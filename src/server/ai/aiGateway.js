@@ -17,6 +17,7 @@ import {
   AI_VALIDATION_TIMEOUT_MS,
   abortableDelay,
   createAiDeadline,
+  createProgressWatch,
   raceWithAbort
 } from './aiDeadline.js';
 import { AiError, isAiError, toAiFailure } from './aiErrors.js';
@@ -482,23 +483,39 @@ export function createAiGateway({
    * gitmemiştir; yanıt başladıktan sonraki hiçbir hata yinelenmez (aynı yanıt
    * baştan ikinci kez üretilmez).
    */
-  async function connectStream({ deadline, context, source, healthFailure, invoke }) {
+  async function connectStream({ deadline, watch, context, source, healthFailure, invoke }) {
     for (let attempt = 1; ; attempt += 1) {
       context.attempts = attempt;
       const startedAt = now();
       try {
-        return { opened: await raceWithAbort(invoke, deadline.signal), startedAt };
+        return { opened: await raceWithAbort(invoke, watch.signal), startedAt };
       } catch (error) {
-        const failure = deadline.failure() || toAiFailure(error);
+        const failure = deadline.failure() || watch.failure() || toAiFailure(error);
         recordProviderCall({ operation: 'ai.provider.stream', latencyMs: now() - startedAt, code: failure.code, healthFailure: healthFailure(failure), source });
         const delayMs = RETRY_BASE_DELAY_MS + Math.floor(random() * RETRY_JITTER_MS);
         const retry = attempt < MAX_PROVIDER_ATTEMPTS && isConnectFailure(failure)
           && deadline.remainingMs() >= delayMs + MIN_ATTEMPT_BUDGET_MS;
         if (!retry) throw failure;
-        await abortableDelay(delayMs, deadline.signal);
+        await abortableDelay(delayMs, watch.signal);
         recordAiRetry({ networkCode: failure.details?.networkCode ?? null });
       }
     }
+  }
+
+  /**
+   * Bir sağlayıcı çağrısının ilerleme gözcüsü: süre sınırının altında çalışır ve
+   * kesilince sağlayıcı isteğini de keser. Hata önceliği: süre sınırı, sonra ilerleme.
+   */
+  function watchProvider(config, deadline, scope) {
+    const watch = createProgressWatch({ ...config.providerProgress, parentSignal: deadline.signal });
+    const unlinkWatch = linkAbort(watch.signal, scope);
+    return Object.assign(watch, {
+      failureOf: (error) => deadline.failure() || watch.failure() || toAiFailure(error),
+      release() {
+        watch.dispose();
+        unlinkWatch();
+      }
+    });
   }
 
   /**
@@ -516,13 +533,14 @@ export function createAiGateway({
    * yanıt otomatik olarak yeniden istenmez. Sonuç tam metni döndürür; süre
    * dolduktan ya da iptal edildikten sonra gelen parça uygulanmaz.
    */
-  async function streamChat({ profile, messages, maxOutputTokens = null, signal = null, onStatus = null, onText }) {
+  async function streamChat({ profile, messages, maxOutputTokens = null, signal = null, onStatus = null, onProgress = null, onText }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     const progress = { emitted: false, reasoning: false, firstTokenMs: null, providerStartMs: null, providerStartedAt: null, recorded: false };
     const providerScope = new AbortController();
     let lease = null;
     let deadline = null;
+    let watch = null;
     let unlink = null;
     try {
       assertOutsideSqlTransaction();
@@ -547,8 +565,10 @@ export function createAiGateway({
         deadline.signal
       );
       context.source = credential.source;
+      watch = watchProvider(config, deadline, providerScope);
       const { opened, startedAt: providerStartedAt } = await connectStream({
         deadline,
+        watch,
         context,
         source: credential.source,
         healthFailure: healthFailureFor(credential.source),
@@ -570,13 +590,17 @@ export function createAiGateway({
       const iterator = opened.events[Symbol.asyncIterator]();
       try {
         for (;;) {
-          const step = await raceWithAbort(() => iterator.next(), deadline.signal);
+          const step = await raceWithAbort(() => iterator.next(), watch.signal);
           if (step.done) break;
           const event = step.value;
           firstEventAt ??= now();
+          // Sağlayıcının anlamlı her olayı ilerlemedir; canlı tutma yorumları olay üretmez.
+          watch.touch();
+          notify(onProgress);
           if (event.type === 'text') {
             chunks.push(event.text);
             await raceWithAbort(() => onText(event.text), deadline.signal);
+            watch.touch();
             if (!progress.emitted) {
               progress.emitted = true;
               progress.firstTokenMs = now() - startedAt;
@@ -593,7 +617,7 @@ export function createAiGateway({
         // Beklenmez: sinyale uymayan bir sağlayıcı kapasiteyi ve çağıranı tutamaz.
         iterator.return?.()?.catch?.(() => {});
       }
-      if (!final && deadline.failure()) throw deadline.failure();
+      if (!final && (deadline.failure() || watch.failure())) throw deadline.failure() || watch.failure();
       if (!final) throw streamInterrupted('STREAM_TRUNCATED');
       const text = chunks.join('').trim();
       if (!text) {
@@ -629,7 +653,7 @@ export function createAiGateway({
         firstTokenMs: progress.firstTokenMs
       };
     } catch (error) {
-      const failure = annotateCredentialFailure(deadline?.failure() || toAiFailure(error), context.source);
+      const failure = annotateCredentialFailure(watch ? watch.failureOf(error) : deadline?.failure() || toAiFailure(error), context.source);
       context.source ??= failureSource(failure);
       if (failure.code === AI_ERROR_CODES.AI_QUEUE_TIMEOUT && context.queueWaitMs == null) {
         context.queueWaitMs = failure.details?.queueWaitMs ?? null;
@@ -659,6 +683,7 @@ export function createAiGateway({
       if (progress.emitted && isAiError(failure)) failure.details = { ...failure.details, partial: true };
       throw failure;
     } finally {
+      watch?.release();
       unlink?.();
       providerScope.abort();
       deadline?.dispose();
@@ -733,11 +758,14 @@ export function createAiGateway({
           const safeMessages = requireToolMessages(messages);
           const roundScope = new AbortController();
           const unlinkRound = linkAbort(providerScope.signal, roundScope);
+          // Her model turu kendi ilerleme sınırıyla yürür: ilerlemeyen tur oturumun süresini tüketemez.
+          const watch = watchProvider(config, deadline, roundScope);
           progress.rounds += 1;
           const roundStartedAt = now();
           try {
             const { opened, startedAt: providerStartedAt } = await connectStream({
               deadline,
+              watch,
               context,
               source: credential.source,
               healthFailure,
@@ -762,15 +790,17 @@ export function createAiGateway({
             const iterator = opened.events[Symbol.asyncIterator]();
             try {
               for (;;) {
-                const step = await raceWithAbort(() => iterator.next(), deadline.signal);
+                const step = await raceWithAbort(() => iterator.next(), watch.signal);
                 if (step.done) break;
                 const event = step.value;
                 firstEventAt ??= now();
+                watch.touch();
                 if (event.type === 'text') {
                   chunks.push(event.text);
                   if (onEvent) {
                     const delivered = await raceWithAbort(() => onEvent({ type: 'text', text: event.text }), deadline.signal);
                     if (event.text && delivered === true) progress.emitted = true;
+                    watch.touch();
                   }
                 } else if (event.type === 'reasoning' && !thinking) {
                   thinking = true;
@@ -780,12 +810,15 @@ export function createAiGateway({
                 } else if (event.type === 'done') {
                   final = event;
                   break;
+                } else {
+                  // Görünmeyen ilerleme (gizli akıl yürütme, araç bağımsız değişkeni) turu canlı tutar.
+                  notify(onEvent, { type: 'progress' });
                 }
               }
             } finally {
               iterator.return?.()?.catch?.(() => {});
             }
-            if (!final && deadline.failure()) throw deadline.failure();
+            if (!final && (deadline.failure() || watch.failure())) throw deadline.failure() || watch.failure();
             if (!final) throw streamInterrupted('STREAM_TRUNCATED');
             const text = chunks.join('').trim();
             const toolCalls = Array.isArray(final.toolCalls) ? final.toolCalls : [];
@@ -811,14 +844,18 @@ export function createAiGateway({
             progress.recorded = true;
             return { text, toolCalls, finishReason: final.finishReason ?? null, model: route.model, usage: final.usage ?? null,
               durationMs: Math.max(0, now() - roundStartedAt), firstEventMs: firstEventAt == null ? null : Math.max(0, firstEventAt - roundStartedAt) };
+          } catch (error) {
+            throw watch.failureOf(error);
           } finally {
+            watch.release();
             unlinkRound();
             roundScope.abort();
           }
         }
       });
 
-      const result = await run(session);
+      // Sinyale uymayan iş (takılan araç ya da sağlayıcı) kirayı süre sınırından öteye tutamaz.
+      const result = await raceWithAbort(() => run(session), deadline.signal);
       if (deadline.failure()) throw deadline.failure();
       const durationMs = now() - startedAt;
       recordAiRequest({ ...context, durationMs });

@@ -404,6 +404,98 @@ test('ilk metni bekleyen yavaş modelde bağlantı canlı tutulur; canlı tutma 
   assert.equal(text.length, settled);
 });
 
+const finalAnswer = (turn, content = 'Yanıt') => ({ conversation: turn.conversation,
+  answer: { id: randomUUID(), sequence: 2, role: 'assistant', content, turnId: null, replyToId: turn.userMessage.id, mode: 'standard', finishReason: 'stop', createdAt: 'x' } });
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Akışın zamanlayıcıları süreci ayakta tutmaz (unref); gerçek sunucuda HTTP soketi tutar, testte bu zamanlayıcı.
+const holdLoop = (t) => {
+  const hold = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(hold));
+};
+
+/* ── Canlılık: taşıma canlı tutması üretim ilerlemesi değildir ── */
+
+test('canlı tutma ilerleme sayılmaz: ilerlemeyen üretim sınırda kesilir, tek hata olayı gelir ve üretim hakkı bir kez bırakılır', async (t) => {
+  holdLoop(t);
+  const { turn, released } = fakeTurn();
+  let observed = null;
+  const response = assistantStreamResponse(turn, {
+    keepaliveMs: 5, stallMs: 60, graceMs: 200,
+    // Sinyale uyan ama hiç ilerlemeyen üretim (takılan sağlayıcı ya da araç).
+    generate: (_turn, { signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', () => {
+      observed = signal.reason;
+      reject(signal.reason);
+    }, { once: true }))
+  });
+  const text = await response.text();
+  const parsed = parseSseText(text);
+  assert.ok(parsed.comments >= 2, 'canlı tutma yorumları akmaya devam etti');
+  assert.deepEqual(parsed.events.map((event) => event.event), ['accepted', 'error']);
+  assert.equal(parsed.events[1].data.code, 'AI_TIMEOUT');
+  assert.equal(parsed.events[1].data.reason, 'GENERATION_STALLED');
+  assert.equal(observed?.details?.reason, 'GENERATION_STALLED', 'üretim kesildi');
+  assert.equal(released(), 1);
+});
+
+test('sinyale uymayan üretim bekleme süresi sonunda zorla bitirilir; geç gelen sonuç ikinci olay ya da ikinci bırakma üretmez', async (t) => {
+  holdLoop(t);
+  const { turn, released } = fakeTurn();
+  let finish;
+  const response = assistantStreamResponse(turn, {
+    keepaliveMs: 5, stallMs: 30, graceMs: 30,
+    generate: () => new Promise((resolve) => { finish = resolve; })
+  });
+  const parsed = parseSseText(await response.text());
+  assert.deepEqual(parsed.events.map((event) => event.event), ['accepted', 'error']);
+  assert.equal(parsed.events[1].data.reason, 'GENERATION_STALLED');
+  assert.equal(released(), 1, 'hak, takılan üretim sürerken bırakıldı');
+  finish(finalAnswer(turn));
+  await pause(10);
+  assert.equal(released(), 1);
+});
+
+test('gerçek ilerleme uzun üretimi canlı tutar ve seyreltilmiş progress olaylarıyla bildirilir', async (t) => {
+  holdLoop(t);
+  const { turn, released } = fakeTurn();
+  const response = assistantStreamResponse(turn, {
+    keepaliveMs: 5, stallMs: 50, progressEventMs: 40,
+    generate: async (_turn, { onProgress, onText }) => {
+      for (let index = 0; index < 20; index += 1) {
+        await pause(8);
+        onProgress();
+      }
+      await onText('Uzun düşünmenin yanıtı');
+      return finalAnswer(turn, 'Uzun düşünmenin yanıtı');
+    }
+  });
+  const events = parseSseText(await response.text()).events.map((event) => event.event);
+  assert.equal(events.at(-1), 'done', 'ilerleyen üretim kesilmedi');
+  const progress = events.filter((event) => event === 'progress').length;
+  assert.ok(progress >= 1 && progress <= 6, `ilerleme olayları seyreltilir (${progress})`);
+  assert.equal(released(), 1);
+});
+
+test('okumayan istemci turu tutamaz: teslim beklemesi sınırlıdır, üretim kesilir ve hak bırakılır', async (t) => {
+  holdLoop(t);
+  const { turn, released } = fakeTurn();
+  let failure = null;
+  const response = assistantStreamResponse(turn, {
+    keepaliveMs: 5, stallMs: 1000, graceMs: 30, deliveryTimeoutMs: 40,
+    generate: async (_turn, { onText }) => {
+      try {
+        for (let index = 0; ; index += 1) await onText(`parça ${index} `.repeat(64));
+      } catch (error) {
+        failure = error;
+        throw error;
+      }
+    }
+  });
+  for (let waited = 0; released() === 0 && waited < 2000; waited += 10) await pause(10);
+  assert.equal(released(), 1, 'hak okunmayan akışa rağmen bırakıldı');
+  assert.equal(failure?.details?.reason, 'DELIVERY_STALLED');
+  await response.body.cancel();
+});
+
 test('beklenmeyen iç hata genel iletiyle bildirilir; hata ayrıntısı akışa taşınmaz', async (t) => {
   const logs = captureConsole(t);
   const { turn, released } = fakeTurn();

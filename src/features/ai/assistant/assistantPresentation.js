@@ -73,6 +73,10 @@ export function assistantFailureView(result, now = Date.now()) {
   const code = String(result?.code ?? '');
   // Sunucuda durdurulan üretim (ör. konuşma başka pencerede silindi) kullanıcının Durdur'u değildir.
   if (code === AI_ERROR_CODES.AI_CANCELLED) return { ...SERVER_CANCELLED, retryable: true, action: null };
+  // Bağlantı canlı ama üretim ilerlemiyor: canlı tutma iletisi ilerleme sayılmaz, tur yeniden denenebilir.
+  if (code === 'STREAM_STALLED' && result?.reason === 'NO_PROGRESS') {
+    return { tone: 'fail', title: 'Yanıt ilerlemiyor', message: 'Yanıt uzun süredir ilerlemedi ve durduruldu. Yeniden deneyebilir ya da yeni bir konuşma başlatabilirsiniz.', retryable: true, action: null };
+  }
   if (Object.hasOwn(CLIENT_FAILURES, code)) return { ...CLIENT_FAILURES[code], retryable: true, action: null };
   if (SESSION_CODES.has(code)) {
     return {
@@ -125,10 +129,12 @@ export function assistantFailureView(result, now = Date.now()) {
     case AI_ERROR_CODES.AI_TIMEOUT:
       return {
         tone: 'fail',
-        title: 'Yanıt süre sınırında tamamlanmadı',
+        title: ['PROVIDER_STALLED', 'GENERATION_STALLED', 'DELIVERY_STALLED'].includes(result?.reason) ? 'Yanıt ilerlemiyor' : 'Yanıt süre sınırında tamamlanmadı',
         message: result?.partial
           ? 'Yanıt süre sınırı dolduğu için yarıda kesildi ve kaydedilmedi.'
-          : 'Yapay zekâ hizmeti süre sınırında yanıt vermedi.',
+          : ['PROVIDER_STALLED', 'GENERATION_STALLED', 'DELIVERY_STALLED'].includes(result?.reason)
+            ? 'Yapay zekâ hizmeti uzun süredir ilerleme göstermediği için yanıt durduruldu ve kaydedilmedi. Yeniden deneyebilirsiniz.'
+            : 'Yapay zekâ hizmeti süre sınırında yanıt vermedi.',
         retryable: true,
         action: null
       };

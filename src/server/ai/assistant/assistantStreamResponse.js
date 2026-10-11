@@ -7,6 +7,7 @@ import {
   ASSISTANT_TOOL_TOPICS
 } from '../../../domain/ai/assistantContract.js';
 import { ServerPersistenceError } from '../../errors.js';
+import { AiError } from '../aiErrors.js';
 import { recordAssistantTurn } from '../aiTelemetry.js';
 import { generateAssistantAnswer } from './assistantService.js';
 
@@ -26,13 +27,24 @@ import { generateAssistantAnswer } from './assistantService.js';
  * yer açılana kadar bekletilir; bu bekleme ağ geçidinin süre sınırına bağlıdır.
  * Böylece sunucu belleğinde okunmamış sınırsız çıktı birikmez.
  *
- * Canlı tutma: yavaş bir model ilk metni üretirken (ya da yalnızca akıl
- * yürütürken) bağlantı ve ters vekil sessiz kalmasın diye aralıklarla SSE
- * YORUM satırı (`: keepalive`) gönderilir. Yorum veri taşımaz, istemci onu
- * gösterilecek metin ya da ilerleme saymaz; zamanlayıcı akış bitince durur.
+ * Canlı tutma ile ilerleme AYRIDIR. Bağlantı ve ters vekil sessiz kalmasın diye
+ * aralıklarla SSE YORUM satırı (`: keepalive`) gönderilir; yorum veri taşımaz ve
+ * istemci onu ilerleme saymaz. Gerçek ilerleme (evre, metin, sağlayıcı ya da araç
+ * olayı) seyrekleştirilmiş `progress` olayıyla bildirilir. Belirli süre hiç
+ * ilerlemeyen üretim sunucuda kesilir; kesilen üretim sinyale uymasa da kısa bir
+ * süre sonra tur sonlandırılır, üretim hakkı ve kaynaklar bırakılır. Son yanıtın
+ * teslimi de sınırlıdır: okumayan istemci turu tutamaz.
  */
 
 export const ASSISTANT_KEEPALIVE_MS = 15000;
+/** `progress` olayları arasındaki en kısa süre (ilerleme varken). */
+export const ASSISTANT_PROGRESS_EVENT_MS = 10000;
+/** Hiç ilerlemeyen üretimin kesildiği süre (sağlayıcının ilerleme sınırlarından uzun). */
+export const ASSISTANT_GENERATION_STALL_MS = 90000;
+/** Kesilen üretimin kendiliğinden bitmesi için beklenen süre (yanıt yazımı bütçesinden uzun). */
+export const ASSISTANT_STALL_GRACE_MS = 25000;
+/** Okumayan istemcinin kuyrukta yer açması için beklenen en uzun süre. */
+export const ASSISTANT_DELIVERY_TIMEOUT_MS = 20000;
 /** Kuyruktaki en fazla olay (tek olay en fazla bir sağlayıcı parçası kadardır). */
 export const QUEUE_HIGH_WATER_MARK = 32;
 const RETRYABLE_SERVER_CODES = new Set(['DATABASE_UNAVAILABLE']);
@@ -119,6 +131,10 @@ function acceptedPayload(turn) {
 export function assistantStreamResponse(turn, {
   signal = null,
   keepaliveMs = ASSISTANT_KEEPALIVE_MS,
+  progressEventMs = ASSISTANT_PROGRESS_EVENT_MS,
+  stallMs = ASSISTANT_GENERATION_STALL_MS,
+  graceMs = ASSISTANT_STALL_GRACE_MS,
+  deliveryTimeoutMs = ASSISTANT_DELIVERY_TIMEOUT_MS,
   generate = generateAssistantAnswer
 } = {}) {
   const cancelled = new AbortController();
@@ -127,6 +143,13 @@ export function assistantStreamResponse(turn, {
   let closed = false;
   let waiting = null;
   let textSent = false;
+  let terminal = false;
+  let finished = false;
+  let stalled = null;
+  let lastProgressAt = Date.now();
+  let lastProgressSentAt = Date.now();
+  let lastByteAt = Date.now();
+  let graceTimer = null;
 
   const wake = () => {
     const pending = waiting;
@@ -138,6 +161,7 @@ export function assistantStreamResponse(turn, {
     if (closed) return false;
     try {
       controller.enqueue(bytes);
+      lastByteAt = Date.now();
       return true;
     } catch {
       closed = true;
@@ -146,12 +170,78 @@ export function assistantStreamResponse(turn, {
   };
 
   const send = (event, data) => enqueue(frame(event, data));
+  const finalEvent = (event, data) => {
+    if (terminal) return false;
+    terminal = true;
+    return send(event, data);
+  };
 
-  /** Kuyrukta yer açılana (ya da akış kapanana) kadar bekler; üretim sinyali bu beklemeyi de keser. */
+  /**
+   * Gerçek ilerleme: gözcüyü yeniler ve en fazla `progressEventMs` aralıkla
+   * istemciye bildirilir. Evre ya da metin olayı zaten görünür ilerlemedir.
+   */
+  const progress = ({ visible = false } = {}) => {
+    const now = Date.now();
+    lastProgressAt = now;
+    if (visible) lastProgressSentAt = now;
+    else if (!terminal && now - lastProgressSentAt >= progressEventMs) {
+      lastProgressSentAt = now;
+      send(ASSISTANT_STREAM_EVENTS.PROGRESS, {});
+    }
+  };
+
+  /** Akışı kapatır ve üretim hakkını bırakır; her yolda yalnızca bir kez etkilidir. */
+  let released = false;
+  const close = () => {
+    if (!released) {
+      released = true;
+      turn.claim?.release();
+    }
+    if (!closed) {
+      closed = true;
+      try {
+        controller.close();
+      } catch {
+        // İptal edilmiş akış zaten kapalıdır.
+      }
+    }
+    wake();
+  };
+
+  /**
+   * İlerlemeyen üretim kesilir. Üretim sinyale uyup kısa sürede biter; uymasa da
+   * süre sonunda tur hata olayıyla sonlandırılır ve üretim hakkı bırakılır.
+   */
+  const stall = (reason) => {
+    if (stalled || finished) return;
+    stalled = new AiError(AI_ERROR_CODES.AI_TIMEOUT, { details: { reason } });
+    cancelled.abort(stalled);
+    wake();
+    graceTimer = setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      finalEvent(ASSISTANT_STREAM_EVENTS.ERROR, assistantStreamErrorPayload(stalled, { partial: textSent }));
+      close();
+    }, graceMs);
+    graceTimer.unref?.();
+  };
+
+  /** Kuyrukta yer açılana (ya da akış kapanana) kadar bekler; bekleme sınırlıdır ve üretim sinyali onu da keser. */
   async function sendWhenReady(event, data) {
+    const startedAt = Date.now();
     while (!closed && controller.desiredSize <= 0 && !generationSignal.aborted) {
+      const remaining = deliveryTimeoutMs - (Date.now() - startedAt);
+      if (remaining <= 0) {
+        // Okumayan istemci turu tutamaz: üretim kesilir, hak bırakılır.
+        stall('DELIVERY_STALLED');
+        break;
+      }
       await new Promise((resolve) => {
-        waiting = resolve;
+        const timer = setTimeout(resolve, remaining);
+        waiting = () => {
+          clearTimeout(timer);
+          resolve();
+        };
       });
     }
     if (generationSignal.aborted) return false;
@@ -160,17 +250,20 @@ export function assistantStreamResponse(turn, {
 
   async function run() {
     const startedAt = Date.now();
-    const keepalive = setInterval(() => {
-      if (!closed && controller.desiredSize > 0) enqueue(KEEPALIVE);
-    }, keepaliveMs);
-    keepalive.unref?.();
+    const tickMs = Math.max(1, Math.min(keepaliveMs, Math.floor(stallMs / 3), 5000));
+    const ticker = setInterval(() => {
+      const now = Date.now();
+      if (!closed && now - lastByteAt >= keepaliveMs && controller.desiredSize > 0) enqueue(KEEPALIVE);
+      if (now - lastProgressAt >= stallMs) stall('GENERATION_STALLED');
+    }, tickMs);
+    ticker.unref?.();
     const onAbort = () => wake();
     generationSignal.addEventListener('abort', onAbort, { once: true });
     try {
       send(ASSISTANT_STREAM_EVENTS.ACCEPTED, acceptedPayload(turn));
       if (turn.replay) {
         textSent = send(ASSISTANT_STREAM_EVENTS.DELTA, { text: turn.replay.content });
-        send(ASSISTANT_STREAM_EVENTS.DONE, {
+        finalEvent(ASSISTANT_STREAM_EVENTS.DONE, {
           conversation: turn.conversation,
           assistantMessage: messageView(turn.replay, { includeContent: false }),
           replayed: true
@@ -180,20 +273,31 @@ export function assistantStreamResponse(turn, {
       }
       const result = await generate(turn, {
         signal: generationSignal,
-        onStatus: (status) => send(ASSISTANT_STREAM_EVENTS.STATUS, {
-          phase: status.phase,
-          ...(ASSISTANT_TOOL_TOPICS.includes(status.topic) ? { topic: status.topic } : {})
-        }),
+        onStatus: (status) => {
+          progress({ visible: true });
+          send(ASSISTANT_STREAM_EVENTS.STATUS, {
+            phase: status.phase,
+            ...(ASSISTANT_TOOL_TOPICS.includes(status.topic) ? { topic: status.topic } : {})
+          });
+        },
+        onProgress: () => progress(),
         onText: async (text) => {
+          progress({ visible: true });
           // Yanıt yalnızca metin gerçekten kuyruğa girdiyse "kısmi" sayılır.
-          if (await sendWhenReady(ASSISTANT_STREAM_EVENTS.DELTA, { text })) textSent = true;
+          if (await sendWhenReady(ASSISTANT_STREAM_EVENTS.DELTA, { text })) {
+            textSent = true;
+            return;
+          }
+          // Teslim edilemeyen metin üretimin sonudur: kesilen ya da kapanan akışta tur yanıtı göstermiş sayılmaz.
+          throw stalled || (generationSignal.aborted ? generationSignal.reason : null) || new AiError(AI_ERROR_CODES.AI_CANCELLED);
         },
         // Gösterilen taslak geçersizleşti (araç çağrısına dönüştü ya da doğrulanamadı).
         onRevise: () => {
           if (send(ASSISTANT_STREAM_EVENTS.REVISE, {})) textSent = false;
         }
       });
-      send(ASSISTANT_STREAM_EVENTS.DONE, {
+      if (finished) return;
+      finalEvent(ASSISTANT_STREAM_EVENTS.DONE, {
         conversation: result.conversation,
         assistantMessage: messageView(result.answer, { includeContent: result.reconciled === true || result.contentAuthoritative === true }),
         ...(result.reconciled ? { reconciled: true } : {}),
@@ -201,30 +305,23 @@ export function assistantStreamResponse(turn, {
       });
       recordAssistantTurn({ durationMs: Date.now() - startedAt });
     } catch (error) {
-      const payload = assistantStreamErrorPayload(error, { partial: textSent });
+      const failure = stalled || error;
+      const payload = assistantStreamErrorPayload(failure, { partial: textSent });
       recordAssistantTurn({
         code: payload.code,
-        error,
+        error: failure,
         source: payload.credentialSource,
-        details: error?.details ?? null,
+        details: failure?.details ?? null,
         serviceFailure: payload.code === 'DATABASE_UNAVAILABLE',
         durationMs: Date.now() - startedAt
       });
-      send(ASSISTANT_STREAM_EVENTS.ERROR, payload);
+      finalEvent(ASSISTANT_STREAM_EVENTS.ERROR, payload);
     } finally {
-      clearInterval(keepalive);
+      finished = true;
+      clearInterval(ticker);
+      clearTimeout(graceTimer);
       generationSignal.removeEventListener('abort', onAbort);
-      turn.claim?.release();
-      if (!closed) {
-        closed = true;
-        try {
-          controller.close();
-        } catch {
-          // İptal edilmiş akış zaten kapalıdır.
-        }
-      }
-      // Süre sınırıyla terk edilmiş bir geri basınç beklemesi askıda kalmaz.
-      wake();
+      close();
     }
   }
 

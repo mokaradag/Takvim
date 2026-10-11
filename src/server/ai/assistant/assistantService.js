@@ -825,13 +825,14 @@ function persistAnswer(turn, write) {
  * Yanıtın yazımı istemcinin iptaline bağlı değildir: model yanıtı tamamladıysa
  * bağlantı o anda kesilse de yanıt kaybolmaz (yazım yine süre sınırlıdır).
  */
-export async function generateAssistantAnswer(turn, { signal = null, onStatus = null, onText }) {
-  if (turn.grounded) return generateGroundedAssistantAnswer(turn, { signal, onStatus, onText });
+export async function generateAssistantAnswer(turn, { signal = null, onStatus = null, onProgress = null, onText }) {
+  if (turn.grounded) return generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress, onText });
   const result = turn.dataUnavailable ? { text: 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', finishReason: 'unavailable' } : await getAiGateway().streamChat({
     profile: turn.profile,
     messages: turn.modelMessages,
     signal,
     onStatus,
+    onProgress,
     onText
   });
   if (turn.dataUnavailable) await onText(result.text);
@@ -903,7 +904,7 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
  * doğrulandıktan (ya da güvenli iletiye düştükten) SONRA, tek kısa işlemde
  * yazılır. Durdurulan ya da süresi dolan tur yazılmaz.
  */
-async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText }) {
+async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress = null, onText }) {
   const options = {
     messages: turn.modelMessages,
     catalog: toolCatalogForModel(),
@@ -911,6 +912,7 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
     allowedTextFields: turn.allowedTextFields || [],
     clarification: turn.clarification || null,
     onStatus,
+    onProgress,
     onText: async () => {},
     deferDisclosure: true
   };
@@ -952,6 +954,7 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
     if (!stored.persisted || !stored.message) {
       throw conversationNotFound('ANSWER_NOT_PERSISTED');
     }
+    onProgress?.();
     const evidence = await optionalEvidence(turn.sicil, signal, {
       conversationId: turn.conversation.id, messageId: stored.message.id
     });
@@ -966,8 +969,9 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
     const replaced = !own || answer.content !== grounded.text || answer.finishReason !== grounded.finishReason;
     const deliveredOutcome = !replaced ? grounded.outcome
       : answer.finishReason === 'stop' ? 'grounded' : answer.finishReason === 'grounding_failed' ? 'failed' : answer.finishReason;
-    grounded.completeDisclosure?.(deliveredOutcome);
+    // Tur izi yalnızca metin gerçekten teslim edildikten sonra son sonucunu alır; teslim hatası `error` olur.
     await onText(answer.content);
+    grounded.completeDisclosure?.(deliveredOutcome);
   } catch (error) {
     // Kayıt ya da açıklama hatası da turun tek son izini bırakır.
     grounded.completeDisclosure?.('error', error?.code);

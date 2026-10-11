@@ -373,7 +373,10 @@ test('iptal süren akışı sağlayıcı tarafında da kapatır; okuma iptal ned
   const controller = new AbortController();
   const { events } = await stream(createOpenAiCompatibleProvider(), server, { signal: controller.signal });
   const iterator = events[Symbol.asyncIterator]();
-  assert.equal((await iterator.next()).value.type, 'text');
+  // Rol parçası metinsiz ilerlemedir; ilk görünür olay metindir.
+  let first = await iterator.next();
+  while (first.value.type === 'progress') first = await iterator.next();
+  assert.equal(first.value.type, 'text');
   const reason = new Error('Durdur');
   const pending = iterator.next();
   controller.abort(reason);
@@ -386,7 +389,7 @@ test('iptal süren akışı sağlayıcı tarafında da kapatır; okuma iptal ned
 test('düşünme evresi aynı mantıksal içeriğin parça sınırından bağımsızdır', async () => {
   for (const pieces of [['<think>gizli</think>Yanıt'], ['<think>', 'gizli', '</think>', 'Yanıt']]) {
     const events = await collect(readChatCompletionStream(bodyFrom([...pieces.map((text) => delta(text)), finish(), 'data: [DONE]\n\n']).stream));
-    assert.deepEqual(events.map((event) => event.type), ['reasoning', 'text', 'done']);
+    assert.deepEqual(events.map((event) => event.type).filter((type) => type !== 'progress'), ['reasoning', 'text', 'done']);
     assert.equal(textOf(events), 'Yanıt');
   }
 });
@@ -529,4 +532,25 @@ test('son boş satırı olmayan hata olayı DONE verisiyle başarıya dönüşme
     const body = bodyFrom([delta('Yanıt') + finish() + 'event: error\ndata: [DONE]' + suffix]);
     await rejectsWithReason(collect(readChatCompletionStream(body.stream)), 'AI_PROVIDER_UNAVAILABLE', 'STREAM_ERROR_EVENT');
   }
+});
+
+test('ilerleme anlamlı parçadır: canlı tutma yorumu ve boş parça ilerleme değildir; gizli akıl yürütme ve araç bağımsız değişkeni ilerlemedir', async () => {
+  const reasoning = (text) => sse({ choices: [{ index: 0, delta: { reasoning_content: text } }] });
+  const toolStart = sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'rota_task_search', arguments: '' } }] } }] });
+  const toolArgs = sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"text":' } }] } }] });
+  const table = [
+    ['canlı tutma yorumu', [': keepalive\n\n'], 0],
+    ['boş metin parçası', [delta('')], 0],
+    ['boş seçenek dizisi', [sse({ choices: [] })], 0],
+    ['rol parçası', [sse({ choices: [{ index: 0, delta: { role: 'assistant' } }] })], 1],
+    ['gizli akıl yürütmenin sonraki parçaları', [reasoning('a'), reasoning('b'), reasoning('c')], 3],
+    ['yalnızca araç bağımsız değişkeni', [toolStart, toolArgs, toolArgs], 3],
+    ['yalnızca kullanım parçası', [sse({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })], 1]
+  ];
+  const before = async (chunks) => {
+    const events = await collect(readChatCompletionStream(bodyFrom([...chunks, finish(), 'data: [DONE]\n\n']).stream, { toolCalls: true }));
+    return events.slice(0, events.findIndex((event) => event.type === 'done')).length;
+  };
+  const baseline = await before([]);
+  for (const [name, chunks, expected] of table) assert.equal(await before(chunks) - baseline, expected, name);
 });

@@ -58,11 +58,17 @@ function persistedEvidenceJson(entry, payload, clarificationContext) {
 export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceOrdinal } = {}) {
   const entries = [];
   const turnKey = randomBytes(8).toString('hex');
+  // Bir kez geçerli olup sonra geçersizleşen kanıt dökümde kalmıştır: tur artık sağlayıcıya ya da kullanıcıya veri açamaz.
+  let revoked = false;
+  const invalidate = (entry) => {
+    if (entry.valid) revoked = true;
+    entry.valid = false;
+  };
 
   return Object.freeze({
     factPrefix() { return `${turnKey}_R${entries.length + 1}`; },
     /** Başarılı araç sonucunu kaydeder; kimlik (R<n>) döner. Defter doluysa `null`. */
-    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, populationReferences = null, args = null }) {
+    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, populationReferences = null, args = null, round = null }) {
       if (entries.length >= Math.min(maxEntries, EVIDENCE_LIMITS.maxEvidencePerAnswer)) return null;
       const id = evidenceIdFor(entries.length + 1);
       const summary = normalizeEvidenceSummary({
@@ -71,7 +77,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       if (!summary) return null;
       // Yürütülen bağımsız değişkenler yalnızca sunucuda kalır: kanıtın nüfusu bunlardan hesaplanır.
       entries.push({ id, tool, kind, summary, payload: null, authorizationEpoch, scopedAuthorization, valid: true,
-        args: Object.freeze({ ...(args || {}) }),
+        args: Object.freeze({ ...(args || {}) }), round,
         population: Array.isArray(populationReferences) && populationReferences.length ? populationReferences : null });
       return id;
     },
@@ -93,11 +99,15 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       entry.taskReferences = [...references.values()];
     },
     invalidateAuthorization(epoch, validate = null) {
-      for (const entry of entries) if (validate ? !validate(entry) : entry.authorizationEpoch !== epoch) entry.valid = false;
+      for (const entry of entries) if (validate ? !validate(entry) : entry.authorizationEpoch !== epoch) invalidate(entry);
     },
     authorizationEntries() { return entries.filter((entry) => entry.valid && entry.payload); },
     retainAuthorized(ids) {
-      for (const entry of entries) if (!ids.has(entry.id)) entry.valid = false;
+      for (const entry of entries) if (!ids.has(entry.id)) invalidate(entry);
+    },
+    /** Kayıtlı kanıtlardan biri geçerliliğini yitirdi mi (yetki değişti ya da okunamadı)? */
+    revoked() {
+      return revoked;
     },
     ids() {
       return entries.filter((entry) => entry.valid).map((entry) => entry.id);
@@ -120,7 +130,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       return entries.filter((entry) => entry.valid && entry.payload).map((entry) => {
         let payload = null;
         try { payload = JSON.parse(entry.payload); } catch { /* Bozuk yük kanıt değildir. */ }
-        return { id: entry.id, tool: entry.tool, args: entry.args, payload };
+        return { id: entry.id, tool: entry.tool, args: entry.args, round: entry.round, payload };
       });
     },
     /** Verilen kimliklerin özetleri, kanıt sırasına göre. */

@@ -142,7 +142,9 @@ test('akış: parçalara bölünmüş ad ve bağımsız değişkenler birleştir
     'data: [DONE]\n\n'
   ]));
   const events = await collect(await toolStream(provider));
-  assert.deepEqual(events.map((event) => event.type), ['text', 'tool_call_started', 'tool_call_started', 'done']);
+  // Bağımsız değişken parçaları görünür olay üretmez; yalnızca ilerleme olarak bildirilir.
+  assert.deepEqual(events.map((event) => event.type).filter((type) => type !== 'progress'), ['text', 'tool_call_started', 'tool_call_started', 'done']);
+  assert.equal(events.filter((event) => event.type === 'progress').length, 3);
   const done = events.at(-1);
   assert.equal(done.finishReason, 'tool_calls');
   assert.deepEqual(done.toolCalls, [
@@ -243,7 +245,7 @@ test('araç istenmeyen akışlı sohbet (Aşama 2) çağrı parçalarını yok s
   });
   const events = [];
   for await (const event of readChatCompletionStream(body)) events.push(event);
-  assert.deepEqual(events.map((event) => event.type), ['text', 'done']);
+  assert.deepEqual(events.map((event) => event.type).filter((type) => type !== 'progress'), ['text', 'done']);
   assert.equal(Object.hasOwn(events.at(-1), 'toolCalls'), false);
 });
 

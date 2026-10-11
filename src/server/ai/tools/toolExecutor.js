@@ -53,7 +53,7 @@ export function createToolExecutor({
   validateCall = null,
   clock = Date.now
 }) {
-  const state = { calls: 0, resultBytes: 0, toolMs: 0, roundStartedAt: null, attempted: 0, failures: 0 };
+  const state = { calls: 0, resultBytes: 0, toolMs: 0, roundStartedAt: null, attempted: 0, failures: 0, rounds: 0 };
 
   function phaseRemainingMs() {
     const running = state.roundStartedAt == null ? 0 : clock() - state.roundStartedAt;
@@ -137,6 +137,7 @@ export function createToolExecutor({
   /** Bir model yanıtındaki araç çağrılarını yürütür; çağrı sırasıyla araç iletileri döner. */
   async function executeRound(toolCalls = []) {
     context.beginRound();
+    state.rounds += 1;
     const plans = toolCalls.map((call, index) => {
       if (index >= limits.maxCallsPerRound || phaseRemainingMs() <= 0) {
         return { call, tool: null, rejected: new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED) };
@@ -219,7 +220,8 @@ export function createToolExecutor({
             authorizationEpoch: context.authorizationEpoch?.() ?? null,
             scopedAuthorization: context.evidenceAuthorization?.(result.args, shrunk, result.projectPopulation) ?? null,
             populationReferences: result.population,
-            args: result.args
+            args: result.args,
+            round: state.rounds
           });
           content = JSON.stringify({ ...shrunk, evidenceId: id });
           if (id) ledger.attachPayload(id, content);

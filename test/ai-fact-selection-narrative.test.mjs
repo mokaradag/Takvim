@@ -98,9 +98,55 @@ test('list requests render lists, a table layout renders a table, and value requ
   const table = verifyRequested(ledger, facts, listRequest, { layout: 'table' });
   assert.match(table.normalized, /^\| Görev \| Termin \| Gecikme \(gün\) \|$/m);
   assert.match(table.normalized, /^\| Radar test planı · RDR · Radar Modernizasyonu[^\n]* \| 20 Eylül 2026 \| 10 \|$/m);
+  // Satır başlığı projeyi zaten taşır: proje adı ve kodu ayrıca sütun olmaz.
+  const withProject = verifyRequested(ledger, [...facts, 'data.tasks.*.project.name', 'data.tasks.*.project.code'],
+    { ...listRequest, metrics: [...listRequest.metrics, 'task.project'] });
+  assert.equal(withProject.ok, true, JSON.stringify(withProject.issues));
+  assert.doesNotMatch(withProject.normalized, /Proje ad|Proje kod/);
+  // Sorumlu adları sütunu alan adıyla ("Ad") değil ölçüyle adlandırılır.
+  const people = verifyRequested(ledger, [...facts, 'data.tasks.*.assignees.*.name'], { ...listRequest, metrics: [...listRequest.metrics, 'task.assignees'] }, { layout: 'table' });
+  assert.match(people.normalized, /^\| Görev \| Termin \| Gecikme \(gün\) \| Sorumlular \|$/m);
   const analytics = await callRotaTool(stack, AYSE, 'rota_task_analytics', { deadline: 'overdue', assignee: 'me' });
   const summary = verifyRequested(analytics.ledger, ['data.totals.total'], { operation: 'value', metrics: ['tasks.total'], ...overdueMine });
   assert.match(summary.normalized, /^Görebildiğiniz görevler arasında toplam \*\*3\*\* görev bulunuyor \(ölçüt: .*Gecikmiş.*\)\. 【R1】$/);
+});
+
+test('a criterion shared by every row is stated once, never repeated on each row', async (t) => {
+  const stack = stackFor(t);
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { deadline: 'overdue', assignee: 'me' });
+  const rows = ['data.tasks.*.title', 'data.tasks.*.targetFinish', 'data.tasks.*.overdueDays'];
+  const request = { operation: 'list', metrics: ['task.targetFinish', 'task.overdueDays'], filters: { deadline: 'overdue', assignee: 'me' } };
+  for (const layout of ['list', 'table']) {
+    // Sayım cümlesi ölçütü zaten söyler: satırlar ve liste başı yinelemez.
+    const counted = verifyRequested(ledger, ['totalCount', ...rows], { ...request, metrics: ['tasks.total', ...request.metrics] }, { layout });
+    assert.equal(counted.ok, true, JSON.stringify(counted.issues));
+    assert.equal(counted.normalized.match(/ölçüt/g).length, 1, counted.normalized);
+    // Sayım yoksa ortak ölçüt listenin başında bir kez yazılır.
+    const listed = verifyRequested(ledger, rows, request, { layout });
+    assert.equal(listed.ok, true, JSON.stringify(listed.issues));
+    assert.match(listed.normalized, /^_Ölçüt: Termin: Gecikmiş; Sorumlu: Ben_\n\n/);
+    assert.equal(listed.normalized.match(/ölçüt/gi).length, 1, listed.normalized);
+  }
+});
+
+test('an empty list population says that nothing matched, not only that the result is complete', async (t) => {
+  const stack = stackFor(t);
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_schedule_requests', { tab: 'pending' });
+  const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_schedule_requests', collection: 'items' }, filters: { tab: 'pending' } };
+  const verdict = verifyRequested(ledger, ['R1:complete'], request);
+  assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+  assert.match(verdict.normalized, /^Eşleşen talep bulunmadı/);
+  assert.doesNotMatch(verdict.normalized, /Sonuç tamdır/);
+});
+
+test('dependency rows say which direction they are; a lag reads as a lag', async (t) => {
+  const stack = stackFor(t);
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.DUE_SOON });
+  const raw = { operation: 'list', metrics: ['task.title', 'dependency.type', 'dependency.lag'], population: { tool: 'rota_dependency_inspect' }, entities: [{ type: 'task', id: TASKS.DUE_SOON }] };
+  const facts = ['predecessors', 'successors'].flatMap((side) => [`R1:data.${side}.*.title`, `R1:data.${side}.*.type`, `R1:data.${side}.*.lag.value`]);
+  const verdict = verifyRequested(ledger, facts, raw);
+  assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+  assert.match(verdict.normalized, /^Öncül: \*\*Radar test planı\*\* görevinin türü \*\*FS\*\*\. Gecikme: \*\*2 gün\*\*\. Ardıl: \*\*Dokümantasyon\*\*/);
 });
 
 test('null, incomplete and unit semantics stay visible in the narrative', async (t) => {

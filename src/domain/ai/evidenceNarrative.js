@@ -47,6 +47,8 @@ const ROW_NOUNS = Object.freeze({ tasks: ['Görev', 'Task'], matches: ['Proje', 
   groups: ['Grup', 'Group'], nodes: ['Düğüm', 'Node'], items: ['Kayıt', 'Record'], series: ['Seri', 'Series'], holidays: ['Tatil', 'Holiday'],
   mostSlipped: ['Görev', 'Task'], mostConnected: ['Görev', 'Task'], predecessors: ['Öncül', 'Predecessor'], successors: ['Ardıl', 'Successor'], checks: ['Denetim', 'Check'] });
 const TASK_ROWS = new Set(['tasks', 'mostSlipped', 'mostConnected', 'predecessors', 'successors', 'candidates']);
+/** Satırın göreve göre rolü (bağımlılığın yönü): tek satırda önek, listede başlık. */
+const ROW_ROLES = Object.freeze({ predecessors: [['Öncül', 'Predecessor'], ['Öncüller', 'Predecessors']], successors: [['Ardıl', 'Successor'], ['Ardıllar', 'Successors']] });
 
 const ONES = ['', 'bir', 'iki', 'üç', 'dört', 'beş', 'altı', 'yedi', 'sekiz', 'dokuz'];
 const TENS = ['', 'on', 'yirmi', 'otuz', 'kırk', 'elli', 'altmış', 'yetmiş', 'seksen', 'doksan'];
@@ -116,6 +118,8 @@ function labelOf(fact, locale) {
     const prefix = parts.at(-1) === 'from' ? ['Önceki', 'Original'] : ['Önerilen', 'Proposed'];
     return `${prefix[language(locale)]} ${factLabel(parts.at(-2), locale).toLocaleLowerCase(locale === 'en' ? 'en-US' : 'tr-TR')}`;
   }
+  // Gecikmenin değeri "Değer" değil gecikmedir (birimi değerle birlikte yazılır).
+  if (parts.at(-2) === 'lag' && parts.at(-1) === 'value') return factLabel('lag', locale);
   const label = factLabel(fact.field, locale).split(' / ').at(-1);
   return fact.changeField ? `${factLabel(fact.changeField, locale)} / ${label}` : label;
 }
@@ -285,7 +289,14 @@ function recordSentences(record, locale) {
     sentences.push(`${title}: ${facts.map((fact) => strong(narrativeValue(fact, locale))).join(key === 'wbsPath.*' ? ' › ' : ', ')}.`);
   }
 
-  const rest = record.entries.filter((entry) => !used.has(entry));
+  // Aynı ölçünün aynı biçimde okunan iki gösterimi (ör. kural ve kural açıklaması) bir kez yazılır.
+  const shown = new Set();
+  const rest = record.entries.filter((entry) => !used.has(entry)).filter(({ fact }) => {
+    const key = fact.semantic?.metric ? `${fact.semantic.metric}|${narrativeValue(fact, locale)}` : null;
+    if (key && shown.has(key)) return false;
+    if (key) shown.add(key);
+    return true;
+  });
   if (rest.length) {
     const pairs = rest.map(({ fact }) => `${labelOf(fact, locale)}: ${strong(narrativeValue(fact, locale))}`);
     // Satır kaydı her zaman satırını adlandırır: komşu satırın ölçüsü onunla karışmaz.
@@ -321,22 +332,36 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
   const pattern = (rel) => rel.replace(/\.\d+(?=\.|$)/g, '.*');
   const titleKey = ROW_TITLES.find((key) => rows.every((row) => row.entries.some(({ rel }) => rel === key)));
   const columns = [];
-  for (const row of rows) for (const { rel } of row.entries) if (rel !== titleKey && !['title', 'name'].includes(rel) && !columns.includes(pattern(rel))) columns.push(pattern(rel));
+  // Satır başlığı projeyi (kod · ad) zaten taşıyorsa proje adı/kodu sütunu tekrarıdır.
+  const projectInTitle = rows.every((row) => row.entries[0]?.fact.semantic?.row?.project);
+  for (const row of rows) {
+    for (const { rel } of row.entries) {
+      if (rel === titleKey || ['title', 'name'].includes(rel) || columns.includes(pattern(rel))) continue;
+      if (projectInTitle && ['project.name', 'project.code'].includes(pattern(rel))) continue;
+      columns.push(pattern(rel));
+    }
+  }
   const lang = language(locale);
   const valuesOf = (row, key) => row.entries.filter(({ rel }) => pattern(rel) === key).map(({ fact }) => fact);
   const columnLabel = (key) => {
     const sample = rows.flatMap((row) => valuesOf(row, key))[0];
     if (!sample) return key;
+    if (key.startsWith('assignees.')) return locale === 'en' ? 'Assignees' : 'Sorumlular';
     const labels = factLabel(sample.field, locale).split(' / ');
+    if (key === 'project.name') return locale === 'en' ? 'Project' : 'Proje';
+    if (key === 'project.code') return locale === 'en' ? 'Project code' : 'Proje kodu';
     if (key.startsWith('project.') && labels.length > 1) return `${labels.at(-2)} ${labels.at(-1).toLocaleLowerCase(locale === 'en' ? 'en-US' : 'tr-TR')}`;
     return labelOf(sample, locale);
   };
+  const rowCriteria = (row) => qualifierText(row.entries, locale, { omit: row.entries[0]?.fact.semantic?.row?.project ? ['project'] : [] });
+  // Bütün satırların ortak ölçütü bir kez yazılır; satırlar arasında farklıysa her satır kendininkini taşır.
+  const criteria = rows.every((row) => rowCriteria(row) === rowCriteria(rows[0])) ? rowCriteria(rows[0]) : null;
   const titleOf = (row) => {
     const context = row.entries[0]?.fact.semantic?.row;
     const names = titleKey ? valuesOf(row, titleKey) : [];
     const project = context?.project ? ` · ${escapedFactText([context.projectCode, context.project].filter(Boolean).join(' · '))}` : '';
     const organization = context?.organization ? ` · ${escapedFactText(context.organization)}` : '';
-    return `${escapedFactText(context?.name || names[0] && names.map((fact) => fact.value).join(', ') || row.subject)}${project}${organization}${qualifierText(row.entries, locale, { omit: context?.project ? ['project'] : [] })}`;
+    return `${escapedFactText(context?.name || names[0] && names.map((fact) => fact.value).join(', ') || row.subject)}${project}${organization}${criteria === null ? rowCriteria(row) : ''}`;
   };
   const cell = (facts, plain) => facts.map((fact) => (plain ? narrativeValue(fact, locale) : strong(narrativeValue(fact, locale)))).join(facts[0]?.field.includes('wbsPath') ? ' › ' : ', ');
   // Karşılaştırma doğal olduğunda (en az üç satır; üç sütun ya da iki sayısal sütun) tablo; aksi hâlde liste.
@@ -348,17 +373,17 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
     // Sayı sütunları sağa yaslanır: değerler basamak hizasında okunur.
     const lines = [`| ${headers.join(' | ')} |`, `| ${['---', ...columns.map((key) => (numericColumns.includes(key) ? '---:' : '---'))].join(' | ')} |`];
     for (const row of rows) lines.push(`| ${[titleOf(row), ...columns.map((key) => { const facts = valuesOf(row, key); return facts.length ? cell(facts, true) : '—'; })].join(' | ')} |`);
-    return `${lines.join('\n')}\n\n_${locale === 'en' ? 'Source' : 'Kaynak'}:_ ${citation([evidenceId])}`;
+    return { body: `${lines.join('\n')}\n\n_${locale === 'en' ? 'Source' : 'Kaynak'}:_ ${citation([evidenceId])}`, criteria: criteria || '' };
   }
-  return rows.map((row) => {
+  return { body: rows.map((row) => {
     const pairs = columns.map((key) => { const facts = valuesOf(row, key); return facts.length ? `${columnLabel(key)}: ${cell(facts, false)}` : null; }).filter(Boolean);
     return `- ${strong(titleOf(row))}${pairs.length ? ` — ${pairs.join(' · ')}` : ''} ${citation([evidenceId])}`;
-  }).join('\n');
+  }).join('\n'), criteria: criteria || '' };
 }
 
 /* ── Zarf sayıları ────────────────────────────────────────── */
 
-function envelopeSentences(facts, { tool, locale }) {
+function envelopeSentences(facts, { tool, locale, empty = false }) {
   const noun = NOUNS[tool]?.[language(locale)] || (locale === 'en' ? 'records' : 'kayıt');
   const sentences = [];
   for (const fact of facts) {
@@ -372,6 +397,11 @@ function envelopeSentences(facts, { tool, locale }) {
         : (locale === 'en' ? `${strong(narrativeValue(fact, locale))} matching ${noun} were found${where}${qualifiers}.` : `${capitalize(`${where}eşleşen ${strong(narrativeValue(fact, locale))} ${noun} bulundu`)}${qualifiers}.`));
     } else if (fact.field === 'returnedCount') {
       sentences.push(locale === 'en' ? `${strong(narrativeValue(fact, locale))} of them are shown.` : `Bunlardan ${strong(narrativeValue(fact, locale))}${turkishPossessiveSuffix(fact.value)} gösteriliyor.`);
+    } else if (fact.field === 'complete' && empty && fact.value === true) {
+      // Liste ya da sıralamanın boş nüfusu: tam kanıt eşleşen kayıt olmadığını gösterir (sayı seçildiyse o söyler).
+      if (!facts.some((item) => item.field === 'totalCount')) {
+        sentences.push(locale === 'en' ? `No matching ${noun} were found${qualifiers}.` : `${capitalize(`eşleşen ${noun} bulunmadı`)}${qualifiers}.`);
+      }
     } else if (fact.field === 'complete') {
       sentences.push(fact.value ? (locale === 'en' ? 'The result is complete.' : 'Sonuç tamdır.') : (locale === 'en' ? 'The result is incomplete.' : 'Sonuç eksiktir.'));
     } else if (fact.field === 'truncated') {
@@ -443,7 +473,7 @@ function recordRelative(tool, field) {
  * Doğrulanmış olgu seçimini Markdown anlatıma dönüştürür.
  * @param {{ evidenceId: string, fact: object }[]} items Sunucunun doğruladığı olgular (seçim sırasıyla).
  */
-export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto', operation = null } = {}) {
+export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto', operation = null, empty = [] } = {}) {
   const chosenLayout = layoutFrom(layout, operation);
   const byEvidence = new Map();
   for (const item of items) {
@@ -478,16 +508,22 @@ export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto',
     // Tek satırlık koleksiyon bir kayıttır; çok satırlı koleksiyon liste ya da tablodur.
     const lists = [];
     for (const [collection, rows] of collections) {
+      const role = ROW_ROLES[collection.split('.').at(-1)];
       if (rows.size === 1) {
         const [row] = rows.values();
-        sentences.push(...recordSentences({ tool, kind: rowKind(collection, tool), subject: row.subject, entries: row.entries, anonymous: false, row: true }, locale));
+        const record = recordSentences({ tool, kind: rowKind(collection, tool), subject: row.subject, entries: row.entries, anonymous: false, row: true }, locale);
+        sentences.push(...(role && record.length ? [`${role[0][language(locale)]}: ${record[0]}`, ...record.slice(1)] : record));
       } else {
-        lists.push(renderRows(collection, [...rows.values()], { evidenceId, locale, layout: chosenLayout === 'prose' ? 'list' : chosenLayout }));
+        lists.push({ ...renderRows(collection, [...rows.values()], { evidenceId, locale, layout: chosenLayout === 'prose' ? 'list' : chosenLayout }), role });
       }
     }
-    sentences.push(...envelopeSentences(envelope, { tool, locale }));
+    sentences.push(...envelopeSentences(envelope, { tool, locale, empty: empty.includes(evidenceId) }));
+    const stated = sentences.join(' ');
+    // Ortak ölçüt üstteki cümlede (ör. sayımda) yazılmadıysa listenin başında bir kez yazılır.
+    const lead = (criteria) => (criteria && !stated.includes(criteria) ? `_${capitalize(criteria.trim().slice(1, -1))}_\n\n` : '');
+    const listBlocks = lists.map(({ body, criteria, role }) => `${role ? `**${role[1][language(locale)]}**\n\n` : ''}${lead(criteria)}${body}`);
     if (sentences.length) blocks.push(`${sentences.join(' ')} ${citation([evidenceId])}`);
-    blocks.push(...lists);
+    blocks.push(...listBlocks);
   }
   return blocks.join('\n\n');
 }

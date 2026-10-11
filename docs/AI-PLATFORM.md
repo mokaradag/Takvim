@@ -340,9 +340,11 @@ değişmez; JSON güncellenir ve Rota yeniden başlatılır.
 
 24.09.2026 kataloğunda hız gerektiren `chat.fast`, `chat.general` ve
 `chat.tools` profilleri düşünme kipine sahip olmayan
-`Qwen3-Next-80B-A3B-Instruct` modeline; `chat.reasoning`
-`DeepSeek-V4.1-Flash` modeline; `vision` ise düşünme kipine sahip olmayan
-`Qwen3-VL-8B-Instruct` modeline bağlıdır. Dört model sunucudan kaldırılacağı
+`Qwen3-Next-80B-A3B-Instruct` modeline; Derin düşünme profilleri
+`chat.reasoning` ve `chat.tools.reasoning` `gemma-4-31B-it` modeline (bağlam
+131072); `vision` ise düşünme kipine sahip olmayan `Qwen3-VL-8B-Instruct`
+modeline bağlıdır. `DeepSeek-V4.1-Flash` katalogda kayıtlı kalır ama hiçbir
+profil onu kullanmaz. Dört model sunucudan kaldırılacağı
 bildirildiği için hem varsayılan kayıttan hem de operasyonel JSON'dan bilinçli
 olarak çıkarılmıştır: `Qwen3-30B-A3B-Instruct-2507`,
 `Qwen3-Coder-30B-A3B-Instruct`, `Qwen2.5-VL-7B-Instruct` ve
@@ -355,12 +357,12 @@ Kısaltılmış örnek:
   "version": 1,
   "models": [
     { "id": "Qwen3-Next-80B-A3B-Instruct", "provider": "onprem", "capabilities": ["chat", "tools"], "contextTokens": 262144, "enabled": true },
-    { "id": "DeepSeek-V4.1-Flash", "provider": "onprem", "capabilities": ["chat", "tools", "reasoning"], "contextTokens": 524288, "enabled": true },
+    { "id": "gemma-4-31B-it", "provider": "onprem", "capabilities": ["chat", "tools", "reasoning", "vision"], "contextTokens": 131072, "enabled": true },
     { "id": "Qwen3-VL-8B-Instruct", "provider": "onprem", "capabilities": ["chat", "vision"], "contextTokens": 32768, "enabled": true }
   ],
   "profiles": {
     "chat.fast": { "model": "Qwen3-Next-80B-A3B-Instruct", "maxOutputTokens": 512 },
-    "chat.reasoning": { "model": "DeepSeek-V4.1-Flash", "maxOutputTokens": 2048, "timeoutMs": 180000 },
+    "chat.reasoning": { "model": "gemma-4-31B-it", "maxOutputTokens": 2048, "timeoutMs": 180000 },
     "vision": { "model": "Qwen3-VL-8B-Instruct", "maxOutputTokens": 1024 }
   }
 }
@@ -461,6 +463,11 @@ isteklerin kiraları unutulup kapasite aşılamaz.
 - İstek süre sınırı `MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS` (varsayılan 90000,
   1000–600000) ya da profilin `timeoutMs` değeridir. Sıra beklemesi bu süreye
   dâhil değildir; kendi sınırı vardır (§6).
+- Süre sınırının altında her sağlayıcı çağrısı bir **ilerleme** sınırıyla
+  yürür: ilk anlamlı akış olayı `MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS`
+  (60000), sonraki olaylar arası `MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS`
+  (45000) içinde gelmelidir (100–600000). SSE yorum satırları ilerleme değildir;
+  hiç ilerlemeyen akış `AI_TIMEOUT` (`PROVIDER_STALLED`) ile kesilir (§18.3).
 - İstemci bağlantıyı keserse (`request.signal`) sağlayıcıya giden istek de
   kesilir, kapasite hemen bırakılır ve yanıt `AI_CANCELLED` (499) olur.
 - Süre dolduktan ya da iptalden sonra gelen yanıt **uygulanmaz**.
@@ -800,6 +807,8 @@ olur). Değerler hiçbir tanı çıktısına taşınmaz.
 | `MERGEN_ROTA_AI_MODEL_REGISTRY_PATH` | boş | İsteğe bağlı model kaydı JSON dosyası (§5) |
 | `MERGEN_ROTA_AI_MAX_ACTIVE_REQUESTS` … `_QUEUE_TIMEOUT_MS` | bkz. §6 | Kapasite sınırları |
 | `MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS` | `90000` | Sağlayıcı yanıtı süre sınırı (§7) |
+| `MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS` | `60000` | İstekten ilk anlamlı akış olayına kadar izin verilen en uzun süre (§7); canlı tutma ilerleme sayılmaz |
+| `MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS` | `45000` | İki anlamlı akış olayı arasındaki en uzun süre (§7) |
 | `MERGEN_ROTA_AI_TOOLS_ENABLED` | `false` | Aşama 3 Rota verisi araçlarını açar (§19); 0018 ve araç profilleri de gerekir |
 
 Özellik açıkken en az bir anahtar kaynağı (kurumsal anahtar ya da ana anahtar)
@@ -1122,6 +1131,7 @@ HTTP durumu değişemeyeceği için her akış **tam olarak bir** sonlandırıc�
 | --- | --- | --- |
 | `accepted` | `{ v: 1, conversation, userMessage, mode, replay, context: { trimmed, omittedMessages } }` | İstek kabul edildi; kullanıcı iletisi kaydedildi (ilk olay) |
 | `status` | `{ phase: 'generating' \| 'thinking' }` | Gerçek evre geçişi (sağlayıcı yanıt vermeye başladı / model düşünüyor) |
+| `progress` | `{}` | Görünür olay üretmeyen gerçek üretim ilerlemesi (gizli akıl yürütme, araç bağımsız değişkeni, araç yürütmesi); en fazla 10 sn'de bir |
 | `delta` | `{ text }` | Görünür yanıt metninin sıradaki parçası |
 | `done` | `{ conversation, assistantMessage (metinsiz, uzunluklu), replayed }` | Yanıt tamamlandı VE kaydedildi |
 | `error` | `{ code, message, reason, retryable, retryAfterMs, credentialSource, partial }` | Sonlandırıcı hata; `partial: true` metin başladıktan sonra kesildiğini söyler |
@@ -1143,16 +1153,43 @@ yanıtı oynatır). Tanınmayan olay ve evre ileriye uyumluluk için yok sayıl�
 Sağlayıcının ham olayı, model adı, anahtar, adres ya da akıl yürütme metni
 hiçbir olaya girmez.
 
-**Canlı tutma:** yavaş bir model ilk metni üretirken bağlantı ve ters vekil
-sessiz kalmasın diye sunucu 15 sn'de bir SSE **yorum** satırı (`: keepalive`)
-gönderir. Yorum veri taşımaz, gösterilen metni etkilemez ve ilerleme sayılmaz;
-akış bitince, iptal edilince ya da istemci okumayı bırakınca zamanlayıcı durur
-(tarayıcının okumadığı kuyruğa yazılmaz). Tarayıcı 45 sn boyunca hiç bayt
-(canlı tutma dâhil) almazsa bağlantıyı kopmuş sayar (`STREAM_STALLED`).
+**Canlı tutma ilerleme değildir.** Yavaş bir model ilk metni üretirken bağlantı
+ve ters vekil sessiz kalmasın diye sunucu 15 sn'de bir SSE **yorum** satırı
+(`: keepalive`) gönderir. Yorum yalnızca TAŞIMANIN canlı olduğunu söyler; veri
+taşımaz ve hiçbir katmanda üretim ilerlemesi sayılmaz. İlerleme katmanlı olarak
+sınırlıdır:
+
+1. **Sağlayıcı:** her model turu kendi ilerleme gözcüsüyle yürür. İstekten ilk
+   anlamlı akış olayına (rol, metin, akıl yürütme, araç parçası, kullanım)
+   `MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS` (60 sn), iki anlamlı olay
+   arasına `MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS` (45 sn) izin verilir.
+   Sağlayıcının SSE yorumları ve boş parçalar süreyi uzatmaz. Sınır dolunca
+   sağlayıcı isteği kesilir ve tur `AI_TIMEOUT` (`PROVIDER_STALLED`) ile biter.
+2. **Tur:** akış yanıtı 90 sn boyunca hiçbir gerçek ilerleme (evre, metin,
+   `progress`, araç yürütmesi, kayıt) görmezse üretimi `AI_TIMEOUT`
+   (`GENERATION_STALLED`) ile keser. Sinyale uymayan iş 25 sn içinde bitmezse
+   tur yine tek hata olayıyla sonlandırılır.
+3. **Kaynaklar:** hangi yol olursa olsun kapasite kirası ve konuşmanın üretim
+   hakkı tam bir kez bırakılır; araçlı oturum sinyale uymayan bir araç ya da
+   sağlayıcı yüzünden kirayı süre sınırının ötesinde tutamaz. Ardından aynı tur
+   yeniden denenebilir, aynı konuşmada yeni soru sorulabilir ve başka
+   kullanıcıların turları hiçbir aşamada beklemez.
+4. **Tarayıcı:** 45 sn boyunca hiç bayt (canlı tutma dâhil) gelmezse bağlantı
+   kopmuş (`STREAM_STALLED`, `NO_DATA`); bayt gelse de 120 sn boyunca hiçbir
+   protokol olayı gelmezse üretim takılmış sayılır (`STREAM_STALLED`,
+   `NO_PROGRESS`). İkisinde de istek kesilir, arayüz "çalışıyor" durumunda
+   kalmaz ve tur yeniden denenebilir. Tarayıcı sınırı sunucununkinden uzundur:
+   normalde önce sunucunun hata olayı gelir.
+
+Akış bitince, iptal edilince ya da istemci okumayı bırakınca zamanlayıcılar
+durur (tarayıcının okumadığı kuyruğa yazılmaz).
 
 **Geri basınç:** sunucu kuyruğunda en fazla 32 olay bekler; yavaş istemcide
-sonraki metin parçası yer açılana kadar bekletilir (bu bekleme de ağ geçidinin
-süre sınırına bağlıdır). Okunmamış çıktı sunucu belleğinde sınırsız birikmez.
+sonraki metin parçası yer açılana kadar bekletilir. Bekleme 20 sn ile
+sınırlıdır: okumayan istemci turu tutamaz, üretim `DELIVERY_STALLED` ile kesilir
+ve hak bırakılır. Teslim edilemeyen yanıt metni turun izine teslim edilmiş yanıt
+olarak değil hata olarak yazılır. Okunmamış çıktı sunucu belleğinde sınırsız
+birikmez.
 
 ### 18.4 Kipler ve profiller
 
@@ -1229,6 +1266,10 @@ iletiler bağlamın dışında kaldıysa `accepted` olayı bunu bildirir
   beklemeden kullanılabilir; yeni deneme süren uzlaştırmayı geçersiz kılar ve
   gerekirse kendi sonucundan sonra yeniden başlatır. Kayıtlı yanıt bulunursa tur
   tamamlanmış gösterilir, bulunmazsa kısmi metin ve **Yeniden dene** kalır.
+  Sunucunun turu kendi `error` olayıyla bitirmesi (ör. `PROVIDER_STALLED`) bir
+  karardır, belirsiz son değildir: tek doğrulama okuması yapılır ve gecikmeli
+  yeniden okumalar beklenmez; durdurulan sağlayıcıdan sonra yeniden deneme ve
+  yeni konuşma hemen kullanılabilir.
 - **Kabul öncesi hatalar.** Sunucunun iletiyi yazmadan verdiği kesin retler
   (oturum, geçersiz istek, kapalı/yapılandırılmamış hizmet, `CONFLICT`,
   `NOT_FOUND`) yerel turu atar ve metni taslağa geri koyar; yazma alanında yeni

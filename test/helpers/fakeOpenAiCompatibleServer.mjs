@@ -57,10 +57,11 @@ export function sseChunksFor(model, text) {
  * Akışlı yanıt (`stream: true`). Parçalar ayrı yazılır; `gapMs` parçalar arası
  * beklemedir. `destroyAfter` verilen sayıda parçadan sonra soketi keser
  * (yanıt ortasında kopan bağlantı), `hangAfter` bağlantıyı açık bırakır.
+ * `chunks` istek gövdesini alan bir işlev de olabilir (isteğe göre senaryo).
  */
-function streamResponse(response, scenario, model, text, state) {
+function streamResponse(response, scenario, model, text, state, body) {
   const stream = scenario.stream || {};
-  const chunks = stream.chunks ?? sseChunksFor(model, scenario.text || text);
+  const chunks = (typeof stream.chunks === 'function' ? stream.chunks(body) : stream.chunks) ?? sseChunksFor(model, scenario.text || text);
   response.writeHead(200, {
     'content-type': stream.contentType ?? 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache'
@@ -198,7 +199,7 @@ export async function startFakeOpenAiCompatibleServer({
           return;
         }
         if (body?.stream === true && !scenario.jsonForStream) {
-          streamResponse(response, scenario, body?.model || 'fake-model', text, state);
+          streamResponse(response, scenario, body?.model || 'fake-model', text, state, body);
           return;
         }
         json(response, 200, completion(body?.model || 'fake-model', scenario.text || text));

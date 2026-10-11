@@ -295,7 +295,8 @@ test('terminal selection cannot replace a requested list, rank or named row with
   const named = inProject(['task.status'], PROJECTS.FULL, { entities: [{ type: 'project', id: PROJECTS.FULL }, { type: 'task', id: rows[0].taskId }] });
   assert.equal(issue(['data.tasks.1.status'], named), 'ENTITY_MISSING');
   assert.equal(issue(['data.tasks.0.status'], named), null);
-  const list = inProject(['task.title'], PROJECTS.FULL, { operation: 'list' });
+  // Listenin sırası nüfusun parçasıdır: başlığa göre okunan liste bu sırayı bildirir.
+  const list = inProject(['task.title'], PROJECTS.FULL, { operation: 'list', population: { tool: 'rota_task_search', collection: 'tasks', sort: 'title_asc' } });
   assert.equal(issue(['data.tasks.0.title'], list), 'LIST_INCOMPLETE');
   assert.equal(issue(['data.tasks.*.title'], list), null);
 });

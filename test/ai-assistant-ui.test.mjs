@@ -2117,6 +2117,32 @@ test('uzlaştırma ilk olumsuz okumadan sonra geç kaydedilen yanıtı bulur', a
   controller.dispose();
 });
 
+test('sunucunun kendi hata olayıyla bitirdiği tur tek okumayla uzlaşır; kopan akış gecikmeli okumayı sürdürür', async () => {
+  for (const [settled, expectedReads] of [[true, 1], [false, 3]]) {
+    const { controller, api, state } = await readyController({ reconciliationDelaysMs: [1, 1] });
+    controller.send('Soru');
+    const run = api.turns[0];
+    const data = acceptedData(CONVERSATION_A, run, 'Soru');
+    run.emit('accepted', data);
+    let reads = 0;
+    api.loadAssistantConversationRequest = async () => {
+      reads += 1;
+      return { ok: true, conversation: data.conversation, messages: [] };
+    };
+    run.resolve(settled
+      ? { ok: false, code: 'AI_TIMEOUT', reason: 'PROVIDER_STALLED', retryable: true, settled: true, phase: 'stream' }
+      : { ok: false, code: 'STREAM_INTERRUPTED', retryable: true });
+    await drain();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    await drain();
+    assert.equal(reads, expectedReads, settled ? 'sunucu kararı tek okumayla doğrulanır' : 'belirsiz son gecikmeli yeniden okunur');
+    assert.equal(state().reconciling[state().active.key], undefined, 'uzlaştırma biter');
+    if (settled) assert.equal(state().active.turns[0].answer.error.title, 'Yanıt ilerlemiyor');
+    assert.equal(controller.retry(run.input.turnId).ok, true, 'aynı tur yeniden denenebilir');
+    controller.dispose();
+  }
+});
+
 test('uzlaştırma sürerken yazma alanı açık kalır ama yeni gönderim engellenir', async () => {
   const { controller, api } = await readyController({ reconciliationDelaysMs: [1000] });
   controller.send('Soru');

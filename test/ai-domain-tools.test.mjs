@@ -167,9 +167,9 @@ test('yönetim kapsamı: yönetici yalnızca astının görevini ve onun iş da�
   const design = full.result.data.nodes.find((node) => node.wbsId === WBS.FULL_DESIGN);
   assert.equal(design.subtreeTasks, 2);
   assert.equal(design.subtreeOverdue, 1);
+  // Derinlik nüfusun boyutudur: istenen derinliğe kadar bütün düğümler listelendiyse sonuç tamdır; daha derin düğümler not edilir.
   const shallow = await callRotaTool(stack, AYSE, 'rota_wbs_inspect', { projectId: PROJECTS.FULL, depth: 1 });
-  assert.equal(shallow.result.complete, false);
-  assert.equal(shallow.result.truncated, true);
+  assert.deepEqual([shallow.result.complete, shallow.result.truncated, shallow.result.totalCount, shallow.result.data.deeperNodes], [true, false, 1, true]);
   assert.match(shallow.result.data.notes.join(' '), /derinlikte kesildi/);
 });
 

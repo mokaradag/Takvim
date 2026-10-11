@@ -1,31 +1,65 @@
 import 'server-only';
-import { randomUUID } from 'node:crypto';
-import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.js';
 import { claimableContract, METRICS, metricEntry, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
-import { concreteCollections, provesEmptyCollection, rankableMeasure, rankedRowIndexes, REQUEST_ENTITY_TYPES, REQUEST_LIMITS, REQUEST_OPERATIONS } from '../../../domain/ai/requestContract.js';
+import {
+  canonicalField,
+  collectionComplete,
+  collectionTotalPaths,
+  concreteCollections,
+  insideRowCollection,
+  provesEmptyCollection,
+  readLater,
+  rowKey,
+  scalarKey
+} from '../../../domain/ai/evidencePopulation.js';
+import {
+  ENTITY_ID_FIELDS,
+  entityKey,
+  factRow,
+  factSuperseded,
+  listCollections,
+  parentProperty,
+  presentCollection,
+  rankableMeasure,
+  rankedRowIndexes,
+  REQUEST_ENTITY_TYPES,
+  REQUEST_LIMITS,
+  REQUEST_OPERATIONS,
+  rowMetricFields,
+  sourceCollections
+} from '../../../domain/ai/requestContract.js';
 import { createEvidenceFacts, fieldPatternCovers } from '../../../domain/ai/evidenceFacts.js';
+import { businessDate } from '../../../domain/calendar/businessDate.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 import { parseSicil } from '../../identity/sicil.js';
-import { addDays, normalizeTaskFilters } from './rota/taskFacts.js';
+import { normalizeTaskFilters } from './rota/taskFacts.js';
 import { parseToolArguments } from './toolArguments.js';
 import { invalidArguments } from './toolErrors.js';
 import { getRotaTool, toolCatalogForModel } from './toolRegistry.js';
-import { TOOL_LIMITS } from './toolLimits.js';
-import { containmentText, populationArguments } from './toolScope.js';
+import { containmentText } from './toolScope.js';
+import {
+  declaredFacets,
+  familyKeys,
+  periodWindow,
+  populationAgreement,
+  REQUEST_PERIODS,
+  selectorsOf,
+  sortedBy
+} from './requestPopulation.js';
 
 /**
  * Veri okunmadan bildirilen türlü isteğin SUNUCU tarafı: şema, güven
- * denetimi, varlık bağlama ve kanıtın nüfus koşulları.
+ * denetimi, varlık bağlama, kanıtın nüfus dizini ve isteğin belirlediği
+ * olguların belirlenimci seçimi.
  *
  * Şemanın süzgeç değerleri araçların kendi şemalarından alınır; istek araçla
  * aynı sözlüğü konuşur. Sunucu kullanıcı cümlesini yorumlamaz: yalnızca
  * bildirilen yapının geçerliliğini, arama metninin kullanıcının iletisinden
  * geldiğini ve kimliğin kullanıcıdan ya da sunucu seçiminden geldiğini denetler.
+ * Nüfus kimliği ve aracın yetenekleri requestPopulation.js'dedir.
  */
 
 const ID_PATTERN = '^(?:[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}|[1-9][0-9]{0,9})$';
 const POPULATIONS = Object.freeze({ project: 'projects', task: 'tasks', person: 'people', wbs: 'wbs', baseline: 'baselines' });
-const PERIODS = Object.freeze(['today', 'yesterday', 'last_7_days']);
 
 let schema = null;
 
@@ -49,7 +83,7 @@ export function requestSchema() {
         properties: {
           tool: { type: 'string', enum: toolCatalogForModel().map((tool) => tool.name) },
           collection: { type: 'string', maxLength: 80, description: `Yalnızca list/rank: aracın satır koleksiyonu (${toolCatalogForModel()
-            .filter((tool) => rowCollections(tool.name).length).map((tool) => `${tool.name}=${rowCollections(tool.name).join('|')}`).join(', ')}). value isteğinde verilmez.` },
+            .filter((tool) => rowCollections(tool.name).length).map((tool) => `${tool.name}=${rowCollections(tool.name).join('|')}`).join(', ')}). value isteğinde verilmez; kardeş koleksiyonlar (öncüller ve ardıllar, bildirim akışları) birlikte isteniyorsa list isteğinde verilmez.` },
           groupBy: getRotaTool('rota_task_analytics').parameters.properties.groupBy,
           depth: { type: 'integer', minimum: 1, maximum: 4 },
           textFields: { type: 'array', maxItems: 4, uniqueItems: true, items: { type: 'string', enum: ['description', 'requesterMessage', 'decisionMessage', 'changes'] } },
@@ -79,7 +113,7 @@ export function requestSchema() {
         type: 'object', additionalProperties: false,
         properties: {
           status: task.status, priority: task.priority, deadline: task.deadline, dateField: task.dateField,
-          dateFrom: task.dateFrom, dateTo: task.dateTo, period: { type: 'string', enum: [...PERIODS] },
+          dateFrom: task.dateFrom, dateTo: task.dateTo, period: { type: 'string', enum: [...REQUEST_PERIODS] },
           assignee: { type: 'string', enum: ['me', 'unassigned'] }, createdByMe: task.createdByMe, milestone: task.milestone, text: task.text,
           tab: { type: 'string', enum: ['pending', 'sent', 'history'] }, workflowStatus: { type: 'string', enum: [...new Set(statuses)] },
           source: { type: 'string', enum: ['corporate', 'manual'] }, includeEmpty: { type: 'boolean' },
@@ -91,54 +125,27 @@ export function requestSchema() {
   return schema;
 }
 
-const propertyMetrics = new Map();
-
-/** Ölçü bağlı varlığın özelliği olarak (nüfus aracından bağımsız) herhangi bir araçtan gelebilir mi? */
-function propertyMetric(metric) {
-  if (!propertyMetrics.has(metric)) {
-    propertyMetrics.set(metric, toolCatalogForModel().some((tool) => metricPaths(tool.name, metric)
-      .some((path) => metricEntry(tool.name, path.startsWith('data.') ? path.slice(5) : path)?.property)));
-  }
-  return propertyMetrics.get(metric);
-}
-
-function periodWindow(period, today) {
-  if (period === 'yesterday') return { dateFrom: addDays(today, -1), dateTo: addDays(today, -1) };
-  if (period === 'last_7_days') return { dateFrom: addDays(today, -6), dateTo: today };
-  return period === 'today' ? { dateFrom: today, dateTo: today } : {};
-}
-
 /**
- * Bildirimi doğrular; geçerli değilse ayrıntılı `INVALID_ARGUMENTS`.
- * Arama metni kullanıcının iletisinden, kimlik kullanıcının yazdığı ya da
- * sunucunun bağladığı seçimden gelmelidir.
+ * Bildirimi doğrular; geçerli değilse ayrıntılı `INVALID_ARGUMENTS`. Arama
+ * metni kullanıcının iletisinden, kimlik kullanıcının yazdığı ya da sunucunun
+ * bağladığı seçimden gelmelidir. Nüfusun planla tamamlanması ve aracın
+ * yetenek denetimi `completeRequest` ile, araç planıyla birlikte yapılır.
  */
+/** Nüfusun boyutları: istek düzeyinde yazılmışlarsa (nüfusta yoksa) nüfusa aittir; biçim kayması anlamı değiştirmez. */
+const POPULATION_KEYS = Object.freeze(['collection', 'sort', 'groupBy', 'depth', 'textFields']);
+
+function populationShape(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !raw.population || typeof raw.population !== 'object') return raw;
+  const misplaced = POPULATION_KEYS.filter((key) => Object.hasOwn(raw, key) && !Object.hasOwn(raw.population, key));
+  if (!misplaced.length) return raw;
+  const rest = Object.fromEntries(Object.entries(raw).filter(([key]) => !misplaced.includes(key)));
+  return { ...rest, population: { ...raw.population, ...Object.fromEntries(misplaced.map((key) => [key, raw[key]])) } };
+}
+
 export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, today }) {
   if (raw == null) throw invalidArguments(['$.request:required']);
-  const value = parseToolArguments(requestSchema(), JSON.stringify(raw));
+  const value = parseToolArguments(requestSchema(), JSON.stringify(populationShape(raw)));
   const problems = [];
-  // Düzeltme ipuçları yalnızca kayıt defterinden türetilir (araç adı şemayla doğrulanmıştır).
-  const hints = [];
-  if (value.population) {
-    const tool = getRotaTool(value.population.tool);
-    const collections = rowCollections(tool.name);
-    const sorts = tool.parameters.properties.sort?.enum || [];
-    if (value.population.collection && !collections.includes(value.population.collection)) problems.push('$.population.collection:unknown');
-    if (value.population.sort && !sorts.includes(value.population.sort)) problems.push('$.population.sort:unsupported');
-    if (value.operation !== 'value' && !value.population.collection) problems.push('$.population.collection:required');
-    if (value.population.groupBy && tool.name !== 'rota_task_analytics') problems.push('$.population.groupBy:unsupported');
-    if (value.population.depth && tool.name !== 'rota_wbs_inspect') problems.push('$.population.depth:unsupported');
-    if (problems.some((problem) => problem.startsWith('$.population.collection'))) {
-      hints.push(`population.collection (${tool.name}): ${collections.join('|') || '-'}${value.operation === 'value' ? '; value isteğinde gerekmez' : ''}`);
-    }
-    if (problems.includes('$.population.sort:unsupported')) hints.push(`population.sort (${tool.name}): ${sorts.join('|') || '-'}`);
-    // Doğrulayıcı toplam ölçüyü yalnızca nüfus aracından ya da fields kaynağından kabul eder: taşınamayan ölçü veri okunmadan reddedilir.
-    value.metrics.forEach((metric, index) => {
-      if (metricPaths(tool.name, metric).length || (value.fields || []).some((field) => field.metric === metric) || propertyMetric(metric)) return;
-      problems.push(`$.metrics[${index}]:population`);
-      hints.push(`${metric}: ${tool.name} taşımaz; taşıyan araçlar ${toolCatalogForModel().filter((item) => metricPaths(item.name, metric).length).map((item) => item.name).join('|') || '-'}`);
-    });
-  }
   for (const field of value.fields || []) if (!value.metrics.includes(field.metric) || !metricPaths(field.tool, field.metric).includes(field.path)) problems.push('$.fields:unknown');
   for (const binding of value.bindings || []) if (!value.metrics.includes(binding.metric) || !value.entities?.[binding.entity]) problems.push('$.bindings:unknown');
   if ((value.operation === 'rank') !== Boolean(value.rank)) problems.push('$.rank:operation');
@@ -152,7 +159,8 @@ export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, tod
     }
     if (entity.text != null) {
       if (!textTrusted(entity.text)) problems.push(`${path}.text:untrusted`);
-      return Object.freeze({ type: entity.type, id: null, text: containmentText(entity.text) });
+      // Karşılaştırma katlanmış metinle yapılır; sunucunun ad araması kullanıcının yazdığı biçimi kullanır.
+      return Object.freeze({ type: entity.type, id: null, text: containmentText(entity.text), query: String(entity.text).trim() });
     }
     const id = entity.type === 'person' ? parseSicil(entity.id) : canonicalActualId(entity.id);
     if (id == null || !identityTrusted(POPULATIONS[entity.type], String(id))) problems.push(`${path}.id:untrusted`);
@@ -166,92 +174,10 @@ export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, tod
   } catch (error) {
     problems.push(...(error.details || ['$.filters:invalid']).map((detail) => detail.replace(/^\$\./, '$.filters.')));
   }
-  if (problems.length) throw Object.assign(invalidArguments(problems), { hints });
+  if (problems.length) throw invalidArguments(problems);
   return Object.freeze({ operation: value.operation, metrics: Object.freeze([...value.metrics]), rank: value.rank ? Object.freeze({ ...value.rank }) : null,
     entities: Object.freeze(entities), filters: Object.freeze(filters), layout: value.layout || 'auto', reasoning: value.reasoning || 'deterministic',
     population: value.population ? Object.freeze({ ...value.population }) : null, fields: Object.freeze(value.fields || []), bindings: Object.freeze(value.bindings || []) });
-}
-
-/**
- * Bildirim ve ilk araç planı tek yerel çağrının bağımsız değişkenleridir. Araç
- * şemaları planda yinelenmez: araçlar aynı turda ayrıca sunulur ve plan
- * çağrıları ya `calls` içinde ya da aynı yanıtta doğrudan taşıyabilir.
- */
-export function typedPlanningTool(catalog) {
-  return { name: 'rota_plan', description: 'Veri okumadan türlü Rota isteğini ve ilk salt okunur araç planını bildir. Araçları calls içinde ya da aynı yanıtta doğrudan çağır; asistan metni gerekmez.',
-    parameters: { type: 'object', additionalProperties: false, required: ['intent', 'language'], properties: {
-      intent: { type: 'string', enum: ['rota', 'general'] }, language: { type: 'string', enum: ['tr', 'en'] },
-      request: { ...requestSchema(), required: [...requestSchema().required, 'population', 'layout'] },
-      calls: { type: 'array', maxItems: TOOL_LIMITS.maxCallsPerRound, items: {
-        type: 'object', additionalProperties: false, required: ['name', 'arguments'], properties: {
-          name: { type: 'string', enum: catalog.map((tool) => tool.name) },
-          arguments: { type: 'object', description: 'Aynı adlı aracın parametre şemasına uyan bağımsız değişkenler.' }
-        }
-      } }
-    } } };
-}
-
-function planCallKey(call, catalog) {
-  const tool = catalog.find((item) => item.name === call.name);
-  try { return `${call.name}:${JSON.stringify(parseToolArguments(tool.parameters, call.arguments))}`; } catch { return `${call.name}:${call.arguments}`; }
-}
-
-/** Plan ve yanındaki doğrudan çağrılar birlikte doğrulanır; geçerli planın dışındaki hiçbir çağrı çalışmaz. */
-export function unpackTypedPlan(result, catalog) {
-  const plans = result.toolCalls.filter((call) => call.name === 'rota_plan');
-  if (plans.length !== 1 || plans[0].oversize) throw invalidArguments(['$.plan:single']);
-  const [call] = plans;
-  if (Buffer.byteLength(call.arguments || '', 'utf8') > TOOL_LIMITS.maxArgumentBytes) throw invalidArguments(['$.plan:tooLarge']);
-  let plan;
-  try { plan = JSON.parse(call.arguments); } catch { throw invalidArguments(['$.plan:json']); }
-  const calls = plan?.calls ?? [];
-  if (!plan || typeof plan !== 'object' || Array.isArray(plan) || Object.keys(plan).some((key) => !['intent', 'language', 'request', 'calls'].includes(key))
-    || !['rota', 'general'].includes(plan.intent) || !['tr', 'en'].includes(plan.language) || !Array.isArray(calls)) throw invalidArguments(['$.plan:shape']);
-  const direct = result.toolCalls.filter((item) => item !== call);
-  if (direct.some((item) => !catalog.some((tool) => tool.name === item.name))) throw invalidArguments(['$.calls:shape']);
-  if (calls.length + direct.length > TOOL_LIMITS.maxCallsPerRound) throw invalidArguments(['$.calls:maxItems']);
-  // Eksik layout auto, eksik population sunucu seçimi yerine model seçimidir (eski bildirimle aynı); içerik sorunları birlikte bildirilir.
-  if (plan.intent === 'rota' && !plan.request) throw invalidArguments(['$.request:required']);
-  if (plan.intent === 'rota' && !calls.length && !direct.length) throw invalidArguments(['$.calls:required']);
-  if (plan.intent === 'general' && (calls.length || plan.request || direct.length)) throw invalidArguments(['$.plan:general']);
-  const planned = calls.map((item, index) => {
-    const tool = catalog.find((tool) => tool.name === item?.name);
-    if (!tool || Object.keys(item).some((key) => !['name', 'arguments'].includes(key)) || !item.arguments || typeof item.arguments !== 'object'
-      || Array.isArray(item.arguments)) throw invalidArguments([`$.calls[${index}]:shape`]);
-    let args;
-    try { args = parseToolArguments(tool.parameters, JSON.stringify(item.arguments)); }
-    catch (error) { throw invalidArguments((error.details || ['$:invalid']).map((detail) => `$.calls[${index}].${tool.name}${String(detail).slice(1)}`)); }
-    return { id: `${call.id}_${index}`, name: item.name, arguments: JSON.stringify(args) };
-  });
-  // Aynı çağrı plan içinde ve doğrudan yinelenirse bir kez çalışır.
-  const seen = new Set();
-  const toolCalls = [...planned, ...direct].filter((item) => {
-    const key = planCallKey(item, catalog);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  return { ...result, text: JSON.stringify({ kind: 'route', intent: plan.intent, language: plan.language, ...(plan.request ? { request: plan.request } : {}) }), toolCalls };
-}
-
-/**
- * Yerel çağrı yerine asistan metni olarak dönen plan: tek JSON nesnesi
- * (`{"name":"rota_plan","arguments":{…}}`, planın kendisi ya da `calls` taşıyan
- * yönlendirme bildirimi; isteğe bağlı tek `<tool_call>` zarfı). Metin
- * yorumlanmaz; plan yerel çağrıyla aynı doğrulamadan geçer.
- */
-export function textPlanCall(text) {
-  const value = parseEvidenceResponse(String(text ?? '').trim().replace(/^<tool_call>\s*([\s\S]*?)\s*<\/tool_call>$/, '$1'));
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  let args = null;
-  if (value.name === 'rota_plan' && Object.keys(value).every((key) => ['name', 'arguments'].includes(key))) {
-    try { args = typeof value.arguments === 'string' ? JSON.parse(value.arguments) : value.arguments; } catch { args = null; }
-  } else if (Array.isArray(value.calls) && (value.kind === undefined || value.kind === 'route')) {
-    const { kind: _kind, ...plan } = value;
-    args = plan;
-  }
-  if (!args || typeof args !== 'object' || Array.isArray(args)) return null;
-  return { id: `plan_${randomUUID().replace(/-/g, '').slice(0, 16)}`, name: 'rota_plan', arguments: JSON.stringify(args), oversize: false };
 }
 
 /** Bildirim sorunlarının beklenen biçimi; yalnızca şemadan türetilir, modelin değeri yansıtılmaz. */
@@ -272,6 +198,51 @@ export function declarationHints(problems) {
     hints.push(`${path.slice(2)}: ${node.type === 'array' ? `${leaf?.type} dizisi` : node.type}${values}`);
   }
   return [...new Set(hints)].slice(0, 6);
+}
+
+/**
+ * Kayıtlı olmayan ölçü kimliğinin düzeltme ipucu: aynı önekli kayıtlı ölçüler (yalnızca kayıt
+ * defterinden; modelin yazdığı metin yansıtılmaz).
+ */
+export function metricIdHints(problems, raw) {
+  return problems.flatMap((problem) => {
+    const index = /^\$\.metrics\[(\d+)\]:enum$/.exec(String(problem))?.[1];
+    const value = index == null ? null : raw?.metrics?.[Number(index)];
+    const head = typeof value === 'string' ? value.split('.')[0] : null;
+    const family = head ? Object.keys(METRICS).filter((metric) => metric.startsWith(`${head}.`)) : [];
+    return family.length ? [`metrics[${index}] kayıtlı değil; kayıtlı ${head}.* ölçüleri: ${family.slice(0, 16).join('|')}`] : [];
+  });
+}
+
+/**
+ * Bildirimin kullanıcının adlandırdığı kayıtları: metni kullanıcının iletisinde geçen
+ * varlık adları ve görev başlığı metni. Bir tur boyunca birikir (reddedilen bildirimler dâhil).
+ */
+export function namedScope(scope, raw, textTrusted) {
+  const texts = [...(Array.isArray(raw?.entities) ? raw.entities.map((entity) => entity?.text) : []), raw?.filters?.text];
+  const next = new Map((scope || []).map((item) => [item.key, item]));
+  for (const text of texts) {
+    if (typeof text !== 'string' || !textTrusted(text)) continue;
+    const key = containmentText(text);
+    if (key && !next.has(key)) next.set(key, { key, text: text.trim() });
+  }
+  return [...next.values()];
+}
+
+/**
+ * Düzeltme biçimi onarır, sorunun kapsamını daraltamaz: önceki bildirimde kullanıcının
+ * adlandırdığı kayıtlardan yeni bildirimin varlıklarında (ya da başlık metninde) karşılığı
+ * olmayanlar. Ad kısaltılmış ya da sözcüklerle uzatılmış olabilir.
+ */
+export function droppedNames(scope, raw) {
+  const texts = [...(Array.isArray(raw?.entities) ? raw.entities.map((entity) => entity?.text) : []), raw?.filters?.text]
+    .filter((text) => typeof text === 'string').map(containmentText).filter(Boolean);
+  return (scope || []).filter((item) => !texts.some((text) => prefixRelated(item.key, text))).map((item) => item.text);
+}
+
+/** Düşürülen adların düzeltme ipucu. */
+export function droppedNameHint(names) {
+  return `entities: kullanıcının adlandırdığı ${names.map((name) => JSON.stringify(name)).join(', ')} bildirimden düşürülemez; soru adlandırılan her kaydı kapsar. Birden çok varlıkta her ölçüyü bindings ile kendi varlığına bağla (ör. [{"metric":"tasks.open","entity":0},{"metric":"tasks.total","entity":1}])`;
 }
 
 /** Modele verilen kapalı ölçü sözlüğü: kimlikler öneklerine göre gruplanır. */
@@ -310,8 +281,8 @@ function resolvedId(type, tool, args, payload, text) {
   const data = payload?.data;
   if (!data || typeof data !== 'object') return null;
   if (type === 'wbs') {
-    // Kesilmiş düğüm listesindeki tek eşleşme bütün ağaçta tek olduğunu kanıtlamaz.
-    if (tool !== 'rota_wbs_inspect' || payload.complete !== true || payload.truncated === true) return null;
+    // Kesilmiş ya da derinlikle sınırlı düğüm listesindeki tek eşleşme bütün ağaçta tek olduğunu kanıtlamaz.
+    if (tool !== 'rota_wbs_inspect' || payload.complete !== true || payload.truncated === true || data.deeperNodes === true) return null;
     const nodes = (data.nodes || []).filter((node) => [node.name, node.code].some((label) => containmentText(label) === text));
     return nodes.length === 1 ? nodes[0].wbsId : null;
   }
@@ -337,134 +308,88 @@ export function bindRequestEntities(request, entries, selection = null) {
   return request.entities.map((entity) => {
     if (entity.id) return { ...entity, bound: entity.id };
     const found = new Set(entries.map(({ tool, args, payload }) => resolvedId(entity.type, tool, args, payload, entity.text)).filter(Boolean));
+    // Kapsamın bağladığı ad: tam adı kullanıcının iletisinde geçen tek kısmi aday ya da (seri incelemesinde) tek serinin kayıtları.
+    for (const item of selection?.named || []) {
+      if (item.type !== entity.type || (item.tool && item.tool !== request.population?.tool)) continue;
+      if (item.text === entity.text || prefixRelated(item.title, entity.text)) found.add(item.id);
+    }
     if (found.size === 1) return { ...entity, bound: [...found][0] };
     const sameType = request.entities.filter((item) => item.type === entity.type && item.text);
     return { ...entity, bound: !found.size && selected?.[0] === entity.type && sameType.length === 1 ? selected[1] : null };
   });
 }
 
-/* ── Kanıtın nüfus koşulları ──────────────────────────────── */
+/** Kullanıcının adlandırdığı adayın adı ile bildirilen ad aynı adın kısaltılmışı ya da sözcüklerle uzatılmışı mı? */
+const prefixRelated = (title, text) => Boolean(title && text) && (title === text || text.startsWith(`${title} `) || title.startsWith(`${text} `));
 
-const FAMILY_KEYS = Object.freeze({
-  task: ['status', 'priority', 'deadline', 'dateField', 'dateFrom', 'dateTo', 'period', 'assignee', 'createdByMe', 'milestone', 'text'],
-  projectSearch: ['text'],
-  personSearch: ['text'],
-  workflow: ['tab', 'workflowStatus', 'dateFrom', 'dateTo', 'period', 'text'],
-  portfolio: ['source', 'includeEmpty'],
-  activity: ['dateFrom', 'dateTo', 'period', 'activityScope', 'activityKind'],
-  calendar: ['dateFrom', 'dateTo', 'period']
-});
-const FAMILIES = Object.freeze({
-  rota_task_search: 'task', rota_task_analytics: 'task', rota_project_search: 'projectSearch', rota_person_search: 'personSearch',
-  rota_schedule_requests: 'workflow', rota_assignment_requests: 'workflow',
-  rota_portfolio_summary: 'portfolio', rota_activity_search: 'activity', rota_calendar_inspect: 'calendar'
-});
-const TASK_SORT_RANKS = Object.freeze({
-  overdue_days_desc: ['task.overdueDays', 'desc'], target_finish_asc: ['task.targetFinish', 'asc'], target_finish_desc: ['task.targetFinish', 'desc'],
-  planned_start_asc: ['task.plannedStart', 'asc'], updated_desc: ['task.updatedAt', 'desc']
-});
-const PORTFOLIO_SORT_RANKS = Object.freeze({ overdue_desc: ['tasks.overdue', 'desc'], open_desc: ['tasks.open', 'desc'], due_soon_desc: ['tasks.dueNext7Days', 'desc'] });
+/** Ad aramasının çözüm alanı: aracın yalnızca metinle (koşulsuz) yapılan araması adın görünür kayıtlarını tam sayar. */
+const NAME_SEARCHES = Object.freeze({ project: ['rota_project_search', 'resolution'], person: ['rota_person_search', 'resolution'], task: ['rota_task_search', 'titleResolution'] });
 
-const compact = (value) => Object.fromEntries(Object.entries(value).filter(([, item]) => item != null && !(Array.isArray(item) && !item.length)));
-const sorted = (values) => (values?.length ? [...values].sort() : null);
+/** Kullanıcının yazdığı adın ilk sözcüğü: tam ad hiçbir kayda uymazsa yoklama araması bununla yapılır. */
+const probeText = (entity) => String(entity.query || entity.text || '').trim().split(/\s+/)[0] || '';
+
+/** Bu metinle koşulsuz tam ad araması yapıldı ve hiçbir görünür kayda uymadı mı? */
+function searchedNone(entries, type, text) {
+  const [search, field] = NAME_SEARCHES[type] || [];
+  return entries.some(({ tool, args = {}, payload }) => tool === search && payload?.data && payload.complete !== false
+    && containmentText(args.text || '') === text && Object.keys(args).every((key) => ['text', 'limit'].includes(key)) && payload.data[field] === 'none');
+}
 
 /**
- * Aracın bağımsız değişken adlarıyla değerlerden kanonik nüfus koşulları.
- * Arama metni her zaman nüfus koşuludur; ad çözümü için yapılan aramanın
- * satırı, değer isteğinde adlandırılan varlık olarak doğrulanır.
+ * Tam adı hiçbir görünür kayda uymayan bağlanmamış varlığın yoklama araması (adın ilk sözcüğü):
+ * model adı uzatmış olabilir (ör. "… _alt görev"); yoklamanın adaylarından tam adı kullanıcının
+ * iletisinde geçen tek aday bildirilen varlıktır.
  */
-function canonicalFacets(family, values, today) {
-  const searchText = (text) => (text ? containmentText(text) || null : null);
-  switch (family) {
-    case 'task': {
-      const filters = normalizeTaskFilters({ ...values, ...periodWindow(values.period, today), period: undefined });
-      return compact({ status: sorted(filters.statuses), priority: sorted(filters.priorities), deadline: filters.deadline,
-        dateField: filters.dateField, dateFrom: filters.dateFrom, dateTo: filters.dateTo,
-        assignee: ['me', 'unassigned'].includes(filters.assignee) ? filters.assignee : null, createdByMe: filters.createdByMe || null,
-        milestone: filters.milestone, text: searchText(filters.text) });
-    }
-    case 'projectSearch':
-    case 'personSearch':
-      return compact({ text: searchText(values.text) });
-    case 'workflow': {
-      const window = { dateFrom: values.dateFrom || null, dateTo: values.dateTo || null, ...periodWindow(values.period, today) };
-      return compact({ tab: values.tab && values.tab !== 'all' ? values.tab : null, workflowStatus: values.status || null, ...window,
-        text: values.text ? containmentText(values.text) : null });
-    }
-    case 'portfolio':
-      return compact({ source: values.source && values.source !== 'all' ? values.source : null, includeEmpty: values.includeEmpty === false ? false : null });
-    case 'activity': {
-      const window = populationArguments('rota_activity_search', { ...values, ...periodWindow(values.period, today),
-        period: values.period || values.dateFrom ? 'custom' : undefined }, today);
-      const fallback = window.dateFrom === today && window.dateTo === today;
-      return compact({ dateFrom: fallback ? null : window.dateFrom, dateTo: fallback ? null : window.dateTo,
-        activityScope: window.scope && window.scope !== 'visible' ? window.scope : null, activityKind: values.kind || null });
-    }
-    case 'calendar': {
-      const window = populationArguments('rota_calendar_inspect', { ...values, ...periodWindow(values.period, today) }, today);
-      const fallback = window.dateFrom === today && window.dateTo === addDays(today, 29);
-      return compact({ dateFrom: fallback ? null : window.dateFrom, dateTo: fallback ? null : window.dateTo });
-    }
-    default:
-      return {};
-  }
-}
-
-/** İstenen koşulların aracın bağımsız değişken adlarına çevirisi. */
-function declaredValues(family, filters) {
-  if (family === 'workflow') return { tab: filters.tab, status: filters.workflowStatus, dateFrom: filters.dateFrom, dateTo: filters.dateTo, period: filters.period, text: filters.text };
-  if (family === 'activity') return { dateFrom: filters.dateFrom, dateTo: filters.dateTo, period: filters.period, scope: filters.activityScope, kind: filters.activityKind };
-  return filters;
-}
-
-function selectorsOf(args) {
-  return [
-    ...(args.projectId ? [{ type: 'project', id: args.projectId }] : []),
-    ...(args.taskId ? [{ type: 'task', id: args.taskId }] : []),
-    ...(args.personSicil != null ? [{ type: 'person', id: String(args.personSicil) }] : []),
-    ...(args.wbsId ? [{ type: 'wbs', id: args.wbsId }] : []),
-    ...(args.baselineId ? [{ type: 'baseline', id: args.baselineId }] : [])
-  ];
-}
-
-function sortedBy(tool, args) {
-  const pair = tool === 'rota_task_search' ? TASK_SORT_RANKS[args.sort || (args.deadline === 'overdue' ? 'overdue_days_desc' : 'target_finish_asc')]
-    : tool === 'rota_portfolio_summary' ? PORTFOLIO_SORT_RANKS[args.sort || 'overdue_desc']
-      : tool === 'rota_workload_summary' ? ['tasks.open', 'desc']
-        : tool === 'rota_baseline_compare' ? ['task.varianceDays', 'desc']
-          : tool === 'rota_dependency_inspect' ? ['dependencies.relationCount', 'desc'] : null;
-  return pair ? { metric: pair[0], order: pair[1] } : null;
+export function nameProbes(request, entries, selection = null) {
+  return bindRequestEntities(request, entries, selection).flatMap((entity) => {
+    const probe = probeText(entity);
+    if (entity.bound || !entity.text || !searchedNone(entries, entity.type, entity.text) || containmentText(probe) === entity.text) return [];
+    return [{ name: NAME_SEARCHES[entity.type][0], args: { text: probe } }];
+  });
 }
 
 /**
- * Doğrulayıcının kanıt dizini: kanıtın yürütülen nüfusu, istenen koşulların o
- * araçtaki karşılığı, aracın ifade edemediği koşullar ve varlık seçicileri.
+ * Adla bildirilen ve ne tam adı ne de adın ilk sözcüğü hiçbir görünür kayda uymayan varlıklar (ör.
+ * görme yetkisi olmayan proje). Bu varlığın verisi bu turda okunamaz; yanıt kaydın bulunamadığıdır.
+ */
+export function unmatchedEntities(request, entries, selection = null) {
+  return bindRequestEntities(request, entries, selection).filter((entity) => !entity.bound && entity.text && searchedNone(entries, entity.type, entity.text)
+    && searchedNone(entries, entity.type, containmentText(probeText(entity))));
+}
+
+/* ── Kanıtın nüfus dizini ─────────────────────────────────── */
+
+/**
+ * Doğrulayıcının, sunucu seçiminin ve devir kararının ORTAK kanıt dizini:
+ * kanıtın kanonik nüfusu (koşullar, seçiciler, varsayılanları uygulanmış
+ * boyutlar), istenen koşulların o araçtaki karşılığı ve aracın ifade edemediği
+ * koşullar. Yürütülen bağımsız değişkenler kayıtta kalır.
  */
 export function requestEvidence(request, entries, today) {
   const active = Object.entries(request.filters).filter(([, value]) => value != null).map(([key]) => key);
   const index = new Map();
-  for (const [ordinal, { id, tool, args = {}, payload }] of entries.entries()) {
-    const family = FAMILIES[tool] || null;
-    const keys = family ? FAMILY_KEYS[family] : [];
+  for (const [ordinal, { id, tool, args = {}, payload, round = null }] of entries.entries()) {
+    const agreement = populationAgreement(request, tool, args, today);
     index.set(id, {
+      id,
       tool,
       ordinal,
-      snapshotDimensions: compact({ groupBy: args.groupBy, depth: args.depth, textFields: args.textFields ? [...args.textFields].sort() : null }),
+      round: round ?? ordinal,
+      args,
+      snapshotDimensions: agreement.dimensions,
       facts: payload?.data ? createEvidenceFacts(payload, { prefix: payload.factScope || id }) : [],
       envelope: payload,
-      facets: canonicalFacets(family, args, today),
-      declared: canonicalFacets(family, declaredValues(family, request.filters), today),
-      unsupported: active.filter((key) => !keys.includes(key)),
+      facets: agreement.facets,
+      declared: declaredFacets(tool, request.filters, today),
+      unsupported: active.filter((key) => !familyKeys(tool).includes(key)),
       selectors: selectorsOf(args),
-      sortedBy: sortedBy(tool, args),
+      sortedBy: sortedBy(tool, agreement.dimensions),
       firstPage: !args.cursor,
-      populationMatch: !request.population || request.population.tool === tool,
-      collection: request.population?.tool === tool ? request.population.collection || null : null,
-      dimensionsMatch: request.population?.tool !== tool ||
-        ((!request.population.groupBy || request.population.groupBy === args.groupBy) && (!request.population.depth || request.population.depth === (args.depth || 2))
-        && (!request.population.textFields || JSON.stringify([...request.population.textFields].sort()) === JSON.stringify([...(args.textFields || [])].sort()))),
-      sortMatch: !request.population?.sort || request.population.tool !== tool || request.population.sort === (args.sort ||
-        (tool === 'rota_task_search' ? args.deadline === 'overdue' ? 'overdue_days_desc' : 'target_finish_asc' : tool === 'rota_portfolio_summary' ? 'overdue_desc' : null))
+      populationMatch: agreement.populationMatch,
+      collection: request.population?.tool === tool ? declaredCollections(request) : null,
+      dimensionsMatch: agreement.dimensionsMatch,
+      rowDimensionsMatch: agreement.rowDimensionsMatch,
+      sortMatch: agreement.sortMatch
     });
   }
   return index;
@@ -480,154 +405,290 @@ export function requestRepairHint(request, entries) {
   return lines.slice(0, REQUEST_LIMITS.maxMetrics).join('\n');
 }
 
-/* ── İstekten türetilen olgu seçimi ───────────────────────── */
+/* ── Uygun taşıyıcılar (sunucu seçimi ve devir kararı) ────── */
 
 const scalar = (value) => value === null || ['string', 'number', 'boolean'].includes(typeof value);
-const canonicalField = (field) => field.split('.').map((part) => /^\d+$/.test(part) ? '*' : part).join('.');
-const factPool = (entry) => createEvidenceFacts(entry.payload, { prefix: entry.payload.factScope || entry.id });
-const declaredFields = (request, tool, metric) => (request.fields || []).filter((field) => field.tool === tool && field.metric === metric).map((field) => field.path);
-const ROW_TOTALS = Object.freeze({
-  rota_task_search: { tasks: 'tasks.total' }, rota_project_search: { matches: 'projects.total' }, rota_person_search: { people: 'people.total' },
-  rota_portfolio_summary: { projects: 'projects.total' }, rota_wbs_inspect: { nodes: 'wbs.nodes' },
-  rota_task_analytics: { groups: 'tasks.groupCount' }, rota_workload_summary: { people: 'people.total' },
-  rota_baseline_compare: { mostSlipped: 'baseline.compared' }, rota_activity_search: { items: 'activity.events' },
-  rota_schedule_requests: { items: 'requests.total' }, rota_assignment_requests: { items: 'requests.total' },
-  rota_calendar_inspect: { holidays: 'calendar.holidays' }, rota_outlook_status: { items: 'subscriptions.active' }
+const sortedJson = (value) => JSON.stringify(Object.keys(value).sort().map((key) => [key, value[key]]));
+const declaredPaths = (request, tool, metric) => request.fields.filter((field) => field.tool === tool && field.metric === metric).map((field) => field.path);
+const isProperty = (tool, path) => metricEntry(tool, path.startsWith('data.') ? path.slice(5) : path)?.property === true;
+/**
+ * Değer isteğinde ölçünün olası taşıyıcı yolları: satır dışı yollar ve varlığın kendi
+ * özelliği olan satır alanları. Grup ya da proje satırındaki kırılım değer isteğinde
+ * uygun değildir (doğrulayıcı da reddeder); toplamın anlamını belirsizleştirmez.
+ */
+const valueCarrierPaths = (tool, metric) => metricPaths(tool, metric).filter((path) => !insideRowCollection(tool, path) || isProperty(tool, path));
+/**
+ * Aynı kanıtta yapı gereği AYNI değeri taşıyan yollar (tek anlam): sunucu ilkini seçer.
+ * Eşitlik bir özellik sınamasıyla korunur (analiz: toplam = saat kapsamının görev sayısı = totalCount).
+ */
+export const SAME_VALUE_PATHS = Object.freeze({ rota_task_analytics: { 'tasks.total': ['data.totals.total', 'data.hours.taskCount', 'totalCount'] } });
+
+/**
+ * Aynı değerin birlikte gösterilen biçimleri (ör. proje adı ve kodu): liste ya da sıralama
+ * satırında aynı nesnedeki bu yapraklar ölçünün tek anlamıdır; sunucu satır sütunu olarak hepsini seçer.
+ */
+const REPRESENTATION_LEAVES = Object.freeze({
+  'task.project': ['name', 'code'], 'wbs.name': ['name', 'code'], 'recurrence.rule': ['rule', 'ruleDescription'],
+  'calendar.holidayName': ['name', 'short'], 'person.organization': ['directorate', 'department', 'unit']
 });
 
-/** Muhakeme başlamadan önce bildirilen ölçülerin kanıtı bulunmalıdır. */
-export function requestEvidenceReady(request, entries, today) {
-  const evidence = [...requestEvidence(request, entries, today).values()];
-  return request.metrics.every((metric) => evidence.some((entry) => (entry.populationMatch !== false || declaredFields(request, entry.tool, metric).length > 0) && entry.dimensionsMatch !== false
-    && entry.facts.some((fact) => fact.semantic?.metric === metric && (!(request.fields || []).some((field) => field.metric === metric)
-      || declaredFields(request, entry.tool, metric).some((path) => fieldPatternCovers(path, fact.field))))));
+function representations(metric, paths) {
+  const leaves = REPRESENTATION_LEAVES[metric];
+  if (!leaves || paths.length < 2) return false;
+  const parent = (path) => path.slice(0, path.lastIndexOf('.'));
+  return paths.every((path) => parent(path) === parent(paths[0]) && leaves.includes(path.slice(path.lastIndexOf('.') + 1)));
 }
 
-function metricCarriers(request, entry, metric, { collection = null, bound = [] } = {}) {
-  const declared = declaredFields(request, entry.tool, metric);
+/** Değer isteğinde ölçünün tek anlamlı taşıyıcı yolları: tek yol ya da aynı değerli yolların ilki; yoksa null. */
+function valueCarrier(tool, metric) {
+  const carriers = valueCarrierPaths(tool, metric);
+  const same = SAME_VALUE_PATHS[tool]?.[metric];
+  if (same && carriers.every((path) => same.includes(path))) return [same[0]];
+  return carriers.length === 1 ? carriers : null;
+}
+
+/** Olgunun satırının ya da seçicisinin adlandırdığı bağlı varlık (varlığın kendi özelliği). */
+function ownedBy(source, fact, bound) {
+  const type = fact.semantic?.metric?.split('.')[0];
+  const idField = ENTITY_ID_FIELDS[type];
+  if (!fact.semantic?.property || !idField) return null;
+  const row = factRow(source.tool, fact.field);
+  const object = row?.kind === 'row' ? row.path.split('.').slice(1).reduce((value, key) => value?.[key], source.envelope.data) : null;
+  const id = object ? object[idField] : (source.selectors.find((item) => item.type === type)?.id ?? null);
+  if (id == null) return null;
+  return bound.find((entity) => entity.type === type && entityKey(type, entity.bound) === entityKey(type, id)) || null;
+}
+
+/**
+ * Bir ölçünün bu kanıttaki uygun taşıyıcı olguları: doğrulayıcının olgu başına
+ * denetimlerinin aynısı (nüfus aracı ya da açık alan bağı, koşullar, boyutlar,
+ * sıra, koleksiyon, tazelik). Bağlı varlığın kendi özelliği nüfustan bağımsızdır.
+ */
+function eligibleFacts(request, source, metric, evidence, bound) {
+  const declared = declaredPaths(request, source.tool, metric);
   if (request.fields.some((field) => field.metric === metric) && !declared.length) return [];
-  const registry = metricPaths(entry.tool, metric);
-  const paths = declared.length ? declared : registry;
-  const pool = factPool(entry).filter((fact) => fact.semantic?.metric === metric && scalar(fact.value));
-  const filled = paths.filter((path) => pool.some((fact) => fieldPatternCovers(path, fact.field)));
-  if (!declared.length && registry.length > 1) return null;
-  return filled.flatMap((path) => {
-    if (collection) return path.startsWith(`data.${collection}.*.`) ? [path] : [];
-    const rows = rowCollections(entry.tool).filter((row) => path.startsWith(`data.${row}.*.`));
-    if (!rows.length) return [path];
-    const matches = pool.filter((fact) => fieldPatternCovers(path, fact.field));
-    if (!matches.every((fact) => fact.semantic?.property)) return [];
-    return matches.filter((fact) => bound.some((entity) => {
-      const type = fact.semantic.metric.split('.')[0];
-      const field = { project: 'projectId', task: 'taskId', person: 'sicil', wbs: 'wbsId', baseline: 'baselineId' }[type];
-      const parts = fact.field.split('.');
-      const index = parts.findIndex((part) => /^\d+$/.test(part));
-      const row = parts.slice(1, index + 1).reduce((value, key) => value?.[key], entry.payload.data);
-      return entity.type === type && String(row?.[field]).toLowerCase() === String(entity.bound).toLowerCase();
-    })).map((fact) => fact.field);
+  return source.facts.filter((fact) => {
+    if (fact.semantic?.metric !== metric || !scalar(fact.value)) return false;
+    if (declared.length && !declared.some((path) => fieldPatternCovers(path, fact.field))) return false;
+    const row = factRow(source.tool, fact.field);
+    const owner = request.operation === 'value' || row?.kind !== 'row' ? ownedBy(source, fact, bound) : null;
+    if (!owner) {
+      const dimensionsMatch = row?.kind === 'row' ? source.rowDimensionsMatch : source.dimensionsMatch;
+      if ((source.populationMatch === false && !declared.length) || dimensionsMatch === false || source.sortMatch === false) return false;
+      if (source.unsupported.length || sortedJson(source.facets) !== sortedJson(source.declared)) return false;
+      if (request.operation === 'value' && row?.kind === 'row') return false;
+    }
+    if (sourceCollections(source) && row?.kind === 'row' && !sourceCollections(source).includes(row.canonical)) return false;
+    return !factSuperseded(evidence, source, fact, { property: owner ? [owner.type, entityKey(owner.type, owner.bound)] : null });
   });
 }
 
-/** Değer isteğinde sayfalı satır koleksiyonunun satır dışı kesin toplamı (ör. totalCount) sayfa tamlığına bağlı değildir. */
-const pagedOnly = (request, entry) => request.operation === 'value' && entry.payload.complete !== true && rowCollections(entry.tool).length > 0;
-const rowCarrier = (tool, path) => rowCollections(tool).some((row) => path.startsWith(`data.${row}.`));
+const usableEntries = (entries) => entries.filter((entry) => entry.payload?.ok === true && entry.payload.data);
 
-function eligiblePopulation(request, entry) {
-  if ((entry.payload.complete !== true && !pagedOnly(request, entry)) || entry.payload.truncated === true || entry.args?.cursor) return false;
-  if (entry.tool === 'rota_task_analytics' && entry.args?.groupBy && request.population?.groupBy !== entry.args.groupBy) return false;
-  if (entry.tool === 'rota_wbs_inspect' && request.operation !== 'value' && !request.population?.depth) return false;
-  if (['rota_schedule_requests', 'rota_assignment_requests'].includes(entry.tool) && request.filters.text && !request.population?.textFields) return false;
-  return true;
+/**
+ * Muhakeme başlamadan önce kanıt isteği karşılayabilir mi? Her ölçünün uygun
+ * bir taşıyıcısı, liste/sıralamada nüfusun tam (ya da sıralı ilk sayfa ya da
+ * boş) koleksiyonu bulunmalıdır. Doğrulayıcının reddedeceği kanıt Derin
+ * düşünme turunu harcamaz.
+ */
+export function requestEvidenceReady(request, entries, today, selection = null) {
+  if (!request?.population) return false;
+  const bound = bindRequestEntities(request, entries, selection);
+  if (bound.some((entity) => !entity.bound)) return false;
+  const evidence = requestEvidence(request, usableEntries(entries), today ?? businessDate(new Date()));
+  const sources = [...evidence.values()];
+  const lists = request.operation === 'value' ? [] : declaredCollections(request) || [];
+  if (request.operation !== 'value') {
+    const populated = sources.some((source) => source.tool === request.population.tool && source.populationMatch && source.rowDimensionsMatch && source.sortMatch
+      && !source.unsupported.length && sortedJson(source.facets) === sortedJson(source.declared)
+      && (listedCompletely(source, lists) || listProvenEmpty(source, lists)
+        || (request.operation === 'rank' && source.firstPage && source.sortedBy?.metric === request.rank.metric && source.sortedBy?.order === request.rank.order)));
+    if (!populated) return false;
+  }
+  return request.metrics.every((metric) => sources.some((source) => eligibleFacts(request, source, metric, evidence, bound).length > 0
+    || (request.operation !== 'value' && source.tool === request.population.tool && listProvenEmpty(source, lists))));
 }
 
-function rowSelection(request, entry, canonical, bound, entries) {
-  const concrete = concreteCollections(entry.payload, canonical);
-  if (!concrete.length) return provesEmptyCollection({ tool: entry.tool, envelope: entry.payload, firstPage: !entry.args?.cursor }, canonical) ? [`${entry.id}:complete`] : null;
-  const prefix = `data.${canonical}.*.`;
-  const declared = (request.fields || []).filter((field) => field.tool === entry.tool);
-  const fields = [];
-  const facts = [];
+/** Liste ya da sıralamanın bildirilen satır koleksiyonları; bildirilmemişse bildirilen satır ölçülerini taşıyan kardeş koleksiyonlar. */
+function declaredCollections(request) {
+  if (request.operation === 'value' || !request.population) return null;
+  if (request.population.collection) return [request.population.collection];
+  const lists = request.operation === 'list' ? listCollections(request.population.tool, request.metrics) : [];
+  return lists.length ? lists : null;
+}
+
+/** Kanıttaki her bildirilen koleksiyon tam mı (en az biri bulunmalı)? Tek koleksiyonda koleksiyonun tamlığıdır. */
+function listedCompletely(source, lists) {
+  if (lists.length === 1) return collectionComplete(source, lists[0]);
+  const present = lists.filter((canonical) => presentCollection(source.envelope, canonical));
+  return present.length > 0 && present.every((canonical) => collectionComplete(source, canonical));
+}
+
+/** Kanıt bildirilen koleksiyonların hepsinin boş olduğunu kanıtlıyor mu? */
+function listProvenEmpty(source, lists) {
+  if (lists.length === 1) return provesEmptyCollection(source, lists[0]);
+  const present = lists.filter((canonical) => presentCollection(source.envelope, canonical));
+  return present.length > 0 && present.every((canonical) => provesEmptyCollection(source, canonical));
+}
+
+/* ── İstekten türetilen olgu seçimi ───────────────────────── */
+
+/** Değer isteği: her ölçünün (ve bağlı varlığının) tek anlamlı kanıtı. */
+function valueSelection(request, sources, evidence, bound) {
+  const references = [];
   for (const metric of request.metrics) {
-    const paths = metricPaths(entry.tool, metric);
-    const rowPaths = paths.filter((path) => path.startsWith(prefix));
-    const scalarPaths = paths.filter((path) => !path.startsWith(prefix));
-    const selected = declared.filter((field) => field.metric === metric).map((field) => field.path);
-    if (rowPaths.length && (!selected.length && (rowPaths.length > 1 || scalarPaths.some((path) => factPool(entry).some((fact) => fieldPatternCovers(path, fact.field)))))) return null;
-    if (rowPaths.length) fields.push(...(selected.length ? selected.filter((path) => path.startsWith(prefix)) : rowPaths));
-    if (!rowPaths.length || selected.some((path) => !path.startsWith(prefix))) {
-      const sources = entries.flatMap((source) => {
-        const carriers = metricCarriers(request, source, metric, { bound });
-        const own = carriers?.every((path) => metricEntry(source.tool, path.startsWith('data.') ? canonicalField(path).slice(5) : path)?.property);
-        const explicit = declaredFields(request, source.tool, metric).length > 0;
-        if (source.id !== entry.id && (!bound.length || (!own && !explicit))) return [];
-        return carriers?.length ? [{ source, carriers }] : [];
+    const declared = request.fields.some((field) => field.metric === metric);
+    const allowed = request.bindings.filter((binding) => binding.metric === metric).map((binding) => bound[binding.entity]);
+    const groups = sources.flatMap((source) => {
+      if (source.envelope.truncated === true || !source.firstPage) return [];
+      const carrier = declared ? null : valueCarrier(source.tool, metric);
+      if (!declared && !carrier && valueCarrierPaths(source.tool, metric).length > 1) return [];
+      let facts = eligibleFacts(request, source, metric, evidence, bound);
+      if (carrier && valueCarrierPaths(source.tool, metric).length > 1) facts = facts.filter((fact) => carrier.includes(canonicalField(fact.field)));
+      // Sayfalı satır koleksiyonunun satır dışı kesin toplamı geçerlidir; satırları yalnızca tam koleksiyondan okunur.
+      facts = facts.filter((fact) => {
+        const row = factRow(source.tool, fact.field);
+        return row?.kind !== 'row' || collectionComplete(source, row.canonical);
       });
-      if (sources.length !== 1) return null;
-      // Satır sayımı yalnızca aynı koleksiyonun toplamıyla birleşir.
-      const [{ source, carriers }] = sources;
-      const own = carriers.every((path) => metricEntry(source.tool, path.startsWith('data.') ? canonicalField(path).slice(5) : path)?.property);
-      if (!own && (source.id !== entry.id || ROW_TOTALS[entry.tool]?.[canonical] !== metric)) return null;
-      facts.push(...carriers.map((path) => `${source.id}:${path}`));
+      if (allowed.length) {
+        facts = facts.filter((fact) => {
+          const owner = ownedBy(source, fact, bound);
+          const keys = owner ? [entityKey(owner.type, owner.bound)] : source.selectors.map(({ type, id }) => entityKey(type, id));
+          return keys.some((key) => allowed.some((entity) => entityKey(entity.type, entity.bound) === key));
+        });
+      }
+      return facts.length ? [{ source, facts }] : [];
+    // Eşdeğer okumalardan (aynı araç ve nüfus) yalnızca sonuncusu önerilir: aynı plandaki yinelenen çağrı seçimi belirsizleştirmez.
+    }).filter((group, index, all) => !all.some((other, position) => position > index && other.source.tool === group.source.tool
+      && scalarKey(other.source) === scalarKey(group.source)));
+    if (!groups.length) return null;
+    if (groups.length > 1) {
+      if (bound.length < 2) return null;
+      const keys = groups.map(({ source }) => JSON.stringify(source.selectors));
+      if (new Set(keys).size !== groups.length || keys.some((key) => key === '[]')) return null;
     }
+    references.push(...groups.flatMap(({ source, facts }) => facts.map((fact) => `${source.id}:${fact.field}`)));
+  }
+  return references;
+}
+
+/** Liste ya da sıralama: nüfus aracının tam koleksiyonunun bütün satırları ya da sıralamanın başı. */
+function rowSelection(request, source, evidence, bound, sources) {
+  if (source.tool !== request.population.tool || !source.populationMatch || !source.rowDimensionsMatch || !source.sortMatch
+    || source.unsupported.length || sortedJson(source.facets) !== sortedJson(source.declared)) return null;
+  if (request.population.collection) return collectionSelection(request, source, evidence, bound, sources, request.population.collection, []);
+  // Birden çok koleksiyonlu liste: kanıttaki her bildirilen koleksiyon ayrı ayrı (boşsa boş olarak) seçilir.
+  const lists = (declaredCollections(request) || []).filter((canonical) => presentCollection(source.envelope, canonical));
+  if (request.operation !== 'list' || !lists.length) return null;
+  const parts = lists.map((canonical) => collectionSelection(request, source, evidence, bound, sources, canonical, lists));
+  if (parts.some((facts) => !facts)) return null;
+  const facts = parts.flat().filter((fact) => fact !== `${source.id}:complete`);
+  return facts.length ? facts : [`${source.id}:complete`];
+}
+
+/** Tek satır koleksiyonunun seçimi; `siblings` aynı listedeki diğer koleksiyonlardır (birlikte listede tek koleksiyonun toplamı seçilmez). */
+function collectionSelection(request, source, evidence, bound, sources, canonical, siblings) {
+  const total = siblings.length ? null : collectionTotalPaths(source.tool, canonical).find((path) => (path === 'totalCount' ? source.envelope.totalCount != null
+    : path.split('.').slice(1).reduce((value, key) => value?.[key], source.envelope.data) != null));
+  const prefix = `data.${canonical}.*.`;
+  const fields = [];
+  const scalars = [];
+  for (const metric of request.metrics) {
+    const declared = declaredPaths(request, source.tool, metric);
+    const registered = rowMetricFields(source.tool, canonical, metric).map((field) => `${prefix}${field}`);
+    // Kanıtta bulunmayan kayıtlı alan (ör. grup satırında yalnızca count yazılır) belirsizlik değildir.
+    const written = registered.filter((path) => source.facts.some((fact) => fieldPatternCovers(path, fact.field)));
+    const rowPaths = written.length ? written : registered;
+    if (rowPaths.length) {
+      const selected = declared.length ? declared.filter((path) => path.startsWith(prefix)) : rowPaths;
+      // Bildirilen koleksiyonun satır alanı listenin yanıtıdır; aynı ölçünün satır dışı toplamı isteğe bağlı bağlamdır, belirsizlik değil.
+      if (!declared.length && rowPaths.length > 1 && !representations(metric, rowPaths)) return null;
+      if (!selected.length) return null;
+      fields.push(...selected);
+      continue;
+    }
+    if (total && metricPaths(source.tool, metric).includes(total) && collectionTotalPaths(source.tool, canonical).includes(total)) {
+      scalars.push(`${source.id}:${total}`);
+      continue;
+    }
+    // Tek kaydın iç koleksiyonunda üst kaydın kendi özelliği (ör. serinin kuralı) tek anlamlıysa seçilir.
+    const parentPaths = metricPaths(source.tool, metric).filter((path) => parentProperty(source.tool, canonical, path)
+      && source.facts.some((fact) => fact.field === path));
+    if (parentPaths.length === 1 || representations(metric, parentPaths)) {
+      scalars.push(...parentPaths.map((path) => `${source.id}:${path}`));
+      continue;
+    }
+    // Bağlı varlığın kendi özelliği başka bir kanıttan gelebilir; tek anlamlı olmalıdır.
+    const owners = sources.flatMap((other) => eligibleFacts(request, other, metric, evidence, bound)
+      .filter((fact) => ownedBy(other, fact, bound) && isProperty(other.tool, canonicalField(fact.field)))
+      .map((fact) => `${other.id}:${fact.field}`));
+    if (owners.length !== 1) return null;
+    scalars.push(owners[0]);
+  }
+  // Boş koleksiyonun yanıtı ya koleksiyonun sayısıdır ya da tamlık olgusudur (üst kaydın özelliği boşluğu söylemez).
+  if (provesEmptyCollection(source, canonical)) {
+    const counted = scalars.some((fact) => collectionTotalPaths(source.tool, canonical).includes(fact.slice(fact.indexOf(':') + 1)));
+    return counted ? scalars : [...scalars, `${source.id}:complete`];
   }
   if (!fields.length) return null;
-  if (concrete.every(({ rows }) => rows.length === 0)) {
-    if (!provesEmptyCollection({ tool: entry.tool, envelope: entry.payload, firstPage: !entry.args?.cursor }, canonical)) return null;
-    return facts.length ? facts : [`${entry.id}:complete`];
-  }
-  for (const item of concrete) {
-    let indexes = request.operation === 'rank' ? rankedRowIndexes(request, entry.tool, entry.payload, canonical, item.collection.slice(5)) : item.rows.map((_, index) => index);
+  const rank = request.operation === 'rank';
+  if (!rank && !collectionComplete(source, canonical)) return null;
+  // Aynı nüfusun daha yeni tam okuması bu satırların yerine geçer.
+  if ([...evidence.values()].some((newer) => readLater(newer, source) && newer.tool === source.tool
+    && rowKey(newer, canonical) === rowKey(source, canonical) && collectionComplete(newer, canonical))) return null;
+  const naming = claimableContract(source.tool).paths.find((path) => path.startsWith(`${canonical}.*.`)
+    && !path.slice(canonical.length + 3).includes('.') && metricEntry(source.tool, path)?.context);
+  const relatives = [...new Set([naming ? `data.${naming}` : null, ...fields].filter(Boolean).map((path) => path.slice(prefix.length)))];
+  const facts = [...scalars];
+  for (const item of concreteCollections(source.envelope, canonical)) {
+    if (!item.rows.length) continue;
+    let indexes = rank ? rankedRowIndexes(request, source.tool, source.envelope, canonical, item.collection.slice(5)) : item.rows.map((_, index) => index);
     if (!indexes?.length) return null;
     if (indexes.length === item.rows.length) indexes = ['*'];
-    const naming = claimableContract(entry.tool).paths.find((path) => path.startsWith(`${canonical}.*.`)
-      && !path.slice(canonical.length + 3).includes('.') && metricEntry(entry.tool, path)?.context);
-    const relatives = [...new Set([naming ? `data.${naming}` : null, ...fields].filter(Boolean).map((path) => path.slice(prefix.length)))];
-    for (const index of indexes) for (const rel of relatives) facts.push(`${entry.id}:${item.collection}.${index}.${rel}`);
+    for (const relative of relatives) {
+      // Bütün satırlarda boş olan çok değerli alanın deseni olgu seçmez; satırlar alanı boş değeriyle taşır.
+      const references = indexes.map((index) => `${item.collection}.${index}.${relative}`)
+        .filter((pattern) => source.facts.some((fact) => fieldPatternCovers(pattern, fact.field)));
+      facts.push(...references.map((pattern) => `${source.id}:${pattern}`));
+    }
   }
-  return facts;
+  return facts.length ? facts : null;
 }
 
-/** Tek anlamlı, tam ve çakışmayan kanıt; belirsizlikte seçimi model yapar. */
-export function requestSelections(request, entries, selection = null) {
+/**
+ * Bildirilen istekten sunucunun önerdiği olgu seçimleri. Öneri doğrulayıcının
+ * kendisinden geçer (`accept`); tek doğrulanan aday kalırsa model seçim turu
+ * gerekmez. Eşdeğer okumalar (aynı araç, nüfus, sıra ve boyutlar) tek adaydır:
+ * en yeniden başlayarak doğrulanan ilk okuma önerilir. Belirsizlikte (birden çok
+ * taşıyıcı ya da nüfus, bağlanmamış boyut ya da varlık) seçimi model yapar.
+ */
+export function requestSelections(request, entries, selection = null, today = null, accept = null) {
   if (request.reasoning === 'synthesis' || !request.population) return [];
-  const usable = entries.filter((entry) => entry.payload?.ok === true && entry.payload.data && eligiblePopulation(request, entry));
   const bound = bindRequestEntities(request, entries, selection);
   if (bound.some((entity) => !entity.bound)) return [];
-  if (bound.length > 1 && request.metrics.length > 1 && !request.bindings?.length) return [];
-  const candidates = [];
+  const evidence = requestEvidence(request, usableEntries(entries), today ?? businessDate(new Date()));
+  const sources = [...evidence.values()];
+  const json = (facts) => JSON.stringify({ kind: 'rota', facts: [...new Set(facts)], layout: request.layout || 'auto' });
+  const usable = (facts) => facts?.length && (!accept || accept(json(facts)));
   if (request.operation === 'value') {
-    const composite = [];
-    for (const metric of request.metrics) {
-      const sources = usable.flatMap((entry) => {
-        if (request.population && request.population.tool !== entry.tool && !declaredFields(request, entry.tool, metric).length
-          && !metricPaths(entry.tool, metric).every((path) => metricEntry(entry.tool, path.startsWith('data.') ? path.slice(5) : path)?.property)) return [];
-        if (!request.population && !metricPaths(entry.tool, metric).every((path) => {
-          const key = path.startsWith('data.') ? path.slice(5) : path;
-          return metricEntry(entry.tool, key)?.property && bound.length;
-        })) return [];
-        const carriers = metricCarriers(request, entry, metric, { bound });
-        if (pagedOnly(request, entry) && carriers?.some((path) => rowCarrier(entry.tool, path))) return [];
-        return carriers?.length ? [{ entry, carriers }] : [];
-      });
-      if (!sources.length) return [];
-      if (sources.length > 1) {
-        if (bound.length < 2) return [];
-        const keys = sources.map(({ entry }) => JSON.stringify(selectorsOf(entry.args || {})));
-        if (new Set(keys).size !== sources.length || keys.some((key) => key === '[]')) return [];
+    const facts = valueSelection(request, sources, evidence, bound);
+    return usable(facts) ? [json(facts)] : [];
+  }
+  const classes = new Map();
+  for (const source of [...sources].sort((left, right) => right.ordinal - left.ordinal)) {
+    const key = `${source.tool}|${rowKey(source, request.population.collection)}`;
+    if (!classes.has(key)) classes.set(key, []);
+    classes.get(key).push(source);
+  }
+  const candidates = [];
+  for (const members of classes.values()) {
+    for (const source of members) {
+      const facts = rowSelection(request, source, evidence, bound, sources);
+      if (usable(facts)) {
+        candidates.push(json(facts));
+        break;
       }
-      composite.push(...sources.flatMap(({ entry, carriers }) => carriers.map((path) => `${entry.id}:${path}`)));
-    }
-    candidates.push(composite);
-  } else {
-    if (!request.population?.collection) return [];
-    for (const entry of usable) {
-      if (entry.tool !== request.population.tool) continue;
-      if (entry.tool === 'rota_task_analytics' && request.population.collection === 'groups' && !request.population.groupBy) continue;
-      if (entry.tool === 'rota_wbs_inspect' && !request.population.depth) continue;
-      if (getRotaTool(entry.tool).parameters.properties.sort && !request.population.sort && request.operation === 'list') continue;
-      const facts = rowSelection(request, entry, request.population.collection, bound, usable);
-      if (facts?.length) candidates.push(facts);
     }
   }
-  return [...new Set(candidates.map((facts) => JSON.stringify({ kind: 'rota', facts: [...new Set(facts)], layout: request.layout || 'auto' })))];
+  return [...new Set(candidates)];
 }

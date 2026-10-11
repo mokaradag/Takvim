@@ -49,16 +49,20 @@ const factAnswer = (onCall = null) => ({ type: 'script', respond: (call) => {
 const toolQueries = (stack) => (stack.db.aiToolLog || []).filter((entry) => entry.query === 'task-facts').length;
 const countFull = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, entities: [{ type: 'project', id: PROJECTS.FULL }] };
 const searchFull = { type: 'tool-calls', preface: [declared(countFull)], calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] };
-/** Adla çözülen görevin satırdaki durumu: sunucu seçim türetmez, olguyu model seçer (devir bu yolda sınanır). */
+/**
+ * Adla çözülen görevin durumu ve projesi: proje adı ve kodu aynı ölçüyü taşır,
+ * bu yüzden sunucu seçim türetmez ve olguları model seçer (devir bu yolda sınanır).
+ */
 const NAMED = 'Radar test planı';
-const NAMED_QUESTION = `${NAMED} görevinin durumu nedir?`;
+const NAMED_QUESTION = `${NAMED} görevinin durumu ve projesi nedir?`;
 const NAMED_ANSWER = /görevinin durumu \*\*Yapılacak\*\*/;
-const statusNamed = { operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', text: NAMED }] };
+const statusNamed = { operation: 'value', metrics: ['task.status', 'task.project'], entities: [{ type: 'task', text: NAMED }] };
 const searchNamed = { type: 'tool-calls', preface: [declared(statusNamed)], calls: [{ name: 'rota_task_search', arguments: { text: NAMED } }] };
 const synthesizeNamed = { ...searchNamed, preface: [declared({ ...statusNamed, reasoning: 'synthesis', population: { tool: 'rota_task_search' } })] };
 const statusAnswer = (onCall = null) => ({ type: 'script', respond: (call) => {
   onCall?.(call);
-  return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: [`${toolResultsOf(call)[0].evidenceId}:data.tasks.0.status`] }) };
+  const id = toolResultsOf(call)[0].evidenceId;
+  return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: [`${id}:data.tasks.0.status`, `${id}:data.tasks.0.project.name`] }) };
 } });
 const logLines = (lines, operation) => lines.filter((line) => line.includes(`"operation":"${operation}"`)).map((line) => JSON.parse(line.slice(line.indexOf('{'))));
 
@@ -76,6 +80,10 @@ test('a declared synthesis request is finalized once by Deep thinking with the s
   assert.equal(response.status, 200);
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, DEEP, DEEP], JSON.stringify(response.events));
   assert.equal(stack.provider.calls[1].toolChoice, 'none', 'kanıt varken Derin düşünme yalnızca yanıtı yazar');
+  // Devir temiz dökümle yapılır ama bu turun yetkili kanıtını (araç çağrısı ve sonucu) taşır.
+  const handedOver = toolResultsOf(stack.provider.calls[1]);
+  assert.deepEqual(handedOver.map((result) => [result.ok, result.evidenceId]), [[true, 'R1']]);
+  assert.ok(handedOver[0].data.tasks.some((row) => row.title === NAMED), 'Derin düşünme kanıtın değerlerini görür');
   // Tek düzeltme bütçesi Standart modelde harcanmaz: aynı sorunu devredilen tur düzeltir.
   assert.doesNotMatch(stack.provider.calls[1].messages[0].content, /SUNUCU DOĞRULAMASI/);
   assert.match(stack.provider.calls[2].messages[0].content, /SUNUCU DOĞRULAMASI/);
@@ -211,6 +219,38 @@ test('a turn that ends without evidence because of NOT_FOUND, scope or SQL failu
   }
 });
 
+const tooLarge = () => Object.assign(new Error('AI_TOOL_RESULT_TOO_LARGE'), { number: 51001 });
+const countPlan = { type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr', request: { ...countFull, layout: 'auto' },
+  calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] } }] };
+
+test('a Standard turn that read no evidence hands Deep a fresh plan with tools; Deep re-plans and answers', async (t) => {
+  const stack = stackFor(t);
+  stack.db.aiToolFailure = { 'task-facts': tooLarge() };
+  let deepCall = null;
+  stack.provider.enqueue(countPlan, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, { type: 'script', respond: (call) => {
+    deepCall = call;
+    stack.db.aiToolFailure = null;
+    return countPlan;
+  } });
+  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, DEEP]);
+  assert.deepEqual([deepCall.tools[0].name, deepCall.toolChoice], ['rota_plan', 'auto'], 'kanıtsız devirde istek donmamıştır');
+  assert.equal(toolResultsOf(deepCall)[0].error.code, 'RESULT_TOO_LARGE', 'Derin, Standart turun başarısız okumasını görür');
+  const answer = doneOf(response).assistantMessage;
+  assert.equal(answer.finishReason, 'stop');
+  assert.match(answer.content, /eşleşen \*\*\d+\*\* görev/);
+});
+
+test('without evidence and with the shared tool budget spent, the turn is not escalated to a Deep round that could not read data', async (t) => {
+  const stack = stackFor(t);
+  stack.db.aiToolFailure = { 'task-facts': tooLarge() };
+  stack.provider.enqueue(countPlan, countPlan, countPlan, countPlan, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID });
+  const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
+  assert.ok(stack.provider.calls.every((call) => call.model === STANDARD), JSON.stringify(stack.provider.calls.map((call) => call.model)));
+  assert.equal(doneOf(response).assistantMessage.content, GROUNDING_FAILURE_TEXT);
+  assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
+});
+
 test('a missing declaration exhausts the cheap planning budget without SQL, then gets one Deep fallback', async (t) => {
   const stack = stackFor(t);
   const undeclared = { type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] };
@@ -302,62 +342,52 @@ test('provider usage keeps reasoning token counts only when reported, and empty 
   assert.equal(assistantStreamErrorPayload(new AiError('AI_PROVIDER_RESPONSE_INVALID', { details: { reason: 'MISSING_CHOICE' } })).retryable, false);
 });
 
-test('a missing declared metric is obtained by bounded Standard repair before tool-disabled escalation', async (t) => {
+test('a declared population the plan did not read is read by the server before any repair or escalation', async (t) => {
   const stack = stackFor(t);
   const request = { ...countFull, metrics: ['tasks.total', 'tasks.open'], population: { tool: 'rota_task_analytics' },
     fields: ['total', 'open'].map((metric) => ({ metric: `tasks.${metric}`, tool: 'rota_task_analytics', path: `data.totals.${metric}` })) };
-  stack.provider.enqueue(
-    { ...searchFull, preface: [declared(request)] }, factAnswer(),
-    { type: 'script', respond: (call) => {
-      assert.equal(call.model, STANDARD);
-      assert.equal(call.toolChoice, 'auto');
-      assert.ok(call.tools.some((tool) => tool.name === 'rota_task_analytics'));
-      return { type: 'tool-calls', calls: [{ name: 'rota_task_analytics', arguments: { projectId: PROJECTS.FULL } }] };
-    } }
-  );
+  stack.provider.enqueue({ ...searchFull, preface: [declared(request)] });
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
   assert.equal(doneOf(response).assistantMessage.finishReason, 'stop');
-  // Düzeltmenin araç turu bildirilen bütün ölçüleri taşır: olguyu sunucu seçer.
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD]);
+  // Planın çağrısı bildirilen nüfusu okumadı: sunucu nüfus okumasını bildirimden kurar ve olguyu seçer; düzeltme ya da devir yoktur.
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD]);
   assert.deepEqual(doneOf(response).assistantMessage.evidence.map((item) => item.id), ['R2']);
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
 });
 
-test('repair followed by Deep finalization shares its exhausted repair and tool budgets', async (t) => {
+test('a synthesis request whose population the server completed is finalized once by Deep with tools closed', async (t) => {
   const stack = stackFor(t);
   // Yanıt iki kanıtın olgularını birlikte ister: seçimi model yapar.
   const request = { ...countFull, reasoning: 'synthesis', metrics: ['project.code', 'tasks.open'], population: { tool: 'rota_task_analytics' },
     fields: [{ metric: 'project.code', tool: 'rota_task_search', path: 'data.project.code' }, { metric: 'tasks.open', tool: 'rota_task_analytics', path: 'data.totals.open' }] };
   stack.provider.enqueue({ ...searchFull, preface: [declared(request)] },
-    { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.project.code'] }) },
-    { type: 'tool-calls', calls: [{ name: 'rota_task_analytics', arguments: { projectId: PROJECTS.FULL } }] },
     { type: 'script', respond: (call) => {
+      // Sunucunun tamamladığı kanıtla Derin düşünme yalnızca yanıtı yazar: araçlar kapalı, iki kanıt görünür.
       assert.equal(call.toolChoice, 'none');
       assert.equal(toolResultsOf(call).length, 2);
       return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.project.code', 'R2:data.totals.open'] }) };
     } });
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
   assert.equal(doneOf(response).assistantMessage.finishReason, 'stop');
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, DEEP]);
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, DEEP]);
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 1);
 });
 
-test('unauthorized or unavailable evidence repair fails closed after the shared single repair', async (t) => {
+test('an unauthorized or unavailable population read fails closed without escalation', async (t) => {
   for (const scenario of ['scope', 'sql']) {
     const stack = stackFor(t);
-    const request = { ...countFull, metrics: ['tasks.total', 'tasks.open'], population: { tool: 'rota_task_analytics' },
-    fields: ['total', 'open'].map((metric) => ({ metric: `tasks.${metric}`, tool: 'rota_task_analytics', path: `data.totals.${metric}` })) };
-    stack.provider.enqueue({ ...searchFull, preface: [declared(request)] }, factAnswer(),
-      { type: 'script', respond: () => {
-        if (scenario === 'sql') stack.db.aiToolFailure = { 'task-facts': Object.assign(new Error('bağlantı yok'), { code: 'ESOCKET' }) };
-        return { type: 'tool-calls', calls: [{ name: 'rota_task_analytics', arguments: { projectId: scenario === 'scope' ? PROJECTS.HIDDEN : PROJECTS.FULL } }] };
-      } }, factAnswer());
-    const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
-    assert.equal(doneOf(response).assistantMessage.content, GROUNDING_FAILURE_TEXT);
-    assert.equal(stack.provider.calls.length, 4);
-    assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, STANDARD]);
-    assert.equal(aiTelemetrySnapshot().grounding.repaired, 1);
-    assert.equal(toolResultsOf(stack.provider.calls[3]).at(-1).ok, false);
-    assert.deepEqual(doneOf(response).assistantMessage.evidence, []);
+    // Kullanıcının yazdığı ama göremediği proje; ya da nüfus okuması sırasında SQL kesintisi.
+    const projectId = scenario === 'scope' ? PROJECTS.HIDDEN : PROJECTS.FULL;
+    const request = { operation: 'value', metrics: ['tasks.total', 'tasks.open'], population: { tool: 'rota_task_analytics' }, entities: [{ type: 'project', id: projectId }],
+      fields: ['total', 'open'].map((metric) => ({ metric: `tasks.${metric}`, tool: 'rota_task_analytics', path: `data.totals.${metric}` })) };
+    if (scenario === 'sql') stack.db.aiToolFailure = { 'task-facts': Object.assign(new Error('bağlantı yok'), { code: 'ESOCKET' }) };
+    stack.provider.enqueue({ type: 'answer', text: declared(request) }, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID });
+    const response = await sendTurn({ turnId: randomUUID(), message: `Projede kaç görev var? ${projectId}` });
+    const answer = doneOf(response).assistantMessage;
+    assert.ok(answer.content === GROUNDING_FAILURE_TEXT || answer.finishReason === 'unavailable', `${scenario}: ${answer.content}`);
+    assert.deepEqual(answer.evidence, []);
+    assert.equal(answer.content.includes('42'), false);
+    assert.ok(stack.provider.calls.every((call) => call.model === STANDARD), `${scenario}: Derin düşünmeye devredilmez`);
+    assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
   }
 });

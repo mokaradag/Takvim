@@ -87,7 +87,7 @@ test('dependency row properties are bound to the focal task population without i
 });
 
 test('nested collections use the occurrence row for completeness and rendering', () => {
-  const entry = source('rota_recurrence_inspect', { series: [{ title: 'Series', next: [{ occurrenceDate: '2026-10-08', status: 'todo' }] }, { next: [] }] },
+  const entry = source('rota_recurrence_inspect', { series: [{ title: 'Series', nextTruncated: false, next: [{ occurrenceDate: '2026-10-08', status: 'todo' }] }, { nextTruncated: false, next: [] }] },
     { collection: 'series.*.next', envelope: { totalCount: 2 } });
   assert.equal(factRow(entry.tool, 'data.series.0.next.0.status').collection, 'data.series.0.next');
   assert.equal(verify([entry], rows(['recurrence.occurrenceDate', 'task.status']), ['R1:data.series.*.next.*.occurrenceDate', 'R1:data.series.*.next.*.status']).ok, true);
@@ -147,7 +147,7 @@ test('same-metric concrete carriers and snapshot dimensions remain distinct', ()
   const second = source('rota_dependency_inspect', { coverage: { byType: { SS: 3 } } }, { id: 'R2' });
   const request = { operation: 'value', metrics: ['dependencies.byType'], entities: [] };
   assert.equal(verify([first, second], request, ['R1:data.coverage.byType.FS']).ok, true);
-  const grouped = source('rota_task_analytics', { groups: [{ key: 'todo', open: 2 }] }, { collection: 'groups', snapshotDimensions: { groupBy: 'status' }, envelope: { totalCount: 1 } });
-  const byProject = source('rota_task_analytics', { groups: [{ key: 'p', open: 3 }] }, { id: 'R2', collection: 'groups', snapshotDimensions: { groupBy: 'project' }, envelope: { totalCount: 1 } });
+  const grouped = source('rota_task_analytics', { groupBy: 'status', groups: [{ key: 'todo', open: 2 }] }, { collection: 'groups', snapshotDimensions: { groupBy: 'status' }, envelope: { totalCount: 1 } });
+  const byProject = source('rota_task_analytics', { groupBy: 'project', groups: [{ key: 'p', open: 3 }] }, { id: 'R2', collection: 'groups', snapshotDimensions: { groupBy: 'project' }, envelope: { totalCount: 1 } });
   assert.equal(verify([grouped, byProject], rows(['tasks.open']), ['R1:data.groups.*.open']).ok, true);
 });

@@ -1,18 +1,33 @@
-import { claimableContract, METRICS, metricEntry, rowCollections } from './claimableEvidence.js';
+import { claimableContract, METRICS, metricEntry, NAMING_METRICS, rowCollections } from './claimableEvidence.js';
 import { scaledDecimal } from '../numbers/fixedDecimal.js';
+import {
+  canonicalField,
+  collectionComplete,
+  collectionTotalPaths,
+  concreteCollections,
+  populationKey,
+  provesEmptyCollection,
+  readLater,
+  rowKey,
+  scalarKey
+} from './evidencePopulation.js';
+
+export { concreteCollections, provesEmptyCollection } from './evidencePopulation.js';
 
 /**
  * Rota AI istek sözleşmesi — modelin veri okumadan bildirdiği türlü istek ile
- * seçtiği olguların BELİRLENİMCİ uyumu.
+ * seçilen olguların BELİRLENİMCİ uyumu.
  *
  * Sunucu Türkçe ya da İngilizce cümleyi yorumlamaz: sorunun anlamı modelin
  * yapılandırılmış bildirimidir (`operation`, `metrics`, `entities`, `filters`,
- * `rank`). Burada yalnızca nesnel değişmezler denetlenir: istenen her ölçü
- * temsil edilir; istenmeyen ölçü yanıt olamaz; olgunun nüfusu bildirilen
- * koşullarla ve sunucunun bağladığı varlıklarla birebir aynıdır; liste TAM bir
- * sonucun bütün satırlarını, sıralama sıralamanın başını kapsar ve istenen ölçü
- * listelenen satırların kendisinde bulunur. Doğal dil anlamının daha iyi
- * çıkarımı Aşama 4'ün işidir.
+ * `population`, `fields`, `bindings`, `rank`). Burada yalnızca nesnel
+ * değişmezler denetlenir ve her biri bir YÜKÜMLÜLÜKTÜR: istenen her ölçü, her
+ * açık alan bağı ve her ölçü/varlık bağı karşılanır; istenmeyen ölçü yanıt
+ * olamaz; olgunun nüfusu bildirilen nüfusla birebir aynıdır; liste nüfusun
+ * bütün satırlarını, sıralama sıralamanın başını kapsar; daha yeni aynı
+ * nüfusun yerine geçtiği kanıt kullanılamaz. Nüfus, tamlık, toplam ve tazelik
+ * kuralları sunucu seçimiyle ortaktır (evidencePopulation.js). Doğal dil
+ * anlamının daha iyi çıkarımı Aşama 4'ün işidir.
  */
 
 export const REQUEST_OPERATIONS = Object.freeze(['value', 'list', 'rank']);
@@ -27,10 +42,9 @@ export function rankableMeasure(measure) {
 }
 
 /** Satırın kimlik alanı, bildirilen varlık türüne göre. */
-const ENTITY_ID_FIELDS = Object.freeze({ project: 'projectId', task: 'taskId', person: 'sicil', wbs: 'wbsId', baseline: 'baselineId' });
+export const ENTITY_ID_FIELDS = Object.freeze({ project: 'projectId', task: 'taskId', person: 'sicil', wbs: 'wbsId', baseline: 'baselineId' });
 
 const sortedJson = (value) => JSON.stringify(Object.keys(value).sort().map((key) => [key, value[key]]));
-const canonicalPath = (field) => field.split('.').map((part) => /^\d+$/.test(part) ? '*' : part).join('.');
 const TASK_COUNT_TOOLS = new Set(['rota_task_search', 'rota_task_analytics', 'rota_project_detail', 'rota_task_detail']);
 
 /**
@@ -47,7 +61,7 @@ function factCollections(tool, field) {
   if (parts[0] !== 'data') return [];
   return parts.flatMap((part, index) => {
     if (index <= 1 || !/^\d+$/.test(part)) return [];
-    const canonical = parts.slice(1, index).map((part) => /^\d+$/.test(part) ? '*' : part).join('.');
+    const canonical = parts.slice(1, index).map((item) => /^\d+$/.test(item) ? '*' : item).join('.');
     return [{
       kind: rowCollections(tool).includes(canonical) ? 'row' : 'list',
       canonical,
@@ -96,13 +110,66 @@ function pathValues(value, parts) {
   return value && typeof value === 'object' ? pathValues(value[head], rest) : [];
 }
 
+/**
+ * Satır alanının durumu: değer var, alan BOŞ (değeri null ya da yazılmamış tekil varlık
+ * özelliği, ör. hedef bitişi olmayan görev; ya da çok değerli alan boş, ör. sorumlusu
+ * olmayan görev: `assignees: []`) ya da alan hiç yok (yazılmamış sayaç ya da çok değerli alan). Boş alan bir
+ * değerdir (yalnızca kısaltılmamış kanıtta); olmayan alan ölçüyü taşımaz.
+ */
+function rowFieldState(tool, collection, row, field) {
+  const parts = field.split('.');
+  const values = pathValues(row, parts);
+  if (values.some((value) => value !== null)) return 'value';
+  if (values.length) return 'empty';
+  const star = parts.indexOf('*');
+  // Araçlar boş tekil varlık özelliğini (ör. hedef bitişi olmayan görev) satıra yazmaz; sayaçlar her zaman yazılır.
+  if (star < 0) return metricEntry(tool, `${collection}.*.${field}`)?.property === true ? 'empty' : 'absent';
+  const container = parts.slice(0, star).reduce((value, key) => (value && typeof value === 'object' ? value[key] : undefined), row);
+  return Array.isArray(container) && container.length === 0 ? 'empty' : 'absent';
+}
+
 /** Koleksiyonun satırlarında bir ölçüyü taşıyan kanonik alanlar. */
-function rowMetricFields(tool, collection, metric) {
+export function rowMetricFields(tool, collection, metric) {
   const prefix = `${collection}.*.`;
   return claimableContract(tool).paths
     .filter((path) => path.startsWith(prefix) && metricEntry(tool, path)?.metric === metric)
     .map((path) => path.slice(prefix.length));
 }
+
+/**
+ * Aynı okumada aynı türden satırları taşıyan ve birlikte listelenebilen kardeş koleksiyonlar
+ * (ör. bir görevin öncülleri ve ardılları). Başka koleksiyonlar birlikte örtük liste olamaz.
+ */
+const LISTED_TOGETHER = Object.freeze({
+  rota_dependency_inspect: [['predecessors', 'successors']],
+  rota_notifications: [['scheduleRequests.latest', 'assignmentCoordination.latest', 'taskEvents.latest']]
+});
+
+/**
+ * Bildirilmemiş liste koleksiyonu: bildirilen her satır ölçüsünü taşıyan koleksiyon. Birden çoksa
+ * yalnızca kayıtlı kardeş koleksiyonlar birlikte listedir (her biri tam listelenir); aksi hâlde boş.
+ */
+export function listCollections(tool, metrics, collections = rowCollections(tool)) {
+  const rowMetrics = metrics.filter((metric) => collections.some((collection) => rowMetricFields(tool, collection, metric).length));
+  if (!rowMetrics.length) return [];
+  const fitting = collections.filter((collection) => rowMetrics.every((metric) => rowMetricFields(tool, collection, metric).length));
+  if (fitting.length < 2) return fitting;
+  return (LISTED_TOGETHER[tool] || []).some((family) => fitting.every((collection) => family.includes(collection))) ? fitting : [];
+}
+
+/**
+ * İç içe koleksiyonun tek kayıt biçimindeki üst kaydının kendi özelliği mi (ör. görevle okunan tek serinin
+ * kuralı, yinelemelerinin listesinde)? Üst kaydın sayımları değil, yalnızca kayıtlı özellikleri.
+ */
+export function parentProperty(tool, collection, path) {
+  const text = String(collection || '');
+  if (!text.includes('.') || text.includes('*') || String(path).includes('*')) return false;
+  const parent = `data.${text.slice(0, text.lastIndexOf('.'))}.`;
+  return path.startsWith(parent) && !path.startsWith(`data.${text}.`) && metricEntry(tool, path.slice(5))?.property === true;
+}
+
+/** Kanıtın bildirilen satır koleksiyonları (nüfus aracı değilse ya da değer isteğinde null). */
+export const sourceCollections = (source) => (source?.collection == null ? null : [].concat(source.collection));
 
 /** Satır sıralamasının ölçü alanı: koleksiyonda o ölçüyü taşıyan ve satırlarda bulunan tek kanonik yol. */
 function rankField(tool, collection, metric, rows) {
@@ -147,7 +214,7 @@ function rankedIndexes(request, source, collection, selected) {
   const { rows, ranked, boundary, order, direction, rankValue } = plan;
   const expected = new Set(order);
   if (expected.size !== selected.size || [...expected].some((index) => !selected.has(index))) return null;
-  if (source.envelope.complete === true && source.envelope.truncated !== true && source.firstPage === true) return order;
+  if (collectionComplete(source, collection.canonical)) return order;
   // Kesilmiş koleksiyon: sunucu aynı ölçüyle sıralamışsa ilk sayfa bütün nüfusun başıdır.
   const sorted = source.sortedBy?.metric === request.rank.metric && source.sortedBy?.order === request.rank.order && source.firstPage === true;
   if (!sorted) return null;
@@ -161,95 +228,150 @@ function rankedIndexes(request, source, collection, selected) {
       && (nextValue < boundary ? -1 : nextValue > boundary ? 1 : 0) * direction > 0)) ? order : null;
 }
 
-/** Kanonik koleksiyonun bütün somut satır kümeleri. */
-export function concreteCollections(envelope, canonical) {
-  const found = [];
-  function visit(value, parts, path, parent = null) {
-    if (!parts.length) { if (Array.isArray(value)) found.push({ canonical, collection: path, rows: value, parent }); return; }
-    const [head, ...tail] = parts;
-    if (head === '*') {
-      if (Array.isArray(value)) value.forEach((item, index) => visit(item, tail, `${path}.${index}`, item));
-    } else if (value && typeof value === 'object') visit(value[head], tail, `${path}.${head}`, value);
-  }
-  visit(envelope.data, canonical.split('.'), 'data');
-  return found;
+export function entityKey(type, id) {
+  return `${type}:${String(id).toLowerCase()}`;
 }
 
-export function provesEmptyCollection(source, canonical) {
-  const envelope = source.envelope;
-  if (envelope?.complete !== true || envelope.truncated === true || source.firstPage !== true) return false;
-  const collections = concreteCollections(envelope, canonical);
-  if (!collections.length) return source.tool === 'rota_recurrence_inspect' && canonical === 'series.*.next'
-    && Array.isArray(envelope.data?.series) && envelope.data.series.length === 0 && envelope.totalCount === 0;
-  if (collections.some(({ rows }) => rows.length !== 0)) return false;
-  if (source.tool === 'rota_recurrence_inspect' && canonical.endsWith('.next')) {
-    return collections.every(({ parent }) => parent?.upcomingCount === 0 && parent.nextTruncated === false);
-  }
-  if (source.tool === 'rota_dependency_inspect' && ['predecessors', 'successors'].includes(canonical)) return true;
-  if (source.tool === 'rota_baseline_compare' && canonical === 'availableBaselines') return envelope.data?.availableBaselinesTruncated === false;
-  if (source.tool === 'rota_task_analytics' && canonical === 'groups') return envelope.data?.groupBy != null && envelope.data.groupCount === 0;
-  const counted = {
-    rota_task_search: 'tasks', rota_project_search: 'matches', rota_person_search: 'people', rota_portfolio_summary: 'projects',
-    rota_workload_summary: 'people', rota_wbs_inspect: 'nodes', rota_baseline_compare: 'mostSlipped', rota_dependency_inspect: 'mostConnected',
-    rota_recurrence_inspect: 'series', rota_calendar_inspect: 'holidays', rota_activity_search: 'items',
-    rota_schedule_requests: 'items', rota_assignment_requests: 'items', rota_outlook_status: 'items'
-  };
-  return counted[source.tool] === canonical && envelope.totalCount === 0;
+/** İki varlıklı ve iki ölçülü istekte her ölçünün varlığı açıkça bağlanmalıdır. */
+export function bindingsRequired(request) {
+  // Kaydı adlandıran ölçü (ör. project.name) her varlığın kendi adıdır; eşleme belirsizliği yalnızca ölçen ölçülerdedir.
+  return (request.entities || []).length > 1 && new Set(request.metrics.filter((metric) => !NAMING_METRICS.has(metric))).size > 1;
+}
+
+/* ── Tazelik ──────────────────────────────────────────────── */
+
+/** Kanıtın satırının adlandırdığı varlık ya da seçicisi: varlığın kendi özelliğinin sahibi. */
+function propertyOwner(source, field, type) {
+  if (!type || !ENTITY_ID_FIELDS[type]) return null;
+  const row = factCollections(source.tool, field).findLast((item) => item.kind === 'row');
+  const object = row ? valueAt(source.envelope, row.path) : null;
+  const id = object?.[ENTITY_ID_FIELDS[type]];
+  if (id != null) return entityKey(type, id);
+  if (row) return null;
+  const selector = (source.selectors || []).find((item) => item.type === type);
+  return selector ? entityKey(type, selector.id) : null;
 }
 
 /**
- * Atfedilen her kanıt TAM ve satırsız mı? Yalnızca böyle bir kanıt boş nüfusu
- * kanıtlar; kısaltılmış ya da sayfalanmış boş sonuç nüfusun boş olduğunu göstermez.
- * Liste/sıralama satırlarının taşıyacağı her koleksiyon (istenen bir satır
- * ölçüsünü taşıyan) boş olmalıdır.
+ * Seçilen olgunun yerine aynı turda daha yeni bir kanıt geçti mi? Sınıf
+ * (evidencePopulation.js): satır kümesi yalnızca aynı nüfusun daha yeni TAM
+ * okumasıyla, toplam aynı nüfusun herhangi bir daha yeni okumasıyla, varlığın
+ * özelliği aynı varlığın aynı özelliğiyle eskir.
+ */
+export function factSuperseded(evidence, source, fact, { property = null } = {}) {
+  const metric = fact.semantic?.metric;
+  const row = factRow(source.tool, fact.field);
+  for (const newer of evidence.values()) {
+    if (newer === source || !readLater(newer, source)) continue;
+    if (property) {
+      const [type, owner] = property;
+      const sameProperty = (newer.facts || []).some((item) => item.semantic?.metric === metric
+        && (newer.tool === source.tool ? canonicalField(item.field) === canonicalField(fact.field) : item.field.split('.').at(-1) === fact.field.split('.').at(-1))
+        && propertyOwner(newer, item.field, type) === owner);
+      if (sameProperty) return true;
+      continue;
+    }
+    if (newer.unsupported?.length) continue;
+    if (row?.kind === 'row') {
+      if (newer.tool === source.tool && rowKey(newer, row.canonical) === rowKey(source, row.canonical) && collectionComplete(newer, row.canonical)) return true;
+      continue;
+    }
+    if (scalarKey(newer) !== scalarKey(source)) continue;
+    const sameCarrier = (newer.facts || []).some((item) => item.semantic?.metric === metric && (newer.tool === source.tool
+      ? canonicalField(item.field) === canonicalField(fact.field)
+      : !factRow(newer.tool, item.field) && !row && metric.startsWith('tasks.') && TASK_COUNT_TOOLS.has(source.tool) && TASK_COUNT_TOOLS.has(newer.tool)));
+    if (sameCarrier) return true;
+  }
+  return false;
+}
+
+/** Boş nüfus kanıtı bir sayımdır: aynı aracın aynı nüfusu daha yeni bir okumada yeniden okunduysa eskimiştir. */
+function emptyProofSuperseded(evidence, source) {
+  const key = populationKey(source, Object.fromEntries(Object.entries(source.snapshotDimensions || {}).filter(([name]) => !['sort', 'textFields'].includes(name))));
+  return [...evidence.values()].some((newer) => newer !== source && readLater(newer, source) && newer.tool === source.tool
+    && populationKey(newer, Object.fromEntries(Object.entries(newer.snapshotDimensions || {}).filter(([name]) => !['sort', 'textFields'].includes(name)))) === key);
+}
+
+const rowDimensions = (source) => source.rowDimensionsMatch ?? source.dimensionsMatch;
+
+/* ── Boş nüfus ────────────────────────────────────────────── */
+
+/** Koleksiyon bu kanıtta var mı (iç içe koleksiyonda dış dizinin varlığı yeter)? */
+export function presentCollection(envelope, canonical) {
+  if (concreteCollections(envelope, canonical).length) return true;
+  const parts = canonical.split('.');
+  const outer = parts.indexOf('*');
+  return outer > 0 && Array.isArray(valueAt(envelope, `data.${parts.slice(0, outer).join('.')}`));
+}
+
+/**
+ * Atfedilen kanıtlardan nüfusun BOŞ olduğunu kanıtlayanlar. Yalnızca bildirilen
+ * nüfusla aynı kanıt sayılır; kanıtlanan her koleksiyon satır ölçülerini taşır.
  */
 function emptyRowSources(request, facts, evidence) {
   const ids = [...new Set(facts.map(({ evidenceId }) => evidenceId))];
   return ids.flatMap((evidenceId) => {
     const source = evidence.get(evidenceId);
-    if (!source || source.populationMatch === false || source.dimensionsMatch === false || source.sortMatch === false || source.unsupported.length
+    if (!source || source.populationMatch === false || rowDimensions(source) === false || source.sortMatch === false || source.unsupported.length
       || sortedJson(source.facets) !== sortedJson(source.declared)) return [];
-    const active = rowCollections(source.tool).filter((collection) => concreteCollections(source.envelope, collection).length > 0
-      || (source.tool === 'rota_recurrence_inspect' && collection === 'series.*.next' && source.envelope.data?.series?.length === 0));
+    const active = (sourceCollections(source) || rowCollections(source.tool)).filter((collection) => presentCollection(source.envelope, collection));
     const rowMetrics = request.metrics.filter((metric) => active.some((collection) => rowMetricFields(source.tool, collection, metric).length > 0));
-    const compatible = active.filter((collection) => (!source.collection || collection === source.collection)
-      && rowMetrics.length && rowMetrics.every((metric) => rowMetricFields(source.tool, collection, metric).length > 0));
+    const compatible = active.filter((collection) => rowMetrics.length && rowMetrics.every((metric) => rowMetricFields(source.tool, collection, metric).length > 0));
     if (!compatible.length || compatible.some((collection) => !provesEmptyCollection(source, collection))) return [];
-    return [{ source, metrics: rowMetrics }];
+    return [{ source, metrics: rowMetrics, collections: compatible, stale: emptyProofSuperseded(evidence, source) }];
   });
 }
 
-/**
- * Boş nüfusta satır ölçüleri: istekle aynı nüfusu taşıyan ve boşluğu kanıtlayan
- * kanıtın boş satır koleksiyonundaki ölçü, satır olmadığı için boşta karşılanır.
- */
-function vacuousRowMetrics(sources) {
-  return new Set(sources.flatMap(({ metrics }) => metrics));
-}
+/* ── Satır bütünlüğü ──────────────────────────────────────── */
 
 /**
  * Seçilen satırların her biri, taşıyabildiği istenen ölçünün olgusunu da taşıyor mu?
- * Kanıtta o ölçünün değeri bulunmayan satır ölçüyü taşımaz.
+ * Değeri olan satır ölçünün olgusunu ister; çok değerli alanı boş olan satır
+ * (kısaltılmamış kanıtta) ölçüyü boş değeriyle taşır; alanı olmayan satır taşımaz.
  */
 function rowMetricComplete(entry, metric) {
   const fields = rowMetricFields(entry.source.tool, entry.row.canonical, metric);
   const rows = valueAt(entry.source.envelope, entry.row.collection) || [];
+  const untrimmed = entry.source.envelope?.data?.sizeNote == null;
   return [...entry.indexes].every((index) => {
     const row = rows[index];
-    return row && fields.some((field) => pathValues(row, field.split('.')).length > 0)
-      && entry.metrics.get(index)?.has(metric) === true;
+    if (!row) return false;
+    const states = fields.map((field) => rowFieldState(entry.source.tool, entry.row.canonical, row, field));
+    if (states.includes('value')) return entry.metrics.get(index)?.has(metric) === true;
+    return untrimmed && states.includes('empty');
   });
 }
 
-function entityKey(type, id) {
-  return `${type}:${String(id).toLowerCase()}`;
+/**
+ * Seçilen satırların hiçbiri ölçünün değerini taşımıyor ama hepsinde ölçünün çok
+ * değerli alanı (kısaltılmamış kanıtta) boşsa ölçü boş değeriyle verilmiştir.
+ */
+function emptyRowMetric(metric, rowGroups) {
+  const carrying = rowGroups.filter((entry) => rowMetricFields(entry.source.tool, entry.row.canonical, metric).length);
+  return carrying.length > 0 && carrying.every((entry) => rowMetricComplete(entry, metric));
 }
+
+/** Açık alan bağı, seçilen satırların hepsinde o alan boş çok değerliyse ya da koleksiyon boşsa boşta karşılanır. */
+function fieldVacuous(binding, rowGroups, empty) {
+  return rowCollections(binding.tool).some((collection) => {
+    const prefix = `data.${collection}.*.`;
+    if (!binding.path.startsWith(prefix)) return false;
+    if (empty.some((item) => item.source.tool === binding.tool && item.collections.includes(collection))) return true;
+    const relative = binding.path.slice(prefix.length);
+    const entries = rowGroups.filter((entry) => entry.source.tool === binding.tool && entry.row.canonical === collection);
+    return entries.length > 0 && entries.every((entry) => entry.source.envelope?.data?.sizeNote == null && [...entry.indexes]
+      .every((index) => rowFieldState(binding.tool, collection, (valueAt(entry.source.envelope, entry.row.collection) || [])[index], relative) === 'empty'));
+  });
+}
+
+/* ── Doğrulama ────────────────────────────────────────────── */
 
 /**
  * Seçilen olguların bildirilen isteğe uyumu: `{ ok, issues }`.
  *
  * `evidence`: kanıt kimliği → `{ tool, envelope, facets, declared, unsupported,
- * selectors, sortedBy, firstPage }`. `facets` kanıtın yürütülen nüfus
+ * selectors, sortedBy, firstPage, snapshotDimensions, populationMatch,
+ * dimensionsMatch, sortMatch, collection }`. `facets` kanıtın yürütülen nüfus
  * koşulları, `declared` istenen koşulların bu araçtaki karşılığı, `unsupported`
  * aracın ifade edemediği istenen koşullardır; hepsini sunucu hesaplar.
  */
@@ -260,10 +382,15 @@ export function verifyRequestedFacts(request, facts, evidence) {
   if (entities.some((entity) => entity.bound == null)) return fail('ENTITY_UNRESOLVED');
   const boundKeys = new Set(entities.map((entity) => entityKey(entity.type, entity.bound)));
   const metrics = new Set(request.metrics);
+  const declaredFields = request.fields || [];
+  const bindings = request.bindings || [];
+  const rows = ['list', 'rank'].includes(request.operation);
   const represented = new Set();
   const referenced = new Set();
   const collections = new Map();
   const metricEntities = new Map();
+  const satisfiedFields = new Set();
+  const scalars = [];
   for (const { evidenceId, fact } of facts) {
     const source = evidence.get(evidenceId);
     if (!source) return fail('UNKNOWN_FACT_REFERENCE');
@@ -271,7 +398,7 @@ export function verifyRequestedFacts(request, facts, evidence) {
     const substantive = metrics.has(semantic.metric);
     if (!substantive && !semantic.context) return fail('UNDECLARED_METRIC');
     const factRows = factCollections(source.tool, fact.field);
-    const row = factRows.findLast((row) => row.kind === 'row') || factRows[0] || null;
+    const row = factRows.findLast((item) => item.kind === 'row') || factRows[0] || null;
     const rowObject = row ? valueAt(source.envelope, row.path) : null;
     const rowEntities = rowObject && typeof rowObject === 'object'
       ? Object.entries(ENTITY_ID_FIELDS).filter(([, field]) => rowObject[field] != null).map(([type, field]) => entityKey(type, rowObject[field])) : [];
@@ -286,12 +413,16 @@ export function verifyRequestedFacts(request, facts, evidence) {
     const selectors = [...source.selectors, ...(group?.selectors || [])];
     if (selectors.some(({ type, id }) => !boundKeys.has(entityKey(type, id)))) return fail('ENTITY_MISMATCH');
     if (substantive) {
-      const fieldBindings = (request.fields || []).filter((item) => item.metric === semantic.metric);
-      const explicitlySourced = fieldBindings.some((item) => item.tool === source.tool);
-      if (!ownProperty && ((source.populationMatch === false && !explicitlySourced) || source.dimensionsMatch === false || source.sortMatch === false)) return fail('POPULATION_MISMATCH');
-      if (source.collection && row?.kind === 'row' && row.canonical !== source.collection) return fail('POPULATION_MISMATCH');
-      const canonicalField = fact.field.startsWith('data.') ? fact.field.split('.').slice(1).map((part) => /^\d+$/.test(part) ? '*' : part).join('.') : fact.field;
-      if (fieldBindings.length && !fieldBindings.some((item) => item.tool === source.tool && item.path === (fact.field.startsWith('data.') ? `data.${canonicalField}` : canonicalField))) return fail('POPULATION_MISMATCH');
+      const fieldBindings = declaredFields.filter((item) => item.metric === semantic.metric);
+      const path = fact.field.startsWith('data.') ? canonicalField(fact.field) : fact.field;
+      const binding = fieldBindings.find((item) => item.tool === source.tool && item.path === path);
+      // Satır olgusu satır nüfusunu (gruplama dâhil), toplam yalnızca toplamın nüfusunu belirleyen boyutları ister.
+      // Değer isteğinde anahtarı bildirilen koşulu bağlayan grup satırı bildirilen nüfusun kendisidir.
+      const dimensionsMatch = row?.kind === 'row' && !group ? rowDimensions(source) : source.dimensionsMatch;
+      if (!ownProperty && ((source.populationMatch === false && !binding) || dimensionsMatch === false || source.sortMatch === false)) return fail('POPULATION_MISMATCH');
+      if (sourceCollections(source) && row?.kind === 'row' && !sourceCollections(source).includes(row.canonical)) return fail('POPULATION_MISMATCH');
+      if (fieldBindings.length && !binding) return fail('POPULATION_MISMATCH');
+      if (binding) satisfiedFields.add(binding);
       if (!ownProperty) {
         if (group && group.facets === null) return fail('POPULATION_MISMATCH');
         const effective = { ...source.facets, ...(group?.facets || {}) };
@@ -299,28 +430,11 @@ export function verifyRequestedFacts(request, facts, evidence) {
         if (sortedJson(effective) !== sortedJson(source.declared)) return fail('POPULATION_MISMATCH');
       }
       represented.add(semantic.metric);
-      const scope = sortedJson(source.facets) + sortedJson(Object.fromEntries(source.selectors.map(({ type, id }) => [type, id]))) + sortedJson(source.snapshotDimensions || {});
       const propertyType = semantic.property && (request.operation === 'value' || ownProperty) ? semantic.metric?.split('.')[0] : null;
       const propertyId = rowObject?.[ENTITY_ID_FIELDS[propertyType]];
-      const propertyEntity = propertyId != null ? entityKey(propertyType, propertyId) : source.selectors.find((item) => item.type === propertyType)
-        ? entityKey(propertyType, source.selectors.find((item) => item.type === propertyType).id) : null;
-      for (const newer of evidence.values()) {
-        if (newer.ordinal <= source.ordinal || (newer.unsupported.length && !ownProperty)) continue;
-        const sameScope = scope === sortedJson(newer.facets) + sortedJson(Object.fromEntries(newer.selectors.map(({ type, id }) => [type, id]))) + sortedJson(newer.snapshotDimensions || {});
-        if ((newer.facts || []).some((item) => {
-          if (item.semantic?.metric !== semantic.metric) return false;
-          const newRow = factCollections(newer.tool, item.field).findLast((row) => row.kind === 'row');
-          const sameCarrier = source.tool === newer.tool ? canonicalPath(fact.field) === canonicalPath(item.field)
-            : ownProperty ? fact.field.split('.').at(-1) === item.field.split('.').at(-1)
-              : !row && !newRow && semantic.metric.startsWith('tasks.') && TASK_COUNT_TOOLS.has(source.tool) && TASK_COUNT_TOOLS.has(newer.tool);
-          if (!sameCarrier) return false;
-          if (!ownProperty || !propertyEntity) return sameScope;
-          const newObject = newRow ? valueAt(newer.envelope, newRow.path) : null;
-          const id = newObject?.[ENTITY_ID_FIELDS[propertyType]];
-          return id != null ? entityKey(propertyType, id) === propertyEntity
-            : !newRow && newer.selectors.some(({ type, id }) => entityKey(type, id) === propertyEntity);
-        })) return fail('STALE_EVIDENCE');
-      }
+      const owner = ownProperty ? propertyOwner(source, fact.field, propertyType) : null;
+      if (factSuperseded(evidence, source, fact, { property: owner ? [propertyType, owner] : null })) return fail('STALE_EVIDENCE');
+      if (rows && !ownProperty && !row) scalars.push({ evidenceId, source, path });
       // Varlık yalnızca ölçü taşıyan olguyla karşılanır; ad ya da etiket bağlamı yetmez.
       const reference = ({ type, id }) => {
         const key = entityKey(type, id);
@@ -338,71 +452,100 @@ export function verifyRequestedFacts(request, facts, evidence) {
       }
       rowEntities.forEach((key) => reference({ type: key.split(':')[0], id: key.slice(key.indexOf(':') + 1) }));
     }
-    for (const row of factRows) {
-      if (source.collection && row.kind === 'row' && row.canonical !== source.collection) continue;
-      const key = `${evidenceId}|${row.collection}`;
-      if (!collections.has(key)) collections.set(key, { evidenceId, source, row, indexes: new Set(), metrics: new Map(), bound: true });
+    for (const item of factRows) {
+      if (sourceCollections(source) && item.kind === 'row' && !sourceCollections(source).includes(item.canonical)) continue;
+      const key = `${evidenceId}|${item.collection}`;
+      if (!collections.has(key)) collections.set(key, { evidenceId, source, row: item, indexes: new Set(), metrics: new Map(), bound: true });
       const entry = collections.get(key);
-      entry.indexes.add(row.index);
+      entry.indexes.add(item.index);
       if (substantive && conflictingRow) entry.conflicting = true;
-      if (substantive) entry.metrics.set(row.index, (entry.metrics.get(row.index) || new Set()).add(semantic.metric));
-      if (row.kind === 'row' && request.operation === 'value') {
+      if (substantive) entry.metrics.set(item.index, (entry.metrics.get(item.index) || new Set()).add(semantic.metric));
+      if (item.kind === 'row' && request.operation === 'value') {
         const grouped = group && group.facets !== null && (Object.keys(group.facets).length > 0 || group.selectors.length > 0);
         if (!named && !grouped) entry.bound = false;
       }
     }
   }
   const rowGroups = [...collections.values()].filter((entry) => entry.row.kind === 'row');
-  const empty = ['list', 'rank'].includes(request.operation) && !rowGroups.length ? emptyRowSources(request, facts, evidence) : [];
-  const vacuous = vacuousRowMetrics(empty);
+  const empty = rows && !rowGroups.length ? emptyRowSources(request, facts, evidence) : [];
+  if (empty.some((item) => item.stale)) return fail('STALE_EVIDENCE');
+  const vacuous = new Set(empty.flatMap(({ metrics: covered }) => covered));
   for (const { source } of empty) for (const selector of source.selectors) if (boundKeys.has(entityKey(selector.type, selector.id))) referenced.add(entityKey(selector.type, selector.id));
-  if ([...metrics].some((metric) => !represented.has(metric) && !vacuous.has(metric))) return fail('METRIC_MISSING');
+  if ([...metrics].some((metric) => !represented.has(metric) && !vacuous.has(metric) && !emptyRowMetric(metric, rowGroups))) return fail('METRIC_MISSING');
+  // Bildirilen her alan bağı bir yükümlülüktür; aynı ölçünün başka bir alanı onun yerine geçmez.
+  if (declaredFields.some((binding) => !satisfiedFields.has(binding) && !fieldVacuous(binding, rowGroups, empty))) return fail('METRIC_MISSING');
   if ([...boundKeys].some((key) => !referenced.has(key))) return fail('ENTITY_MISSING');
-  if (entities.length > 1 && metrics.size > 1) {
-    if (!request.bindings?.length || request.metrics.some((metric) => !request.bindings.some((binding) => binding.metric === metric))) return fail('ENTITY_METRIC_AMBIGUOUS');
-    for (const binding of request.bindings) {
-      const entity = entities[binding.entity];
-      if (!metricEntities.get(binding.metric)?.has(entityKey(entity.type, entity.bound))) return fail('ENTITY_MISSING');
-    }
-    for (const [metric, keys] of metricEntities) for (const key of keys) {
-      if (boundKeys.has(key) && !request.bindings.some((binding) => binding.metric === metric
-        && entityKey(entities[binding.entity].type, entities[binding.entity].bound) === key)) return fail('ENTITY_MISMATCH');
+  if (bindingsRequired(request) && request.metrics.some((metric) => !bindings.some((binding) => binding.metric === metric))) return fail('ENTITY_METRIC_AMBIGUOUS');
+  // Verilen her ölçü/varlık bağı, ölçü ve varlık sayısından bağımsız olarak uygulanır.
+  for (const binding of bindings) {
+    const entity = entities[binding.entity];
+    if (!entity || !metricEntities.get(binding.metric)?.has(entityKey(entity.type, entity.bound))) return fail('ENTITY_MISSING');
+  }
+  for (const [metric, keys] of metricEntities) {
+    const allowed = bindings.filter((binding) => binding.metric === metric);
+    if (!allowed.length) continue;
+    for (const key of keys) {
+      if (boundKeys.has(key) && !allowed.some((binding) => entityKey(entities[binding.entity].type, entities[binding.entity].bound) === key)) return fail('ENTITY_MISMATCH');
     }
   }
   for (const entry of collections.values()) {
-    const rows = valueAt(entry.source.envelope, entry.row.collection);
-    const size = Array.isArray(rows) ? rows.length : 0;
-    const complete = entry.indexes.size === size;
+    const list = valueAt(entry.source.envelope, entry.row.collection);
+    const size = Array.isArray(list) ? list.length : 0;
     // Çok değerli alan her istekte bütündür; satırların tamlığı istek türüne bağlıdır.
-    if (entry.row.kind === 'list' && !complete) return fail('PARTIAL_VALUE_LIST');
+    if (entry.row.kind === 'list' && entry.indexes.size !== size) return fail('PARTIAL_VALUE_LIST');
     if (entry.row.kind !== 'row') continue;
-    // Bütün satırların istendiği liste yalnızca TAM bir sonuçtan kurulur: boyut
-    // sınırında kısaltılan zarf, elinde kalan satırların tamamı seçilse de bütün değildir.
-    if (request.operation === 'list'
-      && (!complete || entry.source.envelope?.complete !== true || entry.source.envelope?.truncated === true || entry.source.firstPage !== true)) return fail('LIST_INCOMPLETE');
     if (request.operation === 'value' && (entry.conflicting || (!entry.bound
-      && (size !== 1 || entry.source.envelope?.complete !== true || entry.source.envelope?.truncated === true
-        || entry.source.firstPage !== true)))) return fail('ROW_SELECTION_UNBOUND');
+      && (size !== 1 || !collectionComplete(entry.source, entry.row.canonical))))) return fail('ROW_SELECTION_UNBOUND');
+  }
+  if (request.operation === 'list') {
+    // Bütün satırların istendiği liste yalnızca TAM bir nüfustan kurulur ve
+    // nüfusun her somut kümesini (iç içe koleksiyonda seçilmeyen üst satırlar dâhil) kapsar.
+    // Birden çok koleksiyonlu listede kanıttaki her bildirilen koleksiyon (boşsa boş olarak) listelenir.
+    const populations = new Map(rowGroups.map((entry) => [`${entry.evidenceId}|${entry.row.canonical}`, entry]));
+    const listed = new Map(rowGroups.map((entry) => [entry.evidenceId, entry.source]));
+    for (const [evidenceId, source] of listed) {
+      for (const canonical of sourceCollections(source) || []) {
+        if (presentCollection(source.envelope, canonical)) populations.set(`${evidenceId}|${canonical}`, { evidenceId, source, row: { canonical } });
+      }
+    }
+    for (const { evidenceId, source, row } of populations.values()) {
+      if (!collectionComplete(source, row.canonical)) return fail('LIST_INCOMPLETE');
+      for (const concrete of concreteCollections(source.envelope, row.canonical)) {
+        const selected = collections.get(`${evidenceId}|${concrete.collection}`);
+        if ((selected?.indexes.size || 0) !== concrete.rows.length) return fail('LIST_INCOMPLETE');
+      }
+    }
   }
   // Liste ve sıralama satırların yanıtıdır: satırların taşıyabildiği istenen ölçü
   // her satırda bulunmalıdır; genel bir toplam satırların değerinin yerine geçmez.
-  if (['list', 'rank'].includes(request.operation)) {
+  if (rows) {
     const rowMetrics = [...metrics].filter((metric) => rowGroups.some((entry) =>
       rowMetricFields(entry.source.tool, entry.row.canonical, metric).length > 0));
     if (rowGroups.length && !rowMetrics.length) return fail('METRIC_MISSING');
     for (const metric of rowMetrics) {
       if (rowGroups.some((entry) => !rowMetricComplete(entry, metric))) return fail('METRIC_MISSING');
     }
+    // Satırlarla birlikte verilen toplam, aynı kanıtta o satır koleksiyonunu sayan toplam olmalıdır;
+    // boş nüfusta yalnızca boşluğu kanıtlayan kanıtın toplamı aynı nüfusu anlatır.
+    for (const { evidenceId, source, path } of scalars) {
+      if (!rowGroups.length && !empty.length) break;
+      const counted = rowGroups.length
+        ? rowGroups.some((entry) => entry.evidenceId === evidenceId && (collectionTotalPaths(source.tool, entry.row.canonical).includes(path)
+          || parentProperty(source.tool, entry.row.canonical, path)))
+        : empty.some((item) => item.source === source);
+      if (!counted) return fail('POPULATION_MISMATCH');
+    }
   }
   if (request.operation === 'list' && !rowGroups.length && !empty.length) return fail('LIST_ROWS_REQUIRED');
   if (request.operation === 'rank') {
     // Satırsız kanıt yalnızca nüfus boşken sıralamanın yanıtıdır.
-    if (!rowGroups.length) return empty.length ? { ok: true, issues: [] } : fail('RANK_MISMATCH');
+    if (!rowGroups.length) return empty.length ? { ok: true, issues: [], empty: [...new Set(empty.map((item) => item.source.id))] } : fail('RANK_MISMATCH');
     if (rowGroups.length !== 1) return fail('RANK_MISMATCH');
     const [entry] = rowGroups;
     const indexes = rankedIndexes(request, entry.source, entry.row, entry.indexes);
     if (!indexes) return fail('RANK_MISMATCH');
     return { ok: true, issues: [], rankOrder: { evidenceId: entry.evidenceId, collection: entry.row.collection, indexes } };
   }
-  return { ok: true, issues: [] };
+  // Boş nüfusun yanıtı: anlatı "eşleşen kayıt yok" der (yalnızca tamlık bayrağı değil).
+  return empty.length ? { ok: true, issues: [], empty: [...new Set(empty.map((item) => item.source.id))] } : { ok: true, issues: [] };
 }

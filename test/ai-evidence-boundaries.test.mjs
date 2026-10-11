@@ -21,12 +21,13 @@ const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
 /** Model turu: araç çağrısı; ilk turda veri okunmadan önceki türlü istek bildirimiyle. */
 const calls = (name, args = {}, id = 'call', request = null) => ({ text: request ? declared(request) : '', toolCalls: [{ id, name, arguments: JSON.stringify(args) }] });
 const taskStatus = (...ids) => ({ operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' }, entities: ids.map((id) => ({ type: 'task', id })) });
-/** Çok değerli sorumlu alanı sunucu seçimine girmez: olguları model seçer ve tur sonraki model turlarına sürer. */
-const statusAndAssignees = (...ids) => ({ operation: 'value', metrics: ['task.status', 'task.assignees'], entities: ids.map((id) => ({ type: 'task', id })),
-  bindings: ids.length > 1 ? ['task.status', 'task.assignees'].flatMap((metric) => ids.map((_, entity) => ({ metric, entity }))) : [] });
-const statusFacts = (...ids) => reply(JSON.stringify({ kind: 'rota', facts: ids.flatMap((id) => [`${id}:data.task.status`, `${id}:data.task.assignees.*.name`]) }));
+/** Proje adı ve kodu aynı ölçüyü taşır: sunucu seçim türetmez, olguları model seçer ve tur sonraki model turlarına sürer. */
+const statusAndAssignees = (...ids) => ({ operation: 'value', metrics: ['task.status', 'task.project'], entities: ids.map((id) => ({ type: 'task', id })),
+  bindings: ids.length > 1 ? ['task.status', 'task.project'].flatMap((metric) => ids.map((_, entity) => ({ metric, entity }))) : [] });
+const statusFacts = (...ids) => reply(JSON.stringify({ kind: 'rota', facts: ids.flatMap((id) => [`${id}:data.task.status`, `${id}:data.task.project.name`]) }));
 const projectCount = (id) => ({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, entities: [{ type: 'project', id }] });
-const aliWorkload = { operation: 'value', metrics: ['tasks.open'], entities: [{ type: 'person', text: 'Ali' }] };
+const aliWorkload = { operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary' },
+  fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }], entities: [{ type: 'person', text: 'Ali' }] };
 const reply = (text, finishReason = 'stop') => ({ text, toolCalls: [], finishReason });
 const results = (input) => input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
 
@@ -49,11 +50,11 @@ async function turn(t, steps, { user = 'Rota verisini incele', context = null, h
 
 test('data intent is selected before data and never uses Turkish casing or keyword matching', async (t) => {
   const { result, inputs } = await turn(t, [reply(declared({ operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary' },
-    fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }] })), calls('rota_workload_summary')], { user: 'İŞ YÜKÜM NASIL?' });
+    fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }] }))], { user: 'İŞ YÜKÜM NASIL?' });
   assert.equal(result.outcome, 'grounded');
   assert.equal(inputs[0].messages.some((message) => message.role === 'tool'), false);
-  // Bildirilen sayıyı sunucu kanıttan seçer: seçim için ayrı model turu yoktur.
-  assert.equal(inputs.length, 2);
+  // Çağrısız bildirimin nüfus okumasını sunucu bildirimden kurar ve sayıyı kanıttan seçer: ek model turu yoktur.
+  assert.equal(inputs.length, 1);
 });
 
 test('an immediate general declaration safely clarifies and cannot bypass the routing boundary for a natural data question', async (t) => {
@@ -177,8 +178,8 @@ test('free text cannot become a terminal claim unless its projection was selecte
 
 test('explicit text projection preserves exact equality and safe Markdown escaping', async (t) => {
   const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.LITERAL, textFields: ['description'] }, 'call',
-    { operation: 'value', metrics: ['task.description', 'task.assignees'], entities: [{ type: 'task', id: TASKS.LITERAL }] }),
-    (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.task.description'), claimFor(results(input)[0], 'data.task.assignees.0.name')))],
+    { operation: 'value', metrics: ['task.description', 'task.project'], entities: [{ type: 'task', id: TASKS.LITERAL }] }),
+    (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.task.description'), claimFor(results(input)[0], 'data.task.project.name')))],
   { user: `Rota verisini incele: ${TASKS.LITERAL}`, allowedTextFields: ['description'] });
   assert.equal(result.outcome, 'grounded');
   assert.doesNotMatch(result.text, /【R7】/);
@@ -189,14 +190,13 @@ test('authorization revocation observed in a later round invalidates earlier evi
   const auth = () => ({ sicil: AYSE, isSystemAdmin: false, isExecutive: false,
     effective: { access: available ? new Map([[PROJECTS.FULL, { accessLevel: 'FULL', reasons: ['MANUAL_GRANT'] }]]) : new Map(), partialTaskIds: new Set() } });
   const context = createToolTurnContext({ sicil: AYSE, now: NOW, loadAuthorization: async () => auth() });
-  const { result } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'call', statusAndAssignees(TASKS.OVERDUE)), () => {
+  const { result, inputs } = await turn(t, [calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'call', statusAndAssignees(TASKS.OVERDUE)), () => {
     available = false;
     return calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'revoked');
-  }, (input) => {
-    assert.equal(results(input).at(-1).error.code, 'NOT_FOUND');
-    return statusFacts(results(input)[0].evidenceId);
-  }, reply('{"kind":"not_found"}')], { user: `Rota verisini incele: ${TASKS.OVERDUE}`, context });
-  assert.equal(result.outcome, 'not_found');
+  }], { user: `Rota verisini incele: ${TASKS.OVERDUE}`, context });
+  // Araç turunda geçersizleşen kanıt dökümde kalmıştır: sağlayıcıya başka tur gönderilmez.
+  assert.equal(inputs.length, 2);
+  assert.equal(result.outcome, 'unavailable');
   assert.deepEqual(result.evidenceRows, []);
   assert.doesNotMatch(result.text, /Radar/);
 });
@@ -226,9 +226,9 @@ test('removing one employee changes the authorization epoch even while executive
 });
 
 test('output truncation recovers with fewer claims and never replays partial JSON', async (t) => {
-  const named = { operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', text: 'Radar test planı' }] };
+  const named = { operation: 'value', metrics: ['task.status', 'task.project'], entities: [{ type: 'task', text: 'Radar test planı' }] };
   const { result, inputs } = await turn(t, [calls('rota_task_search', { text: 'Radar test planı' }, 'call', named), reply('{"kind":"rota","claims":[', 'length'),
-    (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.tasks.0.status')))], { user: 'Radar test planı görevinin durumu nedir?' });
+    (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.tasks.0.status'), claimFor(results(input)[0], 'data.tasks.0.project.name')))], { user: 'Radar test planı görevinin durumu ve projesi nedir?' });
   assert.equal(result.outcome, 'grounded');
   assert.equal(result.repaired, true);
   assert.match(inputs[2].messages[0].content, /En fazla 8 iddia/);

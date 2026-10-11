@@ -282,10 +282,12 @@ okunmaz.
   kapsamı/türü).
 - Bir koşula uyan kayıtların sayısı o nüfusun toplamıdır (`tasks.total` ve
   koşul `filters` içinde); `tasks.overdue` ve `tasks.open` proje, kişi ya da
-  portföy nüfusunun kırılımıdır, görev satırı alanı değildir. Sayı ile kayıtlar
-  birlikte istenirse `list` ve en az bir satır alanı bildirilir. İstem bu
-  kalıbı tek örnekle gösterir:
-  `{"operation":"list","metrics":["tasks.total","task.targetFinish"],"filters":{"deadline":"overdue","assignee":"me"}}`
+  portföy nüfusunun kırılımıdır, görev satırı alanı değildir. Sayı ve sırasız
+  kayıtlar `list`, sayı ve ilk/en yüksek/en erken N kayıt `rank` olur; her
+  ikisinde en az bir satır alanı bildirilir ve satırlarla verilen toplam yalnızca
+  o koleksiyonun kendi sayısı olabilir (ortak `COLLECTION_TOTALS` kaydı). İstemin
+  örneği:
+  `{"operation":"list","metrics":["tasks.total","task.targetFinish"],"population":{"tool":"rota_task_search","collection":"tasks","sort":"overdue_days_desc"},"layout":"auto","filters":{"deadline":"overdue","assignee":"me"}}`
   ve `rota_task_search {"deadline":"overdue","assignee":"me"}`. Bu, modele
   verilen yönergedir; sunucu cümleyi yorumlamaz, yalnızca bildirimi doğrular.
 
@@ -798,7 +800,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Girdiler:** `projectId` (zorunlu), `wbsId`, `depth` (1–4, varsayılan 2), `limit` (1–60).
 - **Yetki:** §5 iş dağılım kuralı; `catalogVisibility`: `full-catalog` ya da `ancestor-chain-of-visible-tasks`.
 - **Kaynak:** `AI_TOOL_WBS_SQL`.
-- **Çıktı:** `nodes[]` (kod, ad, derinlik, alt düğüm, doğrudan/alt ağaç görev, açık, gecikmiş), `tasksWithoutWbs`, notlar.
+- **Çıktı:** `nodes[]` (kod, ad, derinlik, alt düğüm, doğrudan/alt ağaç görev, açık, gecikmiş), `nodeCount` ve `totalCount` (istenen derinliğe kadar olan düğümler), `filters.depth`, `deeperNodes` (daha derin düğüm var mı), `tasksWithoutWbs`, notlar. Sonuç, istenen derinliğe kadar bütün düğümler listelendiyse tamdır.
 - **Örnek sorular:** "Tasarım paketinde kaç açık görev var?"
 
 ### 10.8 `rota_workload_summary` — iş yükü
@@ -999,8 +1001,14 @@ bağımsız değişken, sonuç içeriği, SQL ya da anahtar kaydedilmez.
   bildirdiği girdi/tamamlama/akıl yürütme belirteçleri. Soru, yanıt, bağımsız
   değişken, kanıt içeriği, Sicil ya da anahtar yazılmaz.
 - `grounding.escalations`: Standart → Derin düşünme devri sayısı, nedene
-  (`SYNTHESIS_REQUIRED`, gerçek muhakeme isteğinde `VERIFICATION_FAILED`)
-  ve son sonuca göre. Sonuç devredilen turun kendi sonucudur: doğrulanan yanıt
+  ve son sonuca göre. Nedenler: `SYNTHESIS_REQUIRED` (kanıt hazır, istek
+  `reasoning: synthesis`), `VERIFICATION_FAILED` (ucuz yanıt düzeltmesinden
+  sonra da doğrulanamayan seçim), `REQUEST_DECLARATION` (bildirim düzeltme
+  bütçesi tükendi), `EMPTY_COMPLETION` (yinelenen boş tamamlama) ve `LENGTH`
+  (çıktı sınırı düzeltmesi tükendi). Devir yalnızca Derin turun sonucu
+  değiştirebileceği durumda yapılır: kanıt okunduysa kanıt bildirilen isteği
+  doğrulayıcının kurallarıyla karşılayabilmeli, okunmadıysa ortak araç turu
+  bütçesinden en az bir tur kalmalıdır. Sonuç devredilen turun kendi sonucudur: doğrulanan yanıt
   (`grounded`, `clarification` …), `failed` (devirde de doğrulanamadı),
   `timeout` (sağlayıcı süre sınırı) ya da `error` (başka hizmet hatası).
   Her devir `ai.grounded.escalation` bilgi olayı yazar: istenen kip, kullanılan
@@ -1128,8 +1136,9 @@ geri alma betiği kanıtı iletilerden önce düşürür.
 | `test/ai-tool-containment.test.mjs` | İlk turda da kullanıcı iletisinden gelen arama metni, normalize takip karşılaştırması, meşru daraltma ve ilgisiz genişlemenin reddi |
 | `test/ai-evidence-selectors.test.mjs` | Sayıların proje/kişi/görev/dönem seçicileriyle çizilmesi, kimlik yerine ad, birim ve tekrar tamlığı |
 | `test/ai-grounded-escalation.test.mjs` | Bildirilen muhakeme gereksiniminde veri sonrası Derin devri; eksik kanıtın önce ucuz profilde toplanması, ortak onarım/araç bütçesi, SQL'in yeniden kullanılmaması, süre aşımı/iptal/kimlik sınırları; ucuz bütçe tükenince tek Derin devri, Derin kipin kendine devretmemesi, içeriksiz tanı |
-| `test/ai-grounded-mode-and-protocol.test.mjs` | Kipin araç profili (Derin, Standart profil olmadan da çalışır), metin/kod çiti/`<tool_call>` olarak dönen plan, planla birlikte doğrudan çağrı, reddedilen planın kayıt defteri ipucuyla düzeltilmesi ve SQL'siz sınırlı kurtarma, sıfır/sıfır olmayan sayım-liste-sıra, kayıt hatasında tek son iz, `general_redirect` sonucu, art arda yinelenmeyen ve işten sonra yinelenen yetki okuması |
+| `test/ai-grounded-mode-and-protocol.test.mjs` | Kipin araç profili (Derin, Standart profil olmadan da çalışır), metin/kod çiti/`<tool_call>` olarak dönen plan, planla birlikte doğrudan çağrı, reddedilen planın kayıt defteri ipucuyla düzeltilmesi ve SQL'siz sınırlı kurtarma, düzeltmenin kullanıcının adlandırdığı kaydı düşürememesi, sıfır/sıfır olmayan sayım-liste-sıra, kayıt hatasında tek son iz, `general_redirect` sonucu, art arda yinelenmeyen ve işten sonra yinelenen yetki okuması |
 | `test/ai-request-populations.test.mjs` | Tam koleksiyonla boşluk, kardeş/nested nüfuslar, somut alan ve gruplama kimliği, ölçü/varlık eşlemesi, eski/çelişen anlık görüntüler ve bağımsız metaveri |
+| `test/ai-request-invariants.test.mjs` | Sözleşme değişmezleri (tablo): planla tamamlama ve SQL'den önce ret, kanonik varsayılanlar, alan ve varlık bağı yükümlülükleri, boş çok değerli alan ve yazılmamış özellik, koleksiyona özgü tamlık (WBS derinliği, kardeş koleksiyonlar, okuma biçimi), satırla toplam, sınıfa bağlı tazelik, düzen, sunucu seçimi ve Derin hazırlığı; adı geçen kayıtların türüne göre gruplamanın varlık başına değer olması; kırılım ve aynı değer kimlikleri (özellik sınaması), sunucu okumaları, korumalı metin |
 | `test/ai-assistant-availability.test.mjs` | `MERGEN_ROTA_AI_ENABLED` kapalıyken başlatıcının, panelin ve komut paleti girdisinin gösterilmemesi; işaretin her istekte ortamdan okunması ve yapılandırma değeri taşımaması |
 
 Yerel/CI doğrulaması: tüm Node sınamaları `--test-concurrency=1` ile,
@@ -1194,7 +1203,11 @@ yürütür. Hızlı yol uygun değilse seçilen kipin modeli olguları seçer. S
 kipte Derin profil gerçek `reasoning: synthesis` ihtiyacı için veri sonrası ya
 da ucuz kurtarma tükendiğinde bir kez kullanılabilir; Derin seçildiğinde modele
 bağlı kısım Derin profilde kalır, yetki/SQL/doğrulama/çizim yine sunucudadır.
-Genel sohbetin Fast/Standard/Deep profil çözümü bu değişiklikten etkilenmez.
+Genel sohbetin kip → profil eşlemesi (Fast/Standard/Deep → `chat.fast` /
+`chat.general` / `chat.reasoning`) bu değişiklikten etkilenmez. Profilin modeli
+kayıttan gelir: kurum içi katalogda hem `chat.reasoning` hem
+`chat.tools.reasoning` `gemma-4-31B-it` modelindedir (bağlam 131072); bu
+kurumun model kararıdır, Rota verisi sözleşmesinin sonucu değildir.
 
 **Seçim uygunluğu.** Tam ilk sayfa ve tek aday yeterli değildir: amaçlanan
 araç/koleksiyon, alt alanlar, gruplama/derinlik, sıra, düzen ve çok varlıklı
@@ -1205,6 +1218,131 @@ birleşen toplamın o koleksiyonu saydığı sunucuda tanımlı olmalıdır. Yin
 veya üst üste binen ölçü kanıtları körlemesine birleştirilmez. Yeni örtüşen
 ölçü eski seçimi `STALE_EVIDENCE` ile reddeder; güvenli, ayrı metaveri
 aynı varlığa bağlı ölçü kanıtıyla birleşebilir. Yetki yenilemek ölçüyü yenilemez.
+
+**Sözleşme değişmezleri.** Aşağıdakiler tek kaynaktan uygulanır; sunucu
+seçimi, model seçiminin doğrulaması ve Derin devir kararı aynı kuralları
+paylaşır (`evidencePopulation.js`, `requestPopulation.js`, `requestContract.js`):
+
+- *Anlam veri okunmadan bildirilir.* Planın çağrıları isteğe bağlıdır; varsa
+  bildirilmeyen koşul ve boyutlar nüfus çağrısından tamamlanır. Çelişen ya da
+  aracın ifade edemediği değer, satır alanı olmayan liste, koleksiyonu saymayan
+  toplam, bağlanamayan özellik ve eksik ölçü/varlık bağı veri okunmadan
+  reddedilir.
+- *Yürütme kümesi atomiktir.* Plan çağrıları ve aynı yanıttaki doğrudan
+  çağrılar birlikte doğrulanır (kayıtlı ve izinli araç, boyut, şema, kapsam,
+  yinelemenin ayıklanması, ayıklanmış küme üzerinde sınırlar); tek geçersiz üye
+  bütün kümeyi SQL'siz reddeder. Çağrı kimliklerini sunucu verir.
+- *Tek nüfus kimliği.* Varsayılanlar kanonikleşir (sıra, WBS derinliği 2,
+  gruplama yok, korumalı alan yok); verilmeyen boyut varsayılandır, joker
+  değildir. Toplamı belirleyen boyutlar (WBS derinliği, korumalı arama alanı)
+  satır kümesini belirleyenlerden (sıra, gruplama) ayrı tutulur.
+- *Tazelik sınıfa bağlıdır.* Toplam, aynı toplam nüfusunun daha sonraki bir
+  araç turundaki herhangi bir okumasıyla; satır kümesi yalnızca aynı satır
+  nüfusunun daha sonraki TAM okumasıyla; varlık özelliği aynı varlığın aynı
+  özelliğiyle eskir. Aynı turdaki eşdeğer okumalar eşzamanlıdır.
+- *Her bağ bir yükümlülüktür.* Bildirilen her `fields` bağı ve her ölçü/varlık
+  bağı (ölçü sayısından bağımsız) karşılanmalıdır; boş çok değerli alan bir
+  değerdir, alanın yokluğu ya da kısaltılmış kanıt değildir.
+- *Tamlık koleksiyona özgüdür.* Yineleme önizlemesi, baz plan listesi ve grup
+  satırları kendi tamlık işaretleriyle değerlendirilir; liste iç içe
+  koleksiyonun her somut kümesini kapsar.
+- *Derin bir doğrulama onarımı değildir.* Kanıt okunduysa devir yalnızca kanıt
+  isteği doğrulayıcının kurallarıyla karşılayabiliyorsa, okunmadıysa ortak araç
+  bütçesinden tur kalmışsa yapılır; kanıtsız devirde Derin yeniden planlar.
+  Yetkisi kalkan kanıt başka bir sağlayıcı turuna gönderilmez.
+
+**Zayıf model güvenceleri.** Modelin yalnızca türlü isteği doğru bildirmesi
+yeterlidir; okuma, ad çözümü ve olgu seçimi mümkün olduğunca sunucudadır. Hiçbiri
+kullanıcı cümlesini yorumlamaz; hepsi kayıt defterinden ve kanıttan türetilir.
+
+- *Sunucu okumaları.* İstek kabul edilince sunucu okumaları bildirimden kurar:
+  adla bildirilen varlık önce ad aramasıyla çözülür, sonra nüfus aracı bağlı
+  kimliklerle, bildirilen koşul/dönem/sıra/gruplama/derinlik/korumalı alanla
+  okunur (aynı türden birden çok varlıkta varlık başına bir okuma). Okumanın
+  kanonik kimliği koşullar, seçiciler, boyutlar, imleç ve sayfa boyudur; aynı
+  okuma yinelenmez, küçük sayfa eksik okumadır. Bildirilen nüfus aracı sonraki
+  turlarda da açıktır; bağımsız değişkenler kapsam sınırına bağlıdır.
+- *Kırılım kimliği.* Görev nüfusu kırılımı taşımıyorsa ve tanımlayan koşulu
+  zaten içeriyorsa kırılım sayımı (ör. `tasks.overdue` ve `deadline: overdue`)
+  o nüfusun toplamıdır (`BREAKDOWN_FILTERS`; özellik sınamasıyla korunur).
+- *Tek anlamlı taşıyıcılar.* Yapı gereği aynı değeri taşıyan yollar
+  (`SAME_VALUE_PATHS`) ve aynı değerin birlikte gösterilen biçimleri (proje
+  adı/kodu, WBS adı/kodu, kural/açıklaması, tatil adı/kısa adı, birim
+  kırılımı) sunucu seçiminde belirsizlik değildir. Satırın yazmadığı kayıtlı
+  alan da belirsizlik değildir; bildirilen koleksiyonun satır alanı listenin
+  yanıtıdır, aynı ölçünün genel toplamı yalnızca bağlamdır.
+- *Kardeş koleksiyonlar.* `list` isteğinde koleksiyon verilmez ve bildirilen
+  satır ölçülerini kayıtlı kardeş koleksiyonlar taşırsa (öncüller ve ardıllar,
+  bildirim akışları) liste hepsidir; her biri tam listelenir. Başka birden çok
+  koleksiyon ve `rank` açık koleksiyon ister.
+- *Okuma biçimi.* Seçiciyle tek kayıt döndüren araçta koleksiyonun adı okumanın
+  biçimine çevrilir (görevle okunan tekrar incelemesi `series.next`, görevsiz
+  okuma `series.*.next`); biçimde olmayan koleksiyon veri okunmadan reddedilir.
+- *Ad çözümü.* Tek kesin eşleşme kimliktir. Adaylardan tam adı kullanıcının
+  iletisinde (sözcük başından) geçen TEK aday, kullanıcının adlandırdığı kayıttır;
+  bildirilen ad onun kısaltılmışı ya da sözcüklerle uzatılmışı olmalıdır (model
+  adı kısaltmış ya da "… görev" diye uzatmış olabilir). Tam ad hiçbir kayda
+  uymazsa sunucu adın ilk sözcüğüyle bir yoklama araması yapar (kapsam yalnızca
+  bu yoklamaya izin verir). Adaylar tek bir tekrar serisinin şablonu ve
+  yinelemeleriyse ad yalnızca seri incelemesi için tektir. Ne tam ad ne yoklama
+  hiçbir görünür kayda uymuyorsa yanıt, kaydın varlığını ele vermeyen
+  "bulunamadı"dır; model seçim turu gerekmez.
+- *Varlık özelliği okuması.* Bağlı varlığın nüfus aracında bulunmayan kendi
+  özelliği (ör. görev listesinde görevin açıklaması) o varlığı seçen taşıyıcı
+  araçtan okunur.
+- *Düzeltme ipuçları.* Nüfus aracının taşımadığı ölçünün ipucu onu taşıyan araçları
+  gösterir; kayıtlı olmayan ölçü kimliğine aynı önekli kayıtlı ölçüler önerilir.
+  Sunucu hangi ölçünün soruda istendiğini yorumlamaz; düzeltilen bildirim yeniden
+  doğrulanır.
+- *Korumalı metin.* Korumalı metin ölçüsü (ör. `task.description`) kendi alanını
+  nüfus okumasının boyutu yapar; kullanıcı açmadıysa veri okunmadan reddedilir.
+  Veri okunmadan bildirilen alanlar sunucu okumalarında da açıktır.
+- *Kullanıcı metni.* Ad ve arama metni kullanıcının iletisinde bir sözcük
+  başından başlamalıdır; son sözcük çekim eki alabilir ("toplantısı" →
+  "toplantısının").
+- *Yazılmayan alan.* Araçlar boş tekil varlık özelliğini (ör. hedef bitişi
+  olmayan görev) satıra yazmaz: kısaltılmamış kanıtta bu bir boş değerdir.
+  Sayaçlar her satıra yazılır; yazılmamış sayaç eksik ölçüdür.
+- *İş dağılım derinliği.* Düğüm listesinde `population.depth` açıkça bildirilir (planın
+  kendi WBS okuması yoksa eksik derinlik veri okunmadan reddedilir). Derinlik nüfusun boyutudur: `nodeCount`/`totalCount`
+  istenen derinliğe kadar olan düğümleri sayar, sonuç bu düğümlerin hepsi
+  listelendiyse tamdır; daha derin düğümler yalnızca `deeperNodes` ve notla
+  bildirilir ve anlatı derinliği ölçüt olarak yazar. Bütün ağacın sayısı
+  projenin kendi özelliğidir (`project.wbsNodeCount`). WBS adı yalnızca derinlikle
+  sınırlanmamış tam listede tek eşleşmeyle çözülür.
+- *Yönlendiren red.* Adla aranan ama bildirilmeyen proje/kişi, proje ya da kişi
+  adıyla görev başlığı araması, bağlanacak varlığı olmayan özellik değeri,
+  birden çok koleksiyonda bulunan satır ölçüsünün tek değeri, adı geçen kişiyle
+  birlikte `assignee` koşulu, aracın desteklemediği metin/gruplama/derinlik veri
+  okunmadan reddedilir; ipucu kayıt defterinden doğru bildirimi (varlık, nüfus
+  aracı, koleksiyon) gösterir. Sunucunun türettiği okuma geçersiz bir birleşimde
+  yalnızca kurulmaz; tur hatasına dönüşmez.
+- *Bağlam ölçüleri ve gruplar.* Yalnızca kaydı adlandıran ölçü (ör. `project.name`,
+  `task.title`) birden çok varlıkta eşleme belirsizliği yaratmaz; `bindings`
+  yalnızca birden çok ölçen ölçüde gerekir. Gruplanan boyutun ölçüsü (ör.
+  önceliğe göre gruplamada `task.priority`) grup satırının etiketidir. Adı geçen
+  kayıtların türüne göre gruplama (adı geçen projelerde `groupBy: project`,
+  kişilerde `assignee`) o kayıtların kendi toplamlarıdır: istek varlık başına
+  değere (`value`) çevrilir, kaydın adı ölçü değil öznedir.
+- *Kapsam korunur.* Reddedilen bildirimin düzeltmesi biçimi onarır, soruyu
+  daraltamaz: turun bildirimlerinde metni kullanıcının iletisinde geçen bir
+  kayıt (varlık adı ya da başlık metni) sonraki bildirimde yoksa veri okunmadan
+  `$.entities:dropped` ile reddedilir; ipucu düşürülen adı ve varlık başına
+  `bindings` biçimini gösterir. Ad kısaltılmış ya da uzatılmış olabilir. Veri
+  okunmadan reddedilen bildirim, plan doğrulamasındaki retle aynı biçimde
+  modelin kendi çağrısı ve araç hatası olarak dökümde kalır.
+- *Tek kaydın iç koleksiyonu.* Görevle okunan tek serinin yineleme sayısı
+  (`series.upcomingCount`) `series.next` koleksiyonunun kendi sayısıdır; boş
+  yaklaşan liste bu sayıyla yanıtlanır.
+- *Hoşgörülü ayrıştırma.* Seçim ve plan, çevresindeki düzyazıdan ya da tek kod
+  çitinden ayrıştırılır; JSON metni olarak yazılmış iç alanlar şemadan önce
+  çözülür; istek düzeyinde yazılmış nüfus boyutları (`collection`, `sort`,
+  `groupBy`, `depth`, `textFields`) nüfusta yoksa nüfusa taşınır; plandaki `language` seçimde tekrarlanabilir. Birden çok çit ya da
+  bilinmeyen anahtar reddedilir.
+- *Boş liste anlatısı.* Boş nüfusun yanıtı "eşleşen kayıt bulunmadı" der.
+- *Ortak ölçüt.* Bütün satırların ortak ölçütü (ör. "Termin: Gecikmiş; Sorumlu:
+  Ben") satırlarda yinelenmez: üstteki sayım cümlesi söylemediyse listenin
+  başında bir kez yazılır; satırlar arasında farklıysa her satır kendininkini taşır.
 
 **Boş nüfus.** Sadece satır ölçüsü isteyen sıfır satırlı liste/rank geçerlidir.
 Kanıt doğru, tam, kısaltılmamış, ilk sayfadaki tam istenen koleksiyonu

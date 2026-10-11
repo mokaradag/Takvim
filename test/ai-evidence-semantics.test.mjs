@@ -400,9 +400,15 @@ for (const path of ['server', 'model']) {
   test(`a failed final authorization read is a safe unavailable terminal, not fabricated evidence or verification failure (${path} selection)`, async (t) => {
     stackFor(t);
     const base = createToolTurnContext({ sicil: AYSE, now: NOW });
-    const context = { ...base, revalidateAuthorization: async () => { throw Object.assign(new Error('SQL unavailable'), { code: 'DATABASE_UNAVAILABLE' }); } };
-    // İş dağılım yolu (çok değerli) istenirse olguları model seçer; aksi hâlde sunucu seçer.
-    const metrics = path === 'server' ? ['task.title'] : ['task.title', 'task.wbsPath'];
+    // Model yolunda ilk okuma (araç turundan sonra) başarılıdır: model seçimi gerçekten çalışır ve son okuma başarısız olur.
+    let reads = 0;
+    const context = { ...base, revalidateAuthorization: async (signal) => {
+      reads += 1;
+      if (path === 'model' && reads === 1) return base.revalidateAuthorization(signal);
+      throw Object.assign(new Error('SQL unavailable'), { code: 'DATABASE_UNAVAILABLE' });
+    } };
+    // Proje ölçüsünü adı ve kodu birlikte taşır: sunucu seçim türetmez, olguları model seçer.
+    const metrics = path === 'server' ? ['task.title'] : ['task.title', 'task.project'];
     let round = 0;
     const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => {
       round += 1;
@@ -410,14 +416,15 @@ for (const path of ['server', 'model']) {
         return { text: declared({ operation: 'value', metrics, entities: [{ type: 'task', id: TASKS.OVERDUE }] }),
           toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
       }
-      return { text: JSON.stringify({ kind: 'rota', facts: ['R1:data.task.title', 'R1:data.task.wbsPath.*'] }), toolCalls: [], finishReason: 'stop' };
+      return { text: JSON.stringify({ kind: 'rota', facts: ['R1:data.task.title', 'R1:data.task.project.name'] }), toolCalls: [], finishReason: 'stop' };
     } }, { messages: buildGroundedContext({ userContent: `Görevi göster ${TASKS.OVERDUE}`, now: NOW }).messages,
       catalog: toolCatalogForModel(), context, onText: async () => {} });
     assert.equal(result.outcome, 'unavailable');
     assert.equal(result.finishReason, 'unavailable');
     assert.deepEqual(result.evidenceRows, []);
-    // Son yetki okuması çizimden hemen önce yapılır: sunucu seçiminde araç turunun ardından.
-    assert.equal(round, 1, 'yetki okunamıyorsa kanıt ikinci kez sağlayıcıya gönderilmez');
+    // Son yetki okuması çizimden hemen önce yapılır: sunucu seçiminde araç turunun ardından, model seçiminde seçim turunun ardından.
+    assert.equal(round, path === 'server' ? 1 : 2, path === 'server' ? 'yetki okunamıyorsa kanıt ikinci kez sağlayıcıya gönderilmez' : 'model seçimi çalıştı');
+    assert.equal(reads, path === 'server' ? 1 : 2);
     assert.doesNotMatch(result.text, /SQL|Radar/);
   });
 }

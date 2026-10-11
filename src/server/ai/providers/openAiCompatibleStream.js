@@ -279,10 +279,11 @@ function interpretChunk(payload, state) {
       ...(reasoningTokens != null ? { reasoningTokens } : {})
     };
   }
-  if (payload.choices == null) return { content: null, reasoning: false };
+  const usage = payload.usage != null;
+  if (payload.choices == null) return { content: null, reasoning: false, progress: usage };
   if (!Array.isArray(payload.choices)) throw invalid('STREAM_EVENT_MALFORMED');
   const choice = primaryChoice(payload.choices);
-  if (choice == null) return { content: null, reasoning: false };
+  if (choice == null) return { content: null, reasoning: false, progress: usage };
   if (!isPlainObject(choice)) throw invalid('STREAM_EVENT_MALFORMED');
   const delta = choice.delta ?? null;
   if (delta != null && !isPlainObject(delta)) throw invalid('STREAM_EVENT_MALFORMED');
@@ -298,12 +299,16 @@ function interpretChunk(payload, state) {
   }
   const started = toolFragments == null ? 0 : accumulateToolCalls(toolFragments, state, state.limits);
   if (choice.finish_reason && !state.finishReason) state.finishReason = choice.finish_reason.slice(0, 40);
-  return { content: delta?.content ?? null, reasoning, started };
+  // Üretim ilerlemesi: rol, metin, akıl yürütme, araç parçası, bitiş ya da kullanım. Boş parça ilerleme değildir.
+  const progress = Boolean(delta?.role || delta?.content || reasoning || (Array.isArray(toolFragments) && toolFragments.length)
+    || choice.finish_reason || usage);
+  return { content: delta?.content ?? null, reasoning, started, progress };
 }
 
 /**
  * Akışlı yanıtı olay dizisine çevirir: `{ type: 'text', text }`,
- * `{ type: 'reasoning' }` ve en sonda tek `{ type: 'done', finishReason,
+ * `{ type: 'reasoning' }`, başka olay üretmeyen anlamlı parça için
+ * `{ type: 'progress' }` ve en sonda tek `{ type: 'done', finishReason,
  * model, usage }`. `[DONE]` gelince okuma durur ve bağlantı bırakılır. Akış
  * `[DONE]` ya da bitiş nedeni olmadan biterse yanıt KESİLMİŞTİR.
  *
@@ -358,9 +363,19 @@ export async function* readChatCompletionStream(body, { signal = null, limits = 
       } catch {
         throw invalid('STREAM_EVENT_MALFORMED');
       }
-      const { content, reasoning, started } = interpretChunk(payload, state);
-      yield* emit(content == null ? '' : think.push(content), reasoning);
-      for (let index = 0; index < started; index += 1) yield { type: 'tool_call_started' };
+      const { content, reasoning, started, progress } = interpretChunk(payload, state);
+      let yielded = false;
+      for (const item of emit(content == null ? '' : think.push(content), reasoning)) {
+        yielded = true;
+        yield item;
+      }
+      for (let index = 0; index < started; index += 1) {
+        yielded = true;
+        yield { type: 'tool_call_started' };
+      }
+      // Görünür olay üretmeyen ilerleme (gizli akıl yürütme, araç bağımsız değişkeni) de bildirilir;
+      // SSE yorum satırı ve boş parça canlı tutmadır, ilerleme sayılmaz.
+      if (!yielded && progress) yield { type: 'progress' };
     }
   }
 

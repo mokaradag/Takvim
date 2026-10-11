@@ -91,18 +91,18 @@ for (const mode of ['standard', 'deep']) {
   });
 }
 
-test('a separate or a missing declaration costs one extra model round, never a selection round', async (t) => {
+test('a declaration without calls is read by the server; a missing declaration costs one extra model round, never a selection round', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
-  // Ayrı bildirim: bildirim turu ve araç turu.
-  stack.provider.enqueue({ type: 'answer', text: declared(OVERDUE_LIST) }, searchOverdue([]));
+  // Ayrı (çağrısız) bildirim: nüfus okumasını sunucu bildirimden kurar; ek model turu yoktur.
+  stack.provider.enqueue({ type: 'answer', text: declared(OVERDUE_LIST) });
   assert.equal(doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage.finishReason, 'stop');
   // Bildirimsiz çağrı çalışmaz; düzeltmeden sonra çağrı bildirimle yinelenir.
   stack.provider.enqueue(searchOverdue([]), searchOverdue());
   assert.equal(doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage.finishReason, 'stop');
-  assert.equal(stack.provider.calls.length, 4);
+  assert.equal(stack.provider.calls.length, 3);
   assert.deepEqual(turnTraces(logs).map(({ context }) => [context.selectedBy, context.toolCalls, context.rounds.map((round) => round.purpose)]),
-    [['server', 1, ['plan', 'tools']], ['server', 1, ['tools', 'declaration']]]);
+    [['server', 1, ['plan']], ['server', 1, ['tools', 'declaration']]]);
   assert.deepEqual(turnTraces(logs).map(({ context }) => context.declarations), [1, 1]);
   assert.ok(stack.provider.calls.every((call) => call.model === DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model));
   drained(stack.provider);

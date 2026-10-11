@@ -347,7 +347,8 @@ for (const source of ['rota', 'general']) {
 
 test('clarification preserves only authorized structured candidates for the next turn', async (t) => {
   const stack = stackFor(t);
-  stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.open'], entities: [{ type: 'person', text: 'Ali' }] })],
+  stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary' },
+    fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }], entities: [{ type: 'person', text: 'Ali' }] })],
     calls: [{ name: 'rota_person_search', arguments: { text: 'Ali' } }] },
     { type: 'script', respond: (call) => {
       const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);

@@ -238,6 +238,13 @@ export const METRICS = Object.freeze(Object.fromEntries([...REGISTRY.values(), n
   .flatMap((entries) => [...entries.values()]).filter((entry) => entry.metric)
   .map((entry) => [entry.metric, entry.measure]).sort(([left], [right]) => left.localeCompare(right))));
 
+/** Yalnızca kaydı adlandıran ölçüler (her kayıtlı yolu bağlam): ölçü/varlık eşlemesinde belirsizlik yaratmaz. */
+const namingByMetric = new Map();
+for (const entry of [...REGISTRY.values()].flatMap((entries) => [...entries.values()])) {
+  if (entry.metric) namingByMetric.set(entry.metric, (namingByMetric.get(entry.metric) ?? true) && entry.context === true);
+}
+export const NAMING_METRICS = Object.freeze(new Set([...namingByMetric].filter(([, naming]) => naming).map(([metric]) => metric)));
+
 /** Kanıt olgusunun kayıtlı ölçüsü; kayıt dışı yol `null`. */
 export function metricEntry(tool, canonicalPath) {
   if (canonicalPath === 'totalCount') return TOTAL_COUNT[tool] || null;

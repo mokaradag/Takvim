@@ -90,10 +90,14 @@ for (const reply of ['2', '#2']) {
       assert.match(call.messages[0].content, new RegExp(`SUNUCU SEÇİMİ: Kullanıcı önceki açıklamadaki 2\\. adayı seçti; sunucu bu seçimi personSicil=${ALI_2}`));
       // Adla bildirilen kişi, bu turda başka çözüm yoksa sunucunun bağladığı seçime bağlanır.
       return { type: 'tool-calls', preface: [declared(aliWorkload)], calls: [{ name: 'rota_workload_summary', arguments: { personSicil: ALI_1 } }, { name: 'rota_workload_summary', arguments: { personSicil: ALI_2 } }] };
+    } }, { type: 'script', respond: (call) => {
+      // Seçilmeyen aday bu turda kimlik değildir: plan bütünüyle reddedilir, geçerli kardeşi de veri okumaz.
+      assert.deepEqual(toolResults(call).map((result) => result.error?.code), ['UNSUPPORTED_SCOPE', 'INVALID_ARGUMENTS']);
+      assert.equal((stack.db.aiToolLog || []).some((entry) => entry.params?.personSicil === ALI_2), false, 'reddedilen plan veri okumaz');
+      return { type: 'tool-calls', calls: [{ name: 'rota_workload_summary', arguments: { personSicil: ALI_2 } }] };
     } });
     const second = done(await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: reply }));
     assert.equal(second.assistantMessage.finishReason, 'stop');
-    assert.equal(aiTelemetrySnapshot().tools.byOutcome.UNSUPPORTED_SCOPE, 1, 'the other stored candidate is not an identity in this turn');
     assert.equal(stack.db.aiToolLog.some((entry) => entry.params.personSicil === ALI_1), false);
     assert.equal(JSON.parse(stack.db.aiMessageEvidence.at(-1).EvidenceJson).data.filters.personSicil, ALI_2);
   });
@@ -148,16 +152,20 @@ test('a numbered task selection binds the task identity for detail and Outlook f
   const context = JSON.parse(stack.db.aiMessageEvidence.at(-1).EvidenceJson).clarificationContext;
   const chosen = context.find((item) => item.ordinal === 0).taskId;
   const other = context.find((item) => item.ordinal === 1).taskId;
-  stack.provider.enqueue({ type: 'tool-calls', preface: [outlook], calls: [{ name: 'rota_outlook_status', arguments: { taskId: other } }, { name: 'rota_outlook_status', arguments: { taskId: chosen } }] });
+  stack.provider.enqueue({ type: 'tool-calls', preface: [outlook], calls: [{ name: 'rota_outlook_status', arguments: { taskId: other } }, { name: 'rota_outlook_status', arguments: { taskId: chosen } }] },
+    { type: 'script', respond: (call) => {
+      assert.deepEqual(toolResults(call).map((result) => result.error?.code), ['UNSUPPORTED_SCOPE', 'INVALID_ARGUMENTS']);
+      return { type: 'tool-calls', calls: [{ name: 'rota_outlook_status', arguments: { taskId: chosen } }] };
+    } });
   const second = done(await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: '1' }));
   assert.equal(second.assistantMessage.finishReason, 'stop');
-  assert.equal(aiTelemetrySnapshot().tools.byOutcome.UNSUPPORTED_SCOPE, 1);
+  assert.equal((stack.db.aiToolLog || []).some((entry) => entry.params?.taskId === other), false, 'seçilmeyen aday hiçbir SQL çalıştırmaz');
   assert.equal(JSON.parse(stack.db.aiMessageEvidence.at(-1).EvidenceJson).data.task.taskId, chosen);
 });
 
 test('task-name resolution reaches Outlook status in a later round', async (t) => {
   const stack = stackFor(t);
-  const request = declared({ operation: 'value', metrics: ['subscription.state'], entities: [{ type: 'task', text: 'Anten kalibrasyonu' }] });
+  const request = declared({ operation: 'value', metrics: ['subscription.state'], population: { tool: 'rota_outlook_status' }, entities: [{ type: 'task', text: 'Anten kalibrasyonu' }] });
   stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_task_search', arguments: { text: 'Anten kalibrasyonu' } }] }, { type: 'script', respond: (call) => {
     assert.ok(call.tools.some((tool) => tool.name === 'rota_outlook_status'));
     const [found] = toolResults(call);

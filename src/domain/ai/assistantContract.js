@@ -35,6 +35,12 @@ export const ASSISTANT_STREAM_EVENTS = Object.freeze({
    * gelir. Sonlandırıcı değildir.
    */
   REVISE: 'revise',
+  /**
+   * Üretim gerçekten ilerliyor (sağlayıcı ya da araç olayı). Gövdesi boştur;
+   * istemci yalnızca ilerleme gözcüsünü yeniler. SSE yorum satırı (`: keepalive`)
+   * yalnızca bağlantıyı canlı tutar, ilerleme değildir. Sonlandırıcı değildir.
+   */
+  PROGRESS: 'progress',
   DONE: 'done',
   ERROR: 'error'
 });
