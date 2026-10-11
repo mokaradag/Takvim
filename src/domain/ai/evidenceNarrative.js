@@ -1,4 +1,6 @@
 import { escapedFactText, factLabel, factPresentation } from './evidenceFacts.js';
+import { semanticCarrierKey } from './claimableEvidence.js';
+import { factRow } from './requestContract.js';
 
 /**
  * Doğrulanmış olguların SUNUCUYA AİT anlatımı.
@@ -197,10 +199,18 @@ function recordSentences(record, locale) {
   let qualified = false;
   const qualify = (projectNamed = false) => { if (qualified) return ''; qualified = true; return projectNamed ? unnamedProjectQualifiers : qualifiers; };
 
-  const projectEntry = take((rel) => record.kind === 'task' && rel === 'project.name')[0];
-  take((rel) => record.kind === 'task' && rel === 'project.code');
+  let projectEntry = take((rel) => record.kind === 'task' && rel === 'project.name')[0];
+  const projectCode = take((rel) => record.kind === 'task' && rel === 'project.code')[0];
+  if (projectCode) projectEntry = { ...projectCode, fact: { ...projectCode.fact,
+    value: [projectEntry?.fact.value, projectCode.fact.value].filter((value) => value != null).join(' · ') } };
   const identity = take((rel) => Object.hasOwn(POSSESSIVE, rel) || (/^dates\./.test(rel) && Object.hasOwn(POSSESSIVE, rel.slice(6))));
-  const shownIdentity = identity.filter(({ rel }) => !/Label$/.test(rel) || !identity.some((other) => other.rel === rel.replace(/Label$/, '')));
+  const shown = new Set();
+  const shownIdentity = identity.filter(({ rel }) => !/Label$/.test(rel) || !identity.some((other) => other.rel === rel.replace(/Label$/, ''))).filter(({ fact }) => {
+    const key = `${semanticCarrierKey(record.tool, fact.field)}|${narrativeValue(fact, locale)}`;
+    if (shown.has(key)) return false;
+    shown.add(key);
+    return true;
+  });
   if (shownIdentity.length) {
     const pairs = shownIdentity.map(({ fact }) => `${POSSESSIVE[leafOf(fact.field)][lang]} ${strong(narrativeValue(fact, locale))}`);
     const projectName = projectEntry ? strong(narrativeValue(projectEntry.fact, locale)) : null;
@@ -289,10 +299,10 @@ function recordSentences(record, locale) {
     sentences.push(`${title}: ${facts.map((fact) => strong(narrativeValue(fact, locale))).join(key === 'wbsPath.*' ? ' › ' : ', ')}.`);
   }
 
-  // Aynı ölçünün aynı biçimde okunan iki gösterimi (ör. kural ve kural açıklaması) bir kez yazılır.
-  const shown = new Set();
+  // Yalnızca aynı anlamsal taşıyıcının aynı değeri bir kez yazılır.
+  shown.clear();
   const rest = record.entries.filter((entry) => !used.has(entry)).filter(({ fact }) => {
-    const key = fact.semantic?.metric ? `${fact.semantic.metric}|${narrativeValue(fact, locale)}` : null;
+    const key = fact.semantic?.metric ? `${semanticCarrierKey(record.tool, fact.field)}|${narrativeValue(fact, locale)}` : null;
     if (key && shown.has(key)) return false;
     if (key) shown.add(key);
     return true;
@@ -310,7 +320,9 @@ function recordSentences(record, locale) {
 
 /* ── Satır listeleri ve tablolar ──────────────────────────── */
 
-function rowParts(field) {
+function rowParts(field, tool) {
+  const row = factRow(tool, field);
+  if (row?.kind === 'row') return { collection: row.collection, row: row.path, rel: field.slice(row.path.length + 1) };
   const parts = field.split('.');
   const index = parts.findIndex((part, position) => position > 0 && /^\d+$/.test(part));
   if (index < 0 || index === parts.length - 1) return null;
@@ -373,11 +385,11 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
     // Sayı sütunları sağa yaslanır: değerler basamak hizasında okunur.
     const lines = [`| ${headers.join(' | ')} |`, `| ${['---', ...columns.map((key) => (numericColumns.includes(key) ? '---:' : '---'))].join(' | ')} |`];
     for (const row of rows) lines.push(`| ${[titleOf(row), ...columns.map((key) => { const facts = valuesOf(row, key); return facts.length ? cell(facts, true) : '—'; })].join(' | ')} |`);
-    return { body: `${lines.join('\n')}\n\n_${locale === 'en' ? 'Source' : 'Kaynak'}:_ ${citation([evidenceId])}`, criteria: criteria || '' };
+    return { body: `${lines.join('\n')}\n\n_${locale === 'en' ? 'Source' : 'Kaynak'}:_ ${citation([...new Set(rows.map((row) => row.evidenceId || evidenceId))])}`, criteria: criteria || '' };
   }
   return { body: rows.map((row) => {
     const pairs = columns.map((key) => { const facts = valuesOf(row, key); return facts.length ? `${columnLabel(key)}: ${cell(facts, false)}` : null; }).filter(Boolean);
-    return `- ${strong(titleOf(row))}${pairs.length ? ` — ${pairs.join(' · ')}` : ''} ${citation([evidenceId])}`;
+    return `- ${strong(titleOf(row))}${pairs.length ? ` — ${pairs.join(' · ')}` : ''} ${citation([row.evidenceId || evidenceId])}`;
   }).join('\n'), criteria: criteria || '' };
 }
 
@@ -473,8 +485,20 @@ function recordRelative(tool, field) {
  * Doğrulanmış olgu seçimini Markdown anlatıma dönüştürür.
  * @param {{ evidenceId: string, fact: object }[]} items Sunucunun doğruladığı olgular (seçim sırasıyla).
  */
-export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto', operation = null, empty = [] } = {}) {
+export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto', operation = null, empty = [], emptyRank = [] } = {}) {
   const chosenLayout = layoutFrom(layout, operation);
+  const ranked = new Map();
+  const rankCollections = new Set();
+  if (operation === 'rank') for (const { evidenceId, fact } of items) {
+    const tool = fact.semantic?.provenance?.tool;
+    const parts = factRow(tool, fact.field);
+    if (parts?.kind !== 'row') continue;
+    const key = `${evidenceId}|${parts.path}`;
+    rankCollections.add(`${evidenceId}|${parts.collection}`);
+    if (!ranked.has(key)) ranked.set(key, { evidenceId, collection: parts.collection, subject: fact.semantic?.row?.name || fact.subject, entries: [] });
+    ranked.get(key).entries.push({ rel: fact.field.slice(parts.path.length + 1), fact });
+  }
+  const globalRank = rankCollections.size > 1;
   const byEvidence = new Map();
   for (const item of items) {
     if (!byEvidence.has(item.evidenceId)) byEvidence.set(item.evidenceId, []);
@@ -488,7 +512,8 @@ export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto',
     const main = { tool, kind: 'generic', subject: null, entries: [], anonymous: false };
     for (const fact of facts) {
       if (ENVELOPE_FIELDS.has(fact.field)) continue;
-      const parts = rowParts(fact.field);
+      const parts = rowParts(fact.field, tool);
+      if (globalRank && parts && ranked.has(`${evidenceId}|${parts.row}`)) continue;
       // Varlık kaydının içindeki diziler (sorumlular, etiketler) kaydın çok değerli alanıdır.
       if (parts && !/^data\.(task|project)\./.test(parts.collection)) {
         if (!collections.has(parts.collection)) collections.set(parts.collection, new Map());
@@ -518,12 +543,18 @@ export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto',
       }
     }
     sentences.push(...envelopeSentences(envelope, { tool, locale, empty: empty.includes(evidenceId) }));
+    if (emptyRank.includes(evidenceId)) sentences.push(locale === 'en' ? 'No records have a value to rank by.' : 'Sıralama ölçüsünde değeri olan kayıt yok.');
     const stated = sentences.join(' ');
     // Ortak ölçüt üstteki cümlede (ör. sayımda) yazılmadıysa listenin başında bir kez yazılır.
     const lead = (criteria) => (criteria && !stated.includes(criteria) ? `_${capitalize(criteria.trim().slice(1, -1))}_\n\n` : '');
     const listBlocks = lists.map(({ body, criteria, role }) => `${role ? `**${role[1][language(locale)]}**\n\n` : ''}${lead(criteria)}${body}`);
     if (sentences.length) blocks.push(`${sentences.join(' ')} ${citation([evidenceId])}`);
     blocks.push(...listBlocks);
+  }
+  if (globalRank) {
+    const rows = [...ranked.values()];
+    const rendered = renderRows(rows[0].collection, rows, { locale, layout: chosenLayout === 'prose' ? 'list' : chosenLayout });
+    blocks.push(`${rendered.criteria ? `_${capitalize(rendered.criteria.trim().slice(1, -1))}_\n\n` : ''}${rendered.body}`);
   }
   return blocks.join('\n\n');
 }

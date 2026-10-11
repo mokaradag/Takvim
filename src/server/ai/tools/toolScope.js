@@ -58,6 +58,19 @@ export function containmentText(value) {
   return foldText(value).replace(/ı/g, 'i').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
+const NAME_SUFFIXES = new Set(['in', 'un', 'nin', 'nun', 'inin', 'unun', 'i', 'u', 'yi', 'yu', 'ni', 'nu', 'ya', 'ye', 'a', 'e', 'da', 'de', 'ta', 'te', 'dan', 'den', 'tan', 'ten']);
+
+/** Tam sözcükler ve sınırlı Türkçe ekler; gelişigüzel harf öneki kapsam değildir. */
+function phrasePositions(haystack, phrase) {
+  const tokens = containmentText(haystack).split(' ');
+  const wanted = containmentText(phrase).split(' ');
+  if (!wanted[0]) return [];
+  return tokens.flatMap((_, index) => wanted.every((part, offset) => {
+    const token = tokens[index + offset];
+    return token === part || (offset === wanted.length - 1 && token?.startsWith(part) && NAME_SUFFIXES.has(token.slice(part.length)));
+  }) ? [index] : []);
+}
+
 export function populationArguments(name, args, today) {
   if (TASK_POPULATION_TOOLS.has(name)) return normalizeTaskFilters(args);
   if (name === 'rota_activity_search') {
@@ -127,15 +140,17 @@ function resultIdentities(name, data) {
  * kullanıcının adlandırdığı kayıttır (model adı kısaltmış ya da uzatmış olabilir):
  * `{ population, type, id, title }`; aday kümesi kesilmişse ya da birden çok aday uyuyorsa null.
  */
-function namedCandidate(name, data, userNeedle) {
+function namedCandidate(name, data, userNeedle, search) {
   if (!data || typeof data !== 'object' || data.candidatesTruncated === true) return null;
   const [candidates, population, type, label, idField] = name === 'rota_task_search' && ['partial', 'ambiguous'].includes(data.titleResolution)
     ? [data.candidates, 'tasks', 'task', 'title', 'taskId']
     : name === 'rota_project_search' && ['partial', 'ambiguous'].includes(data.resolution) ? [data.candidates, 'projects', 'project', 'name', 'projectId'] : [];
   if (!Array.isArray(candidates)) return null;
+  const positions = phrasePositions(userNeedle, search);
+  if (positions.length !== 1) return null;
   const named = candidates.filter((candidate) => {
     const title = containmentText(candidate?.[label] || '');
-    return title && candidate[idField] && (` ${userNeedle}`).includes(` ${title}`);
+    return title && candidate[idField] && phrasePositions(userNeedle, title).includes(positions[0]);
   });
   return named.length === 1 ? { population, type, id: String(named[0][idField]), title: containmentText(named[0][label]) } : null;
 }
@@ -178,7 +193,7 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
   // Metin kullanıcının iletisinde bir sözcük başından başlamalıdır; son sözcüğü ek alabilir (ör. "toplantısı" → "toplantısının").
   function textTrusted(text) {
     const needle = containmentText(text);
-    return Boolean(needle) && (trustedTexts.has(needle) || (` ${userNeedle}`).includes(` ${needle}`));
+    return Boolean(needle) && (trustedTexts.has(needle) || phrasePositions(userNeedle, needle).length > 0);
   }
 
   function identityTrusted(population, id) {
@@ -248,14 +263,15 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
           && [body.data?.resolution, body.data?.titleResolution].includes('none')) {
           unmatchedNames.set(call.name, new Set([...(unmatchedNames.get(call.name) || []), containmentText(args.text)]));
         }
-        const candidate = typeof args.text === 'string' ? namedCandidate(call.name, body.data, userNeedle) : null;
+        const candidate = typeof args.text === 'string' ? namedCandidate(call.name, body.data, userNeedle, args.text) : null;
         if (candidate) {
           ids[candidate.population].add(candidate.id);
           named.push({ type: candidate.type, text: containmentText(args.text), title: candidate.title, id: candidate.id });
         }
         // Adayları tek bir serinin kayıtları olan ad (kesin ya da serinin adı kullanıcının iletisinde) yalnızca seri incelemesini seçer.
         const resolved = call.name === 'rota_task_search' && typeof args.text === 'string' ? body.data?.resolvedSeries : null;
-        if (resolved?.taskId && (resolved.exact === true || (` ${userNeedle}`).includes(` ${containmentText(resolved.title || '')}`))) {
+        if (resolved?.taskId && (resolved.exact === true || (phrasePositions(userNeedle, args.text).length === 1
+          && phrasePositions(userNeedle, resolved.title || '').includes(phrasePositions(userNeedle, args.text)[0])))) {
           series.add(String(resolved.taskId));
           named.push({ type: 'task', text: containmentText(args.text), id: String(resolved.taskId), tool: 'rota_recurrence_inspect' });
         }

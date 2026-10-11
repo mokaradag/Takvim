@@ -4,12 +4,15 @@ import {
   ASSISTANT_PROTOCOL_HEADER,
   ASSISTANT_PROTOCOL_VERSION,
   ASSISTANT_STREAM_EVENTS,
-  ASSISTANT_TOOL_TOPICS
+  ASSISTANT_TOOL_TOPICS,
+  ASSISTANT_TIMING,
+  assistantGenerationStallMs
 } from '../../../domain/ai/assistantContract.js';
 import { ServerPersistenceError } from '../../errors.js';
 import { AiError } from '../aiErrors.js';
+import { readAiConfig } from '../aiConfig.js';
 import { recordAssistantTurn } from '../aiTelemetry.js';
-import { generateAssistantAnswer } from './assistantService.js';
+import { discloseAssistantMessage, generateAssistantAnswer } from './assistantService.js';
 
 /**
  * Rota AI akış yanıtı (tarayıcıya giden sürümlü protokol).
@@ -38,11 +41,11 @@ import { generateAssistantAnswer } from './assistantService.js';
 
 export const ASSISTANT_KEEPALIVE_MS = 15000;
 /** `progress` olayları arasındaki en kısa süre (ilerleme varken). */
-export const ASSISTANT_PROGRESS_EVENT_MS = 10000;
+export const ASSISTANT_PROGRESS_EVENT_MS = ASSISTANT_TIMING.progressEventMs;
 /** Hiç ilerlemeyen üretimin kesildiği süre (sağlayıcının ilerleme sınırlarından uzun). */
 export const ASSISTANT_GENERATION_STALL_MS = 90000;
 /** Kesilen üretimin kendiliğinden bitmesi için beklenen süre (yanıt yazımı bütçesinden uzun). */
-export const ASSISTANT_STALL_GRACE_MS = 25000;
+export const ASSISTANT_STALL_GRACE_MS = ASSISTANT_TIMING.stallGraceMs;
 /** Okumayan istemcinin kuyrukta yer açması için beklenen en uzun süre. */
 export const ASSISTANT_DELIVERY_TIMEOUT_MS = 20000;
 /** Kuyruktaki en fazla olay (tek olay en fazla bir sağlayıcı parçası kadardır). */
@@ -132,7 +135,7 @@ export function assistantStreamResponse(turn, {
   signal = null,
   keepaliveMs = ASSISTANT_KEEPALIVE_MS,
   progressEventMs = ASSISTANT_PROGRESS_EVENT_MS,
-  stallMs = ASSISTANT_GENERATION_STALL_MS,
+  stallMs = assistantGenerationStallMs(readAiConfig()),
   graceMs = ASSISTANT_STALL_GRACE_MS,
   deliveryTimeoutMs = ASSISTANT_DELIVERY_TIMEOUT_MS,
   generate = generateAssistantAnswer
@@ -146,10 +149,11 @@ export function assistantStreamResponse(turn, {
   let terminal = false;
   let finished = false;
   let stalled = null;
-  let lastProgressAt = Date.now();
-  let lastProgressSentAt = Date.now();
-  let lastByteAt = Date.now();
+  let lastProgressAt = performance.now();
+  let lastProgressSentAt = performance.now();
+  let lastByteAt = performance.now();
   let graceTimer = null;
+  let delivering = false;
 
   const wake = () => {
     const pending = waiting;
@@ -161,7 +165,7 @@ export function assistantStreamResponse(turn, {
     if (closed) return false;
     try {
       controller.enqueue(bytes);
-      lastByteAt = Date.now();
+      lastByteAt = performance.now();
       return true;
     } catch {
       closed = true;
@@ -181,10 +185,10 @@ export function assistantStreamResponse(turn, {
    * istemciye bildirilir. Evre ya da metin olayı zaten görünür ilerlemedir.
    */
   const progress = ({ visible = false } = {}) => {
-    const now = Date.now();
+    const now = performance.now();
     lastProgressAt = now;
     if (visible) lastProgressSentAt = now;
-    else if (!terminal && now - lastProgressSentAt >= progressEventMs) {
+    else if (!terminal && !delivering && now - lastProgressSentAt >= progressEventMs) {
       lastProgressSentAt = now;
       send(ASSISTANT_STREAM_EVENTS.PROGRESS, {});
     }
@@ -227,10 +231,10 @@ export function assistantStreamResponse(turn, {
   };
 
   /** Kuyrukta yer açılana (ya da akış kapanana) kadar bekler; bekleme sınırlıdır ve üretim sinyali onu da keser. */
-  async function sendWhenReady(event, data) {
-    const startedAt = Date.now();
+  async function waitForCapacity() {
+    const startedAt = performance.now();
     while (!closed && controller.desiredSize <= 0 && !generationSignal.aborted) {
-      const remaining = deliveryTimeoutMs - (Date.now() - startedAt);
+      const remaining = deliveryTimeoutMs - (performance.now() - startedAt);
       if (remaining <= 0) {
         // Okumayan istemci turu tutamaz: üretim kesilir, hak bırakılır.
         stall('DELIVERY_STALLED');
@@ -244,16 +248,41 @@ export function assistantStreamResponse(turn, {
         };
       });
     }
-    if (generationSignal.aborted) return false;
-    return send(event, data);
+    return !closed && !generationSignal.aborted;
+  }
+
+  async function sendWhenReady(event, data) {
+    return await waitForCapacity() && send(event, data);
+  }
+
+  const deliveryFailure = () => stalled || (generationSignal.aborted ? generationSignal.reason : null) || new AiError(AI_ERROR_CODES.AI_CANCELLED);
+
+  // Bekleme erişim denetiminden ÖNCE biter; denetimden sonra hiçbir await yoktur.
+  async function deliver(prepare, replayed = false) {
+    if (!await waitForCapacity()) throw deliveryFailure();
+    delivering = true;
+    try {
+      const result = await prepare();
+      if (generationSignal.aborted || closed || finished || terminal) throw deliveryFailure();
+      textSent = send(ASSISTANT_STREAM_EVENTS.DELTA, { text: result.answer.content });
+      if (!textSent) throw deliveryFailure();
+      finalEvent(ASSISTANT_STREAM_EVENTS.DONE, {
+        conversation: result.conversation,
+        assistantMessage: messageView(result.answer, { includeContent: result.reconciled === true || result.contentAuthoritative === true }),
+        ...(result.reconciled ? { reconciled: true } : {}), replayed
+      });
+      return result;
+    } finally {
+      delivering = false;
+    }
   }
 
   async function run() {
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     const tickMs = Math.max(1, Math.min(keepaliveMs, Math.floor(stallMs / 3), 5000));
     const ticker = setInterval(() => {
-      const now = Date.now();
-      if (!closed && now - lastByteAt >= keepaliveMs && controller.desiredSize > 0) enqueue(KEEPALIVE);
+      const now = performance.now();
+      if (!closed && !delivering && now - lastByteAt >= keepaliveMs && controller.desiredSize > 0) enqueue(KEEPALIVE);
       if (now - lastProgressAt >= stallMs) stall('GENERATION_STALLED');
     }, tickMs);
     ticker.unref?.();
@@ -262,12 +291,8 @@ export function assistantStreamResponse(turn, {
     try {
       send(ASSISTANT_STREAM_EVENTS.ACCEPTED, acceptedPayload(turn));
       if (turn.replay) {
-        textSent = send(ASSISTANT_STREAM_EVENTS.DELTA, { text: turn.replay.content });
-        finalEvent(ASSISTANT_STREAM_EVENTS.DONE, {
-          conversation: turn.conversation,
-          assistantMessage: messageView(turn.replay, { includeContent: false }),
-          replayed: true
-        });
+        await deliver(async () => ({ conversation: turn.conversation,
+          answer: turn.sicil ? await discloseAssistantMessage(turn, turn.replay, generationSignal) : turn.replay }), true);
         // Kayıtlı yanıtın yeniden oynatılması yeni bir tur değildir: tur sayaçlarına girmez.
         return;
       }
@@ -281,6 +306,7 @@ export function assistantStreamResponse(turn, {
           });
         },
         onProgress: () => progress(),
+        onDelivery: deliver,
         onText: async (text) => {
           progress({ visible: true });
           // Yanıt yalnızca metin gerçekten kuyruğa girdiyse "kısmi" sayılır.
@@ -297,13 +323,16 @@ export function assistantStreamResponse(turn, {
         }
       });
       if (finished) return;
-      finalEvent(ASSISTANT_STREAM_EVENTS.DONE, {
+      if (!terminal && result.reconciled && turn.sicil) {
+        await deliver(async () => ({ ...result, answer: await discloseAssistantMessage(turn, result.answer, generationSignal) }));
+      }
+      if (!terminal) finalEvent(ASSISTANT_STREAM_EVENTS.DONE, {
         conversation: result.conversation,
         assistantMessage: messageView(result.answer, { includeContent: result.reconciled === true || result.contentAuthoritative === true }),
         ...(result.reconciled ? { reconciled: true } : {}),
         replayed: false
       });
-      recordAssistantTurn({ durationMs: Date.now() - startedAt });
+      recordAssistantTurn({ durationMs: performance.now() - startedAt });
     } catch (error) {
       const failure = stalled || error;
       const payload = assistantStreamErrorPayload(failure, { partial: textSent });
@@ -313,7 +342,7 @@ export function assistantStreamResponse(turn, {
         source: payload.credentialSource,
         details: failure?.details ?? null,
         serviceFailure: payload.code === 'DATABASE_UNAVAILABLE',
-        durationMs: Date.now() - startedAt
+        durationMs: performance.now() - startedAt
       });
       finalEvent(ASSISTANT_STREAM_EVENTS.ERROR, payload);
     } finally {

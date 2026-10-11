@@ -12,19 +12,20 @@ import {
 import { recordGroundedAnswer, recordGroundedTurn } from '../aiTelemetry.js';
 import { createEvidenceLedger } from '../tools/evidenceLedger.js';
 import { createToolExecutor } from '../tools/toolExecutor.js';
-import { getRotaTool } from '../tools/toolRegistry.js';
+import { getRotaTool, toolCatalogForModel } from '../tools/toolRegistry.js';
 import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.js';
 import { isTurnFatal, TOOL_ERROR_CODES } from '../tools/toolErrors.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import { createToolScope } from '../tools/toolScope.js';
 import { bindRequestEntities, declarationHints, parseRequestDeclaration, requestEvidence, requestEvidenceReady, requestRepairHint, requestSelections, requestSummary, requestWindow,
-  droppedNameHint, droppedNames, metricIdHints, namedScope, nameProbes, unmatchedEntities } from '../tools/requestDeclaration.js';
+  droppedNameHint, droppedNames, metricIdHints, namedScope, nameProbes, requestSchema, unmatchedEntities } from '../tools/requestDeclaration.js';
 import { createCallIds, prepareExecutionSet, rejectionFor, textPlanCall, typedPlanningTool, unpackTypedPlan } from '../tools/executionSet.js';
 import { completeRequest, derivedReads, readKey, requestTextFields } from '../tools/requestPopulation.js';
 import { parseTurnLanguage, parseTurnRequest, parseTurnRoute, parseTurnWindow, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
 import { CLARIFICATION_LIMITS, clarificationReference } from '../../../domain/ai/clarification.js';
 import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
 import { createAiDeadline } from '../aiDeadline.js';
+import { rankDomain } from '../../../domain/ai/requestContract.js';
 
 /**
  * Rota verisine dayanan yanıtın SINIRLI döngüsü.
@@ -253,7 +254,18 @@ const EVIDENCE_READY_NOTE = 'SUNUCU: Bu turun kanıtları hazır. Yeni araç ça
 const DECLARATION_ROUNDS = 2;
 
 /** Bildirim hatası ayrıntıları yalnızca şema yoludur; modelin yazdığı metin yönergeye taşınmaz. */
-const problemPaths = (details = []) => details.map((detail) => String(detail).replace(/[^\w.$[\]:-]/g, '').slice(0, 80)).filter(Boolean).slice(0, 8);
+const schemaNames = (schema) => Object.entries(schema.properties || {}).flatMap(([name, child]) => [name, ...schemaNames(child)])
+  .concat(schema.items ? schemaNames(schema.items) : []);
+const structuralNames = new Set(['plan', 'calls', 'request', 'intent', 'language', 'name', 'arguments', 'metric', 'entity', 'field',
+  ...schemaNames(requestSchema()), ...toolCatalogForModel().flatMap((tool) => [tool.name, ...schemaNames(tool.parameters)])]);
+const problemPaths = (details = []) => details.map((detail) => {
+  const match = /^(\$[^:]*):([A-Za-z][A-Za-z-]*)$/.exec(String(detail));
+  if (!match) return '$:invalid';
+  const path = match[1].split('.').slice(1)
+    .map((part) => /^([A-Za-z]\w*)(\[\d+\])?$/.exec(part))
+    .map((part) => part && structuralNames.has(part[1]) ? `${part[1]}${part[2] || ''}` : 'field').join('.');
+  return `${path ? `$.${path}` : '$'}:${match[2]}`;
+}).slice(0, 8);
 
 function declarationRepair(details = [], serverHints = []) {
   const problems = problemPaths(details);
@@ -701,7 +713,18 @@ function derivedCalls(turn, request) {
   const entries = turn.ledger.requestEntries();
   const selection = turn.containment.boundSelection();
   const bound = bindRequestEntities(request, entries, selection);
-  const reads = derivedReads(request, bound, { today: turn.context.today, attempted: turn.attemptedReads });
+  const reads = [];
+  if (request.operation === 'rank' && bound.every((entity) => entity.bound)) {
+    const sources = [...requestEvidence(request, entries, turn.context.today).values()].reverse();
+    for (const source of sources.filter((item) => item.tool === request.population.tool && item.firstPage)) {
+      const domain = rankDomain(request, [source, ...sources], request.population.collection);
+      if (!domain?.next) continue;
+      const args = domain.next;
+      if (!turn.attemptedReads.has(readKey(source.tool, args, turn.context.today))) reads.push({ name: source.tool, args });
+      break;
+    }
+  }
+  if (!reads.length) reads.push(...derivedReads(request, bound, { today: turn.context.today, attempted: turn.attemptedReads }));
   // Tam adı hiçbir kayda uymayan varlık için adın ilk sözcüğüyle bir yoklama araması yapılır.
   const probes = reads.length ? [] : nameProbes(request, entries, selection)
     .filter(({ name, args }) => !turn.attemptedReads.has(readKey(name, args, turn.context.today)));

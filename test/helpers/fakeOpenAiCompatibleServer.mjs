@@ -233,11 +233,11 @@ export async function startFakeOpenAiCompatibleServer({
      * beklenen sayılarla düşer.
      */
     waitForClosedRequests(count, { limitMs = CLOSED_REQUEST_WAIT_LIMIT_MS } = {}) {
-      const deadline = Date.now() + limitMs;
+      const deadline = performance.now() + limitMs;
       return new Promise((resolve, reject) => {
         const check = () => {
           if (state.closedBeforeResponse >= count) return resolve();
-          if (Date.now() >= deadline) {
+          if (performance.now() >= deadline) {
             return reject(new Error(`Aşağı akış bağlantısı ${limitMs} ms içinde kapanmadı: kapanan ${state.closedBeforeResponse}, beklenen ${count}.`));
           }
           return setTimeout(check, 5);
@@ -247,11 +247,11 @@ export async function startFakeOpenAiCompatibleServer({
     },
     /** İstemcinin yarıda bıraktığı akış sayısı `count`'a ulaşana kadar sınırlı bekler. */
     waitForClosedStreams(count, { limitMs = CLOSED_REQUEST_WAIT_LIMIT_MS } = {}) {
-      const deadline = Date.now() + limitMs;
+      const deadline = performance.now() + limitMs;
       return new Promise((resolve, reject) => {
         const check = () => {
           if (state.streamsClosedByClient >= count) return resolve();
-          if (Date.now() >= deadline) {
+          if (performance.now() >= deadline) {
             return reject(new Error(`Akış ${limitMs} ms içinde istemci tarafından kapatılmadı: kapanan ${state.streamsClosedByClient}, beklenen ${count}.`));
           }
           return setTimeout(check, 5);
@@ -261,11 +261,11 @@ export async function startFakeOpenAiCompatibleServer({
     },
     /** En az `count` istek alınana kadar sınırlı bekler. */
     waitForRequests(count, { limitMs = CLOSED_REQUEST_WAIT_LIMIT_MS } = {}) {
-      const deadline = Date.now() + limitMs;
+      const deadline = performance.now() + limitMs;
       return new Promise((resolve, reject) => {
         const check = () => {
           if (state.requests.length >= count) return resolve();
-          if (Date.now() >= deadline) {
+          if (performance.now() >= deadline) {
             return reject(new Error(`Sahte ağ geçidi ${limitMs} ms içinde istek almadı: alınan ${state.requests.length}, beklenen ${count}.`));
           }
           return setTimeout(check, 5);

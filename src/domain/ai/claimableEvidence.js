@@ -260,6 +260,29 @@ export function metricPaths(tool, metric) {
   return paths;
 }
 
+/** Gerçek eşdeğer taşıyıcılar; eşit sayılar ya da ortak ölçü kimliği eşdeğerlik değildir. */
+export const SAME_VALUE_PATHS = Object.freeze({ rota_task_analytics: { 'tasks.total': ['data.totals.total', 'data.hours.taskCount', 'totalCount'] } });
+
+const DISTINCT_FIELDS = new Set(['task.project', 'wbs.name', 'recurrence.rule', 'calendar.holidayName', 'person.organization', 'dependencies.byType']);
+
+/** Özellik kimliği araçtan bağımsızdır; görünür alt boyutlar ayrı kalır. */
+export function semanticCarrierKey(tool, path) {
+  const canonical = String(path).split('.').map((part) => /^\d+$/.test(part) ? '*' : part).join('.');
+  const entry = metricEntry(tool, canonical.replace(/^data\./, ''));
+  if (!entry?.metric) return `${tool}|${canonical}`;
+  if (DISTINCT_FIELDS.has(entry.metric)) return `${entry.metric}|${canonical.split('.').at(-1)}`;
+  if (entry.property) return entry.metric;
+  if (SAME_VALUE_PATHS[tool]?.[entry.metric]?.includes(canonical)) return `${tool}|${entry.metric}|scalar`;
+  return `${tool}|${entry.metric}|${canonical}`;
+}
+
+export function equivalentCarriers(tool, paths) {
+  return paths.length > 0 && paths.every((path) => semanticCarrierKey(tool, path) === semanticCarrierKey(tool, paths[0]));
+}
+
+/** Kişinin tek görev aboneliği TaskId/UserSicil benzersiz anahtarıyla göreve aittir. */
+export const metricEntityType = (metric) => String(metric).startsWith('subscription.') ? 'task' : String(metric).split('.')[0];
+
 /**
  * Kayıt satırı koleksiyonları. Bir kaydın çok değerli alanı (sorumlular, WBS
  * yolu, etiketler, erişim nedenleri, çalışma günleri) satır değildir.

@@ -235,11 +235,11 @@ const taskSearch = {
     }));
     const rankSort = { target_finish_asc: ['targetFinish', 'asc'], target_finish_desc: ['targetFinish', 'desc'],
       planned_start_asc: ['plannedStart', 'asc'], updated_desc: ['updatedAt', 'desc'], overdue_days_desc: ['overdueDays', 'desc'] }[sort];
-    const next = sorted[page.length];
+    const next = sorted[offset + page.length];
     const nextValue = next && rankSort ? (rankSort[0] === 'overdueDays'
       ? (isOverdue(next, call.today) ? overdueDays(next, call.today) : null) : next[rankSort[0]] ?? null) : null;
     return {
-      ...(rankSort && offset === 0 && next ? { rankingBoundary: {
+      ...(rankSort && next ? { rankingBoundary: {
         collection: 'tasks', metric: `task.${rankSort[0]}`, order: rankSort[1], returnedCount: page.length, nextValue
       } } : {}),
       data: {

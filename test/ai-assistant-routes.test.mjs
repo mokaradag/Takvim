@@ -38,10 +38,24 @@ const { resolveModelProfile, validateModelRegistry } = await import('../src/doma
 const { aiRuntimeLoad } = await import('../src/server/ai/aiRuntime.js');
 const { activeAssistantGenerationCountForTests } = await import('../src/server/ai/assistant/assistantGenerations.js');
 const { assistantStreamResponse, assistantStreamErrorPayload } = await import('../src/server/ai/assistant/assistantStreamResponse.js');
-const { ASSISTANT_PROTOCOL_HEADER, ASSISTANT_PROTOCOL_VERSION } = await import('../src/domain/ai/assistantContract.js');
+const { ASSISTANT_PROTOCOL_HEADER, ASSISTANT_PROTOCOL_VERSION, ASSISTANT_TIMING, ASSISTANT_MAX_NO_PROGRESS_MS, assistantGenerationStallMs } = await import('../src/domain/ai/assistantContract.js');
+const { parseAiConfig } = await import('../src/server/ai/aiConfig.js');
 
 const REGISTRY = validateModelRegistry(DEFAULT_AI_MODEL_REGISTRY).registry;
 const MODEL_NAMES = [...REGISTRY.models.keys()];
+
+test('server stall timing follows provider configuration and client progress timing covers every supported terminal deadline', () => {
+  for (const [queue, first, idle] of [[20000, 60000, 45000], [120000, 600000, 1000], [100, 1000, 600000], [100, 1000, 1000]]) {
+    const config = parseAiConfig({ MERGEN_ROTA_AI_ENABLED: 'true', MERGEN_ROTA_AI_BASE_URL: 'https://fixture.invalid/v1', MERGEN_ROTA_AI_DEFAULT_API_KEY: DEFAULT_KEY,
+      MERGEN_ROTA_AI_QUEUE_TIMEOUT_MS: String(queue), MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS: String(first), MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS: String(idle) });
+    assert.equal(config.available, true, JSON.stringify(config.issues));
+    assert.equal(assistantGenerationStallMs(config), ASSISTANT_TIMING.setupMs + queue + Math.max(first, idle));
+    const terminal = assistantGenerationStallMs(config) + ASSISTANT_TIMING.progressEventMs + ASSISTANT_TIMING.tickerMs + ASSISTANT_TIMING.stallGraceMs;
+    assert.ok(ASSISTANT_MAX_NO_PROGRESS_MS >= terminal + ASSISTANT_TIMING.marginMs);
+  }
+  assert.ok(assistantGenerationStallMs({ queueTimeoutMs: 100, providerProgress: { firstEventMs: 1000, idleMs: 1000 } }) < 90000,
+    'küçük sağlayıcı sınırı gereksiz uzun sabit gözcüye dönüşmez');
+});
 const CROSS_SITE = [
   { origin: 'https://kardes.example.internal' },
   { 'sec-fetch-site': 'same-site' },

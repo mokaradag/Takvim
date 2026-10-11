@@ -1,5 +1,6 @@
 import {
   ASSISTANT_LIMITS,
+  ASSISTANT_MAX_NO_PROGRESS_MS,
   ASSISTANT_PROTOCOL_HEADER,
   ASSISTANT_PROTOCOL_VERSION,
   ASSISTANT_STREAM_EVENTS,
@@ -33,9 +34,9 @@ export const ASSISTANT_STREAM_INACTIVITY_MS = 45000;
 /**
  * Üretim ilerleme sınırı: bu süre boyunca hiçbir protokol olayı (evre, metin,
  * `progress`) gelmezse tur takılmış sayılır. Canlı tutma yorumu ilerleme değildir;
- * sunucunun kendi ilerleme sınırından (90 sn) uzundur, normalde önce sunucunun hata olayı gelir.
+ * desteklenen sunucu bütçelerinden uzundur; önce sunucunun hata olayı gelir.
  */
-export const ASSISTANT_STREAM_PROGRESS_MS = 120000;
+export const ASSISTANT_STREAM_PROGRESS_MS = ASSISTANT_MAX_NO_PROGRESS_MS;
 /** Tek olayın istemci üst sınırı (kayıtlı yanıtın yeniden oynatılması tek olaydır). */
 const MAX_STREAM_EVENT_CHARS = 1024 * 1024;
 export const ASSISTANT_INVALID_RESPONSE = 'INVALID_RESPONSE';

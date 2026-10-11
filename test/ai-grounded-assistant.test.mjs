@@ -524,10 +524,9 @@ test('araç turu sınırı: dördüncü turdan sonra araçlar kapanır, sınır 
     ['rota_task_analytics', { projectId: PROJECTS.FULL }],
     ['rota_wbs_inspect', { projectId: PROJECTS.FULL }]
   ];
-  // Her ölçü yalnızca bir aracın kanıtında bulunur: nüfus aracı ve alan bağları açıkça bildirilir; proje erişimi
-  // iki kanıtta bulunduğu için seçimi model yapar.
+  // Alan bağları açıkça bildirilir; muhakeme isteği, dört tur sonundaki araçsız seçimi sınar.
   const declaration = declared({ operation: 'value', metrics: ['projects.withOverdue', 'project.access', 'tasks.worstOverdueDays', 'wbs.nodes'],
-    population: { tool: 'rota_portfolio_summary' }, fields: [{ metric: 'tasks.worstOverdueDays', tool: 'rota_task_analytics', path: 'data.overdueAging.worstOverdueDays' },
+    reasoning: 'synthesis', population: { tool: 'rota_portfolio_summary' }, fields: [{ metric: 'tasks.worstOverdueDays', tool: 'rota_task_analytics', path: 'data.overdueAging.worstOverdueDays' },
       { metric: 'wbs.nodes', tool: 'rota_wbs_inspect', path: 'data.nodeCount' }], entities: [{ type: 'project', id: PROJECTS.FULL }] });
   stack.provider.enqueue(
     ...rounds.map(([name, args], index) => ({ type: 'tool-calls', preface: index ? [] : [declaration], calls: [{ name, arguments: args }] })),

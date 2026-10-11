@@ -1165,7 +1165,9 @@ sınırlıdır:
    arasına `MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS` (45 sn) izin verilir.
    Sağlayıcının SSE yorumları ve boş parçalar süreyi uzatmaz. Sınır dolunca
    sağlayıcı isteği kesilir ve tur `AI_TIMEOUT` (`PROVIDER_STALLED`) ile biter.
-2. **Tur:** akış yanıtı 90 sn boyunca hiçbir gerçek ilerleme (evre, metin,
+2. **Tur:** akış yanıtının ilerleme sınırı 10 sn kurulum + yapılandırılmış sıra
+   süresi + sağlayıcının ilk olay/boşta sınırlarının büyüğüdür (varsayılan 90 sn).
+   Bu süre boyunca hiçbir gerçek ilerleme (evre, metin,
    `progress`, araç yürütmesi, kayıt) görmezse üretimi `AI_TIMEOUT`
    (`GENERATION_STALLED`) ile keser. Sinyale uymayan iş 25 sn içinde bitmezse
    tur yine tek hata olayıyla sonlandırılır.
@@ -1175,11 +1177,13 @@ sınırlıdır:
    yeniden denenebilir, aynı konuşmada yeni soru sorulabilir ve başka
    kullanıcıların turları hiçbir aşamada beklemez.
 4. **Tarayıcı:** 45 sn boyunca hiç bayt (canlı tutma dâhil) gelmezse bağlantı
-   kopmuş (`STREAM_STALLED`, `NO_DATA`); bayt gelse de 120 sn boyunca hiçbir
+   kopmuş (`STREAM_STALLED`, `NO_DATA`); bayt gelse de 780 sn boyunca hiçbir
    protokol olayı gelmezse üretim takılmış sayılır (`STREAM_STALLED`,
    `NO_PROGRESS`). İkisinde de istek kesilir, arayüz "çalışıyor" durumunda
    kalmaz ve tur yeniden denenebilir. Tarayıcı sınırı sunucununkinden uzundur:
-   normalde önce sunucunun hata olayı gelir.
+   desteklenen en uzun sıra ve sağlayıcı bütçesini, ilerleme seyrekleştirmesini,
+   gözcü aralığını, kesme payını ve 10 sn ek payı kapsar; önce sunucunun hata
+   olayı gelir. Süre ölçümleri duvar saati yerine monoton saat kullanır.
 
 Akış bitince, iptal edilince ya da istemci okumayı bırakınca zamanlayıcılar
 durur (tarayıcının okumadığı kuyruğa yazılmaz).

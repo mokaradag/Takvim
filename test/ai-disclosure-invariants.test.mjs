@@ -428,3 +428,56 @@ test('authorization row budgets fail closed without affecting ordinary authoriza
   assert.ok(statements.length > 0);
   for (const { sql } of statements) assert.doesNotMatch(sql, /authorizationMaxRows|EmployeeSicil;|authorizedTasks/);
 });
+
+for (const kind of ['title', 'protected-text', 'aggregate']) {
+  for (const revoke of [false, true]) {
+    test(`final SSE capacity gate revalidates persisted ${kind} (${revoke ? 'revoked' : 'retained'})`, async (t) => {
+      const stack = stackFor(t);
+      const { prepareAssistantTurn, generateAssistantAnswer } = await import('../src/server/ai/assistant/assistantService.js');
+      const { assistantStreamResponse, QUEUE_HIGH_WATER_MARK } = await import('../src/server/ai/assistant/assistantStreamResponse.js');
+      const { parseSseText } = await import('./helpers/aiStack.mjs');
+      const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
+      const { activeAssistantGenerationCountForTests } = await import('../src/server/ai/assistant/assistantGenerations.js');
+      const text = 'KAPASİTEDE BEKLEYEN KORUMALI METİN';
+      stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE).Description = text;
+      const metric = kind === 'title' ? 'task.title' : kind === 'protected-text' ? 'task.description' : 'tasks.total';
+      const name = kind === 'aggregate' ? 'rota_task_search' : 'rota_task_detail';
+      const args = kind === 'aggregate' ? { projectId: PROJECTS.FULL } : { taskId: TASKS.OVERDUE, ...(kind === 'protected-text' ? { textFields: ['description'] } : {}) };
+      const request = { operation: 'value', metrics: [metric], population: { tool: name }, entities: [{ type: kind === 'aggregate' ? 'project' : 'task', id: kind === 'aggregate' ? PROJECTS.FULL : TASKS.OVERDUE }] };
+      stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [{ name, arguments: args }] });
+      const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: `Göster ${args.taskId || args.projectId}`, mode: 'standard', conversationId: null, includeText: kind === 'protected-text' }) });
+      const response = assistantStreamResponse(turn, { deliveryTimeoutMs: 2000, generate: (prepared, callbacks) => {
+        for (let index = 0; index < QUEUE_HIGH_WATER_MARK; index += 1) callbacks.onStatus({ phase: 'verifying' });
+        return generateAssistantAnswer(prepared, callbacks);
+      } });
+      t.after(() => turn.claim?.release());
+      const deadline = performance.now() + 1500;
+      while (!stack.db.aiConversationMessages.some((row) => row.Role === 'assistant')) {
+        assert.ok(performance.now() < deadline, 'tamponlanan yanıt kaydedilmedi');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      assert.equal(aiTelemetrySnapshot().grounding.grounded, 0, 'teslim beklerken son telemetri yazılmaz');
+      if (revoke) {
+        stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+        stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+      }
+      const wire = await response.text();
+      const events = parseSseText(wire).events;
+      const visible = events.filter((event) => event.event === 'delta').map((event) => event.data.text);
+      const terminal = events.filter((event) => ['done', 'error'].includes(event.event));
+      assert.equal(terminal.length, 1);
+      assert.equal(terminal[0].event, 'done');
+      assert.equal(visible.length, 1);
+      assert.equal(aiTelemetrySnapshot().assistantTurns.completed, 1, 'gerçek teslim bir kez sayılır');
+      assert.equal(activeAssistantGenerationCountForTests(), 0);
+      if (revoke) {
+        assert.equal(visible[0], NON_ENUMERATING_FAILURE_TEXT);
+        assert.deepEqual(terminal[0].data.assistantMessage.evidence, []);
+        assert.doesNotMatch(wire, /Radar test planı|KAPASİTEDE BEKLEYEN|eşleşen \*\*8\*\*/);
+      } else {
+        assert.equal(terminal[0].data.assistantMessage.finishReason, 'stop');
+        assert.match(visible[0], kind === 'title' ? /Radar test planı/ : kind === 'protected-text' ? /KAPASİTEDE BEKLEYEN/ : /eşleşen \*\*8\*\*/);
+      }
+    });
+  }
+}

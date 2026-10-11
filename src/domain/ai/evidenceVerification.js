@@ -1,7 +1,7 @@
-import { claimableContract } from './claimableEvidence.js';
+import { claimableContract, metricEntry, semanticCarrierKey } from './claimableEvidence.js';
 import { FACT_LIMITS, createEvidenceFacts, fieldPatternCovers } from './evidenceFacts.js';
 import { canonicalField } from './evidencePopulation.js';
-import { factRow, verifyRequestedFacts } from './requestContract.js';
+import { factRow, rowFieldState, rowMetricFields, verifyRequestedFacts } from './requestContract.js';
 import { renderVerifiedNarrative } from './evidenceNarrative.js';
 
 /**
@@ -155,6 +155,38 @@ export function resolveEvidenceSelection(answer, { evidenceIds = [], evidencePay
  * `request` verildiğinde seçim bildirilen isteğe uymalıdır (bkz.
  * requestContract.js); sunucu turu isteği her zaman verir.
  */
+function renderableFacts(request, items, evidence, answer) {
+  const rendered = [...items];
+  const rows = new Map();
+  for (const item of items) {
+    const source = evidence.get(item.evidenceId);
+    const row = source && factRow(source.tool, item.fact.field);
+    if (row?.kind === 'row') rows.set(`${item.evidenceId}|${row.path}`, { item, source, row });
+  }
+  for (const { item, source, row } of rows.values()) {
+    const object = row.path.split('.').slice(1).reduce((value, key) => value?.[key], source.envelope.data);
+    for (const metric of request.metrics) {
+      const bindings = (request.fields || []).filter((field) => field.metric === metric && field.tool === source.tool);
+      const candidates = rowMetricFields(source.tool, row.canonical, metric);
+      const references = (answer.facts || []).filter((reference) => reference.startsWith(`${item.evidenceId}:`)).map((reference) => reference.slice(reference.indexOf(':') + 1));
+      const chosen = [...references, ...items.filter((other) => other.evidenceId === item.evidenceId).map((other) => other.fact.field)]
+        .map((field) => semanticCarrierKey(source.tool, field));
+      const fields = candidates.filter((field) => bindings.length
+        ? bindings.some((binding) => binding.path === `data.${row.canonical}.*.${field}`)
+        : candidates.length === 1 || chosen.includes(semanticCarrierKey(source.tool, `data.${row.canonical}.*.${field}`)));
+      for (const field of fields) {
+        if (rowFieldState(source.tool, row.canonical, object, field) !== 'empty') continue;
+        const concrete = `${row.path}.${field.replace(/\*/g, '0')}`;
+        if (rendered.some((other) => other.evidenceId === item.evidenceId && other.fact.field === concrete)) continue;
+        const semantic = metricEntry(source.tool, `${row.canonical}.*.${field}`);
+        rendered.push({ evidenceId: item.evidenceId, fact: { ...item.fact, field: concrete, value: null,
+          semantic: { ...item.fact.semantic, ...semantic, metric, displayValue: null } } });
+      }
+    }
+  }
+  return rendered;
+}
+
 export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads = [], locale = 'tr', request = null, evidence = new Map() } = {}) {
   const answer = parseEvidenceResponse(text);
   const selection = resolveEvidenceSelection(answer, { evidenceIds, evidencePayloads });
@@ -162,23 +194,28 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
   // Bildirilen düzen veri okunmadan önce bağlanmıştır: seçim onu yinelemek zorunda değildir, yalnızca çelişemez.
   const layout = selection.layout ?? (request?.layout || 'auto');
   let emptyProofs = [];
+  let emptyRank = [];
   if (request) {
     if (request.layout && request.layout !== 'auto' && layout !== request.layout) return { ok: false, citedIds: [], issues: [{ code: 'LAYOUT_MISMATCH' }] };
     const verdict = verifyRequestedFacts(request, selection.facts, evidence);
     if (!verdict.ok) return { ok: false, citedIds: [], issues: verdict.issues };
     emptyProofs = verdict.empty || [];
+    emptyRank = verdict.emptyRank || [];
     if (verdict.rankOrder) {
-      const { evidenceId, collection, indexes } = verdict.rankOrder;
-      const positions = new Map(indexes.map((index, position) => [index, position]));
-      const rowOf = (item) => item.evidenceId === evidenceId ? factRow(evidence.get(evidenceId).tool, item.fact.field) : null;
-      const ranked = selection.facts.filter((item) => rowOf(item)?.collection === collection)
-        .sort((left, right) => positions.get(rowOf(left).index) - positions.get(rowOf(right).index));
+      const positions = new Map(verdict.rankOrder.map((row, index) => [`${row.evidenceId}|${row.path}`, index]));
+      const position = (item) => {
+        const source = evidence.get(item.evidenceId);
+        const row = source && factRow(source.tool, item.fact.field);
+        return row?.kind === 'row' ? positions.get(`${item.evidenceId}|${row.path}`) : undefined;
+      };
+      const ranked = selection.facts.filter((item) => position(item) !== undefined).sort((left, right) => position(left) - position(right));
       let offset = 0;
-      selection.facts = selection.facts.map((item) => rowOf(item)?.collection === collection ? ranked[offset++] : item);
+      selection.facts = selection.facts.map((item) => position(item) !== undefined ? ranked[offset++] : item);
     }
   }
   const citedIds = [...new Set(selection.facts.map((item) => item.evidenceId))];
-  const normalized = renderVerifiedNarrative(selection.facts, { locale, layout, operation: request?.operation || null, empty: emptyProofs });
+  const rendered = request ? renderableFacts(request, selection.facts, evidence, answer) : selection.facts;
+  const normalized = renderVerifiedNarrative(rendered, { locale, layout, operation: request?.operation || null, empty: emptyProofs, emptyRank });
   if (normalized.length > FACT_LIMITS.maxAnswerChars) return { ok: false, citedIds: [], issues: [{ code: 'ANSWER_TOO_LARGE' }] };
   return { ok: true, normalized, citedIds, facts: selection.facts, issues: [] };
 }

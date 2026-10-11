@@ -825,8 +825,8 @@ function persistAnswer(turn, write) {
  * Yanıtın yazımı istemcinin iptaline bağlı değildir: model yanıtı tamamladıysa
  * bağlantı o anda kesilse de yanıt kaybolmaz (yazım yine süre sınırlıdır).
  */
-export async function generateAssistantAnswer(turn, { signal = null, onStatus = null, onProgress = null, onText }) {
-  if (turn.grounded) return generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress, onText });
+export async function generateAssistantAnswer(turn, { signal = null, onStatus = null, onProgress = null, onText, onDelivery = null }) {
+  if (turn.grounded) return generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress, onText, onDelivery });
   const result = turn.dataUnavailable ? { text: 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', finishReason: 'unavailable' } : await getAiGateway().streamChat({
     profile: turn.profile,
     messages: turn.modelMessages,
@@ -904,7 +904,7 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
  * doğrulandıktan (ya da güvenli iletiye düştükten) SONRA, tek kısa işlemde
  * yazılır. Durdurulan ya da süresi dolan tur yazılmaz.
  */
-async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress = null, onText }) {
+async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress = null, onText, onDelivery = null }) {
   const options = {
     messages: turn.modelMessages,
     catalog: toolCatalogForModel(),
@@ -955,22 +955,29 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
       throw conversationNotFound('ANSWER_NOT_PERSISTED');
     }
     onProgress?.();
-    const evidence = await optionalEvidence(turn.sicil, signal, {
-      conversationId: turn.conversation.id, messageId: stored.message.id
-    });
-    // Bu turda doğrulanıp yazılan yanıt gösterilir; kalıcı nüfusu sınıra sığmayan
-    // yanıt yalnızca SONRAKİ açılışlarda doğrulanamaz sayılır.
+    const prepareDelivery = async () => {
+      const evidence = await optionalEvidence(turn.sicil, signal, {
+        conversationId: turn.conversation.id, messageId: stored.message.id
+      });
+      // Bu turda doğrulanıp yazılan yanıt gösterilir; kalıcı nüfusu sınıra sığmayan
+      // yanıt yalnızca SONRAKİ açılışlarda doğrulanamaz sayılır.
+      const own = stored.message.id === messageId;
+      const liveAuthorized = own && evidence?.unverifiable?.has(messageId) && await grounded.guardDisclosure?.(signal);
+      answer = liveAuthorized
+        ? { ...stored.message, evidence: grounded.evidence }
+        : discloseSavedMessages([stored.message], evidence)[0];
+      return { conversation: stored.conversation, answer: { ...answer, evidence: answer.evidence || [] },
+        reconciled: !own, finishReason: answer.finishReason, contentAuthoritative: true, firstTokenMs: null };
+    };
+    // Erişim, kuyrukta yer açıldıktan sonra ve görünür teslimin hemen öncesinde doğrulanır.
+    if (onDelivery) await onDelivery(prepareDelivery);
+    else await onText((await prepareDelivery()).answer.content);
     const own = stored.message.id === messageId;
-    const liveAuthorized = own && evidence?.unverifiable?.has(messageId) && await grounded.guardDisclosure?.(signal);
-    answer = liveAuthorized
-      ? { ...stored.message, evidence: grounded.evidence }
-      : discloseSavedMessages([stored.message], evidence)[0];
     // Gösterilen yanıt turun kendi yanıtıysa özgün sonuç (ör. general_redirect) korunur.
     const replaced = !own || answer.content !== grounded.text || answer.finishReason !== grounded.finishReason;
     const deliveredOutcome = !replaced ? grounded.outcome
       : answer.finishReason === 'stop' ? 'grounded' : answer.finishReason === 'grounding_failed' ? 'failed' : answer.finishReason;
     // Tur izi yalnızca metin gerçekten teslim edildikten sonra son sonucunu alır; teslim hatası `error` olur.
-    await onText(answer.content);
     grounded.completeDisclosure?.(deliveredOutcome);
   } catch (error) {
     // Kayıt ya da açıklama hatası da turun tek son izini bırakır.
@@ -985,4 +992,12 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
     contentAuthoritative: true,
     firstTokenMs: null
   };
+}
+
+/** Kayıtlı yanıt da teslim sınırında güncel erişimden geçer. */
+export async function discloseAssistantMessage(turn, message, signal) {
+  if (message.source === 'general' || message.finishReason === 'general') return message;
+  return discloseSavedMessages([message], await optionalEvidence(turn.sicil, signal, {
+    conversationId: turn.conversation.id, messageId: message.id
+  }))[0];
 }

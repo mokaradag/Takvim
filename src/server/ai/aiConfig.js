@@ -1,6 +1,7 @@
 import 'server-only';
 import { normalizeApiKeyInput } from '../../domain/ai/aiCredentialPolicy.js';
 import { AI_ERROR_CODES } from '../../domain/ai/aiErrorCatalog.js';
+import { ASSISTANT_TIMING } from '../../domain/ai/assistantContract.js';
 import { AiError } from './aiErrors.js';
 
 /**
@@ -40,11 +41,11 @@ const INTEGER_SETTINGS = Object.freeze({
   [NAMES.MAX_QUEUED]: { fallback: 32, min: 0, max: 1024 },
   [NAMES.MAX_ACTIVE_PER_USER]: { fallback: 2, min: 1, max: 32 },
   [NAMES.MAX_QUEUED_PER_USER]: { fallback: 2, min: 0, max: 64 },
-  [NAMES.QUEUE_TIMEOUT_MS]: { fallback: 20000, min: 100, max: 120000 },
+  [NAMES.QUEUE_TIMEOUT_MS]: { fallback: 20000, min: 100, max: ASSISTANT_TIMING.queueMaxMs },
   [NAMES.REQUEST_TIMEOUT_MS]: { fallback: 90000, min: 1000, max: 600000 },
   // Sağlayıcı ilerleme sınırları: canlı tutma değil, anlamlı akış olayı beklenir (bkz. aiDeadline).
-  [NAMES.PROVIDER_FIRST_EVENT_TIMEOUT_MS]: { fallback: 60000, min: 100, max: 600000 },
-  [NAMES.PROVIDER_IDLE_TIMEOUT_MS]: { fallback: 45000, min: 100, max: 600000 }
+  [NAMES.PROVIDER_FIRST_EVENT_TIMEOUT_MS]: { fallback: 60000, min: 100, max: ASSISTANT_TIMING.providerMaxMs },
+  [NAMES.PROVIDER_IDLE_TIMEOUT_MS]: { fallback: 45000, min: 100, max: ASSISTANT_TIMING.providerMaxMs }
 });
 
 function text(env, name) {

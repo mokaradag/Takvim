@@ -1,9 +1,10 @@
 import 'server-only';
-import { EVIDENCE_TEXT_FIELDS, metricEntry, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
-import { collectionTotalMetric, insideRowCollection } from '../../../domain/ai/evidencePopulation.js';
+import { EVIDENCE_TEXT_FIELDS, metricEntityType, metricEntry, metricPaths, NAMING_METRICS, rowCollections } from '../../../domain/ai/claimableEvidence.js';
+import { collectionTotalMetric, insideRowCollection, populationDimensions } from '../../../domain/ai/evidencePopulation.js';
 import { bindingsRequired, listCollections, parentProperty, REQUEST_ENTITY_TYPES, rowMetricFields } from '../../../domain/ai/requestContract.js';
 import { METRICS } from '../../../domain/ai/claimableEvidence.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
+import { businessDate } from '../../../domain/calendar/businessDate.js';
 import { addDays, normalizeTaskFilters } from './rota/taskFacts.js';
 import { parseToolArguments } from './toolArguments.js';
 import { getRotaTool, toolCatalogForModel } from './toolRegistry.js';
@@ -159,14 +160,12 @@ export function canonicalDimensions(tool, values = {}) {
  * (evidencePopulation.js) aynı ayrımı kullanır.
  */
 function scalarDimensions(tool, dimensions, facets) {
-  return compact({
-    depth: tool === 'rota_wbs_inspect' ? dimensions.depth : null,
-    textFields: WORKFLOW_TOOLS.has(tool) && facets.text ? dimensions.textFields.join(',') || 'none' : null
-  });
+  return populationDimensions({ tool, snapshotDimensions: dimensions, facets });
 }
 
 function rowDimensions(tool, dimensions, facets) {
-  return { ...scalarDimensions(tool, dimensions, facets), ...(tool === 'rota_task_analytics' ? { groupBy: dimensions.groupBy || 'none' } : {}) };
+  const { sort, ...membership } = populationDimensions({ tool, snapshotDimensions: dimensions, facets }, 'rows');
+  return membership;
 }
 
 /** Bildirilen nüfusun bu araçtaki kanonik boyutları (istenmeyen boyut araç varsayılanıdır). */
@@ -213,7 +212,7 @@ export function populationAgreement(request, tool, args, today) {
 const REQUEST_ENTITY_LIMIT = 4;
 
 const propertyType = (metric) => {
-  const type = String(metric).split('.')[0];
+  const type = metricEntityType(metric);
   return REQUEST_ENTITY_TYPES.includes(type) ? type : null;
 };
 
@@ -348,6 +347,15 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
       return { request, problems, hints };
     }
   }
+  // Kimlikler, koleksiyon ve gruplama biçimi hesaplanmadan önce varlığa yükseltilir.
+  for (const call of calls.filter((call) => call.name === population.tool)) {
+    for (const selector of selectorsOf(call.args)) {
+      const id = selector.type === 'person' ? String(selector.id) : canonicalActualId(selector.id);
+      if (entities.some((entity) => entity.type === selector.type && (entity.id === id || entity.text))) continue;
+      if (entities.length >= REQUEST_ENTITY_LIMIT) problems.push('$.entities:maxItems');
+      else entities.push(Object.freeze({ type: selector.type, id, text: null }));
+    }
+  }
   // Gruplama yalnızca görev analizinde vardır: aynı görev koşullarıyla bildirilen gruplama analizin grup satırlarıdır.
   if (population.groupBy && FAMILIES[population.tool] === 'task' && !Object.hasOwn(getRotaTool(population.tool).parameters.properties, 'groupBy')) {
     const { sort, collection, ...rest } = population;
@@ -370,7 +378,7 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
   const definition = getRotaTool(tool);
   const collections = rowCollections(tool);
   // Bildirilen satır ölçülerini taşıyan tek koleksiyon bildirilmiş sayılır; birden çok kardeş koleksiyon listede hepsidir.
-  const shaped = shapeCollections(tool, request.entities);
+  const shaped = shapeCollections(tool, entities);
   const counterpart = SELECTED_SHAPES[tool]?.counterparts[population.collection];
   if (population.collection && !shaped.includes(population.collection) && shaped.includes(counterpart)) population.collection = counterpart;
   if (operation !== 'value' && !population.collection) {
@@ -415,15 +423,6 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
         if (!values.some((value) => same(value, fallback))) problems.push(`$.population.${key}:ambiguous`);
       }
     }
-    // Nüfus çağrısındaki kimlik seçicisi bildirilen varlıktır (adla bildirilen aynı türdeki varlık sunucu çözümüyle bağlanır).
-    for (const call of own) {
-      for (const selector of selectorsOf(call.args)) {
-        const id = selector.type === 'person' ? String(selector.id) : canonicalActualId(selector.id);
-        if (entities.some((entity) => entity.type === selector.type && (entity.id === id || entity.text))) continue;
-        if (entities.length >= REQUEST_ENTITY_LIMIT) problems.push('$.entities:maxItems');
-        else entities.push(Object.freeze({ type: selector.type, id, text: null }));
-      }
-    }
   }
   // Korumalı serbest metin ölçüsü (ör. task.description) yalnızca o alan açılarak okunur: alan nüfus okumasının boyutudur.
   const textual = request.metrics.flatMap((metric) => textLeaves(tool, metric));
@@ -463,7 +462,12 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
   }
   const renamed = (metric) => metrics.renamed.get(metric) || metric;
   const completed = Object.freeze({ ...request, operation, metrics: Object.freeze(metrics.list), filters: Object.freeze(filters), entities: Object.freeze(entities),
-    fields: Object.freeze((request.fields || []).map((field) => Object.freeze({ ...field, metric: renamed(field.metric) }))),
+    fields: Object.freeze((request.fields || []).map((field) => {
+      if (renamed(field.metric) === field.metric) return field;
+      const paths = metricPaths(tool, renamed(field.metric)).filter((path) => !insideRowCollection(tool, path));
+      const path = paths.find((path) => path === 'totalCount') || paths[0];
+      return Object.freeze({ ...field, metric: renamed(field.metric), tool, ...(path ? { path } : {}) });
+    })),
     bindings: Object.freeze((request.bindings || []).map((binding) => Object.freeze({ ...binding, metric: renamed(binding.metric) }))),
     ...(request.rank ? { rank: Object.freeze({ ...request.rank, metric: renamed(request.rank.metric) }) } : {}),
     population: Object.freeze(Object.fromEntries(Object.entries(population).filter(([, value]) => value != null))) });
@@ -478,6 +482,12 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
 export function requestCapabilityProblems(request, { allowedTextFields = [] } = {}) {
   const problems = [];
   const hints = [];
+  for (const field of request.fields || []) {
+    if (!request.metrics.includes(field.metric) || metricEntry(field.tool, field.path.replace(/^data\./, ''))?.metric !== field.metric) problems.push('$.fields:metric');
+  }
+  for (const binding of request.bindings || []) {
+    if (!request.metrics.includes(binding.metric) || !request.entities[binding.entity]) problems.push('$.bindings:metric');
+  }
   const population = request.population;
   if (!population) return { problems: ['$.population:required'], hints };
   const tool = getRotaTool(population.tool);
@@ -532,15 +542,17 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
     // değer isteğinde bildirilen varlığın kendi özelliği koşullardan bağımsızdır.
     // Değer isteğinde bir varlığın kendi özelliği (ör. task.status) yalnızca o varlık bildirilirse satırdan okunabilir.
     const type = propertyType(metric);
-    if (request.operation === 'value' && !bound.length && type && !request.entities.some((entity) => entity.type === type)
-      && metricPaths(tool.name, metric).length && metricPaths(tool.name, metric).every((path) => insideRowCollection(tool.name, path) && isProperty(tool.name, path))) {
+    if (request.operation === 'value' && type && !request.entities.some((entity) => entity.type === type)
+      && metricPaths(tool.name, metric).length && metricPaths(tool.name, metric).every((path) => shaped.some((collection) => path.startsWith(`data.${collection}.`)))) {
       problems.push(`$.metrics[${index}]:entity`);
       hints.push(`${metric}: ${type} özelliği; request.entities: [{"type":"${type}","text":"<kullanıcının yazdığı ad>"}] bildir (birden çok kayıt isteniyorsa operation list)`);
       return;
     }
-    // Yalnızca birden çok satır koleksiyonunda (ör. öncüller ve ardıllar) bulunan, varlık özelliği olmayan ölçünün tek bir değeri yoktur.
+    // Satır ölçüsünün tek koleksiyonu olması, tek değeri olduğu anlamına gelmez.
     const rowHomes = collections.filter((collection) => rowMetricFields(tool.name, collection, metric).length);
-    if (request.operation === 'value' && !bound.length && !type && rowHomes.length > 1 && metricPaths(tool.name, metric).every((path) => insideRowCollection(tool.name, path))) {
+    if (request.operation === 'value' && !type && rowHomes.length > 0
+      && (bound.length ? request.fields.filter((field) => field.metric === metric).map((field) => field.path) : metricPaths(tool.name, metric))
+        .every((path) => shaped.some((collection) => path.startsWith(`data.${collection}.`)))) {
       problems.push(`$.metrics[${index}]:rows`);
       hints.push(`${metric}: yalnızca ${rowHomes.join('|')} satırlarında; operation list (ya da rank)`);
       return;
@@ -584,7 +596,7 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
       hints.push(`${metric}: ${lists.join('|')} satırlarının alanı değil`);
     });
   }
-  if (bindingsRequired(request) && request.metrics.some((metric) => !request.bindings.some((binding) => binding.metric === metric))) {
+  if (bindingsRequired(request) && request.metrics.some((metric) => !NAMING_METRICS.has(metric) && !request.bindings.some((binding) => binding.metric === metric))) {
     problems.push('$.bindings:required');
     hints.push('bindings: her ölçü için {metric, entity} (entity, entities dizisindeki sıra)');
   }
@@ -625,10 +637,13 @@ const stableArgs = (value) => JSON.stringify(value, (key, item) => (item && type
  * değişkenlerle okuyan çağrı aynı okumadır; küçük sayfa ise eksik okumadır ve sunucu
  * bildirilen nüfusu bir kez tam okuyabilir.
  */
-export function readKey(name, args, today) {
+export function readKey(name, args, today = businessDate(new Date())) {
   const selectors = selectorsOf(args).map(({ type, id }) => `${type}:${String(id).toLowerCase()}`).sort();
+  const represented = new Set([...familyKeys(name), ...(FAMILIES[name] === 'workflow' ? ['status'] : []),
+    ...(FAMILIES[name] === 'activity' ? ['scope', 'kind'] : []), ...Object.values(SELECTOR_PARAMS), 'sort', 'groupBy', 'depth', 'textFields', 'cursor', 'limit']);
+  const extra = Object.fromEntries(Object.entries(args).filter(([key]) => !represented.has(key)));
   return `${name}:${stableArgs({ facets: canonicalFacets(FAMILIES[name] || null, args, today), selectors,
-    dimensions: canonicalDimensions(name, args), cursor: args.cursor ?? null, limit: args.limit ?? null })}`;
+    dimensions: canonicalDimensions(name, args), extra, cursor: args.cursor ?? null, limit: args.limit ?? null })}`;
 }
 
 /** Sıralama isteğinin aracın sırası: sıralama ölçüsü ve yönü aracın sıra kayıtlarından biriyle eşleşmelidir. */

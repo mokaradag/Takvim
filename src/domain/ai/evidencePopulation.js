@@ -1,4 +1,4 @@
-import { metricPaths, rowCollections } from './claimableEvidence.js';
+import { metricEntry, metricPaths, rowCollections } from './claimableEvidence.js';
 
 /**
  * Kanıt nüfusunun ORTAK kuralları: koleksiyonun somut satır kümeleri,
@@ -63,6 +63,14 @@ export function collectionTotalPaths(tool, canonical) {
 const valueAt = (envelope, path) => String(path).split('.').slice(1).reduce((value, key) => value?.[key], envelope?.data);
 const untrimmed = (envelope) => envelope?.data?.sizeNote == null;
 
+/** Son tamamlanma özelliği, tamamlanma tarihleri eksikken kesin değildir. */
+export function carrierAvailable(source, field, row = null) {
+  const metric = metricEntry(source.tool, canonicalField(field).replace(/^data\./, ''))?.metric;
+  if (!['recurrence.lastCompletedFinish', 'recurrence.lastCompletedOccurrence'].includes(metric)) return true;
+  const parent = String(field).split('.lastCompleted')[0];
+  return (row || valueAt(source.envelope, parent))?.completionDatesComplete !== false;
+}
+
 /**
  * Koleksiyona özgü tamlık: zarfın genel `complete` bayrağı başka boyutların
  * (ör. tekrar serisinde geçmiş bitiş tarihleri) eksikliğini de taşır. Kuralı
@@ -70,14 +78,16 @@ const untrimmed = (envelope) => envelope?.data?.sizeNote == null;
  */
 const COLLECTION_COMPLETENESS = Object.freeze({
   rota_recurrence_inspect: {
-    // Seri satırlarının son tamamlanma alanı gerçek bitiş tarihlerine dayanır; yaklaşan önizlemenin kısalması seri kümesini eksiltmez.
-    series: (envelope) => Array.isArray(envelope.data?.series) && envelope.totalCount === envelope.data.series.length
-      && envelope.data.series.every((series) => series?.completionDatesComplete !== false),
+    series: (envelope) => Array.isArray(envelope.data?.series) && envelope.totalCount === envelope.data.series.length,
     'series.next': (envelope) => envelope.data?.series?.nextTruncated === false,
     'series.*.next': (envelope) => Array.isArray(envelope.data?.series) && envelope.totalCount === envelope.data.series.length
       && envelope.data.series.every((series) => series?.nextTruncated === false)
   },
-  rota_baseline_compare: { availableBaselines: (envelope) => envelope.data?.availableBaselinesTruncated === false },
+  rota_baseline_compare: {
+    availableBaselines: (envelope) => envelope.data?.availableBaselinesTruncated === false,
+    mostSlipped: (envelope) => Array.isArray(envelope.data?.mostSlipped) && envelope.returnedCount === envelope.totalCount
+      && envelope.returnedCount === envelope.data.mostSlipped.length
+  },
   // Gruplama yapılmamış analizin boş `groups` dizisi bir grup nüfusu değildir.
   rota_task_analytics: { groups: (envelope) => envelope.complete === true && envelope.truncated !== true && envelope.data?.groupBy != null }
 });
@@ -160,7 +170,31 @@ export function populationKey(source, dimensions = null) {
  * talep listesinde korumalı metin alanları aramanın kapsamını belirler; sıra ve
  * gruplama toplamı değiştirmez (sunucunun uygunluk denetimiyle aynı ayrım).
  */
-const SCALAR_DIMENSIONS = Object.freeze({ rota_wbs_inspect: ['depth'], rota_schedule_requests: ['textFields'], rota_assignment_requests: ['textFields'] });
+/** Üyeliği değiştiren boyutlar; izdüşüm izni tek başına nüfus değildir. */
+export function populationDimensions(source, kind = 'scalar', metric = null) {
+  const dimensions = source.snapshotDimensions || {};
+  const result = {};
+  if (source.tool === 'rota_wbs_inspect') result.depth = dimensions.depth ?? 2;
+  if (['rota_schedule_requests', 'rota_assignment_requests'].includes(source.tool) && source.facets?.text) {
+    result.textFields = [...(dimensions.textFields || [])].sort();
+  }
+  if (source.tool === 'rota_task_analytics' && (kind === 'rows' || metric === 'tasks.groupCount')) result.groupBy = dimensions.groupBy ?? null;
+  if (kind === 'rows') {
+    if (source.tool === 'rota_task_search') result.sort = dimensions.sort || (source.facets?.deadline === 'overdue' ? 'overdue_days_desc' : 'target_finish_asc');
+    else if (source.tool === 'rota_portfolio_summary') result.sort = dimensions.sort || 'overdue_desc';
+    else if (dimensions.sort != null) result.sort = dimensions.sort;
+  }
+  return result;
+}
+
+/** Aynı boyut kuralları bildirime uygunluğu ve tazeliği belirler. */
+export function metricDimensionsMatch(source, request, metric, rows = false) {
+  if ((rows ? source.rowDimensionsMatch ?? source.dimensionsMatch : source.dimensionsMatch) === false) return false;
+  if (request.population?.tool !== source.tool) return true;
+  const declared = { ...source, snapshotDimensions: request.population };
+  return stableJson(populationDimensions(source, rows ? 'rows' : 'scalar', metric))
+    === stableJson(populationDimensions(declared, rows ? 'rows' : 'scalar', metric));
+}
 
 /**
  * Daha yeni okuma: kesinlikle daha sonraki bir araç turunda. Aynı turdaki eşdeğer
@@ -170,12 +204,10 @@ export function readLater(newer, older) {
   return (newer.round ?? newer.ordinal) > (older.round ?? older.ordinal);
 }
 
-export function scalarKey(source) {
-  const keep = SCALAR_DIMENSIONS[source.tool] || [];
-  const dimensions = Object.fromEntries(Object.entries(source.snapshotDimensions || {}).filter(([key]) => keep.includes(key)));
-  return populationKey(source, dimensions);
+export function scalarKey(source, metric = null) {
+  return populationKey(source, populationDimensions(source, 'scalar', metric));
 }
 
 export function rowKey(source, canonical) {
-  return `${canonical}|${populationKey(source, source.snapshotDimensions || {})}`;
+  return `${canonical}|${populationKey(source, populationDimensions(source, 'rows'))}`;
 }

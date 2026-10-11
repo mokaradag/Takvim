@@ -165,7 +165,7 @@ test('a numbered task selection binds the task identity for detail and Outlook f
 
 test('task-name resolution reaches Outlook status in a later round', async (t) => {
   const stack = stackFor(t);
-  const request = declared({ operation: 'value', metrics: ['subscription.state'], population: { tool: 'rota_outlook_status' }, entities: [{ type: 'task', text: 'Anten kalibrasyonu' }] });
+  const request = declared({ operation: 'value', metrics: ['subscription.state'], reasoning: 'synthesis', population: { tool: 'rota_outlook_status' }, entities: [{ type: 'task', text: 'Anten kalibrasyonu' }] });
   stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_task_search', arguments: { text: 'Anten kalibrasyonu' } }] }, { type: 'script', respond: (call) => {
     assert.ok(call.tools.some((tool) => tool.name === 'rota_outlook_status'));
     const [found] = toolResults(call);

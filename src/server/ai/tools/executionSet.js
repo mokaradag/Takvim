@@ -5,6 +5,7 @@ import { parseToolArguments } from './toolArguments.js';
 import { invalidArguments, TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { TOOL_LIMITS } from './toolLimits.js';
 import { requestSchema } from './requestDeclaration.js';
+import { readKey } from './requestPopulation.js';
 
 /**
  * Bir model yanıtının YÜRÜTME KÜMESİ: plan çağrıları ve aynı yanıttaki
@@ -16,9 +17,6 @@ import { requestSchema } from './requestDeclaration.js';
  * yürütülmez: geçersiz plan kısmi veri okutamaz. Kimlikleri sunucu verir;
  * sağlayıcının ya da planın kimlikleri çakışsa da döküm tutarlı kalır.
  */
-
-const stableJson = (value) => JSON.stringify(value, (key, item) => (item && typeof item === 'object' && !Array.isArray(item)
-  ? Object.fromEntries(Object.keys(item).sort().map((name) => [name, item[name]])) : item));
 
 /** Turun çağrı kimliği üreteci: döküm boyunca benzersiz ve sağlayıcı kimlik biçimine uygun. */
 export function createCallIds() {
@@ -37,7 +35,7 @@ export function typedPlanningTool(catalog) {
     parameters: { type: 'object', additionalProperties: false, required: ['intent', 'language'], properties: {
       intent: { type: 'string', enum: ['rota', 'general'] }, language: { type: 'string', enum: ['tr', 'en'] },
       request: { ...requestSchema(), required: [...requestSchema().required, 'population', 'layout'] },
-      calls: { type: 'array', maxItems: TOOL_LIMITS.maxCallsPerRound, items: {
+      calls: { type: 'array', maxItems: TOOL_LIMITS.maxCallsPerRound * 2, items: {
         type: 'object', additionalProperties: false, required: ['name', 'arguments'], properties: {
           name: { type: 'string', enum: catalog.map((tool) => tool.name) },
           arguments: { type: 'object', description: 'Aynı adlı aracın parametre şemasına uyan bağımsız değişkenler.' }
@@ -87,7 +85,7 @@ export function unpackTypedPlan(result) {
   const calls = plan?.calls ?? [];
   if (!plan || typeof plan !== 'object' || Array.isArray(plan) || Object.keys(plan).some((key) => !['intent', 'language', 'request', 'calls'].includes(key))
     || !['rota', 'general'].includes(plan.intent) || !['tr', 'en'].includes(plan.language) || !Array.isArray(calls)) throw invalidArguments(['$.plan:shape']);
-  if (calls.length > TOOL_LIMITS.maxCallsPerRound) throw invalidArguments(['$.calls:maxItems']);
+  if (calls.length > TOOL_LIMITS.maxCallsPerRound * 2) throw invalidArguments(['$.calls:maxItems']);
   const planned = calls.map((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some((key) => !['name', 'arguments'].includes(key))
       || typeof item.name !== 'string' || !item.arguments || typeof item.arguments !== 'object' || Array.isArray(item.arguments)) throw invalidArguments([`$.calls[${index}]:shape`]);
@@ -154,7 +152,7 @@ export function prepareExecutionSet(rawCalls, { catalog, permitted = null, valid
       return;
     }
     // Aynı çağrı plan içinde ve doğrudan yinelenirse bir kez çalışır.
-    const key = `${tool.name}:${stableJson(args)}`;
+    const key = readKey(tool.name, args);
     if (seen.has(key)) return;
     seen.set(key, index);
     prepared.push({ index, name: tool.name, args, arguments: JSON.stringify(args) });
