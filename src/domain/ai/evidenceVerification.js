@@ -1,7 +1,7 @@
 import { claimableContract, metricEntry, semanticCarrierKey } from './claimableEvidence.js';
 import { FACT_LIMITS, createEvidenceFacts, fieldPatternCovers } from './evidenceFacts.js';
 import { canonicalField } from './evidencePopulation.js';
-import { factRow, rowFieldState, rowMetricFields, verifyRequestedFacts } from './requestContract.js';
+import { factRow, metricAllowedForRow, rowFieldState, rowMetricFields, verifyRequestedFacts } from './requestContract.js';
 import { renderVerifiedNarrative } from './evidenceNarrative.js';
 
 /**
@@ -166,6 +166,7 @@ function renderableFacts(request, items, evidence, answer) {
   for (const { item, source, row } of rows.values()) {
     const object = row.path.split('.').slice(1).reduce((value, key) => value?.[key], source.envelope.data);
     for (const metric of request.metrics) {
+      if (!metricAllowedForRow(request, metric, source, object, row.canonical)) continue;
       const bindings = (request.fields || []).filter((field) => field.metric === metric && field.tool === source.tool);
       const candidates = rowMetricFields(source.tool, row.canonical, metric);
       const references = (answer.facts || []).filter((reference) => reference.startsWith(`${item.evidenceId}:`)).map((reference) => reference.slice(reference.indexOf(':') + 1));

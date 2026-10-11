@@ -58,7 +58,7 @@ export function containmentText(value) {
   return foldText(value).replace(/ı/g, 'i').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
-const NAME_SUFFIXES = new Set(['in', 'un', 'nin', 'nun', 'inin', 'unun', 'i', 'u', 'yi', 'yu', 'ni', 'nu', 'ya', 'ye', 'a', 'e', 'da', 'de', 'ta', 'te', 'dan', 'den', 'tan', 'ten']);
+const NAME_SUFFIXES = new Set(['in', 'un', 'nin', 'nun', 'inin', 'unun', 'i', 'u', 'yi', 'yu', 'ni', 'nu', 'ya', 'ye', 'a', 'e', 'na', 'ne', 'da', 'de', 'ta', 'te', 'nda', 'nde', 'dan', 'den', 'tan', 'ten', 'ndan', 'nden', 'la', 'le', 'yla', 'yle']);
 
 /** Tam sözcükler ve sınırlı Türkçe ekler; gelişigüzel harf öneki kapsam değildir. */
 function phrasePositions(haystack, phrase) {
@@ -260,6 +260,7 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
         }
         for (const { population, id } of resultIdentities(call.name, body.data)) ids[population].add(String(id));
         if (NAME_SEARCH_TOOLS.has(call.name) && typeof args.text === 'string' && body.complete !== false
+          && Object.keys(args).every((key) => ['text', 'limit'].includes(key))
           && [body.data?.resolution, body.data?.titleResolution].includes('none')) {
           unmatchedNames.set(call.name, new Set([...(unmatchedNames.get(call.name) || []), containmentText(args.text)]));
         }

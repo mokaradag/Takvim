@@ -341,6 +341,9 @@ function rowKind(collection, tool) {
 const ROW_TITLES = Object.freeze(['title', 'name', 'task.title', 'person.name', 'label']);
 
 function renderRows(collection, rows, { evidenceId, locale, layout }) {
+  const roles = new Set(rows.map((row) => row.collection).filter(Boolean));
+  const mixed = roles.size > 1 && new Set([...roles].map((role) => role.split('.').at(-1))).size > 1;
+  const roleLabel = (row) => ROW_NOUNS[row.collection?.split('.').at(-1)]?.[locale === 'en' ? 1 : 0] || (locale === 'en' ? 'Record' : 'Kayıt');
   const pattern = (rel) => rel.replace(/\.\d+(?=\.|$)/g, '.*');
   const titleKey = ROW_TITLES.find((key) => rows.every((row) => row.entries.some(({ rel }) => rel === key)));
   const columns = [];
@@ -373,14 +376,14 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
     const names = titleKey ? valuesOf(row, titleKey) : [];
     const project = context?.project ? ` · ${escapedFactText([context.projectCode, context.project].filter(Boolean).join(' · '))}` : '';
     const organization = context?.organization ? ` · ${escapedFactText(context.organization)}` : '';
-    return `${escapedFactText(context?.name || names[0] && names.map((fact) => fact.value).join(', ') || row.subject)}${project}${organization}${criteria === null ? rowCriteria(row) : ''}`;
+    return `${mixed ? `${roleLabel(row)}: ` : ''}${escapedFactText(context?.name || names[0] && names.map((fact) => fact.value).join(', ') || row.subject)}${project}${organization}${criteria === null ? rowCriteria(row) : ''}`;
   };
   const cell = (facts, plain) => facts.map((fact) => (plain ? narrativeValue(fact, locale) : strong(narrativeValue(fact, locale)))).join(facts[0]?.field.includes('wbsPath') ? ' › ' : ', ');
   // Karşılaştırma doğal olduğunda (en az üç satır; üç sütun ya da iki sayısal sütun) tablo; aksi hâlde liste.
   const numericColumns = columns.filter((key) => rows.every((row) => valuesOf(row, key).every(isCount)));
   const table = columns.length >= 1 && (layout === 'table' || (layout !== 'list' && rows.length >= 3 && (columns.length >= 3 || numericColumns.length >= 2)));
   if (table) {
-    const head = ROW_NOUNS[collection.split('.').at(-1)]?.[lang] || (locale === 'en' ? 'Record' : 'Kayıt');
+    const head = !mixed && ROW_NOUNS[collection.split('.').at(-1)]?.[lang] || (locale === 'en' ? 'Record' : 'Kayıt');
     const headers = [head, ...columns.map((key) => columnLabel(key).replace(/\|/g, '/'))];
     // Sayı sütunları sağa yaslanır: değerler basamak hizasında okunur.
     const lines = [`| ${headers.join(' | ')} |`, `| ${['---', ...columns.map((key) => (numericColumns.includes(key) ? '---:' : '---'))].join(' | ')} |`];

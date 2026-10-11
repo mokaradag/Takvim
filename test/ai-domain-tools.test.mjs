@@ -778,9 +778,9 @@ test('çağrı sınırları: turda en fazla beş çağrı yürütülür; tanınm
   assert.deepEqual(ledger.ids(), ['R1', 'R2'], 'kanıt kimlikleri çağrı sırasıyla verilir');
   const factReads = stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts');
   assert.equal(factReads.filter((entry) => !entry.params.taskIds).length, 1, 'liste ve toplam aynı olgu okumasından gelir; yinelenen çağrı yeniden çalışmaz');
-  assert.equal(factReads.length, 2, 'sorumlu izdüşümü yalnızca dönen sayfanın görevleri için bir kez okunur');
-  assert.equal(factReads[1].params.withAssignees, 1);
-  assert.ok(factReads[1].params.taskIds.split(',').length <= 20);
+  assert.equal(factReads.length, 1, 'sayfa zincirinin sorumluları aynı maddileştirilmiş nüfusla bir kez okunur');
+  assert.equal(factReads[0].params.withAssignees, 1);
+  assert.equal(factReads[0].params.taskIds, '');
   const oversize = await callRotaTools(stack, AYSE, [['rota_task_search', JSON.stringify({ text: 'a', filler: 'x'.repeat(9000) })]]);
   assert.equal(oversize.results[0].error.code, 'INVALID_ARGUMENTS');
   assert.deepEqual(oversize.results[0].error.details, ['$:tooLarge']);
@@ -1120,3 +1120,44 @@ test('AI completion rates share product rounding and empty-set semantics', async
   assert.equal(taskCompletionRate(0, 0), 0);
   assert.equal(taskCompletionRate(2, 3), 67);
 });
+
+for (const tool of ['rota_workload_summary', 'rota_task_analytics', 'rota_activity_search']) {
+  test(`bounded complete ${tool} reads exceed the presentation cap without other buckets, and oversized results create no evidence`, async (t) => {
+    const stack = stackFor(t);
+    const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+    const populate = (count) => {
+      stack.db.tasks = Array.from({ length: count }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}` }));
+      stack.db.taskAssignees = stack.db.tasks.map((task, index) => ({ TaskId: task.TaskId, Sicil: 920000 + index }));
+      stack.db.people.push(...stack.db.tasks.map((_task, index) => ({ Sicil: 920000 + index, DisplayName: `Kişi ${index}` })));
+      if (tool === 'rota_activity_search') stack.db.auditLog = stack.db.tasks.map((task, index) => ({ AuditId: index + 1,
+        OccurredAt: '2026-09-29T08:00:00Z', ActorSicil: AYSE, ActorDisplayName: 'Ayşe Yılmaz', ActionCode: 'UPDATE',
+        EntityType: 'TASK', EntityId: task.TaskId, ProjectId: PROJECTS.FULL, CorrelationId: `activity-${index}`,
+        BeforeJson: JSON.stringify({ Status: 'planned' }), AfterJson: JSON.stringify({ Status: 'inProgress' }) }));
+    };
+    populate(31);
+    const collection = tool === 'rota_workload_summary' ? 'people' : tool === 'rota_activity_search' ? 'items' : 'groups';
+    const request = { operation: 'list', population: { tool, collection } };
+    const extra = tool === 'rota_task_analytics' ? { groupBy: 'assignee' }
+      : tool === 'rota_activity_search' ? { period: 'custom', dateFrom: '2026-09-29' } : {};
+    const read = async (limit, maxResultBytes = TOOL_LIMITS.maxResultBytes) => {
+      const ledger = createEvidenceLedger();
+      const limits = { ...TOOL_LIMITS, maxResultBytes };
+      const executor = createToolExecutor({ context: createToolTurnContext({ sicil: AYSE, now: NOW }), ledger, limits,
+        request: () => request, signal: new AbortController().signal });
+      const [message] = await executor.runRound([{ id: 'complete', name: tool,
+        arguments: JSON.stringify({ projectId: PROJECTS.FULL, limit, ...extra }) }]);
+      return { ledger, result: JSON.parse(message.content) };
+    };
+    const complete = await read(1);
+    assert.equal(complete.result.ok, true);
+    assert.equal(complete.result.complete, true);
+    assert.equal(complete.result.data[collection].length, 31);
+    assert.equal(complete.result.data[collection].some((row) => row.key === 'other'), false);
+    assert.equal(decodeAuthorizationPopulation(JSON.parse(complete.ledger.persistable(complete.ledger.ids())[0].evidenceJson).authorizationPopulation).length, 31);
+    const tooLarge = await read(1, 1000);
+    assert.equal(tooLarge.result.error.code, 'RESULT_TOO_LARGE');
+    assert.deepEqual(tooLarge.ledger.ids(), []);
+    const ordinary = await callRotaTool(stack, AYSE, tool, { projectId: PROJECTS.FULL, limit: 1, ...extra });
+    assert.equal(ordinary.result.complete, false, 'sunum sınırı yalnızca kapsamlı istek dışında korunur');
+  });
+}

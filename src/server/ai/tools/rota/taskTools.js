@@ -2,6 +2,7 @@ import 'server-only';
 import { searchCorporateDirectory } from '../../../directory/directorySearch.js';
 import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
 import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
+import { completeReadRequired } from '../../../../domain/ai/requestContract.js';
 import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
@@ -138,7 +139,7 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false }
       .items.find((person) => person.sicil === filters.personSicil)?.name;
     filters.person = resolved && resolved !== String(filters.personSicil) ? dataText(resolved, 120) : 'Seçilen kişi';
   }
-  return { facts, projects, assignees: result.assignees };
+  return { facts, projects, assignees: result.assignees, filters: { ...filters } };
 }
 
 function filterHighlights(filters) {
@@ -197,17 +198,25 @@ const taskSearch = {
     const sort = args.sort || (filters.deadline === 'overdue' ? 'overdue_days_desc' : 'target_finish_asc');
     const limit = args.limit ?? 20;
     const { scope } = await call.authorization();
-    // Sorumlu izdüşümü bütün nüfus için değil, yalnızca dönen sayfa için okunur.
-    const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters);
+    // İmleç zinciri aynı maddileştirilmiş değerleri okur; kimlik sırası tek başına anlık görüntü değildir.
+    const load = () => loadFilteredFacts(call, scope, filters, { withAssignees: true });
+    let result;
+    try { result = await call.snapshot(JSON.stringify(['rota_task_search', filters, sort, call.today]), args.cursor, load); }
+    catch (error) {
+      // Yeni bağlamda imleç ancak bütün değerlerin özeti yeniden eşleşirse geçer.
+      if (error?.details?.includes('$.cursor:stale')) result = await load();
+      else throw error;
+    }
+    const { facts, projects, assignees } = result;
+    Object.assign(filters, result.filters);
+    call.notePopulation(facts.map((fact) => ({ taskId: fact.id, projectId: fact.projectId })));
     const sorted = sortFacts(facts, sort, call.today);
-    // Sıralı kimlikler nüfus ve sıra kaymasını yakalar; sorumlu izdüşümü yalnız sayfaya uygulanır.
-    const anchor = sorted.map((fact) => fact.id);
+    // İmleç üyelikle birlikte sıralama ve gösterim değerlerini de bağlar.
+    const anchor = sorted.map((fact) => [taskItem(fact, { projects, assignees, today: call.today }),
+      ...(sort === 'updated_desc' ? [fact.updatedAt] : [])]);
     const { page, offset, nextCursor } = paginate('rota_task_search', { filters, sort }, sorted, { limit, cursor: args.cursor ?? null, anchor });
     const pageFacts = page;
-    const pageAssignees = filters.assignee === 'person' || !pageFacts.length ? assignees
-      : (await call.sql((executor) => readTaskFacts(executor, scope, {
-        taskIds: pageFacts.map((fact) => fact.id), withAssignees: true, maxRows: pageFacts.length
-      }))).assignees;
+    const pageAssignees = assignees;
     const pageProjects = projects;
     const exactTotal = sorted.length;
     const stableNextCursor = nextCursor;
@@ -471,7 +480,8 @@ const taskAnalytics = {
         ? left.key.localeCompare(right.key)
         : right.count - left.count || left.label.localeCompare(right.label, 'tr')));
       groupCount = ordered.length;
-      const visibleGroupLimit = ordered.length > limit ? Math.max(0, limit - 1) : limit;
+      const visibleGroupLimit = completeReadRequired(call.request, 'rota_task_analytics') ? ordered.length
+        : ordered.length > limit ? Math.max(0, limit - 1) : limit;
       groups = ordered.slice(0, visibleGroupLimit);
       if (ordered.length > visibleGroupLimit) {
         const rest = ordered.slice(visibleGroupLimit).reduce((sum, group) => ({
@@ -480,7 +490,7 @@ const taskAnalytics = {
         groups.push({ key: 'other', label: `Diğer ${ordered.length - visibleGroupLimit} grup`, ...rest });
       }
     }
-    const groupsTruncated = Boolean(groupBy && groupCount > limit);
+    const groupsTruncated = Boolean(groupBy && groupCount > limit && !completeReadRequired(call.request, 'rota_task_analytics'));
     const totals = statusTotals(facts, call.today);
     const descriptor = searchedScope(scope, filters.projectId);
     return {

@@ -1,10 +1,10 @@
 import 'server-only';
 import { EVIDENCE_TEXT_FIELDS, metricEntityType, metricEntry, metricPaths, NAMING_METRICS, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { collectionTotalMetric, insideRowCollection, populationDimensions } from '../../../domain/ai/evidencePopulation.js';
-import { bindingsRequired, listCollections, parentProperty, REQUEST_ENTITY_TYPES, rowMetricFields } from '../../../domain/ai/requestContract.js';
+import { bindingsRequired, completeReadRequired, listCollections, parentProperty, REQUEST_ENTITY_TYPES, rowMetricFields, unboundCarrierMetrics } from '../../../domain/ai/requestContract.js';
 import { METRICS } from '../../../domain/ai/claimableEvidence.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
-import { businessDate } from '../../../domain/calendar/businessDate.js';
+import { effectivePageSize } from './rota/rotaToolSupport.js';
 import { addDays, normalizeTaskFilters } from './rota/taskFacts.js';
 import { parseToolArguments } from './toolArguments.js';
 import { getRotaTool, toolCatalogForModel } from './toolRegistry.js';
@@ -461,6 +461,10 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
     hints.push('filters.assignee: adı geçen kişinin görevleri için yazılmaz; kişi request.entities ile bildirilir, sunucu onu seçici yapar');
   }
   const renamed = (metric) => metrics.renamed.get(metric) || metric;
+  if (request.rank && !population.sort) {
+    const sort = rankSort(tool, { ...request.rank, metric: renamed(request.rank.metric) });
+    if (sort) population.sort = sort;
+  }
   const completed = Object.freeze({ ...request, operation, metrics: Object.freeze(metrics.list), filters: Object.freeze(filters), entities: Object.freeze(entities),
     fields: Object.freeze((request.fields || []).map((field) => {
       if (renamed(field.metric) === field.metric) return field;
@@ -492,6 +496,10 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
   if (!population) return { problems: ['$.population:required'], hints };
   const tool = getRotaTool(population.tool);
   const parameters = tool.parameters.properties;
+  for (const metric of unboundCarrierMetrics(request)) {
+    problems.push('$.fields:required');
+    hints.push(`${metric}: ayrı anlamlı taşıyıcılar için fields ile istenen kayıtlı alanı bağla`);
+  }
   const collections = rowCollections(tool.name);
   const sorts = parameters.sort?.enum || [];
   const shaped = shapeCollections(tool.name, request.entities);
@@ -559,7 +567,10 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
     }
     const sources = (bound.length ? bound : [tool.name]).filter((name) => carriesMetric(name, metric));
     const aggregate = sources.some((name) => metricPaths(name, metric).some((path) => !isProperty(name, path)));
-    if (!sources.length || (property && request.operation === 'value' && !aggregate)) return;
+    const ownCarrier = property && !aggregate && (request.operation === 'value' || sources.every((name) => metricPaths(name, metric)
+      .filter((path) => !bound.length || request.fields.some((field) => field.metric === metric && field.tool === name && field.path === path))
+      .every((path) => !insideRowCollection(name, path))));
+    if (!sources.length || ownCarrier) return;
     for (const name of sources) {
       const unsupported = active.filter((key) => !familyKeys(name).includes(key));
       if (unsupported.length) {
@@ -587,6 +598,25 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
       hints.push(`${metric}: ${population.collection} satırlarının alanı ya da sayısı değil${total ? `; satır sayısı ${total}` : ''}`);
     });
     if (request.rank && !rowMetrics.includes(request.rank.metric)) problems.push('$.rank.metric:rows');
+  }
+  // Ön denetim veri boyutunu tahmin etmez; seçilen aracın tamlık ve sıra yeteneğini kanıtlar.
+  if (request.operation !== 'value') {
+    const cappedGroups = tool.name === 'rota_task_analytics' && population.collection === 'groups'
+      && !['status', 'priority', 'deadline'].includes(population.groupBy);
+    const cappedPeople = tool.name === 'rota_workload_summary' && !request.entities.some((entity) => entity.type === 'person');
+    if ((cappedGroups || cappedPeople) && !completeReadRequired(request, tool.name)) {
+      problems.push('$.population.collection:exhaustive-unsupported');
+      hints.push(`${tool.name}: bu sınırlı koleksiyon imleçle bütünüyle okunamaz`);
+    }
+  }
+  if (request.rank) {
+    const ordering = sortedBy(tool.name, requestDimensions(request, tool.name));
+    if ((parameters.sort || parameters.cursor) && !completeReadRequired(request, tool.name)) {
+      if (!ordering || ordering.metric !== request.rank.metric || ordering.order !== request.rank.order) {
+        problems.push('$.rank:ordering');
+        hints.push(`${tool.name}: rank ölçüsü/yönü population.sort ile aynı olmalı`);
+      }
+    }
   }
   if (multiple) {
     // Birden çok koleksiyonlu liste yalnızca satır alanlarıdır; tek koleksiyonun toplamı bütün listenin sayısı değildir.
@@ -637,13 +667,14 @@ const stableArgs = (value) => JSON.stringify(value, (key, item) => (item && type
  * değişkenlerle okuyan çağrı aynı okumadır; küçük sayfa ise eksik okumadır ve sunucu
  * bildirilen nüfusu bir kez tam okuyabilir.
  */
-export function readKey(name, args, today = businessDate(new Date())) {
+export function readKey(name, args, today) {
   const selectors = selectorsOf(args).map(({ type, id }) => `${type}:${String(id).toLowerCase()}`).sort();
   const represented = new Set([...familyKeys(name), ...(FAMILIES[name] === 'workflow' ? ['status'] : []),
     ...(FAMILIES[name] === 'activity' ? ['scope', 'kind'] : []), ...Object.values(SELECTOR_PARAMS), 'sort', 'groupBy', 'depth', 'textFields', 'cursor', 'limit']);
   const extra = Object.fromEntries(Object.entries(args).filter(([key]) => !represented.has(key)));
-  return `${name}:${stableArgs({ facets: canonicalFacets(FAMILIES[name] || null, args, today), selectors,
-    dimensions: canonicalDimensions(name, args), extra, cursor: args.cursor ?? null, limit: args.limit ?? null })}`;
+  return `${name}:${stableArgs({ today, facets: canonicalFacets(FAMILIES[name] || null, args, today), selectors,
+    dimensions: canonicalDimensions(name, args), extra, cursor: args.cursor ?? null,
+    limit: effectivePageSize(getRotaTool(name)?.parameters?.properties?.limit, args) })}`;
 }
 
 /** Sıralama isteğinin aracın sırası: sıralama ölçüsü ve yönü aracın sıra kayıtlarından biriyle eşleşmelidir. */

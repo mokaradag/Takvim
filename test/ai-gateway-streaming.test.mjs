@@ -449,3 +449,57 @@ test('tool round measurements include failed connection attempts before the succ
   assert.equal(fake.pendingCount, 0);
   assert.equal(aiTelemetrySnapshot().retries, 1);
 });
+
+for (const tools of [false, true]) {
+  test(`provider inactivity excludes downstream delivery waits (${tools ? 'tool session' : 'chat'})`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+    const provider = createFakeAiProvider();
+    provider.enqueue({ type: 'stream', chunks: ['A', 'B'] });
+    const { gateway, stream, admission } = gatewayFor(t, { provider,
+      env: { MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS: '100', MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS: '1000' } });
+    let release;
+    let waiting = false;
+    const delivered = [];
+    const receive = async (text) => {
+      delivered.push(text);
+      if (text === 'A') { waiting = true; await new Promise((resolve) => { release = resolve; }); }
+    };
+    const pending = tools ? gateway.runToolSession({ profile: 'chat.tools', run: (session) => session.round({ messages: MESSAGES,
+      onEvent: (event) => event.type === 'text' ? receive(event.text) : undefined }) }) : stream({ onText: receive });
+    await until(() => waiting);
+    t.mock.timers.tick(1500);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(admission.status().active, 1);
+    assert.equal(provider.calls[0].aborted, false);
+    release();
+    assert.equal((await pending).text, 'AB');
+    assert.deepEqual(delivered, ['A', 'B']);
+    assert.equal(admission.status().active, 0);
+  });
+
+  test(`each permitted connection retry gets its own first-event budget (${tools ? 'tool session' : 'chat'})`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+    const fake = createFakeAiProvider();
+    fake.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'stream', text: 'İkinci deneme' });
+    const method = tools ? 'streamToolCompletion' : 'streamChatCompletion';
+    let attempts = 0;
+    const provider = { ...fake, [method](input) {
+      attempts += 1;
+      return new Promise((resolve, reject) => setTimeout(() => { fake[method](input).then(resolve, reject); }, 800));
+    } };
+    const { gateway, stream, admission } = gatewayFor(t, { provider,
+      env: { MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS: '1000' } });
+    const pending = tools ? gateway.runToolSession({ profile: 'chat.tools', run: (session) => session.round({ messages: MESSAGES }) }) : stream();
+    await until(() => attempts === 1);
+    t.mock.timers.tick(800);
+    await until(() => fake.calls.length === 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(200);
+    await until(() => attempts === 2);
+    t.mock.timers.tick(800);
+    assert.equal((await pending).text, 'İkinci deneme');
+    assert.equal(fake.calls.length, 2);
+    assert.equal(aiTelemetrySnapshot().retries, 1);
+    assert.equal(admission.status().active, 0);
+  });
+}

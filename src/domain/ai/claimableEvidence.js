@@ -270,6 +270,7 @@ export function semanticCarrierKey(tool, path) {
   const canonical = String(path).split('.').map((part) => /^\d+$/.test(part) ? '*' : part).join('.');
   const entry = metricEntry(tool, canonical.replace(/^data\./, ''));
   if (!entry?.metric) return `${tool}|${canonical}`;
+  if (entry.metric === 'task.project') return `task.project|${canonical.endsWith('.code') ? 'code' : 'name'}`;
   if (DISTINCT_FIELDS.has(entry.metric)) return `${entry.metric}|${canonical.split('.').at(-1)}`;
   if (entry.property) return entry.metric;
   if (SAME_VALUE_PATHS[tool]?.[entry.metric]?.includes(canonical)) return `${tool}|${entry.metric}|scalar`;
@@ -281,7 +282,7 @@ export function equivalentCarriers(tool, paths) {
 }
 
 /** Kişinin tek görev aboneliği TaskId/UserSicil benzersiz anahtarıyla göreve aittir. */
-export const metricEntityType = (metric) => String(metric).startsWith('subscription.') ? 'task' : String(metric).split('.')[0];
+export const metricEntityType = (metric) => /^(subscription|recurrence)\./.test(String(metric)) ? 'task' : String(metric).split('.')[0];
 
 /**
  * Kayıt satırı koleksiyonları. Bir kaydın çok değerli alanı (sorumlular, WBS

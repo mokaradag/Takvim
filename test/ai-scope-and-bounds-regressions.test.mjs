@@ -45,13 +45,13 @@ test('WBS recursion limits produce a bounded tool error, including wrapped SQL e
   }
 });
 
-test('task paging ignores assignee projection changes but detects population drift', async (t) => {
+test('task cursors reject changed displayed values and population drift across contexts', async (t) => {
   const stack = stackFor(t);
   const first = await callRotaTool(stack, AYSE, 'rota_task_search', { limit: 1 });
   assert.ok(first.result.nextCursor);
   stack.db.taskAssignees.push({ TaskId: first.result.data.tasks[0].taskId, Sicil: LEAD });
   const second = await callRotaTool(stack, AYSE, 'rota_task_search', { limit: 1, cursor: first.result.nextCursor });
-  assert.equal(second.result.ok, true);
+  assert.equal(second.result.error.code, 'INVALID_ARGUMENTS', 'sorumlu değeri de imleç görüntüsünün parçasıdır');
   stack.db.tasks.push({ ...stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE), TaskId: 'a2000000-0000-4000-8000-000000000001' });
   const changed = await callRotaTool(stack, AYSE, 'rota_task_search', { limit: 1, cursor: first.result.nextCursor });
   assert.equal(changed.result.error.code, 'INVALID_ARGUMENTS');

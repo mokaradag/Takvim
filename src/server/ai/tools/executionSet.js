@@ -124,7 +124,7 @@ export function textPlanCall(text) {
  * çağrı sırasıyla güvenli araç hatalarıdır. Sınır, ayıklanmış küme üzerinde
  * uygulanır; ham girdi ayrıca kötüye kullanıma karşı sınırlıdır.
  */
-export function prepareExecutionSet(rawCalls, { catalog, permitted = null, validateCall = null, limits = TOOL_LIMITS, attempted = 0, callId }) {
+export function prepareExecutionSet(rawCalls, { catalog, permitted = null, validateCall = null, limits = TOOL_LIMITS, attempted = 0, callId, today }) {
   const problems = [];
   const prepared = [];
   if (rawCalls.length > limits.maxCallsPerRound * 2) {
@@ -152,7 +152,7 @@ export function prepareExecutionSet(rawCalls, { catalog, permitted = null, valid
       return;
     }
     // Aynı çağrı plan içinde ve doğrudan yinelenirse bir kez çalışır.
-    const key = readKey(tool.name, args);
+    const key = readKey(tool.name, args, today);
     if (seen.has(key)) return;
     seen.set(key, index);
     prepared.push({ index, name: tool.name, args, arguments: JSON.stringify(args) });

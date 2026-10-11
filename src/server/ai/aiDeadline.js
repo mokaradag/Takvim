@@ -54,6 +54,8 @@ export function createProgressWatch({ firstEventMs, idleMs, parentSignal = null 
     touch() {
       if (!controller.signal.aborted) arm(idleMs);
     },
+    pause() { clearTimeout(timer); },
+    restart() { if (!controller.signal.aborted) arm(firstEventMs); },
     dispose() {
       clearTimeout(timer);
       parentSignal?.removeEventListener?.('abort', onParentAbort);

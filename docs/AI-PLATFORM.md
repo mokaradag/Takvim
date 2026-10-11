@@ -1159,7 +1159,8 @@ ve ters vekil sessiz kalmasın diye sunucu 15 sn'de bir SSE **yorum** satırı
 taşımaz ve hiçbir katmanda üretim ilerlemesi sayılmaz. İlerleme katmanlı olarak
 sınırlıdır:
 
-1. **Sağlayıcı:** her model turu kendi ilerleme gözcüsüyle yürür. İstekten ilk
+1. **Sağlayıcı:** her bağlantı denemesi kendi ilk olay bütçesini alır; toplam
+   istek süresi bütün yeniden denemeleri sınırlar. İstekten ilk
    anlamlı akış olayına (rol, metin, akıl yürütme, araç parçası, kullanım)
    `MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS` (60 sn), iki anlamlı olay
    arasına `MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS` (45 sn) izin verilir.
@@ -1194,6 +1195,9 @@ sınırlıdır: okumayan istemci turu tutamaz, üretim `DELIVERY_STALLED` ile ke
 ve hak bırakılır. Teslim edilemeyen yanıt metni turun izine teslim edilmiş yanıt
 olarak değil hata olarak yazılır. Okunmamış çıktı sunucu belleğinde sınırsız
 birikmez.
+Üretilmiş metnin teslimini beklerken sağlayıcının boşta ve turun üretim
+saatleri durur; teslimin kendi sınırı işlemeye devam eder. Kuyruk doluyken
+görünmeyen ilerleme iç saati yeniler ama yeni `progress` olayı kuyruğa eklenmez.
 
 ### 18.4 Kipler ve profiller
 

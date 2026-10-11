@@ -1,6 +1,8 @@
 import 'server-only';
 import { randomBytes } from 'node:crypto';
-import { encodeAuthorizationPopulation, evidenceTaskReferences, unverifiableAuthorizationPopulation } from './evidenceAuthorization.js';
+import { claimableContract } from '../../../domain/ai/claimableEvidence.js';
+import { canonicalActualId } from '../../../domain/identity/actualId.js';
+import { encodeAuthorizationPopulation, evidenceTaskReferences, PAYLOAD_POPULATION_TOOLS, unverifiableAuthorizationPopulation } from './evidenceAuthorization.js';
 import {
   EVIDENCE_LIMITS,
   evidenceIdFor,
@@ -68,7 +70,18 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
   return Object.freeze({
     factPrefix() { return `${turnKey}_R${entries.length + 1}`; },
     /** Başarılı araç sonucunu kaydeder; kimlik (R<n>) döner. Defter doluysa `null`. */
-    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, populationReferences = null, args = null, round = null }) {
+    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, populationReferences = null, args = null, round = null, snapshot = null }) {
+      // Boş nüfus da açıkça kaydedilir; eksik köken başarılı kanıt olamaz.
+      const protectedPopulation = claimableContract(tool).paths.length && !PAYLOAD_POPULATION_TOOLS.has(tool);
+      if (protectedPopulation && !Array.isArray(populationReferences)) return null;
+      const projects = new Map();
+      for (const row of populationReferences || []) {
+        const taskId = canonicalActualId(row?.taskId);
+        const projectId = canonicalActualId(row?.projectId);
+        if (!taskId || (protectedPopulation || row.projectId != null) && !projectId
+          || projects.has(taskId) && projects.get(taskId) !== projectId) return null;
+        projects.set(taskId, projectId);
+      }
       if (entries.length >= Math.min(maxEntries, EVIDENCE_LIMITS.maxEvidencePerAnswer)) return null;
       const id = evidenceIdFor(entries.length + 1);
       const summary = normalizeEvidenceSummary({
@@ -77,8 +90,8 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       if (!summary) return null;
       // Yürütülen bağımsız değişkenler yalnızca sunucuda kalır: kanıtın nüfusu bunlardan hesaplanır.
       entries.push({ id, tool, kind, summary, payload: null, authorizationEpoch, scopedAuthorization, valid: true,
-        args: Object.freeze({ ...(args || {}) }), round,
-        population: Array.isArray(populationReferences) && populationReferences.length ? populationReferences : null });
+        args: Object.freeze({ ...(args || {}) }), round, snapshot,
+        population: populationReferences });
       return id;
     },
     /**
@@ -130,7 +143,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       return entries.filter((entry) => entry.valid && entry.payload).map((entry) => {
         let payload = null;
         try { payload = JSON.parse(entry.payload); } catch { /* Bozuk yük kanıt değildir. */ }
-        return { id: entry.id, tool: entry.tool, args: entry.args, round: entry.round, payload };
+        return { id: entry.id, tool: entry.tool, args: entry.args, round: entry.round, snapshot: entry.snapshot, payload };
       });
     },
     /** Verilen kimliklerin özetleri, kanıt sırasına göre. */

@@ -1236,16 +1236,30 @@ paylaşır (`evidencePopulation.js`, `requestPopulation.js`, `requestContract.js
   gruplama yok, korumalı alan yok); verilmeyen boyut varsayılandır, joker
   değildir. Toplamı belirleyen boyutlar (WBS derinliği, korumalı arama alanı)
   satır kümesini belirleyenlerden (sıra, gruplama) ayrı tutulur.
-- *Tazelik sınıfa bağlıdır.* Toplam, aynı toplam nüfusunun daha sonraki bir
-  araç turundaki herhangi bir okumasıyla; satır kümesi yalnızca aynı satır
-  nüfusunun daha sonraki TAM okumasıyla; varlık özelliği aynı varlığın aynı
-  özelliğiyle eskir. Aynı turdaki eşdeğer okumalar eşzamanlıdır.
+- *Tazelik sınıfa bağlıdır.* Okumalar sırayla yürür; aynı model turu ortak SQL
+  görüntüsü değildir. Toplam aynı nüfusun sonraki okumasıyla, kısmi satır
+  okuması yalnızca yeniden okuduğu kararlı kimliklerle, tam okuma aynı satır
+  nüfusunun bütünüyle önceki kanıtı eskiltir. Özellik sahibi ve anlamsal
+  taşıyıcı ortak kimliktir; açık boş değer önceki değeri eskiltir, yokluk ve
+  kısaltma eskiltmez. Gerçekten aynı maddileştirilmiş değerleri paylaşan
+  okumalar birbirini eskiltmez.
 - *Her bağ bir yükümlülüktür.* Bildirilen her `fields` bağı ve her ölçü/varlık
   bağı (ölçü sayısından bağımsız) karşılanmalıdır; boş çok değerli alan bir
   değerdir, alanın yokluğu ya da kısaltılmış kanıt değildir.
 - *Tamlık koleksiyona özgüdür.* Yineleme önizlemesi, baz plan listesi ve grup
   satırları kendi tamlık işaretleriyle değerlendirilir; liste iç içe
   koleksiyonun her somut kümesini kapsar.
+- *Yürütülebilirlik SQL'den önce kanıtlanır.* Tamamlanan istek aynı yetenek
+  denetiminden yeniden geçer. Sıralama ölçüsü/yönü nüfus sırasıyla uyuşur;
+  desteklenmeyen sıra reddedilir. Görev listesi aynı değer görüntüsünün
+  kesintisiz, tekil kimlikli imleç zinciriyle tamamlanır. Belleğe zaten alınan
+  iş yükü, analiz grupları ve hareket nüfusu kapsamlı isteklerde tam döner;
+  sonuç bütçesine sığmazsa kısmi kanıt yerine `RESULT_TOO_LARGE` döner.
+- *Toplam kökeni zorunludur.* Korumalı toplam üreticisi bütün katkıda bulunan
+  görev/proje çiftlerini `notePopulation` ile kaydeder; eksik ya da çelişkili
+  köken deftere alınmaz. Kimlikler yalnızca sunucuda kalır. Son teslim ve
+  yeniden açılış her katkıyı güncel üyelikle doğrular; değişmeyen proje
+  hibeleri taşınmış ya da silinmiş bir görevin eski toplamını korumaz.
 - *Derin bir doğrulama onarımı değildir.* Kanıt okunduysa devir yalnızca kanıt
   isteği doğrulayıcının kurallarıyla karşılayabiliyorsa, okunmadıysa ortak araç
   bütçesinden tur kalmışsa yapılır; kanıtsız devirde Derin yeniden planlar.

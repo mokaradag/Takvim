@@ -18,6 +18,7 @@ import {
   entityKey,
   factRow,
   factSuperseded,
+  collectionDomain,
   listCollections,
   parentProperty,
   presentCollection,
@@ -39,6 +40,8 @@ import { parseToolArguments } from './toolArguments.js';
 import { invalidArguments } from './toolErrors.js';
 import { getRotaTool, toolCatalogForModel } from './toolRegistry.js';
 import { containmentText } from './toolScope.js';
+import { MIN_DIRECTORY_QUERY_LENGTH } from '../../directory/directorySearch.js';
+import { effectivePageSize } from './rota/rotaToolSupport.js';
 import {
   declaredFacets,
   familyKeys,
@@ -219,7 +222,7 @@ export function metricIdHints(problems, raw) {
 
 /**
  * Bildirimin kullanıcının adlandırdığı kayıtları: metni kullanıcının iletisinde geçen
- * varlık adları ve görev başlığı metni. Bir tur boyunca birikir (reddedilen bildirimler dâhil).
+ * varlık adları ve görev başlığı metni. Yalnızca kabul edilen istekler birikir.
  */
 export function namedScope(scope, raw, textTrusted) {
   const texts = [...(Array.isArray(raw?.entities) ? raw.entities.map((entity) => entity?.text) : []), raw?.filters?.text];
@@ -334,6 +337,15 @@ const NAME_SEARCHES = Object.freeze({ project: ['rota_project_search', 'resoluti
 /** Kullanıcının yazdığı adın ilk sözcüğü: tam ad hiçbir kayda uymazsa yoklama araması bununla yapılır. */
 const probeText = (entity) => String(entity.query || entity.text || '').trim().split(/\s+/)[0] || '';
 
+function probeCall(entity) {
+  const search = NAME_SEARCHES[entity.type]?.[0];
+  if (!search) return null;
+  const text = probeText(entity);
+  if (entity.type === 'person' && text.length < MIN_DIRECTORY_QUERY_LENGTH && parseSicil(text) == null) return null;
+  try { return { name: search, args: parseToolArguments(getRotaTool(search).parameters, JSON.stringify({ text })) }; }
+  catch { return null; }
+}
+
 /** Bu metinle koşulsuz tam ad araması yapıldı ve hiçbir görünür kayda uymadı mı? */
 function searchedNone(entries, type, text) {
   const [search, field] = NAME_SEARCHES[type] || [];
@@ -350,7 +362,8 @@ export function nameProbes(request, entries, selection = null) {
   return bindRequestEntities(request, entries, selection).flatMap((entity) => {
     const probe = probeText(entity);
     if (entity.bound || !entity.text || !searchedNone(entries, entity.type, entity.text) || containmentText(probe) === entity.text) return [];
-    return [{ name: NAME_SEARCHES[entity.type][0], args: { text: probe } }];
+    const call = probeCall(entity);
+    return call ? [call] : [];
   });
 }
 
@@ -360,7 +373,7 @@ export function nameProbes(request, entries, selection = null) {
  */
 export function unmatchedEntities(request, entries, selection = null) {
   return bindRequestEntities(request, entries, selection).filter((entity) => !entity.bound && entity.text && searchedNone(entries, entity.type, entity.text)
-    && searchedNone(entries, entity.type, containmentText(probeText(entity))));
+    && (!probeCall(entity) || searchedNone(entries, entity.type, containmentText(probeText(entity)))));
 }
 
 /* ── Kanıtın nüfus dizini ─────────────────────────────────── */
@@ -374,14 +387,17 @@ export function unmatchedEntities(request, entries, selection = null) {
 export function requestEvidence(request, entries, today) {
   const active = Object.entries(request.filters).filter(([, value]) => value != null).map(([key]) => key);
   const index = new Map();
-  for (const [ordinal, { id, tool, args = {}, payload, round = null }] of entries.entries()) {
+  for (const [ordinal, { id, tool, args = {}, payload, round = null, snapshot = null }] of entries.entries()) {
     const agreement = populationAgreement(request, tool, args, today);
     index.set(id, {
       id,
       tool,
       ordinal,
       round: round ?? ordinal,
+      snapshot,
       args,
+      effectiveLimit: effectivePageSize(getRotaTool(tool).parameters.properties.limit, args),
+      pageMaximum: getRotaTool(tool).parameters.properties.limit?.maximum,
       snapshotDimensions: agreement.dimensions,
       facts: payload?.data ? createEvidenceFacts(payload, { prefix: payload.factScope || id }) : [],
       envelope: payload,
@@ -474,7 +490,7 @@ function eligibleFacts(request, source, metric, evidence, bound) {
       if (request.operation === 'value' && row?.kind === 'row') return false;
     }
     if (sourceCollections(source) && row?.kind === 'row' && !sourceCollections(source).includes(row.canonical)) return false;
-    return !factSuperseded(evidence, source, fact, { property: owner ? [owner.type, entityKey(owner.type, owner.bound)] : null });
+    return !factSuperseded(evidence, source, fact, { property: owner ? [owner.type, entityKey(owner.type, owner.bound)] : null, rows: request.operation !== 'value' });
   });
 }
 
@@ -501,15 +517,13 @@ function declaredCollections(request) {
 /** Kanıttaki her bildirilen koleksiyon tam mı (en az biri bulunmalı)? Tek koleksiyonda koleksiyonun tamlığıdır. */
 function listedCompletely(source, lists) {
   if (lists.length === 1) return collectionComplete(source, lists[0]);
-  const present = lists.filter((canonical) => presentCollection(source.envelope, canonical));
-  return present.length > 0 && present.every((canonical) => collectionComplete(source, canonical));
+  return lists.length > 0 && lists.every((canonical) => presentCollection(source.envelope, canonical) && collectionComplete(source, canonical));
 }
 
 /** Kanıt bildirilen koleksiyonların hepsinin boş olduğunu kanıtlıyor mu? */
 function listProvenEmpty(source, lists) {
   if (lists.length === 1) return provesEmptyCollection(source, lists[0]);
-  const present = lists.filter((canonical) => presentCollection(source.envelope, canonical));
-  return present.length > 0 && present.every((canonical) => provesEmptyCollection(source, canonical));
+  return lists.length > 0 && lists.every((canonical) => provesEmptyCollection(source, canonical));
 }
 
 /* ── İstekten türetilen olgu seçimi ───────────────────────── */
@@ -558,7 +572,7 @@ function rowSelection(request, source, evidence, bound, sources, readiness = fal
     || source.unsupported.length || sortedJson(source.facets) !== sortedJson(source.declared)) return null;
   if (request.population.collection) return collectionSelection(request, source, evidence, bound, sources, request.population.collection, [], readiness);
   // Birden çok koleksiyonlu liste: kanıttaki her bildirilen koleksiyon ayrı ayrı (boşsa boş olarak) seçilir.
-  const lists = (declaredCollections(request) || []).filter((canonical) => presentCollection(source.envelope, canonical));
+  const lists = declaredCollections(request) || [];
   if (request.operation !== 'list' || !lists.length) return null;
   const parts = lists.map((canonical) => collectionSelection(request, source, evidence, bound, sources, canonical, lists, readiness));
   if (parts.some((facts) => !facts)) return null;
@@ -617,7 +631,8 @@ function collectionSelection(request, source, evidence, bound, sources, canonica
   }
   if (!fields.length) return null;
   const rank = request.operation === 'rank';
-  if (!rank && !collectionComplete(source, canonical)) return null;
+  const domain = !rank ? collectionDomain([source, ...sources], canonical) : null;
+  if (!rank && !domain?.complete) return null;
   // Aynı nüfusun daha yeni tam okuması bu satırların yerine geçer.
   if ([...evidence.values()].some((newer) => readLater(newer, source) && newer.tool === source.tool
     && rowKey(newer, canonical) === rowKey(source, canonical) && collectionComplete(newer, canonical))) return null;
@@ -647,7 +662,7 @@ function collectionSelection(request, source, evidence, bound, sources, canonica
     }
     return facts.length ? facts : null;
   }
-  for (const item of concreteCollections(source.envelope, canonical)) {
+  for (const member of domain.sources) for (const item of concreteCollections(member.envelope, canonical)) {
     if (!item.rows.length) continue;
     let indexes = item.rows.map((_, index) => index);
     if (!indexes?.length) return null;
@@ -655,8 +670,8 @@ function collectionSelection(request, source, evidence, bound, sources, canonica
     for (const relative of relatives) {
       // Bütün satırlarda boş olan çok değerli alanın deseni olgu seçmez; satırlar alanı boş değeriyle taşır.
       const references = indexes.map((index) => `${item.collection}.${index}.${relative}`)
-        .filter((pattern) => source.facts.some((fact) => fieldPatternCovers(pattern, fact.field)));
-      facts.push(...references.map((pattern) => `${source.id}:${pattern}`));
+        .filter((pattern) => member.facts.some((fact) => fieldPatternCovers(pattern, fact.field)));
+      facts.push(...references.map((pattern) => `${member.id}:${pattern}`));
     }
   }
   return facts.length ? facts : null;

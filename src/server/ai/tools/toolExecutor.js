@@ -7,6 +7,7 @@ import { isTurnFatal, TOOL_ERROR_CODES, ToolError, toToolError } from './toolErr
 import { TOOL_LIMITS } from './toolLimits.js';
 import { getRotaTool } from './toolRegistry.js';
 import { fitToolResult } from './toolResultPolicy.js';
+import { completeReadRequired } from '../../../domain/ai/requestContract.js';
 import { claimableContract, projectEvidenceData } from '../../../domain/ai/claimableEvidence.js';
 import { trackResultText } from './toolResultText.js';
 
@@ -51,7 +52,8 @@ export function createToolExecutor({
   resolveTool = getRotaTool,
   onProgress = null,
   validateCall = null,
-  clock = Date.now
+  clock = Date.now,
+  request = () => null
 }) {
   const state = { calls: 0, resultBytes: 0, toolMs: 0, roundStartedAt: null, attempted: 0, failures: 0, rounds: 0 };
 
@@ -85,23 +87,26 @@ export function createToolExecutor({
     if (remaining < 250) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
     const deadline = createAiDeadline({ timeoutMs: remaining, parentSignal: typeof signal === 'function' ? signal() : signal, now: clock });
     const population = [];
+    let populationNoted = false;
+    let snapshot = null;
     const projectPopulation = [];
     try {
       const scoped = Object.freeze({
         sicil: context.sicil,
         today: context.today,
         now: context.now,
+        request: request(),
         signal: deadline.signal,
         authorization: () => context.authorization(deadline.signal),
         sql: (work) => context.sql(deadline.signal, work),
-        snapshot: (key, cursor, load) => context.snapshot(key, cursor, load),
-        notePopulation: (references) => { for (const reference of references) population.push(reference); },
+        snapshot: async (key, cursor, load) => { snapshot = await context.snapshot(key, cursor, load); return snapshot; },
+        notePopulation: (references) => { populationNoted = true; for (const reference of references) population.push(reference); },
         noteProjects: (projectIds) => { projectPopulation.push(...projectIds); }
       });
       await context.authorization?.(deadline.signal);
       const outcome = await raceWithAbort(() => trackResultText(() => tool.handler(args, scoped),
         (data) => projectEvidenceData(data, args.textFields || [])), deadline.signal);
-      return { outcome, cacheKey, args, population, projectPopulation };
+      return { outcome, cacheKey, args, population: populationNoted ? population : null, projectPopulation, snapshot };
     } catch (error) {
       const failure = deadline.failure();
       if (failure?.code === AI_ERROR_CODES.AI_CANCELLED) throw failure;
@@ -174,7 +179,8 @@ export function createToolExecutor({
         }
       }
     };
-    const workers = Array.from({ length: Math.min(limits.roundConcurrency, plans.length) }, () => worker());
+    // Okuma sırası tazelik sırasıdır; farklı SQL okumaları ortak an sayılmaz.
+    const workers = Array.from({ length: Math.min(1, plans.length) }, () => worker());
     const settled = await Promise.allSettled(workers);
     const fatal = settled.find((item) => item.status === 'rejected');
     if (fatal) throw fatal.reason;
@@ -196,7 +202,8 @@ export function createToolExecutor({
         content = JSON.stringify(errorEnvelope(name, result.error));
       } else {
         const envelope = envelopeFor(plan.tool, result.outcome, result.generatedAt, result.args);
-        const text = fitToolResult(envelope, limits.maxResultBytes - 64, ledger.factPrefix(), plan.tool.resultPolicy);
+        const policy = completeReadRequired(request(), plan.tool.name) ? { trim: [] } : plan.tool.resultPolicy;
+        const text = fitToolResult(envelope, limits.maxResultBytes - 64, ledger.factPrefix(), policy);
         if (!text) {
           code = TOOL_ERROR_CODES.RESULT_TOO_LARGE;
           content = JSON.stringify(errorEnvelope(name, new ToolError(code)));
@@ -221,10 +228,12 @@ export function createToolExecutor({
             scopedAuthorization: context.evidenceAuthorization?.(result.args, shrunk, result.projectPopulation) ?? null,
             populationReferences: result.population,
             args: result.args,
-            round: state.rounds
+            round: state.rounds,
+            snapshot: result.snapshot
           });
           content = JSON.stringify({ ...shrunk, evidenceId: id });
           if (id) ledger.attachPayload(id, content);
+          else { code = TOOL_ERROR_CODES.RESULT_TOO_LARGE; content = JSON.stringify(errorEnvelope(name, new ToolError(code))); }
         }
       }
       const budgeted = fitWithinResultBudget(content, name);

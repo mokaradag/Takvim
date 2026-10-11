@@ -706,3 +706,40 @@ test('ağ geçidinin kaydettiği tur hatası ikinci bir işletim olayı üretmez
   assert.equal(logs.filter((line) => line.includes('ai.assistant.turn')).length, 0);
   assert.equal(aiTelemetrySnapshot().assistantTurns.failed, 1);
 });
+
+test('delivery backpressure has its own bounded clock even when generation stall is shorter', async (t) => {
+  holdLoop(t);
+  const { turn, released } = fakeTurn();
+  let failure;
+  const response = assistantStreamResponse(turn, { keepaliveMs: 5, stallMs: 20, graceMs: 30, deliveryTimeoutMs: 80,
+    generate: async (_turn, { onText }) => {
+      try { for (let index = 0; ; index += 1) await onText(`parça ${index}`); }
+      catch (error) { failure = error; throw error; }
+    } });
+  for (let index = 0; !released() && index < 100; index += 1) await pause(5);
+  assert.equal(released(), 1);
+  assert.equal(failure?.details?.reason, 'DELIVERY_STALLED');
+  await response.body.cancel();
+});
+
+test('hidden progress keeps generation alive without queuing frames for a backed-up reader', async (t) => {
+  holdLoop(t);
+  const { turn, released } = fakeTurn();
+  const { QUEUE_HIGH_WATER_MARK } = await import('../src/server/ai/assistant/assistantStreamResponse.js');
+  let produced = 0;
+  let complete;
+  const response = assistantStreamResponse(turn, { keepaliveMs: 5, stallMs: 30, progressEventMs: 1,
+    generate: async (_turn, { onProgress }) => {
+      for (let index = 0; index < QUEUE_HIGH_WATER_MARK * 4; index += 1) { await pause(2); onProgress(); produced += 1; }
+      await new Promise((resolve) => { complete = resolve; });
+      return finalAnswer(turn);
+    } });
+  while (!complete) await pause(5);
+  assert.equal(produced, QUEUE_HIGH_WATER_MARK * 4);
+  assert.equal(released(), 0, 'görünmeyen ilerleme canlıdır');
+  complete();
+  const events = parseSseText(await response.text()).events;
+  assert.ok(events.filter((event) => event.event === 'progress').length < QUEUE_HIGH_WATER_MARK);
+  assert.equal(events.at(-1).event, 'done');
+  assert.equal(released(), 1);
+});

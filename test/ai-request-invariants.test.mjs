@@ -23,6 +23,10 @@ const { getRotaTool } = await import('../src/server/ai/tools/toolRegistry.js');
 const requestDeclarationModule = await import('../src/server/ai/tools/requestDeclaration.js');
 const { parseToolArguments } = await import('../src/server/ai/tools/toolArguments.js');
 
+const populationModule = await import('../src/domain/ai/evidencePopulation.js');
+
+const claimableVocabulary = await import('../src/domain/ai/claimableEvidence.js');
+
 const stackFor = (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
   return createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed() });
@@ -56,7 +60,7 @@ test('the plan completes undeclared population dimensions and filters from its o
   const cases = [
     { raw: { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search' } }, calls: [['rota_task_search', { deadline: 'overdue', assignee: 'me' }]],
       expect: (request) => assert.deepEqual([request.filters, request.population.collection, request.population.sort], [{ deadline: 'overdue', assignee: 'me' }, 'tasks', 'overdue_days_desc']) },
-    { raw: { operation: 'list', metrics: ['wbs.name'], population: { tool: 'rota_wbs_inspect', collection: 'nodes' }, entities: [{ type: 'project', id: PROJECTS.FULL }] },
+    { raw: { operation: 'list', metrics: ['wbs.name'], fields: [{ metric: 'wbs.name', tool: 'rota_wbs_inspect', path: 'data.nodes.*.name' }], population: { tool: 'rota_wbs_inspect', collection: 'nodes' }, entities: [{ type: 'project', id: PROJECTS.FULL }] },
       calls: [['rota_wbs_inspect', { projectId: PROJECTS.FULL }]], expect: (request) => assert.equal(request.population.depth, 2, 'varsayılan derinlik açık değer olur') },
     { raw: { operation: 'list', metrics: ['tasks.open'], population: { tool: 'rota_task_analytics', collection: 'groups' } }, calls: [['rota_task_analytics', { groupBy: 'priority' }]],
       expect: (request) => assert.equal(request.population.groupBy, 'priority') },
@@ -305,7 +309,7 @@ test('a scalar combined with rows must count that exact row collection in the sa
   const tasks = source('rota_task_search', { tasks: [{ taskId: 't1', title: 'Bir' }] }, { collection: 'tasks', envelope: { totalCount: 1 } });
   assert.equal(issue(verify([tasks], { operation: 'list', metrics: ['tasks.total', 'task.title'] }, ['R1:totalCount', 'R1:data.tasks.*.title'])), null);
   // Aynı turdaki eşdeğer okuma: tazelik değil, sayımın hangi satırlara ait olduğu belirleyicidir.
-  const other = source('rota_task_search', { tasks: [] }, { id: 'R2', round: 1, collection: 'tasks', envelope: { totalCount: 7 } });
+  const other = source('rota_task_search', { tasks: [] }, { id: 'R2', round: 0, facets: { text: 'başka' }, collection: 'tasks', envelope: { totalCount: 7 } });
   assert.equal(issue(verify([tasks, other], { operation: 'list', metrics: ['tasks.total', 'task.title'] }, ['R2:totalCount', 'R1:data.tasks.*.title'])), 'POPULATION_MISMATCH',
     'başka kanıtın toplamı bu satırların sayısı değildir');
 });
@@ -323,8 +327,8 @@ test('freshness follows the carrier class and the canonical population, never th
     { name: 'later complete snapshot', sources: [rows(1, 1), rows(2, 2)], refs: ['R1:data.tasks.*.title'], expected: 'STALE_EVIDENCE' },
     // Farklı sırayla okunan tam liste başka bir satır nüfusudur (#22).
     { name: 'later complete with another sort', sources: [rows(1, 1), rows(2, 2, { snapshotDimensions: { sort: 'updated_desc', textFields: [] } })], refs: ['R1:data.tasks.*.title'], expected: null },
-    // Aynı turdaki eşdeğer okumalar aynı andır.
-    { name: 'same round equivalent', sources: [rows(1, 1), rows(2, 1)], refs: ['R1:data.tasks.*.title'], expected: null }
+    // Tur numarası anlık görüntü değildir; ayrı okumalar sırayla yenilenir.
+    { name: 'same round serialized reads', sources: [rows(1, 1), rows(2, 1)], refs: ['R1:data.tasks.*.title'], expected: 'STALE_EVIDENCE' }
   ];
   for (const { name, sources, refs, expected } of table) assert.equal(issue(verify(sources, list, refs)), expected, name);
   // Toplam her sayfada kesindir: daha yeni (kısmi de olsa) okuma eski toplamın yerine geçer.
@@ -365,6 +369,18 @@ test('server selection honors bindings and the indexed arguments; Deep readiness
   const list = parsedRequest({ operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks', sort: 'target_finish_asc' } });
   assert.equal(requestEvidenceReady(list, sorted.ledger.requestEntries(), REQUEST_TODAY), false);
   assert.equal(requestEvidenceReady({ ...list, population: { ...list.population, sort: 'updated_desc' } }, sorted.ledger.requestEntries(), REQUEST_TODAY), true);
+  const rank = parsedRequest({ operation: 'rank', metrics: ['task.updatedAt', 'task.title'],
+    population: { tool: 'rota_task_search', collection: 'tasks', sort: 'updated_desc' }, rank: { metric: 'task.updatedAt', order: 'desc', limit: 1 } });
+  assert.deepEqual(complete(rank, []).problems, []);
+  assert.equal(requestEvidenceReady(rank, sorted.ledger.requestEntries(), REQUEST_TODAY), true);
+  const [ranked] = requestSelections(rank, sorted.ledger.requestEntries(), null, REQUEST_TODAY);
+  assert.equal(issue(verifyRequested(sorted.ledger, JSON.parse(ranked).facts, rank)), null);
+  const flags = parsedRequest({ operation: 'list', metrics: ['task.milestone', 'task.overdue'],
+    population: { tool: 'rota_task_search', collection: 'tasks', sort: 'updated_desc' } });
+  const [selected] = requestSelections(flags, sorted.ledger.requestEntries(), null, REQUEST_TODAY);
+  const rendered = verifyRequested(sorted.ledger, JSON.parse(selected).facts, flags);
+  assert.equal(issue(rendered), null);
+  assert.doesNotMatch(rendered.normalized, /Belirtilmemiş/);
 });
 
 /* ── Zayıf model protokolü: biçim toleransı ve sunucu seçimi ── */
@@ -502,7 +518,7 @@ test('a depth-limited WBS listing is the complete population of that depth and i
   const [entry] = ledger.requestEntries();
   assert.deepEqual([entry.payload.complete, entry.payload.totalCount, entry.payload.data.nodeCount, entry.payload.data.deeperNodes], [true, 2, 2, true],
     'derinlik nüfusun boyutudur; daha derin düğümler yalnızca not edilir');
-  const counted = { operation: 'list', metrics: ['wbs.nodes', 'wbs.name'], population: { tool: 'rota_wbs_inspect', collection: 'nodes', depth: 2 },
+  const counted = { operation: 'list', metrics: ['wbs.nodes', 'wbs.name'], fields: ['name', 'code'].map((field) => ({ metric: 'wbs.name', tool: 'rota_wbs_inspect', path: `data.nodes.*.${field}` })), population: { tool: 'rota_wbs_inspect', collection: 'nodes', depth: 2 },
     entities: [{ type: 'project', id: PROJECTS.FULL }] };
   const verdict = verifyRequested(ledger, ['R1:data.nodeCount', 'R1:data.nodes.*.name', 'R1:data.nodes.*.code'], counted);
   assert.equal(issue(verdict), null);
@@ -577,6 +593,7 @@ test('distinct name and code carriers are server-selected when explicitly bound;
   const list = parsedRequest({ operation: 'list', metrics: ['task.title', 'task.project'], population: { tool: 'rota_task_search', collection: 'tasks', sort: 'overdue_days_desc' },
     filters: { deadline: 'overdue', assignee: 'me' }, fields: ['name', 'code'].map((field) => ({ metric: 'task.project', tool: 'rota_task_search', path: `data.tasks.*.project.${field}` })) });
   assert.deepEqual(requestSelections({ ...list, fields: [] }, ledger.requestEntries(), null, REQUEST_TODAY), []);
+  assert.ok(complete({ ...list, fields: [] }, []).problems.includes('$.fields:required'));
   const [candidate] = requestSelections(list, ledger.requestEntries(), null, REQUEST_TODAY);
   assert.ok(JSON.parse(candidate).facts.includes('R1:data.tasks.*.project.name'));
   assert.ok(JSON.parse(candidate).facts.includes('R1:data.tasks.*.project.code'));
@@ -584,25 +601,27 @@ test('distinct name and code carriers are server-selected when explicitly bound;
   const wbs = await callRotaTool(stack, AYSE, 'rota_wbs_inspect', { projectId: PROJECTS.FULL, depth: 4 });
   const nodes = parsedRequest({ operation: 'list', metrics: ['wbs.name'], entities: [{ type: 'project', id: PROJECTS.FULL }], population: { tool: 'rota_wbs_inspect', collection: 'nodes', depth: 4 }, fields: ['name', 'code'].map((field) => ({ metric: 'wbs.name', tool: 'rota_wbs_inspect', path: `data.nodes.*.${field}` })) });
   assert.deepEqual(requestSelections({ ...nodes, fields: [] }, wbs.ledger.requestEntries(), null, REQUEST_TODAY), []);
+  assert.ok(complete({ ...nodes, fields: [] }, []).problems.includes('$.fields:required'));
   assert.deepEqual(requestSelections(nodes, wbs.ledger.requestEntries(), null, REQUEST_TODAY).map((item) => JSON.parse(item).facts),
     [['R1:data.nodes.*.name', 'R1:data.nodes.*.code']], 'düğüm adı ve kodu ayrı açık alanlardır');
 });
 
-const entriesOf = (sources) => sources.map((item) => ({ id: item.id, tool: item.tool, args: item.args || {}, payload: item.envelope, round: item.round }));
+const entriesOf = (sources) => sources.map((item) => ({ id: item.id, tool: item.tool, args: item.args || {}, payload: item.envelope, round: item.round, snapshot: item.snapshot }));
 
 function agreement(raw, sources, expected, references = null) {
   const request = parsedRequest(raw);
   const entries = entriesOf(sources);
-  const evidence = requestEvidence(request, entries, REQUEST_TODAY);
+  const boundRequest = { ...request, entities: requestDeclarationModule.bindRequestEntities(request, entries) };
+  const evidence = requestEvidence(boundRequest, entries, REQUEST_TODAY);
   const selected = requestSelections(request, entries, null, REQUEST_TODAY);
   assert.equal(selected.length > 0, expected, 'sunucu seçimi');
   assert.equal(requestEvidenceReady(request, entries, REQUEST_TODAY), expected, 'Derin hazırlık');
   for (const candidate of selected) {
-    assert.equal(analyzeGroundedAnswer(candidate, { request, evidence, evidenceIds: sources.map((item) => item.id),
+    assert.equal(analyzeGroundedAnswer(candidate, { request: boundRequest, evidence, evidenceIds: sources.map((item) => item.id),
       evidencePayloads: sources.map((item) => ({ id: item.id, payload: JSON.stringify(item.envelope) })) }).ok, true, 'aynı seçim doğrulanır');
   }
-  if (references) assert.equal(verify([...evidence.values()], request, references).ok, expected, 'aynı kanıt doğrulanır');
-  return selected.map((candidate) => analyzeGroundedAnswer(candidate, { request, evidence, evidenceIds: sources.map((item) => item.id),
+  if (references) assert.equal(verify([...evidence.values()], boundRequest, references).ok, expected, 'aynı kanıt doğrulanır');
+  return selected.map((candidate) => analyzeGroundedAnswer(candidate, { request: boundRequest, evidence, evidenceIds: sources.map((item) => item.id),
     evidencePayloads: sources.map((item) => ({ id: item.id, payload: JSON.stringify(item.envelope) })) }));
 }
 
@@ -627,7 +646,6 @@ test('population identity matrix distinguishes membership from projection, scala
   assert.notEqual(rowKey(tasks, 'tasks'), rowKey({ ...tasks, snapshotDimensions: { sort: 'updated_desc' } }, 'tasks'));
 });
 
-const populationModule = await import('../src/domain/ai/evidencePopulation.js');
 
 test('workflow freshness and empty proofs use the same text membership matrix', () => {
   for (const searched of [false, true]) {
@@ -718,11 +736,12 @@ test('nested rank rendering preserves global order when concrete series interlea
 test('boundary ties larger than the maximum page verify only through a continuous population cursor chain', () => {
   const raw = { operation: 'rank', metrics: ['task.title', 'task.overdueDays', 'tasks.total'], rank: { metric: 'task.overdueDays', order: 'desc', limit: 1 },
     population: { tool: 'rota_task_search', collection: 'tasks', sort: 'overdue_days_desc' } };
-  const rows = Array.from({ length: 70 }, (_, index) => ({ title: `Eşit ${index}`, overdueDays: 7 }));
+  const snapshot = {};
+  const rows = Array.from({ length: 70 }, (_, index) => ({ taskId: `t${index}`, title: `Eşit ${index}`, overdueDays: 7 }));
   const args = { sort: 'overdue_days_desc', limit: 20 };
-  const first = source('rota_task_search', { tasks: rows.slice(0, 20) }, { args, envelope: { totalCount: 70, returnedCount: 20, complete: false, nextCursor: 'devam',
+  const first = source('rota_task_search', { tasks: rows.slice(0, 20) }, { args, snapshot, envelope: { totalCount: 70, returnedCount: 20, complete: false, nextCursor: 'devam',
     rankingBoundary: { collection: 'tasks', metric: 'task.overdueDays', order: 'desc', returnedCount: 20, nextValue: 7 } } });
-  const last = source('rota_task_search', { tasks: rows.slice(20) }, { id: 'R2', args: { ...args, cursor: 'devam', limit: 50 },
+  const last = source('rota_task_search', { tasks: rows.slice(20) }, { id: 'R2', snapshot, args: { ...args, cursor: 'devam', limit: 50 },
     envelope: { totalCount: 70, returnedCount: 50, nextCursor: null } });
   agreement(raw, [first], false);
   const [answer] = agreement(raw, [first, last], true);
@@ -736,7 +755,8 @@ test('readiness preserves a complete rank beside a partial page in the same roun
   const { ledger } = await callRotaTools(stackFor(t), AYSE, [['rota_person_search', { text: 'Ayşe Yılmaz' }], ['rota_task_search', { personSicil: AYSE }], ['rota_task_search', { personSicil: AYSE, limit: 5 }]]);
   const raw = { operation: 'rank', metrics: ['task.targetFinish', 'task.status'], rank: { metric: 'task.targetFinish', order: 'asc', limit: 1 },
     population: { tool: 'rota_task_search', collection: 'tasks' }, entities: [{ type: 'person', text: 'Ayşe Yılmaz' }] };
-  assert.equal(verifyRequested(ledger, ['R2:data.tasks.0.targetFinish', 'R2:data.tasks.0.status'], raw).ok, true);
+  const verdict = verifyRequested(ledger, ['R2:data.tasks.0.targetFinish', 'R2:data.tasks.0.status'], raw);
+  assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
   assert.equal(requestEvidenceReady(parsedRequest(raw), ledger.requestEntries(), REQUEST_TODAY), true);
   assert.equal(requestSelections(parsedRequest(raw), ledger.requestEntries(), null, REQUEST_TODAY).length > 0, true);
 });
@@ -781,7 +801,7 @@ test('row-only value declarations reject even one collection or an explicit row 
     assert.ok(result.problems.some((problem) => /:rows|:entity/.test(problem)), metric);
     const path = claimableVocabulary.metricPaths(tool, metric).find((candidate) => candidate.startsWith(`data.${collection}.`));
     assert.ok(complete({ ...raw, fields: [{ metric, tool, path }] }, [[tool, args]]).problems.some((problem) => /:rows|:entity/.test(problem)), `${metric} bound row`);
-    assert.deepEqual(complete({ ...raw, operation: 'list' }, [[tool, args]]).problems, [], `${metric} list`);
+    assert.deepEqual(complete({ ...raw, operation: 'list', fields: [{ metric, tool, path }] }, [[tool, args]]).problems, [], `${metric} list`);
   }
   assert.deepEqual(complete({ operation: 'value', metrics: ['task.title'], population: { tool: 'rota_task_search' }, entities: [{ type: 'task', text: 'Radar test planı' }] }, []).problems, []);
 });
@@ -826,7 +846,6 @@ test('a subscription property is a unique task-bound value, while an account-wid
   assert.equal(verify(sources, { ...request, entities: [{ type: 'task', bound: TASKS.OVERDUE }] }, JSON.parse(selection).facts).ok, false);
 });
 
-const claimableVocabulary = await import('../src/domain/ai/claimableEvidence.js');
 
 test('semantic carrier matrix preserves equal-valued subdimensions and collapses only true aliases', () => {
   const cases = [
@@ -866,7 +885,10 @@ test('cross-tool own-property freshness compares semantic property and owner, pr
   assert.equal(verify([old, later], request, ['R1:data.projects.0.access']).ok, true);
   const organization = source('rota_person_search', { people: [{ sicil: 1, organization: { department: 'A' } }] });
   const unit = source('rota_person_search', { people: [{ sicil: 1, organization: { unit: 'A' } }] }, { id: 'R2' });
-  assert.equal(verify([organization, unit], { operation: 'value', metrics: ['person.organization'], entities: [{ type: 'person', bound: '1' }] }, ['R1:data.people.0.organization.department']).ok, true);
+  const department = { operation: 'value', metrics: ['person.organization'], population: { tool: 'rota_person_search' }, fields: [{ metric: 'person.organization', tool: 'rota_person_search', path: 'data.people.*.organization.department' }], entities: [{ type: 'person', bound: '1' }] };
+  assert.equal(issue(verify([organization, unit], department, ['R1:data.people.0.organization.department'])), 'STALE_EVIDENCE', 'yazılan organizasyon nesnesinde olmayan düzey sözleşmeye göre boştur');
+  delete unit.envelope.data.people[0].organization;
+  assert.equal(verify([organization, unit], department, ['R1:data.people.0.organization.department']).ok, true, 'organizasyon nesnesinin yokluğu boş düzey değildir');
 });
 
 test('later pages preserve exact scalar selection while metric-aware grouping controls freshness', () => {
@@ -890,4 +912,187 @@ test('historical incompleteness invalidates completion properties without invali
   agreement({ operation: 'list', metrics: ['recurrence.lastCompletedFinish'], population: { tool: item.tool, collection: 'series' } }, [item], false, ['R1:data.series.*.lastCompleted.actualFinish']);
   item.envelope.data.series[0].completionDatesComplete = true;
   agreement({ operation: 'list', metrics: ['recurrence.lastCompletedFinish'], population: { tool: item.tool, collection: 'series' } }, [item], true);
+});
+
+/* Aynı arıza ve komşu karşı örnek: ortak değişmezler. */
+test('partial rereads stale only the same stable row and semantic property, including explicit empty values', () => {
+  const old = source('rota_task_search', { tasks: [{ taskId: 'a', title: 'A', status: 'todo', assignees: [{ name: 'Alice' }] },
+    { taskId: 'b', title: 'B', status: 'todo', assignees: [{ name: 'Bob' }] }] }, { envelope: { totalCount: 2 } });
+  const latest = source('rota_task_search', { tasks: [{ taskId: 'a', title: 'A', status: 'in_progress', assignees: [] }] },
+    { id: 'R2', firstPage: false, envelope: { complete: false, truncated: true, totalCount: 2 } });
+  const request = { operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', bound: 'a' }] };
+  assert.equal(issue(verify([old, latest], request, ['R1:data.tasks.0.status'])), 'STALE_EVIDENCE');
+  assert.equal(verify([old, latest], { ...request, entities: [{ type: 'task', bound: 'b' }] }, ['R1:data.tasks.1.status']).ok, true);
+  assert.equal(verify([old, latest], request, ['R2:data.tasks.0.status']).ok, true);
+  assert.equal(issue(verify([old, latest], { ...request, metrics: ['task.assignees'] }, ['R1:data.tasks.0.assignees.0.name'])), 'STALE_EVIDENCE');
+  delete latest.envelope.data.tasks[0].assignees;
+  assert.equal(verify([old, latest], { ...request, metrics: ['task.assignees'] }, ['R1:data.tasks.0.assignees.0.name']).ok, true, 'yokluk açık boşluk değildir');
+  latest.envelope.data.tasks[0].status = 'todo';
+  assert.equal(issue(verify([old, latest], request, ['R1:data.tasks.0.status'])), 'STALE_EVIDENCE', 'değişmeyen yetkili tekrar da eski kaydı yeniler');
+});
+
+test('only a real shared value snapshot makes same-round reads interchangeable', () => {
+  const snapshot = {};
+  const a = source('rota_task_analytics', { totals: { total: 2 } }, { round: 1, snapshot });
+  const b = source('rota_task_analytics', { totals: { total: 2 } }, { id: 'R2', round: 1, snapshot });
+  const request = { operation: 'value', metrics: ['tasks.total'] };
+  assert.equal(verify([a, b], request, ['R1:data.totals.total']).ok, true);
+  b.snapshot = {};
+  b.envelope.data.totals.total = 3;
+  assert.equal(issue(verify([a, b], request, ['R1:data.totals.total'])), 'STALE_EVIDENCE');
+});
+
+test('semantic aliases share the owner while project code and recurrence description remain separate', () => {
+  const old = source('rota_task_detail', { task: { project: { name: 'Eski', code: 'K1' }, recurrence: { rule: 'R1', ruleDescription: 'D1' } } },
+    { selectors: [{ type: 'task', id: 'a' }] });
+  const search = source('rota_recurrence_inspect', { series: [{ templateTaskId: 'a', project: 'Yeni' }] }, { id: 'R2' });
+  const request = { operation: 'value', metrics: ['task.project'], entities: [{ type: 'task', bound: 'a' }],
+    fields: [{ metric: 'task.project', tool: old.tool, path: 'data.task.project.name' }] };
+  assert.equal(issue(verify([old, search], request, ['R1:data.task.project.name'])), 'STALE_EVIDENCE');
+  assert.equal(verify([old, search], { ...request, fields: [{ ...request.fields[0], path: 'data.task.project.code' }] }, ['R1:data.task.project.code']).ok, true);
+  const series = source('rota_recurrence_inspect', { series: { templateTaskId: 'a', rule: 'R2' } }, { id: 'R3', selectors: [{ type: 'task', id: 'a' }] });
+  const recurring = { operation: 'value', metrics: ['recurrence.rule'], entities: request.entities,
+    fields: [{ metric: 'recurrence.rule', tool: old.tool, path: 'data.task.recurrence.rule' }] };
+  assert.equal(issue(verify([old, series], recurring, ['R1:data.task.recurrence.rule'])), 'STALE_EVIDENCE');
+  assert.equal(verify([old, series], { ...recurring, fields: [{ ...recurring.fields[0], path: 'data.task.recurrence.ruleDescription' }] }, ['R1:data.task.recurrence.ruleDescription']).ok, true);
+  series.selectors = [{ type: 'task', id: 'occurrence' }];
+  assert.equal(issue(verify([old, series], recurring, ['R1:data.task.recurrence.rule'])), 'STALE_EVIDENCE', 'yineleme seçicisi şablonun sahibi değildir');
+  series.selectors = [{ type: 'task', id: 'a' }];
+  series.envelope.data.series.templateTaskId = 'other-template';
+  assert.equal(verify([old, series], recurring, ['R1:data.task.recurrence.rule']).ok, true, 'başka şablon aynı seçiciyle eski özelliği eskiltmez');
+});
+
+test('preflight rejects unsortable requests and requires bounded complete reads for capped populations', () => {
+  const rank = { operation: 'rank', metrics: ['task.progressPercent'], rank: { metric: 'task.progressPercent', order: 'desc', limit: 1 },
+    population: { tool: 'rota_task_search', collection: 'tasks' } };
+  assert.ok(complete(rank, []).problems.includes('$.rank:ordering'));
+  const dated = { ...rank, metrics: ['task.targetFinish'], rank: { metric: 'task.targetFinish', order: 'asc', limit: 1 } };
+  assert.deepEqual(complete(dated, []).problems, []);
+  assert.ok(complete({ ...dated, population: { ...dated.population, sort: 'updated_desc' } }, []).problems.includes('$.rank:ordering'));
+  assert.deepEqual(complete({ operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'assignee' } }, []).problems, []);
+  assert.deepEqual(complete({ operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'priority' } }, []).problems, []);
+  assert.deepEqual(complete({ operation: 'list', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary', collection: 'people' } }, []).problems, []);
+});
+
+test('project and person are conjunctive selectors; repeated project owners remain a bound comparison', async (t) => {
+  const request = { operation: 'value', metrics: ['tasks.total', 'tasks.plannedHours'], population: { tool: 'rota_task_analytics' },
+    entities: [{ type: 'project', id: PROJECTS.FULL }, { type: 'person', id: String(AYSE) }] };
+  assert.deepEqual(complete(request, [['rota_task_analytics', { projectId: PROJECTS.FULL, personSicil: AYSE }]]).problems, []);
+  const read = await callRotaTool(stackFor(t), AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, personSicil: AYSE });
+  assert.equal(verifyRequested(read.ledger, ['R1:data.totals.total', 'R1:data.hours.plannedHours.total'], request).ok, true);
+  const comparison = { ...request, entities: [{ type: 'project', id: PROJECTS.FULL }, { type: 'project', id: PROJECTS.READ }] };
+  assert.ok(complete(comparison, []).problems.includes('$.bindings:required'));
+});
+
+test('own project properties accompany filtered lists and ranks without inheriting task filters', () => {
+  for (const operation of ['list', 'rank']) {
+    const request = { operation, metrics: ['task.status', 'project.access'], filters: { status: ['todo'] },
+      entities: [{ type: 'project', id: PROJECTS.FULL }], population: { tool: 'rota_task_search', collection: 'tasks' },
+      fields: [{ metric: 'project.access', tool: 'rota_project_detail', path: 'data.access.level' }],
+      ...(operation === 'rank' ? { metrics: ['task.targetFinish', 'project.access'], rank: { metric: 'task.targetFinish', order: 'asc', limit: 1 } } : {}) };
+    assert.deepEqual(complete(request, []).problems, []);
+  }
+});
+
+test('list and rank chains require a shared value snapshot, stable row IDs and every declared sibling', () => {
+  const snapshot = {};
+  const rows = [{ taskId: TASKS.OVERDUE, title: 'A', targetFinish: '2026-10-01' }, { taskId: TASKS.DUE_SOON, title: 'B', targetFinish: '2026-10-02' }];
+  const first = source('rota_task_search', { tasks: rows.slice(0, 1) }, { snapshot, args: { limit: 1 },
+    envelope: { totalCount: 2, returnedCount: 1, complete: false, truncated: true, nextCursor: 'next' } });
+  const last = source('rota_task_search', { tasks: rows.slice(1) }, { id: 'R2', snapshot, args: { limit: 1, cursor: 'next' },
+    envelope: { totalCount: 2, returnedCount: 1, nextCursor: null } });
+  const raw = { operation: 'list', metrics: ['task.title', 'task.targetFinish'], population: { tool: first.tool, collection: 'tasks' } };
+  agreement(raw, [first, last], true);
+  last.snapshot = {};
+  agreement(raw, [first, last], false);
+  last.snapshot = snapshot;
+  last.envelope.data.tasks[0].taskId = TASKS.OVERDUE;
+  agreement(raw, [first, last], false);
+  const missing = source('rota_dependency_inspect', { predecessors: [{ taskId: TASKS.OVERDUE, title: 'A', type: 'FS' }] },
+    { args: { taskId: TASKS.DUE_SOON }, envelope: { totalCount: 1, returnedCount: 1 } });
+  const siblings = { operation: 'list', metrics: ['task.title', 'dependency.type'], entities: [{ type: 'task', id: TASKS.DUE_SOON }], population: { tool: missing.tool } };
+  agreement(siblings, [missing], false);
+  missing.envelope.data.successors = [];
+  agreement(siblings, [missing], true);
+  const nested = { tool: 'rota_recurrence_inspect', firstPage: true,
+    envelope: { complete: true, totalCount: 2, data: { series: [{ next: [], nextTruncated: false }, { nextTruncated: false }] } } };
+  assert.equal(populationModule.collectionComplete(nested, 'series.*.next'), false);
+  nested.envelope.data.series[1].next = [];
+  assert.equal(populationModule.collectionComplete(nested, 'series.*.next'), true);
+});
+
+test('all-empty meaningful alternatives require field bindings before SQL and remain distinct in all four layers', () => {
+  const item = source('rota_person_search', { people: [{ sicil: AYSE, name: 'Ayşe Yılmaz', organization: {} }] },
+    { args: { text: 'Ayşe Yılmaz' }, envelope: { totalCount: 1, returnedCount: 1 } });
+  const raw = { operation: 'list', metrics: ['person.name', 'person.organization'], filters: { text: 'Ayşe Yılmaz' }, population: { tool: item.tool, collection: 'people' } };
+  assert.ok(complete(raw, [[item.tool, item.args]]).problems.includes('$.fields:required'));
+  agreement(raw, [item], false);
+  const bound = { ...raw, fields: [{ metric: 'person.organization', tool: item.tool, path: 'data.people.*.organization.department' }] };
+  assert.deepEqual(complete(bound, [[item.tool, item.args]]).problems, []);
+  const [answer] = agreement(bound, [item], true);
+  assert.match(answer.normalized, /Müdürlük.*Belirtilmemiş/);
+  assert.doesNotMatch(answer.normalized, /Direktörlük|Birim/);
+});
+
+test('generated name probes obey the directory schema and skip one-letter first tokens', () => {
+  const request = parsedRequest({ operation: 'value', metrics: ['project.name'], entities: [{ type: 'project', text: 'A Projesi' }], population: { tool: 'rota_project_detail' } });
+  const item = source('rota_project_search', { matches: [], resolution: 'none' }, { args: { text: 'A Projesi' } });
+  assert.deepEqual(requestDeclarationModule.nameProbes(request, entriesOf([item])), []);
+  assert.equal(requestDeclarationModule.unmatchedEntities(request, entriesOf([item])).length, 1);
+  const safe = parsedRequest({ ...request, entities: [{ type: 'project', text: 'Radar Projesi' }] });
+  item.args.text = 'Radar Projesi';
+  assert.deepEqual(requestDeclarationModule.nameProbes(safe, entriesOf([item])), [{ name: 'rota_project_search', args: { text: 'Radar' } }]);
+});
+
+test('canonical execution identity uses the frozen turn date across Türkiye midnight and deduplicates effective default pages', async (t) => {
+  const { readKey } = await import('../src/server/ai/tools/requestPopulation.js');
+  const { prepareExecutionSet } = await import('../src/server/ai/tools/executionSet.js');
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-09-29T20:59:59Z') });
+  const args = { deadline: 'due_today' };
+  const calls = [{ name: 'rota_task_search', arguments: JSON.stringify(args) }];
+  const options = { catalog: [getRotaTool('rota_task_search')], today: '2026-09-29', callId: () => 'call' };
+  const first = prepareExecutionSet(calls, options);
+  const before = readKey('rota_task_search', first.calls[0].args, options.today);
+  t.mock.timers.tick(2000);
+  assert.equal(new Date().toISOString().slice(11, 19), '21:00:01');
+  const second = prepareExecutionSet(calls, options);
+  assert.equal(readKey('rota_task_search', second.calls[0].args, options.today), before);
+  assert.equal(readKey('rota_task_search', { ...args, limit: 20 }, options.today), before);
+  const request = parsedRequest({ operation: 'rank', metrics: ['task.targetFinish'], population: { tool: 'rota_task_search', collection: 'tasks' },
+    rank: { metric: 'task.targetFinish', order: 'asc', limit: 1 } });
+  const trimmed = source('rota_task_search', { tasks: [], sizeNote: 'kısaltıldı' }, { envelope: { returnedCount: 0, totalCount: 50, complete: false, truncated: true } });
+  const [indexed] = requestEvidence(request, entriesOf([trimmed]), options.today).values();
+  const { rankDomain } = await import('../src/domain/ai/requestContract.js');
+  const recovery = rankDomain(request, [indexed], 'tasks').next;
+  assert.deepEqual(recovery, { limit: 10 });
+  assert.deepEqual(parseToolArguments(getRotaTool('rota_task_search').parameters, JSON.stringify(recovery)), recovery);
+  indexed.effectiveLimit = 1;
+  assert.equal(rankDomain(request, [indexed], 'tasks').next, null, 'en küçük sayfa yeniden türetilmez');
+  assert.notEqual(readKey('rota_task_search', args, '2026-09-30'), before);
+});
+
+test('empty synthesis honors metric/entity bindings and global dependency ranks retain each row role', async () => {
+  const item = source('rota_task_search', { tasks: [{ taskId: TASKS.OVERDUE, title: 'A', targetFinish: '2026-10-01', assignees: [] },
+    { taskId: TASKS.DUE_SOON, title: 'B', targetFinish: '2026-10-02', assignees: [] }] }, { envelope: { totalCount: 2, returnedCount: 2 } });
+  const request = { operation: 'list', metrics: ['task.targetFinish', 'task.assignees'], entities: [{ type: 'task', bound: TASKS.OVERDUE }, { type: 'task', bound: TASKS.DUE_SOON }],
+    bindings: [{ metric: 'task.targetFinish', entity: 0 }, { metric: 'task.assignees', entity: 1 }] };
+  const answer = verify([item], request, ['R1:data.tasks.*.title', 'R1:data.tasks.0.targetFinish']);
+  assert.equal(answer.ok, true, JSON.stringify(answer.issues));
+  assert.doesNotMatch(answer.normalized.split('\n').find((line) => line.includes('**A**')), /Sorumlu/);
+  assert.match(answer.normalized.split('\n').find((line) => line.includes('**B**')), /Sorumlular.*Belirtilmemiş/);
+  const detail = source('rota_task_detail', { task: { taskId: TASKS.DUE_SOON, assignees: [{ name: 'Ayşe' }] } },
+    { id: 'R2', args: { taskId: TASKS.DUE_SOON }, selectors: [{ type: 'task', id: TASKS.DUE_SOON }] });
+  const explicitlyBound = { ...request, fields: [{ metric: 'task.assignees', tool: detail.tool, path: 'data.task.assignees.*.name' }] };
+  const withDetail = verify([item, detail], explicitlyBound, ['R1:data.tasks.*.title', 'R1:data.tasks.0.targetFinish', 'R2:data.task.assignees.*.name']);
+  assert.equal(withDetail.ok, true, JSON.stringify(withDetail.issues));
+  assert.match(withDetail.normalized, /Ayşe/);
+  assert.doesNotMatch(withDetail.normalized, /Belirtilmemiş/);
+  const links = source('rota_dependency_inspect', { predecessors: [{ taskId: TASKS.OVERDUE, title: 'Önce', targetFinish: '2026-10-01' }],
+    successors: [{ taskId: TASKS.DUE_SOON, title: 'Sonra', targetFinish: '2026-10-02' }] }, { envelope: { totalCount: 2, returnedCount: 2 } });
+  const { renderVerifiedNarrative } = await import('../src/domain/ai/evidenceNarrative.js');
+  const normalized = renderVerifiedNarrative(links.facts.filter((fact) => ['task.title', 'task.targetFinish'].includes(fact.semantic.metric))
+    .map((fact) => ({ evidenceId: links.id, fact })), { operation: 'rank', locale: 'tr', layout: 'list' });
+  assert.match(normalized, /Öncül.*Önce/);
+  assert.match(normalized, /Ardıl.*Sonra/);
+  assert.equal((normalized.match(/【R1】/g) || []).length, 2);
 });

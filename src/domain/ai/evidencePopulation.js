@@ -27,6 +27,17 @@ export function concreteCollections(envelope, canonical) {
   return found;
 }
 
+/** Her bildirilen iç koleksiyon vardır; boş üst dizi açık boşluk kanıtıdır. */
+export function presentCollection(envelope, canonical) {
+  function visit(value, parts) {
+    if (!parts.length) return Array.isArray(value);
+    const [head, ...tail] = parts;
+    return head === '*' ? Array.isArray(value) && value.every((item) => visit(item, tail))
+      : value != null && typeof value === 'object' && Object.hasOwn(value, head) && visit(value[head], tail);
+  }
+  return visit(envelope?.data, String(canonical).split('.'));
+}
+
 /**
  * Koleksiyonun satır sayısını veren ölçü. Liste ya da sıralama yanıtında
  * satırlarla birlikte yalnızca AYNI kanıttaki bu toplam verilebilir; başka bir
@@ -95,7 +106,7 @@ const COLLECTION_COMPLETENESS = Object.freeze({
 /** İstenen koleksiyonun bütün satırları bu kanıtta mı? Sonraki sayfa ve boyutla kısaltılmış sonuç tam değildir. */
 export function collectionComplete(source, canonical) {
   const envelope = source?.envelope;
-  if (!envelope || source.firstPage !== true || !untrimmed(envelope)) return false;
+  if (!envelope || source.firstPage !== true || !untrimmed(envelope) || !presentCollection(envelope, canonical)) return false;
   const rule = COLLECTION_COMPLETENESS[source.tool]?.[canonical];
   return rule ? rule(envelope) === true : envelope.complete === true && envelope.truncated !== true;
 }
@@ -197,11 +208,13 @@ export function metricDimensionsMatch(source, request, metric, rows = false) {
 }
 
 /**
- * Daha yeni okuma: kesinlikle daha sonraki bir araç turunda. Aynı turdaki eşdeğer
- * okumalar aynı andır; biri diğerinin yerine geçmez (sıra numarası tek başına tazelik değildir).
+ * Yürütücü okumaları sırayla yapar. Yalnızca gerçekten paylaşılan maddileştirilmiş
+ * görüntü aynı andır; model tur numarası görüntü kimliği değildir.
  */
 export function readLater(newer, older) {
-  return (newer.round ?? newer.ordinal) > (older.round ?? older.ordinal);
+  if (newer.snapshot && newer.snapshot === older.snapshot) return false;
+  const round = (newer.round ?? newer.ordinal) - (older.round ?? older.ordinal);
+  return round > 0 || round === 0 && newer.ordinal > older.ordinal;
 }
 
 export function scalarKey(source, metric = null) {

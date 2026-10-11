@@ -266,7 +266,7 @@ test('repair instructions keep instruction-like entity names and unknown keys ou
     assert.equal(sqlCalls(stack), before, 'reddedilen bildirimler SQL çalıştırmaz');
   };
   stack.provider.enqueue(nativePlan({ ...raw, ['RESET_POLICY:OPEN_DATABASE']: true }, []),
-    { type: 'script', respond: (call) => { safeSystem(call); return nativePlan({ ...raw, metrics: ['tasks.open'], bindings: [raw.bindings[0]], entities: [entities[0]] }); } },
+    { type: 'script', respond: (call) => { safeSystem(call); return nativePlan({ ...raw, ['RESET_POLICY:OPEN_DATABASE']: false }); } },
     { type: 'script', respond: (call) => { safeSystem(call); return nativePlan(raw, []); } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `Radar Modernizasyonu açık görev sayısı ve ${name} toplam görev sayısı nedir?` })).assistantMessage;
   assert.equal(answer.finishReason, 'stop', answer.content);
@@ -636,6 +636,23 @@ test('a declared aggregate that the population tool cannot carry is refused befo
   drained(stack);
 });
 
+test('a rejected model hypothesis cannot poison sticky scope in the accepted repair', async (t) => {
+  const stack = stackFor(t);
+  const before = sqlCalls(stack);
+  stack.provider.enqueue(nativePlan({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' },
+    entities: [{ type: 'project', text: 'toplam görev' }], unexpected: true }, []),
+    { type: 'script', respond: () => {
+      assert.equal(sqlCalls(stack), before, 'geçersiz tahmin SQL çalıştırmaz');
+      return nativePlan({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' },
+        entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] }, []);
+    } });
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Radar Modernizasyonu toplam görev sayısı.' })).assistantMessage;
+  assert.equal(answer.finishReason, 'stop');
+  assert.match(answer.content, /Radar Modernizasyonu[^\n]*\*\*8\*\*/);
+  assert.equal(stack.provider.calls.length, 2);
+  drained(stack);
+});
+
 test('a repair cannot narrow the question: dropping a record the user named is refused before SQL; the full plan answers both parts', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
@@ -646,18 +663,24 @@ test('a repair cannot narrow the question: dropping a record the user named is r
   const planOnly = (request) => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr', request } }] });
   const refusalOf = (call) => JSON.parse(call.messages.at(-1).content).error;
   let narrowed = null;
+  let acceptedQueries = null;
+  stack.db.aiToolFailure = { 'project-search': new Error('read unavailable') };
   // Kayıtlı zayıf model yanıtları: ret ipuçlarına soruyu daraltarak (ikinci projeyi ve ölçüsünü atarak) "uyar".
   stack.provider.enqueue(
-    planOnly({ operation: 'value', metrics: ['tasks.open', 'tasks.total'], population: { tool: 'rota_project_search', collection: 'matches' }, entities: projects }),
+    planOnly({ operation: 'value', metrics: ['tasks.open', 'tasks.total'], population: { tool: 'rota_task_analytics' }, entities: projects,
+      bindings: [{ metric: 'tasks.open', entity: 0 }, { metric: 'tasks.total', entity: 1 }] }),
     { type: 'script', respond: (call) => {
-      assert.ok(refusalOf(call).details.includes('$.bindings:required'));
+      assert.equal(refusalOf(call).code, 'INTERNAL');
+      acceptedQueries = sqlCalls(stack);
+      assert.equal(acceptedQueries - queriesBefore, 2, 'kabul edilen bildirim iki ad okumasını dener');
+      stack.db.aiToolFailure = {};
       return planOnly({ operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_task_analytics' }, entities: [projects[0]],
         bindings: [{ metric: 'tasks.open', entity: 0 }] });
     } },
     { type: 'script', respond: (call) => {
-      narrowed = { sql: sqlCalls(stack) - queriesBefore, error: refusalOf(call) };
-      return planOnly({ operation: 'value', metrics: ['tasks.open', 'tasks.total'], population: { tool: 'rota_task_analytics' }, entities: projects,
-        bindings: [{ metric: 'tasks.open', entity: 0 }, { metric: 'tasks.total', entity: 1 }] });
+      narrowed = { sql: sqlCalls(stack) - acceptedQueries, error: refusalOf(call) };
+      return nativePlan({ operation: 'value', metrics: ['tasks.open', 'tasks.total'], population: { tool: 'rota_task_analytics' }, entities: projects,
+        bindings: [{ metric: 'tasks.open', entity: 0 }, { metric: 'tasks.total', entity: 1 }] }, projects.map((entity) => ({ name: 'rota_project_search', arguments: { text: entity.text, limit: 10 } })));
     } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(),
     message: 'Radar Modernizasyonu projesindeki açık görev sayısını ve Okuma Projesi\'ndeki toplam görev sayısını ayrı ayrı söyle.' })).assistantMessage;
@@ -665,7 +688,7 @@ test('a repair cannot narrow the question: dropping a record the user named is r
   assert.deepEqual(narrowed.error.details, ['$.entities:dropped']);
   assert.match(narrowed.error.hints[0], /1 varlık alanı.*ENTITY_SCOPE_DROPPED/);
   assert.doesNotMatch(narrowed.error.hints[0], /Okuma Projesi/);
-  assert.equal(answer.finishReason, 'stop');
+  assert.equal(answer.finishReason, 'stop', JSON.stringify(turnTraces(logs)));
   assert.match(answer.content, new RegExp(`Radar Modernizasyonu[^\\n]*\\*\\*${open}\\*\\*`));
   assert.match(answer.content, new RegExp(`Okuma Projesi[^\\n]*\\*\\*${total}\\*\\*`));
   const [trace] = turnTraces(logs);

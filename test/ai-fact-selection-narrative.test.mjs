@@ -100,7 +100,8 @@ test('list requests render lists, a table layout renders a table, and value requ
   assert.match(table.normalized, /^\| Radar test planı · RDR · Radar Modernizasyonu[^\n]* \| 20 Eylül 2026 \| 10 \|$/m);
   // Satır başlığı projeyi zaten taşır: proje adı ve kodu ayrıca sütun olmaz.
   const withProject = verifyRequested(ledger, [...facts, 'data.tasks.*.project.name', 'data.tasks.*.project.code'],
-    { ...listRequest, metrics: [...listRequest.metrics, 'task.project'] });
+    { ...listRequest, metrics: [...listRequest.metrics, 'task.project'],
+      fields: ['name', 'code'].map((field) => ({ metric: 'task.project', tool: 'rota_task_search', path: `data.tasks.*.project.${field}` })) });
   assert.equal(withProject.ok, true, JSON.stringify(withProject.issues));
   assert.doesNotMatch(withProject.normalized, /Proje ad|Proje kod/);
   // Sorumlu adları sütunu alan adıyla ("Ad") değil ölçüyle adlandırılır.

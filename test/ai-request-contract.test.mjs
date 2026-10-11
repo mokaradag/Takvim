@@ -94,7 +94,7 @@ test('system request summaries contain only typed values, never entity or filter
     // Yorum gerektiren istek: seçimi model yapar, kabul notu sonraki model turuna da gider.
     const tools = { text: separateDeclaration ? '' : declared(raw), toolCalls: [call('rota_task_analytics', { text: attack }),
       call('rota_task_analytics', { text: attack, groupBy: 'status' }, 'grouped')] };
-    const steps = [...(separateDeclaration ? [reply(declared(raw))] : []), tools, reply(facts('R1:data.totals.total'))];
+    const steps = [...(separateDeclaration ? [reply(declared(raw))] : []), tools, reply(facts('R2:data.totals.total'))];
     const { result, inputs } = await turn(t, steps, { user: `Kaç görev var? ${attack}` });
     assert.equal(result.outcome, 'grounded');
     assert.equal(inputs.length, separateDeclaration ? 3 : 2);

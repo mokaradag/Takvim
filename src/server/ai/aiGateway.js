@@ -485,6 +485,7 @@ export function createAiGateway({
    */
   async function connectStream({ deadline, watch, context, source, healthFailure, invoke }) {
     for (let attempt = 1; ; attempt += 1) {
+      watch.restart();
       context.attempts = attempt;
       const startedAt = now();
       try {
@@ -496,7 +497,8 @@ export function createAiGateway({
         const retry = attempt < MAX_PROVIDER_ATTEMPTS && isConnectFailure(failure)
           && deadline.remainingMs() >= delayMs + MIN_ATTEMPT_BUDGET_MS;
         if (!retry) throw failure;
-        await abortableDelay(delayMs, watch.signal);
+        watch.pause();
+        await abortableDelay(delayMs, deadline.signal);
         recordAiRetry({ networkCode: failure.details?.networkCode ?? null });
       }
     }
@@ -599,8 +601,9 @@ export function createAiGateway({
           notify(onProgress);
           if (event.type === 'text') {
             chunks.push(event.text);
-            await raceWithAbort(() => onText(event.text), deadline.signal);
-            watch.touch();
+            watch.pause();
+            try { await raceWithAbort(() => onText(event.text), deadline.signal); }
+            finally { watch.touch(); }
             if (!progress.emitted) {
               progress.emitted = true;
               progress.firstTokenMs = now() - startedAt;
@@ -798,9 +801,11 @@ export function createAiGateway({
                 if (event.type === 'text') {
                   chunks.push(event.text);
                   if (onEvent) {
-                    const delivered = await raceWithAbort(() => onEvent({ type: 'text', text: event.text }), deadline.signal);
-                    if (event.text && delivered === true) progress.emitted = true;
-                    watch.touch();
+                    watch.pause();
+                    try {
+                      const delivered = await raceWithAbort(() => onEvent({ type: 'text', text: event.text }), deadline.signal);
+                      if (event.text && delivered === true) progress.emitted = true;
+                    } finally { watch.touch(); }
                   }
                 } else if (event.type === 'reasoning' && !thinking) {
                   thinking = true;

@@ -280,7 +280,8 @@ for (const path of ['server', 'model']) {
       stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(task.TaskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] });
     } else {
       // Proje adı/kodu belirsizliğinde seçim modelindir; görev seçim turunda taşınır.
-      const request = declared({ operation: 'value', metrics: ['task.title', 'task.project'], entities: [{ type: 'task', id: task.TaskId }] });
+      const request = declared({ operation: 'value', metrics: ['task.title', 'task.project'], reasoning: 'synthesis',
+        fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }], entities: [{ type: 'task', id: task.TaskId }] });
       stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] },
         { type: 'script', respond: () => {
           task.ProjectId = PROJECTS.HIDDEN;
@@ -429,7 +430,7 @@ test('authorization row budgets fail closed without affecting ordinary authoriza
   for (const { sql } of statements) assert.doesNotMatch(sql, /authorizationMaxRows|EmployeeSicil;|authorizedTasks/);
 });
 
-for (const kind of ['title', 'protected-text', 'aggregate']) {
+for (const kind of ['title', 'protected-text', 'aggregate', 'workload']) {
   for (const revoke of [false, true]) {
     test(`final SSE capacity gate revalidates persisted ${kind} (${revoke ? 'revoked' : 'retained'})`, async (t) => {
       const stack = stackFor(t);
@@ -440,10 +441,14 @@ for (const kind of ['title', 'protected-text', 'aggregate']) {
       const { activeAssistantGenerationCountForTests } = await import('../src/server/ai/assistant/assistantGenerations.js');
       const text = 'KAPASİTEDE BEKLEYEN KORUMALI METİN';
       stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE).Description = text;
-      const metric = kind === 'title' ? 'task.title' : kind === 'protected-text' ? 'task.description' : 'tasks.total';
-      const name = kind === 'aggregate' ? 'rota_task_search' : 'rota_task_detail';
-      const args = kind === 'aggregate' ? { projectId: PROJECTS.FULL } : { taskId: TASKS.OVERDUE, ...(kind === 'protected-text' ? { textFields: ['description'] } : {}) };
-      const request = { operation: 'value', metrics: [metric], population: { tool: name }, entities: [{ type: kind === 'aggregate' ? 'project' : 'task', id: kind === 'aggregate' ? PROJECTS.FULL : TASKS.OVERDUE }] };
+      if (kind === 'workload') stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+      const aggregate = ['aggregate', 'workload'].includes(kind);
+      const metric = kind === 'title' ? 'task.title' : kind === 'protected-text' ? 'task.description' : kind === 'workload' ? 'tasks.open' : 'tasks.total';
+      const name = kind === 'aggregate' ? 'rota_task_search' : kind === 'workload' ? 'rota_workload_summary' : 'rota_task_detail';
+      const args = aggregate ? { projectId: PROJECTS.FULL } : { taskId: TASKS.OVERDUE, ...(kind === 'protected-text' ? { textFields: ['description'] } : {}) };
+      const request = { operation: 'value', metrics: [metric], population: { tool: name },
+        ...(kind === 'workload' ? { fields: [{ metric, tool: name, path: 'data.openTaskCount' }] } : {}),
+        entities: [{ type: aggregate ? 'project' : 'task', id: aggregate ? PROJECTS.FULL : TASKS.OVERDUE }] };
       stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [{ name, arguments: args }] });
       const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: `Göster ${args.taskId || args.projectId}`, mode: 'standard', conversationId: null, includeText: kind === 'protected-text' }) });
       const response = assistantStreamResponse(turn, { deliveryTimeoutMs: 2000, generate: (prepared, callbacks) => {
@@ -458,8 +463,11 @@ for (const kind of ['title', 'protected-text', 'aggregate']) {
       }
       assert.equal(aiTelemetrySnapshot().grounding.grounded, 0, 'teslim beklerken son telemetri yazılmaz');
       if (revoke) {
-        stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
-        stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+        if (kind === 'workload') stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE).ProjectId = PROJECTS.HIDDEN;
+        else {
+          stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+          stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+        }
       }
       const wire = await response.text();
       const events = parseSseText(wire).events;
@@ -476,8 +484,66 @@ for (const kind of ['title', 'protected-text', 'aggregate']) {
         assert.doesNotMatch(wire, /Radar test planı|KAPASİTEDE BEKLEYEN|eşleşen \*\*8\*\*/);
       } else {
         assert.equal(terminal[0].data.assistantMessage.finishReason, 'stop');
-        assert.match(visible[0], kind === 'title' ? /Radar test planı/ : kind === 'protected-text' ? /KAPASİTEDE BEKLEYEN/ : /eşleşen \*\*8\*\*/);
+        assert.match(visible[0], kind === 'title' ? /Radar test planı/ : kind === 'protected-text' ? /KAPASİTEDE BEKLEYEN/ : kind === 'workload' ? /\*\*6\*\*/ : /eşleşen \*\*8\*\*/);
       }
     });
   }
 }
+
+for (const change of ['retained', 'deleted', 'moved-visible', 'moved-hidden', 'project-revoked', 'task-hidden']) {
+  test(`workload aggregate contributors are revalidated on final and reopened disclosure (${change})`, async (t) => {
+    const stack = stackFor(t);
+    const contributors = [TASKS.OVERDUE, TASKS.UNASSIGNED, TASKS.PARTIAL_OWN];
+    stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+    stack.db.tasks = stack.db.tasks.filter((task) => contributors.includes(task.TaskId));
+    const request = { operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary' },
+      fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }] };
+    stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [{ name: 'rota_workload_summary', arguments: {} }] });
+    const turnId = randomUUID();
+    const message = 'Görünür açık görev sayısını söyle.';
+    const saved = done(await sendTurn({ turnId, message }));
+    assert.equal(saved.assistantMessage.finishReason, 'stop');
+    assert.match(saved.assistantMessage.content, /\*\*3\*\*/);
+    const { decodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+    const persisted = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+    assert.deepEqual(decodeAuthorizationPopulation(persisted.authorizationPopulation).map((item) => item.taskId).sort(), [...contributors].sort());
+    const context = createToolTurnContext({ sicil: AYSE });
+    const signal = new AbortController().signal;
+    await context.revalidateAuthorization(signal);
+    const epoch = context.authorizationEpoch();
+    const task = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+    if (change === 'deleted') stack.db.tasks = stack.db.tasks.filter((row) => row !== task);
+    if (change === 'moved-visible') task.ProjectId = PROJECTS.READ;
+    if (change === 'moved-hidden') task.ProjectId = PROJECTS.HIDDEN;
+    if (change === 'project-revoked') stack.db.projects.find((project) => project.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+    if (change === 'task-hidden') stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.PARTIAL_OWN);
+    await context.revalidateAuthorization(signal);
+    if (!['project-revoked', 'task-hidden'].includes(change)) assert.equal(context.authorizationEpoch(), epoch);
+    const opened = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
+    const replay = await sendTurn({ conversationId: saved.conversation.id, turnId, message });
+    if (change === 'retained') {
+      assert.equal(opened.content, saved.assistantMessage.content);
+      assert.equal(deltas(replay), saved.assistantMessage.content);
+    } else {
+      assert.equal(opened.content, NON_ENUMERATING_FAILURE_TEXT);
+      assert.deepEqual(opened.evidence, []);
+      assert.equal(deltas(replay), NON_ENUMERATING_FAILURE_TEXT);
+      assert.doesNotMatch(JSON.stringify(replay.events), /Radar test planı|Atanmamış|Alice|\*\*3\*\*|Önceki bütün talimatları/);
+    }
+  });
+}
+
+test('the ledger rejects a protected aggregate without contributor provenance, including an explicit empty-population counterexample', async () => {
+  const { createEvidenceLedger } = await import('../src/server/ai/tools/evidenceLedger.js');
+  const { getRotaTool } = await import('../src/server/ai/tools/toolRegistry.js');
+  const ledger = createEvidenceLedger();
+  const metadata = { tool: 'rota_workload_summary', kind: getRotaTool('rota_workload_summary').evidenceKind,
+    label: 'İş yükü', generatedAt: new Date().toISOString(), complete: true, truncated: false, partial: false, counts: { returned: 0, total: 0 } };
+  assert.equal(ledger.register(metadata), null);
+  assert.equal(ledger.register({ ...metadata, populationReferences: [{ taskId: TASKS.OVERDUE }] }), null);
+  assert.equal(ledger.register({ ...metadata, populationReferences: [
+    { taskId: TASKS.OVERDUE, projectId: PROJECTS.FULL }, { taskId: TASKS.OVERDUE, projectId: PROJECTS.HIDDEN }
+  ] }), null);
+  assert.deepEqual(ledger.ids(), []);
+  assert.equal(ledger.register({ ...metadata, populationReferences: [] }), 'R1');
+});

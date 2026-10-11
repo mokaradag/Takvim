@@ -83,14 +83,19 @@ export function taskItem(fact, { projects, assignees = null, today, withProject 
     status: fact.status,
     statusLabel: statusLabelOf(fact.status),
     priority: fact.priority,
-    priorityLabel: priorityLabel(fact.priority)
+    priorityLabel: priorityLabel(fact.priority),
+    milestone: fact.milestone,
+    overdue: isOverdue(fact, today)
   };
+  if (fact.keyword) item.keyword = dataText(fact.keyword, 80);
   if (fact.targetFinish) item.targetFinish = fact.targetFinish;
   if (fact.plannedStart) item.plannedStart = fact.plannedStart;
   if (fact.plannedFinish) item.plannedFinish = fact.plannedFinish;
+  if (fact.actualStart) item.actualStart = fact.actualStart;
   if (fact.actualFinish) item.actualFinish = fact.actualFinish;
   if (fact.progress != null) item.progressPercent = fact.progress;
-  if (fact.milestone) item.milestone = true;
+  if (fact.createdAt) item.createdAt = fact.createdAt;
+  if (fact.updatedAt) item.updatedAt = fact.updatedAt;
   if (isOverdue(fact, today)) item.overdueDays = overdueDays(fact, today);
   if (assignees) Object.assign(item, assigneeView(fact, assignees));
   // Kanonik erişim düzeyi (FULL/READ/PARTIAL): kanıt yazıcısı bunu yerelleştirir.
@@ -155,12 +160,18 @@ export function isPartialScope(scopeDescriptor) {
 
 export const ID_PROPERTY = (description) => ({ type: 'string', format: 'uuid', description });
 export const DATE_PROPERTY = (description) => ({ type: 'string', format: 'date', description });
-export const LIMIT_PROPERTY = (maximum, fallback) => ({
-  type: 'integer',
-  minimum: 1,
-  maximum,
-  description: `Döndürülecek en fazla öğe (1–${maximum}, varsayılan ${fallback}).`
-});
+const limitDefaults = new WeakMap();
+export const effectivePageSize = (property, args) => args.limit ?? limitDefaults.get(property) ?? null;
+export const LIMIT_PROPERTY = (maximum, fallback) => {
+  const property = {
+    type: 'integer',
+    minimum: 1,
+    maximum,
+    description: `Döndürülecek en fazla öğe (1–${maximum}, varsayılan ${fallback}).`
+  };
+  limitDefaults.set(property, fallback);
+  return property;
+};
 export const CURSOR_PROPERTY = {
   type: 'string',
   maxLength: 400,

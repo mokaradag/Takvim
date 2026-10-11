@@ -42,8 +42,6 @@ import { discloseAssistantMessage, generateAssistantAnswer } from './assistantSe
 export const ASSISTANT_KEEPALIVE_MS = 15000;
 /** `progress` olayları arasındaki en kısa süre (ilerleme varken). */
 export const ASSISTANT_PROGRESS_EVENT_MS = ASSISTANT_TIMING.progressEventMs;
-/** Hiç ilerlemeyen üretimin kesildiği süre (sağlayıcının ilerleme sınırlarından uzun). */
-export const ASSISTANT_GENERATION_STALL_MS = 90000;
 /** Kesilen üretimin kendiliğinden bitmesi için beklenen süre (yanıt yazımı bütçesinden uzun). */
 export const ASSISTANT_STALL_GRACE_MS = ASSISTANT_TIMING.stallGraceMs;
 /** Okumayan istemcinin kuyrukta yer açması için beklenen en uzun süre. */
@@ -188,7 +186,7 @@ export function assistantStreamResponse(turn, {
     const now = performance.now();
     lastProgressAt = now;
     if (visible) lastProgressSentAt = now;
-    else if (!terminal && !delivering && now - lastProgressSentAt >= progressEventMs) {
+    else if (!terminal && !delivering && controller.desiredSize > 0 && now - lastProgressSentAt >= progressEventMs) {
       lastProgressSentAt = now;
       send(ASSISTANT_STREAM_EVENTS.PROGRESS, {});
     }
@@ -233,6 +231,7 @@ export function assistantStreamResponse(turn, {
   /** Kuyrukta yer açılana (ya da akış kapanana) kadar bekler; bekleme sınırlıdır ve üretim sinyali onu da keser. */
   async function waitForCapacity() {
     const startedAt = performance.now();
+    const backpressure = controller.desiredSize <= 0;
     while (!closed && controller.desiredSize <= 0 && !generationSignal.aborted) {
       const remaining = deliveryTimeoutMs - (performance.now() - startedAt);
       if (remaining <= 0) {
@@ -248,6 +247,7 @@ export function assistantStreamResponse(turn, {
         };
       });
     }
+    if (backpressure) lastProgressAt = performance.now();
     return !closed && !generationSignal.aborted;
   }
 
@@ -283,7 +283,7 @@ export function assistantStreamResponse(turn, {
     const ticker = setInterval(() => {
       const now = performance.now();
       if (!closed && !delivering && now - lastByteAt >= keepaliveMs && controller.desiredSize > 0) enqueue(KEEPALIVE);
-      if (now - lastProgressAt >= stallMs) stall('GENERATION_STALLED');
+      if (!waiting && now - lastProgressAt >= stallMs) stall('GENERATION_STALLED');
     }, tickMs);
     ticker.unref?.();
     const onAbort = () => wake();

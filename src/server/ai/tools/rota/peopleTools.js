@@ -7,6 +7,7 @@ import { dataText, ID_PROPERTY, LIMIT_PROPERTY, PERSON_SICIL_PROPERTY, searchedS
 import { loadFilteredFacts } from './taskTools.js';
 import { assignmentState, foldText, isDueWithin, isOverdue, normalizeTaskFilters, DUE_SOON_DAYS } from './taskFacts.js';
 import { decimalFromScaled, scaledDecimal } from '../../../../domain/numbers/fixedDecimal.js';
+import { completeReadRequired } from '../../../../domain/ai/requestContract.js';
 
 /* ── rota_workload_summary ────────────────────────────────── */
 
@@ -71,7 +72,7 @@ const workloadSummary = {
     for (const [sicil, hours] of hoursByPerson) people.get(sicil).plannedHoursOnAssignedTasks = decimalFromScaled(hours, 2);
     const ordered = [...people.values()].sort((left, right) => right.openTasks - left.openTasks
       || right.overdue - left.overdue || left.name.localeCompare(right.name, 'tr') || left.sicil - right.sicil);
-    const page = ordered.slice(0, limit);
+    const page = completeReadRequired(call.request, 'rota_workload_summary') ? ordered : ordered.slice(0, limit);
     const descriptor = searchedScope(scope, filters.projectId);
     // Sayıların nüfusunu belirleyen seçiciler olgunun niteleyicisidir (proje ve kişi adıyla).
     const projectName = filters.project || null;

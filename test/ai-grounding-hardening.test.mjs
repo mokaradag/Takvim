@@ -249,19 +249,16 @@ test('successful later rounds open their own follow-ups (person → task list �
   const earliest = { operation: 'rank', metrics: ['task.targetFinish', 'task.status'], rank: { metric: 'task.targetFinish', order: 'asc', limit: 1 },
     population: { tool: 'rota_task_search', collection: 'tasks' }, reasoning: 'synthesis', entities: [{ type: 'person', text: 'Ayşe Yılmaz' }] };
   const { result } = await turn(t, [calls('rota_person_search', { text: 'Ayşe Yılmaz' }, 'call', earliest), (input) => {
-    const person = results(input)[0].data.people[0];
-    // İki eşdeğer liste sayfası aynı sıralamayı karşılar: seçim belirsizdir, model ayrıntıya ilerler.
-    const list = calls('rota_task_search', { personSicil: person.sicil }, 'list');
-    list.toolCalls.push({ id: 'page', name: 'rota_task_search', arguments: JSON.stringify({ personSicil: person.sicil, limit: 5 }) });
-    return list;
-  }, (input) => {
     assert.ok(input.tools.some((tool) => tool.name === 'rota_task_detail'));
-    return calls('rota_task_detail', { taskId: results(input).at(-1).data.tasks[0].taskId }, 'detail');
+    const population = results(input).at(-1);
+    assert.equal(population.tool, 'rota_task_search');
+    return calls('rota_task_detail', { taskId: population.data.tasks[0].taskId }, 'detail');
   }, (input) => {
-    assert.equal(results(input).at(-1).ok, true);
-    return calls('rota_task_search', { personSicil: AYSE }, 'current');
-  }, (input) => {
-    const list = results(input).findLast((item) => item.tool === 'rota_task_search');
+    assert.equal(results(input).find((item) => item.tool === 'rota_task_detail').ok, true);
+    // Ayrıntı eski satır özelliklerini yeniler; sunucu kalan bütçeyle nüfusu tekrar okur.
+    const list = results(input).at(-1);
+    assert.equal(list.tool, 'rota_task_search');
+    assert.equal(list.evidenceId, 'R4');
     return reply(JSON.stringify({ kind: 'rota', facts: [`${list.evidenceId}:data.tasks.0.title`, `${list.evidenceId}:data.tasks.0.targetFinish`, `${list.evidenceId}:data.tasks.0.status`] }));
   }], { user: 'Ayşe Yılmaz\'ın ilk görevinin durumu?' });
   assert.equal(result.outcome, 'grounded');
@@ -733,4 +730,24 @@ test('authorization id lists are materialized once into keyed temp tables before
   const { CURRENT_TASK_DISCLOSURE_SQL, DISCLOSURE_SCOPE_SETUP_SQL } = await import('../src/server/authorization/disclosureScope.js');
   assert.doesNotMatch(CURRENT_TASK_DISCLOSURE_SQL, /STRING_SPLIT/);
   assert.match(DISCLOSURE_SCOPE_SETUP_SQL, /CREATE TABLE #AiDisclosureTasks\(TaskId uniqueidentifier NOT NULL PRIMARY KEY\)/);
+});
+
+test('a filtered name miss cannot authorize an unfiltered probe; an unconditional miss still can', () => {
+  const userText = 'Radar Modernizasyonu tamamlanmış görevleri';
+  const filtered = createToolScope({ today: '2026-09-30', userText });
+  established(filtered, 'rota_task_search', { text: 'Radar Modernizasyonu', status: ['done'], projectId: PROJECTS.FULL }, { tasks: [], titleResolution: 'none' });
+  assert.throws(() => filtered.validate('rota_task_search', { text: 'Radar' }), { code: 'UNSUPPORTED_SCOPE' });
+  const clean = createToolScope({ today: '2026-09-30', userText });
+  established(clean, 'rota_task_search', { text: 'Radar Modernizasyonu' }, { tasks: [], titleResolution: 'none' });
+  assert.doesNotThrow(() => clean.validate('rota_task_search', { text: 'Radar' }));
+});
+
+test('Turkish buffer-n and instrumental suffixes preserve whole named phrases without accepting arbitrary prefixes', () => {
+  for (const ending of ['nda', 'na', 'ndan', 'yla']) {
+    const scope = createToolScope({ userText: `Haftalık durum toplantısı${ending} görevler`, today: '2026-09-30' });
+    assert.equal(scope.textTrusted('Haftalık durum toplantısı'), true, ending);
+    assert.equal(scope.textTrusted('Haftalık durum toplantıs'), false, ending);
+    assert.equal(scope.textTrusted('Haftalık durum topla'), false, ending);
+  }
+  assert.equal(createToolScope({ userText: 'Haftalık durum toplantısız görevler', today: '2026-09-30' }).textTrusted('Haftalık durum toplantısı'), false);
 });

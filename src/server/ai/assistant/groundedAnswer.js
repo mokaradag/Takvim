@@ -25,7 +25,7 @@ import { parseTurnLanguage, parseTurnRequest, parseTurnRoute, parseTurnWindow, T
 import { CLARIFICATION_LIMITS, clarificationReference } from '../../../domain/ai/clarification.js';
 import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
 import { createAiDeadline } from '../aiDeadline.js';
-import { rankDomain } from '../../../domain/ai/requestContract.js';
+import { collectionDomain, factSuperseded, rankDomain } from '../../../domain/ai/requestContract.js';
 
 /**
  * Rota verisine dayanan yanıtın SINIRLI döngüsü.
@@ -340,7 +340,6 @@ function acceptDeclaration(turn, declaration, route) {
   const raw = parseTurnRequest(declaration);
   // Düzeltme kullanıcının adlandırdığı bir kaydı düşüremez (zayıf model reddi soruyu daraltarak "onarır").
   const dropped = droppedNames(turn.namedScope, raw);
-  turn.namedScope = namedScope(turn.namedScope, raw, turn.containment.textTrusted);
   const scopeProblems = dropped.length ? { details: ['$.entities:dropped'], hints: [droppedNameHint(dropped)] } : { details: [], hints: [] };
   try {
     request = parseRequestDeclaration(raw, {
@@ -368,7 +367,7 @@ function preparePlan(turn, calls, declared) {
   if (declared && !declared.ok) return { ok: false, details: declared.details, hints: declared.hints || [] };
   if (!turn.declared) return { ok: false, details: ['$.request:required'], hints: [] };
   const set = prepareExecutionSet(calls, { catalog: turn.catalog, validateCall: turn.containment.validate, limits: turn.limits,
-    attempted: turn.executor.stats().attempted, callId: turn.callId });
+    attempted: turn.executor.stats().attempted, callId: turn.callId, today: turn.context.today });
   if (!set.ok) {
     return { ok: false, details: set.problems.flatMap((problem) => problem.error.details?.length ? problem.error.details : [`$.calls:${problem.error.code}`]),
       hints: [], problems: set.problems };
@@ -382,6 +381,7 @@ function preparePlan(turn, calls, declared) {
 /** Planla tamamlanan istek bu turun isteğidir; önceki (veri okunmadan değişen) kabul notunun yerini alır. */
 function acceptRequest(turn, request) {
   turn.request = request;
+  turn.namedScope = namedScope(turn.namedScope, request, turn.containment.textTrusted);
   // Veri okunmadan bildirilen nüfusun korumalı metin alanları sunucunun türettiği okumalarda da açıktır.
   turn.containment.declareTextFields(requestTextFields(request));
   const note = `SUNUCU: Veri okunmadan bildirilen istek kabul edildi: ${requestSummary(request)}. Son yanıtta bu isteğin her ölçüsünü taşıyan olguları seç; istek veri okunduktan sonra değiştirilemez.`;
@@ -454,6 +454,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     trace: { startedAt: Date.now(), rounds: [], declarations: 0, repairs: 0, revalidationMs: 0, verificationMs: 0, pending: null }
   };
   turn.executor = createToolExecutor({
+    request: () => turn.request,
     resolveTool: (name) => !turn.permittedTools || turn.permittedTools.has(name) ? getRotaTool(name) : null,
     context,
     ledger: turn.ledger,
@@ -714,17 +715,36 @@ function derivedCalls(turn, request) {
   const selection = turn.containment.boundSelection();
   const bound = bindRequestEntities(request, entries, selection);
   const reads = [];
-  if (request.operation === 'rank' && bound.every((entity) => entity.bound)) {
+  if (['list', 'rank'].includes(request.operation) && bound.every((entity) => entity.bound) && request.population.collection) {
     const sources = [...requestEvidence(request, entries, turn.context.today).values()].reverse();
     for (const source of sources.filter((item) => item.tool === request.population.tool && item.firstPage)) {
-      const domain = rankDomain(request, [source, ...sources], request.population.collection);
+      const domain = request.operation === 'rank' ? rankDomain(request, [source, ...sources], request.population.collection)
+        : collectionDomain([source, ...sources], request.population.collection);
       if (!domain?.next) continue;
-      const args = domain.next;
+      let args = domain.next;
+      const first = domain.sources[0];
+      if (request.operation === 'list' && first.envelope.data?.sizeNote == null && domain.sources.length === 1
+        && first.effectiveLimit < first.pageMaximum) {
+        const { cursor: _cursor, ...initial } = first.args;
+        args = { ...initial, limit: first.pageMaximum };
+      }
       if (!turn.attemptedReads.has(readKey(source.tool, args, turn.context.today))) reads.push({ name: source.tool, args });
       break;
     }
   }
   if (!reads.length) reads.push(...derivedReads(request, bound, { today: turn.context.today, attempted: turn.attemptedReads }));
+  if (!reads.length && request.operation !== 'value') {
+    const evidence = requestEvidence(request, entries, turn.context.today);
+    const source = [...evidence.values()].reverse().find((item) => item.tool === request.population.tool && item.firstPage
+      && item.populationMatch && item.sortMatch && item.pageMaximum && item.facts.some((fact) => request.metrics.includes(fact.semantic?.metric)
+        && factSuperseded(evidence, item, fact, { rows: true })));
+    if (source) {
+      const { cursor: _cursor, ...initial } = source.args;
+      const args = { ...initial, limit: source.pageMaximum };
+      if (source.effectiveLimit === source.pageMaximum) delete args.limit;
+      if (!turn.attemptedReads.has(readKey(source.tool, args, turn.context.today))) reads.push({ name: source.tool, args });
+    }
+  }
   // Tam adı hiçbir kayda uymayan varlık için adın ilk sözcüğüyle bir yoklama araması yapılır.
   const probes = reads.length ? [] : nameProbes(request, entries, selection)
     .filter(({ name, args }) => !turn.attemptedReads.has(readKey(name, args, turn.context.today)));
@@ -924,7 +944,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
         acceptRequest(turn, prepared.request);
       } else {
         prepared = prepareExecutionSet(calls, { catalog, permitted: turn.permittedTools, validateCall: containment.validate, limits,
-          attempted: executor.stats().attempted, callId: turn.callId });
+          attempted: executor.stats().attempted, callId: turn.callId, today: turn.context.today });
         if (!prepared.ok) {
           // Geçersiz küme hiç yürütülmez; reddedilen tur araç turu bütçesinden düşer.
           turn.toolsRequested = true;
@@ -940,7 +960,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       // Bildirilen nüfus henüz okunmadıysa (ör. adla çözülen varlığın okuması) sunucu okumayı bildirimden kurar.
       while (!ledger.revoked() && turn.toolRounds < limits.maxToolRounds && !evidenceReady()) {
         const derived = prepareExecutionSet(derivedCalls(turn, turn.request), { catalog, validateCall: containment.validate, limits,
-          attempted: executor.stats().attempted, callId: turn.callId });
+          attempted: executor.stats().attempted, callId: turn.callId, today: turn.context.today });
         if (!derived.ok || !derived.calls.length) break;
         await executeRound(turn, derived.calls);
       }
