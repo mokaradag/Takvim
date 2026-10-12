@@ -1,7 +1,7 @@
 import { claimableContract, metricEntry, semanticCarrierKey } from './claimableEvidence.js';
 import { FACT_LIMITS, createEvidenceFacts, fieldPatternCovers } from './evidenceFacts.js';
 import { canonicalField } from './evidencePopulation.js';
-import { factRow, metricAllowedForRow, rowFieldState, rowMetricFields, verifyRequestedFacts } from './requestContract.js';
+import { emptyFieldCurrent, factRow, metricAllowedForRow, rowFieldState, rowMetricFields, verifyRequestedFacts } from './requestContract.js';
 import { renderVerifiedNarrative } from './evidenceNarrative.js';
 
 /**
@@ -155,8 +155,9 @@ export function resolveEvidenceSelection(answer, { evidenceIds = [], evidencePay
  * `request` verildiğinde seçim bildirilen isteğe uymalıdır (bkz.
  * requestContract.js); sunucu turu isteği her zaman verir.
  */
-function renderableFacts(request, items, evidence, answer) {
+function renderableFacts(request, items, evidence, answer, emptyProperties = []) {
   const rendered = [...items];
+  const rowsAnswer = ['list', 'rank'].includes(request.operation);
   const rows = new Map();
   for (const item of items) {
     const source = evidence.get(item.evidenceId);
@@ -176,14 +177,23 @@ function renderableFacts(request, items, evidence, answer) {
         ? bindings.some((binding) => binding.path === `data.${row.canonical}.*.${field}`)
         : candidates.length === 1 || chosen.includes(semanticCarrierKey(source.tool, `data.${row.canonical}.*.${field}`)));
       for (const field of fields) {
-        if (rowFieldState(source.tool, row.canonical, object, field) !== 'empty') continue;
         const concrete = `${row.path}.${field.replace(/\*/g, '0')}`;
+        // Yalnızca okunmuş ve güncel boşluk çizilir; daha yeni okumanın yerine geçtiği boşluk değildir.
+        if (rowFieldState(source.tool, row.canonical, object, field) !== 'empty' || !emptyFieldCurrent(evidence, source, concrete, metric, rowsAnswer)) continue;
         if (rendered.some((other) => other.evidenceId === item.evidenceId && other.fact.field === concrete)) continue;
         const semantic = metricEntry(source.tool, `${row.canonical}.*.${field}`);
         rendered.push({ evidenceId: item.evidenceId, fact: { ...item.fact, field: concrete, value: null,
           semantic: { ...item.fact.semantic, ...semantic, metric, displayValue: null } } });
       }
     }
+  }
+  // Doğrulayıcının kanıtladığı satır dışı boş özellik (ör. sorumlusu olmayan görev) aynı kanıtın olgusuyla çizilir.
+  for (const { evidenceId, field, metric } of emptyProperties) {
+    const template = items.find((item) => item.evidenceId === evidenceId);
+    if (!template || rendered.some((other) => other.evidenceId === evidenceId && other.fact.field === field)) continue;
+    const semantic = metricEntry(evidence.get(evidenceId).tool, canonicalField(field).slice(5));
+    rendered.push({ evidenceId, fact: { ...template.fact, field, value: null, type: 'null',
+      semantic: { ...template.fact.semantic, ...semantic, metric, displayValue: null } } });
   }
   return rendered;
 }
@@ -195,11 +205,13 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
   // Bildirilen düzen veri okunmadan önce bağlanmıştır: seçim onu yinelemek zorunda değildir, yalnızca çelişemez.
   const layout = selection.layout ?? (request?.layout || 'auto');
   let emptyProofs = [];
+  let emptyProperties = [];
   if (request) {
     if (request.layout && request.layout !== 'auto' && layout !== request.layout) return { ok: false, citedIds: [], issues: [{ code: 'LAYOUT_MISMATCH' }] };
     const verdict = verifyRequestedFacts(request, selection.facts, evidence);
     if (!verdict.ok) return { ok: false, citedIds: [], issues: verdict.issues };
     emptyProofs = verdict.empty || [];
+    emptyProperties = verdict.emptyProperties || [];
     if (verdict.rankOrder) {
       const { evidenceId, collection, indexes } = verdict.rankOrder;
       const positions = new Map(indexes.map((index, position) => [index, position]));
@@ -211,7 +223,7 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
     }
   }
   const citedIds = [...new Set(selection.facts.map((item) => item.evidenceId))];
-  const rendered = request ? renderableFacts(request, selection.facts, evidence, answer) : selection.facts;
+  const rendered = request ? renderableFacts(request, selection.facts, evidence, answer, emptyProperties) : selection.facts;
   const normalized = renderVerifiedNarrative(rendered, { locale, layout, operation: request?.operation || null, empty: emptyProofs });
   if (normalized.length > FACT_LIMITS.maxAnswerChars) return { ok: false, citedIds: [], issues: [{ code: 'ANSWER_TOO_LARGE' }] };
   return { ok: true, normalized, citedIds, facts: selection.facts, issues: [] };

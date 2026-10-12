@@ -910,9 +910,12 @@ test('cross-tool own-property freshness compares semantic property and owner, pr
   later.selectors = [{ type: 'project', id: 'other' }];
   assert.equal(verify([old, later], request, ['R1:data.projects.0.access']).ok, true);
   const organization = source('rota_person_search', { people: [{ sicil: 1, organization: { department: 'A' } }] });
-  const unit = source('rota_person_search', { people: [{ sicil: 1, organization: { unit: 'A' } }] }, { id: 'R2' });
+  // Kişi araması üç düzeyi de yazar (boşsa açık null): daha yeni okumanın açık boşluğu eski değeri eskitir.
+  const unit = source('rota_person_search', { people: [{ sicil: 1, organization: { directorate: null, department: null, unit: 'A' } }] }, { id: 'R2' });
   const department = { operation: 'value', metrics: ['person.organization'], population: { tool: 'rota_person_search' }, fields: [{ metric: 'person.organization', tool: 'rota_person_search', path: 'data.people.*.organization.department' }], entities: [{ type: 'person', bound: '1' }] };
-  assert.equal(issue(verify([organization, unit], department, ['R1:data.people.0.organization.department'])), 'STALE_EVIDENCE', 'yazılan organizasyon nesnesinde olmayan düzey sözleşmeye göre boştur');
+  assert.equal(issue(verify([organization, unit], department, ['R1:data.people.0.organization.department'])), 'STALE_EVIDENCE', 'açıkça boş düzey daha yeni boşluktur');
+  unit.envelope.data.people[0].organization = { unit: 'A' };
+  assert.equal(verify([organization, unit], department, ['R1:data.people.0.organization.department']).ok, true, 'yazılmamış düzey okunmamıştır, boş değildir');
   delete unit.envelope.data.people[0].organization;
   assert.equal(verify([organization, unit], department, ['R1:data.people.0.organization.department']).ok, true, 'organizasyon nesnesinin yokluğu boş düzey değildir');
 });
@@ -1042,7 +1045,7 @@ test('list pages are never stitched; every declared sibling and every nested chi
 });
 
 test('all-empty meaningful alternatives require field bindings before SQL and remain distinct in all four layers', () => {
-  const item = source('rota_person_search', { people: [{ sicil: AYSE, name: 'Ayşe Yılmaz', organization: {} }] },
+  const item = source('rota_person_search', { people: [{ sicil: AYSE, name: 'Ayşe Yılmaz', organization: { directorate: null, department: null, unit: null } }] },
     { args: { text: 'Ayşe Yılmaz' }, envelope: { totalCount: 1, returnedCount: 1 } });
   const raw = { operation: 'list', metrics: ['person.name', 'person.organization'], filters: { text: 'Ayşe Yılmaz' }, population: { tool: item.tool, collection: 'people' } };
   assert.ok(complete(raw, [[item.tool, item.args]]).problems.includes('$.fields:required'));
@@ -1052,6 +1055,9 @@ test('all-empty meaningful alternatives require field bindings before SQL and re
   const [answer] = agreement(bound, [item], true);
   assert.match(answer.normalized, /Müdürlük.*Belirtilmemiş/);
   assert.doesNotMatch(answer.normalized, /Direktörlük|Birim/);
+  // Üreticinin yazmadığı düzey okunmamıştır: "Belirtilmemiş" olarak kanıtlanamaz.
+  item.envelope.data.people[0].organization = {};
+  agreement(bound, [item], false);
 });
 
 test('generated name probes obey the directory schema and skip one-letter first tokens', () => {
@@ -1236,4 +1242,154 @@ test('an ID and resolved text can bind the same record, while two distinct names
   const second = { ...item, id: 'R2', args: { text: 'Başka' } };
   const distinct = parsedRequest({ operation: 'value', metrics: ['project.name'], entities: [{ type: 'project', text: 'Radar' }, { type: 'project', text: 'Başka' }] });
   assert.deepEqual(requestDeclarationModule.bindRequestEntities(distinct, entriesOf([item, second])).map((entity) => entity.bound), [null, null]);
+});
+
+/* ── Aşama 3 yakınsaması: alan durumu, tazelik ve nüfus kapsamı ── */
+
+test('field state is value, explicitly empty or unread; an unread field is never certified or rendered as empty', async (t) => {
+  const { rowFieldState } = claimableRequest;
+  // Görev araması boş terminini yazmaz (okunmuş, boş); bağımlılık satırı termini hiç okumaz.
+  assert.equal(rowFieldState('rota_task_search', 'tasks', { title: 'A' }, 'targetFinish'), 'empty');
+  assert.equal(rowFieldState('rota_task_search', 'tasks', { title: 'A', targetFinish: '2026-10-01' }, 'targetFinish'), 'value');
+  assert.equal(rowFieldState('rota_task_search', 'tasks', { title: 'A' }, 'project.lead'), 'absent');
+  assert.equal(rowFieldState('rota_dependency_inspect', 'predecessors', { title: 'A' }, 'targetFinish'), 'absent');
+  assert.equal(rowFieldState('rota_dependency_inspect', 'predecessors', { title: 'A', plannedStart: null }, 'plannedStart'), 'empty');
+  assert.equal(rowFieldState('rota_dependency_inspect', 'predecessors', { title: 'A' }, 'plannedStart'), 'absent');
+  const stack = stackFor(t);
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.DONE });
+  const entries = ledger.requestEntries();
+  const raw = (metric) => ({ operation: 'list', metrics: ['task.title', metric], population: { tool: 'rota_dependency_inspect', collection: 'predecessors' },
+    entities: [{ type: 'task', id: TASKS.DONE }] });
+  // Okunan öncülün boş planlanan başlangıcı açık boşluktur: hazırlık, seçim ve doğrulama birlikte kabul eder.
+  const planned = parsedRequest(raw('task.plannedStart'));
+  assert.equal(requestEvidenceReady(planned, entries, REQUEST_TODAY), true);
+  const [candidate] = requestSelections(planned, entries, null, REQUEST_TODAY);
+  const rendered = verifyRequested(ledger, JSON.parse(candidate).facts, raw('task.plannedStart'));
+  assert.equal(issue(rendered), null);
+  assert.match(rendered.normalized, /Dokümantasyon.*Belirtilmemiş/s);
+  // Öncülün termini bu araçta okunmaz: hazırlık ve doğrulama birlikte reddeder; "Belirtilmemiş" yazılmaz.
+  const target = parsedRequest(raw('task.targetFinish'));
+  assert.equal(requestEvidenceReady(target, entries, REQUEST_TODAY), false);
+  assert.deepEqual(requestSelections(target, entries, null, REQUEST_TODAY), []);
+  assert.equal(issue(verifyRequested(ledger, ['R1:data.predecessors.*.title'], raw('task.targetFinish'))), 'METRIC_MISSING');
+});
+
+test('an explicitly empty record property of a bound entity is a value; an unwritten one is not', async (t) => {
+  const stack = stackFor(t);
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.UNASSIGNED });
+  const entries = ledger.requestEntries();
+  const raw = { operation: 'value', metrics: ['task.assignees'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: TASKS.UNASSIGNED }] };
+  const request = parsedRequest(raw);
+  assert.equal(requestEvidenceReady(request, entries, REQUEST_TODAY), true);
+  const [candidate] = requestSelections(request, entries, null, REQUEST_TODAY);
+  assert.deepEqual(JSON.parse(candidate).facts, ['R1:data.task.title']);
+  const rendered = verifyRequested(ledger, JSON.parse(candidate).facts, raw);
+  assert.equal(issue(rendered), null);
+  assert.match(rendered.normalized, /Sorumlu.*Belirtilmemiş/);
+  // Başka bir görevin boş özelliği bu görevin değeri değildir; yazılmamış özellik okunmamıştır.
+  const other = { ...raw, entities: [{ type: 'task', id: TASKS.OVERDUE }] };
+  assert.equal(issue(verifyRequested(ledger, ['R1:data.task.title'], other)), 'ENTITY_MISMATCH');
+  const unread = source('rota_task_detail', { task: { taskId: TASKS.UNASSIGNED, title: 'Dokümantasyon' } }, { selectors: [{ type: 'task', id: TASKS.UNASSIGNED }] });
+  assert.equal(issue(verify([unread], { ...raw, entities: [{ type: 'task', bound: TASKS.UNASSIGNED }] }, ['R1:data.task.title'])), 'METRIC_MISSING');
+});
+
+test('explicit-empty state obeys the single freshness rule in verification and rendering', () => {
+  const task = TASKS.OVERDUE;
+  const request = { operation: 'value', metrics: ['task.targetFinish'], entities: [{ type: 'task', bound: task }] };
+  const searched = (id) => source('rota_task_search', { tasks: [{ taskId: task, title: 'Radar test planı' }] }, { id, envelope: { totalCount: 1, returnedCount: 1 } });
+  const detailed = (id, targetFinish) => source('rota_task_detail', { task: { taskId: task, dates: { targetFinish } } }, { id, selectors: [{ type: 'task', id: task }] });
+  // Eski açık boşluk, aynı görevin daha yeni değeriyle eskir: ne doğrulanır ne çizilir.
+  assert.equal(issue(verify([searched('R1')], request, ['R1:data.tasks.0.title'])), null);
+  const newer = detailed('R2', '2026-10-01');
+  assert.equal(issue(verify([searched('R1'), newer], request, ['R1:data.tasks.0.title'])), 'METRIC_MISSING');
+  const both = verify([searched('R1'), newer], request, ['R1:data.tasks.0.title', 'R2:data.task.dates.targetFinish']);
+  assert.equal(issue(both), null);
+  assert.doesNotMatch(both.normalized, /Belirtilmemiş/);
+  // Eski değer, aynı görevin daha yeni açık boşluğuyla eskir; okumayan araç (bağımlılık satırı) eskitmez.
+  assert.equal(issue(verify([detailed('R1', '2026-10-01'), searched('R2')], request, ['R1:data.task.dates.targetFinish'])), 'STALE_EVIDENCE');
+  const dependency = source('rota_dependency_inspect', { task: { taskId: TASKS.DUE_SOON, title: 'Anten' }, predecessors: [{ taskId: task, title: 'Radar test planı' }], successors: [] }, { id: 'R2' });
+  assert.equal(issue(verify([detailed('R1', '2026-10-01'), dependency], request, ['R1:data.task.dates.targetFinish'])), null);
+});
+
+test('a selected naming context obeys the same freshness rule as the requested metric', () => {
+  const task = TASKS.OVERDUE;
+  const searched = source('rota_task_search', { tasks: [{ taskId: task, title: 'Eski ad' }] }, { envelope: { totalCount: 1, returnedCount: 1 } });
+  const detail = source('rota_task_detail', { task: { taskId: task, title: 'Yeni ad', hours: { planned: 5 } } }, { id: 'R2', selectors: [{ type: 'task', id: task }] });
+  const request = { operation: 'value', metrics: ['task.plannedHours'], entities: [{ type: 'task', bound: task }], reasoning: 'synthesis' };
+  assert.equal(issue(verify([searched, detail], request, ['R1:data.tasks.0.title', 'R2:data.task.hours.planned'])), 'STALE_EVIDENCE');
+  assert.equal(issue(verify([searched, detail], request, ['R2:data.task.title', 'R2:data.task.hours.planned'])), null);
+});
+
+test('a list or rank cannot silently drop a declared entity its population tool cannot select', () => {
+  const raw = { operation: 'list', metrics: ['task.title', 'task.status'], population: { tool: 'rota_task_search', collection: 'tasks' },
+    entities: [{ type: 'project', id: PROJECTS.FULL }, { type: 'task', id: TASKS.OVERDUE }] };
+  assert.ok(complete(raw, []).problems.includes('$.entities[1]:population'), 'görev bağı düşerse projenin bütün görevleri listelenirdi');
+  assert.ok(!complete(raw, []).problems.includes('$.entities[0]:population'));
+  // Varlığın kendi özelliğini seçen başka bir okuma (görev ayrıntısı) varlığı taşır.
+  assert.deepEqual(complete({ ...raw, metrics: ['task.title', 'task.description'], entities: [{ type: 'task', id: TASKS.OVERDUE }] }, [], { allowedTextFields: ['description'] })
+    .problems.filter((problem) => problem.startsWith('$.entities')), []);
+  assert.ok(complete({ operation: 'list', metrics: ['project.name'], population: { tool: 'rota_portfolio_summary', collection: 'projects' },
+    entities: [{ type: 'project', id: PROJECTS.FULL }] }, []).problems.includes('$.entities[0]:population'));
+});
+
+test('search identity is the tool search predicate, not a looser folding', () => {
+  const { canonicalFacets } = populationServer;
+  assert.notDeepEqual(canonicalFacets('task', { text: 'A-B' }, REQUEST_TODAY), canonicalFacets('task', { text: 'A B' }, REQUEST_TODAY));
+  assert.notDeepEqual(canonicalFacets('task', { text: 'Kısım' }, REQUEST_TODAY), canonicalFacets('task', { text: 'Kisim' }, REQUEST_TODAY));
+  assert.deepEqual(canonicalFacets('task', { text: 'RAPOR-2' }, REQUEST_TODAY), canonicalFacets('task', { text: 'rapor-2' }, REQUEST_TODAY));
+  const raw = { operation: 'list', metrics: ['task.title'], filters: { text: 'A-B' }, population: { tool: 'rota_task_search', collection: 'tasks' } };
+  assert.ok(complete(raw, [['rota_task_search', { text: 'A B' }]]).problems.includes('$.filters.text:conflict'));
+  const request = complete(raw, []).request;
+  assert.equal(populationServer.requestBoundCall(request, 'rota_task_search', { text: 'A B', limit: 50 }, { today: REQUEST_TODAY }), null);
+  assert.ok(populationServer.requestBoundCall(request, 'rota_task_search', { text: 'a-b', limit: 50 }, { today: REQUEST_TODAY }));
+});
+
+test('a zero-hit task name scoped to the declared project probes and ends inside that project only', async () => {
+  const { createToolScope } = await import('../src/server/ai/tools/toolScope.js');
+  const request = parsedRequest({ operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' },
+    entities: [{ type: 'project', id: PROJECTS.FULL }, { type: 'task', text: 'Olmayan görev' }] });
+  const miss = (args, id = 'R1') => source('rota_task_search', { tasks: [], titleResolution: 'none' }, { id, args });
+  const scoped = miss({ text: 'Olmayan görev', projectId: PROJECTS.FULL });
+  assert.deepEqual(requestDeclarationModule.nameProbes(request, entriesOf([scoped])),
+    [{ name: 'rota_task_search', args: { text: 'Olmayan', projectId: PROJECTS.FULL } }], 'yoklama projede kalır');
+  assert.equal(requestDeclarationModule.unmatchedEntities(request, entriesOf([scoped])).length, 0);
+  const probed = [scoped, miss({ text: 'Olmayan', projectId: PROJECTS.FULL }, 'R2')];
+  assert.equal(requestDeclarationModule.unmatchedEntities(request, entriesOf(probed)).length, 1, 'projede bulunmayan ad "bulunamadı" ile biter');
+  // Başka projedeki boşluk bu projenin kanıtı değildir; projesiz istekte projedeki boşluk genel boşluk değildir.
+  const elsewhere = [miss({ text: 'Olmayan görev', projectId: PROJECTS.READ }), miss({ text: 'Olmayan', projectId: PROJECTS.READ }, 'R2')];
+  assert.equal(requestDeclarationModule.unmatchedEntities(request, entriesOf(elsewhere)).length, 0);
+  const unscoped = parsedRequest({ operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', text: 'Olmayan görev' }] });
+  assert.deepEqual(requestDeclarationModule.nameProbes(unscoped, entriesOf([scoped])), []);
+  assert.equal(requestDeclarationModule.unmatchedEntities(unscoped, entriesOf(probed)).length, 0);
+  // Kapsam sınırı: projedeki boşluğun yoklaması aynı projede kalır; projesiz yoklamaya dönüşemez.
+  const scope = createToolScope({ today: REQUEST_TODAY, userText: `${PROJECTS.FULL} projesinde Olmayan görev durumu` });
+  scope.establish([{ name: 'rota_task_search', arguments: JSON.stringify({ text: 'Olmayan görev', projectId: PROJECTS.FULL }) }],
+    [{ content: JSON.stringify({ ok: true, complete: true, data: { tasks: [], titleResolution: 'none' } }) }]);
+  assert.doesNotThrow(() => scope.validate('rota_task_search', { text: 'Olmayan', projectId: PROJECTS.FULL }));
+  assert.throws(() => scope.validate('rota_task_search', { text: 'Olmayan' }), { code: 'UNSUPPORTED_SCOPE' });
+});
+
+test('grouping by the named records type drops the naming metric together with its field and entity bindings', () => {
+  const raw = { operation: 'list', metrics: ['project.name', 'tasks.total'], population: { tool: 'rota_task_analytics', groupBy: 'project' },
+    entities: [{ type: 'project', id: PROJECTS.FULL }], fields: [{ metric: 'project.name', tool: 'rota_project_detail', path: 'data.project.name' }] };
+  const { request, problems } = complete(raw, []);
+  assert.deepEqual(problems, []);
+  assert.deepEqual([request.operation, request.metrics, request.fields], ['value', ['tasks.total'], []]);
+});
+
+test('a list and a bound entity whose own multivalue property is explicitly empty agree in readiness, selection and verification', async (t) => {
+  const raw = { operation: 'list', metrics: ['task.title', 'project.tags'], population: { tool: 'rota_task_search', collection: 'tasks' },
+    entities: [{ type: 'project', id: PROJECTS.READ }] };
+  const { request, problems } = complete(raw, []);
+  assert.deepEqual(problems, []);
+  const reads = populationServer.derivedReads(request, request.entities.map((entity) => ({ ...entity, bound: entity.id })), { today: REQUEST_TODAY });
+  assert.deepEqual(reads.map(({ name }) => name), ['rota_task_search', 'rota_project_detail']);
+  const { ledger } = await callRotaTools(stackFor(t), AYSE, reads.map(({ name, args }) => [name, args]));
+  const entries = ledger.requestEntries();
+  assert.equal(requestEvidenceReady(request, entries, REQUEST_TODAY), true);
+  const [candidate] = requestSelections(request, entries, null, REQUEST_TODAY);
+  assert.ok(JSON.parse(candidate).facts.includes('R2:data.project.name'));
+  const rendered = verifyRequested(ledger, JSON.parse(candidate).facts, raw);
+  assert.equal(issue(rendered), null);
+  assert.match(rendered.normalized, /Proje etiketleri: \*\*Belirtilmemiş\*\*/);
 });

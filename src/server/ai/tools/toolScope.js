@@ -9,6 +9,8 @@ import { clarificationReferences } from '../../../domain/ai/clarification.js';
 const IDENTITY_ARGUMENTS = Object.freeze({ taskId: 'tasks', projectId: 'projects', wbsId: 'wbs', baselineId: 'baselines', personSicil: 'people' });
 const TASK_POPULATION_TOOLS = new Set(['rota_task_search', 'rota_task_analytics']);
 const NAME_SEARCH_TOOLS = new Set(['rota_task_search', 'rota_project_search', 'rota_person_search']);
+/** Ad aramasının ve yoklamasının bağımsız değişkenleri: metin, sayfa boyu ve (görev adında) tek proje. */
+const NAME_PROBE_KEYS = new Set(['text', 'limit', 'projectId']);
 /** Kimliksiz geniş nüfustan aynı görünür görev nüfusuna geçişler. */
 const BROAD_FOLLOW_UPS = Object.freeze({
   rota_data_quality: ['rota_task_search', 'rota_task_analytics'],
@@ -259,10 +261,11 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
           if (args[key] != null) ids[population].add(String(args[key]));
         }
         for (const { population, id } of resultIdentities(call.name, body.data)) ids[population].add(String(id));
+        // Hiçbir kayda uymayan ad, arandığı kapsamla (koşulsuz ya da tek projede) kaydedilir.
         if (NAME_SEARCH_TOOLS.has(call.name) && typeof args.text === 'string' && body.complete !== false
-          && Object.keys(args).every((key) => ['text', 'limit'].includes(key))
+          && Object.keys(args).every((key) => NAME_PROBE_KEYS.has(key))
           && [body.data?.resolution, body.data?.titleResolution].includes('none')) {
-          unmatchedNames.set(call.name, new Set([...(unmatchedNames.get(call.name) || []), containmentText(args.text)]));
+          unmatchedNames.set(call.name, [...(unmatchedNames.get(call.name) || []), { text: containmentText(args.text), projectId: args.projectId ?? null }]);
         }
         const candidate = typeof args.text === 'string' ? namedCandidate(call.name, body.data, userNeedle, args.text) : null;
         if (candidate) {
@@ -298,9 +301,10 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
         return;
       }
       if ((args.textFields || []).some((field) => !textFields.has(field))) fail();
-      // Hiçbir kayda uymayan ad aramasının yoklaması: aynı adın kullanıcının yazdığı ilk sözcükleriyle koşulsuz ad araması.
-      if (NAME_SEARCH_TOOLS.has(name) && args.text != null && Object.keys(args).every((key) => ['text', 'limit'].includes(key)) && textTrusted(args.text)
-        && [...(unmatchedNames.get(name) || [])].some((text) => text.startsWith(`${containmentText(args.text)} `))) return;
+      // Hiçbir kayda uymayan ad aramasının yoklaması: aynı adın kullanıcının yazdığı ilk sözcükleriyle, AYNI kapsamda ad araması.
+      if (NAME_SEARCH_TOOLS.has(name) && args.text != null && Object.keys(args).every((key) => NAME_PROBE_KEYS.has(key)) && textTrusted(args.text)
+        && (unmatchedNames.get(name) || []).some((item) => item.projectId === (args.projectId ?? null)
+          && item.text.startsWith(`${containmentText(args.text)} `))) return;
       const normalized = populationArguments(name, args, today);
       const sameRoot = roots.get(name);
       const relatedTaskRoots = TASK_POPULATION_TOOLS.has(name)

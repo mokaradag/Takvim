@@ -960,9 +960,13 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
         conversationId: turn.conversation.id, messageId: stored.message.id
       });
       // Bu turda doğrulanıp yazılan yanıt gösterilir; kalıcı nüfusu sınıra sığmayan
-      // yanıt yalnızca SONRAKİ açılışlarda doğrulanamaz sayılır.
+      // yanıt yalnızca SONRAKİ açılışlarda doğrulanamaz sayılır. Kayıtlı kanıtın tekrar
+      // okunamaması (geçici hata) güncel yetkinin bilinmemesi değildir: yetki bellekteki
+      // defterle yeniden doğrulanır; doğrulanamazsa ya da erişim kalktıysa yanıt gösterilmez.
       const own = stored.message.id === messageId;
-      const liveAuthorized = own && evidence?.unverifiable?.has(messageId) && await grounded.guardDisclosure?.(signal);
+      const reloadFailed = evidence?.unavailable === true || evidence?.ready === false
+        || evidence?.unavailableMessages?.has(messageId) || evidence?.unverifiable?.has(messageId);
+      const liveAuthorized = own && reloadFailed && await grounded.guardDisclosure?.(signal);
       answer = liveAuthorized
         ? { ...stored.message, evidence: grounded.evidence }
         : discloseSavedMessages([stored.message], evidence)[0];

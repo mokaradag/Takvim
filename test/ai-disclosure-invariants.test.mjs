@@ -319,6 +319,34 @@ test('a transient post-persist check fails closed before streaming and can recov
   assert.match(recovered.body.messages.find((message) => message.role === 'assistant').content, /Radar test planı/);
 });
 
+for (const revoke of [false, true]) {
+  test(`an optional saved-evidence reread failure after persistence ${revoke ? 'still hides an answer whose access was revoked' : 'keeps the answer this turn just verified'}`, async (t) => {
+    const stack = stackFor(t);
+    citeTask(stack, TASKS.OVERDUE);
+    const pool = await getSqlPool();
+    // Kayıtlı kanıtın tekrar okunması geçici olarak başarısızdır; güncel yetki bellekteki defterle yine doğrulanabilir.
+    stack.db.aiConversationHooks = { beforeAppend() {
+      failEvidenceReads(t, pool, 'DATABASE_UNAVAILABLE');
+      if (revoke) {
+        stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+        stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+      }
+    } };
+    const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
+    const answer = done(response).assistantMessage;
+    if (revoke) {
+      assert.notEqual(answer.finishReason, 'stop');
+      assert.deepEqual(answer.evidence, []);
+      assert.equal(deltas(response).includes('Radar test planı'), false, 'erişimi kalkan veri gösterilmez');
+    } else {
+      assert.equal(answer.finishReason, 'stop');
+      assert.match(answer.content, /Radar test planı/);
+      assert.equal(answer.evidence.length, 1);
+      assert.equal(deltas(response), answer.content);
+    }
+  });
+}
+
 for (const source of ['rota', 'general']) {
   test(`write reconciliation uses the same disclosure gate for the ${source} generation path`, async (t) => {
     const stack = stackFor(t);

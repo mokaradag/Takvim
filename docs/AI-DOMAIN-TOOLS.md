@@ -1235,7 +1235,12 @@ paylaşır (`evidencePopulation.js`, `requestPopulation.js`, `requestContract.js
 - *Tek nüfus kimliği.* Varsayılanlar kanonikleşir (sıra, WBS derinliği 2,
   gruplama yok, korumalı alan yok); verilmeyen boyut varsayılandır, joker
   değildir. Toplamı belirleyen boyutlar (WBS derinliği, korumalı arama alanı)
-  satır kümesini belirleyenlerden (sıra, gruplama) ayrı tutulur.
+  satır kümesini belirleyenlerden (sıra, gruplama) ayrı tutulur. Arama metninin
+  kimliği aracın kendi arama yüklemidir (`foldText`: büyük/küçük harf ve aksan
+  duyarsız, noktalama ve ı/i ayrı); "A-B" ile "A B" ayrı nüfustur. Liste ve
+  sıralamada nüfus aracının seçicisi olmayan (ve başka bir okumanın seçmediği)
+  bildirilen varlık sessizce düşürülmez; istek veri okunmadan reddedilir
+  (`$.entities[i]:population`).
 - *Tek tazelik kuralı.* Aynı nüfus daha sonraki bir araç turunda yeniden
   okunduysa eski olgu kullanılamaz; aynı turdaki okumalar eşzamanlıdır ve
   okumalar birbiriyle karşılaştırılıp doğru olanı çıkarılmaz. Liste/sıralama
@@ -1244,7 +1249,9 @@ paylaşır (`evidencePopulation.js`, `requestPopulation.js`, `requestContract.js
   özelliği aynı varlığın aynı anlamsal özelliğini (açık boşluğu dâhil) taşıyan
   okumayla; toplam aynı araçtaki eşdeğer taşıyıcıyla eskir. Araçlar arası
   eşdeğerlik yalnızca görev sayımları için açıkça bildirilmiştir; aynı ölçü
-  kimliği tek başına eşdeğerlik değildir.
+  kimliği tek başına eşdeğerlik değildir. Kural her seçilen olguya (adlandıran
+  bağlam dâhil) ve boş alan durumuna da uygulanır: daha yeni değerin eskittiği
+  boşluk ne doğrulanır ne "Belirtilmemiş" olarak çizilir.
 - *Her bağ bir yükümlülüktür.* Bildirilen her `fields` bağı ve her ölçü/varlık
   bağı (ölçü sayısından bağımsız) karşılanmalıdır; boş çok değerli alan bir
   değerdir, alanın yokluğu ya da kısaltılmış kanıt değildir.
@@ -1265,7 +1272,8 @@ paylaşır (`evidencePopulation.js`, `requestPopulation.js`, `requestContract.js
   hibeleri taşınmış ya da silinmiş bir görevin eski toplamını korumaz.
 - *Derin bir doğrulama onarımı değildir.* Kanıt okunduysa devir yalnızca kanıt
   isteği doğrulayıcının kurallarıyla karşılayabiliyorsa, okunmadıysa ortak araç
-  bütçesinden tur kalmışsa yapılır; kanıtsız devirde Derin yeniden planlar.
+  bütçesinden tur kalmışsa yapılır; kanıtsız devirde Derin yeniden planlar ve
+  Standart turun kabul notu (eski istek) dökümden çıkarılır.
   Yetkisi kalkan kanıt başka bir sağlayıcı turuna gönderilmez.
 
 **Zayıf model güvenceleri.** Modelin yalnızca türlü isteği doğru bildirmesi
@@ -1282,12 +1290,13 @@ kullanıcı cümlesini yorumlamaz; hepsi kayıt defterinden ve kanıttan türeti
 - *Kırılım kimliği.* Görev nüfusu kırılımı taşımıyorsa ve tanımlayan koşulu
   zaten içeriyorsa kırılım sayımı (ör. `tasks.overdue` ve `deadline: overdue`)
   o nüfusun toplamıdır (`BREAKDOWN_FILTERS`; özellik sınamasıyla korunur).
-- *Tek anlamlı taşıyıcılar.* Yapı gereği aynı değeri taşıyan yollar
-  (`SAME_VALUE_PATHS`) ve aynı değerin birlikte gösterilen biçimleri (proje
-  adı/kodu, WBS adı/kodu, kural/açıklaması, tatil adı/kısa adı, birim
-  kırılımı) sunucu seçiminde belirsizlik değildir. Satırın yazmadığı kayıtlı
-  alan da belirsizlik değildir; bildirilen koleksiyonun satır alanı listenin
-  yanıtıdır, aynı ölçünün genel toplamı yalnızca bağlamdır.
+- *Tek anlamlı taşıyıcılar.* Yalnızca yapı gereği aynı değeri taşıyan yollar
+  (`SAME_VALUE_PATHS`) sunucu seçiminde belirsizlik değildir. Aynı ölçünün ayrı
+  anlamlı kardeş alanları (proje adı/kodu, WBS adı/kodu, kural/açıklaması,
+  tatil adı/kısa adı, organizasyon düzeyleri) açık `fields` bağı ister; bağ
+  yoksa istek veri okunmadan reddedilir. Satırın yazmadığı kayıtlı alan
+  belirsizlik değildir; bildirilen koleksiyonun satır alanı listenin yanıtıdır,
+  aynı ölçünün genel toplamı yalnızca bağlamdır.
 - *Kardeş koleksiyonlar.* `list` isteğinde koleksiyon verilmez ve bildirilen
   satır ölçülerini kayıtlı kardeş koleksiyonlar taşırsa (öncüller ve ardıllar,
   bildirim akışları) liste hepsidir; her biri tam listelenir. Başka birden çok
@@ -1300,10 +1309,12 @@ kullanıcı cümlesini yorumlamaz; hepsi kayıt defterinden ve kanıttan türeti
   bildirilen ad onun kısaltılmışı ya da sözcüklerle uzatılmışı olmalıdır (model
   adı kısaltmış ya da "… görev" diye uzatmış olabilir). Tam ad hiçbir kayda
   uymazsa sunucu adın ilk sözcüğüyle bir yoklama araması yapar (kapsam yalnızca
-  bu yoklamaya izin verir). Adaylar tek bir tekrar serisinin şablonu ve
+  bu yoklamaya izin verir). Tek bildirilen projede çözülen görev adının araması
+  ve yoklaması aynı projeyle sınırlıdır; projedeki boşluk başka bir kapsamda
+  yeniden aranmaz. Adaylar tek bir tekrar serisinin şablonu ve
   yinelemeleriyse ad yalnızca seri incelemesi için tektir. Ne tam ad ne yoklama
-  hiçbir görünür kayda uymuyorsa yanıt, kaydın varlığını ele vermeyen
-  "bulunamadı"dır; model seçim turu gerekmez.
+  (adın çözüldüğü kapsamda) hiçbir görünür kayda uymuyorsa yanıt, kaydın
+  varlığını ele vermeyen "bulunamadı"dır; model seçim turu gerekmez.
 - *Varlık özelliği okuması.* Bağlı varlığın nüfus aracında bulunmayan kendi
   özelliği (ör. görev listesinde görevin açıklaması) o varlığı seçen taşıyıcı
   araçtan okunur.
@@ -1317,9 +1328,15 @@ kullanıcı cümlesini yorumlamaz; hepsi kayıt defterinden ve kanıttan türeti
 - *Kullanıcı metni.* Ad ve arama metni kullanıcının iletisinde bir sözcük
   başından başlamalıdır; son sözcük çekim eki alabilir ("toplantısı" →
   "toplantısının").
-- *Yazılmayan alan.* Araçlar boş tekil varlık özelliğini (ör. hedef bitişi
-  olmayan görev) satıra yazmaz: kısaltılmamış kanıtta bu bir boş değerdir.
-  Sayaçlar her satıra yazılır; yazılmamış sayaç eksik ölçüdür.
+- *Alan durumu.* Alan üç durumdan birindedir: değer, açık boşluk ya da
+  okunmamış (`rowFieldState` tek tanımdır; hazırlık, doğrulama, çizim ve tazelik
+  onu kullanır). Açık boşluk `null`, boş çok değerli alan ya da üreticinin
+  okuyup boşken yazmadığı kayıtlı özelliktir (ör. görev aramasında terminsiz
+  görev). Üreticinin okumadığı alan (ör. öncül satırında termin) boş değildir:
+  ölçüyü karşılamaz ve "Belirtilmemiş" olarak çizilmez. Bağlı varlığın satır
+  dışı çok değerli özelliğinin açık boşluğu (ör. sorumlusu olmayan görevin
+  ayrıntısı) da değerdir. Sayaçlar her satıra yazılır; yazılmamış sayaç eksik
+  ölçüdür.
 - *İş dağılım derinliği.* Düğüm listesinde `population.depth` açıkça bildirilir (planın
   kendi WBS okuması yoksa eksik derinlik veri okunmadan reddedilir). Derinlik nüfusun boyutudur: `nodeCount`/`totalCount`
   istenen derinliğe kadar olan düğümleri sayar, sonuç bu düğümlerin hepsi
@@ -1428,8 +1445,10 @@ künyeleri birlikte gizlenir. Tek bir atıf iptal olsa bile kayıtlı yanıtın
 tamamı gizlenir; korunmuş metin genel sohbet geçmişine de alınmaz. Eski, epoch
 içermeyen kanıt güvenilir sayılmaz; geçici kanıt/yetki okuma hatası `unavailable`
 olarak gösterilir, yetki kaybı diye sunulmaz. Yeni doğrulanıp yazılan kendi
-yanıtının tekrar okuması geçici olarak başarısızsa doğrulanmış sonuç korunur;
-başka bir yazıcıyla uzlaştırılmış eski yanıt bu istisnayı kullanamaz.
+yanıtının tekrar okuması geçici olarak başarısızsa doğrulanmış sonuç korunur:
+güncel yetki bellekteki kanıt defteriyle yeniden doğrulanır; yetki
+doğrulanamazsa ya da erişim kalktıysa yanıt gösterilmez. Başka bir yazıcıyla
+uzlaştırılmış eski yanıt bu istisnayı kullanamaz.
 Son yetki okumasının ayrı 8 saniyelik bütçesi vardır; tüketilmiş araç SQL
 bütçesi başarılı kanıtı otomatik doğrulama hatasına çevirmez.
 Bu, gözlenen yetki değişimini kapatan uygulama denetimidir; SQL okuması,

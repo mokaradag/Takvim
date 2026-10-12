@@ -5,7 +5,7 @@ import { bindingsRequired, conjunctiveEntities, listCollections, parentProperty,
 import { METRICS } from '../../../domain/ai/claimableEvidence.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 import { effectivePageSize } from './rota/rotaToolSupport.js';
-import { addDays, normalizeTaskFilters } from './rota/taskFacts.js';
+import { addDays, foldText, normalizeTaskFilters } from './rota/taskFacts.js';
 import { parseToolArguments } from './toolArguments.js';
 import { getRotaTool, toolCatalogForModel } from './toolRegistry.js';
 import { containmentText, populationArguments } from './toolScope.js';
@@ -69,10 +69,12 @@ const same = (left, right) => JSON.stringify(left ?? null) === JSON.stringify(ri
 /**
  * Aracın bağımsız değişken adlarıyla değerlerden kanonik nüfus koşulları.
  * Arama metni her zaman nüfus koşuludur; ad çözümü için yapılan aramanın
- * satırı, değer isteğinde adlandırılan varlık olarak doğrulanır.
+ * satırı, değer isteğinde adlandırılan varlık olarak doğrulanır. Metnin kimliği
+ * aracın kendi arama yüklemidir (foldText: noktalama ve ı/i ayrı kalır); daha
+ * gevşek bir katlama farklı aramaları aynı nüfus sayardı.
  */
 export function canonicalFacets(family, values, today) {
-  const searchText = (text) => (text ? containmentText(text) || null : null);
+  const searchText = (text) => (text ? foldText(text) || null : null);
   switch (family) {
     case 'task': {
       const filters = normalizeTaskFilters({ ...values, ...periodWindow(values.period, today), period: undefined });
@@ -87,7 +89,7 @@ export function canonicalFacets(family, values, today) {
     case 'workflow': {
       const window = { dateFrom: values.dateFrom || null, dateTo: values.dateTo || null, ...periodWindow(values.period, today) };
       return compact({ tab: values.tab && values.tab !== 'all' ? values.tab : null, workflowStatus: values.status || null, ...window,
-        text: values.text ? containmentText(values.text) : null });
+        text: searchText(values.text) });
     }
     case 'portfolio':
       return compact({ source: values.source && values.source !== 'all' ? values.source : null, includeEmpty: values.includeEmpty === false ? false : null });
@@ -461,13 +463,15 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
     if (sort) population.sort = sort;
   }
   const completed = Object.freeze({ ...request, operation, metrics: Object.freeze(metrics.list), filters: Object.freeze(filters), entities: Object.freeze(entities),
-    fields: Object.freeze((request.fields || []).map((field) => {
+    // Öznesine dönüşen adlandıran ölçünün alan ve varlık bağı da düşer: istek kendi içinde tutarlı kalır.
+    fields: Object.freeze((request.fields || []).filter((field) => metrics.list.includes(renamed(field.metric))).map((field) => {
       if (renamed(field.metric) === field.metric) return field;
       const paths = metricPaths(tool, renamed(field.metric)).filter((path) => !insideRowCollection(tool, path));
       const path = paths.find((path) => path === 'totalCount') || paths[0];
       return Object.freeze({ ...field, metric: renamed(field.metric), tool, ...(path ? { path } : {}) });
     })),
-    bindings: Object.freeze((request.bindings || []).map((binding) => Object.freeze({ ...binding, metric: renamed(binding.metric) }))),
+    bindings: Object.freeze((request.bindings || []).filter((binding) => metrics.list.includes(renamed(binding.metric)))
+      .map((binding) => Object.freeze({ ...binding, metric: renamed(binding.metric) }))),
     ...(request.rank ? { rank: Object.freeze({ ...request.rank, metric: renamed(request.rank.metric) }) } : {}),
     population: Object.freeze(Object.fromEntries(Object.entries(population).filter(([, value]) => value != null))) });
   const capability = requestCapabilityProblems(completed, { allowedTextFields });
@@ -610,6 +614,16 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
       hints.push(`${metric}: ${lists.join('|')} satırlarının alanı değil`);
     });
   }
+  // Liste ve sıralama bildirilen her varlığı okumada taşır: nüfus aracının seçicisi olmayan ve başka bir okumanın
+  // seçmediği varlık sessizce düşürülürse nüfus genişler (ör. görev bağlı listede projenin bütün görevleri).
+  if (request.operation !== 'value') {
+    request.entities.forEach((entity, index) => {
+      const param = SELECTOR_PARAMS[entity.type];
+      if (Object.hasOwn(parameters, param) || entityReadElsewhere(request, entity, index)) return;
+      problems.push(`$.entities[${index}]:population`);
+      hints.push(`entities[${index}]: ${tool.name} ${entity.type} seçicisi (${param}) taşımaz; bu ${entity.type} kaydını seçen bir nüfus aracı bildir ya da varlığı kaldır`);
+    });
+  }
   if (bindingsRequired(request) && request.metrics.some((metric) => !NAMING_METRICS.has(metric) && !request.bindings.some((binding) => binding.metric === metric))) {
     problems.push('$.bindings:required');
     hints.push('bindings: her ölçü için {metric, entity} (entity, entities dizisindeki sıra)');
@@ -626,6 +640,18 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
 
 function isProperty(tool, path) {
   return metricEntry(tool, path.startsWith('data.') ? path.slice(5) : path)?.property === true;
+}
+
+/** Varlık nüfus aracının dışında bir okumayla seçiliyor mu: kendi özelliğinin taşıyıcısı ya da açık alan bağının aracı. */
+function entityReadElsewhere(request, entity, index) {
+  const param = SELECTOR_PARAMS[entity.type];
+  const allows = (metric) => {
+    const bindings = (request.bindings || []).filter((binding) => binding.metric === metric);
+    return !bindings.length || bindings.some((binding) => binding.entity === index);
+  };
+  return request.metrics.some((metric) => propertyCarrier(request, metric)?.type === entity.type && allows(metric))
+    || (request.fields || []).some((field) => field.tool !== request.population.tool && allows(field.metric)
+      && Object.hasOwn(getRotaTool(field.tool).parameters.properties, param));
 }
 
 function rowMetricsOf(tool, collection) {
@@ -646,6 +672,16 @@ const CATALOG_RESOLVERS = Object.freeze({ wbs: 'rota_wbs_inspect', baseline: 'ro
 const PROJECT_SCOPED = new Set(['task', 'wbs', 'baseline']);
 /** Farklı varlıklara bağlanan ölçüler karşılaştırmadır; bağlanmayan varlık ortak bağlamdır. */
 const comparisonSubjects = (request) => new Set((request.bindings || []).map((binding) => binding.entity));
+
+/**
+ * Adın çözüldüğü nüfus: karşılaştırma değilse tek bildirilen projenin görev, WBS ve baz plan adı
+ * o projede çözülür. Bağlı proje varlığı (henüz bağlanmamışsa `bound: null`) ya da null; türetilen
+ * çözüm, yoklama ve "bulunamadı" kararı aynı kapsamı kullanır.
+ */
+export function resolutionProject(request, bound, entity) {
+  const projects = bound.filter((item) => item.type === 'project');
+  return PROJECT_SCOPED.has(entity.type) && projects.length === 1 && comparisonSubjects(request).size < 2 ? projects[0] : null;
+}
 
 const stableArgs = (value) => JSON.stringify(value, (key, item) => (item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map((name) => [name, item[name]])) : item));
@@ -687,11 +723,10 @@ export function derivedReads(request, bound, { today, attempted = new Set() } = 
   const fresh = (calls) => calls.filter((call, index) => !attempted.has(key(call)) && calls.findIndex((other) => key(other) === key(call)) === index);
   const unresolved = bound.filter((entity) => !entity.bound && entity.text);
   if (unresolved.length) {
-    // Karşılaştırma değilse tek bildirilen projenin görev, WBS ve baz plan adı o projede, proje bağlandıktan sonra çözülür.
-    const projects = bound.filter((entity) => entity.type === 'project');
-    const project = projects.length === 1 && comparisonSubjects(request).size < 2 ? projects[0] : null;
+    // Projedeki kaydın adı proje bağlandıktan sonra o projede çözülür.
     return fresh(unresolved.flatMap((entity) => {
-      const scoped = PROJECT_SCOPED.has(entity.type) && project;
+      const project = resolutionProject(request, bound, entity);
+      const scoped = Boolean(project);
       if (scoped && project.bound == null) return [];
       const catalog = CATALOG_RESOLVERS[entity.type];
       const resolver = getRotaTool(catalog || RESOLVERS[entity.type] || '');

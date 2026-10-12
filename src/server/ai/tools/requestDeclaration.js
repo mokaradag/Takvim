@@ -13,12 +13,14 @@ import {
   metricDimensionsMatch
 } from '../../../domain/ai/evidencePopulation.js';
 import {
+  emptyPropertyProofs,
   ENTITY_ID_FIELDS,
   entityKey,
   factRow,
   factSuperseded,
   listCollections,
   parentProperty,
+  propertyOwner,
   rankableMeasure,
   rankedRowIndexes,
   REQUEST_ENTITY_TYPES,
@@ -44,6 +46,7 @@ import {
   periodWindow,
   populationAgreement,
   REQUEST_PERIODS,
+  resolutionProject,
   selectorsOf,
   sortedBy
 } from './requestPopulation.js';
@@ -333,21 +336,29 @@ const NAME_SEARCHES = Object.freeze({ project: ['rota_project_search', 'resoluti
 /** Kullanıcının yazdığı adın ilk sözcüğü: tam ad hiçbir kayda uymazsa yoklama araması bununla yapılır. */
 const probeText = (entity) => String(entity.query || entity.text || '').trim().split(/\s+/)[0] || '';
 
-function probeCall(entity) {
+/** Yoklama araması; projede çözülen ad yoklamada da aynı projeyle sınırlıdır (kapsam genişlemez). */
+function probeCall(entity, projectId = null) {
   const search = NAME_SEARCHES[entity.type]?.[0];
   if (!search) return null;
   const text = probeText(entity);
   if (entity.type === 'person' && text.length < MIN_DIRECTORY_QUERY_LENGTH && parseSicil(text) == null) return null;
-  try { return { name: search, args: parseToolArguments(getRotaTool(search).parameters, JSON.stringify({ text })) }; }
+  try { return { name: search, args: parseToolArguments(getRotaTool(search).parameters, JSON.stringify({ text, ...(projectId ? { projectId } : {}) })) }; }
   catch { return null; }
 }
 
-/** Bu metinle koşulsuz tam ad araması yapıldı ve hiçbir görünür kayda uymadı mı? */
-function searchedNone(entries, type, text) {
+/**
+ * Bu metinle ad araması yapıldı ve hiçbir görünür kayda uymadı mı? Koşulsuz arama her kapsamda,
+ * projede yapılan arama yalnızca adın aynı projedeki çözümü için "yok" kanıtıdır.
+ */
+function searchedNone(entries, type, text, projectId = null) {
   const [search, field] = NAME_SEARCHES[type] || [];
   return entries.some(({ tool, args = {}, payload }) => tool === search && payload?.data && payload.complete !== false
-    && containmentText(args.text || '') === text && Object.keys(args).every((key) => ['text', 'limit'].includes(key)) && payload.data[field] === 'none');
+    && containmentText(args.text || '') === text && Object.keys(args).every((key) => ['text', 'limit', 'projectId'].includes(key))
+    && (args.projectId == null || (projectId != null && canonicalActualId(args.projectId) === canonicalActualId(projectId))) && payload.data[field] === 'none');
 }
+
+/** Varlığın adının çözüldüğü proje kimliği (requestPopulation.resolutionProject); yoksa null. */
+const resolutionProjectId = (request, bound, entity) => resolutionProject(request, bound, entity)?.bound ?? null;
 
 /**
  * Tam adı hiçbir görünür kayda uymayan bağlanmamış varlığın yoklama araması (adın ilk sözcüğü):
@@ -355,21 +366,29 @@ function searchedNone(entries, type, text) {
  * iletisinde geçen tek aday bildirilen varlıktır.
  */
 export function nameProbes(request, entries, selection = null) {
-  return bindRequestEntities(request, entries, selection).flatMap((entity) => {
+  const bound = bindRequestEntities(request, entries, selection);
+  return bound.flatMap((entity) => {
     const probe = probeText(entity);
-    if (entity.bound || !entity.text || !searchedNone(entries, entity.type, entity.text) || containmentText(probe) === entity.text) return [];
-    const call = probeCall(entity);
+    const projectId = resolutionProjectId(request, bound, entity);
+    if (entity.bound || !entity.text || !searchedNone(entries, entity.type, entity.text, projectId) || containmentText(probe) === entity.text) return [];
+    const call = probeCall(entity, projectId);
     return call ? [call] : [];
   });
 }
 
 /**
- * Adla bildirilen ve ne tam adı ne de adın ilk sözcüğü hiçbir görünür kayda uymayan varlıklar (ör.
- * görme yetkisi olmayan proje). Bu varlığın verisi bu turda okunamaz; yanıt kaydın bulunamadığıdır.
+ * Adla bildirilen ve ne tam adı ne de adın ilk sözcüğü (adın çözüldüğü kapsamda) hiçbir görünür kayda
+ * uymayan varlıklar (ör. görme yetkisi olmayan proje). Bu varlığın verisi bu turda okunamaz; yanıt kaydın
+ * bulunamadığıdır ve başka bir kapsamda yeniden aranmaz.
  */
 export function unmatchedEntities(request, entries, selection = null) {
-  return bindRequestEntities(request, entries, selection).filter((entity) => !entity.bound && entity.text && searchedNone(entries, entity.type, entity.text)
-    && (!probeCall(entity) || searchedNone(entries, entity.type, containmentText(probeText(entity)))));
+  const bound = bindRequestEntities(request, entries, selection);
+  return bound.filter((entity) => {
+    if (entity.bound || !entity.text) return false;
+    const projectId = resolutionProjectId(request, bound, entity);
+    return searchedNone(entries, entity.type, entity.text, projectId)
+      && (!probeCall(entity, projectId) || searchedNone(entries, entity.type, containmentText(probeText(entity)), projectId));
+  });
 }
 
 /* ── Kanıtın nüfus dizini ─────────────────────────────────── */
@@ -509,6 +528,23 @@ function declaredCollections(request) {
 
 /* ── İstekten türetilen olgu seçimi ───────────────────────── */
 
+/**
+ * Bağlı varlığın açıkça boş çok değerli özelliği (doğrulayıcının aynı tanımı, emptyPropertyProofs):
+ * kanıt, varlığı adlandıran olgusuyla atfedilir; varlık başına en yeni kanıt.
+ */
+function emptyPropertyCitations(request, sources, metric, evidence, bound) {
+  const type = metricEntityType(metric);
+  const named = new Map();
+  for (const source of sources) {
+    for (const { owner } of emptyPropertyProofs(request, bound, source, metric, evidence)) {
+      const naming = source.facts.find((fact) => fact.semantic?.context && fact.semantic.property && !factRow(source.tool, fact.field)
+        && metricEntityType(fact.semantic.metric) === type && propertyOwner(source, fact.field, type) === owner);
+      if (naming) named.set(owner, `${source.id}:${naming.field}`);
+    }
+  }
+  return [...named.values()];
+}
+
 /** Değer isteği: her ölçünün (ve bağlı varlığının) tek anlamlı kanıtı. */
 function valueSelection(request, sources, evidence, bound, readiness = false) {
   const references = [];
@@ -536,7 +572,12 @@ function valueSelection(request, sources, evidence, bound, readiness = false) {
     // Eşdeğer okumalardan (aynı araç ve nüfus) yalnızca sonuncusu önerilir: aynı plandaki yinelenen çağrı seçimi belirsizleştirmez.
     }).filter((group, index, all) => !all.some((other, position) => position > index && other.source.tool === group.source.tool
       && scalarKey(other.source, metric) === scalarKey(group.source, metric)));
-    if (!groups.length) return null;
+    if (!groups.length) {
+      const named = emptyPropertyCitations(request, sources, metric, evidence, bound);
+      if (!named.length) return null;
+      references.push(...named);
+      continue;
+    }
     if (groups.length > 1) {
       if (bound.length < 2) return null;
       const keys = groups.map(({ source }) => JSON.stringify(source.selectors));
@@ -598,8 +639,9 @@ function collectionSelection(request, source, evidence, bound, sources, canonica
     const owners = sources.flatMap((other) => eligibleFacts(request, other, metric, evidence, bound)
       .filter((fact) => ownedBy(other, fact, bound) && isProperty(other.tool, canonicalField(fact.field)))
       .map((fact) => `${other.id}:${fact.field}`));
-    if (owners.length !== 1) return null;
-    scalars.push(owners[0]);
+    const citations = owners.length ? owners : emptyPropertyCitations(request, sources, metric, evidence, bound);
+    if (citations.length !== 1) return null;
+    scalars.push(citations[0]);
   }
   // Boş koleksiyonun yanıtı ya koleksiyonun sayısıdır ya da tamlık olgusudur (üst kaydın özelliği boşluğu söylemez).
   if (provesEmptyCollection(source, canonical)) {

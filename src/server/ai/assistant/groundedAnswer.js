@@ -390,6 +390,19 @@ function requestCallValidator(turn, request, reads = null) {
   };
 }
 
+/** Önceki kabul notu dökümlerden çıkarılır: yalnızca güncel kabul edilen istek modele bildirilir. */
+function clearAcceptedNote(turn) {
+  if (!turn.acceptedNote) return;
+  for (const transcript of [turn.transcript, turn.baseline]) {
+    transcript.forEach((message, index) => {
+      if (message.role === 'system' && message.content.includes(turn.acceptedNote)) {
+        transcript[index] = { ...message, content: message.content.replace(`\n\n${turn.acceptedNote}`, '') };
+      }
+    });
+  }
+  turn.acceptedNote = null;
+}
+
 /** Planla tamamlanan istek bu turun isteğidir; önceki (veri okunmadan değişen) kabul notunun yerini alır. */
 function acceptRequest(turn, request, language = null) {
   turn.request = request;
@@ -400,15 +413,7 @@ function acceptRequest(turn, request, language = null) {
   // Veri okunmadan bildirilen nüfusun korumalı metin alanları sunucunun türettiği okumalarda da açıktır.
   turn.containment.declareTextFields(requestTextFields(request));
   const note = `SUNUCU: Veri okunmadan bildirilen istek kabul edildi: ${requestSummary(request)}. Son yanıtta bu isteğin her ölçüsünü taşıyan olguları seç; istek veri okunduktan sonra değiştirilemez.`;
-  if (turn.acceptedNote) {
-    for (const transcript of [turn.transcript, turn.baseline]) {
-      transcript.forEach((message, index) => {
-        if (message.role === 'system' && message.content.includes(turn.acceptedNote)) {
-          transcript[index] = { ...message, content: message.content.replace(`\n\n${turn.acceptedNote}`, '') };
-        }
-      });
-    }
-  }
+  clearAcceptedNote(turn);
   turn.acceptedNote = note;
   instruct(turn, note);
 }
@@ -698,13 +703,15 @@ function escalation(turn, reason, { error = null } = {}) {
   turn.escalated = true;
   turn.transcript = [...turn.baseline];
   turn.trace.pending = null;
-  // Kanıt okunmadıysa istek donmamıştır: Derin düşünme kendi planını ve bildirimini verebilir.
+  // Kanıt okunmadıysa istek donmamıştır: Derin düşünme kendi planını ve bildirimini verebilir; eski kabul notu
+  // (ör. "istek değiştirilemez") Derin'i bağlamaz. Yürütülen okumaların kaydı korunur: aynı okuma yinelenmez.
   if (!turn.ledger.size()) {
     turn.declarationsLeft = DECLARATION_ROUNDS;
     turn.declared = null;
     turn.request = null;
     turn.toolsAttempted = false;
     turn.permittedTools = null;
+    clearAcceptedNote(turn);
   }
   if (turn.ledger.ids().length) instruct(turn, EVIDENCE_READY_NOTE);
   return {

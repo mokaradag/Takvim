@@ -234,6 +234,8 @@ test('a Standard turn that read no evidence hands Deep a fresh plan with tools; 
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, DEEP]);
   assert.deepEqual([deepCall.tools[0].name, deepCall.toolChoice], ['rota_plan', 'auto'], 'kanıtsız devirde istek donmamıştır');
+  assert.ok(deepCall.messages.every((message) => !String(message.content || '').includes('Veri okunmadan bildirilen istek kabul edildi')),
+    'Standart turun eski kabul notu Derin düşünmeyi bağlamaz');
   assert.equal(toolResultsOf(deepCall)[0].error.code, 'RESULT_TOO_LARGE', 'Derin, Standart turun başarısız okumasını görür');
   const answer = doneOf(response).assistantMessage;
   assert.equal(answer.finishReason, 'stop');

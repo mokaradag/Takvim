@@ -735,6 +735,17 @@ test('authorization id lists are materialized once into keyed temp tables before
   assert.match(DISCLOSURE_SCOPE_SETUP_SQL, /CREATE TABLE #AiDisclosureTasks\(TaskId uniqueidentifier NOT NULL PRIMARY KEY\)/);
 });
 
+test('a task name with no match inside the declared project ends as not-found in one model round and never searches outside the project', async (t) => {
+  const planned = { text: '', toolCalls: [{ id: 'plan', name: 'rota_plan', arguments: JSON.stringify({ intent: 'rota', language: 'tr', request: {
+    operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' },
+    entities: [{ type: 'project', id: PROJECTS.FULL }, { type: 'task', text: 'Olmayan görev' }] } }) }] };
+  const { result, stack } = await turn(t, [planned], { user: `${PROJECTS.FULL} projesindeki Olmayan görev durumu nedir?` });
+  assert.equal(result.outcome, 'not_found');
+  assert.equal(result.text, 'Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.');
+  const searches = stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').map((entry) => [entry.params.text, entry.params.projectId]);
+  assert.deepEqual(searches, [['Olmayan görev', PROJECTS.FULL], ['Olmayan', PROJECTS.FULL]], 'ad ve yoklaması yalnızca bildirilen projede aranır');
+});
+
 test('a filtered name miss cannot authorize an unfiltered probe; an unconditional miss still can', () => {
   const userText = 'Radar Modernizasyonu tamamlanmış görevleri';
   const filtered = createToolScope({ today: '2026-09-30', userText });

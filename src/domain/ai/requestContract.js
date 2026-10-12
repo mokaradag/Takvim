@@ -7,6 +7,7 @@ import {
   collectionTotalPaths,
   collectionTotalMetric,
   concreteCollections,
+  insideRowCollection,
   metricDimensionsMatch,
   presentCollection,
   provesEmptyCollection,
@@ -144,10 +145,28 @@ function pathValues(value, parts) {
 }
 
 /**
- * Satır alanının durumu: değer var, alan BOŞ (değeri null ya da yazılmamış tekil varlık
- * özelliği, ör. hedef bitişi olmayan görev; ya da çok değerli alan boş, ör. sorumlusu
- * olmayan görev: `assignees: []`) ya da alan hiç yok (yazılmamış sayaç ya da çok değerli alan). Boş alan bir
- * değerdir (yalnızca kısaltılmamış kanıtta); olmayan alan ölçüyü taşımaz.
+ * Üreticinin satırda OKUYUP boşken yazmadığı tekil özellikler (kısa yük). Yalnızca bu
+ * alanlarda yazılmamış alan boşluk kanıtıdır; kayıtta yeri olsa da üreticinin okumadığı
+ * alan (ör. öncül satırındaki termin) okunmamıştır, boş değildir.
+ */
+const OMITTED_WHEN_EMPTY = Object.freeze({
+  rota_task_search: { tasks: ['keyword', 'targetFinish', 'plannedStart', 'plannedFinish', 'actualStart', 'actualFinish', 'progressPercent',
+    'createdAt', 'updatedAt', 'overdueDays', 'project.code'] },
+  rota_project_search: { matches: ['code', 'lead'] },
+  rota_portfolio_summary: { projects: ['code'] },
+  rota_baseline_compare: { mostSlipped: ['targetFinish'] },
+  rota_schedule_requests: { items: ['decidedAt', 'project.code'] },
+  rota_assignment_requests: { items: ['requestedAssigneeOrganization', 'suggestedAssignee', 'targetFinish', 'decidedBy', 'decidedAt', 'project.code'] },
+  rota_activity_search: { items: ['project.code'] },
+  rota_notifications: { 'taskEvents.latest': ['by'] },
+  rota_outlook_status: { items: ['deliveredCalendarDate', 'lastDeliveredAt', 'failure.code', 'failure.message'] }
+});
+
+/**
+ * Satır alanının TEK durum tanımı: değer var, alan BOŞ (açık null, boş çok değerli alan, ör.
+ * sorumlusu olmayan görev: `assignees: []`, ya da üreticinin okuyup boşken yazmadığı özellik)
+ * ya da alan YOK (okunmamış). Boş alan bir değerdir (yalnızca kısaltılmamış kanıtta); olmayan
+ * alan ölçüyü taşımaz. Hazırlık, doğrulama, çizim ve tazelik bu durumu kullanır.
  */
 export function rowFieldState(tool, collection, row, field) {
   if (!carrierAvailable({ tool }, `data.${collection}.*.${field}`, row)) return 'absent';
@@ -156,8 +175,7 @@ export function rowFieldState(tool, collection, row, field) {
   if (values.some((value) => value !== null)) return 'value';
   if (values.length) return 'empty';
   const star = parts.indexOf('*');
-  // Araçlar boş tekil varlık özelliğini (ör. hedef bitişi olmayan görev) satıra yazmaz; sayaçlar her zaman yazılır.
-  if (star < 0) return metricEntry(tool, `${collection}.*.${field}`)?.property === true ? 'empty' : 'absent';
+  if (star < 0) return row && typeof row === 'object' && OMITTED_WHEN_EMPTY[tool]?.[collection]?.includes(field) ? 'empty' : 'absent';
   const container = parts.slice(0, star).reduce((value, key) => (value && typeof value === 'object' ? value[key] : undefined), row);
   return Array.isArray(container) && container.length === 0 ? 'empty' : 'absent';
 }
@@ -370,6 +388,36 @@ export function factSuperseded(evidence, source, fact, { rows = false } = {}) {
   return false;
 }
 
+/** Boş alan da olgudur: aynı tek tazelik kuralıyla eskir (daha yeni değer ya da okuma eski boşluğu geçersiz kılar). */
+export function emptyFieldCurrent(evidence, source, field, metric, rows) {
+  const property = metricEntry(source.tool, canonicalField(field).replace(/^data\./, ''))?.property === true;
+  return !factSuperseded(evidence, source, { field, semantic: { metric, property } }, { rows });
+}
+
+/**
+ * Bağlı varlığın satır dışı çok değerli özelliğinin açık boşluğu (ör. sorumlusu olmayan görevin
+ * ayrıntısında `task.assignees: []`): `[{ field, owner }]`. Kısaltılmamış kanıt, alan bağı,
+ * ölçü/varlık bağı ve tazelik uygulanır; doğrulama ve sunucu seçimi bu tanımı paylaşır.
+ */
+export function emptyPropertyProofs(request, entities, source, metric, evidence) {
+  const type = metricEntityType(metric);
+  if (!ENTITY_ID_FIELDS[type] || source.envelope?.data?.sizeNote != null) return [];
+  const declared = (request.fields || []).filter((item) => item.metric === metric);
+  const allowed = (request.bindings || []).filter((item) => item.metric === metric).map((item) => entities[item.entity]).filter(Boolean);
+  const owners = (allowed.length ? allowed : entities).filter((entity) => entity.type === type && entity.bound != null)
+    .map((entity) => entityKey(type, entity.bound));
+  return metricPaths(source.tool, metric).flatMap((path) => {
+    const star = path.indexOf('.*');
+    if (star < 0 || insideRowCollection(source.tool, path) || metricEntry(source.tool, path.slice(5))?.property !== true
+      || (declared.length && !declared.some((item) => item.tool === source.tool && item.path === path))) return [];
+    const container = valueAt(source.envelope, path.slice(0, star));
+    if (!Array.isArray(container) || container.length) return [];
+    const field = path.replace(/\*/g, '0');
+    const owner = propertyOwner(source, field, type);
+    return owner && owners.includes(owner) && emptyFieldCurrent(evidence, source, field, metric, false) ? [{ field, owner }] : [];
+  });
+}
+
 /** Boş nüfus kanıtı satır nüfusu ve onun sayımıdır; ikisine de aynı tazelik kuralı uygulanır. */
 function emptyProofSuperseded(evidence, source, canonical) {
   const metric = collectionTotalMetric(source.tool, canonical);
@@ -408,7 +456,7 @@ function emptyRowSources(request, facts, evidence) {
  * Değeri olan satır ölçünün olgusunu ister; çok değerli alanı boş olan satır
  * (kısaltılmamış kanıtta) ölçüyü boş değeriyle taşır; alanı olmayan satır taşımaz.
  */
-function rowMetricComplete(entry, metric, request) {
+function rowMetricComplete(entry, metric, request, evidence, rowsAnswer) {
   const prefix = `data.${entry.row.canonical}.*.`;
   const bound = (request.fields || []).filter((field) => field.metric === metric && field.tool === entry.source.tool && field.path.startsWith(prefix));
   const fields = bound.length ? bound.map((field) => field.path.slice(prefix.length)) : rowMetricFields(entry.source.tool, entry.row.canonical, metric);
@@ -419,27 +467,29 @@ function rowMetricComplete(entry, metric, request) {
     if (!row) return false;
     if (!metricAllowedForRow(request, metric, entry.source, row, entry.row.canonical)) return true;
     const states = fields.map((field) => rowFieldState(entry.source.tool, entry.row.canonical, row, field));
+    const empty = (field, position) => untrimmed && states[position] === 'empty'
+      && emptyFieldCurrent(evidence, entry.source, `${entry.row.collection}.${index}.${field.replace(/\*/g, '0')}`, metric, rowsAnswer);
     if (bound.length) return fields.every((field, position) => states[position] === 'value'
       ? entry.metrics.get(index)?.has(semanticCarrierKey(entry.source.tool, `${prefix}${field}`))
-      : untrimmed && states[position] === 'empty');
+      : empty(field, position));
     const present = fields.filter((field, position) => states[position] !== 'absent');
     if (present.length > 1 && !equivalentCarriers(entry.source.tool, present.map((field) => `${prefix}${field}`))) return false;
     if (states.includes('value')) return entry.metrics.get(index)?.has(metric) === true;
-    return untrimmed && states.includes('empty');
+    return fields.some(empty);
   });
 }
 
 /**
- * Seçilen satırların hiçbiri ölçünün değerini taşımıyor ama hepsinde ölçünün çok
- * değerli alanı (kısaltılmamış kanıtta) boşsa ölçü boş değeriyle verilmiştir.
+ * Seçilen satırların hiçbiri ölçünün değerini taşımıyor ama hepsinde ölçünün alanı
+ * (kısaltılmamış ve güncel kanıtta) açıkça boşsa ölçü boş değeriyle verilmiştir.
  */
-function emptyRowMetric(metric, rowGroups, request) {
+function emptyRowMetric(metric, rowGroups, request, evidence, rowsAnswer) {
   const carrying = rowGroups.filter((entry) => rowMetricFields(entry.source.tool, entry.row.canonical, metric).length);
-  return carrying.length > 0 && carrying.every((entry) => rowMetricComplete(entry, metric, request));
+  return carrying.length > 0 && carrying.every((entry) => rowMetricComplete(entry, metric, request, evidence, rowsAnswer));
 }
 
-/** Açık alan bağı, seçilen satırların hepsinde o alan boş çok değerliyse ya da koleksiyon boşsa boşta karşılanır. */
-function fieldVacuous(binding, rowGroups, empty) {
+/** Açık alan bağı, seçilen satırların hepsinde o alan güncel olarak boşsa ya da koleksiyon boşsa boşta karşılanır. */
+function fieldVacuous(binding, rowGroups, empty, evidence, rowsAnswer) {
   return rowCollections(binding.tool).some((collection) => {
     const prefix = `data.${collection}.*.`;
     if (!binding.path.startsWith(prefix)) return false;
@@ -447,7 +497,8 @@ function fieldVacuous(binding, rowGroups, empty) {
     const relative = binding.path.slice(prefix.length);
     const entries = rowGroups.filter((entry) => entry.source.tool === binding.tool && entry.row.canonical === collection);
     return entries.length > 0 && entries.every((entry) => entry.source.envelope?.data?.sizeNote == null && [...entry.indexes]
-      .every((index) => rowFieldState(binding.tool, collection, (valueAt(entry.source.envelope, entry.row.collection) || [])[index], relative) === 'empty'));
+      .every((index) => rowFieldState(binding.tool, collection, (valueAt(entry.source.envelope, entry.row.collection) || [])[index], relative) === 'empty'
+        && emptyFieldCurrent(evidence, entry.source, `${entry.row.collection}.${index}.${relative.replace(/\*/g, '0')}`, binding.metric, rowsAnswer)));
   });
 }
 
@@ -523,7 +574,6 @@ export function verifyRequestedFacts(request, facts, evidence) {
       represented.add(semantic.metric);
       const propertyType = semantic.property && (request.operation === 'value' || ownProperty) ? metricEntityType(semantic.metric) : null;
       const propertyId = rowObject?.[ENTITY_ID_FIELDS[propertyType]] ?? rowObject?.[propertyType]?.[ENTITY_ID_FIELDS[propertyType]];
-      if (factSuperseded(evidence, source, fact, { rows })) return fail('STALE_EVIDENCE');
       if (rows && !ownProperty && !row) scalars.push({ evidenceId, source, path });
       // Varlık yalnızca ölçü taşıyan olguyla karşılanır; ad ya da etiket bağlamı yetmez.
       const reference = ({ type, id }) => {
@@ -542,6 +592,8 @@ export function verifyRequestedFacts(request, facts, evidence) {
       }
       rowEntities.forEach((key) => reference({ type: key.split(':')[0], id: key.slice(key.indexOf(':') + 1) }));
     }
+    // Tek tazelik kuralı her seçilen olguya uygulanır: adlandıran bağlam da eskimiş okumadan gelemez.
+    if (factSuperseded(evidence, source, fact, { rows })) return fail('STALE_EVIDENCE');
     for (const item of factRows) {
       if (sourceCollections(source) && item.kind === 'row' && !sourceCollections(source).includes(item.canonical)) continue;
       const key = `${evidenceId}|${item.collection}`;
@@ -564,20 +616,34 @@ export function verifyRequestedFacts(request, facts, evidence) {
     const prefix = `data.${entry.row.canonical}.*.`;
     const fields = rowMetricFields(entry.source.tool, entry.row.canonical, metric).filter((field) => !declaredFields.some((item) => item.metric === metric)
       || declaredFields.some((item) => item.metric === metric && item.tool === entry.source.tool && item.path === `${prefix}${field}`));
-    if (!fields.length || !fields.every((field) => rowFieldState(entry.source.tool, entry.row.canonical, object, field) === 'empty')) continue;
+    if (!fields.length || !fields.every((field) => rowFieldState(entry.source.tool, entry.row.canonical, object, field) === 'empty'
+      && emptyFieldCurrent(evidence, entry.source, `${entry.row.collection}.${index}.${field.replace(/\*/g, '0')}`, metric, rows))) continue;
     const owner = propertyOwner(entry.source, `${entry.row.collection}.${index}.${fields[0]}`, metricEntityType(metric));
     if (!owner || !boundKeys.has(owner)) continue;
     referenced.add(owner);
     if (!metricEntities.has(metric)) metricEntities.set(metric, new Set());
     metricEntities.get(metric).add(owner);
   }
+  // Atfedilen kanıtta bağlı varlığın satır dışı çok değerli özelliği açıkça boşsa ölçü boş değeriyle verilmiştir.
+  const cited = [...new Set(facts.map(({ evidenceId }) => evidenceId))].map((id) => evidence.get(id));
+  const emptyProperties = [...metrics].filter((metric) => !represented.has(metric)).flatMap((metric) => cited
+    .flatMap((source) => emptyPropertyProofs(request, entities, source, metric, evidence).map((proof) => ({ ...proof, metric, source }))));
+  for (const { metric, owner } of emptyProperties) {
+    referenced.add(owner);
+    if (!metricEntities.has(metric)) metricEntities.set(metric, new Set());
+    metricEntities.get(metric).add(owner);
+  }
+  // Çizim doğrulanmış boş özellikleri kullanır; JavaScript özelliğinin yokluğundan boşluk çıkarılmaz.
+  const passed = (extra) => ({ ok: true, issues: [], ...extra,
+    ...(emptyProperties.length ? { emptyProperties: emptyProperties.map(({ source, field, metric }) => ({ evidenceId: source.id, field, metric })) } : {}) });
   const empty = rows && !rowGroups.length ? emptyRowSources(request, facts, evidence) : [];
   if (empty.some((item) => item.stale)) return fail('STALE_EVIDENCE');
-  const vacuous = new Set(empty.flatMap(({ metrics: covered }) => covered));
+  const vacuous = new Set([...empty.flatMap(({ metrics: covered }) => covered), ...emptyProperties.map(({ metric }) => metric)]);
   for (const { source } of empty) for (const selector of source.selectors) if (boundKeys.has(entityKey(selector.type, selector.id))) referenced.add(entityKey(selector.type, selector.id));
-  if ([...metrics].some((metric) => !represented.has(metric) && !vacuous.has(metric) && !emptyRowMetric(metric, rowGroups, request))) return fail('METRIC_MISSING');
+  if ([...metrics].some((metric) => !represented.has(metric) && !vacuous.has(metric) && !emptyRowMetric(metric, rowGroups, request, evidence, rows))) return fail('METRIC_MISSING');
   // Bildirilen her alan bağı bir yükümlülüktür; aynı ölçünün başka bir alanı onun yerine geçmez.
-  if (declaredFields.some((binding) => !satisfiedFields.has(binding) && !fieldVacuous(binding, rowGroups, empty))) return fail('METRIC_MISSING');
+  if (declaredFields.some((binding) => !satisfiedFields.has(binding) && !fieldVacuous(binding, rowGroups, empty, evidence, rows)
+    && !emptyProperties.some(({ metric, source, field }) => metric === binding.metric && source.tool === binding.tool && canonicalField(field) === binding.path))) return fail('METRIC_MISSING');
   if ([...boundKeys].some((key) => !referenced.has(key))) return fail('ENTITY_MISSING');
   if (bindingsRequired(request) && request.metrics.some((metric) => !NAMING_METRICS.has(metric) && !bindings.some((binding) => binding.metric === metric))) return fail('ENTITY_METRIC_AMBIGUOUS');
   // Verilen her ölçü/varlık bağı, ölçü ve varlık sayısından bağımsız olarak uygulanır.
@@ -628,7 +694,7 @@ export function verifyRequestedFacts(request, facts, evidence) {
       rowMetricFields(entry.source.tool, entry.row.canonical, metric).length > 0));
     if (rowGroups.length && !rowMetrics.length) return fail('METRIC_MISSING');
     for (const metric of rowMetrics) {
-      if (rowGroups.some((entry) => !rowMetricComplete(entry, metric, request))) return fail('METRIC_MISSING');
+      if (rowGroups.some((entry) => !rowMetricComplete(entry, metric, request, evidence, rows))) return fail('METRIC_MISSING');
     }
     // Satırlarla birlikte verilen toplam, aynı kanıtta o satır koleksiyonunu sayan toplam olmalıdır;
     // boş nüfusta yalnızca boşluğu kanıtlayan kanıtın toplamı aynı nüfusu anlatır.
@@ -644,14 +710,14 @@ export function verifyRequestedFacts(request, facts, evidence) {
   if (request.operation === 'list' && !rowGroups.length && !empty.length) return fail('LIST_ROWS_REQUIRED');
   if (request.operation === 'rank') {
     // Satırsız kanıt yalnızca nüfus boşken sıralamanın yanıtıdır.
-    if (!rowGroups.length) return empty.length ? { ok: true, issues: [], empty: [...new Set(empty.map((item) => item.source.id))] } : fail('RANK_MISMATCH');
+    if (!rowGroups.length) return empty.length ? passed({ empty: [...new Set(empty.map((item) => item.source.id))] }) : fail('RANK_MISMATCH');
     // Sıralama tek okumanın tek somut koleksiyonudur; sayfa ve iç içe kümeler birleştirilmez.
     if (rowGroups.length !== 1) return fail('RANK_MISMATCH');
     const [entry] = rowGroups;
     const indexes = rankedIndexes(request, entry.source, entry.row, entry.indexes);
     if (!indexes) return fail('RANK_MISMATCH');
-    return { ok: true, issues: [], rankOrder: { evidenceId: entry.evidenceId, collection: entry.row.collection, indexes } };
+    return passed({ rankOrder: { evidenceId: entry.evidenceId, collection: entry.row.collection, indexes } });
   }
   // Boş nüfusun yanıtı: anlatı "eşleşen kayıt yok" der (yalnızca tamlık bayrağı değil).
-  return empty.length ? { ok: true, issues: [], empty: [...new Set(empty.map((item) => item.source.id))] } : { ok: true, issues: [] };
+  return passed(empty.length ? { empty: [...new Set(empty.map((item) => item.source.id))] } : {});
 }

@@ -219,8 +219,8 @@ const dependencyInspect = {
         type: row.DependencyType,
         typeLabel: DEPENDENCY_LABELS[row.DependencyType] || row.DependencyType,
         lag: lagView(row),
-        ...(other && sqlDay(other.PlannedStart) ? { plannedStart: sqlDay(other.PlannedStart) } : {}),
-        ...(other && sqlDay(other.PlannedFinish) ? { plannedFinish: sqlDay(other.PlannedFinish) } : {})
+        // Okunan görevin boş tarihi açık null'dır; okunamayan görevin tarihi yazılmaz (boş değil, okunmamış).
+        ...(other ? { plannedStart: sqlDay(other.PlannedStart) || null, plannedFinish: sqlDay(other.PlannedFinish) || null } : {})
       };
     };
     const notes = ['Kritik yol ve bolluk bu araçta hesaplanmaz; yalnızca kayıtlı ilişkiler gösterilir.'];
