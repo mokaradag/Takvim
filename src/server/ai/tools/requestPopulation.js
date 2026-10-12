@@ -786,18 +786,25 @@ export function derivedReads(request, bound, { today, attempted = new Set() } = 
   return fresh([...(populationNeeded && reads.length === candidates.length ? reads : []), ...ownReads, ...fieldReads]);
 }
 
-/** İlk, türetilen ve takip okumaları aynı türlü yükümlülüklere bağlıdır. */
-export function callRequiredByRequest(request, name, args, { today, bound = request.entities.map((entity) => ({ ...entity, bound: entity.id })), reads = null } = {}) {
-  if (!request?.population) return false;
+/**
+ * İlk, türetilen ve takip okumaları aynı türlü yükümlülüklere bağlıdır: istekte yeri olmayan
+ * çağrı `null`dır. Yürütülecek biçim döner; sayfa boyu tek yönlüdür, daha küçük sayfa korunur,
+ * büyüğü sunucunun türettiği sayfaya indirilir.
+ */
+export function requestBoundCall(request, name, args, { today, bound = request.entities.map((entity) => ({ ...entity, bound: entity.id })), reads = null } = {}) {
+  if (!request?.population) return null;
   const required = reads || derivedReads(request, bound, { today });
   const identity = (tool, values) => {
     const { limit: _limit, cursor: _cursor, ...population } = values;
     return readKey(tool, { ...population, limit: 1 }, today);
   };
-  return required.some((call) => {
-    if (call.name !== name) return false;
+  const pageSize = (values) => effectivePageSize(getRotaTool(name)?.parameters?.properties?.limit, values);
+  for (const call of required) {
+    if (call.name !== name) continue;
     let expected = call.args;
-    if (!expected) { try { expected = JSON.parse(call.arguments); } catch { return false; } }
-    return (args.cursor || null) === (expected.cursor || null) && identity(name, args) === identity(name, expected);
-  });
+    if (!expected) { try { expected = JSON.parse(call.arguments); } catch { continue; } }
+    if ((args.cursor || null) !== (expected.cursor || null) || identity(name, args) !== identity(name, expected)) continue;
+    return pageSize(args) > pageSize(expected) ? { ...args, limit: pageSize(expected) } : args;
+  }
+  return null;
 }

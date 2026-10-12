@@ -1456,7 +1456,9 @@ doğruysa kapsamlı listedir. Satır kümesinin tamlığı, hareket ayrıntılar
 veya kalite örneklerinin kısaltılmasından bağımsızdır; kısaltılmış ayrıntı
 eksiksiz değer olarak seçilemez. İlk, doğrudan, türetilen ve takip çağrıları
 aynı donmuş isteğin kalan okuma yükümlülüklerine bağlıdır; geçersiz bir kardeş
-çağrı bütün kümeyi SQL öncesinde reddettirir. Türetilen okuma bildirilen bir
+çağrı bütün kümeyi SQL öncesinde reddettirir. İstek bağlı çağrı sunucunun
+türettiğinden büyük sayfayla yürümez: büyük sayfa sunucunun sayfasına indirilir,
+küçük sayfa korunur. Türetilen okuma bildirilen bir
 seçiciyi düşürmez: karşılaştırmada hiçbir ölçüye bağlanmayan ortak bağlam varsa
 okuma türetilmez. Tek bildirilen projenin görev, WBS ve baz plan adı o projede,
 proje bağlandıktan sonra çözülür. Ayrı anlamlı ad/kod taşıyıcıları veri

@@ -1163,7 +1163,7 @@ test('value name/code ambiguity is rejected before reading; an explicit carrier 
 });
 
 test('comparison reads keep each metric subject separate from conjunctive selectors', () => {
-  const { derivedReads, callRequiredByRequest } = populationServer;
+  const { derivedReads, requestBoundCall } = populationServer;
   const raw = { operation: 'value', metrics: ['tasks.open', 'tasks.total'], population: { tool: 'rota_task_analytics' },
     entities: [{ type: 'project', id: PROJECTS.FULL }, { type: 'person', id: String(AYSE) }],
     bindings: [{ metric: 'tasks.open', entity: 0 }, { metric: 'tasks.total', entity: 1 }] };
@@ -1171,7 +1171,7 @@ test('comparison reads keep each metric subject separate from conjunctive select
   const bound = request.entities.map((entity) => ({ ...entity, bound: entity.id }));
   const reads = derivedReads(request, bound, { today: REQUEST_TODAY });
   assert.deepEqual(reads.map((read) => read.args), [{ projectId: PROJECTS.FULL }, { personSicil: AYSE }]);
-  assert.equal(callRequiredByRequest(request, 'rota_task_analytics', { projectId: PROJECTS.FULL, personSicil: AYSE }, { today: REQUEST_TODAY, bound }), false);
+  assert.equal(requestBoundCall(request, 'rota_task_analytics', { projectId: PROJECTS.FULL, personSicil: AYSE }, { today: REQUEST_TODAY, bound }), null);
   const joint = complete({ ...raw, bindings: [] }, []).request;
   assert.deepEqual(derivedReads(joint, bound, { today: REQUEST_TODAY }).map((read) => read.args), [{ projectId: PROJECTS.FULL, personSicil: AYSE }]);
   const repeated = complete({ ...raw,
@@ -1194,11 +1194,33 @@ test('a capped preview certifies a list only when it is objectively complete; pr
 
 const toolCatalog = (await import('../src/server/ai/tools/toolRegistry.js')).toolCatalogForModel();
 
+test('a request-bound read runs with at most the server-derived page; a smaller page is kept and nothing is refused for size', async () => {
+  const { prepareExecutionSet } = await import('../src/server/ai/tools/executionSet.js');
+  const { requestBoundCall } = populationServer;
+  const options = { today: REQUEST_TODAY };
+  // Değer: sunucu aracın varsayılan sayfasını türetir; daha büyük sayfa ona indirilir, küçüğü korunur.
+  const value = complete({ operation: 'value', metrics: ['tasks.overdue'], population: { tool: 'rota_task_search' }, filters: { deadline: 'overdue' } }, []).request;
+  assert.deepEqual(requestBoundCall(value, 'rota_task_search', { deadline: 'overdue', limit: 50 }, options), { deadline: 'overdue', limit: 20 });
+  assert.deepEqual(requestBoundCall(value, 'rota_task_search', { deadline: 'overdue', limit: 3 }, options), { deadline: 'overdue', limit: 3 });
+  assert.equal(requestBoundCall(value, 'rota_task_search', { deadline: 'due_today', limit: 3 }, options), null);
+  // Liste nüfusun bütün satırlarıdır: aracın en büyük sayfasına kadar kabul edilir.
+  const list = complete({ operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' } }, []).request;
+  assert.deepEqual(requestBoundCall(list, 'rota_task_search', { limit: 50 }, options), { limit: 50 });
+  // Ad araması: model daha büyük sayfa isterse reddedilmez, sunucunun sayfasıyla yürür.
+  const named = complete({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] }, []).request;
+  const bound = named.entities.map((entity) => ({ ...entity, bound: null }));
+  const validateCall = (name, args) => requestBoundCall(named, name, args, { ...options, bound });
+  const set = prepareExecutionSet([{ name: 'rota_project_search', arguments: JSON.stringify({ text: 'Radar Modernizasyonu', limit: 10 }) }],
+    { catalog: toolCatalog, validateCall, callId: () => 'call', today: REQUEST_TODAY });
+  assert.equal(set.ok, true, JSON.stringify(set.problems));
+  assert.deepEqual([set.calls[0].args, JSON.parse(set.calls[0].arguments)], [{ text: 'Radar Modernizasyonu', limit: 5 }, { text: 'Radar Modernizasyonu', limit: 5 }]);
+});
+
 test('required continuations reject a detached first page and comparison properties read only their bound subject', () => {
   const request = complete({ operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' } }, []).request;
   const options = { today: REQUEST_TODAY, reads: [{ name: 'rota_task_search', args: { cursor: 'next', limit: 20 } }] };
-  assert.equal(populationServer.callRequiredByRequest(request, 'rota_task_search', { cursor: 'next', limit: 5 }, options), true);
-  assert.equal(populationServer.callRequiredByRequest(request, 'rota_task_search', {}, options), false);
+  assert.deepEqual(populationServer.requestBoundCall(request, 'rota_task_search', { cursor: 'next', limit: 5 }, options), { cursor: 'next', limit: 5 });
+  assert.equal(populationServer.requestBoundCall(request, 'rota_task_search', {}, options), null);
   const comparison = complete({ operation: 'value', metrics: ['tasks.total', 'task.status'], population: { tool: 'rota_task_analytics' },
     entities: [{ type: 'project', id: PROJECTS.FULL }, { type: 'task', id: TASKS.OVERDUE }, { type: 'task', id: TASKS.DUE_SOON }],
     bindings: [{ metric: 'tasks.total', entity: 0 }, { metric: 'task.status', entity: 1 }] }, []).request;

@@ -157,7 +157,8 @@ export function prepareExecutionSet(rawCalls, { catalog, permitted = null, valid
     let args;
     try {
       args = parseToolArguments(tool.parameters, String(call.arguments ?? '{}'));
-      validateCall?.(tool.name, args);
+      // Doğrulayıcı, istek bağlı çağrının yürütülecek biçimini döndürebilir (ör. daha küçük sayfa).
+      args = validateCall?.(tool.name, args) || args;
     } catch (error) {
       const details = (error?.details || []).map((detail) => `$.calls[${index}].${tool.name}${String(detail).slice(1)}`);
       problems.push({ index, error: new ToolError(error?.code || TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: details.length ? details : [`$.calls[${index}]:${error?.code === TOOL_ERROR_CODES.UNSUPPORTED_SCOPE ? 'scope' : 'invalid'}`] }) });

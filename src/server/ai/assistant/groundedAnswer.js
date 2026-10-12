@@ -20,7 +20,7 @@ import { createToolScope } from '../tools/toolScope.js';
 import { bindRequestEntities, declarationHints, parseRequestDeclaration, requestEvidence, requestEvidenceReady, requestRepairHint, requestSelections, requestSummary, requestWindow,
   droppedNameHint, droppedNames, metricIdHints, namedScope, nameProbes, requestSchema, unmatchedEntities } from '../tools/requestDeclaration.js';
 import { createCallIds, prepareExecutionSet, rejectionFor, textPlanCall, typedPlanningTool, unpackTypedPlan } from '../tools/executionSet.js';
-import { callRequiredByRequest, completeRequest, derivedReads, readKey, requestTextFields } from '../tools/requestPopulation.js';
+import { completeRequest, derivedReads, readKey, requestBoundCall, requestTextFields } from '../tools/requestPopulation.js';
 import { parseTurnLanguage, parseTurnRequest, parseTurnRoute, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
 import { CLARIFICATION_LIMITS, clarificationReference } from '../../../domain/ai/clarification.js';
 import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
@@ -379,12 +379,14 @@ function preparePlan(turn, calls, declared) {
   return { ok: true, request: completion.request, calls: checked.calls };
 }
 
-/** Modelin bulduğu kimlik yeni bir okuma yükümlülüğü açmaz. */
+/** Modelin bulduğu kimlik yeni bir okuma yükümlülüğü açmaz; istek bağlı çağrı sunucunun biçimiyle yürür. */
 function requestCallValidator(turn, request, reads = null) {
   const bound = bindRequestEntities(request, turn.ledger.requestEntries(), turn.containment.boundSelection());
   return (name, args) => {
     turn.containment.validate(name, args);
-    if (!callRequiredByRequest(request, name, args, { today: turn.context.today, bound, reads })) throw invalidArguments(['$.request:unrelated']);
+    const call = requestBoundCall(request, name, args, { today: turn.context.today, bound, reads });
+    if (!call) throw invalidArguments(['$.request:unrelated']);
+    return call;
   };
 }
 
