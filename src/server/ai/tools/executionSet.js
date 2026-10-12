@@ -25,6 +25,18 @@ export function createCallIds() {
   return () => `call_${prefix}_${(next += 1)}`;
 }
 
+const serverContinuations = new WeakMap();
+
+/** İç sayfalama araca yeni bir model parametresi eklemez. */
+export function serverReadCall(name, args, catalog) {
+  const tool = catalog.find((item) => item.name === name);
+  const internal = args.cursor && !tool?.parameters.properties.cursor;
+  const { cursor, ...initial } = args;
+  const call = { id: 'derived', name, args, arguments: JSON.stringify(internal ? initial : args), oversize: false };
+  if (internal) serverContinuations.set(call, cursor);
+  return call;
+}
+
 /**
  * Bildirim ve ilk araç planı tek yerel çağrının bağımsız değişkenleridir. Araç
  * şemaları planda yinelenmez: araçlar aynı turda ayrıca sunulur ve plan
@@ -69,6 +81,18 @@ function decodeNestedJson(plan) {
   return decoded;
 }
 
+/** Eski pencere yalnızca mevcut süzgeçlere çevrilir; ayrı anlam taşımaz. */
+function normalizePlan(plan) {
+  if (!plan || typeof plan !== 'object' || !Object.hasOwn(plan, 'window')) return plan;
+  const { window, ...rest } = plan;
+  if (!window || typeof window !== 'object' || Array.isArray(window) || !Object.keys(window).length
+    || Object.entries(window).some(([key, value]) => !['period', 'dateFrom', 'dateTo'].includes(key) || typeof value !== 'string')
+    || !rest.request || typeof rest.request !== 'object' || Array.isArray(rest.request)) throw invalidArguments(['$.plan:window']);
+  const filters = rest.request.filters || {};
+  if (Object.entries(window).some(([key, value]) => Object.hasOwn(filters, key) && filters[key] !== value)) throw invalidArguments(['$.filters:conflict']);
+  return { ...rest, request: { ...rest.request, filters: { ...filters, ...window } } };
+}
+
 /**
  * Plan çağrısını açar: yalnızca biçim denetlenir; içindeki ve yanındaki araç
  * çağrıları `prepareExecutionSet` ile birlikte doğrulanır.
@@ -81,7 +105,7 @@ export function unpackTypedPlan(result) {
   if (Buffer.byteLength(call.arguments || '', 'utf8') > TOOL_LIMITS.maxArgumentBytes) throw invalidArguments(['$.plan:tooLarge']);
   let plan;
   try { plan = JSON.parse(call.arguments); } catch { throw invalidArguments(['$.plan:json']); }
-  plan = decodeNestedJson(plan);
+  plan = normalizePlan(decodeNestedJson(plan));
   const calls = plan?.calls ?? [];
   if (!plan || typeof plan !== 'object' || Array.isArray(plan) || Object.keys(plan).some((key) => !['intent', 'language', 'request', 'calls'].includes(key))
     || !['rota', 'general'].includes(plan.intent) || !['tr', 'en'].includes(plan.language) || !Array.isArray(calls)) throw invalidArguments(['$.plan:shape']);
@@ -109,9 +133,9 @@ export function textPlanCall(text) {
   let args = null;
   if (value.name === 'rota_plan' && Object.keys(value).every((key) => ['name', 'arguments'].includes(key))) {
     try { args = typeof value.arguments === 'string' ? JSON.parse(value.arguments) : value.arguments; } catch { args = null; }
-  } else if (Array.isArray(value.calls) && (value.kind === undefined || value.kind === 'route')) {
+  } else if (Object.hasOwn(value, 'intent') && (value.kind === undefined || value.kind === 'route')) {
     const { kind: _kind, ...plan } = value;
-    args = plan;
+    args = value.kind === 'route' && plan.language === undefined ? { ...plan, language: 'tr' } : plan;
   }
   if (!args || typeof args !== 'object' || Array.isArray(args)) return null;
   return { id: 'plan', name: 'rota_plan', arguments: JSON.stringify(args), oversize: false };
@@ -145,6 +169,7 @@ export function prepareExecutionSet(rawCalls, { catalog, permitted = null, valid
     let args;
     try {
       args = parseToolArguments(tool.parameters, String(call.arguments ?? '{}'));
+      if (serverContinuations.has(call)) args = { ...args, cursor: serverContinuations.get(call) };
       validateCall?.(tool.name, args);
     } catch (error) {
       const details = (error?.details || []).map((detail) => `$.calls[${index}].${tool.name}${String(detail).slice(1)}`);
@@ -155,7 +180,9 @@ export function prepareExecutionSet(rawCalls, { catalog, permitted = null, valid
     const key = readKey(tool.name, args, today);
     if (seen.has(key)) return;
     seen.set(key, index);
-    prepared.push({ index, name: tool.name, args, arguments: JSON.stringify(args) });
+    const { cursor, ...initial } = args;
+    const internal = serverContinuations.has(call);
+    prepared.push({ index, name: tool.name, args, arguments: JSON.stringify(internal ? initial : args), ...(internal ? { serverCursor: cursor } : {}) });
   });
   if (!problems.length && prepared.length > limits.maxCallsPerRound) {
     problems.push({ index: -1, error: new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED, { details: ['$.calls:maxItems'] }) });
@@ -164,7 +191,8 @@ export function prepareExecutionSet(rawCalls, { catalog, permitted = null, valid
     problems.push({ index: -1, error: new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED, { details: ['$.calls:budget'] }) });
   }
   if (problems.length) return { ok: false, calls: [], problems };
-  return { ok: true, calls: prepared.map((call) => ({ id: callId(), name: call.name, arguments: call.arguments, args: call.args })), problems };
+  return { ok: true, calls: prepared.map((call) => ({ id: callId(), name: call.name, arguments: call.arguments, args: call.args,
+    ...(call.serverCursor ? { serverCursor: call.serverCursor } : {}) })), problems };
 }
 
 /** Reddedilen kümenin her çağrısının güvenli hatası: kendi sorunu ya da geçersiz kardeşi nedeniyle yürütülmedi. */

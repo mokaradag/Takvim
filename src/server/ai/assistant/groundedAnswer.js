@@ -14,14 +14,14 @@ import { createEvidenceLedger } from '../tools/evidenceLedger.js';
 import { createToolExecutor } from '../tools/toolExecutor.js';
 import { getRotaTool, toolCatalogForModel } from '../tools/toolRegistry.js';
 import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.js';
-import { isTurnFatal, TOOL_ERROR_CODES } from '../tools/toolErrors.js';
+import { invalidArguments, isTurnFatal, TOOL_ERROR_CODES } from '../tools/toolErrors.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import { createToolScope } from '../tools/toolScope.js';
 import { bindRequestEntities, declarationHints, parseRequestDeclaration, requestEvidence, requestEvidenceReady, requestRepairHint, requestSelections, requestSummary, requestWindow,
   droppedNameHint, droppedNames, metricIdHints, namedScope, nameProbes, requestSchema, unmatchedEntities } from '../tools/requestDeclaration.js';
-import { createCallIds, prepareExecutionSet, rejectionFor, textPlanCall, typedPlanningTool, unpackTypedPlan } from '../tools/executionSet.js';
-import { completeRequest, derivedReads, readKey, requestTextFields } from '../tools/requestPopulation.js';
-import { parseTurnLanguage, parseTurnRequest, parseTurnRoute, parseTurnWindow, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
+import { createCallIds, prepareExecutionSet, rejectionFor, serverReadCall, textPlanCall, typedPlanningTool, unpackTypedPlan } from '../tools/executionSet.js';
+import { callRequiredByRequest, completeRequest, derivedReads, readKey, requestTextFields } from '../tools/requestPopulation.js';
+import { parseTurnLanguage, parseTurnRequest, parseTurnRoute, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
 import { CLARIFICATION_LIMITS, clarificationReference } from '../../../domain/ai/clarification.js';
 import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
 import { createAiDeadline } from '../aiDeadline.js';
@@ -211,8 +211,10 @@ function analyze(text, { evidenceIds, evidencePayloads, toolsAttempted, toolsReq
     }
     return { kind: 'grounded', ...analyzeRequested(text, { evidenceIds, evidencePayloads, locale, request, entries, selection, today }) };
   }
-  // Araç istendi ama veri alınamadı (çağrılar başarısız ya da veri okunmadan reddedildi): model veriye ulaşamadığını bildirebilir.
-  if ((toolsAttempted || toolsRequested) && response?.kind === 'unavailable' && Object.keys(response).length === 1) {
+  // Yalnızca yürütülen okumaların erişim hatası arka uç kullanılamıyor yanıtı olabilir.
+  if (toolsAttempted && toolFailureCodes.size > 0 && [...toolFailureCodes].every((code) =>
+    [TOOL_ERROR_CODES.DATABASE_UNAVAILABLE, TOOL_ERROR_CODES.TIMEOUT, TOOL_ERROR_CODES.BUSY, TOOL_ERROR_CODES.INTERNAL].includes(code))
+    && response?.kind === 'unavailable' && Object.keys(response).length === 1) {
     return { ok: true, normalized: locale === 'en' ? 'Rota data is currently unavailable. Please try again later.' : 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', kind: 'unavailable', citedIds: [], issues: [] };
   }
   if (!toolsAttempted && [TURN_ROUTES.GENERAL, TURN_ROUTES.UNDECIDED].includes(route) && response?.kind === 'general' && typeof response.text === 'string' && Object.keys(response).length === 2) {
@@ -331,10 +333,8 @@ function recordRejectedRound(turn, calls, problems) {
  */
 function acceptDeclaration(turn, declaration, route) {
   const language = parseTurnLanguage(declaration);
-  if (language) turn.locale = language;
   if (route !== TURN_ROUTES.ROTA) {
-    turn.declared = null;
-    return { ok: true };
+    return { ok: true, request: null, language };
   }
   let request;
   const raw = parseTurnRequest(declaration);
@@ -353,9 +353,7 @@ function acceptDeclaration(turn, declaration, route) {
       hints: [...(error.hints || []), ...metricIdHints(error.details || [], raw), ...scopeProblems.hints] };
   }
   if (dropped.length) return { ok: false, ...scopeProblems };
-  turn.declared = request;
-  turn.containment.declare(parseTurnWindow(declaration) || requestWindow(request));
-  return { ok: true };
+  return { ok: true, request, language };
 }
 
 /**
@@ -365,22 +363,38 @@ function acceptDeclaration(turn, declaration, route) {
  */
 function preparePlan(turn, calls, declared) {
   if (declared && !declared.ok) return { ok: false, details: declared.details, hints: declared.hints || [] };
-  if (!turn.declared) return { ok: false, details: ['$.request:required'], hints: [] };
+  const provisional = declared?.request || turn.declared;
+  if (!provisional) return { ok: false, details: ['$.request:required'], hints: [] };
   const set = prepareExecutionSet(calls, { catalog: turn.catalog, validateCall: turn.containment.validate, limits: turn.limits,
     attempted: turn.executor.stats().attempted, callId: turn.callId, today: turn.context.today });
   if (!set.ok) {
     return { ok: false, details: set.problems.flatMap((problem) => problem.error.details?.length ? problem.error.details : [`$.calls:${problem.error.code}`]),
       hints: [], problems: set.problems };
   }
-  const completion = completeRequest(turn.declared, set.calls.map(({ name, args }) => ({ name, args })),
+  const completion = completeRequest(provisional, set.calls.map(({ name, args }) => ({ name, args })),
     { today: turn.context.today, allowedTextFields: turn.allowedTextFields });
   if (completion.problems.length) return { ok: false, details: completion.problems, hints: completion.hints };
-  return { ok: true, request: completion.request, calls: set.calls };
+  const checked = prepareExecutionSet(calls, { catalog: turn.catalog, validateCall: requestCallValidator(turn, completion.request), limits: turn.limits,
+    attempted: turn.executor.stats().attempted, callId: turn.callId, today: turn.context.today });
+  if (!checked.ok) return { ok: false, details: checked.problems.flatMap((problem) => problem.error.details || []), hints: [], problems: checked.problems };
+  return { ok: true, request: completion.request, calls: checked.calls };
+}
+
+/** Modelin bulduğu kimlik yeni bir okuma yükümlülüğü açmaz. */
+function requestCallValidator(turn, request, reads = null) {
+  const bound = bindRequestEntities(request, turn.ledger.requestEntries(), turn.containment.boundSelection());
+  return (name, args) => {
+    turn.containment.validate(name, args);
+    if (!callRequiredByRequest(request, name, args, { today: turn.context.today, bound, reads })) throw invalidArguments(['$.request:unrelated']);
+  };
 }
 
 /** Planla tamamlanan istek bu turun isteğidir; önceki (veri okunmadan değişen) kabul notunun yerini alır. */
-function acceptRequest(turn, request) {
+function acceptRequest(turn, request, language = null) {
   turn.request = request;
+  turn.declared = request;
+  if (language) turn.locale = language;
+  turn.containment.declare(requestWindow(request));
   turn.namedScope = namedScope(turn.namedScope, request, turn.containment.textTrusted);
   // Veri okunmadan bildirilen nüfusun korumalı metin alanları sunucunun türettiği okumalarda da açıktır.
   turn.containment.declareTextFields(requestTextFields(request));
@@ -518,7 +532,9 @@ function traceRound(turn, { purpose, startedAt, result = null, error = null }) {
   turn.trace.rounds.push({
     purpose,
     profile: turn.session.profile,
-    model: turn.session.model,
+    model: turn.session.reportedModel?.(result?.model) ?? turn.session.model,
+    configuredModel: turn.session.model,
+    modelMismatch: result?.modelMismatch === true,
     durationMs: measured?.durationMs ?? Date.now() - startedAt,
     firstEventMs: measured?.firstEventMs ?? null,
     budget: turn.session.maxOutputTokens ?? null,
@@ -748,7 +764,7 @@ function derivedCalls(turn, request) {
   // Tam adı hiçbir kayda uymayan varlık için adın ilk sözcüğüyle bir yoklama araması yapılır.
   const probes = reads.length ? [] : nameProbes(request, entries, selection)
     .filter(({ name, args }) => !turn.attemptedReads.has(readKey(name, args, turn.context.today)));
-  return [...reads, ...probes].map(({ name, args }) => ({ id: 'derived', name, arguments: JSON.stringify(args), oversize: false }));
+  return [...reads, ...probes].map(({ name, args }) => serverReadCall(name, args, turn.catalog));
 }
 
 /** Doğrulanmış yürütme kümesini çalıştırır; model ve sunucu okumaları aynı yoldan geçer. */
@@ -812,11 +828,12 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
   // İstek ilk kanıtla donar: veri okunmadan (çağrılar başarısız olsa da) plan ve bildirim yenilenebilir.
   const frozen = () => ledger.size() > 0;
   const canEscalate = () => escalationAvailable && escalationPermitted(turn);
+  const toolsAvailable = () => turn.toolRounds < limits.maxToolRounds && executor.stats().attempted < limits.maxTotalCalls;
   // Ucuz kurtarma tükendiğinde Standart tur Derin'e bir kez devredilir. Veri okunduysa Derin araç
   // çağıramaz: devir yalnızca kanıt bildirilen isteği belirlenimci olarak karşılayabiliyorsa yapılır.
   // Veri okunmadıysa Derin yeniden planlar; ortak araç turu bütçesi tükendiyse planı yürütemez.
   const evidenceReady = () => Boolean(turn.request && requestEvidenceReady(turn.request, ledger.requestEntries(), turn.context.today, containment.boundSelection()));
-  const deepCanHelp = () => canEscalate() && (frozen() ? evidenceReady() : turn.toolRounds < limits.maxToolRounds);
+  const deepCanHelp = () => canEscalate() && (frozen() ? evidenceReady() : toolsAvailable());
   const fallback = (reason) => (deepCanHelp() ? escalation(turn, reason) : failTurn(turn, onText));
   const rejectDeclaration = (calls, details, hints = [], problems = null, executionCalls = calls) => {
     if (calls.length) turn.toolsRequested = true;
@@ -838,7 +855,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     if (ledger.ids().length && turn.revalidatedAt !== turn.work) {
       if (await revalidate(turn) || ledger.revoked()) return finish(turn, unavailableVerdict(turn.locale), onText);
     }
-    const canCallTools = allowTools && turn.toolRounds < limits.maxToolRounds;
+    const canCallTools = allowTools && toolsAvailable();
     status(ASSISTANT_STREAM_PHASES.GENERATING);
     turn.modelRounds += 1;
     boundTranscript(turn.transcript);
@@ -873,7 +890,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     }
     turn.work += 1;
     traceRound(turn, { purpose, startedAt, result });
-    const reported = session.model;
+    const reported = session.reportedModel?.(result.model) ?? session.model;
     if (reported) turn.models.push(reported);
     // Yerel çağrı yerine metin olarak dönen plan aynı plan doğrulamasından geçer.
     const textPlan = !frozen() && !result.toolCalls.length ? textPlanCall(result.text) : null;
@@ -910,8 +927,9 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     const declared = !frozen() && declaredRoute ? acceptDeclaration(turn, declaration, declaredRoute) : null;
     if (declared) turn.trace.declarations += 1;
     // Çağrısız istek: okumalar bildirimden kurulabiliyorsa sunucu kurar; kurulamıyorsa plan çağrı ister.
-    if (declared?.ok && turn.declared && !calls.length && canCallTools) {
-      calls = derivedCalls(turn, turn.declared);
+    if (declared?.ok && declared.request && !calls.length && canCallTools) {
+      const completed = preparePlan(turn, [], declared);
+      calls = completed.ok ? derivedCalls(turn, completed.request) : [];
       if (!calls.length && plan) {
         // Okuma kurulamadıysa önce isteğin kendi sorunları (ör. aracın metin süzgeci yok) bildirilir; yoksa çağrı istenir.
         const reasons = preparePlan(turn, [], declared);
@@ -923,6 +941,13 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     if (declared && !calls.length && turn.declarationsLeft > 0) {
       turn.route = declaredRoute;
       if (declared.ok) {
+        const prepared = declared.request ? preparePlan(turn, [], declared) : { ok: true };
+        if (!prepared.ok) {
+          if (rejectDeclaration(modelCalls, prepared.details, prepared.hints)) continue;
+          return fallback('REQUEST_DECLARATION');
+        }
+        if (declared.request) acceptRequest(turn, prepared.request, declared.language);
+        else { turn.declared = null; if (declared.language) turn.locale = declared.language; }
         turn.declarationsLeft -= 1;
         instruct(turn, `Bu turun veri okunmadan belirlenen yönlendirmesi: ${turn.route}. Şimdi bu niyete göre yanıtla; Rota olguları yalnızca araç kanıtıyla sunulur.`);
       } else {
@@ -941,9 +966,9 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
           if (rejectDeclaration(modelCalls, prepared.details, prepared.hints, prepared.problems, calls)) continue;
           return fallback('REQUEST_DECLARATION');
         }
-        acceptRequest(turn, prepared.request);
+        acceptRequest(turn, prepared.request, declared?.language);
       } else {
-        prepared = prepareExecutionSet(calls, { catalog, permitted: turn.permittedTools, validateCall: containment.validate, limits,
+        prepared = prepareExecutionSet(calls, { catalog, permitted: turn.permittedTools, validateCall: requestCallValidator(turn, turn.request, derivedCalls(turn, turn.request)), limits,
           attempted: executor.stats().attempted, callId: turn.callId, today: turn.context.today });
         if (!prepared.ok) {
           // Geçersiz küme hiç yürütülmez; reddedilen tur araç turu bütçesinden düşer.
@@ -958,8 +983,9 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       }
       await executeRound(turn, prepared.calls);
       // Bildirilen nüfus henüz okunmadıysa (ör. adla çözülen varlığın okuması) sunucu okumayı bildirimden kurar.
-      while (!ledger.revoked() && turn.toolRounds < limits.maxToolRounds && !evidenceReady()) {
-        const derived = prepareExecutionSet(derivedCalls(turn, turn.request), { catalog, validateCall: containment.validate, limits,
+      while (!ledger.revoked() && toolsAvailable() && !evidenceReady()) {
+        const needed = derivedCalls(turn, turn.request);
+        const derived = prepareExecutionSet(needed, { catalog, validateCall: requestCallValidator(turn, turn.request, needed), limits,
           attempted: executor.stats().attempted, callId: turn.callId, today: turn.context.today });
         if (!derived.ok || !derived.calls.length) break;
         await executeRound(turn, derived.calls);

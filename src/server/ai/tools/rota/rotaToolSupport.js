@@ -3,13 +3,53 @@ import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { accessReasonLabel, describeTaskScope, isCompleteTaskView, projectAccess, SCOPE_KINDS } from './rotaScope.js';
 import { readProjectSearch, readTaskFacts } from './rotaToolStore.js';
+import { collectionRanking, internalPageRequired } from '../../../../domain/ai/evidencePopulation.js';
+import { rowMetricFields } from '../../../../domain/ai/requestContract.js';
+import { scaledDecimal } from '../../../../domain/numbers/fixedDecimal.js';
+import { METRICS } from '../../../../domain/ai/claimableEvidence.js';
 import {
   assigneeView,
   isOverdue,
   overdueDays,
+  paginate,
   priorityLabel,
   statusLabelOf
 } from './taskFacts.js';
+
+/** Sınırlı iç koleksiyon sayfaları mevcut imleç zarfını kullanır. */
+export function collectionPage(call, tool, collection, args, rows, limit) {
+  if (!internalPageRequired(call.request, tool, collection)) return { page: rows.slice(0, limit), offset: 0, nextCursor: null };
+  const rank = call.request.rank;
+  const ordering = collectionRanking(tool, collection, rank);
+  let ordered = rows;
+  let field = null;
+  if (rank && ordering?.metric === rank.metric && ordering.order === rank.order) {
+    const bindings = (call.request.fields || []).filter((item) => item.tool === tool && item.metric === rank.metric);
+    const fields = rowMetricFields(tool, collection, rank.metric).filter((name) => !bindings.length
+      || bindings.some((item) => item.path === `data.${collection}.*.${name}`));
+    const value = (row, name) => name.split('.').reduce((item, key) => item?.[key], row);
+    field = fields.find((name) => rows.some((row) => value(row, name) !== undefined)) || fields[0];
+    const comparable = (row) => METRICS[rank.metric] === 'hours' ? scaledDecimal(value(row, field), 2) : value(row, field);
+    if (field) ordered = [...rows].sort((left, right) => {
+      const a = comparable(left); const b = comparable(right);
+      return a == null ? b == null ? 0 : 1 : b == null ? -1 : (a < b ? -1 : a > b ? 1 : 0) * (rank.order === 'asc' ? 1 : -1);
+    });
+    limit = Math.min(limit, (rank.limit || 1) + 1);
+  }
+  const { cursor: _cursor, limit: _limit, ...population } = args;
+  const page = paginate(tool, { collection, population, rank: rank || null }, ordered, { limit, cursor: call.cursor || null, anchor: ordered.map((row) =>
+    row.taskId ?? row.seriesTaskId ?? row.sicil ?? row.key ?? row.projectId ?? row.wbsId) });
+  const next = ordered[page.offset + page.page.length];
+  return { ...page, ...(rank && field ? { rankingBoundary: { collection, metric: rank.metric, order: rank.order,
+    returnedCount: page.page.length, nextValue: next ? field.split('.').reduce((value, key) => value?.[key], next) ?? null : null } } : {}) };
+}
+
+/** Sayfalı okuma aynı yetki altında aynı maddileştirilmiş nüfusu kullanır. */
+export function collectionSnapshot(call, tool, args, load) {
+  if (!internalPageRequired(call.request, tool)) return load();
+  const { cursor: _cursor, limit: _limit, ...population } = args;
+  return call.snapshot(JSON.stringify([tool, population, call.today]), call.cursor || null, load);
+}
 
 /**
  * Araçların ortak yardımcıları: modele giden VERİ metninin güvenli biçimi,

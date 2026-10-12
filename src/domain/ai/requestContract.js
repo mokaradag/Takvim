@@ -1,4 +1,4 @@
-import { claimableContract, equivalentCarriers, METRICS, metricEntityType, metricEntry, metricPaths, NAMING_METRICS, rowCollections, semanticCarrierKey } from './claimableEvidence.js';
+import { claimableContract, equivalentCarriers, METRICS, metricEntityType, metricEntry, metricPaths, NAMING_METRICS, rowCollections, scalarCarrierKey, semanticCarrierKey } from './claimableEvidence.js';
 import { scaledDecimal } from '../numbers/fixedDecimal.js';
 import {
   canonicalField,
@@ -56,23 +56,17 @@ const JOINT_SELECTORS = Object.freeze({
 
 export function conjunctiveEntities(request) {
   const entities = request.entities || [];
+  if (new Set((request.bindings || []).map((binding) => binding.entity)).size > 1) return false;
   return entities.length > 1 && new Set(entities.map((entity) => entity.type)).size === entities.length
     && entities.every((entity) => JOINT_SELECTORS[request.population?.tool]?.includes(entity.type));
 }
 
-/** Zaten belleğe alınan sınırlı nüfusun tamamı okunur; modelin limit'i listeyi kesmez. */
-export function completeReadRequired(request, tool) {
-  return ['list', 'rank'].includes(request?.operation) && request.population?.tool === tool
-    && (tool === 'rota_workload_summary' && request.population.collection === 'people'
-      || tool === 'rota_task_analytics' && request.population.collection === 'groups'
-      || tool === 'rota_activity_search' && request.population.collection === 'items');
-}
-
 /** Satırın kararlı kimliği indis değildir. */
-export function rowIdentity(row) {
+export function rowIdentity(row, source = null, canonical = null, index = null) {
+  if (source?.rowIdentities?.[canonical]?.[index] != null) return `row:${source.rowIdentities[canonical][index]}`;
   if (!row || typeof row !== 'object') return null;
   // İç içe proje gibi bağlam kayıtları satırın kimliği değildir.
-  for (const field of ['requestId', 'coordinationId', 'notificationId', 'eventId', 'taskId', 'wbsId', 'baselineId', 'sicil', 'projectId', 'key', 'occurrenceDate', 'date', 'templateTaskId', 'seriesTaskId']) {
+  for (const field of ['requestId', 'coordinationId', 'notificationId', 'eventId', 'taskId', 'wbsId', 'baselineId', 'sicil', 'projectId', 'key', 'id', 'occurrenceDate', 'date', 'templateTaskId', 'seriesTaskId']) {
     if (row[field] != null) return `${field}:${row[field]}`;
   }
   return null;
@@ -96,7 +90,6 @@ export function metricAllowedForRow(request, metric, source, row, collection = n
 }
 
 const sortedJson = (value) => JSON.stringify(Object.keys(value).sort().map((key) => [key, value[key]]));
-const TASK_COUNT_TOOLS = new Set(['rota_task_search', 'rota_task_analytics', 'rota_project_detail', 'rota_task_detail']);
 
 /**
  * Olgunun kayıt satırı: kayıt defterindeki en içteki satır koleksiyonu.
@@ -229,7 +222,6 @@ export function unboundCarrierMetrics(request) {
   if (!tool) return [];
   const collections = request.population.collection ? [request.population.collection] : listCollections(tool, request.metrics);
   return request.metrics.filter((metric) => {
-    if (metric !== 'person.organization' && request.operation === 'value') return false;
     if ((request.fields || []).some((field) => field.metric === metric)) return false;
     const paths = metricPaths(tool, metric).filter((path) => metricEntry(tool, path.replace(/^data\./, ''))?.property
       && (request.operation === 'value' || collections.some((collection) => path.startsWith(`data.${collection}.*.`))));
@@ -272,11 +264,21 @@ export function collectionDomain(sources, canonical) {
   }
   const rows = chain.flatMap((source) => concreteCollections(source.envelope, canonical).flatMap(({ collection, rows: items }) =>
     items.map((row, index) => ({ source, collection, row, index }))));
-  const identities = rows.map((item) => rowIdentity(item.row));
+  const identities = rows.map((item) => rowIdentity(item.row, item.source, canonical, item.index));
   if (chain.length > 1 && (identities.some((identity) => identity == null) || new Set(identities).size !== identities.length)) return null;
   const last = chain.at(-1);
-  const complete = collectionComplete(first, canonical) || chain.length > 1 && !last.envelope.nextCursor
-    && last.envelope.complete === true && last.envelope.truncated !== true && rows.length === first.envelope.totalCount;
+  const total = collectionTotalPaths(first.tool, canonical).map((path) => path === 'totalCount' ? first.envelope.totalCount : valueAt(first.envelope, path))
+    .find((value) => Number.isSafeInteger(value) && value >= 0);
+  let complete = collectionComplete(first, canonical) || chain.length > 1 && !last.envelope.nextCursor
+    && (total != null ? rows.length === total : last.envelope.complete === true && last.envelope.truncated !== true);
+  if (complete) {
+    const members = new Set(identities.filter(Boolean));
+    complete = !compatible.some((newer) => !chain.includes(newer) && readLater(newer, last)
+      && concreteCollections(newer.envelope, canonical).some(({ rows: items }) => items.some((row, index) => {
+        const identity = rowIdentity(row, newer, canonical, index);
+        return identity && !members.has(identity);
+      })));
+  }
   return { sources: chain, rows, complete, next: !complete && last.envelope.nextCursor ? { ...last.args, cursor: last.envelope.nextCursor } : null };
 }
 
@@ -409,17 +411,17 @@ export function factSuperseded(evidence, source, fact, { property = null, rows =
     if (row?.kind === 'row') {
       if (newer.tool === source.tool && rowKey(newer, row.canonical) === rowKey(source, row.canonical)) {
         if (collectionComplete(newer, row.canonical)) return true;
-        const identity = rowIdentity(valueAt(source.envelope, row.path));
-        if (identity && concreteCollections(newer.envelope, row.canonical).some(({ rows }) => rows.some((item) => rowIdentity(item) === identity
+        const identity = rowIdentity(valueAt(source.envelope, row.path), source, row.canonical, row.index);
+        if (identity && concreteCollections(newer.envelope, row.canonical).some(({ rows }) => rows.some((item, index) => rowIdentity(item, newer, row.canonical, index) === identity
           && rowMetricFields(newer.tool, row.canonical, metric).some((field) => semanticCarrierKey(newer.tool, `data.${row.canonical}.*.${field}`)
             === semanticCarrierKey(source.tool, fact.field) && rowFieldState(newer.tool, row.canonical, item, field) !== 'absent')))) return true;
       }
       continue;
     }
     if (scalarKey(newer, metric) !== scalarKey(source, metric)) continue;
-    const sameCarrier = (newer.facts || []).some((item) => item.semantic?.metric === metric && (newer.tool === source.tool
-      ? semanticCarrierKey(newer.tool, item.field) === semanticCarrierKey(source.tool, fact.field)
-      : !factRow(newer.tool, item.field) && !row && metric.startsWith('tasks.') && TASK_COUNT_TOOLS.has(source.tool) && TASK_COUNT_TOOLS.has(newer.tool)));
+    const key = scalarCarrierKey(source.tool, fact.field);
+    const sameCarrier = key && (newer.facts || []).some((item) => item.semantic?.metric === metric
+      && scalarCarrierKey(newer.tool, item.field) === key);
     if (sameCarrier) return true;
   }
   return false;
@@ -429,8 +431,9 @@ export function factSuperseded(evidence, source, fact, { property = null, rows =
 function emptyProofSuperseded(evidence, source, canonical = source.collection) {
   const metric = collectionTotalMetric(source.tool, canonical);
   const key = scalarKey(source, metric);
-  return [...evidence.values()].some((newer) => newer !== source && readLater(newer, source) && newer.tool === source.tool
-    && scalarKey(newer, metric) === key);
+  const carriers = collectionTotalPaths(source.tool, canonical).map((path) => scalarCarrierKey(source.tool, path)).filter(Boolean);
+  return [...evidence.values()].some((newer) => newer !== source && readLater(newer, source) && scalarKey(newer, metric) === key
+    && (newer.tool === source.tool || (newer.facts || []).some((fact) => carriers.includes(scalarCarrierKey(newer.tool, fact.field)))));
 }
 
 const rowDimensions = (source) => source.rowDimensionsMatch ?? source.dimensionsMatch;

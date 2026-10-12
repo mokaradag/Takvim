@@ -651,6 +651,8 @@ export function recordGroundedTurn(trace = {}) {
         purpose: ROUND_PURPOSES.has(round?.purpose) ? round.purpose : null,
         profile: isKnownAiProfile(round?.profile) ? round.profile : null,
         model: safeModel(round?.model),
+        configuredModel: safeModel(round?.configuredModel),
+        modelMismatch: round?.modelMismatch === true,
         ms: millis(round?.durationMs),
         firstEventMs: millis(round?.firstEventMs),
         budget: safeCount(round?.budget),

@@ -1,4 +1,5 @@
 import 'server-only';
+import { internalPageRequired } from '../../../../domain/ai/evidencePopulation.js';
 import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
 import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
 import { taskCompletionRate } from '../../../../scheduling/metrics/taskCompletionRate.js';
@@ -10,6 +11,8 @@ import { readPortfolio, readProjectDetail, readProjectSearch, readWbs } from './
 import {
   accessExplanation,
   accessLevelOf,
+  collectionPage,
+  collectionSnapshot,
   dataText,
   ID_PROPERTY,
   LIMIT_PROPERTY,
@@ -228,7 +231,7 @@ const portfolioSummary = {
     const source = args.source || 'all';
     const { scope } = await call.authorization();
     const soonEnd = addDays(call.today, DUE_SOON_DAYS - 1);
-    const { rows, population } = await call.sql((executor) => readPortfolio(executor, scope, { today: call.today, soonEnd, source }));
+    const { rows, population } = await collectionSnapshot(call, 'rota_portfolio_summary', args, () => call.sql((executor) => readPortfolio(executor, scope, { today: call.today, soonEnd, source })));
     call.notePopulation?.(population);
     const filteredRows = rows
       .filter((row) => source === 'all' || (source === 'corporate') === (row.SourceType === 'CORPORATE'))
@@ -255,12 +258,13 @@ const portfolioSummary = {
       projectsWithOverdue: sum.projectsWithOverdue + (project.tasks.overdue > 0 ? 1 : 0)
     }), { projects: 0, tasks: 0, open: 0, done: 0, overdue: 0, dueNext7Days: 0, openWithoutTargetFinish: 0, projectsWithOverdue: 0 });
     const descriptor = describeTaskScope(filteredRows.map(scopeAccess));
-    const page = projects.slice(0, limit);
+    const paging = collectionPage(call, 'rota_portfolio_summary', 'projects', args, projects, limit);
+    const page = paging.page;
     const rankField = { overdue_desc: 'overdue', open_desc: 'open', due_soon_desc: 'dueNext7Days' }[sort];
     return {
       ...(rankField && projects.length > page.length ? { rankingBoundary: {
         collection: 'projects', metric: `tasks.${rankField}`, order: 'desc', returnedCount: page.length,
-        nextValue: projects[page.length].tasks[rankField]
+        nextValue: projects[paging.offset + page.length]?.tasks[rankField] ?? null
       } } : {}),
       data: {
         totals,
@@ -271,11 +275,11 @@ const portfolioSummary = {
         definitions: { overdue: METRIC_DEFINITIONS.taskTotals.overdue, dueNext7Days: METRIC_DEFINITIONS.taskTotals.dueNext7Days, today: call.today, completeTaskView: METRIC_DEFINITIONS.completeTaskView }
       },
       scope: descriptor,
-      complete: page.length === projects.length,
-      truncated: page.length < projects.length,
+      complete: paging.offset + page.length === projects.length,
+      truncated: paging.offset + page.length < projects.length && !paging.nextCursor,
       returnedCount: page.length,
       totalCount: projects.length,
-      nextCursor: null,
+      nextCursor: paging.nextCursor,
       evidence: {
         label: `Portföy özeti · ${totals.projects} proje`,
         entity: { type: 'portfolio', id: 'portfolio', name: 'Portföy' },
@@ -310,9 +314,9 @@ const wbsInspect = {
     const limit = args.limit ?? 40;
     const { scope } = await call.authorization();
     const access = await requireVisibleProject(scope, args.projectId, call);
-    const result = await call.sql((executor) => readWbs(executor, scope, {
+    const result = await collectionSnapshot(call, 'rota_wbs_inspect', args, () => call.sql((executor) => readWbs(executor, scope, {
       projectId: args.projectId, wbsId: args.wbsId ?? null, today: call.today, maxRows: TOOL_LIMITS.maxAnalyzedTasks
-    }));
+    })));
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
     call.notePopulation?.(result.population);
     const nodes = new Map();
@@ -399,7 +403,7 @@ const wbsInspect = {
     const walk = (node, depth) => {
       if (walked.has(node.id)) return;
       walked.add(node.id);
-      if (listed.length >= limit) {
+      if (!internalPageRequired(call.request, 'rota_wbs_inspect') && listed.length >= limit) {
         omitted += 1;
         return;
       }
@@ -430,12 +434,13 @@ const wbsInspect = {
     start.forEach((node) => count(node, 0));
     const catalogVisible = result.nodes.some((row) => Boolean(row.CatalogVisible)) || access.accessLevel === 'FULL' || access.readGrant || access.ownScoped;
     const descriptor = describeTaskScope([access]);
+    const paging = collectionPage(call, 'rota_wbs_inspect', 'nodes', args, listed, limit);
     return {
       data: {
         project: { projectId: canonicalActualId(args.projectId), name: result.project ? dataText(result.project.ProjectName, 160) : null },
         catalogVisibility: catalogVisible ? 'full-catalog' : 'ancestor-chain-of-visible-tasks',
         nodeCount: withinDepth.size,
-        nodes: listed,
+        nodes: paging.page,
         filters: { depth: depthLimit },
         deeperNodes: depthTruncated,
         tasksWithoutWbs: args.wbsId ? null : unplacedTasks,
@@ -447,11 +452,11 @@ const wbsInspect = {
         ]
       },
       scope: descriptor,
-      complete: omitted === 0 && cycleNodes.size === 0,
-      truncated: omitted > 0 || cycleNodes.size > 0,
-      returnedCount: listed.length,
+      complete: omitted === 0 && cycleNodes.size === 0 && paging.offset + paging.page.length === listed.length,
+      truncated: omitted > 0 || cycleNodes.size > 0 || paging.offset + paging.page.length < listed.length && !paging.nextCursor,
+      returnedCount: paging.page.length,
       totalCount: withinDepth.size,
-      nextCursor: null,
+      nextCursor: paging.nextCursor,
       evidence: {
         label: `İş dağılım yapısı · ${withinDepth.size} düğüm`,
         entity: { type: 'project', id: canonicalActualId(args.projectId), name: result.project ? dataText(result.project.ProjectName, 120) : null },

@@ -102,7 +102,7 @@ function searchThenCite(args, { request = countRequest(args), language = 'tr' } 
  */
 const NAMED_TASK = 'Radar test planı';
 const NAMED_QUESTION = `${NAMED_TASK} görevinin durumu ve projesi nedir?`;
-const searchNamed = { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['task.status', 'task.project'], entities: [{ type: 'task', text: NAMED_TASK }] })],
+const searchNamed = { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['task.status', 'task.project'], reasoning: 'synthesis', fields: [{ metric: 'task.project', tool: 'rota_task_search', path: 'data.tasks.*.project.name' }], entities: [{ type: 'task', text: NAMED_TASK }] })],
   calls: [{ name: 'rota_task_search', arguments: { text: NAMED_TASK } }] };
 
 /** Kalıcı kanıt kaydındaki araç sonucu (modele verilen zarfın aynısı ve yetki alanları). */
@@ -284,7 +284,7 @@ test('atıflı yanıt: araç sonucu kanıt olur, yanıt doğrulanıp tek parça 
 test('derin kip basit sayımı da seçilen Derin araç profiliyle planlar', async (t) => {
   const stack = groundedStack(t);
   stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.FULL }));
-  const response = await sendTurn({ turnId: randomUUID(), message: `Radar görevleri ${PROJECTS.FULL}`, mode: 'deep' });
+  const response = await sendTurn({ turnId: randomUUID(), message: `Radar Modernizasyonu görevleri ${PROJECTS.FULL}`, mode: 'deep' });
   assert.equal(response.status, 200);
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [DEEP_TOOL_MODEL]);
   assert.equal(doneOf(response).assistantMessage.mode, 'deep');
@@ -301,9 +301,9 @@ test('uydurma atıf: "Projede 42 gecikmiş görev var. 【R99】" bir kez düzel
   );
   const response = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION });
   assert.equal(response.status, 200);
-  assert.equal(stack.provider.calls.length, 4);
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, DEEP_TOOL_MODEL]);
-  const deep = stack.provider.calls[3];
+  assert.equal(stack.provider.calls.length, 3);
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, DEEP_TOOL_MODEL, DEEP_TOOL_MODEL]);
+  const deep = stack.provider.calls[1];
   assert.equal(deep.toolChoice, 'none', 'kanıt varken Derin devri araç çağırmaz');
   assert.equal(deep.messages.some((message) => String(message.content).includes('42 gecikmiş')), false, 'reddedilen taslak devre taşınmaz');
   const repair = stack.provider.calls[2];
@@ -327,10 +327,10 @@ test('uydurma atıf: "Projede 42 gecikmiş görev var. 【R99】" bir kez düzel
   assert.equal(grounding.failed, 1);
   assert.equal(grounding.repaired, 1);
   assert.equal(grounding.grounded, 0);
-  assert.deepEqual(grounding.escalations, { total: 1, byReason: { VERIFICATION_FAILED: 1 }, byOutcome: { failed: 1 } });
+  assert.deepEqual(grounding.escalations, { total: 1, byReason: { SYNTHESIS_REQUIRED: 1 }, byOutcome: { failed: 1 } });
 });
 
-test('Standart düzeltme başarılı olursa yalnızca doğrulanmış yanıt gösterilir ve atfedilen kanıt kaydedilir', async (t) => {
+test('Derin yorum düzeltmesi başarılı olursa yalnızca doğrulanmış yanıt ve kanıt kaydedilir', async (t) => {
   const stack = groundedStack(t);
   stack.provider.enqueue(
     searchNamed,
@@ -350,10 +350,10 @@ test('Standart düzeltme başarılı olursa yalnızca doğrulanmış yanıt gös
   assert.equal(response.text.includes('42 gecikmiş'), false);
   assert.deepEqual(done.assistantMessage.evidence.map((item) => [item.id, item.kind]), [['R1', 'task-list']]);
   assert.equal(stack.db.aiMessageEvidence.length, 1);
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL]);
-  assert.equal(aiTelemetrySnapshot().grounding.repaired, 1, 'protokol düzeltmesi Standart kipte kalır');
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, DEEP_TOOL_MODEL, DEEP_TOOL_MODEL]);
+  assert.equal(aiTelemetrySnapshot().grounding.repaired, 1, 'yorum isteğinin doğrulanması Derin kipte aynı sınıra bağlıdır');
   assert.equal(aiTelemetrySnapshot().grounding.grounded, 1);
-  assert.deepEqual(aiTelemetrySnapshot().grounding.escalations, { total: 0, byReason: {}, byOutcome: {} });
+  assert.deepEqual(aiTelemetrySnapshot().grounding.escalations, { total: 1, byReason: { SYNTHESIS_REQUIRED: 1 }, byOutcome: { grounded: 1 } });
 });
 
 test('kısmi kapsam: sunucu kapsam notunu model metninden bağımsız olarak her zaman ekler', async (t) => {
@@ -476,7 +476,7 @@ test('tanınmayan araç ve bozuk bağımsız değişken güvenli hata alır; SQL
         return { type: 'answer', text: 'Projede 12 görev var.' };
       }
     },
-    { type: 'answer', text: '{"kind":"unavailable"}' }
+    { type: 'answer', text: '{"kind":"unavailable"}' }, { type: 'answer', text: '{"kind":"unavailable"}' }
   );
   const response = await sendTurn({ turnId: randomUUID(), message: `Görevleri SQL ile getir ${TASKS.OVERDUE} ${PROJECTS.FULL}` });
   assert.deepEqual(seen.map((result) => [result.ok, result.error.code]), [
@@ -490,13 +490,13 @@ test('tanınmayan araç ve bozuk bağımsız değişken güvenli hata alır; SQL
     'veri alınmayan ilk tur kataloğu daraltmaz');
   assert.equal((stack.db.aiToolLog || []).length, 0, 'hiçbir araç SQL’i çalışmadı');
   // Kanıtsız taslak gösterilmez; protokol düzeltmesi Standart kipte kalır.
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL]);
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, DEEP_TOOL_MODEL]);
   assert.equal(stack.provider.calls[2].messages.some((message) => String(message.content || '').includes('12 görev')), false,
     'reddedilen taslak devredilen döküme girmez');
   assert.equal(response.text.includes('12 görev'), false);
   const done = doneOf(response);
-  assert.equal(done.assistantMessage.content, 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.');
-  assert.equal(done.assistantMessage.finishReason, 'unavailable');
+  assert.equal(done.assistantMessage.content, GROUNDING_FAILURE_TEXT);
+  assert.equal(done.assistantMessage.finishReason, 'grounding_failed');
   assert.deepEqual(done.assistantMessage.evidence, []);
   assert.equal(stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE).Status, 'planned', 'hiçbir yazma yapılmadı');
 });
@@ -512,44 +512,35 @@ test('bulunamadı yanıtı gerçek NOT_FOUND olmadan kabul edilmez', async (t) =
   const failedTool = toolResultsOf(stack.provider.calls[1])[0];
   assert.equal(failedTool.error.code, 'INVALID_ARGUMENTS');
   assert.equal((stack.db.aiToolLog || []).length, 0, 'bozuk plan veri okunmadan reddedilir');
-  assert.equal(doneOf(response).assistantMessage.finishReason, 'unavailable');
+  assert.equal(doneOf(response).assistantMessage.finishReason, 'grounding_failed');
   assert.equal(response.text.includes(NON_ENUMERATING_FAILURE_TEXT), false);
 });
 
-test('araç turu sınırı: dördüncü turdan sonra araçlar kapanır, sınır notu eklenir ve yanıt eldeki kanıtla verilir', async (t) => {
+test('araç turu sınırında eksik liste kabul edilmez ve yeni SQL çalışmaz', async (t) => {
   const stack = groundedStack(t);
-  const rounds = [
-    ['rota_portfolio_summary', {}],
-    ['rota_project_detail', { projectId: PROJECTS.FULL }],
-    ['rota_task_analytics', { projectId: PROJECTS.FULL }],
-    ['rota_wbs_inspect', { projectId: PROJECTS.FULL }]
-  ];
-  // Alan bağları açıkça bildirilir; muhakeme isteği, dört tur sonundaki araçsız seçimi sınar.
-  const declaration = declared({ operation: 'value', metrics: ['projects.withOverdue', 'project.access', 'tasks.worstOverdueDays', 'wbs.nodes'],
-    reasoning: 'synthesis', population: { tool: 'rota_portfolio_summary' }, fields: [{ metric: 'tasks.worstOverdueDays', tool: 'rota_task_analytics', path: 'data.overdueAging.worstOverdueDays' },
-      { metric: 'wbs.nodes', tool: 'rota_wbs_inspect', path: 'data.nodeCount' }], entities: [{ type: 'project', id: PROJECTS.FULL }] });
-  stack.provider.enqueue(
-    ...rounds.map(([name, args], index) => ({ type: 'tool-calls', preface: index ? [] : [declaration], calls: [{ name, arguments: args }] })),
-    { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.totals.projectsWithOverdue', 'R2:data.access.level', 'R3:data.overdueAging.worstOverdueDays', 'R4:data.nodeCount'] }) }
-  );
-  const response = await sendTurn({ turnId: randomUUID(), message: `Her şeyi incele ${PROJECTS.FULL}` });
-  assert.equal(stack.provider.calls.length, 5);
-  assert.deepEqual(stack.provider.calls.map((call) => call.toolChoice), ['auto', 'auto', 'auto', 'auto', 'none']);
-  const limited = stack.provider.calls[4].messages;
-  assert.equal(limited[0].role, 'system');
-  assert.match(limited[0].content, /Araç çağrı sınırına ulaşıldı/);
-  assert.equal(limited.slice(1).some((message) => message.role === 'system'), false);
-  const done = doneOf(response);
-  assert.deepEqual(done.assistantMessage.evidence.map((item) => item.id), ['R1', 'R2', 'R3', 'R4']);
-  assert.deepEqual(stack.db.aiMessageEvidence.map((row) => row.Ordinal).sort(), [1, 2, 3, 4]);
+  const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+  stack.db.tasks = Array.from({ length: 180 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}` }));
+  const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, entities: [{ type: 'project', id: PROJECTS.FULL }] };
+  let callsAtLimit;
+  stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL, limit: 1 } }] },
+    { type: 'script', respond: (call) => {
+      assert.equal(call.toolChoice, 'none');
+      assert.match(call.messages[0].content, /Araç çağrı sınırına ulaşıldı/);
+      callsAtLimit = stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').length;
+      return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.tasks.*.title'] }) };
+    } }, { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.tasks.*.title'] }) });
+  const response = await sendTurn({ turnId: randomUUID(), message: `Bütün görevler ${PROJECTS.FULL}` });
+  assert.equal(doneOf(response).assistantMessage.finishReason, 'grounding_failed');
+  assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').length, callsAtLimit, 'araç bütçesi yeniden açılmaz');
+  assert.deepEqual(stack.db.aiMessageEvidence, []);
 });
 
 test('yalnızca atfedilen kanıtlar kaydedilir; kanıt kimlikleri çağrı sırasını izler', async (t) => {
   const stack = groundedStack(t);
   stack.provider.enqueue(
-    { type: 'tool-calls', preface: [declared(countRequest({ projectId: PROJECTS.FULL }))], calls: [{ name: 'rota_portfolio_summary', arguments: {} }, { name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] }
+    { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] })], calls: [{ name: 'rota_project_search', arguments: { text: 'Radar Modernizasyonu' } }] }
   );
-  const response = await sendTurn({ turnId: randomUUID(), message: `Radar görevleri ${PROJECTS.FULL}` });
+  const response = await sendTurn({ turnId: randomUUID(), message: `Radar Modernizasyonu görevleri ${PROJECTS.FULL}` });
   const done = doneOf(response);
   assert.equal(done.assistantMessage.content, '**Radar Modernizasyonu** projesinde eşleşen **8** görev bulundu. 【R2】');
   assert.deepEqual(done.assistantMessage.evidence.map((item) => item.id), ['R2']);
@@ -561,7 +552,7 @@ test('görev verisindeki talimat ve atıf işaretleri modele veri olarak, nötrl
   let content = null;
   stack.provider.enqueue(
     // Proje adı ve kodu aynı ölçüyü taşır: olguları model seçer ve veriyi görür.
-    { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['task.status', 'task.project'], entities: [{ type: 'task', id: TASKS.LITERAL }] })], calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.LITERAL, textFields: ['description'] } }] },
+    { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['task.status', 'task.project'], reasoning: 'synthesis', fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }], entities: [{ type: 'task', id: TASKS.LITERAL }] })], calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.LITERAL, textFields: ['description'] } }] },
     {
       type: 'script',
       respond: (call) => {
@@ -667,7 +658,7 @@ test('gözlem kayıtları içerik taşımaz: soru, yanıt, görev adı, bağıms
   const logs = captureConsole(t);
   const question = `Gizli-soru-7Q3 Radar test planı kaç kayıt döndürür? ${TASKS.OVERDUE}`;
   stack.provider.enqueue(
-    { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.total', 'task.status'], entities: [{ type: 'task', id: TASKS.OVERDUE }], filters: { text: 'Radar test' } })],
+    { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.total', 'task.status'], fields: [{ metric: 'task.status', tool: 'rota_task_detail', path: 'data.task.status' }], entities: [{ type: 'task', id: TASKS.OVERDUE }], filters: { text: 'Radar test' } })],
       calls: [{ name: 'rota_task_search', arguments: { text: 'Radar test' } }, { name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } }] },
     { type: 'script', respond: (call) => {
       const [search, detail] = toolResultsOf(call);
@@ -718,7 +709,7 @@ test('stored instructions cannot expand subsequent tool access beyond the truste
   let rejectedSeen = false;
   stack.provider.enqueue(
     // Proje adı ve kodu aynı ölçüyü taşır: model veriyi görür ve sonraki turda aracı genişletmeyi dener.
-    { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['task.status', 'task.project'], entities: [{ type: 'task', id: TASKS.LITERAL }] })], calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.LITERAL } }] },
+    { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['task.status', 'task.project'], reasoning: 'synthesis', fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }], entities: [{ type: 'task', id: TASKS.LITERAL }] })], calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.LITERAL } }] },
     { type: 'tool-calls', calls: [{ name: 'rota_person_search', arguments: { text: 'Ayşe' } }, { name: 'rota_portfolio_summary', arguments: {} }] },
     { type: 'script', respond: (call) => {
       const rejected = toolResultsOf(call).slice(-2);
@@ -728,7 +719,7 @@ test('stored instructions cannot expand subsequent tool access beyond the truste
       return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.task.status', 'R1:data.task.project.name'] }) };
     } }
   );
-  const response = await sendTurn({ turnId: randomUUID(), message: `Rapor görevini göster: ${TASKS.LITERAL}` });
+  const response = await sendTurn({ turnId: randomUUID(), message: `Rapor görevini göster: ${TASKS.LITERAL}`, mode: 'deep' });
   assert.equal(rejectedSeen, true, 'genişletme denemesi gerçekten yapıldı ve reddedildi');
   assert.equal(stack.provider.calls.length, 3);
   assert.equal(doneOf(response).assistantMessage.evidence.length, 1);
@@ -786,7 +777,7 @@ test('English grounded turns receive English deterministic scope disclosures and
   // Dil, sunucunun sözcük listesiyle değil modelin bildirimiyle seçilir.
   assert.doesNotMatch(stack.provider.calls[0].messages[0].content, /Reply in English/);
   // Proje adı ve kodu aynı ölçüyü taşır: olguları model seçer; doğrulanamayan seçim İngilizce güvenli iletiyle biter.
-  const projectOf = { operation: 'value', metrics: ['task.project'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] };
+  const projectOf = { operation: 'value', metrics: ['task.project'], reasoning: 'synthesis', fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] };
   stack.provider.enqueue({ type: 'answer', text: declared(projectOf, { language: 'en' }) },
     { type: 'answer', text: 'There are 999 tasks.' }, { type: 'answer', text: 'There are 999 tasks.' });
   const failed = await sendTurn({ turnId: randomUUID(), message: `Which project is task ${TASKS.OVERDUE} in?` });

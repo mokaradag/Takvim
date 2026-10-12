@@ -4,6 +4,7 @@ import {
   canonicalField,
   carrierAvailable,
   collectionComplete,
+  collectionRanking,
   collectionTotalPaths,
   concreteCollections,
   insideRowCollection,
@@ -325,7 +326,7 @@ export function bindRequestEntities(request, entries, selection = null) {
     return { ...entity, bound: !found.size && selected?.[0] === entity.type && sameType.length === 1 ? selected[1] : null };
   });
   return bound.map((entity, index) => bound.some((other, position) => position !== index && entity.bound && other.type === entity.type
-    && other.bound === entity.bound && other.text !== entity.text) ? { ...entity, bound: null } : entity);
+    && other.bound === entity.bound && entity.text && other.text && other.text !== entity.text) ? { ...entity, bound: null } : entity);
 }
 
 /** Kullanıcının adlandırdığı adayın adı ile bildirilen ad aynı adın kısaltılmışı ya da sözcüklerle uzatılmışı mı? */
@@ -387,7 +388,7 @@ export function unmatchedEntities(request, entries, selection = null) {
 export function requestEvidence(request, entries, today) {
   const active = Object.entries(request.filters).filter(([, value]) => value != null).map(([key]) => key);
   const index = new Map();
-  for (const [ordinal, { id, tool, args = {}, payload, round = null, snapshot = null }] of entries.entries()) {
+  for (const [ordinal, { id, tool, args = {}, payload, round = null, snapshot = null, rowIdentities = {} }] of entries.entries()) {
     const agreement = populationAgreement(request, tool, args, today);
     index.set(id, {
       id,
@@ -395,6 +396,7 @@ export function requestEvidence(request, entries, today) {
       ordinal,
       round: round ?? ordinal,
       snapshot,
+      rowIdentities,
       args,
       effectiveLimit: effectivePageSize(getRotaTool(tool).parameters.properties.limit, args),
       pageMaximum: getRotaTool(tool).parameters.properties.limit?.maximum,
@@ -405,7 +407,7 @@ export function requestEvidence(request, entries, today) {
       declared: declaredFacets(tool, request.filters, today),
       unsupported: active.filter((key) => !familyKeys(tool).includes(key)),
       selectors: selectorsOf(args),
-      sortedBy: sortedBy(tool, agreement.dimensions),
+      sortedBy: collectionRanking(tool, request.population?.collection, request.rank) || sortedBy(tool, agreement.dimensions),
       firstPage: !args.cursor,
       populationMatch: agreement.populationMatch,
       collection: request.population?.tool === tool ? declaredCollections(request) : null,

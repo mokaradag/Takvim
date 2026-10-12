@@ -7,7 +7,6 @@ import { isTurnFatal, TOOL_ERROR_CODES, ToolError, toToolError } from './toolErr
 import { TOOL_LIMITS } from './toolLimits.js';
 import { getRotaTool } from './toolRegistry.js';
 import { fitToolResult } from './toolResultPolicy.js';
-import { completeReadRequired } from '../../../domain/ai/requestContract.js';
 import { claimableContract, projectEvidenceData } from '../../../domain/ai/claimableEvidence.js';
 import { trackResultText } from './toolResultText.js';
 
@@ -77,7 +76,7 @@ export function createToolExecutor({
    */
   async function execute(call, tool, pending, index) {
     if (call.oversize) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$:tooLarge'] });
-    const args = parseToolArguments(tool.parameters, call.arguments);
+    const args = { ...parseToolArguments(tool.parameters, call.arguments), ...(call.serverCursor ? { cursor: call.serverCursor } : {}) };
     validateCall?.(tool.name, args);
     const cacheKey = `${tool.name}\u0000${JSON.stringify(args)}`;
     // Çağrılar sırayla alınır: özdeş çağrının sahibi her zaman daha küçük sıradadır.
@@ -86,9 +85,10 @@ export function createToolExecutor({
     const remaining = Math.min(tool.timeoutMs, phaseRemainingMs());
     if (remaining < 250) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
     const deadline = createAiDeadline({ timeoutMs: remaining, parentSignal: typeof signal === 'function' ? signal() : signal, now: clock });
-    const population = [];
+    const population = new Map();
     let populationNoted = false;
     let snapshot = null;
+    const rowIdentities = {};
     const projectPopulation = [];
     try {
       const scoped = Object.freeze({
@@ -96,17 +96,19 @@ export function createToolExecutor({
         today: context.today,
         now: context.now,
         request: request(),
+        cursor: args.cursor || null,
         signal: deadline.signal,
         authorization: () => context.authorization(deadline.signal),
         sql: (work) => context.sql(deadline.signal, work),
         snapshot: async (key, cursor, load) => { snapshot = await context.snapshot(key, cursor, load); return snapshot; },
-        notePopulation: (references) => { populationNoted = true; for (const reference of references) population.push(reference); },
-        noteProjects: (projectIds) => { projectPopulation.push(...projectIds); }
+        notePopulation: (references) => { populationNoted = true; for (const reference of references) population.set(JSON.stringify([reference.taskId, reference.projectId]), reference); },
+        noteProjects: (projectIds) => { projectPopulation.push(...projectIds); },
+        noteRows: (collection, ids) => { rowIdentities[collection] = [...ids]; }
       });
       await context.authorization?.(deadline.signal);
       const outcome = await raceWithAbort(() => trackResultText(() => tool.handler(args, scoped),
         (data) => projectEvidenceData(data, args.textFields || [])), deadline.signal);
-      return { outcome, cacheKey, args, population: populationNoted ? population : null, projectPopulation, snapshot };
+      return { outcome, cacheKey, args, population: populationNoted ? [...population.values()] : null, projectPopulation, snapshot, rowIdentities };
     } catch (error) {
       const failure = deadline.failure();
       if (failure?.code === AI_ERROR_CODES.AI_CANCELLED) throw failure;
@@ -202,8 +204,7 @@ export function createToolExecutor({
         content = JSON.stringify(errorEnvelope(name, result.error));
       } else {
         const envelope = envelopeFor(plan.tool, result.outcome, result.generatedAt, result.args);
-        const policy = completeReadRequired(request(), plan.tool.name) ? { trim: [] } : plan.tool.resultPolicy;
-        const text = fitToolResult(envelope, limits.maxResultBytes - 64, ledger.factPrefix(), policy);
+        const text = fitToolResult(envelope, limits.maxResultBytes - 64, ledger.factPrefix(), plan.tool.resultPolicy);
         if (!text) {
           code = TOOL_ERROR_CODES.RESULT_TOO_LARGE;
           content = JSON.stringify(errorEnvelope(name, new ToolError(code)));
@@ -229,7 +230,8 @@ export function createToolExecutor({
             populationReferences: result.population,
             args: result.args,
             round: state.rounds,
-            snapshot: result.snapshot
+            snapshot: result.snapshot,
+            rowIdentities: shrunk.data?.sizeNote ? {} : result.rowIdentities
           });
           content = JSON.stringify({ ...shrunk, evidenceId: id });
           if (id) ledger.attachPayload(id, content);

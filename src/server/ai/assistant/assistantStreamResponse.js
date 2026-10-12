@@ -152,6 +152,15 @@ export function assistantStreamResponse(turn, {
   let lastByteAt = performance.now();
   let graceTimer = null;
   let delivering = false;
+  let recorded = false;
+  const startedAt = performance.now();
+  const recordOutcome = (error = null) => {
+    if (recorded) return;
+    recorded = true;
+    const payload = error ? assistantStreamErrorPayload(error, { partial: textSent }) : null;
+    recordAssistantTurn({ ...(payload ? { code: payload.code, error, source: payload.credentialSource,
+      details: error?.details ?? null, serviceFailure: payload.code === 'DATABASE_UNAVAILABLE' } : {}), durationMs: performance.now() - startedAt });
+  };
 
   const wake = () => {
     const pending = waiting;
@@ -222,6 +231,7 @@ export function assistantStreamResponse(turn, {
     graceTimer = setTimeout(() => {
       if (finished) return;
       finished = true;
+      recordOutcome(stalled);
       finalEvent(ASSISTANT_STREAM_EVENTS.ERROR, assistantStreamErrorPayload(stalled, { partial: textSent }));
       close();
     }, graceMs);
@@ -230,7 +240,6 @@ export function assistantStreamResponse(turn, {
 
   /** Kuyrukta yer açılana (ya da akış kapanana) kadar bekler; bekleme sınırlıdır ve üretim sinyali onu da keser. */
   async function waitForCapacity() {
-    const startedAt = performance.now();
     const backpressure = controller.desiredSize <= 0;
     while (!closed && controller.desiredSize <= 0 && !generationSignal.aborted) {
       const remaining = deliveryTimeoutMs - (performance.now() - startedAt);
@@ -255,7 +264,8 @@ export function assistantStreamResponse(turn, {
     return await waitForCapacity() && send(event, data);
   }
 
-  const deliveryFailure = () => stalled || (generationSignal.aborted ? generationSignal.reason : null) || new AiError(AI_ERROR_CODES.AI_CANCELLED);
+  const deliveryFailure = () => stalled || (generationSignal.reason instanceof ServerPersistenceError ? generationSignal.reason : null)
+    || new AiError(AI_ERROR_CODES.AI_CANCELLED);
 
   // Bekleme erişim denetiminden ÖNCE biter; denetimden sonra hiçbir await yoktur.
   async function deliver(prepare, replayed = false) {
@@ -323,6 +333,7 @@ export function assistantStreamResponse(turn, {
         }
       });
       if (finished) return;
+      if (stalled || generationSignal.aborted) throw deliveryFailure();
       if (!terminal && result.reconciled && turn.sicil) {
         await deliver(async () => ({ ...result, answer: await discloseAssistantMessage(turn, result.answer, generationSignal) }));
       }
@@ -332,18 +343,11 @@ export function assistantStreamResponse(turn, {
         ...(result.reconciled ? { reconciled: true } : {}),
         replayed: false
       });
-      recordAssistantTurn({ durationMs: performance.now() - startedAt });
+      recordOutcome();
     } catch (error) {
       const failure = stalled || error;
       const payload = assistantStreamErrorPayload(failure, { partial: textSent });
-      recordAssistantTurn({
-        code: payload.code,
-        error: failure,
-        source: payload.credentialSource,
-        details: failure?.details ?? null,
-        serviceFailure: payload.code === 'DATABASE_UNAVAILABLE',
-        durationMs: performance.now() - startedAt
-      });
+      recordOutcome(failure);
       finalEvent(ASSISTANT_STREAM_EVENTS.ERROR, payload);
     } finally {
       finished = true;

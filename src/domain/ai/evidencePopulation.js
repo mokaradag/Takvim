@@ -53,6 +53,37 @@ const COLLECTION_TOTALS = Object.freeze({
   rota_recurrence_inspect: { series: 'recurrence.entries', 'series.next': 'recurrence.upcomingOccurrences' }
 });
 
+/** Her kayıtlı koleksiyonun sınırlı kanıt üretim yolu; modele gönderilmez. */
+const COLLECTION_CAPABILITIES = Object.freeze({
+  rota_task_search: { tasks: 'page' }, rota_project_search: { matches: 'preview' }, rota_person_search: { people: 'preview' },
+  rota_task_analytics: { groups: { kind: 'internal-page', ranking: 'dynamic' }, 'overdueAging.buckets': 'bounded' },
+  rota_project_detail: {}, rota_task_detail: {},
+  rota_portfolio_summary: { projects: 'internal-page' }, rota_wbs_inspect: { nodes: 'internal-page' },
+  rota_workload_summary: { people: { kind: 'internal-page', ranking: 'dynamic' } },
+  rota_baseline_compare: { availableBaselines: 'preview', mostSlipped: { kind: 'internal-page', ranking: { metric: 'task.varianceDays', order: 'desc' } } },
+  rota_dependency_inspect: { predecessors: 'bounded', successors: 'bounded', mostConnected: { kind: 'internal-page', ranking: { metric: 'dependencies.relationCount', order: 'desc' } } },
+  rota_recurrence_inspect: { series: { kind: 'internal-page', ranking: 'dynamic' }, 'series.next': { kind: 'internal-page', ranking: 'dynamic' }, 'series.*.next': 'preview' },
+  rota_calendar_inspect: { holidays: 'bounded' }, rota_activity_search: { items: 'page' },
+  rota_schedule_requests: { items: 'page' }, rota_assignment_requests: { items: 'page' },
+  rota_notifications: { 'scheduleRequests.latest': 'preview', 'assignmentCoordination.latest': 'preview', 'taskEvents.latest': 'preview' },
+  rota_outlook_status: { items: 'preview' }, rota_data_quality: { checks: 'bounded', 'completedWithoutActualFinish.examples': 'preview' }
+});
+
+export function collectionCapability(tool, canonical) {
+  const capability = COLLECTION_CAPABILITIES[tool]?.[canonical];
+  return capability?.kind || capability || null;
+}
+
+export function collectionRanking(tool, canonical, rank) {
+  const ranking = COLLECTION_CAPABILITIES[tool]?.[canonical]?.ranking;
+  return ranking === 'dynamic' ? rank : ranking || null;
+}
+
+export function internalPageRequired(request, tool, canonical = request?.population?.collection) {
+  return ['list', 'rank'].includes(request?.operation) && request.population?.tool === tool
+    && collectionCapability(tool, canonical) === 'internal-page';
+}
+
 /** Yol aracın bir satır koleksiyonunun içinde mi (grup, proje, görev satırı…)? */
 export const insideRowCollection = (tool, path) => rowCollections(tool).some((row) => path.startsWith(`data.${row}.`));
 
@@ -77,6 +108,16 @@ const untrimmed = (envelope) => envelope?.data?.sizeNote == null;
 /** Son tamamlanma özelliği, tamamlanma tarihleri eksikken kesin değildir. */
 export function carrierAvailable(source, field, row = null) {
   const metric = metricEntry(source.tool, canonicalField(field).replace(/^data\./, ''))?.metric;
+  if (source.tool === 'rota_data_quality' && metric === 'quality.examples') {
+    const parts = String(field).split('.');
+    const parent = parts[1] === 'checks' ? (row?.examples ? row : source.envelope?.data?.checks?.[Number(parts[2])])
+      : source.envelope?.data?.completedWithoutActualFinish;
+    if (parent && Array.isArray(parent.examples)) return parent.count === parent.examples.length;
+  }
+  if (source.tool === 'rota_activity_search' && ['activity.changes', 'activity.changeBefore', 'activity.changeAfter'].includes(metric)) {
+    const item = row || source.envelope?.data?.items?.[Number(String(field).split('.')[2])];
+    return Boolean(item) && !item.detailsLimited && !(metric === 'activity.changes' && Number(item.moreChanges || 0) > 0);
+  }
   if (!['recurrence.lastCompletedFinish', 'recurrence.lastCompletedOccurrence'].includes(metric)) return true;
   const parent = String(field).split('.lastCompleted')[0];
   return (row || valueAt(source.envelope, parent))?.completionDatesComplete !== false;
@@ -88,6 +129,13 @@ export function carrierAvailable(source, field, row = null) {
  * olmayan koleksiyonda zarfın tamlığı geçerlidir.
  */
 const COLLECTION_COMPLETENESS = Object.freeze({
+  rota_activity_search: {
+    items: (envelope) => envelope.totalCount === envelope.data?.items?.length && envelope.returnedCount === envelope.data.items.length
+  },
+  rota_data_quality: {
+    checks: (envelope) => Array.isArray(envelope.data?.checks),
+    'completedWithoutActualFinish.examples': (envelope) => envelope.data?.completedWithoutActualFinish?.count === envelope.data?.completedWithoutActualFinish?.examples?.length
+  },
   rota_recurrence_inspect: {
     series: (envelope) => Array.isArray(envelope.data?.series) && envelope.totalCount === envelope.data.series.length,
     'series.next': (envelope) => envelope.data?.series?.nextTruncated === false,
@@ -156,6 +204,17 @@ export function collectionRows(envelope, canonical) {
     .flatMap(({ collection, rows }) => rows.map((row, index) => ({ collection, index, row })));
 }
 
+export const BREAKDOWN_FILTERS = Object.freeze({
+  'tasks.overdue': { deadline: 'overdue' },
+  'tasks.dueToday': { deadline: 'due_today' },
+  'tasks.dueNext7Days': { deadline: 'due_next_7_days' },
+  'tasks.openWithoutTargetFinish': { deadline: 'no_target_finish' },
+  'tasks.inProgress': { status: ['in_progress'] },
+  'tasks.todo': { status: ['todo'] },
+  'tasks.done': { status: ['done'] },
+  'tasks.open': { status: ['todo', 'in_progress'] }
+});
+
 /* ── Tazelik ────────────────────────────────────────────────
  * Aynı turda aynı nüfusun yeniden okunması eski kaydı geçersiz kılabilir; hangi
  * yeni okumanın eskisinin YERİNE geçtiği olgunun sınıfına bağlıdır:
@@ -218,7 +277,13 @@ export function readLater(newer, older) {
 }
 
 export function scalarKey(source, metric = null) {
-  return populationKey(source, populationDimensions(source, 'scalar', metric));
+  const definition = BREAKDOWN_FILTERS[metric];
+  const facets = { ...(source.facets || {}) };
+  for (const [key, required] of Object.entries(definition || {})) {
+    if (Array.isArray(required)) facets[key] = (facets[key] || required).filter((value) => required.includes(value)).sort();
+    else if (facets[key] == null || facets[key] === required) facets[key] = required;
+  }
+  return populationKey({ ...source, facets }, populationDimensions(source, 'scalar', metric));
 }
 
 export function rowKey(source, canonical) {

@@ -90,14 +90,13 @@ test('system request summaries contain only typed values, never entity or filter
   assert.deepEqual(JSON.parse(requestSummary(request)), { operation: 'value', metrics: ['tasks.total'],
     entities: [{ type: 'project' }, { type: 'project', id: PROJECTS.FULL }], filters: { deadline: 'overdue' } });
   for (const separateDeclaration of [false, true]) {
-    const raw = { operation: 'value', metrics: ['tasks.total'], filters: { text: attack }, reasoning: 'synthesis' };
+    const raw = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', groupBy: 'status' }, filters: { text: attack }, reasoning: 'synthesis' };
     // Yorum gerektiren istek: seçimi model yapar, kabul notu sonraki model turuna da gider.
-    const tools = { text: separateDeclaration ? '' : declared(raw), toolCalls: [call('rota_task_analytics', { text: attack }),
-      call('rota_task_analytics', { text: attack, groupBy: 'status' }, 'grouped')] };
-    const steps = [...(separateDeclaration ? [reply(declared(raw))] : []), tools, reply(facts('R2:data.totals.total'))];
+    const tools = { text: separateDeclaration ? '' : declared(raw), toolCalls: [call('rota_task_analytics', { text: attack, groupBy: 'status' }, 'grouped')] };
+    const steps = [separateDeclaration ? reply(declared(raw)) : tools, reply(facts('R1:data.totals.total'))];
     const { result, inputs } = await turn(t, steps, { user: `Kaç görev var? ${attack}` });
     assert.equal(result.outcome, 'grounded');
-    assert.equal(inputs.length, separateDeclaration ? 3 : 2);
+    assert.equal(inputs.length, 2);
     for (const input of inputs.slice(1)) {
       const systems = input.messages.filter((message) => message.role === 'system');
       assert.equal(systems.some((message) => message.content.toLowerCase().includes(attack.toLowerCase())), false);
@@ -106,18 +105,18 @@ test('system request summaries contain only typed values, never entity or filter
   }
 });
 
-test('task search then project search can reach the resolved project detail without widening task scope', async (t) => {
+test('a declared project resolves directly without an unrelated task search', async (t) => {
   const title = 'Radar Modernizasyonu test planı';
   const request = { operation: 'value', metrics: ['project.name'], population: { tool: 'rota_project_detail' }, fields: [{ metric: 'project.name', tool: 'rota_project_detail', path: 'data.project.name' }], entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] };
   const seed = rotaToolSeed();
   seed.tasks.find((row) => row.TaskId === TASKS.OVERDUE).Title = title;
   const { result } = await turn(t, [
-    { text: declared(request), toolCalls: [call('rota_task_search', { text: title })] }
+    { text: declared(request), toolCalls: [call('rota_project_search', { text: 'Radar Modernizasyonu' })] }
   ], { user: `${title} görevinin Radar Modernizasyonu projesini göster`, seed });
   assert.equal(result.outcome, 'grounded');
   assert.match(result.text, /Radar Modernizasyonu/);
-  // Bildirilen proje adla çözülür ve künyesi okunur (sunucu okumaları); görev araması kapsamı genişletmez, olguyu sunucu seçer.
-  assert.deepEqual(result.evidence.map((item) => item.id), ['R3']);
+  // Yalnızca bildirilen proje çözülür; künyesini sunucu okur.
+  assert.deepEqual(result.evidence.map((item) => item.id), ['R2']);
 });
 
 test('the request schema speaks the closed metric vocabulary and the task tool filter values', () => {
@@ -173,8 +172,7 @@ test('a declaration after data was read cannot change the request', async (t) =>
   const overdue = inProject(['tasks.overdue'], { reasoning: 'synthesis' });
   // Yorum gerektiren istekte seçimi model yapar ve isteği değiştirmeyi dener.
   const { result, inputs } = await turn(t, [
-    { text: declared(overdue), toolCalls: [call('rota_task_analytics', { projectId: PROJECTS.FULL }),
-      call('rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'status' }, 'grouped')] },
+    { text: declared(overdue), toolCalls: [call('rota_task_analytics', { projectId: PROJECTS.FULL })] },
     reply(declared(inProject(['tasks.done']))),
     (input) => reply(facts(`${results(input)[0].evidenceId}:data.totals.done`))
   ], { user: `Radar projesinde kaç gecikmiş görev var? ${PROJECTS.FULL}` });
@@ -184,9 +182,9 @@ test('a declaration after data was read cannot change the request', async (t) =>
 
 test('declaration-only responses are bounded and cannot loop', async (t) => {
   const again = reply(declared(inProject(['tasks.total'])));
-  const { result, inputs } = await turn(t, [again, again, again, again], { user: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
+  const { result, inputs } = await turn(t, [again, again, again], { user: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
   assert.equal(result.outcome, 'failed');
-  assert.equal(inputs.length, 4);
+  assert.equal(inputs.length, 3);
 });
 
 test('a prompt-injected tool result cannot redirect the declared request to another true fact', async (t) => {
@@ -527,14 +525,14 @@ test('a rank request verifies from an empty population and still needs rows when
 
 test('list answers include every returned row of every claimable row collection', async (t) => {
   const stack = stackFor(t);
-  const { ledger } = await callRotaTools(stack, AYSE, [['rota_portfolio_summary', {}], ['rota_workload_summary', {}]]);
-  assert.equal(issue(verifyRequested(ledger, ['R1:data.projects.0.name', 'R1:data.projects.0.tasks.open'], { operation: 'list', metrics: ['tasks.open'] })), 'LIST_INCOMPLETE');
-  assert.equal(issue(verifyRequested(ledger, ['R1:data.projects.*.name', 'R1:data.projects.*.tasks.open'], { operation: 'list', metrics: ['tasks.open'] })), null);
-  assert.equal(issue(verifyRequested(ledger, ['R1:data.totals.open'], { operation: 'list', metrics: ['tasks.open'] })), 'LIST_ROWS_REQUIRED');
-  assert.equal(issue(verifyRequested(ledger, ['R2:data.people.1.openTasks'], { operation: 'list', metrics: ['tasks.open'] })), 'LIST_INCOMPLETE');
+  const { ledger } = await callRotaTools(stack, AYSE, [['rota_workload_summary', {}], ['rota_portfolio_summary', {}]]);
+  assert.equal(issue(verifyRequested(ledger, ['R2:data.projects.0.name', 'R2:data.projects.0.tasks.open'], { operation: 'list', metrics: ['tasks.open'] })), 'LIST_INCOMPLETE');
+  assert.equal(issue(verifyRequested(ledger, ['R2:data.projects.*.name', 'R2:data.projects.*.tasks.open'], { operation: 'list', metrics: ['tasks.open'] })), null);
+  assert.equal(issue(verifyRequested(ledger, ['R2:data.totals.open'], { operation: 'list', metrics: ['tasks.open'] })), 'LIST_ROWS_REQUIRED');
+  assert.equal(issue(verifyRequested(ledger, ['R1:data.people.1.openTasks'], { operation: 'list', metrics: ['tasks.open'] })), 'LIST_INCOMPLETE');
   // Genel toplam, listelenen satırların değerinin yerine geçmez.
-  assert.equal(issue(verifyRequested(ledger, ['R1:data.totals.open', 'R1:data.projects.*.name'], { operation: 'list', metrics: ['tasks.open'] })), 'METRIC_MISSING');
-  assert.equal(issue(verifyRequested(ledger, ['R1:data.projects.*.tasks.overdue', 'R1:data.projects.0.tasks.open'],
+  assert.equal(issue(verifyRequested(ledger, ['R2:data.totals.open', 'R2:data.projects.*.name'], { operation: 'list', metrics: ['tasks.open'] })), 'METRIC_MISSING');
+  assert.equal(issue(verifyRequested(ledger, ['R2:data.projects.*.tasks.overdue', 'R2:data.projects.0.tasks.open'],
     { operation: 'list', metrics: ['tasks.open', 'tasks.overdue'] })), 'METRIC_MISSING', 'tek satırdaki doğru ölçü bütün listeyi karşılamaz');
 });
 
@@ -781,44 +779,42 @@ test('protocol evidence gaps never reopen exhausted budgets through Deep escalat
   const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
   for (const budget of [{ maxRepairRounds: 0 }, { maxToolRounds: 1 }, { maxTotalCalls: 1 }]) {
     const stack = stackFor(t);
-    // İlk görev okuması başarılı, sonraki (nüfus okuması dâhil) başarısız: kanıt boşluğu kapanmaz.
-    let taskReads = 0;
-    stack.db.queryBarrier = { match: (sql) => {
-      if (sql.startsWith('/* rota-ai-tool:task-facts */') && (taskReads += 1) > 1) throw Object.assign(new Error('bağlantı yok'), { code: 'ESOCKET' });
-      return false;
-    } };
+    const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+    stack.db.tasks = Array.from({ length: 180 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}` }));
     const context = createToolTurnContext({ sicil: AYSE, now: NOW });
     const limits = { ...TOOL_LIMITS, ...budget };
-    // Nüfus aracı analizdir; görev araması bildirilen ölçüleri taşımaz ve kanıt boşluğu bırakır.
-    const request = { operation: 'value', metrics: ['tasks.total', 'tasks.open'], population: { tool: 'rota_task_analytics' } };
-    const choices = [];
+    const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, entities: [{ type: 'project', id: PROJECTS.FULL }] };
     let rounds = 0;
     const session = { signal: new AbortController().signal, round: async (input) => {
-      choices.push(input.toolChoice);
       rounds += 1;
-      if (rounds === 1) return { text: declared(request), toolCalls: [call('rota_task_search')], finishReason: 'tool_calls' };
-      if (rounds === 3 && input.toolChoice === 'auto') return { text: '', toolCalls: [call('rota_task_analytics')], finishReason: 'tool_calls' };
-      return reply(facts('R1:totalCount'));
+      if (rounds === 1) return { text: declared(request), toolCalls: [call('rota_task_search', { projectId: PROJECTS.FULL, limit: 1 })], finishReason: 'tool_calls' };
+      assert.equal(input.toolChoice, 'none');
+      return reply(facts('R1:data.tasks.*.title'));
     } };
-    const initial = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: 'Görev sayısı ve açık görev sayısı', now: NOW }).messages,
+    const initial = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: `Bütün görevler ${PROJECTS.FULL}`, now: NOW }).messages,
       catalog: toolCatalogForModel(), context, limits, onText: async () => {}, escalation: true });
     assert.equal(initial.outcome, 'failed');
     assert.equal(initial.stats.toolRounds <= limits.maxToolRounds, true);
-    assert.equal(initial.stats.attempted <= limits.maxTotalCalls + 1, true);
-    assert.equal(choices.at(-1), budget.maxToolRounds === 1 ? 'none' : 'auto');
-    assert.equal(rounds <= 5, true);
+    assert.equal(initial.stats.attempted <= limits.maxTotalCalls, true);
+    assert.equal(rounds <= 3, true);
   }
 });
 
 test('a final cursor page is not an exhaustive population even when complete marks the end', async (t) => {
   const stack = stackFor(t);
-  const first = await callRotaTool(stack, AYSE, 'rota_task_search', { limit: 1 });
-  const last = await callRotaTool(stack, AYSE, 'rota_task_search', { cursor: first.result.nextCursor, limit: 50 });
+  const first = await callRotaTools(stack, AYSE, [['rota_task_search', { limit: 1 }]]);
+  const messages = await first.executor.runRound([call('rota_task_search', { cursor: first.results[0].nextCursor, limit: 50 })]);
+  const result = JSON.parse(messages[0].content);
+  const last = { result, ledger: {
+    ids: () => ['R2'],
+    requestEntries: () => first.ledger.requestEntries().filter((entry) => entry.id === 'R2'),
+    payloads: () => first.ledger.payloads().filter((entry) => entry.id === 'R2')
+  } };
   assert.equal(last.result.complete, true);
   assert.equal(last.result.returnedCount < last.result.totalCount, true);
-  assert.equal(issue(verifyRequested(last.ledger, ['data.tasks.*.title'], { operation: 'list', metrics: ['task.title'] })), 'LIST_INCOMPLETE');
+  assert.equal(issue(verifyRequested(last.ledger, ['R2:data.tasks.*.title'], { operation: 'list', metrics: ['task.title'] })), 'LIST_INCOMPLETE');
   const request = { operation: 'rank', metrics: ['task.targetFinish'], rank: { metric: 'task.targetFinish', order: 'asc', limit: REQUEST_LIMITS.maxRankLimit } };
-  assert.equal(issue(verifyRequested(last.ledger, ['data.tasks.*.targetFinish'], request)), 'RANK_MISMATCH');
+  assert.equal(issue(verifyRequested(last.ledger, ['R2:data.tasks.*.targetFinish'], request)), 'RANK_MISMATCH');
 });
 
 

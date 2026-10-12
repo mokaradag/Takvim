@@ -50,22 +50,19 @@ test('global analytics/search follow-ups preserve the canonical task population 
       assert.throws(() => scope.validate(to, broader), { code: 'UNSUPPORTED_SCOPE' });
     }
   }
-  stackFor(t);
-  const steps = [
-    { text: declared({ operation: 'list', metrics: ['tasks.total', 'task.title'], filters: { deadline: 'overdue' } }),
-      toolCalls: [{ id: 'count', name: 'rota_task_analytics', arguments: '{"deadline":"overdue"}' }] },
-    { text: '', toolCalls: [{ id: 'list', name: 'rota_task_search', arguments: '{"deadline":"overdue"}' }] }
-  ];
-  const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
-    if (steps.length) return steps.shift();
-    const results = input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
-    assert.ok(results.every((item) => item.ok), JSON.stringify(results));
-    assert.equal(results[0].data.totals.total, results[1].totalCount);
-    return { text: JSON.stringify({ kind: 'rota', facts: [`${results[1].evidenceId}:totalCount`, `${results[1].evidenceId}:data.tasks.*.title`] }), toolCalls: [], finishReason: 'stop' };
+  const stack = stackFor(t);
+  let rounds = 0;
+  const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => {
+    rounds += 1;
+    assert.equal(rounds, 1, 'the count and list share one required population read');
+    return { text: declared({ operation: 'list', metrics: ['tasks.total', 'task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { deadline: 'overdue' } }),
+      toolCalls: [{ id: 'list', name: 'rota_task_search', arguments: '{"deadline":"overdue"}' }] };
   } }, { messages: buildGroundedContext({ userContent: 'Kaç gecikmiş görevim var ve hangileri?', now: NOW }).messages,
     catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {} });
   assert.equal(result.outcome, 'grounded');
   assert.equal(result.repaired, false);
+  assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts' && !entry.params.withAssignees).length, 1);
+
 });
 
 test('omitted activity/calendar defaults cannot widen during same-tool follow-ups', () => {
@@ -413,7 +410,7 @@ for (const path of ['server', 'model']) {
     const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => {
       round += 1;
       if (round === 1) {
-        return { text: declared({ operation: 'value', metrics, entities: [{ type: 'task', id: TASKS.OVERDUE }] }),
+        return { text: declared({ operation: 'value', metrics, entities: [{ type: 'task', id: TASKS.OVERDUE }], ...(path === 'model' ? { reasoning: 'synthesis', fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }] } : {}) }),
           toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
       }
       return { text: JSON.stringify({ kind: 'rota', facts: ['R1:data.task.title', 'R1:data.task.project.name'] }), toolCalls: [], finishReason: 'stop' };

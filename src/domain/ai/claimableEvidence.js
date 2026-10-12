@@ -278,7 +278,17 @@ export function semanticCarrierKey(tool, path) {
 }
 
 export function equivalentCarriers(tool, paths) {
-  return paths.length > 0 && paths.every((path) => semanticCarrierKey(tool, path) === semanticCarrierKey(tool, paths[0]));
+  const identity = (path) => scalarCarrierKey(tool, path) || semanticCarrierKey(tool, path);
+  return paths.length > 0 && paths.every((path) => identity(path) === identity(paths[0]));
+}
+
+/** Satır dışı sayımın anlamı araç adından değil kayıtlı ölçüden gelir. */
+export function scalarCarrierKey(tool, path) {
+  const canonical = String(path).split('.').map((part) => Number.isInteger(Number(part)) && part !== '' ? '*' : part).join('.');
+  const entry = metricEntry(tool, canonical.replace('data.', ''));
+  if (!entry?.metric || entry.property || rowCollections(tool).some((row) => canonical.startsWith(`data.${row}.`))) return null;
+  if (canonical === 'returnedCount' || DISTINCT_FIELDS.has(entry.metric)) return semanticCarrierKey(tool, canonical);
+  return `${entry.metric}|${entry.measure}`;
 }
 
 /** Kişinin tek görev aboneliği TaskId/UserSicil benzersiz anahtarıyla göreve aittir. */

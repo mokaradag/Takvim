@@ -56,7 +56,7 @@ const searchFull = { type: 'tool-calls', preface: [declared(countFull)], calls: 
 const NAMED = 'Radar test planı';
 const NAMED_QUESTION = `${NAMED} görevinin durumu ve projesi nedir?`;
 const NAMED_ANSWER = /görevinin durumu \*\*Yapılacak\*\*/;
-const statusNamed = { operation: 'value', metrics: ['task.status', 'task.project'], entities: [{ type: 'task', text: NAMED }] };
+const statusNamed = { operation: 'value', metrics: ['task.status', 'task.project'], reasoning: 'synthesis', fields: [{ metric: 'task.project', tool: 'rota_task_search', path: 'data.tasks.*.project.name' }], entities: [{ type: 'task', text: NAMED }] };
 const searchNamed = { type: 'tool-calls', preface: [declared(statusNamed)], calls: [{ name: 'rota_task_search', arguments: { text: NAMED } }] };
 const synthesizeNamed = { ...searchNamed, preface: [declared({ ...statusNamed, reasoning: 'synthesis', population: { tool: 'rota_task_search' } })] };
 const statusAnswer = (onCall = null) => ({ type: 'script', respond: (call) => {
@@ -116,15 +116,15 @@ test('a verified Standard answer keeps the whole turn in Standard and spends no 
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD]);
   assert.match(doneOf(response).assistantMessage.content, /\*\*8\*\*/);
   // Seçimi model yaptığında da tur Standart kipte kalır.
-  stack.provider.enqueue(searchNamed, statusAnswer());
+  stack.provider.enqueue({ ...searchNamed, preface: [declared({ ...statusNamed, reasoning: 'deterministic' })] });
   const named = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION });
-  assert.deepEqual(stack.provider.calls.slice(1).map((call) => call.model), [STANDARD, STANDARD]);
+  assert.deepEqual(stack.provider.calls.slice(1).map((call) => call.model), [STANDARD]);
   assert.match(doneOf(named).assistantMessage.content, NAMED_ANSWER);
   const { grounding } = aiTelemetrySnapshot();
   assert.equal(grounding.escalations.total, 0);
   assert.equal(grounding.repaired, 0);
   assert.equal(grounding.grounded, 2);
-  assert.equal(grounding.serverSelected, 1);
+  assert.equal(grounding.serverSelected, 2);
 });
 
 test('a Deep escalation that times out ends as a bounded timeout, not as a verification failure', async (t) => {
@@ -149,12 +149,11 @@ test('an empty Standard completion is diagnosed without content and retried in-s
   const stack = stackFor(t);
   const logs = captureConsole(t);
   stack.provider.enqueue(
-    searchNamed,
     { type: 'answer', text: '', chunks: [], reasoning: 3, usage: { promptTokens: 900, completionTokens: 512, totalTokens: 1412, reasoningTokens: 512 } },
-    statusAnswer()
+    { ...searchNamed, preface: [declared({ ...statusNamed, reasoning: 'deterministic' })] }
   );
   const response = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION });
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD]);
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD]);
   assert.match(doneOf(response).assistantMessage.content, NAMED_ANSWER);
   assert.equal(deltas(response).length, 1);
   const snapshot = aiTelemetrySnapshot();
@@ -346,12 +345,12 @@ test('a declared population the plan did not read is read by the server before a
   const stack = stackFor(t);
   const request = { ...countFull, metrics: ['tasks.total', 'tasks.open'], population: { tool: 'rota_task_analytics' },
     fields: ['total', 'open'].map((metric) => ({ metric: `tasks.${metric}`, tool: 'rota_task_analytics', path: `data.totals.${metric}` })) };
-  stack.provider.enqueue({ ...searchFull, preface: [declared(request)] });
+  stack.provider.enqueue({ type: 'answer', text: declared(request) });
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
   assert.equal(doneOf(response).assistantMessage.finishReason, 'stop');
   // Planın çağrısı bildirilen nüfusu okumadı: sunucu nüfus okumasını bildirimden kurar ve olguyu seçer; düzeltme ya da devir yoktur.
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD]);
-  assert.deepEqual(doneOf(response).assistantMessage.evidence.map((item) => item.id), ['R2']);
+  assert.deepEqual(doneOf(response).assistantMessage.evidence.map((item) => item.id), ['R1']);
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
 });
 

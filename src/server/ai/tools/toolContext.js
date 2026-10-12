@@ -158,10 +158,10 @@ export function createToolTurnContext({
     sql: withSql,
     async snapshot(key, cursor, load) {
       const existing = snapshots.get(key);
-      if (existing && (cursor || existing.round === state.round)) return existing.pending;
+      if (existing && existing.epoch === state.epoch && (cursor || existing.round === state.round)) return existing.pending;
       if (cursor) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.cursor:stale'] });
       const pending = Promise.resolve().then(load);
-      const snapshot = { pending, round: state.round };
+      const snapshot = { pending, round: state.round, epoch: state.epoch };
       snapshots.set(key, snapshot);
       try { return await pending; }
       catch (error) { if (snapshots.get(key) === snapshot) snapshots.delete(key); throw error; }

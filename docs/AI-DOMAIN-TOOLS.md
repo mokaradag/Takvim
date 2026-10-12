@@ -742,7 +742,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Yetki:** Anlık görüntünün görev görünürlüğü; kişi süzgeci yalnızca kimliği kullanıcıya açık sorumluluklarla eşleşir.
 - **Kaynak:** `AI_TOOL_TASK_FACTS_SQL` (yetki + daraltıcı kaba süzgeç) → tam süzgeç, sıralama ve sayfalama saf JS'de.
 - **Çıktı:** `tasks[]` (kimlik, başlık, proje, durum, öncelik, termin/plan/gerçekleşen tarihleri, gecikme günü, sorumlular), `sort`.
-- **Tamlık:** `totalCount` kesin toplam; liste bir sayfa; `nextCursor` süzgeç ve sıralı veri kümesi özetine bağlıdır. Canlı ekleme/silme/sıralama değişimi eski imleci reddeder; aynı imleçle sessizce kayıt atlanmaz veya tekrarlanmaz.
+- **Tamlık:** `totalCount` kesin toplam; liste bir sayfa; `nextCursor` süzgeç ve sıralı veri kümesi özetine bağlıdır. Sayfalar aynı turun yetki epoch’una bağlı sunucu görüntüsünü kullanır; yeni bağlamdaki veya epoch’u değişmiş imleç reddedilir. Aynı zincirde sessizce kayıt atlanmaz veya tekrarlanmaz.
 - **Anlambilim:** §9; metin araması büyük/küçük harf ve aksan duyarsızdır: `ş/ç/ğ/ö/ü` taban harfleriyle eşleşir, kesin JS eşleşmesinde noktasız `ı` ayrı kalır; SQL'deki `CHARINDEX` yalnızca kaba daraltmadır. `%`/`_`/`[` düz metindir.
 - **Örnek sorular:** "Bu hafta termini olan görevlerim neler?", "Radar projesinde gecikmiş kritik görevler hangileri?"
 
@@ -1435,8 +1435,10 @@ kanıtı güncel veri yerine kullanılamaz.
 
 Hareket, tarih talebi ve atama koordinasyonu sayfaları tek tur içinde en fazla
 1000 kayıtlık sunucu anlık görüntüsünü paylaşır. Yeni turda eski iş akışı
-imleci reddedilir; epoch değişince anlık görüntü atılır. Görev listeleri
-sıralı veri özeti değişince imleci reddeder. Normal UI/rapor OFFSET davranışı
+imleci reddedilir; epoch değişince anlık görüntü atılır. Görev listeleri de
+aynı yetki epoch’unda aynı maddileştirilmiş nüfusu kullanır; kopuk imleç
+yeniden okunan canlı veriye bağlanmaz. Eş sorumlular yalnızca dönen sayfadaki
+görevler için okunur ve bu görüntüde saklanır. Normal UI/rapor OFFSET davranışı
 bu AI kuralları için değiştirilmez.
 
 Tarih ve atama sayfalarında sayaçlar **seçilen sekmedeki** yetkili/süzülmüş
@@ -1446,6 +1448,16 @@ nüfustan kurulur; taşmada sayaçlar bilinmezdir. Geçmiş katılımcı/alıcı
 tek başına AI açıklama yetkisi değildir: görev etkin projede halen FULL/READ
 ya da kişisel görev kapsamında olmalıdır. Normal rapor/bildirim SQL yolu
 `evidenceSnapshotLimit` verilmedikçe AI birleşimlerini/bütçelerini çalıştırmaz.
+
+Kapsamlı liste ve sıralamada her kayıtlı koleksiyonun sunucu içi üretim
+yeteneği SQL öncesinde denetlenir. Önizlemeler kapsamlı liste sayılmaz;
+iç sayfalamayı destekleyen koleksiyonlar mevcut imleç zarfıyla, aynı görüntü
+üzerinden sınırlı sayfalar üretir. Araç ve toplam sonuç bütçeleri değişmez.
+Satır kümesinin tamlığı, hareket ayrıntılarının veya kalite örneklerinin
+kısaltılmasından bağımsızdır; kısaltılmış ayrıntı eksiksiz değer olarak seçilemez.
+İlk, doğrudan, türetilen ve takip çağrıları aynı donmuş isteğin kalan okuma
+yükümlülüklerine bağlıdır; geçersiz bir kardeş çağrı bütün kümeyi SQL öncesinde
+reddettirir. Ayrı anlamlı ad/kod taşıyıcıları veri okunmadan alanla bağlanır.
 
 Takip kökleri karşılaştırılmadan önce katı şemayla normalize edilir (null,
 GUID, metin boşluğu). Sayfalama/sunum değişebilir; filtreler daralabilir;

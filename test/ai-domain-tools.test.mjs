@@ -242,7 +242,10 @@ test('arama sıralı, sayfalı ve kesin toplamlıdır; imleç süzgece bağlıd�
   assert.equal(first.result.returnedCount, 3);
   assert.equal(first.result.complete, false);
   assert.ok(first.result.nextCursor);
-  const second = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, sort: 'title_asc', limit: 3, cursor: first.result.nextCursor });
+  const context = first.context;
+  const executor = createToolExecutor({ context, ledger: createEvidenceLedger(), signal: new AbortController().signal });
+  const [continued] = await executor.runRound([{ id: 'next', name: 'rota_task_search', arguments: JSON.stringify({ projectId: PROJECTS.FULL, sort: 'title_asc', limit: 3, cursor: first.result.nextCursor }) }]);
+  const second = { result: JSON.parse(continued.content) };
   assert.equal(second.result.returnedCount, 3);
   assert.equal(new Set([...first.result.data.tasks, ...second.result.data.tasks].map((task) => task.taskId)).size, 6);
   const mismatched = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.READ, sort: 'title_asc', limit: 3, cursor: first.result.nextCursor });
@@ -778,9 +781,11 @@ test('çağrı sınırları: turda en fazla beş çağrı yürütülür; tanınm
   assert.deepEqual(ledger.ids(), ['R1', 'R2'], 'kanıt kimlikleri çağrı sırasıyla verilir');
   const factReads = stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts');
   assert.equal(factReads.filter((entry) => !entry.params.taskIds).length, 1, 'liste ve toplam aynı olgu okumasından gelir; yinelenen çağrı yeniden çalışmaz');
-  assert.equal(factReads.length, 1, 'sayfa zincirinin sorumluları aynı maddileştirilmiş nüfusla bir kez okunur');
-  assert.equal(factReads[0].params.withAssignees, 1);
+  assert.equal(factReads.length, 2, 'nüfus ve sayfa izdüşümü ayrı okunur; yineleme ikisini de yeniden okumaz');
+  assert.equal(factReads[0].params.withAssignees, 0);
   assert.equal(factReads[0].params.taskIds, '');
+  assert.equal(factReads[1].params.withAssignees, 1);
+  assert.ok(factReads[1].params.taskIds);
   const oversize = await callRotaTools(stack, AYSE, [['rota_task_search', JSON.stringify({ text: 'a', filler: 'x'.repeat(9000) })]]);
   assert.equal(oversize.results[0].error.code, 'INVALID_ARGUMENTS');
   assert.deepEqual(oversize.results[0].error.details, ['$:tooLarge']);
@@ -1122,7 +1127,7 @@ test('AI completion rates share product rounding and empty-set semantics', async
 });
 
 for (const tool of ['rota_workload_summary', 'rota_task_analytics', 'rota_activity_search']) {
-  test(`bounded complete ${tool} reads exceed the presentation cap without other buckets, and oversized results create no evidence`, async (t) => {
+  test(`bounded ${tool} pages reconstruct the collection without a full-population payload`, async (t) => {
     const stack = stackFor(t);
     const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
     const populate = (count) => {
@@ -1148,16 +1153,123 @@ for (const tool of ['rota_workload_summary', 'rota_task_analytics', 'rota_activi
         arguments: JSON.stringify({ projectId: PROJECTS.FULL, limit, ...extra }) }]);
       return { ledger, result: JSON.parse(message.content) };
     };
-    const complete = await read(1);
-    assert.equal(complete.result.ok, true);
-    assert.equal(complete.result.complete, true);
-    assert.equal(complete.result.data[collection].length, 31);
-    assert.equal(complete.result.data[collection].some((row) => row.key === 'other'), false);
-    assert.equal(decodeAuthorizationPopulation(JSON.parse(complete.ledger.persistable(complete.ledger.ids())[0].evidenceJson).authorizationPopulation).length, 31);
-    const tooLarge = await read(1, 1000);
-    assert.equal(tooLarge.result.error.code, 'RESULT_TOO_LARGE');
-    assert.deepEqual(tooLarge.ledger.ids(), []);
+    const { serverReadCall, prepareExecutionSet, createCallIds } = await import('../src/server/ai/tools/executionSet.js');
+    const catalog = (await import('../src/server/ai/tools/toolRegistry.js')).toolCatalogForModel();
+    const context = createToolTurnContext({ sicil: AYSE, now: NOW });
+    const ledger = createEvidenceLedger();
+    const executor = createToolExecutor({ context, ledger, request: () => request, signal: new AbortController().signal });
+    const pageSize = tool === 'rota_activity_search' ? 20 : 25;
+    const args = { projectId: PROJECTS.FULL, limit: pageSize, ...extra };
+    const rows = [];
+    let cursor = null;
+    for (let index = 0; index < 3; index += 1) {
+      const call = serverReadCall(tool, { ...args, ...(cursor ? { cursor } : {}) }, catalog);
+      const prepared = prepareExecutionSet([call], { catalog, callId: createCallIds(), today: context.today });
+      assert.equal(prepared.ok, true);
+      const [message] = await executor.runRound(prepared.calls);
+      const body = JSON.parse(message.content);
+      assert.equal(body.ok, true, message.content);
+      assert.ok(body.data[collection].length <= pageSize);
+      assert.equal(body.data[collection].some((row) => row.key === 'other'), false);
+      rows.push(...body.data[collection]);
+      cursor = body.nextCursor;
+      if (!cursor) break;
+    }
+    assert.equal(rows.length, 31);
+    const large = await read(25, 1000);
+    assert.ok(large.result.error || large.result.data.sizeNote, 'size pressure cannot silently prove completeness');
     const ordinary = await callRotaTool(stack, AYSE, tool, { projectId: PROJECTS.FULL, limit: 1, ...extra });
     assert.equal(ordinary.result.complete, false, 'sunum sınırı yalnızca kapsamlı istek dışında korunur');
+  });
+}
+
+test('cursor snapshots keep their authorization epoch and never recover detached pages', async (t) => {
+  const stack = stackFor(t);
+  let full = true;
+  const context = createToolTurnContext({ sicil: AYSE, now: NOW, loadAuthorization: async () => ({ sicil: AYSE,
+    effective: { access: new Map([[PROJECTS.FULL, { accessLevel: full ? 'FULL' : 'PARTIAL', reasons: [] }]]), partialTaskIds: new Set() } }) });
+  const signal = new AbortController().signal;
+  let loads = 0;
+  const load = async () => ({ reads: ++loads, deletedActivity: 'protected' });
+  context.beginRound(); await context.authorization(signal);
+  const first = await context.snapshot('activity', null, load);
+  context.beginRound(); await context.authorization(signal);
+  assert.equal(await context.snapshot('activity', 'continuation', load), first);
+  assert.equal(loads, 1);
+  full = false;
+  context.beginRound(); await context.authorization(signal);
+  await assert.rejects(() => context.snapshot('activity', 'continuation', load), (error) => error.details.includes('$.cursor:stale'));
+  assert.equal(loads, 1, 'stale continuation neither exposes nor reloads old rows');
+  assert.notEqual(await context.snapshot('activity', null, load), first);
+  assert.equal(loads, 2);
+});
+
+for (const [tool, collection, metric] of [
+  ['rota_portfolio_summary', 'projects', 'tasks.open'],
+  ['rota_wbs_inspect', 'nodes', 'wbs.directTasks'],
+  ['rota_baseline_compare', 'mostSlipped', 'task.varianceDays'],
+  ['rota_dependency_inspect', 'mostConnected', 'dependencies.relationCount'],
+  ['rota_recurrence_inspect', 'series', 'recurrence.openOccurrences'],
+  ['rota_recurrence_inspect', 'series.next', 'recurrence.occurrenceDate']
+]) {
+  test(`${tool}.${collection} has a bounded, snapshot-verifiable exhaustive path`, async (t) => {
+    const stack = stackFor(t);
+    const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+    const ids = Array.from({ length: 7 }, (_, index) => `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`);
+    stack.db.tasks = ids.map((TaskId) => ({ ...template, TaskId }));
+    let args = { projectId: PROJECTS.FULL, limit: 2 };
+    if (tool === 'rota_portfolio_summary') {
+      const project = stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL);
+      stack.db.projects = ids.map((_id, index) => ({ ...project, ProjectId: `10000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`, ProjectName: `Proje ${index}` }));
+      stack.db.tasks.forEach((task, index) => { task.ProjectId = stack.db.projects[index].ProjectId; });
+      args = { limit: 2 };
+    } else if (tool === 'rota_wbs_inspect') {
+      stack.db.wbs = ids.map((_id, index) => ({ WbsId: `30000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`, ProjectId: PROJECTS.FULL, Name: `Düğüm ${index}`, Code: `R.${index}`, SortOrder: index }));
+      stack.db.tasks.forEach((task, index) => { task.WbsId = stack.db.wbs[index].WbsId; });
+    } else if (tool === 'rota_baseline_compare') {
+      stack.db.taskBaselineSnapshots = ids.map((TaskId) => ({ BaselineId: BASELINE_ID, TaskId, PlannedFinish: '2026-09-10' }));
+    } else if (tool === 'rota_dependency_inspect') {
+      stack.db.taskDependencies = ids.slice(1).map((TaskId, index) => ({ ProjectId: PROJECTS.FULL, TaskId, PredecessorTaskId: ids[index], DependencyType: 'FS', LagDays: 0 }));
+      args = { projectId: PROJECTS.FULL };
+    } else if (collection === 'series') {
+      stack.db.tasks.forEach((task) => { task.RecurrenceRule = 'FREQ=WEEKLY;BYDAY=MO'; });
+    } else {
+      const series = stack.db.tasks[0];
+      series.RecurrenceRule = 'FREQ=WEEKLY;BYDAY=MO';
+      stack.db.tasks = [series, ...ids.map((id, index) => ({ ...template, TaskId: id.replace('20000000', '21000000'), RecurrenceParentTaskId: series.TaskId, RecurrenceOccurrenceDate: `2026-10-${String(index + 1).padStart(2, '0')}` }))];
+      args.taskId = series.TaskId;
+    }
+    const { parsedRequest } = await import('./helpers/requestScenario.mjs');
+    const { requestEvidence } = await import('../src/server/ai/tools/requestDeclaration.js');
+    const { collectionDomain, rankDomain } = await import('../src/domain/ai/requestContract.js');
+    const { serverReadCall, prepareExecutionSet, createCallIds } = await import('../src/server/ai/tools/executionSet.js');
+    const catalog = (await import('../src/server/ai/tools/toolRegistry.js')).toolCatalogForModel();
+    const request = parsedRequest({ operation: tool === 'rota_dependency_inspect' ? 'rank' : 'list', metrics: [metric], population: { tool, collection },
+      ...(tool === 'rota_dependency_inspect' ? { rank: { metric, order: 'desc', limit: 6 } } : {}) });
+    const ledger = createEvidenceLedger();
+    const context = createToolTurnContext({ sicil: AYSE, now: NOW });
+    const executor = createToolExecutor({ context, ledger, request: () => request, signal: new AbortController().signal });
+    let cursor = null;
+    for (let page = 0; page < 4; page += 1) {
+      const prepared = prepareExecutionSet([serverReadCall(tool, { ...args, ...(cursor ? { cursor } : {}) }, catalog)], { catalog, callId: createCallIds(), today: context.today });
+      assert.equal(prepared.ok, true);
+      const [message] = await executor.runRound(prepared.calls);
+      const result = JSON.parse(message.content);
+      assert.equal(result.ok, true, message.content);
+      const rows = collection.split('.').reduce((value, key) => value[key], result.data);
+      assert.ok(rows.length <= (tool === 'rota_dependency_inspect' ? 5 : 2));
+      cursor = result.nextCursor;
+      if (!cursor) break;
+    }
+    assert.equal(cursor, null);
+    const sources = [...requestEvidence(request, ledger.requestEntries(), context.today).values()];
+    const domain = collectionDomain(sources, collection);
+    assert.equal(domain.complete, true);
+    assert.equal(domain.rows.length, 7);
+    if (request.rank) {
+      const ranked = rankDomain(request, sources, collection);
+      assert.equal(ranked.verified, true);
+      assert.equal(ranked.order.length, 7, 'top six includes the boundary tie across pages');
+    }
   });
 }

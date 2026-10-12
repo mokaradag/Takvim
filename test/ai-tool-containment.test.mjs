@@ -46,7 +46,7 @@ test('an invented first-round search is refused end to end and the model must st
       toolCalls: [{ id: 'a', name: 'rota_task_search', arguments: '{"text":"Gizli görev"}' }] },
     (input) => {
       assert.equal(results(input)[0].error.code, 'UNSUPPORTED_SCOPE');
-      return { text: '', toolCalls: [{ id: 'b', name: 'rota_task_search', arguments: '{"text":"radar test planı"}' }] };
+      return { text: declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, filters: { text: 'radar test planı' } }), toolCalls: [{ id: 'b', name: 'rota_task_search', arguments: '{"text":"radar test planı"}' }] };
     }
   ];
   const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {

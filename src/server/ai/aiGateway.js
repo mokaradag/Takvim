@@ -722,7 +722,8 @@ export function createAiGateway({
       assertOutsideSqlTransaction();
       const sicil = await trustedSicil(signal);
       const config = requireAiAvailable(loadConfig());
-      const route = requireRoute(await untilCancelled(() => loadRegistry(config), signal), profile, AI_CAPABILITIES.CHAT);
+      const registry = await untilCancelled(() => loadRegistry(config), signal);
+      const route = requireRoute(registry, profile, AI_CAPABILITIES.CHAT);
       if (!route.capabilities.includes(AI_CAPABILITIES.TOOLS)) {
         throw new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, { details: { reason: 'CAPABILITY_MISMATCH', profile } });
       }
@@ -745,12 +746,18 @@ export function createAiGateway({
       );
       context.source = credential.source;
       const healthFailure = healthFailureFor(credential.source);
+      const reportedModel = (value) => {
+        const model = registry.models.get(value);
+        return model?.enabled && model.provider === route.provider && model.capabilities.includes(AI_CAPABILITIES.CHAT)
+          && model.capabilities.includes(AI_CAPABILITIES.TOOLS) ? model.id : null;
+      };
 
       const session = Object.freeze({
         sicil,
         // Yalnızca telemetri: profil, yapılandırılmış model ve çıktı sınırı (anahtar ya da adres değil).
         profile: route.profile,
         model: route.model,
+        reportedModel,
         maxOutputTokens: outputLimit,
         signal: deadline.signal,
         remainingMs: () => deadline.remainingMs(),
@@ -847,7 +854,9 @@ export function createAiGateway({
             }
             recordProviderCall({ operation: 'ai.provider.stream', latencyMs: now() - providerStartedAt, source: credential.source });
             progress.recorded = true;
-            return { text, toolCalls, finishReason: final.finishReason ?? null, model: route.model, usage: final.usage ?? null,
+            const verifiedModel = reportedModel(final.model);
+            return { text, toolCalls, finishReason: final.finishReason ?? null, model: verifiedModel, configuredModel: route.model,
+              modelMismatch: typeof final.model === 'string' && final.model !== route.model, usage: final.usage ?? null,
               durationMs: Math.max(0, now() - roundStartedAt), firstEventMs: firstEventAt == null ? null : Math.max(0, firstEventAt - roundStartedAt) };
           } catch (error) {
             throw watch.failureOf(error);

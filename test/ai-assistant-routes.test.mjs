@@ -743,3 +743,18 @@ test('hidden progress keeps generation alive without queuing frames for a backed
   assert.equal(events.at(-1).event, 'done');
   assert.equal(released(), 1);
 });
+
+test('a generation that resolves after its stall verdict never emits DONE', async (t) => {
+  holdLoop(t);
+  const { turn, released } = fakeTurn();
+  const response = assistantStreamResponse(turn, { stallMs: 10, graceMs: 100, keepaliveMs: 5,
+    generate: async (_turn, { signal }) => {
+      await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+      return finalAnswer(turn);
+    } });
+  const events = parseSseText(await response.text()).events;
+  assert.equal(events.some((event) => event.event === 'done'), false);
+  assert.equal(events.at(-1).event, 'error');
+  assert.equal(events.at(-1).data.reason, 'GENERATION_STALLED');
+  assert.equal(released(), 1);
+});

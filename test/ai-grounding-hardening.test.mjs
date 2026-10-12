@@ -33,7 +33,11 @@ const { ServerPersistenceError } = await import('../src/server/errors.js');
 
 const TOOLS_ON = Object.freeze({ MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' });
 /** Model turu: araç çağrısı; ilk turda veri okunmadan önceki türlü istek bildirimiyle. */
-const calls = (name, args = {}, id = 'call', request = null) => ({ text: request ? declared(request) : '', toolCalls: [{ id, name, arguments: JSON.stringify(args) }] });
+const calls = (name, args = {}, id = 'call', request = null) => {
+  const typed = request?.metrics.includes('task.project') && !request.fields ? { ...request, reasoning: 'synthesis',
+    fields: [{ metric: 'task.project', tool: name, path: name === 'rota_task_detail' ? 'data.task.project.name' : 'data.tasks.*.project.name' }] } : request;
+  return { text: typed ? declared(typed) : '', toolCalls: [{ id, name, arguments: JSON.stringify(args) }] };
+};
 const reply = (text, finishReason = 'stop') => ({ text, toolCalls: [], finishReason });
 const results = (input) => input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
 const stackFor = (t, seed = {}, sicil = AYSE) => createAiStack(t, { sicil, env: TOOLS_ON, seed: rotaToolSeed(seed) });
@@ -240,10 +244,10 @@ test('the turn endpoint only accepts a boolean free-text choice and forwards it 
   // Sağlayıcı ikizindeki doğrulama hatası akışta hata olayı olur; tur tamamlanmalı ve veri açılmamalıdır.
   const done = refused.events.find((event) => event.event === 'done');
   assert.ok(done, 'the turn must complete; a provider-side assertion failure surfaces as an error event');
-  assert.equal(done.data.assistantMessage.finishReason, 'unavailable');
+  assert.equal(done.data.assistantMessage.finishReason, 'grounding_failed');
 });
 
-test('successful later rounds open their own follow-ups (person → task list → task detail)', async (t) => {
+test('a completed rank refuses an injected detail read and keeps the original proof', async (t) => {
   // "İlk görev"in anlamı modelin türlü bildirimidir: termine göre ilk satır.
   // Yorum istenen tur: seçimi model yapar ve takip araçlarına ilerler. Nüfus aracı ad çözümünden sonra çağrılır, bu yüzden bildirilir.
   const earliest = { operation: 'rank', metrics: ['task.targetFinish', 'task.status'], rank: { metric: 'task.targetFinish', order: 'asc', limit: 1 },
@@ -254,11 +258,10 @@ test('successful later rounds open their own follow-ups (person → task list �
     assert.equal(population.tool, 'rota_task_search');
     return calls('rota_task_detail', { taskId: population.data.tasks[0].taskId }, 'detail');
   }, (input) => {
-    assert.equal(results(input).find((item) => item.tool === 'rota_task_detail').ok, true);
+    assert.equal(results(input).find((item) => item.tool === 'rota_task_detail').error.code, 'INVALID_ARGUMENTS');
     // Ayrıntı eski satır özelliklerini yeniler; sunucu kalan bütçeyle nüfusu tekrar okur.
-    const list = results(input).at(-1);
-    assert.equal(list.tool, 'rota_task_search');
-    assert.equal(list.evidenceId, 'R4');
+    const list = results(input).find((item) => item.tool === 'rota_task_search');
+    assert.equal(list.evidenceId, 'R2');
     return reply(JSON.stringify({ kind: 'rota', facts: [`${list.evidenceId}:data.tasks.0.title`, `${list.evidenceId}:data.tasks.0.targetFinish`, `${list.evidenceId}:data.tasks.0.status`] }));
   }], { user: 'Ayşe Yılmaz\'ın ilk görevinin durumu?' });
   assert.equal(result.outcome, 'grounded');
@@ -750,4 +753,17 @@ test('Turkish buffer-n and instrumental suffixes preserve whole named phrases wi
     assert.equal(scope.textTrusted('Haftalık durum topla'), false, ending);
   }
   assert.equal(createToolScope({ userText: 'Haftalık durum toplantısız görevler', today: '2026-09-30' }).textTrusted('Haftalık durum toplantısı'), false);
+});
+
+test('stored instructions cannot fetch details after a list obligation is already covered', async (t) => {
+  const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, reasoning: 'synthesis' };
+  const { result, stack } = await turn(t, [calls('rota_task_search', { limit: 50 }, 'list', request), (input) => {
+    const body = results(input)[0];
+    return calls('rota_task_detail', { taskId: body.data.tasks[0].taskId }, 'injected');
+  }, (input) => {
+    assert.equal(results(input).at(-1).error.code, 'INVALID_ARGUMENTS');
+    return reply(JSON.stringify({ kind: 'rota', facts: ['R1:data.tasks.*.title'] }));
+  }]);
+  assert.equal(result.outcome, 'grounded');
+  assert.equal(stack.db.aiToolLog.some((entry) => entry.query === 'task-detail'), false);
 });

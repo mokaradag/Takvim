@@ -204,17 +204,19 @@ test('one invalid member of the execution set rejects the whole set before any S
 test('duplicate provider call IDs and plan/direct duplicates are executed once each under server-assigned unique IDs', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
-  const reads = [['rota_task_search', OVERDUE_MINE], ['rota_task_analytics', {}], ['rota_workload_summary', {}]];
+  const taskIds = [TASKS.OVERDUE, TASKS.DUE_SOON, TASKS.DONE];
+  const reads = taskIds.map((taskId) => ['rota_task_detail', { taskId }]);
+  const request = { operation: 'value', metrics: ['task.title', 'task.status'], population: { tool: 'rota_task_detail' }, entities: taskIds.map((id) => ({ type: 'task', id })) };
   let transcript = null;
   // Üç planlı çağrı ve aynı üç çağrı doğrudan: sınır (5) ayıklanmış kümeye uygulanır.
   stack.provider.enqueue({ type: 'tool-calls', calls: [
-    { id: 'id_0', name: 'rota_plan', arguments: plan({ ...OVERDUE_LIST, reasoning: 'synthesis' }, reads.map(([name, args]) => ({ name, arguments: args }))) },
+    { id: 'id_0', name: 'rota_plan', arguments: plan({ ...request, reasoning: 'synthesis' }, reads.map(([name, args]) => ({ name, arguments: args }))) },
     ...reads.map(([name, args]) => ({ id: 'id_0', name, arguments: Object.fromEntries(Object.entries(args).reverse()) }))
   ] }, { type: 'script', respond: (call) => {
     transcript = call.messages;
-    return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:totalCount', 'R1:data.tasks.*.title', 'R1:data.tasks.*.targetFinish'] }) };
+    return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: taskIds.flatMap((_id, index) => [`R${index + 1}:data.task.title`, `R${index + 1}:data.task.status`]) }) };
   } });
-  await sendTurn({ turnId: randomUUID(), message: OVERDUE_QUESTION });
+  await sendTurn({ turnId: randomUUID(), message: taskIds.join(' '), mode: 'deep' });
   const [trace] = turnTraces(logs);
   assert.equal(trace.toolCalls, 3);
   const ids = transcript.flatMap((message) => message.toolCalls || []).map((call) => call.id);
@@ -228,9 +230,11 @@ test('duplicate provider call IDs and plan/direct duplicates are executed once e
 test('six planned duplicates are three executions and still answer in Standard without Deep', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
-  const reads = [['rota_task_search', OVERDUE_MINE], ['rota_task_analytics', {}], ['rota_workload_summary', {}]];
-  stack.provider.enqueue(nativePlan(OVERDUE_LIST, reads.flatMap(([name, args]) => [{ name, arguments: args }, { name, arguments: args }])));
-  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: OVERDUE_QUESTION })).assistantMessage;
+  const ids = [TASKS.OVERDUE, TASKS.DUE_SOON, TASKS.DONE];
+  const reads = ids.map((taskId) => ['rota_task_detail', { taskId }]);
+  const request = { operation: 'value', metrics: ['task.title', 'task.status'], population: { tool: 'rota_task_detail' }, entities: ids.map((id) => ({ type: 'task', id })) };
+  stack.provider.enqueue(nativePlan(request, reads.flatMap(([name, args]) => [{ name, arguments: args }, { name, arguments: args }])));
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: ids.join(' ') })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.deepEqual(turnTraces(logs).map((trace) => [trace.toolCalls, trace.escalated, trace.selectedBy]), [[3, false, 'server']]);
   drained(stack);
@@ -517,7 +521,7 @@ test('a general redirect keeps its own outcome although it is stored as a clarif
 /* ── Yetkinin yeniden okunması ───────────────────────────── */
 
 const titleAndProject = { operation: 'value', metrics: ['task.title', 'task.project'], entities: [{ type: 'task', id: TASKS.OVERDUE }],
-  population: { tool: 'rota_task_detail' }, layout: 'auto' };
+  population: { tool: 'rota_task_detail' }, layout: 'auto', reasoning: 'synthesis', fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }] };
 const detailPlan = () => nativePlan(titleAndProject, [{ name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } }]);
 const selectTitleAndProject = { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.task.title', 'R1:data.task.project.name'] }) };
 
@@ -527,9 +531,9 @@ test('authorization is read once between a tool round and the next model round, 
   stack.provider.enqueue(detailPlan(), { type: 'script', respond: () => { reads.push(visibilityReads(stack)); return selectTitleAndProject; } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `Görevin proje adı: ${TASKS.OVERDUE}` })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
-  assert.deepEqual(reads, [1], 'sunucu seçimi denemesinden sonra aynı yetki ikinci kez okunmaz');
+  assert.deepEqual(reads, [2], 'sunucu seçimi denemesinden sonra aynı yetki ikinci kez okunmaz');
   // Model turundan sonra son doğrulama ve kayıttan sonraki açıklama yetkiyi yeniden okur.
-  assert.equal(visibilityReads(stack), 3);
+  assert.equal(visibilityReads(stack), 4);
   drained(stack);
 });
 
@@ -653,6 +657,22 @@ test('a rejected model hypothesis cannot poison sticky scope in the accepted rep
   drained(stack);
 });
 
+test('a rejected English plan cannot change the language of a valid repair without a language declaration', async (t) => {
+  const stack = stackFor(t);
+  const invalid = { ...plan(ONGOING_COUNT, [{ name: 'rota_task_search', arguments: ONGOING_MINE }]), language: 'en', unexpected: true };
+  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: invalid }] },
+    { type: 'script', respond: () => {
+      assert.equal(sqlCalls(stack), 0);
+      return { type: 'tool-calls', preface: [JSON.stringify({ kind: 'route', intent: 'rota', request: ONGOING_COUNT })],
+        calls: [{ name: 'rota_task_search', arguments: ONGOING_MINE }] };
+    } });
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Kaç devam eden görevim var?' })).assistantMessage;
+  assert.equal(answer.finishReason, 'stop');
+  assert.match(answer.content, /Eşleşen/);
+  assert.equal(stack.provider.calls.length, 2);
+  drained(stack);
+});
+
 test('a repair cannot narrow the question: dropping a record the user named is refused before SQL; the full plan answers both parts', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
@@ -759,4 +779,44 @@ for (const mode of ['standard', 'deep']) test(`user question matrix: 28 determin
   assert.equal(traces.length, 28);
   assert.ok(traces.every((trace) => trace.outcome === 'grounded' && trace.selectedBy === 'server' && !trace.escalated && trace.modelRounds === 1));
   assert.ok(stack.provider.calls.every((call) => call.model === (mode === 'standard' ? STANDARD : DEEP)));
+});
+
+for (const tool of ['rota_activity_search', 'rota_calendar_inspect', 'rota_portfolio_summary']) {
+  test(`a valid plan with unrelated ${tool} rejects its whole execution set before SQL`, async (t) => {
+    const stack = stackFor(t);
+    let inspected = false;
+    stack.provider.enqueue(nativePlan(ONGOING_COUNT, [{ name: 'rota_task_search', arguments: ONGOING_MINE }, { name: tool, arguments: {} }]),
+      { type: 'script', respond: () => {
+        inspected = true;
+        assert.equal(sqlCalls(stack), 0);
+        return nativePlan(ONGOING_COUNT, [{ name: 'rota_task_search', arguments: ONGOING_MINE }]);
+      } });
+    const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Kaç devam eden görevim var?' })).assistantMessage;
+    assert.equal(inspected, true);
+    assert.equal(answer.finishReason, 'stop');
+    assert.equal(stack.db.aiToolLog.some((entry) => ['task-activity', 'portfolio'].includes(entry.query)), false);
+    drained(stack);
+  });
+}
+
+test('call-less assistant text uses the native typed parser and server-derived reads', async (t) => {
+  const stack = stackFor(t);
+  stack.provider.enqueue({ type: 'answer', text: JSON.stringify({ intent: 'rota', language: 'tr', request: ONGOING_COUNT }) });
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Kaç devam eden görevim var?' })).assistantMessage;
+  assert.equal(answer.finishReason, 'stop');
+  assert.equal(stack.provider.calls.length, 1);
+  assert.ok(sqlCalls(stack) > 0);
+  drained(stack);
+});
+
+test('legacy window is normalized into the typed filters before any read', async (t) => {
+  const stack = stackFor(t);
+  const request = { operation: 'value', metrics: ['activity.events'], population: { tool: 'rota_activity_search' }, layout: 'auto' };
+  stack.provider.enqueue({ type: 'answer', text: JSON.stringify({ kind: 'route', intent: 'rota', language: 'tr', request, window: { period: 'yesterday' } }) });
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Dünkü hareketlerin sayısı?' })).assistantMessage;
+  assert.equal(answer.finishReason, 'stop');
+  const evidence = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+  assert.equal(evidence.data.range.from, '2026-09-29');
+  assert.equal(evidence.data.range.to, '2026-09-29');
+  drained(stack);
 });

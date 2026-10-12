@@ -228,20 +228,23 @@ test('two empty completions get exactly one Deep fallback and then fail without 
   drained(stack.provider);
 });
 
-test('a user-significant carrier ambiguity requires one cheap model selection', async (t) => {
+test('a carrier ambiguity is repaired before SQL and explicit field binding stays in Standard', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   const request = { operation: 'value', metrics: ['task.title', 'task.project'], entities: [{ type: 'task', id: TASKS.OVERDUE }],
     population: { tool: 'rota_task_detail' }, layout: 'auto' };
   stack.provider.enqueue(nativePlan(request, [{ name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } }]),
-    { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.task.title', 'R1:data.task.project.name'] }) });
+    { type: 'script', respond: () => {
+      assert.equal((stack.db.aiToolLog || []).length, 0);
+      return nativePlan({ ...request, fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }] }, [{ name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } }]);
+    } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `Görevin proje adı: ${TASKS.OVERDUE}` })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.match(answer.content, /Radar Modernizasyonu/);
   assert.equal(stack.provider.calls.length, 2);
   assert.ok(stack.provider.calls.every((call) => call.model === DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model));
   const [trace] = turnTraces(logs);
-  assert.deepEqual([trace.context.selectedBy, trace.context.rounds.map((round) => round.purpose)], ['model', ['plan', 'select']]);
+  assert.deepEqual([trace.context.selectedBy, trace.context.rounds.map((round) => round.purpose)], ['server', ['plan', 'declaration']]);
   drained(stack.provider);
 });
 
@@ -250,7 +253,7 @@ test('revoked ambiguous evidence cannot reach the provider fallback', async (t) 
   stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
   const task = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE);
   const request = { operation: 'value', metrics: ['task.title', 'task.project'], entities: [{ type: 'task', id: task.TaskId }],
-    population: { tool: 'rota_task_detail' }, layout: 'auto' };
+    population: { tool: 'rota_task_detail' }, layout: 'auto', reasoning: 'synthesis', fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }] };
   stack.db.queryBarrier = { match(sql) {
     if (sql.includes('rota-ai-tool:task-visibility')) task.ProjectId = PROJECTS.HIDDEN;
     return false;
@@ -289,15 +292,31 @@ test('provider-controlled model and finish metadata never enter content-free tur
   const logs = captureConsole(t);
   const marker = 'sk-provider-controlled-secret';
   const request = { operation: 'value', metrics: ['task.title', 'task.project'], entities: [{ type: 'task', id: TASKS.OVERDUE }],
-    population: { tool: 'rota_task_detail' }, layout: 'auto' };
+    population: { tool: 'rota_task_detail' }, layout: 'auto', reasoning: 'synthesis', fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }] };
   stack.provider.enqueue(nativePlan(request, [{ name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } }]),
     { type: 'answer', model: marker, finishReason: marker, text: JSON.stringify({ kind: 'rota', facts: ['R1:data.task.title', 'R1:data.task.project.name'] }) });
-  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `Görevin proje adı: ${TASKS.OVERDUE}` })).assistantMessage;
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `Görevin proje adı: ${TASKS.OVERDUE}`, mode: 'deep' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.equal(stack.provider.calls.length, 2);
   const [trace] = turnTraces(logs);
-  assert.equal(trace.context.rounds[1].model, DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model);
+  assert.equal(trace.context.rounds[1].model, DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model);
   assert.equal(trace.context.rounds[1].finish, null);
   assert.ok(logs.every((line) => !line.includes(marker)));
+  drained(stack.provider);
+});
+
+test('an allowed reported model remains distinct from the configured route model', async (t) => {
+  const stack = stackFor(t);
+  const logs = captureConsole(t);
+  const request = { operation: 'value', metrics: ['task.title'], reasoning: 'synthesis', entities: [{ type: 'task', id: TASKS.OVERDUE }], population: { tool: 'rota_task_detail' } };
+  stack.provider.enqueue(nativePlan(request, [{ name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } }]),
+    { type: 'answer', model: DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model,
+      text: JSON.stringify({ kind: 'rota', facts: ['R1:data.task.title'] }) });
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `Görevi yorumla ${TASKS.OVERDUE}`, mode: 'deep' })).assistantMessage;
+  assert.equal(answer.finishReason, 'stop');
+  const [trace] = turnTraces(logs);
+  assert.equal(trace.context.rounds[1].model, DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model);
+  assert.equal(trace.context.rounds[1].configuredModel, DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model);
+  assert.equal(trace.context.rounds[1].modelMismatch, true);
   drained(stack.provider);
 });

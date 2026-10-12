@@ -19,7 +19,11 @@ const { AI_TOOL_TASK_FACTS_SQL, AI_TOOL_TASK_DETAIL_SQL } = await import('../src
 const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
 
 /** Model turu: araç çağrısı; ilk turda veri okunmadan önceki türlü istek bildirimiyle. */
-const calls = (name, args = {}, id = 'call', request = null) => ({ text: request ? declared(request) : '', toolCalls: [{ id, name, arguments: JSON.stringify(args) }] });
+const calls = (name, args = {}, id = 'call', request = null) => {
+  const typed = request?.metrics.includes('task.project') && !request.fields ? { ...request, reasoning: 'synthesis',
+    fields: [{ metric: 'task.project', tool: name, path: name === 'rota_task_detail' ? 'data.task.project.name' : 'data.tasks.*.project.name' }] } : request;
+  return { text: typed ? declared(typed) : '', toolCalls: [{ id, name, arguments: JSON.stringify(args) }] };
+};
 const taskStatus = (...ids) => ({ operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' }, entities: ids.map((id) => ({ type: 'task', id })) });
 /** Proje adı ve kodu aynı ölçüyü taşır: sunucu seçim türetmez, olguları model seçer ve tur sonraki model turlarına sürer. */
 const statusAndAssignees = (...ids) => ({ operation: 'value', metrics: ['task.status', 'task.project'], entities: ids.map((id) => ({ type: 'task', id })),
@@ -88,7 +92,7 @@ test('short grounded follow-ups can choose fresh evidence without inheriting old
 test('failed initial calls leave the catalog available for a correct retry', async (t) => {
   const { result } = await turn(t, [calls('rota_search_tasks', {}, 'call', projectCount(PROJECTS.FULL)), (input) => {
     assert.ok(input.tools.some((tool) => tool.name === 'rota_task_search'));
-    return calls('rota_task_search', { projectId: PROJECTS.FULL });
+    return calls('rota_task_search', { projectId: PROJECTS.FULL }, 'retry', projectCount(PROJECTS.FULL));
   }], { user: `Rota verisini incele: ${PROJECTS.FULL}` });
   assert.equal(result.outcome, 'grounded');
 });
@@ -99,7 +103,7 @@ test('a successful NOT_FOUND retry supersedes earlier errors and has its own ter
   const { result } = await turn(t, [() => {
     before = { ...aiTelemetrySnapshot().grounding };
     return calls('rota_task_detail', {}, 'call', taskStatus(TASKS.HIDDEN));
-  }, calls('rota_task_detail', { taskId: TASKS.HIDDEN }), reply('{"kind":"not_found"}')], { user: `Rota verisini incele: ${TASKS.HIDDEN}` });
+  }, calls('rota_task_detail', { taskId: TASKS.HIDDEN }, 'retry', taskStatus(TASKS.HIDDEN)), reply('{"kind":"not_found"}')], { user: `Rota verisini incele: ${TASKS.HIDDEN}` });
   assert.equal(result.outcome, 'not_found');
   assert.equal(result.finishReason, 'not_found');
   assert.deepEqual(result.evidenceRows, []);
@@ -143,9 +147,9 @@ test('multiple initial entities preserve each established scope for valid follow
   const first = calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'call', statusAndAssignees(TASKS.OVERDUE, TASKS.DUE_SOON));
   first.toolCalls.push({ id: 'other', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.DUE_SOON }) });
   const { result } = await turn(t, [first, calls('rota_task_detail', { taskId: TASKS.OVERDUE }, 'follow'), (input) => {
-    assert.equal(results(input).at(-1).ok, true);
+    assert.equal(results(input).at(-1).error.code, 'INVALID_ARGUMENTS', 'karşılanan yükümlülük yeniden SQL okutmaz');
     // Bildirilen her varlık kendi olgusuyla karşılanır.
-    return statusFacts(results(input).at(-1).evidenceId, results(input)[1].evidenceId);
+    return statusFacts(results(input)[0].evidenceId, results(input)[1].evidenceId);
   }], { user: `Görevleri incele ${TASKS.OVERDUE} ${TASKS.DUE_SOON}` });
   assert.equal(result.outcome, 'grounded');
 });
@@ -287,9 +291,11 @@ test('a task cursor does not disclose changes to a hidden recurrence identifier'
   const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.PARTIAL, limit: 1 });
   assert.ok(first.result.nextCursor);
   own.RecurrenceParentTaskId = TASKS.TEAM_HIDDEN;
-  const next = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.PARTIAL, limit: 1, cursor: first.result.nextCursor });
-  assert.equal(next.result.ok, true);
-  assert.notEqual(next.result.data.tasks[0].taskId, first.result.data.tasks[0].taskId);
+  const executor = createToolExecutor({ context: first.context, ledger: createEvidenceLedger(), signal: new AbortController().signal });
+  const [message] = await executor.runRound([{ id: 'next', name: 'rota_task_search', arguments: JSON.stringify({ projectId: PROJECTS.PARTIAL, limit: 1, cursor: first.result.nextCursor }) }]);
+  const next = JSON.parse(message.content);
+  assert.equal(next.ok, true);
+  assert.notEqual(next.data.tasks[0].taskId, first.result.data.tasks[0].taskId);
 });
 
 test('dependency shrinking recomputes multi-list cardinality and task detail can shrink nested collections', () => {

@@ -1,7 +1,7 @@
 import 'server-only';
 import { EVIDENCE_TEXT_FIELDS, metricEntityType, metricEntry, metricPaths, NAMING_METRICS, rowCollections } from '../../../domain/ai/claimableEvidence.js';
-import { collectionTotalMetric, insideRowCollection, populationDimensions } from '../../../domain/ai/evidencePopulation.js';
-import { bindingsRequired, completeReadRequired, listCollections, parentProperty, REQUEST_ENTITY_TYPES, rowMetricFields, unboundCarrierMetrics } from '../../../domain/ai/requestContract.js';
+import { BREAKDOWN_FILTERS, collectionCapability, collectionRanking, collectionTotalMetric, insideRowCollection, populationDimensions } from '../../../domain/ai/evidencePopulation.js';
+import { bindingsRequired, conjunctiveEntities, listCollections, parentProperty, REQUEST_ENTITY_TYPES, rowMetricFields, unboundCarrierMetrics } from '../../../domain/ai/requestContract.js';
 import { METRICS } from '../../../domain/ai/claimableEvidence.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 import { effectivePageSize } from './rota/rotaToolSupport.js';
@@ -232,17 +232,21 @@ const textLeaves = (tool, metric) => metricPaths(tool, metric).map((path) => pat
  * Nüfus aracının taşımadığı, bildirilen bir varlığın kendi özelliği: o varlığı seçen taşıyıcı araç
  * (ör. görevin açıklaması için rota_task_detail) `{ tool, type, param, textFields }`; yoksa null.
  */
-function propertyCarrier(request, metric) {
+function propertyCarrier(request, metric, selected = null) {
   const type = propertyType(metric);
-  if (!type || !request.population?.tool || carriesMetric(request.population.tool, metric) || !request.entities.some((entity) => entity.type === type)) return null;
+  const explicit = (request.fields || []).filter((field) => field.metric === metric && (!selected || field.tool === selected)).map((field) => field.tool);
+  if (!type || !request.population?.tool || (!explicit.length && carriesMetric(request.population.tool, metric))
+    || explicit.includes(request.population.tool) || !request.entities.some((entity) => entity.type === type)) return null;
   const param = SELECTOR_PARAMS[type];
-  const tool = carriers(metric).find((name) => Object.hasOwn(getRotaTool(name).parameters.properties, param));
+  const tool = (explicit.length ? explicit : carriers(metric)).find((name) => Object.hasOwn(getRotaTool(name).parameters.properties, param));
   return tool ? { tool, type, param, textFields: textLeaves(tool, metric) } : null;
 }
 
 /** İsteğin veri okunmadan açtığı korumalı metin alanları: nüfusunki ve varlık özelliği okumalarınınki. */
 export function requestTextFields(request) {
-  const fields = [...(request.population?.textFields || []), ...request.metrics.flatMap((metric) => propertyCarrier(request, metric)?.textFields || [])];
+  const fields = [...(request.population?.textFields || []), ...request.metrics.flatMap((metric) =>
+    [...new Set(request.fields.filter((field) => field.metric === metric).map((field) => field.tool)), null]
+      .flatMap((tool) => propertyCarrier(request, metric, tool)?.textFields || []))];
   return [...new Set(fields)].sort();
 }
 const carriers = (metric) => toolCatalogForModel().filter((tool) => carriesMetric(tool.name, metric)).map((tool) => tool.name);
@@ -258,16 +262,7 @@ const freeText = (key) => key === 'text';
  * Analiz ve görev araması aynı yüklemleri kullanır (taskFacts: isOverdue, deadlineMatches,
  * durum kuralları); kimlik bir özellik sınamasıyla korunur.
  */
-export const BREAKDOWN_FILTERS = Object.freeze({
-  'tasks.overdue': { deadline: 'overdue' },
-  'tasks.dueToday': { deadline: 'due_today' },
-  'tasks.dueNext7Days': { deadline: 'due_next_7_days' },
-  'tasks.openWithoutTargetFinish': { deadline: 'no_target_finish' },
-  'tasks.inProgress': { status: ['in_progress'] },
-  'tasks.todo': { status: ['todo'] },
-  'tasks.done': { status: ['done'] },
-  'tasks.open': { status: ['todo', 'in_progress'] }
-});
+export { BREAKDOWN_FILTERS } from '../../../domain/ai/evidencePopulation.js';
 
 /**
  * Nüfus aracı kırılımı taşımıyor ama toplamı taşıyorsa ve nüfus kırılımın tanımlayan
@@ -486,6 +481,7 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
 export function requestCapabilityProblems(request, { allowedTextFields = [] } = {}) {
   const problems = [];
   const hints = [];
+  const carrierHint = (name, metric) => `${metric}: fields ile istenen kayıtlı alanı bağla; ${name}: ${metricPaths(name, metric).join('|')}`;
   for (const field of request.fields || []) {
     if (!request.metrics.includes(field.metric) || metricEntry(field.tool, field.path.replace(/^data\./, ''))?.metric !== field.metric) problems.push('$.fields:metric');
   }
@@ -498,7 +494,14 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
   const parameters = tool.parameters.properties;
   for (const metric of unboundCarrierMetrics(request)) {
     problems.push('$.fields:required');
-    hints.push(`${metric}: ayrı anlamlı taşıyıcılar için fields ile istenen kayıtlı alanı bağla`);
+    hints.push(carrierHint(tool.name, metric));
+  }
+  for (const metric of request.metrics.filter((metric) => !carriesMetric(tool.name, metric))) {
+    const carrier = propertyCarrier(request, metric);
+    if (carrier && unboundCarrierMetrics({ ...request, metrics: [metric], population: { tool: carrier.tool } }).length) {
+      problems.push('$.fields:required');
+      hints.push(carrierHint(carrier.tool, metric));
+    }
   }
   const collections = rowCollections(tool.name);
   const sorts = parameters.sort?.enum || [];
@@ -600,18 +603,19 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
     if (request.rank && !rowMetrics.includes(request.rank.metric)) problems.push('$.rank.metric:rows');
   }
   // Ön denetim veri boyutunu tahmin etmez; seçilen aracın tamlık ve sıra yeteneğini kanıtlar.
-  if (request.operation !== 'value') {
-    const cappedGroups = tool.name === 'rota_task_analytics' && population.collection === 'groups'
-      && !['status', 'priority', 'deadline'].includes(population.groupBy);
-    const cappedPeople = tool.name === 'rota_workload_summary' && !request.entities.some((entity) => entity.type === 'person');
-    if ((cappedGroups || cappedPeople) && !completeReadRequired(request, tool.name)) {
-      problems.push('$.population.collection:exhaustive-unsupported');
-      hints.push(`${tool.name}: bu sınırlı koleksiyon imleçle bütünüyle okunamaz`);
+  if (request.operation === 'list') {
+    for (const collection of population.collection ? [population.collection] : lists) {
+      const capability = collectionCapability(tool.name, collection);
+      if (!capability || capability === 'preview') {
+        problems.push('$.population.collection:exhaustive-unsupported');
+        hints.push(`${tool.name}: bu sınırlı koleksiyon imleçle bütünüyle okunamaz`);
+      }
     }
   }
   if (request.rank) {
-    const ordering = sortedBy(tool.name, requestDimensions(request, tool.name));
-    if ((parameters.sort || parameters.cursor) && !completeReadRequired(request, tool.name)) {
+    const ordering = collectionRanking(tool.name, population.collection, request.rank) || sortedBy(tool.name, requestDimensions(request, tool.name));
+    const capability = collectionCapability(tool.name, population.collection);
+    if (!capability || capability === 'preview' || capability === 'page' || ordering) {
       if (!ordering || ordering.metric !== request.rank.metric || ordering.order !== request.rank.order) {
         problems.push('$.rank:ordering');
         hints.push(`${tool.name}: rank ölçüsü/yönü population.sort ile aynı olmalı`);
@@ -709,8 +713,8 @@ export function derivedReads(request, bound, { today, attempted = new Set() } = 
   const family = FAMILIES[tool.name] || null;
   const base = {};
   const values = declaredValues(family, request.filters);
-  // Görev araçlarında dönem, tarih aralığına çevrilir (aracın dönem bağımsız değişkeni yok).
-  const windowed = family === 'task' && values.period ? { ...values, ...periodWindow(values.period, today), period: undefined } : values;
+  // Dönem parametresi olmayan araçlarda aynı pencere tarih aralığına çevrilir.
+  const windowed = values.period && !Object.hasOwn(properties, 'period') ? { ...values, ...periodWindow(values.period, today), period: undefined } : values;
   for (const [key, value] of Object.entries(windowed)) {
     if (value == null) continue;
     if (!Object.hasOwn(properties, key)) return [];
@@ -729,9 +733,17 @@ export function derivedReads(request, bound, { today, attempted = new Set() } = 
     selectors.set(param, [...new Set([...(selectors.get(param) || []), entity.type === 'person' ? Number(entity.bound) : entity.bound])]);
   }
   const multiple = [...selectors].filter(([, ids]) => ids.length > 1);
-  if (multiple.length > 1) return [];
+  const comparisons = !conjunctiveEntities(request) && new Set((request.bindings || []).map((binding) => binding.entity)).size > 1;
+  if (multiple.length > 1 && !comparisons) return [];
   const single = Object.fromEntries([...selectors].filter(([, ids]) => ids.length === 1).map(([param, [id]]) => [param, id]));
-  const candidates = multiple.length ? multiple[0][1].map((id) => ({ ...base, ...single, [multiple[0][0]]: id })) : [{ ...base, ...single }];
+  const candidates = comparisons ? [...new Set(request.bindings.filter((binding) => carriesMetric(tool.name, binding.metric)
+    && (!request.fields.some((field) => field.metric === binding.metric) || request.fields.some((field) => field.metric === binding.metric && field.tool === tool.name)))
+    .map((binding) => binding.entity))].flatMap((index) => {
+    const entity = bound[index];
+    const param = SELECTOR_PARAMS[entity?.type];
+    return param && Object.hasOwn(properties, param) && entity.bound != null
+      ? [{ ...base, [param]: entity.type === 'person' ? Number(entity.bound) : entity.bound }] : [];
+  }) : multiple.length ? multiple[0][1].map((id) => ({ ...base, ...single, [multiple[0][0]]: id })) : [{ ...base, ...single }];
   const declared = declaredFacets(tool.name, request.filters, today);
   const reads = candidates.flatMap((candidate) => {
     const args = parsedRead(tool, candidate);
@@ -744,14 +756,47 @@ export function derivedReads(request, bound, { today, attempted = new Set() } = 
     return [{ name: tool.name, args }];
   });
   // Bağlı varlığın nüfus aracında bulunmayan kendi özelliği, o varlığı seçen taşıyıcı araçtan okunur.
-  const ownReads = request.metrics.flatMap((metric) => {
-    const carrier = propertyCarrier(request, metric);
+  const ownReads = request.metrics.flatMap((metric) => [...new Set(request.fields.filter((field) => field.metric === metric
+    && field.tool !== request.population.tool).map((field) => field.tool)), null].flatMap((selected) => {
+    const carrier = propertyCarrier(request, metric, selected);
     if (!carrier) return [];
-    return bound.filter((entity) => entity.type === carrier.type && entity.bound != null).flatMap((entity) => {
+    const bindings = request.bindings.filter((binding) => binding.metric === metric);
+    return bound.filter((entity, index) => entity.type === carrier.type && entity.bound != null
+      && (!bindings.length || bindings.some((binding) => binding.entity === index))).flatMap((entity) => {
       const args = parsedRead(getRotaTool(carrier.tool), { [carrier.param]: carrier.type === 'person' ? Number(entity.bound) : entity.bound,
         ...(carrier.textFields.length ? { textFields: carrier.textFields } : {}) });
       return args ? [{ name: carrier.tool, args }] : [];
     });
+  }));
+  const fieldReads = [...new Set(request.fields.filter((field) => field.tool !== tool.name).map((field) => field.tool))].flatMap((name) => {
+    const fields = request.fields.filter((field) => field.tool === name);
+    const metrics = [...new Set(fields.map((field) => field.metric))];
+    const bindings = request.bindings.filter((binding) => metrics.includes(binding.metric));
+    const subjects = !conjunctiveEntities(request) && bindings.length ? new Set(bindings.map((binding) => binding.entity)) : null;
+    const indexes = bound.flatMap((_entity, index) => !subjects || subjects.has(index) ? [index] : []);
+    const entities = indexes.map((index) => request.entities[index]);
+    const property = fields.every((field) => isProperty(name, field.path));
+    const variant = { ...request, operation: 'value', rank: null, metrics, fields, filters: property ? {} : request.filters,
+      entities, bindings: bindings.map((binding) => ({ ...binding, entity: indexes.indexOf(binding.entity) })), population: { tool: name } };
+    return derivedReads(variant, indexes.map((index) => bound[index]), { today, attempted });
   });
-  return fresh([...(reads.length === candidates.length ? reads : []), ...ownReads]);
+  const populationNeeded = request.metrics.some((metric) => carriesMetric(tool.name, metric)
+    && (!request.fields.some((field) => field.metric === metric) || request.fields.some((field) => field.metric === metric && field.tool === tool.name)));
+  return fresh([...(populationNeeded && reads.length === candidates.length ? reads : []), ...ownReads, ...fieldReads]);
+}
+
+/** İlk, türetilen ve takip okumaları aynı türlü yükümlülüklere bağlıdır. */
+export function callRequiredByRequest(request, name, args, { today, bound = request.entities.map((entity) => ({ ...entity, bound: entity.id })), reads = null } = {}) {
+  if (!request?.population) return false;
+  const required = reads || derivedReads(request, bound, { today });
+  const identity = (tool, values) => {
+    const { limit: _limit, cursor: _cursor, ...population } = values;
+    return readKey(tool, { ...population, limit: 1 }, today);
+  };
+  return required.some((call) => {
+    if (call.name !== name) return false;
+    let expected = call.args;
+    if (!expected) { try { expected = JSON.parse(call.arguments); } catch { return false; } }
+    return (args.cursor || null) === (expected.cursor || null) && identity(name, args) === identity(name, expected);
+  });
 }

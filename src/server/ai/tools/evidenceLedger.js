@@ -70,7 +70,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
   return Object.freeze({
     factPrefix() { return `${turnKey}_R${entries.length + 1}`; },
     /** Başarılı araç sonucunu kaydeder; kimlik (R<n>) döner. Defter doluysa `null`. */
-    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, populationReferences = null, args = null, round = null, snapshot = null }) {
+    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, populationReferences = null, args = null, round = null, snapshot = null, rowIdentities = {} }) {
       // Boş nüfus da açıkça kaydedilir; eksik köken başarılı kanıt olamaz.
       const protectedPopulation = claimableContract(tool).paths.length && !PAYLOAD_POPULATION_TOOLS.has(tool);
       if (protectedPopulation && !Array.isArray(populationReferences)) return null;
@@ -90,7 +90,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       if (!summary) return null;
       // Yürütülen bağımsız değişkenler yalnızca sunucuda kalır: kanıtın nüfusu bunlardan hesaplanır.
       entries.push({ id, tool, kind, summary, payload: null, authorizationEpoch, scopedAuthorization, valid: true,
-        args: Object.freeze({ ...(args || {}) }), round, snapshot,
+        args: Object.freeze({ ...(args || {}) }), round, snapshot, rowIdentities,
         population: populationReferences });
       return id;
     },
@@ -143,7 +143,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       return entries.filter((entry) => entry.valid && entry.payload).map((entry) => {
         let payload = null;
         try { payload = JSON.parse(entry.payload); } catch { /* Bozuk yük kanıt değildir. */ }
-        return { id: entry.id, tool: entry.tool, args: entry.args, round: entry.round, snapshot: entry.snapshot, payload };
+        return { id: entry.id, tool: entry.tool, args: entry.args, round: entry.round, snapshot: entry.snapshot, rowIdentities: entry.rowIdentities, payload };
       });
     },
     /** Verilen kimliklerin özetleri, kanıt sırasına göre. */

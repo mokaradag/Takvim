@@ -65,7 +65,7 @@ test('a turn without the opt-in cannot request protected text, and the next turn
   assert.equal(opened.assistantMessage.evidence.length, 1);
   askDescription({ modelAnswer: true });
   const next = done(await sendTurn({ conversationId: opened.conversation.id, turnId: randomUUID(), message: `Peki şimdi açıklamayı tekrar göster ${TASKS.LITERAL}` }));
-  assert.equal(next.assistantMessage.finishReason, 'unavailable');
+  assert.equal(next.assistantMessage.finishReason, 'grounding_failed');
   assert.doesNotMatch(next.assistantMessage.content, /talimatları/);
   const refused = toolResults(stack.provider.calls.at(-1))[0];
   assert.equal(refused.error.code, 'UNSUPPORTED_SCOPE');

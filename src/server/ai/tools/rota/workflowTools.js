@@ -1,5 +1,4 @@
 import 'server-only';
-import { completeReadRequired } from '../../../../domain/ai/requestContract.js';
 import { changeEntryVisible } from '../../../../domain/ai/claimableEvidence.js';
 import { COORDINATION_MODES, COORDINATION_STATUS_LABELS, COORDINATION_STATUSES } from '../../../../domain/assignment/assignmentCoordination.js';
 import { TASK_NOTIFICATION_KINDS } from '../../../../domain/notifications/notificationInbox.js';
@@ -122,8 +121,7 @@ const activitySearch = {
     call.notePopulation?.(report.items.filter((item) => item.taskAvailable && item.currentProjectId)
       .map((item) => ({ taskId: item.taskId, projectId: item.currentProjectId })));
     const textFields = args.textFields || [];
-    const completeRead = completeReadRequired(call.request, 'rota_activity_search');
-    const items = (completeRead ? report.items : report.items.slice(page * pageSize, (page + 1) * pageSize)).map((item) => {
+    const items = report.items.slice(page * pageSize, (page + 1) * pageSize).map((item) => {
       const access = item.projectId ? projectAccess(scope, item.projectId) : null;
       const hideAssigneeNames = !scope.isAdmin && !isCompleteTaskView(access);
       // Serbest metin alanlarının değişiklikleri istenmediyse sayılmaz ve sınırı tüketmez.
@@ -148,8 +146,8 @@ const activitySearch = {
         ...(item.detailsLimited || structured.length > 6 ? { detailsLimited: true } : {})
       };
     });
-    const pageState = completeRead ? { complete: true, truncated: false, nextCursor: null }
-      : pageWindow('rota_activity_search', key, page, pageSize, report.total);
+    call.noteRows?.('items', report.items.slice(page * pageSize, (page + 1) * pageSize).map((item) => item.id));
+    const pageState = pageWindow('rota_activity_search', key, page, pageSize, report.total);
     const detailsLimited = items.some((item) => item.detailsLimited || Number(item.moreChanges || 0) > 0);
     const selector = await workflowSelector(call, scope, key);
     return {
