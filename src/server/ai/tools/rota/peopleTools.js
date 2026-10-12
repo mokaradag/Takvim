@@ -3,7 +3,7 @@ import { parseSicil } from '../../../identity/sicil.js';
 import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
 import { MIN_DIRECTORY_QUERY_LENGTH, searchCorporateDirectory } from '../../../directory/directorySearch.js';
 import { invalidArguments } from '../toolErrors.js';
-import { collectionPage, collectionSnapshot, dataText, ID_PROPERTY, LIMIT_PROPERTY, PERSON_SICIL_PROPERTY, searchedScope } from './rotaToolSupport.js';
+import { dataText, ID_PROPERTY, LIMIT_PROPERTY, PERSON_SICIL_PROPERTY, searchedScope } from './rotaToolSupport.js';
 import { loadFilteredFacts } from './taskTools.js';
 import { assignmentState, foldText, isDueWithin, isOverdue, normalizeTaskFilters, DUE_SOON_DAYS } from './taskFacts.js';
 import { decimalFromScaled, scaledDecimal } from '../../../../domain/numbers/fixedDecimal.js';
@@ -32,10 +32,7 @@ const workloadSummary = {
     const limit = args.limit ?? 10;
     const filters = normalizeTaskFilters({ projectId: args.projectId, status: ['todo', 'in_progress'], personSicil: args.personSicil });
     const { scope } = await call.authorization();
-    const result = await collectionSnapshot(call, 'rota_workload_summary', args, () => loadFilteredFacts(call, scope, filters, { withAssignees: true }));
-    const { facts, assignees } = result;
-    Object.assign(filters, result.filters);
-    call.notePopulation?.(facts.map((fact) => ({ taskId: fact.id, projectId: fact.projectId })));
+    const { facts, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
     const people = new Map();
     const hoursByPerson = new Map();
     let unassigned = 0;
@@ -74,15 +71,14 @@ const workloadSummary = {
     for (const [sicil, hours] of hoursByPerson) people.get(sicil).plannedHoursOnAssignedTasks = decimalFromScaled(hours, 2);
     const ordered = [...people.values()].sort((left, right) => right.openTasks - left.openTasks
       || right.overdue - left.overdue || left.name.localeCompare(right.name, 'tr') || left.sicil - right.sicil);
-    const paging = collectionPage(call, 'rota_workload_summary', 'people', args, ordered, limit);
-    const { page, offset } = paging;
+    const page = ordered.slice(0, limit);
     const descriptor = searchedScope(scope, filters.projectId);
     // Sayıların nüfusunu belirleyen seçiciler olgunun niteleyicisidir (proje ve kişi adıyla).
     const projectName = filters.project || null;
     const personName = filters.person || null;
     return {
-      ...(paging.rankingBoundary ? { rankingBoundary: paging.rankingBoundary } : page.length < ordered.length ? { rankingBoundary: {
-        collection: 'people', metric: 'tasks.open', order: 'desc', returnedCount: page.length, nextValue: ordered[offset + page.length]?.openTasks ?? null
+      ...(page.length < ordered.length ? { rankingBoundary: {
+        collection: 'people', metric: 'tasks.open', order: 'desc', returnedCount: page.length, nextValue: ordered[page.length].openTasks
       } } : {}),
       data: {
         filters: {
@@ -99,11 +95,11 @@ const workloadSummary = {
         ]
       },
       scope: descriptor,
-      complete: offset + page.length === ordered.length,
-      truncated: offset + page.length < ordered.length && !paging.nextCursor,
+      complete: page.length === ordered.length,
+      truncated: page.length < ordered.length,
       returnedCount: page.length,
       totalCount: ordered.length,
-      nextCursor: paging.nextCursor,
+      nextCursor: null,
       evidence: {
         label: `İş yükü dağılımı · ${ordered.length} kişi`,
         entity: args.projectId ? { type: 'project', id: args.projectId, name: projectName } : null,

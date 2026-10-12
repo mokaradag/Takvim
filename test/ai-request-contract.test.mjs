@@ -788,7 +788,8 @@ test('protocol evidence gaps never reopen exhausted budgets through Deep escalat
     const session = { signal: new AbortController().signal, round: async (input) => {
       rounds += 1;
       if (rounds === 1) return { text: declared(request), toolCalls: [call('rota_task_search', { projectId: PROJECTS.FULL, limit: 1 })], finishReason: 'tool_calls' };
-      assert.equal(input.toolChoice, 'none');
+      // Araç bütçesi tükendiyse araç sunulmaz; yalnızca düzeltme bütçesi tükendiyse araçlar kalır ama yeni okuma türetilmez.
+      if (budget.maxToolRounds || budget.maxTotalCalls) assert.equal(input.toolChoice, 'none');
       return reply(facts('R1:data.tasks.*.title'));
     } };
     const initial = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: `Bütün görevler ${PROJECTS.FULL}`, now: NOW }).messages,

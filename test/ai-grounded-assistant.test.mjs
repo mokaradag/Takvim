@@ -521,15 +521,22 @@ test('araç turu sınırında eksik liste kabul edilmez ve yeni SQL çalışmaz'
   const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
   stack.db.tasks = Array.from({ length: 180 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}` }));
   const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, entities: [{ type: 'project', id: PROJECTS.FULL }] };
+  const read = (limit) => ({ type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL, limit } }] });
+  const taskQueries = () => stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').length;
+  let afterReads;
   let callsAtLimit;
-  stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL, limit: 1 } }] },
+  // Sunucu listeyi en büyük sayfayla bir kez okur; sayfa birleştirilmez. Sonraki okumalar istekte yeri olmadığından
+  // SQL'siz reddedilir ve tur bütçesinden düşer; sınırda araçlar kapanır.
+  stack.provider.enqueue({ ...read(1), preface: [declared(request)] },
+    { type: 'script', respond: () => { afterReads = taskQueries(); return read(2); } }, read(3),
     { type: 'script', respond: (call) => {
       assert.equal(call.toolChoice, 'none');
       assert.match(call.messages[0].content, /Araç çağrı sınırına ulaşıldı/);
-      callsAtLimit = stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').length;
-      return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.tasks.*.title'] }) };
-    } }, { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.tasks.*.title'] }) });
+      callsAtLimit = taskQueries();
+      return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R2:data.tasks.*.title'] }) };
+    } }, { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R2:data.tasks.*.title'] }) });
   const response = await sendTurn({ turnId: randomUUID(), message: `Bütün görevler ${PROJECTS.FULL}` });
+  assert.equal(callsAtLimit, afterReads, 'istekte yeri olmayan okumalar SQL çalıştırmaz');
   assert.equal(doneOf(response).assistantMessage.finishReason, 'grounding_failed');
   assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').length, callsAtLimit, 'araç bütçesi yeniden açılmaz');
   assert.deepEqual(stack.db.aiMessageEvidence, []);

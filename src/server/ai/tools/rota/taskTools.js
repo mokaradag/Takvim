@@ -2,7 +2,6 @@ import 'server-only';
 import { searchCorporateDirectory } from '../../../directory/directorySearch.js';
 import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
 import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
-import { internalPageRequired } from '../../../../domain/ai/evidencePopulation.js';
 import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
@@ -10,8 +9,6 @@ import { describeTaskScope, projectAccess } from './rotaScope.js';
 import { readTaskDetail, readTaskFacts, readWbsSelector } from './rotaToolStore.js';
 import {
   accessExplanation,
-  collectionPage,
-  collectionSnapshot,
   CURSOR_PROPERTY,
   DATE_PROPERTY,
   dataText,
@@ -92,7 +89,7 @@ function sqlAssigneeMode(filters) {
 }
 
 /** Yetkili ve kaba süzgeçle daraltılmış görev olguları; sınır aşılırsa "çok büyük". */
-async function readFilteredFacts(call, scope, filters, { withAssignees = false } = {}) {
+async function loadFilteredFacts(call, scope, filters, { withAssignees = false } = {}) {
   if (filters.wbsId) {
     const node = await call.sql((executor) => readWbsSelector(executor, scope, { projectId: filters.projectId, wbsId: filters.wbsId }));
     if (!node) throw notFound();
@@ -141,17 +138,7 @@ async function readFilteredFacts(call, scope, filters, { withAssignees = false }
       .items.find((person) => person.sicil === filters.personSicil)?.name;
     filters.person = resolved && resolved !== String(filters.personSicil) ? dataText(resolved, 120) : 'Seçilen kişi';
   }
-  return { facts, projects, assignees: result.assignees, filters: { ...filters } };
-}
-
-/** Aynı kümedeki eşdeğer araçlar aynı olgu görüntüsünü paylaşır. */
-async function loadFilteredFacts(call, scope, filters, { withAssignees = false } = {}) {
-  const key = JSON.stringify(['task-facts', filters, withAssignees || filters.assignee === 'person', call.today]);
-  const load = () => readFilteredFacts(call, scope, filters, { withAssignees });
-  const result = call.snapshot ? await call.snapshot(key, null, load) : await load();
-  Object.assign(filters, result.filters);
-  call.notePopulation?.(result.facts.map((fact) => ({ taskId: fact.id, projectId: fact.projectId })));
-  return result;
+  return { facts, projects, assignees: result.assignees };
 }
 
 function filterHighlights(filters) {
@@ -210,25 +197,17 @@ const taskSearch = {
     const sort = args.sort || (filters.deadline === 'overdue' ? 'overdue_days_desc' : 'target_finish_asc');
     const limit = args.limit ?? 20;
     const { scope } = await call.authorization();
-    // İmleç zinciri aynı maddileştirilmiş değerleri okur; kimlik sırası tek başına anlık görüntü değildir.
-    const load = () => loadFilteredFacts(call, scope, filters);
-    const result = await call.snapshot(JSON.stringify(['rota_task_search', filters, sort, call.today]), args.cursor, load);
-    const { facts, projects, assignees } = result;
-    Object.assign(filters, result.filters);
-    call.notePopulation(facts.map((fact) => ({ taskId: fact.id, projectId: fact.projectId })));
+    // Sorumlu izdüşümü bütün nüfus için değil, yalnızca dönen sayfa için okunur.
+    const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters);
     const sorted = sortFacts(facts, sort, call.today);
-    // Görüntü değerleri önbellektedir; imleç yalnızca kararlı üyelik ve sırayı bağlar.
+    // Sıralı kimlikler nüfus ve sıra kaymasını yakalar; sorumlu izdüşümü yalnız sayfaya uygulanır.
     const anchor = sorted.map((fact) => fact.id);
     const { page, offset, nextCursor } = paginate('rota_task_search', { filters, sort }, sorted, { limit, cursor: args.cursor ?? null, anchor });
     const pageFacts = page;
-    const missingAssignees = filters.assignee === 'person' ? [] : pageFacts.filter((fact) => !assignees.has(fact.id));
-    if (missingAssignees.length) {
-      const projection = await call.sql((executor) => readTaskFacts(executor, scope, {
-        taskIds: missingAssignees.map((fact) => fact.id), withAssignees: true, maxRows: missingAssignees.length
-      }));
-      for (const fact of missingAssignees) assignees.set(fact.id, projection.assignees.get(fact.id) || []);
-    }
-    const pageAssignees = assignees;
+    const pageAssignees = filters.assignee === 'person' || !pageFacts.length ? assignees
+      : (await call.sql((executor) => readTaskFacts(executor, scope, {
+        taskIds: pageFacts.map((fact) => fact.id), withAssignees: true, maxRows: pageFacts.length
+      }))).assignees;
     const pageProjects = projects;
     const exactTotal = sorted.length;
     const stableNextCursor = nextCursor;
@@ -256,11 +235,11 @@ const taskSearch = {
     }));
     const rankSort = { target_finish_asc: ['targetFinish', 'asc'], target_finish_desc: ['targetFinish', 'desc'],
       planned_start_asc: ['plannedStart', 'asc'], updated_desc: ['updatedAt', 'desc'], overdue_days_desc: ['overdueDays', 'desc'] }[sort];
-    const next = sorted[offset + page.length];
+    const next = sorted[page.length];
     const nextValue = next && rankSort ? (rankSort[0] === 'overdueDays'
       ? (isOverdue(next, call.today) ? overdueDays(next, call.today) : null) : next[rankSort[0]] ?? null) : null;
     return {
-      ...(rankSort && next ? { rankingBoundary: {
+      ...(rankSort && offset === 0 && next ? { rankingBoundary: {
         collection: 'tasks', metric: `task.${rankSort[0]}`, order: rankSort[1], returnedCount: page.length, nextValue
       } } : {}),
       data: {
@@ -472,14 +451,10 @@ const taskAnalytics = {
     const groupBy = args.groupBy || null;
     const limit = args.limit ?? 10;
     const { scope } = await call.authorization();
-    const result = await collectionSnapshot(call, 'rota_task_analytics', args, () => loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' }));
-    const { facts, projects, assignees } = result;
-    Object.assign(filters, result.filters);
-    call.notePopulation?.(facts.map((fact) => ({ taskId: fact.id, projectId: fact.projectId })));
+    const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' });
     const context = { projects, assignees, today: call.today };
     let groups = null;
     let groupCount = 0;
-    let paging = null;
     if (groupBy) {
       const byKey = new Map();
       for (const fact of facts) {
@@ -496,21 +471,19 @@ const taskAnalytics = {
         ? left.key.localeCompare(right.key)
         : right.count - left.count || left.label.localeCompare(right.label, 'tr')));
       groupCount = ordered.length;
-      paging = internalPageRequired(call.request, 'rota_task_analytics') ? collectionPage(call, 'rota_task_analytics', 'groups', args, ordered, limit) : null;
       const visibleGroupLimit = ordered.length > limit ? Math.max(0, limit - 1) : limit;
-      groups = paging ? paging.page : ordered.slice(0, visibleGroupLimit);
-      if (!paging && ordered.length > visibleGroupLimit) {
+      groups = ordered.slice(0, visibleGroupLimit);
+      if (ordered.length > visibleGroupLimit) {
         const rest = ordered.slice(visibleGroupLimit).reduce((sum, group) => ({
           count: sum.count + group.count, open: sum.open + group.open, overdue: sum.overdue + group.overdue, done: sum.done + group.done
         }), { count: 0, open: 0, overdue: 0, done: 0 });
         groups.push({ key: 'other', label: `Diğer ${ordered.length - visibleGroupLimit} grup`, ...rest });
       }
     }
-    const groupsTruncated = Boolean(groupBy && (paging ? paging.offset + groups.length < groupCount : groupCount > limit));
+    const groupsTruncated = Boolean(groupBy && groupCount > limit);
     const totals = statusTotals(facts, call.today);
     const descriptor = searchedScope(scope, filters.projectId);
     return {
-      ...(paging?.rankingBoundary ? { rankingBoundary: paging.rankingBoundary } : {}),
       data: {
         totals,
         filters,
@@ -525,10 +498,10 @@ const taskAnalytics = {
       },
       scope: descriptor,
       complete: !groupsTruncated,
-      truncated: groupsTruncated && !paging?.nextCursor,
+      truncated: groupsTruncated,
       returnedCount: facts.length,
       totalCount: facts.length,
-      nextCursor: paging?.nextCursor || null,
+      nextCursor: null,
       evidence: {
         label: `Görev özeti · ${facts.length} görev`,
         entity: projectEntity(scope, filters, projects),

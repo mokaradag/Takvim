@@ -250,7 +250,7 @@ test('without evidence and with the shared tool budget spent, the turn is not es
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
 });
 
-test('a missing declaration exhausts the cheap planning budget without SQL, then gets one Deep fallback', async (t) => {
+test('a missing declaration exhausts the Standard planning budget without SQL, then escalates once to Deep, which has its own bounded declaration budget', async (t) => {
   const stack = stackFor(t);
   const undeclared = { type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] };
   stack.provider.enqueue(undeclared, undeclared, undeclared, undeclared, undeclared, undeclared);

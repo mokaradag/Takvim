@@ -19,13 +19,12 @@ import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import { createToolScope } from '../tools/toolScope.js';
 import { bindRequestEntities, declarationHints, parseRequestDeclaration, requestEvidence, requestEvidenceReady, requestRepairHint, requestSelections, requestSummary, requestWindow,
   droppedNameHint, droppedNames, metricIdHints, namedScope, nameProbes, requestSchema, unmatchedEntities } from '../tools/requestDeclaration.js';
-import { createCallIds, prepareExecutionSet, rejectionFor, serverReadCall, textPlanCall, typedPlanningTool, unpackTypedPlan } from '../tools/executionSet.js';
+import { createCallIds, prepareExecutionSet, rejectionFor, textPlanCall, typedPlanningTool, unpackTypedPlan } from '../tools/executionSet.js';
 import { callRequiredByRequest, completeRequest, derivedReads, readKey, requestTextFields } from '../tools/requestPopulation.js';
 import { parseTurnLanguage, parseTurnRequest, parseTurnRoute, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
 import { CLARIFICATION_LIMITS, clarificationReference } from '../../../domain/ai/clarification.js';
 import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
 import { createAiDeadline } from '../aiDeadline.js';
-import { collectionDomain, factSuperseded, rankDomain } from '../../../domain/ai/requestContract.js';
 
 /**
  * Rota verisine dayanan yanıtın SINIRLI döngüsü.
@@ -468,7 +467,6 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     trace: { startedAt: Date.now(), rounds: [], declarations: 0, repairs: 0, revalidationMs: 0, verificationMs: 0, pending: null }
   };
   turn.executor = createToolExecutor({
-    request: () => turn.request,
     resolveTool: (name) => !turn.permittedTools || turn.permittedTools.has(name) ? getRotaTool(name) : null,
     context,
     ledger: turn.ledger,
@@ -730,41 +728,11 @@ function derivedCalls(turn, request) {
   const entries = turn.ledger.requestEntries();
   const selection = turn.containment.boundSelection();
   const bound = bindRequestEntities(request, entries, selection);
-  const reads = [];
-  if (['list', 'rank'].includes(request.operation) && bound.every((entity) => entity.bound) && request.population.collection) {
-    const sources = [...requestEvidence(request, entries, turn.context.today).values()].reverse();
-    for (const source of sources.filter((item) => item.tool === request.population.tool && item.firstPage)) {
-      const domain = request.operation === 'rank' ? rankDomain(request, [source, ...sources], request.population.collection)
-        : collectionDomain([source, ...sources], request.population.collection);
-      if (!domain?.next) continue;
-      let args = domain.next;
-      const first = domain.sources[0];
-      if (request.operation === 'list' && first.envelope.data?.sizeNote == null && domain.sources.length === 1
-        && first.effectiveLimit < first.pageMaximum) {
-        const { cursor: _cursor, ...initial } = first.args;
-        args = { ...initial, limit: first.pageMaximum };
-      }
-      if (!turn.attemptedReads.has(readKey(source.tool, args, turn.context.today))) reads.push({ name: source.tool, args });
-      break;
-    }
-  }
-  if (!reads.length) reads.push(...derivedReads(request, bound, { today: turn.context.today, attempted: turn.attemptedReads }));
-  if (!reads.length && request.operation !== 'value') {
-    const evidence = requestEvidence(request, entries, turn.context.today);
-    const source = [...evidence.values()].reverse().find((item) => item.tool === request.population.tool && item.firstPage
-      && item.populationMatch && item.sortMatch && item.pageMaximum && item.facts.some((fact) => request.metrics.includes(fact.semantic?.metric)
-        && factSuperseded(evidence, item, fact, { rows: true })));
-    if (source) {
-      const { cursor: _cursor, ...initial } = source.args;
-      const args = { ...initial, limit: source.pageMaximum };
-      if (source.effectiveLimit === source.pageMaximum) delete args.limit;
-      if (!turn.attemptedReads.has(readKey(source.tool, args, turn.context.today))) reads.push({ name: source.tool, args });
-    }
-  }
+  const reads = derivedReads(request, bound, { today: turn.context.today, attempted: turn.attemptedReads });
   // Tam adı hiçbir kayda uymayan varlık için adın ilk sözcüğüyle bir yoklama araması yapılır.
   const probes = reads.length ? [] : nameProbes(request, entries, selection)
     .filter(({ name, args }) => !turn.attemptedReads.has(readKey(name, args, turn.context.today)));
-  return [...reads, ...probes].map(({ name, args }) => serverReadCall(name, args, turn.catalog));
+  return [...reads, ...probes].map(({ name, args }) => ({ id: 'derived', name, arguments: JSON.stringify(args), oversize: false }));
 }
 
 /** Doğrulanmış yürütme kümesini çalıştırır; model ve sunucu okumaları aynı yoldan geçer. */

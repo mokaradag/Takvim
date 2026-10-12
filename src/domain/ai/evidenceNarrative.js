@@ -341,9 +341,6 @@ function rowKind(collection, tool) {
 const ROW_TITLES = Object.freeze(['title', 'name', 'task.title', 'person.name', 'label']);
 
 function renderRows(collection, rows, { evidenceId, locale, layout }) {
-  const roles = new Set(rows.map((row) => row.collection).filter(Boolean));
-  const mixed = roles.size > 1 && new Set([...roles].map((role) => role.split('.').at(-1))).size > 1;
-  const roleLabel = (row) => ROW_NOUNS[row.collection?.split('.').at(-1)]?.[locale === 'en' ? 1 : 0] || (locale === 'en' ? 'Record' : 'Kayıt');
   const pattern = (rel) => rel.replace(/\.\d+(?=\.|$)/g, '.*');
   const titleKey = ROW_TITLES.find((key) => rows.every((row) => row.entries.some(({ rel }) => rel === key)));
   const columns = [];
@@ -376,23 +373,23 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
     const names = titleKey ? valuesOf(row, titleKey) : [];
     const project = context?.project ? ` · ${escapedFactText([context.projectCode, context.project].filter(Boolean).join(' · '))}` : '';
     const organization = context?.organization ? ` · ${escapedFactText(context.organization)}` : '';
-    return `${mixed ? `${roleLabel(row)}: ` : ''}${escapedFactText(context?.name || names[0] && names.map((fact) => fact.value).join(', ') || row.subject)}${project}${organization}${criteria === null ? rowCriteria(row) : ''}`;
+    return `${escapedFactText(context?.name || names[0] && names.map((fact) => fact.value).join(', ') || row.subject)}${project}${organization}${criteria === null ? rowCriteria(row) : ''}`;
   };
   const cell = (facts, plain) => facts.map((fact) => (plain ? narrativeValue(fact, locale) : strong(narrativeValue(fact, locale)))).join(facts[0]?.field.includes('wbsPath') ? ' › ' : ', ');
   // Karşılaştırma doğal olduğunda (en az üç satır; üç sütun ya da iki sayısal sütun) tablo; aksi hâlde liste.
   const numericColumns = columns.filter((key) => rows.every((row) => valuesOf(row, key).every(isCount)));
   const table = columns.length >= 1 && (layout === 'table' || (layout !== 'list' && rows.length >= 3 && (columns.length >= 3 || numericColumns.length >= 2)));
   if (table) {
-    const head = !mixed && ROW_NOUNS[collection.split('.').at(-1)]?.[lang] || (locale === 'en' ? 'Record' : 'Kayıt');
+    const head = ROW_NOUNS[collection.split('.').at(-1)]?.[lang] || (locale === 'en' ? 'Record' : 'Kayıt');
     const headers = [head, ...columns.map((key) => columnLabel(key).replace(/\|/g, '/'))];
     // Sayı sütunları sağa yaslanır: değerler basamak hizasında okunur.
     const lines = [`| ${headers.join(' | ')} |`, `| ${['---', ...columns.map((key) => (numericColumns.includes(key) ? '---:' : '---'))].join(' | ')} |`];
     for (const row of rows) lines.push(`| ${[titleOf(row), ...columns.map((key) => { const facts = valuesOf(row, key); return facts.length ? cell(facts, true) : '—'; })].join(' | ')} |`);
-    return { body: `${lines.join('\n')}\n\n_${locale === 'en' ? 'Source' : 'Kaynak'}:_ ${citation([...new Set(rows.map((row) => row.evidenceId || evidenceId))])}`, criteria: criteria || '' };
+    return { body: `${lines.join('\n')}\n\n_${locale === 'en' ? 'Source' : 'Kaynak'}:_ ${citation([evidenceId])}`, criteria: criteria || '' };
   }
   return { body: rows.map((row) => {
     const pairs = columns.map((key) => { const facts = valuesOf(row, key); return facts.length ? `${columnLabel(key)}: ${cell(facts, false)}` : null; }).filter(Boolean);
-    return `- ${strong(titleOf(row))}${pairs.length ? ` — ${pairs.join(' · ')}` : ''} ${citation([row.evidenceId || evidenceId])}`;
+    return `- ${strong(titleOf(row))}${pairs.length ? ` — ${pairs.join(' · ')}` : ''} ${citation([evidenceId])}`;
   }).join('\n'), criteria: criteria || '' };
 }
 
@@ -488,20 +485,8 @@ function recordRelative(tool, field) {
  * Doğrulanmış olgu seçimini Markdown anlatıma dönüştürür.
  * @param {{ evidenceId: string, fact: object }[]} items Sunucunun doğruladığı olgular (seçim sırasıyla).
  */
-export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto', operation = null, empty = [], emptyRank = [] } = {}) {
+export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto', operation = null, empty = [] } = {}) {
   const chosenLayout = layoutFrom(layout, operation);
-  const ranked = new Map();
-  const rankCollections = new Set();
-  if (operation === 'rank') for (const { evidenceId, fact } of items) {
-    const tool = fact.semantic?.provenance?.tool;
-    const parts = factRow(tool, fact.field);
-    if (parts?.kind !== 'row') continue;
-    const key = `${evidenceId}|${parts.path}`;
-    rankCollections.add(`${evidenceId}|${parts.collection}`);
-    if (!ranked.has(key)) ranked.set(key, { evidenceId, collection: parts.collection, subject: fact.semantic?.row?.name || fact.subject, entries: [] });
-    ranked.get(key).entries.push({ rel: fact.field.slice(parts.path.length + 1), fact });
-  }
-  const globalRank = rankCollections.size > 1;
   const byEvidence = new Map();
   for (const item of items) {
     if (!byEvidence.has(item.evidenceId)) byEvidence.set(item.evidenceId, []);
@@ -516,7 +501,6 @@ export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto',
     for (const fact of facts) {
       if (ENVELOPE_FIELDS.has(fact.field)) continue;
       const parts = rowParts(fact.field, tool);
-      if (globalRank && parts && ranked.has(`${evidenceId}|${parts.row}`)) continue;
       // Varlık kaydının içindeki diziler (sorumlular, etiketler) kaydın çok değerli alanıdır.
       if (parts && !/^data\.(task|project)\./.test(parts.collection)) {
         if (!collections.has(parts.collection)) collections.set(parts.collection, new Map());
@@ -546,18 +530,12 @@ export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto',
       }
     }
     sentences.push(...envelopeSentences(envelope, { tool, locale, empty: empty.includes(evidenceId) }));
-    if (emptyRank.includes(evidenceId)) sentences.push(locale === 'en' ? 'No records have a value to rank by.' : 'Sıralama ölçüsünde değeri olan kayıt yok.');
     const stated = sentences.join(' ');
     // Ortak ölçüt üstteki cümlede (ör. sayımda) yazılmadıysa listenin başında bir kez yazılır.
     const lead = (criteria) => (criteria && !stated.includes(criteria) ? `_${capitalize(criteria.trim().slice(1, -1))}_\n\n` : '');
     const listBlocks = lists.map(({ body, criteria, role }) => `${role ? `**${role[1][language(locale)]}**\n\n` : ''}${lead(criteria)}${body}`);
     if (sentences.length) blocks.push(`${sentences.join(' ')} ${citation([evidenceId])}`);
     blocks.push(...listBlocks);
-  }
-  if (globalRank) {
-    const rows = [...ranked.values()];
-    const rendered = renderRows(rows[0].collection, rows, { locale, layout: chosenLayout === 'prose' ? 'list' : chosenLayout });
-    blocks.push(`${rendered.criteria ? `_${capitalize(rendered.criteria.trim().slice(1, -1))}_\n\n` : ''}${rendered.body}`);
   }
   return blocks.join('\n\n');
 }

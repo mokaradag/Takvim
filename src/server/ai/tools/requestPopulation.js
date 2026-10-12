@@ -1,6 +1,6 @@
 import 'server-only';
 import { EVIDENCE_TEXT_FIELDS, metricEntityType, metricEntry, metricPaths, NAMING_METRICS, rowCollections } from '../../../domain/ai/claimableEvidence.js';
-import { BREAKDOWN_FILTERS, collectionCapability, collectionRanking, collectionTotalMetric, insideRowCollection, populationDimensions } from '../../../domain/ai/evidencePopulation.js';
+import { BREAKDOWN_FILTERS, collectionTotalMetric, insideRowCollection, populationDimensions } from '../../../domain/ai/evidencePopulation.js';
 import { bindingsRequired, conjunctiveEntities, listCollections, parentProperty, REQUEST_ENTITY_TYPES, rowMetricFields, unboundCarrierMetrics } from '../../../domain/ai/requestContract.js';
 import { METRICS } from '../../../domain/ai/claimableEvidence.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
@@ -602,26 +602,6 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
     });
     if (request.rank && !rowMetrics.includes(request.rank.metric)) problems.push('$.rank.metric:rows');
   }
-  // Ön denetim veri boyutunu tahmin etmez; seçilen aracın tamlık ve sıra yeteneğini kanıtlar.
-  if (request.operation === 'list') {
-    for (const collection of population.collection ? [population.collection] : lists) {
-      const capability = collectionCapability(tool.name, collection);
-      if (!capability || capability === 'preview') {
-        problems.push('$.population.collection:exhaustive-unsupported');
-        hints.push(`${tool.name}: bu sınırlı koleksiyon imleçle bütünüyle okunamaz`);
-      }
-    }
-  }
-  if (request.rank) {
-    const ordering = collectionRanking(tool.name, population.collection, request.rank) || sortedBy(tool.name, requestDimensions(request, tool.name));
-    const capability = collectionCapability(tool.name, population.collection);
-    if (!capability || capability === 'preview' || capability === 'page' || ordering) {
-      if (!ordering || ordering.metric !== request.rank.metric || ordering.order !== request.rank.order) {
-        problems.push('$.rank:ordering');
-        hints.push(`${tool.name}: rank ölçüsü/yönü population.sort ile aynı olmalı`);
-      }
-    }
-  }
   if (multiple) {
     // Birden çok koleksiyonlu liste yalnızca satır alanlarıdır; tek koleksiyonun toplamı bütün listenin sayısı değildir.
     request.metrics.forEach((metric, index) => {
@@ -661,6 +641,11 @@ function rowMetricsOf(tool, collection) {
 
 const SELECTOR_PARAMS = Object.freeze({ project: 'projectId', task: 'taskId', person: 'personSicil', wbs: 'wbsId', baseline: 'baselineId' });
 const RESOLVERS = Object.freeze({ project: 'rota_project_search', person: 'rota_person_search', task: 'rota_task_search' });
+/** Projenin içindeki kaydın adı projenin kataloğunda çözülür (tam katalog: en derin düzey, en büyük sayfa). */
+const CATALOG_RESOLVERS = Object.freeze({ wbs: 'rota_wbs_inspect', baseline: 'rota_baseline_compare' });
+const PROJECT_SCOPED = new Set(['task', 'wbs', 'baseline']);
+/** Farklı varlıklara bağlanan ölçüler karşılaştırmadır; bağlanmayan varlık ortak bağlamdır. */
+const comparisonSubjects = (request) => new Set((request.bindings || []).map((binding) => binding.entity));
 
 const stableArgs = (value) => JSON.stringify(value, (key, item) => (item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map((name) => [name, item[name]])) : item));
@@ -702,9 +687,19 @@ export function derivedReads(request, bound, { today, attempted = new Set() } = 
   const fresh = (calls) => calls.filter((call, index) => !attempted.has(key(call)) && calls.findIndex((other) => key(other) === key(call)) === index);
   const unresolved = bound.filter((entity) => !entity.bound && entity.text);
   if (unresolved.length) {
+    // Karşılaştırma değilse tek bildirilen projenin görev, WBS ve baz plan adı o projede, proje bağlandıktan sonra çözülür.
+    const projects = bound.filter((entity) => entity.type === 'project');
+    const project = projects.length === 1 && comparisonSubjects(request).size < 2 ? projects[0] : null;
     return fresh(unresolved.flatMap((entity) => {
-      const resolver = RESOLVERS[entity.type] ? getRotaTool(RESOLVERS[entity.type]) : null;
-      const args = resolver ? parsedRead(resolver, { text: entity.query || entity.text }) : null;
+      const scoped = PROJECT_SCOPED.has(entity.type) && project;
+      if (scoped && project.bound == null) return [];
+      const catalog = CATALOG_RESOLVERS[entity.type];
+      const resolver = getRotaTool(catalog || RESOLVERS[entity.type] || '');
+      if (!resolver || (catalog && !scoped)) return [];
+      const properties = resolver.parameters.properties;
+      const args = parsedRead(resolver, catalog
+        ? { projectId: project.bound, ...(properties.depth ? { depth: properties.depth.maximum } : {}), ...(properties.limit ? { limit: properties.limit.maximum } : {}) }
+        : { text: entity.query || entity.text, ...(scoped && properties.projectId ? { projectId: project.bound } : {}) });
       return args ? [{ name: resolver.name, args }] : [];
     }));
   }
@@ -726,6 +721,8 @@ export function derivedReads(request, bound, { today, attempted = new Set() } = 
   if (population.groupBy && properties.groupBy) base.groupBy = population.groupBy;
   if (population.depth && properties.depth) base.depth = population.depth;
   if (population.textFields?.length && properties.textFields) base.textFields = population.textFields;
+  // Liste nüfusun bütün satırlarıdır: aracın en büyük sayfasıyla bir kez okunur; sayfalar birleştirilmez.
+  if (request.operation === 'list' && properties.limit?.maximum) base.limit = properties.limit.maximum;
   const selectors = new Map();
   for (const entity of bound) {
     const param = SELECTOR_PARAMS[entity.type];
@@ -733,10 +730,14 @@ export function derivedReads(request, bound, { today, attempted = new Set() } = 
     selectors.set(param, [...new Set([...(selectors.get(param) || []), entity.type === 'person' ? Number(entity.bound) : entity.bound])]);
   }
   const multiple = [...selectors].filter(([, ids]) => ids.length > 1);
-  const comparisons = !conjunctiveEntities(request) && new Set((request.bindings || []).map((binding) => binding.entity)).size > 1;
+  const subjects = comparisonSubjects(request);
+  const comparisons = !conjunctiveEntities(request) && subjects.size > 1;
   if (multiple.length > 1 && !comparisons) return [];
   const single = Object.fromEntries([...selectors].filter(([, ids]) => ids.length === 1).map(([param, [id]]) => [param, id]));
-  const candidates = comparisons ? [...new Set(request.bindings.filter((binding) => carriesMetric(tool.name, binding.metric)
+  // Karşılaştırmada ortak bağlam seçicisi okumadan düşürülürse nüfus genişler, eklenirse doğrulanamaz: okuma türetilmez.
+  const context = comparisons && bound.some((entity, index) => !subjects.has(index) && entity.bound != null
+    && Object.hasOwn(properties, SELECTOR_PARAMS[entity.type] || ''));
+  const candidates = context ? [] : comparisons ? [...new Set(request.bindings.filter((binding) => carriesMetric(tool.name, binding.metric)
     && (!request.fields.some((field) => field.metric === binding.metric) || request.fields.some((field) => field.metric === binding.metric && field.tool === tool.name)))
     .map((binding) => binding.entity))].flatMap((index) => {
     const entity = bound[index];

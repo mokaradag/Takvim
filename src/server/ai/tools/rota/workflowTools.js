@@ -146,7 +146,6 @@ const activitySearch = {
         ...(item.detailsLimited || structured.length > 6 ? { detailsLimited: true } : {})
       };
     });
-    call.noteRows?.('items', report.items.slice(page * pageSize, (page + 1) * pageSize).map((item) => item.id));
     const pageState = pageWindow('rota_activity_search', key, page, pageSize, report.total);
     const detailsLimited = items.some((item) => item.detailsLimited || Number(item.moreChanges || 0) > 0);
     const selector = await workflowSelector(call, scope, key);

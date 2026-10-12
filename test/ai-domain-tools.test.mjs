@@ -1126,60 +1126,76 @@ test('AI completion rates share product rounding and empty-set semantics', async
   assert.equal(taskCompletionRate(2, 3), 67);
 });
 
-for (const tool of ['rota_workload_summary', 'rota_task_analytics', 'rota_activity_search']) {
-  test(`bounded ${tool} pages reconstruct the collection without a full-population payload`, async (t) => {
+/* Sınırlı koleksiyon tek okumadır: gizli sayfa, sunucu sıralaması ya da sayfa birleştirme yoktur. */
+for (const [tool, collection, metric, operation] of [
+  ['rota_workload_summary', 'people', 'tasks.open', 'list'],
+  ['rota_task_analytics', 'groups', 'tasks.total', 'list'],
+  ['rota_activity_search', 'items', 'activity.kind', 'list'],
+  ['rota_portfolio_summary', 'projects', 'tasks.open', 'list'],
+  ['rota_wbs_inspect', 'nodes', 'wbs.directTasks', 'list'],
+  ['rota_baseline_compare', 'mostSlipped', 'task.varianceDays', 'list'],
+  ['rota_dependency_inspect', 'mostConnected', 'dependencies.relationCount', 'rank'],
+  ['rota_recurrence_inspect', 'series', 'recurrence.openOccurrences', 'list'],
+  ['rota_recurrence_inspect', 'series.next', 'recurrence.occurrenceDate', 'list']
+]) {
+  test(`${tool}.${collection} larger than its page is one bounded read and an exhaustive ${operation} fails closed`, async (t) => {
     const stack = stackFor(t);
     const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
-    const populate = (count) => {
-      stack.db.tasks = Array.from({ length: count }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}` }));
+    const ids = Array.from({ length: 31 }, (_, index) => `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`);
+    stack.db.tasks = ids.map((TaskId) => ({ ...template, TaskId }));
+    let args = { projectId: PROJECTS.FULL, limit: 2 };
+    if (tool === 'rota_workload_summary' || tool === 'rota_task_analytics') {
       stack.db.taskAssignees = stack.db.tasks.map((task, index) => ({ TaskId: task.TaskId, Sicil: 920000 + index }));
       stack.db.people.push(...stack.db.tasks.map((_task, index) => ({ Sicil: 920000 + index, DisplayName: `Kişi ${index}` })));
-      if (tool === 'rota_activity_search') stack.db.auditLog = stack.db.tasks.map((task, index) => ({ AuditId: index + 1,
-        OccurredAt: '2026-09-29T08:00:00Z', ActorSicil: AYSE, ActorDisplayName: 'Ayşe Yılmaz', ActionCode: 'UPDATE',
-        EntityType: 'TASK', EntityId: task.TaskId, ProjectId: PROJECTS.FULL, CorrelationId: `activity-${index}`,
-        BeforeJson: JSON.stringify({ Status: 'planned' }), AfterJson: JSON.stringify({ Status: 'inProgress' }) }));
-    };
-    populate(31);
-    const collection = tool === 'rota_workload_summary' ? 'people' : tool === 'rota_activity_search' ? 'items' : 'groups';
-    const request = { operation: 'list', population: { tool, collection } };
-    const extra = tool === 'rota_task_analytics' ? { groupBy: 'assignee' }
-      : tool === 'rota_activity_search' ? { period: 'custom', dateFrom: '2026-09-29' } : {};
-    const read = async (limit, maxResultBytes = TOOL_LIMITS.maxResultBytes) => {
-      const ledger = createEvidenceLedger();
-      const limits = { ...TOOL_LIMITS, maxResultBytes };
-      const executor = createToolExecutor({ context: createToolTurnContext({ sicil: AYSE, now: NOW }), ledger, limits,
-        request: () => request, signal: new AbortController().signal });
-      const [message] = await executor.runRound([{ id: 'complete', name: tool,
-        arguments: JSON.stringify({ projectId: PROJECTS.FULL, limit, ...extra }) }]);
-      return { ledger, result: JSON.parse(message.content) };
-    };
-    const { serverReadCall, prepareExecutionSet, createCallIds } = await import('../src/server/ai/tools/executionSet.js');
-    const catalog = (await import('../src/server/ai/tools/toolRegistry.js')).toolCatalogForModel();
-    const context = createToolTurnContext({ sicil: AYSE, now: NOW });
-    const ledger = createEvidenceLedger();
-    const executor = createToolExecutor({ context, ledger, request: () => request, signal: new AbortController().signal });
-    const pageSize = tool === 'rota_activity_search' ? 20 : 25;
-    const args = { projectId: PROJECTS.FULL, limit: pageSize, ...extra };
-    const rows = [];
-    let cursor = null;
-    for (let index = 0; index < 3; index += 1) {
-      const call = serverReadCall(tool, { ...args, ...(cursor ? { cursor } : {}) }, catalog);
-      const prepared = prepareExecutionSet([call], { catalog, callId: createCallIds(), today: context.today });
-      assert.equal(prepared.ok, true);
-      const [message] = await executor.runRound(prepared.calls);
-      const body = JSON.parse(message.content);
-      assert.equal(body.ok, true, message.content);
-      assert.ok(body.data[collection].length <= pageSize);
-      assert.equal(body.data[collection].some((row) => row.key === 'other'), false);
-      rows.push(...body.data[collection]);
-      cursor = body.nextCursor;
-      if (!cursor) break;
+      if (tool === 'rota_task_analytics') args.groupBy = 'assignee';
+    } else if (tool === 'rota_activity_search') {
+      stack.db.auditLog = stack.db.tasks.map((task, index) => ({ AuditId: index + 1, OccurredAt: '2026-09-29T08:00:00Z', ActorSicil: AYSE,
+        ActorDisplayName: 'Ayşe Yılmaz', ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: task.TaskId, ProjectId: PROJECTS.FULL,
+        CorrelationId: `activity-${index}`, BeforeJson: JSON.stringify({ Status: 'planned' }), AfterJson: JSON.stringify({ Status: 'inProgress' }) }));
+      args = { projectId: PROJECTS.FULL, limit: 2, period: 'custom', dateFrom: '2026-09-29' };
+    } else if (tool === 'rota_portfolio_summary') {
+      const project = stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL);
+      stack.db.projects = ids.map((_id, index) => ({ ...project, ProjectId: `10000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`, ProjectName: `Proje ${index}` }));
+      stack.db.tasks.forEach((task, index) => { task.ProjectId = stack.db.projects[index].ProjectId; });
+      args = { limit: 2 };
+    } else if (tool === 'rota_wbs_inspect') {
+      stack.db.wbs = ids.map((_id, index) => ({ WbsId: `30000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`, ProjectId: PROJECTS.FULL, Name: `Düğüm ${index}`, Code: `R.${index}`, SortOrder: index }));
+      stack.db.tasks.forEach((task, index) => { task.WbsId = stack.db.wbs[index].WbsId; });
+    } else if (tool === 'rota_baseline_compare') {
+      stack.db.taskBaselineSnapshots = ids.map((TaskId) => ({ BaselineId: BASELINE_ID, TaskId, PlannedFinish: '2026-09-10' }));
+    } else if (tool === 'rota_dependency_inspect') {
+      stack.db.taskDependencies = ids.slice(1).map((TaskId, index) => ({ ProjectId: PROJECTS.FULL, TaskId, PredecessorTaskId: ids[index], DependencyType: 'FS', LagDays: 0 }));
+      args = { projectId: PROJECTS.FULL };
+    } else if (collection === 'series') {
+      stack.db.tasks.forEach((task) => { task.RecurrenceRule = 'FREQ=WEEKLY;BYDAY=MO'; });
+    } else {
+      const series = stack.db.tasks[0];
+      series.RecurrenceRule = 'FREQ=WEEKLY;BYDAY=MO';
+      stack.db.tasks = [series, ...ids.map((id, index) => ({ ...template, TaskId: id.replace('20000000', '21000000'), RecurrenceParentTaskId: series.TaskId,
+        RecurrenceOccurrenceDate: `2026-10-${String(index + 1).padStart(2, '0')}` }))];
+      args.taskId = series.TaskId;
     }
-    assert.equal(rows.length, 31);
-    const large = await read(25, 1000);
-    assert.ok(large.result.error || large.result.data.sizeNote, 'size pressure cannot silently prove completeness');
-    const ordinary = await callRotaTool(stack, AYSE, tool, { projectId: PROJECTS.FULL, limit: 1, ...extra });
-    assert.equal(ordinary.result.complete, false, 'sunum sınırı yalnızca kapsamlı istek dışında korunur');
+    const { verifyRequested } = await import('./helpers/requestScenario.mjs');
+    const { rowMetricFields } = await import('../src/domain/ai/requestContract.js');
+    const { result, ledger } = await callRotaTool(stack, AYSE, tool, args);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const rows = collection.split('.').reduce((value, key) => value[key], result.data);
+    assert.ok(rows.length <= (tool === 'rota_dependency_inspect' ? 5 : 2) || collection === 'series.next', JSON.stringify(rows.length));
+    assert.equal(result.complete, false, JSON.stringify({ upcoming: result.data.series?.upcomingCount, next: result.data.series?.next?.length, truncated: result.data.series?.nextTruncated }));
+    // Yalnızca aracın kendi imleci vardır; sunucu gizli devam sayfası açmaz.
+    if (tool !== 'rota_activity_search') assert.equal(result.nextCursor, null);
+    const field = `data.${collection}.*.${rowMetricFields(tool, collection, metric)[0]}`;
+    const entities = [...(args.projectId ? [{ type: 'project', id: args.projectId }] : []), ...(args.taskId ? [{ type: 'task', id: args.taskId }] : [])];
+    const request = { operation, metrics: [metric], population: { tool, collection, ...(args.groupBy ? { groupBy: args.groupBy } : {}) }, entities,
+      ...(args.period ? { filters: { dateFrom: args.dateFrom } } : {}),
+      ...(operation === 'rank' ? { rank: { metric, order: 'desc', limit: 6 } } : {}) };
+    assert.equal(verifyRequested(ledger, [field], request).issues[0]?.code, operation === 'rank' ? 'RANK_MISMATCH' : 'LIST_INCOMPLETE');
+    if (tool === 'rota_activity_search') {
+      // Aracın kendi imleciyle okunan sonraki sayfa listeyi tamamlamaz: sayfalar birleştirilmez.
+      const { results, ledger: paged } = await callRotaTools(stack, AYSE, [[tool, args], [tool, { ...args, cursor: result.nextCursor }]]);
+      assert.equal(results[1].ok, true, JSON.stringify(results[1]));
+      assert.equal(verifyRequested(paged, ['R1:data.items.*.kind', 'R2:data.items.*.kind'], request).issues[0]?.code, 'LIST_INCOMPLETE');
+    }
   });
 }
 
@@ -1204,72 +1220,3 @@ test('cursor snapshots keep their authorization epoch and never recover detached
   assert.equal(loads, 2);
 });
 
-for (const [tool, collection, metric] of [
-  ['rota_portfolio_summary', 'projects', 'tasks.open'],
-  ['rota_wbs_inspect', 'nodes', 'wbs.directTasks'],
-  ['rota_baseline_compare', 'mostSlipped', 'task.varianceDays'],
-  ['rota_dependency_inspect', 'mostConnected', 'dependencies.relationCount'],
-  ['rota_recurrence_inspect', 'series', 'recurrence.openOccurrences'],
-  ['rota_recurrence_inspect', 'series.next', 'recurrence.occurrenceDate']
-]) {
-  test(`${tool}.${collection} has a bounded, snapshot-verifiable exhaustive path`, async (t) => {
-    const stack = stackFor(t);
-    const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
-    const ids = Array.from({ length: 7 }, (_, index) => `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`);
-    stack.db.tasks = ids.map((TaskId) => ({ ...template, TaskId }));
-    let args = { projectId: PROJECTS.FULL, limit: 2 };
-    if (tool === 'rota_portfolio_summary') {
-      const project = stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL);
-      stack.db.projects = ids.map((_id, index) => ({ ...project, ProjectId: `10000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`, ProjectName: `Proje ${index}` }));
-      stack.db.tasks.forEach((task, index) => { task.ProjectId = stack.db.projects[index].ProjectId; });
-      args = { limit: 2 };
-    } else if (tool === 'rota_wbs_inspect') {
-      stack.db.wbs = ids.map((_id, index) => ({ WbsId: `30000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`, ProjectId: PROJECTS.FULL, Name: `Düğüm ${index}`, Code: `R.${index}`, SortOrder: index }));
-      stack.db.tasks.forEach((task, index) => { task.WbsId = stack.db.wbs[index].WbsId; });
-    } else if (tool === 'rota_baseline_compare') {
-      stack.db.taskBaselineSnapshots = ids.map((TaskId) => ({ BaselineId: BASELINE_ID, TaskId, PlannedFinish: '2026-09-10' }));
-    } else if (tool === 'rota_dependency_inspect') {
-      stack.db.taskDependencies = ids.slice(1).map((TaskId, index) => ({ ProjectId: PROJECTS.FULL, TaskId, PredecessorTaskId: ids[index], DependencyType: 'FS', LagDays: 0 }));
-      args = { projectId: PROJECTS.FULL };
-    } else if (collection === 'series') {
-      stack.db.tasks.forEach((task) => { task.RecurrenceRule = 'FREQ=WEEKLY;BYDAY=MO'; });
-    } else {
-      const series = stack.db.tasks[0];
-      series.RecurrenceRule = 'FREQ=WEEKLY;BYDAY=MO';
-      stack.db.tasks = [series, ...ids.map((id, index) => ({ ...template, TaskId: id.replace('20000000', '21000000'), RecurrenceParentTaskId: series.TaskId, RecurrenceOccurrenceDate: `2026-10-${String(index + 1).padStart(2, '0')}` }))];
-      args.taskId = series.TaskId;
-    }
-    const { parsedRequest } = await import('./helpers/requestScenario.mjs');
-    const { requestEvidence } = await import('../src/server/ai/tools/requestDeclaration.js');
-    const { collectionDomain, rankDomain } = await import('../src/domain/ai/requestContract.js');
-    const { serverReadCall, prepareExecutionSet, createCallIds } = await import('../src/server/ai/tools/executionSet.js');
-    const catalog = (await import('../src/server/ai/tools/toolRegistry.js')).toolCatalogForModel();
-    const request = parsedRequest({ operation: tool === 'rota_dependency_inspect' ? 'rank' : 'list', metrics: [metric], population: { tool, collection },
-      ...(tool === 'rota_dependency_inspect' ? { rank: { metric, order: 'desc', limit: 6 } } : {}) });
-    const ledger = createEvidenceLedger();
-    const context = createToolTurnContext({ sicil: AYSE, now: NOW });
-    const executor = createToolExecutor({ context, ledger, request: () => request, signal: new AbortController().signal });
-    let cursor = null;
-    for (let page = 0; page < 4; page += 1) {
-      const prepared = prepareExecutionSet([serverReadCall(tool, { ...args, ...(cursor ? { cursor } : {}) }, catalog)], { catalog, callId: createCallIds(), today: context.today });
-      assert.equal(prepared.ok, true);
-      const [message] = await executor.runRound(prepared.calls);
-      const result = JSON.parse(message.content);
-      assert.equal(result.ok, true, message.content);
-      const rows = collection.split('.').reduce((value, key) => value[key], result.data);
-      assert.ok(rows.length <= (tool === 'rota_dependency_inspect' ? 5 : 2));
-      cursor = result.nextCursor;
-      if (!cursor) break;
-    }
-    assert.equal(cursor, null);
-    const sources = [...requestEvidence(request, ledger.requestEntries(), context.today).values()];
-    const domain = collectionDomain(sources, collection);
-    assert.equal(domain.complete, true);
-    assert.equal(domain.rows.length, 7);
-    if (request.rank) {
-      const ranked = rankDomain(request, sources, collection);
-      assert.equal(ranked.verified, true);
-      assert.equal(ranked.order.length, 7, 'top six includes the boundary tie across pages');
-    }
-  });
-}

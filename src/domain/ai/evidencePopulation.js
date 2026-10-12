@@ -53,37 +53,6 @@ const COLLECTION_TOTALS = Object.freeze({
   rota_recurrence_inspect: { series: 'recurrence.entries', 'series.next': 'recurrence.upcomingOccurrences' }
 });
 
-/** Her kayıtlı koleksiyonun sınırlı kanıt üretim yolu; modele gönderilmez. */
-const COLLECTION_CAPABILITIES = Object.freeze({
-  rota_task_search: { tasks: 'page' }, rota_project_search: { matches: 'preview' }, rota_person_search: { people: 'preview' },
-  rota_task_analytics: { groups: { kind: 'internal-page', ranking: 'dynamic' }, 'overdueAging.buckets': 'bounded' },
-  rota_project_detail: {}, rota_task_detail: {},
-  rota_portfolio_summary: { projects: 'internal-page' }, rota_wbs_inspect: { nodes: 'internal-page' },
-  rota_workload_summary: { people: { kind: 'internal-page', ranking: 'dynamic' } },
-  rota_baseline_compare: { availableBaselines: 'preview', mostSlipped: { kind: 'internal-page', ranking: { metric: 'task.varianceDays', order: 'desc' } } },
-  rota_dependency_inspect: { predecessors: 'bounded', successors: 'bounded', mostConnected: { kind: 'internal-page', ranking: { metric: 'dependencies.relationCount', order: 'desc' } } },
-  rota_recurrence_inspect: { series: { kind: 'internal-page', ranking: 'dynamic' }, 'series.next': { kind: 'internal-page', ranking: 'dynamic' }, 'series.*.next': 'preview' },
-  rota_calendar_inspect: { holidays: 'bounded' }, rota_activity_search: { items: 'page' },
-  rota_schedule_requests: { items: 'page' }, rota_assignment_requests: { items: 'page' },
-  rota_notifications: { 'scheduleRequests.latest': 'preview', 'assignmentCoordination.latest': 'preview', 'taskEvents.latest': 'preview' },
-  rota_outlook_status: { items: 'preview' }, rota_data_quality: { checks: 'bounded', 'completedWithoutActualFinish.examples': 'preview' }
-});
-
-export function collectionCapability(tool, canonical) {
-  const capability = COLLECTION_CAPABILITIES[tool]?.[canonical];
-  return capability?.kind || capability || null;
-}
-
-export function collectionRanking(tool, canonical, rank) {
-  const ranking = COLLECTION_CAPABILITIES[tool]?.[canonical]?.ranking;
-  return ranking === 'dynamic' ? rank : ranking || null;
-}
-
-export function internalPageRequired(request, tool, canonical = request?.population?.collection) {
-  return ['list', 'rank'].includes(request?.operation) && request.population?.tool === tool
-    && collectionCapability(tool, canonical) === 'internal-page';
-}
-
 /** Yol aracın bir satır koleksiyonunun içinde mi (grup, proje, görev satırı…)? */
 export const insideRowCollection = (tool, path) => rowCollections(tool).some((row) => path.startsWith(`data.${row}.`));
 
@@ -216,14 +185,14 @@ export const BREAKDOWN_FILTERS = Object.freeze({
 });
 
 /* ── Tazelik ────────────────────────────────────────────────
- * Aynı turda aynı nüfusun yeniden okunması eski kaydı geçersiz kılabilir; hangi
- * yeni okumanın eskisinin YERİNE geçtiği olgunun sınıfına bağlıdır:
- *  - `scalar`: toplam ve sayımlar her sayfada kesindir; aynı nüfusun daha yeni
- *    okuması (sayfası ne olursa olsun) eskisinin yerine geçer.
- *  - `rows`: satır kümesi yalnızca daha yeni TAM okumayla (aynı nüfus, aynı sıra
- *    ve boyutlar) değişir; sonraki sayfa ya da eksik okuma tam kümeyi eskitmez.
- *  - `property`: varlığın kendi özelliği, aynı varlığın aynı özelliğini taşıyan
- *    daha yeni herhangi bir okumayla eskir.
+ * Aynı nüfusun daha sonraki bir turda yeniden okunması eski kaydı geçersiz kılar
+ * (tek kural: requestContract.factSuperseded). Okumalar karşılaştırılmaz:
+ *  - `rows`: aynı aracın aynı satır nüfusunun daha sonraki HER okuması (tam ya da
+ *    sayfa) eski satırları eskitir; kesinleşme yalnızca en son okumadan olur.
+ *  - `scalar`: aynı nüfusun aynı araçtaki eşdeğer taşıyıcısı; araçlar arası
+ *    eşdeğerlik yalnızca görev sayımları için açıkça bildirilmiştir.
+ *  - `property`: varlığın kendi özelliği, aynı varlığın aynı özelliğini (açık
+ *    boşluğu dâhil) taşıyan daha yeni herhangi bir okumayla eskir.
  */
 
 const stableJson = (value) => JSON.stringify(value, (key, item) => (item && typeof item === 'object' && !Array.isArray(item)
@@ -236,11 +205,10 @@ export function populationKey(source, dimensions = null) {
 }
 
 /**
- * Toplamların nüfusunu değiştiren boyutlar: WBS derinliği listelenen düğümleri,
- * talep listesinde korumalı metin alanları aramanın kapsamını belirler; sıra ve
- * gruplama toplamı değiştirmez (sunucunun uygunluk denetimiyle aynı ayrım).
+ * Nüfusu değiştiren boyutlar (uygunluk ve tazeliğin tek tanımı): WBS derinliği,
+ * metin aramasında korumalı alanlar, grupların gruplaması ve satır sırası. İzdüşüm
+ * izni tek başına nüfus değildir; sıra ve gruplama toplamı değiştirmez.
  */
-/** Üyeliği değiştiren boyutlar; izdüşüm izni tek başına nüfus değildir. */
 export function populationDimensions(source, kind = 'scalar', metric = null) {
   const dimensions = source.snapshotDimensions || {};
   const result = {};
@@ -267,13 +235,11 @@ export function metricDimensionsMatch(source, request, metric, rows = false) {
 }
 
 /**
- * Yürütücü okumaları sırayla yapar. Yalnızca gerçekten paylaşılan maddileştirilmiş
- * görüntü aynı andır; model tur numarası görüntü kimliği değildir.
+ * Daha yeni okuma: kesinlikle daha sonraki bir araç turunda. Aynı turdaki okumalar
+ * aynı andır; biri diğerinin yerine geçmez (sıra numarası tek başına tazelik değildir).
  */
 export function readLater(newer, older) {
-  if (newer.snapshot && newer.snapshot === older.snapshot) return false;
-  const round = (newer.round ?? newer.ordinal) - (older.round ?? older.ordinal);
-  return round > 0 || round === 0 && newer.ordinal > older.ordinal;
+  return (newer.round ?? newer.ordinal) > (older.round ?? older.ordinal);
 }
 
 export function scalarKey(source, metric = null) {

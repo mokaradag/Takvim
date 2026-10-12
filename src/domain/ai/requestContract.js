@@ -1,4 +1,4 @@
-import { claimableContract, equivalentCarriers, METRICS, metricEntityType, metricEntry, metricPaths, NAMING_METRICS, rowCollections, scalarCarrierKey, semanticCarrierKey } from './claimableEvidence.js';
+import { claimableContract, equivalentCarriers, METRICS, metricEntityType, metricEntry, metricPaths, NAMING_METRICS, rowCollections, semanticCarrierKey } from './claimableEvidence.js';
 import { scaledDecimal } from '../numbers/fixedDecimal.js';
 import {
   canonicalField,
@@ -59,17 +59,6 @@ export function conjunctiveEntities(request) {
   if (new Set((request.bindings || []).map((binding) => binding.entity)).size > 1) return false;
   return entities.length > 1 && new Set(entities.map((entity) => entity.type)).size === entities.length
     && entities.every((entity) => JOINT_SELECTORS[request.population?.tool]?.includes(entity.type));
-}
-
-/** Satırın kararlı kimliği indis değildir. */
-export function rowIdentity(row, source = null, canonical = null, index = null) {
-  if (source?.rowIdentities?.[canonical]?.[index] != null) return `row:${source.rowIdentities[canonical][index]}`;
-  if (!row || typeof row !== 'object') return null;
-  // İç içe proje gibi bağlam kayıtları satırın kimliği değildir.
-  for (const field of ['requestId', 'coordinationId', 'notificationId', 'eventId', 'taskId', 'wbsId', 'baselineId', 'sicil', 'projectId', 'key', 'id', 'occurrenceDate', 'date', 'templateTaskId', 'seriesTaskId']) {
-    if (row[field] != null) return `${field}:${row[field]}`;
-  }
-  return null;
 }
 
 /** Doğrulama, boş alan çizimi ve seçim aynı ölçü/varlık bağını kullanır. */
@@ -238,89 +227,51 @@ function rankField(request, tool, canonical, rows) {
   return written.length === 1 ? written[0] : fields.length === 1 ? fields[0] : null;
 }
 
-/** İmleç devamı, aynı değer görüntüsü ve tekil satırlar liste/sıralama için ortaktır. */
-export function collectionDomain(sources, canonical) {
-  if (!sources.length) return null;
-  const anchor = sources[0];
-  const compatible = sources.filter((source) => source.tool === anchor.tool && rowKey(source, canonical) === rowKey(anchor, canonical));
-  const starts = compatible.filter((source) => source.firstPage && (!anchor.snapshot || source.snapshot === anchor.snapshot))
-    .sort((left, right) => (right.ordinal ?? 0) - (left.ordinal ?? 0));
-  const first = starts.find((source) => collectionComplete(source, canonical))
-    || starts.find((source) => source.envelope?.data?.sizeNote == null) || starts[0];
-  if (!first) return null;
-  if (first.envelope?.data?.sizeNote != null) {
-    const limit = first.args?.limit ?? first.effectiveLimit;
-    const { cursor: _cursor, ...args } = first.args || {};
-    return { sources: [first], rows: [], complete: false, next: limit > 1 ? { ...args, limit: Math.floor(limit / 2) } : null };
-  }
-  const chain = [first];
-  for (let page = first; page.envelope.nextCursor;) {
-    const next = compatible.find((source) => source !== page && source.args?.cursor === page.envelope.nextCursor
-      && first.snapshot && source.snapshot === first.snapshot && source.envelope.totalCount === first.envelope.totalCount
-      && source.envelope?.data?.sizeNote == null && !chain.includes(source));
-    if (!next) break;
-    chain.push(next);
-    page = next;
-  }
-  const rows = chain.flatMap((source) => concreteCollections(source.envelope, canonical).flatMap(({ collection, rows: items }) =>
-    items.map((row, index) => ({ source, collection, row, index }))));
-  const identities = rows.map((item) => rowIdentity(item.row, item.source, canonical, item.index));
-  if (chain.length > 1 && (identities.some((identity) => identity == null) || new Set(identities).size !== identities.length)) return null;
-  const last = chain.at(-1);
-  const total = collectionTotalPaths(first.tool, canonical).map((path) => path === 'totalCount' ? first.envelope.totalCount : valueAt(first.envelope, path))
-    .find((value) => Number.isSafeInteger(value) && value >= 0);
-  let complete = collectionComplete(first, canonical) || chain.length > 1 && !last.envelope.nextCursor
-    && (total != null ? rows.length === total : last.envelope.complete === true && last.envelope.truncated !== true);
-  if (complete) {
-    const members = new Set(identities.filter(Boolean));
-    complete = !compatible.some((newer) => !chain.includes(newer) && readLater(newer, last)
-      && concreteCollections(newer.envelope, canonical).some(({ rows: items }) => items.some((row, index) => {
-        const identity = rowIdentity(row, newer, canonical, index);
-        return identity && !members.has(identity);
-      })));
-  }
-  return { sources: chain, rows, complete, next: !complete && last.envelope.nextCursor ? { ...last.args, cursor: last.envelope.nextCursor } : null };
-}
-
-/** Tek nüfusun bütün iç koleksiyonları ve doğrulanmış imleç zinciri aynı sıralama alanıdır. */
-export function rankDomain(request, sources, canonical) {
-  if (!request.rank || !sources.length) return null;
-  const anchor = sources[0];
-  sources = sources.filter((source) => source.tool === anchor.tool && rowKey(source, canonical) === rowKey(anchor, canonical)
-    && source.populationMatch !== false && metricDimensionsMatch(source, request, request.rank.metric, true)
-    && source.sortMatch !== false && !source.unsupported?.length && sortedJson(source.facets || {}) === sortedJson(source.declared || {}));
-  const domain = collectionDomain(sources, canonical);
-  if (!domain) return null;
-  const { sources: chain, rows, complete } = domain;
-  const first = chain[0];
-  if (first.envelope?.data?.sizeNote != null) return { ...domain, order: [], verified: false, empty: false };
-  const field = rankField(request, first.tool, canonical, rows.map((item) => item.row));
-  if (!field || rows.some((item) => rowFieldState(first.tool, canonical, item.row, field) === 'absent')) return null;
+/** Tek somut koleksiyonun ölçüye göre başı: `limit` satır ve sınırdaki eşitler (kanıttaki değerlerden). */
+function rankPlan(request, source, collection) {
+  const rows = valueAt(source.envelope, collection.collection);
+  if (!Array.isArray(rows)) return null;
+  const field = rankField(request, source.tool, collection.canonical, rows);
+  if (!field || rows.some((row) => rowFieldState(source.tool, collection.canonical, row, field) === 'absent')) return null;
   const direction = request.rank.order === 'asc' ? 1 : -1;
   const rankValue = (value) => METRICS[request.rank.metric] === 'hours' ? scaledDecimal(value, 2) : value;
-  const ranked = rows.map((item, position) => ({ ...item, position, value: rankValue(fieldValue(item.row, field)) }))
-    .filter((item) => item.value != null).sort((left, right) =>
-      (left.value < right.value ? -1 : left.value > right.value ? 1 : 0) * direction || left.position - right.position);
+  const ranked = rows.map((row, index) => ({ index, value: rankValue(fieldValue(row, field)) }))
+    .filter((item) => item.value != null)
+    .sort((left, right) => (left.value < right.value ? -1 : left.value > right.value ? 1 : 0) * direction || left.index - right.index);
   const limit = Math.min(request.rank.limit || 1, ranked.length);
-  const boundary = limit ? ranked[limit - 1].value : null;
-  const order = ranked.filter((item, position) => position < limit || item.value === boundary);
-  const last = chain.at(-1);
-  const sorted = first.sortedBy?.metric === request.rank.metric && first.sortedBy?.order === request.rank.order;
-  const proof = last.envelope.rankingBoundary;
-  const nextValue = rankValue(proof?.nextValue);
-  const cutoff = proof?.collection === canonical && proof.metric === request.rank.metric && proof.order === request.rank.order
-    && proof.returnedCount === concreteCollections(last.envelope, canonical).reduce((sum, item) => sum + item.rows.length, 0)
-    && (proof.nextValue === null || (ranked.length >= (request.rank.limit || 1) && nextValue != null && boundary != null
-      && typeof nextValue === typeof boundary && (nextValue < boundary ? -1 : nextValue > boundary ? 1 : 0) * direction > 0));
-  const verified = complete || (sorted && (Boolean(ranked[order.length]) || cutoff));
-  return { order, sources: chain, verified, empty: rows.length > 0 && ranked.length === 0,
-    next: !verified && sorted ? domain.next : null };
+  if (!limit) return null;
+  const boundary = ranked[limit - 1].value;
+  const order = ranked.filter((item, position) => position < limit || item.value === boundary).map((item) => item.index);
+  return { rows, ranked, boundary, order, direction, rankValue };
 }
 
-/** Eski çağıranlar da aynı küresel sıralama planını kullanır. */
+/** Sıralama isteğinin bu kanıtta beklenen satır indisleri; seçim yine `verifyRequestedFacts` ile doğrulanır. */
 export function rankedRowIndexes(request, tool, envelope, canonical, concrete = canonical) {
-  const domain = rankDomain(request, [{ tool, envelope, firstPage: true }], canonical);
-  return domain ? domain.order.filter((item) => item.collection === `data.${concrete}`).map((item) => item.index) : null;
+  return rankPlan(request, { tool, envelope }, { canonical, collection: `data.${concrete}` })?.order || null;
+}
+
+/**
+ * Sıralama yanıtı: tek okumanın tek somut koleksiyonunda ölçüye göre baştaki
+ * `limit` satır ve onlarla eşit değerdeki satırlar. Tam koleksiyonu sunucu
+ * değerlerden sıralar; kesilmiş koleksiyonda yalnızca aracın aynı ölçüyle
+ * sıraladığı ilk sayfa ve sınır kanıtı kabul edilir. Sayfalar birleştirilmez.
+ */
+function rankedIndexes(request, source, collection, selected) {
+  const plan = rankPlan(request, source, collection);
+  if (!plan) return null;
+  const { rows, ranked, boundary, order, direction, rankValue } = plan;
+  const expected = new Set(order);
+  if (expected.size !== selected.size || [...expected].some((index) => !selected.has(index))) return null;
+  if (collectionComplete(source, collection.canonical)) return order;
+  const sorted = source.sortedBy?.metric === request.rank.metric && source.sortedBy?.order === request.rank.order && source.firstPage === true;
+  if (!sorted) return null;
+  if (ranked[expected.size]) return order;
+  const proof = source.envelope.rankingBoundary;
+  const nextValue = rankValue(proof?.nextValue);
+  return proof?.collection === collection.canonical && proof.metric === request.rank.metric
+    && proof.order === request.rank.order && proof.returnedCount === rows.length
+    && (proof.nextValue === null || (ranked.length >= (request.rank.limit || 1) && nextValue != null && typeof nextValue === typeof boundary
+      && (nextValue < boundary ? -1 : nextValue > boundary ? 1 : 0) * direction > 0)) ? order : null;
 }
 
 export function entityKey(type, id) {
@@ -384,56 +335,48 @@ function propertyStates(source, metric) {
   return states.map((state) => ({ ...state, field: state.field.replace(/^\./, '') }));
 }
 
+/** Görev sayımlarının araçlar arası tek açık eşdeğerlik sınıfı; başka sayımlar araca bağlıdır. */
+const TASK_COUNT_TOOLS = new Set(['rota_task_search', 'rota_task_analytics', 'rota_project_detail', 'rota_task_detail', 'rota_workload_summary']);
+
 /**
- * Seçilen olgunun yerine aynı turda daha yeni bir kanıt geçti mi? Sınıf
- * (evidencePopulation.js): satır kümesi yalnızca aynı nüfusun daha yeni TAM
- * okumasıyla, toplam aynı nüfusun herhangi bir daha yeni okumasıyla, varlığın
- * özelliği aynı varlığın aynı özelliğiyle eskir.
+ * Tek tazelik kuralı: olgunun niceliği turda daha sonra yeniden okunduysa eski olgu
+ * kullanılamaz. Olgu yanıttaki rolüyle değerlendirilir: liste/sıralama satırı aynı
+ * aracın aynı satır nüfusunun daha sonraki HER okumasıyla (tam olmasa da); varlığın
+ * kendi özelliği aynı varlığın aynı anlamsal özelliğini (açık boşluğu dâhil) taşıyan
+ * okumayla; toplam aynı nüfusun aynı taşıyıcısıyla eskir. Okumalar karşılaştırılmaz.
  */
-export function factSuperseded(evidence, source, fact, { property = null, rows = false } = {}) {
+export function factSuperseded(evidence, source, fact, { rows = false } = {}) {
   const metric = fact.semantic?.metric;
   const row = factRow(source.tool, fact.field);
   const type = metricEntityType(metric);
-  const owner = fact.semantic?.property && propertyOwner(source, fact.field, type);
-  property ||= owner ? [type, owner] : null;
+  const owner = fact.semantic?.property && !(rows && row?.kind === 'row') ? propertyOwner(source, fact.field, type) : null;
+  const carrier = semanticCarrierKey(source.tool, fact.field);
   for (const newer of evidence.values()) {
     if (newer === source || !readLater(newer, source)) continue;
-    if (property) {
-      const [type, owner] = property;
-      const sameProperty = propertyStates(newer, metric).some((item) => item.key === semanticCarrierKey(source.tool, fact.field)
-        && propertyOwner(newer, item.field, type) === owner);
-      if (sameProperty) return true;
-      if (rows && row?.kind === 'row' && newer.tool === source.tool && rowKey(newer, row.canonical) === rowKey(source, row.canonical)
-        && collectionComplete(newer, row.canonical)) return true;
+    if (owner) {
+      if (propertyStates(newer, metric).some((item) => item.key === carrier && propertyOwner(newer, item.field, type) === owner)) return true;
       continue;
     }
     if (newer.unsupported?.length) continue;
     if (row?.kind === 'row') {
-      if (newer.tool === source.tool && rowKey(newer, row.canonical) === rowKey(source, row.canonical)) {
-        if (collectionComplete(newer, row.canonical)) return true;
-        const identity = rowIdentity(valueAt(source.envelope, row.path), source, row.canonical, row.index);
-        if (identity && concreteCollections(newer.envelope, row.canonical).some(({ rows }) => rows.some((item, index) => rowIdentity(item, newer, row.canonical, index) === identity
-          && rowMetricFields(newer.tool, row.canonical, metric).some((field) => semanticCarrierKey(newer.tool, `data.${row.canonical}.*.${field}`)
-            === semanticCarrierKey(source.tool, fact.field) && rowFieldState(newer.tool, row.canonical, item, field) !== 'absent')))) return true;
-      }
+      if (newer.tool === source.tool && rowKey(newer, row.canonical) === rowKey(source, row.canonical)) return true;
       continue;
     }
     if (scalarKey(newer, metric) !== scalarKey(source, metric)) continue;
-    const key = scalarCarrierKey(source.tool, fact.field);
-    const sameCarrier = key && (newer.facts || []).some((item) => item.semantic?.metric === metric
-      && scalarCarrierKey(newer.tool, item.field) === key);
-    if (sameCarrier) return true;
+    const taskCounts = !row && newer.tool !== source.tool && metric?.startsWith('tasks.') && TASK_COUNT_TOOLS.has(source.tool) && TASK_COUNT_TOOLS.has(newer.tool);
+    if ((newer.facts || []).some((item) => item.semantic?.metric === metric && (taskCounts ? !factRow(newer.tool, item.field)
+      : newer.tool === source.tool && equivalentCarriers(source.tool, [fact.field, item.field])))) return true;
   }
   return false;
 }
 
-/** Boş nüfus kanıtı bir sayımdır: aynı aracın aynı nüfusu daha yeni bir okumada yeniden okunduysa eskimiştir. */
-function emptyProofSuperseded(evidence, source, canonical = source.collection) {
+/** Boş nüfus kanıtı satır nüfusu ve onun sayımıdır; ikisine de aynı tazelik kuralı uygulanır. */
+function emptyProofSuperseded(evidence, source, canonical) {
   const metric = collectionTotalMetric(source.tool, canonical);
-  const key = scalarKey(source, metric);
-  const carriers = collectionTotalPaths(source.tool, canonical).map((path) => scalarCarrierKey(source.tool, path)).filter(Boolean);
-  return [...evidence.values()].some((newer) => newer !== source && readLater(newer, source) && scalarKey(newer, metric) === key
-    && (newer.tool === source.tool || (newer.facts || []).some((fact) => carriers.includes(scalarCarrierKey(newer.tool, fact.field)))));
+  return [...evidence.values()].some((newer) => newer !== source && readLater(newer, source) && !newer.unsupported?.length
+    && newer.tool === source.tool && rowKey(newer, canonical) === rowKey(source, canonical))
+    || Boolean(metric) && collectionTotalPaths(source.tool, canonical)
+      .some((path) => factSuperseded(evidence, source, { field: path, semantic: { metric } }));
 }
 
 const rowDimensions = (source) => source.rowDimensionsMatch ?? source.dimensionsMatch;
@@ -453,11 +396,8 @@ function emptyRowSources(request, facts, evidence) {
     const active = (sourceCollections(source) || rowCollections(source.tool)).filter((collection) => presentCollection(source.envelope, collection));
     const rowMetrics = request.metrics.filter((metric) => active.some((collection) => rowMetricFields(source.tool, collection, metric).length > 0));
     const compatible = active.filter((collection) => rowMetrics.length && rowMetrics.every((metric) => rowMetricFields(source.tool, collection, metric).length > 0));
-    const rankEmpty = request.operation === 'rank' && compatible.length === 1
-      && rankDomain(request, [source, ...evidence.values()], compatible[0]);
-    if (!compatible.length || (!rankEmpty?.verified || !rankEmpty.empty) && compatible.some((collection) => !provesEmptyCollection(source, collection))) return [];
-    return [{ source, metrics: rowMetrics, collections: compatible, rankEmpty: rankEmpty?.empty === true,
-      stale: compatible.some((canonical) => emptyProofSuperseded(evidence, source, canonical)) }];
+    if (!compatible.length || compatible.some((collection) => !provesEmptyCollection(source, collection))) return [];
+    return [{ source, metrics: rowMetrics, collections: compatible, stale: compatible.some((canonical) => emptyProofSuperseded(evidence, source, canonical)) }];
   });
 }
 
@@ -583,8 +523,7 @@ export function verifyRequestedFacts(request, facts, evidence) {
       represented.add(semantic.metric);
       const propertyType = semantic.property && (request.operation === 'value' || ownProperty) ? metricEntityType(semantic.metric) : null;
       const propertyId = rowObject?.[ENTITY_ID_FIELDS[propertyType]] ?? rowObject?.[propertyType]?.[ENTITY_ID_FIELDS[propertyType]];
-      const owner = ownProperty ? propertyOwner(source, fact.field, propertyType) : null;
-      if (factSuperseded(evidence, source, fact, { property: owner ? [propertyType, owner] : null, rows })) return fail('STALE_EVIDENCE');
+      if (factSuperseded(evidence, source, fact, { rows })) return fail('STALE_EVIDENCE');
       if (rows && !ownProperty && !row) scalars.push({ evidenceId, source, path });
       // Varlık yalnızca ölçü taşıyan olguyla karşılanır; ad ya da etiket bağlamı yetmez.
       const reference = ({ type, id }) => {
@@ -632,8 +571,6 @@ export function verifyRequestedFacts(request, facts, evidence) {
     if (!metricEntities.has(metric)) metricEntities.set(metric, new Set());
     metricEntities.get(metric).add(owner);
   }
-  const rank = request.operation === 'rank' && rowGroups.length
-    ? rankDomain(request, [{ ...rowGroups[0].source, id: rowGroups[0].evidenceId }, ...[...evidence].map(([id, source]) => ({ ...source, id }))], rowGroups[0].row.canonical) : null;
   const empty = rows && !rowGroups.length ? emptyRowSources(request, facts, evidence) : [];
   if (empty.some((item) => item.stale)) return fail('STALE_EVIDENCE');
   const vacuous = new Set(empty.flatMap(({ metrics: covered }) => covered));
@@ -677,10 +614,9 @@ export function verifyRequestedFacts(request, facts, evidence) {
       }
     }
     for (const { evidenceId, source, row } of populations.values()) {
-      const domain = collectionDomain([source, ...evidence.values()], row.canonical);
-      if (!domain?.complete || !domain.sources.includes(source)) return fail('LIST_INCOMPLETE');
-      for (const member of domain.sources) for (const concrete of concreteCollections(member.envelope, row.canonical)) {
-        const selected = collections.get(`${member.id}|${concrete.collection}`);
+      if (!collectionComplete(source, row.canonical)) return fail('LIST_INCOMPLETE');
+      for (const concrete of concreteCollections(source.envelope, row.canonical)) {
+        const selected = collections.get(`${evidenceId}|${concrete.collection}`);
         if ((selected?.indexes.size || 0) !== concrete.rows.length) return fail('LIST_INCOMPLETE');
       }
     }
@@ -702,22 +638,19 @@ export function verifyRequestedFacts(request, facts, evidence) {
         ? rowGroups.some((entry) => entry.evidenceId === evidenceId && (collectionTotalPaths(source.tool, entry.row.canonical).includes(path)
           || parentProperty(source.tool, entry.row.canonical, path)))
         : empty.some((item) => item.source === source);
-      if (!counted && !(rank?.verified && rank.sources.some((item) => item.id === evidenceId)
-        && collectionTotalPaths(source.tool, rowGroups[0].row.canonical).includes(path))) return fail('POPULATION_MISMATCH');
+      if (!counted) return fail('POPULATION_MISMATCH');
     }
   }
   if (request.operation === 'list' && !rowGroups.length && !empty.length) return fail('LIST_ROWS_REQUIRED');
   if (request.operation === 'rank') {
     // Satırsız kanıt yalnızca nüfus boşken sıralamanın yanıtıdır.
-    if (!rowGroups.length) return empty.length ? { ok: true, issues: [],
-      empty: [...new Set(empty.filter((item) => !item.rankEmpty).map((item) => item.source.id))],
-      emptyRank: [...new Set(empty.filter((item) => item.rankEmpty).map((item) => item.source.id))] } : fail('RANK_MISMATCH');
-    if (!rank?.verified || rowGroups.some((entry) => entry.source.tool !== rowGroups[0].source.tool
-      || entry.row.canonical !== rowGroups[0].row.canonical || rowKey(entry.source, entry.row.canonical) !== rowKey(rowGroups[0].source, entry.row.canonical))) return fail('RANK_MISMATCH');
-    const selected = new Set(rowGroups.flatMap((entry) => [...entry.indexes].map((index) => `${entry.evidenceId}|${entry.row.collection}|${index}`)));
-    const expected = rank.order.map((item) => `${item.source.id}|${item.collection}|${item.index}`);
-    if (selected.size !== expected.length || expected.some((key) => !selected.has(key))) return fail('RANK_MISMATCH');
-    return { ok: true, issues: [], rankOrder: rank.order.map((item) => ({ evidenceId: item.source.id, path: `${item.collection}.${item.index}` })) };
+    if (!rowGroups.length) return empty.length ? { ok: true, issues: [], empty: [...new Set(empty.map((item) => item.source.id))] } : fail('RANK_MISMATCH');
+    // Sıralama tek okumanın tek somut koleksiyonudur; sayfa ve iç içe kümeler birleştirilmez.
+    if (rowGroups.length !== 1) return fail('RANK_MISMATCH');
+    const [entry] = rowGroups;
+    const indexes = rankedIndexes(request, entry.source, entry.row, entry.indexes);
+    if (!indexes) return fail('RANK_MISMATCH');
+    return { ok: true, issues: [], rankOrder: { evidenceId: entry.evidenceId, collection: entry.row.collection, indexes } };
   }
   // Boş nüfusun yanıtı: anlatı "eşleşen kayıt yok" der (yalnızca tamlık bayrağı değil).
   return empty.length ? { ok: true, issues: [], empty: [...new Set(empty.map((item) => item.source.id))] } : { ok: true, issues: [] };

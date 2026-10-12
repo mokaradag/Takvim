@@ -321,14 +321,14 @@ test('freshness follows the carrier class and the canonical population, never th
     { id: `R${id}`, round, collection: 'tasks', snapshotDimensions: { sort: 'overdue_days_desc', textFields: [] }, envelope: { totalCount: 1 }, ...extra });
   const list = { operation: 'list', metrics: ['task.title'] };
   const table = [
-    // Daha yeni bir sayfa (imleç) tam satır kümesini eskitmez (#2, #19).
-    { name: 'later new member contradicts completeness', sources: [rows(1, 1), rows(2, 2, { firstPage: false, envelope: { totalCount: 5, complete: false } })], refs: ['R1:data.tasks.*.title'], expected: 'LIST_INCOMPLETE' },
+    // Aynı nüfusun daha sonraki her okuması (kısmi sayfa da) eski satırları eskitir; okumalar karşılaştırılmaz.
+    { name: 'later partial read of the same population', sources: [rows(1, 1), rows(2, 2, { firstPage: false, envelope: { totalCount: 5, complete: false } })], refs: ['R1:data.tasks.*.title'], expected: 'STALE_EVIDENCE' },
     // Aynı nüfusun daha yeni tam okuması eskisinin yerine geçer.
     { name: 'later complete snapshot', sources: [rows(1, 1), rows(2, 2)], refs: ['R1:data.tasks.*.title'], expected: 'STALE_EVIDENCE' },
     // Farklı sırayla okunan tam liste başka bir satır nüfusudur (#22).
     { name: 'later complete with another sort', sources: [rows(1, 1), rows(2, 2, { snapshotDimensions: { sort: 'updated_desc', textFields: [] } })], refs: ['R1:data.tasks.*.title'], expected: null },
-    // Tur numarası anlık görüntü değildir; ayrı okumalar sırayla yenilenir.
-    { name: 'same round serialized reads', sources: [rows(1, 1), rows(2, 1)], refs: ['R1:data.tasks.*.title'], expected: 'STALE_EVIDENCE' }
+    // Aynı turdaki okumalar aynı andır; biri diğerinin yerine geçmez.
+    { name: 'same round reads', sources: [rows(1, 1), rows(2, 1)], refs: ['R1:data.tasks.*.title'], expected: null }
   ];
   for (const { name, sources, refs, expected } of table) assert.equal(issue(verify(sources, list, refs)), expected, name);
   // Toplam her sayfada kesindir: daha yeni (kısmi de olsa) okuma eski toplamın yerine geçer.
@@ -338,6 +338,20 @@ test('freshness follows the carrier class and the canonical population, never th
   const empty = source('rota_task_search', { tasks: [] }, { collection: 'tasks', snapshotDimensions: { sort: 'overdue_days_desc', textFields: [] } });
   assert.equal(issue(verify([empty], list, ['R1:complete'])), null);
   assert.equal(issue(verify([empty, rows(2, 2, { firstPage: false, envelope: { totalCount: 5, complete: false } })], list, ['R1:complete'])), 'STALE_EVIDENCE');
+});
+
+test('count carriers are tool-scoped; only the declared task-count class crosses tools', () => {
+  // Takvim talepleri ile atama talepleri aynı ölçü kimliğini taşır ama farklı kayıtları sayar.
+  const schedule = source('rota_schedule_requests', { counts: { sent: 2 } }, { envelope: { totalCount: 4 } });
+  const assignment = source('rota_assignment_requests', { counts: { sent: 7 } }, { id: 'R2', envelope: { totalCount: 9 } });
+  for (const [metric, reference] of [['requests.total', 'R1:totalCount'], ['requests.sent', 'R1:data.counts.sent']]) {
+    assert.equal(issue(verify([schedule, assignment], { operation: 'value', metrics: [metric] }, [reference])), null, metric);
+  }
+  const reread = source('rota_schedule_requests', { counts: { sent: 3 } }, { id: 'R2', envelope: { totalCount: 5 } });
+  assert.equal(issue(verify([schedule, reread], { operation: 'value', metrics: ['requests.total'] }, ['R1:totalCount'])), 'STALE_EVIDENCE');
+  const analytics = source('rota_task_analytics', { totals: { total: 2 } });
+  const search = source('rota_task_search', { tasks: [] }, { id: 'R2', envelope: { totalCount: 3 } });
+  assert.equal(issue(verify([analytics, search], { operation: 'value', metrics: ['tasks.total'] }, ['R1:data.totals.total'])), 'STALE_EVIDENCE');
 });
 
 test('a declared layout binds the answer; a selection may omit it but cannot contradict it (#1)', () => {
@@ -365,6 +379,7 @@ test('server selection honors bindings and the indexed arguments; Deep readiness
   assert.deepEqual(JSON.parse(candidate).facts, ['R1:data.visibleTasks.open', 'R2:data.visibleTasks.total'], 'her ölçü yalnızca bağlı varlığından seçilir');
   assert.equal(issue(verifyRequested(ledger, JSON.parse(candidate).facts, request)), null);
   // Sıra uyuşmayan liste kanıtı doğrulanamaz: Derin düşünme turu harcanmaz.
+  stack.db.tasks.forEach((task, index) => { task.UpdatedAt = new Date(Date.UTC(2026, 8, 1 + index)); });
   const sorted = await callRotaTool(stack, AYSE, 'rota_task_search', { sort: 'updated_desc' });
   const list = parsedRequest({ operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks', sort: 'target_finish_asc' } });
   assert.equal(requestEvidenceReady(list, sorted.ledger.requestEntries(), REQUEST_TODAY), false);
@@ -489,9 +504,11 @@ test('reads derived from the declaration: name resolution first, then the popula
   };
   const overdueMine = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks', sort: 'overdue_days_desc' }, filters: { deadline: 'overdue', assignee: 'me' } };
   // Çağrısız istek: nüfus okuması bildirimden kurulur.
-  assert.deepEqual(derive(overdueMine, []), [['rota_task_search', { deadline: 'overdue', assignee: 'me', sort: 'overdue_days_desc' }]]);
+  // Liste nüfusun bütün satırlarıdır: aracın en büyük sayfasıyla bir kez okunur.
+  assert.deepEqual(derive(overdueMine, []), [['rota_task_search', { deadline: 'overdue', assignee: 'me', sort: 'overdue_days_desc', limit: 50 }]]);
   // Aynı nüfus farklı yazımla okunduysa yinelenmez; küçük sayfa eksik okumadır ve bir kez tam okunur.
-  assert.deepEqual(derive(overdueMine, [], [['rota_task_search', { assignee: 'me', deadline: 'overdue' }]]), []);
+  assert.deepEqual(derive(overdueMine, [], [['rota_task_search', { assignee: 'me', deadline: 'overdue', limit: 50 }]]), []);
+  assert.equal(derive(overdueMine, [], [['rota_task_search', { assignee: 'me', deadline: 'overdue' }]]).length, 1);
   assert.equal(derive(overdueMine, [], [['rota_task_search', { assignee: 'me', deadline: 'overdue', limit: 1 }]]).length, 1);
   // Adla bildirilen varlık önce çözülür; çözülünce nüfus okuması bağlı kimlikle yapılır.
   const inProject = { operation: 'value', metrics: ['tasks.inProgress'], population: { tool: 'rota_task_analytics' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] };
@@ -510,6 +527,37 @@ test('reads derived from the declaration: name resolution first, then the popula
   // Seçiciyle çelişen koşul (kişi seçicisi ile "assignee: me") okuma kurmaz ve turu hataya düşürmez.
   assert.deepEqual(derive({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' },
     entities: [{ type: 'person', text: 'Zeynep Kaya' }], filters: { assignee: 'me' } }, ['910003']), []);
+});
+
+test('derived reads stay inside the declared population: shared comparison context is never dropped and names resolve inside the one declared project', async () => {
+  const { derivedReads } = await import('../src/server/ai/tools/requestPopulation.js');
+  const derive = (raw, bound) => {
+    const request = parsedRequest(raw);
+    return derivedReads(request, request.entities.map((entity, index) => ({ ...entity, bound: bound[index] ?? entity.id ?? null })), { today: REQUEST_TODAY })
+      .map(({ name, args }) => [name, args]);
+  };
+  // Karşılaştırmanın her öznesi kendi okumasıdır; hiçbir ölçüye bağlanmayan proje ortak bağlamdır ve düşürülemez.
+  const people = [{ type: 'person', id: String(AYSE) }, { type: 'person', id: String(AYSE + 1) }];
+  const compare = { operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_task_analytics' }, entities: people,
+    bindings: [{ metric: 'tasks.open', entity: 0 }, { metric: 'tasks.open', entity: 1 }] };
+  assert.deepEqual(derive(compare, []), [['rota_task_analytics', { personSicil: AYSE }], ['rota_task_analytics', { personSicil: AYSE + 1 }]]);
+  assert.deepEqual(derive({ ...compare, entities: [...people, { type: 'project', id: PROJECTS.FULL }] }, []), [],
+    'proje seçicisiz kişi okuması bildirilen nüfustan geniştir');
+  // Tek bildirilen projenin görev, WBS ve baz plan adı o projede, proje bağlandıktan sonra çözülür.
+  const task = { operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_search' },
+    entities: [{ type: 'project', text: 'Radar Modernizasyonu' }, { type: 'task', text: 'Radar test planı' }] };
+  assert.deepEqual(derive(task, []), [['rota_project_search', { text: 'Radar Modernizasyonu' }]]);
+  assert.deepEqual(derive(task, [PROJECTS.FULL]), [['rota_task_search', { text: 'Radar test planı', projectId: PROJECTS.FULL }]]);
+  const separate = { ...task, metrics: ['task.status', 'tasks.open'], bindings: [{ metric: 'tasks.open', entity: 0 }, { metric: 'task.status', entity: 1 }] };
+  assert.deepEqual(derive(separate, [PROJECTS.FULL]), [['rota_task_search', { text: 'Radar test planı' }]], 'karşılaştırmada görev projeye bağlı değildir');
+  const wbs = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' },
+    entities: [{ type: 'project', text: 'Radar Modernizasyonu' }, { type: 'wbs', text: 'Tasarım' }] };
+  assert.deepEqual(derive(wbs, []), [['rota_project_search', { text: 'Radar Modernizasyonu' }]]);
+  assert.deepEqual(derive(wbs, [PROJECTS.FULL]), [['rota_wbs_inspect', { projectId: PROJECTS.FULL, depth: 4, limit: 60 }]]);
+  assert.deepEqual(derive({ ...wbs, entities: [{ type: 'wbs', text: 'Tasarım' }] }, []), [], 'proje olmadan WBS adı çözülmez');
+  const baseline = { operation: 'value', metrics: ['baseline.finishSlipped'], population: { tool: 'rota_baseline_compare' },
+    entities: [{ type: 'project', id: PROJECTS.FULL }, { type: 'baseline', text: 'İlk plan' }] };
+  assert.deepEqual(derive(baseline, []), [['rota_baseline_compare', { projectId: PROJECTS.FULL, limit: 25 }]]);
 });
 
 test('a depth-limited WBS listing is the complete population of that depth and its total counts that depth', async (t) => {
@@ -679,14 +727,12 @@ for (const field of ['assignees', 'targetFinish']) {
   });
 }
 
-test('a non-empty population with no rank value is distinct from empty population and absent counters', () => {
+test('a rank with no rank value fails closed; it is neither an empty population nor a top-N', () => {
   const raw = { operation: 'rank', metrics: ['task.title', 'task.targetFinish', 'tasks.total'], rank: { metric: 'task.targetFinish', order: 'asc', limit: 3 },
     population: { tool: 'rota_task_search', collection: 'tasks' } };
   const item = source('rota_task_search', { tasks: [{ title: 'Tarihsiz' }, { title: 'Yine tarihsiz', targetFinish: null }] }, { envelope: { totalCount: 2, returnedCount: 2 } });
-  const [answer] = agreement(raw, [item], true, ['R1:totalCount', 'R1:complete']);
-  assert.match(answer.normalized, /\*\*2\*\*/);
-  assert.match(answer.normalized, /Sıralama ölçüsünde değeri olan kayıt yok/);
-  assert.doesNotMatch(answer.normalized, /Eşleşen .*bulunmadı|Tarihsiz/);
+  agreement(raw, [item], false, ['R1:totalCount', 'R1:complete']);
+  assert.equal(issue(verify([item], raw, ['R1:totalCount', 'R1:data.tasks.*.title', 'R1:data.tasks.*.targetFinish'])), 'RANK_MISMATCH');
   agreement({ operation: 'rank', metrics: ['tasks.open'], rank: { metric: 'tasks.open', order: 'desc', limit: 1 },
     population: { tool: 'rota_workload_summary', collection: 'people' } }, [source('rota_workload_summary', { people: [{ name: 'Sayaç yok' }] })], false);
 });
@@ -703,52 +749,32 @@ test('collection completeness is independent of historical dates and unrelated b
   agreement({ operation: 'list', metrics: ['task.varianceDays'], population: { tool: baseline.tool, collection: 'mostSlipped' } }, [baseline], false);
 });
 
-test('nested ranks cover one global recurrence population and retain deterministic boundary ties', () => {
-  const raw = { operation: 'rank', metrics: ['recurrence.occurrenceDate', 'task.status'], rank: { metric: 'recurrence.occurrenceDate', order: 'asc', limit: 1 },
-    population: { tool: 'rota_recurrence_inspect', collection: 'series.*.next' } };
-  const item = source('rota_recurrence_inspect', { series: [
-    { nextTruncated: false, next: [{ occurrenceDate: '2026-10-09', status: 'todo' }] },
-    { nextTruncated: false, next: [{ occurrenceDate: '2026-10-01', status: 'todo' }, { occurrenceDate: '2026-10-01', status: 'done' }] }
-  ] }, { envelope: { totalCount: 2, returnedCount: 2 } });
-  const [answer] = agreement(raw, [item], true);
-  assert.equal(answer.facts.filter((fact) => fact.fact.semantic.metric === 'recurrence.occurrenceDate').length, 2);
-  assert.doesNotMatch(answer.normalized, /9 Ekim/);
-  assert.equal(verify([item], raw, ['R1:data.series.1.next.0.occurrenceDate', 'R1:data.series.1.next.0.status']).ok, false, 'sınırdaki eşit satır düşmez');
-  item.envelope.data.series[0].nextTruncated = true;
-  agreement(raw, [item], false);
-});
-
-test('nested rank rendering preserves global order when concrete series interleave; a list keeps collection order', () => {
-  const raw = { operation: 'rank', metrics: ['recurrence.occurrenceDate'], rank: { metric: 'recurrence.occurrenceDate', order: 'asc', limit: 3 },
+test('a rank across nested child collections is not stitched and fails closed; a nested list keeps collection order', () => {
+  const raw = { operation: 'rank', metrics: ['recurrence.occurrenceDate'], rank: { metric: 'recurrence.occurrenceDate', order: 'asc', limit: 1 },
     population: { tool: 'rota_recurrence_inspect', collection: 'series.*.next' } };
   const item = source('rota_recurrence_inspect', { series: [
     { nextTruncated: false, next: [{ occurrenceDate: '2026-10-01' }, { occurrenceDate: '2026-10-03' }] },
     { nextTruncated: false, next: [{ occurrenceDate: '2026-10-02' }] }
   ] }, { envelope: { totalCount: 2, returnedCount: 2 } });
-  const [rank] = agreement(raw, [item], true);
-  assert.ok(rank.normalized.indexOf('1 Ekim') < rank.normalized.indexOf('2 Ekim'));
-  assert.ok(rank.normalized.indexOf('2 Ekim') < rank.normalized.indexOf('3 Ekim'));
+  agreement(raw, [item], false);
+  assert.equal(issue(verify([item], raw, ['R1:data.series.0.next.0.occurrenceDate'])), 'RANK_MISMATCH');
   const { rank: _rank, ...list } = raw;
   const [all] = agreement({ ...list, operation: 'list' }, [item], true);
   assert.deepEqual(all.facts.filter((item) => item.fact.semantic.metric === 'recurrence.occurrenceDate').map((item) => item.fact.value), ['2026-10-01', '2026-10-03', '2026-10-02']);
 });
 
-test('boundary ties larger than the maximum page verify only through a continuous population cursor chain', () => {
+test('a boundary tie larger than one page never verifies, even beside its continuation page', () => {
   const raw = { operation: 'rank', metrics: ['task.title', 'task.overdueDays', 'tasks.total'], rank: { metric: 'task.overdueDays', order: 'desc', limit: 1 },
     population: { tool: 'rota_task_search', collection: 'tasks', sort: 'overdue_days_desc' } };
-  const snapshot = {};
   const rows = Array.from({ length: 70 }, (_, index) => ({ taskId: `t${index}`, title: `Eşit ${index}`, overdueDays: 7 }));
   const args = { sort: 'overdue_days_desc', limit: 20 };
-  const first = source('rota_task_search', { tasks: rows.slice(0, 20) }, { args, snapshot, envelope: { totalCount: 70, returnedCount: 20, complete: false, nextCursor: 'devam',
+  const first = source('rota_task_search', { tasks: rows.slice(0, 20) }, { args, envelope: { totalCount: 70, returnedCount: 20, complete: false, nextCursor: 'devam',
     rankingBoundary: { collection: 'tasks', metric: 'task.overdueDays', order: 'desc', returnedCount: 20, nextValue: 7 } } });
-  const last = source('rota_task_search', { tasks: rows.slice(20) }, { id: 'R2', snapshot, args: { ...args, cursor: 'devam', limit: 50 },
+  const last = source('rota_task_search', { tasks: rows.slice(20) }, { id: 'R2', args: { ...args, cursor: 'devam', limit: 50 },
     envelope: { totalCount: 70, returnedCount: 50, nextCursor: null } });
   agreement(raw, [first], false);
-  const [answer] = agreement(raw, [first, last], true);
-  assert.equal(answer.facts.filter((fact) => fact.fact.semantic.metric === 'task.overdueDays').length, 70);
-  assert.match(answer.normalized, /\*\*70\*\*/);
-  last.args.cursor = 'başka-anlık-görüntü';
   agreement(raw, [first, last], false);
+  assert.equal(verify([first, last], raw, ['R1:totalCount', 'R1:data.tasks.*.overdueDays', 'R2:data.tasks.*.overdueDays']).ok, false);
 });
 
 test('readiness preserves a complete rank beside a partial page in the same round', async (t) => {
@@ -931,14 +957,12 @@ test('partial rereads stale only the same stable row and semantic property, incl
   assert.equal(issue(verify([old, latest], request, ['R1:data.tasks.0.status'])), 'STALE_EVIDENCE', 'değişmeyen yetkili tekrar da eski kaydı yeniler');
 });
 
-test('only a real shared value snapshot makes same-round reads interchangeable', () => {
-  const snapshot = {};
-  const a = source('rota_task_analytics', { totals: { total: 2 } }, { round: 1, snapshot });
-  const b = source('rota_task_analytics', { totals: { total: 2 } }, { id: 'R2', round: 1, snapshot });
+test('same-round reads are simultaneous; only a later round supersedes, and reads are never compared', () => {
+  const a = source('rota_task_analytics', { totals: { total: 2 } }, { round: 1 });
+  const b = source('rota_task_analytics', { totals: { total: 3 } }, { id: 'R2', round: 1 });
   const request = { operation: 'value', metrics: ['tasks.total'] };
   assert.equal(verify([a, b], request, ['R1:data.totals.total']).ok, true);
-  b.snapshot = {};
-  b.envelope.data.totals.total = 3;
+  b.round = 2;
   assert.equal(issue(verify([a, b], request, ['R1:data.totals.total'])), 'STALE_EVIDENCE');
 });
 
@@ -962,15 +986,16 @@ test('semantic aliases share the owner while project code and recurrence descrip
   assert.equal(verify([old, series], recurring, ['R1:data.task.recurrence.rule']).ok, true, 'başka şablon aynı seçiciyle eski özelliği eskiltmez');
 });
 
-test('preflight rejects unsortable requests and requires bounded complete reads for capped populations', () => {
+test('preflight does not predict data size or order; a rank the tool cannot sort verifies only from a complete collection', () => {
   const rank = { operation: 'rank', metrics: ['task.progressPercent'], rank: { metric: 'task.progressPercent', order: 'desc', limit: 1 },
     population: { tool: 'rota_task_search', collection: 'tasks' } };
-  assert.ok(complete(rank, []).problems.includes('$.rank:ordering'));
-  const dated = { ...rank, metrics: ['task.targetFinish'], rank: { metric: 'task.targetFinish', order: 'asc', limit: 1 } };
-  assert.deepEqual(complete(dated, []).problems, []);
-  assert.ok(complete({ ...dated, population: { ...dated.population, sort: 'updated_desc' } }, []).problems.includes('$.rank:ordering'));
+  assert.deepEqual(complete(rank, []).problems, []);
+  const rows = [{ taskId: 't1', progressPercent: 10 }, { taskId: 't2', progressPercent: 90 }];
+  const whole = source('rota_task_search', { tasks: rows }, { envelope: { totalCount: 2, returnedCount: 2 } });
+  assert.equal(issue(verify([whole], rank, ['R1:data.tasks.1.progressPercent'])), null);
+  const page = source('rota_task_search', { tasks: rows }, { envelope: { totalCount: 9, returnedCount: 2, complete: false, nextCursor: 'devam' } });
+  assert.equal(issue(verify([page], rank, ['R1:data.tasks.1.progressPercent'])), 'RANK_MISMATCH');
   assert.deepEqual(complete({ operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'assignee' } }, []).problems, []);
-  assert.deepEqual(complete({ operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'priority' } }, []).problems, []);
   assert.deepEqual(complete({ operation: 'list', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary', collection: 'people' } }, []).problems, []);
 });
 
@@ -994,20 +1019,15 @@ test('own project properties accompany filtered lists and ranks without inheriti
   }
 });
 
-test('list and rank chains require a shared value snapshot, stable row IDs and every declared sibling', () => {
-  const snapshot = {};
+test('list pages are never stitched; every declared sibling and every nested child collection is required', () => {
   const rows = [{ taskId: TASKS.OVERDUE, title: 'A', targetFinish: '2026-10-01' }, { taskId: TASKS.DUE_SOON, title: 'B', targetFinish: '2026-10-02' }];
-  const first = source('rota_task_search', { tasks: rows.slice(0, 1) }, { snapshot, args: { limit: 1 },
+  const first = source('rota_task_search', { tasks: rows.slice(0, 1) }, { args: { limit: 1 },
     envelope: { totalCount: 2, returnedCount: 1, complete: false, truncated: true, nextCursor: 'next' } });
-  const last = source('rota_task_search', { tasks: rows.slice(1) }, { id: 'R2', snapshot, args: { limit: 1, cursor: 'next' },
+  const last = source('rota_task_search', { tasks: rows.slice(1) }, { id: 'R2', args: { limit: 1, cursor: 'next' },
     envelope: { totalCount: 2, returnedCount: 1, nextCursor: null } });
   const raw = { operation: 'list', metrics: ['task.title', 'task.targetFinish'], population: { tool: first.tool, collection: 'tasks' } };
-  agreement(raw, [first, last], true);
-  last.snapshot = {};
   agreement(raw, [first, last], false);
-  last.snapshot = snapshot;
-  last.envelope.data.tasks[0].taskId = TASKS.OVERDUE;
-  agreement(raw, [first, last], false);
+  assert.equal(verify([first, last], raw, ['R1:data.tasks.*.title', 'R1:data.tasks.*.targetFinish', 'R2:data.tasks.*.title', 'R2:data.tasks.*.targetFinish']).ok, false);
   const missing = source('rota_dependency_inspect', { predecessors: [{ taskId: TASKS.OVERDUE, title: 'A', type: 'FS' }] },
     { args: { taskId: TASKS.DUE_SOON }, envelope: { totalCount: 1, returnedCount: 1 } });
   const siblings = { operation: 'list', metrics: ['task.title', 'dependency.type'], entities: [{ type: 'task', id: TASKS.DUE_SOON }], population: { tool: missing.tool } };
@@ -1028,7 +1048,7 @@ test('all-empty meaningful alternatives require field bindings before SQL and re
   assert.ok(complete(raw, [[item.tool, item.args]]).problems.includes('$.fields:required'));
   agreement(raw, [item], false);
   const bound = { ...raw, fields: [{ metric: 'person.organization', tool: item.tool, path: 'data.people.*.organization.department' }] };
-  assert.ok(complete(bound, [[item.tool, item.args]]).problems.includes('$.population.collection:exhaustive-unsupported'));
+  assert.deepEqual(complete(bound, [[item.tool, item.args]]).problems, []);
   const [answer] = agreement(bound, [item], true);
   assert.match(answer.normalized, /Müdürlük.*Belirtilmemiş/);
   assert.doesNotMatch(answer.normalized, /Direktörlük|Birim/);
@@ -1061,17 +1081,12 @@ test('canonical execution identity uses the frozen turn date across Türkiye mid
   const request = parsedRequest({ operation: 'rank', metrics: ['task.targetFinish'], population: { tool: 'rota_task_search', collection: 'tasks' },
     rank: { metric: 'task.targetFinish', order: 'asc', limit: 1 } });
   const trimmed = source('rota_task_search', { tasks: [], sizeNote: 'kısaltıldı' }, { envelope: { returnedCount: 0, totalCount: 50, complete: false, truncated: true } });
-  const [indexed] = requestEvidence(request, entriesOf([trimmed]), options.today).values();
-  const { rankDomain } = await import('../src/domain/ai/requestContract.js');
-  const recovery = rankDomain(request, [indexed], 'tasks').next;
-  assert.deepEqual(recovery, { limit: 10 });
-  assert.deepEqual(parseToolArguments(getRotaTool('rota_task_search').parameters, JSON.stringify(recovery)), recovery);
-  indexed.effectiveLimit = 1;
-  assert.equal(rankDomain(request, [indexed], 'tasks').next, null, 'en küçük sayfa yeniden türetilmez');
+  // Boyutla kısaltılmış sayfa sıralama kanıtı değildir; daha küçük sayfa türetilmez, istek kapalı kalır.
+  assert.deepEqual(requestSelections(request, entriesOf([trimmed]), null, options.today), []);
   assert.notEqual(readKey('rota_task_search', args, '2026-09-30'), before);
 });
 
-test('empty synthesis honors metric/entity bindings and global dependency ranks retain each row role', async () => {
+test('empty synthesis honors metric/entity bindings; a rank across sibling collections is never merged', async () => {
   const item = source('rota_task_search', { tasks: [{ taskId: TASKS.OVERDUE, title: 'A', targetFinish: '2026-10-01', assignees: [] },
     { taskId: TASKS.DUE_SOON, title: 'B', targetFinish: '2026-10-02', assignees: [] }] }, { envelope: { totalCount: 2, returnedCount: 2 } });
   const request = { operation: 'list', metrics: ['task.targetFinish', 'task.assignees'], entities: [{ type: 'task', bound: TASKS.OVERDUE }, { type: 'task', bound: TASKS.DUE_SOON }],
@@ -1089,12 +1104,8 @@ test('empty synthesis honors metric/entity bindings and global dependency ranks 
   assert.doesNotMatch(withDetail.normalized, /Belirtilmemiş/);
   const links = source('rota_dependency_inspect', { predecessors: [{ taskId: TASKS.OVERDUE, title: 'Önce', targetFinish: '2026-10-01' }],
     successors: [{ taskId: TASKS.DUE_SOON, title: 'Sonra', targetFinish: '2026-10-02' }] }, { envelope: { totalCount: 2, returnedCount: 2 } });
-  const { renderVerifiedNarrative } = await import('../src/domain/ai/evidenceNarrative.js');
-  const normalized = renderVerifiedNarrative(links.facts.filter((fact) => ['task.title', 'task.targetFinish'].includes(fact.semantic.metric))
-    .map((fact) => ({ evidenceId: links.id, fact })), { operation: 'rank', locale: 'tr', layout: 'list' });
-  assert.match(normalized, /Öncül.*Önce/);
-  assert.match(normalized, /Ardıl.*Sonra/);
-  assert.equal((normalized.match(/【R1】/g) || []).length, 2);
+  const rank = { operation: 'rank', metrics: ['task.targetFinish'], rank: { metric: 'task.targetFinish', order: 'asc', limit: 1 }, population: { tool: links.tool } };
+  assert.equal(issue(verify([links], rank, ['R1:data.predecessors.0.targetFinish', 'R1:data.successors.0.targetFinish'])), 'RANK_MISMATCH');
 });
 
 test('semantic scalar freshness covers every registered root count carrier, while grouping stays distinct', () => {
@@ -1120,14 +1131,14 @@ test('old empty lists expire across semantic count tools, with another populatio
   assert.equal(verify([old, newer], request, ['R1:complete']).ok, true);
 });
 
-test('membership contradictions stale completeness without staling untouched row values', () => {
+test('any later read of the same row population stales the older rows; another row order is another population', () => {
   const older = source('rota_task_search', { tasks: [{ taskId: 'a', title: 'A' }, { taskId: 'b', title: 'B' }] }, { envelope: { totalCount: 2 } });
   const later = source('rota_task_search', { tasks: [{ taskId: 'c', title: 'C' }] }, { id: 'R2', envelope: { totalCount: 3, complete: false } });
   const evidence = new Map([['R1', older], ['R2', later]]);
-  assert.equal(claimableRequest.factSuperseded(evidence, older, older.facts.find((fact) => fact.field === 'data.tasks.0.title'), { rows: true }), false);
-  assert.equal(claimableRequest.collectionDomain([older, later], 'tasks').complete, false);
+  const fact = older.facts.find((item) => item.field === 'data.tasks.0.title');
+  assert.equal(claimableRequest.factSuperseded(evidence, older, fact, { rows: true }), true);
   later.snapshotDimensions = { sort: 'updated_desc' };
-  assert.equal(claimableRequest.collectionDomain([older, later], 'tasks').complete, true);
+  assert.equal(claimableRequest.factSuperseded(evidence, older, fact, { rows: true }), false);
 });
 
 test('collection membership ignores unrelated detail clipping, but clipped detail carriers remain unavailable', () => {
@@ -1172,19 +1183,13 @@ test('comparison reads keep each metric subject separate from conjunctive select
 
 const populationServer = await import('../src/server/ai/tools/requestPopulation.js');
 
-test('all registered collections have a capability and unsupported previews refuse exhaustive declarations', () => {
-  for (const tool of toolCatalog) for (const collection of claimableVocabulary.rowCollections(tool.name)) {
-    assert.ok(populationModule.collectionCapability(tool.name, collection), `${tool.name}.${collection}`);
-  }
+test('a capped preview certifies a list only when it is objectively complete; preflight does not predict it', () => {
   const preview = { operation: 'list', metrics: ['notification.at'], population: { tool: 'rota_notifications', collection: 'taskEvents.latest' } };
-  assert.ok(populationServer.requestCapabilityProblems({ ...preview, filters: {}, fields: [], entities: [], bindings: [] }).problems
-    .includes('$.population.collection:exhaustive-unsupported'));
-  const rank = { operation: 'rank', metrics: ['task.varianceDays'], rank: { metric: 'task.varianceDays', order: 'asc', limit: 1 },
-    population: { tool: 'rota_baseline_compare', collection: 'mostSlipped' }, entities: [{ type: 'project', id: PROJECTS.FULL }] };
-  assert.ok(complete(rank, []).problems.includes('$.rank:ordering'));
-  assert.deepEqual(complete({ ...rank, rank: { ...rank.rank, order: 'desc' } }, []).problems, []);
-  assert.ok(complete({ ...rank, metrics: ['dependencies.relationCount'], population: { tool: 'rota_dependency_inspect', collection: 'mostConnected' },
-    rank: { metric: 'dependencies.relationCount', order: 'asc', limit: 6 } }, []).problems.includes('$.rank:ordering'));
+  assert.deepEqual(populationServer.requestCapabilityProblems({ ...preview, filters: {}, fields: [], entities: [], bindings: [] }).problems, []);
+  const latest = source('rota_notifications', { taskEvents: { latest: [{ at: '2026-09-29T08:00:00Z' }] } }, { envelope: { complete: false } });
+  assert.equal(issue(verify([latest], preview, ['R1:data.taskEvents.latest.*.at'])), 'LIST_INCOMPLETE');
+  const matches = source('rota_project_search', { matches: [{ projectId: PROJECTS.FULL, name: 'A' }] }, { envelope: { totalCount: 4, returnedCount: 1, complete: false } });
+  assert.equal(issue(verify([matches], { operation: 'list', metrics: ['project.name'], population: { tool: matches.tool, collection: 'matches' } }, ['R1:data.matches.*.name'])), 'LIST_INCOMPLETE');
 });
 
 const toolCatalog = (await import('../src/server/ai/tools/toolRegistry.js')).toolCatalogForModel();

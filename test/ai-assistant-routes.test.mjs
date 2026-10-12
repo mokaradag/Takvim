@@ -707,6 +707,27 @@ test('ağ geçidinin kaydettiği tur hatası ikinci bir işletim olayı üretmez
   assert.equal(aiTelemetrySnapshot().assistantTurns.failed, 1);
 });
 
+test('the delivery bound starts with each backpressure wait, not with the stream', async (t) => {
+  holdLoop(t);
+  const { turn, released } = fakeTurn();
+  const response = assistantStreamResponse(turn, { keepaliveMs: 1000, stallMs: 1000, graceMs: 50, deliveryTimeoutMs: 150,
+    generate: async (_turn, { onText, onProgress }) => {
+      // Sınırdan uzun süren sağlıklı üretim; ardından okuyucu kısa süre geride kalır.
+      for (let index = 0; index < 30; index += 1) { await pause(10); onProgress(); }
+      for (let index = 0; index < 40; index += 1) await onText(`parça ${index} `);
+      return finalAnswer(turn, 'tamam');
+    } });
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = decoder.decode((await reader.read()).value, { stream: true });
+  await pause(360);
+  for (let step = await reader.read(); !step.done; step = await reader.read()) text += decoder.decode(step.value, { stream: true });
+  const events = parseSseText(text).events.map((event) => event.event);
+  assert.equal(events.at(-1), 'done', text.slice(-300));
+  assert.equal(events.includes('error'), false);
+  assert.equal(released(), 1);
+});
+
 test('delivery backpressure has its own bounded clock even when generation stall is shorter', async (t) => {
   holdLoop(t);
   const { turn, released } = fakeTurn();

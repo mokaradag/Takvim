@@ -240,19 +240,31 @@ test('six planned duplicates are three executions and still answer in Standard w
   drained(stack);
 });
 
-test('a boundary tie spanning SQL pages is completed deterministically in Standard with top-N and exact total', async (t) => {
+test('a boundary tie spanning SQL pages is never stitched: a partial top-N is refused and no row is disclosed', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   stack.db.tasks = Array.from({ length: 70 }, (_, index) => ({ ...stack.db.tasks[0],
     TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`, Title: `Eşit gecikme ${String(index).padStart(2, '0')}` }));
   const request = { ...TOP_OVERDUE, metrics: [...TOP_OVERDUE.metrics, 'tasks.total'], entities: [{ type: 'project', id: PROJECTS.FULL }], filters: { deadline: 'overdue' } };
-  stack.provider.enqueue(nativePlan(request, [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL, deadline: 'overdue', limit: 50 } }]));
+  const partial = { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.tasks.0.title', 'R1:data.tasks.1.title', 'R1:data.tasks.2.title', 'R1:totalCount'] }) };
+  stack.provider.enqueue(nativePlan(request, [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL, deadline: 'overdue', limit: 50 } }]), partial, partial);
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `${PROJECTS.FULL} projesinde en gecikmiş 3 görevi ve toplam sayıyı göster.` })).assistantMessage;
+  assert.equal(answer.finishReason, 'grounding_failed', JSON.stringify({ content: answer.content, traces: turnTraces(logs) }));
+  assert.equal(stack.db.tasks.some((task) => answer.content.includes(task.Title)), false);
+  assert.equal(turnTraces(logs)[0].selectedBy, null);
+  drained(stack);
+});
+
+test('a WBS named inside a declared project resolves from that project catalog and is answered by server selection', async (t) => {
+  const stack = stackFor(t);
+  const logs = captureConsole(t);
+  const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' },
+    entities: [{ type: 'project', id: PROJECTS.FULL }, { type: 'wbs', text: 'Tasarım' }] };
+  stack.provider.enqueue(nativePlan(request, []));
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `${PROJECTS.FULL} projesinde Tasarım iş paketindeki görev sayısı nedir?` })).assistantMessage;
   assert.equal(answer.finishReason, 'stop', JSON.stringify({ content: answer.content, traces: turnTraces(logs) }));
-  assert.match(answer.content, /\*\*70\*\*/);
-  for (const task of stack.db.tasks) assert.ok(answer.content.includes(task.Title), task.Title);
   const [trace] = turnTraces(logs);
-  assert.deepEqual([trace.selectedBy, trace.escalated, trace.modelRounds, trace.toolCalls], ['server', false, 1, 4]);
+  assert.deepEqual([trace.selectedBy, trace.escalated, trace.modelRounds], ['server', false, 1]);
   drained(stack);
 });
 

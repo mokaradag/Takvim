@@ -1,5 +1,4 @@
 import 'server-only';
-import { internalPageRequired } from '../../../../domain/ai/evidencePopulation.js';
 import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { countWorkingDays } from '../../../../scheduling/calendars/index.js';
@@ -10,8 +9,6 @@ import { describeTaskScope, projectAccess } from './rotaScope.js';
 import { readBaseline, readCalendar, readDependencies, readTaskFacts } from './rotaToolStore.js';
 import {
   DATE_PROPERTY,
-  collectionPage,
-  collectionSnapshot,
   dataText,
   fullAccessRequired,
   ID_PROPERTY,
@@ -66,9 +63,9 @@ const baselineCompare = {
     const limit = args.limit ?? 10;
     const { scope } = await call.authorization();
     await requireFullProject(scope, args.projectId, call);
-    const result = await collectionSnapshot(call, 'rota_baseline_compare', args, () => call.sql((executor) => readBaseline(executor, scope, {
+    const result = await call.sql((executor) => readBaseline(executor, scope, {
       projectId: args.projectId, baselineId: args.baselineId ?? null, maxRows: TOOL_LIMITS.maxAnalyzedTasks
-    })));
+    }));
     if (!result.projectFull) throw fullAccessRequired();
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
     // Karşılaştırma ve eklenen görev sayıları projenin güncel bütün görevlerine dayanır.
@@ -128,14 +125,13 @@ const baselineCompare = {
     const total = variances.reduce((sum, item) => sum + item.varianceDays, 0);
     const orderedSlipped = variances
       .sort((left, right) => right.varianceDays - left.varianceDays || left.title.localeCompare(right.title, 'tr'));
-    const paging = collectionPage(call, 'rota_baseline_compare', 'mostSlipped', args, orderedSlipped, limit);
-    const slipped = paging.page
+    const slipped = orderedSlipped.slice(0, limit)
       .map((item) => ({ ...item, statusLabel: statusLabelOf(item.status) }));
     const project = projectAccess(scope, args.projectId);
     return {
-      ...(paging.rankingBoundary ? { rankingBoundary: paging.rankingBoundary } : slipped.length < orderedSlipped.length ? { rankingBoundary: {
+      ...(slipped.length < orderedSlipped.length ? { rankingBoundary: {
         collection: 'mostSlipped', metric: 'task.varianceDays', order: 'desc', returnedCount: slipped.length,
-        nextValue: orderedSlipped[paging.offset + slipped.length]?.varianceDays ?? null
+        nextValue: orderedSlipped[slipped.length].varianceDays
       } } : {}),
       data: {
         filters: { projectId: args.projectId, project: projectName || 'Seçilen proje', baselineId: selectedId, baseline: selected?.name || 'Seçilen baz plan' },
@@ -152,11 +148,11 @@ const baselineCompare = {
         definitions: METRIC_DEFINITIONS.baseline
       },
       scope: describeTaskScope(project ? [project] : []),
-      complete: paging.offset + slipped.length === variances.length && !result.baselinesTruncated,
-      truncated: !paging.nextCursor && paging.offset + slipped.length < variances.length || result.baselinesTruncated,
+      complete: slipped.length === variances.length && !result.baselinesTruncated,
+      truncated: slipped.length < variances.length || result.baselinesTruncated,
       returnedCount: slipped.length,
       totalCount: variances.length,
-      nextCursor: paging.nextCursor,
+      nextCursor: null,
       evidence: {
         label: selected ? `Baz plan karşılaştırması · ${selected.name}` : 'Baz plan karşılaştırması · baz plan yok',
         entity: { type: 'project', id: args.projectId, name: projectName },
@@ -208,9 +204,9 @@ const dependencyInspect = {
       projectId = focus.projectId;
     }
     await requireFullProject(scope, projectId, call);
-    const result = await collectionSnapshot(call, 'rota_dependency_inspect', args, () => call.sql((executor) => readDependencies(executor, scope, {
+    const result = await call.sql((executor) => readDependencies(executor, scope, {
       projectId, focusTaskId: focus?.id ?? null, maxRows: TOOL_LIMITS.maxAnalyzedTasks
-    })));
+    }));
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
     call.notePopulation?.(result.population);
     const tasks = new Map(result.tasks.map((row) => [canonicalActualId(row.TaskId), row]));
@@ -276,13 +272,12 @@ const dependencyInspect = {
     const taskCount = Number(result.totals.TaskCount || 0);
     const orderedConnections = [...degree.entries()]
       .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
-    const connections = orderedConnections.map(([taskId, count]) => ({ taskId, title: dataText(tasks.get(taskId)?.Title, 160), relationCount: count }));
-    const paging = collectionPage(call, 'rota_dependency_inspect', 'mostConnected', args, connections, 5);
-    const mostConnected = paging.page;
+    const mostConnected = orderedConnections.slice(0, 5)
+      .map(([taskId, count]) => ({ taskId, title: dataText(tasks.get(taskId)?.Title, 160), relationCount: count }));
     return {
-      ...(paging.rankingBoundary ? { rankingBoundary: paging.rankingBoundary } : mostConnected.length < orderedConnections.length ? { rankingBoundary: {
+      ...(mostConnected.length < orderedConnections.length ? { rankingBoundary: {
         collection: 'mostConnected', metric: 'dependencies.relationCount', order: 'desc', returnedCount: mostConnected.length,
-        nextValue: orderedConnections[paging.offset + mostConnected.length]?.[1] ?? null
+        nextValue: orderedConnections[mostConnected.length][1]
       } } : {}),
       data: {
         filters: { projectId, project: projectName || 'Seçilen proje' },
@@ -300,11 +295,11 @@ const dependencyInspect = {
         notes
       },
       scope: describeTaskScope([projectAccess(scope, projectId)]),
-      complete: paging.offset + mostConnected.length === orderedConnections.length,
-      truncated: paging.offset + mostConnected.length < orderedConnections.length && !paging.nextCursor,
+      complete: mostConnected.length === orderedConnections.length,
+      truncated: mostConnected.length < orderedConnections.length,
       returnedCount: result.dependencies.length,
       totalCount: result.dependencies.length,
-      nextCursor: paging.nextCursor,
+      nextCursor: null,
       evidence: {
         label: `Bağımlılık kapsaması · ${result.dependencies.length} ilişki`,
         entity: { type: 'project', id: projectId, name: projectName },
@@ -316,12 +311,13 @@ const dependencyInspect = {
 
 /* ── rota_recurrence_inspect ──────────────────────────────── */
 
-function seriesSummary(occurrences, today, previewLimit = 3) {
+function seriesSummary(occurrences, today) {
   const ordered = [...occurrences].sort((left, right) => String(left.recurrenceOccurrenceDate || '').localeCompare(String(right.recurrenceOccurrenceDate || '')));
   const upcoming = ordered.filter((fact) => fact.status !== 'done' && (fact.recurrenceOccurrenceDate || '') >= today);
   const completed = occurrences.filter((fact) => fact.status === 'done');
   const completionDatesComplete = completed.every((fact) => Boolean(fact.actualFinish));
   const lastDone = completed.filter((fact) => fact.actualFinish).sort((left, right) => right.actualFinish.localeCompare(left.actualFinish) || right.id.localeCompare(left.id))[0] || null;
+  const previewLimit = 3;
   return {
     visibleOccurrences: occurrences.length,
     completionDatesComplete,
@@ -357,18 +353,9 @@ const recurrenceInspect = {
     const limit = args.limit ?? 10;
     const { scope } = await call.authorization();
     if (args.taskId) {
-      const selected = await collectionSnapshot(call, 'rota_recurrence_inspect', args, async () => {
-        const { fact } = await visibleTask(call, scope, args.taskId);
-        if (args.projectId && args.projectId !== fact.projectId) throw notFound();
-        const seriesId = fact.recurrenceRule ? fact.id : fact.recurrenceParentId;
-        const parent = seriesId === fact.id ? fact : seriesId
-          ? (await call.sql((executor) => readTaskFacts(executor, scope, { taskIds: [seriesId], maxRows: 1 }))).facts[0] : null;
-        const result = parent?.recurrenceRule ? await call.sql((executor) => readTaskFacts(executor, scope, {
-          projectId: fact.projectId, seriesId, maxRows: TOOL_LIMITS.maxAnalyzedTasks
-        })) : { facts: [fact], truncated: false };
-        return { fact, seriesId, result };
-      });
-      const { fact, seriesId, result } = selected;
+      const { fact } = await visibleTask(call, scope, args.taskId);
+      if (args.projectId && args.projectId !== fact.projectId) throw notFound();
+      const seriesId = fact.recurrenceRule ? fact.id : fact.recurrenceParentId;
       if (!seriesId) {
         call.notePopulation?.(factPopulation([fact]));
         const access = projectAccess(scope, fact.projectId);
@@ -379,21 +366,18 @@ const recurrenceInspect = {
           evidence: { label: `Tekrar serisi · ${dataText(fact.title, 60)}`, entity: { type: 'task', id: fact.id, name: dataText(fact.title, 120) }, highlights: ['Tekrarlayan görev değil'] }
         };
       }
+      const parent = seriesId === fact.id ? fact : (await call.sql((executor) => readTaskFacts(executor, scope, { taskIds: [seriesId], maxRows: 1 }))).facts[0];
+      const result = parent?.recurrenceRule ? await call.sql((executor) => readTaskFacts(executor, scope, {
+        projectId: fact.projectId, seriesId, maxRows: TOOL_LIMITS.maxAnalyzedTasks
+      })) : { facts: [fact], truncated: false };
       if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
       const template = result.facts.find((item) => item.id === seriesId && item.recurrenceRule) || null;
       const occurrences = template ? result.facts.filter((item) => item.recurrenceParentId === seriesId) : [fact];
       call.notePopulation?.(factPopulation(template ? result.facts : [fact]));
       const access = projectAccess(scope, fact.projectId);
-      const internal = internalPageRequired(call.request, 'rota_recurrence_inspect', 'series.next');
-      const summary = seriesSummary(occurrences, call.today, internal ? occurrences.length : 3);
-      const paging = collectionPage(call, 'rota_recurrence_inspect', 'series.next', args, summary.next, internal ? limit : 3);
-      if (internal) {
-        summary.next = paging.page;
-        summary.nextTruncated = paging.offset + paging.page.length < summary.upcomingCount;
-      }
+      const summary = seriesSummary(occurrences, call.today);
       const evidenceTask = template || fact;
       return {
-        ...(paging.rankingBoundary ? { rankingBoundary: paging.rankingBoundary } : {}),
         data: {
           series: {
             ...(template ? { templateTaskId: template.id } : {}),
@@ -409,7 +393,7 @@ const recurrenceInspect = {
         truncated: summary.nextTruncated,
         returnedCount: 1,
         totalCount: 1,
-        nextCursor: paging.nextCursor,
+        nextCursor: null,
         evidence: {
           label: `Tekrar serisi · ${dataText(template?.title || fact.title, 60)}`,
           entity: { type: 'task', id: evidenceTask.id, name: dataText(evidenceTask.title, 120) },
@@ -419,9 +403,9 @@ const recurrenceInspect = {
     }
     if (args.projectId) await requireVisibleProject(scope, args.projectId, call);
     const projectName = args.projectId ? await visibleProjectName(call, scope, args.projectId) : null;
-    const result = await collectionSnapshot(call, 'rota_recurrence_inspect', args, () => call.sql((executor) => readTaskFacts(executor, scope, {
+    const result = await call.sql((executor) => readTaskFacts(executor, scope, {
       projectId: args.projectId ?? null, recurringOnly: true, maxRows: TOOL_LIMITS.maxAnalyzedTasks
-    })));
+    }));
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
     call.notePopulation?.(factPopulation(result.facts));
     const projects = projectIndex(result.projects);
@@ -449,22 +433,20 @@ const recurrenceInspect = {
         ...seriesSummary(entry.occurrences, call.today)
       };
     }).sort((left, right) => right.open - left.open || left.title.localeCompare(right.title, 'tr'));
-    const paging = collectionPage(call, 'rota_recurrence_inspect', 'series', args, list, limit);
-    const page = paging.page;
+    const page = list.slice(0, limit);
     const previewTruncated = page.some((item) => item.nextTruncated);
     const datesIncomplete = page.some((item) => !item.completionDatesComplete);
     const descriptor = args.projectId
       ? describeTaskScope([projectAccess(scope, args.projectId)])
       : describeTaskScope(scope.isAdmin ? [] : [...scope.projects.values()]);
     return {
-      ...(paging.rankingBoundary ? { rankingBoundary: paging.rankingBoundary } : {}),
       data: { filters: args.projectId ? { projectId: args.projectId, project: projectName || 'Seçilen proje' } : {}, visibleEntryCount: list.length, series: page, notes: ['Sayılar yalnızca görünür görevler üzerindedir.'] },
       scope: descriptor,
-      complete: paging.offset + page.length === list.length && !previewTruncated && !datesIncomplete,
-      truncated: paging.offset + page.length < list.length && !paging.nextCursor || previewTruncated,
+      complete: page.length === list.length && !previewTruncated && !datesIncomplete,
+      truncated: page.length < list.length || previewTruncated,
       returnedCount: page.length,
       totalCount: list.length,
-      nextCursor: paging.nextCursor,
+      nextCursor: null,
       evidence: {
         label: `Tekrar kayıtları · ${list.length} görünür kayıt`,
         entity: args.projectId ? { type: 'project', id: args.projectId, name: projectName } : null,

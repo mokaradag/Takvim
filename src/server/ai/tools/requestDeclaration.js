@@ -4,12 +4,10 @@ import {
   canonicalField,
   carrierAvailable,
   collectionComplete,
-  collectionRanking,
   collectionTotalPaths,
   concreteCollections,
   insideRowCollection,
   provesEmptyCollection,
-  readLater,
   rowKey,
   scalarKey,
   metricDimensionsMatch
@@ -19,12 +17,10 @@ import {
   entityKey,
   factRow,
   factSuperseded,
-  collectionDomain,
   listCollections,
   parentProperty,
-  presentCollection,
   rankableMeasure,
-  rankDomain,
+  rankedRowIndexes,
   REQUEST_ENTITY_TYPES,
   REQUEST_LIMITS,
   REQUEST_OPERATIONS,
@@ -42,7 +38,6 @@ import { invalidArguments } from './toolErrors.js';
 import { getRotaTool, toolCatalogForModel } from './toolRegistry.js';
 import { containmentText } from './toolScope.js';
 import { MIN_DIRECTORY_QUERY_LENGTH } from '../../directory/directorySearch.js';
-import { effectivePageSize } from './rota/rotaToolSupport.js';
 import {
   declaredFacets,
   familyKeys,
@@ -388,18 +383,14 @@ export function unmatchedEntities(request, entries, selection = null) {
 export function requestEvidence(request, entries, today) {
   const active = Object.entries(request.filters).filter(([, value]) => value != null).map(([key]) => key);
   const index = new Map();
-  for (const [ordinal, { id, tool, args = {}, payload, round = null, snapshot = null, rowIdentities = {} }] of entries.entries()) {
+  for (const [ordinal, { id, tool, args = {}, payload, round = null }] of entries.entries()) {
     const agreement = populationAgreement(request, tool, args, today);
     index.set(id, {
       id,
       tool,
       ordinal,
       round: round ?? ordinal,
-      snapshot,
-      rowIdentities,
       args,
-      effectiveLimit: effectivePageSize(getRotaTool(tool).parameters.properties.limit, args),
-      pageMaximum: getRotaTool(tool).parameters.properties.limit?.maximum,
       snapshotDimensions: agreement.dimensions,
       facts: payload?.data ? createEvidenceFacts(payload, { prefix: payload.factScope || id }) : [],
       envelope: payload,
@@ -407,7 +398,7 @@ export function requestEvidence(request, entries, today) {
       declared: declaredFacets(tool, request.filters, today),
       unsupported: active.filter((key) => !familyKeys(tool).includes(key)),
       selectors: selectorsOf(args),
-      sortedBy: collectionRanking(tool, request.population?.collection, request.rank) || sortedBy(tool, agreement.dimensions),
+      sortedBy: sortedBy(tool, agreement.dimensions),
       firstPage: !args.cursor,
       populationMatch: agreement.populationMatch,
       collection: request.population?.tool === tool ? declaredCollections(request) : null,
@@ -492,7 +483,7 @@ function eligibleFacts(request, source, metric, evidence, bound) {
       if (request.operation === 'value' && row?.kind === 'row') return false;
     }
     if (sourceCollections(source) && row?.kind === 'row' && !sourceCollections(source).includes(row.canonical)) return false;
-    return !factSuperseded(evidence, source, fact, { property: owner ? [owner.type, entityKey(owner.type, owner.bound)] : null, rows: request.operation !== 'value' });
+    return !factSuperseded(evidence, source, fact, { rows: request.operation !== 'value' });
   });
 }
 
@@ -514,18 +505,6 @@ function declaredCollections(request) {
   if (request.population.collection) return [request.population.collection];
   const lists = request.operation === 'list' ? listCollections(request.population.tool, request.metrics) : [];
   return lists.length ? lists : null;
-}
-
-/** Kanıttaki her bildirilen koleksiyon tam mı (en az biri bulunmalı)? Tek koleksiyonda koleksiyonun tamlığıdır. */
-function listedCompletely(source, lists) {
-  if (lists.length === 1) return collectionComplete(source, lists[0]);
-  return lists.length > 0 && lists.every((canonical) => presentCollection(source.envelope, canonical) && collectionComplete(source, canonical));
-}
-
-/** Kanıt bildirilen koleksiyonların hepsinin boş olduğunu kanıtlıyor mu? */
-function listProvenEmpty(source, lists) {
-  if (lists.length === 1) return provesEmptyCollection(source, lists[0]);
-  return lists.length > 0 && lists.every((canonical) => provesEmptyCollection(source, canonical));
 }
 
 /* ── İstekten türetilen olgu seçimi ───────────────────────── */
@@ -604,11 +583,7 @@ function collectionSelection(request, source, evidence, bound, sources, canonica
       continue;
     }
     if (total && metricPaths(source.tool, metric).includes(total) && collectionTotalPaths(source.tool, canonical).includes(total)) {
-      const counter = sources.flatMap((other) => other.tool === source.tool && scalarKey(other, metric) === scalarKey(source, metric)
-        ? eligibleFacts(request, other, metric, evidence, bound).filter((fact) => collectionTotalPaths(other.tool, canonical).includes(fact.field))
-          .map((fact) => `${other.id}:${fact.field}`) : []).at(-1);
-      if (!counter) return null;
-      scalars.push(counter);
+      scalars.push(`${source.id}:${total}`);
       continue;
     }
     // Tek kaydın iç koleksiyonunda üst kaydın kendi özelliği (ör. serinin kuralı) tek anlamlıysa seçilir.
@@ -633,47 +608,22 @@ function collectionSelection(request, source, evidence, bound, sources, canonica
   }
   if (!fields.length) return null;
   const rank = request.operation === 'rank';
-  const domain = !rank ? collectionDomain([source, ...sources], canonical) : null;
-  if (!rank && !domain?.complete) return null;
-  // Aynı nüfusun daha yeni tam okuması bu satırların yerine geçer.
-  if ([...evidence.values()].some((newer) => readLater(newer, source) && newer.tool === source.tool
-    && rowKey(newer, canonical) === rowKey(source, canonical) && collectionComplete(newer, canonical))) return null;
+  // Liste tek tam okumadır; tazelik ve sayfa kuralını seçimi doğrulayan aynı denetim uygular.
+  if (!rank && !collectionComplete(source, canonical)) return null;
   const naming = claimableContract(source.tool).paths.find((path) => path.startsWith(`${canonical}.*.`)
     && !path.slice(canonical.length + 3).includes('.') && metricEntry(source.tool, path)?.context);
   const relatives = [...new Set([naming ? `data.${naming}` : null, ...fields].filter(Boolean).map((path) => path.slice(prefix.length)))];
   const facts = [...scalars];
-  if (rank) {
-    const domain = rankDomain(request, [source, ...sources], canonical);
-    if (!domain?.verified) return null;
-    if (domain.empty) return [...facts, `${source.id}:complete`];
-    const groups = new Map();
-    for (const item of domain.order) {
-      const key = `${item.source.id}|${item.collection}`;
-      if (!groups.has(key)) groups.set(key, { ...item, indexes: [] });
-      groups.get(key).indexes.push(item.index);
-    }
-    for (const item of groups.values()) {
-      const rows = concreteCollections(item.source.envelope, canonical).find((collection) => collection.collection === item.collection)?.rows || [];
-      const indexes = item.indexes.length === rows.length ? ['*'] : item.indexes;
-      for (const relative of relatives) {
-        for (const index of indexes) {
-          const path = `${item.collection}.${index}.${relative}`;
-          if (item.source.facts.some((fact) => fieldPatternCovers(path, fact.field))) facts.push(`${item.source.id}:${path}`);
-        }
-      }
-    }
-    return facts.length ? facts : null;
-  }
-  for (const member of domain.sources) for (const item of concreteCollections(member.envelope, canonical)) {
+  for (const item of concreteCollections(source.envelope, canonical)) {
     if (!item.rows.length) continue;
-    let indexes = item.rows.map((_, index) => index);
+    let indexes = rank ? rankedRowIndexes(request, source.tool, source.envelope, canonical, item.collection.slice(5)) : item.rows.map((_, index) => index);
     if (!indexes?.length) return null;
     if (indexes.length === item.rows.length) indexes = ['*'];
     for (const relative of relatives) {
       // Bütün satırlarda boş olan çok değerli alanın deseni olgu seçmez; satırlar alanı boş değeriyle taşır.
       const references = indexes.map((index) => `${item.collection}.${index}.${relative}`)
-        .filter((pattern) => member.facts.some((fact) => fieldPatternCovers(pattern, fact.field)));
-      facts.push(...references.map((pattern) => `${member.id}:${pattern}`));
+        .filter((pattern) => source.facts.some((fact) => fieldPatternCovers(pattern, fact.field)));
+      facts.push(...references.map((pattern) => `${source.id}:${pattern}`));
     }
   }
   return facts.length ? facts : null;

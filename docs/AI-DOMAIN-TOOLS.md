@@ -742,7 +742,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Yetki:** Anlık görüntünün görev görünürlüğü; kişi süzgeci yalnızca kimliği kullanıcıya açık sorumluluklarla eşleşir.
 - **Kaynak:** `AI_TOOL_TASK_FACTS_SQL` (yetki + daraltıcı kaba süzgeç) → tam süzgeç, sıralama ve sayfalama saf JS'de.
 - **Çıktı:** `tasks[]` (kimlik, başlık, proje, durum, öncelik, termin/plan/gerçekleşen tarihleri, gecikme günü, sorumlular), `sort`.
-- **Tamlık:** `totalCount` kesin toplam; liste bir sayfa; `nextCursor` süzgeç ve sıralı veri kümesi özetine bağlıdır. Sayfalar aynı turun yetki epoch’una bağlı sunucu görüntüsünü kullanır; yeni bağlamdaki veya epoch’u değişmiş imleç reddedilir. Aynı zincirde sessizce kayıt atlanmaz veya tekrarlanmaz.
+- **Tamlık:** `totalCount` kesin toplam; liste bir sayfa; `nextCursor` süzgeç ve sıralı veri kümesi özetine bağlıdır. Canlı ekleme/silme/sıralama değişimi eski imleci reddeder; aynı imleçle sessizce kayıt atlanmaz veya tekrarlanmaz. Her sayfa güncel yetkiyle okunan ayrı kanıttır; sayfalar tek liste olarak birleştirilmez.
 - **Anlambilim:** §9; metin araması büyük/küçük harf ve aksan duyarsızdır: `ş/ç/ğ/ö/ü` taban harfleriyle eşleşir, kesin JS eşleşmesinde noktasız `ı` ayrı kalır; SQL'deki `CHARINDEX` yalnızca kaba daraltmadır. `%`/`_`/`[` düz metindir.
 - **Örnek sorular:** "Bu hafta termini olan görevlerim neler?", "Radar projesinde gecikmiş kritik görevler hangileri?"
 
@@ -1236,25 +1236,28 @@ paylaşır (`evidencePopulation.js`, `requestPopulation.js`, `requestContract.js
   gruplama yok, korumalı alan yok); verilmeyen boyut varsayılandır, joker
   değildir. Toplamı belirleyen boyutlar (WBS derinliği, korumalı arama alanı)
   satır kümesini belirleyenlerden (sıra, gruplama) ayrı tutulur.
-- *Tazelik sınıfa bağlıdır.* Okumalar sırayla yürür; aynı model turu ortak SQL
-  görüntüsü değildir. Toplam aynı nüfusun sonraki okumasıyla, kısmi satır
-  okuması yalnızca yeniden okuduğu kararlı kimliklerle, tam okuma aynı satır
-  nüfusunun bütünüyle önceki kanıtı eskiltir. Özellik sahibi ve anlamsal
-  taşıyıcı ortak kimliktir; açık boş değer önceki değeri eskiltir, yokluk ve
-  kısaltma eskiltmez. Gerçekten aynı maddileştirilmiş değerleri paylaşan
-  okumalar birbirini eskiltmez.
+- *Tek tazelik kuralı.* Aynı nüfus daha sonraki bir araç turunda yeniden
+  okunduysa eski olgu kullanılamaz; aynı turdaki okumalar eşzamanlıdır ve
+  okumalar birbiriyle karşılaştırılıp doğru olanı çıkarılmaz. Liste/sıralama
+  satırı aynı aracın aynı satır nüfusunun sonraki HER okumasıyla (kısmi sayfa
+  dâhil) eskir: kesinleşme yalnızca en son okumadan olur. Varlığın kendi
+  özelliği aynı varlığın aynı anlamsal özelliğini (açık boşluğu dâhil) taşıyan
+  okumayla; toplam aynı araçtaki eşdeğer taşıyıcıyla eskir. Araçlar arası
+  eşdeğerlik yalnızca görev sayımları için açıkça bildirilmiştir; aynı ölçü
+  kimliği tek başına eşdeğerlik değildir.
 - *Her bağ bir yükümlülüktür.* Bildirilen her `fields` bağı ve her ölçü/varlık
   bağı (ölçü sayısından bağımsız) karşılanmalıdır; boş çok değerli alan bir
   değerdir, alanın yokluğu ya da kısaltılmış kanıt değildir.
 - *Tamlık koleksiyona özgüdür.* Yineleme önizlemesi, baz plan listesi ve grup
   satırları kendi tamlık işaretleriyle değerlendirilir; liste iç içe
   koleksiyonun her somut kümesini kapsar.
-- *Yürütülebilirlik SQL'den önce kanıtlanır.* Tamamlanan istek aynı yetenek
-  denetiminden yeniden geçer. Sıralama ölçüsü/yönü nüfus sırasıyla uyuşur;
-  desteklenmeyen sıra reddedilir. Görev listesi aynı değer görüntüsünün
-  kesintisiz, tekil kimlikli imleç zinciriyle tamamlanır. Belleğe zaten alınan
-  iş yükü, analiz grupları ve hareket nüfusu kapsamlı isteklerde tam döner;
-  sonuç bütçesine sığmazsa kısmi kanıt yerine `RESULT_TOO_LARGE` döner.
+- *Liste ve sıralama tek okumadan kesinleşir.* SQL'den önce istek sözleşmesi
+  (şema, kapsam, bağlar) denetlenir; veri boyutu ve sıra tahmin edilmez.
+  Liste, aracın en büyük sayfasıyla bir kez okunan tam koleksiyondur.
+  Sıralama tam koleksiyondan ya da aracın aynı ölçüyle sıraladığı ilk sayfa ve
+  sınır kanıtından kurulur. Sayfalar, iç içe kümeler ve kardeş koleksiyonlar
+  birleştirilmez; sunucu gizli sayfa açmaz ve ölçüye göre yeniden sıralamaz.
+  Kesinleşemeyen istek kapalı kalır (`LIST_INCOMPLETE`, `RANK_MISMATCH`).
 - *Toplam kökeni zorunludur.* Korumalı toplam üreticisi bütün katkıda bulunan
   görev/proje çiftlerini `notePopulation` ile kaydeder; eksik ya da çelişkili
   köken deftere alınmaz. Kimlikler yalnızca sunucuda kalır. Son teslim ve
@@ -1435,10 +1438,9 @@ kanıtı güncel veri yerine kullanılamaz.
 
 Hareket, tarih talebi ve atama koordinasyonu sayfaları tek tur içinde en fazla
 1000 kayıtlık sunucu anlık görüntüsünü paylaşır. Yeni turda eski iş akışı
-imleci reddedilir; epoch değişince anlık görüntü atılır. Görev listeleri de
-aynı yetki epoch’unda aynı maddileştirilmiş nüfusu kullanır; kopuk imleç
-yeniden okunan canlı veriye bağlanmaz. Eş sorumlular yalnızca dönen sayfadaki
-görevler için okunur ve bu görüntüde saklanır. Normal UI/rapor OFFSET davranışı
+imleci reddedilir; epoch değişince anlık görüntü atılır. Görev listeleri
+sıralı veri özeti değişince imleci reddeder. Sayfalar birleştirilmez: her sayfa
+ayrı kanıttır. Normal UI/rapor OFFSET davranışı
 bu AI kuralları için değiştirilmez.
 
 Tarih ve atama sayfalarında sayaçlar **seçilen sekmedeki** yetkili/süzülmüş
@@ -1449,15 +1451,16 @@ tek başına AI açıklama yetkisi değildir: görev etkin projede halen FULL/RE
 ya da kişisel görev kapsamında olmalıdır. Normal rapor/bildirim SQL yolu
 `evidenceSnapshotLimit` verilmedikçe AI birleşimlerini/bütçelerini çalıştırmaz.
 
-Kapsamlı liste ve sıralamada her kayıtlı koleksiyonun sunucu içi üretim
-yeteneği SQL öncesinde denetlenir. Önizlemeler kapsamlı liste sayılmaz;
-iç sayfalamayı destekleyen koleksiyonlar mevcut imleç zarfıyla, aynı görüntü
-üzerinden sınırlı sayfalar üretir. Araç ve toplam sonuç bütçeleri değişmez.
-Satır kümesinin tamlığı, hareket ayrıntılarının veya kalite örneklerinin
-kısaltılmasından bağımsızdır; kısaltılmış ayrıntı eksiksiz değer olarak seçilemez.
-İlk, doğrudan, türetilen ve takip çağrıları aynı donmuş isteğin kalan okuma
-yükümlülüklerine bağlıdır; geçersiz bir kardeş çağrı bütün kümeyi SQL öncesinde
-reddettirir. Ayrı anlamlı ad/kod taşıyıcıları veri okunmadan alanla bağlanır.
+Önizlemeler ve sınırlı koleksiyonlar yalnızca nesnel tamlık işaretleri
+doğruysa kapsamlı listedir. Satır kümesinin tamlığı, hareket ayrıntılarının
+veya kalite örneklerinin kısaltılmasından bağımsızdır; kısaltılmış ayrıntı
+eksiksiz değer olarak seçilemez. İlk, doğrudan, türetilen ve takip çağrıları
+aynı donmuş isteğin kalan okuma yükümlülüklerine bağlıdır; geçersiz bir kardeş
+çağrı bütün kümeyi SQL öncesinde reddettirir. Türetilen okuma bildirilen bir
+seçiciyi düşürmez: karşılaştırmada hiçbir ölçüye bağlanmayan ortak bağlam varsa
+okuma türetilmez. Tek bildirilen projenin görev, WBS ve baz plan adı o projede,
+proje bağlandıktan sonra çözülür. Ayrı anlamlı ad/kod taşıyıcıları veri
+okunmadan alanla bağlanır.
 
 Takip kökleri karşılaştırılmadan önce katı şemayla normalize edilir (null,
 GUID, metin boşluğu). Sayfalama/sunum değişebilir; filtreler daralabilir;

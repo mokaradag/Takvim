@@ -277,13 +277,14 @@ export function semanticCarrierKey(tool, path) {
   return `${tool}|${entry.metric}|${canonical}`;
 }
 
+/** Aynı aracın aynı niceliği taşıyan yolları; araçlar arası eşdeğerlik buradan çıkarılmaz. */
 export function equivalentCarriers(tool, paths) {
   const identity = (path) => scalarCarrierKey(tool, path) || semanticCarrierKey(tool, path);
   return paths.length > 0 && paths.every((path) => identity(path) === identity(paths[0]));
 }
 
-/** Satır dışı sayımın anlamı araç adından değil kayıtlı ölçüden gelir. */
-export function scalarCarrierKey(tool, path) {
+/** Araç içinde satır dışı sayımın anlamı kayıtlı ölçü ve birimidir. */
+function scalarCarrierKey(tool, path) {
   const canonical = String(path).split('.').map((part) => Number.isInteger(Number(part)) && part !== '' ? '*' : part).join('.');
   const entry = metricEntry(tool, canonical.replace('data.', ''));
   if (!entry?.metric || entry.property || rowCollections(tool).some((row) => canonical.startsWith(`data.${row}.`))) return null;

@@ -25,18 +25,6 @@ export function createCallIds() {
   return () => `call_${prefix}_${(next += 1)}`;
 }
 
-const serverContinuations = new WeakMap();
-
-/** İç sayfalama araca yeni bir model parametresi eklemez. */
-export function serverReadCall(name, args, catalog) {
-  const tool = catalog.find((item) => item.name === name);
-  const internal = args.cursor && !tool?.parameters.properties.cursor;
-  const { cursor, ...initial } = args;
-  const call = { id: 'derived', name, args, arguments: JSON.stringify(internal ? initial : args), oversize: false };
-  if (internal) serverContinuations.set(call, cursor);
-  return call;
-}
-
 /**
  * Bildirim ve ilk araç planı tek yerel çağrının bağımsız değişkenleridir. Araç
  * şemaları planda yinelenmez: araçlar aynı turda ayrıca sunulur ve plan
@@ -169,7 +157,6 @@ export function prepareExecutionSet(rawCalls, { catalog, permitted = null, valid
     let args;
     try {
       args = parseToolArguments(tool.parameters, String(call.arguments ?? '{}'));
-      if (serverContinuations.has(call)) args = { ...args, cursor: serverContinuations.get(call) };
       validateCall?.(tool.name, args);
     } catch (error) {
       const details = (error?.details || []).map((detail) => `$.calls[${index}].${tool.name}${String(detail).slice(1)}`);
@@ -180,9 +167,7 @@ export function prepareExecutionSet(rawCalls, { catalog, permitted = null, valid
     const key = readKey(tool.name, args, today);
     if (seen.has(key)) return;
     seen.set(key, index);
-    const { cursor, ...initial } = args;
-    const internal = serverContinuations.has(call);
-    prepared.push({ index, name: tool.name, args, arguments: JSON.stringify(internal ? initial : args), ...(internal ? { serverCursor: cursor } : {}) });
+    prepared.push({ index, name: tool.name, args, arguments: JSON.stringify(args) });
   });
   if (!problems.length && prepared.length > limits.maxCallsPerRound) {
     problems.push({ index: -1, error: new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED, { details: ['$.calls:maxItems'] }) });
@@ -191,8 +176,7 @@ export function prepareExecutionSet(rawCalls, { catalog, permitted = null, valid
     problems.push({ index: -1, error: new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED, { details: ['$.calls:budget'] }) });
   }
   if (problems.length) return { ok: false, calls: [], problems };
-  return { ok: true, calls: prepared.map((call) => ({ id: callId(), name: call.name, arguments: call.arguments, args: call.args,
-    ...(call.serverCursor ? { serverCursor: call.serverCursor } : {}) })), problems };
+  return { ok: true, calls: prepared.map((call) => ({ id: callId(), name: call.name, arguments: call.arguments, args: call.args })), problems };
 }
 
 /** Reddedilen kümenin her çağrısının güvenli hatası: kendi sorunu ya da geçersiz kardeşi nedeniyle yürütülmedi. */

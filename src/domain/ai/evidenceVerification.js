@@ -195,28 +195,24 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
   // Bildirilen düzen veri okunmadan önce bağlanmıştır: seçim onu yinelemek zorunda değildir, yalnızca çelişemez.
   const layout = selection.layout ?? (request?.layout || 'auto');
   let emptyProofs = [];
-  let emptyRank = [];
   if (request) {
     if (request.layout && request.layout !== 'auto' && layout !== request.layout) return { ok: false, citedIds: [], issues: [{ code: 'LAYOUT_MISMATCH' }] };
     const verdict = verifyRequestedFacts(request, selection.facts, evidence);
     if (!verdict.ok) return { ok: false, citedIds: [], issues: verdict.issues };
     emptyProofs = verdict.empty || [];
-    emptyRank = verdict.emptyRank || [];
     if (verdict.rankOrder) {
-      const positions = new Map(verdict.rankOrder.map((row, index) => [`${row.evidenceId}|${row.path}`, index]));
-      const position = (item) => {
-        const source = evidence.get(item.evidenceId);
-        const row = source && factRow(source.tool, item.fact.field);
-        return row?.kind === 'row' ? positions.get(`${item.evidenceId}|${row.path}`) : undefined;
-      };
-      const ranked = selection.facts.filter((item) => position(item) !== undefined).sort((left, right) => position(left) - position(right));
+      const { evidenceId, collection, indexes } = verdict.rankOrder;
+      const positions = new Map(indexes.map((index, position) => [index, position]));
+      const rowOf = (item) => item.evidenceId === evidenceId ? factRow(evidence.get(evidenceId).tool, item.fact.field) : null;
+      const ranked = selection.facts.filter((item) => rowOf(item)?.collection === collection)
+        .sort((left, right) => positions.get(rowOf(left).index) - positions.get(rowOf(right).index));
       let offset = 0;
-      selection.facts = selection.facts.map((item) => position(item) !== undefined ? ranked[offset++] : item);
+      selection.facts = selection.facts.map((item) => rowOf(item)?.collection === collection ? ranked[offset++] : item);
     }
   }
   const citedIds = [...new Set(selection.facts.map((item) => item.evidenceId))];
   const rendered = request ? renderableFacts(request, selection.facts, evidence, answer) : selection.facts;
-  const normalized = renderVerifiedNarrative(rendered, { locale, layout, operation: request?.operation || null, empty: emptyProofs, emptyRank });
+  const normalized = renderVerifiedNarrative(rendered, { locale, layout, operation: request?.operation || null, empty: emptyProofs });
   if (normalized.length > FACT_LIMITS.maxAnswerChars) return { ok: false, citedIds: [], issues: [{ code: 'ANSWER_TOO_LARGE' }] };
   return { ok: true, normalized, citedIds, facts: selection.facts, issues: [] };
 }

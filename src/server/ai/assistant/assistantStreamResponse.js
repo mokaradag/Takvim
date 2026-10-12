@@ -241,8 +241,10 @@ export function assistantStreamResponse(turn, {
   /** Kuyrukta yer açılana (ya da akış kapanana) kadar bekler; bekleme sınırlıdır ve üretim sinyali onu da keser. */
   async function waitForCapacity() {
     const backpressure = controller.desiredSize <= 0;
+    // Sınır akışın değil bu bekleyişin başından ölçülür.
+    const waitStartedAt = performance.now();
     while (!closed && controller.desiredSize <= 0 && !generationSignal.aborted) {
-      const remaining = deliveryTimeoutMs - (performance.now() - startedAt);
+      const remaining = deliveryTimeoutMs - (performance.now() - waitStartedAt);
       if (remaining <= 0) {
         // Okumayan istemci turu tutamaz: üretim kesilir, hak bırakılır.
         stall('DELIVERY_STALLED');
