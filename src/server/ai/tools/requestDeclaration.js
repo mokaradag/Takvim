@@ -34,7 +34,7 @@ import { createEvidenceFacts, fieldPatternCovers } from '../../../domain/ai/evid
 import { businessDate } from '../../../domain/calendar/businessDate.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 import { parseSicil } from '../../identity/sicil.js';
-import { normalizeTaskFilters } from './rota/taskFacts.js';
+import { normalizeTaskFilters, searchText } from './rota/taskFacts.js';
 import { parseToolArguments } from './toolArguments.js';
 import { invalidArguments } from './toolErrors.js';
 import { getRotaTool, toolCatalogForModel } from './toolRegistry.js';
@@ -220,29 +220,39 @@ export function metricIdHints(problems, raw) {
 }
 
 /**
- * Bildirimin kullanıcının adlandırdığı kayıtları: metni kullanıcının iletisinde geçen
- * varlık adları ve görev başlığı metni. Yalnızca kabul edilen istekler birikir.
+ * Kabul edilen isteğin kapsam yükümlülükleri, TÜRÜYLE: kullanıcının adlandırdığı ya da kimliğini
+ * yazdığı her kayıt (planla tamamlanan istekteki seçici kimlikleri dâhil) ve görev başlığı metni.
+ * Yalnızca kabul edilen istekler birikir.
  */
-export function namedScope(scope, raw, textTrusted) {
-  const texts = [...(Array.isArray(raw?.entities) ? raw.entities.map((entity) => entity?.text) : []), raw?.filters?.text];
+export function namedScope(scope, request, textTrusted) {
   const next = new Map((scope || []).map((item) => [item.key, item]));
-  for (const text of texts) {
-    if (typeof text !== 'string' || !textTrusted(text)) continue;
-    const key = containmentText(text);
-    if (key && !next.has(key)) next.set(key, { key, text: text.trim() });
+  const add = (item) => { if (!next.has(item.key)) next.set(item.key, item); };
+  for (const entity of request?.entities || []) {
+    const name = typeof entity.text === 'string' && textTrusted(entity.text) ? containmentText(entity.text) : '';
+    if (entity.id) add({ key: `${entity.type}#${entity.id}`, type: entity.type, id: entity.id });
+    else if (name) add({ key: `${entity.type}:${name}`, type: entity.type, name });
   }
+  const filter = request?.filters?.text;
+  const name = typeof filter === 'string' && textTrusted(filter) ? containmentText(filter) : '';
+  if (name) add({ key: `filter:${name}`, type: 'filter', name });
   return [...next.values()];
 }
 
 /**
- * Düzeltme biçimi onarır, sorunun kapsamını daraltamaz: önceki bildirimde kullanıcının
- * adlandırdığı kayıtlardan yeni bildirimin varlıklarında (ya da başlık metninde) karşılığı
- * olmayanlar. Ad kısaltılmış ya da sözcüklerle uzatılmış olabilir.
+ * Düzeltme biçimi onarır, sorunun kapsamını daraltamaz ya da başka bir nüfusa kaydıramaz: önceki
+ * kabulün yükümlülüklerinden planla tamamlanan yeni istekte karşılığı olmayanlar. Kimlik aynı türde
+ * aynı kimlikle, ad aynı türde (kısaltılmış ya da sözcüklerle uzatılmış) adla karşılanır; görev
+ * başlığı metni başlık metniyle ya da o metinle adlandırılan görevle (daha dar) karşılanır.
  */
-export function droppedNames(scope, raw) {
-  const texts = [...(Array.isArray(raw?.entities) ? raw.entities.map((entity) => entity?.text) : []), raw?.filters?.text]
-    .filter((text) => typeof text === 'string').map(containmentText).filter(Boolean);
-  return (scope || []).filter((item) => !texts.some((text) => prefixRelated(item.key, text))).map((item) => item.text);
+export function droppedNames(scope, request) {
+  const entities = request?.entities || [];
+  const filter = typeof request?.filters?.text === 'string' ? containmentText(request.filters.text) : '';
+  const kept = (item) => (item.id
+    ? entities.some((entity) => entity.type === item.type && entity.id === item.id)
+    : entities.some((entity) => (entity.type === item.type || (item.type === 'filter' && entity.type === 'task'))
+      && typeof entity.text === 'string' && prefixRelated(item.name, containmentText(entity.text)))
+      || (item.type === 'filter' && Boolean(filter) && prefixRelated(item.name, filter)));
+  return (scope || []).filter((item) => !kept(item)).map((item) => item.key);
 }
 
 /** Düşürülen adların düzeltme ipucu. */
@@ -282,8 +292,9 @@ export function requestSummary(request) {
 
 /* ── Varlık bağlama ───────────────────────────────────────── */
 
-function resolvedId(type, tool, args, payload, text) {
+function resolvedId(type, tool, args, payload, entity) {
   const data = payload?.data;
+  const { text } = entity;
   if (!data || typeof data !== 'object') return null;
   if (type === 'wbs') {
     // Kesilmiş ya da derinlikle sınırlı düğüm listesindeki tek eşleşme bütün ağaçta tek olduğunu kanıtlamaz.
@@ -296,7 +307,8 @@ function resolvedId(type, tool, args, payload, text) {
     const baselines = (data.availableBaselines || []).filter((baseline) => containmentText(baseline.name) === text);
     return baselines.length === 1 ? baselines[0].baselineId : null;
   }
-  if (containmentText(args?.text || '') !== text) return null;
+  // Ad aramasının çözümü yalnızca AYNI aramanın (aracın yüklemiyle) çözümüdür.
+  if (!sameSearch(args?.text, entity.query)) return null;
   if (type === 'project' && tool === 'rota_project_search' && data.resolution === 'unique') return data.resolvedProject?.projectId || null;
   if (type === 'person' && tool === 'rota_person_search' && data.resolution === 'unique') return data.resolvedPerson?.sicil == null ? null : String(data.resolvedPerson.sicil);
   if (type === 'task' && tool === 'rota_task_search' && data.titleResolution === 'unique') return data.resolvedTask?.taskId || null;
@@ -312,20 +324,23 @@ export function bindRequestEntities(request, entries, selection = null) {
     : selection?.personSicil != null ? ['person', String(selection.personSicil)] : null;
   const bound = request.entities.map((entity) => {
     if (entity.id) return { ...entity, bound: entity.id };
-    const found = new Set(entries.map(({ tool, args, payload }) => resolvedId(entity.type, tool, args, payload, entity.text)).filter(Boolean));
+    const found = new Set(entries.map(({ tool, args, payload }) => resolvedId(entity.type, tool, args, payload, entity)).filter(Boolean));
     // Kapsamın bağladığı ad: tam adı kullanıcının iletisinde geçen tek kısmi aday ya da (seri incelemesinde) tek serinin kayıtları.
     for (const item of selection?.named || []) {
       if (item.type !== entity.type || (item.tool && item.tool !== request.population?.tool)) continue;
       const uniqueScope = request.entities.filter((other) => other.type === entity.type && prefixRelated(item.text, other.text)).length === 1;
-      if (item.text === entity.text || (uniqueScope && prefixRelated(item.text, entity.text) && prefixRelated(item.title, entity.text))) found.add(item.id);
+      if (sameSearch(item.query, entity.query) || (uniqueScope && prefixRelated(item.text, entity.text) && prefixRelated(item.title, entity.text))) found.add(item.id);
     }
     if (found.size === 1) return { ...entity, bound: [...found][0] };
     const sameType = request.entities.filter((item) => item.type === entity.type && item.text);
     return { ...entity, bound: !found.size && selected?.[0] === entity.type && sameType.length === 1 ? selected[1] : null };
   });
   return bound.map((entity, index) => bound.some((other, position) => position !== index && entity.bound && other.type === entity.type
-    && other.bound === entity.bound && entity.text && other.text && other.text !== entity.text) ? { ...entity, bound: null } : entity);
+    && other.bound === entity.bound && entity.text && other.text && !sameSearch(other.query, entity.query)) ? { ...entity, bound: null } : entity);
 }
+
+/** İki metin aracın arama yükleminde aynı arama mı (requestPopulation.canonicalFacets ile aynı kimlik)? */
+const sameSearch = (left, right) => searchText(left) != null && searchText(left) === searchText(right);
 
 /** Kullanıcının adlandırdığı adayın adı ile bildirilen ad aynı adın kısaltılmışı ya da sözcüklerle uzatılmışı mı? */
 const prefixRelated = (title, text) => Boolean(title && text) && (title === text || text.startsWith(`${title} `) || title.startsWith(`${text} `));
@@ -347,13 +362,14 @@ function probeCall(entity, projectId = null) {
 }
 
 /**
- * Bu metinle ad araması yapıldı ve hiçbir görünür kayda uymadı mı? Koşulsuz arama her kapsamda,
- * projede yapılan arama yalnızca adın aynı projedeki çözümü için "yok" kanıtıdır.
+ * Bu adın AYNI araması (aracın yüklemiyle: `searchText`) yapıldı ve hiçbir görünür kayda uymadı mı?
+ * Başka biçimde yazılmış (ör. "A B" / "A-B") aramanın boşluğu bu adın yokluğunu kanıtlamaz. Koşulsuz
+ * arama her kapsamda, projede yapılan arama yalnızca adın aynı projedeki çözümü için "yok" kanıtıdır.
  */
-function searchedNone(entries, type, text, projectId = null) {
+function searchedNone(entries, type, query, projectId = null) {
   const [search, field] = NAME_SEARCHES[type] || [];
   return entries.some(({ tool, args = {}, payload }) => tool === search && payload?.data && payload.complete !== false
-    && containmentText(args.text || '') === text && Object.keys(args).every((key) => ['text', 'limit', 'projectId'].includes(key))
+    && sameSearch(args.text, query) && Object.keys(args).every((key) => ['text', 'limit', 'projectId'].includes(key))
     && (args.projectId == null || (projectId != null && canonicalActualId(args.projectId) === canonicalActualId(projectId))) && payload.data[field] === 'none');
 }
 
@@ -370,7 +386,7 @@ export function nameProbes(request, entries, selection = null) {
   return bound.flatMap((entity) => {
     const probe = probeText(entity);
     const projectId = resolutionProjectId(request, bound, entity);
-    if (entity.bound || !entity.text || !searchedNone(entries, entity.type, entity.text, projectId) || containmentText(probe) === entity.text) return [];
+    if (entity.bound || !entity.text || !searchedNone(entries, entity.type, entity.query, projectId) || sameSearch(probe, entity.query)) return [];
     const call = probeCall(entity, projectId);
     return call ? [call] : [];
   });
@@ -386,8 +402,8 @@ export function unmatchedEntities(request, entries, selection = null) {
   return bound.filter((entity) => {
     if (entity.bound || !entity.text) return false;
     const projectId = resolutionProjectId(request, bound, entity);
-    return searchedNone(entries, entity.type, entity.text, projectId)
-      && (!probeCall(entity, projectId) || searchedNone(entries, entity.type, containmentText(probeText(entity)), projectId));
+    return searchedNone(entries, entity.type, entity.query, projectId)
+      && (!probeCall(entity, projectId) || searchedNone(entries, entity.type, probeText(entity), projectId));
   });
 }
 

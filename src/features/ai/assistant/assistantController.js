@@ -436,8 +436,8 @@ export function createAssistantController({
    * Durdurulan ya da `done` almadan kesilen üretimin sonucunu sunucudan okur:
    * sağlayıcı yanıtı tamamlamış ve sunucu onu kaydetmişse tur tamamlanmış
    * gösterilir. Okuma bitene kadar bu konuşmada yeni tur başlatılmaz. Sunucu
-   * turu kendi hata olayıyla bitirdiyse (`settled`) karar verilmiştir: tek
-   * doğrulama okuması yeterlidir, gecikmeli yeniden okuma beklenmez.
+   * turu kendi hata olayıyla bitirdiyse (`settled`) karar verilmiştir: tek başarılı
+   * doğrulama okuması yeterlidir, gecikmeli yeniden okuma yalnızca okuma başarısızsa sürer.
    */
   async function reconcileRun(run, { settled = false } = {}) {
     const ownSession = session;
@@ -451,7 +451,8 @@ export function createAssistantController({
         result = await api.loadAssistantConversationRequest(run.conversationId, { signal: load.signal });
         if (ownSession !== session || load.signal.aborted) break;
         const found = result?.ok && result.messages.some((message) => message.role === 'assistant' && message.replyToId === run.userMessageId);
-        if (found || settled || result?.code === 'NOT_FOUND' || isSessionFailure(result || {}) || attempt >= reconciliationDelaysMs.length) break;
+        // Sunucu kararı (settled) tek BAŞARILI okumayla doğrulanır; geçici okuma hatası kayıtlı yanıtı gizlemez.
+        if (found || (settled && result?.ok) || result?.code === 'NOT_FOUND' || isSessionFailure(result || {}) || attempt >= reconciliationDelaysMs.length) break;
         await new Promise((resolve) => {
           const finish = () => { clearTimeout(timer); load.signal.removeEventListener('abort', finish); resolve(); };
           const timer = setTimeout(finish, reconciliationDelaysMs[attempt]);

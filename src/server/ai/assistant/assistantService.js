@@ -825,8 +825,8 @@ function persistAnswer(turn, write) {
  * Yanıtın yazımı istemcinin iptaline bağlı değildir: model yanıtı tamamladıysa
  * bağlantı o anda kesilse de yanıt kaybolmaz (yazım yine süre sınırlıdır).
  */
-export async function generateAssistantAnswer(turn, { signal = null, onStatus = null, onProgress = null, onText, onDelivery = null }) {
-  if (turn.grounded) return generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress, onText, onDelivery });
+export async function generateAssistantAnswer(turn, { signal = null, onStatus = null, onProgress = null, onText, onDelivery = null, onGenerated = null }) {
+  if (turn.grounded) return generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress, onText, onDelivery, onGenerated });
   const result = turn.dataUnavailable ? { text: 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', finishReason: 'unavailable' } : await getAiGateway().streamChat({
     profile: turn.profile,
     messages: turn.modelMessages,
@@ -836,6 +836,8 @@ export async function generateAssistantAnswer(turn, { signal = null, onStatus = 
     onText
   });
   if (turn.dataUnavailable) await onText(result.text);
+  // Üretim bitti: bundan sonrası (yazım, açıklama, teslim) kendi süre sınırlarıyla yürür.
+  onGenerated?.();
   if (turn.general && result.finishReason === 'stop') result.finishReason = 'general';
   const messageId = randomUUID();
   const stored = await persistAnswer(turn, (executor) => appendConversationAnswer(executor, turn.sicil, {
@@ -904,7 +906,7 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
  * doğrulandıktan (ya da güvenli iletiye düştükten) SONRA, tek kısa işlemde
  * yazılır. Durdurulan ya da süresi dolan tur yazılmaz.
  */
-async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress = null, onText, onDelivery = null }) {
+async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress = null, onText, onDelivery = null, onGenerated = null }) {
   const options = {
     messages: turn.modelMessages,
     catalog: toolCatalogForModel(),
@@ -927,6 +929,8 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
   // Seçilen kipin araç profili turu yürütür: Derin düşünme Standart profile indirgenmez.
   let grounded = await runIn(turn.profile, { escalation: Boolean(turn.escalationProfile) });
   if (grounded.outcome === 'escalate') grounded = await escalateGroundedTurn(turn, grounded, { signal, onText: options.onText, runIn });
+  // Üretim bitti: bundan sonrası (yazım, açıklama, teslim) kendi süre sınırlarıyla yürür.
+  onGenerated?.();
   const messageId = randomUUID();
   let stored;
   let answer;

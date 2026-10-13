@@ -450,6 +450,20 @@ test('tool round measurements include failed connection attempts before the succ
   assert.equal(aiTelemetrySnapshot().retries, 1);
 });
 
+test('a tool round that carries tool results is never resent by a connection retry without the caller access check', async (t) => {
+  const fake = createFakeAiProvider();
+  fake.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'stream', text: 'yeniden gönderilmemeli' });
+  const { gateway, admission } = gatewayFor(t, { provider: fake });
+  const evidence = [...MESSAGES,
+    { role: 'assistant', content: '', toolCalls: [{ id: 'call_1', name: 'rota_task_search', arguments: '{}' }] },
+    { role: 'tool', toolCallId: 'call_1', content: JSON.stringify({ ok: true, data: { tasks: [{ title: 'Yetkisi kalkan görev' }] } }) }];
+  await assert.rejects(gateway.runToolSession({ profile: 'chat.tools', run: (session) => session.round({ messages: evidence }) }),
+    { code: 'AI_PROVIDER_UNAVAILABLE' });
+  assert.equal(fake.calls.length, 1, 'kanıt taşıyan tur bağlantı yeniden denemesiyle ikinci kez gönderilmedi');
+  assert.equal(aiTelemetrySnapshot().retries, 0);
+  assert.equal(admission.status().active, 0);
+});
+
 for (const tools of [false, true]) {
   test(`provider inactivity excludes downstream delivery waits (${tools ? 'tool session' : 'chat'})`, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });

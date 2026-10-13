@@ -1160,7 +1160,9 @@ taşımaz ve hiçbir katmanda üretim ilerlemesi sayılmaz. İlerleme katmanlı 
 sınırlıdır:
 
 1. **Sağlayıcı:** her bağlantı denemesi kendi ilk olay bütçesini alır; toplam
-   istek süresi bütün yeniden denemeleri sınırlar. İstekten ilk
+   istek süresi bütün yeniden denemeleri sınırlar. Araç sonucu taşıyan model
+   turu bağlantı hatasında yeniden GÖNDERİLMEZ: kanıtın sağlayıcıya her
+   açıklanışı turun güncel erişim denetiminden geçer; hata tura döner. İstekten ilk
    anlamlı akış olayına (rol, metin, akıl yürütme, araç parçası, kullanım)
    `MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS` (60 sn), iki anlamlı olay
    arasına `MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS` (45 sn) izin verilir.
@@ -1169,9 +1171,12 @@ sınırlıdır:
 2. **Tur:** akış yanıtının ilerleme sınırı 10 sn kurulum + yapılandırılmış sıra
    süresi + sağlayıcının ilk olay/boşta sınırlarının büyüğüdür (varsayılan 90 sn).
    Bu süre boyunca hiçbir gerçek ilerleme (evre, metin,
-   `progress`, araç yürütmesi, kayıt) görmezse üretimi `AI_TIMEOUT`
+   `progress`, araç yürütmesi) görmezse üretimi `AI_TIMEOUT`
    (`GENERATION_STALLED`) ile keser. Sinyale uymayan iş 25 sn içinde bitmezse
-   tur yine tek hata olayıyla sonlandırılır.
+   tur yine tek hata olayıyla sonlandırılır. Gözcü yalnızca üretimi korur: yanıt
+   üretildikten sonraki yazım, erişim denetimi ve teslim kendi sınırlarıyla
+   yürür (yazım bütçesi, kanıt yeniden doğrulama süresi, teslim beklemesi);
+   yavaş kayıt doğrulanmış yanıtı kesmez.
 3. **Kaynaklar:** hangi yol olursa olsun kapasite kirası ve konuşmanın üretim
    hakkı tam bir kez bırakılır; araçlı oturum sinyale uymayan bir araç ya da
    sağlayıcı yüzünden kirayı süre sınırının ötesinde tutamaz. Ardından aynı tur
@@ -1275,9 +1280,11 @@ iletiler bağlamın dışında kaldıysa `accepted` olayı bunu bildirir
   gerekirse kendi sonucundan sonra yeniden başlatır. Kayıtlı yanıt bulunursa tur
   tamamlanmış gösterilir, bulunmazsa kısmi metin ve **Yeniden dene** kalır.
   Sunucunun turu kendi `error` olayıyla bitirmesi (ör. `PROVIDER_STALLED`) bir
-  karardır, belirsiz son değildir: tek doğrulama okuması yapılır ve gecikmeli
-  yeniden okumalar beklenmez; durdurulan sağlayıcıdan sonra yeniden deneme ve
-  yeni konuşma hemen kullanılabilir.
+  karardır, belirsiz son değildir: tek başarılı doğrulama okuması yeterlidir;
+  gecikmeli yeniden okuma yalnızca okuma başarısızsa sürer. Durdurulan
+  sağlayıcıdan sonra yeniden deneme ve yeni konuşma hemen kullanılabilir.
+  Uzlaştırılan (başka yazıcının kaydettiği) yanıt gösterilmiş taslağa eklenmez:
+  önce `revise`, ardından kayıtlı yanıt gelir.
 - **Kabul öncesi hatalar.** Sunucunun iletiyi yazmadan verdiği kesin retler
   (oturum, geçersiz istek, kapalı/yapılandırılmamış hizmet, `CONFLICT`,
   `NOT_FOUND`) yerel turu atar ve metni taslağa geri koyar; yazma alanında yeni

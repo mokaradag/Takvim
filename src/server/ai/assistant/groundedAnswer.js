@@ -337,9 +337,6 @@ function acceptDeclaration(turn, declaration, route) {
   }
   let request;
   const raw = parseTurnRequest(declaration);
-  // Düzeltme kullanıcının adlandırdığı bir kaydı düşüremez (zayıf model reddi soruyu daraltarak "onarır").
-  const dropped = droppedNames(turn.namedScope, raw);
-  const scopeProblems = dropped.length ? { details: ['$.entities:dropped'], hints: [droppedNameHint(dropped)] } : { details: [], hints: [] };
   try {
     request = parseRequestDeclaration(raw, {
       textTrusted: turn.containment.textTrusted,
@@ -348,10 +345,8 @@ function acceptDeclaration(turn, declaration, route) {
     });
   } catch (error) {
     if (error?.code !== TOOL_ERROR_CODES.INVALID_ARGUMENTS) throw error;
-    return { ok: false, details: [...(error.details || []), ...scopeProblems.details],
-      hints: [...(error.hints || []), ...metricIdHints(error.details || [], raw), ...scopeProblems.hints] };
+    return { ok: false, details: error.details || [], hints: [...(error.hints || []), ...metricIdHints(error.details || [], raw)] };
   }
-  if (dropped.length) return { ok: false, ...scopeProblems };
   return { ok: true, request, language };
 }
 
@@ -373,6 +368,9 @@ function preparePlan(turn, calls, declared) {
   const completion = completeRequest(provisional, set.calls.map(({ name, args }) => ({ name, args })),
     { today: turn.context.today, allowedTextFields: turn.allowedTextFields });
   if (completion.problems.length) return { ok: false, details: completion.problems, hints: completion.hints };
+  // Düzeltme kullanıcının adlandırdığı bir kaydı düşüremez (zayıf model reddi soruyu daraltarak "onarır").
+  const dropped = droppedNames(turn.namedScope, completion.request);
+  if (dropped.length) return { ok: false, details: ['$.entities:dropped'], hints: [droppedNameHint(dropped)] };
   const checked = prepareExecutionSet(calls, { catalog: turn.catalog, validateCall: requestCallValidator(turn, completion.request), limits: turn.limits,
     attempted: turn.executor.stats().attempted, callId: turn.callId, today: turn.context.today });
   if (!checked.ok) return { ok: false, details: checked.problems.flatMap((problem) => problem.error.details || []), hints: [], problems: checked.problems };

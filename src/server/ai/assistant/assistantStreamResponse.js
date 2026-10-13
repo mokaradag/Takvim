@@ -152,11 +152,17 @@ export function assistantStreamResponse(turn, {
   let lastByteAt = performance.now();
   let graceTimer = null;
   let delivering = false;
+  // Üretim gözcüsü yalnızca üretimi korur; yazım, açıklama ve teslim kendi sınırlarıyla yürür.
+  let generated = Boolean(turn.replay);
   let recorded = false;
   const startedAt = performance.now();
-  const recordOutcome = (error = null) => {
-    if (recorded) return;
+  // Turun sonucu teslim edilen sonlandırıcıdır: gönderilmiş `done` sonrası kapanış iptal değildir
+  // (hata olayı her yolda sonuçtan SONRA gönderilir). Kayıtlı yanıtın yeniden oynatılması yeni bir
+  // tur değildir; başarısı da başarısızlığı da tur sayaçlarına girmez.
+  const recordOutcome = (failure = null) => {
+    if (recorded || turn.replay) return;
     recorded = true;
+    const error = terminal ? null : failure;
     const payload = error ? assistantStreamErrorPayload(error, { partial: textSent }) : null;
     recordAssistantTurn({ ...(payload ? { code: payload.code, error, source: payload.credentialSource,
       details: error?.details ?? null, serviceFailure: payload.code === 'DATABASE_UNAVAILABLE' } : {}), durationMs: performance.now() - startedAt });
@@ -276,6 +282,8 @@ export function assistantStreamResponse(turn, {
     try {
       const result = await prepare();
       if (generationSignal.aborted || closed || finished || terminal) throw deliveryFailure();
+      // Teslim edilen yanıt yetkilidir: gösterilmiş taslağın yerini alır, ona eklenmez.
+      if (textSent && send(ASSISTANT_STREAM_EVENTS.REVISE, {})) textSent = false;
       textSent = send(ASSISTANT_STREAM_EVENTS.DELTA, { text: result.answer.content });
       if (!textSent) throw deliveryFailure();
       finalEvent(ASSISTANT_STREAM_EVENTS.DONE, {
@@ -295,7 +303,7 @@ export function assistantStreamResponse(turn, {
     const ticker = setInterval(() => {
       const now = performance.now();
       if (!closed && !delivering && now - lastByteAt >= keepaliveMs && controller.desiredSize > 0) enqueue(KEEPALIVE);
-      if (!waiting && now - lastProgressAt >= stallMs) stall('GENERATION_STALLED');
+      if (!waiting && !generated && now - lastProgressAt >= stallMs) stall('GENERATION_STALLED');
     }, tickMs);
     ticker.unref?.();
     const onAbort = () => wake();
@@ -305,7 +313,6 @@ export function assistantStreamResponse(turn, {
       if (turn.replay) {
         await deliver(async () => ({ conversation: turn.conversation,
           answer: turn.sicil ? await discloseAssistantMessage(turn, turn.replay, generationSignal) : turn.replay }), true);
-        // Kayıtlı yanıtın yeniden oynatılması yeni bir tur değildir: tur sayaçlarına girmez.
         return;
       }
       const result = await generate(turn, {
@@ -318,6 +325,7 @@ export function assistantStreamResponse(turn, {
           });
         },
         onProgress: () => progress(),
+        onGenerated: () => { generated = true; },
         onDelivery: deliver,
         onText: async (text) => {
           progress({ visible: true });

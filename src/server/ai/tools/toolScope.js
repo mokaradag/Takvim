@@ -2,7 +2,7 @@ import 'server-only';
 import { TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { parseToolArguments } from './toolArguments.js';
 import { getRotaTool } from './toolRegistry.js';
-import { addDays, foldText, normalizeTaskFilters } from './rota/taskFacts.js';
+import { addDays, foldText, normalizeTaskFilters, searchText } from './rota/taskFacts.js';
 import { businessDate } from '../../../domain/calendar/businessDate.js';
 import { clarificationReferences } from '../../../domain/ai/clarification.js';
 
@@ -270,14 +270,14 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
         const candidate = typeof args.text === 'string' ? namedCandidate(call.name, body.data, userNeedle, args.text) : null;
         if (candidate) {
           ids[candidate.population].add(candidate.id);
-          named.push({ type: candidate.type, text: containmentText(args.text), title: candidate.title, id: candidate.id });
+          named.push({ type: candidate.type, text: containmentText(args.text), query: searchText(args.text), title: candidate.title, id: candidate.id });
         }
         // Adayları tek bir serinin kayıtları olan ad (kesin ya da serinin adı kullanıcının iletisinde) yalnızca seri incelemesini seçer.
         const resolved = call.name === 'rota_task_search' && typeof args.text === 'string' ? body.data?.resolvedSeries : null;
         if (resolved?.taskId && (resolved.exact === true || (phrasePositions(userNeedle, args.text).length === 1
           && phrasePositions(userNeedle, resolved.title || '').includes(phrasePositions(userNeedle, args.text)[0])))) {
           series.add(String(resolved.taskId));
-          named.push({ type: 'task', text: containmentText(args.text), id: String(resolved.taskId), tool: 'rota_recurrence_inspect' });
+          named.push({ type: 'task', text: containmentText(args.text), query: searchText(args.text), id: String(resolved.taskId), tool: 'rota_recurrence_inspect' });
         }
       }
       established = true;

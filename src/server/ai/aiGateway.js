@@ -483,7 +483,7 @@ export function createAiGateway({
    * gitmemiştir; yanıt başladıktan sonraki hiçbir hata yinelenmez (aynı yanıt
    * baştan ikinci kez üretilmez).
    */
-  async function connectStream({ deadline, watch, context, source, healthFailure, invoke }) {
+  async function connectStream({ deadline, watch, context, source, healthFailure, invoke, resend = true }) {
     for (let attempt = 1; ; attempt += 1) {
       watch.restart();
       context.attempts = attempt;
@@ -494,7 +494,7 @@ export function createAiGateway({
         const failure = deadline.failure() || watch.failure() || toAiFailure(error);
         recordProviderCall({ operation: 'ai.provider.stream', latencyMs: now() - startedAt, code: failure.code, healthFailure: healthFailure(failure), source });
         const delayMs = RETRY_BASE_DELAY_MS + Math.floor(random() * RETRY_JITTER_MS);
-        const retry = attempt < MAX_PROVIDER_ATTEMPTS && isConnectFailure(failure)
+        const retry = resend && attempt < MAX_PROVIDER_ATTEMPTS && isConnectFailure(failure)
           && deadline.remainingMs() >= delayMs + MIN_ATTEMPT_BUDGET_MS;
         if (!retry) throw failure;
         watch.pause();
@@ -779,6 +779,9 @@ export function createAiGateway({
               context,
               source: credential.source,
               healthFailure,
+              // Araç sonucu taşıyan tur kanıtın sağlayıcıya açıklanmasıdır: çağıranın güncel erişim
+              // denetiminden geçmeden yeniden gönderilmez; bağlantı hatası tura döner.
+              resend: !safeMessages.some((message) => message.role === 'tool'),
               invoke: () => getProvider().streamToolCompletion({
                 baseUrl: config.baseUrl,
                 apiKey: credential.apiKey,

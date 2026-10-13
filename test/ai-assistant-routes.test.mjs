@@ -489,6 +489,59 @@ test('gerçek ilerleme uzun üretimi canlı tutar ve seyreltilmiş progress olay
   assert.equal(released(), 1);
 });
 
+test('üretim gözcüsü yalnızca üretimi korur: üretimden sonraki yavaş yazım ve açıklama doğrulanmış yanıtı kesmez', async (t) => {
+  holdLoop(t);
+  const { turn, released } = fakeTurn();
+  const response = assistantStreamResponse(turn, {
+    keepaliveMs: 5, stallMs: 30, graceMs: 30,
+    generate: async (_turn, { onGenerated, onDelivery }) => {
+      onGenerated?.();
+      // Yazım ve teslim öncesi erişim denetimi üretim gözcüsünün sınırından uzun sürer (kendi bütçeleri içinde).
+      await pause(120);
+      return onDelivery(async () => {
+        await pause(120);
+        return { ...finalAnswer(turn, 'Kayıtlı yanıt'), contentAuthoritative: true };
+      });
+    }
+  });
+  const events = parseSseText(await response.text()).events;
+  assert.deepEqual(events.map((event) => event.event), ['accepted', 'delta', 'done']);
+  assert.equal(events[1].data.text, 'Kayıtlı yanıt');
+  assert.equal(released(), 1);
+});
+
+test('uzlaştırılan yanıt gösterilmiş taslağın yerini alır: revise ardından tek yetkili metin ve tek done gelir', async (t) => {
+  holdLoop(t);
+  const { createAssistantStreamDecoder } = await import('../src/features/ai/assistant/assistantClient.js');
+  const stamp = '2026-10-13T10:00:00.000Z';
+  const { turn: base } = fakeTurn();
+  const { turn, released } = fakeTurn({ sicil: 1, conversation: { ...base.conversation, createdAt: stamp, updatedAt: stamp } });
+  const draft = 'T'.repeat(30);
+  const stored = 'K'.repeat(30);
+  const response = assistantStreamResponse(turn, {
+    keepaliveMs: 1000, stallMs: 1000,
+    generate: async (_turn, { onText, onGenerated }) => {
+      await onText(draft);
+      onGenerated?.();
+      // Aynı turun yanıtını başka bir yazıcı kaydetmişti: kayıtlı (yetkili) yanıt döner.
+      const result = finalAnswer(turn, stored);
+      return { ...result, answer: { ...result.answer, finishReason: 'general', createdAt: stamp }, reconciled: true };
+    }
+  });
+  const text = await response.text();
+  assert.deepEqual(parseSseText(text).events.map((event) => event.event), ['accepted', 'delta', 'revise', 'delta', 'done']);
+  // Taslak ve kayıtlı yanıt ayrı ayrı sınırın içindedir; birleşimleri sınırı aşar ama istemci taslağı siler.
+  const decoder = createAssistantStreamDecoder({ maxAnswerChars: 40 });
+  const shown = { answer: '' };
+  for (const event of decoder.push(text)) {
+    if (event.type === 'revise') shown.answer = '';
+    if (event.type === 'delta') shown.answer += event.data.text;
+  }
+  assert.equal(decoder.end()?.type, 'done');
+  assert.equal(shown.answer, stored);
+  assert.equal(released(), 1);
+});
+
 test('okumayan istemci turu tutamaz: teslim beklemesi sınırlıdır, üretim kesilir ve hak bırakılır', async (t) => {
   holdLoop(t);
   const { turn, released } = fakeTurn();
@@ -649,6 +702,35 @@ test('kayıtlı yanıtın yeniden oynatılması tur sayaçlarını artırmaz', a
   assert.equal(events.at(-1).data.replayed, true);
   const turns = aiTelemetrySnapshot().assistantTurns;
   assert.deepEqual([turns.completed, turns.failed, turns.cancelled], [0, 0, 0]);
+});
+
+test('turun sayılan sonucu teslim edilen sonlandırıcıdır: başarısız yeniden oynatma ve done sonrası kapanış başarısız tur sayılmaz', async (t) => {
+  holdLoop(t);
+  const { aiTelemetrySnapshot, resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
+  const { AiError } = await import('../src/server/ai/aiErrors.js');
+  resetAiTelemetryForTests();
+  const { turn } = fakeTurn();
+  const replay = { id: randomUUID(), sequence: 2, role: 'assistant', content: 'Kayıtlı yanıt', turnId: null, replyToId: turn.userMessage.id, mode: 'standard', finishReason: 'stop', createdAt: 'x' };
+  // Yeniden oynatma teslim edilemedi (istemci bağlantıyı kesti): özgün tur zaten sayılmıştı.
+  const stop = new AbortController();
+  stop.abort(new AiError('AI_CANCELLED'));
+  const failed = assistantStreamResponse({ ...turn, replay, claim: { ...turn.claim, signal: stop.signal } });
+  assert.equal(parseSseText(await failed.text()).events.at(-1).event, 'error');
+  let turns = aiTelemetrySnapshot().assistantTurns;
+  assert.deepEqual([turns.completed, turns.failed, turns.cancelled], [0, 0, 0]);
+  // done gönderildikten sonra (üretim dönmeden) istemci kapanırsa tur tamamlanmıştır.
+  const { turn: live } = fakeTurn();
+  let response;
+  response = assistantStreamResponse(live, {
+    generate: async (_turn, { onDelivery }) => {
+      const result = await onDelivery(async () => ({ ...finalAnswer(live), contentAuthoritative: true }));
+      await response.body.cancel();
+      return result;
+    }
+  });
+  for (let waited = 0; aiTelemetrySnapshot().assistantTurns.completed + aiTelemetrySnapshot().assistantTurns.cancelled === 0 && waited < 1000; waited += 10) await pause(10);
+  turns = aiTelemetrySnapshot().assistantTurns;
+  assert.deepEqual([turns.completed, turns.failed, turns.cancelled], [1, 0, 0]);
 });
 
 test('kullanıcıya özgü tur hatası (kişisel anahtar, istek) hizmet hatası sayılmaz; kurumsal anahtar reddi sayılır', async (t) => {

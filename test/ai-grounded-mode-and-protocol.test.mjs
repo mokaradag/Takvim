@@ -19,6 +19,7 @@ import { assistantReadiness, captureConsole, createAiStack, listAssistantConvers
 import { startFakeOpenAiCompatibleServer } from './helpers/fakeOpenAiCompatibleServer.mjs';
 import { AYSE, callRotaTool, LEAD, NOW, PROJECTS, TASKS, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { declared } from './helpers/evidenceScenario.mjs';
+import { parsedRequest } from './helpers/requestScenario.mjs';
 
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
 const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
@@ -726,6 +727,50 @@ test('a repair cannot narrow the question: dropping a record the user named is r
   const [trace] = turnTraces(logs);
   assert.deepEqual([trace.selectedBy, trace.escalated, trace.declarations], ['server', false, 3]);
   drained(stack);
+});
+
+test('a repair cannot widen the question: a record named by ID, or by name as another type, stays an obligation before SQL', async (t) => {
+  const stack = stackFor(t);
+  const scoped = (await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL })).result.data.totals.total;
+  const visible = (await callRotaTool(stack, AYSE, 'rota_task_analytics', {})).result.data.totals.total;
+  assert.notEqual(scoped, visible, 'fikstür iki nüfusu ayırır');
+  const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, layout: 'auto',
+    entities: [{ type: 'project', id: PROJECTS.FULL }] };
+  const refusalOf = (call) => JSON.parse(call.messages.at(-1).content).error;
+  let widened = null;
+  let before = null;
+  stack.db.aiToolFailure = { 'task-facts': new Error('read unavailable') };
+  stack.provider.enqueue(nativePlan(request, [{ name: 'rota_task_analytics', arguments: { projectId: PROJECTS.FULL } }]),
+    { type: 'script', respond: (call) => {
+      assert.equal(refusalOf(call).code, 'INTERNAL', 'ilk okuma kanıt üretmeden başarısız');
+      stack.db.aiToolFailure = {};
+      before = sqlCalls(stack);
+      // Zayıf model: kimlikle adlandırılan projeyi atıp bütün görünür nüfusu okur.
+      const { entities: _entities, ...broad } = request;
+      return nativePlan(broad, [{ name: 'rota_task_analytics', arguments: {} }]);
+    } },
+    { type: 'script', respond: (call) => {
+      widened = { sql: sqlCalls(stack) - before, error: refusalOf(call) };
+      return nativePlan(request, [{ name: 'rota_task_analytics', arguments: { projectId: PROJECTS.FULL } }]);
+    } });
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `${PROJECTS.FULL} projesinde toplam kaç görev var?` })).assistantMessage;
+  assert.equal(widened.sql, 0, 'genişletilmiş bildirim için SQL çalışmaz');
+  assert.deepEqual(widened.error.details, ['$.entities:dropped']);
+  assert.equal(answer.finishReason, 'stop');
+  assert.match(answer.content, new RegExp(`\\*\\*${scoped}\\*\\*`));
+  drained(stack);
+  // Ad, türüyle bir yükümlülüktür: aynı yazımlı görev ya da görev başlığı metni projenin yerini tutmaz.
+  const { droppedNames, namedScope } = await import('../src/server/ai/tools/requestDeclaration.js');
+  const parse = (raw) => parsedRequest(raw);
+  const project = namedScope([], parse({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', text: 'Radar' }] }), () => true);
+  assert.equal(droppedNames(project, parse({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'task', text: 'Radar' }] })).length, 1);
+  assert.equal(droppedNames(project, parse({ operation: 'value', metrics: ['tasks.total'], filters: { text: 'Radar' } })).length, 1);
+  assert.equal(droppedNames(project, parse({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] })).length, 0);
+  // Görev başlığı metni aynı metinle adlandırılan göreve daraltılabilir; tersi (tek görevden nüfusa) genişlemedir.
+  const filter = namedScope([], parse({ operation: 'list', metrics: ['task.title'], filters: { text: 'Radar' } }), () => true);
+  assert.equal(droppedNames(filter, parse({ operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', text: 'Radar' }] })).length, 0);
+  const task = namedScope([], parse({ operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', text: 'Radar' }] }), () => true);
+  assert.equal(droppedNames(task, parse({ operation: 'list', metrics: ['task.title'], filters: { text: 'Radar' } })).length, 1);
 });
 
 test('a count read through a paged search is answered from its exact total; a paged list is completed by one server read of the declared population', async (t) => {

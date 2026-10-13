@@ -166,6 +166,15 @@ export function foldText(value) {
     .replace(/[̀-ͯ]/g, '');
 }
 
+/**
+ * Arama metninin TEK kimliği: aracın kendi arama yüklemi (noktalama ve ı/i ayrı kalır).
+ * Nüfus, yürütme kimliği, ad bağlama ve "bulunamadı" kanıtı bununla karşılaştırılır;
+ * daha gevşek bir katlama farklı aramaları aynı arama sayardı.
+ */
+export function searchText(text) {
+  return text ? foldText(String(text).trim()) || null : null;
+}
+
 export function textMatches(fact, text) {
   if (!text) return true;
   return foldText(`${fact.title} ${fact.keyword}`).includes(foldText(text));

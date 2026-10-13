@@ -212,15 +212,30 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
     if (!verdict.ok) return { ok: false, citedIds: [], issues: verdict.issues };
     emptyProofs = verdict.empty || [];
     emptyProperties = verdict.emptyProperties || [];
-    if (verdict.rankOrder) {
-      const { evidenceId, collection, indexes } = verdict.rankOrder;
-      const positions = new Map(indexes.map((index, position) => [index, position]));
-      const rowOf = (item) => item.evidenceId === evidenceId ? factRow(evidence.get(evidenceId).tool, item.fact.field) : null;
-      const ranked = selection.facts.filter((item) => rowOf(item)?.collection === collection)
-        .sort((left, right) => positions.get(rowOf(left).index) - positions.get(rowOf(right).index));
-      let offset = 0;
-      selection.facts = selection.facts.map((item) => rowOf(item)?.collection === collection ? ranked[offset++] : item);
-    }
+    // Satırlar doğrulanmış sırayla yazılır: sıralamada sıralama kanıtının, listede aracın (bildirilen
+    // sıralamayla eşleşmiş) satır sırası. Seçimin sırası bu sırayı değiştirmez.
+    const order = verdict.rankOrder ? new Map(verdict.rankOrder.indexes.map((index, position) => [index, position])) : null;
+    const rowOf = (item) => {
+      const row = factRow(evidence.get(item.evidenceId)?.tool, item.fact.field);
+      if (verdict.rankOrder) return item.evidenceId === verdict.rankOrder.evidenceId && row?.collection === verdict.rankOrder.collection ? row : null;
+      return request.operation === 'list' && row?.kind === 'row' ? row : null;
+    };
+    const keyOf = (item) => `${item.evidenceId}|${rowOf(item).collection}`;
+    const positionOf = (item) => (order ? order.get(rowOf(item).index) : rowOf(item).index);
+    const groups = new Map();
+    selection.facts.forEach((item, position) => {
+      if (!rowOf(item)) return;
+      if (!groups.has(keyOf(item))) groups.set(keyOf(item), []);
+      groups.get(keyOf(item)).push({ item, position });
+    });
+    for (const group of groups.values()) group.sort((left, right) => positionOf(left.item) - positionOf(right.item) || left.position - right.position);
+    const offsets = new Map();
+    selection.facts = selection.facts.map((item) => {
+      if (!rowOf(item)) return item;
+      const offset = offsets.get(keyOf(item)) || 0;
+      offsets.set(keyOf(item), offset + 1);
+      return groups.get(keyOf(item))[offset].item;
+    });
   }
   const citedIds = [...new Set(selection.facts.map((item) => item.evidenceId))];
   const rendered = request ? renderableFacts(request, selection.facts, evidence, answer, emptyProperties) : selection.facts;

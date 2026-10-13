@@ -153,6 +153,7 @@ const OMITTED_WHEN_EMPTY = Object.freeze({
   rota_task_search: { tasks: ['keyword', 'targetFinish', 'plannedStart', 'plannedFinish', 'actualStart', 'actualFinish', 'progressPercent',
     'createdAt', 'updatedAt', 'overdueDays', 'project.code'] },
   rota_project_search: { matches: ['code', 'lead'] },
+  rota_person_search: { people: ['jobTitle'] },
   rota_portfolio_summary: { projects: ['code'] },
   rota_baseline_compare: { mostSlipped: ['targetFinish'] },
   rota_schedule_requests: { items: ['decidedAt', 'project.code'] },
@@ -321,9 +322,12 @@ export function propertyOwner(source, field, type) {
   return selector ? entityKey(type, selector.id) : null;
 }
 
-/** Değer, açık boşluk ve yokluk ayrı durumlardır; kısaltılmış yük boşluk kanıtı değildir. */
+/**
+ * Daha yeni okumanın özellik durumları (değer ya da açık boşluk): yalnızca eski olguyu eskitmek için
+ * kullanılır. Kısaltılmış yükte kalan değer de günceldir; kısaltılmış yük boşluk KANITI olmasa da
+ * (bkz. emptyPropertyProofs) eskitmesi yalnızca doğrulamayı daraltır.
+ */
 function propertyStates(source, metric) {
-  if (source.envelope?.data?.sizeNote != null) return [];
   const states = [];
   const visit = (value, parts, path, full) => {
     if (!parts.length) {
@@ -549,8 +553,10 @@ export function verifyRequestedFacts(request, facts, evidence) {
     const named = row?.kind === 'row' && rowEntities.some((entity) => boundKeys.has(entity));
     // Değer isteğinde bağlı varlığın kendi özelliği (adlandırılan satır ya da
     // seçicinin kaydı) nüfus koşulundan bağımsızdır; toplamlar ve sayımlar değildir.
-    const ownProperty = semantic.property === true && (request.operation === 'value' || !row)
-      && (named || ((!row || row.path === fact.field) && source.selectors.length > 0));
+    // Kaydın satır dışı çok değerli özelliği (ör. projenin etiketleri) satır değildir: yine kaydın kendi özelliğidir.
+    const inRow = row?.kind === 'row';
+    const ownProperty = semantic.property === true && (request.operation === 'value' || !inRow)
+      && (named || ((!inRow || row.path === fact.field) && source.selectors.length > 0));
     const group = request.operation === 'value' && row?.kind === 'row' && !named ? groupScope(fact) : null;
     const selectors = [...source.selectors, ...(group?.selectors || [])];
     if (selectors.some(({ type, id }) => !boundKeys.has(entityKey(type, id)))) return fail('ENTITY_MISMATCH');
@@ -625,9 +631,12 @@ export function verifyRequestedFacts(request, facts, evidence) {
     metricEntities.get(metric).add(owner);
   }
   // Atfedilen kanıtta bağlı varlığın satır dışı çok değerli özelliği açıkça boşsa ölçü boş değeriyle verilmiştir.
+  // Boşluk kendi sahibinindir: başka varlığın değeri onu, onun boşluğu başka varlığın değerini karşılamaz.
   const cited = [...new Set(facts.map(({ evidenceId }) => evidenceId))].map((id) => evidence.get(id));
-  const emptyProperties = [...metrics].filter((metric) => !represented.has(metric)).flatMap((metric) => cited
-    .flatMap((source) => emptyPropertyProofs(request, entities, source, metric, evidence).map((proof) => ({ ...proof, metric, source }))));
+  const emptyProperties = [...metrics].flatMap((metric) => cited
+    .flatMap((source) => emptyPropertyProofs(request, entities, source, metric, evidence).map((proof) => ({ ...proof, metric, source }))))
+    .filter(({ metric, owner }, index, all) => !metricEntities.get(metric)?.has(owner)
+      && all.findIndex((other) => other.metric === metric && other.owner === owner) === index);
   for (const { metric, owner } of emptyProperties) {
     referenced.add(owner);
     if (!metricEntities.has(metric)) metricEntities.set(metric, new Set());
@@ -646,6 +655,17 @@ export function verifyRequestedFacts(request, facts, evidence) {
     && !emptyProperties.some(({ metric, source, field }) => metric === binding.metric && source.tool === binding.tool && canonicalField(field) === binding.path))) return fail('METRIC_MISSING');
   if ([...boundKeys].some((key) => !referenced.has(key))) return fail('ENTITY_MISSING');
   if (bindingsRequired(request) && request.metrics.some((metric) => !NAMING_METRICS.has(metric) && !bindings.some((binding) => binding.metric === metric))) return fail('ENTITY_METRIC_AMBIGUOUS');
+  // Bağsız, kesişim olmayan çok varlıklı değer isteğinde ölçen her ölçü, uygulandığı HER varlıkta
+  // (değer ya da doğrulanmış boşlukla) verilir; bir varlığın adı başka varlığın değerinin yerine geçmez.
+  if (request.operation === 'value' && boundKeys.size > 1 && !conjunctiveEntities(request)) {
+    for (const metric of metrics) {
+      // Yalnızca boş nüfus ölçüyü bütün varlıklar için karşılar; sahibine ait boşluk sahibinin değeridir.
+      if (NAMING_METRICS.has(metric) || empty.some(({ metrics: covered }) => covered.includes(metric)) || bindings.some((binding) => binding.metric === metric)) continue;
+      const type = metricEntityType(metric);
+      const expected = entities.filter((entity) => !REQUEST_ENTITY_TYPES.includes(type) || entity.type === type);
+      if (expected.some((entity) => !metricEntities.get(metric)?.has(entityKey(entity.type, entity.bound)))) return fail('ENTITY_MISSING');
+    }
+  }
   // Verilen her ölçü/varlık bağı, ölçü ve varlık sayısından bağımsız olarak uygulanır.
   for (const binding of bindings) {
     const entity = entities[binding.entity];
@@ -664,6 +684,15 @@ export function verifyRequestedFacts(request, facts, evidence) {
     const size = Array.isArray(list) ? list.length : 0;
     // Çok değerli alan her istekte bütündür; satırların tamlığı istek türüne bağlıdır.
     if (entry.row.kind === 'list' && entry.indexes.size !== size) return fail('PARTIAL_VALUE_LIST');
+    // Bütünlük ölçü başınadır: bir ölçünün seçilen öğesi, başka ölçünün eksik öğesinin yerini tutmaz.
+    if (entry.row.kind === 'list') {
+      for (const metric of metrics) {
+        if (![...entry.metrics.values()].some((carried) => carried.has(metric))) continue;
+        const missing = (entry.source.facts || []).some((fact) => fact.semantic?.metric === metric
+          && factCollections(entry.source.tool, fact.field).some((item) => item.collection === entry.row.collection && !entry.metrics.get(item.index)?.has(metric)));
+        if (missing) return fail('PARTIAL_VALUE_LIST');
+      }
+    }
     if (entry.row.kind !== 'row') continue;
     if (request.operation === 'value' && (entry.conflicting || (!entry.bound
       && (size !== 1 || !collectionComplete(entry.source, entry.row.canonical))))) return fail('ROW_SELECTION_UNBOUND');

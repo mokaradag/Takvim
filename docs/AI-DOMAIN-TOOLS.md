@@ -1237,7 +1237,10 @@ paylaşır (`evidencePopulation.js`, `requestPopulation.js`, `requestContract.js
   değildir. Toplamı belirleyen boyutlar (WBS derinliği, korumalı arama alanı)
   satır kümesini belirleyenlerden (sıra, gruplama) ayrı tutulur. Arama metninin
   kimliği aracın kendi arama yüklemidir (`foldText`: büyük/küçük harf ve aksan
-  duyarsız, noktalama ve ı/i ayrı); "A-B" ile "A B" ayrı nüfustur. Liste ve
+  duyarsız, noktalama ve ı/i ayrı); "A-B" ile "A B" ayrı nüfustur. Ad bağlama
+  ve "bulunamadı" kanıtı da aynı yüklemi kullanır: başka yazımlı aramanın
+  boşluğu adın yokluğu, başka yazımlı aramanın tek sonucu adın kaydı değildir.
+  Liste ve
   sıralamada nüfus aracının seçicisi olmayan (ve başka bir okumanın seçmediği)
   bildirilen varlık sessizce düşürülmez; istek veri okunmadan reddedilir
   (`$.entities[i]:population`).
@@ -1359,10 +1362,14 @@ kullanıcı cümlesini yorumlamaz; hepsi kayıt defterinden ve kanıttan türeti
   kişilerde `assignee`) o kayıtların kendi toplamlarıdır: istek varlık başına
   değere (`value`) çevrilir, kaydın adı ölçü değil öznedir.
 - *Kapsam korunur.* Reddedilen bildirimin düzeltmesi biçimi onarır, soruyu
-  daraltamaz: turun bildirimlerinde metni kullanıcının iletisinde geçen bir
-  kayıt (varlık adı ya da başlık metni) sonraki bildirimde yoksa veri okunmadan
-  `$.entities:dropped` ile reddedilir; ipucu düşürülen adı ve varlık başına
-  `bindings` biçimini gösterir. Ad kısaltılmış ya da uzatılmış olabilir. Veri
+  daraltamaz ya da başka bir nüfusa kaydıramaz: kabul edilen isteğin her kaydı
+  TÜRÜYLE bir yükümlülüktür (kullanıcının adlandırdığı varlık, kimliğiyle
+  bildirilen ya da planın seçicisinden gelen varlık ve başlık metni). Planla
+  tamamlanan sonraki istekte karşılığı yoksa veri okunmadan `$.entities:dropped`
+  ile reddedilir; ipucu düşürülen kayıt sayısını ve varlık başına `bindings`
+  biçimini gösterir. Kimlik aynı türde aynı kimlikle, ad aynı türde (kısaltılmış
+  ya da uzatılmış) adla karşılanır; aynı yazımlı başka türden kayıt karşılamaz.
+  Başlık metni aynı metinle adlandırılan göreve daraltılabilir; tersi değil. Veri
   okunmadan reddedilen bildirim, plan doğrulamasındaki retle aynı biçimde
   modelin kendi çağrısı ve araç hatası olarak dökümde kalır.
 - *Tek kaydın iç koleksiyonu.* Görevle okunan tek serinin yineleme sayısı

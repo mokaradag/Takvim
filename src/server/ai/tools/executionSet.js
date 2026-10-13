@@ -155,17 +155,19 @@ export function prepareExecutionSet(rawCalls, { catalog, permitted = null, valid
       return;
     }
     let args;
+    let key;
     try {
       args = parseToolArguments(tool.parameters, String(call.arguments ?? '{}'));
       // Doğrulayıcı, istek bağlı çağrının yürütülecek biçimini döndürebilir (ör. daha küçük sayfa).
       args = validateCall?.(tool.name, args) || args;
+      // Kanonik kimlik de bir doğrulamadır (ör. aralıksız tarih alanı): hatası çağrının reddidir.
+      key = readKey(tool.name, args, today);
     } catch (error) {
       const details = (error?.details || []).map((detail) => `$.calls[${index}].${tool.name}${String(detail).slice(1)}`);
       problems.push({ index, error: new ToolError(error?.code || TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: details.length ? details : [`$.calls[${index}]:${error?.code === TOOL_ERROR_CODES.UNSUPPORTED_SCOPE ? 'scope' : 'invalid'}`] }) });
       return;
     }
     // Aynı çağrı plan içinde ve doğrudan yinelenirse bir kez çalışır.
-    const key = readKey(tool.name, args, today);
     if (seen.has(key)) return;
     seen.set(key, index);
     prepared.push({ index, name: tool.name, args, arguments: JSON.stringify(args) });

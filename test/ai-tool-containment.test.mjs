@@ -124,10 +124,10 @@ test('an ambiguous entity search cannot borrow another entity name from the same
   const data = { resolution: 'ambiguous', candidates: [{ projectId: PROJECTS.FULL, name: 'Radar Modernizasyonu' }] };
   scope.establish([{ name: 'rota_project_search', arguments: JSON.stringify({ text: 'Radar' }) }], [{ content: JSON.stringify({ ok: true, data }) }]);
   assert.throws(() => scope.validate('rota_project_detail', { projectId: PROJECTS.FULL }), { code: 'UNSUPPORTED_SCOPE' });
-  const request = { population: { tool: 'rota_task_search' }, entities: [{ type: 'project', text: 'radar' }, { type: 'project', text: 'radar modernizasyonu' }] };
-  const bound = bindRequestEntities(request, [], { named: [{ type: 'project', text: 'radar modernizasyonu', title: 'radar modernizasyonu', id: PROJECTS.FULL }] });
+  const request = { population: { tool: 'rota_task_search' }, entities: [{ type: 'project', text: 'radar', query: 'Radar' }, { type: 'project', text: 'radar modernizasyonu', query: 'Radar Modernizasyonu' }] };
+  const bound = bindRequestEntities(request, [], { named: [{ type: 'project', text: 'radar modernizasyonu', query: 'radar modernizasyonu', title: 'radar modernizasyonu', id: PROJECTS.FULL }] });
   assert.deepEqual(bound.map((entity) => entity.bound), [null, PROJECTS.FULL]);
-  const duplicate = bindRequestEntities(request, [], { named: [{ type: 'project', text: 'radar', id: PROJECTS.FULL }, { type: 'project', text: 'radar modernizasyonu', id: PROJECTS.FULL }] });
+  const duplicate = bindRequestEntities(request, [], { named: [{ type: 'project', text: 'radar', query: 'radar', id: PROJECTS.FULL }, { type: 'project', text: 'radar modernizasyonu', query: 'radar modernizasyonu', id: PROJECTS.FULL }] });
   assert.deepEqual(duplicate.map((entity) => entity.bound), [null, null]);
   const single = createToolScope({ userText: 'Radar Modernizasyonu projesinin görevleri' });
   single.establish([{ name: 'rota_project_search', arguments: JSON.stringify({ text: 'Radar' }) }], [{ content: JSON.stringify({ ok: true, data }) }]);

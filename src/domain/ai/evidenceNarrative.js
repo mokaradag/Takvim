@@ -222,8 +222,10 @@ function recordSentences(record, locale) {
       sentences.push(`${projectName ? `${projectName} projesindeki ${subject} görevinin` : `${subject}${noun}`} ${joinList(pairs, locale)}${qualify()}.`);
     }
   } else if (projectEntry) {
-    sentences.push(locale === 'en' ? `The ${subject} task belongs to the ${strong(narrativeValue(projectEntry.fact, locale))} project.`
-      : `${subject} görevi ${strong(narrativeValue(projectEntry.fact, locale))} projesindedir.`);
+    const project = strong(narrativeValue(projectEntry.fact, locale));
+    const named = nameEntry || record.row || !record.anonymous;
+    sentences.push(locale === 'en' ? `${named ? `The ${subject} task` : 'The task'} belongs to the ${project} project.`
+      : `${named ? `${subject} görevi` : 'Görev'} ${project} projesindedir.`);
   }
 
   const overdue = take((rel, fact) => rel === 'overdueDays' && isCount(fact))[0];
@@ -287,16 +289,20 @@ function recordSentences(record, locale) {
     sentences.push(`${capitalize(parts.join('; '))}.`);
   }
 
-  // Çok değerli alanlar (sorumlular, WBS yolu, etiketler).
+  // Kaydın ilk cümlesi kaydını adlandırır: komşu kaydın ölçüsü onunla karışmaz.
+  const lead = () => (sentences.length || (!nameEntry && !record.row && (record.anonymous || record.kind === 'generic')) ? '' : `${subject}${qualify()} — `);
+
+  // Çok değerli alanlar (sorumlular, WBS yolu, etiketler); her değer kendi etiketiyle (ör. değişen alan) gruplanır.
   const multi = new Map();
   for (const entry of take((rel) => /\.\d+(\.|$)/.test(rel))) {
-    const key = entry.rel.replace(/\.\d+(?=\.|$)/g, '.*');
-    if (!multi.has(key)) multi.set(key, []);
-    multi.get(key).push(entry.fact);
+    const pattern = entry.rel.replace(/\.\d+(?=\.|$)/g, '.*');
+    const key = `${pattern}\u0000${pattern.startsWith('assignees.') ? '' : labelOf(entry.fact, locale)}`;
+    if (!multi.has(key)) multi.set(key, { pattern, facts: [] });
+    multi.get(key).facts.push(entry.fact);
   }
-  for (const [key, facts] of multi) {
-    const title = key.startsWith('assignees.') ? (locale === 'en' ? 'Assignees' : 'Sorumlular') : capitalize(labelOf(facts[0], locale));
-    sentences.push(`${title}: ${facts.map((fact) => strong(narrativeValue(fact, locale))).join(key === 'wbsPath.*' ? ' › ' : ', ')}.`);
+  for (const { pattern, facts } of multi.values()) {
+    const title = pattern.startsWith('assignees.') ? (locale === 'en' ? 'Assignees' : 'Sorumlular') : capitalize(labelOf(facts[0], locale));
+    sentences.push(`${lead()}${title}: ${facts.map((fact) => strong(narrativeValue(fact, locale))).join(pattern === 'wbsPath.*' ? ' › ' : ', ')}.`);
   }
 
   // Yalnızca aynı anlamsal taşıyıcının aynı değeri bir kez yazılır.
@@ -309,10 +315,8 @@ function recordSentences(record, locale) {
   });
   if (rest.length) {
     const pairs = rest.map(({ fact }) => `${labelOf(fact, locale)}: ${strong(narrativeValue(fact, locale))}`);
-    // Satır kaydı her zaman satırını adlandırır: komşu satırın ölçüsü onunla karışmaz.
-    const lead = sentences.length || (!nameEntry && !record.row && (record.anonymous || record.kind === 'generic')) ? '' : `${subject}${qualify()} — `;
-    sentences.push(`${lead}${capitalize(pairs.join('; '))}${qualify()}.`);
-  } else if (!sentences.length && nameEntry) {
+    sentences.push(`${lead()}${capitalize(pairs.join('; '))}${qualify()}.`);
+  } else if (!sentences.length && (nameEntry || codeEntry)) {
     sentences.push(`${subject}${qualify()}.`);
   }
   return sentences;
@@ -511,7 +515,8 @@ export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto',
       }
       const { kind, rel } = recordRelative(tool, fact.field);
       if (main.kind === 'generic') main.kind = kind;
-      main.subject ??= fact.subject;
+      // Görevin içindeki projenin adı projenin öznesidir; görevi adlandırmaz.
+      if (!(kind === 'task' && rel.startsWith('project.'))) main.subject ??= fact.subject;
       main.entries.push({ rel, fact });
     }
     main.anonymous = !main.subject || main.subject === 'Rota';
@@ -521,7 +526,8 @@ export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto',
     const lists = [];
     for (const [collection, rows] of collections) {
       const role = ROW_ROLES[collection.split('.').at(-1)];
-      if (rows.size === 1) {
+      // Açıkça bildirilen tablo düzeni tek satırda da tablodur.
+      if (rows.size === 1 && layout !== 'table') {
         const [row] = rows.values();
         const record = recordSentences({ tool, kind: rowKind(collection, tool), subject: row.subject, entries: row.entries, anonymous: false, row: true }, locale);
         sentences.push(...(role && record.length ? [`${role[0][language(locale)]}: ${record[0]}`, ...record.slice(1)] : record));

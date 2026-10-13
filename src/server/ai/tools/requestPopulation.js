@@ -5,7 +5,7 @@ import { bindingsRequired, conjunctiveEntities, listCollections, parentProperty,
 import { METRICS } from '../../../domain/ai/claimableEvidence.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 import { effectivePageSize } from './rota/rotaToolSupport.js';
-import { addDays, foldText, normalizeTaskFilters } from './rota/taskFacts.js';
+import { addDays, normalizeTaskFilters, searchText } from './rota/taskFacts.js';
 import { parseToolArguments } from './toolArguments.js';
 import { getRotaTool, toolCatalogForModel } from './toolRegistry.js';
 import { containmentText, populationArguments } from './toolScope.js';
@@ -70,11 +70,9 @@ const same = (left, right) => JSON.stringify(left ?? null) === JSON.stringify(ri
  * Aracın bağımsız değişken adlarıyla değerlerden kanonik nüfus koşulları.
  * Arama metni her zaman nüfus koşuludur; ad çözümü için yapılan aramanın
  * satırı, değer isteğinde adlandırılan varlık olarak doğrulanır. Metnin kimliği
- * aracın kendi arama yüklemidir (foldText: noktalama ve ı/i ayrı kalır); daha
- * gevşek bir katlama farklı aramaları aynı nüfus sayardı.
+ * `searchText`tir.
  */
 export function canonicalFacets(family, values, today) {
-  const searchText = (text) => (text ? foldText(text) || null : null);
   switch (family) {
     case 'task': {
       const filters = normalizeTaskFilters({ ...values, ...periodWindow(values.period, today), period: undefined });
