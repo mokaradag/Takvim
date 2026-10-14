@@ -790,6 +790,9 @@ export async function runGroundedTurn(session, {
   turn.deferDisclosure = deferDisclosure;
   // Yeni oturum (kuyruk beklemesi dâhil) yetkinin yeniden okunmasını gerektirir.
   turn.work += 1;
+  // Oturumun kurulması (kira, kimlik bilgisi) ilerlemedir: üretim gözcüsünün kurulum payı her oturumu, Derin devri dâhil,
+  // bir kez karşılar; turda en çok iki oturum vardır ve her biri kendi süre sınırıyla biter.
+  turn.progress();
   try {
     return await continueTurn(turn, { escalationAvailable, onText, resumed: Boolean(resume) });
   } catch (error) {

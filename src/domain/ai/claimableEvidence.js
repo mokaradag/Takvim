@@ -240,10 +240,16 @@ export const METRICS = Object.freeze(Object.fromEntries([...REGISTRY.values(), n
 
 /** Yalnızca kaydı adlandıran ölçüler (her kayıtlı yolu bağlam): ölçü/varlık eşlemesinde belirsizlik yaratmaz. */
 const namingByMetric = new Map();
+const propertyByMetric = new Map();
 for (const entry of [...REGISTRY.values()].flatMap((entries) => [...entries.values()])) {
   if (entry.metric) namingByMetric.set(entry.metric, (namingByMetric.get(entry.metric) ?? true) && entry.context === true);
+  if (entry.metric) propertyByMetric.set(entry.metric, (propertyByMetric.get(entry.metric) ?? true) && entry.property === true);
 }
 export const NAMING_METRICS = Object.freeze(new Set([...namingByMetric].filter(([, naming]) => naming).map(([metric]) => metric)));
+/** Başka bir kaydı adlandıran ölçü: sahibinin (görevin) ölçülen özelliğidir; sahibinin anılması onu göstermez. */
+export const RELATED_NAMING_METRICS = Object.freeze(new Set(['task.project']));
+/** Yalnızca varlığın kendi özelliği olan ölçüler (her kayıtlı yolu özellik); toplam ve sayımlar değildir. */
+export const PROPERTY_METRICS = Object.freeze(new Set([...propertyByMetric].filter(([, property]) => property).map(([metric]) => metric)));
 
 /** Kanıt olgusunun kayıtlı ölçüsü; kayıt dışı yol `null`. */
 export function metricEntry(tool, canonicalPath) {

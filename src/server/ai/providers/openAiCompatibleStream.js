@@ -186,6 +186,8 @@ export function createLeadingThinkFilter() {
 function accumulateToolCalls(fragments, state, limits) {
   if (!Array.isArray(fragments)) throw invalid('STREAM_EVENT_MALFORMED');
   let started = 0;
+  // Çağrıya yeni kimlik, ad ya da bağımsız değişken ekleyen parça ilerlemedir; yinelenen boş parça değildir.
+  let grew = false;
   for (const fragment of fragments) {
     if (!isPlainObject(fragment)) throw invalid('STREAM_EVENT_MALFORMED');
     if (fragment.type != null && fragment.type !== 'function') throw invalid('STREAM_TOOL_CALL_MALFORMED');
@@ -215,6 +217,7 @@ function accumulateToolCalls(fragments, state, limits) {
     }
     if (id != null) {
       if (slot.id != null && slot.id !== id) throw invalid('STREAM_TOOL_CALL_MALFORMED');
+      if (slot.id == null) grew = true;
       slot.id = id;
     }
     const fn = fragment.function;
@@ -223,10 +226,12 @@ function accumulateToolCalls(fragments, state, limits) {
     if (fn.name != null) {
       if (typeof fn.name !== 'string') throw invalid('STREAM_TOOL_CALL_MALFORMED');
       slot.name += fn.name;
+      if (fn.name) grew = true;
       if (slot.name.length > limits.maxToolNameChars) throw invalid('STREAM_TOOL_CALL_MALFORMED');
     }
     if (fn.arguments != null) {
       if (typeof fn.arguments !== 'string') throw invalid('STREAM_TOOL_CALL_MALFORMED');
+      if (fn.arguments) grew = true;
       if (!slot.oversize) {
         if (slot.arguments.length + fn.arguments.length > limits.maxToolArgumentChars) {
           slot.oversize = true;
@@ -237,7 +242,7 @@ function accumulateToolCalls(fragments, state, limits) {
       }
     }
   }
-  return started;
+  return { started, grew: grew || started > 0 };
 }
 
 /**
@@ -269,17 +274,20 @@ function interpretChunk(payload, state) {
     if (state.model != null && state.model !== model) throw invalid('MODEL_CHANGED');
     state.model = model;
   }
+  // Kullanım yalnızca belirteç sayılarını değiştirirse ilerlemedir; boş ya da yinelenen kullanım nesnesi kalp atışıdır.
+  let usage = false;
   if (payload.usage != null) {
     if (!isPlainObject(payload.usage)) throw invalid('STREAM_EVENT_MALFORMED');
     const reasoningTokens = reportedReasoningTokens(payload.usage);
+    const previous = JSON.stringify(state.usage);
     state.usage = {
       promptTokens: tokenCount(payload.usage.prompt_tokens),
       completionTokens: tokenCount(payload.usage.completion_tokens),
       totalTokens: tokenCount(payload.usage.total_tokens),
       ...(reasoningTokens != null ? { reasoningTokens } : {})
     };
+    usage = JSON.stringify(state.usage) !== previous && Object.values(state.usage).some((count) => count != null);
   }
-  const usage = payload.usage != null;
   if (payload.choices == null) return { content: null, reasoning: false, progress: usage };
   if (!Array.isArray(payload.choices)) throw invalid('STREAM_EVENT_MALFORMED');
   const choice = primaryChoice(payload.choices);
@@ -297,11 +305,15 @@ function interpretChunk(payload, state) {
   if (state.finishReason && (delta?.content || reasoning || (Array.isArray(toolFragments) && toolFragments.length))) {
     throw invalid('CONTENT_AFTER_FINISH');
   }
-  const started = toolFragments == null ? 0 : accumulateToolCalls(toolFragments, state, state.limits);
-  if (choice.finish_reason && !state.finishReason) state.finishReason = choice.finish_reason.slice(0, 40);
-  // Üretim ilerlemesi: rol, metin, akıl yürütme, araç parçası, bitiş ya da kullanım. Boş parça ilerleme değildir.
-  const progress = Boolean(delta?.role || delta?.content || reasoning || (Array.isArray(toolFragments) && toolFragments.length)
-    || choice.finish_reason || usage);
+  const { started, grew } = toolFragments == null ? { started: 0, grew: false } : accumulateToolCalls(toolFragments, state, state.limits);
+  // Rol ve bitiş nedeni yalnızca ilk kez durum değiştirir; her parçada yinelenmeleri (ör. kalp atışı) ilerleme değildir.
+  const firstRole = Boolean(delta?.role) && !state.roleSeen;
+  if (delta?.role) state.roleSeen = true;
+  const finished = Boolean(choice.finish_reason) && !state.finishReason;
+  if (finished) state.finishReason = choice.finish_reason.slice(0, 40);
+  // Üretim ilerlemesi akışın durumunu değiştiren parçadır: ilk rol, metin, akıl yürütme, büyüyen araç çağrısı, ilk bitiş
+  // ya da belirteç sayısı. Boş ya da yinelenen parça ilerleme değildir.
+  const progress = Boolean(firstRole || delta?.content || reasoning || grew || finished || usage);
   return { content: delta?.content ?? null, reasoning, started, progress };
 }
 
@@ -332,7 +344,7 @@ export async function* readChatCompletionStream(body, { signal = null, limits = 
   const parser = createSseEventParser({ maxEventChars: limits.maxEventChars });
   const think = createLeadingThinkFilter();
   const state = {
-    model: null, usage: null, finishReason: null, bytes: 0, textChars: 0,
+    model: null, usage: null, finishReason: null, roleSeen: false, bytes: 0, textChars: 0,
     collectTools: toolCalls === true, toolCalls: [], limits: { ...AI_STREAM_LIMITS, ...limits }
   };
   let completed = false;

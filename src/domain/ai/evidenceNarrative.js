@@ -346,19 +346,22 @@ const ROW_TITLES = Object.freeze(['title', 'name', 'task.title', 'person.name', 
 
 function renderRows(collection, rows, { evidenceId, locale, layout }) {
   const pattern = (rel) => rel.replace(/\.\d+(?=\.|$)/g, '.*');
+  // Değişiklik değeri kendi değişen alanının sütunudur: aynı yoldaki başka alanın değeri onun etiketi altına yazılmaz.
+  const columnKey = ({ rel, fact }) => (fact.changeField ? `${pattern(rel)}|${fact.changeField}` : pattern(rel));
   const titleKey = ROW_TITLES.find((key) => rows.every((row) => row.entries.some(({ rel }) => rel === key)));
   const columns = [];
   // Satır başlığı projeyi (kod · ad) zaten taşıyorsa proje adı/kodu sütunu tekrarıdır.
   const projectInTitle = rows.every((row) => row.entries[0]?.fact.semantic?.row?.project);
   for (const row of rows) {
-    for (const { rel } of row.entries) {
-      if (rel === titleKey || ['title', 'name'].includes(rel) || columns.includes(pattern(rel))) continue;
+    for (const entry of row.entries) {
+      const { rel } = entry;
+      if (rel === titleKey || ['title', 'name'].includes(rel) || columns.includes(columnKey(entry))) continue;
       if (projectInTitle && ['project.name', 'project.code'].includes(pattern(rel))) continue;
-      columns.push(pattern(rel));
+      columns.push(columnKey(entry));
     }
   }
   const lang = language(locale);
-  const valuesOf = (row, key) => row.entries.filter(({ rel }) => pattern(rel) === key).map(({ fact }) => fact);
+  const valuesOf = (row, key) => row.entries.filter((entry) => columnKey(entry) === key).map(({ fact }) => fact);
   const columnLabel = (key) => {
     const sample = rows.flatMap((row) => valuesOf(row, key))[0];
     if (!sample) return key;
@@ -382,7 +385,8 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
   const cell = (facts, plain) => facts.map((fact) => (plain ? narrativeValue(fact, locale) : strong(narrativeValue(fact, locale)))).join(facts[0]?.field.includes('wbsPath') ? ' › ' : ', ');
   // Karşılaştırma doğal olduğunda (en az üç satır; üç sütun ya da iki sayısal sütun) tablo; aksi hâlde liste.
   const numericColumns = columns.filter((key) => rows.every((row) => valuesOf(row, key).every(isCount)));
-  const table = columns.length >= 1 && (layout === 'table' || (layout !== 'list' && rows.length >= 3 && (columns.length >= 3 || numericColumns.length >= 2)));
+  // Açıkça istenen tablo yalnızca ad sütunundan da oluşabilir.
+  const table = layout === 'table' || (columns.length >= 1 && layout !== 'list' && rows.length >= 3 && (columns.length >= 3 || numericColumns.length >= 2));
   if (table) {
     const head = ROW_NOUNS[collection.split('.').at(-1)]?.[lang] || (locale === 'en' ? 'Record' : 'Kayıt');
     const headers = [head, ...columns.map((key) => columnLabel(key).replace(/\|/g, '/'))];

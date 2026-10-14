@@ -226,7 +226,11 @@ export function createToolExecutor({
           });
           content = JSON.stringify({ ...shrunk, evidenceId: id });
           if (id) ledger.attachPayload(id, content);
-          else { code = TOOL_ERROR_CODES.RESULT_TOO_LARGE; content = JSON.stringify(errorEnvelope(name, new ToolError(code))); }
+          else {
+            // Dolu defter sınırdır; eksik ya da tutarsız köken sunucu sözleşme hatasıdır: model düzeltemez, boyut hatası değildir.
+            code = ledger.full() ? TOOL_ERROR_CODES.LIMIT_EXCEEDED : TOOL_ERROR_CODES.INTERNAL;
+            content = JSON.stringify(errorEnvelope(name, new ToolError(code)));
+          }
         }
       }
       const budgeted = fitWithinResultBudget(content, name);

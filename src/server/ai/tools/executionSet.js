@@ -163,6 +163,8 @@ export function prepareExecutionSet(rawCalls, { catalog, permitted = null, valid
       // Kanonik kimlik de bir doğrulamadır (ör. aralıksız tarih alanı): hatası çağrının reddidir.
       key = readKey(tool.name, args, today);
     } catch (error) {
+      // Yalnızca doğrulama hatası çağrının reddidir; sunucu hatası modelin düzeltebileceği girdi değildir, tur onunla biter.
+      if (!(error instanceof ToolError)) throw error;
       const details = (error?.details || []).map((detail) => `$.calls[${index}].${tool.name}${String(detail).slice(1)}`);
       problems.push({ index, error: new ToolError(error?.code || TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: details.length ? details : [`$.calls[${index}]:${error?.code === TOOL_ERROR_CODES.UNSUPPORTED_SCOPE ? 'scope' : 'invalid'}`] }) });
       return;

@@ -1,4 +1,5 @@
-import { claimableContract, equivalentCarriers, METRICS, metricEntityType, metricEntry, metricPaths, NAMING_METRICS, rowCollections, semanticCarrierKey } from './claimableEvidence.js';
+import { claimableContract, equivalentCarriers, METRICS, metricEntityType, metricEntry, metricPaths, NAMING_METRICS, PROPERTY_METRICS, RELATED_NAMING_METRICS, rowCollections, semanticCarrierKey } from './claimableEvidence.js';
+import { createEvidenceFacts, FACT_LIMITS } from './evidenceFacts.js';
 import { scaledDecimal } from '../numbers/fixedDecimal.js';
 import {
   canonicalField,
@@ -331,7 +332,7 @@ function propertyStates(source, metric) {
   const states = [];
   const visit = (value, parts, path, full) => {
     if (!parts.length) {
-      if (value !== undefined && carrierAvailable(source, path)) states.push({ field: path, key: semanticCarrierKey(source.tool, full) });
+      if (value !== undefined && carrierAvailable(source, path.replace(/^\./, ''))) states.push({ field: path, key: semanticCarrierKey(source.tool, full) });
       return;
     }
     const [head, ...tail] = parts;
@@ -660,8 +661,11 @@ export function verifyRequestedFacts(request, facts, evidence) {
   if (request.operation === 'value' && boundKeys.size > 1 && !conjunctiveEntities(request)) {
     for (const metric of metrics) {
       // Yalnızca boş nüfus ölçüyü bütün varlıklar için karşılar; sahibine ait boşluk sahibinin değeridir.
-      if (NAMING_METRICS.has(metric) || empty.some(({ metrics: covered }) => covered.includes(metric)) || bindings.some((binding) => binding.metric === metric)) continue;
-      const type = metricEntityType(metric);
+      // Kaydın kendi adı kaydın anılmasıyla verilir; başka kaydın adı (görevin projesi) sahibinin ölçülen özelliğidir.
+      if ((NAMING_METRICS.has(metric) && !RELATED_NAMING_METRICS.has(metric)) || empty.some(({ metrics: covered }) => covered.includes(metric))
+        || bindings.some((binding) => binding.metric === metric)) continue;
+      // Özellik sahibinin türündeki varlıklarda, toplam ve sayım kendi türünde (ör. tekrar sayımı her projede) verilir.
+      const type = PROPERTY_METRICS.has(metric) ? metricEntityType(metric) : String(metric).split('.')[0];
       const expected = entities.filter((entity) => !REQUEST_ENTITY_TYPES.includes(type) || entity.type === type);
       if (expected.some((entity) => !metricEntities.get(metric)?.has(entityKey(entity.type, entity.bound)))) return fail('ENTITY_MISSING');
     }
@@ -686,9 +690,15 @@ export function verifyRequestedFacts(request, facts, evidence) {
     if (entry.row.kind === 'list' && entry.indexes.size !== size) return fail('PARTIAL_VALUE_LIST');
     // Bütünlük ölçü başınadır: bir ölçünün seçilen öğesi, başka ölçünün eksik öğesinin yerini tutmaz.
     if (entry.row.kind === 'list') {
+      const canonical = `data.${entry.row.canonical}.*`;
       for (const metric of metrics) {
         if (![...entry.metrics.values()].some((carried) => carried.has(metric))) continue;
-        const missing = (entry.source.facts || []).some((fact) => fact.semantic?.metric === metric
+        // Koleksiyonun kendi olgularıyla denetlenir: kanıtın sınırlı olgu dizini son öğeleri taşımayabilir; sınıra ulaşan koleksiyon tam kanıtlanamaz.
+        const fields = metricPaths(entry.source.tool, metric).filter((path) => path === canonical || path.startsWith(`${canonical}.`))
+          .map((path) => `${entry.row.collection}${path.slice(`data.${entry.row.canonical}`.length)}`);
+        const own = createEvidenceFacts(entry.source.envelope, { prefix: entry.source.envelope?.factScope, fields });
+        if (own.length >= FACT_LIMITS.maxFacts) return fail('PARTIAL_VALUE_LIST');
+        const missing = own.some((fact) => fact.semantic?.metric === metric
           && factCollections(entry.source.tool, fact.field).some((item) => item.collection === entry.row.collection && !entry.metrics.get(item.index)?.has(metric)));
         if (missing) return fail('PARTIAL_VALUE_LIST');
       }

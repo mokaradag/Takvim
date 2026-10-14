@@ -18,6 +18,10 @@ export const ASSISTANT_TIMING = Object.freeze({
   progressEventMs: 10000, tickerMs: 5000, stallGraceMs: 25000, marginMs: 10000
 });
 
+/**
+ * Sunucu üretim gözcüsü: iki ilerleme arasındaki en uzun süre. Pay bir oturum kurulumunu (rehber, kuyruk, kimlik
+ * bilgisi) ve ardından bir sağlayıcı beklemesini karşılar; oturumun kurulması da ilerlemedir (Derin devri ikinci oturumdur).
+ */
 export const assistantGenerationStallMs = (config) => ASSISTANT_TIMING.setupMs + config.queueTimeoutMs
   + Math.max(config.providerProgress.firstEventMs, config.providerProgress.idleMs);
 

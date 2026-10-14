@@ -202,8 +202,8 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
   const answer = parseEvidenceResponse(text);
   const selection = resolveEvidenceSelection(answer, { evidenceIds, evidencePayloads });
   if (!selection.ok) return { ok: false, citedIds: [], issues: selection.issues };
-  // Bildirilen düzen veri okunmadan önce bağlanmıştır: seçim onu yinelemek zorunda değildir, yalnızca çelişemez.
-  const layout = selection.layout ?? (request?.layout || 'auto');
+  // Bildirilen düzen veri okunmadan önce bağlanmıştır: seçim onu yinelemek zorunda değildir, yalnızca çelişemez ("auto" çelişmez).
+  const layout = selection.layout && selection.layout !== 'auto' ? selection.layout : (request?.layout || 'auto');
   let emptyProofs = [];
   let emptyProperties = [];
   if (request) {

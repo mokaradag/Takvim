@@ -461,10 +461,12 @@ test('a named entity is bound only by a unique server resolution, and unscoped a
 });
 
 test('a WBS name binds only from a complete server listing of the tree', async (t) => {
-  const request = { operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'wbs', text: 'Tasarım' }] };
+  const request = { operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', id: PROJECTS.FULL }, { type: 'wbs', text: 'Tasarım' }] };
   const complete = await callRotaTools(stackFor(t), AYSE, [['rota_wbs_inspect', { projectId: PROJECTS.FULL, depth: 4 }], ['rota_task_analytics', { wbsId: WBS.FULL_DESIGN }]]);
   assert.equal(complete.results[0].complete, true);
   assert.equal(issue(verifyRequested(complete.ledger, ['R2:data.totals.total'], request)), null);
+  // Bir projenin kataloğu adın bildirilen proje dışındaki tekliğini kanıtlamaz: proje bildirilmeden bağlanmaz.
+  assert.equal(issue(verifyRequested(complete.ledger, ['R2:data.totals.total'], { ...request, entities: [request.entities[1]] })), 'ENTITY_UNRESOLVED');
   // Varsayılan iki düzey ağacı keser: daha derinde aynı adlı düğüm olabilir.
   const truncated = await callRotaTools(stackFor(t), AYSE, [['rota_wbs_inspect', { projectId: PROJECTS.FULL }], ['rota_task_analytics', { wbsId: WBS.FULL_DESIGN }]]);
   assert.equal(truncated.results[0].data.deeperNodes, true);

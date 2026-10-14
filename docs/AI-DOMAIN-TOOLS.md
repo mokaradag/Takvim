@@ -249,7 +249,9 @@ doğrudan verilebilir (aynı çağrı bir kez çalışır). Yerel çağrı yerin
 olarak dönen aynı plan (tek JSON nesnesi: `calls` taşıyan yönlendirme
 bildirimi, planın kendisi ya da `{"name":"rota_plan","arguments":…}`; tek kod
 çiti veya tek `<tool_call>` zarfı içinde olabilir) aynı doğrulamadan geçer.
-Eksik `layout` `auto`, eksik `population` sunucu seçimi yerine model seçimidir:
+Eksik `layout` `auto` sayılır. Eksik `population`, planın istenen ölçüleri
+taşıyan tek çağrısından tamamlanır; tamamlanamazsa plan veri okunmadan
+`$.population:required` ile reddedilir:
 
 ```json
 {"intent":"rota","language":"tr","request":{"operation":"value","metrics":["tasks.total"],"population":{"tool":"rota_task_search"},"layout":"auto","filters":{"status":["in_progress"],"assignee":"me"}},"calls":[{"name":"rota_task_search","arguments":{"status":["in_progress"],"assignee":"me"}}]}
@@ -1270,7 +1272,8 @@ paylaşır (`evidencePopulation.js`, `requestPopulation.js`, `requestContract.js
   Kesinleşemeyen istek kapalı kalır (`LIST_INCOMPLETE`, `RANK_MISMATCH`).
 - *Toplam kökeni zorunludur.* Korumalı toplam üreticisi bütün katkıda bulunan
   görev/proje çiftlerini `notePopulation` ile kaydeder; eksik ya da çelişkili
-  köken deftere alınmaz. Kimlikler yalnızca sunucuda kalır. Son teslim ve
+  köken deftere alınmaz ve modele boyut hatası değil `INTERNAL` olarak döner
+  (dolu defter `LIMIT_EXCEEDED`). Kimlikler yalnızca sunucuda kalır. Son teslim ve
   yeniden açılış her katkıyı güncel üyelikle doğrular; değişmeyen proje
   hibeleri taşınmış ya da silinmiş bir görevin eski toplamını korumaz.
 - *Derin bir doğrulama onarımı değildir.* Kanıt okunduysa devir yalnızca kanıt
@@ -1487,7 +1490,9 @@ türettiğinden büyük sayfayla yürümez: büyük sayfa sunucunun sayfasına i
 küçük sayfa korunur. Türetilen okuma bildirilen bir
 seçiciyi düşürmez: karşılaştırmada hiçbir ölçüye bağlanmayan ortak bağlam varsa
 okuma türetilmez. Tek bildirilen projenin görev, WBS ve baz plan adı o projede,
-proje bağlandıktan sonra çözülür. Ayrı anlamlı ad/kod taşıyıcıları veri
+proje bağlandıktan sonra çözülür. Ad yalnızca aynı kapsamın aramasıyla bağlanır:
+başka projede ya da koşulsuz tek olan ad bildirilen projenin kaydı değildir,
+projede tek olan ad da koşulsuz tek değildir. Ayrı anlamlı ad/kod taşıyıcıları veri
 okunmadan alanla bağlanır.
 
 Takip kökleri karşılaştırılmadan önce katı şemayla normalize edilir (null,

@@ -554,3 +554,20 @@ test('ilerleme anlamlı parçadır: canlı tutma yorumu ve boş parça ilerleme 
   const baseline = await before([]);
   for (const [name, chunks, expected] of table) assert.equal(await before(chunks) - baseline, expected, name);
 });
+
+test('yinelenen rol ve bitiş parçaları ilerleme değildir: yalnızca durumu ilk kez değiştiren parça sayılır', async () => {
+  const heartbeat = sse({ id: 'c1', model: 'akis-modeli', choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] });
+  const events = await collect(readChatCompletionStream(bodyFrom([heartbeat, heartbeat, heartbeat, finish(), finish(), 'data: [DONE]\n\n']).stream));
+  assert.deepEqual(events.map((event) => event.type), ['progress', 'progress', 'done'], 'ilk rol ve ilk bitiş');
+  const stalled = await collect(readChatCompletionStream(bodyFrom([heartbeat, heartbeat, heartbeat, delta('A'), finish(), 'data: [DONE]\n\n']).stream));
+  assert.equal(stalled.filter((event) => event.type === 'progress').length, 2, 'ilk rol ve bitiş; metin kendi olayıdır');
+  assert.equal(textOf(stalled), 'A');
+  // Yinelenen boş araç parçası ve boş ya da aynı kullanım nesnesi de kalp atışıdır; büyüyen çağrı ve yeni sayı ilerlemedir.
+  const fragment = (args) => sse({ id: 'c1', model: 'akis-modeli', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args } }] } }] });
+  const usage = (value) => sse({ id: 'c1', model: 'akis-modeli', choices: [], usage: value });
+  const tools = await collect(readChatCompletionStream(bodyFrom([fragment('{'), fragment(''), fragment(''), usage({}), usage({}), fragment('}'),
+    usage({ prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 }), usage({ prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 }), finish(), 'data: [DONE]\n\n']).stream, { toolCalls: true }));
+  const types = tools.map((event) => event.type);
+  assert.equal(types.filter((type) => type === 'progress').length, 3, 'büyüyen ikinci parça, yeni kullanım ve bitiş');
+  assert.equal(types.filter((type) => type === 'tool_call_started').length, 1);
+});

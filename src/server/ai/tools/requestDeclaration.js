@@ -292,10 +292,16 @@ export function requestSummary(request) {
 
 /* ── Varlık bağlama ───────────────────────────────────────── */
 
-function resolvedId(type, tool, args, payload, entity) {
+/** İki okuma kapsamı aynı proje mi (ikisi de koşulsuz ya da aynı proje kimliği)? */
+const sameScope = (projectId, scope) => (projectId == null ? null : canonicalActualId(projectId)) === (scope == null ? null : canonicalActualId(scope));
+
+/** `scope`: varlığın adının çözüldüğü proje (resolutionProject) ya da koşulsuz çözüm için null. */
+function resolvedId(type, tool, args, payload, entity, scope) {
   const data = payload?.data;
   const { text } = entity;
   if (!data || typeof data !== 'object') return null;
+  // Çözüm yalnızca varlığın kendi kapsamındaki aramanın çözümüdür: projede tek olan ad başka projede ya da koşulsuz tek değildir.
+  if (!sameScope(args?.projectId, scope)) return null;
   if (type === 'wbs') {
     // Kesilmiş ya da derinlikle sınırlı düğüm listesindeki tek eşleşme bütün ağaçta tek olduğunu kanıtlamaz.
     if (tool !== 'rota_wbs_inspect' || payload.complete !== true || payload.truncated === true || data.deeperNodes === true) return null;
@@ -322,18 +328,25 @@ function resolvedId(type, tool, args, payload, entity) {
 export function bindRequestEntities(request, entries, selection = null) {
   const selected = selection?.projectId ? ['project', selection.projectId] : selection?.taskId ? ['task', selection.taskId]
     : selection?.personSicil != null ? ['person', String(selection.personSicil)] : null;
-  const bound = request.entities.map((entity) => {
+  const bindOne = (entity, scope) => {
     if (entity.id) return { ...entity, bound: entity.id };
-    const found = new Set(entries.map(({ tool, args, payload }) => resolvedId(entity.type, tool, args, payload, entity)).filter(Boolean));
+    const found = new Set(entries.map(({ tool, args, payload }) => resolvedId(entity.type, tool, args, payload, entity, scope)).filter(Boolean));
     // Kapsamın bağladığı ad: tam adı kullanıcının iletisinde geçen tek kısmi aday ya da (seri incelemesinde) tek serinin kayıtları.
     for (const item of selection?.named || []) {
-      if (item.type !== entity.type || (item.tool && item.tool !== request.population?.tool)) continue;
+      if (item.type !== entity.type || (item.tool && item.tool !== request.population?.tool) || !sameScope(item.projectId, scope)) continue;
       const uniqueScope = request.entities.filter((other) => other.type === entity.type && prefixRelated(item.text, other.text)).length === 1;
       if (sameSearch(item.query, entity.query) || (uniqueScope && prefixRelated(item.text, entity.text) && prefixRelated(item.title, entity.text))) found.add(item.id);
     }
     if (found.size === 1) return { ...entity, bound: [...found][0] };
     const sameType = request.entities.filter((item) => item.type === entity.type && item.text);
     return { ...entity, bound: !found.size && selected?.[0] === entity.type && sameType.length === 1 ? selected[1] : null };
+  };
+  // Projedeki kaydın adı yalnızca çözüldüğü projenin (resolutionProject) aramasıyla bağlanır; proje bağlanmadan bağlanmaz.
+  const projects = request.entities.map((entity) => (entity.type === 'project' ? bindOne(entity, null) : { ...entity, bound: entity.id ?? null }));
+  const bound = request.entities.map((entity, index) => {
+    if (entity.type === 'project') return projects[index];
+    const project = resolutionProject(request, projects, entity);
+    return project && project.bound == null ? { ...entity, bound: entity.id ?? null } : bindOne(entity, project?.bound ?? null);
   });
   return bound.map((entity, index) => bound.some((other, position) => position !== index && entity.bound && other.type === entity.type
     && other.bound === entity.bound && entity.text && other.text && !sameSearch(other.query, entity.query)) ? { ...entity, bound: null } : entity);

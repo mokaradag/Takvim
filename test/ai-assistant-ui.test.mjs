@@ -447,6 +447,7 @@ test('hata görünümü kategorileri ayırır; kapasite yoğunluğu çökme gibi
   assert.match(view({ code: 'AI_TIMEOUT', partial: true }).message, /yarıda kesildi/);
   // Teslim sınırı yanıt kaydedildikten sonra da dolabilir: "kaydedilmedi" denmez.
   assert.doesNotMatch(view({ code: 'AI_TIMEOUT', reason: 'DELIVERY_STALLED' }).message, /kaydedilmedi/);
+  assert.doesNotMatch(view({ code: 'AI_TIMEOUT', reason: 'DELIVERY_STALLED', partial: true }).message, /kaydedilmedi/, 'taslağı gösterilmiş yanıt da kaydedilmiş olabilir');
   assert.match(view({ code: 'AI_TIMEOUT', reason: 'GENERATION_STALLED' }).message, /kaydedilmedi/);
   assert.equal(view({ code: 'AI_PROVIDER_UNAVAILABLE', partial: false }).title, 'Hizmete ulaşılamıyor');
   assert.equal(view({ code: 'AI_PROVIDER_UNAVAILABLE', partial: true }).title, 'Yanıt yarıda kesildi');

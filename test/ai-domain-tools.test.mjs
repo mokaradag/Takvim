@@ -1220,3 +1220,26 @@ test('cursor snapshots keep their authorization epoch and never recover detached
   assert.equal(loads, 2);
 });
 
+
+test('a provenance refusal is a server contract failure, not a size error the model could repair; a full ledger is the limit', async () => {
+  // Korumalı aracın işleyicisi nüfusunu bildirmez (notePopulation yok): köken eksiktir.
+  const tool = {
+    name: 'rota_task_search', topic: 'tasks', evidenceKind: 'task-list', timeoutMs: 8000,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    handler: async () => ({ data: { tasks: [{ title: 'A' }] }, complete: true, returnedCount: 1, totalCount: 1, scope: { kind: 'complete-projects' }, evidence: { label: 'Görevler' } })
+  };
+  const context = { sicil: AYSE, today: '2026-10-01', beginRound() {} };
+  const ledger = createEvidenceLedger();
+  const executor = createToolExecutor({ context, ledger, signal: new AbortController().signal, resolveTool: () => tool });
+  const [message] = await executor.runRound([{ id: 'detail', name: tool.name, arguments: '{}' }]);
+  assert.equal(JSON.parse(message.content).error?.code, 'INTERNAL', message.content);
+  assert.deepEqual(ledger.ids(), []);
+  // Dolu defter yanıt başına kanıt sınırıdır.
+  const budget = { ...tool, name: 'rota_budget', parameters: { type: 'object', properties: { x: { type: 'integer' } }, additionalProperties: false } };
+  const full = createEvidenceLedger({ maxEntries: 1 });
+  const bounded = createToolExecutor({ context, ledger: full, signal: new AbortController().signal, resolveTool: () => budget });
+  const messages = await bounded.runRound([{ id: 'one', name: budget.name, arguments: '{}' }, { id: 'two', name: budget.name, arguments: '{"x":1}' }]);
+  assert.equal(JSON.parse(messages[0].content).evidenceId, 'R1');
+  assert.equal(JSON.parse(messages[1].content).error?.code, 'LIMIT_EXCEEDED', messages[1].content);
+  assert.equal(full.full(), true);
+});

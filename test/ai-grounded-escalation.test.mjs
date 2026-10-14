@@ -392,3 +392,30 @@ test('an unauthorized or unavailable population read fails closed without escala
     assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
   }
 });
+
+test('each provider session, including the Deep hand-off, is a generation progress point before its first round', async (t) => {
+  stackFor(t);
+  const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
+  const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
+  const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
+  const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
+  let progress = 0;
+  const seen = [];
+  const session = (rounds) => ({ signal: new AbortController().signal, remainingMs: () => 60000, round: async (input) => {
+    seen.push(progress);
+    return rounds.shift()(input);
+  } });
+  const plan = () => ({ text: declared(statusNamed), toolCalls: [{ id: 'call', name: 'rota_task_search', arguments: JSON.stringify({ text: NAMED }) }] });
+  const options = { messages: buildGroundedContext({ userContent: NAMED_QUESTION, now: NOW }).messages, catalog: toolCatalogForModel(),
+    context: createToolTurnContext({ sicil: AYSE, now: NOW }), onProgress: () => { progress += 1; }, onText: async () => {} };
+  const standard = await runGroundedTurn(session([plan]), { ...options, escalation: true });
+  assert.equal(standard.outcome, 'escalate');
+  assert.equal(seen[0], 1, 'Standart oturumun kurulması ilk sağlayıcı turundan önce ilerlemedir');
+  const before = progress;
+  const deep = await runGroundedTurn(session([(input) => {
+    const id = toolResultsOf(input)[0].evidenceId;
+    return { text: JSON.stringify({ kind: 'rota', facts: [`${id}:data.tasks.0.status`, `${id}:data.tasks.0.project.name`] }), toolCalls: [], finishReason: 'stop' };
+  }]), { ...options, resume: standard.resume });
+  assert.equal(seen[1], before + 1, 'Derin devri kendi kurulumundan sonra yeni ilerlemeyle başlar; Standart turun ilerlemesini tüketmez');
+  assert.equal(deep.outcome, 'grounded');
+});

@@ -1166,12 +1166,13 @@ sınırlıdır:
    anlamlı akış olayına (rol, metin, akıl yürütme, araç parçası, kullanım)
    `MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS` (60 sn), iki anlamlı olay
    arasına `MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS` (45 sn) izin verilir.
-   Sağlayıcının SSE yorumları ve boş parçalar süreyi uzatmaz. Sınır dolunca
+   Sağlayıcının SSE yorumları, boş parçalar ve yinelenen rol ya da bitiş parçaları
+   süreyi uzatmaz. Sınır dolunca
    sağlayıcı isteği kesilir ve tur `AI_TIMEOUT` (`PROVIDER_STALLED`) ile biter.
 2. **Tur:** akış yanıtının ilerleme sınırı 10 sn kurulum + yapılandırılmış sıra
    süresi + sağlayıcının ilk olay/boşta sınırlarının büyüğüdür (varsayılan 90 sn).
    Bu süre boyunca hiçbir gerçek ilerleme (evre, metin,
-   `progress`, araç yürütmesi) görmezse üretimi `AI_TIMEOUT`
+   `progress`, araç yürütmesi, sağlayıcı oturumunun kurulması) görmezse üretimi `AI_TIMEOUT`
    (`GENERATION_STALLED`) ile keser. Sinyale uymayan iş 25 sn içinde bitmezse
    tur yine tek hata olayıyla sonlandırılır. Gözcü yalnızca üretimi korur: yanıt
    üretildikten sonraki yazım, erişim denetimi ve teslim kendi sınırlarıyla
