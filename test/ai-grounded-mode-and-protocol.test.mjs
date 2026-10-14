@@ -767,9 +767,10 @@ test('a repair cannot widen the question: a record named by ID, or by name as an
   assert.equal(droppedNames(project, parse({ operation: 'value', metrics: ['tasks.total'], filters: { text: 'Radar' } })).length, 1);
   assert.equal(droppedNames(project, parse({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] })).length, 1,
     'önek benzerliği aynı varlık olduğunu kanıtlamaz');
-  // Görev başlığı metni aynı metinle adlandırılan göreve daraltılabilir; tersi (tek görevden nüfusa) genişlemedir.
+  // Ad varlığı bağlar; nüfus süzgeci kendi alanında korunur.
   const filter = namedScope([], parse({ operation: 'list', metrics: ['task.title'], filters: { text: 'Radar' } }), () => true);
-  assert.equal(droppedNames(filter, parse({ operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', text: 'Radar' }] })).length, 0);
+  assert.equal(droppedNames(filter, parse({ operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', text: 'Radar' }] })).length, 1);
+  assert.equal(droppedNames(filter, parse({ operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', text: 'Radar' }], filters: { text: 'Radar' } })).length, 0);
   const task = namedScope([], parse({ operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', text: 'Radar' }] }), () => true);
   assert.equal(droppedNames(task, parse({ operation: 'list', metrics: ['task.title'], filters: { text: 'Radar' } })).length, 1);
 });
@@ -827,6 +828,46 @@ test('repair search containment uses the actual predicate; entity identity stays
   assert.equal(bindRequestEntities(named, [], candidate('Radar'))[0].bound, null, 'yoklama kısa adı başka varlığa bağlayamaz');
   assert.equal(bindRequestEntities(named, [], candidate('Radar test planı'))[0].bound, TASKS.OVERDUE);
   assert.equal(bindRequestEntities(request('Radar A', true), [], candidate('Radar-A'))[0].bound, null);
+});
+
+test('a resolved named task cannot replace the accepted text filter during a repair', async (t) => {
+  const stack = stackFor(t);
+  const title = 'Radar test planı';
+  const request = { operation: 'value', metrics: ['tasks.total', 'task.actualHours'], population: { tool: 'rota_task_search' },
+    fields: [{ metric: 'task.actualHours', tool: 'rota_task_detail', path: 'data.task.hours.actual' }],
+    entities: [{ type: 'task', text: title }], filters: { text: title } };
+  const search = { name: 'rota_task_search', arguments: { text: title } };
+  const detail = { name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } };
+  const candidate = { ordinal: 0, taskId: TASKS.OVERDUE };
+  // Önceki açıklamada seçilen kimlik biliniyor; ilk okumalar kanıt oluşmadan başarısız.
+  stack.db.aiToolFailure = { 'task-facts': new Error('read unavailable'), 'task-detail': new Error('read unavailable') };
+  let before = null;
+  let rounds = 0;
+  const session = { profile: 'chat.tools', model: STANDARD, signal: new AbortController().signal, round: async (input) => {
+    rounds += 1;
+    if (rounds === 1) return { text: '', toolCalls: [{ id: 'initial', name: 'rota_plan', arguments: JSON.stringify(plan(request, [search])) }] };
+    if (rounds === 2) {
+      const results = input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
+      assert.deepEqual(results.map((result) => result.error?.code), ['INTERNAL', 'INTERNAL']);
+      stack.db.aiToolFailure = {};
+      before = sqlCalls(stack);
+      const { filters: _filters, ...broad } = request;
+      return { text: '', toolCalls: [{ id: 'broad', name: 'rota_plan', arguments: JSON.stringify(plan(broad,
+        [{ name: 'rota_task_search', arguments: {} }, detail])) }] };
+    }
+    assert.equal(rounds, 3);
+    assert.equal(sqlCalls(stack), before, 'ad aynı kalsa da süzgeçsiz plan SQL öncesinde reddedilir');
+    assert.deepEqual(JSON.parse(input.messages.at(-1).content).error.details, ['$.entities:dropped']);
+    return { text: '', toolCalls: [{ id: 'restored', name: 'rota_plan', arguments: JSON.stringify(plan(request, [search, detail])) }] };
+  } };
+  const result = await runGroundedTurn(session, {
+    messages: buildGroundedContext({ userContent: '1', now: NOW }).messages,
+    catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {},
+    clarification: { selected: candidate, candidates: [candidate], question: `${title} kayıt sayısı ve gerçekleşen saati nedir?` }
+  });
+  assert.equal(result.outcome, 'grounded');
+  assert.match(result.text, /\*\*1\*\*/);
+  assert.equal(rounds, 3, 'süzgecin düşürülmesi kabul edilmiş yanıt üretemez');
 });
 
 for (const code of ['TIMEOUT', 'BUSY', 'DATABASE_UNAVAILABLE', 'INTERNAL']) {

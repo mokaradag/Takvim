@@ -246,13 +246,13 @@ export function namedScope(scope, request, textTrusted) {
 export function droppedNames(scope, request) {
   const entities = request?.entities || [];
   const filter = searchText(request?.filters?.text);
-  const kept = (item) => (item.id
+  // Varlık adı nüfus süzgecinin yerini tutmaz.
+  const kept = (item) => (item.type === 'filter'
+    ? Boolean(filter) && filter.includes(item.name)
+    : item.id
     ? entities.some((entity) => entity.type === item.type && entity.id === item.id)
-    : entities.some((entity) => (entity.type === item.type || (item.type === 'filter' && entity.type === 'task'))
-      && typeof entity.query === 'string' && (item.type === 'filter'
-        ? searchText(entity.query)?.includes(item.name)
-        : item.name === (['wbs', 'baseline'].includes(entity.type) ? entity.text : searchText(entity.query))))
-      || (item.type === 'filter' && Boolean(filter) && filter.includes(item.name)));
+    : entities.some((entity) => entity.type === item.type && typeof entity.query === 'string'
+      && item.name === (['wbs', 'baseline'].includes(entity.type) ? entity.text : searchText(entity.query))));
   return (scope || []).filter((item) => !kept(item)).map((item) => item.key);
 }
 
