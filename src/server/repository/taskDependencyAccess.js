@@ -26,10 +26,16 @@ export async function prepareScopedTaskDependencies(executor, actor, changes) {
       ...(task.dependencyMutation === false ? [] : (task.dependencyChanges?.upserts || task.deps || []).map((dep) => dep.predecessorId)),
       ...(task.dependencyMutation === false && task.version ? [] : task.dependencyChanges?.removals || [])].filter(Boolean).map(key))
   ]);
+  // Proje satırı bütün commit boyunca proje-içi ilişki ağı değişikliklerini
+  // serileştirir. İçerik-only mevcut görev yeni bir ağ doğrulaması istemez;
+  // yeni görev ve açık ilişki mutasyonları ise hedef proje satırını da kilitler.
+  const dependencyProjectIds = new Set(upserts
+    .filter((task) => !task.version || task.dependencyMutation !== false)
+    .map((task) => key(task.projectId)));
   const req = executor.request();
   req.input('scopedDependencyTaskIds', sql.NVarChar(sql.MAX), [...taskIds].sort().join(','));
   req.input('dependencyOwnerTaskIds', sql.NVarChar(sql.MAX), [...upserts.map((task) => key(task.id)), ...(changes.taskDeletes || []).map((task) => key(task.id))].sort().join(','));
-  req.input('dependencyProjectIds', sql.NVarChar(sql.MAX), [...new Set(upserts.map((task) => key(task.projectId)))].sort().join(','));
+  req.input('dependencyProjectIds', sql.NVarChar(sql.MAX), [...dependencyProjectIds].sort().join(','));
   const result = await req.query(`
     SELECT ProjectId FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK)
     WHERE ProjectId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@dependencyProjectIds, ','))
@@ -37,13 +43,12 @@ export async function prepareScopedTaskDependencies(executor, actor, changes) {
         WHERE TaskId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@dependencyOwnerTaskIds, ',')))
     ORDER BY ProjectId;
 
-    -- Ağ doğrulaması ve silme de aynı görev -> ilişki kilit sırasını izler.
+    -- Proje satırı ağ değişikliklerini serileştirir. Burada proje nüfusunun
+    -- tamamını kilitlemek yerine yalnızca bu mutasyonun gerçek görev uçları
+    -- kilitlenir; sıradan içerik kaydı yüzlerce ilgisiz görevi bloke etmez.
     SELECT TaskId, ProjectId
     FROM dbo.MR_Tasks WITH (UPDLOCK, HOLDLOCK)
     WHERE TaskId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@scopedDependencyTaskIds, ','))
-      OR ProjectId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@dependencyProjectIds, ','))
-      OR ProjectId IN (SELECT ProjectId FROM dbo.MR_Tasks
-        WHERE TaskId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@dependencyOwnerTaskIds, ',')))
     ORDER BY TaskId;
 
     SELECT TaskId, ProjectId, PredecessorTaskId, DependencyType, LagDays, LagValue, LagUnit
