@@ -150,6 +150,7 @@ export function assistantStreamResponse(turn, {
   let lastProgressAt = performance.now();
   let lastProgressSentAt = performance.now();
   let lastByteAt = performance.now();
+  let ticker = null;
   let graceTimer = null;
   let delivering = false;
   // Üretim gözcüsü yalnızca üretimi korur; yazım, açıklama ve teslim kendi sınırlarıyla yürür.
@@ -173,6 +174,7 @@ export function assistantStreamResponse(turn, {
     waiting = null;
     pending?.();
   };
+  const onAbort = () => wake();
 
   const enqueue = (bytes) => {
     if (closed) return false;
@@ -210,6 +212,11 @@ export function assistantStreamResponse(turn, {
   /** Akışı kapatır ve üretim hakkını bırakır; her yolda yalnızca bir kez etkilidir. */
   let released = false;
   const close = () => {
+    clearInterval(ticker);
+    ticker = null;
+    clearTimeout(graceTimer);
+    graceTimer = null;
+    generationSignal.removeEventListener('abort', onAbort);
     if (!released) {
       released = true;
       turn.claim?.release();
@@ -300,13 +307,12 @@ export function assistantStreamResponse(turn, {
   async function run() {
     const startedAt = performance.now();
     const tickMs = Math.max(1, Math.min(keepaliveMs, Math.floor(stallMs / 3), 5000));
-    const ticker = setInterval(() => {
+    ticker = setInterval(() => {
       const now = performance.now();
       if (!closed && !delivering && now - lastByteAt >= keepaliveMs && controller.desiredSize > 0) enqueue(KEEPALIVE);
       if (!waiting && !generated && now - lastProgressAt >= stallMs) stall('GENERATION_STALLED');
     }, tickMs);
     ticker.unref?.();
-    const onAbort = () => wake();
     generationSignal.addEventListener('abort', onAbort, { once: true });
     try {
       send(ASSISTANT_STREAM_EVENTS.ACCEPTED, acceptedPayload(turn));
@@ -361,9 +367,6 @@ export function assistantStreamResponse(turn, {
       finalEvent(ASSISTANT_STREAM_EVENTS.ERROR, payload);
     } finally {
       finished = true;
-      clearInterval(ticker);
-      clearTimeout(graceTimer);
-      generationSignal.removeEventListener('abort', onAbort);
       close();
     }
   }

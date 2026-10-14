@@ -35,6 +35,64 @@ function failEvidenceReads(t, pool, code) {
   });
 }
 
+for (const delivery of ['retained', 'recovered', 'unavailable', 'revoked', 'deleted']) {
+  test(`saved replay validates the original answer once at delivery (${delivery})`, async (t) => {
+    const stack = stackFor(t);
+    citeTask(stack, TASKS.OVERDUE);
+    const input = { turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` };
+    const saved = done(await sendTurn(input));
+    const { prepareAssistantTurn } = await import('../src/server/ai/assistant/assistantService.js');
+    const { assistantStreamResponse } = await import('../src/server/ai/assistant/assistantStreamResponse.js');
+    const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
+    const turns = { ...aiTelemetrySnapshot().assistantTurns };
+    const calls = stack.provider.calls.length;
+    let preparing = true;
+    let reads = 0;
+    const pool = await getSqlPool();
+    const request = pool.request.bind(pool);
+    t.mock.method(pool, 'request', () => {
+      const value = request();
+      const query = value.query.bind(value);
+      value.query = async (sql) => {
+        if (sql.includes('AS EvidenceReady')) {
+          reads += 1;
+          if (delivery === 'unavailable' || (delivery === 'recovered' && preparing)) {
+            throw Object.assign(new Error('evidence read unavailable'), { code: 'DATABASE_UNAVAILABLE' });
+          }
+        }
+        return query(sql);
+      };
+      return value;
+    });
+    const turn = await prepareAssistantTurn({ readBody: async () => ({ ...input, conversationId: saved.conversation.id, mode: 'standard' }) });
+    preparing = false;
+    if (delivery === 'revoked') {
+      stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+      stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+    }
+    if (delivery === 'deleted') stack.db.tasks = stack.db.tasks.filter((row) => row.TaskId !== TASKS.OVERDUE);
+    const { parseSseText } = await import('./helpers/aiStack.mjs');
+    const replay = parseSseText(await assistantStreamResponse(turn).text());
+    assert.deepEqual(replay.events.map((event) => event.event), ['accepted', 'delta', 'done']);
+    assert.equal(done(replay).replayed, true);
+    const answer = done(replay).assistantMessage;
+    if (delivery === 'retained' || delivery === 'recovered') {
+      assert.equal(deltas(replay), saved.assistantMessage.content);
+      assert.equal(answer.finishReason, saved.assistantMessage.finishReason);
+      assert.deepEqual(answer.evidence, saved.assistantMessage.evidence);
+    } else {
+      assert.equal(answer.finishReason, delivery === 'unavailable' ? 'unavailable' : 'not_found');
+      assert.deepEqual(answer.evidence, []);
+      assert.equal(deltas(replay), delivery === 'unavailable'
+        ? 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.' : NON_ENUMERATING_FAILURE_TEXT);
+      assert.equal(JSON.stringify(replay.events).includes(saved.assistantMessage.content), false);
+    }
+    assert.equal(reads, 1, 'kayıtlı kanıt hazırlıkta okunmaz, yalnızca teslimde doğrulanır');
+    assert.equal(stack.provider.calls.length, calls);
+    assert.deepEqual(aiTelemetrySnapshot().assistantTurns, turns);
+  });
+}
+
 for (const failure of ['missing', 'AI_BUSY', 'DATABASE_UNAVAILABLE']) {
   for (const finishReason of ['stop', 'end_turn', 'eos', 'stop_sequence', 'length', 'content_filter']) {
     test(`tool-free literal citations survive ${failure} on reopen, replay and history (${finishReason})`, async (t) => {

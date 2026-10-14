@@ -9,6 +9,7 @@
  */
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { getEventListeners } from 'node:events';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -466,6 +467,42 @@ test('sinyale uymayan üretim bekleme süresi sonunda zorla bitirilir; geç gele
   finish(finalAnswer(turn));
   await pause(10);
   assert.equal(released(), 1);
+});
+
+test('hiç bitmeyen ve iptali yok sayan üretim zorla kapanınca gözcü kaynakları bırakılır', { timeout: 2000 }, async (t) => {
+  holdLoop(t);
+  const active = new Set();
+  const schedule = globalThis.setInterval;
+  const clear = globalThis.clearInterval;
+  t.mock.method(globalThis, 'setInterval', (...args) => {
+    const timer = schedule(...args);
+    active.add(timer);
+    return timer;
+  });
+  t.mock.method(globalThis, 'clearInterval', (timer) => {
+    active.delete(timer);
+    return clear(timer);
+  });
+  // Başarısız beklenti de gerçek zamanlayıcı bırakmaz.
+  t.after(() => { for (const timer of active) clear(timer); });
+  const { turn, released } = fakeTurn();
+  let generationSignal;
+  const response = assistantStreamResponse(turn, {
+    keepaliveMs: 5, stallMs: 20, graceMs: 20,
+    generate: (_turn, { signal }) => {
+      generationSignal = signal;
+      return new Promise(() => {});
+    }
+  });
+  assert.equal(active.size, 1);
+  assert.equal(getEventListeners(generationSignal, 'abort').length, 1);
+  const events = parseSseText(await response.text()).events;
+  assert.deepEqual(events.map((event) => event.event), ['accepted', 'error']);
+  assert.equal(events.at(-1).data.reason, 'GENERATION_STALLED');
+  assert.equal(generationSignal.aborted, true);
+  assert.equal(released(), 1);
+  assert.equal(active.size, 0, 'sağlayıcı dönmeden gözcü aralığı temizlenir');
+  assert.equal(getEventListeners(generationSignal, 'abort').length, 0);
 });
 
 test('gerçek ilerleme uzun üretimi canlı tutar ve seyreltilmiş progress olaylarıyla bildirilir', async (t) => {

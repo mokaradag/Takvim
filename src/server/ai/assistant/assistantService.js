@@ -709,14 +709,11 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   if (existing.answer) {
     const failure = outcomeFailure(existing, input);
     if (failure) throw failure;
-    const replayEvidence = await optionalEvidence(sicil, signal, {
-      conversationId: existing.conversation.id,
-      messageId: existing.answer.id
-    });
     return {
       sicil, claim: null, mode: existing.answer.mode, profile: assistantProfileForMode(existing.answer.mode), grounded: false,
       conversation: existing.conversation, userMessage: existing.turn.message,
-      replay: discloseSavedMessages([existing.answer], replayEvidence)[0],
+      // Ham kayıt yalnızca teslim sınırında güncel yetkiyle açıklanır.
+      replay: existing.answer,
       modelMessages: [], context: { trimmed: Boolean(existing.answer.contextTrimmed), omittedMessages: Math.max(0, Number(existing.answer.contextOmittedMessages) || 0) }
     };
   }
@@ -749,7 +746,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     claim.bindConversation(prepared.conversation.id);
     const useTools = grounded && !prepared.answer;
     let history = prepared.history;
-    if (history.some((message) => message.role === 'assistant')) {
+    if (!prepared.answer && history.some((message) => message.role === 'assistant')) {
       // Geçmiş yanıtlar bağlama yer tutucu olarak girer: yalnızca kanıt dönemleri gerekir.
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id }, { revalidate: false });
       history = fallbackAssistantHistory(history, priorEvidence);
@@ -784,7 +781,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       dataUnavailable: config.toolsEnabled && input.source !== 'general' && !grounded,
       conversation: prepared.conversation,
       userMessage: prepared.turn.message,
-      replay: prepared.answer ? discloseSavedMessages([prepared.answer], await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id, messageId: prepared.answer.id }))[0] : null,
+      replay: prepared.answer || null,
       modelMessages: context.messages,
       context: { trimmed: context.trimmed, omittedMessages: context.omittedMessages }
     };

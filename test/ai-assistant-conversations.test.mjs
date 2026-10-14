@@ -771,9 +771,7 @@ test('kayıtlı yanıt araması salt okunurdur: kilit almaz ve işlem açmaz', a
   assert.equal(terminal(replay).data.replayed, true);
   const statements = db.aiConversationLog.statements;
   assert.equal(statements[0].params.readOnly, true, 'yanıt araması salt okunur hazırlanır');
-  assert.equal(statements.length, 2, 'yeniden oynatma yalnızca yanıt ve kanıt okumalarını yapar');
-  assert.match(statements[1].sql, /MR_AiMessageEvidence/);
-  assert.doesNotMatch(statements[1].sql, /\b(?:INSERT|UPDATE|DELETE)\b|UPDLOCK|HOLDLOCK/i);
+  assert.equal(statements.length, 1, 'genel sohbetin yeniden oynatılması gereksiz kanıt okuması yapmaz');
 });
 
 test('başlık her satırdaki başlık ve alıntı işaretini atar', () => {
