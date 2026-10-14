@@ -53,7 +53,7 @@ export function createToolExecutor({
   validateCall = null,
   clock = Date.now
 }) {
-  const state = { calls: 0, resultBytes: 0, toolMs: 0, roundStartedAt: null, attempted: 0, failures: 0 };
+  const state = { calls: 0, resultBytes: 0, toolMs: 0, roundStartedAt: null, attempted: 0, failures: 0, rounds: 0 };
 
   function phaseRemainingMs() {
     const running = state.roundStartedAt == null ? 0 : clock() - state.roundStartedAt;
@@ -84,7 +84,8 @@ export function createToolExecutor({
     const remaining = Math.min(tool.timeoutMs, phaseRemainingMs());
     if (remaining < 250) throw new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED);
     const deadline = createAiDeadline({ timeoutMs: remaining, parentSignal: typeof signal === 'function' ? signal() : signal, now: clock });
-    const population = [];
+    const population = new Map();
+    let populationNoted = false;
     const projectPopulation = [];
     try {
       const scoped = Object.freeze({
@@ -95,13 +96,13 @@ export function createToolExecutor({
         authorization: () => context.authorization(deadline.signal),
         sql: (work) => context.sql(deadline.signal, work),
         snapshot: (key, cursor, load) => context.snapshot(key, cursor, load),
-        notePopulation: (references) => { for (const reference of references) population.push(reference); },
+        notePopulation: (references) => { populationNoted = true; for (const reference of references) population.set(JSON.stringify([reference.taskId, reference.projectId]), reference); },
         noteProjects: (projectIds) => { projectPopulation.push(...projectIds); }
       });
       await context.authorization?.(deadline.signal);
       const outcome = await raceWithAbort(() => trackResultText(() => tool.handler(args, scoped),
         (data) => projectEvidenceData(data, args.textFields || [])), deadline.signal);
-      return { outcome, cacheKey, args, population, projectPopulation };
+      return { outcome, cacheKey, args, population: populationNoted ? [...population.values()] : null, projectPopulation };
     } catch (error) {
       const failure = deadline.failure();
       if (failure?.code === AI_ERROR_CODES.AI_CANCELLED) throw failure;
@@ -137,6 +138,7 @@ export function createToolExecutor({
   /** Bir model yanıtındaki araç çağrılarını yürütür; çağrı sırasıyla araç iletileri döner. */
   async function executeRound(toolCalls = []) {
     context.beginRound();
+    state.rounds += 1;
     const plans = toolCalls.map((call, index) => {
       if (index >= limits.maxCallsPerRound || phaseRemainingMs() <= 0) {
         return { call, tool: null, rejected: new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED) };
@@ -219,10 +221,16 @@ export function createToolExecutor({
             authorizationEpoch: context.authorizationEpoch?.() ?? null,
             scopedAuthorization: context.evidenceAuthorization?.(result.args, shrunk, result.projectPopulation) ?? null,
             populationReferences: result.population,
-            args: result.args
+            args: result.args,
+            round: state.rounds
           });
           content = JSON.stringify({ ...shrunk, evidenceId: id });
           if (id) ledger.attachPayload(id, content);
+          else {
+            // Dolu defter sınırdır; eksik ya da tutarsız köken sunucu sözleşme hatasıdır: model düzeltemez, boyut hatası değildir.
+            code = ledger.full() ? TOOL_ERROR_CODES.LIMIT_EXCEEDED : TOOL_ERROR_CODES.INTERNAL;
+            content = JSON.stringify(errorEnvelope(name, new ToolError(code)));
+          }
         }
       }
       const budgeted = fitWithinResultBudget(content, name);

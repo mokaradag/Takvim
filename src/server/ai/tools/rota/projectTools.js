@@ -420,14 +420,24 @@ const wbsInspect = {
       else if (node.children.length) depthTruncated = true;
     };
     start.forEach((node) => walk(node, 0));
+    // Nüfus istenen derinliğe kadar olan düğümlerdir: toplam ve tamlık bu nüfusa göredir; daha derin düğümler yalnızca not edilir.
+    const withinDepth = new Set();
+    const count = (node, depth) => {
+      if (withinDepth.has(node.id)) return;
+      withinDepth.add(node.id);
+      if (depth + 1 < depthLimit) node.children.forEach((child) => count(child, depth + 1));
+    };
+    start.forEach((node) => count(node, 0));
     const catalogVisible = result.nodes.some((row) => Boolean(row.CatalogVisible)) || access.accessLevel === 'FULL' || access.readGrant || access.ownScoped;
     const descriptor = describeTaskScope([access]);
     return {
       data: {
         project: { projectId: canonicalActualId(args.projectId), name: result.project ? dataText(result.project.ProjectName, 160) : null },
         catalogVisibility: catalogVisible ? 'full-catalog' : 'ancestor-chain-of-visible-tasks',
-        nodeCount,
+        nodeCount: withinDepth.size,
         nodes: listed,
+        filters: { depth: depthLimit },
+        deeperNodes: depthTruncated,
         tasksWithoutWbs: args.wbsId ? null : unplacedTasks,
         notes: [
           'Görev sayıları yalnızca görünür görevler üzerindedir.',
@@ -437,13 +447,13 @@ const wbsInspect = {
         ]
       },
       scope: descriptor,
-      complete: omitted === 0 && !depthTruncated && cycleNodes.size === 0,
-      truncated: omitted > 0 || depthTruncated || cycleNodes.size > 0,
+      complete: omitted === 0 && cycleNodes.size === 0,
+      truncated: omitted > 0 || cycleNodes.size > 0,
       returnedCount: listed.length,
-      totalCount: nodeCount,
+      totalCount: withinDepth.size,
       nextCursor: null,
       evidence: {
-        label: `İş dağılım yapısı · ${nodeCount} düğüm`,
+        label: `İş dağılım yapısı · ${withinDepth.size} düğüm`,
         entity: { type: 'project', id: canonicalActualId(args.projectId), name: result.project ? dataText(result.project.ProjectName, 120) : null },
         highlights: listed.slice(0, 3).map((node) => `${node.code} · ${node.name}`)
       }

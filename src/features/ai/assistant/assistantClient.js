@@ -1,5 +1,6 @@
 import {
   ASSISTANT_LIMITS,
+  ASSISTANT_MAX_NO_PROGRESS_MS,
   ASSISTANT_PROTOCOL_HEADER,
   ASSISTANT_PROTOCOL_VERSION,
   ASSISTANT_STREAM_EVENTS,
@@ -30,6 +31,12 @@ import { requestJson } from '../../shared/jsonRequest.js';
 const BASE = '/api/mergen-rota/ai/assistant';
 /** Sunucu 15 sn'de bir canlı tutma gönderir; bu süre boyunca hiç bayt gelmezse bağlantı kopmuş sayılır. */
 export const ASSISTANT_STREAM_INACTIVITY_MS = 45000;
+/**
+ * Üretim ilerleme sınırı: bu süre boyunca hiçbir protokol olayı (evre, metin,
+ * `progress`) gelmezse tur takılmış sayılır. Canlı tutma yorumu ilerleme değildir;
+ * desteklenen sunucu bütçelerinden uzundur; önce sunucunun hata olayı gelir.
+ */
+export const ASSISTANT_STREAM_PROGRESS_MS = ASSISTANT_MAX_NO_PROGRESS_MS;
 /** Tek olayın istemci üst sınırı (kayıtlı yanıtın yeniden oynatılması tek olaydır). */
 const MAX_STREAM_EVENT_CHARS = 1024 * 1024;
 export const ASSISTANT_INVALID_RESPONSE = 'INVALID_RESPONSE';
@@ -156,6 +163,7 @@ function interpret({ event, data }) {
       if (payload.topic != null && !ASSISTANT_TOOL_TOPICS.includes(payload.topic)) delete payload.topic;
       break;
     case ASSISTANT_STREAM_EVENTS.REVISE:
+    case ASSISTANT_STREAM_EVENTS.PROGRESS:
       break;
     case ASSISTANT_STREAM_EVENTS.DELTA:
       if (typeof payload.text !== 'string') throw new AssistantProtocolError('MALFORMED_EVENT');
@@ -194,7 +202,7 @@ export function createAssistantStreamDecoder({
   mode = null
 } = {}) {
   const parser = createEventStreamParser({ maxEventChars, tooLarge: () => new AssistantProtocolError('EVENT_TOO_LARGE') });
-  const state = { accepted: null, terminal: null, answerChars: 0, answer: '' };
+  const state = { accepted: null, terminal: null, answerChars: 0, answer: '', received: 0 };
 
   function checkAccepted({ conversation, userMessage, mode: acceptedMode, replay }) {
     if (replay !== true && mode != null && acceptedMode !== mode) throw new AssistantProtocolError('MODE_MISMATCH');
@@ -218,6 +226,7 @@ export function createAssistantStreamDecoder({
     // Sonlandırıcıdan sonraki her şey (bozuk olay dâhil) okunmadan yok sayılır:
     // sonuç ağ parçalarının nasıl bölündüğüne bağlı olmaz.
     if (state.terminal) return null;
+    state.received += 1;
     const event = interpret(raw);
     if (!event) return null;
     const terminal = event.type === ASSISTANT_STREAM_EVENTS.DONE || event.type === ASSISTANT_STREAM_EVENTS.ERROR;
@@ -251,6 +260,10 @@ export function createAssistantStreamDecoder({
     get accepted() {
       return Boolean(state.accepted);
     },
+    /** Çözülen protokol olayı sayısı (tanınmayan olay dâhil, yorum satırı hariç): ilerleme gözcüsü için. */
+    get received() {
+      return state.received;
+    },
     push(text) {
       return parser.push(text).map(accept).filter(Boolean);
     },
@@ -283,7 +296,8 @@ function errorFields(body) {
  * sağlayıcıya kadar iptal eder. Sonuç: `{ ok: true, done }` ya da kararlı hata
  * biçimi (`cancelled`: kullanıcı durdurdu; `partial`: metin gelmeye başlamıştı).
  * Sunucudan belirli süre boyunca hiç bayt (canlı tutma dâhil) gelmezse bağlantı
- * kopmuş sayılır (`STREAM_STALLED`).
+ * kopmuş, canlı tutma sürse de hiçbir protokol olayı gelmezse üretim takılmış
+ * sayılır; ikisi de `STREAM_STALLED` ile biter ve istek kesilir.
  */
 export async function streamAssistantTurnRequest({
   conversationId = null,
@@ -295,12 +309,15 @@ export async function streamAssistantTurnRequest({
   signal = null,
   onEvent = null,
   expectedSequence = null,
-  inactivityMs = ASSISTANT_STREAM_INACTIVITY_MS
+  inactivityMs = ASSISTANT_STREAM_INACTIVITY_MS,
+  progressMs = ASSISTANT_STREAM_PROGRESS_MS
 }) {
   const controller = new AbortController();
   let abortCause = signal?.aborted ? 'caller' : null;
+  let stallReason = null;
   let partial = false;
   let watchdog = null;
+  let progressWatchdog = null;
   const abort = (cause) => {
     if (!abortCause) abortCause = cause;
     controller.abort();
@@ -308,12 +325,21 @@ export async function streamAssistantTurnRequest({
   const onCallerAbort = () => abort('caller');
   if (signal?.aborted) controller.abort();
   else signal?.addEventListener('abort', onCallerAbort, { once: true });
+  const stall = (reason) => {
+    stallReason ??= reason;
+    abort('stalled');
+  };
   const arm = () => {
     clearTimeout(watchdog);
-    watchdog = setTimeout(() => abort('stalled'), inactivityMs);
+    watchdog = setTimeout(() => stall('NO_DATA'), inactivityMs);
+  };
+  const armProgress = () => {
+    clearTimeout(progressWatchdog);
+    progressWatchdog = setTimeout(() => stall('NO_PROGRESS'), progressMs);
   };
   const cleanup = () => {
     clearTimeout(watchdog);
+    clearTimeout(progressWatchdog);
     signal?.removeEventListener?.('abort', onCallerAbort);
   };
   const failure = (code, extra = {}) => ({
@@ -321,11 +347,12 @@ export async function streamAssistantTurnRequest({
   });
   const connectionFailure = () => {
     if (abortCause === 'caller') return failure('REQUEST_CANCELLED', { cancelled: true });
-    if (abortCause === 'stalled') return failure('STREAM_STALLED', { retryable: true });
+    if (abortCause === 'stalled') return failure('STREAM_STALLED', { retryable: true, reason: stallReason });
     return failure('NETWORK', { retryable: true });
   };
 
   arm();
+  armProgress();
   let response;
   try {
     response = await fetch(publicRotaPath(`${BASE}/turns`), {
@@ -336,6 +363,7 @@ export async function streamAssistantTurnRequest({
       signal: controller.signal
     });
     arm();
+    armProgress();
   } catch {
     cleanup();
     return connectionFailure();
@@ -388,8 +416,12 @@ export async function streamAssistantTurnRequest({
         return connectionFailure();
       }
       if (step.done) break;
+      // Her bayt bağlantının canlı olduğunu, yalnızca çözülen protokol olayı üretimin ilerlediğini gösterir.
       arm();
-      for (const event of decoder.push(decode(step.value, { stream: true }))) {
+      const received = decoder.received;
+      const events = decoder.push(decode(step.value, { stream: true }));
+      if (decoder.received > received) armProgress();
+      for (const event of events) {
         if (event.type === ASSISTANT_STREAM_EVENTS.DELTA && event.data.text) partial = true;
         if (event.type === ASSISTANT_STREAM_EVENTS.REVISE) partial = false;
         onEvent?.(event);
@@ -421,6 +453,8 @@ export async function streamAssistantTurnRequest({
       credentialSource: data.credentialSource ?? null,
       partial: data.partial === true || partial,
       cancelled: data.code === 'AI_CANCELLED',
+      // Sunucunun bu tur için verdiği son karar (kopan bağlantı değil).
+      settled: true,
       phase: 'stream'
     };
   }

@@ -208,7 +208,7 @@ const dependencyInspect = {
       projectId, focusTaskId: focus?.id ?? null, maxRows: TOOL_LIMITS.maxAnalyzedTasks
     }));
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
-    if (!focus) call.notePopulation?.(result.population);
+    call.notePopulation?.(result.population);
     const tasks = new Map(result.tasks.map((row) => [canonicalActualId(row.TaskId), row]));
     const relation = (row, otherId) => {
       const other = tasks.get(otherId);
@@ -219,8 +219,8 @@ const dependencyInspect = {
         type: row.DependencyType,
         typeLabel: DEPENDENCY_LABELS[row.DependencyType] || row.DependencyType,
         lag: lagView(row),
-        ...(other && sqlDay(other.PlannedStart) ? { plannedStart: sqlDay(other.PlannedStart) } : {}),
-        ...(other && sqlDay(other.PlannedFinish) ? { plannedFinish: sqlDay(other.PlannedFinish) } : {})
+        // Okunan görevin boş tarihi açık null'dır; okunamayan görevin tarihi yazılmaz (boş değil, okunmamış).
+        ...(other ? { plannedStart: sqlDay(other.PlannedStart) || null, plannedFinish: sqlDay(other.PlannedFinish) || null } : {})
       };
     };
     const notes = ['Kritik yol ve bolluk bu araçta hesaplanmaz; yalnızca kayıtlı ilişkiler gösterilir.'];
@@ -357,6 +357,7 @@ const recurrenceInspect = {
       if (args.projectId && args.projectId !== fact.projectId) throw notFound();
       const seriesId = fact.recurrenceRule ? fact.id : fact.recurrenceParentId;
       if (!seriesId) {
+        call.notePopulation?.(factPopulation([fact]));
         const access = projectAccess(scope, fact.projectId);
         return {
           data: { task: { taskId: fact.id, title: dataText(fact.title, 160) }, recurring: false },

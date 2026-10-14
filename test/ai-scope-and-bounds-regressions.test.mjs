@@ -49,6 +49,7 @@ test('task paging ignores assignee projection changes but detects population dri
   const stack = stackFor(t);
   const first = await callRotaTool(stack, AYSE, 'rota_task_search', { limit: 1 });
   assert.ok(first.result.nextCursor);
+  // Sayfalar birleştirilmez: her sayfa kendi okuma anının kanıtıdır.
   stack.db.taskAssignees.push({ TaskId: first.result.data.tasks[0].taskId, Sicil: LEAD });
   const second = await callRotaTool(stack, AYSE, 'rota_task_search', { limit: 1, cursor: first.result.nextCursor });
   assert.equal(second.result.ok, true);

@@ -12,6 +12,23 @@ export const ASSISTANT_PROTOCOL_VERSION = 1;
 export const ASSISTANT_STREAM_CONTENT_TYPE = 'text/event-stream';
 export const ASSISTANT_PROTOCOL_HEADER = 'x-mergen-rota-assistant-protocol';
 
+/** İstemci gözcüsü desteklenen sunucu bütçelerinin tamamını kapsar. */
+export const ASSISTANT_TIMING = Object.freeze({
+  providerMaxMs: 600000, queueMaxMs: 120000, setupMs: 10000,
+  progressEventMs: 10000, tickerMs: 5000, stallGraceMs: 25000, marginMs: 10000
+});
+
+/**
+ * Sunucu üretim gözcüsü: iki ilerleme arasındaki en uzun süre. Pay bir oturum kurulumunu (rehber, kuyruk, kimlik
+ * bilgisi) ve ardından bir sağlayıcı beklemesini karşılar; oturumun kurulması da ilerlemedir (Derin devri ikinci oturumdur).
+ */
+export const assistantGenerationStallMs = (config) => ASSISTANT_TIMING.setupMs + config.queueTimeoutMs
+  + Math.max(config.providerProgress.firstEventMs, config.providerProgress.idleMs);
+
+export const ASSISTANT_MAX_NO_PROGRESS_MS = ASSISTANT_TIMING.queueMaxMs + ASSISTANT_TIMING.providerMaxMs
+  + ASSISTANT_TIMING.setupMs + ASSISTANT_TIMING.progressEventMs + ASSISTANT_TIMING.tickerMs
+  + ASSISTANT_TIMING.stallGraceMs + ASSISTANT_TIMING.marginMs;
+
 /**
  * Sayfayla gelen açık/kapalı işareti (`<meta name=... content="enabled|disabled">`).
  * Yalnızca `MERGEN_ROTA_AI_ENABLED` sonucunu taşır; kapalıyken kabuk yardımcıyı
@@ -35,6 +52,12 @@ export const ASSISTANT_STREAM_EVENTS = Object.freeze({
    * gelir. Sonlandırıcı değildir.
    */
   REVISE: 'revise',
+  /**
+   * Üretim gerçekten ilerliyor (sağlayıcı ya da araç olayı). Gövdesi boştur;
+   * istemci yalnızca ilerleme gözcüsünü yeniler. SSE yorum satırı (`: keepalive`)
+   * yalnızca bağlantıyı canlı tutar, ilerleme değildir. Sonlandırıcı değildir.
+   */
+  PROGRESS: 'progress',
   DONE: 'done',
   ERROR: 'error'
 });

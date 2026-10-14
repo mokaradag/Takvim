@@ -140,6 +140,7 @@ export function createToolTurnContext({
     limits,
     /** Yeni araç kümesi: yetki bağlamı yeniden okunacaktır. */
     beginRound() {
+      state.round = (state.round || 0) + 1;
       state.authorization = null;
     },
     /** Bu kümenin yetki kapsamı (küme içinde bir kez yüklenir). */
@@ -156,11 +157,14 @@ export function createToolTurnContext({
     /** Sınırlı yürütücüyle tek SQL işi (kapı + süre sınırı + iptal). */
     sql: withSql,
     async snapshot(key, cursor, load) {
-      if (snapshots.has(key)) return snapshots.get(key);
+      const existing = snapshots.get(key);
+      if (existing && existing.epoch === state.epoch && (cursor || existing.round === state.round)) return existing.pending;
       if (cursor) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.cursor:stale'] });
-      const result = await load();
-      snapshots.set(key, result);
-      return result;
+      const pending = Promise.resolve().then(load);
+      const snapshot = { pending, round: state.round, epoch: state.epoch };
+      snapshots.set(key, snapshot);
+      try { return await pending; }
+      catch (error) { if (snapshots.get(key) === snapshot) snapshots.delete(key); throw error; }
     },
     authorizationEpoch() { return state.epoch; },
     evidenceAuthorization(args, envelope, projectIds) { return scopedEvidenceAuthorization(state.current.auth, state.current.scope, args, envelope, projectIds); },

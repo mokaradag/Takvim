@@ -200,7 +200,7 @@
       "maxOutputTokens": 1024
     },
     "chat.reasoning": {
-      "model": "DeepSeek-V4.1-Flash",
+      "model": "gemma-4-31B-it",
       "maxOutputTokens": 2048,
       "timeoutMs": 180000
     },
@@ -209,7 +209,7 @@
       "maxOutputTokens": 4096
     },
     "chat.tools.reasoning": {
-      "model": "DeepSeek-V4.1-Flash",
+      "model": "gemma-4-31B-it",
       "maxOutputTokens": 8192,
       "timeoutMs": 180000
     },

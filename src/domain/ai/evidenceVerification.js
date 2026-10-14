@@ -1,5 +1,7 @@
-import { FACT_LIMITS, createEvidenceFacts, fieldPatternCovers } from './evidenceFacts.js';
-import { factRow, verifyRequestedFacts } from './requestContract.js';
+import { claimableContract, evidenceSemantic, semanticCarrierKey } from './claimableEvidence.js';
+import { FACT_LIMITS, createEvidenceFacts, factLabel, fieldPatternCovers } from './evidenceFacts.js';
+import { canonicalField } from './evidencePopulation.js';
+import { emptyFieldCurrent, factRow, metricAllowedForRow, rowFieldState, rowMetricFields, verifyRequestedFacts } from './requestContract.js';
 import { renderVerifiedNarrative } from './evidenceNarrative.js';
 
 /**
@@ -26,9 +28,40 @@ function exactKeys(value, keys, optional = []) {
   return keys.every((key) => Object.hasOwn(value, key)) && present.every((key) => keys.includes(key) || optional.includes(key));
 }
 
+/** Metnin başındaki tek JSON nesnesinin sonu (dizgelerdeki ayraçlar sayılmaz); yoksa -1. */
+function leadingObjectEnd(text) {
+  if (text[0] !== '{') return -1;
+  let depth = 0;
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quoted) {
+      if (char === '\\') index += 1;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') quoted = true;
+    else if (char === '{') depth += 1;
+    else if (char === '}' && (depth -= 1) === 0) return index + 1;
+  }
+  return -1;
+}
+
+/**
+ * Modelin yapılandırılmış yanıtı: tek JSON değeri, tek kod çiti içinde de gelebilir.
+ * Modelin JSON'un yanına yazdığı açıklama hiçbir zaman gösterilmez (yanıt doğrulanmış
+ * olgulardan çizilir); bu yüzden tek kod çiti ya da baştaki tek nesne dışındaki metin
+ * yok sayılır. Birden çok kod çiti belirsizdir ve kabul edilmez.
+ */
 export function parseEvidenceResponse(text) {
   if (typeof text !== 'string' || text.length > FACT_LIMITS.maxAnswerChars) return null;
-  try { return JSON.parse(text); } catch { return null; }
+  const trimmed = text.trim();
+  const parse = (body) => { try { return JSON.parse(body); } catch { return null; } };
+  const whole = parse(trimmed.replace(/^```(?:json)?[ \t]*\n([\s\S]*?)\n?```$/, '$1'));
+  if (whole !== null) return whole;
+  const fences = [...trimmed.matchAll(/```(?:json)?[ \t]*\n([\s\S]*?)\n?```/g)];
+  if (fences.length === 1) return parse(fences[0][1].trim());
+  if (fences.length > 1) return null;
+  const end = leadingObjectEnd(trimmed);
+  return end > 0 ? parse(trimmed.slice(0, end)) : null;
 }
 
 /** Bu turun geçerli kanıt yükleri: kimlik → zarf. */
@@ -64,9 +97,11 @@ export function resolveEvidenceSelection(answer, { evidenceIds = [], evidencePay
     seen.add(key);
     selected.push({ evidenceId, fact });
   };
-  if (exactKeys(answer, ['kind', 'facts'], ['layout']) && answer.kind === 'rota') {
+  // Planda bildirilen dilin seçimde yinelenmesi zararsızdır: yanıt dili planın bildirimidir, seçim onu değiştiremez.
+  if (exactKeys(answer, ['kind', 'facts'], ['layout', 'language']) && answer.kind === 'rota') {
     if (!Array.isArray(answer.facts) || !answer.facts.length || answer.facts.length > FACT_LIMITS.maxClaims) return failure('FACT_SELECTION_REQUIRED');
     if (answer.layout != null && !LAYOUTS.has(answer.layout)) return failure('INVALID_FACT_REFERENCE');
+    if (answer.language != null && !['tr', 'en'].includes(answer.language)) return failure('INVALID_FACT_REFERENCE');
     const references = [];
     for (const reference of answer.facts) {
       const match = typeof reference === 'string' ? FACT_REFERENCE.exec(reference.trim()) : null;
@@ -81,7 +116,10 @@ export function resolveEvidenceSelection(answer, { evidenceIds = [], evidencePay
       const facts = factsOf(envelope, patterns);
       for (const pattern of patterns) {
         const matched = facts.filter((fact) => fieldPatternCovers(pattern, fact.field));
-        if (!matched.length) return failure('UNKNOWN_FACT_REFERENCE');
+        // Kayıtlı bir yolun joker deseni, bütün satırlarda boş olan çok değerli alanda hiçbir olgu seçmeyebilir.
+        if (!matched.length && !(pattern.includes('*') && claimableContract(envelope.tool).paths.includes(canonicalField(pattern).slice(5)))) {
+          return failure('UNKNOWN_FACT_REFERENCE');
+        }
       }
     }
     // Seçim sırası korunur: başvuru sırası, joker içinde kanıttaki sıra.
@@ -89,7 +127,8 @@ export function resolveEvidenceSelection(answer, { evidenceIds = [], evidencePay
       for (const fact of factsOf(envelopes.get(evidenceId), [pattern]).filter((item) => fieldPatternCovers(pattern, item.field))) add(evidenceId, fact);
       if (selected.length > FACT_LIMITS.maxFacts) return failure('ANSWER_TOO_LARGE');
     }
-    return { ok: true, facts: selected, layout: answer.layout || 'auto', issues: [] };
+    if (!selected.length) return failure('FACT_SELECTION_REQUIRED');
+    return { ok: true, facts: selected, layout: answer.layout ?? null, issues: [] };
   }
   if (!exactKeys(answer, ['kind', 'claims']) || answer.kind !== 'rota'
     || !Array.isArray(answer.claims) || !answer.claims.length || answer.claims.length > FACT_LIMITS.maxClaims) {
@@ -109,32 +148,99 @@ export function resolveEvidenceSelection(answer, { evidenceIds = [], evidencePay
       || !Object.is(fact.value, claim.value)) return failure('UNSUPPORTED_EVIDENCE_VALUE');
     add(claim.evidenceId, fact);
   }
-  return { ok: true, facts: selected, layout: 'auto', issues: [] };
+  return { ok: true, facts: selected, layout: null, issues: [] };
 }
 
 /**
  * `request` verildiğinde seçim bildirilen isteğe uymalıdır (bkz.
  * requestContract.js); sunucu turu isteği her zaman verir.
  */
+function renderableFacts(request, items, evidence, answer, emptyProperties = []) {
+  const rendered = [...items];
+  // Boşluğun sunumu kardeş olgudan değil, kendi kayıtlı alanından gelir.
+  const emptyFact = (source, field, metric, template) => ({
+    factId: `${source.envelope.factScope}:${field}`, subjectId: field.slice(0, field.lastIndexOf('.')), subject: template.subject,
+    field, value: null, type: 'null', semantic: { ...evidenceSemantic(source.envelope, field, null, factLabel(field)), metric }
+  });
+  const rowsAnswer = ['list', 'rank'].includes(request.operation);
+  const rows = new Map();
+  for (const item of items) {
+    const source = evidence.get(item.evidenceId);
+    const row = source && factRow(source.tool, item.fact.field);
+    if (row?.kind === 'row') rows.set(`${item.evidenceId}|${row.path}`, { item, source, row });
+  }
+  for (const { item, source, row } of rows.values()) {
+    const object = row.path.split('.').slice(1).reduce((value, key) => value?.[key], source.envelope.data);
+    for (const metric of request.metrics) {
+      if (!metricAllowedForRow(request, metric, source, object, row.canonical)) continue;
+      const bindings = (request.fields || []).filter((field) => field.metric === metric && field.tool === source.tool);
+      const candidates = rowMetricFields(source.tool, row.canonical, metric);
+      const references = (answer.facts || []).filter((reference) => reference.startsWith(`${item.evidenceId}:`)).map((reference) => reference.slice(reference.indexOf(':') + 1));
+      const chosen = [...references, ...items.filter((other) => other.evidenceId === item.evidenceId).map((other) => other.fact.field)]
+        .map((field) => semanticCarrierKey(source.tool, field));
+      const fields = candidates.filter((field) => bindings.length
+        ? bindings.some((binding) => binding.path === `data.${row.canonical}.*.${field}`)
+        : candidates.length === 1 || chosen.includes(semanticCarrierKey(source.tool, `data.${row.canonical}.*.${field}`)));
+      for (const field of fields) {
+        const concrete = `${row.path}.${field.replace(/\*/g, '0')}`;
+        // Yalnızca okunmuş ve güncel boşluk çizilir; daha yeni okumanın yerine geçtiği boşluk değildir.
+        if (rowFieldState(source.tool, row.canonical, object, field) !== 'empty' || !emptyFieldCurrent(evidence, source, concrete, metric, rowsAnswer)) continue;
+        if (rendered.some((other) => other.evidenceId === item.evidenceId && other.fact.field === concrete)) continue;
+        rendered.push({ evidenceId: item.evidenceId, fact: emptyFact(source, concrete, metric, item.fact) });
+      }
+    }
+  }
+  // Doğrulayıcının kanıtladığı satır dışı boş özellik (ör. sorumlusu olmayan görev) aynı kanıtın olgusuyla çizilir.
+  for (const { evidenceId, field, metric } of emptyProperties) {
+    const template = items.find((item) => item.evidenceId === evidenceId);
+    if (!template || rendered.some((other) => other.evidenceId === evidenceId && other.fact.field === field)) continue;
+    rendered.push({ evidenceId, fact: emptyFact(evidence.get(evidenceId), field, metric, template.fact) });
+  }
+  return rendered;
+}
+
 export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads = [], locale = 'tr', request = null, evidence = new Map() } = {}) {
   const answer = parseEvidenceResponse(text);
   const selection = resolveEvidenceSelection(answer, { evidenceIds, evidencePayloads });
   if (!selection.ok) return { ok: false, citedIds: [], issues: selection.issues };
+  // Bildirilen düzen veri okunmadan önce bağlanmıştır: seçim onu yinelemek zorunda değildir, yalnızca çelişemez ("auto" çelişmez).
+  const layout = selection.layout && selection.layout !== 'auto' ? selection.layout : (request?.layout || 'auto');
+  let emptyProofs = [];
+  let emptyProperties = [];
   if (request) {
+    if (request.layout && request.layout !== 'auto' && layout !== request.layout) return { ok: false, citedIds: [], issues: [{ code: 'LAYOUT_MISMATCH' }] };
     const verdict = verifyRequestedFacts(request, selection.facts, evidence);
     if (!verdict.ok) return { ok: false, citedIds: [], issues: verdict.issues };
-    if (verdict.rankOrder) {
-      const { evidenceId, collection, indexes } = verdict.rankOrder;
-      const positions = new Map(indexes.map((index, position) => [index, position]));
-      const rowOf = (item) => item.evidenceId === evidenceId ? factRow(evidence.get(evidenceId).tool, item.fact.field) : null;
-      const ranked = selection.facts.filter((item) => rowOf(item)?.collection === collection)
-        .sort((left, right) => positions.get(rowOf(left).index) - positions.get(rowOf(right).index));
-      let offset = 0;
-      selection.facts = selection.facts.map((item) => rowOf(item)?.collection === collection ? ranked[offset++] : item);
-    }
+    emptyProofs = verdict.empty || [];
+    emptyProperties = verdict.emptyProperties || [];
+    // Satırlar doğrulanmış sırayla yazılır: sıralamada sıralama kanıtının, listede aracın (bildirilen
+    // sıralamayla eşleşmiş) satır sırası. Seçimin sırası bu sırayı değiştirmez.
+    const order = verdict.rankOrder ? new Map(verdict.rankOrder.indexes.map((index, position) => [index, position])) : null;
+    const rowOf = (item) => {
+      const row = factRow(evidence.get(item.evidenceId)?.tool, item.fact.field);
+      if (verdict.rankOrder) return item.evidenceId === verdict.rankOrder.evidenceId && row?.collection === verdict.rankOrder.collection ? row : null;
+      return request.operation === 'list' && row?.kind === 'row' ? row : null;
+    };
+    const keyOf = (item) => `${item.evidenceId}|${rowOf(item).collection}`;
+    const positionOf = (item) => (order ? order.get(rowOf(item).index) : rowOf(item).index);
+    const groups = new Map();
+    selection.facts.forEach((item, position) => {
+      if (!rowOf(item)) return;
+      if (!groups.has(keyOf(item))) groups.set(keyOf(item), []);
+      groups.get(keyOf(item)).push({ item, position });
+    });
+    for (const group of groups.values()) group.sort((left, right) => positionOf(left.item) - positionOf(right.item) || left.position - right.position);
+    const offsets = new Map();
+    selection.facts = selection.facts.map((item) => {
+      if (!rowOf(item)) return item;
+      const offset = offsets.get(keyOf(item)) || 0;
+      offsets.set(keyOf(item), offset + 1);
+      return groups.get(keyOf(item))[offset].item;
+    });
   }
   const citedIds = [...new Set(selection.facts.map((item) => item.evidenceId))];
-  const normalized = renderVerifiedNarrative(selection.facts, { locale, layout: selection.layout, operation: request?.operation || null });
+  const rendered = request ? renderableFacts(request, selection.facts, evidence, answer, emptyProperties) : selection.facts;
+  const normalized = renderVerifiedNarrative(rendered, { locale, layout, operation: request?.operation || null, empty: emptyProofs });
   if (normalized.length > FACT_LIMITS.maxAnswerChars) return { ok: false, citedIds: [], issues: [{ code: 'ANSWER_TOO_LARGE' }] };
   return { ok: true, normalized, citedIds, facts: selection.facts, issues: [] };
 }

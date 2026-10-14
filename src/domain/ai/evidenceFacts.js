@@ -281,7 +281,8 @@ export function factPresentation(fact, locale = 'tr') {
     source: ['Proje kaynağı', 'Project source'], includeEmpty: ['Görünür görevi olmayan projeler', 'Projects without visible tasks'],
     statuses: ['Durum', 'Status'], priorities: ['Öncelik', 'Priority'], deadline: ['Termin', 'Deadline'],
     dateField: ['Tarih alanı', 'Date field'], dateFrom: ['İlk tarih', 'First date'], dateTo: ['Son tarih', 'Last date'],
-    assignee: ['Sorumlu', 'Assignee'], personSicil: ['Kişi', 'Person'], createdByMe: ['Oluşturduklarım', 'Created by me'], milestone: ['Kilometre taşı', 'Milestone'] };
+    assignee: ['Sorumlu', 'Assignee'], personSicil: ['Kişi', 'Person'], createdByMe: ['Oluşturduklarım', 'Created by me'], milestone: ['Kilometre taşı', 'Milestone'],
+    depth: ['Derinlik', 'Depth'] };
   const filterValues = { ...values.status, ...values.priority, overdue: ['Gecikmiş', 'Overdue'],
     due_today: ['Bugün', 'Today'], due_next_7_days: ['Bugün dahil yedi gün', 'Seven days including today'],
     due_next_30_days: ['Bugün dahil otuz gün', 'Thirty days including today'], no_target_finish: ['Terminsiz', 'No deadline'],
@@ -303,6 +304,7 @@ export function factPresentation(fact, locale = 'tr') {
       case 'source': return value === 'all' ? null : values.sourceType[value]?.[language] || null;
       case 'includeEmpty': return value === false ? ['Hariç', 'Excluded'][language] : null;
       case 'createdByMe': return value === true ? filterValue(true) : null;
+      case 'depth': return Number.isInteger(value) ? `${value} ${['düzey', value === 1 ? 'level' : 'levels'][language]}` : null;
       default: return (Array.isArray(value) ? value : [value]).map(filterValue).filter(Boolean).join(', ') || null;
     }
   };

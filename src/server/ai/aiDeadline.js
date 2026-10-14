@@ -18,6 +18,52 @@ export function aiValidationBudgetMs(config) {
 }
 
 /**
+ * Sağlayıcı İLERLEME gözcüsü (canlı tutma değil): istek gönderildikten sonra ilk
+ * anlamlı akış olayı (rol, metin, akıl yürütme, araç parçası) `firstEventMs`,
+ * sonrakiler `idleMs` içinde gelmezse sinyal `AI_TIMEOUT` (`PROVIDER_STALLED`)
+ * ile kesilir; aradaki SSE yorum satırları ya da boş parçalar süreyi uzatmaz.
+ * Üst sinyalin kesilmesi gözcüyü de keser (nedeni korunur). `dispose()` her
+ * yolda zamanlayıcıyı ve dinleyiciyi bırakır. Sınırlar yapılandırmadan gelir
+ * (`MERGEN_ROTA_AI_PROVIDER_*_TIMEOUT_MS`).
+ */
+export function createProgressWatch({ firstEventMs, idleMs, parentSignal = null }) {
+  const controller = new AbortController();
+  let failure = null;
+  let timer = null;
+  const arm = (ms) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (controller.signal.aborted) return;
+      failure = new AiError(AI_ERROR_CODES.AI_TIMEOUT, { details: { reason: 'PROVIDER_STALLED', idleMs: ms } });
+      controller.abort(failure);
+    }, Math.max(1, ms));
+  };
+  const onParentAbort = () => {
+    clearTimeout(timer);
+    controller.abort(parentSignal.reason);
+  };
+  if (parentSignal?.aborted) onParentAbort();
+  else {
+    parentSignal?.addEventListener?.('abort', onParentAbort, { once: true });
+    arm(firstEventMs);
+  }
+  return {
+    signal: controller.signal,
+    /** İlerleme yoksa sınıflandırılmış hata; aksi hâlde `null`. */
+    failure: () => failure,
+    touch() {
+      if (!controller.signal.aborted) arm(idleMs);
+    },
+    pause() { clearTimeout(timer); },
+    restart() { if (!controller.signal.aborted) arm(firstEventMs); },
+    dispose() {
+      clearTimeout(timer);
+      parentSignal?.removeEventListener?.('abort', onParentAbort);
+    }
+  };
+}
+
+/**
  * Yapay zekâ işinin süre sınırı ve iptali.
  *
  * Tek bir `AbortSignal`, hem süre dolmasını hem de istemcinin iptalini taşır;

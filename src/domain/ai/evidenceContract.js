@@ -216,7 +216,7 @@ export function groundingRepairInstruction(issues = [], hint = '') {
     'SUNUCU DOĞRULAMASI: Önceki taslak kullanıcıya gösterilmedi.',
     `Sözleşme hataları: ${codes.join(', ')}`,
     'Kanıt varsa yalnızca olgu seçimi üret (değer ya da cümle yazma):',
-    '{"kind":"rota","facts":["R1:data.tam.alan.yolu","R1:totalCount"]}',
+    '{"kind":"rota","facts":["R1:data.tam.alan.yolu"]}',
     'Alan yolu sonuçtaki tam noktalı yoldur ve claimable.paths içinde olmalıdır; listenin bütün satırları için indis yerine * yaz. Ad kesin çözülmediyse {"kind":"clarification","evidence":"R1"} yaz.',
     'Seçim, veri okunmadan bildirilen isteğe uymalıdır: bildirilen her ölçü (metrics) temsil edilir, bildirilmeyen ölçü yanıt olamaz, olgunun nüfusu bildirilen koşullar ve varlıklarla aynıdır; list bütün satırları, rank sıralamanın başını seçer. İstek artık değiştirilemez.',
     ...(hint ? [`Bildirilen ölçülerin bu turun kanıtlarındaki yolları:\n${hint}`] : []),

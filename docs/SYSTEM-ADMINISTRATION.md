@@ -756,7 +756,18 @@ geçer. Tamponlanan model JSON'u
 istemciye verilmiş metin değildir; kesilme sağlıkta yarım teslim sayılmaz.
 Kapıda sorgu başlamadan dolan süre `BUSY`, çalışan sorgunun süresi `TIMEOUT`
 olur. Varsayılan `chat.tools` / `chat.tools.reasoning` çıktı sınırları
-4096 / 8192 token; dağıtılan dış kayıt dosyası da güncellenmelidir.
+4096 / 8192 token; dağıtılan dış kayıt dosyası da güncellenmelidir. Her Rota
+verisi turunun model/araç turu sayısı, seçimi kimin yaptığı, tur başına süre,
+çıktı sınırı ve bitiş nedeni içeriksiz `ai.grounded.turn` olayında izlenir.
+
+Derin UI kipinde modele bağlı bütün Rota turları `chat.tools.reasoning`
+kullanır ve tur izinde bu profil görünür; Derin kip için `chat.tools` kurulu
+olması gerekmez. Standart kipte gerçek muhakeme ya da ucuz kurtarmadan sonra
+kalan bildirim/biçim/boş yanıt hatası `chat.tools.reasoning` profiline bir kez
+devredilir (`ai.grounded.escalation`). Sıradan asistan metni boş olan yerel
+`rota_plan` çağrısı ve metin olarak dönen aynı plan geçerlidir. Tur izi güvenilir model adını ve kapalı
+bitiş nedenini kaydeder; son sonucu görünür çıktıdan önceki kayıttan sonraki
+güncel erişim denetimi belirler.
 
 Elle kabul, FULL/READ/kısmi kullanıcılarla veri sonrası yetki iptalini,
 konuşma yeniden açma/tekrar ve oluşturucu hakkı iptalini, gizli tekrar/kişi

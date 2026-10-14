@@ -167,9 +167,9 @@ test('yönetim kapsamı: yönetici yalnızca astının görevini ve onun iş da�
   const design = full.result.data.nodes.find((node) => node.wbsId === WBS.FULL_DESIGN);
   assert.equal(design.subtreeTasks, 2);
   assert.equal(design.subtreeOverdue, 1);
+  // Derinlik nüfusun boyutudur: istenen derinliğe kadar bütün düğümler listelendiyse sonuç tamdır; daha derin düğümler not edilir.
   const shallow = await callRotaTool(stack, AYSE, 'rota_wbs_inspect', { projectId: PROJECTS.FULL, depth: 1 });
-  assert.equal(shallow.result.complete, false);
-  assert.equal(shallow.result.truncated, true);
+  assert.deepEqual([shallow.result.complete, shallow.result.truncated, shallow.result.totalCount, shallow.result.data.deeperNodes], [true, false, 1, true]);
   assert.match(shallow.result.data.notes.join(' '), /derinlikte kesildi/);
 });
 
@@ -242,7 +242,10 @@ test('arama sıralı, sayfalı ve kesin toplamlıdır; imleç süzgece bağlıd�
   assert.equal(first.result.returnedCount, 3);
   assert.equal(first.result.complete, false);
   assert.ok(first.result.nextCursor);
-  const second = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, sort: 'title_asc', limit: 3, cursor: first.result.nextCursor });
+  const context = first.context;
+  const executor = createToolExecutor({ context, ledger: createEvidenceLedger(), signal: new AbortController().signal });
+  const [continued] = await executor.runRound([{ id: 'next', name: 'rota_task_search', arguments: JSON.stringify({ projectId: PROJECTS.FULL, sort: 'title_asc', limit: 3, cursor: first.result.nextCursor }) }]);
+  const second = { result: JSON.parse(continued.content) };
   assert.equal(second.result.returnedCount, 3);
   assert.equal(new Set([...first.result.data.tasks, ...second.result.data.tasks].map((task) => task.taskId)).size, 6);
   const mismatched = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.READ, sort: 'title_asc', limit: 3, cursor: first.result.nextCursor });
@@ -778,9 +781,11 @@ test('çağrı sınırları: turda en fazla beş çağrı yürütülür; tanınm
   assert.deepEqual(ledger.ids(), ['R1', 'R2'], 'kanıt kimlikleri çağrı sırasıyla verilir');
   const factReads = stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts');
   assert.equal(factReads.filter((entry) => !entry.params.taskIds).length, 1, 'liste ve toplam aynı olgu okumasından gelir; yinelenen çağrı yeniden çalışmaz');
-  assert.equal(factReads.length, 2, 'sorumlu izdüşümü yalnızca dönen sayfanın görevleri için bir kez okunur');
+  assert.equal(factReads.length, 2, 'nüfus ve sayfa izdüşümü ayrı okunur; yineleme ikisini de yeniden okumaz');
+  assert.equal(factReads[0].params.withAssignees, 0);
+  assert.equal(factReads[0].params.taskIds, '');
   assert.equal(factReads[1].params.withAssignees, 1);
-  assert.ok(factReads[1].params.taskIds.split(',').length <= 20);
+  assert.ok(factReads[1].params.taskIds);
   const oversize = await callRotaTools(stack, AYSE, [['rota_task_search', JSON.stringify({ text: 'a', filler: 'x'.repeat(9000) })]]);
   assert.equal(oversize.results[0].error.code, 'INVALID_ARGUMENTS');
   assert.deepEqual(oversize.results[0].error.details, ['$:tooLarge']);
@@ -1119,4 +1124,122 @@ test('AI completion rates share product rounding and empty-set semantics', async
   assert.equal(taskCompletionRate(0, 300), 0);
   assert.equal(taskCompletionRate(0, 0), 0);
   assert.equal(taskCompletionRate(2, 3), 67);
+});
+
+/* Sınırlı koleksiyon tek okumadır: gizli sayfa, sunucu sıralaması ya da sayfa birleştirme yoktur. */
+for (const [tool, collection, metric, operation] of [
+  ['rota_workload_summary', 'people', 'tasks.open', 'list'],
+  ['rota_task_analytics', 'groups', 'tasks.total', 'list'],
+  ['rota_activity_search', 'items', 'activity.kind', 'list'],
+  ['rota_portfolio_summary', 'projects', 'tasks.open', 'list'],
+  ['rota_wbs_inspect', 'nodes', 'wbs.directTasks', 'list'],
+  ['rota_baseline_compare', 'mostSlipped', 'task.varianceDays', 'list'],
+  ['rota_dependency_inspect', 'mostConnected', 'dependencies.relationCount', 'rank'],
+  ['rota_recurrence_inspect', 'series', 'recurrence.openOccurrences', 'list'],
+  ['rota_recurrence_inspect', 'series.next', 'recurrence.occurrenceDate', 'list']
+]) {
+  test(`${tool}.${collection} larger than its page is one bounded read and an exhaustive ${operation} fails closed`, async (t) => {
+    const stack = stackFor(t);
+    const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+    const ids = Array.from({ length: 31 }, (_, index) => `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`);
+    stack.db.tasks = ids.map((TaskId) => ({ ...template, TaskId }));
+    let args = { projectId: PROJECTS.FULL, limit: 2 };
+    if (tool === 'rota_workload_summary' || tool === 'rota_task_analytics') {
+      stack.db.taskAssignees = stack.db.tasks.map((task, index) => ({ TaskId: task.TaskId, Sicil: 920000 + index }));
+      stack.db.people.push(...stack.db.tasks.map((_task, index) => ({ Sicil: 920000 + index, DisplayName: `Kişi ${index}` })));
+      if (tool === 'rota_task_analytics') args.groupBy = 'assignee';
+    } else if (tool === 'rota_activity_search') {
+      stack.db.auditLog = stack.db.tasks.map((task, index) => ({ AuditId: index + 1, OccurredAt: '2026-09-29T08:00:00Z', ActorSicil: AYSE,
+        ActorDisplayName: 'Ayşe Yılmaz', ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: task.TaskId, ProjectId: PROJECTS.FULL,
+        CorrelationId: `activity-${index}`, BeforeJson: JSON.stringify({ Status: 'planned' }), AfterJson: JSON.stringify({ Status: 'inProgress' }) }));
+      args = { projectId: PROJECTS.FULL, limit: 2, period: 'custom', dateFrom: '2026-09-29' };
+    } else if (tool === 'rota_portfolio_summary') {
+      const project = stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL);
+      stack.db.projects = ids.map((_id, index) => ({ ...project, ProjectId: `10000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`, ProjectName: `Proje ${index}` }));
+      stack.db.tasks.forEach((task, index) => { task.ProjectId = stack.db.projects[index].ProjectId; });
+      args = { limit: 2 };
+    } else if (tool === 'rota_wbs_inspect') {
+      stack.db.wbs = ids.map((_id, index) => ({ WbsId: `30000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`, ProjectId: PROJECTS.FULL, Name: `Düğüm ${index}`, Code: `R.${index}`, SortOrder: index }));
+      stack.db.tasks.forEach((task, index) => { task.WbsId = stack.db.wbs[index].WbsId; });
+    } else if (tool === 'rota_baseline_compare') {
+      stack.db.taskBaselineSnapshots = ids.map((TaskId) => ({ BaselineId: BASELINE_ID, TaskId, PlannedFinish: '2026-09-10' }));
+    } else if (tool === 'rota_dependency_inspect') {
+      stack.db.taskDependencies = ids.slice(1).map((TaskId, index) => ({ ProjectId: PROJECTS.FULL, TaskId, PredecessorTaskId: ids[index], DependencyType: 'FS', LagDays: 0 }));
+      args = { projectId: PROJECTS.FULL };
+    } else if (collection === 'series') {
+      stack.db.tasks.forEach((task) => { task.RecurrenceRule = 'FREQ=WEEKLY;BYDAY=MO'; });
+    } else {
+      const series = stack.db.tasks[0];
+      series.RecurrenceRule = 'FREQ=WEEKLY;BYDAY=MO';
+      stack.db.tasks = [series, ...ids.map((id, index) => ({ ...template, TaskId: id.replace('20000000', '21000000'), RecurrenceParentTaskId: series.TaskId,
+        RecurrenceOccurrenceDate: `2026-10-${String(index + 1).padStart(2, '0')}` }))];
+      args.taskId = series.TaskId;
+    }
+    const { verifyRequested } = await import('./helpers/requestScenario.mjs');
+    const { rowMetricFields } = await import('../src/domain/ai/requestContract.js');
+    const { result, ledger } = await callRotaTool(stack, AYSE, tool, args);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const rows = collection.split('.').reduce((value, key) => value[key], result.data);
+    assert.ok(rows.length <= (tool === 'rota_dependency_inspect' ? 5 : 2) || collection === 'series.next', JSON.stringify(rows.length));
+    assert.equal(result.complete, false, JSON.stringify({ upcoming: result.data.series?.upcomingCount, next: result.data.series?.next?.length, truncated: result.data.series?.nextTruncated }));
+    // Yalnızca aracın kendi imleci vardır; sunucu gizli devam sayfası açmaz.
+    if (tool !== 'rota_activity_search') assert.equal(result.nextCursor, null);
+    const field = `data.${collection}.*.${rowMetricFields(tool, collection, metric)[0]}`;
+    const entities = [...(args.projectId ? [{ type: 'project', id: args.projectId }] : []), ...(args.taskId ? [{ type: 'task', id: args.taskId }] : [])];
+    const request = { operation, metrics: [metric], population: { tool, collection, ...(args.groupBy ? { groupBy: args.groupBy } : {}) }, entities,
+      ...(args.period ? { filters: { dateFrom: args.dateFrom } } : {}),
+      ...(operation === 'rank' ? { rank: { metric, order: 'desc', limit: 6 } } : {}) };
+    assert.equal(verifyRequested(ledger, [field], request).issues[0]?.code, operation === 'rank' ? 'RANK_MISMATCH' : 'LIST_INCOMPLETE');
+    if (tool === 'rota_activity_search') {
+      // Aracın kendi imleciyle okunan sonraki sayfa listeyi tamamlamaz: sayfalar birleştirilmez.
+      const { results, ledger: paged } = await callRotaTools(stack, AYSE, [[tool, args], [tool, { ...args, cursor: result.nextCursor }]]);
+      assert.equal(results[1].ok, true, JSON.stringify(results[1]));
+      assert.equal(verifyRequested(paged, ['R1:data.items.*.kind', 'R2:data.items.*.kind'], request).issues[0]?.code, 'LIST_INCOMPLETE');
+    }
+  });
+}
+
+test('cursor snapshots keep their authorization epoch and never recover detached pages', async (t) => {
+  const stack = stackFor(t);
+  let full = true;
+  const context = createToolTurnContext({ sicil: AYSE, now: NOW, loadAuthorization: async () => ({ sicil: AYSE,
+    effective: { access: new Map([[PROJECTS.FULL, { accessLevel: full ? 'FULL' : 'PARTIAL', reasons: [] }]]), partialTaskIds: new Set() } }) });
+  const signal = new AbortController().signal;
+  let loads = 0;
+  const load = async () => ({ reads: ++loads, deletedActivity: 'protected' });
+  context.beginRound(); await context.authorization(signal);
+  const first = await context.snapshot('activity', null, load);
+  context.beginRound(); await context.authorization(signal);
+  assert.equal(await context.snapshot('activity', 'continuation', load), first);
+  assert.equal(loads, 1);
+  full = false;
+  context.beginRound(); await context.authorization(signal);
+  await assert.rejects(() => context.snapshot('activity', 'continuation', load), (error) => error.details.includes('$.cursor:stale'));
+  assert.equal(loads, 1, 'stale continuation neither exposes nor reloads old rows');
+  assert.notEqual(await context.snapshot('activity', null, load), first);
+  assert.equal(loads, 2);
+});
+
+
+test('a provenance refusal is a server contract failure, not a size error the model could repair; a full ledger is the limit', async () => {
+  // Korumalı aracın işleyicisi nüfusunu bildirmez (notePopulation yok): köken eksiktir.
+  const tool = {
+    name: 'rota_task_search', topic: 'tasks', evidenceKind: 'task-list', timeoutMs: 8000,
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    handler: async () => ({ data: { tasks: [{ title: 'A' }] }, complete: true, returnedCount: 1, totalCount: 1, scope: { kind: 'complete-projects' }, evidence: { label: 'Görevler' } })
+  };
+  const context = { sicil: AYSE, today: '2026-10-01', beginRound() {} };
+  const ledger = createEvidenceLedger();
+  const executor = createToolExecutor({ context, ledger, signal: new AbortController().signal, resolveTool: () => tool });
+  const [message] = await executor.runRound([{ id: 'detail', name: tool.name, arguments: '{}' }]);
+  assert.equal(JSON.parse(message.content).error?.code, 'INTERNAL', message.content);
+  assert.deepEqual(ledger.ids(), []);
+  // Dolu defter yanıt başına kanıt sınırıdır.
+  const budget = { ...tool, name: 'rota_budget', parameters: { type: 'object', properties: { x: { type: 'integer' } }, additionalProperties: false } };
+  const full = createEvidenceLedger({ maxEntries: 1 });
+  const bounded = createToolExecutor({ context, ledger: full, signal: new AbortController().signal, resolveTool: () => budget });
+  const messages = await bounded.runRound([{ id: 'one', name: budget.name, arguments: '{}' }, { id: 'two', name: budget.name, arguments: '{"x":1}' }]);
+  assert.equal(JSON.parse(messages[0].content).evidenceId, 'R1');
+  assert.equal(JSON.parse(messages[1].content).error?.code, 'LIMIT_EXCEEDED', messages[1].content);
+  assert.equal(full.full(), true);
 });

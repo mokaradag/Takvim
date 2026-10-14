@@ -18,7 +18,6 @@ const { turkishPossessiveSuffix, renderClarification, renderVerifiedNarrative } 
 const { SCOPE_DISCLOSURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
 
 const done = (response) => response.events.find((event) => event.event === 'done')?.data;
-const toolResults = (call) => call.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
 const stackFor = (t, seed = {}) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed(seed) });
 
 test('nested proposed schedule dates retain their field and direction in prose and tables', async (t) => {
@@ -99,9 +98,56 @@ test('list requests render lists, a table layout renders a table, and value requ
   const table = verifyRequested(ledger, facts, listRequest, { layout: 'table' });
   assert.match(table.normalized, /^\| Görev \| Termin \| Gecikme \(gün\) \|$/m);
   assert.match(table.normalized, /^\| Radar test planı · RDR · Radar Modernizasyonu[^\n]* \| 20 Eylül 2026 \| 10 \|$/m);
+  // Satır başlığı projeyi zaten taşır: proje adı ve kodu ayrıca sütun olmaz.
+  const withProject = verifyRequested(ledger, [...facts, 'data.tasks.*.project.name', 'data.tasks.*.project.code'],
+    { ...listRequest, metrics: [...listRequest.metrics, 'task.project'],
+      fields: ['name', 'code'].map((field) => ({ metric: 'task.project', tool: 'rota_task_search', path: `data.tasks.*.project.${field}` })) });
+  assert.equal(withProject.ok, true, JSON.stringify(withProject.issues));
+  assert.doesNotMatch(withProject.normalized, /Proje ad|Proje kod/);
+  // Sorumlu adları sütunu alan adıyla ("Ad") değil ölçüyle adlandırılır.
+  const people = verifyRequested(ledger, [...facts, 'data.tasks.*.assignees.*.name'], { ...listRequest, metrics: [...listRequest.metrics, 'task.assignees'] }, { layout: 'table' });
+  assert.match(people.normalized, /^\| Görev \| Termin \| Gecikme \(gün\) \| Sorumlular \|$/m);
   const analytics = await callRotaTool(stack, AYSE, 'rota_task_analytics', { deadline: 'overdue', assignee: 'me' });
   const summary = verifyRequested(analytics.ledger, ['data.totals.total'], { operation: 'value', metrics: ['tasks.total'], ...overdueMine });
   assert.match(summary.normalized, /^Görebildiğiniz görevler arasında toplam \*\*3\*\* görev bulunuyor \(ölçüt: .*Gecikmiş.*\)\. 【R1】$/);
+});
+
+test('a criterion shared by every row is stated once, never repeated on each row', async (t) => {
+  const stack = stackFor(t);
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { deadline: 'overdue', assignee: 'me' });
+  const rows = ['data.tasks.*.title', 'data.tasks.*.targetFinish', 'data.tasks.*.overdueDays'];
+  const request = { operation: 'list', metrics: ['task.targetFinish', 'task.overdueDays'], filters: { deadline: 'overdue', assignee: 'me' } };
+  for (const layout of ['list', 'table']) {
+    // Sayım cümlesi ölçütü zaten söyler: satırlar ve liste başı yinelemez.
+    const counted = verifyRequested(ledger, ['totalCount', ...rows], { ...request, metrics: ['tasks.total', ...request.metrics] }, { layout });
+    assert.equal(counted.ok, true, JSON.stringify(counted.issues));
+    assert.equal(counted.normalized.match(/ölçüt/g).length, 1, counted.normalized);
+    // Sayım yoksa ortak ölçüt listenin başında bir kez yazılır.
+    const listed = verifyRequested(ledger, rows, request, { layout });
+    assert.equal(listed.ok, true, JSON.stringify(listed.issues));
+    assert.match(listed.normalized, /^_Ölçüt: Termin: Gecikmiş; Sorumlu: Ben_\n\n/);
+    assert.equal(listed.normalized.match(/ölçüt/gi).length, 1, listed.normalized);
+  }
+});
+
+test('an empty list population says that nothing matched, not only that the result is complete', async (t) => {
+  const stack = stackFor(t);
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_schedule_requests', { tab: 'pending' });
+  const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_schedule_requests', collection: 'items' }, filters: { tab: 'pending' } };
+  const verdict = verifyRequested(ledger, ['R1:complete'], request);
+  assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+  assert.match(verdict.normalized, /^Eşleşen talep bulunmadı/);
+  assert.doesNotMatch(verdict.normalized, /Sonuç tamdır/);
+});
+
+test('dependency rows say which direction they are; a lag reads as a lag', async (t) => {
+  const stack = stackFor(t);
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.DUE_SOON });
+  const raw = { operation: 'list', metrics: ['task.title', 'dependency.type', 'dependency.lag'], population: { tool: 'rota_dependency_inspect' }, entities: [{ type: 'task', id: TASKS.DUE_SOON }] };
+  const facts = ['predecessors', 'successors'].flatMap((side) => [`R1:data.${side}.*.title`, `R1:data.${side}.*.type`, `R1:data.${side}.*.lag.value`]);
+  const verdict = verifyRequested(ledger, facts, raw);
+  assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+  assert.match(verdict.normalized, /^Öncül: \*\*Radar test planı\*\* görevinin türü \*\*FS\*\*\. Gecikme: \*\*2 gün\*\*\. Ardıl: \*\*Dokümantasyon\*\*/);
 });
 
 test('null, incomplete and unit semantics stay visible in the narrative', async (t) => {
@@ -168,32 +214,33 @@ test('legacy structured claims remain verifiable and render through the same nar
 const OVERDUE_MINE = Object.freeze({ deadline: 'overdue', assignee: 'me' });
 const FULL_PROJECT = Object.freeze([{ type: 'project', id: PROJECTS.FULL }]);
 const COMMON_QUESTIONS = [
-  ['Kaç gecikmiş görevim var?', { operation: 'value', metrics: ['tasks.total'], filters: OVERDUE_MINE }, ['rota_task_analytics', OVERDUE_MINE], ['data.totals.total'],
+  ['Kaç gecikmiş görevim var?', { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, fields: [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' }], filters: OVERDUE_MINE }, ['rota_task_analytics', OVERDUE_MINE], ['data.totals.total'],
     /toplam \*\*\d+\*\* görev bulunuyor \(ölçüt: /],
-  ['Gecikmiş görevlerimi listele', { operation: 'list', metrics: ['tasks.total', 'task.targetFinish'], filters: OVERDUE_MINE }, ['rota_task_search', OVERDUE_MINE],
+  ['Gecikmiş görevlerimi listele', { operation: 'list', metrics: ['tasks.total', 'task.targetFinish'], population: { tool: 'rota_task_search', collection: 'tasks', sort: 'overdue_days_desc' }, filters: OVERDUE_MINE }, ['rota_task_search', OVERDUE_MINE],
     ['totalCount', 'data.tasks.*.title', 'data.tasks.*.targetFinish'], /^- \*\*Radar test planı · RDR · Radar Modernizasyonu[^\n]*\*\*/m],
-  [`Radar Modernizasyonu projesinde kaç görev var? ${PROJECTS.FULL}`, { operation: 'value', metrics: ['tasks.total'], entities: FULL_PROJECT },
+  [`Radar Modernizasyonu projesinde kaç görev var? ${PROJECTS.FULL}`, { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_project_detail' }, entities: FULL_PROJECT },
     ['rota_project_detail', { projectId: PROJECTS.FULL }], ['data.visibleTasks.total'], /projesinde toplam \*\*8\*\* görev/],
-  [`Radar Modernizasyonu projesini özetle ${PROJECTS.FULL}`, { operation: 'value', metrics: ['tasks.total', 'tasks.open', 'tasks.overdue', 'tasks.completionRatePercent'], entities: FULL_PROJECT },
+  [`Radar Modernizasyonu projesini özetle ${PROJECTS.FULL}`, { operation: 'value', metrics: ['tasks.total', 'tasks.open', 'tasks.overdue', 'tasks.completionRatePercent'], population: { tool: 'rota_project_detail' }, entities: FULL_PROJECT },
     ['rota_project_detail', { projectId: PROJECTS.FULL }],
     ['data.visibleTasks.total', 'data.visibleTasks.open', 'data.visibleTasks.overdue', 'data.visibleTasks.completionRatePercent'], /Bunların \*\*\d+\*\*'s?[ıiuü] açık ve \*\*\d+\*\*'s?[ıiuü] gecikmiş; tamamlanma oranı \*\*%\d+\*\*\. 【R1】$/],
-  ['Kimde kaç açık iş var?', { operation: 'list', metrics: ['tasks.open'] }, ['rota_workload_summary', {}], ['data.people.*.name', 'data.people.*.openTasks'],
+  ['Kimde kaç açık iş var?', { operation: 'list', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary', collection: 'people' }, fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.people.*.openTasks' }] }, ['rota_workload_summary', {}], ['data.people.*.name', 'data.people.*.openTasks'],
     /^- \*\*Ayşe Yılmaz\*\* — Açık görev: \*\*\d+\*\* 【R1】$/m]
 ];
 
 for (const [question, request, [tool, args], facts, expected] of COMMON_QUESTIONS) {
-  test(`a less capable tool model answers "${question}" by selecting facts only`, async (t) => {
+  test(`"${question}" is answered from the declared request in one model round, and a model selecting facts only verifies the same`, async (t) => {
     const stack = stackFor(t);
-    stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [{ name: tool, arguments: args }] }, { type: 'script', respond: (call) => {
-      const [result] = toolResults(call);
-      assert.equal(result.ok, true);
-      return { type: 'answer', text: select(...facts.map((fact) => `${result.evidenceId}:${fact}`)) };
-    } });
+    stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [{ name: tool, arguments: args }] });
     const response = await sendTurn({ turnId: randomUUID(), message: question });
     const answer = done(response).assistantMessage;
     assert.equal(answer.finishReason, 'stop');
     assert.match(answer.content.replace(`\n\n${SCOPE_DISCLOSURE_TEXT}`, ''), expected);
-    assert.equal(stack.provider.calls.length, 2, 'no repair round was needed');
+    assert.equal(stack.provider.calls.length, 1, 'the server selects the declared facts: no selection or repair round');
+    // Sunucu seçemeseydi daha zayıf bir modelin yalnızca olgu seçen yanıtı da aynı doğrulamadan geçerdi.
+    const { ledger } = await callRotaTool(stack, AYSE, tool, args);
+    const modelSelection = verifyRequested(ledger, facts, request);
+    assert.equal(modelSelection.ok, true, JSON.stringify(modelSelection.issues));
+    assert.match(modelSelection.normalized, expected);
   });
 }
 

@@ -220,7 +220,7 @@ const TOTAL_COUNT = Object.freeze({
   rota_task_search: TOTALS.total, rota_task_detail: TOTALS.total, rota_task_analytics: TOTALS.total, rota_data_quality: TOTALS.total,
   rota_project_search: m('projects.total', 'projects'), rota_project_detail: m('projects.total', 'projects'), rota_portfolio_summary: m('projects.total', 'projects'),
   rota_person_search: m('people.total', 'people'), rota_workload_summary: m('people.total', 'people'), rota_wbs_inspect: m('wbs.nodes', 'wbs-nodes'),
-  rota_baseline_compare: m('baseline.finishSlipped', 'tasks'), rota_dependency_inspect: m('dependencies.total', 'dependencies'),
+  rota_baseline_compare: m('baseline.compared', 'tasks'), rota_dependency_inspect: m('dependencies.total', 'dependencies'),
   rota_recurrence_inspect: m('recurrence.entries', 'series'), rota_calendar_inspect: m('calendar.holidays', 'holidays'),
   rota_activity_search: m('activity.events', 'events'), rota_schedule_requests: m('requests.total', 'requests'),
   rota_assignment_requests: m('requests.total', 'requests'), rota_notifications: m('notifications.total', 'notifications'),
@@ -238,6 +238,19 @@ export const METRICS = Object.freeze(Object.fromEntries([...REGISTRY.values(), n
   .flatMap((entries) => [...entries.values()]).filter((entry) => entry.metric)
   .map((entry) => [entry.metric, entry.measure]).sort(([left], [right]) => left.localeCompare(right))));
 
+/** Yalnızca kaydı adlandıran ölçüler (her kayıtlı yolu bağlam): ölçü/varlık eşlemesinde belirsizlik yaratmaz. */
+const namingByMetric = new Map();
+const propertyByMetric = new Map();
+for (const entry of [...REGISTRY.values()].flatMap((entries) => [...entries.values()])) {
+  if (entry.metric) namingByMetric.set(entry.metric, (namingByMetric.get(entry.metric) ?? true) && entry.context === true);
+  if (entry.metric) propertyByMetric.set(entry.metric, (propertyByMetric.get(entry.metric) ?? true) && entry.property === true);
+}
+export const NAMING_METRICS = Object.freeze(new Set([...namingByMetric].filter(([, naming]) => naming).map(([metric]) => metric)));
+/** Başka bir kaydı adlandıran ölçü: sahibinin (görevin) ölçülen özelliğidir; sahibinin anılması onu göstermez. */
+export const RELATED_NAMING_METRICS = Object.freeze(new Set(['task.project']));
+/** Yalnızca varlığın kendi özelliği olan ölçüler (her kayıtlı yolu özellik); toplam ve sayımlar değildir. */
+export const PROPERTY_METRICS = Object.freeze(new Set([...propertyByMetric].filter(([, property]) => property).map(([metric]) => metric)));
+
 /** Kanıt olgusunun kayıtlı ölçüsü; kayıt dışı yol `null`. */
 export function metricEntry(tool, canonicalPath) {
   if (canonicalPath === 'totalCount') return TOTAL_COUNT[tool] || null;
@@ -252,6 +265,41 @@ export function metricPaths(tool, metric) {
   if (ENVELOPE_ENTRIES.returnedCount.metric === metric) paths.push('returnedCount');
   return paths;
 }
+
+/** Gerçek eşdeğer taşıyıcılar; eşit sayılar ya da ortak ölçü kimliği eşdeğerlik değildir. */
+export const SAME_VALUE_PATHS = Object.freeze({ rota_task_analytics: { 'tasks.total': ['data.totals.total', 'data.hours.taskCount', 'totalCount'] } });
+
+const DISTINCT_FIELDS = new Set(['task.project', 'wbs.name', 'recurrence.rule', 'calendar.holidayName', 'person.organization', 'dependencies.byType']);
+
+/** Özellik kimliği araçtan bağımsızdır; görünür alt boyutlar ayrı kalır. */
+export function semanticCarrierKey(tool, path) {
+  const canonical = String(path).split('.').map((part) => /^\d+$/.test(part) ? '*' : part).join('.');
+  const entry = metricEntry(tool, canonical.replace(/^data\./, ''));
+  if (!entry?.metric) return `${tool}|${canonical}`;
+  if (entry.metric === 'task.project') return `task.project|${canonical.endsWith('.code') ? 'code' : 'name'}`;
+  if (DISTINCT_FIELDS.has(entry.metric)) return `${entry.metric}|${canonical.split('.').at(-1)}`;
+  if (entry.property) return entry.metric;
+  if (SAME_VALUE_PATHS[tool]?.[entry.metric]?.includes(canonical)) return `${tool}|${entry.metric}|scalar`;
+  return `${tool}|${entry.metric}|${canonical}`;
+}
+
+/** Aynı aracın aynı niceliği taşıyan yolları; araçlar arası eşdeğerlik buradan çıkarılmaz. */
+export function equivalentCarriers(tool, paths) {
+  const identity = (path) => scalarCarrierKey(tool, path) || semanticCarrierKey(tool, path);
+  return paths.length > 0 && paths.every((path) => identity(path) === identity(paths[0]));
+}
+
+/** Araç içinde satır dışı sayımın anlamı kayıtlı ölçü ve birimidir. */
+function scalarCarrierKey(tool, path) {
+  const canonical = String(path).split('.').map((part) => Number.isInteger(Number(part)) && part !== '' ? '*' : part).join('.');
+  const entry = metricEntry(tool, canonical.replace('data.', ''));
+  if (!entry?.metric || entry.property || rowCollections(tool).some((row) => canonical.startsWith(`data.${row}.`))) return null;
+  if (canonical === 'returnedCount' || DISTINCT_FIELDS.has(entry.metric)) return semanticCarrierKey(tool, canonical);
+  return `${entry.metric}|${entry.measure}`;
+}
+
+/** Kişinin tek görev aboneliği TaskId/UserSicil benzersiz anahtarıyla göreve aittir. */
+export const metricEntityType = (metric) => /^(subscription|recurrence)\./.test(String(metric)) ? 'task' : String(metric).split('.')[0];
 
 /**
  * Kayıt satırı koleksiyonları. Bir kaydın çok değerli alanı (sorumlular, WBS
@@ -295,7 +343,9 @@ const CHANGE_INSTANT_FIELDS = new Set(['createdAt', 'updatedAt']);
 const DISPLAY_UNITS = Object.freeze({ hours: 'hours', 'currency-unspecified': 'unspecified-currency' });
 
 function rowContext(envelope, parts) {
-  const index = parts.findIndex((part, position) => position > 1 && /^\d+$/.test(part));
+  const indexes = parts.map((part, position) => position > 1 && /^\d+$/.test(part) ? position : -1).filter((position) => position >= 0);
+  const index = indexes.findLast((position) => rowCollections(envelope.tool).includes(parts.slice(1, position).map((part) => /^\d+$/.test(part) ? '*' : part).join('.')))
+    ?? indexes[0] ?? -1;
   if (index < 0 || index === parts.length - 1) return null;
   const row = parts.slice(1, index + 1).reduce((value, key) => value?.[key], envelope.data);
   if (!row || typeof row !== 'object') return null;

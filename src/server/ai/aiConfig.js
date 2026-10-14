@@ -1,6 +1,7 @@
 import 'server-only';
 import { normalizeApiKeyInput } from '../../domain/ai/aiCredentialPolicy.js';
 import { AI_ERROR_CODES } from '../../domain/ai/aiErrorCatalog.js';
+import { ASSISTANT_TIMING } from '../../domain/ai/assistantContract.js';
 import { AiError } from './aiErrors.js';
 
 /**
@@ -25,6 +26,8 @@ const NAMES = Object.freeze({
   MAX_QUEUED_PER_USER: 'MERGEN_ROTA_AI_MAX_QUEUED_PER_USER',
   QUEUE_TIMEOUT_MS: 'MERGEN_ROTA_AI_QUEUE_TIMEOUT_MS',
   REQUEST_TIMEOUT_MS: 'MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS',
+  PROVIDER_FIRST_EVENT_TIMEOUT_MS: 'MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS',
+  PROVIDER_IDLE_TIMEOUT_MS: 'MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS',
   TOOLS_ENABLED: 'MERGEN_ROTA_AI_TOOLS_ENABLED'
 });
 
@@ -38,8 +41,11 @@ const INTEGER_SETTINGS = Object.freeze({
   [NAMES.MAX_QUEUED]: { fallback: 32, min: 0, max: 1024 },
   [NAMES.MAX_ACTIVE_PER_USER]: { fallback: 2, min: 1, max: 32 },
   [NAMES.MAX_QUEUED_PER_USER]: { fallback: 2, min: 0, max: 64 },
-  [NAMES.QUEUE_TIMEOUT_MS]: { fallback: 20000, min: 100, max: 120000 },
-  [NAMES.REQUEST_TIMEOUT_MS]: { fallback: 90000, min: 1000, max: 600000 }
+  [NAMES.QUEUE_TIMEOUT_MS]: { fallback: 20000, min: 100, max: ASSISTANT_TIMING.queueMaxMs },
+  [NAMES.REQUEST_TIMEOUT_MS]: { fallback: 90000, min: 1000, max: 600000 },
+  // Sağlayıcı ilerleme sınırları: canlı tutma değil, anlamlı akış olayı beklenir (bkz. aiDeadline).
+  [NAMES.PROVIDER_FIRST_EVENT_TIMEOUT_MS]: { fallback: 60000, min: 100, max: ASSISTANT_TIMING.providerMaxMs },
+  [NAMES.PROVIDER_IDLE_TIMEOUT_MS]: { fallback: 45000, min: 100, max: ASSISTANT_TIMING.providerMaxMs }
 });
 
 function text(env, name) {
@@ -168,6 +174,10 @@ function disabledConfig(issues) {
     }),
     queueTimeoutMs: INTEGER_SETTINGS[NAMES.QUEUE_TIMEOUT_MS].fallback,
     requestTimeoutMs: INTEGER_SETTINGS[NAMES.REQUEST_TIMEOUT_MS].fallback,
+    providerProgress: Object.freeze({
+      firstEventMs: INTEGER_SETTINGS[NAMES.PROVIDER_FIRST_EVENT_TIMEOUT_MS].fallback,
+      idleMs: INTEGER_SETTINGS[NAMES.PROVIDER_IDLE_TIMEOUT_MS].fallback
+    }),
     toolsEnabled: false,
     toolsFlagInvalid: false
   });
@@ -193,6 +203,10 @@ export function parseAiConfig(env = process.env) {
   if (limits.maxQueuedPerUser > limits.maxQueued) issues.push(NAMES.MAX_QUEUED_PER_USER);
   const queueTimeoutMs = parseInteger(env, NAMES.QUEUE_TIMEOUT_MS, issues);
   const requestTimeoutMs = parseInteger(env, NAMES.REQUEST_TIMEOUT_MS, issues);
+  const providerProgress = Object.freeze({
+    firstEventMs: parseInteger(env, NAMES.PROVIDER_FIRST_EVENT_TIMEOUT_MS, issues),
+    idleMs: parseInteger(env, NAMES.PROVIDER_IDLE_TIMEOUT_MS, issues)
+  });
   // Rota verisi araçları ayrı bir açık onaydır: 0018 göçü uygulanmadan açılmamalıdır.
   // Geçersiz değer araçları kapatır; genel sohbet yapılandırmasını bozmaz.
   const toolIssues = [];
@@ -215,6 +229,7 @@ export function parseAiConfig(env = process.env) {
     limits,
     queueTimeoutMs,
     requestTimeoutMs,
+    providerProgress,
     toolsEnabled,
     toolsFlagInvalid
   });

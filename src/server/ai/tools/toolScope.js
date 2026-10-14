@@ -2,12 +2,15 @@ import 'server-only';
 import { TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { parseToolArguments } from './toolArguments.js';
 import { getRotaTool } from './toolRegistry.js';
-import { addDays, foldText, normalizeTaskFilters } from './rota/taskFacts.js';
+import { addDays, foldText, normalizeTaskFilters, searchText } from './rota/taskFacts.js';
 import { businessDate } from '../../../domain/calendar/businessDate.js';
 import { clarificationReferences } from '../../../domain/ai/clarification.js';
 
 const IDENTITY_ARGUMENTS = Object.freeze({ taskId: 'tasks', projectId: 'projects', wbsId: 'wbs', baselineId: 'baselines', personSicil: 'people' });
 const TASK_POPULATION_TOOLS = new Set(['rota_task_search', 'rota_task_analytics']);
+const NAME_SEARCH_TOOLS = new Set(['rota_task_search', 'rota_project_search', 'rota_person_search']);
+/** Ad aramasının ve yoklamasının bağımsız değişkenleri: metin, sayfa boyu ve (görev adında) tek proje. */
+const NAME_PROBE_KEYS = new Set(['text', 'limit', 'projectId']);
 /** Kimliksiz geniş nüfustan aynı görünür görev nüfusuna geçişler. */
 const BROAD_FOLLOW_UPS = Object.freeze({
   rota_data_quality: ['rota_task_search', 'rota_task_analytics'],
@@ -55,6 +58,19 @@ const PRESENTATION_KEYS = new Set(['cursor', 'limit', 'textFields', 'sort', 'dep
 /** Kapsam metni karşılaştırması: harf, aksan, noktasız ı ve noktalama duyarsız. */
 export function containmentText(value) {
   return foldText(value).replace(/ı/g, 'i').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+const NAME_SUFFIXES = new Set(['in', 'un', 'nin', 'nun', 'inin', 'unun', 'i', 'u', 'yi', 'yu', 'ni', 'nu', 'ya', 'ye', 'a', 'e', 'na', 'ne', 'da', 'de', 'ta', 'te', 'nda', 'nde', 'dan', 'den', 'tan', 'ten', 'ndan', 'nden', 'la', 'le', 'yla', 'yle']);
+
+/** Tam sözcükler ve sınırlı Türkçe ekler; gelişigüzel harf öneki kapsam değildir. */
+function phrasePositions(haystack, phrase) {
+  const tokens = containmentText(haystack).split(' ');
+  const wanted = containmentText(phrase).split(' ');
+  if (!wanted[0]) return [];
+  return tokens.flatMap((_, index) => wanted.every((part, offset) => {
+    const token = tokens[index + offset];
+    return token === part || (offset === wanted.length - 1 && token?.startsWith(part) && NAME_SUFFIXES.has(token.slice(part.length)));
+  }) ? [index] : []);
 }
 
 export function populationArguments(name, args, today) {
@@ -121,6 +137,26 @@ function resultIdentities(name, data) {
   return identities.filter((row) => typeof row.id === 'string' || typeof row.id === 'number');
 }
 
+/**
+ * Ad aramasının adaylarından tam adı kullanıcının iletisinde (sözcük başından) geçen TEK aday,
+ * kullanıcının adlandırdığı kayıttır (model adı kısaltmış ya da uzatmış olabilir):
+ * `{ population, type, id, title }`; aday kümesi kesilmişse ya da birden çok aday uyuyorsa null.
+ */
+function namedCandidate(name, data, userNeedle, search) {
+  if (!data || typeof data !== 'object' || data.candidatesTruncated === true) return null;
+  const [candidates, population, type, label, idField] = name === 'rota_task_search' && ['partial', 'ambiguous'].includes(data.titleResolution)
+    ? [data.candidates, 'tasks', 'task', 'title', 'taskId']
+    : name === 'rota_project_search' && ['partial', 'ambiguous'].includes(data.resolution) ? [data.candidates, 'projects', 'project', 'name', 'projectId'] : [];
+  if (!Array.isArray(candidates)) return null;
+  const positions = phrasePositions(userNeedle, search);
+  if (positions.length !== 1) return null;
+  const named = candidates.filter((candidate) => {
+    const title = containmentText(candidate?.[label] || '');
+    return title && candidate[idField] && phrasePositions(userNeedle, title).includes(positions[0]);
+  });
+  return named.length === 1 ? { population, type, id: String(named[0][idField]), title: named[0][label] } : null;
+}
+
 function referenceIdentity(reference) {
   if (reference.projectId) return ['projects', reference.projectId];
   if (reference.taskId) return ['tasks', reference.taskId];
@@ -143,6 +179,9 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
   const textFields = new Set();
   const trustedTexts = new Set();
   const trustedWindows = [];
+  const named = [];
+  const series = new Set();
+  const unmatchedNames = new Map();
   const userNeedle = containmentText(userText);
   // Önceki açıklamanın adayları: yalnızca bağlanan seçim kimliktir.
   const reserved = new Set(clarificationReferences(clarification?.candidates).map((reference) => referenceIdentity(reference).join(':')));
@@ -153,9 +192,10 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
     if (population === 'projects') projectScope = true;
   }
 
+  // Metin kullanıcının iletisinde bir sözcük başından başlamalıdır; son sözcüğü ek alabilir (ör. "toplantısı" → "toplantısının").
   function textTrusted(text) {
     const needle = containmentText(text);
-    return Boolean(needle) && (trustedTexts.has(needle) || (` ${userNeedle} `).includes(` ${needle} `));
+    return Boolean(needle) && (trustedTexts.has(needle) || phrasePositions(userNeedle, needle).length > 0);
   }
 
   function identityTrusted(population, id) {
@@ -173,7 +213,8 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
     identityTrusted,
     /** Önceki açıklamada kullanıcının numarasıyla seçtiği ve sunucunun bağladığı aday. */
     boundSelection() {
-      return bound ? { ...bound } : null;
+      if (!named.length) return bound ? { ...bound } : null;
+      return { ...(bound || {}), named: named.map((item) => ({ ...item })) };
     },
     /**
      * Veri okunmadan önce bildirilen nüfus (ör. dönem). Yalnızca ilk araç
@@ -190,6 +231,11 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
           if (window.dateFrom && window.dateTo) trustedWindows.push({ dateFrom: window.dateFrom, dateTo: window.dateTo });
         } catch { /* Geçersiz bildirim yok sayılır. */ }
       }
+    },
+    /** Veri okunmadan önce bildirilen nüfusun korumalı metin alanları (kullanıcının açtığı kümeden); ilk araç turundan sonra yok sayılır. */
+    declareTextFields(fields) {
+      if (established) return;
+      for (const field of fields || []) if (!allowedTextFields || allowedTextFields.includes(field)) textFields.add(field);
     },
     establish(calls, messages) {
       const successful = messages.map((message, index) => {
@@ -215,6 +261,24 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
           if (args[key] != null) ids[population].add(String(args[key]));
         }
         for (const { population, id } of resultIdentities(call.name, body.data)) ids[population].add(String(id));
+        // Hiçbir kayda uymayan ad, arandığı kapsamla (koşulsuz ya da tek projede) kaydedilir.
+        if (NAME_SEARCH_TOOLS.has(call.name) && typeof args.text === 'string' && body.complete !== false
+          && Object.keys(args).every((key) => NAME_PROBE_KEYS.has(key))
+          && [body.data?.resolution, body.data?.titleResolution].includes('none')) {
+          unmatchedNames.set(call.name, [...(unmatchedNames.get(call.name) || []), { text: containmentText(args.text), projectId: args.projectId ?? null }]);
+        }
+        const candidate = typeof args.text === 'string' ? namedCandidate(call.name, body.data, userNeedle, args.text) : null;
+        if (candidate) {
+          ids[candidate.population].add(candidate.id);
+          named.push({ type: candidate.type, text: containmentText(args.text), query: searchText(args.text), title: candidate.title, id: candidate.id, projectId: args.projectId ?? null });
+        }
+        // Adayları tek bir serinin kayıtları olan ad (kesin ya da serinin adı kullanıcının iletisinde) yalnızca seri incelemesini seçer.
+        const resolved = call.name === 'rota_task_search' && typeof args.text === 'string' ? body.data?.resolvedSeries : null;
+        if (resolved?.taskId && (resolved.exact === true || (phrasePositions(userNeedle, args.text).length === 1
+          && phrasePositions(userNeedle, resolved.title || '').includes(phrasePositions(userNeedle, args.text)[0])))) {
+          series.add(String(resolved.taskId));
+          named.push({ type: 'task', text: containmentText(args.text), query: searchText(args.text), id: String(resolved.taskId), tool: 'rota_recurrence_inspect', projectId: args.projectId ?? null });
+        }
       }
       established = true;
     },
@@ -237,6 +301,10 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
         return;
       }
       if ((args.textFields || []).some((field) => !textFields.has(field))) fail();
+      // Hiçbir kayda uymayan ad aramasının yoklaması: aynı adın kullanıcının yazdığı ilk sözcükleriyle, AYNI kapsamda ad araması.
+      if (NAME_SEARCH_TOOLS.has(name) && args.text != null && Object.keys(args).every((key) => NAME_PROBE_KEYS.has(key)) && textTrusted(args.text)
+        && (unmatchedNames.get(name) || []).some((item) => item.projectId === (args.projectId ?? null)
+          && item.text.startsWith(`${containmentText(args.text)} `))) return;
       const normalized = populationArguments(name, args, today);
       const sameRoot = roots.get(name);
       const relatedTaskRoots = TASK_POPULATION_TOOLS.has(name)
@@ -248,7 +316,9 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
         const matches = (sameRoot || relatedTaskRoots).some((root) => contains(root, normalized, { textTrusted }));
         if (!matches) fail();
       }
+      const seriesSelected = name === 'rota_recurrence_inspect' && args.taskId != null && series.has(String(args.taskId));
       for (const [key, population] of Object.entries(IDENTITY_ARGUMENTS)) {
+        if (seriesSelected && key === 'taskId') continue;
         if (args[key] != null && !ids[population].has(String(args[key])) && !identityTrusted(population, args[key])) fail();
       }
       if (!sameRoot && !taskPopulation && args.text != null && !textTrusted(args.text)) fail();

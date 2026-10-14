@@ -4,11 +4,15 @@ import {
   ASSISTANT_PROTOCOL_HEADER,
   ASSISTANT_PROTOCOL_VERSION,
   ASSISTANT_STREAM_EVENTS,
-  ASSISTANT_TOOL_TOPICS
+  ASSISTANT_TOOL_TOPICS,
+  ASSISTANT_TIMING,
+  assistantGenerationStallMs
 } from '../../../domain/ai/assistantContract.js';
 import { ServerPersistenceError } from '../../errors.js';
+import { AiError } from '../aiErrors.js';
+import { readAiConfig } from '../aiConfig.js';
 import { recordAssistantTurn } from '../aiTelemetry.js';
-import { generateAssistantAnswer } from './assistantService.js';
+import { discloseAssistantMessage, generateAssistantAnswer } from './assistantService.js';
 
 /**
  * Rota AI akış yanıtı (tarayıcıya giden sürümlü protokol).
@@ -26,13 +30,22 @@ import { generateAssistantAnswer } from './assistantService.js';
  * yer açılana kadar bekletilir; bu bekleme ağ geçidinin süre sınırına bağlıdır.
  * Böylece sunucu belleğinde okunmamış sınırsız çıktı birikmez.
  *
- * Canlı tutma: yavaş bir model ilk metni üretirken (ya da yalnızca akıl
- * yürütürken) bağlantı ve ters vekil sessiz kalmasın diye aralıklarla SSE
- * YORUM satırı (`: keepalive`) gönderilir. Yorum veri taşımaz, istemci onu
- * gösterilecek metin ya da ilerleme saymaz; zamanlayıcı akış bitince durur.
+ * Canlı tutma ile ilerleme AYRIDIR. Bağlantı ve ters vekil sessiz kalmasın diye
+ * aralıklarla SSE YORUM satırı (`: keepalive`) gönderilir; yorum veri taşımaz ve
+ * istemci onu ilerleme saymaz. Gerçek ilerleme (evre, metin, sağlayıcı ya da araç
+ * olayı) seyrekleştirilmiş `progress` olayıyla bildirilir. Belirli süre hiç
+ * ilerlemeyen üretim sunucuda kesilir; kesilen üretim sinyale uymasa da kısa bir
+ * süre sonra tur sonlandırılır, üretim hakkı ve kaynaklar bırakılır. Son yanıtın
+ * teslimi de sınırlıdır: okumayan istemci turu tutamaz.
  */
 
 export const ASSISTANT_KEEPALIVE_MS = 15000;
+/** `progress` olayları arasındaki en kısa süre (ilerleme varken). */
+export const ASSISTANT_PROGRESS_EVENT_MS = ASSISTANT_TIMING.progressEventMs;
+/** Kesilen üretimin kendiliğinden bitmesi için beklenen süre (yanıt yazımı bütçesinden uzun). */
+export const ASSISTANT_STALL_GRACE_MS = ASSISTANT_TIMING.stallGraceMs;
+/** Okumayan istemcinin kuyrukta yer açması için beklenen en uzun süre. */
+export const ASSISTANT_DELIVERY_TIMEOUT_MS = 20000;
 /** Kuyruktaki en fazla olay (tek olay en fazla bir sağlayıcı parçası kadardır). */
 export const QUEUE_HIGH_WATER_MARK = 32;
 const RETRYABLE_SERVER_CODES = new Set(['DATABASE_UNAVAILABLE']);
@@ -119,6 +132,10 @@ function acceptedPayload(turn) {
 export function assistantStreamResponse(turn, {
   signal = null,
   keepaliveMs = ASSISTANT_KEEPALIVE_MS,
+  progressEventMs = ASSISTANT_PROGRESS_EVENT_MS,
+  stallMs = assistantGenerationStallMs(readAiConfig()),
+  graceMs = ASSISTANT_STALL_GRACE_MS,
+  deliveryTimeoutMs = ASSISTANT_DELIVERY_TIMEOUT_MS,
   generate = generateAssistantAnswer
 } = {}) {
   const cancelled = new AbortController();
@@ -127,17 +144,43 @@ export function assistantStreamResponse(turn, {
   let closed = false;
   let waiting = null;
   let textSent = false;
+  let terminal = false;
+  let finished = false;
+  let stalled = null;
+  let lastProgressAt = performance.now();
+  let lastProgressSentAt = performance.now();
+  let lastByteAt = performance.now();
+  let ticker = null;
+  let graceTimer = null;
+  let delivering = false;
+  // Üretim gözcüsü yalnızca üretimi korur; yazım, açıklama ve teslim kendi sınırlarıyla yürür.
+  let generated = Boolean(turn.replay);
+  let recorded = false;
+  const startedAt = performance.now();
+  // Turun sonucu teslim edilen sonlandırıcıdır: gönderilmiş `done` sonrası kapanış iptal değildir
+  // (hata olayı her yolda sonuçtan SONRA gönderilir). Kayıtlı yanıtın yeniden oynatılması yeni bir
+  // tur değildir; başarısı da başarısızlığı da tur sayaçlarına girmez.
+  const recordOutcome = (failure = null) => {
+    if (recorded || turn.replay) return;
+    recorded = true;
+    const error = terminal ? null : failure;
+    const payload = error ? assistantStreamErrorPayload(error, { partial: textSent }) : null;
+    recordAssistantTurn({ ...(payload ? { code: payload.code, error, source: payload.credentialSource,
+      details: error?.details ?? null, serviceFailure: payload.code === 'DATABASE_UNAVAILABLE' } : {}), durationMs: performance.now() - startedAt });
+  };
 
   const wake = () => {
     const pending = waiting;
     waiting = null;
     pending?.();
   };
+  const onAbort = () => wake();
 
   const enqueue = (bytes) => {
     if (closed) return false;
     try {
       controller.enqueue(bytes);
+      lastByteAt = performance.now();
       return true;
     } catch {
       closed = true;
@@ -146,85 +189,185 @@ export function assistantStreamResponse(turn, {
   };
 
   const send = (event, data) => enqueue(frame(event, data));
+  const finalEvent = (event, data) => {
+    if (terminal) return false;
+    terminal = true;
+    return send(event, data);
+  };
 
-  /** Kuyrukta yer açılana (ya da akış kapanana) kadar bekler; üretim sinyali bu beklemeyi de keser. */
-  async function sendWhenReady(event, data) {
+  /**
+   * Gerçek ilerleme: gözcüyü yeniler ve en fazla `progressEventMs` aralıkla
+   * istemciye bildirilir. Evre ya da metin olayı zaten görünür ilerlemedir.
+   */
+  const progress = ({ visible = false } = {}) => {
+    const now = performance.now();
+    lastProgressAt = now;
+    if (visible) lastProgressSentAt = now;
+    else if (!terminal && !delivering && controller.desiredSize > 0 && now - lastProgressSentAt >= progressEventMs) {
+      lastProgressSentAt = now;
+      send(ASSISTANT_STREAM_EVENTS.PROGRESS, {});
+    }
+  };
+
+  /** Akışı kapatır ve üretim hakkını bırakır; her yolda yalnızca bir kez etkilidir. */
+  let released = false;
+  const close = () => {
+    clearInterval(ticker);
+    ticker = null;
+    clearTimeout(graceTimer);
+    graceTimer = null;
+    generationSignal.removeEventListener('abort', onAbort);
+    if (!released) {
+      released = true;
+      turn.claim?.release();
+    }
+    if (!closed) {
+      closed = true;
+      try {
+        controller.close();
+      } catch {
+        // İptal edilmiş akış zaten kapalıdır.
+      }
+    }
+    wake();
+  };
+
+  /**
+   * İlerlemeyen üretim kesilir. Üretim sinyale uyup kısa sürede biter; uymasa da
+   * süre sonunda tur hata olayıyla sonlandırılır ve üretim hakkı bırakılır.
+   */
+  const stall = (reason) => {
+    if (stalled || finished) return;
+    stalled = new AiError(AI_ERROR_CODES.AI_TIMEOUT, { details: { reason } });
+    cancelled.abort(stalled);
+    wake();
+    graceTimer = setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      recordOutcome(stalled);
+      finalEvent(ASSISTANT_STREAM_EVENTS.ERROR, assistantStreamErrorPayload(stalled, { partial: textSent }));
+      close();
+    }, graceMs);
+    graceTimer.unref?.();
+  };
+
+  /** Kuyrukta yer açılana (ya da akış kapanana) kadar bekler; bekleme sınırlıdır ve üretim sinyali onu da keser. */
+  async function waitForCapacity() {
+    const backpressure = controller.desiredSize <= 0;
+    // Sınır akışın değil bu bekleyişin başından ölçülür.
+    const waitStartedAt = performance.now();
     while (!closed && controller.desiredSize <= 0 && !generationSignal.aborted) {
+      const remaining = deliveryTimeoutMs - (performance.now() - waitStartedAt);
+      if (remaining <= 0) {
+        // Okumayan istemci turu tutamaz: üretim kesilir, hak bırakılır.
+        stall('DELIVERY_STALLED');
+        break;
+      }
       await new Promise((resolve) => {
-        waiting = resolve;
+        const timer = setTimeout(resolve, remaining);
+        waiting = () => {
+          clearTimeout(timer);
+          resolve();
+        };
       });
     }
-    if (generationSignal.aborted) return false;
-    return send(event, data);
+    if (backpressure) lastProgressAt = performance.now();
+    return !closed && !generationSignal.aborted;
+  }
+
+  async function sendWhenReady(event, data) {
+    return await waitForCapacity() && send(event, data);
+  }
+
+  const deliveryFailure = () => stalled || (generationSignal.reason instanceof ServerPersistenceError ? generationSignal.reason : null)
+    || new AiError(AI_ERROR_CODES.AI_CANCELLED);
+
+  // Bekleme erişim denetiminden ÖNCE biter; denetimden sonra hiçbir await yoktur.
+  async function deliver(prepare, replayed = false) {
+    if (!await waitForCapacity()) throw deliveryFailure();
+    delivering = true;
+    try {
+      const result = await prepare();
+      if (generationSignal.aborted || closed || finished || terminal) throw deliveryFailure();
+      // Teslim edilen yanıt yetkilidir: gösterilmiş taslağın yerini alır, ona eklenmez.
+      if (textSent && send(ASSISTANT_STREAM_EVENTS.REVISE, {})) textSent = false;
+      textSent = send(ASSISTANT_STREAM_EVENTS.DELTA, { text: result.answer.content });
+      if (!textSent) throw deliveryFailure();
+      finalEvent(ASSISTANT_STREAM_EVENTS.DONE, {
+        conversation: result.conversation,
+        assistantMessage: messageView(result.answer, { includeContent: result.reconciled === true || result.contentAuthoritative === true }),
+        ...(result.reconciled ? { reconciled: true } : {}), replayed
+      });
+      return result;
+    } finally {
+      delivering = false;
+    }
   }
 
   async function run() {
-    const startedAt = Date.now();
-    const keepalive = setInterval(() => {
-      if (!closed && controller.desiredSize > 0) enqueue(KEEPALIVE);
-    }, keepaliveMs);
-    keepalive.unref?.();
-    const onAbort = () => wake();
+    const startedAt = performance.now();
+    const tickMs = Math.max(1, Math.min(keepaliveMs, Math.floor(stallMs / 3), 5000));
+    ticker = setInterval(() => {
+      const now = performance.now();
+      if (!closed && !delivering && now - lastByteAt >= keepaliveMs && controller.desiredSize > 0) enqueue(KEEPALIVE);
+      if (!waiting && !generated && now - lastProgressAt >= stallMs) stall('GENERATION_STALLED');
+    }, tickMs);
+    ticker.unref?.();
     generationSignal.addEventListener('abort', onAbort, { once: true });
     try {
       send(ASSISTANT_STREAM_EVENTS.ACCEPTED, acceptedPayload(turn));
       if (turn.replay) {
-        textSent = send(ASSISTANT_STREAM_EVENTS.DELTA, { text: turn.replay.content });
-        send(ASSISTANT_STREAM_EVENTS.DONE, {
-          conversation: turn.conversation,
-          assistantMessage: messageView(turn.replay, { includeContent: false }),
-          replayed: true
-        });
-        // Kayıtlı yanıtın yeniden oynatılması yeni bir tur değildir: tur sayaçlarına girmez.
+        await deliver(async () => ({ conversation: turn.conversation,
+          answer: turn.sicil ? await discloseAssistantMessage(turn, turn.replay, generationSignal) : turn.replay }), true);
         return;
       }
       const result = await generate(turn, {
         signal: generationSignal,
-        onStatus: (status) => send(ASSISTANT_STREAM_EVENTS.STATUS, {
-          phase: status.phase,
-          ...(ASSISTANT_TOOL_TOPICS.includes(status.topic) ? { topic: status.topic } : {})
-        }),
+        onStatus: (status) => {
+          progress({ visible: true });
+          send(ASSISTANT_STREAM_EVENTS.STATUS, {
+            phase: status.phase,
+            ...(ASSISTANT_TOOL_TOPICS.includes(status.topic) ? { topic: status.topic } : {})
+          });
+        },
+        onProgress: () => progress(),
+        onGenerated: () => { generated = true; },
+        onDelivery: deliver,
         onText: async (text) => {
+          progress({ visible: true });
           // Yanıt yalnızca metin gerçekten kuyruğa girdiyse "kısmi" sayılır.
-          if (await sendWhenReady(ASSISTANT_STREAM_EVENTS.DELTA, { text })) textSent = true;
+          if (await sendWhenReady(ASSISTANT_STREAM_EVENTS.DELTA, { text })) {
+            textSent = true;
+            return;
+          }
+          // Teslim edilemeyen metin üretimin sonudur: kesilen ya da kapanan akışta tur yanıtı göstermiş sayılmaz.
+          throw stalled || (generationSignal.aborted ? generationSignal.reason : null) || new AiError(AI_ERROR_CODES.AI_CANCELLED);
         },
         // Gösterilen taslak geçersizleşti (araç çağrısına dönüştü ya da doğrulanamadı).
         onRevise: () => {
           if (send(ASSISTANT_STREAM_EVENTS.REVISE, {})) textSent = false;
         }
       });
-      send(ASSISTANT_STREAM_EVENTS.DONE, {
+      if (finished) return;
+      if (stalled || generationSignal.aborted) throw deliveryFailure();
+      if (!terminal && result.reconciled && turn.sicil) {
+        await deliver(async () => ({ ...result, answer: await discloseAssistantMessage(turn, result.answer, generationSignal) }));
+      }
+      if (!terminal) finalEvent(ASSISTANT_STREAM_EVENTS.DONE, {
         conversation: result.conversation,
         assistantMessage: messageView(result.answer, { includeContent: result.reconciled === true || result.contentAuthoritative === true }),
         ...(result.reconciled ? { reconciled: true } : {}),
         replayed: false
       });
-      recordAssistantTurn({ durationMs: Date.now() - startedAt });
+      recordOutcome();
     } catch (error) {
-      const payload = assistantStreamErrorPayload(error, { partial: textSent });
-      recordAssistantTurn({
-        code: payload.code,
-        error,
-        source: payload.credentialSource,
-        details: error?.details ?? null,
-        serviceFailure: payload.code === 'DATABASE_UNAVAILABLE',
-        durationMs: Date.now() - startedAt
-      });
-      send(ASSISTANT_STREAM_EVENTS.ERROR, payload);
+      const failure = stalled || error;
+      const payload = assistantStreamErrorPayload(failure, { partial: textSent });
+      recordOutcome(failure);
+      finalEvent(ASSISTANT_STREAM_EVENTS.ERROR, payload);
     } finally {
-      clearInterval(keepalive);
-      generationSignal.removeEventListener('abort', onAbort);
-      turn.claim?.release();
-      if (!closed) {
-        closed = true;
-        try {
-          controller.close();
-        } catch {
-          // İptal edilmiş akış zaten kapalıdır.
-        }
-      }
-      // Süre sınırıyla terk edilmiş bir geri basınç beklemesi askıda kalmaz.
-      wake();
+      finished = true;
+      close();
     }
   }
 

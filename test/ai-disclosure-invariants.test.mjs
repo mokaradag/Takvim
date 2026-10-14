@@ -15,14 +15,11 @@ const done = (response) => response.events.find((event) => event.event === 'done
 const deltas = (response) => response.events.filter((event) => event.event === 'delta').map((event) => event.data.text).join('');
 const stackFor = (t, seed = {}) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed(seed) });
 
-const taskTitle = (taskId) => declared({ operation: 'value', metrics: ['task.title'], entities: [{ type: 'task', id: taskId }] });
+const taskTitle = (taskId) => declared({ operation: 'value', metrics: ['task.title'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: taskId }] });
 
-function citeTask(stack, taskId, field = 'data.task.title') {
-  stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(taskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId } }] },
-    { type: 'script', respond: (call) => {
-      const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
-      return { type: 'answer', text: evidenceReply(claimFor(result, field)) };
-    } });
+/** Görev ayrıntısı turu; bildirilen başlığı sunucu kanıttan seçip atıflı yazar. */
+function citeTask(stack, taskId) {
+  stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(taskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId } }] });
 }
 
 function failEvidenceReads(t, pool, code) {
@@ -35,6 +32,64 @@ function failEvidenceReads(t, pool, code) {
       return query(sql);
     };
     return value;
+  });
+}
+
+for (const delivery of ['retained', 'recovered', 'unavailable', 'revoked', 'deleted']) {
+  test(`saved replay validates the original answer once at delivery (${delivery})`, async (t) => {
+    const stack = stackFor(t);
+    citeTask(stack, TASKS.OVERDUE);
+    const input = { turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` };
+    const saved = done(await sendTurn(input));
+    const { prepareAssistantTurn } = await import('../src/server/ai/assistant/assistantService.js');
+    const { assistantStreamResponse } = await import('../src/server/ai/assistant/assistantStreamResponse.js');
+    const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
+    const turns = { ...aiTelemetrySnapshot().assistantTurns };
+    const calls = stack.provider.calls.length;
+    let preparing = true;
+    let reads = 0;
+    const pool = await getSqlPool();
+    const request = pool.request.bind(pool);
+    t.mock.method(pool, 'request', () => {
+      const value = request();
+      const query = value.query.bind(value);
+      value.query = async (sql) => {
+        if (sql.includes('AS EvidenceReady')) {
+          reads += 1;
+          if (delivery === 'unavailable' || (delivery === 'recovered' && preparing)) {
+            throw Object.assign(new Error('evidence read unavailable'), { code: 'DATABASE_UNAVAILABLE' });
+          }
+        }
+        return query(sql);
+      };
+      return value;
+    });
+    const turn = await prepareAssistantTurn({ readBody: async () => ({ ...input, conversationId: saved.conversation.id, mode: 'standard' }) });
+    preparing = false;
+    if (delivery === 'revoked') {
+      stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+      stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+    }
+    if (delivery === 'deleted') stack.db.tasks = stack.db.tasks.filter((row) => row.TaskId !== TASKS.OVERDUE);
+    const { parseSseText } = await import('./helpers/aiStack.mjs');
+    const replay = parseSseText(await assistantStreamResponse(turn).text());
+    assert.deepEqual(replay.events.map((event) => event.event), ['accepted', 'delta', 'done']);
+    assert.equal(done(replay).replayed, true);
+    const answer = done(replay).assistantMessage;
+    if (delivery === 'retained' || delivery === 'recovered') {
+      assert.equal(deltas(replay), saved.assistantMessage.content);
+      assert.equal(answer.finishReason, saved.assistantMessage.finishReason);
+      assert.deepEqual(answer.evidence, saved.assistantMessage.evidence);
+    } else {
+      assert.equal(answer.finishReason, delivery === 'unavailable' ? 'unavailable' : 'not_found');
+      assert.deepEqual(answer.evidence, []);
+      assert.equal(deltas(replay), delivery === 'unavailable'
+        ? 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.' : NON_ENUMERATING_FAILURE_TEXT);
+      assert.equal(JSON.stringify(replay.events).includes(saved.assistantMessage.content), false);
+    }
+    assert.equal(reads, 1, 'kayıtlı kanıt hazırlıkta okunmaz, yalnızca teslimde doğrulanır');
+    assert.equal(stack.provider.calls.length, calls);
+    assert.deepEqual(aiTelemetrySnapshot().assistantTurns, turns);
   });
 }
 
@@ -268,24 +323,39 @@ test('moving a cited task outside the current scope hides it on reopen and repla
   assert.equal(deltas(await sendTurn({ conversationId: first.conversation.id, turnId, message: `Görevi göster: ${TASKS.OVERDUE}` })), NON_ENUMERATING_FAILURE_TEXT);
 });
 
-test('a task moved across the ACL boundary after reading cannot be rendered or persisted as evidence', async (t) => {
-  const stack = stackFor(t);
-  stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
-  const task = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE);
-  const title = task.Title;
-  stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(task.TaskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] },
-    { type: 'script', respond: (call) => {
-      const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
-      task.ProjectId = PROJECTS.HIDDEN;
-      return { type: 'answer', text: evidenceReply(claimFor(result, 'data.task.title')) };
-    } }, { type: 'answer', text: '{"kind":"unavailable"}' });
-  const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
-  assert.equal(done(response).assistantMessage.finishReason, 'unavailable');
-  assert.ok(!deltas(response).includes(title));
-  assert.deepEqual(stack.db.aiMessageEvidence, []);
-});
+for (const path of ['server', 'model']) {
+  test(`a task moved across the ACL boundary after reading cannot be rendered or persisted as evidence (${path} selection)`, async (t) => {
+    const stack = stackFor(t);
+    stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+    const task = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE);
+    const title = task.Title;
+    if (path === 'server') {
+      // Sunucu seçiminde okuma ile çizim arasında model turu yoktur: görev son görünürlük denetimi sırasında taşınır.
+      stack.db.queryBarrier = { match: (sql) => {
+        if (sql.includes('rota-ai-tool:task-visibility')) task.ProjectId = PROJECTS.HIDDEN;
+        return false;
+      } };
+      stack.provider.enqueue({ type: 'tool-calls', preface: [taskTitle(task.TaskId)], calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] });
+    } else {
+      // Proje adı/kodu belirsizliğinde seçim modelindir; görev seçim turunda taşınır.
+      const request = declared({ operation: 'value', metrics: ['task.title', 'task.project'], reasoning: 'synthesis',
+        fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }], entities: [{ type: 'task', id: task.TaskId }] });
+      stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_task_detail', arguments: { taskId: task.TaskId } }] },
+        { type: 'script', respond: () => {
+          task.ProjectId = PROJECTS.HIDDEN;
+          return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R1:data.task.title', 'R1:data.task.project.name'] }) };
+        } });
+    }
+    const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
+    assert.equal(done(response).assistantMessage.finishReason, 'unavailable');
+    assert.ok(!deltas(response).includes(title));
+    assert.deepEqual(stack.db.aiMessageEvidence, []);
+    assert.equal(stack.provider.calls.length, path === 'server' ? 1 : 2, 'yetki iptalinden sonra sağlayıcı çağrılmaz');
+    assert.equal(stack.provider.pendingCount, 0);
+  });
+}
 
-test('a transient post-persist check preserves this turn, while reopen fails closed as unavailable', async (t) => {
+test('a transient post-persist check fails closed before streaming and can recover on reopen', async (t) => {
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);
   stack.db.aiConversationHooks = { beforeAppend() {
@@ -293,9 +363,10 @@ test('a transient post-persist check preserves this turn, while reopen fails clo
   } };
   const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
   const saved = done(response);
-  assert.equal(saved.assistantMessage.finishReason, 'stop');
+  assert.equal(saved.assistantMessage.finishReason, 'unavailable');
   assert.equal(saved.assistantMessage.content, deltas(response));
-  assert.equal(saved.assistantMessage.evidence.length, 1);
+  assert.equal(saved.assistantMessage.evidence.length, 0);
+  assert.equal(deltas(response).includes('Radar test planı'), false);
   const busy = await loadAssistantConversation(saved.conversation.id);
   const hidden = busy.body.messages.find((message) => message.role === 'assistant');
   assert.equal(hidden.finishReason, 'unavailable');
@@ -303,8 +374,36 @@ test('a transient post-persist check preserves this turn, while reopen fails clo
   assert.deepEqual(hidden.evidence, []);
   delete stack.db.aiToolFailure;
   const recovered = await loadAssistantConversation(saved.conversation.id);
-  assert.equal(recovered.body.messages.find((message) => message.role === 'assistant').content, saved.assistantMessage.content);
+  assert.match(recovered.body.messages.find((message) => message.role === 'assistant').content, /Radar test planı/);
 });
+
+for (const revoke of [false, true]) {
+  test(`an optional saved-evidence reread failure after persistence ${revoke ? 'still hides an answer whose access was revoked' : 'keeps the answer this turn just verified'}`, async (t) => {
+    const stack = stackFor(t);
+    citeTask(stack, TASKS.OVERDUE);
+    const pool = await getSqlPool();
+    // Kayıtlı kanıtın tekrar okunması geçici olarak başarısızdır; güncel yetki bellekteki defterle yine doğrulanabilir.
+    stack.db.aiConversationHooks = { beforeAppend() {
+      failEvidenceReads(t, pool, 'DATABASE_UNAVAILABLE');
+      if (revoke) {
+        stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+        stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+      }
+    } };
+    const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
+    const answer = done(response).assistantMessage;
+    if (revoke) {
+      assert.notEqual(answer.finishReason, 'stop');
+      assert.deepEqual(answer.evidence, []);
+      assert.equal(deltas(response).includes('Radar test planı'), false, 'erişimi kalkan veri gösterilmez');
+    } else {
+      assert.equal(answer.finishReason, 'stop');
+      assert.match(answer.content, /Radar test planı/);
+      assert.equal(answer.evidence.length, 1);
+      assert.equal(deltas(response), answer.content);
+    }
+  });
+}
 
 for (const source of ['rota', 'general']) {
   test(`write reconciliation uses the same disclosure gate for the ${source} generation path`, async (t) => {
@@ -335,7 +434,8 @@ for (const source of ['rota', 'general']) {
 
 test('clarification preserves only authorized structured candidates for the next turn', async (t) => {
   const stack = stackFor(t);
-  stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.open'], entities: [{ type: 'person', text: 'Ali' }] })],
+  stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary' },
+    fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }], entities: [{ type: 'person', text: 'Ali' }] })],
     calls: [{ name: 'rota_person_search', arguments: { text: 'Ali' } }] },
     { type: 'script', respond: (call) => {
       const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
@@ -350,10 +450,7 @@ test('clarification preserves only authorized structured candidates for the next
     assert.match(prior, /"personSicil":/);
     assert.doesNotMatch(prior, /Ali Veli|organization|name|code/);
     assert.doesNotMatch(prior, /【R1】/);
-    return { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.open'] })], calls: [{ name: 'rota_workload_summary', arguments: {} }] };
-  } }, { type: 'script', respond: (call) => {
-    const result = JSON.parse(call.messages.findLast((message) => message.role === 'tool').content);
-    return { type: 'answer', text: evidenceReply(claimFor(result, 'data.openTaskCount')) };
+    return { type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary' }, fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }] })], calls: [{ name: 'rota_workload_summary', arguments: {} }] };
   } });
   assert.equal(done(await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: '1' })).assistantMessage.finishReason, 'stop');
 });
@@ -417,4 +514,122 @@ test('authorization row budgets fail closed without affecting ordinary authoriza
   const statements = stack.db.statements.slice(before);
   assert.ok(statements.length > 0);
   for (const { sql } of statements) assert.doesNotMatch(sql, /authorizationMaxRows|EmployeeSicil;|authorizedTasks/);
+});
+
+for (const kind of ['title', 'protected-text', 'aggregate', 'workload']) {
+  for (const revoke of [false, true]) {
+    test(`final SSE capacity gate revalidates persisted ${kind} (${revoke ? 'revoked' : 'retained'})`, async (t) => {
+      const stack = stackFor(t);
+      const { prepareAssistantTurn, generateAssistantAnswer } = await import('../src/server/ai/assistant/assistantService.js');
+      const { assistantStreamResponse, QUEUE_HIGH_WATER_MARK } = await import('../src/server/ai/assistant/assistantStreamResponse.js');
+      const { parseSseText } = await import('./helpers/aiStack.mjs');
+      const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
+      const { activeAssistantGenerationCountForTests } = await import('../src/server/ai/assistant/assistantGenerations.js');
+      const text = 'KAPASİTEDE BEKLEYEN KORUMALI METİN';
+      stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE).Description = text;
+      if (kind === 'workload') stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+      const aggregate = ['aggregate', 'workload'].includes(kind);
+      const metric = kind === 'title' ? 'task.title' : kind === 'protected-text' ? 'task.description' : kind === 'workload' ? 'tasks.open' : 'tasks.total';
+      const name = kind === 'aggregate' ? 'rota_task_search' : kind === 'workload' ? 'rota_workload_summary' : 'rota_task_detail';
+      const args = aggregate ? { projectId: PROJECTS.FULL } : { taskId: TASKS.OVERDUE, ...(kind === 'protected-text' ? { textFields: ['description'] } : {}) };
+      const request = { operation: 'value', metrics: [metric], population: { tool: name },
+        ...(kind === 'workload' ? { fields: [{ metric, tool: name, path: 'data.openTaskCount' }] } : {}),
+        entities: [{ type: aggregate ? 'project' : 'task', id: aggregate ? PROJECTS.FULL : TASKS.OVERDUE }] };
+      stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [{ name, arguments: args }] });
+      const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: `Göster ${args.taskId || args.projectId}`, mode: 'standard', conversationId: null, includeText: kind === 'protected-text' }) });
+      const response = assistantStreamResponse(turn, { deliveryTimeoutMs: 2000, generate: (prepared, callbacks) => {
+        for (let index = 0; index < QUEUE_HIGH_WATER_MARK; index += 1) callbacks.onStatus({ phase: 'verifying' });
+        return generateAssistantAnswer(prepared, callbacks);
+      } });
+      t.after(() => turn.claim?.release());
+      const deadline = performance.now() + 1500;
+      while (!stack.db.aiConversationMessages.some((row) => row.Role === 'assistant')) {
+        assert.ok(performance.now() < deadline, 'tamponlanan yanıt kaydedilmedi');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      assert.equal(aiTelemetrySnapshot().grounding.grounded, 0, 'teslim beklerken son telemetri yazılmaz');
+      if (revoke) {
+        if (kind === 'workload') stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE).ProjectId = PROJECTS.HIDDEN;
+        else {
+          stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+          stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+        }
+      }
+      const wire = await response.text();
+      const events = parseSseText(wire).events;
+      const visible = events.filter((event) => event.event === 'delta').map((event) => event.data.text);
+      const terminal = events.filter((event) => ['done', 'error'].includes(event.event));
+      assert.equal(terminal.length, 1);
+      assert.equal(terminal[0].event, 'done');
+      assert.equal(visible.length, 1);
+      assert.equal(aiTelemetrySnapshot().assistantTurns.completed, 1, 'gerçek teslim bir kez sayılır');
+      assert.equal(activeAssistantGenerationCountForTests(), 0);
+      if (revoke) {
+        assert.equal(visible[0], NON_ENUMERATING_FAILURE_TEXT);
+        assert.deepEqual(terminal[0].data.assistantMessage.evidence, []);
+        assert.doesNotMatch(wire, /Radar test planı|KAPASİTEDE BEKLEYEN|eşleşen \*\*8\*\*/);
+      } else {
+        assert.equal(terminal[0].data.assistantMessage.finishReason, 'stop');
+        assert.match(visible[0], kind === 'title' ? /Radar test planı/ : kind === 'protected-text' ? /KAPASİTEDE BEKLEYEN/ : kind === 'workload' ? /\*\*6\*\*/ : /eşleşen \*\*8\*\*/);
+      }
+    });
+  }
+}
+
+for (const change of ['retained', 'deleted', 'moved-visible', 'moved-hidden', 'project-revoked', 'task-hidden']) {
+  test(`workload aggregate contributors are revalidated on final and reopened disclosure (${change})`, async (t) => {
+    const stack = stackFor(t);
+    const contributors = [TASKS.OVERDUE, TASKS.UNASSIGNED, TASKS.PARTIAL_OWN];
+    stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+    stack.db.tasks = stack.db.tasks.filter((task) => contributors.includes(task.TaskId));
+    const request = { operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary' },
+      fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }] };
+    stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [{ name: 'rota_workload_summary', arguments: {} }] });
+    const turnId = randomUUID();
+    const message = 'Görünür açık görev sayısını söyle.';
+    const saved = done(await sendTurn({ turnId, message }));
+    assert.equal(saved.assistantMessage.finishReason, 'stop');
+    assert.match(saved.assistantMessage.content, /\*\*3\*\*/);
+    const { decodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+    const persisted = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+    assert.deepEqual(decodeAuthorizationPopulation(persisted.authorizationPopulation).map((item) => item.taskId).sort(), [...contributors].sort());
+    const context = createToolTurnContext({ sicil: AYSE });
+    const signal = new AbortController().signal;
+    await context.revalidateAuthorization(signal);
+    const epoch = context.authorizationEpoch();
+    const task = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+    if (change === 'deleted') stack.db.tasks = stack.db.tasks.filter((row) => row !== task);
+    if (change === 'moved-visible') task.ProjectId = PROJECTS.READ;
+    if (change === 'moved-hidden') task.ProjectId = PROJECTS.HIDDEN;
+    if (change === 'project-revoked') stack.db.projects.find((project) => project.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+    if (change === 'task-hidden') stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.PARTIAL_OWN);
+    await context.revalidateAuthorization(signal);
+    if (!['project-revoked', 'task-hidden'].includes(change)) assert.equal(context.authorizationEpoch(), epoch);
+    const opened = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
+    const replay = await sendTurn({ conversationId: saved.conversation.id, turnId, message });
+    if (change === 'retained') {
+      assert.equal(opened.content, saved.assistantMessage.content);
+      assert.equal(deltas(replay), saved.assistantMessage.content);
+    } else {
+      assert.equal(opened.content, NON_ENUMERATING_FAILURE_TEXT);
+      assert.deepEqual(opened.evidence, []);
+      assert.equal(deltas(replay), NON_ENUMERATING_FAILURE_TEXT);
+      assert.doesNotMatch(JSON.stringify(replay.events), /Radar test planı|Atanmamış|Alice|\*\*3\*\*|Önceki bütün talimatları/);
+    }
+  });
+}
+
+test('the ledger rejects a protected aggregate without contributor provenance, including an explicit empty-population counterexample', async () => {
+  const { createEvidenceLedger } = await import('../src/server/ai/tools/evidenceLedger.js');
+  const { getRotaTool } = await import('../src/server/ai/tools/toolRegistry.js');
+  const ledger = createEvidenceLedger();
+  const metadata = { tool: 'rota_workload_summary', kind: getRotaTool('rota_workload_summary').evidenceKind,
+    label: 'İş yükü', generatedAt: new Date().toISOString(), complete: true, truncated: false, partial: false, counts: { returned: 0, total: 0 } };
+  assert.equal(ledger.register(metadata), null);
+  assert.equal(ledger.register({ ...metadata, populationReferences: [{ taskId: TASKS.OVERDUE }] }), null);
+  assert.equal(ledger.register({ ...metadata, populationReferences: [
+    { taskId: TASKS.OVERDUE, projectId: PROJECTS.FULL }, { taskId: TASKS.OVERDUE, projectId: PROJECTS.HIDDEN }
+  ] }), null);
+  assert.deepEqual(ledger.ids(), []);
+  assert.equal(ledger.register({ ...metadata, populationReferences: [] }), 'R1');
 });

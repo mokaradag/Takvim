@@ -379,6 +379,7 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
 
   return {
     calls,
+    get pendingCount() { return queue.length; },
     get activeCount() { return active.size; },
     get peakActive() { return peakActive; },
     /** Sonraki çağrıların davranışını sıraya koyar. */

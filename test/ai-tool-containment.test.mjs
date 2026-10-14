@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import { AYSE, NOW, PROJECTS, TASKS, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { declared } from './helpers/evidenceScenario.mjs';
 
 const { createToolScope, containmentText } = await import('../src/server/ai/tools/toolScope.js');
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
@@ -42,13 +42,12 @@ test('the first round may search only text from the current user message', () =>
 test('an invented first-round search is refused end to end and the model must stay within the question', async (t) => {
   createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
   const steps = [
-    { text: declared({ operation: 'value', metrics: ['tasks.total'], filters: { text: 'radar test planı' } }),
+    { text: declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, filters: { text: 'radar test planı' } }),
       toolCalls: [{ id: 'a', name: 'rota_task_search', arguments: '{"text":"Gizli görev"}' }] },
     (input) => {
       assert.equal(results(input)[0].error.code, 'UNSUPPORTED_SCOPE');
-      return { text: '', toolCalls: [{ id: 'b', name: 'rota_task_search', arguments: '{"text":"radar test planı"}' }] };
-    },
-    (input) => ({ text: evidenceReply(claimFor(results(input).at(-1), 'totalCount')), toolCalls: [], finishReason: 'stop' })
+      return { text: declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, filters: { text: 'radar test planı' } }), toolCalls: [{ id: 'b', name: 'rota_task_search', arguments: '{"text":"radar test planı"}' }] };
+    }
   ];
   const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
     const step = steps.shift();
@@ -104,4 +103,33 @@ test('a project the portfolio itself returned is a trusted identity for the next
   }
   // Portföyde dönmeyen proje kimliği hâlâ kullanıcının yazdığı kimlik olmalıdır.
   assert.throws(() => scope.validate('rota_project_detail', { projectId: PROJECTS.HIDDEN }), { code: 'UNSUPPORTED_SCOPE' });
+});
+
+test('scope text permits whole tokens and conservative Turkish suffixes, never arbitrary leading letters', () => {
+  const scope = createToolScope({ userText: 'Radar Modernizasyonu ve Haftalık durum toplantısının görevleri' });
+  for (const text of ['R', 'Ra', 'Rad', 'Modern', 'Haft', 'top']) {
+    assert.throws(() => scope.validate('rota_task_search', { text }), { code: 'UNSUPPORTED_SCOPE' }, text);
+  }
+  for (const text of ['Radar', 'Radar Modernizasyonu', 'Haftalık durum toplantısı']) {
+    assert.doesNotThrow(() => scope.validate('rota_task_search', { text }), text);
+  }
+  const exact = createToolScope({ userText: 'R kodlu proje ve Ra adlı görev' });
+  assert.doesNotThrow(() => exact.validate('rota_project_search', { text: 'R' }));
+  assert.doesNotThrow(() => exact.validate('rota_task_search', { text: 'Ra' }));
+});
+
+test('an ambiguous entity search cannot borrow another entity name from the same utterance', async () => {
+  const { bindRequestEntities } = await import('../src/server/ai/tools/requestDeclaration.js');
+  const scope = createToolScope({ userText: 'Radar projesi ile Radar Modernizasyonu projesinin görevlerini karşılaştır' });
+  const data = { resolution: 'ambiguous', candidates: [{ projectId: PROJECTS.FULL, name: 'Radar Modernizasyonu' }] };
+  scope.establish([{ name: 'rota_project_search', arguments: JSON.stringify({ text: 'Radar' }) }], [{ content: JSON.stringify({ ok: true, data }) }]);
+  assert.throws(() => scope.validate('rota_project_detail', { projectId: PROJECTS.FULL }), { code: 'UNSUPPORTED_SCOPE' });
+  const request = { population: { tool: 'rota_task_search' }, entities: [{ type: 'project', text: 'radar', query: 'Radar' }, { type: 'project', text: 'radar modernizasyonu', query: 'Radar Modernizasyonu' }] };
+  const bound = bindRequestEntities(request, [], { named: [{ type: 'project', text: 'radar modernizasyonu', query: 'radar modernizasyonu', title: 'radar modernizasyonu', id: PROJECTS.FULL }] });
+  assert.deepEqual(bound.map((entity) => entity.bound), [null, PROJECTS.FULL]);
+  const duplicate = bindRequestEntities(request, [], { named: [{ type: 'project', text: 'radar', query: 'radar', id: PROJECTS.FULL }, { type: 'project', text: 'radar modernizasyonu', query: 'radar modernizasyonu', id: PROJECTS.FULL }] });
+  assert.deepEqual(duplicate.map((entity) => entity.bound), [null, null]);
+  const single = createToolScope({ userText: 'Radar Modernizasyonu projesinin görevleri' });
+  single.establish([{ name: 'rota_project_search', arguments: JSON.stringify({ text: 'Radar' }) }], [{ content: JSON.stringify({ ok: true, data }) }]);
+  assert.doesNotThrow(() => single.validate('rota_project_detail', { projectId: PROJECTS.FULL }));
 });

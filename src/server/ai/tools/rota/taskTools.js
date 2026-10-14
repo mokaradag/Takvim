@@ -221,6 +221,10 @@ const taskSearch = {
     const titleResolution = !needle ? null : resolvedFact ? 'unique'
       : exactFacts.length > 1 || sorted.length > 1 ? 'ambiguous' : sorted.length === 1 ? 'partial' : 'none';
     const candidatePool = titleResolution === 'ambiguous' ? (exactFacts.length > 1 ? exactFacts : sorted) : titleResolution === 'partial' ? sorted : [];
+    // Adayların hepsi tek bir tekrar serisinin şablonu ve yinelemeleriyse ad, seri olarak tektir (seri incelemesinin seçicisi).
+    const seriesRoots = new Set(candidatePool.map((fact) => (fact.recurrenceRule ? fact.id : fact.recurrenceParentId || null)));
+    const seriesTemplate = titleResolution === 'ambiguous' && seriesRoots.size === 1 && !seriesRoots.has(null)
+      ? sorted.find((fact) => seriesRoots.has(fact.id) && fact.recurrenceRule) || null : null;
     const candidates = candidatePool.slice(0, CLARIFICATION_LIMITS.maxCandidates).map((fact) => ({
       taskId: fact.id,
       title: dataText(fact.title, 160),
@@ -248,6 +252,7 @@ const taskSearch = {
           titleResolution,
           ...(resolvedFact ? { resolvedTask: { taskId: resolvedFact.id, title: dataText(resolvedFact.title, 160) } } : {}),
           ...(candidates.length ? { candidates, ...(candidatePool.length > candidates.length ? { candidatesTruncated: true } : {}) } : {}),
+          ...(seriesTemplate ? { resolvedSeries: { taskId: seriesTemplate.id, title: dataText(seriesTemplate.title, 160), exact: exactFacts.length === candidatePool.length } } : {}),
           ...(titleResolution === 'ambiguous' ? { guidance: 'Arama metni tek bir görevi belirlemiyor. Ayrıntı gerekiyorsa {"kind":"clarification","evidence":"<kanıt>"} ile kullanıcıya sorun; adayları sunucu gösterir. Tahmin etmeyin.' } : {}),
           ...(titleResolution === 'partial' ? { guidance: 'Arama metni yalnızca bir görevin adına kısmen uyuyor; görev kesin olarak belirlenmedi. Ayrıntısı gerekiyorsa {"kind":"clarification","evidence":"<kanıt>"} ile kullanıcıdan onay isteyin.' } : {})
         } : {}),

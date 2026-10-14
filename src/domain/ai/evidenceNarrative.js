@@ -1,4 +1,6 @@
 import { escapedFactText, factLabel, factPresentation } from './evidenceFacts.js';
+import { semanticCarrierKey } from './claimableEvidence.js';
+import { factRow } from './requestContract.js';
 
 /**
  * Doğrulanmış olguların SUNUCUYA AİT anlatımı.
@@ -47,6 +49,8 @@ const ROW_NOUNS = Object.freeze({ tasks: ['Görev', 'Task'], matches: ['Proje', 
   groups: ['Grup', 'Group'], nodes: ['Düğüm', 'Node'], items: ['Kayıt', 'Record'], series: ['Seri', 'Series'], holidays: ['Tatil', 'Holiday'],
   mostSlipped: ['Görev', 'Task'], mostConnected: ['Görev', 'Task'], predecessors: ['Öncül', 'Predecessor'], successors: ['Ardıl', 'Successor'], checks: ['Denetim', 'Check'] });
 const TASK_ROWS = new Set(['tasks', 'mostSlipped', 'mostConnected', 'predecessors', 'successors', 'candidates']);
+/** Satırın göreve göre rolü (bağımlılığın yönü): tek satırda önek, listede başlık. */
+const ROW_ROLES = Object.freeze({ predecessors: [['Öncül', 'Predecessor'], ['Öncüller', 'Predecessors']], successors: [['Ardıl', 'Successor'], ['Ardıllar', 'Successors']] });
 
 const ONES = ['', 'bir', 'iki', 'üç', 'dört', 'beş', 'altı', 'yedi', 'sekiz', 'dokuz'];
 const TENS = ['', 'on', 'yirmi', 'otuz', 'kırk', 'elli', 'altmış', 'yetmiş', 'seksen', 'doksan'];
@@ -116,6 +120,8 @@ function labelOf(fact, locale) {
     const prefix = parts.at(-1) === 'from' ? ['Önceki', 'Original'] : ['Önerilen', 'Proposed'];
     return `${prefix[language(locale)]} ${factLabel(parts.at(-2), locale).toLocaleLowerCase(locale === 'en' ? 'en-US' : 'tr-TR')}`;
   }
+  // Gecikmenin değeri "Değer" değil gecikmedir (birimi değerle birlikte yazılır).
+  if (parts.at(-2) === 'lag' && parts.at(-1) === 'value') return factLabel('lag', locale);
   const label = factLabel(fact.field, locale).split(' / ').at(-1);
   return fact.changeField ? `${factLabel(fact.changeField, locale)} / ${label}` : label;
 }
@@ -193,10 +199,18 @@ function recordSentences(record, locale) {
   let qualified = false;
   const qualify = (projectNamed = false) => { if (qualified) return ''; qualified = true; return projectNamed ? unnamedProjectQualifiers : qualifiers; };
 
-  const projectEntry = take((rel) => record.kind === 'task' && rel === 'project.name')[0];
-  take((rel) => record.kind === 'task' && rel === 'project.code');
+  let projectEntry = take((rel) => record.kind === 'task' && rel === 'project.name')[0];
+  const projectCode = take((rel) => record.kind === 'task' && rel === 'project.code')[0];
+  if (projectCode) projectEntry = { ...projectCode, fact: { ...projectCode.fact,
+    value: [projectEntry?.fact.value, projectCode.fact.value].filter((value) => value != null).join(' · ') } };
   const identity = take((rel) => Object.hasOwn(POSSESSIVE, rel) || (/^dates\./.test(rel) && Object.hasOwn(POSSESSIVE, rel.slice(6))));
-  const shownIdentity = identity.filter(({ rel }) => !/Label$/.test(rel) || !identity.some((other) => other.rel === rel.replace(/Label$/, '')));
+  const shown = new Set();
+  const shownIdentity = identity.filter(({ rel }) => !/Label$/.test(rel) || !identity.some((other) => other.rel === rel.replace(/Label$/, ''))).filter(({ fact }) => {
+    const key = `${semanticCarrierKey(record.tool, fact.field)}|${narrativeValue(fact, locale)}`;
+    if (shown.has(key)) return false;
+    shown.add(key);
+    return true;
+  });
   if (shownIdentity.length) {
     const pairs = shownIdentity.map(({ fact }) => `${POSSESSIVE[leafOf(fact.field)][lang]} ${strong(narrativeValue(fact, locale))}`);
     const projectName = projectEntry ? strong(narrativeValue(projectEntry.fact, locale)) : null;
@@ -208,8 +222,10 @@ function recordSentences(record, locale) {
       sentences.push(`${projectName ? `${projectName} projesindeki ${subject} görevinin` : `${subject}${noun}`} ${joinList(pairs, locale)}${qualify()}.`);
     }
   } else if (projectEntry) {
-    sentences.push(locale === 'en' ? `The ${subject} task belongs to the ${strong(narrativeValue(projectEntry.fact, locale))} project.`
-      : `${subject} görevi ${strong(narrativeValue(projectEntry.fact, locale))} projesindedir.`);
+    const project = strong(narrativeValue(projectEntry.fact, locale));
+    const named = nameEntry || record.row || !record.anonymous;
+    sentences.push(locale === 'en' ? `${named ? `The ${subject} task` : 'The task'} belongs to the ${project} project.`
+      : `${named ? `${subject} görevi` : 'Görev'} ${project} projesindedir.`);
   }
 
   const overdue = take((rel, fact) => rel === 'overdueDays' && isCount(fact))[0];
@@ -273,25 +289,34 @@ function recordSentences(record, locale) {
     sentences.push(`${capitalize(parts.join('; '))}.`);
   }
 
-  // Çok değerli alanlar (sorumlular, WBS yolu, etiketler).
+  // Kaydın ilk cümlesi kaydını adlandırır: komşu kaydın ölçüsü onunla karışmaz.
+  const lead = () => (sentences.length || (!nameEntry && !record.row && (record.anonymous || record.kind === 'generic')) ? '' : `${subject}${qualify()} — `);
+
+  // Çok değerli alanlar (sorumlular, WBS yolu, etiketler); her değer kendi etiketiyle (ör. değişen alan) gruplanır.
   const multi = new Map();
   for (const entry of take((rel) => /\.\d+(\.|$)/.test(rel))) {
-    const key = entry.rel.replace(/\.\d+(?=\.|$)/g, '.*');
-    if (!multi.has(key)) multi.set(key, []);
-    multi.get(key).push(entry.fact);
+    const pattern = entry.rel.replace(/\.\d+(?=\.|$)/g, '.*');
+    const key = `${pattern}\u0000${pattern.startsWith('assignees.') ? '' : labelOf(entry.fact, locale)}`;
+    if (!multi.has(key)) multi.set(key, { pattern, facts: [] });
+    multi.get(key).facts.push(entry.fact);
   }
-  for (const [key, facts] of multi) {
-    const title = key.startsWith('assignees.') ? (locale === 'en' ? 'Assignees' : 'Sorumlular') : capitalize(labelOf(facts[0], locale));
-    sentences.push(`${title}: ${facts.map((fact) => strong(narrativeValue(fact, locale))).join(key === 'wbsPath.*' ? ' › ' : ', ')}.`);
+  for (const { pattern, facts } of multi.values()) {
+    const title = pattern.startsWith('assignees.') ? (locale === 'en' ? 'Assignees' : 'Sorumlular') : capitalize(labelOf(facts[0], locale));
+    sentences.push(`${lead()}${title}: ${facts.map((fact) => strong(narrativeValue(fact, locale))).join(pattern === 'wbsPath.*' ? ' › ' : ', ')}.`);
   }
 
-  const rest = record.entries.filter((entry) => !used.has(entry));
+  // Yalnızca aynı anlamsal taşıyıcının aynı değeri bir kez yazılır.
+  shown.clear();
+  const rest = record.entries.filter((entry) => !used.has(entry)).filter(({ fact }) => {
+    const key = fact.semantic?.metric ? `${semanticCarrierKey(record.tool, fact.field)}|${narrativeValue(fact, locale)}` : null;
+    if (key && shown.has(key)) return false;
+    if (key) shown.add(key);
+    return true;
+  });
   if (rest.length) {
     const pairs = rest.map(({ fact }) => `${labelOf(fact, locale)}: ${strong(narrativeValue(fact, locale))}`);
-    // Satır kaydı her zaman satırını adlandırır: komşu satırın ölçüsü onunla karışmaz.
-    const lead = sentences.length || (!nameEntry && !record.row && (record.anonymous || record.kind === 'generic')) ? '' : `${subject}${qualify()} — `;
-    sentences.push(`${lead}${capitalize(pairs.join('; '))}${qualify()}.`);
-  } else if (!sentences.length && nameEntry) {
+    sentences.push(`${lead()}${capitalize(pairs.join('; '))}${qualify()}.`);
+  } else if (!sentences.length && (nameEntry || codeEntry)) {
     sentences.push(`${subject}${qualify()}.`);
   }
   return sentences;
@@ -299,7 +324,9 @@ function recordSentences(record, locale) {
 
 /* ── Satır listeleri ve tablolar ──────────────────────────── */
 
-function rowParts(field) {
+function rowParts(field, tool) {
+  const row = factRow(tool, field);
+  if (row?.kind === 'row') return { collection: row.collection, row: row.path, rel: field.slice(row.path.length + 1) };
   const parts = field.split('.');
   const index = parts.findIndex((part, position) => position > 0 && /^\d+$/.test(part));
   if (index < 0 || index === parts.length - 1) return null;
@@ -319,46 +346,64 @@ const ROW_TITLES = Object.freeze(['title', 'name', 'task.title', 'person.name', 
 
 function renderRows(collection, rows, { evidenceId, locale, layout }) {
   const pattern = (rel) => rel.replace(/\.\d+(?=\.|$)/g, '.*');
+  // Değişiklik değeri kendi değişen alanının sütunudur: aynı yoldaki başka alanın değeri onun etiketi altına yazılmaz.
+  const columnKey = ({ rel, fact }) => (fact.changeField ? `${pattern(rel)}|${fact.changeField}` : pattern(rel));
   const titleKey = ROW_TITLES.find((key) => rows.every((row) => row.entries.some(({ rel }) => rel === key)));
   const columns = [];
-  for (const row of rows) for (const { rel } of row.entries) if (rel !== titleKey && !['title', 'name'].includes(rel) && !columns.includes(pattern(rel))) columns.push(pattern(rel));
+  // Satır başlığı projeyi (kod · ad) zaten taşıyorsa proje adı/kodu sütunu tekrarıdır.
+  const projectInTitle = rows.every((row) => row.entries[0]?.fact.semantic?.row?.project);
+  for (const row of rows) {
+    for (const entry of row.entries) {
+      const { rel } = entry;
+      if (rel === titleKey || ['title', 'name'].includes(rel) || columns.includes(columnKey(entry))) continue;
+      if (projectInTitle && ['project.name', 'project.code'].includes(pattern(rel))) continue;
+      columns.push(columnKey(entry));
+    }
+  }
   const lang = language(locale);
-  const valuesOf = (row, key) => row.entries.filter(({ rel }) => pattern(rel) === key).map(({ fact }) => fact);
+  const valuesOf = (row, key) => row.entries.filter((entry) => columnKey(entry) === key).map(({ fact }) => fact);
   const columnLabel = (key) => {
     const sample = rows.flatMap((row) => valuesOf(row, key))[0];
     if (!sample) return key;
+    if (key.startsWith('assignees.')) return locale === 'en' ? 'Assignees' : 'Sorumlular';
     const labels = factLabel(sample.field, locale).split(' / ');
+    if (key === 'project.name') return locale === 'en' ? 'Project' : 'Proje';
+    if (key === 'project.code') return locale === 'en' ? 'Project code' : 'Proje kodu';
     if (key.startsWith('project.') && labels.length > 1) return `${labels.at(-2)} ${labels.at(-1).toLocaleLowerCase(locale === 'en' ? 'en-US' : 'tr-TR')}`;
     return labelOf(sample, locale);
   };
+  const rowCriteria = (row) => qualifierText(row.entries, locale, { omit: row.entries[0]?.fact.semantic?.row?.project ? ['project'] : [] });
+  // Bütün satırların ortak ölçütü bir kez yazılır; satırlar arasında farklıysa her satır kendininkini taşır.
+  const criteria = rows.every((row) => rowCriteria(row) === rowCriteria(rows[0])) ? rowCriteria(rows[0]) : null;
   const titleOf = (row) => {
     const context = row.entries[0]?.fact.semantic?.row;
     const names = titleKey ? valuesOf(row, titleKey) : [];
     const project = context?.project ? ` · ${escapedFactText([context.projectCode, context.project].filter(Boolean).join(' · '))}` : '';
     const organization = context?.organization ? ` · ${escapedFactText(context.organization)}` : '';
-    return `${escapedFactText(context?.name || names[0] && names.map((fact) => fact.value).join(', ') || row.subject)}${project}${organization}${qualifierText(row.entries, locale, { omit: context?.project ? ['project'] : [] })}`;
+    return `${escapedFactText(context?.name || names[0] && names.map((fact) => fact.value).join(', ') || row.subject)}${project}${organization}${criteria === null ? rowCriteria(row) : ''}`;
   };
   const cell = (facts, plain) => facts.map((fact) => (plain ? narrativeValue(fact, locale) : strong(narrativeValue(fact, locale)))).join(facts[0]?.field.includes('wbsPath') ? ' › ' : ', ');
   // Karşılaştırma doğal olduğunda (en az üç satır; üç sütun ya da iki sayısal sütun) tablo; aksi hâlde liste.
   const numericColumns = columns.filter((key) => rows.every((row) => valuesOf(row, key).every(isCount)));
-  const table = columns.length >= 1 && (layout === 'table' || (layout !== 'list' && rows.length >= 3 && (columns.length >= 3 || numericColumns.length >= 2)));
+  // Açıkça istenen tablo yalnızca ad sütunundan da oluşabilir.
+  const table = layout === 'table' || (columns.length >= 1 && layout !== 'list' && rows.length >= 3 && (columns.length >= 3 || numericColumns.length >= 2));
   if (table) {
     const head = ROW_NOUNS[collection.split('.').at(-1)]?.[lang] || (locale === 'en' ? 'Record' : 'Kayıt');
     const headers = [head, ...columns.map((key) => columnLabel(key).replace(/\|/g, '/'))];
     // Sayı sütunları sağa yaslanır: değerler basamak hizasında okunur.
     const lines = [`| ${headers.join(' | ')} |`, `| ${['---', ...columns.map((key) => (numericColumns.includes(key) ? '---:' : '---'))].join(' | ')} |`];
     for (const row of rows) lines.push(`| ${[titleOf(row), ...columns.map((key) => { const facts = valuesOf(row, key); return facts.length ? cell(facts, true) : '—'; })].join(' | ')} |`);
-    return `${lines.join('\n')}\n\n_${locale === 'en' ? 'Source' : 'Kaynak'}:_ ${citation([evidenceId])}`;
+    return { body: `${lines.join('\n')}\n\n_${locale === 'en' ? 'Source' : 'Kaynak'}:_ ${citation([evidenceId])}`, criteria: criteria || '' };
   }
-  return rows.map((row) => {
+  return { body: rows.map((row) => {
     const pairs = columns.map((key) => { const facts = valuesOf(row, key); return facts.length ? `${columnLabel(key)}: ${cell(facts, false)}` : null; }).filter(Boolean);
     return `- ${strong(titleOf(row))}${pairs.length ? ` — ${pairs.join(' · ')}` : ''} ${citation([evidenceId])}`;
-  }).join('\n');
+  }).join('\n'), criteria: criteria || '' };
 }
 
 /* ── Zarf sayıları ────────────────────────────────────────── */
 
-function envelopeSentences(facts, { tool, locale }) {
+function envelopeSentences(facts, { tool, locale, empty = false }) {
   const noun = NOUNS[tool]?.[language(locale)] || (locale === 'en' ? 'records' : 'kayıt');
   const sentences = [];
   for (const fact of facts) {
@@ -372,6 +417,11 @@ function envelopeSentences(facts, { tool, locale }) {
         : (locale === 'en' ? `${strong(narrativeValue(fact, locale))} matching ${noun} were found${where}${qualifiers}.` : `${capitalize(`${where}eşleşen ${strong(narrativeValue(fact, locale))} ${noun} bulundu`)}${qualifiers}.`));
     } else if (fact.field === 'returnedCount') {
       sentences.push(locale === 'en' ? `${strong(narrativeValue(fact, locale))} of them are shown.` : `Bunlardan ${strong(narrativeValue(fact, locale))}${turkishPossessiveSuffix(fact.value)} gösteriliyor.`);
+    } else if (fact.field === 'complete' && empty && fact.value === true) {
+      // Liste ya da sıralamanın boş nüfusu: tam kanıt eşleşen kayıt olmadığını gösterir (sayı seçildiyse o söyler).
+      if (!facts.some((item) => item.field === 'totalCount')) {
+        sentences.push(locale === 'en' ? `No matching ${noun} were found${qualifiers}.` : `${capitalize(`eşleşen ${noun} bulunmadı`)}${qualifiers}.`);
+      }
     } else if (fact.field === 'complete') {
       sentences.push(fact.value ? (locale === 'en' ? 'The result is complete.' : 'Sonuç tamdır.') : (locale === 'en' ? 'The result is incomplete.' : 'Sonuç eksiktir.'));
     } else if (fact.field === 'truncated') {
@@ -443,7 +493,7 @@ function recordRelative(tool, field) {
  * Doğrulanmış olgu seçimini Markdown anlatıma dönüştürür.
  * @param {{ evidenceId: string, fact: object }[]} items Sunucunun doğruladığı olgular (seçim sırasıyla).
  */
-export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto', operation = null } = {}) {
+export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto', operation = null, empty = [] } = {}) {
   const chosenLayout = layoutFrom(layout, operation);
   const byEvidence = new Map();
   for (const item of items) {
@@ -458,7 +508,7 @@ export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto',
     const main = { tool, kind: 'generic', subject: null, entries: [], anonymous: false };
     for (const fact of facts) {
       if (ENVELOPE_FIELDS.has(fact.field)) continue;
-      const parts = rowParts(fact.field);
+      const parts = rowParts(fact.field, tool);
       // Varlık kaydının içindeki diziler (sorumlular, etiketler) kaydın çok değerli alanıdır.
       if (parts && !/^data\.(task|project)\./.test(parts.collection)) {
         if (!collections.has(parts.collection)) collections.set(parts.collection, new Map());
@@ -469,7 +519,8 @@ export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto',
       }
       const { kind, rel } = recordRelative(tool, fact.field);
       if (main.kind === 'generic') main.kind = kind;
-      main.subject ??= fact.subject;
+      // Görevin içindeki projenin adı projenin öznesidir; görevi adlandırmaz.
+      if (!(kind === 'task' && rel.startsWith('project.'))) main.subject ??= fact.subject;
       main.entries.push({ rel, fact });
     }
     main.anonymous = !main.subject || main.subject === 'Rota';
@@ -478,16 +529,23 @@ export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto',
     // Tek satırlık koleksiyon bir kayıttır; çok satırlı koleksiyon liste ya da tablodur.
     const lists = [];
     for (const [collection, rows] of collections) {
-      if (rows.size === 1) {
+      const role = ROW_ROLES[collection.split('.').at(-1)];
+      // Açıkça bildirilen tablo düzeni tek satırda da tablodur.
+      if (rows.size === 1 && layout !== 'table') {
         const [row] = rows.values();
-        sentences.push(...recordSentences({ tool, kind: rowKind(collection, tool), subject: row.subject, entries: row.entries, anonymous: false, row: true }, locale));
+        const record = recordSentences({ tool, kind: rowKind(collection, tool), subject: row.subject, entries: row.entries, anonymous: false, row: true }, locale);
+        sentences.push(...(role && record.length ? [`${role[0][language(locale)]}: ${record[0]}`, ...record.slice(1)] : record));
       } else {
-        lists.push(renderRows(collection, [...rows.values()], { evidenceId, locale, layout: chosenLayout === 'prose' ? 'list' : chosenLayout }));
+        lists.push({ ...renderRows(collection, [...rows.values()], { evidenceId, locale, layout: chosenLayout === 'prose' ? 'list' : chosenLayout }), role });
       }
     }
-    sentences.push(...envelopeSentences(envelope, { tool, locale }));
+    sentences.push(...envelopeSentences(envelope, { tool, locale, empty: empty.includes(evidenceId) }));
+    const stated = sentences.join(' ');
+    // Ortak ölçüt üstteki cümlede (ör. sayımda) yazılmadıysa listenin başında bir kez yazılır.
+    const lead = (criteria) => (criteria && !stated.includes(criteria) ? `_${capitalize(criteria.trim().slice(1, -1))}_\n\n` : '');
+    const listBlocks = lists.map(({ body, criteria, role }) => `${role ? `**${role[1][language(locale)]}**\n\n` : ''}${lead(criteria)}${body}`);
     if (sentences.length) blocks.push(`${sentences.join(' ')} ${citation([evidenceId])}`);
-    blocks.push(...lists);
+    blocks.push(...listBlocks);
   }
   return blocks.join('\n\n');
 }

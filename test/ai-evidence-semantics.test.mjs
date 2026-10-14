@@ -50,22 +50,19 @@ test('global analytics/search follow-ups preserve the canonical task population 
       assert.throws(() => scope.validate(to, broader), { code: 'UNSUPPORTED_SCOPE' });
     }
   }
-  stackFor(t);
-  const steps = [
-    { text: declared({ operation: 'list', metrics: ['tasks.total', 'task.title'], filters: { deadline: 'overdue' } }),
-      toolCalls: [{ id: 'count', name: 'rota_task_analytics', arguments: '{"deadline":"overdue"}' }] },
-    { text: '', toolCalls: [{ id: 'list', name: 'rota_task_search', arguments: '{"deadline":"overdue"}' }] }
-  ];
-  const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
-    if (steps.length) return steps.shift();
-    const results = input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
-    assert.ok(results.every((item) => item.ok), JSON.stringify(results));
-    assert.equal(results[0].data.totals.total, results[1].totalCount);
-    return { text: JSON.stringify({ kind: 'rota', facts: [`${results[0].evidenceId}:data.totals.total`, `${results[1].evidenceId}:data.tasks.*.title`] }), toolCalls: [], finishReason: 'stop' };
+  const stack = stackFor(t);
+  let rounds = 0;
+  const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => {
+    rounds += 1;
+    assert.equal(rounds, 1, 'the count and list share one required population read');
+    return { text: declared({ operation: 'list', metrics: ['tasks.total', 'task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { deadline: 'overdue' } }),
+      toolCalls: [{ id: 'list', name: 'rota_task_search', arguments: '{"deadline":"overdue"}' }] };
   } }, { messages: buildGroundedContext({ userContent: 'Kaç gecikmiş görevim var ve hangileri?', now: NOW }).messages,
     catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {} });
   assert.equal(result.outcome, 'grounded');
   assert.equal(result.repaired, false);
+  assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts' && !entry.params.withAssignees).length, 1);
+
 });
 
 test('omitted activity/calendar defaults cannot widen during same-tool follow-ups', () => {
@@ -384,7 +381,7 @@ test('final authorization has its own budget after tool SQL reaches the cumulati
   const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
     round += 1;
     if (round === 1) {
-      return { text: declared({ operation: 'value', metrics: ['task.title'], entities: [{ type: 'task', id: TASKS.OVERDUE }] }),
+      return { text: declared({ operation: 'value', metrics: ['task.title'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] }),
         toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
     }
     const evidence = JSON.parse(input.messages.findLast((message) => message.role === 'tool').content);
@@ -396,24 +393,35 @@ test('final authorization has its own budget after tool SQL reaches the cumulati
   assert.equal(context.stats().authorizationLoads, 2);
 });
 
-test('a failed final authorization read is a safe unavailable terminal, not fabricated evidence or verification failure', async (t) => {
-  stackFor(t);
-  const base = createToolTurnContext({ sicil: AYSE, now: NOW });
-  const context = { ...base, revalidateAuthorization: async () => { throw Object.assign(new Error('SQL unavailable'), { code: 'DATABASE_UNAVAILABLE' }); } };
-  let round = 0;
-  const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
-    round += 1;
-    if (round === 1) {
-      return { text: declared({ operation: 'value', metrics: ['task.title'], entities: [{ type: 'task', id: TASKS.OVERDUE }] }),
-        toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
-    }
-    const evidence = JSON.parse(input.messages.findLast((message) => message.role === 'tool').content);
-    return { text: evidenceReply(claimFor(evidence, 'data.task.title')), toolCalls: [], finishReason: 'stop' };
-  } }, { messages: buildGroundedContext({ userContent: `Görevi göster ${TASKS.OVERDUE}`, now: NOW }).messages,
-    catalog: toolCatalogForModel(), context, onText: async () => {} });
-  assert.equal(result.outcome, 'unavailable');
-  assert.equal(result.finishReason, 'unavailable');
-  assert.deepEqual(result.evidenceRows, []);
-  assert.equal(round, 2);
-  assert.doesNotMatch(result.text, /SQL|Radar/);
-});
+for (const path of ['server', 'model']) {
+  test(`a failed final authorization read is a safe unavailable terminal, not fabricated evidence or verification failure (${path} selection)`, async (t) => {
+    stackFor(t);
+    const base = createToolTurnContext({ sicil: AYSE, now: NOW });
+    // Model yolunda ilk okuma (araç turundan sonra) başarılıdır: model seçimi gerçekten çalışır ve son okuma başarısız olur.
+    let reads = 0;
+    const context = { ...base, revalidateAuthorization: async (signal) => {
+      reads += 1;
+      if (path === 'model' && reads === 1) return base.revalidateAuthorization(signal);
+      throw Object.assign(new Error('SQL unavailable'), { code: 'DATABASE_UNAVAILABLE' });
+    } };
+    // Proje ölçüsünü adı ve kodu birlikte taşır: sunucu seçim türetmez, olguları model seçer.
+    const metrics = path === 'server' ? ['task.title'] : ['task.title', 'task.project'];
+    let round = 0;
+    const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => {
+      round += 1;
+      if (round === 1) {
+        return { text: declared({ operation: 'value', metrics, entities: [{ type: 'task', id: TASKS.OVERDUE }], ...(path === 'model' ? { reasoning: 'synthesis', fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }] } : {}) }),
+          toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
+      }
+      return { text: JSON.stringify({ kind: 'rota', facts: ['R1:data.task.title', 'R1:data.task.project.name'] }), toolCalls: [], finishReason: 'stop' };
+    } }, { messages: buildGroundedContext({ userContent: `Görevi göster ${TASKS.OVERDUE}`, now: NOW }).messages,
+      catalog: toolCatalogForModel(), context, onText: async () => {} });
+    assert.equal(result.outcome, 'unavailable');
+    assert.equal(result.finishReason, 'unavailable');
+    assert.deepEqual(result.evidenceRows, []);
+    // Son yetki okuması çizimden hemen önce yapılır: sunucu seçiminde araç turunun ardından, model seçiminde seçim turunun ardından.
+    assert.equal(round, path === 'server' ? 1 : 2, path === 'server' ? 'yetki okunamıyorsa kanıt ikinci kez sağlayıcıya gönderilmez' : 'model seçimi çalıştı');
+    assert.equal(reads, path === 'server' ? 1 : 2);
+    assert.doesNotMatch(result.text, /SQL|Radar/);
+  });
+}

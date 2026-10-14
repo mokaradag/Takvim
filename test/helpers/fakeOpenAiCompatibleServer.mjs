@@ -57,10 +57,11 @@ export function sseChunksFor(model, text) {
  * Akışlı yanıt (`stream: true`). Parçalar ayrı yazılır; `gapMs` parçalar arası
  * beklemedir. `destroyAfter` verilen sayıda parçadan sonra soketi keser
  * (yanıt ortasında kopan bağlantı), `hangAfter` bağlantıyı açık bırakır.
+ * `chunks` istek gövdesini alan bir işlev de olabilir (isteğe göre senaryo).
  */
-function streamResponse(response, scenario, model, text, state) {
+function streamResponse(response, scenario, model, text, state, body) {
   const stream = scenario.stream || {};
-  const chunks = stream.chunks ?? sseChunksFor(model, scenario.text || text);
+  const chunks = (typeof stream.chunks === 'function' ? stream.chunks(body) : stream.chunks) ?? sseChunksFor(model, scenario.text || text);
   response.writeHead(200, {
     'content-type': stream.contentType ?? 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache'
@@ -198,7 +199,7 @@ export async function startFakeOpenAiCompatibleServer({
           return;
         }
         if (body?.stream === true && !scenario.jsonForStream) {
-          streamResponse(response, scenario, body?.model || 'fake-model', text, state);
+          streamResponse(response, scenario, body?.model || 'fake-model', text, state, body);
           return;
         }
         json(response, 200, completion(body?.model || 'fake-model', scenario.text || text));
@@ -232,11 +233,11 @@ export async function startFakeOpenAiCompatibleServer({
      * beklenen sayılarla düşer.
      */
     waitForClosedRequests(count, { limitMs = CLOSED_REQUEST_WAIT_LIMIT_MS } = {}) {
-      const deadline = Date.now() + limitMs;
+      const deadline = performance.now() + limitMs;
       return new Promise((resolve, reject) => {
         const check = () => {
           if (state.closedBeforeResponse >= count) return resolve();
-          if (Date.now() >= deadline) {
+          if (performance.now() >= deadline) {
             return reject(new Error(`Aşağı akış bağlantısı ${limitMs} ms içinde kapanmadı: kapanan ${state.closedBeforeResponse}, beklenen ${count}.`));
           }
           return setTimeout(check, 5);
@@ -246,11 +247,11 @@ export async function startFakeOpenAiCompatibleServer({
     },
     /** İstemcinin yarıda bıraktığı akış sayısı `count`'a ulaşana kadar sınırlı bekler. */
     waitForClosedStreams(count, { limitMs = CLOSED_REQUEST_WAIT_LIMIT_MS } = {}) {
-      const deadline = Date.now() + limitMs;
+      const deadline = performance.now() + limitMs;
       return new Promise((resolve, reject) => {
         const check = () => {
           if (state.streamsClosedByClient >= count) return resolve();
-          if (Date.now() >= deadline) {
+          if (performance.now() >= deadline) {
             return reject(new Error(`Akış ${limitMs} ms içinde istemci tarafından kapatılmadı: kapanan ${state.streamsClosedByClient}, beklenen ${count}.`));
           }
           return setTimeout(check, 5);
@@ -260,11 +261,11 @@ export async function startFakeOpenAiCompatibleServer({
     },
     /** En az `count` istek alınana kadar sınırlı bekler. */
     waitForRequests(count, { limitMs = CLOSED_REQUEST_WAIT_LIMIT_MS } = {}) {
-      const deadline = Date.now() + limitMs;
+      const deadline = performance.now() + limitMs;
       return new Promise((resolve, reject) => {
         const check = () => {
           if (state.requests.length >= count) return resolve();
-          if (Date.now() >= deadline) {
+          if (performance.now() >= deadline) {
             return reject(new Error(`Sahte ağ geçidi ${limitMs} ms içinde istek almadı: alınan ${state.requests.length}, beklenen ${count}.`));
           }
           return setTimeout(check, 5);

@@ -709,14 +709,11 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
   if (existing.answer) {
     const failure = outcomeFailure(existing, input);
     if (failure) throw failure;
-    const replayEvidence = await optionalEvidence(sicil, signal, {
-      conversationId: existing.conversation.id,
-      messageId: existing.answer.id
-    });
     return {
       sicil, claim: null, mode: existing.answer.mode, profile: assistantProfileForMode(existing.answer.mode), grounded: false,
       conversation: existing.conversation, userMessage: existing.turn.message,
-      replay: discloseSavedMessages([existing.answer], replayEvidence)[0],
+      // Ham kayıt yalnızca teslim sınırında güncel yetkiyle açıklanır.
+      replay: existing.answer,
       modelMessages: [], context: { trimmed: Boolean(existing.answer.contextTrimmed), omittedMessages: Math.max(0, Number(existing.answer.contextOmittedMessages) || 0) }
     };
   }
@@ -749,7 +746,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     claim.bindConversation(prepared.conversation.id);
     const useTools = grounded && !prepared.answer;
     let history = prepared.history;
-    if (history.some((message) => message.role === 'assistant')) {
+    if (!prepared.answer && history.some((message) => message.role === 'assistant')) {
       // Geçmiş yanıtlar bağlama yer tutucu olarak girer: yalnızca kanıt dönemleri gerekir.
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id }, { revalidate: false });
       history = fallbackAssistantHistory(history, priorEvidence);
@@ -775,7 +772,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       mode: prepared.answer?.mode || input.mode,
       profile: prepared.answer ? assistantProfileForMode(prepared.answer.mode) : (useTools ? assistantToolProfileForMode(input.mode) : profile),
       grounded: useTools,
-      // Standart kipteki kurtarılabilir model hatası Derin düşünme araç profiline devredilebilir.
+      // Yalnızca Standart kip Derin profile BİR kez devredebilir; Derin kip kendine devretmez.
       escalationProfile: useTools && input.mode === ASSISTANT_MODES.STANDARD && toolRouteAvailable(registry, ASSISTANT_MODES.DEEP)
         ? assistantToolProfileForMode(ASSISTANT_MODES.DEEP) : null,
       general: input.source === 'general',
@@ -784,7 +781,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       dataUnavailable: config.toolsEnabled && input.source !== 'general' && !grounded,
       conversation: prepared.conversation,
       userMessage: prepared.turn.message,
-      replay: prepared.answer ? discloseSavedMessages([prepared.answer], await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id, messageId: prepared.answer.id }))[0] : null,
+      replay: prepared.answer || null,
       modelMessages: context.messages,
       context: { trimmed: context.trimmed, omittedMessages: context.omittedMessages }
     };
@@ -825,16 +822,19 @@ function persistAnswer(turn, write) {
  * Yanıtın yazımı istemcinin iptaline bağlı değildir: model yanıtı tamamladıysa
  * bağlantı o anda kesilse de yanıt kaybolmaz (yazım yine süre sınırlıdır).
  */
-export async function generateAssistantAnswer(turn, { signal = null, onStatus = null, onText }) {
-  if (turn.grounded) return generateGroundedAssistantAnswer(turn, { signal, onStatus, onText });
+export async function generateAssistantAnswer(turn, { signal = null, onStatus = null, onProgress = null, onText, onDelivery = null, onGenerated = null }) {
+  if (turn.grounded) return generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress, onText, onDelivery, onGenerated });
   const result = turn.dataUnavailable ? { text: 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', finishReason: 'unavailable' } : await getAiGateway().streamChat({
     profile: turn.profile,
     messages: turn.modelMessages,
     signal,
     onStatus,
+    onProgress,
     onText
   });
   if (turn.dataUnavailable) await onText(result.text);
+  // Üretim bitti: bundan sonrası (yazım, açıklama, teslim) kendi süre sınırlarıyla yürür.
+  onGenerated?.();
   if (turn.general && result.finishReason === 'stop') result.finishReason = 'general';
   const messageId = randomUUID();
   const stored = await persistAnswer(turn, (executor) => appendConversationAnswer(executor, turn.sicil, {
@@ -872,13 +872,7 @@ function evidenceSchemaMissing() {
   });
 }
 
-/**
- * Standart kipte doğrulanamayan, uzunluk sınırında kalan ya da boş dönen turu
- * Derin düşünme araç profiliyle, AYNI kanıt defteri ve kapsamla BİR kez
- * sonlandırır. İptal, kimlik, veri ve süre aşımı hataları yukarı taşınır; Derin
- * düşünme oturumu başka bir yapay zekâ hizmeti hatasıyla kurulamaz ya da biterse
- * Standart sonucu (güvenli ileti ya da özgün hata) kullanılır. Genel sohbete düşülmez.
- */
+/** Veri sonrası muhakeme devri; iptal, kimlik ve süre aşımı yukarı taşınır. */
 async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
   const telemetry = (outcome, models = []) => recordGroundedEscalation({
     requestedMode: turn.mode, models: [...request.models, ...models], reason: request.reason, toolsReused: request.toolsReused, outcome
@@ -888,11 +882,15 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
     result = await runIn(turn.escalationProfile, { resume: request.resume });
   } catch (error) {
     // Yalnızca yapay zekâ hizmetinin hatası Standart sonucuna döner; iptal, kimlik ve veri hataları turu bitirir.
-    if (signal?.aborted || !isAiError(error) || error.code === AI_ERROR_CODES.AI_CANCELLED) throw error;
+    if (signal?.aborted || !isAiError(error) || error.code === AI_ERROR_CODES.AI_CANCELLED) {
+      telemetry('error');
+      request.traceError?.(error);
+      throw error;
+    }
     const timedOut = error.code === AI_ERROR_CODES.AI_TIMEOUT;
     telemetry(timedOut ? 'timeout' : 'error');
     // Süre aşımı doğrulama hatası değildir: sağlayıcının yoğunluğu güvenli iletiyle gizlenmez.
-    if (timedOut) throw error;
+    if (timedOut) { request.traceError?.(error); throw error; }
     return request.fallback(onText);
   }
   telemetry(result.outcome, result.models);
@@ -905,7 +903,7 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
  * doğrulandıktan (ya da güvenli iletiye düştükten) SONRA, tek kısa işlemde
  * yazılır. Durdurulan ya da süresi dolan tur yazılmaz.
  */
-async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText }) {
+async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress = null, onText, onDelivery = null, onGenerated = null }) {
   const options = {
     messages: turn.modelMessages,
     catalog: toolCatalogForModel(),
@@ -913,52 +911,92 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
     allowedTextFields: turn.allowedTextFields || [],
     clarification: turn.clarification || null,
     onStatus,
-    onText
+    onProgress,
+    onText: async () => {},
+    deferDisclosure: true
   };
+  const lifecycle = { deadline: null };
   const runIn = (profile, extra) => getAiGateway().runToolSession({
     profile,
     signal,
+    lifecycle,
     run: (session) => {
       if (Number(session.sicil) !== Number(turn.sicil)) throw unknownSicil();
       return runGroundedTurn(session, { ...options, ...extra });
     }
   });
-  let grounded = await runIn(turn.profile, { escalation: Boolean(turn.escalationProfile) });
-  if (grounded.outcome === 'escalate') grounded = await escalateGroundedTurn(turn, grounded, { signal, onText, runIn });
+  // Seçilen kipin araç profili turu yürütür: Derin düşünme Standart profile indirgenmez.
+  let grounded;
+  try {
+    grounded = await runIn(turn.profile, { escalation: Boolean(turn.escalationProfile) });
+    if (grounded.outcome === 'escalate') grounded = await escalateGroundedTurn(turn, grounded, { signal, onText: options.onText, runIn });
+  } finally {
+    // Kayıt, açıklama ve teslim kendi mevcut sınırlarıyla yürür.
+    lifecycle.deadline?.dispose();
+  }
+  // Üretim bitti: bundan sonrası (yazım, açıklama, teslim) kendi süre sınırlarıyla yürür.
+  onGenerated?.();
   const messageId = randomUUID();
   let stored;
+  let answer;
   try {
-    stored = await persistAnswer(turn, (executor) => appendGroundedConversationAnswer(executor, turn.sicil, {
-      conversationId: turn.conversation.id,
-      messageId,
-      replyToMessageId: turn.userMessage.id,
-      content: grounded.text,
-      mode: turn.mode,
-      finishReason: grounded.finishReason,
-      contextTrimmed: turn.context.trimmed,
-      contextOmittedMessages: turn.context.omittedMessages,
-      evidence: grounded.evidenceRows
-    }));
-  } catch (error) {
-    if (isMissingEvidenceSchema(error)) {
-      noteEvidenceSchema(false);
-      throw evidenceSchemaMissing();
+    try {
+      stored = await persistAnswer(turn, (executor) => appendGroundedConversationAnswer(executor, turn.sicil, {
+        conversationId: turn.conversation.id,
+        messageId,
+        replyToMessageId: turn.userMessage.id,
+        content: grounded.text,
+        mode: turn.mode,
+        finishReason: grounded.finishReason,
+        contextTrimmed: turn.context.trimmed,
+        contextOmittedMessages: turn.context.omittedMessages,
+        evidence: grounded.evidenceRows
+      }));
+    } catch (error) {
+      if (isMissingEvidenceSchema(error)) {
+        noteEvidenceSchema(false);
+        throw evidenceSchemaMissing();
+      }
+      throw error;
     }
+    if (!stored.knownSicil) throw unknownSicil();
+    if (!stored.persisted || !stored.message) {
+      throw conversationNotFound('ANSWER_NOT_PERSISTED');
+    }
+    onProgress?.();
+    const prepareDelivery = async () => {
+      const evidence = await optionalEvidence(turn.sicil, signal, {
+        conversationId: turn.conversation.id, messageId: stored.message.id
+      });
+      // Bu turda doğrulanıp yazılan yanıt gösterilir; kalıcı nüfusu sınıra sığmayan
+      // yanıt yalnızca SONRAKİ açılışlarda doğrulanamaz sayılır. Kayıtlı kanıtın tekrar
+      // okunamaması (geçici hata) güncel yetkinin bilinmemesi değildir: yetki bellekteki
+      // defterle yeniden doğrulanır; doğrulanamazsa ya da erişim kalktıysa yanıt gösterilmez.
+      const own = stored.message.id === messageId;
+      const reloadFailed = evidence?.unavailable === true || evidence?.ready === false
+        || evidence?.unavailableMessages?.has(messageId) || evidence?.unverifiable?.has(messageId);
+      const liveAuthorized = own && reloadFailed && await grounded.guardDisclosure?.(signal);
+      answer = liveAuthorized
+        ? { ...stored.message, evidence: grounded.evidence }
+        : discloseSavedMessages([stored.message], evidence)[0];
+      return { conversation: stored.conversation, answer: { ...answer, evidence: answer.evidence || [] },
+        reconciled: !own, finishReason: answer.finishReason, contentAuthoritative: true, firstTokenMs: null };
+    };
+    // Erişim, kuyrukta yer açıldıktan sonra ve görünür teslimin hemen öncesinde doğrulanır.
+    if (onDelivery) await onDelivery(prepareDelivery);
+    else await onText((await prepareDelivery()).answer.content);
+    const own = stored.message.id === messageId;
+    // Gösterilen yanıt turun kendi yanıtıysa özgün sonuç (ör. general_redirect) korunur.
+    const replaced = !own || answer.content !== grounded.text || answer.finishReason !== grounded.finishReason;
+    const deliveredOutcome = !replaced ? grounded.outcome
+      : answer.finishReason === 'stop' ? 'grounded' : answer.finishReason === 'grounding_failed' ? 'failed' : answer.finishReason;
+    // Tur izi yalnızca metin gerçekten teslim edildikten sonra son sonucunu alır; teslim hatası `error` olur.
+    grounded.completeDisclosure?.(deliveredOutcome);
+  } catch (error) {
+    // Kayıt ya da açıklama hatası da turun tek son izini bırakır.
+    grounded.completeDisclosure?.('error', error?.code);
     throw error;
   }
-  if (!stored.knownSicil) throw unknownSicil();
-  if (!stored.persisted || !stored.message) {
-    throw conversationNotFound('ANSWER_NOT_PERSISTED');
-  }
-  const evidence = await optionalEvidence(turn.sicil, signal, {
-    conversationId: turn.conversation.id, messageId: stored.message.id
-  });
-  // Bu turda doğrulanıp yazılan yanıt gösterilir; kalıcı nüfusu sınıra sığmayan
-  // yanıt yalnızca SONRAKİ açılışlarda doğrulanamaz sayılır.
-  const own = stored.message.id === messageId;
-  const answer = own && (evidence?.unavailable || evidence?.unavailableMessages?.has(messageId) || evidence?.unverifiable?.has(messageId))
-    ? { ...stored.message, evidence: grounded.evidence }
-    : discloseSavedMessages([stored.message], evidence)[0];
   return {
     conversation: stored.conversation,
     answer: { ...answer, evidence: answer.evidence || [] },
@@ -967,4 +1005,12 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onText 
     contentAuthoritative: true,
     firstTokenMs: null
   };
+}
+
+/** Kayıtlı yanıt da teslim sınırında güncel erişimden geçer. */
+export async function discloseAssistantMessage(turn, message, signal) {
+  if (message.source === 'general' || message.finishReason === 'general') return message;
+  return discloseSavedMessages([message], await optionalEvidence(turn.sicil, signal, {
+    conversationId: turn.conversation.id, messageId: message.id
+  }))[0];
 }

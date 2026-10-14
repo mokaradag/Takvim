@@ -445,6 +445,10 @@ test('hata görünümü kategorileri ayırır; kapasite yoğunluğu çökme gibi
   assert.equal(view({ code: 'AI_UNAUTHORIZED', credentialSource: 'default' }).action, null);
   assert.equal(view({ code: 'AI_RATE_LIMITED', message: 'Sınır.' }).tone, 'warn');
   assert.match(view({ code: 'AI_TIMEOUT', partial: true }).message, /yarıda kesildi/);
+  // Teslim sınırı yanıt kaydedildikten sonra da dolabilir: "kaydedilmedi" denmez.
+  assert.doesNotMatch(view({ code: 'AI_TIMEOUT', reason: 'DELIVERY_STALLED' }).message, /kaydedilmedi/);
+  assert.doesNotMatch(view({ code: 'AI_TIMEOUT', reason: 'DELIVERY_STALLED', partial: true }).message, /kaydedilmedi/, 'taslağı gösterilmiş yanıt da kaydedilmiş olabilir');
+  assert.match(view({ code: 'AI_TIMEOUT', reason: 'GENERATION_STALLED' }).message, /kaydedilmedi/);
   assert.equal(view({ code: 'AI_PROVIDER_UNAVAILABLE', partial: false }).title, 'Hizmete ulaşılamıyor');
   assert.equal(view({ code: 'AI_PROVIDER_UNAVAILABLE', partial: true }).title, 'Yanıt yarıda kesildi');
   assert.equal(view({ code: 'STREAM_INTERRUPTED' }).title, 'Yanıt yarıda kesildi');
@@ -478,6 +482,15 @@ test('hazırlık, evre, bitiş nedeni, sayaç ve göreli zaman metinleri', () =>
   assert.equal(presentation.generationPhaseLabel('streaming', 'standard'), null);
   assert.match(presentation.finishReasonNote('length'), /uzunluk sınırına/);
   assert.equal(presentation.finishReasonNote('stop'), null);
+  for (const reason of ['PROVIDER_STALLED', 'GENERATION_STALLED']) {
+    const partial = presentation.assistantFailureView({ code: 'AI_TIMEOUT', reason, partial: true });
+    assert.equal(partial.title, 'Yanıt ilerlemiyor');
+    assert.match(partial.message, /ilerleme göstermediği/);
+    assert.match(partial.message, /yarıda/);
+    assert.doesNotMatch(partial.message, /süre sınırı dolduğu/);
+  }
+  assert.match(presentation.assistantFailureView({ code: 'AI_TIMEOUT', partial: true }).message, /süre sınırı dolduğu/);
+  assert.doesNotMatch(presentation.assistantFailureView({ code: 'AI_TIMEOUT', reason: 'DELIVERY_STALLED', partial: true }).message, /kaydedilmedi/);
   assert.equal(presentation.characterCountLabel(100, 8000), null);
   assert.equal(presentation.characterCountLabel(7000, 8000), '7.000 / 8.000');
   const now = Date.parse('2026-09-26T12:00:00.000Z');
@@ -2114,6 +2127,53 @@ test('uzlaştırma ilk olumsuz okumadan sonra geç kaydedilen yanıtı bulur', a
   assert.equal(state().active.turns[0].answer.content, 'Geç kayıt');
   assert.equal(state().active.turns[0].answer.status, 'complete');
   assert.equal(controller.canSend(), true);
+  controller.dispose();
+});
+
+test('sunucunun kendi hata olayıyla bitirdiği tur tek okumayla uzlaşır; kopan akış gecikmeli okumayı sürdürür', async () => {
+  for (const [settled, expectedReads] of [[true, 1], [false, 3]]) {
+    const { controller, api, state } = await readyController({ reconciliationDelaysMs: [1, 1] });
+    controller.send('Soru');
+    const run = api.turns[0];
+    const data = acceptedData(CONVERSATION_A, run, 'Soru');
+    run.emit('accepted', data);
+    let reads = 0;
+    api.loadAssistantConversationRequest = async () => {
+      reads += 1;
+      return { ok: true, conversation: data.conversation, messages: [] };
+    };
+    run.resolve(settled
+      ? { ok: false, code: 'AI_TIMEOUT', reason: 'PROVIDER_STALLED', retryable: true, settled: true, phase: 'stream' }
+      : { ok: false, code: 'STREAM_INTERRUPTED', retryable: true });
+    await drain();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    await drain();
+    assert.equal(reads, expectedReads, settled ? 'sunucu kararı tek okumayla doğrulanır' : 'belirsiz son gecikmeli yeniden okunur');
+    assert.equal(state().reconciling[state().active.key], undefined, 'uzlaştırma biter');
+    if (settled) assert.equal(state().active.turns[0].answer.error.title, 'Yanıt ilerlemiyor');
+    assert.equal(controller.retry(run.input.turnId).ok, true, 'aynı tur yeniden denenebilir');
+    controller.dispose();
+  }
+  // Sunucu kararından sonraki doğrulama okuması geçici olarak başarısızsa okuma sürer: kaydedilmiş yanıt gösterilir.
+  const { controller, api, state } = await readyController({ reconciliationDelaysMs: [1, 1] });
+  controller.send('Soru');
+  const run = api.turns[0];
+  const data = acceptedData(CONVERSATION_A, run, 'Soru');
+  run.emit('accepted', data);
+  const saved = { id: '30000000-0000-4000-8000-0000000000aa', sequence: 2, role: 'assistant', content: 'Kayıtlı yanıt', turnId: null,
+    replyToId: data.userMessage.id, mode: 'standard', finishReason: 'stop', createdAt: '2026-10-13T10:00:00.000Z' };
+  let reads = 0;
+  api.loadAssistantConversationRequest = async () => {
+    reads += 1;
+    return reads === 1 ? { ok: false, code: 'DATABASE_UNAVAILABLE', retryable: true } : { ok: true, conversation: data.conversation, messages: [saved] };
+  };
+  run.resolve({ ok: false, code: 'AI_TIMEOUT', reason: 'DELIVERY_STALLED', retryable: true, settled: true, phase: 'stream' });
+  await drain();
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  await drain();
+  assert.equal(reads, 2);
+  assert.equal(state().active.turns[0].answer.status, 'complete');
+  assert.equal(state().active.turns[0].answer.content, 'Kayıtlı yanıt');
   controller.dispose();
 });
 
