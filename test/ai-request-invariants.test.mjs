@@ -754,6 +754,19 @@ test('distinct name and code carriers are server-selected when explicitly bound;
 
 const entriesOf = (sources) => sources.map((item) => ({ id: item.id, tool: item.tool, args: item.args || {}, payload: item.envelope, round: item.round, snapshot: item.snapshot }));
 
+test('a synthesized empty actor uses its own canonical metadata, not the sibling change metadata', () => {
+  const entry = source('rota_activity_search', { items: [{ kind: 'updated', actor: null,
+    structuredChanges: [{ field: 'progress', after: 30 }] }] },
+  { collection: 'items', envelope: { totalCount: 1, returnedCount: 1 } });
+  const request = { operation: 'list', metrics: ['activity.changeAfter', 'activity.actor'], layout: 'table',
+    population: { tool: 'rota_activity_search', collection: 'items' } };
+  const answer = verify([entry], request, ['R1:data.items.0.structuredChanges.0.after']);
+  assert.equal(answer.ok, true, JSON.stringify(answer.issues));
+  assert.match(answer.normalized, /\| İşlemi yapan \|/);
+  assert.match(answer.normalized, /Belirtilmemiş/);
+  assert.doesNotMatch(answer.normalized, /İlerleme \(%\) \/ İşlemi yapan/);
+});
+
 function agreement(raw, sources, expected, references = null) {
   const request = parsedRequest(raw);
   const entries = entriesOf(sources);

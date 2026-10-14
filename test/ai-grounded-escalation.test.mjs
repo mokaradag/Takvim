@@ -20,6 +20,7 @@ const { assistantStreamErrorPayload } = await import('../src/server/ai/assistant
 const { AiError } = await import('../src/server/ai/aiErrors.js');
 const { parseChatCompletion } = await import('../src/server/ai/providers/openAiCompatibleProvider.js');
 const { reportedReasoningTokens } = await import('../src/server/ai/providers/openAiCompatibleStream.js');
+const { generateAssistantAnswer, prepareAssistantTurn } = await import('../src/server/ai/assistant/assistantService.js');
 
 const STANDARD = DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'].model;
 const DEEP = DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model;
@@ -143,6 +144,112 @@ test('a Deep escalation that times out ends as a bounded timeout, not as a verif
   assert.deepEqual(grounding.escalations, { total: 1, byReason: { SYNTHESIS_REQUIRED: 1 }, byOutcome: { timeout: 1 } });
   assert.equal(grounding.failed, 0, 'sağlayıcı süre aşımı doğrulama hatası sayılmaz');
   assert.equal(logLines(logs, 'ai.grounded.escalation')[0].context.outcome, 'timeout');
+});
+
+for (const cancelled of [false, true]) {
+  test(`late Standard escalation keeps the original generation deadline (${cancelled ? 'cancel' : 'timeout'})`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: NOW });
+    fixedClocks.add(t);
+    const stack = stackFor(t, { env: { MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS: '1000',
+      MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS: '100000', MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS: '100000' } });
+    const controller = new AbortController();
+    stack.provider.enqueue({ type: 'deferred-stream' }, { type: 'deferred-stream' });
+    const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: NAMED_QUESTION, mode: 'standard' }) });
+    t.after(() => turn.claim.release());
+    const pending = generateAssistantAnswer(turn, { signal: controller.signal, onText: async () => {} });
+    const rejected = assert.rejects(pending, { code: cancelled ? 'AI_CANCELLED' : 'AI_TIMEOUT' });
+    await until(() => Boolean(stack.provider.calls[0]?.emit));
+    t.mock.timers.tick(44000);
+    stack.provider.calls[0].emit(JSON.stringify({ intent: 'rota', language: 'tr', request: statusNamed,
+      calls: [{ name: 'rota_task_search', arguments: { text: NAMED } }] }));
+    stack.provider.calls[0].complete();
+    await until(() => Boolean(stack.provider.calls[1]?.emit));
+    assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, DEEP]);
+    t.mock.timers.tick(1999);
+    await immediate();
+    assert.equal(stack.provider.calls[1].aborted, false, 'Derin kalan süreyi kullanır');
+    if (cancelled) controller.abort();
+    else t.mock.timers.tick(1);
+    // Eski uygulamada Derin kendi 225 saniyelik bütçesini alırdı.
+    assert.equal(stack.provider.calls[1].signal.aborted, true, 'özgün sınır/iptal Derin sağlayıcıya ulaşır');
+    await rejected;
+    assert.deepEqual(stack.db.aiConversationMessages.map((row) => row.Role), ['user']);
+    assert.equal(aiRuntimeLoad().active, 0);
+    assert.equal(stack.provider.activeCount, 0);
+    const telemetry = aiTelemetrySnapshot().grounding;
+    assert.equal(telemetry.failed, 0);
+    assert.deepEqual(telemetry.escalations.byOutcome, cancelled ? { error: 1 } : { timeout: 1 });
+  });
+}
+
+for (const mode of ['standard', 'deep']) {
+  test(`${mode === 'standard' ? 'early escalation retains useful Deep time' : 'direct Deep retains its normal budget'} and generation expiry does not time post-generation delivery`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: NOW });
+    fixedClocks.add(t);
+    const stack = stackFor(t, { env: { MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS: '1000',
+      MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS: '100000', MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS: '100000' } });
+    stack.provider.enqueue({ type: 'deferred-stream' });
+    if (mode === 'standard') stack.provider.enqueue({ type: 'deferred-stream' });
+    const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: NAMED_QUESTION, mode }) });
+    t.after(() => turn.claim.release());
+    let delivered = null;
+    const pending = generateAssistantAnswer(turn, { onText: async () => {}, onDelivery: async (prepare) => {
+      assert.equal(aiRuntimeLoad().active, 0, 'kiralar üretim sonunda bırakıldı');
+      t.mock.timers.tick(230000);
+      delivered = await prepare();
+    } });
+    await until(() => Boolean(stack.provider.calls[0]?.emit));
+    t.mock.timers.tick(mode === 'standard' ? 1000 : 46001);
+    stack.provider.calls[0].emit(JSON.stringify({ intent: 'rota', language: 'tr', request: statusNamed,
+      calls: [{ name: 'rota_task_search', arguments: { text: NAMED } }] }));
+    stack.provider.calls[0].complete();
+    if (mode === 'standard') {
+      await until(() => Boolean(stack.provider.calls[1]?.emit));
+      t.mock.timers.tick(14000);
+      const id = toolResultsOf(stack.provider.calls[1])[0].evidenceId;
+      stack.provider.calls[1].emit(JSON.stringify({ kind: 'rota', facts: [`${id}:data.tasks.0.status`, `${id}:data.tasks.0.project.name`] }));
+      stack.provider.calls[1].complete();
+    } else {
+      // Derin başlangıçtan tek bütçe alır; Standart'ın kısa bütçesine indirgenmez.
+      stack.provider.enqueue(statusAnswer());
+    }
+    const result = await pending;
+    assert.equal(result.finishReason, 'stop');
+    assert.match(delivered.answer.content, NAMED_ANSWER);
+    assert.deepEqual(stack.provider.calls.map((call) => call.model), mode === 'standard' ? [STANDARD, DEEP] : [DEEP, DEEP]);
+    assert.equal(aiRuntimeLoad().active, 0);
+  });
+}
+
+test('a completed grounded generation can persist and revalidate disclosure after its generation deadline', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: NOW });
+  fixedClocks.add(t);
+  const stack = stackFor(t, { env: { MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS: '1000',
+    MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS: '100000' } });
+  stack.provider.enqueue({ type: 'deferred-stream' });
+  const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: QUESTION, mode: 'standard' }) });
+  t.after(() => turn.claim.release());
+  let release;
+  let persisting = false;
+  stack.db.commitHook = async () => { persisting = true; await new Promise((resolve) => { release = resolve; }); };
+  t.after(() => release?.());
+  const visible = [];
+  const pending = generateAssistantAnswer(turn, { onText: async (text) => { visible.push(text); } });
+  await until(() => Boolean(stack.provider.calls[0]?.emit));
+  t.mock.timers.tick(45000);
+  stack.provider.calls[0].emit(JSON.stringify({ intent: 'rota', language: 'tr', request: countFull,
+    calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] }));
+  stack.provider.calls[0].complete();
+  await until(() => persisting);
+  assert.equal(aiRuntimeLoad().active, 0);
+  t.mock.timers.tick(2000);
+  await immediate();
+  assert.deepEqual(visible, [], 'kayıt bitmeden kanıt açıklanmaz');
+  release();
+  const result = await pending;
+  assert.equal(result.finishReason, 'stop');
+  assert.deepEqual(visible, [result.answer.content]);
+  assert.match(result.answer.content, /\*\*8\*\*/);
 });
 
 test('an empty Standard completion is diagnosed without content and retried in-session without Deep escalation', async (t) => {

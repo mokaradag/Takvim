@@ -482,6 +482,15 @@ test('hazırlık, evre, bitiş nedeni, sayaç ve göreli zaman metinleri', () =>
   assert.equal(presentation.generationPhaseLabel('streaming', 'standard'), null);
   assert.match(presentation.finishReasonNote('length'), /uzunluk sınırına/);
   assert.equal(presentation.finishReasonNote('stop'), null);
+  for (const reason of ['PROVIDER_STALLED', 'GENERATION_STALLED']) {
+    const partial = presentation.assistantFailureView({ code: 'AI_TIMEOUT', reason, partial: true });
+    assert.equal(partial.title, 'Yanıt ilerlemiyor');
+    assert.match(partial.message, /ilerleme göstermediği/);
+    assert.match(partial.message, /yarıda/);
+    assert.doesNotMatch(partial.message, /süre sınırı dolduğu/);
+  }
+  assert.match(presentation.assistantFailureView({ code: 'AI_TIMEOUT', partial: true }).message, /süre sınırı dolduğu/);
+  assert.doesNotMatch(presentation.assistantFailureView({ code: 'AI_TIMEOUT', reason: 'DELIVERY_STALLED', partial: true }).message, /kaydedilmedi/);
   assert.equal(presentation.characterCountLabel(100, 8000), null);
   assert.equal(presentation.characterCountLabel(7000, 8000), '7.000 / 8.000');
   const now = Date.parse('2026-09-26T12:00:00.000Z');

@@ -1,5 +1,5 @@
-import { claimableContract, metricEntry, semanticCarrierKey } from './claimableEvidence.js';
-import { FACT_LIMITS, createEvidenceFacts, fieldPatternCovers } from './evidenceFacts.js';
+import { claimableContract, evidenceSemantic, semanticCarrierKey } from './claimableEvidence.js';
+import { FACT_LIMITS, createEvidenceFacts, factLabel, fieldPatternCovers } from './evidenceFacts.js';
 import { canonicalField } from './evidencePopulation.js';
 import { emptyFieldCurrent, factRow, metricAllowedForRow, rowFieldState, rowMetricFields, verifyRequestedFacts } from './requestContract.js';
 import { renderVerifiedNarrative } from './evidenceNarrative.js';
@@ -157,6 +157,11 @@ export function resolveEvidenceSelection(answer, { evidenceIds = [], evidencePay
  */
 function renderableFacts(request, items, evidence, answer, emptyProperties = []) {
   const rendered = [...items];
+  // Boşluğun sunumu kardeş olgudan değil, kendi kayıtlı alanından gelir.
+  const emptyFact = (source, field, metric, template) => ({
+    factId: `${source.envelope.factScope}:${field}`, subjectId: field.slice(0, field.lastIndexOf('.')), subject: template.subject,
+    field, value: null, type: 'null', semantic: { ...evidenceSemantic(source.envelope, field, null, factLabel(field)), metric }
+  });
   const rowsAnswer = ['list', 'rank'].includes(request.operation);
   const rows = new Map();
   for (const item of items) {
@@ -181,9 +186,7 @@ function renderableFacts(request, items, evidence, answer, emptyProperties = [])
         // Yalnızca okunmuş ve güncel boşluk çizilir; daha yeni okumanın yerine geçtiği boşluk değildir.
         if (rowFieldState(source.tool, row.canonical, object, field) !== 'empty' || !emptyFieldCurrent(evidence, source, concrete, metric, rowsAnswer)) continue;
         if (rendered.some((other) => other.evidenceId === item.evidenceId && other.fact.field === concrete)) continue;
-        const semantic = metricEntry(source.tool, `${row.canonical}.*.${field}`);
-        rendered.push({ evidenceId: item.evidenceId, fact: { ...item.fact, field: concrete, value: null,
-          semantic: { ...item.fact.semantic, ...semantic, metric, displayValue: null } } });
+        rendered.push({ evidenceId: item.evidenceId, fact: emptyFact(source, concrete, metric, item.fact) });
       }
     }
   }
@@ -191,9 +194,7 @@ function renderableFacts(request, items, evidence, answer, emptyProperties = [])
   for (const { evidenceId, field, metric } of emptyProperties) {
     const template = items.find((item) => item.evidenceId === evidenceId);
     if (!template || rendered.some((other) => other.evidenceId === evidenceId && other.fact.field === field)) continue;
-    const semantic = metricEntry(evidence.get(evidenceId).tool, canonicalField(field).slice(5));
-    rendered.push({ evidenceId, fact: { ...template.fact, field, value: null, type: 'null',
-      semantic: { ...template.fact.semantic, ...semantic, metric, displayValue: null } } });
+    rendered.push({ evidenceId, fact: emptyFact(evidence.get(evidenceId), field, metric, template.fact) });
   }
   return rendered;
 }

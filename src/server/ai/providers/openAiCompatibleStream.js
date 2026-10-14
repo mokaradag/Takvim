@@ -231,8 +231,8 @@ function accumulateToolCalls(fragments, state, limits) {
     }
     if (fn.arguments != null) {
       if (typeof fn.arguments !== 'string') throw invalid('STREAM_TOOL_CALL_MALFORMED');
-      if (fn.arguments) grew = true;
       if (!slot.oversize) {
+        if (fn.arguments) grew = true;
         if (slot.arguments.length + fn.arguments.length > limits.maxToolArgumentChars) {
           slot.oversize = true;
           slot.arguments = '';

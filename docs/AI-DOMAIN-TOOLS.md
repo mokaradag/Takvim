@@ -574,7 +574,7 @@ bağları ek seçim ve onarım turları üretiyordu. Bunların Standart hatası
 sayılarak Derin'e devredilmesi model turu sayısını büyütüyordu. Model
 adını değiştirmek bu yapısal sorunu çözmez.
 
-`Fast` genel sohbet profilidir; türlü Rota planı kullanıcının seçtiği kipin
+`chat.fast` yalnızca bağlantı yoklamasında kullanılır; türlü Rota planı kullanıcının seçtiği kipin
 araç profilinin işidir: Standart `chat.tools`, Derin düşünme
 `chat.tools.reasoning`. Derin seçildiğinde modele bağlı her tur (plan, takip,
 seçim) Derin profildedir; Standart araç profili ön koşul değildir ve Derin
@@ -1205,8 +1205,8 @@ yürütür. Hızlı yol uygun değilse seçilen kipin modeli olguları seçer. S
 kipte Derin profil gerçek `reasoning: synthesis` ihtiyacı için veri sonrası ya
 da ucuz kurtarma tükendiğinde bir kez kullanılabilir; Derin seçildiğinde modele
 bağlı kısım Derin profilde kalır, yetki/SQL/doğrulama/çizim yine sunucudadır.
-Genel sohbetin kip → profil eşlemesi (Fast/Standard/Deep → `chat.fast` /
-`chat.general` / `chat.reasoning`) bu değişiklikten etkilenmez. Profilin modeli
+Genel sohbetin kip → profil eşlemesi (Standart/Derin → `chat.general` /
+`chat.reasoning`) bu değişiklikten etkilenmez. Profilin modeli
 kayıttan gelir: kurum içi katalogda hem `chat.reasoning` hem
 `chat.tools.reasoning` `gemma-4-31B-it` modelindedir (bağlam 131072); bu
 kurumun model kararıdır, Rota verisi sözleşmesinin sonucu değildir.

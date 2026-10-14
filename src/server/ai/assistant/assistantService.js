@@ -918,17 +918,25 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
     onText: async () => {},
     deferDisclosure: true
   };
+  const lifecycle = { deadline: null };
   const runIn = (profile, extra) => getAiGateway().runToolSession({
     profile,
     signal,
+    lifecycle,
     run: (session) => {
       if (Number(session.sicil) !== Number(turn.sicil)) throw unknownSicil();
       return runGroundedTurn(session, { ...options, ...extra });
     }
   });
   // Seçilen kipin araç profili turu yürütür: Derin düşünme Standart profile indirgenmez.
-  let grounded = await runIn(turn.profile, { escalation: Boolean(turn.escalationProfile) });
-  if (grounded.outcome === 'escalate') grounded = await escalateGroundedTurn(turn, grounded, { signal, onText: options.onText, runIn });
+  let grounded;
+  try {
+    grounded = await runIn(turn.profile, { escalation: Boolean(turn.escalationProfile) });
+    if (grounded.outcome === 'escalate') grounded = await escalateGroundedTurn(turn, grounded, { signal, onText: options.onText, runIn });
+  } finally {
+    // Kayıt, açıklama ve teslim kendi mevcut sınırlarıyla yürür.
+    lifecycle.deadline?.dispose();
+  }
   // Üretim bitti: bundan sonrası (yazım, açıklama, teslim) kendi süre sınırlarıyla yürür.
   onGenerated?.();
   const messageId = randomUUID();

@@ -25,6 +25,7 @@ const TURN_ID = '0a1b2c3d-4e5f-4a6b-9c7d-8e9fa0b1c2d3';
 const USER_ID = '11111111-2222-4333-8444-555555555555';
 const ANSWER_ID = '99999999-8888-4777-8666-555555555555';
 const encoder = new TextEncoder();
+const originalFetch = globalThis.fetch;
 
 const conversation = { id: CONVERSATION_ID, title: 'Deneme', createdAt: '2026-09-26T10:00:00.000Z', updatedAt: '2026-09-26T10:00:00.000Z', messageCount: 1 };
 const userMessage = { id: USER_ID, sequence: 1, role: 'user', content: 'Soru', turnId: TURN_ID, replyToId: null, mode: null, finishReason: null, createdAt: 'x', length: 4 };
@@ -189,12 +190,16 @@ test('sunucudan uzun süre hiç bayt gelmezse bağlantı durgun sayılır', asyn
 });
 
 test('canlı tutma bağlantıyı canlı tutar ama ilerleme değildir: olay gelmeyen tur NO_PROGRESS ile biter, ilerleme olayı süreyi yeniler', async (t) => {
+  const streams = [];
+  const calls = stubFetch(t, (call) => {
+    const stream = streams.shift();
+    assert.ok(stream);
+    call.init.signal.addEventListener('abort', () => stream.push(null));
+    return stream.response;
+  });
   const run = async (between) => {
     const stream = streamResponse([], { manual: true });
-    const calls = stubFetch(t, (call) => {
-      call.init.signal.addEventListener('abort', () => stream.push(null));
-      return stream.response;
-    });
+    streams.push(stream);
     const pending = streamAssistantTurnRequest({ turnId: TURN_ID, message: 'Soru', mode: 'standard', inactivityMs: 40, progressMs: 60 });
     await new Promise((resolve) => setImmediate(resolve));
     stream.push(ACCEPTED);
@@ -203,13 +208,17 @@ test('canlı tutma bağlantıyı canlı tutar ama ilerleme değildir: olay gelme
     const result = await Promise.race([pending, new Promise((resolve) => setTimeout(() => resolve(null), 200))]);
     clearInterval(ticker);
     if (!result) stream.push(frame('done', { conversation, assistantMessage: { ...assistantMessage, length: 0 } }));
-    return { result: result ?? await pending, aborted: calls[0].init.signal.aborted };
+    return { result: result ?? await pending, aborted: calls.at(-1).init.signal.aborted };
   };
   const frozen = await run(() => ': keepalive\n\n');
   assert.deepEqual([frozen.result.ok, frozen.result.code, frozen.result.reason, frozen.result.retryable], [false, 'STREAM_STALLED', 'NO_PROGRESS', true]);
   assert.equal(frozen.aborted, true, 'takılan istek sunucuya kadar kesilir');
   const progressing = await run(() => frame('progress', {}));
   assert.equal(progressing.result.ok, true, 'ilerleme olayı alan tur kesilmez');
+});
+
+test('the completed multi-run stream test restores the original fetch', () => {
+  assert.equal(globalThis.fetch, originalFetch);
 });
 
 test('ağ hatası, HTTP hatası, beklenmeyen içerik ve yarıda kalan akış kararlı sonuçlara çevrilir', async (t) => {

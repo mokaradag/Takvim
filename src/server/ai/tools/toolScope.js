@@ -154,7 +154,7 @@ function namedCandidate(name, data, userNeedle, search) {
     const title = containmentText(candidate?.[label] || '');
     return title && candidate[idField] && phrasePositions(userNeedle, title).includes(positions[0]);
   });
-  return named.length === 1 ? { population, type, id: String(named[0][idField]), title: containmentText(named[0][label]) } : null;
+  return named.length === 1 ? { population, type, id: String(named[0][idField]), title: named[0][label] } : null;
 }
 
 function referenceIdentity(reference) {

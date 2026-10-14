@@ -710,19 +710,20 @@ export function createAiGateway({
    * biçimi, araç çağrısı parçaları ve kimliği bu katmanın dışına çıkmaz; tur
    * yalnızca birleştirilmiş çağrıları (`{ id, name, arguments, oversize }`) görür.
    */
-  async function runToolSession({ profile, signal = null, run }) {
+  async function runToolSession({ profile, signal = null, run, lifecycle = null }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     const progress = { providerStartedAt: null, recorded: true, rounds: 0, emitted: false };
     const providerScope = new AbortController();
     let lease = null;
-    let deadline = null;
+    let deadline = lifecycle?.deadline || null;
     let unlink = null;
     try {
       assertOutsideSqlTransaction();
-      const sicil = await trustedSicil(signal);
+      const lifecycleSignal = deadline?.signal || signal;
+      const sicil = await trustedSicil(lifecycleSignal);
       const config = requireAiAvailable(loadConfig());
-      const registry = await untilCancelled(() => loadRegistry(config), signal);
+      const registry = await untilCancelled(() => loadRegistry(config), lifecycleSignal);
       const route = requireRoute(registry, profile, AI_CAPABILITIES.CHAT);
       if (!route.capabilities.includes(AI_CAPABILITIES.TOOLS)) {
         throw new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, { details: { reason: 'CAPABILITY_MISMATCH', profile } });
@@ -733,12 +734,14 @@ export function createAiGateway({
         userKey: sicil,
         modelKey: route.model,
         modelLimit: route.maxConcurrency,
-        signal,
+        signal: lifecycleSignal,
         timeoutMs: config.queueTimeoutMs
       });
       context.queueWaitMs = lease.queueWaitMs;
       const toolSessionTimeoutMs = (route.timeoutMs ?? config.requestTimeoutMs) + TOOL_LIMITS.maxToolPhaseMs;
-      deadline = createAiDeadline({ timeoutMs: toolSessionTimeoutMs, parentSignal: signal, now });
+      // Standart → Derin devri aynı mutlak üretim sınırını tüketir.
+      deadline ||= createAiDeadline({ timeoutMs: toolSessionTimeoutMs, parentSignal: signal, now });
+      if (lifecycle) lifecycle.deadline = deadline;
       unlink = linkAbort(deadline.signal, providerScope);
       const credential = await raceWithAbort(
         () => resolveCredential({ sicil, config, signal: deadline.signal }),
@@ -907,7 +910,7 @@ export function createAiGateway({
     } finally {
       unlink?.();
       providerScope.abort();
-      deadline?.dispose();
+      if (!lifecycle) deadline?.dispose();
       lease?.release();
     }
   }

@@ -765,12 +765,119 @@ test('a repair cannot widen the question: a record named by ID, or by name as an
   const project = namedScope([], parse({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', text: 'Radar' }] }), () => true);
   assert.equal(droppedNames(project, parse({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'task', text: 'Radar' }] })).length, 1);
   assert.equal(droppedNames(project, parse({ operation: 'value', metrics: ['tasks.total'], filters: { text: 'Radar' } })).length, 1);
-  assert.equal(droppedNames(project, parse({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] })).length, 0);
+  assert.equal(droppedNames(project, parse({ operation: 'value', metrics: ['tasks.total'], entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] })).length, 1,
+    'önek benzerliği aynı varlık olduğunu kanıtlamaz');
   // Görev başlığı metni aynı metinle adlandırılan göreve daraltılabilir; tersi (tek görevden nüfusa) genişlemedir.
   const filter = namedScope([], parse({ operation: 'list', metrics: ['task.title'], filters: { text: 'Radar' } }), () => true);
   assert.equal(droppedNames(filter, parse({ operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', text: 'Radar' }] })).length, 0);
   const task = namedScope([], parse({ operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', text: 'Radar' }] }), () => true);
   assert.equal(droppedNames(task, parse({ operation: 'list', metrics: ['task.title'], filters: { text: 'Radar' } })).length, 1);
+});
+
+for (const entity of [false, true]) {
+  test(`an accepted ${entity ? 'named entity' : 'text population'} cannot shorten during repair before SQL`, async (t) => {
+    const stack = stackFor(t);
+    const original = 'Radar test planı';
+    stack.db.tasks.push({ ...stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE), TaskId: randomUUID(), Title: 'Radar', Status: 'done' });
+    const request = entity
+      ? { operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_search' }, entities: [{ type: 'task', text: original }] }
+      : { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, filters: { text: original } };
+    const search = (text) => [{ name: 'rota_task_search', arguments: { text } }];
+    stack.db.aiToolFailure = { 'task-facts': new Error('read unavailable') };
+    let before = null;
+    stack.provider.enqueue(nativePlan(request, search(original)), { type: 'script', respond: (call) => {
+      assert.equal(JSON.parse(call.messages.at(-1).content).error.code, 'INTERNAL');
+      stack.db.aiToolFailure = {};
+      before = sqlCalls(stack);
+      const broad = entity ? { ...request, entities: [{ type: 'task', text: 'Radar' }] } : { ...request, filters: { text: 'Radar' } };
+      return nativePlan(broad, search('Radar'));
+    } }, { type: 'script', respond: (call) => {
+      assert.equal(sqlCalls(stack), before, 'daha geniş okuma SQL öncesinde reddedildi');
+      assert.deepEqual(JSON.parse(call.messages.at(-1).content).error.details, ['$.entities:dropped']);
+      return nativePlan(request, search(original));
+    } });
+    const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `${original} ${entity ? 'görevinin durumu nedir' : 'için kaç görev var'}?` })).assistantMessage;
+    assert.equal(answer.finishReason, 'stop');
+    assert.match(answer.content, entity ? /Yapılacak/ : /\*\*1\*\*/);
+    assert.doesNotMatch(answer.content, /Tamamlandı/);
+    drained(stack);
+  });
+}
+
+test('repair search containment uses the actual predicate; entity identity stays exact', async () => {
+  const { bindRequestEntities, droppedNames, namedScope } = await import('../src/server/ai/tools/requestDeclaration.js');
+  const request = (text, entity = false) => parsedRequest({ operation: 'value', metrics: ['tasks.total'],
+    ...(entity ? { entities: [{ type: 'task', text }] } : { filters: { text } }) });
+  for (const entity of [false, true]) {
+    const scope = namedScope([], request('Radar test planı', entity), () => true);
+    for (const text of ['Radar test planı', 'RADAR TEST PLANI', '  Radar test planı  ']) {
+      assert.equal(droppedNames(scope, request(text, entity)).length, 0, `aynı arama: ${text}`);
+    }
+    assert.equal(droppedNames(scope, request('Radar', entity)).length, 1);
+    assert.equal(droppedNames(scope, request('Radar test planı ek', entity)).length, entity ? 1 : 0);
+    assert.equal(droppedNames(scope, request('Yeni Radar test planı', entity)).length, entity ? 1 : 0);
+    for (const [accepted, repaired] of [['Radar-A', 'Radar A'], ['Kısım', 'Kisim'], ['Radar  test', 'Radar test']]) {
+      assert.equal(droppedNames(namedScope([], request(accepted, entity), () => true), request(repaired, entity)).length, 1);
+    }
+  }
+  const id = parsedRequest({ operation: 'value', metrics: ['task.status'], entities: [{ type: 'task', id: TASKS.OVERDUE }] });
+  assert.deepEqual(droppedNames(namedScope([], id, () => true), id), []);
+  const named = request('Radar test planı', true);
+  const candidate = (title) => ({ named: [{ type: 'task', query: 'Radar', title, id: TASKS.OVERDUE }] });
+  assert.equal(bindRequestEntities(named, [], candidate('Radar'))[0].bound, null, 'yoklama kısa adı başka varlığa bağlayamaz');
+  assert.equal(bindRequestEntities(named, [], candidate('Radar test planı'))[0].bound, TASKS.OVERDUE);
+  assert.equal(bindRequestEntities(request('Radar A', true), [], candidate('Radar-A'))[0].bound, null);
+});
+
+for (const code of ['TIMEOUT', 'BUSY', 'DATABASE_UNAVAILABLE', 'INTERNAL']) {
+  test(`a failed population read after evidence freezes stays bounded (${code})`, async (t) => {
+    const stack = stackFor(t);
+    const { ToolError } = await import('../src/server/ai/tools/toolErrors.js');
+    const request = { operation: 'value', metrics: ['tasks.total', 'task.actualHours'], population: { tool: 'rota_task_search' },
+      fields: [{ metric: 'task.actualHours', tool: 'rota_task_detail', path: 'data.task.hours.actual' }],
+      entities: [{ type: 'task', id: TASKS.OVERDUE }], filters: { text: 'Radar test' } };
+    const attempts = () => (stack.db.aiToolLog || []).filter((entry) => entry.query === 'task-facts').length;
+    stack.db.aiToolFailure = { get 'task-facts'() { return attempts() === 1 ? new ToolError(code) : null; } };
+    stack.provider.enqueue(nativePlan(request, [{ name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } },
+      { name: 'rota_task_search', arguments: { text: 'Radar test' } }]));
+    if (code === 'INTERNAL') stack.provider.enqueue({ type: 'answer', text: 'geçersiz' }, { type: 'answer', text: 'geçersiz' });
+    const response = await sendTurn({ turnId: randomUUID(), message: `Radar test planı görevinin durumu ve Radar test kayıt sayısı nedir? ${TASKS.OVERDUE}` });
+    const answer = doneOf(response).assistantMessage;
+    if (code === 'INTERNAL') {
+      assert.equal(answer.finishReason, 'grounding_failed', 'kalıcı ret otomatik yinelenmez');
+      assert.equal(attempts(), 1);
+    } else {
+      assert.equal(answer.finishReason, 'stop');
+      assert.match(answer.content, /12/);
+      assert.match(answer.content, /\*\*1\*\*/);
+      assert.equal(attempts(), 3, 'tek yeniden okuma ve onun sayfa sorumlusu izdüşümü');
+      assert.equal(aiTelemetrySnapshot().tools.byTool.rota_task_search.calls, 2, 'başarılı araç yeniden türetilmez');
+      assert.equal(stack.provider.calls.length, 1);
+    }
+    assert.ok(aiTelemetrySnapshot().tools.calls <= TOOL_LIMITS.maxTotalCalls);
+    drained(stack);
+  });
+}
+
+test('repeated transient population failures cannot increase tool rounds or widen the retry', async (t) => {
+  const stack = stackFor(t);
+  const { ToolError } = await import('../src/server/ai/tools/toolErrors.js');
+  stack.db.aiToolFailure = { 'task-facts': new ToolError('TIMEOUT') };
+  const logs = captureConsole(t);
+  const request = { operation: 'value', metrics: ['tasks.total', 'task.actualHours'], population: { tool: 'rota_task_search' },
+    fields: [{ metric: 'task.actualHours', tool: 'rota_task_detail', path: 'data.task.hours.actual' }],
+    entities: [{ type: 'task', id: TASKS.OVERDUE }], filters: { text: 'Radar test' } };
+  stack.provider.enqueue(nativePlan(request, [{ name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } },
+    { name: 'rota_task_search', arguments: { text: 'Radar test' } }]),
+  { type: 'answer', text: 'geçersiz' }, { type: 'answer', text: 'geçersiz' });
+  const response = await sendTurn({ turnId: randomUUID(), message: `Radar test planı görevinin durumu ve Radar test kayıt sayısı nedir? ${TASKS.OVERDUE}` });
+  assert.equal(doneOf(response).assistantMessage.finishReason, 'grounding_failed');
+  const trace = turnTraces(logs)[0];
+  assert.equal(trace.toolRounds, TOOL_LIMITS.maxToolRounds);
+  assert.equal(trace.toolCalls, TOOL_LIMITS.maxToolRounds + 1);
+  assert.equal(stack.provider.calls.length, 3, 'zaman aşımı Derin devri açmaz');
+  assert.ok((stack.db.aiToolLog || []).filter((entry) => entry.query === 'task-facts').every((entry) => entry.params.text === 'Radar test'));
+  drained(stack);
 });
 
 test('a count read through a paged search is answered from its exact total; a paged list is completed by one server read of the declared population', async (t) => {

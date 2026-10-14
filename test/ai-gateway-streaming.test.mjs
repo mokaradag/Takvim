@@ -464,6 +464,42 @@ test('a tool round that carries tool results is never resent by a connection ret
   assert.equal(admission.status().active, 0);
 });
 
+test('tool sessions share absolute remaining lifetime and each capacity lease releases exactly once', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  const { gateway, admission, provider } = gatewayFor(t, {
+    env: { MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS: '1000', MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS: '100000' } });
+  const acquire = admission.acquire.bind(admission);
+  const released = [];
+  t.mock.method(admission, 'acquire', async (options) => {
+    const lease = await acquire(options);
+    const index = released.push(0) - 1;
+    return { ...lease, release() { released[index] += 1; lease.release(); } };
+  });
+  const lifecycle = { deadline: null };
+  t.after(() => lifecycle.deadline?.dispose());
+  let firstSignal;
+  await gateway.runToolSession({ profile: 'chat.tools', lifecycle, run: (session) => {
+    firstSignal = session.signal;
+    assert.equal(session.remainingMs(), 46000);
+    t.mock.timers.tick(44000);
+    return 'escalate';
+  } });
+  provider.enqueue({ type: 'deferred-stream' });
+  const pending = gateway.runToolSession({ profile: 'chat.tools.reasoning', lifecycle, run: (session) => {
+    assert.equal(session.signal, firstSignal);
+    assert.equal(session.remainingMs(), 2000, 'Derin yeni bütçe alamaz');
+    return session.round({ messages: MESSAGES });
+  } });
+  const rejected = assert.rejects(pending, { code: 'AI_TIMEOUT' });
+  await until(() => Boolean(provider.calls[0]?.emit));
+  t.mock.timers.tick(2000);
+  await rejected;
+  assert.deepEqual(released, [1, 1]);
+  assert.equal(admission.status().active, 0);
+  assert.equal(provider.calls[0].aborted, true);
+  assert.equal(aiTelemetrySnapshot().streams.timeout, 1);
+});
+
 for (const tools of [false, true]) {
   test(`provider inactivity excludes downstream delivery waits (${tools ? 'tool session' : 'chat'})`, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });

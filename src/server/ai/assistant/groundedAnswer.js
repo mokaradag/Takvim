@@ -457,7 +457,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     modelRounds: 0,
     toolsAttempted: false,
     toolsRequested: false,
-    // Bu turda yürütülen okumalar: bildirimden türetilen okuma aynı çağrıyı yinelemez.
+    // Başarılı/kalıcı sonuçlar yinelenmez; geçici hata mevcut tur/çağrı sınırları içinde yinelenebilir.
     attemptedReads: new Set(),
     toolFailureCodes: new Set(),
     repaired: false,
@@ -749,8 +749,13 @@ async function executeRound(turn, executed) {
   turn.route = TURN_ROUTES.ROTA;
   turn.toolFailureCodes.clear();
   turn.toolRounds += 1;
-  for (const call of executed) turn.attemptedReads.add(readKey(call.name, call.args, turn.context.today));
   const toolMessages = await executor.runRound(executed);
+  executed.forEach((call, index) => {
+    const code = toolMessageBody(toolMessages[index])?.error?.code;
+    if (![TOOL_ERROR_CODES.TIMEOUT, TOOL_ERROR_CODES.BUSY, TOOL_ERROR_CODES.DATABASE_UNAVAILABLE].includes(code)) {
+      turn.attemptedReads.add(readKey(call.name, call.args, turn.context.today));
+    }
+  });
   turn.work += 1;
   turn.progress();
   for (const message of toolMessages) {

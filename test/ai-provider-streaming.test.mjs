@@ -571,3 +571,15 @@ test('yinelenen rol ve bitiş parçaları ilerleme değildir: yalnızca durumu i
   assert.equal(types.filter((type) => type === 'progress').length, 3, 'büyüyen ikinci parça, yeni kullanım ve bitiş');
   assert.equal(types.filter((type) => type === 'tool_call_started').length, 1);
 });
+
+test('discarded oversized tool argument fragments cannot renew meaningful progress', async () => {
+  const fragment = (argumentsText) => sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0,
+    function: { arguments: argumentsText } }] } }] });
+  const events = await collect(readChatCompletionStream(bodyFrom([fragment('{'), fragment('12345'), fragment('discarded'),
+    fragment('discarded again'), finish('tool_calls'), 'data: [DONE]\n\n']).stream,
+  { toolCalls: true, limits: { ...AI_STREAM_LIMITS, maxToolArgumentChars: 5 } }));
+  assert.deepEqual(events.map((event) => event.type), ['tool_call_started', 'progress', 'progress', 'done'],
+    'yalnızca ilk aşım ve bitiş durumu değiştirir; atılan parçalar ilerleme değildir');
+  assert.equal(events.at(-1).toolCalls[0].oversize, true);
+  assert.equal(events.at(-1).toolCalls[0].arguments, '');
+});

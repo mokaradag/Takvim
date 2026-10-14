@@ -293,11 +293,13 @@ test('a lone partial task match whose full title the user typed is the named tas
   assert.equal(named.result.outcome, 'grounded');
   assert.deepEqual(named.result.evidence.map((item) => item.id), ['R2'], 'ayrıntı okuması sunucunun çözdüğü kimlikle yapılır');
   assert.match(named.result.text, /^\*\*Rapor %50 \\\[özel\\\] \\_alt\*\* — Açıklama: /);
-  // Model adı sözcükle uzatır ("… _alt görev"): tam ad hiçbir kayda uymaz; adın ilk sözcüğüyle yoklama yapılır ve
-  // tam adı iletide geçen tek aday bildirilen görevdir. "Bulunamadı" denmez.
-  const extended = await turn(t, [planned('Rapor %50 [özel] _alt görev')], { user: 'Rapor %50 [özel] _alt görevinin açıklaması nedir?', allowedTextFields: ['description'] });
-  assert.equal(extended.result.outcome, 'grounded');
-  assert.match(extended.result.text, /^\*\*Rapor %50 \\\[özel\\\] \\_alt\*\* — Açıklama: /);
+  // Yoklamadaki kısa başlık kabul edilen uzun adın kimliği değildir; onay alınmadan ayrıntı okunmaz.
+  const extended = await turn(t, [planned('Rapor %50 [özel] _alt görev'), (input) => {
+    assert.equal(results(input).at(-1).data.titleResolution, 'partial');
+    return reply(JSON.stringify({ kind: 'clarification', evidence: 'R2' }));
+  }], { user: 'Rapor %50 [özel] _alt görevinin açıklaması nedir?', allowedTextFields: ['description'] });
+  assert.equal(extended.result.outcome, 'clarification');
+  assert.equal((extended.stack.db.aiToolLog || []).some((entry) => entry.query === 'task-detail'), false);
   // Liste nüfusunda bulunmayan görev özelliği (açıklama), görevi seçen ayrıntı aracından okunur; açıklamadaki yönerge yalnızca veridir.
   const listed = await turn(t, [{ text: '', toolCalls: [{ id: 'plan', name: 'rota_plan', arguments: JSON.stringify({ intent: 'rota', language: 'tr', request: {
     operation: 'list', metrics: ['task.title', 'task.description'], population: { tool: 'rota_task_search', collection: 'tasks' },

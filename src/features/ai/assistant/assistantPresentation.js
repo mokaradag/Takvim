@@ -133,10 +133,10 @@ export function assistantFailureView(result, now = Date.now()) {
         // Teslim sınırı yanıt kaydedildikten (ve taslağı gösterildikten) sonra da dolabilir: kaydedilmediği söylenmez.
         message: result?.reason === 'DELIVERY_STALLED'
           ? 'Yanıt tarayıcıya iletilemedi. Kaydedildiyse konuşma yeniden açıldığında görünür; yeniden deneyebilirsiniz.'
+          : ['PROVIDER_STALLED', 'GENERATION_STALLED'].includes(result?.reason)
+            ? `Yapay zekâ hizmeti uzun süredir ilerleme göstermediği için yanıt ${result?.partial ? 'yarıda ' : ''}durduruldu ve kaydedilmedi. Yeniden deneyebilirsiniz.`
           : result?.partial
             ? 'Yanıt süre sınırı dolduğu için yarıda kesildi ve kaydedilmedi.'
-          : ['PROVIDER_STALLED', 'GENERATION_STALLED'].includes(result?.reason)
-            ? 'Yapay zekâ hizmeti uzun süredir ilerleme göstermediği için yanıt durduruldu ve kaydedilmedi. Yeniden deneyebilirsiniz.'
             : 'Yapay zekâ hizmeti süre sınırında yanıt vermedi.',
         retryable: true,
         action: null

@@ -228,30 +228,31 @@ export function namedScope(scope, request, textTrusted) {
   const next = new Map((scope || []).map((item) => [item.key, item]));
   const add = (item) => { if (!next.has(item.key)) next.set(item.key, item); };
   for (const entity of request?.entities || []) {
-    const name = typeof entity.text === 'string' && textTrusted(entity.text) ? containmentText(entity.text) : '';
+    const name = typeof entity.query === 'string' && textTrusted(entity.query)
+      ? ['wbs', 'baseline'].includes(entity.type) ? entity.text : searchText(entity.query) : '';
     if (entity.id) add({ key: `${entity.type}#${entity.id}`, type: entity.type, id: entity.id });
     else if (name) add({ key: `${entity.type}:${name}`, type: entity.type, name });
   }
   const filter = request?.filters?.text;
-  const name = typeof filter === 'string' && textTrusted(filter) ? containmentText(filter) : '';
+  const name = typeof filter === 'string' && textTrusted(filter) ? searchText(filter) : '';
   if (name) add({ key: `filter:${name}`, type: 'filter', name });
   return [...next.values()];
 }
 
 /**
- * Düzeltme biçimi onarır, sorunun kapsamını daraltamaz ya da başka bir nüfusa kaydıramaz: önceki
- * kabulün yükümlülüklerinden planla tamamlanan yeni istekte karşılığı olmayanlar. Kimlik aynı türde
- * aynı kimlikle, ad aynı türde (kısaltılmış ya da sözcüklerle uzatılmış) adla karşılanır; görev
- * başlığı metni başlık metniyle ya da o metinle adlandırılan görevle (daha dar) karşılanır.
+ * Düzeltme kabul edilen nüfusu genişletemez ya da varlığı değiştiremez.
+ * Adın arama kimliği aynıdır; metin süzgeci aracın alt dizge yüklemiyle yalnızca daralabilir.
  */
 export function droppedNames(scope, request) {
   const entities = request?.entities || [];
-  const filter = typeof request?.filters?.text === 'string' ? containmentText(request.filters.text) : '';
+  const filter = searchText(request?.filters?.text);
   const kept = (item) => (item.id
     ? entities.some((entity) => entity.type === item.type && entity.id === item.id)
     : entities.some((entity) => (entity.type === item.type || (item.type === 'filter' && entity.type === 'task'))
-      && typeof entity.text === 'string' && prefixRelated(item.name, containmentText(entity.text)))
-      || (item.type === 'filter' && Boolean(filter) && prefixRelated(item.name, filter)));
+      && typeof entity.query === 'string' && (item.type === 'filter'
+        ? searchText(entity.query)?.includes(item.name)
+        : item.name === (['wbs', 'baseline'].includes(entity.type) ? entity.text : searchText(entity.query))))
+      || (item.type === 'filter' && Boolean(filter) && filter.includes(item.name)));
   return (scope || []).filter((item) => !kept(item)).map((item) => item.key);
 }
 
@@ -334,8 +335,7 @@ export function bindRequestEntities(request, entries, selection = null) {
     // Kapsamın bağladığı ad: tam adı kullanıcının iletisinde geçen tek kısmi aday ya da (seri incelemesinde) tek serinin kayıtları.
     for (const item of selection?.named || []) {
       if (item.type !== entity.type || (item.tool && item.tool !== request.population?.tool) || !sameScope(item.projectId, scope)) continue;
-      const uniqueScope = request.entities.filter((other) => other.type === entity.type && prefixRelated(item.text, other.text)).length === 1;
-      if (sameSearch(item.query, entity.query) || (uniqueScope && prefixRelated(item.text, entity.text) && prefixRelated(item.title, entity.text))) found.add(item.id);
+      if (sameSearch(item.query, entity.query) || sameSearch(item.title, entity.query)) found.add(item.id);
     }
     if (found.size === 1) return { ...entity, bound: [...found][0] };
     const sameType = request.entities.filter((item) => item.type === entity.type && item.text);
@@ -354,9 +354,6 @@ export function bindRequestEntities(request, entries, selection = null) {
 
 /** İki metin aracın arama yükleminde aynı arama mı (requestPopulation.canonicalFacets ile aynı kimlik)? */
 const sameSearch = (left, right) => searchText(left) != null && searchText(left) === searchText(right);
-
-/** Kullanıcının adlandırdığı adayın adı ile bildirilen ad aynı adın kısaltılmışı ya da sözcüklerle uzatılmışı mı? */
-const prefixRelated = (title, text) => Boolean(title && text) && (title === text || text.startsWith(`${title} `) || title.startsWith(`${text} `));
 
 /** Ad aramasının çözüm alanı: aracın yalnızca metinle (koşulsuz) yapılan araması adın görünür kayıtlarını tam sayar. */
 const NAME_SEARCHES = Object.freeze({ project: ['rota_project_search', 'resolution'], person: ['rota_person_search', 'resolution'], task: ['rota_task_search', 'titleResolution'] });
@@ -390,9 +387,7 @@ function searchedNone(entries, type, query, projectId = null) {
 const resolutionProjectId = (request, bound, entity) => resolutionProject(request, bound, entity)?.bound ?? null;
 
 /**
- * Tam adı hiçbir görünür kayda uymayan bağlanmamış varlığın yoklama araması (adın ilk sözcüğü):
- * model adı uzatmış olabilir (ör. "… _alt görev"); yoklamanın adaylarından tam adı kullanıcının
- * iletisinde geçen tek aday bildirilen varlıktır.
+ * Tam adı uymayan bağlanmamış varlığın ilk sözcük yoklaması; benzer kısa ad kimlik değildir.
  */
 export function nameProbes(request, entries, selection = null) {
   const bound = bindRequestEntities(request, entries, selection);
