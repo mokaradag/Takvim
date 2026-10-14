@@ -293,63 +293,65 @@ function validateTaskScalars(changes) {
 function validateDependencyScalars(changes) {
   for (let taskIndex = 0; taskIndex < (changes.taskUpserts || []).length; taskIndex += 1) {
     const task = changes.taskUpserts[taskIndex];
-    if (!Array.isArray(task?.deps)) continue;
-    const predecessorIds = new Set();
-    for (let dependencyIndex = 0; dependencyIndex < task.deps.length; dependencyIndex += 1) {
-      const dependency = task.deps[dependencyIndex];
-      if (!dependency || typeof dependency !== 'object' || Array.isArray(dependency)) continue;
-      const path = `taskUpserts[${taskIndex}].deps[${dependencyIndex}]`;
-      const predecessorId = text(dependency.predecessorId);
-      if (predecessorId && predecessorId === text(task.id)) {
-        return issue('SELF_DEPENDENCY', `${path}.predecessorId`, 'Bir görev kendisine bağımlı olamaz.');
-      }
-      if (predecessorId && predecessorIds.has(predecessorId)) {
-        return issue('DUPLICATE_DEPENDENCY', `${path}.predecessorId`, 'Aynı öncül görev bağımlılığı birden fazla kez eklenemez.');
-      }
-      if (predecessorId) predecessorIds.add(predecessorId);
+    for (const [collection, dependencies] of [['deps', task?.deps], ['dependencyChanges.upserts', task?.dependencyChanges?.upserts]]) {
+      if (!Array.isArray(dependencies)) continue;
+      const predecessorIds = new Set();
+      for (let dependencyIndex = 0; dependencyIndex < dependencies.length; dependencyIndex += 1) {
+        const dependency = dependencies[dependencyIndex];
+        if (!dependency || typeof dependency !== 'object' || Array.isArray(dependency)) continue;
+        const path = `taskUpserts[${taskIndex}].${collection}[${dependencyIndex}]`;
+        const predecessorId = text(dependency.predecessorId);
+        if (predecessorId && predecessorId === text(task.id)) {
+          return issue('SELF_DEPENDENCY', `${path}.predecessorId`, 'Bir görev kendisine bağımlı olamaz.');
+        }
+        if (predecessorId && predecessorIds.has(predecessorId)) {
+          return issue('DUPLICATE_DEPENDENCY', `${path}.predecessorId`, 'Aynı öncül görev bağımlılığı birden fazla kez eklenemez.');
+        }
+        if (predecessorId) predecessorIds.add(predecessorId);
 
-      // Gecikme sınırı da motorun ufkudur; `decimal(10,2)` genişliği zamanlama
-      // motorunun temsil ettiği aralığın çok üstündeydi ve aradaki değerler
-      // sessizce SIFIR gecikmeye düşüyordu.
-      const lagDaysIssue = validateNumber(dependency.lagDays, `${path}.lagDays`, 'Bağımlılık gecikme günü', {
-        min: -MAX_WORKING_DAY_SPAN,
-        max: MAX_WORKING_DAY_SPAN,
-        invalidCode: 'DEPENDENCY_LAG_INVALID',
-        rangeCode: 'DEPENDENCY_LAG_INVALID'
-      });
-      if (lagDaysIssue) return lagDaysIssue;
-      const lagValueIssue = validateNumber(dependency.lagValue, `${path}.lagValue`, 'Bağımlılık gecikme değeri', {
-        min: -MAX_WORKING_DAY_SPAN,
-        max: MAX_WORKING_DAY_SPAN,
-        invalidCode: 'DEPENDENCY_LAG_INVALID',
-        rangeCode: 'DEPENDENCY_LAG_INVALID'
-      });
-      if (lagValueIssue) return lagValueIssue;
-      if (dependency.lagUnit != null && dependency.lagUnit !== '' && typeof dependency.lagUnit !== 'string') {
-        return issue('DEPENDENCY_LAG_UNIT_INVALID', `${path}.lagUnit`, 'Bağımlılık gecikme birimi day, week veya month olmalıdır.');
-      }
-      if (text(dependency.lagUnit) && !DEPENDENCY_LAG_UNITS.has(text(dependency.lagUnit))) {
-        return issue('DEPENDENCY_LAG_UNIT_INVALID', `${path}.lagUnit`, 'Bağımlılık gecikme birimi day, week veya month olmalıdır.');
-      }
-      // Birim ÇEVRİLDİKTEN sonra da sınır içinde kalmalıdır: 200 "ay" değeri
-      // tek başına küçük görünür ama 4000 iş gününe karşılık gelir.
-      //
-      // Çevrim, desteklenen EN YOĞUN takvimle (haftanın yedi günü çalışma)
-      // ölçülür. Varsayılan beş günlük takvimle ölçülseydi sınır takvime göre
-      // kayardı: 3000 "hafta" varsayılanda 15 000 iş günü sayılıp geçer, aynı
-      // bağımlılık yedi günlük bir takvimde 21 000 iş gününe karşılık gelir ve
-      // `MAX_WORKING_DAY_SPAN` aşılmış olarak kalıcılaşırdı. Doğrulayıcı görevin
-      // takvimini çözemediği için en kötü durum bağlayıcı alınır.
-      const lagValue = numericValue(dependency.lagValue);
-      if (lagValue.present && lagValue.valid && Math.abs(dependencyLagDays({
-        lagValue: Number(lagValue.value),
-        lagUnit: text(dependency.lagUnit) || 'day'
-      }, MAX_DENSITY_CALENDAR)) > MAX_WORKING_DAY_SPAN) {
-        return issue(
-          'DEPENDENCY_LAG_INVALID',
-          `${path}.lagValue`,
-          `Bağımlılık gecikmesi ${MAX_WORKING_DAY_SPAN} iş gününü aşamaz.`
-        );
+        // Gecikme sınırı da motorun ufkudur; `decimal(10,2)` genişliği zamanlama
+        // motorunun temsil ettiği aralığın çok üstündeydi ve aradaki değerler
+        // sessizce SIFIR gecikmeye düşüyordu.
+        const lagDaysIssue = validateNumber(dependency.lagDays, `${path}.lagDays`, 'Bağımlılık gecikme günü', {
+          min: -MAX_WORKING_DAY_SPAN,
+          max: MAX_WORKING_DAY_SPAN,
+          invalidCode: 'DEPENDENCY_LAG_INVALID',
+          rangeCode: 'DEPENDENCY_LAG_INVALID'
+        });
+        if (lagDaysIssue) return lagDaysIssue;
+        const lagValueIssue = validateNumber(dependency.lagValue, `${path}.lagValue`, 'Bağımlılık gecikme değeri', {
+          min: -MAX_WORKING_DAY_SPAN,
+          max: MAX_WORKING_DAY_SPAN,
+          invalidCode: 'DEPENDENCY_LAG_INVALID',
+          rangeCode: 'DEPENDENCY_LAG_INVALID'
+        });
+        if (lagValueIssue) return lagValueIssue;
+        if (dependency.lagUnit != null && dependency.lagUnit !== '' && typeof dependency.lagUnit !== 'string') {
+          return issue('DEPENDENCY_LAG_UNIT_INVALID', `${path}.lagUnit`, 'Bağımlılık gecikme birimi day, week veya month olmalıdır.');
+        }
+        if (text(dependency.lagUnit) && !DEPENDENCY_LAG_UNITS.has(text(dependency.lagUnit))) {
+          return issue('DEPENDENCY_LAG_UNIT_INVALID', `${path}.lagUnit`, 'Bağımlılık gecikme birimi day, week veya month olmalıdır.');
+        }
+        // Birim ÇEVRİLDİKTEN sonra da sınır içinde kalmalıdır: 200 "ay" değeri
+        // tek başına küçük görünür ama 4000 iş gününe karşılık gelir.
+        //
+        // Çevrim, desteklenen EN YOĞUN takvimle (haftanın yedi günü çalışma)
+        // ölçülür. Varsayılan beş günlük takvimle ölçülseydi sınır takvime göre
+        // kayardı: 3000 "hafta" varsayılanda 15 000 iş günü sayılıp geçer, aynı
+        // bağımlılık yedi günlük bir takvimde 21 000 iş gününe karşılık gelir ve
+        // `MAX_WORKING_DAY_SPAN` aşılmış olarak kalıcılaşırdı. Doğrulayıcı görevin
+        // takvimini çözemediği için en kötü durum bağlayıcı alınır.
+        const lagValue = numericValue(dependency.lagValue);
+        if (lagValue.present && lagValue.valid && Math.abs(dependencyLagDays({
+          lagValue: Number(lagValue.value),
+          lagUnit: text(dependency.lagUnit) || 'day'
+        }, MAX_DENSITY_CALENDAR)) > MAX_WORKING_DAY_SPAN) {
+          return issue(
+            'DEPENDENCY_LAG_INVALID',
+            `${path}.lagValue`,
+            `Bağımlılık gecikmesi ${MAX_WORKING_DAY_SPAN} iş gününü aşamaz.`
+          );
+        }
       }
     }
   }

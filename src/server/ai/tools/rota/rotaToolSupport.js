@@ -70,6 +70,7 @@ export function accessExplanation(access) {
     label: accessLabelOf(level),
     reasons: [...new Set((access?.reasons || []).map(accessReasonLabel))],
     completeTaskView: isCompleteTaskView(access),
+    // Birlikte erişim bayrağıdır; baz plan FULL, bağımlılık görünür uçlarla sınırlıdır.
     dependenciesAndBaselines: level === 'FULL'
   };
 }
@@ -123,7 +124,7 @@ export async function requireVisibleProject(scope, projectId, call) {
   return access;
 }
 
-/** Bağımlılık ve baz plan yalnızca FULL projede (anlık görüntüyle aynı). */
+/** Baz plan gibi proje yönetimi bilgileri yalnızca FULL projede açıktır. */
 export async function requireFullProject(scope, projectId, call) {
   const access = await requireVisibleProject(scope, projectId, call);
   if (access.accessLevel !== 'FULL') throw fullAccessRequired();

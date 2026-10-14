@@ -46,7 +46,8 @@ export async function assertTaskDependencyReconciliationCovered(executor, change
   const taskUpserts = [...(changes.taskUpserts || [])]
     .sort((left, right) => String(left.id).localeCompare(String(right.id)));
   const taskDeleteIds = (changes.taskDeletes || []).map(deleteId).filter(Boolean);
-  const invalidatedPredecessorIds = new Set(taskDeleteIds);
+  // Silmede ilişki temizliği sunucuya aittir; yalnızca proje taşıma uzlaştırılır.
+  const invalidatedPredecessorIds = new Set();
 
   for (const task of taskUpserts) {
     const taskId = id(task.id);

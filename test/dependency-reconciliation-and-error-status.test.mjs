@@ -48,7 +48,7 @@ test('ordered SQL persistence locks and validates dependency reconciliation befo
   assert.match(validation, /MR_TaskDependencies dependency WITH \(UPDLOCK, HOLDLOCK\)/);
   assert.match(validation, /MR_Tasks successor WITH \(UPDLOCK, HOLDLOCK\)/);
   assert.match(validation, /storedProjectId !== nextProjectId/);
-  assert.match(validation, /invalidatedPredecessorIds = new Set\(taskDeleteIds\)/);
+  assert.match(validation, /invalidatedPredecessorIds = new Set\(\)/);
 
   const guardPosition = ordered.indexOf('await assertTaskDependencyReconciliationCovered');
   const commitPosition = ordered.indexOf('return repository.commitChanges');

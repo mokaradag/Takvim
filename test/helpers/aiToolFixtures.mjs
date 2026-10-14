@@ -3,7 +3,7 @@
  *
  * Kapsam haritası (kullanıcı AYSE, sistem yöneticisi DEĞİL, yönetici):
  *   · FULL    — "Radar Modernizasyonu" (manuel proje lideri)
- *   · READ    — "Okuma Projesi" (manuel okuma hibesi; bütün görevler, bağımlılık/baz plan YOK)
+ *   · READ    — "Okuma Projesi" (manuel okuma hibesi; bütün görevler ve görünür bağımlılıklar; baz plan YOK)
  *   · KISMİ   — "Kısmi Proje" (kurumsal; 10 görevden yalnızca 2'sinin sorumlusu)
  *   · YÖNETİM — "Ekip Projesi" (kurumsal; yalnızca astı ZEYNEP'in görevi)
  *   · YOK     — "Gizli Proje" ve etkin olmayan "Arşiv Projesi"

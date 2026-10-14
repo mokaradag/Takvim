@@ -258,8 +258,8 @@ function taskDetail(db, params) {
     Description: description == null ? null : description.slice(0, 1600),
     DescriptionClipped: description != null && description.length > 1600 ? 1 : 0,
     VisibleCreatedBySicil: creatorVisible ? task.CreatedBySicil : null,
-    PredecessorCount: entry.AccessLevel === 'FULL' ? db.taskDependencies.filter((dep) => same(dep.ProjectId, task.ProjectId) && same(dep.TaskId, task.TaskId)).length : null,
-    SuccessorCount: entry.AccessLevel === 'FULL' ? db.taskDependencies.filter((dep) => same(dep.ProjectId, task.ProjectId) && same(dep.PredecessorTaskId, task.TaskId)).length : null,
+    PredecessorCount: db.taskDependencies.filter((dep) => scopeOf(db, { ...params, taskIds: '' }).visible.has(upper(dep.PredecessorTaskId)) && same(dep.ProjectId, task.ProjectId) && same(dep.TaskId, task.TaskId)).length,
+    SuccessorCount: db.taskDependencies.filter((dep) => scopeOf(db, { ...params, taskIds: '' }).visible.has(upper(dep.TaskId)) && same(dep.ProjectId, task.ProjectId) && same(dep.PredecessorTaskId, task.TaskId)).length,
     ParentTitle: parentVisible ? parent.Title : null,
     ProjectName: project.ProjectName,
     ProjectCode: project.ProjectCode,
@@ -353,7 +353,7 @@ function projectDetail(db, params) {
       ProjectTypeName: project.ProjectTypeName, LeadSicil: project.LeadSicil, DataDate: project.DataDate, ...access,
       LeadName: project.LeadSicil == null ? null : personName(db, project.LeadSicil),
       CalendarName: calendar?.Name ?? null,
-      DependencyCount: access.AccessLevel === 'FULL' ? db.taskDependencies.filter((dep) => same(dep.ProjectId, project.ProjectId)).length : null,
+      DependencyCount: db.taskDependencies.filter((dep) => scope.visible.has(upper(dep.TaskId)) && scope.visible.has(upper(dep.PredecessorTaskId)) && same(dep.ProjectId, project.ProjectId)).length,
       BaselineCount: access.AccessLevel === 'FULL' ? db.baselines.filter((row) => same(row.ProjectId, project.ProjectId)).length : null,
       WbsNodeCount: access.AccessLevel === 'FULL' || access.HasReadGrant || access.IsTaskScoped
         ? db.wbs.filter((node) => same(node.ProjectId, project.ProjectId)).length
@@ -402,14 +402,14 @@ function wbs(db, params) {
 function dependencies(db, params) {
   const scope = scopeOf(db, params);
   const access = scope.projects.get(upper(params.projectId));
-  if (!access || access.AccessLevel !== 'FULL') return [[], [], [{ TaskCount: 0, OpenCount: 0 }], []];
+  if (!access) return [[], [], [{ TaskCount: 0, OpenCount: 0 }], []];
   const focus = params.focusTaskId ? upper(params.focusTaskId) : null;
   const rows = db.taskDependencies
-    .filter((dep) => same(dep.ProjectId, params.projectId) && (!focus || same(dep.TaskId, focus) || same(dep.PredecessorTaskId, focus)))
+    .filter((dep) => scope.visible.has(upper(dep.TaskId)) && scope.visible.has(upper(dep.PredecessorTaskId)) && same(dep.ProjectId, params.projectId) && (!focus || same(dep.TaskId, focus) || same(dep.PredecessorTaskId, focus)))
     .slice(0, Number(params.maxRows))
     .map((dep) => ({ TaskId: dep.TaskId, PredecessorTaskId: dep.PredecessorTaskId, DependencyType: dep.DependencyType, LagDays: dep.LagDays, LagValue: dep.LagValue, LagUnit: dep.LagUnit }));
   const involved = new Set([focus, ...rows.flatMap((row) => [upper(row.TaskId), upper(row.PredecessorTaskId)])].filter(Boolean));
-  const projectTasks = db.tasks.filter((task) => same(task.ProjectId, params.projectId));
+  const projectTasks = db.tasks.filter((task) => same(task.ProjectId, params.projectId) && scope.visible.has(upper(task.TaskId)));
   return [
     rows,
     projectTasks.filter((task) => focus ? involved.has(upper(task.TaskId)) : scope.visible.has(upper(task.TaskId))).map((task) => ({
@@ -417,7 +417,7 @@ function dependencies(db, params) {
       TargetFinish: task.TargetFinish, IsMilestone: task.IsMilestone
     })),
     [{ TaskCount: projectTasks.length, OpenCount: projectTasks.filter((task) => canonicalStatus(task.Status) !== 'done').length }],
-    focus ? [] : populationRows([...scope.visible.values()])
+    populationRows([...scope.visible.values()])
   ];
 }
 
@@ -519,7 +519,7 @@ export function runAiToolQuery(db, sqlText, params) {
   if (marker[1] !== 'wbs-selector' && scopeOf(db, params).projects.size >= Number(params.analysisMaxRows)) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
   // Independently enforce the SQL population budget before computing result sets.
   const boundedTaskQueries = new Set(['task-facts', 'task-detail', 'portfolio', 'project-detail', 'wbs', 'baseline']);
-  if (boundedTaskQueries.has(marker[1]) || (marker[1] === 'dependencies' && !params.focusTaskId)) {
+  if (boundedTaskQueries.has(marker[1]) || marker[1] === 'dependencies') {
     const scope = scopeOf(db, params);
     const cap = Number(params.analysisMaxRows);
     const tooLarge = () => { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; };

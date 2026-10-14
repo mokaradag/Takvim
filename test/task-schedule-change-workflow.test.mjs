@@ -628,7 +628,7 @@ test('0007 göçü henüz çalışmamışsa uygulama boş tarih talebi listesiyl
   }
 });
 
-test('sınırlı oluşturucu kapsam dışı öncül bağı olan görevi silemez', async () => {
+test('sınırlı oluşturucu görevi silerken kapsam dışı öncülün içeriğini değiştirmez', async () => {
   const related = seed({
     tasks: [
       seed().tasks[0],
@@ -656,12 +656,10 @@ test('sınırlı oluşturucu kapsam dışı öncül bağı olan görevi silemez'
   const stack = await createActualStack(related, { sicil: CREATOR, corporateWbsSource: false });
   try {
     const task = stack.state.tasks.find((entry) => entry.id === TASK_ID);
-    await assert.rejects(
-      stack.repository.commitChanges({ taskDeletes: [{ id: TASK_ID, version: task.version }] }),
-      (error) => error.code === 'FORBIDDEN' && /yetki alanınız dışındaki/.test(error.message)
-    );
-    assert.equal(stack.db.tasks.some((entry) => String(entry.TaskId).toLowerCase() === TASK_ID), true);
-    assert.equal(stack.db.taskDependencies.length, 1);
+    await stack.repository.commitChanges({ taskDeletes: [{ id: TASK_ID, version: task.version }] });
+    assert.equal(stack.db.tasks.some((entry) => String(entry.TaskId).toLowerCase() === TASK_ID), false);
+    assert.equal(stack.db.tasks.some((entry) => String(entry.TaskId).toLowerCase() === PREDECESSOR_ID), true);
+    assert.equal(stack.db.taskDependencies.length, 0);
   } finally {
     await stack.dispose();
   }
@@ -712,7 +710,7 @@ test('görev silme, yıkıcı deyimlerden önce görev ve ilişki aralıkların�
   const scopeBody = source.slice(scopeStart, scopeEnd);
   assert.match(body, /taskRowForUpdate\(executor, taskId\)/);
   assert.match(body, /taskAssigneeSicilsForUpdate\(executor, taskId\)/);
-  assert.match(body, /hasRelatedTasksOutsideScope\(executor, actor, taskId\)/);
+  assert.match(body, /hasRelatedTasksOutsideScope\(executor, actor, taskId, \{ dependencies: false \}\)/);
   assert.match(scopeBody, /MR_TaskDependencies WITH \(UPDLOCK, HOLDLOCK\).*PredecessorTaskId = @taskId/s);
   assert.match(scopeBody, /MR_TaskDependencies WITH \(UPDLOCK, HOLDLOCK\)[\s\S]*WHERE TaskId = @taskId/);
   assert.match(scopeBody, /MR_Tasks WITH \(UPDLOCK, HOLDLOCK\).*RecurrenceParentTaskId = @taskId/s);

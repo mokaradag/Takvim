@@ -3,19 +3,19 @@ import { prepareTaskLifecycleIntent } from '../../state/appState.js';
 import { submitAssignmentCoordination } from '../../data/api/assignmentCoordinationClient.js';
 import { scheduleRequestItems } from '../schedule-change/scheduleRequestQueryState.js';
 import { useScheduleRequestQuery } from '../schedule-change/useScheduleRequestQuery.js';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  useAllPeople, useAllProjects, useAllTasks, useCalendars, useTaskAssignmentScope, useCurrentUser,
+  useAllPeople, useAllProjects, useAllTasks, useCalendars, useAssignmentScopeSicils, useTaskAssignmentScope, useCurrentUser,
   useScheduleRequests, useSelectedTask, useTaskCreationDraft, useTaskActions
 } from '../../state/hooks';
-import { projectWriteFailure, resolveTaskMutationAccess } from '../../state/projectWritePolicy.js';
+import { indexTaskWriteState, projectWriteFailure, resolveTaskMutationAccess } from '../../state/projectWritePolicy.js';
 import { resolveTaskEditorAccess, taskEditorPatch } from '../../state/taskEditorCommit.js';
 import { ReadOnlyTaskDrawer } from './ReadOnlyTaskDrawer';
 import { SimpleTaskDrawer } from './SimpleTaskDrawer';
 import { TaskDrawer } from './TaskDrawer';
 import { normalizeTaskAssigneePatch } from './taskAssigneePatch.js';
 
-function TaskEditor({ task, simple, creationDraft, tasks, projects, assignableProjects, people, currentUser, scheduleRequests }) {
+function TaskEditor({ task, simple, creationDraft, tasks, projects, assignableProjects, people, currentUser, scheduleRequests, dateFormat }) {
   const { closeTask, saveTaskEdits, deleteTask, submitScheduleChange, updateTaskDraft, cancelTaskDraft, saveTaskDraft, registerTaskEditorDraft, reloadData } = useTaskActions();
   const [displayTask, setDisplayTask] = useState(task);
   const [saving, setSaving] = useState(false);
@@ -37,7 +37,13 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
   )), [registerTaskEditorDraft, task.id]);
   const isCreating = creationDraft?.task?.id === task.id;
   const calendars = useCalendars();
-  const writeState = { projects, tasks, assignableProjects, currentUser, calendars };
+  const assignmentScopeSicils = useAssignmentScopeSicils();
+  const writeState = useMemo(() => indexTaskWriteState({ projects, tasks, assignableProjects, currentUser, calendars, assignmentScopeSicils }), [projects, tasks, assignableProjects, currentUser, calendars, assignmentScopeSicils]);
+  const editableIds = useMemo(() => new Set(tasks.filter((candidate) => {
+    const access = resolveTaskMutationAccess(writeState, candidate.id);
+    return access.ok && access.canManageDependencies;
+  }).map((candidate) => candidate.id)), [writeState, tasks]);
+  const canEditTaskDependencies = useCallback((candidate) => editableIds.has(candidate?.id), [editableIds]);
   const initialAccess = resolveTaskMutationAccess(writeState, task.id, {});
   const draftAccess = isCreating ? initialAccess : resolveTaskEditorAccess(writeState, task.id, pendingRef.current.get(task.id)?.patch);
 
@@ -76,7 +82,8 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
       for (const id of pendingRef.current.keys()) if (id !== task.id) pendingRef.current.delete(id);
     }
     const original = tasks.find((item) => item.id === taskId);
-    const entry = { id: taskId, version: previous?.version || original?.version, patch: combined };
+    const entry = { id: taskId, version: previous?.version || original?.version, patch: combined,
+      observedDependencies: previous?.observedDependencies || (Object.prototype.hasOwnProperty.call(patch, 'deps') ? original?.deps : undefined) };
     if (Object.keys(taskEditorPatch(original, combined)).length) pendingRef.current.set(taskId, entry);
     else pendingRef.current.delete(taskId);
     setDirty(pendingRef.current.size > 0);
@@ -118,7 +125,9 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
       } else {
         const previous = pendingRef.current.get(task.id);
         const edits = new Map(pendingRef.current);
-        edits.set(task.id, { id: task.id, version: previous?.version || task.version, patch: taskEditorPatch(task, input) });
+        const patch = taskEditorPatch(task, input);
+        if (!Object.prototype.hasOwnProperty.call(previous?.patch || {}, 'deps')) delete patch.deps;
+        edits.set(task.id, { id: task.id, version: previous?.version || task.version, observedDependencies: previous?.observedDependencies, patch });
         result = await saveTaskEdits([...edits.values()], {
           generateSeries: seriesRef.current, ...saveOptions, taskId: task.id, syncKeywordCatalog: simple,
           onRebase: (rebased) => {
@@ -182,21 +191,19 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
   return simple ? <SimpleTaskDrawer {...common} /> : <TaskDrawer
     {...common}
     tasks={tasks}
+    dateFormat={dateFormat}
     onUpdateRelatedTask={onUpdate}
     generateSeries={generateSeries}
     onPrepareSeries={() => { seriesRef.current = true; setGenerateSeries(true); return { ok: true, staged: true }; }}
     canManageRecurrence={isCreating ? Boolean(creationDraft.scope) : draftAccess.canManageRecurrence}
     canManageStructure={isCreating ? creationDraft.scope === 'FULL' : draftAccess.canManageStructure}
     canManageDependencies={isCreating ? Boolean(creationDraft.scope) : draftAccess.canManageDependencies}
-    canEditTaskDependencies={(candidate) => {
-      const access = resolveTaskEditorAccess(writeState, candidate.id);
-      return access.ok && access.canManageDependencies;
-    }}
+    canEditTaskDependencies={canEditTaskDependencies}
     canChooseWbs={isCreating ? Boolean(creationDraft.scope) : draftAccess.canChooseWbs}
   />;
 }
 
-export function TaskDetailOverlay({ simple = false }) {
+export function TaskDetailOverlay({ simple = false, dateFormat }) {
   const task = useSelectedTask();
   const creationDraft = useTaskCreationDraft();
   const tasks = useAllTasks();
@@ -208,5 +215,5 @@ export function TaskDetailOverlay({ simple = false }) {
   const requestQuery = useScheduleRequestQuery({ tab: 'sent', status: 'PENDING', taskId: task?.id }, Boolean(task?.id && creationDraft?.task?.id !== task.id));
   const scheduleRequests = scheduleRequestItems(previewRequests, requestQuery);
   if (!task) return null;
-  return <TaskEditor key={task.id} {...{ task, simple, creationDraft, tasks, projects, assignableProjects, people, currentUser, scheduleRequests }} />;
+  return <TaskEditor key={task.id} {...{ task, simple, creationDraft, tasks, projects, assignableProjects, people, currentUser, scheduleRequests, dateFormat }} />;
 }

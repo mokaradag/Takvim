@@ -76,10 +76,10 @@ export function taskAssignableProjects(state = {}) {
 export function taskCreationScopeInProject(state = {}, value = null) {
   const id = projectId(value);
   if (!id) return null;
-  const visible = findProject(state.projects, id);
+  const visible = state.taskWriteIndex ? state.taskWriteIndex.projects.get(id) : findProject(state.projects, id);
   if (canWriteProject(visible)) return 'FULL';
-  if ((state.assignableProjects || []).some((project) => String(project.id) === id)) return 'ASSIGNMENT';
-  if (assigneeTaskCreateProjects(state).some((project) => String(project.id) === id)) return 'ASSIGNEE_CREATE';
+  if (state.taskWriteIndex ? state.taskWriteIndex.assignable.has(id) : (state.assignableProjects || []).some((project) => String(project.id) === id)) return 'ASSIGNMENT';
+  if (state.taskWriteIndex ? state.taskWriteIndex.ownProjects.has(id) : assigneeTaskCreateProjects(state).some((project) => String(project.id) === id)) return 'ASSIGNEE_CREATE';
   return null;
 }
 
@@ -91,14 +91,15 @@ export function canCreateTasksInProject(state = {}, value = null) {
 export function canAssignTasksInProject(state = {}, projectId = null) {
   const id = projectId == null || projectId === '' ? null : String(projectId);
   if (!id) return false;
-  const visible = findProject(state.projects, id);
+  const visible = state.taskWriteIndex ? state.taskWriteIndex.projects.get(id) : findProject(state.projects, id);
   if (canWriteProject(visible)) return true;
-  return (state.assignableProjects || []).some((project) => String(project.id) === id);
+  return state.taskWriteIndex ? state.taskWriteIndex.assignable.has(id) : (state.assignableProjects || []).some((project) => String(project.id) === id);
 }
 
 function findAssignableProject(state = {}, value = null) {
   const id = projectId(value);
   if (!id) return null;
+  if (state.taskWriteIndex) return state.taskWriteIndex.projects.get(id) || state.taskWriteIndex.assignable.get(id) || null;
   return taskAssignableProjects(state).find((project) => String(project.id) === id) || null;
 }
 
@@ -130,8 +131,21 @@ export function resolveTaskCreationAccess(state = {}, requestedProjectId = null)
   };
 }
 
+/** Toplu seçicide aynı yetki kararını doğrusal indekslerle çalıştırır. */
+export function indexTaskWriteState(state) {
+  return { ...state, taskWriteIndex: {
+    tasks: new Map((state.tasks || []).map((task) => [String(task.id), task])),
+    projects: new Map((state.projects || []).map((project) => [String(project.id), project])),
+    assignable: new Map((state.assignableProjects || []).map((project) => [String(project.id), project])),
+    ownProjects: new Set((state.tasks || []).filter((task) => task.isCurrentUserAssignee).map((task) => String(task.projectId))),
+    assignmentSicils: new Set((state.assignmentScopeSicils || []).map(String)),
+    recurrenceParents: new Set((state.tasks || []).map((task) => String(task.recurrenceParentId || '')))
+  } };
+}
+
 export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
-  const task = (state.tasks || []).find((item) => String(item.id) === String(taskId)) || null;
+  const task = state.taskWriteIndex ? state.taskWriteIndex.tasks.get(String(taskId))
+    : (state.tasks || []).find((item) => String(item.id) === String(taskId)) || null;
   if (!task) {
     return { ok: false, code: 'TASK_NOT_FOUND', field: 'taskId', message: 'Güncellenecek görev bulunamadı.' };
   }
@@ -139,7 +153,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
   // Kaynak proje görev atama kapsamında da olabilir: yönetici, kendi
   // personeline tanımladığı görevi düzenleyebilmelidir. Görevin kalıcı
   // sorumlusu ise yalnızca bu görev için dar bir içerik/ilerleme hakkı alır.
-  const visibleSourceProject = findProject(state.projects, task.projectId);
+  const visibleSourceProject = state.taskWriteIndex ? state.taskWriteIndex.projects.get(String(task.projectId)) : findProject(state.projects, task.projectId);
   const sourceProject = visibleSourceProject || findAssignableProject(state, task.projectId);
   const hasFullSourceProject = canWriteProject(visibleSourceProject);
   const hasProjectTaskWrite = canAssignTasksInProject(state, task.projectId);
@@ -153,12 +167,15 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
     && String(task.assigneeIds[0]) === currentUserId
     && (isTaskCreator || Boolean(task.isCurrentUserAssignee))
     && canCreateTasksInProject(state, task.projectId);
-  const hasRecurrenceChildren = (state.tasks || []).some((item) => (
+  const hasRecurrenceChildren = state.taskWriteIndex ? state.taskWriteIndex.recurrenceParents.has(String(task.id)) : (state.tasks || []).some((item) => (
     String(item?.recurrenceParentId || '') === String(task.id)
   ));
   const canEditSelfRecurrence = selfRecurrence && !hasRecurrenceChildren;
   const limitedCreator = isTaskCreator && !hasFullSourceProject;
-  const creatorCanAssign = limitedCreator && hasProjectTaskWrite && !hasHiddenAssignees;
+  const assignmentSicils = state.taskWriteIndex?.assignmentSicils || new Set((state.assignmentScopeSicils || []).map(String));
+  const assignmentListInScope = !Array.isArray(state.assignmentScopeSicils)
+    || (task.assigneeIds || []).every((id) => assignmentSicils.has(String(id)));
+  const creatorCanAssign = limitedCreator && hasProjectTaskWrite && !hasHiddenAssignees && assignmentListInScope;
   const assigneeWorkOnly = Boolean(task.isCurrentUserAssignee) && !limitedCreator
     && (!hasProjectTaskWrite || (hasHiddenAssignees && !hasFullSourceProject));
   const canManageRecurrence = hasFullSourceProject || selfRecurrence;
@@ -308,7 +325,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
   // Atama kataloğu kaydı accessLevel taşımayabilir; bu, Demo projesi gibi FULL
   // sayılacağı anlamına gelmez. Tam yetki yalnızca görünür proje kümesindeki
   // kaynak ve hedef kayıtlarından türetilir.
-  const visibleDestinationProject = findProject(state.projects, destinationProject?.id);
+  const visibleDestinationProject = state.taskWriteIndex ? state.taskWriteIndex.projects.get(String(destinationProject?.id)) : findProject(state.projects, destinationProject?.id);
   const full = hasFullSourceProject && canWriteProject(visibleDestinationProject);
   // Görevin SORUMLUSU, atama kapsamı da taşısa, kendi plan ve gerçekleşen
   // tarihlerini doğrudan yönetir: işi yapan kişidir ve sunucu da aynı kararı

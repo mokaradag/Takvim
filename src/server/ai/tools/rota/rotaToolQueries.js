@@ -103,6 +103,13 @@ const SCOPE_TASK_IDS = `
     WHERE @isAdmin = 0 AND TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value))) IS NOT NULL;
 `;
 
+const visibleDependencyEndpoint = (expression) => `EXISTS (
+  SELECT 1 FROM dbo.MR_Tasks endpoint
+  JOIN #AiScopeProjects endpointProject ON endpointProject.ProjectId = endpoint.ProjectId
+  WHERE endpoint.TaskId = ${expression} AND (endpointProject.AccessLevel = 'FULL' OR endpointProject.HasReadGrant = 1
+    OR EXISTS (SELECT 1 FROM #AiScopeTaskIds endpointScope WHERE endpointScope.TaskId = endpoint.TaskId))
+)`;
+
 /**
  * Görünür görevler: FULL ve READ projelerinde projenin bütün görevleri,
  * kısmi projede yalnızca kişisel kapsamdaki görevler. `IdentityBase`, anlık
@@ -341,7 +348,7 @@ ${visibleTasks()}
 /**
  * Tek görevin ayrıntısı. Görev görünür değilse hiçbir satır dönmez (var olmayan
  * görevle aynı sonuç). Oluşturan kimliği anlık görüntüdeki kuralla, bağımlılık
- * sayıları yalnızca FULL projede, seri şablonunun adı yalnızca şablon da
+ * sayıları yalnızca görünür uçlar arasında, seri şablonunun adı yalnızca şablon da
  * görünürse döner. İş dağılım zinciri, görünür görevin kendi düğümünden köke
  * kadardır (görünür görevin zinciri her kapsamda görünürdür).
  */
@@ -357,12 +364,12 @@ ${ASSIGNMENT_FACTS}
     CASE WHEN visible.IdentityBase = 1
       OR EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil)
     THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
-    CASE WHEN visible.AccessLevel = 'FULL' THEN (
-      SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = t.ProjectId AND d.TaskId = t.TaskId) bounded
-    ) ELSE NULL END AS PredecessorCount,
-    CASE WHEN visible.AccessLevel = 'FULL' THEN (
-      SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = t.ProjectId AND d.PredecessorTaskId = t.TaskId) bounded
-    ) ELSE NULL END AS SuccessorCount,
+    (SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present
+      FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = t.ProjectId AND d.TaskId = t.TaskId
+        AND ${visibleDependencyEndpoint('d.PredecessorTaskId')}) bounded) AS PredecessorCount,
+    (SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present
+      FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = t.ProjectId AND d.PredecessorTaskId = t.TaskId
+        AND ${visibleDependencyEndpoint('d.TaskId')}) bounded) AS SuccessorCount,
     CASE WHEN t.RecurrenceParentTaskId IS NOT NULL AND (visible.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR EXISTS (
       SELECT 1 FROM #AiScopeTasks s WHERE s.TaskId = t.RecurrenceParentTaskId
     )) THEN parent.Title ELSE NULL END AS ParentTitle,
@@ -470,7 +477,7 @@ ${visibleTasks()}
 
 /**
  * Tek proje künyesi: proje satırı, etiketler, takvim ve lider adı, görünür
- * görev toplamları ve (yalnızca FULL projede) bağımlılık ile baz plan sayıları.
+ * görünür görev/ilişki toplamları ve yalnızca FULL projede baz plan sayıları.
  */
 export const AI_TOOL_PROJECT_DETAIL_SQL = `/* rota-ai-tool:project-detail */
 ${SCOPE_PROJECTS}
@@ -479,9 +486,10 @@ ${visibleTasks()}
     v.AccessLevel, v.HasReadGrant, v.IsTaskScoped,
     NULLIF(LTRIM(RTRIM(lead.DisplayName)), N'') AS LeadName,
     COALESCE(projectCalendar.Name, defaultCalendar.Name) AS CalendarName,
-    CASE WHEN v.AccessLevel = 'FULL' THEN (
-      SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present FROM dbo.MR_TaskDependencies d WHERE d.ProjectId = v.ProjectId) bounded
-    ) ELSE NULL END AS DependencyCount,
+    (SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present FROM dbo.MR_TaskDependencies d
+      JOIN #AiTasks successor ON successor.TaskId = d.TaskId
+      JOIN #AiTasks predecessor ON predecessor.TaskId = d.PredecessorTaskId
+      WHERE d.ProjectId = v.ProjectId) bounded) AS DependencyCount,
     CASE WHEN v.AccessLevel = 'FULL' THEN (
       SELECT COUNT(*) FROM (SELECT TOP (@analysisMaxRows) 1 AS Present FROM dbo.MR_Baselines b WHERE b.ProjectId = v.ProjectId) bounded
     ) ELSE NULL END AS BaselineCount,
@@ -637,20 +645,18 @@ ${visibleTasks("@wbsId IS NULL OR EXISTS (SELECT 1 FROM #AiWbsFocus focus WHERE 
   DROP TABLE #AiWbsFocus, #AiRequiredWbs, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**
- * Bağımlılık ilişkileri — yalnızca FULL projede (anlık görüntüyle aynı).
+ * Bağımlılık ilişkileri — iki uç da görünür olduğunda (anlık görüntüyle aynı).
  * Kritik yol HESAPLANMAZ; yalnızca kayıtlı ilişkiler ve kapsama sayıları döner.
  */
 export const AI_TOOL_DEPENDENCIES_SQL = `/* rota-ai-tool:dependencies */
 ${SCOPE_PROJECTS}
-  IF @focusTaskId IS NULL
-  BEGIN
 ${visibleTasks()}
-  END
   DROP TABLE IF EXISTS #AiDependencies;
   SELECT TOP (@maxRows) d.TaskId, d.PredecessorTaskId, d.DependencyType, d.LagDays, d.LagValue, d.LagUnit
   INTO #AiDependencies
   FROM dbo.MR_TaskDependencies d
-  JOIN #AiScopeProjects v ON v.ProjectId = d.ProjectId AND v.AccessLevel = 'FULL'
+  JOIN #AiTasks successor ON successor.TaskId = d.TaskId
+  JOIN #AiTasks predecessor ON predecessor.TaskId = d.PredecessorTaskId
   WHERE d.ProjectId = @projectId
     AND (@focusTaskId IS NULL OR d.TaskId = @focusTaskId OR d.PredecessorTaskId = @focusTaskId)
   ORDER BY d.TaskId, d.PredecessorTaskId;
@@ -659,7 +665,7 @@ ${visibleTasks()}
 
   SELECT t.TaskId, t.Title, t.Status, t.PlannedStart, t.PlannedFinish, t.TargetFinish, t.IsMilestone
   FROM dbo.MR_Tasks t
-  JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'FULL'
+  JOIN #AiTasks visibleTask ON visibleTask.TaskId = t.TaskId
   WHERE t.ProjectId = @projectId
     AND ((@focusTaskId IS NULL AND EXISTS (SELECT 1 FROM #AiTasks visible WHERE visible.TaskId = t.TaskId))
       OR t.TaskId = @focusTaskId OR EXISTS (
@@ -668,7 +674,7 @@ ${visibleTasks()}
   SELECT COUNT(*) AS TaskCount,
     COALESCE(SUM(CASE WHEN ${STATUS_SQL} <> 'done' THEN 1 ELSE 0 END), 0) AS OpenCount
   FROM dbo.MR_Tasks t
-  JOIN #AiScopeProjects v ON v.ProjectId = t.ProjectId AND v.AccessLevel = 'FULL'
+  JOIN #AiTasks visibleTask ON visibleTask.TaskId = t.TaskId
   WHERE @focusTaskId IS NULL AND t.ProjectId = @projectId
     AND EXISTS (SELECT 1 FROM #AiTasks visible WHERE visible.TaskId = t.TaskId);
   SELECT visible.TaskId, visible.ProjectId FROM #AiTasks visible;

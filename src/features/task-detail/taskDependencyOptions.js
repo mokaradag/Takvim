@@ -1,14 +1,20 @@
-import { fmt } from '../../scheduling/dates/index.js';
+import { fmtDisplayDate, getAppDateDisplayFormat, parseDate, TR_MONTHS } from '../../scheduling/dates/index.js';
 
 /** Seçenek künyeleri arama tuşlarında değil, görev listesi değişince hazırlanır. */
-export function buildTaskDependencyOptions(tasks, wbs = []) {
+export function buildTaskDependencyOptions(tasks, wbs = [], dateFormat = getAppDateDisplayFormat()) {
+  const formatDate = (value) => {
+    if (!value) return '—';
+    const date = parseDate(value);
+    return dateFormat === 'dd/mm/yyyy' ? fmtDisplayDate(date)
+      : `${String(date.getDate()).padStart(2, '0')} ${TR_MONTHS[date.getMonth()]} ${date.getFullYear()}`;
+  };
   const nodes = new Map(wbs.map((node) => [node.id, node]));
   const names = new Map();
   for (const task of tasks) names.set(task.task, (names.get(task.task) || 0) + 1);
   const options = tasks.map((task) => {
     const node = nodes.get(task.wbsId);
-    const start = fmt(task.plannedStart, 'dd MMM yyyy');
-    const finish = fmt(task.plannedFinish, 'dd MMM yyyy');
+    const start = formatDate(task.plannedStart);
+    const finish = formatDate(task.plannedFinish);
     const dates = `${start} → ${finish}`;
     const context = [node?.code, dates].filter(Boolean);
     if (names.get(task.task) > 1) context.push(task.keyword, (task.sorumlu || []).join(', '));

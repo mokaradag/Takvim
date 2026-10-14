@@ -149,14 +149,16 @@ export function normalizeTaskReferences(task, context = {}) {
   const hasCanonicalAssigneeIds = Array.isArray(task.assigneeIds)
     && (task.assigneeIds.length > 0 || canonicalAssigneePatch || explicitAssigneeNames.length === 0);
   const assigneeIds = hasCanonicalAssigneeIds
-    ? [...new Set(task.assigneeIds.map(String).filter((id) => peopleById.has(id)))]
+    ? [...new Set(task.assigneeIds.map(String).filter((id) => peopleById.has(id)
+      || (task.assigneeCount != null && Array.isArray(task.assigneeDisplayNames))))]
     : [...new Set(explicitAssigneeNames.map((name) => peopleByName.get(name)?.id).filter(Boolean))];
   const directoryAssigneeNames = hasCanonicalAssigneeIds
     ? assigneeIds.map((id) => peopleById.get(id)?.name).filter(Boolean)
     : explicitAssigneeNames.filter((name) => peopleByName.has(name));
   const hasTaskScopedCoAssignees = taskScopedAssigneeNames.length > 0
     && Number(task.assigneeCount ?? assigneeIds.length) > assigneeIds.length;
-  const assigneeNames = hasTaskScopedCoAssignees ? taskScopedAssigneeNames : directoryAssigneeNames;
+  const assigneeNames = hasTaskScopedCoAssignees || (hasCanonicalAssigneeIds && !canonicalAssigneePatch && taskScopedAssigneeNames.length)
+    ? taskScopedAssigneeNames : directoryAssigneeNames;
 
   const requestedWbs = task.wbsId ? wbsById.get(task.wbsId) : null;
   const validRequestedWbs = requestedWbs && requestedWbs.projectId === project?.id ? requestedWbs : null;

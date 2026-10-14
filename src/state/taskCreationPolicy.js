@@ -4,7 +4,7 @@ import { WORKSPACE_MODE_PROJECT } from './selectors/workspaceSelectors.js';
 
 const ASSIGNEE_TASK_CREATE_FIELDS = new Set([
   'task', 'title', 'description', 'keyword', 'status', 'priority', 'progress',
-  'wbsId', 'plannedStart', 'plannedFinish', 'targetFinish', 'recurrence', 'actualStart', 'actualFinish'
+  'deps', 'wbsId', 'plannedStart', 'plannedFinish', 'targetFinish', 'recurrence', 'actualStart', 'actualFinish'
 ]);
 
 /**
@@ -76,7 +76,7 @@ export async function executeTaskCreation({ state = {}, input = null, id, mutate
         calendarId: null,
         assigneeIds: currentUserId ? [currentUserId] : [],
         sorumlu: currentUserId && currentUserName ? [currentUserName] : [],
-        deps: [],
+        deps: scopedInput.deps || [],
         recurrence: scopedInput.recurrence || null,
         recurrenceParentId: null,
         recurrenceOccurrenceDate: null,

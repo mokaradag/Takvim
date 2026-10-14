@@ -4,76 +4,101 @@ import { sql } from '../db/pool.js';
 import { MAX_COMMIT_TASK_DEPENDENCIES, MAX_COMMIT_TOTAL_DEPENDENCIES } from './commitChangeValidation.js';
 
 export const TASK_DEPENDENCY_CONTEXT = Symbol('taskDependencyContext');
-
 const key = (value) => canonicalActualId(value) ?? String(value || '');
 const hasFullAccess = (actor, projectId) => actor.isSystemAdmin
   || actor.effective.access.get(key(projectId))?.accessLevel === 'FULL';
 
-function canReadTask(actor, taskId, projectId) {
-  return hasFullAccess(actor, projectId)
-    || actor.effective.access.get(key(projectId))?.reasons.includes('MANUAL_GRANT')
-    || actor.effective.partialTaskIds.has(key(taskId));
+function canReadTask(actor, row) {
+  if (!row) return false;
+  return hasFullAccess(actor, row.ProjectId)
+    || actor.effective.access.get(key(row.ProjectId))?.reasons.includes('MANUAL_GRANT')
+    || actor.effective.partialTaskIds.has(key(row.TaskId));
 }
 
-/** Kısmi görev ağı yalnızca görünür kenarları değiştirir; gizli kenarlar korunur. */
+/** Görevler önce kilitlenir; içerik kaydı ve açık ilişki deltası ayrı uygulanır. */
 export async function prepareScopedTaskDependencies(executor, actor, changes) {
   const upserts = changes.taskUpserts || [];
-  const scoped = upserts.filter((task) => !hasFullAccess(actor, task.projectId));
-  if (!scoped.length) return changes;
+  if (!upserts.length && !(changes.taskDeletes || []).length) return changes;
+  const taskIds = new Set([
+    ...upserts.map((task) => key(task.id)),
+    ...(changes.taskDeletes || []).map((task) => key(task.id)),
+    ...upserts.flatMap((task) => [task.recurrenceParentId,
+      ...(task.dependencyMutation === false ? [] : (task.dependencyChanges?.upserts || task.deps || []).map((dep) => dep.predecessorId)),
+      ...(task.dependencyMutation === false && task.version ? [] : task.dependencyChanges?.removals || [])].filter(Boolean).map(key))
+  ]);
   const req = executor.request();
-  req.input('scopedDependencyTaskIds', sql.NVarChar(sql.MAX), scoped.map((task) => key(task.id)).sort().join(','));
+  req.input('scopedDependencyTaskIds', sql.NVarChar(sql.MAX), [...taskIds].sort().join(','));
+  req.input('dependencyOwnerTaskIds', sql.NVarChar(sql.MAX), [...upserts.map((task) => key(task.id)), ...(changes.taskDeletes || []).map((task) => key(task.id))].sort().join(','));
+  req.input('dependencyProjectIds', sql.NVarChar(sql.MAX), [...new Set(upserts.map((task) => key(task.projectId)))].sort().join(','));
   const result = await req.query(`
+    SELECT ProjectId FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK)
+    WHERE ProjectId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@dependencyProjectIds, ','))
+      OR ProjectId IN (SELECT ProjectId FROM dbo.MR_Tasks
+        WHERE TaskId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@dependencyOwnerTaskIds, ',')))
+    ORDER BY ProjectId;
+
+    -- Ağ doğrulaması ve silme de aynı görev -> ilişki kilit sırasını izler.
+    SELECT TaskId, ProjectId
+    FROM dbo.MR_Tasks WITH (UPDLOCK, HOLDLOCK)
+    WHERE TaskId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@scopedDependencyTaskIds, ','))
+      OR ProjectId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@dependencyProjectIds, ','))
+      OR ProjectId IN (SELECT ProjectId FROM dbo.MR_Tasks
+        WHERE TaskId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@dependencyOwnerTaskIds, ',')))
+    ORDER BY TaskId;
+
     SELECT TaskId, ProjectId, PredecessorTaskId, DependencyType, LagDays, LagValue, LagUnit
     FROM dbo.MR_TaskDependencies WITH (UPDLOCK, HOLDLOCK)
-    WHERE TaskId IN (
-      SELECT TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value)))
-      FROM STRING_SPLIT(@scopedDependencyTaskIds, ',')
-    )
+    WHERE TaskId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@scopedDependencyTaskIds, ','))
     ORDER BY TaskId, PredecessorTaskId;
-
-    SELECT TaskId
-    FROM dbo.MR_Tasks WITH (UPDLOCK, HOLDLOCK)
-    WHERE TaskId IN (
-      SELECT TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value)))
-      FROM STRING_SPLIT(@scopedDependencyTaskIds, ',')
-    )
-    ORDER BY TaskId;
   `);
+  const rows = new Map((result.recordsets?.[1] || []).map((row) => [key(row.TaskId), row]));
   const storedByTask = new Map();
-  for (const row of result.recordset || []) {
-    const taskKey = `${key(row.TaskId)}:${key(row.ProjectId)}`;
-    if (!storedByTask.has(taskKey)) storedByTask.set(taskKey, []);
-    storedByTask.get(taskKey).push({
-      predecessorId: key(row.PredecessorTaskId), type: row.DependencyType,
-      lagDays: row.LagDays, lagValue: row.LagValue, lagUnit: row.LagUnit
-    });
+  for (const row of result.recordsets?.[2] || []) {
+    const taskId = key(row.TaskId);
+    if (!storedByTask.has(taskId)) storedByTask.set(taskId, []);
+    storedByTask.get(taskId).push({ predecessorId: key(row.PredecessorTaskId), type: row.DependencyType,
+      lagDays: row.LagDays, lagValue: row.LagValue, lagUnit: row.LagUnit });
   }
-  const existingTaskIds = new Set((result.recordsets?.[1] || []).map((row) => key(row.TaskId)));
-  const proposedProjects = new Map(scoped.filter((task) => !existingTaskIds.has(key(task.id)))
+  const newProjects = new Map(upserts.filter((task) => !rows.has(key(task.id)))
     .map((task) => [key(task.id), key(task.projectId)]));
+  const finalProjects = new Map(upserts.map((task) => [key(task.id), key(task.projectId)]));
   const taskUpserts = upserts.map((task) => {
-    const projectId = key(task.projectId);
-    if (hasFullAccess(actor, projectId)) return task;
-    const stored = storedByTask.get(`${key(task.id)}:${projectId}`) || [];
-    // Eski istemcinin boş PARTIAL izdüşümü içerik kaydında bağları silemez.
-    if (task.dependencyMutation === false && !(task.deps || []).length) {
+    const before = rows.get(key(task.id));
+    const stored = storedByTask.get(key(task.id)) || [];
+    if (before && task.dependencyMutation === false) {
+      if (key(before.ProjectId) !== key(task.projectId)) {
+        throw new ServerPersistenceError('MUTATION_FAILED', 'Proje taşıma açık ilişki değişikliği gerektirir.');
+      }
       return { ...task, deps: stored };
     }
-    const submitted = task.deps || [];
-    // Aynı işlemdeki yeni görevlerin yazma yetkisi de kalıcılaştırmada doğrulanır.
-    if (submitted.some((dep) => !canReadTask(actor, dep.predecessorId, projectId)
-      && proposedProjects.get(key(dep.predecessorId)) !== projectId)) {
-      throw new ServerPersistenceError('FORBIDDEN', 'Yalnızca aynı projedeki görünür görevlerle ilişki kurulabilir.');
+    const projectId = key(task.projectId);
+    const delta = task.dependencyChanges;
+    const submitted = delta?.upserts || task.deps || [];
+    if (new Set(submitted.map((dep) => key(dep.predecessorId))).size !== submitted.length) {
+      throw new ServerPersistenceError('MUTATION_FAILED', 'Aynı öncül görev birden fazla kez eklenemez.');
     }
-    const hidden = stored.filter((dep) => !canReadTask(actor, dep.predecessorId, projectId));
-    const deps = [...submitted, ...hidden];
-    if (deps.length > MAX_COMMIT_TASK_DEPENDENCIES) {
+    const allowed = (targetId) => {
+      const row = rows.get(key(targetId));
+      return row ? (finalProjects.get(key(targetId)) || key(row.ProjectId)) === projectId && canReadTask(actor, row)
+        : newProjects.get(key(targetId)) === projectId;
+    };
+    // Bilinmeyen, gizli ve çapraz proje hedefleri aynı hatayı üretir.
+    if (submitted.some((dep) => !allowed(dep.predecessorId))) {
+      throw new ServerPersistenceError('FORBIDDEN', 'İlişki hedefi bu işlem için kullanılamıyor.');
+    }
+    const deps = new Map((before && key(before.ProjectId) === projectId && (delta || !hasFullAccess(actor, projectId)) ? stored : [])
+      .map((dep) => [key(dep.predecessorId), dep]));
+    for (const targetId of delta?.removals || []) {
+      // Görünürlüğü kaybolan hedefin eski izdüşümü ilişkiyi silemez.
+      if (allowed(targetId)) deps.delete(key(targetId));
+    }
+    for (const dep of submitted) deps.set(key(dep.predecessorId), dep);
+    if (deps.size > MAX_COMMIT_TASK_DEPENDENCIES) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Görev bağımlılık sınırı aşıldı.');
     }
-    return { ...task, deps };
+    return { ...task, deps: [...deps.values()] };
   });
-  const dependencyCount = taskUpserts.reduce((count, task) => count + (task.deps || []).length, 0);
-  if (dependencyCount > MAX_COMMIT_TOTAL_DEPENDENCIES) {
+  if (taskUpserts.reduce((n, task) => n + (task.deps || []).length, 0) > MAX_COMMIT_TOTAL_DEPENDENCIES) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'İşlem bağımlılık sınırı aşıldı.');
   }
   return { ...changes, taskUpserts };

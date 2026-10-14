@@ -405,21 +405,6 @@ function directAssignee(db, taskId, sicil) {
   return db.taskAssignees.some((entry) => sameGuid(entry.TaskId, taskId) && entry.Sicil === sicil);
 }
 
-/** Mutasyon görev künyesinde üretim sorgusuyla aynı dar kişi kapsamını uygular. */
-function creatorIdentityVisible(db, task, sicil, { hasFullScope = false, canAssignAllCorporate = false } = {}) {
-  if (task?.CreatedBySicil == null) return false;
-  const project = projectById(db, task.ProjectId);
-  if (hasFullScope || Number(task.CreatedBySicil) === Number(sicil)
-    || directAssignee(db, task.TaskId, sicil)
-    || Number(project?.LeadSicil) === Number(task.CreatedBySicil)) return true;
-  if (canAssignAllCorporate && db.executiveScope.some((scope) => scope.ManagerSicil === sicil
-    && scope.EmployeeSicil === task.CreatedBySicil)) return true;
-  return db.taskAssignees.some((assignment) => assignment.Sicil === task.CreatedBySicil
-    && db.tasks.some((candidate) => sameGuid(candidate.TaskId, assignment.TaskId)
-      && db.projectAccess.some((grant) => grant.IsActive && grant.Sicil === sicil
-        && grant.AccessLevel === 'READ' && sameGuid(grant.ProjectId, candidate.ProjectId))));
-}
-
 function taskScopedAssigneeRows(db, taskIds, sicil, isAdmin, { exposeTaskScopedAvatar = false } = {}) {
   // Üretim sorgusu ORDER BY ta.TaskId, ta.Sicil uygular.
   const ordered = [...db.taskAssignees].sort((left, right) =>
@@ -1360,20 +1345,7 @@ function runQuery(db, statement, params, { database }) {
     const snapshot = snapshotRecordsets(db, sicil, Boolean(params.isAdmin), Boolean(params.canAssignAllCorporate));
     const projectedTasks = snapshot[3]
       .filter((row) => taskIds.has(String(row.TaskId).toUpperCase()))
-      .map((row) => {
-        const identityVisible = creatorIdentityVisible(db, row, sicil, {
-          hasFullScope: Boolean(params.hasFullScope),
-          canAssignAllCorporate: Boolean(params.canAssignAllCorporate)
-        });
-        const creator = identityVisible
-          ? db.people.find((person) => Number(person.Sicil) === Number(row.CreatedBySicil))
-          : null;
-        return {
-          ...row,
-          VisibleCreatedBySicil: identityVisible ? row.CreatedBySicil : null,
-          CreatedByName: creator?.DisplayName || null
-        };
-      });
+;
     const projectedAssignees = sqlText.includes('LEFT JOIN #DirectoryNames pd')
       ? taskScopedAssigneeRows(db, taskIds, sicil, Boolean(params.isAdmin), { exposeTaskScopedAvatar: true })
       : snapshot[4].filter((row) => taskIds.has(String(row.TaskId).toUpperCase()));
@@ -1913,7 +1885,7 @@ function runQuery(db, statement, params, { database }) {
     for (const task of db.tasks) {
       if (sameGuid(task.RecurrenceParentTaskId, params.taskId)) relatedIds.add(String(task.TaskId).toLowerCase());
     }
-    for (const dependency of db.taskDependencies || []) {
+    for (const dependency of sqlText.includes('FROM dbo.MR_TaskDependencies WITH') ? db.taskDependencies || [] : []) {
       if (sameGuid(dependency.PredecessorTaskId, params.taskId)) relatedIds.add(String(dependency.TaskId).toLowerCase());
       if (sameGuid(dependency.TaskId, params.taskId)) relatedIds.add(String(dependency.PredecessorTaskId).toLowerCase());
     }
@@ -1971,12 +1943,10 @@ function runQuery(db, statement, params, { database }) {
         && String(entry.ProjectCode).toUpperCase() === String(project?.ProjectCode || '').toUpperCase()))
       || db.projectAccess.some((entry) => entry.IsActive && entry.Sicil === params.sicil
         && sameGuid(entry.ProjectId, task?.ProjectId) && ['FULL', 'READ'].includes(entry.AccessLevel));
-    const published = new Set(snapshotRecordsets(db, params.sicil, Boolean(params.isAdmin), false)[9].map((person) => person.Sicil));
     return result([db.taskAssignees
       .filter((entry) => sameGuid(entry.TaskId, params.taskId))
       .filter((entry) => broadVisibility || entry.Sicil === params.sicil
         || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === entry.Sicil))
-      .filter((entry) => published.has(entry.Sicil))
       .map((entry) => ({ Sicil: entry.Sicil }))]);
   }
 
@@ -2034,11 +2004,17 @@ function runQuery(db, statement, params, { database }) {
   }
   if (params.scopedDependencyTaskIds != null) {
     const taskIds = new Set(params.scopedDependencyTaskIds.split(',').map((value) => value.toLowerCase()));
+    const projectIds = new Set(String(params.dependencyProjectIds || '').split(','));
+    const ownerIds = new Set(String(params.dependencyOwnerTaskIds || '').split(','));
+    for (const task of db.tasks) if (ownerIds.has(String(task.TaskId).toLowerCase())) projectIds.add(String(task.ProjectId).toLowerCase());
     return result([
-      db.taskDependencies.filter((entry) => taskIds.has(String(entry.TaskId).toLowerCase())),
-      db.tasks.filter((entry) => taskIds.has(String(entry.TaskId).toLowerCase())).map((entry) => ({ TaskId: entry.TaskId }))
+      db.projects.filter((entry) => projectIds.has(String(entry.ProjectId).toLowerCase())).map((entry) => ({ ProjectId: entry.ProjectId })),
+      db.tasks.filter((entry) => taskIds.has(String(entry.TaskId).toLowerCase()) || projectIds.has(String(entry.ProjectId).toLowerCase()))
+        .map((entry) => ({ TaskId: entry.TaskId, ProjectId: entry.ProjectId })),
+      db.taskDependencies.filter((entry) => taskIds.has(String(entry.TaskId).toLowerCase()))
     ]);
   }
+
   if (sqlText.includes('SELECT TaskId, PredecessorTaskId')) {
     const isSingleTaskDependencyRead = sqlText.includes('AND TaskId = @taskId');
     return result([db.taskDependencies

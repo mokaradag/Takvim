@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { dependencyChanges } from '../src/scheduling/dependencyChanges.js';
+import { executeTaskCreation } from '../src/state/taskCreationPolicy.js';
 import { createActualStack, DEFAULT_CALENDAR_ID } from './helpers/actualStack.mjs';
 
 const PROJECT_ID = '91111111-1111-4111-8111-111111111111';
@@ -62,21 +64,14 @@ function seed() {
   };
 }
 
-test('istemci dependencyMutation=false gönderse de gerçek bağımlılık değişikliği döngü doğrulamasını atlayamaz', async () => {
+test('dependencyMutation=false tam yetkide de ilişki izdüşümünü yok sayar', async () => {
   const stack = await createActualStack(seed(), { sicil: SICIL, corporateWbsSource: false });
   try {
     const predecessor = stack.state.tasks.find((task) => task.id === PREDECESSOR_ID);
-    await assert.rejects(
-      stack.repository.commitChanges({
-        taskUpserts: [{
-          ...predecessor,
-          deps: [{ predecessorId: TASK_ID, type: 'FS', lagDays: 0 }],
-          assigneeMutation: false,
-          dependencyMutation: false
-        }]
-      }),
-      (error) => error.code === 'MUTATION_FAILED' && /döngü/.test(error.message)
-    );
+    await stack.repository.commitChanges({
+      taskUpserts: [{ ...predecessor, deps: [{ predecessorId: TASK_ID, type: 'FS', lagDays: 0 }],
+        assigneeMutation: false, dependencyMutation: false }]
+    });
 
     assert.equal(stack.db.taskDependencies.length, 1);
     assert.equal(String(stack.db.taskDependencies[0].TaskId).toLowerCase(), TASK_ID);
@@ -113,7 +108,7 @@ for (const creator of [false, true]) {
       assert.deepEqual(stack.state.tasks.find((task) => task.id === TASK_ID).deps.map((d) => d.predecessorId), [PREDECESSOR_ID]);
       for (const deps of [[], [{ predecessorId: PREDECESSOR_ID, type: 'FF', lagDays: 2 }], [{ predecessorId: PREDECESSOR_ID, type: 'SF', lagDays: -1 }], []]) {
         const task = stack.state.tasks.find((row) => row.id === TASK_ID);
-        const response = await stack.repository.commitChanges({ taskUpserts: [{ ...task, deps, dependencyMutation: true, assigneeMutation: false }] });
+        const response = await stack.repository.commitChanges({ taskUpserts: [{ ...task, deps, dependencyChanges: dependencyChanges(task.deps, deps), dependencyMutation: true, assigneeMutation: false }] });
         assert.deepEqual(response.taskUpserts.find((row) => row.id === TASK_ID).deps.map((d) => [d.predecessorId, d.type]), deps.map((d) => [d.predecessorId, d.type]));
         assert.ok(stack.db.taskDependencies.some((d) => String(d.PredecessorTaskId).toLowerCase() === HIDDEN_ID));
         await stack.reload();
@@ -182,7 +177,7 @@ test('normal sorumlu yeni görevle öncül ve ardıl bağlantılarını tek atom
       calendarId: null, plannedDurationDays: null, assigneeIds: [String(SICIL)],
       deps: [{ predecessorId: PREDECESSOR_ID, type: 'FS', lagDays: 0 }] };
     const response = await stack.repository.commitChanges({ taskUpserts: [
-      { ...target, deps: [{ predecessorId: newId, type: 'SS', lagDays: 0 }], dependencyMutation: true, assigneeMutation: false },
+      { ...target, deps: [{ predecessorId: newId, type: 'SS', lagDays: 0 }], dependencyChanges: dependencyChanges(target.deps, [{ predecessorId: newId, type: 'SS', lagDays: 0 }]), dependencyMutation: true, assigneeMutation: false },
       created
     ] });
     assert.ok(response.taskUpserts.some((row) => row.id === newId));
@@ -214,7 +209,7 @@ test('READ görünürlüğü ardıl yazma hakkı vermez; görünür çapraz proj
     const readonly = stack.state.tasks.find((row) => row.id === HIDDEN_ID);
     assert.ok(stack.state.tasks.some((row) => row.id === OTHER_TASK));
     await assert.rejects(stack.repository.commitChanges({ taskUpserts: [{ ...readonly, deps: [{ predecessorId: PREDECESSOR_ID, type: 'FS', lagDays: 0 }], dependencyMutation: true }] }), { code: 'FORBIDDEN' });
-    await assert.rejects(stack.repository.commitChanges({ taskUpserts: [{ ...target, deps: [{ predecessorId: OTHER_TASK, type: 'FS', lagDays: 0 }], dependencyMutation: true }] }), { code: 'MUTATION_FAILED' });
+    await assert.rejects(stack.repository.commitChanges({ taskUpserts: [{ ...target, deps: [{ predecessorId: OTHER_TASK, type: 'FS', lagDays: 0 }], dependencyMutation: true }] }), { code: 'FORBIDDEN' });
     assert.equal(stack.db.taskDependencies.length, 2);
   } finally { await stack.dispose(); }
 });
@@ -242,5 +237,186 @@ test('gizli bağların korunması mevcut görev başına bağımlılık sınır�
     const target = stack.state.tasks.find((row) => row.id === TASK_ID);
     await assert.rejects(stack.repository.commitChanges({ taskUpserts: [{ ...target, deps: [{ predecessorId: PREDECESSOR_ID, type: 'FS', lagDays: 0 }], dependencyMutation: true }] }), (error) => error.code === 'MUTATION_FAILED' && /sınırı/.test(error.message));
     assert.equal(stack.db.taskDependencies.length, 500);
+  } finally { await stack.dispose(); }
+});
+
+for (const readGrant of [false, true]) {
+  test(`içerik kaydı görünürlüğü kaybolan öncülü doğrulamaz veya yazmaz (READ=${readGrant})`, async () => {
+    const data = partialSeed();
+    if (readGrant) data.projectAccess.push({ ProjectId: PROJECT_ID, Sicil: SICIL, AccessLevel: 'READ' });
+    const stack = await createActualStack(data, { sicil: SICIL, corporateWbsSource: false });
+    try {
+      const task = stack.state.tasks.find((row) => row.id === TASK_ID);
+      stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => String(row.TaskId).toLowerCase() !== PREDECESSOR_ID);
+      stack.db.projectAccess = [];
+      const start = stack.db.statements.length;
+      const result = await stack.persistence.mutate('task/update', { type: 'task/update', id: TASK_ID, patch: { task: 'İçerik kaydı', progress: 20 } });
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(stack.db.taskDependencies.length, 2);
+      assert.deepEqual(result.value.taskUpserts.find((row) => row.id === TASK_ID).deps, []);
+      assert.equal(stack.db.statements.slice(start).some((row) => /DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId;/.test(row.sql)), false);
+      assert.ok(task.deps.some((dep) => dep.predecessorId === PREDECESSOR_ID));
+    } finally { await stack.dispose(); }
+  });
+}
+
+test('snapshotta görünmeyen kenar sonradan görünür olsa da açık delta onu silmez', async () => {
+  const stack = await createActualStack(partialSeed(), { sicil: SICIL, corporateWbsSource: false });
+  try {
+    const observed = stack.state.tasks.find((row) => row.id === TASK_ID).deps;
+    stack.db.projectAccess.push({ ProjectId: PROJECT_ID, Sicil: SICIL, AccessLevel: 'READ', IsActive: 1 });
+    const result = await stack.persistence.mutate('task/update', { type: 'task/update', id: TASK_ID,
+      observedDependencies: observed, patch: { deps: [] } });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(stack.db.taskDependencies.map((dep) => String(dep.PredecessorTaskId).toLowerCase()), [HIDDEN_ID]);
+    await stack.reload();
+    assert.deepEqual(stack.state.tasks.find((row) => row.id === TASK_ID).deps.map((dep) => dep.predecessorId), [HIDDEN_ID]);
+  } finally { await stack.dispose(); }
+});
+
+test('görünürlüğü kaybolan kenarın açık eski çıkarma isteği kalıcı kenarı korur', async () => {
+  const stack = await createActualStack(partialSeed(), { sicil: SICIL, corporateWbsSource: false });
+  try {
+    const task = stack.state.tasks.find((row) => row.id === TASK_ID);
+    stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => String(row.TaskId).toLowerCase() !== PREDECESSOR_ID);
+    await stack.repository.commitChanges({ taskUpserts: [{ ...task, deps: [], dependencyMutation: true,
+      dependencyChanges: dependencyChanges(task.deps, []), assigneeMutation: false }] });
+    assert.equal(stack.db.taskDependencies.length, 2);
+  } finally { await stack.dispose(); }
+});
+
+test('bilinmeyen, gizli ve çapraz proje UUID aynı hata sözleşmesini kullanır', async () => {
+  const data = partialSeed();
+  data.projectAccess.push({ ProjectId: PROJECT_ID, Sicil: SICIL, AccessLevel: 'READ' });
+  const stack = await createActualStack(data, { sicil: SICIL, corporateWbsSource: false });
+  try {
+    const task = stack.state.tasks.find((row) => row.id === TASK_ID);
+    const errors = [];
+    for (const target of [OTHER_TASK, '99999999-9999-4999-8999-999999999999']) {
+      try { await stack.repository.commitChanges({ taskUpserts: [{ ...task,
+        dependencyMutation: true, dependencyChanges: { upserts: [{ predecessorId: target, type: 'FS', lagDays: 0 }], removals: [] } }] }); }
+      catch (error) { errors.push([error.code, error.message, error.details]); }
+    }
+    stack.db.projectAccess = [];
+    try { await stack.repository.commitChanges({ taskUpserts: [{ ...task,
+      dependencyMutation: true, dependencyChanges: { upserts: [{ predecessorId: HIDDEN_ID, type: 'FS', lagDays: 0 }], removals: [] } }] }); }
+    catch (error) { errors.push([error.code, error.message, error.details]); }
+    assert.equal(errors.length, 3);
+    assert.deepEqual(errors[0], errors[1]);
+    assert.deepEqual(errors[0], errors[2]);
+    for (const id of [OTHER_PROJECT, OTHER_TASK, HIDDEN_ID]) assert.equal(JSON.stringify(errors).includes(id), false);
+  } finally { await stack.dispose(); }
+});
+
+for (const creator of [false, true]) {
+  for (const missing of [false, true]) {
+    test(`dar görev kimliği rehberden bağımsızdır; iki ardışık kayıt korunur (creator=${creator}, missing=${missing})`, async () => {
+      const stack = await createActualStack(partialSeed({ creator }), { sicil: SICIL, corporateWbsSource: false });
+      try {
+        const initial = stack.state.tasks.find((row) => row.id === TASK_ID);
+        assert.equal(initial.assigneeIds.includes(String(SICIL + 1)), creator);
+        if (missing) stack.db.people = stack.db.people.filter((row) => row.Sicil !== SICIL + 1);
+        for (const title of ['Birinci kayıt', 'İkinci kayıt']) {
+          const result = await stack.persistence.mutate('task/update', { type: 'task/update', id: TASK_ID, patch: { task: title } });
+          assert.equal(result.ok, true, JSON.stringify(result));
+          assert.deepEqual(stack.state.tasks.find((row) => row.id === TASK_ID).assigneeIds, initial.assigneeIds);
+          assert.equal(stack.db.taskAssignees.filter((row) => String(row.TaskId).toLowerCase() === TASK_ID).length, 2);
+        }
+        await stack.reload();
+        assert.deepEqual(stack.state.tasks.find((row) => row.id === TASK_ID).assigneeIds, initial.assigneeIds);
+      } finally { await stack.dispose(); }
+    });
+  }
+}
+
+test('ilgisiz FULL projesi PARTIAL görevde gizli eş sorumluyu açmaz veya gerektirmez', async () => {
+  const data = partialSeed();
+  data.projectAccess.push({ ProjectId: OTHER_PROJECT, Sicil: SICIL, AccessLevel: 'FULL' });
+  const stack = await createActualStack(data, { sicil: SICIL, corporateWbsSource: false });
+  try {
+    const initial = stack.state.tasks.find((row) => row.id === TASK_ID);
+    assert.deepEqual(initial.assigneeIds, [String(SICIL)]);
+    for (const title of ['Bir', 'İki']) {
+      const result = await stack.persistence.mutate('task/update', { type: 'task/update', id: TASK_ID, patch: { task: title } });
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.deepEqual(stack.state.tasks.find((row) => row.id === TASK_ID).assigneeIds, [String(SICIL)]);
+    }
+  } finally { await stack.dispose(); }
+});
+
+test('ASSIGNEE_CREATE seçilen öncülü gerçek oluşturma/kayıt/yeniden yükleme zincirinde korur', async () => {
+  const stack = await createActualStack(partialSeed(), { sicil: SICIL, corporateWbsSource: false });
+  try {
+    const id = '98888888-8888-4888-8888-888888888888';
+    const created = await executeTaskCreation({ state: stack.state, id,
+      input: { projectId: PROJECT_ID, task: 'Bağımlı yeni görev', deps: [{ predecessorId: PREDECESSOR_ID, type: 'FS', lagDays: 0 }] },
+      mutate: stack.persistence.mutate });
+    assert.equal(created.scope, 'ASSIGNEE_CREATE');
+    assert.equal(created.result.ok, true, JSON.stringify(created.result));
+    await stack.reload();
+    assert.deepEqual(stack.state.tasks.find((task) => task.id === id).deps.map((dep) => dep.predecessorId), [PREDECESSOR_ID]);
+  } finally { await stack.dispose(); }
+});
+
+test('silme salt okunur ardılı kaydetmez; sunucu yalnızca ilişkiyi temizler', async () => {
+  const data = partialSeed({ creator: true });
+  data.taskAssignees = data.taskAssignees.filter((row) => !(String(row.TaskId).toLowerCase() === PREDECESSOR_ID && row.Sicil !== SICIL));
+  data.tasks.find((row) => row.TaskId === TASK_ID).CreatedBySicil = SICIL + 1;
+  data.projectAccess.push({ ProjectId: PROJECT_ID, Sicil: SICIL, AccessLevel: 'READ' });
+  const stack = await createActualStack(data, { sicil: SICIL, corporateWbsSource: false });
+  try {
+    const before = { ...stack.db.tasks.find((task) => String(task.TaskId).toLowerCase() === TASK_ID) };
+    const result = await stack.persistence.mutate('task/delete', { type: 'task/delete', id: PREDECESSOR_ID });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(stack.db.tasks.find((task) => String(task.TaskId).toLowerCase() === TASK_ID), before);
+    assert.equal(stack.db.taskDependencies.some((dep) => String(dep.PredecessorTaskId).toLowerCase() === PREDECESSOR_ID), false);
+  } finally { await stack.dispose(); }
+});
+
+for (const partial of [false, true]) {
+  test(`ilişki yazması görev ağını ilişki satırlarından önce kilitler (partial=${partial})`, async () => {
+    const stack = await createActualStack(partial ? partialSeed() : seed(), { sicil: SICIL, corporateWbsSource: false });
+    try {
+      const task = stack.state.tasks.find((row) => row.id === TASK_ID);
+      const start = stack.db.statements.length;
+      await stack.repository.commitChanges({ taskUpserts: [{ ...task, dependencyMutation: true,
+        dependencyChanges: { upserts: [{ predecessorId: PREDECESSOR_ID, type: 'FF', lagDays: 0 }], removals: [] } }] });
+      const queries = stack.db.statements.slice(start).map((row) => row.sql);
+      const preparation = queries.find((sql) => sql.includes('STRING_SPLIT(@scopedDependencyTaskIds'));
+      assert.ok(preparation.indexOf('FROM dbo.MR_Tasks WITH (UPDLOCK') < preparation.indexOf('FROM dbo.MR_TaskDependencies WITH (UPDLOCK'));
+      assert.match(preparation, /ORDER BY TaskId;/);
+      assert.match(preparation, /@dependencyProjectIds/);
+    } finally { await stack.dispose(); }
+  });
+}
+
+test('içerik niyeti eski ilişki yükünü HTTP doğrulamasında da yok sayar', async () => {
+  const stack = await createActualStack(partialSeed(), { sicil: SICIL, corporateWbsSource: false });
+  try {
+    const task = stack.state.tasks.find((row) => row.id === TASK_ID);
+    const result = await stack.repository.commitChanges({ taskUpserts: [{ ...task, task: 'Geçerli içerik',
+      dependencyMutation: false, assigneeMutation: false,
+      deps: [{ predecessorId: 'eskimiş-projeksiyon', type: 'ESKI', lagDays: 'eskimiş' }],
+      dependencyChanges: { upserts: null, removals: ['eskimiş'] } }] });
+    assert.equal(result.taskUpserts.find((row) => row.id === TASK_ID).task, 'Geçerli içerik');
+    assert.equal(stack.db.taskDependencies.length, 2);
+  } finally { await stack.dispose(); }
+});
+
+test('ilişki deltası mevcut tür/gecikme/tekrar/sınır doğrulamasını atlayamaz', async () => {
+  const stack = await createActualStack(partialSeed(), { sicil: SICIL, corporateWbsSource: false });
+  try {
+    const task = stack.state.tasks.find((row) => row.id === TASK_ID);
+    const valid = { predecessorId: PREDECESSOR_ID, type: 'FS', lagDays: 0 };
+    for (const delta of [
+      { upserts: [{ ...valid, type: 'INVALID' }], removals: [] },
+      { upserts: [{ ...valid, lagValue: 3000, lagUnit: 'month' }], removals: [] },
+      { upserts: [valid, valid], removals: [] },
+      { upserts: [valid], removals: [1] },
+      { upserts: [], removals: Array(501).fill(PREDECESSOR_ID) }
+    ]) {
+      await assert.rejects(stack.repository.commitChanges({ taskUpserts: [{ ...task, dependencyMutation: true, dependencyChanges: delta }] }), { code: 'MUTATION_FAILED' });
+    }
+    assert.equal(stack.db.taskDependencies.length, 2);
   } finally { await stack.dispose(); }
 });

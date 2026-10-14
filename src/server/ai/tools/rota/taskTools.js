@@ -356,9 +356,7 @@ const taskDetail = {
       updatedAt: fact.updatedAt,
       calendar: row.CalendarName ? dataText(row.CalendarName, 120) : null,
       calendarSource: row.CalendarSource || null,
-      dependencies: fact.accessLevel === 'FULL'
-        ? { predecessorCount: Number(row.PredecessorCount || 0), successorCount: Number(row.SuccessorCount || 0) }
-        : null,
+      dependencies: { predecessorCount: Number(row.PredecessorCount || 0), successorCount: Number(row.SuccessorCount || 0) },
       access: accessExplanation(access)
     };
     return {
@@ -367,7 +365,7 @@ const taskDetail = {
         notes: [
           'NULL saat/bütçe değeri bilinmiyor demektir, sıfır değildir. Rota para birimi tutmaz.',
           ...(creatorVisible ? [] : ['Oluşturan kişinin kimliği bu erişim düzeyinde gösterilmez.']),
-          ...(task.dependencies ? [] : ['Bağımlılıklar yalnızca projede tam erişimi olan kullanıcılara açıktır.']),
+          'Bağımlılık sayıları yalnızca iki ucu da görünür olan ilişkileri kapsar.',
           ...(wbsPathTruncated ? ['İş dağılım yolu güvenlik derinliği nedeniyle kısaltıldı.'] : [])
         ]
       },

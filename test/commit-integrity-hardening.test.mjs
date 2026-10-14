@@ -57,12 +57,11 @@ test('Actual commits validate the final dependency graph under transaction locks
   assert.match(source, /projectEdges\.set\(previousProjectId, removeTaskEdges/);
   assert.match(source, /projectEdges\.set\(projectId, removeTaskEdges/);
   assert.match(source, /const cycleTaskIds = findDependencyCycle\(projectEdges\.get\(projectId\) \|\| \[\]\);/);
-  assert.match(
-    source,
-    /return withSqlTransaction\(async \(transaction\) => \{\s+const actor = await observePhase\('phase.commit.authorization', \(\) => loadAuthorizationContext\(transaction\)\);\s+const scopedChanges = await prepareScopedTaskDependencies\(transaction, actor, changes\);\s+const plannedChanges = await planIntegrity\(transaction, scopedChanges, actor\);[\s\S]*?return baseRepository\.commitChanges\(plannedChanges\);/s
-  );
+  assert.match(source, /const scopedChanges = input\?\.\[TASK_DEPENDENCY_CONTEXT\] \? changes : await prepareScopedTaskDependencies/);
+  assert.match(source, /const plannedChanges = await planIntegrity\(transaction, scopedChanges, actor\);/);
+  assert.match(source, /return baseRepository\.commitChanges\(plannedChanges\);/);
   // İşlem başına e-posta tercihi taşınırken planlanan nesne KOPYALANMAZ:
-  // bağımlılık planlama işareti sayılamayan bir simgedir ve yayılma onu düşürür.
+  // doğrulanmış işlem bağlamı sayılamayan bir simgedir ve yayılma onu düşürür.
   assert.match(source, /if \(input\?\.notifyAssignees === true\) plannedChanges\.notifyAssignees = true;/);
   assert.doesNotMatch(source, /baseRepository\.commitChanges\(\{ \.\.\.plannedChanges/);
 });

@@ -508,7 +508,7 @@ export default function AppShell() {
         </TaskOrganizationFilterProvider>
       </div>
 
-      <TaskDetailOverlay simple={simpleMode} />
+      <TaskDetailOverlay simple={simpleMode} dateFormat={t.dateFormat} />
       {cmdOpen && (
         <CommandPalette
           navItems={visibleNavItems}

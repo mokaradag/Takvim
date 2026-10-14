@@ -183,7 +183,7 @@ const dependencyInspect = {
   version: 1,
   topic: 'dependencies',
   evidenceKind: 'dependencies',
-  authorization: 'Bağımlılıklar yalnızca projede FULL erişimi olan kullanıcılara açıktır (anlık görüntüyle aynı).',
+  authorization: 'Bağımlılıklar yalnızca iki uç görev de görünür olduğunda açıktır (anlık görüntüyle aynı).',
   description: 'Kayıtlı bağımlılık ilişkilerini inceler: bir görevin öncülleri ve ardılları (tür FS/SS/FF/SF ve gecikme) ya da bir projenin bağımlılık kapsaması. Kritik yol, bolluk ya da tarih hesabı YAPMAZ.',
   parameters: {
     type: 'object',
@@ -203,7 +203,7 @@ const dependencyInspect = {
       if (projectId && projectId !== focus.projectId) throw notFound();
       projectId = focus.projectId;
     }
-    await requireFullProject(scope, projectId, call);
+    await requireVisibleProject(scope, projectId, call);
     const result = await call.sql((executor) => readDependencies(executor, scope, {
       projectId, focusTaskId: focus?.id ?? null, maxRows: TOOL_LIMITS.maxAnalyzedTasks
     }));

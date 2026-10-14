@@ -13,10 +13,10 @@ import { ACCESS_REASONS } from '../../../authorization/authorization.js';
  *  - FULL (sistem yöneticisi, kurumsal proje rolü, proje lideri/sahibi,
  *    manuel FULL hibe) → projenin bütün görevleri, bağımlılıkları ve baz
  *    planları;
- *  - READ hibesi → projenin bütün görevleri (salt okunur); bağımlılık ve baz
- *    plan YOK;
+ *  - READ hibesi → projenin bütün görevleri ve görünür uçlar arasındaki bağımlılıklar;
+ *    baz plan YOK;
  *  - KISMİ → yalnızca kullanıcının oluşturduğu, sorumlusu olduğu ya da yönetim
- *    kapsamındaki çalışanın sorumlu olduğu görevler.
+ *    kapsamındaki çalışanın sorumlu olduğu görevler ve bunlar arasındaki kenarlar.
  *
  * Proje belirteci `<kimlik>:<F|P><READ 0|1><kendi görev kapsamı 0|1>`
  * biçimindedir; sistem yöneticisinde SQL belirteç listesi boştur ve SQL

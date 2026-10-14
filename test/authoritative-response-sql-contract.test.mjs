@@ -237,16 +237,10 @@ test('oluşturan künyesi yalnızca sayılı kaynaklardan ve Sicil eşleşmesind
   assert.match(taskSelect, /LEFT JOIN #DirectoryNames creator\s+ON creator\.Sicil = t\.CreatedBySicil AND creatorAuth\.IdentityVisible = 1/);
 
   const gate = taskSelect.slice(taskSelect.indexOf('CROSS APPLY'), taskSelect.indexOf(') creatorAuth'));
-  const sources = [
-    '@hasFullScope = 1',
-    't.CreatedBySicil = @sicil',
-    'facts.IsOwnAssignee = 1',
-    'p.LeadSicil = t.CreatedBySicil',
-    '@canAssignAllCorporate = 1',
-    'creatorRead.Sicil = t.CreatedBySicil'
-  ];
-  for (const source of sources) assert.ok(gate.includes(source), `künye kaynağı korunmalıdır: ${source}`);
-  assert.equal((gate.match(/\bOR\b/g) || []).length, sources.length - 1, 'künye kaynakları çoğaltılmamalıdır');
+  for (const source of ["pa.AccessLevel = 'FULL'", 'pa.HasReadGrant = 1', 't.CreatedBySicil = @sicil', 'facts.IsOwnAssignee = 1']) {
+    assert.ok(gate.includes(source), `künye kaynağı korunmalıdır: ${source}`);
+  }
+  assert.doesNotMatch(gate, /@hasFullScope|creatorRead|p.LeadSicil/);
   // Kimlik yalnızca Sicil ile çözülür; ada göre eşleştirme yapılmaz.
   assert.doesNotMatch(gate, /DisplayName|ad_soyad/);
 });
@@ -325,9 +319,9 @@ test('yetkili yanıt toplu işi kimlik listelerini ve kurumsal görünümleri bi
   assert.equal((batch.match(/SELECT COUNT\(\*\) FROM dbo\.MR_TaskAssignees/g) || []).length, 0);
   assert.equal((batch.match(/ownAssignment/g) || []).length, 0);
 
-  // READ yetkisi üzerinden künye açan kural küme olarak çözülür.
-  assert.match(batch, /INSERT #CreatorReadScope\(Sicil\)/);
-  assert.match(batch, /EXISTS \(\s+SELECT 1 FROM #CreatorReadScope creatorRead WHERE creatorRead\.Sicil = t\.CreatedBySicil\s+\)/);
+  // Künye yetkisi görevin kendi projesinden türetilir.
+  assert.doesNotMatch(batch, /#CreatorReadScope|@hasFullScope/);
+  assert.match(batch, /JOIN #ProjectAuth predecessorAuth ON predecessorAuth.ProjectId = predecessor.ProjectId/);
 });
 
 test('yetkili yanıt çıktıları istenen kimlik kümesiyle sınırlı kalır', () => {

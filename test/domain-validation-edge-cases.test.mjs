@@ -139,7 +139,7 @@ test('task reference normalization preserves scoped display names when a canonic
     assigneeDisplayNames: ['Ayşe', 'Rehber Dışı Görevli']
   }, { projects, people, wbs });
 
-  assert.deepEqual(result.assigneeIds, ['u1']);
+  assert.deepEqual(result.assigneeIds, ['u1', 'missing']);
   assert.deepEqual(result.sorumlu, ['Ayşe', 'Rehber Dışı Görevli']);
 });
 

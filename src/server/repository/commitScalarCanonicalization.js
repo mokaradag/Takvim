@@ -82,6 +82,16 @@ export function canonicalizeCommitScalars(changes) {
       ...(hasOwn(task, 'spent') ? { spent: emptyStringToNull(task.spent) } : {}),
       sortOrder: emptyStringToNull(task?.sortOrder),
       assigneeIds: mapArray(task?.assigneeIds, trimString),
+      dependencyChanges: task?.dependencyChanges == null ? task?.dependencyChanges : {
+        ...task.dependencyChanges,
+        upserts: mapArray(task.dependencyChanges.upserts, (dependency) => ({
+          ...dependency,
+          type: trimString(dependency?.type),
+          lagDays: emptyStringToNull(dependency?.lagDays),
+          lagValue: emptyStringToNull(dependency?.lagValue),
+          lagUnit: trimString(dependency?.lagUnit)
+        }))
+      },
       deps: mapArray(task?.deps, (dependency) => ({
         ...dependency,
         type: trimString(dependency?.type),

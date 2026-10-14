@@ -127,6 +127,7 @@ export function TaskDrawer({
   canManageStructure = true,
   canManageDependencies = canManageStructure,
   canEditTaskDependencies = () => true,
+  dateFormat,
   canManageRecurrence = true,
   canChooseWbs = true,
   canManageAssignees = true,
@@ -758,6 +759,7 @@ export function TaskDrawer({
                 onChange={(deps) => save({ deps })}
                 onUpdateTask={onUpdateRelatedTask}
                 canEditTask={canEditTaskDependencies}
+                dateFormat={dateFormat}
                 wbs={allWbs}
               />
             </Section>}
@@ -1211,7 +1213,7 @@ function Section({ title, icon, tone = 'var(--accent)', hint, info, children }) 
  * ters yönden düzenler ve ARDIL görevi yamalar (bkz. taskSuccessorPolicy.js).
  * Böylece tek bir kenar iki yerde saklanmaz.
  */
-function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = true, canEditTask = () => true, wbs = [] }) {
+function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = true, canEditTask = () => true, wbs = [], dateFormat }) {
   const deps = useMemo(() => task.deps || [], [task.deps]);
   const [tab, setTab] = useState('predecessors');
   const [selectedType, setSelectedType] = useState('FS');
@@ -1275,8 +1277,8 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
   }, [tasks]);
 
   const optionsById = useMemo(() => new Map(
-    buildTaskDependencyOptions(others, wbs).map((option) => [option.value, option])
-  ), [others, wbs]);
+    buildTaskDependencyOptions(others, wbs, dateFormat).map((option) => [option.value, option])
+  ), [others, wbs, dateFormat]);
 
   const predecessorOptions = useMemo(() => {
     // Döngü denetimi ARDIL yönünde de uygulanır: `A → B → C` ağında `A` açılıp

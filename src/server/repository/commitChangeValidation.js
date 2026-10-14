@@ -132,10 +132,15 @@ export function canonicalizeCommitChanges(changes) {
       projectId: canonicalUuid(task?.projectId),
       wbsId: canonicalUuid(task?.wbsId),
       calendarId: canonicalUuid(task?.calendarId),
+      dependencyChanges: task?.dependencyMutation === false && task?.version ? undefined : task?.dependencyChanges == null ? task?.dependencyChanges : {
+        ...task.dependencyChanges,
+        upserts: mapCollection(task.dependencyChanges.upserts, (dep) => ({ ...dep, predecessorId: canonicalUuid(dep?.predecessorId) })),
+        removals: mapCollection(task.dependencyChanges.removals, canonicalUuid)
+      },
       // Seri şablonu kimliği de kanonikleştirilir: yalnızca harf büyüklüğü
       // farkı yüzünden şablon bulunamadı hatası alınmamalıdır.
       recurrenceParentId: canonicalUuid(task?.recurrenceParentId),
-      deps: Array.isArray(task?.deps) ? task.deps.map((dependency) => ({
+      deps: task?.dependencyMutation === false && task?.version ? [] : Array.isArray(task?.deps) ? task.deps.map((dependency) => ({
         ...dependency,
         id: canonicalUuid(dependency?.id),
         predecessorId: canonicalUuid(dependency?.predecessorId)
@@ -283,13 +288,22 @@ function validateTaskDependencies(changes) {
     if (task.deps !== undefined && !Array.isArray(task.deps)) {
       return issue('TASK_DEPENDENCIES_NOT_ARRAY', `taskUpserts[${taskIndex}].deps`, 'Görev bağımlılıkları dizi olmalıdır.');
     }
-    for (let dependencyIndex = 0; dependencyIndex < (task.deps || []).length; dependencyIndex += 1) {
-      const dependency = task.deps[dependencyIndex];
+    const delta = task.dependencyChanges;
+    if (delta != null && (!delta || typeof delta !== 'object' || Array.isArray(delta)
+      || !Array.isArray(delta.upserts) || !Array.isArray(delta.removals))) {
+      return issue('TASK_DEPENDENCY_CHANGES_INVALID', `taskUpserts[${taskIndex}].dependencyChanges`, 'İlişki değişiklikleri ekleme ve çıkarma dizileri taşımalıdır.');
+    }
+    for (const target of delta?.removals || []) {
+      if (!isActualId(target)) return issue('DEPENDENCY_PREDECESSOR_INVALID', `taskUpserts[${taskIndex}].dependencyChanges`, 'İlişki hedefi geçerli UUID olmalıdır.');
+    }
+    const submittedDependencies = [...(task.deps || []), ...(delta?.upserts || [])];
+    for (let dependencyIndex = 0; dependencyIndex < submittedDependencies.length; dependencyIndex += 1) {
+      const dependency = submittedDependencies[dependencyIndex];
       const path = `taskUpserts[${taskIndex}].deps[${dependencyIndex}]`;
       if (!dependency || typeof dependency !== 'object' || Array.isArray(dependency)) {
         return issue('TASK_DEPENDENCY_INVALID', path, 'Görev bağımlılığı nesne olmalıdır.');
       }
-      if (!text(dependency.predecessorId)) {
+      if (!isActualId(dependency.predecessorId)) {
         return issue('DEPENDENCY_PREDECESSOR_REQUIRED', `${path}.predecessorId`, 'Bağımlılık için öncül görev kimliği gereklidir.');
       }
       if (!DEPENDENCY_TYPES.has(text(dependency.type))) {
@@ -338,7 +352,11 @@ export function findCommitChangeIssue(changes) {
   let totalDependencies = 0;
   let totalAssignees = 0;
   for (let taskIndex = 0; taskIndex < taskUpserts.length; taskIndex += 1) {
-    const dependencies = taskUpserts[taskIndex]?.deps;
+    const task = taskUpserts[taskIndex];
+    const delta = task?.dependencyChanges;
+    const deltaSize = (Array.isArray(delta?.upserts) ? delta.upserts.length : 0) + (Array.isArray(delta?.removals) ? delta.removals.length : 0);
+    if (deltaSize > MAX_COMMIT_TASK_DEPENDENCIES) return issue('TASK_DEPENDENCIES_TOO_LARGE', `taskUpserts[${taskIndex}].dependencyChanges`, 'İlişki değişiklik sınırı aşıldı.');
+    const dependencies = task?.deps;
     if (Array.isArray(dependencies)) {
       if (dependencies.length > MAX_COMMIT_TASK_DEPENDENCIES) {
         return issue(
@@ -348,8 +366,9 @@ export function findCommitChangeIssue(changes) {
           { size: dependencies.length, limit: MAX_COMMIT_TASK_DEPENDENCIES }
         );
       }
-      totalDependencies += dependencies.length;
+      totalDependencies += Math.max(dependencies.length, deltaSize);
     }
+    if (!Array.isArray(dependencies)) totalDependencies += deltaSize;
     // Sorumlular da AYNI bütçeye girer: her sicil işlem içinde bir dizin
     // sorgusu açar (bkz. MAX_COMMIT_TASK_ASSIGNEES).
     const assignees = taskUpserts[taskIndex]?.assigneeIds;

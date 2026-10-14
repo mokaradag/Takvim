@@ -313,7 +313,7 @@ test('aynı öncülün bağımlılık öznitelikleri değiştiğinde satır yeni
           ...task,
           deps: task.deps.map((dependency) => ({ ...dependency, ...patch })),
           assigneeMutation: false,
-          dependencyMutation: false
+          dependencyMutation: true
         }]
       });
 

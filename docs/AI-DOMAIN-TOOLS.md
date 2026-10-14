@@ -189,8 +189,7 @@ Araçlar yeni bir yetki modeli **kurmaz**; Rota'nın var olan anlamını kullan�
   durumundadır. "Sorumlusuz" süzgeci, sorumlu grubu, iş yükü ve kalite
   sayımları gizli atamanın varlığını ne ekleyerek ne düşürerek yansıtır.
   Dizinde çözülemeyen atama ayrı kalite denetimidir.
-- Bağımlılıklar ve baz planlar yalnızca projede **FULL** erişimde açıktır;
-  diğer düzeylerde araç `UNSUPPORTED_SCOPE` döner.
+- Bağımlılıklar ve ilişki sayıları FULL/READ/PARTIAL kapsamında yalnızca iki uç görev de görünürse döner; gizli kenarların varlığı veya kimlikleri açıklanmaz. Baz planlar yalnızca **FULL** erişimde açıktır; diğer düzeylerde baz plan aracı `UNSUPPORTED_SCOPE` döner.
 - İş dağılım ağacı: FULL/READ/kendi görev kapsamında katalog; yalnızca yönetim
   kapsamıyla görülen projede yalnızca görünür görevlerin düğümleri ve ataları.
 - **Görünmeyen kayıt ile var olmayan kayıt ayırt edilemez** (`NOT_FOUND`).
@@ -752,7 +751,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 
 - **Amaç:** Tek görevin tam künyesi.
 - **Girdiler:** `taskId` (zorunlu).
-- **Yetki:** Görünmeyen görev `NOT_FOUND`; oluşturan ve eş sorumlu kimliği anlık görüntü kuralıyla; bağımlılık sayıları yalnızca FULL.
+- **Yetki:** Görünmeyen görev `NOT_FOUND`; oluşturan ve eş sorumlu kimliği anlık görüntü kuralıyla; bağımlılık sayıları yalnızca iki ucu da görünür ilişkiler.
 - **Kaynak:** `AI_TOOL_TASK_DETAIL_SQL`.
 - **Çıktı:** açıklama (en fazla 1600 karakter, kısaltma bildirilir), proje ve iş dağılım yolu, durum, öncelik, kilometre taşı, tarihler, gecikme, ilerleme, saat, bütçe (para birimi yok), tekrar kuralı, sorumlular, oluşturan, takvim, erişim düzeyi ve nedeni, notlar.
 - **Tamlık:** Tek kayıt; boş alanlar "yok" olarak değil `null` ve not olarak döner.
@@ -784,7 +783,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 - **Girdiler:** `projectId` (zorunlu).
 - **Yetki:** Görünmeyen proje `NOT_FOUND`; erişim nedeni kullanıcının kendi yetkisidir (proje lideri, erişim hibesi, kurumsal rol, manuel sahip, sorumlu, oluşturan, yönetim kapsamı, sistem yöneticisi).
 - **Kaynak:** `AI_TOOL_PROJECT_DETAIL_SQL` + yetki bağlamı.
-- **Çıktı:** künye (kaynak etiketi ve kanonik `sourceType`, lider, takvim, etiketler, iş dağılım düğüm sayısı, FULL'da bağımlılık/baz plan sayısı), `access` (düzey, etiket, nedenler, tam görev görünümü), `visibleTasks` toplamları, `definitions`.
+- **Çıktı:** künye (kaynak etiketi ve kanonik `sourceType`, lider, takvim, etiketler, iş dağılım düğüm sayısı, görünür uçlar arasında bağımlılık sayısı ve FULL'da baz plan sayısı), `access` (düzey, etiket, nedenler, tam görev görünümü), `visibleTasks` toplamları, `definitions`.
 - **Örnek sorular:** "Bu projede neden bütün görevleri göremiyorum?"
 
 ### 10.6 `rota_portfolio_summary` — portföy
@@ -872,7 +871,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 
 - **Amaç:** Görevin öncül/ardılları ya da projenin bağımlılık kapsaması.
 - **Girdiler:** `taskId` ya da `projectId`.
-- **Yetki:** Yalnızca FULL.
+- **Yetki:** FULL/READ/PARTIAL; hem öncül hem ardıl normal uygulama kapsamında görünür olmalıdır. Odak görevi ve toplamlar aynı görünür görev kümesinden gelir. Gizli görev kimlikleri ve gizli kenar sayıları döndürülmez.
 - **Kaynak:** `AI_TOOL_DEPENDENCIES_SQL`.
 - **Çıktı:** öncüller/ardıllar (tür etiketi "Bitiş → Başlangıç (FS)", gecikme etiketi, tarihler) ya da proje kapsaması; "Kritik yol hesaplanmaz" notu.
 - **Örnek sorular:** "Bu görev hangi görevleri bekliyor?"
@@ -1098,7 +1097,7 @@ geri alma betiği kanıtı iletilerden önce düşürür.
       satırlarla yanıtlanır; `ai.grounded.turn` olayında çoğunlukla
       `modelRounds: 1`, `selectedBy: "server"` görülür. Gecikmiş görevi olmayan
       kullanıcı “Eşleşen 0 görev” yanıtı alır.
-- [ ] FULL olmayan projede baz plan/bağımlılık sorgusu veri döndürmez;
+- [ ] FULL olmayan projede baz plan sorgusu veri döndürmez; bağımlılık sorgusu snapshot ile aynı görünür uçlar arasındaki kenarları döndürür;
       doğrulanamayan yanıt sabit güvenli iletiyle sonuçlanır.
 - [ ] "Bildirimlerim" sorusundan sonra zildeki okunmamış sayısı değişmez.
 - [ ] Görev oluşturma/düzenleme istendiğinde yardımcı yapamayacağını söyler.

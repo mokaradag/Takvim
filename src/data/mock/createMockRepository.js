@@ -41,6 +41,7 @@ function normalizeMockTask(task = {}) {
   const persistentTask = { ...task };
   delete persistentTask.assigneeMutation;
   delete persistentTask.dependencyMutation;
+  delete persistentTask.dependencyChanges;
   return persistentTask;
 }
 function normalizeMockSnapshot(seed) {

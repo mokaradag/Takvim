@@ -89,7 +89,11 @@ export function normalizeActualChanges(changes = {}) {
       // Yineleme, seri şablonuna Gerçek Sistem kimliğiyle bağlanır.
       recurrenceParentId: toOptionalActualUuid(task.recurrenceParentId, 'Tekrar şablonu kimliği'),
       status: toOptionalPersistenceStatus(task.status),
-      deps: Array.isArray(task.deps) ? task.deps.map((dependency) => ({
+      dependencyChanges: task.dependencyMutation === false && task.version ? undefined : task.dependencyChanges == null ? task.dependencyChanges : {
+        upserts: task.dependencyChanges.upserts.map((dep) => ({ ...dep, predecessorId: requiredActualUuid(dep.predecessorId, 'Öncül görev kimliği') })),
+        removals: task.dependencyChanges.removals.map((id) => requiredActualUuid(id, 'Öncül görev kimliği'))
+      },
+      deps: task.dependencyMutation === false && task.version ? [] : Array.isArray(task.deps) ? task.deps.map((dependency) => ({
         ...dependency,
         id: dependency.id ? requiredActualUuid(dependency.id, 'Bağımlılık kimliği') : dependency.id,
         predecessorId: requiredActualUuid(dependency.predecessorId, 'Öncül görev kimliği')

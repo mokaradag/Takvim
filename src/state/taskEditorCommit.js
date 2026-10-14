@@ -103,7 +103,7 @@ export function prepareTaskEditorCommit(state, edits, { taskId, generateSeries =
     }
     const access = resolveTaskEditorAccess(planned, edit.id, patch);
     if (!access.ok) throw Object.assign(new Error(access.message), access);
-    updates.push({ id: edit.id, patch });
+    updates.push({ id: edit.id, patch, observedDependencies: edit.observedDependencies });
     planned = appStateReducer(planned, { type: 'task/update', id: edit.id, patch });
   }
   const template = planned.tasks.find((task) => task.id === taskId);

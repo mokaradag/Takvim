@@ -1,3 +1,4 @@
+import { dependencyChanges } from '../scheduling/dependencyChanges.js';
 import {
   normalizeRepositoryError,
   REPOSITORY_ERROR_CODES
@@ -490,23 +491,28 @@ export function createStateMutationOrchestrator({
         || Object.prototype.hasOwnProperty.call(action.patch || {}, 'projectId');
       changes.taskUpserts = changes.taskUpserts.map((task) => (
         String(task.id) === String(action.id)
-          ? { ...task, assigneeMutation, dependencyMutation, resetActualDates: action.patch?.resetActualDates === true }
+          ? { ...task, assigneeMutation, dependencyMutation,
+            ...(dependencyMutation ? { dependencyChanges: dependencyChanges(action.observedDependencies || before.tasks.find((row) => String(row.id) === String(task.id))?.deps, task.deps) } : {}),
+            resetActualDates: action.patch?.resetActualDates === true }
           : task
       ));
     }
     if (action.type === 'task/save-draft') {
-      const byId = new Map(action.updates.map((update) => [String(update.id), update.patch]));
+      const byId = new Map(action.updates.map((update) => [String(update.id), update]));
       changes.taskUpserts = changes.taskUpserts.map((task) => {
-        const patch = byId.get(String(task.id)) || {};
+        const update = byId.get(String(task.id));
+        const patch = update?.patch || {};
         return {
           ...task,
           assigneeMutation: Object.prototype.hasOwnProperty.call(patch, 'assigneeIds'),
           dependencyMutation: Object.prototype.hasOwnProperty.call(patch, 'deps')
             || Object.prototype.hasOwnProperty.call(patch, 'projectId'),
+          ...(Object.prototype.hasOwnProperty.call(patch, 'deps') ? { dependencyChanges: dependencyChanges(update?.observedDependencies || before.tasks.find((row) => String(row.id) === String(task.id))?.deps, task.deps) } : {}),
           resetActualDates: patch.resetActualDates === true
         };
       });
     }
+    if (action.type === 'task/delete') changes.taskUpserts = [];
     if (isEmptyChangeSet(changes)) {
       applyStateAction(action);
       return { ok: true, value: null };

@@ -13,8 +13,6 @@ import {
 } from './taskCommitPlanning.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
 
-const DEPENDENCY_PLANNING_VERIFIED = Symbol.for('mergen-rota.dependency-planning-verified');
-
 // Kimlikler kanonik (küçük harf) biçime indirilir: SQL Server satırlarından okunan
 // büyük harfli GUID'ler ile istemciden gelen değerler aynı anahtar uzayında karşılaştırılır.
 function uuid(value, label = 'Kimlik') {
@@ -252,43 +250,6 @@ async function loadProjectDependencyEdgesForUpdate(executor, projectId) {
   }));
 }
 
-async function loadTaskDependenciesForUpdate(executor, projectId, taskId) {
-  const req = request(executor);
-  req.input('projectId', sql.UniqueIdentifier, projectId);
-  req.input('taskId', sql.UniqueIdentifier, taskId);
-  const result = await req.query(`
-    SELECT TaskId, PredecessorTaskId, DependencyType, LagDays, LagValue, LagUnit
-    FROM dbo.MR_TaskDependencies WITH (UPDLOCK, HOLDLOCK)
-    WHERE ProjectId = @projectId AND TaskId = @taskId
-    ORDER BY TaskId, PredecessorTaskId;
-  `);
-  return (result.recordset || [])
-    .filter((row) => rowId(row.TaskId) === taskId)
-    .map((row) => ({
-      predecessorId: rowId(row.PredecessorTaskId),
-      type: row.DependencyType,
-      lagDays: row.LagDays,
-      lagValue: row.LagValue,
-      lagUnit: row.LagUnit
-    }));
-}
-
-function dependencySignature(dependency) {
-  return JSON.stringify([
-    uuid(dependency?.predecessorId, 'Öncül görev kimliği'),
-    dependency?.type,
-    Number(dependency?.lagDays || 0),
-    dependency?.lagValue == null ? null : Number(dependency.lagValue),
-    dependency?.lagUnit || null
-  ]);
-}
-
-function sameDependencies(left = [], right = []) {
-  const a = left.map(dependencySignature).sort();
-  const b = right.map(dependencySignature).sort();
-  return a.length === b.length && a.every((value, index) => value === b[index]);
-}
-
 function taskReferenceMessage(issue) {
   const messages = {
     TASK_IDENTITY_REQUIRED: 'Görev ve proje kimlikleri zorunludur.',
@@ -339,13 +300,7 @@ async function planTaskCommits(executor, changes) {
   for (const task of normalizedUpserts) {
     const exists = existingTaskProjects.has(task.id);
     const moved = exists && existingTaskProjects.get(task.id) !== task.projectId;
-    let dependencyMutation = !exists || task.dependencyMutation !== false || moved;
-    if (!dependencyMutation) {
-      dependencyMutation = !sameDependencies(
-        await loadTaskDependenciesForUpdate(executor, task.projectId, task.id),
-        task.deps
-      );
-    }
+    const dependencyMutation = !exists || task.dependencyMutation !== false || moved;
     taskUpserts.push({ ...task, dependencyMutation });
   }
   const validatedUpserts = taskUpserts.map((task) => (
@@ -365,7 +320,7 @@ async function planTaskCommits(executor, changes) {
     taskDeletes
   });
   if (issue) {
-    throw new ServerPersistenceError('MUTATION_FAILED', taskReferenceMessage(issue), { details: issue });
+    throw new ServerPersistenceError('MUTATION_FAILED', taskReferenceMessage(issue), { details: issue.code.startsWith('DEPENDENCY') || issue.code === 'CROSS_PROJECT_DEPENDENCY' ? undefined : issue });
   }
 
   return {
@@ -456,7 +411,6 @@ async function planIntegrity(executor, changes, actor) {
     await assertSingleRootWbs(executor, changes);
     const plannedChanges = await planTaskCommits(executor, changes);
     await assertAcyclicTaskDependencies(executor, plannedChanges, actor);
-    Object.defineProperty(plannedChanges, DEPENDENCY_PLANNING_VERIFIED, { value: true });
     return plannedChanges;
   });
 }
@@ -468,13 +422,12 @@ export function createHardenedSqlAppRepository() {
     async commitChanges(input) {
       const changes = normalizeChanges(input);
       return withSqlTransaction(async (transaction) => {
-        const actor = await observePhase('phase.commit.authorization', () => loadAuthorizationContext(transaction));
-        const scopedChanges = await prepareScopedTaskDependencies(transaction, actor, changes);
+        const actor = input?.[TASK_DEPENDENCY_CONTEXT]
+          || await observePhase('phase.commit.authorization', () => loadAuthorizationContext(transaction));
+        const scopedChanges = input?.[TASK_DEPENDENCY_CONTEXT] ? changes : await prepareScopedTaskDependencies(transaction, actor, changes);
         const plannedChanges = await planIntegrity(transaction, scopedChanges, actor);
         Object.defineProperty(plannedChanges, TASK_DEPENDENCY_CONTEXT, { value: actor });
-        // İşlem başına e-posta tercihi taşınır. Nesne KOPYALANMAZ: bağımlılık
-        // planlama işareti sayılamayan (non-enumerable) bir simge olarak durur
-        // ve yayılma (spread) onu düşürürdü.
+        // E-posta niyeti taşınırken doğrulanmış işlem bağlamının simgesi korunur.
         if (input?.notifyAssignees === true) plannedChanges.notifyAssignees = true;
         return baseRepository.commitChanges(plannedChanges);
       });

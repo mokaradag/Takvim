@@ -6,6 +6,7 @@ import { observePhase } from '../observability/observeOperation.js';
 import { canonicalizeCommitChanges } from './commitChangeValidation.js';
 import { canonicalizeCommitScalars } from './commitScalarCanonicalization.js';
 import { assertTaskDependencyReconciliationCovered } from './dependencyReconciliationValidation.js';
+import { prepareScopedTaskDependencies, TASK_DEPENDENCY_CONTEXT } from './taskDependencyAccess.js';
 import { createHardenedSqlAppRepository } from './hardenedSqlAppRepository.js';
 import {
   assertDeleteIntentMatchesPersistence,
@@ -78,6 +79,10 @@ export function createOrderedSqlAppRepository() {
       };
 
       return observePhase('phase.commit.transaction', () => withSqlTransaction(async (transaction) => {
+        const actor = await observePhase('phase.commit.authorization', () => loadAuthorizationContext(transaction));
+        const prepared = await prepareScopedTaskDependencies(transaction, actor, orderedChanges);
+        orderedChanges.taskUpserts = prepared.taskUpserts;
+        Object.defineProperty(orderedChanges, TASK_DEPENDENCY_CONTEXT, { value: actor });
         // Proje varlığı/sürümü sorgulanmadan önce rol denetlenir. Aksi hâlde
         // yönetici olmayan kullanıcı etkin, etkin olmayan ve bilinmeyen proje
         // kimlikleri için farklı hata alarak kayıt varlığını yoklayabilirdi.
@@ -86,7 +91,6 @@ export function createOrderedSqlAppRepository() {
         // (tamamen geçerli) bir istekte işlem başlamadan TypeError üretiyordu.
         await observePhase('phase.commit.intent-validation', async () => {
           if ((orderedChanges.projectDeletes || []).length) {
-            const actor = await loadAuthorizationContext(transaction);
             if (!actor.isSystemAdmin) {
               throw new ServerPersistenceError('FORBIDDEN', 'Projeyi yalnızca sistem yöneticisi silebilir.');
             }

@@ -98,7 +98,7 @@ test('Temel Kip seçimi Özet sayfasına iner ve Özet kip profiliyle çizilir',
   // Görev ayrıntısı Temel Kipte sade panelden açılır: pano ayrı bir bileşen
   // kurmaz, ortak `openTask` eylemini kullanır.
   assert.match(read('src/features/dashboard/DashboardView.jsx'), /const \{ openTask: onOpenTask \} = useTaskActions\(\);/);
-  assert.match(shell, /<TaskDetailOverlay simple=\{simpleMode\} \/>/);
+  assert.match(shell, /<TaskDetailOverlay simple=\{simpleMode\} dateFormat=\{t.dateFormat\} \/>/);
   assert.match(read('src/features/task-detail/TaskDetailOverlay.jsx'), /simple \? <SimpleTaskDrawer \{\.\.\.common\} \/>/);
 });
 

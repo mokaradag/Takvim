@@ -436,7 +436,7 @@ test('dizin araması kaynak sınırına ulaşırsa kesin toplam bilinmiyor olara
   assert.deepEqual([exact.result.returnedCount, exact.result.totalCount, exact.result.complete, exact.result.truncated], [25, 25, true, false]);
 });
 
-test('proje künyesi erişim nedenini açıklar; READ bağımlılık ve baz planı açmaz', async (t) => {
+test('proje künyesi READ görünür bağımlılık sayısını ve kapalı baz planı ayırır', async (t) => {
   const stack = stackFor(t);
   const read = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.READ });
   assert.equal(read.result.data.access.level, 'READ');
@@ -444,7 +444,7 @@ test('proje künyesi erişim nedenini açıklar; READ bağımlılık ve baz plan
   assert.equal(read.result.data.access.completeTaskView, true);
   assert.equal(read.result.data.access.dependenciesAndBaselines, false);
   assert.equal(read.result.data.visibleTasks.total, 2);
-  assert.equal(read.result.data.project.dependencyCount, null);
+  assert.equal(read.result.data.project.dependencyCount, 1);
   assert.equal(read.result.data.project.wbsNodeCount, 0, 'READ erişimi tam WBS kataloğu sayısını da görür');
   const partial = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.PARTIAL });
   assert.equal(partial.result.data.access.level, 'PARTIAL');
@@ -492,7 +492,7 @@ test('baz plan karşılaştırması belirlenimci sapma verir; silinmiş görevin
   assert.equal(hidden.result.error.code, 'NOT_FOUND');
 });
 
-test('bağımlılıklar FS/SS/FF/SF ve gecikmeyle okunur; kritik yol hesaplanmaz; READ projede kapalıdır', async (t) => {
+test('bağımlılıklar FS/SS/FF/SF ve gecikmeyle okunur; kritik yol hesaplanmaz; READ görünür uçları okur', async (t) => {
   const stack = stackFor(t);
   const { result } = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.DUE_SOON });
   assert.equal(result.ok, true);
@@ -520,9 +520,9 @@ test('bağımlılıklar FS/SS/FF/SF ve gecikmeyle okunur; kritik yol hesaplanmaz
   );
 
   const read = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { projectId: PROJECTS.READ });
-  assert.equal(read.result.error.code, 'UNSUPPORTED_SCOPE');
+  assert.equal(read.result.ok, true);
   const readTask = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.READ_2 });
-  assert.equal(readTask.result.error.code, 'UNSUPPORTED_SCOPE');
+  assert.equal(readTask.result.ok, true);
   const missing = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', {});
   assert.equal(missing.result.error.code, 'INVALID_ARGUMENTS');
 });
@@ -1243,3 +1243,29 @@ test('a provenance refusal is a server contract failure, not a size error the mo
   assert.equal(JSON.parse(messages[1].content).error?.code, 'LIMIT_EXCEEDED', messages[1].content);
   assert.equal(full.full(), true);
 });
+
+for (const mode of ['FULL', 'READ', 'PARTIAL']) {
+  test(`AI bağımlılık okuması snapshot ile aynı görünür uçları döndürür (${mode})`, async (t) => {
+    const seed = rotaToolSeed();
+    const projectId = PROJECTS.PARTIAL;
+    seed.corporateProjectAccess = mode === 'FULL' ? [{ Sicil: AYSE, ProjectCode: 'PRT' }] : [];
+    if (mode === 'READ') seed.projectAccess.push({ ProjectId: projectId, Sicil: AYSE, AccessLevel: 'READ', IsActive: 1 });
+    seed.taskDependencies = [
+      { ProjectId: projectId, TaskId: TASKS.PARTIAL_OWN, PredecessorTaskId: TASKS.PARTIAL_SHARED, DependencyType: 'FS', LagDays: 0 },
+      { ProjectId: projectId, TaskId: TASKS.PARTIAL_OWN, PredecessorTaskId: PARTIAL_OTHERS[0], DependencyType: 'SS', LagDays: 0 }
+    ];
+    const stack = createAiStack(t, { sicil: AYSE, seed });
+    const { createSqlAppRepository } = await import('../src/server/repository/sqlAppRepository.js');
+    const snapshot = await createSqlAppRepository().readSnapshot();
+    const task = snapshot.tasks.find((task) => task.id === TASKS.PARTIAL_OWN);
+    const expected = task.deps.map((dep) => dep.predecessorId).sort();
+    const inspection = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: task.id });
+    assert.equal(inspection.result.ok, true, JSON.stringify(inspection.result));
+    assert.deepEqual(inspection.result.data.predecessors.map((dep) => dep.taskId).sort(), expected);
+    const detail = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: task.id });
+    assert.equal(detail.result.data.task.dependencies.predecessorCount, expected.length);
+    const coverage = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { projectId });
+    assert.equal(coverage.result.data.coverage.dependencyCount, expected.length);
+    if (mode === 'PARTIAL') assert.equal(JSON.stringify(inspection.result).includes(PARTIAL_OTHERS[0]), false);
+  });
+}

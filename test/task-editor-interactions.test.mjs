@@ -379,3 +379,54 @@ test('normal sorumlu ilişkileri görür; aynı adlı görevler İDA ve tarihle 
     assert.equal((await view.editor.output.props.onUpdateRelatedTask('read', { deps: [{ predecessorId: 't1', type: 'FS' }] })).ok, false);
   } finally { relations?.unmount(); view.close(); delete globalThis[CLIENT_STATE]; }
 });
+
+test('500 görevli seçicide yazı girişi yetki indeksini yeniden kurmaz', () => {
+  const state = fixture();
+  state.projects[0].accessLevel = 'PARTIAL';
+  Object.assign(state.selectedTask, { isCurrentUserAssignee: true, assigneeIds: ['1'] });
+  state.tasks = [state.selectedTask, ...Array.from({ length: 500 }, (_, i) => ({
+    ...state.selectedTask, id: `large-${i}`, task: `Görev ${i}`
+  }))];
+  globalThis[CLIENT_STATE] = state;
+  const view = editorFor(false);
+  try {
+    const predicate = view.editor.output.props.canEditTaskDependencies;
+    const originalFind = state.tasks.find;
+    const originalSome = state.tasks.some;
+    state.tasks.find = () => { throw new Error('Yetki grafiği tekrar tarandı'); };
+    state.tasks.some = () => { throw new Error('Yetki grafiği tekrar tarandı'); };
+    for (const task of state.tasks) assert.equal(predicate(task), true);
+    state.tasks.find = originalFind;
+    state.tasks.some = originalSome;
+    input(view.drawer.output, (node) => ['input', 'textarea'].includes(node.type) && node.props.value === 'Başlangıç').props.onChange({ target: { value: 'Yeni başlık' } });
+    view.sync();
+    assert.equal(view.editor.output.props.canEditTaskDependencies, predicate);
+  } finally { view.close(); delete globalThis[CLIENT_STATE]; }
+});
+
+test('açık öncül ve ardıl seçicilerinde tarih tercihi görev listesi değişmeden güncellenir', () => {
+  const state = fixture();
+  state.tasks.push({ ...state.selectedTask, id: 't2', task: 'Aday', plannedStart: '2026-10-14', plannedFinish: '2026-10-20' });
+  globalThis[CLIENT_STATE] = state;
+  const outer = mountComponent(TaskDetailOverlay, { dateFormat: 'pattern' });
+  const editor = mountComponent(outer.output.type, outer.output.props);
+  const drawer = mountComponent(editor.output.type, editor.output.props);
+  const relationNode = input(drawer.output, (node) => node.type?.name === 'RelEditor');
+  const relations = mountComponent(relationNode.type, relationNode.props);
+  try {
+    for (const label of ['Öncül görev seçin', 'Ardıl görev seçin']) {
+      input(relations.output, (node) => node.props?.role === 'tab' && String(node.props.children).includes(label.startsWith('Öncül') ? 'Öncüller' : 'Ardıllar')).props.onClick();
+      relations.render();
+      assert.match(input(relations.output, (node) => node.props?.ariaLabel === label).props.options[0].description, /14 Eki 2026/);
+    }
+    outer.render({ dateFormat: 'dd/mm/yyyy' });
+    editor.render(outer.output.props);
+    drawer.render(editor.output.props);
+    relations.render(input(drawer.output, (node) => node.type?.name === 'RelEditor').props);
+    for (const label of ['Öncül görev seçin', 'Ardıl görev seçin']) {
+      input(relations.output, (node) => node.props?.role === 'tab' && String(node.props.children).includes(label.startsWith('Öncül') ? 'Öncüller' : 'Ardıllar')).props.onClick();
+      relations.render();
+      assert.match(input(relations.output, (node) => node.props?.ariaLabel === label).props.options[0].description, /14\/10\/2026/);
+    }
+  } finally { relations.unmount(); drawer.unmount(); editor.unmount(); outer.unmount(); delete globalThis[CLIENT_STATE]; }
+});

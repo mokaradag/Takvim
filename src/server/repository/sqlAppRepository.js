@@ -43,7 +43,6 @@ import { CORPORATE_PROJECT_SYNC_SQL } from './corporateQueries.js';
 import { CORPORATE_WBS_SYNC_WARMTH_SQL } from './corporateWbsQueries.js';
 import { synchronizeCorporateWbs } from './corporateWbsSync.js';
 
-const DEPENDENCY_PLANNING_VERIFIED = Symbol.for('mergen-rota.dependency-planning-verified');
 import { runCorporateWbsSync } from './corporateWbsSyncSchedule.js';
 import { decodeVersion, encodeVersion } from './versionTokens.js';
 
@@ -910,7 +909,6 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
   const req = request(executor);
   req.input('sicil', sql.Int, auth.sicil);
   req.input('isAdmin', sql.Bit, auth.isSystemAdmin);
-  req.input('hasFullScope', sql.Bit, Boolean(auth.isSystemAdmin || auth.effective?.fullProjectIds?.size));
   req.input('canAssignAllCorporate', sql.Bit, Boolean(auth.canAssignAllCorporateProjects));
   req.input('projectIds', sql.NVarChar(sql.MAX), projectIds.join(','));
   req.input('wbsIds', sql.NVarChar(sql.MAX), wbsIds.join(','));
@@ -920,11 +918,12 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
 
     DROP TABLE IF EXISTS #RequestedProjects, #RequestedWbs, #RequestedTasks, #ExecutiveScope,
       #ScopeProjects, #ProjectRole, #TaskScopedProjects, #ProjectAuth, #TaskAssigneeFacts,
-      #CreatorReadScope, #DirectoryNames;
+      #DependencyTargets, #DirectoryNames;
 
     CREATE TABLE #RequestedProjects(ProjectId uniqueidentifier PRIMARY KEY);
     CREATE TABLE #RequestedWbs(WbsId uniqueidentifier PRIMARY KEY);
     CREATE TABLE #RequestedTasks(TaskId uniqueidentifier PRIMARY KEY);
+    CREATE TABLE #DependencyTargets(TaskId uniqueidentifier PRIMARY KEY);
     CREATE TABLE #ExecutiveScope(EmployeeSicil int PRIMARY KEY);
     CREATE TABLE #ScopeProjects(ProjectId uniqueidentifier PRIMARY KEY);
     CREATE TABLE #ProjectRole(
@@ -948,7 +947,6 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       IsOwnAssignee bit NOT NULL,
       IsScopeAssignee bit NOT NULL
     );
-    CREATE TABLE #CreatorReadScope(Sicil int PRIMARY KEY);
 
     -- Kimlik listeleri TEK KEZ ayrıştırılır. Her deyim kendi STRING_SPLIT
     -- çağrısını yaptığında aynı metin altı kez bölünüyor ve dönüştürülmüş
@@ -968,6 +966,10 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       SELECT TRY_CONVERT(uniqueidentifier, LTRIM(RTRIM(value))) AS Id FROM STRING_SPLIT(@taskIds, ',')
     ) parsed WHERE parsed.Id IS NOT NULL;
 
+    INSERT #DependencyTargets(TaskId)
+    SELECT DISTINCT d.PredecessorTaskId FROM dbo.MR_TaskDependencies d
+    JOIN #RequestedTasks rt ON rt.TaskId = d.TaskId;
+
     -- Yönetim kapsamı TEK KEZ okunur. Aynı Sicil birden fazla kademede bulunabilir.
     INSERT #ExecutiveScope(EmployeeSicil)
     SELECT DISTINCT EmployeeSicil
@@ -981,6 +983,8 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       SELECT w.ProjectId FROM dbo.MR_WBS w JOIN #RequestedWbs rw ON rw.WbsId = w.WbsId
       UNION
       SELECT t.ProjectId FROM dbo.MR_Tasks t JOIN #RequestedTasks rt ON rt.TaskId = t.TaskId
+      UNION
+      SELECT t.ProjectId FROM dbo.MR_Tasks t JOIN #DependencyTargets dt ON dt.TaskId = t.TaskId
     ) scoped;
 
     -- Rol ve açık yetki kararı proje başına TEK KEZ verilir.
@@ -1051,32 +1055,10 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       COUNT(ta.Sicil),
       CAST(MAX(CASE WHEN ta.Sicil = @sicil THEN 1 ELSE 0 END) AS bit),
       CAST(MAX(CASE WHEN es.EmployeeSicil IS NOT NULL THEN 1 ELSE 0 END) AS bit)
-    FROM #RequestedTasks rt
+    FROM (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets) rt
     LEFT JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = rt.TaskId
     LEFT JOIN #ExecutiveScope es ON es.EmployeeSicil = ta.Sicil
     GROUP BY rt.TaskId;
-
-    -- READ yetkisi üzerinden künye açılan OLUŞTURANLAR küme olarak çözülür.
-    -- Yüklem görev satırı başına çalıştığında, oluşturanın bütün atamaları ve
-    -- o atamaların projeleri her satır için yeniden taranıyordu.
-    INSERT #CreatorReadScope(Sicil)
-    SELECT candidate.Sicil
-    FROM (
-      SELECT DISTINCT t.CreatedBySicil AS Sicil
-      FROM dbo.MR_Tasks t
-      JOIN #RequestedTasks rt ON rt.TaskId = t.TaskId
-      WHERE t.CreatedBySicil IS NOT NULL
-    ) candidate
-    WHERE EXISTS (
-      SELECT 1
-      FROM dbo.MR_TaskAssignees creatorAssignment
-      JOIN dbo.MR_Tasks creatorTask ON creatorTask.TaskId = creatorAssignment.TaskId
-      JOIN dbo.MR_ProjectAccess creatorReadGrant ON creatorReadGrant.ProjectId = creatorTask.ProjectId
-        AND creatorReadGrant.Sicil = @sicil
-        AND creatorReadGrant.IsActive = 1
-        AND creatorReadGrant.AccessLevel = 'READ'
-      WHERE creatorAssignment.Sicil = candidate.Sicil
-    );
 
     -- Kişi rehberi görünümü TEK KEZ, yalnızca gereken Siciller için okunur.
     SELECT needed.Sicil, NULLIF(LTRIM(RTRIM(pd.DisplayName)), '') AS DisplayName
@@ -1125,20 +1107,9 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
     JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
     JOIN #TaskAssigneeFacts facts ON facts.TaskId = t.TaskId
     CROSS APPLY (
-      SELECT CAST(CASE WHEN @hasFullScope = 1
+      SELECT CAST(CASE WHEN pa.AccessLevel = 'FULL' OR pa.HasReadGrant = 1
         OR t.CreatedBySicil = @sicil
         OR facts.IsOwnAssignee = 1
-        OR p.LeadSicil = t.CreatedBySicil
-        OR (
-          @canAssignAllCorporate = 1
-          AND EXISTS (
-            SELECT 1 FROM #ExecutiveScope creatorScope
-            WHERE creatorScope.EmployeeSicil = t.CreatedBySicil
-          )
-        )
-        OR EXISTS (
-          SELECT 1 FROM #CreatorReadScope creatorRead WHERE creatorRead.Sicil = t.CreatedBySicil
-        )
       THEN 1 ELSE 0 END AS bit) AS IdentityVisible
     ) creatorAuth
     LEFT JOIN #DirectoryNames creator
@@ -1176,24 +1147,20 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
     SELECT d.*
     FROM dbo.MR_TaskDependencies d
     JOIN #RequestedTasks rt ON rt.TaskId = d.TaskId
-    JOIN #ProjectAuth pa ON pa.ProjectId = d.ProjectId
     JOIN dbo.MR_Tasks successor ON successor.TaskId = d.TaskId
-    JOIN #TaskAssigneeFacts facts ON facts.TaskId = d.TaskId
+    JOIN #ProjectAuth pa ON pa.ProjectId = successor.ProjectId
+    JOIN #TaskAssigneeFacts facts ON facts.TaskId = successor.TaskId
+    JOIN dbo.MR_Tasks predecessor ON predecessor.TaskId = d.PredecessorTaskId
+    JOIN #ProjectAuth predecessorAuth ON predecessorAuth.ProjectId = predecessor.ProjectId
+    JOIN #TaskAssigneeFacts predecessorFacts ON predecessorFacts.TaskId = predecessor.TaskId
     WHERE (pa.AccessLevel = 'FULL' OR pa.HasReadGrant = 1
       OR successor.CreatedBySicil = @sicil OR facts.IsOwnAssignee = 1 OR facts.IsScopeAssignee = 1)
-      AND (pa.AccessLevel = 'FULL' OR pa.HasReadGrant = 1
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_Tasks predecessor
-        WHERE predecessor.TaskId = d.PredecessorTaskId
-          AND (predecessor.CreatedBySicil = @sicil
-            OR EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees a
-              WHERE a.TaskId = predecessor.TaskId AND (a.Sicil = @sicil
-                OR EXISTS (SELECT 1 FROM #ExecutiveScope es WHERE es.EmployeeSicil = a.Sicil))))
-      ));
+      AND (predecessorAuth.AccessLevel = 'FULL' OR predecessorAuth.HasReadGrant = 1
+        OR predecessor.CreatedBySicil = @sicil OR predecessorFacts.IsOwnAssignee = 1 OR predecessorFacts.IsScopeAssignee = 1);
 
     DROP TABLE #RequestedProjects, #RequestedWbs, #RequestedTasks, #ExecutiveScope,
       #ScopeProjects, #ProjectRole, #TaskScopedProjects, #ProjectAuth, #TaskAssigneeFacts,
-      #CreatorReadScope, #DirectoryNames;
+      #DependencyTargets, #DirectoryNames;
   `);
 
   const [projectRows = [], tagRows = [], wbsRows = [], taskRows = [], assigneeRows = [], dependencyRows = []] = result.recordsets || [];
@@ -1754,7 +1721,7 @@ async function projectRootWbsId(executor, projectId) {
  * Bu ilişkili görevler görünmez ve yöneticinin kapsamı dışında olabilir; tam
  * yetkisi olmayan bir aktör için silme o satırlara dokunmamalıdır.
  */
-async function hasRelatedTasksOutsideScope(executor, actor, taskId) {
+async function hasRelatedTasksOutsideScope(executor, actor, taskId, { dependencies = true } = {}) {
   const req = request(executor);
   req.input('taskId', sql.UniqueIdentifier, taskId);
   req.input('managerSicil', sql.Int, actor.sicil);
@@ -1762,12 +1729,12 @@ async function hasRelatedTasksOutsideScope(executor, actor, taskId) {
     SELECT TOP (1) related.TaskId
     FROM (
       SELECT TaskId FROM dbo.MR_Tasks WITH (UPDLOCK, HOLDLOCK) WHERE RecurrenceParentTaskId = @taskId
-      UNION
+      ${dependencies ? `UNION
       SELECT TaskId FROM dbo.MR_TaskDependencies WITH (UPDLOCK, HOLDLOCK) WHERE PredecessorTaskId = @taskId
       UNION
       SELECT PredecessorTaskId AS TaskId
       FROM dbo.MR_TaskDependencies WITH (UPDLOCK, HOLDLOCK)
-      WHERE TaskId = @taskId
+      WHERE TaskId = @taskId` : ''}
     ) related
     WHERE related.TaskId <> @taskId
       AND NOT EXISTS (
@@ -1815,21 +1782,18 @@ async function taskAssigneeSicilsForUpdate(executor, taskId) {
  * İstemcinin aynı yetki bağlamında görebileceği kalıcı görev sorumlularını
  * döndürür. Dar sorumlu güncellemesinde gelen `assigneeIds`, eksik PARTIAL
  * görünümün yetkili listeyi değiştirmesine izin vermeden bu projeksiyonla
- * karşılaştırılır. İstemci normalleştirmesi gibi yalnızca yayımlanmış rehber
- * kimlikleri karşılaştırmaya girer; görev künyesi rehberi genişletmez.
+ * karşılaştırılır. Görevde yetkili kimlikler rehber yayınına bağlı değildir;
+ * görev künyesi atama rehberini genişletmez.
  */
 async function visibleTaskAssigneeSicils(executor, actor, taskId) {
   const req = request(executor);
   req.input('taskId', sql.UniqueIdentifier, taskId);
   req.input('sicil', sql.Int, actor.sicil);
   req.input('isAdmin', sql.Bit, actor.isSystemAdmin);
-  req.input('hasFullScope', sql.Bit, actor.isSystemAdmin || actor.effective.fullProjectIds.size > 0);
-  req.input('visibleProjectIds', sql.NVarChar(sql.MAX), [...actor.effective.access.keys()].join(','));
   const result = await req.query(`
     SELECT ta.Sicil
     FROM dbo.MR_TaskAssignees ta
     JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
-    JOIN dbo.MR_V_PeopleDirectory directory ON directory.Sicil = ta.Sicil
     JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
     WHERE ta.TaskId = @taskId AND (
       @isAdmin = 1
@@ -1849,20 +1813,6 @@ async function visibleTaskAssigneeSicils(executor, actor, taskId) {
         SELECT 1 FROM dbo.MR_V_ExecutiveScope es
         WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
       )
-    ) AND (
-      @hasFullScope = 1 OR ta.Sicil = @sicil
-      OR EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-        WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil)
-      OR EXISTS (SELECT 1 FROM dbo.MR_Projects visibleProject
-        WHERE visibleProject.IsActive = 1 AND visibleProject.LeadSicil = ta.Sicil
-          AND visibleProject.ProjectId IN (SELECT TRY_CONVERT(uniqueidentifier, value)
-            FROM STRING_SPLIT(@visibleProjectIds, ',')))
-      OR EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees published
-        JOIN dbo.MR_Tasks publishedTask ON publishedTask.TaskId = published.TaskId
-        JOIN dbo.MR_Projects publishedProject ON publishedProject.ProjectId = publishedTask.ProjectId AND publishedProject.IsActive = 1
-        JOIN dbo.MR_ProjectAccess readGrant ON readGrant.ProjectId = publishedTask.ProjectId
-          AND readGrant.Sicil = @sicil AND readGrant.IsActive = 1 AND readGrant.AccessLevel = 'READ'
-        WHERE published.Sicil = ta.Sicil)
     );
   `);
   return (result.recordset || []).map((row) => Number(row.Sicil));
@@ -2002,7 +1952,7 @@ function assertAssigneeTaskCreateFieldsOnly(task, parent = null) {
   }
 }
 
-async function commitTask(executor, actor, task, correlationId, { dependencyPlanningVerified = false } = {}) {
+async function commitTask(executor, actor, task, correlationId) {
   const taskId = uuid(task.id);
   const projectId = uuid(task.projectId);
   const before = await taskRow(executor, taskId);
@@ -2025,7 +1975,7 @@ async function commitTask(executor, actor, task, correlationId, { dependencyPlan
   const selfRecurrence = narrowTaskWrite && !before.RecurrenceParentTaskId
     && authoritativeAssigneeSicils.length === 1 && actorIsAssignee;
 
-  if (narrowTaskWrite && !creatorAssigneeWrite) {
+  if (narrowTaskWrite && !creatorAssigneeWrite && task.assigneeMutation !== false) {
     const submittedAssigneeSicils = (task.assigneeIds || []).map(Number);
     const visibleAssigneeSicils = await visibleTaskAssigneeSicils(executor, actor, taskId);
     if (!sameSicilSet(submittedAssigneeSicils, visibleAssigneeSicils)) {
@@ -2079,7 +2029,8 @@ async function commitTask(executor, actor, task, correlationId, { dependencyPlan
 
   // Sorumlular sonra doğrulanır: görev atama kapsamı, yamanın SONUÇ
   // sorumlularına bakarak karar verir.
-  const assigneesUnchanged = Boolean(before) && sameSicilSet(authoritativeAssigneeSicils, (task.assigneeIds || []).map(Number));
+  const assigneesUnchanged = Boolean(before) && (task.assigneeMutation === false
+    || sameSicilSet(authoritativeAssigneeSicils, (task.assigneeIds || []).map(Number)));
   const assigneeSicils = (narrowTaskWrite && !creatorAssigneeWrite) || assigneesUnchanged
     ? authoritativeAssigneeSicils
     : await ensurePeople(executor, task.assigneeIds || []);
@@ -2445,7 +2396,7 @@ async function commitTask(executor, actor, task, correlationId, { dependencyPlan
     }
   }
 
-  const rewriteDependencies = !dependencyPlanningVerified || task.dependencyMutation !== false;
+  const rewriteDependencies = !before || task.dependencyMutation !== false || beforeProjectId !== projectId;
   if (rewriteDependencies) {
     const clear = request(executor);
     clear.input('taskId', sql.UniqueIdentifier, taskId);
@@ -2671,12 +2622,10 @@ async function deleteTask(executor, actor, entry, correlationId) {
       throw new ServerPersistenceError('FORBIDDEN', 'Bu görevde başka sorumlular bulunduğu için silemezsiniz.');
     }
   }
-  // Silme yalnızca bu satırı değil, yinelemelerini ve ardıllarının bağımlılık
-  // satırlarını da değiştirir. Tam yetkisi olmayan aktör için bu ilişkili
-  // görevlerin de kapsam içinde olduğu doğrulanır; aksi hâlde kapsam içi bir
-  // görevi silmek, hiç görülmeyen görevlere yazardı.
+  // İlişki temizliği sunucuya aittir; yalnızca yinelemelerin satır yazması
+  // ayrıca kapsam gerektirir. Ardıl görevin içeriği değiştirilmez.
   if (!fullProjectWrite
-    && await hasRelatedTasksOutsideScope(executor, actor, taskId)) {
+    && await hasRelatedTasksOutsideScope(executor, actor, taskId, { dependencies: false })) {
     throw new ServerPersistenceError(
       'FORBIDDEN',
       'Bu görev, yetki alanınız dışındaki görevlerle ilişkili (yineleme ya da bağımlılık). Silme işlemi tam proje yetkisi gerektirir.'
@@ -2957,7 +2906,6 @@ export function createSqlAppRepository() {
     },
 
     async commitChanges(input) {
-      const dependencyPlanningVerified = input?.[DEPENDENCY_PLANNING_VERIFIED] === true;
       let changes = normalizeChanges(input);
       return withSqlTransaction(async (transaction) => {
         const actor = input?.[TASK_DEPENDENCY_CONTEXT]
@@ -2984,7 +2932,7 @@ export function createSqlAppRepository() {
         const assignmentChanges = [];
         for (const task of changes.taskUpserts) {
           const touched = await observePhase('phase.commit.task-mutation', () => commitTask(
-            transaction, actor, task, correlationId, { dependencyPlanningVerified }
+            transaction, actor, task, correlationId
           ));
           if (touched.projectId) touchedTaskProjects.add(touched.projectId);
           if (touched.beforeProjectId) touchedTaskProjects.add(touched.beforeProjectId);

@@ -739,3 +739,5 @@ sıralama düğmesi vardır: hedef tarihe göre artan (varsayılan) veya azalan.
 olmayan görev her iki yönde de en altta kalır ve eşitlikte sıra kararlıdır.
 Düğme yalnızca simge taşır; erişilebilir adı ve ipucu hangi yönde sıralandığını
 söyler. İşlem tümüyle istemci tarafındadır.
+
+Dependency pickers in the open Task drawer react to the date-format preference without a reload. Their successor edit predicate is backed by a stable, memoized Task-write index, including recurrence and assignment scope, so ordinary text input does not scan the whole authorization graph. Selected predecessors in assignee-scoped creation are saved and reloaded under the same server validation as existing Tasks.
