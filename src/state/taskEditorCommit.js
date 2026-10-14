@@ -26,7 +26,7 @@ export function resolveTaskEditorAccess(state, taskId, patch = {}) {
   const blocked = Object.keys(changed).find((field) => (
     (field === 'targetFinish' && !access.canEditTargetFinish)
     || (['plannedStart', 'plannedFinish'].includes(field) && !access.canControlSchedule)
-    || (field === 'deps' && !access.canManageStructure)
+    || (field === 'deps' && !access.canManageDependencies)
     || (field === 'recurrence' && !access.canManageRecurrence)
   ));
   return blocked ? {

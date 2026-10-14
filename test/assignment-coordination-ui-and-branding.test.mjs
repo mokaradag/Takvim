@@ -572,3 +572,14 @@ test('sekme simgesi pusula markasıdır ve açık/koyu bağlamda okunur kalır',
   // Ana logo ile aynı ürün kimliği: iki yüzey de pusula çizer.
   assert.match(read('src/components/shell/AppLogo.jsx'), /Rota compass mark/);
 });
+
+test('bölüm dışı doğrudan atama bildirimi zil ve ayrıntıda aynı doğru başlığı kullanır', () => {
+  const record = { id: 'notice', mode: 'NOTICE', status: 'NOTIFIED', allowedDecisions: [], taskAvailable: true, taskTitle: 'Test', assigneeName: 'Çalışan', assigneeSicil: '900', createdAt: '2026-10-14T09:00:00Z' };
+  const [item] = notificationCenterItems({ assignmentCoordinations: [record] });
+  assert.equal(item.headline, 'Bölüm dışı atama bildirimi');
+  const view = mountComponent(AssignmentCoordinationDialog, { record, onClose() {}, onDecide() {}, onOpenTask() {} });
+  try {
+    assert.ok(findElement(view.output, (node) => node.props?.children === 'Bölüm dışı atama bildirimi'));
+    assert.equal(findElement(view.output, (node) => node.props?.children === 'Kurum dışı atama bildirimi'), null);
+  } finally { view.unmount(); }
+});

@@ -242,6 +242,7 @@ export function SearchableSelect({
               role="option"
               data-active={activeIndex === index ? 'true' : 'false'}
               aria-selected={selectedOption}
+              title={option.title}
               className={`searchable-select-option${activeIndex === index ? ' is-active' : ''}${selectedOption ? ' is-selected' : ''}`}
               onMouseEnter={() => setActiveIndex(index)}
               onClick={() => select(option)}

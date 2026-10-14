@@ -595,11 +595,13 @@ test('project-level READ grants expose project tasks, WBS, assignees, and requir
   assert.match(source, /-- FULL ya da READ projesinde oluşturan kimliği zaten açıktır\.\s+1\s+FROM dbo\.MR_Tasks t/);
   assert.match(source, /scoped\.IsOwnAssignee, scoped\.IsScopeAssignee,\s+CASE WHEN t\.CreatedBySicil = @sicil THEN 1 ELSE 0 END/);
   assert.match(source, /CASE WHEN visible\.HasReadGrant = 1/);
-  assert.match(source, /SELECT d\.\*[\s\S]*WHERE v\.AccessLevel = 'FULL';/);
+  assert.match(source, /SELECT d\.\*[\s\S]*JOIN #VisibleTasks successor ON successor\.TaskId = d\.TaskId\s+JOIN #VisibleTasks predecessor ON predecessor\.TaskId = d\.PredecessorTaskId;/);
   // Yetkili mutasyon yanıtında da READ yetkisi görev/WBS görünürlüğünü açar,
-  // bağımlılıkları AÇMAZ.
+  // bağımlılıklar iki ucun da görünürlüğüyle süzülür.
   assert.match(source, /JOIN #ProjectAuth pa ON pa\.ProjectId = w\.ProjectId\s+WHERE pa\.AccessLevel = 'FULL' OR pa\.HasReadGrant = 1 OR pa\.IsTaskScoped = 1;/);
-  assert.match(source, /JOIN #ProjectAuth pa ON pa\.ProjectId = d\.ProjectId\s+WHERE pa\.AccessLevel = 'FULL';/);
+  assert.match(source, /JOIN dbo\.MR_Tasks successor ON successor\.TaskId = d\.TaskId/);
+  assert.match(source, /predecessor\.TaskId = d\.PredecessorTaskId/);
+  assert.match(source, /successor\.CreatedBySicil = @sicil OR facts\.IsOwnAssignee = 1 OR facts\.IsScopeAssignee = 1/);
 });
 
 test('root WBS deletion is rejected in both domain state and SQL persistence', () => {

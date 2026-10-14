@@ -486,10 +486,13 @@
 }
 .rel-add-row {
   display: grid;
-  grid-template-columns: 110px minmax(0, 1fr);
+  grid-template-columns: minmax(4.5rem, max-content) minmax(0, 1fr);
   gap: 8px;
   margin-top: 4px;
 }
+
+.rel-successor { min-width: 0; margin: 0; }
+.rel-successor:disabled { opacity: .65; }
 
 /* ── Görev paneli bölümleri ──────────────────────────────────────
    Her bölüm kendi vurgu rengini (`--section-tone`) taşır. Başlıklar daha önce

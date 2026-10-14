@@ -322,7 +322,7 @@ const assignmentRequests = {
   topic: 'requests',
   evidenceKind: 'assignment-requests',
   authorization: 'Atama Koordinasyonu ekranının kuralı: talep eden, alıcı, CANLI karar yetkisi (sistem yöneticisi, güncel FULL proje yetkisi ya da güncel yönetim ilişkisi). Alıcı satırı tek başına yetki değildir.',
-  description: 'Kurum dışı atama koordinasyonu kayıtlarını salt okunur listeler: onay bekleyen talepler, bildirimler ve geçmiş; kararın kimde olduğu ve kullanıcının karar verip veremeyeceği. Karar vermez, okundu işaretlemez.',
+  description: 'Bölüm dışı atama koordinasyonu kayıtlarını salt okunur listeler: onay bekleyen talepler, bildirimler ve geçmiş; kararın kimde olduğu ve kullanıcının karar verip veremeyeceği. Karar vermez, okundu işaretlemez.',
   parameters: {
     type: 'object',
     additionalProperties: false,

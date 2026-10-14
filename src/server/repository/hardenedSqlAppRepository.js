@@ -1,5 +1,7 @@
 import 'server-only';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
+import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
+import { prepareScopedTaskDependencies, TASK_DEPENDENCY_CONTEXT } from './taskDependencyAccess.js';
 import { ServerPersistenceError } from '../errors.js';
 import { observePhase } from '../observability/observeOperation.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
@@ -373,7 +375,7 @@ async function planTaskCommits(executor, changes) {
   };
 }
 
-async function assertAcyclicTaskDependencies(executor, changes) {
+async function assertAcyclicTaskDependencies(executor, changes, actor) {
   const dependencyUpserts = changes.taskUpserts.filter((task) => task.dependencyMutation !== false);
   if (!dependencyUpserts.length && !changes.taskDeletes.length) return;
 
@@ -440,19 +442,20 @@ async function assertAcyclicTaskDependencies(executor, changes) {
     const cycleTaskIds = findDependencyCycle(projectEdges.get(projectId) || []);
     if (cycleTaskIds.length) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Görev bağımlılıkları döngü oluşturamaz.', {
-        details: { projectId, taskIds: cycleTaskIds }
+        details: actor.isSystemAdmin || actor.effective.access.get(projectId)?.accessLevel === 'FULL'
+          ? { projectId, taskIds: cycleTaskIds } : undefined
       });
     }
   }
 }
 
-async function planIntegrity(executor, changes) {
+async function planIntegrity(executor, changes, actor) {
   return observePhase('phase.commit.integrity-planning', async () => {
     await assertActiveProjectMutationTargets(executor, changes);
     await assertActiveCalendarReferences(executor, changes);
     await assertSingleRootWbs(executor, changes);
     const plannedChanges = await planTaskCommits(executor, changes);
-    await assertAcyclicTaskDependencies(executor, plannedChanges);
+    await assertAcyclicTaskDependencies(executor, plannedChanges, actor);
     Object.defineProperty(plannedChanges, DEPENDENCY_PLANNING_VERIFIED, { value: true });
     return plannedChanges;
   });
@@ -465,7 +468,10 @@ export function createHardenedSqlAppRepository() {
     async commitChanges(input) {
       const changes = normalizeChanges(input);
       return withSqlTransaction(async (transaction) => {
-        const plannedChanges = await planIntegrity(transaction, changes);
+        const actor = await observePhase('phase.commit.authorization', () => loadAuthorizationContext(transaction));
+        const scopedChanges = await prepareScopedTaskDependencies(transaction, actor, changes);
+        const plannedChanges = await planIntegrity(transaction, scopedChanges, actor);
+        Object.defineProperty(plannedChanges, TASK_DEPENDENCY_CONTEXT, { value: actor });
         // İşlem başına e-posta tercihi taşınır. Nesne KOPYALANMAZ: bağımlılık
         // planlama işareti sayılamayan (non-enumerable) bir simge olarak durur
         // ve yayılma (spread) onu düşürürdü.

@@ -192,7 +192,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
 
   if (limitedCreator) {
     const protectedFields = new Set([
-      'projectId', 'proje', 'calendarId', 'assigneeIds', 'deps',
+      'projectId', 'proje', 'calendarId', 'assigneeIds',
       'isMilestone', 'milestone', 'recurrence', 'recurrenceParentId',
       'recurrenceOccurrenceDate', 'sortOrder',
       // GERÇEKLEŞEN tarihler oluşturucuya açıktır: görevi açan kişi çoğunlukla
@@ -223,6 +223,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       // `canManageRecurrence` tekrar bölümünü/generasyonu açık tutar. Kural
       // düzenleme yetkisi ayrı bayraktır; çocuklar üretildikten sonra kapanır.
       canManageStructure: false,
+      canManageDependencies: true,
       canManageRecurrence: selfRecurrence,
       canEditRecurrenceRule: canEditSelfRecurrence,
       canGenerateRecurrence: selfRecurrence,
@@ -240,7 +241,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
 
   if (assigneeWorkOnly) {
     const protectedFields = new Set([
-      'projectId', 'proje', 'wbsId', 'calendarId', 'assigneeIds', 'deps',
+      'projectId', 'proje', 'wbsId', 'calendarId', 'assigneeIds',
       'isMilestone', 'milestone', 'recurrence', 'recurrenceParentId',
       'recurrenceOccurrenceDate', 'sortOrder',
       // Sorumlu KENDİ plan tarihlerini (`plannedStart` / `plannedFinish`) ve
@@ -270,6 +271,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       destinationProject: sourceProject,
       scope: 'ASSIGNEE',
       canManageStructure: false,
+      canManageDependencies: true,
       canManageRecurrence: selfRecurrence,
       canEditRecurrenceRule: canEditSelfRecurrence,
       canGenerateRecurrence: selfRecurrence,
@@ -323,6 +325,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
     destinationProject,
     scope: full ? 'FULL' : 'ASSIGNMENT',
     canManageStructure: full,
+    canManageDependencies: full || sourceProject?.id === destinationProject?.id,
     canManageRecurrence: recurrenceAccess,
     canEditRecurrenceRule: recurrenceAccess && !hasRecurrenceChildren,
     canGenerateRecurrence: recurrenceAccess,

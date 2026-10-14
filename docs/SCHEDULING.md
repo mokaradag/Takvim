@@ -176,6 +176,10 @@ Task Detail relations editor exposes both directions:
 - the *Ardıllar* tab edits the **other** task's `deps` and is patched through
   `updateTask(successorId, …)`.
 
+The searchable picker presents the Task name first, then its existing WBS code (when available) and current planned start → finish dates, including the year and the application’s Turkish date-format preference. Missing dates appear as `—`. Duplicate titles additionally show existing tags/assignee display names; otherwise identical option summaries add the existing creation timestamp when available. The full title, WBS name and available context remain accessible through a tooltip. No Task numbering or database UUID is introduced. Search includes WBS code/name, dates, tag and visible assignee names; the existing 60-result limit and portal/keyboard behavior are retained. The compact FS/SS/FF/SF control yields space to the Task picker and stacks on small screens.
+
+Normal Task editors can manage dependencies in Kapsamlı Kip within their existing authorization: only visible same-Project Tasks are offered, and the Ardıllar picker offers only editable successors. Visible read-only successor links stay disabled. The SQL transaction preserves hidden edges and validates cycles against the complete stored network. See [authorization boundaries](AUTHORIZATION-MODEL.md).
+
 `src/features/task-detail/taskSuccessorPolicy.js` owns that translation as a pure
 module: it derives successors by scanning for the reverse reference, produces the
 patch for link/unlink/type-and-lag changes, and rejects an edge that would create

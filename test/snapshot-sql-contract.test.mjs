@@ -89,7 +89,9 @@ for (const mode of ['admin', 'lead', 'corporate', 'full', 'read', 'creator', 'ow
       assert.deepEqual(sortedIds(body.wbs), (mode === 'admin' ? [21, 22, 23, 24]
         : broad || ['creator', 'own'].includes(mode) ? [21, 22, 23]
           : mode === 'executive' ? [21, 22] : []).map(id));
-      assert.equal(body.tasks.reduce((count, task) => count + task.deps.length, 0), full ? 1 : 0);
+      assert.equal(body.tasks.reduce((count, task) => count + task.deps.length, 0), broad ? 1 : 0);
+      const visibleTaskIds = new Set(body.tasks.map((task) => task.id));
+      for (const task of body.tasks) for (const dep of task.deps) assert.ok(visibleTaskIds.has(dep.predecessorId));
       assert.equal(body.baselines.length, full ? 1 : 0);
       assert.equal(body.taskBaselineSnapshots.length, full ? 1 : 0);
       assert.equal(body.session.currentUser.employeeNo, String(ACTOR));

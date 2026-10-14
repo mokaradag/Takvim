@@ -338,3 +338,44 @@ test('dış görev güncellemesi dokunulmamış alanı yeniler; başlık taslağ
     assert.equal(view.editor.output.props.task.task, 'Başlığa ekledim');
   } finally { view.close(); delete globalThis[CLIENT_STATE]; }
 });
+
+test('normal sorumlu ilişkileri görür; aynı adlı görevler İDA ve tarihle ayrılır, salt okunur ardıl seçilmez', async () => {
+  const state = fixture();
+  Object.assign(state.projects[0], { accessLevel: 'PARTIAL' });
+  Object.assign(state.tasks[0], { isCurrentUserAssignee: true, assigneeIds: ['1'] });
+  state.tasks.push(
+    { ...state.tasks[0], id: 't2', task: 'Aynı görev', wbsId: 'w2', plannedStart: '2026-10-14', plannedFinish: '2026-10-20' },
+    { ...state.tasks[0], id: 't3', task: 'Aynı görev', plannedStart: null, plannedFinish: '2026-10-21' },
+    { ...state.tasks[0], id: 'read', task: 'Salt okunur', isCurrentUserAssignee: false }
+  );
+  state.wbs.push({ id: 'w2', projectId: 'p1', name: 'Test', code: '1.2' });
+  globalThis[CLIENT_STATE] = state;
+  const view = editorFor(false);
+  let relations;
+  try {
+    assert.equal(view.editor.output.props.canManageStructure, false);
+    assert.equal(view.editor.output.props.canManageDependencies, true);
+    const node = input(view.drawer.output, (item) => item.type?.name === 'RelEditor');
+    relations = mountComponent(node.type, node.props);
+    const picker = input(relations.output, (item) => item.props?.ariaLabel === 'Öncül görev seçin');
+    const second = picker.props.options.find((option) => option.value === 't2');
+    const third = picker.props.options.find((option) => option.value === 't3');
+    assert.notEqual(second.description, third.description);
+    assert.match(second.description, /1\.2/);
+    assert.match(second.description, /14.*2026.*→.*20.*2026/);
+    assert.match(third.description, /— →/);
+    assert.equal(picker.props.maxVisible, 60);
+    const type = input(relations.output, (item) => item.props?.['aria-label'] === 'Eklenecek öncül ilişki türü');
+    assert.deepEqual(type.props.children.map((option) => option.props.value), ['FS', 'SS', 'FF', 'SF']);
+    picker.props.onChange('t2');
+    view.sync();
+    assert.equal(view.editor.output.props.task.deps[0].predecessorId, 't2');
+    relations.render({ ...node.props, task: view.editor.output.props.task });
+    input(relations.output, (item) => item.props?.role === 'tab' && String(item.props.children).includes('Ardıllar')).props.onClick();
+    relations.render();
+    const successors = input(relations.output, (item) => item.props?.ariaLabel === 'Ardıl görev seçin');
+    assert.equal(successors.props.options.some((option) => option.value === 'read'), false);
+    assert.ok(successors.props.options.some((option) => option.value === 't3'));
+    assert.equal((await view.editor.output.props.onUpdateRelatedTask('read', { deps: [{ predecessorId: 't1', type: 'FS' }] })).ok, false);
+  } finally { relations?.unmount(); view.close(); delete globalThis[CLIENT_STATE]; }
+});

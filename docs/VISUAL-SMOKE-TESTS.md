@@ -333,7 +333,7 @@ Açık/koyu tema, normal/büyütülmüş yazı ve dar/geniş pencere için:
   olmalı; ilgisiz bir "M" harfi amblemi görünmemeli.
 - Ağ sekmesinde simge için ek bir dosya isteği görünmemeli.
 
-## Kurum dışı atama, koordinasyon ve bildirimler
+## Bölüm dışı atama, koordinasyon ve bildirimler
 
 Açık/koyu tema, normal/büyütülmüş yazı ve 1440/1280/760 piksel genişliklerde:
 
@@ -390,3 +390,10 @@ Açık/koyu tema, normal/büyütülmüş yazı ve 1440/1280/760 piksel genişlik
   sütun** etkilenmeli. Hedefi olmayan görev her iki yönde de en altta kalmalı.
   Düğmenin ipucu/erişilebilir adı yönü söylemeli; klavyeyle ulaşılabilmeli.
 - `prefers-reduced-motion` açıkken yeni denetimler animasyon üretmemeli.
+
+### Bağımlılık seçici ve görev kapsamı
+
+- Kapsamlı Kipte aynı adlı görevleri İDA kodu, plan tarihleri ve gerektiğinde etiket/sorumlu künyesiyle ayırt edin; eksik tarih `—` olmalı. Uzun başlıkların tam metnini araç ipucunda kontrol edin.
+- Yüzlerce görevde ad/İDA/tarih aramasını, ok tuşları + Enter/Escape davranışını, dar ekranı, açık/koyu temayı ve kaydırılan panelde listenin kesilmediğini kontrol edin. FS/SS/FF/SF seçicisi rahat kullanılmalı.
+- Normal sorumlu ile öncül/ardıl ekleyin, tür/gecikme değiştirin, kaldırın ve kaydedip yeniden yükleyin. Salt okunur ardıl düzenlenememeli; görünmeyen görev ve bağların kimlikleri açılmamalı.
+- Zil ve atama koordinasyonu ayrıntısındaki doğrudan bildirim başlığı “Bölüm dışı atama bildirimi” olmalı.

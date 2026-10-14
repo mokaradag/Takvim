@@ -19,7 +19,7 @@ import { DirectoryPersonSearch } from './DirectoryPersonSearch.jsx';
  */
 
 function headline(record) {
-  if (record.mode === COORDINATION_MODES.NOTICE) return 'Kurum dışı atama bildirimi';
+  if (record.mode === COORDINATION_MODES.NOTICE) return 'Bölüm dışı atama bildirimi';
   if (record.status === 'PENDING') return 'Atama talebi';
   return `Atama talebi · ${COORDINATION_STATUS_LABELS[record.status] || record.status}`;
 }

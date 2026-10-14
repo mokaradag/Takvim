@@ -676,7 +676,7 @@ database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql
 
 | Tablo | İçerik | Anahtar / dizin |
 | --- | --- | --- |
-| `MR_TaskAssignmentCoordinations` | Kurum dışı atama talebi/bildirimi ve kararı | PK `CoordinationId`; **benzersiz** açık kayıt `(TaskId, RequestedAssigneeSicil)`; görev ve talep eden dizinleri |
+| `MR_TaskAssignmentCoordinations` | Bölüm dışı atama talebi/bildirimi ve kararı | PK `CoordinationId`; **benzersiz** açık kayıt `(TaskId, RequestedAssigneeSicil)`; görev ve talep eden dizinleri |
 | `MR_AssignmentCoordinationRecipients` | Alıcı kümesi ve okundu/temizlendi sürümü | PK `(CoordinationId, Sicil)`; `IX_…_Sicil` |
 | `MR_TaskNotifications` | Zil olayları (atandı / kaldırıldı) | PK `NotificationId`; **benzersiz** `(RecipientSicil, EventKey)`; `IX_…_RecipientOccurred` |
 | `MR_TaskMailOutbox` | Dayanıklı e-posta niyeti ve teslimat durumu | PK `MailId`; **benzersiz** `DedupeKey`; `IX_…_Due` |

@@ -187,6 +187,11 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
     onPrepareSeries={() => { seriesRef.current = true; setGenerateSeries(true); return { ok: true, staged: true }; }}
     canManageRecurrence={isCreating ? Boolean(creationDraft.scope) : draftAccess.canManageRecurrence}
     canManageStructure={isCreating ? creationDraft.scope === 'FULL' : draftAccess.canManageStructure}
+    canManageDependencies={isCreating ? Boolean(creationDraft.scope) : draftAccess.canManageDependencies}
+    canEditTaskDependencies={(candidate) => {
+      const access = resolveTaskEditorAccess(writeState, candidate.id);
+      return access.ok && access.canManageDependencies;
+    }}
     canChooseWbs={isCreating ? Boolean(creationDraft.scope) : draftAccess.canChooseWbs}
   />;
 }

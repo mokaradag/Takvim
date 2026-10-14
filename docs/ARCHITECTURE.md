@@ -261,7 +261,7 @@ Genel snapshot `scheduleRequests` içinde en fazla sekiz önizleme, `scheduleReq
 
 ### Atama koordinasyonu ve birleşik bildirim mimarisi
 
-Kurum dışı atama, zil bildirimi ve isteğe bağlı e-posta **tek bir mimaridir**,
+Bölüm dışı atama, zil bildirimi ve isteğe bağlı e-posta **tek bir mimaridir**,
 üç ayrı özellik değil. Rota doğruluk kaynağıdır; e-posta yalnızca bir taşıma
 katmanıdır ve iş akışı durumu taşımaz.
 

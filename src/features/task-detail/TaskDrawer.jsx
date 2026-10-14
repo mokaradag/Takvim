@@ -70,6 +70,7 @@ import { scheduleDifferenceSummary, requestDates } from '../schedule-change/sche
 import { ExternalAssigneePicker } from '../assignment-coordination/ExternalAssigneePicker.jsx';
 import { useAssignmentRequestDraft } from '../assignment-coordination/useAssignmentRequestDraft.js';
 import { AssigneeMailToggle } from '../assignment-coordination/AssigneeMailToggle.jsx';
+import { buildTaskDependencyOptions } from './taskDependencyOptions.js';
 import { TaskCreatorByline } from './TaskCreatorByline.jsx';
 
 function legacyProjectTags(projectId, tasks) {
@@ -124,6 +125,8 @@ export function TaskDrawer({
   onUpdate,
   onDelete,
   canManageStructure = true,
+  canManageDependencies = canManageStructure,
+  canEditTaskDependencies = () => true,
   canManageRecurrence = true,
   canChooseWbs = true,
   canManageAssignees = true,
@@ -726,7 +729,7 @@ export function TaskDrawer({
               </div>
             </Section>}
 
-            {canManageStructure && <Section
+            {canManageDependencies && <Section
               title="İlişkiler ve bağımlılıklar"
               icon={<Icons.Link size={13} />}
               tone="var(--status-overdue)"
@@ -754,6 +757,8 @@ export function TaskDrawer({
                 tasks={tasks}
                 onChange={(deps) => save({ deps })}
                 onUpdateTask={onUpdateRelatedTask}
+                canEditTask={canEditTaskDependencies}
+                wbs={allWbs}
               />
             </Section>}
 
@@ -1206,7 +1211,7 @@ function Section({ title, icon, tone = 'var(--accent)', hint, info, children }) 
  * ters yönden düzenler ve ARDIL görevi yamalar (bkz. taskSuccessorPolicy.js).
  * Böylece tek bir kenar iki yerde saklanmaz.
  */
-function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = true }) {
+function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = true, canEditTask = () => true, wbs = [] }) {
   const deps = useMemo(() => task.deps || [], [task.deps]);
   const [tab, setTab] = useState('predecessors');
   const [selectedType, setSelectedType] = useState('FS');
@@ -1269,13 +1274,9 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
     });
   }, [tasks]);
 
-  // Öncül görev listesi de büyük projelerde canlı arama gerektirir.
-  const taskOption = (candidate) => ({
-    value: candidate.id,
-    label: candidate.task,
-    description: candidate.keyword || null,
-    keywords: [candidate.task, candidate.keyword, candidate.projectCode]
-  });
+  const optionsById = useMemo(() => new Map(
+    buildTaskDependencyOptions(others, wbs).map((option) => [option.value, option])
+  ), [others, wbs]);
 
   const predecessorOptions = useMemo(() => {
     // Döngü denetimi ARDIL yönünde de uygulanır: `A → B → C` ağında `A` açılıp
@@ -1286,8 +1287,8 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
       .filter((candidate) => !blocked.has(candidate.id))
       .slice()
       .sort((left, right) => String(left.task || '').localeCompare(String(right.task || ''), 'tr'))
-      .map(taskOption);
-  }, [others, deps, task.id, graph]);
+      .map((candidate) => optionsById.get(candidate.id));
+  }, [others, deps, task.id, graph, optionsById]);
 
   const successorOptions = useMemo(() => {
     const linked = new Set(successors.map((entry) => entry.task.id));
@@ -1295,11 +1296,11 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
     // seçimi yapmak zorunda kalmasın.
     const blocked = collectPredecessorClosure(task.id, graph);
     return others
-      .filter((candidate) => !linked.has(candidate.id) && !blocked.has(candidate.id))
+      .filter((candidate) => canEditTask(candidate) && !linked.has(candidate.id) && !blocked.has(candidate.id))
       .slice()
       .sort((left, right) => String(left.task || '').localeCompare(String(right.task || ''), 'tr'))
-      .map(taskOption);
-  }, [others, successors, task.id, graph]);
+      .map((candidate) => optionsById.get(candidate.id));
+  }, [others, successors, task.id, graph, optionsById, canEditTask]);
 
   const updateDep = (idx, patch) => {
     const next = deps.map((d, i) => {
@@ -1328,7 +1329,7 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
   };
 
   const applySuccessorPlan = (plan) => {
-    if (!allowSuccessorEdits || !onUpdateTask) {
+    if (!allowSuccessorEdits || !onUpdateTask || (plan.ok && !canEditTask(graph.find((item) => item.id === plan.successorId)))) {
       setLinkError('Ardıl ilişkilerini düzenleme yetkiniz yok.');
       return;
     }
@@ -1480,8 +1481,9 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
               options={predecessorOptions}
               onChange={(taskId) => addDep(taskId, selectedType)}
               placeholder="+ Öncül görev seçin..."
-              searchPlaceholder="Görev adı veya etiketiyle ara"
+              searchPlaceholder="Görev, İDA kodu veya tarihle ara"
               emptyText="Eklenebilecek başka öncül görev yok."
+              ariaLabel="Öncül görev seçin"
               maxVisible={60}
               compact
             />
@@ -1499,14 +1501,14 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
             <div className="rel-empty">Bu görevin ardılı yok. Aşağıdan ekleyebilirsiniz.</div>
           )}
           {successors.map(({ task: successor, dependency }) => (
-            <div key={successor.id} className="rel-item">
+            <fieldset key={successor.id} className="rel-item rel-successor" disabled={!canEditTask(successor)} title={!canEditTask(successor) ? 'Bu ardıl görevi düzenleme yetkiniz yok.' : undefined}>
               {renderRelationFields(
                 dependency,
                 (patch) => updateSuccessor(successor.id, patch),
                 () => removeSuccessor(successor.id),
                 { label: successor.task, color: projectColorVar(successor.proje) }
               )}
-            </div>
+            </fieldset>
           ))}
 
           <div className="rel-add-row">
@@ -1518,8 +1520,9 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
               options={successorOptions}
               onChange={addSuccessor}
               placeholder="+ Ardıl görev seçin..."
-              searchPlaceholder="Görev adı veya etiketiyle ara"
+              searchPlaceholder="Görev, İDA kodu veya tarihle ara"
               emptyText="Eklenebilecek başka ardıl görev yok."
+              ariaLabel="Ardıl görev seçin"
               maxVisible={60}
               compact
             />

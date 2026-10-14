@@ -587,7 +587,9 @@ function snapshotRecordsets(db, sicil, isAdmin, canAssignAllCorporate = false) {
     return Number(task.CreatedBySicil) === Number(sicil) || entry.Sicil === sicil
       || db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil);
   });
-  const dependencies = db.taskDependencies.filter((entry) => visible.get(guid(entry.ProjectId)) === 'FULL');
+  const visibleTaskIds = new Set(tasks.map((task) => guid(task.TaskId)));
+  const dependencies = db.taskDependencies.filter((entry) => visibleTaskIds.has(guid(entry.TaskId))
+    && visibleTaskIds.has(guid(entry.PredecessorTaskId)));
   const hasFullScope = isAdmin || [...visible.values()].includes('FULL');
   const people = db.people
     .filter((person) => hasFullScope
@@ -1963,15 +1965,18 @@ function runQuery(db, statement, params, { database }) {
     const task = taskById(db, params.taskId);
     const project = task ? projectById(db, task.ProjectId) : null;
     const broadVisibility = Boolean(params.isAdmin)
+      || Number(task?.CreatedBySicil) === Number(params.sicil)
       || (project?.SourceType === 'MANUAL' && project.LeadSicil === params.sicil)
       || (project?.SourceType === 'CORPORATE' && db.corporateProjectAccess.some((entry) => entry.Sicil === params.sicil
         && String(entry.ProjectCode).toUpperCase() === String(project?.ProjectCode || '').toUpperCase()))
       || db.projectAccess.some((entry) => entry.IsActive && entry.Sicil === params.sicil
         && sameGuid(entry.ProjectId, task?.ProjectId) && ['FULL', 'READ'].includes(entry.AccessLevel));
+    const published = new Set(snapshotRecordsets(db, params.sicil, Boolean(params.isAdmin), false)[9].map((person) => person.Sicil));
     return result([db.taskAssignees
       .filter((entry) => sameGuid(entry.TaskId, params.taskId))
       .filter((entry) => broadVisibility || entry.Sicil === params.sicil
         || db.executiveScope.some((scope) => scope.ManagerSicil === params.sicil && scope.EmployeeSicil === entry.Sicil))
+      .filter((entry) => published.has(entry.Sicil))
       .map((entry) => ({ Sicil: entry.Sicil }))]);
   }
 
@@ -2026,6 +2031,13 @@ function runQuery(db, statement, params, { database }) {
     return result([db.wbs
       .filter((node) => sameGuid(node.ProjectId, params.projectId))
       .map((node) => ({ WbsId: node.WbsId, ProjectId: node.ProjectId, ParentWbsId: node.ParentWbsId }))]);
+  }
+  if (params.scopedDependencyTaskIds != null) {
+    const taskIds = new Set(params.scopedDependencyTaskIds.split(',').map((value) => value.toLowerCase()));
+    return result([
+      db.taskDependencies.filter((entry) => taskIds.has(String(entry.TaskId).toLowerCase())),
+      db.tasks.filter((entry) => taskIds.has(String(entry.TaskId).toLowerCase())).map((entry) => ({ TaskId: entry.TaskId }))
+    ]);
   }
   if (sqlText.includes('SELECT TaskId, PredecessorTaskId')) {
     const isSingleTaskDependencyRead = sqlText.includes('AND TaskId = @taskId');

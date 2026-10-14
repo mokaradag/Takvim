@@ -7,7 +7,7 @@ Zil TEKTİR ve üç kalıcı kaynağı aynı merkezde toplar:
 | Kaynak | Tablo | Ne anlatır |
 | --- | --- | --- |
 | Tarih değişikliği talebi | `MR_TaskScheduleChangeRequests` | Hedef bitiş önerisi ve kararı |
-| Atama koordinasyonu | `MR_TaskAssignmentCoordinations` | Kurum dışı atama talebi/bildirimi ve kararı |
+| Atama koordinasyonu | `MR_TaskAssignmentCoordinations` | Bölüm dışı atama talebi/bildirimi ve kararı |
 | Atama olayı | `MR_TaskNotifications` | Göreve atandınız / sorumluluğunuz kaldırıldı |
 
 Üçü de aynı okundu/temizlendi anlambilimini kullanır; ikinci bir bildirim altyapısı yoktur.
@@ -31,7 +31,7 @@ Kenardaki **Talepler** düz bir üst düzey gezinme öğesidir. Sayfa dört sekm
 | Gelenler | Kullanıcının kararını bekleyen, etkin projelerdeki açık tarih talepleri |
 | Gönderdiklerim | Kullanıcının gönderdiği tüm durumdaki tarih talepleri |
 | Geçmiş | Kabul, ret, yeni taleple değiştirme ve güncelliğini yitirme kayıtları; görevi silinen veya projesi kapalı kayıtlar |
-| Atama Koordinasyonu | Kurum dışı atama talepleri ve bildirimleri (aşağıya bakınız) |
+| Atama Koordinasyonu | Bölüm dışı atama talepleri ve bildirimleri (aşağıya bakınız) |
 
 Arama görev başlığı, proje adı/kodu, talep eden ve talep notunda çalışır. Proje, talep eden adı/sicili, durum ve talep oluşturma tarihi aralığıyla daraltılabilir. Başlangıç ve bitiş günleri aralığa dahildir. Sekme sayaçları mevcut süzgeçlere uyar; Gönderdiklerim ile Geçmiş kesişebilir.
 
@@ -47,9 +47,11 @@ Talep listeleri yalnızca oturum kullanıcısının gönderdiği veya karar sahi
 
 ## Atama Koordinasyonu
 
-Kurum dışı personelle çalışma, atama kapsamı sınırını KALDIRMAZ. Üç soru ayrılır: kimi **bulabilirsiniz**, kimi **doğrudan atayabilirsiniz**, kim için **koordinasyon** gerekir.
+Kurum içindeki farklı bölümlere yapılan doğrudan atamanın zil ve ayrıntı başlığı **“Bölüm dışı atama bildirimi”**dir (eski başlık: “Kurum dışı atama bildirimi”). Kurum dışındaki kişilere yönelik ayrı bir atama yetkisi tanımlanmaz.
 
-### Kurum dışı personel arama
+Bölüm dışı personelle çalışma, atama kapsamı sınırını KALDIRMAZ. Üç soru ayrılır: kimi **bulabilirsiniz**, kimi **doğrudan atayabilirsiniz**, kim için **koordinasyon** gerekir.
+
+### Bölüm dışı personel arama
 
 Sorumlu seçicilerinde "Diğer birimlerden personel göster" anahtarı bulunur; varsayılan **KAPALI**dır ve kapalıyken bugünkü izin verilen personel davranışı aynen sürer. Açıldığında arama `GET /api/mergen-rota/directory/search` ucuna gider:
 
@@ -69,9 +71,9 @@ Sonuç satırı ad, Sicil ve kurumsal künyeyi birlikte gösterir. Kimlik her za
 | Sıradan kullanıcı → başka çalışan | **Atama talebi** |
 | Yönetici → kendi `MR_V_ExecutiveScope` personeli | Doğrudan atama (değişmedi) |
 | Yönetici → kapsam dışı çalışan | **Atama talebi** |
-| SYSTEM_ADMIN / tam proje yetkilisi → kurum dışı çalışan | Doğrudan atama **ve** koordinasyon bildirimi |
+| SYSTEM_ADMIN / tam proje yetkilisi → bölüm dışı çalışan | Doğrudan atama **ve** koordinasyon bildirimi |
 
-Doğrudan atanan kişi için aynı görevde bekleyen bir talep varsa talep aynı işlemde `CANCELLED` ("Doğrudan atamayla karşılandı.") olur. Tekrar serisinin yinelemesi, şablonunda zaten bulunan kurum dışı sorumlu için ayrı bir koordinasyon kaydı açmaz; kayıt şablondadır.
+Doğrudan atanan kişi için aynı görevde bekleyen bir talep varsa talep aynı işlemde `CANCELLED` ("Doğrudan atamayla karşılandı.") olur. Tekrar serisinin yinelemesi, şablonunda zaten bulunan bölüm dışı sorumlu için ayrı bir koordinasyon kaydı açmaz; kayıt şablondadır.
 
 Talep gerektiren bir kişi seçildiğinde panel bunu açıkça söyler: *"Bu kişi doğrudan atama yetkinizin dışında. Kaydettiğinizde ilgili yöneticiye atama talebi gönderilecektir."* İstemci anahtarı yalnızca arayüzdür; yetki her çağrıda sunucuda yeniden doğrulanır ve doğrudan API isteği kuralları atlayamaz.
 

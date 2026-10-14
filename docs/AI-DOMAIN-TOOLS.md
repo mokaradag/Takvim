@@ -843,7 +843,7 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 
 ### 10.12 `rota_assignment_requests` — atama koordinasyonu
 
-- **Amaç:** Kurum dışı atama koordinasyonu kayıtları.
+- **Amaç:** Bölüm dışı atama koordinasyonu kayıtları.
 - **Girdiler:** `tab`, `status`, `projectId`, `taskId`, `dateFrom`/`dateTo`, `text`, `limit`, `cursor`.
 - **Yetki:** Talep eden, alıcı ve CANLI karar yetkisi; alıcı satırı tek başına yetki değildir.
 - **Kaynak:** `readCoordinationPage`.

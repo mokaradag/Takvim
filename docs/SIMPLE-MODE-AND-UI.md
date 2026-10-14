@@ -639,7 +639,7 @@ Sorumlu seçimi ve yazma `assigneeIds`/Sicil ile yapılır; adlar yalnızca gös
 
 Tarih talebi ayrıntısındaki **Görevi aç**, görev kimliğini çözer ve gerekirse yetkili veriyi yeniler. Farklı proje çalışma alanındaki göreve geçerken proje bağlamı da güncellenir. Silinmiş veya erişimi kaldırılmış görev için açık bir hata gösterilir.
 
-Yeni görev oluştururken de **Öncüller** ve **Ardıllar** tanımlanabilir. Ardılın türü/gecikmesi ve kaldırılması taslakta tutulur; Kaydet yeni görevle tüm bağlantıları aynı transaction içinde yazar. Kapatma bağlantıları da bırakır; döngü, farklı proje, yetki veya sürüm hatasında hiçbir kısmi kayıt oluşmaz. Proje seçimi değişirse önceki projeye ait bekleyen ardıl bağlantıları temizlenir. Bağımlılık düzenlemesi tam proje yetkisi gerektirir.
+Yeni görev oluştururken de **Öncüller** ve **Ardıllar** tanımlanabilir. Ardılın türü/gecikmesi ve kaldırılması taslakta tutulur; Kaydet yeni görevle tüm bağlantıları aynı transaction içinde yazar. Kapatma bağlantıları da bırakır; döngü, farklı proje, yetki veya sürüm hatasında hiçbir kısmi kayıt oluşmaz. Proje seçimi değişirse önceki projeye ait bekleyen ardıl bağlantıları temizlenir. Görevi düzenlemeye yetkili normal kullanıcılar da görünür, aynı projedeki görevler arasında bağımlılık tanımlayabilir; ardıl düzenlemek ardıl görevi düzenleme yetkisi gerektirir. Seçicide görev adı altında mevcut İDA kodu ve güncel plan tarihleri gösterilir; aynı adlı görevlerde etiket/sorumlu ve gerekirse oluşturulma zamanı ayırt etmeyi sağlar. Eksik tarihler `—` görünür; ad, İDA ve tarihle arama yapılabilir.
 
 
 Kaydedilmemiş görev taslakları sekme kapatma/yenileme korumasına katılır. Demo/Gerçek Sistem geçişi açık taslak varken durur ve Kaydet veya kapatarak vazgeçme yönlendirmesi gösterir. Temel/Kapsamlı Kip değişimi aynı görev taslağını korur. Yerel taslak varken hatırlatma e-postası gönderilemez; önce Kaydet gerekir. Tekrar hazırlama ve ardıl düzenlemeleri de bu korumaya dahildir.
@@ -649,7 +649,7 @@ Taslakta proje değişince alan yetkileri birikmiş düzenlemeye göre yeniden h
 
 ## Talepler ve bildirim önizlemesi
 
-Her iki kipte düz **Talepler** sayfasının Gelenler, Gönderdiklerim, Geçmiş ve **Atama Koordinasyonu** sekmeleri vardır; kurum dışı atama için ayrı bir kenar çubuğu sayfası açılmaz. Kalıcı geçmiş sunucuda sayfalanır; zil yalnızca sekiz önizleme ile okunmamış/bekleyen sayaçlarını taşır ve tarih talepleri, atama koordinasyonu ile atama bildirimlerini **tek listede** birleştirir — ikinci bir zil yoktur. Okuma veya görünenleri temizleme iş kaydını silmez; açık kararlar görünür kalır. Ayrıntılar ve dağıtım adımı: [Talepler ve bildirimler](REQUESTS-AND-NOTIFICATIONS.md).
+Her iki kipte düz **Talepler** sayfasının Gelenler, Gönderdiklerim, Geçmiş ve **Atama Koordinasyonu** sekmeleri vardır; bölüm dışı atama için ayrı bir kenar çubuğu sayfası açılmaz. Kalıcı geçmiş sunucuda sayfalanır; zil yalnızca sekiz önizleme ile okunmamış/bekleyen sayaçlarını taşır ve tarih talepleri, atama koordinasyonu ile atama bildirimlerini **tek listede** birleştirir — ikinci bir zil yoktur. Okuma veya görünenleri temizleme iş kaydını silmez; açık kararlar görünür kalır. Ayrıntılar ve dağıtım adımı: [Talepler ve bildirimler](REQUESTS-AND-NOTIFICATIONS.md).
 
 ## Özet KPI ayrıntı penceresi
 
