@@ -1,11 +1,9 @@
 import 'server-only';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
-import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { observePhase } from '../observability/observeOperation.js';
 import { canonicalizeCommitChanges } from './commitChangeValidation.js';
 import { canonicalizeCommitScalars } from './commitScalarCanonicalization.js';
-import { assertTaskDependencyReconciliationCovered } from './dependencyReconciliationValidation.js';
 import { prepareScopedTaskDependencies, TASK_DEPENDENCY_CONTEXT } from './taskDependencyAccess.js';
 import { createHardenedSqlAppRepository } from './hardenedSqlAppRepository.js';
 import {
@@ -79,8 +77,8 @@ export function createOrderedSqlAppRepository() {
       };
 
       return observePhase('phase.commit.transaction', () => withSqlTransaction(async (transaction) => {
-        const actor = await observePhase('phase.commit.authorization', () => loadAuthorizationContext(transaction));
-        const prepared = await prepareScopedTaskDependencies(transaction, actor, orderedChanges);
+        const prepared = await prepareScopedTaskDependencies(transaction, orderedChanges);
+        const actor = prepared[TASK_DEPENDENCY_CONTEXT];
         orderedChanges.taskUpserts = prepared.taskUpserts;
         Object.defineProperty(orderedChanges, TASK_DEPENDENCY_CONTEXT, { value: actor });
         // Proje varlığı/sürümü sorgulanmadan önce rol denetlenir. Aksi hâlde
@@ -98,9 +96,6 @@ export function createOrderedSqlAppRepository() {
           await assertUpsertIntentMatchesPersistence(transaction, orderedChanges);
           await assertManualProjectCodesAvailable(transaction, orderedChanges);
           await assertDeleteIntentMatchesPersistence(transaction, orderedChanges);
-        });
-        await observePhase('phase.commit.dependency-reconciliation', async () => {
-          await assertTaskDependencyReconciliationCovered(transaction, orderedChanges);
         });
         return repository.commitChanges(orderedChanges);
       }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE }));

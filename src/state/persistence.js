@@ -507,7 +507,7 @@ export function createStateMutationOrchestrator({
           assigneeMutation: Object.prototype.hasOwnProperty.call(patch, 'assigneeIds'),
           dependencyMutation: Object.prototype.hasOwnProperty.call(patch, 'deps')
             || Object.prototype.hasOwnProperty.call(patch, 'projectId'),
-          ...(Object.prototype.hasOwnProperty.call(patch, 'deps') ? { dependencyChanges: dependencyChanges(update?.observedDependencies || before.tasks.find((row) => String(row.id) === String(task.id))?.deps, task.deps) } : {}),
+          ...((Object.prototype.hasOwnProperty.call(patch, 'deps') || Object.prototype.hasOwnProperty.call(patch, 'projectId')) ? { dependencyChanges: dependencyChanges(update?.observedDependencies || before.tasks.find((row) => String(row.id) === String(task.id))?.deps, task.deps) } : {}),
           resetActualDates: patch.resetActualDates === true
         };
       });

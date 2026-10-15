@@ -5,7 +5,7 @@ import { countWorkingDays } from '../../../../scheduling/calendars/index.js';
 import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
-import { describeTaskScope, projectAccess } from './rotaScope.js';
+import { describeTaskScope, isCompleteTaskView, projectAccess } from './rotaScope.js';
 import { readBaseline, readCalendar, readDependencies, readTaskFacts } from './rotaToolStore.js';
 import {
   DATE_PROPERTY,
@@ -200,7 +200,7 @@ const dependencyInspect = {
     let projectId = args.projectId || null;
     if (args.taskId) {
       focus = (await visibleTask(call, scope, args.taskId)).fact;
-      if (projectId && projectId !== focus.projectId) throw notFound();
+      if (projectId && canonicalActualId(projectId) !== focus.projectId) throw notFound();
       projectId = focus.projectId;
     }
     await requireVisibleProject(scope, projectId, call);
@@ -223,7 +223,8 @@ const dependencyInspect = {
         ...(other ? { plannedStart: sqlDay(other.PlannedStart) || null, plannedFinish: sqlDay(other.PlannedFinish) || null } : {})
       };
     };
-    const notes = ['Kritik yol ve bolluk bu araçta hesaplanmaz; yalnızca kayıtlı ilişkiler gösterilir.'];
+    const dependencyPopulationComplete = isCompleteTaskView(projectAccess(scope, projectId));
+    const notes = ['Kritik yol ve bolluk bu araçta hesaplanmaz; yalnızca kayıtlı ilişkiler gösterilir.', ...(dependencyPopulationComplete ? [] : ['Yalnızca görünür ilişkiler listelenir; gizli ilişkiler bulunabilir, sayılar toplam değildir.'])];
     if (focus) {
       const predecessors = result.dependencies.filter((row) => canonicalActualId(row.TaskId) === focus.id)
         .map((row) => relation(row, canonicalActualId(row.PredecessorTaskId)));
@@ -237,15 +238,15 @@ const dependencyInspect = {
           notes: ['Öncül: bu görevin bağlı olduğu görev. Ardıl: bu göreve bağlı görev.', ...notes]
         },
         scope: describeTaskScope([projectAccess(scope, projectId)]),
-        complete: true,
+        complete: dependencyPopulationComplete,
         truncated: false,
         returnedCount: predecessors.length + successors.length,
-        totalCount: predecessors.length + successors.length,
+        totalCount: dependencyPopulationComplete ? predecessors.length + successors.length : null,
         nextCursor: null,
         evidence: {
           label: `Bağımlılık ilişkileri · ${dataText(focus.title, 60)}`,
           entity: { type: 'task', id: focus.id, name: dataText(focus.title, 120) },
-          highlights: [`Öncül: ${predecessors.length}`, `Ardıl: ${successors.length}`]
+          highlights: [`Görünür öncül: ${predecessors.length}`, `Görünür ardıl: ${successors.length}`]
         }
       };
     }
@@ -295,10 +296,10 @@ const dependencyInspect = {
         notes
       },
       scope: describeTaskScope([projectAccess(scope, projectId)]),
-      complete: mostConnected.length === orderedConnections.length,
+      complete: dependencyPopulationComplete && mostConnected.length === orderedConnections.length,
       truncated: mostConnected.length < orderedConnections.length,
       returnedCount: result.dependencies.length,
-      totalCount: result.dependencies.length,
+      totalCount: dependencyPopulationComplete ? result.dependencies.length : null,
       nextCursor: null,
       evidence: {
         label: `Bağımlılık kapsaması · ${result.dependencies.length} ilişki`,

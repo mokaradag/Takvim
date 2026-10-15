@@ -251,6 +251,7 @@ function taskDetail(db, params) {
   const parentVisible = parent && (entry.AccessLevel === 'FULL' || access.HasReadGrant || scopedTasks.has(upper(parent.TaskId)));
   const calendar = (id) => db.calendars.find((row) => same(row.CalendarId, id) && row.IsActive);
   const description = task.Description == null ? null : String(task.Description);
+  const fullScope = scopeOf(db, { ...params, taskIds: '' });
   const row = {
     ...fact,
     CalendarId: task.CalendarId,
@@ -258,8 +259,8 @@ function taskDetail(db, params) {
     Description: description == null ? null : description.slice(0, 1600),
     DescriptionClipped: description != null && description.length > 1600 ? 1 : 0,
     VisibleCreatedBySicil: creatorVisible ? task.CreatedBySicil : null,
-    PredecessorCount: db.taskDependencies.filter((dep) => scopeOf(db, { ...params, taskIds: '' }).visible.has(upper(dep.PredecessorTaskId)) && same(dep.ProjectId, task.ProjectId) && same(dep.TaskId, task.TaskId)).length,
-    SuccessorCount: db.taskDependencies.filter((dep) => scopeOf(db, { ...params, taskIds: '' }).visible.has(upper(dep.TaskId)) && same(dep.ProjectId, task.ProjectId) && same(dep.PredecessorTaskId, task.TaskId)).length,
+    PredecessorCount: db.taskDependencies.filter((dep) => fullScope.visible.has(upper(dep.TaskId)) && fullScope.visible.has(upper(dep.PredecessorTaskId)) && same(dep.ProjectId, task.ProjectId) && same(dep.TaskId, task.TaskId)).length,
+    SuccessorCount: db.taskDependencies.filter((dep) => fullScope.visible.has(upper(dep.TaskId)) && fullScope.visible.has(upper(dep.PredecessorTaskId)) && same(dep.ProjectId, task.ProjectId) && same(dep.PredecessorTaskId, task.TaskId)).length,
     ParentTitle: parentVisible ? parent.Title : null,
     ProjectName: project.ProjectName,
     ProjectCode: project.ProjectCode,
@@ -416,8 +417,8 @@ function dependencies(db, params) {
       TaskId: task.TaskId, Title: task.Title, Status: task.Status, PlannedStart: task.PlannedStart, PlannedFinish: task.PlannedFinish,
       TargetFinish: task.TargetFinish, IsMilestone: task.IsMilestone
     })),
-    [{ TaskCount: projectTasks.length, OpenCount: projectTasks.filter((task) => canonicalStatus(task.Status) !== 'done').length }],
-    populationRows([...scope.visible.values()])
+    [{ TaskCount: focus ? 0 : projectTasks.length, OpenCount: projectTasks.filter((task) => canonicalStatus(task.Status) !== 'done').length }],
+    populationRows([...scope.visible.values()].filter(({ task }) => !focus || involved.has(upper(task.TaskId))))
   ];
 }
 
@@ -526,9 +527,13 @@ export function runAiToolQuery(db, sqlText, params) {
     const hasSelectedBaseline = marker[1] !== 'baseline' || db.baselines.some((row) => scope.projects.get(upper(params.projectId))?.AccessLevel === 'FULL'
       && same(row.ProjectId, params.projectId) && (!params.baselineId || same(row.BaselineId, params.baselineId)));
     const focused = marker[1] === 'wbs' && params.wbsId ? wbsSubtree(db, params) : null;
+    const neighborhood = marker[1] === 'dependencies' && params.focusTaskId ? new Set([upper(params.focusTaskId), ...db.taskDependencies
+      .filter((d) => same(d.TaskId, params.focusTaskId) || same(d.PredecessorTaskId, params.focusTaskId))
+      .flatMap((d) => [upper(d.TaskId), upper(d.PredecessorTaskId)])]) : null;
     const analyzed = [...scope.visible.values()].filter(({ task }) => (!params.seriesId || same(task.TaskId, params.seriesId) || same(task.RecurrenceParentTaskId, params.seriesId))
       && (!params.recurringOnly || task.RecurrenceRule || task.RecurrenceParentTaskId)
-      && (marker[1] !== 'wbs' || !params.wbsId || focused.has(upper(task.WbsId))));
+      && (marker[1] !== 'wbs' || !params.wbsId || focused.has(upper(task.WbsId)))
+      && (!neighborhood || neighborhood.has(upper(task.TaskId))));
     const staged = marker[1] === 'task-facts' ? taskFacts(db, params)[0] : null;
     const analyzedCount = staged ? staged.length : analyzed.length;
     if (hasSelectedBaseline && analyzedCount >= cap) tooLarge();

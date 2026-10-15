@@ -1,12 +1,10 @@
 import 'server-only';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
-import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { prepareScopedTaskDependencies, TASK_DEPENDENCY_CONTEXT } from './taskDependencyAccess.js';
 import { ServerPersistenceError } from '../errors.js';
 import { observePhase } from '../observability/observeOperation.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { sqlIdentifier } from '../db/sqlIdentifier.js';
-import { findDependencyCycle } from './dependencyGraphValidation.js';
 import {
   findFinalTaskReferenceIssue,
   orderTaskUpsertsByDependencies
@@ -54,7 +52,7 @@ async function rowForUpdate(executor, table, idColumn, value, label) {
   req.input('entityId', sql.UniqueIdentifier, entityId);
   const result = await req.query(`
     SELECT TOP (1) *
-    FROM dbo.${safeTable} WITH (UPDLOCK, HOLDLOCK)
+    FROM dbo.${safeTable} WITH (${table === 'MR_Projects' ? 'HOLDLOCK' : 'UPDLOCK, HOLDLOCK'})
     WHERE ${safeColumn} = @entityId;
   `);
   return result.recordset[0] || null;
@@ -145,7 +143,7 @@ async function assertActiveCalendarReferences(executor, changes) {
     req.input('calendarId', sql.UniqueIdentifier, calendarId);
     const result = await req.query(`
       SELECT TOP (1) CalendarId
-      FROM dbo.MR_Calendars WITH (UPDLOCK, HOLDLOCK)
+      FROM dbo.MR_Calendars WITH (HOLDLOCK)
       WHERE CalendarId = @calendarId AND IsActive = 1;
     `);
     if (!result.recordset.length) {
@@ -228,28 +226,6 @@ async function assertSingleRootWbs(executor, changes) {
   }
 }
 
-function removeTaskEdges(edges, taskId, { incoming = true, outgoing = true } = {}) {
-  return edges.filter((edge) => (
-    (!outgoing || edge.taskId !== taskId)
-    && (!incoming || edge.predecessorId !== taskId)
-  ));
-}
-
-async function loadProjectDependencyEdgesForUpdate(executor, projectId) {
-  const req = request(executor);
-  req.input('projectId', sql.UniqueIdentifier, projectId);
-  const result = await req.query(`
-    SELECT TaskId, PredecessorTaskId
-    FROM dbo.MR_TaskDependencies WITH (UPDLOCK, HOLDLOCK)
-    WHERE ProjectId = @projectId
-    ORDER BY TaskId, PredecessorTaskId;
-  `);
-  return (result.recordset || []).map((row) => ({
-    taskId: rowId(row.TaskId),
-    predecessorId: rowId(row.PredecessorTaskId)
-  }));
-}
-
 function taskReferenceMessage(issue) {
   const messages = {
     TASK_IDENTITY_REQUIRED: 'Görev ve proje kimlikleri zorunludur.',
@@ -330,87 +306,12 @@ async function planTaskCommits(executor, changes) {
   };
 }
 
-async function assertAcyclicTaskDependencies(executor, changes, actor) {
-  const dependencyUpserts = changes.taskUpserts.filter((task) => task.dependencyMutation !== false);
-  if (!dependencyUpserts.length && !changes.taskDeletes.length) return;
-
-  const changedTaskRows = new Map();
-  const affectedProjectIds = new Set();
-  const changedIds = new Set([
-    ...dependencyUpserts.map((task) => uuid(task.id, 'Görev kimliği')),
-    ...changes.taskDeletes.map((entry) => uuid(entry.id, 'Görev kimliği'))
-  ]);
-
-  for (const taskId of [...changedIds].sort()) {
-    const row = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', taskId, 'Görev kimliği');
-    if (row) {
-      changedTaskRows.set(taskId, row);
-      affectedProjectIds.add(rowId(row.ProjectId));
-    }
-  }
-  for (const task of dependencyUpserts) affectedProjectIds.add(uuid(task.projectId, 'Proje kimliği'));
-
-  const projectEdges = new Map();
-  for (const projectId of [...affectedProjectIds].sort()) {
-    projectEdges.set(projectId, await loadProjectDependencyEdgesForUpdate(executor, projectId));
-  }
-
-  for (const task of dependencyUpserts) {
-    const taskId = uuid(task.id, 'Görev kimliği');
-    const nextProjectId = uuid(task.projectId, 'Proje kimliği');
-    const previousProjectId = changedTaskRows.has(taskId) ? rowId(changedTaskRows.get(taskId).ProjectId) : null;
-
-    if (previousProjectId && previousProjectId !== nextProjectId) {
-      projectEdges.set(previousProjectId, removeTaskEdges(projectEdges.get(previousProjectId) || [], taskId));
-      projectEdges.set(nextProjectId, removeTaskEdges(projectEdges.get(nextProjectId) || [], taskId));
-    } else {
-      projectEdges.set(nextProjectId, removeTaskEdges(
-        projectEdges.get(nextProjectId) || [],
-        taskId,
-        { incoming: false }
-      ));
-    }
-  }
-
-  for (const entry of changes.taskDeletes) {
-    const taskId = uuid(entry.id, 'Görev kimliği');
-    const row = changedTaskRows.get(taskId);
-    if (!row) continue;
-    const projectId = rowId(row.ProjectId);
-    projectEdges.set(projectId, removeTaskEdges(projectEdges.get(projectId) || [], taskId));
-  }
-
-  for (const task of dependencyUpserts) {
-    const taskId = uuid(task.id, 'Görev kimliği');
-    const projectId = uuid(task.projectId, 'Proje kimliği');
-    const nextEdges = projectEdges.get(projectId) || [];
-    for (const dependency of task.deps || []) {
-      nextEdges.push({
-        taskId,
-        predecessorId: uuid(dependency.predecessorId, 'Öncül görev kimliği')
-      });
-    }
-    projectEdges.set(projectId, nextEdges);
-  }
-
-  for (const projectId of [...affectedProjectIds].sort()) {
-    const cycleTaskIds = findDependencyCycle(projectEdges.get(projectId) || []);
-    if (cycleTaskIds.length) {
-      throw new ServerPersistenceError('MUTATION_FAILED', 'Görev bağımlılıkları döngü oluşturamaz.', {
-        details: actor.isSystemAdmin || actor.effective.access.get(projectId)?.accessLevel === 'FULL'
-          ? { projectId, taskIds: cycleTaskIds } : undefined
-      });
-    }
-  }
-}
-
-async function planIntegrity(executor, changes, actor) {
+async function planIntegrity(executor, changes) {
   return observePhase('phase.commit.integrity-planning', async () => {
     await assertActiveProjectMutationTargets(executor, changes);
     await assertActiveCalendarReferences(executor, changes);
     await assertSingleRootWbs(executor, changes);
     const plannedChanges = await planTaskCommits(executor, changes);
-    await assertAcyclicTaskDependencies(executor, plannedChanges, actor);
     return plannedChanges;
   });
 }
@@ -422,10 +323,9 @@ export function createHardenedSqlAppRepository() {
     async commitChanges(input) {
       const changes = normalizeChanges(input);
       return withSqlTransaction(async (transaction) => {
-        const actor = input?.[TASK_DEPENDENCY_CONTEXT]
-          || await observePhase('phase.commit.authorization', () => loadAuthorizationContext(transaction));
-        const scopedChanges = input?.[TASK_DEPENDENCY_CONTEXT] ? changes : await prepareScopedTaskDependencies(transaction, actor, changes);
-        const plannedChanges = await planIntegrity(transaction, scopedChanges, actor);
+        const scopedChanges = input?.[TASK_DEPENDENCY_CONTEXT] ? changes : await prepareScopedTaskDependencies(transaction, changes);
+        const actor = input?.[TASK_DEPENDENCY_CONTEXT] || scopedChanges[TASK_DEPENDENCY_CONTEXT];
+        const plannedChanges = await planIntegrity(transaction, scopedChanges);
         Object.defineProperty(plannedChanges, TASK_DEPENDENCY_CONTEXT, { value: actor });
         // E-posta niyeti taşınırken doğrulanmış işlem bağlamının simgesi korunur.
         if (input?.notifyAssignees === true) plannedChanges.notifyAssignees = true;

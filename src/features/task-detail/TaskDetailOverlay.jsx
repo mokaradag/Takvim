@@ -78,9 +78,6 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
       setSaveError(access.message);
       return Promise.resolve(projectWriteFailure('task/update', access));
     }
-    if (taskId === task.id && patch.projectId && patch.projectId !== displayTask.projectId) {
-      for (const id of pendingRef.current.keys()) if (id !== task.id) pendingRef.current.delete(id);
-    }
     const original = tasks.find((item) => item.id === taskId);
     const entry = { id: taskId, version: previous?.version || original?.version, patch: combined,
       observedDependencies: previous?.observedDependencies || (Object.prototype.hasOwnProperty.call(patch, 'deps') ? original?.deps : undefined) };
@@ -127,7 +124,7 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
         const edits = new Map(pendingRef.current);
         const patch = taskEditorPatch(task, input);
         if (!Object.prototype.hasOwnProperty.call(previous?.patch || {}, 'deps')) delete patch.deps;
-        edits.set(task.id, { id: task.id, version: previous?.version || task.version, observedDependencies: previous?.observedDependencies, patch });
+        if (initialAccess.ok) edits.set(task.id, { id: task.id, version: previous?.version || task.version, observedDependencies: previous?.observedDependencies, patch });
         result = await saveTaskEdits([...edits.values()], {
           generateSeries: seriesRef.current, ...saveOptions, taskId: task.id, syncKeywordCatalog: simple,
           onRebase: (rebased) => {
@@ -162,7 +159,11 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
     return pending;
   };
 
-  if (!isCreating && !initialAccess.ok) return <ReadOnlyTaskDrawer task={task} onClose={closeTask} />;
+  if (!isCreating && !initialAccess.ok) return <ReadOnlyTaskDrawer
+    task={task} tasks={tasks} dateFormat={dateFormat} onClose={closeTask}
+    onUpdateRelatedTask={onUpdate} canEditTaskDependencies={canEditTaskDependencies}
+    onSave={() => onSave(task)} hasUnsavedChanges={dirty} isSaving={saving} saveError={saveError}
+  />;
   const canManageDraft = creationDraft?.scope === 'FULL' || creationDraft?.scope === 'ASSIGNMENT';
   const common = {
     task: isCreating ? task : displayTask,

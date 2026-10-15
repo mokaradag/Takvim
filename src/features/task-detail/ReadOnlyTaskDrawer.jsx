@@ -8,7 +8,8 @@ import { AvatarStack, StatusPill } from '../../components/ui';
 import { TaskKeyword } from '../../components/TaskKeyword';
 import { OutlookCalendarAction } from '../outlook/OutlookCalendarAction';
 import { taskAssigneeDisplayNames } from './taskAssigneeDisplay.js';
-import { useAllPeople } from '../../state/hooks';
+import { RelEditor } from './TaskDrawer.jsx';
+import { useAllPeople, useAllWbs } from '../../state/hooks';
 import { TaskCreatorByline } from './TaskCreatorByline.jsx';
 
 function valueOrDash(value) {
@@ -24,8 +25,10 @@ function ReadOnlyField({ label, value }) {
   );
 }
 
-export function ReadOnlyTaskDrawer({ task, onClose }) {
+export function ReadOnlyTaskDrawer({ task, onClose, tasks = [], dateFormat, onUpdateRelatedTask,
+  canEditTaskDependencies = () => false, onSave, hasUnsavedChanges = false, isSaving = false, saveError }) {
   const people = useAllPeople();
+  const wbs = useAllWbs();
   const color = projectColorVar(task.proje);
   const assigneeNames = taskAssigneeDisplayNames(task);
 
@@ -56,7 +59,7 @@ export function ReadOnlyTaskDrawer({ task, onClose }) {
           <div className="col" style={{ gap: 18 }}>
             <div className="card" style={{ padding: 12 }}>
               <div className="muted" style={{ fontSize: 12, lineHeight: 1.55 }}>
-                Bu görev PARTIAL veya READ proje görünürlüğüyle açıldı. Ayrıntıları görüntüleyebilirsiniz; değişiklik yapmak için tam proje yazma yetkisi gerekir.
+                Bu görevin ayrıntıları salt okunurdur. Yazma yetkiniz olan ardıl görevlerin ilişkilerini düzenleyebilirsiniz.
               </div>
             </div>
 
@@ -88,6 +91,12 @@ export function ReadOnlyTaskDrawer({ task, onClose }) {
               </>}
             </div>
 
+            {onUpdateRelatedTask && <fieldset disabled={isSaving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+              <div className="label">İlişkiler ve bağımlılıklar</div>
+              <RelEditor task={task} tasks={tasks} wbs={wbs} dateFormat={dateFormat}
+                allowPredecessorEdits={false} onUpdateTask={onUpdateRelatedTask} canEditTask={canEditTaskDependencies} />
+            </fieldset>}
+            {saveError && <div role="alert">{saveError}</div>}
             <div className="col" style={{ gap: 6 }}>
               <div className="label">Notlar</div>
               <div className="input" style={{ minHeight: 90, whiteSpace: 'pre-wrap', background: 'var(--bg-elev-2)', color: 'var(--text-muted)' }}>
@@ -103,7 +112,8 @@ export function ReadOnlyTaskDrawer({ task, onClose }) {
               kullanıcı onu kendi Outlook takvimine ekleyebilir. */}
           <OutlookCalendarAction task={task} />
           <div style={{ flex: 1 }} />
-          <button className="btn primary" onClick={onClose}>Kapat</button>
+          {hasUnsavedChanges && <button className="btn primary" disabled={isSaving} onClick={onSave}>Kaydet</button>}
+          <button className="btn" disabled={isSaving} onClick={onClose}>Kapat</button>
         </div>
       </div>
     </>

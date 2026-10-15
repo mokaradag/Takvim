@@ -650,7 +650,13 @@ ${visibleTasks("@wbsId IS NULL OR EXISTS (SELECT 1 FROM #AiWbsFocus focus WHERE 
  */
 export const AI_TOOL_DEPENDENCIES_SQL = `/* rota-ai-tool:dependencies */
 ${SCOPE_PROJECTS}
-${visibleTasks()}
+${visibleTasks(`@focusTaskId IS NULL OR t.TaskId = @focusTaskId OR EXISTS (
+    SELECT 1 FROM dbo.MR_TaskDependencies focused
+    WHERE focused.ProjectId = @projectId
+      AND ${visibleDependencyEndpoint('@focusTaskId')}
+      AND ((focused.TaskId = @focusTaskId AND focused.PredecessorTaskId = t.TaskId)
+        OR (focused.PredecessorTaskId = @focusTaskId AND focused.TaskId = t.TaskId))
+  )`)}
   DROP TABLE IF EXISTS #AiDependencies;
   SELECT TOP (@maxRows) d.TaskId, d.PredecessorTaskId, d.DependencyType, d.LagDays, d.LagValue, d.LagUnit
   INTO #AiDependencies

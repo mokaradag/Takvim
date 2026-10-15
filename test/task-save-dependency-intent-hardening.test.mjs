@@ -181,7 +181,7 @@ test('normal sorumlu yeni görevle öncül ve ardıl bağlantılarını tek atom
       created
     ] });
     assert.ok(response.taskUpserts.some((row) => row.id === newId));
-    assert.equal(stack.db.statements.filter((entry) => entry.sql.includes('STRING_SPLIT(@scopedDependencyTaskIds')).length, 1);
+    assert.equal(stack.db.statements.filter((entry) => entry.sql.includes('/* commit-resource-discovery */')).length, 1);
     await stack.reload();
     assert.equal(stack.state.tasks.find((row) => row.id === newId).deps[0].predecessorId, PREDECESSOR_ID);
     assert.equal(stack.state.tasks.find((row) => row.id === TASK_ID).deps[0].predecessorId, newId);
@@ -382,10 +382,10 @@ for (const partial of [false, true]) {
       await stack.repository.commitChanges({ taskUpserts: [{ ...task, dependencyMutation: true,
         dependencyChanges: { upserts: [{ predecessorId: PREDECESSOR_ID, type: 'FF', lagDays: 0 }], removals: [] } }] });
       const queries = stack.db.statements.slice(start).map((row) => row.sql);
-      const preparation = queries.find((sql) => sql.includes('STRING_SPLIT(@scopedDependencyTaskIds'));
-      assert.ok(preparation.indexOf('FROM dbo.MR_Tasks WITH (UPDLOCK') < preparation.indexOf('FROM dbo.MR_TaskDependencies WITH (UPDLOCK'));
-      assert.match(preparation, /ORDER BY TaskId;/);
-      assert.match(preparation, /@dependencyProjectIds/);
+      const firstTask = queries.findIndex((sql) => sql.includes('/* commit-task-lock */'));
+      const firstEdge = queries.findIndex((sql) => sql.includes('/* commit-dependency-lock */'));
+      const lastProject = queries.findLastIndex((sql) => sql.includes('/* commit-project-lock */'));
+      assert.ok(lastProject >= 0 && lastProject < firstTask && firstTask < firstEdge);
     } finally { await stack.dispose(); }
   });
 }
@@ -418,5 +418,166 @@ test('ilişki deltası mevcut tür/gecikme/tekrar/sınır doğrulamasını atlay
       await assert.rejects(stack.repository.commitChanges({ taskUpserts: [{ ...task, dependencyMutation: true, dependencyChanges: delta }] }), { code: 'MUTATION_FAILED' });
     }
     assert.equal(stack.db.taskDependencies.length, 2);
+  } finally { await stack.dispose(); }
+});
+
+
+test('explicit edge updates/removals preserve untouched row identity and creation provenance', async () => {
+  const data = partialSeed();
+  data.taskDependencies.forEach((row, i) => Object.assign(row, {
+    TaskDependencyId: `a0000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`,
+    CreatedBySicil: SICIL + 1, UpdatedBySicil: SICIL + 1,
+    CreatedAt: '2025-01-01T00:00:00.000Z', UpdatedAt: '2025-02-01T00:00:00.000Z'
+  }));
+  const stack = await createActualStack(data, { sicil: SICIL, corporateWbsSource: false });
+  try {
+    const hidden = structuredClone(stack.db.taskDependencies.find((d) => d.PredecessorTaskId.toLowerCase() === HIDDEN_ID));
+    const visible = structuredClone(stack.db.taskDependencies.find((d) => d.PredecessorTaskId.toLowerCase() === PREDECESSOR_ID));
+    const task = stack.state.tasks.find((t) => t.id === TASK_ID);
+    await stack.repository.commitChanges({ taskUpserts: [{ ...task, dependencyMutation: true, assigneeMutation: false,
+      dependencyChanges: { upserts: [{ predecessorId: PREDECESSOR_ID, type: 'FF', lagDays: 3 }], removals: [] } }] });
+    assert.deepEqual(stack.db.taskDependencies.find((d) => d.PredecessorTaskId.toLowerCase() === HIDDEN_ID), hidden);
+    const updated = stack.db.taskDependencies.find((d) => d.PredecessorTaskId.toLowerCase() === PREDECESSOR_ID);
+    assert.equal(updated.TaskDependencyId, visible.TaskDependencyId);
+    assert.equal(updated.CreatedBySicil, visible.CreatedBySicil);
+    assert.equal(updated.CreatedAt, visible.CreatedAt);
+    assert.equal(updated.DependencyType, 'FF');
+    await stack.reload();
+    const current = stack.state.tasks.find((t) => t.id === TASK_ID);
+    await stack.repository.commitChanges({ taskUpserts: [{ ...current, dependencyMutation: true, assigneeMutation: false,
+      dependencyChanges: { upserts: [], removals: [PREDECESSOR_ID] } }] });
+    assert.deepEqual(stack.db.taskDependencies, [hidden]);
+    await stack.reload();
+    const start = stack.db.statements.length;
+    await stack.repository.commitChanges({ taskUpserts: [{ ...stack.state.tasks.find((t) => t.id === TASK_ID), task: 'Content',
+      dependencyMutation: false, assigneeMutation: false }] });
+    assert.deepEqual(stack.db.taskDependencies, [hidden]);
+    assert.equal(stack.db.statements.slice(start).some(({ sql }) => /(?:INSERT|UPDATE|DELETE) dbo.MR_TaskDependencies/.test(sql)), false);
+    assert.equal(stack.db.statements.slice(start).some(({ sql }) => /MR_(?:Projects|Calendars) WITH \(UPDLOCK/.test(sql)), false);
+  } finally { await stack.dispose(); }
+});
+
+function movingSeed() {
+  const data = seed();
+  data.projects.push({ ...data.projects[0], ProjectId: OTHER_PROJECT, ProjectCode: 'DEST', ProjectName: 'Destination' });
+  return data;
+}
+
+for (const moved of ['both', 'predecessor', 'successor']) {
+  test(`atomic ${moved} move preserves retained edge or applies its explicit pre-move removal`, async () => {
+    const stack = await createActualStack(movingSeed(), { sicil: SICIL, corporateWbsSource: false });
+    try {
+      const edge = structuredClone(stack.db.taskDependencies[0]);
+      const successor = stack.state.tasks.find((t) => t.id === TASK_ID);
+      const predecessor = stack.state.tasks.find((t) => t.id === PREDECESSOR_ID);
+      const taskUpserts = [{ ...successor, projectId: moved === 'predecessor' ? PROJECT_ID : OTHER_PROJECT,
+        // A stale/partial projection never becomes replacement truth, even during a move.
+        deps: [], dependencyMutation: true, assigneeMutation: false,
+        dependencyChanges: { upserts: [], removals: moved === 'both' ? [] : [PREDECESSOR_ID] } }];
+      if (moved !== 'successor') taskUpserts.push({ ...predecessor, projectId: OTHER_PROJECT, deps: [], dependencyMutation: true,
+        assigneeMutation: false, dependencyChanges: { upserts: [], removals: [] } });
+      const response = await stack.repository.commitChanges({ taskUpserts });
+      if (moved === 'both') {
+        assert.deepEqual(stack.db.taskDependencies, [{ ...edge, ProjectId: OTHER_PROJECT.toUpperCase() }]);
+        const { appStateReducer } = await import('../src/state/appState.js');
+        const state = appStateReducer(stack.state, { type: 'data/apply-changes', changes: response });
+        assert.ok(state.tasks.find((t) => t.id === TASK_ID).deps.some((d) => d.predecessorId === PREDECESSOR_ID));
+      } else assert.equal(stack.db.taskDependencies.length, 0);
+      await stack.reload();
+      assert.equal(stack.state.tasks.find((t) => t.id === TASK_ID).deps.length, moved === 'both' ? 1 : 0);
+    } finally { await stack.dispose(); }
+  });
+}
+
+for (const contentSuccessor of [false, true]) {
+  test(`unreconciled cross-project move fails atomically (contentSuccessor=${contentSuccessor})`, async () => {
+    const stack = await createActualStack(movingSeed(), { sicil: SICIL, corporateWbsSource: false });
+    try {
+      const tasks = stack.db.tasks.map((t) => ({ ...t, RowVersion: Buffer.from(t.RowVersion) })), edges = structuredClone(stack.db.taskDependencies);
+      const predecessor = stack.state.tasks.find((t) => t.id === PREDECESSOR_ID);
+      const taskUpserts = [{ ...predecessor, projectId: OTHER_PROJECT, dependencyMutation: true,
+        dependencyChanges: { upserts: [], removals: [] } }];
+      if (contentSuccessor) taskUpserts.push({ ...stack.state.tasks.find((t) => t.id === TASK_ID), dependencyMutation: false, assigneeMutation: false });
+      await assert.rejects(stack.repository.commitChanges({ taskUpserts }), { code: 'MUTATION_FAILED' });
+      assert.deepEqual(stack.db.tasks, tasks);
+      assert.deepEqual(stack.db.taskDependencies, edges);
+    } finally { await stack.dispose(); }
+  });
+}
+
+test('readback includes a predecessor that became visible after editor load', async () => {
+  const stack = await createActualStack(partialSeed(), { sicil: SICIL, corporateWbsSource: false });
+  try {
+    const task = stack.state.tasks.find((t) => t.id === TASK_ID);
+    assert.equal(stack.state.tasks.some((t) => t.id === HIDDEN_ID), false);
+    stack.db.taskAssignees.push({ TaskId: HIDDEN_ID.toUpperCase(), Sicil: SICIL });
+    const response = await stack.repository.commitChanges({ taskUpserts: [{ ...task, task: 'New title', dependencyMutation: false, assigneeMutation: false }] });
+    const returnedIds = new Set(response.taskUpserts.map((t) => t.id));
+    for (const row of response.taskUpserts) for (const dep of row.deps || []) assert.ok(returnedIds.has(dep.predecessorId));
+    assert.ok(returnedIds.has(HIDDEN_ID));
+    const { appStateReducer } = await import('../src/state/appState.js');
+    const state = appStateReducer(stack.state, { type: 'data/apply-changes', changes: response });
+    const saved = state.tasks.find((t) => t.id === TASK_ID);
+    for (const dep of saved.deps) assert.ok(state.tasks.some((t) => t.id === dep.predecessorId));
+  } finally { await stack.dispose(); }
+});
+
+
+test('client save-draft moves both endpoints without manufacturing dependency removals', async () => {
+  const stack = await createActualStack(movingSeed(), { sicil: SICIL, corporateWbsSource: false });
+  try {
+    const edge = structuredClone(stack.db.taskDependencies[0]);
+    const result = await stack.persistence.mutate('task/save-draft', { type: 'task/save-draft',
+      updates: [TASK_ID, PREDECESSOR_ID].map((id) => ({ id, patch: { projectId: OTHER_PROJECT, wbsId: null } })) });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(stack.db.taskDependencies[0].TaskDependencyId, edge.TaskDependencyId);
+    assert.equal(stack.state.tasks.find((t) => t.id === TASK_ID).deps[0].predecessorId, PREDECESSOR_ID);
+  } finally { await stack.dispose(); }
+});
+
+test('hidden task project guesses share one content-save authorization response', async () => {
+  const stack = await createActualStack(partialSeed(), { sicil: SICIL, corporateWbsSource: false });
+  try {
+    const task = stack.state.tasks.find((t) => t.id === TASK_ID);
+    for (const projectId of [PROJECT_ID, OTHER_PROJECT]) await assert.rejects(stack.repository.commitChanges({
+      taskUpserts: [{ ...task, id: HIDDEN_ID, projectId, dependencyMutation: false, assigneeMutation: false }]
+    }), { code: 'FORBIDDEN' });
+  } finally { await stack.dispose(); }
+});
+
+
+test('task deletion can invalidate an old edge while another delta updates the successor', async () => {
+  const data = seed();
+  data.tasks.push({ ...data.tasks[1], TaskId: OTHER_TASK });
+  data.taskAssignees.push({ TaskId: OTHER_TASK, Sicil: SICIL });
+  const stack = await createActualStack(data, { sicil: SICIL, corporateWbsSource: false });
+  try {
+    const task = stack.state.tasks.find((t) => t.id === TASK_ID);
+    const predecessor = stack.state.tasks.find((t) => t.id === PREDECESSOR_ID);
+    await stack.repository.commitChanges({ taskDeletes: [{ id: predecessor.id, version: predecessor.version }], taskUpserts: [{ ...task,
+      dependencyMutation: true, dependencyChanges: { upserts: [{ predecessorId: OTHER_TASK, type: 'SS', lagDays: 0 }], removals: [] } }] });
+    assert.equal(stack.db.taskDependencies.length, 1);
+    assert.equal(stack.db.taskDependencies[0].PredecessorTaskId.toLowerCase(), OTHER_TASK);
+  } finally { await stack.dispose(); }
+});
+
+test('readback starts after mutation locks are released and is not replayed as a mutation', async () => {
+  const stack = await createActualStack(seed(), { sicil: SICIL, corporateWbsSource: false });
+  try {
+    stack.db.transactions.length = 0;
+    await stack.repository.commitChanges({ taskUpserts: [{ ...stack.state.tasks.find((t) => t.id === TASK_ID), dependencyMutation: false, assigneeMutation: false }] });
+    const [mutation, readback] = stack.db.transactions;
+    assert.equal(stack.db.transactions.length, 2);
+    assert.ok(mutation.commitStatementIndex <= readback.statementIndex);
+    const { withSqlTransaction, afterSqlCommit, isWithinSqlTransaction } = await import('../src/server/db/pool.js');
+    let writes = 0;
+    await assert.rejects(withSqlTransaction(async () => {
+      writes++;
+      return afterSqlCommit(async () => {
+        assert.equal(isWithinSqlTransaction(), false);
+        throw Object.assign(new Error('readback deadlock'), { number: 1205 });
+      });
+    }, { deadlockRetries: 1 }), /readback deadlock/);
+    assert.equal(writes, 1);
   } finally { await stack.dispose(); }
 });

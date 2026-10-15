@@ -30,14 +30,16 @@ function personFromRow(row) {
   };
 }
 
-export async function loadAuthorizationContext(executor = null, { includeScopeIdentities = false, maxScopeRows = null } = {}) {
+export async function loadAuthorizationContext(executor = null, { includeScopeIdentities = false, maxScopeRows = null, resourceProjectIds = null, resourceTaskIds = null } = {}) {
   const sicil = await getTrustedCurrentSicil();
   const pool = executor || await getSqlPool();
   const request = pool.request();
   request.input('sicil', sql.Int, sicil);
   if (maxScopeRows != null) request.input('authorizationMaxRows', sql.Int, maxScopeRows + 1);
+  if (resourceProjectIds) request.input('authorizationProjectIds', sql.NVarChar(sql.MAX), resourceProjectIds.join(','));
+  if (resourceTaskIds) request.input('authorizationTaskIds', sql.NVarChar(sql.MAX), resourceTaskIds.join(','));
   request.input('adminPredicateOnly', sql.Bit, includeScopeIdentities ? 1 : 0);
-  const result = await request.query(`
+  const query = `
     SELECT TOP (1) Sicil, DisplayName, Username, JobTitle, Team, Sector, Directorate, Department, Unit
     FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil;
 
@@ -100,7 +102,23 @@ export async function loadAuthorizationContext(executor = null, { includeScopeId
       AND (@adminPredicateOnly = 0 OR NOT EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1))
     ${maxScopeRows != null ? ') authorizedTasks' : ''};
     ${includeScopeIdentities ? `SELECT DISTINCT ${maxScopeRows != null ? 'TOP (@authorizationMaxRows)' : ''} EmployeeSicil FROM dbo.MR_V_ExecutiveScope WHERE ManagerSicil = @sicil AND NOT EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1) ORDER BY EmployeeSicil;` : ''}
-  `);
+  `;
+  // Commit authorization reads only resources in the already acquired plan.
+  // Do not retain broad resource-scan locks or request unrelated project/task rows.
+  const scopedQuery = resourceProjectIds && resourceTaskIds ? query
+    .replace(/\b(FROM|JOIN) dbo\.MR_Projects p\b/g, `$1 (
+      SELECT * FROM dbo.MR_Projects WITH (READCOMMITTED)
+      WHERE ProjectId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@authorizationProjectIds, ','))
+    ) p`)
+    .replace(/\bFROM dbo\.MR_Tasks t\b/g, `FROM (
+      SELECT * FROM dbo.MR_Tasks WITH (READCOMMITTED)
+      WHERE TaskId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@authorizationTaskIds, ','))
+    ) t`)
+    .replace(/\bJOIN dbo\.MR_TaskAssignees ta\b/g, `JOIN (
+      SELECT * FROM dbo.MR_TaskAssignees WITH (READCOMMITTED)
+      WHERE TaskId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@authorizationTaskIds, ','))
+    ) ta`) : query;
+  const result = await request.query(scopedQuery);
 
   if (maxScopeRows != null && [3, 4, 5].some((index) => (result.recordsets[index]?.length || 0) > maxScopeRows)) {
     throw new ServerPersistenceError('AI_SCOPE_LIMIT_EXCEEDED', 'Yetki kapsamı analiz sınırını aşıyor.');

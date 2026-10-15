@@ -135,7 +135,7 @@ test('karışık harfli yeni tekrar şablonu çocuktan sonra gelse de önce kili
     assert.equal(stack.db.tasks.length, 2);
     assert.equal(String(stack.db.tasks[1].RecurrenceParentTaskId).toLowerCase(), PARENT_ID);
 
-    assert.equal(stack.db.transactions.length, 1);
+    assert.equal(stack.db.transactions.length, 2, 'one mutation transaction, then one lock-free mutation readback transaction');
     assert.equal(stack.db.transactions[0].statementIndex, 0);
     const parentLockIndex = trace.findIndex((entry) => (
       /FROM dbo\.MR_Tasks WITH \(UPDLOCK, HOLDLOCK\)/.test(entry.sql)

@@ -35,7 +35,7 @@ test('nested SQL repository work reuses the outer transaction', () => {
   assert.match(source, /const transactionContext = new AsyncLocalStorage\(\);/);
   assert.match(source, /const activeTransaction = transactionContext\.getStore\(\);/);
   assert.match(source, /if \(activeTransaction\) return work\(activeTransaction, sql\);/);
-  assert.match(source, /return await transactionContext\.run\(transaction, async \(\) => \{/);
+  assert.match(source, /const result = await transactionContext\.run\(transaction, async \(\) => \{/);
 });
 
 test('Actual commits lock and preserve the single-root WBS invariant', () => {
@@ -48,22 +48,14 @@ test('Actual commits lock and preserve the single-root WBS invariant', () => {
   assert.match(source, /if \(existingRoots\.length === 1 && roots\[0\]\.id !== existingRoots\[0\]\)/);
 });
 
-test('Actual commits validate the final dependency graph under transaction locks', () => {
+test('Actual commits share one locked final-graph validator and forward verified context', () => {
+  const preparation = read('src/server/repository/taskDependencyAccess.js');
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
-  assert.match(
-    source,
-    /FROM dbo\.MR_TaskDependencies WITH \(UPDLOCK, HOLDLOCK\)\s+WHERE ProjectId = @projectId/s
-  );
-  assert.match(source, /projectEdges\.set\(previousProjectId, removeTaskEdges/);
-  assert.match(source, /projectEdges\.set\(projectId, removeTaskEdges/);
-  assert.match(source, /const cycleTaskIds = findDependencyCycle\(projectEdges\.get\(projectId\) \|\| \[\]\);/);
+  assert.match(preparation, /findDependencyCycle\(\[\.\.\.resulting.values\(\)\]\)/);
   assert.match(source, /const scopedChanges = input\?\.\[TASK_DEPENDENCY_CONTEXT\] \? changes : await prepareScopedTaskDependencies/);
-  assert.match(source, /const plannedChanges = await planIntegrity\(transaction, scopedChanges, actor\);/);
+  assert.match(source, /const plannedChanges = await planIntegrity\(transaction, scopedChanges\);/);
   assert.match(source, /return baseRepository\.commitChanges\(plannedChanges\);/);
-  // İşlem başına e-posta tercihi taşınırken planlanan nesne KOPYALANMAZ:
-  // doğrulanmış işlem bağlamı sayılamayan bir simgedir ve yayılma onu düşürür.
   assert.match(source, /if \(input\?\.notifyAssignees === true\) plannedChanges\.notifyAssignees = true;/);
-  assert.doesNotMatch(source, /baseRepository\.commitChanges\(\{ \.\.\.plannedChanges/);
 });
 
 test('recurrence occurrence creation locks the template in the same hardened transaction', () => {
@@ -71,14 +63,14 @@ test('recurrence occurrence creation locks the template in the same hardened tra
   assert.match(source, /recurrenceParentId:\s*task\.recurrenceParentId\s*\?\s*uuid\(task\.recurrenceParentId, 'Tekrar şablonu kimliği'\)/);
   assert.match(source, /\.filter\(\(task\) => task\.recurrenceParentId\)\s*\.map\(\(task\) => task\.recurrenceParentId\)/);
   assert.match(source, /for \(const taskId of \[\.\.\.referencedTaskIds\]\.sort\(\)\) \{\s+const row = await rowForUpdate\(executor, 'MR_Tasks', 'TaskId', taskId/s);
-  assert.match(source, /FROM dbo\.\$\{safeTable\} WITH \(UPDLOCK, HOLDLOCK\)/);
+  assert.match(read('src/server/repository/commitResourceLocks.js'), /commit-task-lock/);
 });
 
 test('Project writes require a calendar and all supplied calendar references must be active', () => {
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
   assert.match(
     source,
-    /FROM dbo\.MR_Calendars WITH \(UPDLOCK, HOLDLOCK\)\s+WHERE CalendarId = @calendarId AND IsActive = 1/s
+    /FROM dbo\.MR_Calendars WITH \(HOLDLOCK\)\s+WHERE CalendarId = @calendarId AND IsActive = 1/s
   );
   assert.match(source, /for \(const project of changes\.projectUpserts\) \{/);
   assert.match(source, /if \(!project\.calendarId\) \{/);

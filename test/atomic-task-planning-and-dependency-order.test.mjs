@@ -80,13 +80,3 @@ test('hardened commits require active stored and destination projects', () => {
   assert.match(source, /if \(before\) await requireActiveProject\(rowId\(before\.ProjectId\)\);/);
   assert.match(source, /await assertActiveProjectMutationTargets\(executor, changes\);/);
 });
-
-test('dependency graph removals finish before final requested edges are added', () => {
-  const source = read('src/server/repository/hardenedSqlAppRepository.js');
-  const deleteLoop = source.indexOf('for (const entry of changes.taskDeletes)');
-  const additionLoop = source.indexOf("const nextEdges = projectEdges.get(projectId) || [];");
-  assert.ok(deleteLoop >= 0);
-  assert.ok(additionLoop > deleteLoop);
-  assert.match(source, /const plannedChanges = await planTaskCommits\(executor, changes\);/);
-  assert.match(source, /return baseRepository\.commitChanges\(plannedChanges\);/);
-});

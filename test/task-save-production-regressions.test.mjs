@@ -271,7 +271,7 @@ test('bağımlılık düzenlenmediyse tam yetkili içerik kaydı mevcut bağıml
     );
     assert.equal(
       contentStatements.filter((sql) => sql.includes(
-        'SELECT TOP (1) ProjectId FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK) WHERE ProjectId = @projectId AND IsActive = 1'
+        'SELECT TOP (1) ProjectId FROM dbo.MR_Projects WITH (HOLDLOCK) WHERE ProjectId = @projectId AND IsActive = 1'
       )).length,
       1,
       'aynı projedeki kaynak ve hedef kapsamı tek etkin-proje sorgusunu paylaşmalıdır'
@@ -295,7 +295,7 @@ test('bağımlılık düzenlenmediyse tam yetkili içerik kaydı mevcut bağıml
   }
 });
 
-test('aynı öncülün bağımlılık öznitelikleri değiştiğinde satır yeniden yazılır', async () => {
+test('aynı öncülün bağımlılık öznitelikleri değiştiğinde yalnızca mevcut satır güncellenir', async () => {
   const cases = [
     ['type', { type: 'SS' }],
     ['lagDays', { lagDays: 2 }],
@@ -319,13 +319,13 @@ test('aynı öncülün bağımlılık öznitelikleri değiştiğinde satır yeni
 
       const statements = stack.db.statements.slice(statementStart).map((entry) => entry.sql);
       assert.equal(
-        statements.filter((sql) => sql.includes('DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId')).length,
+        statements.filter((sql) => sql.includes('UPDATE dbo.MR_TaskDependencies')).length,
         1,
         `${field} değişikliği bağımlılık satırını yeniden yazmalıdır`
       );
       assert.equal(
         statements.filter((sql) => sql.includes('INSERT dbo.MR_TaskDependencies(')).length,
-        1,
+        0,
         `${field} değişikliği yeni bağımlılık satırını eklemelidir`
       );
       const persisted = stack.db.taskDependencies.find((entry) => (

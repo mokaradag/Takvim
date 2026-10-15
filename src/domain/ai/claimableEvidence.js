@@ -66,7 +66,7 @@ const PROJECT = Object.freeze({
   name: c('project.name'), code: c('project.code'), sourceType: p('project.sourceType', 'enum'), lead: p('project.lead', 'text'),
   type: p('project.type', 'text'), calendar: p('project.calendar', 'text'), dataDate: p('project.dataDate', 'date'),
   tagCount: p('project.tagCount', 'tags'), wbsNodeCount: p('project.wbsNodeCount', 'wbs-nodes'),
-  dependencyCount: p('project.dependencyCount', 'dependencies'), baselineCount: p('project.baselineCount', 'baselines')
+  dependencyCount: m('project.dependencyCount', 'dependencies'), baselineCount: p('project.baselineCount', 'baselines')
 });
 /** Görev satırındaki proje künyesi: adı ve kodu satırın bağlamıdır. */
 const TASK_PROJECT = Object.freeze({ ...PROJECT, name: c('task.project'), code: c('task.project') });
@@ -132,7 +132,7 @@ const REGISTRY_ENTRIES = Object.freeze({
     ...fields('task.cost', { budget: p('task.budget', 'currency-unspecified'), spent: p('task.spent', 'currency-unspecified') }),
     ...fields('task.access', TASK_ACCESS), ['task.access.reasons.*', p('task.accessReasons', 'enum')], ['task.createdBy.name', p('task.createdBy', 'text')],
     ['task.calendar', p('task.calendar', 'text')], ['task.calendarSource', p('task.calendarSource', 'enum')],
-    ...fields('task.dependencies', { predecessorCount: p('task.predecessorCount', 'dependencies'), successorCount: p('task.successorCount', 'dependencies') }),
+    ...fields('task.dependencies', { predecessorCount: m('task.predecessorCount', 'dependencies'), successorCount: m('task.successorCount', 'dependencies') }),
     ...fields('task.recurrence', { rule: p('recurrence.rule', 'text'), ruleDescription: p('recurrence.rule', 'text'), occurrenceDate: p('recurrence.occurrenceDate', 'date') })],
   rota_task_analytics: [...fields('definitions', { overdue: DEFINITION, dueNext7Days: DEFINITION, completionRatePercent: DEFINITION, today: x('date'), assignee: DEFINITION }),
     ...fields('totals', TOTALS), ...fields('overdueAging.buckets.*', { label: x(), count: m('tasks.overdue', 'tasks') }),

@@ -1263,9 +1263,45 @@ for (const mode of ['FULL', 'READ', 'PARTIAL']) {
     assert.equal(inspection.result.ok, true, JSON.stringify(inspection.result));
     assert.deepEqual(inspection.result.data.predecessors.map((dep) => dep.taskId).sort(), expected);
     const detail = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: task.id });
-    assert.equal(detail.result.data.task.dependencies.predecessorCount, expected.length);
+    if (mode === 'PARTIAL') {
+      assert.equal(detail.result.data.task.dependencies, null);
+      assert.equal(detail.result.complete, false);
+      assert.equal(inspection.result.complete, false);
+      assert.equal(inspection.result.totalCount, null);
+      const project = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId });
+      assert.equal(project.result.data.project.dependencyCount, null);
+    } else assert.equal(detail.result.data.task.dependencies.predecessorCount, expected.length);
     const coverage = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { projectId });
     assert.equal(coverage.result.data.coverage.dependencyCount, expected.length);
     if (mode === 'PARTIAL') assert.equal(JSON.stringify(inspection.result).includes(PARTIAL_OTHERS[0]), false);
   });
 }
+
+
+test('focused dependency inspection bounds the visible neighborhood before the large-project cap', async (t) => {
+  const seed = rotaToolSeed();
+  seed.tasks.push(...Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({
+    TaskId: `f9000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`, ProjectId: PROJECTS.FULL,
+    Title: 'Unrelated task', Status: 'planned', Priority: 'medium', CreatedBySicil: AYSE
+  })));
+  const stack = createAiStack(t, { sicil: AYSE, seed });
+  const focused = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.DUE_SOON });
+  assert.equal(focused.result.ok, true, JSON.stringify(focused.result));
+  assert.equal(focused.result.data.predecessors.length, 1);
+  // SQL staging and evidence population remain focused; project-wide safeguards stay active.
+  assert.ok(focused.result.returnedCount < 10);
+  const wide = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { projectId: PROJECTS.FULL });
+  assert.equal(wide.result.error.code, 'RESULT_TOO_LARGE');
+});
+
+test('AI dependency count metrics always carry population semantics', async () => {
+  const { PROPERTY_METRICS, metricEntry } = await import('../src/domain/ai/claimableEvidence.js');
+  for (const [tool, path, metric] of [
+    ['rota_project_detail', 'data.project.dependencyCount', 'project.dependencyCount'],
+    ['rota_task_detail', 'data.task.dependencies.predecessorCount', 'task.predecessorCount'],
+    ['rota_task_detail', 'data.task.dependencies.successorCount', 'task.successorCount']
+  ]) {
+    assert.equal(PROPERTY_METRICS.has(metric), false);
+    assert.equal(metricEntry(tool, path.replace(/^data\./, '')).property, false);
+  }
+});

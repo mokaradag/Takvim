@@ -145,7 +145,7 @@ async function commitProgress(stack, progress) {
 /* ── 1 · Yetkilendirme matrisi ──────────────────────────────────── */
 
 for (const mode of [...WRITES_FULL, 'assignee', 'creator']) {
-  test(`yetkili mutasyon yanıtı ${mode} kipinde yalnızca dokunulan satırları döndürür`, async () => {
+  test(`yetkili mutasyon yanıtı ${mode} kipinde dokunulan satırları ve görünür ilişki uçlarını döndürür`, async () => {
     const stack = await createActualStack(seed(mode), { sicil: ACTOR, corporateWbsSource: false });
     try {
       stack.db.statements.length = 0;
@@ -153,7 +153,7 @@ for (const mode of [...WRITES_FULL, 'assignee', 'creator']) {
       const committed = await commitProgress(stack, 42);
 
       // Yanıt HEDEFLİDİR: dokunulmayan proje, WBS ve görev geri gelmez.
-      assert.deepEqual(committed.taskUpserts.map((task) => task.id), [TASK]);
+      assert.deepEqual(committed.taskUpserts.map((task) => task.id), WRITES_FULL.includes(mode) ? [TASK, CO_TASK] : [TASK]);
       assert.deepEqual(committed.projectUpserts.map((project) => project.id), [PROJECT]);
       assert.deepEqual(committed.wbsUpserts.map((node) => node.id).sort(), [CHILD_WBS]);
       assert.equal(committed.taskUpserts[0].progress, 42);
@@ -342,7 +342,7 @@ test('yetkili yanıt çıktıları istenen kimlik kümesiyle sınırlı kalır',
     const start = batch.indexOf(`    ${statement}`);
     assert.ok(start > 0, statement);
     const body = batch.slice(start, batch.indexOf(';', start));
-    assert.match(body, new RegExp(`JOIN ${requested} `), statement);
+    assert.match(body, new RegExp(requested === '#RequestedTasks' && statement !== 'SELECT d.*' ? 'JOIN \\(SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets\\)' : `JOIN ${requested} `), statement);
     // Görünürlük kararı satır içinde yeniden türetilmez.
     assert.doesNotMatch(body, /MR_V_CorporateProjectAccess|MR_V_ExecutiveScope|MR_ProjectAccess/, statement);
   }

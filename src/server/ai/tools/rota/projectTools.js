@@ -134,7 +134,7 @@ const projectDetail = {
   topic: 'projects',
   evidenceKind: 'project-detail',
   authorization: 'Proje görünür değilse "bulunamadı". Görev toplamları yalnızca görünür görevler üzerindedir; erişim nedeni kullanıcının kendi yetkisidir.',
-  description: 'Tek projenin künyesi: kaynak, lider, takvim, etiketler, kullanıcının erişim düzeyi ve NEDENİ, görünür görevlerin durum/gecikme toplamları ve (tam erişimde) bağımlılık ile baz plan sayıları. "Neden bu projeyi görüyorum / neden göremiyorum" sorularında da kullanın.',
+  description: 'Tek projenin künyesi: kaynak, lider, takvim, etiketler, kullanıcının erişim düzeyi ve NEDENİ, görünür görevlerin durum/gecikme toplamları ve FULL/READ görünümünde bağımlılık ve FULL erişimde baz plan sayıları. "Neden bu projeyi görüyorum / neden göremiyorum" sorularında da kullanın.',
   parameters: {
     type: 'object',
     additionalProperties: false,
@@ -173,7 +173,7 @@ const projectDetail = {
           tags,
           tagCount: countsOverLimit.includes('tagCount') ? null : detail.tags.length,
           wbsNodeCount: row.WbsNodeCount == null ? null : Number(row.WbsNodeCount),
-          dependencyCount: row.DependencyCount == null ? null : Number(row.DependencyCount),
+          dependencyCount: !isCompleteTaskView(access) || row.DependencyCount == null ? null : Number(row.DependencyCount),
           baselineCount: row.BaselineCount == null ? null : Number(row.BaselineCount),
           ...(countsOverLimit.length ? { countsOverLimit } : {})
         },
@@ -182,7 +182,7 @@ const projectDetail = {
         definitions: { overdue: METRIC_DEFINITIONS.taskTotals.overdue, dueNext7Days: METRIC_DEFINITIONS.taskTotals.dueNext7Days, today: call.today }
       },
       scope: descriptor,
-      complete: !tagsTruncated && !countsOverLimit.length,
+      complete: !tagsTruncated && !countsOverLimit.length && isCompleteTaskView(access),
       truncated: tagsTruncated || countsOverLimit.length > 0,
       returnedCount: 1,
       totalCount: 1,

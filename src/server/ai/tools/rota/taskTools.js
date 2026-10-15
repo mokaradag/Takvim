@@ -5,7 +5,7 @@ import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
 import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.js';
 import { TOOL_LIMITS } from '../toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
-import { describeTaskScope, projectAccess } from './rotaScope.js';
+import { describeTaskScope, isCompleteTaskView, projectAccess } from './rotaScope.js';
 import { readTaskDetail, readTaskFacts, readWbsSelector } from './rotaToolStore.js';
 import {
   accessExplanation,
@@ -297,7 +297,7 @@ const taskDetail = {
   topic: 'tasks',
   evidenceKind: 'task-detail',
   authorization: 'Görev görünür değilse "bulunamadı" (var olmayan görevle aynı). Oluşturan ve eş sorumlu kimliği anlık görüntüyle aynı kuralla gösterilir.',
-  description: 'Tek bir görevin ayrıntısı: açıklama, proje ve iş dağılım yolu, durum, öncelik, planlanan/termin/gerçekleşen tarihler, ilerleme, saat ve bütçe alanları, tekrar bilgisi, sorumlular ve (tam erişimde) bağımlılık sayıları.',
+  description: 'Tek bir görevin ayrıntısı: açıklama, proje ve iş dağılım yolu, durum, öncelik, planlanan/termin/gerçekleşen tarihler, ilerleme, saat ve bütçe alanları, tekrar bilgisi, sorumlular ve (FULL/READ tam görev görünümünde) bağımlılık sayıları.',
   parameters: {
     type: 'object',
     additionalProperties: false,
@@ -356,7 +356,7 @@ const taskDetail = {
       updatedAt: fact.updatedAt,
       calendar: row.CalendarName ? dataText(row.CalendarName, 120) : null,
       calendarSource: row.CalendarSource || null,
-      dependencies: { predecessorCount: Number(row.PredecessorCount || 0), successorCount: Number(row.SuccessorCount || 0) },
+      dependencies: isCompleteTaskView(access) ? { predecessorCount: Number(row.PredecessorCount || 0), successorCount: Number(row.SuccessorCount || 0) } : null,
       access: accessExplanation(access)
     };
     return {
@@ -370,7 +370,7 @@ const taskDetail = {
         ]
       },
       scope: describeTaskScope(access ? [access] : []),
-      complete: !wbsPathTruncated && !descriptionClipped,
+      complete: !wbsPathTruncated && !descriptionClipped && isCompleteTaskView(access),
       truncated: wbsPathTruncated || descriptionClipped,
       returnedCount: 1,
       totalCount: 1,

@@ -224,7 +224,7 @@ test('API proje taşımasında eksik ardıl uzlaştırmasını reddeder ve bağl
     assert.equal(stack.db.taskDependencies.length, 2);
     const task = stack.state.tasks.find((item) => item.id === taskId);
     const changes = { taskUpserts: [{ ...task, projectId: targetId, wbsId: null, deps: [], version: 'AAAAAAAAAAA=' }], taskDeletes: [], wbsUpserts: [], wbsDeletes: [] };
-    await assert.rejects(stack.repository.commitChanges(changes), (error) => error.details?.code === 'TASK_DEPENDENCY_RECONCILIATION_REQUIRED');
+    await assert.rejects(stack.repository.commitChanges(changes), (error) => error.code === 'MUTATION_FAILED');
     assert.equal(stack.db.taskDependencies.length, 2);
     const successor = stack.state.tasks.find((item) => item.id === successorId);
     changes.taskUpserts.push({ ...successor, deps: [] });

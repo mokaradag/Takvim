@@ -1,23 +1,58 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
+registerServerOnlyShim();
+const { lockCommitResources } = await import('../src/server/repository/commitResourceLocks.js');
+const A = 'aaaaaaaa-0000-4000-8000-000000000001';
+const B = 'bbbbbbbb-0000-4000-8000-000000000002';
+const T = 'cccccccc-0000-4000-8000-000000000003';
+const U = 'dddddddd-0000-4000-8000-000000000004';
+function executor(tasks) {
+  const calls = [];
+  return { calls, request() { const params = {}; return { input(name, _type, value) { params[name] = value; }, async query(sql) {
+    calls.push({ sql, params });
+    const rows = sql.includes('commit-task-lock') ? tasks.filter((t) => t.TaskId === params.resourceId) : [];
+    if (sql.includes('commit-project-code-lock')) return { recordset: [{ LockResult: 0 }] };
+    if (sql.includes('commit-resource-discovery')) return { recordsets: [tasks, []] };
+    if (sql.includes('commit-topology-members')) return { recordsets: [[], []] };
+    return { recordset: rows };
+  } }; } };
+}
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const source = fs.readFileSync(path.join(ROOT, 'src/server/repository/taskDependencyAccess.js'), 'utf8');
-
-test('dependency preparation does not lock an entire project task population for content-only saves', () => {
-  const taskLock = source.match(/SELECT TaskId, ProjectId\s+FROM dbo\.MR_Tasks WITH \(UPDLOCK, HOLDLOCK\)[\s\S]*?ORDER BY TaskId;/)?.[0];
-  assert.ok(taskLock, 'task lock query must exist');
-  assert.match(taskLock, /TaskId IN \(SELECT TRY_CONVERT\(uniqueidentifier, value\) FROM STRING_SPLIT\(@scopedDependencyTaskIds, ','\)\)/);
-  assert.doesNotMatch(taskLock, /ProjectId IN/);
+test('content saves acquire shared project stability and their own task, without topology locks', async () => {
+  const db = executor([{ TaskId: T, ProjectId: A }]);
+  await lockCommitResources(db, { taskUpserts: [{ id: T, projectId: A, version: 'v1', dependencyMutation: false }] });
+  assert.equal(db.calls.some(({ sql }) => /MR_Projects WITH \(UPDLOCK/.test(sql)), false);
+  assert.equal(db.calls.some(({ sql }) => sql.includes('commit-dependency-lock')), false);
+  assert.equal(db.calls.find(({ sql }) => sql.includes('commit-topology-members')).params.topologyProjectIds, '');
+  assert.deepEqual(db.calls.filter(({ sql }) => sql.includes('commit-task-lock')).map(({ params }) => params.resourceId), [T]);
 });
 
-test('project-wide serialization is reserved for new tasks and explicit dependency mutations', () => {
-  assert.match(source, /const dependencyProjectIds = new Set\(upserts\s*\.filter\(\(task\) => !task\.version \|\| task\.dependencyMutation !== false\)/);
-  const projectLock = source.indexOf('FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK)');
-  const taskLock = source.indexOf('FROM dbo.MR_Tasks WITH (UPDLOCK, HOLDLOCK)');
-  const dependencyLock = source.indexOf('FROM dbo.MR_TaskDependencies WITH (UPDLOCK, HOLDLOCK)');
-  assert.ok(projectLock >= 0 && projectLock < taskLock && taskLock < dependencyLock);
+for (const [source, destination] of [[A, B], [B, A]]) {
+  test(`mixed transaction locks source ${source[0]} / destination ${destination[0]} in global order`, async () => {
+    const db = executor([{ TaskId: T, ProjectId: source }, { TaskId: U, ProjectId: destination }]);
+    await lockCommitResources(db, { projectUpserts: [{ id: destination }], taskDeletes: [{ id: U }],
+      taskUpserts: [{ id: T, projectId: destination, version: 'v1', dependencyMutation: true, dependencyChanges: { upserts: [], removals: [] } }] });
+    const projectCalls = db.calls.filter(({ sql }) => sql.includes('commit-project-lock'));
+    assert.deepEqual(projectCalls.map(({ params }) => params.resourceId), [A, B]);
+    const taskCalls = db.calls.filter(({ sql }) => sql.includes('commit-task-lock'));
+    assert.deepEqual(taskCalls.map(({ params }) => params.resourceId), [T, U]);
+    const lastProject = db.calls.findLastIndex(({ sql }) => sql.includes('commit-project-lock'));
+    const firstTask = db.calls.findIndex(({ sql }) => sql.includes('commit-task-lock'));
+    const lastTask = db.calls.findLastIndex(({ sql }) => sql.includes('commit-task-lock'));
+    const edge = db.calls.findIndex(({ sql }) => sql.includes('commit-dependency-lock'));
+    assert.ok(lastProject < firstTask && lastTask < edge);
+  });
+}
+
+
+test('project GUID casing cannot remove assignment dependency write permission', async () => {
+  const { indexTaskWriteState, resolveTaskMutationAccess } = await import('../src/state/projectWritePolicy.js');
+  const state = { currentUser: { id: '1' }, tasks: [{ id: T.toUpperCase(), projectId: A.toUpperCase(), assigneeIds: ['2'] }],
+    projects: [{ id: A.toLowerCase(), accessLevel: 'PARTIAL' }], assignableProjects: [{ id: A.toUpperCase() }], assignmentScopeSicils: ['2'] };
+  for (const value of [state, indexTaskWriteState(state)]) {
+    const access = resolveTaskMutationAccess(value, T.toLowerCase(), { projectId: A.toUpperCase() });
+    assert.equal(access.ok, true);
+    assert.equal(access.canManageDependencies, true);
+  }
 });

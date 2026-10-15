@@ -1,3 +1,4 @@
+import { canonicalActualIdOrValue, sameActualReference } from '../domain/identity/actualId.js';
 import { taskPersonnelScope } from './taskPersonnelScope.js';
 import { normalizeTaskLifecycle, requiresActualDateReset, ACTUAL_DATE_RESET_MESSAGE } from '../domain/taskLifecycle.js';
 import { businessDate } from '../domain/calendar/businessDate.js';
@@ -413,7 +414,7 @@ function invalidatedPredecessorIds(beforeTasks, upserts, deletes) {
   const beforeById = new Map((beforeTasks || []).map((task) => [task.id, task]));
   for (const task of upserts || []) {
     const before = beforeById.get(task.id);
-    if (before && before.projectId !== task.projectId) invalidated.add(task.id);
+    if (before && !sameActualReference(before.projectId, task.projectId)) invalidated.add(task.id);
   }
   return invalidated;
 }
@@ -513,7 +514,8 @@ function applyCommittedChanges(state, changes = {}) {
   const taskState = { ...state, projects, wbs };
   const previousTasksById = new Map(state.tasks.map((task) => [String(task.id), task]));
   const taskUpserts = (changes.taskUpserts || []).map((task) => (
-    preserveTaskScopedAvatarIdentities(previousTasksById.get(String(task.id)) || null, task)
+    preserveTaskScopedAvatarIdentities(previousTasksById.get(String(task.id)) || null,
+      Array.isArray(task.deps) ? task : { ...task, deps: previousTasksById.get(String(task.id))?.deps || [] })
   ));
   const invalidated = invalidatedPredecessorIds(
     state.tasks,
@@ -530,7 +532,9 @@ function applyCommittedChanges(state, changes = {}) {
     (task) => normalizeStateTask(task, taskState),
     { prependNew: true }
   );
-  const tasks = removePredecessorReferences(appliedTasks, invalidated);
+  const finalProjects = new Map(appliedTasks.map((task) => [canonicalActualIdOrValue(task.id), task.projectId]));
+  const tasks = appliedTasks.map((task) => ({ ...task, deps: (task.deps || []).filter((dep) =>
+    !invalidated.has(dep.predecessorId) || sameActualReference(finalProjects.get(canonicalActualIdOrValue(dep.predecessorId)), task.projectId)) }));
   const baselines = (state.baselines || []).filter((baseline) => !scrubbedProjectIds.has(baseline.projectId));
   const baselineIds = new Set(baselines.map((baseline) => baseline.id));
   const taskIds = new Set(tasks.map((task) => task.id));
@@ -595,9 +599,8 @@ export function appStateReducer(state, action) {
       return { ...next, projects: next.projects.map((project) => projectsById.get(project.id) || project) };
     }
     case 'task/update': {
-      const previousTask = state.tasks.find((task) => task.id === action.id) || null;
       let updatedTask = null;
-      let tasks = state.tasks.map((task) => {
+      const tasks = state.tasks.map((task) => {
         if (task.id !== action.id) return task;
         const next = { ...task, ...withCompletionStamp(state, task.id, action.patch) };
         const patchHasAssigneeIds = Object.prototype.hasOwnProperty.call(action.patch, 'assigneeIds');
@@ -618,12 +621,6 @@ export function appStateReducer(state, action) {
         updatedTask = normalizeStateTask(next, state);
         return updatedTask;
       });
-      const projectChanged = Boolean(updatedTask && previousTask && updatedTask.projectId !== previousTask.projectId);
-      if (projectChanged) {
-        tasks = tasks.map((task) => (task.id === action.id ? { ...task, deps: [] } : task));
-        tasks = removePredecessorReferences(tasks, new Set([action.id]));
-        updatedTask = tasks.find((task) => task.id === action.id) || updatedTask;
-      }
       const selectedTaskId = state.workspaceMode === WORKSPACE_MODE_PROJECT
         && state.selectedTaskId === action.id
         && updatedTask

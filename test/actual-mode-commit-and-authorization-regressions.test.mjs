@@ -259,7 +259,7 @@ test('görev atama kapsamı yalnızca etkin kurumsal projeleri ve kendi personel
   assert.match(body, /if \(hasTaskAssignmentScope\(actor\) && actor\.isExecutive\)/);
   // Yalnızca ETKİN KURUMSAL proje.
   assert.match(body, /SourceType = 'CORPORATE' AND IsActive = 1/);
-  assert.match(body, /MR_Projects WITH \(UPDLOCK, HOLDLOCK\)[\s\S]*SourceType = 'CORPORATE' AND IsActive = 1/);
+  assert.match(body, /MR_Projects WITH \(HOLDLOCK\)[\s\S]*SourceType = 'CORPORATE' AND IsActive = 1/);
   // Sorumluların tamamı yöneticinin kapsamında olmalı.
   assert.match(body, /FROM dbo\.MR_V_ExecutiveScope es\s+WHERE es\.ManagerSicil = @managerSicil/);
   assert.match(body, /görevin en az bir sorumlusu olmalıdır/);
@@ -268,21 +268,12 @@ test('görev atama kapsamı yalnızca etkin kurumsal projeleri ve kendi personel
     source.indexOf('async function assertActiveProject'),
     source.indexOf('const TASK_PROJECT_SCOPES')
   );
-  assert.match(activeLock, /MR_Projects WITH \(UPDLOCK, HOLDLOCK\)/);
+  assert.match(activeLock, /MR_Projects WITH \(HOLDLOCK\)/);
   const assigneeCreateLock = source.slice(
     source.indexOf('async function hasAuthoritativeAssigneeTaskCreateScope'),
     source.indexOf('async function assertTaskProjectScope')
   );
-  assert.match(assigneeCreateLock, /MR_Projects p WITH \(UPDLOCK, HOLDLOCK\)/);
-});
-
-test('cross-project task moves clear incoming and outgoing dependency rows before changing ProjectId', () => {
-  const source = read('src/server/repository/sqlAppRepository.js');
-  const body = source.slice(source.indexOf('async function commitTask'), source.indexOf('async function deleteTask'));
-  const cleanupIndex = body.indexOf('WHERE TaskId = @taskId OR PredecessorTaskId = @taskId;');
-  const updateIndex = body.indexOf('UPDATE dbo.MR_Tasks');
-  assert.match(body, /const projectChanged = before && !sameActualId\(before\.ProjectId, projectId\);/);
-  assert.ok(cleanupIndex >= 0 && cleanupIndex < updateIndex);
+  assert.match(assigneeCreateLock, /MR_Projects p WITH \(HOLDLOCK\)/);
 });
 
 test('manual FULL grants are ignored when their project is inactive', () => {

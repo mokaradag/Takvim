@@ -71,6 +71,7 @@ import { ExternalAssigneePicker } from '../assignment-coordination/ExternalAssig
 import { useAssignmentRequestDraft } from '../assignment-coordination/useAssignmentRequestDraft.js';
 import { AssigneeMailToggle } from '../assignment-coordination/AssigneeMailToggle.jsx';
 import { buildTaskDependencyOptions } from './taskDependencyOptions.js';
+import { sameActualId } from '../../domain/identity/actualId.js';
 import { TaskCreatorByline } from './TaskCreatorByline.jsx';
 
 function legacyProjectTags(projectId, tasks) {
@@ -1213,9 +1214,9 @@ function Section({ title, icon, tone = 'var(--accent)', hint, info, children }) 
  * ters yönden düzenler ve ARDIL görevi yamalar (bkz. taskSuccessorPolicy.js).
  * Böylece tek bir kenar iki yerde saklanmaz.
  */
-function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = true, canEditTask = () => true, wbs = [], dateFormat }) {
+export function RelEditor({ task, tasks, onChange, onUpdateTask, allowPredecessorEdits = true, allowSuccessorEdits = true, canEditTask = () => true, wbs = [], dateFormat }) {
   const deps = useMemo(() => task.deps || [], [task.deps]);
-  const [tab, setTab] = useState('predecessors');
+  const [tab, setTab] = useState(allowPredecessorEdits ? 'predecessors' : 'successors');
   const [selectedType, setSelectedType] = useState('FS');
   const [successorType, setSuccessorType] = useState('FS');
   const [linkError, setLinkError] = useState(null);
@@ -1251,7 +1252,7 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
   }, [tasks, task, successorDrafts]);
 
   const others = useMemo(
-    () => graph.filter((item) => item.id !== task.id && (!task.projectId || item.projectId === task.projectId)),
+    () => graph.filter((item) =>  !sameActualId(item.id, task.id) && (!task.projectId || sameActualId(item.projectId, task.projectId))),
     [graph, task.id, task.projectId]
   );
 
@@ -1455,9 +1456,9 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
       </div>
 
       {tab === 'predecessors' ? (
-        <div className="col" style={{ gap: 8 }}>
+        <fieldset disabled={!allowPredecessorEdits} className="col" style={{ gap: 8, border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           {deps.length === 0 && (
-            <div className="rel-empty">Bu görevin öncülü yok. Aşağıdan ekleyebilirsiniz.</div>
+            <div className="rel-empty">Bu görünümde öncül ilişki yok.</div>
           )}
           {deps.map((d, idx) => {
             const dep = tasks.find((x) => x.id === depId(d));
@@ -1490,7 +1491,7 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
               compact
             />
           </div>
-        </div>
+        </fieldset>
       ) : (
         <div className="col" style={{ gap: 8 }}>
           <div className="rel-direction-note">
@@ -1500,7 +1501,7 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
             </span>
           </div>
           {successors.length === 0 && (
-            <div className="rel-empty">Bu görevin ardılı yok. Aşağıdan ekleyebilirsiniz.</div>
+            <div className="rel-empty">Bu görünümde ardıl ilişki yok.</div>
           )}
           {successors.map(({ task: successor, dependency }) => (
             <fieldset key={successor.id} className="rel-item rel-successor" disabled={!canEditTask(successor)} title={!canEditTask(successor) ? 'Bu ardıl görevi düzenleme yetkiniz yok.' : undefined}>

@@ -228,7 +228,9 @@ export function createFakeDatabase(seed = {}) {
       DependencyType: entry.DependencyType || 'FS',
       LagDays: entry.LagDays ?? 0,
       LagValue: entry.LagValue ?? null,
-      LagUnit: entry.LagUnit ?? null
+      LagUnit: entry.LagUnit ?? null,
+      CreatedBySicil: entry.CreatedBySicil ?? null, UpdatedBySicil: entry.UpdatedBySicil ?? null,
+      CreatedAt: entry.CreatedAt || new Date().toISOString(), UpdatedAt: entry.UpdatedAt || new Date().toISOString()
     })),
     baselines: seed.baselines || [],
     taskBaselineSnapshots: seed.taskBaselineSnapshots || [],
@@ -1314,6 +1316,12 @@ function runQuery(db, statement, params, { database }) {
   // ── Yetkilendirme ve anlık görüntü ─────────────────────────
   if (sqlText.includes('FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil')) {
     const sets = authorizationRecordsets(db, sicil);
+    if (params.authorizationProjectIds != null) {
+      const projects = new Set(params.authorizationProjectIds.split(',').map((id) => id.toUpperCase()));
+      const tasks = new Set(String(params.authorizationTaskIds || '').split(',').map((id) => id.toUpperCase()));
+      sets[3] = sets[3].filter((row) => projects.has(String(row.ProjectId).toUpperCase()));
+      sets[4] = sets[4].filter((row) => tasks.has(String(row.TaskId).toUpperCase()));
+    }
     if (params.adminPredicateOnly && db.systemAdminSicils.includes(sicil)) { sets[3] = []; sets[4] = []; }
     if (sqlText.includes('ORDER BY EmployeeSicil;')) {
       sets.push(db.executiveScope.filter((entry) => entry.ManagerSicil === sicil && !(params.adminPredicateOnly && db.systemAdminSicils.includes(sicil))).map(({ EmployeeSicil }) => ({ EmployeeSicil })));
@@ -1343,12 +1351,14 @@ function runQuery(db, statement, params, { database }) {
     const wbsIds = requested(params.wbsIds);
     const taskIds = requested(params.taskIds);
     const snapshot = snapshotRecordsets(db, sicil, Boolean(params.isAdmin), Boolean(params.canAssignAllCorporate));
+    const projectedIds = new Set(taskIds);
+    for (const edge of snapshot[5]) if (taskIds.has(String(edge.TaskId).toUpperCase())) projectedIds.add(String(edge.PredecessorTaskId).toUpperCase());
     const projectedTasks = snapshot[3]
-      .filter((row) => taskIds.has(String(row.TaskId).toUpperCase()))
+      .filter((row) => projectedIds.has(String(row.TaskId).toUpperCase()))
 ;
     const projectedAssignees = sqlText.includes('LEFT JOIN #DirectoryNames pd')
-      ? taskScopedAssigneeRows(db, taskIds, sicil, Boolean(params.isAdmin), { exposeTaskScopedAvatar: true })
-      : snapshot[4].filter((row) => taskIds.has(String(row.TaskId).toUpperCase()));
+      ? taskScopedAssigneeRows(db, projectedIds, sicil, Boolean(params.isAdmin), { exposeTaskScopedAvatar: true })
+      : snapshot[4].filter((row) => projectedIds.has(String(row.TaskId).toUpperCase()));
     return result([
       snapshot[0].filter((row) => projectIds.has(String(row.ProjectId).toUpperCase())),
       snapshot[1].filter((row) => projectIds.has(String(row.ProjectId).toUpperCase())),
@@ -1362,7 +1372,7 @@ function runQuery(db, statement, params, { database }) {
     const calendar = db.calendars.find((entry) => entry.IsDefault && entry.IsActive) || null;
     return result([calendar ? [{ CalendarId: calendar.CalendarId }] : []]);
   }
-  if (sqlText.includes('FROM dbo.MR_Calendars WITH (UPDLOCK, HOLDLOCK)') && sqlText.includes('@calendarId')) {
+  if ((sqlText.includes('FROM dbo.MR_Calendars WITH (HOLDLOCK)') || sqlText.includes('FROM dbo.MR_Calendars WITH (UPDLOCK, HOLDLOCK)')) && sqlText.includes('@calendarId')) {
     const calendar = db.calendars.find((entry) => sameGuid(entry.CalendarId, params.calendarId) && entry.IsActive);
     return result([calendar ? [{ CalendarId: calendar.CalendarId }] : []]);
   }
@@ -1978,14 +1988,33 @@ function runQuery(db, statement, params, { database }) {
     ]);
   }
 
+  if (sqlText.includes('/* commit-resource-discovery */')) {
+    const parse = (value) => new Set(String(value || '').split(',').map((id) => id.trim().toLowerCase()).filter(Boolean));
+    const taskIds = parse(params.lockTaskIds), wbsIds = parse(params.lockWbsIds);
+    return result([db.tasks.filter((t) => taskIds.has(String(t.TaskId).toLowerCase()) || taskIds.has(String(t.RecurrenceParentTaskId).toLowerCase()) || db.tasks.some((own) => taskIds.has(String(own.TaskId).toLowerCase()) && sameGuid(own.RecurrenceParentTaskId, t.TaskId))),
+      db.wbs.filter((w) => wbsIds.has(String(w.WbsId).toLowerCase())),
+      db.projects.filter((p) => JSON.parse(params.lockProjectCodes || '[]').includes(String(p.ProjectCode || '').toUpperCase()))]);
+  }
+  if (sqlText.includes('/* commit-code-owners */')) return result([db.projects.filter((p) => JSON.parse(params.lockProjectCodes || '[]').includes(String(p.ProjectCode || '').toUpperCase()))]);
+  if (sqlText.includes('/* commit-topology-members */')) {
+    const projects = new Set(String(params.topologyProjectIds || '').split(',').map((id) => id.trim().toLowerCase()).filter(Boolean));
+    return result([db.tasks.filter((t) => projects.has(String(t.ProjectId).toLowerCase())), db.wbs.filter((w) => projects.has(String(w.ProjectId).toLowerCase()))]);
+  }
+  if (sqlText.includes('/* commit-project-lock */')) return result([db.projects.filter((p) => sameGuid(p.ProjectId, params.resourceId))]);
+  if (sqlText.includes('/* commit-task-lock */')) return result([db.tasks.filter((t) => sameGuid(t.TaskId, params.resourceId))]);
+  if (sqlText.includes('/* commit-wbs-lock */')) return result([db.wbs.filter((w) => sameGuid(w.WbsId, params.resourceId))]);
+  if (sqlText.includes('/* commit-dependency-lock */')) {
+    const projects = new Set(String(params.lockedTopologyProjectIds || '').split(',').map((id) => id.trim().toLowerCase()).filter(Boolean));
+    return result([db.taskDependencies.filter((d) => projects.has(String(d.ProjectId).toLowerCase()))]);
+  }
   // ── Kilitli tek satır okumaları ────────────────────────────
-  const lockedIdSelect = sqlText.match(/SELECT TOP \(1\) (\w+)\s+FROM dbo\.(\w+) WITH \(UPDLOCK, HOLDLOCK\)\s+WHERE (\w+) = @(entityId|taskId)/);
+  const lockedIdSelect = sqlText.match(/SELECT TOP \(1\) (\w+)\s+FROM dbo\.(\w+) WITH \((?:UPDLOCK, )?HOLDLOCK\)\s+WHERE (\w+) = @(entityId|taskId)/);
   if (lockedIdSelect) {
     const [, column, table, whereColumn, parameter] = lockedIdSelect;
     const rows = tableRows(db, table).filter((row) => sameGuid(row[whereColumn], params[parameter]));
     return result([rows.slice(0, 1).map((row) => ({ [column]: row[column] }))]);
   }
-  const lockedRowSelect = sqlText.match(/SELECT TOP \(1\)\s+\*\s+FROM dbo\.(\w+) WITH \(UPDLOCK, HOLDLOCK\)\s+WHERE (\w+) = @(entityId|id)/);
+  const lockedRowSelect = sqlText.match(/SELECT TOP \(1\)\s+\*\s+FROM dbo\.(\w+) WITH \((?:UPDLOCK, )?HOLDLOCK\)\s+WHERE (\w+) = @(entityId|id)/);
   if (lockedRowSelect) {
     const [, table, column, parameter] = lockedRowSelect;
     const rows = tableRows(db, table).filter((row) => sameGuid(row[column], params[parameter]));
@@ -2002,19 +2031,6 @@ function runQuery(db, statement, params, { database }) {
       .filter((node) => sameGuid(node.ProjectId, params.projectId))
       .map((node) => ({ WbsId: node.WbsId, ProjectId: node.ProjectId, ParentWbsId: node.ParentWbsId }))]);
   }
-  if (params.scopedDependencyTaskIds != null) {
-    const taskIds = new Set(params.scopedDependencyTaskIds.split(',').map((value) => value.toLowerCase()));
-    const projectIds = new Set(String(params.dependencyProjectIds || '').split(','));
-    const ownerIds = new Set(String(params.dependencyOwnerTaskIds || '').split(','));
-    for (const task of db.tasks) if (ownerIds.has(String(task.TaskId).toLowerCase())) projectIds.add(String(task.ProjectId).toLowerCase());
-    return result([
-      db.projects.filter((entry) => projectIds.has(String(entry.ProjectId).toLowerCase())).map((entry) => ({ ProjectId: entry.ProjectId })),
-      db.tasks.filter((entry) => taskIds.has(String(entry.TaskId).toLowerCase()) || projectIds.has(String(entry.ProjectId).toLowerCase()))
-        .map((entry) => ({ TaskId: entry.TaskId, ProjectId: entry.ProjectId })),
-      db.taskDependencies.filter((entry) => taskIds.has(String(entry.TaskId).toLowerCase()))
-    ]);
-  }
-
   if (sqlText.includes('SELECT TaskId, PredecessorTaskId')) {
     const isSingleTaskDependencyRead = sqlText.includes('AND TaskId = @taskId');
     return result([db.taskDependencies
@@ -2279,6 +2295,9 @@ function runQuery(db, statement, params, { database }) {
   if (sqlText.includes('UPDATE dbo.MR_Tasks')) {
     const task = taskById(db, params.taskId);
     if (!task || !sameVersion(task.RowVersion, params.version)) return result([[{ Affected: 0 }]]);
+    if (!sameGuid(task.ProjectId, params.projectId) && db.taskDependencies.some((d) => sameGuid(d.TaskId, params.taskId) || sameGuid(d.PredecessorTaskId, params.taskId))) {
+      const error = new Error('Composite dependency endpoint/project FK violation'); error.number = 547; throw error;
+    }
     Object.assign(task, {
       ProjectId: guid(params.projectId),
       WbsId: guid(params.wbsId),
@@ -2318,6 +2337,16 @@ function runQuery(db, statement, params, { database }) {
       .filter((entry) => !sameGuid(entry.TaskId, params.taskId) && !sameGuid(entry.PredecessorTaskId, params.taskId));
     return result([relatedTaskIds.map((RelatedTaskId) => ({ RelatedTaskId }))]);
   }
+  if (sqlText.includes('DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId AND PredecessorTaskId = @predecessorId')) {
+    db.taskDependencies = db.taskDependencies.filter((d) => !(sameGuid(d.TaskId, params.taskId) && sameGuid(d.PredecessorTaskId, params.predecessorId)));
+    return result([[]]);
+  }
+  if (sqlText.includes('UPDATE dbo.MR_TaskDependencies')) {
+    const row = db.taskDependencies.find((d) => sameGuid(d.TaskId, params.taskId) && sameGuid(d.PredecessorTaskId, params.predecessorId));
+    if (row) Object.assign(row, { ProjectId: guid(params.projectId), DependencyType: params.type, LagDays: params.lagDays, LagValue: params.lagValue, LagUnit: params.lagUnit,
+      UpdatedAt: new Date().toISOString(), UpdatedBySicil: params.actorSicil });
+    return result([[]]);
+  }
   if (sqlText.includes('DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId;')) {
     db.taskDependencies = db.taskDependencies.filter((entry) => !sameGuid(entry.TaskId, params.taskId));
     if (sqlText.includes('DELETE dbo.MR_TaskAssignees')) {
@@ -2345,6 +2374,9 @@ function runQuery(db, statement, params, { database }) {
     return result([[]]);
   }
   if (sqlText.includes('INSERT dbo.MR_TaskDependencies(')) {
+    if (![params.taskId, params.predecessorId].every((id) => db.tasks.some((t) => sameGuid(t.TaskId, id) && sameGuid(t.ProjectId, params.projectId)))) {
+      const error = new Error('Composite dependency endpoint/project FK violation'); error.number = 547; throw error;
+    }
     db.taskDependencies.push({
       TaskDependencyId: guid(params.dependencyId),
       ProjectId: guid(params.projectId),
@@ -2353,7 +2385,9 @@ function runQuery(db, statement, params, { database }) {
       DependencyType: params.type,
       LagDays: params.lagDays ?? 0,
       LagValue: params.lagValue ?? null,
-      LagUnit: params.lagUnit ?? null
+      LagUnit: params.lagUnit ?? null,
+      CreatedAt: params.createdAt ?? new Date().toISOString(), CreatedBySicil: params.createdBy ?? params.actorSicil ?? null,
+      UpdatedAt: params.updatedAt ?? new Date().toISOString(), UpdatedBySicil: params.updatedBy ?? params.actorSicil ?? null
     });
     return result([[]]);
   }
@@ -2404,7 +2438,7 @@ export function createFakeSqlServerDriver(db) {
 
     async query(statement) {
       const database = this.pool.config?.database || 'MERGEN_Rota';
-      db.statements.push({ sql: String(statement), database });
+      db.statements.push({ sql: String(statement), database, params: { ...this.params } });
       // Test kancası: eşleşen sorgu, test bariyeri açana kadar bekler (ör. yavaş
       // bir rehber sorgusunun ortak havuzu ne kadar meşgul ettiğini ölçmek için).
       if (db.queryBarrier?.match(String(statement))) {
@@ -2413,7 +2447,7 @@ export function createFakeSqlServerDriver(db) {
       }
       if (String(statement).includes('sys.sp_getapplock')) {
         if (!this.pool.began) throw new Error('Kilit bir SQL işlemi içinde alınmalıdır.');
-        this.pool.lockOnly = true;
+        this.pool.lockOnly = String(this.params.resource).startsWith('mergen-rota:admin:');
         const owner = db.adminActionLocks.get(this.params.resource);
         if (owner && owner !== this.pool) return { recordset: [{ LockResult: -1 }] };
         db.adminActionLocks.set(this.params.resource, this.pool);

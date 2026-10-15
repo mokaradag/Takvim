@@ -9,11 +9,11 @@ import { CORPORATE_WBS_READ_ONLY_MESSAGE } from '../../domain/projectTypes.js';
 import { buildSessionCurrentUser } from '../../domain/identity/sessionUser.js';
 import { getTrustedSessionIdentity } from '../identity/currentUserProvider.js';
 import { resolveAuthMode } from '../identity/keycloakConfig.js';
-import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
+import { getSqlPool, sql, withSqlTransaction, afterSqlCommit } from '../db/pool.js';
 import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { ServerPersistenceError } from '../errors.js';
 import { observePhase, recordPhaseDuration } from '../observability/observeOperation.js';
-import { prepareScopedTaskDependencies, TASK_DEPENDENCY_CONTEXT } from './taskDependencyAccess.js';
+import { prepareScopedTaskDependencies, TASK_DEPENDENCY_CONTEXT, DEPENDENCY_PLAN } from './taskDependencyAccess.js';
 import { applyTaskAssigneeProjection } from './taskAssigneeProjection.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { assertCanCreateManualProject, assertProjectWriteAccess, hasTaskAssignmentScope } from '../authorization/authorization.js';
@@ -1065,11 +1065,11 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
     INTO #DirectoryNames
     FROM (
       SELECT DISTINCT t.CreatedBySicil AS Sicil
-      FROM dbo.MR_Tasks t JOIN #RequestedTasks rt ON rt.TaskId = t.TaskId
+      FROM dbo.MR_Tasks t JOIN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets) rt ON rt.TaskId = t.TaskId
       WHERE t.CreatedBySicil IS NOT NULL
       UNION
       SELECT DISTINCT ta.Sicil
-      FROM dbo.MR_TaskAssignees ta JOIN #RequestedTasks rt ON rt.TaskId = ta.TaskId
+      FROM dbo.MR_TaskAssignees ta JOIN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets) rt ON rt.TaskId = ta.TaskId
     ) needed
     LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = needed.Sicil;
     CREATE CLUSTERED INDEX IX_DirectoryNames_Sicil ON #DirectoryNames(Sicil);
@@ -1102,7 +1102,7 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       CASE WHEN creatorAuth.IdentityVisible = 1 THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
       creator.DisplayName AS CreatedByName
     FROM dbo.MR_Tasks t
-    JOIN #RequestedTasks rt ON rt.TaskId = t.TaskId
+    JOIN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets) rt ON rt.TaskId = t.TaskId
     JOIN #ProjectAuth pa ON pa.ProjectId = t.ProjectId
     JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
     JOIN #TaskAssigneeFacts facts ON facts.TaskId = t.TaskId
@@ -1126,7 +1126,7 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       COALESCE(pd.DisplayName, CASE WHEN auth.IdentityVisible = 1
         THEN CONVERT(varchar(20), ta.Sicil) ELSE NULL END) AS DisplayName
     FROM dbo.MR_TaskAssignees ta
-    JOIN #RequestedTasks rt ON rt.TaskId = ta.TaskId
+    JOIN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets) rt ON rt.TaskId = ta.TaskId
     JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
     JOIN #ProjectAuth pa ON pa.ProjectId = t.ProjectId
     JOIN #TaskAssigneeFacts facts ON facts.TaskId = ta.TaskId
@@ -1253,7 +1253,8 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       // Görev künyesi: kartta "kim, ne zaman oluşturdu" satırını besler.
       createdByName: row.CreatedByName == null ? null : String(row.CreatedByName).trim() || null,
       createdAt: row.CreatedAt ? new Date(row.CreatedAt).toISOString() : null,
-      deps: dependencies.get(id(row.TaskId)) || [], version: encodeVersion(row.RowVersion)
+      ...(taskIds.some((taskId) => sameActualId(taskId, row.TaskId)) ? { deps: dependencies.get(id(row.TaskId)) || [] } : {}),
+      version: encodeVersion(row.RowVersion)
     }))
   };
 }
@@ -1574,7 +1575,7 @@ async function assertActiveProject(executor, projectId) {
   const req = request(executor);
   req.input('projectId', sql.UniqueIdentifier, projectId);
   const rows = await req.query(
-    'SELECT TOP (1) ProjectId FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK) WHERE ProjectId = @projectId AND IsActive = 1;'
+    'SELECT TOP (1) ProjectId FROM dbo.MR_Projects WITH (HOLDLOCK) WHERE ProjectId = @projectId AND IsActive = 1;'
   );
   if (!rows.recordset.length) {
     throw new ServerPersistenceError('FORBIDDEN', 'Etkin olmayan bir projede görev yazılamaz.');
@@ -1609,7 +1610,7 @@ async function hasAuthoritativeAssigneeTaskCreateScope(executor, actor, projectI
     SELECT TOP (1) ta.TaskId
     FROM dbo.MR_TaskAssignees ta WITH (UPDLOCK, HOLDLOCK)
     JOIN dbo.MR_Tasks t WITH (HOLDLOCK) ON t.TaskId = ta.TaskId
-    JOIN dbo.MR_Projects p WITH (UPDLOCK, HOLDLOCK)
+    JOIN dbo.MR_Projects p WITH (HOLDLOCK)
       ON p.ProjectId = t.ProjectId AND p.IsActive = 1
     WHERE t.ProjectId = @projectId AND ta.Sicil = @sicil;
   `);
@@ -1633,7 +1634,7 @@ async function assertTaskProjectScope(executor, actor, projectId, { allowAssigne
     const projectCheck = request(executor);
     projectCheck.input('projectId', sql.UniqueIdentifier, projectId);
     const projectRows = await projectCheck.query(`
-      SELECT TOP (1) ProjectId FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK)
+      SELECT TOP (1) ProjectId FROM dbo.MR_Projects WITH (HOLDLOCK)
       WHERE ProjectId = @projectId AND SourceType = 'CORPORATE' AND IsActive = 1;
     `);
     if (projectRows.recordset.length) return TASK_PROJECT_SCOPES.ASSIGNMENT;
@@ -1952,6 +1953,60 @@ function assertAssigneeTaskCreateFieldsOnly(task, parent = null) {
   }
 }
 
+async function persistDependencyPlan(executor, actor, task) {
+  const taskId = uuid(task.id);
+  const projectId = uuid(task.projectId);
+  const plan = task[DEPENDENCY_PLAN];
+  if (!plan) throw new ServerPersistenceError('MUTATION_FAILED', 'Bağımlılık mutasyon planı eksik.');
+  for (const dependency of [...plan.inserts, ...plan.updates]) {
+    const predecessorId = uuid(dependency.predecessorId);
+    const dep = request(executor);
+    dep.input('dependencyId', sql.UniqueIdentifier, randomUUID());
+    dep.input('projectId', sql.UniqueIdentifier, projectId);
+    dep.input('taskId', sql.UniqueIdentifier, taskId);
+    dep.input('predecessorId', sql.UniqueIdentifier, predecessorId);
+    dep.input('type', sql.Char(2), dependency.type);
+    dep.input('lagDays', sql.Decimal(10, 2), Number(dependency.lagDays || 0));
+    dep.input('lagValue', sql.Decimal(10, 2), dependency.lagValue == null ? null : Number(dependency.lagValue));
+    dep.input('lagUnit', sql.VarChar(10), dependency.lagUnit || null);
+    dep.input('actorSicil', sql.Int, actor.sicil);
+    if (plan.updates.includes(dependency)) await dep.query(`
+      UPDATE dbo.MR_TaskDependencies
+      SET ProjectId = @projectId, DependencyType = @type, LagDays = @lagDays,
+        LagValue = @lagValue, LagUnit = @lagUnit, UpdatedAt = SYSUTCDATETIME(), UpdatedBySicil = @actorSicil
+      WHERE TaskId = @taskId AND PredecessorTaskId = @predecessorId;
+    `);
+    else await dep.query(`
+      INSERT dbo.MR_TaskDependencies(
+        TaskDependencyId, ProjectId, TaskId, PredecessorTaskId,
+        DependencyType, LagDays, LagValue, LagUnit, CreatedBySicil, UpdatedBySicil
+      ) VALUES(
+        @dependencyId, @projectId, @taskId, @predecessorId,
+        @type, @lagDays, @lagValue, @lagUnit, @actorSicil, @actorSicil
+      );
+    `);
+  }
+  // Composite endpoint/project FKs are immediate in SQL Server. Only moved
+  // edges are relocated around task moves, retaining their identity/provenance.
+  for (const row of plan.relocations) {
+    const dep = request(executor);
+    for (const [name, type, value] of [
+      ['dependencyId', sql.UniqueIdentifier, row.TaskDependencyId], ['projectId', sql.UniqueIdentifier, projectId],
+      ['taskId', sql.UniqueIdentifier, taskId], ['predecessorId', sql.UniqueIdentifier, row.PredecessorTaskId],
+      ['type', sql.Char(2), row.dependency.type], ['lagDays', sql.Decimal(10, 2), row.dependency.lagDays || 0],
+      ['lagValue', sql.Decimal(10, 2), row.dependency.lagValue ?? null], ['lagUnit', sql.VarChar(10), row.dependency.lagUnit || null],
+      ['createdAt', sql.DateTime2, row.CreatedAt], ['createdBy', sql.Int, row.CreatedBySicil],
+      ['updatedAt', sql.DateTime2, row.attributesChanged ? new Date() : row.UpdatedAt], ['updatedBy', sql.Int, row.attributesChanged ? actor.sicil : row.UpdatedBySicil]
+    ]) dep.input(name, type, value);
+    await dep.query(`/* relocate-dependency */
+      INSERT dbo.MR_TaskDependencies(TaskDependencyId, ProjectId, TaskId, PredecessorTaskId,
+        DependencyType, LagDays, LagValue, LagUnit, CreatedAt, CreatedBySicil, UpdatedAt, UpdatedBySicil)
+      VALUES(@dependencyId, @projectId, @taskId, @predecessorId, @type, @lagDays, @lagValue, @lagUnit,
+        @createdAt, @createdBy, @updatedAt, @updatedBy);
+    `);
+  }
+}
+
 async function commitTask(executor, actor, task, correlationId) {
   const taskId = uuid(task.id);
   const projectId = uuid(task.projectId);
@@ -2257,18 +2312,6 @@ async function commitTask(executor, actor, task, correlationId) {
       'Yinelemeleri olan bir tekrar şablonu başka projeye taşınamaz; önce yinelemeleri kaldırın.'
     );
   }
-  if (projectChanged) {
-    const dependencyCleanup = request(executor);
-    dependencyCleanup.input('taskId', sql.UniqueIdentifier, taskId);
-    const cleanup = await dependencyCleanup.query(`
-      DELETE dbo.MR_TaskDependencies
-      OUTPUT deleted.TaskId AS RelatedTaskId
-      WHERE TaskId = @taskId OR PredecessorTaskId = @taskId;
-    `);
-    for (const row of cleanup.recordset || []) {
-      if (!sameActualId(row.RelatedTaskId, taskId)) relatedTaskIds.add(id(row.RelatedTaskId));
-    }
-  }
   let plannedDurationDays = assigneeWorkOnly
     ? nullableNumber(before.PlannedDurationDays)
     : nullableNumber(task.plannedDurationDays);
@@ -2396,12 +2439,6 @@ async function commitTask(executor, actor, task, correlationId) {
     }
   }
 
-  const rewriteDependencies = !before || task.dependencyMutation !== false || beforeProjectId !== projectId;
-  if (rewriteDependencies) {
-    const clear = request(executor);
-    clear.input('taskId', sql.UniqueIdentifier, taskId);
-    await clear.query('DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId;');
-  }
   // Değişmeyen atamalar yeniden yazılmaz; atayan kişi ve tarih korunur.
   if ((!narrowTaskWrite || creatorAssigneeWrite) && !assigneesUnchanged) {
     const clear = request(executor);
@@ -2419,32 +2456,6 @@ async function commitTask(executor, actor, task, correlationId) {
     }
   }
 
-  for (const dependency of rewriteDependencies ? (task.deps || []) : []) {
-    const predecessorId = uuid(dependency.predecessorId);
-    const predecessor = await taskRow(executor, predecessorId);
-    if (!predecessor || !sameActualId(predecessor.ProjectId, projectId) || sameActualId(predecessorId, taskId)) {
-      throw new ServerPersistenceError('MUTATION_FAILED', 'Bağımlılık görevleri aynı projede ve birbirinden farklı olmalıdır.');
-    }
-    const dep = request(executor);
-    dep.input('dependencyId', sql.UniqueIdentifier, randomUUID());
-    dep.input('projectId', sql.UniqueIdentifier, projectId);
-    dep.input('taskId', sql.UniqueIdentifier, taskId);
-    dep.input('predecessorId', sql.UniqueIdentifier, predecessorId);
-    dep.input('type', sql.Char(2), dependency.type);
-    dep.input('lagDays', sql.Decimal(10, 2), Number(dependency.lagDays || 0));
-    dep.input('lagValue', sql.Decimal(10, 2), dependency.lagValue == null ? null : Number(dependency.lagValue));
-    dep.input('lagUnit', sql.VarChar(10), dependency.lagUnit || null);
-    dep.input('actorSicil', sql.Int, actor.sicil);
-    await dep.query(`
-      INSERT dbo.MR_TaskDependencies(
-        TaskDependencyId, ProjectId, TaskId, PredecessorTaskId,
-        DependencyType, LagDays, LagValue, LagUnit, CreatedBySicil, UpdatedBySicil
-      ) VALUES(
-        @dependencyId, @projectId, @taskId, @predecessorId,
-        @type, @lagDays, @lagValue, @lagUnit, @actorSicil, @actorSicil
-      );
-    `);
-  }
   const committed = await taskRow(executor, taskId);
   // Takvim ve görünürlük değişiklikleri aynı işlemde kuyruğa yazılır.
   await enqueueOutlookTaskChange(executor, taskId,
@@ -2908,11 +2919,8 @@ export function createSqlAppRepository() {
     async commitChanges(input) {
       let changes = normalizeChanges(input);
       return withSqlTransaction(async (transaction) => {
-        const actor = input?.[TASK_DEPENDENCY_CONTEXT]
-          || await observePhase('phase.commit.authorization', () => loadAuthorizationContext(transaction));
-        if (!input?.[TASK_DEPENDENCY_CONTEXT]) {
-          changes = await prepareScopedTaskDependencies(transaction, actor, changes);
-        }
+        if (!input?.[TASK_DEPENDENCY_CONTEXT]) changes = await prepareScopedTaskDependencies(transaction, changes);
+        const actor = input?.[TASK_DEPENDENCY_CONTEXT] || changes[TASK_DEPENDENCY_CONTEXT];
         const correlationId = randomUUID();
         const consumedRootIds = new Set();
         const tagPlans = [];
@@ -2930,6 +2938,23 @@ export function createSqlAppRepository() {
           if (!consumedRootIds.has(id(node.id))) await commitWbs(transaction, actor, node, correlationId);
         }
         const assignmentChanges = [];
+        for (const entry of changes.taskDeletes) {
+          const req = request(transaction);
+          req.input('taskId', sql.UniqueIdentifier, entry.id);
+          const removed = await req.query(`DELETE dbo.MR_TaskDependencies
+            OUTPUT deleted.TaskId AS RelatedTaskId
+            WHERE TaskId = @taskId OR PredecessorTaskId = @taskId;`);
+          for (const row of removed.recordset || []) if (!sameActualId(row.RelatedTaskId, entry.id)) relatedTaskIds.add(id(row.RelatedTaskId));
+        }
+        for (const task of changes.taskUpserts) {
+          const plan = task[DEPENDENCY_PLAN];
+          for (const predecessorId of [...plan.deletes, ...plan.relocations.map((row) => row.PredecessorTaskId)]) {
+            const req = request(transaction);
+            req.input('taskId', sql.UniqueIdentifier, task.id);
+            req.input('predecessorId', sql.UniqueIdentifier, predecessorId);
+            await req.query('DELETE dbo.MR_TaskDependencies WHERE TaskId = @taskId AND PredecessorTaskId = @predecessorId;');
+          }
+        }
         for (const task of changes.taskUpserts) {
           const touched = await observePhase('phase.commit.task-mutation', () => commitTask(
             transaction, actor, task, correlationId
@@ -2940,6 +2965,7 @@ export function createSqlAppRepository() {
           for (const relatedTaskId of touched.relatedTaskIds || []) relatedTaskIds.add(relatedTaskId);
           if (touched.assignmentChange) assignmentChanges.push(touched.assignmentChange);
         }
+        for (const task of changes.taskUpserts) await persistDependencyPlan(transaction, actor, task);
         // Bildirim, kurum dışı koordinasyon kaydı ve isteğe bağlı posta NİYETİ
         // aynı işlemde, TEK seferde ve küme tabanlı çözümle yazılır. Hiçbir SMTP
         // çağrısı bu yolda yapılmaz (bkz. server/notifications/taskMailWorker.js).
@@ -2979,29 +3005,32 @@ export function createSqlAppRepository() {
           ...propagatedTaskIds,
           ...relatedTaskIds
         ]);
-        const authoritative = await observePhase('phase.commit.authoritative-response', () => loadAuthoritativeMutationRows(
-          transaction, actor, {
-            projectIds: [...projectIds],
-            wbsIds: [...wbsIds],
-            taskIds: [...taskIds]
-          }
-        ));
-        const invisibleChangedProjectIds = [...projectIds]
-          .filter((projectId) => !authoritative.projectUpserts.some((project) => sameActualId(project.id, projectId)));
-        return {
-          projectUpserts: authoritative.projectUpserts,
-          // Lead değişimi aktörün son FULL kaynağını kaldırmış olabilir. Geniş
-          // snapshot bunu görünmez yapıyordu; hedefli yanıt da eski yetkili
-          // proje nesnesini istemcide bırakmamalıdır.
-          projectDeletes: [...new Set([
-            ...changes.projectDeletes.map((value) => id(value.id)),
-            ...invisibleChangedProjectIds
-          ])],
-          wbsUpserts: authoritative.wbsUpserts,
-          wbsDeletes: [...new Set([...changes.wbsDeletes.map((value) => id(value.id)), ...deletedWbsIds])],
-          taskUpserts: authoritative.taskUpserts,
-          taskDeletes: changes.taskDeletes.map((value) => id(value.id))
-        };
+        return afterSqlCommit(() => withSqlTransaction(async (readback) => {
+          const readActor = await loadAuthorizationContext(readback);
+          const authoritative = await observePhase('phase.commit.authoritative-response', () => loadAuthoritativeMutationRows(
+            readback, readActor, {
+              projectIds: [...projectIds],
+              wbsIds: [...wbsIds],
+              taskIds: [...taskIds]
+            }
+          ));
+          const invisibleChangedProjectIds = [...projectIds]
+            .filter((projectId) => !authoritative.projectUpserts.some((project) => sameActualId(project.id, projectId)));
+          return {
+            projectUpserts: authoritative.projectUpserts,
+            // Lead değişimi aktörün son FULL kaynağını kaldırmış olabilir. Geniş
+            // snapshot bunu görünmez yapıyordu; hedefli yanıt da eski yetkili
+            // proje nesnesini istemcide bırakmamalıdır.
+            projectDeletes: [...new Set([
+              ...changes.projectDeletes.map((value) => id(value.id)),
+              ...invisibleChangedProjectIds
+            ])],
+            wbsUpserts: authoritative.wbsUpserts,
+            wbsDeletes: [...new Set([...changes.wbsDeletes.map((value) => id(value.id)), ...deletedWbsIds])],
+            taskUpserts: authoritative.taskUpserts,
+            taskDeletes: changes.taskDeletes.map((value) => id(value.id))
+          };
+        }));
       });
     }
   };

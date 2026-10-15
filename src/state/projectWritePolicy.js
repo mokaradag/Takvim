@@ -1,3 +1,4 @@
+import { canonicalActualId } from '../domain/identity/actualId.js';
 import { CORPORATE_WBS_READ_ONLY_MESSAGE, supportsManualWbsEditing } from '../domain/projectTypes.js';
 
 export { CORPORATE_WBS_READ_ONLY_MESSAGE };
@@ -6,13 +7,13 @@ function isActualDataMode(state = {}) {
   return String(state.session?.dataMode || '').toLowerCase() === 'actual';
 }
 
-function projectId(value) {
-  return value == null || value === '' ? null : String(value);
+function identityKey(value) {
+  return value == null || value === '' ? null : (canonicalActualId(value) ?? String(value));
 }
 
 function findProject(projects = [], value = null) {
-  const id = projectId(value);
-  return id ? (projects || []).find((project) => String(project.id) === id) || null : null;
+  const id = identityKey(value);
+  return id ? (projects || []).find((project) => identityKey(project.id) === id) || null : null;
 }
 
 function findProjectByName(projects = [], value = '') {
@@ -39,8 +40,8 @@ export function writableProjects(projects = []) {
 export function assigneeTaskCreateProjects(state = {}) {
   const projectIds = new Set((state.tasks || [])
     .filter((task) => task?.isCurrentUserAssignee && task.projectId != null)
-    .map((task) => String(task.projectId)));
-  return (state.projects || []).filter((project) => projectIds.has(String(project.id)));
+    .map((task) => identityKey(task.projectId)));
+  return (state.projects || []).filter((project) => projectIds.has(identityKey(project.id)));
 }
 
 /**
@@ -56,16 +57,16 @@ export function assigneeTaskCreateProjects(state = {}) {
  */
 export function taskAssignableProjects(state = {}) {
   const visible = writableProjects(state.projects || []);
-  const known = new Set(visible.map((project) => String(project.id)));
+  const known = new Set(visible.map((project) => identityKey(project.id)));
   const scoped = (state.assignableProjects || []).filter((project) => {
     if (!project) return false;
-    const id = String(project.id);
+    const id = identityKey(project.id);
     if (known.has(id)) return false;
     known.add(id);
     return true;
   });
   const assigneeScoped = assigneeTaskCreateProjects(state)
-    .filter((project) => !known.has(String(project.id)));
+    .filter((project) => !known.has(identityKey(project.id)));
   return [...visible, ...scoped, ...assigneeScoped];
 }
 
@@ -74,12 +75,12 @@ export function taskAssignableProjects(state = {}) {
  * sorumlu listesini değiştirme hakkı değildir.
  */
 export function taskCreationScopeInProject(state = {}, value = null) {
-  const id = projectId(value);
+  const id = identityKey(value);
   if (!id) return null;
   const visible = state.taskWriteIndex ? state.taskWriteIndex.projects.get(id) : findProject(state.projects, id);
   if (canWriteProject(visible)) return 'FULL';
-  if (state.taskWriteIndex ? state.taskWriteIndex.assignable.has(id) : (state.assignableProjects || []).some((project) => String(project.id) === id)) return 'ASSIGNMENT';
-  if (state.taskWriteIndex ? state.taskWriteIndex.ownProjects.has(id) : assigneeTaskCreateProjects(state).some((project) => String(project.id) === id)) return 'ASSIGNEE_CREATE';
+  if (state.taskWriteIndex ? state.taskWriteIndex.assignable.has(id) : (state.assignableProjects || []).some((project) => identityKey(project.id) === id)) return 'ASSIGNMENT';
+  if (state.taskWriteIndex ? state.taskWriteIndex.ownProjects.has(id) : assigneeTaskCreateProjects(state).some((project) => identityKey(project.id) === id)) return 'ASSIGNEE_CREATE';
   return null;
 }
 
@@ -88,19 +89,19 @@ export function canCreateTasksInProject(state = {}, value = null) {
 }
 
 /** Bu projeye görev yazılabilir mi? (tam yetki ya da görev atama kapsamı) */
-export function canAssignTasksInProject(state = {}, projectId = null) {
-  const id = projectId == null || projectId === '' ? null : String(projectId);
+export function canAssignTasksInProject(state = {}, value = null) {
+  const id = identityKey(value);
   if (!id) return false;
   const visible = state.taskWriteIndex ? state.taskWriteIndex.projects.get(id) : findProject(state.projects, id);
   if (canWriteProject(visible)) return true;
-  return state.taskWriteIndex ? state.taskWriteIndex.assignable.has(id) : (state.assignableProjects || []).some((project) => String(project.id) === id);
+  return state.taskWriteIndex ? state.taskWriteIndex.assignable.has(id) : (state.assignableProjects || []).some((project) => identityKey(project.id) === id);
 }
 
 function findAssignableProject(state = {}, value = null) {
-  const id = projectId(value);
+  const id = identityKey(value);
   if (!id) return null;
   if (state.taskWriteIndex) return state.taskWriteIndex.projects.get(id) || state.taskWriteIndex.assignable.get(id) || null;
-  return taskAssignableProjects(state).find((project) => String(project.id) === id) || null;
+  return taskAssignableProjects(state).find((project) => identityKey(project.id) === id) || null;
 }
 
 export function resolveTaskCreationProject(state = {}, requestedProjectId = null) {
@@ -134,18 +135,18 @@ export function resolveTaskCreationAccess(state = {}, requestedProjectId = null)
 /** Toplu seçicide aynı yetki kararını doğrusal indekslerle çalıştırır. */
 export function indexTaskWriteState(state) {
   return { ...state, taskWriteIndex: {
-    tasks: new Map((state.tasks || []).map((task) => [String(task.id), task])),
-    projects: new Map((state.projects || []).map((project) => [String(project.id), project])),
-    assignable: new Map((state.assignableProjects || []).map((project) => [String(project.id), project])),
-    ownProjects: new Set((state.tasks || []).filter((task) => task.isCurrentUserAssignee).map((task) => String(task.projectId))),
+    tasks: new Map((state.tasks || []).map((task) => [identityKey(task.id), task])),
+    projects: new Map((state.projects || []).map((project) => [identityKey(project.id), project])),
+    assignable: new Map((state.assignableProjects || []).map((project) => [identityKey(project.id), project])),
+    ownProjects: new Set((state.tasks || []).filter((task) => task.isCurrentUserAssignee).map((task) => identityKey(task.projectId))),
     assignmentSicils: new Set((state.assignmentScopeSicils || []).map(String)),
-    recurrenceParents: new Set((state.tasks || []).map((task) => String(task.recurrenceParentId || '')))
+    recurrenceParents: new Set((state.tasks || []).filter((task) => task.recurrenceParentId).map((task) => identityKey(task.recurrenceParentId)))
   } };
 }
 
 export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
-  const task = state.taskWriteIndex ? state.taskWriteIndex.tasks.get(String(taskId))
-    : (state.tasks || []).find((item) => String(item.id) === String(taskId)) || null;
+  const task = state.taskWriteIndex ? state.taskWriteIndex.tasks.get(identityKey(taskId))
+    : (state.tasks || []).find((item) => identityKey(item.id) === identityKey(taskId)) || null;
   if (!task) {
     return { ok: false, code: 'TASK_NOT_FOUND', field: 'taskId', message: 'Güncellenecek görev bulunamadı.' };
   }
@@ -153,7 +154,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
   // Kaynak proje görev atama kapsamında da olabilir: yönetici, kendi
   // personeline tanımladığı görevi düzenleyebilmelidir. Görevin kalıcı
   // sorumlusu ise yalnızca bu görev için dar bir içerik/ilerleme hakkı alır.
-  const visibleSourceProject = state.taskWriteIndex ? state.taskWriteIndex.projects.get(String(task.projectId)) : findProject(state.projects, task.projectId);
+  const visibleSourceProject = state.taskWriteIndex ? state.taskWriteIndex.projects.get(identityKey(task.projectId)) : findProject(state.projects, task.projectId);
   const sourceProject = visibleSourceProject || findAssignableProject(state, task.projectId);
   const hasFullSourceProject = canWriteProject(visibleSourceProject);
   const hasProjectTaskWrite = canAssignTasksInProject(state, task.projectId);
@@ -167,8 +168,8 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
     && String(task.assigneeIds[0]) === currentUserId
     && (isTaskCreator || Boolean(task.isCurrentUserAssignee))
     && canCreateTasksInProject(state, task.projectId);
-  const hasRecurrenceChildren = state.taskWriteIndex ? state.taskWriteIndex.recurrenceParents.has(String(task.id)) : (state.tasks || []).some((item) => (
-    String(item?.recurrenceParentId || '') === String(task.id)
+  const hasRecurrenceChildren = state.taskWriteIndex ? state.taskWriteIndex.recurrenceParents.has(identityKey(task.id)) : (state.tasks || []).some((item) => (
+    identityKey(item?.recurrenceParentId || '') === identityKey(task.id)
   ));
   const canEditSelfRecurrence = selfRecurrence && !hasRecurrenceChildren;
   const limitedCreator = isTaskCreator && !hasFullSourceProject;
@@ -325,7 +326,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
   // Atama kataloğu kaydı accessLevel taşımayabilir; bu, Demo projesi gibi FULL
   // sayılacağı anlamına gelmez. Tam yetki yalnızca görünür proje kümesindeki
   // kaynak ve hedef kayıtlarından türetilir.
-  const visibleDestinationProject = state.taskWriteIndex ? state.taskWriteIndex.projects.get(String(destinationProject?.id)) : findProject(state.projects, destinationProject?.id);
+  const visibleDestinationProject = state.taskWriteIndex ? state.taskWriteIndex.projects.get(identityKey(destinationProject?.id)) : findProject(state.projects, destinationProject?.id);
   const full = hasFullSourceProject && canWriteProject(visibleDestinationProject);
   // Görevin SORUMLUSU, atama kapsamı da taşısa, kendi plan ve gerçekleşen
   // tarihlerini doğrudan yönetir: işi yapan kişidir ve sunucu da aynı kararı
@@ -342,7 +343,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
     destinationProject,
     scope: full ? 'FULL' : 'ASSIGNMENT',
     canManageStructure: full,
-    canManageDependencies: full || sourceProject?.id === destinationProject?.id,
+    canManageDependencies: true,
     canManageRecurrence: recurrenceAccess,
     canEditRecurrenceRule: recurrenceAccess && !hasRecurrenceChildren,
     canGenerateRecurrence: recurrenceAccess,
@@ -376,7 +377,7 @@ export function resolveTaskDeleteAccess(state = {}, taskId = null) {
 
 export function resolveWbsMutationAccess(state = {}, nodeId, targetNodeId = null) {
   const nodes = state.wbs || [];
-  const node = nodes.find((item) => String(item.id) === String(nodeId)) || null;
+  const node = nodes.find((item) => identityKey(item.id) === identityKey(nodeId)) || null;
   if (!node) {
     return { ok: false, code: 'WBS_NODE_NOT_FOUND', field: 'wbsId', message: 'İşlem yapılacak WBS düğümü bulunamadı.' };
   }
@@ -406,13 +407,13 @@ export function resolveWbsMutationAccess(state = {}, nodeId, targetNodeId = null
   }
 
   if (targetNodeId != null) {
-    const targetNode = nodes.find((item) => String(item.id) === String(targetNodeId)) || null;
+    const targetNode = nodes.find((item) => identityKey(item.id) === identityKey(targetNodeId)) || null;
     const targetProject = targetNode ? findProject(state.projects, targetNode.projectId) : null;
     // Proje kimlikleri METİN olarak karşılaştırılır (modülün geri kalanı gibi):
     // bir kayıt sayısal, ötekisi metin kimlik taşıdığında geçerli bir taşıma
     // "çapraz proje" sanılıp reddediliyordu.
     if (!targetNode || !canWriteProject(targetProject)
-      || String(targetNode.projectId) !== String(node.projectId)) {
+      || identityKey(targetNode.projectId) !== identityKey(node.projectId)) {
       return {
         ok: false,
         code: 'PROJECT_WRITE_FORBIDDEN',
@@ -427,7 +428,7 @@ export function resolveWbsMutationAccess(state = {}, nodeId, targetNodeId = null
 }
 
 export function resolveTaskWbsMoveAccess(state = {}, taskIds = [], targetWbsId = null) {
-  const target = (state.wbs || []).find((node) => String(node.id) === String(targetWbsId)) || null;
+  const target = (state.wbs || []).find((node) => identityKey(node.id) === identityKey(targetWbsId)) || null;
   const targetProject = target ? findProject(state.projects, target.projectId) : null;
   if (!target) {
     return {
@@ -451,7 +452,7 @@ export function resolveTaskWbsMoveAccess(state = {}, taskIds = [], targetWbsId =
         message: 'Bu görev için WBS seçme yetkiniz bulunmuyor.'
       };
     }
-    if (String(access.task.projectId) !== String(target.projectId)) {
+    if (identityKey(access.task.projectId) !== identityKey(target.projectId)) {
       return {
         ok: false,
         code: 'CROSS_PROJECT_TASK_WBS_MOVE',

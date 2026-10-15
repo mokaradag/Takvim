@@ -238,7 +238,7 @@ for (const simple of [true, false]) {
   });
 }
 
-test('birikmiş proje taşıması tarih ve bağımlılık yetkilerini hemen daraltır', async () => {
+test('birikmiş proje taşıması tarih yetkisini daraltır ve açık ilişki uzlaştırmasına izin verir', async () => {
   const state = fixture();
   state.projects.push({ id: 'p2', name: 'Atama projesi', accessLevel: 'PARTIAL' });
   state.assignableProjects = [{ id: 'p2', name: 'Atama projesi' }];
@@ -252,7 +252,8 @@ test('birikmiş proje taşıması tarih ve bağımlılık yetkilerini hemen dara
     assert.equal(view.editor.output.props.canManageStructure, false);
     assert.equal(view.editor.output.props.canEditTargetFinish, false);
     assert.equal(view.editor.output.props.canControlSchedule, false);
-    for (const patch of [{ targetFinish: '2026-09-30' }, { deps: [{ id: 'other', type: 'FS' }] }]) {
+    assert.equal(view.editor.output.props.canManageDependencies, true);
+    for (const patch of [{ targetFinish: '2026-09-30' }]) {
       assert.equal((await view.editor.output.props.onUpdate('t1', patch)).ok, false);
       view.sync();
     }
@@ -429,4 +430,32 @@ test('açık öncül ve ardıl seçicilerinde tarih tercihi görev listesi deği
       assert.match(input(relations.output, (node) => node.props?.ariaLabel === label).props.options[0].description, /14\/10\/2026/);
     }
   } finally { relations.unmount(); drawer.unmount(); editor.unmount(); outer.unmount(); delete globalThis[CLIENT_STATE]; }
+});
+
+
+test('read-only predecessor drawer stages and saves only its writable successor', async () => {
+  const state = fixture();
+  state.projects[0].accessLevel = 'PARTIAL';
+  const successor = { ...state.selectedTask, id: 'writable', task: 'Writable successor', isCurrentUserAssignee: true, assigneeIds: ['1'] };
+  state.tasks.push(successor, { ...successor, id: 'readonly', isCurrentUserAssignee: false, assigneeIds: ['100'] });
+  const calls = [];
+  state.actions = { saveTaskEdits: async (edits) => { calls.push(edits); return { ok: true }; }, closeTask: () => {} };
+  globalThis[CLIENT_STATE] = state;
+  const view = editorFor(false);
+  let relations;
+  try {
+    assert.equal(view.editor.output.type.name, 'ReadOnlyTaskDrawer');
+    const rel = input(view.drawer.output, (node) => node.type?.name === 'RelEditor');
+    assert.equal(rel.props.allowPredecessorEdits, false);
+    relations = mountComponent(rel.type, rel.props);
+    const picker = input(relations.output, (node) => node.props?.ariaLabel === 'Ardıl görev seçin');
+    assert.deepEqual(picker.props.options.map((row) => row.value), ['writable']);
+    picker.props.onChange('writable');
+    view.sync();
+    await input(view.drawer.output, (node) => node.type === 'button' && node.props.children === 'Kaydet').props.onClick();
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].map((edit) => edit.id), ['writable']);
+    assert.equal(calls[0][0].patch.deps[0].predecessorId, 't1');
+    assert.deepEqual(calls[0][0].observedDependencies, []);
+  } finally { relations?.unmount(); view.close(); delete globalThis[CLIENT_STATE]; }
 });

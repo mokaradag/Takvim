@@ -6,6 +6,9 @@ import { ServerPersistenceError } from '../errors.js';
 
 let poolPromise;
 const transactionContext = new AsyncLocalStorage();
+// Nested repository layers forward this value; only the outer transaction resolves it.
+const AFTER_COMMIT = Symbol('afterCommit');
+export const afterSqlCommit = (read) => ({ [AFTER_COMMIT]: read });
 
 export async function getSqlPool() {
   const activeTransaction = transactionContext.getStore();
@@ -92,11 +95,12 @@ export async function withSqlTransaction(work, {
     const transaction = new driver.Transaction(pool);
     try {
       await transaction.begin(isolationLevel);
-      return await transactionContext.run(transaction, async () => {
+      const result = await transactionContext.run(transaction, async () => {
         const result = await work(transaction, sql);
         await transaction.commit();
         return result;
       });
+      return result?.[AFTER_COMMIT] ? result[AFTER_COMMIT]() : result;
     } catch (error) {
       try {
         if (transaction._aborted !== true) await transaction.rollback();

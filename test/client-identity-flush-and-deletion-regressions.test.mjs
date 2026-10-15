@@ -157,7 +157,7 @@ test('project scrubbing clears a selected task that is no longer present', () =>
   assert.equal(scrubbed.selectedTaskId, null);
 });
 
-test('moving a task across projects clears both outgoing and incoming dependencies', () => {
+test('moving a task keeps relationship intent until the atomic graph is reconciled', () => {
   const before = createInitialState(seed({ includeOutgoingDependency: true }));
   const after = appStateReducer(before, {
     type: 'task/update',
@@ -176,9 +176,9 @@ test('moving a task across projects clears both outgoing and incoming dependenci
 
   assert.equal(moved.projectId, 'p-2');
   assert.equal(moved.wbsId, 'w-2');
-  assert.deepEqual(moved.deps, []);
-  assert.deepEqual(successor.deps, []);
-  assert.deepEqual(new Set(changes.taskUpserts.map((item) => item.id)), new Set(['task-1', 'task-2']));
+  assert.deepEqual(moved.deps, before.tasks.find((t) => t.id === 'task-1').deps);
+  assert.deepEqual(successor.deps, before.tasks.find((t) => t.id === 'task-2').deps);
+  assert.deepEqual(new Set(changes.taskUpserts.map((item) => item.id)), new Set(['task-1']));
 });
 
 test('Demo repository returns and reloads dependency reconciliation after direct deletion', async () => {
