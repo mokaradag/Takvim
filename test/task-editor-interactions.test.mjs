@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CLIENT_STATE, findElement, mountComponent } from './helpers/clientComponentHarness.mjs';
 import { createTaskEditorDraftRegistry, unsavedTaskEditorResult } from '../src/state/taskEditorDrafts.js';
+import { setAppDateDisplayFormat } from '../src/scheduling/dates/index.js';
+const { useTweaks } = await import('../src/hooks/useTweaks.js');
+const { useApplyTweaks } = await import('../src/hooks/useApplyTweaks.js');
+const { SearchableSelect } = await import('../src/components/SearchableSelect.jsx');
 const { DataModeContext } = await import('../src/components/shell/DataModeContext.jsx');
 const { DataModeIndicator } = await import('../src/components/shell/DataModeIndicator.jsx');
 const { UnsavedChangesGuard } = await import('../src/components/shell/UnsavedChangesGuard.jsx');
@@ -24,6 +28,116 @@ function input(tree, predicate) {
   assert.ok(element, 'İstenen denetim bulunmalıdır.');
   return element;
 }
+
+test('bağımlılık seçenekleri aynı adlı görevleri WBS ve tarihle ayırır; eksik bağlam boş ayırıcı üretmez', () => {
+  const state = fixture();
+  state.tasks.push(
+    { id: 't2', task: 'Malzeme Siparişi', projectId: 'p1', wbsId: 'w2', plannedStart: '2026-10-12', plannedFinish: '2026-10-24' },
+    { id: 't3', task: 'Malzeme Siparişi', projectId: 'p1', wbsId: 'w1', plannedFinish: '2026-11-02' },
+    { id: 't4', task: 'Malzeme Siparişi', projectId: 'p1' },
+    { id: 't5', task: 'Başka proje', projectId: 'p2' }
+  );
+  state.wbs.push({ id: 'w2', projectId: 'p1', code: '2.3.1', name: 'Satınalma', parentId: 'w1' });
+  globalThis[CLIENT_STATE] = state;
+  const view = editorFor(false);
+  let relations;
+  let select;
+  try {
+    const element = input(view.drawer.output, (node) => typeof node.type === 'function' && node.props?.onUpdateTask);
+    relations = mountComponent(element.type, element.props);
+    let picker = input(relations.output, (node) => node.props?.placeholder === '+ Öncül görev seçin...');
+    assert.deepEqual(picker.props.options.map((option) => option.value), ['t2', 't3', 't4']);
+    assert.deepEqual(picker.props.options.map((option) => option.description), [
+      '2.3.1 Satınalma · 12 Eki 2026 → 24 Eki 2026', '1 Kök · 02 Kas 2026', null
+    ]);
+    assert.ok(picker.props.options.every((option) => option.label === 'Malzeme Siparişi'));
+    const typeControl = input(relations.output, (node) => node.props?.['aria-label'] === 'Eklenecek öncül ilişki türü');
+    assert.equal(typeControl.props.value, 'FS');
+    assert.deepEqual(typeControl.props.children.map((option) => option.props.value), ['FS', 'SS', 'FF', 'SF']);
+    typeControl.props.onChange({ target: { value: 'SS' } });
+    relations.render();
+    picker = input(relations.output, (node) => node.props?.placeholder === '+ Öncül görev seçin...');
+
+    globalThis.window = { innerWidth: 1280, innerHeight: 900, addEventListener() {}, removeEventListener() {} };
+    globalThis.document = { body: { nodeType: 1, style: {} }, addEventListener() {}, removeEventListener() {} };
+    select = mountComponent(SearchableSelect, picker.props);
+    const trigger = input(select.output, (node) => node.props?.['aria-haspopup'] === 'listbox');
+    trigger.ref.current = { getBoundingClientRect: () => ({ top: 100, bottom: 134, left: 600, width: 420 }), focus() {} };
+    trigger.props.onClick();
+    select.render();
+    const panel = () => select.output.props.children.find((child) => child?.children?.props?.role === 'listbox').children;
+    for (const query of ['2.3.1', 'satınalma', 'MALZEME']) {
+      input(panel(), (node) => node.type === 'input').props.onChange({ target: { value: query } });
+      select.render();
+      assert.ok(findElement(panel(), (node) => node.props?.role === 'option'));
+      if (query !== 'MALZEME') {
+        const list = input(panel(), (node) => node.props?.className === 'searchable-select-list');
+        assert.equal(list.props.children[0].length, 1);
+        assert.equal(findElement(panel(), (node) => node.props?.className === 'muted searchable-select-option-meta').props.children, '2.3.1 Satınalma · 12 Eki 2026 → 24 Eki 2026');
+      }
+    }
+    input(panel(), (node) => node.props?.role === 'option').props.onClick();
+    view.sync();
+    assert.equal(view.editor.output.props.task.deps[0].predecessorId, 't2');
+    assert.equal(view.editor.output.props.task.deps[0].type, 'SS');
+  } finally {
+    setAppDateDisplayFormat('pattern');
+    select?.unmount(); relations?.unmount(); view.close();
+    delete globalThis.window; delete globalThis.document; delete globalThis[CLIENT_STATE];
+  }
+});
+
+test('açık öncül ve ardıl seçicileri gerçek tarih tercihi değişimini aynı görev/WBS referanslarıyla izler', () => {
+  const state = fixture();
+  state.tasks.push({ id: 't2', task: 'Aday', projectId: 'p1', plannedStart: '2026-10-12', plannedFinish: '2026-10-24' });
+  globalThis[CLIENT_STATE] = state;
+  const style = { setProperty() {}, removeProperty() {} };
+  globalThis.document = { body: { style, classList: { toggle() {} } }, documentElement: { style }, addEventListener() {}, removeEventListener() {} };
+  const view = editorFor(false);
+  let relations;
+  let setPreference;
+  try {
+    const element = input(view.drawer.output, (node) => typeof node.type === 'function' && node.props?.onUpdateTask);
+    relations = mountComponent(() => {
+      const [preferences, setTweak] = useTweaks({ dateFormat: 'pattern', accent: '#3b82f6' });
+      setPreference = setTweak;
+      useApplyTweaks(preferences);
+      return element.type(element.props);
+    }, {});
+    const picker = () => input(relations.output, (node) => /\+ (Öncül|Ardıl) görev seçin/.test(node.props?.placeholder));
+    assert.equal(picker().props.options[0].description, '12 Eki 2026 → 24 Eki 2026');
+    const changeTab = (label) => {
+      input(relations.output, (node) => node.props?.role === 'tab' && String(node.props.children).includes(label)).props.onClick();
+      relations.render();
+    };
+    changeTab('Ardıllar');
+    assert.equal(picker().props.options[0].description, '12 Eki 2026 → 24 Eki 2026');
+    setPreference('dateFormat', 'dd/mm/yyyy');
+    relations.render();
+    assert.equal(picker().props.options[0].description, '12/10/2026 → 24/10/2026');
+    changeTab('Öncüller');
+    assert.equal(picker().props.options[0].description, '12/10/2026 → 24/10/2026');
+    setPreference('dateFormat', 'pattern');
+    relations.render();
+    assert.equal(picker().props.options[0].description, '12 Eki 2026 → 24 Eki 2026');
+  } finally {
+    relations?.unmount(); view.close(); setAppDateDisplayFormat('pattern');
+    delete globalThis.document; delete globalThis[CLIENT_STATE];
+  }
+});
+
+test('PARTIAL sorumlu main gibi bağımlılık düzenleyicisini açamaz', () => {
+  const state = fixture();
+  state.currentUser = { id: '100' };
+  state.projects[0].accessLevel = 'PARTIAL';
+  state.selectedTask.isCurrentUserAssignee = true;
+  globalThis[CLIENT_STATE] = state;
+  const view = editorFor(false);
+  try {
+    assert.equal(view.editor.output.props.canManageStructure, false);
+    assert.equal(findElement(view.drawer.output, (node) => typeof node.type === 'function' && node.props?.onUpdateTask), null);
+  } finally { view.close(); delete globalThis[CLIENT_STATE]; }
+});
 for (const simple of [true, false]) {
   test(`${simple ? 'Temel' : 'Kapsamlı'} Kipte alan ve sorumlu düzenlemeleri yalnızca Kaydet ile gönderilir`, async () => {
     const state = fixture();

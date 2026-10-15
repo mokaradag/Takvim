@@ -34,6 +34,22 @@ const { AssigneeMailToggle } = await import('../src/features/assignment-coordina
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 
+test('bölüm dışı atama bildirimi zil ve ayrıntı penceresinde aynı başlığı kullanır', () => {
+  const record = {
+    id: 'notice', mode: 'NOTICE', status: 'NOTIFIED', source: NOTIFICATION_SOURCES.ASSIGNMENT_COORDINATION,
+    taskId: 't1', taskTitle: 'Görev', assigneeName: 'Çalışan', allowedDecisions: [],
+    createdAt: '2026-10-15T09:00:00Z'
+  };
+  assert.equal(notificationCenterItems({ assignmentCoordinations: [record] })[0].headline, 'Bölüm dışı atama bildirimi');
+  const dialog = mountComponent(AssignmentCoordinationDialog, { record, onClose() {} });
+  try {
+    assert.equal(findElement(dialog.output, (node) => node.type === 'h2').props.children, 'Bölüm dışı atama bildirimi');
+    for (const file of ['src/features/notifications/notificationCenterItems.js', 'src/features/assignment-coordination/AssignmentCoordinationDialog.jsx']) {
+      assert.doesNotMatch(read(file), /Kurum dışı atama bildirimi/);
+    }
+  } finally { dialog.unmount(); }
+});
+
 /* ── Alan modeli ─────────────────────────────────────────────── */
 
 test('koordinasyon kararları duruma ve role göre açılır', () => {

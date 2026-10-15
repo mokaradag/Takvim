@@ -47,6 +47,8 @@ Talep listeleri yalnızca oturum kullanıcısının gönderdiği veya karar sahi
 
 ## Atama Koordinasyonu
 
+Doğrudan atama bildirimlerinin zil ve ayrıntı penceresindeki başlığı **Bölüm dışı atama bildirimi** olarak gösterilir. Kişi aynı kurumun başka bölümündedir; yalnızca kullanıcıya gösterilen başlık değişir, atama ve koordinasyon kuralları değişmez.
+
 Kurum dışı personelle çalışma, atama kapsamı sınırını KALDIRMAZ. Üç soru ayrılır: kimi **bulabilirsiniz**, kimi **doğrudan atayabilirsiniz**, kim için **koordinasyon** gerekir.
 
 ### Kurum dışı personel arama

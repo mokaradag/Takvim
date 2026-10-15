@@ -194,6 +194,8 @@ Accept runs under SERIALIZABLE isolation, compares the three captured original d
 
 FULL Project users may create/edit/delete Tasks, assign employees, manage dependencies, manage WBS, move Tasks, reparent WBS, edit permitted Project metadata, and use complete Project scheduling/reporting.
 
+The compact WBS/date context and contextual search in dependency pickers do not change authorization or persistence. Ordinary/PARTIAL users gain no dependency-management permission; the existing main rules remain in force.
+
 PARTIAL users cannot mutate Project, WBS structure, assignment, dependency, baseline, tag, or access records. Narrow Task exceptions are the executive Task assignment scope, authoritative current assignees editing work fields, `ASSIGNEE_CREATE` creating a self-assigned Task with Termin and an existing WBS selection, and the limited creator scope described above. The client may disable controls, but the server independently returns FORBIDDEN for unauthorized writes.
 
 Corporate identity fields are source-controlled. Even FULL users cannot change corporate SourceType, ProjectCode, ProjectName, ProjectTypeCode, ProjectTypeName, or LeadSicil; the update statement preserves the corporate lead explicitly, so editing MERGEN-owned fields can never clear it. They may change supported application metadata such as Data Date, color, calendar, and tags. Manual Project owners may change the manual Project lead.

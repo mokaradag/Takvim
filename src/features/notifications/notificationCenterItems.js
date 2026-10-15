@@ -53,7 +53,7 @@ function coordinationItem(record) {
     headline: record.actionable
       ? 'Kararınız bekleniyor'
       : notice
-        ? 'Kurum dışı atama bildirimi'
+        ? 'Bölüm dışı atama bildirimi'
         : `Atama talebi · ${(COORDINATION_STATUS_LABELS[record.status] || 'güncellendi').toLocaleLowerCase('tr-TR')}`,
     subtitle: `${record.assigneeName} · ${record.taskTitle || 'Silinen görev'}`,
     detail: record.assigneeOrganization || record.projectName || ''

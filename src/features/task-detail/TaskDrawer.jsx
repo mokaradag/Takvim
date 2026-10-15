@@ -2,7 +2,7 @@
 import { useModalFocusTrap } from '../../hooks/useModalFocusTrap.js';
 import { useAppState } from '../../state/AppStateProvider';
 import { taskPersonnelScope } from '../../state/taskPersonnelScope.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DateInput } from '../../components/DateInput';
 import { Icons } from '../../components/icons';
 import { Spinner } from '../../components/Loader';
@@ -22,7 +22,7 @@ import {
   relTypeOf
 } from '../../scheduling/dependencies';
 import { PRIORITIES, TASK_SERIES_BATCH_LIMIT, resolvePriority } from '../../domain/constants/index.js';
-import { TR_DAYS, diffDays, fmt, fmtISO, today } from '../../scheduling/dates';
+import { TR_DAYS, diffDays, fmt, fmtISO, getAppDateDisplayFormat, today } from '../../scheduling/dates';
 import {
   MAX_RECURRENCE_OCCURRENCES,
   RECURRENCE_WEEKDAYS,
@@ -752,6 +752,7 @@ export function TaskDrawer({
                 key={local.projectId}
                 task={local}
                 tasks={tasks}
+                wbs={allWbs}
                 onChange={(deps) => save({ deps })}
                 onUpdateTask={onUpdateRelatedTask}
               />
@@ -1206,7 +1207,7 @@ function Section({ title, icon, tone = 'var(--accent)', hint, info, children }) 
  * ters yönden düzenler ve ARDIL görevi yamalar (bkz. taskSuccessorPolicy.js).
  * Böylece tek bir kenar iki yerde saklanmaz.
  */
-function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = true }) {
+function RelEditor({ task, tasks, wbs = [], onChange, onUpdateTask, allowSuccessorEdits = true }) {
   const deps = useMemo(() => task.deps || [], [task.deps]);
   const [tab, setTab] = useState('predecessors');
   const [selectedType, setSelectedType] = useState('FS');
@@ -1270,12 +1271,31 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
   }, [tasks]);
 
   // Öncül görev listesi de büyük projelerde canlı arama gerektirir.
-  const taskOption = (candidate) => ({
-    value: candidate.id,
-    label: candidate.task,
-    description: candidate.keyword || null,
-    keywords: [candidate.task, candidate.keyword, candidate.projectCode]
-  });
+  const dateFormat = getAppDateDisplayFormat();
+  const wbsByProjectAndId = useMemo(() => {
+    const index = new Map();
+    for (const node of wbs) {
+      let projectNodes = index.get(node.projectId);
+      if (!projectNodes) {
+        projectNodes = new Map();
+        index.set(node.projectId, projectNodes);
+      }
+      if (!projectNodes.has(node.id)) projectNodes.set(node.id, node);
+    }
+    return index;
+  }, [wbs]);
+  const taskOption = useCallback((candidate) => {
+    const node = wbsByProjectAndId.get(candidate.projectId)?.get(candidate.wbsId);
+    const wbsLabel = [node?.code, node?.name].filter(Boolean).join(' ');
+    const dates = [candidate.plannedStart, candidate.plannedFinish].filter(Boolean)
+      .map((date) => fmt(date, dateFormat === 'dd/mm/yyyy' ? dateFormat : 'dd MMM yyyy'));
+    return {
+      value: candidate.id,
+      label: candidate.task,
+      description: [wbsLabel, dates.join(' → ')].filter(Boolean).join(' · ') || null,
+      keywords: [candidate.task, node?.code, node?.name, candidate.keyword, candidate.projectCode]
+    };
+  }, [wbsByProjectAndId, dateFormat]);
 
   const predecessorOptions = useMemo(() => {
     // Döngü denetimi ARDIL yönünde de uygulanır: `A → B → C` ağında `A` açılıp
@@ -1287,7 +1307,7 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
       .slice()
       .sort((left, right) => String(left.task || '').localeCompare(String(right.task || ''), 'tr'))
       .map(taskOption);
-  }, [others, deps, task.id, graph]);
+  }, [others, deps, task.id, graph, taskOption]);
 
   const successorOptions = useMemo(() => {
     const linked = new Set(successors.map((entry) => entry.task.id));
@@ -1299,7 +1319,7 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
       .slice()
       .sort((left, right) => String(left.task || '').localeCompare(String(right.task || ''), 'tr'))
       .map(taskOption);
-  }, [others, successors, task.id, graph]);
+  }, [others, successors, task.id, graph, taskOption]);
 
   const updateDep = (idx, patch) => {
     const next = deps.map((d, i) => {
@@ -1480,7 +1500,7 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
               options={predecessorOptions}
               onChange={(taskId) => addDep(taskId, selectedType)}
               placeholder="+ Öncül görev seçin..."
-              searchPlaceholder="Görev adı veya etiketiyle ara"
+              searchPlaceholder="Görev adı, WBS veya etiketle ara"
               emptyText="Eklenebilecek başka öncül görev yok."
               maxVisible={60}
               compact
@@ -1518,7 +1538,7 @@ function RelEditor({ task, tasks, onChange, onUpdateTask, allowSuccessorEdits = 
               options={successorOptions}
               onChange={addSuccessor}
               placeholder="+ Ardıl görev seçin..."
-              searchPlaceholder="Görev adı veya etiketiyle ara"
+              searchPlaceholder="Görev adı, WBS veya etiketle ara"
               emptyText="Eklenebilecek başka ardıl görev yok."
               maxVisible={60}
               compact
