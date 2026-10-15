@@ -641,6 +641,8 @@ Tarih talebi ayrıntısındaki **Görevi aç**, görev kimliğini çözer ve ger
 
 Yeni görev oluştururken de **Öncüller** ve **Ardıllar** tanımlanabilir. Ardılın türü/gecikmesi ve kaldırılması taslakta tutulur; Kaydet yeni görevle tüm bağlantıları aynı transaction içinde yazar. Kapatma bağlantıları da bırakır; döngü, farklı proje, yetki veya sürüm hatasında hiçbir kısmi kayıt oluşmaz. Proje seçimi değişirse önceki projeye ait bekleyen ardıl bağlantıları temizlenir. Bağımlılık düzenlemesi tam proje yetkisi gerektirir.
 
+Bağımlılık seçeneklerinde görev adı baskındır; küçük ikinci satırda mevcut WBS kodu/adı ve plan başlangıç → bitiş tarihleri gösterilir. Eksik WBS/tarihler boş ayırıcı veya yer tutucu üretmez. Tarihler uygulamanın gösterim tercihini canlı izler; yıl bilgisi de korunur. Mevcut arama görev adı, WBS kodu/adı ve etiketi kapsar. FS/SS/FF/SF seçicisi 76 px genişliğindedir; dar ekranda mevcut dikey yerleşim korunur. Bağımlılık düzenleme yetkisi main ile aynıdır; normal/PARTIAL kullanıcılar yeni bağımlılık yönetimi yetkisi kazanmaz.
+
 
 Kaydedilmemiş görev taslakları sekme kapatma/yenileme korumasına katılır. Demo/Gerçek Sistem geçişi açık taslak varken durur ve Kaydet veya kapatarak vazgeçme yönlendirmesi gösterir. Temel/Kapsamlı Kip değişimi aynı görev taslağını korur. Yerel taslak varken hatırlatma e-postası gönderilemez; önce Kaydet gerekir. Tekrar hazırlama ve ardıl düzenlemeleri de bu korumaya dahildir.
 

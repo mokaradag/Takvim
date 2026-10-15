@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { resolveTaskEditorAccess } from '../src/state/taskEditorCommit.js';
 import { createActualStack, DEFAULT_CALENDAR_ID } from './helpers/actualStack.mjs';
 
 const PROJECT_ID = '91111111-1111-4111-8111-111111111111';
@@ -84,4 +85,30 @@ test('istemci dependencyMutation=false gönderse de gerçek bağımlılık deği
   } finally {
     await stack.dispose();
   }
+});
+
+
+test('PARTIAL sorumlu ve oluşturucu main gibi bağımlılık yazamaz; içerik kaydı mevcut bağlantıyı korur', async () => {
+  const employee = 910002;
+  const data = seed();
+  data.people.push({ Sicil: employee, DisplayName: 'Sorumlu', Username: 'u910002' });
+  data.taskAssignees = [TASK_ID, PREDECESSOR_ID].map((TaskId) => ({ TaskId, Sicil: employee }));
+  data.tasks[0].CreatedBySicil = employee;
+  const stack = await createActualStack(data, { sicil: employee, corporateWbsSource: false });
+  try {
+    assert.equal(stack.state.projects.find((project) => project.id === PROJECT_ID).accessLevel, 'PARTIAL');
+    const task = stack.state.tasks.find((item) => item.id === TASK_ID);
+    assert.deepEqual(task.deps, []);
+    const deps = [{ predecessorId: PREDECESSOR_ID, type: 'SS', lagDays: 2 }];
+    assert.equal(resolveTaskEditorAccess(stack.state, TASK_ID, { deps }).ok, false);
+    await assert.rejects(stack.repository.commitChanges({ taskUpserts: [{
+      ...task, deps, assigneeMutation: false, dependencyMutation: true
+    }] }), (error) => error.code === 'FORBIDDEN');
+    await stack.repository.commitChanges({ taskUpserts: [{
+      ...task, task: 'Yeni başlık', assigneeMutation: false, dependencyMutation: false
+    }] });
+    assert.equal(stack.db.taskDependencies.length, 1);
+    assert.equal(stack.db.taskDependencies[0].DependencyType, 'FS');
+    assert.equal(stack.db.taskDependencies[0].LagDays, 0);
+  } finally { await stack.dispose(); }
 });

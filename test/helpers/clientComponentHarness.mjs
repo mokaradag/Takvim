@@ -77,6 +77,7 @@ export function mountComponent(Component, initialProps) {
     useId() { return memo(() => `test-id-${position}`, []); },
     useSyncExternalStore(_subscribe, snapshot, serverSnapshot) { return (serverSnapshot || snapshot)(); }
   };
+  dispatcher.useLayoutEffect = dispatcher.useEffect;
   function render(nextProps = props) {
     props = nextProps;
     dirty = true;
