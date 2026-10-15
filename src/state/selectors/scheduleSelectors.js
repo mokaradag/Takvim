@@ -125,6 +125,12 @@ export function buildPortfolioSchedule({ tasks = [], projects = [], calendars = 
       warnings.push({ scope: 'project', projectId: project.id, ...suppressed.error });
       continue;
     }
+    if (projectTasks.some((task) => task.dependenciesLoaded === false)) {
+      const error = { code: 'INCOMPLETE_DEPENDENCY_PROJECTION', message: 'İlişkiler henüz tam yüklenmedi. Zamanlamayı hesaplamak için verileri yenileyin.', details: { projectId: project.id } };
+      projectSchedules[project.id] = invalidProjectSchedule(project.id, error);
+      warnings.push({ scope: 'project', projectId: project.id, ...error });
+      continue;
+    }
     if (!projectTasks.length) {
       projectSchedules[project.id] = emptyProjectSchedule(project.id);
       continue;

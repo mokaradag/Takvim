@@ -410,10 +410,10 @@ test('partial snapshots expose the WBS catalog only for a creator or assigned us
   assert.match(source, /WHERE v\.AccessLevel = 'FULL'\s+OR v\.HasReadGrant = 1\s+OR v\.IsTaskScoped = 1\s+OR EXISTS \(SELECT 1 FROM #RequiredPartialWbs r WHERE r\.WbsId = w\.WbsId\)/s);
 });
 
-test('WBS reparent validation holds update and serializable locks across the ancestry walk', () => {
+test('WBS reparent validation reads stable ancestry under the project topology mutex', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitWbs'), source.indexOf('async function commitTask'));
-  assert.match(source, /FROM dbo\.MR_WBS WITH \(UPDLOCK, HOLDLOCK\) WHERE WbsId = @id/);
+  assert.match(source, /FROM dbo\.MR_WBS WITH \(HOLDLOCK\) WHERE WbsId = @id/);
   assert.match(body, /const before = await wbsRowForUpdate\(executor, wbsId\)/);
   assert.match(body, /let parent = await wbsRowForUpdate\(executor, node\.parentId\)/);
   assert.match(body, /await wbsRowForUpdate\(executor, parent\.ParentWbsId\)/);
@@ -590,7 +590,7 @@ test('project-level READ grants expose project tasks, WBS, assignees, and requir
   // Yetkili mutasyon yanıtında da READ yetkisi görev/WBS görünürlüğünü açar,
   // bağımlılıklar iki ucun da görünürlüğüyle süzülür.
   assert.match(source, /JOIN #ProjectAuth pa ON pa\.ProjectId = w\.ProjectId\s+WHERE pa\.AccessLevel = 'FULL' OR pa\.HasReadGrant = 1 OR pa\.IsTaskScoped = 1;/);
-  assert.match(source, /JOIN dbo\.MR_Tasks successor ON successor\.TaskId = d\.TaskId/);
+  assert.match(source, /JOIN dbo\.MR_Tasks successor WITH \(READCOMMITTED\) ON successor\.TaskId = d\.TaskId/);
   assert.match(source, /predecessor\.TaskId = d\.PredecessorTaskId/);
   assert.match(source, /successor\.CreatedBySicil = @sicil OR facts\.IsOwnAssignee = 1 OR facts\.IsScopeAssignee = 1/);
 });

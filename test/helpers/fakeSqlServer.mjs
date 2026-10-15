@@ -1317,8 +1317,8 @@ function runQuery(db, statement, params, { database }) {
   if (sqlText.includes('FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil')) {
     const sets = authorizationRecordsets(db, sicil);
     if (params.authorizationProjectIds != null) {
-      const projects = new Set(params.authorizationProjectIds.split(',').map((id) => id.toUpperCase()));
-      const tasks = new Set(String(params.authorizationTaskIds || '').split(',').map((id) => id.toUpperCase()));
+      const projects = new Set(params.authorizationProjectIds.split(',').map((id) => id.trim().toUpperCase()).filter(Boolean));
+      const tasks = new Set(String(params.authorizationTaskIds || '').split(',').map((id) => id.trim().toUpperCase()).filter(Boolean));
       sets[3] = sets[3].filter((row) => projects.has(String(row.ProjectId).toUpperCase()));
       sets[4] = sets[4].filter((row) => tasks.has(String(row.TaskId).toUpperCase()));
     }
@@ -1353,9 +1353,16 @@ function runQuery(db, statement, params, { database }) {
     const snapshot = snapshotRecordsets(db, sicil, Boolean(params.isAdmin), Boolean(params.canAssignAllCorporate));
     const projectedIds = new Set(taskIds);
     for (const edge of snapshot[5]) if (taskIds.has(String(edge.TaskId).toUpperCase())) projectedIds.add(String(edge.PredecessorTaskId).toUpperCase());
-    const projectedTasks = snapshot[3]
-      .filter((row) => projectedIds.has(String(row.TaskId).toUpperCase()))
-;
+    const projectedTasks = snapshot[3].filter((row) => projectedIds.has(String(row.TaskId).toUpperCase()));
+    for (const task of projectedTasks) {
+      let node = db.wbs.find((w) => sameGuid(w.WbsId, task.WbsId));
+      const seen = new Set();
+      while (node && !seen.has(node.WbsId)) {
+        seen.add(node.WbsId);
+        wbsIds.add(String(node.WbsId).toUpperCase());
+        node = db.wbs.find((w) => sameGuid(w.WbsId, node.ParentWbsId));
+      }
+    }
     const projectedAssignees = sqlText.includes('LEFT JOIN #DirectoryNames pd')
       ? taskScopedAssigneeRows(db, projectedIds, sicil, Boolean(params.isAdmin), { exposeTaskScopedAvatar: true })
       : snapshot[4].filter((row) => projectedIds.has(String(row.TaskId).toUpperCase()));
@@ -1927,13 +1934,13 @@ function runQuery(db, statement, params, { database }) {
       .filter((entry) => sameGuid(entry.TaskId, params.taskId))
       .map((entry) => ({ Sicil: entry.Sicil }))]);
   }
-  if (sqlText.includes('FROM dbo.MR_TaskAssignees WITH (UPDLOCK, HOLDLOCK)')
+  if (/FROM dbo\.MR_TaskAssignees WITH \((?:UPDLOCK, )?HOLDLOCK\)/.test(sqlText)
     && sqlText.includes('WHERE TaskId = @taskId')) {
     return result([db.taskAssignees
       .filter((entry) => sameGuid(entry.TaskId, params.taskId))
       .map((entry) => ({ Sicil: entry.Sicil }))]);
   }
-  if (sqlText.includes('FROM dbo.MR_TaskAssignees ta WITH (UPDLOCK, HOLDLOCK)')
+  if (/FROM dbo\.MR_TaskAssignees ta WITH \((?:UPDLOCK, )?HOLDLOCK\)/.test(sqlText)
     && sqlText.includes('WHERE t.ProjectId = @projectId AND ta.Sicil = @sicil')) {
     const assignment = db.taskAssignees.find((entry) => entry.Sicil === params.sicil
       && db.tasks.some((task) => sameGuid(task.TaskId, entry.TaskId)
@@ -1988,14 +1995,19 @@ function runQuery(db, statement, params, { database }) {
     ]);
   }
 
+  if (sqlText.includes('/* commit-create-scope-preflight */')) {
+    const projects = new Set(String(params.createScopeProjectIds || '').split(',').map((id) => id.trim().toLowerCase()));
+    return result([db.tasks.filter((task) => projects.has(String(task.ProjectId).toLowerCase())
+      && db.projects.some((project) => sameGuid(project.ProjectId, task.ProjectId) && project.IsActive)
+      && db.taskAssignees.some((assignee) => sameGuid(assignee.TaskId, task.TaskId) && assignee.Sicil === params.sicil))
+      .map((task) => ({ ProjectId: task.ProjectId }))]);
+  }
   if (sqlText.includes('/* commit-resource-discovery */')) {
     const parse = (value) => new Set(String(value || '').split(',').map((id) => id.trim().toLowerCase()).filter(Boolean));
     const taskIds = parse(params.lockTaskIds), wbsIds = parse(params.lockWbsIds);
-    return result([db.tasks.filter((t) => taskIds.has(String(t.TaskId).toLowerCase()) || taskIds.has(String(t.RecurrenceParentTaskId).toLowerCase()) || db.tasks.some((own) => taskIds.has(String(own.TaskId).toLowerCase()) && sameGuid(own.RecurrenceParentTaskId, t.TaskId))),
-      db.wbs.filter((w) => wbsIds.has(String(w.WbsId).toLowerCase())),
-      db.projects.filter((p) => JSON.parse(params.lockProjectCodes || '[]').includes(String(p.ProjectCode || '').toUpperCase()))]);
+    return result([db.tasks.filter((t) => taskIds.has(String(t.TaskId).toLowerCase())),
+      db.wbs.filter((w) => wbsIds.has(String(w.WbsId).toLowerCase()))]);
   }
-  if (sqlText.includes('/* commit-code-owners */')) return result([db.projects.filter((p) => JSON.parse(params.lockProjectCodes || '[]').includes(String(p.ProjectCode || '').toUpperCase()))]);
   if (sqlText.includes('/* commit-topology-members */')) {
     const projects = new Set(String(params.topologyProjectIds || '').split(',').map((id) => id.trim().toLowerCase()).filter(Boolean));
     return result([db.tasks.filter((t) => projects.has(String(t.ProjectId).toLowerCase())), db.wbs.filter((w) => projects.has(String(w.ProjectId).toLowerCase()))]);
@@ -2449,10 +2461,18 @@ export function createFakeSqlServerDriver(db) {
         if (!this.pool.began) throw new Error('Kilit bir SQL işlemi içinde alınmalıdır.');
         this.pool.lockOnly = String(this.params.resource).startsWith('mergen-rota:admin:');
         const owner = db.adminActionLocks.get(this.params.resource);
-        if (owner && owner !== this.pool) return { recordset: [{ LockResult: -1 }] };
-        db.adminActionLocks.set(this.params.resource, this.pool);
+        if (this.params.lockMode === 'Shared') {
+          if (owner && !(owner instanceof Set) && owner !== this.pool) return { recordset: [{ LockResult: -1 }] };
+          const readers = owner instanceof Set ? owner : new Set();
+          readers.add(this.pool);
+          db.adminActionLocks.set(this.params.resource, readers);
+        } else {
+          if (owner && owner !== this.pool && (!(owner instanceof Set) || [...owner].some((entry) => entry !== this.pool))) return { recordset: [{ LockResult: -1 }] };
+          db.adminActionLocks.set(this.params.resource, this.pool);
+        }
         return { recordset: [{ LockResult: 0 }] };
       }
+      await db.queryHook?.({ statement, params: this.params, transaction: this.pool });
       return runQuery(db, statement, this.params, { database });
     }
   }
@@ -2495,7 +2515,8 @@ export function createFakeSqlServerDriver(db) {
     }
     releaseLocks() {
       for (const [key, owner] of db.adminActionLocks) {
-        if (owner === this) db.adminActionLocks.delete(key);
+        if (owner instanceof Set) { owner.delete(this); if (!owner.size) db.adminActionLocks.delete(key); }
+        else if (owner === this) db.adminActionLocks.delete(key);
       }
     }
     async commit() {

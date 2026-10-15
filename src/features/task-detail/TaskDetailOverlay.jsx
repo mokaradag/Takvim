@@ -159,20 +159,23 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
     return pending;
   };
 
+  const onClose = () => {
+    if (saveRef.current) return;
+    pendingRef.current.clear();
+    seriesRef.current = false;
+    setDirty(false);
+    return isCreating ? cancelTaskDraft() : closeTask();
+  };
   if (!isCreating && !initialAccess.ok) return <ReadOnlyTaskDrawer
-    task={task} tasks={tasks} dateFormat={dateFormat} onClose={closeTask}
+    task={task} tasks={tasks} dateFormat={dateFormat} onClose={onClose}
     onUpdateRelatedTask={onUpdate} canEditTaskDependencies={canEditTaskDependencies}
+    onRefreshDependencies={() => reloadData?.({ preserveFailedTaskUpdates: true })}
     onSave={() => onSave(task)} hasUnsavedChanges={dirty} isSaving={saving} saveError={saveError}
   />;
   const canManageDraft = creationDraft?.scope === 'FULL' || creationDraft?.scope === 'ASSIGNMENT';
   const common = {
     task: isCreating ? task : displayTask,
-    onClose: () => {
-      if (saveRef.current) return;
-      pendingRef.current.clear();
-      seriesRef.current = false;
-      return isCreating ? cancelTaskDraft() : closeTask();
-    },
+    onClose,
     onUpdate,
     onSave,
     onDelete: deleteTask,
@@ -200,6 +203,8 @@ function TaskEditor({ task, simple, creationDraft, tasks, projects, assignablePr
     canManageStructure={isCreating ? creationDraft.scope === 'FULL' : draftAccess.canManageStructure}
     canManageDependencies={isCreating ? Boolean(creationDraft.scope) : draftAccess.canManageDependencies}
     canEditTaskDependencies={canEditTaskDependencies}
+    dependenciesLoaded={!writeState.taskWriteIndex.incompleteDependencyProjects.has(String(task.projectId).toLowerCase())}
+    onRefreshDependencies={() => reloadData?.({ preserveFailedTaskUpdates: true })}
     canChooseWbs={isCreating ? Boolean(creationDraft.scope) : draftAccess.canChooseWbs}
   />;
 }

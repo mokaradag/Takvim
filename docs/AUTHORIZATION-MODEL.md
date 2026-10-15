@@ -340,3 +340,5 @@ parçalı olarak yeniden doğrular; konuşma genelinde 160 000 görev eşiği yo
 numaralı açıklama seçiminden gelir; veri metni ve model kimliği yetki değildir.
 Silinmiş/arşivlenmiş görevlerde talepler ve koordinasyon geçmişi gerçek kayıtlı
 katılımcılara açıktır; canlı görev yetkisi bu tarihi katılımın yerine geçmez.
+
+Dependency mutations require successor task-write capability, including authoritative assignee scope for assignment-only editors. The UI memoized task-write index applies the same boundary; readable predecessors may still edit writable successors. PARTIAL graph constraint failures share a generic message without hidden counts, IDs or paths. Project deletion performs an identity-only administrator preflight before resource discovery, followed by transactional authorization. Mutation readback re-evaluates final-state visibility before commit.

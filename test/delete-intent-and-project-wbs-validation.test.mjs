@@ -150,6 +150,6 @@ test('commit route and ordered repository enforce all new boundaries', () => {
   assert.match(ordered, /await assertDeleteIntentMatchesPersistence\(transaction, orderedChanges\);/);
   assert.match(intent, /collection: 'wbsDeletes'/);
   assert.match(intent, /collection: 'taskDeletes'/);
-  assert.match(intent, /WITH \(UPDLOCK, HOLDLOCK\)/);
+  assert.match(intent, /WITH \(HOLDLOCK\)/);
   assert.match(ordered, /isolationLevel: sql\.ISOLATION_LEVEL\.SERIALIZABLE/);
 });

@@ -58,7 +58,7 @@ async function targetExistsForUpdate(executor, target, id) {
   request.input('entityId', sql.UniqueIdentifier, id);
   const result = await request.query(`
     SELECT TOP (1) ${safeColumn}
-    FROM dbo.${safeTable} WITH (UPDLOCK, HOLDLOCK)
+    FROM dbo.${safeTable} WITH (HOLDLOCK)
     WHERE ${safeColumn} = @entityId;
   `);
   return Boolean(result.recordset?.length);

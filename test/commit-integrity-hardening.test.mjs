@@ -42,7 +42,7 @@ test('Actual commits lock and preserve the single-root WBS invariant', () => {
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
   assert.match(
     source,
-    /FROM dbo\.MR_WBS WITH \(UPDLOCK, HOLDLOCK\)\s+WHERE ProjectId = @projectId/s
+    /FROM dbo\.MR_WBS WITH \(READCOMMITTED\)\s+WHERE ProjectId = @projectId/s
   );
   assert.match(source, /if \(roots\.length !== 1\)/);
   assert.match(source, /if \(existingRoots\.length === 1 && roots\[0\]\.id !== existingRoots\[0\]\)/);
@@ -51,7 +51,7 @@ test('Actual commits lock and preserve the single-root WBS invariant', () => {
 test('Actual commits share one locked final-graph validator and forward verified context', () => {
   const preparation = read('src/server/repository/taskDependencyAccess.js');
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
-  assert.match(preparation, /findDependencyCycle\(\[\.\.\.resulting.values\(\)\]\)/);
+  assert.match(preparation, /reconcileDependencyGraph\(/);
   assert.match(source, /const scopedChanges = input\?\.\[TASK_DEPENDENCY_CONTEXT\] \? changes : await prepareScopedTaskDependencies/);
   assert.match(source, /const plannedChanges = await planIntegrity\(transaction, scopedChanges\);/);
   assert.match(source, /return baseRepository\.commitChanges\(plannedChanges\);/);
@@ -61,9 +61,10 @@ test('Actual commits share one locked final-graph validator and forward verified
 test('recurrence occurrence creation locks the template in the same hardened transaction', () => {
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
   assert.match(source, /recurrenceParentId:\s*task\.recurrenceParentId\s*\?\s*uuid\(task\.recurrenceParentId, 'Tekrar şablonu kimliği'\)/);
-  assert.match(source, /\.filter\(\(task\) => task\.recurrenceParentId\)\s*\.map\(\(task\) => task\.recurrenceParentId\)/);
-  assert.match(source, /for \(const taskId of \[\.\.\.referencedTaskIds\]\.sort\(\)\) \{\s+const row = await rowForUpdate\(executor, 'MR_Tasks', 'TaskId', taskId/s);
-  assert.match(read('src/server/repository/commitResourceLocks.js'), /commit-task-lock/);
+  const locks = read('src/server/repository/commitResourceLocks.js');
+  assert.match(locks, /const parentIds = ids\(upserts\.flatMap/);
+  assert.match(locks, /parentIds\.filter\(\(value\) => !writeTasks\.includes\(value\)\)/);
+  assert.match(locks, /commit-task-lock/);
 });
 
 test('Project writes require a calendar and all supplied calendar references must be active', () => {

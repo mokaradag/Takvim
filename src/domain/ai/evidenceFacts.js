@@ -53,7 +53,7 @@ const LABELS = Object.freeze({
   completedWithoutActualFinish: ['Gerçekleşen bitişi eksik tamamlanan görev', 'Completed tasks without actual finish'],
   access: ['Erişim', 'Access'], level: ['Erişim düzeyi', 'Access level'], reasons: ['Erişim nedeni', 'Access reason'],
   completeTaskView: ['Tam görev görünümü', 'Complete task view'],
-  dependenciesAndBaselines: ['Bağımlılık ve baz plan erişimi', 'Dependency and baseline access'],
+  dependencies: ['Bağımlılık erişimi', 'Dependency access'], baselines: ['Baz plan erişimi', 'Baseline access'],
   title: ['Başlık', 'Title'], name: ['Ad', 'Name'], code: ['Kod', 'Code'], description: ['Açıklama', 'Description'],
   keyword: ['Etiket', 'Label'], status: ['Durum', 'Status'], priority: ['Öncelik', 'Priority'],
   milestone: ['Kilometre taşı', 'Milestone'], progress: ['İlerleme (%)', 'Progress (%)'],

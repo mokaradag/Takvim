@@ -52,7 +52,7 @@ test('ordered SQL commits lock all mutable upsert targets before persistence', (
   for (const table of ['MR_Projects', 'MR_WBS', 'MR_Tasks']) {
     assert.match(validation, new RegExp(`table: '${table}'`));
   }
-  assert.match(validation, /WITH \(UPDLOCK, HOLDLOCK\)/);
+  assert.match(validation, /WITH \(HOLDLOCK\)/);
   assert.match(validation, /\.sort\(\(left, right\) => String\(left\.id\)\.localeCompare\(String\(right\.id\)\)\)/);
 });
 

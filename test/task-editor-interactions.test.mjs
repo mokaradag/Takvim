@@ -238,7 +238,7 @@ for (const simple of [true, false]) {
   });
 }
 
-test('birikmiş proje taşıması tarih yetkisini daraltır ve açık ilişki uzlaştırmasına izin verir', async () => {
+test('birikmiş proje taşıması tarih ve kapsam dışı ilişki yetkisini daraltır', async () => {
   const state = fixture();
   state.projects.push({ id: 'p2', name: 'Atama projesi', accessLevel: 'PARTIAL' });
   state.assignableProjects = [{ id: 'p2', name: 'Atama projesi' }];
@@ -252,7 +252,7 @@ test('birikmiş proje taşıması tarih yetkisini daraltır ve açık ilişki uz
     assert.equal(view.editor.output.props.canManageStructure, false);
     assert.equal(view.editor.output.props.canEditTargetFinish, false);
     assert.equal(view.editor.output.props.canControlSchedule, false);
-    assert.equal(view.editor.output.props.canManageDependencies, true);
+    assert.equal(view.editor.output.props.canManageDependencies, false);
     for (const patch of [{ targetFinish: '2026-09-30' }]) {
       assert.equal((await view.editor.output.props.onUpdate('t1', patch)).ok, false);
       view.sync();
@@ -396,9 +396,12 @@ test('500 görevli seçicide yazı girişi yetki indeksini yeniden kurmaz', () =
     const originalSome = state.tasks.some;
     state.tasks.find = () => { throw new Error('Yetki grafiği tekrar tarandı'); };
     state.tasks.some = () => { throw new Error('Yetki grafiği tekrar tarandı'); };
-    for (const task of state.tasks) assert.equal(predicate(task), true);
-    state.tasks.find = originalFind;
-    state.tasks.some = originalSome;
+    try {
+      for (const task of state.tasks) assert.equal(predicate(task), true);
+    } finally {
+      state.tasks.find = originalFind;
+      state.tasks.some = originalSome;
+    }
     input(view.drawer.output, (node) => ['input', 'textarea'].includes(node.type) && node.props.value === 'Başlangıç').props.onChange({ target: { value: 'Yeni başlık' } });
     view.sync();
     assert.equal(view.editor.output.props.canEditTaskDependencies, predicate);
@@ -458,4 +461,67 @@ test('read-only predecessor drawer stages and saves only its writable successor'
     assert.equal(calls[0][0].patch.deps[0].predecessorId, 't1');
     assert.deepEqual(calls[0][0].observedDependencies, []);
   } finally { relations?.unmount(); view.close(); delete globalThis[CLIENT_STATE]; }
+});
+
+test('read-only successor edits cannot close while saving and deliberate close clears drafts', async () => {
+  const state = fixture();
+  state.projects[0].accessLevel = 'PARTIAL';
+  state.tasks.push({ ...state.selectedTask, id: 'successor', isCurrentUserAssignee: true, assigneeIds: ['1'] });
+  let finish;
+  let closes = 0;
+  let checker;
+  state.actions = { registerTaskEditorDraft: (check) => { checker = check; return () => {}; },
+    closeTask: () => { assert.equal(checker(null), false); closes++; },
+    saveTaskEdits: () => new Promise((resolve) => { finish = resolve; }) };
+  globalThis[CLIENT_STATE] = state;
+  const view = editorFor(false);
+  try {
+    await view.editor.output.props.onUpdateRelatedTask('successor', { deps: [{ predecessorId: 't1', type: 'FS' }] });
+    view.sync();
+    const saving = view.editor.output.props.onSave();
+    view.sync();
+    view.editor.output.props.onClose();
+    input(view.drawer.output, (node) => node.props.className === 'drawer-backdrop').props.onClick();
+    assert.equal(closes, 0);
+    finish({ ok: false, error: { message: 'Kaydedilemedi' } });
+    await saving;
+    view.sync();
+    assert.ok(input(view.drawer.output, (node) => node.props.role === 'alert'));
+    assert.equal(checker(null), true);
+    view.editor.output.props.onClose();
+    assert.equal(closes, 1);
+    assert.equal(checker(null), false);
+  } finally { view.close(); delete globalThis[CLIENT_STATE]; }
+});
+
+test('drawer blocks a linked project move with guidance before staging a save', () => {
+  const state = fixture();
+  state.projects.push({ id: 'p2', name: 'Hedef', accessLevel: 'FULL', tags: [] });
+  state.selectedTask.deps = [{ predecessorId: 'pred', type: 'FS' }];
+  state.tasks.push({ ...state.selectedTask, id: 'pred', deps: [] });
+  globalThis[CLIENT_STATE] = state;
+  const view = editorFor(false);
+  try {
+    const picker = input(view.drawer.output, (node) => node.props?.value === 'p1' && node.props?.onChange && node.props?.options);
+    picker.props.onChange('p2');
+    view.sync();
+    assert.equal(view.editor.output.props.task.projectId, 'p1');
+    assert.match(input(view.drawer.output, (node) => node.props.role === 'alert').props.children, /öncül ve ardıl/);
+  } finally { view.close(); delete globalThis[CLIENT_STATE]; }
+});
+
+
+test('an unknown dependency target blocks project relationship edits until refresh', () => {
+  const state = fixture();
+  state.tasks.push({ ...state.selectedTask, id: 'unknown', dependenciesLoaded: false });
+  let refreshes = 0;
+  state.actions = { reloadData: () => { refreshes++; } };
+  globalThis[CLIENT_STATE] = state;
+  const view = editorFor(false);
+  try {
+    assert.equal(view.editor.output.props.canManageDependencies, false);
+    assert.equal(view.editor.output.props.canEditTaskDependencies(state.tasks[1]), false);
+    input(view.drawer.output, (node) => node.type === 'button' && node.props.children === 'Verileri yenile').props.onClick();
+    assert.equal(refreshes, 1);
+  } finally { view.close(); delete globalThis[CLIENT_STATE]; }
 });

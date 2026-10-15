@@ -382,7 +382,7 @@ test('supported typed fields work and arbitrary prose cannot accompany a valid c
 
 test('proje erişim açıklaması olgu olarak doğrulanır; orta öncelik ürün etiketiyle çizilir', () => {
   const context = groundingContext({
-    task: { title: 'Alfa', priority: 'medium', access: { level: 'READ', reasons: ['Proje erişim hibesi'], completeTaskView: true, dependenciesAndBaselines: false } }
+    task: { title: 'Alfa', priority: 'medium', access: { level: 'READ', reasons: ['Proje erişim hibesi'], completeTaskView: true, baselines: false } }
   });
   assert.equal(verify(context, claimFor(context.envelope, 'data.task.access.level')).ok, true);
   const reason = verify(context, claimFor(context.envelope, 'data.task.access.reasons.0'));

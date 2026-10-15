@@ -47,7 +47,7 @@ test('yetki matrisi: sistem yöneticisi, FULL, READ, kısmi, yönetim kapsamı, 
   assert.deepEqual([...admin].sort(), [...all, ...PARTIAL_OTHERS].sort());
   const adminDetail = await callRotaTool(stack, ADMIN, 'rota_task_detail', { taskId: TASKS.OVERDUE });
   assert.equal(adminDetail.result.data.task.access.level, 'FULL');
-  assert.equal(adminDetail.result.data.task.access.dependenciesAndBaselines, true);
+  assert.equal(adminDetail.result.data.task.access.baselines, true);
   assert.equal(adminDetail.result.scope.kind, 'complete-projects');
   for (const projectId of [PROJECTS.ARCHIVED, '10000000-0000-4000-8000-00000000abcd']) {
     const missingProject = await callRotaTool(stack, ADMIN, 'rota_task_analytics', { projectId });
@@ -442,12 +442,15 @@ test('proje künyesi READ görünür bağımlılık sayısını ve kapalı baz p
   assert.equal(read.result.data.access.level, 'READ');
   assert.deepEqual(read.result.data.access.reasons, ['Proje erişim hibesi']);
   assert.equal(read.result.data.access.completeTaskView, true);
-  assert.equal(read.result.data.access.dependenciesAndBaselines, false);
+  assert.equal(read.result.data.access.baselines, false);
+  assert.equal(read.result.data.access.dependencies, true);
   assert.equal(read.result.data.visibleTasks.total, 2);
   assert.equal(read.result.data.project.dependencyCount, 1);
   assert.equal(read.result.data.project.wbsNodeCount, 0, 'READ erişimi tam WBS kataloğu sayısını da görür');
   const partial = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.PARTIAL });
   assert.equal(partial.result.data.access.level, 'PARTIAL');
+  assert.equal(partial.result.data.access.dependencies, true);
+  assert.equal(partial.result.data.access.baselines, false);
   assert.equal(partial.result.data.project.wbsNodeCount, 0, 'kendi görev kapsamı da tam WBS kataloğu sayısını görür');
   assert.ok(partial.result.data.access.reasons.includes('Görev sorumlusu'));
   assert.equal(partial.result.scope.kind, 'authorized-task-subset');

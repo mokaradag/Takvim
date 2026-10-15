@@ -135,6 +135,7 @@ export function resolveTaskCreationAccess(state = {}, requestedProjectId = null)
 /** Toplu seçicide aynı yetki kararını doğrusal indekslerle çalıştırır. */
 export function indexTaskWriteState(state) {
   return { ...state, taskWriteIndex: {
+    incompleteDependencyProjects: new Set((state.tasks || []).filter((task) => task.dependenciesLoaded === false).map((task) => identityKey(task.projectId))),
     tasks: new Map((state.tasks || []).map((task) => [identityKey(task.id), task])),
     projects: new Map((state.projects || []).map((project) => [identityKey(project.id), project])),
     assignable: new Map((state.assignableProjects || []).map((project) => [identityKey(project.id), project])),
@@ -156,6 +157,9 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
   // sorumlusu ise yalnızca bu görev için dar bir içerik/ilerleme hakkı alır.
   const visibleSourceProject = state.taskWriteIndex ? state.taskWriteIndex.projects.get(identityKey(task.projectId)) : findProject(state.projects, task.projectId);
   const sourceProject = visibleSourceProject || findAssignableProject(state, task.projectId);
+  const dependenciesLoaded = task.dependenciesLoaded !== false && !(state.taskWriteIndex
+    ? state.taskWriteIndex.incompleteDependencyProjects.has(identityKey(task.projectId))
+    : (state.tasks || []).some((item) => identityKey(item.projectId) === identityKey(task.projectId) && item.dependenciesLoaded === false));
   const hasFullSourceProject = canWriteProject(visibleSourceProject);
   const hasProjectTaskWrite = canAssignTasksInProject(state, task.projectId);
   const hasHiddenAssignees = Number(task.assigneeCount ?? (task.assigneeIds || []).length)
@@ -241,7 +245,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       // `canManageRecurrence` tekrar bölümünü/generasyonu açık tutar. Kural
       // düzenleme yetkisi ayrı bayraktır; çocuklar üretildikten sonra kapanır.
       canManageStructure: false,
-      canManageDependencies: true,
+      canManageDependencies: dependenciesLoaded,
       canManageRecurrence: selfRecurrence,
       canEditRecurrenceRule: canEditSelfRecurrence,
       canGenerateRecurrence: selfRecurrence,
@@ -289,7 +293,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       destinationProject: sourceProject,
       scope: 'ASSIGNEE',
       canManageStructure: false,
-      canManageDependencies: true,
+      canManageDependencies: dependenciesLoaded,
       canManageRecurrence: selfRecurrence,
       canEditRecurrenceRule: canEditSelfRecurrence,
       canGenerateRecurrence: selfRecurrence,
@@ -343,7 +347,8 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
     destinationProject,
     scope: full ? 'FULL' : 'ASSIGNMENT',
     canManageStructure: full,
-    canManageDependencies: true,
+    canManageDependencies: dependenciesLoaded && (full || Boolean(task.isCurrentUserAssignee)
+      || (!hasHiddenAssignees && (task.assigneeIds || []).length > 0 && assignmentListInScope)),
     canManageRecurrence: recurrenceAccess,
     canEditRecurrenceRule: recurrenceAccess && !hasRecurrenceChildren,
     canGenerateRecurrence: recurrenceAccess,

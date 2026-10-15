@@ -3,6 +3,7 @@ import { sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { observePhase } from '../observability/observeOperation.js';
 import { canonicalizeCommitChanges } from './commitChangeValidation.js';
+import { normalizeCommitChanges } from './commitMutationIntent.js';
 import { canonicalizeCommitScalars } from './commitScalarCanonicalization.js';
 import { prepareScopedTaskDependencies, TASK_DEPENDENCY_CONTEXT } from './taskDependencyAccess.js';
 import { createHardenedSqlAppRepository } from './hardenedSqlAppRepository.js';
@@ -29,7 +30,7 @@ async function assertManualProjectCodesAvailable(transaction, changes) {
     request.input('projectCode', sql.NVarChar(255), projectCode);
     const result = await request.query(`
       SELECT TOP (1) SourceType
-      FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK)
+      FROM dbo.MR_Projects WITH (READCOMMITTED)
       WHERE ProjectId = @projectId;
 
       SELECT TOP (1) ProjectCode
@@ -37,7 +38,7 @@ async function assertManualProjectCodesAvailable(transaction, changes) {
       WHERE ProjectCode = @projectCode;
 
       SELECT TOP (1) ProjectId
-      FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK)
+      FROM dbo.MR_Projects WITH (READCOMMITTED)
       WHERE ProjectId <> @projectId AND UPPER(ProjectCode) = @projectCode;
     `);
 
@@ -70,13 +71,12 @@ export function createOrderedSqlAppRepository() {
   return {
     ...repository,
     commitChanges(changes = {}) {
-      const canonicalChanges = canonicalizeCommitScalars(canonicalizeCommitChanges(changes));
-      const orderedChanges = {
-        ...canonicalChanges,
-        wbsUpserts: orderWbsUpsertsByParents(canonicalChanges.wbsUpserts || [])
-      };
-
+      const canonicalChanges = normalizeCommitChanges(canonicalizeCommitScalars(canonicalizeCommitChanges(changes)));
       return observePhase('phase.commit.transaction', () => withSqlTransaction(async (transaction) => {
+        // Her denemenin niyet ve yetki bağlamı ayrıdır.
+        const orderedChanges = { ...canonicalChanges,
+          taskUpserts: canonicalChanges.taskUpserts.map((task) => ({ ...task })),
+          wbsUpserts: orderWbsUpsertsByParents(canonicalChanges.wbsUpserts || []) };
         const prepared = await prepareScopedTaskDependencies(transaction, orderedChanges);
         const actor = prepared[TASK_DEPENDENCY_CONTEXT];
         orderedChanges.taskUpserts = prepared.taskUpserts;
@@ -98,7 +98,7 @@ export function createOrderedSqlAppRepository() {
           await assertDeleteIntentMatchesPersistence(transaction, orderedChanges);
         });
         return repository.commitChanges(orderedChanges);
-      }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE }));
+      }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE, deadlockRetries: 2 }));
     }
   };
 }

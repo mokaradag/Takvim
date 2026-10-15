@@ -205,7 +205,7 @@ test('sıradan kullanıcı erişimi olmayan projeye görev yazamaz', async () =>
       stack.repository.commitChanges(taskChanges({ assigneeIds: [String(PLAIN_SICIL)] })),
       (error) => {
         assert.equal(error.code, 'FORBIDDEN');
-        assert.match(error.message, /tam yazma yetkiniz yok/);
+        assert.equal(error.message, 'Görev bu işlem için kullanılamıyor.');
         return true;
       }
     );

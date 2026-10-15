@@ -128,6 +128,8 @@ export function TaskDrawer({
   canManageStructure = true,
   canManageDependencies = canManageStructure,
   canEditTaskDependencies = () => true,
+  dependenciesLoaded = true,
+  onRefreshDependencies,
   dateFormat,
   canManageRecurrence = true,
   canChooseWbs = true,
@@ -314,7 +316,15 @@ export function TaskDrawer({
     assignmentRequest: assignmentRequests.assignmentRequest
   });
 
+  const [projectMoveError, setProjectMoveError] = useState(null);
   const changeProject = (projectId) => {
+    const linked = (local.deps || []).length || tasks.some((item) => (item.deps || []).some((dep) => sameActualId(dep.predecessorId, local.id)));
+    const source = projects.find((item) => sameActualId(item.id, local.projectId));
+    if (!sameActualId(projectId, local.projectId) && (linked || local.dependenciesLoaded === false || (source?.accessLevel && source.accessLevel !== 'FULL'))) {
+      setProjectMoveError('Projeyi değiştirmeden önce öncül ve ardıl ilişkilerini kaldırın. Kısmi görünümde taşıma için tam proje yetkisi gerekir.');
+      return;
+    }
+    setProjectMoveError(null);
     const project = projects.find((item) => item.id === projectId)
       || assignmentScopeProjects.find((item) => item.id === projectId)
       || null;
@@ -765,6 +775,9 @@ export function TaskDrawer({
               />
             </Section>}
 
+            {!dependenciesLoaded && <div role="status" className="muted">
+              İlişkiler henüz tam yüklenmedi. <button className="btn" disabled={isSaving} onClick={onRefreshDependencies}>Verileri yenile</button>
+            </div>}
             <Section title="Notlar" icon={<Icons.Info size={13} />} tone="var(--text-dim)">
               <textarea
                 className="input" rows={4}
@@ -777,6 +790,7 @@ export function TaskDrawer({
           </div>
         </fieldset>
 
+        {projectMoveError && <div className="drawer-save-error" role="alert">{projectMoveError}</div>}
         {saveError && <div className="drawer-save-error" role="alert">{saveError}</div>}
         <div className="drawer-foot">
           {!isCreating && canDelete && <button className="btn" disabled={isSaving} onClick={() => { if (confirm('Görev silinsin mi?')) { onDelete(task.id); onClose(); } }}>

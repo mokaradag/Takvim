@@ -1,3 +1,4 @@
+import { normalizeCommitChanges as normalizeChanges } from './commitMutationIntent.js';
 import 'server-only';
 import { normalizeTaskLifecycle } from '../../domain/taskLifecycle.js';
 import { businessDate } from '../../domain/calendar/businessDate.js';
@@ -9,7 +10,7 @@ import { CORPORATE_WBS_READ_ONLY_MESSAGE } from '../../domain/projectTypes.js';
 import { buildSessionCurrentUser } from '../../domain/identity/sessionUser.js';
 import { getTrustedSessionIdentity } from '../identity/currentUserProvider.js';
 import { resolveAuthMode } from '../identity/keycloakConfig.js';
-import { getSqlPool, sql, withSqlTransaction, afterSqlCommit } from '../db/pool.js';
+import { getSqlPool, sql, withSqlTransaction } from '../db/pool.js';
 import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { ServerPersistenceError } from '../errors.js';
 import { observePhase, recordPhaseDuration } from '../observability/observeOperation.js';
@@ -64,19 +65,6 @@ function isCorporateSource(value) {
   return String(value || '').toUpperCase() === 'CORPORATE';
 }
 
-function normalizeDelete(value) {
-  return typeof value === 'string' ? { id: value, version: null } : value;
-}
-function normalizeChanges(changes = {}) {
-  return {
-    projectUpserts: changes.projectUpserts || [],
-    projectDeletes: (changes.projectDeletes || []).map(normalizeDelete),
-    wbsUpserts: changes.wbsUpserts || [],
-    wbsDeletes: (changes.wbsDeletes || []).map(normalizeDelete),
-    taskUpserts: changes.taskUpserts || [],
-    taskDeletes: (changes.taskDeletes || []).map(normalizeDelete)
-  };
-}
 
 async function synchronizeCorporateProjects(executor, actorSicil) {
   const sync = request(executor);
@@ -98,19 +86,19 @@ function projectRow(executor, value) { return rowById(executor, 'MR_Projects', '
 async function projectRowForUpdate(executor, value) {
   const req = request(executor);
   req.input('id', sql.UniqueIdentifier, uuid(value));
-  return (await req.query('SELECT TOP (1) * FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK) WHERE ProjectId = @id;')).recordset[0] || null;
+  return (await req.query('SELECT TOP (1) * FROM dbo.MR_Projects WITH (HOLDLOCK) WHERE ProjectId = @id;')).recordset[0] || null;
 }
 function wbsRow(executor, value) { return rowById(executor, 'MR_WBS', 'WbsId', value); }
 async function wbsRowForUpdate(executor, value) {
   const req = request(executor);
   req.input('id', sql.UniqueIdentifier, uuid(value));
-  return (await req.query('SELECT TOP (1) * FROM dbo.MR_WBS WITH (UPDLOCK, HOLDLOCK) WHERE WbsId = @id;')).recordset[0] || null;
+  return (await req.query('SELECT TOP (1) * FROM dbo.MR_WBS WITH (HOLDLOCK) WHERE WbsId = @id;')).recordset[0] || null;
 }
 function taskRow(executor, value) { return rowById(executor, 'MR_Tasks', 'TaskId', value); }
 async function taskRowForUpdate(executor, value) {
   const req = request(executor);
   req.input('id', sql.UniqueIdentifier, uuid(value));
-  return (await req.query('SELECT TOP (1) * FROM dbo.MR_Tasks WITH (UPDLOCK, HOLDLOCK) WHERE TaskId = @id;')).recordset[0] || null;
+  return (await req.query('SELECT TOP (1) * FROM dbo.MR_Tasks WITH (HOLDLOCK) WHERE TaskId = @id;')).recordset[0] || null;
 }
 
 async function loadTaskPlanContext(executor, projectId, calendarId) {
@@ -905,7 +893,7 @@ function projectSnapshotRecordsets({
  * tek görev güncellemesini büyük veri kümelerinde uzun süre kilit altında
  * tutuyordu.
  */
-async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], wbsIds = [], taskIds = [] } = {}) {
+async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], wbsIds = [], taskIds = [], metadataProjectIds = [] } = {}) {
   const req = request(executor);
   req.input('sicil', sql.Int, auth.sicil);
   req.input('isAdmin', sql.Bit, auth.isSystemAdmin);
@@ -913,12 +901,16 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
   req.input('projectIds', sql.NVarChar(sql.MAX), projectIds.join(','));
   req.input('wbsIds', sql.NVarChar(sql.MAX), wbsIds.join(','));
   req.input('taskIds', sql.NVarChar(sql.MAX), taskIds.join(','));
+  req.input('metadataProjectIds', sql.NVarChar(sql.MAX), JSON.stringify(metadataProjectIds));
   const result = await req.query(`
     SET NOCOUNT ON;
 
     DROP TABLE IF EXISTS #RequestedProjects, #RequestedWbs, #RequestedTasks, #ExecutiveScope,
       #ScopeProjects, #ProjectRole, #TaskScopedProjects, #ProjectAuth, #TaskAssigneeFacts,
-      #DependencyTargets, #DirectoryNames;
+      #DependencyTargets, #DirectoryNames, #MetadataProjects;
+
+    CREATE TABLE #MetadataProjects(ProjectId uniqueidentifier PRIMARY KEY);
+    INSERT #MetadataProjects SELECT DISTINCT TRY_CONVERT(uniqueidentifier, value) FROM OPENJSON(@metadataProjectIds);
 
     CREATE TABLE #RequestedProjects(ProjectId uniqueidentifier PRIMARY KEY);
     CREATE TABLE #RequestedWbs(WbsId uniqueidentifier PRIMARY KEY);
@@ -967,7 +959,7 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
     ) parsed WHERE parsed.Id IS NOT NULL;
 
     INSERT #DependencyTargets(TaskId)
-    SELECT DISTINCT d.PredecessorTaskId FROM dbo.MR_TaskDependencies d
+    SELECT DISTINCT d.PredecessorTaskId FROM dbo.MR_TaskDependencies d WITH (READCOMMITTED)
     JOIN #RequestedTasks rt ON rt.TaskId = d.TaskId;
 
     -- Yönetim kapsamı TEK KEZ okunur. Aynı Sicil birden fazla kademede bulunabilir.
@@ -980,11 +972,11 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
     SELECT DISTINCT scoped.ProjectId FROM (
       SELECT rp.ProjectId FROM #RequestedProjects rp
       UNION
-      SELECT w.ProjectId FROM dbo.MR_WBS w JOIN #RequestedWbs rw ON rw.WbsId = w.WbsId
+      SELECT w.ProjectId FROM dbo.MR_WBS w WITH (READCOMMITTED) JOIN #RequestedWbs rw ON rw.WbsId = w.WbsId
       UNION
-      SELECT t.ProjectId FROM dbo.MR_Tasks t JOIN #RequestedTasks rt ON rt.TaskId = t.TaskId
+      SELECT t.ProjectId FROM dbo.MR_Tasks t WITH (READCOMMITTED) JOIN #RequestedTasks rt ON rt.TaskId = t.TaskId
       UNION
-      SELECT t.ProjectId FROM dbo.MR_Tasks t JOIN #DependencyTargets dt ON dt.TaskId = t.TaskId
+      SELECT t.ProjectId FROM dbo.MR_Tasks t WITH (READCOMMITTED) JOIN #DependencyTargets dt ON dt.TaskId = t.TaskId
     ) scoped;
 
     -- Rol ve açık yetki kararı proje başına TEK KEZ verilir.
@@ -993,18 +985,18 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       CASE WHEN @isAdmin = 1
         OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
         OR EXISTS (
-          SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
+          SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a WITH (READCOMMITTED)
           WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
         )
       THEN 1 ELSE 0 END,
       CASE WHEN accessGrant.AccessLevel = 'FULL' THEN 1 ELSE 0 END,
       CASE WHEN accessGrant.AccessLevel = 'READ' THEN 1 ELSE 0 END,
       CASE WHEN accessGrant.AccessLevel IS NOT NULL THEN 1 ELSE 0 END
-    FROM dbo.MR_Projects p
+    FROM dbo.MR_Projects p WITH (READCOMMITTED)
     JOIN #ScopeProjects sp ON sp.ProjectId = p.ProjectId
     OUTER APPLY (
       SELECT TOP (1) pa.AccessLevel
-      FROM dbo.MR_ProjectAccess pa
+      FROM dbo.MR_ProjectAccess pa WITH (READCOMMITTED)
       WHERE pa.ProjectId = p.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
     ) accessGrant
     WHERE p.IsActive = 1;
@@ -1015,24 +1007,30 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
     INSERT #TaskScopedProjects(ProjectId)
     SELECT DISTINCT scoped.ProjectId FROM (
       SELECT t.ProjectId
-      FROM dbo.MR_Tasks t
+      FROM dbo.MR_Tasks t WITH (READCOMMITTED)
       JOIN #ProjectRole candidate ON candidate.ProjectId = t.ProjectId
         AND candidate.IsRoleFull = 0 AND candidate.HasFullGrant = 0 AND candidate.HasReadGrant = 0
+        AND (t.TaskId IN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets)
+          OR t.ProjectId IN (SELECT ProjectId FROM #MetadataProjects))
       WHERE t.CreatedBySicil = @sicil
       UNION
       SELECT t.ProjectId
-      FROM dbo.MR_TaskAssignees ta
-      JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
+      FROM dbo.MR_TaskAssignees ta WITH (READCOMMITTED)
+      JOIN dbo.MR_Tasks t WITH (READCOMMITTED) ON t.TaskId = ta.TaskId
       JOIN #ProjectRole candidate ON candidate.ProjectId = t.ProjectId
         AND candidate.IsRoleFull = 0 AND candidate.HasFullGrant = 0 AND candidate.HasReadGrant = 0
+        AND (t.TaskId IN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets)
+          OR t.ProjectId IN (SELECT ProjectId FROM #MetadataProjects))
       WHERE ta.Sicil = @sicil
       UNION
       SELECT t.ProjectId
       FROM #ExecutiveScope es
-      JOIN dbo.MR_TaskAssignees ta ON ta.Sicil = es.EmployeeSicil
-      JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
+      JOIN dbo.MR_TaskAssignees ta WITH (READCOMMITTED) ON ta.Sicil = es.EmployeeSicil
+      JOIN dbo.MR_Tasks t WITH (READCOMMITTED) ON t.TaskId = ta.TaskId
       JOIN #ProjectRole candidate ON candidate.ProjectId = t.ProjectId
         AND candidate.IsRoleFull = 0 AND candidate.HasFullGrant = 0 AND candidate.HasReadGrant = 0
+        AND (t.TaskId IN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets)
+          OR t.ProjectId IN (SELECT ProjectId FROM #MetadataProjects))
     ) scoped;
 
     INSERT #ProjectAuth(ProjectId, AccessLevel, HasReadGrant, IsTaskScoped, IsVisible)
@@ -1056,7 +1054,7 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       CAST(MAX(CASE WHEN ta.Sicil = @sicil THEN 1 ELSE 0 END) AS bit),
       CAST(MAX(CASE WHEN es.EmployeeSicil IS NOT NULL THEN 1 ELSE 0 END) AS bit)
     FROM (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets) rt
-    LEFT JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = rt.TaskId
+    LEFT JOIN dbo.MR_TaskAssignees ta WITH (READCOMMITTED) ON ta.TaskId = rt.TaskId
     LEFT JOIN #ExecutiveScope es ON es.EmployeeSicil = ta.Sicil
     GROUP BY rt.TaskId;
 
@@ -1065,17 +1063,17 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
     INTO #DirectoryNames
     FROM (
       SELECT DISTINCT t.CreatedBySicil AS Sicil
-      FROM dbo.MR_Tasks t JOIN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets) rt ON rt.TaskId = t.TaskId
+      FROM dbo.MR_Tasks t WITH (READCOMMITTED) JOIN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets) rt ON rt.TaskId = t.TaskId
       WHERE t.CreatedBySicil IS NOT NULL
       UNION
       SELECT DISTINCT ta.Sicil
-      FROM dbo.MR_TaskAssignees ta JOIN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets) rt ON rt.TaskId = ta.TaskId
+      FROM dbo.MR_TaskAssignees ta WITH (READCOMMITTED) JOIN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets) rt ON rt.TaskId = ta.TaskId
     ) needed
-    LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = needed.Sicil;
+    LEFT JOIN dbo.MR_V_PeopleDirectory pd WITH (READCOMMITTED) ON pd.Sicil = needed.Sicil;
     CREATE CLUSTERED INDEX IX_DirectoryNames_Sicil ON #DirectoryNames(Sicil);
 
     SELECT p.*, pa.AccessLevel
-    FROM dbo.MR_Projects p
+    FROM dbo.MR_Projects p WITH (READCOMMITTED)
     JOIN #RequestedProjects rp ON rp.ProjectId = p.ProjectId
     JOIN #ProjectAuth pa ON pa.ProjectId = p.ProjectId
     WHERE pa.IsVisible = 1;
@@ -1083,14 +1081,33 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
     -- Etiketler de yetkili proje kümesiyle sınırlanır: görünmeyen projenin
     -- etiketleri istemciye hiç taşınmaz.
     SELECT pt.ProjectId, pt.TagName, pt.ColorToken, pt.IconKey, pt.SortOrder
-    FROM dbo.MR_ProjectTags pt
+    FROM dbo.MR_ProjectTags pt WITH (READCOMMITTED)
     JOIN #RequestedProjects rp ON rp.ProjectId = pt.ProjectId
     JOIN #ProjectAuth pa ON pa.ProjectId = pt.ProjectId
     WHERE pa.IsVisible = 1
     ORDER BY pt.ProjectId, pt.SortOrder, pt.TagName;
 
+    ;WITH RequiredWbs AS (
+      SELECT w.WbsId, w.ParentWbsId FROM dbo.MR_WBS w WITH (READCOMMITTED)
+      WHERE w.WbsId IN (SELECT WbsId FROM #RequestedWbs)
+        OR EXISTS (
+          SELECT 1 FROM dbo.MR_Tasks t WITH (READCOMMITTED)
+          JOIN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets) rt ON rt.TaskId = t.TaskId
+          JOIN #ProjectAuth pa ON pa.ProjectId = t.ProjectId
+          JOIN #TaskAssigneeFacts facts ON facts.TaskId = t.TaskId
+          WHERE t.WbsId = w.WbsId AND (pa.AccessLevel = 'FULL' OR pa.HasReadGrant = 1
+            OR t.CreatedBySicil = @sicil OR facts.IsOwnAssignee = 1 OR facts.IsScopeAssignee = 1)
+        )
+      UNION ALL
+      SELECT parent.WbsId, parent.ParentWbsId FROM dbo.MR_WBS parent WITH (READCOMMITTED) JOIN RequiredWbs child ON child.ParentWbsId = parent.WbsId
+    )
+    INSERT #RequestedWbs(WbsId)
+    SELECT DISTINCT WbsId FROM RequiredWbs
+    WHERE WbsId NOT IN (SELECT WbsId FROM #RequestedWbs)
+    OPTION (MAXRECURSION 32767);
+
     SELECT w.*
-    FROM dbo.MR_WBS w
+    FROM dbo.MR_WBS w WITH (READCOMMITTED)
     JOIN #RequestedWbs rw ON rw.WbsId = w.WbsId
     JOIN #ProjectAuth pa ON pa.ProjectId = w.ProjectId
     WHERE pa.AccessLevel = 'FULL' OR pa.HasReadGrant = 1 OR pa.IsTaskScoped = 1;
@@ -1101,10 +1118,10 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       CASE WHEN t.CreatedBySicil = @sicil THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS IsCurrentUserCreator,
       CASE WHEN creatorAuth.IdentityVisible = 1 THEN t.CreatedBySicil ELSE NULL END AS VisibleCreatedBySicil,
       creator.DisplayName AS CreatedByName
-    FROM dbo.MR_Tasks t
+    FROM dbo.MR_Tasks t WITH (READCOMMITTED)
     JOIN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets) rt ON rt.TaskId = t.TaskId
     JOIN #ProjectAuth pa ON pa.ProjectId = t.ProjectId
-    JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
+    JOIN dbo.MR_Projects p WITH (READCOMMITTED) ON p.ProjectId = t.ProjectId
     JOIN #TaskAssigneeFacts facts ON facts.TaskId = t.TaskId
     CROSS APPLY (
       SELECT CAST(CASE WHEN pa.AccessLevel = 'FULL' OR pa.HasReadGrant = 1
@@ -1125,9 +1142,9 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       CASE WHEN pd.DisplayName IS NOT NULL THEN ta.Sicil ELSE NULL END AS AvatarEmployeeNo,
       COALESCE(pd.DisplayName, CASE WHEN auth.IdentityVisible = 1
         THEN CONVERT(varchar(20), ta.Sicil) ELSE NULL END) AS DisplayName
-    FROM dbo.MR_TaskAssignees ta
+    FROM dbo.MR_TaskAssignees ta WITH (READCOMMITTED)
     JOIN (SELECT TaskId FROM #RequestedTasks UNION SELECT TaskId FROM #DependencyTargets) rt ON rt.TaskId = ta.TaskId
-    JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
+    JOIN dbo.MR_Tasks t WITH (READCOMMITTED) ON t.TaskId = ta.TaskId
     JOIN #ProjectAuth pa ON pa.ProjectId = t.ProjectId
     JOIN #TaskAssigneeFacts facts ON facts.TaskId = ta.TaskId
     LEFT JOIN #DirectoryNames pd ON pd.Sicil = ta.Sicil
@@ -1145,12 +1162,12 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
     ORDER BY ta.TaskId, ta.Sicil;
 
     SELECT d.*
-    FROM dbo.MR_TaskDependencies d
+    FROM dbo.MR_TaskDependencies d WITH (READCOMMITTED)
     JOIN #RequestedTasks rt ON rt.TaskId = d.TaskId
-    JOIN dbo.MR_Tasks successor ON successor.TaskId = d.TaskId
+    JOIN dbo.MR_Tasks successor WITH (READCOMMITTED) ON successor.TaskId = d.TaskId
     JOIN #ProjectAuth pa ON pa.ProjectId = successor.ProjectId
     JOIN #TaskAssigneeFacts facts ON facts.TaskId = successor.TaskId
-    JOIN dbo.MR_Tasks predecessor ON predecessor.TaskId = d.PredecessorTaskId
+    JOIN dbo.MR_Tasks predecessor WITH (READCOMMITTED) ON predecessor.TaskId = d.PredecessorTaskId
     JOIN #ProjectAuth predecessorAuth ON predecessorAuth.ProjectId = predecessor.ProjectId
     JOIN #TaskAssigneeFacts predecessorFacts ON predecessorFacts.TaskId = predecessor.TaskId
     WHERE (pa.AccessLevel = 'FULL' OR pa.HasReadGrant = 1
@@ -1160,7 +1177,7 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
 
     DROP TABLE #RequestedProjects, #RequestedWbs, #RequestedTasks, #ExecutiveScope,
       #ScopeProjects, #ProjectRole, #TaskScopedProjects, #ProjectAuth, #TaskAssigneeFacts,
-      #DependencyTargets, #DirectoryNames;
+      #DependencyTargets, #DirectoryNames, #MetadataProjects;
   `);
 
   const [projectRows = [], tagRows = [], wbsRows = [], taskRows = [], assigneeRows = [], dependencyRows = []] = result.recordsets || [];
@@ -1253,7 +1270,8 @@ async function loadAuthoritativeMutationRows(executor, auth, { projectIds = [], 
       // Görev künyesi: kartta "kim, ne zaman oluşturdu" satırını besler.
       createdByName: row.CreatedByName == null ? null : String(row.CreatedByName).trim() || null,
       createdAt: row.CreatedAt ? new Date(row.CreatedAt).toISOString() : null,
-      ...(taskIds.some((taskId) => sameActualId(taskId, row.TaskId)) ? { deps: dependencies.get(id(row.TaskId)) || [] } : {}),
+      deps: dependencies.get(id(row.TaskId)) || [],
+      dependenciesLoaded: taskIds.some((taskId) => sameActualId(taskId, row.TaskId)),
       version: encodeVersion(row.RowVersion)
     }))
   };
@@ -1608,7 +1626,7 @@ async function hasAuthoritativeAssigneeTaskCreateScope(executor, actor, projectI
   scopeCheck.input('sicil', sql.Int, actor.sicil);
   const result = await scopeCheck.query(`
     SELECT TOP (1) ta.TaskId
-    FROM dbo.MR_TaskAssignees ta WITH (UPDLOCK, HOLDLOCK)
+    FROM dbo.MR_TaskAssignees ta WITH (HOLDLOCK)
     JOIN dbo.MR_Tasks t WITH (HOLDLOCK) ON t.TaskId = ta.TaskId
     JOIN dbo.MR_Projects p WITH (HOLDLOCK)
       ON p.ProjectId = t.ProjectId AND p.IsActive = 1
@@ -1729,12 +1747,12 @@ async function hasRelatedTasksOutsideScope(executor, actor, taskId, { dependenci
   const result = await req.query(`
     SELECT TOP (1) related.TaskId
     FROM (
-      SELECT TaskId FROM dbo.MR_Tasks WITH (UPDLOCK, HOLDLOCK) WHERE RecurrenceParentTaskId = @taskId
+      SELECT TaskId FROM dbo.MR_Tasks WITH (HOLDLOCK) WHERE RecurrenceParentTaskId = @taskId
       ${dependencies ? `UNION
-      SELECT TaskId FROM dbo.MR_TaskDependencies WITH (UPDLOCK, HOLDLOCK) WHERE PredecessorTaskId = @taskId
+      SELECT TaskId FROM dbo.MR_TaskDependencies WITH (HOLDLOCK) WHERE PredecessorTaskId = @taskId
       UNION
       SELECT PredecessorTaskId AS TaskId
-      FROM dbo.MR_TaskDependencies WITH (UPDLOCK, HOLDLOCK)
+      FROM dbo.MR_TaskDependencies WITH (HOLDLOCK)
       WHERE TaskId = @taskId` : ''}
     ) related
     WHERE related.TaskId <> @taskId
@@ -1745,9 +1763,9 @@ async function hasRelatedTasksOutsideScope(executor, actor, taskId, { dependenci
           AND owned.CreatedBySicil = @managerSicil
       )
       AND (
-        NOT EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees ta WITH (UPDLOCK, HOLDLOCK) WHERE ta.TaskId = related.TaskId)
+        NOT EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees ta WITH (HOLDLOCK) WHERE ta.TaskId = related.TaskId)
         OR EXISTS (
-          SELECT 1 FROM dbo.MR_TaskAssignees ta WITH (UPDLOCK, HOLDLOCK)
+          SELECT 1 FROM dbo.MR_TaskAssignees ta WITH (HOLDLOCK)
           WHERE ta.TaskId = related.TaskId
             AND NOT EXISTS (
               SELECT 1 FROM dbo.MR_V_ExecutiveScope es
@@ -1773,7 +1791,7 @@ async function taskAssigneeSicilsForUpdate(executor, taskId) {
   req.input('taskId', sql.UniqueIdentifier, taskId);
   const result = await req.query(`
     SELECT Sicil
-    FROM dbo.MR_TaskAssignees WITH (UPDLOCK, HOLDLOCK)
+    FROM dbo.MR_TaskAssignees WITH (HOLDLOCK)
     WHERE TaskId = @taskId;
   `);
   return (result.recordset || []).map((row) => Number(row.Sicil));
@@ -2755,7 +2773,7 @@ async function deleteProject(executor, actor, entry, correlationId) {
   taskCheck.input('projectId', sql.UniqueIdentifier, projectId);
   const taskCount = Number((await taskCheck.query(`
     SELECT COUNT_BIG(*) AS TaskCount
-    FROM dbo.MR_Tasks WITH (UPDLOCK, HOLDLOCK)
+    FROM dbo.MR_Tasks WITH (HOLDLOCK)
     WHERE ProjectId = @projectId;
   `)).recordset?.[0]?.TaskCount ?? 0);
   if (taskCount > 0) {
@@ -3005,13 +3023,16 @@ export function createSqlAppRepository() {
           ...propagatedTaskIds,
           ...relatedTaskIds
         ]);
-        return afterSqlCommit(() => withSqlTransaction(async (readback) => {
-          const readActor = await loadAuthorizationContext(readback);
+        const readback = transaction;
+        {
+          // Son yetki ve satır sürümleri aynı atomik işlemin parçasıdır.
+          const readActor = await loadAuthorizationContext(readback, { resourceProjectIds: [...projectIds], resourceTaskIds: [...taskIds] });
           const authoritative = await observePhase('phase.commit.authoritative-response', () => loadAuthoritativeMutationRows(
             readback, readActor, {
               projectIds: [...projectIds],
               wbsIds: [...wbsIds],
-              taskIds: [...taskIds]
+              taskIds: [...taskIds],
+              metadataProjectIds: changes.projectUpserts.map((value) => id(value.id))
             }
           ));
           const invisibleChangedProjectIds = [...projectIds]
@@ -3030,7 +3051,7 @@ export function createSqlAppRepository() {
             taskUpserts: authoritative.taskUpserts,
             taskDeletes: changes.taskDeletes.map((value) => id(value.id))
           };
-        }));
+        }
       });
     }
   };

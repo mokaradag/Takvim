@@ -292,19 +292,14 @@ test('WBS deletion and task reassignment can be persisted atomically', async () 
   assert.equal(selectTaskById(reloaded.tasks, 't2').wbsId, 'p1-root');
 });
 
-test('a cross-project dependency introduced through persistence invalidates only the affected project', async () => {
+test('a cross-project dependency introduced through persistence is rejected atomically', async () => {
   const repository = createMockRepository(makeSeed());
   const state = await loadState(repository);
   const task = selectTaskById(state.tasks, 't2');
-  await repository.commitChanges({
-    taskUpserts: [{ ...task, deps: [{ predecessorId: 't3', type: 'FS', lagDays: 0 }] }]
-  });
+  await assert.rejects(repository.commitChanges({ taskUpserts: [{ ...task, deps: [{ predecessorId: 't3', type: 'FS', lagDays: 0 }] }] }), /aynı projede/);
   const reloaded = await loadState(repository);
-  const schedule = scheduleFor(reloaded);
-  assert.equal(selectProjectSchedule(schedule, 'p1').status, 'invalid');
-  assert.equal(selectProjectSchedule(schedule, 'p1').error.code, 'CROSS_PROJECT_DEPENDENCY');
-  assert.equal(selectProjectSchedule(schedule, 'p2').status, 'valid');
-  assert.equal(schedule.status, 'warning');
+  assert.deepEqual(selectTaskById(reloaded.tasks, 't2').deps, task.deps);
+  assert.equal(selectProjectSchedule(scheduleFor(reloaded), 'p2').status, 'valid');
 });
 
 test('an unknown-project task produces a warning without blocking valid project schedules', async () => {

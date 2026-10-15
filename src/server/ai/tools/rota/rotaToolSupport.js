@@ -70,8 +70,8 @@ export function accessExplanation(access) {
     label: accessLabelOf(level),
     reasons: [...new Set((access?.reasons || []).map(accessReasonLabel))],
     completeTaskView: isCompleteTaskView(access),
-    // Birlikte erişim bayrağıdır; baz plan FULL, bağımlılık görünür uçlarla sınırlıdır.
-    dependenciesAndBaselines: level === 'FULL'
+    dependencies: level !== 'NONE',
+    baselines: level === 'FULL'
   };
 }
 

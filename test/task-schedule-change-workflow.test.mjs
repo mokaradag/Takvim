@@ -696,7 +696,7 @@ test('sınırlı oluşturucu kendi oluşturduğu sorumlusuz yinelemeyi ayırarak
   }
 });
 
-test('görev silme, yıkıcı deyimlerden önce görev ve ilişki aralıklarını kilitler', () => {
+test('görev silme kanonik kilitli kaynakları yeniden okur', () => {
   const source = readFileSync(new URL('../src/server/repository/sqlAppRepository.js', import.meta.url), 'utf8');
   const start = source.indexOf('async function deleteTask');
   const end = source.indexOf('async function deleteWbs');
@@ -711,9 +711,9 @@ test('görev silme, yıkıcı deyimlerden önce görev ve ilişki aralıkların�
   assert.match(body, /taskRowForUpdate\(executor, taskId\)/);
   assert.match(body, /taskAssigneeSicilsForUpdate\(executor, taskId\)/);
   assert.match(body, /hasRelatedTasksOutsideScope\(executor, actor, taskId, \{ dependencies: false \}\)/);
-  assert.match(scopeBody, /MR_TaskDependencies WITH \(UPDLOCK, HOLDLOCK\).*PredecessorTaskId = @taskId/s);
-  assert.match(scopeBody, /MR_TaskDependencies WITH \(UPDLOCK, HOLDLOCK\)[\s\S]*WHERE TaskId = @taskId/);
-  assert.match(scopeBody, /MR_Tasks WITH \(UPDLOCK, HOLDLOCK\).*RecurrenceParentTaskId = @taskId/s);
+  assert.match(scopeBody, /MR_TaskDependencies WITH \(HOLDLOCK\).*PredecessorTaskId = @taskId/s);
+  assert.match(scopeBody, /MR_TaskDependencies WITH \(HOLDLOCK\)[\s\S]*WHERE TaskId = @taskId/);
+  assert.match(scopeBody, /MR_Tasks WITH \(HOLDLOCK\).*RecurrenceParentTaskId = @taskId/s);
 });
 
 test('WBS kataloğu görev kapsamlı projeleri satır başına görev sorgulamadan önceden hesaplar', () => {

@@ -1,3 +1,4 @@
+import { normalizeCommitChanges as normalizeChanges, MUTATION_INTENT } from './commitMutationIntent.js';
 import 'server-only';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { prepareScopedTaskDependencies, TASK_DEPENDENCY_CONTEXT } from './taskDependencyAccess.js';
@@ -6,7 +7,6 @@ import { observePhase } from '../observability/observeOperation.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import {
-  findFinalTaskReferenceIssue,
   orderTaskUpsertsByDependencies
 } from './taskCommitPlanning.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
@@ -25,24 +25,8 @@ function rowId(value) {
   return value == null ? null : (canonicalActualId(value) ?? String(value));
 }
 
-function normalizeDelete(value) {
-  return typeof value === 'string' ? { id: value, version: null } : value;
-}
 
-function normalizeChanges(changes = {}) {
-  return {
-    projectUpserts: changes.projectUpserts || [],
-    projectDeletes: (changes.projectDeletes || []).map(normalizeDelete),
-    wbsUpserts: changes.wbsUpserts || [],
-    wbsDeletes: (changes.wbsDeletes || []).map(normalizeDelete),
-    taskUpserts: changes.taskUpserts || [],
-    taskDeletes: (changes.taskDeletes || []).map(normalizeDelete)
-  };
-}
-
-function request(executor) {
-  return executor.request();
-}
+function request(executor) { return executor.request(); }
 
 async function rowForUpdate(executor, table, idColumn, value, label) {
   const entityId = uuid(value, label);
@@ -52,7 +36,7 @@ async function rowForUpdate(executor, table, idColumn, value, label) {
   req.input('entityId', sql.UniqueIdentifier, entityId);
   const result = await req.query(`
     SELECT TOP (1) *
-    FROM dbo.${safeTable} WITH (${table === 'MR_Projects' ? 'HOLDLOCK' : 'UPDLOCK, HOLDLOCK'})
+    FROM dbo.${safeTable} WITH (HOLDLOCK)
     WHERE ${safeColumn} = @entityId;
   `);
   return result.recordset[0] || null;
@@ -157,7 +141,7 @@ async function loadWbsRowsForUpdate(executor, projectId) {
   req.input('projectId', sql.UniqueIdentifier, projectId);
   return (await req.query(`
     SELECT WbsId, ProjectId, ParentWbsId
-    FROM dbo.MR_WBS WITH (UPDLOCK, HOLDLOCK)
+    FROM dbo.MR_WBS WITH (READCOMMITTED)
     WHERE ProjectId = @projectId
     ORDER BY WbsId;
   `)).recordset;
@@ -226,21 +210,6 @@ async function assertSingleRootWbs(executor, changes) {
   }
 }
 
-function taskReferenceMessage(issue) {
-  const messages = {
-    TASK_IDENTITY_REQUIRED: 'Görev ve proje kimlikleri zorunludur.',
-    DUPLICATE_TASK_UPSERT: 'Aynı görev bir değişiklik kümesinde birden fazla kez güncellenemez.',
-    TASK_UPSERT_DELETE_CONFLICT: 'Aynı görev tek değişiklik kümesinde hem güncellenip hem silinemez.',
-    DEPENDENCY_PREDECESSOR_REQUIRED: 'Bağımlılık için öncül görev seçilmelidir.',
-    DUPLICATE_DEPENDENCY: 'Aynı öncül görev bağımlılığı birden fazla kez eklenemez.',
-    SELF_DEPENDENCY: 'Bir görev kendisine bağımlı olamaz.',
-    DEPENDENCY_TARGET_DELETED: 'Silinen görev aynı değişiklik kümesinde öncül olarak kullanılamaz.',
-    DEPENDENCY_TARGET_NOT_FOUND: 'Öncül görev bulunamadı.',
-    CROSS_PROJECT_DEPENDENCY: 'Bağımlılık görevleri son durumda aynı projede olmalıdır.'
-  };
-  return messages[issue.code] || 'Görev bağımlılıkları geçerli değildir.';
-}
-
 async function planTaskCommits(executor, changes) {
   const normalizedUpserts = changes.taskUpserts.map((task) => ({
     ...task,
@@ -258,47 +227,8 @@ async function planTaskCommits(executor, changes) {
     ...entry,
     id: uuid(entry.id, 'Görev kimliği')
   }));
-  const referencedTaskIds = new Set([
-    ...normalizedUpserts.map((task) => task.id),
-    ...taskDeletes.map((entry) => entry.id),
-    ...normalizedUpserts
-      .filter((task) => task.recurrenceParentId)
-      .map((task) => task.recurrenceParentId)
-  ]);
-  const existingTaskProjects = new Map();
-
-  for (const taskId of [...referencedTaskIds].sort()) {
-    const row = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', taskId, 'Görev kimliği');
-    if (row) existingTaskProjects.set(taskId, rowId(row.ProjectId));
-  }
-
-  const taskUpserts = [];
-  for (const task of normalizedUpserts) {
-    const exists = existingTaskProjects.has(task.id);
-    const moved = exists && existingTaskProjects.get(task.id) !== task.projectId;
-    const dependencyMutation = !exists || task.dependencyMutation !== false || moved;
-    taskUpserts.push({ ...task, dependencyMutation });
-  }
-  const validatedUpserts = taskUpserts.map((task) => (
-    task.dependencyMutation === false ? { ...task, deps: [] } : task
-  ));
-
-  for (const predecessorId of [...new Set(validatedUpserts
-    .flatMap((task) => task.deps.map((dependency) => dependency.predecessorId)))].sort()) {
-    if (existingTaskProjects.has(predecessorId)) continue;
-    const row = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', predecessorId, 'Görev kimliği');
-    if (row) existingTaskProjects.set(predecessorId, rowId(row.ProjectId));
-  }
-
-  const issue = findFinalTaskReferenceIssue({
-    existingTaskProjects,
-    taskUpserts: validatedUpserts,
-    taskDeletes
-  });
-  if (issue) {
-    throw new ServerPersistenceError('MUTATION_FAILED', taskReferenceMessage(issue), { details: issue.code.startsWith('DEPENDENCY') || issue.code === 'CROSS_PROJECT_DEPENDENCY' ? undefined : issue });
-  }
-
+  const taskUpserts = normalizedUpserts.map((task) => ({ ...task,
+    dependencyMutation: task[MUTATION_INTENT]?.dependencies ?? task.dependencyMutation }));
   return {
     ...changes,
     taskUpserts: orderTaskUpsertsByDependencies(taskUpserts),

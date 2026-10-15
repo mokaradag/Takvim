@@ -1,3 +1,5 @@
+import { normalizeTaskRecord } from '../normalizeTaskRecord.js';
+import { reconcileDependencyGraph, reconcileTaskDependencies, pruneDeletedDependencies } from '../../domain/dependencyGraph.js';
 import {
   AppRepositoryError,
   REPOSITORY_ERROR_CODES
@@ -47,12 +49,12 @@ function normalizeMockTask(task = {}) {
 function normalizeMockSnapshot(seed) {
   const snapshot = clone(seed);
   snapshot.projects = (snapshot.projects || []).map(normalizeMockProject);
-  snapshot.tasks = (snapshot.tasks || []).map(normalizeMockTask);
+  snapshot.tasks = (snapshot.tasks || []).map((task) => normalizeTaskRecord(normalizeMockTask(task), snapshot));
   return snapshot;
 }
 function normalizeChanges(changes = {}) {
   const normalized = {
-    taskUpserts: clone(changes.taskUpserts || []).map(normalizeMockTask),
+    taskUpserts: clone(changes.taskUpserts || []),
     taskDeletes: [...new Set((changes.taskDeletes || []).map(normalizeDelete).filter(Boolean))],
     wbsUpserts: clone(changes.wbsUpserts || []),
     wbsDeletes: [...new Set((changes.wbsDeletes || []).map(normalizeDelete).filter(Boolean))]
@@ -91,23 +93,6 @@ function applyCollectionChanges(items, upserts = [], deletes = [], { prependNew 
   const updated = items.filter((item) => !deleted.has(item.id)).map((item) => upsertsById.get(item.id) || item);
   const additions = upserts.filter((item) => !existingIds.has(item.id) && !deleted.has(item.id));
   return prependNew ? [...additions, ...updated] : [...updated, ...additions];
-}
-function invalidatedPredecessorIds(beforeTasks, upserts, deletes) {
-  const invalidated = new Set(deletes || []);
-  const beforeById = new Map((beforeTasks || []).map((task) => [task.id, task]));
-  for (const task of upserts || []) {
-    const before = beforeById.get(task.id);
-    if (before && before.projectId !== task.projectId) invalidated.add(task.id);
-  }
-  return invalidated;
-}
-function removePredecessorReferences(tasks, predecessorIds) {
-  if (!predecessorIds.size) return tasks;
-  return tasks.map((task) => {
-    const dependencies = task.deps || [];
-    const filtered = dependencies.filter((dependency) => !predecessorIds.has(dependency.predecessorId));
-    return filtered.length === dependencies.length ? task : { ...task, deps: filtered };
-  });
 }
 function dependenciesChanged(before, after) {
   return JSON.stringify(before?.deps || []) !== JSON.stringify(after?.deps || []);
@@ -167,9 +152,28 @@ export function createMockRepository(seed = DEFAULT_SEED, options = {}) {
       assertNoConflictingChange(normalized.taskUpserts, normalized.taskDeletes, 'görev');
       assertNoConflictingChange(normalized.wbsUpserts, normalized.wbsDeletes, 'WBS düğümü');
       candidate.projects = applyCollectionChanges(candidate.projects || [], normalized.projectUpserts, normalized.projectDeletes);
-      const invalidated = invalidatedPredecessorIds(beforeTasks, normalized.taskUpserts, normalized.taskDeletes);
+      const deletedIds = new Set(normalized.taskDeletes);
+      normalized.taskUpserts = normalized.taskUpserts.map((task) => {
+        const before = beforeTasksById.get(task.id);
+        const deps = before && task.dependencyMutation === false ? before.deps || []
+          : reconcileTaskDependencies(before?.deps, task, { replace: !task.dependencyChanges, deletedIds }).deps;
+        return { ...task, deps };
+      });
+      const affectedProjects = new Set(normalized.taskUpserts.flatMap((task) => [task.projectId, beforeTasksById.get(task.id)?.projectId]));
+      for (const taskId of deletedIds) affectedProjects.add(beforeTasksById.get(taskId)?.projectId);
+      const graph = reconcileDependencyGraph({
+        storedEdges: beforeTasks.filter((task) => affectedProjects.has(task.projectId)).flatMap((task) => (task.deps || []).map((dep) => ({ ...dep, taskId: task.id }))),
+        taskProjects: new Map(beforeTasks.map((task) => [task.id, task.projectId])),
+        taskUpserts: normalized.taskUpserts, deletedIds
+      });
+      if (graph.invalid || graph.cycle.length || normalized.taskUpserts.some((task) => task.deps.length > 500)
+        || normalized.taskUpserts.reduce((n, task) => n + task.deps.length, 0) > 5000) {
+        throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+          message: graph.invalid ? 'Bağımlılık görevleri son durumda aynı projede olmalıdır.' : 'Bağımlılık kısıtları sağlanamadı.', operation: 'commitChanges' });
+      }
+      normalized.taskUpserts = normalized.taskUpserts.map(normalizeMockTask);
       const appliedTasks = applyCollectionChanges(candidate.tasks || [], normalized.taskUpserts, normalized.taskDeletes, { prependNew: true });
-      candidate.tasks = removePredecessorReferences(appliedTasks, invalidated);
+      candidate.tasks = pruneDeletedDependencies(appliedTasks, deletedIds);
       candidate.wbs = applyCollectionChanges(candidate.wbs || [], normalized.wbsUpserts, normalized.wbsDeletes);
       // Etiket kataloğu değiştiğinde görev anahtar sözcükleri Gerçek Sistem'de
       // olduğu gibi DEPO sınırında hizalanır; iki veri kipi aynı planı uygular.

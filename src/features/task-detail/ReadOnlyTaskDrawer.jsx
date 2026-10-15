@@ -26,14 +26,14 @@ function ReadOnlyField({ label, value }) {
 }
 
 export function ReadOnlyTaskDrawer({ task, onClose, tasks = [], dateFormat, onUpdateRelatedTask,
-  canEditTaskDependencies = () => false, onSave, hasUnsavedChanges = false, isSaving = false, saveError }) {
+  canEditTaskDependencies = () => false, onRefreshDependencies, onSave, hasUnsavedChanges = false, isSaving = false, saveError }) {
   const people = useAllPeople();
   const wbs = useAllWbs();
   const color = projectColorVar(task.proje);
   const assigneeNames = taskAssigneeDisplayNames(task);
 
   const drawerRef = useRef(null);
-  useModalFocusTrap({ containerRef: drawerRef, initialFocusRef: drawerRef, priority: 310, onClose });
+  useModalFocusTrap({ containerRef: drawerRef, initialFocusRef: drawerRef, priority: 310, onClose, blocked: isSaving });
 
   return (
     <>
@@ -91,7 +91,10 @@ export function ReadOnlyTaskDrawer({ task, onClose, tasks = [], dateFormat, onUp
               </>}
             </div>
 
-            {onUpdateRelatedTask && <fieldset disabled={isSaving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+            {task.dependenciesLoaded === false && <div role="status" className="muted">
+              İlişkiler henüz tam yüklenmedi. <button className="btn" disabled={isSaving} onClick={onRefreshDependencies}>Verileri yenile</button>
+            </div>}
+            {task.dependenciesLoaded !== false && onUpdateRelatedTask && <fieldset disabled={isSaving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
               <div className="label">İlişkiler ve bağımlılıklar</div>
               <RelEditor task={task} tasks={tasks} wbs={wbs} dateFormat={dateFormat}
                 allowPredecessorEdits={false} onUpdateTask={onUpdateRelatedTask} canEditTask={canEditTaskDependencies} />

@@ -1,6 +1,8 @@
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { ServerPersistenceError } from '../errors.js';
-import { findDependencyCycle } from './dependencyGraphValidation.js';
+import { reconcileDependencyGraph, reconcileTaskDependencies } from '../../domain/dependencyGraph.js';
+import { normalizeCommitChanges, MUTATION_INTENT } from './commitMutationIntent.js';
+import { sql } from '../db/pool.js';
 import { getTrustedCurrentSicil } from '../identity/currentUserProvider.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { lockCommitResources } from './commitResourceLocks.js';
@@ -20,15 +22,44 @@ function canReadTask(actor, row) {
 }
 
 /** Görevler önce kilitlenir; içerik kaydı ve açık ilişki deltası ayrı uygulanır. */
-export async function prepareScopedTaskDependencies(executor, changes) {
+export async function prepareScopedTaskDependencies(executor, input) {
+  const changes = normalizeCommitChanges(input);
   await getTrustedCurrentSicil();
+  if (changes.projectDeletes.length) {
+    const identity = await loadAuthorizationContext(executor, { resourceProjectIds: [], resourceTaskIds: [] });
+    if (!identity.isSystemAdmin) throw new ServerPersistenceError('FORBIDDEN', 'Projeyi yalnızca sistem yöneticisi silebilir.');
+  }
   const upserts = changes.taskUpserts || [];
-  const { rows, dependencies, projectIds } = await lockCommitResources(executor, changes);
+  const { rows, dependencies, projectIds } = await lockCommitResources(executor, changes, {
+    preflight: async ({ rows, projectIds }) => {
+      const actor = await loadAuthorizationContext(executor, { resourceProjectIds: projectIds, resourceTaskIds: [...rows.keys()] });
+      for (const task of [...upserts, ...changes.taskDeletes]) {
+        const row = rows.get(key(task.id));
+        if (row && !canReadTask(actor, row)) throw new ServerPersistenceError('FORBIDDEN', 'Görev bu işlem için kullanılamıyor.');
+      }
+      const creates = upserts.filter((task) => !rows.has(key(task.id)) && !hasFullAccess(actor, task.projectId));
+      if (creates.length && !actor.isExecutive) {
+        const req = executor.request();
+        req.input('sicil', sql.Int, actor.sicil);
+        req.input('createScopeProjectIds', sql.NVarChar(sql.MAX), [...new Set(creates.map((task) => key(task.projectId)))].join(','));
+        const result = await req.query(`/* commit-create-scope-preflight */
+          SELECT DISTINCT t.ProjectId FROM dbo.MR_Tasks t WITH (READCOMMITTED)
+          JOIN dbo.MR_TaskAssignees ta WITH (READCOMMITTED) ON ta.TaskId = t.TaskId
+          JOIN dbo.MR_Projects p WITH (READCOMMITTED) ON p.ProjectId = t.ProjectId AND p.IsActive = 1
+          WHERE ta.Sicil = @sicil AND t.ProjectId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@createScopeProjectIds, ','));
+        `);
+        const allowed = new Set((result.recordset || []).map((row) => key(row.ProjectId)));
+        if (creates.some((task) => !allowed.has(key(task.projectId)))) throw new ServerPersistenceError('FORBIDDEN', 'Görev bu işlem için kullanılamıyor.');
+      }
+    }
+  });
   const actor = await loadAuthorizationContext(executor, { resourceProjectIds: projectIds, resourceTaskIds: [...rows.keys()] });
   const storedByTask = new Map();
+  const storedRowsByTask = new Map();
   for (const row of dependencies) {
     const taskId = key(row.TaskId);
-    if (!storedByTask.has(taskId)) storedByTask.set(taskId, []);
+    if (!storedByTask.has(taskId)) { storedByTask.set(taskId, []); storedRowsByTask.set(taskId, []); }
+    storedRowsByTask.get(taskId).push(row);
     storedByTask.get(taskId).push({ predecessorId: key(row.PredecessorTaskId), type: row.DependencyType,
       lagDays: row.LagDays, lagValue: row.LagValue, lagUnit: row.LagUnit });
   }
@@ -36,13 +67,16 @@ export async function prepareScopedTaskDependencies(executor, changes) {
     .map((task) => [key(task.id), key(task.projectId)]));
   const finalProjects = new Map(upserts.map((task) => [key(task.id), key(task.projectId)]));
   const deletedIds = new Set((changes.taskDeletes || []).map((t) => key(t.id)));
+  const completeGraph = projectIds.every((projectId) => hasFullAccess(actor, projectId)
+    || actor.effective.access.get(key(projectId))?.reasons.includes('MANUAL_GRANT'));
+  const constraintError = (message) => new ServerPersistenceError('MUTATION_FAILED', completeGraph ? message : 'İlişki değişikliği uygulanamadı. Bağımlılık kısıtlarını kontrol edin.');
   const taskUpserts = upserts.map((task) => {
     const before = rows.get(key(task.id));
     const stored = storedByTask.get(key(task.id)) || [];
     if (before && !canReadTask(actor, before)) {
       throw new ServerPersistenceError('FORBIDDEN', 'Görev bu işlem için kullanılamıyor.');
     }
-    if (before && task.dependencyMutation === false) {
+    if (before && !task[MUTATION_INTENT].dependencies) {
       if (key(before.ProjectId) !== key(task.projectId)) {
         throw new ServerPersistenceError('MUTATION_FAILED', 'Proje taşıma açık ilişki değişikliği gerektirir.');
       }
@@ -65,55 +99,39 @@ export async function prepareScopedTaskDependencies(executor, changes) {
     }
     // Legacy FULL replacement is the only array-authoritative compatibility path.
     const legacyFullReplacement = !delta && hasFullAccess(actor, projectId) && (!before || hasFullAccess(actor, before.ProjectId));
-    const deps = new Map((before && !legacyFullReplacement ? stored : [])
-      .map((dep) => [key(dep.predecessorId), dep]));
-    for (const targetId of delta?.removals || []) {
-      // Görünürlüğü kaybolan hedefin eski izdüşümü ilişkiyi silemez.
+    const removals = (delta?.removals || []).filter((targetId) => {
       const target = rows.get(key(targetId));
-      if (before && target && key(target.ProjectId) === key(before.ProjectId) && canReadTask(actor, target)) deps.delete(key(targetId));
-    }
-    for (const dep of submitted) deps.set(key(dep.predecessorId), dep);
-    for (const deletedId of deletedIds) deps.delete(deletedId);
+      return before && target && key(target.ProjectId) === key(before.ProjectId) && canReadTask(actor, target);
+    });
+    const reconciled = reconcileTaskDependencies(stored, { ...task,
+      dependencyChanges: delta ? { ...delta, removals } : undefined
+    }, { replace: legacyFullReplacement || !before, deletedIds });
+    const deps = new Map(reconciled.deps.map((dep) => [key(dep.predecessorId), dep]));
     if (deps.size > MAX_COMMIT_TASK_DEPENDENCIES) {
-      throw new ServerPersistenceError('MUTATION_FAILED', 'Görev bağımlılık sınırı aşıldı.');
+      throw constraintError('Görev bağımlılık sınırı aşıldı.');
     }
-    const storedMap = new Map(stored.map((dep) => [key(dep.predecessorId), dep]));
-    const signature = (dep) => JSON.stringify([dep.type, Number(dep.lagDays || 0), dep.lagValue ?? null, dep.lagUnit || null]);
+    const updatedIds = new Set(reconciled.updates.map((dep) => key(dep.predecessorId)));
     const plan = {
-      inserts: [...deps.values()].filter((dep) => !storedMap.has(key(dep.predecessorId))),
-      updates: [...deps.values()].filter((dep) => storedMap.has(key(dep.predecessorId)) && key(before.ProjectId) === projectId &&
-        signature(dep) !== signature(storedMap.get(key(dep.predecessorId)))),
-      relocations: before && key(before.ProjectId) !== projectId ? dependencies
-        .filter((row) => key(row.TaskId) === key(task.id) && deps.has(key(row.PredecessorTaskId)))
+      inserts: reconciled.inserts,
+      updates: before && key(before.ProjectId) !== projectId ? [] : reconciled.updates,
+      relocations: before && key(before.ProjectId) !== projectId ? (storedRowsByTask.get(key(task.id)) || [])
+        .filter((row) => deps.has(key(row.PredecessorTaskId)))
         .map((row) => ({ ...row, dependency: deps.get(key(row.PredecessorTaskId)),
-          attributesChanged: signature(deps.get(key(row.PredecessorTaskId))) !== signature(storedMap.get(key(row.PredecessorTaskId))) })) : [],
-      deletes: stored.filter((dep) => !deps.has(key(dep.predecessorId))).map((dep) => dep.predecessorId)
+          attributesChanged: updatedIds.has(key(row.PredecessorTaskId)) })) : [],
+      deletes: reconciled.deletes
     };
     // deps is an integrity-only final graph; SQL persistence consumes only this plan.
-    return { ...task, deps: [...deps.values()], [DEPENDENCY_PLAN]: plan };
+    return { ...task, dependencyMutation: task[MUTATION_INTENT].dependencies, deps: [...deps.values()], [DEPENDENCY_PLAN]: plan };
   });
-  const resulting = new Map(dependencies.map((edge) => [`${key(edge.TaskId)}:${key(edge.PredecessorTaskId)}`, {
-    taskId: key(edge.TaskId), predecessorId: key(edge.PredecessorTaskId)
-  }]));
-  for (const task of taskUpserts) {
-    const plan = task[DEPENDENCY_PLAN];
-    for (const target of plan.deletes) resulting.delete(`${key(task.id)}:${key(target)}`);
-    for (const dep of plan.inserts) resulting.set(`${key(task.id)}:${key(dep.predecessorId)}`, { taskId: key(task.id), predecessorId: key(dep.predecessorId) });
-  }
-  for (const [edgeKey, edge] of resulting) {
-    if (deletedIds.has(edge.taskId) || deletedIds.has(edge.predecessorId)) { resulting.delete(edgeKey); continue; }
-    const successorProject = finalProjects.get(edge.taskId) || key(rows.get(edge.taskId)?.ProjectId);
-    const predecessorProject = finalProjects.get(edge.predecessorId) || key(rows.get(edge.predecessorId)?.ProjectId);
-    if (!successorProject || successorProject !== predecessorProject || edge.taskId === edge.predecessorId) {
-      throw new ServerPersistenceError('MUTATION_FAILED', 'Bağımlılık görevleri son durumda aynı projede olmalıdır.');
-    }
-  }
-  const cycleTaskIds = findDependencyCycle([...resulting.values()]);
-  if (cycleTaskIds.length) {
-    throw new ServerPersistenceError('MUTATION_FAILED', 'Görev bağımlılıkları döngü oluşturamaz.');
-  }
+  const graph = reconcileDependencyGraph({
+    storedEdges: dependencies.map((edge) => ({ taskId: key(edge.TaskId), predecessorId: key(edge.PredecessorTaskId) })),
+    taskProjects: new Map([...rows].map(([taskId, row]) => [taskId, key(row.ProjectId)])),
+    taskUpserts, deletedIds
+  });
+  if (graph.invalid) throw constraintError('Bağımlılık görevleri son durumda aynı projede olmalıdır.');
+  if (graph.cycle.length) throw constraintError('Görev bağımlılıkları döngü oluşturamaz.');
   if (taskUpserts.reduce((n, task) => n + (task.deps || []).length, 0) > MAX_COMMIT_TOTAL_DEPENDENCIES) {
-    throw new ServerPersistenceError('MUTATION_FAILED', 'İşlem bağımlılık sınırı aşıldı.');
+    throw constraintError('İşlem bağımlılık sınırı aşıldı.');
   }
   const prepared = { ...changes, taskUpserts };
   Object.defineProperty(prepared, TASK_DEPENDENCY_CONTEXT, { value: actor });

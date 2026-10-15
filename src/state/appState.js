@@ -1,3 +1,4 @@
+import { pruneDeletedDependencies } from '../domain/dependencyGraph.js';
 import { canonicalActualIdOrValue, sameActualReference } from '../domain/identity/actualId.js';
 import { taskPersonnelScope } from './taskPersonnelScope.js';
 import { normalizeTaskLifecycle, requiresActualDateReset, ACTUAL_DATE_RESET_MESSAGE } from '../domain/taskLifecycle.js';
@@ -515,16 +516,12 @@ function applyCommittedChanges(state, changes = {}) {
   const previousTasksById = new Map(state.tasks.map((task) => [String(task.id), task]));
   const taskUpserts = (changes.taskUpserts || []).map((task) => (
     preserveTaskScopedAvatarIdentities(previousTasksById.get(String(task.id)) || null,
-      Array.isArray(task.deps) ? task : { ...task, deps: previousTasksById.get(String(task.id))?.deps || [] })
+      task.dependenciesLoaded === false || !Array.isArray(task.deps) ? { ...task,
+        deps: previousTasksById.get(String(task.id))?.deps || [],
+        dependenciesLoaded: previousTasksById.has(String(task.id)) ? previousTasksById.get(String(task.id)).dependenciesLoaded : false } : task)
   ));
-  const invalidated = invalidatedPredecessorIds(
-    state.tasks,
-    taskUpserts.filter((task) => !scrubbedProjectIds.has(task.projectId)),
-    [
-      ...(changes.taskDeletes || []),
-      ...state.tasks.filter((task) => scrubbedProjectIds.has(task.projectId)).map((task) => task.id)
-    ]
-  );
+  const deletedTaskIds = new Set([...(changes.taskDeletes || []).map(deleteId),
+    ...state.tasks.filter((task) => scrubbedProjectIds.has(task.projectId)).map((task) => task.id)]);
   const appliedTasks = applyUpserts(
     state.tasks.filter((task) => !scrubbedProjectIds.has(task.projectId)),
     taskUpserts.filter((task) => !scrubbedProjectIds.has(task.projectId)),
@@ -532,9 +529,7 @@ function applyCommittedChanges(state, changes = {}) {
     (task) => normalizeStateTask(task, taskState),
     { prependNew: true }
   );
-  const finalProjects = new Map(appliedTasks.map((task) => [canonicalActualIdOrValue(task.id), task.projectId]));
-  const tasks = appliedTasks.map((task) => ({ ...task, deps: (task.deps || []).filter((dep) =>
-    !invalidated.has(dep.predecessorId) || sameActualReference(finalProjects.get(canonicalActualIdOrValue(dep.predecessorId)), task.projectId)) }));
+  const tasks = pruneDeletedDependencies(appliedTasks, deletedTaskIds);
   const baselines = (state.baselines || []).filter((baseline) => !scrubbedProjectIds.has(baseline.projectId));
   const baselineIds = new Set(baselines.map((baseline) => baseline.id));
   const taskIds = new Set(tasks.map((task) => task.id));

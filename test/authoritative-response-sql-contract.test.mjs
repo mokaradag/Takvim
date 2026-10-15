@@ -155,7 +155,7 @@ for (const mode of [...WRITES_FULL, 'assignee', 'creator']) {
       // Yanıt HEDEFLİDİR: dokunulmayan proje, WBS ve görev geri gelmez.
       assert.deepEqual(committed.taskUpserts.map((task) => task.id), WRITES_FULL.includes(mode) ? [TASK, CO_TASK] : [TASK]);
       assert.deepEqual(committed.projectUpserts.map((project) => project.id), [PROJECT]);
-      assert.deepEqual(committed.wbsUpserts.map((node) => node.id).sort(), [CHILD_WBS]);
+      assert.deepEqual(committed.wbsUpserts.map((node) => node.id).sort(), [ROOT_WBS, CHILD_WBS].sort());
       assert.equal(committed.taskUpserts[0].progress, 42);
 
       const accessLevel = WRITES_FULL.includes(mode) ? 'FULL' : 'PARTIAL';
@@ -299,20 +299,20 @@ test('yetkili yanıt toplu işi kimlik listelerini ve kurumsal görünümleri bi
   for (const list of ['@projectIds', '@wbsIds', '@taskIds']) {
     assert.equal((batch.match(new RegExp(`STRING_SPLIT\\(${list},`, 'g')) || []).length, 1, list);
   }
-  assert.equal((batch.match(/TRY_CONVERT\(uniqueidentifier/g) || []).length, 3);
+  assert.equal((batch.match(/TRY_CONVERT\(uniqueidentifier/g) || []).length, 4);
 
   // Pahalı kurumsal görünümler toplu işte BİR KEZ okunur.
   for (const view of ['MR_V_ExecutiveScope', 'MR_V_CorporateProjectAccess', 'MR_V_PeopleDirectory']) {
     assert.equal((batch.match(new RegExp(`dbo\\.${view}\\b`, 'g')) || []).length, 1, view);
   }
   // Kurumsal erişim yüklemi kaynak türü süzgecini korur.
-  assert.match(batch, /MR_V_CorporateProjectAccess a\s+WHERE p\.SourceType = 'CORPORATE'/);
+  assert.match(batch, /MR_V_CorporateProjectAccess a WITH \(READCOMMITTED\)\s+WHERE p\.SourceType = 'CORPORATE'/);
   assert.match(batch, /SELECT DISTINCT EmployeeSicil\s+FROM dbo\.MR_V_ExecutiveScope\s+WHERE ManagerSicil = @sicil/);
 
   // Proje yetkisi proje başına TEK KEZ verilir; çıktı seçimleri kararı okur.
   assert.match(batch, /INSERT #ProjectRole\(ProjectId, IsRoleFull, HasFullGrant, HasReadGrant, HasAnyGrant\)/);
   assert.match(batch, /INSERT #ProjectAuth\(ProjectId, AccessLevel, HasReadGrant, IsTaskScoped, IsVisible\)/);
-  assert.equal((batch.match(/JOIN #ProjectAuth pa ON/g) || []).length, 6);
+  assert.equal((batch.match(/JOIN #ProjectAuth pa ON/g) || []).length, 7);
 
   // Sorumlu sayımı ve kendi sorumluluğu satır başına sorgulanmaz.
   assert.match(batch, /INSERT #TaskAssigneeFacts\(TaskId, AssigneeCount, IsOwnAssignee, IsScopeAssignee\)/);

@@ -1536,3 +1536,5 @@ gerçek bitişi bilinen tamamlanan yinelemelerden en yeni gün ve kararlı göre
 kimliğiyle seçilir; planlanan oluşum tarihi bitiş yerine kullanılamaz.
 Gerçek bitişi eksik tamamlanmış yineleme varsa `completionDatesComplete=false`
 ve sonuç eksiktir; bilinen gerçek bitiş yoksa `lastCompleted=null` olur.
+
+Dependency and baseline capabilities are separate: `access.dependencies` permits inspection of relationships between visible endpoints; `access.baselines` remains FULL-only. `completeTaskView` and population completeness still determine whether dependency totals are authoritative.

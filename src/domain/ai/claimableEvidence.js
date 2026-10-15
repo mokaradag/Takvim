@@ -72,11 +72,11 @@ const PROJECT = Object.freeze({
 const TASK_PROJECT = Object.freeze({ ...PROJECT, name: c('task.project'), code: c('task.project') });
 const ACCESS = Object.freeze({
   level: p('project.access', 'enum'), completeTaskView: p('project.completeTaskView', 'boolean'),
-  dependenciesAndBaselines: p('project.dependenciesAndBaselines', 'boolean')
+  dependencies: p('project.dependencies', 'boolean'), baselines: p('project.baselines', 'boolean')
 });
 const TASK_ACCESS = Object.freeze({
   level: p('task.access', 'enum'), completeTaskView: p('task.completeTaskView', 'boolean'),
-  dependenciesAndBaselines: p('task.dependenciesAndBaselines', 'boolean')
+  dependencies: p('task.dependencies', 'boolean'), baselines: p('task.baselines', 'boolean')
 });
 const DATES = Object.freeze({
   plannedStart: TASK.plannedStart, plannedFinish: TASK.plannedFinish, plannedDurationDays: p('task.plannedDurationDays', 'days'),
