@@ -30,9 +30,11 @@ export function useTaskTablePagination(rows, resetKey, pageSize) {
 export function TaskTablePagination({ page, pageCount, setPage, showDateLegend = false, label = 'Görev sayfaları' }) {
   const pageLabel = label === 'Talep sayfaları'
     ? 'talep sayfası'
-    : label === 'Hareket sayfaları'
-      ? 'hareket sayfası'
-      : 'görev sayfası';
+    : label.endsWith('bildirimleri sayfaları')
+      ? 'bildirim sayfası'
+      : label === 'Hareket sayfaları'
+        ? 'hareket sayfası'
+        : 'görev sayfası';
   return (
     <div className="task-table-footer">
       {showDateLegend && <span className="task-date-legend"><Icons.Check size={11} /> Gerçekleşen tarih <span>· İşaretsiz tarih planlanandır</span></span>}

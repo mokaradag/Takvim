@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useRef, useState } from 'react';
+import { useMemo } from 'react';
 import { DateInput } from '../../components/DateInput.jsx';
 import { Icons } from '../../components/icons.jsx';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
@@ -7,11 +7,11 @@ import {
   COORDINATION_MODES,
   COORDINATION_STATUS_LABELS
 } from '../../domain/assignment/assignmentCoordination.js';
-import { decideAssignmentCoordinationRequest, markNotificationItems } from '../../data/api/assignmentCoordinationClient.js';
+import { useNotificationActions } from '../notifications/useNotificationActions.js';
+import { combineActionErrors } from '../notifications/notificationActions.js';
 import { useAllProjects, useTaskActions } from '../../state/hooks/index.js';
 import { TaskTablePagination } from '../tasks/TaskTablePagination.jsx';
 import { AssignmentCoordinationDialog } from './AssignmentCoordinationDialog.jsx';
-import { useAssignmentCoordinationQuery } from './useAssignmentCoordinationQuery.js';
 
 const SCOPES = Object.freeze([
   { value: 'all', label: 'Tüm kayıtlar' },
@@ -20,7 +20,7 @@ const SCOPES = Object.freeze([
   { value: 'history', label: 'Sonuçlananlar' }
 ]);
 
-const INITIAL = Object.freeze({
+export const COORDINATION_INITIAL_QUERY = Object.freeze({
   tab: 'all', search: '', projectId: '', requester: '', assignee: '',
   organization: '', status: '', from: '', to: '', page: 0
 });
@@ -32,14 +32,15 @@ const INITIAL = Object.freeze({
  * uygulanır. Kapsam seçimi ikinci bir sekme katmanı açmaz; olağan süzgeç
  * satırında durur.
  */
-export function AssignmentCoordinationView() {
-  const [query, setQuery] = useState(INITIAL);
-  const [selected, setSelected] = useState(null);
-  const [readError, setReadError] = useState(null);
-  const openerRef = useRef(null);
+const EMPTY_RESULT = { data: { items: [], total: 0, page: 0, pageSize: 25 }, actual: false };
+
+export function AssignmentCoordinationView({ query = COORDINATION_INITIAL_QUERY, setQuery = () => {}, result = EMPTY_RESULT, onChanged = () => {} } = {}) {
   const projects = useAllProjects();
-  const { openTask, reloadData } = useTaskActions();
-  const { data, loading, error, actual, refresh } = useAssignmentCoordinationQuery(query);
+  const { openTask } = useTaskActions();
+  const { data, loading, error, actual } = result;
+  const { selected, busy, actionError: readError, fallbackRef, open, decide, openOwnedTask, close, refresh } = useNotificationActions(onChanged, openTask);
+  const displayedError = combineActionErrors([['Sorgu', error], ['İşlem', readError]]);
+  const rowsActionable = result.rowsKnown !== false;
 
   const projectOptions = useMemo(() => [
     { value: '', label: 'Tüm projeler' },
@@ -55,28 +56,9 @@ export function AssignmentCoordinationView() {
 
   const change = (key, value) => setQuery((current) => ({ ...current, [key]: value, page: 0 }));
 
-  const open = async (record, target) => {
-    openerRef.current = target;
-    setSelected(record);
-    setReadError(null);
-    const result = await markNotificationItems([record]);
-    if (!result.ok) setReadError(result.message);
-    else { refresh(); await reloadData?.({ preserveFailedTaskUpdates: true }); }
-  };
-
-  const decide = async (coordinationId, input) => {
-    const result = await decideAssignmentCoordinationRequest(coordinationId, input);
-    refresh();
-    if (result.ok) {
-      await reloadData?.({ preserveFailedTaskUpdates: true });
-      if (result.value?.record) setSelected(result.value.record);
-    }
-    return result;
-  };
-
   const rows = data.items;
   return (
-    <div className="coordination-panel">
+    <div ref={fallbackRef} tabIndex={-1} className="coordination-panel">
       <div className="detail-list-filters request-filters">
         <label><span>Ara</span>
           <input className="input" type="search" value={query.search} placeholder="Görev, proje, kişi veya not…"
@@ -118,12 +100,12 @@ export function AssignmentCoordinationView() {
         <label><span>Tarih · Son</span>
           <DateInput ariaLabel="Son kayıt tarihi" value={query.to} onChange={(value) => change('to', value)} />
         </label>
-        <button type="button" className="btn ghost sm" onClick={() => setQuery(INITIAL)}>Filtreleri temizle</button>
+        <button type="button" className="btn ghost sm" onClick={() => setQuery(COORDINATION_INITIAL_QUERY)}>Filtreleri temizle</button>
       </div>
 
-      {(error || readError) && (
+      {displayedError && (
         <p role="alert" className="schedule-modal-error">
-          {error || readError}
+          {displayedError}
           <button type="button" className="btn ghost sm" onClick={refresh}>Yenile</button>
         </p>
       )}
@@ -143,7 +125,7 @@ export function AssignmentCoordinationView() {
             {rows.map((record) => (
               <tr key={record.id}>
                 <td>
-                  <button type="button" className="detail-task-link" onClick={(event) => open(record, event.currentTarget)}>
+                  <button type="button" className="detail-task-link" disabled={busy || !rowsActionable} onClick={() => open(record)}>
                     {record.taskTitle || 'Silinen görev'} <Icons.ChevronRight size={12} />
                   </button>
                   <small className="muted">{[record.projectCode, record.projectName].filter(Boolean).join(' · ')}</small>
@@ -174,7 +156,7 @@ export function AssignmentCoordinationView() {
         {actual && !loading && !error && !rows.length && <p className="empty">Bu görünümde koordinasyon kaydı bulunamadı.</p>}
       </div>
 
-      <TaskTablePagination
+      {result.totalKnown !== false && <TaskTablePagination
         page={data.page}
         pageCount={Math.max(1, Math.ceil(data.total / data.pageSize))}
         label="Talep sayfaları"
@@ -182,14 +164,14 @@ export function AssignmentCoordinationView() {
           ...current,
           page: typeof update === 'function' ? update(data.page) : update
         }))}
-      />
+      />}
 
       {selected && (
         <AssignmentCoordinationDialog
           record={rows.find((item) => item.id === selected.id) || selected}
-          restoreFocusRef={openerRef}
-          onClose={() => setSelected(null)}
-          onOpenTask={openTask}
+          restoreFocusRef={fallbackRef}
+          onClose={close}
+          onOpenTask={openOwnedTask}
           onDecide={decide}
         />
       )}

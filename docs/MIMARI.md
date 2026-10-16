@@ -265,6 +265,10 @@ beklemez. Varlık nabzı istek başına değil, kullanıcı başına ve 90 saniy
 birdir. Ayrıntılar: [Talepler ve bildirimler](TALEPLER-VE-BILDIRIMLER.md),
 [yetki modeli](YETKILENDIRME-MODELI.md), [şema](VERITABANI-SEMASI.md).
 
+Talepler'in Gelenler/Geçmiş sekmelerinde tarih talepleri, görev bildirimleri ve koordinasyon bildirimleri ayrı sunucu sayfalarıdır. Görev geçmişi `notifications` GET ucundan yalnız oturum alıcısının Sicil'iyle, koordinasyon geçmişi mevcut katılım ve canlı karar yetkisi kurallarıyla okunur. Okunan/temizlenen bilgilendirme geçmişe geçer; açık karar okunsa da gelenlerde kalır. Üst koordinasyon sayacı aynı sayfalı sorgunun tüm erişilebilir kayıt toplamıdır, zilin bekleyen karar sayısı değildir. Kayıtlı görev/proje künyesi geçmişi korur; görev açma yetkisi ayrı doğrulanır. Yeni tablo, göç veya genel anlık görüntü alanı eklenmez.
+
+Talepler'de koordinasyon verisinin tek sayfa sorgusu sahibi vardır: özel sekme veya bildirim bölümü bu sorgunun o anki sayfasını kullanır. Süzgeçli tablo toplamı ve süzgeçsiz üst bildirim sayaçları aynı yanıtta ayrı sözleşmelerdir. İstemci sorgu sonuçları ve yerel seçimler Sicil ile yalıtılır; yükleme son bilinen sayıları sıfıra dönüştürmez, kaynak hatası eksik toplamı kesin sayı olarak sunmaz. Görev ve koordinasyon sayfa sorguları alıcı nüfusunu tek kez materyalleştirip sayaçları ve sayfayı bundan türetir; genel yalıtım düzeyi değişmez. Karar denemeleri başarısızlıkta da bu sahibi yeniler. İsteğe bağlı şema yokluğu mevcut boş gelen kutusu davranışını korur. Gruplu bildirim tek görev gezintisi sunmaz. Kalıcı geçmiş için yeni tablo/göç gerekmez; tam geçmiş genel anlık görüntüye taşınmaz.
+
 ### Görev hareket raporu
 
 Raporlar, Performans ve Görev Hareketleri sekmelerini içerir. Performans hesapları korunur; hareket sorgusu ayrı API → yetkilendirilmiş rapor servisi → MR_AuditLog yolunu kullanır. Aktör ve görev görünürlüğü birlikte doğrulanır; JSON farkları sunucuda Türkçe iş diline çevrilir. Genel anlık görüntü denetim geçmişi taşımaz. Ayrıntılar: [Görev Hareketleri](GOREV-HAREKET-RAPORU.md).

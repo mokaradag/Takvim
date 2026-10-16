@@ -44,7 +44,7 @@ function scheduleItem(request) {
   };
 }
 
-function coordinationItem(record) {
+export function coordinationItem(record) {
   const notice = record.mode === COORDINATION_MODES.NOTICE;
   return {
     ...record,
@@ -60,7 +60,7 @@ function coordinationItem(record) {
   };
 }
 
-function taskEventItem(notification) {
+export function taskEventItem(notification) {
   const assigned = notification.kind === TASK_NOTIFICATION_KINDS.TASK_ASSIGNED;
   const many = Number(notification.taskCount || 1) > 1;
   return {

@@ -1,8 +1,12 @@
 import 'server-only';
+import { isMissingNotificationInboxSchema } from './notificationSchema.js';
 import { CURRENT_TASK_DISCLOSURE_SQL } from '../authorization/disclosureScope.js';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { NOTIFICATION_SOURCES } from '../../domain/notifications/notificationInbox.js';
-import { sql } from '../db/pool.js';
+import { sql, withSqlTransaction } from '../db/pool.js';
+import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
+import { normalizeScheduleQuery } from '../schedule-change/scheduleRequestQueryNormalization.js';
+import { ServerPersistenceError } from '../errors.js';
 import { encodeVersion } from '../repository/versionTokens.js';
 
 /**
@@ -19,13 +23,20 @@ const SOURCE = `
   LEFT JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
   LEFT JOIN dbo.MR_V_PeopleDirectory actor ON actor.Sicil = n.ActorSicil
 `;
+const PAGE_SOURCE = `
+  FROM dbo.MR_TaskNotifications n
+  LEFT JOIN dbo.MR_Tasks t ON t.TaskId = n.TaskId
+  LEFT JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId
+`;
 const OWNED = 'n.RecipientSicil = @sicil';
 const UNREAD = 'n.ReadAt IS NULL';
 const VISIBLE = 'n.DismissedAt IS NULL';
-const TASK_AVAILABLE = '(t.TaskId IS NOT NULL AND p.IsActive = 1)';
+const TASK_AVAILABLE = '(t.TaskId IS NOT NULL AND ISNULL(p.IsActive, 0) = 1)';
 const FIELDS = `n.*, COALESCE(n.ActorNameSnapshot, actor.DisplayName) AS ActorName,
   CASE WHEN ${UNREAD} THEN 1 ELSE 0 END AS IsUnread,
   CASE WHEN ${TASK_AVAILABLE} THEN 1 ELSE 0 END AS TaskAvailable`;
+const PAGE_FIELDS = `n.*, COALESCE(n.ActorNameSnapshot, actor.DisplayName) AS ActorName,
+  page.IsUnread AS IsUnread, page.TaskAvailable AS TaskAvailable`;
 
 function isoTime(value) {
   return value ? new Date(value).toISOString() : null;
@@ -53,7 +64,6 @@ export function mapTaskNotification(row) {
     version: encodeVersion(row.RowVersion),
     unread: row.IsUnread == null ? true : Boolean(row.IsUnread),
     taskAvailable: row.TaskAvailable == null ? false : Boolean(row.TaskAvailable),
-    // Bildirim bir karar istemez; zilde yalnızca bilgilendirme olarak durur.
     actionable: false
   };
 }
@@ -65,6 +75,71 @@ export const TASK_NOTIFICATION_INBOX_SQL = `
   WHERE ${OWNED} AND ${TASK_AVAILABLE} AND ${VISIBLE}
   ORDER BY n.OccurredAt DESC, n.NotificationId DESC;
 `;
+
+/**
+ * Talepler sayfası önce dar ve değişmez bir alıcı nüfusu kurar. Sayaç, toplam,
+ * güvenli sayfa ve sayfa üyeliği bu nüfustan çıkar; geniş künye yalnız son
+ * sayfadaki kimlikler için birleştirilir.
+ */
+export const TASK_NOTIFICATION_PAGE_SQL = `
+  DROP TABLE IF EXISTS #TaskNotificationPopulation, #TaskNotificationPageIds;
+  SELECT n.NotificationId, n.OccurredAt,
+    CASE WHEN ${UNREAD} THEN 1 ELSE 0 END AS IsUnread,
+    CASE WHEN ${TASK_AVAILABLE} THEN 1 ELSE 0 END AS TaskAvailable,
+    CASE WHEN ${UNREAD} AND ${VISIBLE} AND ${TASK_AVAILABLE} THEN 1 ELSE 0 END AS IsIncoming
+  INTO #TaskNotificationPopulation ${PAGE_SOURCE} WHERE ${OWNED};
+
+  SELECT COUNT(CASE WHEN IsIncoming = 1 THEN 1 END) AS IncomingCount,
+    COUNT(CASE WHEN IsIncoming = 0 THEN 1 END) AS HistoryCount
+  FROM #TaskNotificationPopulation;
+  DECLARE @total int = (SELECT COUNT(*) FROM #TaskNotificationPopulation
+    WHERE (@tab = 'pending' AND IsIncoming = 1) OR (@tab = 'history' AND IsIncoming = 0));
+  DECLARE @lastPage int = CASE WHEN @total = 0 THEN 0 ELSE (@total - 1) / @pageSize END;
+  DECLARE @safePage int = CASE WHEN @page > @lastPage THEN @lastPage ELSE @page END;
+  SELECT @total AS Total, @safePage AS Page;
+
+  SELECT NotificationId, OccurredAt, IsUnread, TaskAvailable
+  INTO #TaskNotificationPageIds
+  FROM #TaskNotificationPopulation
+  WHERE (@tab = 'pending' AND IsIncoming = 1) OR (@tab = 'history' AND IsIncoming = 0)
+  ORDER BY OccurredAt DESC, NotificationId DESC
+  OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
+
+  SELECT ${PAGE_FIELDS} ${SOURCE}
+  INNER JOIN #TaskNotificationPageIds page ON page.NotificationId = n.NotificationId
+  ORDER BY page.OccurredAt DESC, n.NotificationId DESC;
+  DROP TABLE #TaskNotificationPageIds, #TaskNotificationPopulation;
+`;
+
+export async function readTaskNotificationPage(executor, actor, input = {}) {
+  const query = normalizeScheduleQuery({ tab: input.tab, page: input.page, pageSize: input.pageSize });
+  if (!['pending', 'history'].includes(query.tab)) {
+    throw new ServerPersistenceError('MUTATION_FAILED', 'Bildirim sekmesi geçersiz.', { status: 400 });
+  }
+  const request = executor.request();
+  request.input('sicil', sql.Int, actor.sicil);
+  request.input('tab', sql.VarChar(10), query.tab);
+  request.input('page', sql.Int, query.page);
+  request.input('pageSize', sql.Int, query.pageSize);
+  let result;
+  try { result = await request.query(TASK_NOTIFICATION_PAGE_SQL); }
+  catch (error) {
+    if (!isMissingNotificationInboxSchema(error)) throw error;
+    result = { recordsets: [] };
+  }
+  const counts = result.recordsets?.[0]?.[0] || {};
+  const pagination = result.recordsets?.[1]?.[0] || {};
+  return {
+    items: (result.recordsets?.[2] || []).map(mapTaskNotification),
+    total: Number(pagination.Total || 0), page: Number(pagination.Page || 0), pageSize: query.pageSize,
+    counts: { pending: Number(counts.IncomingCount || 0), history: Number(counts.HistoryCount || 0) }
+  };
+}
+
+export async function queryTaskNotifications(input) {
+  return withSqlTransaction(async (executor) =>
+    readTaskNotificationPage(executor, await loadAuthorizationContext(executor), input));
+}
 
 /**
  * Yapay zekâ zil okuması: okunmamış sayaç yalnızca okunmamış nüfusu sınırlı

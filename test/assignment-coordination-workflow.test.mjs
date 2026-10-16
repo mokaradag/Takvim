@@ -131,6 +131,8 @@ async function asUser(sicil, run) {
 const store = await import('../src/server/assignment/assignmentCoordinationStore.js');
 const queries = await import('../src/server/assignment/assignmentCoordinationQueries.js');
 const directorySearch = await import('../src/server/directory/directorySearch.js');
+const taskNotificationQueries = await import('../src/server/notifications/taskNotificationQueries.js');
+const { markNotifications } = await import('../src/server/notifications/notificationInboxQueries.js');
 
 function assigneesOf(stack, taskId) {
   return stack.db.taskAssignees
@@ -157,10 +159,11 @@ test('koordinasyon sayaçları alt sorgulu yetki ifadelerini aggregate içinde �
   assert.match(queries.COORDINATION_INBOX_SQL, /WITH coordination_inbox_counts AS/);
   assert.match(queries.COORDINATION_INBOX_SQL, /SUM\(IsUnread\)/);
   assert.match(queries.COORDINATION_INBOX_SQL, /SUM\(IsPending\)/);
-  const pageCounts = source.match(/WITH coordination_page_counts AS \([\s\S]*?FROM coordination_page_counts;/)?.[0] || '';
-  assert.match(pageCounts, /COALESCE\(SUM\(IsPending\), 0\) AS PendingCount/);
-  assert.match(pageCounts, /COALESCE\(SUM\(IsSent\), 0\) AS SentCount/);
-  assert.match(pageCounts, /COALESCE\(SUM\(IsHistory\), 0\) AS HistoryCount/);
+  const pageCounts = source.match(/SELECT COUNT\(CASE WHEN MatchesFilters[\s\S]*?FROM #CoordinationPage;/)?.[0] || '';
+  assert.match(pageCounts, /SUM\(CASE WHEN MatchesFilters = 1 THEN IsPending ELSE 0 END\)/);
+  assert.match(pageCounts, /SUM\(CASE WHEN MatchesFilters = 1 THEN IsSent ELSE 0 END\)/);
+  assert.match(pageCounts, /SUM\(CASE WHEN MatchesFilters = 1 THEN IsHistory ELSE 0 END\)/);
+  assert.doesNotMatch(pageCounts, /EXISTS|MR_V_ExecutiveScope|STRING_SPLIT/);
 });
 
 test('sıradan kullanıcı kendini atayabilir; başkasını doğrudan atayamaz', async () => {
@@ -1230,5 +1233,251 @@ test('göç uygulanmamış kurulumda uygulama zil olmadan açılır', async () =
     assert.equal(stack.db.taskAssignmentCoordinations.length, 0);
     assert.equal(stack.db.taskNotifications.length, 0);
     assert.equal(stack.db.taskMailOutbox.length, 0);
+  } finally { await stack.dispose(); }
+});
+
+test('görev bildirimi okununca veya zilden temizlenince Talepler geçmişinde korunur', async () => {
+  const stack = await createActualStack(seed(), { sicil: PROJECT_MANAGER, corporateWbsSource: false });
+  try {
+    const task = stack.state.tasks.find((entry) => entry.id === TASK_ID);
+    await stack.repository.commitChanges({
+      taskUpserts: [{ ...task, assigneeIds: [String(ORDINARY), String(EXTERNAL)], assigneeMutation: true }]
+    });
+    await asUser(EXTERNAL, async () => {
+      await stack.reload();
+      const bell = stack.state.taskNotifications.find((entry) => entry.kind === 'TASK_ASSIGNED');
+      assert.ok(bell);
+      let incoming = await taskNotificationQueries.queryTaskNotifications({ tab: 'pending' });
+      assert.equal(incoming.items[0].id, bell.id);
+      assert.equal(incoming.counts.pending, 1);
+      for (const action of ['read', 'dismiss', 'dismiss']) {
+        await markNotifications({ action, notifications: [bell] });
+        incoming = await taskNotificationQueries.queryTaskNotifications({ tab: 'pending' });
+        assert.equal(incoming.total, 0);
+        const history = await taskNotificationQueries.queryTaskNotifications({ tab: 'history' });
+        assert.equal(history.total, 1);
+        assert.equal(history.items[0].id, bell.id);
+        assert.equal(history.items[0].unread, false);
+        await stack.reload();
+        assert.equal(stack.state.taskNotifications.some((row) => row.id === bell.id && row.unread), false);
+      }
+      assert.equal(stack.state.taskNotifications.some((row) => row.id === bell.id), false);
+    });
+    assert.equal((await taskNotificationQueries.queryTaskNotifications({ tab: 'history', sicil: EXTERNAL })).total, 0,
+      'istemciden Sicil alınıp başka kişinin kutusu okunamaz');
+  } finally { await stack.dispose(); }
+});
+
+test('koordinasyon okundu/geçmiş ayrımı karar yetkisini ve sürümünü korur', async () => {
+  const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    const created = await store.createAssignmentCoordination({ taskId: TASK_ID, assigneeSicils: [EXTERNAL], message: 'Destek' });
+    await asUser(UNIT_MANAGER, async () => {
+      const page = () => queries.queryAssignmentCoordinations({ tab: 'incoming' });
+      const record = (await page()).items[0];
+      assert.equal(record.actionable, true);
+      await markNotifications({ action: 'dismiss', notifications: [record] });
+      const read = (await page()).items[0];
+      assert.equal(read.unread, false);
+      assert.equal(read.actionable, true);
+      assert.equal((await queries.queryAssignmentCoordinations({ tab: 'archive' })).total, 0);
+      await asUser(DEPARTMENT_MANAGER, () => store.decideAssignmentCoordination(created.items[0].id, { decision: 'REJECT' }));
+      const resolved = (await page()).items[0];
+      assert.equal(resolved.actionable, false);
+      assert.equal(resolved.unread, true, 'yeni karar sürümü tekrar okunmamıştır');
+      await markNotifications({ action: 'read', notifications: [record] });
+      assert.equal((await page()).items[0].unread, true, 'gecikmiş eski sürüm yeni kararı temizleyemez');
+      await markNotifications({ action: 'read', notifications: [resolved] });
+      assert.equal((await page()).total, 0);
+      assert.equal((await queries.queryAssignmentCoordinations({ tab: 'archive' })).total, 1);
+    });
+  } finally { await stack.dispose(); }
+});
+
+test('Bölüm dışı atama bildirimi okununca geçmiş ve özel koordinasyon sekmesinde bulunur', async () => {
+  const stack = await createActualStack(seed(), { sicil: PROJECT_MANAGER, corporateWbsSource: false });
+  try {
+    const task = stack.state.tasks.find((entry) => entry.id === TASK_ID);
+    await stack.repository.commitChanges({
+      taskUpserts: [{ ...task, assigneeIds: [String(ORDINARY), String(EXTERNAL)], assigneeMutation: true }]
+    });
+    await asUser(UNIT_MANAGER, async () => {
+      const initial = await queries.queryAssignmentCoordinations({ tab: 'incoming' });
+      assert.equal(initial.items[0].mode, 'NOTICE');
+      assert.equal(initial.items[0].actionable, false);
+      for (const action of ['read', 'dismiss']) {
+        await markNotifications({ action, notifications: initial.items });
+        assert.equal((await queries.queryAssignmentCoordinations({ tab: 'incoming' })).total, 0);
+        const history = await queries.queryAssignmentCoordinations({ tab: 'archive' });
+        const all = await queries.queryAssignmentCoordinations({ tab: 'all' });
+        assert.equal(history.items[0].id, initial.items[0].id);
+        assert.equal(all.total, 1);
+        assert.equal(history.counts.all, all.total);
+        await stack.reload();
+        assert.equal(stack.state.notificationSummary.pendingCount, 0);
+        assert.equal(history.counts.all, 1, 'üst sekme sayacı bekleyen karar değil tüm kayıtları ölçer');
+      }
+      stack.db.tasks = stack.db.tasks.filter((row) => row.TaskId.toLowerCase() !== TASK_ID);
+      const deleted = await queries.queryAssignmentCoordinations({ tab: 'archive' });
+      assert.equal(deleted.items[0].taskAvailable, false);
+      assert.equal(deleted.items[0].taskTitle, task.task);
+      assert.deepEqual(deleted.items[0].allowedDecisions, []);
+    });
+  } finally { await stack.dispose(); }
+});
+
+test('görev bildirimi geçmişi Sicil ile sınırlı, sayfalı ve canlı görev yetkisinden bağımsızdır', async () => {
+  const notifications = Array.from({ length: 105 }, (_, index) => ({
+    NotificationId: `66666666-6666-4666-8666-${String(index + 1).padStart(12, '0')}`,
+    TaskId: OTHER_TASK_ID, RecipientSicil: SAME_NAME_A, ActorSicil: PROJECT_MANAGER,
+    Kind: index % 2 ? 'TASK_ASSIGNED' : 'TASK_UNASSIGNED',
+    TaskTitleSnapshot: 'Teslim edilmiş görev', ProjectIdSnapshot: PROJECT_ID,
+    ProjectNameSnapshot: 'Teslim edilmiş proje', ProjectCodeSnapshot: 'P9000001',
+    OccurredAt: '2026-10-01T09:00:00Z', ReadAt: '2026-10-02T09:00:00Z'
+  }));
+  const stack = await createActualStack(seed({ taskNotifications: notifications }), { sicil: SAME_NAME_A, corporateWbsSource: false });
+  try {
+    const { GET } = await import('../src/app/api/mergen-rota/notifications/route.js');
+    const response = await GET(new Request('http://localhost/api/mergen-rota/notifications?tab=history&pageSize=20'));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    const first = await response.json();
+    assert.equal(first.total, 105);
+    assert.equal(first.items.length, 20);
+    const ids = [];
+    for (let page = 0; page < 6; page += 1) {
+      const result = await taskNotificationQueries.queryTaskNotifications({ tab: 'history', pageSize: 20, page });
+      assert.equal(result.total, 105);
+      assert.ok(result.items.length <= 20);
+      ids.push(...result.items.map((item) => item.id));
+    }
+    assert.equal(new Set(ids).size, 105);
+    assert.equal((await taskNotificationQueries.queryTaskNotifications({ tab: 'history', pageSize: 20, page: 999 })).page, 5);
+    await assert.rejects(taskNotificationQueries.queryTaskNotifications({ pageSize: 101 }), (error) => error.status === 400);
+    await assert.rejects(taskNotificationQueries.queryTaskNotifications({ page: -1 }), (error) => error.status === 400);
+    await assert.rejects(taskNotificationQueries.queryTaskNotifications({ tab: 'sent' }), (error) => error.status === 400);
+    assert.equal(stack.state.tasks.some((row) => row.id === OTHER_TASK_ID), false, 'teslim edilmiş bildirim canlı görev yetkisi vermez');
+    assert.ok(stack.state.taskNotifications.length <= 8, 'tam geçmiş anlık görüntüde değildir');
+    assert.equal((await asUser(SAME_NAME_B, () => taskNotificationQueries.queryTaskNotifications({ tab: 'history' }))).total, 0,
+      'aynı ad kimlik veya yetki sağlamaz');
+    stack.db.projects[0].IsActive = 0;
+    let history = await taskNotificationQueries.queryTaskNotifications({ tab: 'history' });
+    assert.equal(history.items[0].taskAvailable, false);
+    stack.db.tasks = [];
+    history = await taskNotificationQueries.queryTaskNotifications({ tab: 'history' });
+    assert.equal(history.total, 105);
+    assert.equal(history.items[0].taskTitle, 'Teslim edilmiş görev');
+    assert.equal(history.items[0].projectName, 'Teslim edilmiş proje');
+    assert.equal(history.items[0].taskAvailable, false);
+    assert.match(taskNotificationQueries.TASK_NOTIFICATION_PAGE_SQL, /ORDER BY n\.OccurredAt DESC, n\.NotificationId DESC/);
+    assert.match(taskNotificationQueries.TASK_NOTIFICATION_PAGE_SQL, /FETCH NEXT @pageSize ROWS ONLY/);
+    assert.doesNotMatch(taskNotificationQueries.TASK_NOTIFICATION_PAGE_SQL, /WHERE[^;]*AND \(t\.TaskId IS NOT NULL/);
+  } finally { await stack.dispose(); }
+});
+
+test('koordinasyon bildirim sayfaları ve sayaçları aynı alıcı nüfusunu kullanır', async () => {
+  const records = Array.from({ length: 53 }, (_, index) => ({
+    CoordinationId: `77777777-7777-4777-8777-${String(index + 1).padStart(12, '0')}`,
+    TaskId: TASK_ID, RequesterSicil: PROJECT_MANAGER, RequestedAssigneeSicil: EXTERNAL,
+    Mode: 'NOTICE', Status: 'APPROVED', TaskTitleSnapshot: 'Koordinasyon künyesi', ProjectIdSnapshot: PROJECT_ID,
+    CreatedAt: '2026-10-01T09:00:00Z'
+  }));
+  const stack = await createActualStack(seed({ taskAssignmentCoordinations: records,
+    assignmentCoordinationRecipients: records.map((row) => ({ CoordinationId: row.CoordinationId, Sicil: TEAM_MEMBER }))
+  }), { sicil: TEAM_MEMBER, corporateWbsSource: false });
+  try {
+    const ids = [];
+    for (let page = 0; page < 3; page += 1) {
+      const result = await queries.queryAssignmentCoordinations({ tab: 'incoming', page, pageSize: 20 });
+      assert.equal(result.total, 53);
+      assert.equal(result.counts.incoming, 53);
+      assert.equal(result.counts.all, 53);
+      assert.ok(result.items.length <= 20);
+      ids.push(...result.items.map((row) => row.id));
+    }
+    assert.equal(new Set(ids).size, 53);
+    assert.ok(stack.state.assignmentCoordinations.length <= 8);
+    assert.equal(stack.state.tasks.some((row) => row.id === TASK_ID), false,
+      'alıcı geçmişi görev erişimi sağlamaz');
+    stack.db.tasks = [];
+    assert.equal((await queries.queryAssignmentCoordinations({ tab: 'incoming' })).total, 0);
+    const history = await queries.queryAssignmentCoordinations({ tab: 'archive', page: 999, pageSize: 20 });
+    assert.equal(history.page, 2);
+    assert.equal(history.total, 53);
+    assert.equal(history.counts.archive, 53);
+    assert.equal(history.items[0].taskTitle, 'Koordinasyon künyesi');
+    assert.deepEqual(history.items[0].allowedDecisions, []);
+    const filtered = await queries.queryAssignmentCoordinations({ tab: 'archive', status: 'REJECTED' });
+    assert.equal(filtered.total, 0);
+    assert.equal(filtered.counts.all, 0);
+    assert.equal(filtered.notificationCounts.all, 53, 'iç süzgeç üst sekme sayacını daraltmaz');
+    assert.equal(filtered.notificationCounts.archive, 53);
+  } finally { await stack.dispose(); }
+});
+
+test('görev bildirimi gelen/geçmiş ayrımı okuma, temizleme ve görev kullanılabilirliğinde tam bir bölüntüdür', async () => {
+  const data = seed();
+  const closedProject = '88888888-8888-4888-8888-000000000001';
+  const closedTask = '88888888-8888-4888-8888-000000000002';
+  data.projects.push({ ...data.projects[0], ProjectId: closedProject, ProjectCode: 'CLOSED', IsActive: 0 });
+  data.tasks.push({ ...data.tasks[0], TaskId: closedTask, ProjectId: closedProject });
+  data.taskNotifications = [
+    { TaskId: TASK_ID }, { TaskId: TASK_ID, ReadAt: '2026-10-02T09:00:00Z' },
+    { TaskId: TASK_ID, DismissedAt: '2026-10-02T09:00:00Z' },
+    { TaskId: '88888888-8888-4888-8888-000000000099' }, { TaskId: closedTask }
+  ].map((row, index) => ({ NotificationId: `99999999-9999-4999-8999-${String(index + 1).padStart(12, '0')}`,
+    RecipientSicil: TEAM_MEMBER, ActorSicil: PROJECT_MANAGER, Kind: 'TASK_ASSIGNED',
+    TaskTitleSnapshot: 'Teslim edilmiş künye', ProjectIdSnapshot: PROJECT_ID, OccurredAt: '2026-10-01T09:00:00Z', ...row }));
+  const stack = await createActualStack(data, { sicil: TEAM_MEMBER, corporateWbsSource: false });
+  try {
+    const incoming = await taskNotificationQueries.queryTaskNotifications({ tab: 'pending' });
+    const history = await taskNotificationQueries.queryTaskNotifications({ tab: 'history' });
+    assert.deepEqual(incoming.counts, { pending: 1, history: 4 });
+    assert.deepEqual(history.counts, incoming.counts);
+    assert.equal(incoming.total, 1); assert.equal(history.total, 4);
+    assert.equal(new Set([...incoming.items, ...history.items].map((row) => row.id)).size, 5);
+    assert.equal(history.items.filter((row) => !row.taskAvailable).length, 2);
+    assert.equal(stack.state.notificationSummary.unreadCount, incoming.total, 'zil aynı güncel görev nüfusunu sayar');
+    for (const row of history.items) assert.equal(row.taskTitle, 'Teslim edilmiş künye');
+  } finally { await stack.dispose(); }
+});
+
+test('isteğe bağlı bildirim şeması yokken iki Talepler GET ucu sayısal boş sayfa döndürür', async () => {
+  const stack = await createActualStack(seed({ assignmentCoordinationSchemaMissing: true }), { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    const tasks = await import('../src/app/api/mergen-rota/notifications/route.js');
+    const coordinations = await import('../src/app/api/mergen-rota/assignment-coordination/route.js');
+    for (const [route, path, tabs] of [[tasks, 'notifications', ['pending', 'history']],
+      [coordinations, 'assignment-coordination', ['all', 'incoming', 'archive']]]) {
+      for (const tab of tabs) {
+        const response = await route.GET(new Request(`http://localhost/api/mergen-rota/${path}?tab=${tab}&page=9`));
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.deepEqual(body.items, []); assert.equal(body.total, 0); assert.equal(body.page, 0);
+        assert.ok(Object.values(body.counts).every((count) => count === 0));
+      }
+    }
+    await assert.rejects(taskNotificationQueries.queryTaskNotifications({ page: -1 }), (error) => error.status === 400);
+  } finally { await stack.dispose(); }
+});
+
+test('sayfa SQL yanıtları tek alıcı nüfusunu bir kez materyalleştirir, sayaç ve satırlar onu kullanır', async () => {
+  const stack = await createActualStack(seed(), { sicil: ORDINARY, corporateWbsSource: false });
+  try {
+    await taskNotificationQueries.queryTaskNotifications({ tab: 'pending' });
+    await queries.queryAssignmentCoordinations({ tab: 'all', status: 'REJECTED' });
+    // Bellek sürücüsü SQL eşzamanlılığını taklit etmez; gerçek SQL yapısı denetlenir.
+    for (const [table, materialized] of [['MR_TaskNotifications', '#TaskNotificationPage'],
+      ['MR_TaskAssignmentCoordinations', '#CoordinationPage']]) {
+      const statement = stack.db.statements.map((entry) => entry.sql).findLast((sql) => sql.includes(`INTO ${materialized}`));
+      assert.ok(statement);
+      const populationEnd = statement.indexOf(';', statement.indexOf(`INTO ${materialized}`));
+      const derived = statement.slice(populationEnd + 1);
+      assert.doesNotMatch(derived, new RegExp(`dbo\\.${table}`));
+      assert.ok((derived.match(new RegExp(`FROM ${materialized}`, 'g')) || []).length >= 3);
+      assert.match(statement.slice(0, populationEnd), /@sicil/, 'nüfus oturum alıcısıyla sınırlıdır');
+    }
+    const filtered = await queries.queryAssignmentCoordinations({ tab: 'all', status: 'REJECTED' });
+    assert.equal(filtered.notificationCounts.all, 0);
   } finally { await stack.dispose(); }
 });

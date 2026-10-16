@@ -1565,3 +1565,5 @@ fieldset.drawer-body { border: 0; margin: 0; min-width: 0; }
   .project-browser-list { max-height: calc(var(--app-viewport-h, 100vh) * .6); }
   .wbs-tree-scroll { flex-basis: auto; max-height: calc(var(--app-viewport-h, 100vh) * .65); }
 }
+
+.notification-history-section { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--border-strong); min-width: 0; }

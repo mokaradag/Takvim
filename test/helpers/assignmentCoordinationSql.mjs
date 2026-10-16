@@ -279,6 +279,18 @@ function taskNotificationInbox(db, params) {
     unread.length > bound ? [] : unread.map((row) => ({ TaskId: row.TaskId, CurrentProjectId: taskOf(db, row.TaskId)?.ProjectId ?? null, CountsUnread: 1, CountsPending: 0 }))];
 }
 
+function taskNotificationPage(db, params) {
+  const rows = db.taskNotifications.filter((row) => Number(row.RecipientSicil) === Number(params.sicil));
+  const incoming = (row) => !row.ReadAt && !row.DismissedAt && taskNotificationRow(db, row).TaskAvailable === 1;
+  const counts = { IncomingCount: rows.filter(incoming).length, HistoryCount: rows.filter((row) => !incoming(row)).length };
+  const tabbed = rows.filter((row) => params.tab === 'pending' ? incoming(row) : !incoming(row));
+  const page = Math.min(params.page, Math.max(0, Math.ceil(tabbed.length / params.pageSize) - 1));
+  const items = tabbed.sort((left, right) => Date.parse(right.OccurredAt) - Date.parse(left.OccurredAt)
+    || String(right.NotificationId).localeCompare(String(left.NotificationId)))
+    .slice(page * params.pageSize, (page + 1) * params.pageSize).map((row) => taskNotificationRow(db, row));
+  return [[counts], [{ Total: tabbed.length, Page: page }], items];
+}
+
 function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
   const sicil = Number(params.sicil);
   const pageSize = Number(params.pageSize || 25);
@@ -317,9 +329,15 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
     }
     return true;
   });
+  const incoming = (row) => pageActionable(row) || (taskAvailable(db, row) && isUnread(db, row, sicil) && isVisible(db, row, params));
   const history = (row) => !['PENDING', 'CANCELLATION_REQUESTED'].includes(row.Status) || !taskAvailable(db, row);
   const counts = {
+    NotificationTotal: db.taskAssignmentCoordinations.filter(pageParticipant).length,
+    NotificationIncomingCount: db.taskAssignmentCoordinations.filter(pageParticipant).filter(incoming).length,
+    NotificationArchiveCount: db.taskAssignmentCoordinations.filter(pageParticipant).filter((row) => !incoming(row)).length,
     Total: matches.length,
+    IncomingCount: matches.filter(incoming).length,
+    ArchiveCount: matches.filter((row) => !incoming(row)).length,
     PendingCount: matches.filter(pageActionable).length,
     SentCount: matches.filter((row) => Number(row.RequesterSicil) === sicil).length,
     HistoryCount: matches.filter(history).length
@@ -327,6 +345,8 @@ function coordinationPage(db, params, { decisionAuthorityScope = false } = {}) {
   const tab = params.tab || 'all';
   const tabbed = matches.filter((row) => {
     if (tab === 'all') return true;
+    if (tab === 'incoming') return incoming(row);
+    if (tab === 'archive') return !incoming(row);
     if (tab === 'pending') return pageActionable(row);
     if (tab === 'sent') return Number(row.RequesterSicil) === sicil;
     return history(row);
@@ -810,6 +830,11 @@ export function runAssignmentCoordinationQuery(db, sqlText, params) {
       return completeMail(db, params, { sent: false });
     }
     if (sqlText.includes('AS PendingCount')) return mailQueueStatus(db);
+  }
+
+  if (sqlText.includes('FROM dbo.MR_TaskNotifications n') && sqlText.includes('DECLARE @safePage')) {
+    if (missing) throw missingObject('MR_TaskNotifications');
+    return taskNotificationPage(db, params);
   }
 
   if (sqlText.includes('INSERT dbo.MR_TaskNotifications(')) {

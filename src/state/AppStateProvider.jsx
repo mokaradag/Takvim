@@ -174,15 +174,20 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     });
   }, [workspaceReady, workspaceWriteReady, state.dataStatus, state.workspaceMode, state.selectedProjectId]);
 
-  const openTask = useCallback(async (taskOrId) => {
+  const openTask = useCallback(async (taskOrId, options = {}) => {
+    const isCurrent = typeof options.isCurrent === 'function' ? options.isCurrent : () => true;
+    if (!isCurrent()) return { ok: false, stale: true };
     const rawId = typeof taskOrId === 'string' ? taskOrId : taskOrId?.id;
     const findTask = () => stateRef.current.tasks.find((item) => sameActualReference(item.id, rawId));
     let task = findTask();
     if (!task) {
+      if (!isCurrent()) return { ok: false, stale: true };
       const refreshed = await reloadData({ refreshMode: 'manual' });
+      if (!isCurrent()) return { ok: false, stale: true };
       if (refreshed?.ok === false) return refreshed;
       task = findTask();
     }
+    if (!isCurrent()) return { ok: false, stale: true };
     if (!task) return { ok: false, error: { message: 'Görev bulunamadı veya artık görüntüleme yetkiniz yok.' } };
     taskCreationDraftRef.current = null;
     setTaskCreationDraft(null);
@@ -291,8 +296,7 @@ export function AppStateProvider({ children, repository = getAppRepository() }) 
     if (!access.canDelete) {
       return projectWriteFailure('task/delete', {
         code: 'TASK_DELETE_FORBIDDEN',
-        field: 'taskId',
-        message: access.deleteReason || 'Bu görevi silmek için proje yetkisi gerekir.'
+        field: 'taskId', message: access.deleteReason || 'Bu görevi silmek için proje yetkisi gerekir.'
       });
     }
     const failedFlush = firstFailedResult(await persistence.flushTaskUpdates([id]));

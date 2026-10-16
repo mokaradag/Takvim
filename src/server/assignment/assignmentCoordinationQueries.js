@@ -1,4 +1,5 @@
 import 'server-only';
+import { isMissingNotificationInboxSchema } from '../notifications/notificationSchema.js';
 import { bindDisclosureScope, CURRENT_TASK_DISCLOSURE_SQL, DISCLOSURE_SCOPE_CLEANUP_SQL, DISCLOSURE_SCOPE_SETUP_SQL } from '../authorization/disclosureScope.js';
 import { canonicalActualId, extractActualId } from '../../domain/identity/actualId.js';
 import { COORDINATION_STATUSES } from '../../domain/assignment/assignmentCoordination.js';
@@ -50,19 +51,9 @@ const COUNT_SOURCE = `
  */
 const LIVE_MANAGER_OF_ASSIGNEE = `EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
   WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = c.RequestedAssigneeSicil)`;
-// Zil ve bekleyen sayaç yalnız yazma yolunun bildirdiği yönetim zincirini
-// keşfeder. Direktörlük ilişkisi karar yetkisini korur ama otomatik bildirim
-// kapsamına girmez.
 const LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE = `EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
   WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = c.RequestedAssigneeSicil
     AND es.ScopeType IN ('UNIT','DEPARTMENT'))`;
-/**
- * Proje ölçütü görevin GÜNCEL projesidir; künye yalnızca silinmiş görev için
- * yedektir. Görev başka projeye taşındığında `decideAssignmentCoordination`
- * yetkiyi canlı projeye göre verir: künyeyi önceleyen yüklem eski projenin FULL
- * yetkilisine sunucunun reddedeceği düğmeleri gösteriyor, yeni projenin
- * yetkilisi ise kaydı hiç bulamıyordu.
- */
 const LIVE_FULL_PROJECT_ACCESS = `EXISTS (SELECT 1 FROM STRING_SPLIT(@fullProjectIds, ',') fp
   WHERE TRY_CONVERT(uniqueidentifier, NULLIF(LTRIM(RTRIM(fp.value)), ''))
     = COALESCE(t.ProjectId, c.ProjectIdSnapshot))`;
@@ -70,20 +61,12 @@ const DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSystemAdmin = 1
   OR ${LIVE_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS}))`;
 const NOTIFICATION_DECISION_AUTHORITY = `(c.RequesterSicil <> @sicil AND (@isSystemAdmin = 1
   OR ${LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS}))`;
-/**
- * Katılım ALICI satırından ya da GÜNCEL karar yetkisinden türetilir.
- *
- * Talep edilen kişi yalnızca atama yürürlüğe girdiğinde alıcı olur; onay
- * beklerken kaydı görmez. Sistem yöneticiliği bilinçli olarak DIŞARIDADIR:
- * yönetici her kaydı karara bağlayabilir ama zili sistemdeki bütün kayıtlarla
- * dolmaz (bkz. bindCoordinationScope · boş `@fullProjectIds`).
- */
 const PARTICIPANT = `(c.RequesterSicil = @sicil
   OR EXISTS (SELECT 1 FROM dbo.MR_AssignmentCoordinationRecipients r
     WHERE r.CoordinationId = c.CoordinationId AND r.Sicil = @sicil)
   OR ${LIVE_NOTIFICATION_MANAGER_OF_ASSIGNEE} OR ${LIVE_FULL_PROJECT_ACCESS})`;
 const IS_MANAGER = `CASE WHEN ${DECISION_AUTHORITY} THEN 1 ELSE 0 END`;
-const TASK_AVAILABLE = '(t.TaskId IS NOT NULL AND p.IsActive = 1)';
+const TASK_AVAILABLE = '(t.TaskId IS NOT NULL AND ISNULL(p.IsActive, 0) = 1)';
 const ACTIONABLE = `(${TASK_AVAILABLE} AND (
   (c.Status = 'PENDING' AND ${NOTIFICATION_DECISION_AUTHORITY})
   OR (c.Status = 'CANCELLATION_REQUESTED' AND c.RequesterSicil = @sicil)))`;
@@ -109,13 +92,6 @@ const orderFor = (actionable) => `CASE WHEN ${actionable} THEN 0 ELSE 1 END,
 const FIELDS = fieldsFor(ACTIONABLE);
 const ORDER = orderFor(ACTIONABLE);
 
-/**
- * Okuma yüzeyinin AKTÖR kapsamı.
- *
- * `PARTICIPANT`, `IS_MANAGER` ve `ACTIONABLE` bu üç parametreyi kullanır; hepsi
- * oturum bağlamından gelir, hiçbiri istemciden okunmaz. Sistem yöneticisinde
- * bit yeterlidir: bütün projelerin kimliğini listeye yazmak gereksizdir.
- */
 export function bindCoordinationScope(request, actor) {
   const fullProjectIds = actor.isSystemAdmin
     ? ''
@@ -126,13 +102,6 @@ export function bindCoordinationScope(request, actor) {
   return request;
 }
 
-/**
- * Zil önizlemesi: sekiz satır ve iki sayaç.
- *
- * Metin ayrı dışa aktarılır; birleşik bildirim okuması bunu görev bildirimi
- * sorgusuyla TEK gidiş-dönüşte çalıştırır (bkz.
- * server/notifications/notificationInboxQueries.js).
- */
 export const COORDINATION_INBOX_SQL = `
   WITH coordination_inbox_counts AS (
     SELECT
@@ -148,12 +117,6 @@ export const COORDINATION_INBOX_SQL = `
   WHERE ${PARTICIPANT} AND ${TASK_AVAILABLE} AND ${VISIBLE} ORDER BY ${ORDER};
 `;
 
-/**
- * Yapay zekâ zil okuması: her sayaç kendi nüfusunu ayrı ve sınırlı yoklar
- * (okunmuş ama kaldırılmamış eski kayıtlar güncel sayıları bilinmez yapmaz);
- * sayılan kayıtların görevleri son yetki denetimi için döner. Açıklama kapsamı
- * tabloları çağıranın birleşik deyiminde kurulur.
- */
 export const COORDINATION_EVIDENCE_INBOX_SQL = `
   DROP TABLE IF EXISTS #CoordinationUnreadProbe, #CoordinationPendingProbe;
   SELECT TOP (@evidenceSnapshotLimit + 1) c.TaskId, t.ProjectId AS CurrentProjectId
@@ -187,7 +150,6 @@ export function mapCoordinationInbox(countRows, itemRows, actorSicil, population
   };
 }
 
-/** Kanıt sayaçlarının dayandığı görevler (güncel proje kimliğiyle). */
 export function countedTaskPopulation(rows = []) {
   return rows.map((row) => ({ taskId: canonicalActualId(row.TaskId), projectId: canonicalActualId(row.CurrentProjectId),
     unread: Boolean(row.CountsUnread), pending: Boolean(row.CountsPending) })).filter((row) => row.taskId);
@@ -217,7 +179,7 @@ function normalizeId(field, value) {
 
 export function normalizeCoordinationQuery(input = {}) {
   const tab = input.tab || 'pending';
-  if (!['pending', 'sent', 'history', 'all'].includes(tab)) invalid('Koordinasyon sekmesi geçersiz.');
+  if (!['pending', 'sent', 'history', 'all', 'incoming', 'archive'].includes(tab)) invalid('Koordinasyon sekmesi geçersiz.');
   const page = Number(input.page || 0);
   const pageSize = Number(input.pageSize || 25);
   if (!Number.isSafeInteger(page) || page < 0 || page > 1000000) invalid('Sayfa numarası geçersiz.');
@@ -272,7 +234,6 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
 
   if (evidenceSnapshotLimit != null) {
     bindDisclosureScope(request, actor);
-    // Yapay zekâ okumasında iletiler yalnızca kullanıcının bu turda açtığı alanlarda aranır.
     request.input('searchRequesterMessage', sql.Bit, messageSearch.requester === true ? 1 : 0);
     request.input('searchDecisionMessage', sql.Bit, messageSearch.decision === true ? 1 : 0);
   }
@@ -301,8 +262,11 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
       OR CONVERT(varchar(20), c.RequestedAssigneeSicil) = @assignee)
     AND (@organization = '' OR CHARINDEX(@organization, COALESCE(c.AssigneeOrgSnapshot, '') COLLATE Turkish_100_CI_AI) > 0)
     AND (@search = '' OR CHARINDEX(@search, ${searchCorpus} COLLATE Turkish_100_CI_AI) > 0)`;
+  const incoming = `(${actionable} OR (${TASK_AVAILABLE} AND ${UNREAD} AND ${VISIBLE}))`;
+  const archive = `(NOT ${actionable} AND (NOT ${TASK_AVAILABLE} OR NOT ${UNREAD} OR NOT ${VISIBLE}))`;
   const tabFilter = `(@tab = 'all' OR (@tab = 'pending' AND ${actionable})
     OR (@tab = 'sent' AND c.RequesterSicil = @sicil)
+    OR (@tab = 'incoming' AND ${incoming}) OR (@tab = 'archive' AND ${archive})
     OR (@tab = 'history' AND (c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${TASK_AVAILABLE})))`;
 
   const evidenceStatement = evidenceSnapshotLimit == null ? null : `
@@ -318,7 +282,6 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
     DECLARE @total int = (SELECT COUNT(*) FROM #CoordinationEvidenceSnapshot);
     IF @total > @evidenceSnapshotLimit
     BEGIN
-      -- Paylaşılan havuz oturumunda geçici tablo kalmaz.
       DROP TABLE #CoordinationEvidenceSnapshot, #AiDisclosureProjects, #AiDisclosureTasks;
       THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
     END
@@ -329,29 +292,89 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
     DROP TABLE #CoordinationEvidenceSnapshot;
     ${DISCLOSURE_SCOPE_CLEANUP_SQL}
   `;
-  const result = await request.query(evidenceStatement || `
-    ${decisionAuthority ? '/* rota-ai-decision-authority */' : ''}
-    WITH coordination_page_counts AS (
-      SELECT
-        CASE WHEN ${actionable} THEN 1 ELSE 0 END AS IsPending,
-        CASE WHEN c.RequesterSicil = @sicil THEN 1 ELSE 0 END AS IsSent,
-        CASE WHEN (c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${TASK_AVAILABLE})
-          THEN 1 ELSE 0 END AS IsHistory
-      ${SOURCE} WHERE ${filters}
-    )
-    SELECT
-      COUNT(*) AS Total,
-      COALESCE(SUM(IsPending), 0) AS PendingCount,
-      COALESCE(SUM(IsSent), 0) AS SentCount,
-      COALESCE(SUM(IsHistory), 0) AS HistoryCount
-    FROM coordination_page_counts;
-    DECLARE @total int = (SELECT COUNT(*) ${SOURCE} WHERE ${filters} AND ${tabFilter});
+
+  const pageNeedsRequester = Boolean(query.search || query.requester);
+  const pageNeedsAssignee = Boolean(query.search || query.assignee);
+  const pageSource = `${COUNT_SOURCE}
+    ${pageNeedsRequester ? 'LEFT JOIN dbo.MR_V_PeopleDirectory requester ON requester.Sicil = c.RequesterSicil' : ''}
+    ${pageNeedsAssignee ? 'LEFT JOIN dbo.MR_V_PeopleDirectory assignee ON assignee.Sicil = c.RequestedAssigneeSicil' : ''}`;
+  const pageFilterParts = [
+    '(@projectId IS NULL OR COALESCE(t.ProjectId, c.ProjectIdSnapshot) = @projectId)',
+    '(@taskId IS NULL OR c.TaskId = @taskId)',
+    '(@status IS NULL OR c.Status = @status)',
+    '(@fromUtc IS NULL OR c.CreatedAt >= @fromUtc)',
+    '(@toUtc IS NULL OR c.CreatedAt < @toUtc)',
+    query.requester ? `(CHARINDEX(@requester, COALESCE(requester.DisplayName, '') COLLATE Turkish_100_CI_AI) > 0
+      OR CONVERT(varchar(20), c.RequesterSicil) = @requester)` : null,
+    query.assignee ? `(CHARINDEX(@assignee, COALESCE(assignee.DisplayName, c.AssigneeNameSnapshot, '') COLLATE Turkish_100_CI_AI) > 0
+      OR CONVERT(varchar(20), c.RequestedAssigneeSicil) = @assignee)` : null,
+    query.organization ? `CHARINDEX(@organization, COALESCE(c.AssigneeOrgSnapshot, '') COLLATE Turkish_100_CI_AI) > 0` : null,
+    query.search ? `CHARINDEX(@search, CONCAT(COALESCE(c.TaskTitleSnapshot, t.Title), ' ',
+      COALESCE(c.ProjectNameSnapshot, p.ProjectName), ' ', COALESCE(c.ProjectCodeSnapshot, p.ProjectCode), ' ',
+      requester.DisplayName, ' ', COALESCE(assignee.DisplayName, c.AssigneeNameSnapshot), ' ',
+      c.RequesterMessage) COLLATE Turkish_100_CI_AI) > 0` : null
+  ].filter(Boolean);
+  const pageFilters = pageFilterParts.join('\n      AND ');
+  const pageTabFilter = `(@tab = 'all' OR (@tab = 'pending' AND IsPending = 1)
+    OR (@tab = 'sent' AND IsSent = 1) OR (@tab = 'incoming' AND IsIncoming = 1)
+    OR (@tab = 'archive' AND IsArchive = 1) OR (@tab = 'history' AND IsHistory = 1))`;
+  const pagedFields = `c.*, page.IsManager AS IsManager, page.IsActionable AS IsActionable,
+    COALESCE(c.TaskTitleSnapshot, t.Title) AS TaskTitle,
+    COALESCE(c.ProjectIdSnapshot, t.ProjectId) AS ProjectId,
+    COALESCE(c.ProjectNameSnapshot, p.ProjectName) AS ProjectName,
+    COALESCE(c.ProjectCodeSnapshot, p.ProjectCode) AS ProjectCode,
+    requester.DisplayName AS RequesterName,
+    COALESCE(assignee.DisplayName, c.AssigneeNameSnapshot) AS AssigneeName,
+    suggested.DisplayName AS SuggestedAssigneeName,
+    decidedBy.DisplayName AS DecisionByName,
+    page.IsUnread AS IsUnread, page.TaskAvailable AS TaskAvailable`;
+
+  let result;
+  try { result = await request.query(evidenceStatement || `
+    DROP TABLE IF EXISTS #CoordinationPopulation, #CoordinationPageIds;
+    SELECT c.CoordinationId, c.CreatedAt, c.DecidedAt,
+      ${IS_MANAGER} AS IsManager,
+      CASE WHEN ${actionable} THEN 1 ELSE 0 END AS IsActionable,
+      CASE WHEN ${UNREAD} THEN 1 ELSE 0 END AS IsUnread,
+      CASE WHEN ${TASK_AVAILABLE} THEN 1 ELSE 0 END AS TaskAvailable,
+      CASE WHEN ${incoming} THEN 1 ELSE 0 END AS IsIncoming,
+      CASE WHEN ${archive} THEN 1 ELSE 0 END AS IsArchive,
+      CASE WHEN ${actionable} THEN 1 ELSE 0 END AS IsPending,
+      CASE WHEN c.RequesterSicil = @sicil THEN 1 ELSE 0 END AS IsSent,
+      CASE WHEN c.Status NOT IN ('PENDING','CANCELLATION_REQUESTED') OR NOT ${TASK_AVAILABLE} THEN 1 ELSE 0 END AS IsHistory,
+      CASE WHEN ${pageFilters} THEN 1 ELSE 0 END AS MatchesFilters
+    INTO #CoordinationPopulation ${pageSource} WHERE ${participant};
+
+    SELECT COUNT(CASE WHEN MatchesFilters = 1 THEN 1 END) AS Total,
+      COALESCE(SUM(CASE WHEN MatchesFilters = 1 THEN IsIncoming ELSE 0 END), 0) AS IncomingCount,
+      COALESCE(SUM(CASE WHEN MatchesFilters = 1 THEN IsArchive ELSE 0 END), 0) AS ArchiveCount,
+      COALESCE(SUM(CASE WHEN MatchesFilters = 1 THEN IsPending ELSE 0 END), 0) AS PendingCount,
+      COALESCE(SUM(CASE WHEN MatchesFilters = 1 THEN IsSent ELSE 0 END), 0) AS SentCount,
+      COALESCE(SUM(CASE WHEN MatchesFilters = 1 THEN IsHistory ELSE 0 END), 0) AS HistoryCount,
+      COUNT(*) AS NotificationTotal,
+      COALESCE(SUM(IsIncoming), 0) AS NotificationIncomingCount,
+      COALESCE(SUM(IsArchive), 0) AS NotificationArchiveCount
+    FROM #CoordinationPopulation;
+    DECLARE @total int = (SELECT COUNT(*) FROM #CoordinationPopulation WHERE MatchesFilters = 1 AND ${pageTabFilter});
     DECLARE @lastPage int = CASE WHEN @total = 0 THEN 0 ELSE (@total - 1) / @pageSize END;
     DECLARE @safePage int = CASE WHEN @page > @lastPage THEN @lastPage ELSE @page END;
     SELECT @total AS Total, @safePage AS Page;
-    SELECT ${fields} ${SOURCE} WHERE ${filters} AND ${tabFilter}
-    ORDER BY ${order} OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
-  `);
+
+    SELECT CoordinationId, CreatedAt, DecidedAt, IsManager, IsActionable, IsUnread, TaskAvailable, IsPending
+    INTO #CoordinationPageIds
+    FROM #CoordinationPopulation WHERE MatchesFilters = 1 AND ${pageTabFilter}
+    ORDER BY IsPending DESC, COALESCE(DecidedAt, CreatedAt) DESC, CoordinationId DESC
+    OFFSET (@safePage * @pageSize) ROWS FETCH NEXT @pageSize ROWS ONLY;
+
+    SELECT ${pagedFields} ${SOURCE}
+    INNER JOIN #CoordinationPageIds page ON page.CoordinationId = c.CoordinationId
+    ORDER BY page.IsPending DESC, COALESCE(page.DecidedAt, page.CreatedAt) DESC, page.CoordinationId DESC;
+    DROP TABLE #CoordinationPageIds, #CoordinationPopulation;
+  `); }
+  catch (error) {
+    if (evidenceSnapshotLimit != null || !isMissingNotificationInboxSchema(error)) throw error;
+    result = { recordsets: [] };
+  }
   const counts = result.recordsets?.[0]?.[0] || {};
   const pagination = result.recordsets?.[1]?.[0] || {};
   return {
@@ -359,7 +382,13 @@ export async function readCoordinationPage(executor, actor, input = {}, { decisi
     total: Number(pagination.Total || 0),
     page: Number(pagination.Page || 0),
     pageSize: query.pageSize,
+    ...(evidenceSnapshotLimit == null ? { notificationCounts: {
+      all: Number(counts.NotificationTotal || 0), incoming: Number(counts.NotificationIncomingCount || 0),
+      archive: Number(counts.NotificationArchiveCount || 0)
+    } } : {}),
     counts: {
+      ...(evidenceSnapshotLimit == null ? { all: Number(counts.Total || 0),
+        incoming: Number(counts.IncomingCount || 0), archive: Number(counts.ArchiveCount || 0) } : {}),
       pending: Number(counts.PendingCount || 0),
       sent: Number(counts.SentCount || 0),
       history: Number(counts.HistoryCount || 0)
@@ -372,7 +401,6 @@ export async function queryAssignmentCoordinations(input) {
     readCoordinationPage(executor, await loadAuthorizationContext(executor), input));
 }
 
-/** Tek kaydın güncel künyesi (karar sonrası yanıt ve açılan pencere için). */
 export async function readCoordination(executor, actor, coordinationId) {
   const request = bindCoordinationScope(executor.request(), actor);
   request.input('coordinationId', sql.UniqueIdentifier, coordinationId);
@@ -383,20 +411,12 @@ export async function readCoordination(executor, actor, coordinationId) {
   return mapCoordination(result.recordset?.[0], actor.sicil);
 }
 
-/**
- * Okundu / temizlendi.
- *
- * Sürüm taşınır: gecikmiş bir eski sürüm işlemi yeni kararı temizleyemez.
- * Bir kişinin okuması diğer alıcının bildirimini değiştirmez.
- */
 export async function updateCoordinationNotifications(executor, actor, notifications = [], action = 'read') {
   for (const item of notifications) {
     const request = bindCoordinationScope(executor.request(), actor);
     request.input('coordinationId', sql.UniqueIdentifier, item.id);
     request.input('eventVersion', sql.Binary(8), decodeVersion(item.version));
     request.input('dismiss', sql.Bit, action === 'dismiss');
-    // `PARTICIPANT` görev satırına bakar (tam proje yetkisi ölçütü); katılım
-    // burada da aynı yüklemle kurulur, ikinci bir kural yazılmaz.
     await request.query(`
       IF EXISTS (SELECT 1 FROM dbo.MR_TaskAssignmentCoordinations c WITH (UPDLOCK, HOLDLOCK)
         LEFT JOIN dbo.MR_Tasks t ON t.TaskId = c.TaskId

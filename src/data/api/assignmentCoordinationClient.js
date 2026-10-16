@@ -38,3 +38,9 @@ export function markNotificationItems(notifications, action = 'read') {
     })
   });
 }
+
+/** Talepler'deki görev bildirimleri; zilden bağımsız sayfalanır. */
+export function fetchTaskNotifications(query = {}) {
+  const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value != null && value !== ''));
+  return requestJson(`/api/mergen-rota/notifications?${params}`, { method: 'GET' });
+}

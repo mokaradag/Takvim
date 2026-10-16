@@ -28,12 +28,28 @@ Kenardaki **Talepler** düz bir üst düzey gezinme öğesidir. Sayfa dört sekm
 
 | Sekme | İçerik |
 | --- | --- |
-| Gelenler | Kullanıcının kararını bekleyen, etkin projelerdeki açık tarih talepleri |
+| Gelenler | Açık tarih talepleri; okunmamış görev ve koordinasyon bildirimleri; okunsa da karar bekleyen koordinasyon kayıtları |
 | Gönderdiklerim | Kullanıcının gönderdiği tüm durumdaki tarih talepleri |
-| Geçmiş | Kabul, ret, yeni taleple değiştirme ve güncelliğini yitirme kayıtları; görevi silinen veya projesi kapalı kayıtlar |
+| Geçmiş | Sonuçlanan/eski tarih talepleri; okunan veya zilden temizlenen görev ve bilgilendirme koordinasyonu kayıtları; kullanılamayan görevlere ait görev ve koordinasyon geçmişi |
 | Atama Koordinasyonu | Kurum dışı atama talepleri ve bildirimleri (aşağıya bakınız) |
 
-Arama görev başlığı, proje adı/kodu, talep eden ve talep notunda çalışır. Proje, talep eden adı/sicili, durum ve talep oluşturma tarihi aralığıyla daraltılabilir. Başlangıç ve bitiş günleri aralığa dahildir. Sekme sayaçları mevcut süzgeçlere uyar; Gönderdiklerim ile Geçmiş kesişebilir.
+Gelenler ve Geçmiş içinde **Tarih değişikliği talepleri**, **Görev bildirimleri** ve **Atama koordinasyonu bildirimleri** ayrı bölümlerdir. Her bölümün kendi sunucu sayfası, toplamı ve sayfalama denetimi vardır; ayrı kaynakların sayfaları tarayıcıda birleştirilip tek bir sıralama gibi sunulmaz. Gönderdiklerim yalnızca gönderilen tarih taleplerini göstermeyi sürdürür; sıradan atama olayları buraya eklenmez.
+
+**Size görev atandı** ve sorumluluk kaldırma olayları, görev mevcut ve proje açıkken okunmamışsa Gelenler'dedir. Görev silinirse veya proje kapanırsa okunmamış olay da Geçmiş'e geçer; zilin güncel dikkat nüfusunu artırmaz. Okundu işaretleme veya zilden temizleme bunları Geçmiş'e taşır; `ReadAt` / `DismissedAt` satırı silmez. **Bölüm dışı atama bildirimi** aynı şekilde okununca Geçmiş'te bulunur ve özel Atama Koordinasyonu sekmesinde kalır. Koordinasyonun karar bekleyen kaydı ise okunsa veya temizlense de Gelenler'de kalır. Sonuçlanan kaydın yeni sürümü okunmamışsa Gelenler'de, okunduğunda Geçmiş'tedir. Sürüm denetimi korunur; eski sürüm işareti yeni kararı temizleyemez.
+
+Görev bildirimi, görev silinse, proje kapansa veya güncel görev yetkisi kalksa da alıcısının kayıtlı künyesiyle okunabilir. Kullanılamayan görev ve koordinasyon kayıtları Geçmiş'te korunur. “Görev silinmiş veya proje kapalı” açıklaması gösterilir; geçmiş satırı canlı göreve erişim hakkı vermez. **Görevi aç** mevcut yetkili yükleme yolunu kullanır. Kimlik oturumun **Sicil** değeridir; ad eşleştirmesi yapılmaz.
+
+Birden çok görevi temsil eden toplu bildirim yalnızca bir örnek görev kimliği saklayabilir. Bu nedenle toplu bildirimde bütün grubu açıyormuş izlenimi veren **Görevi aç** eylemi sunulmaz; okundu işaretleme ve kalıcı geçmiş korunur. Tek görev bildirimini açmak, açma yetki hatası verse de okuma işlemini uygular; görev açma hatası kullanıcıya gösterilir.
+
+İstemcide satırlar, sayaçlar, seçimler ve hata durumu oturumun Sicil'ine aittir. Sicil değiştiği anda önceki alıcının verileri ve açık ayrıntıları gösterilmez; yeni alıcının sorgusu yeniden yüklenir. Aynı adlı kişiler bu sahipliği paylaşmaz.
+
+Sayfa yüklenirken son başarılı toplam ve sayaçlar korunur, yükleme durumu ayrıca gösterilir. Kaynaklardan biri okunamazsa Gelenler/Geçmiş toplamı kısmi bir sayı gibi sunulmaz: bilinmiyor işareti ve hata açıklaması gösterilir. Bilinen sıfır, yükleme ve hata durumları ayrıdır. Yenileme eski eylem hatasını temizler; yeni sorgu hatası görünür kalır.
+
+Atama Koordinasyonu ve bildirim bölümleri o an gösterilen koordinasyon sayfası için tek sorgu sahibini kullanır. İç süzgeçler tablo toplamını daraltırken üst koordinasyon ve bildirim sayaçları aynı yanıttaki süzgeçsiz alıcı nüfusundan gelir. Sunucuya gönderilen karar denemesi, başarı veya sürüm/yetki çakışması sonucundan bağımsız olarak güncel veriyi yeniletir. Eski sürümlü pencere kapatılır; hata görünür kalır ve güncel kayıt yeniden açılabilir. Okununca listeden çıkan bir kaydın penceresi kapanırken odak bağlıysa açan düğmeye, aksi halde kalıcı bölüm kabına döner.
+
+Her görev veya koordinasyon sayfa yanıtının sayaçları, toplamı ve satırları aynı alıcı nüfusundan türetilir. Eşzamanlı okuma/temizleme, aynı yanıtın sayıları ile satırlarını birbirinden ayıramaz. İsteğe bağlı bildirim tabloları henüz kurulmamışsa bu okumalar mevcut zil sözleşmesine uygun sayısal boş sayfa döndürür; diğer veritabanı hataları gizlenmez.
+
+Arama görev başlığı, proje adı/kodu, talep eden ve talep notunda çalışır. Proje, talep eden adı/sicili, durum ve talep oluşturma tarihi aralığıyla daraltılabilir. Başlangıç ve bitiş günleri aralığa dahildir. Bu süzgeçler yalnızca tarih değişikliği bölümüne uygulanır ve bölümün toplamıyla aynı nüfusu sayar. Gelenler/Geçmiş üst sayaçları, süzülmüş tarih talepleri ile kendi bölümlerinde gösterilen süzgeçsiz bildirim toplamlarının toplamıdır. Gönderdiklerim ile tarih talebi geçmişi kesişebilir.
 
 Sunucu varsayılan olarak **25** kayıt döndürür; API sayfa boyutunu 1–100 arasında sınırlar. İlk/Önceki/Sonraki/Son denetimleri ve sayfa göstergesi vardır. Süzgeç veya sekme değişimi ilk sayfaya döner; sonuç sayısı azalınca sayfa son geçerli sayfaya çekilir. Geçmişin tamamı uygulamanın genel anlık görüntüsüne yüklenmez. Anlık görüntü yalnızca sekiz önizleme ve okunmamış/bekleyen sayaçlarını taşır. Görev paneli kendi bekleyen önerisini ayrıca görev kimliğiyle sorgular.
 
@@ -104,6 +120,8 @@ Onay, görev ve sorumlu satırları kilitliyken tek işlemde çalışır. Bayatl
 
 ### Sekme ve süzgeçler
 
+**Atama Koordinasyonu** üst sekme sayacı, sunucudaki aynı katılım kurallarıyla erişilebilen **tüm koordinasyon kayıtlarını** sayar; zilin `pendingCount` değeri değildir. Bekleyen karar sayısı sıfırken geçmiş/bilgilendirme kayıtları varsa üst sayaç sıfır olmaz. Üst sayaç bu sekmenin iç süzgeçlerinden bağımsızdır; iç tablonun sayfalama toplamı ise seçilen kapsam ve süzgeçlere uyar. Sayı mevcut sayfalı sorgunun toplamından gelir; tam geçmişi veya bu sayıyı genel anlık görüntüye eklemek gerekmez.
+
 **Atama Koordinasyonu** sekmesi arama, kapsam (tümü / kararımı bekleyenler / gönderdiklerim / sonuçlananlar), proje, talep eden, görevlendirilen, birim, durum ve tarih aralığı süzgeçleri sunar. Süzgeçler ve sayfalama **sunucuda** uygulanır; geçmişin tamamı uygulamanın anlık görüntüsüne yüklenmez. Satır; görev, proje, görevlendirilen, talep eden, kurumsal künye, durum, oluşturma ve son yanıt zamanını gösterir. Kaydı açmak, tarih talebi penceresiyle aynı klavye ve odak davranışına sahip bir pencere açar.
 
 ## Atama e-posta bildirimi
@@ -151,7 +169,9 @@ Mevcut kurulumda **0007** yüklü olmalıdır. Uygulama dağıtımından önce a
 
 `MR_TaskAssignmentCoordinations` görev/proje/kişi künyesini, talep anındaki yetkili sorumlu kümesini, görev sürümünü, durumu, notları ve karar zamanını taşır; `MR_AssignmentCoordinationRecipients` hem alıcı kümesidir hem de `(CoordinationId, Sicil)` anahtarıyla okundu/temizlendi sürümünü tutar. `MR_TaskNotifications` alıcı başına değişmez olay satırıdır. `MR_TaskMailOutbox` posta niyetini ve teslimat durumunu tutar. `MR_UserPresence` Sicil başına tek nabız satırıdır.
 
-`GET /api/mergen-rota/assignment-coordination` parametreleri: `tab` (`all|pending|sent|history`), sıfır tabanlı `page`, `pageSize` (1–100), `search`, `projectId`, `taskId`, `requester`, `assignee`, `organization`, `status`, `from`, `to`. `POST` aynı adrese `{ taskId, assigneeSicils, message }` gönderir. `PATCH /assignment-coordination/{coordinationId}` gövdesi `{ decision, message, version, suggestedAssigneeSicil }` taşır. `PATCH /api/mergen-rota/notifications` gövdesi `{ action: read|dismiss, notifications: [{id, version, source}] }` ile karışık kaynaklı işaretleme yapar.
+`GET /api/mergen-rota/assignment-coordination` parametreleri: `tab` (`all|pending|sent|history|incoming|archive`; son ikisi Gelenler/Geçmiş bildirim bölümü içindir), sıfır tabanlı `page`, `pageSize` (1–100), `search`, `projectId`, `taskId`, `requester`, `assignee`, `organization`, `status`, `from`, `to`. `POST` aynı adrese `{ taskId, assigneeSicils, message }` gönderir. `PATCH /assignment-coordination/{coordinationId}` gövdesi `{ decision, message, version, suggestedAssigneeSicil }` taşır. `PATCH /api/mergen-rota/notifications` gövdesi `{ action: read|dismiss, notifications: [{id, version, source}] }` ile karışık kaynaklı işaretleme yapar.
+
+`GET /api/mergen-rota/notifications`, oturum alıcısının görev bildirimlerini `tab=pending|history`, sıfır tabanlı `page` ve `pageSize` (varsayılan 25, sınır 1–100) ile sayfalar. Yanıt `items`, `total`, `page`, `pageSize` ve `counts.pending/history` taşır. Koordinasyon sayfalı yanıtı ayrıca aynı süzülmüş katılım nüfusunun `counts.all/incoming/archive` sayılarını verir. Sıralama görev olaylarında olay zamanı ve kimlik, koordinasyonda önce karar bekleme, ardından son yanıt/oluşturma zamanı ve kimlik ile belirlenimlidir. Okuma uçları önbelleğe alınmaz. Bu Talepler genişletmesi **yeni veritabanı göçü gerektirmez**; mevcut 0008/0015 tablolarını kullanır. Zilin önizleme sınırı, okuma/temizleme yazmaları ve bildirim üretimi değişmez.
 
 `GET /api/mergen-rota/schedule-changes` parametreleri: `tab`, sıfır tabanlı `page`, `pageSize`, `search`, `projectId`, `taskId`, `requester`, `status`, `from`, `to`. `projectId` ve `taskId`, düz Gerçek Sistem UUID'sini veya kendi istemci kimliği biçimini (`project-<uuid>` / `task-<uuid>`) kabul eder ve sunucuda küçük harfli UUID'ye kanonikleştirilir; yanlış türde önekler ve geçersiz metinler reddedilir. `PATCH` aynı adrese `action: read|dismiss` ve `notifications: [{id, version}]` gönderir. Mevcut talep oluşturma `POST` ve karar `PATCH /schedule-changes/{requestId}` uçları korunur. Kullanıcı kimliği istemciden alınmaz; tüm sorgular parametrelidir ve yanıtlar önbelleğe alınmaz.
 

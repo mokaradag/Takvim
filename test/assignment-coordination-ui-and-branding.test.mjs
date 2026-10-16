@@ -3,6 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { CLIENT_STATE, findElement, mountComponent } from './helpers/clientComponentHarness.mjs';
 import {
@@ -30,6 +31,9 @@ const { AssignmentCoordinationDialog } = await import('../src/features/assignmen
 const { ExternalAssigneePicker } = await import('../src/features/assignment-coordination/ExternalAssigneePicker.jsx');
 const { DirectoryPersonSearch } = await import('../src/features/assignment-coordination/DirectoryPersonSearch.jsx');
 const { AssigneeMailToggle } = await import('../src/features/assignment-coordination/AssigneeMailToggle.jsx');
+const { ScheduleRequestsView } = await import('../src/features/schedule-change/ScheduleRequestsView.jsx');
+const { NotificationHistorySection } = await import('../src/features/notifications/NotificationHistorySection.jsx');
+const { useTaskNotificationQuery } = await import('../src/features/notifications/useTaskNotificationQuery.js');
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
@@ -562,6 +566,93 @@ test('sekme değişimi açık talep çekmecesini kapatır', () => {
   assert.match(selectTab, /setSelected\(null\);/);
 });
 
+test('Talepler sayaçları bölüm toplamlarını kullanır; sıfır bekleyen koordinasyon geçmişini sıfırlamaz', async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis[CLIENT_STATE] = { projects: [], session: { dataMode: 'actual' }, actions: {},
+    notificationSummary: { pendingCount: 0, unreadCount: 0 } };
+  const requests = [];
+  globalThis.fetch = async (url) => {
+    requests.push(String(url));
+    const counts = String(url).includes('assignment-coordination')
+      ? { all: 7, incoming: 2, archive: 5, pending: 0, sent: 0, history: 7 }
+      : String(url).includes('notifications') ? { pending: 2, history: 8 } : { pending: 1, sent: 3, history: 4 };
+    return Response.json({ items: [], total: 0, page: 0, pageSize: 25, counts });
+  };
+  const view = mountComponent(ScheduleRequestsView, {});
+  try {
+    await delay(250); view.render();
+    const tab = (id) => findElement(view.output, (node) => node.props?.id === `requests-${id}-tab`);
+    const count = (id) => findElement(tab(id), (node) => node.type === 'span').props.children;
+    assert.equal(count('coordination'), 7);
+    assert.equal(count('pending'), 5);
+    assert.equal(count('history'), 17);
+    const section = findElement(view.output, (node) => node.type === NotificationHistorySection);
+    assert.ok(section, 'Gelenler kalıcı bildirim bölümünü gösterir');
+    tab('history').props.onClick(); view.render();
+    await delay(250); view.render();
+    assert.ok(requests.some((url) => /notifications\?tab=history/.test(url)));
+    assert.ok(requests.some((url) => /assignment-coordination\?tab=archive/.test(url)));
+    assert.equal(count('coordination'), 7);
+    tab('sent').props.onClick(); view.render();
+    assert.equal(findElement(view.output, (node) => node.type === NotificationHistorySection), null,
+      'atama olayları Gönderdiklerim kapsamına girmez');
+    globalThis[CLIENT_STATE].session = { dataMode: 'demo' }; view.render();
+    for (const id of ['pending', 'sent', 'history', 'coordination']) assert.equal(count(id), 0, 'özellik kullanılamıyorsa boş nüfus bilinen sıfırdır');
+  } finally { view.unmount(); globalThis.fetch = previousFetch; delete globalThis[CLIENT_STATE]; }
+});
+
+test('kalıcı bildirim satırı mevcut okuma ve yetkili görev açma yolunu kullanır', async () => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  const opened = [];
+  let refreshed = 0;
+  globalThis.fetch = async (url, init) => { calls.push([String(url), JSON.parse(init.body)]); return Response.json({ ok: true }); };
+  globalThis[CLIENT_STATE] = { actions: {
+    openTask: async (id) => { opened.push(id); return { ok: false, error: { message: 'Güncel görev yetkiniz yok.' } }; }
+  } };
+  const record = { id: 'same-id', source: NOTIFICATION_SOURCES.TASK_EVENT, taskId: 't1', kind: 'TASK_UNASSIGNED',
+    taskTitle: 'Teslim edilmiş görev', projectName: 'Proje', actorName: 'Yönetici', unread: true, taskAvailable: true };
+  const props = { result: { actual: true, data: { items: [record], page: 0, total: 1, pageSize: 25 }, refresh() {} },
+    setPage() {}, onChanged: async () => { refreshed += 1; } };
+  const view = mountComponent(NotificationHistorySection, props);
+  try {
+    const button = (text) => findElement(view.output, (node) => node.type === 'button' && node.props.children === text);
+    const row = findElement(view.output, (node) => node.type === 'tr' && node.key === 'TASK_EVENT:same-id');
+    assert.ok(row);
+    await button('Okundu işaretle').props.onClick(); view.render();
+    assert.equal(calls[0][0].endsWith('/notifications'), true);
+    assert.deepEqual(calls[0][1], { action: 'read', notifications: [{ id: 'same-id', source: 'TASK_EVENT' }] });
+    assert.equal(refreshed, 1);
+    await button('Görevi aç').props.onClick(); view.render();
+    assert.deepEqual(opened, ['t1']);
+    assert.match(JSON.stringify(findElement(view.output, (node) => node.props?.role === 'alert')), /Güncel görev yetkiniz yok/);
+    view.render({ ...props, result: { ...props.result, data: { ...props.result.data,
+      items: [{ ...record, unread: false, taskAvailable: false }] } } });
+    assert.equal(button('Görevi aç').props.disabled, true);
+    assert.match(JSON.stringify(view.output), /Teslim edilmiş görev/);
+    assert.match(JSON.stringify(view.output), /Görev silinmiş veya proje kapalı/);
+  } finally { view.unmount(); globalThis.fetch = previousFetch; delete globalThis[CLIENT_STATE]; }
+});
+
+test('görev bildirimi sayfasının geç yanıtı yeni geçmiş sayfasını ezemez', async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis[CLIENT_STATE] = { session: { dataMode: 'actual' } };
+  let releaseFirst;
+  const page = (id) => Response.json({ items: [{ id }], total: 1, page: 0, pageSize: 25, counts: { pending: 0, history: 1 } });
+  globalThis.fetch = (url) => String(url).includes('tab=pending')
+    ? new Promise((resolve) => { releaseFirst = resolve; }) : Promise.resolve(page('history'));
+  const view = mountComponent(({ query }) => useTaskNotificationQuery(query), { query: { tab: 'pending', page: 0 } });
+  try {
+    await delay(250);
+    view.render({ query: { tab: 'history', page: 0 } });
+    await delay(250); view.render();
+    assert.equal(view.output.data.items[0].id, 'history');
+    releaseFirst(page('late-incoming'));
+    await delay(0); view.render();
+    assert.equal(view.output.data.items[0].id, 'history');
+  } finally { view.unmount(); globalThis.fetch = previousFetch; delete globalThis[CLIENT_STATE]; }
+});
+
 /* ── Marka ───────────────────────────────────────────────────── */
 
 test('sekme simgesi pusula markasıdır ve açık/koyu bağlamda okunur kalır', () => {
@@ -587,4 +678,267 @@ test('sekme simgesi pusula markasıdır ve açık/koyu bağlamda okunur kalır',
 
   // Ana logo ile aynı ürün kimliği: iki yüzey de pusula çizer.
   assert.match(read('src/components/shell/AppLogo.jsx'), /Rota compass mark/);
+});
+
+/* ── Alıcı, sayfa ve iş akışı değişmezleri ────────────────────── */
+const { useAssignmentCoordinationQuery } = await import('../src/features/assignment-coordination/useAssignmentCoordinationQuery.js');
+const { AssignmentCoordinationView } = await import('../src/features/assignment-coordination/AssignmentCoordinationView.jsx');
+const { TaskTablePagination } = await import('../src/features/tasks/TaskTablePagination.jsx');
+
+const notificationPage = (items = [], extra = {}) => ({ items, total: 61, page: 0, pageSize: 25,
+  counts: { all: 61, pending: 61, history: 9, incoming: 61, archive: 9 }, ...extra });
+const notificationSession = (sicil) => ({ dataMode: 'actual', currentUser: { employeeNo: String(sicil), name: 'Aynı Ad' } });
+const notificationButton = (view, text) => findElement(view.output, (node) => node.type === 'button' && node.props.children === text);
+const coordinationRecord = { id: 'c1', source: 'ASSIGNMENT_COORDINATION', status: 'PENDING', mode: 'REQUEST',
+  taskId: 't1', taskTitle: 'A kullanıcısının görevi', version: 'v1', unread: false, allowedDecisions: ['APPROVE'] };
+
+test('Sicil değişimi iki sorguyu, açık pencereyi ve eski eylem hatasını aynı anda yalıtır', async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis[CLIENT_STATE] = { session: notificationSession(100), actions: {}, projects: [] };
+  let releaseA;
+  let held = false;
+  globalThis.fetch = async (_url, init) => {
+    if (init.method === 'PATCH') return Response.json({ error: { message: 'A okuma hatası' } }, { status: 409 });
+    const who = globalThis[CLIENT_STATE].session.currentUser.employeeNo;
+    if (held && who === '100') return new Promise((resolve) => { releaseA = resolve; });
+    return Response.json(notificationPage([{ ...coordinationRecord, id: who }]));
+  };
+  const queries = mountComponent(() => ({ task: useTaskNotificationQuery({ tab: 'pending', page: 0 }),
+    coordination: useAssignmentCoordinationQuery({ tab: 'incoming', page: 0 }) }), {});
+  const props = { coordination: true, result: { actual: true, data: notificationPage([{ ...coordinationRecord, unread: true }]) }, setPage() {}, onChanged() {} };
+  const section = mountComponent(NotificationHistorySection, props);
+  const specialized = mountComponent(AssignmentCoordinationView, props);
+  try {
+    await delay(240); queries.render();
+    assert.equal(queries.output.task.data.items[0].id, '100');
+    assert.equal(queries.output.coordination.data.items[0].id, '100');
+    findElement(section.output, (node) => node.props?.className === 'detail-task-link').props.onClick(); section.render();
+    assert.ok(findElement(section.output, (node) => node.type === AssignmentCoordinationDialog));
+    findElement(specialized.output, (node) => node.props?.className === 'detail-task-link').props.onClick(); specialized.render();
+    assert.ok(findElement(specialized.output, (node) => node.type === AssignmentCoordinationDialog));
+    await delay(0); section.render();
+    assert.match(JSON.stringify(section.output), /A okuma hatası/);
+    held = true; queries.output.task.refresh(); queries.render(); await delay(240);
+    globalThis[CLIENT_STATE].session = notificationSession(200);
+    const start = queries.frames.length;
+    queries.render(); section.render(); specialized.render();
+    for (const frame of queries.frames.slice(start)) {
+      for (const source of [frame.task, frame.coordination]) {
+        assert.deepEqual(source.data.items, []); assert.equal(source.known, false); assert.equal(source.error, null);
+      }
+    }
+    assert.equal(findElement(section.output, (node) => node.type === AssignmentCoordinationDialog), null);
+    assert.equal(findElement(section.output, (node) => node.props?.role === 'alert'), null);
+    assert.equal(findElement(specialized.output, (node) => node.type === AssignmentCoordinationDialog), null);
+    assert.equal(findElement(specialized.output, (node) => node.props?.role === 'alert'), null);
+    await delay(240); queries.render();
+    assert.equal(queries.output.task.data.items[0].id, '200');
+    assert.equal(queries.output.coordination.data.items[0].id, '200');
+    releaseA(Response.json(notificationPage([{ id: 'late-A' }]))); await delay(0); queries.render();
+    assert.equal(queries.output.task.data.items[0].id, '200');
+    globalThis[CLIENT_STATE].session = notificationSession(100); section.render();
+    assert.equal(findElement(section.output, (node) => node.type === AssignmentCoordinationDialog), null, 'eski seçim geri dönmez');
+  } finally { queries.unmount(); section.unmount(); specialized.unmount(); globalThis.fetch = previousFetch; delete globalThis[CLIENT_STATE]; }
+});
+
+test('her iki sayfalı sorguda yavaş ve başarısız sayfa toplamları korur, toparlanma yeni satırları getirir', async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis[CLIENT_STATE] = { session: notificationSession(100) };
+  const pending = [];
+  globalThis.fetch = (url) => {
+    const params = new URL(String(url), 'http://local').searchParams;
+    if (['history', 'archive'].includes(params.get('tab'))) return Promise.resolve(Response.json({ error: { message: 'Geçmiş yüklenemedi' } }, { status: 503 }));
+    const page = Number(params.get('page'));
+    if (page) return new Promise((resolve) => pending.push(resolve));
+    return Promise.resolve(Response.json(notificationPage([{ id: 'first' }])));
+  };
+  const view = mountComponent(({ page, archived = false }) => ({ task: useTaskNotificationQuery({ tab: archived ? 'history' : 'pending', page }),
+    coordination: useAssignmentCoordinationQuery({ tab: archived ? 'archive' : 'incoming', page }) }), { page: 0 });
+  try {
+    await delay(240); view.render(); view.render({ page: 1 });
+    for (const result of Object.values(view.output)) {
+      assert.equal(result.data.total, 61); assert.equal(result.data.counts.pending, 61);
+      assert.equal(result.totalKnown, true); assert.equal(result.loading, true); assert.deepEqual(result.data.items, []);
+    }
+    await delay(240);
+    pending.splice(0).forEach((resolve) => resolve(Response.json({ error: { message: 'Geçici hata' } }, { status: 503 })));
+    await delay(0); view.render();
+    for (const result of Object.values(view.output)) {
+      assert.equal(result.data.total, 61); assert.equal(result.known, true); assert.equal(result.error, 'Geçici hata');
+      assert.deepEqual(result.data.items, [], 'başarısız yeni sayfa eski sayfanın satırlarını sahiplenemez');
+      result.refresh();
+    }
+    view.render(); await delay(240);
+    pending.splice(0).forEach((resolve) => resolve(Response.json(notificationPage([{ id: 'second' }], { page: 1 }))));
+    await delay(0); view.render();
+    for (const result of Object.values(view.output)) {
+      assert.equal(result.error, null); assert.equal(result.data.page, 1); assert.equal(result.data.items[0].id, 'second');
+    }
+    view.render({ page: 0, archived: true }); await delay(240); view.render();
+    for (const result of Object.values(view.output)) {
+      assert.equal(result.error, 'Geçmiş yüklenemedi'); assert.deepEqual(result.data.items, []);
+      assert.equal(result.totalKnown, false); assert.equal(result.data.counts.pending, 61);
+    }
+  } finally { view.unmount(); globalThis.fetch = previousFetch; delete globalThis[CLIENT_STATE]; }
+});
+
+test('gerçek Sonraki, Önceki ve Son düğmeleri iki kaynakta sayısal sayfa iletir', () => {
+  globalThis[CLIENT_STATE] = { session: notificationSession(100), actions: {} };
+  try {
+    for (const coordination of [false, true]) {
+      const received = [];
+      const section = mountComponent(NotificationHistorySection, { coordination,
+        result: { data: notificationPage([], { page: 1 }), actual: true }, setPage: (page) => received.push(page), onChanged() {} });
+      const pagerElement = findElement(section.output, (node) => node.type === TaskTablePagination);
+      const pager = mountComponent(TaskTablePagination, pagerElement.props);
+      try {
+        for (const label of ['Sonraki bildirim sayfası', 'Önceki bildirim sayfası', 'Son sayfa']) {
+          findElement(pager.output, (node) => node.props?.['aria-label'] === label).props.onClick();
+        }
+        assert.deepEqual(received, [2, 0, 2]);
+        assert.ok(received.every(Number.isInteger));
+      } finally { section.unmount(); pager.unmount(); }
+    }
+  } finally { delete globalThis[CLIENT_STATE]; }
+});
+
+test('iki koordinasyon yüzeyi çakışmada aynı sorgu sahibini yeniler ve eski sürümü tekrar sunmaz', async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis[CLIENT_STATE] = { session: notificationSession(100), actions: {}, projects: [] };
+  let version = 'v1';
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push([String(url), init.method]);
+    if (init.method === 'PATCH') { version = 'v2'; return Response.json({ error: { message: 'Sürüm değişti' } }, { status: 409 }); }
+    return Response.json(notificationPage([{ ...coordinationRecord, version }], { notificationCounts: { all: 61, incoming: 61, archive: 9 } }));
+  };
+  const owner = mountComponent(() => useAssignmentCoordinationQuery({ tab: 'incoming', page: 0 }), {});
+  try {
+    await delay(240); owner.render();
+    for (const Component of [NotificationHistorySection, AssignmentCoordinationView]) {
+      version = 'v1'; owner.output.refresh(); owner.render(); await delay(240); owner.render();
+      const props = () => ({ coordination: true, result: owner.output, setPage() {}, onChanged: () => owner.output.refresh() });
+      const view = mountComponent(Component, props());
+      try {
+        findElement(view.output, (node) => node.props?.className === 'detail-task-link').props.onClick(); view.render();
+        const dialog = findElement(view.output, (node) => node.type === AssignmentCoordinationDialog);
+        const response = await dialog.props.onDecide('c1', { decision: 'APPROVE', version: dialog.props.record.version });
+        assert.equal(response.ok, false); view.render();
+        assert.equal(findElement(view.output, (node) => node.type === AssignmentCoordinationDialog), null);
+        assert.match(JSON.stringify(view.output), /Sürüm değişti/);
+        owner.render(); await delay(240); owner.render(); view.render(props());
+        findElement(view.output, (node) => node.props?.className === 'detail-task-link').props.onClick(); view.render();
+        assert.equal(findElement(view.output, (node) => node.type === AssignmentCoordinationDialog).props.record.version, 'v2');
+      } finally { view.unmount(); }
+    }
+    assert.equal(calls.filter(([, method]) => method === 'PATCH').length, 2);
+  } finally { owner.unmount(); globalThis.fetch = previousFetch; delete globalThis[CLIENT_STATE]; }
+});
+
+test('gizli kaynak hataları kısmi toplam göstermez; koordinasyon tablosu ikinci sorgu açmaz', async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis[CLIENT_STATE] = { session: notificationSession(100), actions: {}, projects: [] };
+  let failure = '';
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    const path = String(url); calls.push(path);
+    if (failure && path.includes(failure)) return Response.json({ error: { message: 'Kaynak hatası' } }, { status: 500 });
+    return Response.json(notificationPage([], { counts: { pending: 2, history: 3, sent: 1, all: 7, incoming: 2, archive: 5 },
+      notificationCounts: { all: 7, incoming: 2, archive: 5 } }));
+  };
+  const view = mountComponent(ScheduleRequestsView, {});
+  const tab = (id) => findElement(view.output, (node) => node.props?.id === `requests-${id}-tab`);
+  const count = (id) => findElement(tab(id), (node) => node.type === 'span').props.children;
+  try {
+    await delay(240); view.render(); assert.equal(count('pending'), 6);
+    const start = calls.length;
+    tab('coordination').props.onClick(); view.render(); await delay(240); view.render();
+    const table = findElement(view.output, (node) => node.type === AssignmentCoordinationView);
+    const child = mountComponent(AssignmentCoordinationView, table.props);
+    await delay(240); child.render(); child.unmount();
+    assert.equal(calls.slice(start).filter((url) => url.includes('assignment-coordination')).length, 1);
+    assert.equal(count('coordination'), 7);
+    for (const source of ['notifications', 'assignment-coordination']) {
+      failure = source;
+      globalThis[CLIENT_STATE].notificationSummary = { unreadCount: source.length };
+      view.render(); await delay(240); view.render();
+      assert.equal(count('pending'), '…'); assert.equal(count('history'), '…');
+      assert.match(JSON.stringify(findElement(view.output, (node) => node.props?.role === 'alert')), /toplam bilinmiyor/);
+      failure = ''; globalThis[CLIENT_STATE].notificationSummary = { unreadCount: source.length + 1 };
+      view.render(); await delay(240); view.render(); assert.equal(count('pending'), 6);
+    }
+  } finally { view.unmount(); globalThis.fetch = previousFetch; delete globalThis[CLIENT_STATE]; }
+});
+
+test('görev açma hatası okuma işlemini engellemez, yenileme eski hatayı temizler, grup tek görevi açmaz', async () => {
+  const previousFetch = globalThis.fetch;
+  let marked = 0;
+  let opened = 0;
+  globalThis.fetch = async () => { marked += 1; return Response.json({}); };
+  globalThis[CLIENT_STATE] = { session: notificationSession(100), actions: {
+    openTask: async () => { opened += 1; return { ok: false, error: { message: 'Yetki yok' } }; }
+  } };
+  const record = { id: 'n1', source: 'TASK_EVENT', kind: 'TASK_ASSIGNED', taskId: 't1', taskCount: 1, unread: true };
+  const props = { result: { actual: true, data: notificationPage([record]) }, setPage() {}, onChanged() {} };
+  const view = mountComponent(NotificationHistorySection, props);
+  try {
+    await notificationButton(view, 'Görevi aç').props.onClick(); view.render();
+    assert.equal(marked, 1); assert.equal(opened, 1); assert.match(JSON.stringify(view.output), /Yetki yok/);
+    notificationButton(view, 'Yenile').props.onClick(); view.render();
+    assert.equal(findElement(view.output, (node) => node.props?.role === 'alert'), null);
+    view.render({ ...props, result: { ...props.result, data: notificationPage([{ ...record, taskCount: 3 }]) } });
+    assert.equal(notificationButton(view, 'Görevi aç'), null);
+  } finally { view.unmount(); globalThis.fetch = previousFetch; delete globalThis[CLIENT_STATE]; }
+});
+
+test('okunan satır kaybolduğunda pencere odağı kalıcı bölüm kabına döner', async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({});
+  globalThis[CLIENT_STATE] = { session: notificationSession(100), actions: {} };
+  const props = { coordination: true, result: { actual: true, data: notificationPage([{ ...coordinationRecord, unread: true }]) }, setPage() {}, onChanged() {} };
+  const view = mountComponent(NotificationHistorySection, props);
+  let dialog;
+  let restored = 0;
+  const opener = { isConnected: true, focus() { throw new Error('Ayrılan satıra odak dönmemeli'); } };
+  const fallback = { isConnected: true, focus() { restored += 1; } };
+  try {
+    view.output.ref.current = fallback;
+    findElement(view.output, (node) => node.props?.className === 'detail-task-link').props.onClick(); view.render();
+    const element = findElement(view.output, (node) => node.type === AssignmentCoordinationDialog);
+    globalThis.document = { activeElement: opener, body: {}, addEventListener() {}, removeEventListener() {} };
+    dialog = mountComponent(AssignmentCoordinationDialog, element.props);
+    await delay(0); view.render({ ...props, result: { ...props.result, data: notificationPage([]) } });
+    opener.isConnected = false;
+    dialog.unmount(); dialog = null; await delay(10);
+    assert.equal(restored, 1);
+  } finally { dialog?.unmount(); view.unmount(); globalThis.fetch = previousFetch; delete globalThis.document; delete globalThis[CLIENT_STATE]; }
+});
+
+test('zil toplu olayı yalnız okur ve eski Sicil eyleminin gecikmiş hatasını yeni oturuma taşımaz', async () => {
+  const previousFetch = globalThis.fetch;
+  let opened = 0;
+  let release;
+  let held = false;
+  const records = [{ id: 'group', source: 'TASK_EVENT', taskId: 't1', taskCount: 3, kind: 'TASK_ASSIGNED', unread: true }];
+  globalThis[CLIENT_STATE] = { session: notificationSession(100), taskNotifications: records, actions: {
+    openTask: async () => { opened += 1; return { ok: true }; }
+  } };
+  globalThis.document = { addEventListener() {}, removeEventListener() {}, activeElement: null };
+  globalThis.fetch = () => held ? new Promise((resolve) => { release = resolve; })
+    : Promise.resolve(Response.json({ error: { message: 'Okuma kaydedilemedi' } }, { status: 503 }));
+  const view = mountComponent(ScheduleRequestCenter, {});
+  try {
+    findElement(view.output, (node) => node.props?.className === 'icon-btn schedule-request-toggle').props.onClick(); view.render();
+    await findElement(view.output, (node) => node.props?.className === 'schedule-request-card').props.onClick(); view.render();
+    assert.match(JSON.stringify(findElement(view.output, (node) => node.props?.role === 'alert')), /Okuma kaydedilemedi/);
+    held = true;
+    const pending = findElement(view.output, (node) => node.props?.className === 'schedule-request-card').props.onClick();
+    await delay(0); view.render();
+    assert.equal(opened, 0, 'grup ilk görev kimliğine yönlendirilmez');
+    assert.equal(findElement(view.output, (node) => node.props?.className === 'schedule-request-card').props.disabled, true);
+    globalThis[CLIENT_STATE].session = notificationSession(200); view.render();
+    release(Response.json({ error: { message: 'A oturumunun hatası' } }, { status: 409 }));
+    await pending; view.render();
+    assert.doesNotMatch(JSON.stringify(view.output), /A oturumunun hatası/);
+  } finally { view.unmount(); globalThis.fetch = previousFetch; delete globalThis.document; delete globalThis[CLIENT_STATE]; }
 });
