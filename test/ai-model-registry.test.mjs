@@ -6,7 +6,7 @@
  * varsayılana düşmez.
  */
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -23,6 +23,7 @@ const {
 } = await import('../src/domain/ai/aiModelRegistry.js');
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
 const { aiModelRegistryState, loadAiModelRegistry, resetAiModelRegistryForTests } = await import('../src/server/ai/modelRegistryLoader.js');
+const operationalRegistry = JSON.parse(await readFile(new URL('../config/ai-model-registry.onprem.json', import.meta.url), 'utf8'));
 
 function registry(overrides = {}) {
   return {
@@ -66,14 +67,83 @@ test('varsayılan kayıt geçerlidir ve her profil gerekli yetenekleri taşıyan
   // Hızlı profil düşünme kipine sahip olmayan güncel kurum içi modele bağlıdır.
   assert.equal(fast.model, 'Qwen3-Next-80B-A3B-Instruct');
   assert.equal(fast.contextTokens, 262144);
-  for (const retiring of [
-    'Qwen3-30B-A3B-Instruct-2507',
-    'Qwen3-Coder-30B-A3B-Instruct',
-    'Qwen2.5-VL-7B-Instruct',
-    'Qwen3-VL-30B-A3B-Instruct'
-  ]) {
-    assert.equal(DEFAULT_AI_MODEL_REGISTRY.models.some((model) => model.id === retiring), false, retiring);
-  }
+});
+
+for (const [source, document] of [['varsayılan', DEFAULT_AI_MODEL_REGISTRY], ['operasyonel JSON', operationalRegistry]]) {
+  test(`${source}: yalnızca güncel ve desteklenen kurum içi modeller bulunur`, () => {
+    const validated = validateModelRegistry(document);
+    assert.equal(validated.ok, true, JSON.stringify(validated.issues));
+    assert.deepEqual([...validated.registry.models.keys()].sort(), [
+      'VoxCPM2', 'DeepSeek-V4.1-Flash', 'Qwen3.8-Flash-Next', 'FLUX.2-dev',
+      'intfloat/multilingual-e5-large', 'tts-1-hd', 'whisper-large-v3',
+      'openai/gpt-oss-120b', 'Qwen3-Next-80B-A3B-Instruct', 'tts-1',
+      'Qwen3-Embedding-8B', 'bge-reranker-v2-m3', 'Qwen3-Reranker-8B',
+      'gemma-4-31B-it', 'Qwen3.6-35B-A3B', 'Qwen3-VL-8B-Instruct', 'Qwen3.8-27B'
+    ].sort());
+    for (const excluded of [
+      'dall-e-3', 'Qwen3.5-397B-A17B-FP8', 'laya-multilingual',
+      'Qwen3-30B-A3B-Instruct-2507', 'Qwen3-Coder-30B-A3B-Instruct',
+      'Qwen2.5-VL-7B-Instruct', 'Qwen3-VL-30B-A3B-Instruct'
+    ]) {
+      assert.equal(validated.registry.models.has(excluded), false, excluded);
+    }
+    for (const model of validated.registry.models.values()) {
+      assert.equal(model.enabled, true, model.id);
+      assert.equal(model.provider, 'onprem', model.id);
+    }
+  });
+
+  test(`${source}: yeni modeller ve güncellenen yetenekler platform kataloğuyla eşleşir`, () => {
+    const { registry: parsed } = validateModelRegistry(document);
+    for (const [id, capabilities, contextTokens] of [
+      ['Qwen3.8-Flash-Next', ['chat', 'tools', 'reasoning', 'vision'], 262144],
+      ['DeepSeek-V4.1-Flash', ['chat', 'tools', 'reasoning', 'vision'], 524288],
+      ['FLUX.2-dev', ['image.generation'], null],
+      ['Qwen3-Reranker-8B', ['rerank'], 32768],
+      ['bge-reranker-v2-m3', ['rerank'], 8192]
+    ]) {
+      const model = parsed.models.get(id);
+      assert.ok(model, id);
+      assert.deepEqual([...model.capabilities].sort(), [...capabilities].sort(), id);
+      assert.equal(model.contextTokens, contextTokens, id);
+    }
+  });
+
+  test(`${source}: tercih edilen modeller seçilir ve diğer profil eşlemeleri korunur`, () => {
+    const { registry: parsed } = validateModelRegistry(document);
+    const expectedProfiles = {
+      'chat.fast': 'Qwen3-Next-80B-A3B-Instruct',
+      'chat.general': 'Qwen3-Next-80B-A3B-Instruct',
+      'chat.tools': 'Qwen3-Next-80B-A3B-Instruct',
+      'chat.reasoning': 'gemma-4-31B-it',
+      'chat.tools.reasoning': 'gemma-4-31B-it',
+      vision: 'Qwen3-VL-8B-Instruct',
+      embedding: 'intfloat/multilingual-e5-large',
+      rerank: 'Qwen3-Reranker-8B',
+      'speech.stt': 'whisper-large-v3',
+      'speech.tts.fast': 'tts-1',
+      'speech.tts.quality': 'tts-1-hd',
+      'image.generation': 'FLUX.2-dev'
+    };
+    assert.deepEqual([...parsed.profiles.keys()].sort(), Object.keys(expectedProfiles).sort());
+    for (const [profile, model] of Object.entries(expectedProfiles)) {
+      const resolved = resolveModelProfile(parsed, profile);
+      assert.equal(resolved.ok, true, profile);
+      assert.equal(resolved.route.model, model, profile);
+      for (const capability of aiProfileRequirements(profile)) {
+        assert.ok(resolved.route.capabilities.includes(capability), `${profile} → ${capability}`);
+      }
+    }
+  });
+}
+
+test('operasyonel JSON ile varsayılan kaydın modelleri, yetenekleri ve profil ayarları aynıdır', () => {
+  const normalize = (document) => ({
+    ...document,
+    models: document.models.map((model) => ({ ...model, capabilities: [...model.capabilities].sort() }))
+      .sort((left, right) => left.id.localeCompare(right.id))
+  });
+  assert.deepEqual(normalize(operationalRegistry), normalize(DEFAULT_AI_MODEL_REGISTRY));
 });
 
 test('profil yapılandırılmış modele çözülür; bilinmeyen, eksik ya da kapalı profil kararlı nedenle reddedilir', () => {
