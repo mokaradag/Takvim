@@ -338,17 +338,28 @@ dağıtılmış kopyası mutlak bir yolda tutulur ve
 yetenek, bağlam boyutu ya da profil tercihi değiştiğinde uygulama iş kodu
 değişmez; JSON güncellenir ve Rota yeniden başlatılır.
 
-24.09.2026 kataloğunda hız gerektiren `chat.fast`, `chat.general` ve
-`chat.tools` profilleri düşünme kipine sahip olmayan
+13.10.2026 tarihli platform kataloğuyla eşleşen kayıtta hız gerektiren
+`chat.fast`, `chat.general` ve `chat.tools` profilleri düşünme kipine sahip olmayan
 `Qwen3-Next-80B-A3B-Instruct` modeline; Derin düşünme profilleri
 `chat.reasoning` ve `chat.tools.reasoning` `gemma-4-31B-it` modeline (bağlam
 131072); `vision` ise düşünme kipine sahip olmayan `Qwen3-VL-8B-Instruct`
-modeline bağlıdır. `DeepSeek-V4.1-Flash` katalogda kayıtlı kalır ama hiçbir
-profil onu kullanmaz. Dört model sunucudan kaldırılacağı
-bildirildiği için hem varsayılan kayıttan hem de operasyonel JSON'dan bilinçli
-olarak çıkarılmıştır: `Qwen3-30B-A3B-Instruct-2507`,
-`Qwen3-Coder-30B-A3B-Instruct`, `Qwen2.5-VL-7B-Instruct` ve
-`Qwen3-VL-30B-A3B-Instruct`.
+modeline bağlıdır. `embedding`, `intfloat/multilingual-e5-large` modelini;
+`speech.stt`, `whisper-large-v3` modelini; `speech.tts.fast` ve
+`speech.tts.quality` sırasıyla `tts-1` ve `tts-1-hd` modellerini kullanır.
+
+`Qwen3.8-Flash-Next`, 256K (262144 belirteç) bağlamla sohbet, araç kullanımı,
+akıl yürütme ve görsel anlama yetenekleriyle katalogda bulunur; mevcut sohbet
+profilleri bu modele taşınmaz. `DeepSeek-V4.1-Flash`, 512K (524288 belirteç)
+bağlamla aynı dört yeteneği taşır ancak hiçbir profil onu kullanmaz. Görsel
+anlama yeteneği, platform ekranlarında bu modelin yanında
+`Qwen3-VL-8B-Instruct` ile aynı görsel girdi simgesinin bulunmasına dayanır.
+
+`image.generation` profili `FLUX.2-dev` modeline bağlıdır. Platformun görsel
+düzenleme desteği bu kayda yeni bir yetenek veya profil eklemez. `rerank`
+profili 32K (32768 belirteç) bağlamlı `Qwen3-Reranker-8B` modelini kullanır;
+8K (8192 belirteç) bağlamlı `bge-reranker-v2-m3` de seçilebilir model olarak
+katalogda kalır. Güncel platform kataloğunda bulunmayan veya kaldırılacağı
+bildirilen modeller etkin kayda ve profil eşlemelerine alınmaz.
 
 Kısaltılmış örnek:
 

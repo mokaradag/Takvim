@@ -22,17 +22,17 @@ export const DEFAULT_AI_MODEL_REGISTRY = Object.freeze({
   version: 1,
   models: [
     model('VoxCPM2', ['speech.tts']),
-    model('DeepSeek-V4.1-Flash', ['chat', 'tools', 'reasoning'], 524288),
+    model('DeepSeek-V4.1-Flash', ['chat', 'tools', 'reasoning', 'vision'], 524288),
+    model('Qwen3.8-Flash-Next', ['chat', 'tools', 'reasoning', 'vision'], 262144),
     model('Qwen3.8-27B', ['chat', 'tools', 'reasoning', 'vision'], 262144),
     model('intfloat/multilingual-e5-large', ['embedding']),
     model('tts-1-hd', ['speech.tts']),
-    model('dall-e-3', ['image.generation']),
+    model('FLUX.2-dev', ['image.generation']),
     model('whisper-large-v3', ['speech.stt']),
     model('openai/gpt-oss-120b', ['chat', 'tools', 'reasoning'], 131072),
     model('Qwen3-Next-80B-A3B-Instruct', ['chat', 'tools'], 262144),
     model('tts-1', ['speech.tts']),
     model('Qwen3-Embedding-8B', ['embedding']),
-    model('Qwen3.5-397B-A17B-FP8', ['chat', 'tools', 'reasoning', 'vision'], 262144),
     model('bge-reranker-v2-m3', ['rerank'], 8192),
     model('Qwen3-Reranker-8B', ['rerank'], 32768),
     model('gemma-4-31B-it', ['chat', 'tools', 'reasoning', 'vision'], 131072),
@@ -47,10 +47,10 @@ export const DEFAULT_AI_MODEL_REGISTRY = Object.freeze({
     'chat.tools.reasoning': { model: 'gemma-4-31B-it', maxOutputTokens: 8192, timeoutMs: 180000 },
     vision: { model: 'Qwen3-VL-8B-Instruct', maxOutputTokens: 1024 },
     embedding: { model: 'intfloat/multilingual-e5-large' },
-    rerank: { model: 'bge-reranker-v2-m3' },
+    rerank: { model: 'Qwen3-Reranker-8B' },
     'speech.stt': { model: 'whisper-large-v3' },
     'speech.tts.fast': { model: 'tts-1' },
     'speech.tts.quality': { model: 'tts-1-hd' },
-    'image.generation': { model: 'dall-e-3' }
+    'image.generation': { model: 'FLUX.2-dev' }
   }
 });
