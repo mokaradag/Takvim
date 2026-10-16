@@ -7,7 +7,7 @@ kurulumu, güvenlik kararları ve sorun giderme.
 Özellik hem **Temel Kip** hem **Kapsamlı Kip** için aynı biçimde çalışır.
 
 Aynı SMTP altyapısı **Outlook takvim davetlerini** de taşır; takvim
-tümleştirmesi ayrı bir belgede anlatılır: `docs/OUTLOOK-CALENDAR.md`. Bu
+tümleştirmesi ayrı bir belgede anlatılır: `docs/OUTLOOK-TAKVIM.md`. Bu
 belgedeki SMTP yapılandırması ikisi için de geçerlidir ve hatırlatma
 e-postalarının biçimi takvim tümleştirmesinden **etkilenmez**: takvim parçası
 yalnızca davet iletilerine eklenir. **Otomatik hatırlatma Açık/Kapalı ayarı Outlook teslimatını etkilemez.** Outlook kuyruğu Node sunucusuyla başlayan bağımsız çalışanla otomatik işlenir; yönetici eylemi ve Outlook için OS zamanlayıcısı gerekmez.
@@ -59,7 +59,7 @@ Görev arayüzü / zamanlayıcı
 kuralı anlık görüntüyle aynıdır: tam proje yetkisi (`MR_ProjectAccess` üzerinde
 `FULL`/`READ`), kendi görevi ya da astına atanmış görev. Elle verilmiş bir
 `PARTIAL` proje yetkisi görev kapsamlıdır ve tek başına **başkasının görevine**
-posta göndermeye yetmez. Görev atama kapsamı (bkz. `docs/AUTHORIZATION-MODEL.md`)
+posta göndermeye yetmez. Görev atama kapsamı (bkz. `docs/YETKILENDIRME-MODELI.md`)
 burada yetki **vermez**: yönetici, göremediği bir görevin sorumlularına posta
 gönderemez. Sistem yöneticisi kullanıcı bazlı yetki denetimlerini atlar ama
 projenin **etkin** olması gerekir.
@@ -184,7 +184,7 @@ Kurallar:
 
 Hatırlatma yönetimi artık bağımsız bir gezinme öğesi değildir: kenar çubuğundaki
 **Sistem Yönetimi** sayfasının **Hatırlatma E-postaları** sekmesinde bulunur
-(`docs/SYSTEM-ADMINISTRATION.md`). Görünüm TAŞINMIŞTIR, çatallanmamıştır —
+(`docs/SISTEM-YONETIMI.md`). Görünüm TAŞINMIŞTIR, çatallanmamıştır —
 yetki, ayarlar, zamanlayıcı, elle tur, doğrulama, hata işleme ve gönderim
 geçmişi davranışı değişmemiştir.
 
@@ -442,7 +442,7 @@ Yanıt gövdesi `reminders` ve `outlook` özetlerini ayrı taşır. `evaluated`,
 
 Hatırlatma kapalı ama Outlook daveti gönderilmişse yönetici sayfası “Otomatik hatırlatma: kapalı.” ve “Outlook: 1 iş alındı, 1 gönderildi…” özetlerini ayrı gösterir. Hiçbir ileti gönderilmediği söylenmez. Yönetici **“Turu şimdi çalıştır”** eylemi tanı/deneme içindir; normal Outlook teslimatı buna bağlı değildir. Outlook kuyruk bütçesi tanı ucunda 10 saniye, otomatik çalışanda `MERGEN_ROTA_OUTLOOK_RUN_BUDGET_MS` (varsayılan 45 saniye) değeridir. Her sonuç/hata yazımına bağımsız 5 saniye ayrılır. Otomatik çalışan ayrıca SQL bağlantısı edinmeye 15 saniye ayırır; toplam süre tek sonuçlandırmayla 65 saniye, zaman aşımından sonra hata kaydı da gerekirse 70 saniye olabilir. Hatırlatma turunun mevcut işleme davranışı korunur. Uzun hatırlatma turunda istemci 30 saniyede yanıt alamazsa `REQUEST_TIMEOUT`, işlem sonucunun henüz doğrulanmadığını bildirir.
 
-Bir alt sistem başarısızsa HTTP **503**, ikisi de başarılıysa **200** döner. 503 gövdesindeki özetler ve güvenli `error.code`/`error.message` istemcide korunur. SMTP yapılandırma/gönderim, Outlook tur süresi/sahiplik ve SQL hata kategorileri görünür; sırlar, bağlantı dizeleri ve SQL metinleri görünmez. Hatırlatma kapalı olması tek başına hata değildir. Outlook `claimed`, `sent`, `unchanged`, `cancelled`, `inProgress`, `failed`, `exhausted`, `failureCodes` alanları [Outlook belgesinde](OUTLOOK-CALENDAR.md) açıklanır.
+Bir alt sistem başarısızsa HTTP **503**, ikisi de başarılıysa **200** döner. 503 gövdesindeki özetler ve güvenli `error.code`/`error.message` istemcide korunur. SMTP yapılandırma/gönderim, Outlook tur süresi/sahiplik ve SQL hata kategorileri görünür; sırlar, bağlantı dizeleri ve SQL metinleri görünmez. Hatırlatma kapalı olması tek başına hata değildir. Outlook `claimed`, `sent`, `unchanged`, `cancelled`, `inProgress`, `failed`, `exhausted`, `failureCodes` alanları [Outlook belgesinde](OUTLOOK-TAKVIM.md) açıklanır.
 
 Aynı ucun **GET** yöntemi yalnız SYSTEM_ADMIN oturumuyla kuyruk sağlık durumunu okur, posta göndermez; zamanlayıcı anahtarı GET yetkisi vermez. Yönetici sayfasında görünürken 15 saniyede bir yenilenir. Ortak veritabanı kuyruk sayıları ile bu Node sürecinin son otomatik Outlook turu ayrı gösterilir. Hatırlatma taslağı bu yenilemeden etkilenmez.
 
@@ -450,7 +450,7 @@ Aynı ucun **GET** yöntemi yalnız SYSTEM_ADMIN oturumuyla kuyruk sağlık duru
 
 ## 10. Veritabanı
 
-İki tablo eklenir (bkz. `docs/DATABASE-SCHEMA.md`):
+İki tablo eklenir (bkz. `docs/VERITABANI-SEMASI.md`):
 
 - `MR_ReminderSettings` — tek satırlık yönetici yapılandırması (otomatik
   gönderim, pencere, sıklık, konu ve gövde şablonu).
@@ -544,7 +544,7 @@ hata koduyla listelenir. Alıcı adresleri maskelenmiştir.
 | `src/server/notifications/taskMailService.js` | Kuyruğu tüketen gönderim; aynı `mailService` taşımasını kullanır |
 | `src/server/notifications/taskMailWorker.js` | Node başlangıcıyla açılan yoklama döngüsü |
 
-Outlook kullanıcı eylemleri kalıcı kuyruğa yazılır ve uygulamayla başlayan otomatik Outlook çalışanı tarafından gönderilir; turlar arasında varsayılan 5 saniye beklenir (`MERGEN_ROTA_OUTLOOK_POLL_INTERVAL_MS`). Geçici SMTP/SQL kesintilerinde kuyruk korunur ve otomatik geri çekilmeyle tekrar denenir. İşletim sistemi zamanlayıcısı yalnız otomatik hatırlatma e-postaları için gereklidir. Hatırlatma sorgusu hata verse de Outlook kuyruğu denenir; iki işten biri başarısızsa uç HTTP 503 döndürür. Eksik Outlook şeması, geçersiz SMTP yapılandırması, deneme eşiğini aşmış bekleyen işler ve Outlook tur bütçesinin dolması sağlık hatasıdır. `MERGEN_ROTA_OUTLOOK_RUN_BUDGET_MS` varsayılanı 45.000 ms; ayrıntılar için [Outlook takvimi](OUTLOOK-CALENDAR.md).
+Outlook kullanıcı eylemleri kalıcı kuyruğa yazılır ve uygulamayla başlayan otomatik Outlook çalışanı tarafından gönderilir; turlar arasında varsayılan 5 saniye beklenir (`MERGEN_ROTA_OUTLOOK_POLL_INTERVAL_MS`). Geçici SMTP/SQL kesintilerinde kuyruk korunur ve otomatik geri çekilmeyle tekrar denenir. İşletim sistemi zamanlayıcısı yalnız otomatik hatırlatma e-postaları için gereklidir. Hatırlatma sorgusu hata verse de Outlook kuyruğu denenir; iki işten biri başarısızsa uç HTTP 503 döndürür. Eksik Outlook şeması, geçersiz SMTP yapılandırması, deneme eşiğini aşmış bekleyen işler ve Outlook tur bütçesinin dolması sağlık hatasıdır. `MERGEN_ROTA_OUTLOOK_RUN_BUDGET_MS` varsayılanı 45.000 ms; ayrıntılar için [Outlook takvimi](OUTLOOK-TAKVIM.md).
 
 ## Outlook ile ortak SMTP ve tur sonucu
 
@@ -552,7 +552,7 @@ Outlook teslimatı etkinse SMTP zorunludur: en az `SMTP_HOST` ve geçerli `SMTP_
 
 `runAutomaticReminders()` herhangi bir gerçek başarısız teslimatta `ok:false` döndürür. Birleşik `/reminders/run` sonucu, `reminders.ok`, pozitif başarısız sayısı ve `results[].status=FAILED` değerlerini birlikte değerlendirir; Outlook başarısı bu hatayı gizlemez. Başarısız birleşik tur HTTP 503 üretir; arayüz ayrı sayaçları ve hatırlatmaya özgü güvenli hata kodlarını gösterir. Kısmi alıcı çözümü uyarıları korunur; SMTP’ye hiç iletilmeyen uygunluk nedeniyle atlamalar teslimat hatası sayılmaz.
 
-Outlook tamamlanma/açılma davranışı için mevcut 0010 kurulumuna da `MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql` uygulanır. Günlük FREE termin gösterimi, tek yönlü bağlantı ve Exchange kabul kontrolü [OUTLOOK-CALENDAR.md](OUTLOOK-CALENDAR.md) içindedir. Outlook kabul/ret/elle silme durumu okunmaz; bu durumlar hatırlatma politikasını değiştirmez.
+Outlook tamamlanma/açılma davranışı için mevcut 0010 kurulumuna da `MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql` uygulanır. Günlük FREE termin gösterimi, tek yönlü bağlantı ve Exchange kabul kontrolü [OUTLOOK-TAKVIM.md](OUTLOOK-TAKVIM.md) içindedir. Outlook kabul/ret/elle silme durumu okunmaz; bu durumlar hatırlatma politikasını değiştirmez.
 
 ## Atama bildirimi postaları (isteğe bağlı)
 
@@ -573,15 +573,18 @@ Farkları bilinçlidir:
 | Zamanlayıcı | otomatik gönderim için OS zamanlayıcısı gerekir | gerekmez; çalışan Node ile başlar |
 
 Kutu işaretlendiğinde kaydetme SMTP'yi **beklemez**: posta niyeti görev
-değişikliğiyle **aynı transaction** içinde kuyruğa yazılır, gönderimi
+değişikliğiyle **aynı veritabanı işlemi** içinde kuyruğa yazılır, gönderimi
 `MERGEN_ROTA_TASK_MAIL_POLL_MS` (varsayılan 30.000 ms) aralığıyla çalışan ayrı
 bir döngü yapar. Böylece posta sunucusundaki bir arıza görev kaydetmeyi
-düşürmez. Kuyruk satırı `DedupeKey` ile tekilleştirilir; yeniden denenen bir
-commit ikinci posta üretmez. Başarısız gönderim üstel geri çekilmeyle yeniden
+düşürmez. Kuyruk satırı `DedupeKey` ile tekilleştirilir; aynı değişiklik
+kuyruğa ikinci kez eklenmez. Bu, tam olarak bir kez teslimat güvencesi değildir:
+SMTP iletiyi kabul ettikten sonra `SENT` yazılamadan çalışan durursa veya durum
+yazması başarısız olursa satır kira dolunca yeniden kiralanabilir ve aynı ileti
+yeniden gönderilebilir. Başarısız gönderim üstel geri çekilmeyle yeniden
 denenir ve deneme eşiği dolduğunda satır `FAILED` olarak kalır — sessizce
 kaybolmaz. Şema (`0015`) uygulanmadıysa kutu işaretlenmiş olsa bile posta
 üretilmez ve görev kaydetme etkilenmez.
 
 SMTP yapılandırılmamışsa bu akış da hatırlatmalarla aynı biçimde çalışmaz;
 kuyruk teslim edilmemiş kalır. Ayrıntılar: [Talepler ve
-bildirimler](REQUESTS-AND-NOTIFICATIONS.md).
+bildirimler](TALEPLER-VE-BILDIRIMLER.md).

@@ -16,7 +16,7 @@ Gerçek Sistem seçimi
   → GET /api/mergen-rota/auth/status
   → authenticated: true
       → AppStateProvider kurulur
-      → session ve snapshot yüklenir
+      → oturum ve anlık görüntü yüklenir
   → authenticated: false
       → /api/mergen-rota/auth/login?returnTo=<uygulama-kökü>
       → Keycloak / implicit köprü

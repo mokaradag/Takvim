@@ -1,20 +1,16 @@
-# MERGEN Rota — `/rota` reverse-proxy deployment
+# MERGEN Rota — `/rota` Ters Vekil Dağıtımı
 
-This deployment model keeps Next.js internally mounted at `/` on port `8008`, while Nginx exposes it publicly at:
+Bu dağıtım modelinde Next.js içeride `8008` portunun `/` yolunda çalışır; Nginx ise dışarıya şu adresten sunar:
 
 ```text
 https://<MERGEN_HOST>/rota/
 ```
 
-Nginx strips `/rota` before forwarding. MERGEN Rota therefore does **not** use Next.js `basePath`; it uses a browser-visible public prefix plus `assetPrefix`.
+Nginx iletmeden önce `/rota` bölümünü kaldırır. Bu nedenle MERGEN Rota, Next.js `basePath` **kullanmaz**; tarayıcıya görünen dış erişim öneki ile `assetPrefix` kullanır.
 
-## Compatible Nginx rule
+## Uyumlu Nginx kuralı
 
-The existing prefix-stripping form is supported. Note the `^~ /rota/` boundary:
-a bare `location /rota` is a *prefix* match, so it also captures unrelated paths
-such as `/rota-admin` and `/rotavirus` and forwards them to the Rota upstream
-instead of their intended handler (or a 404). The exact `= /rota` location keeps
-the bare path working.
+Mevcut önek kaldırma biçimi desteklenir. `^~ /rota/` sınırına dikkat edin: tek başına `location /rota` bir *önek* eşleşmesidir; `/rota-admin` ve `/rotavirus` gibi ilgisiz yolları da yakalayıp kendi işleyicileri (veya 404) yerine Rota arka sunucusuna iletir. Tam eşleşen `= /rota` konumu, son eğik çizgi olmadan da yolun çalışmasını sağlar.
 
 ```nginx
 location = /rota {
@@ -42,9 +38,9 @@ location ^~ /rota/ {
 }
 ```
 
-The application redirects the exact path `/rota` to `/rota/`. Requests below `/rota/` are then stripped by Nginx and forwarded to the internal root route.
+Uygulama tam `/rota` yolunu `/rota/` yoluna yönlendirir. `/rota/` altındaki isteklerin öneki daha sonra Nginx tarafından kaldırılır ve iç kök rotaya iletilir.
 
-Examples:
+Örnekler:
 
 ```text
 /rota/                                      -> /
@@ -54,45 +50,29 @@ Examples:
 /rota/api/mergen-rota/auth/implicit-session  -> /api/mergen-rota/auth/implicit-session
 ```
 
-## Streaming and origin forwarding (Rota AI)
+## Akış ve kaynak bilgisinin iletilmesi (Rota AI)
 
-Rota AI answers stream from `POST /api/mergen-rota/ai/assistant/turns` as
-`text/event-stream`. The application already sends `Cache-Control: no-cache,
-no-store, no-transform` and `X-Accel-Buffering: no`, which disables Nginx
-response buffering for that response. It also sends an SSE comment every 15
-seconds while a slow model has not produced text yet, so an idle-read timeout
-larger than 15 seconds allows heartbeats to keep the connection open. Merge the
-following into the `location ^~ /rota/` block (also for TEST `/bilge` or other
-prefixes). REPLACE existing directives, rather than appending duplicates,
-including `proxy_http_version`, `proxy_read_timeout`, `proxy_send_timeout` and
-all matching `proxy_set_header` names (especially `Host`). nginx rejects duplicate
-single-value directives and repeated Host headers break forwarding:
+Rota AI yanıtları `POST /api/mergen-rota/ai/assistant/turns` üzerinden `text/event-stream` olarak akar. Uygulama zaten `Cache-Control: no-cache, no-store, no-transform` ve `X-Accel-Buffering: no` göndererek bu yanıt için Nginx yanıt arabelleğini kapatır. Yavaş model henüz metin üretmemişken her 15 saniyede bir SSE yorumu da gönderir; 15 saniyeden uzun boşta okuma zaman aşımı, nabız iletileriyle bağlantının açık kalmasını sağlar. Aşağıdakileri `location ^~ /rota/` bloğuyla birleştirin (TEST `/bilge` ve diğer önekler için de geçerlidir). `proxy_http_version`, `proxy_read_timeout`, `proxy_send_timeout` ve eşleşen bütün `proxy_set_header` adları (özellikle `Host`) dahil mevcut yönergeleri çoğaltmak yerine DEĞİŞTİRİN. Nginx, tek değerli yönergelerin tekrarını reddeder; yinelenen Host başlıkları iletimi bozar:
 
 ```nginx
     proxy_http_version 1.1;
-    # Streaming: forward each chunk immediately.
+    # Akış: her parçayı hemen iletin.
     proxy_buffering off;
     proxy_cache off;
-    # Keep text/event-stream out of gzip_types (compression buffers the stream).
-    # Idle timeouts, not a total stream lifetime limit.
+    # text/event-stream değerini gzip_types dışında tutun (sıkıştırma akışı arabelleğe alır).
+    # Bunlar boşta kalma zaman aşımlarıdır; toplam akış ömrü sınırı değildir.
     proxy_read_timeout 300s;
     proxy_send_timeout 300s;
-    # Original host and scheme: the same-origin check of state-changing AI
-    # requests (turns, deletes, key management) compares them with `Origin`.
-    # `$http_host` keeps a non-default public port (`$host` drops it).
+    # Özgün ana makine ve şema: durum değiştiren AI isteklerinin (turlar,
+    # silmeler, anahtar yönetimi) aynı-kaynak denetimi bunları `Origin` ile karşılaştırır.
+    # `$http_host`, varsayılan dışı dış erişim portunu korur (`$host` kaldırır).
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 ```
 
-Longer existing timeouts (such as the `100000` values above) are compatible.
-The application's own AI timeouts are not relaxed to accommodate a proxy: a
-proxy that buffers the whole answer or cuts the connection early must be fixed in
-the proxy. Likewise, if the proxy does not forward the original host and scheme,
-state-changing AI requests are rejected with `403 FORBIDDEN` by design; the fix
-is the forwarding headers above, never a weaker same-origin check. See
-`docs/AI-PLATFORM.md` §18.11.
+Daha uzun mevcut zaman aşımları (yukarıdaki `100000` değerleri gibi) uyumludur. Uygulamanın kendi AI zaman aşımları vekile uyum sağlamak için gevşetilmez: yanıtın tamamını arabelleğe alan veya bağlantıyı erken kesen vekilde düzeltme yapılmalıdır. Benzer biçimde vekil özgün ana makineyi ve şemayı iletmezse durum değiştiren AI istekleri tasarım gereği `403 FORBIDDEN` ile reddedilir; çözüm aynı-kaynak denetimini zayıflatmak değil, yukarıdaki iletim başlıklarıdır. Bkz. `docs/YAPAY-ZEKA-PLATFORMU.md` §18.11.
 
 ### Sahada doğrulanan aynı-kaynak tanısı — 28 Eylül 2026
 
@@ -123,9 +103,9 @@ Aynı belirti görülürse önce vekil başlıklarını doğrulayın; çözüm
 üretim 8008/`/rota` örneğine dokunmadan TEST 8009/`/bilge` üzerinde
 tamamlanmıştır.
 
-## Production `.env.local`
+## Üretim `.env.local` dosyası
 
-Use masked values as a template:
+Maskelenmiş değerleri şablon olarak kullanın:
 
 ```ini
 NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH=/rota
@@ -140,26 +120,26 @@ MERGEN_ROTA_KEYCLOAK_POST_LOGOUT_REDIRECT_URI=https://<MERGEN_HOST>/rota/
 MERGEN_ROTA_SESSION_COOKIE_SECURE=true
 ```
 
-The implicit callback URI must be permitted by the existing Keycloak client exactly as written.
+Mevcut Keycloak istemcisi, implicit geri çağrı URI'sine tam yazıldığı biçimiyle izin vermelidir.
 
-Both `NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH` and `NEXT_PUBLIC_MERGEN_ROTA_AUTO_REFRESH_INTERVAL_MS` are embedded into the browser bundle, so changing either requires a rebuild. The refresh interval defaults to 60 seconds, rejects values below 30 seconds, pauses in hidden tabs and is unused in Demo Mode:
+`NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH` ve `NEXT_PUBLIC_MERGEN_ROTA_AUTO_REFRESH_INTERVAL_MS` tarayıcı paketine gömülür; ikisinden birini değiştirmek yeniden derleme gerektirir. Yenileme aralığı varsayılan olarak 60 saniyedir, 30 saniyenin altındaki değerleri reddeder, gizli sekmelerde duraklar ve Demo Kipinde kullanılmaz:
 
 ```cmd
 npm run build
 npm run start -- -H 0.0.0.0 -p 8008
 ```
 
-`NODE_EXTRA_CA_CERTS` must still be set before Node starts when the realm JWKS certificate chain uses a private corporate CA.
+Realm JWKS sertifika zinciri özel kurumsal CA kullanıyorsa `NODE_EXTRA_CA_CERTS` yine Node başlamadan önce ayarlanmalıdır.
 
-## Direct port-8008 access
+## 8008 portuna doğrudan erişim
 
-A prefixed build also includes an internal rewrite from `/rota/:path*` to `/:path*`, which allows direct diagnostic access at:
+Önekli derleme ayrıca `/rota/:path*` yolundan `/:path*` yoluna iç yeniden yazım içerir; bu, şu adresten doğrudan tanı erişimine izin verir:
 
 ```text
 http://<ROTA_SERVER>:8008/rota/
 ```
 
-The canonical production address remains the external HTTPS URL.
+Esas üretim adresi, dış HTTPS URL'si olarak kalır.
 
 ### Rota AI için tek süreç zorunluluğu
 
@@ -167,7 +147,7 @@ Aynı konuşma veritabanına bağlı `/api/mergen-rota/ai/assistant` ve tüm alt
 uçlarını tek bir Node.js sürecine yönlendirin. Bu uçlarda çok sunuculu upstream,
 PM2 cluster veya worker dağıtımı kullanmayın; yalnız oturum yapışkanlığı yeterli
 değildir. Silme ve tur istekleri farklı süreçlere gidemez. Dağıtım geçişinde eski
-süreci durdurmadan yeni sürece AI trafiği açmayın. Ayrıntılar: `AI-PLATFORM.md` §18.14.
+süreci durdurmadan yeni sürece AI trafiği açmayın. Ayrıntılar: `YAPAY-ZEKA-PLATFORMU.md` §18.14.
 
 ## Aşama 2 gerçek akış kabulü — 29.09.2026
 

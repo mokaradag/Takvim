@@ -145,7 +145,7 @@ Kurallar:
 
 Atama koordinasyonu, görev bildirimleri, posta kuyruğu ve kullanıcı varlığı **0015** göçüyle gelir. Dağıtım sırası: `database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql` → `npm run build` → Node hizmetini yeniden başlat. Betik yinelenebilir ve veriye dokunmaz; 0014 uygulanmadan çalışmaz. Göç uygulanmadan açılan kurulumda zil, var olan tarih talebi akışıyla çalışmayı sürdürür ve görev yazması etkilenmez.
 
-Mevcut kurulumda **0007** yüklü olmalıdır. Uygulama dağıtımından önce aynı veritabanında `database/MR_Upgrade_0008_Request_Notifications.sql` çalıştırılır. Betik tekrar çalıştırılabilir. Veritabanı yeniden oluşturulmaz; daha önceki talep ve audit kayıtları korunur. Ardından `npm run build` çalıştırılıp Node hizmeti yeniden başlatılır. Yeni kurulumda ana oluşturma betiği güncel şemayı içerir.
+Mevcut kurulumda **0007** yüklü olmalıdır. Uygulama dağıtımından önce aynı veritabanında `database/MR_Upgrade_0008_Request_Notifications.sql` çalıştırılır. Betik tekrar çalıştırılabilir. Veritabanı yeniden oluşturulmaz; daha önceki talep ve denetim kayıtları korunur. Ardından `npm run build` çalıştırılıp Node hizmeti yeniden başlatılır. Yeni kurulumda ana oluşturma betiği güncel şemayı içerir.
 
 `MR_ScheduleRequestNotifications` tablosu `(RequestId, Sicil)` anahtarını, `ReadVersion`, `DismissedVersion` ve `UpdatedAt` alanlarını taşır. `MR_TaskScheduleChangeRequests` ek olarak görev başlığı ve proje kimliği/adı/kodu künyesini saklar. 0008 mevcut kayıtların künyesini doldurur ve görev silinince talepleri de silen yabancı anahtarı kaldırır. Önceden silinmiş kayıtlar bu yükseltmeyle geri getirilemez. Görev silme akışı açık talepleri güncelliğini yitirmiş olarak işaretler; tamamlanmış taleplere dokunmaz.
 

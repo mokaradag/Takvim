@@ -10,7 +10,7 @@
    sayfa olur ve çekmece katmanını kullanır.
 
    Yükseklikler ölçekli görünüm değişkenleriyle yazılır (bkz.
-   UI-STYLING-ARCHITECTURE.md §2.1); renkler yalnızca tema belirteçlerinden
+   ARAYUZ-BICIMLENDIRME-MIMARISI.md §2.1); renkler yalnızca tema belirteçlerinden
    gelir, iki tema ve yüksek karşıtlık aynı sözleşmeyi kullanır. */
 
 /* ── Üst çubuk düğmesi ve Bilgin imi ──────────────────────────── */

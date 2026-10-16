@@ -67,7 +67,7 @@ Takvim sayfasında iki sekme bulunur:
 1. **Takvim** — varsayılan görünüm; her görevi yalnızca Termin (`targetFinish`) gününde gösterir. Eski bir kayıtta hedef yoksa `plannedFinish` güvenli yedektir; süre `plannedStart`–`plannedFinish` aralığında çoğaltılmaz; ayrıntılı zaman çizelgesi Kapsamlı Kip Gantt görünümünde izlenir.
 2. **Hızlı Görev Tanımı** — proje, görev, isteğe bağlı kısa açıklama/etiket, sorumlular ve termin tarihi ile hızlı kayıt oluşturur.
 
-Kullanıcı başka bir sayfadan yeniden Takvim'e geçtiğinde Takvim sekmesi yeniden varsayılan görünüm olur. Temel Kipte oluşturulan kayıtlar mevcut Project/Task veri altyapısını kullanmaya devam eder ve Kapsamlı Kipte ayrıntılandırılabilir.
+Kullanıcı başka bir sayfadan yeniden Takvim'e geçtiğinde Takvim sekmesi yeniden varsayılan görünüm olur. Temel Kipte oluşturulan kayıtlar mevcut Proje/Görev veri altyapısını kullanmaya devam eder ve Kapsamlı Kipte ayrıntılandırılabilir.
 
 ## Kip sınırları ve komut arama
 
@@ -91,7 +91,7 @@ Sütun kümesi doğrudan **Hızlı Görev Tanımı** alanlarından türetilir (`
 | Durum | `status` |
 | Termin | `targetFinish` |
 
-Kapsamlı Kipe ait planlama alanları Temel Kipte **hiç gösterilmez**: ilerleme yüzdesi, başlangıç tarihleri, temel plan (baseline), bağımlılıklar, tekrar kuralı, iş dağılım ağacı düğümü ve serbest zamanlama alanları. Saat/efor alanları ise ürünün hiçbir normal kullanıcı görünümünde gösterilmez; eski `plannedHours` / `actualHours` değerleri yalnızca veri uyumluluğu için korunur. Bu liste `ADVANCED_ONLY_TASK_FIELDS` sabitinde tutulur ve regresyon testleri alanların sızmadığını doğrular.
+Kapsamlı Kipe ait planlama alanları Temel Kipte **hiç gösterilmez**: ilerleme yüzdesi, başlangıç tarihleri, baz plan, bağımlılıklar, tekrar kuralı, iş dağılım ağacı düğümü ve serbest zamanlama alanları. Saat/efor alanları ise ürünün hiçbir normal kullanıcı görünümünde gösterilmez; eski `plannedHours` / `actualHours` değerleri yalnızca veri uyumluluğu için korunur. Bu liste `ADVANCED_ONLY_TASK_FIELDS` sabitinde tutulur ve regresyon testleri alanların sızmadığını doğrular.
 
 Sayfa aynı sadeleştirilmiş alan kümesi üzerinde şu yetenekleri sunar:
 
@@ -103,7 +103,7 @@ Sayfa aynı sadeleştirilmiş alan kümesi üzerinde şu yetenekleri sunar:
 6. **Sıralama** — sade sütun başlıklarından yapılır.
 7. **Düzenleme** — satıra tıklamak `SimpleTaskDrawer` panelini açar.
 
-İşlem sırası `yetkili snapshot → çalışma alanı/proje → kurumsal kapsam → arama → sütun fasetleri → sıralama → sayfalama` biçimindedir. Direktörlük/Müdürlük/Birim bir yetkilendirme kuralı değildir ve görev/kişi görünürlüğünü genişletmez. Seçenekler yalnızca mevcut çalışma alanındaki görevlerin, mevcut kişi projeksiyonunda çözülebilen sorumlularından üretilir; geçici arama veya sütun süzgeci kurumsal seçeneği listeden düşürmez.
+İşlem sırası `yetkili anlık görüntü → çalışma alanı/proje → kurumsal kapsam → arama → sütun fasetleri → sıralama → sayfalama` biçimindedir. Direktörlük/Müdürlük/Birim bir yetkilendirme kuralı değildir ve görev/kişi görünürlüğünü genişletmez. Seçenekler yalnızca mevcut çalışma alanındaki görevlerin, mevcut kişi projeksiyonunda çözülebilen sorumlularından üretilir; geçici arama veya sütun süzgeci kurumsal seçeneği listeden düşürmez.
 
 `SimpleTaskDrawer`, Kapsamlı Kipteki `TaskDrawer` yerine yalnızca görev adı, kısa açıklama, sorumlular, öncelik, durum ve termin alanlarını düzenler. Her satırda silme eylemi bulunur; silme simgesi yetkisiz durumda açıklayıcı nedenle pasiftir, paneldeki büyük **Sil** düğmesi ise yalnızca sunucudaki kuralla uyumlu yetkili görevlerde gösterilir. Görev başlığı odaklanabilir bir düğmedir: satır tıklaması dışında klavyeyle de açılır.
 
@@ -115,7 +115,7 @@ Dar `ASSIGNEE_CREATE` kapsamında yeni görev tanımlayan normal kullanıcı iç
 - **Kısa açıklama/etiket isteğe bağlıdır.** Kullanıcı değer girerse proje etiket kataloğuyla eşleştirilir; değer yoksa görev etiketsiz oluşturulur. Girilen değer katalogda aranır, yoksa yazılabilir projelerde kataloğa eklenir. Proje üst verisi yazılamıyorsa (görev atama kapsamı) açıkça girilen etiket yine görevde saklanır.
 - **Gizli plan tarihleri ezilmez.** Temel Kip planı, başlangıç/bitiş/termin hâlâ aynı gün olduğunda "kendi kurduğu plan" sayar ve termin değişikliğiyle üçünü birlikte taşır. Tarihler ayrışmışsa plan Kapsamlı Kipte kurulmuştur; o zaman yalnızca `targetFinish` güncellenir ve görevin Gantt/CPM sonuçları korunur.
 
-`AppShell`, `simpleMode` bayrağına göre sade veya gelişmiş görev tablosunu seçer. Her iki görünüm aynı kalıcı Task modelini ve kabuğun anahtarlı içerik alanı dışında duran `TaskOrganizationFilterProvider` geçici durumunu kullanır; bu nedenle Temel → Kapsamlı ve Kapsamlı → Temel geçişinde seçim korunur. Durum sunucuya yazılmaz. Temel Kip düğmesi yalnızca var olan hızlı kayıt sekmesine geçer.
+`AppShell`, `simpleMode` bayrağına göre sade veya gelişmiş görev tablosunu seçer. Her iki görünüm aynı kalıcı görev modelini ve kabuğun anahtarlı içerik alanı dışında duran `TaskOrganizationFilterProvider` geçici durumunu kullanır; bu nedenle Temel → Kapsamlı ve Kapsamlı → Temel geçişinde seçim korunur. Durum sunucuya yazılmaz. Temel Kip düğmesi yalnızca var olan hızlı kayıt sekmesine geçer.
 
 ### Öncelik Temel Kipte
 
@@ -125,7 +125,7 @@ Yeni bir öncelik modeli **tanımlanmaz**. Kapsamlı Kipin `TASK_PRIORITIES` kat
 
 ### Proje seçimi
 
-Hızlı Görev Tanımı ve sadeleştirilmiş görev düzenleme proje listesini `useTaskAssignableProjects()` üzerinden alır. Sıradan kullanıcı için tam yetkili projelere ek olarak, yetkili sorumlusu olduğu görev bulunan proje dar kendi-görev oluşturma kapsamında seçilebilir; müdür/direktör için buna kurumsal CN43N kataloğu eklenir. Bu genişleme proje veya WBS yönetim yetkisi vermez. Kural ve sunucu tarafı sınırı: `docs/AUTHORIZATION-MODEL.md` · *Task assignment scope*.
+Hızlı Görev Tanımı ve sadeleştirilmiş görev düzenleme proje listesini `useTaskAssignableProjects()` üzerinden alır. Sıradan kullanıcı için tam yetkili projelere ek olarak, yetkili sorumlusu olduğu görev bulunan proje dar kendi-görev oluşturma kapsamında seçilebilir; müdür/direktör için buna kurumsal CN43N kataloğu eklenir. Bu genişleme proje veya WBS yönetim yetkisi vermez. Kural ve sunucu tarafı sınırı: `docs/YETKILENDIRME-MODELI.md` · *Görev atama kapsamı*.
 
 ## Açılış perdesi
 
@@ -141,7 +141,7 @@ Sorumlu seçiminin görsel kart tasarımı korunur; ancak tüm kullanıcılar ay
 - en fazla ilk sekiz eşleşmeyi hızlı seçim kartları olarak görür;
 - seçtiği kişileri ayrı bir **Seçilenler** bölümünde görmeye devam eder.
 
-Bu yaklaşım, kişi sayısı büyüdüğünde yüzlerce kartın aynı anda render edilmesini önler. Mevcut uygulama kişi listesini istemci tarafında filtreler. Gerçek veritabanı/API entegrasyonunda aynı arayüz korunarak arama sunucu tarafına taşınabilir; bu durumda arama metni sorgu parametresi olarak gönderilmeli, sonuçlar sayfalı veya sınırlı biçimde dönmelidir.
+Bu yaklaşım, kişi sayısı büyüdüğünde yüzlerce kartın aynı anda çizilmesini önler. Mevcut uygulama kişi listesini istemci tarafında filtreler. Gerçek veritabanı/API entegrasyonunda aynı arayüz korunarak arama sunucu tarafına taşınabilir; bu durumda arama metni sorgu parametresi olarak gönderilmeli, sonuçlar sayfalı veya sınırlı biçimde dönmelidir.
 
 ## Üst çubuk proje bağlamı
 
@@ -162,7 +162,7 @@ Proje çalışma alanında proje bağlamı üst çubuğun gerçek yatay ve dikey
 
 hizalanır.
 
-Durum dağılımı halka grafiği ve legend yerleşimi, kabul edilen boyut ve 1280 px davranışını korur. Dashboard yapısı `dashboard-main-grid`, `dashboard-status-card`, `dashboard-status-body`, `dashboard-status-chart` ve `dashboard-status-legend` gibi semantik sınıflarla tanımlanır; inline stil metni veya kart sırası üzerinden çıkarım yapılmaz. Bu sözleşmenin sahibi `src/app/styles/dashboard.css` dosyasıdır.
+Durum dağılımı halka grafiği ve açıklama yerleşimi, kabul edilen boyut ve 1280 px davranışını korur. Özet yapısı `dashboard-main-grid`, `dashboard-status-card`, `dashboard-status-body`, `dashboard-status-chart` ve `dashboard-status-legend` gibi semantik sınıflarla tanımlanır; satır içi biçim metni veya kart sırası üzerinden çıkarım yapılmaz. Bu sözleşmenin sahibi `src/app/styles/dashboard.css` dosyasıdır.
 
 ### Durum dağılımı kovaları birbirini dışlar
 
@@ -196,7 +196,7 @@ tekrarlandığı için yuvarlama artığı deseni başa sardırıyor, aynı dili
 iki ayrı yerinde parça parça görünüyordu; seçili dilimi dışarı öteleyen
 "patlatma" da dilimi halkadan kopararak aynı bölünmüş izlenimi veriyordu. Vurgu
 artık yalnızca iç yarıçapı değiştirir. Ayrıntı için bkz.
-`docs/UI-STYLING-ARCHITECTURE.md` § 10.
+`docs/ARAYUZ-BICIMLENDIRME-MIMARISI.md` § 10.
 
 ### Plan sağlığı kartları
 
@@ -260,7 +260,7 @@ adı ve departmanıyla kişiselleştirilmiştir. Kimlik yalnızca **gösterim**
 amaçlıdır; hiçbir yetki kararı buradan türetilmez.
 
 Saate göre selamlama **yalnızca tarayıcıda** hesaplanır. Bu istemci bileşeni
-sunucuda da ön-render edilebilir; `new Date()` orada sunucu saat diliminde
+sunucuda da önceden çizilebilir; `new Date()` orada sunucu saat diliminde
 okunur ve iki taraf farklı dilime düşerse hidrasyon uyuşmazlığı ve yanlış
 selamlama oluşurdu. Bağlanana kadar dilimden bağımsız bir metin gösterilir.
 
@@ -451,7 +451,7 @@ Temel Kipte proje oluşturmak etkin çalışma alanını **değiştirmez** (`add
 
 Kullanıcı bir projeyi açıp görevleri **sonra** tanımlamak isteyebilir. Bu nedenle Temel Kipte, hızlı görev formundan bağımsız bir **Yeni proje** düğmesi bulunur; düğme Kapsamlı Kipteki `ProjectCreateDialog` penceresini açar ve yalnızca projeyi (ve kök iş dağılım düğümünü) oluşturur. Oluşturulan proje form üzerindeki proje seçiminde etkin hâle gelir, çalışma alanı değişmez ve hiçbir görev kaydı üretilmez. Düğme oturumun `canCreateProjects` yetkisi yoksa devre dışıdır.
 
-Pencere, hızlı görev formunun **dışında** render edilir: iç içe `<form>` öğeleri geçersiz HTML'dir ve tarayıcı iç formu yok sayar.
+Pencere, hızlı görev formunun **dışında** çizilir: iç içe `<form>` öğeleri geçersiz HTML'dir ve tarayıcı iç formu yok sayar.
 
 Etiket kataloğuna yazma, görev kaydından **bağımsız ikincil bir işlemdir**. Proje satırı yazılamıyorsa görev yine oluşturulur ve kullanıcıya uyarı gösterilir; asıl işlem ikincil bir yazma yüzünden engellenmez.
 
@@ -489,7 +489,7 @@ Kurumsal rehberde herkesin direktörlüğü tanımlı değildir; bir bölüm ça
 
 Tablo sütunları Görevler sayfasıyla aynı süzgeç/sıralama bileşenini kullanır ve
 kurumsal düzey süzgeçleri üstteki dizin açılır listeleriyle tek durumu paylaşır.
-Ayrıntı: `docs/PROJECT-PORTFOLIO-AND-DIRECTORY.md`.
+Ayrıntı: `docs/PROJE-PORTFOYU-VE-DIZINI.md`.
 
 ## Ekip · personel ayrıntı penceresi
 
@@ -511,7 +511,7 @@ Kenar çubuğunun altındaki kullanıcı bloğu artık sabit bir örnek kişi de
 
 - kurumsal fotoğraf, Sicil'den `<TABAN_URL>/<SICIL>.jpg` biçiminde üretilir;
   adres yoksa ya da görsel yüklenemezse baş harflere dönülür;
-- ad satırının altında **Keycloak `department` claim'i** gösterilir; uydurma bir
+- ad satırının altında **Keycloak `department` beyanı** gösterilir; uydurma bir
   "rol" metni yoktur. Değer yoksa nötr `Departman bilgisi yok` yazılır;
 - departman adları uzun olabildiği için satır tek satıra zorlanmaz: küçük yazı
   tipi, sıkı satır yüksekliği ve çok satıra sarma kullanılır, taşma engellenir.
@@ -614,7 +614,7 @@ Kurum içi npm registry/proxy yapılandırması kullanılıyorsa ayarı silmeden
 
 ## Stil sahipliği
 
-Temel Kip arayüz stilleri `src/app/styles/simple-mode.css` içinde sahiplenilir. Üst çubuk `shell.css`, Özet/Dashboard `dashboard.css` tarafından yönetilir. Yerel bir görsel sorun için yeni bir global `fixes` veya `polish` katmanı eklenmemelidir; ilgili yetkili stil sahibi düzeltilmelidir. Ayrıntılar için `UI-STYLING-ARCHITECTURE.md` dosyasına bakın.
+Temel Kip arayüz stilleri `src/app/styles/simple-mode.css` içinde sahiplenilir. Üst çubuk `shell.css`, Özet `dashboard.css` tarafından yönetilir. Yerel bir görsel sorun için yeni bir genel `fixes` veya `polish` katmanı eklenmemelidir; ilgili yetkili stil sahibi düzeltilmelidir. Ayrıntılar için `ARAYUZ-BICIMLENDIRME-MIMARISI.md` dosyasına bakın.
 
 
 ## Proje seçimi, ölçek ve Takvim görünümü
@@ -633,13 +633,13 @@ Koyu temada hafta sonları daha açık mavi zemin ve üst kenar çizgisiyle ayr�
 
 Temel ve Kapsamlı Kipte yeni veya mevcut görevde yapılan değişiklikler **Kaydet** seçilene kadar yerel taslakta kalır. Sorumlu, başlık, kısa açıklama/etiket, not, tarih, durum, öncelik, ilerleme, proje/WBS, bağımlılık ve tekrar alanları yazarken, odak kaybında veya pencere kapatılırken sunucuya gönderilmez. Kapatma ve arka plana tıklama taslağı bırakır. Boş başlık kaydı engeller; pencere yine kapatılabilir.
 
-Kaydet, görev ve değişen ardıl bağlantılarını tek değişiklik kümesinde gönderir. Kayıt sürerken alanlar ve tekrar tıklama kilitlenir. Başarılı sonuçtan sonra pencere kapanır; hata taslağı açık tutar. Yeni yetkili snapshot geldiğinde düzenlenen değerler korunur; eski sürüm güncel kaydı ezemez. Etiket kataloğuna ekleme yetkisi varsa Temel Kip kısa açıklaması aynı işlemde kataloğa eklenir. Başlık ve not için ayrı istek, kapanışta ek debounce beklemesi ve değişmeyen sorumluların tekrar yazılması yoktur.
+Kaydet, görev ve değişen ardıl bağlantılarını tek değişiklik kümesinde gönderir. Kayıt sürerken alanlar ve tekrar tıklama kilitlenir. Başarılı sonuçtan sonra pencere kapanır; hata taslağı açık tutar. Yeni yetkili anlık görüntü geldiğinde düzenlenen değerler korunur; eski sürüm güncel kaydı ezemez. Etiket kataloğuna ekleme yetkisi varsa Temel Kip kısa açıklaması aynı işlemde kataloğa eklenir. Başlık ve not için ayrı istek, kapanışta ek birleştirme gecikmesi ve değişmeyen sorumluların tekrar yazılması yoktur.
 
 Sorumlu seçimi ve yazma `assigneeIds`/Sicil ile yapılır; adlar yalnızca gösterim içindir. Aynı adlı çalışanlar sicilleriyle ayrı ayrı seçilebilir, çıkarılabilir ve yeniden yüklenebilir. Yöneticiye ait manuel projeler ve yeni serbest proje formu da kurumsal atama kapsamıyla sınırlıdır; sistem yöneticisi istisnası korunur.
 
 Tarih talebi ayrıntısındaki **Görevi aç**, görev kimliğini çözer ve gerekirse yetkili veriyi yeniler. Farklı proje çalışma alanındaki göreve geçerken proje bağlamı da güncellenir. Silinmiş veya erişimi kaldırılmış görev için açık bir hata gösterilir.
 
-Yeni görev oluştururken de **Öncüller** ve **Ardıllar** tanımlanabilir. Ardılın türü/gecikmesi ve kaldırılması taslakta tutulur; Kaydet yeni görevle tüm bağlantıları aynı transaction içinde yazar. Kapatma bağlantıları da bırakır; döngü, farklı proje, yetki veya sürüm hatasında hiçbir kısmi kayıt oluşmaz. Proje seçimi değişirse önceki projeye ait bekleyen ardıl bağlantıları temizlenir. Bağımlılık düzenlemesi tam proje yetkisi gerektirir.
+Yeni görev oluştururken de **Öncüller** ve **Ardıllar** tanımlanabilir. Ardılın türü/gecikmesi ve kaldırılması taslakta tutulur; Kaydet yeni görevle tüm bağlantıları aynı veritabanı işlemi içinde yazar. Kapatma bağlantıları da bırakır; döngü, farklı proje, yetki veya sürüm hatasında hiçbir kısmi kayıt oluşmaz. Proje seçimi değişirse önceki projeye ait bekleyen ardıl bağlantıları temizlenir. Bağımlılık düzenlemesi tam proje yetkisi gerektirir.
 
 Bağımlılık seçeneklerinde görev adı baskındır; küçük ikinci satırda mevcut WBS kodu/adı ve plan başlangıç → bitiş tarihleri gösterilir. Eksik WBS/tarihler boş ayırıcı veya yer tutucu üretmez. Tarihler uygulamanın gösterim tercihini canlı izler; yıl bilgisi de korunur. Mevcut arama görev adı, WBS kodu/adı ve etiketi kapsar. FS/SS/FF/SF seçicisi 76 px genişliğindedir; dar ekranda mevcut dikey yerleşim korunur. Bağımlılık düzenleme yetkisi main ile aynıdır; normal/PARTIAL kullanıcılar yeni bağımlılık yönetimi yetkisi kazanmaz.
 
@@ -651,7 +651,7 @@ Taslakta proje değişince alan yetkileri birikmiş düzenlemeye göre yeniden h
 
 ## Talepler ve bildirim önizlemesi
 
-Her iki kipte düz **Talepler** sayfasının Gelenler, Gönderdiklerim, Geçmiş ve **Atama Koordinasyonu** sekmeleri vardır; kurum dışı atama için ayrı bir kenar çubuğu sayfası açılmaz. Kalıcı geçmiş sunucuda sayfalanır; zil yalnızca sekiz önizleme ile okunmamış/bekleyen sayaçlarını taşır ve tarih talepleri, atama koordinasyonu ile atama bildirimlerini **tek listede** birleştirir — ikinci bir zil yoktur. Okuma veya görünenleri temizleme iş kaydını silmez; açık kararlar görünür kalır. Ayrıntılar ve dağıtım adımı: [Talepler ve bildirimler](REQUESTS-AND-NOTIFICATIONS.md).
+Her iki kipte düz **Talepler** sayfasının Gelenler, Gönderdiklerim, Geçmiş ve **Atama Koordinasyonu** sekmeleri vardır; kurum dışı atama için ayrı bir kenar çubuğu sayfası açılmaz. Kalıcı geçmiş sunucuda sayfalanır; zil yalnızca sekiz önizleme ile okunmamış/bekleyen sayaçlarını taşır ve tarih talepleri, atama koordinasyonu ile atama bildirimlerini **tek listede** birleştirir — ikinci bir zil yoktur. Okuma veya görünenleri temizleme iş kaydını silmez; açık kararlar görünür kalır. Ayrıntılar ve dağıtım adımı: [Talepler ve bildirimler](TALEPLER-VE-BILDIRIMLER.md).
 
 ## Özet KPI ayrıntı penceresi
 
@@ -672,7 +672,7 @@ Görev başlığı, Notlar ve diğer alanlar iki kez kopyalanan yerel durum yeri
 
 ### Raporlar sekmeleri
 
-Kapsamlı Kipte Raporlar tek gezinme öğesi olarak kalır: Performans mevcut raporları, Görev Hareketleri ise kimin hangi görünür görevde ne değiştirdiğini gösterir. Sekmelerin tarih filtreleri bağımsızdır. Hareket raporu Bugün ve uygun kullanıcıda Ekibim ile açılır; Türkiye saatini, sunucu süzgeçlerini ve sayfalamayı kullanır. [Ayrıntılar](TASK-ACTIVITY-REPORT.md).
+Kapsamlı Kipte Raporlar tek gezinme öğesi olarak kalır: Performans mevcut raporları, Görev Hareketleri ise kimin hangi görünür görevde ne değiştirdiğini gösterir. Sekmelerin tarih filtreleri bağımsızdır. Hareket raporu Bugün ve uygun kullanıcıda Ekibim ile açılır; Türkiye saatini, sunucu süzgeçlerini ve sayfalamayı kullanır. [Ayrıntılar](GOREV-HAREKET-RAPORU.md).
 
 **Filtreleri Temizle** görünürlüğü rapora özeldir. Özet kendi tarih/kurumsal filtrelerinden en az biri etkin olduğunda; Performans kendi rapor filtrelerinden biri varsayılandan saptığında düğmeyi gösterir. Görev Hareketleri (`TaskActivitiesView`) ise `INITIAL` sorgusundaki herhangi bir alan değiştiğinde — kişi, proje, tür veya dönem dahil — düğmeyi gösterir. Temizleme Özet/Performans tarafında ilgili tarih ve kurumsal seçimleri varsayılanlarına döndürür; Görev Hareketleri sekmesinde dönem Bugün’e, kapsam sunucunun yetkili varsayılanına, kişi/proje/tür filtreleri boş seçime ve sayfa ilk sayfaya döner. Çalışma alanı ve yetki kümesi korunur; ek onay sorulmaz. Outlook menüsü etkin abonelik ile gönderim/bekleme/hata durumlarını ayırır; ayrıntılı tek yönlü bağlantı açıklaması Yardım → Outlook’tadır.
 

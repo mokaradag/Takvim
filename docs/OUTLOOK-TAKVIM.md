@@ -68,7 +68,7 @@ Tamamlanma günü görev işlemi sırasında `CompletionDate` alanında kalıcı
 
 Next.js Node başlangıç kancası `src/instrumentation.js`, her uzun süre çalışan uygulama sürecinde tek Outlook çalışanı başlatır. Derleme ve Edge yürütmesi gönderim başlatmaz. İlk tur başlangıçta, sonraki tur önceki bittikten varsayılan 5 saniye sonra çalışır. Tarayıcı, yönetici düğmesi, hatırlatma anahtarı veya OS zamanlayıcısı Outlook için gerekli değildir. Node uygulaması yönetilen hizmet olarak açık kalmalıdır.
 
-Görev değişikliği ve kuyruk kaydı aynı veritabanı işlemindedir; SMTP task persistence yolunda çağrılmaz. SMTP yokken görev kaydı sürer. Eksik Outlook şeması güvenli biçimde raporlanır; normal görev kaydı eksik isteğe bağlı Outlook şeması yüzünden engellenmez. Veritabanı işlem hataları ayrı kalıcılık hatalarıdır.
+Görev değişikliği ve kuyruk kaydı aynı veritabanı işlemindedir; SMTP görevin kalıcı kaydı yolunda çağrılmaz. SMTP yokken görev kaydı sürer. Eksik Outlook şeması güvenli biçimde raporlanır; normal görev kaydı eksik isteğe bağlı Outlook şeması yüzünden engellenmez. Veritabanı işlem hataları ayrı kalıcılık hatalarıdır.
 
 - `QueueSeq` her yeni niyeti ayırır. Teslimat sırasında başka bir güncelleme gelirse eski sonuç yeni kuyruk neslini temizlemez.
 - `LeaseToken` ve 60 saniyelik `LeaseExpiresAt` tek sahiplik sağlar; kira 20 saniyede bir yenilenir. Yenileme/sahiplik kaybında gönderim durdurulur. Çöken çalışanın işi kira bitince alınabilir.
@@ -126,8 +126,8 @@ Mevcut kurulum için:
 2. Eksik önceki göçleri sırayla tamamlayın; güncel `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` uygulanmış olmalıdır. PR #72’nin güncel 0010 sürümü zaten varsa 0010’ı tekrar çalıştırmak gerekmez.
 3. **`database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`, ardından `database/MR_Upgrade_0012_System_Observability.sql` çalıştırın.** PR #72/0010 bulunan kurulumlar da bu yeni tamamlanma göçünü uygulamalıdır. Göç yinelenebilir, UID/sıra/abonelikleri korur; eski belirsiz iptaller kendiliğinden yeniden etkinleştirilmez.
 4. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` her iki göçün son şemasını içerir; dolu veritabanında temiz kurulum betiğini kullanmayın.
-5. SMTP, kurumsal dizin, ODBC/SQL ve kimlik yapılandırmasını doğrulayın. Ayrıntılar: [Kalıcı kurulum](DURABLE-PERSISTENCE.md), [SMTP/hatırlatmalar](TASK-REMINDERS.md).
-6. `npm ci`, `npm run build`, ardından mevcut yönetilen Node hizmetini başlatın. Outlook için OS zamanlayıcısı kurmayın; **yalnız otomatik hatırlatma e-postaları** isteniyorsa mevcut Windows Task Scheduler/cron gerekir.
+5. SMTP, kurumsal dizin, ODBC/SQL ve kimlik yapılandırmasını doğrulayın. Ayrıntılar: [Kalıcı kurulum](KALICI-VERI-SAKLAMA.md), [SMTP/hatırlatmalar](GOREV-HATIRLATMALARI.md).
+6. `npm ci`, `npm run build`, ardından mevcut yönetilen Node hizmetini başlatın. Outlook için işletim sistemi zamanlayıcısı kurmayın; **yalnız otomatik hatırlatma e-postaları** isteniyorsa mevcut Windows Task Scheduler/cron gerekir.
 
 Özelliği kapatmak için `MERGEN_ROTA_OUTLOOK_CALENDAR_ENABLED=false` kullanılır; kalıcı kuyruk silinmez. Tam şema geri alma betiği `MR_Rollback_Durable_Persistence.sql` bütün MR uygulama verilerini siler; Outlook özelliğini kapatmak için kullanılmaz.
 
@@ -181,7 +181,7 @@ görünümü kurum ortamındaki kabul testiyle doğrulanmalıdır.
 ## Yönetici tanısı
 
 Kuyruk, çalışan ve teslimat sağlığı **Sistem Yönetimi → Kuyruklar ve İşler**
-sekmesinde izlenir (`docs/SYSTEM-ADMINISTRATION.md`): çalışan nabzı, bekleyen /
+sekmesinde izlenir (`docs/SISTEM-YONETIMI.md`): çalışan nabzı, bekleyen /
 hazır / işleniyor / hatalı / deneme eşiğini aşan sayıları, **en eski bekleyen
 kayıt yaşı**, en yüksek deneme sayısı, son başarılı teslimat ve bekleyen
 kayıtların güvenli künyesi. Kritik UX kuralı: dolu kuyruk kendiliğinden sorun
@@ -195,11 +195,11 @@ deneme anını sıfırlar — `QueueSeq` ve iCalendar `SEQUENCE` değişmez, kir
 (süren) teslimata dokunulmaz, böylece eski bir kuyruk kuşağı yeni niyeti ezemez.
 Yıkıcı bir "kuyruğu temizle" eylemi bilinçli olarak yoktur.
 
-`POST /api/mergen-rota/reminders/run`, SYSTEM_ADMIN veya mevcut reminder scheduler anahtarıyla sınırlıdır. Hatırlatma ve Outlook turlarını bağımsız başlatır. `reminders.ok=false`, pozitif `failed` veya herhangi bir `results[].status=FAILED`, Outlook başarılı olsa da toplam `ok=false` ve **HTTP 503** üretir. Başarısızlıklar güvenli kodlarıyla gösterilir; bir tarafın başarısı diğerinin hatasını gizlemez. Başarılı/kapalı iki taraf HTTP 200 üretir. Ham SQL, parolalar, adresler veya takvim gövdeleri tanı yanıtına yazılmaz.
+`POST /api/mergen-rota/reminders/run`, SYSTEM_ADMIN veya mevcut hatırlatma zamanlayıcısı anahtarıyla sınırlıdır. Hatırlatma ve Outlook turlarını bağımsız başlatır. `reminders.ok=false`, pozitif `failed` veya herhangi bir `results[].status=FAILED`, Outlook başarılı olsa da toplam `ok=false` ve **HTTP 503** üretir. Başarısızlıklar güvenli kodlarıyla gösterilir; bir tarafın başarısı diğerinin hatasını gizlemez. Başarılı/kapalı iki taraf HTTP 200 üretir. Ham SQL, parolalar, adresler veya takvim gövdeleri tanı yanıtına yazılmaz.
 
 Otomatik çalışanda önce SQL bağlantısını edinmek için en çok **15 saniye**, ardından kuyruk işlemleri için `MERGEN_ROTA_OUTLOOK_RUN_BUDGET_MS` (varsayılan **45 saniye**) ayrılır. `completeOutlookDelivery` ve `failOutlookDelivery` işlemlerinin **her biri yeni ve bağımsız 5 saniyelik** sonuçlandırma süresine sahiptir. Böylece sonuç yazımı zaman aşımına uğrasa bile hata ve yeniden deneme zamanı kaydedilebilir. Tek sonuçlandırmayla otomatik turun toplamı **65 saniyeye**, sonuç yazımının ardından hata yazımı da gerekirse **70 saniyeye** kadar çıkabilir. Yönetici tanı ucunun Outlook kuyruk bütçesi 10 saniyedir; bu bütçe bağlantı edinme, sonuçlandırma ve ayrı hatırlatma turunun toplam süresi değildir. Tarayıcı `REQUEST_TIMEOUT` sonucu, işlemin sonucunun henüz doğrulanmadığını belirtir.
 
-SYSTEM_ADMIN-only GET ortak veritabanından pending/due/inFlight/failed/exhausted sayılarını ve **yerel Node sürecinin** son otomatik turunu verir. Son tur bütün sunucuların toplamı değildir. Yönetici ekranı görünürken 15 saniyede yenilenir; kaydedilmemiş hatırlatma taslağı değiştirilmez. Kuyruk tıkanması, çalışan nabzının eskimesi ve deneme eşiğinin dolması ayrıca `OUTLOOK_QUEUE_AGING`, `OUTLOOK_WORKER_STALE` ve `OUTLOOK_DELIVERY_FAILED` işletim uyarıları üretir.
+Yalnızca SYSTEM_ADMIN erişimli GET ortak veritabanından pending/due/inFlight/failed/exhausted sayılarını ve **yerel Node sürecinin** son otomatik turunu verir. Son tur bütün sunucuların toplamı değildir. Yönetici ekranı görünürken 15 saniyede yenilenir; kaydedilmemiş hatırlatma taslağı değiştirilmez. Kuyruk tıkanması, çalışan nabzının eskimesi ve deneme eşiğinin dolması ayrıca `OUTLOOK_QUEUE_AGING`, `OUTLOOK_WORKER_STALE` ve `OUTLOOK_DELIVERY_FAILED` işletim uyarıları üretir.
 
 Güvenli tanılar: `SMTP_*`, `NO_RECIPIENT_ADDRESS`, `DATABASE_UNAVAILABLE`, `DATABASE_TIMEOUT`, `DATABASE_DEADLOCK`, `DATABASE_QUERY_FAILED`, `OUTLOOK_LEASE_LOST`, `OUTLOOK_RUN_TIMEOUT`, `OUTLOOK_RETRY_EXHAUSTED`, `OUTLOOK_SCHEMA_MISSING`. Sistem düzeldiğinde eşiğe ulaşmamış satırlar otomatik yeniden denenir; `exhausted` satırlar ise açık ekleme/yeniden gönderme/kaldırma eylemiyle deneme durumu sıfırlanana kadar bekler.
 
@@ -226,7 +226,7 @@ Aşağıdaki kontroller kurumun gerçek Outlook istemcileri ve Exchange ilkeleri
 
 ## Kod ve testler
 
-Kanonik gün: `src/domain/calendar/taskCalendarDate.js`. iCalendar ve içerik/hash: `src/domain/outlook/`. Abonelik, SQL, yaşam döngüsü, çalışan ve güvenli tanı: `src/server/outlook/`. UI: `src/features/outlook/`; yönetici sonuçları: `src/features/reminders/`. Şema ayrıntıları: [DATABASE-SCHEMA.md](DATABASE-SCHEMA.md).
+Kanonik gün: `src/domain/calendar/taskCalendarDate.js`. iCalendar ve içerik/hash: `src/domain/outlook/`. Abonelik, SQL, yaşam döngüsü, çalışan ve güvenli tanı: `src/server/outlook/`. UI: `src/features/outlook/`; yönetici sonuçları: `src/features/reminders/`. Şema ayrıntıları: [VERITABANI-SEMASI.md](VERITABANI-SEMASI.md).
 
 Regresyonlar `test/outlook-calendar-*.test.mjs`, `test/outlook-automatic-delivery.test.mjs`, `test/delivery-run-reporting.test.mjs` ve `test/smtp-delivery-lifecycle.test.mjs` kapsamındadır. Tam doğrulama: `npm test`, `npm run lint`, `npm run build`.
 

@@ -32,7 +32,7 @@ gösterilir (`ADMIN_NAV_IDS`). Gizleme tek başına güvenlik DEĞİLDİR:
 - Sayfa **projeye değil sisteme** aittir. Bu yüzden üst çubukta seçili proje
   künyesi ve dışa aktarma denetimi gösterilmez (`GLOBAL_NAV_IDS`).
 
-Rol tanımı ve yetki katmanının bütünü için bkz. `docs/AUTHORIZATION-MODEL.md`.
+Rol tanımı ve yetki katmanının bütünü için bkz. `docs/YETKILENDIRME-MODELI.md`.
 
 ---
 
@@ -59,7 +59,7 @@ Sağlık şeridi ve sekmeler sayfanın üstünde sabit kalır. Yedi sekmenin tam
 Hatırlatma yönetimi **taşınmıştır, çatallanmamıştır**: var olan
 `ReminderSettingsView` olduğu gibi yedinci sekmeye gömülür. Yetki, şablon
 doğrulama, zamanlayıcı ve SMTP davranışı değişmemiştir
-(`docs/TASK-REMINDERS.md`).
+(`docs/GOREV-HATIRLATMALARI.md`).
 
 ---
 
@@ -191,7 +191,7 @@ Mekanizma genişletilebilir: yeni bir yol `withRouteObservability(...)` ya da
 `observeOperation(...)` ile kapsama alınır. HTTP `4xx` istemci kararıdır ve hata
 oranına yazılmaz; yalnızca `5xx` sunucu hatası sayılır.
 
-### Snapshot ve commit faz tanısı
+### Anlık görüntü ve kayıt aşaması tanısı
 
 `api.snapshot` ve `api.commit` toplam süreleri korunur; bunlara ek olarak sabit
 adlı `phase.snapshot.*` ve `phase.commit.*` ölçümleri toplanır. Faz adları
@@ -199,8 +199,8 @@ adlı `phase.snapshot.*` ve `phase.commit.*` ölçümleri toplanır. Faz adları
 şişirmez. Ölçümler yalnız süre ve başarı/hata kodu taşır; görev, proje, Sicil,
 ad, e-posta veya açıklama içermez.
 
-Snapshot tarafında katalog çağrısı, SERIALIZABLE okuma işlemi, yetkilendirme,
-ana snapshot sorgusu, varsayılan takvim, tarih değişikliği kutusu, oturum ve
+Anlık görüntü tarafında katalog çağrısı, SERIALIZABLE okuma işlemi, yetkilendirme,
+ana anlık görüntü sorgusu, varsayılan takvim, tarih değişikliği kutusu, oturum ve
 yanıt hazırlama ayrı görülebilir. Sorumlu projeksiyonu artık ana SQL paketinin
 beşinci sonuç kümesinde döner; `phase.snapshot.assignees` için yeni örnek
 üretilmez. Bu iş ve JavaScript projeksiyonu `phase.snapshot.main-query`
@@ -248,7 +248,7 @@ Tanı satırı Sicil, ad, e-posta, proje, görev, açıklama ya da yetki ayrınt
 yalnız HTTP 5xx yanıtlarını sayar. Bu yüzden faz ve API hata oranlarının eşit
 olması beklenmez. Bu anlamlar değiştirilmemiştir.
 
-Commit tarafında istek doğrulama, SERIALIZABLE işlem, niyet doğrulama,
+Kayıt tarafında istek doğrulama, SERIALIZABLE işlem, niyet doğrulama,
 bağımlılık uzlaştırması, bütünlük planlama, yetkilendirme, görev yazması,
 hedefli yetkili yanıt ve yanıt hazırlama ayrıştırılır. Normal görev kaydında
 bütünlük planlamasının doğruladığı `dependencyMutation=false` bağımlılıkları
@@ -491,7 +491,7 @@ halde bağımlılık erişilemez hale geldikten sonra da kart sağlıklı kalır
   hizmet hatası ve son sağlayıcı sonuçlarından türetilir. Kapasite için
   yalnızca paylaşılan kapasitenin dolması (kullanıcı sınırı değil) uyarı
   sayılır; bileşen hiçbir zaman *Kritik* olmaz ve boştayken
-  *Bilinmiyor* durumu genel başlığı düşürmez (bkz. `docs/AI-PLATFORM.md`).
+  *Bilinmiyor* durumu genel başlığı düşürmez (bkz. `docs/YAPAY-ZEKA-PLATFORMU.md`).
 - Yapay zekâ hizmeti ayrıntısı Rota AI akışlarını da özetler: *İlk metin P95*
   (isteğin ağ geçidine girişinden ilk görünür metne kadar geçen süre) ve *Akış
   sonuçları* (tamamlanan, durdurulan, yarıda kalan, süre aşımı, başlamadan
@@ -514,7 +514,7 @@ halde bağımlılık erişilemez hale geldikten sonra da kart sağlıklı kalır
   beş dakikada bir araç hizmet hatası (`TIMEOUT`, `DATABASE_UNAVAILABLE`,
   `INTERNAL`) oluştu. Araç ölçümleri `ai.tool.call` adıyla yazılır; yalnızca
   araç adı, sonuç sınıfı, süre ve sonuç boyutu taşır — bağımsız değişken,
-  sonuç içeriği, soru, yanıt ya da SQL yazılmaz. Ayrıntı: `docs/AI-DOMAIN-TOOLS.md`.
+  sonuç içeriği, soru, yanıt ya da SQL yazılmaz. Ayrıntı: `docs/YAPAY-ZEKA-ALAN-ARACLARI.md`.
 
 **Aşama 2 gerçek TEST kabulü (29.09.2026):** Rota AI'nin gerçek `/bilge`
 yolu üzerinden akış, durdurma/yeniden deneme, profil dağılımı, konuşma
@@ -607,7 +607,7 @@ Telemetri **yeni bir sızıntı yolu değildir**. Tek kanonik temizleyici
 (`domain/observability/redaction.js`) hem günlüklerde hem kalıcı olay bağlamında
 hem de uç yanıtlarında çalışır:
 
-- **Adı** duyarlı olan alanlar (parola, secret, token, `authorization`, çerez,
+- **Adı** duyarlı olan alanlar (parola, gizli değer, belirteç, `authorization`, çerez,
   bağlantı dizesi, oturum kimliği…) değerine bakılmadan `[gizlendi]` olur.
 - **Değeri** duyarlı desene uyan metinler (bağlantı dizesi, `Bearer …`, JWT,
   `password=…`) anahtarı masum olsa da gizlenir.
@@ -704,7 +704,7 @@ anahtar, konuşma geçmişi, istem ve yanıt saklanmaz. İleti metinlerinin kal�
 aşağıdaki **0017 · Rota AI konuşma geçmişi** bölümünde açıklanır. Göç uygulanmadan açılan kurulumda kişisel anahtar
 kaydı açıkça reddedilir, kurumsal varsayılan anahtar çalışmaya devam eder. Geri
 alma betiği tabloyu da düşürür. Yapay zekâ ortam değişkenleri ve dağıtım sırası:
-`docs/AI-PLATFORM.md`.
+`docs/YAPAY-ZEKA-PLATFORMU.md`.
 
 ### 0017 · Rota AI konuşma geçmişi
 
@@ -724,7 +724,7 @@ nesnesi saklanmaz. Göç uygulanmadan açılan kurulumda yalnızca Rota AI uçla
 anlaşılır bir yapılandırma hatası döner; uygulamanın geri kalanı etkilenmez.
 Yönetici konsolunda konuşma içeriği gösterilmez ve yöneticinin kullanıcı
 konuşmalarına erişen bir ucu yoktur. Geri alma betiği iki tabloyu da düşürür.
-Ayrıntı: `docs/AI-PLATFORM.md` §18.
+Ayrıntı: `docs/YAPAY-ZEKA-PLATFORMU.md` §18.
 
 ### 0018 · Rota AI kanıt kaydı
 
@@ -743,7 +743,7 @@ düşünce zinciri saklanmaz. Kayıtlar yanıt iletisi ve konuşmayla birlikte s
 Yönetici konsolu kanıt içeriği göstermez. Göç uygulanmadan
 `MERGEN_ROTA_AI_TOOLS_ENABLED=true` açılırsa veri kaynağı `unavailable` verir; kullanıcı Genel sohbet seçebilir ve
 yapay zekâ bileşeni 0018'in eksik olduğunu uyarır. Geri alma betiği tabloyu
-konuşma tablolarından önce düşürür. Ayrıntı: `docs/AI-DOMAIN-TOOLS.md` §13.
+konuşma tablolarından önce düşürür. Ayrıntı: `docs/YAPAY-ZEKA-ALAN-ARACLARI.md` §13.
 
 Aşama 3 işletiminde `not_found`, aday seçimi, genel sohbete yönlendirme
 (`general_redirect`) ve hizmet kullanılamıyor sonucu gerçek `grounding_failed`
@@ -756,7 +756,7 @@ geçer. Tamponlanan model JSON'u
 istemciye verilmiş metin değildir; kesilme sağlıkta yarım teslim sayılmaz.
 Kapıda sorgu başlamadan dolan süre `BUSY`, çalışan sorgunun süresi `TIMEOUT`
 olur. Varsayılan `chat.tools` / `chat.tools.reasoning` çıktı sınırları
-4096 / 8192 token; dağıtılan dış kayıt dosyası da güncellenmelidir. Her Rota
+4096 / 8192 jeton; dağıtılan dış kayıt dosyası da güncellenmelidir. Her Rota
 verisi turunun model/araç turu sayısı, seçimi kimin yaptığı, tur başına süre,
 çıktı sınırı ve bitiş nedeni içeriksiz `ai.grounded.turn` olayında izlenir.
 
@@ -859,13 +859,13 @@ Yönetim konsolu üretimde yeni bir yük kaynağı olmamalıdır:
 
 ## 19. İlgili belgeler
 
-- `docs/AUTHORIZATION-MODEL.md` — rol ve yetki katmanı
-- `docs/TASK-REMINDERS.md` — hatırlatma şablonu, planı ve gönderim geçmişi
-- `docs/OUTLOOK-CALENDAR.md` — takvim teslimatı ve kuyruk semantiği
-- `docs/DATABASE-SCHEMA.md` — tablo ve dizin künyesi
-- `docs/DURABLE-PERSISTENCE.md` — kalıcılaştırma sınırları
-- `docs/AI-PLATFORM.md` — yapay zekâ altyapısı, sağlık bileşeni ve bağlantı testi
-- `docs/AI-DOMAIN-TOOLS.md` — Rota AI alan araçları, kanıt kaydı (0018) ve araç gözlemi
+- `docs/YETKILENDIRME-MODELI.md` — rol ve yetki katmanı
+- `docs/GOREV-HATIRLATMALARI.md` — hatırlatma şablonu, planı ve gönderim geçmişi
+- `docs/OUTLOOK-TAKVIM.md` — takvim teslimatı ve kuyruk semantiği
+- `docs/VERITABANI-SEMASI.md` — tablo ve dizin künyesi
+- `docs/KALICI-VERI-SAKLAMA.md` — kalıcılaştırma sınırları
+- `docs/YAPAY-ZEKA-PLATFORMU.md` — yapay zekâ altyapısı, sağlık bileşeni ve bağlantı testi
+- `docs/YAPAY-ZEKA-ALAN-ARACLARI.md` — Rota AI alan araçları, kanıt kaydı (0018) ve araç gözlemi
 
 ### İnceleme sonrası doğruluk güvenceleri
 
@@ -964,13 +964,13 @@ FROM dbo.MR_SchemaMigrations
 WHERE MigrationId = N'0012_system_observability';
 ```
 
-### Snapshot SQL birleştirmesi ve üretim doğrulaması
+### Anlık görüntü SQL birleştirmesi ve üretim doğrulaması
 
 Üretimde bildirilen yaklaşık başlangıç değerleri: `api.snapshot` P50 3,06 sn,
 P95 7,02 sn; işlem fazı P50 5,04 sn / P95 7,37 sn; sorumlu fazı
 2,96 / 4,41 sn; ana sorgu 2,41 / 2,97 sn. Fazlar farklı örnek sayılarına ve
 pencerelere sahip olabilir; yüzdelikler toplanarak toplam gecikme hesaplanmaz.
-Genel API P50/P95/P99 değerleri 144/385/623 ms olduğundan hedef snapshot SQL
+Genel API P50/P95/P99 değerleri 144/385/623 ms olduğundan hedef anlık görüntü SQL
 tekrarıdır. Bunlar dağıtım sonrası kazanım ölçümleri değildir.
 
 | Önce | Sonra |
@@ -1008,7 +1008,7 @@ Tablo değişkenlerinin gerçek veri hacmindeki planı dağıtımda incelenmelid
 
 SERIALIZABLE korunur. Yetki okuması, ana paket, varsayılan takvim ve talep
 kutusu aynı işlemde kalır; katalog eşitlemesi işlemin dışında kalır. SQL zaman
-aşımı, bağlantı havuzu, veritabanı yalıtım ayarları ve commit yolu değişmez.
+aşımı, bağlantı havuzu, veritabanı yalıtım ayarları ve kayıt yolu değişmez.
 
 Dağıtım sonrasında aynı sürüm ve temsili trafik penceresinde:
 
