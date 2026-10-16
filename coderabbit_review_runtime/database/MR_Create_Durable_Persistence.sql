@@ -290,8 +290,8 @@ BEGIN TRY
         CalendarId uniqueidentifier NULL,
         CONSTRAINT PK_MR_TaskBaselineSnapshots PRIMARY KEY (BaselineId, TaskId),
         CONSTRAINT FK_MR_TaskBaselineSnapshots_Baselines FOREIGN KEY (BaselineId) REFERENCES dbo.MR_Baselines(BaselineId),
-        /* TaskId BILEREK yabanci anahtar TASIMAZ (bkz. docs/DATABASE-SCHEMA.md
-           "Baseline history"). Referans anlik goruntusu, karsilastirdigi
+        /* TaskId BILEREK yabanci anahtar TASIMAZ (bkz. docs/VERITABANI-SEMASI.md
+           "Baz plan geçmişi"). Referans anlik goruntusu, karsilastirdigi
            gorevden DAHA UZUN yasar: gorev silindiginde tarihsel kayit da
            silinseydi, o referansa gore olculen sapma gecmisi geriye donuk
            degisirdi. Bu yuzden TaskId yalnizca dizinlenir. */

@@ -1,127 +1,119 @@
-# CPM and Critical-Path Engine
+# CPM ve Kritik Yol Motoru
 
-The CPM implementation lives under `src/scheduling/cpm` and is intentionally pure. It does not import React, Next.js, application state, the mock repository, baseline data or feature UI.
+CPM uygulaması `src/scheduling/cpm` altındadır ve bilinçli olarak saf tutulur. React, Next.js, uygulama durumu, deneme deposu, baz plan verisi veya özellik arayüzlerini içe aktarmaz.
 
-The distinction between stored scheduling data and calculated schedule results is defined in `docs/SCHEDULING-DATA-MODEL.md`.
+Saklanan zamanlama verileri ile hesaplanan zamanlama sonuçları arasındaki ayrım `docs/ZAMANLAMA-VERI-MODELI.md` belgesinde tanımlanır.
 
-## Public API
+## Dışa açık API
 
 ```js
 import { calculateCpm, buildDependencyGraph, CpmValidationError } from './src/scheduling/cpm/index.js';
 ```
 
-`calculateCpm(tasks, options)` accepts:
+`calculateCpm(tasks, options)` şu girdileri kabul eder:
 
-- `tasks`: activities with stable IDs, canonical current-plan fields and dependencies;
-- `projects`: project records used to resolve project calendars;
-- `calendars`: scheduling calendars;
-- `projectStart`: optional schedule anchor date;
-- `fallbackCalendar`: optional fallback calendar.
+- `tasks`: kararlı kimlikleri, kanonik güncel plan alanları ve bağımlılıkları olan aktiviteler;
+- `projects`: proje takvimlerini çözümlemek için kullanılan proje kayıtları;
+- `calendars`: zamanlama takvimleri;
+- `projectStart`: isteğe bağlı zamanlama referans tarihi;
+- `fallbackCalendar`: isteğe bağlı yedek takvim.
 
-If `projectStart` is omitted, the engine uses the earliest available task `plannedStart` as the current-plan schedule anchor.
+`projectStart` verilmezse motor, mevcut en erken görev `plannedStart` değerini güncel planın zamanlama referansı olarak kullanır.
 
-## Activity duration
+## Aktivite süresi
 
-The engine determines working-day duration in this order:
+Motor iş günü cinsinden süreyi şu sırayla belirler:
 
-1. explicit numeric `task.plannedDurationDays`;
-2. zero for `task.milestone === true`;
-3. inclusive working-day count between `plannedStart` and `plannedFinish` using the activity's effective calendar, clamped to a minimum of one day for a non-milestone activity.
+1. açıkça verilen sayısal `task.plannedDurationDays`;
+2. `task.milestone === true` olduğunda sıfır;
+3. aktivitenin geçerli takvimiyle `plannedStart` ve `plannedFinish` arasındaki, iki uç dahil iş günü sayısı; kilometre taşı olmayan aktivitelerde en az bir gün kabul edilir.
 
-The minimum in step 3 matters: a valid one-day activity whose start and finish both land on a weekend or holiday counts zero working days, and `SCHEDULING.md` requires such a duration to clamp to one. Publishing the raw count would draw the activity as a milestone and zero its progress weight.
+Üçüncü adımdaki alt sınır önemlidir: başlangıç ve bitişi hafta sonuna veya tatile gelen geçerli tek günlük bir aktivitenin iş günü sayısı sıfırdır; `ZAMANLAMA.md` böyle bir sürenin bire yükseltilmesini gerektirir. Ham sayının yayımlanması aktiviteyi kilometre taşı olarak çizer ve ilerleme ağırlığını sıfırlar.
 
-Canonical application tasks normally arrive with `plannedDurationDays` normalized from their current-plan date range. The date fallback keeps the pure engine usable for focused scheduling scenarios while preserving the same canonical current-plan semantics.
+Kanonik uygulama görevleri normalde güncel plan tarih aralığından normalleştirilmiş `plannedDurationDays` ile gelir. Tarihlerden süre türetme yedeği, aynı kanonik güncel plan anlamını koruyarak saf motorun odaklı zamanlama senaryolarında kullanılmasını sağlar.
 
-The CPM result field `durationDays` means the working-day duration used by that calculation. It is a derived result property and is not an alternative canonical Task duration field.
+CPM sonucundaki `durationDays`, ilgili hesaplamada kullanılan iş günü süresidir. Türetilmiş bir sonuç özelliğidir; kanonik görev süresi için alternatif bir alan değildir.
 
-## Inputs intentionally not used as constraints
+## Bilinçli olarak kısıt kabul edilmeyen girdiler
 
-The current CPM engine remains a pure current-plan network calculation.
+Mevcut CPM motoru, saf bir güncel plan ağ hesabı olarak kalır.
 
-- `targetFinish` is a management target, not an automatic CPM constraint.
-- `actualStart` and `actualFinish` do not currently drive rescheduling.
-- `remainingDurationDays` is not currently used for progress-aware CPM.
-- `Project.dataDate` is not currently used to status or reschedule the network.
-- baseline snapshots are historical comparison data, not CPM input dates.
+- `targetFinish` bir yönetim hedefidir; otomatik CPM kısıtı değildir.
+- `actualStart` ve `actualFinish` şu anda yeniden zamanlamayı yönlendirmez.
+- `remainingDurationDays` şu anda ilerlemeyi dikkate alan CPM için kullanılmaz.
+- `Project.dataDate` şu anda ağın durumunu belirlemek veya ağı yeniden zamanlamak için kullanılmaz.
+- Baz plan anlık görüntüleri tarihsel karşılaştırma verisidir; CPM girdi tarihleri değildir.
 
-Progress updating, data-date scheduling and formal scheduling constraints are future engine work.
+İlerleme güncellemesi, veri tarihine göre zamanlama ve biçimsel zamanlama kısıtları motorun gelecekteki geliştirme kapsamındadır.
 
-## Calendar resolution
+## Takvim çözümleme
 
-Every activity resolves its effective calendar through the scheduling-calendar contract:
+Her aktivitenin geçerli takvimi, zamanlama takvimi sözleşmesine göre belirlenir:
 
-1. task-level `calendarId` override;
-2. project `calendarId`;
-3. fallback calendar.
+1. görev düzeyinde `calendarId` geçersiz kılması;
+2. projenin `calendarId` değeri;
+3. yedek takvim.
 
-Durations, schedule movement and dependency lag/lead use working-day helpers from `src/scheduling/calendars`.
+Süreler, tarihler arasındaki hareket ve bağımlılık gecikme/öne alma hesapları `src/scheduling/calendars` iş günü yardımcılarını kullanır.
 
-## Relationship semantics
+## İlişki anlamları
 
-The engine supports all four dependency types:
+Motor dört bağımlılık türünü de destekler:
 
-- `FS`: Finish-to-Start;
-- `SS`: Start-to-Start;
-- `FF`: Finish-to-Finish;
-- `SF`: Start-to-Finish.
+- `FS`: Bitişten Başlangıca (Finish-to-Start);
+- `SS`: Başlangıçtan Başlangıca (Start-to-Start);
+- `FF`: Bitişten Bitişe (Finish-to-Finish);
+- `SF`: Başlangıçtan Bitişe (Start-to-Finish).
 
-The schedule uses date-only, inclusive activity dates. Therefore a zero-lag `FS` relationship places the successor on the next working day after the predecessor's finish. `lagDays` is measured in working days:
+Zamanlama, saat içermeyen ve iki ucu dahil aktivite tarihlerini kullanır. Bu nedenle sıfır gecikmeli bir `FS` ilişkisi, ardılı öncülün bitişinden sonraki ilk iş gününe yerleştirir. `lagDays` iş günü cinsindendir:
 
-- positive values add lag;
-- negative values create lead/overlap.
+- pozitif değerler gecikme ekler;
+- negatif değerler öne alma/örtüşme oluşturur.
 
-Relationship constraints use the successor activity's effective calendar when translating lag/lead into dates. This keeps successor placement consistent with the calendar on which the successor can actually work.
+İlişki kısıtları, gecikme/öne almayı tarihlere dönüştürürken ardıl aktivitenin geçerli takvimini kullanır. Böylece ardılın yerleşimi, gerçekten çalışabileceği takvimle tutarlı kalır.
 
-## Forward pass
+## İleri geçiş
 
-The forward pass follows topological dependency order and calculates:
+İleri geçiş topolojik bağımlılık sırasını izler ve şunları hesaplar:
 
-- Early Start (`earlyStart`);
-- Early Finish (`earlyFinish`).
+- Erken Başlangıç (`earlyStart`);
+- Erken Bitiş (`earlyFinish`).
 
-Each activity starts no earlier than the project start and no earlier than any incoming dependency constraint.
+Her aktivite, proje başlangıcından ve gelen bağımlılık kısıtlarının herhangi birinden önce başlayamaz.
 
-## Backward pass
+## Geri geçiş
 
-The backward pass starts from the calculated project finish and processes activities in reverse topological order. It calculates:
+Geri geçiş, hesaplanan proje bitişinden başlar ve aktiviteleri ters topolojik sırada işler. Şunları hesaplar:
 
-- Late Start (`lateStart`);
-- Late Finish (`lateFinish`).
+- Geç Başlangıç (`lateStart`);
+- Geç Bitiş (`lateFinish`).
 
-The engine then calculates:
+Motor daha sonra şunları hesaplar:
 
-- Total Float (`totalFloatDays`);
-- Free Float (`freeFloatDays`);
-- critical status (`isCritical`).
+- Toplam Bolluk (`totalFloatDays`);
+- Serbest Bolluk (`freeFloatDays`);
+- kritiklik durumu (`isCritical`).
 
-An activity is currently classified as critical when `totalFloatDays <= 0`.
+Bir aktivite şu anda `totalFloatDays <= 0` olduğunda kritik sayılır.
 
-## Critical paths
+## Kritik yollar
 
-The result includes:
+Sonuç şunları içerir:
 
-- `criticalTaskIds`: all zero-or-negative-float activities;
-- `criticalPaths`: dependency paths connecting critical activities through zero-slack relationships.
+- `criticalTaskIds`: bolluğu sıfır veya negatif olan bütün aktiviteler;
+- `criticalPaths`: kritik aktiviteleri sıfır bolluklu ilişkiler üzerinden bağlayan bağımlılık yolları.
 
-Multiple critical paths can therefore be returned when parallel paths have equal controlling duration.
+Dolayısıyla paralel yolların belirleyici süreleri eşitse birden çok kritik yol dönebilir.
 
-### Path enumeration is bounded
+### Yol listelemenin sınırı
 
-Path enumeration materializes one array per critical root-to-leaf path, and that
-count grows **exponentially** with consecutive diamond structures: twenty-five
-critical diamond layers describe more than thirty-three million paths.
-`buildPortfolioSchedule()` calls `calculateCpm()` synchronously, so such a network
-froze schedule rendering or exhausted browser memory.
+Yol listeleme, kökten yaprağa her kritik yol için bir dizi oluşturur; art arda gelen elmas yapılarında bu sayı **üstel** büyür: yirmi beş kritik elmas katmanı otuz üç milyondan fazla yol tanımlar. `buildPortfolioSchedule()`, `calculateCpm()` işlevini eşzamanlı çağırdığından böyle bir ağ zamanlama çizimini donduruyor veya tarayıcı belleğini tüketiyordu.
 
-Enumeration therefore stops at `MAX_CRITICAL_PATHS` (500) and reports
-`criticalPathsTruncated: true`. `criticalTaskIds` stays **complete** — only the
-path listing is cut — so criticality highlighting is never wrong, just less
-detailed. `selectPortfolioSchedule()` carries the flag through to each project
-schedule so the UI never claims a complete listing.
+Bu nedenle listeleme `MAX_CRITICAL_PATHS` (500) sınırında durur ve `criticalPathsTruncated: true` bildirir. `criticalTaskIds` **eksiksiz** kalır; yalnızca yol listesi kesilir. Böylece kritiklik vurgusu yanlış olmaz, yalnızca ayrıntı azalır. `selectPortfolioSchedule()` bu bayrağı her proje zamanlamasına taşır; arayüz listenin eksiksiz olduğunu ileri sürmez.
 
-## Result shape
+## Sonuç yapısı
 
-`calculateCpm()` returns:
+`calculateCpm()` şu yapıyı döndürür:
 
 ```text
 projectStart
@@ -144,15 +136,15 @@ tasks
     isCritical
 ```
 
-Dates are returned as local `YYYY-MM-DD` strings.
+Tarihler yerel `YYYY-MM-DD` dizeleri olarak döner.
 
-The result is derived schedule state. It is not merged into the canonical Task object.
+Sonuç, türetilmiş zamanlama durumudur. Kanonik görev nesnesine birleştirilmez.
 
-## Graph validation
+## Graf doğrulama
 
-The dependency graph is validated before scheduling. `CpmValidationError` includes a stable `code` and optional `details`.
+Bağımlılık grafı zamanlamadan önce doğrulanır. `CpmValidationError`, kararlı bir `code` ve isteğe bağlı `details` içerir.
 
-Current validation codes include:
+Mevcut doğrulama kodları şunlardır:
 
 - `MISSING_TASK_ID`;
 - `DUPLICATE_TASK_ID`;
@@ -165,37 +157,37 @@ Current validation codes include:
 - `MISSING_PROJECT_START`;
 - `INVALID_PROJECT_START`.
 
-Invalid networks fail before partial CPM results are returned.
+Geçersiz ağlar, kısmi CPM sonuçları dönmeden hata verir.
 
-## Application integration
+## Uygulama bütünleşmesi
 
-The CPM engine remains a scheduling service. Application integration is owned by `src/state/selectors/scheduleSelectors.js` and memoized by `AppStateProvider`.
+CPM motoru bir zamanlama servisi olarak kalır. Uygulama bütünleşmesinden `src/state/selectors/scheduleSelectors.js` sorumludur; `AppStateProvider` sonucu bellekte yeniden kullanır.
 
-The state projection:
+Durum projeksiyonu:
 
-- partitions tasks by `projectId`;
-- calls `calculateCpm()` independently for each project;
-- combines successful task results into a portfolio-level derived lookup;
-- preserves project-level `criticalTaskIds`, `criticalPaths` and calculated finish dates;
-- isolates validation failures so one malformed project does not prevent other projects from rendering;
-- reports cross-project dependencies explicitly as `CROSS_PROJECT_DEPENDENCY` instead of silently producing an invalid project-scoped calculation.
+- görevleri `projectId` ile ayırır;
+- her proje için bağımsız `calculateCpm()` çağrısı yapar;
+- başarılı görev sonuçlarını portföy düzeyinde türetilmiş bir erişim yapısında birleştirir;
+- proje düzeyindeki `criticalTaskIds`, `criticalPaths` ve hesaplanan bitiş tarihlerini korur;
+- hatalı bir projenin diğer projelerin çizilmesini engellememesi için doğrulama hatalarını yalıtır;
+- geçersiz bir proje hesabını sessizce üretmek yerine projeler arası bağımlılıkları açıkça `CROSS_PROJECT_DEPENDENCY` olarak bildirir.
 
-Feature components consume the derived projection through state hooks. They do not call `calculateCpm()` directly and do not copy CPM mathematics into React.
+Özellik bileşenleri türetilmiş projeksiyonu durum kancaları üzerinden kullanır. Doğrudan `calculateCpm()` çağırmaz ve CPM matematiğini React içine kopyalamaz.
 
-The Gantt integration keeps `plannedStart` -> `plannedFinish` as the primary current-plan bars. CPM results are presented as derived overlays: critical task/relationship styling, optional early/late/float columns, critical-only filtering, project calculated finish information, CPM tooltips and validation warnings.
+Gantt bütünleşmesi, ana güncel plan çubuklarında `plannedStart` -> `plannedFinish` aralığını korur. CPM sonuçları ayrı türetilmiş katmanlarla sunulur: kritik görev/ilişki biçimlendirmesi, isteğe bağlı erken/geç/bolluk sütunları, yalnızca kritik görevleri süzme, hesaplanan proje bitişi, CPM bilgi kutuları ve doğrulama uyarıları.
 
-Calculated CPM fields are not persisted or merged into canonical task objects. Editing the current plan naturally recomputes the derived projection while leaving baseline snapshots and actual dates unchanged.
+Hesaplanan CPM alanları kalıcı olarak saklanmaz veya kanonik görev nesnelerine birleştirilmez. Güncel plan düzenlendiğinde türetilmiş projeksiyon doğal olarak yeniden hesaplanır; baz plan anlık görüntüleri ve gerçekleşen tarihler değişmez.
 
-## Remaining engine scope
+## Motorun dışında kalan kapsam
 
-The engine and current application projection still intentionally do not:
+Motor ve mevcut uygulama projeksiyonu hâlâ bilinçli olarak şunları yapmaz:
 
-- perform progress-aware or data-date-driven rescheduling;
-- use actual dates as scheduling drivers;
-- use management targets as hard constraints;
-- persist CPM results;
-- modify baseline snapshots;
-- model formal scheduling constraints;
-- model cross-project dependency networks;
-- model working hours or partial-day calendars;
-- resource-level activities.
+- ilerlemeyi veya veri tarihini dikkate alan yeniden zamanlama;
+- gerçekleşen tarihleri zamanlama yönlendiricisi olarak kullanma;
+- yönetim hedeflerini kesin kısıt kabul etme;
+- CPM sonuçlarını kalıcı saklama;
+- baz plan anlık görüntülerini değiştirme;
+- biçimsel zamanlama kısıtlarını modelleme;
+- projeler arası bağımlılık ağlarını modelleme;
+- çalışma saatlerini veya kısmi gün takvimlerini modelleme;
+- aktiviteler için kaynak dengeleme.

@@ -19,7 +19,7 @@ import { raceWithAbort } from '../aiDeadline.js';
  * süren üretimi durdurmak için kullanılır.
  *
  * Dağıtım şartı: aynı konuşma veritabanının tüm AI uçları tek Node.js
- * sürecine gider (docs/AI-PLATFORM.md §18.14). Tur tekilliği süreçler arası
+ * sürecine gider (docs/YAPAY-ZEKA-PLATFORMU.md §18.14). Tur tekilliği süreçler arası
  * üretim kilidi değildir; çok örnekli AI dağıtımı desteklenmez.
  */
 

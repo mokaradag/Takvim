@@ -77,7 +77,7 @@ Kurumsal Project kodu/adı/türü sunucu tarafından yönetilir. Senkronizasyon 
 
 Kurumsal projelerin İş Dağılım Ağacı MERGEN Rota içinde tanımlanmaz; **farklı bir veritabanında** bulunan `CN43N` tablosundan eşitlenir. Bu nedenle ikinci bir bağlantı tanımı gerekir (`.env.example` içindeki `MERGEN_ROTA_WBS_DB_*` bloğu). Eşleştirme `Proje tanımı` kolonu ile proje kodu üzerinden yapılır; `WBS element`, `Name`, `Level`, `Status`, `PYP kodu` ve `Proj.type` kolonları kullanılır, `Kontrol kodu` ile planlanan tarih kolonları kullanılmaz.
 
-Yapı uygulama üzerinden değiştirilemez: hem arayüz hem sunucu kurumsal WBS yazma girişimlerini reddeder. Görevlerin bu düğümlere atanması ve düğümler arasında taşınması mümkündür. Bağlantı tanımlanmazsa eşitleme atlanır ve kurumsal projeler yalnızca kök düğümle görünür; kaynak erişilemezse veri yüklemesi kurumsal WBS olmadan sürer. Ayrıntılar: `docs/WBS-AND-WORKSPACES.md`.
+Yapı uygulama üzerinden değiştirilemez: hem arayüz hem sunucu kurumsal WBS yazma girişimlerini reddeder. Görevlerin bu düğümlere atanması ve düğümler arasında taşınması mümkündür. Bağlantı tanımlanmazsa eşitleme atlanır ve kurumsal projeler yalnızca kök düğümle görünür; kaynak erişilemezse veri yüklemesi kurumsal WBS olmadan sürer. Ayrıntılar: `docs/IS-KIRILIM-YAPISI-VE-CALISMA-ALANLARI.md`.
 
 Eşitleme her istekte baştan çalışmaz. Proje başına içerik parmak izi `MR_CorporateWbsSyncState` tablosunda tutulur; kaynak değişmediğinde `MR_WBS` birleştirmesi hiç yapılmaz. Ayrıca `MERGEN_ROTA_WBS_SYNC_TTL_MS` (varsayılan 5 dakika) süresince kurumsal kaynak yeniden okunmaz ve eşzamanlı istekler tek bir eşitlemeyi paylaşır. Bu iki katman olmadan 38 bin satırlık kurulumda tek bir açılış isteği 30 saniyeyi aşıyordu.
 
@@ -91,7 +91,7 @@ Eşitleme her istekte baştan çalışmaz. Proje başına içerik parmak izi `MR
 4. Kendi atandığı görevler (`PARTIAL`, salt okunur)
 5. Varsayılan ret
 
-**Görev atama kapsamı** görünürlükten ayrı bir kavramdır. Müdür, direktör ve takım liderleri (HR02'den türeyen mevcut `isExecutive` soyutlaması; koda gömülü kullanıcı listesi yoktur) yeni görev tanımlarken proje seçicisinde **tüm etkin CN43N kataloğunu** görür; böylece kendi personeline, kendisinde `corporateprojectaccess` bulunmayan bir kurumsal projede de iş atayabilir. Bu genişleme yalnızca seçime ve görev yazmasına açıktır: görev görünürlüğü, proje üst verisi, iş dağılım ağacı ve yönetici işlevleri değişmez ve sunucu her atananın `MR_V_ExecutiveScope` içinde olmasını arar. Sıradan kullanıcının seçicisi eskisi gibi yalnızca kendi `corporateprojectaccess` projeleridir. Ayrıntılar: `docs/AUTHORIZATION-MODEL.md`.
+**Görev atama kapsamı** görünürlükten ayrı bir kavramdır. Müdür, direktör ve takım liderleri (HR02'den türeyen mevcut `isExecutive` soyutlaması; koda gömülü kullanıcı listesi yoktur) yeni görev tanımlarken proje seçicisinde **tüm etkin CN43N kataloğunu** görür; böylece kendi personeline, kendisinde `corporateprojectaccess` bulunmayan bir kurumsal projede de iş atayabilir. Bu genişleme yalnızca seçime ve görev yazmasına açıktır: görev görünürlüğü, proje üst verisi, iş dağılım ağacı ve yönetici işlevleri değişmez ve sunucu her atananın `MR_V_ExecutiveScope` içinde olmasını arar. Sıradan kullanıcının seçicisi eskisi gibi yalnızca kendi `corporateprojectaccess` projeleridir. Ayrıntılar: `docs/YETKILENDIRME-MODELI.md`.
 
 `MR_UserRoles` oluşturma betiği sistem yöneticilerini parametreli tohumlar: kurulumdan önce `@SystemAdminSicils` değişkenine virgülle ayrılmış Sicil listesi yazılır. Gerçek Sicil değerleri kişisel veridir ve depoya işlenmez. HR09 sorumlulukları kurumsal FULL erişim sağlar. Manuel erişimler `MR_ProjectAccess` içinde tutulur. Sistem yöneticileri ile HR02'de dinamik olarak yönetici görünen kullanıcılar manuel Project oluşturabilir; Project, kök WBS, FULL OWNER erişimi ve audit kayıtları aynı transaction içinde oluşturulur.
 
@@ -128,7 +128,7 @@ Yerel geliştirme kimliği yalnızca `MERGEN_ROTA_AUTH_MODE=development` **ve** 
 
 Her iki akışta da sunucu realm JWKS ucundan imza anahtarlarını çeker; kurumsal kök sertifika gerekiyorsa Node başlatılmadan önce `NODE_EXTRA_CA_CERTS` ayarlanmalıdır.
 
-Ayrıntılar, ortam değişkenleri, IT'nin kaydetmesi gereken adresler ve sorun giderme: [`docs/KEYCLOAK-SSO.md`](docs/KEYCLOAK-SSO.md). Otomatik açılış sınırı: [`docs/AUTOMATIC-AUTH-BOOTSTRAP.md`](docs/AUTOMATIC-AUTH-BOOTSTRAP.md).
+Ayrıntılar, ortam değişkenleri, IT'nin kaydetmesi gereken adresler ve sorun giderme: [`docs/KEYCLOAK-SSO.md`](../docs/KEYCLOAK-SSO.md). Otomatik açılış sınırı: [`docs/OTOMATIK-KURUMSAL-OTURUM-ONYUKLEMESI.md`](../docs/OTOMATIK-KURUMSAL-OTURUM-ONYUKLEMESI.md).
 
 ## Kullanıcı fotoğrafları
 
@@ -145,7 +145,7 @@ Değer boşsa, sicil eksik/bozuksa veya görsel yüklenemezse tüm avatarlar ba�
 5. `npm ci`
 6. `npm run build`
 7. `npm run start -- -H 0.0.0.0 -p 8008`
-8. İsteğe bağlı: hatırlatma postaları için `.env.local` içindeki SMTP bloğunu doldurun ve zamanlayıcıyı kaydedin (`docs/TASK-REMINDERS.md`).
+8. İsteğe bağlı: hatırlatma postaları için `.env.local` içindeki SMTP bloğunu doldurun ve zamanlayıcıyı kaydedin (`docs/GOREV-HATIRLATMALARI.md`).
 9. **Gerçek Sistem** seçerek yetki ve kalıcılığı doğrulayın.
 
 Build aşamasında tüm MERGEN Rota nesnelerini kaldırmak için `database/MR_Rollback_Durable_Persistence.sql` çalıştırılabilir. **Bu işlem tüm MR_* uygulama verisini kalıcı olarak siler.** HR02, A01 ve HR09 tablolarına dokunmaz.
@@ -176,20 +176,20 @@ npm run start -- -H 0.0.0.0 -p 8008
 Ayrıntılar:
 
 - `docs/KEYCLOAK-SSO.md`
-- `docs/AUTOMATIC-AUTH-BOOTSTRAP.md`
-- `docs/DURABLE-PERSISTENCE.md`
-- `docs/DATABASE-SCHEMA.md`
-- `docs/AUTHORIZATION-MODEL.md`
-- `docs/ARCHITECTURE.md`
-- `docs/PERSISTENCE-BOUNDARY.md`
-- `docs/WBS-AND-WORKSPACES.md`
-- `docs/SCHEDULING-DATA-MODEL.md`
+- `docs/OTOMATIK-KURUMSAL-OTURUM-ONYUKLEMESI.md`
+- `docs/KALICI-VERI-SAKLAMA.md`
+- `docs/VERITABANI-SEMASI.md`
+- `docs/YETKILENDIRME-MODELI.md`
+- `docs/MIMARI.md`
+- `docs/KALICILIK-SINIRI.md`
+- `docs/IS-KIRILIM-YAPISI-VE-CALISMA-ALANLARI.md`
+- `docs/ZAMANLAMA-VERI-MODELI.md`
 - `docs/CPM.md`
-- `docs/TAGS-AND-RECURRING-TASKS.md`
-- `docs/TASK-REMINDERS.md`
-- `docs/SIMPLE-MODE-AND-UI.md`
-- `docs/UI-STYLING-ARCHITECTURE.md`
-- `docs/VISUAL-SMOKE-TESTS.md`
+- `docs/ETIKETLER-VE-TEKRARLAYAN-GOREVLER.md`
+- `docs/GOREV-HATIRLATMALARI.md`
+- `docs/TEMEL-KIP-VE-ARAYUZ.md`
+- `docs/ARAYUZ-BICIMLENDIRME-MIMARISI.md`
+- `docs/GORSEL-DUMAN-TESTLERI.md`
 
 ## Etiketler ve tekrarlayan görevler
 
@@ -197,7 +197,7 @@ Proje etiketleri ad, renk ve simge taşıyan kontrollü bir katalogdur; ad
 değişikliği o etiketi kullanan görevlere taşınır. Tekrarlayan görevler RFC 5545
 (iCalendar) `RRULE` altkümesiyle tanımlanır: kural seri şablonunda yaşar,
 üretilen yinelemeler `recurrenceParentId` ile şablona bağlı sıradan görevlerdir.
-Ayrıntılar: `docs/TAGS-AND-RECURRING-TASKS.md`.
+Ayrıntılar: `docs/ETIKETLER-VE-TEKRARLAYAN-GOREVLER.md`.
 
 ## Görev ilişkileri ve öncelik
 
@@ -209,7 +209,7 @@ listesini yamalar. Döngü oluşturacak seçimler listeye hiç girmez.
 Görev önceliği (`Kritik` / `Yüksek` / `Orta` / `Düşük`) görev panelindeki
 **Öncelik** bölümünden tanımlanır ve Görevler, Gantt, Kanban ile Raporlar risk
 matrisini besler. Öncelik bir planlama kısıtı değildir; CPM sonuçlarını
-etkilemez. Ayrıntılar: `docs/SCHEDULING.md`.
+etkilemez. Ayrıntılar: `docs/ZAMANLAMA.md`.
 
 ## Görev hatırlatma postaları
 
@@ -225,7 +225,7 @@ sınırlıdır (`429` + `retry-after`); şifrelenmemiş bir SMTP kanalında kiml
 bilgisi gönderilmez; zamanlayıcı ucu tur hiç başlayamadığında `503` döner. Süreç
 gönderim sırasında sonlanırsa `PENDING` kalan aralık 30 dakika sonra yeniden
 sahiplenilir, böylece o hatırlatma kalıcı olarak kaybolmaz. Ayrıntılar:
-`docs/TASK-REMINDERS.md`.
+`docs/GOREV-HATIRLATMALARI.md`.
 
 ## Görünüm tercihleri
 
@@ -245,7 +245,7 @@ erişilebilirlik sınıflarıyla birlikte **ilk boyamadan önce** uygulanır
 (`src/lib/tweaksBootstrap.js`): `AppShell` monte olmadan çizilen veri kipi ve
 oturum ekranları da doğru ölçekte açılır, yerleşim zıplaması olmaz. Açılır listeler,
 ipuçları ve süzgeç kutuları da ölçeği hesaba katıp görünüm alanına sığdırılır.
-Ayrıntılar: `docs/UI-STYLING-ARCHITECTURE.md`.
+Ayrıntılar: `docs/ARAYUZ-BICIMLENDIRME-MIMARISI.md`.
 
 ## Scheduling ve baseline ilkeleri
 
@@ -271,7 +271,7 @@ basınca uygulama donuyor" olarak bildirdiği hata:
 Kritik yol sayımı da sınırlıdır (`MAX_CRITICAL_PATHS`): art arda elmas desenleri
 yol sayısını üstel büyütür. Kritik **görev** kümesi tam kalır; yalnızca yol
 listesi kesilir ve `criticalPathsTruncated` ile bildirilir. Ayrıntılar:
-`docs/SCHEDULING.md` ve `docs/CPM.md`.
+`docs/ZAMANLAMA.md` ve `docs/CPM.md`.
 
 ## Sonraki aşama
 

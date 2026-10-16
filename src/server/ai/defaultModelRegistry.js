@@ -6,7 +6,7 @@ import 'server-only';
  * Bu dosya VERİDİR ve `config/ai-model-registry.onprem.json` içindeki güncel
  * kurum içi katalogla aynı profil tercihlerini taşır. Model dizisi değiştiğinde
  * iş kodu değişmez; kurulum `MERGEN_ROTA_AI_MODEL_REGISTRY_PATH` ile dış JSON
- * kaydını gösterebilir (bkz. docs/AI-PLATFORM.md).
+ * kaydını gösterebilir (bkz. docs/YAPAY-ZEKA-PLATFORMU.md).
  */
 
 const model = (id, capabilities, contextTokens = null) => ({

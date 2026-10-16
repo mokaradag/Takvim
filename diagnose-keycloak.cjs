@@ -118,7 +118,7 @@ async function inspectLiveLoginRoute({ callbackUrl, expectations }) {
   // İKİ geri dönüş biçimi vardır. Yetkilendirme kodu akışı
   // `/api/mergen-rota/auth/callback` adresine döner; İMPLİCİT KÖPRÜ ise
   // `/auth/implicit-callback` adresine (bkz. IMPLICIT_CALLBACK_PATH ve
-  // docs/NGINX-ROTA-PREFIX.md). Yalnızca `/api/mergen-rota/` aranırsa implicit
+  // docs/NGINX-ROTA-ON-EKI.md). Yalnızca `/api/mergen-rota/` aranırsa implicit
   // kurulumda önek BOŞ kalır, TEST 5 öneksiz adresi yoklar ve DOĞRU
   // yapılandırılmış önekli bir kurulum 404/uyumsuz diye raporlanır — tanının
   // gerçek bir giriş yolu hatasını göstermesini de geciktirir.

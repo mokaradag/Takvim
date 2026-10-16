@@ -16,7 +16,7 @@ Sekmeler ok tuşları/Home/End ile gezilebilir. Hareket ayrıntıları yerel `de
 
 Tek kaynak **MR_AuditLog**dur; ikinci hareket tablosu yoktur. `OccurredAt` UTC tutulur. Sunucu gün sınırlarını **Europe/Istanbul** saat diliminden `[startUtc, endUtc)` aralığına çevirir; geçmişteki saat dilimi farklarını da dikkate alır. Örneğin 8 Eylül 2026 günü, 7 Eylül 21:00 UTC dahil ve 8 Eylül 21:00 UTC hariç aralıktır. İstemci tarih/saat gösterimi de İstanbul saatini kullanır.
 
-Sorgu ve yetkilendirme `src/server/reports/taskActivityReport.js`, tarih sınırları `activityDates.js`, Türkçe fark dönüşümü `taskActivityChanges.js` içindedir. Yetkili tarih kümesi sunucuda gruplanır, toplamlar hesaplanır ve sayfalanır. Ham önce/sonra JSON yalnızca seçili sayfanın işlemleri için alınır ve sunucuda işlenir; APIye veya genel snapshot'a gönderilmez. Sorumlu adları tek toplu sorguda çözülür; satır başına sorgu yoktur.
+Sorgu ve yetkilendirme `src/server/reports/taskActivityReport.js`, tarih sınırları `activityDates.js`, Türkçe fark dönüşümü `taskActivityChanges.js` içindedir. Yetkili tarih kümesi sunucuda gruplanır, toplamlar hesaplanır ve sayfalanır. Ham önce/sonra JSON yalnızca seçili sayfanın işlemleri için alınır ve sunucuda işlenir; APIye veya genel anlık görüntüye gönderilmez. Sorumlu adları tek toplu sorguda çözülür; satır başına sorgu yoktur.
 
 ## Yetkilendirme ve tarihçe
 

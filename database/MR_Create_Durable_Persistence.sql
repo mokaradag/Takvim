@@ -313,7 +313,7 @@ BEGIN TRY
 
     /* Kurum dışı atama koordinasyonu. Talep edilen sorumlu ONAYLANANA kadar
        MR_TaskAssignees'e yazılmaz; iş yükü ve raporlar yalnızca gerçek
-       sorumluyu görür (bkz. docs/REQUESTS-AND-NOTIFICATIONS.md). */
+       sorumluyu görür (bkz. docs/TALEPLER-VE-BILDIRIMLER.md). */
     CREATE TABLE dbo.MR_TaskAssignmentCoordinations (
         CoordinationId uniqueidentifier NOT NULL
             CONSTRAINT DF_MR_TaskAssignmentCoordinations_Id DEFAULT NEWSEQUENTIALID(),
@@ -436,7 +436,7 @@ BEGIN TRY
         INCLUDE (RecipientSicil, AttemptCount);
 
     /* Sicil başına TEK nabız satırı: sekme, istek ve örnek sayısı tabloyu
-       büyütmez (bkz. docs/SYSTEM-ADMINISTRATION.md · Aktif Kullanıcılar). */
+       büyütmez (bkz. docs/SISTEM-YONETIMI.md · Aktif Kullanıcılar). */
     CREATE TABLE dbo.MR_UserPresence (
         Sicil int NOT NULL,
         FirstSeenAt datetime2(7) NOT NULL
@@ -450,7 +450,7 @@ BEGIN TRY
     CREATE INDEX IX_MR_UserPresence_LastSeenAt ON dbo.MR_UserPresence(LastSeenAt DESC) INCLUDE (Sicil);
 
     /* Sicil başına EN FAZLA bir kişisel yapay zekâ anahtarı; yalnızca şifreli
-       hâli saklanır (bkz. docs/AI-PLATFORM.md · Kişisel anahtarın güvenliği). */
+       hâli saklanır (bkz. docs/YAPAY-ZEKA-PLATFORMU.md · Kişisel anahtarın güvenliği). */
     CREATE TABLE dbo.MR_AiUserCredentials (
         Sicil int NOT NULL,
         EncryptionVersion tinyint NOT NULL,
@@ -476,7 +476,7 @@ BEGIN TRY
     );
 
     /* Rota AI konuşma geçmişi; sahibi güvenilir Sicil'dir. Yalnızca kullanıcıya
-       görünen ileti metni saklanır (bkz. docs/AI-PLATFORM.md · Konuşma geçmişi). */
+       görünen ileti metni saklanır (bkz. docs/YAPAY-ZEKA-PLATFORMU.md · Konuşma geçmişi). */
     CREATE TABLE dbo.MR_AiConversations (
         ConversationId uniqueidentifier NOT NULL,
         OwnerSicil int NOT NULL,
@@ -536,7 +536,7 @@ BEGIN TRY
         WHERE ReplyToMessageId IS NOT NULL;
 
     /* Rota AI yanıt kanıtları: atıf yapılan GÜVENLİ araç sonucu görünümü; ileti
-       silinince birlikte silinir (bkz. docs/AI-DOMAIN-TOOLS.md §13). */
+       silinince birlikte silinir (bkz. docs/YAPAY-ZEKA-ALAN-ARACLARI.md §13). */
     CREATE TABLE dbo.MR_AiMessageEvidence (
         MessageId uniqueidentifier NOT NULL,
         Ordinal tinyint NOT NULL,
@@ -606,8 +606,8 @@ BEGIN TRY
         CalendarId uniqueidentifier NULL,
         CONSTRAINT PK_MR_TaskBaselineSnapshots PRIMARY KEY (BaselineId, TaskId),
         CONSTRAINT FK_MR_TaskBaselineSnapshots_Baselines FOREIGN KEY (BaselineId) REFERENCES dbo.MR_Baselines(BaselineId),
-        /* TaskId BILEREK yabanci anahtar TASIMAZ (bkz. docs/DATABASE-SCHEMA.md
-           "Baseline history"). Referans anlik goruntusu, karsilastirdigi
+        /* TaskId BILEREK yabanci anahtar TASIMAZ (bkz. docs/VERITABANI-SEMASI.md
+           "Baz plan geçmişi"). Referans anlik goruntusu, karsilastirdigi
            gorevden DAHA UZUN yasar: gorev silindiginde tarihsel kayit da
            silinseydi, o referansa gore olculen sapma gecmisi geriye donuk
            degisirdi. Bu yuzden TaskId yalnizca dizinlenir. */

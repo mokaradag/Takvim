@@ -10,7 +10,7 @@ Proje veya personel seçen uzun listeler yerel HTML `select` alanları yerine ca
 
 Ham `<select>` yalnızca sabit ve kısa numaralandırmalar için kalır: ilişki türü (FS/SS/FF/SF), gecikme birimi ve takvimdeki ay/yıl seçimi.
 
-Açılır panelin yerleşim ve katman sözleşmesi `SIMPLE-MODE-AND-UI.md` içinde tanımlanır. Panel `document.body` altına taşınır; bu sayede daraltılmış veya geçici açılmış kenar çubuğunun boyutu ve yığın bağlamı listeyi etkilemez.
+Açılır panelin yerleşim ve katman sözleşmesi `TEMEL-KIP-VE-ARAYUZ.md` içinde tanımlanır. Panel `document.body` altına taşınır; bu sayede daraltılmış veya geçici açılmış kenar çubuğunun boyutu ve yığın bağlamı listeyi etkilemez.
 
 ## Görevler sayfasında kurumsal daraltma
 
@@ -18,7 +18,7 @@ Temel ve Kapsamlı Kipteki Görevler ile Kapsamlı Kipteki Kanban araç çubuğu
 
 Kurumsal yol semantiğinin sahibi `src/domain/organization/organizationHierarchy.js` dosyasıdır; Ekip ve Görevler aynı işlevleri kullanır. Görev-sorumlu eşleşmesi `src/domain/organization/taskOrganizationFilter.js` içinde kişi kimliğine göre bir kez indekslenir. Çok sorumlulu görev, sorumlulardan **en az biri** seçili yolda olduğunda eşleşir. Seçenek listesi geçici tablo fasetlerinden değil mevcut yetkili çalışma alanı görevlerinin projekte edilmiş sorumlularından üretilir.
 
-Bu bölüm bir yetkilendirme kuralı tanımlamaz. İşlem sırası yetkili snapshot ve çalışma alanı/proje seçiminden sonra başlar; kurumsal seçim yalnızca eldeki görevleri azaltabilir. Temel/Kapsamlı Kip ve Görevler/Kanban aynı oturumluk seçimi paylaşır. Kanban araması kurumsal süzgeçten geçen görevleri daraltır; sürükleme ve kolon sayıları yalnızca bu sonuçları kullanır. Otomatik veri yenilemesi geçerli yolu korur; yeni projeksiyonda bir alt yol kaybolursa seçim en yakın geçerli üst kapsama indirilir.
+Bu bölüm bir yetkilendirme kuralı tanımlamaz. İşlem sırası yetkili anlık görüntü ve çalışma alanı/proje seçiminden sonra başlar; kurumsal seçim yalnızca eldeki görevleri azaltabilir. Temel/Kapsamlı Kip ve Görevler/Kanban aynı oturumluk seçimi paylaşır. Kanban araması kurumsal süzgeçten geçen görevleri daraltır; sürükleme ve kolon sayıları yalnızca bu sonuçları kullanır. Otomatik veri yenilemesi geçerli yolu korur; yeni projeksiyonda bir alt yol kaybolursa seçim en yakın geçerli üst kapsama indirilir.
 
 ## Proje türleri
 
@@ -137,15 +137,14 @@ liderinde ise tüm etkin CN43N kataloğunu taşır; büyük katalogda seçici yi
 (`rootWbsId`) proje kaydıyla birlikte gelir, böylece görev seçimden hemen sonra
 yazılabilir.
 
-Kural ve sunucu tarafı sınırı: `docs/AUTHORIZATION-MODEL.md` · *Task assignment
-scope*.
+Kural ve sunucu tarafı sınırı: `docs/YETKILENDIRME-MODELI.md` · *Görev atama kapsamı*.
 
 ## Kayıt güvenilirliği
 
 Gerçek Sistem kayıtları için şu korumalar uygulanır:
 
-- Var olan proje, WBS ve görev nesnelerinde arayüzün düşürdüğü `version` alanı, commit öncesinde mevcut durumdan geri yüklenir. Böylece güncelleme işlemi yanlışlıkla oluşturma olarak yorumlanmaz ve “Kayıt kimliği zaten kullanılıyor” çatışması oluşmaz.
-- Commit yanıtındaki yetkili satırlar **proje kayıtları dâhil** duruma uygulanır. Aksi hâlde proje sürüm anahtarı eskir ve aynı projenin ikinci güncellemesi (örneğin `Proje rengi` değişikliği) oluşturma çakışması olarak reddedilir. Depo projeyi hiç yankılamazsa sürümsüz yerel kopya saklanmaz; yetkili anlık görüntü yeniden yüklenir.
+- Var olan proje, WBS ve görev nesnelerinde arayüzün düşürdüğü `version` alanı, kayıttan önce mevcut durumdan geri yüklenir. Böylece güncelleme işlemi yanlışlıkla oluşturma olarak yorumlanmaz ve “Kayıt kimliği zaten kullanılıyor” çatışması oluşmaz.
+- Kayıt yanıtındaki yetkili satırlar **proje kayıtları dâhil** duruma uygulanır. Aksi hâlde proje sürüm anahtarı eskir ve aynı projenin ikinci güncellemesi (örneğin `Proje rengi` değişikliği) oluşturma çakışması olarak reddedilir. Depo projeyi hiç yankılamazsa sürümsüz yerel kopya saklanmaz; yetkili anlık görüntü yeniden yüklenir.
 - Gerçek Sistem istemcisi proje, WBS, görev, takvim ve bağımlılık kimliklerini API isteğinden önce UUID olarak doğrular. İstemci ön ekli kimliklerin sonundaki UUID güvenli biçimde ayrıştırılır. Doğrulama başarısız olduğunda ileti hangi alanın hatalı olduğunu ve **alınan değeri** açıkça belirtir; genel bir “geçerli UUID olmalıdır” uyarısı sorunlu kaydın bulunmasını imkânsız kılıyordu.
 - İkincil yazmalar asıl işlemi engellemez. Temel Kipte etiket kataloğuna ekleme başarısız olsa bile görev kaydı oluşturulur ve kullanıcıya uyarı gösterilir.
 

@@ -3,7 +3,7 @@
  *
  * Sağlayıcının ham hatası arayüze taşınmaz; her sonuç bu kararlı kodlardan
  * birine indirgenir. `serviceFailure`, sonucun hizmet sağlığını mı yoksa
- * kullanıcı/istemci kararını mı anlattığını söyler (bkz. docs/AI-PLATFORM.md).
+ * kullanıcı/istemci kararını mı anlattığını söyler (bkz. docs/YAPAY-ZEKA-PLATFORMU.md).
  */
 
 export const AI_ERROR_CODES = Object.freeze({

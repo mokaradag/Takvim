@@ -113,7 +113,7 @@ const ASSISTANT_CONTEXT_CLIPPED_SUFFIX = '\n[…ileti bağlam için kısaltıld�
 /**
  * Rota verisi araçlarının kullanıldığı turda geçmiş için daha dar bütçe: araç
  * sonuçları ve araç tanımları bağlamda yer tutar; geçmiş yanıtlar da güncel
- * kanıt değildir (bkz. docs/AI-DOMAIN-TOOLS.md).
+ * kanıt değildir (bkz. docs/YAPAY-ZEKA-ALAN-ARACLARI.md).
  */
 export const ASSISTANT_GROUNDED_CONTEXT_POLICY = Object.freeze({
   historyWindow: ASSISTANT_CONTEXT_POLICY.historyWindow,

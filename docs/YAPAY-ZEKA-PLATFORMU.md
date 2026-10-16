@@ -21,7 +21,7 @@ yanıtlaması — sunucuya ait 19 alan aracı, kanıt kimlikleri (`R1`, `R2` …
 belirlenimci atıf doğrulaması, kanıt kaydı (0018). İsteğe bağlıdır
 (`MERGEN_ROTA_AI_TOOLS_ENABLED`); kapalıyken Aşama 2 davranışı değişmez. Özet
 [§19](#19-rota-ai-kanıta-dayalı-alan-araçları-aşama-3)'da, ayrıntı
-[AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md)'dedir.
+[YAPAY-ZEKA-ALAN-ARACLARI.md](YAPAY-ZEKA-ALAN-ARACLARI.md)'dedir.
 
 ---
 
@@ -820,7 +820,7 @@ sayılan `.env.local` dosyasında ya da hizmet ortamında bulunur.
 
 ## 13. Veritabanı: 0016
 
-> Rota AI konuşma geçmişi (0017) için bkz. [§18.7](#187-konuşma-geçmişi-ve-sicil-sahipliği) ve [§18.14](#1814-dağıtım); kanıt kaydı (0018) için bkz. [AI-DOMAIN-TOOLS.md §13](AI-DOMAIN-TOOLS.md#13-veritabanı-0018).
+> Rota AI konuşma geçmişi (0017) için bkz. [§18.7](#187-konuşma-geçmişi-ve-sicil-sahipliği) ve [§18.14](#1814-dağıtım); kanıt kaydı (0018) için bkz. [YAPAY-ZEKA-ALAN-ARACLARI.md §13](YAPAY-ZEKA-ALAN-ARACLARI.md#13-veritabanı-0018).
 
 `database/MR_Upgrade_0016_Ai_User_Credentials.sql` tek bir tablo ekler:
 
@@ -885,7 +885,7 @@ serbest SQL çalıştırmaz. "SQL çalıştır" ya da "yapay zekânın ürettiğ
 araçları bu kurala uyar: model yalnızca kayıtlı salt okunur bir aracı ve şemaya
 uyan bağımsız değişkenleri seçer; bütün SQL sabit, parametreli ve yetki
 denetimlidir (`src/server/ai/tools/rota/rotaToolQueries.js`) ya da var olan yetki
-denetimli okuma hizmetleridir (bkz. [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md)). Kişisel anahtar tablosuna yalnızca depo modülü,
+denetimli okuma hizmetleridir (bkz. [YAPAY-ZEKA-ALAN-ARACLARI.md](YAPAY-ZEKA-ALAN-ARACLARI.md)). Kişisel anahtar tablosuna yalnızca depo modülü,
 derleme anında sabit ve Sicil ile sınırlı sorgularla erişir.
 
 ---
@@ -1316,7 +1316,7 @@ iletiler bağlamın dışında kaldıysa `accepted` olayı bunu bildirir
 ### 18.7 Konuşma geçmişi ve Sicil sahipliği
 
 `database/MR_Upgrade_0017_Ai_Assistant_Conversations.sql` iki tablo ekler
-(ayrıntı: `docs/DATABASE-SCHEMA.md`):
+(ayrıntı: `docs/VERITABANI-SEMASI.md`):
 
 - `MR_AiConversations`: `ConversationId`, `OwnerSicil`, `Title`,
   `OriginTurnId`, `MessageCount`, `CreatedAt`, `UpdatedAt`.
@@ -1441,7 +1441,7 @@ Durum değiştiren istekler (tur, silme) Aşama 1'in aynı kaynak denetiminden
 geçer ve bu denetim vekil için **gevşetilmemiştir**: vekil `Origin`'in ana
 makinesini ve şemasını iletmiyorsa istek `403 FORBIDDEN` alır. Çözüm vekil
 yapılandırmasıdır (ör. TEST `/bilge` yolunda yukarıdaki başlıklar), uygulamanın
-güvenlik denetimi değil. Örnek yapılandırma: `docs/NGINX-ROTA-PREFIX.md`.
+güvenlik denetimi değil. Örnek yapılandırma: `docs/NGINX-ROTA-ON-EKI.md`.
 
 ### 18.12 Arayüz
 
@@ -1456,7 +1456,7 @@ güvenlik denetimi değil. Örnek yapılandırma: `docs/NGINX-ROTA-PREFIX.md`.
   (460–600 px; 1600 px ve üstünde en fazla 680 px) ve çalışma alanına en az
   96 px kalır. Katmanı `--z-assistant`'tır: kabuğun ve
   yapışkan şeritlerin üstünde; açılır paneller, görev çekmecesi, komut paleti ve
-  kipli pencereler onun üstündedir (`docs/UI-STYLING-ARCHITECTURE.md` §9). Dar
+  kipli pencereler onun üstündedir (`docs/ARAYUZ-BICIMLENDIRME-MIMARISI.md` §9). Dar
   ekranda (≤ 760 px) tam ekran, kipli bir sayfa olur (`role="dialog"`, odak
   tuzağı); ekran klavyesi açılınca yükseklik görünür alana eşitlenir.
 - **Durum korunur:** panel kapanıp açılınca açık konuşma, taslak ve süren yanıt
@@ -1729,7 +1729,7 @@ temeli gevşetmeden eklemelidir.
 
 ## 19. Rota AI: kanıta dayalı alan araçları (Aşama 3)
 
-Ayrıntılı belge: [AI-DOMAIN-TOOLS.md](AI-DOMAIN-TOOLS.md). Özet:
+Ayrıntılı belge: [YAPAY-ZEKA-ALAN-ARACLARI.md](YAPAY-ZEKA-ALAN-ARACLARI.md). Özet:
 
 Rota verisinde plan, seçilen kipin araç profilinde (Standart `chat.tools`,
 Derin düşünme `chat.tools.reasoning`) `rota_plan` yerel çağrısıyla ya da metin
@@ -1773,7 +1773,7 @@ gönderilir ve tur telemetrisi bu son kararı kaydeder.
 - **Döngü ve sınırlar:** en fazla 4 araç turu, turda 5 / toplam 12 çağrı,
   çağrı başına 8 sn, toplam araç SQL süresi 25 sn, sonuç 16 KiB; ayrı araç SQL
   kapısı (1 eşzamanlı, Sicil başına 1). Tur tek kapasite kirası ve tek süre
-  sınırıyla yürür (`aiGateway.runToolSession`). Görev/baz plan/katalog 20 000, sorumluluk/yetki ilişkisi 200 000, süzülmüş ham hareket 20 000 sınırı max+1 ile korunur. Hareket başına en yeni 2 ayrıntı ve JSON başına 8192 karakter okunur; metin kişi çözümü 2000 Sicil ile sınırlıdır. Bildirim geçmişi kaynak başına 1000+1 yoklar, taşmada kesin sayaç yerine null verir. İş akışları tur başına 1000 kayıtlık anlık görüntü, görev listeleri veri özetine bağlı imleç kullanır. Araç profili çıktı sınırları 4096 / 8192 token; kesik JSON tek ortak onarım hakkıyla daha az iddiaya daraltılır. Bildirilen istek kanıttaki olguları tek anlamlı belirliyorsa seçimi sunucu aynı doğrulamayla yapar ve ayrı model seçim turu olmaz; tur yapısı içeriksiz `ai.grounded.turn` olayında izlenir (`docs/AI-DOMAIN-TOOLS.md`, “Tur bütçesi ve sunucu seçimi”).
+  sınırıyla yürür (`aiGateway.runToolSession`). Görev/baz plan/katalog 20 000, sorumluluk/yetki ilişkisi 200 000, süzülmüş ham hareket 20 000 sınırı max+1 ile korunur. Hareket başına en yeni 2 ayrıntı ve JSON başına 8192 karakter okunur; metin kişi çözümü 2000 Sicil ile sınırlıdır. Bildirim geçmişi kaynak başına 1000+1 yoklar, taşmada kesin sayaç yerine null verir. İş akışları tur başına 1000 kayıtlık anlık görüntü, görev listeleri veri özetine bağlı imleç kullanır. Araç profili çıktı sınırları 4096 / 8192 jeton; kesik JSON tek ortak onarım hakkıyla daha az iddiaya daraltılır. Bildirilen istek kanıttaki olguları tek anlamlı belirliyorsa seçimi sunucu aynı doğrulamayla yapar ve ayrı model seçim turu olmaz; tur yapısı içeriksiz `ai.grounded.turn` olayında izlenir (`docs/YAPAY-ZEKA-ALAN-ARACLARI.md`, “Tur bütçesi ve sunucu seçimi”).
 - **Akış:** `accepted.rotaData`, `status` evreleri `tools` (+ veri alanı
   konusu) ve `verifying`, `revise` olayı, `done.assistantMessage.content` ve
   `evidence`. Aşama 3 model protokolü tamponlanır; yalnızca doğrulanmış son

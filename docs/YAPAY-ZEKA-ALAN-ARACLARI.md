@@ -8,7 +8,7 @@ gözlemlenebilirlik, dağıtım ve kabul.
 
 Aşama 1–2 temelleri (güvenilir Sicil, anahtar yönetimi, sağlayıcı soyutlaması,
 model kaydı, `aiGateway`, kapasite, akış, konuşma geçmişi) için bkz.
-[AI-PLATFORM.md](AI-PLATFORM.md). Aşama 3 bu temelleri değiştirmez; yalnızca
+[YAPAY-ZEKA-PLATFORMU.md](YAPAY-ZEKA-PLATFORMU.md). Aşama 3 bu temelleri değiştirmez; yalnızca
 sınırlı ve sınanmış uzantılar ekler (§15).
 
 **Dört ilke:**
@@ -168,7 +168,7 @@ Bağımsız değişkenler model metnidir ve **güvenilmez**:
 ## 5. Yetki
 
 Araçlar yeni bir yetki modeli **kurmaz**; Rota'nın var olan anlamını kullanır
-(bkz. [AUTHORIZATION-MODEL.md](AUTHORIZATION-MODEL.md)):
+(bkz. [YETKILENDIRME-MODELI.md](YETKILENDIRME-MODELI.md)):
 
 - Yetki bağlamı `loadAuthorizationContext` ile okunur ve `buildRotaScope` ile
   sabit SQL'e parametre olarak verilir; görünür görevler SQL içinde anlık
@@ -328,9 +328,9 @@ Son seçim isteğe belirlenimci olarak bağlanır (`requestContract.js`):
   ya da genel toplam eksik satır ölçüsünün yerine geçmez. Aynı nüfusun ayrıca
   bildirilen toplamı satır ölçüsü yerine geçmeden bağlamsal olarak korunur.
   Boşluk yalnızca TAM, kısaltılmamış, ilk sayfadaki tam istenen koleksiyonla
-  kanıtlanır. Satır-only listede `complete` olgusu bu kanıta atıf yapabilir;
+  kanıtlanır. Yalnızca satır içeren listede `complete` olgusu bu kanıta atıf yapabilir;
   ayrıca toplam istenmişse toplam olgusu da gerekir. Sibling koleksiyon,
-  ilgisiz scalar veya başka araç nüfusu satır ölçüsünü karşılayamaz.
+  ilgisiz skaler değer veya başka araç nüfusu satır ölçüsünü karşılayamaz.
   `totalCount` yalnızca aracın tanımlı nüfusunu sayar: tekrar serisi sayısı
   oluşum sayısı değildir; içteki `next` koleksiyonları kendi `upcomingCount`
   ve `nextTruncated` değerleriyle doğrulanır.
@@ -497,11 +497,11 @@ kullanmaz. Doğal dildeki anlamsal çıkarım Aşama 4'te geliştirilecektir. A�
 3'ün belirlenimci mantığı güvenilir yapısal doğrulama, yetki, kanıt
 bütünlüğü, ölçü hesabı, sınırlar ve benzeri nesnel değişmezlerle sınırlıdır.
 
-> Phase 3 does not use regex/keyword NLP to interpret Turkish or English user
-> intent. Natural-language semantic reasoning will be improved in Phase 4.
-> Phase 3 deterministic logic is limited to trusted structural validation,
-> authorization, evidence integrity, metric computation, bounds and other
-> objective invariants.
+> Aşama 3, Türkçe veya İngilizce kullanıcı niyetini yorumlamak için regex/anahtar
+> kelime tabanlı doğal dil işleme kullanmaz. Doğal dilde anlamsal akıl yürütme
+> Aşama 4’te iyileştirilecektir. Aşama 3’ün belirlenimci mantığı güvenilir yapısal
+> doğrulama, yetkilendirme, kanıt bütünlüğü, ölçüm hesabı, sınırlar ve diğer
+> nesnel değişmezlerle sınırlıdır.
 
 Sorunun türlü isteğe çevrilmesi modelin olasılıksal yorumudur; sunucu her
 ifadenin doğru çevrileceğini iddia etmez. Sunucunun güvencesi şudur: istek
@@ -728,7 +728,7 @@ Bütün hesaplar sunucuda, sabit kurallarla yapılır; model sayı hesaplamaz.
 | Baz plan sapması | Güncel planlanan bitiş − baz plandaki planlanan bitiş (takvim günü); silinen ve sonradan eklenen görevler ayrıca sayılır |
 | Bağımlılık | FS, SS, FF, SF ve gecikme (ör. "+2 gün", "−1 hafta") kayıtlı ilişkidir; kritik yol, bolluk ya da tarih hesabı yapılmaz |
 | İş günü | Rota takvim kuralı: çalışma günleri eksi resmi tatiller, iki uç dâhil |
-| İş yükü | Açık görev sayıları ve kişinin atandığı görevlerin task düzeyindeki planlanan saat toplamı; kişi-saat tahsisi, kapasite ya da aşırı yük yargısı değildir |
+| İş yükü | Açık görev sayıları ve kişinin atandığı görevlerin görev düzeyindeki planlanan saat toplamı; kişi-saat tahsisi, kapasite ya da aşırı yük yargısı değildir |
 
 ---
 

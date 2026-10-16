@@ -16,18 +16,18 @@ MERGEN Bilge'ye aittir ve MERGEN Rota yapılandırmasında kullanılmaz.
 
 Kimlik doğrulama, kullanıcının **kim olduğunu** belirler. Kullanıcının **neye
 erişebileceğini** MERGEN Rota'nın mevcut yetkilendirme modeli belirlemeye devam
-eder (`docs/AUTHORIZATION-MODEL.md`). Keycloak entegrasyonu yalnızca
+eder (`docs/YETKILENDIRME-MODELI.md`). Keycloak entegrasyonu yalnızca
 `CurrentUserProvider` katmanını değiştirmiştir:
 
 ```text
 Keycloak (doğrulanmış jeton)
-    → sicil claim'i  (ya da preferred_username → HR02 → Sicil)
+    → sicil beyanı  (ya da preferred_username → HR02 → Sicil)
     → HttpOnly MERGEN Rota oturum çerezi
     → getTrustedCurrentSicil()
     → loadAuthorizationContext()  (MR_UserRoles, HR09, MR_ProjectAccess, ...)
 ```
 
-SQL şeması, repository transaction modeli, yetkilendirme önceliği, yetkiye göre
+SQL şeması, depo işlem modeli, yetkilendirme önceliği, yetkiye göre
 süzülmüş anlık görüntüler ve kısmi proje CPM bastırması **değişmemiştir**.
 
 ---
@@ -45,9 +45,11 @@ süzülmüş anlık görüntüler ve kısmi proje CPM bastırması **değişmemi
 
 Korunan veri uçları değişmedi: `GET /api/mergen-rota/session`,
 `GET /api/mergen-rota/snapshot`, `POST /api/mergen-rota/commit`. Her mutasyon
-mevcut sunucu/transaction sınırı içinde yeniden yetkilendirilir.
+mevcut sunucu/veritabanı işlemi sınırı içinde yeniden yetkilendirilir.
 
 ### Akış seçimi
+
+OAuth terminolojisindeki jeton endpoint'i bu belgede **jeton ucu** olarak adlandırılır. Authorization Code akışında kodun jetonla takas edildiği bu uç, implicit köprü akışında kullanılmaz.
 
 Oturum açma akışı yalnızca sunucu yapılandırmasından, `MERGEN_ROTA_KEYCLOAK_FLOW`
 ile seçilir. Tarayıcı akışı değiştiremez. Kabul edilen değerler **tam olarak**:
@@ -67,8 +69,8 @@ akışa düşmez.
 | `response_type` | `code` | `token` |
 | `response_mode` | (varsayılan) | `fragment` |
 | PKCE | `S256`, zorunlu | Yok (kullanılmaz) |
-| Jeton endpoint'i | Kullanılır | **Kullanılmaz** |
-| İstemci secret'ı | Gizli istemcide gerekir | **Gerekmez** |
+| Jeton ucu | Kullanılır | **Kullanılmaz** |
+| İstemci gizli değeri | Gizli istemcide gerekir | **Gerekmez** |
 | Jeton tarayıcıya ulaşır mı? | Hayır | Kısa süreliğine, URL parçasında |
 | Sunucu tarafı JWT + Sicil doğrulaması | Evet | Evet, **aynı kod** |
 | Oturum çerezi | `mergen_rota_session` | `mergen_rota_session` (aynı) |
@@ -82,9 +84,9 @@ istemci kimlik doğrulaması** gerektirdiğini bilmek gerekir.
 > `prompt=none` sondası beklendiği gibi `login_required` dönmüş), ancak jeton
 > takası reddedilmiştir: `HTTP 401`, `error=unauthorized_client`,
 > `error_description=Invalid client or Invalid client credentials` ve gönderilen
-> bir istemci secret'ı yok. Bu, Standard Flow'un kapalı olduğu anlamına gelmez;
+> bir istemci gizli değeri yok. Bu, Standard Flow'un kapalı olduğu anlamına gelmez;
 > jeton ucunun geçerli bir gizli istemci kimlik doğrulaması beklediği anlamına
-> gelir. Secret elde edilemediği sürece Authorization Code takası tamamlanamaz.
+> gelir. Gizli değer elde edilemediği sürece Authorization Code takası tamamlanamaz.
 > Implicit köprü, hâlihazırda `response_type=token` ile çalışan mevcut istemci
 > için bu nedenle açık bir uyumluluk kipi olarak eklenmiştir.
 
@@ -97,7 +99,7 @@ istemci kimlik doğrulaması** gerektirdiğini bilmek gerekir.
 3. Keycloak kullanıcıyı doğrular ve `callback` adresine `code` + `state` ile
    döner.
 4. Sunucu `state` eşleşmesini doğrular, kodu **sunucu tarafında** jetonla takas
-   eder, jetonun imzasını ve claim'lerini doğrular.
+   eder, jetonun imzasını ve beyanlarını doğrular.
 5. Doğrulanmış Sicil ve güvenli görüntüleme alanları HMAC ile imzalanmış
    HttpOnly oturum çerezine yazılır; kullanıcı `returnTo` yoluna döner.
 
@@ -116,7 +118,7 @@ döngüsü yerine açık bir hata yanıtı döner.
    `{ flow: 'implicit-bridge', state, returnTo, exp }`.
 4. Tarayıcı Keycloak'a yönlendirilir: `response_type=token`,
    `response_mode=fragment`, `client_id`, implicit geri dönüş adresi, kapsam,
-   `state`. İstemci secret'ı bu adrese **hiçbir koşulda** yazılmaz.
+   `state`. İstemci gizli değeri bu adrese **hiçbir koşulda** yazılmaz.
 5. Keycloak jetonu ve `state`'i **URL parçasında** döndürür.
 6. `GET /auth/implicit-callback` küçük bir HTML yanıtıdır (hidratlanan uygulama
    sayfası değil): parçayı okur, `history.replaceState` ile **derhâl siler** ve
@@ -155,19 +157,19 @@ HttpOnly oturuma çevrilir. Erişim jetonu `localStorage`'da saklanmaz.
 
 ---
 
-## 3. Zorunlu Keycloak claim'leri
+## 3. Zorunlu Keycloak beyanları
 
-Doğrulanan standart claim'ler: `iss`, `exp`, `aud`, `azp`, `typ`, `nbf`, `iat`.
+Doğrulanan standart beyanlar: `iss`, `exp`, `aud`, `azp`, `typ`, `nbf`, `iat`.
 
-`typ` claim'i **zorunludur** ve erişim jetonu sınırında yalnızca `Bearer`
+`typ` beyanı **zorunludur** ve erişim jetonu sınırında yalnızca `Bearer`
 kabul edilir. Keycloak erişim jetonuna `typ: 'Bearer'`, kimlik jetonuna
-`typ: 'ID'` yazar; liste ikisini birden kabul ederken (ve claim eksikse denetimi
+`typ: 'ID'` yazar; liste ikisini birden kabul ederken (ve beyan eksikse denetimi
 tümüyle atlarken) issuer, kitle, yetkili taraf ve kimlik alanları geçerli olan
 **imzalı bir kimlik jetonu** da uygulama oturumu açabiliyordu.
 
-Kimlik için okunan claim'ler:
+Kimlik için okunan beyanlar:
 
-| Claim | Kullanım |
+| Beyan | Kullanım |
 | --- | --- |
 | `sicil` | **Güvenilen kimlik anahtarı.** Tüm yetkilendirme bu değerle çalışır |
 | `preferred_username` | Görüntüleme + isteğe bağlı Sicil yedeği |
@@ -180,7 +182,7 @@ Kimlik için okunan claim'ler:
 
 ### Sicil eşlemesi
 
-1. Doğrulanmış `sicil` claim'i kullanılır. Biçim kuralı geliştirme kimliğiyle
+1. Doğrulanmış `sicil` beyanı kullanılır. Biçim kuralı geliştirme kimliğiyle
    aynıdır: yalnızca pozitif tam sayı, `int` sınırı içinde. `900001abc`, `0`,
    `-1`, `900001.5` gibi değerler reddedilir.
 2. `sicil` yoksa ve `MERGEN_ROTA_KEYCLOAK_USERNAME_SICIL_FALLBACK=true` ise
@@ -204,7 +206,7 @@ Kimlik için okunan claim'ler:
 - **Kapalı başarısızlık**: JWKS alınamıyorsa, anahtar bilinmiyorsa, imza
   geçersizse, süre dolmuşsa, issuer/kitle/istemci doğrulaması başarısızsa veya
   Sicil çözülemiyorsa istek reddedilir.
-- Bozuk bir Sicil claim'i **kullanıcı adı yedeğine düşmez**. Denetim claim adını
+- Bozuk bir Sicil beyanı **kullanıcı adı yedeğine düşmez**. Denetim beyan adını
   `KEYCLOAK_CLAIM_MAP` üzerinden okur; sabit `'sicil'` metni, eşleme
   değiştiğinde bu kapalı başarısızlığı sessizce devre dışı bırakıyordu.
 - Kimlik sağlayıcısının **arızası** yetkisizlik değildir: jeton ucundan gelen
@@ -226,13 +228,13 @@ Kimlik için okunan claim'ler:
   veya Sicil'i geçersiz bir çerez kimlik üretmez.
 
 `GET /api/mergen-rota/session` yanıtındaki `currentUser` nesnesi kurumsal rehber
-kaydı ile doğrulanmış claim'lerin birleşimidir: `sicil`, `employeeNo`, `name`,
+kaydı ile doğrulanmış beyanların birleşimidir: `sicil`, `employeeNo`, `name`,
 `username`, `givenName`, `familyName`, `email`, `department`, `sector`,
 `managementUnit`, `subject`, `role`, `team`, `organization`. Ham jeton yanıtta
 bulunmaz.
 
 > **Not — iki farklı "departman":** `currentUser.department` Keycloak
-> `department` claim'idir (kenar çubuğunda görünen değer).
+> `department` beyanıdır (kenar çubuğunda görünen değer).
 > `currentUser.organization.department` ise HR02 `mudurluk` alanından türetilen
 > kurumsal rehber değeridir. İkisi karıştırılmamalıdır.
 
@@ -335,9 +337,9 @@ MERGEN Rota istemcisi için (tercih edilen `authorization-code` akışı):
 - **Standard flow (Authorization Code):** açık
 - **PKCE (S256):** zorunlu
 - **İstemci türü:** public tercih edilir. Gizli (confidential) istemcide jeton
-  takası geçerli bir istemci kimlik doğrulaması ister; secret elde edilemiyorsa
+  takası geçerli bir istemci kimlik doğrulaması ister; gizli değer elde edilemiyorsa
   bu akış tamamlanamaz.
-- **Claim'ler:** `sicil`, `sektor`, `department`, `mudurluk` erişim jetonuna
+- **Beyanlar:** `sicil`, `sektor`, `department`, `mudurluk` erişim jetonuna
   eklenmelidir (diğerleri standart `profile`/`email` kapsamlarından gelir)
 
 `implicit-bridge` kipi kullanılacaksa, hâlihazırda implicit akışla çalışan
@@ -348,7 +350,7 @@ istemci için ek olarak:
   — `.env.local` içindeki `MERGEN_ROTA_KEYCLOAK_IMPLICIT_REDIRECT_URI` ile
   **birebir aynı** olmalıdır
 - **Web origin:** `https://<MERGEN_ROTA_HOST>:8008`
-- **İstemci secret'ı:** gerekmez (jeton endpoint'i kullanılmaz)
+- **İstemci gizli değeri:** gerekmez (jeton ucu kullanılmaz)
 
 Bu belge Keycloak'ta herhangi bir değişikliğin **yapıldığını** iddia etmez;
 yalnızca ilgili akışın çalışması için hangi kaydın gerektiğini listeler.
@@ -431,11 +433,11 @@ yalnızca maskelenmiş alanları günlüğe yazar.
 | --- | --- |
 | Her istek `UNAUTHORIZED` | `MERGEN_ROTA_SESSION_SECRET` eksik/kısa, ya da çerez `Secure` iken site HTTP üzerinden açılıyor |
 | "Kimlik doğrulanamadı" | İmza/issuer/kitle uyuşmazlığı; realm, istemci kimliği ve `aud`/`azp` yapılandırmasını karşılaştırın |
-| "Kurumsal Sicil bilgisi çözülemedi" | Jetonda `sicil` claim'i yok ve kullanıcı adı HR02'de tekil eşleşmiyor |
+| "Kurumsal Sicil bilgisi çözülemedi" | Jetonda `sicil` beyanı yok ve kullanıcı adı HR02'de tekil eşleşmiyor |
 | Oturum açma döngüsü | `redirect_uri` Keycloak kaydıyla birebir aynı değil (port 8008 dâhil) |
 | Anahtar rotasyonu sonrası kısa süreli hata | JWKS yenileme hız sınırı; `MERGEN_ROTA_KEYCLOAK_JWKS_MIN_REFRESH_MS` ile ayarlanır |
 | Avatarlar baş harf gösteriyor | `NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL` boş, ya da fotoğraf sunucusuna erişilemiyor |
-| Jeton takasında `HTTP 401` + `unauthorized_client` + `Invalid client or Invalid client credentials` | Gizli istemci kimlik doğrulaması eksik/yanlış. Standard Flow kapalı **değildir**; yetkilendirme isteği kabul edilmektedir. Secret sağlanamıyorsa `MERGEN_ROTA_KEYCLOAK_FLOW=implicit-bridge` kullanılabilir |
+| Jeton takasında `HTTP 401` + `unauthorized_client` + `Invalid client or Invalid client credentials` | Gizli istemci kimlik doğrulaması eksik/yanlış. Standard Flow kapalı **değildir**; yetkilendirme isteği kabul edilmektedir. Gizli değer sağlanamıyorsa `MERGEN_ROTA_KEYCLOAK_FLOW=implicit-bridge` kullanılabilir |
 | "Implicit köprü kipi etkin değil" | `MERGEN_ROTA_KEYCLOAK_FLOW` `implicit-bridge` değil; köprü ucu yalnızca o kipte çalışır |
 | "Oturum açma işlemi bulunamadı / süresi doldu" | İşlem çerezi yok veya 10 dakikayı aştı. Eski bir geri dönüş adresini yeniden kullanmayın; oturum açmayı baştan başlatın |
 | "Oturum açma işlemi bu akışa ait değil" | Çerez öteki akışa ait. Sunucu yeniden başlatıldıysa veya akış değiştirildiyse tek çözüm taze oturum açmadır |

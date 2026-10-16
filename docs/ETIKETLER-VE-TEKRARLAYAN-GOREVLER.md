@@ -127,7 +127,7 @@ COUNT=<n> | UNTIL=<YYYYMMDD>       seri sonu (ikisi birden verilemez)
 
 `COUNT` ve `UNTIL` birlikte verilirse RFC 5545 gereği kural geçersizdir ve
 **yazma sınırında reddedilir**: `findRecurrenceRuleIssue` bunu
-`COUNT ve UNTIL birlikte verilemez.` gerekçesiyle bildirir, commit ucu da
+`COUNT ve UNTIL birlikte verilemez.` gerekçesiyle bildirir, kayıt ucu da
 `TASK_RECURRENCE_INVALID` döndürür. Kullanıcının verdiği bitiş tarihi bu yüzden
 sessizce kaybolamaz.
 
