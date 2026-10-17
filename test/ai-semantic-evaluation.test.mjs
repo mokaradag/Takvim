@@ -243,7 +243,14 @@ test('koşu kaydı güvenilmezdir: sonuç ile yük çelişen, yabancı ya da yin
     'güvensiz gerekçe': (copy, first) => { first.embedding = { ...failed, reason: 'sk-gizli ileti' }; first.firstStage = null; first.rerank = null; first.reranked = null; },
     'bilinmeyen sonuç': (copy, first) => { first.embedding.outcome = 'belki'; },
     'geçersiz sınır': (copy) => { copy.limit = 0; },
-    'okunamayan satır': (copy) => { Object.defineProperty(copy.cases, 2, { get() { throw new Error('okunamaz'); } }); }
+    'okunamayan satır': (copy) => { Object.defineProperty(copy.cases, 2, { get() { throw new Error('okunamaz'); } }); },
+    'başarısız dizinde sıralama': (copy) => { copy.index = { outcome: 'invalid', reason: 'COUNT_MISMATCH', latencyMs: 1 }; },
+    'dizin varken dizin yok ıskası': (copy, first) => { Object.assign(first, { embedding: { outcome: 'failed', reason: 'INDEX_UNAVAILABLE' }, firstStage: null, rerank: null, reranked: null }); },
+    'gecikmesiz başarılı gömme': (copy, first) => { delete first.embedding.latencyMs; },
+    'gecikmesiz başarılı yeniden sıralama': (copy, first) => { delete first.rerank.latencyMs; },
+    'gecikmesiz dizin': (copy) => { delete copy.index.latencyMs; },
+    'gecikmeli çağrılmamış vaka': (copy, first) => { Object.assign(first, { embedding: { outcome: 'failed', reason: 'RUN_HALTED', latencyMs: 3 }, firstStage: null, rerank: null, reranked: null }); },
+    'çağrılmamış yeniden sıralama': (copy, first) => { Object.assign(first, { rerank: { outcome: 'failed', reason: 'RUN_HALTED' }, reranked: null }); }
   };
   for (const [label, change] of Object.entries(invalid)) {
     assert.throws(() => summarizeSemanticRun(variant(change), toyBenchmark), /SEMANTIC_RUN_INVALID/, label);

@@ -277,8 +277,12 @@ Koşu kaydının kuralları:
   **permütasyonudur** (aday ekleyemez, çıkaramaz).
 - Aday listesi tam `min(limit, katalog)` uzunluktadır, kimlikler katalogda ve
   tekildir, skorlar sonlu ve artmayan sıradadır (benzerlik [-1, 1]).
-- `ok` ve `timeout` gerekçe taşımaz; `invalid` ve `failed` güvenli kod taşır;
-  gecikme sonlu ve negatif olmayan bir sayıdır.
+- `ok` ve `timeout` gerekçe taşımaz; `invalid` ve `failed` güvenli kod taşır.
+- Dizin kaydı `ok` değilse her vaka `INDEX_UNAVAILABLE` ıskasıdır; dizin `ok`
+  iken bu kod kullanılamaz (dizin olmadan sıralama puanlanmaz).
+- Yapılan her çağrı (dizin, sorgu gömme, yeniden sıralama) sonlu ve negatif
+  olmayan bir gecikme taşır; yalnızca hiç çağrılmayan vaka ıskası
+  (`INDEX_UNAVAILABLE`, `RUN_HALTED`) gecikme taşımaz.
 - Kesimler koşunun toplandığı `limit` derinliğini aşamaz (`SEMANTIC_CUTOFFS`):
   toplanmamış derinlik ölçülmez. Özet kendi yapılandırmasını taşır
   (`catalogue`, `limit`, `cutoffs`, `ndcgCutoff`).

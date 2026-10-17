@@ -47,6 +47,9 @@ const MAX_ISSUES = 25;
 const MAX_CALL_TIMEOUT_MS = 600000;
 const MAX_TAGS_DECLARED = 64;
 const RUN_HALTED = 'RUN_HALTED';
+const INDEX_UNAVAILABLE = 'INDEX_UNAVAILABLE';
+// Model hiç çağrılmadan kaydedilen ıskalar: gecikme taşımazlar.
+const UNCALLED = new Set([INDEX_UNAVAILABLE, RUN_HALTED]);
 const BENCHMARKS = new WeakSet();
 
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -333,7 +336,7 @@ export async function collectSemanticRun({
   const documentOf = new Map(catalogue.items.map((item) => [item.id, item.text]));
   const cases = [];
   for (const testCase of benchmark.cases) {
-    if (!index) cases.push(missedCase(testCase.id, 'INDEX_UNAVAILABLE'));
+    if (!index) cases.push(missedCase(testCase.id, INDEX_UNAVAILABLE));
     else if (halted) cases.push(missedCase(testCase.id, RUN_HALTED));
     else cases.push(await collectCase(testCase, { index, embedding, reranking, limit, documentOf, call }));
   }
@@ -473,15 +476,21 @@ function outcomeCounts(records) {
 
 const RUN_ERRORS = new Set(['SEMANTIC_RUN_STALE', 'SEMANTIC_RUN_INVALID']);
 const runInvalid = () => new TypeError('SEMANTIC_RUN_INVALID');
-const isLatency = (value) => value === undefined || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
+const isLatency = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 
-// Sonuç türü ile gerekçe tutarlıdır: başarılı ve süresi dolan çağrı gerekçe taşımaz, diğerleri güvenli kod taşır.
-function readCallRecord(record) {
+/**
+ * Sonuç türü ile gerekçe tutarlıdır: başarılı ve süresi dolan çağrı gerekçe
+ * taşımaz, diğerleri güvenli kod taşır. Yapılan her çağrı ölçülmüş gecikme
+ * taşır; yalnızca hiç çağrılmayan vaka ıskası (`uncalled` izinliyse) taşımaz.
+ */
+function readCallRecord(record, { uncalled = false } = {}) {
   if (!isRecord(record)) throw runInvalid();
   const { outcome, reason, latencyMs } = record;
-  if (!OUTCOMES.includes(outcome) || !isLatency(latencyMs)) throw runInvalid();
+  if (!OUTCOMES.includes(outcome)) throw runInvalid();
   const reasonless = outcome === OK || outcome === TIMEOUT;
   if (reasonless ? reason !== undefined : !(typeof reason === 'string' && SAFE_CODE.test(reason))) throw runInvalid();
+  const called = !(uncalled && outcome === FAILED && UNCALLED.has(reason));
+  if (called ? !isLatency(latencyMs) : latencyMs !== undefined) throw runInvalid();
   return Object.freeze({ outcome, reason, latencyMs });
 }
 
@@ -512,7 +521,7 @@ function readRanked(raw, key, depth, allowed) {
 function readEntry(raw, { depth, items, reranking }) {
   if (!isRecord(raw)) throw runInvalid();
   const { case: id, embedding, rerank, firstStage, reranked } = raw;
-  const entry = { case: id, embedding: readCallRecord(embedding), rerank: null, firstStage: null, reranked: null };
+  const entry = { case: id, embedding: readCallRecord(embedding, { uncalled: true }), rerank: null, firstStage: null, reranked: null };
   if (entry.embedding.outcome !== OK) {
     if (firstStage != null || rerank != null || reranked != null) throw runInvalid();
     return Object.freeze(entry);
@@ -549,6 +558,8 @@ function readRun(run, benchmark) {
     const entry = readEntry(raw, context);
     // Kıyas kümesinde olmayan ya da yinelenen vaka satırı sessizce yok sayılmaz ya da ezilmez.
     if (!known.has(entry.case) || byCase.has(entry.case)) throw runInvalid();
+    // Dizin yoksa her vaka `INDEX_UNAVAILABLE` ıskasıdır; dizin varken bu kod kullanılamaz.
+    if ((indexRecord.outcome === OK) === (entry.embedding.reason === INDEX_UNAVAILABLE)) throw runInvalid();
     byCase.set(entry.case, entry);
   }
   return { limit, reranking: context.reranking, index: indexRecord, byCase };
