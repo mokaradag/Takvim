@@ -23,6 +23,13 @@ belirlenimci atıf doğrulaması, kanıt kaydı (0018). İsteğe bağlıdır
 [§19](#19-rota-ai-kanıta-dayalı-alan-araçları-aşama-3)'da, ayrıntı
 [YAPAY-ZEKA-ALAN-ARACLARI.md](YAPAY-ZEKA-ALAN-ARACLARI.md)'dedir.
 
+Aşama 4: gömme ve yeniden sıralama modelleriyle Türkçe doğal dilin anlamsal
+olarak anlaşılması; Aşama 3'ün kimlik, yetki, SQL ve kanıt sınırı değişmez.
+Dondurulmuş dört adımlı yol haritası (4A–4D), değişmezler, değerlendirme ve
+kurum içi kabul sözleşmesi
+[YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.md)'dedir; özet
+[§20](#20-rota-ai-anlamsal-katman-aşama-4)'de.
+
 ---
 
 ## 1. Mimari sınır
@@ -100,6 +107,7 @@ Tarayıcı ──► /api/mergen-rota/ai/*  (Node çalışma zamanı, önbelleks
 | `src/features/ai/assistant/*` | Rota AI paneli, istemci ve akış çözücüsü, durum makinesi, güvenli Markdown, sunum ve etkileşim kuralları |
 | `src/server/ai/tools/*` | Aşama 3: araç kayıt defteri, katı bağımsız değişken doğrulaması, sınırlı yürütücü, araç SQL kapısı, kanıt defteri ve 19 salt okunur alan aracı (tek SQL sahibi `rota/rotaToolStore.js`) |
 | `src/domain/ai/evidenceContract.js`, `src/server/ai/assistant/grounded*.js` | Aşama 3: ortak kanıt/atıf sözleşmesi; sunucuya ait yönerge ve doğrulanan, sınırlı araç döngüsü |
+| `src/domain/ai/semanticContract.js`, `semanticEvaluation.js` | Aşama 4A: anlamsal sözleşme (model çıktısı doğrulaması, katalog, parmak izi, sıralama) ve değerlendirme (kıyas kümesi, ölçüler, sınırlı koşucu); canlı yola bağlı değildir |
 
 ---
 
@@ -1804,3 +1812,26 @@ gönderilir ve tur telemetrisi bu son kararı kaydeder.
   alınacaksa bayrağı kapatmak yeterlidir; Aşama 3 öncesi uygulama sürümüne
   dönülürse model kaydı da önceki JSON'a döndürülmeli veya `chat.tools` /
   `chat.tools.reasoning` profilleri kaldırılmalıdır.
+
+---
+
+## 20. Rota AI: anlamsal katman (Aşama 4)
+
+Ayrıntılı belge: [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.md). Özet:
+
+- **Yol haritası (dondurulmuş):** 4A anlamsal temel ve değerlendirme → 4B gerçek
+  anlamsal erişim ve yeniden sıralama → 4C akıllı planlayıcı ve zayıf model
+  doğrulaması → 4D insan kalitesinde yanıt ve kurum içi yakınsama. Değişiklik
+  yalnızca ölçülmüş gerekçeyle ve belge bilinçli olarak güncellenerek yapılır;
+  Aşama 4, 4D ile biter.
+- **Güven sınırı:** kimlik, yetki, görünürlük, SQL, hesap ve kanıt Aşama 3'te
+  kalır. `embedding` ve `rerank` profilleri yalnızca sunucuya ait katalogdan
+  aday önerir; anlamsal benzerlik yetki değildir, model çıktısı kanıt değildir.
+- **4A (uygulandı):** `src/domain/ai/semanticContract.js` model çıktısını
+  güvenilmez veri olarak doğrular (biçim, sayı, dizin, boyut, sonluluk),
+  katalog/uzay/dizin parmak izleriyle bayat gömmeyi reddeder ve belirlenimci,
+  sınırlı sıralama yapar; `semanticEvaluation.js` 117 vakalık sentetik Türkçe
+  kıyas kümesini, ölçüleri ve sınırlı koşucuyu tanımlar. Hiçbir üretim modülü
+  bunları içe aktarmaz; canlı davranış değişmez. Gerçek model nitelendirmesi
+  CI dışında elle çalıştırılır (`scripts/semantic-evaluation.mjs`,
+  `scripts/semantic-model-qualification.py`).
