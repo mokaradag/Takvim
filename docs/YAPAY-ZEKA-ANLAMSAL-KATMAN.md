@@ -283,6 +283,9 @@ Koşu kaydının kuralları:
 - Yapılan her çağrı (dizin, sorgu gömme, yeniden sıralama) sonlu ve negatif
   olmayan bir gecikme taşır; yalnızca hiç çağrılmayan vaka ıskası
   (`INDEX_UNAVAILABLE`, `RUN_HALTED`) gecikme taşımaz.
+- `RUN_HALTED` ıskaları kıyas sırasında kesintisiz bir son dilimdir ve hemen
+  önceki vakanın son çağrısı (yeniden sıralama, yoksa gömme) süresi dolan
+  çağrıdır; duruştan sonra puanlanan vaka reddedilir.
 - Kesimler koşunun toplandığı `limit` derinliğini aşamaz (`SEMANTIC_CUTOFFS`):
   toplanmamış derinlik ölçülmez. Özet kendi yapılandırmasını taşır
   (`catalogue`, `limit`, `cutoffs`, `ndcgCutoff`).

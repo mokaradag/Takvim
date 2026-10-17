@@ -562,7 +562,25 @@ function readRun(run, benchmark) {
     if ((indexRecord.outcome === OK) === (entry.embedding.reason === INDEX_UNAVAILABLE)) throw runInvalid();
     byCase.set(entry.case, entry);
   }
+  checkHaltOrder(benchmark, byCase);
   return { limit, reranking: context.reranking, index: indexRecord, byCase };
+}
+
+const isHalted = (entry) => entry?.embedding.reason === RUN_HALTED;
+
+/**
+ * Koşucu durduktan sonra model çağırmaz: `RUN_HALTED` ıskaları kıyas sırasında
+ * kesintisiz bir son dilimdir ve hemen önceki vakanın son çağrısı süresi dolan
+ * çağrıdır. Duruştan sonra puanlanan vaka, sırasız ya da gerekçesiz duruş reddedilir.
+ */
+function checkHaltOrder(benchmark, byCase) {
+  const entries = benchmark.cases.map((testCase) => byCase.get(testCase.id));
+  const first = entries.findIndex(isHalted);
+  if (first < 0) return;
+  if (entries.slice(first).some((entry) => !isHalted(entry))) throw runInvalid();
+  const previous = entries[first - 1];
+  const last = previous?.rerank ?? previous?.embedding;
+  if (last?.outcome !== TIMEOUT) throw runInvalid();
 }
 
 /**

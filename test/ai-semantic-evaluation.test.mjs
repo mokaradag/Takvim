@@ -250,7 +250,12 @@ test('koşu kaydı güvenilmezdir: sonuç ile yük çelişen, yabancı ya da yin
     'gecikmesiz başarılı yeniden sıralama': (copy, first) => { delete first.rerank.latencyMs; },
     'gecikmesiz dizin': (copy) => { delete copy.index.latencyMs; },
     'gecikmeli çağrılmamış vaka': (copy, first) => { Object.assign(first, { embedding: { outcome: 'failed', reason: 'RUN_HALTED', latencyMs: 3 }, firstStage: null, rerank: null, reranked: null }); },
-    'çağrılmamış yeniden sıralama': (copy, first) => { Object.assign(first, { rerank: { outcome: 'failed', reason: 'RUN_HALTED' }, reranked: null }); }
+    'çağrılmamış yeniden sıralama': (copy, first) => { Object.assign(first, { rerank: { outcome: 'failed', reason: 'RUN_HALTED' }, reranked: null }); },
+    'süre aşımı olmadan duruş': (copy) => { Object.assign(copy.cases[3], { embedding: { outcome: 'failed', reason: 'RUN_HALTED' }, firstStage: null, rerank: null, reranked: null }); },
+    'duruştan sonra puanlanan vaka': (copy) => {
+      Object.assign(copy.cases[1], { rerank: { outcome: 'timeout', latencyMs: 25 }, reranked: null });
+      Object.assign(copy.cases[2], { embedding: { outcome: 'failed', reason: 'RUN_HALTED' }, firstStage: null, rerank: null, reranked: null });
+    }
   };
   for (const [label, change] of Object.entries(invalid)) {
     assert.throws(() => summarizeSemanticRun(variant(change), toyBenchmark), /SEMANTIC_RUN_INVALID/, label);
@@ -267,6 +272,12 @@ test('koşu kaydı güvenilmezdir: sonuç ile yük çelişen, yabancı ya da yin
   first.reranked[first.reranked.length - 1] = { id: unseen, relevance: -10 };
   assert.throws(() => summarizeSemanticRun(outsider, toyBenchmark, { cutoffs: [1, 3], ndcgCutoff: 3 }), /SEMANTIC_RUN_INVALID/);
   assert.equal(summarizeSemanticRun(narrow, toyBenchmark, { cutoffs: [1, 3], ndcgCutoff: 3 }).limit, 3);
+  // Yeniden sıralama süre aşımından sonra kesintisiz duruş dilimi geçerlidir.
+  const halted = summarizeSemanticRun(variant((copy) => {
+    Object.assign(copy.cases[1], { rerank: { outcome: 'timeout', latencyMs: 25 }, reranked: null });
+    for (const entry of copy.cases.slice(2)) Object.assign(entry, { embedding: { outcome: 'failed', reason: 'RUN_HALTED' }, firstStage: null, rerank: null, reranked: null });
+  }), toyBenchmark);
+  assert.deepEqual(halted.outcomes.embedding, { ok: 2, invalid: 0, timeout: 0, failed: 2 });
   // Kaydı olmayan vaka reddedilmez; ıska sayılır.
   const partial = summarizeSemanticRun(variant((copy) => { copy.cases.pop(); }), toyBenchmark);
   assert.equal(partial.cases.missing, 1);
