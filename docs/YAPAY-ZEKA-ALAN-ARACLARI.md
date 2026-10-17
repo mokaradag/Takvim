@@ -1154,7 +1154,9 @@ gerçek veritabanında elle kabul kapsamındadır.
 
 ## 19. Aşama 3 kapsamı dışında kalanlar
 
-- Anlamsal gösterim, vektör arama, RAG (Aşama 4);
+- anlamsal gösterim ve yeniden sıralama (Aşama 4; yol haritası ve sözleşme:
+  [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.md)); vektör
+  veritabanı ve genel belge RAG'i Aşama 4'te de varsayılmaz;
 - yapay zekâ eliyle herhangi bir yazma: görev oluşturma/düzenleme, atama,
   durum/tarih değişikliği, talep açma/karar, bildirim işaretleme, Outlook
   (Aşama 5);

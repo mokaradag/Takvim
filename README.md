@@ -349,6 +349,20 @@ son çizimden önce erişim yeniden okunur. Aday seçimi, bulunamadı ve hizmet
 kullanılamıyor meşru ayrı sonuçlardır. Araç profilleri varsayılan 4096 / 8192
 çıktı tokenı kullanır; dağıtılan dış model kaydı da güncellenmelidir.
 
+### Rota AI: anlamsal katman (Aşama 4)
+
+Aşama 4, Türkçe doğal dilin gömme ve yeniden sıralama modelleriyle anlamsal
+olarak anlaşılmasını Aşama 3'ün yetki, SQL ve kanıt sınırını gevşetmeden
+ekler ve dondurulmuş dört adımdan oluşur: 4A anlamsal temel ve değerlendirme,
+4B gerçek anlamsal erişim ve yeniden sıralama, 4C akıllı planlayıcı ve zayıf
+model doğrulaması, 4D insan kalitesinde yanıt ve kurum içi yakınsama. 4A canlı
+davranışı değiştirmez: model çıktısını güvenilmez veri olarak doğrulayan saf
+sözleşmeleri, sürüm/parmak izi kurallarını, 117 vakalık sentetik Türkçe kıyas
+kümesini, ölçüleri, belirlenimci sınama ikizlerini ve elle çalıştırılan gerçek
+model nitelendirme mekanizmasını kurar. Regex ya da anahtar sözcükle doğal dil
+yorumu yasaktır; anlamsal benzerlik yetki değildir. Yol haritası, değişmezler,
+ölçüler ve kurum içi kabul: `docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md`.
+
 ## Kurum dışı görev atama ve Atama Koordinasyonu
 
 Bir kişiyi **bulabilmek**, ona **doğrudan atayabilmek** ve onun için **resmî bir
