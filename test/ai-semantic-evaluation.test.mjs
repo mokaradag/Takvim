@@ -27,6 +27,7 @@ const {
 const {
   SEMANTIC_BENCHMARK_FORMAT,
   SEMANTIC_BENCHMARK_LIMITS,
+  SEMANTIC_EVALUATION_DEFAULTS,
   SEMANTIC_EXPECTATIONS,
   collectSemanticRun,
   evaluateSemanticDecisions,
@@ -173,6 +174,106 @@ test('kıyas kümesi doğrulaması bozuk, çelişkili ya da kanonik olmayan alt�
   assert.throws(() => validateSemanticBenchmark(toyDocument(), null), TypeError);
 });
 
+test('kıyas kümesi yapısı kapalıdır: seyrek dizi, açık null ve bozuk grup yokluk sayılmaz, doğrulayıcı fırlamaz', () => {
+  const issues = (document) => validateSemanticBenchmark(document, toyCatalogue).issues;
+  const withCase = (position, change) => toyDocument(TOY_CASES.map((testCase, i) => (i === position ? { ...testCase, ...change } : testCase)));
+  const hole = (size) => new Array(size);
+  const table = [
+    [toyDocument([TOY_CASES[0], , TOY_CASES[2], TOY_CASES[3]]), ['cases[1]:shape']], // eslint-disable-line no-sparse-arrays
+    [withCase(0, { needs: hole(1) }), ['cases[0].needs:shape']],
+    [withCase(0, { needs: [null] }), ['cases[0].needs[0]:shape']],
+    [withCase(0, { needs: [42] }), ['cases[0].needs[0]:shape']],
+    [withCase(0, { needs: [['b', , 'c']] }), ['cases[0].needs[0]:shape']], // eslint-disable-line no-sparse-arrays
+    [withCase(0, { needs: null }), ['cases[0].needs:shape']],
+    [withCase(3, { needs: null }), ['cases[3].needs:shape']],
+    [withCase(0, { avoid: hole(1) }), ['cases[0].avoid:shape']],
+    [withCase(0, { avoid: null }), ['cases[0].avoid:shape']],
+    [withCase(0, { tags: hole(1) }), ['cases[0].tags:shape']],
+    [withCase(0, { tags: null }), ['cases[0].tags:shape']],
+    [toyDocument(TOY_CASES, { yorum: 'ek ayar' }), ['$:unknown-field']],
+    [toyDocument(TOY_CASES.map((testCase, i) => (i === 0 ? { ...testCase, get text() { throw new Error('okunamaz'); } } : testCase))), ['$:unreadable']]
+  ];
+  for (const [document, expected] of table) assert.deepEqual(issues(document), expected, JSON.stringify(expected));
+  // Taklit katalog altın etiketleri gerçek katalog gibi damgalayamaz; koşucu da taklidi reddeder.
+  const ghost = { fingerprint: toyCatalogue.fingerprint, items: [...toyCatalogue.items, { id: 'ghost' }] };
+  assert.throws(() => validateSemanticBenchmark(toyDocument(), ghost), /SEMANTIC_CATALOGUE_REQUIRED/);
+  assert.throws(() => validateSemanticBenchmark(toyDocument(), { ...toyCatalogue }), /SEMANTIC_CATALOGUE_REQUIRED/);
+  const embed = createEmbeddingDouble({ vectorFor: toyVector }).embed;
+  return assert.rejects(collectSemanticRun({ benchmark: toyBenchmark, catalogue: { ...toyCatalogue }, embedding: { space, embed } }), /SEMANTIC_CATALOGUE_MISMATCH/);
+});
+
+test('koşu kaydı güvenilmezdir: sonuç ile yük çelişen, yabancı ya da yinelenen satırlı, uydurma yeniden sıralamalı koşu reddedilir', async () => {
+  const run = await toyRun({
+    embedding: { space, embed: createEmbeddingDouble({ vectorFor: toyVector }).embed },
+    reranking: { provenance: rerankProvenance, rerank: createRerankDouble({ scoreFor: toyScore }).rerank }
+  });
+  // JSON'dan gelen düz kopya, koşucunun dondurulmuş kaydıyla aynı özeti verir.
+  assert.deepEqual(summarizeSemanticRun(JSON.parse(JSON.stringify(run)), toyBenchmark), summarizeSemanticRun(run, toyBenchmark));
+  const variant = (change) => {
+    const copy = structuredClone(run);
+    change(copy, copy.cases[0]);
+    return copy;
+  };
+  const failed = { outcome: 'failed', reason: 'MODEL_CALL_FAILED', latencyMs: 1 };
+  const stale = [
+    (copy) => { copy.version = 2; },
+    (copy) => { copy.format = 'baska'; },
+    (copy) => { copy.catalogue = '0'.repeat(64); }
+  ];
+  for (const change of stale) assert.throws(() => summarizeSemanticRun(variant(change), toyBenchmark), /SEMANTIC_RUN_STALE/);
+  const invalid = {
+    'fazla vaka satırı': (copy) => { copy.cases.push(structuredClone(copy.cases[0])); },
+    'yinelenen vaka': (copy) => { copy.cases[1] = structuredClone(copy.cases[0]); },
+    'yabancı vaka': (copy, first) => { first.case = 'toy-999'; },
+    'seyrek vaka listesi': (copy) => { delete copy.cases[1]; },
+    'başarısız gömmede aday': (copy, first) => { first.embedding = failed; },
+    'başarısız gömmede yeniden sıralama': (copy, first) => { first.embedding = failed; first.firstStage = null; },
+    'başarısız yeniden sıralamada sonuç': (copy, first) => { first.rerank = failed; },
+    'eksik yeniden sıralama kaydı': (copy, first) => { first.rerank = null; first.reranked = null; },
+    'yeniden sıralama aday düşürür': (copy, first) => { first.reranked = first.reranked.slice(1); },
+    'yeniden sıralama aday ekler': (copy, first) => { first.reranked[3] = { id: 'zzz', relevance: -1 }; },
+    'yeniden sıralama aday yineler': (copy, first) => { first.reranked[1] = { ...first.reranked[0] }; },
+    'sırasız ilk aşama': (copy, first) => { first.firstStage.reverse(); },
+    'kısa ilk aşama': (copy, first) => { first.firstStage.pop(); },
+    'aralık dışı benzerlik': (copy, first) => { first.firstStage[0].similarity = 2; },
+    'negatif gecikme': (copy, first) => { first.embedding.latencyMs = -5; },
+    'negatif dizin gecikmesi': (copy) => { copy.index.latencyMs = -1; },
+    'gerekçesiz başarısızlık': (copy, first) => { first.embedding = { outcome: 'failed', latencyMs: 1 }; first.firstStage = null; first.rerank = null; first.reranked = null; },
+    'gerekçeli başarı': (copy, first) => { first.embedding.reason = 'X'; },
+    'güvensiz gerekçe': (copy, first) => { first.embedding = { ...failed, reason: 'sk-gizli ileti' }; first.firstStage = null; first.rerank = null; first.reranked = null; },
+    'bilinmeyen sonuç': (copy, first) => { first.embedding.outcome = 'belki'; },
+    'geçersiz sınır': (copy) => { copy.limit = 0; },
+    'okunamayan satır': (copy) => { Object.defineProperty(copy.cases, 2, { get() { throw new Error('okunamaz'); } }); }
+  };
+  for (const [label, change] of Object.entries(invalid)) {
+    assert.throws(() => summarizeSemanticRun(variant(change), toyBenchmark), /SEMANTIC_RUN_INVALID/, label);
+  }
+  // Sınırlı aday kümesinde yeniden sıralama, ilk aşamanın görmediği katalog öğesini ekleyemez.
+  const narrow = await toyRun({
+    embedding: { space, embed: createEmbeddingDouble({ vectorFor: toyVector }).embed },
+    reranking: { provenance: rerankProvenance, rerank: createRerankDouble({ scoreFor: toyScore }).rerank },
+    limit: 3
+  });
+  const outsider = structuredClone(narrow);
+  const first = outsider.cases[0];
+  const unseen = TOY.find((id) => !first.firstStage.some((candidate) => candidate.id === id));
+  first.reranked[first.reranked.length - 1] = { id: unseen, relevance: -10 };
+  assert.throws(() => summarizeSemanticRun(outsider, toyBenchmark, { cutoffs: [1, 3], ndcgCutoff: 3 }), /SEMANTIC_RUN_INVALID/);
+  assert.equal(summarizeSemanticRun(narrow, toyBenchmark, { cutoffs: [1, 3], ndcgCutoff: 3 }).limit, 3);
+  // Kaydı olmayan vaka reddedilmez; ıska sayılır.
+  const partial = summarizeSemanticRun(variant((copy) => { copy.cases.pop(); }), toyBenchmark);
+  assert.equal(partial.cases.missing, 1);
+  // Kesimler koşunun toplandığı derinliği aşamaz; seyrek kesim dizisi reddedilir.
+  const shallow = await toyRun({ embedding: { space, embed: createEmbeddingDouble({ vectorFor: toyVector }).embed }, limit: 1 });
+  assert.throws(() => summarizeSemanticRun(shallow, toyBenchmark), /SEMANTIC_CUTOFFS/);
+  assert.throws(() => summarizeSemanticRun(shallow, toyBenchmark, { cutoffs: [1], ndcgCutoff: 2 }), /SEMANTIC_CUTOFFS/);
+  assert.equal(summarizeSemanticRun(shallow, toyBenchmark, { cutoffs: [1], ndcgCutoff: 1 }).limit, 1);
+  assert.throws(() => summarizeSemanticRun(run, toyBenchmark, { cutoffs: [1, , 5] }), /SEMANTIC_CUTOFFS/); // eslint-disable-line no-sparse-arrays
+  // Özet kendi yapılandırmasını taşır.
+  const summary = summarizeSemanticRun(run, toyBenchmark);
+  assert.deepEqual([summary.catalogue, summary.limit, summary.cutoffs, summary.ndcgCutoff], [toyCatalogue.fingerprint, 10, [1, 3, 5], 5]);
+});
+
 /* ── Ölçüler ────────────────────────────────────────────── */
 
 test('ölçüler elle hesaplanan senaryoyla birebir uyuşur; yeniden sıralamanın katkısı ayrıca ölçülür', async () => {
@@ -268,7 +369,7 @@ test('model hatası, geçersiz çıktı ve süre aşımı ölçüden çıkarılm
   const secret = Object.assign(new Error('sk-gizli-anahtar sağlayıcı yanıtında'), { code: 'AI_PROVIDER_UNAVAILABLE' });
   const embedding = createEmbeddingDouble({
     vectorFor: toyVector,
-    behaviors: [{ type: 'vectors' }, { type: 'throw', error: secret }, { type: 'raw', value: [{ index: 0, vector: [NaN, 0, 0, 0] }] }, { type: 'stall' }]
+    behaviors: [{ type: 'vectors' }, { type: 'throw', error: secret }, { type: 'raw', value: [{ index: 0, vector: [NaN, 0, 0, 0] }] }, { type: 'hang' }]
   });
   let abortReason = null;
   const embed = (texts, options) => {
@@ -340,6 +441,58 @@ test('katalog gömülemezse dizin kurulmaz, model çağrılmaz ve bütün vakala
   assert.equal(summary.stages.embedding.answer.hitAt1, 0);
   assert.equal(summary.stages.embedding.abstainSeparability, 0);
   assert.deepEqual(summary.outcomes.embedding, { ok: 0, invalid: 0, timeout: 0, failed: 4 });
+});
+
+test('süresi dolup iptali doğrulanamayan çağrıdan sonra model çağrılmaz; kalan vakalar ıska sayılır ve örtüşme olmaz', { timeout: 5000 }, async () => {
+  // Sinyale uymayan model: hiç sonuçlanmaz ya da geç sonuçlanıp paylaşılan durumu değiştirir.
+  for (const late of [false, true]) {
+    const embedding = createEmbeddingDouble({ vectorFor: toyVector });
+    let queries = 0;
+    const embed = (texts, options) => {
+      if (options.purpose === 'document') return embedding.embed(texts, options);
+      queries += 1;
+      if (queries > 1) return embedding.embed(texts, options);
+      return new Promise((resolve) => {
+        if (late) setTimeout(() => resolve([]), 200);
+      });
+    };
+    const run = await toyRun({ embedding: { space, embed }, callTimeoutMs: 25 });
+    assert.deepEqual(run.cases.map((entry) => [entry.embedding.outcome, entry.embedding.reason ?? null]),
+      [['timeout', null], ['failed', 'RUN_HALTED'], ['failed', 'RUN_HALTED'], ['failed', 'RUN_HALTED']], `late=${late}`);
+    assert.equal(queries, 1, 'süresi dolan çağrıdan sonra yeni model çağrısı başlamaz');
+    const summary = summarizeSemanticRun(run, toyBenchmark);
+    assert.deepEqual(summary.outcomes.embedding, { ok: 0, invalid: 0, timeout: 1, failed: 3 });
+    assert.equal(summary.stages.embedding.answer.cases, 2);
+    // Gecikme nüfusu yalnızca yapılan çağrılardır: hiç çağrılmayan vaka gecikmeye girmez.
+    assert.equal(summary.latency.embedding.count, 1);
+  }
+  // Varsayılan süre sınırı sonludur; sınırsız çağrı seçeneği yoktur.
+  assert.ok(Number.isSafeInteger(SEMANTIC_EVALUATION_DEFAULTS.callTimeoutMs) && SEMANTIC_EVALUATION_DEFAULTS.callTimeoutMs > 0);
+  await assert.rejects(toyRun({ embedding: { space, embed: createEmbeddingDouble({ vectorFor: toyVector }).embed }, callTimeoutMs: null }), RangeError);
+});
+
+test('iptal yarışları: çağrıdan önce gelen iptal modeli çağırmaz, sonuçla iptal arasında iptal kazanır', { timeout: 5000 }, async () => {
+  // Koşu başlatılır başlatılmaz iptal: kuyruktaki çağrı modele ulaşmaz.
+  const early = new AbortController();
+  const embedding = createEmbeddingDouble({ vectorFor: toyVector });
+  const pending = toyRun({ embedding: { space, embed: embedding.embed }, signal: early.signal });
+  early.abort(new Error('hemen'));
+  await assert.rejects(pending, /hemen/);
+  assert.equal(embedding.calls.length, 0);
+  // Son model çağrısının sonucu kesinleştikten SONRA ama koşucu onu kaydetmeden ÖNCE gelen iptal:
+  // başarı kaydedilmez, koşu iptal nedeniyle reddedilir.
+  const racing = new AbortController();
+  const reason = new Error('yarış');
+  const normal = createEmbeddingDouble({ vectorFor: toyVector });
+  let calls = 0;
+  const embed = (texts, options) => {
+    calls += 1;
+    if (calls < 1 + TOY_CASES.length) return normal.embed(texts, options);
+    const value = texts.map((text, index) => ({ index, vector: toyVector(text, options.purpose) }));
+    return { then(resolve) { resolve(value); queueMicrotask(() => racing.abort(reason)); } };
+  };
+  await assert.rejects(toyRun({ embedding: { space, embed }, signal: racing.signal }), (error) => error === reason);
+  assert.equal(calls, 1 + TOY_CASES.length);
 });
 
 test('koşunun iptali hemen yayılır; sinyale uymayan model de koşuyu askıda bırakamaz', { timeout: 5000 }, async () => {
@@ -428,4 +581,17 @@ test('planlayıcı kararları: açıklama doğruluğu, çekimserlik, araç kapsa
   assert.equal(dirty.missing, 1);
   assert.deepEqual(Object.values(dirty.confusion).map((row) => row.none), [2, 1, 1]);
   assert.throws(() => evaluateSemanticDecisions({ cases: [] }, []), TypeError);
+  // Karar da güvenilmez model çıktısıdır: seyrek araç listesi, araç adlandıran çekimserlik,
+  // okunamayan karar ve karar listesindeki boşluk geçersiz sayılır; değerlendirme fırlamaz.
+  const hostile = evaluateSemanticDecisions(toyBenchmark, [
+    { case: 'toy-001', decision: 'answer', tools: new Array(1) },
+    { case: 'toy-002', decision: 'answer', tools: ['c', , 'd'] }, // eslint-disable-line no-sparse-arrays
+    { case: 'toy-004', decision: 'abstain', tools: ['a'] },
+    { case: 'toy-003', get decision() { throw new Error('okunamaz'); }, tools: [] },
+    , // eslint-disable-line no-sparse-arrays
+    { case: 'toy-003', decision: 'clarify', tools: ['a', 'b'] }
+  ]);
+  assert.equal(hostile.invalid, 5);
+  assert.equal(hostile.toolCoverage, 0);
+  assert.deepEqual(hostile.recall, { answer: 0, clarify: 1, abstain: 0 });
 });

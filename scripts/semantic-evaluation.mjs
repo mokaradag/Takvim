@@ -70,69 +70,173 @@ function writeInput({ catalogue, benchmark }, out) {
   else process.stdout.write(json);
 }
 
-/** Koşu dosyasındaki girişler anahtarına göre tekil olmalıdır; yinelenen giriş sessizce ezilmez. */
-function keyed(entries, key, value, label) {
-  const list = Array.isArray(entries) ? entries : [];
-  const map = new Map(list.map((entry) => [entry?.[key], value(entry)]));
-  if (map.size !== list.length) fail(`Koşu dosyasında yinelenen ${label} girişi var.`);
-  return map;
+// Koşu dosyası güvenilmez girdidir: her bölüm kapalı şemadır, kimlik ve vaka kümeleri girdiyle BİREBİR aynıdır.
+const RUN_FIELDS = ['format', 'version', 'benchmark', 'catalogue', 'embedding', 'rerank', 'environment'];
+const EMBEDDING_FIELDS = ['model', 'provider', 'preprocessing', 'queryPrefix', 'documentPrefix', 'runtime', 'documentLatencyMs', 'documents', 'queries'];
+const RERANK_FIELDS = ['model', 'provider', 'runtime', 'queries'];
+// Koşucunun sorgu düzeyindeki çıkarım hatası için tek güvenli kod; hata iletisi kaydedilmez.
+const INFERENCE_FAILED = 'INFERENCE_FAILED';
+const MAX_TEXT = 200;
+
+const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const isLatency = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+const boundedText = (value) => typeof value === 'string' && value.length <= MAX_TEXT;
+
+function closed(record, fields, label) {
+  if (!isRecord(record) || Object.keys(record).some((key) => !fields.includes(key))) fail(`Koşu dosyasında ${label} bölümü tanınmadı.`);
+  return record;
+}
+
+/** Satırlar beklenen anahtar kümesinin her öğesini tam bir kez taşımalıdır; eksik, fazla ya da yinelenen satır reddedilir. */
+function exactRows(rows, key, expected, label) {
+  if (!Array.isArray(rows) || rows.length !== expected.length) fail(`Koşu dosyasında ${label} satırları girdiyle eşleşmiyor.`);
+  const byKey = new Map();
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    if (!isRecord(row) || !expected.includes(row[key]) || byKey.has(row[key])) fail(`Koşu dosyasında yinelenen, yabancı ya da bozuk ${label} satırı var.`);
+    byKey.set(row[key], row);
+  }
+  return byKey;
+}
+
+// Sorgu satırı ya vektör ya da güvenli hata kodu taşır; gecikme ölçülmüş ve negatif olmayan bir süredir.
+function readOutcomeRow(row, fields, payload, label) {
+  closed(row, fields, label);
+  if (!isLatency(row.latencyMs)) fail(`Koşu dosyasında ${label} gecikmesi geçersiz.`);
+  if (Object.hasOwn(row, 'failure') ? row.failure !== INFERENCE_FAILED || Object.hasOwn(row, payload) : !Object.hasOwn(row, payload)) {
+    fail(`Koşu dosyasında ${label} sonucu tutarsız.`);
+  }
+  return row;
+}
+
+function readEnvironment(environment) {
+  if (environment == null) return null;
+  const entries = isRecord(environment) ? Object.entries(environment) : null;
+  if (!entries || entries.length > 16 || entries.some(([, value]) => !(value === null || boundedText(value) || Number.isFinite(value)))) {
+    fail('Koşu dosyasındaki ortam künyesi geçersiz.');
+  }
+  return Object.fromEntries(entries);
+}
+
+/**
+ * Ham koşu dosyasını bir kez doğrulayıp güvenilir biçime çevirir: biçim/sürüm,
+ * parmak izleri, model kökeni, ön işleme ve önekler, belgeler ve sorgular
+ * (kimlik kümesi ve koşucunun GERÇEKTEN değerlendirdiği metin girdiyle birebir),
+ * yeniden sıralama satırları ve skor kimlikleri, gecikmeler ve ortam.
+ */
+function readModelRun(raw, { catalogue, benchmark }) {
+  const run = closed(raw, RUN_FIELDS, 'üst düzey');
+  if (run.format !== MODEL_RUN_FORMAT || run.version !== 1) fail('Koşu dosyasının biçimi tanınmadı.');
+  if (run.benchmark !== benchmark.fingerprint || run.catalogue !== catalogue.fingerprint) {
+    fail('Koşu dosyası bayat: başka bir kıyas kümesi ya da araç kataloğuyla üretilmiş. Girdiyi yeniden üretip modelleri yeniden koşun.');
+  }
+  const embedding = closed(run.embedding, EMBEDDING_FIELDS, 'gömme');
+  const { queryPrefix, documentPrefix } = embedding;
+  if (!boundedText(queryPrefix) || !boundedText(documentPrefix) || (embedding.runtime !== undefined && !boundedText(embedding.runtime))) {
+    fail('Koşu dosyasındaki önek ya da çalışma ortamı künyesi geçersiz.');
+  }
+  // Önek varsa ön işleme belirteci onu adlandırır; önek yoksa belirteç "none" kalır.
+  if (Boolean(queryPrefix || documentPrefix) === (embedding.preprocessing === 'none')) fail('Koşu dosyasındaki önekler ön işleme belirteciyle çelişiyor.');
+  const space = createEmbeddingSpace(provenanceOf(embedding, AI_PROFILES.EMBEDDING, 'embedding'), embedding.preprocessing);
+  if (!space) fail('Koşu dosyasındaki gömme modeli kökeni ya da ön işleme belirteci geçersiz.');
+  if (!isLatency(embedding.documentLatencyMs)) fail('Koşu dosyasındaki katalog gömme gecikmesi geçersiz.');
+  const itemIds = catalogue.items.map((item) => item.id);
+  const caseIds = benchmark.cases.map((testCase) => testCase.id);
+  const textOfItem = new Map(catalogue.items.map((item) => [item.id, item.text]));
+  const textOfCase = new Map(benchmark.cases.map((testCase) => [testCase.id, testCase.text]));
+  const documents = exactRows(embedding.documents, 'id', itemIds, 'belge');
+  for (const [id, row] of documents) {
+    closed(row, ['id', 'text', 'vector'], 'belge');
+    if (row.text !== textOfItem.get(id)) fail('Koşu dosyasındaki belge metni girdiyle aynı değil; değiştirilmiş metin puanlanmaz.');
+  }
+  const queries = exactRows(embedding.queries, 'case', caseIds, 'sorgu');
+  for (const [id, row] of queries) {
+    readOutcomeRow(row, ['case', 'text', 'vector', 'failure', 'latencyMs'], 'vector', 'sorgu');
+    if (row.text !== textOfCase.get(id)) fail('Koşu dosyasındaki sorgu metni girdiyle aynı değil; değiştirilmiş metin puanlanmaz.');
+  }
+  let rerank = null;
+  if (run.rerank != null) {
+    const section = closed(run.rerank, RERANK_FIELDS, 'yeniden sıralama');
+    const provenance = provenanceOf(section, AI_PROFILES.RERANK, 'rerank');
+    if (!provenance || (section.runtime !== undefined && !boundedText(section.runtime))) fail('Koşu dosyasındaki yeniden sıralama modeli kökeni geçersiz.');
+    const rows = exactRows(section.queries, 'case', caseIds, 'yeniden sıralama');
+    const scores = new Map();
+    for (const [id, row] of rows) {
+      readOutcomeRow(row, ['case', 'scores', 'failure', 'latencyMs'], 'scores', 'yeniden sıralama');
+      if (Object.hasOwn(row, 'scores')) {
+        const byItem = exactRows(row.scores, 'id', itemIds, 'skor');
+        for (const score of byItem.values()) closed(score, ['id', 'score'], 'skor');
+        scores.set(id, byItem);
+      }
+    }
+    rerank = { provenance, runtime: section.runtime ?? null, rows, scores };
+  }
+  return { embedding, space, documents, queries, rerank, environment: readEnvironment(run.environment) };
+}
+
+function inferenceFailure() {
+  return Object.assign(new Error(INFERENCE_FAILED), { code: INFERENCE_FAILED });
+}
+
+/** Doğrulanmış kayıtlı çıktıları model sınırı işlevlerine çevirir; değerler yine sözleşmede doğrulanır. */
+function recordedModels(trusted, { catalogue, benchmark }) {
+  const caseOf = new Map(benchmark.cases.map((testCase) => [testCase.text, testCase.id]));
+  const itemOf = new Map(catalogue.items.map((item) => [item.text, item.id]));
+  if (itemOf.size !== catalogue.items.length) fail('Katalog belge metinleri tekil değil; kayıtlı çıktılar belgelere eşlenemez.');
+  const embed = async (texts, { purpose }) => texts.map((text, index) => {
+    if (purpose === 'document') return { index, vector: trusted.documents.get(itemOf.get(text)).vector };
+    const row = trusted.queries.get(caseOf.get(text));
+    if (row.failure) throw inferenceFailure();
+    return { index, vector: row.vector };
+  });
+  const embedding = { space: trusted.space, embed };
+  if (!trusted.rerank) return { embedding, reranking: null };
+  const { provenance, scores } = trusted.rerank;
+  const rerank = async (query, texts) => {
+    const byItem = scores.get(caseOf.get(query));
+    if (!byItem) throw inferenceFailure();
+    return texts.map((text, index) => ({ index, score: byItem.get(itemOf.get(text)).score }));
+  };
+  return { embedding, reranking: { provenance, rerank } };
 }
 
 function provenanceOf(section, profile, capability) {
   return semanticModelProvenance({ profile, model: section?.model, provider: section?.provider, capabilities: [capability] }, profile);
 }
 
-/** Koşucunun önceden hesapladığı çıktıları model sınırı işlevlerine çevirir; eksik değer sözleşmede reddedilir. */
-function recordedModels(run, { catalogue, benchmark }) {
-  const caseOf = new Map(benchmark.cases.map((testCase) => [testCase.text, testCase.id]));
-  const itemOf = new Map(catalogue.items.map((item) => [item.text, item.id]));
-  if (itemOf.size !== catalogue.items.length) fail('Katalog belge metinleri tekil değil; kayıtlı çıktılar belgelere eşlenemez.');
-  const documents = keyed(run.embedding?.documents, 'id', (entry) => entry?.vector, 'belge');
-  const queries = keyed(run.embedding?.queries, 'case', (entry) => entry?.vector, 'sorgu');
-  const space = createEmbeddingSpace(provenanceOf(run.embedding, AI_PROFILES.EMBEDDING, 'embedding'), run.embedding?.preprocessing);
-  if (!space) fail('Koşu dosyasındaki gömme modeli kökeni ya da ön işleme belirteci geçersiz.');
-  const embed = async (texts, { purpose }) => texts.map((text, index) => ({
-    index, vector: purpose === 'document' ? documents.get(itemOf.get(text)) : queries.get(caseOf.get(text))
-  }));
-  if (!run.rerank) return { embedding: { space, embed }, reranking: null };
-  const provenance = provenanceOf(run.rerank, AI_PROFILES.RERANK, 'rerank');
-  if (!provenance) fail('Koşu dosyasındaki yeniden sıralama modeli kökeni geçersiz.');
-  const scores = keyed(run.rerank.queries, 'case', (entry) => keyed(entry?.scores, 'id', (score) => score?.score, 'skor'), 'yeniden sıralama');
-  const rerank = async (query, texts) => texts.map((text, index) => ({ index, score: scores.get(caseOf.get(query))?.get(itemOf.get(text)) }));
-  return { embedding: { space, embed }, reranking: { provenance, rerank } };
-}
-
 const percent = (value) => (value == null ? '—' : value.toFixed(3));
 const signed = (value) => (value == null ? '—' : `${value >= 0 ? '+' : ''}${value.toFixed(3)}`);
 
-function markdown(summary, run, benchmark) {
+function markdown(summary, qualification, benchmark) {
   const { embedding, reranked } = summary.stages;
   const final = reranked || embedding;
   const textOf = new Map(benchmark.cases.map((testCase) => [testCase.id, testCase]));
-  const [k1, , kMax] = SEMANTIC_EVALUATION_DEFAULTS.cutoffs;
+  const [k1, , kMax] = summary.cutoffs;
+  const { embedding: model, reranker, latencyWorkload: workload } = qualification;
   const row = (label, pick, delta = null) => `| ${label} | ${percent(pick(embedding))} | ${reranked ? percent(pick(reranked)) : '—'} | ${reranked ? signed(delta) : '—'} |`;
   const latency = (value) => (value ? `p50 ${Math.round(value.p50)} ms · p95 ${Math.round(value.p95)} ms · en çok ${Math.round(value.max)} ms (${value.count})` : '—');
   return [
     '# Rota AI anlamsal nitelendirme raporu',
     '',
-    `- Kıyas kümesi: \`${summary.benchmark.slice(0, 16)}\` · ${summary.cases.total} vaka (${summary.cases.answer} yanıt, ${summary.cases.clarify} açıklama, ${summary.cases.abstain} kapsam dışı)`,
-    `- Gömme: ${run.embedding.model} (${run.embedding.provider}, ön işleme \`${run.embedding.preprocessing}\`)${run.embedding.runtime ? ` · ${run.embedding.runtime}` : ''}`,
-    `- Yeniden sıralama: ${run.rerank ? `${run.rerank.model} (${run.rerank.provider})` : 'yok'}`,
-    `- Ortam: ${run.environment ? JSON.stringify(run.environment) : '—'}`,
+    `- Kıyas kümesi: \`${summary.benchmark.slice(0, 16)}\` · katalog \`${summary.catalogue.slice(0, 16)}\` · ${summary.cases.total} vaka (${summary.cases.answer} yanıt, ${summary.cases.clarify} açıklama, ${summary.cases.abstain} kapsam dışı)`,
+    `- Gömme: ${model.model} (${model.provider}, ön işleme \`${model.preprocessing}\`, sorgu öneki ${JSON.stringify(model.queryPrefix)}, belge öneki ${JSON.stringify(model.documentPrefix)})${model.runtime ? ` · ${model.runtime}` : ''}`,
+    `- Yeniden sıralama: ${reranker ? `${reranker.model} (${reranker.provider})${reranker.runtime ? ` · ${reranker.runtime}` : ''}` : 'yok'}`,
+    `- Aday sınırı: ilk ${summary.limit} aday · kesimler ${summary.cutoffs.join(', ')} · NDCG@${summary.ndcgCutoff}`,
+    `- Ortam: ${qualification.environment ? JSON.stringify(qualification.environment) : '—'}`,
     `- Model çıktısı: gömme ${JSON.stringify(summary.outcomes.embedding)}${summary.outcomes.rerank ? ` · yeniden sıralama ${JSON.stringify(summary.outcomes.rerank)}` : ''}`,
     '',
     '| Ölçü (yanıt vakaları) | Gömme | Yeniden sıralama | Fark |',
     '| --- | ---: | ---: | ---: |',
     row('Top-1', (stage) => stage.answer.hitAt1, summary.uplift?.hitAt1),
     row('MRR', (stage) => stage.answer.mrr, summary.uplift?.mrr),
-    ...SEMANTIC_EVALUATION_DEFAULTS.cutoffs.map((k) => row(`Recall@${k}`, (stage) => stage.answer.recall[k], summary.uplift?.recall[k])),
+    ...summary.cutoffs.map((k) => row(`Recall@${k}`, (stage) => stage.answer.recall[k], summary.uplift?.recall[k])),
     row(`Kapsama@${kMax}`, (stage) => stage.answer.coverage[kMax]),
-    row(`NDCG@${SEMANTIC_EVALUATION_DEFAULTS.ndcgCutoff}`, (stage) => stage.answer.ndcg, summary.uplift?.ndcg),
+    row(`NDCG@${summary.ndcgCutoff}`, (stage) => stage.answer.ndcg, summary.uplift?.ndcg),
     row('Kaçınma çifti tutarlılığı', (stage) => stage.answer.avoid.rate),
     row(`Açıklama vakalarında kapsama@${kMax}`, (stage) => stage.clarifyCoverage.rate),
     row('Kapsam dışı ayrılabilirliği (AUROC)', (stage) => stage.abstainSeparability),
     '',
-    `Gecikme (koşucunun ölçtüğü): katalog ${summary.latency.index == null ? '—' : `${Math.round(summary.latency.index)} ms`} · sorgu gömme ${latency(summary.latency.embedding)} · yeniden sıralama ${latency(summary.latency.rerank)}`,
+    `Gecikme (koşucunun ölçtüğü): katalog ${summary.latency.index == null ? '—' : `${Math.round(summary.latency.index)} ms`} (${workload.index.documentsPerCall} belge, tek çağrı) · sorgu gömme ${latency(summary.latency.embedding)} (çağrı başına 1 sorgu) · yeniden sıralama ${latency(summary.latency.rerank)}${workload.rerank ? ` (çağrı başına bütün katalog: ${workload.rerank.documentsPerCall} belge; kalite ölçüleri ilk ${summary.limit} aday üzerindedir)` : ''}`,
     '',
     `## Etikete göre Top-1 (${reranked ? 'yeniden sıralama' : 'gömme'})`,
     '',
@@ -147,32 +251,66 @@ function markdown(summary, run, benchmark) {
   ].join('\n');
 }
 
+/**
+ * Nitelendirme çıktısının künyesi: sonucu yeniden üretmek için gereken her şey
+ * (koşu biçimi, parmak izleri, modeller, ön işleme ve gerçek önekler, aday
+ * sınırı, kesimler, gecikmenin ölçüldüğü iş yükü ve ortam).
+ */
+function qualificationOf(trusted, summary, { catalogue, benchmark }) {
+  const { embedding, space, rerank } = trusted;
+  return {
+    run: { format: MODEL_RUN_FORMAT, version: 1 },
+    benchmark: summary.benchmark,
+    catalogue: summary.catalogue,
+    embedding: {
+      profile: space.profile, model: space.model, provider: space.provider, preprocessing: space.preprocessing,
+      queryPrefix: embedding.queryPrefix, documentPrefix: embedding.documentPrefix, runtime: embedding.runtime ?? null
+    },
+    reranker: rerank ? { ...rerank.provenance, runtime: rerank.runtime } : null,
+    limit: summary.limit,
+    cutoffs: summary.cutoffs,
+    ndcgCutoff: summary.ndcgCutoff,
+    // Koşucu yeniden sıralayıcıyla her sorguda bütün kataloğu puanlar; kalite ölçüleri ilk `limit` aday üzerindedir.
+    latencyWorkload: {
+      index: { documentsPerCall: catalogue.items.length, calls: 1 },
+      embedding: { queriesPerCall: 1, calls: benchmark.cases.length },
+      rerank: rerank ? { documentsPerCall: catalogue.items.length, calls: benchmark.cases.length } : null
+    },
+    environment: trusted.environment
+  };
+}
+
 async function report(context, flags) {
   if (!flags.run) fail('--run koşu dosyası gerekli.');
-  const run = JSON.parse(readFileSync(flags.run, 'utf8'));
-  if (run?.format !== MODEL_RUN_FORMAT || run.version !== 1) fail('Koşu dosyasının biçimi tanınmadı.');
-  if (run.benchmark !== context.benchmark.fingerprint || run.catalogue !== context.catalogue.fingerprint) {
-    fail('Koşu dosyası bayat: başka bir kıyas kümesi ya da araç kataloğuyla üretilmiş. Girdiyi yeniden üretip modelleri yeniden koşun.');
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(flags.run, 'utf8'));
+  } catch {
+    fail('Koşu dosyası okunamadı ya da JSON değil.');
   }
-  const models = recordedModels(run, context);
+  const trusted = readModelRun(raw, context);
+  const { cutoffs, ndcgCutoff } = SEMANTIC_EVALUATION_DEFAULTS;
+  // Kesimler toplanan aday derinliğini aşamaz: sınır en derin kesimden küçük olamaz.
+  const minimum = Math.max(...cutoffs, ndcgCutoff);
   const limit = flags.limit == null ? SEMANTIC_EVALUATION_DEFAULTS.limit : Number(flags.limit);
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > SEMANTIC_LIMITS.maxCandidates) {
-    fail(`--limit 1 ile ${SEMANTIC_LIMITS.maxCandidates} arasında bir tam sayı olmalıdır.`);
+  if (!Number.isSafeInteger(limit) || limit < minimum || limit > SEMANTIC_LIMITS.maxCandidates) {
+    fail(`--limit ${minimum} ile ${SEMANTIC_LIMITS.maxCandidates} arasında bir tam sayı olmalıdır.`);
   }
-  const collected = await collectSemanticRun({ ...context, ...models, limit });
+  const collected = await collectSemanticRun({ ...context, ...recordedModels(trusted, context), limit });
   const summary = summarizeSemanticRun(collected, context.benchmark);
-  // Kayıtlı çıktı anında okunur; gecikme koşucunun gerçek model ölçümüdür.
+  // Kayıtlı çıktı anında okunur; gecikme koşucunun gerçek model ölçümüdür ve nüfusu kıyas kümesinin vakalarıdır.
   summary.latency = {
-    index: Number.isFinite(run.embedding?.documentLatencyMs) ? run.embedding.documentLatencyMs : null,
-    embedding: semanticLatencySummary((run.embedding?.queries || []).map((entry) => entry?.latencyMs)),
-    rerank: run.rerank ? semanticLatencySummary((run.rerank.queries || []).map((entry) => entry?.latencyMs)) : null
+    index: trusted.embedding.documentLatencyMs,
+    embedding: semanticLatencySummary([...trusted.queries.values()].map((row) => row.latencyMs)),
+    rerank: trusted.rerank ? semanticLatencySummary([...trusted.rerank.rows.values()].map((row) => row.latencyMs)) : null
   };
+  const qualification = qualificationOf(trusted, summary, context);
   if (flags.json) {
     // Dizin kaydının süresi kayıtlı çıktının okunma süresidir; gerçek gecikme `summary.latency` içindedir.
     const { outcome, reason = null, identity = null, dimensions = null } = collected.index;
-    process.stdout.write(`${JSON.stringify({ summary, index: { outcome, reason, identity, dimensions }, environment: run.environment ?? null }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ qualification, summary, index: { outcome, reason, identity, dimensions } }, null, 2)}\n`);
   } else {
-    process.stdout.write(markdown(summary, run, context.benchmark));
+    process.stdout.write(markdown(summary, qualification, context.benchmark));
   }
 }
 

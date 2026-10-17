@@ -74,9 +74,11 @@ export function semanticFingerprint(value) {
  * Modele giden metnin yapısal normalleştirmesi: denetim ve görünmez karakterler
  * atılır, Unicode NFC'ye getirilir, boşluklar tekleşir. Büyük/küçük harf
  * katlanmaz (Türkçe I/ı/İ/i korunur); aksan, ek ya da sözcük değiştirilmez.
+ * NFC temizlikten SONRA uygulanır: silinen karakterin yan yana getirdiği harf
+ * ve birleşen işaret de birleşir; sonuç tekrar normalleştirmede değişmez.
  */
 export function normalizeSemanticText(value) {
-  return normalizeAssistantMessageText(value).normalize('NFC').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim();
+  return normalizeAssistantMessageText(value).replace(INVISIBLE, '').normalize('NFC').replace(/\s+/g, ' ').trim();
 }
 
 export function normalizeSemanticQuery(value) {
@@ -136,7 +138,16 @@ export function createSemanticCatalogue(definitions) {
   return { ok: true, catalogue };
 }
 
-/** Model kaydının çözdüğü rotadan model kökeni; profilin yeteneğini taşımayan rota kabul edilmez. */
+/** Yalnızca bu modülün kurduğu katalog doğrudur; aynı biçimli taklit nesne katalog sayılmaz. */
+export function isSemanticCatalogue(value) {
+  return CATALOGUES.has(value);
+}
+
+/**
+ * Model rotasının künyesinden model kökeni; profilin yeteneğini taşımayan rota
+ * kabul edilmez. Rotanın model kaydından çözülmesi çağıranın işidir (4B'de
+ * `resolveModelProfile`); köken yetki taşımaz, yalnızca uzayı adlandırır.
+ */
 export function semanticModelProvenance(route, profile) {
   if (typeof profile !== 'string' || !Object.hasOwn(PROFILE_CAPABILITY, profile) || !isRecord(route) || route.profile !== profile) return null;
   if (!Array.isArray(route.capabilities) || !route.capabilities.includes(PROFILE_CAPABILITY[profile])) return null;
@@ -171,7 +182,8 @@ function isVector(value) {
 function unitVector(value, dimensions) {
   if (!isVector(value)) return failure(SEMANTIC_FAILURES.RESPONSE_SHAPE);
   const { length } = value;
-  if (length === 0 || length > SEMANTIC_LIMITS.maxDimensions) return failure(SEMANTIC_FAILURES.DIMENSION_INVALID);
+  // Uzunluk da model verisidir (Proxy): ayırmadan önce tam sayı ve sınır denetlenir.
+  if (!Number.isSafeInteger(length) || length < 1 || length > SEMANTIC_LIMITS.maxDimensions) return failure(SEMANTIC_FAILURES.DIMENSION_INVALID);
   if (dimensions != null && length !== dimensions) return failure(SEMANTIC_FAILURES.DIMENSION_MISMATCH);
   const unit = new Float64Array(length);
   let peak = 0;
@@ -189,12 +201,25 @@ function unitVector(value, dimensions) {
   return { ok: true, vector: unit };
 }
 
+// Model yanıtını okurken fırlayan erişimci (getter/Proxy) doğrulamadan kaçamaz; biçim hatası sayılır.
+function readModelOutput(read) {
+  try {
+    return read();
+  } catch {
+    return failure(SEMANTIC_FAILURES.RESPONSE_SHAPE);
+  }
+}
+
 /**
  * Dizin adresli gömme yanıtı `[{ index, vector }]`: her giriş tam bir kez, bütün
  * vektörler aynı boyutta. Girişler konumla okunur (yineleyiciye güvenilmez);
  * `count` giriş yinelenmeyen dizinle geldiğinde her yuva dolmuştur.
  */
 function validateEmbeddingBatch(raw, count, dimensions = null) {
+  return readModelOutput(() => readEmbeddingBatch(raw, count, dimensions));
+}
+
+function readEmbeddingBatch(raw, count, dimensions) {
   if (!Array.isArray(raw)) return failure(SEMANTIC_FAILURES.RESPONSE_SHAPE);
   if (raw.length !== count) return failure(SEMANTIC_FAILURES.COUNT_MISMATCH);
   const vectors = new Array(count);
@@ -269,6 +294,10 @@ export function rankSemanticIndex(index, { space, embeddings, limit = SEMANTIC_L
  */
 export function applyRerankScores(candidates, scores) {
   if (!CANDIDATE_LISTS.has(candidates)) throw new TypeError('SEMANTIC_CANDIDATES_REQUIRED');
+  return readModelOutput(() => rerankCandidates(candidates, scores));
+}
+
+function rerankCandidates(candidates, scores) {
   if (!Array.isArray(scores)) return failure(SEMANTIC_FAILURES.RESPONSE_SHAPE);
   if (scores.length !== candidates.length) return failure(SEMANTIC_FAILURES.COUNT_MISMATCH);
   const relevance = new Array(candidates.length);

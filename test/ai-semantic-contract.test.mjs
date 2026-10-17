@@ -26,6 +26,7 @@ const {
   createEmbeddingSpace,
   createSemanticCatalogue,
   createSemanticIndex,
+  isSemanticCatalogue,
   normalizeSemanticQuery,
   rankSemanticIndex,
   semanticModelProvenance,
@@ -84,6 +85,14 @@ test('anlamsal sorgu yalnızca yapısal olarak normalleşir; Türkçe harfler ka
   }
   assert.deepEqual(normalizeSemanticQuery('  Okunmamış\u200B\u00A0bildirim\t\n\nsayım\u0007 ? \uFEFF'), { ok: true, value: 'Okunmamış bildirim sayım ?' });
   assert.equal(normalizeSemanticQuery(normalizeSemanticQuery(decomposed).value).value, composed, 'normalleştirme tekrarlanabilir');
+  // Silinen denetim/görünmez karakterin yan yana getirdiği harf ve birleşen işaret de NFC'de birleşir:
+  // sonuç NFC'dir ve ikinci normalleştirme hiçbir şey değiştirmez.
+  for (const [input, expected] of [['A\u200B\u030A', 'Å'], ['I\u200B\u0307', 'İ'], ['e\u00AD\u0301', 'é'], ['o\uFEFF\u0308', 'ö'], ['a\u0007\u0301', 'á'], ['u\u2060\u0308 x', 'ü x']]) {
+    const once = normalizeSemanticQuery(input).value;
+    assert.equal(once, expected, JSON.stringify(input));
+    assert.equal(once, once.normalize('NFC'));
+    assert.equal(normalizeSemanticQuery(once).value, once, JSON.stringify(input));
+  }
   for (const empty of ['', '   ', '\u200B\uFEFF\u00AD', '\n\t', null, undefined, 42, {}, ['metin']]) {
     assert.deepEqual(normalizeSemanticQuery(empty), { ok: false, reason: F.QUERY_EMPTY }, String(empty));
   }
@@ -139,6 +148,9 @@ test('katalog kapalı türlerle, tekil kimliklerle ve sıraya bağlı parmak izi
   const shifting = { id: 'alpha', kind: 'tool', version: 1, get text() { reads += 1; return reads === 1 ? 'Görevleri arar' : ''; } };
   assert.equal(createSemanticCatalogue([shifting]).catalogue.items[0].text, 'Görevleri arar');
   assert.equal(reads, 1);
+  // Yalnızca kurucunun ürettiği katalog katalogdur.
+  assert.equal(isSemanticCatalogue(items), true);
+  assert.equal(isSemanticCatalogue({ ...items }), false);
   // Öğe türleri kapalıdır: veritabanı kaydı türü yoktur; yeni tür bilinçli bir sözleşme değişikliğidir.
   assert.deepEqual(Object.values(SEMANTIC_ITEM_KINDS), ['tool']);
   assert.equal(Object.isFrozen(SEMANTIC_ITEM_KINDS), true);
@@ -224,6 +236,17 @@ test('gömme yanıtı güvenilmez veridir: biçim, sayı, dizin, boyut ve sonlul
     ['BigInt', entries([new BigInt64Array([1n, 0n, 0n]), ...ok.slice(1)]), F.VALUE_NOT_FINITE],
     ['sıfır vektör', entries([[0, 0, 0], ...ok.slice(1)]), F.ZERO_VECTOR]
   ];
+  // Uzunluğu ya da erişimcisi model denetimindeki (Proxy/getter) yanıt ayırma yapamaz, doğrulamadan kaçamaz.
+  const withLength = (length) => new Proxy([1, 0, 0], { get: (target, key) => (key === 'length' ? length : target[key]) });
+  const throwing = new Proxy([1, 0, 0], { get: (target, key) => { if (key === '1') throw new Error('okunamaz'); return target[key]; } });
+  cases.push(
+    ['negatif uzunluk', entries([withLength(-1), ...ok.slice(1)]), F.DIMENSION_INVALID],
+    ['kesirli uzunluk', entries([withLength(2.5), ...ok.slice(1)]), F.DIMENSION_INVALID],
+    ['NaN uzunluk', entries([withLength(NaN), ...ok.slice(1)]), F.DIMENSION_INVALID],
+    ['fırlayan değer', entries([throwing, ...ok.slice(1)]), F.RESPONSE_SHAPE],
+    ['fırlayan giriş', [{ index: 0, get vector() { throw new Error('okunamaz'); } }, ...rest], F.RESPONSE_SHAPE],
+    ['fırlayan yanıt', new Proxy(entries(ok), { get: (target, key) => { if (key === '0') throw new Error('okunamaz'); return target[key]; } }), F.RESPONSE_SHAPE]
+  );
   for (const [label, raw, reason] of cases) assert.deepEqual(createSemanticIndex(items, space, raw), { ok: false, reason }, label);
 
   // Yanıt sırası serbesttir; tür dizileri ve uç büyüklükler taşmadan birim uzunluğa iner.
@@ -323,7 +346,8 @@ test('yeniden sıralama yalnızca verilen adayları dizer; eksik, yabancı ya da
     ['sonsuz', [...head, { index: 3, score: Infinity }], F.VALUE_NOT_FINITE],
     ['metin skor', [...head, { index: 3, score: '0.9' }], F.VALUE_NOT_FINITE],
     ['skor yok', [...head, { index: 3 }], F.VALUE_NOT_FINITE],
-    ['boş giriş', [...head, null], F.RESPONSE_SHAPE]
+    ['boş giriş', [...head, null], F.RESPONSE_SHAPE],
+    ['fırlayan skor', [...head, { index: 3, get score() { throw new Error('okunamaz'); } }], F.RESPONSE_SHAPE]
   ];
   for (const [label, raw, reason] of cases) assert.deepEqual(applyRerankScores(candidates, raw), { ok: false, reason }, label);
   assert.throws(() => applyRerankScores([...candidates], scores), TypeError);
