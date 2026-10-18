@@ -240,6 +240,10 @@ test('koşu kaydı güvenilmezdir: koşucunun üretemeyeceği durum, bozuk köke
     'fazla vaka satırı': (copy) => { copy.cases.push(structuredClone(copy.cases[0])); },
     'yinelenen vaka': (copy) => { copy.cases[1] = structuredClone(copy.cases[0]); },
     'yabancı vaka': (copy, first) => { first.case = 'toy-999'; },
+    // Satır sırası biçimin parçasıdır: koşucu vakaları kıyas kümesi sırasıyla yazar.
+    'geri giden vaka sırası': (copy) => { [copy.cases[1], copy.cases[2]] = [copy.cases[2], copy.cases[1]]; },
+    // Güvenilmez erişimcinin fırlattığı hata, iletisi ne olursa olsun bayat koşu sayılmaz.
+    'bayat iletili okunamayan alan': (copy) => { Object.defineProperty(copy, 'format', { enumerable: true, get() { throw new Error('SEMANTIC_RUN_STALE'); } }); },
     'seyrek vaka listesi': (copy) => { delete copy.cases[1]; },
     'okunamayan satır': (copy) => { Object.defineProperty(copy.cases, 2, { get() { throw new Error('okunamaz'); } }); },
     'bilinmeyen üst alan': (copy) => { copy.yorum = 'x'; },
@@ -321,7 +325,8 @@ test('koşu kaydı güvenilmezdir: koşucunun üretemeyeceği durum, bozuk köke
     ['duruştan sonra kayıt yok', (copy) => { halt(copy, 1); copy.cases.splice(2); }, { ok: 2, invalid: 0, timeout: 0, failed: 0 }, 2],
     ['gömmede süre aşımıyla duruş', (copy, first) => { Object.assign(first, { embedding: { outcome: 'timeout', latencyMs: 25, halted: true }, firstStage: null, rerank: null, reranked: null }); haltedFrom(copy, 1); }, { ok: 0, invalid: 0, timeout: 1, failed: 3 }, 0],
     ['sonuçlanan süre aşımından sonra sürer', (copy) => { halt(copy, 1, false); }, { ok: 4, invalid: 0, timeout: 0, failed: 0 }, 0],
-    ['eksik vaka', (copy) => { copy.cases.pop(); }, { ok: 3, invalid: 0, timeout: 0, failed: 0 }, 1]
+    ['eksik vaka', (copy) => { copy.cases.pop(); }, { ok: 3, invalid: 0, timeout: 0, failed: 0 }, 1],
+    ['atlanan ara vaka', (copy) => { copy.cases.splice(1, 1); }, { ok: 3, invalid: 0, timeout: 0, failed: 0 }, 1]
   ];
   for (const [label, change, embedding, missing] of legal) {
     const summary = summarizeSemanticRun(variant(change), toyBenchmark);
@@ -388,6 +393,11 @@ test('ölçüler elle hesaplanan senaryoyla birebir uyuşur; yeniden sıralaman�
   assert.equal(summary.uplift.mrr, 0.25);
   near(summary.uplift.ndcg, 1 - (1 / Math.log2(3) + 1) / 2, 'uplift');
   assert.deepEqual(summary.uplift.recall, { 1: 0.5, 3: 0, 5: 0 });
+  // Katkı her aşama ölçüsünde aynı tanımdır: kapsama@1 ilk aşamada 0, yeniden sıralamada 0.5.
+  assert.deepEqual(summary.uplift.coverage, { 1: 0.5, 3: 0, 5: 0 });
+  assert.deepEqual([summary.uplift.avoid, summary.uplift.clarifyCoverage, summary.uplift.abstainSeparability], [
+    second.answer.avoid.rate - first.answer.avoid.rate, second.clarifyCoverage.rate - first.clarifyCoverage.rate, 0
+  ]);
   assert.deepEqual(summary.outcomes, { index: 'ok', embedding: { ok: 4, invalid: 0, timeout: 0, failed: 0 }, rerank: { ok: 4, invalid: 0, timeout: 0, failed: 0 } });
   // Model sınırına yalnızca metinler gider; yeniden sıralayıcı yalnızca ilk aşamanın adaylarını görür.
   assert.deepEqual(embedding.calls.map((call) => call.purpose), ['document', 'query', 'query', 'query', 'query']);
@@ -438,6 +448,7 @@ test('tam kıyas kümesi kâhin ikiziyle uçtan uca koşar: kusursuz sıralama k
   assert.equal(summary.stages.reranked.answer.hitAt1, 0);
   assert.equal(summary.uplift.hitAt1, -1);
   assert.equal(summary.stages.reranked.abstainSeparability, 0.5);
+  assert.equal(summary.uplift.abstainSeparability, -0.5);
   assert.deepEqual(summary.outcomes.embedding, { ok: benchmark.cases.length, invalid: 0, timeout: 0, failed: 0 });
   // Model sınırına yalnızca kanonik vaka metni gider: kimlik, etiket ya da beklenti gitmez.
   assert.deepEqual(embedding.calls[0].texts, catalogue.items.map((item) => item.text));

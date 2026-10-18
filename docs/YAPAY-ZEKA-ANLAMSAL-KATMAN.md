@@ -205,8 +205,8 @@ Saf, belirlenimci ve canlı yola bağlı olmayan kurallar:
 | Kavram | Kural |
 | --- | --- |
 | Sorgu normalleştirme | Asistan iletisiyle aynı denetim karakteri temizliği + görünmez karakter (U+00AD, U+200B, U+2060, U+FEFF) silme + Unicode NFC (temizlikten SONRA: silinen karakterin yan yana getirdiği harf ve birleşen işaret de birleşir; `normalize(normalize(x)) = normalize(x)`) + boşlukların tekleşmesi; boş sorgu `QUERY_EMPTY`, 2000 karakteri aşan `QUERY_TOO_LONG`. **Büyük/küçük harf katlanmaz** (Türkçe I/ı/İ/i korunur); aksan, ek, sözcük değiştirilmez, eş anlam ya da kök bulma yapılmaz |
-| Katalog | Öğe: `id`, `kind` (kapalı küme: `tool`), `version`, `text`, `fingerprint`; en fazla 256 öğe, metin en fazla 4000 karakter, kimlik tekil; her tanım bir kez okunur, seyrek dizinin boşluğu da reddedilir. Bugünkü katalog Aşama 3 araç kayıt defterinin 19 aracıdır; metin aracın sunucuya ait açıklamasıdır (şema, işleyici, yetki belgesi girmez) |
-| Model kökeni | Profil–yetenek uyumlu rota künyesinden: `embedding` profili `embedding`, `rerank` profili `rerank` yeteneğini taşımalıdır. Rotanın model kaydından çözülmesi çağıranın işidir (4B'de `resolveModelProfile`); nitelendirmede köken koşu dosyasının beyan ettiği kimliktir ve raporda öyle yazılır. Köken yetki taşımaz, yalnızca uzayı adlandırır. İş kodunda model adı yoktur |
+| Katalog | Öğe: `id`, `kind` (kapalı küme: `tool`), `version`, `text`, `fingerprint`; en fazla 256 öğe, metin en fazla 4000 karakter, kimlik tekil (metnin tekil olması gerekmez: iki öğe aynı açıklamayı taşıyabilir; kimlik ve sıra ayırır); her tanım bir kez okunur, seyrek dizinin boşluğu da reddedilir. Bugünkü katalog Aşama 3 araç kayıt defterinin 19 aracıdır; metin aracın sunucuya ait açıklamasıdır (şema, işleyici, yetki belgesi girmez) |
+| Model kökeni | Profil–yetenek uyumlu rota künyesinden: `embedding` profili `embedding`, `rerank` profili `rerank` yeteneğini taşımalıdır. Rota ve köken alanları (`profile`, `model`, `provider`) **bir kez** okunur; doğrulanan değer kökene ve uzaya yazılan değerdir (okumalar arasında değişen erişimci geçerli değerle doğrulanıp başka değer yazdıramaz). Rotanın model kaydından çözülmesi çağıranın işidir (4B'de `resolveModelProfile`); nitelendirmede köken koşu dosyasının beyan ettiği kimliktir ve raporda öyle yazılır. Köken yetki taşımaz, yalnızca uzayı adlandırır. İş kodunda model adı yoktur |
 | Gömme uzayı | `profile + model + provider + preprocessing`; ön işleme (ör. E5 `query:`/`passage:` önekleri) adlandırılmış bir belirteçtir |
 | Gömme yanıtı | Dizin adresli `[{ index, vector }]`; her giriş tam bir kez, tüm vektörler aynı boyutta (1–8192), değerler sonlu sayı, sıfır vektör yok. Girişler konumla, her değer bir kez okunur (dizinin yineleyicisine güvenilmez; doğrulanan değer kullanılan değerdir); vektör uzunluğu da model verisidir ve ayırmadan önce tam sayı ve sınır olarak denetlenir; okurken fırlayan erişimci (getter/Proxy) doğrulamadan kaçamaz; vektörler taşma/alttaşma güvenli ölçeklemeyle birim uzunluğa indirilir |
 | Sıralama | Kosinüs benzerliği ([-1, 1]); en fazla 20 aday; eşitlikte katalog sırası; başka uzayda ya da boyutta üretilmiş sorgu `SPACE_MISMATCH`/`DIMENSION_MISMATCH` |
@@ -269,13 +269,17 @@ Koşu kaydının kuralları. Temel değişmez: kabul edilen kayıt,
 tek değil, birbirine bağlı durum olarak doğrulanır:
 
 - Biçim, sürüm (yalnızca 1), kıyas kümesi ve katalog parmak izi uyuşmazsa
-  `SEMANTIC_RUN_STALE`.
+  `SEMANTIC_RUN_STALE`. Bayatlık yalnızca bu karşılaştırmanın kendisinden
+  gelir (modül içi işaret); kayıttaki fırlayan erişimcinin hatası, iletisi
+  `SEMANTIC_RUN_STALE` olsa bile `SEMANTIC_RUN_INVALID`'dir.
 - Yapı kapalıdır: üst düzey kayıt, vaka satırı, çağrı kaydı ve aday,
   koşucunun yazdığı alan kümesini taşır; eksik ya da bilinmeyen alan
   `SEMANTIC_RUN_INVALID`'dir.
-- Vaka satırları kıyas kümesinin vakalarıdır; yabancı ya da yinelenen satır
-  reddedilir (sessizce yok sayılmaz, ezilmez). Kaydı olmayan vaka reddedilmez;
-  ıska sayılır (kısmi koşu).
+- Vaka satırları kıyas kümesinin vakalarıdır ve **kıyas kümesi sırasındadır**
+  (koşucu satırları bu sırayla yazar; sıra biçimin parçasıdır). Yabancı,
+  yinelenen ya da geri giden (yer değiştirmiş) satır reddedilir (sessizce yok
+  sayılmaz, ezilmez). Kaydı olmayan vaka reddedilmez; hangi konumda olursa
+  olsun ıska sayılır (kısmi koşu).
 - Çağrı kaydının alanları sonuç türüne göre tektir: `ok` → sonuç ve gecikme;
   `invalid`/`failed` → güvenli kod ve gecikme; `timeout` → gecikme ve
   koşucunun duruş kararı (`halted: true|false`). Yapılan her çağrı (dizin,
@@ -347,7 +351,7 @@ araçlar; ihtiyaç gruplarıyla kesişemez.
 | Kaçınma çifti tutarlılığı | en iyi ihtiyaç sırası < kaçınılacak aracın sırası olan çiftlerin oranı |
 | Açıklama kapsaması@K | `clarify` vakalarında bütün makul yorumların ilk K adayda bulunması |
 | Kapsam dışı ayrılabilirliği | En yüksek skorla kapsam içi/dışı ayrımının AUROC değeri (eşitlik ½); skoru olmayan (başarısız) vaka en kötü durum sayılır |
-| Yeniden sıralama katkısı | Aynı ölçünün yeniden sıralama sonrası − ilk aşama farkı |
+| Yeniden sıralama katkısı | Aynı ölçünün yeniden sıralama sonrası − ilk aşama farkı; iki aşamada da değeri olan **her** ölçü için: Top-1, MRR, NDCG, Recall@K, kapsama@K, kaçınma çifti tutarlılığı, açıklama kapsaması ve kapsam dışı ayrılabilirliği (`uplift`; Markdown'da "Fark" sütunu). Bir aşamada değer yoksa (`null`) fark da `null`'dır |
 | Gecikme | p50 / p95 / en çok (en yakın sıra yüzdeliği) |
 
 Planlayıcı kararları (`[{ case, decision, tools }]`, 4C için): karar
@@ -487,7 +491,7 @@ Yakınsama denetimi: 117 vakanın tamamı bu kurallarla, araçların gerçek
 | tr-087 | Yalnızca `rota_data_quality` | Gerçekleşen bitişi eksik tamamlanmış görevi yalnızca veri kalitesi denetler |
 | tr-090 | Tek grup: `rota_task_analytics` | Proje süzgeci + gecikme + sorumluya göre gruplama toplamı ve kişi kırılımını birlikte verir |
 
-Son hedefli denetim: üç vakada Aşama 3 işleyicisinin çıktısı sorulan olguyu
+Son hedefli denetim: dört vakada Aşama 3 işleyicisinin çıktısı sorulan olguyu
 tek başına verdiği için yeterli alternatif aynı gruba eklendi (parmak izi
 bilinçli olarak değişti):
 
@@ -496,6 +500,7 @@ bilinçli olarak değişti):
 | tr-017 | Grup: `rota_task_detail` + `rota_task_search` | Görev araması her görev için `targetFinish`, `plannedFinish` ve `progressPercent` döndürür; soru tam olarak bunları sorar |
 | tr-029 | Grup: `rota_project_detail` + `rota_project_search` | Proje araması eşleşen projenin `lead` alanını döndürür; soru proje liderini sorar |
 | tr-043 | Grup: `rota_workload_summary` + `rota_task_analytics` | Analitik açık durum süzgeci ve `groupBy: assignee` ile görünür sorumluları süzülen sayıya göre azalan sıralar; en çok açık işi olan kişi ilk gruptur |
+| tr-045 | Grup: `rota_workload_summary` + `rota_task_analytics` | Analitik `personSicil` süzgeciyle o kişinin görevlerinde açık, devam eden, gecikmiş, bugün/7 gün içinde terminli ve tamamlanan sayıları, gecikme yaşlandırmasını ve saat kapsamasını döndürür; "iş yükü ne durumda" sorusunu tek başına yanıtlar (tr-047 ile aynı gerekçe). Kişi kimliği için arama her iki araçta da planlayıcı önkoşuludur, ihtiyaç değildir |
 
 Doğrulanıp **değiştirilmeyenler**: adı geçen görev/proje/kişi için arama aracını
 önkoşul olarak isteyen öneriler (yukarıdaki `needs` kuralı); proje sıralamasında görev
@@ -513,7 +518,11 @@ yanıt, hata, sinyale uyan ve uymayan takılma). Kâhin ikiz altın etiketlerden
 vektör kurar ve yalnızca değerlendiricinin kendisini sınar.
 
 CI çevrimdışı ve belirlenimcidir; model indirmez, Hugging Face'e ya da
-Python'a bağlı değildir. Uygulama başlangıcı da model indirmez.
+Python'a bağlı değildir. Uygulama başlangıcı da model indirmez. Python
+koşucusunun kendi sınaması (`test/semantic_model_qualification_test.py`,
+yalnızca standart kitaplık; model yerine yüklendiğini bildiren saplama
+modüller) CI'da koşmaz; koşucu değiştiğinde elle çalıştırılır:
+`python3 test/semantic_model_qualification_test.py`.
 
 ### 6.6 Gerçek model nitelendirme mekanizması
 
@@ -530,13 +539,20 @@ node scripts/semantic-evaluation.mjs report --run kosu.json   # --json ile makin
 
 - Python koşucusu (`pip install sentence-transformers`) yalnızca ham çıktıyı
   (vektörler, skorlar, koşucunun ölçtüğü gecikme) yazar; sorgu vektöründe ya
-  da yeniden sıralama skorunda sonlu olmayan değer `null` olur ve raporda
-  geçersiz sayılır. Koşu dosyası modele **gerçekten verilen** belge ve sorgu
+  da yeniden sıralama skorunda sayı olmayan ya da sonlu olmayan değer `null`
+  olur ve raporda geçersiz sayılır. Koşu dosyası modele **gerçekten verilen** belge ve sorgu
   metnini, etkin `queryPrefix`/`documentPrefix` öneklerini ve `batchSize`
   değerini de taşır.
 - **Ön koşullar model yüklenmeden denetlenir** (pahalı koşunun sonunda
-  reddedilecek değer başta durdurulur): girdi dosyası var, okunur ve biçimi
-  doğru; çıktı yolu klasör değil, klasörü var ve yazılabilir (geçici dosya
+  reddedilecek değer başta durdurulur): girdi dosyası var, okunur ve kapalı
+  şemadadır (üst düzey alanlar, belge `{id, text}`, sorgu `{case, text}`;
+  bilinmeyen alan yok; sürüm tam sayı 1; parmak izleri 64 onaltılık
+  karakter); belge ve vaka kimlikleri raporun biçiminde ve **tekil**; en çok
+  256 belge ve 150 sorgu (katalog ve kıyas kümesi sınırı); metinler boş değil,
+  belge metni en çok 4000, sorgu metni en çok 2000 karakter. Raporla aynı
+  sınır aynı ölçüyle denetlenir: Node `.length` UTF-16 kod birimi saydığı
+  için koşucu önek, `--device` ve metin uzunluğunu da UTF-16 kod birimiyle
+  ölçer (`😀` iki birimdir). Çıktı yolu klasör değil, klasörü var ve yazılabilir (geçici dosya
   burada gerçekten ayrılır, `os.access` tahminine dayanılmaz); çıktı girdiyle
   aynı dosya değil (farklı yazım, Windows büyük/küçük harf, kısa ad, sembolik
   ya da sabit bağ: `realpath`/`normcase` ve `os.path.samefile` ile); ön işleme
@@ -546,16 +562,29 @@ node scripts/semantic-evaluation.mjs report --run kosu.json   # --json ile makin
   ayrıdır: yerel klasördeki ya da Windows yolu (`C:\modeller\...`) olan model
   `--embedding-name`/`--reranker-name` ile kayıttaki kimliğiyle adlandırılır;
   yol herhangi bir biçimde olabilir, kayda yazılan kimlik belirteç biçimindedir.
+  Ön koşul reddi diske dokunmaz (önceki çıktı da yerinde kalır).
+- **Sayı sözleşmesi:** koşucu model çıktısını sayıya **çevirmez**, yalnızca
+  zaten sayı olanı kabul eder: Python `int`/`float` ve NumPy sayısal skalerleri
+  (`numbers.Real`); `bool` ve NumPy `bool_`, sayısal metin (`"1"`) ve başka
+  nesne sayı değildir. Böylece Node sözleşmesinin (`typeof x === 'number'`)
+  reddedeceği bir yanıt koşucuda geçerli sayıya dönüşüp nitelendirilemez.
 - Güvenilirlik: model yükleme ve **katalog gömme** hatası ölümcüldür. Her
   belgenin tam bir vektörü olmalı; boyut 1–8192 ve hepsinde aynı, bütün
-  değerler sonlu, sıfır vektör yok. Değilse koşu dosyası yazılmaz (NaN `null`'a
-  çevrilip başarılı görünen bir dosya üretilmez). Tek bir sorgunun gömme ya
+  değerler yukarıdaki anlamda sayı ve sonlu, sıfır vektör yok. Değilse koşu
+  dosyası yazılmaz (NaN `null`'a çevrilip başarılı görünen bir dosya
+  üretilmez). Tek bir sorgunun gömme ya
   da yeniden sıralama hatası `INFERENCE_FAILED` koduyla kaydedilir (hata
   iletisi yazılmaz); tek sorguya tam bir vektör dönmemesi de bu hatadır (fazla
   vektörün ilki sessizce alınmaz). Rapor o vakayı `failed` ıskası sayar,
-  tamamlanan ölçümler korunur. Çıktı yolu işe başlamadan silinir ve sonuç baştan
-  ayrılan geçici dosyadan atomik olarak yerine konur: başarısız deneme eski
-  koşuyu ya da geçici dosya bırakmaz. Özet satırı ASCII'dir ve stdout
+  tamamlanan ölçümler korunur. İş başlarken sıra bilinçlidir: önce eski çıktı
+  silinir, sonra geçici dosya ayrılır, sonuç atomik olarak yerine konur. Eski
+  çıktı silinemezse (Windows'ta başka programda açık, salt okunur ya da erişim
+  reddi) koşucu açık bir iletiyle durur ve bu denemenin geçici dosyası hiç
+  oluşmamıştır; iş başladıktan sonraki her hata geçici dosyayı siler. Böylece
+  başarısız deneme ne eski koşuyu yeni gibi ne de `.semantic-run-*.tmp`
+  bırakır. Geçici dosya `mkstemp` ile oluşur; POSIX'te koşu dosyası sahibine
+  özeldir (0600). Bu bilinçlidir: kabul ortamı §8'deki Windows VM'dir;
+  koşu dosyasını başka bir POSIX hesabıyla paylaşan iş akışı sözleşmede yoktur. Özet satırı ASCII'dir ve stdout
   yazılamayan karakterde düşmez (Windows kod sayfası).
 - `report` ham koşuyu güvenilmez girdi olarak bir kez doğrular: kapalı şema
   (bilinmeyen alan reddedilir); biçim/sürüm ve parmak izleri; model kökeni;
@@ -566,6 +595,12 @@ node scripts/semantic-evaluation.mjs report --run kosu.json   # --json ile makin
   aynısı (değiştirilmiş metin puanlanmaz); gecikmeler sonlu ve negatif değil;
   ortam künyesi sınırlı; `batchSize` 1–4096. Sonra aynı çıktıyı üretimdeki
   sözleşme ve koşucudan geçirir; bozuk sorgu değeri ıska sayılır.
+- Yeniden oynatım kimlikle eşler, metinle değil: katalog açıklamalarının
+  tekil olması gerekmez. Belge vektörleri katalog sırasıyla (konum → kimlik)
+  verilir. Yeniden sıralayıcıya yalnızca metin gittiği için aynı metinli
+  adaylar metinden ayırt edilemez; adayların kimliği koşucunun ilk aşamasıyla
+  aynı belirlenimci sıralamadan (aynı dizin ve sorgu vektörü) yeniden kurulur
+  ve skor o kimliğin kayıttaki skorudur.
 - Katalog dizini kurulamayan koşu (sonlu olmayan, sıfır ya da farklı boyutlu
   belge vektörü) **nitelendirme değildir**: `report` hata koduyla durur, sıfır
   ölçülü başarılı görünen rapor üretmez.
@@ -636,64 +671,73 @@ yerel klasörün adsız kullanımı, toplu iş boyutu), sonlu olmayan ya da sıf
 katalog vektöründe koşu dosyasının yazılmaması, tek sorguya iki vektörün
 `INFERENCE_FAILED` olması, aday sınırının dışındaki sonlu olmayan skorun
 yeniden sıralama çağrısını geçersiz sayması ve Windows yolu + `--embedding-name`
-ile kimlik ayrımı doğrulandı. Bunlar yalnızca tesisatın sınamasıdır;
+ile kimlik ayrımı doğrulandı. Kök neden yakınsama turunda gerçek katalog ve
+kıyas kümesiyle girdi → koşucu (NumPy `float32` döndüren saplamalar) → rapor
+zinciri yeniden koşturuldu: koşu dosyası raporca kabul edildi, bütün "Fark"
+hücreleri doldu, geçici dosya kalmadı; ön koşul, sayı sözleşmesi ve temizlik
+kuralları `test/semantic_model_qualification_test.py` ile sınandı. Bunlar yalnızca tesisatın sınamasıdır;
 anlamsal kalite hakkında hiçbir şey söylemez. Gerçek gömme/yeniden sıralama taban
 çizgisi 4B'nin ilk işidir (ağ izni verilen bir ortamda §6.6 komutlarıyla ya da
 kurum içinde §8 ile).
 
-**Zayıf model uyumluluk okuması (Claude Haiku 4.5, 18.10.2026).** Haiku 4.5 is
-a weak-model compatibility proxy only. It is not an emulator of
-Qwen3-Next-80B-A3B-Instruct and freezes no production threshold. Haiku 4.5
-yalnızca bir **zayıf model / düşük düşünmeli uyumluluk vekilidir**: kurum
-içindeki `Qwen3-Next-80B-A3B-Instruct` modelinin taklidi ya da benzetimi
-DEĞİLDİR, Qwen'in üretim başarımı hakkında bir şey söylemez, 4C kabul ölçütü
-değildir ve hiçbir eşik dondurmaz. Amaç, katalog ve kıyas kümesinin gizli akıl
-yürütme olmadan anlaşılıp anlaşılmadığını görmektir.
+**Zayıf model uyumluluk okuması (Claude Haiku 4.5, 18.10.2026, son kök neden
+yakınsama turundan sonra).** Haiku 4.5 is a weak/basic-model compatibility
+proxy only. It is not an emulator of Qwen3-Next-80B-A3B-Instruct, and it
+freezes no production threshold. Haiku 4.5 yalnızca bir **zayıf model / düşük
+düşünmeli uyumluluk vekilidir**: kurum içindeki `Qwen3-Next-80B-A3B-Instruct`
+modelinin taklidi ya da benzetimi DEĞİLDİR, Qwen'in üretim başarımı hakkında
+bir şey söylemez, 4C kabul ölçütü değildir ve hiçbir eşik dondurmaz. Amaç,
+katalog ve kıyas kümesinin gizli akıl yürütme olmadan anlaşılıp
+anlaşılmadığını görmektir.
 
 Kurulum: yalnızca `claude-haiku-4-5-20251001` modeline sabitlenmiş, depo
 bağlanmamış ayrı bir oturum; tek tur, araç çağrısı yok (oturum kaydıyla
-doğrulandı). Genişletilmiş düşünme istenmedi; ancak oturumun varsayılan ayarı
-modelin yanıttan önce bir düşünme bloğu (yaklaşık 5.800 belirteç) üretmesine
-izin verdi, bu yüzden okuma tam olarak "düşünmesiz" değildir. Modele yalnızca
-19 aracın sunucuya ait açıklamaları, karar türlerinin tanımı ve sabit tohumla
-karıştırılmış sırada, yalnızca sıra numarasıyla 117 soru verildi; vaka
-kimliği, beklenti, ihtiyaç, kaçınma, etiket, önceki yanıtlar ya da inceleme
-yorumları verilmedi. Yanıt, son kıyas kümesi üzerinde güncel
-`evaluateSemanticDecisions` ile puanlandı:
+doğrulandı). Genişletilmiş düşünme, adım adım düşünme ya da gerekçe
+istenmedi; ancak ürün düşünmesiz bir kip sunmuyor ve oturumun varsayılan
+ayarı modelin yanıttan önce bir düşünme bloğu (kayda göre yaklaşık 9.600
+düşünme belirteci) üretmesine izin verdi. Bu yüzden okuma tam olarak
+"düşünmesiz" değildir. Modele yalnızca 19 aracın sunucuya ait açıklamaları,
+üç karar türünün kısa tanımı ve sabit tohumla karıştırılmış sırada, yalnızca
+sıra numarasıyla 117 soru verildi; vaka kimliği, beklenti, ihtiyaç, kaçınma,
+etiket, altın araç, önceki yanıtlar, inceleme yorumları ya da zor vaka listesi
+verilmedi. Yanıt, bu turun kıyas kümesi üzerinde güncel
+`evaluateSemanticDecisions` ile tek geçişte puanlandı:
 
-| Ölçü | Değer |
-| --- | --- |
-| Karar doğruluğu | 0.957 (112/117) |
-| `answer` geri çağırma | 0.958 (91/95) |
-| Açıklama doğruluğu (`recall.clarify`) | 0.857 (6/7) |
-| Desteklenmeyen istekte çekimserlik (`recall.abstain`) | 1.000 (15/15) |
-| `answer` vakalarında araç kapsaması | 0.926 (88/95) |
-| Yasak araç ihlali | 0 |
-| Eksik / geçersiz karar | 0 / 0 |
+| Ölçü | Bu okuma | Önceki okuma |
+| --- | --- | --- |
+| Karar doğruluğu | 0.932 (109/117) | 0.957 (112/117) |
+| `answer` geri çağırma | 0.968 (92/95) | 0.958 (91/95) |
+| Açıklama doğruluğu (`recall.clarify`) | 0.286 (2/7) | 0.857 (6/7) |
+| Desteklenmeyen istekte çekimserlik (`recall.abstain`) | 1.000 (15/15) | 1.000 (15/15) |
+| `answer` vakalarında araç kapsaması | 0.947 (90/95) | 0.926 (88/95) |
+| Yasak araç ihlali | 0 | 0 |
+| Eksik / geçersiz karar | 0 / 0 | 0 / 0 |
 
-Ayrışmalar (8 vaka) ve sınıfları:
+Ayrışmalar (10 vaka) ve sınıfları:
 
 | Vaka | Model | Sınıf | Not |
 | --- | --- | --- | --- |
 | tr-005 "Sorumlusu olmayan görevler hangileri?" | `rota_data_quality` | Belirsiz katalog açıklaması | Veri kalitesi yalnızca açık görevleri ve en çok beş örnek verir; görev aramasının açıklaması `assignee` süzgecini anmaz, veri kalitesininki "sorumlusuz" der |
-| tr-037 kurumsal/manuel proje karşılaştırması | `rota_task_analytics` | Belirsiz katalog açıklaması | Kaynak (`source`) süzgeci yalnızca portföy özetinde var; analitikte proje kaynağı süzgeci ya da gruplaması yok. Portföy açıklaması bu süzgeci anmıyor |
 | tr-048, tr-050 kişinin birimi/unvanı | Çekimser | Belirsiz katalog açıklaması | Kişi araması birim ve unvan döndürür; açıklaması anmıyor |
-| tr-032 "Radar tarafında işler nasıl gidiyor?" | Açıklama istedi | Meşru zayıf model ıskası | Makul varsayılanla yorumlanabilen bulanık ifade belirsizlik sayılmaz (§6.4) |
-| tr-046 "Bu hafta termini dolan işler kişilere nasıl dağılmış?" | Görev araması + iş yükü | Meşru zayıf model ıskası | İş yükü özetinde tarih süzgeci yoktur; analitik `deadline` süzgeci ve `groupBy: assignee` ile tek başına yanıtlar |
+| tr-046 "Bu hafta termini dolan işler kişilere nasıl dağılmış?" | İş yükü özeti | Meşru zayıf model ıskası | İş yükü özetinde tarih süzgeci yoktur; analitik `deadline` süzgeci ve `groupBy: assignee` ile tek başına yanıtlar |
 | tr-060 "Talepleri göster" | Açıklama istedi (aynı iki araç) | Meşru zayıf model ıskası (sınırda) | Ürünün Talepler ekranı iki talep türünü birlikte gösterir |
-| tr-098 "Takvimi göster" | Tek yorumla yanıt | Meşru zayıf model ıskası | Çalışma takvimi, Outlook gönderimi ve görev takvimi gerçekten ayrı yetenekler |
+| tr-098 "Takvimi göster" | Tek yorumla yanıt (çalışma takvimi) | Meşru zayıf model ıskası | Çalışma takvimi, Outlook gönderimi ve görev takvimi gerçekten ayrı yetenekler |
+| tr-099 "Ahmet ne yapıyor?" | Çekimser | Meşru zayıf model ıskası | Kişinin görevleri ve hareketleri Rota yeteneğidir; istek kapsam içidir ama okuma belirsizdir |
+| tr-100 "Toplantı ne zaman?" | Çekimser | Meşru zayıf model ıskası (sınırda) | Toplantı Rota'da görev ya da tekrarlayan seri olarak bulunur; hangisi kastedildiği sorulmalıdır |
+| tr-101 "Bunu kim yaptı?", tr-102 "Kaç tane var?" | Çekimser | Meşru zayıf model ıskası | Göndergesi olmayan kapsam içi istek açıklama gerektirir; çekimserlik kapsam dışı istek içindir |
 
 Kıyas altın etiketi ya da soru kusuru bulunmadı; bu okuma yüzünden hiçbir
-etiket değiştirilmedi (§6.4'teki düzeltmeler araçların gerçek çıktısına
-dayanır ve okumadan önce yapıldı). Tr-017, tr-029 ve tr-043'te model ayrıntı ya
-da iş yükü aracını seçti; eklenen alternatifler bu vakalarda puanı
-değiştirmedi. Model istenen düz JSON yerine yanıtı yine kod çitine sardı
-(protokol sapması); çit soyularak puanlandı ve sayılar bu şekilde verildi. 4C'de
-planlayıcı çıktısı türlü sözleşmeyle doğrulanır. Adı geçen varlık için arama
-aracını da seçmesi §6.4 kuralı gereği cezalandırılmadı. Bu belgenin önceki
-sürümlerindeki Haiku okumaları eski kıyas kümesine aittir ve yerini bu okuma
-alır. Aşama 4A bu okumaya bağlı değildir; MERGEN Rota'da Anthropic bağlantısı,
-kimlik bilgisi ya da bağımlılığı yoktur.
+etiket değiştirilmedi. Bu turdaki tek etiket değişikliği (tr-045) Aşama 3
+işleyicisine dayanır ve okumadan önce yapıldı; model tr-045'te iş yükü özetini
+seçtiği için puanı değiştirmedi. Önceki okumayla fark büyük ölçüde açıklama
+vakalarındadır: model bu kez göndergesiz kısa istekleri (tr-099–tr-102)
+kapsam dışı saydı. Bu, 4C planlayıcısının açıklama/çekimserlik sınırı için
+girdidir; ölçüyü iyileştirmek için kıyas kümesi ya da tanımlar
+ayarlanmadı. Tek okuma; okumalar arası oynaklık ölçülmedi. Model istenen düz
+JSON yerine yanıtı yine kod çitine sardı (protokol sapması, ayrışma değil);
+çit soyularak puanlandı. Adı geçen varlık için arama aracını da seçmesi §6.4
+kuralı gereği cezalandırılmadı. Aşama 4A bu okumaya bağlı değildir; MERGEN
+Rota'da Anthropic bağlantısı, kimlik bilgisi ya da bağımlılığı yoktur.
 
 Eşikler (ör. kabul edilebilir Recall@5 ya da çekimserlik oranı) bu adımda
 **dondurulmaz**: gerçek model ölçümü olmadan seçilen eşik keyfî olurdu. 4B
@@ -748,6 +792,7 @@ Soru metni dışında kullanıcı verisi, anahtar ya da adres kaydedilmez.
 
 | Dosya | Kapsam |
 | --- | --- |
-| `test/ai-semantic-contract.test.mjs` | Yapısal sorgu normalleştirme (NFC, temizlikten sonra NFC ve tekrar edilebilirlik, İ/I, görünmez karakter, sınırlar); katalog ve parmak izleri (negatif, kesirli, güvensiz ya da değişen uzunluk dâhil); Aşama 3 kayıt defterinden katalog; model kökeni ve uzay; bozuk gömme yanıtları (Proxy uzunluğu, fırlayan erişimci dâhil); belirlenimci, sınırlı sıralama ve eşitlik; bayat uzay; yeniden sıralama sözleşmesi; enjeksiyon metninin etkisizliği; kimlik/yetki/SQL yüzeyi olmaması ve canlı yola bağlanmama |
-| `test/ai-semantic-evaluation.test.mjs` | Kıyas kümesinin yapısı, sentetikliği ve sızıntısızlığı; üretim kodunun kıyas kümesinden bağımsızlığı; kapalı yapı (seyrek dizi, açık `null`, bozuk grup, bilinmeyen alan, okunamayan belge, taklit katalog) tablosu; elle hesaplanan ölçüler ve yeniden sıralama katkısı; kâhin ikizle tam küme; başarısız/geçersiz/süresi dolan çağrıların ıska sayılması; sinyale uymayan modelde koşunun durması; iptal yarışları; yeniden sıralama düşüşü; dizin kurulamaması; iptal; gecikme özeti; koşu kaydı durum makinesinin geçerli/geçersiz durum tabloları (bayat sürüm, kapalı alanlar, yabancı/yinelenen satır, sonuç–yük çelişkisi, çağrılmayan ıska biçimi, dizin durumu, duruş dilimi ve `halted` kararı, kısmi koşu, eşitlik sırası, köken ve dizin kimliği, permütasyon olmayan yeniden sıralama, negatif gecikme, sınırdan derin kesim); uzunluğu okumalar arasında değişen dizi; planlayıcı karar ölçüleri ve güvenilmez karar tablosu (okunamayan liste, korunan vaka kimliği) |
-| `test/ai-semantic-qualification.test.mjs` | Nitelendirme komutu: parmak izli girdi; kâhin koşu dosyasıyla rapor ve `qualification` künyesi (model, önekler, yeniden sıralayıcı, aday sınırı, gecikme iş yükü); bayat, eksik/fazla/yabancı/yinelenen satırlı, değiştirilmiş metinli, negatif gecikmeli, öneki çelişkili, bilinmeyen alanlı ya da güvensiz hata kodlu koşunun reddi; bozuk değerin ve `INFERENCE_FAILED` satırının ıska sayılması; dizini kurulamayan koşunun reddi; bütün katalog yeniden sıralama skoru doğrulaması ve gerçek çağrı nüfusu; `batchSize` künyesi; Markdown enjeksiyonunun etkisizliği; `--limit` sınırı |
+| `test/ai-semantic-contract.test.mjs` | Yapısal sorgu normalleştirme (NFC, temizlikten sonra NFC ve tekrar edilebilirlik, İ/I, görünmez karakter, sınırlar); katalog ve parmak izleri (negatif, kesirli, güvensiz ya da değişen uzunluk dâhil); Aşama 3 kayıt defterinden katalog; model kökeni ve uzay (okumalar arasında değişen köken alanı dâhil); bozuk gömme yanıtları (Proxy uzunluğu, fırlayan erişimci dâhil); belirlenimci, sınırlı sıralama ve eşitlik; bayat uzay; yeniden sıralama sözleşmesi; enjeksiyon metninin etkisizliği; kimlik/yetki/SQL yüzeyi olmaması ve canlı yola bağlanmama |
+| `test/ai-semantic-evaluation.test.mjs` | Kıyas kümesinin yapısı, sentetikliği ve sızıntısızlığı; üretim kodunun kıyas kümesinden bağımsızlığı; kapalı yapı (seyrek dizi, açık `null`, bozuk grup, bilinmeyen alan, okunamayan belge, taklit katalog) tablosu; elle hesaplanan ölçüler ve her ölçünün yeniden sıralama katkısı; kâhin ikizle tam küme; başarısız/geçersiz/süresi dolan çağrıların ıska sayılması; sinyale uymayan modelde koşunun durması; iptal yarışları; yeniden sıralama düşüşü; dizin kurulamaması; iptal; gecikme özeti; koşu kaydı durum makinesinin geçerli/geçersiz durum tabloları (bayat sürüm, bayat iletili fırlayan erişimcinin `INVALID` sayılması, kapalı alanlar, yabancı/yinelenen/geri giden satır, atlanan ara satır, sonuç–yük çelişkisi, çağrılmayan ıska biçimi, dizin durumu, duruş dilimi ve `halted` kararı, kısmi koşu, eşitlik sırası, köken ve dizin kimliği, permütasyon olmayan yeniden sıralama, negatif gecikme, sınırdan derin kesim); uzunluğu okumalar arasında değişen dizi; planlayıcı karar ölçüleri ve güvenilmez karar tablosu (okunamayan liste, korunan vaka kimliği) |
+| `test/ai-semantic-qualification.test.mjs` | Nitelendirme komutu: parmak izli girdi; kâhin koşu dosyasıyla rapor ve `qualification` künyesi (model, önekler, yeniden sıralayıcı, aday sınırı, gecikme iş yükü); bayat, eksik/fazla/yabancı/yinelenen satırlı, değiştirilmiş metinli, negatif gecikmeli, öneki çelişkili, bilinmeyen alanlı ya da güvensiz hata kodlu koşunun reddi; bozuk değerin ve `INFERENCE_FAILED` satırının ıska sayılması; dizini kurulamayan koşunun reddi; bütün katalog yeniden sıralama skoru doğrulaması ve gerçek çağrı nüfusu; `batchSize` künyesi; Markdown enjeksiyonunun etkisizliği; yeniden sıralamalı raporda her ölçünün "Fark" hücresi; `--limit` sınırı; aynı açıklamalı iki katalog öğesinin yeniden oynatımda kendi kimliğinin vektörünü ve skorunu alması |
+| `test/semantic_model_qualification_test.py` (CI dışı, elle) | Python koşucusu: yinelenen kimlik, sayı ve metin sınırı (astral karakter dâhil), kapalı şema ve mantıksal sürümün model modülleri yüklenmeden reddi; önek ve `--device` için UTF-16 sınırı; sayısal metin, mantıksal değer, NaN/sonsuz ve sıfır vektörün sayıya çevrilmemesi, NumPy skalerlerinin kabulü; tür geçersiz katalogda koşu dosyası yazılmaması; eski çıktı silinemediğinde geçici dosya bırakılmaması |

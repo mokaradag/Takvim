@@ -73,7 +73,7 @@
     {"id": "tr-042", "text": "İş dağılım ağacında hiçbir düğüme bağlanmamış görevler var mı?", "expect": "answer", "needs": [["rota_data_quality"]], "tags": ["olumsuzluk"]},
     {"id": "tr-043", "text": "Ekipte işi en çok birikmiş kişi kim?", "expect": "answer", "needs": [["rota_workload_summary", "rota_task_analytics"]], "avoid": ["rota_person_search"], "tags": ["enustunluk", "gunluk"]},
     {"id": "tr-044", "text": "Kimin üzerinde kaç açık görev var?", "expect": "answer", "needs": [["rota_workload_summary", "rota_task_analytics"]], "tags": ["sayim"]},
-    {"id": "tr-045", "text": "Ayşe'nin iş yükü ne durumda?", "expect": "answer", "needs": [["rota_workload_summary"]], "avoid": ["rota_activity_search"], "tags": ["varlik-adi", "cekim"]},
+    {"id": "tr-045", "text": "Ayşe'nin iş yükü ne durumda?", "expect": "answer", "needs": [["rota_workload_summary", "rota_task_analytics"]], "avoid": ["rota_activity_search"], "tags": ["varlik-adi", "cekim"]},
     {"id": "tr-046", "text": "Bu hafta termini dolan işler kişilere nasıl dağılmış?", "expect": "answer", "needs": [["rota_task_analytics"]], "tags": ["goreli-zaman"]},
     {"id": "tr-047", "text": "Mehmet'in elinde gecikmiş kaç iş var", "expect": "answer", "needs": [["rota_workload_summary", "rota_task_search", "rota_task_analytics"]], "tags": ["varlik-adi", "sayim", "noktalamasiz"]},
     {"id": "tr-048", "text": "Zeynep Kaya hangi birimde çalışıyor?", "expect": "answer", "needs": [["rota_person_search"]], "avoid": ["rota_workload_summary"], "tags": ["varlik-adi"]},

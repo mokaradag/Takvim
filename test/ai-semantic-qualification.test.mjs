@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -181,6 +181,10 @@ test('girdi parmak izli ve kanoniktir; kâhin koşu dosyası aynı sözleşmeden
   assert.doesNotMatch(injected.stdout, /^\| Top-1 \| 1\.000 \|$/m);
   assert.match(injected.stdout, /· st 5 {2}\\#\\# Nitelendirme sonucu: BAŞARILI {2}\\\| Ölçü \\\|/);
   assert.match(injected.stdout, /· \\<b\\>x\\<\/b\\> \\`kod\\`/);
+  // Yeniden sıralama varken her ölçü satırı katkıyı (fark) taşır; söz verilen değer "—" olarak kalmaz.
+  for (const label of ['Top-1', 'MRR', 'Recall@5', 'Kapsama@5', 'NDCG@5', 'Kaçınma çifti tutarlılığı', 'Açıklama vakalarında kapsama@5', 'Kapsam dışı ayrılabilirliği \\(AUROC\\)']) {
+    assert.match(injected.stdout, new RegExp(`^\\| ${label} \\| [0-9.]+ \\| [0-9.]+ \\| [+-][0-9.]+ \\|$`, 'm'), label);
+  }
 
   // Bayat, eksik/fazla satırlı, değiştirilmiş metinli ya da bozuk koşu reddedilir.
   const ghost = (document) => document.embedding.queries.push({ case: 'ghost-1', text: 'hayalet', vector: [1], latencyMs: 600000 });
@@ -226,4 +230,59 @@ test('girdi parmak izli ve kanoniktir; kâhin koşu dosyası aynı sözleşmeden
   }
   assert.equal((await cli('report')).code, 1);
   assert.equal((await cli('bilinmeyen')).code, 1);
+  // Bağlantılı yoldan çağrılan komut da çalışır; sessizce başarılı çıkmaz.
+  const linked = path.join(directory, 'depo');
+  await symlink(ROOT, linked, 'junction');
+  const viaLink = await run(process.execPath, [path.join(linked, 'scripts/semantic-evaluation.mjs'), 'input'], { cwd: ROOT, maxBuffer: 1 << 24 });
+  assert.equal(JSON.parse(viaLink.stdout).catalogue, input.catalogue);
+  const unknown = await run(process.execPath, [path.join(linked, 'scripts/semantic-evaluation.mjs'), 'bilinmeyen']).catch((error) => error);
+  assert.equal(unknown.code, 1);
+});
+
+test('katalog yalnızca tekil kimlik ister: aynı açıklamalı iki öğe yeniden oynatımda kendi kimliğinin çıktısını alır', async () => {
+  const { readModelRun, recordedModels } = await import('../scripts/semantic-evaluation.mjs');
+  const { createSemanticCatalogue } = await import('../src/domain/ai/semanticContract.js');
+  const { collectSemanticRun, summarizeSemanticRun, validateSemanticBenchmark } = await import('../src/domain/ai/semanticEvaluation.js');
+  const built = createSemanticCatalogue([
+    { id: 'rota_a', kind: 'tool', version: 1, text: 'Görevleri listeler' },
+    { id: 'rota_b', kind: 'tool', version: 1, text: 'Görevleri listeler' },
+    { id: 'rota_c', kind: 'tool', version: 1, text: 'Projeleri özetler' }
+  ]);
+  assert.equal(built.ok, true);
+  const { catalogue } = built;
+  const validated = validateSemanticBenchmark({
+    format: 'mergen-rota-semantic-benchmark', version: 1, language: 'tr', tags: { ornek: 'Örnek' },
+    cases: [
+      { id: 'toy-001', text: 'Birinci soru', expect: 'answer', needs: [['rota_b']], tags: ['ornek'] },
+      { id: 'toy-002', text: 'İkinci soru', expect: 'answer', needs: [['rota_a']], tags: ['ornek'] }
+    ]
+  }, catalogue);
+  assert.equal(validated.ok, true, JSON.stringify(validated.issues));
+  const { benchmark } = validated;
+  const ids = catalogue.items.map((item) => item.id);
+  const oneHot = (id) => ids.map((other) => (other === id ? 1 : 0));
+  // Aynı metinli öğelerin vektörleri ve skorları farklıdır: metinle eşleme yanlış öğeye düşerdi.
+  const target = { 'toy-001': 'rota_b', 'toy-002': 'rota_a' };
+  const raw = {
+    format: 'mergen-rota-semantic-model-run', version: 1, benchmark: benchmark.fingerprint, catalogue: catalogue.fingerprint,
+    embedding: {
+      model: 'kahin-gomme', provider: 'test', preprocessing: 'none', queryPrefix: '', documentPrefix: '', batchSize: 8, documentLatencyMs: 1,
+      documents: catalogue.items.map(({ id, text }) => ({ id, text, vector: oneHot(id) })),
+      queries: benchmark.cases.map(({ id, text }) => ({ case: id, text, vector: oneHot(target[id]), latencyMs: 1 }))
+    },
+    rerank: {
+      model: 'kahin-siralama', provider: 'test', batchSize: 8,
+      queries: benchmark.cases.map(({ id }) => ({ case: id, latencyMs: 1, scores: ids.map((item) => ({ id: item, score: item === target[id] ? 0.9 : item === 'rota_c' ? 0.5 : 0.1 })) }))
+    },
+    environment: null
+  };
+  const context = { catalogue, benchmark };
+  const run = await collectSemanticRun({ ...context, ...recordedModels(readModelRun(raw, context), context), limit: 3 });
+  assert.equal(run.index.outcome, 'ok');
+  for (const entry of run.cases) {
+    assert.equal(entry.firstStage[0].id, target[entry.case], entry.case);
+    assert.deepEqual(entry.reranked.map(({ id, relevance }) => [id, relevance]), [[target[entry.case], 0.9], ['rota_c', 0.5], [target[entry.case] === 'rota_a' ? 'rota_b' : 'rota_a', 0.1]], entry.case);
+  }
+  const summary = summarizeSemanticRun(run, benchmark, { cutoffs: [1, 3], ndcgCutoff: 3 });
+  assert.deepEqual([summary.stages.embedding.answer.hitAt1, summary.stages.reranked.answer.hitAt1], [1, 1]);
 });

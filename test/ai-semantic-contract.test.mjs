@@ -32,7 +32,7 @@ const {
   semanticModelProvenance,
   semanticToolDefinitions
 } = await import('../src/domain/ai/semanticContract.js');
-const { AI_PROFILES, resolveModelProfile, validateModelRegistry } = await import('../src/domain/ai/aiModelRegistry.js');
+const { AI_CAPABILITIES, AI_PROFILES, resolveModelProfile, validateModelRegistry } = await import('../src/domain/ai/aiModelRegistry.js');
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
 const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
 
@@ -212,6 +212,17 @@ test('model kökeni yalnızca kayıttan çözülen ve profilin yeteneğini taş�
   assert.notEqual(createEmbeddingSpace(provenance, 'e5-query-passage-v1').key, space.key);
   assert.notEqual(createEmbeddingSpace({ ...provenance, model: 'baska-model' }, 'none').key, space.key);
   assert.notEqual(createEmbeddingSpace({ ...provenance, provider: 'baska-saglayici' }, 'none').key, space.key);
+  // Değişen erişimci doğrulamayı bir değerle geçip kökene ya da uzaya başka değer yazamaz: alanlar bir kez okunur.
+  const changing = (first, then, fields = {}) => {
+    let reads = 0;
+    return { ...fields, get model() { reads += 1; return reads === 1 ? first : then; } };
+  };
+  const snapped = createEmbeddingSpace(changing('valid-model', 'bad model', { profile: AI_PROFILES.EMBEDDING, provider: 'test' }), 'none');
+  assert.equal(snapped.model, 'valid-model');
+  assert.equal(snapped.key, createEmbeddingSpace({ profile: AI_PROFILES.EMBEDDING, model: 'valid-model', provider: 'test' }, 'none').key);
+  assert.equal(createEmbeddingSpace(changing('bad model', 'valid-model', { profile: AI_PROFILES.EMBEDDING, provider: 'test' }), 'none'), null);
+  const route = changing('valid-model', 'bad model', { profile: AI_PROFILES.RERANK, provider: 'test', capabilities: [AI_CAPABILITIES.RERANK] });
+  assert.deepEqual(semanticModelProvenance(route, AI_PROFILES.RERANK), { profile: AI_PROFILES.RERANK, model: 'valid-model', provider: 'test' });
 });
 
 test('gömme yanıtı güvenilmez veridir: biçim, sayı, dizin, boyut ve sonluluk denetlenir', () => {

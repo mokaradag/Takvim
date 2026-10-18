@@ -13,7 +13,7 @@
  *
  * Ayrıntı: docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerServerOnlyShim } from '../test/helpers/serverOnlyShim.mjs';
@@ -26,7 +26,8 @@ const INPUT_FORMAT = 'mergen-rota-semantic-input';
 const MODEL_RUN_FORMAT = 'mergen-rota-semantic-model-run';
 
 const {
-  SEMANTIC_LIMITS, createEmbeddingSpace, createSemanticCatalogue, semanticModelProvenance, semanticToolDefinitions
+  SEMANTIC_LIMITS, createEmbeddingSpace, createSemanticCatalogue, createSemanticIndex, rankSemanticIndex, semanticModelProvenance,
+  semanticToolDefinitions
 } = await import('../src/domain/ai/semanticContract.js');
 const {
   SEMANTIC_EVALUATION_DEFAULTS, collectSemanticRun, semanticLatencySummary, summarizeSemanticRun, validateSemanticBenchmark
@@ -128,7 +129,7 @@ function readEnvironment(environment) {
  * (kimlik kümesi ve koşucunun GERÇEKTEN değerlendirdiği metin girdiyle birebir),
  * yeniden sıralama satırları ve skor kimlikleri, gecikmeler ve ortam.
  */
-function readModelRun(raw, { catalogue, benchmark }) {
+export function readModelRun(raw, { catalogue, benchmark }) {
   const run = closed(raw, RUN_FIELDS, 'üst düzey');
   if (run.format !== MODEL_RUN_FORMAT || run.version !== 1) fail('Koşu dosyasının biçimi tanınmadı.');
   if (run.benchmark !== benchmark.fingerprint || run.catalogue !== catalogue.fingerprint) {
@@ -190,24 +191,33 @@ function inferenceFailure() {
   return Object.assign(new Error(INFERENCE_FAILED), { code: INFERENCE_FAILED });
 }
 
-/** Doğrulanmış kayıtlı çıktıları model sınırı işlevlerine çevirir; değerler yine sözleşmede doğrulanır. */
-function recordedModels(trusted, { catalogue, benchmark }) {
+/**
+ * Doğrulanmış kayıtlı çıktıları model sınırı işlevlerine çevirir; değerler yine sözleşmede doğrulanır.
+ * Katalog metinleri tekil olmak zorunda değildir: belge çıktısı katalog sırasıyla (konum → kimlik),
+ * yeniden sıralama skoru adayın kimliğiyle eşlenir. Vaka metinleri kıyas sözleşmesince tekildir.
+ */
+export function recordedModels(trusted, { catalogue, benchmark }) {
   const caseOf = new Map(benchmark.cases.map((testCase) => [testCase.text, testCase.id]));
-  const itemOf = new Map(catalogue.items.map((item) => [item.text, item.id]));
-  if (itemOf.size !== catalogue.items.length) fail('Katalog belge metinleri tekil değil; kayıtlı çıktılar belgelere eşlenemez.');
-  const embed = async (texts, { purpose }) => texts.map((text, index) => {
-    if (purpose === 'document') return { index, vector: trusted.documents.get(itemOf.get(text)).vector };
-    const row = trusted.queries.get(caseOf.get(text));
+  const documents = catalogue.items.map((item, index) => ({ index, vector: trusted.documents.get(item.id).vector }));
+  const embed = async (texts, { purpose }) => {
+    if (purpose === 'document') return documents;
+    const row = trusted.queries.get(caseOf.get(texts[0]));
     if (row.failure) throw inferenceFailure();
-    return { index, vector: row.vector };
-  });
+    return [{ index: 0, vector: row.vector }];
+  };
   const embedding = { space: trusted.space, embed };
   if (!trusted.rerank) return { embedding, reranking: null };
   const { provenance, scores } = trusted.rerank;
+  // Yeniden sıralayıcıya yalnızca metin gider; aynı metinli adaylar ancak kimlikle ayrılır. Adayların kimliği
+  // koşucunun ilk aşamasıyla aynı belirlenimci sıralamadan (aynı dizin, aynı sorgu vektörü) yeniden kurulur.
+  const built = createSemanticIndex(catalogue, trusted.space, documents);
   const rerank = async (query, texts) => {
-    const byItem = scores.get(caseOf.get(query));
-    if (!byItem) throw inferenceFailure();
-    return texts.map((text, index) => ({ index, score: byItem.get(itemOf.get(text)).score }));
+    const id = caseOf.get(query);
+    const byItem = scores.get(id);
+    if (!byItem || !built.ok) throw inferenceFailure();
+    const ranked = rankSemanticIndex(built.index, { space: trusted.space, embeddings: [{ index: 0, vector: trusted.queries.get(id).vector }], limit: texts.length });
+    if (!ranked.ok) throw inferenceFailure();
+    return ranked.candidates.map((candidate, index) => ({ index, score: byItem.get(candidate.id).score }));
   };
   return { embedding, reranking: { provenance, rerank } };
 }
@@ -244,11 +254,11 @@ function markdown(summary, qualification, benchmark) {
     row('Top-1', (stage) => stage.answer.hitAt1, summary.uplift?.hitAt1),
     row('MRR', (stage) => stage.answer.mrr, summary.uplift?.mrr),
     ...summary.cutoffs.map((k) => row(`Recall@${k}`, (stage) => stage.answer.recall[k], summary.uplift?.recall[k])),
-    row(`Kapsama@${kMax}`, (stage) => stage.answer.coverage[kMax]),
+    row(`Kapsama@${kMax}`, (stage) => stage.answer.coverage[kMax], summary.uplift?.coverage[kMax]),
     row(`NDCG@${summary.ndcgCutoff}`, (stage) => stage.answer.ndcg, summary.uplift?.ndcg),
-    row('Kaçınma çifti tutarlılığı', (stage) => stage.answer.avoid.rate),
-    row(`Açıklama vakalarında kapsama@${kMax}`, (stage) => stage.clarifyCoverage.rate),
-    row('Kapsam dışı ayrılabilirliği (AUROC)', (stage) => stage.abstainSeparability),
+    row('Kaçınma çifti tutarlılığı', (stage) => stage.answer.avoid.rate, summary.uplift?.avoid),
+    row(`Açıklama vakalarında kapsama@${kMax}`, (stage) => stage.clarifyCoverage.rate, summary.uplift?.clarifyCoverage),
+    row('Kapsam dışı ayrılabilirliği (AUROC)', (stage) => stage.abstainSeparability, summary.uplift?.abstainSeparability),
     '',
     `Gecikme (koşucunun ölçtüğü): katalog ${summary.latency.index == null ? '—' : `${Math.round(summary.latency.index)} ms`} (${workload.index.documentsPerCall} belge, tek çağrı) · sorgu gömme ${latency(summary.latency.embedding)} (çağrı başına 1 sorgu) · yeniden sıralama ${latency(summary.latency.rerank)}${workload.rerank ? ` (çağrı başına bütün katalog: ${workload.rerank.documentsPerCall} belge; kalite ölçüleri ilk ${summary.limit} aday üzerindedir)` : ''}`,
     '',
@@ -338,7 +348,19 @@ async function report(context, flags) {
   }
 }
 
-const { command, flags } = parseArguments(process.argv.slice(2));
-if (command === 'input') writeInput(load(), flags.out);
-else if (command === 'report') await report(load(), flags);
-else fail('Kullanım: node scripts/semantic-evaluation.mjs input [--out dosya] | report --run dosya [--limit 10] [--json]');
+// Komut yalnızca doğrudan çalıştırıldığında yürür; sınama yeniden oynatımı içe aktararak kendi kataloğuyla sınar.
+// Yollar gerçek yola çevrilerek karşılaştırılır: sembolik bağ, Windows bağlantı noktası ya da subst sürücüsü komutu susturamaz.
+function invokedDirectly() {
+  try {
+    return Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (invokedDirectly()) {
+  const { command, flags } = parseArguments(process.argv.slice(2));
+  if (command === 'input') writeInput(load(), flags.out);
+  else if (command === 'report') await report(load(), flags);
+  else fail('Kullanım: node scripts/semantic-evaluation.mjs input [--out dosya] | report --run dosya [--limit 10] [--json]');
+}

@@ -150,10 +150,12 @@ export function isSemanticCatalogue(value) {
  * `resolveModelProfile`); köken yetki taşımaz, yalnızca uzayı adlandırır.
  */
 export function semanticModelProvenance(route, profile) {
-  if (typeof profile !== 'string' || !Object.hasOwn(PROFILE_CAPABILITY, profile) || !isRecord(route) || route.profile !== profile) return null;
-  if (!Array.isArray(route.capabilities) || !route.capabilities.includes(PROFILE_CAPABILITY[profile])) return null;
-  if (!token(route.model, MODEL_TOKEN) || !token(route.provider, MODEL_TOKEN)) return null;
-  return Object.freeze({ profile, model: route.model, provider: route.provider });
+  if (typeof profile !== 'string' || !Object.hasOwn(PROFILE_CAPABILITY, profile) || !isRecord(route)) return null;
+  // Alanlar bir kez okunur: doğrulanan değer kökene yazılan değerdir.
+  const { profile: routeProfile, capabilities, model, provider } = route;
+  if (routeProfile !== profile || !Array.isArray(capabilities) || !capabilities.includes(PROFILE_CAPABILITY[profile])) return null;
+  if (!token(model, MODEL_TOKEN) || !token(provider, MODEL_TOKEN)) return null;
+  return Object.freeze({ profile, model, provider });
 }
 
 /**
@@ -161,9 +163,11 @@ export function semanticModelProvenance(route, profile) {
  * karşılaştırılabilir. Uzay değişirse onunla kurulmuş dizin geçersizdir.
  */
 export function createEmbeddingSpace(provenance, preprocessing) {
-  if (provenance?.profile !== AI_PROFILES.EMBEDDING || !token(preprocessing, PREPROCESSING)) return null;
-  if (!token(provenance.model, MODEL_TOKEN) || !token(provenance.provider, MODEL_TOKEN)) return null;
+  if (!isRecord(provenance)) return null;
+  // Köken alanları bir kez okunur: doğrulanan değer uzaya yazılan değerdir.
   const { profile, model, provider } = provenance;
+  if (profile !== AI_PROFILES.EMBEDDING || !token(preprocessing, PREPROCESSING)) return null;
+  if (!token(model, MODEL_TOKEN) || !token(provider, MODEL_TOKEN)) return null;
   const space = Object.freeze({
     profile, model, provider, preprocessing,
     key: semanticFingerprint([SEMANTIC_CONTRACT_VERSION, profile, model, provider, preprocessing])

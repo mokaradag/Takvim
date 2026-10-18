@@ -495,7 +495,8 @@ function outcomeCounts(records) {
 
 /* ── Koşu kaydının güven sınırı ─────────────────────────── */
 
-const RUN_ERRORS = new Set(['SEMANTIC_RUN_STALE', 'SEMANTIC_RUN_INVALID']);
+// Bayat koşu iç işaretle ayrılır: güvenilmez erişimcinin fırlattığı aynı iletili hata bayat sayılmaz.
+const STALE_RUN = Symbol('SEMANTIC_RUN_STALE');
 const runInvalid = () => new TypeError('SEMANTIC_RUN_INVALID');
 const isLatency = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const hasExactFields = (record, fields) => {
@@ -630,7 +631,7 @@ function readRun(run, benchmark) {
   if (!isRecord(run)) throw runInvalid();
   const { format, version, benchmark: fingerprint, catalogue, embedding, limit, reranker: rawReranker, index, cases } = run;
   if (format !== SEMANTIC_RUN_FORMAT || version !== SEMANTIC_RUN_VERSION || fingerprint !== benchmark.fingerprint || catalogue !== benchmark.catalogue) {
-    throw new Error('SEMANTIC_RUN_STALE');
+    throw STALE_RUN;
   }
   if (!hasExactFields(run, RUN_FIELDS)) throw runInvalid();
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > SEMANTIC_LIMITS.maxCandidates) throw runInvalid();
@@ -640,7 +641,7 @@ function readRun(run, benchmark) {
   const indexRecord = readCall(index, { catalogue: benchmark.catalogue, space });
   const list = denseCopy(cases, benchmark.cases.length);
   if (!list) throw runInvalid();
-  const known = new Set(benchmark.cases.map((testCase) => testCase.id));
+  const positionOf = new Map(benchmark.cases.map((testCase, position) => [testCase.id, position]));
   const context = {
     depth: Math.min(limit, benchmark.items.length),
     catalogueOrder: new Map(benchmark.items.map((id, position) => [id, position])),
@@ -648,10 +649,13 @@ function readRun(run, benchmark) {
     indexed: indexRecord.outcome === OK
   };
   const byCase = new Map();
+  let previous = -1;
   for (const raw of list) {
     const entry = readEntry(raw, context);
-    // Kıyas kümesinde olmayan ya da yinelenen vaka satırı sessizce yok sayılmaz ya da ezilmez.
-    if (!known.has(entry.case) || byCase.has(entry.case)) throw runInvalid();
+    // Satırlar koşucunun yazdığı kıyas kümesi sırasındadır: yabancı, yinelenen ya da geri giden vaka reddedilir; atlanan vaka kısmi koşunun ıskasıdır.
+    const position = positionOf.get(entry.case);
+    if (!(position > previous)) throw runInvalid();
+    previous = position;
     byCase.set(entry.case, entry);
   }
   checkHalt(benchmark, byCase);
@@ -685,7 +689,7 @@ function trustedRun(run, benchmark) {
   try {
     return readRun(run, benchmark);
   } catch (error) {
-    if (error instanceof Error && RUN_ERRORS.has(error.message)) throw error;
+    if (error === STALE_RUN) throw new Error('SEMANTIC_RUN_STALE');
     throw runInvalid();
   }
 }
@@ -720,7 +724,8 @@ export function summarizeSemanticRun(run, benchmark, { cutoffs: requested = SEMA
     top: entry?.reranked?.[0]?.relevance ?? null
   }), options) : null;
   const difference = (after, before) => (after == null || before == null ? null : after - before);
-  const delta = (key) => difference(rerankStage.answer[key], embeddingStage.answer[key]);
+  const delta = (pick) => difference(pick(rerankStage), pick(embeddingStage));
+  const byCutoff = (pick) => Object.fromEntries(cutoffs.map((k) => [k, delta((stage) => pick(stage)[k])]));
   const { profile, model, provider, preprocessing } = trusted.space;
   return {
     benchmark: benchmark.fingerprint,
@@ -747,9 +752,17 @@ export function summarizeSemanticRun(run, benchmark, { cutoffs: requested = SEMA
       rerank: reranking ? outcomeCounts(rows.map(({ entry }) => entry?.rerank)) : null
     },
     stages: { embedding: embeddingStage, reranked: rerankStage },
-    uplift: rerankStage
-      ? { hitAt1: delta('hitAt1'), mrr: delta('mrr'), ndcg: delta('ndcg'), recall: Object.fromEntries(cutoffs.map((k) => [k, difference(rerankStage.answer.recall[k], embeddingStage.answer.recall[k])])) }
-      : null,
+    // Yeniden sıralama katkısı her aşama ölçüsü için aynı tanımdır: yeniden sıralama sonrası − ilk aşama.
+    uplift: rerankStage ? {
+      hitAt1: delta((stage) => stage.answer.hitAt1),
+      mrr: delta((stage) => stage.answer.mrr),
+      ndcg: delta((stage) => stage.answer.ndcg),
+      recall: byCutoff((stage) => stage.answer.recall),
+      coverage: byCutoff((stage) => stage.answer.coverage),
+      avoid: delta((stage) => stage.answer.avoid.rate),
+      clarifyCoverage: delta((stage) => stage.clarifyCoverage.rate),
+      abstainSeparability: delta((stage) => stage.abstainSeparability)
+    } : null,
     // Gecikme nüfusu: gerçekten yapılan çağrılar (başarısızlar dâhil); hiç çağrılmayan vaka girmez.
     latency: {
       index: trusted.index.latencyMs ?? null,
