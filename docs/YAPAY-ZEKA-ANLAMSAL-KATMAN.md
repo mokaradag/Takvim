@@ -670,7 +670,7 @@ retrieveSemanticCandidates({ query, signal })
   → sunucuya ait katalog (Aşama 3 araç kayıt defteri, 19 araç; 4A)
   → profil kullanılabilirliği (kayıt; ağ geçidi çağrılmaz)
   → ağ geçidi embedTexts(query)  → `embedding` profili, `query` öneki
-  → süreç içi dizin (yoksa tek uçuşla: embedTexts(katalog) → `passage` öneki → createSemanticIndex)
+  → süreç içi dizin (yoksa tek uçuşla: embedServerCatalogue() → `passage` öneki → createSemanticIndex)
   → rankSemanticIndex: ilk aşama, en çok 10 aday (4A)
   → ağ geçidi rerankTexts(sorgu, 10 adayın açıklaması) → `rerank` profili
   → applyRerankScores (4A): yalnızca aynı adayların permütasyonu
@@ -715,10 +715,13 @@ yarıya indirir. Değer sabittir; isteğe göre değişen "topK" yoktur.
 - **Belirteç penceresi.** Karakter sınırı (sorgu 2000, belge 4000) belirteç
   penceresini kanıtlamaz ve ağ geçidi belirteç SAYMAZ (belirteçleyici uçtadır).
   Kural açıktır ve kayıttadır: `truncateTokens: N` varsa uç, önekli metni
-  belirteçlere ayırır ve pencereyi aşan girdinin **ilk N belirtecini (önek
-  dâhil)** gömer — istek `truncate_prompt_tokens: N, truncation_side: "right"`
-  taşır (vLLM 0.31.0; pooling modellerinde sağdan kesme, E5 model kartındaki
-  512 belirteç kesmesiyle aynı). Alan yoksa kesme istenmez ve pencereyi aşan
+  belirteçlere ayırır ve pencereyi aşan girdiyi **önek ve özel belirteçler
+  korunarak N belirtece** sınırlar — istek yalnızca `truncate_prompt_tokens: N`
+  taşır. `truncation_side` gönderilmez: vLLM 0.31.0
+  `vllm/renderers/params.py` içindeki `get_encode_kwargs`, açık yön verilirse
+  belirteçleyici kesmesini kapatır; sonradan dizi kesmek E5 kapanış belirtecini
+  düşürebilir. E5 belirteçleyicisinin varsayılan sağ yönü kullanılır.
+  Alan yoksa kesme istenmez ve pencereyi aşan
   girdiyi uç reddeder (vLLM 400): sorgu için `unavailable`/`rejected`, sunucuya
   ait katalog belgesi için `configuration` (`PROVIDER_REJECTED_FIXED_REQUEST`).
   `truncateTokens`, modelin `contextTokens` değerini aşamaz. Kesme yalnızca
@@ -757,7 +760,7 @@ sıralama sözleşmesiyle doğrulandı:
 
 | İşlem | İstek | Yanıt → sözleşme biçimi |
 | --- | --- | --- |
-| `embeddings` | `POST {base}/embeddings` `{ model, input: [...], encoding_format: "float" }` (+ `truncate_prompt_tokens`, `truncation_side: "right"` yalnızca `truncateTokens` varsa) | `data[{ index, embedding }]` → `[{ index, vector }]` |
+| `embeddings` | `POST {base}/embeddings` `{ model, input: [...], encoding_format: "float" }` (+ yalnızca `truncate_prompt_tokens`, `truncateTokens` varsa) | `data[{ index, embedding }]` → `[{ index, vector }]` |
 | `rerank` | `POST {base}/rerank` `{ model, query, documents: [...], top_n: n }` | `results[{ index, relevance_score }]` → `[{ index, score }]` |
 
 - Bağdaştırıcı yalnızca zarfı doğrular (dizi değilse
@@ -779,10 +782,15 @@ sıralama sözleşmesiyle doğrulandı:
   `maxConcurrency` sınırı dâhil) → süre sınırı (profilin `timeoutMs` ya da
   genel sınır) → kimlik bilgisi → sağlayıcı → telemetri; kira ve süre sınırı
   her yolda bırakılır.
-- **Sunucuya ait katalog belgesi** (`purpose: document`) çağıranın güvenilir
-  kimliğini ve rehber üyeliğini yine doğrular, ama kullanıcının kapasite payını
-  ve anahtarını kullanmaz: sunucu kapasite anahtarı (küresel ve model sınırları
-  geçerli) ve **kurumsal anahtar** (`MERGEN_ROTA_AI_DEFAULT_API_KEY`) ile
+- **Sunucuya ait katalog belgesi** yalnızca `embedServerCatalogue` ile gömülür;
+  metinler ağ geçidinde sabit sunucu araç kaydından üretilir, çağırandan alınmaz.
+  `embedTexts` içindeki `purpose: document` yalnızca öneki seçer; kullanıcı
+  doğrulamasını, payını, anahtarını ya da hata sınıfını değiştirmez. Paylaşılan
+  katalog işi kullanıcı rehberine yeniden başvurmaz; her çağıran kendi sorgu
+  gömmesinde ve yeniden sıralamasında bağımsız doğrulanır. Katalog işi sunucu
+  kapasite anahtarı (küresel ve model sınırları geçerli; insan başına etkin/sıra
+  sınırları uygulanmaz) ve **kurumsal anahtar**
+  (`MERGEN_ROTA_AI_DEFAULT_API_KEY`) ile
   yürür. Kurulumu hangi kullanıcı başlatırsa başlatsın onun kişisel anahtarı,
   kotası, iptal edilmiş anahtarı ya da dolu kullanıcı payı paylaşılan dizini
   düşüremez ve katalog gömmesi ona faturalanmaz. Kurumsal anahtar yoksa
@@ -828,7 +836,10 @@ sıralama sözleşmesiyle doğrulandı:
   uyuşmayan istekler onu bekler (eşzamanlı geçişte `unavailable` dönmez);
   YENİ bir yeniden kurulum ise anahtar başına en çok
   `SEMANTIC_DIMENSION_REBUILD_COOLDOWN_MS` (60 sn) aralıkla başlatılır: farklı boyutlu arka uçları karıştıran bir uç her
-  istekte kataloğu yeniden gömdüremez. Gerçek bir boyut geçişinde danışmanlık
+  istekte kataloğu yeniden gömdüremez. Zamanlar anahtar başına tutulur; süresi
+  dolan kayıtlar budanır. En çok 256 yaşayan kayıt tutulur; tablo doluyken
+  mevcut bekleme süreleri silinmez, yeni anahtarın yeniden kurulumu bekler.
+  Gerçek bir boyut geçişinde danışmanlık
   süreç yeniden başlatılmadan, en geç bu sürede döner.
 - Kurulum **anahtar başına tek uçuştur**: aynı anahtardaki eşzamanlı istekler
   tek katalog gömmesini paylaşır; arada başka anahtar istense de süren kurulum
@@ -1161,9 +1172,12 @@ kapısını geçti mi?" sorusu DEĞİL.
   `truncate_prompt_tokens: 512, truncation_side: right` taşıdı, iş yükü
   künyesi gerçek çağrı sayısını (117/117) yazdı; türetilen kümenin parmak izi
   özgününden farklı. Üretim `semanticRetrieval` hizmeti (gerçek ağ geçidi →
-  bağdaştırıcı → HTTP) sırayla özgün, kabul edilen ve elenmemiş ham 117 ifadede
-  117/117 `reranked` döndü; hiçbir aday katalog dışında değil, en çok 10 aday;
-  katalog bir kez kuruldu (kurumsal anahtarla) ve 233 kez yeniden kullanıldı.
+  bağdaştırıcı → HTTP) için önceki kayıt üç 117 sorguluk kümede `reranked`
+  sonucu ve bir kurulumla 233 yeniden kullanım bildirmişti. Bu iki iddia
+  tutarsızdır: üç tam geçiş 350 yeniden kullanım gerektirir; 233 ise iki
+  geçişe karşılık gelir. Ham ölçüm raporu depoda bulunmadığından hangi
+  geçişlerin yapıldığı doğrulanamıyor; geçiş ve toplam yeniden kullanım
+  sayısı doğrulanmış ölçüm olarak verilmez.
 - İkiz anlam taşımadığı için **hiçbir kalite sayısı (Top-1, MRR, Recall,
   NDCG, yeniden sıralama katkısı, özgün–yeniden ifade farkı) raporlanmadı**;
   bu sayılar kurum içi VM'de gerçek modellerle `live --queries` ile ölçülür.
@@ -1239,8 +1253,8 @@ alanını uygulamıştır.
 
 | Dosya | Kapsam |
 | --- | --- |
-| `test/ai-semantic-contract.test.mjs` | Yapısal sorgu normalleştirme (NFC, temizlikten sonra NFC ve tekrar edilebilirlik, İ/I, görünmez karakter, sınırlar); katalog ve parmak izleri (negatif, kesirli, güvensiz ya da değişen uzunluk dâhil); Aşama 3 kayıt defterinden katalog; model kökeni ve uzay (okumalar arasında değişen köken alanı dâhil); bozuk gömme yanıtları (Proxy uzunluğu, fırlayan erişimci dâhil); belirlenimci, sınırlı sıralama ve eşitlik; bayat uzay; yeniden sıralama sözleşmesi; enjeksiyon metninin etkisizliği; kimlik/yetki/SQL yüzeyi olmaması; sözleşmenin üretimde yalnızca keşif hizmetince (ağ geçidi ve bağdaştırıcı yalnızca sınırları) kullanılması |
-| `test/ai-semantic-gateway.test.mjs` | Bağdaştırıcının gerçek soketle tel biçimi (`/embeddings`, `/rerank`, `encoding_format`, `top_n`), değerlerin çevrilmemesi; bozuk zarf, sayı olmayan model kimliği ve HTTP durumlarının kararlı kodu, hata gövdesinin taşınmaması; girdi sayısıyla ölçeklenen okuma sınırı (4096 boyutlu katalog); ağ geçidinde öneklerin kayıttan ve tek yerde eklenmesi; girdi sınırları; profil/yetenek çözümü; `MODEL_MISMATCH` ve kayıtta bildirilen uç adlarının (`reportedModels`) kabulü, başka modelin adının reddi; belirteç penceresi (vLLM 0.31.0 ikizi: kesme yokken aşan sorgu `AI_REQUEST_INVALID`, aşan katalog belgesi yapılandırma hatası; `truncateTokens` ile tel gövdesinde `truncate_prompt_tokens`/`truncation_side: right` ve önekin korunması; karakter sınırındaki girdi); en kötü biçimli en büyük boyutlu geçerli yanıtın kabulü ve bütçeyi aşan bozuk yanıtın ayrıştırılmaması, bütçenin sözleşme tavanı; katalog belgesinin kurumsal anahtar ve sunucu kapasite anahtarıyla gitmesi (kullanıcının payı dolu ya da anahtarı kişiselken), kurumsal anahtar yokken `DEFAULT_KEY_REQUIRED`; sabit istek reddinin yapılandırma hatası olması; dar yineleme; modelin eşzamanlılık sınırı ve sıradayken iptal; süre aşımı, iptal ve geç yanıt; her yolda kiranın bırakılması; içeriksiz günlük; açık SQL işlemi reddi |
+| `test/ai-semantic-contract.test.mjs` | Yapısal sorgu normalleştirme (NFC, temizlikten sonra NFC ve tekrar edilebilirlik, İ/I, görünmez karakter, sınırlar); katalog ve parmak izleri (negatif, kesirli, güvensiz ya da değişen uzunluk dâhil); Aşama 3 kayıt defterinden katalog; model kökeni ve uzay (okumalar arasında değişen köken alanı dâhil); bozuk gömme yanıtları (Proxy uzunluğu, fırlayan erişimci dâhil); belirlenimci, sınırlı sıralama ve eşitlik; bayat uzay; yeniden sıralama sözleşmesi; enjeksiyon metninin etkisizliği; kimlik/yetki/SQL yüzeyi olmaması; sözleşmenin üretimde keşif hizmetince kullanılması (ağ geçidinde yalnızca sabit katalog ve sınırlar, bağdaştırıcıda yalnızca sınırlar) |
+| `test/ai-semantic-gateway.test.mjs` | Bağdaştırıcının gerçek soketle tel biçimi (`/embeddings`, `/rerank`, `encoding_format`, `top_n`), değerlerin çevrilmemesi; bozuk zarf, sayı olmayan model kimliği ve HTTP durumlarının kararlı kodu, hata gövdesinin taşınmaması; girdi sayısıyla ölçeklenen okuma sınırı (4096 boyutlu katalog); ağ geçidinde öneklerin kayıttan ve tek yerde eklenmesi; girdi sınırları; profil/yetenek çözümü; `MODEL_MISMATCH` ve kayıtta bildirilen uç adlarının (`reportedModels`) kabulü, başka modelin adının reddi; belirteç penceresi (vLLM 0.31.0 ikizi: kesme yokken aşan sorgu `AI_REQUEST_INVALID`, aşan kullanıcı belgesi de `AI_REQUEST_INVALID`, sabit katalog belgesi yapılandırma hatası; `truncateTokens` ile tel gövdesinde `truncate_prompt_tokens` ve açık yönün bulunmaması, uzun sorgu/belgede önekin ve özel belirteçlerin korunması; karakter sınırındaki girdi); en kötü biçimli en büyük boyutlu geçerli yanıtın kabulü ve bütçeyi aşan bozuk yanıtın ayrıştırılmaması, bütçenin sözleşme tavanı; katalog belgesinin kurumsal anahtar ve sunucu kapasite anahtarıyla gitmesi (kullanıcının payı dolu ya da anahtarı kişiselken), kurumsal anahtar yokken `DEFAULT_KEY_REQUIRED`; sabit istek reddinin yapılandırma hatası olması; dar yineleme; modelin eşzamanlılık sınırı ve sıradayken iptal; süre aşımı, iptal ve geç yanıt; her yolda kiranın bırakılması; içeriksiz günlük; açık SQL işlemi reddi |
 | `test/ai-semantic-retrieval.test.mjs` | Keşif akışı (normalleştirme, önekler, tek katalog gömmesi, sınırlı ilk aşama, yalnızca o adayların yeniden sıralanması), derinliğin değerlendirmeyle bağı, eşitlik sırası, gerçek araç kataloğu; tek uçuşlu kurulum (20 eşzamanlı istek), başarısız kurulumun önbelleğe girmemesi, başlatanın iptalinin paylaşılan kurulumu düşürmemesi, yalnızca en son kurulumun görünmesi, A → B → A sırasında süren kurulumun yeniden kullanılması, takılan kurulumun süre sınırında düşmesi; geçerli boyut geçişinde dizinin yeniden kurulması, düşen yeniden kurulumda geçerli dizinin korunması, eşzamanlı geçişte süren kurulumun paylaşılması ve karışık boyutlu uçta bekleme süresi; paylaşılan dizinin kurulumu başlatan kullanıcının kişisel anahtarı ya da kotasıyla düşmemesi; açıklama/sürüm/sıra/model/belirteç/önek değişince yeniden kurulum, kurulum sırasında değişen rota (`stale`); bozuk katalog ve sorgu gömmesi tabloları; yeniden sıralama düşüş tablosu (bozuk çıktı ve hizmet hataları → `first_stage`); kapalı profiller, kapalı yapay zekâ ve geçersiz yapılandırma; hizmet hatası sınıfları ve kapasite; geçersiz sorgu ve katalog; her evrede iptal ve geç sonuç; enjeksiyon metninin sonuca, günlüğe ve telemetriye girmemesi; anlamsal sağlık işleminin `ai.request` kuralıyla sınıflanması (kurumsal anahtar reddi hizmet hatası; kişisel anahtar reddi/oran sınırı, kullanıcının kendi kapasite sınırı ve istek reddi değil); iç hatanın (açık SQL işlemi, sağlayıcının beklenmeyen istisnası) her evrede yukarı taşınması; süreç düzeyi tam yığın (oturum, rehber, anahtar), SQL işlemi ve kimlik hatasının yukarı taşınması; durağan mimari sınırları (sağlayıcı yalnızca ağ geçidinde, Türkçe kalıp ya da araca özel dal yok, model adı yok, Aşama 3 turuna bağlanmama) |
 | `test/ai-semantic-evaluation.test.mjs` | Kıyas kümesinin yapısı, sentetikliği ve sızıntısızlığı; üretim kodunun kıyas kümesinden bağımsızlığı; kapalı yapı (seyrek dizi, açık `null`, bozuk grup, bilinmeyen alan, okunamayan belge, taklit katalog) tablosu; elle hesaplanan ölçüler ve her ölçünün yeniden sıralama katkısı; kâhin ikizle tam küme; başarısız/geçersiz/süresi dolan çağrıların ıska sayılması; model işlevinin `TimeoutError` ile bildirdiği süre aşımının `timeout` sayılması; çağrı süre sınırı üst değerinin ağ geçidi yaşam döngüsünü kapsaması; sinyale uymayan modelde koşunun durması; iptal yarışları; yeniden sıralama düşüşü; dizin kurulamaması; iptal; gecikme özeti; koşu kaydı durum makinesinin geçerli/geçersiz durum tabloları (bayat sürüm, bayat iletili fırlayan erişimcinin `INVALID` sayılması, kapalı alanlar, yabancı/yinelenen/geri giden satır, atlanan ara satır, sonuç–yük çelişkisi, çağrılmayan ıska biçimi, dizin durumu, duruş dilimi ve `halted` kararı, kısmi koşu, eşitlik sırası, köken ve dizin kimliği, permütasyon olmayan yeniden sıralama, negatif gecikme, sınırdan derin kesim); uzunluğu okumalar arasında değişen dizi; planlayıcı karar ölçüleri ve güvenilmez karar tablosu (okunamayan liste, korunan vaka kimliği) |
 | `test/ai-semantic-qualification.test.mjs` | Nitelendirme komutu: parmak izli girdi; kâhin koşu dosyasıyla rapor ve `qualification` künyesi (model, önekler, yeniden sıralayıcı, aday sınırı, gecikme iş yükü); bayat, eksik/fazla/yabancı/yinelenen satırlı, değiştirilmiş metinli, negatif gecikmeli, öneki çelişkili, bilinmeyen alanlı ya da güvensiz hata kodlu koşunun reddi; bozuk değerin ve `INFERENCE_FAILED` satırının ıska sayılması; dizini kurulamayan koşunun reddi; bütün katalog yeniden sıralama skoru doğrulaması ve gerçek çağrı nüfusu; `batchSize` künyesi; Markdown enjeksiyonunun etkisizliği; yeniden sıralamalı raporda her ölçünün "Fark" hücresi; `--limit` sınırı; aynı açıklamalı iki katalog öğesinin yeniden oynatımda kendi kimliğinin vektörünü ve skorunu alması; `live`: üretim yolundan (ağ geçidi + bağdaştırıcı + yerel HTTP ikizi) kâhin uçla kusursuz ölçü, kayıttan gelen profil ve önekler, tek katalog gömmesi, 10 adaylık yeniden sıralama, künye; `--queries` ile türetilen küme ve bozuk soru dosyalarının reddi; anahtarsız ya da kapalı yapılandırmanın ve kurulamayan dizinin reddi; yeniden sıralama profili kapalıyken yalnızca ilk aşama, bozuk yeniden sıralama eşlemesinin reddi; üretimden farklı `--limit` değerinin reddi; bağlantı hatası yinelenen koşuda stdout'un ayrıştırılabilir JSON kalması (günlük stderr'de); `.env.local` ortam kaynağı ve kabuk önceliği, anahtarın yazılmaması; ağ geçidi süre aşımının `timeout` sayılması; durmuş koşuda iş yükünün yalnızca gerçek çağrıları sayması; dış süre sınırının ağ geçidinin en uzun yaşam döngüsünü kapsaması; belirteç penceresinin künyede ve tel gövdesinde olması |

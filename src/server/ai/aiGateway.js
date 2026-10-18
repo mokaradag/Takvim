@@ -5,10 +5,11 @@ import {
   AI_CAPABILITIES,
   AI_EMBEDDING_PURPOSES,
   AI_MAX_OUTPUT_TOKENS,
+  AI_PROFILES,
   AI_NO_PREPROCESSING,
   resolveModelProfile
 } from '../../domain/ai/aiModelRegistry.js';
-import { SEMANTIC_LIMITS } from '../../domain/ai/semanticContract.js';
+import { createSemanticCatalogue, semanticToolDefinitions, SEMANTIC_LIMITS } from '../../domain/ai/semanticContract.js';
 import { isWithinSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { getTrustedCurrentSicil } from '../identity/currentUserProvider.js';
@@ -33,6 +34,7 @@ import { recordAiRequest, recordAiRetry, recordAiStream, recordAiValidation, rec
 import { loadAiModelRegistry } from './modelRegistryLoader.js';
 import { classifyProviderStatus, createControlApiKey, isConnectFailure, streamInterrupted } from './providers/openAiCompatibleProvider.js';
 import { TOOL_LIMITS } from './tools/toolLimits.js';
+import { getRotaTool, rotaToolNames } from './tools/toolRegistry.js';
 
 /**
  * Yapay zekâ ağ geçidi — alt sistemin TEK yürütme yolu.
@@ -343,6 +345,7 @@ export function createAiGateway({
   storeValidation = storeCredentialValidation,
   currentSicil = getTrustedCurrentSicil,
   verifySicil = assertAiDirectoryMember,
+  loadCatalogueTools = () => rotaToolNames().map((name) => getRotaTool(name)),
   now = Date.now,
   random = Math.random
 }) {
@@ -529,8 +532,8 @@ export function createAiGateway({
    * reddedilir. `fixed` sunucuya ait sabit isteği anlatır (4xx yapılandırma
    * hatasıdır).
    *
-   * `serverOwned` iş (sunucuya ait katalog belgesi) çağıranın güvenilir
-   * kimliğini yine doğrular, ama kullanıcının kapasite payını ve anahtarını
+   * `serverOwned` yalnızca sabit katalog işlemidir; kullanıcı doğrulaması
+   * her çağıranın sorgusunda kalır. Kullanıcının kapasite payını ve anahtarını
    * kullanmaz: sunucu kapasite anahtarı ve kurumsal anahtarla yürür. Paylaşılan
    * işin sonucu ve faturası onu başlatan kullanıcıya bağlı değildir.
    */
@@ -541,13 +544,14 @@ export function createAiGateway({
     let deadline = null;
     try {
       assertOutsideSqlTransaction();
-      const sicil = await trustedSicil(signal);
+      const sicil = serverOwned ? null : await trustedSicil(signal);
       const config = requireAiAvailable(loadConfig());
       const input = prepare();
       const route = requireRoute(await untilCancelled(() => loadRegistry(config), signal), profile, capability);
       context.model = route.model;
       lease = await getAdmission(config).acquire({
         userKey: serverOwned ? SERVER_WORK_KEY : sicil,
+        serverOwned,
         modelKey: route.model,
         modelLimit: route.maxConcurrency,
         signal,
@@ -611,20 +615,34 @@ export function createAiGateway({
    * `document`) kayıttaki ön işlemenin önekini seçer; önek TEK yerde, burada
    * eklenir. Belirteç penceresi kuralı da ön işlemedendir (`truncateTokens`:
    * önekli metin uçta ilk N belirtece kesilir; yoksa aşan girdiyi uç reddeder).
-   * Sunucuya ait katalog belgesi sabit ve sunucuya ait istektir; sorgu kullanıcı
-   * girdisidir. `embeddings` güvenilmez model çıktısıdır (dizin adresli
+   * Amaç yalnızca öneki seçer; bu işlem her zaman kullanıcıya aittir.
+   * `embeddings` güvenilmez model çıktısıdır (dizin adresli
    * `{ index, vector }`) ve anlamsal sözleşmede doğrulanır; `route` uzayı adlandırır.
    */
-  async function embedTexts({ profile, texts, purpose, signal = null }) {
+  async function embedTexts(options) {
+    return embedInput(options);
+  }
+
+  /** Yalnızca sunucu kayıt defterinin sabit kataloğu kurumsal kapasiteyi kullanır. */
+  async function embedServerCatalogue({ signal = null } = {}) {
+    return embedInput({ profile: AI_PROFILES.EMBEDDING, purpose: AI_EMBEDDING_PURPOSES.DOCUMENT, signal }, true);
+  }
+
+  async function embedInput({ profile, texts, purpose, signal = null }, serverOwned = false) {
     const document = purpose === AI_EMBEDDING_PURPOSES.DOCUMENT;
     const { response, ...call } = await semanticCall({
       profile,
       capability: AI_CAPABILITIES.EMBEDDING,
       operation: 'ai.provider.embeddings',
       signal,
-      fixed: document,
-      serverOwned: document,
+      fixed: serverOwned,
+      serverOwned,
       prepare: () => {
+        if (serverOwned) {
+          const built = createSemanticCatalogue(semanticToolDefinitions(loadCatalogueTools()));
+          if (!built.ok) throw new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, { details: { reason: 'CATALOGUE_INVALID' } });
+          return built.catalogue.items.map((item) => item.text);
+        }
         const input = boundedTexts(texts, SEMANTIC_LIMITS.maxCatalogueItems, SEMANTIC_LIMITS.maxItemTextChars);
         if (!input || !EMBEDDING_PURPOSES.has(purpose)) throw semanticInputInvalid('EMBEDDING_INPUT_INVALID');
         return input;
@@ -1203,5 +1221,5 @@ export function createAiGateway({
     }
   }
 
-  return { completeChat, streamChat, runToolSession, validatePersonalCredential, embedTexts, rerankTexts };
+  return { completeChat, streamChat, runToolSession, validatePersonalCredential, embedTexts, embedServerCatalogue, rerankTexts };
 }

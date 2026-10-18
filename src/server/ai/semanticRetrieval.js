@@ -147,14 +147,11 @@ export function createSemanticRetrieval({
   now = Date.now
 } = {}) {
   // Tek görünür dizin ve anahtar başına en çok bir süren kurulum; kullanıcı verisi (sorgu, sorgu vektörü) burada tutulmaz.
-  const state = { ready: null, builds: new Map(), latest: null, dimensionRebuild: null };
+  const state = { ready: null, builds: new Map(), latest: null, dimensionRebuilds: new Map() };
 
   async function buildIndex(catalogue, space, key) {
     // Katalog belgesi sunucuya aittir: ağ geçidi bunu kurumsal anahtar ve sunucu kapasitesiyle yürütür.
-    const call = await getGateway().embedTexts({
-      profile: AI_PROFILES.EMBEDDING,
-      texts: catalogue.items.map((item) => item.text),
-      purpose: AI_EMBEDDING_PURPOSES.DOCUMENT,
+    const call = await getGateway().embedServerCatalogue({
       signal: null
     });
     // Kurulum sırasında rota değiştiyse (kayıt yeniden yüklendi) vektörler istenen uzaya ait değildir.
@@ -222,9 +219,14 @@ export function createSemanticRetrieval({
 
   /** Boyut uyuşmazlığı yeniden kurulumu bu anahtar için bekleme süresi dışında mı? Evetse zamanı kaydeder. */
   function claimDimensionRebuild(key) {
-    const last = state.dimensionRebuild;
-    if (last?.key === key && now() - last.at < SEMANTIC_DIMENSION_REBUILD_COOLDOWN_MS) return false;
-    state.dimensionRebuild = { key, at: now() };
+    const at = now();
+    for (const [entry, startedAt] of state.dimensionRebuilds) {
+      if (at - startedAt >= SEMANTIC_DIMENSION_REBUILD_COOLDOWN_MS) state.dimensionRebuilds.delete(entry);
+    }
+    if (state.dimensionRebuilds.has(key)) return false;
+    // Dolu tabloda yeni kurulum başlatılmaz; yaşayan anahtarların bekleme süresi silinmez.
+    if (state.dimensionRebuilds.size >= 256) return false;
+    state.dimensionRebuilds.set(key, at);
     return true;
   }
 

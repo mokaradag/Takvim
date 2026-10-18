@@ -65,7 +65,7 @@ const isQueryCall = (call) => call.kind === 'embeddings' && call.input.length ==
 function setup(t, { tools = TOOLS, registry = DEFAULT_REGISTRY, env = {}, respond = null, embed = toyEmbed, rerank = toyRerank, now, credential } = {}) {
   const provider = createFakeAiProvider({ embed, rerank, respond: respond ? (call) => respond(call) : null });
   const current = { registry, tools };
-  const { gateway, admission } = semanticGatewayFor(t, { provider, registry: () => current.registry, env, ...(credential ? { credential } : {}) });
+  const { gateway, admission } = semanticGatewayFor(t, { provider, registry: () => current.registry, loadCatalogueTools: () => current.tools, env, ...(credential ? { credential } : {}) });
   const retrieval = createSemanticRetrieval({
     getGateway: () => gateway,
     loadRegistry: async () => current.registry,
@@ -392,13 +392,13 @@ test('boyut geçişi sırasında eşzamanlı istekler süren yeniden kurulumu pa
 test('paylaşılan katalog dizini sunucuya aittir: kurulumu başlatan kullanıcının kişisel anahtarı ya da kotası öteki kullanıcıları etkilemez', async (t) => {
   // Uç kişisel anahtarla katalog gömmesini reddeder (ör. kişisel kota): eski davranışta kurulum bütün bekleyenler için düşerdi.
   const provider = createFakeAiProvider({
-    embed: toyEmbed,
+    embed: (text) => hashedVector(text, 8),
     rerank: toyRerank,
     respond: (call) => (isDocumentCall(call) && call.apiKey !== DEFAULT_KEY ? { type: 'status', status: 429 } : null)
   });
   const stack = createAiStack(t, { provider, sicil: SICIL_A });
   assert.equal((await saveKey(PERSONAL_KEY_A)).status, 200);
-  const retrieval = createSemanticRetrieval({ loadTools: () => TOOLS });
+  const retrieval = createSemanticRetrieval();
   const fromA = await retrieval.retrieve({ query: QUERY });
   assert.deepEqual({ status: fromA.status, failure: fromA.failure }, { status: 'reranked', failure: null });
   stack.useSicil(SICIL_B);
@@ -742,7 +742,7 @@ test('çağıranın iptali her evrede iptal kalır; geç gelen model sonucu uygu
 
 test('iptal model sonucu geldikten sonra ama sonuç döndürülmeden önce gelirse de sonuç uygulanmaz', async (t) => {
   const provider = createFakeAiProvider({ embed: toyEmbed, rerank: toyRerank });
-  const { gateway } = semanticGatewayFor(t, { provider });
+  const { gateway } = semanticGatewayFor(t, { provider, loadCatalogueTools: () => TOOLS });
   for (const operation of ['embedTexts', 'rerankTexts']) {
     const controller = new AbortController();
     // Ağ geçidi başarıyla döner, iptal hemen ardından gelir: yarışı iptal kazanır.
@@ -857,4 +857,87 @@ test('anlamsal keşif yalnızca ağ geçidini çağırır; kimlik, yetki, SQL, a
   assert.deepEqual(callers(/\.embedTexts\(\{|\.rerankTexts\(\{/), ['src/server/ai/semanticRetrieval.js']);
   // Aşama 4B danışman adayları üretir; planlayıcıya ve araç yürütmesine bağlanması Aşama 4C'nin işidir.
   assert.deepEqual(callers(/semanticRetrieval/), []);
+});
+
+test('ayrı dizin anahtarlarının katalog işleri insan başına etkin sınırını paylaşmaz', async (t) => {
+  const ctx = setup(t, {
+    env: { MERGEN_ROTA_AI_MAX_ACTIVE_REQUESTS: '4', MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER: '1', MERGEN_ROTA_AI_MAX_QUEUED_PER_USER: '0' },
+    embed: (text) => hashedVector(text, 8),
+    respond: (call) => isDocumentCall(call) ? { type: 'deferred' } : null
+  });
+  t.after(() => ctx.documentCalls().forEach((call) => call.resolve()));
+  const first = ctx.retrieve('A sorusu');
+  await until(() => ctx.documentCalls().length === 1, 'A kurulumu etkin');
+  ctx.current.tools = TOOLS.map((tool) => ({ ...tool, version: 2 }));
+  const second = ctx.retrieve('B sorusu');
+  await until(() => ctx.documentCalls().length === 2, 'B kurulumu da kabul edildi');
+  assert.equal(ctx.admission.status().active, 2);
+  ctx.documentCalls()[0].resolve();
+  assert.equal((await first).status, 'reranked');
+  ctx.documentCalls()[1].resolve();
+  assert.equal((await second).status, 'reranked');
+  assertIdle(ctx.admission);
+});
+
+test('boyut yeniden kurulumunun A → B → A bekleme süresi anahtar başına korunur', async (t) => {
+  let queryDimensions = 8;
+  let clock = 1000;
+  const ctx = setup(t, { now: () => clock, embed: (text) => hashedVector(text, text.startsWith('query: ') ? queryDimensions : 8) });
+  for (const version of [1, 2, 1]) {
+    ctx.current.tools = TOOLS.map((tool) => ({ ...tool, version }));
+    queryDimensions = 8;
+    assert.equal((await ctx.retrieve()).status, 'reranked');
+    queryDimensions = 12;
+    const before = ctx.documentCalls().length;
+    assert.equal((await ctx.retrieve()).failure.reason, 'DIMENSION_MISMATCH');
+    assert.equal(ctx.documentCalls().length, before + (version === 1 && before > 2 ? 0 : 1));
+    clock += 1000;
+  }
+  assert.equal(ctx.documentCalls().length, 5);
+  clock += SEMANTIC_DIMENSION_REBUILD_COOLDOWN_MS;
+  await ctx.retrieve();
+  assert.equal(ctx.documentCalls().length, 6, 'süresi dolan anahtar yeniden kurulabilir');
+});
+
+test('paylaşılan katalog başlatanın rehberine yeniden başvurmaz; her kullanıcı kendi hatasını alır, geçerli bekleyenler etkilenmez', async (t) => {
+  const { AsyncLocalStorage } = await import('node:async_hooks');
+  const { ServerPersistenceError } = await import('../src/server/errors.js');
+  const identity = new AsyncLocalStorage();
+  const directoryFailure = new ServerPersistenceError('DATABASE_UNAVAILABLE', 'Rehber kullanılamıyor');
+  let rejectDirectory;
+  const directory = new Promise((resolve, reject) => { rejectDirectory = reject; });
+  directory.catch(() => {});
+  let repeatedPreflight = false;
+  const checks = new Map();
+  const provider = createFakeAiProvider({ embed: toyEmbed, rerank: toyRerank, respond: (call) => isDocumentCall(call) ? { type: 'deferred' } : null });
+  const documents = () => provider.calls.filter(isDocumentCall);
+  const { gateway, admission } = semanticGatewayFor(t, {
+    provider, loadCatalogueTools: () => TOOLS,
+    currentSicil: async () => identity.getStore(),
+    verifySicil: async (user) => {
+      checks.set(user, (checks.get(user) ?? 0) + 1);
+      if (user === 900003) throw directoryFailure;
+      if (user === 900001 && checks.get(user) > 1 && documents().length === 0) {
+        repeatedPreflight = true;
+        await directory;
+      }
+    }
+  });
+  const retrieval = createSemanticRetrieval({ getGateway: () => gateway, loadRegistry: async () => DEFAULT_REGISTRY, loadTools: () => TOOLS });
+  const ask = (user) => identity.run(user, () => retrieval.retrieve({ query: QUERY }));
+  const first = ask(900001);
+  const firstOutcome = first.catch((error) => error);
+  await until(() => documents().length === 1 || repeatedPreflight, 'ortak kurulum başladı');
+  const second = ask(900002);
+  const secondOutcome = second.catch((error) => error);
+  await until(() => provider.calls.filter(isQueryCall).length === 2 && provider.calls.filter(isQueryCall).every((call) => call.settled), 'ikinci kullanıcı sorgusu doğrulandı');
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(ask(900003), (error) => error === directoryFailure);
+  rejectDirectory(directoryFailure);
+  documents().forEach((call) => call.resolve());
+  const results = await Promise.all([firstOutcome, secondOutcome]);
+  assert.deepEqual(results.map((result) => result.status), ['reranked', 'reranked']);
+  assert.deepEqual([checks.get(900001), checks.get(900002), checks.get(900003)], [2, 2, 1]);
+  assert.equal(documents().length, 1);
+  assertIdle(admission);
 });

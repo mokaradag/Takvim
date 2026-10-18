@@ -29,7 +29,7 @@ export function registryWith({ models = (model) => model, profiles = {} } = {}) 
   return validated.registry;
 }
 
-export function semanticGatewayFor(t, { provider = createFakeAiProvider(), registry = DEFAULT_REGISTRY, env = {}, random = () => 0, credential = { source: 'default', apiKey: DEFAULT_KEY } } = {}) {
+export function semanticGatewayFor(t, { provider = createFakeAiProvider(), registry = DEFAULT_REGISTRY, env = {}, random = () => 0, credential = { source: 'default', apiKey: DEFAULT_KEY }, loadCatalogueTools, currentSicil = async () => 900001, verifySicil = async () => {} } = {}) {
   resetAiTelemetryForTests();
   resetTelemetryRegistryForTests();
   t.after(() => {
@@ -50,8 +50,9 @@ export function semanticGatewayFor(t, { provider = createFakeAiProvider(), regis
     loadConfig: () => config,
     loadRegistry: async () => (typeof registry === 'function' ? registry() : registry),
     resolveCredential: async () => credential,
-    currentSicil: async () => 900001,
-    verifySicil: async () => {},
+    currentSicil,
+    verifySicil,
+    ...(loadCatalogueTools ? { loadCatalogueTools } : {}),
     random
   });
   return { gateway, admission, provider, config };

@@ -256,13 +256,13 @@ test('katalog belgesi sunucuya aittir: kurumsal anahtar ve sunucu kapasite anaht
     verifySicil: async () => {}
   });
   provider.enqueue({ type: 'deferred' });
-  const building = embedDocuments(gateway);
+  const building = gateway.embedServerCatalogue();
   await provider.waitForActive(1);
   // Kurulum sürerken aynı kullanıcının (etkin payı 1) sorgusu kurulum yüzünden AI_BUSY almaz.
   await embedQuery(gateway);
   provider.calls[0].resolve();
   await building;
-  assert.deepEqual(provider.calls.map((call) => [call.input.length, call.apiKey]), [[2, DEFAULT_KEY], [1, PERSONAL_KEY_A]]);
+  assert.deepEqual(provider.calls.map((call) => [call.input.length, call.apiKey]), [[19, DEFAULT_KEY], [1, PERSONAL_KEY_A]]);
   assert.equal(users[0], '\u0000server');
   assert.equal(String(users[1]), '900001');
   // Kurumsal anahtar yoksa sunucu işi kişisel anahtara geçmez: yapılandırma hatasıdır ve sağlayıcıya ulaşmaz.
@@ -276,14 +276,15 @@ test('katalog belgesi sunucuya aittir: kurumsal anahtar ve sunucu kapasite anaht
     verifySicil: async () => {}
   });
   const before = provider.calls.length;
-  await assert.rejects(embedDocuments(personalOnly), (error) => error.code === 'AI_CONFIGURATION_ERROR' && error.details.reason === 'DEFAULT_KEY_REQUIRED');
+  await assert.rejects(personalOnly.embedServerCatalogue(), (error) => error.code === 'AI_CONFIGURATION_ERROR' && error.details.reason === 'DEFAULT_KEY_REQUIRED');
   assert.equal((await embedQuery(personalOnly)).embeddings.length, 1, 'kullanıcı sorgusu kendi anahtarıyla sürer');
   assert.equal(provider.calls.length - before, 1);
 });
 
 test('belirteç penceresi kayıttan açık kuraldır: kesme yoksa uç aşan girdiyi reddeder, varsa önek dâhil ilk N belirteç gömülür', async (t) => {
   const embedded = [];
-  const server = await startFakeOpenAiCompatibleServer({ semantic: { embed: (text) => { embedded.push(text); return [1, 0, 0]; } } });
+  const tokens = [];
+  const server = await startFakeOpenAiCompatibleServer({ semantic: { embed: (text, model, sequence) => { embedded.push(text); tokens.push(sequence); return [1, 0, 0]; } } });
   t.after(() => server.close());
   // İkizin penceresi 8 belirteçtir (6 sözcük + 2 özel belirteç).
   server.setScenario({ embeddingWindow: 8 });
@@ -297,21 +298,23 @@ test('belirteç penceresi kayıttan açık kuraldır: kesme yoksa uç aşan gird
   const strictBody = server.state.requests.at(-1).body;
   assert.equal(Object.hasOwn(strictBody, 'truncate_prompt_tokens') || Object.hasOwn(strictBody, 'truncation_side'), false);
   assert.deepEqual(embedded.at(-1), `query: ${fits}`);
-  // Kesme bildirilmemişse pencereyi aşan sorgu kullanıcı isteği hatasıdır; katalog belgesi yapılandırma hatasıdır.
+  // Kullanıcı metni, belge öneki seçilse de kullanıcı isteğidir.
   await assert.rejects(strict.gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts: [over], purpose: 'query' }),
     (error) => error.code === 'AI_REQUEST_INVALID' && error.details.providerStatus === 400);
   await assert.rejects(strict.gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts: [fits, over], purpose: 'document' }),
-    (error) => error.code === 'AI_CONFIGURATION_ERROR' && error.details.reason === 'PROVIDER_REJECTED_FIXED_REQUEST');
+    (error) => error.code === 'AI_REQUEST_INVALID' && error.details.providerStatus === 400);
   idle(strict.admission);
 
   const truncating = gatewayFor(t, { provider: createOpenAiCompatibleProvider(), env, registry: withTruncation(8) });
   const result = await truncating.gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts: [fits, over], purpose: 'document' });
   assert.equal(result.embeddings.length, 2);
   const body = server.state.requests.at(-1).body;
-  assert.deepEqual({ truncate: body.truncate_prompt_tokens, side: body.truncation_side, input: body.input },
-    { truncate: 8, side: 'right', input: [`passage: ${fits}`, `passage: ${over}`] });
+  assert.deepEqual(body, { model: EMBEDDING.model, encoding_format: 'float', truncate_prompt_tokens: 8, input: [`passage: ${fits}`, `passage: ${over}`] });
   // Sağdan kesme öneki korur: ikiz önekli ilk altı sözcüğü gömdü.
   assert.deepEqual(embedded.slice(-2), [`passage: ${fits}`, 'passage: bir iki üç dört beş']);
+  assert.deepEqual(tokens.at(-1), ['<s>', 'passage:', 'bir', 'iki', 'üç', 'dört', 'beş', '</s>']);
+  await truncating.gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts: [over], purpose: 'query' });
+  assert.deepEqual(tokens.at(-1), ['<s>', 'query:', 'bir', 'iki', 'üç', 'dört', 'beş', '</s>']);
   assert.equal(result.route.preprocessing.truncateTokens, 8);
   // Sözleşmenin karakter sınırındaki girdi ağ geçidinden geçer; pencere kuralı uçta uygulanır.
   server.setScenario({});
@@ -348,7 +351,7 @@ test('gömme yanıt bütçesi sözleşmenin en büyük isteğiyle sınırlıdır
 test('sunucuya ait katalog belgesinin reddi yapılandırma hatasıdır; kullanıcı sorgusunun reddi istek hatasıdır', async (t) => {
   const { gateway, provider } = gatewayFor(t);
   provider.enqueue({ type: 'status', status: 400 }, { type: 'status', status: 422 }, { type: 'status', status: 413 });
-  await assert.rejects(embedDocuments(gateway),
+  await assert.rejects(gateway.embedServerCatalogue(),
     (error) => error.code === 'AI_CONFIGURATION_ERROR' && error.details.reason === 'PROVIDER_REJECTED_FIXED_REQUEST' && error.details.providerStatus === 400);
   await assert.rejects(embedQuery(gateway), { code: 'AI_REQUEST_INVALID' });
   await assert.rejects(rerank(gateway), { code: 'AI_REQUEST_INVALID' });
@@ -459,8 +462,60 @@ test('anlamsal çağrı açık bir SQL işlemi içinde başlatılamaz', async (t
     (error) => error.code === 'AI_INTERNAL_ERROR' && error.details.reason === 'SQL_TRANSACTION_ACTIVE'
   );
   await assert.rejects(
+    withSqlTransaction(() => getAiGateway().embedServerCatalogue()),
+    (error) => error.code === 'AI_INTERNAL_ERROR' && error.details.reason === 'SQL_TRANSACTION_ACTIVE'
+  );
+  await assert.rejects(
     withSqlTransaction(() => getAiGateway().rerankTexts({ profile: AI_PROFILES.RERANK, query: 'q', documents: ['x'] })),
     (error) => error.details.reason === 'SQL_TRANSACTION_ACTIVE'
   );
   assert.equal(provider.calls.length, 0);
+});
+
+test('belge amacı kullanıcı kotasını, kişisel anahtarı ya da hata sınıfını değiştirmez; ayrı katalog işlemi yalnızca sabit metinleri gömer', async (t) => {
+  const { gateway, provider, admission } = gatewayFor(t, {
+    credential: { source: 'personal', apiKey: PERSONAL_KEY_A },
+    env: { MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER: '1', MERGEN_ROTA_AI_MAX_QUEUED_PER_USER: '0' }
+  });
+  await embedDocuments(gateway);
+  assert.equal(provider.calls[0].apiKey, PERSONAL_KEY_A);
+  provider.enqueue({ type: 'status', status: 400 });
+  await assert.rejects(embedDocuments(gateway), { code: 'AI_REQUEST_INVALID' });
+  const lease = await admission.acquire({ userKey: 900001, timeoutMs: 1000 });
+  try {
+    await assert.rejects(embedDocuments(gateway), (error) => error.code === 'AI_BUSY' && error.details.scope === 'user');
+    await gateway.embedServerCatalogue({ texts: ['Kullanıcının keyfî belgesi'], purpose: 'document' });
+    const catalogue = provider.calls.at(-1);
+    assert.equal(catalogue.apiKey, DEFAULT_KEY);
+    const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
+    const { createSemanticCatalogue, semanticToolDefinitions } = await import('../src/domain/ai/semanticContract.js');
+    const built = createSemanticCatalogue(semanticToolDefinitions(rotaToolNames().map(getRotaTool)));
+    assert.deepEqual(catalogue.input, built.catalogue.items.map((item) => `passage: ${item.text}`));
+  } finally {
+    lease.release();
+  }
+  idle(admission);
+});
+
+test('sunucu katalog işi küresel ve model sınırlarını korur; insan sıra sınırı sıfırken ortak sıraya girebilir', async (t) => {
+  for (const modelBound of [false, true]) {
+    const { gateway, provider, admission } = gatewayFor(t, {
+      registry: modelBound ? registryWith({ models: (model) => model.id === EMBEDDING.model ? { ...model, maxConcurrency: 1 } : model }) : REGISTRY,
+      env: { MERGEN_ROTA_AI_MAX_ACTIVE_REQUESTS: modelBound ? '4' : '1', MERGEN_ROTA_AI_MAX_QUEUED_REQUESTS: '1', MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER: '1', MERGEN_ROTA_AI_MAX_QUEUED_PER_USER: '0' }
+    });
+    provider.enqueue({ type: 'deferred' });
+    const first = gateway.embedServerCatalogue();
+    first.catch(() => {});
+    t.after(() => provider.calls.forEach((call) => call.resolve?.()));
+    await provider.waitForActive(1);
+    const second = gateway.embedServerCatalogue();
+    second.catch(() => {});
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual({ active: admission.status().active, queued: admission.status().queued }, { active: 1, queued: 1 });
+    await assert.rejects(gateway.embedServerCatalogue(), (error) => error.code === 'AI_BUSY' && error.details.scope === 'global' && error.details.saturation === (modelBound ? 'model' : 'global'));
+    provider.calls[0].resolve();
+    await Promise.all([first, second]);
+    assert.equal(provider.peakActive, 1);
+    idle(admission);
+  }
 });

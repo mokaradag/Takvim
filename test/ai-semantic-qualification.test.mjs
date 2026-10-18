@@ -384,7 +384,7 @@ test('canlı nitelendirme kıyas kümesini üretim yolundan geçirir: profil ve 
   assert.equal(embeddings.length, 1 + BENCHMARK.cases.length);
   assert.deepEqual(embeddings[0].body.input, ITEMS.map((item) => `passage: ${item.text}`));
   // Belirteç penceresi kuralı üretimle aynıdır: önek dâhil ilk 512 belirteç, sağdan kesme.
-  assert.ok(embeddings.every((request) => request.body.truncate_prompt_tokens === 512 && request.body.truncation_side === 'right'));
+  assert.ok(embeddings.every((request) => request.body.truncate_prompt_tokens === 512 && !Object.hasOwn(request.body, 'truncation_side')));
   assert.ok(embeddings.slice(1).every((request) => request.body.input.length === 1 && request.body.input[0].startsWith('query: ')));
   const reranks = requests.filter((request) => request.path === '/v1/rerank');
   assert.equal(reranks.length, BENCHMARK.cases.length);

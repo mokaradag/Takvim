@@ -52,9 +52,9 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
   const modelSaturated = (modelKey, modelLimit) => modelKey != null && modelLimit != null
     && (activeByModel.get(modelKey) || 0) >= modelLimit;
 
-  function hasCapacity(userKey, modelKey, modelLimit) {
+  function hasCapacity(userKey, modelKey, modelLimit, serverOwned) {
     if (active >= maxActive) return false;
-    if ((activeByUser.get(userKey) || 0) >= maxActivePerUser) return false;
+    if (!serverOwned && (activeByUser.get(userKey) || 0) >= maxActivePerUser) return false;
     return !modelSaturated(modelKey, modelLimit);
   }
 
@@ -62,16 +62,16 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
    * İsteği hemen başlatmayan sınır: `global` ya da `model` paylaşılan
    * kapasitedir; `user` yalnızca o kullanıcının kendi etkin sınırıdır.
    */
-  function saturationOf(userKey, modelKey, modelLimit) {
+  function saturationOf(userKey, modelKey, modelLimit, serverOwned) {
     if (active >= maxActive) return 'global';
     if (modelSaturated(modelKey, modelLimit)) return 'model';
-    if ((activeByUser.get(userKey) || 0) >= maxActivePerUser) return 'user';
+    if (!serverOwned && (activeByUser.get(userKey) || 0) >= maxActivePerUser) return 'user';
     return 'global';
   }
 
-  function start(userKey, modelKey, queueWaitMs) {
+  function start(userKey, modelKey, queueWaitMs, serverOwned) {
     active += 1;
-    increment(activeByUser, userKey);
+    if (!serverOwned) increment(activeByUser, userKey);
     // Model kimliği olmayan iş (ör. anahtar doğrulaması) model sayacına girmez.
     if (modelKey != null) increment(activeByModel, modelKey);
     counters.admitted += 1;
@@ -82,7 +82,7 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
         if (released) return;
         released = true;
         active -= 1;
-        decrement(activeByUser, userKey);
+        if (!serverOwned) decrement(activeByUser, userKey);
         if (modelKey != null) decrement(activeByModel, modelKey);
         drain();
         notify();
@@ -93,7 +93,7 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
   function leaveQueue(waiter) {
     const index = waiters.indexOf(waiter);
     if (index >= 0) waiters.splice(index, 1);
-    decrement(queuedByUser, waiter.userKey);
+    if (!waiter.serverOwned) decrement(queuedByUser, waiter.userKey);
     clearTimeout(waiter.timer);
     waiter.signal?.removeEventListener?.('abort', waiter.onAbort);
   }
@@ -101,12 +101,12 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
   function drain() {
     for (let index = 0; index < waiters.length && active < maxActive;) {
       const waiter = waiters[index];
-      if (!hasCapacity(waiter.userKey, waiter.modelKey, waiter.modelLimit)) {
+      if (!hasCapacity(waiter.userKey, waiter.modelKey, waiter.modelLimit, waiter.serverOwned)) {
         index += 1;
         continue;
       }
       leaveQueue(waiter);
-      waiter.resolve(start(waiter.userKey, waiter.modelKey, Math.max(0, now() - waiter.enqueuedAt)));
+      waiter.resolve(start(waiter.userKey, waiter.modelKey, Math.max(0, now() - waiter.enqueuedAt), waiter.serverOwned));
     }
   }
 
@@ -117,12 +117,12 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
    * `modelKey` verilmezse (`null`) istek model sayacına hiç girmez: kayıttaki
    * hiçbir model kimliği, sağlayıcı düzeyindeki işle aynı sayacı paylaşamaz.
    */
-  function acquire({ userKey, modelKey = null, modelLimit = null, signal = null, timeoutMs }) {
+  function acquire({ userKey, serverOwned = false, modelKey = null, modelLimit = null, signal = null, timeoutMs }) {
     const user = String(userKey);
     const model = modelKey == null ? null : String(modelKey);
     if (signal?.aborted) return Promise.reject(new AiError(AI_ERROR_CODES.AI_CANCELLED));
-    if (hasCapacity(user, model, modelLimit)) {
-      const lease = start(user, model, 0);
+    if (hasCapacity(user, model, modelLimit, serverOwned)) {
+      const lease = start(user, model, 0, serverOwned);
       notify();
       return Promise.resolve(lease);
     }
@@ -131,14 +131,14 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
       notify();
       return Promise.reject(new AiError(AI_ERROR_CODES.AI_BUSY, {
         retryAfterMs: BUSY_RETRY_AFTER_MS,
-        details: { scope, saturation: saturationOf(user, model, modelLimit) }
+        details: { scope, saturation: saturationOf(user, model, modelLimit, serverOwned) }
       }));
     };
-    if ((queuedByUser.get(user) || 0) >= maxQueuedPerUser) return busy('user');
+    if (!serverOwned && (queuedByUser.get(user) || 0) >= maxQueuedPerUser) return busy('user');
     if (waiters.length >= maxQueued) return busy('global');
 
     return new Promise((resolve, reject) => {
-      const waiter = { userKey: user, modelKey: model, modelLimit, signal, enqueuedAt: now(), resolve, timer: null, onAbort: null };
+      const waiter = { userKey: user, serverOwned, modelKey: model, modelLimit, signal, enqueuedAt: now(), resolve, timer: null, onAbort: null };
       waiter.onAbort = () => {
         leaveQueue(waiter);
         counters.cancelledWhileQueued += 1;
@@ -146,7 +146,7 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
         reject(new AiError(AI_ERROR_CODES.AI_CANCELLED));
       };
       waiter.timer = setTimeout(() => {
-        const saturation = saturationOf(waiter.userKey, waiter.modelKey, waiter.modelLimit);
+        const saturation = saturationOf(waiter.userKey, waiter.modelKey, waiter.modelLimit, waiter.serverOwned);
         leaveQueue(waiter);
         counters.queueTimeouts += 1;
         notify();
@@ -157,7 +157,7 @@ export function createAiAdmissionController({ limits, now = Date.now, onChange =
       }, Math.max(1, Number(timeoutMs) || 1));
       signal?.addEventListener?.('abort', waiter.onAbort, { once: true });
       waiters.push(waiter);
-      increment(queuedByUser, user);
+      if (!serverOwned) increment(queuedByUser, user);
       notify();
     });
   }

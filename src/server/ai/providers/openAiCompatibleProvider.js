@@ -488,12 +488,12 @@ export function createOpenAiCompatibleProvider({
      * Metinlerin gömmesi (`POST /embeddings`). Değerler sayı dizisi olarak
      * istenir (`encoding_format: float`); metin sunucuda hazırlanmış (ön işlemesi
      * uygulanmış) hâliyle gider. `truncateTokens` verilmişse belirteç penceresini
-     * aşan girdi uçta SAĞDAN kesilir: önek dâhil ilk N belirteç kalır (vLLM
-     * `truncate_prompt_tokens` + `truncation_side`). Verilmemişse kesme istenmez
+     * aşan girdi uçta belirteçleyicinin varsayılan yönüyle kesilir (E5: sağ).
+     * Yön zorlanmaz: vLLM özel belirteçleri belirteçleyici içinde korur. Verilmemişse kesme istenmez
      * ve pencereyi aşan girdiyi uç reddeder. Hata gövdesi okunmaz.
      */
     async embeddings({ baseUrl, apiKey, model, input, truncateTokens = null, signal }) {
-      const truncation = truncateTokens == null ? {} : { truncate_prompt_tokens: truncateTokens, truncation_side: 'right' };
+      const truncation = truncateTokens == null ? {} : { truncate_prompt_tokens: truncateTokens };
       const response = await send(`${baseUrl}/embeddings`, {
         method: 'POST',
         headers: requestHeaders(apiKey, { json: true }),

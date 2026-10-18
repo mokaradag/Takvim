@@ -41,7 +41,7 @@ const DEFAULT_SEMANTIC = Object.freeze({ embed: (text) => hashedVector(text), re
 function semanticPayload(kind, body, semantic) {
   if (kind === 'embeddings') {
     const inputs = Array.isArray(body?.input) ? body.input : [body?.input];
-    return { object: 'list', model: body?.model, data: inputs.map((text, index) => ({ object: 'embedding', index, embedding: semantic.embed(text, body?.model) })) };
+    return { object: 'list', model: body?.model, data: inputs.map((text, index) => ({ object: 'embedding', index, embedding: semantic.embed(text, body?.model, body?.embeddingTokens?.[index]) })) };
   }
   const documents = Array.isArray(body?.documents) ? body.documents : [];
   const results = documents.map((text, index) => ({ index, document: { text }, relevance_score: semantic.rerank(body?.query, text, body?.model) }))
@@ -53,21 +53,28 @@ function semanticPayload(kind, body, semantic) {
  * vLLM 0.31.0 gömme penceresi kuralının ikizi (pooling çalıştırıcısı). Belirteç
  * sayısı yalnızca İKİZDE boşlukla bölünmüş sözcük + iki özel belirteçtir.
  * Kesme istenmemişse pencereyi aşan girdi reddedilir (`null` → 400);
- * `truncate_prompt_tokens` pencereden büyükse ya da yön `right` değilse istek
- * reddedilir; `truncation_side: right` önek dâhil ilk N belirteci tutar.
+ * `truncate_prompt_tokens` pencereden büyükse istek reddedilir. Varsayılan
+ * belirteçleyici sağdan keserken özel belirteçleri korur; açık yön ise vLLM
+ * gibi özel belirteçler eklendikten sonra diziyi keser.
  */
 function applyEmbeddingWindow(body, window) {
   const inputs = Array.isArray(body?.input) ? body.input : [body?.input];
   const limit = body?.truncate_prompt_tokens ?? null;
-  if (limit != null && (limit > window || body.truncation_side !== 'right')) return null;
+  if (limit != null && limit > window) return null;
   const kept = [];
+  const embeddingTokens = [];
   for (const text of inputs) {
     const words = String(text).split(' ');
-    if (limit != null && words.length + 2 > limit) kept.push(words.slice(0, limit - 2).join(' '));
-    else if (words.length + 2 > window) return null;
-    else kept.push(text);
+    let tokens = ['<s>', ...words, '</s>'];
+    if (limit != null && tokens.length > limit) {
+      tokens = body.truncation_side == null
+        ? ['<s>', ...words.slice(0, limit - 2), '</s>']
+        : body.truncation_side === 'left' ? tokens.slice(-limit) : tokens.slice(0, limit);
+    } else if (tokens.length > window) return null;
+    embeddingTokens.push(tokens);
+    kept.push(tokens.filter((token) => token !== '<s>' && token !== '</s>').join(' '));
   }
-  return { ...body, input: kept };
+  return { ...body, input: kept, embeddingTokens };
 }
 
 function json(response, status, body, headers = {}) {

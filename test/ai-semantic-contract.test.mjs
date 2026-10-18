@@ -402,7 +402,7 @@ test('anlamsal katman kimlik, yetki, SQL ve ağ yüzeyi taşımaz; doğal dil ku
     // Belirli bir araca özel davranış yoktur.
     assert.doesNotMatch(body, /rota_/, file);
   }
-  // Aşama 4B: sözleşmeyi yalnızca anlamsal keşif hizmeti kullanır; ağ geçidi ve bağdaştırıcı yalnızca sınırları okur.
+  // Aşama 4B: ağ geçidi yalnızca sabit kataloğu kurar; dizin ve sıralama anlamsal keşifte kalır.
   // Değerlendirme modülü üretimde hiç kullanılmaz (yalnızca nitelendirme komutu ve sınamalar).
   const importers = (pattern) => walk(path.join(ROOT, 'src'))
     .filter((file) => /\.(?:js|jsx|mjs)$/.test(file) && !SEMANTIC_MODULES.includes(toRelative(file)))
@@ -414,8 +414,12 @@ test('anlamsal katman kimlik, yetki, SQL ve ağ yüzeyi taşımaz; doğal dil ku
     'src/server/ai/providers/openAiCompatibleProvider.js',
     'src/server/ai/semanticRetrieval.js'
   ]);
-  for (const file of ['src/server/ai/aiGateway.js', 'src/server/ai/providers/openAiCompatibleProvider.js']) {
-    assert.match(fs.readFileSync(path.join(ROOT, file), 'utf8'), /^import \{ SEMANTIC_LIMITS \} from '[./]+domain\/ai\/semanticContract\.js';$/m, file);
+  for (const [file, expected] of [
+    ['src/server/ai/aiGateway.js', 'createSemanticCatalogue, semanticToolDefinitions, SEMANTIC_LIMITS'],
+    ['src/server/ai/providers/openAiCompatibleProvider.js', 'SEMANTIC_LIMITS']
+  ]) {
+    const imports = [...fs.readFileSync(path.join(ROOT, file), 'utf8').matchAll(/^import \{ ([^}]+) \} from '[./]+domain\/ai\/semanticContract\.js';$/gm)];
+    assert.deepEqual(imports.map((match) => match[1]), [expected], file);
   }
   assert.deepEqual(importers(/semanticEvaluation/), []);
 });
