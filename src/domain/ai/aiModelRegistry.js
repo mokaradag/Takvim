@@ -68,17 +68,18 @@ const SAFE_FIELD_PATTERN = /^[A-Za-z0-9._-]{1,40}$/;
  * fark edilmeden kalkardı.
  */
 const DOCUMENT_FIELDS = new Set(['version', 'models', 'profiles']);
-const MODEL_FIELDS = new Set(['id', 'provider', 'capabilities', 'contextTokens', 'maxConcurrency', 'enabled', 'preprocessing']);
+const MODEL_FIELDS = new Set(['id', 'provider', 'capabilities', 'contextTokens', 'maxConcurrency', 'enabled', 'preprocessing', 'reportedModels']);
 const PROFILE_FIELDS = new Set(['model', 'enabled', 'maxOutputTokens', 'timeoutMs']);
-const PREPROCESSING_FIELDS = new Set(['id', 'queryPrefix', 'documentPrefix']);
+const PREPROCESSING_FIELDS = new Set(['id', 'queryPrefix', 'documentPrefix', 'truncateTokens']);
 const PREPROCESSING_ID_PATTERN = /^[a-z0-9][a-z0-9.:-]{0,63}$/;
 const MAX_PREFIX_CHARS = 200;
+const MAX_REPORTED_MODELS = 8;
 
 /** Gömme girdisinin amacı: kullanıcı sorgusu ya da sunucuya ait katalog belgesi. */
 export const AI_EMBEDDING_PURPOSES = Object.freeze({ QUERY: 'query', DOCUMENT: 'document' });
 
-/** Ön işlemesiz model: önek yok, belirteç `none`. */
-export const AI_NO_PREPROCESSING = Object.freeze({ id: 'none', queryPrefix: '', documentPrefix: '' });
+/** Ön işlemesiz model: önek yok, kesme yok, belirteç `none`. */
+export const AI_NO_PREPROCESSING = Object.freeze({ id: 'none', queryPrefix: '', documentPrefix: '', truncateTokens: null });
 /** Tek istekte istenebilecek en büyük çıktı belirteci (profil sınırı ve çağrı sınırı için ortak). */
 export const AI_MAX_OUTPUT_TOKENS = 131072;
 
@@ -141,9 +142,15 @@ function rejectUnknownFields(entry, allowed, path, add) {
  * önekleri). Yalnızca gömme modelinde tanımlanır; belirteç önekleri adlandırır
  * ve gömme uzayının kimliğine girer: önek varsa `none` olamaz, önek yoksa
  * `none` olmalıdır (nitelendirme raporuyla aynı kural). Önekler kırpılmaz.
+ *
+ * Alanın YOKLUĞU ön işlemesizliktir; yazılmış her değer (`null` dâhil)
+ * doğrulanır: geçersiz değer gömme uzayını sessizce değiştiremez.
+ * `truncateTokens`, modelin belirteç penceresini aşan girdinin (önek dâhil)
+ * uçta ilk N belirtece kesileceğini söyler; yoksa aşan girdiyi uç reddeder.
  */
-function validatePreprocessing(value, capabilities, path, add) {
-  if (value == null) return AI_NO_PREPROCESSING;
+function validatePreprocessing(entry, capabilities, contextTokens, path, add) {
+  if (!Object.hasOwn(entry, 'preprocessing') || entry.preprocessing === undefined) return AI_NO_PREPROCESSING;
+  const value = entry.preprocessing;
   if (!capabilities?.includes(AI_CAPABILITIES.EMBEDDING)) {
     add(path, 'ön işleme yalnızca gömme modelinde tanımlanabilir');
     return AI_NO_PREPROCESSING;
@@ -155,6 +162,14 @@ function validatePreprocessing(value, capabilities, path, add) {
   rejectUnknownFields(value, PREPROCESSING_FIELDS, path, add);
   const { id, queryPrefix = '', documentPrefix = '' } = value;
   let valid = true;
+  const truncateTokens = optionalInteger(value.truncateTokens, NUMBER_BOUNDS.contextTokens);
+  if (!truncateTokens.ok || value.truncateTokens === null) {
+    add(`${path}.truncateTokens`, 'pozitif tam sayı olmalıdır');
+    valid = false;
+  } else if (truncateTokens.value != null && contextTokens != null && truncateTokens.value > contextTokens) {
+    add(`${path}.truncateTokens`, 'modelin bağlam penceresinden (contextTokens) büyük olamaz');
+    valid = false;
+  }
   if (typeof id !== 'string' || !PREPROCESSING_ID_PATTERN.test(id)) {
     add(`${path}.id`, 'küçük harf, rakam, nokta, iki nokta ve tireden oluşan bir belirteç olmalıdır');
     valid = false;
@@ -168,11 +183,49 @@ function validatePreprocessing(value, capabilities, path, add) {
   if (valid && Boolean(queryPrefix || documentPrefix) === (id === AI_NO_PREPROCESSING.id)) {
     add(`${path}.id`, 'önek kullanılıyorsa belirteç onu adlandırmalı; önek yoksa "none" olmalıdır');
   }
-  return valid ? Object.freeze({ id, queryPrefix, documentPrefix }) : AI_NO_PREPROCESSING;
+  return valid ? Object.freeze({ id, queryPrefix, documentPrefix, truncateTokens: truncateTokens.value }) : AI_NO_PREPROCESSING;
+}
+
+/**
+ * Uçun yanıtta bildirebileceği öteki adlar (ör. vLLM yanıtı her zaman ilk
+ * `--served-model-name` ile döner). Yalnızca model kimliği doğrulanan gömme ve
+ * yeniden sıralama modelinde tanımlanır; joker yoktur, her ad bire bir eşleşir.
+ * Adlar arası çakışma (başka modelin kimliği ya da adı) kayıtta reddedilir.
+ */
+function validateReportedModels(entry, id, capabilities, path, add) {
+  if (!Object.hasOwn(entry, 'reportedModels') || entry.reportedModels === undefined) return Object.freeze([]);
+  const value = entry.reportedModels;
+  if (!capabilities?.some((capability) => capability === AI_CAPABILITIES.EMBEDDING || capability === AI_CAPABILITIES.RERANK)) {
+    add(path, 'yalnızca gömme ya da yeniden sıralama modelinde tanımlanabilir');
+    return Object.freeze([]);
+  }
+  const valid = Array.isArray(value) && value.length >= 1 && value.length <= MAX_REPORTED_MODELS
+    && value.every((name) => typeof name === 'string' && MODEL_ID_PATTERN.test(name) && name !== id)
+    && new Set(value).size === value.length;
+  if (!valid) {
+    add(path, `modelin kendi kimliğinden farklı, yinelenmeyen 1-${MAX_REPORTED_MODELS} model adı olmalıdır`);
+    return Object.freeze([]);
+  }
+  return Object.freeze([...value]);
+}
+
+/** Bildirilen ad başka bir modeli de adlandırırsa yanıtın hangi modele ait olduğu bilinemez. */
+function rejectAmbiguousReportedModels(models, paths, add) {
+  const owner = new Map([...models.keys()].map((id) => [id, id]));
+  for (const model of models.values()) {
+    for (const name of model.reportedModels) {
+      if (owner.has(name) && owner.get(name) !== model.id) {
+        add(`${paths.get(model.id)}.reportedModels`, 'başka bir modelin kimliğini ya da adını taşıyamaz');
+      } else {
+        owner.set(name, model.id);
+      }
+    }
+  }
 }
 
 function validateModels(entries, add) {
   const models = new Map();
+  const paths = new Map();
   if (!Array.isArray(entries) || entries.length === 0) {
     add('models', 'en az bir model tanımlanmalıdır');
     return models;
@@ -211,7 +264,9 @@ function validateModels(entries, add) {
     if (!maxConcurrency.ok) add(`${path}.maxConcurrency`, 'boş ya da 1-1000 arası tam sayı olmalıdır');
     const enabled = optionalBoolean(entry.enabled, true);
     if (!enabled.ok) add(`${path}.enabled`, 'true ya da false olmalıdır');
-    const preprocessing = validatePreprocessing(entry.preprocessing, capabilities, `${path}.preprocessing`, add);
+    const preprocessing = validatePreprocessing(entry, capabilities, contextTokens.value ?? null, `${path}.preprocessing`, add);
+    const reportedModels = validateReportedModels(entry, id, capabilities, `${path}.reportedModels`, add);
+    paths.set(id, path);
     models.set(id, Object.freeze({
       id,
       provider,
@@ -219,9 +274,11 @@ function validateModels(entries, add) {
       contextTokens: contextTokens.value ?? null,
       maxConcurrency: maxConcurrency.value ?? null,
       enabled: enabled.value !== false,
-      preprocessing
+      preprocessing,
+      reportedModels
     }));
   });
+  rejectAmbiguousReportedModels(models, paths, add);
   return models;
 }
 
@@ -324,7 +381,8 @@ export function resolveModelProfile(registry, profileId) {
       maxConcurrency: model.maxConcurrency,
       maxOutputTokens: profile.maxOutputTokens,
       timeoutMs: profile.timeoutMs,
-      preprocessing: model.preprocessing
+      preprocessing: model.preprocessing,
+      reportedModels: model.reportedModels
     })
   };
 }

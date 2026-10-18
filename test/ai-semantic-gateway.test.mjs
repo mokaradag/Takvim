@@ -12,16 +12,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { startFakeOpenAiCompatibleServer } from './helpers/fakeOpenAiCompatibleServer.mjs';
-import { DEFAULT_KEY, captureConsole, createAiStack } from './helpers/aiStack.mjs';
+import { DEFAULT_KEY, PERSONAL_KEY_A, captureConsole, createAiStack } from './helpers/aiStack.mjs';
 import { DEFAULT_REGISTRY as REGISTRY, assertIdle as idle, registryWith, semanticGatewayFor as gatewayFor } from './helpers/semanticGateway.mjs';
 
 const { createAiGateway } = await import('../src/server/ai/aiGateway.js');
+const admissionModule = await import('../src/server/ai/admissionController.js');
 const { parseAiConfig } = await import('../src/server/ai/aiConfig.js');
 const { AI_PROFILES, resolveModelProfile, validateModelRegistry } = await import('../src/domain/ai/aiModelRegistry.js');
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
 const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
 const { snapshotOperations } = await import('../src/server/observability/telemetryRegistry.js');
-const { createOpenAiCompatibleProvider } = await import('../src/server/ai/providers/openAiCompatibleProvider.js');
+const { createOpenAiCompatibleProvider, embeddingResponseBudget } = await import('../src/server/ai/providers/openAiCompatibleProvider.js');
+const { SEMANTIC_LIMITS } = await import('../src/domain/ai/semanticContract.js');
 const { getAiGateway } = await import('../src/server/ai/aiRuntime.js');
 const { withSqlTransaction } = await import('../src/server/db/pool.js');
 
@@ -141,8 +143,9 @@ test('ön işleme önekleri kayıttan ve yalnızca ağ geçidinde eklenir; yenid
   assert.equal(provider.calls[0].apiKey, DEFAULT_KEY);
   assert.deepEqual(query.route, {
     profile: AI_PROFILES.EMBEDDING, model: EMBEDDING.model, provider: EMBEDDING.provider, capabilities: EMBEDDING.capabilities,
-    preprocessing: { id: 'e5-query-passage', queryPrefix: 'query: ', documentPrefix: 'passage: ' }
+    preprocessing: { id: 'e5-query-passage', queryPrefix: 'query: ', documentPrefix: 'passage: ', truncateTokens: 512 }
   });
+  assert.equal(provider.calls[0].truncateTokens, 512, 'pencere kuralı ön işlemeyle birlikte gider');
   assert.equal(Object.isFrozen(query.route), true);
   assert.deepEqual(Object.keys(query.embeddings[0]), ['index', 'vector']);
   await embedDocuments(gateway);
@@ -157,6 +160,7 @@ test('ön işleme önekleri kayıttan ve yalnızca ağ geçidinde eklenir; yenid
   const plain = gatewayFor(t, { registry: registryWith({ models: (model) => ({ ...model, preprocessing: undefined }) }) });
   await embedQuery(plain.gateway);
   assert.deepEqual(plain.provider.calls[0].input, ['Gecikmiş işlerim']);
+  assert.equal(plain.provider.calls[0].truncateTokens, null);
   // Telemetri profili ve işlemi içeriksiz sayar.
   const snapshot = aiTelemetrySnapshot();
   assert.equal(snapshot.byProfile.embedding, 1);
@@ -213,6 +217,132 @@ test('başka modelin yanıtı bu uzaya ait değildir: bildirilen model farklıys
   assert.equal(provider.calls.length, 3);
   assert.equal(aiTelemetrySnapshot().provider.lastFailureCode, 'AI_PROVIDER_RESPONSE_INVALID');
   idle(admission);
+});
+
+test('kayıtta bildirilen uç adı kabul edilir; başka bir modelin adı yine MODEL_MISMATCH olur', async (t) => {
+  const aliased = registryWith({ models: (model) => (model.id === EMBEDDING.model ? { ...model, reportedModels: ['e5-large'] }
+    : model.id === RERANK.model ? { ...model, reportedModels: ['reranker'] } : model) });
+  const { gateway, provider, admission } = gatewayFor(t, { registry: aliased });
+  provider.enqueue({ type: 'reply', model: 'e5-large' }, { type: 'reply', model: 'reranker' },
+    { type: 'reply', model: 'reranker' }, { type: 'reply', model: 'Qwen3-Embedding-8B' }, { type: 'reply', model: 'e5-large-v2' });
+  const embedded = await embedQuery(gateway);
+  // Köken yapılandırılan modeldir: takma ad uzayı değiştirmez.
+  assert.equal(embedded.route.model, EMBEDDING.model);
+  assert.equal((await rerank(gateway)).scores.length, 2);
+  // Takma ad yalnızca kendi modelini adlandırır: gömme rotasında yeniden sıralayıcının adı da gerçekten farklı bir modeldir.
+  for (const label of ['başka modelin takma adı', 'kayıttaki başka model', 'benzer ama farklı ad']) {
+    await assert.rejects(embedQuery(gateway), (error) => error.details.reason === 'MODEL_MISMATCH', label);
+  }
+  idle(admission);
+});
+
+test('katalog belgesi sunucuya aittir: kurumsal anahtar ve sunucu kapasite anahtarıyla gider; kullanıcının anahtarı ve payı onu belirlemez', async (t) => {
+  const { provider, config } = gatewayFor(t, { env: { MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER: '1', MERGEN_ROTA_AI_MAX_QUEUED_PER_USER: '0' } });
+  assert.equal(config.limits.maxActivePerUser, 1);
+  const users = [];
+  const gateway = createAiGateway({
+    getProvider: () => provider,
+    getAdmission: (() => {
+      const { createAiAdmissionController } = admissionModule;
+      const admission = createAiAdmissionController({ limits: config.limits });
+      const wrapped = { acquire: (options) => { users.push(options.userKey); return admission.acquire(options); }, status: () => admission.status() };
+      return () => wrapped;
+    })(),
+    loadConfig: () => config,
+    loadRegistry: async () => REGISTRY,
+    // Kullanıcının kişisel anahtarı: sorgusu bununla gider.
+    resolveCredential: async () => ({ source: 'personal', apiKey: PERSONAL_KEY_A }),
+    currentSicil: async () => 900001,
+    verifySicil: async () => {}
+  });
+  provider.enqueue({ type: 'deferred' });
+  const building = embedDocuments(gateway);
+  await provider.waitForActive(1);
+  // Kurulum sürerken aynı kullanıcının (etkin payı 1) sorgusu kurulum yüzünden AI_BUSY almaz.
+  await embedQuery(gateway);
+  provider.calls[0].resolve();
+  await building;
+  assert.deepEqual(provider.calls.map((call) => [call.input.length, call.apiKey]), [[2, DEFAULT_KEY], [1, PERSONAL_KEY_A]]);
+  assert.equal(users[0], '\u0000server');
+  assert.equal(String(users[1]), '900001');
+  // Kurumsal anahtar yoksa sunucu işi kişisel anahtara geçmez: yapılandırma hatasıdır ve sağlayıcıya ulaşmaz.
+  const personalOnly = createAiGateway({
+    getProvider: () => provider,
+    getAdmission: () => admissionModule.createAiAdmissionController({ limits: config.limits }),
+    loadConfig: () => ({ ...config, defaultApiKey: null, defaultKeyConfigured: false }),
+    loadRegistry: async () => REGISTRY,
+    resolveCredential: async () => ({ source: 'personal', apiKey: PERSONAL_KEY_A }),
+    currentSicil: async () => 900001,
+    verifySicil: async () => {}
+  });
+  const before = provider.calls.length;
+  await assert.rejects(embedDocuments(personalOnly), (error) => error.code === 'AI_CONFIGURATION_ERROR' && error.details.reason === 'DEFAULT_KEY_REQUIRED');
+  assert.equal((await embedQuery(personalOnly)).embeddings.length, 1, 'kullanıcı sorgusu kendi anahtarıyla sürer');
+  assert.equal(provider.calls.length - before, 1);
+});
+
+test('belirteç penceresi kayıttan açık kuraldır: kesme yoksa uç aşan girdiyi reddeder, varsa önek dâhil ilk N belirteç gömülür', async (t) => {
+  const embedded = [];
+  const server = await startFakeOpenAiCompatibleServer({ semantic: { embed: (text) => { embedded.push(text); return [1, 0, 0]; } } });
+  t.after(() => server.close());
+  // İkizin penceresi 8 belirteçtir (6 sözcük + 2 özel belirteç).
+  server.setScenario({ embeddingWindow: 8 });
+  const env = { MERGEN_ROTA_AI_BASE_URL: server.baseUrl };
+  const withTruncation = (truncateTokens) => registryWith({ models: (model) => (model.id === EMBEDDING.model
+    ? { ...model, contextTokens: 8, preprocessing: { id: 'e5-query-passage', queryPrefix: 'query: ', documentPrefix: 'passage: ', ...(truncateTokens ? { truncateTokens } : {}) } } : model) });
+  const fits = 'bir iki üç dört beş'; // önekle 6 sözcük: tam pencere
+  const over = 'bir iki üç dört beş altı yedi';
+  const strict = gatewayFor(t, { provider: createOpenAiCompatibleProvider(), env, registry: withTruncation(null) });
+  await strict.gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts: [fits], purpose: 'query' });
+  const strictBody = server.state.requests.at(-1).body;
+  assert.equal(Object.hasOwn(strictBody, 'truncate_prompt_tokens') || Object.hasOwn(strictBody, 'truncation_side'), false);
+  assert.deepEqual(embedded.at(-1), `query: ${fits}`);
+  // Kesme bildirilmemişse pencereyi aşan sorgu kullanıcı isteği hatasıdır; katalog belgesi yapılandırma hatasıdır.
+  await assert.rejects(strict.gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts: [over], purpose: 'query' }),
+    (error) => error.code === 'AI_REQUEST_INVALID' && error.details.providerStatus === 400);
+  await assert.rejects(strict.gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts: [fits, over], purpose: 'document' }),
+    (error) => error.code === 'AI_CONFIGURATION_ERROR' && error.details.reason === 'PROVIDER_REJECTED_FIXED_REQUEST');
+  idle(strict.admission);
+
+  const truncating = gatewayFor(t, { provider: createOpenAiCompatibleProvider(), env, registry: withTruncation(8) });
+  const result = await truncating.gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts: [fits, over], purpose: 'document' });
+  assert.equal(result.embeddings.length, 2);
+  const body = server.state.requests.at(-1).body;
+  assert.deepEqual({ truncate: body.truncate_prompt_tokens, side: body.truncation_side, input: body.input },
+    { truncate: 8, side: 'right', input: [`passage: ${fits}`, `passage: ${over}`] });
+  // Sağdan kesme öneki korur: ikiz önekli ilk altı sözcüğü gömdü.
+  assert.deepEqual(embedded.slice(-2), [`passage: ${fits}`, 'passage: bir iki üç dört beş']);
+  assert.equal(result.route.preprocessing.truncateTokens, 8);
+  // Sözleşmenin karakter sınırındaki girdi ağ geçidinden geçer; pencere kuralı uçta uygulanır.
+  server.setScenario({});
+  const longest = 'ş'.repeat(SEMANTIC_LIMITS.maxItemTextChars);
+  await truncating.gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts: [longest], purpose: 'document' });
+  assert.deepEqual(server.state.requests.at(-1).body.input, [`passage: ${longest}`]);
+  idle(truncating.admission);
+});
+
+test('gömme yanıt bütçesi sözleşmenin en büyük isteğiyle sınırlıdır: en kötü biçimli geçerli yanıt kabul edilir, bütçeyi aşan bozuk yanıt ayrıştırılmaz', async (t) => {
+  // Bütçe girdi sayısıyla ölçeklenir ama sözleşmenin en büyük kataloğunu aşmaz.
+  assert.equal(embeddingResponseBudget(1), 1024 * 1024 + SEMANTIC_LIMITS.maxDimensions * 32);
+  assert.equal(embeddingResponseBudget(10000), embeddingResponseBudget(SEMANTIC_LIMITS.maxCatalogueItems));
+  assert.equal(embeddingResponseBudget(SEMANTIC_LIMITS.maxCatalogueItems), 1024 * 1024 + 256 * 8192 * 32);
+  const server = await startFakeOpenAiCompatibleServer();
+  t.after(() => server.close());
+  const provider = createOpenAiCompatibleProvider();
+  const { signal } = new AbortController();
+  // En uzun kayan nokta yazımı (24 karakter) ve geniş ayraçla en büyük boyutta vektörler: geçerli yanıt bütçeye sığar.
+  const worst = '-1.2345678901234567e-308';
+  const inputs = ['a', 'b', 'c'];
+  server.setScenario({ semanticPayload: (body) => JSON.parse(JSON.stringify({ model: body.model, data: body.input.map((_, index) => ({
+    object: 'embedding', index, embedding: Array.from({ length: SEMANTIC_LIMITS.maxDimensions }, () => Number(worst))
+  })) })) });
+  const valid = await provider.embeddings({ baseUrl: server.baseUrl, apiKey: 'k', model: 'm', input: inputs, signal });
+  assert.equal(valid.embeddings.length, 3);
+  assert.equal(valid.embeddings[2].vector.length, SEMANTIC_LIMITS.maxDimensions);
+  // Bütçeyi aşan bozuk yanıt okunurken kesilir; JSON ayrıştırılmaz.
+  server.setScenario({ oversizedBytes: embeddingResponseBudget(inputs.length) });
+  await assert.rejects(provider.embeddings({ baseUrl: server.baseUrl, apiKey: 'k', model: 'm', input: inputs, signal }),
+    (error) => error.code === 'AI_PROVIDER_RESPONSE_INVALID' && error.details.reason === 'RESPONSE_TOO_LARGE');
 });
 
 test('sunucuya ait katalog belgesinin reddi yapılandırma hatasıdır; kullanıcı sorgusunun reddi istek hatasıdır', async (t) => {

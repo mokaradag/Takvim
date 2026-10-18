@@ -1,5 +1,5 @@
 import 'server-only';
-import { AI_ERROR_CODES } from '../../domain/ai/aiErrorCatalog.js';
+import { AI_ERROR_CODES, aiErrorDefinition } from '../../domain/ai/aiErrorCatalog.js';
 import { AI_EMBEDDING_PURPOSES, AI_PROFILE_RESOLUTION_FAILURES, AI_PROFILES, resolveModelProfile } from '../../domain/ai/aiModelRegistry.js';
 import {
   applyRerankScores,
@@ -10,7 +10,6 @@ import {
   rankSemanticIndex,
   SEMANTIC_FAILURES,
   semanticFingerprint,
-  semanticIndexIdentity,
   semanticModelProvenance,
   semanticToolDefinitions
 } from '../../domain/ai/semanticContract.js';
@@ -18,7 +17,7 @@ import { readAiConfig, requireAiAvailable } from './aiConfig.js';
 import { raceWithAbort } from './aiDeadline.js';
 import { AiError, isAiError } from './aiErrors.js';
 import { getAiGateway } from './aiRuntime.js';
-import { recordSemanticRetrieval } from './aiTelemetry.js';
+import { aiFailureServiceHealth, recordSemanticRetrieval } from './aiTelemetry.js';
 import { loadAiModelRegistry } from './modelRegistryLoader.js';
 import { getRotaTool, rotaToolNames } from './tools/toolRegistry.js';
 
@@ -36,26 +35,40 @@ import { getRotaTool, rotaToolNames } from './tools/toolRegistry.js';
  * Başarısızlık danışmanlığın kaybıdır: yeniden sıralama kullanılamazsa
  * doğrulanmış ilk aşama sırası (`first_stage`), gömme ya da dizin
  * kullanılamazsa `unavailable` döner ve çağıran Aşama 3 davranışıyla sürer.
- * Yukarı yalnızca çağıranın kendi iptali ve yapay zekâ dışı hatalar (kimlik,
- * veritabanı, programlama hatası) taşınır.
+ * Danışmanlık kaybına yalnızca ortak hata kataloğunun BEKLENEN model/hizmet
+ * sonuçları çevrilir; çağıranın kendi iptali, iç hata (açık SQL işlemi,
+ * programlama hatası) ve yapay zekâ dışı hatalar (kimlik, veritabanı) yukarı
+ * taşınır.
  *
  * Katalog dizini süreç içinde tutulur (kalıcılık, vektör veritabanı yok).
- * Yeniden kullanımdan önce 4A dizin kimliği (sözleşme sürümü, katalog parmak
- * izi, gömme uzayı, boyut) güncel katalog ve uzayla yeniden hesaplanıp
- * karşılaştırılır; ön işlemenin önekleri de aynı olmalıdır. Kurulum tek
- * uçuştur ve tek bir çağıranın iptaline bağlı değildir (ağ geçidinin süre
- * sınırıyla biter); yalnızca tamamen doğrulanmış dizin görünür olur, başarısız
- * kurulum önbelleğe girmez.
+ * Yeniden kullanım anahtarı katalog parmak izi, gömme uzayı (4A) ve ön
+ * işlemenin kendisidir (önekler, belirteç penceresi); boyut sorgu vektörüyle
+ * denetlenir ve uç geçerli ama farklı boyutta vektör döndürmeye başlarsa dizin
+ * bir kez yeniden kurulur. Kurulum anahtar başına tek uçuştur ve tek bir
+ * çağıranın iptaline bağlı değildir (ağ geçidinin süre sınırıyla biter); yalnızca
+ * tamamen doğrulanmış ve en son istenen anahtara ait dizin görünür olur,
+ * başarısız kurulum önbelleğe girmez.
  */
 
 /** İlk aşama derinliği: değerlendirmenin aday sınırıyla (`SEMANTIC_EVALUATION_DEFAULTS.limit`) aynıdır. */
 export const SEMANTIC_RETRIEVAL_DEPTH = 10;
 
+/**
+ * Boyut uyuşmazlığının tetiklediği yeniden kurulumlar arasındaki en kısa süre
+ * (anahtar başına): farklı boyutlu arka uçları karıştıran bir uç her istekte
+ * kataloğu yeniden gömdüremez; gerçek boyut geçişi en geç bu sürede toparlanır.
+ */
+export const SEMANTIC_DIMENSION_REBUILD_COOLDOWN_MS = 60000;
+
 export const SEMANTIC_RETRIEVAL_STATUS = Object.freeze({ RERANKED: 'reranked', FIRST_STAGE: 'first_stage', UNAVAILABLE: 'unavailable' });
 
 const STAGE = Object.freeze({ QUERY: 'query', CATALOGUE: 'catalogue', EMBEDDING: 'embedding', INDEX: 'index', RERANK: 'rerank' });
 
-/** Ağ geçidi sonucunun teşhis sınıfı: kararlı ve içeriksiz. */
+/**
+ * Ağ geçidinin BEKLENEN sonuçlarının teşhis sınıfı: kararlı ve içeriksiz.
+ * Tabloda olmayan kod (ör. `AI_INTERNAL_ERROR`) model ya da hizmet sonucu
+ * değildir; danışmanlık kaybına çevrilmez, yukarı taşınır.
+ */
 const CATEGORY_OF_CODE = Object.freeze({
   [AI_ERROR_CODES.AI_DISABLED]: 'disabled',
   [AI_ERROR_CODES.AI_CONFIGURATION_ERROR]: 'configuration',
@@ -76,17 +89,31 @@ const PROFILE_OFF = new Set([AI_PROFILE_RESOLUTION_FAILURES.PROFILE_DISABLED, AI
 
 const failureOf = (stage, category, reason) => Object.freeze({ stage, category, reason });
 
+/**
+ * Anlamsal katmanın kendi bulgusu. Hizmet sağlığı sınıfı ortak hata
+ * kataloğunun karşılık gelen kodundan gelir (`code` yoksa sağlık hatası değildir).
+ */
+function localOutcome(stage, category, reason, { code = null, log = true } = {}) {
+  return { failure: failureOf(stage, category, reason), serviceFailure: code ? aiErrorDefinition(code).serviceFailure : false, log };
+}
+
 /** Anlamsal katmanın kendi kusuru (ağ geçidi görmediği için burada günlüğe yazılır). */
 class SemanticStageFailure extends Error {
-  constructor(failure) {
-    super(failure.reason);
-    this.failure = failure;
+  constructor(outcome) {
+    super(outcome.failure.reason);
+    this.outcome = outcome;
   }
 }
 
-function gatewayFailure(stage, error) {
+/** Ağ geçidi hatasının sonucu; beklenen bir model/hizmet sonucu değilse `null` (çağıran yukarı taşır). */
+function gatewayOutcome(stage, error) {
+  if (!isAiError(error) || !Object.hasOwn(CATEGORY_OF_CODE, error.code)) return null;
   const reason = error.details?.reason;
-  return failureOf(stage, CATEGORY_OF_CODE[error.code] ?? 'internal', typeof reason === 'string' && SAFE_REASON.test(reason) ? reason : error.code);
+  return {
+    failure: failureOf(stage, CATEGORY_OF_CODE[error.code], typeof reason === 'string' && SAFE_REASON.test(reason) ? reason : error.code),
+    // Sağlık sınıfı ağ geçidinin `ai.request` kaydıyla aynı kuraldır (anahtar kaynağı ve kapasite kapsamı dâhil).
+    serviceFailure: aiFailureServiceHealth(error) === true
+  };
 }
 
 function cancelled(error) {
@@ -99,12 +126,11 @@ function spaceOf(route) {
   return provenance ? createEmbeddingSpace(provenance, route.preprocessing?.id) : null;
 }
 
-/** Süren kurulumun anahtarı: katalog, uzay ve öneklerin kendisi (belirteç aynı kalıp önek değişse de eski kurulum paylaşılmaz). */
+/** Dizinin anahtarı: katalog, uzay ve ön işlemenin kendisi (belirteç aynı kalıp önek ya da pencere değişse de eski dizin kullanılmaz). */
 function indexKey(catalogue, space, route) {
-  return semanticFingerprint([catalogue.fingerprint, space.key, route.preprocessing.queryPrefix, route.preprocessing.documentPrefix]);
+  const { queryPrefix, documentPrefix, truncateTokens = null } = route.preprocessing;
+  return semanticFingerprint([catalogue.fingerprint, space.key, queryPrefix, documentPrefix, truncateTokens]);
 }
-
-const samePrefixes = (left, right) => left.queryPrefix === right.queryPrefix && left.documentPrefix === right.documentPrefix;
 
 async function defaultLoadRegistry(signal) {
   const config = requireAiAvailable(readAiConfig());
@@ -120,10 +146,11 @@ export function createSemanticRetrieval({
   loadTools = defaultTools,
   now = Date.now
 } = {}) {
-  // Tek görünür dizin ve en çok bir süren kurulum; kullanıcı verisi (sorgu, sorgu vektörü) burada tutulmaz.
-  const state = { ready: null, building: null };
+  // Tek görünür dizin ve anahtar başına en çok bir süren kurulum; kullanıcı verisi (sorgu, sorgu vektörü) burada tutulmaz.
+  const state = { ready: null, builds: new Map(), latest: null, dimensionRebuild: null };
 
   async function buildIndex(catalogue, space, key) {
+    // Katalog belgesi sunucuya aittir: ağ geçidi bunu kurumsal anahtar ve sunucu kapasitesiyle yürütür.
     const call = await getGateway().embedTexts({
       profile: AI_PROFILES.EMBEDDING,
       texts: catalogue.items.map((item) => item.text),
@@ -133,43 +160,44 @@ export function createSemanticRetrieval({
     // Kurulum sırasında rota değiştiyse (kayıt yeniden yüklendi) vektörler istenen uzaya ait değildir.
     const built = spaceOf(call.route);
     if (!built || built.key !== space.key || indexKey(catalogue, built, call.route) !== key) {
-      throw new SemanticStageFailure(failureOf(STAGE.INDEX, 'stale', SEMANTIC_FAILURES.SPACE_MISMATCH));
+      throw new SemanticStageFailure(localOutcome(STAGE.INDEX, 'stale', SEMANTIC_FAILURES.SPACE_MISMATCH));
     }
     const created = createSemanticIndex(catalogue, space, call.embeddings);
-    if (!created.ok) throw new SemanticStageFailure(failureOf(STAGE.INDEX, 'invalid_output', created.reason));
+    if (!created.ok) {
+      throw new SemanticStageFailure(localOutcome(STAGE.INDEX, 'invalid_output', created.reason, { code: AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID }));
+    }
     return created.index;
   }
 
   /**
-   * Geçerli dizin ya da tek uçuşlu kurulum. Kurulum çağıranın sinyaline bağlı
-   * değildir: iptal eden çağıran yalnızca kendi beklemesinden çıkar, öteki
-   * bekleyenler ve sonraki istekler kurulumu kullanır. Kurulum ağ geçidinin
-   * süre sınırıyla her zaman sonuçlanır.
+   * Geçerli dizin ya da anahtar başına tek uçuşlu kurulum. Kurulum çağıranın
+   * sinyaline bağlı değildir: iptal eden çağıran yalnızca kendi beklemesinden
+   * çıkar, öteki bekleyenler ve sonraki istekler kurulumu kullanır. Kurulum ağ
+   * geçidinin süre sınırıyla her zaman sonuçlanır. Arada başka anahtar istense
+   * de süren kurulum izlenir (A → B → A ikinci kurulum açmaz); yalnızca en son
+   * istenen anahtarın kurulumu görünür olur. `rebuild`, hazır dizini kullanmadan
+   * kurulumu başlatır ya da paylaşır; hazır dizin yalnızca yeni kurulum
+   * başarıyla bitince değişir, kurulum düşerse hazır dizin korunur.
    */
-  async function indexFor(catalogue, space, route, signal) {
+  async function indexFor(catalogue, space, route, signal, { rebuild = false } = {}) {
     signal?.throwIfAborted();
-    // Yeniden kullanım 4A dizin kimliğiyle (sözleşme sürümü, katalog, uzay, boyut) ve öneklerin kendisiyle karşılaştırılır.
-    const { ready } = state;
-    if (ready && samePrefixes(ready.preprocessing, route.preprocessing)
-      && ready.index.identity === semanticIndexIdentity(catalogue.fingerprint, space.key, ready.index.dimensions)) {
-      return { index: ready.index, use: 'hit' };
-    }
     const key = indexKey(catalogue, space, route);
-    let build = state.building?.key === key ? state.building : null;
+    state.latest = key;
+    if (!rebuild && state.ready?.key === key) return { index: state.ready.index, use: 'hit' };
+    let build = state.builds.get(key);
     const use = build ? 'shared' : 'built';
     if (!build) {
-      build = { key, promise: buildIndex(catalogue, space, key) };
-      state.building = build;
-      // Yalnızca en son istenen kurulum görünür olur; reddedilen kurulum önbellekte kalmaz.
-      build.promise.then((index) => {
-        if (state.building !== build) return;
-        state.building = null;
-        state.ready = { index, preprocessing: route.preprocessing };
+      build = buildIndex(catalogue, space, key);
+      state.builds.set(key, build);
+      // Reddedilen kurulum önbellekte kalmaz; sonraki istek yeniden kurar.
+      build.then((index) => {
+        if (state.builds.get(key) === build) state.builds.delete(key);
+        if (state.latest === key) state.ready = { key, index };
       }, () => {
-        if (state.building === build) state.building = null;
+        if (state.builds.get(key) === build) state.builds.delete(key);
       });
     }
-    const index = await (signal ? raceWithAbort(() => build.promise, signal) : build.promise);
+    const index = await (signal ? raceWithAbort(() => build, signal) : build);
     return { index, use };
   }
 
@@ -187,24 +215,36 @@ export function createSemanticRetrieval({
     return { embedding: reasonOf(AI_PROFILES.EMBEDDING), rerank: reasonOf(AI_PROFILES.RERANK) };
   }
 
+  /** Kapalı ya da tanımsız profil sağlık hatası değildir; bozuk eşleme yapılandırma hatasıdır. */
+  const profileOutcome = (stage, reason) => (PROFILE_OFF.has(reason)
+    ? localOutcome(stage, 'disabled', reason, { code: AI_ERROR_CODES.AI_DISABLED })
+    : localOutcome(stage, 'configuration', reason, { code: AI_ERROR_CODES.AI_CONFIGURATION_ERROR }));
+
+  /** Boyut uyuşmazlığı yeniden kurulumu bu anahtar için bekleme süresi dışında mı? Evetse zamanı kaydeder. */
+  function claimDimensionRebuild(key) {
+    const last = state.dimensionRebuild;
+    if (last?.key === key && now() - last.at < SEMANTIC_DIMENSION_REBUILD_COOLDOWN_MS) return false;
+    state.dimensionRebuild = { key, at: now() };
+    return true;
+  }
+
   async function discover(query, signal, trace) {
     const normalized = normalizeSemanticQuery(query);
-    if (!normalized.ok) return { failure: failureOf(STAGE.QUERY, 'query', normalized.reason) };
+    if (!normalized.ok) return localOutcome(STAGE.QUERY, 'query', normalized.reason, { code: AI_ERROR_CODES.AI_REQUEST_INVALID, log: false });
     const built = createSemanticCatalogue(semanticToolDefinitions(loadTools()));
-    if (!built.ok) return { failure: failureOf(STAGE.CATALOGUE, 'catalogue', 'CATALOGUE_INVALID'), log: true };
+    if (!built.ok) return localOutcome(STAGE.CATALOGUE, 'catalogue', 'CATALOGUE_INVALID', { code: AI_ERROR_CODES.AI_CONFIGURATION_ERROR });
     const { catalogue } = built;
     let routes;
     try {
       routes = await routeFailures(signal);
     } catch (error) {
       if (signal?.aborted) throw cancelled(error);
-      if (!isAiError(error)) throw error;
+      const outcome = gatewayOutcome(STAGE.EMBEDDING, error);
+      if (!outcome) throw error;
       // Ağ geçidi çağrılmadığı için yapılandırma kusuru burada günlüğe yazılır.
-      return { failure: gatewayFailure(STAGE.EMBEDDING, error), log: true };
+      return { ...outcome, log: true };
     }
-    if (routes.embedding) {
-      return { failure: failureOf(STAGE.EMBEDDING, PROFILE_OFF.has(routes.embedding) ? 'disabled' : 'configuration', routes.embedding), log: true };
-    }
+    if (routes.embedding) return profileOutcome(STAGE.EMBEDDING, routes.embedding);
 
     let ranked;
     try {
@@ -212,27 +252,37 @@ export function createSemanticRetrieval({
         profile: AI_PROFILES.EMBEDDING, texts: [normalized.value], purpose: AI_EMBEDDING_PURPOSES.QUERY, signal
       });
       const space = spaceOf(embedded.route);
-      if (!space) return { failure: failureOf(STAGE.EMBEDDING, 'configuration', 'SPACE_INVALID'), log: true };
+      if (!space) return localOutcome(STAGE.EMBEDDING, 'configuration', 'SPACE_INVALID', { code: AI_ERROR_CODES.AI_CONFIGURATION_ERROR });
       trace.stage = STAGE.INDEX;
-      const { index, use } = await indexFor(catalogue, space, embedded.route, signal);
-      trace.index = use;
       // Sorgu vektörü sıralamada doğrulanır (biçim, sayı, boyut, sonluluk, uzay): bozuksa gömme evresinin çıktısıdır.
-      const result = rankSemanticIndex(index, {
+      const rank = (index) => rankSemanticIndex(index, {
         space, embeddings: embedded.embeddings, limit: Math.min(SEMANTIC_RETRIEVAL_DEPTH, index.catalogue.items.length)
       });
-      if (!result.ok) return { failure: failureOf(STAGE.EMBEDDING, 'invalid_output', result.reason), log: true };
+      let { index, use } = await indexFor(catalogue, space, embedded.route, signal);
+      let result = rank(index);
+      // Uç bu uzayda başka boyutta vektör döndürmeye başladıysa hazır dizin güncel olmayabilir: süren kurulum
+      // varsa beklenir, yoksa bekleme süresi dışındaysa bir kez yeniden kurulur. Kurulum düşerse hazır dizin
+      // korunur; yeni dizin de uyuşmuyorsa bozuk olan sorgudur.
+      if (!result.ok && result.reason === SEMANTIC_FAILURES.DIMENSION_MISMATCH && use === 'hit') {
+        const key = indexKey(catalogue, space, embedded.route);
+        if (state.builds.has(key) || claimDimensionRebuild(key)) {
+          ({ index, use } = await indexFor(catalogue, space, embedded.route, signal, { rebuild: true }));
+          result = rank(index);
+        }
+      }
+      trace.index = use;
+      if (!result.ok) return localOutcome(STAGE.EMBEDDING, 'invalid_output', result.reason, { code: AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID });
       ranked = { candidates: result.candidates, textOf: new Map(index.catalogue.items.map((item) => [item.id, item.text])) };
     } catch (error) {
       if (signal?.aborted) throw cancelled(error);
-      if (error instanceof SemanticStageFailure) return { failure: error.failure, log: true };
-      if (!isAiError(error)) throw error;
-      return { failure: gatewayFailure(trace.stage, error) };
+      if (error instanceof SemanticStageFailure) return error.outcome;
+      const outcome = gatewayOutcome(trace.stage, error);
+      if (!outcome) throw error;
+      return outcome;
     }
 
-    const firstStage = (failure, log = false) => ({ status: SEMANTIC_RETRIEVAL_STATUS.FIRST_STAGE, candidates: ranked.candidates, failure, log });
-    if (routes.rerank) {
-      return firstStage(failureOf(STAGE.RERANK, PROFILE_OFF.has(routes.rerank) ? 'disabled' : 'configuration', routes.rerank), true);
-    }
+    const firstStage = (outcome) => ({ ...outcome, status: SEMANTIC_RETRIEVAL_STATUS.FIRST_STAGE, candidates: ranked.candidates });
+    if (routes.rerank) return firstStage(profileOutcome(STAGE.RERANK, routes.rerank));
     let scored;
     try {
       scored = await getGateway().rerankTexts({
@@ -243,11 +293,14 @@ export function createSemanticRetrieval({
       });
     } catch (error) {
       // Çağıranın iptali burada ilk aşamaya çevrilmez: `retrieve` sonucu döndürmeden önce iptali denetler.
-      if (!isAiError(error)) throw error;
-      return firstStage(gatewayFailure(STAGE.RERANK, error));
+      const outcome = gatewayOutcome(STAGE.RERANK, error);
+      if (!outcome) throw error;
+      return firstStage(outcome);
     }
     const reranked = applyRerankScores(ranked.candidates, scored.scores);
-    if (!reranked.ok) return firstStage(failureOf(STAGE.RERANK, 'invalid_output', reranked.reason), true);
+    if (!reranked.ok) {
+      return firstStage(localOutcome(STAGE.RERANK, 'invalid_output', reranked.reason, { code: AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID }));
+    }
     return { status: SEMANTIC_RETRIEVAL_STATUS.RERANKED, candidates: reranked.candidates, failure: null };
   }
 
@@ -274,7 +327,13 @@ export function createSemanticRetrieval({
     const status = outcome.status ?? SEMANTIC_RETRIEVAL_STATUS.UNAVAILABLE;
     const candidates = outcome.candidates ?? Object.freeze([]);
     recordSemanticRetrieval({
-      status, failure: outcome.failure, index: trace.index, candidates: candidates.length, durationMs: now() - startedAt, log: Boolean(outcome.log)
+      status,
+      failure: outcome.failure,
+      serviceFailure: Boolean(outcome.serviceFailure),
+      index: trace.index,
+      candidates: candidates.length,
+      durationMs: now() - startedAt,
+      log: Boolean(outcome.log)
     });
     return Object.freeze({ status, candidates, failure: outcome.failure });
   }
@@ -286,7 +345,7 @@ export function createSemanticRetrieval({
       const index = state.ready?.index;
       return {
         ready: index ? { identity: index.identity, dimensions: index.dimensions, items: index.catalogue.items.length } : null,
-        building: state.building !== null
+        building: state.builds.size > 0
       };
     }
   };

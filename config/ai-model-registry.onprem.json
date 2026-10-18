@@ -56,13 +56,14 @@
       "capabilities": [
         "embedding"
       ],
-      "contextTokens": null,
+      "contextTokens": 512,
       "maxConcurrency": null,
       "enabled": true,
       "preprocessing": {
         "id": "e5-query-passage",
         "queryPrefix": "query: ",
-        "documentPrefix": "passage: "
+        "documentPrefix": "passage: ",
+        "truncateTokens": 512
       }
     },
     {

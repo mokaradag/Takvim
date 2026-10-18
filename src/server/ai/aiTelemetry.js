@@ -157,6 +157,17 @@ function outcomeOf(code, serviceFailure, { source = null, details = null } = {})
 }
 
 /**
+ * Ağ geçidi hatasının hizmet sağlığı sınıfı, `ai.request` kaydıyla AYNI kural
+ * (`outcomeOf`): anahtarın kaynağı ve kapasite kapsamı hatanın ayrıntısından
+ * okunur. Ağ geçidini çağıran katmanlar (ör. anlamsal keşif) ikinci bir
+ * sınıflandırma yazmaz.
+ */
+export function aiFailureServiceHealth(error) {
+  const details = error?.details ?? null;
+  return outcomeOf(error?.code, error?.serviceFailure, { source: details?.credentialSource ?? null, details }).serviceFailure;
+}
+
+/**
  * Kapasite sonucunu paylaşılan baskı ya da kullanıcının kendi sınırı olarak
  * işaretler. Rehber denetimi kapısının dolması yapay zekâ kapasitesiyle
  * karıştırılmaz: o istekler kapasite denetimine hiç ulaşmamıştır.
@@ -579,7 +590,7 @@ const SEMANTIC_STAGES = new Set(['query', 'catalogue', 'embedding', 'index', 're
 const SEMANTIC_CATEGORIES = new Set([
   'query', 'catalogue', 'disabled', 'configuration', 'credential', 'capacity', 'timeout', 'provider', 'invalid_output', 'rejected', 'stale', 'internal'
 ]);
-/** Hizmet sağlığını anlatmayan sınıflar: sorgunun kendisi ve bilinçli olarak kapatılmış profil. */
+/** Teşhis kaydına ve günlüğe girmeyen sınıflar: sorgunun kendisi ve bilinçli olarak kapatılmış profil. */
 const SEMANTIC_QUIET = new Set(['query', 'disabled']);
 const SEMANTIC_INDEX_USES = new Set(['hit', 'built', 'shared']);
 const SAFE_REASON = /^[A-Z][A-Z0-9_]{0,63}$/;
@@ -591,14 +602,17 @@ const SAFE_REASON = /^[A-Z][A-Z0-9_]{0,63}$/;
  * (`shared`), aday sayısı ve süre. Sorgu, vektör, skor ya da katalog metni
  * yazılmaz. `log`, ağ geçidinin görmediği anlamsal kusuru (sözleşmenin reddettiği
  * model çıktısı, bayat dizin, bozuk katalog) işletim günlüğüne yazdırır; ağ
- * geçidi hataları orada zaten kayıtlıdır.
+ * geçidi hataları orada zaten kayıtlıdır. `serviceFailure`, ortak hata
+ * kataloğunun (ağ geçidi kaydıyla aynı) sağlık sınıfıdır: kullanıcının eksik ya
+ * da reddedilen anahtarı, geçersiz sorgusu ya da kapalı profil hizmet sağlığını
+ * düşürmez; danışmanlığın yalnızca `unavailable` kaybı sağlık işlemine yazılır.
  */
-export function recordSemanticRetrieval({ status, failure = null, index = null, candidates = 0, durationMs = 0, log = false }) {
+export function recordSemanticRetrieval({ status, failure = null, serviceFailure = false, index = null, candidates = 0, durationMs = 0, log = false }) {
   const safeStatus = SEMANTIC_STATUSES.has(status) ? status : 'unavailable';
   const stage = SEMANTIC_STAGES.has(failure?.stage) ? failure.stage : null;
   const category = SEMANTIC_CATEGORIES.has(failure?.category) ? failure.category : (failure ? 'internal' : null);
   const reason = SAFE_REASON.test(String(failure?.reason ?? '')) ? failure.reason : null;
-  const serviceFailure = safeStatus === 'unavailable' && category != null && !SEMANTIC_QUIET.has(category);
+  const unhealthy = safeStatus === 'unavailable' && category != null && serviceFailure === true;
   safely(() => {
     const current = state().semantic;
     current.retrievals += 1;
@@ -610,7 +624,7 @@ export function recordSemanticRetrieval({ status, failure = null, index = null, 
     }
     if (SEMANTIC_INDEX_USES.has(index)) current.index[index] += 1;
     pushSample(current.latencyMs, durationMs);
-    recordOperation({ operation: 'ai.semantic.retrieve', durationMs, ok: !serviceFailure, code: serviceFailure ? `SEMANTIC_${category.toUpperCase()}` : null });
+    recordOperation({ operation: 'ai.semantic.retrieve', durationMs, ok: !unhealthy, code: unhealthy ? `SEMANTIC_${category.toUpperCase()}` : null });
   });
   if (log && category && !SEMANTIC_QUIET.has(category)) {
     safely(() => logEvent({

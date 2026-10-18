@@ -401,7 +401,7 @@ Doğrulama kuralları:
 - Belge, model ve profil nesnelerinde yalnızca tanınan alanlar bulunabilir
   (belge: `version`, `models`, `profiles`; model: `id`, `provider`,
   `capabilities`, `contextTokens`, `maxConcurrency`, `enabled`,
-  `preprocessing`; profil: `model`, `enabled`, `maxOutputTokens`, `timeoutMs`). `maxConcurreny` gibi bir yazım
+  `preprocessing`, `reportedModels`; profil: `model`, `enabled`, `maxOutputTokens`, `timeoutMs`). `maxConcurreny` gibi bir yazım
   hatası sessizce yok sayılmaz; kayıt reddedilir, çünkü aksi hâlde güvenlik
   sınırı fark edilmeden kalkardı.
 - `version` yalnızca `1`; en fazla 200 model; model kimlikleri benzersiz.
@@ -410,13 +410,24 @@ Doğrulama kuralları:
 - `contextTokens` boş ya da pozitif tam sayı; `maxConcurrency` boş ya da
   1–1000 (model başına eşzamanlı istek üst sınırı, §6); `enabled` boolean.
 - `preprocessing` yalnızca `embedding` yeteneği taşıyan modelde bulunabilir:
-  `{ "id": "e5-query-passage", "queryPrefix": "query: ", "documentPrefix": "passage: " }`
+  `{ "id": "e5-query-passage", "queryPrefix": "query: ", "documentPrefix": "passage: ", "truncateTokens": 512 }`
   (kapalı alan kümesi; `id` küçük harf/rakam/`.:-` belirteci; önekler en çok
   200 karakter ve kırpılmaz; önek varsa `id` `none` olamaz, önek yoksa `none`
-  olmalıdır). Alan yoksa ön işleme yoktur. Önek ağ geçidinde, gömmenin amacına
-  (sorgu/belge) göre eklenir ve belirteç gömme uzayının kimliğine girer
-  (bkz. YAPAY-ZEKA-ANLAMSAL-KATMAN.md §7.2). Kurum içi kayıtta
-  `intfloat/multilingual-e5-large` E5'in belgelenmiş öneklerini taşır.
+  olmalıdır; `truncateTokens` pozitif tam sayı ve modelin `contextTokens`
+  değerini aşamaz). Alan **yoksa** ön işleme yoktur; yazılmış `null` ya da
+  geçersiz değer kayıt hatasıdır. Önek ağ geçidinde, gömmenin amacına
+  (sorgu/belge) göre eklenir ve belirteç gömme uzayının kimliğine girer.
+  `truncateTokens` varsa uç, belirteç penceresini aşan önekli girdinin ilk N
+  belirtecini gömer (`truncate_prompt_tokens`, `truncation_side: right`; vLLM
+  0.31.0); yoksa aşan girdiyi uç reddeder (bkz. YAPAY-ZEKA-ANLAMSAL-KATMAN.md
+  §7.2). Kurum içi kayıtta `intfloat/multilingual-e5-large` E5'in belgelenmiş
+  öneklerini ve 512 belirteçlik pencereyi taşır.
+- `reportedModels` (isteğe bağlı) yalnızca gömme ya da yeniden sıralama
+  modelinde: uçun yanıtta bildirebileceği öteki adlar (vLLM her zaman ilk
+  `--served-model-name` değerini bildirir). 1–8 tekil ad, joker yok; modelin
+  kendi kimliği ya da kayıttaki başka bir modelin kimliği/adı olamaz.
+  Bildirilen model ne kimlik ne bu adlardan biriyse yanıt `MODEL_MISMATCH` ile
+  reddedilir.
 - Profil kayıttaki **etkin** bir modele bağlanmalı ve profilin gerektirdiği
   yetenekleri taşımalıdır. `maxOutputTokens` 1–131072 ve bağlıysa modelin
   `contextTokens` değerinden büyük olamaz (etkin profil için); `timeoutMs`
@@ -1848,12 +1859,17 @@ Ayrıntılı belge: [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.m
   `scripts/semantic-model-qualification.py`).
 - **4B (uygulandı):** `semanticRetrieval.js` sorguyu kayıttaki `embedding`
   profiliyle ağ geçidinden (`embedTexts`, ön işleme önekleri kayıttan) gömer,
-  sunucuya ait 19 araçlık kataloğun süreç içi dizininde (tek uçuşlu kurulum,
-  4A kimliğiyle yeniden kullanım, kalıcılık/vektör veritabanı yok) en çok 10
+  sunucuya ait 19 araçlık kataloğun süreç içi dizininde (anahtar başına tek
+  uçuşlu kurulum, 4A kimliğiyle yeniden kullanım, boyut geçişinde yeniden
+  kurulum, kalıcılık/vektör veritabanı yok) en çok 10
   aday bulur ve yalnızca bu adayları `rerank` profiliyle (`rerankTexts`)
   yeniden sıralar. Yeniden sıralama düşerse doğrulanmış ilk aşama, gömme
   düşerse danışmanlık yoktur; çağıranın iptali iptal kalır. Gömme ve yeniden
   sıralama çağrıları sohbetle aynı kimlik, kapasite, süre sınırı, dar yineleme
-  ve telemetri kurallarından geçer. Adaylar Aşama 3 turuna bağlanmaz (4C);
-  canlı asistan davranışı değişmez. Üretim yolundan nitelendirme:
-  `node scripts/semantic-evaluation.mjs live`.
+  ve telemetri kurallarından geçer; sunucuya ait katalog gömmesi kullanıcının
+  payını ve anahtarını değil sunucu kapasite anahtarını ve **kurumsal
+  anahtarı** kullanır (kurumsal anahtar yoksa dizin kurulmaz). Beklenen
+  model/hizmet hataları dışındaki iç hatalar (ör. açık SQL işlemi) yukarı
+  taşınır. Adaylar Aşama 3 turuna bağlanmaz (4C); canlı asistan davranışı
+  değişmez. Üretim yolundan nitelendirme (uygulama dizininden; `.env.local`
+  okunur): `node scripts/semantic-evaluation.mjs live --json`.

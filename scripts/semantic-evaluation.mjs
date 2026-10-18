@@ -11,12 +11,16 @@
  *     sözleşmeden ve değerlendirme koşucusundan geçirir. Başka bir kıyas kümesi
  *     ya da katalogla üretilmiş (bayat) koşuyu reddeder.
  *
- *   node scripts/semantic-evaluation.mjs live [--limit 10] [--json]
+ *   node scripts/semantic-evaluation.mjs live [--json]
  *     Kıyas kümesini ÜRETİMDEKİ yoldan geçirir: model kaydının `embedding` ve
  *     `rerank` profilleri → ağ geçidi (kapasite, süre sınırı, yineleme) →
  *     OpenAI uyumlu bağdaştırıcı → `MERGEN_ROTA_AI_BASE_URL` ucu, kurumsal
- *     anahtarla. Rota verisi okunmaz; uca yalnızca sentetik sorular ve
- *     sunucuya ait araç açıklamaları gider.
+ *     anahtarla. Aday derinliği üretimdekidir (10); `--limit` yalnızca bu
+ *     değerle verilebilir. Ortam uygulamayla aynı kaynaktan okunur (çalışma
+ *     dizinindeki `.env.local`, `.env`; kabuktaki değer önceliklidir). Rota
+ *     verisi okunmaz; uca yalnızca sentetik sorular ve sunucuya ait araç
+ *     açıklamaları gider. İşletim günlüğü stderr'e yazılır, stdout yalnızca
+ *     rapordur (`--json` ile ayrıştırılabilir JSON).
  *
  *   --queries sorular.json  (üç komutta da)
  *     Kıyas vakalarının metnini `[{ case, text }]` ile değiştirir (ör. aynı
@@ -24,7 +28,9 @@
  *
  * Ayrıntı: docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md
  */
+import { Console } from 'node:console';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerServerOnlyShim } from '../test/helpers/serverOnlyShim.mjs';
@@ -43,8 +49,9 @@ const {
 const {
   SEMANTIC_EVALUATION_DEFAULTS, collectSemanticRun, semanticLatencySummary, summarizeSemanticRun, validateSemanticBenchmark
 } = await import('../src/domain/ai/semanticEvaluation.js');
-const { AI_NO_PREPROCESSING, AI_PROFILES, resolveModelProfile } = await import('../src/domain/ai/aiModelRegistry.js');
+const { AI_NO_PREPROCESSING, AI_PROFILE_RESOLUTION_FAILURES, AI_PROFILES, resolveModelProfile } = await import('../src/domain/ai/aiModelRegistry.js');
 const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
+const { aiCallBudgetMs } = await import('../src/server/ai/aiDeadline.js');
 
 function fail(message) {
   process.stderr.write(`${message}\n`);
@@ -396,15 +403,84 @@ async function report(context, flags) {
   printSummary({ qualification: qualificationOf(trusted, summary, context), summary, index: collected.index }, flags, context.benchmark);
 }
 
+// Bilinçli olarak kapatılmış ya da hiç tanımlanmamış yeniden sıralama profili yalnızca ilk aşama ölçümüne izin verir.
+const RERANK_OFF = new Set([AI_PROFILE_RESOLUTION_FAILURES.PROFILE_DISABLED, AI_PROFILE_RESOLUTION_FAILURES.PROFILE_NOT_CONFIGURED]);
+// Süre sınırına ulaşan ağ geçidi çağrısının sonuçlanması için pay.
+const LIVE_SETTLE_MARGIN_MS = 5000;
+
+/**
+ * Canlı çağrının dış süre sınırı: ağ geçidinin en uzun meşru yaşam döngüsü
+ * (rehber denetimi + sıra + rotanın süre sınırı) ve sonuçlanma payı. Daha kısa
+ * bir sınır geçerli bir çağrıyı ağ geçidinden önce keserdi.
+ */
+export function liveCallTimeoutMs(config, routeTimeoutsMs) {
+  return aiCallBudgetMs(config, Math.max(...routeTimeoutsMs)) + LIVE_SETTLE_MARGIN_MS;
+}
+
+/**
+ * Gecikmenin ölçüldüğü iş yükü: yalnızca GERÇEKTEN yapılan çağrılar. Koşu
+ * durduğunda (sonuçlanmayan çağrı) ya da dizin kurulamadığında çağrılmayan
+ * vakalar sayılmaz; özetin gecikme nüfusu da aynı çağrılardır.
+ */
+export function liveWorkload(summary, { documents, rerankDepth }) {
+  return {
+    index: { documentsPerCall: documents, calls: 1, batchSize: documents },
+    embedding: { queriesPerCall: 1, calls: summary.latency.embedding?.count ?? 0 },
+    rerank: rerankDepth == null ? null : { documentsPerCall: rerankDepth, calls: summary.latency.rerank?.count ?? 0, batchSize: rerankDepth }
+  };
+}
+
+// Ağ geçidinin süre aşımı değerlendirme sözleşmesinde süre aşımıdır (genel model hatası değil).
+function reportingTimeouts(call) {
+  return async (...args) => {
+    try {
+      return await call(...args);
+    } catch (error) {
+      if (error?.code === 'AI_TIMEOUT') throw new DOMException('Ağ geçidi süre sınırı doldu.', 'TimeoutError');
+      throw error;
+    }
+  };
+}
+
+/**
+ * Komutun stdout'u yalnızca rapordur: işletim günlüğü (ör. ağ geçidinin
+ * yineleme kaydı, ortam dosyası bildirimi) stderr'e gider. Yalnızca bu komut
+ * sürecinde geçerlidir; uygulamanın telemetrisi değişmez.
+ */
+function routeDiagnosticsToStderr() {
+  const diagnostics = new Console({ stdout: process.stderr, stderr: process.stderr });
+  for (const method of ['log', 'info', 'debug']) console[method] = diagnostics[method].bind(diagnostics);
+}
+
+/**
+ * Uygulamanın (Next.js) ortam kaynağı: çalışma dizinindeki `.env.production.local`,
+ * `.env.local`, `.env.production`, `.env` — `next start` ile aynı kural ve aynı
+ * araç (@next/env). Kabukta tanımlı değer dosyadakinden önceliklidir.
+ */
+function loadDeploymentEnvironment() {
+  const { loadEnvConfig } = createRequire(import.meta.url)('@next/env');
+  const { loadedEnvFiles } = loadEnvConfig(process.cwd(), false, { info: (...args) => console.error(...args), error: (...args) => console.error(...args) });
+  // Yalnızca dosya adı yazılır; değerler yazılmaz.
+  for (const file of loadedEnvFiles) process.stderr.write(`Ortam dosyası okundu: ${path.basename(file.path)}\n`);
+}
+
 /**
  * Üretim yolundan nitelendirme. Ağ geçidi süreçteki gibi kurulur (kapasite,
- * süre sınırı, dar yineleme, model eşleşmesi, ön işleme önekleri); bu bir
- * operatör komutudur: kullanıcı oturumu yoktur, kurumsal anahtar kullanılır
- * ve Rota verisi okunmaz. Profiller kayıttan bir kez çözülür; yeniden
- * sıralama profili kapalıysa yalnızca ilk aşama ölçülür.
+ * süre sınırı, dar yineleme, model eşleşmesi, ön işleme önekleri ve belirteç
+ * penceresi); bu bir operatör komutudur: kullanıcı oturumu yoktur, kurumsal
+ * anahtar kullanılır ve Rota verisi okunmaz. Profiller kayıttan bir kez
+ * çözülür. Aday derinliği üretimin derinliğidir. Yeniden sıralama profili
+ * bilinçli olarak kapatılmış ya da tanımlanmamışsa yalnızca ilk aşama ölçülür;
+ * bozuk profil ölçüm yerine hatadır.
  */
 async function live(context, flags) {
-  const limit = limitOf(flags);
+  routeDiagnosticsToStderr();
+  loadDeploymentEnvironment();
+  const { SEMANTIC_RETRIEVAL_DEPTH } = await import('../src/server/ai/semanticRetrieval.js');
+  if (flags.limit != null && Number(flags.limit) !== SEMANTIC_RETRIEVAL_DEPTH) {
+    fail(`live üretim yolunu ölçer: aday derinliği üretimdeki ${SEMANTIC_RETRIEVAL_DEPTH} değeridir (--limit yalnızca report içindir).`);
+  }
+  const limit = SEMANTIC_RETRIEVAL_DEPTH;
   const { parseAiConfig } = await import('../src/server/ai/aiConfig.js');
   const { createAiAdmissionController } = await import('../src/server/ai/admissionController.js');
   const { createAiGateway } = await import('../src/server/ai/aiGateway.js');
@@ -425,7 +501,11 @@ async function live(context, flags) {
   const space = createEmbeddingSpace(semanticModelProvenance(embeddingRoute.route, AI_PROFILES.EMBEDDING), preprocessing.id);
   if (!space) fail('embedding profilinin rotası bir gömme uzayı kurmuyor.');
   const rerankRoute = resolveModelProfile(registry, AI_PROFILES.RERANK);
+  if (!rerankRoute.ok && !RERANK_OFF.has(rerankRoute.reason)) {
+    fail(`rerank profili kullanılamıyor (${rerankRoute.reason}); yalnızca kapatılmış ya da tanımlanmamış profil ilk aşama ölçümüne izin verir.`);
+  }
   const provenance = rerankRoute.ok ? semanticModelProvenance(rerankRoute.route, AI_PROFILES.RERANK) : null;
+  if (rerankRoute.ok && !provenance) fail('rerank profilinin rotası bir yeniden sıralama kökeni kurmuyor.');
   const admission = createAiAdmissionController({ limits: config.limits });
   const provider = createOpenAiCompatibleProvider();
   const gateway = createAiGateway({
@@ -440,15 +520,14 @@ async function live(context, flags) {
   // Ağ geçidi rotayı her çağrıda aynı (yüklenmiş) kayıttan çözer: uzay ve köken koşu boyunca sabittir.
   const embedding = {
     space,
-    embed: async (texts, { purpose, signal }) => (await gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts, purpose, signal })).embeddings
+    embed: reportingTimeouts(async (texts, { purpose, signal }) => (await gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts, purpose, signal })).embeddings)
   };
   const reranking = provenance ? {
     provenance,
-    rerank: async (query, documents, { signal }) => (await gateway.rerankTexts({ profile: AI_PROFILES.RERANK, query, documents, signal })).scores
+    rerank: reportingTimeouts(async (query, documents, { signal }) => (await gateway.rerankTexts({ profile: AI_PROFILES.RERANK, query, documents, signal })).scores)
   } : null;
-  // Çağrı süresini ağ geçidi belirler: değerlendirmenin süre sınırı sıra ve istek sınırlarının toplamından uzundur.
-  const requestMs = Math.max(embeddingRoute.route.timeoutMs ?? config.requestTimeoutMs, rerankRoute.ok ? rerankRoute.route.timeoutMs ?? config.requestTimeoutMs : 0);
-  const callTimeoutMs = Math.min(600000, requestMs + config.queueTimeoutMs + 5000);
+  const routeTimeoutMs = (route) => route.timeoutMs ?? config.requestTimeoutMs;
+  const callTimeoutMs = liveCallTimeoutMs(config, [routeTimeoutMs(embeddingRoute.route), ...(provenance ? [routeTimeoutMs(rerankRoute.route)] : [])]);
   const collected = await collectSemanticRun({ ...context, embedding, reranking, limit, callTimeoutMs });
   if (collected.index.outcome !== 'ok') fail(`Katalog gömmesi başarısız (${collected.index.reason ?? collected.index.outcome}); dizin kurulamadı, nitelendirme yapılamaz.`);
   const summary = summarizeSemanticRun(collected, context.benchmark);
@@ -457,21 +536,19 @@ async function live(context, flags) {
     run: { format: collected.format, version: collected.version, path: 'gateway' },
     benchmark: summary.benchmark,
     catalogue: summary.catalogue,
-    embedding: { ...summary.provenance.embedding, queryPrefix: preprocessing.queryPrefix, documentPrefix: preprocessing.documentPrefix, runtime: 'gateway' },
+    embedding: {
+      ...summary.provenance.embedding,
+      queryPrefix: preprocessing.queryPrefix,
+      documentPrefix: preprocessing.documentPrefix,
+      truncateTokens: preprocessing.truncateTokens ?? null,
+      runtime: 'gateway'
+    },
     reranker: provenance ? { ...provenance, runtime: 'gateway' } : null,
     limit: summary.limit,
     cutoffs: summary.cutoffs,
     ndcgCutoff: summary.ndcgCutoff,
-    latencyWorkload: {
-      index: { documentsPerCall: documents, calls: 1, batchSize: documents },
-      embedding: { queriesPerCall: 1, calls: context.benchmark.cases.length },
-      rerank: provenance ? {
-        documentsPerCall: Math.min(limit, documents),
-        calls: Object.values(summary.outcomes.rerank).reduce((sum, count) => sum + count, 0),
-        batchSize: Math.min(limit, documents)
-      } : null
-    },
-    environment: { node: process.version, platform: process.platform, maxActive: config.limits.maxActive }
+    latencyWorkload: liveWorkload(summary, { documents, rerankDepth: provenance ? Math.min(limit, documents) : null }),
+    environment: { node: process.version, platform: process.platform, maxActive: config.limits.maxActive, callTimeoutMs }
   };
   printSummary({ qualification, summary, index: collected.index }, flags, context.benchmark);
 }
@@ -491,5 +568,5 @@ if (invokedDirectly()) {
   if (command === 'input') writeInput(load(flags), flags.out);
   else if (command === 'report') await report(load(flags), flags);
   else if (command === 'live') await live(load(flags), flags);
-  else fail('Kullanım: node scripts/semantic-evaluation.mjs input [--out dosya] | report --run dosya [--limit 10] [--json] | live [--limit 10] [--json]; üçünde de [--queries sorular.json]');
+  else fail('Kullanım: node scripts/semantic-evaluation.mjs input [--out dosya] | report --run dosya [--limit 10] [--json] | live [--json]; üçünde de [--queries sorular.json]');
 }

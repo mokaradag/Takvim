@@ -49,6 +49,27 @@ function semanticPayload(kind, body, semantic) {
   return { id: 'rerank-fake', model: body?.model, results };
 }
 
+/**
+ * vLLM 0.31.0 gömme penceresi kuralının ikizi (pooling çalıştırıcısı). Belirteç
+ * sayısı yalnızca İKİZDE boşlukla bölünmüş sözcük + iki özel belirteçtir.
+ * Kesme istenmemişse pencereyi aşan girdi reddedilir (`null` → 400);
+ * `truncate_prompt_tokens` pencereden büyükse ya da yön `right` değilse istek
+ * reddedilir; `truncation_side: right` önek dâhil ilk N belirteci tutar.
+ */
+function applyEmbeddingWindow(body, window) {
+  const inputs = Array.isArray(body?.input) ? body.input : [body?.input];
+  const limit = body?.truncate_prompt_tokens ?? null;
+  if (limit != null && (limit > window || body.truncation_side !== 'right')) return null;
+  const kept = [];
+  for (const text of inputs) {
+    const words = String(text).split(' ');
+    if (limit != null && words.length + 2 > limit) kept.push(words.slice(0, limit - 2).join(' '));
+    else if (words.length + 2 > window) return null;
+    else kept.push(text);
+  }
+  return { ...body, input: kept };
+}
+
 function json(response, status, body, headers = {}) {
   const text = JSON.stringify(body);
   response.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text), ...headers });
@@ -213,7 +234,12 @@ export async function startFakeOpenAiCompatibleServer({
         const semanticKind = request.method !== 'POST' ? null
           : request.url.endsWith('/embeddings') ? 'embeddings' : request.url.endsWith('/rerank') ? 'rerank' : null;
         if (semanticKind && !scenario.malformed && !scenario.oversizedBytes) {
-          json(response, 200, scenario.semanticPayload ? scenario.semanticPayload(body, semanticKind) : semanticPayload(semanticKind, body, { ...DEFAULT_SEMANTIC, ...semantic }));
+          const windowed = semanticKind === 'embeddings' && scenario.embeddingWindow ? applyEmbeddingWindow(body, scenario.embeddingWindow) : body;
+          if (!windowed) {
+            json(response, 400, { error: { message: `maximum context length exceeded ${authorization}`, type: 'BadRequestError' } });
+            return;
+          }
+          json(response, 200, scenario.semanticPayload ? scenario.semanticPayload(windowed, semanticKind) : semanticPayload(semanticKind, windowed, { ...DEFAULT_SEMANTIC, ...semantic }));
           return;
         }
         if (!semanticKind && (!request.url.endsWith('/chat/completions') || request.method !== 'POST')) {

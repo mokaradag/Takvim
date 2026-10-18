@@ -15,7 +15,7 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -329,20 +329,31 @@ function oracleEndpoint() {
   };
 }
 
-async function live(t, { env = {}, args = [], semantic = oracleEndpoint() } = {}) {
+const FETCH_FAULT = path.join(ROOT, 'test/helpers/fetchFaultPreload.mjs');
+
+/**
+ * Komut alt süreçte, boş bir çalışma dizininde koşar: geliştiricinin `.env.local`
+ * dosyası sınamaya karışmaz. `envFile` verilirse o dizine `.env.local` yazılır;
+ * `shell: false` yapay zekâ değişkenlerini kabuktan vermez. `fault` alt sürece
+ * tek bir `fetch` arızası yükler (bkz. helpers/fetchFaultPreload.mjs).
+ */
+async function live(t, { env = {}, args = [], semantic = oracleEndpoint(), envFile = null, shell = true, fault = null } = {}) {
   const server = await startFakeOpenAiCompatibleServer({ semantic });
   t.after(() => server.close());
-  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('MERGEN_ROTA_')));
+  const cwd = await mkdtemp(path.join(tmpdir(), 'rota-semantic-cwd-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  if (envFile) await writeFile(path.join(cwd, '.env.local'), envFile(server), 'utf8');
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('MERGEN_ROTA_') && key !== 'NODE_OPTIONS'));
   const environment = {
     ...inherited,
-    MERGEN_ROTA_AI_ENABLED: 'true',
-    MERGEN_ROTA_AI_BASE_URL: server.baseUrl,
-    MERGEN_ROTA_AI_DEFAULT_API_KEY: LIVE_KEY,
+    ...(shell ? { MERGEN_ROTA_AI_ENABLED: 'true', MERGEN_ROTA_AI_BASE_URL: server.baseUrl, MERGEN_ROTA_AI_DEFAULT_API_KEY: LIVE_KEY } : {}),
+    ...(fault ? { ROTA_TEST_FETCH_FAULT: fault } : {}),
     ...env
   };
   for (const [key, value] of Object.entries(environment)) if (value == null) delete environment[key];
+  const node = fault ? ['--import', pathToFileURL(FETCH_FAULT).href] : [];
   try {
-    const { stdout, stderr } = await run(process.execPath, [SCRIPT, 'live', ...args], { cwd: ROOT, env: environment });
+    const { stdout, stderr } = await run(process.execPath, [...node, SCRIPT, 'live', ...args], { cwd, env: environment });
     return { code: 0, stdout, stderr, server };
   } catch (error) {
     return { code: error.code, stdout: error.stdout, stderr: error.stderr, server };
@@ -356,7 +367,7 @@ test('canlı nitelendirme kıyas kümesini üretim yolundan geçirir: profil ve 
   assert.deepEqual(qualification.run, { format: 'mergen-rota-semantic-run', version: 1, path: 'gateway' });
   assert.deepEqual(qualification.embedding, {
     profile: AI_PROFILES.EMBEDDING, model: ROUTES.embedding.model, provider: ROUTES.embedding.provider,
-    preprocessing: ROUTES.embedding.preprocessing.id, queryPrefix: 'query: ', documentPrefix: 'passage: ', runtime: 'gateway'
+    preprocessing: ROUTES.embedding.preprocessing.id, queryPrefix: 'query: ', documentPrefix: 'passage: ', truncateTokens: 512, runtime: 'gateway'
   });
   assert.deepEqual(qualification.reranker, { profile: AI_PROFILES.RERANK, model: ROUTES.rerank.model, provider: ROUTES.rerank.provider, runtime: 'gateway' });
   assert.deepEqual(qualification.latencyWorkload.rerank, { documentsPerCall: 10, calls: BENCHMARK.cases.length, batchSize: 10 });
@@ -372,6 +383,8 @@ test('canlı nitelendirme kıyas kümesini üretim yolundan geçirir: profil ve 
   const embeddings = requests.filter((request) => request.path === '/v1/embeddings');
   assert.equal(embeddings.length, 1 + BENCHMARK.cases.length);
   assert.deepEqual(embeddings[0].body.input, ITEMS.map((item) => `passage: ${item.text}`));
+  // Belirteç penceresi kuralı üretimle aynıdır: önek dâhil ilk 512 belirteç, sağdan kesme.
+  assert.ok(embeddings.every((request) => request.body.truncate_prompt_tokens === 512 && request.body.truncation_side === 'right'));
   assert.ok(embeddings.slice(1).every((request) => request.body.input.length === 1 && request.body.input[0].startsWith('query: ')));
   const reranks = requests.filter((request) => request.path === '/v1/rerank');
   assert.equal(reranks.length, BENCHMARK.cases.length);
@@ -442,4 +455,99 @@ test('canlı nitelendirmede yeniden sıralama profili kapalıysa yalnızca ilk a
   assert.equal(qualification.reranker, null);
   assert.equal(summary.stages.reranked, null);
   assert.equal(result.server.state.requests.filter((request) => request.path === '/v1/rerank').length, 0);
+});
+
+/* ── Nitelendirmenin üretim yoluyla aynılığı ── */
+
+test('canlı nitelendirme üretimin aday derinliğiyle ölçer; başka derinlik reddedilir ve model çağrılmaz', { timeout: 120000 }, async (t) => {
+  for (const limit of ['5', '20']) {
+    const result = await live(t, { args: ['--json', '--limit', limit] });
+    assert.equal(result.code, 1, limit);
+    assert.match(result.stderr, /aday derinliği üretimdeki 10 değeridir/, limit);
+    assert.equal(result.server.state.requests.length, 0, limit);
+  }
+});
+
+test('bozuk yeniden sıralama eşlemesi ilk aşama nitelendirmesine dönüşmez: kayıt reddedilir ve model çağrılmaz', { timeout: 120000 }, async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-semantic-registry-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'kayit.json');
+  const document = JSON.parse(JSON.stringify(DEFAULT_AI_MODEL_REGISTRY));
+  // Yeniden sıralama profili yeteneği olmayan bir modele bağlanmış: bilinçli kapatma değil, yapılandırma hatasıdır.
+  document.profiles.rerank = { ...document.profiles.rerank, model: 'Qwen3-Embedding-8B' };
+  await writeFile(file, JSON.stringify(document), 'utf8');
+  const result = await live(t, { args: ['--json'], env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file } });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /Model kaydı yüklenemedi/);
+  assert.equal(result.stdout, '');
+  assert.equal(result.server.state.requests.length, 0);
+});
+
+test('yinelenen ama başarılı canlı koşuda stdout yalnızca ayrıştırılabilir JSON\'dur; işletim günlüğü stderr\'e gider', { timeout: 120000 }, async (t) => {
+  const result = await live(t, { args: ['--json'], fault: 'refuse-first' });
+  assert.equal(result.code, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.index.outcome, 'ok');
+  assert.deepEqual(report.summary.outcomes.embedding, { ok: BENCHMARK.cases.length, invalid: 0, timeout: 0, failed: 0 });
+  assert.match(result.stderr, /AI_PROVIDER_RETRY/);
+  assert.doesNotMatch(result.stdout, /\[mergen-rota\]/);
+});
+
+test('canlı nitelendirme uygulamanın ortam kaynağını (`.env.local`) okur; kabuktaki değer önceliklidir ve anahtar yazılmaz', { timeout: 120000 }, async (t) => {
+  const envFile = (server) => [
+    'MERGEN_ROTA_AI_ENABLED=true',
+    `MERGEN_ROTA_AI_BASE_URL=${server.baseUrl}`,
+    `MERGEN_ROTA_AI_DEFAULT_API_KEY=${LIVE_KEY}`,
+    ''
+  ].join('\n');
+  const loaded = await live(t, { args: ['--json'], envFile, shell: false });
+  assert.equal(loaded.code, 0, loaded.stderr);
+  assert.equal(JSON.parse(loaded.stdout).index.outcome, 'ok');
+  assert.match(loaded.stderr, /\.env\.local/);
+  assert.ok(loaded.server.state.requests.length > 0 && loaded.server.state.requests.every((request) => request.bearer === LIVE_KEY));
+  assert.equal(`${loaded.stdout}${loaded.stderr}`.includes(LIVE_KEY), false);
+  const overridden = await live(t, { args: ['--json'], envFile, shell: false, env: { MERGEN_ROTA_AI_ENABLED: 'false' } });
+  assert.equal(overridden.code, 1);
+  assert.match(overridden.stderr, /MERGEN_ROTA_AI_ENABLED/);
+  assert.equal(overridden.server.state.requests.length, 0);
+});
+
+test('ağ geçidinin süre aşımı nitelendirmede süre aşımı olarak sayılır; koşu sürer', { timeout: 120000 }, async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-semantic-registry-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'kayit.json');
+  const document = JSON.parse(JSON.stringify(DEFAULT_AI_MODEL_REGISTRY));
+  document.profiles.rerank = { ...document.profiles.rerank, timeoutMs: 1000 };
+  await writeFile(file, JSON.stringify(document), 'utf8');
+  const result = await live(t, { args: ['--json'], env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file }, fault: 'delay-first-rerank:2500' });
+  assert.equal(result.code, 0, result.stderr);
+  const { summary, qualification } = JSON.parse(result.stdout);
+  assert.deepEqual(summary.outcomes.rerank, { ok: BENCHMARK.cases.length - 1, invalid: 0, timeout: 1, failed: 0 });
+  assert.equal(qualification.latencyWorkload.rerank.calls, BENCHMARK.cases.length);
+});
+
+test('nitelendirme iş yükü yalnızca gerçekten yapılan çağrıları sayar; dış süre sınırı ağ geçidinin en uzun yaşam döngüsünü kapsar', { timeout: 30000 }, async () => {
+  const { liveCallTimeoutMs, liveWorkload } = await import('../scripts/semantic-evaluation.mjs');
+  const { collectSemanticRun, summarizeSemanticRun, validateSemanticBenchmark, SEMANTIC_MAX_CALL_TIMEOUT_MS } = await import('../src/domain/ai/semanticEvaluation.js');
+  const { createEmbeddingSpace, createSemanticCatalogue, semanticModelProvenance } = await import('../src/domain/ai/semanticContract.js');
+  const catalogue = createSemanticCatalogue(semanticToolDefinitions(rotaToolNames().map((name) => getRotaTool(name)))).catalogue;
+  const benchmark = validateSemanticBenchmark(BENCHMARK, catalogue).benchmark;
+  const space = createEmbeddingSpace(semanticModelProvenance(ROUTES.embedding, AI_PROFILES.EMBEDDING), 'e5-query-passage');
+  let queries = 0;
+  // İkinci sorgu iptale uymaz ve hiç sonuçlanmaz: koşu durur, kalan vakalar çağrılmaz.
+  const embed = (texts, { purpose }) => {
+    if (purpose === 'document') return Promise.resolve(texts.map((_, index) => ({ index, vector: ITEMS.map((__, j) => (j === index ? 1 : 0)) })));
+    queries += 1;
+    return queries === 2 ? new Promise(() => {}) : Promise.resolve([{ index: 0, vector: ITEMS.map(() => 1) }]);
+  };
+  const run = await collectSemanticRun({ benchmark, catalogue, embedding: { space, embed }, callTimeoutMs: 20 });
+  const summary = summarizeSemanticRun(run, benchmark);
+  const workload = liveWorkload(summary, { documents: ITEMS.length, rerankDepth: null });
+  assert.equal(queries, 2);
+  assert.deepEqual(workload.embedding, { queriesPerCall: 1, calls: 2 });
+  assert.equal(workload.rerank, null);
+  // En uzun meşru ağ geçidi çağrısı: rehber 5 s + sıra (en çok 120 s) + rota (en çok 600 s).
+  const longest = liveCallTimeoutMs({ queueTimeoutMs: 120000 }, [600000, 1000]);
+  assert.ok(longest > 5000 + 120000 + 600000 && longest <= SEMANTIC_MAX_CALL_TIMEOUT_MS);
+  assert.equal(liveCallTimeoutMs({ queueTimeoutMs: 20000 }, [90000]), 5000 + 20000 + 90000 + 5000);
 });

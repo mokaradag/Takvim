@@ -401,8 +401,10 @@ listesi tek geçersiz çıktıdır (her vaka kararsız); değerlendirme fırlama
   (`INDEX_UNAVAILABLE`, `RUN_HALTED`) genel koda iner.
 - Koşucu (`collectSemanticRun`) vakaları sırayla yürütür; iki model çağrısı
   hiçbir zaman örtüşmez. Süre aşımı ve iptal:
-  - Çağrı başına süre sınırı her zaman sonludur: varsayılan 60 sn, 1 ms–600 sn
-    arasında tam sayı; sınırsız çağrı seçeneği yoktur.
+  - Çağrı başına süre sınırı her zaman sonludur: varsayılan 60 sn, 1 ms–900 sn
+    arasında tam sayı (`SEMANTIC_MAX_CALL_TIMEOUT_MS`; üretim ağ geçidinin en
+    uzun meşru yaşam döngüsünü — rehber 5 sn + sıra ≤ 120 sn + rota ≤ 600 sn —
+    kapsar); sınırsız çağrı seçeneği yoktur.
   - Koşunun iptali (Durdur) hemen yayılır ve koşu iptal nedeniyle reddedilir.
     İptal çağrı başlamadan geldiyse model hiç çağrılmaz; model sonucu
     kesinleştikten sonra ama koşucu onu kaydetmeden önce geldiyse başarı
@@ -416,6 +418,10 @@ listesi tek geçersiz çıktıdır (her vaka kararsız); değerlendirme fırlama
     daha çağrılmaz, kalan vakalar `failed`/`RUN_HALTED` ıskasıdır. Böylece
     terk edilen çağrı sonraki vakaların sonucunu ya da gecikmesini
     kirletemez. Ek sürede sonuçlanan süre aşımı `halted: false` taşır.
+  - Model işlevi kendi süre sınırının dolduğunu standart `TimeoutError` adlı
+    hatayla bildirebilir (ör. `live` komutunda ağ geçidinin `AI_TIMEOUT`
+    sonucu): çağrı sonuçlanmıştır, vaka `timeout` ıskasıdır (`halted: false`),
+    genel `failed` değildir. Adı okunamayan hata genel hatadır.
   - **Sınır:** model bağdaştırıcısı eşzamansızdır (olay döngüsünü bloke
     etmez). Süre sınırı ve iptal Promise döndüren çağrıyı sınırlar;
     JavaScript zamanlayıcısı olay döngüsünü bloke eden eşzamanlı bir CPU
@@ -694,19 +700,49 @@ yarıya indirir. Değer sabittir; isteğe göre değişen "topK" yoktur.
 `preprocessing` alanıdır (yalnızca gömme modelinde; kapalı alan kümesi):
 
 ```json
-{ "id": "intfloat/multilingual-e5-large", "capabilities": ["embedding"],
-  "preprocessing": { "id": "e5-query-passage", "queryPrefix": "query: ", "documentPrefix": "passage: " } }
+{ "id": "intfloat/multilingual-e5-large", "capabilities": ["embedding"], "contextTokens": 512,
+  "preprocessing": { "id": "e5-query-passage", "queryPrefix": "query: ", "documentPrefix": "passage: ", "truncateTokens": 512 } }
 ```
 
 - `id` önekleri adlandıran belirteçtir ve gömme uzayının kimliğine girer
   (§6.1); önek varsa `none` olamaz, önek yoksa `none` olmalıdır (nitelendirme
   raporuyla aynı kural). Önek en çok 200 karakterdir ve kırpılmaz (satır sonu
   dâhil: ör. Qwen3-Embedding sorgu yönergesi).
-- Alan yoksa ön işleme yoktur (`none`). Kurum içi kayıt ve varsayılan kayıt
+- Alan **yoksa** ön işleme yoktur (`none`). Yazılmış her değer doğrulanır:
+  `"preprocessing": null`, `null` önek ya da `null`/0/kesirli/metin
+  `truncateTokens` kayıt hatasıdır; geçersiz değer gömme uzayını sessizce
+  değiştiremez (sohbet modelinde alanın kendisi hatadır).
+- **Belirteç penceresi.** Karakter sınırı (sorgu 2000, belge 4000) belirteç
+  penceresini kanıtlamaz ve ağ geçidi belirteç SAYMAZ (belirteçleyici uçtadır).
+  Kural açıktır ve kayıttadır: `truncateTokens: N` varsa uç, önekli metni
+  belirteçlere ayırır ve pencereyi aşan girdinin **ilk N belirtecini (önek
+  dâhil)** gömer — istek `truncate_prompt_tokens: N, truncation_side: "right"`
+  taşır (vLLM 0.31.0; pooling modellerinde sağdan kesme, E5 model kartındaki
+  512 belirteç kesmesiyle aynı). Alan yoksa kesme istenmez ve pencereyi aşan
+  girdiyi uç reddeder (vLLM 400): sorgu için `unavailable`/`rejected`, sunucuya
+  ait katalog belgesi için `configuration` (`PROVIDER_REJECTED_FIXED_REQUEST`).
+  `truncateTokens`, modelin `contextTokens` değerini aşamaz. Kesme yalnızca
+  pencereyi aşan girdiyi değiştirir; değeri dizinin anahtarına girer (§7.4),
+  sorgu, katalog ve `live` nitelendirmesi aynı kuralla gömülür. Gerçek katalogun
+  en uzun belgesi önekle 369 bayttır, kıyas sorularının en uzunu 84
+  karakterdir: olağan girdiler pencerenin çok altındadır; kesme yalnızca uzun
+  kullanıcı sorularında devreye girer.
+- Kurum içi kayıt ve varsayılan kayıt
   `intfloat/multilingual-e5-large` için E5'in belgelenmiş `query: ` /
-  `passage: ` öneklerini taşır; nitelendirme komutundaki
+  `passage: ` öneklerini ve 512 belirteçlik pencereyi (`contextTokens`,
+  `truncateTokens`) taşır; önekler nitelendirme komutundaki
   (`--query-prefix "query: " --document-prefix "passage: " --preprocessing
-  e5-query-passage`) aynısıdır.
+  e5-query-passage`) aynısıdır. Çevrimdışı koşucu (sentence-transformers)
+  modelin kendi `max_seq_length` değeriyle (E5: 512) sağdan keser.
+- **Uçun bildirdiği model adları** (`reportedModels`, isteğe bağlı): vLLM
+  yanıtta, istekte hangi takma ad kullanılmış olursa olsun her zaman ilk
+  `--served-model-name` değerini bildirir. Kayıttaki kimlik o ad değilse
+  gömme ya da yeniden sıralama modeli bu adları açıkça listeler:
+  `"reportedModels": ["e5-large"]`. Yalnızca gömme/yeniden sıralama modelinde,
+  1–8 tekil ad, joker yok, modelin kendi kimliği ve kayıttaki başka bir modelin
+  kimliği ya da adı olamaz. Köken (uzay) yine kayıttaki kimliktir. En basit
+  kurulum kayıttaki kimliği vLLM'in ilk `--served-model-name` değeriyle aynı
+  tutmaktır; o durumda alan gerekmez.
 - Önek TEK yerde eklenir: ağ geçidinin `embedTexts` işlemi, amaca (`query` |
   `document`) göre. Yeniden sıralayıcıya önek eklenmez (koşucuyla aynı).
 - `Qwen3-Embedding-8B` gibi başka bir modele geçilirse modelin belgelenmiş
@@ -721,7 +757,7 @@ sıralama sözleşmesiyle doğrulandı:
 
 | İşlem | İstek | Yanıt → sözleşme biçimi |
 | --- | --- | --- |
-| `embeddings` | `POST {base}/embeddings` `{ model, input: [...], encoding_format: "float" }` | `data[{ index, embedding }]` → `[{ index, vector }]` |
+| `embeddings` | `POST {base}/embeddings` `{ model, input: [...], encoding_format: "float" }` (+ `truncate_prompt_tokens`, `truncation_side: "right"` yalnızca `truncateTokens` varsa) | `data[{ index, embedding }]` → `[{ index, vector }]` |
 | `rerank` | `POST {base}/rerank` `{ model, query, documents: [...], top_n: n }` | `results[{ index, relevance_score }]` → `[{ index, score }]` |
 
 - Bağdaştırıcı yalnızca zarfı doğrular (dizi değilse
@@ -730,14 +766,29 @@ sıralama sözleşmesiyle doğrulandı:
   boyut, sonluluk ve aday kümesi 4A sözleşmesinde doğrulanır. Hata gövdesi
   okunmaz; HTTP durumu var olan eşlemeyle koda iner.
 - Gömme yanıtının okuma sınırı girdi sayısıyla ölçeklenir (1 MiB + girdi
-  başına 8192 × 32 bayt): 4096 boyutlu bir modelin 19 belgelik katalog
-  gömmesi (~1,7 MB) sabit 1 MiB sınırına takılmaz. Yeniden sıralama 1 MiB'tır.
+  başına 8192 × 32 bayt; JSON'daki en uzun kayan nokta yazımı 24 karakter +
+  ayraç): 4096 boyutlu bir modelin 19 belgelik katalog gömmesi (~1,7 MB) sabit
+  1 MiB sınırına takılmaz. Girdi sayısı sözleşmenin en büyük kataloğuyla (256)
+  sınırlıdır: bütçe hiçbir istekte 65 MiB'ı aşmaz; gerçek katalog için ~5,75
+  MiB, sorgu için 1,25 MiB'tır. Bütçeyi aşan yanıt okunurken kesilir ve
+  ayrıştırılmaz. Çok girdili tek çağrı katalog kurulumudur ve anahtar başına
+  tek uçuştur. Yeniden sıralama 1 MiB'tır.
 - Ağ geçidi (`embedTexts`, `rerankTexts`) sohbetle aynı sırayı uygular:
   açık SQL işlemi reddi → güvenilir Sicil → rehber üyeliği → yapılandırma →
   girdi sınırları → profil ve yetenek → kapasite kirası (modelin
   `maxConcurrency` sınırı dâhil) → süre sınırı (profilin `timeoutMs` ya da
   genel sınır) → kimlik bilgisi → sağlayıcı → telemetri; kira ve süre sınırı
   her yolda bırakılır.
+- **Sunucuya ait katalog belgesi** (`purpose: document`) çağıranın güvenilir
+  kimliğini ve rehber üyeliğini yine doğrular, ama kullanıcının kapasite payını
+  ve anahtarını kullanmaz: sunucu kapasite anahtarı (küresel ve model sınırları
+  geçerli) ve **kurumsal anahtar** (`MERGEN_ROTA_AI_DEFAULT_API_KEY`) ile
+  yürür. Kurulumu hangi kullanıcı başlatırsa başlatsın onun kişisel anahtarı,
+  kotası, iptal edilmiş anahtarı ya da dolu kullanıcı payı paylaşılan dizini
+  düşüremez ve katalog gömmesi ona faturalanmaz. Kurumsal anahtar yoksa
+  kurulum `AI_CONFIGURATION_ERROR` (`DEFAULT_KEY_REQUIRED`) ile düşer; kişisel
+  anahtara geçilmez. Kullanıcı sorgusu (sorgu gömmesi, yeniden sıralama)
+  kullanıcının kendi kimliği, payı ve anahtarıyla yürür.
 - Girdi sınırları: gömme 1–256 metin, her biri 1–4000 karakter, amaç
   `query`/`document`; yeniden sıralama sorgu 1–2000 karakter, 1–20 aday.
   Aşan istek sağlayıcıya ve kapasiteye ulaşmadan `AI_REQUEST_INVALID`.
@@ -746,7 +797,8 @@ sıralama sözleşmesiyle doğrulandı:
   sınırı içinde. Gömme ve yeniden sıralama yan etkisiz olsa da 5xx, süre
   aşımı, bozuk çıktı, 4xx ve iptal yinelenmez: pahalı model işi çoğaltılmaz,
   bozuk çıktı yinelemeyle düzelmez.
-- Sağlayıcı yanıtta model bildirir ve bu kayıttaki modelden farklıysa yanıt
+- Sağlayıcı yanıtta model bildirir ve bu kayıttaki model ya da onun için
+  açıkça listelenmiş adlardan (`reportedModels`, §7.2) biri değilse yanıt
   `AI_PROVIDER_RESPONSE_INVALID` (`MODEL_MISMATCH`) ile reddedilir: başka
   modelin vektörü bu uzaya ait değildir. Model bildirilmezse kabul edilir.
 - Sunucuya ait katalog belgesinin 400/413/422 reddi yapılandırma hatasıdır
@@ -757,26 +809,39 @@ sıralama sözleşmesiyle doğrulandı:
 
 - Katalog dizini **süreç içinde** tutulur (`globalThis` üzerinde tek keşif
   örneği); kalıcılık, veritabanı tablosu, göç ya da vektör veritabanı yoktur.
-  Bellekte en çok bir görünür dizin ve bir süren kurulum vardır (19 × boyut).
-  Sorgu, sorgu vektörü ya da kullanıcı verisi saklanmaz.
-- Yeniden kullanım koşulu: 4A dizin kimliği (sözleşme sürümü, katalog parmak
-  izi, gömme uzayı = profil + model + sağlayıcı + ön işleme belirteci, boyut)
-  güncel katalog ve güncel rotanın uzayıyla yeniden hesaplanıp eşit olmalı
-  **ve** ön işlemenin önekleri aynı olmalıdır. Boyut ya da öğe sayısı benzer
-  diye dizin kullanılmaz. Açıklama, sürüm, sıra, model, sağlayıcı, belirteç
-  ya da önek değişirse dizin yeniden kurulur (belirteç aynı kalıp yalnızca
-  önek değişirse 4A kimliği aynı kalır ama önek denetimi dizini yine yeniler).
-  Sorgu farklı boyuttaysa 4A `DIMENSION_MISMATCH` verir.
-- Kurulum **tek uçuştur**: aynı anahtardaki eşzamanlı istekler tek katalog
-  gömmesini paylaşır. Dizin yalnızca 4A doğrulamasından tamamen geçtikten
-  sonra görünür olur; yalnızca en son istenen kurulum görünür olur (eski
-  anahtarın geç biten kurulumu süren yenisini silmez).
+  Bellekte en çok bir görünür dizin ve anahtar başına bir süren kurulum vardır
+  (19 × boyut). Sorgu, sorgu vektörü ya da kullanıcı verisi saklanmaz.
+- Yeniden kullanım anahtarı: katalog parmak izi, gömme uzayı (4A: sözleşme
+  sürümü + profil + model + sağlayıcı + ön işleme belirteci) ve ön işlemenin
+  kendisi (önekler, `truncateTokens`). Açıklama, sürüm, sıra, model,
+  sağlayıcı, belirteç, önek ya da pencere değişirse dizin yeniden kurulur
+  (belirteç aynı kalıp yalnızca önek ya da pencere değişirse 4A kimliği aynı
+  kalır ama anahtar dizini yine yeniler). Yeniden sıralama modelinin
+  değişmesi dizini bayatlatmaz.
+- **Boyut geçişi:** boyut 4A dizin kimliğinin parçasıdır. Uç aynı uzayda
+  geçerli ama farklı boyutta vektör döndürmeye başlarsa hazır dizinle sıralama
+  4A `DIMENSION_MISMATCH` verir; bu durumda dizin **istek başına bir kez**
+  yeniden kurulur (tek uçuş geçerli). Hazır dizin yalnızca yeni kurulum
+  başarıyla bitince değişir: kurulum düşerse geçerli dizin görünür kalır.
+  Yeniden kurulan dizinle de uyuşmuyorsa bozuk olan sorgudur
+  (`embedding`/`invalid_output`). Aynı anahtarda süren bir kurulum varsa
+  uyuşmayan istekler onu bekler (eşzamanlı geçişte `unavailable` dönmez);
+  YENİ bir yeniden kurulum ise anahtar başına en çok
+  `SEMANTIC_DIMENSION_REBUILD_COOLDOWN_MS` (60 sn) aralıkla başlatılır: farklı boyutlu arka uçları karıştıran bir uç her
+  istekte kataloğu yeniden gömdüremez. Gerçek bir boyut geçişinde danışmanlık
+  süreç yeniden başlatılmadan, en geç bu sürede döner.
+- Kurulum **anahtar başına tek uçuştur**: aynı anahtardaki eşzamanlı istekler
+  tek katalog gömmesini paylaşır; arada başka anahtar istense de süren kurulum
+  izlenir (A → B → A ikinci A kurulumu açmaz). Dizin yalnızca 4A
+  doğrulamasından tamamen geçtikten sonra ve yalnızca **en son istenen
+  anahtara** aitse görünür olur; başka anahtarın geç biten kurulumu kendi
+  bekleyenlerine hizmet eder ama görünür dizini değiştirmez.
 - Kurulum **tek bir çağıranın iptaline bağlı değildir**: iptal eden çağıran
   yalnızca kendi beklemesinden çıkar; kurulum öteki bekleyenler ve sonraki
   istekler için sürer. Kurulum ağ geçidinin süre ve sıra sınırıyla her
-  zaman sonuçlanır (askıda söz kalmaz). Kurulumu başlatanın kimliği ve kapasite
-  kotası kullanılır; katalog sunucuya aittir ve kullanıcı verisi taşımaz.
-  Zaten iptal etmiş çağıran için kurulum başlatılmaz.
+  zaman sonuçlanır (askıda söz kalmaz). Katalog sunucuya aittir: kurulum
+  sunucu kapasite anahtarı ve kurumsal anahtarla yürür (§7.3), kullanıcı
+  verisi taşımaz. Zaten iptal etmiş çağıran için kurulum başlatılmaz.
 - Başarısız kurulum (bozuk çıktı, süre aşımı, hizmet hatası, kurulum
   sırasında değişen rota → `stale`/`SPACE_MISMATCH`) **önbelleğe girmez**:
   bekleyenler danışmansız kalır, sonraki istek yeniden kurar. Görünür dizin
@@ -801,16 +866,23 @@ taşır.
 | Yeniden sıralama 5xx / ağ / süre aşımı / 429 / 401–403 / 404 / 400 | `first_stage` | `provider` / `timeout` / `capacity` / `credential` / `configuration` / `rejected` |
 | Yeniden sıralama çıktısı bozuk (eksik/fazla/yabancı/yinelenen dizin, NaN, ±Infinity, metin skor, zarf, başka model) | `first_stage` | `invalid_output` |
 | Gömme profili kapalı ya da tanımsız; yapay zekâ kapalı | `unavailable`; ağ geçidi çağrılmaz | `disabled` |
-| Yapılandırma ya da model kaydı geçersiz | `unavailable` | `configuration` |
+| Yapılandırma ya da model kaydı geçersiz; kurumsal anahtar yokken katalog kurulumu (`DEFAULT_KEY_REQUIRED`) | `unavailable` | `configuration` |
 | Sorgu gömmesinin hizmet hatası (sağlayıcı yok, 5xx, ağ, süre aşımı, kapasite, anahtar) | `unavailable`; hazır dizine dokunulmaz | sınıfına göre |
-| Sorgu vektörü bozuk (sayı, boyut, NaN, ±Infinity, sıfır, metin, mantıksal değer, yabancı dizin) | `unavailable` | `invalid_output` (`embedding`) |
+| Sorgu vektörü bozuk (sayı, NaN, ±Infinity, sıfır, metin, mantıksal değer, yabancı dizin; yeniden kurulumdan sonra da uyuşmayan boyut) | `unavailable` | `invalid_output` (`embedding`) |
+| Sorgu pencereyi aşıyor ve kayıtta `truncateTokens` yok (uç 400) | `unavailable` | `rejected` |
 | Katalog gömmesi bozuk ya da kurulamadı | `unavailable`; önbelleğe girmez | `invalid_output` / hizmet sınıfı (`index`) |
 | Kurulum sırasında rota değişti | `unavailable` | `stale` (`SPACE_MISMATCH`) |
 | Boş ya da 2000 karakteri aşan sorgu | `unavailable`; model çağrılmaz | `query` |
 | Araç kayıt defteri geçersiz (boş, yinelenen ad, boş açıklama) | `unavailable`; keyfî aday yok | `catalogue` |
-| Açık SQL işlemi içinde çağrı | `unavailable`; model çağrılmaz | `internal` (`SQL_TRANSACTION_ACTIVE`) |
 | Çağıranın iptali (her evrede) | `AI_CANCELLED` fırlar; ilk aşamaya düşülmez | — |
+| İç hata: açık SQL işlemi içinde çağrı (`AI_INTERNAL_ERROR`/`SQL_TRANSACTION_ACTIVE`), programlama ya da değişmez ihlali | Yukarı taşınır; model çağrılmaz, danışmanlık kaybına çevrilmez | — |
 | Kimlik/rehber hatası, yapay zekâ dışı hata | Yukarı taşınır (danışmanlık kaybına çevrilmez) | — |
+
+Danışmanlık kaybına yalnızca ortak hata kataloğunun **beklenen** model/hizmet
+sonuçları çevrilir (`AI_DISABLED`, `AI_CONFIGURATION_ERROR`, anahtar,
+kapasite, süre aşımı, sağlayıcı, bozuk yanıt, `AI_REQUEST_INVALID`). Bu
+tablonun dışındaki her kod (ör. `AI_INTERNAL_ERROR`) hata iletisine bakılmadan
+yukarı taşınır.
 
 Çağıran (4C) `unavailable` sonucunda Aşama 3 davranışıyla sürer. Bu adımda
 çağıran olmadığından üretim davranışı değişmez.
@@ -827,7 +899,8 @@ taşır.
 - Gömme ve yeniden sıralama çağrıları sohbetle aynı kapasite denetimine
   girer (küresel, kullanıcı başına ve modelin `maxConcurrency` sınırı); ayrı
   semafor yoktur. Bir keşif istek başına en çok bir kira tutar (çağrılar
-  sıralıdır); kurulum da kendi kirasını alır.
+  sıralıdır); katalog kurulumu kendi kirasını kullanıcı payından değil sunucu
+  kapasite anahtarından alır (küresel ve model sınırları yine geçerlidir).
 - Eşzamanlı olmayan bir CPU döngüsünün zorla kesilmesi kapsam dışıdır (§6.3):
   model sınırı ağ üzerindedir ve eşzamansızdır.
 
@@ -844,6 +917,15 @@ taşır.
   model çıktısı, bayat dizin, geçersiz katalog ya da yapılandırma); ağ geçidi
   hataları ikinci kez yazılmaz. Bilinçli olarak kapatılmış profil ve geçersiz
   sorgu hata sayılmaz, günlüğe yazılmaz.
+- `ai.semantic.retrieve` işleminin sağlık sınıfı ağ geçidinin `ai.request`
+  kaydıyla AYNI kuraldır (`aiFailureServiceHealth`, ortak hata kataloğu +
+  anahtar kaynağı + kapasite kapsamı): reddedilen ya da yetkisiz **kurumsal**
+  anahtar (katalog kurulumunun anahtarı) herkesi etkiler, hizmet hatasıdır;
+  **kişisel** anahtarın reddi ya da oran sınırı, kullanıcının kendi etkin/sıra
+  sınırı, uçun reddettiği istek (`rejected`), geçersiz sorgu ve kapalı profil
+  hizmet hatası sayılmaz; sağlayıcı, paylaşılan kapasite, süre aşımı,
+  yapılandırma ve bozuk çıktı sayılır. Yalnızca `unavailable` sonuç sağlık
+  işlemine hata olarak yazılır.
 - Yazılmayanlar: sorgu, vektör, skor, katalog metni, Sicil, anahtar, model
   yükü. Model kimliği yalnızca var olan telemetri kuralının izin verdiği
   biçimde ağ geçidi kaydındadır.
@@ -851,12 +933,41 @@ taşır.
 ### 7.8 Üretim yolundan nitelendirme
 
 ```bash
-# Kurum içi uç: MERGEN_ROTA_AI_ENABLED=true, MERGEN_ROTA_AI_BASE_URL, MERGEN_ROTA_AI_DEFAULT_API_KEY,
+# Uygulama dizininden çalıştırılır: ortam uygulamayla aynı kaynaktan (.env.local, .env) okunur.
+# Gerekenler: MERGEN_ROTA_AI_ENABLED=true, MERGEN_ROTA_AI_BASE_URL, MERGEN_ROTA_AI_DEFAULT_API_KEY,
 # (varsa) MERGEN_ROTA_AI_MODEL_REGISTRY_PATH
 node scripts/semantic-evaluation.mjs live            # Markdown rapor
-node scripts/semantic-evaluation.mjs live --json     # makine okunur özet ve künye
+node scripts/semantic-evaluation.mjs live --json     # makine okunur özet ve künye (stdout yalnızca JSON)
 node scripts/semantic-evaluation.mjs live --queries sorular.json   # başka ifadeler, aynı altın etiketler
 ```
+
+- **Ortam:** komut, `next start` ile aynı kural ve araçla (`@next/env`)
+  çalışma dizinindeki `.env.production.local`, `.env.local`,
+  `.env.production`, `.env` dosyalarını okur; kabukta tanımlı değer dosyadakinden
+  önceliklidir. Okunan dosyanın yalnızca adı stderr'e yazılır, değerler
+  yazılmaz. Ayrı bir ortam yükleyicisi yoktur.
+- **Çıktı:** stdout yalnızca rapordur. Ağ geçidinin işletim günlüğü (ör.
+  bağlantı hatasından sonraki `AI_PROVIDER_RETRY`) bu komut sürecinde
+  stderr'e yönlendirilir; yinelenen ama başarılı bir koşunun `--json`
+  çıktısı da doğrudan `JSON.parse` ile okunur.
+- **Derinlik:** aday derinliği üretimdekidir (`SEMANTIC_RETRIEVAL_DEPTH = 10`).
+  `live` başka bir `--limit` değerini reddeder (`--limit` `report` içindir):
+  üretimde yeniden sıralayıcıya hiç gitmeyen 11.–20. adayın ölçüye girmesi
+  önlenir.
+- **Yeniden sıralama:** profil **bilinçli olarak kapatılmış** (`enabled:
+  false`) ya da **tanımlanmamışsa** yalnızca ilk aşama ölçülür ve künyede
+  `reranker: null` yazar. Bozuk eşleme (yeteneği olmayan, kapalı ya da
+  bilinmeyen modele bağlı profil) ölçüm değil hatadır: kayıt yüklenemez ya da
+  komut profilin nedenini yazıp durur.
+- **Süre:** her çağrının dış süre sınırı ağ geçidinin en uzun meşru yaşam
+  döngüsüdür: rehber denetimi (5 s) + sıra (`MERGEN_ROTA_AI_QUEUE_TIMEOUT_MS`)
+  + profilin süre sınırı + 5 s sonuçlanma payı (en çok 730 s; değerlendirici
+  900 s'ye kadar kabul eder). Ağ geçidinin `AI_TIMEOUT` sonucu ölçüde
+  **süre aşımı** (`timeout`) olarak sayılır, genel hata olarak değil.
+- **İş yükü künyesi:** `latencyWorkload` yalnızca gerçekten yapılan çağrıları
+  sayar; koşu durduysa (sonuçlanmayan çağrı) çağrılmayan vakalar çağrı
+  sayılmaz. Künye ayrıca gömme önekleri, `truncateTokens` ve dış süre
+  sınırını (`environment.callTimeoutMs`) taşır.
 
 - Kıyas kümesi üretimdeki yoldan geçer: kayıttaki profiller → ağ geçidi
   (kapasite, süre sınırı, dar yineleme, model eşleşmesi, önekler) → OpenAI
@@ -866,8 +977,7 @@ node scripts/semantic-evaluation.mjs live --queries sorular.json   # başka ifad
   gecikmedir.
 - Operatör komutudur: kullanıcı oturumu yoktur, kurumsal anahtar kullanılır,
   Rota verisi okunmaz; uca yalnızca sentetik sorular ve sunucuya ait araç
-  açıklamaları gider. Yeniden sıralama profili kapalıysa yalnızca ilk aşama
-  ölçülür. Katalog gömmesi kurulamazsa komut hata koduyla durur.
+  açıklamaları gider. Katalog gömmesi kurulamazsa komut hata koduyla durur.
 - `--queries` (`input`, `report`, `live`): `[{ "case": "tr-001", "text": "..." }]`
   her kıyas vakası için tam bir satır; metin normalleşir, altın etiketler
   değişmez, türetilen küme aynı kıyas doğrulamasından geçer (tekil metin
@@ -1013,40 +1123,54 @@ live --json` (kayıttaki profiller); karşılaştırma için aynı komut
 modellerle yerel ölçüm §6.6 komutlarıyla yapılır.
 
 **Aşama 4B düşük düşünmeli sağlamlık yoklaması (Claude Haiku 4.5,
-18.10.2026; bağlayıcı değil).** Haiku 4.5 was used as a non-binding
-low-deliberation robustness probe. It is not an emulator of
+18.10.2026, son yakınsama turu; bağlayıcı değil).** Haiku 4.5 was used as a
+non-binding low-deliberation robustness probe. It is not an emulator of
 Qwen3-Next-80B-A3B-Instruct and is not the Phase 4C weak-model acceptance
-gate.
+gate. Soru: "4B hattı, ifadeler daha zayıf ve düşük düşünmeli bir modelden
+geldiğinde yapısal olarak sağlam mı?" — "Qwen3-Next-80B-A3B-Instruct 4C
+kapısını geçti mi?" sorusu DEĞİL.
 
-- Kurulum: `claude-haiku-4-5-20251001` modeline sabitlenmiş, depo bağlanmamış
-  ayrı oturum; tek tur, araç yok. Genişletilmiş düşünme istenmedi; ürün
-  düşünmesiz kip sunmuyor ve oturum varsayılanı yanıttan önce bir düşünme
-  bloğuna (kayda göre ~5.800 belirteç) izin verdi, yani yoklama tam olarak
-  "düşünmesiz" değildir.
-- Girdi yalnızca 117 soru metni ve yeniden ifade kuralıdır (anlamı ve üslubu
-  koru); vaka kimliği, beklenti, etiket, araç adı ya da katalog verilmedi.
-  Çıktı: 117 yeniden ifade; hiçbiri özgün soruyla ya da birbiriyle aynı
-  değil; `--queries` dosyayı kabul etti. Yeniden ifadeler altın veri
-  değildir, depoya eklenmedi; hiçbir etiket ya da üretim kodu değişmedi.
-- Gerçek 4B yolundan geçiş (yerel HTTP ikiziyle): `live --queries` 117/117
-  gömme ve yeniden sıralama çağrısını hatasız tamamladı. Üretim
-  `semanticRetrieval` hizmeti sırayla çağrıldığında özgün ve yeniden ifade
-  edilmiş soruların her biri 117/117 `reranked` döndü; adayların tümü 19
-  araçlık katalogdandı, en çok 10 aday; dizin bir kez kuruldu ve yeniden
-  ifadelerde yeniden kullanıldı. Aynı kullanıcıdan eşzamanlı 117 istek
-  4 `reranked`, 113 `unavailable` (`embedding:capacity`, `AI_BUSY`) verdi:
-  kapasite denetimi beklendiği gibi; aday uydurulmadı.
-- İkiz anlam taşımadığı için Top-1 kayması gibi bir sağlamlık **kalite
-  sayısı verilmedi**; ölçüm kurum içi VM'de `live --queries` ile yapılır.
-- Gözlem (4C girdisi, 4B ölçüsü değil): yeniden ifadelerin bir kısmı anlamı
-  kaydırıyor: "proje" sistematik olarak "müdahale" oldu; "kişilere" →
-  "birimler" (tr-046), "Sicil" → "Sıra numarası" (tr-049), "onay bekleyen" →
-  "tasdik beklemeyen" (tr-093, olumsuzlama), "listeyi sıralamak" → "dizi
-  dizinlemesi" (tr-104), "bolluk süresi (total float)" kayboldu (tr-111).
-  Bu yüzden küme gürültülü sağlamlık girdisidir, anlam eşdeğeri sayılamaz.
-- Haiku'nun yeniden sıralanmış adaylar arasından seçim yaptığı ikinci yoklama
-  çalıştırılmadı: bu ortamda gerçek yeniden sıralanmış aday üretilemez;
-  ikizin sıralamasından seçim 4B hakkında bir şey ölçmezdi.
+- Hugging Face modeli (1. seçenek) kullanılamadı: ağ politikası
+  `huggingface.co` bağlantısını reddediyor, yerel model ve GPU yok. Deponun
+  metinleri üçüncü taraf barındırılan Space'lere bilinçli olarak gönderilmedi.
+- Kurulum: `claude-haiku-4-5-20251001` modeline sabitlenmiş, depo ve kurulum
+  betiği olmayan ayrı oturum; tek tur, araç kullanılmadı. Ürün düşünmesiz kip
+  sunmuyor: yanıtta bir düşünme bloğu vardı (içeriği görünmez) ve çıktı
+  ~15.800 belirteçti (JSON yanıtının birkaç katı), yani yoklama "düşünmesiz"
+  değildir; yalnızca düşük düşünmeli bir yaklaşıklıktır.
+- Girdi yalnızca numaralı 117 soru metni ve dar dönüştürme kurallarıdır
+  (anlamı, olumsuzluğu, özel adları, sayıları, kodları ve alan terimlerini
+  koru; cümle türünü koru; yetki aşma/SQL isteklerini yumuşatma). Vaka
+  kimliği, beklenti, etiket, araç adı ya da katalog verilmedi.
+- Yapısal denetim (belirlenimci): 117/117 satır, boş yok, yinelenen yok,
+  hiçbiri özgünüyle ya da başka bir özgün soruyla aynı değil; bütün metinler
+  4A normalleştirmesinden geçti. Sayılar, kodlar (`MRG-24`, `RDR`, `104233`,
+  `4711`, `29 Ekim`) ve `SELECT * FROM gorevler` korundu.
+- Elle inceleme: 24 yeniden ifade anlam kaydırdı ve elendi — zaman ("Dün" →
+  "önceki/evvelki gün", "Bugün" → "Günümüzde"), alan terimi ("bildirim" →
+  "haber", "Sicil" → "numara/personel kodu", "kritik yol" → "kritik seçenek",
+  "bolluk süresi (total float)" → "leyback zamanları (toplam boşluk)", "baz
+  plan" → "başlangıç programı", "tekrar" → "periyot/sürüm", "hava" → "iklim"),
+  karar durumu ("kararı bende olan" → "onay verdiğim") ve zaman kipi/olumsuzluk
+  ("gönderilemeyen görev kaldı mı" → "iletilmemiş görev kalacak mı").
+  Kabul edilen 93 yeniden ifade ve elenen satırlarda özgün metin `--queries`
+  dosyası oldu. Yeniden ifadeler altın veri değildir, depoya eklenmedi.
+- Gerçek 4B yolundan geçiş (yerel HTTP ikiziyle, anlamsız özet vektörleri):
+  `live --json --queries` 117/117 gömme ve 117/117 yeniden sıralama
+  çağrısını `ok` tamamladı; stdout ayrıştırılabilir JSON, istekler
+  `truncate_prompt_tokens: 512, truncation_side: right` taşıdı, iş yükü
+  künyesi gerçek çağrı sayısını (117/117) yazdı; türetilen kümenin parmak izi
+  özgününden farklı. Üretim `semanticRetrieval` hizmeti (gerçek ağ geçidi →
+  bağdaştırıcı → HTTP) sırayla özgün, kabul edilen ve elenmemiş ham 117 ifadede
+  117/117 `reranked` döndü; hiçbir aday katalog dışında değil, en çok 10 aday;
+  katalog bir kez kuruldu (kurumsal anahtarla) ve 233 kez yeniden kullanıldı.
+- İkiz anlam taşımadığı için **hiçbir kalite sayısı (Top-1, MRR, Recall,
+  NDCG, yeniden sıralama katkısı, özgün–yeniden ifade farkı) raporlanmadı**;
+  bu sayılar kurum içi VM'de gerçek modellerle `live --queries` ile ölçülür.
+- Sonuç: düşük düşünmeli modelin ifadeleri 4B hattında yapısal bir kırılma
+  üretmedi; üretim kodu yoklamaya göre değiştirilmedi. Gözlenen anlam
+  kaymaları 4C için girdidir (zayıf modelin kendi ürettiği metinlere
+  güvenilmemeli).
 
 Eşikler (ör. kabul edilebilir Recall@5 ya da çekimserlik oranı)
 **dondurulmadı**: gerçek model ölçümü olmadan seçilen eşik keyfî olurdu. 4B
@@ -1080,7 +1204,12 @@ yapılır; sonuçlar aynı kıyas kümesi parmak iziyle kaydedilir ki 4A/4B taba
 Ön işleme (ör. Qwen3-Embedding için sorgu yönergesi) modele özgüdür ve
 kayıttaki modelin `preprocessing` alanına yazılır (§7.2); değişirse dizin
 yeniden kurulur. 2–9 numaralı denetimlerin kabul kaydı üretimdeki yoldan
-alınan `node scripts/semantic-evaluation.mjs live --json` çıktısıdır (§7.8);
+alınan `node scripts/semantic-evaluation.mjs live --json` çıktısıdır (§7.8;
+uygulama dizininden çalıştırılır, `.env.local` okunur, kurumsal anahtar
+gerekir, aday derinliği 10'dur). Kayıttaki model kimliği vLLM'in ilk
+`--served-model-name` değeri değilse gömme/yeniden sıralama modeline
+`reportedModels` yazılır (§7.2). İlk aşama tabanı yalnızca `rerank` profili
+`enabled: false` yapılarak alınır;
 kamuya açık modellerin yerel koşusunun kaydı `report --json` çıktısıdır. İkisi
 de sonucu yeniden üretmek için `qualification` künyesini (§6.6) taşır. Kabul
 çıktısı içerik taşımaz: vaka kimliği, ölçüler, sonuç türü sayıları, gecikme ve
@@ -1111,9 +1240,9 @@ alanını uygulamıştır.
 | Dosya | Kapsam |
 | --- | --- |
 | `test/ai-semantic-contract.test.mjs` | Yapısal sorgu normalleştirme (NFC, temizlikten sonra NFC ve tekrar edilebilirlik, İ/I, görünmez karakter, sınırlar); katalog ve parmak izleri (negatif, kesirli, güvensiz ya da değişen uzunluk dâhil); Aşama 3 kayıt defterinden katalog; model kökeni ve uzay (okumalar arasında değişen köken alanı dâhil); bozuk gömme yanıtları (Proxy uzunluğu, fırlayan erişimci dâhil); belirlenimci, sınırlı sıralama ve eşitlik; bayat uzay; yeniden sıralama sözleşmesi; enjeksiyon metninin etkisizliği; kimlik/yetki/SQL yüzeyi olmaması; sözleşmenin üretimde yalnızca keşif hizmetince (ağ geçidi ve bağdaştırıcı yalnızca sınırları) kullanılması |
-| `test/ai-semantic-gateway.test.mjs` | Bağdaştırıcının gerçek soketle tel biçimi (`/embeddings`, `/rerank`, `encoding_format`, `top_n`), değerlerin çevrilmemesi; bozuk zarf, sayı olmayan model kimliği ve HTTP durumlarının kararlı kodu, hata gövdesinin taşınmaması; girdi sayısıyla ölçeklenen okuma sınırı (4096 boyutlu katalog); ağ geçidinde öneklerin kayıttan ve tek yerde eklenmesi; girdi sınırları; profil/yetenek çözümü; `MODEL_MISMATCH`; sabit istek reddinin yapılandırma hatası olması; dar yineleme; modelin eşzamanlılık sınırı ve sıradayken iptal; süre aşımı, iptal ve geç yanıt; her yolda kiranın bırakılması; içeriksiz günlük; açık SQL işlemi reddi |
-| `test/ai-semantic-retrieval.test.mjs` | Keşif akışı (normalleştirme, önekler, tek katalog gömmesi, sınırlı ilk aşama, yalnızca o adayların yeniden sıralanması), derinliğin değerlendirmeyle bağı, eşitlik sırası, gerçek araç kataloğu; tek uçuşlu kurulum (20 eşzamanlı istek), başarısız kurulumun önbelleğe girmemesi, başlatanın iptalinin paylaşılan kurulumu düşürmemesi, yalnızca en son kurulumun görünmesi, takılan kurulumun süre sınırında düşmesi; açıklama/sürüm/sıra/model/belirteç/önek değişince yeniden kurulum, kurulum sırasında değişen rota (`stale`); bozuk katalog ve sorgu gömmesi tabloları; yeniden sıralama düşüş tablosu (bozuk çıktı ve hizmet hataları → `first_stage`); kapalı profiller, kapalı yapay zekâ ve geçersiz yapılandırma; hizmet hatası sınıfları ve kapasite; geçersiz sorgu ve katalog; her evrede iptal ve geç sonuç; enjeksiyon metninin sonuca, günlüğe ve telemetriye girmemesi; süreç düzeyi tam yığın (oturum, rehber, anahtar), SQL işlemi ve kimlik hatasının yukarı taşınması; durağan mimari sınırları (sağlayıcı yalnızca ağ geçidinde, Türkçe kalıp ya da araca özel dal yok, model adı yok, Aşama 3 turuna bağlanmama) |
-| `test/ai-semantic-evaluation.test.mjs` | Kıyas kümesinin yapısı, sentetikliği ve sızıntısızlığı; üretim kodunun kıyas kümesinden bağımsızlığı; kapalı yapı (seyrek dizi, açık `null`, bozuk grup, bilinmeyen alan, okunamayan belge, taklit katalog) tablosu; elle hesaplanan ölçüler ve her ölçünün yeniden sıralama katkısı; kâhin ikizle tam küme; başarısız/geçersiz/süresi dolan çağrıların ıska sayılması; sinyale uymayan modelde koşunun durması; iptal yarışları; yeniden sıralama düşüşü; dizin kurulamaması; iptal; gecikme özeti; koşu kaydı durum makinesinin geçerli/geçersiz durum tabloları (bayat sürüm, bayat iletili fırlayan erişimcinin `INVALID` sayılması, kapalı alanlar, yabancı/yinelenen/geri giden satır, atlanan ara satır, sonuç–yük çelişkisi, çağrılmayan ıska biçimi, dizin durumu, duruş dilimi ve `halted` kararı, kısmi koşu, eşitlik sırası, köken ve dizin kimliği, permütasyon olmayan yeniden sıralama, negatif gecikme, sınırdan derin kesim); uzunluğu okumalar arasında değişen dizi; planlayıcı karar ölçüleri ve güvenilmez karar tablosu (okunamayan liste, korunan vaka kimliği) |
-| `test/ai-semantic-qualification.test.mjs` | Nitelendirme komutu: parmak izli girdi; kâhin koşu dosyasıyla rapor ve `qualification` künyesi (model, önekler, yeniden sıralayıcı, aday sınırı, gecikme iş yükü); bayat, eksik/fazla/yabancı/yinelenen satırlı, değiştirilmiş metinli, negatif gecikmeli, öneki çelişkili, bilinmeyen alanlı ya da güvensiz hata kodlu koşunun reddi; bozuk değerin ve `INFERENCE_FAILED` satırının ıska sayılması; dizini kurulamayan koşunun reddi; bütün katalog yeniden sıralama skoru doğrulaması ve gerçek çağrı nüfusu; `batchSize` künyesi; Markdown enjeksiyonunun etkisizliği; yeniden sıralamalı raporda her ölçünün "Fark" hücresi; `--limit` sınırı; aynı açıklamalı iki katalog öğesinin yeniden oynatımda kendi kimliğinin vektörünü ve skorunu alması; `live`: üretim yolundan (ağ geçidi + bağdaştırıcı + yerel HTTP ikizi) kâhin uçla kusursuz ölçü, kayıttan gelen profil ve önekler, tek katalog gömmesi, 10 adaylık yeniden sıralama, künye; `--queries` ile türetilen küme ve bozuk soru dosyalarının reddi; anahtarsız ya da kapalı yapılandırmanın ve kurulamayan dizinin reddi; yeniden sıralama profili kapalıyken yalnızca ilk aşama |
-| `test/ai-model-registry.test.mjs` (4B eki) | Gömme modelinin `preprocessing` alanı: varsayılan ve operasyonel kayıtta E5 önekleri, rotaya taşınması, yokken `none`, yalnızca gömme modelinde, kapalı alan kümesi, belirteç biçimi, önek–`none` kuralı ve uzunluk sınırı |
+| `test/ai-semantic-gateway.test.mjs` | Bağdaştırıcının gerçek soketle tel biçimi (`/embeddings`, `/rerank`, `encoding_format`, `top_n`), değerlerin çevrilmemesi; bozuk zarf, sayı olmayan model kimliği ve HTTP durumlarının kararlı kodu, hata gövdesinin taşınmaması; girdi sayısıyla ölçeklenen okuma sınırı (4096 boyutlu katalog); ağ geçidinde öneklerin kayıttan ve tek yerde eklenmesi; girdi sınırları; profil/yetenek çözümü; `MODEL_MISMATCH` ve kayıtta bildirilen uç adlarının (`reportedModels`) kabulü, başka modelin adının reddi; belirteç penceresi (vLLM 0.31.0 ikizi: kesme yokken aşan sorgu `AI_REQUEST_INVALID`, aşan katalog belgesi yapılandırma hatası; `truncateTokens` ile tel gövdesinde `truncate_prompt_tokens`/`truncation_side: right` ve önekin korunması; karakter sınırındaki girdi); en kötü biçimli en büyük boyutlu geçerli yanıtın kabulü ve bütçeyi aşan bozuk yanıtın ayrıştırılmaması, bütçenin sözleşme tavanı; katalog belgesinin kurumsal anahtar ve sunucu kapasite anahtarıyla gitmesi (kullanıcının payı dolu ya da anahtarı kişiselken), kurumsal anahtar yokken `DEFAULT_KEY_REQUIRED`; sabit istek reddinin yapılandırma hatası olması; dar yineleme; modelin eşzamanlılık sınırı ve sıradayken iptal; süre aşımı, iptal ve geç yanıt; her yolda kiranın bırakılması; içeriksiz günlük; açık SQL işlemi reddi |
+| `test/ai-semantic-retrieval.test.mjs` | Keşif akışı (normalleştirme, önekler, tek katalog gömmesi, sınırlı ilk aşama, yalnızca o adayların yeniden sıralanması), derinliğin değerlendirmeyle bağı, eşitlik sırası, gerçek araç kataloğu; tek uçuşlu kurulum (20 eşzamanlı istek), başarısız kurulumun önbelleğe girmemesi, başlatanın iptalinin paylaşılan kurulumu düşürmemesi, yalnızca en son kurulumun görünmesi, A → B → A sırasında süren kurulumun yeniden kullanılması, takılan kurulumun süre sınırında düşmesi; geçerli boyut geçişinde dizinin yeniden kurulması, düşen yeniden kurulumda geçerli dizinin korunması, eşzamanlı geçişte süren kurulumun paylaşılması ve karışık boyutlu uçta bekleme süresi; paylaşılan dizinin kurulumu başlatan kullanıcının kişisel anahtarı ya da kotasıyla düşmemesi; açıklama/sürüm/sıra/model/belirteç/önek değişince yeniden kurulum, kurulum sırasında değişen rota (`stale`); bozuk katalog ve sorgu gömmesi tabloları; yeniden sıralama düşüş tablosu (bozuk çıktı ve hizmet hataları → `first_stage`); kapalı profiller, kapalı yapay zekâ ve geçersiz yapılandırma; hizmet hatası sınıfları ve kapasite; geçersiz sorgu ve katalog; her evrede iptal ve geç sonuç; enjeksiyon metninin sonuca, günlüğe ve telemetriye girmemesi; anlamsal sağlık işleminin `ai.request` kuralıyla sınıflanması (kurumsal anahtar reddi hizmet hatası; kişisel anahtar reddi/oran sınırı, kullanıcının kendi kapasite sınırı ve istek reddi değil); iç hatanın (açık SQL işlemi, sağlayıcının beklenmeyen istisnası) her evrede yukarı taşınması; süreç düzeyi tam yığın (oturum, rehber, anahtar), SQL işlemi ve kimlik hatasının yukarı taşınması; durağan mimari sınırları (sağlayıcı yalnızca ağ geçidinde, Türkçe kalıp ya da araca özel dal yok, model adı yok, Aşama 3 turuna bağlanmama) |
+| `test/ai-semantic-evaluation.test.mjs` | Kıyas kümesinin yapısı, sentetikliği ve sızıntısızlığı; üretim kodunun kıyas kümesinden bağımsızlığı; kapalı yapı (seyrek dizi, açık `null`, bozuk grup, bilinmeyen alan, okunamayan belge, taklit katalog) tablosu; elle hesaplanan ölçüler ve her ölçünün yeniden sıralama katkısı; kâhin ikizle tam küme; başarısız/geçersiz/süresi dolan çağrıların ıska sayılması; model işlevinin `TimeoutError` ile bildirdiği süre aşımının `timeout` sayılması; çağrı süre sınırı üst değerinin ağ geçidi yaşam döngüsünü kapsaması; sinyale uymayan modelde koşunun durması; iptal yarışları; yeniden sıralama düşüşü; dizin kurulamaması; iptal; gecikme özeti; koşu kaydı durum makinesinin geçerli/geçersiz durum tabloları (bayat sürüm, bayat iletili fırlayan erişimcinin `INVALID` sayılması, kapalı alanlar, yabancı/yinelenen/geri giden satır, atlanan ara satır, sonuç–yük çelişkisi, çağrılmayan ıska biçimi, dizin durumu, duruş dilimi ve `halted` kararı, kısmi koşu, eşitlik sırası, köken ve dizin kimliği, permütasyon olmayan yeniden sıralama, negatif gecikme, sınırdan derin kesim); uzunluğu okumalar arasında değişen dizi; planlayıcı karar ölçüleri ve güvenilmez karar tablosu (okunamayan liste, korunan vaka kimliği) |
+| `test/ai-semantic-qualification.test.mjs` | Nitelendirme komutu: parmak izli girdi; kâhin koşu dosyasıyla rapor ve `qualification` künyesi (model, önekler, yeniden sıralayıcı, aday sınırı, gecikme iş yükü); bayat, eksik/fazla/yabancı/yinelenen satırlı, değiştirilmiş metinli, negatif gecikmeli, öneki çelişkili, bilinmeyen alanlı ya da güvensiz hata kodlu koşunun reddi; bozuk değerin ve `INFERENCE_FAILED` satırının ıska sayılması; dizini kurulamayan koşunun reddi; bütün katalog yeniden sıralama skoru doğrulaması ve gerçek çağrı nüfusu; `batchSize` künyesi; Markdown enjeksiyonunun etkisizliği; yeniden sıralamalı raporda her ölçünün "Fark" hücresi; `--limit` sınırı; aynı açıklamalı iki katalog öğesinin yeniden oynatımda kendi kimliğinin vektörünü ve skorunu alması; `live`: üretim yolundan (ağ geçidi + bağdaştırıcı + yerel HTTP ikizi) kâhin uçla kusursuz ölçü, kayıttan gelen profil ve önekler, tek katalog gömmesi, 10 adaylık yeniden sıralama, künye; `--queries` ile türetilen küme ve bozuk soru dosyalarının reddi; anahtarsız ya da kapalı yapılandırmanın ve kurulamayan dizinin reddi; yeniden sıralama profili kapalıyken yalnızca ilk aşama, bozuk yeniden sıralama eşlemesinin reddi; üretimden farklı `--limit` değerinin reddi; bağlantı hatası yinelenen koşuda stdout'un ayrıştırılabilir JSON kalması (günlük stderr'de); `.env.local` ortam kaynağı ve kabuk önceliği, anahtarın yazılmaması; ağ geçidi süre aşımının `timeout` sayılması; durmuş koşuda iş yükünün yalnızca gerçek çağrıları sayması; dış süre sınırının ağ geçidinin en uzun yaşam döngüsünü kapsaması; belirteç penceresinin künyede ve tel gövdesinde olması |
+| `test/ai-model-registry.test.mjs` (4B eki) | Gömme modelinin `preprocessing` alanı: varsayılan ve operasyonel kayıtta E5 önekleri ve 512 belirteçlik pencere, rotaya taşınması, yokken `none`, yazılmış `null` (gömme ve sohbet modelinde) ve `null` önekin reddi, yalnızca gömme modelinde, kapalı alan kümesi, belirteç biçimi, önek–`none` kuralı, uzunluk sınırı, `truncateTokens` biçimi ve `contextTokens` sınırı; `reportedModels`: yalnızca gömme/yeniden sıralama modelinde, tekil, jokersiz, kendi kimliği ya da başka bir modelin kimliği/adı olamaz |
 | `test/semantic_model_qualification_test.py` (CI dışı, elle) | Python koşucusu: yinelenen kimlik, sayı ve metin sınırı (astral karakter dâhil), kapalı şema ve mantıksal sürümün model modülleri yüklenmeden reddi; önek ve `--device` için UTF-16 sınırı; sayısal metin, mantıksal değer, NaN/sonsuz ve sıfır vektörün sayıya çevrilmemesi, NumPy skalerlerinin kabulü; tür geçersiz katalogda koşu dosyası yazılmaması; eski çıktı silinemediğinde geçici dosya bırakılmaması |

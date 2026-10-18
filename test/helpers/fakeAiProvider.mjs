@@ -203,6 +203,7 @@ export function createFakeAiProvider({
       messages: input.messages ?? null,
       maxOutputTokens: input.maxOutputTokens ?? null,
       input: input.input ?? null,
+      truncateTokens: input.truncateTokens ?? null,
       query: input.query ?? null,
       documents: input.documents ?? null,
       signal: input.signal ?? null,

@@ -217,7 +217,8 @@ test('gömme modelinin ön işlemesi kapalı, belirteçli veridir ve profilin ro
   // Kurum içi gömme profili E5'in belgelenmiş önekleriyle çalışır; varsayılan kayıt ile operasyonel JSON aynıdır.
   for (const document of [DEFAULT_AI_MODEL_REGISTRY, operationalRegistry]) {
     const route = resolveModelProfile(validateModelRegistry(document).registry, AI_PROFILES.EMBEDDING).route;
-    assert.deepEqual(route.preprocessing, { id: 'e5-query-passage', queryPrefix: 'query: ', documentPrefix: 'passage: ' });
+    assert.deepEqual(route.preprocessing, { id: 'e5-query-passage', queryPrefix: 'query: ', documentPrefix: 'passage: ', truncateTokens: 512 });
+    assert.equal(route.contextTokens, 512);
     assert.equal(Object.isFrozen(route.preprocessing), true);
   }
   // Ön işlemesi bildirilmeyen model önek kullanmaz; sohbet modeli de öyle.
@@ -232,8 +233,10 @@ test('gömme modelinin ön işlemesi kapalı, belirteçli veridir ve profilin ro
     ? { ...model, preprocessing: { id: 'sorgu-yonergesi.v1', queryPrefix: 'Instruct: x\nQuery: ' } } : model)) }));
   assert.equal(instruction.ok, true, JSON.stringify(instruction.issues));
   assert.deepEqual(resolveModelProfile(instruction.registry, AI_PROFILES.EMBEDDING).route.preprocessing,
-    { id: 'sorgu-yonergesi.v1', queryPrefix: 'Instruct: x\nQuery: ', documentPrefix: '' });
+    { id: 'sorgu-yonergesi.v1', queryPrefix: 'Instruct: x\nQuery: ', documentPrefix: '', truncateTokens: null });
   assert.equal(withPreprocessing({ id: 'none' }).ok, true);
+  // Kesme sınırı modelin penceresine eşit olabilir; önekten bağımsızdır.
+  assert.equal(resolveModelProfile(withPreprocessing({ id: 'none', truncateTokens: 512 }).registry, AI_PROFILES.EMBEDDING).route.preprocessing.truncateTokens, 512);
   for (const [preprocessing, issue, id] of [
     [{ id: 'e5', queryPrefix: 'query: ' }, /models\[0\]\.preprocessing: ön işleme yalnızca gömme modelinde/, 'hizli-model'],
     ['e5-query-passage', /models\[2\]\.preprocessing: ön işleme bir nesne olmalıdır/],
@@ -243,12 +246,52 @@ test('gömme modelinin ön işlemesi kapalı, belirteçli veridir ve profilin ro
     [{ id: 'none', queryPrefix: 'query: ' }, /models\[2\]\.preprocessing\.id: önek kullanılıyorsa/],
     [{ id: 'e5-query-passage' }, /models\[2\]\.preprocessing\.id: önek kullanılıyorsa/],
     [{ id: 'e5', queryPrefix: 7 }, /models\[2\]\.preprocessing\.queryPrefix: en fazla 200/],
-    [{ id: 'e5', documentPrefix: 'p'.repeat(201) }, /models\[2\]\.preprocessing\.documentPrefix: en fazla 200/]
+    [{ id: 'e5', documentPrefix: 'p'.repeat(201) }, /models\[2\]\.preprocessing\.documentPrefix: en fazla 200/],
+    // Yazılmış değer yokluk sayılmaz: `null` ön işleme ve `null` önek uzayı sessizce değiştiremez.
+    [null, /models\[2\]\.preprocessing: ön işleme bir nesne olmalıdır/],
+    [null, /models\[0\]\.preprocessing: ön işleme yalnızca gömme modelinde/, 'hizli-model'],
+    [{ id: 'e5', queryPrefix: null }, /models\[2\]\.preprocessing\.queryPrefix: en fazla 200/],
+    [{ id: 'e5', queryPrefix: 'q: ', truncateTokens: null }, /models\[2\]\.preprocessing\.truncateTokens: pozitif tam sayı/],
+    [{ id: 'e5', queryPrefix: 'q: ', truncateTokens: 0 }, /models\[2\]\.preprocessing\.truncateTokens: pozitif tam sayı/],
+    [{ id: 'e5', queryPrefix: 'q: ', truncateTokens: '512' }, /models\[2\]\.preprocessing\.truncateTokens: pozitif tam sayı/],
+    [{ id: 'e5', queryPrefix: 'q: ', truncateTokens: 512.5 }, /models\[2\]\.preprocessing\.truncateTokens: pozitif tam sayı/],
+    [{ id: 'e5', queryPrefix: 'q: ', truncateTokens: 513 }, /models\[2\]\.preprocessing\.truncateTokens: modelin bağlam penceresinden/]
   ]) {
     const result = withPreprocessing(preprocessing, id);
     assert.equal(result.ok, false, JSON.stringify(preprocessing));
     assert.match(result.issues.join('\n'), issue, JSON.stringify(preprocessing));
   }
+});
+
+test('uçun bildirdiği öteki model adları açık, kapalı ve tekil veridir; yalnızca gömme ve yeniden sıralama modelinde tanımlanır', () => {
+  const withModels = (map) => validateModelRegistry(registry({
+    models: [...registry().models.map((model) => map(model)), { id: 'sirala-model', capabilities: ['rerank'] }]
+  }));
+  const aliased = withModels((model) => (model.id === 'gomme-model' ? { ...model, reportedModels: ['gomme', 'org/gomme-model'] } : model));
+  assert.equal(aliased.ok, true, JSON.stringify(aliased.issues));
+  const route = resolveModelProfile(aliased.registry, AI_PROFILES.EMBEDDING).route;
+  assert.deepEqual(route.reportedModels, ['gomme', 'org/gomme-model']);
+  assert.equal(Object.isFrozen(route.reportedModels), true);
+  assert.deepEqual(resolveModelProfile(aliased.registry, AI_PROFILES.CHAT_FAST).route.reportedModels, []);
+  for (const [map, issue] of [
+    [(model) => (model.id === 'hizli-model' ? { ...model, reportedModels: ['hizli'] } : model), /models\[0\]\.reportedModels: yalnızca gömme ya da yeniden sıralama/],
+    [(model) => (model.id === 'gomme-model' ? { ...model, reportedModels: null } : model), /models\[2\]\.reportedModels: modelin kendi kimliğinden farklı/],
+    [(model) => (model.id === 'gomme-model' ? { ...model, reportedModels: [] } : model), /models\[2\]\.reportedModels: modelin kendi kimliğinden farklı/],
+    [(model) => (model.id === 'gomme-model' ? { ...model, reportedModels: ['*'] } : model), /models\[2\]\.reportedModels: modelin kendi kimliğinden farklı/],
+    [(model) => (model.id === 'gomme-model' ? { ...model, reportedModels: ['gomme-model'] } : model), /models\[2\]\.reportedModels: modelin kendi kimliğinden farklı/],
+    [(model) => (model.id === 'gomme-model' ? { ...model, reportedModels: ['a', 'a'] } : model), /models\[2\]\.reportedModels: modelin kendi kimliğinden farklı/],
+    // Başka bir modelin kimliği ya da adı kabul edilseydi gerçekten farklı bir modelin yanıtı bu rotayı karşılardı.
+    [(model) => (model.id === 'gomme-model' ? { ...model, reportedModels: ['hizli-model'] } : model), /models\[2\]\.reportedModels: başka bir modelin/]
+  ]) {
+    const result = withModels(map);
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), issue);
+  }
+  const shared = validateModelRegistry(registry({ models: [
+    ...registry().models.map((model) => (model.id === 'gomme-model' ? { ...model, reportedModels: ['ortak'] } : model)),
+    { id: 'sirala-model', capabilities: ['rerank'], reportedModels: ['ortak'] }
+  ] }));
+  assert.match(shared.issues.join('\n'), /models\[4\]\.reportedModels: başka bir modelin/);
 });
 
 test('model dizisi iş kodu değişmeden değişir: kayıt dosyası profili başka modele yönlendirir', async (t) => {

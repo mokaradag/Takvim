@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createFakeAiProvider } from './helpers/fakeAiProvider.mjs';
 import { hashedVector } from './helpers/fakeOpenAiCompatibleServer.mjs';
-import { SICIL_UNKNOWN, captureConsole, createAiStack } from './helpers/aiStack.mjs';
+import { DEFAULT_KEY, PERSONAL_KEY_A, SICIL_A, SICIL_B, SICIL_UNKNOWN, captureConsole, createAiStack, saveKey } from './helpers/aiStack.mjs';
 import { oneHot } from './helpers/semanticModelDoubles.mjs';
 import { DEFAULT_REGISTRY, assertIdle, registryWith, semanticGatewayFor } from './helpers/semanticGateway.mjs';
 
@@ -29,6 +29,7 @@ const { snapshotOperations } = await import('../src/server/observability/telemet
 const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
 const { withSqlTransaction } = await import('../src/server/db/pool.js');
 const {
+  SEMANTIC_DIMENSION_REBUILD_COOLDOWN_MS,
   SEMANTIC_RETRIEVAL_DEPTH,
   createSemanticRetrieval,
   getSemanticRetrieval,
@@ -61,10 +62,10 @@ const toyRerank = (query, document) => TOOLS.findIndex((tool) => tool.descriptio
 const isDocumentCall = (call) => call.kind === 'embeddings' && call.input.length > 1;
 const isQueryCall = (call) => call.kind === 'embeddings' && call.input.length === 1;
 
-function setup(t, { tools = TOOLS, registry = DEFAULT_REGISTRY, env = {}, respond = null, embed = toyEmbed, rerank = toyRerank, now } = {}) {
+function setup(t, { tools = TOOLS, registry = DEFAULT_REGISTRY, env = {}, respond = null, embed = toyEmbed, rerank = toyRerank, now, credential } = {}) {
   const provider = createFakeAiProvider({ embed, rerank, respond: respond ? (call) => respond(call) : null });
   const current = { registry, tools };
-  const { gateway, admission } = semanticGatewayFor(t, { provider, registry: () => current.registry, env });
+  const { gateway, admission } = semanticGatewayFor(t, { provider, registry: () => current.registry, env, ...(credential ? { credential } : {}) });
   const retrieval = createSemanticRetrieval({
     getGateway: () => gateway,
     loadRegistry: async () => current.registry,
@@ -282,6 +283,178 @@ test('takılan kurulum ağ geçidinin süre sınırında düşer, sonraki istek 
   assert.equal((await retrieve()).status, 'reranked');
 });
 
+test('arada başka anahtar istense de süren kurulum izlenir: A → B → A ikinci kurulum açmaz, görünür dizin en son istenen anahtarındır', async (t) => {
+  const held = [];
+  const ctx = setup(t, {
+    embed: (text) => hashedVector(text, 8),
+    respond: (call) => (isDocumentCall(call) ? (held.push(call), { type: 'deferred' }) : null)
+  });
+  const registryA = DEFAULT_REGISTRY;
+  const registryB = registryWith({ profiles: { embedding: { model: 'Qwen3-Embedding-8B' } } });
+  const firstA = ctx.retrieve('A sorusu');
+  await until(() => held.length === 1, 'A kurulumu başladı');
+  ctx.current.registry = registryB;
+  const onlyB = ctx.retrieve('B sorusu');
+  await until(() => held.length === 2, 'B kurulumu başladı');
+  ctx.current.registry = registryA;
+  const secondA = ctx.retrieve('Yine A sorusu');
+  await until(() => ctx.provider.calls.filter(isQueryCall).length === 3 && ctx.provider.calls.filter(isQueryCall).every((call) => call.settled), 'üçüncü sorgu gömüldü');
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ctx.documentCalls().length, 2, 'A kurulumu paylaşıldı, yeniden başlatılmadı');
+  assert.deepEqual(ctx.retrieval.indexStatus(), { ready: null, building: true });
+  held[0].resolve();
+  assert.deepEqual([(await firstA).status, (await secondA).status], ['reranked', 'reranked']);
+  const identityA = ctx.retrieval.indexStatus().ready.identity;
+  // B'nin geç biten kurulumu kendi bekleyenine hizmet eder ama en son istenen anahtar A olduğundan görünür olmaz.
+  held[1].resolve();
+  assert.equal((await onlyB).status, 'reranked');
+  assert.deepEqual(ctx.retrieval.indexStatus(), { ready: { identity: identityA, dimensions: 8, items: SIZE }, building: false });
+  assert.equal((await ctx.retrieve('A için yeni soru')).status, 'reranked');
+  assert.equal(ctx.documentCalls().length, 2);
+  assert.deepEqual(aiTelemetrySnapshot().semantic.index, { hit: 1, built: 2, shared: 1 });
+});
+
+test('uç geçerli ama farklı boyutta vektör döndürmeye başlarsa dizin yeniden kurulur; danışmanlık süreç yeniden başlamadan döner', async (t) => {
+  let dimensions = 8;
+  const { retrieve, documentCalls, retrieval } = setup(t, { embed: (text) => hashedVector(text, dimensions) });
+  assert.equal((await retrieve()).status, 'reranked');
+  assert.equal(retrieval.indexStatus().ready.dimensions, 8);
+  const before = retrieval.indexStatus().ready.identity;
+  dimensions = 12;
+  const after = await retrieve();
+  assert.deepEqual({ status: after.status, failure: after.failure }, { status: 'reranked', failure: null });
+  assert.equal(documentCalls().length, 2);
+  // Boyut 4A dizin kimliğinin parçasıdır: yeni dizin yeni kimlik taşır.
+  assert.equal(retrieval.indexStatus().ready.dimensions, 12);
+  assert.notEqual(retrieval.indexStatus().ready.identity, before);
+  assert.equal((await retrieve('Sonraki soru')).status, 'reranked');
+  assert.equal(documentCalls().length, 2, 'yeni boyuttaki dizin yeniden kullanılır');
+  assert.deepEqual(aiTelemetrySnapshot().semantic.index, { hit: 1, built: 2, shared: 0 });
+});
+
+test('boyut uyuşmazlığının yeniden kurulumu düşerse hazır dizin korunur; karışık boyutlu uç bekleme süresinde kataloğu bir kez yeniden gömer', async (t) => {
+  const dims = { query: 8, document: 8 };
+  let failDocuments = false;
+  let clock = 1000;
+  const ctx = setup(t, {
+    embed: (text) => hashedVector(text, text.startsWith('query: ') ? dims.query : dims.document),
+    respond: (call) => (failDocuments && isDocumentCall(call) ? { type: 'status', status: 503 } : null),
+    now: () => clock
+  });
+  assert.equal((await ctx.retrieve()).status, 'reranked');
+  const identity = ctx.retrieval.indexStatus().ready.identity;
+  // Tek bir uyumsuz sorgu yeniden kurulum dener; kurulum düşer ama geçerli dizin görünür kalır.
+  dims.query = 12;
+  failDocuments = true;
+  const failed = await ctx.retrieve('Uyumsuz boyutlu soru');
+  assert.deepEqual(failed.failure, { stage: 'index', category: 'provider', reason: 'AI_PROVIDER_UNAVAILABLE' });
+  assert.equal(ctx.retrieval.indexStatus().ready.identity, identity);
+  dims.query = 8;
+  assert.equal((await ctx.retrieve('Uyumlu soru')).status, 'reranked');
+  assert.equal(ctx.documentCalls().length, 2);
+  // Belgeler 8, sorgular 12 boyut döndüren uç: bekleme süresi içinde yeni yeniden kurulum yoktur, sorgu bozuk sayılır.
+  failDocuments = false;
+  dims.query = 12;
+  for (const query of ['Birinci', 'İkinci', 'Üçüncü']) {
+    const result = await ctx.retrieve(query);
+    assert.deepEqual(result.failure, { stage: 'embedding', category: 'invalid_output', reason: 'DIMENSION_MISMATCH' }, query);
+  }
+  assert.equal(ctx.documentCalls().length, 2, 'bekleme süresinde katalog yeniden gömülmedi');
+  assert.equal(ctx.retrieval.indexStatus().ready.identity, identity);
+  // Bekleme süresi geçince bir yeniden kurulum daha denenir (gerçek geçiş en geç bu sürede toparlanır).
+  clock += SEMANTIC_DIMENSION_REBUILD_COOLDOWN_MS;
+  assert.equal((await ctx.retrieve('Dördüncü')).failure.reason, 'DIMENSION_MISMATCH');
+  assert.equal(ctx.documentCalls().length, 3);
+  assert.equal(ctx.retrieval.indexStatus().ready.identity, identity, 'aynı boyutta yeniden kurulan dizin aynı kimliği taşır');
+});
+
+test('boyut geçişi sırasında eşzamanlı istekler süren yeniden kurulumu paylaşır; bekleme süresi yalnızca yeni kurulum başlatmayı sınırlar', async (t) => {
+  let dimensions = 8;
+  let hold = false;
+  const ctx = setup(t, {
+    embed: (text) => hashedVector(text, dimensions),
+    respond: (call) => (hold && isDocumentCall(call) ? { type: 'deferred' } : null)
+  });
+  assert.equal((await ctx.retrieve()).status, 'reranked');
+  dimensions = 12;
+  hold = true;
+  const first = ctx.retrieve('Geçiş sırasında birinci soru');
+  await until(() => ctx.documentCalls().length === 2, 'yeniden kurulum başladı');
+  const second = ctx.retrieve('Geçiş sırasında ikinci soru');
+  await until(() => ctx.provider.calls.filter(isQueryCall).length === 3 && ctx.provider.calls.filter(isQueryCall).every((call) => call.settled), 'ikinci sorgu gömüldü');
+  for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  ctx.documentCalls()[1].resolve();
+  assert.deepEqual([(await first).status, (await second).status], ['reranked', 'reranked']);
+  assert.equal(ctx.documentCalls().length, 2, 'ikinci istek yeni kurulum açmadı, süreni paylaştı');
+  assert.equal(ctx.retrieval.indexStatus().ready.dimensions, 12);
+});
+
+test('paylaşılan katalog dizini sunucuya aittir: kurulumu başlatan kullanıcının kişisel anahtarı ya da kotası öteki kullanıcıları etkilemez', async (t) => {
+  // Uç kişisel anahtarla katalog gömmesini reddeder (ör. kişisel kota): eski davranışta kurulum bütün bekleyenler için düşerdi.
+  const provider = createFakeAiProvider({
+    embed: toyEmbed,
+    rerank: toyRerank,
+    respond: (call) => (isDocumentCall(call) && call.apiKey !== DEFAULT_KEY ? { type: 'status', status: 429 } : null)
+  });
+  const stack = createAiStack(t, { provider, sicil: SICIL_A });
+  assert.equal((await saveKey(PERSONAL_KEY_A)).status, 200);
+  const retrieval = createSemanticRetrieval({ loadTools: () => TOOLS });
+  const fromA = await retrieval.retrieve({ query: QUERY });
+  assert.deepEqual({ status: fromA.status, failure: fromA.failure }, { status: 'reranked', failure: null });
+  stack.useSicil(SICIL_B);
+  assert.equal((await retrieval.retrieve({ query: 'Başka kullanıcının sorusu' })).status, 'reranked');
+  const documents = provider.calls.filter(isDocumentCall);
+  assert.deepEqual(documents.map((call) => call.apiKey), [DEFAULT_KEY]);
+  // Kullanıcı sorgusu kendi anahtarıyla gider; katalog kurulumu kullanıcıya faturalanmaz.
+  assert.deepEqual(provider.calls.filter(isQueryCall).map((call) => call.apiKey), [PERSONAL_KEY_A, DEFAULT_KEY]);
+});
+
+test('anlamsal telemetrinin sağlık sınıfı ağ geçidinin `ai.request` kuralıdır: anahtar kaynağı ve kapasite kapsamı dikkate alınır', async (t) => {
+  const health = () => {
+    const rows = snapshotOperations().filter((row) => row.operation === 'ai.semantic.retrieve');
+    return { count: rows.reduce((sum, row) => sum + row.count, 0), errors: rows.reduce((sum, row) => sum + row.errorCount, 0) };
+  };
+  const expectHealth = async (ctx, behavior, category, unhealthy, label) => {
+    const before = health();
+    ctx.provider.enqueue(behavior);
+    const result = await ctx.retrieve();
+    assert.equal(result.failure.category, category, label);
+    const after = health();
+    assert.deepEqual({ count: after.count - before.count, errors: after.errors - before.errors }, { count: 1, errors: unhealthy ? 1 : 0 }, label);
+  };
+  // Kurumsal anahtarla: reddedilen ya da yetkisiz kurumsal anahtar herkesi etkiler, hizmet hatasıdır.
+  const corporate = setup(t);
+  await corporate.retrieve();
+  for (const [behavior, category, unhealthy] of [
+    [{ type: 'status', status: 401 }, 'credential', true],
+    [{ type: 'status', status: 403 }, 'credential', true],
+    [{ type: 'status', status: 400 }, 'rejected', false],
+    [{ type: 'status', status: 503 }, 'provider', true],
+    [{ type: 'status', status: 429 }, 'capacity', true],
+    [{ type: 'status', status: 504 }, 'timeout', true],
+    [{ type: 'status', status: 404 }, 'configuration', true],
+    [{ type: 'malformed' }, 'invalid_output', true]
+  ]) await expectHealth(corporate, behavior, category, unhealthy, `kurumsal ${JSON.stringify(behavior)}`);
+  // Kişisel anahtarla: anahtarın reddi ve oran sınırı yalnızca o kullanıcıyı anlatır.
+  const personal = setup(t, { credential: { source: 'personal', apiKey: PERSONAL_KEY_A } });
+  await personal.retrieve();
+  for (const [behavior, category] of [[{ type: 'status', status: 401 }, 'credential'], [{ type: 'status', status: 429 }, 'capacity']]) {
+    await expectHealth(personal, behavior, category, false, `kişisel ${JSON.stringify(behavior)}`);
+  }
+  // Kullanıcının kendi etkin sınırı (AI_BUSY, kapsam kullanıcı) paylaşılan kapasite baskısı değildir.
+  const busy = setup(t, { env: { MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER: '1', MERGEN_ROTA_AI_MAX_QUEUED_PER_USER: '0' } });
+  const lease = await busy.admission.acquire({ userKey: '900001', modelKey: null, timeoutMs: 1000 });
+  const before = health();
+  const limited = await busy.retrieve();
+  lease.release();
+  assert.deepEqual(limited.failure, { stage: 'embedding', category: 'capacity', reason: 'AI_BUSY' });
+  assert.equal(health().errors, before.errors);
+  // Geçersiz sorgu da sağlık hatası değildir.
+  const query = health();
+  await corporate.retrieve('   ');
+  assert.equal(health().errors, query.errors);
+});
+
 /* ── Kimlik ve geçersizlik ──────────────────────────────── */
 
 test('katalog, model, sağlayıcı ya da ön işleme değişince eski dizin kullanılmaz', async (t) => {
@@ -395,8 +568,11 @@ test('bozuk sorgu gömmesi sıralanmaz; hazır dizin bozulmaz ve sonraki soruda 
     assert.deepEqual({ status: result.status, failure: result.failure }, { status: 'unavailable', failure: { stage: 'embedding', category: 'invalid_output', reason } }, label);
   }
   assert.equal(rerankCalls().length, 1);
-  assert.equal(documentCalls().length, 1);
+  // Boyutu uyuşmayan sorgu hazır dizini bir kez yeniden kurdurur (uç boyut değiştirmiş olabilir); yeni dizin de
+  // eski boyuttaysa bozuk olan sorgudur ve gömme evresinin çıktısı olarak reddedilir.
+  assert.equal(documentCalls().length, 2);
   assert.equal((await retrieve()).status, 'reranked', 'hazır dizin bozulmadı');
+  assert.equal(documentCalls().length, 2);
   assert.equal(aiTelemetrySnapshot().semantic.failures['embedding.invalid_output'], cases.length);
 });
 
@@ -619,11 +795,26 @@ test('süreç düzeyi keşif güvenilir oturum, rehber, anahtar ve ağ geçidi z
   assert.equal(provider.calls.filter(isDocumentCall).length, 1);
   assert.equal(getSemanticRetrieval(), getSemanticRetrieval());
   assert.equal(aiTelemetrySnapshot().semantic.index.hit, 1);
-  // Açık SQL işlemi içinde model çağrılmaz; danışmanlık düşer ve neden korunur.
-  const inside = await withSqlTransaction(() => retrieveSemanticCandidates({ query: QUERY }));
-  assert.deepEqual({ status: inside.status, failure: inside.failure },
-    { status: 'unavailable', failure: { stage: 'embedding', category: 'internal', reason: 'SQL_TRANSACTION_ACTIVE' } });
-  assert.equal(provider.calls.filter((call) => call.kind === 'embeddings').length, 3);
+  // Açık SQL işlemi içinde model çağrılmaz; bu bir programlama sınırı ihlalidir, danışmanlık kaybına çevrilmez.
+  await assert.rejects(withSqlTransaction(() => retrieveSemanticCandidates({ query: QUERY })),
+    (error) => error.code === 'AI_INTERNAL_ERROR' && error.details.reason === 'SQL_TRANSACTION_ACTIVE');
+  assert.equal(provider.calls.filter((call) => call.kind === 'embeddings').length, 3, 'işlem içindeki çağrı sağlayıcıya ulaşmadı');
+  assert.equal(aiTelemetrySnapshot().semantic.retrievals, 2, 'yukarı taşınan hata danışmanlık sonucu olarak sayılmaz');
+});
+
+test('iç hata (programlama ya da değişmez ihlali) hiçbir evrede danışmanlık kaybına çevrilmez; beklenen hizmet hataları çevrilir', async (t) => {
+  // Sağlayıcının beklenmeyen istisnası ağ geçidinde AI_INTERNAL_ERROR olur.
+  const broken = { type: 'tanınmayan-davranış' };
+  for (const [label, stage] of [['sorgu gömmesi', 'query'], ['katalog kurulumu', 'document'], ['yeniden sıralama', 'rerank']]) {
+    const { retrieve, provider, admission } = setup(t, {
+      respond: (call) => ((stage === 'query' && isQueryCall(call)) || (stage === 'document' && isDocumentCall(call)) || (stage === 'rerank' && call.kind === 'rerank') ? broken : null)
+    });
+    await assert.rejects(retrieve(), { code: 'AI_INTERNAL_ERROR' }, label);
+    assertIdle(admission);
+    assert.ok(provider.calls.length > 0, label);
+  }
+  const { semantic } = aiTelemetrySnapshot();
+  assert.deepEqual(semantic.byStatus, { reranked: 0, first_stage: 0, unavailable: 0, cancelled: 0 });
 });
 
 test('kimlik hatası danışmanlık kaybına çevrilmez: rehberde olmayan Sicil yukarı taşınır', async (t) => {

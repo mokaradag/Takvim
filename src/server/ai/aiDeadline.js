@@ -12,6 +12,15 @@ export const AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS = 5000;
 /** Kişisel anahtar doğrulamasının (kiradan sonra) üst süresi. */
 export const AI_VALIDATION_TIMEOUT_MS = 15000;
 
+/**
+ * Ağ geçidi çağrısının uçtan uca üst süresi: rehber denetimi + sıra + rotanın
+ * süre sınırı. Yineleme beklemesi rotanın süre sınırının içindedir. Çağrıyı
+ * dışarıdan sınırlayan (ör. nitelendirme) bu süreden önce kesmemelidir.
+ */
+export function aiCallBudgetMs(config, timeoutMs) {
+  return AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS + config.queueTimeoutMs + timeoutMs;
+}
+
 /** Doğrulamanın sunucudaki uçtan uca bütçesi: rehber denetimi + sıra + doğrulama. */
 export function aiValidationBudgetMs(config) {
   return AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS + config.queueTimeoutMs + Math.min(AI_VALIDATION_TIMEOUT_MS, config.requestTimeoutMs);

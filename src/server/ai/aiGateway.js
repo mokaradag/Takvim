@@ -17,6 +17,7 @@ import {
   assertAiDirectoryMember,
   readPersonalCredentialForValidation,
   resolveAiCredential,
+  resolveServerAiCredential,
   storeCredentialValidation
 } from './aiCredentialService.js';
 import {
@@ -67,6 +68,12 @@ const TOOL_CALL_ID = /^[A-Za-z0-9_.:-]{1,160}$/;
  */
 const DEFAULT_OUTPUT_TOKENS = 1024;
 const KNOWN_SOURCES = new Set(Object.values(AI_CREDENTIAL_SOURCES));
+/**
+ * Sunucuya ait işin kapasite anahtarı: hiçbir güvenilir Sicil bu değeri
+ * taşıyamaz (NUL karakteri). Küresel ve model sınırları yine uygulanır;
+ * kullanıcının kendi etkin/sıra payı tüketilmez.
+ */
+const SERVER_WORK_KEY = '\u0000server';
 
 const DEFAULT_KEY_MESSAGES = Object.freeze({
   [AI_ERROR_CODES.AI_KEY_INVALID]: 'Kurumsal yapay zekâ anahtarı reddedildi. Sistem yöneticinize başvurun.',
@@ -331,6 +338,7 @@ export function createAiGateway({
   loadConfig = readAiConfig,
   loadRegistry = (config) => loadAiModelRegistry({ path: config.registryPath }),
   resolveCredential = resolveAiCredential,
+  resolveServerCredential = resolveServerAiCredential,
   readPersonalCredential = readPersonalCredentialForValidation,
   storeValidation = storeCredentialValidation,
   currentSicil = getTrustedCurrentSicil,
@@ -515,12 +523,18 @@ export function createAiGateway({
    * sınırı her yolda bırakılır. Yineleme kuralı da ortaktır: yalnızca isteğin
    * sağlayıcıya HİÇ ulaşmadığı bağlantı hatası, bir kez, aynı süre sınırı
    * içinde. Bozuk çıktı, süre aşımı, iptal, 4xx ve 5xx yinelenmez; pahalı model
-   * işi çoğaltılmaz. Sağlayıcının bildirdiği model yapılandırılan modelden
-   * farklıysa vektör ya da skor bu profilin uzayına ait değildir: yanıt
+   * işi çoğaltılmaz. Sağlayıcının bildirdiği model yapılandırılan model ya da
+   * kayıtta onun için açıkça bildirilmiş adlardan (`reportedModels`) biri
+   * değilse vektör ya da skor bu profilin uzayına ait değildir: yanıt
    * reddedilir. `fixed` sunucuya ait sabit isteği anlatır (4xx yapılandırma
    * hatasıdır).
+   *
+   * `serverOwned` iş (sunucuya ait katalog belgesi) çağıranın güvenilir
+   * kimliğini yine doğrular, ama kullanıcının kapasite payını ve anahtarını
+   * kullanmaz: sunucu kapasite anahtarı ve kurumsal anahtarla yürür. Paylaşılan
+   * işin sonucu ve faturası onu başlatan kullanıcıya bağlı değildir.
    */
-  async function semanticCall({ profile, capability, operation, signal, fixed, prepare, request }) {
+  async function semanticCall({ profile, capability, operation, signal, fixed, serverOwned = false, prepare, request }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     let lease = null;
@@ -533,7 +547,7 @@ export function createAiGateway({
       const route = requireRoute(await untilCancelled(() => loadRegistry(config), signal), profile, capability);
       context.model = route.model;
       lease = await getAdmission(config).acquire({
-        userKey: sicil,
+        userKey: serverOwned ? SERVER_WORK_KEY : sicil,
         modelKey: route.model,
         modelLimit: route.maxConcurrency,
         signal,
@@ -541,10 +555,9 @@ export function createAiGateway({
       });
       context.queueWaitMs = lease.queueWaitMs;
       deadline = createAiDeadline({ timeoutMs: route.timeoutMs ?? config.requestTimeoutMs, parentSignal: signal, now });
-      const credential = await raceWithAbort(
-        () => resolveCredential({ sicil, config, signal: deadline.signal }),
-        deadline.signal
-      );
+      const credential = serverOwned
+        ? resolveServerCredential({ config })
+        : await raceWithAbort(() => resolveCredential({ sicil, config, signal: deadline.signal }), deadline.signal);
       context.source = credential.source;
       const resolved = semanticRoute(route);
       const response = await callProvider({
@@ -563,7 +576,7 @@ export function createAiGateway({
             if (fixed && isAiError(error) && error.code === AI_ERROR_CODES.AI_REQUEST_INVALID) throw fixedRequestRejected(error);
             throw error;
           }
-          if (result.model != null && result.model !== route.model) {
+          if (result.model != null && result.model !== route.model && !(route.reportedModels ?? []).includes(result.model)) {
             throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, { details: { reason: 'MODEL_MISMATCH' } });
           }
           return result;
@@ -596,25 +609,30 @@ export function createAiGateway({
   /**
    * Metinleri `embedding` yeteneği taşıyan profille gömer. Amaç (`query` |
    * `document`) kayıttaki ön işlemenin önekini seçer; önek TEK yerde, burada
-   * eklenir. Sunucuya ait katalog belgesi sabit istektir; sorgu kullanıcı
+   * eklenir. Belirteç penceresi kuralı da ön işlemedendir (`truncateTokens`:
+   * önekli metin uçta ilk N belirtece kesilir; yoksa aşan girdiyi uç reddeder).
+   * Sunucuya ait katalog belgesi sabit ve sunucuya ait istektir; sorgu kullanıcı
    * girdisidir. `embeddings` güvenilmez model çıktısıdır (dizin adresli
    * `{ index, vector }`) ve anlamsal sözleşmede doğrulanır; `route` uzayı adlandırır.
    */
   async function embedTexts({ profile, texts, purpose, signal = null }) {
+    const document = purpose === AI_EMBEDDING_PURPOSES.DOCUMENT;
     const { response, ...call } = await semanticCall({
       profile,
       capability: AI_CAPABILITIES.EMBEDDING,
       operation: 'ai.provider.embeddings',
       signal,
-      fixed: purpose === AI_EMBEDDING_PURPOSES.DOCUMENT,
+      fixed: document,
+      serverOwned: document,
       prepare: () => {
         const input = boundedTexts(texts, SEMANTIC_LIMITS.maxCatalogueItems, SEMANTIC_LIMITS.maxItemTextChars);
         if (!input || !EMBEDDING_PURPOSES.has(purpose)) throw semanticInputInvalid('EMBEDDING_INPUT_INVALID');
         return input;
       },
       request: (provider, base, route, input) => {
-        const prefix = purpose === AI_EMBEDDING_PURPOSES.QUERY ? route.preprocessing.queryPrefix : route.preprocessing.documentPrefix;
-        return provider.embeddings({ ...base, input: input.map((text) => `${prefix}${text}`) });
+        const { queryPrefix, documentPrefix, truncateTokens } = route.preprocessing;
+        const prefix = document ? documentPrefix : queryPrefix;
+        return provider.embeddings({ ...base, input: input.map((text) => `${prefix}${text}`), truncateTokens });
       }
     });
     return { embeddings: response.embeddings, ...call };

@@ -47,7 +47,13 @@ const CASE_ID = /^[a-z][a-z0-9-]{2,47}$/;
 const TAG = /^[a-z][a-z0-9-]{1,31}$/;
 const SAFE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const MAX_ISSUES = 25;
-const MAX_CALL_TIMEOUT_MS = 600000;
+/**
+ * Çağrı başına süre sınırının üst değeri: üretim ağ geçidinden geçen bir
+ * çağrının en uzun meşru yaşam döngüsünü (rehber denetimi 5 s + sıra ≤ 120 s +
+ * rota süre sınırı ≤ 600 s) ve sonuçlanma payını kapsar.
+ */
+export const SEMANTIC_MAX_CALL_TIMEOUT_MS = 900000;
+const MAX_CALL_TIMEOUT_MS = SEMANTIC_MAX_CALL_TIMEOUT_MS;
 const MAX_TAGS_DECLARED = 64;
 const RUN_HALTED = 'RUN_HALTED';
 const INDEX_UNAVAILABLE = 'INDEX_UNAVAILABLE';
@@ -216,6 +222,19 @@ function failureCode(error) {
   }
 }
 
+/**
+ * Model işlevi kendi süre sınırının dolduğunu standart `TimeoutError` adıyla
+ * bildirebilir (ör. ağ geçidinin `AI_TIMEOUT` sonucu): çağrı sonuçlanmıştır ve
+ * süre aşımıdır, genel hata değildir. Ad bir kez okunur; okunamazsa hata sayılır.
+ */
+function reportsTimeout(error) {
+  try {
+    return error?.name === 'TimeoutError';
+  } catch {
+    return false;
+  }
+}
+
 // Süresi dolan çağrı iptali kabul edip sonuçlanmalıdır; ek süre içinde sonuçlanmazsa arka planda sürüyor sayılır.
 function settlesWithin(running, ms, signal) {
   return new Promise((resolve) => {
@@ -272,6 +291,7 @@ async function callModel(invoke, { signal, callTimeoutMs, now }) {
       signal?.throwIfAborted();
       return { outcome: TIMEOUT, latencyMs, halted: !settled };
     }
+    if (reportsTimeout(error)) return { outcome: TIMEOUT, latencyMs, halted: false };
     return { outcome: FAILED, reason: failureCode(error), latencyMs };
   } finally {
     clearTimeout(timer);

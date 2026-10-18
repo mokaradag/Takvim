@@ -363,6 +363,9 @@ nitelendirme mekanizmasını kurar. 4B, model kaydındaki `embedding` ve `rerank
 profilleriyle ağ geçidi üzerinden gerçek gömme ile sunucuya ait araç
 kataloğunda sınırlı aday keşfi ve yeniden sıralama yapar (süreç içi dizin,
 vektör veritabanı yok); sonuç danışmandır ve Aşama 3 turuna henüz bağlanmaz.
+Katalog dizini kurumsal anahtarla (`MERGEN_ROTA_AI_DEFAULT_API_KEY`) kurulur;
+üretim yolundan nitelendirme uygulama dizininde `node
+scripts/semantic-evaluation.mjs live --json` ile yapılır (`.env.local` okunur).
 Regex ya da anahtar sözcükle doğal dil
 yorumu yasaktır; anlamsal benzerlik yetki değildir. Yol haritası, değişmezler,
 ölçüler ve kurum içi kabul: `docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md`.

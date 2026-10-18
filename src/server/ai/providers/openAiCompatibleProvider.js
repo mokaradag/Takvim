@@ -51,10 +51,18 @@ const CONNECT_FAILURE_CODES = new Set([
 const NETWORK_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,40}$/;
 /**
  * Gömme yanıtının okuma sınırı girdi sayısıyla ölçeklenir: her vektör anlamsal
- * sözleşmenin en büyük boyutunda olabilir ve JSON'da bir değer 32 baytı aşmaz.
- * Sabit 1 MiB sınırı 4096 boyutlu bir modelin katalog gömmesini reddederdi.
+ * sözleşmenin en büyük boyutunda olabilir ve JSON'da bir değer 32 baytı aşmaz
+ * (en uzun kayan nokta yazımı 24 karakter, ayraç 2 karakter). Sabit 1 MiB sınırı
+ * 4096 boyutlu bir modelin katalog gömmesini reddederdi. Girdi sayısı sözleşmenin
+ * en büyük kataloğuyla sınırlanır: bütçe hiçbir istekte 1 MiB + 256 × 256 KiB'ı
+ * aşmaz. Gerçek katalog (19 araç) için bütçe ~5,75 MiB, sorgu için 1,25 MiB'tır.
  */
-const EMBEDDING_BYTES_PER_INPUT = SEMANTIC_LIMITS.maxDimensions * 32;
+const EMBEDDING_BYTES_PER_VALUE = 32;
+const EMBEDDING_BYTES_PER_INPUT = SEMANTIC_LIMITS.maxDimensions * EMBEDDING_BYTES_PER_VALUE;
+
+export function embeddingResponseBudget(inputs, baseBytes = MAX_RESPONSE_BYTES) {
+  return baseBytes + Math.min(Math.max(0, inputs), SEMANTIC_LIMITS.maxCatalogueItems) * EMBEDDING_BYTES_PER_INPUT;
+}
 
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -479,19 +487,23 @@ export function createOpenAiCompatibleProvider({
     /**
      * Metinlerin gömmesi (`POST /embeddings`). Değerler sayı dizisi olarak
      * istenir (`encoding_format: float`); metin sunucuda hazırlanmış (ön işlemesi
-     * uygulanmış) hâliyle gider. Hata gövdesi okunmaz.
+     * uygulanmış) hâliyle gider. `truncateTokens` verilmişse belirteç penceresini
+     * aşan girdi uçta SAĞDAN kesilir: önek dâhil ilk N belirteç kalır (vLLM
+     * `truncate_prompt_tokens` + `truncation_side`). Verilmemişse kesme istenmez
+     * ve pencereyi aşan girdiyi uç reddeder. Hata gövdesi okunmaz.
      */
-    async embeddings({ baseUrl, apiKey, model, input, signal }) {
+    async embeddings({ baseUrl, apiKey, model, input, truncateTokens = null, signal }) {
+      const truncation = truncateTokens == null ? {} : { truncate_prompt_tokens: truncateTokens, truncation_side: 'right' };
       const response = await send(`${baseUrl}/embeddings`, {
         method: 'POST',
         headers: requestHeaders(apiKey, { json: true }),
-        body: JSON.stringify({ model, input, encoding_format: 'float' })
+        body: JSON.stringify({ model, input, encoding_format: 'float', ...truncation })
       }, signal);
       if (!response.ok) {
         await discardBody(response);
         throw classifyProviderStatus(response.status, response.headers.get('retry-after'));
       }
-      return parseEmbeddingResponse(await readBoundedJson(response, maxResponseBytes + input.length * EMBEDDING_BYTES_PER_INPUT, signal));
+      return parseEmbeddingResponse(await readBoundedJson(response, embeddingResponseBudget(input.length, maxResponseBytes), signal));
     },
 
     /**
