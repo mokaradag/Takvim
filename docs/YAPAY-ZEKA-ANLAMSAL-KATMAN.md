@@ -784,6 +784,8 @@ sıralama sözleşmesiyle doğrulandı:
   her yolda bırakılır.
 - **Sunucuya ait katalog belgesi** yalnızca `embedServerCatalogue` ile gömülür;
   metinler ağ geçidinde sabit sunucu araç kaydından üretilir, çağırandan alınmaz.
+  Yanıt, gerçekten gömülen katalogun parmak izini taşır; hizmet kendi kataloguyla
+  eşleşmezse vektörleri `stale`/`SPACE_MISMATCH` ile reddeder, dizine almaz.
   `embedTexts` içindeki `purpose: document` yalnızca öneki seçer; kullanıcı
   doğrulamasını, payını, anahtarını ya da hata sınıfını değiştirmez. Paylaşılan
   katalog işi kullanıcı rehberine yeniden başvurmaz; her çağıran kendi sorgu
@@ -1166,10 +1168,13 @@ kapısını geçti mi?" sorusu DEĞİL.
   ("gönderilemeyen görev kaldı mı" → "iletilmemiş görev kalacak mı").
   Kabul edilen 93 yeniden ifade ve elenen satırlarda özgün metin `--queries`
   dosyası oldu. Yeniden ifadeler altın veri değildir, depoya eklenmedi.
-- Gerçek 4B yolundan geçiş (yerel HTTP ikiziyle, anlamsız özet vektörleri):
+- Önceki istek biçimiyle 4B yolundan geçiş (yerel HTTP ikiziyle, anlamsız özet
+  vektörleri; mevcut istek biçiminin yoklama kanıtı değildir):
   `live --json --queries` 117/117 gömme ve 117/117 yeniden sıralama
   çağrısını `ok` tamamladı; stdout ayrıştırılabilir JSON, istekler
-  `truncate_prompt_tokens: 512, truncation_side: right` taşıdı, iş yükü
+  o tarihte `truncate_prompt_tokens: 512, truncation_side: right` taşıdı.
+  Bu istek biçimi sonradan değiştirildi; güncel kod yalnızca
+  `truncate_prompt_tokens: 512` gönderir (§7.2–§7.3). Önceki iş yükü
   künyesi gerçek çağrı sayısını (117/117) yazdı; türetilen kümenin parmak izi
   özgününden farklı. Üretim `semanticRetrieval` hizmeti (gerçek ağ geçidi →
   bağdaştırıcı → HTTP) için önceki kayıt üç 117 sorguluk kümede `reranked`

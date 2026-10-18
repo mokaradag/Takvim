@@ -484,13 +484,14 @@ test('belge amacı kullanıcı kotasını, kişisel anahtarı ya da hata sınıf
   const lease = await admission.acquire({ userKey: 900001, timeoutMs: 1000 });
   try {
     await assert.rejects(embedDocuments(gateway), (error) => error.code === 'AI_BUSY' && error.details.scope === 'user');
-    await gateway.embedServerCatalogue({ texts: ['Kullanıcının keyfî belgesi'], purpose: 'document' });
+    const result = await gateway.embedServerCatalogue({ texts: ['Kullanıcının keyfî belgesi'], purpose: 'document' });
     const catalogue = provider.calls.at(-1);
     assert.equal(catalogue.apiKey, DEFAULT_KEY);
     const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
     const { createSemanticCatalogue, semanticToolDefinitions } = await import('../src/domain/ai/semanticContract.js');
     const built = createSemanticCatalogue(semanticToolDefinitions(rotaToolNames().map(getRotaTool)));
     assert.deepEqual(catalogue.input, built.catalogue.items.map((item) => `passage: ${item.text}`));
+    assert.equal(result.catalogueFingerprint, built.catalogue.fingerprint);
   } finally {
     lease.release();
   }

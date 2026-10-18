@@ -514,6 +514,32 @@ test('kurulum sırasında rota değişirse vektörler istenen uzaya ait değildi
   assert.equal(ctx.documentCalls().at(-1).model, 'Qwen3-Embedding-8B');
 });
 
+test('gömülen katalogun açıklaması ya da sırası değişirse aynı sayıda vektör bile yanlış kataloğa bağlanmaz', async (t) => {
+  for (const changed of [TOOLS.map((tool) => ({ ...tool, description: `${tool.description} değişti` })), [...TOOLS].reverse()]) {
+    let swap = true;
+    const ctx = setup(t, {
+      embed: (text) => hashedVector(text, 8),
+      respond: (call) => {
+        if (swap && isQueryCall(call)) {
+          swap = false;
+          ctx.current.tools = changed;
+        } else if (isDocumentCall(call)) {
+          ctx.current.tools = TOOLS;
+        }
+        return null;
+      }
+    });
+    const stale = await ctx.retrieve();
+    assert.deepEqual(stale, { status: 'unavailable', candidates: [], failure: { stage: 'index', category: 'stale', reason: 'SPACE_MISMATCH' } });
+    assert.deepEqual(ctx.documentCalls()[0].input, changed.map((tool) => `passage: ${tool.description}`));
+    assert.equal(ctx.rerankCalls().length, 0);
+    assert.deepEqual(ctx.retrieval.indexStatus(), { ready: null, building: false });
+    assert.equal((await ctx.retrieve()).status, 'reranked');
+    assert.equal(ctx.documentCalls().length, 2, 'bayat vektörler önbelleğe alınmadı');
+    assertIdle(ctx.admission);
+  }
+});
+
 /* ── Model çıktısı güvenilmezdir ────────────────────────── */
 
 const entries = (vectors) => vectors.map((vector, index) => ({ index, embedding: vector }));

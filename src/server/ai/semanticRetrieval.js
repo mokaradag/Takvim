@@ -154,9 +154,9 @@ export function createSemanticRetrieval({
     const call = await getGateway().embedServerCatalogue({
       signal: null
     });
-    // Kurulum sırasında rota değiştiyse (kayıt yeniden yüklendi) vektörler istenen uzaya ait değildir.
+    // Rota ya da gömülen katalog değiştiyse vektörler bu dizine ait değildir.
     const built = spaceOf(call.route);
-    if (!built || built.key !== space.key || indexKey(catalogue, built, call.route) !== key) {
+    if (call.catalogueFingerprint !== catalogue.fingerprint || !built || built.key !== space.key || indexKey(catalogue, built, call.route) !== key) {
       throw new SemanticStageFailure(localOutcome(STAGE.INDEX, 'stale', SEMANTIC_FAILURES.SPACE_MISMATCH));
     }
     const created = createSemanticIndex(catalogue, space, call.embeddings);

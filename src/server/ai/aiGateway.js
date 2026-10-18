@@ -630,6 +630,7 @@ export function createAiGateway({
 
   async function embedInput({ profile, texts, purpose, signal = null }, serverOwned = false) {
     const document = purpose === AI_EMBEDDING_PURPOSES.DOCUMENT;
+    let catalogueFingerprint = null;
     const { response, ...call } = await semanticCall({
       profile,
       capability: AI_CAPABILITIES.EMBEDDING,
@@ -641,6 +642,7 @@ export function createAiGateway({
         if (serverOwned) {
           const built = createSemanticCatalogue(semanticToolDefinitions(loadCatalogueTools()));
           if (!built.ok) throw new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, { details: { reason: 'CATALOGUE_INVALID' } });
+          catalogueFingerprint = built.catalogue.fingerprint;
           return built.catalogue.items.map((item) => item.text);
         }
         const input = boundedTexts(texts, SEMANTIC_LIMITS.maxCatalogueItems, SEMANTIC_LIMITS.maxItemTextChars);
@@ -653,7 +655,7 @@ export function createAiGateway({
         return provider.embeddings({ ...base, input: input.map((text) => `${prefix}${text}`), truncateTokens });
       }
     });
-    return { embeddings: response.embeddings, ...call };
+    return { embeddings: response.embeddings, ...call, ...(serverOwned ? { catalogueFingerprint } : {}) };
   }
 
   /**

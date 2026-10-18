@@ -417,8 +417,9 @@ Doğrulama kuralları:
   değerini aşamaz). Alan **yoksa** ön işleme yoktur; yazılmış `null` ya da
   geçersiz değer kayıt hatasıdır. Önek ağ geçidinde, gömmenin amacına
   (sorgu/belge) göre eklenir ve belirteç gömme uzayının kimliğine girer.
-  `truncateTokens` varsa uç, belirteç penceresini aşan önekli girdinin ilk N
-  belirtecini gömer (`truncate_prompt_tokens`, `truncation_side: right`; vLLM
+  `truncateTokens` varsa uç, önekli girdiyi özel belirteçleri koruyarak N
+  belirtece sınırlar (yalnızca `truncate_prompt_tokens`; `truncation_side`
+  gönderilmez, E5 belirteçleyicisinin varsayılan sağ yönü kullanılır; vLLM
   0.31.0); yoksa aşan girdiyi uç reddeder (bkz. YAPAY-ZEKA-ANLAMSAL-KATMAN.md
   §7.2). Kurum içi kayıtta `intfloat/multilingual-e5-large` E5'in belgelenmiş
   öneklerini ve 512 belirteçlik pencereyi taşır.
