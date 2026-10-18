@@ -17,9 +17,65 @@
  *   node test/helpers/fakeOpenAiCompatibleServer.mjs --serve --port 8099 --valid-key <ANAHTAR>
  * Ardından MERGEN_ROTA_AI_BASE_URL=http://127.0.0.1:8099/v1 kullanılır.
  */
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
+
+/**
+ * Gömme ve yeniden sıralama uçlarının varsayılan ikizi anlam çıkarmaz: değer
+ * metnin özetinden (SHA-256) türetilir, belirlenimcidir ve hiçbir zaman sıfır
+ * vektör değildir. Sınama anlamlı eşleme isterse `semantic` ile kendisi verir.
+ */
+export function hashedVector(text, dimensions = 8) {
+  const digest = createHash('sha256').update(String(text)).digest();
+  return Array.from({ length: dimensions }, (_, index) => (digest[index % digest.length] - 127.5) / 127.5);
+}
+
+export function hashedScore(query, document) {
+  return createHash('sha256').update(`${query}\n${document}`).digest()[0] / 255;
+}
+
+const DEFAULT_SEMANTIC = Object.freeze({ embed: (text) => hashedVector(text), rerank: hashedScore });
+
+function semanticPayload(kind, body, semantic) {
+  if (kind === 'embeddings') {
+    const inputs = Array.isArray(body?.input) ? body.input : [body?.input];
+    return { object: 'list', model: body?.model, data: inputs.map((text, index) => ({ object: 'embedding', index, embedding: semantic.embed(text, body?.model, body?.embeddingTokens?.[index]) })) };
+  }
+  const documents = Array.isArray(body?.documents) ? body.documents : [];
+  const results = documents.map((text, index) => ({ index, document: { text }, relevance_score: semantic.rerank(body?.query, text, body?.model) }))
+    .sort((left, right) => right.relevance_score - left.relevance_score);
+  return { id: 'rerank-fake', model: body?.model, results };
+}
+
+/**
+ * vLLM 0.31.0 gömme penceresi kuralının ikizi (pooling çalıştırıcısı). Belirteç
+ * sayısı yalnızca İKİZDE boşlukla bölünmüş sözcük + iki özel belirteçtir.
+ * Kesme istenmemişse pencereyi aşan girdi reddedilir (`null` → 400);
+ * `truncate_prompt_tokens` pencereden büyükse istek reddedilir. Varsayılan
+ * belirteçleyici sağdan keserken özel belirteçleri korur; açık yön ise vLLM
+ * gibi özel belirteçler eklendikten sonra diziyi keser.
+ */
+function applyEmbeddingWindow(body, window) {
+  const inputs = Array.isArray(body?.input) ? body.input : [body?.input];
+  const limit = body?.truncate_prompt_tokens ?? null;
+  if (limit != null && limit > window) return null;
+  const kept = [];
+  const embeddingTokens = [];
+  for (const text of inputs) {
+    const words = String(text).split(' ');
+    let tokens = ['<s>', ...words, '</s>'];
+    if (limit != null && tokens.length > limit) {
+      tokens = body.truncation_side == null
+        ? ['<s>', ...words.slice(0, limit - 2), '</s>']
+        : body.truncation_side === 'left' ? tokens.slice(-limit) : tokens.slice(0, limit);
+    } else if (tokens.length > window) return null;
+    embeddingTokens.push(tokens);
+    kept.push(tokens.filter((token) => token !== '<s>' && token !== '</s>').join(' '));
+  }
+  return { ...body, input: kept, embeddingTokens };
+}
 
 function json(response, status, body, headers = {}) {
   const text = JSON.stringify(body);
@@ -118,7 +174,8 @@ export async function startFakeOpenAiCompatibleServer({
   validKeys = null,
   publicModels = false,
   models = DEFAULT_MODELS,
-  text = 'Merhaba, sahte ağ geçidi yanıt veriyor.'
+  text = 'Merhaba, sahte ağ geçidi yanıt veriyor.',
+  semantic = DEFAULT_SEMANTIC
 } = {}) {
   const state = {
     scenario: null,
@@ -180,7 +237,19 @@ export async function startFakeOpenAiCompatibleServer({
           json(response, 200, { object: 'list', data: models.map((id) => ({ id, object: 'model' })) });
           return;
         }
-        if (!request.url.endsWith('/chat/completions') || request.method !== 'POST') {
+        // Gömme ve Cohere/Jina uyumlu yeniden sıralama uçları; `semanticPayload` bozuk yanıt senaryosudur.
+        const semanticKind = request.method !== 'POST' ? null
+          : request.url.endsWith('/embeddings') ? 'embeddings' : request.url.endsWith('/rerank') ? 'rerank' : null;
+        if (semanticKind && !scenario.malformed && !scenario.oversizedBytes) {
+          const windowed = semanticKind === 'embeddings' && scenario.embeddingWindow ? applyEmbeddingWindow(body, scenario.embeddingWindow) : body;
+          if (!windowed) {
+            json(response, 400, { error: { message: `maximum context length exceeded ${authorization}`, type: 'BadRequestError' } });
+            return;
+          }
+          json(response, 200, scenario.semanticPayload ? scenario.semanticPayload(windowed, semanticKind) : semanticPayload(semanticKind, windowed, { ...DEFAULT_SEMANTIC, ...semantic }));
+          return;
+        }
+        if (!semanticKind && (!request.url.endsWith('/chat/completions') || request.method !== 'POST')) {
           json(response, 404, { error: { message: 'not found' } });
           return;
         }

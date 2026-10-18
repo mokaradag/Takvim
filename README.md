@@ -355,11 +355,18 @@ Aşama 4, Türkçe doğal dilin gömme ve yeniden sıralama modelleriyle anlamsa
 olarak anlaşılmasını Aşama 3'ün yetki, SQL ve kanıt sınırını gevşetmeden
 ekler ve dondurulmuş dört adımdan oluşur: 4A anlamsal temel ve değerlendirme,
 4B gerçek anlamsal erişim ve yeniden sıralama, 4C akıllı planlayıcı ve zayıf
-model doğrulaması, 4D insan kalitesinde yanıt ve kurum içi yakınsama. 4A canlı
-davranışı değiştirmez: model çıktısını güvenilmez veri olarak doğrulayan saf
-sözleşmeleri, sürüm/parmak izi kurallarını, 117 vakalık sentetik Türkçe kıyas
-kümesini, ölçüleri, belirlenimci sınama ikizlerini ve elle çalıştırılan gerçek
-model nitelendirme mekanizmasını kurar. Regex ya da anahtar sözcükle doğal dil
+model doğrulaması, 4D insan kalitesinde yanıt ve kurum içi yakınsama. 4A
+model çıktısını güvenilmez veri olarak doğrulayan saf sözleşmeleri,
+sürüm/parmak izi kurallarını, 117 vakalık sentetik Türkçe kıyas kümesini,
+ölçüleri, belirlenimci sınama ikizlerini ve elle çalıştırılan gerçek model
+nitelendirme mekanizmasını kurar. 4B, model kaydındaki `embedding` ve `rerank`
+profilleriyle ağ geçidi üzerinden gerçek gömme ile sunucuya ait araç
+kataloğunda sınırlı aday keşfi ve yeniden sıralama yapar (süreç içi dizin,
+vektör veritabanı yok); sonuç danışmandır ve Aşama 3 turuna henüz bağlanmaz.
+Katalog dizini kurumsal anahtarla (`MERGEN_ROTA_AI_DEFAULT_API_KEY`) kurulur;
+üretim yolundan nitelendirme uygulama dizininde `node
+scripts/semantic-evaluation.mjs live --json` ile yapılır (`.env.local` okunur).
+Regex ya da anahtar sözcükle doğal dil
 yorumu yasaktır; anlamsal benzerlik yetki değildir. Yol haritası, değişmezler,
 ölçüler ve kurum içi kabul: `docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md`.
 

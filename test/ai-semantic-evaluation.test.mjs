@@ -29,6 +29,7 @@ const {
   SEMANTIC_BENCHMARK_LIMITS,
   SEMANTIC_EVALUATION_DEFAULTS,
   SEMANTIC_EXPECTATIONS,
+  SEMANTIC_MAX_CALL_TIMEOUT_MS,
   collectSemanticRun,
   evaluateSemanticDecisions,
   summarizeSemanticRun,
@@ -456,6 +457,19 @@ test('tam kıyas kümesi kâhin ikiziyle uçtan uca koşar: kusursuz sıralama k
   assert.doesNotMatch(JSON.stringify(embedding.calls), /tr-\d{3}|"(?:answer|clarify|abstain)"|varlik-adi/);
 });
 
+test('model işlevinin kendi süre sınırını `TimeoutError` ile bildirmesi süre aşımıdır; koşu durmaz, okunamayan ad genel hatadır', { timeout: 5000 }, async () => {
+  const unreadable = { get name() { throw new Error('sk-gizli'); }, code: 'AI_TIMEOUT' };
+  const embedding = createEmbeddingDouble({
+    vectorFor: toyVector,
+    behaviors: [{ type: 'vectors' }, { type: 'throw', error: new DOMException('ağ geçidi süre sınırı', 'TimeoutError') }, { type: 'throw', error: unreadable }]
+  });
+  const run = await toyRun({ embedding: { space, embed: embedding.embed } });
+  assert.deepEqual(run.cases.map((entry) => [entry.embedding.outcome, entry.embedding.reason ?? null, entry.embedding.halted ?? null]),
+    [['timeout', null, false], ['failed', 'AI_TIMEOUT', null], ['ok', null, null], ['ok', null, null]]);
+  const summary = summarizeSemanticRun(run, toyBenchmark);
+  assert.deepEqual(summary.outcomes.embedding, { ok: 2, invalid: 0, timeout: 1, failed: 1 });
+});
+
 test('model hatası, geçersiz çıktı ve süre aşımı ölçüden çıkarılmaz; ıska sayılır ve ileti taşınmaz', { timeout: 5000 }, async () => {
   const secret = Object.assign(new Error('sk-gizli-anahtar sağlayıcı yanıtında'), { code: 'AI_PROVIDER_UNAVAILABLE' });
   const embedding = createEmbeddingDouble({
@@ -644,7 +658,9 @@ test('bayat koşu, uyumsuz katalog ve geçersiz parametreler reddedilir', async 
   await assert.rejects(toyRun({ embedding: { space, embed }, reranking: { provenance: space, rerank: () => [] } }), TypeError);
   await assert.rejects(collectSemanticRun({ benchmark: { ...toyBenchmark }, catalogue: toyCatalogue, embedding: { space, embed } }), TypeError);
   for (const limit of [0, 21, 1.5]) await assert.rejects(toyRun({ embedding: { space, embed }, limit }), RangeError);
-  for (const callTimeoutMs of [0, 1.5, 600001]) await assert.rejects(toyRun({ embedding: { space, embed }, callTimeoutMs }), RangeError);
+  for (const callTimeoutMs of [0, 1.5, SEMANTIC_MAX_CALL_TIMEOUT_MS + 1]) await assert.rejects(toyRun({ embedding: { space, embed }, callTimeoutMs }), RangeError);
+  // Üst değer ağ geçidinin en uzun meşru yaşam döngüsünü kapsar: rehber 5 s + sıra 120 s + rota 600 s.
+  assert.ok(SEMANTIC_MAX_CALL_TIMEOUT_MS > 5000 + 120000 + 600000);
 });
 
 /* ── Planlayıcı kararları ───────────────────────────────── */

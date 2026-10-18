@@ -65,6 +65,9 @@ function createState() {
     // Kanıta dayalı yanıtların sonucu: grounded (kanıtlı), direct (araçsız), failed (doğrulanamadı).
     grounding: { grounded: 0, general_redirect: 0, clarification: 0, not_found: 0, unavailable: 0, failed: 0, repaired: 0, disclosed: 0, serverSelected: 0, rounds: [], evidence: [],
       escalations: { total: 0, byReason: {}, byOutcome: {} } },
+    // Anlamsal aday keşfi: yalnızca sonuç, başarısızlık sınıfı, dizin kullanımı ve süre (sorgu, vektör ya da aday metni YOK).
+    semantic: { retrievals: 0, byStatus: { reranked: 0, first_stage: 0, unavailable: 0, cancelled: 0 }, failures: {},
+      index: { hit: 0, built: 0, shared: 0 }, latencyMs: [], lastFailure: null },
     // Görünür çıktı üretmeden biten model çağrıları (tanı günlüğe yazılır).
     emptyCompletions: 0,
     retries: 0,
@@ -151,6 +154,17 @@ function outcomeOf(code, serviceFailure, { source = null, details = null } = {})
     return { code: definition.code, serviceFailure: false };
   }
   return { code: definition.code, serviceFailure: definition.serviceFailure };
+}
+
+/**
+ * Ağ geçidi hatasının hizmet sağlığı sınıfı, `ai.request` kaydıyla AYNI kural
+ * (`outcomeOf`): anahtarın kaynağı ve kapasite kapsamı hatanın ayrıntısından
+ * okunur. Ağ geçidini çağıran katmanlar (ör. anlamsal keşif) ikinci bir
+ * sınıflandırma yazmaz.
+ */
+export function aiFailureServiceHealth(error) {
+  const details = error?.details ?? null;
+  return outcomeOf(error?.code, error?.serviceFailure, { source: details?.credentialSource ?? null, details }).serviceFailure;
 }
 
 /**
@@ -438,6 +452,14 @@ export function aiTelemetrySnapshot() {
         byOutcome: { ...current.grounding.escalations.byOutcome }
       }
     },
+    semantic: {
+      retrievals: current.semantic.retrievals,
+      byStatus: { ...current.semantic.byStatus },
+      failures: { ...current.semantic.failures },
+      index: { ...current.semantic.index },
+      latency: percentiles(current.semantic.latencyMs),
+      lastFailure: current.semantic.lastFailure ? { ...current.semantic.lastFailure } : null
+    },
     emptyCompletions: current.emptyCompletions,
     lastSuccessAt: current.lastSuccessAt,
     lastFailure: current.lastFailure ? { ...current.lastFailure } : null,
@@ -561,6 +583,60 @@ export function recordEmptyCompletion({ profile, model = null, diagnostics = {} 
       textReceived: diagnostics.textReceived === true
     }
   }));
+}
+
+const SEMANTIC_STATUSES = new Set(['reranked', 'first_stage', 'unavailable', 'cancelled']);
+const SEMANTIC_STAGES = new Set(['query', 'catalogue', 'embedding', 'index', 'rerank']);
+const SEMANTIC_CATEGORIES = new Set([
+  'query', 'catalogue', 'disabled', 'configuration', 'credential', 'capacity', 'timeout', 'provider', 'invalid_output', 'rejected', 'stale', 'internal'
+]);
+/** Teşhis kaydına ve günlüğe girmeyen sınıflar: sorgunun kendisi ve bilinçli olarak kapatılmış profil. */
+const SEMANTIC_QUIET = new Set(['query', 'disabled']);
+const SEMANTIC_INDEX_USES = new Set(['hit', 'built', 'shared']);
+const SAFE_REASON = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+/**
+ * Anlamsal aday keşfinin sonucu (içeriksiz): durum (`reranked`, `first_stage`,
+ * `unavailable`, `cancelled`), başarısızlığın evresi/sınıfı/güvenli kodu, dizinin
+ * yeniden kullanımı (`hit`), kurulumu (`built`) ya da süren kurulumun paylaşımı
+ * (`shared`), aday sayısı ve süre. Sorgu, vektör, skor ya da katalog metni
+ * yazılmaz. `log`, ağ geçidinin görmediği anlamsal kusuru (sözleşmenin reddettiği
+ * model çıktısı, bayat dizin, bozuk katalog) işletim günlüğüne yazdırır; ağ
+ * geçidi hataları orada zaten kayıtlıdır. `serviceFailure`, ortak hata
+ * kataloğunun (ağ geçidi kaydıyla aynı) sağlık sınıfıdır: kullanıcının eksik ya
+ * da reddedilen anahtarı, geçersiz sorgusu ya da kapalı profil hizmet sağlığını
+ * düşürmez; danışmanlığın yalnızca `unavailable` kaybı sağlık işlemine yazılır.
+ */
+export function recordSemanticRetrieval({ status, failure = null, serviceFailure = false, index = null, candidates = 0, durationMs = 0, log = false }) {
+  const safeStatus = SEMANTIC_STATUSES.has(status) ? status : 'unavailable';
+  const stage = SEMANTIC_STAGES.has(failure?.stage) ? failure.stage : null;
+  const category = SEMANTIC_CATEGORIES.has(failure?.category) ? failure.category : (failure ? 'internal' : null);
+  const reason = SAFE_REASON.test(String(failure?.reason ?? '')) ? failure.reason : null;
+  const unhealthy = safeStatus === 'unavailable' && category != null && serviceFailure === true;
+  safely(() => {
+    const current = state().semantic;
+    current.retrievals += 1;
+    current.byStatus[safeStatus] += 1;
+    if (category) {
+      const key = `${stage ?? 'unknown'}.${category}`;
+      current.failures[key] = (current.failures[key] || 0) + 1;
+      if (!SEMANTIC_QUIET.has(category)) current.lastFailure = { stage, category, reason, at: new Date().toISOString() };
+    }
+    if (SEMANTIC_INDEX_USES.has(index)) current.index[index] += 1;
+    pushSample(current.latencyMs, durationMs);
+    recordOperation({ operation: 'ai.semantic.retrieve', durationMs, ok: !unhealthy, code: unhealthy ? `SEMANTIC_${category.toUpperCase()}` : null });
+  });
+  if (log && category && !SEMANTIC_QUIET.has(category)) {
+    safely(() => logEvent({
+      severity: category === 'invalid_output' ? EVENT_SEVERITIES.WARNING : EVENT_SEVERITIES.ERROR,
+      component: COMPONENTS.AI,
+      operation: 'ai.semantic.retrieve',
+      code: 'AI_SEMANTIC_DEGRADED',
+      message: 'Anlamsal aday keşfi danışmanlık olmadan sürdü.',
+      durationMs: millis(durationMs),
+      context: { status: safeStatus, stage, category, reason, candidates: safeCount(candidates) }
+    }));
+  }
 }
 
 const ESCALATION_REASONS = new Set(['SYNTHESIS_REQUIRED', 'VERIFICATION_FAILED', 'LENGTH', 'EMPTY_COMPLETION', 'REQUEST_DECLARATION']);

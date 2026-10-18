@@ -1,6 +1,7 @@
 import 'server-only';
 import { randomBytes } from 'node:crypto';
 import { AI_ERROR_CODES } from '../../../domain/ai/aiErrorCatalog.js';
+import { SEMANTIC_LIMITS } from '../../../domain/ai/semanticContract.js';
 import { AiError } from '../aiErrors.js';
 import {
   AI_STREAM_LIMITS,
@@ -48,6 +49,22 @@ const CONNECT_FAILURE_CODES = new Set([
   'EADDRNOTAVAIL'
 ]);
 const NETWORK_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,40}$/;
+/**
+ * Gömme yanıtının okuma sınırı girdi sayısıyla ölçeklenir: her vektör anlamsal
+ * sözleşmenin en büyük boyutunda olabilir ve JSON'da bir değer 32 baytı aşmaz
+ * (en uzun kayan nokta yazımı 24 karakter, ayraç 2 karakter). Sabit 1 MiB sınırı
+ * 4096 boyutlu bir modelin katalog gömmesini reddederdi. Girdi sayısı sözleşmenin
+ * en büyük kataloğuyla sınırlanır: bütçe hiçbir istekte 1 MiB + 256 × 256 KiB'ı
+ * aşmaz. Gerçek katalog (19 araç) için bütçe ~5,75 MiB, sorgu için 1,25 MiB'tır.
+ */
+const EMBEDDING_BYTES_PER_VALUE = 32;
+const EMBEDDING_BYTES_PER_INPUT = SEMANTIC_LIMITS.maxDimensions * EMBEDDING_BYTES_PER_VALUE;
+
+export function embeddingResponseBudget(inputs, baseBytes = MAX_RESPONSE_BYTES) {
+  return baseBytes + Math.min(Math.max(0, inputs), SEMANTIC_LIMITS.maxCatalogueItems) * EMBEDDING_BYTES_PER_INPUT;
+}
+
+const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 function invalidResponse(reason) {
   return new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, { details: { reason } });
@@ -188,6 +205,38 @@ export function parseChatCompletion(payload) {
       totalTokens: tokenCount(payload.usage?.total_tokens),
       ...(reasoningTokens != null ? { reasoningTokens } : {})
     }
+  };
+}
+
+function semanticResponseModel(payload, reason) {
+  if (payload.model != null && typeof payload.model !== 'string') throw invalidResponse(reason);
+  return reportedModel(payload.model);
+}
+
+/**
+ * OpenAI uyumlu `/embeddings` yanıtı: `{ data: [{ index, embedding }], model }`.
+ * Burada yalnızca zarf doğrulanır ve girişler anlamsal sözleşmenin dizin adresli
+ * biçimine (`{ index, vector }`) çevrilir. Sayı, dizin, boyut ve sonluluk
+ * sözleşmede doğrulanır; değer düzeltilmez, sayıya çevrilmez, sıralanmaz.
+ */
+export function parseEmbeddingResponse(payload) {
+  if (!isRecord(payload) || !Array.isArray(payload.data)) throw invalidResponse('EMBEDDING_RESPONSE_INVALID');
+  return {
+    model: semanticResponseModel(payload, 'EMBEDDING_RESPONSE_INVALID'),
+    embeddings: payload.data.map((entry) => (isRecord(entry) ? { index: entry.index, vector: entry.embedding } : entry))
+  };
+}
+
+/**
+ * Cohere/Jina uyumlu `/rerank` yanıtı: `{ results: [{ index, relevance_score }], model }`.
+ * Girişler `{ index, score }` biçimine çevrilir; aday kümesinin bütünlüğü ve
+ * skorların sonluluğu anlamsal sözleşmede doğrulanır.
+ */
+export function parseRerankResponse(payload) {
+  if (!isRecord(payload) || !Array.isArray(payload.results)) throw invalidResponse('RERANK_RESPONSE_INVALID');
+  return {
+    model: semanticResponseModel(payload, 'RERANK_RESPONSE_INVALID'),
+    scores: payload.results.map((entry) => (isRecord(entry) ? { index: entry.index, score: entry.relevance_score } : entry))
   };
 }
 
@@ -433,6 +482,46 @@ export function createOpenAiCompatibleProvider({
         throw invalidResponse('STREAM_CONTENT_TYPE');
       }
       return { events: readChatCompletionStream(response.body, { signal, limits, toolCalls: true }) };
+    },
+
+    /**
+     * Metinlerin gömmesi (`POST /embeddings`). Değerler sayı dizisi olarak
+     * istenir (`encoding_format: float`); metin sunucuda hazırlanmış (ön işlemesi
+     * uygulanmış) hâliyle gider. `truncateTokens` verilmişse belirteç penceresini
+     * aşan girdi uçta belirteçleyicinin varsayılan yönüyle kesilir (E5: sağ).
+     * Yön zorlanmaz: vLLM özel belirteçleri belirteçleyici içinde korur. Verilmemişse kesme istenmez
+     * ve pencereyi aşan girdiyi uç reddeder. Hata gövdesi okunmaz.
+     */
+    async embeddings({ baseUrl, apiKey, model, input, truncateTokens = null, signal }) {
+      const truncation = truncateTokens == null ? {} : { truncate_prompt_tokens: truncateTokens };
+      const response = await send(`${baseUrl}/embeddings`, {
+        method: 'POST',
+        headers: requestHeaders(apiKey, { json: true }),
+        body: JSON.stringify({ model, input, encoding_format: 'float', ...truncation })
+      }, signal);
+      if (!response.ok) {
+        await discardBody(response);
+        throw classifyProviderStatus(response.status, response.headers.get('retry-after'));
+      }
+      return parseEmbeddingResponse(await readBoundedJson(response, embeddingResponseBudget(input.length, maxResponseBytes), signal));
+    },
+
+    /**
+     * Sınırlı aday kümesinin yeniden sıralanması (`POST /rerank`, Cohere/Jina
+     * uyumlu). Her aday için skor istenir (`top_n` = aday sayısı); yanıt yalnızca
+     * aday dizinlerine skor verir.
+     */
+    async rerank({ baseUrl, apiKey, model, query, documents, signal }) {
+      const response = await send(`${baseUrl}/rerank`, {
+        method: 'POST',
+        headers: requestHeaders(apiKey, { json: true }),
+        body: JSON.stringify({ model, query, documents, top_n: documents.length })
+      }, signal);
+      if (!response.ok) {
+        await discardBody(response);
+        throw classifyProviderStatus(response.status, response.headers.get('retry-after'));
+      }
+      return parseRerankResponse(await readBoundedJson(response, maxResponseBytes, signal));
     },
 
     /**

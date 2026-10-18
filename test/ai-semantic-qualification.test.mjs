@@ -15,7 +15,7 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -285,4 +285,269 @@ test('katalog yalnızca tekil kimlik ister: aynı açıklamalı iki öğe yenide
   }
   const summary = summarizeSemanticRun(run, benchmark, { cutoffs: [1, 3], ndcgCutoff: 3 });
   assert.deepEqual([summary.stages.embedding.answer.hitAt1, summary.stages.reranked.answer.hitAt1], [1, 1]);
+});
+
+/* ── Üretim yolundan nitelendirme: ağ geçidi + bağdaştırıcı + yerel HTTP ikizi ── */
+
+const { registerServerOnlyShim } = await import('./helpers/serverOnlyShim.mjs');
+registerServerOnlyShim();
+const { startFakeOpenAiCompatibleServer } = await import('./helpers/fakeOpenAiCompatibleServer.mjs');
+const { createSemanticCatalogue: liveCatalogue, semanticToolDefinitions } = await import('../src/domain/ai/semanticContract.js');
+const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
+const { AI_PROFILES, resolveModelProfile, validateModelRegistry } = await import('../src/domain/ai/aiModelRegistry.js');
+const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
+
+const LIVE_KEY = 'rota-canli-nitelendirme-anahtari';
+const ITEMS = liveCatalogue(semanticToolDefinitions(rotaToolNames().map((name) => getRotaTool(name)))).catalogue.items;
+const ROUTES = (() => {
+  const registry = validateModelRegistry(DEFAULT_AI_MODEL_REGISTRY).registry;
+  return { embedding: resolveModelProfile(registry, AI_PROFILES.EMBEDDING).route, rerank: resolveModelProfile(registry, AI_PROFILES.RERANK).route };
+})();
+const PARAPHRASE = (text) => `${text} — başka sözle`;
+
+/**
+ * Kâhin uç: belge → konumunun birim vektörü (yalnızca `passage: ` önekiyle
+ * tanınır), sorgu → ihtiyaç gruplarının ilk adayları (yalnızca `query: `
+ * önekiyle tanınır), skor → ihtiyaç ise 1. Önek eksikse ya da yeniden
+ * sıralamaya önekli metin giderse ölçü kusursuz olamaz.
+ */
+function oracleEndpoint() {
+  const position = new Map(ITEMS.map((item, index) => [`passage: ${item.text}`, index]));
+  const byText = new Map(BENCHMARK.cases.flatMap((testCase) => [[testCase.text, testCase], [PARAPHRASE(testCase.text), testCase]]));
+  const firsts = (testCase) => new Set((testCase.needs || []).map((group) => group[0]));
+  return {
+    embed(text) {
+      if (position.has(text)) return ITEMS.map((_, index) => (index === position.get(text) ? 1 : 0));
+      const testCase = text.startsWith('query: ') ? byText.get(text.slice(7)) : null;
+      return ITEMS.map((item) => (!testCase || testCase.expect === 'abstain' || firsts(testCase).has(item.id) ? 1 : 0));
+    },
+    rerank(query, document) {
+      const testCase = byText.get(query);
+      const item = ITEMS.find((entry) => entry.text === document);
+      return testCase && item && (testCase.needs || []).flat().includes(item.id) ? 1 : 0;
+    }
+  };
+}
+
+const FETCH_FAULT = path.join(ROOT, 'test/helpers/fetchFaultPreload.mjs');
+
+/**
+ * Komut alt süreçte, boş bir çalışma dizininde koşar: geliştiricinin `.env.local`
+ * dosyası sınamaya karışmaz. `envFile` verilirse o dizine `.env.local` yazılır;
+ * `shell: false` yapay zekâ değişkenlerini kabuktan vermez. `fault` alt sürece
+ * tek bir `fetch` arızası yükler (bkz. helpers/fetchFaultPreload.mjs).
+ */
+async function live(t, { env = {}, args = [], semantic = oracleEndpoint(), envFile = null, shell = true, fault = null } = {}) {
+  const server = await startFakeOpenAiCompatibleServer({ semantic });
+  t.after(() => server.close());
+  const cwd = await mkdtemp(path.join(tmpdir(), 'rota-semantic-cwd-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  if (envFile) await writeFile(path.join(cwd, '.env.local'), envFile(server), 'utf8');
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('MERGEN_ROTA_') && key !== 'NODE_OPTIONS'));
+  const environment = {
+    ...inherited,
+    ...(shell ? { MERGEN_ROTA_AI_ENABLED: 'true', MERGEN_ROTA_AI_BASE_URL: server.baseUrl, MERGEN_ROTA_AI_DEFAULT_API_KEY: LIVE_KEY } : {}),
+    ...(fault ? { ROTA_TEST_FETCH_FAULT: fault } : {}),
+    ...env
+  };
+  for (const [key, value] of Object.entries(environment)) if (value == null) delete environment[key];
+  const node = fault ? ['--import', pathToFileURL(FETCH_FAULT).href] : [];
+  try {
+    const { stdout, stderr } = await run(process.execPath, [...node, SCRIPT, 'live', ...args], { cwd, env: environment });
+    return { code: 0, stdout, stderr, server };
+  } catch (error) {
+    return { code: error.code, stdout: error.stdout, stderr: error.stderr, server };
+  }
+}
+
+test('canlı nitelendirme kıyas kümesini üretim yolundan geçirir: profil ve önekler kayıttan, katalog bir kez, yeniden sıralama ilk aşama adaylarına', { timeout: 120000 }, async (t) => {
+  const result = await live(t, { args: ['--json'] });
+  assert.equal(result.code, 0, result.stderr);
+  const { qualification, summary, index } = JSON.parse(result.stdout);
+  assert.deepEqual(qualification.run, { format: 'mergen-rota-semantic-run', version: 1, path: 'gateway' });
+  assert.deepEqual(qualification.embedding, {
+    profile: AI_PROFILES.EMBEDDING, model: ROUTES.embedding.model, provider: ROUTES.embedding.provider,
+    preprocessing: ROUTES.embedding.preprocessing.id, queryPrefix: 'query: ', documentPrefix: 'passage: ', truncateTokens: 512, runtime: 'gateway'
+  });
+  assert.deepEqual(qualification.reranker, { profile: AI_PROFILES.RERANK, model: ROUTES.rerank.model, provider: ROUTES.rerank.provider, runtime: 'gateway' });
+  assert.deepEqual(qualification.latencyWorkload.rerank, { documentsPerCall: 10, calls: BENCHMARK.cases.length, batchSize: 10 });
+  assert.deepEqual({ outcome: index.outcome, dimensions: index.dimensions }, { outcome: 'ok', dimensions: ITEMS.length });
+  assert.match(index.identity, /^[0-9a-f]{64}$/);
+  assert.deepEqual(summary.outcomes.embedding, { ok: BENCHMARK.cases.length, invalid: 0, timeout: 0, failed: 0 });
+  assert.deepEqual(summary.outcomes.rerank, { ok: BENCHMARK.cases.length, invalid: 0, timeout: 0, failed: 0 });
+  assert.equal(summary.stages.embedding.answer.hitAt1, 1);
+  assert.equal(summary.stages.reranked.answer.hitAt1, 1);
+  assert.equal(summary.latency.embedding.count, BENCHMARK.cases.length);
+  // Uca giden: tek katalog gömmesi (önekli), vaka başına tek önekli sorgu, ilk aşamanın 10 adayının öneksiz yeniden sıralaması.
+  const { requests } = result.server.state;
+  const embeddings = requests.filter((request) => request.path === '/v1/embeddings');
+  assert.equal(embeddings.length, 1 + BENCHMARK.cases.length);
+  assert.deepEqual(embeddings[0].body.input, ITEMS.map((item) => `passage: ${item.text}`));
+  // Belirteç penceresi kuralı üretimle aynıdır: önek dâhil ilk 512 belirteç, sağdan kesme.
+  assert.ok(embeddings.every((request) => request.body.truncate_prompt_tokens === 512 && !Object.hasOwn(request.body, 'truncation_side')));
+  assert.ok(embeddings.slice(1).every((request) => request.body.input.length === 1 && request.body.input[0].startsWith('query: ')));
+  const reranks = requests.filter((request) => request.path === '/v1/rerank');
+  assert.equal(reranks.length, BENCHMARK.cases.length);
+  assert.ok(reranks.every((request) => request.body.documents.length === 10 && request.body.top_n === 10 && !request.body.query.startsWith('query: ')));
+  assert.ok(requests.every((request) => request.bearer === LIVE_KEY));
+
+  const markdown = await live(t);
+  assert.equal(markdown.code, 0, markdown.stderr);
+  assert.match(markdown.stdout, /çağrı başına ilk aşamanın 10 adayı, üretimdeki gibi/);
+  assert.match(markdown.stdout, /\| Top-1 \| 1\.000 \| 1\.000 \| \+0\.000 \|/);
+});
+
+test('canlı nitelendirme başka ifadeleri aynı altın etiketlerle ölçer; bozuk soru dosyası ve kullanılamayan yapılandırma reddedilir', { timeout: 120000 }, async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-semantic-live-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const write = async (name, rows) => {
+    const file = path.join(directory, name);
+    await writeFile(file, JSON.stringify(rows), 'utf8');
+    return file;
+  };
+  const rows = BENCHMARK.cases.map((testCase) => ({ case: testCase.id, text: `  ${PARAPHRASE(testCase.text)} ` }));
+  const official = JSON.parse((await live(t, { args: ['--json'] })).stdout).summary.benchmark;
+  const paraphrased = await live(t, { args: ['--json', '--queries', await write('sorular.json', rows)] });
+  assert.equal(paraphrased.code, 0, paraphrased.stderr);
+  const summary = JSON.parse(paraphrased.stdout).summary;
+  assert.notEqual(summary.benchmark, official, 'türetilen kümenin parmak izi farklıdır');
+  assert.equal(summary.stages.reranked.answer.hitAt1, 1);
+  const queries = paraphrased.server.state.requests.filter((request) => request.path === '/v1/embeddings').slice(1);
+  assert.equal(queries[0].body.input[0], `query: ${PARAPHRASE(BENCHMARK.cases[0].text)}`, 'metin normalleşir');
+  const rowError = /Soru dosyasında yabancı, yinelenen ya da geçersiz satır var/;
+  for (const [label, broken, message] of [
+    ['eksik', rows.slice(1), /her kıyas vakası için tam bir satır/],
+    ['yinelenen', [...rows.slice(1), rows[1]], rowError],
+    ['yabancı', [...rows.slice(1), { case: 'tr-999', text: 'Yeni' }], rowError],
+    ['fazla alan', [{ ...rows[0], expect: 'abstain' }, ...rows.slice(1)], rowError],
+    ['boş metin', [{ ...rows[0], text: ' ' }, ...rows.slice(1)], rowError],
+    ['aynı metin', [{ ...rows[0], text: rows[1].text }, ...rows.slice(1)], /Kıyas kümesi geçersiz: cases\[\d+\]\.text:duplicate/]
+  ]) {
+    const result = await live(t, { args: ['--queries', await write(`${label}.json`, broken)] });
+    assert.equal(result.code, 1, label);
+    assert.match(result.stderr, message, label);
+    assert.equal(result.server.state.requests.length, 0, `${label}: model çağrılmadı`);
+  }
+  // Yalnızca kişisel anahtarlar yapılandırılmışsa (geçerli ana anahtar) operatör komutunun kullanacağı anahtar yoktur.
+  const masterKey = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1)).toString('base64');
+  const keyless = await live(t, { env: { MERGEN_ROTA_AI_DEFAULT_API_KEY: null, MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: masterKey } });
+  assert.equal(keyless.code, 1);
+  assert.match(keyless.stderr, /MERGEN_ROTA_AI_DEFAULT_API_KEY gerekli/);
+  assert.equal(keyless.server.state.requests.length, 0);
+  const disabled = await live(t, { env: { MERGEN_ROTA_AI_ENABLED: 'false' } });
+  assert.equal(disabled.code, 1);
+  assert.match(disabled.stderr, /MERGEN_ROTA_AI_ENABLED/);
+  const zero = await live(t, { semantic: { embed: () => ITEMS.map(() => 0), rerank: () => 0 } });
+  assert.equal(zero.code, 1);
+  assert.match(zero.stderr, /Katalog gömmesi başarısız \(ZERO_VECTOR\)/);
+});
+
+test('canlı nitelendirmede yeniden sıralama profili kapalıysa yalnızca ilk aşama ölçülür', { timeout: 120000 }, async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-semantic-registry-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'kayit.json');
+  const document = JSON.parse(JSON.stringify(DEFAULT_AI_MODEL_REGISTRY));
+  document.profiles.rerank = { ...document.profiles.rerank, enabled: false };
+  await writeFile(file, JSON.stringify(document), 'utf8');
+  const result = await live(t, { args: ['--json'], env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file } });
+  assert.equal(result.code, 0, result.stderr);
+  const { qualification, summary } = JSON.parse(result.stdout);
+  assert.equal(qualification.reranker, null);
+  assert.equal(summary.stages.reranked, null);
+  assert.equal(result.server.state.requests.filter((request) => request.path === '/v1/rerank').length, 0);
+});
+
+/* ── Nitelendirmenin üretim yoluyla aynılığı ── */
+
+test('canlı nitelendirme üretimin aday derinliğiyle ölçer; başka derinlik reddedilir ve model çağrılmaz', { timeout: 120000 }, async (t) => {
+  for (const limit of ['5', '20']) {
+    const result = await live(t, { args: ['--json', '--limit', limit] });
+    assert.equal(result.code, 1, limit);
+    assert.match(result.stderr, /aday derinliği üretimdeki 10 değeridir/, limit);
+    assert.equal(result.server.state.requests.length, 0, limit);
+  }
+});
+
+test('bozuk yeniden sıralama eşlemesi ilk aşama nitelendirmesine dönüşmez: kayıt reddedilir ve model çağrılmaz', { timeout: 120000 }, async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-semantic-registry-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'kayit.json');
+  const document = JSON.parse(JSON.stringify(DEFAULT_AI_MODEL_REGISTRY));
+  // Yeniden sıralama profili yeteneği olmayan bir modele bağlanmış: bilinçli kapatma değil, yapılandırma hatasıdır.
+  document.profiles.rerank = { ...document.profiles.rerank, model: 'Qwen3-Embedding-8B' };
+  await writeFile(file, JSON.stringify(document), 'utf8');
+  const result = await live(t, { args: ['--json'], env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file } });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /Model kaydı yüklenemedi/);
+  assert.equal(result.stdout, '');
+  assert.equal(result.server.state.requests.length, 0);
+});
+
+test('yinelenen ama başarılı canlı koşuda stdout yalnızca ayrıştırılabilir JSON\'dur; işletim günlüğü stderr\'e gider', { timeout: 120000 }, async (t) => {
+  const result = await live(t, { args: ['--json'], fault: 'refuse-first' });
+  assert.equal(result.code, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.index.outcome, 'ok');
+  assert.deepEqual(report.summary.outcomes.embedding, { ok: BENCHMARK.cases.length, invalid: 0, timeout: 0, failed: 0 });
+  assert.match(result.stderr, /AI_PROVIDER_RETRY/);
+  assert.doesNotMatch(result.stdout, /\[mergen-rota\]/);
+});
+
+test('canlı nitelendirme uygulamanın ortam kaynağını (`.env.local`) okur; kabuktaki değer önceliklidir ve anahtar yazılmaz', { timeout: 120000 }, async (t) => {
+  const envFile = (server) => [
+    'MERGEN_ROTA_AI_ENABLED=true',
+    `MERGEN_ROTA_AI_BASE_URL=${server.baseUrl}`,
+    `MERGEN_ROTA_AI_DEFAULT_API_KEY=${LIVE_KEY}`,
+    ''
+  ].join('\n');
+  const loaded = await live(t, { args: ['--json'], envFile, shell: false });
+  assert.equal(loaded.code, 0, loaded.stderr);
+  assert.equal(JSON.parse(loaded.stdout).index.outcome, 'ok');
+  assert.match(loaded.stderr, /\.env\.local/);
+  assert.ok(loaded.server.state.requests.length > 0 && loaded.server.state.requests.every((request) => request.bearer === LIVE_KEY));
+  assert.equal(`${loaded.stdout}${loaded.stderr}`.includes(LIVE_KEY), false);
+  const overridden = await live(t, { args: ['--json'], envFile, shell: false, env: { MERGEN_ROTA_AI_ENABLED: 'false' } });
+  assert.equal(overridden.code, 1);
+  assert.match(overridden.stderr, /MERGEN_ROTA_AI_ENABLED/);
+  assert.equal(overridden.server.state.requests.length, 0);
+});
+
+test('ağ geçidinin süre aşımı nitelendirmede süre aşımı olarak sayılır; koşu sürer', { timeout: 120000 }, async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-semantic-registry-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'kayit.json');
+  const document = JSON.parse(JSON.stringify(DEFAULT_AI_MODEL_REGISTRY));
+  document.profiles.rerank = { ...document.profiles.rerank, timeoutMs: 1000 };
+  await writeFile(file, JSON.stringify(document), 'utf8');
+  const result = await live(t, { args: ['--json'], env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file }, fault: 'delay-first-rerank:2500' });
+  assert.equal(result.code, 0, result.stderr);
+  const { summary, qualification } = JSON.parse(result.stdout);
+  assert.deepEqual(summary.outcomes.rerank, { ok: BENCHMARK.cases.length - 1, invalid: 0, timeout: 1, failed: 0 });
+  assert.equal(qualification.latencyWorkload.rerank.calls, BENCHMARK.cases.length);
+});
+
+test('nitelendirme iş yükü yalnızca gerçekten yapılan çağrıları sayar; dış süre sınırı ağ geçidinin en uzun yaşam döngüsünü kapsar', { timeout: 30000 }, async () => {
+  const { liveCallTimeoutMs, liveWorkload } = await import('../scripts/semantic-evaluation.mjs');
+  const { collectSemanticRun, summarizeSemanticRun, validateSemanticBenchmark, SEMANTIC_MAX_CALL_TIMEOUT_MS } = await import('../src/domain/ai/semanticEvaluation.js');
+  const { createEmbeddingSpace, createSemanticCatalogue, semanticModelProvenance } = await import('../src/domain/ai/semanticContract.js');
+  const catalogue = createSemanticCatalogue(semanticToolDefinitions(rotaToolNames().map((name) => getRotaTool(name)))).catalogue;
+  const benchmark = validateSemanticBenchmark(BENCHMARK, catalogue).benchmark;
+  const space = createEmbeddingSpace(semanticModelProvenance(ROUTES.embedding, AI_PROFILES.EMBEDDING), 'e5-query-passage');
+  let queries = 0;
+  // İkinci sorgu iptale uymaz ve hiç sonuçlanmaz: koşu durur, kalan vakalar çağrılmaz.
+  const embed = (texts, { purpose }) => {
+    if (purpose === 'document') return Promise.resolve(texts.map((_, index) => ({ index, vector: ITEMS.map((__, j) => (j === index ? 1 : 0)) })));
+    queries += 1;
+    return queries === 2 ? new Promise(() => {}) : Promise.resolve([{ index: 0, vector: ITEMS.map(() => 1) }]);
+  };
+  const run = await collectSemanticRun({ benchmark, catalogue, embedding: { space, embed }, callTimeoutMs: 20 });
+  const summary = summarizeSemanticRun(run, benchmark);
+  const workload = liveWorkload(summary, { documents: ITEMS.length, rerankDepth: null });
+  assert.equal(queries, 2);
+  assert.deepEqual(workload.embedding, { queriesPerCall: 1, calls: 2 });
+  assert.equal(workload.rerank, null);
+  // En uzun meşru ağ geçidi çağrısı: rehber 5 s + sıra (en çok 120 s) + rota (en çok 600 s).
+  const longest = liveCallTimeoutMs({ queueTimeoutMs: 120000 }, [600000, 1000]);
+  assert.ok(longest > 5000 + 120000 + 600000 && longest <= SEMANTIC_MAX_CALL_TIMEOUT_MS);
+  assert.equal(liveCallTimeoutMs({ queueTimeoutMs: 20000 }, [90000]), 5000 + 20000 + 90000 + 5000);
 });

@@ -1,7 +1,15 @@
 import 'server-only';
 import { AI_CREDENTIAL_SOURCES, AI_CREDENTIAL_VALIDATION } from '../../domain/ai/aiCredentialPolicy.js';
 import { AI_ERROR_CODES } from '../../domain/ai/aiErrorCatalog.js';
-import { AI_CAPABILITIES, AI_MAX_OUTPUT_TOKENS, resolveModelProfile } from '../../domain/ai/aiModelRegistry.js';
+import {
+  AI_CAPABILITIES,
+  AI_EMBEDDING_PURPOSES,
+  AI_MAX_OUTPUT_TOKENS,
+  AI_PROFILES,
+  AI_NO_PREPROCESSING,
+  resolveModelProfile
+} from '../../domain/ai/aiModelRegistry.js';
+import { createSemanticCatalogue, semanticToolDefinitions, SEMANTIC_LIMITS } from '../../domain/ai/semanticContract.js';
 import { isWithinSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { getTrustedCurrentSicil } from '../identity/currentUserProvider.js';
@@ -10,6 +18,7 @@ import {
   assertAiDirectoryMember,
   readPersonalCredentialForValidation,
   resolveAiCredential,
+  resolveServerAiCredential,
   storeCredentialValidation
 } from './aiCredentialService.js';
 import {
@@ -25,6 +34,7 @@ import { recordAiRequest, recordAiRetry, recordAiStream, recordAiValidation, rec
 import { loadAiModelRegistry } from './modelRegistryLoader.js';
 import { classifyProviderStatus, createControlApiKey, isConnectFailure, streamInterrupted } from './providers/openAiCompatibleProvider.js';
 import { TOOL_LIMITS } from './tools/toolLimits.js';
+import { getRotaTool, rotaToolNames } from './tools/toolRegistry.js';
 
 /**
  * Yapay zekâ ağ geçidi — alt sistemin TEK yürütme yolu.
@@ -60,6 +70,12 @@ const TOOL_CALL_ID = /^[A-Za-z0-9_.:-]{1,160}$/;
  */
 const DEFAULT_OUTPUT_TOKENS = 1024;
 const KNOWN_SOURCES = new Set(Object.values(AI_CREDENTIAL_SOURCES));
+/**
+ * Sunucuya ait işin kapasite anahtarı: hiçbir güvenilir Sicil bu değeri
+ * taşıyamaz (NUL karakteri). Küresel ve model sınırları yine uygulanır;
+ * kullanıcının kendi etkin/sıra payı tüketilmez.
+ */
+const SERVER_WORK_KEY = '\u0000server';
 
 const DEFAULT_KEY_MESSAGES = Object.freeze({
   [AI_ERROR_CODES.AI_KEY_INVALID]: 'Kurumsal yapay zekâ anahtarı reddedildi. Sistem yöneticinize başvurun.',
@@ -287,6 +303,30 @@ function notify(callback, value) {
   }
 }
 
+const EMBEDDING_PURPOSES = new Set(Object.values(AI_EMBEDDING_PURPOSES));
+
+/** Sınırlı metin listesi: her konum dolu, boş olmayan ve sınır içindeki metin; değilse `null`. */
+function boundedTexts(value, maxCount, maxChars) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > maxCount) return null;
+  const texts = Array.from(value);
+  return texts.every((text) => typeof text === 'string' && text.length > 0 && text.length <= maxChars) ? texts : null;
+}
+
+function semanticInputInvalid(reason) {
+  return new AiError(AI_ERROR_CODES.AI_REQUEST_INVALID, { details: { reason } });
+}
+
+/** Anlamsal çağrıyı yanıtlayan rotanın künyesi: uzayı adlandırır; anahtar, adres ya da sınır taşımaz. */
+function semanticRoute(route) {
+  return Object.freeze({
+    profile: route.profile,
+    model: route.model,
+    provider: route.provider,
+    capabilities: route.capabilities,
+    preprocessing: route.preprocessing ?? AI_NO_PREPROCESSING
+  });
+}
+
 /** Doğrulama sonucu sağlayıcı açısından BAŞARISIZ bir HTTP işlemidir (401/403). */
 function validationFailureCode(outcome) {
   if (outcome === AI_CREDENTIAL_VALIDATION.REJECTED) return AI_ERROR_CODES.AI_KEY_INVALID;
@@ -300,10 +340,12 @@ export function createAiGateway({
   loadConfig = readAiConfig,
   loadRegistry = (config) => loadAiModelRegistry({ path: config.registryPath }),
   resolveCredential = resolveAiCredential,
+  resolveServerCredential = resolveServerAiCredential,
   readPersonalCredential = readPersonalCredentialForValidation,
   storeValidation = storeCredentialValidation,
   currentSicil = getTrustedCurrentSicil,
   verifySicil = assertAiDirectoryMember,
+  loadCatalogueTools = () => rotaToolNames().map((name) => getRotaTool(name)),
   now = Date.now,
   random = Math.random
 }) {
@@ -474,6 +516,170 @@ export function createAiGateway({
       deadline?.dispose();
       lease?.release();
     }
+  }
+
+  /**
+   * Gömme ve yeniden sıralama çağrısı. `completeChat` ile aynı sıra ve
+   * güvenceler geçerlidir: güvenilir Sicil → rehber üyeliği → yapılandırma →
+   * girdi → profil ve yetenek → kapasite kirası (modelin `maxConcurrency`
+   * sınırı dâhil) → süre sınırı → kimlik bilgisi → sağlayıcı; kira ve süre
+   * sınırı her yolda bırakılır. Yineleme kuralı da ortaktır: yalnızca isteğin
+   * sağlayıcıya HİÇ ulaşmadığı bağlantı hatası, bir kez, aynı süre sınırı
+   * içinde. Bozuk çıktı, süre aşımı, iptal, 4xx ve 5xx yinelenmez; pahalı model
+   * işi çoğaltılmaz. Sağlayıcının bildirdiği model yapılandırılan model ya da
+   * kayıtta onun için açıkça bildirilmiş adlardan (`reportedModels`) biri
+   * değilse vektör ya da skor bu profilin uzayına ait değildir: yanıt
+   * reddedilir. `fixed` sunucuya ait sabit isteği anlatır (4xx yapılandırma
+   * hatasıdır).
+   *
+   * `serverOwned` yalnızca sabit katalog işlemidir; kullanıcı doğrulaması
+   * her çağıranın sorgusunda kalır. Kullanıcının kapasite payını ve anahtarını
+   * kullanmaz: sunucu kapasite anahtarı ve kurumsal anahtarla yürür. Paylaşılan
+   * işin sonucu ve faturası onu başlatan kullanıcıya bağlı değildir.
+   */
+  async function semanticCall({ profile, capability, operation, signal, fixed, serverOwned = false, prepare, request }) {
+    const startedAt = now();
+    const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
+    let lease = null;
+    let deadline = null;
+    try {
+      assertOutsideSqlTransaction();
+      const sicil = serverOwned ? null : await trustedSicil(signal);
+      const config = requireAiAvailable(loadConfig());
+      const input = prepare();
+      const route = requireRoute(await untilCancelled(() => loadRegistry(config), signal), profile, capability);
+      context.model = route.model;
+      lease = await getAdmission(config).acquire({
+        userKey: serverOwned ? SERVER_WORK_KEY : sicil,
+        serverOwned,
+        modelKey: route.model,
+        modelLimit: route.maxConcurrency,
+        signal,
+        timeoutMs: config.queueTimeoutMs
+      });
+      context.queueWaitMs = lease.queueWaitMs;
+      deadline = createAiDeadline({ timeoutMs: route.timeoutMs ?? config.requestTimeoutMs, parentSignal: signal, now });
+      const credential = serverOwned
+        ? resolveServerCredential({ config })
+        : await raceWithAbort(() => resolveCredential({ sicil, config, signal: deadline.signal }), deadline.signal);
+      context.source = credential.source;
+      const resolved = semanticRoute(route);
+      const response = await callProvider({
+        operation,
+        deadline,
+        context,
+        source: credential.source,
+        healthFailure: healthFailureFor(credential.source),
+        invoke: async (attemptSignal) => {
+          let result;
+          try {
+            result = await request(getProvider(), {
+              baseUrl: config.baseUrl, apiKey: credential.apiKey, model: route.model, signal: attemptSignal
+            }, resolved, input);
+          } catch (error) {
+            if (fixed && isAiError(error) && error.code === AI_ERROR_CODES.AI_REQUEST_INVALID) throw fixedRequestRejected(error);
+            throw error;
+          }
+          if (result.model != null && result.model !== route.model && !(route.reportedModels ?? []).includes(result.model)) {
+            throw new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, { details: { reason: 'MODEL_MISMATCH' } });
+          }
+          return result;
+        }
+      });
+      if (deadline.failure()) throw deadline.failure();
+      const durationMs = now() - startedAt;
+      recordAiRequest({ ...context, durationMs });
+      return { response, route: resolved, credentialSource: credential.source, durationMs, queueWaitMs: context.queueWaitMs };
+    } catch (error) {
+      const failure = annotateCredentialFailure(deadline?.failure() || toAiFailure(error), context.source);
+      context.source ??= failureSource(failure);
+      if (failure.code === AI_ERROR_CODES.AI_QUEUE_TIMEOUT && context.queueWaitMs == null) {
+        context.queueWaitMs = failure.details?.queueWaitMs ?? null;
+      }
+      recordAiRequest({
+        ...context,
+        code: failure.code,
+        serviceFailure: isServiceFailure(failure),
+        details: failure.details,
+        durationMs: now() - startedAt
+      });
+      throw failure;
+    } finally {
+      deadline?.dispose();
+      lease?.release();
+    }
+  }
+
+  /**
+   * Metinleri `embedding` yeteneği taşıyan profille gömer. Amaç (`query` |
+   * `document`) kayıttaki ön işlemenin önekini seçer; önek TEK yerde, burada
+   * eklenir. Belirteç penceresi kuralı da ön işlemedendir (`truncateTokens`:
+   * önekli metin uçta ilk N belirtece kesilir; yoksa aşan girdiyi uç reddeder).
+   * Amaç yalnızca öneki seçer; bu işlem her zaman kullanıcıya aittir.
+   * `embeddings` güvenilmez model çıktısıdır (dizin adresli
+   * `{ index, vector }`) ve anlamsal sözleşmede doğrulanır; `route` uzayı adlandırır.
+   */
+  async function embedTexts(options) {
+    return embedInput(options);
+  }
+
+  /** Yalnızca sunucu kayıt defterinin sabit kataloğu kurumsal kapasiteyi kullanır. */
+  async function embedServerCatalogue({ signal = null } = {}) {
+    return embedInput({ profile: AI_PROFILES.EMBEDDING, purpose: AI_EMBEDDING_PURPOSES.DOCUMENT, signal }, true);
+  }
+
+  async function embedInput({ profile, texts, purpose, signal = null }, serverOwned = false) {
+    const document = purpose === AI_EMBEDDING_PURPOSES.DOCUMENT;
+    let catalogueFingerprint = null;
+    const { response, ...call } = await semanticCall({
+      profile,
+      capability: AI_CAPABILITIES.EMBEDDING,
+      operation: 'ai.provider.embeddings',
+      signal,
+      fixed: serverOwned,
+      serverOwned,
+      prepare: () => {
+        if (serverOwned) {
+          const built = createSemanticCatalogue(semanticToolDefinitions(loadCatalogueTools()));
+          if (!built.ok) throw new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, { details: { reason: 'CATALOGUE_INVALID' } });
+          catalogueFingerprint = built.catalogue.fingerprint;
+          return built.catalogue.items.map((item) => item.text);
+        }
+        const input = boundedTexts(texts, SEMANTIC_LIMITS.maxCatalogueItems, SEMANTIC_LIMITS.maxItemTextChars);
+        if (!input || !EMBEDDING_PURPOSES.has(purpose)) throw semanticInputInvalid('EMBEDDING_INPUT_INVALID');
+        return input;
+      },
+      request: (provider, base, route, input) => {
+        const { queryPrefix, documentPrefix, truncateTokens } = route.preprocessing;
+        const prefix = document ? documentPrefix : queryPrefix;
+        return provider.embeddings({ ...base, input: input.map((text) => `${prefix}${text}`), truncateTokens });
+      }
+    });
+    return { embeddings: response.embeddings, ...call, ...(serverOwned ? { catalogueFingerprint } : {}) };
+  }
+
+  /**
+   * Sınırlı aday metinlerini `rerank` yeteneği taşıyan profille puanlar. Model
+   * yalnızca verilen adayları puanlar; `scores` güvenilmez çıktıdır (dizin
+   * adresli `{ index, score }`) ve aday kümesinin bütünlüğü anlamsal sözleşmede
+   * doğrulanır. İstek kullanıcının sorgusunu taşır.
+   */
+  async function rerankTexts({ profile, query, documents, signal = null }) {
+    const { response, ...call } = await semanticCall({
+      profile,
+      capability: AI_CAPABILITIES.RERANK,
+      operation: 'ai.provider.rerank',
+      signal,
+      fixed: false,
+      prepare: () => {
+        const candidates = boundedTexts(documents, SEMANTIC_LIMITS.maxCandidates, SEMANTIC_LIMITS.maxItemTextChars);
+        const [text] = boundedTexts([query], 1, SEMANTIC_LIMITS.maxQueryChars) ?? [];
+        if (!candidates || !text) throw semanticInputInvalid('RERANK_INPUT_INVALID');
+        return { query: text, documents: candidates };
+      },
+      request: (provider, base, route, input) => provider.rerank({ ...base, ...input })
+    });
+    return { scores: response.scores, ...call };
   }
 
   /**
@@ -1017,5 +1223,5 @@ export function createAiGateway({
     }
   }
 
-  return { completeChat, streamChat, runToolSession, validatePersonalCredential };
+  return { completeChat, streamChat, runToolSession, validatePersonalCredential, embedTexts, embedServerCatalogue, rerankTexts };
 }

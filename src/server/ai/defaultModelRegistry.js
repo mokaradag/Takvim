@@ -9,14 +9,18 @@ import 'server-only';
  * kaydını gösterebilir (bkz. docs/YAPAY-ZEKA-PLATFORMU.md).
  */
 
-const model = (id, capabilities, contextTokens = null) => ({
+const model = (id, capabilities, contextTokens = null, extra = {}) => ({
   id,
   provider: 'onprem',
   capabilities,
   contextTokens,
   maxConcurrency: null,
-  enabled: true
+  enabled: true,
+  ...extra
 });
+
+// E5 belgelenmiş kullanımı: sorguya `query: `, belgeye `passage: ` öneki; 512 belirteci aşan girdi ilk 512 belirtece kesilir.
+const E5_PREPROCESSING = Object.freeze({ id: 'e5-query-passage', queryPrefix: 'query: ', documentPrefix: 'passage: ', truncateTokens: 512 });
 
 export const DEFAULT_AI_MODEL_REGISTRY = Object.freeze({
   version: 1,
@@ -25,7 +29,7 @@ export const DEFAULT_AI_MODEL_REGISTRY = Object.freeze({
     model('DeepSeek-V4.1-Flash', ['chat', 'tools', 'reasoning', 'vision'], 524288),
     model('Qwen3.8-Flash-Next', ['chat', 'tools', 'reasoning', 'vision'], 262144),
     model('Qwen3.8-27B', ['chat', 'tools', 'reasoning', 'vision'], 262144),
-    model('intfloat/multilingual-e5-large', ['embedding']),
+    model('intfloat/multilingual-e5-large', ['embedding'], 512, { preprocessing: E5_PREPROCESSING }),
     model('tts-1-hd', ['speech.tts']),
     model('FLUX.2-dev', ['image.generation']),
     model('whisper-large-v3', ['speech.stt']),

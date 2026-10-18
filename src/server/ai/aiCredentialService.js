@@ -457,6 +457,23 @@ export async function resolveAiCredential({ sicil, config, signal = null }) {
 }
 
 /**
+ * Sunucuya ait işin (ör. anlamsal katalog dizini) kimlik bilgisi: YALNIZCA
+ * kurumsal anahtar. İşi hangi kullanıcının isteği başlatırsa başlatsın onun
+ * kişisel anahtarı, kotası ya da iptal edilmiş anahtarı paylaşılan işin
+ * sonucunu ve faturasını belirleyemez. Kurumsal anahtar yoksa iş yapılandırma
+ * hatasıyla düşer; kişisel anahtara geçilmez.
+ */
+export function resolveServerAiCredential({ config }) {
+  if (config.defaultKeyConfigured && config.defaultApiKey) {
+    return { source: AI_CREDENTIAL_SOURCES.DEFAULT, apiKey: config.defaultApiKey };
+  }
+  throw new AiError(AI_ERROR_CODES.AI_CONFIGURATION_ERROR, {
+    message: 'Sunucuya ait yapay zekâ işi kurumsal anahtar gerektirir. Sistem yöneticinize başvurun.',
+    details: { reason: 'DEFAULT_KEY_REQUIRED', credentialSource: AI_CREDENTIAL_SOURCES.MISSING }
+  });
+}
+
+/**
  * Açık doğrulama yalnızca KİŞİSEL anahtarı sınar; kurumsal anahtara hiç
  * dokunmaz. `keyNonce`, doğrulanan anahtar malzemesinin kimliğidir.
  */

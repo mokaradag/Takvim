@@ -24,6 +24,7 @@
  * askıda kalmaz, açıklayıcı bir hatayla düşer. Sınır, sahte saatten etkilenmeyen
  * gerçek zamanlayıcıyla ölçülür.
  */
+import { hashedScore, hashedVector } from './fakeOpenAiCompatibleServer.mjs';
 import { registerServerOnlyShim } from './serverOnlyShim.mjs';
 
 registerServerOnlyShim();
@@ -33,6 +34,8 @@ const {
   classifyNetworkFailure,
   classifyProviderStatus,
   parseChatCompletion,
+  parseEmbeddingResponse,
+  parseRerankResponse,
   streamInterrupted
 } = await import('../../src/server/ai/providers/openAiCompatibleProvider.js');
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../../src/server/ai/defaultModelRegistry.js');
@@ -51,7 +54,22 @@ function chatResult(text, model) {
   });
 }
 
-export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalışıyor.', models = DEFAULT_MODELS } = {}) {
+/**
+ * Gömme (`embeddings`) ve yeniden sıralama (`rerank`) çağrıları da aynı sırayı
+ * kullanır. Yanıt gerçek bağdaştırıcının ayrıştırıcısından geçer: `reply`
+ * `embed(metin, model)` / `rerank(sorgu, belge, model)` eşlemesinden tel biçimi
+ * kurar, `{ type: 'reply', payload }` ham (bozuk olabilir) yanıtı ayrıştırır,
+ * `model` sağlayıcının bildirdiği modeli değiştirir. Varsayılan eşleme anlam
+ * çıkarmaz (metnin özetinden türetilir).
+ */
+export function createFakeAiProvider({
+  defaultText = 'Merhaba, bağlantı çalışıyor.',
+  models = DEFAULT_MODELS,
+  embed = (text) => hashedVector(text),
+  rerank = hashedScore,
+  // Sırada davranış yoksa çağrıya göre davranış seçer (ör. yalnızca katalog gömmesini bekletmek); `null` olağan yanıttır.
+  respond = null
+} = {}) {
   const calls = [];
   const queue = [];
   const active = new Set();
@@ -81,6 +99,24 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
   }
 
   const modelList = (behavior = {}) => ({ status: 200, retryAfter: null, models: [...(behavior.models ?? models)] });
+  const reportedModel = (behavior, input) => (behavior.model === undefined ? input.model : behavior.model);
+
+  function resultOf(kind, behavior, input, text = behavior.text ?? defaultText) {
+    if (kind === 'models') return modelList(behavior);
+    if (kind === 'embeddings') {
+      return parseEmbeddingResponse(behavior.payload ?? {
+        model: reportedModel(behavior, input),
+        data: input.input.map((value, index) => ({ index, embedding: embed(value, input.model) }))
+      });
+    }
+    if (kind === 'rerank') {
+      return parseRerankResponse(behavior.payload ?? {
+        model: reportedModel(behavior, input),
+        results: input.documents.map((document, index) => ({ index, relevance_score: rerank(input.query, document, input.model) }))
+      });
+    }
+    return chatResult(text, input.model);
+  }
 
   function abortable(signal, call, work) {
     return new Promise((resolve, reject) => {
@@ -108,7 +144,7 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
     const { signal, model } = input;
     switch (behavior.type) {
       case 'reply':
-        return Promise.resolve(call.kind === 'models' ? modelList(behavior) : chatResult(behavior.text ?? defaultText, model));
+        return Promise.resolve().then(() => resultOf(call.kind, behavior, input));
       case 'empty':
         // Araç istenmemiş sohbette metin taşımayan (`content: null`) yanıt.
         return Promise.resolve(parseChatCompletion({ model, choices: [{ message: { role: 'assistant', content: null }, finish_reason: 'stop' }] }));
@@ -118,13 +154,16 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
       case 'network':
         return Promise.reject(classifyNetworkFailure({ cause: { code: behavior.code } }));
       case 'malformed':
-        return Promise.resolve().then(() => parseChatCompletion({ choices: [] }));
+        return Promise.resolve().then(() => (call.kind === 'embeddings' || call.kind === 'rerank'
+          ? resultOf(call.kind, { payload: {} }, input) : parseChatCompletion({ choices: [] })));
       case 'delay': {
         let timer;
         return abortable(signal, call, {
-          // Gecikmeli model listesi de model listesi sonucu döner (sohbet sonucu değil).
-          start: (resolve) => {
-            timer = setTimeout(() => resolve(call.kind === 'models' ? modelList(behavior) : chatResult(behavior.text ?? defaultText, model)), behavior.ms);
+          // Gecikmeli çağrı da kendi türünün sonucunu döner (model listesi, gömme, skor ya da sohbet).
+          start: (resolve, reject) => {
+            timer = setTimeout(() => {
+              try { resolve(resultOf(call.kind, behavior, input)); } catch (error) { reject(error); }
+            }, behavior.ms);
           },
           cancel: () => clearTimeout(timer)
         });
@@ -133,7 +172,9 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
         return abortable(signal, call, { start: () => {} });
       case 'deferred':
         return new Promise((resolve, reject) => {
-          call.resolve = (text = defaultText) => resolve(call.kind === 'models' ? modelList(behavior) : chatResult(text, model));
+          call.resolve = (text = defaultText) => {
+            try { resolve(resultOf(call.kind, behavior, input, text)); } catch (error) { reject(error); }
+          };
           call.reject = reject;
           if (!behavior.ignoreAbort) {
             signal?.addEventListener('abort', () => {
@@ -152,7 +193,6 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
     // varsayılan olarak 401 döner.
     const rejectedKey = !input.apiKey || String(input.apiKey).startsWith(AI_CONTROL_KEY_PREFIX);
     const fallback = kind === 'models' && rejectedKey ? { type: 'status', status: 401 } : { type: 'reply' };
-    const behavior = queue.shift() || fallback;
     const call = {
       kind,
       model: input.model ?? null,
@@ -162,10 +202,15 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
       baseUrl: input.baseUrl,
       messages: input.messages ?? null,
       maxOutputTokens: input.maxOutputTokens ?? null,
+      input: input.input ?? null,
+      truncateTokens: input.truncateTokens ?? null,
+      query: input.query ?? null,
+      documents: input.documents ?? null,
       signal: input.signal ?? null,
       aborted: false,
       settled: false
     };
+    const behavior = queue.shift() || respond?.(call) || fallback;
     calls.push(call);
     active.add(call);
     peakActive = Math.max(peakActive, active.size);
@@ -404,6 +449,12 @@ export function createFakeAiProvider({ defaultText = 'Merhaba, bağlantı çalı
     },
     listModels(input) {
       return execute('models', input);
+    },
+    embeddings(input) {
+      return execute('embeddings', input);
+    },
+    rerank(input) {
+      return execute('rerank', input);
     }
   };
 }

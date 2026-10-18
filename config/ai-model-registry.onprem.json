@@ -56,9 +56,15 @@
       "capabilities": [
         "embedding"
       ],
-      "contextTokens": null,
+      "contextTokens": 512,
       "maxConcurrency": null,
-      "enabled": true
+      "enabled": true,
+      "preprocessing": {
+        "id": "e5-query-passage",
+        "queryPrefix": "query: ",
+        "documentPrefix": "passage: ",
+        "truncateTokens": 512
+      }
     },
     {
       "id": "tts-1-hd",
