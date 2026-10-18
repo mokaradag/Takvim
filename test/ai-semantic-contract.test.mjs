@@ -5,7 +5,8 @@
  * dizin, boyut ve sonluluk denetlenir; sıralama belirlenimci ve sınırlıdır;
  * model ya da katalog değişince eski dizin karşılaştırılmaz. Sorgu yalnızca
  * yapısal olarak normalleşir (Türkçe harfler katlanmaz). Anlamsal sonuç kimlik,
- * yetki ya da kanıt taşımaz ve canlı Rota yoluna henüz bağlı değildir.
+ * yetki ya da kanıt taşımaz; sözleşmeyi üretimde yalnızca anlamsal keşif
+ * hizmeti kullanır.
  * Gerçek model kullanılmaz; vektörler testin sabit verisidir.
  */
 import assert from 'node:assert/strict';
@@ -389,7 +390,7 @@ test('katalog metnindeki yönerge enjeksiyonu yetki kazanmaz: metin yalnızca g�
   assert.doesNotMatch(JSON.stringify(ranked), /talimat|sicil|SELECT/);
 });
 
-test('anlamsal katman kimlik, yetki, SQL ve ağ yüzeyi taşımaz; doğal dil kuralı içermez; canlı yola bağlı değildir', () => {
+test('anlamsal katman kimlik, yetki, SQL ve ağ yüzeyi taşımaz; doğal dil kuralı içermez; yalnızca anlamsal keşif ve model sınırı kullanır', () => {
   for (const file of SEMANTIC_MODULES) {
     const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
     const body = code(source);
@@ -401,10 +402,20 @@ test('anlamsal katman kimlik, yetki, SQL ve ağ yüzeyi taşımaz; doğal dil ku
     // Belirli bir araca özel davranış yoktur.
     assert.doesNotMatch(body, /rota_/, file);
   }
-  // Aşama 4A canlı davranışı değiştirmez: hiçbir üretim modülü anlamsal katmanı içe aktarmaz.
-  const importers = walk(path.join(ROOT, 'src'))
+  // Aşama 4B: sözleşmeyi yalnızca anlamsal keşif hizmeti kullanır; ağ geçidi ve bağdaştırıcı yalnızca sınırları okur.
+  // Değerlendirme modülü üretimde hiç kullanılmaz (yalnızca nitelendirme komutu ve sınamalar).
+  const importers = (pattern) => walk(path.join(ROOT, 'src'))
     .filter((file) => /\.(?:js|jsx|mjs)$/.test(file) && !SEMANTIC_MODULES.includes(toRelative(file)))
-    .filter((file) => /semantic(?:Contract|Evaluation)/.test(fs.readFileSync(file, 'utf8')))
-    .map(toRelative);
-  assert.deepEqual(importers, []);
+    .filter((file) => pattern.test(fs.readFileSync(file, 'utf8')))
+    .map(toRelative)
+    .sort();
+  assert.deepEqual(importers(/semanticContract/), [
+    'src/server/ai/aiGateway.js',
+    'src/server/ai/providers/openAiCompatibleProvider.js',
+    'src/server/ai/semanticRetrieval.js'
+  ]);
+  for (const file of ['src/server/ai/aiGateway.js', 'src/server/ai/providers/openAiCompatibleProvider.js']) {
+    assert.match(fs.readFileSync(path.join(ROOT, file), 'utf8'), /^import \{ SEMANTIC_LIMITS \} from '[./]+domain\/ai\/semanticContract\.js';$/m, file);
+  }
+  assert.deepEqual(importers(/semanticEvaluation/), []);
 });

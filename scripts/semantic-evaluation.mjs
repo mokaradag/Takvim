@@ -11,6 +11,17 @@
  *     sözleşmeden ve değerlendirme koşucusundan geçirir. Başka bir kıyas kümesi
  *     ya da katalogla üretilmiş (bayat) koşuyu reddeder.
  *
+ *   node scripts/semantic-evaluation.mjs live [--limit 10] [--json]
+ *     Kıyas kümesini ÜRETİMDEKİ yoldan geçirir: model kaydının `embedding` ve
+ *     `rerank` profilleri → ağ geçidi (kapasite, süre sınırı, yineleme) →
+ *     OpenAI uyumlu bağdaştırıcı → `MERGEN_ROTA_AI_BASE_URL` ucu, kurumsal
+ *     anahtarla. Rota verisi okunmaz; uca yalnızca sentetik sorular ve
+ *     sunucuya ait araç açıklamaları gider.
+ *
+ *   --queries sorular.json  (üç komutta da)
+ *     Kıyas vakalarının metnini `[{ case, text }]` ile değiştirir (ör. aynı
+ *     anlamlı başka ifadeler); altın etiketler aynı kalır, parmak izi değişir.
+ *
  * Ayrıntı: docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md
  */
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -26,13 +37,13 @@ const INPUT_FORMAT = 'mergen-rota-semantic-input';
 const MODEL_RUN_FORMAT = 'mergen-rota-semantic-model-run';
 
 const {
-  SEMANTIC_LIMITS, createEmbeddingSpace, createSemanticCatalogue, createSemanticIndex, rankSemanticIndex, semanticModelProvenance,
-  semanticToolDefinitions
+  SEMANTIC_LIMITS, createEmbeddingSpace, createSemanticCatalogue, createSemanticIndex, normalizeSemanticQuery, rankSemanticIndex,
+  semanticModelProvenance, semanticToolDefinitions
 } = await import('../src/domain/ai/semanticContract.js');
 const {
   SEMANTIC_EVALUATION_DEFAULTS, collectSemanticRun, semanticLatencySummary, summarizeSemanticRun, validateSemanticBenchmark
 } = await import('../src/domain/ai/semanticEvaluation.js');
-const { AI_PROFILES } = await import('../src/domain/ai/aiModelRegistry.js');
+const { AI_NO_PREPROCESSING, AI_PROFILES, resolveModelProfile } = await import('../src/domain/ai/aiModelRegistry.js');
 const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
 
 function fail(message) {
@@ -44,16 +55,42 @@ function parseArguments([command, ...rest]) {
   const flags = {};
   for (let i = 0; i < rest.length; i += 1) {
     if (rest[i] === '--json') flags.json = true;
-    else if (['--out', '--run', '--limit'].includes(rest[i]) && rest[i + 1]) flags[rest[i].slice(2)] = rest[++i];
+    else if (['--out', '--run', '--limit', '--queries'].includes(rest[i]) && rest[i + 1]) flags[rest[i].slice(2)] = rest[++i];
     else fail(`Tanınmayan bağımsız değişken: ${rest[i]}`);
   }
   return { command, flags };
 }
 
-function load() {
+/**
+ * Vaka metinlerinin yerine konan ifadeler: her kıyas vakası tam bir kez, metin
+ * kanonik biçime normalleşir; altın etiketler değişmez. Türetilen küme aynı
+ * kıyas doğrulamasından geçer (tekil metin dâhil) ve kendi parmak izini taşır.
+ */
+function withQueries(document, file) {
+  let rows;
+  try {
+    rows = JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    fail('Soru dosyası okunamadı ya da JSON değil.');
+  }
+  const known = new Set(document.cases.map((testCase) => testCase.id));
+  const textOf = new Map();
+  if (!Array.isArray(rows) || rows.length !== known.size) fail('Soru dosyası her kıyas vakası için tam bir satır taşımalıdır.');
+  for (const row of rows) {
+    const query = normalizeSemanticQuery(row?.text);
+    if (!isRecord(row) || Object.keys(row).some((key) => key !== 'case' && key !== 'text') || !known.has(row.case) || textOf.has(row.case) || !query.ok) {
+      fail('Soru dosyasında yabancı, yinelenen ya da geçersiz satır var ({ case, text }).');
+    }
+    textOf.set(row.case, query.value);
+  }
+  return { ...document, cases: document.cases.map((testCase) => ({ ...testCase, text: textOf.get(testCase.id) })) };
+}
+
+function load(flags = {}) {
   const built = createSemanticCatalogue(semanticToolDefinitions(rotaToolNames().map((name) => getRotaTool(name))));
   if (!built.ok) fail(`Araç kataloğu geçersiz: ${built.issues.join(', ')}`);
-  const validated = validateSemanticBenchmark(JSON.parse(readFileSync(BENCHMARK_FILE, 'utf8')), built.catalogue);
+  const official = JSON.parse(readFileSync(BENCHMARK_FILE, 'utf8'));
+  const validated = validateSemanticBenchmark(flags.queries ? withQueries(official, flags.queries) : official, built.catalogue);
   if (!validated.ok) fail(`Kıyas kümesi geçersiz: ${validated.issues.join(', ')}`);
   return { catalogue: built.catalogue, benchmark: validated.benchmark };
 }
@@ -260,7 +297,10 @@ function markdown(summary, qualification, benchmark) {
     row(`Açıklama vakalarında kapsama@${kMax}`, (stage) => stage.clarifyCoverage.rate, summary.uplift?.clarifyCoverage),
     row('Kapsam dışı ayrılabilirliği (AUROC)', (stage) => stage.abstainSeparability, summary.uplift?.abstainSeparability),
     '',
-    `Gecikme (koşucunun ölçtüğü): katalog ${summary.latency.index == null ? '—' : `${Math.round(summary.latency.index)} ms`} (${workload.index.documentsPerCall} belge, tek çağrı) · sorgu gömme ${latency(summary.latency.embedding)} (çağrı başına 1 sorgu) · yeniden sıralama ${latency(summary.latency.rerank)}${workload.rerank ? ` (çağrı başına bütün katalog: ${workload.rerank.documentsPerCall} belge; kalite ölçüleri ilk ${summary.limit} aday üzerindedir)` : ''}`,
+    `Gecikme (koşucunun ölçtüğü): katalog ${summary.latency.index == null ? '—' : `${Math.round(summary.latency.index)} ms`} (${workload.index.documentsPerCall} belge, tek çağrı) · sorgu gömme ${latency(summary.latency.embedding)} (çağrı başına 1 sorgu) · yeniden sıralama ${latency(summary.latency.rerank)}${!workload.rerank ? ''
+      : workload.rerank.documentsPerCall === workload.index.documentsPerCall
+        ? ` (çağrı başına bütün katalog: ${workload.rerank.documentsPerCall} belge; kalite ölçüleri ilk ${summary.limit} aday üzerindedir)`
+        : ` (çağrı başına ilk aşamanın ${workload.rerank.documentsPerCall} adayı, üretimdeki gibi)`}`,
     '',
     `## Etikete göre Top-1 (${reranked ? 'yeniden sıralama' : 'gömme'})`,
     '',
@@ -304,6 +344,26 @@ function qualificationOf(trusted, summary, { catalogue, benchmark }) {
   };
 }
 
+// Kesimler toplanan aday derinliğini aşamaz: sınır en derin kesimden küçük olamaz.
+function limitOf(flags) {
+  const { cutoffs, ndcgCutoff } = SEMANTIC_EVALUATION_DEFAULTS;
+  const minimum = Math.max(...cutoffs, ndcgCutoff);
+  const limit = flags.limit == null ? SEMANTIC_EVALUATION_DEFAULTS.limit : Number(flags.limit);
+  if (!Number.isSafeInteger(limit) || limit < minimum || limit > SEMANTIC_LIMITS.maxCandidates) {
+    fail(`--limit ${minimum} ile ${SEMANTIC_LIMITS.maxCandidates} arasında bir tam sayı olmalıdır.`);
+  }
+  return limit;
+}
+
+function printSummary({ qualification, summary, index }, flags, benchmark) {
+  if (flags.json) {
+    const { outcome, reason = null, identity = null, dimensions = null } = index;
+    process.stdout.write(`${JSON.stringify({ qualification, summary, index: { outcome, reason, identity, dimensions } }, null, 2)}\n`);
+  } else {
+    process.stdout.write(markdown(summary, qualification, benchmark));
+  }
+}
+
 async function report(context, flags) {
   if (!flags.run) fail('--run koşu dosyası gerekli.');
   let raw;
@@ -313,13 +373,7 @@ async function report(context, flags) {
     fail('Koşu dosyası okunamadı ya da JSON değil.');
   }
   const trusted = readModelRun(raw, context);
-  const { cutoffs, ndcgCutoff } = SEMANTIC_EVALUATION_DEFAULTS;
-  // Kesimler toplanan aday derinliğini aşamaz: sınır en derin kesimden küçük olamaz.
-  const minimum = Math.max(...cutoffs, ndcgCutoff);
-  const limit = flags.limit == null ? SEMANTIC_EVALUATION_DEFAULTS.limit : Number(flags.limit);
-  if (!Number.isSafeInteger(limit) || limit < minimum || limit > SEMANTIC_LIMITS.maxCandidates) {
-    fail(`--limit ${minimum} ile ${SEMANTIC_LIMITS.maxCandidates} arasında bir tam sayı olmalıdır.`);
-  }
+  const limit = limitOf(flags);
   const collected = await collectSemanticRun({ ...context, ...recordedModels(trusted, context), limit });
   // Katalog dizini kurulamayan koşu nitelendirme değildir: sıfır ölçülü başarılı rapor üretilmez.
   if (collected.index.outcome !== 'ok') {
@@ -338,14 +392,88 @@ async function report(context, flags) {
     embedding: semanticLatencySummary([...trusted.queries.values()].map((row) => row.latencyMs)),
     rerank: trusted.rerank ? semanticLatencySummary([...trusted.rerank.rows.values()].map((row) => row.latencyMs)) : null
   };
-  const qualification = qualificationOf(trusted, summary, context);
-  if (flags.json) {
-    // Dizin kaydının süresi kayıtlı çıktının okunma süresidir; gerçek gecikme `summary.latency` içindedir.
-    const { outcome, reason = null, identity = null, dimensions = null } = collected.index;
-    process.stdout.write(`${JSON.stringify({ qualification, summary, index: { outcome, reason, identity, dimensions } }, null, 2)}\n`);
-  } else {
-    process.stdout.write(markdown(summary, qualification, context.benchmark));
+  // Dizin kaydının süresi kayıtlı çıktının okunma süresidir; gerçek gecikme `summary.latency` içindedir.
+  printSummary({ qualification: qualificationOf(trusted, summary, context), summary, index: collected.index }, flags, context.benchmark);
+}
+
+/**
+ * Üretim yolundan nitelendirme. Ağ geçidi süreçteki gibi kurulur (kapasite,
+ * süre sınırı, dar yineleme, model eşleşmesi, ön işleme önekleri); bu bir
+ * operatör komutudur: kullanıcı oturumu yoktur, kurumsal anahtar kullanılır
+ * ve Rota verisi okunmaz. Profiller kayıttan bir kez çözülür; yeniden
+ * sıralama profili kapalıysa yalnızca ilk aşama ölçülür.
+ */
+async function live(context, flags) {
+  const limit = limitOf(flags);
+  const { parseAiConfig } = await import('../src/server/ai/aiConfig.js');
+  const { createAiAdmissionController } = await import('../src/server/ai/admissionController.js');
+  const { createAiGateway } = await import('../src/server/ai/aiGateway.js');
+  const { loadAiModelRegistry } = await import('../src/server/ai/modelRegistryLoader.js');
+  const { createOpenAiCompatibleProvider } = await import('../src/server/ai/providers/openAiCompatibleProvider.js');
+  const config = parseAiConfig(process.env);
+  if (!config.available) fail(`Yapay zekâ yapılandırması kullanılamıyor (${config.enabled ? config.issues.join(', ') : 'MERGEN_ROTA_AI_ENABLED'}).`);
+  if (!config.defaultApiKey) fail('Canlı nitelendirme kurumsal anahtarla çalışır: MERGEN_ROTA_AI_DEFAULT_API_KEY gerekli.');
+  let registry;
+  try {
+    registry = await loadAiModelRegistry({ path: config.registryPath });
+  } catch {
+    fail('Model kaydı yüklenemedi.');
   }
+  const embeddingRoute = resolveModelProfile(registry, AI_PROFILES.EMBEDDING);
+  if (!embeddingRoute.ok) fail(`embedding profili kullanılamıyor (${embeddingRoute.reason}).`);
+  const preprocessing = embeddingRoute.route.preprocessing ?? AI_NO_PREPROCESSING;
+  const space = createEmbeddingSpace(semanticModelProvenance(embeddingRoute.route, AI_PROFILES.EMBEDDING), preprocessing.id);
+  if (!space) fail('embedding profilinin rotası bir gömme uzayı kurmuyor.');
+  const rerankRoute = resolveModelProfile(registry, AI_PROFILES.RERANK);
+  const provenance = rerankRoute.ok ? semanticModelProvenance(rerankRoute.route, AI_PROFILES.RERANK) : null;
+  const admission = createAiAdmissionController({ limits: config.limits });
+  const provider = createOpenAiCompatibleProvider();
+  const gateway = createAiGateway({
+    getProvider: () => provider,
+    getAdmission: () => admission,
+    loadConfig: () => config,
+    loadRegistry: async () => registry,
+    currentSicil: async () => 'semantic-qualification',
+    verifySicil: async () => {},
+    resolveCredential: async () => ({ source: 'default', apiKey: config.defaultApiKey })
+  });
+  // Ağ geçidi rotayı her çağrıda aynı (yüklenmiş) kayıttan çözer: uzay ve köken koşu boyunca sabittir.
+  const embedding = {
+    space,
+    embed: async (texts, { purpose, signal }) => (await gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts, purpose, signal })).embeddings
+  };
+  const reranking = provenance ? {
+    provenance,
+    rerank: async (query, documents, { signal }) => (await gateway.rerankTexts({ profile: AI_PROFILES.RERANK, query, documents, signal })).scores
+  } : null;
+  // Çağrı süresini ağ geçidi belirler: değerlendirmenin süre sınırı sıra ve istek sınırlarının toplamından uzundur.
+  const requestMs = Math.max(embeddingRoute.route.timeoutMs ?? config.requestTimeoutMs, rerankRoute.ok ? rerankRoute.route.timeoutMs ?? config.requestTimeoutMs : 0);
+  const callTimeoutMs = Math.min(600000, requestMs + config.queueTimeoutMs + 5000);
+  const collected = await collectSemanticRun({ ...context, embedding, reranking, limit, callTimeoutMs });
+  if (collected.index.outcome !== 'ok') fail(`Katalog gömmesi başarısız (${collected.index.reason ?? collected.index.outcome}); dizin kurulamadı, nitelendirme yapılamaz.`);
+  const summary = summarizeSemanticRun(collected, context.benchmark);
+  const documents = context.catalogue.items.length;
+  const qualification = {
+    run: { format: collected.format, version: collected.version, path: 'gateway' },
+    benchmark: summary.benchmark,
+    catalogue: summary.catalogue,
+    embedding: { ...summary.provenance.embedding, queryPrefix: preprocessing.queryPrefix, documentPrefix: preprocessing.documentPrefix, runtime: 'gateway' },
+    reranker: provenance ? { ...provenance, runtime: 'gateway' } : null,
+    limit: summary.limit,
+    cutoffs: summary.cutoffs,
+    ndcgCutoff: summary.ndcgCutoff,
+    latencyWorkload: {
+      index: { documentsPerCall: documents, calls: 1, batchSize: documents },
+      embedding: { queriesPerCall: 1, calls: context.benchmark.cases.length },
+      rerank: provenance ? {
+        documentsPerCall: Math.min(limit, documents),
+        calls: Object.values(summary.outcomes.rerank).reduce((sum, count) => sum + count, 0),
+        batchSize: Math.min(limit, documents)
+      } : null
+    },
+    environment: { node: process.version, platform: process.platform, maxActive: config.limits.maxActive }
+  };
+  printSummary({ qualification, summary, index: collected.index }, flags, context.benchmark);
 }
 
 // Komut yalnızca doğrudan çalıştırıldığında yürür; sınama yeniden oynatımı içe aktararak kendi kataloğuyla sınar.
@@ -360,7 +488,8 @@ function invokedDirectly() {
 
 if (invokedDirectly()) {
   const { command, flags } = parseArguments(process.argv.slice(2));
-  if (command === 'input') writeInput(load(), flags.out);
-  else if (command === 'report') await report(load(), flags);
-  else fail('Kullanım: node scripts/semantic-evaluation.mjs input [--out dosya] | report --run dosya [--limit 10] [--json]');
+  if (command === 'input') writeInput(load(flags), flags.out);
+  else if (command === 'report') await report(load(flags), flags);
+  else if (command === 'live') await live(load(flags), flags);
+  else fail('Kullanım: node scripts/semantic-evaluation.mjs input [--out dosya] | report --run dosya [--limit 10] [--json] | live [--limit 10] [--json]; üçünde de [--queries sorular.json]');
 }

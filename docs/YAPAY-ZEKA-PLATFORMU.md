@@ -25,10 +25,10 @@ belirlenimci atıf doğrulaması, kanıt kaydı (0018). İsteğe bağlıdır
 
 Aşama 4: gömme ve yeniden sıralama modelleriyle Türkçe doğal dilin anlamsal
 olarak anlaşılması; Aşama 3'ün kimlik, yetki, SQL ve kanıt sınırı değişmez.
-Dondurulmuş dört adımlı yol haritası (4A–4D), değişmezler, değerlendirme ve
-kurum içi kabul sözleşmesi
-[YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.md)'dedir; özet
-[§20](#20-rota-ai-anlamsal-katman-aşama-4)'de.
+Dondurulmuş dört adımlı yol haritası (4A–4D), değişmezler, değerlendirme,
+4B'nin gerçek gömme ile aday keşfi ve yeniden sıralaması ve kurum içi kabul
+sözleşmesi [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.md)'dedir;
+özet [§20](#20-rota-ai-anlamsal-katman-aşama-4)'de.
 
 ---
 
@@ -94,8 +94,8 @@ Tarayıcı ──► /api/mergen-rota/ai/*  (Node çalışma zamanı, önbelleks
 | `src/server/ai/aiCredentialService.js` | Kişisel anahtar kaydı/kaldırma ve çalışma zamanı kimlik bilgisi çözümü |
 | `src/server/ai/admissionController.js` | Sınırlı eşzamanlılık, sıra ve geri basınç |
 | `src/server/ai/aiDeadline.js` | Tek sinyalde süre sınırı + iptal, iptal edilebilir bekleme |
-| `src/server/ai/providers/openAiCompatibleProvider.js` | OpenAI uyumlu HTTP bağdaştırıcısı ve durum → hata eşlemesi |
-| `src/server/ai/aiGateway.js` | Sohbet tamamlama ve kişisel anahtar doğrulaması |
+| `src/server/ai/providers/openAiCompatibleProvider.js` | OpenAI uyumlu HTTP bağdaştırıcısı (sohbet, model listesi, `/embeddings`, Cohere/Jina uyumlu `/rerank`) ve durum → hata eşlemesi |
+| `src/server/ai/aiGateway.js` | Sohbet tamamlama, kişisel anahtar doğrulaması, gömme ve yeniden sıralama (`embedTexts`, `rerankTexts`) |
 | `src/server/ai/modelRegistryLoader.js`, `defaultModelRegistry.js` | Model kaydının yüklenmesi ve varsayılan eşleme (veri) |
 | `src/server/ai/aiTelemetry.js`, `aiHealth.js` | Telemetri, sağlık bileşeni ve entegrasyon kartı |
 | `src/server/ai/aiDiagnosticProbe.js`, `aiProbeProfile.js` | Sabit istemli Aşama 1 bağlantı sınaması; sınama profilinin kullanılabilirliği ve sunucu süre bütçesi |
@@ -107,7 +107,8 @@ Tarayıcı ──► /api/mergen-rota/ai/*  (Node çalışma zamanı, önbelleks
 | `src/features/ai/assistant/*` | Rota AI paneli, istemci ve akış çözücüsü, durum makinesi, güvenli Markdown, sunum ve etkileşim kuralları |
 | `src/server/ai/tools/*` | Aşama 3: araç kayıt defteri, katı bağımsız değişken doğrulaması, sınırlı yürütücü, araç SQL kapısı, kanıt defteri ve 19 salt okunur alan aracı (tek SQL sahibi `rota/rotaToolStore.js`) |
 | `src/domain/ai/evidenceContract.js`, `src/server/ai/assistant/grounded*.js` | Aşama 3: ortak kanıt/atıf sözleşmesi; sunucuya ait yönerge ve doğrulanan, sınırlı araç döngüsü |
-| `src/domain/ai/semanticContract.js`, `semanticEvaluation.js` | Aşama 4A: anlamsal sözleşme (model çıktısı doğrulaması, katalog, parmak izi, sıralama) ve değerlendirme (kıyas kümesi, ölçüler, sınırlı koşucu); canlı yola bağlı değildir |
+| `src/domain/ai/semanticContract.js`, `semanticEvaluation.js` | Aşama 4A: anlamsal sözleşme (model çıktısı doğrulaması, katalog, parmak izi, sıralama) ve değerlendirme (kıyas kümesi, ölçüler, sınırlı koşucu) |
+| `src/server/ai/semanticRetrieval.js` | Aşama 4B: sunucuya ait araç kataloğunda gerçek gömme ile aday keşfi ve yeniden sıralama; süreç içi dizin; danışman sonuç (Aşama 3 turuna bağlı değildir) |
 
 ---
 
@@ -331,7 +332,8 @@ bağlıdır ve bilinmedikçe boş bırakılır.
 | `speech.tts.quality` | Metinden konuşmaya (yüksek kalite) | `speech.tts` |
 | `image.generation` | Görsel üretimi | `image.generation` |
 
-Aşama 1'de yalnızca `chat.fast` kullanılır (bağlantı sınaması). Aşama 2'de
+Aşama 1'de yalnızca `chat.fast` kullanılır (bağlantı sınaması). Aşama 4B'de
+`embedding` ve `rerank` anlamsal aday keşfinde kullanılır. Aşama 2'de
 `chat.general` Standart, `chat.reasoning` Derin düşünme kipini çalıştırır.
 Aşama 3'te Rota verisi araçları açıkken Standart kip `chat.tools`, Derin
 düşünme `chat.tools.reasoning` ile çalışır; kipin araç profili yoksa o kip
@@ -398,8 +400,8 @@ Doğrulama kuralları:
 
 - Belge, model ve profil nesnelerinde yalnızca tanınan alanlar bulunabilir
   (belge: `version`, `models`, `profiles`; model: `id`, `provider`,
-  `capabilities`, `contextTokens`, `maxConcurrency`, `enabled`; profil: `model`,
-  `enabled`, `maxOutputTokens`, `timeoutMs`). `maxConcurreny` gibi bir yazım
+  `capabilities`, `contextTokens`, `maxConcurrency`, `enabled`,
+  `preprocessing`; profil: `model`, `enabled`, `maxOutputTokens`, `timeoutMs`). `maxConcurreny` gibi bir yazım
   hatası sessizce yok sayılmaz; kayıt reddedilir, çünkü aksi hâlde güvenlik
   sınırı fark edilmeden kalkardı.
 - `version` yalnızca `1`; en fazla 200 model; model kimlikleri benzersiz.
@@ -407,6 +409,14 @@ Doğrulama kuralları:
   yeteneklerden en az biri.
 - `contextTokens` boş ya da pozitif tam sayı; `maxConcurrency` boş ya da
   1–1000 (model başına eşzamanlı istek üst sınırı, §6); `enabled` boolean.
+- `preprocessing` yalnızca `embedding` yeteneği taşıyan modelde bulunabilir:
+  `{ "id": "e5-query-passage", "queryPrefix": "query: ", "documentPrefix": "passage: " }`
+  (kapalı alan kümesi; `id` küçük harf/rakam/`.:-` belirteci; önekler en çok
+  200 karakter ve kırpılmaz; önek varsa `id` `none` olamaz, önek yoksa `none`
+  olmalıdır). Alan yoksa ön işleme yoktur. Önek ağ geçidinde, gömmenin amacına
+  (sorgu/belge) göre eklenir ve belirteç gömme uzayının kimliğine girer
+  (bkz. YAPAY-ZEKA-ANLAMSAL-KATMAN.md §7.2). Kurum içi kayıtta
+  `intfloat/multilingual-e5-large` E5'in belgelenmiş öneklerini taşır.
 - Profil kayıttaki **etkin** bir modele bağlanmalı ve profilin gerektirdiği
   yetenekleri taşımalıdır. `maxOutputTokens` 1–131072 ve bağlıysa modelin
   `contextTokens` değerinden büyük olamaz (etkin profil için); `timeoutMs`
@@ -582,7 +592,9 @@ yapılandırılmış günlüğü ve kanonik temizleyiciyi kullanır.
 - **İşlem adları:** `ai.api.credential.status`, `ai.api.credential.save`,
   `ai.api.credential.delete`, `ai.api.credential.validate`, `ai.api.probe`
   (uçlar); `ai.request` (sıra dâhil uçtan uca), `ai.queue.wait`,
-  `ai.provider.chat`, `ai.provider.models`, `ai.credential.validate`. Adlar
+  `ai.provider.chat`, `ai.provider.models`, `ai.provider.embeddings`,
+  `ai.provider.rerank`, `ai.credential.validate`, `ai.semantic.retrieve`
+  (anlamsal aday keşfi; içeriksiz). Adlar
   `api.` ile başlamaz: yavaş model yanıtları olağan uç gecikmesi uyarılarını
   (API P95) kirletmez.
 - **Anlık ölçümler:** etkin ve sıradaki yapay zekâ isteği (`ai.active_requests`,
@@ -1831,7 +1843,17 @@ Ayrıntılı belge: [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.m
   güvenilmez veri olarak doğrular (biçim, sayı, dizin, boyut, sonluluk),
   katalog/uzay/dizin parmak izleriyle bayat gömmeyi reddeder ve belirlenimci,
   sınırlı sıralama yapar; `semanticEvaluation.js` 117 vakalık sentetik Türkçe
-  kıyas kümesini, ölçüleri ve sınırlı koşucuyu tanımlar. Hiçbir üretim modülü
-  bunları içe aktarmaz; canlı davranış değişmez. Gerçek model nitelendirmesi
-  CI dışında elle çalıştırılır (`scripts/semantic-evaluation.mjs`,
+  kıyas kümesini, ölçüleri ve sınırlı koşucuyu tanımlar. Gerçek model
+  nitelendirmesi CI dışında elle çalıştırılır (`scripts/semantic-evaluation.mjs`,
   `scripts/semantic-model-qualification.py`).
+- **4B (uygulandı):** `semanticRetrieval.js` sorguyu kayıttaki `embedding`
+  profiliyle ağ geçidinden (`embedTexts`, ön işleme önekleri kayıttan) gömer,
+  sunucuya ait 19 araçlık kataloğun süreç içi dizininde (tek uçuşlu kurulum,
+  4A kimliğiyle yeniden kullanım, kalıcılık/vektör veritabanı yok) en çok 10
+  aday bulur ve yalnızca bu adayları `rerank` profiliyle (`rerankTexts`)
+  yeniden sıralar. Yeniden sıralama düşerse doğrulanmış ilk aşama, gömme
+  düşerse danışmanlık yoktur; çağıranın iptali iptal kalır. Gömme ve yeniden
+  sıralama çağrıları sohbetle aynı kimlik, kapasite, süre sınırı, dar yineleme
+  ve telemetri kurallarından geçer. Adaylar Aşama 3 turuna bağlanmaz (4C);
+  canlı asistan davranışı değişmez. Üretim yolundan nitelendirme:
+  `node scripts/semantic-evaluation.mjs live`.

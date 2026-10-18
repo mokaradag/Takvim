@@ -68,8 +68,17 @@ const SAFE_FIELD_PATTERN = /^[A-Za-z0-9._-]{1,40}$/;
  * fark edilmeden kalkardı.
  */
 const DOCUMENT_FIELDS = new Set(['version', 'models', 'profiles']);
-const MODEL_FIELDS = new Set(['id', 'provider', 'capabilities', 'contextTokens', 'maxConcurrency', 'enabled']);
+const MODEL_FIELDS = new Set(['id', 'provider', 'capabilities', 'contextTokens', 'maxConcurrency', 'enabled', 'preprocessing']);
 const PROFILE_FIELDS = new Set(['model', 'enabled', 'maxOutputTokens', 'timeoutMs']);
+const PREPROCESSING_FIELDS = new Set(['id', 'queryPrefix', 'documentPrefix']);
+const PREPROCESSING_ID_PATTERN = /^[a-z0-9][a-z0-9.:-]{0,63}$/;
+const MAX_PREFIX_CHARS = 200;
+
+/** Gömme girdisinin amacı: kullanıcı sorgusu ya da sunucuya ait katalog belgesi. */
+export const AI_EMBEDDING_PURPOSES = Object.freeze({ QUERY: 'query', DOCUMENT: 'document' });
+
+/** Ön işlemesiz model: önek yok, belirteç `none`. */
+export const AI_NO_PREPROCESSING = Object.freeze({ id: 'none', queryPrefix: '', documentPrefix: '' });
 /** Tek istekte istenebilecek en büyük çıktı belirteci (profil sınırı ve çağrı sınırı için ortak). */
 export const AI_MAX_OUTPUT_TOKENS = 131072;
 
@@ -127,6 +136,41 @@ function rejectUnknownFields(entry, allowed, path, add) {
   }
 }
 
+/**
+ * Gömme modelinin belgelenmiş ön işlemesi (ör. E5 `query: ` / `passage: `
+ * önekleri). Yalnızca gömme modelinde tanımlanır; belirteç önekleri adlandırır
+ * ve gömme uzayının kimliğine girer: önek varsa `none` olamaz, önek yoksa
+ * `none` olmalıdır (nitelendirme raporuyla aynı kural). Önekler kırpılmaz.
+ */
+function validatePreprocessing(value, capabilities, path, add) {
+  if (value == null) return AI_NO_PREPROCESSING;
+  if (!capabilities?.includes(AI_CAPABILITIES.EMBEDDING)) {
+    add(path, 'ön işleme yalnızca gömme modelinde tanımlanabilir');
+    return AI_NO_PREPROCESSING;
+  }
+  if (!isPlainObject(value)) {
+    add(path, 'ön işleme bir nesne olmalıdır');
+    return AI_NO_PREPROCESSING;
+  }
+  rejectUnknownFields(value, PREPROCESSING_FIELDS, path, add);
+  const { id, queryPrefix = '', documentPrefix = '' } = value;
+  let valid = true;
+  if (typeof id !== 'string' || !PREPROCESSING_ID_PATTERN.test(id)) {
+    add(`${path}.id`, 'küçük harf, rakam, nokta, iki nokta ve tireden oluşan bir belirteç olmalıdır');
+    valid = false;
+  }
+  for (const [field, prefix] of [['queryPrefix', queryPrefix], ['documentPrefix', documentPrefix]]) {
+    if (typeof prefix !== 'string' || prefix.length > MAX_PREFIX_CHARS) {
+      add(`${path}.${field}`, `en fazla ${MAX_PREFIX_CHARS} karakterlik metin olmalıdır`);
+      valid = false;
+    }
+  }
+  if (valid && Boolean(queryPrefix || documentPrefix) === (id === AI_NO_PREPROCESSING.id)) {
+    add(`${path}.id`, 'önek kullanılıyorsa belirteç onu adlandırmalı; önek yoksa "none" olmalıdır');
+  }
+  return valid ? Object.freeze({ id, queryPrefix, documentPrefix }) : AI_NO_PREPROCESSING;
+}
+
 function validateModels(entries, add) {
   const models = new Map();
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -167,13 +211,15 @@ function validateModels(entries, add) {
     if (!maxConcurrency.ok) add(`${path}.maxConcurrency`, 'boş ya da 1-1000 arası tam sayı olmalıdır');
     const enabled = optionalBoolean(entry.enabled, true);
     if (!enabled.ok) add(`${path}.enabled`, 'true ya da false olmalıdır');
+    const preprocessing = validatePreprocessing(entry.preprocessing, capabilities, `${path}.preprocessing`, add);
     models.set(id, Object.freeze({
       id,
       provider,
       capabilities: Object.freeze([...new Set(capabilities || [])]),
       contextTokens: contextTokens.value ?? null,
       maxConcurrency: maxConcurrency.value ?? null,
-      enabled: enabled.value !== false
+      enabled: enabled.value !== false,
+      preprocessing
     }));
   });
   return models;
@@ -277,7 +323,8 @@ export function resolveModelProfile(registry, profileId) {
       contextTokens: model.contextTokens,
       maxConcurrency: model.maxConcurrency,
       maxOutputTokens: profile.maxOutputTokens,
-      timeoutMs: profile.timeoutMs
+      timeoutMs: profile.timeoutMs,
+      preprocessing: model.preprocessing
     })
   };
 }

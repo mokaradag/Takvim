@@ -286,3 +286,160 @@ test('katalog yalnızca tekil kimlik ister: aynı açıklamalı iki öğe yenide
   const summary = summarizeSemanticRun(run, benchmark, { cutoffs: [1, 3], ndcgCutoff: 3 });
   assert.deepEqual([summary.stages.embedding.answer.hitAt1, summary.stages.reranked.answer.hitAt1], [1, 1]);
 });
+
+/* ── Üretim yolundan nitelendirme: ağ geçidi + bağdaştırıcı + yerel HTTP ikizi ── */
+
+const { registerServerOnlyShim } = await import('./helpers/serverOnlyShim.mjs');
+registerServerOnlyShim();
+const { startFakeOpenAiCompatibleServer } = await import('./helpers/fakeOpenAiCompatibleServer.mjs');
+const { createSemanticCatalogue: liveCatalogue, semanticToolDefinitions } = await import('../src/domain/ai/semanticContract.js');
+const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
+const { AI_PROFILES, resolveModelProfile, validateModelRegistry } = await import('../src/domain/ai/aiModelRegistry.js');
+const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
+
+const LIVE_KEY = 'rota-canli-nitelendirme-anahtari';
+const ITEMS = liveCatalogue(semanticToolDefinitions(rotaToolNames().map((name) => getRotaTool(name)))).catalogue.items;
+const ROUTES = (() => {
+  const registry = validateModelRegistry(DEFAULT_AI_MODEL_REGISTRY).registry;
+  return { embedding: resolveModelProfile(registry, AI_PROFILES.EMBEDDING).route, rerank: resolveModelProfile(registry, AI_PROFILES.RERANK).route };
+})();
+const PARAPHRASE = (text) => `${text} — başka sözle`;
+
+/**
+ * Kâhin uç: belge → konumunun birim vektörü (yalnızca `passage: ` önekiyle
+ * tanınır), sorgu → ihtiyaç gruplarının ilk adayları (yalnızca `query: `
+ * önekiyle tanınır), skor → ihtiyaç ise 1. Önek eksikse ya da yeniden
+ * sıralamaya önekli metin giderse ölçü kusursuz olamaz.
+ */
+function oracleEndpoint() {
+  const position = new Map(ITEMS.map((item, index) => [`passage: ${item.text}`, index]));
+  const byText = new Map(BENCHMARK.cases.flatMap((testCase) => [[testCase.text, testCase], [PARAPHRASE(testCase.text), testCase]]));
+  const firsts = (testCase) => new Set((testCase.needs || []).map((group) => group[0]));
+  return {
+    embed(text) {
+      if (position.has(text)) return ITEMS.map((_, index) => (index === position.get(text) ? 1 : 0));
+      const testCase = text.startsWith('query: ') ? byText.get(text.slice(7)) : null;
+      return ITEMS.map((item) => (!testCase || testCase.expect === 'abstain' || firsts(testCase).has(item.id) ? 1 : 0));
+    },
+    rerank(query, document) {
+      const testCase = byText.get(query);
+      const item = ITEMS.find((entry) => entry.text === document);
+      return testCase && item && (testCase.needs || []).flat().includes(item.id) ? 1 : 0;
+    }
+  };
+}
+
+async function live(t, { env = {}, args = [], semantic = oracleEndpoint() } = {}) {
+  const server = await startFakeOpenAiCompatibleServer({ semantic });
+  t.after(() => server.close());
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('MERGEN_ROTA_')));
+  const environment = {
+    ...inherited,
+    MERGEN_ROTA_AI_ENABLED: 'true',
+    MERGEN_ROTA_AI_BASE_URL: server.baseUrl,
+    MERGEN_ROTA_AI_DEFAULT_API_KEY: LIVE_KEY,
+    ...env
+  };
+  for (const [key, value] of Object.entries(environment)) if (value == null) delete environment[key];
+  try {
+    const { stdout, stderr } = await run(process.execPath, [SCRIPT, 'live', ...args], { cwd: ROOT, env: environment });
+    return { code: 0, stdout, stderr, server };
+  } catch (error) {
+    return { code: error.code, stdout: error.stdout, stderr: error.stderr, server };
+  }
+}
+
+test('canlı nitelendirme kıyas kümesini üretim yolundan geçirir: profil ve önekler kayıttan, katalog bir kez, yeniden sıralama ilk aşama adaylarına', { timeout: 120000 }, async (t) => {
+  const result = await live(t, { args: ['--json'] });
+  assert.equal(result.code, 0, result.stderr);
+  const { qualification, summary, index } = JSON.parse(result.stdout);
+  assert.deepEqual(qualification.run, { format: 'mergen-rota-semantic-run', version: 1, path: 'gateway' });
+  assert.deepEqual(qualification.embedding, {
+    profile: AI_PROFILES.EMBEDDING, model: ROUTES.embedding.model, provider: ROUTES.embedding.provider,
+    preprocessing: ROUTES.embedding.preprocessing.id, queryPrefix: 'query: ', documentPrefix: 'passage: ', runtime: 'gateway'
+  });
+  assert.deepEqual(qualification.reranker, { profile: AI_PROFILES.RERANK, model: ROUTES.rerank.model, provider: ROUTES.rerank.provider, runtime: 'gateway' });
+  assert.deepEqual(qualification.latencyWorkload.rerank, { documentsPerCall: 10, calls: BENCHMARK.cases.length, batchSize: 10 });
+  assert.deepEqual({ outcome: index.outcome, dimensions: index.dimensions }, { outcome: 'ok', dimensions: ITEMS.length });
+  assert.match(index.identity, /^[0-9a-f]{64}$/);
+  assert.deepEqual(summary.outcomes.embedding, { ok: BENCHMARK.cases.length, invalid: 0, timeout: 0, failed: 0 });
+  assert.deepEqual(summary.outcomes.rerank, { ok: BENCHMARK.cases.length, invalid: 0, timeout: 0, failed: 0 });
+  assert.equal(summary.stages.embedding.answer.hitAt1, 1);
+  assert.equal(summary.stages.reranked.answer.hitAt1, 1);
+  assert.equal(summary.latency.embedding.count, BENCHMARK.cases.length);
+  // Uca giden: tek katalog gömmesi (önekli), vaka başına tek önekli sorgu, ilk aşamanın 10 adayının öneksiz yeniden sıralaması.
+  const { requests } = result.server.state;
+  const embeddings = requests.filter((request) => request.path === '/v1/embeddings');
+  assert.equal(embeddings.length, 1 + BENCHMARK.cases.length);
+  assert.deepEqual(embeddings[0].body.input, ITEMS.map((item) => `passage: ${item.text}`));
+  assert.ok(embeddings.slice(1).every((request) => request.body.input.length === 1 && request.body.input[0].startsWith('query: ')));
+  const reranks = requests.filter((request) => request.path === '/v1/rerank');
+  assert.equal(reranks.length, BENCHMARK.cases.length);
+  assert.ok(reranks.every((request) => request.body.documents.length === 10 && request.body.top_n === 10 && !request.body.query.startsWith('query: ')));
+  assert.ok(requests.every((request) => request.bearer === LIVE_KEY));
+
+  const markdown = await live(t);
+  assert.equal(markdown.code, 0, markdown.stderr);
+  assert.match(markdown.stdout, /çağrı başına ilk aşamanın 10 adayı, üretimdeki gibi/);
+  assert.match(markdown.stdout, /\| Top-1 \| 1\.000 \| 1\.000 \| \+0\.000 \|/);
+});
+
+test('canlı nitelendirme başka ifadeleri aynı altın etiketlerle ölçer; bozuk soru dosyası ve kullanılamayan yapılandırma reddedilir', { timeout: 120000 }, async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-semantic-live-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const write = async (name, rows) => {
+    const file = path.join(directory, name);
+    await writeFile(file, JSON.stringify(rows), 'utf8');
+    return file;
+  };
+  const rows = BENCHMARK.cases.map((testCase) => ({ case: testCase.id, text: `  ${PARAPHRASE(testCase.text)} ` }));
+  const official = JSON.parse((await live(t, { args: ['--json'] })).stdout).summary.benchmark;
+  const paraphrased = await live(t, { args: ['--json', '--queries', await write('sorular.json', rows)] });
+  assert.equal(paraphrased.code, 0, paraphrased.stderr);
+  const summary = JSON.parse(paraphrased.stdout).summary;
+  assert.notEqual(summary.benchmark, official, 'türetilen kümenin parmak izi farklıdır');
+  assert.equal(summary.stages.reranked.answer.hitAt1, 1);
+  const queries = paraphrased.server.state.requests.filter((request) => request.path === '/v1/embeddings').slice(1);
+  assert.equal(queries[0].body.input[0], `query: ${PARAPHRASE(BENCHMARK.cases[0].text)}`, 'metin normalleşir');
+  const rowError = /Soru dosyasında yabancı, yinelenen ya da geçersiz satır var/;
+  for (const [label, broken, message] of [
+    ['eksik', rows.slice(1), /her kıyas vakası için tam bir satır/],
+    ['yinelenen', [...rows.slice(1), rows[1]], rowError],
+    ['yabancı', [...rows.slice(1), { case: 'tr-999', text: 'Yeni' }], rowError],
+    ['fazla alan', [{ ...rows[0], expect: 'abstain' }, ...rows.slice(1)], rowError],
+    ['boş metin', [{ ...rows[0], text: ' ' }, ...rows.slice(1)], rowError],
+    ['aynı metin', [{ ...rows[0], text: rows[1].text }, ...rows.slice(1)], /Kıyas kümesi geçersiz: cases\[\d+\]\.text:duplicate/]
+  ]) {
+    const result = await live(t, { args: ['--queries', await write(`${label}.json`, broken)] });
+    assert.equal(result.code, 1, label);
+    assert.match(result.stderr, message, label);
+    assert.equal(result.server.state.requests.length, 0, `${label}: model çağrılmadı`);
+  }
+  // Yalnızca kişisel anahtarlar yapılandırılmışsa (geçerli ana anahtar) operatör komutunun kullanacağı anahtar yoktur.
+  const masterKey = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1)).toString('base64');
+  const keyless = await live(t, { env: { MERGEN_ROTA_AI_DEFAULT_API_KEY: null, MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: masterKey } });
+  assert.equal(keyless.code, 1);
+  assert.match(keyless.stderr, /MERGEN_ROTA_AI_DEFAULT_API_KEY gerekli/);
+  assert.equal(keyless.server.state.requests.length, 0);
+  const disabled = await live(t, { env: { MERGEN_ROTA_AI_ENABLED: 'false' } });
+  assert.equal(disabled.code, 1);
+  assert.match(disabled.stderr, /MERGEN_ROTA_AI_ENABLED/);
+  const zero = await live(t, { semantic: { embed: () => ITEMS.map(() => 0), rerank: () => 0 } });
+  assert.equal(zero.code, 1);
+  assert.match(zero.stderr, /Katalog gömmesi başarısız \(ZERO_VECTOR\)/);
+});
+
+test('canlı nitelendirmede yeniden sıralama profili kapalıysa yalnızca ilk aşama ölçülür', { timeout: 120000 }, async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'rota-semantic-registry-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'kayit.json');
+  const document = JSON.parse(JSON.stringify(DEFAULT_AI_MODEL_REGISTRY));
+  document.profiles.rerank = { ...document.profiles.rerank, enabled: false };
+  await writeFile(file, JSON.stringify(document), 'utf8');
+  const result = await live(t, { args: ['--json'], env: { MERGEN_ROTA_AI_MODEL_REGISTRY_PATH: file } });
+  assert.equal(result.code, 0, result.stderr);
+  const { qualification, summary } = JSON.parse(result.stdout);
+  assert.equal(qualification.reranker, null);
+  assert.equal(summary.stages.reranked, null);
+  assert.equal(result.server.state.requests.filter((request) => request.path === '/v1/rerank').length, 0);
+});

@@ -58,7 +58,12 @@
       ],
       "contextTokens": null,
       "maxConcurrency": null,
-      "enabled": true
+      "enabled": true,
+      "preprocessing": {
+        "id": "e5-query-passage",
+        "queryPrefix": "query: ",
+        "documentPrefix": "passage: "
+      }
     },
     {
       "id": "tts-1-hd",

@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { createAiStack, runProbe } from './helpers/aiStack.mjs';
 
 const {
+  AI_NO_PREPROCESSING,
   AI_PROFILES,
   AI_PROFILE_RESOLUTION_FAILURES,
   aiProfileRequirements,
@@ -210,6 +211,44 @@ test('etkin profil kapalı modele ya da yeteneği eksik modele bağlanamaz', () 
   assert.match(mismatch.issues.join('\n'), /gerekli yeteneği taşımıyor \(reasoning\)/);
   const disabledProfile = validateModelRegistry(registry({ profiles: { 'chat.fast': { model: 'kapali-model', enabled: false } } }));
   assert.equal(disabledProfile.ok, true);
+});
+
+test('gömme modelinin ön işlemesi kapalı, belirteçli veridir ve profilin rotasına taşınır', () => {
+  // Kurum içi gömme profili E5'in belgelenmiş önekleriyle çalışır; varsayılan kayıt ile operasyonel JSON aynıdır.
+  for (const document of [DEFAULT_AI_MODEL_REGISTRY, operationalRegistry]) {
+    const route = resolveModelProfile(validateModelRegistry(document).registry, AI_PROFILES.EMBEDDING).route;
+    assert.deepEqual(route.preprocessing, { id: 'e5-query-passage', queryPrefix: 'query: ', documentPrefix: 'passage: ' });
+    assert.equal(Object.isFrozen(route.preprocessing), true);
+  }
+  // Ön işlemesi bildirilmeyen model önek kullanmaz; sohbet modeli de öyle.
+  const plain = validateModelRegistry(registry()).registry;
+  assert.deepEqual(resolveModelProfile(plain, AI_PROFILES.EMBEDDING).route.preprocessing, AI_NO_PREPROCESSING);
+  assert.deepEqual(resolveModelProfile(plain, AI_PROFILES.CHAT_FAST).route.preprocessing, AI_NO_PREPROCESSING);
+  const withPreprocessing = (preprocessing, id = 'gomme-model') => validateModelRegistry(registry({
+    models: registry().models.map((model) => (model.id === id ? { ...model, preprocessing } : model))
+  }));
+  // Önekler kırpılmaz; yalnızca sorgu öneki de geçerlidir (ör. sorgu yönergesi).
+  const instruction = validateModelRegistry(registry({ models: registry().models.map((model) => (model.id === 'gomme-model'
+    ? { ...model, preprocessing: { id: 'sorgu-yonergesi.v1', queryPrefix: 'Instruct: x\nQuery: ' } } : model)) }));
+  assert.equal(instruction.ok, true, JSON.stringify(instruction.issues));
+  assert.deepEqual(resolveModelProfile(instruction.registry, AI_PROFILES.EMBEDDING).route.preprocessing,
+    { id: 'sorgu-yonergesi.v1', queryPrefix: 'Instruct: x\nQuery: ', documentPrefix: '' });
+  assert.equal(withPreprocessing({ id: 'none' }).ok, true);
+  for (const [preprocessing, issue, id] of [
+    [{ id: 'e5', queryPrefix: 'query: ' }, /models\[0\]\.preprocessing: ön işleme yalnızca gömme modelinde/, 'hizli-model'],
+    ['e5-query-passage', /models\[2\]\.preprocessing: ön işleme bir nesne olmalıdır/],
+    [{ id: 'e5', queryPrefix: 'q: ', prefix: 'x' }, /models\[2\]\.preprocessing: tanınmayan alan "prefix"/],
+    [{ queryPrefix: 'q: ' }, /models\[2\]\.preprocessing\.id: küçük harf/],
+    [{ id: 'E5 Query', queryPrefix: 'q: ' }, /models\[2\]\.preprocessing\.id: küçük harf/],
+    [{ id: 'none', queryPrefix: 'query: ' }, /models\[2\]\.preprocessing\.id: önek kullanılıyorsa/],
+    [{ id: 'e5-query-passage' }, /models\[2\]\.preprocessing\.id: önek kullanılıyorsa/],
+    [{ id: 'e5', queryPrefix: 7 }, /models\[2\]\.preprocessing\.queryPrefix: en fazla 200/],
+    [{ id: 'e5', documentPrefix: 'p'.repeat(201) }, /models\[2\]\.preprocessing\.documentPrefix: en fazla 200/]
+  ]) {
+    const result = withPreprocessing(preprocessing, id);
+    assert.equal(result.ok, false, JSON.stringify(preprocessing));
+    assert.match(result.issues.join('\n'), issue, JSON.stringify(preprocessing));
+  }
 });
 
 test('model dizisi iş kodu değişmeden değişir: kayıt dosyası profili başka modele yönlendirir', async (t) => {
