@@ -1,12 +1,15 @@
-import { AI_PROFILES } from './aiModelRegistry.js';
+import { AI_CAPABILITIES, AI_PROFILES } from './aiModelRegistry.js';
 import {
   applyRerankScores,
+  createEmbeddingSpace,
   createSemanticIndex,
   isSemanticCatalogue,
   normalizeSemanticQuery,
   rankSemanticIndex,
   SEMANTIC_LIMITS,
-  semanticFingerprint
+  semanticFingerprint,
+  semanticIndexIdentity,
+  semanticModelProvenance
 } from './semanticContract.js';
 
 /**
@@ -56,14 +59,26 @@ const isRecord = (value) => value !== null && typeof value === 'object' && !Arra
 const mean = (values) => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null);
 
 /**
+ * Güvenilmez dizinin uzunluğu: tam bir kez okunur ve yakalanan değer negatif
+ * olmayan, sınırlı güvenli tam sayı olmalıdır; değilse null. Kopyalama bu
+ * değerle yapılır, uzunluk bir daha okunmaz.
+ */
+function snapshotLength(value, max) {
+  if (!Array.isArray(value)) return null;
+  const { length } = value;
+  return Number.isSafeInteger(length) && length >= 0 && length <= max ? length : null;
+}
+
+/**
  * Dış dizinin yoğun, sınırlı kopyası; dizi değilse, sınırı aşıyorsa ya da
  * boşluk (forEach/map/every'nin atladığı yuva) içeriyorsa null. Her konum bir
  * kez okunur; doğrulama kopya üzerinde yapılır.
  */
 function denseCopy(value, max) {
-  if (!Array.isArray(value) || !Number.isSafeInteger(value.length) || value.length > max) return null;
+  const length = snapshotLength(value, max);
+  if (length === null) return null;
   const copy = [];
-  for (let i = 0; i < value.length; i += 1) {
+  for (let i = 0; i < length; i += 1) {
     if (!Object.hasOwn(value, i)) return null;
     copy.push(value[i]);
   }
@@ -149,14 +164,13 @@ function readBenchmark(document, catalogue) {
     || declared.some(([tag, label]) => !TAG.test(tag) || typeof label !== 'string' || !label.trim())) {
     add('tags:invalid');
   }
-  const cases = Array.isArray(rawCases) && Number.isSafeInteger(rawCases.length) && rawCases.length > 0
-    && rawCases.length <= SEMANTIC_BENCHMARK_LIMITS.maxCases ? rawCases : null;
-  if (!cases) add('cases:count');
+  const count = snapshotLength(rawCases, SEMANTIC_BENCHMARK_LIMITS.maxCases);
+  if (!count) add('cases:count');
   const items = new Set(catalogue.items.map((item) => item.id));
   const context = { add, count: () => total, ids: new Set(), texts: new Set(), items, tags: new Set(declared.map(([tag]) => tag)) };
   // Seyrek dizinin boşluğu da vaka olarak denetlenir: her konum tam bir kez okunur.
-  const validated = Array.from({ length: cases ? cases.length : 0 }, (_, position) => (
-    validateCase(Object.hasOwn(cases, position) ? cases[position] : undefined, `cases[${position}]`, context)));
+  const validated = Array.from({ length: count || 0 }, (_, position) => (
+    validateCase(Object.hasOwn(rawCases, position) ? rawCases[position] : undefined, `cases[${position}]`, context)));
   if (issues.length) return { ok: false, issues };
   const benchmark = Object.freeze({
     fingerprint: semanticFingerprint([SEMANTIC_BENCHMARK_FORMAT, 1, language,
@@ -192,11 +206,11 @@ function requireBenchmark(benchmark) {
 
 /* ── Model sınırı çağrısı ───────────────────────────────── */
 
-// Hata nesnesi de güvenilmezdir: kod bir kez okunur, yalnızca güvenli biçimdeyse kaydedilir.
+// Hata nesnesi de güvenilmezdir: kod bir kez okunur, yalnızca güvenli biçimdeyse kaydedilir; ayrılmış (çağrılmadı) kodlar kullanılamaz.
 function failureCode(error) {
   try {
     const code = error?.code;
-    return typeof code === 'string' && SAFE_CODE.test(code) ? code : 'MODEL_CALL_FAILED';
+    return typeof code === 'string' && SAFE_CODE.test(code) && !UNCALLED.has(code) ? code : 'MODEL_CALL_FAILED';
   } catch {
     return 'MODEL_CALL_FAILED';
   }
@@ -224,6 +238,10 @@ function settlesWithin(running, ms, signal) {
  * sonuçlanmazsa (sinyale uymayan model) `halted` döner: koşucu artık model
  * çağırmaz, terk edilen çağrı sonraki vakaları kirletemez. Hata iletisi
  * taşınmaz; yalnızca güvenli bir kod kaydedilir.
+ *
+ * Model sınırı eşzamansızdır: süre sınırı ve iptal Promise döndüren çağrıyı
+ * sınırlar. Olay döngüsünü bloke eden eşzamanlı iş zamanlayıcıyla kesilemez;
+ * bunu süreç yalıtımı çözer ve Aşama 4A'nın kapsamında değildir.
  */
 async function callModel(invoke, { signal, callTimeoutMs, now }) {
   signal?.throwIfAborted();
@@ -261,7 +279,11 @@ async function callModel(invoke, { signal, callTimeoutMs, now }) {
   }
 }
 
-const callRecord = ({ outcome, reason, latencyMs }) => Object.freeze(reason ? { outcome, reason, latencyMs } : { outcome, latencyMs });
+// Süresi dolan çağrının kaydı koşucunun duruş kararını da taşır: koşu kaydı duruşu bu alanla doğrular.
+function callRecord({ outcome, reason, latencyMs, halted }) {
+  if (outcome === TIMEOUT) return Object.freeze({ outcome, latencyMs, halted });
+  return Object.freeze(reason ? { outcome, reason, latencyMs } : { outcome, latencyMs });
+}
 const missedCase = (id, reason) => Object.freeze({ case: id, embedding: Object.freeze({ outcome: FAILED, reason }), rerank: null, firstStage: null, reranked: null });
 
 async function collectCase(testCase, { index, embedding, reranking, limit, documentOf, call }) {
@@ -307,9 +329,9 @@ export async function collectSemanticRun({
   requireBenchmark(benchmark);
   if (!isSemanticCatalogue(catalogue) || benchmark.catalogue !== catalogue.fingerprint) throw new TypeError('SEMANTIC_CATALOGUE_MISMATCH');
   if (typeof embedding?.embed !== 'function' || embedding.space?.profile !== AI_PROFILES.EMBEDDING) throw new TypeError('SEMANTIC_EMBEDDING_REQUIRED');
-  if (reranking && (typeof reranking.rerank !== 'function' || reranking.provenance?.profile !== AI_PROFILES.RERANK)) {
-    throw new TypeError('SEMANTIC_RERANKING_INVALID');
-  }
+  // Kayda yazılan yeniden sıralama kökeni, koşu kaydını okuyanın kabul ettiği köken biçimindedir.
+  const reranker = reranking ? rerankerProvenance(reranking.provenance) : null;
+  if (reranking && (typeof reranking.rerank !== 'function' || !reranker)) throw new TypeError('SEMANTIC_RERANKING_INVALID');
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > SEMANTIC_LIMITS.maxCandidates) throw new RangeError('SEMANTIC_LIMIT');
   if (!Number.isSafeInteger(callTimeoutMs) || callTimeoutMs < 1 || callTimeoutMs > MAX_CALL_TIMEOUT_MS) {
     throw new RangeError('SEMANTIC_CALL_TIMEOUT');
@@ -341,14 +363,13 @@ export async function collectSemanticRun({
     else cases.push(await collectCase(testCase, { index, embedding, reranking, limit, documentOf, call }));
   }
   const { profile, model, provider, preprocessing } = embedding.space;
-  const reranker = reranking?.provenance;
   return Object.freeze({
     format: SEMANTIC_RUN_FORMAT,
     version: SEMANTIC_RUN_VERSION,
     benchmark: benchmark.fingerprint,
     catalogue: catalogue.fingerprint,
     embedding: Object.freeze({ profile, model, provider, preprocessing }),
-    reranker: reranker ? Object.freeze({ profile: reranker.profile, model: reranker.model, provider: reranker.provider }) : null,
+    reranker,
     limit,
     index: indexRecord,
     cases: Object.freeze(cases)
@@ -477,110 +498,182 @@ function outcomeCounts(records) {
 const RUN_ERRORS = new Set(['SEMANTIC_RUN_STALE', 'SEMANTIC_RUN_INVALID']);
 const runInvalid = () => new TypeError('SEMANTIC_RUN_INVALID');
 const isLatency = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+const hasExactFields = (record, fields) => {
+  const keys = Object.keys(record);
+  return keys.length === fields.length && keys.every((key) => fields.includes(key));
+};
 
-/**
- * Sonuç türü ile gerekçe tutarlıdır: başarılı ve süresi dolan çağrı gerekçe
- * taşımaz, diğerleri güvenli kod taşır. Yapılan her çağrı ölçülmüş gecikme
- * taşır; yalnızca hiç çağrılmayan vaka ıskası (`uncalled` izinliyse) taşımaz.
- */
-function readCallRecord(record, { uncalled = false } = {}) {
-  if (!isRecord(record)) throw runInvalid();
-  const { outcome, reason, latencyMs } = record;
-  if (!OUTCOMES.includes(outcome)) throw runInvalid();
-  const reasonless = outcome === OK || outcome === TIMEOUT;
-  if (reasonless ? reason !== undefined : !(typeof reason === 'string' && SAFE_CODE.test(reason))) throw runInvalid();
-  const called = !(uncalled && outcome === FAILED && UNCALLED.has(reason));
-  if (called ? !isLatency(latencyMs) : latencyMs !== undefined) throw runInvalid();
-  return Object.freeze({ outcome, reason, latencyMs });
+// Koşucunun yazdığı biçimler kapalıdır: her kaydın alan kümesi durumuna göre tektir.
+const RUN_FIELDS = ['format', 'version', 'benchmark', 'catalogue', 'embedding', 'reranker', 'limit', 'index', 'cases'];
+const ENTRY_FIELDS = ['case', 'embedding', 'rerank', 'firstStage', 'reranked'];
+const CALL_FIELDS = Object.freeze({
+  [OK]: ['outcome', 'latencyMs'],
+  [INVALID]: ['outcome', 'reason', 'latencyMs'],
+  [FAILED]: ['outcome', 'reason', 'latencyMs'],
+  [TIMEOUT]: ['outcome', 'latencyMs', 'halted']
+});
+const INDEX_FIELDS = ['outcome', 'latencyMs', 'identity', 'dimensions'];
+const UNCALLED_FIELDS = ['outcome', 'reason'];
+
+function rerankerProvenance(value) {
+  if (!isRecord(value)) return null;
+  const { profile, model, provider } = value;
+  return semanticModelProvenance({ profile, model, provider, capabilities: [AI_CAPABILITIES.RERANK] }, AI_PROFILES.RERANK);
 }
 
-// Aday listesi yoğun, tam `depth` uzunlukta, kimlikleri izinli ve tekil; skorlar sonlu ve artmayan sıradadır.
-function readRanked(raw, key, depth, allowed) {
+/**
+ * Yapılan çağrının kaydı. Alan kümesi sonuç türüne göre kapalıdır: başarılı ve
+ * süresi dolan çağrı gerekçe taşımaz, diğerleri güvenli kod taşır ve ayrılmış
+ * (çağrılmadı) kodları kullanamaz. Her çağrı ölçülmüş gecikme, süresi dolan
+ * çağrı koşucunun duruş kararını (`halted`) taşır. Başarılı dizin kaydının
+ * kimliği kayıttaki gömme uzayına ve boyuta bağlıdır.
+ */
+function readCall(record, index = null) {
+  if (!isRecord(record)) throw runInvalid();
+  const { outcome, reason, latencyMs, halted, identity, dimensions } = record;
+  if (!OUTCOMES.includes(outcome) || !hasExactFields(record, index && outcome === OK ? INDEX_FIELDS : CALL_FIELDS[outcome])
+    || !isLatency(latencyMs)) {
+    throw runInvalid();
+  }
+  if (outcome === INVALID || outcome === FAILED) {
+    if (typeof reason !== 'string' || !SAFE_CODE.test(reason) || UNCALLED.has(reason)) throw runInvalid();
+    return Object.freeze({ outcome, reason, latencyMs });
+  }
+  if (outcome === TIMEOUT) {
+    if (typeof halted !== 'boolean') throw runInvalid();
+    return Object.freeze({ outcome, latencyMs, halted });
+  }
+  if (!index) return Object.freeze({ outcome, latencyMs });
+  if (!Number.isSafeInteger(dimensions) || dimensions < 1 || dimensions > SEMANTIC_LIMITS.maxDimensions
+    || identity !== semanticIndexIdentity(index.catalogue, index.space.key, dimensions)) {
+    throw runInvalid();
+  }
+  return Object.freeze({ outcome, latencyMs, identity, dimensions });
+}
+
+// Hiç çağrılmayan vaka yalnızca koşucunun ürettiği biçimdedir: `failed`, ayrılmış kod; gecikme ve yük yok.
+const isUncalled = (record, reason) => isRecord(record) && hasExactFields(record, UNCALLED_FIELDS)
+  && record.outcome === FAILED && record.reason === reason;
+
+/**
+ * Aday listesi yoğun, tam `depth` uzunlukta, kimlikleri izinli ve tekil;
+ * skorlar sonlu ve artmayan sıradadır. Eşit skorda koşucunun belirlenimci
+ * sırası korunur (`order`: ilk aşamada katalog, yeniden sıralamada ilk aşama
+ * sırası); eşitleri yer değiştirerek ölçüyü değiştiren kayıt reddedilir.
+ */
+function readRanked(raw, key, depth, order) {
   const list = denseCopy(raw, SEMANTIC_LIMITS.maxCandidates);
   if (!list || list.length !== depth) throw runInvalid();
   const seen = new Set();
-  let previous = Infinity;
+  let previous = null;
   return Object.freeze(list.map((candidate) => {
-    if (!isRecord(candidate)) throw runInvalid();
+    if (!isRecord(candidate) || !hasExactFields(candidate, ['id', key])) throw runInvalid();
     const { id, [key]: score } = candidate;
-    if (!allowed.has(id) || seen.has(id) || typeof score !== 'number' || !Number.isFinite(score) || score > previous
+    if (!order.has(id) || seen.has(id) || typeof score !== 'number' || !Number.isFinite(score)
       || (key === 'similarity' && Math.abs(score) > 1)) {
       throw runInvalid();
     }
+    if (previous && (score > previous.score || (score === previous.score && order.get(id) < order.get(previous.id)))) throw runInvalid();
     seen.add(id);
-    previous = score;
+    previous = { id, score };
     return Object.freeze({ id, [key]: score });
   }));
 }
 
 /**
- * Vaka kaydı ile yükü tutarlı olmalıdır: başarısız gömme aday taşımaz;
- * yeniden sıralama yalnızca başarılı ilk aşamadan sonra vardır ve ilk aşamanın
- * aday kümesinin bir permütasyonudur (aday eklemez, çıkarmaz).
+ * Vaka kaydı koşucunun üretebileceği bir durumdur. Dizin yoksa vaka yalnızca
+ * `INDEX_UNAVAILABLE` ıskasıdır; dizin varken çağrılmayan vaka yalnızca
+ * `RUN_HALTED` ıskasıdır. Başarısız gömme aday taşımaz; yeniden sıralama
+ * yalnızca başarılı ilk aşamadan sonra vardır ve ilk aşamanın aday kümesinin
+ * bir permütasyonudur (aday eklemez, çıkarmaz).
  */
-function readEntry(raw, { depth, items, reranking }) {
-  if (!isRecord(raw)) throw runInvalid();
+function readEntry(raw, { depth, catalogueOrder, reranking, indexed }) {
+  if (!isRecord(raw) || !hasExactFields(raw, ENTRY_FIELDS)) throw runInvalid();
   const { case: id, embedding, rerank, firstStage, reranked } = raw;
-  const entry = { case: id, embedding: readCallRecord(embedding, { uncalled: true }), rerank: null, firstStage: null, reranked: null };
+  const entry = { case: id, embedding: null, rerank: null, firstStage: null, reranked: null };
+  const uncalled = indexed ? RUN_HALTED : INDEX_UNAVAILABLE;
+  if (isUncalled(embedding, uncalled)) {
+    if (rerank !== null || firstStage !== null || reranked !== null) throw runInvalid();
+    entry.embedding = Object.freeze({ outcome: FAILED, reason: uncalled });
+    return Object.freeze(entry);
+  }
+  if (!indexed) throw runInvalid();
+  entry.embedding = readCall(embedding);
   if (entry.embedding.outcome !== OK) {
-    if (firstStage != null || rerank != null || reranked != null) throw runInvalid();
+    if (firstStage !== null || rerank !== null || reranked !== null) throw runInvalid();
     return Object.freeze(entry);
   }
-  entry.firstStage = readRanked(firstStage, 'similarity', depth, items);
+  entry.firstStage = readRanked(firstStage, 'similarity', depth, catalogueOrder);
   if (!reranking) {
-    if (rerank != null || reranked != null) throw runInvalid();
+    if (rerank !== null || reranked !== null) throw runInvalid();
     return Object.freeze(entry);
   }
-  entry.rerank = readCallRecord(rerank);
+  entry.rerank = readCall(rerank);
   if (entry.rerank.outcome !== OK) {
-    if (reranked != null) throw runInvalid();
+    if (reranked !== null) throw runInvalid();
     return Object.freeze(entry);
   }
-  entry.reranked = readRanked(reranked, 'relevance', depth, new Set(entry.firstStage.map((candidate) => candidate.id)));
+  entry.reranked = readRanked(reranked, 'relevance', depth, new Map(entry.firstStage.map((candidate, position) => [candidate.id, position])));
   return Object.freeze(entry);
+}
+
+// Kayıttaki gömme kökeni koşucunun yazdığı kapalı künyedir; dizin kimliği bu uzaya bağlanır.
+function readSpace(embedding) {
+  if (!isRecord(embedding) || !hasExactFields(embedding, ['profile', 'model', 'provider', 'preprocessing'])) throw runInvalid();
+  const { profile, model, provider, preprocessing } = embedding;
+  const space = profile === AI_PROFILES.EMBEDDING ? createEmbeddingSpace({ profile, model, provider }, preprocessing) : null;
+  if (!space) throw runInvalid();
+  return space;
 }
 
 function readRun(run, benchmark) {
   if (!isRecord(run)) throw runInvalid();
-  const { format, version, benchmark: fingerprint, catalogue, limit, reranker, index, cases } = run;
+  const { format, version, benchmark: fingerprint, catalogue, embedding, limit, reranker: rawReranker, index, cases } = run;
   if (format !== SEMANTIC_RUN_FORMAT || version !== SEMANTIC_RUN_VERSION || fingerprint !== benchmark.fingerprint || catalogue !== benchmark.catalogue) {
     throw new Error('SEMANTIC_RUN_STALE');
   }
+  if (!hasExactFields(run, RUN_FIELDS)) throw runInvalid();
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > SEMANTIC_LIMITS.maxCandidates) throw runInvalid();
-  if (reranker != null && !(isRecord(reranker) && reranker.profile === AI_PROFILES.RERANK)) throw runInvalid();
-  const indexRecord = readCallRecord(index);
+  const space = readSpace(embedding);
+  const reranker = rawReranker === null ? null : rerankerProvenance(rawReranker);
+  if (rawReranker !== null && (!reranker || !hasExactFields(rawReranker, ['profile', 'model', 'provider']))) throw runInvalid();
+  const indexRecord = readCall(index, { catalogue: benchmark.catalogue, space });
   const list = denseCopy(cases, benchmark.cases.length);
   if (!list) throw runInvalid();
   const known = new Set(benchmark.cases.map((testCase) => testCase.id));
-  const context = { depth: Math.min(limit, benchmark.items.length), items: new Set(benchmark.items), reranking: reranker != null };
+  const context = {
+    depth: Math.min(limit, benchmark.items.length),
+    catalogueOrder: new Map(benchmark.items.map((id, position) => [id, position])),
+    reranking: reranker !== null,
+    indexed: indexRecord.outcome === OK
+  };
   const byCase = new Map();
   for (const raw of list) {
     const entry = readEntry(raw, context);
     // Kıyas kümesinde olmayan ya da yinelenen vaka satırı sessizce yok sayılmaz ya da ezilmez.
     if (!known.has(entry.case) || byCase.has(entry.case)) throw runInvalid();
-    // Dizin yoksa her vaka `INDEX_UNAVAILABLE` ıskasıdır; dizin varken bu kod kullanılamaz.
-    if ((indexRecord.outcome === OK) === (entry.embedding.reason === INDEX_UNAVAILABLE)) throw runInvalid();
     byCase.set(entry.case, entry);
   }
-  checkHaltOrder(benchmark, byCase);
-  return { limit, reranking: context.reranking, index: indexRecord, byCase };
+  checkHalt(benchmark, byCase);
+  return { limit, space, reranker, reranking: context.reranking, index: indexRecord, byCase };
 }
 
-const isHalted = (entry) => entry?.embedding.reason === RUN_HALTED;
-
 /**
- * Koşucu durduktan sonra model çağırmaz: `RUN_HALTED` ıskaları kıyas sırasında
- * kesintisiz bir son dilimdir ve hemen önceki vakanın son çağrısı süresi dolan
- * çağrıdır. Duruştan sonra puanlanan vaka, sırasız ya da gerekçesiz duruş reddedilir.
+ * Duruş durum makinesi: koşucu yalnızca süresi dolup ek sürede de
+ * sonuçlanmayan çağrıdan (`halted: true`) sonra durur. Böyle çağrı en çok bir
+ * kez vardır; ondan önceki kayıtlı vakalar `RUN_HALTED` taşıyamaz, sonraki
+ * kayıtlı vakaların hepsi `RUN_HALTED` ıskasıdır. Kaydı olmayan vaka her
+ * konumda ıskadır (kısmi koşu); kaydı olan vaka duruşla çelişemez.
  */
-function checkHaltOrder(benchmark, byCase) {
-  const entries = benchmark.cases.map((testCase) => byCase.get(testCase.id));
-  const first = entries.findIndex(isHalted);
-  if (first < 0) return;
-  if (entries.slice(first).some((entry) => !isHalted(entry))) throw runInvalid();
-  const previous = entries[first - 1];
-  const last = previous?.rerank ?? previous?.embedding;
-  if (last?.outcome !== TIMEOUT) throw runInvalid();
+function checkHalt(benchmark, byCase) {
+  let halted = false;
+  for (const testCase of benchmark.cases) {
+    const entry = byCase.get(testCase.id);
+    if (!entry) continue;
+    const marker = entry.embedding.reason === RUN_HALTED;
+    if (marker !== halted) throw runInvalid();
+    if (!marker && (entry.rerank ?? entry.embedding).halted === true) halted = true;
+  }
 }
 
 /**
@@ -628,9 +721,16 @@ export function summarizeSemanticRun(run, benchmark, { cutoffs: requested = SEMA
   }), options) : null;
   const difference = (after, before) => (after == null || before == null ? null : after - before);
   const delta = (key) => difference(rerankStage.answer[key], embeddingStage.answer[key]);
+  const { profile, model, provider, preprocessing } = trusted.space;
   return {
     benchmark: benchmark.fingerprint,
     catalogue: benchmark.catalogue,
+    // Doğrulanmış köken: sıralamaları üreten gömme uzayı, dizin kimliği ve yeniden sıralayıcı.
+    provenance: {
+      embedding: { profile, model, provider, preprocessing },
+      index: trusted.index.outcome === OK ? { identity: trusted.index.identity, dimensions: trusted.index.dimensions } : null,
+      reranker: trusted.reranker
+    },
     limit: trusted.limit,
     cutoffs,
     ndcgCutoff,
@@ -666,20 +766,33 @@ const MAX_DECISIONS = SEMANTIC_BENCHMARK_LIMITS.maxCases * 4;
 /**
  * Planlayıcı kararı da güvenilmez model çıktısıdır: alanlar bir kez okunur,
  * araç listesi yoğun, sınırlı ve tekildir; çekimser karar araç adlandıramaz.
- * Okunamayan karar geçersizdir.
+ * Okunamayan karar geçersizdir; okunabilen vaka kimliği korunur, böylece
+ * aynı vakanın sonraki kararı da yinelenen sayılır.
  */
 function readDecision(decisions, position, items) {
+  let id;
   try {
     const raw = Object.hasOwn(decisions, position) ? decisions[position] : undefined;
-    if (!isRecord(raw)) return { id: undefined, decision: null };
-    const { case: id, decision, tools: rawTools } = raw;
-    const tools = denseCopy(rawTools, SEMANTIC_LIMITS.maxCandidates);
+    if (!isRecord(raw)) return { id, decision: null };
+    id = raw.case;
+    const decision = raw.decision;
+    const tools = denseCopy(raw.tools, SEMANTIC_LIMITS.maxCandidates);
     const valid = EXPECTATIONS.includes(decision) && tools !== null
       && tools.every((tool, i) => items.has(tool) && tools.indexOf(tool) === i)
       && (decision !== ABSTAIN || tools.length === 0);
     return { id, decision: valid ? Object.freeze({ decision, tools: Object.freeze(tools) }) : null };
   } catch {
-    return { id: undefined, decision: null };
+    return { id, decision: null };
+  }
+}
+
+// Karar listesinin uzunluğu bir kez okunur; dizi olmayan ya da okunamayan liste null'dır.
+function decisionCount(decisions) {
+  try {
+    const length = Array.isArray(decisions) ? decisions.length : null;
+    return Number.isSafeInteger(length) && length >= 0 ? length : null;
+  } catch {
+    return null;
   }
 }
 
@@ -693,10 +806,10 @@ export function evaluateSemanticDecisions(benchmark, decisions) {
   const known = new Set(benchmark.cases.map((testCase) => testCase.id));
   const items = new Set(benchmark.items);
   const seen = new Map();
-  const count = Array.isArray(decisions) && Number.isSafeInteger(decisions.length) ? decisions.length : 0;
-  // Sınırı aşan karar listesi okunmaz: her karar geçersiz, her vaka kararsız sayılır.
-  let invalid = count > MAX_DECISIONS ? count : 0;
-  for (let position = 0; position < count && count <= MAX_DECISIONS; position += 1) {
+  const count = decisionCount(decisions);
+  // Okunamayan liste tek geçersiz çıktıdır; sınırı aşan liste okunmaz, her kararı geçersizdir. İki durumda da her vaka kararsızdır.
+  let invalid = count === null ? 1 : count > MAX_DECISIONS ? count : 0;
+  for (let position = 0; count !== null && count <= MAX_DECISIONS && position < count; position += 1) {
     const { id, decision } = readDecision(decisions, position, items);
     if (!decision || !known.has(id) || seen.has(id)) {
       invalid += 1;

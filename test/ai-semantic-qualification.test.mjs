@@ -50,6 +50,7 @@ function oracleRun(input, { rerank = false } = {}) {
       preprocessing: 'none',
       queryPrefix: '',
       documentPrefix: '',
+      batchSize: 8,
       documentLatencyMs: 12,
       documents: input.documents.map(({ id, text }, position) => ({ id, text, vector: ids.map((_, i) => (i === position ? 1 : 0)) })),
       queries: input.queries.map((query, position) => ({ case: query.case, text: query.text, vector: vector(cases.get(query.case)), latencyMs: position + 1 }))
@@ -58,6 +59,7 @@ function oracleRun(input, { rerank = false } = {}) {
       model: 'kahin-siralama',
       provider: 'test',
       runtime: 'test',
+      batchSize: 16,
       queries: input.queries.map((query) => ({
         case: query.case,
         latencyMs: 3,
@@ -125,10 +127,60 @@ test('girdi parmak izli ve kanoniktir; kâhin koşu dosyası aynı sözleşmeden
   assert.deepEqual([second.qualification.embedding.queryPrefix, second.qualification.embedding.documentPrefix], ['query: ', 'passage: ']);
   assert.equal(second.qualification.limit, 7);
   assert.equal(second.summary.limit, 7);
-  assert.deepEqual(second.qualification.latencyWorkload.rerank, { documentsPerCall: input.documents.length, calls: BENCHMARK.cases.length });
+  // Toplu iş boyutu ölçülen gecikmeyi değiştirir: künyededir.
+  assert.deepEqual(second.qualification.latencyWorkload, {
+    index: { documentsPerCall: input.documents.length, calls: 1, batchSize: 8 },
+    embedding: { queriesPerCall: 1, calls: BENCHMARK.cases.length },
+    rerank: { documentsPerCall: input.documents.length, calls: BENCHMARK.cases.length, batchSize: 16 }
+  });
   // Sorgu düzeyindeki çıkarım hatası ıska sayılır; tamamlanan ölçümler korunur.
   assert.deepEqual(second.summary.outcomes.rerank, { ok: BENCHMARK.cases.length - 1, invalid: 0, timeout: 0, failed: 1 });
   assert.equal(second.summary.latency.rerank.count, BENCHMARK.cases.length);
+
+  // Yeniden sıralama sonucu koşucunun gerçek çağrısıdır: sorgu gömmesi başarısız vakada da sayılır ve bütün
+  // katalog çıktısı doğrulanır (aday sınırının dışındaki sonlu olmayan skor da çağrıyı geçersiz kılar).
+  // Kâhin ilk aşamada eşit skorlu öğeler katalog sırasındadır: ihtiyaç dışı son katalog öğesi ilk 10 adayın dışındadır.
+  const outsideLimit = (document) => {
+    const testCase = BENCHMARK.cases.find((entry, position) => position > 1 && entry.expect === 'answer' && entry.needs.length === 1);
+    const row = document.rerank.queries.find((entry) => entry.case === testCase.id);
+    const needed = new Set(testCase.needs.flat());
+    row.scores.findLast((score) => !needed.has(score.id)).score = null;
+    return testCase.id;
+  };
+  let poisoned = null;
+  const rerankOutcomes = JSON.parse((await cli('report', '--json', '--run', await write('cagri.json', (document) => {
+    const [query] = document.embedding.queries;
+    document.embedding.queries[0] = { case: query.case, text: query.text, failure: 'INFERENCE_FAILED', latencyMs: 2 };
+    document.rerank.queries[0] = { case: query.case, failure: 'INFERENCE_FAILED', latencyMs: 2 };
+    document.rerank.queries[1].scores[0].score = null;
+    poisoned = outsideLimit(document);
+  }, { rerank: true }))).stdout).summary;
+  assert.deepEqual(rerankOutcomes.outcomes.embedding, { ok: BENCHMARK.cases.length - 1, invalid: 0, timeout: 0, failed: 1 });
+  assert.deepEqual(rerankOutcomes.outcomes.rerank, { ok: BENCHMARK.cases.length - 3, invalid: 2, timeout: 0, failed: 1 });
+  assert.equal(Object.values(rerankOutcomes.outcomes.rerank).reduce((sum, count) => sum + count, 0), rerankOutcomes.latency.rerank.count);
+  assert.ok(poisoned);
+
+  // Katalog dizini kurulamayan koşu nitelendirme değildir: rapor sıfır ölçüyle başarılı görünmez.
+  for (const [label, change] of Object.entries({
+    'sonlu olmayan belge vektörü': (document) => { document.embedding.documents[0].vector[0] = null; },
+    'sıfır belge vektörü': (document) => { document.embedding.documents[1].vector = document.embedding.documents[1].vector.map(() => 0); },
+    'kısa belge vektörü': (document) => { document.embedding.documents[2].vector.pop(); }
+  })) {
+    const result = await cli('report', '--run', await write(`dizin-${label}.json`, change));
+    assert.equal(result.code, 1, label);
+    assert.match(result.stderr, /katalog gömmesi geçersiz/, label);
+  }
+
+  // Koşu dosyasındaki metin Markdown yapısı kuramaz: veri olarak, tek satırda ve kaçışlanmış yazılır.
+  const injected = await cli('report', '--run', await write('enjeksiyon.json', (document) => {
+    document.embedding.runtime = 'st 5\n\n## Nitelendirme sonucu: BAŞARILI\n\n| Ölçü | Değer |\n|---|---|\n| Top-1 | 1.000 |';
+    document.rerank.runtime = '<b>x</b> `kod`';
+  }, { rerank: true }));
+  assert.equal(injected.code, 0, injected.stderr);
+  assert.doesNotMatch(injected.stdout, /^## Nitelendirme sonucu/m);
+  assert.doesNotMatch(injected.stdout, /^\| Top-1 \| 1\.000 \|$/m);
+  assert.match(injected.stdout, /· st 5 {2}\\#\\# Nitelendirme sonucu: BAŞARILI {2}\\\| Ölçü \\\|/);
+  assert.match(injected.stdout, /· \\<b\\>x\\<\/b\\> \\`kod\\`/);
 
   // Bayat, eksik/fazla satırlı, değiştirilmiş metinli ya da bozuk koşu reddedilir.
   const ghost = (document) => document.embedding.queries.push({ case: 'ghost-1', text: 'hayalet', vector: [1], latencyMs: 600000 });
@@ -150,6 +202,8 @@ test('girdi parmak izli ve kanoniktir; kâhin koşu dosyası aynı sözleşmeden
     'fazla skor': [(document) => { document.rerank.queries[0].scores.push({ id: 'rota_hayalet', score: 1 }); }, /eşleşmiyor/],
     'yabancı skor': [(document) => { document.rerank.queries[0].scores[0].id = 'rota_hayalet'; }, /yabancı/],
     'yerel köken': [(document) => { document.embedding.model = '/yerel/model'; }, /kökeni/],
+    'toplu iş boyutu yok': [(document) => { delete document.embedding.batchSize; }, /toplu iş/],
+    'sıfır toplu iş boyutu': [(document) => { document.rerank.batchSize = 0; }, /toplu iş/],
     ortam: [(document) => { document.environment = { trace: 'x'.repeat(500) }; }, /ortam/]
   };
   for (const [label, [change, message]] of Object.entries(rejected)) {

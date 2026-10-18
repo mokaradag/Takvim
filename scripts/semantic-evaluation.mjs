@@ -72,15 +72,19 @@ function writeInput({ catalogue, benchmark }, out) {
 
 // Koşu dosyası güvenilmez girdidir: her bölüm kapalı şemadır, kimlik ve vaka kümeleri girdiyle BİREBİR aynıdır.
 const RUN_FIELDS = ['format', 'version', 'benchmark', 'catalogue', 'embedding', 'rerank', 'environment'];
-const EMBEDDING_FIELDS = ['model', 'provider', 'preprocessing', 'queryPrefix', 'documentPrefix', 'runtime', 'documentLatencyMs', 'documents', 'queries'];
-const RERANK_FIELDS = ['model', 'provider', 'runtime', 'queries'];
+const EMBEDDING_FIELDS = ['model', 'provider', 'preprocessing', 'queryPrefix', 'documentPrefix', 'runtime', 'batchSize', 'documentLatencyMs', 'documents', 'queries'];
+const RERANK_FIELDS = ['model', 'provider', 'runtime', 'batchSize', 'queries'];
 // Koşucunun sorgu düzeyindeki çıkarım hatası için tek güvenli kod; hata iletisi kaydedilmez.
 const INFERENCE_FAILED = 'INFERENCE_FAILED';
 const MAX_TEXT = 200;
+const MAX_BATCH_SIZE = 4096;
 
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isLatency = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const boundedText = (value) => typeof value === 'string' && value.length <= MAX_TEXT;
+// Toplu iş boyutu ölçülen gecikmeyi değiştirir; künyenin parçasıdır.
+const isBatchSize = (value) => Number.isSafeInteger(value) && value >= 1 && value <= MAX_BATCH_SIZE;
+const isScore = (value) => typeof value === 'number' && Number.isFinite(value);
 
 function closed(record, fields, label) {
   if (!isRecord(record) || Object.keys(record).some((key) => !fields.includes(key))) fail(`Koşu dosyasında ${label} bölümü tanınmadı.`);
@@ -140,6 +144,7 @@ function readModelRun(raw, { catalogue, benchmark }) {
   const space = createEmbeddingSpace(provenanceOf(embedding, AI_PROFILES.EMBEDDING, 'embedding'), embedding.preprocessing);
   if (!space) fail('Koşu dosyasındaki gömme modeli kökeni ya da ön işleme belirteci geçersiz.');
   if (!isLatency(embedding.documentLatencyMs)) fail('Koşu dosyasındaki katalog gömme gecikmesi geçersiz.');
+  if (!isBatchSize(embedding.batchSize)) fail('Koşu dosyasındaki gömme toplu iş boyutu geçersiz.');
   const itemIds = catalogue.items.map((item) => item.id);
   const caseIds = benchmark.cases.map((testCase) => testCase.id);
   const textOfItem = new Map(catalogue.items.map((item) => [item.id, item.text]));
@@ -159,17 +164,24 @@ function readModelRun(raw, { catalogue, benchmark }) {
     const section = closed(run.rerank, RERANK_FIELDS, 'yeniden sıralama');
     const provenance = provenanceOf(section, AI_PROFILES.RERANK, 'rerank');
     if (!provenance || (section.runtime !== undefined && !boundedText(section.runtime))) fail('Koşu dosyasındaki yeniden sıralama modeli kökeni geçersiz.');
+    if (!isBatchSize(section.batchSize)) fail('Koşu dosyasındaki yeniden sıralama toplu iş boyutu geçersiz.');
     const rows = exactRows(section.queries, 'case', caseIds, 'yeniden sıralama');
     const scores = new Map();
+    const outcomes = new Map();
     for (const [id, row] of rows) {
       readOutcomeRow(row, ['case', 'scores', 'failure', 'latencyMs'], 'scores', 'yeniden sıralama');
-      if (Object.hasOwn(row, 'scores')) {
-        const byItem = exactRows(row.scores, 'id', itemIds, 'skor');
-        for (const score of byItem.values()) closed(score, ['id', 'score'], 'skor');
-        scores.set(id, byItem);
+      if (!Object.hasOwn(row, 'scores')) {
+        outcomes.set(id, 'failed');
+        continue;
       }
+      const byItem = exactRows(row.scores, 'id', itemIds, 'skor');
+      for (const score of byItem.values()) closed(score, ['id', 'score'], 'skor');
+      // Koşucu her sorguda bütün kataloğu puanlar: çağrının geçerliliği raporun aday sınırına değil bütün çıktıya bağlıdır.
+      const valid = [...byItem.values()].every((score) => isScore(score.score));
+      outcomes.set(id, valid ? 'ok' : 'invalid');
+      if (valid) scores.set(id, byItem);
     }
-    rerank = { provenance, runtime: section.runtime ?? null, rows, scores };
+    rerank = { provenance, runtime: section.runtime ?? null, batchSize: section.batchSize, rows, scores, outcomes };
   }
   return { embedding, space, documents, queries, rerank, environment: readEnvironment(run.environment) };
 }
@@ -205,6 +217,8 @@ function provenanceOf(section, profile, capability) {
 }
 
 const percent = (value) => (value == null ? '—' : value.toFixed(3));
+// Koşu dosyasından gelen metin Markdown'a veri olarak girer: satır sonu ve denetim karakteri boşluk olur, biçim işaretleri kaçışlanır.
+const plain = (value) => String(value).replace(/[\p{Cc}\u2028\u2029]/gu, ' ').replace(/[\\`*_[\]<>|#]/g, '\\$&');
 const signed = (value) => (value == null ? '—' : `${value >= 0 ? '+' : ''}${value.toFixed(3)}`);
 
 function markdown(summary, qualification, benchmark) {
@@ -219,10 +233,10 @@ function markdown(summary, qualification, benchmark) {
     '# Rota AI anlamsal nitelendirme raporu',
     '',
     `- Kıyas kümesi: \`${summary.benchmark.slice(0, 16)}\` · katalog \`${summary.catalogue.slice(0, 16)}\` · ${summary.cases.total} vaka (${summary.cases.answer} yanıt, ${summary.cases.clarify} açıklama, ${summary.cases.abstain} kapsam dışı)`,
-    `- Gömme: ${model.model} (${model.provider}, ön işleme \`${model.preprocessing}\`, sorgu öneki ${JSON.stringify(model.queryPrefix)}, belge öneki ${JSON.stringify(model.documentPrefix)})${model.runtime ? ` · ${model.runtime}` : ''}`,
-    `- Yeniden sıralama: ${reranker ? `${reranker.model} (${reranker.provider})${reranker.runtime ? ` · ${reranker.runtime}` : ''}` : 'yok'}`,
+    `- Gömme: ${plain(model.model)} (${plain(model.provider)}, ön işleme ${plain(model.preprocessing)}, sorgu öneki ${plain(JSON.stringify(model.queryPrefix))}, belge öneki ${plain(JSON.stringify(model.documentPrefix))})${model.runtime ? ` · ${plain(model.runtime)}` : ''}`,
+    `- Yeniden sıralama: ${reranker ? `${plain(reranker.model)} (${plain(reranker.provider)})${reranker.runtime ? ` · ${plain(reranker.runtime)}` : ''}` : 'yok'}`,
     `- Aday sınırı: ilk ${summary.limit} aday · kesimler ${summary.cutoffs.join(', ')} · NDCG@${summary.ndcgCutoff}`,
-    `- Ortam: ${qualification.environment ? JSON.stringify(qualification.environment) : '—'}`,
+    `- Ortam: ${qualification.environment ? plain(JSON.stringify(qualification.environment)) : '—'} · toplu iş boyutu ${workload.index.batchSize}${workload.rerank ? ` / ${workload.rerank.batchSize}` : ''}`,
     `- Model çıktısı: gömme ${JSON.stringify(summary.outcomes.embedding)}${summary.outcomes.rerank ? ` · yeniden sıralama ${JSON.stringify(summary.outcomes.rerank)}` : ''}`,
     '',
     '| Ölçü (yanıt vakaları) | Gömme | Yeniden sıralama | Fark |',
@@ -272,9 +286,9 @@ function qualificationOf(trusted, summary, { catalogue, benchmark }) {
     ndcgCutoff: summary.ndcgCutoff,
     // Koşucu yeniden sıralayıcıyla her sorguda bütün kataloğu puanlar; kalite ölçüleri ilk `limit` aday üzerindedir.
     latencyWorkload: {
-      index: { documentsPerCall: catalogue.items.length, calls: 1 },
+      index: { documentsPerCall: catalogue.items.length, calls: 1, batchSize: embedding.batchSize },
       embedding: { queriesPerCall: 1, calls: benchmark.cases.length },
-      rerank: rerank ? { documentsPerCall: catalogue.items.length, calls: benchmark.cases.length } : null
+      rerank: rerank ? { documentsPerCall: catalogue.items.length, calls: benchmark.cases.length, batchSize: rerank.batchSize } : null
     },
     environment: trusted.environment
   };
@@ -297,8 +311,18 @@ async function report(context, flags) {
     fail(`--limit ${minimum} ile ${SEMANTIC_LIMITS.maxCandidates} arasında bir tam sayı olmalıdır.`);
   }
   const collected = await collectSemanticRun({ ...context, ...recordedModels(trusted, context), limit });
+  // Katalog dizini kurulamayan koşu nitelendirme değildir: sıfır ölçülü başarılı rapor üretilmez.
+  if (collected.index.outcome !== 'ok') {
+    fail(`Koşu dosyasındaki katalog gömmesi geçersiz (${collected.index.reason ?? collected.index.outcome}); dizin kurulamadı, nitelendirme yapılamaz.`);
+  }
   const summary = summarizeSemanticRun(collected, context.benchmark);
-  // Kayıtlı çıktı anında okunur; gecikme koşucunun gerçek model ölçümüdür ve nüfusu kıyas kümesinin vakalarıdır.
+  // Sonuç türü ve gecikme nüfusu koşucunun GERÇEKTEN yaptığı çağrılardır (her vaka için bir sorgu gömme ve bir
+  // yeniden sıralama çağrısı); yeniden sıralama sonucu sorgu gömmesinin yeniden oynatımına bağlı değildir.
+  if (trusted.rerank) {
+    const counts = { ok: 0, invalid: 0, timeout: 0, failed: 0 };
+    for (const outcome of trusted.rerank.outcomes.values()) counts[outcome] += 1;
+    summary.outcomes.rerank = counts;
+  }
   summary.latency = {
     index: trusted.embedding.documentLatencyMs,
     embedding: semanticLatencySummary([...trusted.queries.values()].map((row) => row.latencyMs)),

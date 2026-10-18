@@ -143,6 +143,18 @@ test('katalog kapalı türlerle, tekil kimliklerle ve sıraya bağlı parmak izi
     [[{ ...valid, text: 'ş'.repeat(SEMANTIC_LIMITS.maxItemTextChars + 1) }], ['items[0].text:too-long']]
   ];
   for (const [input, issues] of cases) assert.deepEqual(createSemanticCatalogue(input), { ok: false, issues });
+  // Uzunluk bir kez okunur ve yakalanan değer doğrulanır: negatif, kesirli, güvensiz ya da değişen uzunluk boş katalog damgalayamaz.
+  const lengthOf = (lengths) => {
+    let reads = 0;
+    const proxy = new Proxy([valid], { get: (target, key, receiver) => (key === 'length' ? lengths[reads++] ?? 0 : Reflect.get(target, key, receiver)) });
+    return { proxy, reads: () => reads };
+  };
+  for (const length of [-1, 0.5, NaN, Number.MAX_SAFE_INTEGER + 1, '1']) {
+    assert.deepEqual(createSemanticCatalogue(lengthOf([length]).proxy), { ok: false, issues: ['$:count'] }, String(length));
+  }
+  const changing = lengthOf([1, 0, 0]);
+  assert.deepEqual(createSemanticCatalogue(changing.proxy).catalogue.items.map((item) => item.id), ['alpha']);
+  assert.equal(changing.reads(), 1);
   // Tanım alanları bir kez okunur: doğrulandıktan sonra değişen metin kataloğa giremez.
   let reads = 0;
   const shifting = { id: 'alpha', kind: 'tool', version: 1, get text() { reads += 1; return reads === 1 ? 'Görevleri arar' : ''; } };

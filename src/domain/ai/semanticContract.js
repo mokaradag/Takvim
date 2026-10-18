@@ -119,8 +119,9 @@ function catalogueEntry(definition, path, ids) {
  * katalog parmak izi öğelerin SIRASINA da bağlıdır (eşit skorda sıra belirler).
  */
 export function createSemanticCatalogue(definitions) {
+  // Uzunluk bir kez okunur ve yakalanan değer doğrulanır: negatif, kesirli ya da değişen uzunluk boş katalog damgalayamaz.
   const count = Array.isArray(definitions) ? definitions.length : 0;
-  if (count === 0 || count > SEMANTIC_LIMITS.maxCatalogueItems) return { ok: false, issues: ['$:count'] };
+  if (!Number.isSafeInteger(count) || count < 1 || count > SEMANTIC_LIMITS.maxCatalogueItems) return { ok: false, issues: ['$:count'] };
   const ids = new Set();
   // Seyrek dizinin boşluğu da denetlenir: her konum tam bir kez okunur.
   const entries = Array.from({ length: count }, (_, position) => catalogueEntry(definitions[position], `items[${position}]`, ids));
@@ -238,13 +239,18 @@ function readEmbeddingBatch(raw, count, dimensions) {
   return { ok: true, vectors, dimensions: size };
 }
 
+/** Dizin kimliği: sözleşme sürümü, katalog, uzay ve boyutun parmak izi. */
+export function semanticIndexIdentity(catalogueFingerprint, spaceKey, dimensions) {
+  return semanticFingerprint([SEMANTIC_CONTRACT_VERSION, catalogueFingerprint, spaceKey, dimensions]);
+}
+
 /** Kataloğun gömme dizini; kimliği katalog, uzay ve boyutun parmak izidir. */
 export function createSemanticIndex(catalogue, space, embeddings) {
   if (!CATALOGUES.has(catalogue) || !SPACES.has(space)) throw new TypeError('SEMANTIC_INDEX_INPUT');
   const batch = validateEmbeddingBatch(embeddings, catalogue.items.length);
   if (!batch.ok) return batch;
   const index = Object.freeze({
-    identity: semanticFingerprint([SEMANTIC_CONTRACT_VERSION, catalogue.fingerprint, space.key, batch.dimensions]),
+    identity: semanticIndexIdentity(catalogue.fingerprint, space.key, batch.dimensions),
     catalogue,
     space,
     dimensions: batch.dimensions

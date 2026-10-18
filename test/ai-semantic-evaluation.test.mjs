@@ -178,6 +178,7 @@ test('kıyas kümesi yapısı kapalıdır: seyrek dizi, açık null ve bozuk gru
   const issues = (document) => validateSemanticBenchmark(document, toyCatalogue).issues;
   const withCase = (position, change) => toyDocument(TOY_CASES.map((testCase, i) => (i === position ? { ...testCase, ...change } : testCase)));
   const hole = (size) => new Array(size);
+  const shifting = (values, lengths) => new Proxy(values, { get: (target, key, receiver) => (key === 'length' ? lengths.shift() ?? 0 : Reflect.get(target, key, receiver)) });
   const table = [
     [toyDocument([TOY_CASES[0], , TOY_CASES[2], TOY_CASES[3]]), ['cases[1]:shape']], // eslint-disable-line no-sparse-arrays
     [withCase(0, { needs: hole(1) }), ['cases[0].needs:shape']],
@@ -191,9 +192,17 @@ test('kıyas kümesi yapısı kapalıdır: seyrek dizi, açık null ve bozuk gru
     [withCase(0, { tags: hole(1) }), ['cases[0].tags:shape']],
     [withCase(0, { tags: null }), ['cases[0].tags:shape']],
     [toyDocument(TOY_CASES, { yorum: 'ek ayar' }), ['$:unknown-field']],
-    [toyDocument(TOY_CASES.map((testCase, i) => (i === 0 ? { ...testCase, get text() { throw new Error('okunamaz'); } } : testCase))), ['$:unreadable']]
+    [toyDocument(TOY_CASES.map((testCase, i) => (i === 0 ? { ...testCase, get text() { throw new Error('okunamaz'); } } : testCase))), ['$:unreadable']],
+    // Güvenilmez dizinin uzunluğu bir kez okunur: sınırı geçen ilk okumadan sonra küçülen uzunluk vakaları düşüremez.
+    [toyDocument(shifting(Array.from({ length: 151 }, (_, i) => ({ ...TOY_CASES[3], id: `toy-${i + 100}`, text: `Soru ${i}` })), [151, 1, 1, 1])), ['cases:count']],
+    [toyDocument(shifting([...TOY_CASES], [-1])), ['cases:count']],
+    [toyDocument(shifting([...TOY_CASES], [2.5])), ['cases:count']],
+    [withCase(0, { needs: shifting([['b']], [1, 0, 0]) }), []],
+    [withCase(0, { needs: [shifting(['b'], [1, 0, 0])] }), []],
+    [withCase(0, { tags: shifting(['ornek'], [Number.MAX_SAFE_INTEGER + 1]) }), ['cases[0].tags:shape']],
+    [withCase(0, { avoid: shifting(['d'], [-1]) }), ['cases[0].avoid:shape']]
   ];
-  for (const [document, expected] of table) assert.deepEqual(issues(document), expected, JSON.stringify(expected));
+  for (const [document, expected] of table) assert.deepEqual(validateSemanticBenchmark(document, toyCatalogue).issues ?? [], expected, JSON.stringify(expected));
   // Taklit katalog altın etiketleri gerçek katalog gibi damgalayamaz; koşucu da taklidi reddeder.
   const ghost = { fingerprint: toyCatalogue.fingerprint, items: [...toyCatalogue.items, { id: 'ghost' }] };
   assert.throws(() => validateSemanticBenchmark(toyDocument(), ghost), /SEMANTIC_CATALOGUE_REQUIRED/);
@@ -202,19 +211,24 @@ test('kıyas kümesi yapısı kapalıdır: seyrek dizi, açık null ve bozuk gru
   return assert.rejects(collectSemanticRun({ benchmark: toyBenchmark, catalogue: { ...toyCatalogue }, embedding: { space, embed } }), /SEMANTIC_CATALOGUE_MISMATCH/);
 });
 
-test('koşu kaydı güvenilmezdir: sonuç ile yük çelişen, yabancı ya da yinelenen satırlı, uydurma yeniden sıralamalı koşu reddedilir', async () => {
-  const run = await toyRun({
-    embedding: { space, embed: createEmbeddingDouble({ vectorFor: toyVector }).embed },
-    reranking: { provenance: rerankProvenance, rerank: createRerankDouble({ scoreFor: toyScore }).rerank }
+test('koşu kaydı güvenilmezdir: koşucunun üretemeyeceği durum, bozuk köken ya da eşitlik sırası reddedilir', async () => {
+  const reranking = () => ({ provenance: rerankProvenance, rerank: createRerankDouble({ scoreFor: toyScore }).rerank });
+  const run = await toyRun({ embedding: { space, embed: createEmbeddingDouble({ vectorFor: toyVector }).embed }, reranking: reranking() });
+  const unindexed = await toyRun({
+    embedding: { space, embed: createEmbeddingDouble({ vectorFor: toyVector, behaviors: [{ type: 'raw', value: [] }] }).embed },
+    reranking: reranking()
   });
   // JSON'dan gelen düz kopya, koşucunun dondurulmuş kaydıyla aynı özeti verir.
   assert.deepEqual(summarizeSemanticRun(JSON.parse(JSON.stringify(run)), toyBenchmark), summarizeSemanticRun(run, toyBenchmark));
-  const variant = (change) => {
-    const copy = structuredClone(run);
+  const variant = (change, base = run) => {
+    const copy = structuredClone(base);
     change(copy, copy.cases[0]);
     return copy;
   };
   const failed = { outcome: 'failed', reason: 'MODEL_CALL_FAILED', latencyMs: 1 };
+  const uncalled = (reason) => ({ embedding: { outcome: 'failed', reason }, firstStage: null, rerank: null, reranked: null });
+  const halt = (copy, position, halted = true) => Object.assign(copy.cases[position], { rerank: { outcome: 'timeout', latencyMs: 25, halted }, reranked: null });
+  const haltedFrom = (copy, position) => copy.cases.slice(position).forEach((entry) => Object.assign(entry, uncalled('RUN_HALTED')));
   const stale = [
     (copy) => { copy.version = 2; },
     (copy) => { copy.format = 'baska'; },
@@ -222,10 +236,18 @@ test('koşu kaydı güvenilmezdir: sonuç ile yük çelişen, yabancı ya da yin
   ];
   for (const change of stale) assert.throws(() => summarizeSemanticRun(variant(change), toyBenchmark), /SEMANTIC_RUN_STALE/);
   const invalid = {
+    // Yapı ve satır kümesi
     'fazla vaka satırı': (copy) => { copy.cases.push(structuredClone(copy.cases[0])); },
     'yinelenen vaka': (copy) => { copy.cases[1] = structuredClone(copy.cases[0]); },
     'yabancı vaka': (copy, first) => { first.case = 'toy-999'; },
     'seyrek vaka listesi': (copy) => { delete copy.cases[1]; },
+    'okunamayan satır': (copy) => { Object.defineProperty(copy.cases, 2, { get() { throw new Error('okunamaz'); } }); },
+    'bilinmeyen üst alan': (copy) => { copy.yorum = 'x'; },
+    'bilinmeyen vaka alanı': (copy, first) => { first.yorum = 'x'; },
+    'eksik vaka alanı': (copy, first) => { delete first.reranked; },
+    'bilinmeyen aday alanı': (copy, first) => { first.firstStage[0].rank = 1; },
+    'geçersiz sınır': (copy) => { copy.limit = 0; },
+    // Sonuç ile yük
     'başarısız gömmede aday': (copy, first) => { first.embedding = failed; },
     'başarısız gömmede yeniden sıralama': (copy, first) => { first.embedding = failed; first.firstStage = null; },
     'başarısız yeniden sıralamada sonuç': (copy, first) => { first.rerank = failed; },
@@ -236,60 +258,100 @@ test('koşu kaydı güvenilmezdir: sonuç ile yük çelişen, yabancı ya da yin
     'sırasız ilk aşama': (copy, first) => { first.firstStage.reverse(); },
     'kısa ilk aşama': (copy, first) => { first.firstStage.pop(); },
     'aralık dışı benzerlik': (copy, first) => { first.firstStage[0].similarity = 2; },
+    // Belirlenimci eşitlik sırası: ilk aşamada katalog, yeniden sıralamada ilk aşama sırası.
+    'eşit benzerlikte katalog sırası bozulur': (copy) => { const list = copy.cases[2].firstStage; [list[2], list[3]] = [list[3], list[2]]; },
+    'eşit ilgililikte ilk aşama sırası bozulur': (copy) => { const list = copy.cases[3].reranked; [list[0], list[1]] = [list[1], list[0]]; },
+    // Çağrı kaydı
     'negatif gecikme': (copy, first) => { first.embedding.latencyMs = -5; },
     'negatif dizin gecikmesi': (copy) => { copy.index.latencyMs = -1; },
-    'gerekçesiz başarısızlık': (copy, first) => { first.embedding = { outcome: 'failed', latencyMs: 1 }; first.firstStage = null; first.rerank = null; first.reranked = null; },
+    'gerekçesiz başarısızlık': (copy, first) => { Object.assign(first, { embedding: { outcome: 'failed', latencyMs: 1 }, firstStage: null, rerank: null, reranked: null }); },
     'gerekçeli başarı': (copy, first) => { first.embedding.reason = 'X'; },
-    'güvensiz gerekçe': (copy, first) => { first.embedding = { ...failed, reason: 'sk-gizli ileti' }; first.firstStage = null; first.rerank = null; first.reranked = null; },
+    'güvensiz gerekçe': (copy, first) => { Object.assign(first, { embedding: { ...failed, reason: 'sk-gizli ileti' }, firstStage: null, rerank: null, reranked: null }); },
     'bilinmeyen sonuç': (copy, first) => { first.embedding.outcome = 'belki'; },
-    'geçersiz sınır': (copy) => { copy.limit = 0; },
-    'okunamayan satır': (copy) => { Object.defineProperty(copy.cases, 2, { get() { throw new Error('okunamaz'); } }); },
-    'başarısız dizinde sıralama': (copy) => { copy.index = { outcome: 'invalid', reason: 'COUNT_MISMATCH', latencyMs: 1 }; },
-    'dizin varken dizin yok ıskası': (copy, first) => { Object.assign(first, { embedding: { outcome: 'failed', reason: 'INDEX_UNAVAILABLE' }, firstStage: null, rerank: null, reranked: null }); },
     'gecikmesiz başarılı gömme': (copy, first) => { delete first.embedding.latencyMs; },
     'gecikmesiz başarılı yeniden sıralama': (copy, first) => { delete first.rerank.latencyMs; },
     'gecikmesiz dizin': (copy) => { delete copy.index.latencyMs; },
-    'gecikmeli çağrılmamış vaka': (copy, first) => { Object.assign(first, { embedding: { outcome: 'failed', reason: 'RUN_HALTED', latencyMs: 3 }, firstStage: null, rerank: null, reranked: null }); },
-    'çağrılmamış yeniden sıralama': (copy, first) => { Object.assign(first, { rerank: { outcome: 'failed', reason: 'RUN_HALTED' }, reranked: null }); },
-    'süre aşımı olmadan duruş': (copy) => { Object.assign(copy.cases[3], { embedding: { outcome: 'failed', reason: 'RUN_HALTED' }, firstStage: null, rerank: null, reranked: null }); },
-    'duruştan sonra puanlanan vaka': (copy) => {
-      Object.assign(copy.cases[1], { rerank: { outcome: 'timeout', latencyMs: 25 }, reranked: null });
-      Object.assign(copy.cases[2], { embedding: { outcome: 'failed', reason: 'RUN_HALTED' }, firstStage: null, rerank: null, reranked: null });
-    }
+    'duruş kararı olmayan süre aşımı': (copy, first) => { first.rerank = { outcome: 'timeout', latencyMs: 25 }; first.reranked = null; },
+    'mantıksal olmayan duruş kararı': (copy, first) => { first.rerank = { outcome: 'timeout', latencyMs: 25, halted: 'true' }; first.reranked = null; },
+    'gerekçeli süre aşımı': (copy, first) => { first.rerank = { outcome: 'timeout', reason: 'X', latencyMs: 25, halted: false }; first.reranked = null; },
+    // Köken ve dizin kimliği
+    'kökensiz koşu': (copy) => { delete copy.embedding; },
+    'gömme modeli değişti': (copy) => { copy.embedding.model = 'baska-model'; },
+    'ön işleme değişti': (copy) => { copy.embedding.preprocessing = 'e5-query-passage'; },
+    'gömme profili değil': (copy) => { copy.embedding.profile = 'rerank'; },
+    'dizin kimliği değişti': (copy) => { copy.index.identity = '0'.repeat(64); },
+    'dizin boyutu değişti': (copy) => { copy.index.dimensions = 8; },
+    'dizin kimliksiz': (copy) => { delete copy.index.identity; },
+    'bozuk yeniden sıralayıcı kökeni': (copy) => { copy.reranker.model = 'boşluklu model'; },
+    'yeniden sıralayıcı fazla alan': (copy) => { copy.reranker.capabilities = ['rerank']; },
+    // Dizin durumu
+    'başarısız dizinde sıralama': (copy) => { copy.index = { outcome: 'invalid', reason: 'COUNT_MISMATCH', latencyMs: 1 }; },
+    'başarısız dizinde kimlik': (copy) => { copy.index = { outcome: 'failed', reason: 'X', latencyMs: 1, identity: copy.index.identity }; },
+    'dizin varken dizin yok ıskası': (copy, first) => { Object.assign(first, uncalled('INDEX_UNAVAILABLE')); },
+    // Ayrılmış (çağrılmadı) kodlar yalnızca koşucunun ürettiği biçimde bulunur.
+    'gecikmeli çağrılmamış vaka': (copy, first) => { Object.assign(first, uncalled('RUN_HALTED'), { embedding: { outcome: 'failed', reason: 'RUN_HALTED', latencyMs: 3 } }); },
+    'geçersiz sonuçlu duruş ıskası': (copy) => { halt(copy, 1); haltedFrom(copy, 2); copy.cases[2].embedding = { outcome: 'invalid', reason: 'RUN_HALTED', latencyMs: 1 }; },
+    'yeniden sıralamada duruş kodu': (copy, first) => { Object.assign(first, { rerank: { outcome: 'failed', reason: 'RUN_HALTED', latencyMs: 1 }, reranked: null }); },
+    'yeniden sıralamada gecikmesiz duruş kodu': (copy, first) => { Object.assign(first, { rerank: { outcome: 'failed', reason: 'RUN_HALTED' }, reranked: null }); },
+    // Duruş durum makinesi
+    'süre aşımı olmadan duruş': (copy) => { Object.assign(copy.cases[3], uncalled('RUN_HALTED')); },
+    'sonuçlanan süre aşımından sonra duruş': (copy) => { halt(copy, 1, false); haltedFrom(copy, 2); },
+    'duruştan sonra puanlanan vaka': (copy) => { halt(copy, 1); Object.assign(copy.cases[2], uncalled('RUN_HALTED')); },
+    'duruştan sonra ikinci süre aşımı': (copy) => { halt(copy, 0); haltedFrom(copy, 1); Object.assign(copy.cases[2], { embedding: { outcome: 'timeout', latencyMs: 25, halted: true }, firstStage: null }); }
   };
   for (const [label, change] of Object.entries(invalid)) {
     assert.throws(() => summarizeSemanticRun(variant(change), toyBenchmark), /SEMANTIC_RUN_INVALID/, label);
   }
+  // Dizin yokken model çağrılmaz: vaka yalnızca yüksüz, gecikmesiz `INDEX_UNAVAILABLE` ıskasıdır.
+  const unindexedInvalid = {
+    'dizin yokken çağrılmış vaka': (copy, first) => { first.embedding = failed; },
+    'dizin yokken başarılı vaka': (copy) => { copy.cases[0] = structuredClone(run.cases[0]); },
+    'dizin yokken geçersiz sonuçlu ıska': (copy, first) => { first.embedding = { outcome: 'invalid', reason: 'INDEX_UNAVAILABLE', latencyMs: 600000 }; },
+    'dizin yokken gecikmeli ıska': (copy, first) => { first.embedding.latencyMs = 1; },
+    'dizin yokken duruş ıskası': (copy, first) => { first.embedding.reason = 'RUN_HALTED'; },
+    'dizin yokken yüklü ıska': (copy, first) => { first.firstStage = structuredClone(run.cases[0].firstStage); }
+  };
+  for (const [label, change] of Object.entries(unindexedInvalid)) {
+    assert.throws(() => summarizeSemanticRun(variant(change, unindexed), toyBenchmark), /SEMANTIC_RUN_INVALID/, label);
+  }
+  // Geçerli durumlar: koşucunun üretebildiği ya da kısmi (kaydı olmayan vaka ıskadır) koşular.
+  const legal = [
+    ['duruş dilimi', (copy) => { halt(copy, 1); haltedFrom(copy, 2); }, { ok: 2, invalid: 0, timeout: 0, failed: 2 }, 0],
+    ['kısmi duruş', (copy) => { halt(copy, 1); haltedFrom(copy, 2); copy.cases.pop(); }, { ok: 2, invalid: 0, timeout: 0, failed: 1 }, 1],
+    ['duruştan sonra kayıt yok', (copy) => { halt(copy, 1); copy.cases.splice(2); }, { ok: 2, invalid: 0, timeout: 0, failed: 0 }, 2],
+    ['gömmede süre aşımıyla duruş', (copy, first) => { Object.assign(first, { embedding: { outcome: 'timeout', latencyMs: 25, halted: true }, firstStage: null, rerank: null, reranked: null }); haltedFrom(copy, 1); }, { ok: 0, invalid: 0, timeout: 1, failed: 3 }, 0],
+    ['sonuçlanan süre aşımından sonra sürer', (copy) => { halt(copy, 1, false); }, { ok: 4, invalid: 0, timeout: 0, failed: 0 }, 0],
+    ['eksik vaka', (copy) => { copy.cases.pop(); }, { ok: 3, invalid: 0, timeout: 0, failed: 0 }, 1]
+  ];
+  for (const [label, change, embedding, missing] of legal) {
+    const summary = summarizeSemanticRun(variant(change), toyBenchmark);
+    assert.deepEqual([summary.outcomes.embedding, summary.cases.missing], [embedding, missing], label);
+  }
+  const partialUnindexed = summarizeSemanticRun(variant((copy) => { copy.cases.pop(); }, unindexed), toyBenchmark);
+  assert.deepEqual([partialUnindexed.outcomes.embedding, partialUnindexed.latency.embedding], [{ ok: 0, invalid: 0, timeout: 0, failed: 3 }, null]);
   // Sınırlı aday kümesinde yeniden sıralama, ilk aşamanın görmediği katalog öğesini ekleyemez.
-  const narrow = await toyRun({
-    embedding: { space, embed: createEmbeddingDouble({ vectorFor: toyVector }).embed },
-    reranking: { provenance: rerankProvenance, rerank: createRerankDouble({ scoreFor: toyScore }).rerank },
-    limit: 3
-  });
+  const narrow = await toyRun({ embedding: { space, embed: createEmbeddingDouble({ vectorFor: toyVector }).embed }, reranking: reranking(), limit: 3 });
   const outsider = structuredClone(narrow);
   const first = outsider.cases[0];
   const unseen = TOY.find((id) => !first.firstStage.some((candidate) => candidate.id === id));
   first.reranked[first.reranked.length - 1] = { id: unseen, relevance: -10 };
   assert.throws(() => summarizeSemanticRun(outsider, toyBenchmark, { cutoffs: [1, 3], ndcgCutoff: 3 }), /SEMANTIC_RUN_INVALID/);
   assert.equal(summarizeSemanticRun(narrow, toyBenchmark, { cutoffs: [1, 3], ndcgCutoff: 3 }).limit, 3);
-  // Yeniden sıralama süre aşımından sonra kesintisiz duruş dilimi geçerlidir.
-  const halted = summarizeSemanticRun(variant((copy) => {
-    Object.assign(copy.cases[1], { rerank: { outcome: 'timeout', latencyMs: 25 }, reranked: null });
-    for (const entry of copy.cases.slice(2)) Object.assign(entry, { embedding: { outcome: 'failed', reason: 'RUN_HALTED' }, firstStage: null, rerank: null, reranked: null });
-  }), toyBenchmark);
-  assert.deepEqual(halted.outcomes.embedding, { ok: 2, invalid: 0, timeout: 0, failed: 2 });
-  // Kaydı olmayan vaka reddedilmez; ıska sayılır.
-  const partial = summarizeSemanticRun(variant((copy) => { copy.cases.pop(); }), toyBenchmark);
-  assert.equal(partial.cases.missing, 1);
   // Kesimler koşunun toplandığı derinliği aşamaz; seyrek kesim dizisi reddedilir.
   const shallow = await toyRun({ embedding: { space, embed: createEmbeddingDouble({ vectorFor: toyVector }).embed }, limit: 1 });
   assert.throws(() => summarizeSemanticRun(shallow, toyBenchmark), /SEMANTIC_CUTOFFS/);
   assert.throws(() => summarizeSemanticRun(shallow, toyBenchmark, { cutoffs: [1], ndcgCutoff: 2 }), /SEMANTIC_CUTOFFS/);
   assert.equal(summarizeSemanticRun(shallow, toyBenchmark, { cutoffs: [1], ndcgCutoff: 1 }).limit, 1);
   assert.throws(() => summarizeSemanticRun(run, toyBenchmark, { cutoffs: [1, , 5] }), /SEMANTIC_CUTOFFS/); // eslint-disable-line no-sparse-arrays
-  // Özet kendi yapılandırmasını taşır.
+  // Özet kendi yapılandırmasını ve doğrulanmış kökenini taşır.
   const summary = summarizeSemanticRun(run, toyBenchmark);
   assert.deepEqual([summary.catalogue, summary.limit, summary.cutoffs, summary.ndcgCutoff], [toyCatalogue.fingerprint, 10, [1, 3, 5], 5]);
+  assert.deepEqual(summary.provenance, {
+    embedding: { profile: 'embedding', model: space.model, provider: space.provider, preprocessing: 'none' },
+    index: { identity: run.index.identity, dimensions: 4 },
+    reranker: { profile: 'rerank', model: rerankProvenance.model, provider: rerankProvenance.provider }
+  });
+  assert.equal(summarizeSemanticRun(unindexed, toyBenchmark).provenance.index, null);
 });
 
 /* ── Ölçüler ────────────────────────────────────────────── */
@@ -421,6 +483,14 @@ test('model hatası, geçersiz çıktı ve süre aşımı ölçüden çıkarılm
   const second = await toyRun({ embedding: { space, embed: unsafe.embed } });
   assert.deepEqual(second.cases.map((entry) => entry.embedding.reason), ['MODEL_CALL_FAILED', 'AI_PROVIDER_UNAVAILABLE', 'MODEL_CALL_FAILED', 'MODEL_CALL_FAILED']);
   assert.equal(codeReads, 1);
+  // Model hatası ayrılmış (çağrılmadı) kodu taşıyamaz: koşucunun kaydı okuyucunun kabul ettiği biçimde kalır.
+  const reserved = createEmbeddingDouble({
+    vectorFor: toyVector,
+    behaviors: [{ type: 'vectors' }, ...['RUN_HALTED', 'INDEX_UNAVAILABLE'].map((code) => ({ type: 'throw', error: Object.assign(new Error('x'), { code }) }))]
+  });
+  const third = await toyRun({ embedding: { space, embed: reserved.embed } });
+  assert.deepEqual(third.cases.slice(0, 2).map((entry) => entry.embedding.reason), ['MODEL_CALL_FAILED', 'MODEL_CALL_FAILED']);
+  assert.deepEqual(summarizeSemanticRun(third, toyBenchmark).outcomes.embedding, { ok: 2, invalid: 0, timeout: 0, failed: 2 });
 });
 
 test('yeniden sıralama başarısızsa üretimdeki gibi ilk aşama sırası geçerli kalır ve başarısızlık sayılır', { timeout: 5000 }, async () => {
@@ -440,6 +510,8 @@ test('yeniden sıralama başarısızsa üretimdeki gibi ilk aşama sırası geç
   });
   assert.deepEqual(run.cases.map((entry) => [entry.rerank.outcome, entry.rerank.reason ?? null, entry.reranked === null]),
     [['invalid', 'INDEX_DUPLICATE', true], ['failed', 'MODEL_CALL_FAILED', true], ['ok', null, false], ['timeout', null, true]]);
+  // Sinyale uyan model ek süre içinde sonuçlanır: kayıt koşunun durmadığını taşır.
+  assert.equal(run.cases[3].rerank.halted, false);
   const summary = summarizeSemanticRun(run, toyBenchmark);
   assert.deepEqual(summary.outcomes.rerank, { ok: 1, invalid: 1, timeout: 1, failed: 1 });
   assert.deepEqual(summary.stages.reranked.answer, summary.stages.embedding.answer);
@@ -477,6 +549,9 @@ test('süresi dolup iptali doğrulanamayan çağrıdan sonra model çağrılmaz;
     const run = await toyRun({ embedding: { space, embed }, callTimeoutMs: 25 });
     assert.deepEqual(run.cases.map((entry) => [entry.embedding.outcome, entry.embedding.reason ?? null]),
       [['timeout', null], ['failed', 'RUN_HALTED'], ['failed', 'RUN_HALTED'], ['failed', 'RUN_HALTED']], `late=${late}`);
+    // Duruş kararı süresi dolan çağrının kaydındadır; çağrılmayan vakalar gecikme ve yük taşımaz.
+    assert.equal(run.cases[0].embedding.halted, true);
+    assert.deepEqual(run.cases[1], { case: 'toy-002', embedding: { outcome: 'failed', reason: 'RUN_HALTED' }, rerank: null, firstStage: null, reranked: null });
     assert.equal(queries, 1, 'süresi dolan çağrıdan sonra yeni model çağrısı başlamaz');
     const summary = summarizeSemanticRun(run, toyBenchmark);
     assert.deepEqual(summary.outcomes.embedding, { ok: 0, invalid: 0, timeout: 1, failed: 3 });
@@ -609,7 +684,27 @@ test('planlayıcı kararları: açıklama doğruluğu, çekimserlik, araç kapsa
     , // eslint-disable-line no-sparse-arrays
     { case: 'toy-003', decision: 'clarify', tools: ['a', 'b'] }
   ]);
-  assert.equal(hostile.invalid, 5);
+  // Okunamayan kararın okunabilen vaka kimliği korunur: aynı vakanın sonraki kararı yinelenen sayılır.
+  assert.equal(hostile.invalid, 6);
   assert.equal(hostile.toolCoverage, 0);
-  assert.deepEqual(hostile.recall, { answer: 0, clarify: 1, abstain: 0 });
+  assert.deepEqual(hostile.recall, { answer: 0, clarify: 0, abstain: 0 });
+  // Uzunluk bir kez okunur: doğrulama ile kopya arasında değişen araç listesi çekimserliği geçerli kılamaz.
+  const shrinking = (values, lengths) => new Proxy(values, { get: (target, key, receiver) => (key === 'length' ? lengths.shift() ?? 0 : Reflect.get(target, key, receiver)) });
+  const shifted = evaluateSemanticDecisions(toyBenchmark, [{ case: 'toy-004', decision: 'abstain', tools: shrinking(['a'], [1, 1, 0]) }]);
+  assert.deepEqual([shifted.invalid, shifted.recall.abstain], [1, 0]);
+  // Okunamayan, dizi olmayan ya da uzunluğu bozuk karar listesi tek geçersiz çıktıdır; değerlendirme fırlamaz.
+  const { proxy: revoked, revoke } = Proxy.revocable([], {});
+  revoke();
+  const unreadableLists = [
+    new Proxy([], { get: (target, key) => { if (key === 'length') throw new Error('okunamaz'); return target[key]; } }),
+    shrinking([], [-1]),
+    shrinking([], [1.5]),
+    revoked,
+    'kararlar',
+    null
+  ];
+  for (const decisions of unreadableLists) {
+    const result = evaluateSemanticDecisions(toyBenchmark, decisions);
+    assert.deepEqual([result.invalid, result.missing, result.accuracy], [1, 4, 0]);
+  }
 });
