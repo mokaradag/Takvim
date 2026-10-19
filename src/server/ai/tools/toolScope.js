@@ -47,7 +47,8 @@ export function rowIdentityPath(name, collection, type) {
     const path = followUpTaskPaths(name).find((item) => item.startsWith(prefix) && !item.slice(prefix.length).includes('*'));
     return path ? path.slice(prefix.length) : null;
   }
-  return type === 'project' && name === 'rota_portfolio_summary' && collection === 'projects' ? 'projectId' : null;
+  return type === 'project' && (name === 'rota_portfolio_summary' && collection === 'projects'
+    || name === 'rota_project_search' && collection === 'matches') ? 'projectId' : null;
 }
 
 function valuesAt(value, parts) {
@@ -251,6 +252,14 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
       if (established) return;
       for (const field of fields || []) if (!allowedTextFields || allowedTextFields.includes(field)) textFields.add(field);
     },
+    /** Sunucunun önceden doğruladığı yeni bölüm: kök nüfusu yereldir, yetkili takip kimlikleri ortaktır. */
+    beginPart() {
+      roots.clear();
+      broadRoots.clear();
+      broadProjects = false;
+      projectScope = false;
+      established = false;
+    },
     establish(calls, messages) {
       const successful = messages.map((message, index) => {
         try { return { body: JSON.parse(message.content || '{}'), call: calls[index] }; } catch { return { body: {}, call: calls[index] }; }
@@ -310,7 +319,7 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
         // İlk turda da arama metni kullanıcının bu turdaki iletisinden gelmelidir.
         if (args.text != null && !textTrusted(args.text)) fail();
         for (const [key, population] of Object.entries(IDENTITY_ARGUMENTS)) {
-          if (args[key] != null && !identityTrusted(population, args[key])) fail();
+          if (args[key] != null && !ids[population].has(String(args[key])) && !identityTrusted(population, args[key])) fail();
         }
         return;
       }

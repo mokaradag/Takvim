@@ -323,7 +323,9 @@ export function createSemanticRetrieval({
       outcome = await discover(query, signal, trace);
       if (signal?.aborted) throw new AiError(AI_ERROR_CODES.AI_CANCELLED);
     } catch (error) {
-      if (signal?.aborted) recordSemanticRetrieval({ status: 'cancelled', index: trace.index, durationMs: now() - startedAt });
+      if (signal?.aborted) recordSemanticRetrieval(signal.reason?.code === AI_ERROR_CODES.AI_TIMEOUT
+        ? { status: 'unavailable', failure: { stage: trace.stage, category: 'timeout', reason: 'TIMEOUT' }, index: trace.index, durationMs: now() - startedAt }
+        : { status: 'cancelled', index: trace.index, durationMs: now() - startedAt });
       throw error;
     }
     const status = outcome.status ?? SEMANTIC_RETRIEVAL_STATUS.UNAVAILABLE;

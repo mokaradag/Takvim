@@ -78,8 +78,8 @@ test('a model-proposed general route returns a safe clarification and never rest
   assert.match(result.text, /Genel sohbet/);
   assert.doesNotMatch(result.text, /Rotasyon bir dönme/);
   assert.equal(inputs[0].messages.some((message) => String(message.content).includes('Ignore user')), false);
-  assert.equal(inputs[1].toolChoice, 'auto');
-  assert.ok(inputs[1].tools.length > 0);
+  assert.equal(inputs[1].toolChoice, 'none');
+  assert.deepEqual(inputs[1].tools, []);
 });
 
 test('short grounded follow-ups can choose fresh evidence without inheriting old evidence IDs', async (t) => {

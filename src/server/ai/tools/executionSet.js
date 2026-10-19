@@ -114,6 +114,10 @@ export function unpackTypedPlan(result) {
   try { plan = JSON.parse(call.arguments); } catch { throw invalidArguments(['$.plan:json']); }
   plan = normalizePlan(decodeNestedJson(plan));
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw invalidArguments(['$.plan:shape']);
+  if (Array.isArray(plan.additionalRequests) && !plan.additionalRequests.length) delete plan.additionalRequests;
+  for (const key of ['request', 'clarify', 'abstain']) {
+    if (key !== (plan.intent === PLANNER_INTENTS.ROTA ? 'request' : plan.intent) && plan[key] && typeof plan[key] === 'object' && !Array.isArray(plan[key]) && !Object.keys(plan[key]).length) delete plan[key];
+  }
   const calls = plan.calls ?? [];
   // Biçim sorunu alanıyla bildirilir (zayıf model hangi alanı düzelteceğini görür); modelin yazdığı anahtar yansıtılmaz.
   const shape = [
@@ -179,6 +183,8 @@ export function planShapeHints(problems) {
     '$.intent': `intent (zorunlu): ${Object.values(PLANNER_INTENTS).join('|')}`,
     '$.language': 'language (zorunlu): tr|en',
     '$.request:required': 'intent rota için request zorunludur (ek sorular additionalRequests içinde)',
+    '$.additionalRequests': 'additionalRequests: tek soru için alanı çıkar; bir ya da iki ek istek nesnesi ver; calls ile birlikte verme',
+    '$.plan:repairScope': 'Yalnızca reddedilen yolları düzelt; önceki sorunsuz bölümleri, varlıkları ve koşulları aynen koru',
     '$.clarify': `clarify.reason: ${CLARIFY_REASONS.join('|')}`,
     '$.abstain': `abstain.reason: ${ABSTAIN_REASONS.join('|')}`
   };

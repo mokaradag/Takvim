@@ -37,7 +37,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerServerOnlyShim } from '../test/helpers/serverOnlyShim.mjs';
-import { loadPlannerBenchmark, PLANNER_RUN_FORMAT, scorePlannerRun } from './planner-scoring.mjs';
+import { loadPlannerBenchmark, PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, WEAK_PLANNER_MODEL, validCalendarDate, scorePlannerRun } from './planner-scoring.mjs';
 
 registerServerOnlyShim();
 
@@ -45,7 +45,6 @@ const EVALUATION_SICIL = 900001;
 
 const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
-const { EVIDENCE_TEXT_FIELDS } = await import('../src/domain/ai/claimableEvidence.js');
 const { semanticPlanningAdvice } = await import('../src/server/ai/assistant/semanticPlanning.js');
 const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
 const { toolCatalogForModel, getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
@@ -55,8 +54,7 @@ const {
 } = await import('../src/domain/ai/semanticContract.js');
 
 function fail(message) {
-  process.stderr.write(`${message}\n`);
-  process.exit(1);
+  throw new Error(message);
 }
 
 function parseArguments([command, ...rest]) {
@@ -65,7 +63,7 @@ function parseArguments([command, ...rest]) {
     const flag = rest[i];
     if (flag === '--json') flags.json = true;
     else if (flag === '--no-score') flags.noScore = true;
-    else if (['--model-command', '--model', '--semantic', '--passes', '--concurrency', '--cases', '--out', '--inputs', '--run', '--reference-date'].includes(flag) && rest[i + 1] != null) {
+    else if (['--model-command', '--model', '--semantic', '--passes', '--concurrency', '--cases', '--out', '--inputs', '--run', '--reference-date', '--expected-model', '--model-timeout-ms', '--model-output-bytes'].includes(flag) && rest[i + 1] != null) {
       flags[flag.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = rest[++i];
     } else fail(`Tanınmayan bağımsız değişken: ${flag}`);
   }
@@ -76,8 +74,14 @@ function parseArguments([command, ...rest]) {
   if (!Number.isSafeInteger(flags.passes) || flags.passes < 1 || flags.passes > 10) fail('--passes 1–10 olmalıdır.');
   if (!Number.isSafeInteger(flags.concurrency) || flags.concurrency < 1 || flags.concurrency > 16) fail('--concurrency 1–16 olmalıdır.');
   // Referans gün varsayılan olarak koşunun UTC günüdür: dış model komutunun kendi ortam bilgisi de bu günü taşır.
+  flags.explicitReferenceDate = Boolean(flags.referenceDate);
   flags.referenceDate ||= new Date().toISOString().slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(flags.referenceDate)) fail('--reference-date YYYY-MM-DD olmalıdır.');
+  if (!validCalendarDate(flags.referenceDate)) fail('--reference-date YYYY-MM-DD olmalıdır.');
+  for (const [key, fallback, min, max] of [['modelTimeoutMs', 120000, 20, 600000], ['modelOutputBytes', 4 * 1024 * 1024, 1024, 8 * 1024 * 1024]]) {
+    flags[key] = Number(flags[key] ?? fallback);
+    if (!Number.isSafeInteger(flags[key]) || flags[key] < min || flags[key] > max) fail(`${key}: geçersiz sınır`);
+  }
+  if (flags.expectedModel !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(flags.expectedModel)) fail('--expected-model geçersiz.');
   return { command, flags };
 }
 
@@ -93,6 +97,36 @@ function leakGuard(benchmark) {
   };
 }
 
+/** Belirteç şekilleri tek yerde normalleştirilir; bilinmeyen düşünme sayısı sıfır sayılmaz. */
+function normalizedUsage(usage) {
+  if (!usage) return null;
+  const number = (...values) => values.find((value) => Number.isSafeInteger(value) && value >= 0) ?? null;
+  return {
+    input_tokens: number(usage.input_tokens, usage.promptTokens, usage.inputTokens),
+    cache_read_input_tokens: number(usage.cache_read_input_tokens) ?? 0,
+    cache_creation_input_tokens: number(usage.cache_creation_input_tokens) ?? 0,
+    output_tokens: number(usage.output_tokens, usage.completionTokens, usage.outputTokens),
+    output_tokens_details: { thinking_tokens: number(usage.output_tokens_details?.thinking_tokens, usage.reasoningTokens, usage.thinkingTokens) },
+    thinkingBlocks: number(usage.thinkingBlocks)
+  };
+}
+
+function verifyModel(models, usage, expectedModel, thinkingMode) {
+  const reject = (code) => { throw Object.assign(new Error(code), { code }); };
+  if (!Array.isArray(models) || !models.length || models.some((model) => model !== expectedModel)) reject('PLANNER_MODEL_MISMATCH');
+  if (thinkingMode !== 'off' || usage?.output_tokens_details?.thinking_tokens !== 0 || usage.thinkingBlocks != null && usage.thinkingBlocks !== 0) reject('PLANNER_THINKING_UNVERIFIED');
+}
+
+function uniqueRows(rows, key) {
+  if (!Array.isArray(rows) || !rows.length) fail('SEMANTIC_IDS_INVALID');
+  const result = new Map();
+  for (const row of rows) {
+    if (!row || typeof row[key] !== 'string' || !row[key] || result.has(row[key])) fail('SEMANTIC_IDS_INVALID');
+    result.set(row[key], row);
+  }
+  return result;
+}
+
 /* ── Model bağdaştırıcıları ─────────────────────────────────────────── */
 
 /**
@@ -100,21 +134,41 @@ function leakGuard(benchmark) {
  * işlev araçları) alır; stdout `{ text, toolCalls: [{ name, arguments }], usage, models }` yazar. Komut modele
  * kendi yerel araç çağırma biçimini verir (ör. bir sağlayıcının yerel araç arayüzü); araç yürütmez.
  */
-function externalModel({ command, inputs, guard }) {
+function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes = 4 * 1024 * 1024 }) {
   const workdir = mkdtempSync(path.join(tmpdir(), 'rota-planner-'));
   let sequence = 0;
   const run = (payload) => new Promise((resolve, reject) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^MERGEN_ROTA_/.test(key)));
-    const child = spawn('/bin/sh', ['-c', command], { cwd: workdir, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(command, { shell: true, detached: process.platform !== 'win32', cwd: workdir, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const out = [];
-    const err = [];
-    child.stdout.on('data', (chunk) => out.push(chunk));
-    child.stderr.on('data', (chunk) => err.push(chunk));
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code !== 0) reject(Object.assign(new Error(`MODEL_COMMAND_FAILED ${code}`), { stderr: Buffer.concat(err).toString('utf8').slice(-400) }));
-      else resolve(Buffer.concat(out).toString('utf8'));
-    });
+    let bytes = 0;
+    let settled = false;
+    const terminate = () => {
+      if (process.platform === 'win32') {
+        const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+        killer.on('error', () => child.kill('SIGKILL'));
+      } else {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+      }
+    };
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) { terminate(); reject(Object.assign(new Error(error), { code: error })); }
+      else resolve(value);
+    };
+    const timer = setTimeout(() => finish('MODEL_COMMAND_TIMEOUT'), timeoutMs);
+    const capture = (chunk, stdout) => {
+      bytes += chunk.length;
+      if (bytes > outputBytes) { finish('MODEL_COMMAND_OUTPUT_LIMIT'); return; }
+      if (stdout) out.push(chunk);
+    };
+    child.stdout.on('data', (chunk) => capture(chunk, true));
+    child.stderr.on('data', (chunk) => capture(chunk, false));
+    child.on('error', () => finish('MODEL_COMMAND_ERROR'));
+    child.stdin.on('error', () => finish('MODEL_COMMAND_ERROR'));
+    child.on('close', (code) => finish(code === 0 ? null : 'MODEL_COMMAND_ERROR', Buffer.concat(out).toString('utf8')));
     child.stdin.end(payload);
   });
   return {
@@ -130,14 +184,15 @@ function externalModel({ command, inputs, guard }) {
       }
       const startedAt = Date.now();
       let reply;
-      try { reply = JSON.parse(await run(payload)); } catch (error) { reply = { text: '', toolCalls: [], error: error.message || 'MODEL_COMMAND_FAILED' }; }
-      if (inputs) writeFileSync(path.join(inputs, 'completions.jsonl'), `${JSON.stringify({ call: id, reply })}\n`, { flag: 'a' });
+      try { reply = JSON.parse(await run(payload)); } catch (error) { reply = { text: '', toolCalls: [], error: ['MODEL_COMMAND_TIMEOUT', 'MODEL_COMMAND_OUTPUT_LIMIT'].includes(error.code) ? error.code : 'MODEL_COMMAND_ERROR' }; }
+      if (reply?.error) reply = { text: '', toolCalls: [], error: ['MODEL_COMMAND_TIMEOUT', 'MODEL_COMMAND_OUTPUT_LIMIT'].includes(reply.error) ? reply.error : 'MODEL_COMMAND_ERROR' };
+      if (inputs) writeFileSync(path.join(inputs, 'completions.jsonl'), `${JSON.stringify({ call: id, error: reply?.error ?? null, usage: normalizedUsage(reply?.usage) })}\n`, { flag: 'a' });
       const toolCalls = (Array.isArray(reply?.toolCalls) ? reply.toolCalls : []).filter((call) => call && typeof call.name === 'string')
         .map((call, index) => ({ id: `call_${id}_${index + 1}`, name: call.name, arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments ?? {}), oversize: false }));
-      return { text: typeof reply?.text === 'string' ? reply.text : '', toolCalls, usage: reply?.usage ?? null, models: Array.isArray(reply?.models) ? reply.models : [],
+      return { text: typeof reply?.text === 'string' ? reply.text : '', toolCalls, usage: normalizedUsage(reply?.usage), thinking: reply?.thinking === 'off' ? 'off' : 'unverified', models: Array.isArray(reply?.models) ? reply.models : [],
         error: reply?.error ?? null, durationMs: Date.now() - startedAt };
     },
-    dispose() { rmSync(workdir, { recursive: true, force: true }); }
+    dispose() { rmSync(workdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   };
 }
 
@@ -157,25 +212,40 @@ function candidatesFromRun(file, benchmark) {
   let run;
   try { run = JSON.parse(readFileSync(file, 'utf8')); } catch { fail('Anlamsal koşu dosyası okunamadı.'); }
   const items = catalogue();
+  if (run?.format !== 'mergen-rota-semantic-model-run' || run.version !== 1 || run.benchmark !== benchmark.semanticFingerprint) fail('SEMANTIC_RUN_INVALID');
   if (run?.catalogue !== items.fingerprint) fail('Anlamsal koşu dosyası güncel araç kataloğuna ait değil.');
   const space = createEmbeddingSpace({ profile: 'embedding', model: run.embedding?.model, provider: run.embedding?.provider }, run.embedding?.preprocessing);
   if (!space) fail('Anlamsal koşu dosyasının gömme kökeni geçersiz.');
-  const index = createSemanticIndex(items, space, (run.embedding.documents || []).map((document, position) => ({ index: position, vector: document.vector })));
+  const documents = uniqueRows(run.embedding?.documents, 'id');
+  if (documents.size !== items.items.length || items.items.some((item) => !documents.has(item.id) || documents.get(item.id).text !== item.text)) fail('SEMANTIC_DOCUMENT_IDS_INVALID');
+  const index = createSemanticIndex(items, space, items.items.map((item, position) => ({ index: position, vector: documents.get(item.id).vector })));
   if (!index.ok) fail(`Anlamsal dizin kurulamadı: ${index.reason}`);
-  const queries = new Map((run.embedding.queries || []).map((query) => [query.case, query]));
-  const reranks = new Map((run.rerank?.queries || []).map((query) => [query.case, query]));
+  const queries = uniqueRows(run.embedding?.queries, 'case');
+  const known = new Set(benchmark.cases.filter((testCase) => testCase.canonical !== false).map((testCase) => testCase.id));
+  if (queries.size !== known.size || [...queries.keys()].some((id) => !known.has(id))) fail('SEMANTIC_QUERY_IDS_INVALID');
+  const reranks = run.rerank ? uniqueRows(run.rerank.queries, 'case') : new Map();
+  if (run.rerank && (!run.rerank.model || reranks.size !== known.size || [...reranks.keys()].some((id) => !known.has(id)))) fail('SEMANTIC_RERANK_IDS_INVALID');
   const result = new Map();
   for (const testCase of benchmark.cases) {
     const query = queries.get(testCase.id);
-    if (!query || query.text !== testCase.text) { result.set(testCase.id, { status: 'unavailable', candidates: [], failure: { reason: 'NO_QUERY_VECTOR' } }); continue; }
+    if (!query && testCase.canonical === false) {
+      result.set(testCase.id, { status: 'unavailable', candidates: [], failure: { reason: 'NO_QUERY_VECTOR' } });
+      continue;
+    }
+    if (!query || query.text !== testCase.text) fail('SEMANTIC_QUERY_INVALID');
     const ranked = rankSemanticIndex(index.index, { space, embeddings: [{ index: 0, vector: query.vector }], limit: Math.min(SEMANTIC_RETRIEVAL_DEPTH, items.items.length) });
-    if (!ranked.ok) { result.set(testCase.id, { status: 'unavailable', candidates: [], failure: { reason: ranked.reason } }); continue; }
+    if (!ranked.ok) fail('SEMANTIC_VECTOR_INVALID');
     const scores = reranks.get(testCase.id)?.scores;
     if (Array.isArray(scores)) {
-      const byId = new Map(items.items.map((item, position) => [item.id, scores[position]]));
+      const entries = uniqueRows(scores, 'id');
+      if ([...entries].some(([id, entry]) => !items.items.some((item) => item.id === id) || typeof entry.score !== 'number' || !Number.isFinite(entry.score))
+        || ranked.candidates.some((candidate) => !entries.has(candidate.id))) fail('SEMANTIC_RERANK_SCORES_INVALID');
+      const byId = new Map([...entries].map(([id, entry]) => [id, entry.score]));
       const reranked = applyRerankScores(ranked.candidates, ranked.candidates.map((candidate, position) => ({ index: position, score: byId.get(candidate.id) })));
-      if (reranked.ok) { result.set(testCase.id, { status: 'reranked', candidates: reranked.candidates, failure: null }); continue; }
+      if (!reranked.ok) fail('SEMANTIC_RERANK_SCORES_INVALID');
+      result.set(testCase.id, { status: 'reranked', candidates: reranked.candidates, failure: null }); continue;
     }
+    if (run.rerank) fail('SEMANTIC_RERANK_SCORES_INVALID');
     result.set(testCase.id, { status: 'first_stage', candidates: ranked.candidates, failure: null });
   }
   return { provenance: { model: run.embedding.model, provider: run.embedding.provider, preprocessing: run.embedding.preprocessing,
@@ -190,7 +260,7 @@ class PlanCaptured extends Error {}
  * Tek vaka: üretimdeki planlama döngüsü ilk SQL'den önce durdurulur. Bağlam kimliği sentetiktir; tur
  * kanıt okumadan bittiği için SQL bağlamı hiç kullanılmaz.
  */
-async function planCase({ testCase, model = null, runTurn = null, adviceFor, now, catalog }) {
+async function planCase({ testCase, model = null, runTurn = null, adviceFor, now, catalog, expectedModel = null }) {
   const built = buildGroundedContext({ history: testCase.history || [], userContent: testCase.text, now });
   const planning = await adviceFor(testCase);
   const decisions = [];
@@ -200,19 +270,20 @@ async function planCase({ testCase, model = null, runTurn = null, adviceFor, now
     // "Notlar ve iletiler" açık: planlayıcı serbest metin isteyen soruda da planıyla değerlendirilir (kapalıyken
     // sunucunun sabit uyarısı ayrı sınamada).
     messages: built.messages, catalog, context: createToolTurnContext({ sicil: EVALUATION_SICIL, now }), planning,
-    allowedTextFields: [...EVIDENCE_TEXT_FIELDS],
+    allowedTextFields: [...new Set((testCase.gold?.groups || []).flatMap((group) => group.any.flatMap((alt) => alt.textFields || [])))],
     onText: async () => {}, deferDisclosure: true, escalation: false,
     onPlanned: (decision) => {
       decisions.push(decision);
       if (decision.intent === 'rota') { captured = decision; throw new PlanCaptured(); }
+      if (decision.intent === 'general') throw new PlanCaptured();
     }
   };
   try {
-    const result = await (runTurn || externalTurn(model))(options, rounds);
-    if (result === CAPTURED) return { outcome: 'planned', decisions, rounds, semantic: planning, plan: captured };
+    const result = await (runTurn || externalTurn(model, expectedModel))(options, rounds);
+    if (result === CAPTURED) return { outcome: captured ? 'planned' : 'general_redirect', decisions, rounds, semantic: planning, plan: captured };
     return { outcome: result.outcome, decisions, rounds, semantic: planning };
   } catch (error) {
-    if (error instanceof PlanCaptured) return { outcome: 'planned', decisions, rounds, semantic: planning, plan: captured };
+    if (error instanceof PlanCaptured) return { outcome: captured ? 'planned' : 'general_redirect', decisions, rounds, semantic: planning, plan: captured };
     return { outcome: 'error', error: typeof error?.code === 'string' ? error.code : 'ERROR', decisions, rounds, semantic: planning };
   }
 }
@@ -220,13 +291,15 @@ async function planCase({ testCase, model = null, runTurn = null, adviceFor, now
 const CAPTURED = Symbol('captured');
 
 /** Dış model komutu: üretimdeki oturum sözleşmesinin ikizi; komutun kendi hatası modelin kararı sayılmaz. */
-function externalTurn(model) {
+function externalTurn(model, expectedModel) {
   return (options, rounds) => runGroundedTurn(Object.freeze({
     sicil: EVALUATION_SICIL, profile: 'chat.tools', model: 'planner-under-test', reportedModel: () => null, maxOutputTokens: 4096,
     signal: new AbortController().signal, remainingMs: () => 600000,
     async round({ messages, tools, toolChoice }) {
       const completion = await model.complete({ messages, tools, toolChoice });
-      rounds.push({ durationMs: completion.durationMs, usage: completion.usage, models: completion.models, toolCalls: completion.toolCalls.length, error: completion.error });
+      completion.usage = normalizedUsage(completion.usage);
+      if (expectedModel) verifyModel(completion.models, completion.usage, expectedModel, completion.thinking);
+      rounds.push({ thinkingMode: completion.thinking, durationMs: completion.durationMs, usage: completion.usage, models: completion.models, toolCalls: completion.toolCalls.length, error: completion.error });
       // Komutun kendi hatası (süreç, kimlik doğrulama, beklenmeyen model) modelin kararı değildir: vaka altyapı hatasıyla biter.
       if (completion.error) throw Object.assign(new Error('MODEL_COMMAND_ERROR'), { code: 'MODEL_COMMAND_ERROR' });
       return { text: completion.text, toolCalls: completion.toolCalls, finishReason: completion.toolCalls.length ? 'tool_calls' : 'stop', model: null,
@@ -240,14 +313,20 @@ function externalTurn(model) {
  * yürür. Ağ geçidi oturum içinden fırlayan her hatayı kendi hatasına çevirdiği için ilk SQL'den önceki durma
  * oturum içinde değer olarak döner.
  */
-function liveTurn(gateway) {
+function liveTurn(gateway, expectedModel) {
   return (options, rounds) => gateway.runToolSession({
     profile: 'chat.tools',
     run: async (session) => {
       const recording = Object.freeze({ ...session, async round(input) {
         const startedAt = Date.now();
-        const result = await session.round(input);
-        rounds.push({ durationMs: Date.now() - startedAt, models: [result.model].filter(Boolean), toolCalls: result.toolCalls.length, error: null,
+        let thinking = false;
+        const result = await session.round({ ...input, onEvent: async (event) => {
+          if (event.type === 'thinking') thinking = true;
+          return input.onEvent?.(event);
+        } });
+        if (session.model !== expectedModel || result.modelMismatch) throw Object.assign(new Error('PLANNER_MODEL_MISMATCH'), { code: 'PLANNER_MODEL_MISMATCH' });
+        verifyModel([result.model], normalizedUsage(result.usage), expectedModel, thinking ? 'on' : 'off');
+        rounds.push({ thinkingMode: 'off', durationMs: Date.now() - startedAt, models: [result.model].filter(Boolean), toolCalls: result.toolCalls.length, error: null,
           usage: { input_tokens: result.usage?.promptTokens ?? null, output_tokens: result.usage?.completionTokens ?? null,
             output_tokens_details: { thinking_tokens: result.usage?.reasoningTokens ?? null } } });
         return result;
@@ -290,7 +369,7 @@ async function liveRuntime() {
     resolveCredential: async () => ({ source: 'default', apiKey: config.defaultApiKey })
   });
   const retrieval = createSemanticRetrieval({ getGateway: () => gateway, loadRegistry: async () => registry });
-  return { gateway, retrieval, planner: { profile: AI_PROFILES.CHAT_TOOLS, model: planner.route.model, provider: planner.route.provider } };
+  return { gateway, retrieval, planner: { profile: AI_PROFILES.CHAT_TOOLS, model: planner.route.model, provider: planner.route.provider, thinking: planner.route.capabilities.includes('reasoning') ? 'unverified' : 'off' } };
 }
 
 /** Puanlama için içeriksiz, kararlı karar kaydı (istek nesneleri JSON'a güvenle çevrilir). */
@@ -301,7 +380,7 @@ function recordOf(testCase, pass, outcome) {
   } : null;
   const terminal = outcome.decisions.find((decision) => ['clarify', 'abstain'].includes(decision.intent)) || null;
   return {
-    case: testCase.id, pass, outcome: outcome.outcome, error: outcome.error ?? null, plan,
+    case: testCase.id, pass, language: outcome.plan?.language ?? outcome.decisions.at(-1)?.language ?? null, outcome: outcome.outcome, error: outcome.error ?? null, plan,
     choice: terminal ? { intent: terminal.intent, reason: terminal.reason, ...(terminal.topics ? { topics: [...terminal.topics] } : {}) } : null,
     general: outcome.decisions.some((decision) => decision.intent === 'general'),
     declarations: outcome.decisions.at(-1)?.declarations ?? null,
@@ -309,7 +388,7 @@ function recordOf(testCase, pass, outcome) {
     rounds: outcome.rounds.map((round) => ({ durationMs: round.durationMs, toolCalls: round.toolCalls,
       input: round.usage ? (round.usage.input_tokens ?? 0) + (round.usage.cache_read_input_tokens ?? 0) + (round.usage.cache_creation_input_tokens ?? 0) : null,
       output: round.usage?.output_tokens ?? null, thinking: round.usage?.output_tokens_details?.thinking_tokens ?? null,
-      thinkingBlocks: round.usage?.thinkingBlocks ?? null, models: round.models, error: round.error ?? null }))
+      thinkingBlocks: round.usage?.thinkingBlocks ?? null, thinkingMode: round.thinkingMode ?? null, models: round.models, error: round.error ?? null }))
   };
 }
 
@@ -329,6 +408,7 @@ async function mapLimit(items, limit, work) {
 async function runEvaluation(flags) {
   const loaded = loadPlannerBenchmark({ goldRequired: !flags.noScore, referenceDate: flags.referenceDate });
   const selected = flags.cases ? new Set(flags.cases.split(',').map((item) => item.trim())) : null;
+  if (selected && [...selected].some((id) => !loaded.cases.some((testCase) => testCase.id === id))) fail('UNKNOWN_CASE_ID');
   const cases = loaded.cases.filter((testCase) => !selected || selected.has(testCase.id));
   if (!cases.length) fail('Seçilen vaka yok.');
   const now = loaded.now;
@@ -343,14 +423,17 @@ async function runEvaluation(flags) {
     adviceFor = (testCase) => semanticPlanningAdvice({ query: testCase.text, catalog, retrieve: (input) => runtime.retrieval.retrieve(input) });
     semanticProvenance = { path: 'gateway' };
   } else {
-    const fromRun = candidatesFromRun(flags.semantic, { cases: loaded.cases });
+    const fromRun = candidatesFromRun(flags.semantic, loaded);
     semanticProvenance = fromRun.provenance;
     adviceFor = (testCase) => semanticPlanningAdvice({ query: testCase.text, catalog, retrieve: async () => fromRun.byCase.get(testCase.id) });
   }
   if (!flags.modelCommand && flags.model !== 'live') fail('--model-command ya da --model live gerekir.');
   if (flags.inputs) mkdirSync(flags.inputs, { recursive: true });
-  const model = flags.model === 'live' ? null : externalModel({ command: flags.modelCommand, inputs: flags.inputs || null, guard });
-  const runTurn = flags.model === 'live' ? liveTurn(runtime.gateway) : null;
+  const expectedModel = flags.expectedModel || (flags.model === 'live' ? runtime.planner.model : WEAK_PLANNER_MODEL);
+  if (runtime && flags.model === 'live' && runtime.planner.model !== expectedModel) fail('PLANNER_MODEL_MISMATCH');
+  if (runtime && flags.model === 'live' && runtime.planner.thinking !== 'off') fail('PLANNER_THINKING_UNVERIFIED');
+  const model = flags.model === 'live' ? null : externalModel({ command: flags.modelCommand, inputs: flags.inputs || null, guard, timeoutMs: flags.modelTimeoutMs, outputBytes: flags.modelOutputBytes });
+  const runTurn = flags.model === 'live' ? liveTurn(runtime.gateway, expectedModel) : null;
   const records = [];
   // Altyapı hatası (komut, kota, kimlik doğrulama) geçişi geçersiz kılar: kalan vakalar boşuna çalıştırılmaz.
   let infrastructure = null;
@@ -358,8 +441,8 @@ async function runEvaluation(flags) {
     for (let pass = 1; pass <= flags.passes; pass += 1) {
       const outcomes = await mapLimit(cases, flags.concurrency, async (testCase) => {
         if (infrastructure) return { outcome: 'error', error: 'SKIPPED', decisions: [], rounds: [], semantic: { state: 'unavailable', candidates: [] } };
-        const outcome = await planCase({ testCase, model, runTurn, adviceFor, now, catalog });
-        if (outcome.error === 'MODEL_COMMAND_ERROR') infrastructure ||= outcome.error;
+        const outcome = await planCase({ testCase, model, runTurn, adviceFor, now, catalog, expectedModel });
+        if (outcome.outcome === 'error') infrastructure ||= outcome.error;
         return outcome;
       });
       outcomes.forEach((outcome, index) => records.push(recordOf(cases[index], pass, outcome)));
@@ -371,11 +454,12 @@ async function runEvaluation(flags) {
   }
   if (infrastructure) fail(`Geçiş altyapı hatasıyla durdu (${infrastructure}); koşu geçersizdir ve kaydedilmedi.`);
   // Koşu UTC gün dönümünü geçtiyse dış modelin ortam günü referans günden ayrılmış olabilir: koşu geçersizdir.
-  if (new Date().toISOString().slice(0, 10) !== flags.referenceDate && !process.argv.includes('--reference-date')) fail('Koşu referans günün dışına taştı; yeniden çalıştırın.');
+  if (new Date().toISOString().slice(0, 10) !== flags.referenceDate && !flags.explicitReferenceDate) fail('Koşu referans günün dışına taştı; yeniden çalıştırın.');
   return {
-    format: PLANNER_RUN_FORMAT, version: 1, runId: randomUUID(), benchmark: loaded.fingerprint, semanticBenchmark: loaded.semanticFingerprint,
+    format: PLANNER_RUN_FORMAT, version: PLANNER_RUN_VERSION, runId: randomUUID(), benchmark: loaded.fingerprint, semanticBenchmark: loaded.semanticFingerprint,
     referenceDate: loaded.referenceDate, passes: flags.passes, semantic: { mode: flags.semantic === 'none' || flags.semantic === 'live' ? flags.semantic : 'run', provenance: semanticProvenance },
-    model: flags.model === 'live' ? { live: runtime.planner } : { command: flags.modelCommand.replace(/\s+/g, ' ').slice(0, 600) }, cases: cases.map((testCase) => testCase.id), records
+    qualification: { expectedModel, thinking: 'off' },
+    model: flags.model === 'live' ? { live: runtime.planner } : { commandHash: createHash('sha256').update(flags.modelCommand).digest('hex') }, cases: cases.map((testCase) => testCase.id), records
   };
 }
 
@@ -397,9 +481,10 @@ function printReport(run, flags) {
 }
 
 /** Sınamalar planlama sınırını aynı yoldan çalıştırır (komut satırı yalnızca doğrudan çalıştırmada). */
-export { planCase, recordOf };
+export { candidatesFromRun, externalModel, parseArguments, planCase, recordOf, runEvaluation };
 
 const direct = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+try {
 const { command, flags } = direct ? parseArguments(process.argv.slice(2)) : { command: null, flags: null };
 if (!direct) {
   // İçe aktarıldı: komut çalıştırılmaz.
@@ -407,16 +492,22 @@ if (!direct) {
   const run = await runEvaluation(flags);
   if (flags.out) writeFileSync(flags.out, `${JSON.stringify(run, null, 2)}\n`, 'utf8');
   if (flags.noScore) process.stdout.write(`${JSON.stringify(run.records.map(({ rounds: _rounds, ...record }) => record), null, 1)}\n`);
-  else printReport(run, flags);
+  else process.exitCode = printReport(run, flags).gatePassed ? 0 : 1;
 } else if (command === 'report') {
   if (!flags.run) fail('--run gerekir.');
   let run;
   try { run = JSON.parse(readFileSync(flags.run, 'utf8')); } catch { fail('Koşu dosyası okunamadı.'); }
-  printReport(run, flags);
+  process.exitCode = printReport(run, flags).gatePassed ? 0 : 1;
 } else if (command === 'live') {
   const run = await runEvaluation(flags);
   if (flags.out) writeFileSync(flags.out, `${JSON.stringify(run, null, 2)}\n`, 'utf8');
-  printReport(run, flags);
+  process.exitCode = printReport(run, flags).gatePassed ? 0 : 1;
 } else {
   fail('Komut: run | report | live');
+}
+
+} catch (error) {
+  if (!direct) throw error;
+  process.stderr.write(`${String(error.message).slice(0, 400)}\n`);
+  process.exitCode = 1;
 }

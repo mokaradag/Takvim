@@ -226,7 +226,7 @@ function entityProperty(request, metric) {
 
 const carriesMetric = (tool, metric) => metricPaths(tool, metric).length > 0;
 /** Ölçünün bu araçtaki korumalı serbest metin alanları (ör. açıklama). */
-const textLeaves = (tool, metric) => metricPaths(tool, metric).map((path) => path.split('.').at(-1)).filter((leaf) => EVIDENCE_TEXT_FIELDS.includes(leaf));
+const textLeaves = (tool, metric) => metricPaths(tool, metric).map((path) => path.split('.').findLast((part) => part !== '*')).filter((leaf) => EVIDENCE_TEXT_FIELDS.includes(leaf));
 
 /**
  * Nüfus aracının taşımadığı, bildirilen bir varlığın kendi özelliği: o varlığı seçen taşıyıcı araç

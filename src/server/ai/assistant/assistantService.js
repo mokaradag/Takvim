@@ -898,22 +898,22 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
   return result;
 }
 
-/**
- * Rota verisi araçlarıyla, kanıta dayalı yanıt. Model ve araç turları SQL
- * işlemi dışında çalışır; yanıt ve atıf yaptığı kanıtlar yalnızca yanıt
- * doğrulandıktan (ya da güvenli iletiye düştükten) SONRA, tek kısa işlemde
- * yazılır. Durdurulan ya da süresi dolan tur yazılmaz.
- */
 /** Anlamsal danışmanlığın sorusu: kullanıcının bu turdaki iletisi; numaralı aday seçiminde önceki soru. */
 function planningQuery(turn) {
   if (turn.clarification?.selected && turn.clarification.question) return turn.clarification.question;
   return String(turn.modelMessages.findLast((message) => message.role === 'user')?.content ?? '');
 }
 
+/**
+ * Rota verisi araçlarıyla, kanıta dayalı yanıt. Model ve araç turları SQL
+ * işlemi dışında çalışır; yanıt ve atıf yaptığı kanıtlar yalnızca yanıt
+ * doğrulandıktan (ya da güvenli iletiye düştükten) SONRA, tek kısa işlemde
+ * yazılır. Durdurulan ya da süresi dolan tur yazılmaz.
+ */
 async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress = null, onText, onDelivery = null, onGenerated = null }) {
   const catalog = toolCatalogForModel();
   // Aşama 4C: planlamadan önce Aşama 4B keşfi (kendi kirası ve süre bütçesiyle, araç oturumundan ayrı).
-  // Danışmanlık kaybı planlamayı Aşama 3 davranışına döndürür; iptal ve iç hata yukarı taşınır.
+  // Danışmanlık kaybı planlamayı Aşama 3 davranışına döndürür; iptal ve kimlik/yetki hatası yukarı taşınır.
   onProgress?.();
   const planning = await semanticPlanningAdvice({ query: planningQuery(turn), catalog, signal });
   onProgress?.();
@@ -1003,7 +1003,7 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
     // Gösterilen yanıt turun kendi yanıtıysa özgün sonuç (ör. general_redirect) korunur.
     const replaced = !own || answer.content !== grounded.text || answer.finishReason !== grounded.finishReason;
     const deliveredOutcome = !replaced ? grounded.outcome
-      : answer.finishReason === 'stop' ? 'grounded' : answer.finishReason === 'grounding_failed' ? 'failed' : answer.finishReason;
+      : answer.finishReason === 'unsupported' ? 'abstained' : answer.finishReason === 'stop' ? 'grounded' : answer.finishReason === 'grounding_failed' ? 'failed' : answer.finishReason;
     // Tur izi yalnızca metin gerçekten teslim edildikten sonra son sonucunu alır; teslim hatası `error` olur.
     grounded.completeDisclosure?.(deliveredOutcome);
   } catch (error) {

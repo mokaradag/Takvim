@@ -84,11 +84,11 @@ export function renderPlannerClarification({ reason, topics = [], locale = 'tr' 
   }
   const labels = [...new Set(topics.map((topic) => TOPIC_LABELS[topic]?.[index]).filter(Boolean))].slice(0, PLANNER_LIMITS.maxClarifyTopics);
   if (labels.length >= 2) {
-    return index ? `Your question could refer to several Rota topics: ${joined(labels, locale)}. Could you say which one you mean, with a little more detail?`
-      : `Sorunuz birden çok Rota konusuna uyuyor: ${joined(labels, locale)}. Hangisini kastettiğinizi biraz daha ayrıntılı yazar mısınız?`;
+    return index ? `Your question could refer to several Rota topics: ${joined(labels, locale)}. Please ask the full question again, including the record name or code and which topic you mean.`
+      : `Sorunuz birden çok Rota konusuna uyuyor: ${joined(labels, locale)}. Kaydın adını veya kodunu ve hangi konuyu kastettiğinizi belirterek sorunun tamamını yeniden yazar mısınız?`;
   }
-  return index ? 'Your question could refer to several Rota topics. Could you say which one you mean, with a little more detail?'
-    : 'Sorunuz birden çok Rota konusuna uyabilir. Hangisini kastettiğinizi biraz daha ayrıntılı yazar mısınız?';
+  return index ? 'Your question could refer to several Rota topics. Please ask the full question again, including the record name or code and which topic you mean.'
+    : 'Sorunuz birden çok Rota konusuna uyabilir. Kaydın adını veya kodunu ve hangi konuyu kastettiğinizi belirterek sorunun tamamını yeniden yazar mısınız?';
 }
 
 /** Çekimserlik metni; tanınmayan neden güvenlik metnine düşer. */
@@ -98,5 +98,11 @@ export function renderPlannerAbstention({ reason, locale = 'tr' }) {
 
 /** Bağımlı bölümün yalnızca ilk kayıtlar için okunduğunu bildiren sunucu notu. */
 export function renderDependentLimit({ shown, locale = 'tr' }) {
-  return locale === 'en' ? `_Details are shown for the first ${shown} records._` : `_Ayrıntılar ilk ${shown} kayıt için gösterildi._`;
+  return locale === 'en' ? `_Follow-up is limited to the first ${shown} source records._` : `_Takip bölümü kaynaktaki ilk ${shown} kayıtla sınırlıdır._`;
+}
+
+/** Tamamlanamayan bölüm için içeriksiz, sabit sunucu notu. */
+export function renderPartUnavailable({ locale = 'tr' } = {}) {
+  return locale === 'en' ? 'A requested section could not be completed safely. Please ask that section separately, including the record name or code.'
+    : 'İstenen bir bölüm güvenle tamamlanamadı. Kaydın adını veya kodunu belirterek o bölümü ayrı bir soruyla yeniden sorabilirsiniz.';
 }

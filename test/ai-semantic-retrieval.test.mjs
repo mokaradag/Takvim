@@ -848,6 +848,7 @@ test('kimlik hatası danışmanlık kaybına çevrilmez: rehberde olmayan Sicil 
   const { provider } = createAiStack(t, { sicil: SICIL_UNKNOWN });
   await assert.rejects(retrieveSemanticCandidates({ query: QUERY }), (error) => !(error instanceof AiError) && error.code === 'UNAUTHORIZED');
   assert.equal(provider.calls.length, 0);
+  assert.equal(provider.semanticCalls.length, 0);
 });
 
 /* ── Mimari sınır (durağan) ─────────────────────────────── */

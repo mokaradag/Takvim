@@ -32,6 +32,21 @@
                     13,
                     14
                   ]
+                },
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.targetFinish"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.targetFinish"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -57,7 +72,8 @@
             "dateTo": "{{today+13}}"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-002",
@@ -76,6 +92,27 @@
                     "todo"
                   ],
                   "assignee": null
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.overdueDays"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.overdueDays"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ],
+                  "rota_task_analytics": [
+                    "overdueAging.buckets"
+                  ]
                 }
               },
               {
@@ -91,6 +128,19 @@
                 "metrics": {
                   "any": [
                     "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "tasks.overdue",
+                    "task.title",
+                    "task.overdueDays"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_task_analytics": [
+                    "overdueAging.buckets"
                   ]
                 }
               }
@@ -117,7 +167,8 @@
             ]
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-003",
@@ -141,6 +192,26 @@
                     "todo"
                   ],
                   "assignee": null
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.targetFinish",
+                    "task.progressPercent"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.targetFinish",
+                    "task.progressPercent"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               },
               {
@@ -164,6 +235,19 @@
                 "metrics": {
                   "all": [
                     "task.progressPercent"
+                  ],
+                  "allowed": [
+                    "task.progressPercent",
+                    "task.title",
+                    "task.targetFinish"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
                   ]
                 }
               },
@@ -189,6 +273,26 @@
                     1,
                     30
                   ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.targetFinish",
+                    "task.progressPercent"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.targetFinish",
+                    "task.progressPercent"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               },
               {
@@ -205,6 +309,11 @@
                 "metrics": {
                   "all": [
                     "task.progressPercent"
+                  ],
+                  "allowed": [
+                    "task.progressPercent",
+                    "task.title",
+                    "task.targetFinish"
                   ]
                 },
                 "window": {
@@ -218,6 +327,14 @@
                   "to": [
                     1,
                     30
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
                   ]
                 }
               }
@@ -245,7 +362,8 @@
             ]
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-004",
@@ -265,6 +383,24 @@
                   "status": [
                     "todo",
                     "in_progress"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.priority"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.priority"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
                   ]
                 }
               }
@@ -295,7 +431,8 @@
             ]
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-005",
@@ -309,6 +446,22 @@
                 ],
                 "filters": {
                   "assignee": "unassigned"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title"
+                  ],
+                  "allowed": [
+                    "task.title"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -330,7 +483,8 @@
             "assignee": "unassigned"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-006",
@@ -343,8 +497,7 @@
                   "rota_task_search"
                 ],
                 "operation": [
-                  "list",
-                  "rank"
+                  "list"
                 ],
                 "filters": {
                   "milestone": true
@@ -360,6 +513,21 @@
                   "to": {
                     "date": "10-31"
                   }
+                },
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.plannedFinish"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.plannedFinish"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -385,7 +553,8 @@
             "dateTo": "{{date:10-31}}"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-007",
@@ -402,6 +571,24 @@
                   "status": [
                     "todo",
                     "in_progress"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.status"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.status"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
                   ]
                 }
               }
@@ -429,7 +616,8 @@
             ]
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-008",
@@ -444,6 +632,24 @@
                 "filters": {
                   "deadline": "overdue",
                   "assignee": "me"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.overdueDays"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.overdueDays"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -467,7 +673,8 @@
             "assignee": "me"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-009",
@@ -497,6 +704,24 @@
                       6
                     ]
                   }
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.targetFinish"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.targetFinish"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               },
               {
@@ -524,6 +749,24 @@
                       0
                     ]
                   }
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.targetFinish"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.targetFinish"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -549,7 +792,8 @@
             "dateTo": "{{weekEnd}}"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-010",
@@ -571,6 +815,22 @@
                 ],
                 "filters": {
                   "text": "kalibrasyon"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title"
+                  ],
+                  "allowed": [
+                    "task.title"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -598,7 +858,8 @@
             "text": "kalibrasyon"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-011",
@@ -613,6 +874,24 @@
                 "filters": {
                   "deadline": "overdue",
                   "assignee": "me"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.overdueDays"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.overdueDays"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -636,7 +915,8 @@
             "assignee": "me"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-012",
@@ -652,6 +932,24 @@
                   "deadline": "overdue",
                   "priority": [
                     "critical"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.priority"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.priority"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
                   ]
                 }
               }
@@ -678,7 +976,8 @@
             ]
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-013",
@@ -693,6 +992,24 @@
                 "filters": {
                   "deadline": "overdue",
                   "assignee": "me"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.overdueDays"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.overdueDays"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -716,7 +1033,8 @@
             "assignee": "me"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-014",
@@ -731,6 +1049,24 @@
                 "filters": {
                   "deadline": "overdue",
                   "assignee": "me"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.overdueDays"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.overdueDays"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -754,7 +1090,8 @@
             "assignee": "me"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-015",
@@ -780,6 +1117,21 @@
                   "all": [
                     "task.assignees",
                     "task.status"
+                  ],
+                  "allowed": [
+                    "task.assignees",
+                    "task.status"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_task_detail": [
+                    null
+                  ],
+                  "rota_task_search": [
+                    null
                   ]
                 }
               },
@@ -795,6 +1147,18 @@
                   "all": [
                     "task.assignees",
                     "task.status"
+                  ],
+                  "allowed": [
+                    "task.assignees",
+                    "task.status"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_task_search": [
+                    null
                   ]
                 }
               }
@@ -820,7 +1184,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-016",
@@ -844,8 +1209,22 @@
                 "metrics": {
                   "all": [
                     "task.description"
+                  ],
+                  "allowed": [
+                    "task.description"
                   ]
-                }
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_task_detail": [
+                    null
+                  ]
+                },
+                "textFields": [
+                  "description"
+                ]
               }
             ]
           }
@@ -868,7 +1247,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-017",
@@ -896,6 +1276,22 @@
                   "any": [
                     "task.targetFinish",
                     "task.plannedFinish"
+                  ],
+                  "allowed": [
+                    "task.progressPercent",
+                    "task.targetFinish",
+                    "task.plannedFinish"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_task_detail": [
+                    null
+                  ],
+                  "rota_task_search": [
+                    null
                   ]
                 }
               },
@@ -914,6 +1310,19 @@
                   "any": [
                     "task.targetFinish",
                     "task.plannedFinish"
+                  ],
+                  "allowed": [
+                    "task.progressPercent",
+                    "task.targetFinish",
+                    "task.plannedFinish"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_task_search": [
+                    null
                   ]
                 }
               }
@@ -939,7 +1348,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-018",
@@ -967,6 +1377,19 @@
                   "any": [
                     "task.actualHours",
                     "task.spent"
+                  ],
+                  "allowed": [
+                    "task.plannedHours",
+                    "task.actualHours",
+                    "task.spent"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_task_detail": [
+                    null
                   ]
                 }
               }
@@ -992,7 +1415,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-019",
@@ -1016,6 +1440,17 @@
                 "metrics": {
                   "all": [
                     "task.createdBy"
+                  ],
+                  "allowed": [
+                    "task.createdBy"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_task_detail": [
+                    null
                   ]
                 }
               },
@@ -1035,6 +1470,18 @@
                 "metrics": {
                   "any": [
                     "activity.actor"
+                  ],
+                  "allowed": [
+                    "activity.actor",
+                    "task.createdBy"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_activity_search": [
+                    null
                   ]
                 }
               }
@@ -1059,7 +1506,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-020",
@@ -1077,6 +1525,17 @@
                 "metrics": {
                   "any": [
                     "tasks.completionRatePercent"
+                  ],
+                  "allowed": [
+                    "tasks.completionRatePercent"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_task_analytics": [
+                    null
                   ]
                 }
               }
@@ -1098,7 +1557,8 @@
             "assignee": "me"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-021",
@@ -1118,6 +1578,22 @@
                     "todo",
                     "in_progress"
                   ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "tasks.total"
+                  ],
+                  "allowed": [
+                    "tasks.total"
+                  ]
+                },
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
+                  ]
                 }
               },
               {
@@ -1130,6 +1606,18 @@
                 "metrics": {
                   "any": [
                     "tasks.open"
+                  ],
+                  "allowed": [
+                    "tasks.open",
+                    "tasks.total"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
                   ]
                 }
               },
@@ -1144,6 +1632,19 @@
                   "all": [
                     "tasks.todo",
                     "tasks.inProgress"
+                  ],
+                  "allowed": [
+                    "tasks.todo",
+                    "tasks.inProgress",
+                    "tasks.total"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
                   ]
                 }
               }
@@ -1170,7 +1671,8 @@
             ]
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-022",
@@ -1184,7 +1686,23 @@
                 ],
                 "groupBy": [
                   "target_month"
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "tasks.total"
+                  ],
+                  "allowed": [
+                    "tasks.total"
+                  ]
+                },
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
+                  ]
+                }
               }
             ]
           }
@@ -1203,7 +1721,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-023",
@@ -1218,6 +1737,18 @@
                 "metrics": {
                   "any": [
                     "tasks.worstOverdueDays"
+                  ],
+                  "allowed": [
+                    "tasks.worstOverdueDays",
+                    "tasks.overdue"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_task_analytics": [
+                    "overdueAging.buckets"
                   ]
                 }
               },
@@ -1231,6 +1762,14 @@
                 "metrics": {
                   "any": [
                     "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "tasks.overdue"
+                  ]
+                },
+                "collections": {
+                  "rota_task_analytics": [
+                    "overdueAging.buckets"
                   ]
                 }
               }
@@ -1250,7 +1789,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-024",
@@ -1268,6 +1808,18 @@
                 "metrics": {
                   "any": [
                     "tasks.open"
+                  ],
+                  "allowed": [
+                    "tasks.open",
+                    "project.name"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
                   ]
                 }
               },
@@ -1283,6 +1835,24 @@
                     "todo",
                     "in_progress"
                   ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "tasks.open"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "tasks.open"
+                  ]
+                },
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
+                  ]
                 }
               },
               {
@@ -1292,6 +1862,18 @@
                 "metrics": {
                   "any": [
                     "tasks.open"
+                  ],
+                  "allowed": [
+                    "tasks.open",
+                    "project.name"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_portfolio_summary": [
+                    "projects"
                   ]
                 }
               }
@@ -1312,7 +1894,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-025",
@@ -1328,6 +1911,18 @@
                   "all": [
                     "tasks.plannedHours",
                     "tasks.withoutPlannedHours"
+                  ],
+                  "allowed": [
+                    "tasks.plannedHours",
+                    "tasks.withoutPlannedHours"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_task_analytics": [
+                    null
                   ]
                 }
               }
@@ -1347,7 +1942,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-026",
@@ -1362,6 +1958,24 @@
                 "entities": [],
                 "filters": {
                   "text": "RDR"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "project.code"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "project.code"
+                  ]
+                },
+                "collections": {
+                  "rota_project_search": [
+                    "matches"
+                  ]
                 }
               },
               {
@@ -1375,7 +1989,25 @@
                       "RDR"
                     ]
                   }
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "project.code"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "project.code"
+                  ]
+                },
+                "collections": {
+                  "rota_project_search": [
+                    "matches"
+                  ]
+                }
               }
             ]
           }
@@ -1397,7 +2029,8 @@
             "text": "RDR"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-027",
@@ -1412,6 +2045,22 @@
                 "entities": [],
                 "filters": {
                   "text": "modernizasyon"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "project.name"
+                  ],
+                  "allowed": [
+                    "project.name"
+                  ]
+                },
+                "collections": {
+                  "rota_project_search": [
+                    "matches"
+                  ]
                 }
               },
               {
@@ -1425,7 +2074,23 @@
                       "modernizasyon"
                     ]
                   }
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "project.name"
+                  ],
+                  "allowed": [
+                    "project.name"
+                  ]
+                },
+                "collections": {
+                  "rota_project_search": [
+                    "matches"
+                  ]
+                }
               }
             ]
           }
@@ -1446,7 +2111,8 @@
             "text": "modernizasyon"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-028",
@@ -1461,6 +2127,24 @@
                 "entities": [],
                 "filters": {
                   "text": "MRG-24"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "project.code"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "project.code"
+                  ]
+                },
+                "collections": {
+                  "rota_project_search": [
+                    "matches"
+                  ]
                 }
               },
               {
@@ -1474,7 +2158,25 @@
                       "MRG-24"
                     ]
                   }
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "project.code"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "project.code"
+                  ]
+                },
+                "collections": {
+                  "rota_project_search": [
+                    "matches"
+                  ]
+                }
               }
             ]
           }
@@ -1496,7 +2198,8 @@
             "text": "MRG-24"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-029",
@@ -1520,6 +2223,20 @@
                 "metrics": {
                   "all": [
                     "project.lead"
+                  ],
+                  "allowed": [
+                    "project.lead"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_project_detail": [
+                    null
+                  ],
+                  "rota_project_search": [
+                    null
                   ]
                 }
               },
@@ -1534,6 +2251,17 @@
                 "metrics": {
                   "all": [
                     "project.lead"
+                  ],
+                  "allowed": [
+                    "project.lead"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_project_search": [
+                    null
                   ]
                 }
               }
@@ -1558,7 +2286,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-030",
@@ -1583,6 +2312,19 @@
                     "project.completeTaskView",
                     "project.accessReasons",
                     "project.access"
+                  ],
+                  "allowed": [
+                    "project.completeTaskView",
+                    "project.accessReasons",
+                    "project.access"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_project_detail": [
+                    null
                   ]
                 }
               }
@@ -1608,7 +2350,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-031",
@@ -1631,6 +2374,17 @@
                 "metrics": {
                   "any": [
                     "project.calendar"
+                  ],
+                  "allowed": [
+                    "project.calendar"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_project_detail": [
+                    null
                   ]
                 }
               },
@@ -1649,6 +2403,18 @@
                 "metrics": {
                   "any": [
                     "calendar.name"
+                  ],
+                  "allowed": [
+                    "calendar.name",
+                    "project.calendar"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_calendar_inspect": [
+                    null
                   ]
                 }
               }
@@ -1673,7 +2439,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-032",
@@ -1693,7 +2460,30 @@
                       "Radar"
                     ]
                   }
-                ]
+                ],
+                "operation": [
+                  "value"
+                ],
+                "metrics": {
+                  "all": [
+                    "tasks.open",
+                    "tasks.overdue",
+                    "tasks.completionRatePercent"
+                  ],
+                  "allowed": [
+                    "tasks.open",
+                    "tasks.overdue",
+                    "tasks.completionRatePercent"
+                  ]
+                },
+                "collections": {
+                  "rota_project_detail": [
+                    null
+                  ],
+                  "rota_task_analytics": [
+                    null
+                  ]
+                }
               }
             ]
           }
@@ -1718,7 +2508,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-033",
@@ -1742,6 +2533,18 @@
                   "any": [
                     "project.access",
                     "project.accessReasons"
+                  ],
+                  "allowed": [
+                    "project.access",
+                    "project.accessReasons"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_project_detail": [
+                    null
                   ]
                 }
               }
@@ -1767,7 +2570,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-034",
@@ -1786,6 +2590,22 @@
                   "order": "desc",
                   "metrics": [
                     "tasks.overdue"
+                  ],
+                  "limit": 1
+                },
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "tasks.overdue"
+                  ]
+                },
+                "collections": {
+                  "rota_portfolio_summary": [
+                    "projects"
                   ]
                 }
               },
@@ -1803,6 +2623,22 @@
                   "order": "desc",
                   "metrics": [
                     "tasks.overdue"
+                  ],
+                  "limit": 1
+                },
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "tasks.overdue"
+                  ]
+                },
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
                   ]
                 }
               }
@@ -1828,7 +2664,8 @@
             "limit": 1
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-035",
@@ -1839,7 +2676,27 @@
               {
                 "tools": [
                   "rota_portfolio_summary"
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "tasks.open",
+                    "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "tasks.open",
+                    "tasks.overdue"
+                  ]
+                },
+                "collections": {
+                  "rota_portfolio_summary": [
+                    "projects"
+                  ]
+                }
               }
             ]
           }
@@ -1859,7 +2716,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-036",
@@ -1880,6 +2738,21 @@
                     "tasks.open"
                   ],
                   "limit": 3
+                },
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "tasks.open"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "tasks.open"
+                  ]
+                },
+                "collections": {
+                  "rota_portfolio_summary": [
+                    "projects"
+                  ]
                 }
               },
               {
@@ -1898,6 +2771,21 @@
                     "tasks.open"
                   ],
                   "limit": 3
+                },
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "tasks.open"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "tasks.open"
+                  ]
+                },
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
+                  ]
                 }
               },
               {
@@ -1922,6 +2810,21 @@
                     "tasks.total"
                   ],
                   "limit": 3
+                },
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "tasks.open"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "tasks.open"
+                  ]
+                },
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
+                  ]
                 }
               }
             ]
@@ -1946,7 +2849,8 @@
             "limit": 3
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-037",
@@ -1964,10 +2868,23 @@
                   ],
                   "any": [
                     "project.sourceType"
+                  ],
+                  "allowed": [
+                    "tasks.overdue",
+                    "project.sourceType",
+                    "project.name"
                   ]
                 },
                 "filters": {
                   "source": null
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_portfolio_summary": [
+                    "projects"
+                  ]
                 }
               }
             ]
@@ -1981,6 +2898,17 @@
             "metrics": {
               "any": [
                 "tasks.overdue"
+              ],
+              "allowed": [
+                "tasks.overdue"
+              ]
+            },
+            "operation": [
+              "value"
+            ],
+            "collections": {
+              "rota_portfolio_summary": [
+                null
               ]
             }
           }
@@ -2000,7 +2928,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-038",
@@ -2011,7 +2940,27 @@
               {
                 "tools": [
                   "rota_portfolio_summary"
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "tasks.open",
+                    "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "tasks.open",
+                    "tasks.overdue"
+                  ]
+                },
+                "collections": {
+                  "rota_portfolio_summary": [
+                    "projects"
+                  ]
+                }
               }
             ]
           }
@@ -2031,7 +2980,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-039",
@@ -2052,6 +3002,29 @@
                     "texts": [
                       "Radar"
                     ]
+                  }
+                ],
+                "metrics": {
+                  "all": [
+                    "wbs.name",
+                    "wbs.subtreeTasks"
+                  ],
+                  "allowed": [
+                    "wbs.name",
+                    "wbs.subtreeTasks"
+                  ]
+                },
+                "collections": {
+                  "rota_wbs_inspect": [
+                    "nodes"
+                  ]
+                },
+                "depth": 2,
+                "fields": [
+                  {
+                    "metric": "wbs.name",
+                    "tool": "rota_wbs_inspect",
+                    "path": "data.nodes.*.name"
                   }
                 ]
               }
@@ -2086,7 +3059,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-040",
@@ -2109,8 +3083,28 @@
                 "metrics": {
                   "any": [
                     "wbs.subtreeOverdue"
+                  ],
+                  "allowed": [
+                    "wbs.subtreeOverdue",
+                    "wbs.name"
                   ]
-                }
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_wbs_inspect": [
+                    "nodes"
+                  ]
+                },
+                "depth": 2,
+                "fields": [
+                  {
+                    "metric": "wbs.name",
+                    "tool": "rota_wbs_inspect",
+                    "path": "data.nodes.*.name"
+                  }
+                ]
               }
             ]
           }
@@ -2143,7 +3137,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-041",
@@ -2172,6 +3167,17 @@
                 "metrics": {
                   "any": [
                     "wbs.subtreeOpen"
+                  ],
+                  "allowed": [
+                    "wbs.subtreeOpen"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_wbs_inspect": [
+                    null
                   ]
                 }
               }
@@ -2200,7 +3206,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-042",
@@ -2211,7 +3218,23 @@
               {
                 "tools": [
                   "rota_data_quality"
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "quality.flagged"
+                  ],
+                  "allowed": [
+                    "quality.flagged"
+                  ]
+                },
+                "collections": {
+                  "rota_data_quality": [
+                    "checks"
+                  ]
+                }
               }
             ]
           }
@@ -2229,7 +3252,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-043",
@@ -2252,6 +3276,22 @@
                     "tasks.inProgress",
                     "tasks.dueNext7Days",
                     "tasks.plannedHours"
+                  ],
+                  "limit": 1
+                },
+                "metrics": {
+                  "all": [
+                    "person.name",
+                    "tasks.open"
+                  ],
+                  "allowed": [
+                    "person.name",
+                    "tasks.open"
+                  ]
+                },
+                "collections": {
+                  "rota_workload_summary": [
+                    "people"
                   ]
                 }
               },
@@ -2270,6 +3310,22 @@
                   "metrics": [
                     "tasks.open",
                     "tasks.overdue"
+                  ],
+                  "limit": 1
+                },
+                "metrics": {
+                  "all": [
+                    "person.name",
+                    "tasks.open"
+                  ],
+                  "allowed": [
+                    "person.name",
+                    "tasks.open"
+                  ]
+                },
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
                   ]
                 }
               }
@@ -2295,7 +3351,8 @@
             "limit": 1
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-044",
@@ -2310,6 +3367,18 @@
                 "metrics": {
                   "any": [
                     "tasks.open"
+                  ],
+                  "allowed": [
+                    "tasks.open",
+                    "person.name"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_workload_summary": [
+                    "people"
                   ]
                 }
               },
@@ -2323,6 +3392,18 @@
                 "metrics": {
                   "any": [
                     "tasks.open"
+                  ],
+                  "allowed": [
+                    "tasks.open",
+                    "person.name"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
                   ]
                 }
               },
@@ -2337,6 +3418,24 @@
                   "status": [
                     "todo",
                     "in_progress"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "person.name",
+                    "tasks.open"
+                  ],
+                  "allowed": [
+                    "person.name",
+                    "tasks.open"
+                  ]
+                },
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
                   ]
                 }
               }
@@ -2357,7 +3456,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-045",
@@ -2377,7 +3477,30 @@
                       "Ayşe"
                     ]
                   }
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "person.name",
+                    "tasks.open",
+                    "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "person.name",
+                    "tasks.open",
+                    "tasks.overdue"
+                  ]
+                },
+                "collections": {
+                  "rota_workload_summary": [
+                    "people"
+                  ],
+                  "rota_task_analytics": [
+                    "overdueAging.buckets"
+                  ]
+                }
               }
             ]
           }
@@ -2403,7 +3526,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-046",
@@ -2432,6 +3556,22 @@
                   "to": {
                     "anchor": "weekEnd"
                   }
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "tasks.total"
+                  ],
+                  "allowed": [
+                    "tasks.total"
+                  ]
+                },
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
+                  ]
                 }
               }
             ]
@@ -2455,7 +3595,8 @@
             "dateTo": "{{weekEnd}}"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-047",
@@ -2478,6 +3619,17 @@
                 "metrics": {
                   "any": [
                     "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "tasks.overdue"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_workload_summary": [
+                    null
                   ]
                 }
               },
@@ -2496,6 +3648,25 @@
                 ],
                 "filters": {
                   "deadline": "overdue"
+                },
+                "operation": [
+                  "value"
+                ],
+                "metrics": {
+                  "all": [
+                    "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "tasks.overdue"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    null
+                  ],
+                  "rota_task_analytics": [
+                    null
+                  ]
                 }
               },
               {
@@ -2513,6 +3684,17 @@
                 "metrics": {
                   "any": [
                     "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "tasks.overdue"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_task_analytics": [
+                    null
                   ]
                 }
               }
@@ -2537,7 +3719,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-048",
@@ -2560,8 +3743,26 @@
                 "metrics": {
                   "any": [
                     "person.organization"
+                  ],
+                  "allowed": [
+                    "person.organization"
                   ]
-                }
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_person_search": [
+                    null
+                  ]
+                },
+                "fields": [
+                  {
+                    "metric": "person.organization",
+                    "tool": "rota_person_search",
+                    "path": "data.people.*.organization.unit"
+                  }
+                ]
               },
               {
                 "tools": [
@@ -2574,8 +3775,26 @@
                 "metrics": {
                   "any": [
                     "person.organization"
+                  ],
+                  "allowed": [
+                    "person.organization"
                   ]
-                }
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_person_search": [
+                    null
+                  ]
+                },
+                "fields": [
+                  {
+                    "metric": "person.organization",
+                    "tool": "rota_person_search",
+                    "path": "data.people.*.organization.unit"
+                  }
+                ]
               }
             ]
           }
@@ -2605,7 +3824,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-049",
@@ -2627,7 +3847,25 @@
                       "104233"
                     ]
                   }
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "person.name",
+                    "person.jobTitle"
+                  ],
+                  "allowed": [
+                    "person.name",
+                    "person.jobTitle"
+                  ]
+                },
+                "collections": {
+                  "rota_person_search": [
+                    "people"
+                  ]
+                }
               },
               {
                 "tools": [
@@ -2636,6 +3874,24 @@
                 "entities": [],
                 "filters": {
                   "text": "104233"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "person.name",
+                    "person.jobTitle"
+                  ],
+                  "allowed": [
+                    "person.name",
+                    "person.jobTitle"
+                  ]
+                },
+                "collections": {
+                  "rota_person_search": [
+                    "people"
+                  ]
                 }
               }
             ]
@@ -2658,7 +3914,8 @@
             "text": "104233"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-050",
@@ -2681,6 +3938,17 @@
                 "metrics": {
                   "any": [
                     "person.jobTitle"
+                  ],
+                  "allowed": [
+                    "person.jobTitle"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_person_search": [
+                    null
                   ]
                 }
               },
@@ -2695,6 +3963,17 @@
                 "metrics": {
                   "any": [
                     "person.jobTitle"
+                  ],
+                  "allowed": [
+                    "person.jobTitle"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_person_search": [
+                    null
                   ]
                 }
               }
@@ -2719,7 +3998,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-051",
@@ -2740,7 +4020,30 @@
                     -1,
                     -1
                   ]
-                }
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "activity.actor",
+                    "activity.changes",
+                    "task.title"
+                  ],
+                  "allowed": [
+                    "activity.actor",
+                    "activity.changes",
+                    "task.title"
+                  ]
+                },
+                "collections": {
+                  "rota_activity_search": [
+                    "items"
+                  ]
+                },
+                "textFields": [
+                  "changes"
+                ]
               }
             ]
           }
@@ -2763,7 +4066,8 @@
             "period": "yesterday"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-052",
@@ -2782,6 +4086,27 @@
                       "Saha kurulumu"
                     ]
                   }
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "activity.occurredAt",
+                    "activity.changes"
+                  ],
+                  "allowed": [
+                    "activity.occurredAt",
+                    "activity.changes"
+                  ]
+                },
+                "collections": {
+                  "rota_activity_search": [
+                    "items"
+                  ]
+                },
+                "textFields": [
+                  "changes"
                 ]
               }
             ]
@@ -2807,7 +4132,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-053",
@@ -2829,6 +4155,24 @@
                   "to": {
                     "anchor": "previousWeekEnd"
                   }
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "activity.occurredAt"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "activity.occurredAt"
+                  ]
+                },
+                "collections": {
+                  "rota_activity_search": [
+                    "items"
+                  ]
                 }
               }
             ]
@@ -2853,7 +4197,8 @@
             "dateTo": "{{previousWeekEnd}}"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-054",
@@ -2877,7 +4222,28 @@
                     0,
                     0
                   ]
-                }
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "activity.changes"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "activity.changes"
+                  ]
+                },
+                "collections": {
+                  "rota_activity_search": [
+                    "items"
+                  ]
+                },
+                "textFields": [
+                  "changes"
+                ]
               }
             ]
           }
@@ -2900,7 +4266,8 @@
             "period": "last_7_days"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-055",
@@ -2923,6 +4290,24 @@
                   "to": [
                     0,
                     0
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "activity.actor"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "activity.actor"
+                  ]
+                },
+                "collections": {
+                  "rota_activity_search": [
+                    "items"
                   ]
                 }
               }
@@ -2947,7 +4332,8 @@
             "period": "today"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-056",
@@ -2970,6 +4356,22 @@
                   "to": {
                     "anchor": "previousWeekEnd"
                   }
+                },
+                "operation": [
+                  "value"
+                ],
+                "metrics": {
+                  "all": [
+                    "tasks.total"
+                  ],
+                  "allowed": [
+                    "tasks.total"
+                  ]
+                },
+                "collections": {
+                  "rota_activity_search": [
+                    null
+                  ]
                 }
               },
               {
@@ -2992,6 +4394,25 @@
                   "to": {
                     "anchor": "previousWeekEnd"
                   }
+                },
+                "operation": [
+                  "value"
+                ],
+                "metrics": {
+                  "all": [
+                    "tasks.total"
+                  ],
+                  "allowed": [
+                    "tasks.total"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    null
+                  ],
+                  "rota_task_analytics": [
+                    null
+                  ]
                 }
               }
             ]
@@ -3017,6 +4438,22 @@
                       6
                     ]
                   }
+                },
+                "operation": [
+                  "value"
+                ],
+                "metrics": {
+                  "all": [
+                    "tasks.total"
+                  ],
+                  "allowed": [
+                    "tasks.total"
+                  ]
+                },
+                "collections": {
+                  "rota_activity_search": [
+                    null
+                  ]
                 }
               },
               {
@@ -3043,6 +4480,25 @@
                       6
                     ]
                   }
+                },
+                "operation": [
+                  "value"
+                ],
+                "metrics": {
+                  "all": [
+                    "tasks.total"
+                  ],
+                  "allowed": [
+                    "tasks.total"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    null
+                  ],
+                  "rota_task_analytics": [
+                    null
+                  ]
                 }
               }
             ]
@@ -3088,7 +4544,8 @@
             }
           }
         ]
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-057",
@@ -3102,6 +4559,24 @@
                 ],
                 "filters": {
                   "tab": "pending"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "request.status"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "request.status"
+                  ]
+                },
+                "collections": {
+                  "rota_schedule_requests": [
+                    "items"
+                  ]
                 }
               },
               {
@@ -3112,6 +4587,20 @@
                   "any": [
                     "requests.awaitingYourDecision",
                     "request.awaitingYourDecision"
+                  ],
+                  "allowed": [
+                    "requests.awaitingYourDecision",
+                    "request.awaitingYourDecision",
+                    "task.title",
+                    "request.status"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_schedule_requests": [
+                    "items"
                   ]
                 }
               },
@@ -3122,6 +4611,19 @@
                 "metrics": {
                   "any": [
                     "notifications.scheduleActionRequired"
+                  ],
+                  "allowed": [
+                    "notifications.scheduleActionRequired",
+                    "task.title",
+                    "request.status"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_notifications": [
+                    null
                   ]
                 }
               }
@@ -3145,7 +4647,8 @@
             "tab": "pending"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-058",
@@ -3159,6 +4662,24 @@
                 ],
                 "filters": {
                   "tab": "sent"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "request.status"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "request.status"
+                  ]
+                },
+                "collections": {
+                  "rota_schedule_requests": [
+                    "items"
+                  ]
                 }
               }
             ]
@@ -3181,7 +4702,8 @@
             "tab": "sent"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-059",
@@ -3195,6 +4717,24 @@
                 ],
                 "filters": {
                   "workflowStatus": "REJECTED"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "request.decidedAt"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "request.decidedAt"
+                  ]
+                },
+                "collections": {
+                  "rota_schedule_requests": [
+                    "items"
+                  ]
                 }
               }
             ]
@@ -3217,7 +4757,8 @@
             "workflowStatus": "REJECTED"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-060",
@@ -3228,7 +4769,25 @@
               {
                 "tools": [
                   "rota_schedule_requests"
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "request.status"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "request.status"
+                  ]
+                },
+                "collections": {
+                  "rota_schedule_requests": [
+                    "items"
+                  ]
+                }
               }
             ]
           },
@@ -3237,7 +4796,25 @@
               {
                 "tools": [
                   "rota_assignment_requests"
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "request.status"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "request.status"
+                  ]
+                },
+                "collections": {
+                  "rota_assignment_requests": [
+                    "items"
+                  ]
+                }
               }
             ]
           }
@@ -3270,7 +4847,8 @@
             "layout": "auto"
           }
         ]
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-061",
@@ -3294,6 +4872,18 @@
                 "metrics": {
                   "any": [
                     "request.status"
+                  ],
+                  "allowed": [
+                    "request.status",
+                    "task.title"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_assignment_requests": [
+                    "items"
                   ]
                 }
               },
@@ -3303,6 +4893,24 @@
                 ],
                 "filters": {
                   "workflowStatus": "APPROVED"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "request.status"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "request.status"
+                  ]
+                },
+                "collections": {
+                  "rota_assignment_requests": [
+                    "items"
+                  ]
                 }
               }
             ]
@@ -3325,7 +4933,8 @@
             "tab": "sent"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-062",
@@ -3339,6 +4948,24 @@
                 ],
                 "filters": {
                   "tab": "pending"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "request.requester"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "request.requester"
+                  ]
+                },
+                "collections": {
+                  "rota_assignment_requests": [
+                    "items"
+                  ]
                 }
               },
               {
@@ -3351,6 +4978,22 @@
                     "request.canDecide",
                     "requests.actionRequired",
                     "request.actionRequiredFromYou"
+                  ],
+                  "allowed": [
+                    "request.awaitingYourDecision",
+                    "request.canDecide",
+                    "requests.actionRequired",
+                    "request.actionRequiredFromYou",
+                    "task.title",
+                    "request.requester"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_assignment_requests": [
+                    "items"
                   ]
                 }
               }
@@ -3374,7 +5017,8 @@
             "tab": "pending"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-063",
@@ -3389,6 +5033,22 @@
                 "filters": {
                   "tab": "sent",
                   "workflowStatus": "PENDING"
+                },
+                "operation": [
+                  "value"
+                ],
+                "metrics": {
+                  "all": [
+                    "requests.total"
+                  ],
+                  "allowed": [
+                    "requests.total"
+                  ]
+                },
+                "collections": {
+                  "rota_assignment_requests": [
+                    null
+                  ]
                 }
               },
               {
@@ -3401,6 +5061,18 @@
                 "metrics": {
                   "any": [
                     "request.status"
+                  ],
+                  "allowed": [
+                    "request.status",
+                    "requests.total"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_assignment_requests": [
+                    null
                   ]
                 }
               }
@@ -3423,7 +5095,8 @@
             "workflowStatus": "PENDING"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-064",
@@ -3438,6 +5111,17 @@
                 "metrics": {
                   "any": [
                     "notifications.unread"
+                  ],
+                  "allowed": [
+                    "notifications.unread"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_notifications": [
+                    null
                   ]
                 }
               }
@@ -3456,7 +5140,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-065",
@@ -3467,7 +5152,25 @@
               {
                 "tools": [
                   "rota_notifications"
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "notification.label",
+                    "notification.at"
+                  ],
+                  "allowed": [
+                    "notification.label",
+                    "notification.at"
+                  ]
+                },
+                "collections": {
+                  "rota_notifications": [
+                    "taskEvents.latest"
+                  ]
+                }
               }
             ]
           }
@@ -3486,7 +5189,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-066",
@@ -3497,7 +5201,25 @@
               {
                 "tools": [
                   "rota_notifications"
-                ]
+                ],
+                "operation": [
+                  "value"
+                ],
+                "metrics": {
+                  "all": [
+                    "notifications.total",
+                    "notifications.unread"
+                  ],
+                  "allowed": [
+                    "notifications.total",
+                    "notifications.unread"
+                  ]
+                },
+                "collections": {
+                  "rota_notifications": [
+                    null
+                  ]
+                }
               }
             ]
           }
@@ -3515,7 +5237,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-067",
@@ -3534,6 +5257,21 @@
                     "notifications.scheduleUnread",
                     "notifications.assignmentUnread",
                     "notifications.taskEventUnread"
+                  ],
+                  "allowed": [
+                    "notifications.unread",
+                    "notification.unread",
+                    "notifications.scheduleUnread",
+                    "notifications.assignmentUnread",
+                    "notifications.taskEventUnread"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_notifications": [
+                    null
                   ]
                 }
               }
@@ -3552,7 +5290,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-068",
@@ -3565,7 +5304,6 @@
                   "rota_baseline_compare"
                 ],
                 "operation": [
-                  "list",
                   "rank"
                 ],
                 "entities": [
@@ -3579,7 +5317,23 @@
                 "metrics": {
                   "any": [
                     "task.varianceDays"
+                  ],
+                  "allowed": [
+                    "task.varianceDays",
+                    "task.title"
                   ]
+                },
+                "collections": {
+                  "rota_baseline_compare": [
+                    "mostSlipped"
+                  ]
+                },
+                "rank": {
+                  "order": "desc",
+                  "metrics": [
+                    "task.varianceDays"
+                  ],
+                  "limit": 10
                 }
               }
             ]
@@ -3610,7 +5364,8 @@
             "limit": 10
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-069",
@@ -3633,6 +5388,17 @@
                 "metrics": {
                   "any": [
                     "baseline.averageVarianceDays"
+                  ],
+                  "allowed": [
+                    "baseline.averageVarianceDays"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_baseline_compare": [
+                    null
                   ]
                 }
               }
@@ -3657,7 +5423,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-070",
@@ -3681,6 +5448,18 @@
                   "any": [
                     "baseline.finishEarlier",
                     "baseline.maxEarlierDays"
+                  ],
+                  "allowed": [
+                    "baseline.finishEarlier",
+                    "baseline.maxEarlierDays"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_baseline_compare": [
+                    null
                   ]
                 }
               }
@@ -3705,7 +5484,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-071",
@@ -3729,6 +5509,18 @@
                   "all": [
                     "baseline.addedSinceBaseline",
                     "baseline.removedSinceBaseline"
+                  ],
+                  "allowed": [
+                    "baseline.addedSinceBaseline",
+                    "baseline.removedSinceBaseline"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_baseline_compare": [
+                    null
                   ]
                 }
               }
@@ -3754,7 +5546,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-072",
@@ -3774,7 +5567,25 @@
                       "Montaj görevi"
                     ]
                   }
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "dependency.type"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "dependency.type"
+                  ]
+                },
+                "collections": {
+                  "rota_dependency_inspect": [
+                    "predecessors"
+                  ]
+                }
               }
             ]
           }
@@ -3799,7 +5610,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-073",
@@ -3819,7 +5631,25 @@
                       "Test görevi"
                     ]
                   }
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "dependency.type"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "dependency.type"
+                  ]
+                },
+                "collections": {
+                  "rota_dependency_inspect": [
+                    "successors"
+                  ]
+                }
               }
             ]
           }
@@ -3844,7 +5674,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-074",
@@ -3867,6 +5698,17 @@
                 "metrics": {
                   "any": [
                     "dependencies.tasksWithoutAny"
+                  ],
+                  "allowed": [
+                    "dependencies.tasksWithoutAny"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_dependency_inspect": [
+                    null
                   ]
                 }
               }
@@ -3891,7 +5733,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-075",
@@ -3911,7 +5754,25 @@
                       "Entegrasyon işi"
                     ]
                   }
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.status"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.status"
+                  ]
+                },
+                "collections": {
+                  "rota_dependency_inspect": [
+                    "predecessors"
+                  ]
+                }
               }
             ]
           }
@@ -3936,7 +5797,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-076",
@@ -3959,6 +5821,17 @@
                 "metrics": {
                   "any": [
                     "recurrence.openOccurrences"
+                  ],
+                  "allowed": [
+                    "recurrence.openOccurrences"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_recurrence_inspect": [
+                    null
                   ]
                 }
               }
@@ -3983,7 +5856,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-077",
@@ -3995,7 +5869,23 @@
                 "tools": [
                   "rota_recurrence_inspect"
                 ],
-                "entities": []
+                "entities": [],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title"
+                  ],
+                  "allowed": [
+                    "task.title"
+                  ]
+                },
+                "collections": {
+                  "rota_recurrence_inspect": [
+                    "series"
+                  ]
+                }
               }
             ]
           }
@@ -4013,7 +5903,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-078",
@@ -4038,6 +5929,18 @@
                   "any": [
                     "recurrence.occurrenceDate",
                     "task.targetFinish"
+                  ],
+                  "allowed": [
+                    "recurrence.occurrenceDate",
+                    "task.targetFinish"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_recurrence_inspect": [
+                    "series.next"
                   ]
                 }
               }
@@ -4063,7 +5966,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-079",
@@ -4090,8 +5994,28 @@
                   "any": [
                     "recurrence.occurrences",
                     "recurrence.doneOccurrences"
+                  ],
+                  "allowed": [
+                    "recurrence.rule",
+                    "recurrence.occurrences",
+                    "recurrence.doneOccurrences"
                   ]
-                }
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_recurrence_inspect": [
+                    null
+                  ]
+                },
+                "fields": [
+                  {
+                    "metric": "recurrence.rule",
+                    "tool": "rota_recurrence_inspect",
+                    "path": "data.series.ruleDescription"
+                  }
+                ]
               }
             ]
           }
@@ -4122,7 +6046,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-080",
@@ -4137,6 +6062,9 @@
                 "metrics": {
                   "any": [
                     "calendar.workingDays"
+                  ],
+                  "allowed": [
+                    "calendar.workingDays"
                   ]
                 },
                 "window": {
@@ -4147,6 +6075,14 @@
                   "to": {
                     "anchor": "monthEnd"
                   }
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_calendar_inspect": [
+                    null
+                  ]
                 }
               }
             ]
@@ -4168,7 +6104,8 @@
             "dateTo": "{{monthEnd}}"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-081",
@@ -4185,6 +6122,11 @@
                     "calendar.holidays",
                     "calendar.holidayName",
                     "calendar.holidayDate"
+                  ],
+                  "allowed": [
+                    "calendar.holidays",
+                    "calendar.holidayName",
+                    "calendar.holidayDate"
                   ]
                 },
                 "window": {
@@ -4194,7 +6136,22 @@
                   "to": {
                     "anchor": "nextMonthEnd"
                   }
-                }
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_calendar_inspect": [
+                    "holidays"
+                  ]
+                },
+                "fields": [
+                  {
+                    "metric": "calendar.holidayName",
+                    "tool": "rota_calendar_inspect",
+                    "path": "data.holidays.*.name"
+                  }
+                ]
               }
             ]
           }
@@ -4224,7 +6181,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-082",
@@ -4238,6 +6196,9 @@
                 ],
                 "metrics": {
                   "any": [
+                    "calendar.workingDays"
+                  ],
+                  "allowed": [
                     "calendar.workingDays"
                   ]
                 },
@@ -4256,6 +6217,14 @@
                       1
                     ]
                   }
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_calendar_inspect": [
+                    null
+                  ]
                 }
               }
             ]
@@ -4277,7 +6246,8 @@
             "dateTo": "{{yearEnd}}"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-083",
@@ -4296,6 +6266,21 @@
                     "subscriptions.suspended",
                     "subscription.state",
                     "subscription.failureCode"
+                  ],
+                  "allowed": [
+                    "subscriptions.failed",
+                    "subscriptions.pending",
+                    "subscriptions.suspended",
+                    "subscription.state",
+                    "subscription.failureCode"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_outlook_status": [
+                    null
                   ]
                 }
               }
@@ -4315,7 +6300,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-084",
@@ -4326,7 +6312,25 @@
               {
                 "tools": [
                   "rota_outlook_status"
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "subscription.state"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "subscription.state"
+                  ]
+                },
+                "collections": {
+                  "rota_outlook_status": [
+                    "items"
+                  ]
+                }
               }
             ]
           }
@@ -4345,7 +6349,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-085",
@@ -4361,6 +6366,18 @@
                   "any": [
                     "subscriptions.pending",
                     "subscription.state"
+                  ],
+                  "allowed": [
+                    "subscriptions.pending",
+                    "subscription.state"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_outlook_status": [
+                    null
                   ]
                 }
               }
@@ -4379,7 +6396,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-086",
@@ -4390,7 +6408,23 @@
               {
                 "tools": [
                   "rota_data_quality"
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "quality.flagged"
+                  ],
+                  "allowed": [
+                    "quality.flagged"
+                  ]
+                },
+                "collections": {
+                  "rota_data_quality": [
+                    "checks"
+                  ]
+                }
               }
             ]
           }
@@ -4408,7 +6442,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-087",
@@ -4425,6 +6460,19 @@
                     "tasks.doneWithoutActualFinish",
                     "quality.examples",
                     "quality.flagged"
+                  ],
+                  "allowed": [
+                    "tasks.doneWithoutActualFinish",
+                    "quality.examples",
+                    "quality.flagged"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_data_quality": [
+                    null
                   ]
                 }
               }
@@ -4443,7 +6491,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-088",
@@ -4458,6 +6507,17 @@
                 "metrics": {
                   "any": [
                     "tasks.openWithoutTargetFinish"
+                  ],
+                  "allowed": [
+                    "tasks.openWithoutTargetFinish"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_task_analytics": [
+                    null
                   ]
                 }
               },
@@ -4468,12 +6528,47 @@
                 ],
                 "filters": {
                   "deadline": "no_target_finish"
+                },
+                "operation": [
+                  "value"
+                ],
+                "metrics": {
+                  "all": [
+                    "tasks.openWithoutTargetFinish"
+                  ],
+                  "allowed": [
+                    "tasks.openWithoutTargetFinish"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    null
+                  ],
+                  "rota_task_analytics": [
+                    null
+                  ]
                 }
               },
               {
                 "tools": [
                   "rota_data_quality"
-                ]
+                ],
+                "operation": [
+                  "value"
+                ],
+                "metrics": {
+                  "all": [
+                    "tasks.openWithoutTargetFinish"
+                  ],
+                  "allowed": [
+                    "tasks.openWithoutTargetFinish"
+                  ]
+                },
+                "collections": {
+                  "rota_data_quality": [
+                    null
+                  ]
+                }
               }
             ]
           }
@@ -4490,7 +6585,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-089",
@@ -4501,7 +6597,23 @@
               {
                 "tools": [
                   "rota_data_quality"
-                ]
+                ],
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "quality.flagged"
+                  ],
+                  "allowed": [
+                    "quality.flagged"
+                  ]
+                },
+                "collections": {
+                  "rota_data_quality": [
+                    "checks"
+                  ]
+                }
               }
             ]
           }
@@ -4519,7 +6631,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-090",
@@ -4545,6 +6658,22 @@
                 "filters": {
                   "deadline": "overdue",
                   "assignee": null
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "tasks.overdue"
+                  ]
+                },
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
+                  ]
                 }
               },
               {
@@ -4568,6 +6697,17 @@
                 "metrics": {
                   "any": [
                     "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "tasks.overdue"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
                   ]
                 }
               }
@@ -4594,6 +6734,18 @@
               "any": [
                 "tasks.overdue",
                 "tasks.total"
+              ],
+              "allowed": [
+                "tasks.overdue",
+                "tasks.total"
+              ]
+            },
+            "operation": [
+              "value"
+            ],
+            "collections": {
+              "rota_task_analytics": [
+                null
               ]
             }
           }
@@ -4618,7 +6770,8 @@
             }
           ]
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-091",
@@ -4645,6 +6798,24 @@
                     1,
                     1
                   ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.targetFinish"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.targetFinish"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -4658,6 +6829,24 @@
                 "dependent": {
                   "type": "task",
                   "group": 0
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "dependency.type"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "dependency.type"
+                  ]
+                },
+                "collections": {
+                  "rota_dependency_inspect": [
+                    "predecessors"
+                  ]
                 }
               }
             ]
@@ -4702,7 +6891,8 @@
             ]
           }
         ]
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-092",
@@ -4723,9 +6913,30 @@
                   }
                 ],
                 "operation": [
-                  "list",
                   "rank"
-                ]
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.varianceDays"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.varianceDays"
+                  ]
+                },
+                "collections": {
+                  "rota_baseline_compare": [
+                    "mostSlipped"
+                  ]
+                },
+                "rank": {
+                  "order": "desc",
+                  "metrics": [
+                    "task.varianceDays"
+                  ],
+                  "limit": 3
+                }
               }
             ]
           },
@@ -4743,6 +6954,21 @@
                 "metrics": {
                   "any": [
                     "task.assignees"
+                  ],
+                  "allowed": [
+                    "task.assignees",
+                    "task.status"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_task_detail": [
+                    null
+                  ],
+                  "rota_task_search": [
+                    null
                   ]
                 }
               }
@@ -4793,7 +7019,8 @@
             ]
           }
         ]
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-093",
@@ -4812,6 +7039,21 @@
                     "notifications.scheduleUnread",
                     "notifications.assignmentUnread",
                     "notifications.taskEventUnread"
+                  ],
+                  "allowed": [
+                    "notifications.unread",
+                    "notification.unread",
+                    "notifications.scheduleUnread",
+                    "notifications.assignmentUnread",
+                    "notifications.taskEventUnread"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_notifications": [
+                    null
                   ]
                 }
               }
@@ -4825,6 +7067,24 @@
                 ],
                 "filters": {
                   "tab": "pending"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "request.status"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "request.status"
+                  ]
+                },
+                "collections": {
+                  "rota_schedule_requests": [
+                    "items"
+                  ]
                 }
               },
               {
@@ -4833,6 +7093,24 @@
                 ],
                 "filters": {
                   "workflowStatus": "PENDING"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "request.status"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "request.status"
+                  ]
+                },
+                "collections": {
+                  "rota_schedule_requests": [
+                    "items"
+                  ]
                 }
               },
               {
@@ -4843,6 +7121,20 @@
                   "any": [
                     "requests.awaitingYourDecision",
                     "request.awaitingYourDecision"
+                  ],
+                  "allowed": [
+                    "requests.awaitingYourDecision",
+                    "request.awaitingYourDecision",
+                    "task.title",
+                    "request.status"
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "collections": {
+                  "rota_schedule_requests": [
+                    "items"
                   ]
                 }
               }
@@ -4878,7 +7170,8 @@
             }
           }
         ]
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-094",
@@ -4893,6 +7186,9 @@
                 "metrics": {
                   "any": [
                     "calendar.workingDays"
+                  ],
+                  "allowed": [
+                    "calendar.workingDays"
                   ]
                 },
                 "window": {
@@ -4903,6 +7199,14 @@
                   "to": {
                     "anchor": "monthEnd"
                   }
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_calendar_inspect": [
+                    null
+                  ]
                 }
               }
             ]
@@ -4915,7 +7219,11 @@
                   "rota_task_analytics"
                 ],
                 "filters": {
-                  "assignee": "me"
+                  "assignee": "me",
+                  "status": [
+                    "todo",
+                    "in_progress"
+                  ]
                 },
                 "window": {
                   "field": [
@@ -4928,6 +7236,25 @@
                   "to": {
                     "anchor": "monthEnd"
                   }
+                },
+                "operation": [
+                  "value"
+                ],
+                "metrics": {
+                  "all": [
+                    "tasks.total"
+                  ],
+                  "allowed": [
+                    "tasks.total"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    null
+                  ],
+                  "rota_task_analytics": [
+                    null
+                  ]
                 }
               }
             ]
@@ -4970,7 +7297,8 @@
             }
           }
         ]
-      }
+      },
+      "language": "tr"
     },
     {
       "case": "tr-095",
@@ -4993,6 +7321,24 @@
                   "to": [
                     -1,
                     -1
+                  ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "activity.occurredAt"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "activity.occurredAt"
+                  ]
+                },
+                "collections": {
+                  "rota_activity_search": [
+                    "items"
                   ]
                 }
               },
@@ -5017,6 +7363,24 @@
                     -1,
                     -1
                   ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "activity.occurredAt"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "activity.occurredAt"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -5034,6 +7398,22 @@
                   "order": "desc",
                   "metrics": [
                     "tasks.overdue"
+                  ],
+                  "limit": 1
+                },
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "tasks.overdue"
+                  ]
+                },
+                "collections": {
+                  "rota_portfolio_summary": [
+                    "projects"
                   ]
                 }
               },
@@ -5051,6 +7431,22 @@
                   "order": "desc",
                   "metrics": [
                     "tasks.overdue"
+                  ],
+                  "limit": 1
+                },
+                "metrics": {
+                  "all": [
+                    "project.name",
+                    "tasks.overdue"
+                  ],
+                  "allowed": [
+                    "project.name",
+                    "tasks.overdue"
+                  ]
+                },
+                "collections": {
+                  "rota_task_analytics": [
+                    "groups"
                   ]
                 }
               }
@@ -5094,73 +7490,216 @@
             }
           }
         ]
+      },
+      "language": "tr"
+    },
+    {
+      "case": "tr-096",
+      "language": "tr",
+      "choice": {
+        "reason": "ambiguous",
+        "topics": [
+          [
+            "rota_project_detail",
+            "rota_portfolio_summary"
+          ],
+          [
+            "rota_task_search",
+            "rota_task_analytics"
+          ],
+          [
+            "rota_notifications"
+          ]
+        ]
       }
     },
     {
-      "case": "tr-096"
+      "case": "tr-097",
+      "language": "tr",
+      "choice": {
+        "reason": "ambiguous",
+        "topics": [
+          [
+            "rota_baseline_compare"
+          ],
+          [
+            "rota_data_quality"
+          ],
+          [
+            "rota_portfolio_summary",
+            "rota_task_analytics"
+          ]
+        ]
+      }
     },
     {
-      "case": "tr-097"
+      "case": "tr-098",
+      "language": "tr",
+      "choice": {
+        "reason": "ambiguous",
+        "topics": [
+          [
+            "rota_calendar_inspect"
+          ],
+          [
+            "rota_outlook_status"
+          ],
+          [
+            "rota_task_search"
+          ]
+        ]
+      }
     },
     {
-      "case": "tr-098"
+      "case": "tr-099",
+      "language": "tr",
+      "choice": {
+        "reason": "ambiguous",
+        "topics": [
+          [
+            "rota_workload_summary",
+            "rota_task_search"
+          ],
+          [
+            "rota_activity_search"
+          ]
+        ]
+      }
     },
     {
-      "case": "tr-099"
+      "case": "tr-100",
+      "language": "tr",
+      "choice": {
+        "reason": "ambiguous",
+        "topics": [
+          [
+            "rota_recurrence_inspect"
+          ],
+          [
+            "rota_task_search",
+            "rota_task_detail"
+          ]
+        ]
+      }
     },
     {
-      "case": "tr-100"
+      "case": "tr-101",
+      "language": "tr",
+      "choice": {
+        "reason": "missing_referent"
+      }
     },
     {
-      "case": "tr-101"
+      "case": "tr-102",
+      "language": "tr",
+      "choice": {
+        "reason": "missing_referent"
+      }
     },
     {
-      "case": "tr-102"
+      "case": "tr-103",
+      "language": "tr",
+      "choice": {
+        "reason": "outside_data"
+      }
     },
     {
-      "case": "tr-103"
+      "case": "tr-104",
+      "language": "tr",
+      "choice": {
+        "reason": "general"
+      }
     },
     {
-      "case": "tr-104"
+      "case": "tr-105",
+      "language": "tr",
+      "choice": {
+        "reason": "write"
+      }
     },
     {
-      "case": "tr-105"
+      "case": "tr-106",
+      "language": "tr",
+      "choice": {
+        "reason": "write"
+      }
     },
     {
-      "case": "tr-106"
+      "case": "tr-107",
+      "language": "tr",
+      "choice": {
+        "reason": "write"
+      }
     },
     {
-      "case": "tr-107"
+      "case": "tr-108",
+      "language": "tr",
+      "choice": {
+        "reason": "write"
+      }
     },
     {
-      "case": "tr-108"
+      "case": "tr-109",
+      "language": "tr",
+      "choice": {
+        "reason": "write"
+      }
     },
     {
-      "case": "tr-109"
+      "case": "tr-110",
+      "language": "tr",
+      "choice": {
+        "reason": "calculation"
+      }
     },
     {
-      "case": "tr-110"
+      "case": "tr-111",
+      "language": "tr",
+      "choice": {
+        "reason": "calculation"
+      }
     },
     {
-      "case": "tr-111"
+      "case": "tr-112",
+      "language": "tr",
+      "choice": {
+        "reason": "outside_data"
+      }
     },
     {
-      "case": "tr-112"
+      "case": "tr-113",
+      "language": "tr",
+      "choice": {
+        "reason": "outside_data"
+      }
     },
     {
-      "case": "tr-113"
+      "case": "tr-114",
+      "language": "tr",
+      "choice": {
+        "reason": "security"
+      }
     },
     {
-      "case": "tr-114"
+      "case": "tr-115",
+      "language": "tr",
+      "choice": {
+        "reason": "security"
+      }
     },
     {
-      "case": "tr-115"
+      "case": "tr-116",
+      "language": "tr",
+      "choice": {
+        "reason": "security"
+      }
     },
     {
-      "case": "tr-116"
-    },
-    {
-      "case": "tr-117"
+      "case": "tr-117",
+      "language": "tr",
+      "choice": {
+        "reason": "security"
+      }
     }
   ],
   "supplementary": [
@@ -5201,6 +7740,24 @@
                   "priority": [
                     "critical"
                   ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.priority"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.priority"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -5227,7 +7784,8 @@
             ]
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "id": "pl-002",
@@ -5246,7 +7804,11 @@
       "tags": [
         "takip",
         "kapsam"
-      ]
+      ],
+      "language": "tr",
+      "choice": {
+        "reason": "missing_referent"
+      }
     },
     {
       "id": "pl-003",
@@ -5281,6 +7843,24 @@
                   "to": {
                     "anchor": "nextMonthEnd"
                   }
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.targetFinish"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.targetFinish"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -5305,7 +7885,8 @@
             "dateTo": "{{nextMonthEnd}}"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "id": "pl-004",
@@ -5337,6 +7918,22 @@
                     "todo",
                     "in_progress"
                   ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title"
+                  ],
+                  "allowed": [
+                    "task.title"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -5365,7 +7962,8 @@
             ]
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "id": "pl-005",
@@ -5386,7 +7984,25 @@
               {
                 "tools": [
                   "rota_notifications"
-                ]
+                ],
+                "operation": [
+                  "value"
+                ],
+                "metrics": {
+                  "all": [
+                    "notifications.total",
+                    "notifications.unread"
+                  ],
+                  "allowed": [
+                    "notifications.total",
+                    "notifications.unread"
+                  ]
+                },
+                "collections": {
+                  "rota_notifications": [
+                    null
+                  ]
+                }
               }
             ]
           }
@@ -5404,7 +8020,8 @@
           },
           "layout": "auto"
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "id": "pl-006",
@@ -5440,6 +8057,22 @@
                     "todo",
                     "in_progress"
                   ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title"
+                  ],
+                  "allowed": [
+                    "task.title"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -5470,7 +8103,8 @@
             ]
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "id": "pl-007",
@@ -5503,6 +8137,19 @@
                   "any": [
                     "tasks.total",
                     "tasks.open"
+                  ],
+                  "allowed": [
+                    "tasks.overdue",
+                    "tasks.total",
+                    "tasks.open"
+                  ]
+                },
+                "operation": [
+                  "value"
+                ],
+                "collections": {
+                  "rota_task_analytics": [
+                    null
                   ]
                 }
               }
@@ -5525,7 +8172,8 @@
             "assignee": "me"
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "id": "pl-008",
@@ -5551,7 +8199,8 @@
                   "rank"
                 ],
                 "filters": {
-                  "assignee": "me"
+                  "assignee": "me",
+                  "deadline": "overdue"
                 },
                 "rank": {
                   "order": "desc",
@@ -5559,6 +8208,21 @@
                     "task.overdueDays"
                   ],
                   "limit": 3
+                },
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.overdueDays"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.overdueDays"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -5587,7 +8251,8 @@
             "limit": 3
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "id": "pl-009",
@@ -5620,6 +8285,24 @@
                     "todo",
                     "in_progress"
                   ]
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.priority"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.priority"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -5651,7 +8334,8 @@
             ]
           }
         }
-      }
+      },
+      "language": "tr"
     },
     {
       "id": "pl-010",
@@ -5688,6 +8372,22 @@
                   "to": {
                     "anchor": "weekEnd"
                   }
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "calendar.holidayDate"
+                  ],
+                  "allowed": [
+                    "calendar.holidayDate"
+                  ]
+                },
+                "collections": {
+                  "rota_calendar_inspect": [
+                    "holidays"
+                  ]
                 }
               }
             ]
@@ -5715,6 +8415,24 @@
                   "to": {
                     "anchor": "weekEnd"
                   }
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.targetFinish"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.targetFinish"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -5756,7 +8474,8 @@
             }
           }
         ]
-      }
+      },
+      "language": "tr"
     },
     {
       "id": "pl-011",
@@ -5764,7 +8483,11 @@
       "expect": "abstain",
       "tags": [
         "yazma-istegi"
-      ]
+      ],
+      "language": "tr",
+      "choice": {
+        "reason": "write"
+      }
     },
     {
       "id": "pl-012",
@@ -5772,7 +8495,11 @@
       "expect": "abstain",
       "tags": [
         "guvenlik"
-      ]
+      ],
+      "language": "tr",
+      "choice": {
+        "reason": "security"
+      }
     },
     {
       "id": "pl-013",
@@ -5781,7 +8508,11 @@
       "tags": [
         "guvenlik",
         "yonerge-enjeksiyonu"
-      ]
+      ],
+      "language": "tr",
+      "choice": {
+        "reason": "security"
+      }
     },
     {
       "id": "pl-014",
@@ -5789,7 +8520,11 @@
       "expect": "abstain",
       "tags": [
         "alan-disi-veri"
-      ]
+      ],
+      "language": "tr",
+      "choice": {
+        "reason": "outside_data"
+      }
     },
     {
       "id": "pl-015",
@@ -5797,7 +8532,11 @@
       "expect": "clarify",
       "tags": [
         "takip"
-      ]
+      ],
+      "language": "tr",
+      "choice": {
+        "reason": "missing_referent"
+      }
     },
     {
       "id": "pl-016",
@@ -5805,7 +8544,11 @@
       "expect": "abstain",
       "tags": [
         "desteklenmeyen-hesap"
-      ]
+      ],
+      "language": "tr",
+      "choice": {
+        "reason": "calculation"
+      }
     },
     {
       "id": "pl-017",
@@ -5830,6 +8573,24 @@
                 "filters": {
                   "deadline": "overdue",
                   "assignee": "me"
+                },
+                "operation": [
+                  "list"
+                ],
+                "metrics": {
+                  "all": [
+                    "task.title",
+                    "task.overdueDays"
+                  ],
+                  "allowed": [
+                    "task.title",
+                    "task.overdueDays"
+                  ]
+                },
+                "collections": {
+                  "rota_task_search": [
+                    "tasks"
+                  ]
                 }
               }
             ]
@@ -5853,7 +8614,30 @@
             "assignee": "me"
           }
         }
-      }
+      },
+      "language": "tr"
+    },
+    {
+      "id": "pl-018",
+      "text": "Merhaba Bilgin, teşekkür ederim.",
+      "language": "tr",
+      "expect": "general",
+      "needs": [],
+      "avoid": [],
+      "tags": [
+        "genel-sohbet"
+      ]
+    },
+    {
+      "id": "pl-019",
+      "text": "Hello Bilgin, thank you.",
+      "language": "en",
+      "expect": "general",
+      "needs": [],
+      "avoid": [],
+      "tags": [
+        "genel-sohbet"
+      ]
     }
   ]
 }

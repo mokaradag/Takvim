@@ -27,7 +27,7 @@ function scriptedModel(args) {
     inputs,
     async complete(payload) {
       inputs.push(JSON.stringify(payload));
-      return { text: '', toolCalls: [{ id: 'call_1', name: 'rota_plan', arguments: JSON.stringify(args), oversize: false }], usage: null, models: ['scripted'], error: null, durationMs: 0 };
+      return { text: '', toolCalls: [{ id: 'call_1', name: 'rota_plan', arguments: JSON.stringify(args), oversize: false }], usage: { inputTokens: 12, outputTokens: 8, thinkingTokens: 0 }, models: ['scripted'], thinking: 'off', error: null, durationMs: 0 };
     }
   };
 }
@@ -80,8 +80,7 @@ test('açıklama ve çekimserlik vakaları yalnızca sunucunun sonlandırıcı k
   const loaded = loadPlannerBenchmark({ referenceDate });
   const someAnswer = loaded.cases.find((testCase) => testCase.id === 'tr-008');
   for (const testCase of loaded.cases.filter((item) => item.expect !== 'answer')) {
-    const choice = testCase.expect === 'clarify' ? { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } }
-      : { intent: 'abstain', language: 'tr', abstain: { reason: 'security' } };
+    const choice = { intent: testCase.expect, language: testCase.language, ...(testCase.choice ? { [testCase.expect]: { reason: testCase.choice.reason, ...(testCase.choice.topics ? { topics: testCase.choice.topics.map((group) => group[0]).slice(0, 4) } : {}) } } : {}) };
     const chosen = await decide(loaded, testCase, choice);
     assert.ok(scoreDecision(testCase, chosen.record, { referenceDate }).correct, testCase.id);
     assert.equal(chosen.record.plan, null);
@@ -169,5 +168,170 @@ test('üretim kodu altın etiketleri, kıyas kümesini ve değerlendirme betikle
     assert.doesNotMatch(source, /planner-(?:scoring|evaluation)|ai-(?:planner|semantic)-benchmark|fixtures\//, file);
     assert.doesNotMatch(source, /['"`](?:tr|pl)-\d{3}['"`]/, file);
     for (const text of texts) assert.ok(!source.includes(text), `${file}: kıyas metni`);
+  }
+});
+
+test('kapalı puanlama maddi yanlışları eksik altın alanıyla geçirmez', async () => {
+  const referenceDate = '2026-10-14';
+  const loaded = loadPlannerBenchmark({ referenceDate });
+  const reject = async (id, mutate) => {
+    const testCase = loaded.cases.find((item) => item.id === id);
+    const { record } = await decide(loaded, testCase, answerPlan(testCase, referenceDate));
+    assert.ok(scoreDecision(testCase, record, { referenceDate }).correct, id);
+    mutate(record);
+    assert.equal(scoreDecision(testCase, record, { referenceDate }).correct, false, id);
+  };
+  await reject('tr-001', (r) => { r.plan.requests.push(clone(r.plan.requests[0])); });
+  await reject('tr-001', (r) => { r.plan.requests[0].filters.priority = ['high']; });
+  await reject('tr-004', (r) => { r.plan.requests[0].operation = 'value'; r.plan.requests[0].metrics = ['tasks.total']; });
+  await reject('tr-003', (r) => { r.plan.requests[0].operation = 'rank'; r.plan.requests[0].rank = { metric: 'task.progressPercent', order: 'desc', limit: 1 }; });
+  await reject('tr-072', (r) => { r.plan.requests[0].population.collection = 'successors'; });
+  await reject('tr-073', (r) => { r.plan.requests[0].population.collection = 'predecessors'; });
+  await reject('tr-001', (r) => { r.plan.requests[0].reasoning = 'synthesis'; });
+  await reject('tr-001', (r) => { r.plan.requests[0].population.textFields = ['description']; });
+  await reject('tr-001', (r) => { r.language = 'en'; });
+  await reject('tr-048', (r) => { r.plan.requests[0].fields[0].path = 'data.people.*.organization.directorate'; });
+  await reject('tr-001', (r) => { r.plan.requests[0].metrics.push('task.budget'); });
+  for (const id of ['tr-096', 'tr-101', 'tr-105', 'tr-110', 'tr-112', 'tr-114']) {
+    const c = loaded.cases.find((item) => item.id === id);
+    const choice = { intent: c.expect, language: c.language, [c.expect]: { reason: c.choice.reason, ...(c.choice.topics ? { topics: c.choice.topics.map((group) => group[0]) } : {}) } };
+    const { record } = await decide(loaded, c, choice);
+    assert.equal(scoreDecision(c, record, { referenceDate }).correct, true, id);
+    const wrong = clone(record); wrong.choice.reason = c.expect === 'clarify' ? 'wrong' : 'general';
+    assert.equal(scoreDecision(c, wrong, { referenceDate }).correct, false, id);
+    if (c.choice.topics) {
+      const topics = clone(record); topics.choice.topics = ['rota_calendar_inspect', 'rota_outlook_status'];
+      assert.equal(scoreDecision(c, topics, { referenceDate }).correct, false);
+    }
+    const general = clone(record); general.outcome = 'general_redirect'; general.choice = null; general.general = true;
+    assert.equal(scoreDecision(c, general, { referenceDate }).correct, false);
+  }
+});
+
+test('normal soruda korumalı metin kapalıdır; gerçek general vakaları iki dilde ölçülür', async () => {
+  const loaded = loadPlannerBenchmark();
+  const c = loaded.cases.find((item) => item.id === 'tr-001');
+  const args = answerPlan(c, loaded.referenceDate);
+  args.request.population.textFields = ['description'];
+  const model = scriptedModel(args);
+  const result = await planCase({ testCase: c, model, adviceFor: unavailable, now: loaded.now, catalog });
+  assert.equal(result.outcome, 'clarification');
+  assert.equal(result.plan, undefined);
+  assert.match(model.inputs[1], /not-authorized/);
+  for (const c of loaded.cases.filter((item) => item.expect === 'general')) {
+    const { record } = await decide(loaded, c, { intent: 'general', language: c.language });
+    assert.equal(scoreDecision(c, record, loaded).correct, true);
+    assert.equal(record.rounds.length, 1);
+    assert.equal(scoreDecision(c, { ...record, language: c.language === 'tr' ? 'en' : 'tr' }, loaded).correct, false);
+  }
+});
+
+test('koşu bütünlüğü, tarih ve gerçek model/düşünme kökeni puanlamadan önce zorunludur', async () => {
+  const { PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, scorePlannerRun } = await import('../scripts/planner-scoring.mjs');
+  const loaded = loadPlannerBenchmark();
+  const c = loaded.cases[0];
+  const { record } = await decide(loaded, c, answerPlan(c, loaded.referenceDate));
+  const run = { format: PLANNER_RUN_FORMAT, version: PLANNER_RUN_VERSION, benchmark: loaded.fingerprint, semanticBenchmark: loaded.semanticFingerprint,
+    referenceDate: loaded.referenceDate, passes: 1, cases: [c.id], records: [record], semantic: { mode: 'none' }, model: { commandHash: '0'.repeat(64) }, qualification: { expectedModel: 'scripted', thinking: 'off' } };
+  const summary = scorePlannerRun(run, loaded);
+  assert.equal(summary.byPass[0].correct, 1);
+  assert.equal(summary.gatePassed, false, 'kısmi koşu tam kabul değildir');
+  const rejects = (mutate, code = /PLANNER_RUN_INVALID/) => {
+    const bad = clone(run); mutate(bad);
+    assert.throws(() => scorePlannerRun(bad, loaded), code);
+  };
+  rejects((r) => { r.cases.push(c.id); });
+  rejects((r) => { r.cases = []; r.records = []; });
+  rejects((r) => { r.cases = ['unknown']; });
+  rejects((r) => { r.records.push(clone(record)); });
+  rejects((r) => { r.records = []; });
+  rejects((r) => { r.passes = 0; });
+  rejects((r) => { r.records[0].pass = 2; });
+  rejects((r) => { r.records[0].outcome = 'error'; });
+  rejects((r) => { r.referenceDate = '2026-13-01'; });
+  const changed = { ...run, referenceDate: '2026-10-20' };
+  assert.throws(() => scorePlannerRun(changed, loadPlannerBenchmark({ referenceDate: changed.referenceDate })), /PLANNER_RUN_STALE/);
+  rejects((r) => { r.records[0].rounds[0].models = ['claude-sonnet-4-5']; }, /PLANNER_MODEL_MISMATCH/);
+  rejects((r) => { r.records[0].rounds[0].thinking = 2; }, /PLANNER_THINKING_UNVERIFIED/);
+  rejects((r) => { r.records[0].rounds[0].thinking = null; }, /PLANNER_THINKING_UNVERIFIED/);
+  rejects((r) => { r.model.command = 'secret'; });
+  for (const date of ['2026-13-01', '2026-02-30', '2026-02-29']) assert.throws(() => loadPlannerBenchmark({ referenceDate: date }), /REFERENCE_DATE_INVALID/);
+  for (const date of ['02-30', '13-01']) {
+    const gold = clone(DOCUMENT); gold.cases[0].plan.groups[0].any[0].window.from = { date };
+    assert.throws(() => loadPlannerBenchmark({ plannerDocument: gold }), /invalid/);
+  }
+});
+
+test('dış model komutu sınırlıdır, altyapı hatası puan değildir ve komut sırrı kayda yazılmaz', async (t) => {
+  const { mkdtempSync, readdirSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { externalModel, parseArguments, runEvaluation } = await import('../scripts/planner-evaluation.mjs');
+  const { spawnSync } = await import('node:child_process');
+  const dir = mkdtempSync(path.join(tmpdir(), 'planner-test-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  let sequence = 0;
+  const command = (code) => {
+    const file = path.join(dir, `model-${++sequence}.cjs`);
+    writeFileSync(file, code);
+    return `"${process.execPath}" "${file}"`;
+  };
+  const payload = { messages: [], tools: [], toolChoice: 'none' };
+  for (const [code, error] of [["setInterval(()=>{},1000)", 'MODEL_COMMAND_TIMEOUT'], ["process.stdout.write('x'.repeat(10000))", 'MODEL_COMMAND_OUTPUT_LIMIT'], ["process.stderr.write('x'.repeat(10000))", 'MODEL_COMMAND_OUTPUT_LIMIT']]) {
+    const model = externalModel({ command: command(code), inputs: null, guard: () => {}, timeoutMs: error === 'MODEL_COMMAND_TIMEOUT' ? 50 : 5000, outputBytes: 1024 });
+    try { assert.equal((await model.complete(payload)).error, error); } finally { model.dispose(); }
+  }
+  const reply = { text: '', toolCalls: [{ name: 'rota_plan', arguments: { intent: 'general', language: 'tr' } }], models: ['claude-haiku-4-5-20251001'], thinking: 'off', usage: { inputTokens: 7, outputTokens: 3, thinkingTokens: 0 } };
+  const rawCommand = command(`process.stdout.write(${JSON.stringify(JSON.stringify(reply))})`) + ' --api-key NEVER_SAVE_THIS';
+  const { flags } = parseArguments(['run', '--model-command', rawCommand, '--cases', 'pl-018', '--reference-date', '2026-10-14']);
+  const run = await runEvaluation(flags);
+  assert.equal(run.records[0].rounds[0].input, 7);
+  assert.equal(run.records[0].rounds[0].output, 3);
+  assert.equal(run.records[0].rounds[0].thinking, 0);
+  assert.ok(!JSON.stringify(run).includes('NEVER_SAVE_THIS'));
+  assert.ok(!JSON.stringify(run).includes(rawCommand));
+  const runPath = path.join(dir, 'run.json');
+  writeFileSync(runPath, JSON.stringify(run));
+  const cli = spawnSync(process.execPath, ['scripts/planner-evaluation.mjs', 'report', '--run', runPath, '--json'], { encoding: 'utf8', timeout: 20000 });
+  assert.equal(cli.status, 1);
+  assert.ok(!cli.stdout.includes('NEVER_SAVE_THIS'));
+  for (const patch of [{ models: ['claude-sonnet-4-5'] }, { thinking: 'on' }, { usage: { thinkingTokens: 1 } }, { error: 'provider outage with private token' }]) {
+    const badCommand = command(`process.stdout.write(${JSON.stringify(JSON.stringify({ ...reply, ...patch }))})`);
+    await assert.rejects(runEvaluation({ ...flags, modelCommand: badCommand }), /altyapı hatası/);
+  }
+  assert.deepEqual(readdirSync(dir).filter((file) => file.endsWith('.json')), ['run.json']);
+});
+
+test('anlamsal koşuda belgeler ve sayısal yeniden sıralama puanları kimlikle bağlanır', async (t) => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { candidatesFromRun } = await import('../scripts/planner-evaluation.mjs');
+  const { createSemanticCatalogue, semanticToolDefinitions } = await import('../src/domain/ai/semanticContract.js');
+  const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
+  const dir = mkdtempSync(path.join(tmpdir(), 'planner-semantic-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const items = createSemanticCatalogue(semanticToolDefinitions(rotaToolNames().map((name) => getRotaTool(name)))).catalogue;
+  const c = loadPlannerBenchmark().cases[0];
+  const documents = items.items.map((item, index) => ({ id: item.id, text: item.text, vector: [items.items.length - index, 1] }));
+  const run = { format: 'mergen-rota-semantic-model-run', version: 1, benchmark: 'test-benchmark', catalogue: items.fingerprint,
+    embedding: { model: 'local-double', provider: 'test', preprocessing: 'none', documents, queries: [{ case: c.id, text: c.text, vector: [1, 0] }] },
+    rerank: { model: 'local-rerank', provider: 'test', queries: [{ case: c.id, scores: items.items.map((item, index) => ({ id: item.id, score: index })) }] } };
+  const file = path.join(dir, 'run.json');
+  const read = (value) => { writeFileSync(file, JSON.stringify(value)); return candidatesFromRun(file, { cases: [c], semanticFingerprint: 'test-benchmark' }).byCase.get(c.id); };
+  const normal = read(run);
+  assert.equal(normal.status, 'reranked');
+  const shuffled = clone(run); shuffled.embedding.documents.reverse(); shuffled.rerank.queries[0].scores.reverse();
+  assert.deepEqual(read(shuffled), normal);
+  const first = read({ ...run, rerank: null });
+  assert.notDeepEqual(first.candidates.map((item) => item.id), normal.candidates.map((item) => item.id));
+  for (const mutate of [
+    (r) => { r.embedding.documents.push(clone(r.embedding.documents[0])); },
+    (r) => { r.embedding.documents.pop(); },
+    (r) => { r.embedding.queries.push(clone(r.embedding.queries[0])); },
+    (r) => { r.rerank.queries[0].scores[0].score = '1'; },
+    (r) => { r.rerank.queries[0].scores[0].id = 'unknown'; }
+  ]) {
+    const bad = clone(run); mutate(bad); assert.throws(() => read(bad), /SEMANTIC_/);
   }
 });

@@ -26,19 +26,21 @@ export const PLANNER_BENCHMARK_FILE = path.join(ROOT, 'test/fixtures/ai-planner-
 export const PLANNER_BENCHMARK_FORMAT = 'mergen-rota-planner-benchmark';
 export const PLANNER_BENCHMARK_VERSION = 1;
 export const PLANNER_RUN_FORMAT = 'mergen-rota-planner-run';
+export const PLANNER_RUN_VERSION = 2;
+export const WEAK_PLANNER_MODEL = 'claude-haiku-4-5-20251001';
 
 const { createSemanticCatalogue, semanticFingerprint, semanticToolDefinitions, normalizeSemanticQuery } = await import('../src/domain/ai/semanticContract.js');
 const { validateSemanticBenchmark } = await import('../src/domain/ai/semanticEvaluation.js');
 const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
-const { declaredFacets, toolFamily } = await import('../src/server/ai/tools/requestPopulation.js');
+const { canonicalDimensions, declaredFacets, requestDimensions, requestTextFields, toolFamily } = await import('../src/server/ai/tools/requestPopulation.js');
 const { searchText } = await import('../src/server/ai/tools/rota/taskFacts.js');
 const { containmentText } = await import('../src/server/ai/tools/toolScope.js');
-const { METRICS } = await import('../src/domain/ai/claimableEvidence.js');
+const { EVIDENCE_TEXT_FIELDS, METRICS } = await import('../src/domain/ai/claimableEvidence.js');
 const { REQUEST_ENTITY_TYPES, REQUEST_OPERATIONS } = await import('../src/domain/ai/requestContract.js');
 
 /** Adla bildirilen varlık türünün sunucu tarafı çözüm aracı (planlayıcı önkoşulu; ihtiyaç değildir). */
 const RESOLVERS = Object.freeze({ project: 'rota_project_search', person: 'rota_person_search', task: 'rota_task_search', wbs: 'rota_wbs_inspect', baseline: 'rota_baseline_compare' });
-const EXPECTATIONS = Object.freeze(['answer', 'clarify', 'abstain']);
+const EXPECTATIONS = Object.freeze(['answer', 'clarify', 'abstain', 'general']);
 const FILTER_KEYS = Object.freeze(['status', 'priority', 'deadline', 'dateField', 'assignee', 'createdByMe', 'milestone', 'text', 'tab', 'workflowStatus',
   'source', 'includeEmpty', 'activityScope', 'activityKind']);
 const DATE_FIELDS = Object.freeze(['targetFinish', 'calendarDate', 'plannedStart', 'plannedFinish', 'actualStart', 'actualFinish']);
@@ -71,16 +73,21 @@ function validateFilterValue(key, value, at, add) {
 const ANCHORS = Object.freeze(['today', 'weekStart', 'weekEnd', 'monthStart', 'monthEnd', 'nextMonthStart', 'nextMonthEnd', 'previousWeekStart', 'previousWeekEnd', 'yearEnd', 'nextYearStart']);
 
 /** Göreli pencere sınırı: `[alt, üst]` gün farkı bugüne göre ya da `{ anchor | date: 'AA-GG', range }` takvim çapasına göre. */
+export function validCalendarDate(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`))
+    && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+}
+
 function validateRange(value, at, add) {
   const pair = (range) => Array.isArray(range) && range.length === 2 && range.every(Number.isSafeInteger) && range[0] <= range[1] && Math.abs(range[0]) <= 400 && Math.abs(range[1]) <= 400;
   if (Array.isArray(value)) { if (!pair(value)) add(`${at}:invalid`); return; }
   if (!isRecord(value) || Object.keys(value).some((key) => !['anchor', 'date', 'range'].includes(key)) || !pair(value.range ?? [0, 0])
     || (value.anchor === undefined) === (value.date === undefined) || (value.anchor !== undefined && !ANCHORS.includes(value.anchor))
-    || (value.date !== undefined && !/^\d{2}-\d{2}$/.test(value.date))) add(`${at}:invalid`);
+    || (value.date !== undefined && !validCalendarDate(`2025-${value.date}`))) add(`${at}:invalid`);
 }
 
 function validateAlternative(alt, at, add, { tools, groups, group }) {
-  if (!closed(alt, ['tools', 'operation', 'entities', 'metrics', 'filters', 'window', 'rank', 'groupBy', 'dependent'], at, add)) return;
+  if (!closed(alt, ['tools', 'operation', 'entities', 'metrics', 'filters', 'window', 'rank', 'groupBy', 'dependent', 'collections', 'reasoning', 'textFields', 'depth', 'sort', 'fields'], at, add)) return;
   if (alt.entities !== undefined) {
     if (!Array.isArray(alt.entities) || alt.entities.length > 4) add(`${at}.entities:invalid`);
     else alt.entities.forEach((entity, index) => {
@@ -93,11 +100,32 @@ function validateAlternative(alt, at, add, { tools, groups, group }) {
     });
   }
   stringList(alt.tools, `${at}.tools`, add, { allowed: tools });
+  if (alt.operation === undefined) add(`${at}.operation:required`);
+  if (alt.metrics === undefined) add(`${at}.metrics:required`);
+  if (alt.collections === undefined) add(`${at}.collections:required`);
   if (alt.operation !== undefined) stringList(alt.operation, `${at}.operation`, add, { allowed: [...REQUEST_OPERATIONS] });
-  if (alt.metrics !== undefined && closed(alt.metrics, ['any', 'all'], `${at}.metrics`, add)) {
+  if (alt.metrics !== undefined && closed(alt.metrics, ['any', 'all', 'allowed'], `${at}.metrics`, add)) {
+    stringList(alt.metrics.allowed, `${at}.metrics.allowed`, add, { allowed: Object.keys(METRICS), max: 24 });
     if (alt.metrics.any !== undefined) stringList(alt.metrics.any, `${at}.metrics.any`, add, { allowed: Object.keys(METRICS), max: 16 });
     if (alt.metrics.all !== undefined) stringList(alt.metrics.all, `${at}.metrics.all`, add, { allowed: Object.keys(METRICS), max: 8 });
   }
+  if (alt.collections !== undefined && closed(alt.collections, alt.tools || [], `${at}.collections`, add)) {
+    for (const tool of alt.tools || []) {
+      const values = alt.collections[tool];
+      if (!Array.isArray(values) || !values.length || values.some((value) => value !== null && typeof value !== 'string') || new Set(values).size !== values.length) add(`${at}.collections.${tool}:invalid`);
+    }
+  }
+  if (alt.fields !== undefined) {
+    if (!Array.isArray(alt.fields) || !alt.fields.length) add(`${at}.fields:invalid`);
+    else for (const field of alt.fields) {
+      if (!closed(field, ['metric', 'tool', 'path'], `${at}.fields`, add)) continue;
+      if (!Object.hasOwn(METRICS, field.metric) || !tools.includes(field.tool) || typeof field.path !== 'string') add(`${at}.fields:invalid`);
+    }
+  }
+  if (alt.reasoning !== undefined) stringList(alt.reasoning, `${at}.reasoning`, add, { allowed: ['deterministic', 'synthesis'] });
+  if (alt.textFields !== undefined) stringList(alt.textFields, `${at}.textFields`, add, { allowed: [...EVIDENCE_TEXT_FIELDS], min: 0 });
+  if (alt.depth !== undefined && (!Number.isSafeInteger(alt.depth) || alt.depth < 1 || alt.depth > 4)) add(`${at}.depth:invalid`);
+  if (alt.sort !== undefined) stringList(alt.sort, `${at}.sort`, add);
   if (alt.filters !== undefined && closed(alt.filters, FILTER_KEYS, `${at}.filters`, add)) {
     for (const [key, value] of Object.entries(alt.filters)) validateFilterValue(key, value, `${at}.filters`, add);
   }
@@ -169,6 +197,22 @@ export function resolveExample(example, referenceDate) {
   return resolve(example);
 }
 
+/** Sonlandırıcı kararın nedeni ve konuları da kapalı altın sözleşmenin parçasıdır. */
+function validateDecisionGold(entry, expect, at, add) {
+  if (!['tr', 'en'].includes(entry.language)) add(`${at}.language:required`);
+  if (!['clarify', 'abstain'].includes(expect)) {
+    if (entry.choice !== undefined) add(`${at}.choice:forbidden`);
+    return;
+  }
+  if (!closed(entry.choice, ['reason', 'topics'], `${at}.choice`, add)) return;
+  const reasons = expect === 'clarify' ? ['missing_referent', 'ambiguous'] : ['write', 'calculation', 'outside_data', 'security', 'general'];
+  if (!reasons.includes(entry.choice.reason)) add(`${at}.choice.reason:invalid`);
+  if (entry.choice.reason === 'ambiguous') {
+    if (!Array.isArray(entry.choice.topics) || entry.choice.topics.length < 2) add(`${at}.choice.topics:required`);
+    else entry.choice.topics.forEach((group) => stringList(group, `${at}.choice.topics`, add, { allowed: rotaToolNames() }));
+  } else if (entry.choice.topics !== undefined) add(`${at}.choice.topics:forbidden`);
+}
+
 /**
  * Altın etiket belgesini doğrular ve Aşama 4A kıyas kümesine bağlar. Sonuç: vaka metni, beklentisi,
  * ihtiyaçları, kaçınmaları ve (yanıt vakasında) türlü plan kısıtları.
@@ -187,7 +231,7 @@ export function validatePlannerBenchmark(document, semantic) {
   if (!Array.isArray(document.cases) || document.cases.length !== semantic.cases.length) add('cases:count');
   for (const [position, entry] of (Array.isArray(document.cases) ? document.cases : []).entries()) {
     const at = `cases[${position}]`;
-    if (!closed(entry, ['case', 'plan', 'example'], at, add)) continue;
+    if (!closed(entry, ['case', 'plan', 'example', 'language', 'choice'], at, add)) continue;
     const testCase = byId.get(entry.case);
     if (!testCase) { add(`${at}.case:unknown`); continue; }
     if (seen.has(entry.case)) add(`${at}.case:duplicate`);
@@ -197,7 +241,8 @@ export function validatePlannerBenchmark(document, semantic) {
       if (entry.plan === undefined || entry.example === undefined) add(`${at}:answer-gold-required`);
       else { validatePlan(entry.plan, `${at}.plan`, add, { tools, needs: testCase.needs }); validateExample(entry.example, `${at}.example`, add); }
     } else if (entry.plan !== undefined || entry.example !== undefined) add(`${at}:gold-forbidden`);
-    cases.push({ id: testCase.id, text: testCase.text, history: [], expect: testCase.expect, needs: testCase.needs, avoid: testCase.avoid, tags: testCase.tags,
+    validateDecisionGold(entry, testCase.expect, at, add);
+    cases.push({ language: entry.language, choice: entry.choice, id: testCase.id, text: testCase.text, history: [], expect: testCase.expect, needs: testCase.needs, avoid: testCase.avoid, tags: testCase.tags,
       gold: entry.plan ?? null, example: entry.example ?? null, canonical: true });
   }
   const supplementary = Array.isArray(document.supplementary) ? document.supplementary : null;
@@ -205,7 +250,7 @@ export function validatePlannerBenchmark(document, semantic) {
   const texts = new Set(semantic.cases.map((testCase) => testCase.text));
   for (const [position, entry] of (supplementary || []).entries()) {
     const at = `supplementary[${position}]`;
-    if (!closed(entry, ['id', 'text', 'history', 'expect', 'needs', 'avoid', 'tags', 'plan', 'example'], at, add)) continue;
+    if (!closed(entry, ['id', 'text', 'history', 'expect', 'needs', 'avoid', 'tags', 'plan', 'example', 'language', 'choice'], at, add)) continue;
     if (typeof entry.id !== 'string' || !/^pl-\d{3}$/.test(entry.id) || seen.has(entry.id)) add(`${at}.id:invalid`);
     seen.add(entry.id);
     const query = normalizeSemanticQuery(entry.text);
@@ -225,7 +270,8 @@ export function validatePlannerBenchmark(document, semantic) {
       if (entry.plan === undefined || entry.example === undefined) add(`${at}:answer-gold-required`);
       else if (Array.isArray(needs)) { validatePlan(entry.plan, `${at}.plan`, add, { tools, needs }); validateExample(entry.example, `${at}.example`, add); }
     } else if (entry.plan !== undefined || entry.example !== undefined) add(`${at}:gold-forbidden`);
-    cases.push({ id: entry.id, text: entry.text, history, expect: entry.expect, needs, avoid, tags: entry.tags, gold: entry.plan ?? null, example: entry.example ?? null, canonical: false });
+    validateDecisionGold(entry, entry.expect, at, add);
+    cases.push({ language: entry.language, choice: entry.choice, id: entry.id, text: entry.text, history, expect: entry.expect, needs, avoid, tags: entry.tags, gold: entry.plan ?? null, example: entry.example ?? null, canonical: false });
   }
   if (issues.length) return { ok: false, issues };
   return { ok: true, benchmark: {
@@ -237,6 +283,7 @@ export function validatePlannerBenchmark(document, semantic) {
 
 /** Kıyas kümesi ve altın etiketler; referans gün Türkiye saatiyle sabittir (göreli tarihler buna göre puanlanır). */
 export function loadPlannerBenchmark({ plannerDocument = null, goldRequired = true, referenceDate = '2026-10-14' } = {}) {
+  if (!validCalendarDate(referenceDate)) throw new Error('PLANNER_REFERENCE_DATE_INVALID');
   const built = createSemanticCatalogue(semanticToolDefinitions(rotaToolNames().map((name) => getRotaTool(name))));
   const semantic = validateSemanticBenchmark(JSON.parse(readFileSync(SEMANTIC_BENCHMARK_FILE, 'utf8')), built.catalogue);
   if (!semantic.ok) throw new Error(`Kıyas kümesi geçersiz: ${semantic.issues.join(', ')}`);
@@ -249,7 +296,7 @@ export function loadPlannerBenchmark({ plannerDocument = null, goldRequired = tr
   const document = plannerDocument ?? JSON.parse(readFileSync(PLANNER_BENCHMARK_FILE, 'utf8'));
   const validated = validatePlannerBenchmark(document, semantic.benchmark);
   if (!validated.ok) throw new Error(`Planlayıcı altın etiketleri geçersiz: ${validated.issues.join(', ')}`);
-  return { ...validated.benchmark, referenceDate, now: new Date(`${referenceDate}T06:00:00Z`) };
+  return { ...validated.benchmark, fingerprint: semanticFingerprint([validated.benchmark.fingerprint, referenceDate]), referenceDate, now: new Date(`${referenceDate}T06:00:00Z`) };
 }
 
 /* ── Puanlama ───────────────────────────────────────────────────────── */
@@ -272,7 +319,10 @@ const dayNumber = (day) => Math.round(Date.parse(`${day}T00:00:00Z`) / 86400000)
 function anchorDay(referenceDate, bound) {
   const today = dayNumber(referenceDate);
   const [year, month] = referenceDate.split('-').map(Number);
-  if (bound.date) return dayNumber(`${year}-${bound.date}`);
+  if (bound.date) {
+    if (!validCalendarDate(`${year}-${bound.date}`)) throw new Error('PLANNER_GOLD_DATE_INVALID');
+    return dayNumber(`${year}-${bound.date}`);
+  }
   const weekday = (new Date(`${referenceDate}T00:00:00Z`).getUTCDay() + 6) % 7;
   const monthStart = dayNumber(`${referenceDate.slice(0, 7)}-01`);
   const nextMonth = month === 12 ? `${year + 1}-01-01` : `${year}-${String(month + 1).padStart(2, '0')}-01`;
@@ -286,7 +336,7 @@ function anchorDay(referenceDate, bound) {
 
 /** Penceredeki tarih sınırın kabul aralığında mı? */
 function withinBound(referenceDate, day, bound) {
-  if (typeof day !== 'string') return false;
+  if (!validCalendarDate(day)) return false;
   const base = Array.isArray(bound) ? dayNumber(referenceDate) : anchorDay(referenceDate, bound);
   const [lo, hi] = Array.isArray(bound) ? bound : (bound.range ?? [0, 0]);
   const value = dayNumber(day);
@@ -305,13 +355,39 @@ function effectiveWindow(tool, facets, referenceDate) {
 function alternativeIssue(part, alt, { referenceDate, matchedParts }) {
   const tool = part.population?.tool;
   if (!alt.tools.includes(tool)) return `tool:${tool}`;
-  if (alt.operation && !alt.operation.includes(part.operation)) return `operation:${part.operation}`;
+  if (!alt.operation.includes(part.operation)) return `operation:${part.operation}`;
   if (alt.metrics?.all && alt.metrics.all.some((metric) => !part.metrics.includes(metric))) return 'metrics:all';
   if (alt.metrics?.any && !alt.metrics.any.some((metric) => part.metrics.includes(metric))) return 'metrics:any';
+  if (alt.fields && (alt.fields.some((gold) => !(part.fields || []).some((field) => field.metric === gold.metric && field.tool === gold.tool && field.path === gold.path))
+    || (part.fields || []).some((field) => !alt.fields.some((gold) => field.metric === gold.metric && field.tool === gold.tool && field.path === gold.path)))) return 'fields';
+  if (!alt.fields && (part.fields || []).length) return 'fields:unexpected';
+  if ((part.bindings || []).length && (part.entities || []).length > 1) return 'bindings:unexpected';
+  if (part.metrics.some((metric) => !alt.metrics.allowed.includes(metric))) return 'metrics:extra';
+  if (!(alt.collections[tool] || []).includes(part.population?.collection ?? null)) return 'collection';
+  if (!(alt.reasoning || ['deterministic']).includes(part.reasoning || 'deterministic')) return 'reasoning';
+  if (!sameValue(requestTextFields(part), alt.textFields || [])) return 'textFields';
+  if (!alt.rank && part.rank) return 'rank:unexpected';
+  if (!alt.groupBy && part.population?.groupBy) return 'groupBy:unexpected';
+  const dimensions = requestDimensions(part, tool);
+  const defaults = canonicalDimensions(tool, part.filters || {});
+  if ((dimensions.depth ?? null) !== (alt.depth ?? defaults.depth ?? null)) return 'depth';
+  if (alt.sort ? !alt.sort.includes(dimensions.sort) : !alt.rank && dimensions.sort !== defaults.sort) return 'sort';
   const facets = toolFamily(tool) ? declaredFacets(tool, part.filters || {}, referenceDate) : {};
   for (const [key, expected] of Object.entries(alt.filters || {})) {
     const actual = key === 'dateField' ? facets.dateField : facets[key];
     if (!filterMatches(key, actual, expected)) return `filter:${key}`;
+  }
+  const expectedFilters = Object.fromEntries(Object.entries(alt.filters || {}).map(([key, value]) => [key, isRecord(value)
+    ? value.any.find((option) => filterMatches(key, facets[key], option)) ?? value.any[0] : value]));
+  if (!Object.hasOwn(expectedFilters, 'text') && ['rota_project_search', 'rota_person_search'].includes(tool)) {
+    const type = tool === 'rota_project_search' ? 'project' : 'person';
+    const entity = (alt.entities || []).find((item) => item.type === type);
+    if (entity?.texts?.some((text) => searchText(text) === facets.text)) expectedFilters.text = facets.text;
+  }
+  const expectedFacets = declaredFacets(tool, expectedFilters, referenceDate);
+  for (const key of new Set([...Object.keys(facets), ...Object.keys(expectedFacets)])) {
+    if (Object.hasOwn(alt.filters || {}, key) || alt.window && ['dateFrom', 'dateTo', 'dateField'].includes(key)) continue;
+    if (!sameValue(facets[key], expectedFacets[key] ?? null)) return `filter:unexpected-${key}`;
   }
   if (alt.window) {
     const window = alt.window;
@@ -385,13 +461,22 @@ function entitiesIssue(part, expected) {
  */
 export function scoreDecision(testCase, record, { referenceDate }) {
   const reasons = [];
-  if (testCase.expect === 'clarify') {
-    if (record.outcome === 'clarification' && record.choice?.intent === 'clarify' && !record.plan) return { correct: true, reasons };
-    return { correct: false, reasons: [`decision:${record.outcome}`] };
+  if (record.language !== testCase.language) return { correct: false, reasons: ['language'] };
+  if (testCase.expect === 'general') {
+    return record.outcome === 'general_redirect' && record.general && !record.plan && !record.choice
+      ? { correct: true, reasons } : { correct: false, reasons: [`decision:${record.outcome}`] };
   }
-  if (testCase.expect === 'abstain') {
-    const nonExecution = !record.plan && (record.outcome === 'abstained' || (record.outcome === 'general_redirect' && record.general));
-    return nonExecution ? { correct: true, reasons } : { correct: false, reasons: [`decision:${record.outcome}`] };
+  if (['clarify', 'abstain'].includes(testCase.expect)) {
+    const expected = testCase.expect === 'clarify' ? 'clarification' : 'abstained';
+    if (record.outcome !== expected || record.choice?.intent !== testCase.expect || record.plan) return { correct: false, reasons: [`decision:${record.outcome}`] };
+    if (record.choice.reason !== testCase.choice.reason) reasons.push('choice:reason');
+    const topics = record.choice.topics || [];
+    const groups = testCase.choice.topics || [];
+    if (groups.length) {
+      const matched = groups.filter((group) => group.some((tool) => topics.includes(tool)));
+      if (topics.length < 2 || new Set(topics).size !== topics.length || matched.length < 2 || topics.some((topic) => !groups.flat().includes(topic))) reasons.push('choice:topics');
+    } else if (topics.length) reasons.push('choice:topics');
+    return { correct: !reasons.length, reasons };
   }
   if (record.outcome !== 'planned' || !record.plan) return { correct: false, reasons: [`decision:${record.outcome}`] };
   const parts = record.plan.requests;
@@ -410,20 +495,57 @@ export function scoreDecision(testCase, record, { referenceDate }) {
   else {
     // Gerekli bölümlere eşlenmeyen her bölüm de sorunun bir okuması olmalıdır (bir grubun ya da ek bölümlerin seçeneği).
     const used = new Set(Object.values(matched.matched));
-    const options = [...testCase.gold.groups.flatMap((group) => group.any), ...(testCase.gold.extras || [])];
+    const options = [...(testCase.gold.extras || [])];
     parts.forEach((part, index) => {
-      if (!used.has(index) && !options.some((alt) => !alternativeIssue(part, alt, { referenceDate, matchedParts: matched.matched }))) reasons.push('parts:extra');
+      if (used.has(index)) return;
+      const extra = options.findIndex((alt) => !alternativeIssue(part, alt, { referenceDate, matchedParts: matched.matched }));
+      if (extra < 0) reasons.push('parts:extra');
+      else options.splice(extra, 1);
     });
   }
   return { correct: reasons.length === 0, reasons: [...new Set(reasons)] };
 }
 
+/** Puanlamadan önce bütünlük; bozuk koşu bir model puanı değildir. */
+export function validatePlannerRun(run, loaded) {
+  const invalid = () => { throw new Error('PLANNER_RUN_INVALID'); };
+  if (!isRecord(run) || run.format !== PLANNER_RUN_FORMAT || run.version !== PLANNER_RUN_VERSION) invalid();
+  if (run.benchmark !== loaded.fingerprint || run.semanticBenchmark !== loaded.semanticFingerprint) throw new Error('PLANNER_RUN_STALE');
+  if (!validCalendarDate(run.referenceDate) || run.referenceDate !== loaded.referenceDate) invalid();
+  const known = new Set(loaded.cases.map((testCase) => testCase.id));
+  if (!Array.isArray(run.cases) || !run.cases.length || run.cases.some((id) => !known.has(id)) || new Set(run.cases).size !== run.cases.length) invalid();
+  if (!Number.isSafeInteger(run.passes) || run.passes < 1 || run.passes > 10 || !Array.isArray(run.records) || run.records.length !== run.cases.length * run.passes) invalid();
+  if (!isRecord(run.qualification) || typeof run.qualification.expectedModel !== 'string' || !run.qualification.expectedModel || run.qualification.thinking !== 'off') invalid();
+  if (!isRecord(run.model) || Object.keys(run.model).some((key) => !['live', 'commandHash'].includes(key)) || Boolean(run.model.live) === Boolean(run.model.commandHash)) invalid();
+  if (run.model.commandHash && !/^[a-f0-9]{64}$/.test(run.model.commandHash)) invalid();
+  if (run.model.live && (run.model.live.thinking !== 'off' || run.model.live.model !== run.qualification.expectedModel || !run.model.live.provider || run.model.live.profile !== 'chat.tools')) invalid();
+  if (!isRecord(run.semantic) || !['none', 'run', 'live'].includes(run.semantic.mode)) invalid();
+  if (run.semantic.mode === 'run' && (!run.semantic.provenance?.model || !run.semantic.provenance?.provider || !run.semantic.provenance?.preprocessing)) invalid();
+  if (run.semantic.mode === 'live' && run.semantic.provenance?.path !== 'gateway') invalid();
+  const seen = new Set();
+  for (const record of run.records) {
+    const key = `${record.pass}:${record.case}`;
+    if (!run.cases.includes(record.case) || !Number.isSafeInteger(record.pass) || record.pass < 1 || record.pass > run.passes || seen.has(key)) invalid();
+    seen.add(key);
+    if (!Array.isArray(record.rounds) || !record.rounds.length || record.rounds.some((round) => round.error)) invalid();
+    if (!['planned', 'clarification', 'abstained', 'general_redirect', 'failed'].includes(record.outcome) || record.error) invalid();
+    if (!['reranked', 'first_stage', 'unavailable'].includes(record.semantic?.state) || !Array.isArray(record.semantic?.candidates)
+      || new Set(record.semantic.candidates).size !== record.semantic.candidates.length || record.semantic.candidates.length > 10
+      || record.semantic.candidates.some((id) => !rotaToolNames().includes(id))) invalid();
+    if ((run.semantic.mode === 'none' || record.semantic.state === 'unavailable') && record.semantic.candidates.length
+      || record.semantic.state !== 'unavailable' && !record.semantic.candidates.length) invalid();
+    for (const round of record.rounds) {
+      if (!Array.isArray(round.models) || !round.models.length || round.models.some((model) => model !== run.qualification.expectedModel)) throw new Error('PLANNER_MODEL_MISMATCH');
+      if (round.thinkingMode !== 'off' || round.thinking !== 0 || round.thinkingBlocks != null && round.thinkingBlocks !== 0) throw new Error('PLANNER_THINKING_UNVERIFIED');
+    }
+  }
+}
+
 /** Koşu kaydı güncel kıyas ve altın etiketlere ait olmalıdır; geçiş başına özet ve vaka kimliğiyle ıskalar. */
 export function scorePlannerRun(run, loaded) {
-  if (!isRecord(run) || run.format !== PLANNER_RUN_FORMAT || run.version !== 1) throw new Error('PLANNER_RUN_INVALID');
-  if (run.benchmark !== loaded.fingerprint) throw new Error('PLANNER_RUN_STALE');
+  validatePlannerRun(run, loaded);
   const byId = new Map(loaded.cases.map((testCase) => [testCase.id, testCase]));
-  const selected = (Array.isArray(run.cases) ? run.cases : []).filter((id) => byId.has(id));
+  const selected = run.cases;
   const byPass = [];
   for (let pass = 1; pass <= run.passes; pass += 1) {
     const records = new Map(run.records.filter((record) => record.pass === pass).map((record) => [record.case, record]));
@@ -452,7 +574,9 @@ export function scorePlannerRun(run, loaded) {
     semantic: run.semantic, models, thinkingTokens: { calls: thinking.length, max: thinking.length ? Math.max(...thinking) : null },
     modelCalls: run.records.reduce((sum, record) => sum + record.rounds.length, 0),
     repairs: { plansWithRepair: run.records.filter((record) => (record.declarations ?? 0) > 1).length, maxDeclarations: declarations.length ? Math.max(...declarations) : 0 },
-    byPass
+    byPass,
+    gatePassed: byPass.every((pass) => pass.correct === pass.total && pass.canonical.total === loaded.cases.filter((item) => item.canonical).length
+      && pass.supplementary.total === loaded.cases.filter((item) => !item.canonical).length)
   };
 }
 

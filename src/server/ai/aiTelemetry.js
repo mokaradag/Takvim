@@ -66,8 +66,8 @@ function createState() {
     grounding: { grounded: 0, general_redirect: 0, clarification: 0, abstained: 0, not_found: 0, unavailable: 0, failed: 0, repaired: 0, disclosed: 0, serverSelected: 0, rounds: [], evidence: [],
       escalations: { total: 0, byReason: {}, byOutcome: {} } },
     // Aşama 4C planlayıcısı: karar, anlamsal durum, aday sayısı, bildirim/düzeltme sayısı ve süre (soru, istem ya da plan içeriği YOK).
-    planner: { decisions: { rota: 0, general: 0, clarify: 0, abstain: 0, invalid: 0 }, multiPart: 0,
-      semantic: { reranked: 0, first_stage: 0, unavailable: 0 }, rejections: {}, declarations: [], candidates: [], latencyMs: [] },
+    planner: { decisions: { rota: 0, general: 0, clarify: 0, abstain: 0, invalid: 0, text_fields: 0 }, multiPart: 0,
+      semantic: { reranked: 0, first_stage: 0, unavailable: 0 }, semanticReasons: {}, rejections: {}, declarations: [], candidates: [], latencyMs: [] },
     // Anlamsal aday keşfi: yalnızca sonuç, başarısızlık sınıfı, dizin kullanımı ve süre (sorgu, vektör ya da aday metni YOK).
     semantic: { retrievals: 0, byStatus: { reranked: 0, first_stage: 0, unavailable: 0, cancelled: 0 }, failures: {},
       index: { hit: 0, built: 0, shared: 0 }, latencyMs: [], lastFailure: null },
@@ -460,6 +460,7 @@ export function aiTelemetrySnapshot() {
       decisions: { ...current.planner.decisions },
       multiPart: current.planner.multiPart,
       semantic: { ...current.planner.semantic },
+      semanticReasons: { ...current.planner.semanticReasons },
       rejections: { ...current.planner.rejections },
       declarations: countPercentiles(current.planner.declarations),
       candidates: countPercentiles(current.planner.candidates),
@@ -685,7 +686,7 @@ export function recordGroundedEscalation({ requestedMode, models = [], reason, t
   }));
 }
 
-const PLANNER_DECISIONS = new Set(['rota', 'general', 'clarify', 'abstain', 'invalid']);
+const PLANNER_DECISIONS = new Set(['rota', 'general', 'clarify', 'abstain', 'invalid', 'text_fields']);
 const PLANNER_SEMANTIC_STATES = new Set(['reranked', 'first_stage', 'unavailable']);
 const MAX_PLANNER_REJECTION_KINDS = 32;
 
@@ -694,11 +695,13 @@ const MAX_PLANNER_REJECTION_KINDS = 32;
  * danışmanlığın durumu ve aday sayısı, bildirim sayısı ve karara kadar geçen süre. Soru, istem,
  * plan, araç bağımsız değişkeni ya da Sicil yazılmaz.
  */
-export function recordPlannerDecision({ decision, parts = 0, semantic = 'unavailable', candidates = 0, declarations = 0, latencyMs = 0 }) {
+export function recordPlannerDecision({ decision, parts = 0, semantic = 'unavailable', candidates = 0, declarations = 0, latencyMs = 0, semanticReason = null }) {
   safely(() => {
     const current = state().planner;
     current.decisions[PLANNER_DECISIONS.has(decision) ? decision : 'invalid'] += 1;
     if (parts > 1) current.multiPart += 1;
+    const reason = ['TIMEOUT', 'PROFILE_DISABLED', 'MODEL_UNAVAILABLE', 'INTERNAL_UNAVAILABLE'].includes(semanticReason) ? semanticReason : 'OTHER';
+    if (semantic === 'unavailable') current.semanticReasons[reason] = (current.semanticReasons[reason] || 0) + 1;
     current.semantic[PLANNER_SEMANTIC_STATES.has(semantic) ? semantic : 'unavailable'] += 1;
     pushSample(current.declarations, safeCount(declarations));
     pushSample(current.candidates, safeCount(candidates));
