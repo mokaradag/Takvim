@@ -103,7 +103,7 @@ test('a declaration without calls is read by the server; a missing declaration c
   assert.equal(stack.provider.calls.length, 3);
   assert.deepEqual(turnTraces(logs).map(({ context }) => [context.selectedBy, context.toolCalls, context.rounds.map((round) => round.purpose)]),
     [['server', 1, ['plan']], ['server', 1, ['tools', 'declaration']]]);
-  assert.deepEqual(turnTraces(logs).map(({ context }) => context.declarations), [1, 1]);
+  assert.deepEqual(turnTraces(logs).map(({ context }) => context.declarations), [1, 2]);
   assert.ok(stack.provider.calls.every((call) => call.model === DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model));
   drained(stack.provider);
 });
@@ -146,7 +146,7 @@ test('a newer complete snapshot supersedes duplicate older rows without another 
   assert.equal(answer.finishReason, 'stop');
   assert.deepEqual(answer.evidence.map((item) => item.id), ['R2']);
   const [trace] = turnTraces(logs);
-  assert.deepEqual([trace.context.selectedBy, trace.context.rounds.map((round) => round.purpose)], ['server', ['tools']]);
+  assert.deepEqual([trace.context.selectedBy, trace.context.rounds.map((round) => round.purpose)], ['server', ['plan']]);
   assert.equal(aiTelemetrySnapshot().grounding.serverSelected, 1);
   drained(stack.provider);
 });

@@ -253,7 +253,15 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
       for (const field of fields || []) if (!allowedTextFields || allowedTextFields.includes(field)) textFields.add(field);
     },
     /** Sunucunun önceden doğruladığı yeni bölüm: kök nüfusu yereldir, yetkili takip kimlikleri ortaktır. */
-    beginPart() {
+    beginPart(selectedRows = []) {
+      // Yalnızca doğrulanmış kaynak bölümün seçili sonuç satırları; aday koleksiyonu kimlik değildir.
+      for (const { tool, collection, row } of selectedRows) {
+        for (const [type, population] of [['task', 'tasks'], ['project', 'projects']]) {
+          const field = rowIdentityPath(tool, collection, type);
+          const id = field?.split('.').reduce((value, key) => value?.[key], row);
+          if (typeof id === 'string' || typeof id === 'number') ids[population].add(String(id));
+        }
+      }
       roots.clear();
       broadRoots.clear();
       broadProjects = false;

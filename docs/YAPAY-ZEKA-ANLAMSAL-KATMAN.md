@@ -176,8 +176,8 @@ Aşama 4 **tam olarak dört** uygulama adımından oluşur ve 4D ile biter.
 ### 4C — Akıllı planlayıcı ve zayıf model doğrulaması (UYGULANDI — kabul kapısı AÇIK)
 
 > Kod, sözleşme, değerlendirici ve altın etiketler uygulandı ve sınanıyor
-> (§12). **117/117 kabul kapısı geçilmedi:** zayıf model uyumluluk kapısında
-> (Haiku 4.5, düşünme kapalı) son geçiş 88/117, bir önceki 89/117 (§12.7).
+> (§12). **Düzeltilmiş kabul kapısı bekliyor:** kanonik 117/117 ve zorunlu ek 19/19 birlikte gerekir.
+> Tarihsel Haiku 4.5 88/117 ve 89/117 ölçümleri düzeltilmiş kapıdan önceye aittir (§12.7).
 > Gerçek Qwen3-Next-80B-A3B-Instruct nitelendirmesi kurum içinde bekliyor.
 
 - Sıralanmış anlamsal anlayışı Aşama 3 türlü araç yürütmesine bağlamak:
@@ -1428,3 +1428,30 @@ Ek 17 vaka önceki geçişte 17/17.
 
 
 **4C kök neden yakınsaması:** Katı değerlendirici için yerel belirlenimci regresyonlar güncellendi. Bu ortamda doğrulanmış Haiku 4.5 / kurum içi model erişimi yoktur; düzeltilmiş kapıyla yeni gerçek-model ölçümü **bekliyor**. Kanonik 117/117 ve ek 19/19 gerçek modelle gösterilmeden kabul/merge-ready iddiası yoktur. Üretim uç noktası, araç, sağlayıcı, bağımlılık, göç veya yetki yolu eklenmedi; üretim araç sınırları değiştirilmedi.
+
+
+### 12.8 — İkinci kök neden yakınsaması
+
+İlk karar yalnızca yerel `rota_plan` çağrısıdır; metin JSON başarılı plan sayılmaz. Okuma sınırı kanıt
+sayısından ayrıdır; başarısız okuma niyeti yeniden açmaz. Veri öncesi Derin devri karar ve onarım
+anlık görüntüsünü birlikte temizler. Onarım, tamamlanmış anlamı karşılaştırır; bağımsız geçerli
+bölümler ve soru sayısı korunur. Çok bölümlü sonuçta eksik bölüm `grounded` sayılmaz; tek aday
+seçimi açıklama bağlamıyla saklanır. Bağımlı kimlikler yalnızca doğrulanmış kaynak seçiminin sonuç
+satırlarından gelir; sıralama sınırı sonraki okumaları genişletmez.
+
+Değerlendiricide izinler açık `input.allowedTextFields` girdisidir; altın etiket modele giden girdiyi
+etkilemez. `--semantic none` tanısaldır, kabul sağlamaz. Dosyadan anlamsal kabul için 136 sorunun
+vektörlerini aynı mevcut Python koşucusuyla üretin:
+
+```bash
+node scripts/planner-evaluation.mjs input --out planner-semantic-input.json
+python3 scripts/semantic-model-qualification.py --input planner-semantic-input.json --output planner-semantic-run.json --embedding-model <yerel-model> --reranker-model <yerel-yeniden-siralayici>
+node scripts/planner-evaluation.mjs run --model-command '<komut>' --semantic planner-semantic-run.json --out planner-run.json --json
+```
+
+Eksik/yabancı/yinelenen anlamsal kimlikler reddedilir. Belgelenmiş `INFERENCE_FAILED` yeniden
+sıralama sonucu ilk aşamaya döner; bozuk skor kümesi geçersizdir. Canlı yolda kayıtlı düşünmesiz
+rota, olaylar ve eksik/sıfır kullanım birlikte doğrulanır; dış komutta bilinmeyen düşünme sayısı
+kabul edilmez. Her iki model yolunda her tur sızıntı denetiminden geçer. Dış komut çağıranın
+çalışma klasöründe çalışır; geçici dosyaları ayrı klasördedir. `--no-score --out` ve canlı modelle
+aynı anda dış komut açıkça reddedilir. Gerçek model kabulü hâlâ bekliyor.

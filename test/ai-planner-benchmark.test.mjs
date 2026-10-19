@@ -38,7 +38,7 @@ async function decide(loaded, testCase, args) {
   return { record: recordOf(testCase, 1, outcome), inputs: model.inputs };
 }
 
-const answerPlan = (testCase, referenceDate) => ({ intent: 'rota', language: 'tr', ...resolveExample(testCase.example, referenceDate) });
+const answerPlan = (testCase, referenceDate) => ({ intent: 'rota', language: testCase.language, ...resolveExample(testCase.example, referenceDate) });
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
 test('altın etiket belgesi kapalı şemadır, kıyas kümesine bağlıdır ve bozulmuş biçimleri reddeder', () => {
@@ -182,6 +182,7 @@ test('kapalı puanlama maddi yanlışları eksik altın alanıyla geçirmez', as
     assert.equal(scoreDecision(testCase, record, { referenceDate }).correct, false, id);
   };
   await reject('tr-001', (r) => { r.plan.requests.push(clone(r.plan.requests[0])); });
+  await reject('tr-001', (r) => { r.plan.calls.push(clone(r.plan.calls[0])); });
   await reject('tr-001', (r) => { r.plan.requests[0].filters.priority = ['high']; });
   await reject('tr-004', (r) => { r.plan.requests[0].operation = 'value'; r.plan.requests[0].metrics = ['tasks.total']; });
   await reject('tr-003', (r) => { r.plan.requests[0].operation = 'rank'; r.plan.requests[0].rank = { metric: 'task.progressPercent', order: 'desc', limit: 1 }; });
@@ -294,6 +295,10 @@ test('dış model komutu sınırlıdır, altyapı hatası puan değildir ve komu
   writeFileSync(runPath, JSON.stringify(run));
   const cli = spawnSync(process.execPath, ['scripts/planner-evaluation.mjs', 'report', '--run', runPath, '--json'], { encoding: 'utf8', timeout: 20000 });
   assert.equal(cli.status, 1);
+  assert.equal(cli.stderr, '');
+  const reported = JSON.parse(cli.stdout);
+  assert.equal(reported.summary.byPass[0].correct, 1);
+  assert.equal(reported.summary.gatePassed, false);
   assert.ok(!cli.stdout.includes('NEVER_SAVE_THIS'));
   for (const patch of [{ models: ['claude-sonnet-4-5'] }, { thinking: 'on' }, { usage: { thinkingTokens: 1 } }, { error: 'provider outage with private token' }]) {
     const badCommand = command(`process.stdout.write(${JSON.stringify(JSON.stringify({ ...reply, ...patch }))})`);
@@ -334,4 +339,163 @@ test('anlamsal koşuda belgeler ve sayısal yeniden sıralama puanları kimlikle
   ]) {
     const bad = clone(run); mutate(bad); assert.throws(() => read(bad), /SEMANTIC_/);
   }
+});
+
+test('4C izin girdisi altından bağımsızdır; puanlı ve tanısal turlar aynı planlayıcı girdisini görür', async () => {
+  const loaded = loadPlannerBenchmark();
+  const diagnostic = loadPlannerBenchmark({ goldRequired: false });
+  assert.equal(diagnostic.cases.length, 136);
+  for (const id of ['tr-001', 'tr-016', 'tr-051', 'pl-017']) {
+    const c = loaded.cases.find((c) => c.id === id);
+    const d = diagnostic.cases.find((c) => c.id === id);
+    const args = answerPlan(c, loaded.referenceDate);
+    const normal = scriptedModel(args);
+    const changed = scriptedModel(args);
+    await planCase({ testCase: c, model: normal, adviceFor: unavailable, now: loaded.now, catalog });
+    await planCase({ testCase: { ...d, gold: { groups: [{ any: [{ textFields: ['requesterMessage'] }] }] } }, model: changed, adviceFor: unavailable, now: loaded.now, catalog });
+    assert.deepEqual(changed.inputs, normal.inputs, id);
+  }
+});
+
+test('4C zorunlu kimlikler kapalıdır; eksik ya da değiştirilmiş 19 ek vaka kabul edilmez', () => {
+  for (const mutate of [(d) => d.supplementary.pop(), (d) => d.supplementary[0].id = 'pl-020',
+    (d) => d.supplementary[1].id = d.supplementary[0].id]) {
+    const document = clone(DOCUMENT); mutate(document);
+    assert.throws(() => loadPlannerBenchmark({ plannerDocument: document }), /mandatory-ids/);
+  }
+});
+
+test('4C gold düzeltmeleri İngilizce, bildirim listesi, sorumlu VE durum ve tüm açıklama konularını sınar', async () => {
+  const loaded = loadPlannerBenchmark();
+  for (const [id, mutate] of [
+    ['pl-017', (r) => r.language = 'tr'],
+    ['pl-005', (r) => { r.plan.requests[0].operation = 'value'; r.plan.requests[0].metrics = ['notifications.unread']; }],
+    ['tr-092', (r) => r.plan.requests[1].metrics = ['task.assignees']]
+  ]) {
+    const c = loaded.cases.find((c) => c.id === id);
+    const { record } = await decide(loaded, c, answerPlan(c, loaded.referenceDate));
+    assert.equal(scoreDecision(c, record, loaded).correct, true, id);
+    mutate(record);
+    assert.equal(scoreDecision(c, record, loaded).correct, false, id);
+  }
+  const c = loaded.cases.find((c) => c.choice?.topics?.length === 3);
+  assert.ok(c);
+  const { record } = await decide(loaded, c, { intent: 'clarify', language: c.language, clarify: { reason: c.choice.reason, topics: c.choice.topics.map((g) => g[0]) } });
+  assert.equal(scoreDecision(c, record, loaded).correct, true);
+  record.choice.topics.pop();
+  assert.equal(scoreDecision(c, record, loaded).correct, false);
+  const document = clone(DOCUMENT);
+  document.cases[0].plan.groups[0].any[0].window.from = { date: '02-29' };
+  assert.doesNotThrow(() => loadPlannerBenchmark({ plannerDocument: document, referenceDate: '2024-02-29' }));
+});
+
+test('4C bozuk kayıt raporu TypeError yerine PLANNER_RUN_INVALID verir; anlamsız koşu nitelendiremez', async () => {
+  const { PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, scorePlannerRun } = await import('../scripts/planner-scoring.mjs');
+  const loaded = loadPlannerBenchmark();
+  const records = [];
+  for (const c of loaded.cases) {
+    const args = c.expect === 'answer' ? answerPlan(c, loaded.referenceDate) : { intent: c.expect, language: c.language,
+      ...(c.choice ? { [c.expect]: { reason: c.choice.reason, ...(c.choice.topics ? { topics: c.choice.topics.map((g) => g[0]) } : {}) } } : {}) };
+    records.push((await decide(loaded, c, args)).record);
+  }
+  const run = { format: PLANNER_RUN_FORMAT, version: PLANNER_RUN_VERSION, benchmark: loaded.fingerprint, semanticBenchmark: loaded.semanticFingerprint,
+    referenceDate: loaded.referenceDate, passes: 1, cases: loaded.cases.map((c) => c.id), records, semantic: { mode: 'none' },
+    model: { commandHash: '0'.repeat(64) }, qualification: { expectedModel: 'scripted', thinking: 'off' } };
+  const none = scorePlannerRun(run, loaded);
+  assert.equal(none.byPass[0].correct, 136);
+  assert.equal(none.gatePassed, false);
+  for (const mutate of [(r) => r.records[0] = null, (r) => r.records[0].plan = {}, (r) => r.records[0].plan.requests = [null],
+    (r) => r.records[0].plan.calls = null, (r) => r.records[0].rounds = [null], (r) => r.records[0].plan.requests[0].metrics = null]) {
+    const broken = clone(run); mutate(broken);
+    assert.throws(() => scorePlannerRun(broken, loaded), /PLANNER_RUN_INVALID/);
+  }
+  run.semantic = { mode: 'run', provenance: { model: 'test-double', provider: 'test', preprocessing: 'none' } };
+  for (const record of run.records) record.semantic = { state: 'first_stage', candidates: ['rota_task_search'] };
+  assert.equal(scorePlannerRun(run, loaded).gatePassed, true, 'yalnızca puanlayıcı sınaması; gerçek model kabulü değildir');
+  run.records.at(-1).semantic = { state: 'unavailable', candidates: [] };
+  assert.equal(scorePlannerRun(run, loaded).gatePassed, false, 'tek ek vakada bile danışmanlık yoksa kabul yoktur');
+});
+
+test('4C canlı yol aynı sızıntı ve model denetimini uygular; eksik kullanım yalnızca kayıtlı düşünmesiz rotada sıfırdır', async () => {
+  const { liveTurn, leakGuard } = await import('../scripts/planner-evaluation.mjs');
+  const loaded = loadPlannerBenchmark();
+  const c = loaded.cases[0];
+  const args = answerPlan(c, loaded.referenceDate);
+  const gateway = (patch = {}, event = null) => ({ runToolSession: async ({ run }) => {
+    try { return await run({ model: 'qwen', signal: new AbortController().signal, round: async (input) => {
+      if (event) await input.onEvent(event);
+      return { text: '', toolCalls: [{ name: 'rota_plan', arguments: JSON.stringify(args) }], model: 'qwen', ...patch };
+    } }); } catch { throw Object.assign(new Error('mapped'), { code: 'AI_INTERNAL_ERROR' }); }
+  } });
+  const execute = async (patch, event = null, thinking = 'off', guard = leakGuard(loaded)) => planCase({ testCase: c,
+    runTurn: liveTurn(gateway(patch, event), 'qwen', guard, { thinking }), adviceFor: unavailable, now: loaded.now, catalog });
+  const valid = await execute({});
+  assert.equal(valid.outcome, 'planned');
+  assert.equal(valid.rounds[0].usage.output_tokens_details.thinking_tokens, 0);
+  assert.equal((await execute({ usage: { reasoningTokens: 2 } })).error, 'PLANNER_THINKING_UNVERIFIED');
+  assert.equal((await execute({}, { type: 'thinking' })).error, 'PLANNER_THINKING_UNVERIFIED');
+  assert.equal((await execute({}, null, 'unverified')).error, 'PLANNER_THINKING_UNVERIFIED');
+  assert.equal((await execute({ model: 'wrong' })).error, 'PLANNER_MODEL_MISMATCH');
+  let checked = 0;
+  const guard = (text) => { checked += 1; leakGuard(loaded)(text); };
+  assert.equal((await execute({}, null, 'off', guard)).outcome, 'planned');
+  assert.equal(checked, 1);
+  assert.throws(() => guard('tr-001'), /sızıntı|vaka kimliği/);
+});
+
+test('4C dış altyapı kodları model kimliği hatasına dönüşmez; çelişen komut seçimi reddedilir', async () => {
+  const { parseArguments } = await import('../scripts/planner-evaluation.mjs');
+  assert.throws(() => parseArguments(['live', '--model-command', 'node model.cjs']), /SELECTORS_CONFLICT/);
+  assert.throws(() => parseArguments(['run', '--model', 'live', '--model-command', 'node model.cjs']), /SELECTORS_CONFLICT/);
+  assert.throws(() => parseArguments(['run', '--no-score', '--out', 'run.json']), /UNSCORED_OUTPUT/);
+  const loaded = loadPlannerBenchmark();
+  for (const code of ['MODEL_COMMAND_TIMEOUT', 'MODEL_COMMAND_OUTPUT_LIMIT', 'MODEL_COMMAND_ERROR']) {
+    const result = await planCase({ testCase: loaded.cases[0], model: { complete: async () => ({ text: '', toolCalls: [], models: [], error: code }) },
+      expectedModel: 'qwen', adviceFor: unavailable, now: loaded.now, catalog });
+    assert.equal(result.error, code);
+    assert.equal(result.rounds[0].error, code);
+  }
+});
+
+test('4C anlamsal artifakt tüm 136 soruyu ve tüm belge skorlarını kapsar; belgelenmiş çıkarım hatası ilk aşamadır', async (t) => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { candidatesFromRun } = await import('../scripts/planner-evaluation.mjs');
+  const { createSemanticCatalogue, semanticToolDefinitions } = await import('../src/domain/ai/semanticContract.js');
+  const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
+  const dir = mkdtempSync(path.join(tmpdir(), 'planner-all-semantic-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const loaded = loadPlannerBenchmark();
+  const items = createSemanticCatalogue(semanticToolDefinitions(rotaToolNames().map((name) => getRotaTool(name)))).catalogue;
+  const run = { format: 'mergen-rota-semantic-model-run', version: 1, benchmark: loaded.semanticFingerprint, catalogue: items.fingerprint,
+    embedding: { model: 'test-double', provider: 'test', preprocessing: 'none', documents: items.items.map((item, index) => ({ id: item.id, text: item.text, vector: [items.items.length - index, 1] })),
+      queries: loaded.cases.map((c) => ({ case: c.id, text: c.text, vector: [1, 0] })) },
+    rerank: { model: 'test-rerank', queries: loaded.cases.map((c) => ({ case: c.id, scores: items.items.map((item, index) => ({ id: item.id, score: index })) })) } };
+  const file = path.join(dir, 'run.json');
+  const read = (value) => { writeFileSync(file, JSON.stringify(value)); return candidatesFromRun(file, loaded); };
+  const valid = read(run);
+  assert.equal(valid.byCase.size, 136);
+  assert.equal(valid.byCase.get('pl-019').status, 'reranked');
+  const failed = clone(run); failed.rerank.queries[0] = { case: 'tr-001', failure: 'INFERENCE_FAILED' };
+  assert.equal(read(failed).byCase.get('tr-001').status, 'first_stage');
+  for (const mutate of [(r) => r.embedding.queries.pop(), (r) => r.rerank.queries.pop(),
+    (r) => r.rerank.queries[0].scores.pop(), (r) => r.rerank.queries[0].scores.push(clone(r.rerank.queries[0].scores[0])),
+    (r) => r.rerank.queries[0] = { case: 'tr-001', failure: 'OTHER' }]) {
+    const invalid = clone(run); mutate(invalid); assert.throws(() => read(invalid), /SEMANTIC_/);
+  }
+});
+
+test('4C dış komut çağıranın klasörüne göre çözülür ve geçici klasörü ayrıdır', async (t) => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { externalModel } = await import('../scripts/planner-evaluation.mjs');
+  const dir = mkdtempSync(path.join(process.cwd(), 'planner-relative-test-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'model.cjs');
+  writeFileSync(file, `process.stdout.write(JSON.stringify({text:process.cwd(),toolCalls:[],models:[],usage:{thinkingTokens:0},thinking:'off', isolated:process.env.TMPDIR !== process.cwd()}));`);
+  const model = externalModel({ command: `"${process.execPath}" "${path.relative(process.cwd(), file)}"`, guard: () => {} });
+  try { const reply = await model.complete({ messages: [], tools: [], toolChoice: 'none' }); assert.equal(reply.error, null); assert.equal(reply.text, process.cwd()); }
+  finally { model.dispose(); }
 });

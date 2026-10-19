@@ -1,3 +1,4 @@
+import { nativeDeclaration } from './evidenceScenario.mjs';
 /**
  * Belirlenimci yapay zekâ sağlayıcısı ikizi (süreç içi).
  *
@@ -282,8 +283,8 @@ export function createFakeAiProvider({
       push,
       text: (text) => push({ event: { type: 'text', text } }),
       reasoning: () => push({ event: { type: 'reasoning' } }),
-      done: ({ finishReason = 'stop', model = call.model, usage = null } = {}) => {
-        push({ event: { type: 'done', finishReason, model, usage } });
+      done: ({ finishReason = 'stop', model = call.model, usage = null, toolCalls = [] } = {}) => {
+        push({ event: { type: 'done', finishReason, model, usage, toolCalls } });
         push({ end: true });
       },
       fail: (error) => push({ error }),
@@ -306,6 +307,10 @@ export function createFakeAiProvider({
     const feed = createFeed(signal, call, { ignoreAbort: behavior.ignoreAbort });
     if (behavior.type === 'deferred-stream') {
       call.emit = feed.text;
+      call.emitPlan = (arguments_) => {
+        feed.push({ event: { type: 'tool_call_started' } });
+        feed.done({ finishReason: 'tool_calls', toolCalls: [{ id: 'native_plan', name: 'rota_plan', arguments: JSON.stringify(arguments_) }] });
+      };
       call.think = feed.reasoning;
       call.complete = feed.done;
       call.fail = feed.fail;
@@ -374,7 +379,9 @@ export function createFakeAiProvider({
    *  - `status`, `network`, `stall`, `deferred-stream`, `interrupt` akışlı sohbetle aynı.
    */
   function openToolStream(behavior, call, input) {
-    const resolved = behavior.type === 'script' ? (behavior.respond(call) || { type: 'answer', text: '' }) : behavior;
+    let resolved = behavior.type === 'script' ? (behavior.respond(call) || { type: 'answer', text: '' }) : behavior;
+    const native = nativeDeclaration({ text: resolved.type === 'tool-calls' ? (resolved.preface || []).join('') : resolved.text, toolCalls: resolved.calls || [] });
+    if (native.toolCalls.some((tool) => tool.name === 'rota_plan')) resolved = { ...resolved, type: 'tool-calls', preface: [], calls: native.toolCalls };
     call.behavior = resolved.type;
     if (resolved.type === 'tool-calls') {
       const feed = createFeed(input.signal, call, { ignoreAbort: resolved.ignoreAbort });

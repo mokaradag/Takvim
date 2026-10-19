@@ -135,17 +135,17 @@ const textPlans = {
 };
 
 for (const [name, text] of Object.entries(textPlans)) {
-  test(`${name} is validated like the native plan and answered in one Standard round`, async (t) => {
+  test(`${name} is rejected before SQL and repaired with a native typed plan`, async (t) => {
     const stack = stackFor(t);
     const logs = captureConsole(t);
-    stack.provider.enqueue({ type: 'answer', text });
+    stack.provider.enqueue({ type: 'answer', text }, { type: 'script', respond: () => { assert.equal(sqlCalls(stack), 0); return nativePlan(); } });
     const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: OVERDUE_QUESTION })).assistantMessage;
     assert.equal(answer.finishReason, 'stop');
     assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
-    assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD]);
+    assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD]);
     const [trace] = turnTraces(logs);
     assert.deepEqual([trace.outcome, trace.selectedBy, trace.modelRounds, trace.toolCalls, trace.declarations, trace.repairs, trace.escalated],
-      ['grounded', 'server', 1, 1, 1, 0, false]);
+      ['grounded', 'server', 2, 1, 2, 0, false]);
     drained(stack);
   });
 }
@@ -301,7 +301,7 @@ test('an invalid legacy declaration gets a schema-derived repair hint, runs no S
       sqlAtRepair = sqlCalls(stack);
       assert.match(call.messages[0].content, /Bildirim sorunları: \$\.filters\.status:type/);
       assert.match(call.messages[0].content, /Beklenen biçim: filters\.status: string dizisi todo\|in_progress\|done/);
-      return { type: 'answer', text: JSON.stringify({ kind: 'route', ...plan(ONGOING_COUNT, [{ name: 'rota_task_search', arguments: ONGOING_MINE }]) }) };
+      return nativePlan(ONGOING_COUNT, [{ name: 'rota_task_search', arguments: ONGOING_MINE }]);
     } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Kaç devam eden görevim var?' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
@@ -317,7 +317,7 @@ test('text that only names a read tool or an unknown tool never executes; cheap 
   const stack = stackFor(t);
   const logs = captureConsole(t);
   let sqlBeforeDeep = null;
-  // Standart bütçe: bir yanıt düzeltmesi ve iki bildirim düzeltmesi; sonra tek Derin devri.
+  // Standart iki bildirim düzeltmesi kullanır; ardından tek Derin devri.
   stack.provider.enqueue(
     { type: 'answer', text: JSON.stringify({ name: 'rota_task_search', arguments: OVERDUE_MINE }) },
     { type: 'answer', text: JSON.stringify(plan(OVERDUE_LIST, [{ name: 'rota_sql_query', arguments: { sql: 'SELECT 1' } }])) },
@@ -328,7 +328,7 @@ test('text that only names a read tool or an unknown tool never executes; cheap 
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: OVERDUE_QUESTION })).assistantMessage;
   assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
   assert.equal(sqlBeforeDeep, 0);
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, STANDARD, DEEP]);
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, DEEP, DEEP]);
   const [trace] = turnTraces(logs);
   assert.deepEqual([trace.escalated, trace.toolCalls], [true, 1]);
   drained(stack);
@@ -521,7 +521,7 @@ test('a tool whose SQL never returns (and ignores cancellation) is cut at the to
 test('a general redirect keeps its own outcome although it is stored as a clarification', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
-  stack.provider.enqueue({ type: 'answer', text: '{"kind":"route","intent":"general","language":"tr"}' },
+  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'general', language: 'tr' } }] },
     { type: 'answer', text: JSON.stringify({ kind: 'general', text: 'Genel bir açıklama.' }) });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Proje yönetimi nedir?' })).assistantMessage;
   assert.equal(answer.finishReason, 'clarification');
@@ -676,8 +676,7 @@ test('a rejected English plan cannot change the language of a valid repair witho
   stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: invalid }] },
     { type: 'script', respond: () => {
       assert.equal(sqlCalls(stack), 0);
-      return { type: 'tool-calls', preface: [JSON.stringify({ kind: 'route', intent: 'rota', request: ONGOING_COUNT })],
-        calls: [{ name: 'rota_task_search', arguments: ONGOING_MINE }] };
+      return nativePlan(ONGOING_COUNT, [{ name: 'rota_task_search', arguments: ONGOING_MINE }]);
     } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Kaç devam eden görevim var?' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
@@ -712,20 +711,17 @@ test('a repair cannot narrow the question: dropping a record the user named is r
     } },
     { type: 'script', respond: (call) => {
       narrowed = { sql: sqlCalls(stack) - acceptedQueries, error: refusalOf(call) };
-      return nativePlan({ operation: 'value', metrics: ['tasks.open', 'tasks.total'], population: { tool: 'rota_task_analytics' }, entities: projects,
-        bindings: [{ metric: 'tasks.open', entity: 0 }, { metric: 'tasks.total', entity: 1 }] }, projects.map((entity) => ({ name: 'rota_project_search', arguments: { text: entity.text, limit: 10 } })));
+      return { type: 'answer', text: '{"kind":"unavailable"}' };
     } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(),
     message: 'Radar Modernizasyonu projesindeki açık görev sayısını ve Okuma Projesi\'ndeki toplam görev sayısını ayrı ayrı söyle.' })).assistantMessage;
   assert.equal(narrowed.sql, 0, 'daraltılmış bildirim için SQL çalışmaz');
-  assert.deepEqual(narrowed.error.details, ['$.entities:dropped']);
-  assert.match(narrowed.error.hints[0], /1 varlık alanı.*ENTITY_SCOPE_DROPPED/);
-  assert.doesNotMatch(narrowed.error.hints[0], /Okuma Projesi/);
-  assert.equal(answer.finishReason, 'stop', JSON.stringify(turnTraces(logs)));
-  assert.match(answer.content, new RegExp(`Radar Modernizasyonu[^\\n]*\\*\\*${open}\\*\\*`));
-  assert.match(answer.content, new RegExp(`Okuma Projesi[^\\n]*\\*\\*${total}\\*\\*`));
+  assert.deepEqual(narrowed.error.details, ['$.calls[0]:unknown']);
+  assert.equal(narrowed.error.code, 'UNKNOWN_TOOL', 'okuma başlamışken plan aracı kapalıdır');
+  assert.equal(answer.finishReason, 'unavailable', JSON.stringify(turnTraces(logs)));
+  assert.doesNotMatch(answer.content, /Radar Modernizasyonu|Okuma Projesi/);
   const [trace] = turnTraces(logs);
-  assert.deepEqual([trace.selectedBy, trace.escalated, trace.declarations], ['server', false, 3]);
+  assert.deepEqual([trace.selectedBy, trace.escalated, trace.declarations], [null, false, 1]);
   drained(stack);
 });
 
@@ -751,13 +747,13 @@ test('a repair cannot widen the question: a record named by ID, or by name as an
     } },
     { type: 'script', respond: (call) => {
       widened = { sql: sqlCalls(stack) - before, error: refusalOf(call) };
-      return nativePlan(request, [{ name: 'rota_task_analytics', arguments: { projectId: PROJECTS.FULL } }]);
+      return { type: 'answer', text: '{"kind":"unavailable"}' };
     } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `${PROJECTS.FULL} projesinde toplam kaç görev var?` })).assistantMessage;
   assert.equal(widened.sql, 0, 'genişletilmiş bildirim için SQL çalışmaz');
-  assert.deepEqual(widened.error.details, ['$.entities:dropped']);
-  assert.equal(answer.finishReason, 'stop');
-  assert.match(answer.content, new RegExp(`\\*\\*${scoped}\\*\\*`));
+  assert.deepEqual(widened.error.details, ['$.calls[0]:unknown']);
+  assert.equal(answer.finishReason, 'unavailable');
+  assert.match(answer.content, /ulaşılamıyor/);
   drained(stack);
   // Ad, türüyle bir yükümlülüktür: aynı yazımlı görev ya da görev başlığı metni projenin yerini tutmaz.
   const { droppedNames, namedScope } = await import('../src/server/ai/tools/requestDeclaration.js');
@@ -794,12 +790,12 @@ for (const entity of [false, true]) {
       return nativePlan(broad, search('Radar'));
     } }, { type: 'script', respond: (call) => {
       assert.equal(sqlCalls(stack), before, 'daha geniş okuma SQL öncesinde reddedildi');
-      assert.deepEqual(JSON.parse(call.messages.at(-1).content).error.details, ['$.entities:dropped']);
-      return nativePlan(request, search(original));
+      assert.deepEqual(JSON.parse(call.messages.at(-1).content).error.details, ['$.calls[0]:unknown']);
+      return { type: 'answer', text: '{"kind":"unavailable"}' };
     } });
     const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `${original} ${entity ? 'görevinin durumu nedir' : 'için kaç görev var'}?` })).assistantMessage;
-    assert.equal(answer.finishReason, 'stop');
-    assert.match(answer.content, entity ? /Yapılacak/ : /\*\*1\*\*/);
+    assert.equal(answer.finishReason, 'unavailable');
+    assert.match(answer.content, /ulaşılamıyor/);
     assert.doesNotMatch(answer.content, /Tamamlandı/);
     drained(stack);
   });
@@ -857,16 +853,16 @@ test('a resolved named task cannot replace the accepted text filter during a rep
     }
     assert.equal(rounds, 3);
     assert.equal(sqlCalls(stack), before, 'ad aynı kalsa da süzgeçsiz plan SQL öncesinde reddedilir');
-    assert.deepEqual(JSON.parse(input.messages.at(-1).content).error.details, ['$.entities:dropped']);
-    return { text: '', toolCalls: [{ id: 'restored', name: 'rota_plan', arguments: JSON.stringify(plan(request, [search, detail])) }] };
+    assert.deepEqual(JSON.parse(input.messages.at(-1).content).error.details, ['$.calls[0]:unknown']);
+    return { text: '{"kind":"unavailable"}', toolCalls: [] };
   } };
   const result = await runGroundedTurn(session, {
     messages: buildGroundedContext({ userContent: '1', now: NOW }).messages,
     catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {},
     clarification: { selected: candidate, candidates: [candidate], question: `${title} kayıt sayısı ve gerçekleşen saati nedir?` }
   });
-  assert.equal(result.outcome, 'grounded');
-  assert.match(result.text, /\*\*1\*\*/);
+  assert.equal(result.outcome, 'unavailable');
+  assert.match(result.text, /ulaşılamıyor/);
   assert.equal(rounds, 3, 'süzgecin düşürülmesi kabul edilmiş yanıt üretemez');
 });
 
@@ -1004,9 +1000,9 @@ for (const tool of ['rota_activity_search', 'rota_calendar_inspect', 'rota_portf
   });
 }
 
-test('call-less assistant text uses the native typed parser and server-derived reads', async (t) => {
+test('call-less native plan uses server-derived reads', async (t) => {
   const stack = stackFor(t);
-  stack.provider.enqueue({ type: 'answer', text: JSON.stringify({ intent: 'rota', language: 'tr', request: ONGOING_COUNT }) });
+  stack.provider.enqueue(nativePlan(ONGOING_COUNT, []));
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Kaç devam eden görevim var?' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.equal(stack.provider.calls.length, 1);
@@ -1017,7 +1013,7 @@ test('call-less assistant text uses the native typed parser and server-derived r
 test('legacy window is normalized into the typed filters before any read', async (t) => {
   const stack = stackFor(t);
   const request = { operation: 'value', metrics: ['activity.events'], population: { tool: 'rota_activity_search' }, layout: 'auto' };
-  stack.provider.enqueue({ type: 'answer', text: JSON.stringify({ kind: 'route', intent: 'rota', language: 'tr', request, window: { period: 'yesterday' } }) });
+  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr', request, window: { period: 'yesterday' } } }] });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Dünkü hareketlerin sayısı?' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   const evidence = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);

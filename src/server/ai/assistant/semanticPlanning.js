@@ -17,7 +17,7 @@ import { retrieveSemanticCandidates, SEMANTIC_RETRIEVAL_DEPTH, SEMANTIC_RETRIEVA
  * Danışmanlık kaybı (profil kapalı, model yok, süre doldu, bozuk çıktı, bayat
  * katalog) planlamayı Aşama 3 davranışına döndürür: kayıt defterinin tamamı,
  * kendi sırasıyla. Çağıranın iptali ve kimlik/yetki hatası yukarı
- * taşınır; isteğe bağlı keşfin iç hatası planlamayı durdurmaz. Danışmanlığın süresi ayrıca sınırlıdır: bütçe dolarsa
+ * taşınır; sınıflandırılmamış iç hata gizlenmez. Danışmanlığın süresi ayrıca sınırlıdır: bütçe dolarsa
  * keşif kesilir ve planlama danışmansız sürer.
  */
 
@@ -74,11 +74,11 @@ export async function semanticPlanningAdvice({ query, catalog, signal = null, re
     return validated(result, registered);
   } catch (error) {
     const failure = deadline.failure();
-    // Bütçenin dolması danışmanlığın kaybıdır; çağıranın iptali iptaldir.
-    if (failure?.code === AI_ERROR_CODES.AI_TIMEOUT && !signal?.aborted) return unavailable('TIMEOUT');
+    // Kimlik/yetki ve çağıranın iptali isteğe bağlı kayba çevrilmez.
     if (signal?.aborted) throw isAiError(error) && error.code === AI_ERROR_CODES.AI_CANCELLED ? error : new AiError(AI_ERROR_CODES.AI_CANCELLED);
-    if (['AI_CANCELLED', 'AI_UNAUTHORIZED', 'AI_KEY_INVALID', 'AI_KEY_MISSING', 'UNAUTHORIZED', 'FORBIDDEN', 'SESSION_REQUIRED'].includes(error?.code)) throw error;
-    return unavailable('INTERNAL_UNAVAILABLE');
+    if (['AI_UNAUTHORIZED', 'AI_KEY_INVALID', 'AI_KEY_MISSING', 'UNAUTHORIZED', 'FORBIDDEN', 'SESSION_REQUIRED'].includes(error?.code)) throw error;
+    if (failure?.code === AI_ERROR_CODES.AI_TIMEOUT) return unavailable('TIMEOUT');
+    throw error;
   } finally {
     deadline.dispose();
   }

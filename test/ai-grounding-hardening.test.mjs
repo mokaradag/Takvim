@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack, loadAssistantConversation, sendTurn } from './helpers/aiStack.mjs';
 import { ADMIN, ALI_1, ALI_2, AYSE, NOW, PROJECTS, TASKS, WBS, callRotaTool, callRotaTools, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { claimFor, declared } from './helpers/evidenceScenario.mjs';
+import { claimFor, declared, nativeDeclaration } from './helpers/evidenceScenario.mjs';
 
 const { runGroundedTurn, toolsForInitialCalls } = await import('../src/server/ai/assistant/groundedAnswer.js');
 const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
@@ -39,7 +39,7 @@ const calls = (name, args = {}, id = 'call', request = null) => {
   return { text: typed ? declared(typed) : '', toolCalls: [{ id, name, arguments: JSON.stringify(args) }] };
 };
 const reply = (text, finishReason = 'stop') => ({ text, toolCalls: [], finishReason });
-const results = (input) => input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
+const results = (input) => input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).filter((body) => body.tool !== 'rota_plan');
 const stackFor = (t, seed = {}, sicil = AYSE) => createAiStack(t, { sicil, env: TOOLS_ON, seed: rotaToolSeed(seed) });
 const ok = (data = {}) => ({ content: JSON.stringify({ ok: true, data }) });
 const established = (scope, name, args, data) => scope.establish([{ name, arguments: JSON.stringify(args) }], [ok(data)]);
@@ -51,7 +51,7 @@ async function turn(t, steps, { user = 'Rota verisini incele', allowedTextFields
   const session = { signal: new AbortController().signal, round: async (input) => {
     const step = steps.shift();
     assert.ok(step, 'Beklenmeyen ek model turu');
-    return typeof step === 'function' ? step(input, stack) : step;
+    return nativeDeclaration(typeof step === 'function' ? step(input, stack) : step);
   } };
   const result = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: user, now: NOW }).messages,
     catalog: toolCatalogForModel(), context: scope, allowedTextFields, onText: async (text) => texts.push(text) });
@@ -233,18 +233,13 @@ test('the turn endpoint only accepts a boolean free-text choice and forwards it 
   const invalid = await sendTurn({ turnId: randomUUID(), message: 'Notu göster', includeText: 'yes' });
   assert.equal(invalid.status, 400);
   stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['task.description'], entities: [{ type: 'task', text: 'Rapor' }] })],
-    calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.LITERAL, textFields: ['description'] } }] },
-    { type: 'script', respond: (call) => {
-      const tool = JSON.parse(call.messages.find((message) => message.role === 'tool').content);
-      assert.equal(tool.error.code, 'UNSUPPORTED_SCOPE');
-      return { type: 'answer', text: '{"kind":"unavailable"}' };
-    } });
+    calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.LITERAL, textFields: ['description'] } }] });
   const refused = await sendTurn({ turnId: randomUUID(), message: 'Rapor görevinin notu ne?' });
   assert.equal(refused.status, 200);
   // Sağlayıcı ikizindeki doğrulama hatası akışta hata olayı olur; tur tamamlanmalı ve veri açılmamalıdır.
   const done = refused.events.find((event) => event.event === 'done');
   assert.ok(done, 'the turn must complete; a provider-side assertion failure surfaces as an error event');
-  assert.equal(done.data.assistantMessage.finishReason, 'grounding_failed');
+  assert.equal(done.data.assistantMessage.finishReason, 'clarification');
 });
 
 test('a completed rank refuses an injected detail read and keeps the original proof', async (t) => {
@@ -414,8 +409,8 @@ test('general-chat redirects are counted separately from candidate clarification
   let before = null;
   const { result } = await turn(t, [() => {
     before = { ...aiTelemetrySnapshot().grounding };
-    return reply('{"kind":"general","text":"Proje yönetimi bir disiplindir."}');
-  }], { user: 'Proje yönetimi nedir?' });
+    return nativeDeclaration({ text: JSON.stringify({ name: 'rota_plan', arguments: { intent: 'general', language: 'tr' } }), toolCalls: [] });
+  }, reply('{"kind":"general","text":"Proje yönetimi bir disiplindir."}')], { user: 'Proje yönetimi nedir?' });
   assert.equal(result.outcome, 'general_redirect');
   const after = aiTelemetrySnapshot().grounding;
   assert.equal(after.general_redirect - before.general_redirect, 1);

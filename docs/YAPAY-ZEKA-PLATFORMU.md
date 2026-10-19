@@ -1879,5 +1879,6 @@ Ayrıntılı belge: [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.m
   kümesi ve sırası değişmez). Planlayıcı veri okumadan türlü karar verir
   (`rota_plan`: rota / clarify / abstain / general, en çok 3 bölüm);
   açıklama ve çekimserlik sıfır SQL ile sunucu metnidir. Değerlendirici
-  `scripts/planner-evaluation.mjs`; Haiku 4.5 (düşünme kapalı) kapısı
-  88/117, 117/117 geçilmedi; ayrıntı ve bekleyenler anlamsal katman §12.
+  `scripts/planner-evaluation.mjs`; tarihsel Haiku 4.5 88/117 ölçümü
+  düzeltilmiş kapıdan önceye aittir. Güncel kabul ölçümü bekliyor:
+  117/117 + zorunlu ek 19/19; ayrıntı ve bekleyenler anlamsal katman §12.

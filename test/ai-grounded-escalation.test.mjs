@@ -1,3 +1,4 @@
+import { nativeDeclaration } from './helpers/evidenceScenario.mjs';
 /** Rota AI · muhakeme devri, ortak bütçeler ve içeriksiz boş yanıt tanısı. */
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -39,7 +40,7 @@ function stackFor(t, { env = {} } = {}) {
   return stack;
 }
 
-const toolResultsOf = (call) => (call.messages || []).filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
+const toolResultsOf = (call) => (call.messages || []).filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).filter((body) => body.tool !== 'rota_plan');
 const eventsOf = (response, type) => response.events.filter((event) => event.event === type);
 const deltas = (response) => eventsOf(response, 'delta').map((event) => event.data.text);
 const doneOf = (response) => eventsOf(response, 'done')[0]?.data;
@@ -160,9 +161,8 @@ for (const cancelled of [false, true]) {
     const rejected = assert.rejects(pending, { code: cancelled ? 'AI_CANCELLED' : 'AI_TIMEOUT' });
     await until(() => Boolean(stack.provider.calls[0]?.emit));
     t.mock.timers.tick(44000);
-    stack.provider.calls[0].emit(JSON.stringify({ intent: 'rota', language: 'tr', request: statusNamed,
-      calls: [{ name: 'rota_task_search', arguments: { text: NAMED } }] }));
-    stack.provider.calls[0].complete();
+    stack.provider.calls[0].emitPlan({ intent: 'rota', language: 'tr', request: statusNamed,
+      calls: [{ name: 'rota_task_search', arguments: { text: NAMED } }] });
     await until(() => Boolean(stack.provider.calls[1]?.emit));
     assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, DEEP]);
     t.mock.timers.tick(1999);
@@ -200,9 +200,8 @@ for (const mode of ['standard', 'deep']) {
     } });
     await until(() => Boolean(stack.provider.calls[0]?.emit));
     t.mock.timers.tick(mode === 'standard' ? 1000 : 46001);
-    stack.provider.calls[0].emit(JSON.stringify({ intent: 'rota', language: 'tr', request: statusNamed,
-      calls: [{ name: 'rota_task_search', arguments: { text: NAMED } }] }));
-    stack.provider.calls[0].complete();
+    stack.provider.calls[0].emitPlan({ intent: 'rota', language: 'tr', request: statusNamed,
+      calls: [{ name: 'rota_task_search', arguments: { text: NAMED } }] });
     if (mode === 'standard') {
       await until(() => Boolean(stack.provider.calls[1]?.emit));
       t.mock.timers.tick(14000);
@@ -237,9 +236,8 @@ test('a completed grounded generation can persist and revalidate disclosure afte
   const pending = generateAssistantAnswer(turn, { onText: async (text) => { visible.push(text); } });
   await until(() => Boolean(stack.provider.calls[0]?.emit));
   t.mock.timers.tick(45000);
-  stack.provider.calls[0].emit(JSON.stringify({ intent: 'rota', language: 'tr', request: countFull,
-    calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] }));
-  stack.provider.calls[0].complete();
+  stack.provider.calls[0].emitPlan({ intent: 'rota', language: 'tr', request: countFull,
+    calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] });
   await until(() => persisting);
   assert.equal(aiRuntimeLoad().active, 0);
   t.mock.timers.tick(2000);
@@ -329,24 +327,14 @@ const tooLarge = () => Object.assign(new Error('AI_TOOL_RESULT_TOO_LARGE'), { nu
 const countPlan = { type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr', request: { ...countFull, layout: 'auto' },
   calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] } }] };
 
-test('a Standard turn that read no evidence hands Deep a fresh plan with tools; Deep re-plans and answers', async (t) => {
+test('a failed Rota read does not reopen planning for Deep merely because the ledger is empty', async (t) => {
   const stack = stackFor(t);
   stack.db.aiToolFailure = { 'task-facts': tooLarge() };
-  let deepCall = null;
-  stack.provider.enqueue(countPlan, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID }, { type: 'script', respond: (call) => {
-    deepCall = call;
-    stack.db.aiToolFailure = null;
-    return countPlan;
-  } });
+  stack.provider.enqueue(countPlan, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID });
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, DEEP]);
-  assert.deepEqual([deepCall.tools[0].name, deepCall.toolChoice], ['rota_plan', 'auto'], 'kanıtsız devirde istek donmamıştır');
-  assert.ok(deepCall.messages.every((message) => !String(message.content || '').includes('Veri okunmadan bildirilen istek kabul edildi')),
-    'Standart turun eski kabul notu Derin düşünmeyi bağlamaz');
-  assert.equal(toolResultsOf(deepCall)[0].error.code, 'RESULT_TOO_LARGE', 'Derin, Standart turun başarısız okumasını görür');
-  const answer = doneOf(response).assistantMessage;
-  assert.equal(answer.finishReason, 'stop');
-  assert.match(answer.content, /eşleşen \*\*\d+\*\* görev/);
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD]);
+  assert.equal(doneOf(response).assistantMessage.finishReason, 'grounding_failed');
+  assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
 });
 
 test('without evidence and with the shared tool budget spent, the turn is not escalated to a Deep round that could not read data', async (t) => {
@@ -512,7 +500,7 @@ test('each provider session, including the Deep hand-off, is a generation progre
     seen.push(progress);
     return rounds.shift()(input);
   } });
-  const plan = () => ({ text: declared(statusNamed), toolCalls: [{ id: 'call', name: 'rota_task_search', arguments: JSON.stringify({ text: NAMED }) }] });
+  const plan = () => (nativeDeclaration({ text: declared(statusNamed), toolCalls: [{ id: 'call', name: 'rota_task_search', arguments: JSON.stringify({ text: NAMED }) }] }));
   const options = { messages: buildGroundedContext({ userContent: NAMED_QUESTION, now: NOW }).messages, catalog: toolCatalogForModel(),
     context: createToolTurnContext({ sicil: AYSE, now: NOW }), onProgress: () => { progress += 1; }, onText: async () => {} };
   const standard = await runGroundedTurn(session([plan]), { ...options, escalation: true });

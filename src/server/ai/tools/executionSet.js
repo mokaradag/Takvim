@@ -1,6 +1,5 @@
 import 'server-only';
 import { randomBytes } from 'node:crypto';
-import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.js';
 import { ABSTAIN_REASONS, CLARIFY_REASONS, PLANNER_INTENTS, PLANNER_LIMITS } from '../../../domain/ai/plannerOutcome.js';
 import { parseToolArguments } from './toolArguments.js';
 import { invalidArguments, TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
@@ -118,6 +117,7 @@ export function unpackTypedPlan(result) {
   for (const key of ['request', 'clarify', 'abstain']) {
     if (key !== (plan.intent === PLANNER_INTENTS.ROTA ? 'request' : plan.intent) && plan[key] && typeof plan[key] === 'object' && !Array.isArray(plan[key]) && !Object.keys(plan[key]).length) delete plan[key];
   }
+  if (plan.clarify?.reason === 'missing_referent' && Array.isArray(plan.clarify.topics) && !plan.clarify.topics.length) delete plan.clarify.topics;
   const calls = plan.calls ?? [];
   // Biçim sorunu alanıyla bildirilir (zayıf model hangi alanı düzelteceğini görür); modelin yazdığı anahtar yansıtılmaz.
   const shape = [
@@ -188,7 +188,7 @@ export function planShapeHints(problems) {
     '$.clarify': `clarify.reason: ${CLARIFY_REASONS.join('|')}`,
     '$.abstain': `abstain.reason: ${ABSTAIN_REASONS.join('|')}`
   };
-  return [...new Set(problems.map((problem) => Object.entries(hints).find(([prefix]) => String(problem).startsWith(prefix))?.[1]).filter(Boolean))];
+  return [...new Set(problems.map((problem) => Object.entries(hints).find(([prefix]) => prefix === '$.additionalRequests' ? String(problem).startsWith(`${prefix}:`) : String(problem).startsWith(prefix))?.[1]).filter(Boolean))];
 }
 const CLARIFY_SCHEMA = Object.freeze({ type: 'object', additionalProperties: false, required: ['reason'], properties: {
   reason: { type: 'string', enum: [...CLARIFY_REASONS] },
@@ -197,26 +197,6 @@ const CLARIFY_SCHEMA = Object.freeze({ type: 'object', additionalProperties: fal
 const ABSTAIN_SCHEMA = Object.freeze({ type: 'object', additionalProperties: false, required: ['reason'], properties: {
   reason: { type: 'string', enum: [...ABSTAIN_REASONS] }
 } });
-
-/**
- * Yerel çağrı yerine asistan metni olarak dönen plan: tek JSON nesnesi
- * (`{"name":"rota_plan","arguments":{…}}`, planın kendisi ya da `calls` taşıyan
- * yönlendirme bildirimi; isteğe bağlı tek `<tool_call>` zarfı). Metin
- * yorumlanmaz; plan yerel çağrıyla aynı doğrulamadan geçer.
- */
-export function textPlanCall(text) {
-  const value = parseEvidenceResponse(String(text ?? '').trim().replace(/^<tool_call>\s*([\s\S]*?)\s*<\/tool_call>$/, '$1'));
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  let args = null;
-  if (value.name === 'rota_plan' && Object.keys(value).every((key) => ['name', 'arguments'].includes(key))) {
-    try { args = typeof value.arguments === 'string' ? JSON.parse(value.arguments) : value.arguments; } catch { args = null; }
-  } else if (Object.hasOwn(value, 'intent') && (value.kind === undefined || value.kind === 'route')) {
-    const { kind: _kind, ...plan } = value;
-    args = value.kind === 'route' && plan.language === undefined ? { ...plan, language: 'tr' } : plan;
-  }
-  if (!args || typeof args !== 'object' || Array.isArray(args)) return null;
-  return { id: 'plan', name: 'rota_plan', arguments: JSON.stringify(args), oversize: false };
-}
 
 /**
  * Yürütme kümesini SQL'den önce bütünüyle doğrular ve kanonik biçime getirir.

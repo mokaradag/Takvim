@@ -72,9 +72,6 @@ const STAGE = Object.freeze({ QUERY: 'query', CATALOGUE: 'catalogue', EMBEDDING:
 const CATEGORY_OF_CODE = Object.freeze({
   [AI_ERROR_CODES.AI_DISABLED]: 'disabled',
   [AI_ERROR_CODES.AI_CONFIGURATION_ERROR]: 'configuration',
-  [AI_ERROR_CODES.AI_KEY_MISSING]: 'credential',
-  [AI_ERROR_CODES.AI_KEY_INVALID]: 'credential',
-  [AI_ERROR_CODES.AI_UNAUTHORIZED]: 'credential',
   [AI_ERROR_CODES.AI_BUSY]: 'capacity',
   [AI_ERROR_CODES.AI_QUEUE_TIMEOUT]: 'capacity',
   [AI_ERROR_CODES.AI_RATE_LIMITED]: 'capacity',

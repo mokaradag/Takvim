@@ -1,3 +1,4 @@
+import { nativeDeclaration } from './helpers/evidenceScenario.mjs';
 /**
  * Rota AI · sistem yöneticisi kapsamı.
  *
@@ -89,9 +90,9 @@ for (const path of ['server', 'model']) {
     // Yorum istenen turda olguları model seçer; aksi hâlde sunucu seçer.
     const metrics = path === 'server' ? ['project.name'] : ['project.name', 'project.accessReasons'];
     const steps = [
-      { text: declared({ operation: 'value', metrics, population: { tool: 'rota_project_detail' }, ...(path === 'model' ? { reasoning: 'synthesis' } : {}),
+      nativeDeclaration({ text: declared({ operation: 'value', metrics, population: { tool: 'rota_project_detail' }, ...(path === 'model' ? { reasoning: 'synthesis' } : {}),
         entities: [{ type: 'project', id: PROJECTS.HIDDEN }] }),
-        toolCalls: [{ id: 'call', name: 'rota_project_detail', arguments: JSON.stringify({ projectId: PROJECTS.HIDDEN }) }] },
+        toolCalls: [{ id: 'call', name: 'rota_project_detail', arguments: JSON.stringify({ projectId: PROJECTS.HIDDEN }) }] }),
       ...(path === 'model' ? [() => {
         archive();
         return { text: JSON.stringify({ kind: 'rota', facts: ['R1:data.project.name', 'R1:data.access.reasons.*'] }), toolCalls: [], finishReason: 'stop' };

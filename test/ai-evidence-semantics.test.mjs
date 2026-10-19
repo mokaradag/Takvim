@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import { ADMIN, AYSE, MEHMET, NOW, PROJECTS, TASKS, WBS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { claimFor, declared, nativeDeclaration, evidenceReply } from './helpers/evidenceScenario.mjs';
 
 const { createToolScope } = await import('../src/server/ai/tools/toolScope.js');
 const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
@@ -55,8 +55,8 @@ test('global analytics/search follow-ups preserve the canonical task population 
   const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => {
     rounds += 1;
     assert.equal(rounds, 1, 'the count and list share one required population read');
-    return { text: declared({ operation: 'list', metrics: ['tasks.total', 'task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { deadline: 'overdue' } }),
-      toolCalls: [{ id: 'list', name: 'rota_task_search', arguments: '{"deadline":"overdue"}' }] };
+    return nativeDeclaration({ text: declared({ operation: 'list', metrics: ['tasks.total', 'task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { deadline: 'overdue' } }),
+      toolCalls: [{ id: 'list', name: 'rota_task_search', arguments: '{"deadline":"overdue"}' }] });
   } }, { messages: buildGroundedContext({ userContent: 'Kaç gecikmiş görevim var ve hangileri?', now: NOW }).messages,
     catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {} });
   assert.equal(result.outcome, 'grounded');
@@ -324,8 +324,8 @@ test('activity actor and group-kind filters precede the raw-event cap, and detai
 test('model general routing cannot publish invented current data in either language', async (t) => {
   stackFor(t);
   for (const user of ['İŞLER NASIL?', 'And what about her latest work?']) {
-    const steps = ['{"kind":"route","intent":"general"}', '{"kind":"general","text":"There are 42 delayed tasks; Ayşe owns them."}'];
-    const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => ({ text: steps.shift(), toolCalls: [], finishReason: 'stop' }) }, {
+    const steps = [JSON.stringify({ name: 'rota_plan', arguments: { intent: 'general', language: 'tr' } }), '{"kind":"general","text":"There are 42 delayed tasks; Ayşe owns them."}'];
+    const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => nativeDeclaration({ text: steps.shift(), toolCalls: [], finishReason: 'stop' }) }, {
       messages: buildGroundedContext({ userContent: user, now: NOW }).messages,
       catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {}
     });
@@ -335,7 +335,7 @@ test('model general routing cannot publish invented current data in either langu
   }
 });
 
-test('a direct general response without a route ends with safe clarification rather than grounding failure', async (t) => {
+test('a direct general response without a typed decision exhausts bounded declaration repair', async (t) => {
   stackFor(t);
   let rounds = 0;
   const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => {
@@ -343,9 +343,9 @@ test('a direct general response without a route ends with safe clarification rat
     return { text: '{"kind":"general","text":"There are 42 delayed tasks."}', toolCalls: [], finishReason: 'stop' };
   } }, { messages: buildGroundedContext({ userContent: 'What is project management?', now: NOW }).messages,
     catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {} });
-  assert.equal(rounds, 1);
-  assert.equal(result.outcome, 'general_redirect');
-  assert.equal(result.finishReason, 'clarification');
+  assert.equal(rounds, 3);
+  assert.equal(result.outcome, 'failed');
+  assert.equal(result.finishReason, 'grounding_failed');
   assert.equal(result.repaired, false);
   assert.doesNotMatch(result.text, /42/);
 });
@@ -381,8 +381,8 @@ test('final authorization has its own budget after tool SQL reaches the cumulati
   const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
     round += 1;
     if (round === 1) {
-      return { text: declared({ operation: 'value', metrics: ['task.title'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] }),
-        toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
+      return nativeDeclaration({ text: declared({ operation: 'value', metrics: ['task.title'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] }),
+        toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] });
     }
     const evidence = JSON.parse(input.messages.findLast((message) => message.role === 'tool').content);
     return { text: evidenceReply(claimFor(evidence, 'data.task.title')), toolCalls: [], finishReason: 'stop' };
@@ -410,8 +410,8 @@ for (const path of ['server', 'model']) {
     const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => {
       round += 1;
       if (round === 1) {
-        return { text: declared({ operation: 'value', metrics, entities: [{ type: 'task', id: TASKS.OVERDUE }], ...(path === 'model' ? { reasoning: 'synthesis', fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }] } : {}) }),
-          toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] };
+        return nativeDeclaration({ text: declared({ operation: 'value', metrics, entities: [{ type: 'task', id: TASKS.OVERDUE }], ...(path === 'model' ? { reasoning: 'synthesis', fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }] } : {}) }),
+          toolCalls: [{ id: 'detail', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.OVERDUE }) }] });
       }
       return { text: JSON.stringify({ kind: 'rota', facts: ['R1:data.task.title', 'R1:data.task.project.name'] }), toolCalls: [], finishReason: 'stop' };
     } }, { messages: buildGroundedContext({ userContent: `Görevi göster ${TASKS.OVERDUE}`, now: NOW }).messages,

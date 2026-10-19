@@ -364,8 +364,9 @@ profilleriyle ağ geçidi üzerinden gerçek gömme ile sunucuya ait araç
 kataloğunda sınırlı aday keşfi ve yeniden sıralama yapar (süreç içi dizin,
 vektör veritabanı yok). 4C bu adayları doğrulayıp planlayıcıya danışman not
 olarak verir; planlayıcı veri okumadan türlü karar (yanıt, açıklama,
-çekimserlik) verir. 4C'nin 117/117 zayıf model kabul kapısı henüz geçilmedi
-(Haiku 4.5: 88/117).
+çekimserlik) verir. 4C kabulü bekliyor: düzeltilmiş kapıda gerçek zayıf modelle kanonik 117/117 ve zorunlu ek 19/19,
+üretim eşdeğeri anlamsal danışmanlık ve düşünmesiz model kökeni birlikte gereklidir.
+Tarihsel Haiku 4.5 88/117 ölçümü düzeltilmiş kapıdan önceye aittir.
 Katalog dizini kurumsal anahtarla (`MERGEN_ROTA_AI_DEFAULT_API_KEY`) kurulur;
 üretim yolundan nitelendirme uygulama dizininde `node
 scripts/semantic-evaluation.mjs live --json` ile yapılır (`.env.local` okunur).

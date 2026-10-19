@@ -19,14 +19,14 @@ import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import { createToolScope, rowIdentityPath } from '../tools/toolScope.js';
 import { bindRequestEntities, declarationHints, parseRequestDeclaration, requestEvidence, requestEvidenceReady, requestRepairHint, requestSelections, requestSummary, requestWindow,
   dependentEntity, droppedNameHint, droppedNames, instantiateDependent, metricIdHints, namedScope, nameProbes, requestSchema, unmatchedEntities } from '../tools/requestDeclaration.js';
-import { createCallIds, planShapeHints, prepareExecutionSet, rejectionFor, textPlanCall, typedPlanningTool, unpackTypedPlan } from '../tools/executionSet.js';
-import { completeRequest, derivedReads, readKey, requestBoundCall, requestTextFields } from '../tools/requestPopulation.js';
+import { createCallIds, planShapeHints, prepareExecutionSet, rejectionFor, typedPlanningTool, unpackTypedPlan } from '../tools/executionSet.js';
+import { completeRequest, derivedReads, readKey, requestBoundCall, requestTextFields, declaredFacets, requestDimensions } from '../tools/requestPopulation.js';
 import { parseTurnLanguage, parseTurnRequest, parseTurnRoute, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
 import { CLARIFICATION_LIMITS, clarificationReference } from '../../../domain/ai/clarification.js';
 import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
 import { createAiDeadline } from '../aiDeadline.js';
-import { concreteCollections } from '../../../domain/ai/requestContract.js';
-import { rowCollections } from '../../../domain/ai/claimableEvidence.js';
+import { concreteCollections, rankedRowIndexes } from '../../../domain/ai/requestContract.js';
+import { EVIDENCE_TEXT_FIELDS, METRICS, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { PLANNER_INTENTS, PLANNER_LIMITS, renderDependentLimit, renderPartUnavailable, renderPlannerAbstention, renderPlannerClarification, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
 import { plannerCandidateNote } from './groundedPrompt.js';
 
@@ -393,50 +393,115 @@ function preparePlan(turn, calls, declared, parts = []) {
 
 const stable = (value) => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, item[key]])) : item);
-const planAt = (plan, path) => path.reduce((value, key) => value?.[key], plan);
+const repairDimensions = (semantic) => {
+  const { tool, collection: _collection, ...dimensions } = semantic.population || {};
+  const defaults = tool ? requestDimensions({ population: { tool }, filters: {} }, tool) : {};
+  return stable(Object.fromEntries(Object.entries(dimensions).filter(([key, value]) => value != null && stable(value) !== stable(defaults[key]))));
+};
 
-/** Düzeltme yalnızca ret yollarını değiştirebilir; eksik sorunsuz alanlar da sabittir. */
-function pinRepair(turn, plan, details) {
+const repairCalls = (turn, calls) => calls.filter((call) => call.name !== 'rota_plan').flatMap((call) => {
+  const checked = prepareExecutionSet([call], { catalog: turn.catalog, validateCall: turn.containment.validate, limits: turn.limits,
+    attempted: turn.executor.stats().attempted, callId: turn.callId, today: turn.context.today });
+  return checked.ok ? checked.calls.map(({ name, args }) => ({ name, args })) : [];
+});
+
+/** Düzeltme eşitliği sunucunun tamamladığı anlamdır; boş seçenekler ve varsayılanlar anlam değildir. */
+function repairSemantic(turn, raw, index, calls = [], sections = null) {
+  const clean = (value) => {
+    if (Array.isArray(value)) return value.map(clean);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).filter(([, item]) => item != null
+      && !(Array.isArray(item) && !item.length) && !(typeof item === 'object' && !Object.keys(item).length)).map(([key, item]) => [key, clean(item)]));
+  };
+  const parsed = parseRequestDeclaration(clean(raw), { textTrusted: turn.containment.textTrusted, identityTrusted: turn.containment.identityTrusted,
+    today: turn.context.today, priorParts: index });
+  const completion = completeRequest(parsed, calls, { today: turn.context.today, allowedTextFields: turn.allowedTextFields });
+  const request = completion.request;
+  const tool = request.population?.tool;
+  const semantic = { ...request, metrics: [...request.metrics].sort(), entities: request.entities.map(({ query: _query, ...entity }) => {
+    if (entity.from == null || !sections) return entity;
+    const source = repairSemantic(turn, sections[entity.from], entity.from, entity.from ? [] : calls);
+    return { ...entity, from: source.semantic };
+  }),
+    filters: tool ? declaredFacets(tool, request.filters, turn.context.today) : request.filters,
+    population: tool ? { tool, collection: request.population.collection ?? null, ...requestDimensions(request, tool) } : null,
+    rank: request.rank ? { ...request.rank, limit: request.rank.limit ?? 1 } : null };
+  return { semantic, problems: completion.problems };
+}
+
+/** Geçerli bölümler birebir anlamla, ölçü onarımı ise etkilenmeyen kapsamla sabitlenir. */
+function pinRepair(turn, plan, details, calls = []) {
   if (details.some((detail) => String(detail).endsWith(':dropped'))) return;
   const sections = [plan.request, ...(plan.additionalRequests || [])];
+  const pins = [];
   sections.forEach((raw, index) => {
     if (!raw) return;
-    const path = index ? ['additionalRequests', String(index - 1)] : ['request'];
     const own = details.filter((detail) => index ? String(detail).startsWith(`$.additionalRequests[${index - 1}]`)
       : !String(detail).startsWith('$.additionalRequests'));
     try {
-      const parsed = parseRequestDeclaration(raw, { textTrusted: turn.containment.textTrusted, identityTrusted: turn.containment.identityTrusted,
-        today: turn.context.today, priorParts: index });
-      const checked = completeRequest(parsed, [], { today: turn.context.today, allowedTextFields: turn.allowedTextFields });
+      const checked = repairSemantic(turn, raw, index, index ? [] : calls, sections);
       if (!checked.problems.length && !own.some((detail) => !String(detail).startsWith('$.calls'))) {
-        const key = JSON.stringify(path);
-        if (!turn.repairPins.has(key)) turn.repairPins.set(key, stable(raw));
+        pins.push({ full: stable(checked.semantic) });
+        return;
       }
-    } catch { /* Geçersiz bölümün tamamı güvenilir niyet sayılmaz. */ }
-    // Ölçünün biçim hatası adları ya da nüfus koşullarını değiştirmeyi gerektirmez.
-    if (own.length && own.every((detail) => /\.metrics(?:\[\d+\])?:(enum|type|required|minItems|maxItems)$/.test(String(detail)))) {
-      for (const key of ['entities', 'filters', 'operation', 'population', 'reasoning']) {
-        const at = JSON.stringify([...path, key]);
-        if (!turn.repairPins.has(at)) turn.repairPins.set(at, stable(raw[key]));
-      }
+    } catch { /* Geçersiz ölçü, bağımsız geçerli kapsamı serbest bırakmaz. */ }
+    if (own.length && own.every((detail) => /\.metrics(?:\[\d+\])?:(enum|type|required|minItems|maxItems|population)$/.test(String(detail)))) {
+      const carrier = own.some((detail) => String(detail).endsWith(':population'));
+      const keys = ['operation', 'entities', 'filters', 'reasoning', 'rank', ...(carrier ? ['metrics'] : [])];
+      // Ölçü sözlüğü hatasında da kapsam aynı ayrıştırıcıyla kanonikleşir.
+      try {
+        const validMetrics = (Array.isArray(raw.metrics) ? raw.metrics : []).filter((metric) => Object.hasOwn(METRICS, metric));
+        const rank = raw.rank ? { ...raw.rank, metric: Object.hasOwn(METRICS, raw.rank.metric) ? raw.rank.metric : 'tasks.total' } : null;
+        const probe = repairSemantic(turn, { ...raw, metrics: [...new Set(['tasks.total', ...validMetrics, ...(rank ? [rank.metric] : [])])],
+          ...(rank ? { rank } : {}), fields: [], bindings: [] }, index, [], sections);
+        const scope = Object.fromEntries(keys.map((key) => [key, probe.semantic[key]]));
+        if (carrier) scope.metrics = [...raw.metrics].sort();
+        if (scope.rank && !Object.hasOwn(METRICS, raw.rank.metric)) { const { metric: _metric, ...order } = scope.rank; scope.rank = order; }
+        const fields = (raw.fields || []).filter((field) => validMetrics.includes(field.metric) && metricPaths(field.tool, field.metric).includes(field.path));
+        const bindings = (raw.bindings || []).filter((binding) => validMetrics.includes(binding.metric) && raw.entities?.[binding.entity]);
+        pins.push({ keys, scope: stable(scope), dimensions: repairDimensions(probe.semantic), metrics: validMetrics, fields, bindings,
+          rankMetric: !raw.rank || Object.hasOwn(METRICS, raw.rank.metric) });
+      } catch { /* Bağımsız kapsam da geçersizse sabitlenmez. */ }
     }
   });
+  if (!turn.repairPins.size) turn.repairPins.set('snapshot', { count: sections.length, pins, calls });
 }
 
-function repairMatches(turn, plan) {
-  if (plan.intent !== PLANNER_INTENTS.ROTA) return true;
-  return [...turn.repairPins].every(([path, expected]) => stable(planAt(plan, JSON.parse(path))) === expected);
+function repairMatches(turn, plan, calls = []) {
+  const snapshot = turn.repairPins.get('snapshot');
+  if (!snapshot) return true;
+  if (plan.intent !== PLANNER_INTENTS.ROTA) return snapshot.pins.length === 0;
+  const sections = [plan.request, ...(plan.additionalRequests || [])];
+  if (sections.length !== snapshot.count) return false;
+  const used = new Set();
+  // Bölüm sırası değişebilir; her sabit bölüm yalnızca bir kez eşlenir.
+  return snapshot.pins.every((pin) => {
+    const index = sections.findIndex((raw, index) => {
+      if (used.has(index)) return false;
+      try {
+        const checked = repairSemantic(turn, raw, index, index ? [] : (calls.length ? calls : snapshot.calls), sections);
+        if (pin.full) return !checked.problems.length && stable(checked.semantic) === pin.full;
+        const scope = Object.fromEntries(pin.keys.map((key) => [key, checked.semantic[key]]));
+        if (scope.rank && !pin.rankMetric) { const { metric: _metric, ...order } = scope.rank; scope.rank = order; }
+        if (pin.metrics.some((metric) => !checked.semantic.metrics.includes(metric))
+          || pin.fields.some((field) => !checked.semantic.fields.some((actual) => stable(actual) === stable(field)))
+          || pin.bindings.some((binding) => !checked.semantic.bindings.some((actual) => stable(actual) === stable(binding)))) return false;
+        return stable(scope) === pin.scope && repairDimensions(checked.semantic) === pin.dimensions;
+      } catch { return false; }
+    });
+    if (index < 0) return false;
+    used.add(index);
+    return true;
+  });
 }
 
 /** Ölçünün gerektirdiği metin ile kazara eklenen nüfus seçeneği ayrıdır. */
 function planNeedsText(turn, plan) {
-  return [plan?.request, ...(plan?.additionalRequests || [])].filter(Boolean).some((raw) => {
-    try {
-      const request = parseRequestDeclaration({ ...raw, population: { ...raw.population, textFields: [] } }, { textTrusted: turn.containment.textTrusted, identityTrusted: turn.containment.identityTrusted, today: turn.context.today, priorParts: PLANNER_LIMITS.maxRequests });
-      const completed = completeRequest(request, [], { today: turn.context.today, allowedTextFields: turn.allowedTextFields });
-      return requestTextFields(completed.request).length > 0;
-    } catch { return false; }
-  });
+  return [plan?.request, ...(plan?.additionalRequests || [])].filter(Boolean).some((raw) => Array.isArray(raw.metrics)
+    && raw.metrics.some((metric) => turn.catalog.some((tool) => metricPaths(tool.name, metric).some((path) => {
+      const field = path.split('.').at(-1);
+      return EVIDENCE_TEXT_FIELDS.includes(field) && !turn.allowedTextFields.includes(field);
+    }))));
 }
 
 const TEXT_FIELDS_REQUIRED = /(?:^\$|\.)population\.textFields:not-authorized$/;
@@ -484,8 +549,9 @@ function dependentRows(turn, from, type) {
   const source = turn.answers.find((answer) => answer.index === from);
   if (source?.verdict.kind !== 'grounded') return [];
   const ids = [];
+  const selectedRows = [];
   for (const entry of source.entries) {
-    if (entry.tool !== source.request.population.tool) continue;
+    if (entry.tool !== source.request.population.tool || !source.verdict.citedIds.includes(entry.id)) continue;
     const evidence = requestEvidence(source.request, [entry], turn.context.today).get(entry.id);
     if (!evidence?.populationMatch || !evidence.dimensionsMatch) continue;
     for (const collection of sourceCollections(source.request)) {
@@ -493,13 +559,19 @@ function dependentRows(turn, from, type) {
       if (!identity) continue;
       for (const concrete of concreteCollections(entry.payload, collection)) {
         const rows = concrete.rows;
-        for (const row of Array.isArray(rows) ? rows : []) {
+        const order = source.request.operation === 'rank'
+          ? (rankedRowIndexes(source.request, entry.tool, entry.payload, collection, concrete.collection.replace(/^data\./, '')) || []).slice(0, source.request.rank.limit || 1)
+          : rows.map((_, index) => index);
+        for (const index of order) {
+          const row = rows[index];
+          selectedRows.push({ tool: entry.tool, collection, row });
           const id = identity.split('.').reduce((value, key) => value?.[key], row);
           if ((typeof id === 'string' || typeof id === 'number') && !ids.includes(String(id))) ids.push(String(id));
         }
       }
     }
   }
+  turn.containment.beginPart(selectedRows);
   return ids;
 }
 
@@ -536,7 +608,6 @@ function acceptPart(turn, spec) {
  */
 function settlePart(turn, verdict, selectedBy) {
   if (!turn.parts.length && !turn.answers.length) return { verdict, selectedBy };
-  if (verdict.kind === 'clarification') verdict = { ...verdict, normalized: `${verdict.normalized}\n\n${renderPartUnavailable({ locale: turn.locale })}` };
   turn.answers.push({ index: turn.partIndex, verdict, selectedBy, request: turn.request, entries: partEntries(turn) });
   while (turn.parts.length) {
     const next = turn.parts.shift();
@@ -561,11 +632,16 @@ function settlePart(turn, verdict, selectedBy) {
     acceptPart(turn, instances[0]);
     return null;
   }
-  const texts = turn.answers.flatMap((answer, position) => [answer.verdict.normalized,
+  turn.answers.sort((a, b) => a.index - b.index);
+  const clarifications = turn.answers.filter((answer) => answer.verdict.clarification);
+  const texts = turn.answers.flatMap((answer, position) => [clarifications.length > 1 && answer.verdict.clarification
+    ? renderPlannerClarification({ reason: 'missing_referent', locale: turn.locale }) : answer.verdict.normalized,
     ...(turn.partNotes.has(answer.index) && turn.answers[position + 1]?.index !== answer.index
       ? [renderDependentLimit({ shown: turn.partNotes.get(answer.index), locale: turn.locale })] : [])]);
+  const kind = turn.answers.every((answer) => answer.verdict.kind === 'grounded') ? 'grounded'
+    : clarifications.length ? 'clarification' : turn.answers.every((answer) => answer.verdict.kind === 'not_found') ? 'not_found' : 'unavailable';
   return {
-    verdict: { ok: true, kind: ['grounded', 'clarification', 'unavailable', 'not_found'].find((kind) => turn.answers.some((answer) => answer.verdict.kind === kind)) || 'unavailable',
+    verdict: { ok: true, kind, ...(clarifications.length === 1 ? { clarification: clarifications[0].verdict.clarification } : {}),
       normalized: texts.filter(Boolean).join('\n\n'), citedIds: [...new Set(turn.answers.flatMap((answer) => answer.verdict.citedIds))], issues: [] },
     selectedBy: turn.answers.every((answer) => answer.selectedBy === 'server') ? 'server' : 'model'
   };
@@ -573,12 +649,12 @@ function settlePart(turn, verdict, selectedBy) {
 
 /** Planlama kararının gözlemcisi ve içeriksiz telemetrisi. Karar donmuş bir özettir; turu değiştiremez. */
 function emitPlanned(turn, decision) {
-  if (turn.decision) return;
   turn.decision = decision.intent;
   const summary = Object.freeze({ ...decision, language: turn.locale, semantic: turn.planning.state, candidates: turn.planning.candidates.length,
     declarations: turn.trace.declarations, latencyMs: Date.now() - turn.trace.startedAt });
-  recordPlannerDecision({ decision: summary.intent, parts: summary.requests?.length || 0, semantic: summary.semantic,
+  if (!turn.decisionCounted) recordPlannerDecision({ decision: summary.intent, parts: summary.requests?.length || 0, semantic: summary.semantic,
     candidates: summary.candidates, declarations: summary.declarations, latencyMs: summary.latencyMs, semanticReason: turn.planning.reason });
+  turn.decisionCounted = true;
   turn.onPlanned?.(summary);
 }
 
@@ -667,6 +743,8 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     planning: Object.freeze({ state: advice.state, candidates: Object.freeze([...advice.candidates]), reason: advice.reason }),
     onPlanned,
     decision: null,
+    decisionCounted: false,
+    readStarted: false,
     repairPins: new Map(),
     partEvidence: new Set(),
     // Çok bölümlü plan: sıradaki bölümler, doğrulanmış bölüm sonuçları ve bağımlı bölüm notları.
@@ -686,7 +764,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     route: TURN_ROUTES.UNDECIDED,
     // Yanıt dili modelin bildirimidir; bildirilene kadar varsayılan Türkçedir.
     locale: 'tr',
-    // Bildirilen (henüz planla tamamlanmamış) istek ve planla tamamlanan istek; ilk kanıttan sonra değişmez.
+    // Bildirilen ve tamamlanan istek; ilk okuma girişiminden sonra değişmez.
     declared: null,
     // Turun bildirimlerinde kullanıcının adlandırdığı kayıtlar; düzeltme bunları düşüremez.
     namedScope: [],
@@ -731,7 +809,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
   });
   if (clarification) instruct(turn, selectionInstruction(clarification));
   if (turn.planning.candidates.length) {
-    const note = { role: 'user', content: plannerCandidateNote(turn.planning.candidates) };
+    const note = { role: 'system', content: plannerCandidateNote(turn.planning.candidates) };
     for (const transcript of [turn.transcript, turn.baseline]) {
       transcript.splice(Math.max(0, transcript.findLastIndex((message) => message.role === 'user')), 0, note);
     }
@@ -867,8 +945,8 @@ async function revalidate(turn, disclosureSignal = turn.session.signal) {
 async function finish(turn, verdict, onText, selectedBy = 'model') {
   const { ledger, locale } = turn;
   const cited = ledger.summaries(verdict.citedIds);
-  const disclosure = ['grounded', 'clarification'].includes(verdict.kind) ? withScopeDisclosure(verdict.normalized, cited, locale) : { text: verdict.normalized, disclosed: false };
-  const finalText = ['grounded', 'clarification'].includes(verdict.kind) ? disclosure.text : verdict.normalized;
+  const disclosure = cited.length > 0 ? withScopeDisclosure(verdict.normalized, cited, locale) : { text: verdict.normalized, disclosed: false };
+  const finalText = cited.length > 0 ? disclosure.text : verdict.normalized;
   await onText(finalText);
   const outcome = verdict.kind;
   const completeDisclosure = (deliveredOutcome, code = null) => {
@@ -903,10 +981,9 @@ async function serverSelection(turn) {
   if (!turn.request) return null;
   if (turn.ledger.ids().length && (await revalidate(turn) || turn.ledger.revoked())) return unavailableVerdict(turn.locale);
   const local = verdictInput(turn);
-  if (turn.partCount > 1 && turn.toolsAttempted
-    && !requestEvidenceReady(turn.request, local.entries, turn.context.today, local.selection)) {
+  if (turn.partCount > 1 && turn.toolsAttempted && !local.evidenceIds.length) {
     for (const kind of ['not_found', 'unavailable']) {
-      const verdict = analyze(JSON.stringify({ kind }), { ...local, evidenceIds: [], evidencePayloads: [], entries: [] });
+      const verdict = analyze(JSON.stringify({ kind }), local);
       if (verdict.ok) return verdict;
     }
   }
@@ -933,7 +1010,8 @@ async function serverSelection(turn) {
 async function failTurn(turn, onText) {
   if (turn.answers.length && !turn.ledger.revoked()) {
     const verdict = { ok: true, kind: 'unavailable', normalized: renderPartUnavailable({ locale: turn.locale }), citedIds: [], issues: [] };
-    turn.parts = [];
+    // Sağlayıcı kesildiyse sıradaki bölümler de açıkça eksik gösterilir.
+    for (const part of turn.parts.splice(0)) turn.answers.push({ index: part.index, request: part.request, entries: [], selectedBy: 'server', verdict });
     const outcome = settlePart(turn, verdict, 'server');
     return finish(turn, outcome.verdict, onText, outcome.selectedBy);
   }
@@ -970,7 +1048,11 @@ function escalation(turn, reason, { error = null } = {}) {
   turn.trace.pending = null;
   // Kanıt okunmadıysa istek donmamıştır: Derin düşünme kendi planını ve bildirimini verebilir; eski kabul notu
   // (ör. "istek değiştirilemez") Derin'i bağlamaz. Yürütülen okumaların kaydı korunur: aynı okuma yinelenmez.
-  if ((!turn.decision || turn.decision === PLANNER_INTENTS.ROTA) && !turn.ledger.size()) {
+  if ((!turn.decision || turn.decision === PLANNER_INTENTS.ROTA) && !turn.readStarted) {
+    turn.decision = null;
+    turn.repairPins.clear();
+    turn.textFieldsRequired = false;
+    turn.namedScope = [];
     turn.declarationsLeft = DECLARATION_ROUNDS;
     turn.declared = null;
     turn.request = null;
@@ -1022,6 +1104,8 @@ async function executeRound(turn, executed) {
     emitPlanned(turn, { intent: PLANNER_INTENTS.ROTA, requests: Object.freeze([turn.request, ...turn.parts.map((part) => part.request)].filter(Boolean)),
       calls: Object.freeze(executed.map(({ name, args }) => Object.freeze({ name, args }))) });
   }
+  turn.readStarted = true;
+  turn.toolFailureCodes.clear();
   turn.toolsAttempted = true;
   turn.route = TURN_ROUTES.ROTA;
   const previousIds = new Set(turn.ledger.ids());
@@ -1089,8 +1173,8 @@ export async function runGroundedTurn(session, {
 
 async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
   const { ledger, executor, containment, status, catalog, limits, session } = turn;
-  // İstek ilk kanıtla donar: veri okunmadan (çağrılar başarısız olsa da) plan ve bildirim yenilenebilir.
-  const frozen = () => Boolean(turn.decision && turn.decision !== PLANNER_INTENTS.ROTA) || ledger.size() > 0;
+  // İlk okuma girişimi niyeti dondurur; boş kanıt defteri yürütmeyi geri almaz.
+  const frozen = () => Boolean(turn.decision && turn.decision !== PLANNER_INTENTS.ROTA) || turn.readStarted;
   const canEscalate = () => escalationAvailable && escalationPermitted(turn);
   const toolsAvailable = () => !['general', 'clarify', 'abstain', 'invalid', 'text_fields'].includes(turn.decision) && turn.toolRounds < limits.maxToolRounds && executor.stats().attempted < limits.maxTotalCalls;
   // Ucuz kurtarma tükendiğinde Standart tur Derin'e bir kez devredilir. Veri okunduysa Derin araç
@@ -1098,25 +1182,30 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
   // Veri okunmadıysa Derin yeniden planlar; ortak araç turu bütçesi tükendiyse planı yürütemez.
   const evidenceReady = () => Boolean(turn.request && requestEvidenceReady(turn.request, partEntries(turn), turn.context.today, containment.boundSelection()));
   const deepCanHelp = () => canEscalate() && (frozen() ? evidenceReady() : toolsAvailable());
-  const fallback = (reason) => {
+  const fallback = async (reason) => {
     if (turn.textFieldsRequired) {
       emitPlanned(turn, { intent: 'text_fields' });
       return finish(turn, { ok: true, kind: 'clarification', normalized: renderTextFieldsRequired({ locale: turn.locale }), citedIds: [], issues: [] }, onText);
     }
     if (deepCanHelp()) return escalation(turn, reason);
     if (reason === 'REQUEST_DECLARATION') emitPlanned(turn, { intent: 'invalid' });
+    if (turn.partCount > 1 && !ledger.revoked()) {
+      const outcome = settlePart(turn, { ok: true, kind: 'unavailable', normalized: renderPartUnavailable({ locale: turn.locale }), citedIds: [], issues: [] }, 'server');
+      if (outcome) return finish(turn, outcome.verdict, onText, outcome.selectedBy);
+      const done = await readAndSettle();
+      return done || continueTurn(turn, { escalationAvailable, onText, resumed: false });
+    }
     return failTurn(turn, onText);
   };
   let rejectedPlan = null;
   const rejectDeclaration = (calls, rawDetails, hints = [], problems = null, executionCalls = calls) => {
     const details = rawDetails || [];
     recordPlannerRejection(details[0]);
-    if (rejectedPlan && !details.includes('$.plan:repairScope')) pinRepair(turn, rejectedPlan, details);
+    if (rejectedPlan && !details.includes('$.plan:repairScope')) pinRepair(turn, rejectedPlan, details, repairCalls(turn, executionCalls));
     if (calls.length) turn.toolsRequested = true;
     // Kapsam dışı çağrı veri okunmadan reddedilse de Derin düşünme devrini engeller.
     for (const problem of problems || []) if (ESCALATION_BLOCKING_TOOL_CODES.has(problem.error.code)) turn.toolFailureCodes.add(problem.error.code);
-    if (details.length && details.every((detail) => TEXT_FIELDS_REQUIRED.test(String(detail)))
-      && (turn.declarationsLeft <= 0 || planNeedsText(turn, rejectedPlan))) {
+    if (planNeedsText(turn, rejectedPlan) || details.length && details.every((detail) => TEXT_FIELDS_REQUIRED.test(String(detail))) && turn.declarationsLeft <= 0) {
       turn.textFieldsRequired = true;
       if (rejectedPlan?.language) turn.locale = rejectedPlan.language;
       return false;
@@ -1147,7 +1236,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       const settled = await serverSelection(turn);
       if (ledger.revoked()) return finish(turn, unavailableVerdict(turn.locale), onText);
       if (!settled) {
-        if (!toolsAvailable() && turn.partCount > 1) {
+        if (!toolsAvailable() && turn.partCount > 1 && !evidenceReady()) {
           const outcome = settlePart(turn, { ok: true, kind: 'unavailable', normalized: renderPartUnavailable({ locale: turn.locale }), citedIds: [], issues: [] }, 'server');
           if (outcome) return finish(turn, outcome.verdict, onText, outcome.selectedBy);
           continue;
@@ -1211,9 +1300,6 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     traceRound(turn, { purpose, startedAt, result });
     const reported = session.reportedModel?.(result.model) ?? session.model;
     if (reported) turn.models.push(reported);
-    // Yerel çağrı yerine metin olarak dönen plan aynı plan doğrulamasından geçer.
-    const textPlan = !frozen() && !result.toolCalls.length ? textPlanCall(result.text) : null;
-    if (textPlan) result = { ...result, text: '', toolCalls: [textPlan] };
     const modelCalls = result.toolCalls;
     let plan = null;
     rejectedPlan = null;
@@ -1221,7 +1307,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       try {
         plan = unpackTypedPlan(result);
         rejectedPlan = plan.plan;
-        if (!repairMatches(turn, plan.plan)) throw invalidArguments(['$.plan:repairScope']);
+        if (!repairMatches(turn, plan.plan, repairCalls(turn, plan.calls))) throw invalidArguments(['$.plan:repairScope']);
       }
       catch (error) {
         if (!(error instanceof ToolError)) throw error;
@@ -1252,7 +1338,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       calls = [];
     }
     const declaration = plan ? { kind: 'route', intent: plan.plan.intent, language: plan.plan.language,
-      ...(plan.plan.request ? { request: plan.plan.request } : {}) } : parseEvidenceResponse(result.text);
+      ...(plan.plan.request ? { request: plan.plan.request } : {}) } : null;
     const declaredRoute = parseTurnRoute(declaration);
     // Bildirim yalnızca veri okunmadan önce kabul edilir; sonrasında istek değişmez.
     const declared = !frozen() && declaredRoute ? acceptDeclaration(turn, declaration, declaredRoute) : null;
@@ -1260,11 +1346,13 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     // İlk planlama kararı yerine gelen düz metin karar değildir (açıklama ya da ret metni de modelin değil
     // sunucunun işidir): araç denenmeden önce mevcut bildirim bütçesiyle türlü karar istenir. Metin dökümde
     // boş bir plan çağrısı olarak reddedilir; metnin kendisi taşınmaz.
-    if (!frozen() && !turn.request && !turn.toolsAttempted && turn.route === TURN_ROUTES.UNDECIDED && !plan && !calls.length && !declared && !lengthExhausted
-      && parseEvidenceResponse(result.text) == null && turn.declarationsLeft > 0) {
+    if (!frozen() && !turn.request && !plan && !lengthExhausted) {
       turn.trace.declarations += 1;
-      if (rejectDeclaration([], ['$.plan:required'], [PROSE_PLAN_HINT])) recordRejectedPlan(turn, [{ name: 'rota_plan', arguments: '{}' }], ['$.plan:required'], [PROSE_PLAN_HINT]);
-      continue;
+      if (rejectDeclaration(modelCalls, ['$.plan:required'], [PROSE_PLAN_HINT])) {
+        if (!modelCalls.length) recordRejectedPlan(turn, [{ name: 'rota_plan', arguments: '{}' }], ['$.plan:required'], [PROSE_PLAN_HINT]);
+        continue;
+      }
+      return fallback('REQUEST_DECLARATION');
     }
     // Çok bölümlü plan: bütün bölümler veri okunmadan birlikte doğrulanır; biri geçersizse hiçbiri yürütülmez.
     let parts = [];
@@ -1310,7 +1398,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
         instruct(turn, `Bu turun veri okunmadan belirlenen yönlendirmesi: ${turn.route}. Şimdi bu niyete göre yanıtla; Rota olguları yalnızca araç kanıtıyla sunulur.`);
       } else {
         // Reddedilen plan, plan doğrulamasındaki retle aynı biçimde modelin kendi çağrısı olarak kalır.
-        rejectDeclaration(modelCalls, declared.details, declared.hints);
+        if (!rejectDeclaration(modelCalls, declared.details, declared.hints)) return fallback('REQUEST_DECLARATION');
       }
       continue;
     }
@@ -1318,13 +1406,14 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       let prepared;
       if (!frozen()) {
         // Plan: istek ve bütün çağrılar (plan içi ve doğrudan) birlikte, SQL'den önce doğrulanır.
-        prepared = preparePlan(turn, calls, declared, parts);
+        prepared = preparePlan(turn, calls, declared, plan ? parts : turn.parts);
         if (!prepared.ok) {
           turn.route = TURN_ROUTES.ROTA;
           if (rejectDeclaration(modelCalls, prepared.details, prepared.hints, prepared.problems, calls)) continue;
           return fallback('REQUEST_DECLARATION');
         }
-        acceptPlan(turn, prepared.request, declared?.language, parts);
+        if (plan) acceptPlan(turn, prepared.request, declared?.language, parts);
+        else acceptRequest(turn, prepared.request);
       } else {
         prepared = prepareExecutionSet(calls, { catalog, permitted: turn.permittedTools, validateCall: requestCallValidator(turn, turn.request, derivedCalls(turn, turn.request)), limits,
           attempted: executor.stats().attempted, callId: turn.callId, today: turn.context.today });
@@ -1333,7 +1422,6 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
           turn.toolsRequested = true;
           turn.toolRounds += 1;
           turn.work += 1;
-          for (const problem of prepared.problems) turn.toolFailureCodes.add(problem.error.code);
           recordRejectedRound(turn, calls, prepared.problems);
           if (turn.toolRounds >= limits.maxToolRounds) instruct(turn, roundLimitNote());
           continue;

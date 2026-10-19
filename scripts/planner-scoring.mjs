@@ -32,7 +32,7 @@ export const WEAK_PLANNER_MODEL = 'claude-haiku-4-5-20251001';
 const { createSemanticCatalogue, semanticFingerprint, semanticToolDefinitions, normalizeSemanticQuery } = await import('../src/domain/ai/semanticContract.js');
 const { validateSemanticBenchmark } = await import('../src/domain/ai/semanticEvaluation.js');
 const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
-const { canonicalDimensions, declaredFacets, requestDimensions, requestTextFields, toolFamily } = await import('../src/server/ai/tools/requestPopulation.js');
+const { canonicalDimensions, declaredFacets, readKey, requestBoundCall, requestDimensions, requestTextFields, toolFamily } = await import('../src/server/ai/tools/requestPopulation.js');
 const { searchText } = await import('../src/server/ai/tools/rota/taskFacts.js');
 const { containmentText } = await import('../src/server/ai/tools/toolScope.js');
 const { EVIDENCE_TEXT_FIELDS, METRICS } = await import('../src/domain/ai/claimableEvidence.js');
@@ -40,6 +40,8 @@ const { REQUEST_ENTITY_TYPES, REQUEST_OPERATIONS } = await import('../src/domain
 
 /** Adla bildirilen varlık türünün sunucu tarafı çözüm aracı (planlayıcı önkoşulu; ihtiyaç değildir). */
 const RESOLVERS = Object.freeze({ project: 'rota_project_search', person: 'rota_person_search', task: 'rota_task_search', wbs: 'rota_wbs_inspect', baseline: 'rota_baseline_compare' });
+const CANONICAL_IDS = Object.freeze(Array.from({ length: 117 }, (_, index) => `tr-${String(index + 1).padStart(3, '0')}`));
+const SUPPLEMENTARY_IDS = Object.freeze(Array.from({ length: 19 }, (_, index) => `pl-${String(index + 1).padStart(3, '0')}`));
 const EXPECTATIONS = Object.freeze(['answer', 'clarify', 'abstain', 'general']);
 const FILTER_KEYS = Object.freeze(['status', 'priority', 'deadline', 'dateField', 'assignee', 'createdByMe', 'milestone', 'text', 'tab', 'workflowStatus',
   'source', 'includeEmpty', 'activityScope', 'activityKind']);
@@ -83,7 +85,7 @@ function validateRange(value, at, add) {
   if (Array.isArray(value)) { if (!pair(value)) add(`${at}:invalid`); return; }
   if (!isRecord(value) || Object.keys(value).some((key) => !['anchor', 'date', 'range'].includes(key)) || !pair(value.range ?? [0, 0])
     || (value.anchor === undefined) === (value.date === undefined) || (value.anchor !== undefined && !ANCHORS.includes(value.anchor))
-    || (value.date !== undefined && !validCalendarDate(`2025-${value.date}`))) add(`${at}:invalid`);
+    || (value.date !== undefined && !validCalendarDate(`2000-${value.date}`))) add(`${at}:invalid`);
 }
 
 function validateAlternative(alt, at, add, { tools, groups, group }) {
@@ -213,6 +215,12 @@ function validateDecisionGold(entry, expect, at, add) {
   } else if (entry.choice.topics !== undefined) add(`${at}.choice.topics:forbidden`);
 }
 
+/** İzinler yalnızca açık vaka girdisidir; puanlama etiketinden türetilmez. */
+function validateInput(input, at, add) {
+  if (input === undefined) return;
+  if (closed(input, ['allowedTextFields'], `${at}.input`, add)) stringList(input.allowedTextFields, `${at}.input.allowedTextFields`, add, { allowed: [...EVIDENCE_TEXT_FIELDS], min: 0 });
+}
+
 /**
  * Altın etiket belgesini doğrular ve Aşama 4A kıyas kümesine bağlar. Sonuç: vaka metni, beklentisi,
  * ihtiyaçları, kaçınmaları ve (yanıt vakasında) türlü plan kısıtları.
@@ -224,6 +232,7 @@ export function validatePlannerBenchmark(document, semantic) {
   if (document.format !== PLANNER_BENCHMARK_FORMAT) add('format:unknown');
   if (document.version !== PLANNER_BENCHMARK_VERSION) add('version:unsupported');
   if (document.semanticBenchmark !== semantic.fingerprint) add('semanticBenchmark:stale');
+  if (semantic.cases.length !== CANONICAL_IDS.length || semantic.cases.some((item, index) => item.id !== CANONICAL_IDS[index])) add('cases:mandatory-ids');
   const tools = rotaToolNames();
   const byId = new Map(semantic.cases.map((testCase) => [testCase.id, testCase]));
   const seen = new Set();
@@ -231,7 +240,7 @@ export function validatePlannerBenchmark(document, semantic) {
   if (!Array.isArray(document.cases) || document.cases.length !== semantic.cases.length) add('cases:count');
   for (const [position, entry] of (Array.isArray(document.cases) ? document.cases : []).entries()) {
     const at = `cases[${position}]`;
-    if (!closed(entry, ['case', 'plan', 'example', 'language', 'choice'], at, add)) continue;
+    if (!closed(entry, ['case', 'plan', 'example', 'language', 'choice', 'input'], at, add)) continue;
     const testCase = byId.get(entry.case);
     if (!testCase) { add(`${at}.case:unknown`); continue; }
     if (seen.has(entry.case)) add(`${at}.case:duplicate`);
@@ -242,15 +251,16 @@ export function validatePlannerBenchmark(document, semantic) {
       else { validatePlan(entry.plan, `${at}.plan`, add, { tools, needs: testCase.needs }); validateExample(entry.example, `${at}.example`, add); }
     } else if (entry.plan !== undefined || entry.example !== undefined) add(`${at}:gold-forbidden`);
     validateDecisionGold(entry, testCase.expect, at, add);
-    cases.push({ language: entry.language, choice: entry.choice, id: testCase.id, text: testCase.text, history: [], expect: testCase.expect, needs: testCase.needs, avoid: testCase.avoid, tags: testCase.tags,
+    validateInput(entry.input, at, add);
+    cases.push({ input: entry.input, language: entry.language, choice: entry.choice, id: testCase.id, text: testCase.text, history: [], expect: testCase.expect, needs: testCase.needs, avoid: testCase.avoid, tags: testCase.tags,
       gold: entry.plan ?? null, example: entry.example ?? null, canonical: true });
   }
   const supplementary = Array.isArray(document.supplementary) ? document.supplementary : null;
-  if (!supplementary || supplementary.length > 60) add('supplementary:invalid');
+  if (!supplementary || supplementary.length !== SUPPLEMENTARY_IDS.length || supplementary.some((entry, index) => entry?.id !== SUPPLEMENTARY_IDS[index])) add('supplementary:mandatory-ids');
   const texts = new Set(semantic.cases.map((testCase) => testCase.text));
   for (const [position, entry] of (supplementary || []).entries()) {
     const at = `supplementary[${position}]`;
-    if (!closed(entry, ['id', 'text', 'history', 'expect', 'needs', 'avoid', 'tags', 'plan', 'example', 'language', 'choice'], at, add)) continue;
+    if (!closed(entry, ['id', 'text', 'history', 'expect', 'needs', 'avoid', 'tags', 'plan', 'example', 'language', 'choice', 'input'], at, add)) continue;
     if (typeof entry.id !== 'string' || !/^pl-\d{3}$/.test(entry.id) || seen.has(entry.id)) add(`${at}.id:invalid`);
     seen.add(entry.id);
     const query = normalizeSemanticQuery(entry.text);
@@ -271,7 +281,8 @@ export function validatePlannerBenchmark(document, semantic) {
       else if (Array.isArray(needs)) { validatePlan(entry.plan, `${at}.plan`, add, { tools, needs }); validateExample(entry.example, `${at}.example`, add); }
     } else if (entry.plan !== undefined || entry.example !== undefined) add(`${at}:gold-forbidden`);
     validateDecisionGold(entry, entry.expect, at, add);
-    cases.push({ language: entry.language, choice: entry.choice, id: entry.id, text: entry.text, history, expect: entry.expect, needs, avoid, tags: entry.tags, gold: entry.plan ?? null, example: entry.example ?? null, canonical: false });
+    validateInput(entry.input, at, add);
+    cases.push({ input: entry.input, language: entry.language, choice: entry.choice, id: entry.id, text: entry.text, history, expect: entry.expect, needs, avoid, tags: entry.tags, gold: entry.plan ?? null, example: entry.example ?? null, canonical: false });
   }
   if (issues.length) return { ok: false, issues };
   return { ok: true, benchmark: {
@@ -287,13 +298,13 @@ export function loadPlannerBenchmark({ plannerDocument = null, goldRequired = tr
   const built = createSemanticCatalogue(semanticToolDefinitions(rotaToolNames().map((name) => getRotaTool(name))));
   const semantic = validateSemanticBenchmark(JSON.parse(readFileSync(SEMANTIC_BENCHMARK_FILE, 'utf8')), built.catalogue);
   if (!semantic.ok) throw new Error(`Kıyas kümesi geçersiz: ${semantic.issues.join(', ')}`);
-  // Altın etiketsiz deneme (puanlanmaz): yalnızca kıyas kümesinin soruları.
+  const document = plannerDocument ?? JSON.parse(readFileSync(PLANNER_BENCHMARK_FILE, 'utf8'));
   if (!goldRequired) {
-    const cases = semantic.benchmark.cases.map((testCase) => ({ id: testCase.id, text: testCase.text, history: [], expect: testCase.expect,
-      needs: testCase.needs, avoid: testCase.avoid, tags: testCase.tags, gold: null, example: null, canonical: true }));
+    // Tanı girdisi aynı soru, geçmiş ve açık izin yapılandırmasını kullanır; altın etiketleri taşımaz.
+    const cases = [...semantic.benchmark.cases.map((testCase) => ({ ...testCase, input: document.cases.find((entry) => entry.case === testCase.id)?.input, history: [], canonical: true })),
+      ...document.supplementary.map(({ id, text, history = [], input }) => ({ id, text, history, input, canonical: false }))];
     return { fingerprint: null, semanticFingerprint: semantic.benchmark.fingerprint, referenceDate, cases, now: new Date(`${referenceDate}T06:00:00Z`) };
   }
-  const document = plannerDocument ?? JSON.parse(readFileSync(PLANNER_BENCHMARK_FILE, 'utf8'));
   const validated = validatePlannerBenchmark(document, semantic.benchmark);
   if (!validated.ok) throw new Error(`Planlayıcı altın etiketleri geçersiz: ${validated.issues.join(', ')}`);
   return { ...validated.benchmark, fingerprint: semanticFingerprint([validated.benchmark.fingerprint, referenceDate]), referenceDate, now: new Date(`${referenceDate}T06:00:00Z`) };
@@ -474,7 +485,7 @@ export function scoreDecision(testCase, record, { referenceDate }) {
     const groups = testCase.choice.topics || [];
     if (groups.length) {
       const matched = groups.filter((group) => group.some((tool) => topics.includes(tool)));
-      if (topics.length < 2 || new Set(topics).size !== topics.length || matched.length < 2 || topics.some((topic) => !groups.flat().includes(topic))) reasons.push('choice:topics');
+      if (topics.length < 2 || new Set(topics).size !== topics.length || matched.length !== groups.length || topics.some((topic) => !groups.flat().includes(topic))) reasons.push('choice:topics');
     } else if (topics.length) reasons.push('choice:topics');
     return { correct: !reasons.length, reasons };
   }
@@ -485,6 +496,11 @@ export function scoreDecision(testCase, record, { referenceDate }) {
   const resolvers = new Set([...entityTypes].map((type) => RESOLVERS[type]));
   const partTools = parts.flatMap((part) => [part.population?.tool, ...(part.fields || []).map((field) => field.tool)]).filter(Boolean);
   const callTools = record.plan.calls.map((call) => call.name);
+  const reads = record.plan.calls.map((call) => readKey(call.name, call.args, referenceDate));
+  if (new Set(reads).size !== reads.length) reasons.push('calls:duplicate');
+  for (const call of record.plan.calls) {
+    if (!requestBoundCall(parts[0], call.name, call.args, { today: referenceDate })) reasons.push('calls:unrelated');
+  }
   for (const tool of new Set([...partTools, ...callTools])) {
     if (testCase.avoid.includes(tool)) reasons.push(`avoid:${tool}`);
   }
@@ -524,10 +540,22 @@ export function validatePlannerRun(run, loaded) {
   if (run.semantic.mode === 'live' && run.semantic.provenance?.path !== 'gateway') invalid();
   const seen = new Set();
   for (const record of run.records) {
+    if (!isRecord(record)) invalid();
     const key = `${record.pass}:${record.case}`;
     if (!run.cases.includes(record.case) || !Number.isSafeInteger(record.pass) || record.pass < 1 || record.pass > run.passes || seen.has(key)) invalid();
     seen.add(key);
-    if (!Array.isArray(record.rounds) || !record.rounds.length || record.rounds.some((round) => round.error)) invalid();
+    if (!Array.isArray(record.rounds) || !record.rounds.length || record.rounds.some((round) => !isRecord(round) || round.error)) invalid();
+    if (record.outcome === 'planned' && (!isRecord(record.plan) || !Array.isArray(record.plan.requests) || !record.plan.requests.length
+      || record.plan.requests.length > 3 || !Array.isArray(record.plan.calls) || record.plan.calls.some((call) => !isRecord(call) || !rotaToolNames().includes(call.name) || !isRecord(call.args))
+      || record.plan.requests.some((part) => !isRecord(part) || !['value', 'list', 'rank'].includes(part.operation)
+        || !Array.isArray(part.metrics) || !part.metrics.length || part.metrics.some((metric) => !Object.hasOwn(METRICS, metric))
+        || !isRecord(part.population) || !rotaToolNames().includes(part.population.tool)
+        || !Array.isArray(part.entities) || part.entities.some((entity) => !isRecord(entity))
+        || !isRecord(part.filters) || !Array.isArray(part.fields) || part.fields.some((field) => !isRecord(field))
+        || !Array.isArray(part.bindings) || part.bindings.some((binding) => !isRecord(binding))))) invalid();
+    if (record.choice != null && (!isRecord(record.choice) || !['clarify', 'abstain'].includes(record.choice.intent) || typeof record.choice.reason !== 'string'
+      || record.choice.topics != null && (!Array.isArray(record.choice.topics) || record.choice.topics.some((topic) => typeof topic !== 'string')))) invalid();
+    if (typeof record.general !== 'boolean' || !['tr', 'en'].includes(record.language)) invalid();
     if (!['planned', 'clarification', 'abstained', 'general_redirect', 'failed'].includes(record.outcome) || record.error) invalid();
     if (!['reranked', 'first_stage', 'unavailable'].includes(record.semantic?.state) || !Array.isArray(record.semantic?.candidates)
       || new Set(record.semantic.candidates).size !== record.semantic.candidates.length || record.semantic.candidates.length > 10
@@ -552,7 +580,9 @@ export function scorePlannerRun(run, loaded) {
     const rows = selected.map((id) => {
       const testCase = byId.get(id);
       const record = records.get(id);
-      const scored = record ? scoreDecision(testCase, record, { referenceDate: loaded.referenceDate }) : { correct: false, reasons: ['missing'] };
+      let scored;
+      try { scored = record ? scoreDecision(testCase, record, { referenceDate: loaded.referenceDate }) : { correct: false, reasons: ['missing'] }; }
+      catch { throw new Error('PLANNER_RUN_INVALID'); }
       return { case: id, canonical: testCase.canonical, expect: testCase.expect, ...scored };
     });
     const tally = (filter) => ({ total: rows.filter(filter).length, correct: rows.filter((row) => filter(row) && row.correct).length });
@@ -575,8 +605,8 @@ export function scorePlannerRun(run, loaded) {
     modelCalls: run.records.reduce((sum, record) => sum + record.rounds.length, 0),
     repairs: { plansWithRepair: run.records.filter((record) => (record.declarations ?? 0) > 1).length, maxDeclarations: declarations.length ? Math.max(...declarations) : 0 },
     byPass,
-    gatePassed: byPass.every((pass) => pass.correct === pass.total && pass.canonical.total === loaded.cases.filter((item) => item.canonical).length
-      && pass.supplementary.total === loaded.cases.filter((item) => !item.canonical).length)
+    gatePassed: ['run', 'live'].includes(run.semantic.mode) && run.records.every((record) => record.semantic.state !== 'unavailable') && byPass.every((pass) => pass.correct === pass.total && pass.canonical.total === CANONICAL_IDS.length
+      && pass.supplementary.total === SUPPLEMENTARY_IDS.length)
   };
 }
 

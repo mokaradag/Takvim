@@ -18,7 +18,7 @@ const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
 
 const done = (response) => response.events.find((event) => event.event === 'done')?.data;
 const deltas = (response) => response.events.filter((event) => event.event === 'delta').map((event) => event.data.text).join('');
-const toolResults = (call) => call.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
+const toolResults = (call) => call.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).filter((body) => body.tool !== 'rota_plan');
 const SECOND_RADAR_TASK = '20000000-0000-4000-8000-000000000777';
 
 function stackFor(t) {

@@ -54,7 +54,7 @@ const {
 } = await import('../src/domain/ai/semanticContract.js');
 
 function fail(message) {
-  throw new Error(message);
+  throw Object.assign(new Error(message), { code: message });
 }
 
 function parseArguments([command, ...rest]) {
@@ -68,6 +68,8 @@ function parseArguments([command, ...rest]) {
     } else fail(`Tanınmayan bağımsız değişken: ${flag}`);
   }
   if (command === 'live') Object.assign(flags, { model: 'live', semantic: 'live' });
+  if ((flags.model === 'live' || command === 'live') && flags.modelCommand) fail('PLANNER_MODEL_SELECTORS_CONFLICT');
+  if (flags.noScore && flags.out) fail('PLANNER_UNSCORED_OUTPUT_UNSUPPORTED');
   if (flags.model != null && flags.model !== 'live') fail('--model yalnızca live olabilir (dış model için --model-command).');
   flags.passes = Number(flags.passes);
   flags.concurrency = Number(flags.concurrency);
@@ -139,7 +141,7 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
   let sequence = 0;
   const run = (payload) => new Promise((resolve, reject) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^MERGEN_ROTA_/.test(key)));
-    const child = spawn(command, { shell: true, detached: process.platform !== 'win32', cwd: workdir, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(command, { shell: true, detached: process.platform !== 'win32', cwd: process.cwd(), env: { ...env, TMPDIR: workdir, TEMP: workdir, TMP: workdir }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const out = [];
     let bytes = 0;
     let settled = false;
@@ -221,32 +223,29 @@ function candidatesFromRun(file, benchmark) {
   const index = createSemanticIndex(items, space, items.items.map((item, position) => ({ index: position, vector: documents.get(item.id).vector })));
   if (!index.ok) fail(`Anlamsal dizin kurulamadı: ${index.reason}`);
   const queries = uniqueRows(run.embedding?.queries, 'case');
-  const known = new Set(benchmark.cases.filter((testCase) => testCase.canonical !== false).map((testCase) => testCase.id));
+  const known = new Set(benchmark.cases.map((testCase) => testCase.id));
   if (queries.size !== known.size || [...queries.keys()].some((id) => !known.has(id))) fail('SEMANTIC_QUERY_IDS_INVALID');
   const reranks = run.rerank ? uniqueRows(run.rerank.queries, 'case') : new Map();
   if (run.rerank && (!run.rerank.model || reranks.size !== known.size || [...reranks.keys()].some((id) => !known.has(id)))) fail('SEMANTIC_RERANK_IDS_INVALID');
   const result = new Map();
   for (const testCase of benchmark.cases) {
     const query = queries.get(testCase.id);
-    if (!query && testCase.canonical === false) {
-      result.set(testCase.id, { status: 'unavailable', candidates: [], failure: { reason: 'NO_QUERY_VECTOR' } });
-      continue;
-    }
     if (!query || query.text !== testCase.text) fail('SEMANTIC_QUERY_INVALID');
     const ranked = rankSemanticIndex(index.index, { space, embeddings: [{ index: 0, vector: query.vector }], limit: Math.min(SEMANTIC_RETRIEVAL_DEPTH, items.items.length) });
     if (!ranked.ok) fail('SEMANTIC_VECTOR_INVALID');
-    const scores = reranks.get(testCase.id)?.scores;
+    const rerank = reranks.get(testCase.id);
+    const scores = rerank?.scores;
     if (Array.isArray(scores)) {
       const entries = uniqueRows(scores, 'id');
-      if ([...entries].some(([id, entry]) => !items.items.some((item) => item.id === id) || typeof entry.score !== 'number' || !Number.isFinite(entry.score))
+      if (entries.size !== items.items.length || [...entries].some(([id, entry]) => !items.items.some((item) => item.id === id) || typeof entry.score !== 'number' || !Number.isFinite(entry.score))
         || ranked.candidates.some((candidate) => !entries.has(candidate.id))) fail('SEMANTIC_RERANK_SCORES_INVALID');
       const byId = new Map([...entries].map(([id, entry]) => [id, entry.score]));
       const reranked = applyRerankScores(ranked.candidates, ranked.candidates.map((candidate, position) => ({ index: position, score: byId.get(candidate.id) })));
       if (!reranked.ok) fail('SEMANTIC_RERANK_SCORES_INVALID');
       result.set(testCase.id, { status: 'reranked', candidates: reranked.candidates, failure: null }); continue;
     }
-    if (run.rerank) fail('SEMANTIC_RERANK_SCORES_INVALID');
-    result.set(testCase.id, { status: 'first_stage', candidates: ranked.candidates, failure: null });
+    if (run.rerank && (rerank?.failure !== 'INFERENCE_FAILED' || scores !== undefined)) fail('SEMANTIC_RERANK_SCORES_INVALID');
+    result.set(testCase.id, { status: 'first_stage', candidates: ranked.candidates, failure: run.rerank ? { reason: 'RERANK_FAILED' } : null });
   }
   return { provenance: { model: run.embedding.model, provider: run.embedding.provider, preprocessing: run.embedding.preprocessing,
     runtime: run.embedding.runtime ?? null, reranker: run.rerank?.model ?? null }, byCase: result };
@@ -270,7 +269,7 @@ async function planCase({ testCase, model = null, runTurn = null, adviceFor, now
     // "Notlar ve iletiler" açık: planlayıcı serbest metin isteyen soruda da planıyla değerlendirilir (kapalıyken
     // sunucunun sabit uyarısı ayrı sınamada).
     messages: built.messages, catalog, context: createToolTurnContext({ sicil: EVALUATION_SICIL, now }), planning,
-    allowedTextFields: [...new Set((testCase.gold?.groups || []).flatMap((group) => group.any.flatMap((alt) => alt.textFields || [])))],
+    allowedTextFields: [...(testCase.input?.allowedTextFields || [])],
     onText: async () => {}, deferDisclosure: true, escalation: false,
     onPlanned: (decision) => {
       decisions.push(decision);
@@ -298,10 +297,10 @@ function externalTurn(model, expectedModel) {
     async round({ messages, tools, toolChoice }) {
       const completion = await model.complete({ messages, tools, toolChoice });
       completion.usage = normalizedUsage(completion.usage);
-      if (expectedModel) verifyModel(completion.models, completion.usage, expectedModel, completion.thinking);
       rounds.push({ thinkingMode: completion.thinking, durationMs: completion.durationMs, usage: completion.usage, models: completion.models, toolCalls: completion.toolCalls.length, error: completion.error });
       // Komutun kendi hatası (süreç, kimlik doğrulama, beklenmeyen model) modelin kararı değildir: vaka altyapı hatasıyla biter.
-      if (completion.error) throw Object.assign(new Error('MODEL_COMMAND_ERROR'), { code: 'MODEL_COMMAND_ERROR' });
+      if (completion.error) throw Object.assign(new Error(completion.error), { code: completion.error });
+      if (expectedModel) verifyModel(completion.models, completion.usage, expectedModel, completion.thinking);
       return { text: completion.text, toolCalls: completion.toolCalls, finishReason: completion.toolCalls.length ? 'tool_calls' : 'stop', model: null,
         configuredModel: 'planner-under-test', modelMismatch: false, usage: null, durationMs: completion.durationMs, firstEventMs: null };
     }
@@ -313,30 +312,36 @@ function externalTurn(model, expectedModel) {
  * yürür. Ağ geçidi oturum içinden fırlayan her hatayı kendi hatasına çevirdiği için ilk SQL'den önceki durma
  * oturum içinde değer olarak döner.
  */
-function liveTurn(gateway, expectedModel) {
+function liveTurn(gateway, expectedModel, guard, route) {
   return (options, rounds) => gateway.runToolSession({
     profile: 'chat.tools',
     run: async (session) => {
       const recording = Object.freeze({ ...session, async round(input) {
+        guard(JSON.stringify({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice }));
         const startedAt = Date.now();
         let thinking = false;
         const result = await session.round({ ...input, onEvent: async (event) => {
           if (event.type === 'thinking') thinking = true;
           return input.onEvent?.(event);
         } });
-        if (session.model !== expectedModel || result.modelMismatch) throw Object.assign(new Error('PLANNER_MODEL_MISMATCH'), { code: 'PLANNER_MODEL_MISMATCH' });
-        verifyModel([result.model], normalizedUsage(result.usage), expectedModel, thinking ? 'on' : 'off');
-        rounds.push({ thinkingMode: 'off', durationMs: Date.now() - startedAt, models: [result.model].filter(Boolean), toolCalls: result.toolCalls.length, error: null,
-          usage: { input_tokens: result.usage?.promptTokens ?? null, output_tokens: result.usage?.completionTokens ?? null,
-            output_tokens_details: { thinking_tokens: result.usage?.reasoningTokens ?? null } } });
+        const model = session.reportedModel?.(result.model) ?? result.model;
+        const usage = normalizedUsage(result.usage || {});
+        // Kayıtlı düşünmesiz rota, olay gözlemi ve sağlayıcının eksik/sıfır kullanım biçimi birlikte doğrulanır.
+        if (route?.thinking === 'off' && !thinking && usage.output_tokens_details.thinking_tokens == null) usage.output_tokens_details.thinking_tokens = 0;
+        rounds.push({ thinkingMode: thinking ? 'on' : route?.thinking, durationMs: Date.now() - startedAt, models: [model].filter(Boolean),
+          toolCalls: result.toolCalls.length, error: null, usage });
+        if (session.model !== expectedModel || result.modelMismatch) fail('PLANNER_MODEL_MISMATCH');
+        verifyModel([model], usage, expectedModel, thinking ? 'on' : route?.thinking);
         return result;
       } });
       try { return await runGroundedTurn(recording, options); } catch (error) {
         if (error instanceof PlanCaptured) return CAPTURED;
+        // Ağ geçidi değerlendirme kodlarını yeniden sınıflandırmasın.
+        if (typeof error?.code === 'string' && error.code.startsWith('PLANNER_')) return { evaluationError: error };
         throw error;
       }
     }
-  });
+  }).then((result) => { if (result?.evaluationError) throw result.evaluationError; return result; });
 }
 
 /**
@@ -433,7 +438,7 @@ async function runEvaluation(flags) {
   if (runtime && flags.model === 'live' && runtime.planner.model !== expectedModel) fail('PLANNER_MODEL_MISMATCH');
   if (runtime && flags.model === 'live' && runtime.planner.thinking !== 'off') fail('PLANNER_THINKING_UNVERIFIED');
   const model = flags.model === 'live' ? null : externalModel({ command: flags.modelCommand, inputs: flags.inputs || null, guard, timeoutMs: flags.modelTimeoutMs, outputBytes: flags.modelOutputBytes });
-  const runTurn = flags.model === 'live' ? liveTurn(runtime.gateway, expectedModel) : null;
+  const runTurn = flags.model === 'live' ? liveTurn(runtime.gateway, expectedModel, guard, runtime.planner) : null;
   const records = [];
   // Altyapı hatası (komut, kota, kimlik doğrulama) geçişi geçersiz kılar: kalan vakalar boşuna çalıştırılmaz.
   let infrastructure = null;
@@ -481,13 +486,20 @@ function printReport(run, flags) {
 }
 
 /** Sınamalar planlama sınırını aynı yoldan çalıştırır (komut satırı yalnızca doğrudan çalıştırmada). */
-export { candidatesFromRun, externalModel, parseArguments, planCase, recordOf, runEvaluation };
+export { candidatesFromRun, externalModel, liveTurn, leakGuard, parseArguments, planCase, recordOf, runEvaluation };
 
 const direct = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 try {
 const { command, flags } = direct ? parseArguments(process.argv.slice(2)) : { command: null, flags: null };
 if (!direct) {
   // İçe aktarıldı: komut çalıştırılmaz.
+} else if (command === 'input') {
+  const loaded = loadPlannerBenchmark();
+  const items = catalogue();
+  const input = { format: 'mergen-rota-semantic-input', version: 1, benchmark: loaded.semanticFingerprint, catalogue: items.fingerprint,
+    documents: items.items.map(({ id, text }) => ({ id, text })), queries: loaded.cases.map(({ id, text }) => ({ case: id, text })) };
+  if (flags.out) writeFileSync(flags.out, `${JSON.stringify(input, null, 2)}\n`, 'utf8');
+  else process.stdout.write(`${JSON.stringify(input, null, 2)}\n`);
 } else if (command === 'run') {
   const run = await runEvaluation(flags);
   if (flags.out) writeFileSync(flags.out, `${JSON.stringify(run, null, 2)}\n`, 'utf8');

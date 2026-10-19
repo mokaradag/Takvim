@@ -700,7 +700,7 @@ export function recordPlannerDecision({ decision, parts = 0, semantic = 'unavail
     const current = state().planner;
     current.decisions[PLANNER_DECISIONS.has(decision) ? decision : 'invalid'] += 1;
     if (parts > 1) current.multiPart += 1;
-    const reason = ['TIMEOUT', 'PROFILE_DISABLED', 'MODEL_UNAVAILABLE', 'INTERNAL_UNAVAILABLE'].includes(semanticReason) ? semanticReason : 'OTHER';
+    const reason = ['TIMEOUT', 'PROFILE_DISABLED', 'PROFILE_NOT_CONFIGURED', 'MODEL_UNAVAILABLE', 'INTERNAL_UNAVAILABLE'].includes(semanticReason) ? semanticReason : 'OTHER';
     if (semantic === 'unavailable') current.semanticReasons[reason] = (current.semanticReasons[reason] || 0) + 1;
     current.semantic[PLANNER_SEMANTIC_STATES.has(semantic) ? semantic : 'unavailable'] += 1;
     pushSample(current.declarations, safeCount(declarations));

@@ -417,10 +417,14 @@ test('anlamsal telemetrinin sağlık sınıfı ağ geçidinin `ai.request` kural
   const expectHealth = async (ctx, behavior, category, unhealthy, label) => {
     const before = health();
     ctx.provider.enqueue(behavior);
-    const result = await ctx.retrieve();
-    assert.equal(result.failure.category, category, label);
+    if (category === 'credential') {
+      await assert.rejects(ctx.retrieve(), (error) => ['AI_KEY_INVALID', 'AI_UNAUTHORIZED', 'AI_KEY_MISSING'].includes(error.code));
+    } else {
+      const result = await ctx.retrieve();
+      assert.equal(result.failure.category, category, label);
+    }
     const after = health();
-    assert.deepEqual({ count: after.count - before.count, errors: after.errors - before.errors }, { count: 1, errors: unhealthy ? 1 : 0 }, label);
+    assert.deepEqual({ count: after.count - before.count, errors: after.errors - before.errors }, { count: category === 'credential' ? 0 : 1, errors: category === 'credential' ? 0 : unhealthy ? 1 : 0 }, label);
   };
   // Kurumsal anahtarla: reddedilen ya da yetkisiz kurumsal anahtar herkesi etkiler, hizmet hatasıdır.
   const corporate = setup(t);
@@ -630,12 +634,13 @@ test('yeniden sıralayıcı aday ekleyemez, çıkaramaz, adlandıramaz: bozuk ya
   await retrieve();
   for (const [label, behavior, category, reason] of cases) {
     provider.enqueue({ type: 'reply' }, behavior);
+    if (category === 'credential') { await assert.rejects(retrieve(), { code: reason }); continue; }
     const result = await retrieve();
     assert.deepEqual({ status: result.status, failure: result.failure }, { status: 'first_stage', failure: { stage: 'rerank', category, reason } }, label);
     // Uydurulmuş skor yoktur: ilk aşamanın kendi adayları, kendi sırası ve benzerliğiyle döner.
     assertCandidates(result.candidates, FIRST_STAGE, { relevance: false });
   }
-  assert.equal(aiTelemetrySnapshot().semantic.byStatus.first_stage, cases.length);
+  assert.equal(aiTelemetrySnapshot().semantic.byStatus.first_stage, cases.filter((item) => item[2] !== 'credential').length);
 });
 
 /* ── Yapılandırma ve hizmet hataları ────────────────────── */
@@ -699,6 +704,7 @@ test('sorgu gömmesinin hizmet hatası danışmanlığı kaldırır; sınıf kor
   for (const [behavior, category] of cases) {
     // Bağlantı hatası bir kez yinelenir: ikinci deneme de aynı hatayı alır.
     provider.enqueue(behavior, ...(behavior.type === 'network' ? [behavior] : []));
+    if (category === 'credential') { await assert.rejects(retrieve(), (error) => ['AI_KEY_INVALID', 'AI_UNAUTHORIZED'].includes(error.code)); continue; }
     const result = await retrieve();
     assert.deepEqual({ status: result.status, stage: result.failure.stage, category: result.failure.category },
       { status: 'unavailable', stage: 'embedding', category }, JSON.stringify(behavior));

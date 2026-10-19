@@ -1248,7 +1248,12 @@
           ]
         }
       },
-      "language": "tr"
+      "language": "tr",
+      "input": {
+        "allowedTextFields": [
+          "description"
+        ]
+      }
     },
     {
       "case": "tr-017",
@@ -4067,7 +4072,12 @@
           }
         }
       },
-      "language": "tr"
+      "language": "tr",
+      "input": {
+        "allowedTextFields": [
+          "changes"
+        ]
+      }
     },
     {
       "case": "tr-052",
@@ -4133,7 +4143,12 @@
           ]
         }
       },
-      "language": "tr"
+      "language": "tr",
+      "input": {
+        "allowedTextFields": [
+          "changes"
+        ]
+      }
     },
     {
       "case": "tr-053",
@@ -4267,7 +4282,12 @@
           }
         }
       },
-      "language": "tr"
+      "language": "tr",
+      "input": {
+        "allowedTextFields": [
+          "changes"
+        ]
+      }
     },
     {
       "case": "tr-055",
@@ -6952,8 +6972,9 @@
                   "group": 0
                 },
                 "metrics": {
-                  "any": [
-                    "task.assignees"
+                  "all": [
+                    "task.assignees",
+                    "task.status"
                   ],
                   "allowed": [
                     "task.assignees",
@@ -7986,16 +8007,17 @@
                   "rota_notifications"
                 ],
                 "operation": [
-                  "value"
+                  "list"
                 ],
                 "metrics": {
                   "all": [
-                    "notifications.total",
-                    "notifications.unread"
+                    "notification.label"
                   ],
                   "allowed": [
-                    "notifications.total",
-                    "notifications.unread"
+                    "notification.label",
+                    "notification.status",
+                    "notification.unread",
+                    "task.title"
                   ]
                 },
                 "collections": {
@@ -8010,10 +8032,9 @@
       },
       "example": {
         "request": {
-          "operation": "value",
+          "operation": "list",
           "metrics": [
-            "notifications.total",
-            "notifications.unread"
+            "notification.label"
           ],
           "population": {
             "tool": "rota_notifications"
@@ -8615,7 +8636,7 @@
           }
         }
       },
-      "language": "tr"
+      "language": "en"
     },
     {
       "id": "pl-018",

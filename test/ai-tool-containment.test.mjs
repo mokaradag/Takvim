@@ -1,3 +1,4 @@
+import { nativeDeclaration } from './helpers/evidenceScenario.mjs';
 /**
  * Rota AI · araç kapsam sınırı.
  *
@@ -20,7 +21,7 @@ const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistr
 
 const ok = (data = {}) => ({ content: JSON.stringify({ ok: true, data }) });
 const established = (scope, name, args, data) => scope.establish([{ name, arguments: JSON.stringify(args) }], [ok(data)]);
-const results = (input) => input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
+const results = (input) => input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).filter((body) => body.tool !== 'rota_plan');
 
 test('containment text ignores case, diacritics, dotless i and punctuation', () => {
   assert.equal(containmentText('Ayşe YILMAZ’ın'), containmentText('ayse yilmaz in'));
@@ -42,11 +43,11 @@ test('the first round may search only text from the current user message', () =>
 test('an invented first-round search is refused end to end and the model must stay within the question', async (t) => {
   createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
   const steps = [
-    { text: declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, filters: { text: 'radar test planı' } }),
-      toolCalls: [{ id: 'a', name: 'rota_task_search', arguments: '{"text":"Gizli görev"}' }] },
+    nativeDeclaration({ text: declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, filters: { text: 'radar test planı' } }),
+      toolCalls: [{ id: 'a', name: 'rota_task_search', arguments: '{"text":"Gizli görev"}' }] }),
     (input) => {
       assert.equal(results(input)[0].error.code, 'UNSUPPORTED_SCOPE');
-      return { text: declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, filters: { text: 'radar test planı' } }), toolCalls: [{ id: 'b', name: 'rota_task_search', arguments: '{"text":"radar test planı"}' }] };
+      return nativeDeclaration({ text: declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, filters: { text: 'radar test planı' } }), toolCalls: [{ id: 'b', name: 'rota_task_search', arguments: '{"text":"radar test planı"}' }] });
     }
   ];
   const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
