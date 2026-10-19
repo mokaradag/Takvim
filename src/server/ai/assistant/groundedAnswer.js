@@ -9,22 +9,25 @@ import {
   groundingRepairInstruction,
   withScopeDisclosure
 } from '../../../domain/ai/evidenceContract.js';
-import { recordGroundedAnswer, recordGroundedTurn } from '../aiTelemetry.js';
+import { recordGroundedAnswer, recordGroundedTurn, recordPlannerDecision, recordPlannerRejection } from '../aiTelemetry.js';
 import { createEvidenceLedger } from '../tools/evidenceLedger.js';
 import { createToolExecutor } from '../tools/toolExecutor.js';
 import { getRotaTool, toolCatalogForModel } from '../tools/toolRegistry.js';
 import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.js';
-import { invalidArguments, isTurnFatal, TOOL_ERROR_CODES } from '../tools/toolErrors.js';
+import { invalidArguments, isTurnFatal, TOOL_ERROR_CODES, ToolError } from '../tools/toolErrors.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
-import { createToolScope } from '../tools/toolScope.js';
+import { createToolScope, rowIdentityPath } from '../tools/toolScope.js';
 import { bindRequestEntities, declarationHints, parseRequestDeclaration, requestEvidence, requestEvidenceReady, requestRepairHint, requestSelections, requestSummary, requestWindow,
-  droppedNameHint, droppedNames, metricIdHints, namedScope, nameProbes, requestSchema, unmatchedEntities } from '../tools/requestDeclaration.js';
-import { createCallIds, prepareExecutionSet, rejectionFor, textPlanCall, typedPlanningTool, unpackTypedPlan } from '../tools/executionSet.js';
+  dependentEntity, droppedNameHint, droppedNames, instantiateDependent, metricIdHints, namedScope, nameProbes, requestSchema, unmatchedEntities } from '../tools/requestDeclaration.js';
+import { createCallIds, planShapeHints, prepareExecutionSet, rejectionFor, textPlanCall, typedPlanningTool, unpackTypedPlan } from '../tools/executionSet.js';
 import { completeRequest, derivedReads, readKey, requestBoundCall, requestTextFields } from '../tools/requestPopulation.js';
 import { parseTurnLanguage, parseTurnRequest, parseTurnRoute, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
 import { CLARIFICATION_LIMITS, clarificationReference } from '../../../domain/ai/clarification.js';
 import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
 import { createAiDeadline } from '../aiDeadline.js';
+import { factRow } from '../../../domain/ai/requestContract.js';
+import { PLANNER_INTENTS, PLANNER_LIMITS, renderDependentLimit, renderPlannerAbstention, renderPlannerClarification, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
+import { plannerCandidateNote } from './groundedPrompt.js';
 
 /**
  * Rota verisine dayanan yanıtın SINIRLI döngüsü.
@@ -257,7 +260,7 @@ const DECLARATION_ROUNDS = 2;
 /** Bildirim hatası ayrıntıları yalnızca şema yoludur; modelin yazdığı metin yönergeye taşınmaz. */
 const schemaNames = (schema) => Object.entries(schema.properties || {}).flatMap(([name, child]) => [name, ...schemaNames(child)])
   .concat(schema.items ? schemaNames(schema.items) : []);
-const structuralNames = new Set(['plan', 'calls', 'request', 'intent', 'language', 'name', 'arguments', 'metric', 'entity', 'field',
+const structuralNames = new Set(['plan', 'calls', 'request', 'additionalRequests', 'clarify', 'abstain', 'reason', 'topics', 'from', 'intent', 'language', 'name', 'arguments', 'metric', 'entity', 'field',
   ...schemaNames(requestSchema()), ...toolCatalogForModel().flatMap((tool) => [tool.name, ...schemaNames(tool.parameters)])]);
 const problemPaths = (details = []) => details.map((detail) => {
   const match = /^(\$[^:]*):([A-Za-z][A-Za-z-]*)$/.exec(String(detail));
@@ -270,13 +273,13 @@ const problemPaths = (details = []) => details.map((detail) => {
 
 function declarationRepair(details = [], serverHints = []) {
   const problems = problemPaths(details);
-  const hints = [...serverHints.slice(0, 6), ...declarationHints(problems)];
+  const hints = [...new Set([...serverHints.slice(0, 6), ...planShapeHints(problems), ...declarationHints(problems)])];
   return [
     'SUNUCU DOĞRULAMASI: Araç çağrıları çalıştırılmadı. Rota verisi okunmadan önce geçerli bir istek bildirimi gerekir.',
     ...(problems.length ? [`Bildirim sorunları: ${problems.join(', ')}`] : []),
     ...(hints.length ? [`Beklenen biçim: ${hints.join('; ')}`] : []),
-    'Yalnızca bildirilen sorunları düzelt; sorunsuz araç, ölçü, süzgeç ve çağrı bağımsız değişkenlerini değiştirme. Sorunlu ölçüyü SİLME: ipucundaki taşıyıcı araçlardan birini population.tool yap. Sorun yolları request alanına göredir ($.entities = request.entities).',
-    'Yanıtın yeniden rota_plan çağrısı olmalıdır: intent rota, language tr|en, request içinde operation/metrics/population/layout (ve gerekiyorsa entities/filters); calls isteğe bağlıdır (sunucu okumaları istekten kurar). rota_plan olmadan tek başına doğrudan araç çağrısı çalışmaz. Normal asistan metni gerekmez; geçerli plan sunucuda doğrulanıp yürütülür.',
+    'Yalnızca bildirilen sorunları düzelt; sorunsuz araç, ölçü, süzgeç ve çağrı bağımsız değişkenlerini değiştirme. Sorunlu ölçüyü SİLME: ölçü aynı soruya aitse ipucundaki taşıyıcı araçlardan birini population.tool yap; başka bir aracın yanıtladığı ayrı bir soruysa onu additionalRequests içinde o aracın ek bölümüne taşı. Sorun yolları request alanına göredir ($.entities = request.entities; ek bölümlerde $.additionalRequests[n]).',
+    'Yanıtın yeniden rota_plan çağrısı olmalıdır: Rota verisi gerekiyorsa intent rota, language tr|en, request (ileti ayrı okuma gerektiren başka sorular da soruyorsa ayrıca additionalRequests) içinde operation/metrics/population/layout (ve gerekiyorsa entities/filters); calls isteğe bağlıdır (sunucu okumaları istekten kurar). Soru gerçekten belirsizse intent clarify (clarify.reason), yapılamayan ya da güvensiz istekte intent abstain (abstain.reason). rota_plan olmadan tek başına doğrudan araç çağrısı ya da düz metin yanıt geçerli değildir; normal asistan metni gerekmez.',
     'entities[].text ve filters.text kullanıcının iletisinde geçen metin olmalıdır; entities[].id yalnızca kullanıcının yazdığı ya da sunucunun bağladığı kimliktir.'
   ].join('\n');
 }
@@ -299,10 +302,13 @@ function recordRejectedPlan(turn, calls, details, hints = [], problems = null, e
   });
   if (!shown.length) return;
   const planned = shown.some((call) => call.name === 'rota_plan');
+  // Düzeltme ipuçları modelin gördüğü araç sonucunda da yer alır (sunucu ipuçları, plan ve istek şeması).
+  const paths = problemPaths(details);
+  const guidance = [...new Set([...hints, ...planShapeHints(paths), ...declarationHints(paths)])];
   const error = (call) => {
     if (call.own) return { code: call.own.code, details: problemPaths(call.own.details || []) };
     return { code: TOOL_ERROR_CODES.INVALID_ARGUMENTS, ...(planned && call.name !== 'rota_plan' ? { details: ['$.plan:invalid'] }
-      : { details: problemPaths(details), ...(hints.length ? { hints: hints.slice(0, 6) } : {}) }) };
+      : { details: paths, ...(guidance.length ? { hints: guidance.slice(0, 6) } : {}) }) };
   };
   turn.transcript.push({ role: 'assistant', content: '', toolCalls: shown.map(({ id, name, arguments: args, oversize, own }) => ({ id, name: String(name || 'unknown').slice(0, 64),
     arguments: oversize || own ? '{}' : jsonArguments(args) })) },
@@ -355,7 +361,7 @@ function acceptDeclaration(turn, declaration, route) {
  * birlikte doğrulanır; istek planın nüfus çağrılarıyla tamamlanır ve aracın
  * ifade edemeyeceği istek reddedilir. Herhangi bir sorun varsa hiçbir SQL çalışmaz.
  */
-function preparePlan(turn, calls, declared) {
+function preparePlan(turn, calls, declared, parts = []) {
   if (declared && !declared.ok) return { ok: false, details: declared.details, hints: declared.hints || [] };
   const provisional = declared?.request || turn.declared;
   if (!provisional) return { ok: false, details: ['$.request:required'], hints: [] };
@@ -365,16 +371,164 @@ function preparePlan(turn, calls, declared) {
     return { ok: false, details: set.problems.flatMap((problem) => problem.error.details?.length ? problem.error.details : [`$.calls:${problem.error.code}`]),
       hints: [], problems: set.problems };
   }
-  const completion = completeRequest(provisional, set.calls.map(({ name, args }) => ({ name, args })),
+  // Çok bölümlü planın okumaları yalnızca sunucunun bölümlerden kurduğu okumalardır; ilk bölüm kendi bildirimiyle tamamdır.
+  const completion = completeRequest(provisional, parts.length ? [] : set.calls.map(({ name, args }) => ({ name, args })),
     { today: turn.context.today, allowedTextFields: turn.allowedTextFields });
   if (completion.problems.length) return { ok: false, details: completion.problems, hints: completion.hints };
   // Düzeltme kullanıcının adlandırdığı bir kaydı düşüremez (zayıf model reddi soruyu daraltarak "onarır").
   const dropped = droppedNames(turn.namedScope, completion.request);
   if (dropped.length) return { ok: false, details: ['$.entities:dropped'], hints: [droppedNameHint(dropped)] };
-  const checked = prepareExecutionSet(calls, { catalog: turn.catalog, validateCall: requestCallValidator(turn, completion.request), limits: turn.limits,
+  const validateCall = parts.length ? partsCallValidator(turn, [completion.request, ...independentParts(parts).map((part) => part.request)])
+    : requestCallValidator(turn, completion.request);
+  const checked = prepareExecutionSet(calls, { catalog: turn.catalog, validateCall, limits: turn.limits,
     attempted: turn.executor.stats().attempted, callId: turn.callId, today: turn.context.today });
-  if (!checked.ok) return { ok: false, details: checked.problems.flatMap((problem) => problem.error.details || []), hints: [], problems: checked.problems };
+  if (!checked.ok) {
+    const details = checked.problems.flatMap((problem) => problem.error.details || []);
+    // İsteğe bağlanamayan okuma ayrı bir soruya aitse çağrı olarak değil ek bölüm olarak bildirilir.
+    const hints = details.some((detail) => String(detail).endsWith('.request:unrelated')) ? [UNRELATED_CALL_HINT] : [];
+    return { ok: false, details, hints, problems: checked.problems };
+  }
   return { ok: true, request: completion.request, calls: checked.calls };
+}
+
+const TEXT_FIELDS_REQUIRED = /(?:^\$|\.)population\.textFields:not-authorized$/;
+const PROSE_PLAN_HINT = 'plan:required: düz metin yanıt kullanıcıya gösterilmez ve karar sayılmaz; yanıtın yalnızca rota_plan çağrısıdır. Rota verisiyle yanıtlanabiliyorsa intent rota ve request (adı geçen kaydı sunucu arar); yapılamayan ya da güvensiz istekte intent abstain (abstain.reason); yalnızca soru adı verilmemiş bir kayda işaret ediyor ya da birden çok anlama geliyorsa intent clarify (açıklama sorusunu sunucu yazar)';
+const UNRELATED_CALL_HINT = 'request:unrelated: çağrı isteğin okuması değil; ileti ayrı okuma gerektiren başka bir soru da soruyorsa onu additionalRequests içinde ek bölüm olarak bildir (calls verme), değilse çağrıyı kaldır';
+
+const independentParts = (parts) => parts.filter((part) => !dependentEntity(part.request));
+
+/** Çok bölümlü planın ilk yürütme kümesi: her çağrı bağımsız bölümlerden birinin türetilmiş okumasıdır. */
+function partsCallValidator(turn, requests) {
+  const validators = requests.map((request) => requestCallValidator(turn, request));
+  return (name, args) => {
+    let failure = null;
+    for (const validate of validators) {
+      try { return validate(name, args); } catch (error) {
+        if (!(error instanceof ToolError)) throw error;
+        failure ||= error;
+      }
+    }
+    throw failure || invalidArguments(['$.request:unrelated']);
+  };
+}
+
+/**
+ * Çok bölümlü planın ilk bölüm dışındaki bölümleri: her biri tek bölümlü istekle AYNI doğrulamadan
+ * (şema, güven, nüfus ve yetenek) geçer. Bağımlı bölüm (`{ type, from }`) yalnızca önceki bağımsız bir
+ * list/rank bölümünün takibe açık satır kimliğine bağlanabilir. Bölüm n'nin sorun yolları `$.additionalRequests[n-1]` biçimindedir.
+ */
+function prepareParts(turn, requests, primary) {
+  const parts = [];
+  for (let index = 1; index < requests.length; index += 1) {
+    const at = (details) => details.map((detail) => `$.additionalRequests[${index - 1}]${String(detail).replace(/^\$(?:\.request(?!\w))?/, '')}`);
+    let request;
+    try {
+      request = parseRequestDeclaration(requests[index], { textTrusted: turn.containment.textTrusted, identityTrusted: turn.containment.identityTrusted,
+        today: turn.context.today, priorParts: index });
+    } catch (error) {
+      if (error?.code !== TOOL_ERROR_CODES.INVALID_ARGUMENTS) throw error;
+      return { ok: false, details: at(error.details || []), hints: [...(error.hints || []), ...metricIdHints(error.details || [], requests[index])] };
+    }
+    const completion = completeRequest(request, [], { today: turn.context.today, allowedTextFields: turn.allowedTextFields });
+    if (completion.problems.length) return { ok: false, details: at(completion.problems), hints: completion.hints };
+    const dependent = dependentEntity(completion.request);
+    if (dependent) {
+      const source = dependent.from === 0 ? primary : parts[dependent.from - 1]?.request;
+      const collection = source?.population?.collection;
+      if (!source || dependentEntity(source) || source.operation === 'value' || !collection || !rowIdentityPath(source.population.tool, collection, dependent.type)) {
+        return { ok: false, details: [`$.additionalRequests[${index - 1}].entities:from`], hints: ['entities[].from: önceki bağımsız bir list ya da rank bölümünün satırlarına bağlanır; satırlar o türden kayıt kimliği taşımalıdır (ör. görev satırları → task)'] };
+      }
+    }
+    parts.push(Object.freeze({ index, request: completion.request }));
+  }
+  return { ok: true, parts };
+}
+
+/** Bağımlı bölümün kaynağındaki, doğrulanmış yanıtın satır sırasıyla takibe açık kayıt kimlikleri. */
+function dependentRows(turn, from, type) {
+  const source = turn.answers.find((answer) => answer.index === from);
+  if (source?.verdict.kind !== 'grounded') return [];
+  const { tool, collection } = source.request.population;
+  const path = rowIdentityPath(tool, collection, type);
+  if (!path) return [];
+  const entries = new Map(turn.ledger.requestEntries().map((entry) => [entry.id, entry]));
+  const ids = [];
+  for (const item of source.verdict.facts || []) {
+    const entry = entries.get(item.evidenceId);
+    const row = entry?.tool === tool ? factRow(tool, item.fact?.field) : null;
+    if (row?.kind !== 'row' || row.canonical !== collection) continue;
+    const object = row.path.split('.').slice(1).reduce((value, key) => value?.[key], entry.payload?.data);
+    const id = path.split('.').reduce((value, key) => value?.[key], object);
+    if ((typeof id === 'string' || typeof id === 'number') && !ids.includes(String(id))) ids.push(String(id));
+  }
+  return ids;
+}
+
+/** Sıradaki bölüm bu turun isteğidir: plan veri okunmadan doğrulanmıştır, istek sessizce değişmez. */
+function acceptPart(turn, spec) {
+  turn.partIndex = spec.index;
+  turn.repairsLeft = turn.limits.maxRepairRounds;
+  acceptRequest(turn, spec.request, null, { part: spec.index, count: turn.partCount });
+}
+
+/**
+ * Bölümün doğrulanmış sonucu: tek bölümlü turda ya da açıklama/erişim kaybında `{ verdict }` (tur
+ * olağan biçimde biter). Çok bölümlü planda sonuç saklanır ve sıradaki bölüme geçilir (`null`); son
+ * bölümden sonra bölümler tek yanıtta, plan sırasıyla birleşir. Bağımlı bölüm önceki bölümün satır
+ * kimlikleriyle en çok `maxDependentRows` kez örneklenir.
+ */
+function settlePart(turn, verdict, selectedBy) {
+  if (!turn.parts.length && !turn.answers.length) return { verdict, selectedBy };
+  if (!['grounded', 'not_found'].includes(verdict.kind)) return { verdict, selectedBy };
+  turn.answers.push({ index: turn.partIndex, verdict, selectedBy, request: turn.request });
+  while (turn.parts.length) {
+    const next = turn.parts.shift();
+    const dependent = dependentEntity(next.request);
+    if (!dependent) {
+      acceptPart(turn, next);
+      return null;
+    }
+    const rows = dependentRows(turn, dependent.from, dependent.type);
+    const shown = rows.slice(0, PLANNER_LIMITS.maxDependentRows);
+    if (rows.length > shown.length) turn.partNotes.set(next.index, shown.length);
+    const instances = shown.flatMap((id) => {
+      const completion = completeRequest(instantiateDependent(next.request, id), [], { today: turn.context.today, allowedTextFields: turn.allowedTextFields });
+      return completion.problems.length ? [] : [{ index: next.index, request: completion.request }];
+    });
+    if (!instances.length) continue;
+    turn.parts.unshift(...instances.slice(1));
+    acceptPart(turn, instances[0]);
+    return null;
+  }
+  const texts = turn.answers.flatMap((answer, position) => [answer.verdict.normalized,
+    ...(turn.partNotes.has(answer.index) && turn.answers[position + 1]?.index !== answer.index
+      ? [renderDependentLimit({ shown: turn.partNotes.get(answer.index), locale: turn.locale })] : [])]);
+  return {
+    verdict: { ok: true, kind: turn.answers.some((answer) => answer.verdict.kind === 'grounded') ? 'grounded' : 'not_found',
+      normalized: texts.filter(Boolean).join('\n\n'), citedIds: [...new Set(turn.answers.flatMap((answer) => answer.verdict.citedIds))], issues: [] },
+    selectedBy: turn.answers.every((answer) => answer.selectedBy === 'server') ? 'server' : 'model'
+  };
+}
+
+/** Planlama kararının gözlemcisi ve içeriksiz telemetrisi. Karar donmuş bir özettir; turu değiştiremez. */
+function emitPlanned(turn, decision) {
+  const summary = Object.freeze({ ...decision, semantic: turn.planning.state, candidates: turn.planning.candidates.length,
+    declarations: turn.trace.declarations, latencyMs: Date.now() - turn.trace.startedAt });
+  recordPlannerDecision({ decision: summary.intent, parts: summary.requests?.length || 0, semantic: summary.semantic,
+    candidates: summary.candidates, declarations: summary.declarations, latencyMs: summary.latencyMs });
+  turn.onPlanned?.(summary);
+}
+
+/** Açıklama ya da çekimserlik: veri okunmaz; kullanıcı sunucunun sabit metnini görür. */
+function plannerChoice(turn, plan, onText) {
+  if (plan.language) turn.locale = plan.language;
+  const clarify = plan.intent === PLANNER_INTENTS.CLARIFY;
+  emitPlanned(turn, clarify ? { intent: plan.intent, reason: plan.clarify.reason, topics: Object.freeze([...(plan.clarify.topics || [])]) }
+    : { intent: plan.intent, reason: plan.abstain.reason });
+  const normalized = clarify
+    ? renderPlannerClarification({ reason: plan.clarify.reason, topics: (plan.clarify.topics || []).map((name) => getRotaTool(name)?.topic), locale: turn.locale })
+    : renderPlannerAbstention({ reason: plan.abstain.reason, locale: turn.locale });
+  return finish(turn, { ok: true, kind: clarify ? 'clarification' : 'abstained', normalized, citedIds: [], issues: [] }, onText);
 }
 
 /** Modelin bulduğu kimlik yeni bir okuma yükümlülüğü açmaz; istek bağlı çağrı sunucunun biçimiyle yürür. */
@@ -402,7 +556,7 @@ function clearAcceptedNote(turn) {
 }
 
 /** Planla tamamlanan istek bu turun isteğidir; önceki (veri okunmadan değişen) kabul notunun yerini alır. */
-function acceptRequest(turn, request, language = null) {
+function acceptRequest(turn, request, language = null, position = null) {
   turn.request = request;
   turn.declared = request;
   if (language) turn.locale = language;
@@ -410,10 +564,25 @@ function acceptRequest(turn, request, language = null) {
   turn.namedScope = namedScope(turn.namedScope, request, turn.containment.textTrusted);
   // Veri okunmadan bildirilen nüfusun korumalı metin alanları sunucunun türettiği okumalarda da açıktır.
   turn.containment.declareTextFields(requestTextFields(request));
-  const note = `SUNUCU: Veri okunmadan bildirilen istek kabul edildi: ${requestSummary(request)}. Son yanıtta bu isteğin her ölçüsünü taşıyan olguları seç; istek veri okunduktan sonra değiştirilemez.`;
+  const part = position && position.count > 1 ? `Planın ${position.part + 1}/${position.count}. bölümü; önceki bölümler doğrulandı ya da sırada. ` : '';
+  const note = `SUNUCU: ${part}Veri okunmadan bildirilen istek kabul edildi: ${requestSummary(request)}. Son yanıtta bu isteğin her ölçüsünü taşıyan olguları seç; istek veri okunduktan sonra değiştirilemez.`;
   clearAcceptedNote(turn);
   turn.acceptedNote = note;
   instruct(turn, note);
+}
+
+/** Planın kabulü: ilk bölüm turun isteğidir; bütün bölümlerin dönemi ve korumalı metin alanları veri okunmadan bildirilir. */
+function acceptPlan(turn, request, language, parts) {
+  turn.parts = [...parts];
+  turn.answers = [];
+  turn.partNotes = new Map();
+  turn.partIndex = 0;
+  turn.partCount = parts.length + 1;
+  for (const part of parts) {
+    turn.containment.declare(requestWindow(part.request));
+    turn.containment.declareTextFields(requestTextFields(part.request));
+  }
+  acceptRequest(turn, request, language, { part: 0, count: turn.partCount });
 }
 
 function isEmptyCompletion(error) {
@@ -421,14 +590,26 @@ function isEmptyCompletion(error) {
 }
 
 /** Turun durumu: kanıt defteri, kapsam, araç izinleri ve döküm. Devirde aynı durum sürer. */
-function startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, onStatus, onProgress }) {
+function startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, onStatus, onProgress, planning, onPlanned }) {
   const status = (phase, extra = {}) => onStatus?.({ phase, ...extra });
   const userMessages = messages.filter((message) => message.role === 'user');
   const currentUser = userMessages.at(-1);
   // Kullanıcının bu turdaki iletisi (açıklama yanıtında önceki sorusu da) arama metni için güvenilir niyettir.
   const userText = [clarification?.selected ? clarification.question : null, currentUser?.content].filter(Boolean).join('\n');
+  const advice = planning?.candidates?.length ? planning : { state: 'unavailable', candidates: [] };
   const turn = {
     catalog,
+    // Anlamsal danışmanlık yalnızca planlayıcıya aday sırası notudur; araç kümesi ve sırası kayıt defterinindir.
+    planning: Object.freeze({ state: advice.state, candidates: Object.freeze([...advice.candidates]) }),
+    onPlanned,
+    planned: false,
+    // Çok bölümlü plan: sıradaki bölümler, doğrulanmış bölüm sonuçları ve bağımlı bölüm notları.
+    parts: [],
+    answers: [],
+    partNotes: new Map(),
+    partIndex: 0,
+    partCount: 1,
+    multiPart: false,
     context,
     limits,
     status,
@@ -484,8 +665,9 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     }
   });
   if (clarification) instruct(turn, selectionInstruction(clarification));
+  if (turn.planning.candidates.length) instruct(turn, plannerCandidateNote(turn.planning.candidates));
   if (!allowedTextFields.length) {
-    instruct(turn, 'Bu turda kullanıcı kayıtlı serbest metni (açıklama, talep/karar iletisi, değişiklik metni) açmadı: textFields kullanma; bu metinler gerekiyorsa kullanıcıya iletisinde "Notlar ve iletiler" anahtarını açmasını önerebilirsin.');
+    instruct(turn, 'Bu turda kullanıcı kayıtlı serbest metni (açıklama, talep/karar iletisi, değişiklik metni) açmadı: textFields kullanma. Soru bu metinleri gerektiriyorsa yine planla; sunucu veri okumadan kullanıcıdan "Notlar ve iletiler" anahtarını açmasını ister.');
   }
   return turn;
 }
@@ -631,7 +813,7 @@ async function finish(turn, verdict, onText, selectedBy = 'model') {
   return {
     text: finalText,
     // Doğrulanmış yanıtın bitişi sunucu kararıdır; sağlayıcının son turdaki nedeni (ör. tool_calls) taşınmaz.
-    finishReason: outcome === 'general_redirect' ? 'clarification'
+    finishReason: outcome === 'general_redirect' ? 'clarification' : outcome === 'abstained' ? 'unsupported'
       : ['not_found', 'clarification', 'unavailable'].includes(outcome) ? outcome : 'stop',
     outcome,
     evidence: cited,
@@ -709,6 +891,12 @@ function escalation(turn, reason, { error = null } = {}) {
     turn.request = null;
     turn.toolsAttempted = false;
     turn.permittedTools = null;
+    turn.parts = [];
+    turn.answers = [];
+    turn.partNotes = new Map();
+    turn.partIndex = 0;
+    turn.partCount = 1;
+    turn.multiPart = false;
     clearAcceptedNote(turn);
   }
   if (turn.ledger.ids().length) instruct(turn, EVIDENCE_READY_NOTE);
@@ -745,6 +933,12 @@ function derivedCalls(turn, request) {
 /** Doğrulanmış yürütme kümesini çalıştırır; model ve sunucu okumaları aynı yoldan geçer. */
 async function executeRound(turn, executed) {
   const { executor, containment, catalog, limits } = turn;
+  // Planlama kararı ilk SQL'den önce bir kez bildirilir (gözlemci ve telemetri).
+  if (!turn.planned) {
+    turn.planned = true;
+    emitPlanned(turn, { intent: PLANNER_INTENTS.ROTA, requests: Object.freeze([turn.request, ...turn.parts.map((part) => part.request)].filter(Boolean)),
+      calls: Object.freeze(executed.map(({ name, args }) => Object.freeze({ name, args }))) });
+  }
   turn.toolsAttempted = true;
   turn.route = TURN_ROUTES.ROTA;
   turn.toolFailureCodes.clear();
@@ -768,8 +962,9 @@ async function executeRound(turn, executed) {
     // görev → ayrıntı) mümkündür; bağımsız değişkenler kapsam sınırına bağlı kalır.
     const next = toolsForInitialCalls(executed, catalog, toolMessages);
     // Veri okunmadan bildirilen nüfus aracı da açık kalır; bağımsız değişkenleri yine kapsam sınırına bağlıdır.
-    const declared = turn.request?.population?.tool;
-    turn.permittedTools = new Set([...(turn.permittedTools || []), ...next, ...(declared && catalog.some((tool) => tool.name === declared) ? [declared] : [])]);
+    const declared = [turn.request, ...turn.parts.map((part) => part.request)].map((request) => request?.population?.tool)
+      .filter((name) => name && catalog.some((tool) => tool.name === name));
+    turn.permittedTools = new Set([...(turn.permittedTools || []), ...next, ...declared]);
   }
   record(turn, { role: 'assistant', content: '', toolCalls: safeToolCallsForTranscript(executed, toolMessages) }, ...toolMessages);
   if (turn.toolRounds >= limits.maxToolRounds) instruct(turn, roundLimitNote());
@@ -788,9 +983,11 @@ export async function runGroundedTurn(session, {
   onText,
   escalation: escalationAvailable = false,
   resume = null,
-  deferDisclosure = false
+  deferDisclosure = false,
+  planning = null,
+  onPlanned = null
 }) {
-  const turn = resume || startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, onStatus, onProgress });
+  const turn = resume || startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, onStatus, onProgress, planning, onPlanned });
   turn.session = session;
   turn.deferDisclosure = deferDisclosure;
   // Yeni oturum (kuyruk beklemesi dâhil) yetkinin yeniden okunmasını gerektirir.
@@ -817,17 +1014,51 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
   // Veri okunmadıysa Derin yeniden planlar; ortak araç turu bütçesi tükendiyse planı yürütemez.
   const evidenceReady = () => Boolean(turn.request && requestEvidenceReady(turn.request, ledger.requestEntries(), turn.context.today, containment.boundSelection()));
   const deepCanHelp = () => canEscalate() && (frozen() ? evidenceReady() : toolsAvailable());
-  const fallback = (reason) => (deepCanHelp() ? escalation(turn, reason) : failTurn(turn, onText));
-  const rejectDeclaration = (calls, details, hints = [], problems = null, executionCalls = calls) => {
+  const fallback = (reason) => {
+    // Plan yalnızca kullanıcının açmadığı serbest metin yüzünden okunamıyorsa düzeltme ya da devir bunu çözemez.
+    if (turn.textFieldsRequired) return finish(turn, { ok: true, kind: 'clarification', normalized: renderTextFieldsRequired({ locale: turn.locale }), citedIds: [], issues: [] }, onText);
+    if (reason === 'REQUEST_DECLARATION') recordPlannerDecision({ decision: 'invalid', semantic: turn.planning.state, candidates: turn.planning.candidates.length,
+      declarations: turn.trace.declarations, latencyMs: Date.now() - turn.trace.startedAt });
+    return deepCanHelp() ? escalation(turn, reason) : failTurn(turn, onText);
+  };
+  const rejectDeclaration = (calls, rawDetails, hints = [], problems = null, executionCalls = calls) => {
+    const details = rawDetails || [];
+    recordPlannerRejection(details[0]);
     if (calls.length) turn.toolsRequested = true;
     // Kapsam dışı çağrı veri okunmadan reddedilse de Derin düşünme devrini engeller.
     for (const problem of problems || []) if (ESCALATION_BLOCKING_TOOL_CODES.has(problem.error.code)) turn.toolFailureCodes.add(problem.error.code);
+    if (details.length && details.every((detail) => TEXT_FIELDS_REQUIRED.test(String(detail)))) {
+      turn.textFieldsRequired = true;
+      return false;
+    }
     if (turn.declarationsLeft <= 0) return false;
     turn.declarationsLeft -= 1;
     turn.trace.pending = 'declaration';
     if (calls.length) recordRejectedPlan(turn, calls, details, hints, problems, executionCalls);
     instruct(turn, declarationRepair(details, hints), { repair: true });
     return true;
+  };
+  /**
+   * Bildirilen nüfus henüz okunmadıysa (ör. adla çözülen varlığın okuması) sunucu okumayı bildirimden
+   * kurar; istek kanıttaki olguları belirliyorsa ayrı bir model seçim turu gerekmez. Çok bölümlü planda
+   * doğrulanan bölümden sonra sıradaki bölüm aynı yoldan okunur.
+   */
+  const readAndSettle = async () => {
+    for (;;) {
+      while (!ledger.revoked() && toolsAvailable() && !evidenceReady()) {
+        const needed = derivedCalls(turn, turn.request);
+        const derived = prepareExecutionSet(needed, { catalog, validateCall: requestCallValidator(turn, turn.request, needed), limits,
+          attempted: executor.stats().attempted, callId: turn.callId, today: turn.context.today });
+        if (!derived.ok || !derived.calls.length) break;
+        // Sonraki bölümün okumaları veri okunmadan doğrulanmış plandan sunucunun kurduğu okumalardır.
+        if (turn.partIndex > 0 && turn.permittedTools) for (const call of derived.calls) turn.permittedTools.add(call.name);
+        await executeRound(turn, derived.calls);
+      }
+      const settled = await serverSelection(turn);
+      if (!settled) return null;
+      const outcome = settlePart(turn, settled, 'server');
+      if (outcome) return finish(turn, outcome.verdict, onText, outcome.selectedBy);
+    }
   };
   let allowTools = resumed ? !frozen() : true;
   let lengthExhausted = false;
@@ -850,6 +1081,8 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       result = await session.round({
         messages: turn.transcript,
         // Plan aracı salt okunur araçlarla birlikte sunulur: plan çağrıları kendi içinde ya da yanında taşıyabilir.
+        // Veri okunmadan araç kümesi kayıt defterinin tamamıdır ve sırası sabittir (önek önbelleği soruya göre
+        // bozulmaz); anlamsal danışmanlık yalnızca sistem notundaki aday sırasıdır.
         tools: !frozen() ? [typedPlanningTool(catalog), ...catalog] : turn.permittedTools ? catalog.filter((tool) => turn.permittedTools.has(tool.name)) : catalog,
         toolChoice: canCallTools ? 'auto' : 'none',
         onEvent: async (event) => {
@@ -881,12 +1114,20 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     const modelCalls = result.toolCalls;
     let plan = null;
     if (!frozen() && result.toolCalls.some((call) => call.name === 'rota_plan')) {
+      turn.multiPart = false;
       try { plan = unpackTypedPlan(result); }
       catch (error) {
+        if (!(error instanceof ToolError)) throw error;
         turn.trace.declarations += 1;
         if (rejectDeclaration(modelCalls, error.details)) continue;
         return fallback('REQUEST_DECLARATION');
       }
+      turn.multiPart = Boolean(plan.plan.additionalRequests);
+    }
+    // Açıklama ve çekimserlik sonlandırıcıdır: Rota verisi okunmaz, sunucunun sabit metni gösterilir.
+    if (plan && [PLANNER_INTENTS.CLARIFY, PLANNER_INTENTS.ABSTAIN].includes(plan.plan.intent)) {
+      turn.trace.declarations += 1;
+      return plannerChoice(turn, plan.plan, onText);
     }
     let calls = plan ? plan.calls : result.toolCalls;
 
@@ -904,15 +1145,38 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       result.text = '';
       calls = [];
     }
-    const declaration = plan ? { kind: 'route', ...plan.plan } : parseEvidenceResponse(result.text);
+    const declaration = plan ? { kind: 'route', intent: plan.plan.intent, language: plan.plan.language,
+      ...(plan.plan.request ? { request: plan.plan.request } : {}) } : parseEvidenceResponse(result.text);
     const declaredRoute = parseTurnRoute(declaration);
     // Bildirim yalnızca veri okunmadan önce kabul edilir; sonrasında istek değişmez.
     const declared = !frozen() && declaredRoute ? acceptDeclaration(turn, declaration, declaredRoute) : null;
     if (declared) turn.trace.declarations += 1;
+    // İlk planlama kararı yerine gelen düz metin karar değildir (açıklama ya da ret metni de modelin değil
+    // sunucunun işidir): araç denenmeden önce mevcut bildirim bütçesiyle türlü karar istenir. Metin dökümde
+    // boş bir plan çağrısı olarak reddedilir; metnin kendisi taşınmaz.
+    if (!frozen() && !turn.request && !turn.toolsAttempted && turn.route === TURN_ROUTES.UNDECIDED && !plan && !calls.length && !declared && !lengthExhausted
+      && parseEvidenceResponse(result.text) == null && turn.declarationsLeft > 0) {
+      turn.trace.declarations += 1;
+      if (rejectDeclaration([], ['$.plan:required'], [PROSE_PLAN_HINT])) recordRejectedPlan(turn, [{ name: 'rota_plan', arguments: '{}' }], ['$.plan:required'], [PROSE_PLAN_HINT]);
+      continue;
+    }
+    // Çok bölümlü plan: bütün bölümler veri okunmadan birlikte doğrulanır; biri geçersizse hiçbiri yürütülmez.
+    let parts = [];
+    if (plan?.plan.additionalRequests && declared?.ok && declared.request) {
+      const primary = preparePlan(turn, [], declared);
+      const checked = primary.ok ? prepareParts(turn, [plan.plan.request, ...plan.plan.additionalRequests], primary.request) : primary;
+      if (!checked.ok) {
+        turn.route = TURN_ROUTES.ROTA;
+        if (rejectDeclaration(modelCalls, checked.details, checked.hints)) continue;
+        return fallback('REQUEST_DECLARATION');
+      }
+      parts = checked.parts;
+    }
     // Çağrısız istek: okumalar bildirimden kurulabiliyorsa sunucu kurar; kurulamıyorsa plan çağrı ister.
     if (declared?.ok && declared.request && !calls.length && canCallTools) {
       const completed = preparePlan(turn, [], declared);
-      calls = completed.ok ? derivedCalls(turn, completed.request) : [];
+      // Bağımsız bölümlerin ilk okumaları aynı (ilk) araç turundadır: sunucu kapsamı bu turda kurar.
+      calls = completed.ok ? [...derivedCalls(turn, completed.request), ...independentParts(parts).flatMap((part) => derivedCalls(turn, part.request))] : [];
       if (!calls.length && plan) {
         // Okuma kurulamadıysa önce isteğin kendi sorunları (ör. aracın metin süzgeci yok) bildirilir; yoksa çağrı istenir.
         const reasons = preparePlan(turn, [], declared);
@@ -929,8 +1193,12 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
           if (rejectDeclaration(modelCalls, prepared.details, prepared.hints)) continue;
           return fallback('REQUEST_DECLARATION');
         }
-        if (declared.request) acceptRequest(turn, prepared.request, declared.language);
-        else { turn.declared = null; if (declared.language) turn.locale = declared.language; }
+        if (declared.request) acceptPlan(turn, prepared.request, declared.language, parts);
+        else {
+          turn.declared = null;
+          if (declared.language) turn.locale = declared.language;
+          emitPlanned(turn, { intent: PLANNER_INTENTS.GENERAL });
+        }
         turn.declarationsLeft -= 1;
         instruct(turn, `Bu turun veri okunmadan belirlenen yönlendirmesi: ${turn.route}. Şimdi bu niyete göre yanıtla; Rota olguları yalnızca araç kanıtıyla sunulur.`);
       } else {
@@ -943,13 +1211,13 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       let prepared;
       if (!frozen()) {
         // Plan: istek ve bütün çağrılar (plan içi ve doğrudan) birlikte, SQL'den önce doğrulanır.
-        prepared = preparePlan(turn, calls, declared);
+        prepared = preparePlan(turn, calls, declared, parts);
         if (!prepared.ok) {
           turn.route = TURN_ROUTES.ROTA;
           if (rejectDeclaration(modelCalls, prepared.details, prepared.hints, prepared.problems, calls)) continue;
           return fallback('REQUEST_DECLARATION');
         }
-        acceptRequest(turn, prepared.request, declared?.language);
+        acceptPlan(turn, prepared.request, declared?.language, parts);
       } else {
         prepared = prepareExecutionSet(calls, { catalog, permitted: turn.permittedTools, validateCall: requestCallValidator(turn, turn.request, derivedCalls(turn, turn.request)), limits,
           attempted: executor.stats().attempted, callId: turn.callId, today: turn.context.today });
@@ -965,17 +1233,8 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
         }
       }
       await executeRound(turn, prepared.calls);
-      // Bildirilen nüfus henüz okunmadıysa (ör. adla çözülen varlığın okuması) sunucu okumayı bildirimden kurar.
-      while (!ledger.revoked() && toolsAvailable() && !evidenceReady()) {
-        const needed = derivedCalls(turn, turn.request);
-        const derived = prepareExecutionSet(needed, { catalog, validateCall: requestCallValidator(turn, turn.request, needed), limits,
-          attempted: executor.stats().attempted, callId: turn.callId, today: turn.context.today });
-        if (!derived.ok || !derived.calls.length) break;
-        await executeRound(turn, derived.calls);
-      }
-      // Bildirilen istek kanıttaki olguları belirliyorsa ayrı bir model seçim turu gerekmez.
-      const settled = await serverSelection(turn);
-      if (settled) return finish(turn, settled, onText, 'server');
+      const done = await readAndSettle();
+      if (done) return done;
       if (turn.request.reasoning === 'synthesis' && evidenceReady() && canEscalate()) return escalation(turn, 'SYNTHESIS_REQUIRED');
       continue;
     }
@@ -986,7 +1245,16 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     const verifyStartedAt = Date.now();
     const verdict = authorizationUnavailable || ledger.revoked() ? unavailableVerdict(turn.locale) : analyze(text, verdictInput(turn));
     turn.trace.verificationMs += Date.now() - verifyStartedAt;
-    if (verdict.ok) return finish(turn, verdict, onText);
+    if (verdict.ok) {
+      const outcome = settlePart(turn, verdict, 'model');
+      if (outcome) return finish(turn, outcome.verdict, onText, outcome.selectedBy);
+      // Sıradaki bölüm: okumaları sunucu kurar, seçimi önce sunucu dener.
+      allowTools = true;
+      lengthExhausted = false;
+      const done = await readAndSettle();
+      if (done) return done;
+      continue;
+    }
 
     if (turn.repairsLeft > 0) {
       const evidenceGap = verdict.issues.some((issue) => EVIDENCE_GAP_CODES.has(issue?.code));

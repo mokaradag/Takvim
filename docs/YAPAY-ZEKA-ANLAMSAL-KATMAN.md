@@ -2,13 +2,14 @@
 
 Bu belge Aşama 4'ün amacını, **dondurulmuş dört adımlı yol haritasını**,
 değişmez güven sınırlarını, Aşama 4A'da kurulan anlamsal sözleşme ile
-değerlendirme temelini ve Aşama 4B'de kurulan gerçek gömme ile aday keşfini
-ve yeniden sıralamayı anlatır. Aşama 1–2 için
+değerlendirme temelini, Aşama 4B'de kurulan gerçek gömme ile aday keşfini
+ve yeniden sıralamayı ve Aşama 4C'de kurulan türlü planlayıcıyı (§12)
+anlatır. Aşama 1–2 için
 [YAPAY-ZEKA-PLATFORMU.md](YAPAY-ZEKA-PLATFORMU.md), Aşama 3 için
 [YAPAY-ZEKA-ALAN-ARACLARI.md](YAPAY-ZEKA-ALAN-ARACLARI.md) esastır.
 
 Belgede **UYGULANDI** yazan bölümler bugünkü depoda vardır ve sınanır;
-**PLANLANDI (4C/4D)** yazan bölümler henüz yoktur ve yalnızca sonraki
+**PLANLANDI (4D)** yazan bölümler henüz yoktur ve yalnızca sonraki
 adımların sözleşmesidir.
 
 ---
@@ -166,13 +167,18 @@ Aşama 4 **tam olarak dört** uygulama adımından oluşur ve 4D ile biter.
   ölçülmüş bir gereksinim kanıtlanırsa ve yol haritası bilinçli olarak
   güncellenirse eklenebilir.
 - Keşif **danışman adaylar** üretir ve Aşama 3 turuna bağlanmaz; adayların
-  planlayıcıya ve araç yürütmesine bağlanması 4C'dir. **Beklenen üretim
+  planlayıcıya ve araç yürütmesine bağlanması 4C'dir (§12). **Beklenen üretim
   davranışı değişikliği: YOK** (asistan turları aynıdır).
 - Çıkış ölçütü: 4A kıyas kümesinde ölçülen ve belgelenen iyileşme; eşikler bu
   ölçümden sonra dondurulur. Gerçek model ölçümü geliştirme ortamında
   yapılamadı (§8); eşikler kurum içi ölçüme kadar **dondurulmadı**.
 
-### 4C — Akıllı planlayıcı ve zayıf model doğrulaması (PLANLANDI)
+### 4C — Akıllı planlayıcı ve zayıf model doğrulaması (UYGULANDI — kabul kapısı AÇIK)
+
+> Kod, sözleşme, değerlendirici ve altın etiketler uygulandı ve sınanıyor
+> (§12). **117/117 kabul kapısı geçilmedi:** zayıf model uyumluluk kapısında
+> (Haiku 4.5, düşünme kapalı) son geçiş 88/117, bir önceki 89/117 (§12.7).
+> Gerçek Qwen3-Next-80B-A3B-Instruct nitelendirmesi kurum içinde bekliyor.
 
 - Sıralanmış anlamsal anlayışı Aşama 3 türlü araç yürütmesine bağlamak:
   niyet, varlık, ölçü ve koşul yorumu; sınırlı yapılandırılmış plan; doğru
@@ -1265,3 +1271,153 @@ alanını uygulamıştır.
 | `test/ai-semantic-qualification.test.mjs` | Nitelendirme komutu: parmak izli girdi; kâhin koşu dosyasıyla rapor ve `qualification` künyesi (model, önekler, yeniden sıralayıcı, aday sınırı, gecikme iş yükü); bayat, eksik/fazla/yabancı/yinelenen satırlı, değiştirilmiş metinli, negatif gecikmeli, öneki çelişkili, bilinmeyen alanlı ya da güvensiz hata kodlu koşunun reddi; bozuk değerin ve `INFERENCE_FAILED` satırının ıska sayılması; dizini kurulamayan koşunun reddi; bütün katalog yeniden sıralama skoru doğrulaması ve gerçek çağrı nüfusu; `batchSize` künyesi; Markdown enjeksiyonunun etkisizliği; yeniden sıralamalı raporda her ölçünün "Fark" hücresi; `--limit` sınırı; aynı açıklamalı iki katalog öğesinin yeniden oynatımda kendi kimliğinin vektörünü ve skorunu alması; `live`: üretim yolundan (ağ geçidi + bağdaştırıcı + yerel HTTP ikizi) kâhin uçla kusursuz ölçü, kayıttan gelen profil ve önekler, tek katalog gömmesi, 10 adaylık yeniden sıralama, künye; `--queries` ile türetilen küme ve bozuk soru dosyalarının reddi; anahtarsız ya da kapalı yapılandırmanın ve kurulamayan dizinin reddi; yeniden sıralama profili kapalıyken yalnızca ilk aşama, bozuk yeniden sıralama eşlemesinin reddi; üretimden farklı `--limit` değerinin reddi; bağlantı hatası yinelenen koşuda stdout'un ayrıştırılabilir JSON kalması (günlük stderr'de); `.env.local` ortam kaynağı ve kabuk önceliği, anahtarın yazılmaması; ağ geçidi süre aşımının `timeout` sayılması; durmuş koşuda iş yükünün yalnızca gerçek çağrıları sayması; dış süre sınırının ağ geçidinin en uzun yaşam döngüsünü kapsaması; belirteç penceresinin künyede ve tel gövdesinde olması |
 | `test/ai-model-registry.test.mjs` (4B eki) | Gömme modelinin `preprocessing` alanı: varsayılan ve operasyonel kayıtta E5 önekleri ve 512 belirteçlik pencere, rotaya taşınması, yokken `none`, yazılmış `null` (gömme ve sohbet modelinde) ve `null` önekin reddi, yalnızca gömme modelinde, kapalı alan kümesi, belirteç biçimi, önek–`none` kuralı, uzunluk sınırı, `truncateTokens` biçimi ve `contextTokens` sınırı; `reportedModels`: yalnızca gömme/yeniden sıralama modelinde, tekil, jokersiz, kendi kimliği ya da başka bir modelin kimliği/adı olamaz |
 | `test/semantic_model_qualification_test.py` (CI dışı, elle) | Python koşucusu: yinelenen kimlik, sayı ve metin sınırı (astral karakter dâhil), kapalı şema ve mantıksal sürümün model modülleri yüklenmeden reddi; önek ve `--device` için UTF-16 sınırı; sayısal metin, mantıksal değer, NaN/sonsuz ve sıfır vektörün sayıya çevrilmemesi, NumPy skalerlerinin kabulü; tür geçersiz katalogda koşu dosyası yazılmaması; eski çıktı silinemediğinde geçici dosya bırakılmaması |
+| `test/ai-planner-contract.test.mjs` (4C) | Anlamsal adayların kayıt defterine karşı yeniden doğrulanması (bilinmeyen, yinelenen, yanlış tür/sıra, fazla aday → danışmanlık yok); süre aşımında Aşama 3 davranışı, iptalin iptal kalması, iç hatanın dönüştürülmemesi; araç kümesinin ve sırasının adaylardan bağımsızlığı; türlü planın kapalı biçimi (niyet, dil, ek istek sayısı/türü, karar alanları); açıklama ve çekimserliğin sıfır SQL ile sunucu metni; ilk karar yerine düz metnin boş plan reddi olması ve metnin döküme taşınmaması; genel karardan sonra plan reddi olmaması; çok bölümlü planın hep-ya-hiç doğrulanması ve bağımlı kaynağın sınırı; açılmamış serbest metinde sabit uyarı; çelişkili termin penceresi; proje aramasının adlandırılmış varlıkla kabulü; içeriksiz telemetri |
+| `test/ai-planner-benchmark.test.mjs` (4C) | Altın etiket belgesinin kapalı şeması ve kıyas kümesine bağı; her yanıt vakasının örnek planının üretim planlama sınırından ilk bildirimde geçmesi ve kendi etiketini karşılaması (iki referans günü); açıklama/çekimserlik puanlaması; anlam denetimi (süzgeç, pencere, bağımlı bölüm, varlık, sıralama, ilgisiz araç, ölçü, bölüm eşlemesi); ek bölüm kuralı; modele giden girdide vaka kimliği ve altın etiket izi olmaması; üretim kodunun etiketleri, kıyas kümesini ve değerlendirme betiklerini içe aktarmaması ve vaka metni taşımaması |
+
+---
+
+## 12. Aşama 4C'de uygulananlar (UYGULANDI — kabul kapısı AÇIK)
+
+### 12.1 Bağlantı noktası — `src/server/ai/assistant/semanticPlanning.js`
+
+- 4B keşfinin üretimdeki **tek** çağıranı (`semanticRetrieval` başka hiçbir
+  üretim modülünden içe aktarılmaz; mimari sınaması). `assistantService` her
+  Rota turundan önce `semanticPlanningAdvice({ query, catalog, signal })`
+  çağırır; sonuç `runGroundedTurn` seçeneğidir.
+- Adaylar güvenilmez veridir: durum bilinen değerlerden biri, en çok
+  `SEMANTIC_RETRIEVAL_DEPTH` (10) aday, tür `tool`, sıra 1..n, kimlik kayıt
+  defterinde ve tekil olmalıdır; değilse danışmanlık yoktur
+  (`CANDIDATES_INVALID`). Benzerlik eşiği **yoktur** (§8 ölçümleri bir eşiği
+  haklı çıkarmadı).
+- Kendi süre bütçesi (`SEMANTIC_PLANNING_BUDGET_MS` = 8 sn): bütçe aşımı
+  danışmanlığın kaybıdır (Aşama 3 planlaması sürer); üst iptal
+  `AI_CANCELLED` olarak taşınır; iç hata dönüştürülmez.
+- **Daraltma yoktur.** Gerçek e5 ölçümünde (§8) ilk aşamanın 10 adayı bazı
+  soruların gereken yeteneğini içermedi; bu yüzden araç kümesi her zaman
+  kayıt defterinin tamamıdır ve **sırası sabittir**. Adaylar yalnızca sistem
+  notunda "öneri" olarak görünür (`plannerCandidateNote`). Sabit sıra hem
+  sağlayıcı önek önbelleğini (vLLM önek önbelleği, Anthropic önbellek okuması)
+  korur hem de adayın yetki ya da kesinlik sayılmasını önler.
+
+### 12.2 Türlü plan sözleşmesi — `rota_plan` (`executionSet.js`)
+
+`{ intent, language, request?, additionalRequests?, calls?, clarify?, abstain? }`:
+
+- `intent: rota` — `request` zorunludur; ileti ayrı okuma gerektiren bir ya da
+  iki soru daha soruyorsa `additionalRequests` (en çok 3 bölüm). Ek bölüm
+  önceki bölümün satırlarındaki kayıtlar için soruyorsa varlığı
+  `{ "type": "task|project", "from": <bölüm> }` olarak yazılır; sunucu kaynağın
+  takibe açık satır kimliklerinden en çok 3'ünü bağlar. Çok bölümlü planın
+  okumalarını yalnızca sunucu kurar (`calls` verilemez); bütün bölümler veri
+  okunmadan birlikte doğrulanır, biri geçersizse hiçbiri yürütülmez.
+- `intent: clarify` — `clarify.reason`: `missing_referent | ambiguous`
+  (isteğe bağlı `topics`: 2–4 kayıtlı araç). `intent: abstain` —
+  `abstain.reason`: `write | calculation | outside_data | security | general`.
+  İkisi de **sonlandırıcıdır**: araç çağrısı ya da istek taşıyamaz, Rota verisi
+  okunmaz, kullanıcı sunucunun sabit metnini görür (`plannerOutcome.js`).
+- Biçim hataları alanıyla bildirilir (`$.intent:required`,
+  `$.additionalRequests[0].metrics[1]:enum`, `$.fields[0].path:unknown` …);
+  ipuçları yalnızca sözleşmeden ve kayıt defterinden türetilir ve modelin
+  gördüğü araç sonucunda da yer alır.
+- Çelişkili plan SQL'den önce reddedilir; örneğin göreli termin ön ayarı ile
+  açık termin aralığı birlikte (`$.filters.deadline:conflict`).
+- İlk karar yerine gelen düz metin karar değildir: dökümde boş bir plan
+  çağrısının reddi (`$.plan:required`) olarak kalır, metnin kendisi taşınmaz.
+- Plan yalnızca kullanıcının açmadığı serbest metin yüzünden okunamıyorsa
+  düzeltme yapılmaz; sunucu "Notlar ve iletiler" anahtarını açmayı isteyen
+  sabit metinle biter (veri okunmaz).
+- Düzeltme bütçesi Aşama 3'ünkidir (2 bildirim düzeltmesi); düzeltme
+  kullanıcının adlandırdığı kaydı düşüremez. Veri okunduktan sonra istek
+  değişmez; Standart → Derin devri aynı sınırlardan geçer.
+
+### 12.3 Sunucu yönergesi
+
+Yönerge sözleşmeyi anlatır, doğal dili yorumlamaz: yanıt protokolü (ilk yanıt
+her zaman `rota_plan`), karar tanımları, gönderge ve belirsizlik ilkesi
+(uydurma adlarla karşıt örnek), karar önceliği (yazma/hesap/Rota dışı/
+güvenlik her zaman çekimserlik), tek kaydın alanları için ayrıntı aracı ve
+sunucunun hesapladığı **takvim çapaları** (bugün, dün, yarın, bu hafta, geçen
+hafta, bu ay, önümüzdeki ay; Türkiye günü). Sunucu yalnızca takvim gerçeğini
+verir; ifadeyi çapaya model eşler. Türkçe anahtar sözcük tablosu, eşanlam
+sözlüğü, düzenli ifade yönlendirmesi ya da kıyas vakasına özel dal yoktur
+(mimari sınamaları).
+
+### 12.4 Telemetri
+
+`recordPlannerDecision` / `recordPlannerRejection`: karar türü (rota, general,
+clarify, abstain, invalid), çok bölümlü plan sayısı, anlamsal durum, aday
+sayısı, bildirim sayısı, gecikme ve ret yolunun türü. Soru, yönerge,
+vektör, aday metni, Sicil ya da model gerekçesi yazılmaz (sınama).
+
+### 12.5 Değerlendirici — `scripts/planner-evaluation.mjs`, `scripts/planner-scoring.mjs`
+
+- Her vaka **üretimdeki planlama sınırından** geçer: sunucu bağlamı,
+  `semanticPlanningAdvice`, kayıt defteri araçları ve `rota_plan`,
+  `runGroundedTurn` döngüsü (düzeltmeler dâhil). İlk SQL'den hemen önce tur
+  durur; Rota verisi okunmaz. Değerlendirmede "Notlar ve iletiler" açıktır.
+- Model kaynağı: `--model-command` (stdin `{ messages, tools, toolChoice }`,
+  stdout `{ text, toolCalls, usage, models }`) ya da `--model live`
+  (ağ geçidinin `chat.tools` oturumu). Anlamsal kaynak: `--semantic
+  kosu.json` (gerçek model koşu dosyası, 4A/4B sözleşmesiyle yeniden
+  oynatılır), `none` ya da `live` (üretimdeki keşif hizmeti).
+- Modele giden her girdi sızıntı için denetlenir (vaka kimliği, beklenti,
+  ihtiyaç, altın etiket izi). Altyapı hatasında (kota, kimlik doğrulama,
+  beklenmeyen model) geçiş durur ve kaydedilmez; vaka başına yineleme yoktur.
+- Kurum içi kabul (uygulama dizininden, `.env.local` okunur):
+  `node scripts/planner-evaluation.mjs live --passes 3 --out kabul.json`.
+
+### 12.6 Altın etiketler — `test/fixtures/ai-planner-benchmark.json`
+
+Kapalı şema, sürüm 1, 4A kıyas kümesinin parmak izine bağlı (kıyas değişirse
+etiketler bayat sayılır); yalnızca değerlendirme ve sınamalar okur. Her yanıt
+vakası anlam kısıtları taşır: gerekli bölümler (her biri bir ihtiyaç grubunu
+karşılar; aynı ihtiyaç iki okuma isteyebilir), seçenek başına araç, işlem,
+varlık (aramanın kanonik biçimiyle; kullanıcının yazdığı tür sözcüğü aynı
+kaydı adlandırır), ölçü, süzgeç (üretimin kanonik nüfus kimliğiyle), göreli
+pencere (bugüne ya da takvim çapasına göre), sıralama, gruplama ve bağımlı
+kaynak; isteğe bağlı kabul edilen ek bölümler. Her vakanın örnek planı üretim
+doğrulayıcılarından ilk bildirimde geçer ve kendi etiketini karşılar (sınama).
+17 odaklı ek vaka: takip bağlamı ve kapsam, göreli tarih, ASCII, yazım
+hatası, çekim, oran, en üstünlük, olumsuzluk, çoklu araç, yazma, kimlik
+değiştirme, yönerge enjeksiyonu, Rota dışı veri, desteklenmeyen hesap,
+İngilizce. Kıyas parmak izi: `b4d03098717120684d0f16e21a02f319250e23cd5b84b3b345b09a769b54738b`.
+
+### 12.7 Ölçümler (2026-10-19)
+
+**Anlamsal katman (gerçek modeller, CPU):** `intfloat/multilingual-e5-large`
+ilk aşama: hit@1 0,568, MRR 0,650, recall@5 0,737. Ek ölçüm (profil modeli
+DEĞİL; `Qwen3-Reranker-8B` bu ortamda çalıştırılamadı):
+`BAAI/bge-reranker-v2-m3` (revizyon `953dc6f6…`) ile hit@1 0,589, MRR 0,680,
+recall@5 0,789; yeniden sıralama p50 4,5 sn (19 belge, CPU). Görev arama
+sorularında ilk aşama zayıf: daraltma yerine danışman not seçildi.
+
+**Zayıf model uyumluluk kapısı:** `claude-haiku-4-5-20251001`, genişletilmiş
+düşünme KAPALI (her turda düşünme belirteci 0), depoyu görmeyen yeni oturum,
+yalnızca `rota_plan` ve 19 kayıtlı araç (yerel araç arayüzü), e5 ilk aşama
+adayları, vaka başına yineleme/çoğunluk/model değişimi yok. Haiku 4.5
+Qwen3-Next-80B-A3B-Instruct'ın taklidi DEĞİLDİR; yalnızca mimarinin sınır
+düzeyi akıl yürütme gerektirip gerektirmediğinin kanıtıdır.
+
+| Geçiş | Kanonik | yanıt | açıklama | çekimserlik |
+| --- | --- | --- | --- | --- |
+| Son düzeltmeden önce | 89/117 | — | — | — |
+| Son geçiş | **88/117** | 70/95 | 4/7 | 14/15 |
+
+Kapı (117/117, tercihen 3×) **geçilmedi**. Son geçişin ıskaları (yalnız vaka
+kimliğiyle): açıklama yerine plan ya da tersi — tr-017, tr-032, tr-045,
+tr-072, tr-073, tr-075, tr-079 (ad verilmiş kayıtta gereksiz açıklama),
+tr-096 (düzeltme tükendi), tr-097, tr-098 (belirsiz soruda plan); yanlış araç
+ya da eksik bölüm — tr-023, tr-046, tr-060, tr-090, tr-095; süzgeç/pencere —
+tr-021, tr-034, tr-053, tr-078, tr-091; düzeltmesi yakınsamayan plan —
+tr-049, tr-052, tr-066, tr-068, tr-070, tr-077, tr-087, tr-092, tr-104.
+Ek 17 vaka önceki geçişte 17/17.
+
+### 12.8 Bekleyenler
+
+- **Gerçek model nitelendirmesi:** Qwen3-Next-80B-A3B-Instruct (81,3 milyar
+  parametre) ve gemma-4-31B-it bu ortamda çalıştırılamadı (GPU yok);
+  Qwen3-Reranker-8B ~16,4 GB, 15 GiB bellekte çalıştırılamadı; kurum içi uç
+  erişilemez. Kurum içi komut §12.5'tedir.
+- **Kabul kapısı:** zayıf model geçişi 117/117 değil; ıska sınıfları
+  (gereksiz açıklama, belirsizlikte plan, yakınsamayan düzeltme) sonraki
+  düzeltmenin girdisidir. Kapı geçilmeden 4C "kabul edildi" sayılmaz.

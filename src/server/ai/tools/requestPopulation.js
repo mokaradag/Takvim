@@ -438,8 +438,9 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
     hints.push(...[...new Set(undeclared.map((call) => NAME_RESOLVERS[call.name]))]
       .map((type) => `request.entities: [{"type":"${type}","text":"<kullanıcının yazdığı ad>"}] ekle (adla aranan ${type} bildirilen varlıktır)`));
   }
-  // Aynı ad hem proje/kişi varlığı hem görev başlığı araması olamaz: filters.text yalnızca görev başlığında arar.
-  if (typeof filters.text === 'string' && entities.some((entity) => ['project', 'person'].includes(entity.type) && entity.text
+  // Aynı ad hem proje/kişi varlığı hem görev başlığı araması olamaz: görev nüfusunda filters.text yalnızca görev
+  // başlığında arar. Proje ya da kişi aramasında ise metin adlandırılan varlığın kendi aramasıdır.
+  if (FAMILIES[tool] === 'task' && typeof filters.text === 'string' && entities.some((entity) => ['project', 'person'].includes(entity.type) && entity.text
     && containmentText(entity.text) === containmentText(filters.text))) {
     problems.push('$.filters.text:entity');
     hints.push('filters.text: proje ya da kişi adı entities içinde bildirilir; filters.text yalnızca görev başlığında aranan metindir (gerekmiyorsa kaldır)');
@@ -483,7 +484,10 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
 export function requestCapabilityProblems(request, { allowedTextFields = [] } = {}) {
   const problems = [];
   const hints = [];
-  const carrierHint = (name, metric) => `${metric}: fields ile istenen kayıtlı alanı bağla; ${name}: ${metricPaths(name, metric).join('|')}`;
+  const carrierHint = (name, metric) => {
+    const paths = metricPaths(name, metric);
+    return `${metric}: fields ile kayıtlı alanı bağla (ölçü metrics içinde kalır), ör. {"metric":"${metric}","tool":"${name}","path":"${paths[0]}"}; path seçenekleri: ${paths.join('|')}`;
+  };
   for (const field of request.fields || []) {
     if (!request.metrics.includes(field.metric) || metricEntry(field.tool, field.path.replace(/^data\./, ''))?.metric !== field.metric) problems.push('$.fields:metric');
   }
@@ -535,7 +539,7 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
   }
   if (requestTextFields(request).some((field) => !allowedTextFields.includes(field))) {
     problems.push('$.population.textFields:not-authorized');
-    hints.push('population.textFields: kullanıcı bu turda serbest metni açmadı; bu alan okunamaz (kullanıcıya "Notlar ve iletiler" anahtarını öner)');
+    hints.push('population.textFields: kullanıcı bu turda serbest metni açmadı; bu alan okunamaz (sunucu kullanıcıdan "Notlar ve iletiler" anahtarını açmasını ister)');
   }
   const active = Object.entries(request.filters).filter(([, value]) => value != null).map(([key]) => key);
   const fieldTools = (metric) => [...new Set((request.fields || []).filter((field) => field.metric === metric).map((field) => field.tool))];
@@ -716,7 +720,8 @@ function parsedRead(tool, args) {
  * `[{ name, args }]`; kurulamıyorsa ya da hepsi zaten yürütüldüyse boş.
  */
 export function derivedReads(request, bound, { today, attempted = new Set() } = {}) {
-  if (!request?.population?.tool) return [];
+  // Bağımlı bölümün varlığı önceki bölümün kanıtından bağlanmadan okuma kurulmaz: seçicisiz okuma nüfusu genişletirdi.
+  if (!request?.population?.tool || request.entities?.some((entity) => entity.from != null)) return [];
   const key = (call) => readKey(call.name, call.args, today);
   const fresh = (calls) => calls.filter((call, index) => !attempted.has(key(call)) && calls.findIndex((other) => key(other) === key(call)) === index);
   const unresolved = bound.filter((entity) => !entity.bound && entity.text);

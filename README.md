@@ -362,7 +362,10 @@ sürüm/parmak izi kurallarını, 117 vakalık sentetik Türkçe kıyas kümesin
 nitelendirme mekanizmasını kurar. 4B, model kaydındaki `embedding` ve `rerank`
 profilleriyle ağ geçidi üzerinden gerçek gömme ile sunucuya ait araç
 kataloğunda sınırlı aday keşfi ve yeniden sıralama yapar (süreç içi dizin,
-vektör veritabanı yok); sonuç danışmandır ve Aşama 3 turuna henüz bağlanmaz.
+vektör veritabanı yok). 4C bu adayları doğrulayıp planlayıcıya danışman not
+olarak verir; planlayıcı veri okumadan türlü karar (yanıt, açıklama,
+çekimserlik) verir. 4C'nin 117/117 zayıf model kabul kapısı henüz geçilmedi
+(Haiku 4.5: 88/117).
 Katalog dizini kurumsal anahtarla (`MERGEN_ROTA_AI_DEFAULT_API_KEY`) kurulur;
 üretim yolundan nitelendirme uygulama dizininde `node
 scripts/semantic-evaluation.mjs live --json` ile yapılır (`.env.local` okunur).

@@ -45,6 +45,7 @@ import {
 } from './conversationStore.js';
 import { buildGroundedContext } from './groundedPrompt.js';
 import { runGroundedTurn } from './groundedAnswer.js';
+import { semanticPlanningAdvice } from './semanticPlanning.js';
 import { EVIDENCE_TEXT_FIELDS } from '../../../domain/ai/claimableEvidence.js';
 import { clarificationReferences, selectedCandidateOrdinal } from '../../../domain/ai/clarification.js';
 
@@ -903,10 +904,23 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
  * doğrulandıktan (ya da güvenli iletiye düştükten) SONRA, tek kısa işlemde
  * yazılır. Durdurulan ya da süresi dolan tur yazılmaz.
  */
+/** Anlamsal danışmanlığın sorusu: kullanıcının bu turdaki iletisi; numaralı aday seçiminde önceki soru. */
+function planningQuery(turn) {
+  if (turn.clarification?.selected && turn.clarification.question) return turn.clarification.question;
+  return String(turn.modelMessages.findLast((message) => message.role === 'user')?.content ?? '');
+}
+
 async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress = null, onText, onDelivery = null, onGenerated = null }) {
+  const catalog = toolCatalogForModel();
+  // Aşama 4C: planlamadan önce Aşama 4B keşfi (kendi kirası ve süre bütçesiyle, araç oturumundan ayrı).
+  // Danışmanlık kaybı planlamayı Aşama 3 davranışına döndürür; iptal ve iç hata yukarı taşınır.
+  onProgress?.();
+  const planning = await semanticPlanningAdvice({ query: planningQuery(turn), catalog, signal });
+  onProgress?.();
   const options = {
     messages: turn.modelMessages,
-    catalog: toolCatalogForModel(),
+    catalog,
+    planning,
     context: createToolTurnContext({ sicil: turn.sicil }),
     allowedTextFields: turn.allowedTextFields || [],
     clarification: turn.clarification || null,

@@ -812,7 +812,8 @@ test('anlamsal benzerlik yetki değildir: katalogdaki ya da sorgudaki enjeksiyon
 /* ── Süreç düzeyi tam yığın ─────────────────────────────── */
 
 test('süreç düzeyi keşif güvenilir oturum, rehber, anahtar ve ağ geçidi zincirinden geçer; dizin süreçte bir kez kurulur', async (t) => {
-  const { provider } = createAiStack(t);
+  // Gömme çağrıları sağlayıcının ortak çağrı kaydında sayılır.
+  const { provider } = createAiStack(t, { provider: createFakeAiProvider() });
   const first = await retrieveSemanticCandidates({ query: QUERY });
   assert.equal(first.status, 'reranked');
   assert.equal(first.candidates.length, SEMANTIC_RETRIEVAL_DEPTH);
@@ -851,7 +852,7 @@ test('kimlik hatası danışmanlık kaybına çevrilmez: rehberde olmayan Sicil 
 
 /* ── Mimari sınır (durağan) ─────────────────────────────── */
 
-test('anlamsal keşif yalnızca ağ geçidini çağırır; kimlik, yetki, SQL, ağ, ortam, model adı ve doğal dil kuralı taşımaz; Aşama 3 turuna bağlanmaz', async () => {
+test('anlamsal keşif yalnızca ağ geçidini çağırır; kimlik, yetki, SQL, ağ, ortam, model adı ve doğal dil kuralı taşımaz; Aşama 3 turuna yalnızca planlama sınırından bağlanır', async () => {
   const fs = await import('node:fs');
   const path = await import('node:path');
   const { fileURLToPath } = await import('node:url');
@@ -881,8 +882,9 @@ test('anlamsal keşif yalnızca ağ geçidini çağırır; kimlik, yetki, SQL, a
   assert.deepEqual(callers(/\.rerank\(\{/), ['src/server/ai/aiGateway.js']);
   assert.deepEqual(callers(/['`]\/(?:embeddings|rerank)['`]|\}\/(?:embeddings|rerank)`/), ['src/server/ai/providers/openAiCompatibleProvider.js']);
   assert.deepEqual(callers(/\.embedTexts\(\{|\.rerankTexts\(\{/), ['src/server/ai/semanticRetrieval.js']);
-  // Aşama 4B danışman adayları üretir; planlayıcıya ve araç yürütmesine bağlanması Aşama 4C'nin işidir.
-  assert.deepEqual(callers(/semanticRetrieval/), []);
+  // Aşama 4C: danışman adayları yalnızca asistan turunun orkestrasyon sınırı (anlamsal planlama) kullanır;
+  // araç yürütücüsü, istek doğrulayıcıları ve başka üretim modülleri keşfi içe aktarmaz.
+  assert.deepEqual(callers(/semanticRetrieval/), ['src/server/ai/assistant/semanticPlanning.js']);
 });
 
 test('ayrı dizin anahtarlarının katalog işleri insan başına etkin sınırını paylaşmaz', async (t) => {

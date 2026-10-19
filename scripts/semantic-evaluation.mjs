@@ -447,7 +447,7 @@ function reportingTimeouts(call) {
  * yineleme kaydı, ortam dosyası bildirimi) stderr'e gider. Yalnızca bu komut
  * sürecinde geçerlidir; uygulamanın telemetrisi değişmez.
  */
-function routeDiagnosticsToStderr() {
+export function routeDiagnosticsToStderr() {
   const diagnostics = new Console({ stdout: process.stderr, stderr: process.stderr });
   for (const method of ['log', 'info', 'debug']) console[method] = diagnostics[method].bind(diagnostics);
 }
@@ -457,7 +457,7 @@ function routeDiagnosticsToStderr() {
  * `.env.local`, `.env.production`, `.env` — `next start` ile aynı kural ve aynı
  * araç (@next/env). Kabukta tanımlı değer dosyadakinden önceliklidir.
  */
-function loadDeploymentEnvironment() {
+export function loadDeploymentEnvironment() {
   const { loadEnvConfig } = createRequire(import.meta.url)('@next/env');
   const { loadedEnvFiles } = loadEnvConfig(process.cwd(), false, { info: (...args) => console.error(...args), error: (...args) => console.error(...args) });
   // Yalnızca dosya adı yazılır; değerler yazılmaz.

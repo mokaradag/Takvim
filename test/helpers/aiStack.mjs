@@ -96,7 +96,8 @@ export function createAiStack(t, { env = {}, sicil = SICIL_A, seed = {}, provide
   pool.resetSqlPoolForTests();
   setCurrentUserProvider(null);
   resetAi();
-  const fake = provider || createFakeAiProvider();
+  // Kanıta dayalı turun planlama öncesi anlamsal keşfi sohbet turu için sıraya konmuş davranışları tüketmez.
+  const fake = provider || createFakeAiProvider({ semanticQueue: false });
   setAiProviderForTests(fake);
 
   t.after(() => {

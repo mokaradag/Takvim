@@ -108,7 +108,8 @@ Tarayıcı ──► /api/mergen-rota/ai/*  (Node çalışma zamanı, önbelleks
 | `src/server/ai/tools/*` | Aşama 3: araç kayıt defteri, katı bağımsız değişken doğrulaması, sınırlı yürütücü, araç SQL kapısı, kanıt defteri ve 19 salt okunur alan aracı (tek SQL sahibi `rota/rotaToolStore.js`) |
 | `src/domain/ai/evidenceContract.js`, `src/server/ai/assistant/grounded*.js` | Aşama 3: ortak kanıt/atıf sözleşmesi; sunucuya ait yönerge ve doğrulanan, sınırlı araç döngüsü |
 | `src/domain/ai/semanticContract.js`, `semanticEvaluation.js` | Aşama 4A: anlamsal sözleşme (model çıktısı doğrulaması, katalog, parmak izi, sıralama) ve değerlendirme (kıyas kümesi, ölçüler, sınırlı koşucu) |
-| `src/server/ai/semanticRetrieval.js` | Aşama 4B: sunucuya ait araç kataloğunda gerçek gömme ile aday keşfi ve yeniden sıralama; süreç içi dizin; danışman sonuç (Aşama 3 turuna bağlı değildir) |
+| `src/server/ai/semanticRetrieval.js` | Aşama 4B: sunucuya ait araç kataloğunda gerçek gömme ile aday keşfi ve yeniden sıralama; süreç içi dizin; danışman sonuç |
+| `src/server/ai/assistant/semanticPlanning.js`, `src/domain/ai/plannerOutcome.js` | Aşama 4C: adayların doğrulanıp planlayıcıya danışman not olarak bağlanması; açıklama/çekimserlik kararları ve sunucuya ait metinleri |
 
 ---
 
@@ -1871,6 +1872,12 @@ Ayrıntılı belge: [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.m
   payını ve anahtarını değil sunucu kapasite anahtarını ve **kurumsal
   anahtarı** kullanır (kurumsal anahtar yoksa dizin kurulmaz). Beklenen
   model/hizmet hataları dışındaki iç hatalar (ör. açık SQL işlemi) yukarı
-  taşınır. Adaylar Aşama 3 turuna bağlanmaz (4C); canlı asistan davranışı
-  değişmez. Üretim yolundan nitelendirme (uygulama dizininden; `.env.local`
+  taşınır. Üretim yolundan nitelendirme (uygulama dizininden; `.env.local`
   okunur): `node scripts/semantic-evaluation.mjs live --json`.
+- **4C (uygulandı; kabul kapısı açık):** `semanticPlanning.js` adayları kayıt
+  defterine karşı doğrulayıp planlayıcıya danışman not olarak verir (araç
+  kümesi ve sırası değişmez). Planlayıcı veri okumadan türlü karar verir
+  (`rota_plan`: rota / clarify / abstain / general, en çok 3 bölüm);
+  açıklama ve çekimserlik sıfır SQL ile sunucu metnidir. Değerlendirici
+  `scripts/planner-evaluation.mjs`; Haiku 4.5 (düşünme kapalı) kapısı
+  88/117, 117/117 geçilmedi; ayrıntı ve bekleyenler anlamsal katman §12.

@@ -63,8 +63,11 @@ function createState() {
     // Rota verisi araçları: yalnızca araç adı, sonuç sınıfı ve süre (içerik YOK).
     tools: { calls: 0, byOutcome: {}, byTool: {}, latencyMs: [], lastFailure: null },
     // Kanıta dayalı yanıtların sonucu: grounded (kanıtlı), direct (araçsız), failed (doğrulanamadı).
-    grounding: { grounded: 0, general_redirect: 0, clarification: 0, not_found: 0, unavailable: 0, failed: 0, repaired: 0, disclosed: 0, serverSelected: 0, rounds: [], evidence: [],
+    grounding: { grounded: 0, general_redirect: 0, clarification: 0, abstained: 0, not_found: 0, unavailable: 0, failed: 0, repaired: 0, disclosed: 0, serverSelected: 0, rounds: [], evidence: [],
       escalations: { total: 0, byReason: {}, byOutcome: {} } },
+    // Aşama 4C planlayıcısı: karar, anlamsal durum, aday sayısı, bildirim/düzeltme sayısı ve süre (soru, istem ya da plan içeriği YOK).
+    planner: { decisions: { rota: 0, general: 0, clarify: 0, abstain: 0, invalid: 0 }, multiPart: 0,
+      semantic: { reranked: 0, first_stage: 0, unavailable: 0 }, rejections: {}, declarations: [], candidates: [], latencyMs: [] },
     // Anlamsal aday keşfi: yalnızca sonuç, başarısızlık sınıfı, dizin kullanımı ve süre (sorgu, vektör ya da aday metni YOK).
     semantic: { retrievals: 0, byStatus: { reranked: 0, first_stage: 0, unavailable: 0, cancelled: 0 }, failures: {},
       index: { hit: 0, built: 0, shared: 0 }, latencyMs: [], lastFailure: null },
@@ -438,6 +441,7 @@ export function aiTelemetrySnapshot() {
       grounded: current.grounding.grounded,
       general_redirect: current.grounding.general_redirect,
       clarification: current.grounding.clarification,
+      abstained: current.grounding.abstained,
       not_found: current.grounding.not_found,
       unavailable: current.grounding.unavailable,
       failed: current.grounding.failed,
@@ -451,6 +455,15 @@ export function aiTelemetrySnapshot() {
         byReason: { ...current.grounding.escalations.byReason },
         byOutcome: { ...current.grounding.escalations.byOutcome }
       }
+    },
+    planner: {
+      decisions: { ...current.planner.decisions },
+      multiPart: current.planner.multiPart,
+      semantic: { ...current.planner.semantic },
+      rejections: { ...current.planner.rejections },
+      declarations: countPercentiles(current.planner.declarations),
+      candidates: countPercentiles(current.planner.candidates),
+      latency: percentiles(current.planner.latencyMs)
     },
     semantic: {
       retrievals: current.semantic.retrievals,
@@ -640,7 +653,7 @@ export function recordSemanticRetrieval({ status, failure = null, serviceFailure
 }
 
 const ESCALATION_REASONS = new Set(['SYNTHESIS_REQUIRED', 'VERIFICATION_FAILED', 'LENGTH', 'EMPTY_COMPLETION', 'REQUEST_DECLARATION']);
-const ESCALATION_OUTCOMES = new Set(['grounded', 'clarification', 'not_found', 'unavailable', 'general_redirect', 'failed', 'timeout', 'error']);
+const ESCALATION_OUTCOMES = new Set(['grounded', 'clarification', 'abstained', 'not_found', 'unavailable', 'general_redirect', 'failed', 'timeout', 'error']);
 
 /**
  * Standart kipteki kanıta dayalı turun Derin düşünme ile sonlandırılması:
@@ -672,6 +685,39 @@ export function recordGroundedEscalation({ requestedMode, models = [], reason, t
   }));
 }
 
+const PLANNER_DECISIONS = new Set(['rota', 'general', 'clarify', 'abstain', 'invalid']);
+const PLANNER_SEMANTIC_STATES = new Set(['reranked', 'first_stage', 'unavailable']);
+const MAX_PLANNER_REJECTION_KINDS = 32;
+
+/**
+ * Planlayıcının veri okumadan önceki kararı (Aşama 4C): karar türü, çok bölümlü plan, anlamsal
+ * danışmanlığın durumu ve aday sayısı, bildirim sayısı ve karara kadar geçen süre. Soru, istem,
+ * plan, araç bağımsız değişkeni ya da Sicil yazılmaz.
+ */
+export function recordPlannerDecision({ decision, parts = 0, semantic = 'unavailable', candidates = 0, declarations = 0, latencyMs = 0 }) {
+  safely(() => {
+    const current = state().planner;
+    current.decisions[PLANNER_DECISIONS.has(decision) ? decision : 'invalid'] += 1;
+    if (parts > 1) current.multiPart += 1;
+    current.semantic[PLANNER_SEMANTIC_STATES.has(semantic) ? semantic : 'unavailable'] += 1;
+    pushSample(current.declarations, safeCount(declarations));
+    pushSample(current.candidates, safeCount(candidates));
+    pushSample(current.latencyMs, latencyMs);
+  });
+}
+
+/**
+ * Reddedilen plan bildiriminin yalnızca sorun TÜRÜ (`$.population.tool:enum` → `enum`). Yol, değer ya
+ * da model metni yazılmaz; tür sayısı sınırlıdır.
+ */
+export function recordPlannerRejection(detail) {
+  safely(() => {
+    const kind = /:([a-z][a-zA-Z-]{0,31})$/.exec(String(detail ?? ''))?.[1] || 'invalid';
+    const current = state().planner.rejections;
+    if (Object.hasOwn(current, kind) || Object.keys(current).length < MAX_PLANNER_REJECTION_KINDS) current[kind] = (current[kind] || 0) + 1;
+  });
+}
+
 /** Kanıta dayalı yanıtın sonucu (içerik taşımaz). */
 export function recordGroundedAnswer({ outcome, rounds = 0, evidence = 0, repaired = false, disclosed = false }) {
   safely(() => {
@@ -684,7 +730,7 @@ export function recordGroundedAnswer({ outcome, rounds = 0, evidence = 0, repair
   });
 }
 
-const TURN_OUTCOMES = new Set(['grounded', 'clarification', 'not_found', 'unavailable', 'general_redirect', 'failed', 'error']);
+const TURN_OUTCOMES = new Set(['grounded', 'clarification', 'abstained', 'not_found', 'unavailable', 'general_redirect', 'failed', 'error']);
 const ROUND_PURPOSES = new Set(['plan', 'tools', 'follow-up', 'select', 'repair', 'declaration', 'retry']);
 const FINISH_REASONS = new Set(['stop', 'end_turn', 'eos', 'stop_sequence', 'length', 'content_filter', 'tool_calls', 'function_call', 'error']);
 export const safeFinishReason = (value) => FINISH_REASONS.has(value) ? value : null;

@@ -29,11 +29,25 @@ const FOLLOW_UP_TASK_PATHS = Object.freeze({
   rota_schedule_requests: ['items.*.task.taskId'],
   rota_assignment_requests: ['items.*.task.taskId'],
   rota_outlook_status: ['task.taskId', 'items.*.task.taskId'],
-  rota_notifications: ['scheduleRequests.latest.*.taskId', 'assignmentCoordination.latest.*.taskId', 'taskEvents.latest.*.taskId']
+  rota_notifications: ['scheduleRequests.latest.*.taskId', 'assignmentCoordination.latest.*.taskId', 'taskEvents.latest.*.taskId'],
+  rota_baseline_compare: ['mostSlipped.*.taskId']
 });
 
 export function followUpTaskPaths(name) {
   return FOLLOW_UP_TASK_PATHS[name] || [];
+}
+
+/**
+ * Satır koleksiyonundaki takip kimliğinin satıra göre yolu (çok bölümlü planın bağımlı bölümü
+ * önceki bölümün satırlarına yalnızca bu kimliklerle bağlanır); kimlik takibe açık değilse null.
+ */
+export function rowIdentityPath(name, collection, type) {
+  if (type === 'task') {
+    const prefix = `${collection}.*.`;
+    const path = followUpTaskPaths(name).find((item) => item.startsWith(prefix) && !item.slice(prefix.length).includes('*'));
+    return path ? path.slice(prefix.length) : null;
+  }
+  return type === 'project' && name === 'rota_portfolio_summary' && collection === 'projects' ? 'projectId' : null;
 }
 
 function valuesAt(value, parts) {

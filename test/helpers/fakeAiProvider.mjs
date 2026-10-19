@@ -68,9 +68,14 @@ export function createFakeAiProvider({
   embed = (text) => hashedVector(text),
   rerank = hashedScore,
   // Sırada davranış yoksa çağrıya göre davranış seçer (ör. yalnızca katalog gömmesini bekletmek); `null` olağan yanıttır.
-  respond = null
+  respond = null,
+  // Gömme ve yeniden sıralama çağrıları ortak sırayı tüketir mi? Kapalıyken (kanıta dayalı tur yığını) yalnızca
+  // `kind: 'embeddings' | 'rerank'` ile işaretlenmiş davranışları alır; Aşama 4C'nin planlama öncesi keşfi sohbet
+  // turu için sıraya konmuş davranışları tüketmez.
+  semanticQueue = true
 } = {}) {
   const calls = [];
+  const semanticCalls = [];
   const queue = [];
   const active = new Set();
   const listeners = new Set();
@@ -188,6 +193,13 @@ export function createFakeAiProvider({
     }
   }
 
+  /** Çağrı türünün sıradaki davranışı: işaretsiz davranış her türe, `kind` ile işaretli davranış yalnızca o türe gider. */
+  function take(kind) {
+    const semantic = kind === 'embeddings' || kind === 'rerank';
+    const index = !semantic || semanticQueue ? queue.findIndex((item) => !item.kind || item.kind === kind) : queue.findIndex((item) => item.kind === kind);
+    return index >= 0 ? queue.splice(index, 1)[0] : null;
+  }
+
   async function execute(kind, input) {
     // Gerçek ağ geçitleri gibi anahtarsız ya da geçersiz anahtarlı model listesi
     // varsayılan olarak 401 döner.
@@ -210,17 +222,23 @@ export function createFakeAiProvider({
       aborted: false,
       settled: false
     };
-    const behavior = queue.shift() || respond?.(call) || fallback;
-    calls.push(call);
-    active.add(call);
-    peakActive = Math.max(peakActive, active.size);
-    notify();
+    const behavior = take(kind) || respond?.(call) || fallback;
+    // Ortak sıra dışındaki planlama öncesi keşif sohbet çağrılarının sayımını ve sırasını değiştirmez.
+    const hidden = !semanticQueue && (kind === 'embeddings' || kind === 'rerank');
+    (hidden ? semanticCalls : calls).push(call);
+    if (!hidden) {
+      active.add(call);
+      peakActive = Math.max(peakActive, active.size);
+      notify();
+    }
     try {
       return await run(behavior, call, input);
     } finally {
       call.settled = true;
-      active.delete(call);
-      notify();
+      if (!hidden) {
+        active.delete(call);
+        notify();
+      }
     }
   }
 
@@ -305,7 +323,7 @@ export function createFakeAiProvider({
   }
 
   async function executeStream(input) {
-    const behavior = queue.shift() || { type: 'reply' };
+    const behavior = take('chat') || { type: 'reply' };
     const call = {
       kind: 'stream',
       model: input.model ?? null,
@@ -377,7 +395,7 @@ export function createFakeAiProvider({
   }
 
   async function executeToolStream(input) {
-    const behavior = queue.shift() || { type: 'reply' };
+    const behavior = take('chat') || { type: 'reply' };
     const call = {
       kind: 'tools',
       index: calls.length + 1,
@@ -424,6 +442,8 @@ export function createFakeAiProvider({
 
   return {
     calls,
+    /** Ortak sırayı kullanmayan (semanticQueue: false) gömme ve yeniden sıralama çağrıları. */
+    semanticCalls,
     get pendingCount() { return queue.length; },
     get activeCount() { return active.size; },
     get peakActive() { return peakActive; },

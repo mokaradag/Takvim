@@ -120,7 +120,7 @@ export function requestSchema() {
           status: task.status, priority: task.priority, deadline: task.deadline, dateField: task.dateField,
           dateFrom: task.dateFrom, dateTo: task.dateTo, period: { type: 'string', enum: [...REQUEST_PERIODS] },
           assignee: { type: 'string', enum: ['me', 'unassigned'] }, createdByMe: task.createdByMe, milestone: task.milestone, text: task.text,
-          tab: { type: 'string', enum: ['pending', 'sent', 'history'] }, workflowStatus: { type: 'string', enum: [...new Set(statuses)] },
+          tab: { type: 'string', enum: ['pending', 'sent', 'history'], description: 'Talepler: pending = kararınızı ya da işleminizi bekleyen, sent = sizin gönderdikleriniz, history = sonuçlananlar.' }, workflowStatus: { type: 'string', enum: [...new Set(statuses)] },
           source: { type: 'string', enum: ['corporate', 'manual'] }, includeEmpty: { type: 'boolean' },
           activityScope: { type: 'string', enum: ['mine', 'team'] }, activityKind: getRotaTool('rota_activity_search').parameters.properties.kind
         }
@@ -147,17 +147,50 @@ function populationShape(raw) {
   return { ...rest, population: { ...raw.population, ...Object.fromEntries(misplaced.map((key) => [key, raw[key]])) } };
 }
 
-export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, today }) {
-  if (raw == null) throw invalidArguments(['$.request:required']);
-  const value = parseToolArguments(requestSchema(), JSON.stringify(populationShape(raw)));
+/**
+ * Çok bölümlü planın bağımlı varlığı (`{ type, from }`): önceki bölümün doğrulanmış satırlarındaki kayıtlar.
+ * Kimliği model vermez; sunucu önceki bölümün kanıtından bağlar. Şemadan önce ayrılır, konumu korunur
+ * (bindings varlık sırasına bağlıdır).
+ */
+const DEPENDENT_TYPES = Object.freeze(['task', 'project']);
+const SCHEMA_PROBLEMS = Object.freeze(['enum', 'type', 'required', 'minItems', 'maxItems', 'minLength', 'maxLength', 'pattern', 'unique', 'range', 'date']);
+const WORKFLOW_TOOLS = Object.freeze(['rota_schedule_requests', 'rota_assignment_requests']);
+const DEADLINE_WINDOWS = Object.freeze(['due_today', 'due_next_7_days', 'due_next_30_days', 'no_target_finish']);
+
+function splitDependents(raw, priorParts) {
+  const entities = raw && typeof raw === 'object' && !Array.isArray(raw) && Array.isArray(raw.entities) ? raw.entities : null;
+  if (!entities) return { raw, dependents: new Map(), problems: [] };
+  const dependents = new Map();
   const problems = [];
-  for (const field of value.fields || []) if (!value.metrics.includes(field.metric) || !metricPaths(field.tool, field.metric).includes(field.path)) problems.push('$.fields:unknown');
+  entities.forEach((entity, index) => {
+    if (!entity || typeof entity !== 'object' || !Object.hasOwn(entity, 'from')) return;
+    const valid = Object.keys(entity).every((key) => ['type', 'from'].includes(key)) && DEPENDENT_TYPES.includes(entity.type)
+      && Number.isSafeInteger(entity.from) && entity.from >= 0 && entity.from < priorParts;
+    if (!valid) problems.push(`$.entities[${index}].from:invalid`);
+    dependents.set(index, Object.freeze({ type: entity.type, id: null, text: null, from: entity.from }));
+  });
+  if (dependents.size > 1) problems.push('$.entities:from');
+  // Şema doğrulaması için yer tutucu: ad ya da kimlik değildir, hiçbir zaman okunmaz.
+  const placeholder = entities.map((entity, index) => (dependents.has(index) ? { type: DEPENDENT_TYPES.includes(entity.type) ? entity.type : 'task', text: 'xx' } : entity));
+  return { raw: { ...raw, entities: placeholder }, dependents, problems };
+}
+
+export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, today, priorParts = 0 }) {
+  if (raw == null) throw invalidArguments(['$.request:required']);
+  const split = splitDependents(raw, priorParts);
+  const value = parseToolArguments(requestSchema(), JSON.stringify(populationShape(split.raw)));
+  const problems = [...split.problems];
+  (value.fields || []).forEach((field, index) => {
+    if (!value.metrics.includes(field.metric)) problems.push(`$.fields[${index}].metric:undeclared`);
+    else if (!metricPaths(field.tool, field.metric).includes(field.path)) problems.push(`$.fields[${index}].path:unknown`);
+  });
   for (const binding of value.bindings || []) if (!value.metrics.includes(binding.metric) || !value.entities?.[binding.entity]) problems.push('$.bindings:unknown');
   if ((value.operation === 'rank') !== Boolean(value.rank)) problems.push('$.rank:operation');
   if (value.rank && !value.metrics.includes(value.rank.metric)) problems.push('$.rank.metric:undeclared');
   if (value.rank && !rankableMeasure(METRICS[value.rank.metric])) problems.push('$.rank.metric:unordered');
   const entities = (value.entities || []).map((entity, index) => {
     const path = `$.entities[${index}]`;
+    if (split.dependents.has(index)) return split.dependents.get(index);
     if ((entity.id == null) === (entity.text == null)) {
       problems.push(`${path}:idOrText`);
       return null;
@@ -174,6 +207,10 @@ export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, tod
   const filters = { ...(value.filters || {}) };
   if (filters.text != null && !textTrusted(filters.text)) problems.push('$.filters.text:untrusted');
   if (filters.period && (filters.dateFrom || filters.dateTo)) problems.push('$.filters.period:conflict');
+  // Termin penceresi tek yoldan verilir: göreli termin ön ayarı ile açık termin aralığı birlikte çelişkilidir
+  // (gecikme koşulu ise aralıkla birleşebilir: aralıktaki gecikmiş görevler).
+  if (DEADLINE_WINDOWS.includes(filters.deadline) && (filters.dateFrom || filters.dateTo || filters.period)
+    && (filters.dateField ?? 'targetFinish') === 'targetFinish') problems.push('$.filters.deadline:conflict');
   try {
     normalizeTaskFilters({ ...filters, ...periodWindow(filters.period, today) });
   } catch (error) {
@@ -185,20 +222,38 @@ export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, tod
     population: value.population ? Object.freeze({ ...value.population }) : null, fields: Object.freeze(value.fields || []), bindings: Object.freeze(value.bindings || []) });
 }
 
+/** Bölüm bağımlı bir varlık taşıyor mu (kimliği önceki bölümün kanıtından bağlanacak)? */
+export function dependentEntity(request) {
+  return (request?.entities || []).find((entity) => entity.from != null) || null;
+}
+
+/** Bağımlı bölümün tek kayıt için örneği: bağımlı varlık sunucunun kanıttan bağladığı kimliği alır. */
+export function instantiateDependent(request, id) {
+  return Object.freeze({ ...request, entities: Object.freeze(request.entities.map((entity) => (entity.from != null
+    ? Object.freeze({ type: entity.type, id: String(id), text: null }) : entity))) });
+}
+
 /** Bildirim sorunlarının beklenen biçimi; yalnızca şemadan türetilir, modelin değeri yansıtılmaz. */
 export function declarationHints(problems) {
   const hints = [];
   for (const problem of problems) {
     const path = String(problem).split(':')[0];
+    if (/filters\.deadline:conflict$/.test(String(problem))) {
+      hints.push(`${path.slice(2)}: termin aralığı ya deadline ön ayarıyla ya da dateFrom/dateTo (period) ile verilir, ikisi birlikte verilmez`);
+      continue;
+    }
+    // Şema ipucu yalnızca şema sorununda anlamlıdır (anlamsal sorunların ipucunu sunucu ayrıca verir).
+    if (!SCHEMA_PROBLEMS.includes(String(problem).split(':')[1])) continue;
     const parts = path.replace(/^\$\.?/, '').split('.').filter(Boolean);
     const tool = /^calls\[\d+\]$/.test(parts[0] || '') ? getRotaTool(parts[1]) : null;
     let node = tool ? tool.parameters : requestSchema();
-    for (const part of parts.slice(tool ? 2 : parts[0] === 'request' ? 1 : 0)) {
+    // Ek bölümün yolu ($.additionalRequests[n].…) da istek şemasına göredir.
+    for (const part of parts.slice(tool ? 2 : parts[0] === 'request' || /^additionalRequests\[\d+\]$/.test(parts[0] || '') ? 1 : 0)) {
       node = node?.properties?.[part.replace(/\[\d+\]$/, '')];
       if (/\[\d+\]$/.test(part)) node = node?.items;
     }
     const leaf = node?.type === 'array' ? node.items : node;
-    if (!node?.type || node.type === 'object' || (node.type === 'string' && !node.enum)) continue;
+    if (!node?.type || node.type === 'object' || leaf?.type === 'object' || (node.type === 'string' && !node.enum)) continue;
     const values = !leaf?.enum ? '' : leaf.enum.length <= 12 ? ` ${leaf.enum.join('|')}` : ' (izinli değerlerden biri)';
     hints.push(`${path.slice(2)}: ${node.type === 'array' ? `${leaf?.type} dizisi` : node.type}${values}`);
   }
@@ -206,11 +261,22 @@ export function declarationHints(problems) {
 }
 
 /**
- * Kayıtlı olmayan ölçü kimliğinin düzeltme ipucu: aynı önekli kayıtlı ölçüler (yalnızca kayıt
- * defterinden; modelin yazdığı metin yansıtılmaz).
+ * Kayıtlı olmayan ölçü kimliğinin ve alan yolunun düzeltme ipucu: aynı önekli kayıtlı ölçüler ve ölçünün
+ * araçtaki kayıtlı yolları (yalnızca kayıt defterinden; modelin yazdığı metin yansıtılmaz).
  */
 export function metricIdHints(problems, raw) {
   return problems.flatMap((problem) => {
+    const field = /^\$\.fields\[(\d+)\]\.(metric|path):/.exec(String(problem));
+    if (field) {
+      const item = raw?.fields?.[Number(field[1])];
+      if (field[2] === 'metric') return [`fields[${field[1]}].metric metrics listesinde de bulunmalıdır`];
+      const paths = Object.hasOwn(METRICS, item?.metric) && getRotaTool(item?.tool) ? metricPaths(item.tool, item.metric) : [];
+      return paths.length ? [`fields[${field[1]}].path (${item.metric}, ${item.tool}): ${paths.join('|')}`] : [];
+    }
+    // Talep nüfusunda durum koşulu talebin iş akışı durumudur (filters.status görev durumudur).
+    if (/^\$\.filters\.status:(?:type|enum)$/.test(String(problem)) && WORKFLOW_TOOLS.includes(raw?.population?.tool)) {
+      return [`filters.status görev durumudur; talep durumu filters.workflowStatus: ${requestSchema().properties.filters.properties.workflowStatus.enum.join('|')}`];
+    }
     const index = /^\$\.metrics\[(\d+)\]:enum$/.exec(String(problem))?.[1];
     const value = index == null ? null : raw?.metrics?.[Number(index)];
     const head = typeof value === 'string' ? value.split('.')[0] : null;

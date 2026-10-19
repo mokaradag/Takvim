@@ -561,7 +561,7 @@ test('nested plan fields written as JSON text are decoded before the unchanged s
     assert.deepEqual(plan.request, request);
     assert.deepEqual(unpacked.map((call) => [call.name, JSON.parse(call.arguments)]), [['rota_task_search', { deadline: 'overdue' }]]);
   }
-  assert.throws(() => unpack({ intent: 'rota', language: 'tr', request, calls: '[{"name":' }), (error) => error.details.includes('$.plan:shape'));
+  assert.throws(() => unpack({ intent: 'rota', language: 'tr', request, calls: '[{"name":' }), (error) => error.details.includes('$.calls:type'));
 });
 
 /* ── Bildirimden türetilen okumalar ve kayıtlı kimlikler ──── */
