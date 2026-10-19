@@ -105,7 +105,7 @@ export function RotaDataDrawerFields({ rotaData, telemetry }) {
       />
       <DrawerField label="Planlayıcı kararları" value={countList(Object.entries(planner.decisions || {}), { rota: 'Rota', general: 'Genel', clarify: 'Açıklama', abstain: 'Çekimser', invalid: 'Geçersiz', text_fields: 'Metin izni' }) || 'Henüz karar yok'} />
       <DrawerField label="Planlayıcı ret türleri" value={countList(Object.entries(planner.rejections || {}), {}) || 'Yok'} />
-      <DrawerField label="Anlamsal danışmanlık" value={[countList(Object.entries(planner.semantic || {}), { reranked: 'Yeniden sıralı', first_stage: 'İlk aşama', unavailable: 'Kullanılamıyor' }) || 'Henüz ölçüm yok', countList(Object.entries(planner.semanticReasons || {}), { TIMEOUT: 'Süre aşımı', PROFILE_DISABLED: 'Kapalı', PROFILE_NOT_CONFIGURED: 'Tanımsız', MODEL_UNAVAILABLE: 'Model yok', OTHER: 'Diğer' }), `Çok bölümlü: ${planner.multiPart ?? 0}`].filter(Boolean).join(' · ')} />
+      <DrawerField label="Anlamsal danışmanlık" value={[countList(Object.entries(planner.semantic || {}), { reranked: 'Yeniden sıralı', first_stage: 'İlk aşama', unavailable: 'Kullanılamıyor' }) || 'Henüz ölçüm yok', countList(Object.entries(planner.semanticReasons || {}), { TIMEOUT: 'Süre aşımı', PROFILE_DISABLED: 'Kapalı', PROFILE_NOT_CONFIGURED: 'Tanımsız', MODEL_UNAVAILABLE: 'Model yok', INTERNAL_UNAVAILABLE: 'İç hata', OTHER: 'Diğer' }), `Çok bölümlü: ${planner.multiPart ?? 0}`].filter(Boolean).join(' · ')} />
       <DrawerField label="Görünür çıktısız model yanıtı" value={`${telemetry.emptyCompletions ?? 0}`} />
       {rotaData.toolGate && (
         <DrawerField label="Araç SQL kapısı" value={`Etkin ${rotaData.toolGate.active} · Sırada ${rotaData.toolGate.queued}`} mono />

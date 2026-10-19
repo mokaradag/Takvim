@@ -657,7 +657,7 @@ test('a rejected model hypothesis cannot poison sticky scope in the accepted rep
   const stack = stackFor(t);
   const before = sqlCalls(stack);
   stack.provider.enqueue(nativePlan({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' },
-    entities: [{ type: 'project', text: 'toplam görev' }], unexpected: true }, []),
+    entities: [{ type: 'project', text: 'Gizli Proje' }] }, []),
     { type: 'script', respond: () => {
       assert.equal(sqlCalls(stack), before, 'geçersiz tahmin SQL çalıştırmaz');
       return nativePlan({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' },

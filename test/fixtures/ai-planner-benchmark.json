@@ -8011,7 +8011,7 @@
                 ],
                 "metrics": {
                   "all": [
-                    "notification.label"
+                    "task.title"
                   ],
                   "allowed": [
                     "notification.label",
@@ -8034,7 +8034,8 @@
         "request": {
           "operation": "list",
           "metrics": [
-            "notification.label"
+            "task.title",
+            "notification.unread"
           ],
           "population": {
             "tool": "rota_notifications"

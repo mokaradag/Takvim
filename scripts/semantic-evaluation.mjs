@@ -54,8 +54,7 @@ const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/tool
 const { aiCallBudgetMs } = await import('../src/server/ai/aiDeadline.js');
 
 function fail(message) {
-  process.stderr.write(`${message}\n`);
-  process.exit(1);
+  throw new Error(message);
 }
 
 function parseArguments([command, ...rest]) {

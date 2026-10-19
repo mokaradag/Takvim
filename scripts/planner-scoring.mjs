@@ -496,7 +496,7 @@ export function scoreDecision(testCase, record, { referenceDate }) {
   const resolvers = new Set([...entityTypes].map((type) => RESOLVERS[type]));
   const partTools = parts.flatMap((part) => [part.population?.tool, ...(part.fields || []).map((field) => field.tool)]).filter(Boolean);
   const callTools = record.plan.calls.map((call) => call.name);
-  const reads = record.plan.calls.map((call) => readKey(call.name, call.args, referenceDate));
+  const reads = record.plan.calls.map((call) => readKey(call.name, { ...call.args, limit: 1 }, referenceDate));
   if (new Set(reads).size !== reads.length) reasons.push('calls:duplicate');
   for (const call of record.plan.calls) {
     if (!requestBoundCall(parts[0], call.name, call.args, { today: referenceDate })) reasons.push('calls:unrelated');
@@ -555,7 +555,8 @@ export function validatePlannerRun(run, loaded) {
         || !Array.isArray(part.bindings) || part.bindings.some((binding) => !isRecord(binding))))) invalid();
     if (record.choice != null && (!isRecord(record.choice) || !['clarify', 'abstain'].includes(record.choice.intent) || typeof record.choice.reason !== 'string'
       || record.choice.topics != null && (!Array.isArray(record.choice.topics) || record.choice.topics.some((topic) => typeof topic !== 'string')))) invalid();
-    if (typeof record.general !== 'boolean' || !['tr', 'en'].includes(record.language)) invalid();
+    if (typeof record.general !== 'boolean' || !(['tr', 'en'].includes(record.language) || record.outcome === 'failed' && record.language === null)) invalid();
+    if (record.outcome === 'failed' && (record.plan != null || record.choice != null || record.general)) invalid();
     if (!['planned', 'clarification', 'abstained', 'general_redirect', 'failed'].includes(record.outcome) || record.error) invalid();
     if (!['reranked', 'first_stage', 'unavailable'].includes(record.semantic?.state) || !Array.isArray(record.semantic?.candidates)
       || new Set(record.semantic.candidates).size !== record.semantic.candidates.length || record.semantic.candidates.length > 10
@@ -563,6 +564,7 @@ export function validatePlannerRun(run, loaded) {
     if ((run.semantic.mode === 'none' || record.semantic.state === 'unavailable') && record.semantic.candidates.length
       || record.semantic.state !== 'unavailable' && !record.semantic.candidates.length) invalid();
     for (const round of record.rounds) {
+      if (!['stop', 'tool_calls', 'length', 'content_filter'].includes(round.finishReason)) throw new Error('PLANNER_COMPLETION_UNVERIFIED');
       if (!Array.isArray(round.models) || !round.models.length || round.models.some((model) => model !== run.qualification.expectedModel)) throw new Error('PLANNER_MODEL_MISMATCH');
       if (round.thinkingMode !== 'off' || round.thinking !== 0 || round.thinkingBlocks != null && round.thinkingBlocks !== 0) throw new Error('PLANNER_THINKING_UNVERIFIED');
     }

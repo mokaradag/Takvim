@@ -16,9 +16,10 @@ import { getRotaTool, toolCatalogForModel } from '../tools/toolRegistry.js';
 import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.js';
 import { invalidArguments, isTurnFatal, TOOL_ERROR_CODES, ToolError } from '../tools/toolErrors.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
-import { createToolScope, rowIdentityPath } from '../tools/toolScope.js';
+import { containmentText, createToolScope, rowIdentityPath } from '../tools/toolScope.js';
 import { bindRequestEntities, declarationHints, parseRequestDeclaration, requestEvidence, requestEvidenceReady, requestRepairHint, requestSelections, requestSummary, requestWindow,
   dependentEntity, droppedNameHint, droppedNames, instantiateDependent, metricIdHints, namedScope, nameProbes, requestSchema, unmatchedEntities } from '../tools/requestDeclaration.js';
+import { parseToolArguments } from '../tools/toolArguments.js';
 import { createCallIds, planShapeHints, prepareExecutionSet, rejectionFor, typedPlanningTool, unpackTypedPlan } from '../tools/executionSet.js';
 import { completeRequest, derivedReads, readKey, requestBoundCall, requestTextFields, declaredFacets, requestDimensions } from '../tools/requestPopulation.js';
 import { parseTurnLanguage, parseTurnRequest, parseTurnRoute, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
@@ -26,7 +27,7 @@ import { CLARIFICATION_LIMITS, clarificationReference } from '../../../domain/ai
 import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
 import { createAiDeadline } from '../aiDeadline.js';
 import { concreteCollections, rankedRowIndexes } from '../../../domain/ai/requestContract.js';
-import { EVIDENCE_TEXT_FIELDS, METRICS, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
+import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { PLANNER_INTENTS, PLANNER_LIMITS, renderDependentLimit, renderPartUnavailable, renderPlannerAbstention, renderPlannerClarification, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
 import { plannerCandidateNote } from './groundedPrompt.js';
 
@@ -400,9 +401,22 @@ const repairDimensions = (semantic) => {
 };
 
 const repairCalls = (turn, calls) => calls.filter((call) => call.name !== 'rota_plan').flatMap((call) => {
-  const checked = prepareExecutionSet([call], { catalog: turn.catalog, validateCall: turn.containment.validate, limits: turn.limits,
-    attempted: turn.executor.stats().attempted, callId: turn.callId, today: turn.context.today });
-  return checked.ok ? checked.calls.map(({ name, args }) => ({ name, args })) : [];
+  const definition = getRotaTool(call.name);
+  if (!definition) return [];
+  let raw;
+  try { raw = call.args || JSON.parse(call.arguments); } catch { return []; }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || call.oversize) return [];
+  const args = {};
+  // Hatalı bir bağımsız değişken, geçerli kardeş koşulları silmez; bunlar yürütülecek çağrı değildir.
+  for (const [key, schema] of Object.entries(definition.parameters.properties)) {
+    if (!Object.hasOwn(raw, key)) continue;
+    try {
+      const valid = parseToolArguments({ type: 'object', additionalProperties: false, properties: { [key]: schema } }, JSON.stringify({ [key]: raw[key] }));
+      turn.containment.validate(call.name, valid);
+      Object.assign(args, valid);
+    } catch (error) { if (!(error instanceof ToolError)) throw error; }
+  }
+  return [{ name: call.name, args }];
 });
 
 /** Düzeltme eşitliği sunucunun tamamladığı anlamdır; boş seçenekler ve varsayılanlar anlam değildir. */
@@ -429,69 +443,169 @@ function repairSemantic(turn, raw, index, calls = [], sections = null) {
   return { semantic, problems: completion.problems };
 }
 
-/** Geçerli bölümler birebir anlamla, ölçü onarımı ise etkilenmeyen kapsamla sabitlenir. */
-function pinRepair(turn, plan, details, calls = []) {
-  if (details.some((detail) => String(detail).endsWith(':dropped'))) return;
-  const sections = [plan.request, ...(plan.additionalRequests || [])];
-  const pins = [];
-  sections.forEach((raw, index) => {
-    if (!raw) return;
-    const own = details.filter((detail) => index ? String(detail).startsWith(`$.additionalRequests[${index - 1}]`)
-      : !String(detail).startsWith('$.additionalRequests'));
-    try {
-      const checked = repairSemantic(turn, raw, index, index ? [] : calls, sections);
-      if (!checked.problems.length && !own.some((detail) => !String(detail).startsWith('$.calls'))) {
-        pins.push({ full: stable(checked.semantic) });
-        return;
-      }
-    } catch { /* Geçersiz ölçü, bağımsız geçerli kapsamı serbest bırakmaz. */ }
-    if (own.length && own.every((detail) => /\.metrics(?:\[\d+\])?:(enum|type|required|minItems|maxItems|population)$/.test(String(detail)))) {
-      const carrier = own.some((detail) => String(detail).endsWith(':population'));
-      const keys = ['operation', 'entities', 'filters', 'reasoning', 'rank', ...(carrier ? ['metrics'] : [])];
-      // Ölçü sözlüğü hatasında da kapsam aynı ayrıştırıcıyla kanonikleşir.
-      try {
-        const validMetrics = (Array.isArray(raw.metrics) ? raw.metrics : []).filter((metric) => Object.hasOwn(METRICS, metric));
-        const rank = raw.rank ? { ...raw.rank, metric: Object.hasOwn(METRICS, raw.rank.metric) ? raw.rank.metric : 'tasks.total' } : null;
-        const probe = repairSemantic(turn, { ...raw, metrics: [...new Set(['tasks.total', ...validMetrics, ...(rank ? [rank.metric] : [])])],
-          ...(rank ? { rank } : {}), fields: [], bindings: [] }, index, [], sections);
-        const scope = Object.fromEntries(keys.map((key) => [key, probe.semantic[key]]));
-        if (carrier) scope.metrics = [...raw.metrics].sort();
-        if (scope.rank && !Object.hasOwn(METRICS, raw.rank.metric)) { const { metric: _metric, ...order } = scope.rank; scope.rank = order; }
-        const fields = (raw.fields || []).filter((field) => validMetrics.includes(field.metric) && metricPaths(field.tool, field.metric).includes(field.path));
-        const bindings = (raw.bindings || []).filter((binding) => validMetrics.includes(binding.metric) && raw.entities?.[binding.entity]);
-        pins.push({ keys, scope: stable(scope), dimensions: repairDimensions(probe.semantic), metrics: validMetrics, fields, bindings,
-          rankMetric: !raw.rank || Object.hasOwn(METRICS, raw.rank.metric) });
-      } catch { /* Bağımsız kapsam da geçersizse sabitlenmez. */ }
+/** Yalnızca reddedilen istek yolları serbesttir; diğer anlamlar tek kanonik izdüşümde kalır. */
+function repairAllowance(details, raw) {
+  const paths = new Set();
+  for (const detail of details) {
+    const [path, reason] = String(detail).split(':');
+    if (!path.startsWith('$.')) continue;
+    if (path.startsWith('$.calls')) {
+      const key = /^\$\.calls\[\d+\]\.[^.]+\.([^.[]+)/.exec(path)?.[1];
+      if (Object.hasOwn(requestSchema().properties.filters.properties, key)) paths.add(`filters.${key}`);
+      if (['sort', 'groupBy', 'depth', 'textFields'].includes(key)) paths.add(`population.${key}`);
+      const entity = { taskId: 'task', projectId: 'project', personSicil: 'person', wbsId: 'wbs', baselineId: 'baseline' }[key];
+      if (entity && !(Array.isArray(raw.entities) ? raw.entities : []).some(item => item?.type === entity)) paths.add(`callEntity:${entity}`);
+      continue;
     }
+    const relative = path.replace(/^\$\.(?:additionalRequests\[\d+\]\.|request\.)?/, '');
+    if (typeof raw.filters?.text === 'string' && (reason === 'population' && relative.startsWith('metrics') || relative === 'filters.text' && reason === 'unsupported')) {
+      const type = metricEntityType(raw.metrics?.[0]);
+      if (['task', 'project', 'person', 'wbs', 'baseline'].includes(type)) paths.add(`textSelector:${type}`);
+      paths.add('population.collection');
+    }
+    if (relative === 'metrics' && reason === 'unique') { paths.add('metricsUnique'); continue; }
+    if (relative === 'metrics' && reason === 'maxItems') continue;
+    if (relative === 'metrics' || /^metrics\[\d+\]$/.test(relative)) {
+      if (reason === 'population') {
+        paths.add('population.tool'); paths.add('population.collection');
+        (Array.isArray(raw.fields) ? raw.fields : []).forEach((_, i) => { paths.add(`fields[${i}].tool`); paths.add(`fields[${i}].path`); });
+      } else {
+        paths.add(relative);
+        if (!(Array.isArray(raw.metrics) ? raw.metrics : []).some(metric => Object.hasOwn(METRICS, metric))) {
+          paths.add('population.tool'); paths.add('population.collection');
+        }
+      }
+    } else if (/^filters\.(period|deadline)$/.test(relative) && reason === 'conflict') {
+      for (const key of ['period', 'dateFrom', 'dateTo', ...(relative === 'filters.deadline' ? ['deadline'] : [])]) paths.add(`filters.${key}`);
+    } else if (relative === 'rank' && reason === 'operation') paths.add('rank');
+    else if (Object.hasOwn(requestSchema().properties, relative.split(/[.[]/)[0])) paths.add(relative);
+  }
+  return paths;
+}
+
+/** Yerel yol maskesi yürütme izni değildir; sonuç her zaman tam plan doğrulamasından geçer. */
+function repairOmit(value, paths, prefix = '') {
+  if (paths.has(prefix)) return undefined;
+  if (Array.isArray(value)) return value.map((item, index) => repairOmit(item, paths, `${prefix}[${index}]`));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, repairOmit(item, paths, prefix ? `${prefix}.${key}` : key)])
+    .filter(([, item]) => item != null && !(Array.isArray(item) && !item.length) && !(typeof item === 'object' && !Object.keys(item).length)));
+}
+
+function repairProjection(turn, raw, index, calls, sections, paths) {
+  const known = Object.fromEntries(Object.entries(raw).filter(([key]) => Object.hasOwn(requestSchema().properties, key)));
+  const masked = repairOmit(known, paths);
+  const transfer = [...paths].find(path => path.startsWith('textSelector:'))?.split(':')[1];
+  const selector = transfer && (masked.entities || []).find(entity => entity?.type === transfer && entity.text);
+  const textScope = transfer ? known.filters?.text || selector?.text || null : null;
+  if (transfer) {
+    masked.filters = { ...masked.filters }; delete masked.filters.text;
+    masked.entities = (masked.entities || []).filter(entity => entity !== selector);
+  }
+  const affected = index => [...paths].some(path => path.startsWith(`entities[${index}]`));
+  const placeholders = (masked.entities || []).flatMap((entity, index) => entity && affected(index)
+    ? [{ index, entity: { ...entity, id: entity.id ?? null, text: entity.text ?? null } }] : []);
+  // Sorunlu yapraklar ayrıştırmayı engellemez; alan/bağlama niyeti ayrıca, aynı maskeyle korunur.
+  const metrics = [...new Set((masked.metrics || []).filter(metric => Object.hasOwn(METRICS, metric)))];
+  const surrogateIndexes = new Set();
+  const entities = (masked.entities || []).flatMap((entity, index) => {
+    if (!entity) return [];
+    if (!affected(index)) return [entity];
+    const resolver = { task: 'rota_task_search', project: 'rota_project_search', person: 'rota_person_search' }[entity.type];
+    const call = calls.find(call => call.name === resolver && typeof call.args.text === 'string' && turn.containment.textTrusted(call.args.text));
+    return call ? [{ type: entity.type, text: call.args.text, repairSurrogate: true }] : [];
+  }).map(({ repairSurrogate, ...entity }, index) => {
+    if (repairSurrogate) surrogateIndexes.add(index);
+    return entity;
   });
-  if (!turn.repairPins.size) turn.repairPins.set('snapshot', { count: sections.length, pins, calls });
+  const probe = { ...masked, entities, operation: masked.operation || 'value', metrics: metrics.length ? metrics : ['tasks.total'], fields: [], bindings: [] };
+  if (!probe.population?.tool) probe.population = raw.population;
+  let semantic;
+  try {
+    semantic = repairSemantic(turn, probe, index, calls, sections).semantic;
+  } catch (error) {
+    if (!(error instanceof ToolError)) throw error;
+    // Daha erken şema hatası kalan anlamı serbest bırakamaz.
+    semantic = { ...masked, layout: masked.layout || 'auto', reasoning: masked.reasoning || 'deterministic' };
+  }
+  semantic = { ...semantic, entities: (semantic.entities || []).filter((_, index) => !surrogateIndexes.has(index)) };
+  for (const { index, entity } of placeholders) semantic = { ...semantic, entities: [...(semantic.entities || []).slice(0, index), entity, ...(semantic.entities || []).slice(index)] };
+  semantic = { ...semantic, metrics: masked.metrics ? [...new Set(masked.metrics.filter(item => item != null))].sort() : null,
+    fields: masked.fields || [], bindings: masked.bindings || [] };
+  if (paths.has('population.tool')) {
+    semantic.population = { dimensions: repairDimensions(semantic) };
+  }
+  semantic.entities = (semantic.entities || []).filter(entity => !paths.has(`callEntity:${entity?.type}`));
+  const projection = repairOmit(semantic, new Set([...paths].filter(path => !path.startsWith('metrics['))));
+  // Geçersiz ölçü tek bir yuvadır; onarım fazladan ölçü ekleyemez.
+  return stable({ semantic: projection, ...(transfer ? { textScope: typeof textScope === 'string' ? containmentText(textScope) : textScope } : {}), metricCount: paths.has('metrics') ? null : paths.has('metricsUnique') ? new Set(raw.metrics).size : raw.metrics?.length ?? null });
+}
+
+function pinRepair(turn, plan, details, calls = [], executionCalls = []) {
+  if (details.some(detail => String(detail).endsWith(':dropped'))) return;
+  const sections = [plan.request, ...(plan.additionalRequests || [])];
+  const ownProblems = index => details.filter(detail => index ? String(detail).startsWith(`$.additionalRequests[${index - 1}]`)
+    : !String(detail).startsWith('$.additionalRequests'));
+  const snapshot = turn.repairPins.get('snapshot');
+  if (snapshot) {
+    const used = new Set();
+    for (const pin of snapshot.pins) {
+      const index = sections.findIndex((raw, index) => !used.has(index)
+        && repairProjection(turn, raw, index, index ? [] : snapshot.calls, sections, pin.paths) === pin.projection);
+      if (index < 0) continue;
+      used.add(index);
+      for (const path of repairAllowance(ownProblems(index), sections[index])) pin.paths.add(path);
+      pin.projection = repairProjection(turn, pin.raw, pin.index, pin.index ? [] : snapshot.calls, snapshot.sections, pin.paths);
+    }
+    return;
+  }
+  const pins = sections.map((raw, index) => {
+    const own = ownProblems(index);
+    const paths = repairAllowance(own, raw || {});
+    if (!raw?.population && !calls.some(call => Array.isArray(raw?.metrics) && raw.metrics.every(metric => metricPaths(call.name, metric).length))) {
+      paths.add('population.tool'); paths.add('population.collection');
+    }
+    return { raw, index, paths, projection: repairProjection(turn, raw || {}, index, index ? [] : calls, sections, paths) };
+  });
+  const unrelated = [...new Set(details.flatMap(detail => {
+    const match = /^\$\.calls\[(\d+)\].*\.request:unrelated$/.exec(String(detail));
+    return match ? [Number(match[1])] : [];
+  }))].map(index => executionCalls[index]).filter(Boolean);
+  const additions = [...new Map(repairCalls(turn, unrelated).map(call => [readKey(call.name, { ...call.args, limit: 1 }, turn.context.today), call])).values()];
+  turn.repairPins.set('snapshot', { count: sections.length, sections, pins, calls, additions });
 }
 
 function repairMatches(turn, plan, calls = []) {
   const snapshot = turn.repairPins.get('snapshot');
   if (!snapshot) return true;
-  if (plan.intent !== PLANNER_INTENTS.ROTA) return snapshot.pins.length === 0;
+  if (plan.intent !== PLANNER_INTENTS.ROTA) return false;
   const sections = [plan.request, ...(plan.additionalRequests || [])];
-  if (sections.length !== snapshot.count) return false;
+  if (sections.length !== snapshot.count && sections.length !== snapshot.count + snapshot.additions.length) return false;
   const used = new Set();
-  // Bölüm sırası değişebilir; her sabit bölüm yalnızca bir kez eşlenir.
-  return snapshot.pins.every((pin) => {
-    const index = sections.findIndex((raw, index) => {
-      if (used.has(index)) return false;
-      try {
-        const checked = repairSemantic(turn, raw, index, index ? [] : (calls.length ? calls : snapshot.calls), sections);
-        if (pin.full) return !checked.problems.length && stable(checked.semantic) === pin.full;
-        const scope = Object.fromEntries(pin.keys.map((key) => [key, checked.semantic[key]]));
-        if (scope.rank && !pin.rankMetric) { const { metric: _metric, ...order } = scope.rank; scope.rank = order; }
-        if (pin.metrics.some((metric) => !checked.semantic.metrics.includes(metric))
-          || pin.fields.some((field) => !checked.semantic.fields.some((actual) => stable(actual) === stable(field)))
-          || pin.bindings.some((binding) => !checked.semantic.bindings.some((actual) => stable(actual) === stable(binding)))) return false;
-        return stable(scope) === pin.scope && repairDimensions(checked.semantic) === pin.dimensions;
-      } catch { return false; }
-    });
+  for (const pin of snapshot.pins) {
+    const index = sections.findIndex((raw, index) => !used.has(index)
+      && (!Array.isArray(pin.raw?.metrics) || pin.raw.metrics.every((metric, slot) => !pin.paths.has(`metrics[${slot}]`)
+        || !Object.keys(METRICS).some(id => id.startsWith(`${String(metric).split('.')[0]}.`))
+        || String(raw.metrics?.[slot]).startsWith(`${String(metric).split('.')[0]}.`)))
+      && repairProjection(turn, raw, index, index ? [] : snapshot.calls, sections, pin.paths) === pin.projection
+      && (index || repairProjection(turn, raw, index, calls, sections, pin.paths) === pin.projection));
     if (index < 0) return false;
     used.add(index);
-    return true;
+  }
+  // Ek soru yalnızca sunucunun ilgisiz saydığı çağrının nüfusuna bağlanabilir.
+  const added = sections.map((raw, index) => ({ raw, index })).filter(({ index }) => !used.has(index));
+  return added.every(({ raw, index }) => {
+    try {
+      const request = repairSemantic(turn, raw, index).semantic;
+      const callIndex = snapshot.additions.findIndex((call, position) => !used.has(`call:${position}`)
+        && requestBoundCall(request, call.name, call.args, { today: turn.context.today }));
+      if (callIndex < 0) return false;
+      used.add(`call:${callIndex}`);
+      return true;
+    } catch (error) {
+      if (!(error instanceof ToolError)) throw error;
+      return false;
+    }
   });
 }
 
@@ -635,11 +749,12 @@ function settlePart(turn, verdict, selectedBy) {
   turn.answers.sort((a, b) => a.index - b.index);
   const clarifications = turn.answers.filter((answer) => answer.verdict.clarification);
   const texts = turn.answers.flatMap((answer, position) => [clarifications.length > 1 && answer.verdict.clarification
-    ? renderPlannerClarification({ reason: 'missing_referent', locale: turn.locale }) : answer.verdict.normalized,
+    ? (answer === clarifications[0] ? renderPlannerClarification({ reason: 'missing_referent', locale: turn.locale }) : '') : answer.verdict.normalized,
     ...(turn.partNotes.has(answer.index) && turn.answers[position + 1]?.index !== answer.index
       ? [renderDependentLimit({ shown: turn.partNotes.get(answer.index), locale: turn.locale })] : [])]);
   const kind = turn.answers.every((answer) => answer.verdict.kind === 'grounded') ? 'grounded'
-    : clarifications.length ? 'clarification' : turn.answers.every((answer) => answer.verdict.kind === 'not_found') ? 'not_found' : 'unavailable';
+    : clarifications.length ? 'clarification' : turn.answers.some((answer) => answer.verdict.kind === 'unavailable') ? 'unavailable'
+      : turn.answers.some((answer) => answer.verdict.kind === 'grounded') ? 'grounded' : 'not_found';
   return {
     verdict: { ok: true, kind, ...(clarifications.length === 1 ? { clarification: clarifications[0].verdict.clarification } : {}),
       normalized: texts.filter(Boolean).join('\n\n'), citedIds: [...new Set(turn.answers.flatMap((answer) => answer.verdict.citedIds))], issues: [] },
@@ -1188,20 +1303,20 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       return finish(turn, { ok: true, kind: 'clarification', normalized: renderTextFieldsRequired({ locale: turn.locale }), citedIds: [], issues: [] }, onText);
     }
     if (deepCanHelp()) return escalation(turn, reason);
-    if (reason === 'REQUEST_DECLARATION') emitPlanned(turn, { intent: 'invalid' });
     if (turn.partCount > 1 && !ledger.revoked()) {
       const outcome = settlePart(turn, { ok: true, kind: 'unavailable', normalized: renderPartUnavailable({ locale: turn.locale }), citedIds: [], issues: [] }, 'server');
       if (outcome) return finish(turn, outcome.verdict, onText, outcome.selectedBy);
       const done = await readAndSettle();
       return done || continueTurn(turn, { escalationAvailable, onText, resumed: false });
     }
+    if (!turn.decision) emitPlanned(turn, { intent: 'invalid' });
     return failTurn(turn, onText);
   };
   let rejectedPlan = null;
   const rejectDeclaration = (calls, rawDetails, hints = [], problems = null, executionCalls = calls) => {
     const details = rawDetails || [];
     recordPlannerRejection(details[0]);
-    if (rejectedPlan && !details.includes('$.plan:repairScope')) pinRepair(turn, rejectedPlan, details, repairCalls(turn, executionCalls));
+    if (rejectedPlan && !details.includes('$.plan:repairScope')) pinRepair(turn, rejectedPlan, details, repairCalls(turn, executionCalls), executionCalls);
     if (calls.length) turn.toolsRequested = true;
     // Kapsam dışı çağrı veri okunmadan reddedilse de Derin düşünme devrini engeller.
     for (const problem of problems || []) if (ESCALATION_BLOCKING_TOOL_CODES.has(problem.error.code)) turn.toolFailureCodes.add(problem.error.code);
@@ -1248,7 +1363,6 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     }
   };
   let allowTools = resumed ? !frozen() : true;
-  let lengthExhausted = false;
   for (;;) {
     // Geçerliliğini yitiren kanıt dökümdedir: başka bir sağlayıcı turu ya da görünür yanıt olamaz.
     if (ledger.revoked()) return finish(turn, unavailableVerdict(turn.locale), onText);
@@ -1282,7 +1396,8 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       turn.work += 1;
       traceRound(turn, { purpose, startedAt, error });
       if (turn.answers.length && !session.signal?.aborted
-        && [AI_ERROR_CODES.AI_PROVIDER_UNAVAILABLE, AI_ERROR_CODES.AI_BUSY, AI_ERROR_CODES.AI_RATE_LIMITED].includes(error?.code)) {
+        && ([AI_ERROR_CODES.AI_PROVIDER_UNAVAILABLE, AI_ERROR_CODES.AI_BUSY, AI_ERROR_CODES.AI_RATE_LIMITED].includes(error?.code)
+          || error?.code === AI_ERROR_CODES.AI_TIMEOUT && error.details?.reason === 'PROVIDER_STALLED')) {
         if (await revalidate(turn) || ledger.revoked()) return finish(turn, unavailableVerdict(turn.locale), onText);
         return failTurn(turn, onText);
       }
@@ -1300,6 +1415,18 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     traceRound(turn, { purpose, startedAt, result });
     const reported = session.reportedModel?.(result.model) ?? session.model;
     if (reported) turn.models.push(reported);
+    if (result.finishReason === 'length') {
+      if (turn.repairsLeft > 0) {
+        turn.repairsLeft -= 1;
+        turn.repaired = true;
+        turn.trace.repairs += 1;
+        turn.trace.pending = 'repair';
+        allowTools = !frozen();
+        instruct(turn, 'Çıktı sağlayıcı sınırında kesildi. Önceki kesik JSON geçersizdir. En fazla 8 iddiayla daha kısa ve tam bir JSON üret; gerekli ise listeyi daralt.', { repair: true });
+        continue;
+      }
+      return fallback('LENGTH');
+    }
     const modelCalls = result.toolCalls;
     let plan = null;
     rejectedPlan = null;
@@ -1323,20 +1450,6 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     }
     let calls = turn.decision === PLANNER_INTENTS.GENERAL ? [] : plan ? plan.calls : result.toolCalls;
 
-    if (result.finishReason === 'length') {
-      if (turn.repairsLeft > 0) {
-        turn.repairsLeft -= 1;
-        turn.repaired = true;
-        turn.trace.repairs += 1;
-        turn.trace.pending = 'repair';
-        allowTools = !frozen();
-        instruct(turn, 'Çıktı sağlayıcı sınırında kesildi. Önceki kesik JSON geçersizdir. En fazla 8 iddiayla daha kısa ve tam bir JSON üret; gerekli ise listeyi daralt.', { repair: true });
-        continue;
-      }
-      lengthExhausted = true;
-      result.text = '';
-      calls = [];
-    }
     const declaration = plan ? { kind: 'route', intent: plan.plan.intent, language: plan.plan.language,
       ...(plan.plan.request ? { request: plan.plan.request } : {}) } : null;
     const declaredRoute = parseTurnRoute(declaration);
@@ -1346,7 +1459,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     // İlk planlama kararı yerine gelen düz metin karar değildir (açıklama ya da ret metni de modelin değil
     // sunucunun işidir): araç denenmeden önce mevcut bildirim bütçesiyle türlü karar istenir. Metin dökümde
     // boş bir plan çağrısı olarak reddedilir; metnin kendisi taşınmaz.
-    if (!frozen() && !turn.request && !plan && !lengthExhausted) {
+    if (!frozen() && !turn.request && !plan) {
       turn.trace.declarations += 1;
       if (rejectDeclaration(modelCalls, ['$.plan:required'], [PROSE_PLAN_HINT])) {
         if (!modelCalls.length) recordRejectedPlan(turn, [{ name: 'rota_plan', arguments: '{}' }], ['$.plan:required'], [PROSE_PLAN_HINT]);
@@ -1446,7 +1559,6 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       if (outcome) return finish(turn, outcome.verdict, onText, outcome.selectedBy);
       // Sıradaki bölüm: okumaları sunucu kurar, seçimi önce sunucu dener.
       allowTools = true;
-      lengthExhausted = false;
       const done = await readAndSettle();
       if (done) return done;
       continue;
@@ -1467,6 +1579,6 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       continue;
     }
 
-    return fallback(lengthExhausted ? 'LENGTH' : 'VERIFICATION_FAILED');
+    return fallback('VERIFICATION_FAILED');
   }
 }

@@ -1291,7 +1291,7 @@ alanını uygulamıştır.
   haklı çıkarmadı).
 - Kendi süre bütçesi (`SEMANTIC_PLANNING_BUDGET_MS` = 8 sn): bütçe aşımı
   danışmanlığın kaybıdır (Aşama 3 planlaması sürer); üst iptal
-  `AI_CANCELLED` olarak taşınır; kimlik/yetki hataları kapalı kalır, isteğe bağlı keşfin diğer iç hataları `unavailable` danışmanlığa düşer.
+  `AI_CANCELLED` olarak taşınır; kimlik/yetki, sağlayıcı anahtar/yapılandırma hataları ve sınıflandırılmamış iç hatalar yukarı taşınır; yalnızca beklenen işlemsel keşif hataları `unavailable`/`first_stage` danışmanlığa düşer.
 - **Daraltma yoktur.** Gerçek e5 ölçümünde (§8) ilk aşamanın 10 adayı bazı
   soruların gereken yeteneğini içermedi; bu yüzden araç kümesi her zaman
   kayıt defterinin tamamıdır ve **sırası sabittir**. Adaylar yalnızca sistem
@@ -1356,7 +1356,7 @@ vektör, aday metni, Sicil ya da model gerekçesi yazılmaz (sınama).
   `runGroundedTurn` döngüsü (düzeltmeler dâhil). İlk SQL'den hemen önce tur
   durur; Rota verisi okunmaz. Korumalı metin yalnızca altın sözleşmesi bunu gerektiren vakalarda açıktır; olağan sorularda kapalıdır.
 - Model kaynağı: `--model-command` (stdin `{ messages, tools, toolChoice }`,
-  stdout `{ text, toolCalls, usage, models, thinking: "off" }`) ya da `--model live`
+  stdout `{ text, toolCalls, finishReason, usage, models, thinking: "off" }`) ya da `--model live`
   (ağ geçidinin `chat.tools` oturumu). Anlamsal kaynak: `--semantic
   kosu.json` (gerçek model koşu dosyası, 4A/4B sözleşmesiyle yeniden
   oynatılır), `none` ya da `live` (üretimdeki keşif hizmeti).
@@ -1365,7 +1365,7 @@ vektör, aday metni, Sicil ya da model gerekçesi yazılmaz (sınama).
   beklenmeyen model) geçiş durur ve kaydedilmez; vaka başına yineleme yoktur.
 - Kurum içi kabul (uygulama dizininden, `.env.local` okunur):
   `node scripts/planner-evaluation.mjs live --passes 3 --out kabul.json`.
-- Dış Haiku kapısında beklenen model `claude-haiku-4-5-20251001` ve düşünme kapalıdır; her çağrı model kimliğini, `thinking: "off"` beyanını ve sıfır düşünme belirtecini raporlamalıdır. Canlı yolda düşünme yetenekli modelin kapalı kipini mevcut ağ geçidi sözleşmesi kanıtlayamıyorsa koşu sertifikalanmaz; üretim sözleşmesi bu amaçla genişletilmez. Eksik köken, başka model veya düşünme belirteci koşuyu geçersiz kılar. `--expected-model` yalnızca değerlendirme künyesidir; canlı yolda kayıtlı `chat.tools` modeliyle de birebir doğrulanır, üretim rotasını değiştirmez.
+- Dış Haiku kapısında beklenen model `claude-haiku-4-5-20251001` ve düşünme kapalıdır; her çağrı gerçek `finishReason` değerini, model kimliğini, `thinking: "off"` beyanını ve sıfır düşünme belirtecini raporlamalıdır. Canlı yolda düşünme yetenekli modelin kapalı kipini mevcut ağ geçidi sözleşmesi kanıtlayamıyorsa koşu sertifikalanmaz; üretim sözleşmesi bu amaçla genişletilmez. Eksik köken, başka model veya düşünme belirteci koşuyu geçersiz kılar. `--expected-model` yalnızca değerlendirme künyesidir; canlı yolda kayıtlı `chat.tools` modeliyle de birebir doğrulanır, üretim rotasını değiştirmez.
 - Dış komut platform kabuğunda çalışır (Windows dâhil), varsayılan 120 sn süre ve toplam 4 MiB stdout/stderr sınırına sahiptir (`--model-timeout-ms`, `--model-output-bytes` yalnızca değerlendirme içindir). Sınırda süreç ağacı sonlandırılır; geçici dizin temizlenir. Ham komut saklanmaz: yalnızca SHA-256 kimliği yazılır; ham stderr/altyapı iletileri kayda alınmaz.
 - Koşu biçimi sürüm **2**: referans gün kıyas parmak izine bağlıdır; gerçek takvim günü, bilinen/tekil vaka kimlikleri, bütün geçiş/vaka kayıtları, model/düşünme ve anlamsal köken puanlamadan önce doğrulanır. Bozuk koşu puanlanmaz. Anlamsal belge vektörleri ve yeniden sıralama puanları kimlikle bağlanır; dizi sırası anlam taşımaz. Eski sürüm koşular bu kapıyı karşılamaz.
 - Puanlanan `run`, `report`, `live` komutları kabul kapısı geçilmediyse sıfırdan farklı çıkar; `--no-score` tanısaldır. Kısmi vaka koşusu kapıyı geçiremez. Kabul için kanonik **117/117** ve zorunlu ek **19/19** her geçişte birlikte gereklidir.
@@ -1430,7 +1430,7 @@ Ek 17 vaka önceki geçişte 17/17.
 **4C kök neden yakınsaması:** Katı değerlendirici için yerel belirlenimci regresyonlar güncellendi. Bu ortamda doğrulanmış Haiku 4.5 / kurum içi model erişimi yoktur; düzeltilmiş kapıyla yeni gerçek-model ölçümü **bekliyor**. Kanonik 117/117 ve ek 19/19 gerçek modelle gösterilmeden kabul/merge-ready iddiası yoktur. Üretim uç noktası, araç, sağlayıcı, bağımlılık, göç veya yetki yolu eklenmedi; üretim araç sınırları değiştirilmedi.
 
 
-### 12.8 — İkinci kök neden yakınsaması
+### 12.9 — İkinci kök neden yakınsaması
 
 İlk karar yalnızca yerel `rota_plan` çağrısıdır; metin JSON başarılı plan sayılmaz. Okuma sınırı kanıt
 sayısından ayrıdır; başarısız okuma niyeti yeniden açmaz. Veri öncesi Derin devri karar ve onarım
@@ -1455,3 +1455,12 @@ rota, olaylar ve eksik/sıfır kullanım birlikte doğrulanır; dış komutta bi
 kabul edilmez. Her iki model yolunda her tur sızıntı denetiminden geçer. Dış komut çağıranın
 çalışma klasöründe çalışır; geçici dosyaları ayrı klasördedir. `--no-score --out` ve canlı modelle
 aynı anda dış komut açıkça reddedilir. Gerçek model kabulü hâlâ bekliyor.
+
+
+### 12.10 — Son kök neden yakınsaması
+
+- Onarım aynı kanonik izdüşümle yalnızca doğrulayıcının reddettiği yolları değiştirir; geçerli çağrı koşulları, kapsam, ölçü yuvaları ve bağımsız bölümler korunur. İlgisiz çağrı ipucu yalnızca o nüfusa bağlı ek bölüme izin verir.
+- Bölüm hatası etkin Rota kararını değiştirmez. Yerel sağlayıcı duraklaması önceki doğrulanmış yanıtları korur; çağıranın iptali ve genel süre sınırı yukarı taşınır. Kesik sağlayıcı yanıtı hiçbir niyet için kabul edilmez. Kanıtlı + bulunamadı sonucu kesinti sayılmaz; ortak açıklama yönergesi bir kez gösterilir.
+- Planlayıcı değerlendirmesi anlamsal koşunun kanonik doğrulayıcısını kullanır. Dış modelin bitiş nedeni zorunludur ve korunur. Sızıntı denetimi ham yapılandırılmış girdide çalışır (`PLANNER_GOLD_LEAK`); sayfa boyu aynı nüfusu farklı okuma saydırmaz. Geçerli başarısız model vakası ıskadır, bozuk koşu değildir.
+- Sağlayıcı anahtar/yapılandırma ve kimlik/yetki hataları gizlenmez; beklenen işlemsel danışmanlık kaybı ile sınıflandırılmamış iç hata ayrımı korunur. Yeni üretim yüzeyi, bağımlılık veya bütçe artışı yoktur.
+- Gerçek model kabulü **BEKLİYOR**: kanonik 117/117 + zorunlu ek 19/19 burada çalıştırılmadı. Ortamda canlı AI kapalıdır; dış Haiku komutu ve yerel HuggingFace çalışma zamanı yoktur. Belirlenimci sınamalar gerçek model kabulü sayılmaz.

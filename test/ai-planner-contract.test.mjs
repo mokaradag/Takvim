@@ -26,12 +26,12 @@ const plan = (args) => ({ text: '', toolCalls: [{ id: 'p1', name: 'rota_plan', a
 const prose = (text) => ({ text, toolCalls: [], finishReason: 'stop' });
 const stackFor = (t) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed({}) });
 
-async function turn(t, steps, { user = 'Rota verisini incele', planning = null, allowedTextFields = [], limits, setup = null } = {}) {
+async function turn(t, steps, { user = 'Rota verisini incele', planning = null, allowedTextFields = [], limits, setup = null, signal = null } = {}) {
   const stack = stackFor(t);
   setup?.(stack);
   const inputs = [];
   const decisions = [];
-  const session = { signal: new AbortController().signal, round: async (input) => {
+  const session = { signal: signal || new AbortController().signal, round: async (input) => {
     inputs.push(structuredClone({ messages: input.messages, tools: input.tools.map((tool) => tool.name) }));
     const step = steps.shift();
     assert.ok(step, `Beklenmeyen ek model turu: ${JSON.stringify(input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)))}`);
@@ -202,7 +202,7 @@ test('çelişkili termin penceresi SQL öncesinde reddedilir ve ipucu modelin g�
   const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, layout: 'auto',
     filters: { deadline: 'due_next_7_days', dateFrom: '2026-10-14', dateTo: '2026-10-28' } };
   const abstain = plan({ intent: 'abstain', language: 'tr', abstain: { reason: 'general' } });
-  const { result, inputs } = await turn(t, [plan({ intent: 'rota', language: 'tr', request }), abstain]);
+  const { result, inputs } = await turn(t, [plan({ intent: 'rota', language: 'tr', request }), abstain, abstain]);
   assert.equal(result.stats.attempted, 0);
   const rejection = inputs[1].messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).at(-1);
   assert.deepEqual(rejection.error.details, ['$.filters.deadline:conflict']);
@@ -273,7 +273,7 @@ const hiddenOutlook = { operation: 'value', metrics: ['subscriptions.active'], p
 test('bölüm kanıtı kardeşin NOT_FOUND ya da kullanılamıyor sonucunu gizleyemez; iki sıra da korunur', async (t) => {
   for (const [request, sibling] of [[notifications, hiddenOutlook], [hiddenOutlook, notifications]]) {
     const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request, additionalRequests: [sibling] })], { user: `Bildirimlerim ve görevin Outlook durumu ${TASKS.HIDDEN}` });
-    assert.equal(result.outcome, 'unavailable');
+    assert.equal(result.outcome, 'grounded');
     assert.match(result.text, /Kayıt bulunamadı/);
     assert.ok(result.evidence.length > 0);
     assert.equal(result.stats.attempted, 2);
@@ -545,7 +545,7 @@ test('4C son okuma turundaki sentez kanıtı korunur ve başarısız kardeşten 
   const continued = await turn(t, [plan({ intent: 'rota', language: 'tr', request: notifications, additionalRequests: [hiddenOutlook, request] })],
     { user: `Bildirimlerim, Outlook ${TASKS.HIDDEN} ve görev sayım` });
   assert.equal(continued.result.stats.attempted, 3);
-  assert.equal(continued.result.outcome, 'unavailable');
+  assert.equal(continued.result.outcome, 'grounded');
   assert.equal(continued.result.evidence.length, 2);
 });
 
@@ -561,4 +561,113 @@ test('4C bağımlı kapsam yalnızca doğrulanmış sonuç satırlarına ve rank
   const detail = { operation: 'value', metrics: ['project.lead'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', from: 0 }], layout: 'auto' };
   const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: ranked, additionalRequests: [detail] })]);
   assert.equal(result.stats.attempted, 2, 'top-1 tek ayrıntı kimliği açar');
+});
+
+test('4C yakınsama: hatalı yaprağın onarımı etkilenmeyen anlamı değiştiremez', async (t) => {
+  const base = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me', priority: ['critical'], period: 'last_7_days', deadline: 'overdue' }, layout: 'auto' };
+  const { metricPaths } = await import('../src/domain/ai/claimableEvidence.js');
+  for (const invalid of [
+    { ...base, fields: [{ metric: 'task.title', tool: 'rota_task_search', path: 'bad' }] },
+    { ...base, filters: { ...base.filters, dateFrom: '2026-10-01' } }
+  ]) {
+    const corrected = { ...base, ...(invalid.fields ? { fields: [{ ...invalid.fields[0], path: metricPaths('rota_task_search', 'task.title')[0] }] } : {}) };
+    const positive = await turn(t, [plan({ intent: 'rota', language: 'tr', request: invalid }), plan({ intent: 'rota', language: 'tr', request: corrected })]);
+    assert.ok(positive.result.stats.attempted > 0, 'yalnızca reddedilen yaprak düzeltilirse plan kabul edilir');
+    for (const mutate of [r => { delete r.filters.deadline; }, r => { r.population.sort = 'priority_desc'; }, r => { delete r.filters.priority; }, r => { r.filters.assignee = 'unassigned'; }, r => { r.operation = 'value'; delete r.population.collection; },
+      r => { r.metrics.push('task.status'); }, r => { r.population.tool = 'rota_task_analytics'; delete r.population.collection; }, r => { r.entities = [{ type: 'project', text: 'Radar' }]; }]) {
+      const changed = structuredClone(corrected); mutate(changed);
+      const result = await turn(t, [plan({ intent: 'rota', language: 'tr', request: invalid }), plan({ intent: 'rota', language: 'tr', request: changed }), plan({ intent: 'rota', language: 'tr', request: changed })], { user: 'Radar kritik görevlerim bu hafta' });
+      assert.equal(result.result.stats.attempted, 0);
+      assert.match(JSON.stringify(result.inputs[2].messages), /repairScope/);
+    }
+  }
+});
+
+test('4C yakınsama: geçersiz çağrı düzeltilir, ölçü yuvaları ve izinli ek bölüm sınırı korunur', async (t) => {
+  const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, layout: 'auto' };
+  const calls = [{ name: 'rota_task_analytics', arguments: { assignee: 'me', limit: 'bad' } }];
+  const fixed = [{ name: 'rota_task_analytics', arguments: { assignee: 'me' } }];
+  const accepted = await turn(t, [plan({ intent: 'rota', language: 'tr', request, calls }), plan({ intent: 'rota', language: 'tr', request, calls: fixed })]);
+  assert.equal(accepted.result.outcome, 'grounded');
+  const broadened = plan({ intent: 'rota', language: 'tr', request });
+  const lost = await turn(t, [plan({ intent: 'rota', language: 'tr', request, calls }), broadened, broadened]);
+  assert.equal(lost.result.stats.attempted, 0, 'geçerli çağrı koşulu çağrı kaldırılarak silinemez');
+  const invalidId = [{ name: 'rota_task_analytics', arguments: { projectId: 'bad' } }];
+  const correctedId = [{ name: 'rota_task_analytics', arguments: { projectId: PROJECTS.FULL } }];
+  const corrected = await turn(t, [plan({ intent: 'rota', language: 'tr', request, calls: invalidId }), plan({ intent: 'rota', language: 'tr', request, calls: correctedId })], { user: `Proje ${PROJECTS.FULL} görev sayısı` });
+  assert.equal(corrected.result.outcome, 'grounded');
+  const { metricPaths } = await import('../src/domain/ai/claimableEvidence.js');
+  const twoErrors = { ...request, metrics: ['tasks.typo'], fields: [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'bad' }] };
+  const metricFixed = { ...twoErrors, metrics: ['tasks.total'] };
+  const bothFixed = { ...metricFixed, fields: [{ ...metricFixed.fields[0], path: metricPaths('rota_task_analytics', 'tasks.total')[0] }] };
+  const successive = await turn(t, [plan({ intent: 'rota', language: 'tr', request: twoErrors }), plan({ intent: 'rota', language: 'tr', request: metricFixed }), plan({ intent: 'rota', language: 'tr', request: bothFixed })]);
+  assert.equal(successive.result.outcome, 'grounded', 'yeni doğrulayıcı sorunu yalnızca kendi yolunu serbest bırakır');
+  const repeated = { ...request, metrics: ['tasks.total', 'tasks.total'] };
+  const unrelatedMetric = plan({ intent: 'rota', language: 'tr', request: { ...request, metrics: ['tasks.overdue'] } });
+  const uniqueScope = await turn(t, [plan({ intent: 'rota', language: 'tr', request: repeated }), unrelatedMetric, unrelatedMetric]);
+  assert.equal(uniqueScope.result.stats.attempted, 0, 'yinelenen ölçünün reddi geçerli ölçü niyetini serbest bırakmaz');
+  assert.equal((await turn(t, [plan({ intent: 'rota', language: 'tr', request: repeated }), plan({ intent: 'rota', language: 'tr', request })])).result.outcome, 'grounded');
+  const bad = { ...request, metrics: ['tasks.total', 'tasks.typo'] };
+  const extra = { ...request, metrics: ['tasks.total', 'tasks.overdue', 'tasks.open'] };
+  const rejected = await turn(t, [plan({ intent: 'rota', language: 'tr', request: bad }), plan({ intent: 'rota', language: 'tr', request: extra }), plan({ intent: 'rota', language: 'tr', request: extra })]);
+  assert.equal(rejected.result.stats.attempted, 0);
+  const original = plan({ intent: 'rota', language: 'tr', request, calls: [{ name: 'rota_task_analytics', arguments: {} }, { name: 'rota_notifications', arguments: {} }] });
+  const expanded = await turn(t, [original, plan({ intent: 'rota', language: 'tr', request, additionalRequests: [notifications] })]);
+  assert.equal(expanded.result.stats.attempted, 2);
+  const arbitrary = plan({ intent: 'rota', language: 'tr', request, additionalRequests: [notifications, notifications] });
+  assert.equal((await turn(t, [original, arbitrary, arbitrary])).result.stats.attempted, 0);
+});
+
+test('4C yakınsama: bütün kesik niyetler reddedilir ve hiçbir okuma yapmaz', async (t) => {
+  for (const choice of [{ intent: 'clarify', clarify: { reason: 'missing_referent' } }, { intent: 'abstain', abstain: { reason: 'write' } },
+    { intent: 'general' }, { intent: 'rota', request: notifications }]) {
+    const truncated = { ...plan({ language: 'tr', ...choice }), finishReason: 'length' };
+    const { result, decisions } = await turn(t, [truncated, truncated]);
+    assert.equal(result.outcome, 'failed', choice.intent);
+    assert.equal(result.stats.attempted, 0);
+    assert.ok(!decisions.some(d => ['clarify', 'abstain', 'general', 'rota'].includes(d.intent)));
+  }
+});
+
+test('4C yakınsama: kurtarılabilir sağlayıcı kaybı kısmi kanıtı korur; iptal yukarı taşınır', async (t) => {
+  const ambiguous = { operation: 'value', metrics: ['person.jobTitle'], population: { tool: 'rota_person_search' }, entities: [{ type: 'person', text: 'Ali Veli' }], layout: 'auto' };
+  for (const code of ['AI_PROVIDER_UNAVAILABLE', 'AI_BUSY', 'AI_RATE_LIMITED', 'AI_TIMEOUT']) {
+    const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: notifications, additionalRequests: [ambiguous] }),
+      () => { throw new AiError(code, { details: { reason: 'PROVIDER_STALLED' } }); }], { user: 'Bildirim sayım ve Ali Veli unvanı' });
+    assert.equal(result.outcome, 'unavailable'); assert.match(result.text, /okunmamış/); assert.equal(result.evidence.length, 1);
+  }
+  await assert.rejects(turn(t, [plan({ intent: 'rota', language: 'tr', request: notifications, additionalRequests: [ambiguous] }),
+    () => { throw new AiError('AI_CANCELLED'); }], { user: 'Bildirim sayım ve Ali Veli unvanı' }), e => e.code === 'AI_CANCELLED');
+  const controller = new AbortController();
+  await assert.rejects(turn(t, [plan({ intent: 'rota', language: 'tr', request: notifications, additionalRequests: [ambiguous] }),
+    () => { controller.abort(); throw new AiError('AI_TIMEOUT', { details: { reason: 'PROVIDER_STALLED' } }); }],
+  { user: 'Bildirim sayım ve Ali Veli unvanı', signal: controller.signal }), e => e.code === 'AI_TIMEOUT');
+  const found = await turn(t, [plan({ intent: 'rota', language: 'tr', request: notifications, additionalRequests: [hiddenOutlook] })], { user: `Bildirim sayım Outlook ${TASKS.HIDDEN}` });
+  assert.notEqual(found.result.outcome, 'unavailable');
+});
+
+test('4C yakınsama: kimlik, yetki, sağlayıcı anahtarı ve iç hata danışmanlık kaybıyla gizlenmez', async () => {
+  for (const code of ['UNAUTHORIZED', 'FORBIDDEN', 'SESSION_REQUIRED', 'AI_UNAUTHORIZED', 'AI_KEY_INVALID', 'AI_KEY_MISSING', 'AI_CANCELLED']) {
+    await assert.rejects(semanticPlanningAdvice({ query: 'x', catalog, retrieve: async () => { throw Object.assign(new Error('private'), { code }); } }), e => e.code === code);
+  }
+  for (const reason of ['TIMEOUT', 'MODEL_UNAVAILABLE', 'INTERNAL_UNAVAILABLE']) {
+    assert.equal((await semanticPlanningAdvice({ query: 'x', catalog, retrieve: async () => ({ status: 'unavailable', candidates: [], failure: { reason } }) })).state, 'unavailable');
+  }
+});
+
+test('4C yakınsama: bildirim tükenmesi etkin Rota kararını ve bağımsız kardeş okumayı bozmaz', async (t) => {
+  const unresolved = { operation: 'value', metrics: ['project.baselineCount'], population: { tool: 'rota_task_search' }, entities: [{ type: 'wbs', text: 'Radar' }], layout: 'auto' };
+  const invalid = { text: '', finishReason: 'tool_calls', toolCalls: [{ name: 'rota_task_analytics', arguments: '{}' }] };
+  const { result, decisions } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: unresolved, additionalRequests: [notifications] }), invalid, invalid], { user: 'Radar iş paketi baz plan sayısı ve bildirim sayım' });
+  assert.equal(result.stats.attempted, 1);
+  assert.match(result.text, /okunmamış/);
+  assert.deepEqual(decisions.map(d => d.intent), ['rota']);
+});
+
+test('4C yakınsama: çoklu aday açıklamasının ortak yönergesi bir kez gösterilir', async (t) => {
+  const ambiguous = { operation: 'value', metrics: ['person.jobTitle'], population: { tool: 'rota_person_search' }, entities: [{ type: 'person', text: 'Ali Veli' }], layout: 'auto' };
+  const clarify = input => prose(JSON.stringify({ kind: 'clarification', evidence: JSON.parse(input.messages.filter(m => m.role === 'tool').at(-1).content).evidenceId }));
+  const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: ambiguous, additionalRequests: [ambiguous] }), clarify, clarify], { user: 'Ali Veli unvanı ve işi' });
+  const guidance = renderPlannerClarification({ reason: 'missing_referent', locale: 'tr' });
+  assert.equal(result.text.split(guidance).length - 1, 1);
 });

@@ -27,7 +27,7 @@ function scriptedModel(args) {
     inputs,
     async complete(payload) {
       inputs.push(JSON.stringify(payload));
-      return { text: '', toolCalls: [{ id: 'call_1', name: 'rota_plan', arguments: JSON.stringify(args), oversize: false }], usage: { inputTokens: 12, outputTokens: 8, thinkingTokens: 0 }, models: ['scripted'], thinking: 'off', error: null, durationMs: 0 };
+      return { text: '', toolCalls: [{ id: 'call_1', name: 'rota_plan', arguments: JSON.stringify(args), oversize: false }], finishReason: 'tool_calls', usage: { inputTokens: 12, outputTokens: 8, thinkingTokens: 0 }, models: ['scripted'], thinking: 'off', error: null, durationMs: 0 };
     }
   };
 }
@@ -253,6 +253,7 @@ test('koşu bütünlüğü, tarih ve gerçek model/düşünme kökeni puanlamada
   const changed = { ...run, referenceDate: '2026-10-20' };
   assert.throws(() => scorePlannerRun(changed, loadPlannerBenchmark({ referenceDate: changed.referenceDate })), /PLANNER_RUN_STALE/);
   rejects((r) => { r.records[0].rounds[0].models = ['claude-sonnet-4-5']; }, /PLANNER_MODEL_MISMATCH/);
+  rejects((r) => { r.records[0].rounds[0].finishReason = null; }, /PLANNER_COMPLETION_UNVERIFIED/);
   rejects((r) => { r.records[0].rounds[0].thinking = 2; }, /PLANNER_THINKING_UNVERIFIED/);
   rejects((r) => { r.records[0].rounds[0].thinking = null; }, /PLANNER_THINKING_UNVERIFIED/);
   rejects((r) => { r.model.command = 'secret'; });
@@ -282,13 +283,17 @@ test('dış model komutu sınırlıdır, altyapı hatası puan değildir ve komu
     const model = externalModel({ command: command(code), inputs: null, guard: () => {}, timeoutMs: error === 'MODEL_COMMAND_TIMEOUT' ? 50 : 5000, outputBytes: 1024 });
     try { assert.equal((await model.complete(payload)).error, error); } finally { model.dispose(); }
   }
-  const reply = { text: '', toolCalls: [{ name: 'rota_plan', arguments: { intent: 'general', language: 'tr' } }], models: ['claude-haiku-4-5-20251001'], thinking: 'off', usage: { inputTokens: 7, outputTokens: 3, thinkingTokens: 0 } };
+  const reply = { text: '', toolCalls: [{ name: 'rota_plan', arguments: { intent: 'general', language: 'tr' } }], models: ['claude-haiku-4-5-20251001'], finishReason: 'tool_calls', thinking: 'off', usage: { inputTokens: 7, outputTokens: 3, thinkingTokens: 0 } };
   const rawCommand = command(`process.stdout.write(${JSON.stringify(JSON.stringify(reply))})`) + ' --api-key NEVER_SAVE_THIS';
   const { flags } = parseArguments(['run', '--model-command', rawCommand, '--cases', 'pl-018', '--reference-date', '2026-10-14']);
   const run = await runEvaluation(flags);
   assert.equal(run.records[0].rounds[0].input, 7);
   assert.equal(run.records[0].rounds[0].output, 3);
   assert.equal(run.records[0].rounds[0].thinking, 0);
+  const truncatedCommand = command(`process.stdout.write(${JSON.stringify(JSON.stringify({ ...reply, finishReason: 'length' }))})`);
+  const truncatedRun = await runEvaluation({ ...flags, modelCommand: truncatedCommand });
+  assert.equal(truncatedRun.records[0].outcome, 'failed');
+  assert.ok(truncatedRun.records[0].rounds.every(round => round.finishReason === 'length'));
   assert.ok(!JSON.stringify(run).includes('NEVER_SAVE_THIS'));
   assert.ok(!JSON.stringify(run).includes(rawCommand));
   const runPath = path.join(dir, 'run.json');
@@ -300,7 +305,7 @@ test('dış model komutu sınırlıdır, altyapı hatası puan değildir ve komu
   assert.equal(reported.summary.byPass[0].correct, 1);
   assert.equal(reported.summary.gatePassed, false);
   assert.ok(!cli.stdout.includes('NEVER_SAVE_THIS'));
-  for (const patch of [{ models: ['claude-sonnet-4-5'] }, { thinking: 'on' }, { usage: { thinkingTokens: 1 } }, { error: 'provider outage with private token' }]) {
+  for (const patch of [{ models: ['claude-sonnet-4-5'] }, { thinking: 'on' }, { usage: { thinkingTokens: 1 } }, { error: 'provider outage with private token' }, { finishReason: null }]) {
     const badCommand = command(`process.stdout.write(${JSON.stringify(JSON.stringify({ ...reply, ...patch }))})`);
     await assert.rejects(runEvaluation({ ...flags, modelCommand: badCommand }), /altyapı hatası/);
   }
@@ -320,8 +325,8 @@ test('anlamsal koşuda belgeler ve sayısal yeniden sıralama puanları kimlikle
   const c = loadPlannerBenchmark().cases[0];
   const documents = items.items.map((item, index) => ({ id: item.id, text: item.text, vector: [items.items.length - index, 1] }));
   const run = { format: 'mergen-rota-semantic-model-run', version: 1, benchmark: 'test-benchmark', catalogue: items.fingerprint,
-    embedding: { model: 'local-double', provider: 'test', preprocessing: 'none', documents, queries: [{ case: c.id, text: c.text, vector: [1, 0] }] },
-    rerank: { model: 'local-rerank', provider: 'test', queries: [{ case: c.id, scores: items.items.map((item, index) => ({ id: item.id, score: index })) }] } };
+    embedding: { model: 'local-double', provider: 'test', preprocessing: 'none', queryPrefix: '', documentPrefix: '', batchSize: 1, documentLatencyMs: 1, documents, queries: [{ case: c.id, text: c.text, vector: [1, 0], latencyMs: 1 }] },
+    rerank: { model: 'local-rerank', provider: 'test', batchSize: 1, queries: [{ case: c.id, latencyMs: 1, scores: items.items.map((item, index) => ({ id: item.id, score: index })) }] } };
   const file = path.join(dir, 'run.json');
   const read = (value) => { writeFileSync(file, JSON.stringify(value)); return candidatesFromRun(file, { cases: [c], semanticFingerprint: 'test-benchmark' }).byCase.get(c.id); };
   const normal = read(run);
@@ -367,6 +372,13 @@ test('4C zorunlu kimlikler kapalıdır; eksik ya da değiştirilmiş 19 ek vaka 
 
 test('4C gold düzeltmeleri İngilizce, bildirim listesi, sorumlu VE durum ve tüm açıklama konularını sınar', async () => {
   const loaded = loadPlannerBenchmark();
+  const { metricPaths } = await import('../src/domain/ai/claimableEvidence.js');
+  const notification = loaded.cases.find(c => c.id === 'pl-005');
+  assert.deepEqual(notification.example.request.metrics, ['task.title', 'notification.unread']);
+  for (const metric of notification.example.request.metrics) for (const source of ['scheduleRequests', 'assignmentCoordination', 'taskEvents']) {
+    assert.ok(metricPaths('rota_notifications', metric).some(path => path.includes(`${source}.latest.*.`)), `${metric}: ${source}`);
+  }
+
   for (const [id, mutate] of [
     ['pl-017', (r) => r.language = 'tr'],
     ['pl-005', (r) => { r.plan.requests[0].operation = 'value'; r.plan.requests[0].metrics = ['notifications.unread']; }],
@@ -424,7 +436,7 @@ test('4C canlı yol aynı sızıntı ve model denetimini uygular; eksik kullanı
   const gateway = (patch = {}, event = null) => ({ runToolSession: async ({ run }) => {
     try { return await run({ model: 'qwen', signal: new AbortController().signal, round: async (input) => {
       if (event) await input.onEvent(event);
-      return { text: '', toolCalls: [{ name: 'rota_plan', arguments: JSON.stringify(args) }], model: 'qwen', ...patch };
+      return { text: '', toolCalls: [{ name: 'rota_plan', arguments: JSON.stringify(args) }], model: 'qwen', finishReason: 'tool_calls', ...patch };
     } }); } catch { throw Object.assign(new Error('mapped'), { code: 'AI_INTERNAL_ERROR' }); }
   } });
   const execute = async (patch, event = null, thinking = 'off', guard = leakGuard(loaded)) => planCase({ testCase: c,
@@ -469,19 +481,22 @@ test('4C anlamsal artifakt tüm 136 soruyu ve tüm belge skorlarını kapsar; be
   const loaded = loadPlannerBenchmark();
   const items = createSemanticCatalogue(semanticToolDefinitions(rotaToolNames().map((name) => getRotaTool(name)))).catalogue;
   const run = { format: 'mergen-rota-semantic-model-run', version: 1, benchmark: loaded.semanticFingerprint, catalogue: items.fingerprint,
-    embedding: { model: 'test-double', provider: 'test', preprocessing: 'none', documents: items.items.map((item, index) => ({ id: item.id, text: item.text, vector: [items.items.length - index, 1] })),
-      queries: loaded.cases.map((c) => ({ case: c.id, text: c.text, vector: [1, 0] })) },
-    rerank: { model: 'test-rerank', queries: loaded.cases.map((c) => ({ case: c.id, scores: items.items.map((item, index) => ({ id: item.id, score: index })) })) } };
+    embedding: { model: 'test-double', provider: 'test', preprocessing: 'none', queryPrefix: '', documentPrefix: '', batchSize: 1, documentLatencyMs: 1, documents: items.items.map((item, index) => ({ id: item.id, text: item.text, vector: [items.items.length - index, 1] })),
+      queries: loaded.cases.map((c) => ({ case: c.id, text: c.text, vector: [1, 0], latencyMs: 1 })) },
+    rerank: { model: 'test-rerank', provider: 'test', batchSize: 1, queries: loaded.cases.map((c) => ({ case: c.id, latencyMs: 1, scores: items.items.map((item, index) => ({ id: item.id, score: index })) })) } };
   const file = path.join(dir, 'run.json');
   const read = (value) => { writeFileSync(file, JSON.stringify(value)); return candidatesFromRun(file, loaded); };
   const valid = read(run);
   assert.equal(valid.byCase.size, 136);
   assert.equal(valid.byCase.get('pl-019').status, 'reranked');
-  const failed = clone(run); failed.rerank.queries[0] = { case: 'tr-001', failure: 'INFERENCE_FAILED' };
+  const failed = clone(run); failed.rerank.queries[0] = { case: 'tr-001', failure: 'INFERENCE_FAILED', latencyMs: 1 };
   assert.equal(read(failed).byCase.get('tr-001').status, 'first_stage');
   for (const mutate of [(r) => r.embedding.queries.pop(), (r) => r.rerank.queries.pop(),
     (r) => r.rerank.queries[0].scores.pop(), (r) => r.rerank.queries[0].scores.push(clone(r.rerank.queries[0].scores[0])),
-    (r) => r.rerank.queries[0] = { case: 'tr-001', failure: 'OTHER' }]) {
+    (r) => r.rerank.queries[0] = { case: 'tr-001', failure: 'OTHER' },
+    (r) => r.rerank.queries[0] = { case: 'tr-001', failure: 'INFERENCE_FAILED' },
+    (r) => { r.rerank.provider = ''; }, (r) => { r.embedding.documentLatencyMs = -1; },
+    (r) => { r.rerank.queries[0].latencyMs = '1'; }]) {
     const invalid = clone(run); mutate(invalid); assert.throws(() => read(invalid), /SEMANTIC_/);
   }
 });
@@ -498,4 +513,43 @@ test('4C dış komut çağıranın klasörüne göre çözülür ve geçici klas
   const model = externalModel({ command: `"${process.execPath}" "${path.relative(process.cwd(), file)}"`, guard: () => {} });
   try { const reply = await model.complete({ messages: [], tools: [], toolChoice: 'none' }); assert.equal(reply.error, null); assert.equal(reply.text, process.cwd()); }
   finally { model.dispose(); }
+});
+
+test('4C yakınsama: ham yapılandırılmış metindeki gold sızıntısı kararlı kodla durur', async () => {
+  const { leakGuard, liveTurn } = await import('../scripts/planner-evaluation.mjs');
+  const loaded = loadPlannerBenchmark(); const guard = leakGuard(loaded);
+  for (const payload of [{ messages: [{ content: '{"gold":1}' }] }, { messages: [{ content: JSON.stringify({ payload: '{"gold":1}' }) }] }, { tools: [{ description: '{"needs":[]}' }] }, { messages: [{ content: [{ text: '{"expect":"answer"}' }] }] }]) {
+    assert.throws(() => guard(payload), e => e.code === 'PLANNER_GOLD_LEAK');
+  }
+  const gateway = { runToolSession: async ({ run }) => {
+    try { return await run({ model: 'qwen', round: async () => { throw Error('should not reach'); } }); }
+    catch { throw Object.assign(new Error('mapped'), { code: 'AI_INTERNAL_ERROR' }); }
+  } };
+  const result = await planCase({ testCase: { ...loaded.cases[0], text: '{"gold":1}' }, runTurn: liveTurn(gateway, 'qwen', guard, { thinking: 'off' }), adviceFor: unavailable, now: loaded.now, catalog });
+  assert.equal(result.error, 'PLANNER_GOLD_LEAK');
+});
+
+test('4C yakınsama: kesik dış model yanıtı başarısız vaka sayılır, bozuk kayıt kabul edilmez', async () => {
+  const { PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, scorePlannerRun } = await import('../scripts/planner-scoring.mjs');
+  const loaded = loadPlannerBenchmark(); const c = loaded.cases[0]; const model = scriptedModel(answerPlan(c, loaded.referenceDate));
+  const complete = model.complete.bind(model); model.complete = async p => ({ ...await complete(p), finishReason: 'length' });
+  const outcome = await planCase({ testCase: c, model, adviceFor: unavailable, now: loaded.now, catalog });
+  assert.equal(outcome.outcome, 'failed');
+  const record = recordOf(c, 1, outcome);
+  const run = { format: PLANNER_RUN_FORMAT, version: PLANNER_RUN_VERSION, benchmark: loaded.fingerprint, semanticBenchmark: loaded.semanticFingerprint, referenceDate: loaded.referenceDate,
+    passes: 1, cases: [c.id], records: [record], semantic: { mode: 'none' }, model: { commandHash: '0'.repeat(64) }, qualification: { expectedModel: 'scripted', thinking: 'off' } };
+  assert.equal(scorePlannerRun(run, loaded).byPass[0].correct, 0);
+  record.language = null;
+  assert.equal(scorePlannerRun(run, loaded).byPass[0].correct, 0);
+  for (const mutate of [r => { r.records[0].language = 'xx'; }, r => { r.records[0].plan = {}; }, r => { r.records[0].rounds = []; }]) {
+    const bad = clone(run); mutate(bad); assert.throws(() => scorePlannerRun(bad, loaded), /PLANNER_RUN_INVALID/);
+  }
+});
+
+test('4C yakınsama: sayfa boyu aynı nüfusu ayrı okuma yapmaz', async () => {
+  const loaded = loadPlannerBenchmark(); const c = loaded.cases.find(c => c.id === 'tr-008'); const args = answerPlan(c, loaded.referenceDate);
+  const { record } = await decide(loaded, c, args);
+  const call = record.plan.calls.find(c => c.name === 'rota_task_search'); assert.ok(call);
+  record.plan.calls.push({ ...clone(call), args: { ...call.args, limit: 1 } });
+  assert.ok(scoreDecision(c, record, { referenceDate: loaded.referenceDate }).reasons.includes('calls:duplicate'));
 });

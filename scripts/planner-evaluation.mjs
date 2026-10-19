@@ -11,7 +11,7 @@
  *     tur durur; hiçbir Rota verisi okunmaz. Karar altın etiketlerle `planner-scoring.mjs` içinde puanlanır.
  *
  *     Model, verilen dış komutla çağrılır: stdin üretim turunun `session.round` girdisidir (`{ messages, tools,
- *     toolChoice }`), stdout `{ text, toolCalls, usage, models }`. Komut modele kendi yerel araç çağırma
+ *     toolChoice }`), stdout `{ text, toolCalls, finishReason, usage, models }`. Komut modele kendi yerel araç çağırma
  *     arayüzünü verir ve araç yürütmez. Modele giden girdi vaka kimliği, beklenti ya da altın etiket taşıyamaz
  *     (her çağrıdan önce denetlenir). `--inputs` modele giden her girdiyi ve yanıtı denetim için yazar.
  *
@@ -37,6 +37,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { registerServerOnlyShim } from '../test/helpers/serverOnlyShim.mjs';
+import { readModelRun } from './semantic-evaluation.mjs';
 import { loadPlannerBenchmark, PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, WEAK_PLANNER_MODEL, validCalendarDate, scorePlannerRun } from './planner-scoring.mjs';
 
 registerServerOnlyShim();
@@ -50,7 +51,7 @@ const { createToolTurnContext } = await import('../src/server/ai/tools/toolConte
 const { toolCatalogForModel, getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/toolRegistry.js');
 const { SEMANTIC_RETRIEVAL_DEPTH } = await import('../src/server/ai/semanticRetrieval.js');
 const {
-  applyRerankScores, createEmbeddingSpace, createSemanticCatalogue, createSemanticIndex, rankSemanticIndex, semanticToolDefinitions
+  applyRerankScores, createSemanticCatalogue, createSemanticIndex, rankSemanticIndex, semanticToolDefinitions
 } = await import('../src/domain/ai/semanticContract.js');
 
 function fail(message) {
@@ -91,10 +92,17 @@ function parseArguments([command, ...rest]) {
 
 function leakGuard(benchmark) {
   const ids = benchmark.cases.map((testCase) => testCase.id);
-  const markers = [/\b(?:tr|pl)-\d{3}\b/, /"(?:needs|avoid|expect|gold)"\s*:/, /ai-(?:semantic|planner)-benchmark/, /planner-scoring/];
-  return (text) => {
-    if (markers.some((marker) => marker.test(text)) || ids.some((id) => text.includes(id))) {
-      fail('Modele giden metinde vaka kimliği ya da altın etiket izi bulundu; koşu durduruldu.');
+  const markers = [/\b(?:tr|pl)-\d{3}\b/, /"(?:needs|avoid|expect|gold)\\*"\s*:/, /ai-(?:semantic|planner)-benchmark/, /planner-scoring/];
+  return function inspect(value) {
+    if (typeof value === 'string') {
+      if (markers.some((marker) => marker.test(value)) || ids.some((id) => value.includes(id))) {
+        throw Object.assign(new Error('Modele giden metinde vaka kimliği ya da altın etiket izi bulundu; koşu durduruldu.'), { code: 'PLANNER_GOLD_LEAK' });
+      }
+    } else if (value && typeof value === 'object') {
+      for (const [key, item] of Object.entries(value)) {
+        inspect(`"${key}":`);
+        inspect(item);
+      }
     }
   };
 }
@@ -119,21 +127,11 @@ function verifyModel(models, usage, expectedModel, thinkingMode) {
   if (thinkingMode !== 'off' || usage?.output_tokens_details?.thinking_tokens !== 0 || usage.thinkingBlocks != null && usage.thinkingBlocks !== 0) reject('PLANNER_THINKING_UNVERIFIED');
 }
 
-function uniqueRows(rows, key) {
-  if (!Array.isArray(rows) || !rows.length) fail('SEMANTIC_IDS_INVALID');
-  const result = new Map();
-  for (const row of rows) {
-    if (!row || typeof row[key] !== 'string' || !row[key] || result.has(row[key])) fail('SEMANTIC_IDS_INVALID');
-    result.set(row[key], row);
-  }
-  return result;
-}
-
 /* ── Model bağdaştırıcıları ─────────────────────────────────────────── */
 
 /**
  * Dış model komutu: stdin üretim turunun girdisini (`{ messages, tools, toolChoice }`, OpenAI uyumlu iletiler ve
- * işlev araçları) alır; stdout `{ text, toolCalls: [{ name, arguments }], usage, models }` yazar. Komut modele
+ * işlev araçları) alır; stdout `{ text, toolCalls: [{ name, arguments }], finishReason, usage, models }` yazar. Komut modele
  * kendi yerel araç çağırma biçimini verir (ör. bir sağlayıcının yerel araç arayüzü); araç yürütmez.
  */
 function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes = 4 * 1024 * 1024 }) {
@@ -176,7 +174,7 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
   return {
     async complete({ messages, tools, toolChoice }) {
       const payload = JSON.stringify({ messages, tools, toolChoice });
-      guard(payload);
+      guard({ messages, tools, toolChoice });
       const id = (sequence += 1);
       if (inputs) {
         const system = String(messages[0]?.role === 'system' ? messages[0].content : '');
@@ -192,7 +190,7 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
       const toolCalls = (Array.isArray(reply?.toolCalls) ? reply.toolCalls : []).filter((call) => call && typeof call.name === 'string')
         .map((call, index) => ({ id: `call_${id}_${index + 1}`, name: call.name, arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments ?? {}), oversize: false }));
       return { text: typeof reply?.text === 'string' ? reply.text : '', toolCalls, usage: normalizedUsage(reply?.usage), thinking: reply?.thinking === 'off' ? 'off' : 'unverified', models: Array.isArray(reply?.models) ? reply.models : [],
-        error: reply?.error ?? null, durationMs: Date.now() - startedAt };
+        finishReason: reply?.finishReason ?? null, error: reply?.error ?? null, durationMs: Date.now() - startedAt };
     },
     dispose() { rmSync(workdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   };
@@ -214,38 +212,27 @@ function candidatesFromRun(file, benchmark) {
   let run;
   try { run = JSON.parse(readFileSync(file, 'utf8')); } catch { fail('Anlamsal koşu dosyası okunamadı.'); }
   const items = catalogue();
-  if (run?.format !== 'mergen-rota-semantic-model-run' || run.version !== 1 || run.benchmark !== benchmark.semanticFingerprint) fail('SEMANTIC_RUN_INVALID');
-  if (run?.catalogue !== items.fingerprint) fail('Anlamsal koşu dosyası güncel araç kataloğuna ait değil.');
-  const space = createEmbeddingSpace({ profile: 'embedding', model: run.embedding?.model, provider: run.embedding?.provider }, run.embedding?.preprocessing);
-  if (!space) fail('Anlamsal koşu dosyasının gömme kökeni geçersiz.');
-  const documents = uniqueRows(run.embedding?.documents, 'id');
-  if (documents.size !== items.items.length || items.items.some((item) => !documents.has(item.id) || documents.get(item.id).text !== item.text)) fail('SEMANTIC_DOCUMENT_IDS_INVALID');
+  let trusted;
+  try { trusted = readModelRun(run, { catalogue: items, benchmark: { fingerprint: benchmark.semanticFingerprint, cases: benchmark.cases } }); }
+  catch { fail('SEMANTIC_RUN_INVALID'); }
+  const { space, documents, queries, rerank } = trusted;
   const index = createSemanticIndex(items, space, items.items.map((item, position) => ({ index: position, vector: documents.get(item.id).vector })));
-  if (!index.ok) fail(`Anlamsal dizin kurulamadı: ${index.reason}`);
-  const queries = uniqueRows(run.embedding?.queries, 'case');
-  const known = new Set(benchmark.cases.map((testCase) => testCase.id));
-  if (queries.size !== known.size || [...queries.keys()].some((id) => !known.has(id))) fail('SEMANTIC_QUERY_IDS_INVALID');
-  const reranks = run.rerank ? uniqueRows(run.rerank.queries, 'case') : new Map();
-  if (run.rerank && (!run.rerank.model || reranks.size !== known.size || [...reranks.keys()].some((id) => !known.has(id)))) fail('SEMANTIC_RERANK_IDS_INVALID');
+  if (!index.ok) fail('SEMANTIC_VECTOR_INVALID');
   const result = new Map();
   for (const testCase of benchmark.cases) {
     const query = queries.get(testCase.id);
-    if (!query || query.text !== testCase.text) fail('SEMANTIC_QUERY_INVALID');
     const ranked = rankSemanticIndex(index.index, { space, embeddings: [{ index: 0, vector: query.vector }], limit: Math.min(SEMANTIC_RETRIEVAL_DEPTH, items.items.length) });
     if (!ranked.ok) fail('SEMANTIC_VECTOR_INVALID');
-    const rerank = reranks.get(testCase.id);
-    const scores = rerank?.scores;
-    if (Array.isArray(scores)) {
-      const entries = uniqueRows(scores, 'id');
-      if (entries.size !== items.items.length || [...entries].some(([id, entry]) => !items.items.some((item) => item.id === id) || typeof entry.score !== 'number' || !Number.isFinite(entry.score))
-        || ranked.candidates.some((candidate) => !entries.has(candidate.id))) fail('SEMANTIC_RERANK_SCORES_INVALID');
-      const byId = new Map([...entries].map(([id, entry]) => [id, entry.score]));
-      const reranked = applyRerankScores(ranked.candidates, ranked.candidates.map((candidate, position) => ({ index: position, score: byId.get(candidate.id) })));
+    const outcome = rerank?.outcomes.get(testCase.id);
+    if (outcome === 'invalid') fail('SEMANTIC_RERANK_SCORES_INVALID');
+    if (outcome === 'ok') {
+      const scores = rerank.scores.get(testCase.id);
+      const reranked = applyRerankScores(ranked.candidates, ranked.candidates.map((candidate, index) => ({ index, score: scores.get(candidate.id).score })));
       if (!reranked.ok) fail('SEMANTIC_RERANK_SCORES_INVALID');
-      result.set(testCase.id, { status: 'reranked', candidates: reranked.candidates, failure: null }); continue;
+      result.set(testCase.id, { status: 'reranked', candidates: reranked.candidates, failure: null });
+    } else {
+      result.set(testCase.id, { status: 'first_stage', candidates: ranked.candidates, failure: rerank ? { reason: 'RERANK_FAILED' } : null });
     }
-    if (run.rerank && (rerank?.failure !== 'INFERENCE_FAILED' || scores !== undefined)) fail('SEMANTIC_RERANK_SCORES_INVALID');
-    result.set(testCase.id, { status: 'first_stage', candidates: ranked.candidates, failure: run.rerank ? { reason: 'RERANK_FAILED' } : null });
   }
   return { provenance: { model: run.embedding.model, provider: run.embedding.provider, preprocessing: run.embedding.preprocessing,
     runtime: run.embedding.runtime ?? null, reranker: run.rerank?.model ?? null }, byCase: result };
@@ -297,11 +284,14 @@ function externalTurn(model, expectedModel) {
     async round({ messages, tools, toolChoice }) {
       const completion = await model.complete({ messages, tools, toolChoice });
       completion.usage = normalizedUsage(completion.usage);
-      rounds.push({ thinkingMode: completion.thinking, durationMs: completion.durationMs, usage: completion.usage, models: completion.models, toolCalls: completion.toolCalls.length, error: completion.error });
+      rounds.push({ finishReason: completion.finishReason ?? null, thinkingMode: completion.thinking, durationMs: completion.durationMs, usage: completion.usage, models: completion.models, toolCalls: completion.toolCalls.length, error: completion.error });
       // Komutun kendi hatası (süreç, kimlik doğrulama, beklenmeyen model) modelin kararı değildir: vaka altyapı hatasıyla biter.
       if (completion.error) throw Object.assign(new Error(completion.error), { code: completion.error });
-      if (expectedModel) verifyModel(completion.models, completion.usage, expectedModel, completion.thinking);
-      return { text: completion.text, toolCalls: completion.toolCalls, finishReason: completion.toolCalls.length ? 'tool_calls' : 'stop', model: null,
+      if (expectedModel) {
+        verifyModel(completion.models, completion.usage, expectedModel, completion.thinking);
+        if (!['stop', 'tool_calls', 'length', 'content_filter'].includes(completion.finishReason)) fail('PLANNER_COMPLETION_UNVERIFIED');
+      }
+      return { text: completion.text, toolCalls: completion.toolCalls, finishReason: completion.finishReason ?? (completion.toolCalls.length ? 'tool_calls' : 'stop'), model: null,
         configuredModel: 'planner-under-test', modelMismatch: false, usage: null, durationMs: completion.durationMs, firstEventMs: null };
     }
   }), options);
@@ -317,7 +307,7 @@ function liveTurn(gateway, expectedModel, guard, route) {
     profile: 'chat.tools',
     run: async (session) => {
       const recording = Object.freeze({ ...session, async round(input) {
-        guard(JSON.stringify({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice }));
+        guard({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice });
         const startedAt = Date.now();
         let thinking = false;
         const result = await session.round({ ...input, onEvent: async (event) => {
@@ -328,7 +318,7 @@ function liveTurn(gateway, expectedModel, guard, route) {
         const usage = normalizedUsage(result.usage || {});
         // Kayıtlı düşünmesiz rota, olay gözlemi ve sağlayıcının eksik/sıfır kullanım biçimi birlikte doğrulanır.
         if (route?.thinking === 'off' && !thinking && usage.output_tokens_details.thinking_tokens == null) usage.output_tokens_details.thinking_tokens = 0;
-        rounds.push({ thinkingMode: thinking ? 'on' : route?.thinking, durationMs: Date.now() - startedAt, models: [model].filter(Boolean),
+        rounds.push({ finishReason: result.finishReason ?? null, thinkingMode: thinking ? 'on' : route?.thinking, durationMs: Date.now() - startedAt, models: [model].filter(Boolean),
           toolCalls: result.toolCalls.length, error: null, usage });
         if (session.model !== expectedModel || result.modelMismatch) fail('PLANNER_MODEL_MISMATCH');
         verifyModel([model], usage, expectedModel, thinking ? 'on' : route?.thinking);
@@ -390,7 +380,7 @@ function recordOf(testCase, pass, outcome) {
     general: outcome.decisions.some((decision) => decision.intent === 'general'),
     declarations: outcome.decisions.at(-1)?.declarations ?? null,
     semantic: { state: outcome.semantic.state, candidates: [...outcome.semantic.candidates] },
-    rounds: outcome.rounds.map((round) => ({ durationMs: round.durationMs, toolCalls: round.toolCalls,
+    rounds: outcome.rounds.map((round) => ({ finishReason: round.finishReason ?? null, durationMs: round.durationMs, toolCalls: round.toolCalls,
       input: round.usage ? (round.usage.input_tokens ?? 0) + (round.usage.cache_read_input_tokens ?? 0) + (round.usage.cache_creation_input_tokens ?? 0) : null,
       output: round.usage?.output_tokens ?? null, thinking: round.usage?.output_tokens_details?.thinking_tokens ?? null,
       thinkingBlocks: round.usage?.thinkingBlocks ?? null, thinkingMode: round.thinkingMode ?? null, models: round.models, error: round.error ?? null }))
