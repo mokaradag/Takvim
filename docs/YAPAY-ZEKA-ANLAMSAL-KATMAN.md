@@ -688,9 +688,9 @@ Aday yalnızca `id`, `kind`, `rank`, `similarity` ve (yeniden sıralandıysa)
 yalnızca 4A sözleşmesindedir; hizmet ikinci bir doğrulama yazmaz. Sonuç
 sunucu içinde kullanılır, istemciye gönderilmez.
 
-**Kapsam sınırı.** 4B adayları üretir ama Aşama 3 turuna bağlamaz: asistan
-servisi, araç yürütücüsü ve planlayıcı keşfi içe aktarmaz (sınamayla
-korunur). Adayların plana, araç seçimine ya da yanıta girmesi 4C'dir.
+**Kapsam sınırı.** 4B adayları üretir; 4C'de tek üretim çağıranı
+`semanticPlanning.js` bunları planlayıcıya yalnızca danışmanlık olarak verir
+(§12.1; sınamayla korunur). Asistan servisi bu sınırı kullanır.
 Kimlik, yetki, görünürlük, SQL, kanıt ve yanıt üretimi değişmez.
 
 İlk aşama derinliği (`SEMANTIC_RETRIEVAL_DEPTH = 10`) değerlendirmenin aday
@@ -882,11 +882,11 @@ taşır.
 | --- | --- | --- |
 | Gömme + yeniden sıralama başarılı | `reranked`: 10 adayın yeniden sıralanmış permütasyonu | — |
 | Yeniden sıralama profili kapalı ya da tanımsız | `first_stage`: doğrulanmış ilk aşama, `relevance` yok; ağ geçidi çağrılmaz | `disabled` |
-| Yeniden sıralama 5xx / ağ / süre aşımı / 429 / 401–403 / 404 / 400 | `first_stage` | `provider` / `timeout` / `capacity` / `credential` / `configuration` / `rejected` |
+| Yeniden sıralama 5xx / ağ / süre aşımı / 429 / 404 / 400 | `first_stage` | `provider` / `timeout` / `capacity` / `configuration` / `rejected` |
 | Yeniden sıralama çıktısı bozuk (eksik/fazla/yabancı/yinelenen dizin, NaN, ±Infinity, metin skor, zarf, başka model) | `first_stage` | `invalid_output` |
 | Gömme profili kapalı ya da tanımsız; yapay zekâ kapalı | `unavailable`; ağ geçidi çağrılmaz | `disabled` |
 | Yapılandırma ya da model kaydı geçersiz; kurumsal anahtar yokken katalog kurulumu (`DEFAULT_KEY_REQUIRED`) | `unavailable` | `configuration` |
-| Sorgu gömmesinin hizmet hatası (sağlayıcı yok, 5xx, ağ, süre aşımı, kapasite, anahtar) | `unavailable`; hazır dizine dokunulmaz | sınıfına göre |
+| Sorgu gömmesinin hizmet hatası (sağlayıcı yok, 5xx, ağ, süre aşımı, kapasite) | `unavailable`; hazır dizine dokunulmaz | sınıfına göre |
 | Sorgu vektörü bozuk (sayı, NaN, ±Infinity, sıfır, metin, mantıksal değer, yabancı dizin; yeniden kurulumdan sonra da uyuşmayan boyut) | `unavailable` | `invalid_output` (`embedding`) |
 | Sorgu pencereyi aşıyor ve kayıtta `truncateTokens` yok (uç 400) | `unavailable` | `rejected` |
 | Katalog gömmesi bozuk ya da kurulamadı | `unavailable`; önbelleğe girmez | `invalid_output` / hizmet sınıfı (`index`) |
@@ -894,17 +894,18 @@ taşır.
 | Boş ya da 2000 karakteri aşan sorgu | `unavailable`; model çağrılmaz | `query` |
 | Araç kayıt defteri geçersiz (boş, yinelenen ad, boş açıklama) | `unavailable`; keyfî aday yok | `catalogue` |
 | Çağıranın iptali (her evrede) | `AI_CANCELLED` fırlar; ilk aşamaya düşülmez | — |
+| Sağlayıcı anahtar hatası (`AI_KEY_INVALID`, `AI_UNAUTHORIZED`, `AI_KEY_MISSING`), her evrede | Yukarı taşınır; danışmanlık kaybına çevrilmez | — |
 | İç hata: açık SQL işlemi içinde çağrı (`AI_INTERNAL_ERROR`/`SQL_TRANSACTION_ACTIVE`), programlama ya da değişmez ihlali | Yukarı taşınır; model çağrılmaz, danışmanlık kaybına çevrilmez | — |
 | Kimlik/rehber hatası, yapay zekâ dışı hata | Yukarı taşınır (danışmanlık kaybına çevrilmez) | — |
 
 Danışmanlık kaybına yalnızca ortak hata kataloğunun **beklenen** model/hizmet
-sonuçları çevrilir (`AI_DISABLED`, `AI_CONFIGURATION_ERROR`, anahtar,
+sonuçları çevrilir (`AI_DISABLED`, `AI_CONFIGURATION_ERROR`,
 kapasite, süre aşımı, sağlayıcı, bozuk yanıt, `AI_REQUEST_INVALID`). Bu
 tablonun dışındaki her kod (ör. `AI_INTERNAL_ERROR`) hata iletisine bakılmadan
-yukarı taşınır.
+yukarı taşınır. Sağlayıcı anahtar hataları da yukarı taşınır; Rota turu hata verir.
 
-Çağıran (4C) `unavailable` sonucunda Aşama 3 davranışıyla sürer. Bu adımda
-çağıran olmadığından üretim davranışı değişmez.
+Çağıran (4C, `semanticPlanning.js`, §12.1) `unavailable` sonucunda Aşama 3
+planlama davranışıyla sürer; kimlik, yetki ve anahtar hatalarını dönüştürmez.
 
 ### 7.6 İptal, süre sınırı ve eşzamanlılık
 

@@ -750,3 +750,40 @@ test('4C son geçiş: ölçü bölme yalnızca tam ölçü kümesini ve geçerli
   const dropped = plan({ intent: 'rota', language: 'tr', request: { ...tasks, metrics: metrics.slice(0, 8) } });
   assert.equal((await turn(t, [plan({ intent: 'rota', language: 'tr', request: oversized }), dropped, dropped])).result.stats.attempted, 0);
 });
+
+test('4C artık onarım: bozuk bölüm taşıyıcısı düzelir; geçerli kardeş kapsamı korunur', async (t) => {
+  const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
+  const corrected = plan({ intent: 'rota', language: 'tr', request: tasks, additionalRequests: [notifications] });
+  for (const additionalRequests of [notifications, ["okunmamış bildirimlerim"], [[]]]) {
+    const original = plan({ intent: 'rota', language: 'tr', request: tasks, additionalRequests });
+    const result = await turn(t, [original, corrected]);
+    assert.equal(result.result.outcome, 'grounded');
+    assert.equal(result.result.stats.attempted, 2);
+    const changed = plan({ intent: 'rota', language: 'tr', request: { ...tasks, filters: {} }, additionalRequests: [notifications] });
+    assert.equal((await turn(t, [original, changed, corrected])).result.outcome, 'grounded');
+  }
+  for (const request of ['bildirimlerim', []]) {
+    assert.equal((await turn(t, [plan({ intent: 'rota', language: 'tr', request }),
+      plan({ intent: 'rota', language: 'tr', request: notifications })])).result.outcome, 'grounded');
+  }
+  const original = plan({ intent: 'rota', language: 'tr', request: tasks, additionalRequests: notifications });
+  const changed = plan({ intent: 'rota', language: 'tr', request: tasks, additionalRequests: [{ ...notifications, metrics: ['notifications.total'] }] });
+  const rejected = await turn(t, [original, changed, corrected]);
+  assert.match(JSON.stringify(rejected.inputs[2].messages), /repairScope/);
+});
+
+test('4C artık onarım: karma araç bölmesi kapsamı yalnızca taşıyan bölümlere yansıtır', async (t) => {
+  const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
+  for (const scope of [{ filters: { assignee: 'me' } }, { entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] }]) {
+    const scoped = { ...tasks, filters: {}, ...scope };
+    const mixed = { ...scoped, metrics: [...scoped.metrics, ...notifications.metrics] };
+    const original = plan({ intent: 'rota', language: 'tr', request: mixed });
+    const corrected = plan({ intent: 'rota', language: 'tr', request: scoped, additionalRequests: [notifications] });
+    assert.equal((await turn(t, [original, corrected], { user: 'Radar Modernizasyonu görev sayısı ve bildirimlerim' })).result.outcome, 'grounded');
+    for (const request of [{ ...tasks, filters: {} }, { ...tasks, filters: { assignee: 'unassigned' } }]) {
+      const changed = plan({ intent: 'rota', language: 'tr', request, additionalRequests: [notifications] });
+      const result = await turn(t, [original, changed, corrected], { user: 'Radar Modernizasyonu görev sayısı ve bildirimlerim' });
+      assert.match(JSON.stringify(result.inputs[2].messages), /repairScope/);
+    }
+  }
+});

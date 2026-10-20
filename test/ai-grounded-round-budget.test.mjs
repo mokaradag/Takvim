@@ -212,6 +212,21 @@ test('an empty completion keeps timing and usage, retries once cheaply, then use
   drained(stack.provider);
 });
 
+test('an empty completion preserves the allowed reported model mismatch in its trace', async (t) => {
+  const stack = stackFor(t);
+  const logs = captureConsole(t);
+  const reported = DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model;
+  stack.provider.enqueue({ ...emptyRound, model: reported }, nativePlan());
+  assert.equal(doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION, mode: 'deep' })).assistantMessage.finishReason, 'stop');
+  const [trace] = turnTraces(logs);
+  const [empty, retry] = trace.context.rounds;
+  assert.equal(empty.model, reported);
+  assert.equal(empty.configuredModel, DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model);
+  assert.equal(empty.modelMismatch, true);
+  assert.equal(retry.modelMismatch, false);
+  drained(stack.provider);
+});
+
 test('two empty completions get exactly one Deep fallback and then fail without an escalation storm', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);

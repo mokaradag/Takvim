@@ -21,7 +21,7 @@ import { bindRequestEntities, declarationHints, parseRequestDeclaration, request
   dependentEntity, droppedNameHint, droppedNames, instantiateDependent, metricIdHints, namedScope, nameProbes, requestSchema, unmatchedEntities } from '../tools/requestDeclaration.js';
 import { parseToolArguments } from '../tools/toolArguments.js';
 import { createCallIds, planShapeHints, prepareExecutionSet, rejectionFor, typedPlanningTool, unpackTypedPlan } from '../tools/executionSet.js';
-import { completeRequest, derivedReads, readKey, requestBoundCall, requestTextFields, declaredFacets, requestDimensions } from '../tools/requestPopulation.js';
+import { completeRequest, derivedReads, readKey, requestBoundCall, requestTextFields, declaredFacets, requestDimensions, requestScopeForTool } from '../tools/requestPopulation.js';
 import { parseTurnLanguage, parseTurnRequest, parseTurnRoute, TURN_ROUTES } from '../../../domain/ai/evidenceIntent.js';
 import { CLARIFICATION_LIMITS, clarificationReference } from '../../../domain/ai/clarification.js';
 import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
@@ -554,7 +554,11 @@ function repairProjection(turn, raw, index, calls, sections, paths, references =
 function pinRepair(turn, plan, details, calls = [], executionCalls = []) {
   if (plan.intent !== PLANNER_INTENTS.ROTA) return;
   if (details.some(detail => String(detail).endsWith(':dropped'))) return;
-  const sections = [plan.request, ...(Array.isArray(plan.additionalRequests) ? plan.additionalRequests : [])];
+  // Bozuk taşıyıcı kabul edilmez; yalnızca düzeltme sırasında aynı soru yuvası korunur.
+  const extra = Array.isArray(plan.additionalRequests) ? plan.additionalRequests
+    : plan.additionalRequests && typeof plan.additionalRequests === 'object'
+      && Object.keys(plan.additionalRequests).some(key => Object.hasOwn(requestSchema().properties, key)) ? [plan.additionalRequests] : [];
+  const sections = [plan.request, ...extra];
   const ownProblems = index => details.filter(detail => index ? String(detail).startsWith(`$.additionalRequests[${index - 1}]`)
     : !String(detail).startsWith('$.additionalRequests'));
   const snapshot = turn.repairPins.get('snapshot');
@@ -576,7 +580,7 @@ function pinRepair(turn, plan, details, calls = [], executionCalls = []) {
     const raw = section && typeof section === 'object' && !Array.isArray(section) ? section : {};
     const own = ownProblems(index);
     const paths = repairAllowance(own, raw || {});
-    if (!section) for (const key of Object.keys(requestSchema().properties)) paths.add(key);
+    if (!section || typeof section !== 'object' || Array.isArray(section)) for (const key of Object.keys(requestSchema().properties)) paths.add(key);
     if (!raw?.population && !calls.some(call => Array.isArray(raw?.metrics) && raw.metrics.every(metric => metricPaths(call.name, metric).length))) {
       paths.add('population.tool'); paths.add('population.collection');
     }
@@ -604,22 +608,30 @@ function repairMatches(turn, plan, calls = []) {
   const references = new Map();
   for (const pin of snapshot.pins) {
     if (pin.split) {
-      // Bölme yeni soru üretmez: aynı kapsamda aynı ölçü/alan/bağlama kümesi tam olarak taşınır.
-      const paths = new Set([...pin.paths, 'metrics', 'fields', 'bindings', 'population.tool', 'population.collection']);
-      const expected = repairProjection(turn, pin.raw, pin.index, pin.index ? [] : snapshot.calls, snapshot.sections, paths);
+      // Her bölüm yalnızca kendi aracının taşıdığı kapsamı alır; toplam kapsam kaybolamaz.
+      const paths = new Set([...pin.paths].filter(path => !/^(?:filters|entities)(?:[.\[]|$)/.test(path)));
+      for (const path of ['metrics', 'fields', 'bindings', 'population.tool', 'population.collection']) paths.add(path);
+      const projected = (raw) => raw.metrics.length === pin.raw.metrics.length ? pin.raw : requestScopeForTool({ ...pin.raw, metrics: raw.metrics,
+        fields: (Array.isArray(pin.raw.fields) ? pin.raw.fields : []).filter(field => raw.metrics.includes(field?.metric)),
+        bindings: (Array.isArray(pin.raw.bindings) ? pin.raw.bindings : []).filter(binding => raw.metrics.includes(binding?.metric)) }, raw.population?.tool);
+      const matches = (raw, index, candidateCalls) => repairProjection(turn, raw, index, candidateCalls, sections, paths, references)
+        === repairProjection(turn, projected(raw), pin.index, pin.index ? [] : snapshot.calls, snapshot.sections, paths);
       const available = sections.flatMap((raw, index) => !used.has(index) && Array.isArray(raw?.metrics)
         && raw.metrics.length && raw.metrics.every(metric => pin.raw.metrics.includes(metric))
         && (raw.metrics.length === pin.raw.metrics.length || !raw.metrics.some(metric => metricPaths(pin.raw.population?.tool, metric).length)
           || raw.population?.tool === pin.raw.population?.tool)
-        && repairProjection(turn, raw, index, index ? [] : snapshot.calls, sections, paths, references) === expected
-        && (index || repairProjection(turn, raw, index, calls, sections, paths, references) === expected) ? [index] : []);
+        && matches(raw, index, index ? [] : snapshot.calls)
+        && (index || matches(raw, index, calls)) ? [index] : []);
+      const items = (raw, key) => (raw[key] || []).map(item => key === 'bindings' ? { ...item, entity: raw.entities?.[item.entity] } : item).map(stable).sort();
       const sameItems = (key, indexes) => pin.paths.has(key) || Array.isArray(pin.raw[key] || [])
         && indexes.every(index => Array.isArray(sections[index][key] || []))
-        && stable(indexes.flatMap(index => sections[index][key] || []).map(stable).sort()) === stable((pin.raw[key] || []).map(stable).sort());
+        && stable(indexes.flatMap(index => items(sections[index], key)).sort()) === stable(items(pin.raw, key));
+      const scopeCovered = indexes => Object.keys(pin.raw.filters || {}).every(key => indexes.some(index => Object.hasOwn(projected(sections[index]).filters, key)))
+        && Array.isArray(pin.raw.entities || []) && (pin.raw.entities || []).every(entity => indexes.some(index => projected(sections[index]).entities.some(item => stable(item) === stable(entity))));
       let selected = null;
       for (let mask = 1; mask < (1 << available.length); mask += 1) {
         const indexes = available.filter((_, bit) => mask & (1 << bit));
-        if (['metrics', 'fields', 'bindings'].every(key => sameItems(key, indexes))) { selected = indexes; break; }
+        if (['metrics', 'fields', 'bindings'].every(key => sameItems(key, indexes)) && scopeCovered(indexes)) { selected = indexes; break; }
       }
       if (!selected) return false;
       for (const index of selected) { used.add(index); references.set(index, pin.index); }
@@ -1020,9 +1032,9 @@ function traceRound(turn, { purpose, startedAt, result = null, error = null }) {
   turn.trace.rounds.push({
     purpose,
     profile: turn.session.profile,
-    model: turn.session.reportedModel?.(result?.model) ?? turn.session.model,
+    model: turn.session.reportedModel?.(measured?.model) ?? turn.session.model,
     configuredModel: turn.session.model,
-    modelMismatch: result?.modelMismatch === true,
+    modelMismatch: measured?.modelMismatch === true,
     durationMs: measured?.durationMs ?? Date.now() - startedAt,
     firstEventMs: measured?.firstEventMs ?? null,
     budget: turn.session.maxOutputTokens ?? null,

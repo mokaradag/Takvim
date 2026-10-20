@@ -20,6 +20,21 @@ const DOCUMENT = JSON.parse(readFileSync(PLANNER_BENCHMARK_FILE, 'utf8'));
 const catalog = toolCatalogForModel();
 const unavailable = () => semanticPlanningAdvice({ query: 'x', catalog, retrieve: async () => ({ status: 'unavailable', candidates: [], failure: { reason: 'PROFILE_DISABLED' } }) });
 
+test('4C artık değerlendirme: danışmanlık kimlik ve iç hatası model çağrısından önce koşuyu geçersiz kılar', async () => {
+  const loaded = loadPlannerBenchmark();
+  for (const error of [Object.assign(new Error('gizli tanı'), { code: 'AI_UNAUTHORIZED' }), new TypeError('gizli iç tanı')]) {
+    let called = false;
+    const outcome = await planCase({ testCase: loaded.cases[0], model: { complete() { called = true; } },
+      adviceFor: async () => { throw error; }, now: loaded.now, catalog });
+    assert.equal(outcome.outcome, 'error');
+    assert.equal(outcome.error, error.code || 'ERROR');
+    assert.equal(called, false);
+    assert.deepEqual(outcome.rounds, []);
+    assert.deepEqual(outcome.decisions, []);
+    assert.ok(!JSON.stringify(outcome).includes(error.message));
+  }
+});
+
 /** Her turda verilen plan çağrısını döndüren model; gördüğü girdiler sızıntı denetimi için saklanır. */
 function scriptedModel(args) {
   const inputs = [];

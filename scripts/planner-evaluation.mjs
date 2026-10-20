@@ -276,14 +276,14 @@ class PlanCaptured extends Error {}
  */
 async function planCase({ testCase, model = null, runTurn = null, adviceFor, now, catalog, expectedModel = null }) {
   const built = buildGroundedContext({ history: testCase.history || [], userContent: testCase.text, now });
-  const planning = await adviceFor(testCase);
+  let planning = { state: 'unavailable', candidates: [] };
   const decisions = [];
   const rounds = [];
   let captured = null;
   const options = {
     // "Notlar ve iletiler" açık: planlayıcı serbest metin isteyen soruda da planıyla değerlendirilir (kapalıyken
     // sunucunun sabit uyarısı ayrı sınamada).
-    messages: built.messages, catalog, context: createToolTurnContext({ sicil: EVALUATION_SICIL, now }), planning,
+    messages: built.messages, catalog, context: createToolTurnContext({ sicil: EVALUATION_SICIL, now }),
     allowedTextFields: [...(testCase.input?.allowedTextFields || [])],
     onText: async () => {}, deferDisclosure: true, escalation: false,
     onPlanned: (decision) => {
@@ -293,6 +293,8 @@ async function planCase({ testCase, model = null, runTurn = null, adviceFor, now
     }
   };
   try {
+    planning = await adviceFor(testCase);
+    options.planning = planning;
     const result = await (runTurn || externalTurn(model, expectedModel))(options, rounds);
     if (result === CAPTURED) return { outcome: captured ? 'planned' : 'general_redirect', decisions, rounds, semantic: planning, plan: captured };
     return { outcome: result.outcome, decisions, rounds, semantic: planning };
