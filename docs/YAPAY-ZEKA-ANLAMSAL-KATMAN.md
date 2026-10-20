@@ -1272,7 +1272,7 @@ alanını uygulamıştır.
 | `test/ai-semantic-qualification.test.mjs` | Nitelendirme komutu: parmak izli girdi; kâhin koşu dosyasıyla rapor ve `qualification` künyesi (model, önekler, yeniden sıralayıcı, aday sınırı, gecikme iş yükü); bayat, eksik/fazla/yabancı/yinelenen satırlı, değiştirilmiş metinli, negatif gecikmeli, öneki çelişkili, bilinmeyen alanlı ya da güvensiz hata kodlu koşunun reddi; bozuk değerin ve `INFERENCE_FAILED` satırının ıska sayılması; dizini kurulamayan koşunun reddi; bütün katalog yeniden sıralama skoru doğrulaması ve gerçek çağrı nüfusu; `batchSize` künyesi; Markdown enjeksiyonunun etkisizliği; yeniden sıralamalı raporda her ölçünün "Fark" hücresi; `--limit` sınırı; aynı açıklamalı iki katalog öğesinin yeniden oynatımda kendi kimliğinin vektörünü ve skorunu alması; `live`: üretim yolundan (ağ geçidi + bağdaştırıcı + yerel HTTP ikizi) kâhin uçla kusursuz ölçü, kayıttan gelen profil ve önekler, tek katalog gömmesi, 10 adaylık yeniden sıralama, künye; `--queries` ile türetilen küme ve bozuk soru dosyalarının reddi; anahtarsız ya da kapalı yapılandırmanın ve kurulamayan dizinin reddi; yeniden sıralama profili kapalıyken yalnızca ilk aşama, bozuk yeniden sıralama eşlemesinin reddi; üretimden farklı `--limit` değerinin reddi; bağlantı hatası yinelenen koşuda stdout'un ayrıştırılabilir JSON kalması (günlük stderr'de); `.env.local` ortam kaynağı ve kabuk önceliği, anahtarın yazılmaması; ağ geçidi süre aşımının `timeout` sayılması; durmuş koşuda iş yükünün yalnızca gerçek çağrıları sayması; dış süre sınırının ağ geçidinin en uzun yaşam döngüsünü kapsaması; belirteç penceresinin künyede ve tel gövdesinde olması |
 | `test/ai-model-registry.test.mjs` (4B eki) | Gömme modelinin `preprocessing` alanı: varsayılan ve operasyonel kayıtta E5 önekleri ve 512 belirteçlik pencere, rotaya taşınması, yokken `none`, yazılmış `null` (gömme ve sohbet modelinde) ve `null` önekin reddi, yalnızca gömme modelinde, kapalı alan kümesi, belirteç biçimi, önek–`none` kuralı, uzunluk sınırı, `truncateTokens` biçimi ve `contextTokens` sınırı; `reportedModels`: yalnızca gömme/yeniden sıralama modelinde, tekil, jokersiz, kendi kimliği ya da başka bir modelin kimliği/adı olamaz |
 | `test/semantic_model_qualification_test.py` (CI dışı, elle) | Python koşucusu: yinelenen kimlik, sayı ve metin sınırı (astral karakter dâhil), kapalı şema ve mantıksal sürümün model modülleri yüklenmeden reddi; önek ve `--device` için UTF-16 sınırı; sayısal metin, mantıksal değer, NaN/sonsuz ve sıfır vektörün sayıya çevrilmemesi, NumPy skalerlerinin kabulü; tür geçersiz katalogda koşu dosyası yazılmaması; eski çıktı silinemediğinde geçici dosya bırakılmaması |
-| `test/ai-planner-contract.test.mjs` (4C) | Anlamsal adayların kayıt defterine karşı yeniden doğrulanması (bilinmeyen, yinelenen, yanlış tür/sıra, fazla aday → danışmanlık yok); süre aşımı/iç keşif hatasında Aşama 3 davranışı, iptalin ve kimlik/yetki hatasının taşınması; araç kümesinin ve sırasının adaylardan bağımsızlığı; türlü planın kapalı biçimi (niyet, dil, ek istek sayısı/türü, karar alanları); açıklama ve çekimserliğin sıfır SQL ile sunucu metni; ilk karar yerine düz metnin boş plan reddi olması ve metnin döküme taşınmaması; genel karardan sonra plan reddi olmaması; çok bölümlü planın hep-ya-hiç doğrulanması ve bağımlı kaynağın sınırı; açılmamış serbest metinde sabit uyarı; çelişkili termin penceresi; proje aramasının adlandırılmış varlıkla kabulü; içeriksiz telemetri |
+| `test/ai-planner-contract.test.mjs` (4C) | Anlamsal adayların kayıt defterine karşı yeniden doğrulanması (bilinmeyen, yinelenen, yanlış tür/sıra, fazla aday → danışmanlık yok); süre aşımında Aşama 3 davranışı; iptalin, kimlik/yetki, sağlayıcı anahtarı ve sınıflandırılmamış iç hatanın yukarı taşınması; araç kümesinin ve sırasının adaylardan bağımsızlığı; türlü planın kapalı biçimi (niyet, dil, ek istek sayısı/türü, karar alanları); açıklama ve çekimserliğin sıfır SQL ile sunucu metni; ilk karar yerine düz metnin boş plan reddi olması ve metnin döküme taşınmaması; genel karardan sonra plan reddi olmaması; çok bölümlü planın hep-ya-hiç doğrulanması ve bağımlı kaynağın sınırı; açılmamış serbest metinde sabit uyarı; çelişkili termin penceresi; proje aramasının adlandırılmış varlıkla kabulü; içeriksiz telemetri |
 | `test/ai-planner-benchmark.test.mjs` (4C) | Altın etiket belgesinin kapalı şeması ve kıyas kümesine bağı; her yanıt vakasının örnek planının üretim planlama sınırından ilk bildirimde geçmesi ve kendi etiketini karşılaması (iki referans günü); açıklama/çekimserlik puanlaması; anlam denetimi (süzgeç, pencere, bağımlı bölüm, varlık, sıralama, ilgisiz araç, ölçü, bölüm eşlemesi); ek bölüm kuralı; modele giden girdide vaka kimliği ve altın etiket izi olmaması; üretim kodunun etiketleri, kıyas kümesini ve değerlendirme betiklerini içe aktarmaması ve vaka metni taşımaması |
 
 ---
@@ -1436,8 +1436,9 @@ Ek 17 vaka önceki geçişte 17/17.
 İlk karar yalnızca yerel `rota_plan` çağrısıdır; metin JSON başarılı plan sayılmaz. Okuma sınırı kanıt
 sayısından ayrıdır; başarısız okuma niyeti yeniden açmaz. Veri öncesi Derin devri karar ve onarım
 anlık görüntüsünü birlikte temizler. Onarım, tamamlanmış anlamı karşılaştırır; bağımsız geçerli
-bölümler ve soru sayısı korunur. Çok bölümlü sonuçta eksik bölüm `grounded` sayılmaz; tek aday
-seçimi açıklama bağlamıyla saklanır. Bağımlı kimlikler yalnızca doğrulanmış kaynak seçiminin sonuç
+bölümler ve soru sayısı korunur. Çok bölümlü sonuçta eksik bölüm `grounded` sayılmaz. Tek bölümlü yanıtta aday
+seçimi açıklama bağlamıyla saklanır; çok bölümlü belirsizlikte bölüm kimliği taşımayan küresel seçim
+kaydedilmez, kayıt adı/kodu ile soru yeniden istenir. Bağımlı kimlikler yalnızca doğrulanmış kaynak seçiminin sonuç
 satırlarından gelir; sıralama sınırı sonraki okumaları genişletmez.
 
 Değerlendiricide izinler açık `input.allowedTextFields` girdisidir; altın etiket modele giden girdiyi
@@ -1475,3 +1476,17 @@ Modelin kendi reddedilen çağrısındaki uydurma anahtar altın sızıntısı s
 vaka/dosya izleri denetlenmeye devam eder. Canlı boş yanıtlar kimlik, düşünmesizlik ve bitiş nedeni
 doğrulanarak ıska sayılır; gerçek altyapı hatası koşuyu yine durdurur. Bilinmeyen giriş belirteci `null`
 kalır; `live --no-score` tanısal kayıtları puanlamadan gösterir. Gerçek model kabulü hâlâ **BEKLİYOR**.
+
+
+21 bulguluk son geçişte tekillik hatası yalnızca yinelemeyi kaldırmaya izin verir; geçerli alan ve
+kayıt bağları değişmez. Taşkın dizinin bölünmesi yeni bağ ekleyemez; sonraki doğrulamanın izin verdiği
+bölme düzeltilmiş tam ölçü kümesini korur. Açık satır koleksiyonu liste izdüşümünde korunur.
+Sonraki bölüm, kendi adını çözen doğrulanmış arama kanıtını yeniden kullanır. Genel karar bildirim
+bütçesinden bağımsız kabul edilir; yürütme bütçeleri değişmez.
+
+Değerlendirici boş bayrak değerlerini reddeder; canlı eşzamanlılık mevcut Sicil kabul sınırına
+indirilir. Dış komut başarıda da süreç grubunu temizler; SIGHUP aynı temizliği yapar. Linux procfs
+sinyal sınaması yalnızca Linux'ta çalışır, başlangıç işaretleri atomik yazılır. Puanlama aynı varsayılan
+alanın açık bağını ve birleşik proje/IDA seçicilerini kabul eder; farklı alan anlamını ve eksik gönderen
+kapsamını reddeder. Sağlayıcı ikizi açık parçaları, kesilme nedenini, model kimliğini ve kullanımı
+korur. Bu regresyonlar gerçek model kabulü değildir; 117/117 + 19/19 kapısı hâlâ bekler.

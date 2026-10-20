@@ -59,7 +59,7 @@ const clone = (value) => JSON.parse(JSON.stringify(value));
 test('4C CLI değer alan her bayrak eksik değeri yan etki olmadan reddeder', async () => {
   const { parseArguments } = await import('../scripts/planner-evaluation.mjs');
   for (const flag of ['--model-command', '--model', '--semantic', '--passes', '--concurrency', '--cases', '--out', '--inputs', '--run', '--reference-date', '--expected-model', '--model-timeout-ms', '--model-output-bytes']) {
-    for (const suffix of [['--json'], ['--out', 'run.json'], []]) {
+    for (const suffix of [['--json'], ['--out', 'run.json'], [], [''], ['   ']]) {
       assert.throws(() => parseArguments(['run', flag, ...suffix]), /bir değer gerektirir/, `${flag} ${suffix.join(' ')}`);
     }
   }
@@ -68,7 +68,7 @@ test('4C CLI değer alan her bayrak eksik değeri yan etki olmadan reddeder', as
   assert.equal(flags.json, true);
 });
 
-test('4C dış model kesintisi tüm etkin süreçleri ve geçici dizini temizler', { skip: process.platform === 'win32' }, async (t) => {
+test('4C dış model kesintisi tüm etkin süreçleri ve geçici dizini temizler', { skip: process.platform !== 'linux' }, async (t) => {
   const { mkdtempSync, readdirSync, rmSync, writeFileSync, existsSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const path = await import('node:path');
@@ -81,9 +81,9 @@ test('4C dış model kesintisi tüm etkin süreçleri ve geçici dizini temizler
     try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') return false; throw error; }
     return !existsSync(`/proc/${pid}/stat`) || !readFileSync(`/proc/${pid}/stat`, 'utf8').includes(') Z ');
   };
-  for (const [signal, status] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+  for (const [signal, status] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
     const marker = path.join(dir, signal); const runnerFile = path.join(dir, `${signal}.mjs`); const modelFile = path.join(dir, `${signal}.cjs`);
-    writeFileSync(modelFile, `require('node:fs').writeFileSync(${JSON.stringify(marker)} + '-' + process.pid, JSON.stringify({pid:process.pid,tmp:process.env.TMPDIR}));setInterval(()=>{},1000);`);
+    writeFileSync(modelFile, `const fs=require('node:fs'),file=${JSON.stringify(marker)}+'-'+process.pid;fs.writeFileSync(file+'.tmp',JSON.stringify({pid:process.pid,tmp:process.env.TMPDIR}));fs.renameSync(file+'.tmp',file);setInterval(()=>{},1000);`);
     const command = `"${process.execPath}" "${modelFile}"`;
     writeFileSync(runnerFile, `import { externalModel } from ${JSON.stringify(evaluator)};const model=externalModel({command:${JSON.stringify(command)},guard:()=>{}});await Promise.all([1,2].map(()=>model.complete({messages:[],tools:[],toolChoice:'none'})));model.dispose();`);
     const runner = spawn(process.execPath, [runnerFile], { stdio: 'ignore' });
@@ -91,7 +91,7 @@ test('4C dış model kesintisi tüm etkin süreçleri ve geçici dizini temizler
     const children = [];
     try {
       for (let i = 0; i < 500; i += 1) {
-        const files = readdirSync(dir).filter(name => name.startsWith(`${signal}-`));
+        const files = readdirSync(dir).filter(name => name.startsWith(`${signal}-`) && !name.endsWith('.tmp'));
         if (files.length === 2) { children.push(...files.map(name => JSON.parse(readFileSync(path.join(dir, name), 'utf8')))); break; }
         await delay(10);
       }
@@ -713,4 +713,82 @@ test('4C yakınsama: sayfa boyu aynı nüfusu ayrı okuma yapmaz', async () => {
   const call = record.plan.calls.find(c => c.name === 'rota_task_search'); assert.ok(call);
   record.plan.calls.push({ ...clone(call), args: { ...call.args, limit: 1 } });
   assert.ok(scoreDecision(c, record, { referenceDate: loaded.referenceDate }).reasons.includes('calls:duplicate'));
+});
+
+test('4C yakınsama: varsayılan alanın açık bağı eşdeğerdir; başka anlam geçmez', async () => {
+  const loaded = loadPlannerBenchmark();
+  for (const [id, fields] of [['tr-064', [{ metric: 'notifications.unread', tool: 'rota_notifications', path: 'data.unreadCount' }]],
+    ['tr-008', [{ metric: 'task.title', tool: 'rota_task_search', path: 'data.tasks.*.title' }, { metric: 'task.overdueDays', tool: 'rota_task_search', path: 'data.tasks.*.overdueDays' }]]]) {
+    const c = loaded.cases.find(c => c.id === id);
+    const args = answerPlan(c, loaded.referenceDate); args.request.fields = fields;
+    const { record } = await decide(loaded, c, args);
+    assert.equal(record.outcome, 'planned');
+    assert.equal(scoreDecision(c, record, loaded).correct, true, id);
+    record.plan.requests[0].fields[0].path = 'data.unrelated';
+    assert.equal(scoreDecision(c, record, loaded).correct, false);
+  }
+});
+
+test('4C yakınsama: birleşik proje ve IDA seçicilerinin geçerli bağları puanlanır', async () => {
+  const loaded = loadPlannerBenchmark(); const c = loaded.cases.find(c => c.id === 'tr-041');
+  const args = answerPlan(c, loaded.referenceDate);
+  args.request.bindings = [{ metric: 'wbs.subtreeOpen', entity: 1 }];
+  const { record } = await decide(loaded, c, args);
+  assert.equal(record.outcome, 'planned');
+  assert.equal(scoreDecision(c, record, loaded).correct, true);
+  record.plan.requests[0].bindings[0].entity = 9;
+  assert.equal(scoreDecision(c, record, loaded).correct, false);
+});
+
+test('4C yakınsama: kendi atama talebi yalnızca gönderilen kapsamıyla puanlanır', async () => {
+  const loaded = loadPlannerBenchmark(); const c = loaded.cases.find(c => c.id === 'tr-061');
+  for (const filters of [{}, { tab: 'all' }, { tab: 'history' }, { workflowStatus: 'APPROVED' }, { tab: 'sent' }, { tab: 'sent', workflowStatus: 'APPROVED' }]) {
+    const args = answerPlan(c, loaded.referenceDate); args.request.filters = filters;
+    const { record } = await decide(loaded, c, args);
+    assert.equal(record.outcome, filters.tab === 'all' ? 'failed' : 'planned');
+    assert.equal(scoreDecision(c, record, loaded).correct, filters.tab === 'sent', JSON.stringify(filters));
+  }
+});
+
+test('4C yakınsama: başarılı model komutunun arka plan çocuğu da temizlenir', { skip: process.platform !== 'linux' }, async (t) => {
+  const { externalModel } = await import('../scripts/planner-evaluation.mjs');
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { setTimeout: delay } = await import('node:timers/promises');
+  const dir = mkdtempSync(path.join(tmpdir(), 'planner-background-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'model.cjs');
+  const marker = path.join(dir, 'child.json');
+  const heartbeat = path.join(dir, 'heartbeat');
+  const childSource = `const fs=require('node:fs');let n=0;setInterval(()=>fs.writeFileSync(${JSON.stringify(heartbeat)},String(++n)),10);`;
+  writeFileSync(file, `const fs=require('node:fs');const child=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(childSource)}],{stdio:'ignore'});child.unref();fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:child.pid}));const ready=setInterval(()=>{if(fs.existsSync(${JSON.stringify(heartbeat)})){clearInterval(ready);console.log(JSON.stringify({text:'ok'}));}},10);`);
+  const model = externalModel({ command: `"${process.execPath}" "${file}"`, guard: () => {} });
+  t.after(() => model.dispose());
+  t.after(() => { try { process.kill(JSON.parse(readFileSync(marker, 'utf8')).pid, 'SIGKILL'); } catch { /* Zaten sonlandı. */ } });
+  const result = await model.complete({ messages: [], tools: [], toolChoice: 'none' });
+  assert.equal(result.text, 'ok'); assert.equal(result.error, null);
+  await delay(50);
+  const stopped = readFileSync(heartbeat, 'utf8');
+  await delay(100);
+  assert.equal(readFileSync(heartbeat, 'utf8'), stopped, 'arka plan çocuğu artık çalışmıyor');
+});
+
+test('4C yakınsama: canlı değerlendirici ortak Sicil kabul sınırını aşmaz', async (t) => {
+  const { createAiStack } = await import('./helpers/aiStack.mjs');
+  const { startFakeOpenAiCompatibleServer } = await import('./helpers/fakeOpenAiCompatibleServer.mjs');
+  const { parseArguments, runEvaluation } = await import('../scripts/planner-evaluation.mjs');
+  const server = await startFakeOpenAiCompatibleServer({ delayMs: 40 });
+  t.after(() => server.close());
+  server.setScenario({ stream: { chunks: body => {
+    const event = value => `data: ${JSON.stringify({ model: body.model, ...value })}\n\n`;
+    return [event({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'p1', type: 'function', function: { name: 'rota_plan', arguments: '{"intent":"general","language":"tr"}' } }] } }] }),
+      event({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }), 'data: [DONE]\n\n'];
+  } } });
+  createAiStack(t, { env: { MERGEN_ROTA_AI_BASE_URL: server.baseUrl, MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER: '1', MERGEN_ROTA_AI_MAX_QUEUED_PER_USER: '0' } });
+  const { flags } = parseArguments(['run', '--model', 'live', '--semantic', 'none', '--concurrency', '4', '--cases', 'tr-113,tr-114,tr-115', '--no-score']);
+  const run = await runEvaluation(flags);
+  assert.equal(run.records.length, 3);
+  assert.ok(run.records.every(record => record.outcome === 'general_redirect'));
+  assert.equal(server.state.requests.length, 3);
 });

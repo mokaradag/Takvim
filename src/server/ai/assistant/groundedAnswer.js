@@ -459,7 +459,7 @@ function repairAllowance(details, raw) {
       if (['task', 'project', 'person', 'wbs', 'baseline'].includes(type)) paths.add(`textSelector:${type}`);
       paths.add('population.collection');
     }
-    if (['fields', 'bindings'].includes(relative) && reason === 'unique') paths.add(`${relative}Unique`);
+    if (['fields', 'bindings'].includes(relative) && reason === 'unique') { paths.add(`${relative}Unique`); continue; }
     if (relative === 'metrics' && reason === 'unique') { paths.add('metricsUnique'); continue; }
     if (relative === 'metrics' && reason === 'maxItems') continue;
     if (relative === 'bindings' && reason === 'unknown' && Array.isArray(raw.bindings)) {
@@ -503,6 +503,9 @@ function repairProjection(turn, raw, index, calls, sections, paths, references =
   }
   const known = Object.fromEntries(Object.entries(raw).filter(([key]) => Object.hasOwn(requestSchema().properties, key)));
   const masked = repairOmit(known, paths);
+  for (const key of ['fields', 'bindings']) if (paths.has(`${key}Unique`) && Array.isArray(masked[key])) {
+    masked[key] = [...new Map(masked[key].map(item => [stable(item), item])).values()];
+  }
   const transfer = [...paths].find(path => path.startsWith('textSelector:'))?.split(':')[1];
   const selector = transfer && (masked.entities || []).find(entity => entity?.type === transfer && entity.text);
   const textScope = transfer ? known.filters?.text || selector?.text || null : null;
@@ -562,6 +565,9 @@ function pinRepair(turn, plan, details, calls = [], executionCalls = []) {
   const sections = [plan.request, ...extra];
   const ownProblems = index => details.filter(detail => index ? String(detail).startsWith(`$.additionalRequests[${index - 1}]`)
     : !String(detail).startsWith('$.additionalRequests'));
+  const canSplit = (raw, index, own) => Array.isArray(raw?.metrics) && raw.metrics.every(metric => Object.hasOwn(METRICS, metric))
+    && own.some(detail => /\.metrics(?:\[\d+\])?:(?:population|maxItems)$/.test(String(detail)))
+    && !sections.some(part => Array.isArray(part?.entities) && part.entities.some(entity => entity?.from === index));
   const snapshot = turn.repairPins.get('snapshot');
   if (snapshot) {
     const used = new Set();
@@ -572,7 +578,13 @@ function pinRepair(turn, plan, details, calls = [], executionCalls = []) {
       if (index < 0) continue;
       used.add(index);
       references.set(index, pin.index);
-      for (const path of repairAllowance(ownProblems(index), sections[index])) pin.paths.add(path);
+      if (!pin.split && canSplit(sections[index], index, ownProblems(index))) {
+        // Önceki onarımın koruduğu geçerli anlam artık yeni bölmenin sabit kaynağıdır.
+        pin.raw = sections[index];
+        snapshot.sections[pin.index] = pin.raw;
+        pin.paths = repairAllowance(ownProblems(index), pin.raw);
+        pin.split = true;
+      } else for (const path of repairAllowance(ownProblems(index), sections[index])) pin.paths.add(path);
       pin.projection = repairProjection(turn, pin.raw, pin.index, pin.index ? [] : snapshot.calls, snapshot.sections, pin.paths);
     }
     return;
@@ -585,9 +597,7 @@ function pinRepair(turn, plan, details, calls = [], executionCalls = []) {
     if (!raw?.population && !calls.some(call => Array.isArray(raw?.metrics) && raw.metrics.every(metric => metricPaths(call.name, metric).length))) {
       paths.add('population.tool'); paths.add('population.collection');
     }
-    const split = Array.isArray(raw.metrics) && raw.metrics.every(metric => Object.hasOwn(METRICS, metric))
-      && own.some(detail => /\.metrics(?:\[\d+\])?:(?:population|maxItems)$/.test(String(detail)))
-      && !sections.some(part => Array.isArray(part?.entities) && part.entities.some(entity => entity?.from === index));
+    const split = canSplit(raw, index, own);
     return { raw, index, paths, split, projection: repairProjection(turn, raw, index, index ? [] : calls, sections, paths) };
   });
   const unrelated = [...new Set(details.flatMap(detail => {
@@ -627,7 +637,8 @@ function repairMatches(turn, plan, calls = []) {
         if (!indexes.every(index => Array.isArray(sections[index][key] || []))) return false;
         const candidates = indexes.flatMap(index => (sections[index][key] || []).map(item => ({ item, raw: sections[index] })));
         // Bölme tam ölçü kümesini korur; satır hatası ölçü silme izni değildir.
-        if (key === 'metrics') return stable(candidates.map(({ item }) => item).sort()) === stable([...pin.raw.metrics].sort());
+        if (key === 'metrics') return stable(candidates.map(({ item }) => item).sort())
+          === stable((pin.paths.has('metricsUnique') ? [...new Set(pin.raw.metrics)] : [...pin.raw.metrics]).sort());
         const paths = new Set([...pin.paths].filter(path => path !== key));
         const normalized = (item, raw, prefix) => {
           const masked = repairOmit(item, paths, prefix);
@@ -655,7 +666,7 @@ function repairMatches(turn, plan, calls = []) {
           return true;
         });
         return choices.every((_, slot) => assign(slot, new Set()))
-          && (candidates.length - choices.length <= omitted || pin.paths.has(key) && !pin.paths.has(`${key}Unique`));
+          && candidates.length - choices.length <= omitted;
       };
       const scopeCovered = indexes => Object.keys(pin.raw.filters || {}).every(key => indexes.some(index => Object.hasOwn(projected(sections[index]).filters, key)))
         && Array.isArray(pin.raw.entities || []) && (pin.raw.entities || []).every(entity => indexes.some(index => projected(sections[index]).entities.some(item => stable(item) === stable(entity))));
@@ -785,7 +796,11 @@ function beginPart(turn) {
   const bound = bindRequestEntities(turn.request, entries, turn.containment.boundSelection());
   const reads = derivedReads(turn.request, bound, { today: turn.context.today, attempted: new Set() });
   const keys = new Set(reads.map(({ name, args }) => readKey(name, args, turn.context.today)));
-  for (const entry of entries) if (keys.has(readKey(entry.tool, entry.args, turn.context.today))) turn.partEvidence.add(entry.id);
+  for (const entry of entries) {
+    const resolved = bindRequestEntities(turn.request, [entry]);
+    if (keys.has(readKey(entry.tool, entry.args, turn.context.today))
+      || bound.some((entity, index) => entity.text && entity.bound && resolved[index]?.bound === entity.bound)) turn.partEvidence.add(entry.id);
+  }
 }
 
 /** Sıradaki bölüm bu turun isteğidir: plan veri okunmadan doğrulanmıştır, istek sessizce değişmez. */
@@ -831,7 +846,8 @@ function settlePart(turn, verdict, selectedBy) {
   }
   turn.answers.sort((a, b) => a.index - b.index);
   const clarifications = turn.answers.filter((answer) => answer.verdict.clarification);
-  const texts = turn.answers.flatMap((answer, position) => [clarifications.length > 1 && answer.verdict.clarification
+  // Kalıcı aday sözleşmesi bölüm kimliği taşımaz; çok bölümlü yanıtta küresel numaralı seçim üretilmez.
+  const texts = turn.answers.flatMap((answer, position) => [answer.verdict.clarification
     ? (answer === clarifications[0] ? renderPlannerClarification({ reason: 'missing_referent', locale: turn.locale }) : '') : answer.verdict.normalized,
     ...(turn.partNotes.has(answer.index) && turn.answers[position + 1]?.index !== answer.index
       ? [renderDependentLimit({ shown: turn.partNotes.get(answer.index), locale: turn.locale })] : [])]);
@@ -839,7 +855,7 @@ function settlePart(turn, verdict, selectedBy) {
     : clarifications.length ? 'clarification' : turn.answers.some((answer) => answer.verdict.kind === 'unavailable') ? 'unavailable'
       : turn.answers.some((answer) => answer.verdict.kind === 'grounded') ? 'grounded' : 'not_found';
   return {
-    verdict: { ok: true, kind, ...(clarifications.length === 1 ? { clarification: clarifications[0].verdict.clarification } : {}),
+    verdict: { ok: true, kind,
       normalized: texts.filter(Boolean).join('\n\n'), citedIds: [...new Set(turn.answers.flatMap((answer) => answer.verdict.citedIds))], issues: [] },
     selectedBy: turn.answers.every((answer) => answer.selectedBy === 'server') ? 'server' : 'model'
   };
@@ -1575,7 +1591,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
         return fallback('REQUEST_DECLARATION');
       }
     }
-    if (declared && !calls.length && turn.declarationsLeft > 0) {
+    if (declared && !calls.length && (turn.declarationsLeft > 0 || declared.ok && !declared.request)) {
       turn.route = declaredRoute;
       if (declared.ok) {
         const prepared = declared.request ? preparePlan(turn, [], declared) : { ok: true };
@@ -1590,7 +1606,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
           emitPlanned(turn, { intent: PLANNER_INTENTS.GENERAL });
           allowTools = false;
         }
-        turn.declarationsLeft -= 1;
+        turn.declarationsLeft = Math.max(0, turn.declarationsLeft - 1);
         instruct(turn, `Bu turun veri okunmadan belirlenen yönlendirmesi: ${turn.route}. Şimdi bu niyete göre yanıtla; Rota olguları yalnızca araç kanıtıyla sunulur.`);
       } else {
         // Reddedilen plan, plan doğrulamasındaki retle aynı biçimde modelin kendi çağrısı olarak kalır.

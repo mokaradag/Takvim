@@ -65,7 +65,7 @@ function parseArguments([command, ...rest]) {
     if (flag === '--json') flags.json = true;
     else if (flag === '--no-score') flags.noScore = true;
     else if (['--model-command', '--model', '--semantic', '--passes', '--concurrency', '--cases', '--out', '--inputs', '--run', '--reference-date', '--expected-model', '--model-timeout-ms', '--model-output-bytes'].includes(flag)) {
-      if (rest[i + 1] == null || String(rest[i + 1]).startsWith('--')) fail(`${flag} bir değer gerektirir.`);
+      if (rest[i + 1] == null || !String(rest[i + 1]).trim() || String(rest[i + 1]).startsWith('--')) fail(`${flag} bir değer gerektirir.`);
       flags[flag.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = rest[++i];
     } else fail(`Tanınmayan bağımsız değişken: ${flag}`);
   }
@@ -163,14 +163,15 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
   const workdir = mkdtempSync(path.join(tmpdir(), 'rota-planner-'));
   const active = new Set();
   const dispose = () => {
-    process.off('SIGINT', interrupt); process.off('SIGTERM', terminate);
+    process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); process.off('SIGHUP', hangup);
     for (const stop of active) stop();
     active.clear();
     rmSync(workdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   };
   const interrupt = () => { try { dispose(); } finally { process.exit(130); } };
   const terminate = () => { try { dispose(); } finally { process.exit(143); } };
-  process.once('SIGINT', interrupt); process.once('SIGTERM', terminate);
+  const hangup = () => { try { dispose(); } finally { process.exit(129); } };
+  process.once('SIGINT', interrupt); process.once('SIGTERM', terminate); process.once('SIGHUP', hangup);
   let sequence = 0;
   const run = (payload) => new Promise((resolve, reject) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^MERGEN_ROTA_/.test(key)));
@@ -190,9 +191,11 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
     const finish = (error, value) => {
       if (settled) return;
       settled = true;
+      // Başarılı komut da arka plan çocuğu bırakamaz.
+      terminate();
       active.delete(terminate);
       clearTimeout(timer);
-      if (error) { terminate(); reject(Object.assign(new Error(error), { code: error })); }
+      if (error) { reject(Object.assign(new Error(error), { code: error })); }
       else resolve(value);
     };
     const timer = setTimeout(() => finish('MODEL_COMMAND_TIMEOUT'), timeoutMs);
@@ -417,7 +420,7 @@ async function liveRuntime() {
     resolveCredential: async () => ({ source: 'default', apiKey: config.defaultApiKey })
   });
   const retrieval = createSemanticRetrieval({ getGateway: () => gateway, loadRegistry: async () => registry });
-  return { gateway, retrieval, planner: { profile: AI_PROFILES.CHAT_TOOLS, model: planner.route.model, provider: planner.route.provider, thinking: planner.route.capabilities.includes('reasoning') ? 'unverified' : 'off' } };
+  return { gateway, retrieval, maxActivePerUser: config.limits.maxActivePerUser, planner: { profile: AI_PROFILES.CHAT_TOOLS, model: planner.route.model, provider: planner.route.provider, thinking: planner.route.capabilities.includes('reasoning') ? 'unverified' : 'off' } };
 }
 
 /** Puanlama için içeriksiz, kararlı karar kaydı (istek nesneleri JSON'a güvenle çevrilir). */
@@ -482,12 +485,13 @@ async function runEvaluation(flags) {
   if (runtime && flags.model === 'live' && runtime.planner.thinking !== 'off') fail('PLANNER_THINKING_UNVERIFIED');
   const model = flags.model === 'live' ? null : externalModel({ command: flags.modelCommand, inputs: flags.inputs || null, guard, timeoutMs: flags.modelTimeoutMs, outputBytes: flags.modelOutputBytes });
   const runTurn = flags.model === 'live' ? liveTurn(runtime.gateway, expectedModel, guard, runtime.planner) : null;
+  const concurrency = runtime ? Math.min(flags.concurrency, runtime.maxActivePerUser) : flags.concurrency;
   const records = [];
   // Altyapı hatası (komut, kota, kimlik doğrulama) geçişi geçersiz kılar: kalan vakalar boşuna çalıştırılmaz.
   let infrastructure = null;
   try {
     for (let pass = 1; pass <= flags.passes; pass += 1) {
-      const outcomes = await mapLimit(cases, flags.concurrency, async (testCase) => {
+      const outcomes = await mapLimit(cases, concurrency, async (testCase) => {
         if (infrastructure) return { outcome: 'error', error: 'SKIPPED', decisions: [], rounds: [], semantic: { state: 'unavailable', candidates: [] } };
         const outcome = await planCase({ testCase, model, runTurn, adviceFor, now, catalog, expectedModel });
         if (outcome.outcome === 'error') infrastructure ||= outcome.error;

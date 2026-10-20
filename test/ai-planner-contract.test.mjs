@@ -155,6 +155,14 @@ test('genel sohbet kararından sonraki metin karar reddine düşmez', async (t) 
   assert.ok(inputs.every((input) => !JSON.stringify(input.messages).includes('plan:required')));
 });
 
+test('4C yakınsama: bildirim bütçesi bitince genel karar yine tek kez kabul edilir', async (t) => {
+  const { result, decisions } = await turn(t, [prose('Merhaba'), prose('Merhaba'),
+    plan({ intent: 'general', language: 'tr' }), prose('{"kind":"general","text":"Merhaba"}')]);
+  assert.equal(result.outcome, 'general_redirect');
+  assert.equal(result.stats.attempted, 0);
+  assert.deepEqual(decisions.map(d => d.intent), ['general']);
+});
+
 /* ── Çok bölümlü plan ──────────────────────────────────────── */
 
 test('çok bölümlü planda bir bölüm geçersizse hiçbir bölüm yürütülmez (SQL yok)', async (t) => {
@@ -346,9 +354,9 @@ test('kardeş koleksiyonlu kaynak bağımlı kimlikleriyle kabul edilir; açıkl
   const clarified = await turn(t, [plan({ intent: 'rota', language: 'tr', request: notifications, additionalRequests: [ambiguous] }),
     (input) => { const evidence = JSON.parse(input.messages.filter((message) => message.role === 'tool').at(-1).content); return prose(JSON.stringify({ kind: 'clarification', evidence: evidence.evidenceId })); }], { user: 'Bildirim sayım ve Ali Veli unvanı' });
   assert.equal(clarified.result.outcome, 'clarification');
-  assert.ok(clarified.result.evidenceRows.some((row) => JSON.parse(row.evidenceJson).clarificationContext));
+  assert.ok(clarified.result.evidenceRows.every((row) => !JSON.parse(row.evidenceJson).clarificationContext));
   assert.match(clarified.result.text, /okunmamış/);
-  assert.match(clarified.result.text, /Ali Veli/);
+  assert.ok(clarified.result.text.includes(renderPlannerClarification({ reason: 'missing_referent', locale: 'tr' })));
 });
 
 test('bildirim devri tek karar sayar; metin izni uyarısı da tek içeriksiz karar bırakır', async (t) => {
@@ -874,4 +882,114 @@ test('4C sağlayıcı ikizi: metin planı kesintiyi gizlemez ve yerel çağrı �
     assert.ok(events.some(event => event.type === 'text' && event.text === 'Önsöz'));
     assert.ok(events.some(event => event.type === 'done' && event.toolCalls?.[0].name === 'rota_plan'));
   });
+});
+
+test('4C yakınsama: sağlayıcı ikizi kesilme, açık parçalar ve model künyesini korur', async (t) => {
+  const { createFakeAiProvider } = await import('./helpers/fakeAiProvider.mjs');
+  const { declared } = await import('./helpers/evidenceScenario.mjs');
+  const input = { model: 'configured', signal: new AbortController().signal, messages: [], tools: [] };
+  const usage = { promptTokens: 11, completionTokens: 5, reasoningTokens: 0 };
+  for (const type of ['reply', 'stream']) {
+    for (const patch of [{ finishReason: 'length' }, { chunks: ['{broken'] }, { model: 'different', usage }]) {
+      await t.test(`${type} ${Object.keys(patch).join()}`, async () => {
+        const provider = createFakeAiProvider();
+        provider.enqueue({ type, text: declared(notifications), ...patch });
+        const opened = await provider.streamToolCompletion(input);
+        const events = []; for await (const event of opened.events) events.push(event);
+        const done = events.find(event => event.type === 'done');
+        if (patch.finishReason) { assert.equal(done.finishReason, 'length'); assert.deepEqual(done.toolCalls, []); }
+        if (patch.chunks) { assert.equal(events.filter(e => e.type === 'text').map(e => e.text).join(''), '{broken'); assert.deepEqual(done.toolCalls, []); }
+        if (patch.model) { assert.equal(done.model, 'different'); assert.deepEqual(done.usage, usage); assert.equal(done.toolCalls[0].name, 'rota_plan'); }
+      });
+    }
+  }
+});
+
+test('4C yakınsama: aynı adın sonraki bölümü çözüm kanıtını korur', async (t) => {
+  const project = { operation: 'value', metrics: ['project.lead'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] };
+  const tasks = { ...project, metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' } };
+  const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: project, additionalRequests: [tasks] })], { user: 'Radar Modernizasyonu proje lideri ve görev sayısı' });
+  assert.equal(result.outcome, 'grounded');
+  assert.doesNotMatch(result.text, /tamamlanamadı|ulaşılamıyor/);
+  assert.equal(result.stats.attempted, 2, 'ad araması yalnızca bir kez yapılır');
+});
+
+async function repairDecision(steps, text = 'Radar Modernizasyonu ve Anten görevleri') {
+  const { planCase } = await import('../scripts/planner-evaluation.mjs');
+  const inputs = [];
+  const outcome = await planCase({ testCase: { text }, catalog, now: NOW,
+    adviceFor: async () => ({ state: 'unavailable', candidates: [] }), model: { complete: async input => {
+      inputs.push(input); assert.ok(steps.length, 'beklenmeyen model turu'); return steps.shift();
+    } } });
+  return { outcome, inputs, remaining: steps.length };
+}
+const rota = request => plan({ intent: 'rota', language: 'tr', request });
+
+test('4C yakınsama: yinelenen alan ve bağlamalar yalnızca tekilleştirilebilir', async () => {
+  const entities = [{ type: 'project', text: 'Radar Modernizasyonu' }, { type: 'project', text: 'Anten' }];
+  const base = { operation: 'value', metrics: ['tasks.total', 'tasks.overdue'], population: { tool: 'rota_task_analytics' }, entities,
+    bindings: [{ metric: 'tasks.total', entity: 0 }, { metric: 'tasks.overdue', entity: 1 }] };
+  const field = { metric: 'person.organization', tool: 'rota_person_search', path: 'data.people.*.organization.unit' };
+  const person = { operation: 'list', metrics: ['person.organization'], population: { tool: 'rota_person_search', collection: 'people' }, filters: { text: 'Ali Veli' }, fields: [field] };
+  for (const [valid, key, changed] of [[base, 'bindings', { ...base, bindings: base.bindings.map(b => ({ ...b, entity: 1 - b.entity })) }],
+    [person, 'fields', { ...person, fields: [{ ...field, path: 'data.people.*.organization.directorate' }] }]]) {
+    const original = { ...valid, [key]: [...valid[key], valid[key][0]] };
+    const result = await repairDecision([rota(original), rota(changed), rota(valid)], 'Radar Modernizasyonu ve Anten görevleri; Ali Veli birimi');
+    assert.equal(result.outcome.outcome, 'planned');
+    assert.equal(result.inputs.length, 3, `${key}: anlam değişikliği reddedilir`);
+    assert.match(JSON.stringify(result.inputs[2]), /repairScope/);
+  }
+});
+
+test('4C yakınsama: yinelenen fazla ölçü tekilleştirilip bölünebilir', async () => {
+  const metrics = ['tasks.total', 'tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent'];
+  const base = { operation: 'value', metrics, population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
+  const original = { ...base, metrics: [metrics[0], ...metrics] };
+  const split = plan({ intent: 'rota', language: 'tr', request: { ...base, metrics: metrics.slice(0, 7) }, additionalRequests: [{ ...base, metrics: metrics.slice(7) }] });
+  const result = await repairDecision([rota(original), split]);
+  assert.equal(result.outcome.outcome, 'planned');
+  assert.equal(result.remaining, 0);
+});
+
+test('4C yakınsama: sonraki ret izin verince aynı ölçü kümesi bölünebilir', async () => {
+  const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
+  const mixed = { ...tasks, metrics: ['tasks.total', 'notifications.unread'] };
+  const split = plan({ intent: 'rota', language: 'tr', request: tasks, additionalRequests: [notifications] });
+  const result = await repairDecision([rota({ ...mixed, metrics: ['tasks.total', 'notifications.typo'] }), rota(mixed), split]);
+  assert.equal(result.outcome.outcome, 'planned');
+  assert.equal(result.remaining, 0);
+});
+
+test('4C yakınsama: açık öncül listesi bölmede liste olarak kalır', async () => {
+  const dependency = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_dependency_inspect', collection: 'predecessors' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] };
+  const split = plan({ intent: 'rota', language: 'tr', request: dependency, additionalRequests: [notifications] });
+  const result = await repairDecision([rota({ ...dependency, metrics: [...dependency.metrics, ...notifications.metrics] }), split], `${TASKS.OVERDUE} görevinin öncülleri ve bildirimlerim`);
+  assert.equal(result.outcome.outcome, 'planned');
+});
+
+test('4C yakınsama: fazla bağlama dizisi bölünürken yeni kayıt bağı eklenemez', async () => {
+  const metrics = ['tasks.total', 'tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent'];
+  const entities = ['Radar Modernizasyonu', 'Anten', 'Okuma Projesi'].map(text => ({ type: 'project', text }));
+  const bindings = metrics.flatMap((metric, i) => entities.flatMap((_, entity) => i < 3 && entity === 2 ? [] : [{ metric, entity }]));
+  assert.equal(bindings.length, 21);
+  const base = { operation: 'value', population: { tool: 'rota_task_analytics' }, entities };
+  const sections = [metrics.slice(0, 4), metrics.slice(4)].map(metrics => ({ ...base, metrics, bindings: bindings.filter(b => metrics.includes(b.metric)) }));
+  const corrected = plan({ intent: 'rota', language: 'tr', request: sections[0], additionalRequests: [sections[1], notifications] });
+  const changed = plan({ intent: 'rota', language: 'tr', request: { ...sections[0], bindings: [...sections[0].bindings, { metric: metrics[0], entity: 2 }] }, additionalRequests: [sections[1], notifications] });
+  const original = rota({ ...base, metrics: [...metrics, ...notifications.metrics], bindings });
+  const result = await repairDecision([original, changed, corrected], 'Radar Modernizasyonu, Anten ve Okuma Projesi görev sayıları ve bildirimlerim');
+  assert.equal(result.outcome.outcome, 'planned');
+  assert.equal(result.inputs.length, 3);
+  assert.match(JSON.stringify(result.inputs[2]), /repairScope/);
+});
+
+test('4C yakınsama: çok bölümlü tek belirsizlik küresel aday seçimi kaydetmez', async (t) => {
+  const project = text => ({ operation: 'value', metrics: ['project.lead'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', text }] });
+  const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: project('Radar Modernizasyonu'), additionalRequests: [project('Proje')] }),
+    input => prose(JSON.stringify({ kind: 'clarification', evidence: JSON.parse(input.messages.filter(m => m.role === 'tool').at(-1).content).evidenceId }))],
+  { user: 'Radar Modernizasyonu lideri ve Proje lideri kim?' });
+  assert.equal(result.outcome, 'clarification');
+  assert.match(result.text, /Ayşe Yılmaz/);
+  assert.ok(result.text.includes(renderPlannerClarification({ reason: 'missing_referent', locale: 'tr' })));
+  assert.ok(result.evidenceRows.every(row => !JSON.parse(row.evidenceJson).clarificationContext));
 });

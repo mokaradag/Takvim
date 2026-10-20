@@ -670,7 +670,8 @@ export function requestScopeForTool(request, tool) {
     return Object.hasOwn(properties, SELECTOR_PARAMS[entity?.type]) || entity && entityReadElsewhere(source, entity, index) ? [index] : [];
   });
   const rank = request.rank && request.metrics.includes(request.rank.metric) ? request.rank : null;
-  const operation = request.operation === 'value' ? 'value' : rank ? 'rank' : listCollections(tool, request.metrics).length ? 'list' : 'value';
+  const operation = request.operation === 'value' ? 'value' : rank ? 'rank'
+    : listCollections(tool, request.metrics, request.population?.collection ? [request.population.collection] : undefined).length ? 'list' : 'value';
   return { ...source, operation, rank, filters: Object.fromEntries(Object.entries(request.filters || {}).filter(([key]) => familyKeys(tool).includes(key))),
     entities: indexes.map(index => request.entities[index]),
     bindings: source.bindings.filter(binding => request.metrics.includes(binding.metric) && indexes.includes(binding.entity)).map(binding => ({ ...binding, entity: indexes.indexOf(binding.entity) })) };

@@ -35,8 +35,8 @@ const { getRotaTool, rotaToolNames } = await import('../src/server/ai/tools/tool
 const { canonicalDimensions, declaredFacets, readKey, requestBoundCall, requestDimensions, requestTextFields, toolFamily } = await import('../src/server/ai/tools/requestPopulation.js');
 const { searchText } = await import('../src/server/ai/tools/rota/taskFacts.js');
 const { containmentText } = await import('../src/server/ai/tools/toolScope.js');
-const { EVIDENCE_TEXT_FIELDS, METRICS } = await import('../src/domain/ai/claimableEvidence.js');
-const { REQUEST_ENTITY_TYPES, REQUEST_OPERATIONS } = await import('../src/domain/ai/requestContract.js');
+const { EVIDENCE_TEXT_FIELDS, METRICS, equivalentCarriers, metricPaths, rowCollections } = await import('../src/domain/ai/claimableEvidence.js');
+const { conjunctiveEntities, REQUEST_ENTITY_TYPES, REQUEST_OPERATIONS } = await import('../src/domain/ai/requestContract.js');
 
 /** Adla bildirilen varlık türünün sunucu tarafı çözüm aracı (planlayıcı önkoşulu; ihtiyaç değildir). */
 const RESOLVERS = Object.freeze({ project: 'rota_project_search', person: 'rota_person_search', task: 'rota_task_search', wbs: 'rota_wbs_inspect', baseline: 'rota_baseline_compare' });
@@ -371,8 +371,17 @@ function alternativeIssue(part, alt, { referenceDate, matchedParts }) {
   if (alt.metrics?.any && !alt.metrics.any.some((metric) => part.metrics.includes(metric))) return 'metrics:any';
   if (alt.fields && (alt.fields.some((gold) => !(part.fields || []).some((field) => field.metric === gold.metric && field.tool === gold.tool && field.path === gold.path))
     || (part.fields || []).some((field) => !alt.fields.some((gold) => field.metric === gold.metric && field.tool === gold.tool && field.path === gold.path)))) return 'fields';
-  if (!alt.fields && (part.fields || []).length) return 'fields:unexpected';
-  if ((part.bindings || []).length && (part.entities || []).length > 1) return 'bindings:unexpected';
+  if (!alt.fields && (part.fields || []).some(field => {
+    if (field.tool !== tool || !part.metrics.includes(field.metric) || !metricPaths(tool, field.metric).includes(field.path)) return true;
+    const defaults = metricPaths(tool, field.metric).filter(path => part.operation === 'value'
+      ? !rowCollections(tool).some(collection => path.startsWith(`data.${collection}.*.`))
+      : part.population.collection && path.startsWith(`data.${part.population.collection}.*.`));
+    return !defaults.length || !equivalentCarriers(tool, [field.path, ...defaults]);
+  })) return 'fields:unexpected';
+  if ((part.bindings || []).some(binding => !part.metrics.includes(binding.metric) || !Number.isSafeInteger(binding.entity)
+    || binding.entity < 0 || !part.entities?.[binding.entity])) return 'bindings:invalid';
+  if ((part.bindings || []).length && (part.entities || []).length > 1
+    && (!conjunctiveEntities({ ...part, bindings: [] }) || !conjunctiveEntities(part))) return 'bindings:unexpected';
   if (part.metrics.some((metric) => !alt.metrics.allowed.includes(metric))) return 'metrics:extra';
   if (!(alt.collections[tool] || []).includes(part.population?.collection ?? null)) return 'collection';
   if (!(alt.reasoning || ['deterministic']).includes(part.reasoning || 'deterministic')) return 'reasoning';

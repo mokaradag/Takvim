@@ -381,7 +381,8 @@ export function createFakeAiProvider({
   function openToolStream(behavior, call, input) {
     let resolved = behavior.type === 'script' ? (behavior.respond(call) || { type: 'answer', text: '' }) : behavior;
     const native = nativeDeclaration({ text: resolved.type === 'tool-calls' ? (resolved.preface || []).join('') : resolved.text, toolCalls: resolved.calls || [] });
-    if (['answer', 'reply', 'stream', 'tool-calls'].includes(resolved.type) && native.toolCalls.some((tool) => tool.name === 'rota_plan')) {
+    if (['answer', 'reply', 'stream', 'tool-calls'].includes(resolved.type) && resolved.finishReason !== 'length'
+      && resolved.chunks === undefined && native.toolCalls.some((tool) => tool.name === 'rota_plan')) {
       resolved = { ...resolved, type: 'tool-calls', preface: native.text === '' ? [] : resolved.preface || [], calls: native.toolCalls };
     }
     call.behavior = resolved.type;
@@ -395,7 +396,8 @@ export function createFakeAiProvider({
         oversize: Boolean(entry.oversize)
       }));
       for (let index = 0; index < toolCalls.length; index += 1) feed.push({ event: { type: 'tool_call_started' } });
-      feed.push({ event: { type: 'done', finishReason: 'tool_calls', model: input.model, usage: null, toolCalls } });
+      feed.push({ event: { type: 'done', finishReason: resolved.finishReason ?? 'tool_calls',
+        model: resolved.model === undefined ? input.model : resolved.model, usage: resolved.usage ?? null, toolCalls } });
       feed.push({ end: true });
       return Promise.resolve({ events: feed.iterate() });
     }

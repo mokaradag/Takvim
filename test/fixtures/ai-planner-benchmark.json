@@ -4881,13 +4881,7 @@
                   "rota_assignment_requests"
                 ],
                 "filters": {
-                  "tab": {
-                    "any": [
-                      "sent",
-                      "history",
-                      null
-                    ]
-                  }
+                  "tab": "sent"
                 },
                 "metrics": {
                   "any": [
@@ -4912,6 +4906,7 @@
                   "rota_assignment_requests"
                 ],
                 "filters": {
+                  "tab": "sent",
                   "workflowStatus": "APPROVED"
                 },
                 "operation": [
