@@ -491,6 +491,10 @@ test('4C anlamsal artifakt tüm 136 soruyu ve tüm belge skorlarını kapsar; be
   assert.equal(valid.byCase.get('pl-019').status, 'reranked');
   const failed = clone(run); failed.rerank.queries[0] = { case: 'tr-001', failure: 'INFERENCE_FAILED', latencyMs: 1 };
   assert.equal(read(failed).byCase.get('tr-001').status, 'first_stage');
+  const failedQuery = clone(run); failedQuery.embedding.queries[0] = { case: 'tr-001', text: loaded.cases[0].text, failure: 'INFERENCE_FAILED', latencyMs: 1 };
+  assert.equal(read(failedQuery).byCase.get('tr-001').status, 'unavailable');
+  const badScore = clone(run); badScore.rerank.queries[0].scores[0].score = null;
+  assert.equal(read(badScore).byCase.get('tr-001').status, 'first_stage');
   for (const mutate of [(r) => r.embedding.queries.pop(), (r) => r.rerank.queries.pop(),
     (r) => r.rerank.queries[0].scores.pop(), (r) => r.rerank.queries[0].scores.push(clone(r.rerank.queries[0].scores[0])),
     (r) => r.rerank.queries[0] = { case: 'tr-001', failure: 'OTHER' },
@@ -499,6 +503,92 @@ test('4C anlamsal artifakt tüm 136 soruyu ve tüm belge skorlarını kapsar; be
     (r) => { r.rerank.queries[0].latencyMs = '1'; }]) {
     const invalid = clone(run); mutate(invalid); assert.throws(() => read(invalid), /SEMANTIC_/);
   }
+});
+
+test('4C son geçiş: modelin kendi hatalı anahtarı sızıntı değildir; sunucu girdisi denetlenir', async () => {
+  const { leakGuard } = await import('../scripts/planner-evaluation.mjs');
+  const loaded = loadPlannerBenchmark(); const guard = leakGuard(loaded);
+  const good = answerPlan(loaded.cases[0], loaded.referenceDate);
+  const model = scriptedModel(good); let calls = 0;
+  const complete = model.complete.bind(model);
+  model.complete = async payload => { guard(payload); const reply = await complete(payload);
+    if (++calls === 1) reply.toolCalls[0].arguments = JSON.stringify({ ...good, avoid: [] });
+    guard.observe(reply);
+    return reply; };
+  assert.equal((await planCase({ testCase: loaded.cases[0], model, adviceFor: unavailable, now: loaded.now, catalog })).outcome, 'planned');
+  for (const role of ['system', 'user', 'tool']) assert.throws(() => guard({ messages: [{ role, content: '{"gold":1}' }] }), e => e.code === 'PLANNER_GOLD_LEAK');
+  assert.throws(() => guard({ messages: [{ role: 'assistant', content: '{"gold":1}' }] }), e => e.code === 'PLANNER_GOLD_LEAK');
+  assert.throws(() => guard({ messages: [{ role: 'assistant', toolCalls: [{ arguments: '{"gold":1}' }] }] }), e => e.code === 'PLANNER_GOLD_LEAK');
+  assert.throws(() => guard({ messages: [{ role: 'assistant', content: 'tr-001' }] }), e => e.code === 'PLANNER_GOLD_LEAK');
+});
+
+test('4C son geçiş: bitiş nedenleri iki yolda doğrulanır ve bilinmeyen kullanım null kalır', async () => {
+  const { liveTurn } = await import('../scripts/planner-evaluation.mjs');
+  const { PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, scorePlannerRun } = await import('../scripts/planner-scoring.mjs');
+  const loaded = loadPlannerBenchmark(); const c = loaded.cases[0]; const args = answerPlan(c, loaded.referenceDate);
+  for (const finishReason of ['stop', 'end_turn', 'eos', 'stop_sequence', null]) {
+    const model = scriptedModel(args); const complete = model.complete.bind(model);
+    model.complete = async p => ({ ...await complete(p), finishReason });
+    const result = await planCase({ testCase: c, model, expectedModel: 'scripted', adviceFor: unavailable, now: loaded.now, catalog });
+    assert.equal(result.outcome, finishReason ? 'planned' : 'error');
+    if (finishReason) {
+      const record = recordOf(c, 1, result);
+      const run = { format: PLANNER_RUN_FORMAT, version: PLANNER_RUN_VERSION, benchmark: loaded.fingerprint, semanticBenchmark: loaded.semanticFingerprint, referenceDate: loaded.referenceDate,
+        passes: 1, cases: [c.id], records: [record], semantic: { mode: 'none' }, model: { commandHash: '0'.repeat(64) }, qualification: { expectedModel: 'scripted', thinking: 'off' } };
+      assert.equal(scorePlannerRun(run, loaded).byPass[0].correct, 1);
+    }
+    const gateway = { runToolSession: ({ run }) => run({ model: 'scripted', signal: new AbortController().signal,
+      round: async () => ({ ...await model.complete({ messages: [], tools: [] }), model: 'scripted' }) }) };
+    const live = await planCase({ testCase: c, runTurn: liveTurn(gateway, 'scripted', () => {}, { thinking: 'off' }), adviceFor: unavailable, now: loaded.now, catalog });
+    assert.equal(live.outcome, finishReason ? 'planned' : 'error');
+  }
+  const model = scriptedModel(args); const complete = model.complete.bind(model); model.complete = async p => ({ ...await complete(p), usage: {} });
+  const unknown = await planCase({ testCase: c, model, adviceFor: unavailable, now: loaded.now, catalog });
+  assert.equal(recordOf(c, 1, unknown).rounds[0].input, null);
+});
+
+test('4C son geçiş: canlı boş yanıt ölçümü doğrulanır, model ıskası olarak puanlanır', async () => {
+  const { liveTurn } = await import('../scripts/planner-evaluation.mjs');
+  const { PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, scorePlannerRun } = await import('../scripts/planner-scoring.mjs');
+  const loaded = loadPlannerBenchmark(); const c = loaded.cases[0]; let calls = 0;
+  const gateway = { runToolSession: async ({ run }) => {
+    try { return await run({ model: 'scripted', signal: new AbortController().signal, remainingMs: () => 30000, round: async () => {
+      calls += 1;
+      throw Object.assign(new Error('empty'), { code: 'AI_PROVIDER_RESPONSE_INVALID', details: { reason: 'EMPTY_COMPLETION' },
+        roundMeasurements: { model: 'scripted', modelMismatch: false, finishReason: 'stop', usage: { thinkingTokens: 0 } } });
+    } }); } catch { throw Object.assign(new Error('mapped'), { code: 'AI_INTERNAL_ERROR' }); }
+  } };
+  const outcome = await planCase({ testCase: c, runTurn: liveTurn(gateway, 'scripted', () => {}, { thinking: 'off' }), adviceFor: unavailable, now: loaded.now, catalog });
+  assert.equal(outcome.outcome, 'failed'); assert.equal(calls, 2); assert.equal(outcome.rounds.length, 2);
+  const record = recordOf(c, 1, outcome);
+  const run = { format: PLANNER_RUN_FORMAT, version: PLANNER_RUN_VERSION, benchmark: loaded.fingerprint, semanticBenchmark: loaded.semanticFingerprint, referenceDate: loaded.referenceDate,
+    passes: 1, cases: [c.id], records: [record], semantic: { mode: 'none' }, model: { live: { model: 'scripted', provider: 'test', profile: 'chat.tools', thinking: 'off' } }, qualification: { expectedModel: 'scripted', thinking: 'off' } };
+  for (const kind of ['failed', 'unavailable', 'not_found']) {
+    record.outcome = kind;
+    assert.equal(scorePlannerRun(run, loaded).byPass[0].correct, 0);
+  }
+  record.rounds[0].models = [];
+  assert.throws(() => scorePlannerRun(run, loaded), /MODEL_MISMATCH/);
+});
+
+test('4C son geçiş: gerçek ağ geçidindeki boş yanıt ve güvenlik hatası ayrı kalır', async (t) => {
+  const { createAiStack } = await import('./helpers/aiStack.mjs');
+  const { getAiGateway } = await import('../src/server/ai/aiRuntime.js');
+  const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
+  const { liveTurn, leakGuard } = await import('../scripts/planner-evaluation.mjs');
+  const loaded = loadPlannerBenchmark(); const c = loaded.cases[0];
+  const stack = createAiStack(t, { env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
+  const model = DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'].model;
+  const execute = () => planCase({ testCase: c, runTurn: liveTurn(getAiGateway(), model, leakGuard(loaded), { thinking: 'off' }),
+    adviceFor: unavailable, now: loaded.now, catalog });
+  stack.provider.enqueue({ type: 'answer', text: '' }, { type: 'answer', text: '' });
+  const missed = await execute();
+  assert.equal(missed.outcome, 'failed'); assert.equal(missed.rounds.length, 2);
+  assert.deepEqual(missed.rounds.map(round => round.models), [[model], [model]]);
+  stack.provider.enqueue({ type: 'answer', text: '', model: 'wrong' });
+  assert.equal((await execute()).error, 'PLANNER_MODEL_MISMATCH');
+  stack.provider.enqueue({ type: 'status', status: 401 });
+  assert.equal((await execute()).outcome, 'error');
 });
 
 test('4C dış komut çağıranın klasörüne göre çözülür ve geçici klasörü ayrıdır', async (t) => {

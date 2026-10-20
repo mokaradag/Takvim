@@ -219,7 +219,11 @@ export function readModelRun(raw, { catalogue, benchmark }) {
         continue;
       }
       const byItem = exactRows(row.scores, 'id', itemIds, 'skor');
-      for (const score of byItem.values()) closed(score, ['id', 'score'], 'skor');
+      for (const score of byItem.values()) {
+        closed(score, ['id', 'score'], 'skor');
+        // JSON'daki null sonlu olmayan model skorudur; eksik/metin alan bozuk artifakttır.
+        if (!Object.hasOwn(score, 'score') || score.score !== null && typeof score.score !== 'number') fail('Koşu dosyasındaki skor biçimi geçersiz.');
+      }
       // Koşucu her sorguda bütün kataloğu puanlar: çağrının geçerliliği raporun aday sınırına değil bütün çıktıya bağlıdır.
       const valid = [...byItem.values()].every((score) => isScore(score.score));
       outcomes.set(id, valid ? 'ok' : 'invalid');
@@ -563,9 +567,14 @@ function invokedDirectly() {
 }
 
 if (invokedDirectly()) {
+  try {
   const { command, flags } = parseArguments(process.argv.slice(2));
   if (command === 'input') writeInput(load(flags), flags.out);
   else if (command === 'report') await report(load(flags), flags);
   else if (command === 'live') await live(load(flags), flags);
   else fail('Kullanım: node scripts/semantic-evaluation.mjs input [--out dosya] | report --run dosya [--limit 10] [--json] | live [--json]; üçünde de [--queries sorular.json]');
+  } catch (error) {
+    process.stderr.write(`${String(error?.message ?? error).slice(0, 400)}\n`);
+    process.exitCode = 1;
+  }
 }

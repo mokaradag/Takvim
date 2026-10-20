@@ -1450,7 +1450,8 @@ node scripts/planner-evaluation.mjs run --model-command '<komut>' --semantic pla
 ```
 
 Eksik/yabancı/yinelenen anlamsal kimlikler reddedilir. Belgelenmiş `INFERENCE_FAILED` yeniden
-sıralama sonucu ilk aşamaya döner; bozuk skor kümesi geçersizdir. Canlı yolda kayıtlı düşünmesiz
+sıralama sonucu ve tam kimlik kümesindeki sonlu olmayan (`null`) model skoru ilk aşamaya döner;
+eksik/yinelenen skor kimliği, eksik skor alanı ve metin skor bozuk artifakttır. Canlı yolda kayıtlı düşünmesiz
 rota, olaylar ve eksik/sıfır kullanım birlikte doğrulanır; dış komutta bilinmeyen düşünme sayısı
 kabul edilmez. Her iki model yolunda her tur sızıntı denetiminden geçer. Dış komut çağıranın
 çalışma klasöründe çalışır; geçici dosyaları ayrı klasördedir. `--no-score --out` ve canlı modelle
@@ -1464,3 +1465,12 @@ aynı anda dış komut açıkça reddedilir. Gerçek model kabulü hâlâ bekliy
 - Planlayıcı değerlendirmesi anlamsal koşunun kanonik doğrulayıcısını kullanır. Dış modelin bitiş nedeni zorunludur ve korunur. Sızıntı denetimi ham yapılandırılmış girdide çalışır (`PLANNER_GOLD_LEAK`); sayfa boyu aynı nüfusu farklı okuma saydırmaz. Geçerli başarısız model vakası ıskadır, bozuk koşu değildir.
 - Sağlayıcı anahtar/yapılandırma ve kimlik/yetki hataları gizlenmez; beklenen işlemsel danışmanlık kaybı ile sınıflandırılmamış iç hata ayrımı korunur. Yeni üretim yüzeyi, bağımlılık veya bütçe artışı yoktur.
 - Gerçek model kabulü **BEKLİYOR**: kanonik 117/117 + zorunlu ek 19/19 burada çalıştırılmadı. Ortamda canlı AI kapalıdır; dış Haiku komutu ve yerel HuggingFace çalışma zamanı yoktur. Belirlenimci sınamalar gerçek model kabulü sayılmaz.
+
+Son geçişte yapısal ret öncesi çözülen Rota niyeti de korunur; onarım başka niyete geçemez.
+Bağımlı bölüm, kaynağın onarılan metnine değil aynı bölüm kimliğine bağlıdır. Reddedilen karma/taşkın
+ölçü kümesi yalnızca mevcut üç bölüm sınırında, tam ölçü/alan/bağlama kümesi ve kapsam korunarak
+bölünebilir; geçerli ölçü ya da soru silinmez. Hatalı bağlama geçerli kardeş bağlamaları serbest bırakmaz.
+Modelin kendi reddedilen çağrısındaki uydurma anahtar altın sızıntısı sayılmaz; sunucu girdileri ve
+vaka/dosya izleri denetlenmeye devam eder. Canlı boş yanıtlar kimlik, düşünmesizlik ve bitiş nedeni
+doğrulanarak ıska sayılır; gerçek altyapı hatası koşuyu yine durdurur. Bilinmeyen giriş belirteci `null`
+kalır; `live --no-score` tanısal kayıtları puanlamadan gösterir. Gerçek model kabulü hâlâ **BEKLİYOR**.

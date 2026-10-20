@@ -671,3 +671,82 @@ test('4C yakınsama: çoklu aday açıklamasının ortak yönergesi bir kez gös
   const guidance = renderPlannerClarification({ reason: 'missing_referent', locale: 'tr' });
   assert.equal(result.text.split(guidance).length - 1, 1);
 });
+
+test('4C son geçiş: bozuk onarım türü turu çökertmez; geçerli çağrı süzgeci ve bağlama korunur', async (t) => {
+  const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
+  const bad = { ...request, metrics: ['tasks.typo'] };
+  for (const mutation of [{ metrics: { wrong: true } }, { entities: { wrong: true } }]) {
+    const malformed = plan({ intent: 'rota', language: 'tr', request: { ...request, ...mutation } });
+    const result = await turn(t, [plan({ intent: 'rota', language: 'tr', request: bad }), malformed, plan({ intent: 'rota', language: 'tr', request })]);
+    assert.equal(result.result.outcome, 'grounded');
+  }
+  const original = plan({ intent: 'rota', language: 'tr', request, calls: [{ name: 'rota_task_analytics', arguments: { assignee: 'bad' } }] });
+  const broadened = plan({ intent: 'rota', language: 'tr', request: { ...request, filters: { assignee: 'any' } }, calls: [{ name: 'rota_task_analytics', arguments: { assignee: 'any' } }] });
+  assert.equal((await turn(t, [original, broadened, broadened])).result.stats.attempted, 0);
+  assert.equal((await turn(t, [original, plan({ intent: 'rota', language: 'tr', request })])).result.outcome, 'grounded');
+  const scoped = { operation: 'value', metrics: ['tasks.total', 'tasks.overdue'], population: { tool: 'rota_task_analytics' },
+    entities: [{ type: 'project', text: 'Radar Modernizasyonu' }, { type: 'project', text: 'Anten' }],
+    bindings: [{ metric: 'tasks.total', entity: 0 }, { metric: 'tasks.overdue', entity: 1 }, { metric: 'tasks.open', entity: 0 }] };
+  const swapped = { ...scoped, bindings: [{ metric: 'tasks.total', entity: 1 }, { metric: 'tasks.overdue', entity: 0 }, { metric: 'tasks.total', entity: 0 }] };
+  const changed = plan({ intent: 'rota', language: 'tr', request: swapped });
+  assert.equal((await turn(t, [plan({ intent: 'rota', language: 'tr', request: scoped }), changed, changed], { user: 'Radar Modernizasyonu ve Anten görevleri' })).result.stats.attempted, 0);
+});
+
+test('4C son geçiş: kaynak onarımı bağımlı pimi bozmaz; geçersiz ölçü öneki anlam değildir', async (t) => {
+  const source = { operation: 'list', metrics: ['task.typo'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me' } };
+  const follow = { operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', from: 0 }] };
+  const result = await turn(t, [plan({ intent: 'rota', language: 'tr', request: source, additionalRequests: [follow] }),
+    plan({ intent: 'rota', language: 'tr', request: { ...source, metrics: ['task.title'] }, additionalRequests: [follow] })]);
+  assert.ok(result.result.stats.attempted > 0);
+  const bad = { operation: 'value', metrics: ['task.total'], population: { tool: 'rota_task_analytics' } };
+  assert.equal((await turn(t, [plan({ intent: 'rota', language: 'tr', request: bad }),
+    plan({ intent: 'rota', language: 'tr', request: { ...bad, metrics: ['tasks.total'] } })])).result.outcome, 'grounded');
+});
+
+test('4C son geçiş: çağrı hatası geçerli istek koşulunu açmaz', async (t) => {
+  const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
+  const original = plan({ intent: 'rota', language: 'tr', request, calls: [{ name: 'rota_task_analytics', arguments: { assignee: 'bad' } }] });
+  for (const filters of [{}, { assignee: 'unassigned' }]) {
+    const changed = plan({ intent: 'rota', language: 'tr', request: { ...request, filters }, calls: [{ name: 'rota_task_analytics', arguments: { assignee: filters.assignee || 'any' } }] });
+    const rejected = await turn(t, [original, changed, changed]);
+    assert.equal(rejected.result.stats.attempted, 0);
+    assert.match(JSON.stringify(rejected.inputs[2].messages), /repairScope/);
+  }
+});
+
+test('4C son geçiş: yapısal ret geçerli niyeti korur; onarım niyeti değiştirmez', async (t) => {
+  for (const request of [undefined, { ...notifications, metrics: ['notifications.typo'] }]) {
+    const first = plan({ intent: 'rota', language: 'tr', ...(request ? { request } : {}) });
+    const refusal = plan({ intent: 'abstain', language: 'tr', abstain: { reason: 'write' } });
+    const result = await turn(t, [first, refusal, plan({ intent: 'rota', language: 'tr', request: notifications })]);
+    assert.equal(result.result.outcome, 'grounded');
+    assert.match(JSON.stringify(result.inputs[2].messages), /repairScope/);
+  }
+  const bad = plan({ intent: 'rota', language: 'tr', request: notifications, additionalRequests: { invalid: true } });
+  assert.equal((await turn(t, [bad, plan({ intent: 'rota', language: 'tr', request: notifications })])).result.outcome, 'grounded');
+});
+
+test('4C son geçiş: ilgisiz çağrılar ek soru sayısını zorlamaz', async (t) => {
+  const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' } };
+  const original = plan({ intent: 'rota', language: 'tr', request, calls: [{ name: 'rota_task_analytics', arguments: {} },
+    { name: 'rota_notifications', arguments: {} }, { name: 'rota_portfolio_summary', arguments: {} }] });
+  assert.equal((await turn(t, [original, plan({ intent: 'rota', language: 'tr', request, additionalRequests: [notifications] })])).result.stats.attempted, 2);
+});
+
+test('4C son geçiş: ölçü bölme yalnızca tam ölçü kümesini ve geçerli kapsamı koruyarak yapılır', async (t) => {
+  const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' } };
+  const mixed = { ...tasks, metrics: ['tasks.total', 'notifications.unread'] };
+  assert.equal((await turn(t, [plan({ intent: 'rota', language: 'tr', request: mixed }),
+    plan({ intent: 'rota', language: 'tr', request: tasks, additionalRequests: [notifications] })])).result.stats.attempted, 2);
+  const metrics = ['tasks.total', 'tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent', 'tasks.worstOverdueDays'];
+  const oversized = { ...tasks, metrics };
+  const split = plan({ intent: 'rota', language: 'tr', request: { ...tasks, metrics: metrics.slice(0, 8) }, additionalRequests: [{ ...tasks, metrics: metrics.slice(8) }] });
+  const accepted = await turn(t, [plan({ intent: 'rota', language: 'tr', request: oversized }), split]);
+  assert.ok(accepted.result.stats.attempted > 0);
+  for (const request of [{ ...tasks, metrics: ['tasks.total', 'tasks.open'] }]) {
+    const changed = plan({ intent: 'rota', language: 'tr', request, additionalRequests: [notifications] });
+    assert.equal((await turn(t, [plan({ intent: 'rota', language: 'tr', request: mixed }), changed, changed])).result.stats.attempted, 0);
+  }
+  const dropped = plan({ intent: 'rota', language: 'tr', request: { ...tasks, metrics: metrics.slice(0, 8) } });
+  assert.equal((await turn(t, [plan({ intent: 'rota', language: 'tr', request: oversized }), dropped, dropped])).result.stats.attempted, 0);
+});

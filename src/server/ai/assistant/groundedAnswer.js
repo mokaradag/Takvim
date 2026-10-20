@@ -420,7 +420,7 @@ const repairCalls = (turn, calls) => calls.filter((call) => call.name !== 'rota_
 });
 
 /** Düzeltme eşitliği sunucunun tamamladığı anlamdır; boş seçenekler ve varsayılanlar anlam değildir. */
-function repairSemantic(turn, raw, index, calls = [], sections = null) {
+function repairSemantic(turn, raw, index, calls = []) {
   const clean = (value) => {
     if (Array.isArray(value)) return value.map(clean);
     if (!value || typeof value !== 'object') return value;
@@ -432,11 +432,7 @@ function repairSemantic(turn, raw, index, calls = [], sections = null) {
   const completion = completeRequest(parsed, calls, { today: turn.context.today, allowedTextFields: turn.allowedTextFields });
   const request = completion.request;
   const tool = request.population?.tool;
-  const semantic = { ...request, metrics: [...request.metrics].sort(), entities: request.entities.map(({ query: _query, ...entity }) => {
-    if (entity.from == null || !sections) return entity;
-    const source = repairSemantic(turn, sections[entity.from], entity.from, entity.from ? [] : calls);
-    return { ...entity, from: source.semantic };
-  }),
+  const semantic = { ...request, metrics: [...request.metrics].sort(), entities: request.entities.map(({ query: _query, ...entity }) => entity),
     filters: tool ? declaredFacets(tool, request.filters, turn.context.today) : request.filters,
     population: tool ? { tool, collection: request.population.collection ?? null, ...requestDimensions(request, tool) } : null,
     rank: request.rank ? { ...request.rank, limit: request.rank.limit ?? 1 } : null };
@@ -451,8 +447,8 @@ function repairAllowance(details, raw) {
     if (!path.startsWith('$.')) continue;
     if (path.startsWith('$.calls')) {
       const key = /^\$\.calls\[\d+\]\.[^.]+\.([^.[]+)/.exec(path)?.[1];
-      if (Object.hasOwn(requestSchema().properties.filters.properties, key)) paths.add(`filters.${key}`);
-      if (['sort', 'groupBy', 'depth', 'textFields'].includes(key)) paths.add(`population.${key}`);
+      if (Object.hasOwn(requestSchema().properties.filters.properties, key) && raw.filters?.[key] == null) paths.add(`filters.${key}`);
+      if (['sort', 'groupBy', 'depth', 'textFields'].includes(key) && raw.population?.[key] == null) paths.add(`population.${key}`);
       const entity = { taskId: 'task', projectId: 'project', personSicil: 'person', wbsId: 'wbs', baselineId: 'baseline' }[key];
       if (entity && !(Array.isArray(raw.entities) ? raw.entities : []).some(item => item?.type === entity)) paths.add(`callEntity:${entity}`);
       continue;
@@ -465,6 +461,12 @@ function repairAllowance(details, raw) {
     }
     if (relative === 'metrics' && reason === 'unique') { paths.add('metricsUnique'); continue; }
     if (relative === 'metrics' && reason === 'maxItems') continue;
+    if (relative === 'bindings' && reason === 'unknown' && Array.isArray(raw.bindings)) {
+      raw.bindings.forEach((binding, index) => {
+        if (!raw.metrics?.includes?.(binding?.metric) || !raw.entities?.[binding?.entity]) paths.add(`bindings[${index}]`);
+      });
+      continue;
+    }
     if (relative === 'metrics' || /^metrics\[\d+\]$/.test(relative)) {
       if (reason === 'population') {
         paths.add('population.tool'); paths.add('population.collection');
@@ -492,7 +494,12 @@ function repairOmit(value, paths, prefix = '') {
     .filter(([, item]) => item != null && !(Array.isArray(item) && !item.length) && !(typeof item === 'object' && !Object.keys(item).length)));
 }
 
-function repairProjection(turn, raw, index, calls, sections, paths) {
+function repairProjection(turn, raw, index, calls, sections, paths, references = null) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return stable({ invalid: typeof raw });
+  // Ham model biçimi eşitlikten önce güvenilir sayılmaz; bozuk türler hiçbir zaman diziye zorlanmaz.
+  for (const key of ['metrics', 'entities', 'fields', 'bindings']) {
+    if (raw[key] != null && !Array.isArray(raw[key]) && !paths.has(key)) return stable({ invalid: key, value: raw[key] });
+  }
   const known = Object.fromEntries(Object.entries(raw).filter(([key]) => Object.hasOwn(requestSchema().properties, key)));
   const masked = repairOmit(known, paths);
   const transfer = [...paths].find(path => path.startsWith('textSelector:'))?.split(':')[1];
@@ -506,7 +513,7 @@ function repairProjection(turn, raw, index, calls, sections, paths) {
   const placeholders = (masked.entities || []).flatMap((entity, index) => entity && affected(index)
     ? [{ index, entity: { ...entity, id: entity.id ?? null, text: entity.text ?? null } }] : []);
   // Sorunlu yapraklar ayrıştırmayı engellemez; alan/bağlama niyeti ayrıca, aynı maskeyle korunur.
-  const metrics = [...new Set((masked.metrics || []).filter(metric => Object.hasOwn(METRICS, metric)))];
+  const metrics = [...new Set((masked.metrics || []).filter(metric => Object.hasOwn(METRICS, metric)))].slice(0, requestSchema().properties.metrics.maxItems);
   const surrogateIndexes = new Set();
   const entities = (masked.entities || []).flatMap((entity, index) => {
     if (!entity) return [];
@@ -522,7 +529,7 @@ function repairProjection(turn, raw, index, calls, sections, paths) {
   if (!probe.population?.tool) probe.population = raw.population;
   let semantic;
   try {
-    semantic = repairSemantic(turn, probe, index, calls, sections).semantic;
+    semantic = repairSemantic(turn, probe, index, calls).semantic;
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
     // Daha erken şema hatası kalan anlamı serbest bırakamaz.
@@ -536,36 +543,47 @@ function repairProjection(turn, raw, index, calls, sections, paths) {
     semantic.population = { dimensions: repairDimensions(semantic) };
   }
   semantic.entities = (semantic.entities || []).filter(entity => !paths.has(`callEntity:${entity?.type}`));
+  // Bağımlılık, onarılmakta olan kaynağın ham anlamına değil aynı kaynak bölümüne bağlanır.
+  semantic.entities = semantic.entities.map(entity => entity?.from == null ? entity
+    : { ...entity, from: references ? references.get(entity.from) ?? 'unmatched' : entity.from });
   const projection = repairOmit(semantic, new Set([...paths].filter(path => !path.startsWith('metrics['))));
   // Geçersiz ölçü tek bir yuvadır; onarım fazladan ölçü ekleyemez.
   return stable({ semantic: projection, ...(transfer ? { textScope: typeof textScope === 'string' ? containmentText(textScope) : textScope } : {}), metricCount: paths.has('metrics') ? null : paths.has('metricsUnique') ? new Set(raw.metrics).size : raw.metrics?.length ?? null });
 }
 
 function pinRepair(turn, plan, details, calls = [], executionCalls = []) {
+  if (plan.intent !== PLANNER_INTENTS.ROTA) return;
   if (details.some(detail => String(detail).endsWith(':dropped'))) return;
-  const sections = [plan.request, ...(plan.additionalRequests || [])];
+  const sections = [plan.request, ...(Array.isArray(plan.additionalRequests) ? plan.additionalRequests : [])];
   const ownProblems = index => details.filter(detail => index ? String(detail).startsWith(`$.additionalRequests[${index - 1}]`)
     : !String(detail).startsWith('$.additionalRequests'));
   const snapshot = turn.repairPins.get('snapshot');
   if (snapshot) {
     const used = new Set();
+    const references = new Map();
     for (const pin of snapshot.pins) {
       const index = sections.findIndex((raw, index) => !used.has(index)
-        && repairProjection(turn, raw, index, index ? [] : snapshot.calls, sections, pin.paths) === pin.projection);
+        && repairProjection(turn, raw, index, index ? [] : snapshot.calls, sections, pin.paths, references) === pin.projection);
       if (index < 0) continue;
       used.add(index);
+      references.set(index, pin.index);
       for (const path of repairAllowance(ownProblems(index), sections[index])) pin.paths.add(path);
       pin.projection = repairProjection(turn, pin.raw, pin.index, pin.index ? [] : snapshot.calls, snapshot.sections, pin.paths);
     }
     return;
   }
-  const pins = sections.map((raw, index) => {
+  const pins = sections.map((section, index) => {
+    const raw = section && typeof section === 'object' && !Array.isArray(section) ? section : {};
     const own = ownProblems(index);
     const paths = repairAllowance(own, raw || {});
+    if (!section) for (const key of Object.keys(requestSchema().properties)) paths.add(key);
     if (!raw?.population && !calls.some(call => Array.isArray(raw?.metrics) && raw.metrics.every(metric => metricPaths(call.name, metric).length))) {
       paths.add('population.tool'); paths.add('population.collection');
     }
-    return { raw, index, paths, projection: repairProjection(turn, raw || {}, index, index ? [] : calls, sections, paths) };
+    const split = Array.isArray(raw.metrics) && raw.metrics.every(metric => Object.hasOwn(METRICS, metric))
+      && own.some(detail => /\.metrics(?:\[\d+\])?:(?:population|maxItems)$/.test(String(detail)))
+      && !sections.some(part => Array.isArray(part?.entities) && part.entities.some(entity => entity?.from === index));
+    return { raw, index, paths, split, projection: repairProjection(turn, raw, index, index ? [] : calls, sections, paths) };
   });
   const unrelated = [...new Set(details.flatMap(detail => {
     const match = /^\$\.calls\[(\d+)\].*\.request:unrelated$/.exec(String(detail));
@@ -580,17 +598,39 @@ function repairMatches(turn, plan, calls = []) {
   if (!snapshot) return true;
   if (plan.intent !== PLANNER_INTENTS.ROTA) return false;
   const sections = [plan.request, ...(plan.additionalRequests || [])];
-  if (sections.length !== snapshot.count && sections.length !== snapshot.count + snapshot.additions.length) return false;
+  if (sections.length < snapshot.count || sections.length > PLANNER_LIMITS.maxRequests
+    || !snapshot.pins.some(pin => pin.split) && sections.length > snapshot.count + snapshot.additions.length) return false;
   const used = new Set();
+  const references = new Map();
   for (const pin of snapshot.pins) {
+    if (pin.split) {
+      // Bölme yeni soru üretmez: aynı kapsamda aynı ölçü/alan/bağlama kümesi tam olarak taşınır.
+      const paths = new Set([...pin.paths, 'metrics', 'fields', 'bindings', 'population.tool', 'population.collection']);
+      const expected = repairProjection(turn, pin.raw, pin.index, pin.index ? [] : snapshot.calls, snapshot.sections, paths);
+      const available = sections.flatMap((raw, index) => !used.has(index) && Array.isArray(raw?.metrics)
+        && raw.metrics.length && raw.metrics.every(metric => pin.raw.metrics.includes(metric))
+        && (raw.metrics.length === pin.raw.metrics.length || !raw.metrics.some(metric => metricPaths(pin.raw.population?.tool, metric).length)
+          || raw.population?.tool === pin.raw.population?.tool)
+        && repairProjection(turn, raw, index, index ? [] : snapshot.calls, sections, paths, references) === expected
+        && (index || repairProjection(turn, raw, index, calls, sections, paths, references) === expected) ? [index] : []);
+      const sameItems = (key, indexes) => pin.paths.has(key) || Array.isArray(pin.raw[key] || [])
+        && indexes.every(index => Array.isArray(sections[index][key] || []))
+        && stable(indexes.flatMap(index => sections[index][key] || []).map(stable).sort()) === stable((pin.raw[key] || []).map(stable).sort());
+      let selected = null;
+      for (let mask = 1; mask < (1 << available.length); mask += 1) {
+        const indexes = available.filter((_, bit) => mask & (1 << bit));
+        if (['metrics', 'fields', 'bindings'].every(key => sameItems(key, indexes))) { selected = indexes; break; }
+      }
+      if (!selected) return false;
+      for (const index of selected) { used.add(index); references.set(index, pin.index); }
+      continue;
+    }
     const index = sections.findIndex((raw, index) => !used.has(index)
-      && (!Array.isArray(pin.raw?.metrics) || pin.raw.metrics.every((metric, slot) => !pin.paths.has(`metrics[${slot}]`)
-        || !Object.keys(METRICS).some(id => id.startsWith(`${String(metric).split('.')[0]}.`))
-        || String(raw.metrics?.[slot]).startsWith(`${String(metric).split('.')[0]}.`)))
-      && repairProjection(turn, raw, index, index ? [] : snapshot.calls, sections, pin.paths) === pin.projection
-      && (index || repairProjection(turn, raw, index, calls, sections, pin.paths) === pin.projection));
+      && repairProjection(turn, raw, index, index ? [] : snapshot.calls, sections, pin.paths, references) === pin.projection
+      && (index || repairProjection(turn, raw, index, calls, sections, pin.paths, references) === pin.projection));
     if (index < 0) return false;
     used.add(index);
+    references.set(index, pin.index);
   }
   // Ek soru yalnızca sunucunun ilgisiz saydığı çağrının nüfusuna bağlanabilir.
   const added = sections.map((raw, index) => ({ raw, index })).filter(({ index }) => !used.has(index));
@@ -611,7 +651,7 @@ function repairMatches(turn, plan, calls = []) {
 
 /** Ölçünün gerektirdiği metin ile kazara eklenen nüfus seçeneği ayrıdır. */
 function planNeedsText(turn, plan) {
-  return [plan?.request, ...(plan?.additionalRequests || [])].filter(Boolean).some((raw) => Array.isArray(raw.metrics)
+  return [plan?.request, ...(Array.isArray(plan?.additionalRequests) ? plan.additionalRequests : [])].filter(Boolean).some((raw) => Array.isArray(raw.metrics)
     && raw.metrics.some((metric) => turn.catalog.some((tool) => metricPaths(tool.name, metric).some((path) => {
       const field = path.split('.').at(-1);
       return EVIDENCE_TEXT_FIELDS.includes(field) && !turn.allowedTextFields.includes(field);
@@ -1432,7 +1472,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     rejectedPlan = null;
     if (!frozen() && result.toolCalls.some((call) => call.name === 'rota_plan')) {
       try {
-        plan = unpackTypedPlan(result);
+        plan = unpackTypedPlan(result, { onDecoded: decoded => { rejectedPlan = decoded; } });
         rejectedPlan = plan.plan;
         if (!repairMatches(turn, plan.plan, repairCalls(turn, plan.calls))) throw invalidArguments(['$.plan:repairScope']);
       }

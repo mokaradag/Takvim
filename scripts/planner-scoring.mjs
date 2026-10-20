@@ -555,16 +555,17 @@ export function validatePlannerRun(run, loaded) {
         || !Array.isArray(part.bindings) || part.bindings.some((binding) => !isRecord(binding))))) invalid();
     if (record.choice != null && (!isRecord(record.choice) || !['clarify', 'abstain'].includes(record.choice.intent) || typeof record.choice.reason !== 'string'
       || record.choice.topics != null && (!Array.isArray(record.choice.topics) || record.choice.topics.some((topic) => typeof topic !== 'string')))) invalid();
-    if (typeof record.general !== 'boolean' || !(['tr', 'en'].includes(record.language) || record.outcome === 'failed' && record.language === null)) invalid();
-    if (record.outcome === 'failed' && (record.plan != null || record.choice != null || record.general)) invalid();
-    if (!['planned', 'clarification', 'abstained', 'general_redirect', 'failed'].includes(record.outcome) || record.error) invalid();
+    const missed = ['failed', 'unavailable', 'not_found'].includes(record.outcome);
+    if (typeof record.general !== 'boolean' || !(['tr', 'en'].includes(record.language) || missed && record.language === null)) invalid();
+    if (missed && (record.plan != null || record.choice != null || record.general)) invalid();
+    if (!['planned', 'clarification', 'abstained', 'general_redirect'].includes(record.outcome) && !missed || record.error) invalid();
     if (!['reranked', 'first_stage', 'unavailable'].includes(record.semantic?.state) || !Array.isArray(record.semantic?.candidates)
       || new Set(record.semantic.candidates).size !== record.semantic.candidates.length || record.semantic.candidates.length > 10
       || record.semantic.candidates.some((id) => !rotaToolNames().includes(id))) invalid();
     if ((run.semantic.mode === 'none' || record.semantic.state === 'unavailable') && record.semantic.candidates.length
       || record.semantic.state !== 'unavailable' && !record.semantic.candidates.length) invalid();
     for (const round of record.rounds) {
-      if (!['stop', 'tool_calls', 'length', 'content_filter'].includes(round.finishReason)) throw new Error('PLANNER_COMPLETION_UNVERIFIED');
+      if (!['stop', 'end_turn', 'eos', 'stop_sequence', 'tool_calls', 'length', 'content_filter'].includes(round.finishReason)) throw new Error('PLANNER_COMPLETION_UNVERIFIED');
       if (!Array.isArray(round.models) || !round.models.length || round.models.some((model) => model !== run.qualification.expectedModel)) throw new Error('PLANNER_MODEL_MISMATCH');
       if (round.thinkingMode !== 'off' || round.thinking !== 0 || round.thinkingBlocks != null && round.thinkingBlocks !== 0) throw new Error('PLANNER_THINKING_UNVERIFIED');
     }

@@ -104,7 +104,7 @@ function normalizePlan(plan) {
  * çağrıları `prepareExecutionSet` ile birlikte doğrulanır.
  * `{ plan: { intent, language, request, additionalRequests? }, calls }`.
  */
-export function unpackTypedPlan(result) {
+export function unpackTypedPlan(result, { onDecoded = () => {} } = {}) {
   const plans = result.toolCalls.filter((call) => call.name === 'rota_plan');
   if (plans.length !== 1 || plans[0].oversize) throw invalidArguments(['$.plan:single']);
   const [call] = plans;
@@ -113,6 +113,7 @@ export function unpackTypedPlan(result) {
   try { plan = JSON.parse(call.arguments); } catch { throw invalidArguments(['$.plan:json']); }
   plan = normalizePlan(decodeNestedJson(plan));
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw invalidArguments(['$.plan:shape']);
+  onDecoded(plan);
   if (Array.isArray(plan.additionalRequests) && !plan.additionalRequests.length) delete plan.additionalRequests;
   for (const key of ['request', 'clarify', 'abstain']) {
     if (key !== (plan.intent === PLANNER_INTENTS.ROTA ? 'request' : plan.intent) && plan[key] && typeof plan[key] === 'object' && !Array.isArray(plan[key]) && !Object.keys(plan[key]).length) delete plan[key];

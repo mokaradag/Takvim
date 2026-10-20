@@ -772,6 +772,18 @@ test('çağıranın iptali her evrede iptal kalır; geç gelen model sonucu uygu
   assert.equal(aiTelemetrySnapshot().semantic.byStatus.cancelled, 3);
 });
 
+test('4C son geçiş: yeniden sıralama süre sınırı kendi evresinde ölçülür', async (t) => {
+  const { retrieve, provider, rerankCalls } = setup(t);
+  await retrieve();
+  provider.enqueue({ type: 'reply' }, { type: 'deferred' });
+  const controller = new AbortController();
+  const pending = retrieve(QUERY, { signal: controller.signal });
+  await until(() => rerankCalls().length === 2, 'yeniden sıralama başladı');
+  controller.abort(new AiError('AI_TIMEOUT'));
+  await assert.rejects(pending);
+  assert.equal(aiTelemetrySnapshot().semantic.lastFailure.stage, 'rerank');
+});
+
 test('iptal model sonucu geldikten sonra ama sonuç döndürülmeden önce gelirse de sonuç uygulanmaz', async (t) => {
   const provider = createFakeAiProvider({ embed: toyEmbed, rerank: toyRerank });
   const { gateway } = semanticGatewayFor(t, { provider, loadCatalogueTools: () => TOOLS });

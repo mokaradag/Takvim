@@ -282,6 +282,7 @@ export function createSemanticRetrieval({
 
     const firstStage = (outcome) => ({ ...outcome, status: SEMANTIC_RETRIEVAL_STATUS.FIRST_STAGE, candidates: ranked.candidates });
     if (routes.rerank) return firstStage(profileOutcome(STAGE.RERANK, routes.rerank));
+    trace.stage = STAGE.RERANK;
     let scored;
     try {
       scored = await getGateway().rerankTexts({

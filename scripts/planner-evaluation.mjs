@@ -11,7 +11,7 @@
  *     tur durur; hiçbir Rota verisi okunmaz. Karar altın etiketlerle `planner-scoring.mjs` içinde puanlanır.
  *
  *     Model, verilen dış komutla çağrılır: stdin üretim turunun `session.round` girdisidir (`{ messages, tools,
- *     toolChoice }`), stdout `{ text, toolCalls, finishReason, usage, models }`. Komut modele kendi yerel araç çağırma
+ *     toolChoice }`), stdout `{ text, toolCalls, finishReason, usage, models, thinking: "off" }`. Komut modele kendi yerel araç çağırma
  *     arayüzünü verir ve araç yürütmez. Modele giden girdi vaka kimliği, beklenti ya da altın etiket taşıyamaz
  *     (her çağrıdan önce denetlenir). `--inputs` modele giden her girdiyi ve yanıtı denetim için yazar.
  *
@@ -92,20 +92,44 @@ function parseArguments([command, ...rest]) {
 
 function leakGuard(benchmark) {
   const ids = benchmark.cases.map((testCase) => testCase.id);
-  const markers = [/\b(?:tr|pl)-\d{3}\b/, /"(?:needs|avoid|expect|gold)\\*"\s*:/, /ai-(?:semantic|planner)-benchmark/, /planner-scoring/];
-  return function inspect(value) {
+  const authored = new Set();
+  const argumentHash = value => {
+    try { return createHash('sha256').update(JSON.stringify(JSON.parse(value))).digest('hex'); } catch { return null; }
+  };
+  const markers = [/\b(?:tr|pl)-\d{3}\b/, /ai-(?:semantic|planner)-benchmark/, /planner-scoring/];
+  const goldKey = /"(?:needs|avoid|expect|gold)\\*"\s*:/;
+  const inspect = (value, modelAuthored = false, assistant = false) => {
     if (typeof value === 'string') {
-      if (markers.some((marker) => marker.test(value)) || ids.some((id) => value.includes(id))) {
+      if (markers.some((marker) => marker.test(value)) || !modelAuthored && goldKey.test(value) || ids.some((id) => value.includes(id))) {
         throw Object.assign(new Error('Modele giden metinde vaka kimliği ya da altın etiket izi bulundu; koşu durduruldu.'), { code: 'PLANNER_GOLD_LEAK' });
       }
     } else if (value && typeof value === 'object') {
       for (const [key, item] of Object.entries(value)) {
-        inspect(`"${key}":`);
-        inspect(item);
+        inspect(`"${key}":`, modelAuthored);
+        inspect(item, modelAuthored || assistant && key === 'arguments' && authored.has(argumentHash(item)), assistant);
       }
     }
   };
+  const guard = (input) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return inspect(input);
+    for (const [key, value] of Object.entries(input)) {
+      inspect(`"${key}":`);
+      // Yalnızca bu koşuda modelden alınan çağrı kendi çıktısıdır; geçmiş ve sunucu girdileri istisna değildir.
+      if (key === 'messages' && Array.isArray(value)) value.forEach(message => inspect(message, false, message?.role === 'assistant'));
+      else inspect(value);
+    }
+  };
+  guard.observe = completion => {
+    for (const call of completion.toolCalls || []) {
+      const hash = argumentHash(call.arguments);
+      if (hash) authored.add(hash);
+    }
+  };
+  return guard;
 }
+
+const COMPLETION_REASONS = Object.freeze(['stop', 'end_turn', 'eos', 'stop_sequence', 'tool_calls', 'length', 'content_filter']);
+const verifyCompletion = reason => { if (!COMPLETION_REASONS.includes(reason)) fail('PLANNER_COMPLETION_UNVERIFIED'); };
 
 /** Belirteç şekilleri tek yerde normalleştirilir; bilinmeyen düşünme sayısı sıfır sayılmaz. */
 function normalizedUsage(usage) {
@@ -131,7 +155,7 @@ function verifyModel(models, usage, expectedModel, thinkingMode) {
 
 /**
  * Dış model komutu: stdin üretim turunun girdisini (`{ messages, tools, toolChoice }`, OpenAI uyumlu iletiler ve
- * işlev araçları) alır; stdout `{ text, toolCalls: [{ name, arguments }], finishReason, usage, models }` yazar. Komut modele
+ * işlev araçları) alır; stdout `{ text, toolCalls: [{ name, arguments }], finishReason, usage, models, thinking: "off" }` yazar. Komut modele
  * kendi yerel araç çağırma biçimini verir (ör. bir sağlayıcının yerel araç arayüzü); araç yürütmez.
  */
 function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes = 4 * 1024 * 1024 }) {
@@ -189,6 +213,7 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
       if (inputs) writeFileSync(path.join(inputs, 'completions.jsonl'), `${JSON.stringify({ call: id, error: reply?.error ?? null, usage: normalizedUsage(reply?.usage) })}\n`, { flag: 'a' });
       const toolCalls = (Array.isArray(reply?.toolCalls) ? reply.toolCalls : []).filter((call) => call && typeof call.name === 'string')
         .map((call, index) => ({ id: `call_${id}_${index + 1}`, name: call.name, arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments ?? {}), oversize: false }));
+      guard.observe?.({ toolCalls });
       return { text: typeof reply?.text === 'string' ? reply.text : '', toolCalls, usage: normalizedUsage(reply?.usage), thinking: reply?.thinking === 'off' ? 'off' : 'unverified', models: Array.isArray(reply?.models) ? reply.models : [],
         finishReason: reply?.finishReason ?? null, error: reply?.error ?? null, durationMs: Date.now() - startedAt };
     },
@@ -221,10 +246,13 @@ function candidatesFromRun(file, benchmark) {
   const result = new Map();
   for (const testCase of benchmark.cases) {
     const query = queries.get(testCase.id);
+    if (query.failure === 'INFERENCE_FAILED') {
+      result.set(testCase.id, { status: 'unavailable', candidates: [], failure: { reason: 'INFERENCE_FAILED' } });
+      continue;
+    }
     const ranked = rankSemanticIndex(index.index, { space, embeddings: [{ index: 0, vector: query.vector }], limit: Math.min(SEMANTIC_RETRIEVAL_DEPTH, items.items.length) });
     if (!ranked.ok) fail('SEMANTIC_VECTOR_INVALID');
     const outcome = rerank?.outcomes.get(testCase.id);
-    if (outcome === 'invalid') fail('SEMANTIC_RERANK_SCORES_INVALID');
     if (outcome === 'ok') {
       const scores = rerank.scores.get(testCase.id);
       const reranked = applyRerankScores(ranked.candidates, ranked.candidates.map((candidate, index) => ({ index, score: scores.get(candidate.id).score })));
@@ -289,7 +317,7 @@ function externalTurn(model, expectedModel) {
       if (completion.error) throw Object.assign(new Error(completion.error), { code: completion.error });
       if (expectedModel) {
         verifyModel(completion.models, completion.usage, expectedModel, completion.thinking);
-        if (!['stop', 'tool_calls', 'length', 'content_filter'].includes(completion.finishReason)) fail('PLANNER_COMPLETION_UNVERIFIED');
+        verifyCompletion(completion.finishReason);
       }
       return { text: completion.text, toolCalls: completion.toolCalls, finishReason: completion.finishReason ?? (completion.toolCalls.length ? 'tool_calls' : 'stop'), model: null,
         configuredModel: 'planner-under-test', modelMismatch: false, usage: null, durationMs: completion.durationMs, firstEventMs: null };
@@ -310,10 +338,16 @@ function liveTurn(gateway, expectedModel, guard, route) {
         guard({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice });
         const startedAt = Date.now();
         let thinking = false;
-        const result = await session.round({ ...input, onEvent: async (event) => {
+        let empty = null;
+        let result;
+        try { result = await session.round({ ...input, onEvent: async (event) => {
           if (event.type === 'thinking') thinking = true;
           return input.onEvent?.(event);
-        } });
+        } }); } catch (error) {
+          if (error?.code !== 'AI_PROVIDER_RESPONSE_INVALID' || error.details?.reason !== 'EMPTY_COMPLETION') throw error;
+          empty = error;
+          result = { ...error.roundMeasurements, toolCalls: [] };
+        }
         const model = session.reportedModel?.(result.model) ?? result.model;
         const usage = normalizedUsage(result.usage || {});
         // Kayıtlı düşünmesiz rota, olay gözlemi ve sağlayıcının eksik/sıfır kullanım biçimi birlikte doğrulanır.
@@ -322,10 +356,14 @@ function liveTurn(gateway, expectedModel, guard, route) {
           toolCalls: result.toolCalls.length, error: null, usage });
         if (session.model !== expectedModel || result.modelMismatch) fail('PLANNER_MODEL_MISMATCH');
         verifyModel([model], usage, expectedModel, thinking ? 'on' : route?.thinking);
+        verifyCompletion(result.finishReason);
+        if (empty) throw empty;
+        guard.observe?.(result);
         return result;
       } });
       try { return await runGroundedTurn(recording, options); } catch (error) {
         if (error instanceof PlanCaptured) return CAPTURED;
+        if (error?.code === 'AI_PROVIDER_RESPONSE_INVALID' && error.details?.reason === 'EMPTY_COMPLETION') return { outcome: 'failed' };
         // Ağ geçidi değerlendirme kodlarını yeniden sınıflandırmasın.
         if (typeof error?.code === 'string' && error.code.startsWith('PLANNER_')) return { evaluationError: error };
         throw error;
@@ -381,7 +419,7 @@ function recordOf(testCase, pass, outcome) {
     declarations: outcome.decisions.at(-1)?.declarations ?? null,
     semantic: { state: outcome.semantic.state, candidates: [...outcome.semantic.candidates] },
     rounds: outcome.rounds.map((round) => ({ finishReason: round.finishReason ?? null, durationMs: round.durationMs, toolCalls: round.toolCalls,
-      input: round.usage ? (round.usage.input_tokens ?? 0) + (round.usage.cache_read_input_tokens ?? 0) + (round.usage.cache_creation_input_tokens ?? 0) : null,
+      input: round.usage?.input_tokens != null ? round.usage.input_tokens + (round.usage.cache_read_input_tokens ?? 0) + (round.usage.cache_creation_input_tokens ?? 0) : null,
       output: round.usage?.output_tokens ?? null, thinking: round.usage?.output_tokens_details?.thinking_tokens ?? null,
       thinkingBlocks: round.usage?.thinkingBlocks ?? null, thinkingMode: round.thinkingMode ?? null, models: round.models, error: round.error ?? null }))
   };
@@ -490,7 +528,7 @@ if (!direct) {
     documents: items.items.map(({ id, text }) => ({ id, text })), queries: loaded.cases.map(({ id, text }) => ({ case: id, text })) };
   if (flags.out) writeFileSync(flags.out, `${JSON.stringify(input, null, 2)}\n`, 'utf8');
   else process.stdout.write(`${JSON.stringify(input, null, 2)}\n`);
-} else if (command === 'run') {
+} else if (command === 'run' || command === 'live') {
   const run = await runEvaluation(flags);
   if (flags.out) writeFileSync(flags.out, `${JSON.stringify(run, null, 2)}\n`, 'utf8');
   if (flags.noScore) process.stdout.write(`${JSON.stringify(run.records.map(({ rounds: _rounds, ...record }) => record), null, 1)}\n`);
@@ -499,10 +537,6 @@ if (!direct) {
   if (!flags.run) fail('--run gerekir.');
   let run;
   try { run = JSON.parse(readFileSync(flags.run, 'utf8')); } catch { fail('Koşu dosyası okunamadı.'); }
-  process.exitCode = printReport(run, flags).gatePassed ? 0 : 1;
-} else if (command === 'live') {
-  const run = await runEvaluation(flags);
-  if (flags.out) writeFileSync(flags.out, `${JSON.stringify(run, null, 2)}\n`, 'utf8');
   process.exitCode = printReport(run, flags).gatePassed ? 0 : 1;
 } else {
   fail('Komut: run | report | live');
