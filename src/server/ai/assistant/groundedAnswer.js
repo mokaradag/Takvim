@@ -459,6 +459,7 @@ function repairAllowance(details, raw) {
       if (['task', 'project', 'person', 'wbs', 'baseline'].includes(type)) paths.add(`textSelector:${type}`);
       paths.add('population.collection');
     }
+    if (['fields', 'bindings'].includes(relative) && reason === 'unique') paths.add(`${relative}Unique`);
     if (relative === 'metrics' && reason === 'unique') { paths.add('metricsUnique'); continue; }
     if (relative === 'metrics' && reason === 'maxItems') continue;
     if (relative === 'bindings' && reason === 'unknown' && Array.isArray(raw.bindings)) {
@@ -612,8 +613,7 @@ function repairMatches(turn, plan, calls = []) {
       const paths = new Set([...pin.paths].filter(path => !/^(?:filters|entities)(?:[.\[]|$)/.test(path)));
       for (const path of ['metrics', 'fields', 'bindings', 'population.tool', 'population.collection']) paths.add(path);
       const projected = (raw) => raw.metrics.length === pin.raw.metrics.length ? pin.raw : requestScopeForTool({ ...pin.raw, metrics: raw.metrics,
-        fields: (Array.isArray(pin.raw.fields) ? pin.raw.fields : []).filter(field => raw.metrics.includes(field?.metric)),
-        bindings: (Array.isArray(pin.raw.bindings) ? pin.raw.bindings : []).filter(binding => raw.metrics.includes(binding?.metric)) }, raw.population?.tool);
+        fields: (Array.isArray(pin.raw.fields) ? pin.raw.fields : []).filter(field => raw.metrics.includes(field?.metric)) }, raw.population?.tool);
       const matches = (raw, index, candidateCalls) => repairProjection(turn, raw, index, candidateCalls, sections, paths, references)
         === repairProjection(turn, projected(raw), pin.index, pin.index ? [] : snapshot.calls, snapshot.sections, paths);
       const available = sections.flatMap((raw, index) => !used.has(index) && Array.isArray(raw?.metrics)
@@ -622,10 +622,41 @@ function repairMatches(turn, plan, calls = []) {
           || raw.population?.tool === pin.raw.population?.tool)
         && matches(raw, index, index ? [] : snapshot.calls)
         && (index || matches(raw, index, calls)) ? [index] : []);
-      const items = (raw, key) => (raw[key] || []).map(item => key === 'bindings' ? { ...item, entity: raw.entities?.[item.entity] } : item).map(stable).sort();
-      const sameItems = (key, indexes) => pin.paths.has(key) || Array.isArray(pin.raw[key] || [])
-        && indexes.every(index => Array.isArray(sections[index][key] || []))
-        && stable(indexes.flatMap(index => items(sections[index], key)).sort()) === stable(items(pin.raw, key));
+      const sameItems = (key, indexes) => {
+        if (!Array.isArray(pin.raw[key] || [])) return pin.paths.has(key);
+        if (!indexes.every(index => Array.isArray(sections[index][key] || []))) return false;
+        const candidates = indexes.flatMap(index => (sections[index][key] || []).map(item => ({ item, raw: sections[index] })));
+        // Bölme tam ölçü kümesini korur; satır hatası ölçü silme izni değildir.
+        if (key === 'metrics') return stable(candidates.map(({ item }) => item).sort()) === stable([...pin.raw.metrics].sort());
+        const paths = new Set([...pin.paths].filter(path => path !== key));
+        const normalized = (item, raw, prefix) => {
+          const masked = repairOmit(item, paths, prefix);
+          return masked && key === 'bindings' && Object.hasOwn(masked, 'entity') ? { ...masked, entity: raw.entities?.[masked.entity] } : masked;
+        };
+        const seen = new Set();
+        const choices = [];
+        let omitted = 0;
+        for (const [slot, item] of (pin.raw[key] || []).entries()) {
+          if (pin.paths.has(`${key}Unique`) && seen.has(stable(item))) continue;
+          seen.add(stable(item));
+          const prefix = `${key}[${slot}]`;
+          const expected = normalized(item, pin.raw, prefix);
+          if (expected === undefined) { omitted += 1; continue; }
+          if (!expected || typeof expected !== 'object' || Array.isArray(expected)) return false;
+          choices.push(candidates.flatMap((candidate, at) => stable(normalized(candidate.item, candidate.raw, prefix)) === stable(expected) ? [at] : []));
+        }
+        // Kısmi maske geçerli kardeşin tek eşleşmesini tüketemez.
+        const owners = new Map();
+        const assign = (slot, visited) => choices[slot].some(at => {
+          if (visited.has(at)) return false;
+          visited.add(at);
+          if (owners.has(at) && !assign(owners.get(at), visited)) return false;
+          owners.set(at, slot);
+          return true;
+        });
+        return choices.every((_, slot) => assign(slot, new Set()))
+          && (candidates.length - choices.length <= omitted || pin.paths.has(key) && !pin.paths.has(`${key}Unique`));
+      };
       const scopeCovered = indexes => Object.keys(pin.raw.filters || {}).every(key => indexes.some(index => Object.hasOwn(projected(sections[index]).filters, key)))
         && Array.isArray(pin.raw.entities || []) && (pin.raw.entities || []).every(entity => indexes.some(index => projected(sections[index]).entities.some(item => stable(item) === stable(entity))));
       let selected = null;

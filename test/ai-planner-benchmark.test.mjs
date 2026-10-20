@@ -56,6 +56,62 @@ async function decide(loaded, testCase, args) {
 const answerPlan = (testCase, referenceDate) => ({ intent: 'rota', language: testCase.language, ...resolveExample(testCase.example, referenceDate) });
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
+test('4C CLI değer alan her bayrak eksik değeri yan etki olmadan reddeder', async () => {
+  const { parseArguments } = await import('../scripts/planner-evaluation.mjs');
+  for (const flag of ['--model-command', '--model', '--semantic', '--passes', '--concurrency', '--cases', '--out', '--inputs', '--run', '--reference-date', '--expected-model', '--model-timeout-ms', '--model-output-bytes']) {
+    for (const suffix of [['--json'], ['--out', 'run.json'], []]) {
+      assert.throws(() => parseArguments(['run', flag, ...suffix]), /bir değer gerektirir/, `${flag} ${suffix.join(' ')}`);
+    }
+  }
+  const { flags } = parseArguments(['run', '--out', 'run.json', '--json']);
+  assert.equal(flags.out, 'run.json');
+  assert.equal(flags.json, true);
+});
+
+test('4C dış model kesintisi tüm etkin süreçleri ve geçici dizini temizler', { skip: process.platform === 'win32' }, async (t) => {
+  const { mkdtempSync, readdirSync, rmSync, writeFileSync, existsSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { spawn } = await import('node:child_process');
+  const { setTimeout: delay } = await import('node:timers/promises');
+  const dir = mkdtempSync(path.join(tmpdir(), 'planner-signal-test-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const evaluator = new URL('../scripts/planner-evaluation.mjs', import.meta.url).href;
+  const running = (pid) => {
+    try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') return false; throw error; }
+    return !existsSync(`/proc/${pid}/stat`) || !readFileSync(`/proc/${pid}/stat`, 'utf8').includes(') Z ');
+  };
+  for (const [signal, status] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+    const marker = path.join(dir, signal); const runnerFile = path.join(dir, `${signal}.mjs`); const modelFile = path.join(dir, `${signal}.cjs`);
+    writeFileSync(modelFile, `require('node:fs').writeFileSync(${JSON.stringify(marker)} + '-' + process.pid, JSON.stringify({pid:process.pid,tmp:process.env.TMPDIR}));setInterval(()=>{},1000);`);
+    const command = `"${process.execPath}" "${modelFile}"`;
+    writeFileSync(runnerFile, `import { externalModel } from ${JSON.stringify(evaluator)};const model=externalModel({command:${JSON.stringify(command)},guard:()=>{}});await Promise.all([1,2].map(()=>model.complete({messages:[],tools:[],toolChoice:'none'})));model.dispose();`);
+    const runner = spawn(process.execPath, [runnerFile], { stdio: 'ignore' });
+    const closed = new Promise(resolve => runner.once('exit', (code, stoppedBy) => resolve({ code, stoppedBy })));
+    const children = [];
+    try {
+      for (let i = 0; i < 500; i += 1) {
+        const files = readdirSync(dir).filter(name => name.startsWith(`${signal}-`));
+        if (files.length === 2) { children.push(...files.map(name => JSON.parse(readFileSync(path.join(dir, name), 'utf8')))); break; }
+        await delay(10);
+      }
+      assert.equal(children.length, 2, 'iki model çağrısı başladı');
+      runner.kill(signal);
+      const timeout = setTimeout(() => runner.kill('SIGKILL'), 5000);
+      const result = await closed; clearTimeout(timeout);
+      assert.equal(result.code, status);
+      for (const child of children) {
+        for (let i = 0; i < 100 && running(child.pid); i += 1) await delay(10);
+        assert.equal(running(child.pid), false, 'model çalışmıyor');
+        assert.equal(existsSync(child.tmp), false, 'geçici dizin kaldırıldı');
+      }
+    } finally {
+      runner.kill('SIGKILL');
+      for (const child of children) { try { process.kill(child.pid, 'SIGKILL'); } catch { /* Zaten sonlandı. */ } rmSync(child.tmp, { recursive: true, force: true }); }
+    }
+  }
+});
+
 test('altın etiket belgesi kapalı şemadır, kıyas kümesine bağlıdır ve bozulmuş biçimleri reddeder', () => {
   const loaded = loadPlannerBenchmark({ referenceDate: '2026-10-14' });
   assert.equal(loaded.cases.filter((testCase) => testCase.canonical).length, 117);

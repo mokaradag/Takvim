@@ -787,3 +787,91 @@ test('4C artık onarım: karma araç bölmesi kapsamı yalnızca taşıyan böl�
     }
   }
 });
+
+test('4C bölme kapanışı: satır hatası ölçü düşürme izni değildir', async (t) => {
+  const tasks = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' } };
+  const original = plan({ intent: 'rota', language: 'tr', request: { ...tasks, population: { ...tasks.population, collection: 'groups' }, metrics: [...tasks.metrics, ...notifications.metrics] } });
+  const dropped = plan({ intent: 'rota', language: 'tr', request: tasks });
+  const result = await turn(t, [original, dropped, dropped]);
+  assert.equal(result.result.stats.attempted, 0);
+  assert.match(JSON.stringify(result.inputs[2].messages), /repairScope/);
+});
+
+test('4C bölme kapanışı: bağlı proje kapsamları yalnızca kendi ölçülerine gider', async (t) => {
+  const a = { type: 'project', text: 'Radar Modernizasyonu' };
+  const b = { type: 'project', text: 'Anten' };
+  const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, entities: [a], bindings: [{ metric: 'tasks.total', entity: 0 }] };
+  const project = { operation: 'value', metrics: ['baseline.compared'], population: { tool: 'rota_baseline_compare' }, entities: [b], bindings: [{ metric: 'baseline.compared', entity: 0 }] };
+  const mixed = { ...tasks, metrics: [...tasks.metrics, ...project.metrics], entities: [a, b], bindings: [tasks.bindings[0], { metric: 'baseline.compared', entity: 1 }] };
+  const corrected = plan({ intent: 'rota', language: 'tr', request: tasks, additionalRequests: [project] });
+  const result = await turn(t, [plan({ intent: 'rota', language: 'tr', request: mixed }), corrected], { user: 'Radar Modernizasyonu görevleri ve Anten baz plan sayısı' });
+  assert.ok(result.result.stats.attempted > 0);
+});
+
+test('4C bölme kapanışı: sıralama ve liste yalnızca kendi satır bölümünde kalır', async (t) => {
+  const ranked = { operation: 'rank', metrics: ['project.name', 'tasks.overdue'], population: { tool: 'rota_portfolio_summary', collection: 'projects' }, rank: { metric: 'tasks.overdue', order: 'desc', limit: 1 } };
+  const listed = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' } };
+  for (const request of [ranked, listed]) {
+    await t.test(request.operation, async (t) => {
+      const original = plan({ intent: 'rota', language: 'tr', request: { ...request, metrics: [...request.metrics, ...notifications.metrics] } });
+      const corrected = plan({ intent: 'rota', language: 'tr', request, additionalRequests: [notifications] });
+      assert.ok((await turn(t, [original, corrected])).result.stats.attempted > 0);
+    });
+  }
+});
+
+test('4C bölme kapanışı: hatalı alan veya bağlama geçerli kardeşleri serbest bırakmaz', async (t) => {
+  const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' } };
+  const taskField = { metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' };
+  const metrics = ['tasks.total', 'tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent', 'tasks.worstOverdueDays'];
+  const mixed = { ...tasks, metrics, fields: [taskField, taskField] };
+  const corrected = plan({ intent: 'rota', language: 'tr', request: { ...tasks, metrics: metrics.slice(0, 8), fields: [taskField] }, additionalRequests: [{ ...tasks, metrics: metrics.slice(8) }] });
+  const changed = plan({ intent: 'rota', language: 'tr', request: { ...tasks, metrics: metrics.slice(0, 8) }, additionalRequests: [{ ...tasks, metrics: metrics.slice(8) }] });
+  const result = await turn(t, [plan({ intent: 'rota', language: 'tr', request: mixed }), changed, corrected]);
+  assert.match(JSON.stringify(result.inputs[2].messages), /repairScope/);
+  assert.ok(result.result.stats.attempted > 0);
+  const { planCase } = await import('../scripts/planner-evaluation.mjs');
+  const field = { metric: 'tasks.overdue', tool: 'rota_task_analytics', path: 'data.totals.overdue' };
+  const steps = [plan({ intent: 'rota', language: 'tr', request: { ...tasks, metrics, fields: [{ ...field, tool: 'invalid' }, field] } }),
+    plan({ intent: 'rota', language: 'tr', request: { ...tasks, metrics: metrics.slice(0, 8), fields: [field, { ...field, tool: 'rota_portfolio_summary' }] }, additionalRequests: [{ ...tasks, metrics: metrics.slice(8) }] })];
+  const repaired = await planCase({ testCase: { text: 'Rota verisini incele' }, catalog, now: NOW,
+    adviceFor: async () => ({ state: 'unavailable', candidates: [] }), model: { complete: async () => steps.shift() } });
+  assert.equal(repaired.outcome, 'planned', 'hatalı yuva geçerli kardeşin eşleşmesini tüketmez');
+});
+
+test('4C bölme kapanışı: bozuk bağlama atılırken geçerli bağlama korunur ve tur çökmez', async () => {
+  const { planCase } = await import('../scripts/planner-evaluation.mjs');
+  const metrics = ['tasks.total', 'tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent', 'tasks.worstOverdueDays'];
+  const tasks = { operation: 'value', population: { tool: 'rota_task_analytics' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] };
+  const binding = { metric: 'tasks.total', entity: 0 };
+  const original = plan({ intent: 'rota', language: 'tr', request: { ...tasks, metrics, bindings: [binding, null] } });
+  const corrected = plan({ intent: 'rota', language: 'tr', request: { ...tasks, metrics: metrics.slice(0, 8), bindings: [binding] }, additionalRequests: [{ ...tasks, metrics: metrics.slice(8) }] });
+  const changed = plan({ intent: 'rota', language: 'tr', request: { ...tasks, metrics: metrics.slice(0, 8) }, additionalRequests: [{ ...tasks, metrics: metrics.slice(8) }] });
+  for (const steps of [[original, corrected], [original, changed, corrected]]) {
+    const inputs = [];
+    const result = await planCase({ testCase: { text: 'Radar Modernizasyonu görevleri' }, catalog, now: NOW,
+      adviceFor: async () => ({ state: 'unavailable', candidates: [] }), model: { complete: async input => { inputs.push(input); return steps.shift(); } } });
+    assert.equal(result.outcome, 'planned');
+    assert.equal(steps.length, 0);
+    if (inputs.length === 3) assert.match(JSON.stringify(inputs[2]), /repairScope/);
+  }
+});
+
+test('4C sağlayıcı ikizi: metin planı kesintiyi gizlemez ve yerel çağrı önsözünü silmez', async (t) => {
+  const { createFakeAiProvider } = await import('./helpers/fakeAiProvider.mjs');
+  const { declared } = await import('./helpers/evidenceScenario.mjs');
+  const provider = createFakeAiProvider();
+  const input = { model: 'test', signal: new AbortController().signal, messages: [], tools: [] };
+  await t.test('kesinti', async () => {
+    provider.enqueue({ type: 'interrupt', text: declared(notifications) });
+    const interrupted = await provider.streamToolCompletion(input);
+    await assert.rejects(async () => { for await (const _event of interrupted.events) { /* Akışı tüket. */ } }, error => error.code === 'AI_PROVIDER_UNAVAILABLE' && error.details.reason === 'STREAM_INTERRUPTED');
+  });
+  await t.test('önsöz', async () => {
+    provider.enqueue({ type: 'tool-calls', preface: ['Önsöz'], calls: [{ name: 'rota_plan', arguments: { intent: 'general', language: 'tr' } }] });
+    const opened = await provider.streamToolCompletion(input);
+    const events = []; for await (const event of opened.events) events.push(event);
+    assert.ok(events.some(event => event.type === 'text' && event.text === 'Önsöz'));
+    assert.ok(events.some(event => event.type === 'done' && event.toolCalls?.[0].name === 'rota_plan'));
+  });
+});

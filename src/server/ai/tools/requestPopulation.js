@@ -663,11 +663,17 @@ export function requestScopeForTool(request, tool) {
     entities: (Array.isArray(request.entities) ? request.entities : []).map(entity => entity || {}),
     fields: (Array.isArray(request.fields) ? request.fields : []).filter(field => getRotaTool(field?.tool)),
     bindings: (Array.isArray(request.bindings) ? request.bindings : []).filter(binding => binding && typeof binding === 'object') };
-  const indexes = (Array.isArray(request.entities) ? request.entities : []).flatMap((entity, index) => Object.hasOwn(properties, SELECTOR_PARAMS[entity?.type])
-    || entity && entityReadElsewhere(source, entity, index) ? [index] : []);
-  return { ...source, filters: Object.fromEntries(Object.entries(request.filters || {}).filter(([key]) => familyKeys(tool).includes(key))),
+  const indexes = (Array.isArray(request.entities) ? request.entities : []).flatMap((entity, index) => {
+    const bound = source.bindings.filter(binding => binding.entity === index);
+    if (bound.length && !bound.some(binding => request.metrics.includes(binding.metric))
+      && request.metrics.every(metric => source.bindings.some(binding => binding.metric === metric))) return [];
+    return Object.hasOwn(properties, SELECTOR_PARAMS[entity?.type]) || entity && entityReadElsewhere(source, entity, index) ? [index] : [];
+  });
+  const rank = request.rank && request.metrics.includes(request.rank.metric) ? request.rank : null;
+  const operation = request.operation === 'value' ? 'value' : rank ? 'rank' : listCollections(tool, request.metrics).length ? 'list' : 'value';
+  return { ...source, operation, rank, filters: Object.fromEntries(Object.entries(request.filters || {}).filter(([key]) => familyKeys(tool).includes(key))),
     entities: indexes.map(index => request.entities[index]),
-    bindings: (request.bindings || []).filter(binding => indexes.includes(binding.entity)).map(binding => ({ ...binding, entity: indexes.indexOf(binding.entity) })) };
+    bindings: source.bindings.filter(binding => request.metrics.includes(binding.metric) && indexes.includes(binding.entity)).map(binding => ({ ...binding, entity: indexes.indexOf(binding.entity) })) };
 }
 
 function rowMetricsOf(tool, collection) {

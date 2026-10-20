@@ -64,7 +64,8 @@ function parseArguments([command, ...rest]) {
     const flag = rest[i];
     if (flag === '--json') flags.json = true;
     else if (flag === '--no-score') flags.noScore = true;
-    else if (['--model-command', '--model', '--semantic', '--passes', '--concurrency', '--cases', '--out', '--inputs', '--run', '--reference-date', '--expected-model', '--model-timeout-ms', '--model-output-bytes'].includes(flag) && rest[i + 1] != null) {
+    else if (['--model-command', '--model', '--semantic', '--passes', '--concurrency', '--cases', '--out', '--inputs', '--run', '--reference-date', '--expected-model', '--model-timeout-ms', '--model-output-bytes'].includes(flag)) {
+      if (rest[i + 1] == null || String(rest[i + 1]).startsWith('--')) fail(`${flag} bir değer gerektirir.`);
       flags[flag.slice(2).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = rest[++i];
     } else fail(`Tanınmayan bağımsız değişken: ${flag}`);
   }
@@ -160,6 +161,16 @@ function verifyModel(models, usage, expectedModel, thinkingMode) {
  */
 function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes = 4 * 1024 * 1024 }) {
   const workdir = mkdtempSync(path.join(tmpdir(), 'rota-planner-'));
+  const active = new Set();
+  const dispose = () => {
+    process.off('SIGINT', interrupt); process.off('SIGTERM', terminate);
+    for (const stop of active) stop();
+    active.clear();
+    rmSync(workdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  };
+  const interrupt = () => { try { dispose(); } finally { process.exit(130); } };
+  const terminate = () => { try { dispose(); } finally { process.exit(143); } };
+  process.once('SIGINT', interrupt); process.once('SIGTERM', terminate);
   let sequence = 0;
   const run = (payload) => new Promise((resolve, reject) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^MERGEN_ROTA_/.test(key)));
@@ -175,9 +186,11 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
         try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
       }
     };
+    active.add(terminate);
     const finish = (error, value) => {
       if (settled) return;
       settled = true;
+      active.delete(terminate);
       clearTimeout(timer);
       if (error) { terminate(); reject(Object.assign(new Error(error), { code: error })); }
       else resolve(value);
@@ -217,7 +230,7 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
       return { text: typeof reply?.text === 'string' ? reply.text : '', toolCalls, usage: normalizedUsage(reply?.usage), thinking: reply?.thinking === 'off' ? 'off' : 'unverified', models: Array.isArray(reply?.models) ? reply.models : [],
         finishReason: reply?.finishReason ?? null, error: reply?.error ?? null, durationMs: Date.now() - startedAt };
     },
-    dispose() { rmSync(workdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+    dispose
   };
 }
 

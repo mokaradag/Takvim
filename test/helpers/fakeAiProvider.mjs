@@ -381,7 +381,9 @@ export function createFakeAiProvider({
   function openToolStream(behavior, call, input) {
     let resolved = behavior.type === 'script' ? (behavior.respond(call) || { type: 'answer', text: '' }) : behavior;
     const native = nativeDeclaration({ text: resolved.type === 'tool-calls' ? (resolved.preface || []).join('') : resolved.text, toolCalls: resolved.calls || [] });
-    if (native.toolCalls.some((tool) => tool.name === 'rota_plan')) resolved = { ...resolved, type: 'tool-calls', preface: [], calls: native.toolCalls };
+    if (['answer', 'reply', 'stream', 'tool-calls'].includes(resolved.type) && native.toolCalls.some((tool) => tool.name === 'rota_plan')) {
+      resolved = { ...resolved, type: 'tool-calls', preface: native.text === '' ? [] : resolved.preface || [], calls: native.toolCalls };
+    }
     call.behavior = resolved.type;
     if (resolved.type === 'tool-calls') {
       const feed = createFeed(input.signal, call, { ignoreAbort: resolved.ignoreAbort });

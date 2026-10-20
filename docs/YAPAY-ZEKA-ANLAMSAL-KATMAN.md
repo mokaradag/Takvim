@@ -1367,7 +1367,7 @@ vektör, aday metni, Sicil ya da model gerekçesi yazılmaz (sınama).
 - Kurum içi kabul (uygulama dizininden, `.env.local` okunur):
   `node scripts/planner-evaluation.mjs live --passes 3 --out kabul.json`.
 - Dış Haiku kapısında beklenen model `claude-haiku-4-5-20251001` ve düşünme kapalıdır; her çağrı gerçek `finishReason` değerini, model kimliğini, `thinking: "off"` beyanını ve sıfır düşünme belirtecini raporlamalıdır. Canlı yolda düşünme yetenekli modelin kapalı kipini mevcut ağ geçidi sözleşmesi kanıtlayamıyorsa koşu sertifikalanmaz; üretim sözleşmesi bu amaçla genişletilmez. Eksik köken, başka model veya düşünme belirteci koşuyu geçersiz kılar. `--expected-model` yalnızca değerlendirme künyesidir; canlı yolda kayıtlı `chat.tools` modeliyle de birebir doğrulanır, üretim rotasını değiştirmez.
-- Dış komut platform kabuğunda çalışır (Windows dâhil), varsayılan 120 sn süre ve toplam 4 MiB stdout/stderr sınırına sahiptir (`--model-timeout-ms`, `--model-output-bytes` yalnızca değerlendirme içindir). Sınırda süreç ağacı sonlandırılır; geçici dizin temizlenir. Ham komut saklanmaz: yalnızca SHA-256 kimliği yazılır; ham stderr/altyapı iletileri kayda alınmaz.
+- Dış komut platform kabuğunda çalışır (Windows dâhil), varsayılan 120 sn süre ve toplam 4 MiB stdout/stderr sınırına sahiptir (`--model-timeout-ms`, `--model-output-bytes` yalnızca değerlendirme içindir). Sınırda veya SIGINT/SIGTERM kesintisinde tüm etkin komutların süreç ağaçları sonlandırılır; geçici dizin temizlenir. Değer alan CLI bayrağı sonraki bayrağı değer saymaz. Ham komut saklanmaz: yalnızca SHA-256 kimliği yazılır; ham stderr/altyapı iletileri kayda alınmaz.
 - Koşu biçimi sürüm **2**: referans gün kıyas parmak izine bağlıdır; gerçek takvim günü, bilinen/tekil vaka kimlikleri, bütün geçiş/vaka kayıtları, model/düşünme ve anlamsal köken puanlamadan önce doğrulanır. Bozuk koşu puanlanmaz. Anlamsal belge vektörleri ve yeniden sıralama puanları kimlikle bağlanır; dizi sırası anlam taşımaz. Eski sürüm koşular bu kapıyı karşılamaz.
 - Puanlanan `run`, `report`, `live` komutları kabul kapısı geçilmediyse sıfırdan farklı çıkar; `--no-score` tanısaldır. Kısmi vaka koşusu kapıyı geçiremez. Kabul için kanonik **117/117** ve zorunlu ek **19/19** her geçişte birlikte gereklidir.
 
@@ -1470,7 +1470,7 @@ aynı anda dış komut açıkça reddedilir. Gerçek model kabulü hâlâ bekliy
 Son geçişte yapısal ret öncesi çözülen Rota niyeti de korunur; onarım başka niyete geçemez.
 Bağımlı bölüm, kaynağın onarılan metnine değil aynı bölüm kimliğine bağlıdır. Reddedilen karma/taşkın
 ölçü kümesi yalnızca mevcut üç bölüm sınırında, tam ölçü/alan/bağlama kümesi ve kapsam korunarak
-bölünebilir; geçerli ölçü ya da soru silinmez. Hatalı bağlama geçerli kardeş bağlamaları serbest bırakmaz.
+bölünebilir; geçerli ölçü ya da soru silinmez. Hatalı bağlama geçerli kardeş bağlamaları serbest bırakmaz. Bölmede tam ölçü kümesi ve etkilenmeyen alan/bağlama yuvaları ayrı korunur; bozuk yuva karşılaştırmayı çökertmez. Bağlı varlıklar kendi ölçü bölümüne, ortak bağlanmamış bağlam uygun tüm bölümlere gider; sıralama ve liste işlemi yalnızca kendi satır ölçülerinde kalır.
 Modelin kendi reddedilen çağrısındaki uydurma anahtar altın sızıntısı sayılmaz; sunucu girdileri ve
 vaka/dosya izleri denetlenmeye devam eder. Canlı boş yanıtlar kimlik, düşünmesizlik ve bitiş nedeni
 doğrulanarak ıska sayılır; gerçek altyapı hatası koşuyu yine durdurur. Bilinmeyen giriş belirteci `null`
