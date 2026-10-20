@@ -761,8 +761,20 @@ test('4C yakınsama: başarılı model komutunun arka plan çocuğu da temizleni
   const file = path.join(dir, 'model.cjs');
   const marker = path.join(dir, 'child.json');
   const heartbeat = path.join(dir, 'heartbeat');
-  const childSource = `const fs=require('node:fs');let n=0;setInterval(()=>fs.writeFileSync(${JSON.stringify(heartbeat)},String(++n)),10);`;
-  writeFileSync(file, `const fs=require('node:fs');const child=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(childSource)}],{stdio:'ignore'});child.unref();fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({pid:child.pid}));const ready=setInterval(()=>{if(fs.existsSync(${JSON.stringify(heartbeat)})){clearInterval(ready);console.log(JSON.stringify({text:'ok'}));}},10);`);
+  // Kaynak sabittir; dosya yolları koda eklenmez, süreç bağımsız değişkeni olarak taşınır.
+  writeFileSync(file, `
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const heartbeat = path.join(__dirname, 'heartbeat');
+    const child = require('node:child_process').spawn(process.execPath, ['-e',
+      "const fs = require('node:fs'); let n = 0; setInterval(() => fs.writeFileSync(process.argv[1], String(++n)), 10);",
+      heartbeat], { stdio: 'ignore' });
+    child.unref();
+    fs.writeFileSync(path.join(__dirname, 'child.json'), JSON.stringify({ pid: child.pid }));
+    const ready = setInterval(() => {
+      if (fs.existsSync(heartbeat)) { clearInterval(ready); console.log(JSON.stringify({ text: 'ok' })); }
+    }, 10);
+  `);
   const model = externalModel({ command: `"${process.execPath}" "${file}"`, guard: () => {} });
   t.after(() => model.dispose());
   t.after(() => { try { process.kill(JSON.parse(readFileSync(marker, 'utf8')).pid, 'SIGKILL'); } catch { /* Zaten sonlandı. */ } });

@@ -1490,3 +1490,6 @@ sinyal sınaması yalnızca Linux'ta çalışır, başlangıç işaretleri atomi
 alanın açık bağını ve birleşik proje/IDA seçicilerini kabul eder; farklı alan anlamını ve eksik gönderen
 kapsamını reddeder. Sağlayıcı ikizi açık parçaları, kesilme nedenini, model kimliğini ve kullanımı
 korur. Bu regresyonlar gerçek model kabulü değildir; 117/117 + 19/19 kapısı hâlâ bekler.
+
+Arka plan süreç temizliği sınamasında üretilen JavaScript kaynağı sabittir; geçici dosya yolları
+koda eklenmez, alt sürece bağımsız değişken olarak iletilir. CodeQL denetimleri bastırılmaz.
