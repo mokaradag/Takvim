@@ -107,8 +107,9 @@ function createState() {
 }
 
 function state() {
-  globalThis[STATE_KEY] ||= createState();
-  return globalThis[STATE_KEY];
+  const current = globalThis[STATE_KEY] ||= createState();
+  current.planner ||= createState().planner;
+  return current;
 }
 
 function safely(work) {

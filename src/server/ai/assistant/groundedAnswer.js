@@ -495,7 +495,45 @@ function repairOmit(value, paths, prefix = '') {
     .filter(([, item]) => item != null && !(Array.isArray(item) && !item.length) && !(typeof item === 'object' && !Object.keys(item).length)));
 }
 
-function repairProjection(turn, raw, index, calls, sections, paths, references = null) {
+/** Geçerli kardeşler birebir eşlenir; bozuk yuvalar kaldırılabilir, yeni yuva açılamaz. */
+function repairItemsMatch(pin, sections, key, indexes, bindEntities = true) {
+  if (!Array.isArray(pin.raw[key] || [])) return pin.paths.has(key);
+  if (!indexes.every(index => Array.isArray(sections[index][key] || []))) return false;
+  const candidates = indexes.flatMap(index => (sections[index][key] || []).map(item => ({ item, raw: sections[index] })));
+  // Bölme tam ölçü kümesini korur; satır hatası ölçü silme izni değildir.
+  if (key === 'metrics') return stable(candidates.map(({ item }) => item).sort())
+    === stable((pin.paths.has('metricsUnique') ? [...new Set(pin.raw.metrics)] : [...pin.raw.metrics]).sort());
+  const paths = new Set([...pin.paths].filter(path => path !== key));
+  const normalized = (item, raw, prefix) => {
+    const masked = repairOmit(item, paths, prefix);
+    return bindEntities && masked && key === 'bindings' && Object.hasOwn(masked, 'entity') ? { ...masked, entity: raw.entities?.[masked.entity] } : masked;
+  };
+  const seen = new Set();
+  const choices = [];
+  let omitted = 0;
+  for (const [slot, item] of (pin.raw[key] || []).entries()) {
+    if (pin.paths.has(`${key}Unique`) && seen.has(stable(item))) continue;
+    seen.add(stable(item));
+    const prefix = `${key}[${slot}]`;
+    const expected = normalized(item, pin.raw, prefix);
+    if (expected === undefined) { omitted += 1; continue; }
+    if (!expected || typeof expected !== 'object' || Array.isArray(expected)) return false;
+    choices.push(candidates.flatMap((candidate, at) => stable(normalized(candidate.item, candidate.raw, prefix)) === stable(expected) ? [at] : []));
+  }
+  // Kısmi maske geçerli kardeşin tek eşleşmesini tüketemez.
+  const owners = new Map();
+  const assign = (slot, visited) => choices[slot].some(at => {
+    if (visited.has(at)) return false;
+    visited.add(at);
+    if (owners.has(at) && !assign(owners.get(at), visited)) return false;
+    owners.set(at, slot);
+    return true;
+  });
+  return choices.every((_, slot) => assign(slot, new Set()))
+    && candidates.length - choices.length <= omitted;
+}
+
+function repairProjection(turn, raw, index, calls, sections, paths, references = null, preserved = raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return stable({ invalid: typeof raw });
   // Ham model biçimi eşitlikten önce güvenilir sayılmaz; bozuk türler hiçbir zaman diziye zorlanmaz.
   for (const key of ['metrics', 'entities', 'fields', 'bindings']) {
@@ -503,9 +541,6 @@ function repairProjection(turn, raw, index, calls, sections, paths, references =
   }
   const known = Object.fromEntries(Object.entries(raw).filter(([key]) => Object.hasOwn(requestSchema().properties, key)));
   const masked = repairOmit(known, paths);
-  for (const key of ['fields', 'bindings']) if (paths.has(`${key}Unique`) && Array.isArray(masked[key])) {
-    masked[key] = [...new Map(masked[key].map(item => [stable(item), item])).values()];
-  }
   const transfer = [...paths].find(path => path.startsWith('textSelector:'))?.split(':')[1];
   const selector = transfer && (masked.entities || []).find(entity => entity?.type === transfer && entity.text);
   const textScope = transfer ? known.filters?.text || selector?.text || null : null;
@@ -550,9 +585,17 @@ function repairProjection(turn, raw, index, calls, sections, paths, references =
   // Bağımlılık, onarılmakta olan kaynağın ham anlamına değil aynı kaynak bölümüne bağlanır.
   semantic.entities = semantic.entities.map(entity => entity?.from == null ? entity
     : { ...entity, from: references ? references.get(entity.from) ?? 'unmatched' : entity.from });
-  const projection = repairOmit(semantic, new Set([...paths].filter(path => !path.startsWith('metrics['))));
+  const projectionPaths = new Set([...paths].filter(path => !path.startsWith('metrics[')));
+  const itemRepairs = {};
+  for (const key of ['fields', 'bindings']) {
+    if (paths.has(key) || ![...paths].some(path => path.startsWith(`${key}[`) || path === `${key}Unique`)) continue;
+    // Eski yuva maskesi kısalmış dizinin başka geçerli öğesine uygulanmaz.
+    projectionPaths.add(key);
+    itemRepairs[key] = raw === preserved || repairItemsMatch({ raw: preserved, paths }, [raw], key, [0], false);
+  }
+  const projection = repairOmit(semantic, projectionPaths);
   // Geçersiz ölçü tek bir yuvadır; onarım fazladan ölçü ekleyemez.
-  return stable({ semantic: projection, ...(transfer ? { textScope: typeof textScope === 'string' ? containmentText(textScope) : textScope } : {}), metricCount: paths.has('metrics') ? null : paths.has('metricsUnique') ? new Set(raw.metrics).size : raw.metrics?.length ?? null });
+  return stable({ semantic: projection, ...(Object.keys(itemRepairs).length ? { itemRepairs } : {}), ...(transfer ? { textScope: typeof textScope === 'string' ? containmentText(textScope) : textScope } : {}), metricCount: paths.has('metrics') ? null : paths.has('metricsUnique') ? new Set(raw.metrics).size : raw.metrics?.length ?? null });
 }
 
 function pinRepair(turn, plan, details, calls = [], executionCalls = []) {
@@ -574,7 +617,7 @@ function pinRepair(turn, plan, details, calls = [], executionCalls = []) {
     const references = new Map();
     for (const pin of snapshot.pins) {
       const index = sections.findIndex((raw, index) => !used.has(index)
-        && repairProjection(turn, raw, index, index ? [] : snapshot.calls, sections, pin.paths, references) === pin.projection);
+        && repairProjection(turn, raw, index, index ? [] : snapshot.calls, sections, pin.paths, references, pin.raw) === pin.projection);
       if (index < 0) continue;
       used.add(index);
       references.set(index, pin.index);
@@ -632,56 +675,20 @@ function repairMatches(turn, plan, calls = []) {
           || raw.population?.tool === pin.raw.population?.tool)
         && matches(raw, index, index ? [] : snapshot.calls)
         && (index || matches(raw, index, calls)) ? [index] : []);
-      const sameItems = (key, indexes) => {
-        if (!Array.isArray(pin.raw[key] || [])) return pin.paths.has(key);
-        if (!indexes.every(index => Array.isArray(sections[index][key] || []))) return false;
-        const candidates = indexes.flatMap(index => (sections[index][key] || []).map(item => ({ item, raw: sections[index] })));
-        // Bölme tam ölçü kümesini korur; satır hatası ölçü silme izni değildir.
-        if (key === 'metrics') return stable(candidates.map(({ item }) => item).sort())
-          === stable((pin.paths.has('metricsUnique') ? [...new Set(pin.raw.metrics)] : [...pin.raw.metrics]).sort());
-        const paths = new Set([...pin.paths].filter(path => path !== key));
-        const normalized = (item, raw, prefix) => {
-          const masked = repairOmit(item, paths, prefix);
-          return masked && key === 'bindings' && Object.hasOwn(masked, 'entity') ? { ...masked, entity: raw.entities?.[masked.entity] } : masked;
-        };
-        const seen = new Set();
-        const choices = [];
-        let omitted = 0;
-        for (const [slot, item] of (pin.raw[key] || []).entries()) {
-          if (pin.paths.has(`${key}Unique`) && seen.has(stable(item))) continue;
-          seen.add(stable(item));
-          const prefix = `${key}[${slot}]`;
-          const expected = normalized(item, pin.raw, prefix);
-          if (expected === undefined) { omitted += 1; continue; }
-          if (!expected || typeof expected !== 'object' || Array.isArray(expected)) return false;
-          choices.push(candidates.flatMap((candidate, at) => stable(normalized(candidate.item, candidate.raw, prefix)) === stable(expected) ? [at] : []));
-        }
-        // Kısmi maske geçerli kardeşin tek eşleşmesini tüketemez.
-        const owners = new Map();
-        const assign = (slot, visited) => choices[slot].some(at => {
-          if (visited.has(at)) return false;
-          visited.add(at);
-          if (owners.has(at) && !assign(owners.get(at), visited)) return false;
-          owners.set(at, slot);
-          return true;
-        });
-        return choices.every((_, slot) => assign(slot, new Set()))
-          && candidates.length - choices.length <= omitted;
-      };
       const scopeCovered = indexes => Object.keys(pin.raw.filters || {}).every(key => indexes.some(index => Object.hasOwn(projected(sections[index]).filters, key)))
         && Array.isArray(pin.raw.entities || []) && (pin.raw.entities || []).every(entity => indexes.some(index => projected(sections[index]).entities.some(item => stable(item) === stable(entity))));
       let selected = null;
       for (let mask = 1; mask < (1 << available.length); mask += 1) {
         const indexes = available.filter((_, bit) => mask & (1 << bit));
-        if (['metrics', 'fields', 'bindings'].every(key => sameItems(key, indexes)) && scopeCovered(indexes)) { selected = indexes; break; }
+        if (['metrics', 'fields', 'bindings'].every(key => repairItemsMatch(pin, sections, key, indexes)) && scopeCovered(indexes)) { selected = indexes; break; }
       }
       if (!selected) return false;
       for (const index of selected) { used.add(index); references.set(index, pin.index); }
       continue;
     }
     const index = sections.findIndex((raw, index) => !used.has(index)
-      && repairProjection(turn, raw, index, index ? [] : snapshot.calls, sections, pin.paths, references) === pin.projection
-      && (index || repairProjection(turn, raw, index, calls, sections, pin.paths, references) === pin.projection));
+      && repairProjection(turn, raw, index, index ? [] : snapshot.calls, sections, pin.paths, references, pin.raw) === pin.projection
+      && (index || repairProjection(turn, raw, index, calls, sections, pin.paths, references, pin.raw) === pin.projection));
     if (index < 0) return false;
     used.add(index);
     references.set(index, pin.index);

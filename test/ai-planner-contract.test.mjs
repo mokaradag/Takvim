@@ -17,7 +17,7 @@ const { unpackTypedPlan, typedPlanningTool } = await import('../src/server/ai/to
 const { renderPlannerAbstention, renderPlannerClarification, renderTextFieldsRequired, ABSTAIN_REASONS } = await import('../src/domain/ai/plannerOutcome.js');
 const { AI_ERROR_CODES } = await import('../src/domain/ai/aiErrorCatalog.js');
 const { AiError } = await import('../src/server/ai/aiErrors.js');
-const { aiTelemetrySnapshot, resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
+const { aiTelemetrySnapshot, resetAiTelemetryForTests, recordPlannerDecision, recordPlannerRejection } = await import('../src/server/ai/aiTelemetry.js');
 
 const catalog = toolCatalogForModel();
 const names = catalog.map((tool) => tool.name);
@@ -992,4 +992,53 @@ test('4C yakınsama: çok bölümlü tek belirsizlik küresel aday seçimi kayde
   assert.match(result.text, /Ayşe Yılmaz/);
   assert.ok(result.text.includes(renderPlannerClarification({ reason: 'missing_referent', locale: 'tr' })));
   assert.ok(result.evidenceRows.every(row => !JSON.parse(row.evidenceJson).clarificationContext));
+});
+
+test('4C beş bulgu: bozuk dizi yuvası kaldırılırken geçerli alan ve bağlar korunur', async (t) => {
+  const entities = [{ type: 'project', text: 'Radar Modernizasyonu' }, { type: 'project', text: 'Anten' }];
+  const bindings = [{ metric: 'tasks.total', entity: 0 }, { metric: 'tasks.overdue', entity: 1 }];
+  const fields = [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' },
+    { metric: 'tasks.overdue', tool: 'rota_task_analytics', path: 'data.totals.overdue' }];
+  const valid = { operation: 'value', metrics: ['tasks.total', 'tasks.overdue'], population: { tool: 'rota_task_analytics' }, entities, bindings, fields };
+  for (const key of ['fields', 'bindings']) {
+    const [a, b] = valid[key];
+    for (const items of [[a, a, null, b], [null, a, a, b], [a, null, a, b]]) {
+      await t.test(`${key} ${items.indexOf(null)}`, async () => {
+        const original = rota({ ...valid, [key]: items });
+        const repaired = await repairDecision([original, rota(valid)]);
+        assert.equal(repaired.outcome.outcome, 'planned');
+        assert.equal(repaired.remaining, 0);
+        const changed = { ...valid, [key]: key === 'fields' ? [a] : bindings.map(binding => ({ ...binding, entity: 1 - binding.entity })) };
+        const rejected = await repairDecision([original, rota(changed), rota(valid)]);
+        assert.equal(rejected.outcome.outcome, 'planned');
+        assert.equal(rejected.inputs.length, 3);
+        assert.match(JSON.stringify(rejected.inputs[2]), /repairScope/);
+      });
+    }
+  }
+});
+
+test('4C beş bulgu: eski telemetri durumu planlayıcıyı başlatır ve mevcut sayımları korur', () => {
+  const key = Symbol.for('mergen-rota.ai-telemetry');
+  const previous = globalThis[key];
+  try {
+    for (const firstAccess of ['snapshot', 'record']) {
+      resetAiTelemetryForTests();
+      const current = globalThis[key];
+      current.requests = 7;
+      delete current.planner;
+      if (firstAccess === 'record') recordPlannerDecision({ decision: 'rota' });
+      const initial = aiTelemetrySnapshot();
+      assert.equal(initial.requests, 7);
+      assert.equal(initial.planner.decisions.rota, firstAccess === 'record' ? 1 : 0);
+      const planner = current.planner;
+      recordPlannerDecision({ decision: 'rota' });
+      recordPlannerRejection('$.fields[0]:type');
+      const retained = aiTelemetrySnapshot();
+      assert.equal(current.planner, planner, 'mevcut planlayıcı durumu değiştirilmez');
+      assert.equal(retained.requests, 7);
+      assert.equal(retained.planner.decisions.rota, initial.planner.decisions.rota + 1);
+      assert.equal(retained.planner.rejections.type, 1);
+    }
+  } finally { globalThis[key] = previous; }
 });

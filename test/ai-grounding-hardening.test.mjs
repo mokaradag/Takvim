@@ -240,6 +240,8 @@ test('the turn endpoint only accepts a boolean free-text choice and forwards it 
   const done = refused.events.find((event) => event.event === 'done');
   assert.ok(done, 'the turn must complete; a provider-side assertion failure surfaces as an error event');
   assert.equal(done.data.assistantMessage.finishReason, 'clarification');
+  assert.equal(stack.db.aiToolLog?.length ?? 0, 0);
+  assert.match(done.data.assistantMessage.content, /Notlar ve iletiler/);
 });
 
 test('a completed rank refuses an injected detail read and keeps the original proof', async (t) => {

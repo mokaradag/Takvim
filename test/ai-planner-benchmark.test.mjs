@@ -155,8 +155,9 @@ test('açıklama ve çekimserlik vakaları yalnızca sunucunun sonlandırıcı k
     const chosen = await decide(loaded, testCase, choice);
     assert.ok(scoreDecision(testCase, chosen.record, { referenceDate }).correct, testCase.id);
     assert.equal(chosen.record.plan, null);
-    const planned = await decide(loaded, testCase, answerPlan(someAnswer, referenceDate));
-    assert.equal(scoreDecision(testCase, planned.record, { referenceDate }).correct, false, `${testCase.id}: plan ${planned.record.outcome}`);
+    const planned = await decide(loaded, testCase, { ...answerPlan(someAnswer, referenceDate), language: testCase.language });
+    assert.equal(planned.record.outcome, 'planned', `${testCase.id}: ${planned.record.error ?? planned.record.outcome}`);
+    assert.deepEqual(scoreDecision(testCase, planned.record, { referenceDate }).reasons, ['decision:planned'], testCase.id);
   }
   // Yanıt vakasında sonlandırıcı karar da yanlıştır.
   const refused = await decide(loaded, someAnswer, { intent: 'abstain', language: 'tr', abstain: { reason: 'write' } });
@@ -798,7 +799,7 @@ test('4C yakınsama: canlı değerlendirici ortak Sicil kabul sınırını aşma
       event({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }), 'data: [DONE]\n\n'];
   } } });
   createAiStack(t, { env: { MERGEN_ROTA_AI_BASE_URL: server.baseUrl, MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER: '1', MERGEN_ROTA_AI_MAX_QUEUED_PER_USER: '0' } });
-  const { flags } = parseArguments(['run', '--model', 'live', '--semantic', 'none', '--concurrency', '4', '--cases', 'tr-113,tr-114,tr-115', '--no-score']);
+  const { flags } = parseArguments(['run', '--model', 'live', '--semantic', 'none', '--concurrency', '4', '--cases', 'tr-113,tr-114,tr-115', '--reference-date', '2026-10-14', '--no-score']);
   const run = await runEvaluation(flags);
   assert.equal(run.records.length, 3);
   assert.ok(run.records.every(record => record.outcome === 'general_redirect'));

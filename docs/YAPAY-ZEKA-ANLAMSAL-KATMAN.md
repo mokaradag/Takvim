@@ -1493,3 +1493,9 @@ korur. Bu regresyonlar gerçek model kabulü değildir; 117/117 + 19/19 kapısı
 
 Arka plan süreç temizliği sınamasında üretilen JavaScript kaynağı sabittir; geçici dosya yolları
 koda eklenmez, alt sürece bağımsız değişken olarak iletilir. CodeQL denetimleri bastırılmaz.
+
+Beş bulguluk ek geçişte alan/bağlama onarımı, bölmeyle aynı sınırlı birebir öğe eşlemesini kullanır:
+bozuk yuvalar kaldırılabilir; geçerli kardeşler düşürülemez veya değiştirilemez. Hot reload ile kalan
+eski telemetri nesnesinde yalnızca eksik planlayıcı durumu başlatılır, mevcut sayımlar korunur.
+Metin izni reddi sınaması sıfır veri okumasını; karar puanlama sınaması kabul edilmiş planın doğru
+nedenle reddini doğrular. Canlı eşzamanlılık sınaması sabit, açık referans günle çalışır.
