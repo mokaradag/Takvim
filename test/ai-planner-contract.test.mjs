@@ -26,7 +26,7 @@ const plan = (args) => ({ text: '', toolCalls: [{ id: 'p1', name: 'rota_plan', a
 const prose = (text) => ({ text, toolCalls: [], finishReason: 'stop' });
 const stackFor = (t) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed({}) });
 
-async function turn(t, steps, { user = 'Rota verisini incele', planning = null, allowedTextFields = [], limits, setup = null, signal = null } = {}) {
+async function turn(t, steps, { user = 'Rota verisini incele', planning = null, allowedTextFields = [], limits, setup = null, signal = null, previousResult = null } = {}) {
   const stack = stackFor(t);
   setup?.(stack);
   const inputs = [];
@@ -38,7 +38,7 @@ async function turn(t, steps, { user = 'Rota verisini incele', planning = null, 
     return typeof step === 'function' ? step(input) : step;
   } };
   const result = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: user, now: NOW }).messages,
-    catalog, context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {}, planning, allowedTextFields, ...(limits ? { limits } : {}),
+    catalog, context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {}, planning, allowedTextFields, previousResult, ...(limits ? { limits } : {}),
     onPlanned: (decision) => decisions.push(decision) });
   assert.equal(steps.length, 0, 'beklenen model turları tükenmedi');
   return { result, inputs, decisions };
@@ -277,6 +277,25 @@ test('ek bölüm düzeltilirken geçerli adlandırılmış bölüm değiştirile
 
 const notifications = { operation: 'value', metrics: ['notifications.unread'], population: { tool: 'rota_notifications' }, layout: 'auto' };
 const hiddenOutlook = { operation: 'value', metrics: ['subscriptions.active'], population: { tool: 'rota_outlook_status' }, entities: [{ type: 'task', id: TASKS.HIDDEN }], layout: 'auto' };
+
+test('4C çok bölüm: önceki sonuç bayrağı bütün bölümlerde okumadan önce reddedilir', async (t) => {
+  const followup = { previousResult: true, operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' } };
+  const unresolved = { operation: 'value', metrics: ['project.baselineCount'], population: { tool: 'rota_task_search' }, entities: [{ type: 'wbs', text: 'Radar' }] };
+  for (const prior of [false, true]) for (const [request, additional] of [[followup, notifications], [notifications, followup], [unresolved, followup]]) {
+    await t.test(`${prior}:${request.population.tool}:${Boolean(request.previousResult)}`, async (t) => {
+      let stack;
+      const invalid = plan({ intent: 'rota', language: 'tr', request, additionalRequests: [additional] });
+      const { result } = await turn(t, [invalid, input => {
+        assert.match(JSON.stringify(input.messages.filter(message => message.role === 'tool')), /\$\.previousResult:unavailable/);
+        assert.equal(stack.db.aiToolLog?.length || 0, 0);
+        return invalid;
+      }, invalid], { user: 'Radar iş paketi ve önceki sonuç sayısı', setup: value => { stack = value; },
+        previousResult: prior ? { scope: { type: 'task', taskIds: [TASKS.OVERDUE] }, entries: [{}] } : null });
+      assert.equal(result.stats.attempted, 0);
+      assert.equal(result.outcome, 'failed');
+    });
+  }
+});
 
 test('bölüm kanıtı kardeşin NOT_FOUND ya da kullanılamıyor sonucunu gizleyemez; iki sıra da korunur', async (t) => {
   for (const [request, sibling] of [[notifications, hiddenOutlook], [hiddenOutlook, notifications]]) {

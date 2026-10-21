@@ -1066,7 +1066,12 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
       status(ASSISTANT_STREAM_PHASES.TOOLS, { topic });
     }
   });
-  if (turn.previousResult) instruct(turn, `Önceki doğrulanmış Rota sonuç kapsamı: ${JSON.stringify({ type: 'task', count: turn.previousResult.scope.taskIds.length })}. Bu yalnızca göndergedir, güncel kanıt değildir. Kullanıcının sorusu bu kümeye ilişkinse request.previousResult=true ile rota_task_search (görev özellikleri/süzgeç) ya da rota_task_analytics (sayı) bildir; kimlik/önceki süzgeç kopyalama. Yeni veya adı verilmiş kayıt sorusunda kullanma. Önceki asistan metninden veri çıkarma.`);
+  if (turn.previousResult) {
+    const note = { role: 'system', content: `Önceki doğrulanmış Rota sonuç kapsamı: ${JSON.stringify({ type: 'task', count: turn.previousResult.scope.taskIds.length })}. Bu yalnızca göndergedir, güncel kanıt değildir. Kullanıcının sorusu bu kümeye ilişkinse request.previousResult=true ile rota_task_search (görev özellikleri/süzgeç) ya da rota_task_analytics (sayı) bildir; kimlik/önceki süzgeç kopyalama. Yeni veya adı verilmiş kayıt sorusunda kullanma. Önceki asistan metninden veri çıkarma.` };
+    for (const transcript of [turn.transcript, turn.baseline]) {
+      transcript.splice(Math.max(0, transcript.findLastIndex((message) => message.role === 'user')), 0, note);
+    }
+  }
   if (clarification) instruct(turn, selectionInstruction(clarification));
   if (turn.planning.candidates.length) {
     const note = { role: 'system', content: plannerCandidateNote(turn.planning.candidates) };
@@ -1212,7 +1217,7 @@ function completedResultScope(turn, verdict) {
     if (!evidence?.populationMatch || !evidence.dimensionsMatch) return null;
     const rows = entry.payload?.data?.tasks || [];
     const indexes = turn.request.operation === 'rank'
-      ? (rankedRowIndexes(turn.request, entry.tool, entry.payload, 'tasks', 'tasks') || []).slice(0, turn.request.rank.limit || 1)
+      ? (rankedRowIndexes(turn.request, entry.tool, entry.payload, 'tasks', 'tasks') || [])
       : rows.map((_, index) => index);
     for (const index of indexes) taskIds.add(rows[index]?.taskId);
   }
@@ -1639,9 +1644,10 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     if (plan?.plan.additionalRequests) {
       const primary = preparePlan(turn, [], declared);
       const checked = prepareParts(turn, [plan.plan.request, ...plan.plan.additionalRequests], primary);
-      if (!checked.ok) {
+      const validation = checked.ok ? preparePlan(turn, [], declared, checked.parts) : checked;
+      if (!validation.ok) {
         turn.route = TURN_ROUTES.ROTA;
-        if (rejectDeclaration(modelCalls, checked.details, checked.hints)) continue;
+        if (rejectDeclaration(modelCalls, validation.details, validation.hints)) continue;
         return fallback('REQUEST_DECLARATION');
       }
       parts = checked.parts;

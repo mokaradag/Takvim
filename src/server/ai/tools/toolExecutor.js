@@ -107,9 +107,21 @@ export function createToolExecutor({
         const authorized = await context.revalidateEvidence(prior.entries, deadline.signal);
         if (!prior.entries.every(entry => authorized.has(entry.id))) throw new ToolError(TOOL_ERROR_CODES.NOT_FOUND);
       }
-      const outcome = await raceWithAbort(() => trackResultText(() => tool.handler(args, scoped),
+      let outcome = await raceWithAbort(() => trackResultText(() => tool.handler(args, scoped),
         (data) => projectEvidenceData(data, args.textFields || [])), deadline.signal);
-      return { outcome, cacheKey, args, population: populationNoted ? [...population.values()] : null, projectPopulation };
+      // Önceki küme kısıtı modelden gelmez; kanıt ve kalıcı özet de bu dar nüfusu belirtir.
+      if (prior) {
+        const previousResult = { type: 'task', count: prior.scope.taskIds.length };
+        outcome = { ...outcome,
+          data: { ...outcome.data, previousResult, filters: { ...outcome.data.filters, previousResult: true } },
+          scope: { ...outcome.scope, previousResult, completeProjectView: false,
+            note: 'Sonuç yalnızca önceki doğrulanmış görev kümesinin güncel ve yetkili kayıtlarını kapsar.' },
+          evidence: { ...outcome.evidence, label: `${outcome.evidence.label} · önceki sonuç`,
+            highlights: [`Kapsam: önceki sonuç (${previousResult.count} görev)`, ...(outcome.evidence.highlights || [])] }
+        };
+      }
+      return { outcome, cacheKey, args: prior ? { ...args, previousResult: true } : args,
+        population: populationNoted ? [...population.values()] : null, projectPopulation };
     } catch (error) {
       const failure = deadline.failure();
       if (failure?.code === AI_ERROR_CODES.AI_CANCELLED) throw failure;

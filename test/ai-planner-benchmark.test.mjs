@@ -737,6 +737,27 @@ test('4C son geçiş: gerçek ağ geçidindeki boş yanıt ve güvenlik hatası 
   assert.equal((await execute()).outcome, 'error');
 });
 
+test('4C sahte sağlayıcı: metinsel plan düşünme olaylarını gerçek ağ geçidine taşır', async (t) => {
+  const { createAiStack } = await import('./helpers/aiStack.mjs');
+  const { getAiGateway } = await import('../src/server/ai/aiRuntime.js');
+  const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
+  const { liveTurn, leakGuard } = await import('../scripts/planner-evaluation.mjs');
+  const loaded = loadPlannerBenchmark(); const c = loaded.cases[0];
+  const stack = createAiStack(t, { env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
+  const model = DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'].model;
+  for (const type of ['answer', 'reply', 'stream']) for (const reasoning of [2, 0]) {
+    stack.provider.enqueue({ type, reasoning, text: JSON.stringify({ name: 'rota_plan', arguments: answerPlan(c, loaded.referenceDate) }) });
+    const result = await planCase({ testCase: c, runTurn: liveTurn(getAiGateway(), model, leakGuard(loaded), { thinking: 'off' }),
+      adviceFor: unavailable, now: loaded.now, catalog });
+    const events = stack.provider.calls.at(-1).emitted;
+    assert.equal(events.filter(event => event.type === 'reasoning').length, reasoning, type);
+    if (reasoning) {
+      assert.equal(events[0].type, 'reasoning');
+      assert.equal(result.error, 'PLANNER_THINKING_UNVERIFIED', type);
+    } else assert.equal(result.outcome, 'planned', type);
+  }
+});
+
 test('4C dış komut çağıranın klasörüne göre çözülür ve geçici klasörü ayrıdır', async (t) => {
   const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');

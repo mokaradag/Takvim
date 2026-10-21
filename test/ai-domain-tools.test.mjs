@@ -235,6 +235,28 @@ test('Türkiye günü sınırı: UTC 21:30’da termini “dün” olan görev g
   assert.equal(overdueBefore.result.totalCount, 0);
 });
 
+test('önceki sonuç kapsamı sunucu kökenli kanıtta ve defterde korunur', async (t) => {
+  const stack = stackFor(t);
+  const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL });
+  assert.equal(first.result.data.previousResult, undefined);
+  assert.equal(first.ledger.requestEntries()[0].args.previousResult, undefined);
+  const taskIds = [TASKS.OVERDUE, TASKS.DONE];
+  const prior = { scope: { type: 'task', taskIds }, entries: first.ledger.authorizationEntries() };
+  for (const name of ['rota_task_search', 'rota_task_analytics']) {
+    const ledger = createEvidenceLedger();
+    const executor = createToolExecutor({ context: first.context, ledger, resultScope: () => prior });
+    const [message] = await executor.runRound([{ id: name, name, arguments: '{}' }]);
+    const result = JSON.parse(message.content);
+    assert.equal(result.ok, true);
+    assert.equal(result.totalCount, 2);
+    assert.equal(ledger.requestEntries()[0].args.previousResult, true);
+    assert.deepEqual(result.scope.previousResult, { type: 'task', count: 2 });
+    // Model kendi kapsam bayrağını araç bağımsız değişkeni olarak kabul ettiremez.
+    const [invalid] = await executor.runRound([{ id: 'invalid', name, arguments: '{"previousResult":true}' }]);
+    assert.equal(JSON.parse(invalid.content).error.code, 'INVALID_ARGUMENTS');
+  }
+});
+
 test('arama sıralı, sayfalı ve kesin toplamlıdır; imleç süzgece bağlıdır', async (t) => {
   const stack = stackFor(t);
   const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, sort: 'title_asc', limit: 3 });

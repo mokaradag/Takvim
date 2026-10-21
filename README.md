@@ -367,9 +367,23 @@ olarak verir; planlayıcı veri okumadan türlü karar (yanıt, açıklama,
 çekimserlik) verir. 4C kabulü bekliyor: düzeltilmiş kapıda gerçek zayıf modelle kanonik 117/117 ve zorunlu ek 19/19,
 üretim eşdeğeri anlamsal danışmanlık ve düşünmesiz model kökeni birlikte gereklidir.
 Tarihsel Haiku 4.5 88/117 ölçümü düzeltilmiş kapıdan önceye aittir.
-Katalog dizini kurumsal anahtarla (`MERGEN_ROTA_AI_DEFAULT_API_KEY`) kurulur;
-üretim yolundan nitelendirme uygulama dizininde `node
-scripts/semantic-evaluation.mjs live --json` ile yapılır (`.env.local` okunur).
+Katalog dizini kurumsal anahtarla (`MERGEN_ROTA_AI_DEFAULT_API_KEY`) kurulur.
+4B gömme/yeniden sıralama nitelendirmesi uygulama dizininde yapılır (`.env.local` okunur):
+
+```bash
+node scripts/semantic-evaluation.mjs live --json
+```
+
+4C planlayıcı nitelendirmesi ayrı komuttur; kayıtlı düşünmesiz planlayıcıyı ve
+üretim anlamsal danışmanlığını bütün 136 vakada çalıştırır:
+
+```bash
+node scripts/planner-evaluation.mjs live --passes 3 --out planner-run.json --json
+```
+
+Her geçişte kanonik **117/117** ve zorunlu ek **19/19**, doğrulanmış amaçlanan
+model kimliği ve düşünmesiz çalışma birlikte gereklidir. Kısmi vaka seçimi,
+`--no-score` ya da yalnızca 4B komutunun başarısı 4C kabulü sağlamaz.
 Regex ya da anahtar sözcükle doğal dil
 yorumu yasaktır; anlamsal benzerlik yetki değildir. Yol haritası, değişmezler,
 ölçüler ve kurum içi kabul: `docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md`.

@@ -388,6 +388,7 @@ export function createFakeAiProvider({
     call.behavior = resolved.type;
     if (resolved.type === 'tool-calls') {
       const feed = createFeed(input.signal, call, { ignoreAbort: resolved.ignoreAbort });
+      for (let index = 0; index < (resolved.reasoning ?? 0); index += 1) feed.reasoning();
       for (const chunk of resolved.preface ?? []) feed.text(chunk);
       const toolCalls = resolved.calls.map((entry, index) => ({
         id: entry.id ?? `call_${call.index}_${index + 1}`,
