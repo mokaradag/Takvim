@@ -27,6 +27,8 @@
  *
  *   node scripts/planner-evaluation.mjs report --run sonuc.json [--json]
  *     Kaydedilmiş koşuyu güncel altın etiketlerle yeniden puanlar (bayat koşu reddedilir).
+ *   node scripts/planner-evaluation.mjs input [--out girdi.json]
+ *     Anlamsal koşucu için kanonik ve ek 136 sorunun girdisini üretir.
  *
  * Ayrıntı: docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md §12
  */
@@ -181,6 +183,8 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
     let settled = false;
     const terminate = () => {
       if (process.platform === 'win32') {
+        // Çıkmış kökün PID'si başka bir sürece atanmış olabilir.
+        if (child.exitCode !== null || child.signalCode !== null) return;
         const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
         killer.on('error', () => child.kill('SIGKILL'));
       } else {
@@ -191,7 +195,7 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
     const finish = (error, value) => {
       if (settled) return;
       settled = true;
-      // Başarılı komut da arka plan çocuğu bırakamaz.
+      // POSIX süreç grubu temizlenir; Windows ağacı yalnızca kök yaşarken sonlandırılır.
       terminate();
       active.delete(terminate);
       clearTimeout(timer);
@@ -255,7 +259,13 @@ function candidatesFromRun(file, benchmark) {
   const items = catalogue();
   let trusted;
   try { trusted = readModelRun(run, { catalogue: items, benchmark: { fingerprint: benchmark.semanticFingerprint, cases: benchmark.cases } }); }
-  catch { fail('SEMANTIC_RUN_INVALID'); }
+  catch (error) {
+    // Yalnızca sabit doğrulayıcı nedenleri; ham iç hata ya da artifakt değeri gösterilmez.
+    const stale = 'Koşu dosyası bayat: başka bir kıyas kümesi ya da araç kataloğuyla üretilmiş. Girdiyi yeniden üretip modelleri yeniden koşun.';
+    const rows = ['belge', 'sorgu', 'yeniden sıralama', 'skor'].map(label => `Koşu dosyasında ${label} satırları girdiyle eşleşmiyor.`);
+    const reason = [stale, ...rows].find(message => message === error?.message);
+    throw Object.assign(new Error(`SEMANTIC_RUN_INVALID${reason ? `: ${reason}` : ''} (girdi: planner-evaluation.mjs input)`), { code: 'SEMANTIC_RUN_INVALID' });
+  }
   const { space, documents, queries, rerank } = trusted;
   const index = createSemanticIndex(items, space, items.items.map((item, position) => ({ index: position, vector: documents.get(item.id).vector })));
   if (!index.ok) fail('SEMANTIC_VECTOR_INVALID');
@@ -522,9 +532,11 @@ function printReport(run, flags) {
     process.stdout.write(`${JSON.stringify({ summary, run: { ...run, records: undefined } }, null, 2)}\n`);
     return summary;
   }
-  const lines = [`# Planlayıcı değerlendirmesi`, '', `Kıyas: ${summary.benchmark} · referans gün ${summary.referenceDate} · geçiş ${summary.passes}`, ''];
+  const lines = [`# Planlayıcı değerlendirmesi`, '', `Kıyas: ${summary.benchmark} · referans gün ${summary.referenceDate} · geçiş ${summary.passes}`,
+    `Model: beklenen ${run.qualification.expectedModel} · gözlenen ${summary.models.join(', ') || '—'} · anlamsal ${summary.semantic.mode} · kapı ${summary.gatePassed ? 'GEÇTİ' : 'KALDI'}`,
+    `Zayıf model hedefi: ${WEAK_PLANNER_MODEL}`, ''];
   for (const pass of summary.byPass) {
-    lines.push(`## Geçiş ${pass.pass}: ${pass.correct}/${pass.total} doğru (answer ${pass.byExpect.answer.correct}/${pass.byExpect.answer.total}, clarify ${pass.byExpect.clarify.correct}/${pass.byExpect.clarify.total}, abstain ${pass.byExpect.abstain.correct}/${pass.byExpect.abstain.total})`);
+    lines.push(`## Geçiş ${pass.pass}: ${pass.correct}/${pass.total} doğru (answer ${pass.byExpect.answer.correct}/${pass.byExpect.answer.total}, clarify ${pass.byExpect.clarify.correct}/${pass.byExpect.clarify.total}, abstain ${pass.byExpect.abstain.correct}/${pass.byExpect.abstain.total}, general ${pass.byExpect.general.correct}/${pass.byExpect.general.total}; kanonik ${pass.canonical.correct}/${pass.canonical.total}, ek ${pass.supplementary.correct}/${pass.supplementary.total})`);
     for (const miss of pass.failures) lines.push(`- ${miss.case}: ${miss.reasons.join(', ')}`);
     lines.push('');
   }
@@ -558,7 +570,7 @@ if (!direct) {
   try { run = JSON.parse(readFileSync(flags.run, 'utf8')); } catch { fail('Koşu dosyası okunamadı.'); }
   process.exitCode = printReport(run, flags).gatePassed ? 0 : 1;
 } else {
-  fail('Komut: run | report | live');
+  fail('Komut: input | run | report | live');
 }
 
 } catch (error) {

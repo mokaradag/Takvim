@@ -510,6 +510,7 @@ function repairItemsMatch(pin, sections, key, indexes, bindEntities = true) {
   };
   const seen = new Set();
   const choices = [];
+  const optional = [];
   let omitted = 0;
   for (const [slot, item] of (pin.raw[key] || []).entries()) {
     if (pin.paths.has(`${key}Unique`) && seen.has(stable(item))) continue;
@@ -518,7 +519,8 @@ function repairItemsMatch(pin, sections, key, indexes, bindEntities = true) {
     const expected = normalized(item, pin.raw, prefix);
     if (expected === undefined) { omitted += 1; continue; }
     if (!expected || typeof expected !== 'object' || Array.isArray(expected)) return false;
-    choices.push(candidates.flatMap((candidate, at) => stable(normalized(candidate.item, candidate.raw, prefix)) === stable(expected) ? [at] : []));
+    const matches = candidates.flatMap((candidate, at) => stable(normalized(candidate.item, candidate.raw, prefix)) === stable(expected) ? [at] : []);
+    (key === 'fields' && pin.paths.has(`${prefix}.path`) ? optional : choices).push(matches);
   }
   // Kısmi maske geçerli kardeşin tek eşleşmesini tüketemez.
   const owners = new Map();
@@ -529,8 +531,12 @@ function repairItemsMatch(pin, sections, key, indexes, bindEntities = true) {
     owners.set(at, slot);
     return true;
   });
-  return choices.every((_, slot) => assign(slot, new Set()))
-    && candidates.length - choices.length <= omitted;
+  if (!choices.every((_, slot) => assign(slot, new Set()))) return false;
+  for (const matches of optional) {
+    choices.push(matches);
+    assign(choices.length - 1, new Set());
+  }
+  return candidates.length - owners.size <= omitted;
 }
 
 function repairProjection(turn, raw, index, calls, sections, paths, references = null, preserved = raw) {
@@ -598,7 +604,7 @@ function repairProjection(turn, raw, index, calls, sections, paths, references =
   return stable({ semantic: projection, ...(Object.keys(itemRepairs).length ? { itemRepairs } : {}), ...(transfer ? { textScope: typeof textScope === 'string' ? containmentText(textScope) : textScope } : {}), metricCount: paths.has('metrics') ? null : paths.has('metricsUnique') ? new Set(raw.metrics).size : raw.metrics?.length ?? null });
 }
 
-function pinRepair(turn, plan, details, calls = [], executionCalls = []) {
+function pinRepair(turn, plan, details, calls = [], executionCalls = [], matched = false) {
   if (plan.intent !== PLANNER_INTENTS.ROTA) return;
   if (details.some(detail => String(detail).endsWith(':dropped'))) return;
   // Bozuk taşıyıcı kabul edilmez; yalnızca düzeltme sırasında aynı soru yuvası korunur.
@@ -612,7 +618,8 @@ function pinRepair(turn, plan, details, calls = [], executionCalls = []) {
     && own.some(detail => /\.metrics(?:\[\d+\])?:(?:population|maxItems)$/.test(String(detail)))
     && !sections.some(part => Array.isArray(part?.entities) && part.entities.some(entity => entity?.from === index));
   const snapshot = turn.repairPins.get('snapshot');
-  if (snapshot) {
+  // Eşleşmiş bölme artık aynı anlamın yeni yuvalarıdır; sonraki ret yalnızca kendi yolunu açar.
+  if (snapshot && !(matched && snapshot.pins.some(pin => pin.split))) {
     const used = new Set();
     const references = new Map();
     for (const pin of snapshot.pins) {
@@ -648,7 +655,9 @@ function pinRepair(turn, plan, details, calls = [], executionCalls = []) {
     return match ? [Number(match[1])] : [];
   }))].map(index => executionCalls[index]).filter(Boolean);
   const additions = [...new Map(repairCalls(turn, unrelated).map(call => [readKey(call.name, { ...call.args, limit: 1 }, turn.context.today), call])).values()];
-  turn.repairPins.set('snapshot', { count: sections.length, sections, pins, calls, additions });
+  const next = { count: sections.length, sections, pins, calls, additions: snapshot?.additions || additions };
+  if (snapshot) Object.assign(snapshot, next);
+  else turn.repairPins.set('snapshot', next);
 }
 
 function repairMatches(turn, plan, calls = []) {
@@ -714,7 +723,7 @@ function repairMatches(turn, plan, calls = []) {
 function planNeedsText(turn, plan) {
   return [plan?.request, ...(Array.isArray(plan?.additionalRequests) ? plan.additionalRequests : [])].filter(Boolean).some((raw) => Array.isArray(raw.metrics)
     && raw.metrics.some((metric) => turn.catalog.some((tool) => metricPaths(tool.name, metric).some((path) => {
-      const field = path.split('.').at(-1);
+      const field = path.split('.').findLast((part) => part !== '*');
       return EVIDENCE_TEXT_FIELDS.includes(field) && !turn.allowedTextFields.includes(field);
     }))));
 }
@@ -1419,10 +1428,11 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     return failTurn(turn, onText);
   };
   let rejectedPlan = null;
+  let repairMatched = false;
   const rejectDeclaration = (calls, rawDetails, hints = [], problems = null, executionCalls = calls) => {
     const details = rawDetails || [];
     recordPlannerRejection(details[0]);
-    if (rejectedPlan && !details.includes('$.plan:repairScope')) pinRepair(turn, rejectedPlan, details, repairCalls(turn, executionCalls), executionCalls);
+    if (rejectedPlan && !details.includes('$.plan:repairScope')) pinRepair(turn, rejectedPlan, details, repairCalls(turn, executionCalls), executionCalls, repairMatched);
     if (calls.length) turn.toolsRequested = true;
     // Kapsam dışı çağrı veri okunmadan reddedilse de Derin düşünme devrini engeller.
     for (const problem of problems || []) if (ESCALATION_BLOCKING_TOOL_CODES.has(problem.error.code)) turn.toolFailureCodes.add(problem.error.code);
@@ -1536,11 +1546,13 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     const modelCalls = result.toolCalls;
     let plan = null;
     rejectedPlan = null;
+    repairMatched = false;
     if (!frozen() && result.toolCalls.some((call) => call.name === 'rota_plan')) {
       try {
         plan = unpackTypedPlan(result, { onDecoded: decoded => { rejectedPlan = decoded; } });
         rejectedPlan = plan.plan;
         if (!repairMatches(turn, plan.plan, repairCalls(turn, plan.calls))) throw invalidArguments(['$.plan:repairScope']);
+        repairMatched = true;
       }
       catch (error) {
         if (!(error instanceof ToolError)) throw error;

@@ -56,6 +56,43 @@ async function decide(loaded, testCase, args) {
 const answerPlan = (testCase, referenceDate) => ({ intent: 'rota', language: testCase.language, ...resolveExample(testCase.example, referenceDate) });
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
+test('4C donmuş bulgular: Windows temizliği yalnızca yaşayan kök PID üzerinde çalışır', async (t) => {
+  const childProcess = (await import('node:child_process')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { EventEmitter } = await import('node:events');
+  const { PassThrough } = await import('node:stream');
+  const { externalModel } = await import('../scripts/planner-evaluation.mjs');
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const spawn = childProcess.spawn;
+  const killed = [];
+  let mode;
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+  t.after(() => { Object.defineProperty(process, 'platform', platform); childProcess.spawn = spawn; syncBuiltinESMExports(); });
+  childProcess.spawn = (command, args) => {
+    if (command === 'taskkill') { killed.push(args); return new EventEmitter(); }
+    const child = Object.assign(new EventEmitter(), { pid: 1234, exitCode: null, signalCode: null,
+      stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill() { assert.fail('beklenmeyen kill'); } });
+    child.stdin.on('finish', () => queueMicrotask(() => {
+      if (mode === 'running') child.stdout.emit('data', Buffer.alloc(20));
+      else {
+        if (mode === 'exited') child.exitCode = 0;
+        else child.signalCode = 'SIGTERM';
+        child.stdout.emit('data', Buffer.from('{}'));
+        child.emit('close', child.exitCode);
+      }
+    }));
+    return child;
+  };
+  syncBuiltinESMExports();
+  for (mode of ['exited', 'signalled', 'running']) {
+    const model = externalModel({ command: 'test-double', guard: () => {}, outputBytes: 10 });
+    try { await model.complete({ messages: [], tools: [], toolChoice: 'auto' }); }
+    finally { model.dispose(); }
+    assert.equal(killed.length, mode === 'running' ? 1 : 0, mode);
+  }
+  assert.deepEqual(killed[0], ['/pid', '1234', '/T', '/F']);
+});
+
 test('4C CLI değer alan her bayrak eksik değeri yan etki olmadan reddeder', async () => {
   const { parseArguments } = await import('../scripts/planner-evaluation.mjs');
   for (const flag of ['--model-command', '--model', '--semantic', '--passes', '--concurrency', '--cases', '--out', '--inputs', '--run', '--reference-date', '--expected-model', '--model-timeout-ms', '--model-output-bytes']) {
@@ -473,7 +510,7 @@ test('4C gold düzeltmeleri İngilizce, bildirim listesi, sorumlu VE durum ve t�
   assert.doesNotThrow(() => loadPlannerBenchmark({ plannerDocument: document, referenceDate: '2024-02-29' }));
 });
 
-test('4C bozuk kayıt raporu TypeError yerine PLANNER_RUN_INVALID verir; anlamsız koşu nitelendiremez', async () => {
+test('4C bozuk kayıt raporu TypeError yerine PLANNER_RUN_INVALID verir; anlamsız koşu nitelendiremez', async (t) => {
   const { PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, scorePlannerRun } = await import('../scripts/planner-scoring.mjs');
   const loaded = loadPlannerBenchmark();
   const records = [];
@@ -496,6 +533,22 @@ test('4C bozuk kayıt raporu TypeError yerine PLANNER_RUN_INVALID verir; anlams�
   run.semantic = { mode: 'run', provenance: { model: 'test-double', provider: 'test', preprocessing: 'none' } };
   for (const record of run.records) record.semantic = { state: 'first_stage', candidates: ['rota_task_search'] };
   assert.equal(scorePlannerRun(run, loaded).gatePassed, true, 'yalnızca puanlayıcı sınaması; gerçek model kabulü değildir');
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const dir = mkdtempSync(path.join(tmpdir(), 'planner-report-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'run.json');
+  const stronger = clone(run);
+  stronger.qualification.expectedModel = 'claude-sonnet-4-5';
+  for (const record of stronger.records) for (const round of record.rounds) round.models = ['claude-sonnet-4-5'];
+  writeFileSync(file, JSON.stringify(stronger));
+  const report = spawnSync(process.execPath, ['scripts/planner-evaluation.mjs', 'report', '--run', file], { encoding: 'utf8' });
+  assert.equal(report.status, 0, report.stderr);
+  assert.match(report.stdout, /beklenen claude-sonnet-4-5.*gözlenen claude-sonnet-4-5.*anlamsal run.*kapı GEÇTİ/);
+  assert.match(report.stdout, /general \d+\/\d+/);
+  assert.match(report.stdout, /claude-haiku-4-5-20251001/);
   run.records.at(-1).semantic = { state: 'unavailable', candidates: [] };
   assert.equal(scorePlannerRun(run, loaded).gatePassed, false, 'tek ek vakada bile danışmanlık yoksa kabul yoktur');
 });
@@ -561,6 +614,11 @@ test('4C anlamsal artifakt tüm 136 soruyu ve tüm belge skorlarını kapsar; be
   const valid = read(run);
   assert.equal(valid.byCase.size, 136);
   assert.equal(valid.byCase.get('pl-019').status, 'reranked');
+  const missing = clone(run); missing.embedding.queries.pop();
+  assert.throws(() => read(missing), error => error.code === 'SEMANTIC_RUN_INVALID'
+    && /sorgu satırları girdiyle eşleşmiyor/.test(error.message) && /planner-evaluation.mjs input/.test(error.message));
+  const stale = clone(run); stale.benchmark = 'private-marker';
+  assert.throws(() => read(stale), error => error.code === 'SEMANTIC_RUN_INVALID' && /bayat/.test(error.message) && !error.message.includes('private-marker'));
   const failed = clone(run); failed.rerank.queries[0] = { case: 'tr-001', failure: 'INFERENCE_FAILED', latencyMs: 1 };
   assert.equal(read(failed).byCase.get('tr-001').status, 'first_stage');
   const failedQuery = clone(run); failedQuery.embedding.queries[0] = { case: 'tr-001', text: loaded.cases[0].text, failure: 'INFERENCE_FAILED', latencyMs: 1 };

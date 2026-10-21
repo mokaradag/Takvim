@@ -17,7 +17,7 @@ const { unpackTypedPlan, typedPlanningTool } = await import('../src/server/ai/to
 const { renderPlannerAbstention, renderPlannerClarification, renderTextFieldsRequired, ABSTAIN_REASONS } = await import('../src/domain/ai/plannerOutcome.js');
 const { AI_ERROR_CODES } = await import('../src/domain/ai/aiErrorCatalog.js');
 const { AiError } = await import('../src/server/ai/aiErrors.js');
-const { aiTelemetrySnapshot, resetAiTelemetryForTests, recordPlannerDecision, recordPlannerRejection } = await import('../src/server/ai/aiTelemetry.js');
+const { aiTelemetrySnapshot, resetAiTelemetryForTests, recordGroundedAnswer, recordPlannerDecision, recordPlannerRejection } = await import('../src/server/ai/aiTelemetry.js');
 
 const catalog = toolCatalogForModel();
 const names = catalog.map((tool) => tool.name);
@@ -1027,6 +1027,7 @@ test('4C beş bulgu: eski telemetri durumu planlayıcıyı başlatır ve mevcut 
       const current = globalThis[key];
       current.requests = 7;
       delete current.planner;
+      delete current.grounding.abstained;
       if (firstAccess === 'record') recordPlannerDecision({ decision: 'rota' });
       const initial = aiTelemetrySnapshot();
       assert.equal(initial.requests, 7);
@@ -1034,11 +1035,66 @@ test('4C beş bulgu: eski telemetri durumu planlayıcıyı başlatır ve mevcut 
       const planner = current.planner;
       recordPlannerDecision({ decision: 'rota' });
       recordPlannerRejection('$.fields[0]:type');
+      recordGroundedAnswer({ outcome: 'abstained' });
       const retained = aiTelemetrySnapshot();
       assert.equal(current.planner, planner, 'mevcut planlayıcı durumu değiştirilmez');
       assert.equal(retained.requests, 7);
       assert.equal(retained.planner.decisions.rota, initial.planner.decisions.rota + 1);
       assert.equal(retained.planner.rejections.type, 1);
+      assert.equal(retained.grounding.abstained, 1);
+      recordGroundedAnswer({ outcome: 'abstained' });
+      assert.equal(aiTelemetrySnapshot().grounding.abstained, 2);
     }
   } finally { globalThis[key] = previous; }
+});
+
+test('4C donmuş bulgular: araç ret kodları ayrı ve içeriksiz sayılır', () => {
+  resetAiTelemetryForTests();
+  for (const code of ['UNSUPPORTED_SCOPE', 'UNKNOWN_TOOL', 'LIMIT_EXCEEDED']) recordPlannerRejection(`$.calls:${code}`);
+  recordPlannerRejection('$.fields[0].path:unknown');
+  assert.deepEqual(aiTelemetrySnapshot().planner.rejections, { UNSUPPORTED_SCOPE: 1, UNKNOWN_TOOL: 1, LIMIT_EXCEEDED: 1, unknown: 1 });
+});
+
+test('4C donmuş bulgular: hatalı alan yolu atılabilir; geçerli kardeşler birebir korunur', async () => {
+  const fields = [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' },
+    { metric: 'tasks.overdue', tool: 'rota_task_analytics', path: 'data.totals.overdue' }];
+  const base = { operation: 'value', metrics: ['tasks.total', 'tasks.overdue'], population: { tool: 'rota_task_analytics' }, fields };
+  const original = rota({ ...base, fields: [{ ...fields[0], path: 'data.invalid' }, fields[1]] });
+  for (const fields of [[base.fields[1]], base.fields]) {
+    const result = await repairDecision([original, rota({ ...base, fields })]);
+    assert.equal(result.outcome.outcome, 'planned');
+    assert.equal(result.inputs.length, 2);
+  }
+  for (const fields of [[], [base.fields[0]], [base.fields[1], base.fields[1]]]) {
+    const result = await repairDecision([original, rota({ ...base, fields }), rota(base)]);
+    assert.equal(result.outcome.outcome, 'planned');
+    assert.match(JSON.stringify(result.inputs[2]), /repairScope/);
+  }
+});
+
+test('4C donmuş bulgular: bölmeden sonraki alan onarımı yalnızca reddedilen yolu açar', async () => {
+  const metrics = ['tasks.total', 'tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent'];
+  const fields = [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' },
+    { metric: 'tasks.overdue', tool: 'rota_task_analytics', path: 'data.totals.overdue' }];
+  const base = { operation: 'value', population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' }, metrics, fields };
+  const bad = { ...base, fields: [{ ...fields[0], path: 'data.invalid' }, fields[1]] };
+  const original = rota({ ...bad, metrics: [...metrics, ...notifications.metrics] });
+  const split = request => plan({ intent: 'rota', language: 'tr', request, additionalRequests: [notifications] });
+  const repaired = await repairDecision([original, split(bad), split(base)]);
+  assert.equal(repaired.outcome.outcome, 'planned');
+  assert.equal(repaired.inputs.length, 3);
+  for (const request of [{ ...base, fields: [fields[0]] }, { ...base, filters: {} }, { ...base, metrics: metrics.slice(1) }]) {
+    const result = await repairDecision([original, split(bad), split(request)]);
+    assert.equal(result.outcome.outcome, 'failed');
+    assert.equal(result.outcome.decisions.some(decision => decision.intent === 'rota'), false);
+  }
+});
+
+test('4C donmuş bulgular: yıldızla biten korumalı metin ölçüsü izin uyarısını korur', async (t) => {
+  const request = { operation: 'list', metrics: ['activity.changes'], population: { tool: 'rota_activity_search', collection: 'items' }, filters: { period: 'today' } };
+  for (const value of [request, { ...request, fields: 'invalid' }]) {
+    const { result } = await turn(t, [rota(value)]);
+    assert.equal(result.stats.attempted, 0);
+    assert.equal(result.text, renderTextFieldsRequired({ locale: 'tr' }));
+  }
 });

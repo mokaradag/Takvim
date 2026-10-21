@@ -1499,3 +1499,42 @@ bozuk yuvalar kaldırılabilir; geçerli kardeşler düşürülemez veya değiş
 eski telemetri nesnesinde yalnızca eksik planlayıcı durumu başlatılır, mevcut sayımlar korunur.
 Metin izni reddi sınaması sıfır veri okumasını; karar puanlama sınaması kabul edilmiş planın doğru
 nedenle reddini doğrular. Canlı eşzamanlılık sınaması sabit, açık referans günle çalışır.
+
+### 21 Ekim 2026 — donmuş 4C yakınsama kümesi
+
+Başlangıç HEAD: `1d4b491bd7ba273b0ac0ace063d9134b295ba287`. Kod değişmeden önce GitHub'dan
+okunan **11** açık başlık, bu geçişin sabit kapsamıdır:
+
+```text
+FROZEN_UNRESOLVED_SET
+PRRT_kwDOSQ6ZIs6um4St
+PRRT_kwDOSQ6ZIs6um5mn
+PRRT_kwDOSQ6ZIs6um5mr
+PRRT_kwDOSQ6ZIs6um5mz
+PRRT_kwDOSQ6ZIs6unmgQ
+PRRT_kwDOSQ6ZIs6unosH
+PRRT_kwDOSQ6ZIs6unosO
+PRRT_kwDOSQ6ZIs6upTgp
+PRRT_kwDOSQ6ZIs6upTgt
+PRRT_kwDOSQ6ZIs6upTgz
+PRRT_kwDOSQ6ZIs6uqMVd
+```
+
+Dokuz kök neden/sözleşme kümesi değerlendirildi: yedi kümede sekiz başlık kod düzeltmesi gerektirdi;
+bir başlık aynı telemetri hatasının tekrarıdır, iki başlık mevcut sözleşmeyle uyuşmaz.
+
+| Küme | Yorum kimlikleri | Sonuç ve odaklı doğrulama |
+| --- | --- | --- |
+| Kalan telemetri durumu | 4332597100, 4332918304 (tekrar) | Eksik `grounding.abstained` sıfırlanır; mevcut sayaçlar ve sonraki artışlar korunur. |
+| Ret sınıfı | 4332605939 | Yalnızca kayıtlı büyük harfli araç hata kodları ayrı sayılır; bilinmeyen içerik kaydedilmez. |
+| Sınırlı öğe ve bölme onarımı | 4332903844, 4334001052 | Hatalı alan yolu kaldırılabilir; geçerli kardeşler birebir kalır. Önceki pimle eşleşmiş bölme aynı sunucu anlık görüntüsüne yeniden bağlanır; sonraki ret yalnızca kendi hatalı yolunu açar. Kapsam/ölçü/kardeş kaybı reddedilir. |
+| Korumalı metin | 4332605953 | Son jokerden önceki alan kullanılır; `activity.changes` karma hatada da sıfır okumayla izin uyarısı verir. |
+| Windows süreç sahipliği | 4332918294 | Çıkmış veya sinyalle bitmiş kök için `taskkill` çağrılmaz; yaşayan kökün mevcut ağaç temizliği korunur. Platform ikizi bu üç durumu doğrular. |
+| Anlamsal artifakt reddi | 4333626923 | Bayatlık ve satır sayısı için sabit doğrulayıcı nedenleri ile 136 soruluk `input` komutu gösterilir. Ham iç hata/artifakt içeriği yansıtılmaz. |
+| Model raporu | 4333626929 | Beklenen/gözlenen model, anlamsal kip, kapı sonucu, zayıf model hedefi ve dört karar sınıfı gösterilir. Mevcut özel model değerlendirmesi kısıtlanmaz; daha güçlü model raporda açıkça ayrılır. |
+| Birincil çağrı sözleşmesi | 4332605932 | Kod değişmedi: `additionalRequests` ile açık çağrı reddedilir; `onPlanned.calls` ilk yürütme kümesidir ve yalnızca birincil isteğe bağlıdır. Sekiz çok bölümlü kıyas örneğinin tamamında doğrulandı. Puanlayıcı daha izinli yapılmadı. |
+| Bağımlı bölüm notu | 4333626936 | Kod değişmedi: bölüm önceden `completeRequest` ile doğrulanır; örnekleme yalnızca aynı türde `from` yerine `id` koyar. Boş çağrılı tamamlama kimlik değerine göre farklılaşmaz. İki bağımlı kıyas biçimi ve mevcut satır/bütçe sınamaları doğrulandı. Not gerçekleşen başarı sayısını değil üç kaynak kaydı sınırını bildirir. |
+
+Sekiz odaklı regresyon seçimi başlangıç kodunda başarısız olup düzeltmelerden sonra geçer.
+Üretim sınırları, onarım/çağrı bütçeleri, kimlik ve yetki sözleşmeleri değişmez; yeni uç, araç,
+bağımlılık, girdi biçimi veya Aşama 4D davranışı yoktur. Gerçek model kabul kapısı hâlâ bekler.

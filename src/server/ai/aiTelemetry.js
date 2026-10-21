@@ -6,6 +6,7 @@ import { COMPONENTS, EVENT_SEVERITIES } from '../../domain/observability/eventMo
 import { GAUGE_KEYS, summarizeDurations } from '../../domain/observability/metrics.js';
 import { logEvent } from '../observability/structuredLogger.js';
 import { recordGauge, recordOperation } from '../observability/telemetryRegistry.js';
+import { TOOL_ERROR_CODES } from './tools/toolErrors.js';
 
 /**
  * Yapay zekâ telemetrisi (var olan kaydedici ve günlük üzerinden).
@@ -109,6 +110,7 @@ function createState() {
 function state() {
   const current = globalThis[STATE_KEY] ||= createState();
   current.planner ||= createState().planner;
+  current.grounding.abstained ??= 0;
   return current;
 }
 
@@ -716,7 +718,9 @@ export function recordPlannerDecision({ decision, parts = 0, semantic = 'unavail
  */
 export function recordPlannerRejection(detail) {
   safely(() => {
-    const kind = /:([a-z][a-zA-Z-]{0,31})$/.exec(String(detail ?? ''))?.[1] || 'invalid';
+    const value = String(detail ?? '');
+    const kind = /:([a-z][a-zA-Z-]{0,31})$/.exec(value)?.[1]
+      || Object.values(TOOL_ERROR_CODES).find(code => value.endsWith(`:${code}`)) || 'invalid';
     const current = state().planner.rejections;
     if (Object.hasOwn(current, kind) || Object.keys(current).length < MAX_PLANNER_REJECTION_KINDS) current[kind] = (current[kind] || 0) + 1;
   });
