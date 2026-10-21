@@ -1331,6 +1331,16 @@ alanını uygulamıştır.
   önceki geçersiz plandaki doğrulanmış sorunsuz bölümleri değiştiremez; ölçü biçimi onarılırken varlıklar ve nüfus koşulları sabittir. Genel belirsizlik açıklaması, sonraki turda güvenli devam için kayıt adını/kodunu içeren tam sorunun yeniden yazılmasını açıkça ister. Veri okunduktan sonra istek
   değişmez; Standart → Derin devri aynı sınırlardan geçer.
 
+Tek bölümlü doğrulanmış görev listesinin/sıralamasının dönen kimlikleri (en çok 50), mevcut
+kanıt JSON'unda `resultScope` olarak saklanır. Hemen önceki asistan iletisi başarılıysa sunucu
+planlayıcıya yalnızca kayıt türünü ve küme boyunu verir. Model `request.previousResult: true`
+ile bu kümeyi seçebilir: tek bölümlü, varlıksız `rota_task_search` veya `rota_task_analytics`.
+Önceki tarih/durum koşulları yeniden çalıştırılmaz; sunucu aynı kimliklerin güncel verisini okur.
+Planın tamamı doğrulanmadan yetki/veri okuması başlamaz. Eski kanıtın dönem/proje/görev yetkisi
+mevcut denetimden geçmezse okuma kapalı kalır. Yeni konuşma, araya giren başka yanıt, bozuk ya da
+kayıpsız saklanamayan kapsam gönderge sağlamaz. Önceki asistan metni güncel kanıt değildir;
+zamir/anahtar sözcük tanıma yoktur. Yeni alan mevcut monoton düzeltme eşitliğinde korunur.
+
 ### 12.3 Sunucu yönergesi
 
 Yönerge sözleşmeyi anlatır, doğal dili yorumlamaz: yanıt protokolü (ilk yanıt
@@ -1348,7 +1358,8 @@ sözlüğü, düzenli ifade yönlendirmesi ya da kıyas vakasına özel dal yokt
 `recordPlannerDecision` / `recordPlannerRejection`: karar türü (rota, general,
 clarify, abstain, invalid, text_fields), çok bölümlü plan sayısı, anlamsal durum ve sınırlı kullanılamama nedeni (süre aşımı kullanıcı iptali sayılmaz), aday
 sayısı, bildirim sayısı, gecikme ve ret yolunun türü. Soru, yönerge,
-vektör, aday metni, Sicil ya da model gerekçesi yazılmaz (sınama).
+vektör, aday metni, Sicil ya da model gerekçesi yazılmaz (sınama). Gateway `AI_TIMEOUT`
+yapılandırılmış nedeni, mevcut `TIMEOUT` sayacına normalleştirilir; diğer nedenler değişmez.
 
 ### 12.5 Değerlendirici — `scripts/planner-evaluation.mjs`, `scripts/planner-scoring.mjs`
 

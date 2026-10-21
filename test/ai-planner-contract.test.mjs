@@ -1197,3 +1197,17 @@ test('4C ek iki bulgu: birden çok hatalı bölüm doğrulanmadan veri okunmaz',
   assert.equal(result.stats.attempted, 0);
   assert.equal(result.outcome, 'failed');
 });
+
+test('4C tek bulgu: yapılandırılmış gateway timeout semantik telemetride TIMEOUT sayılır', async () => {
+  resetAiTelemetryForTests();
+  const advice = await semanticPlanningAdvice({ query: 'x', catalog, retrieve: async () => ({
+    status: 'unavailable', candidates: [], failure: { reason: 'AI_TIMEOUT' }
+  }) });
+  recordPlannerDecision({ decision: 'clarify', semantic: advice.state, semanticReason: advice.reason });
+  for (const reason of ['TIMEOUT', 'MODEL_UNAVAILABLE', 'INTERNAL_UNAVAILABLE', 'PROFILE_DISABLED', 'PROFILE_NOT_CONFIGURED', 'unknown']) {
+    recordPlannerDecision({ decision: 'rota', semantic: 'unavailable', semanticReason: reason });
+  }
+  assert.deepEqual(aiTelemetrySnapshot().planner.semanticReasons, {
+    TIMEOUT: 2, MODEL_UNAVAILABLE: 1, INTERNAL_UNAVAILABLE: 1, PROFILE_DISABLED: 1, PROFILE_NOT_CONFIGURED: 1, OTHER: 1
+  });
+});

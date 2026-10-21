@@ -1,4 +1,5 @@
 import 'server-only';
+import { taskResultScope } from '../../../domain/ai/requestContract.js';
 import { sql } from '../../db/pool.js';
 import { normalizeEvidenceSummary } from '../../../domain/ai/evidenceContract.js';
 import { decodeAuthorizationPopulation, PAYLOAD_POPULATION_TOOLS } from '../tools/evidenceAuthorization.js';
@@ -276,6 +277,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
   const [[state] = [], rows = []] = recordsetsOf(result);
   const epochsByMessage = new Map();
   const clarificationByMessage = new Map();
+  const resultScopeByMessage = new Map();
   const authorizationByMessage = new Map();
   for (const row of rows) {
     const id = idOrNull(row.MessageId);
@@ -301,6 +303,10 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     authorizationByMessage.get(id).push({ id: `${id}:${row.Ordinal}`, payload: row.LegacyEvidenceJson || '{}',
       authorizationEpoch, scopedAuthorization, taskReferences, unverifiable });
     try {
+      const scope = taskResultScope(JSON.parse(row.ResultScope || 'null'));
+      if (scope && authorizationEpoch && !unverifiable) resultScopeByMessage.set(id, scope);
+    } catch { /* Bozuk sonuç kapsamı kullanılmaz. */ }
+    try {
       const candidates = JSON.parse(row.ClarificationContext || 'null');
       if (Array.isArray(candidates)) clarificationByMessage.set(id, [...(clarificationByMessage.get(id) || []), ...candidates].sort((a, b) => a.ordinal - b.ordinal).slice(0, 10));
     } catch { /* Geçersiz açıklama durumu kullanılmaz. */ }
@@ -311,6 +317,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     epochsByMessage,
     authorizationByMessage,
     clarificationByMessage,
+    resultScopeByMessage,
     byMessage: evidenceByMessage(rows)
   };
 }

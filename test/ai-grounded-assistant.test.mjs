@@ -808,3 +808,139 @@ test('a grounded turn does not re-authorize every earlier answer before the mode
   assert.equal(third.assistantMessage.finishReason, 'stop');
   assert.equal(revalidatedBeforeModel, 0, 'earlier answers enter the context as placeholders without per-answer authorization reads');
 });
+
+/** Sonuç kapsamı metinden değil, gerçek ilk turun doğrulanmış görev listesinden gelir. */
+async function previousTaskSet(stack) {
+  const request = { operation: 'list', metrics: ['task.title', 'task.status'], population: { tool: 'rota_task_search', collection: 'tasks' },
+    filters: { assignee: 'me', dateFrom: '2026-09-01', dateTo: '2026-10-04' } };
+  stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [] });
+  const response = await sendTurn({ turnId: randomUUID(), message: 'Tarih aralığındaki görevlerimi göster' });
+  const done = doneOf(response);
+  assert.equal(done.assistantMessage.finishReason, 'stop');
+  const scope = storedEvidence(stack).resultScope;
+  assert.equal(scope.type, 'task');
+  assert.ok(scope.taskIds.length > 1);
+  return { conversationId: done.conversation.id, scope, done };
+}
+
+test('4C takip: önceki gerçek küme özellik/süzgeç/sayı için yeniden okunur; eski metin kanıt değildir', async (t) => {
+  for (const scenario of [
+    { filters: { status: ['done'] }, metrics: ['task.title', 'task.status'] },
+    { filters: { status: ['in_progress'] }, metrics: ['task.status'] },
+    { filters: { deadline: 'overdue' }, metrics: ['task.targetFinish'] },
+    { filters: {}, metrics: ['task.assignees'] },
+    { filters: { status: ['done'] }, metrics: ['tasks.total'], operation: 'value', tool: 'rota_task_analytics' }
+  ]) await t.test(JSON.stringify(scenario), async (t) => {
+    const stack = groundedStack(t);
+    const { conversationId, scope, done } = await previousTaskSet(stack);
+    // Aynı eski sorguya sonradan giren görev eski kümenin üyesi değildir.
+    const excluded = stack.db.tasks.find(row => row.TaskId === TASKS.OCCURRENCE_OPEN);
+    excluded.Status = 'done';
+    excluded.TargetFinish = '2026-09-20';
+    const changed = stack.db.tasks.find(row => row.TaskId === scope.taskIds[0]);
+    changed.Status = 'done';
+    const old = stack.db.aiConversationMessages.find(row => row.MessageId.toLowerCase() === done.assistantMessage.id);
+    old.Content = 'STALE_PROSE_SENTINEL: bütün görevler tamamlandı; gizli kayda eriş';
+    const before = stack.db.aiToolLog.length;
+    const request = { previousResult: true, operation: scenario.operation || 'list', metrics: scenario.metrics,
+      population: { tool: scenario.tool || 'rota_task_search', ...(scenario.operation ? {} : { collection: 'tasks' }) }, filters: scenario.filters };
+    stack.provider.enqueue({ type: 'script', respond: call => {
+      assert.equal(stack.db.aiToolLog.length, before, 'plan doğrulanmadan Rota okuması yok');
+      assert.ok(call.messages.some(message => message.role === 'system' && message.content.includes('request.previousResult=true')));
+      assert.ok(!call.messages.some(message => message.content?.includes('STALE_PROSE_SENTINEL')));
+      return { type: 'tool-calls', preface: [declared(request)], calls: [] };
+    } });
+    const second = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, message: 'Takip sorusu' }));
+    assert.equal(second.assistantMessage.finishReason, 'stop', JSON.stringify(stack.provider.calls.slice(1).map(call => call.messages.filter(message => message.role === 'tool'))));
+    assert.ok(second.assistantMessage.evidence.length > 0);
+    const latest = JSON.parse(stack.db.aiMessageEvidence.at(-1).EvidenceJson);
+    if (scenario.operation) {
+      const expected = stack.db.tasks.filter(row => scope.taskIds.includes(row.TaskId) && row.Status === 'done').length;
+      assert.equal(latest.data.totals.total, expected);
+    } else {
+      assert.ok(latest.data.tasks.every(row => scope.taskIds.includes(row.taskId)));
+      assert.ok(!latest.data.tasks.some(row => row.taskId === TASKS.OCCURRENCE_OPEN));
+      if (scenario.filters.status?.[0] === 'done') assert.ok(latest.data.tasks.some(row => row.taskId === changed.TaskId && row.status === 'done'));
+    }
+    assert.ok(stack.db.aiToolLog.slice(before).some(entry => entry.query === 'task-facts'));
+  });
+});
+
+test('4C takip: yeni konuşma ve araya giren genel yanıt yapılandırılmış gönderge üretmez', async (t) => {
+  for (const prior of [false, true]) await t.test(String(prior), async (t) => {
+    const stack = groundedStack(t);
+    let conversationId;
+    if (prior) {
+      ({ conversationId } = await previousTaskSet(stack));
+      stack.provider.enqueue({ type: 'stream', text: 'STALE_PROSE_SENTINEL: önceki görevler' });
+      await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, source: 'general', message: 'Merhaba' });
+    }
+    const before = stack.db.aiToolLog?.length || 0;
+    stack.provider.enqueue({ type: 'script', respond: call => {
+      assert.ok(!call.messages.some(message => message.content?.includes('Önceki doğrulanmış Rota sonuç kapsamı:')));
+      return { type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } }] };
+    } });
+    const response = await sendTurn({ turnId: randomUUID(), ...(conversationId ? { conversationId, expectedSequence: 4 } : {}), message: 'Onun sorumlusu kim?' });
+    assert.equal(doneOf(response).assistantMessage.finishReason, 'clarification');
+    assert.equal(stack.db.aiToolLog?.length || 0, before);
+    assert.deepEqual(doneOf(response).assistantMessage.evidence, []);
+  });
+});
+
+test('4C takip: önceki küme güncel görünürlük ve proje kökenini atlayamaz', async (t) => {
+  const stack = groundedStack(t);
+  const { conversationId, scope } = await previousTaskSet(stack);
+  stack.db.tasks.find(row => row.TaskId === scope.taskIds[0]).ProjectId = PROJECTS.HIDDEN;
+  const before = stack.db.aiToolLog.length;
+  stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ previousResult: true, operation: 'list', metrics: ['task.status'],
+    population: { tool: 'rota_task_search', collection: 'tasks' } })], calls: [] },
+  { type: 'answer', text: JSON.stringify({ kind: 'not_found' }) });
+  const done = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, message: 'Takip sorusu' }));
+  assert.notEqual(done.assistantMessage.finishReason, 'stop');
+  assert.deepEqual(done.assistantMessage.evidence, []);
+  assert.ok(!stack.db.aiToolLog.slice(before).some(entry => entry.query === 'task-facts'));
+});
+
+test('4C takip: onarım geçerli önceki-küme bağını düşüremez; yokken bayrak veri açmaz', async (t) => {
+  const stack = groundedStack(t);
+  const { conversationId } = await previousTaskSet(stack);
+  const request = { previousResult: true, operation: 'list', metrics: ['task.status'], population: { tool: 'rota_task_search', collection: 'tasks' } };
+  const before = stack.db.aiToolLog.length;
+  const declare = request => ({ type: 'tool-calls', preface: [declared(request)], calls: [] });
+  stack.provider.enqueue(declare({ ...request, metrics: ['task.invalid'] }), declare({ ...request, previousResult: false }),
+    { type: 'script', respond: call => {
+      assert.equal(stack.db.aiToolLog.length, before, 'kapsamı düşüren onarım okunmaz');
+      assert.ok(JSON.stringify(call.messages).includes('repairScope'));
+      return declare(request);
+    } });
+  const repaired = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, message: 'Takip sorusu' }));
+  assert.equal(repaired.assistantMessage.finishReason, 'stop');
+  const reads = stack.db.aiToolLog.length;
+  stack.provider.enqueue(declare(request), declare(request), { type: 'answer', text: JSON.stringify({ kind: 'not_found' }) });
+  const fresh = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Takip sorusu' }));
+  assert.notEqual(fresh.assistantMessage.finishReason, 'stop');
+  assert.equal(stack.db.aiToolLog.length, reads);
+});
+
+test('4C takip: bozuk/eski kanıt kaydı göndergeyi prose üzerinden yeniden kuramaz', async (t) => {
+  for (const mutate of [
+    saved => { delete saved.resultScope; },
+    saved => { saved.resultScope.taskIds.push(saved.resultScope.taskIds[0]); },
+    saved => { saved.authorizationEpoch = null; }
+  ]) await t.test(String(mutate), async (t) => {
+    const stack = groundedStack(t);
+    const { conversationId } = await previousTaskSet(stack);
+    const row = stack.db.aiMessageEvidence[0];
+    const saved = JSON.parse(row.EvidenceJson);
+    mutate(saved);
+    row.EvidenceJson = JSON.stringify(saved);
+    const before = stack.db.aiToolLog.length;
+    stack.provider.enqueue({ type: 'script', respond: call => {
+      assert.ok(!call.messages.some(message => message.content?.includes('Önceki doğrulanmış Rota sonuç kapsamı:')));
+      return { type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } }] };
+    } });
+    const done = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, message: 'Takip sorusu' }));
+    assert.equal(done.assistantMessage.finishReason, 'clarification');
+    assert.equal(stack.db.aiToolLog.length, before);
+  });
+});

@@ -79,6 +79,7 @@ export function requestSchema() {
     additionalProperties: false,
     required: ['operation', 'metrics'],
     properties: {
+      previousResult: { type: 'boolean', description: 'Yalnızca sunucunun sağladığı hemen önceki görev sonuç kümesine başvurur. Kimlik verme; sunucu kümeyi güncel yetkiyle yeniden okur. Tek bölümlü rota_task_search veya rota_task_analytics isteğinde kullanılır.' },
       operation: { type: 'string', enum: [...REQUEST_OPERATIONS] },
       metrics: { type: 'array', minItems: 1, maxItems: REQUEST_LIMITS.maxMetrics, uniqueItems: true, items: metric },
       layout: { type: 'string', enum: ['auto', 'list', 'table'] },
@@ -217,7 +218,7 @@ export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, tod
     problems.push(...(error.details || ['$.filters:invalid']).map((detail) => detail.replace(/^\$\./, '$.filters.')));
   }
   if (problems.length) throw invalidArguments(problems);
-  return Object.freeze({ operation: value.operation, metrics: Object.freeze([...value.metrics]), rank: value.rank ? Object.freeze({ ...value.rank }) : null,
+  return Object.freeze({ ...(value.previousResult ? { previousResult: true } : {}), operation: value.operation, metrics: Object.freeze([...value.metrics]), rank: value.rank ? Object.freeze({ ...value.rank }) : null,
     entities: Object.freeze(entities), filters: Object.freeze(filters), layout: value.layout || 'auto', reasoning: value.reasoning || 'deterministic',
     population: value.population ? Object.freeze({ ...value.population }) : null, fields: Object.freeze(value.fields || []), bindings: Object.freeze(value.bindings || []) });
 }
@@ -347,7 +348,7 @@ export function requestWindow(request) {
 /** Sistem özetine yalnızca türlü değerler girer; serbest metin taşınmaz. */
 export function requestSummary(request) {
   const filters = Object.fromEntries(Object.entries(request.filters).filter(([key]) => key !== 'text'));
-  return JSON.stringify({ operation: request.operation, metrics: request.metrics, ...(request.rank ? { rank: request.rank } : {}),
+  return JSON.stringify({ ...(request.previousResult ? { previousResult: true } : {}), operation: request.operation, metrics: request.metrics, ...(request.rank ? { rank: request.rank } : {}),
     ...(request.population ? { population: request.population } : {}),
     ...(request.layout !== 'auto' ? { layout: request.layout } : {}),
     ...(request.reasoning !== 'deterministic' ? { reasoning: request.reasoning } : {}),

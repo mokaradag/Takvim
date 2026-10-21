@@ -1,5 +1,6 @@
 import { claimableContract, equivalentCarriers, METRICS, metricEntityType, metricEntry, metricPaths, NAMING_METRICS, PROPERTY_METRICS, RELATED_NAMING_METRICS, rowCollections, semanticCarrierKey } from './claimableEvidence.js';
 import { createEvidenceFacts, FACT_LIMITS } from './evidenceFacts.js';
+import { canonicalActualId } from '../identity/actualId.js';
 import { scaledDecimal } from '../numbers/fixedDecimal.js';
 import {
   canonicalField,
@@ -38,7 +39,16 @@ export { concreteCollections, provesEmptyCollection } from './evidencePopulation
 
 export const REQUEST_OPERATIONS = Object.freeze(['value', 'list', 'rank']);
 export const REQUEST_ENTITY_TYPES = Object.freeze(['project', 'task', 'person', 'wbs', 'baseline']);
-export const REQUEST_LIMITS = Object.freeze({ maxMetrics: 8, maxEntities: 4, maxRankLimit: 10 });
+export const REQUEST_LIMITS = Object.freeze({ maxMetrics: 8, maxEntities: 4, maxRankLimit: 10, maxPreviousResultRows: 50 });
+
+/** Önceki sonuç yalnızca sunucunun doğruladığı sınırlı görev kimliklerini taşır; veri ya da yetki değildir. */
+export function taskResultScope(value) {
+  if (!value || value.type !== 'task' || Object.keys(value).some(key => !['type', 'taskIds'].includes(key))
+    || !Array.isArray(value.taskIds) || !value.taskIds.length || value.taskIds.length > REQUEST_LIMITS.maxPreviousResultRows) return null;
+  const taskIds = value.taskIds.map(canonicalActualId);
+  if (taskIds.some(id => !id) || new Set(taskIds).size !== taskIds.length) return null;
+  return Object.freeze({ type: 'task', taskIds: Object.freeze(taskIds) });
+}
 
 /** Sıralanamayan ölçme birimleri: metin, sınıf, bayrak, tanım, birimi satıra göre değişen ya da ondalık metin değerler. */
 const UNORDERED_MEASURES = new Set(['text', 'enum', 'boolean', 'definition', 'lag', 'value', 'currency-unspecified']);

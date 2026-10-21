@@ -41,12 +41,12 @@ function highlightPairs(highlights = []) {
  * yeniden üretilebilirlik verisi bırakılır); nüfus da sığmazsa kanıt kalıcı
  * olarak "doğrulanamaz" işaretlenir ve yeniden açılışta gösterilmez.
  */
-function persistedEvidenceJson(entry, payload, clarificationContext) {
+function persistedEvidenceJson(entry, payload, clarificationContext, resultScope) {
   const authorization = {
     authorizationEpoch: entry.authorizationEpoch,
     ...(entry.scopedAuthorization ? { scopedAuthorization: entry.scopedAuthorization } : {})
   };
-  const clarification = clarificationContext ? { clarificationContext } : {};
+  const clarification = { ...(clarificationContext ? { clarificationContext } : {}), ...(resultScope ? { resultScope } : {}) };
   const population = encodeAuthorizationPopulation(entry.taskReferences || evidenceTaskReferences(payload));
   const full = JSON.stringify({ ...payload, ...authorization, authorizationPopulation: population, ...clarification });
   if (full.length <= MAX_EVIDENCE_JSON_CHARS) return full;
@@ -160,7 +160,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
      * yanıtında sunucunun aday kimlikleri (sıra → proje/görev/Sicil) ilgili
      * kanıtla birlikte saklanır; sonraki turdaki numaralı seçim bunlara bağlanır.
      */
-    persistable(ids, { clarification = null } = {}) {
+    persistable(ids, { clarification = null, resultScope = null } = {}) {
       const wanted = new Set(ids);
       return entries
         .filter((entry) => entry.valid && wanted.has(entry.id) && entry.payload)
@@ -182,7 +182,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
             summaryJson: summaryJson.length <= MAX_SUMMARY_JSON_CHARS
               ? summaryJson
               : JSON.stringify({ ...entry.summary, highlights: [] }),
-            evidenceJson: persistedEvidenceJson(entry, payload, clarificationContext)
+            evidenceJson: persistedEvidenceJson(entry, payload, clarificationContext, entry.id === ids[0] ? resultScope : null)
           };
         });
     }

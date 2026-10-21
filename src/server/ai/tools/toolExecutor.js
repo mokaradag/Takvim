@@ -51,6 +51,7 @@ export function createToolExecutor({
   resolveTool = getRotaTool,
   onProgress = null,
   validateCall = null,
+  resultScope = null,
   clock = Date.now
 }) {
   const state = { calls: 0, resultBytes: 0, toolMs: 0, roundStartedAt: null, attempted: 0, failures: 0, rounds: 0 };
@@ -88,7 +89,9 @@ export function createToolExecutor({
     let populationNoted = false;
     const projectPopulation = [];
     try {
+      const prior = resultScope?.();
       const scoped = Object.freeze({
+        taskIds: prior?.scope.taskIds || null,
         sicil: context.sicil,
         today: context.today,
         now: context.now,
@@ -100,6 +103,10 @@ export function createToolExecutor({
         noteProjects: (projectIds) => { projectPopulation.push(...projectIds); }
       });
       await context.authorization?.(deadline.signal);
+      if (prior) {
+        const authorized = await context.revalidateEvidence(prior.entries, deadline.signal);
+        if (!prior.entries.every(entry => authorized.has(entry.id))) throw new ToolError(TOOL_ERROR_CODES.NOT_FOUND);
+      }
       const outcome = await raceWithAbort(() => trackResultText(() => tool.handler(args, scoped),
         (data) => projectEvidenceData(data, args.textFields || [])), deadline.signal);
       return { outcome, cacheKey, args, population: populationNoted ? [...population.values()] : null, projectPopulation };

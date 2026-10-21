@@ -26,7 +26,7 @@ import { parseTurnLanguage, parseTurnRequest, parseTurnRoute, TURN_ROUTES } from
 import { CLARIFICATION_LIMITS, clarificationReference } from '../../../domain/ai/clarification.js';
 import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
 import { createAiDeadline } from '../aiDeadline.js';
-import { concreteCollections, rankedRowIndexes } from '../../../domain/ai/requestContract.js';
+import { concreteCollections, rankedRowIndexes, taskResultScope } from '../../../domain/ai/requestContract.js';
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { PLANNER_INTENTS, PLANNER_LIMITS, renderDependentLimit, renderPartUnavailable, renderPlannerAbstention, renderPlannerClarification, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
 import { plannerCandidateNote } from './groundedPrompt.js';
@@ -377,6 +377,11 @@ function preparePlan(turn, calls, declared, parts = []) {
   const completion = completeRequest(provisional, parts.length ? [] : set.calls.map(({ name, args }) => ({ name, args })),
     { today: turn.context.today, allowedTextFields: turn.allowedTextFields });
   if (completion.problems.length) return { ok: false, details: completion.problems, hints: completion.hints };
+  if (completion.request.previousResult && (!turn.previousResult || parts.length || completion.request.entities.length
+    || !['rota_task_search', 'rota_task_analytics'].includes(completion.request.population.tool))
+    || parts.some(part => part.request.previousResult)) {
+    return { ok: false, details: ['$.previousResult:unavailable'], hints: ['previousResult yalnızca sunucunun hemen önceki görev kümesi varsa, tek bölümlü kimliksiz görev arama/analiz isteğinde kullanılabilir.'] };
+  }
   // Düzeltme kullanıcının adlandırdığı bir kaydı düşüremez (zayıf model reddi soruyu daraltarak "onarır").
   const dropped = droppedNames(turn.namedScope, completion.request);
   if (dropped.length) return { ok: false, details: ['$.entities:dropped'], hints: [droppedNameHint(dropped)] };
@@ -982,7 +987,7 @@ function isEmptyCompletion(error) {
 }
 
 /** Turun durumu: kanıt defteri, kapsam, araç izinleri ve döküm. Devirde aynı durum sürer. */
-function startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, onStatus, onProgress, planning, onPlanned }) {
+function startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, previousResult, onStatus, onProgress, planning, onPlanned }) {
   const status = (phase, extra = {}) => onStatus?.({ phase, ...extra });
   const userMessages = messages.filter((message) => message.role === 'user');
   const currentUser = userMessages.at(-1);
@@ -994,6 +999,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     // Anlamsal danışmanlık yalnızca planlayıcıya aday sırası notudur; araç kümesi ve sırası kayıt defterinindir.
     planning: Object.freeze({ state: advice.state, candidates: Object.freeze([...advice.candidates]), reason: advice.reason }),
     onPlanned,
+    previousResult: previousResult && taskResultScope(previousResult.scope) && previousResult.entries?.length ? previousResult : null,
     decision: null,
     decisionCounted: false,
     readStarted: false,
@@ -1052,6 +1058,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     context,
     ledger: turn.ledger,
     validateCall: turn.containment.validate,
+    resultScope: () => turn.request?.previousResult ? turn.previousResult : null,
     signal: () => turn.session?.signal ?? null,
     limits,
     onProgress: ({ topic }) => {
@@ -1059,6 +1066,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
       status(ASSISTANT_STREAM_PHASES.TOOLS, { topic });
     }
   });
+  if (turn.previousResult) instruct(turn, `Önceki doğrulanmış Rota sonuç kapsamı: ${JSON.stringify({ type: 'task', count: turn.previousResult.scope.taskIds.length })}. Bu yalnızca göndergedir, güncel kanıt değildir. Kullanıcının sorusu bu kümeye ilişkinse request.previousResult=true ile rota_task_search (görev özellikleri/süzgeç) ya da rota_task_analytics (sayı) bildir; kimlik/önceki süzgeç kopyalama. Yeni veya adı verilmiş kayıt sorusunda kullanma. Önceki asistan metninden veri çıkarma.`);
   if (clarification) instruct(turn, selectionInstruction(clarification));
   if (turn.planning.candidates.length) {
     const note = { role: 'system', content: plannerCandidateNote(turn.planning.candidates) };
@@ -1193,6 +1201,24 @@ async function revalidate(turn, disclosureSignal = turn.session.signal) {
   return unavailable;
 }
 
+/** Tek anlamlı görev listesinin dönen satırları; model metni ve seçtiği olgular kimlik kaynağı değildir. */
+function completedResultScope(turn, verdict) {
+  if (verdict.kind !== 'grounded' || turn.partCount !== 1 || !['list', 'rank'].includes(turn.request?.operation)
+    || turn.request.population?.tool !== 'rota_task_search') return null;
+  const taskIds = new Set();
+  for (const entry of turn.ledger.requestEntries()) {
+    if (!verdict.citedIds.includes(entry.id) || entry.tool !== 'rota_task_search') continue;
+    const evidence = requestEvidence(turn.request, [entry], turn.context.today).get(entry.id);
+    if (!evidence?.populationMatch || !evidence.dimensionsMatch) return null;
+    const rows = entry.payload?.data?.tasks || [];
+    const indexes = turn.request.operation === 'rank'
+      ? (rankedRowIndexes(turn.request, entry.tool, entry.payload, 'tasks', 'tasks') || []).slice(0, turn.request.rank.limit || 1)
+      : rows.map((_, index) => index);
+    for (const index of indexes) taskIds.add(rows[index]?.taskId);
+  }
+  return taskResultScope({ type: 'task', taskIds: [...taskIds] });
+}
+
 /** Doğrulanmış sonucun gösterimi: kapsam notunu sunucu ekler, yalnızca atfedilen kanıt kaydedilir. */
 async function finish(turn, verdict, onText, selectedBy = 'model') {
   const { ledger, locale } = turn;
@@ -1217,7 +1243,7 @@ async function finish(turn, verdict, onText, selectedBy = 'model') {
       : ['not_found', 'clarification', 'unavailable'].includes(outcome) ? outcome : 'stop',
     outcome,
     evidence: cited,
-    evidenceRows: ledger.persistable(verdict.citedIds, { clarification: verdict.clarification || null }),
+    evidenceRows: ledger.persistable(verdict.citedIds, { clarification: verdict.clarification || null, resultScope: completedResultScope(turn, verdict) }),
     streamedLive: false,
     repaired: turn.repaired,
     disclosed: disclosure.disclosed,
@@ -1398,6 +1424,7 @@ export async function runGroundedTurn(session, {
   limits = TOOL_LIMITS,
   allowedTextFields = [],
   clarification = null,
+  previousResult = null,
   onStatus = null,
   onProgress = null,
   onText,
@@ -1407,7 +1434,7 @@ export async function runGroundedTurn(session, {
   planning = null,
   onPlanned = null
 }) {
-  const turn = resume || startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, onStatus, onProgress, planning, onPlanned });
+  const turn = resume || startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, previousResult, onStatus, onProgress, planning, onPlanned });
   turn.session = session;
   turn.deferDisclosure = deferDisclosure;
   // Yeni oturum (kuyruk beklemesi dâhil) yetkinin yeniden okunmasını gerektirir.

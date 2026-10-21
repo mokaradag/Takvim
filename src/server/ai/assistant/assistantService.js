@@ -291,7 +291,7 @@ async function loadEvidenceFor(sicil, signal, { conversationId, messageId = null
   if (!result.knownSicil) throw unknownSicil();
   noteEvidenceSchema(result.ready);
   return { ready: result.ready, byMessage: result.byMessage, epochsByMessage: result.epochsByMessage,
-    authorizationByMessage: result.authorizationByMessage, clarificationByMessage: result.clarificationByMessage };
+    authorizationByMessage: result.authorizationByMessage, clarificationByMessage: result.clarificationByMessage, resultScopeByMessage: result.resultScopeByMessage };
 }
 
 /* ── Hazırlık durumu ─────────────────────────────────────────── */
@@ -747,9 +747,15 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     claim.bindConversation(prepared.conversation.id);
     const useTools = grounded && !prepared.answer;
     let history = prepared.history;
+    let previousResult = null;
     if (!prepared.answer && history.some((message) => message.role === 'assistant')) {
       // Geçmiş yanıtlar bağlama yer tutucu olarak girer: yalnızca kanıt dönemleri gerekir.
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id }, { revalidate: false });
+      const prior = history.at(-1);
+      const scope = useTools && prior?.role === 'assistant' && prior.finishReason === 'stop'
+        ? priorEvidence?.resultScopeByMessage?.get(prior.id) : null;
+      const entries = priorEvidence?.authorizationByMessage?.get(prior?.id);
+      if (scope && entries?.length && !priorEvidence.unverifiable?.has(prior.id)) previousResult = { scope, entries };
       history = fallbackAssistantHistory(history, priorEvidence);
       const last = history.at(-1);
       if (useTools && last?.role === 'assistant' && last.finishReason === 'clarification') {
@@ -779,6 +785,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       general: input.source === 'general',
       allowedTextFields: input.includeText ? [...EVIDENCE_TEXT_FIELDS] : [],
       clarification,
+      previousResult,
       dataUnavailable: config.toolsEnabled && input.source !== 'general' && !grounded,
       conversation: prepared.conversation,
       userMessage: prepared.turn.message,
@@ -924,6 +931,7 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
     context: createToolTurnContext({ sicil: turn.sicil }),
     allowedTextFields: turn.allowedTextFields || [],
     clarification: turn.clarification || null,
+    previousResult: turn.previousResult || null,
     onStatus,
     onProgress,
     onText: async () => {},
