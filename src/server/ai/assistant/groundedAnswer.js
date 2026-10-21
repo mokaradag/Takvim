@@ -488,6 +488,8 @@ function repairAllowance(details, raw) {
     } else if (relative === 'rank' && reason === 'operation') paths.add('rank');
     else if (Object.hasOwn(requestSchema().properties, relative.split(/[.[]/)[0])) paths.add(relative);
   }
+  // Geçersiz birleşim, önceki görev kümesine bağı silme izni değildir.
+  if (raw.previousResult === true) paths.delete('previousResult');
   return paths;
 }
 

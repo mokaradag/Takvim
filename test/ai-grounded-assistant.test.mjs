@@ -1030,6 +1030,37 @@ test('4C takip: önceki küme güncel görünürlük ve proje kökenini atlayama
   assert.ok(!stack.db.aiToolLog.slice(before).some(entry => entry.query === 'task-facts'));
 });
 
+test('4C takip: unavailable reddi önceki küme bağını silerek onarım izni vermez', async (t) => {
+  for (const combination of ['entity', 'multipart', 'missing_scope']) for (const repair of ['false', 'omitted']) {
+    await t.test(`${combination}:${repair}`, async (t) => {
+      const stack = groundedStack(t);
+      const prior = combination === 'missing_scope' ? null : await previousTaskSet(stack);
+      const request = { previousResult: true, operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' },
+        ...(combination === 'entity' ? { entities: [{ type: 'project', id: PROJECTS.FULL }] } : {}) };
+      const original = { intent: 'rota', language: 'tr', request,
+        ...(combination === 'multipart' ? { additionalRequests: [{ operation: 'value', metrics: ['notifications.unread'], population: { tool: 'rota_notifications' } }] } : {}) };
+      const unscoped = { ...request };
+      if (repair === 'false') unscoped.previousResult = false;
+      else delete unscoped.previousResult;
+      const attempted = { ...original, request: unscoped };
+      const declare = plan => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plan }] });
+      const before = stack.db.aiToolLog?.length || 0;
+      const saved = stack.db.aiMessageEvidence.length;
+      const calls = stack.provider.calls.length;
+      stack.provider.enqueue(declare(original), declare(attempted), declare(attempted));
+      const done = doneOf(await sendTurn({ turnId: randomUUID(), ...(prior ? { conversationId: prior.conversationId, expectedSequence: 2 } : {}),
+        message: `Önceki görevlerin sayısı ${PROJECTS.FULL}` }));
+      assert.equal(done.assistantMessage.finishReason, 'grounding_failed');
+      assert.deepEqual(done.assistantMessage.evidence, []);
+      assert.equal(stack.db.aiToolLog?.length || 0, before);
+      assert.equal(stack.db.aiMessageEvidence.length, saved);
+      const replies = JSON.stringify(stack.provider.calls.slice(calls).flatMap(call => call.messages.filter(message => message.role === 'tool')));
+      assert.match(replies, /\$\.previousResult:unavailable/);
+      assert.match(replies, /repairScope/);
+    });
+  }
+});
+
 test('4C takip: onarım geçerli önceki-küme bağını düşüremez; yokken bayrak veri açmaz', async (t) => {
   const stack = groundedStack(t);
   const { conversationId } = await previousTaskSet(stack);
