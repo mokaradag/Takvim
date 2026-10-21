@@ -1140,3 +1140,60 @@ test('4C ek dört bulgu: sonraki ret ek soruyu açar; ilk bölümün kapsamı sa
     assert.equal(rejected.outcome.decisions.some(decision => decision.intent === 'rota'), false);
   }
 });
+
+test('4C ek iki bulgu: tüm bölüm hataları aynı rette açılır; geçerli kardeş anlamı korunur', async () => {
+  const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
+  const project = { operation: 'value', metrics: ['project.lead'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] };
+  const badTasks = { ...tasks, metrics: ['tasks.typo'] };
+  const badNotifications = { ...notifications, metrics: ['notifications.typo'] };
+  const multi = (request, additionalRequests) => plan({ intent: 'rota', language: 'tr', request, additionalRequests });
+  for (const [request, extra] of [
+    [badTasks, [badNotifications]],
+    [{ ...tasks, population: { ...tasks.population, collection: 'invalid' } }, [{ ...notifications, population: { ...notifications.population, sort: 'invalid' } }]]
+  ]) {
+    const result = await repairDecision([multi(request, extra), multi(tasks, [notifications])]);
+    assert.equal(result.outcome.outcome, 'planned');
+    assert.equal(result.inputs.length, 2);
+    const rejection = JSON.parse(result.inputs[1].messages.filter(message => message.role === 'tool').at(-1).content);
+    assert.ok(rejection.error.details.some(detail => !detail.startsWith('$.additionalRequests')));
+    assert.ok(rejection.error.details.some(detail => detail.startsWith('$.additionalRequests[0]')));
+  }
+  const original = multi(badTasks, [badNotifications, project]);
+  const fixed = multi(tasks, [notifications, project]);
+  const changed = multi({ ...tasks, filters: {} }, [notifications, { ...project, entities: [{ type: 'project', text: 'Anten' }] }]);
+  const result = await repairDecision([original, changed, fixed]);
+  assert.equal(result.outcome.outcome, 'planned');
+  assert.match(JSON.stringify(result.inputs[2]), /repairScope/);
+  const three = await repairDecision([multi(badTasks, [badNotifications, { ...project, metrics: ['project.typo'] }]), fixed]);
+  assert.equal(three.outcome.outcome, 'planned');
+  assert.match(JSON.stringify(three.inputs[1]), /additionalRequests\[1\]\.metrics/);
+});
+
+test('4C ek iki bulgu: geçersiz bağımlı kaynağın kontrolü ertelenir ve onarımda yeniden yapılır', async () => {
+  const source = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me' } };
+  const follow = from => ({ operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', from }] });
+  const multi = (request, additionalRequests) => plan({ intent: 'rota', language: 'tr', request, additionalRequests });
+  for (const from of [0, 1]) {
+    const badSource = { ...source, metrics: ['task.typo'] };
+    const badFollow = { ...follow(from), metrics: ['task.typo'] };
+    const original = from === 0 ? multi(badSource, [badFollow]) : multi(notifications, [badSource, badFollow]);
+    const fixed = from === 0 ? multi(source, [follow(from)]) : multi(notifications, [source, follow(from)]);
+    const result = await repairDecision([original, fixed]);
+    assert.equal(result.outcome.outcome, 'planned');
+    assert.equal(result.inputs.length, 2);
+    assert.doesNotMatch(JSON.stringify(result.inputs[1]), /entities:from/);
+  }
+  const original = multi({ ...notifications, metrics: ['notifications.typo'] }, [follow(0)]);
+  const invalidSource = multi(notifications, [follow(0)]);
+  const rejected = await repairDecision([original, invalidSource, invalidSource]);
+  assert.equal(rejected.outcome.outcome, 'failed');
+  assert.match(JSON.stringify(rejected.inputs[2]), /entities:from/);
+});
+
+test('4C ek iki bulgu: birden çok hatalı bölüm doğrulanmadan veri okunmaz', async (t) => {
+  const request = { operation: 'value', metrics: ['tasks.typo'], population: { tool: 'rota_task_analytics' } };
+  const rejected = plan({ intent: 'rota', language: 'tr', request, additionalRequests: [{ ...notifications, metrics: ['notifications.typo'] }] });
+  const { result } = await turn(t, [rejected, rejected, rejected]);
+  assert.equal(result.stats.attempted, 0);
+  assert.equal(result.outcome, 'failed');
+});

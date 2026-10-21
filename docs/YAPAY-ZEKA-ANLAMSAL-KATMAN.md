@@ -1292,7 +1292,7 @@ alanını uygulamıştır.
   haklı çıkarmadı).
 - Kendi süre bütçesi (`SEMANTIC_PLANNING_BUDGET_MS` = 8 sn): bütçe aşımı
   danışmanlığın kaybıdır (Aşama 3 planlaması sürer); üst iptal
-  `AI_CANCELLED` olarak taşınır; kimlik/yetki, sağlayıcı anahtar/yapılandırma hataları ve sınıflandırılmamış iç hatalar yukarı taşınır; yalnızca beklenen işlemsel keşif hataları `unavailable`/`first_stage` danışmanlığa düşer.
+  `AI_CANCELLED` olarak taşınır; kimlik/yetki, sağlayıcı anahtar hataları (`AI_KEY_INVALID`, `AI_UNAUTHORIZED`, `AI_KEY_MISSING`) ve sınıflandırılmamış iç hatalar yukarı taşınır; `AI_CONFIGURATION_ERROR` dâhil beklenen işlemsel keşif hataları `unavailable`/`first_stage` danışmanlığa düşer (§7.5).
 - **Daraltma yoktur.** Gerçek e5 ölçümünde (§8) ilk aşamanın 10 adayı bazı
   soruların gereken yeteneğini içermedi; bu yüzden araç kümesi her zaman
   kayıt defterinin tamamıdır ve **sırası sabittir**. Adaylar yalnızca sistem
@@ -1465,7 +1465,7 @@ aynı anda dış komut açıkça reddedilir. Gerçek model kabulü hâlâ bekliy
 - Onarım aynı kanonik izdüşümle yalnızca doğrulayıcının reddettiği yolları değiştirir; geçerli çağrı koşulları, kapsam, ölçü yuvaları ve bağımsız bölümler korunur. İlgisiz çağrı ipucu yalnızca o nüfusa bağlı ek bölüme izin verir.
 - Bölüm hatası etkin Rota kararını değiştirmez. Yerel sağlayıcı duraklaması önceki doğrulanmış yanıtları korur; çağıranın iptali ve genel süre sınırı yukarı taşınır. Kesik sağlayıcı yanıtı hiçbir niyet için kabul edilmez. Kanıtlı + bulunamadı sonucu kesinti sayılmaz; ortak açıklama yönergesi bir kez gösterilir.
 - Planlayıcı değerlendirmesi anlamsal koşunun kanonik doğrulayıcısını kullanır. Dış modelin bitiş nedeni zorunludur ve korunur. Sızıntı denetimi ham yapılandırılmış girdide çalışır (`PLANNER_GOLD_LEAK`); sayfa boyu aynı nüfusu farklı okuma saydırmaz. Geçerli başarısız model vakası ıskadır, bozuk koşu değildir.
-- Sağlayıcı anahtar/yapılandırma ve kimlik/yetki hataları gizlenmez; beklenen işlemsel danışmanlık kaybı ile sınıflandırılmamış iç hata ayrımı korunur. Yeni üretim yüzeyi, bağımlılık veya bütçe artışı yoktur.
+- Sağlayıcı anahtar hataları (`AI_KEY_INVALID`, `AI_UNAUTHORIZED`, `AI_KEY_MISSING`), kimlik/yetki ve sınıflandırılmamış iç hatalar yukarı taşınır; `AI_CONFIGURATION_ERROR` dâhil beklenen işlemsel keşif hataları §7.5 uyarınca `unavailable`/`first_stage` danışmanlığa düşer. Yeni üretim yüzeyi, bağımlılık veya bütçe artışı yoktur.
 - Gerçek model kabulü **BEKLİYOR**: kanonik 117/117 + zorunlu ek 19/19 burada çalıştırılmadı. Ortamda canlı AI kapalıdır; dış Haiku komutu ve yerel HuggingFace çalışma zamanı yoktur. Belirlenimci sınamalar gerçek model kabulü sayılmaz.
 
 Son geçişte yapısal ret öncesi çözülen Rota niyeti de korunur; onarım başka niyete geçemez.
@@ -1561,3 +1561,20 @@ PRRT_kwDOSQ6ZIs6ustXB
 Üç davranış regresyonu başlangıç kodunda başarısız oldu. Düzeltmelerden sonra eksik/karma bağımlı
 sonuçlar, üç bildirimli onarımın iki anlık görüntü yolu, kapsam değişikliği olumsuzları ve sabit
 anlamsal ret nedenleri doğrulanır. Yürütme/onarım bütçesi, kabul edilen girdi ve yetki sınırı değişmez.
+
+### Aynı gün — iki yeni başlığın sınırlı düzeltmesi
+
+Başlangıç HEAD: `ab53343e6af7ebe363c66a2ae088ff87938d9e2d`. Düzenleme öncesi
+`FROZEN_UNRESOLVED_SET`: `PRRT_kwDOSQ6ZIs6uutPj`, `PRRT_kwDOSQ6ZIs6uxrTk`.
+
+- **4335905669:** §12.1 ve §12.10 mevcut §7.5 sözleşmesine uyarlandı. Anahtar/kimlik/yetki
+  hatalarının yukarı taşınması ile `AI_CONFIGURATION_ERROR` danışmanlık kaybı ayrıldı;
+  çalışma zamanı hata sınıflandırması değiştirilmedi.
+- **4337155666:** Çok bölümlü doğrulama birincil hata yüzünden durmaz. Bütün bölümlerin şema ve
+  yetenek sorunları kendi yollarıyla aynı rette toplanır; onarım yalnızca bu yolları açar. Kaynak
+  bölüm geçersizse bağımlı kaynak kontrolü ertelenir; plan yine bütünüyle reddedilir ve düzeltilmiş
+  planda kontrol yeniden yapılır. Kaynak indisleri hatalı kardeşler yüzünden kaymaz.
+
+Odaklı sınamalar iki/üç bölümün birlikte onarımını, birincil ve ek bağımlı kaynaklarını, geçerli
+kardeş kapsamının korunmasını ve sıfır veri okumasıyla reddi kapsar. Bütçe, araç, yetki, girdi
+biçimi veya Aşama 4D davranışı eklenmedi.

@@ -741,7 +741,11 @@ const UNRELATED_CALL_HINT = 'request:unrelated: çağrı isteğin okuması deği
  */
 function prepareParts(turn, requests, primary) {
   const parts = [];
+  const sources = [primary.ok ? primary.request : null];
+  const details = [...(primary.details || [])];
+  const hints = [...(primary.hints || [])];
   for (let index = 1; index < requests.length; index += 1) {
+    sources.push(null);
     const at = (details) => details.map((detail) => `$.additionalRequests[${index - 1}]${String(detail).replace(/^\$(?:\.request(?!\w))?/, '')}`);
     let request;
     try {
@@ -749,20 +753,30 @@ function prepareParts(turn, requests, primary) {
         today: turn.context.today, priorParts: index });
     } catch (error) {
       if (error?.code !== TOOL_ERROR_CODES.INVALID_ARGUMENTS) throw error;
-      return { ok: false, details: at(error.details || []), hints: [...(error.hints || []), ...metricIdHints(error.details || [], requests[index])] };
+      details.push(...at(error.details || []));
+      hints.push(...(error.hints || []), ...metricIdHints(error.details || [], requests[index]));
+      continue;
     }
     const completion = completeRequest(request, [], { today: turn.context.today, allowedTextFields: turn.allowedTextFields });
-    if (completion.problems.length) return { ok: false, details: at(completion.problems), hints: completion.hints };
+    if (completion.problems.length) {
+      details.push(...at(completion.problems));
+      hints.push(...completion.hints);
+      continue;
+    }
     const dependent = dependentEntity(completion.request);
     if (dependent) {
-      const source = dependent.from === 0 ? primary : parts[dependent.from - 1]?.request;
-      if (!source || dependentEntity(source) || source.operation === 'value' || !sourceCollections(source).some((name) => rowIdentityPath(source.population.tool, name, dependent.type))) {
-        return { ok: false, details: [`$.additionalRequests[${index - 1}].entities:from`], hints: ['entities[].from: önceki bağımsız bir list ya da rank bölümünün satırlarına bağlanır; satırlar o türden kayıt kimliği taşımalıdır (ör. görev satırları → task)'] };
+      const source = sources[dependent.from];
+      // Hatalı kaynağın bağı ertelenir; planın tamamı yine reddedilir ve onarımda yeniden denetlenir.
+      if (source && (dependentEntity(source) || source.operation === 'value' || !sourceCollections(source).some((name) => rowIdentityPath(source.population.tool, name, dependent.type)))) {
+        details.push(`$.additionalRequests[${index - 1}].entities:from`);
+        hints.push('entities[].from: önceki bağımsız bir list ya da rank bölümünün satırlarına bağlanır; satırlar o türden kayıt kimliği taşımalıdır (ör. görev satırları → task)');
+        continue;
       }
     }
+    sources[index] = completion.request;
     parts.push(Object.freeze({ index, request: completion.request }));
   }
-  return { ok: true, parts };
+  return primary.ok && !details.length && parts.length === requests.length - 1 ? { ok: true, parts } : { ok: false, details, hints };
 }
 
 /** Yalnızca kayıt defterinin açık satır koleksiyonları takip kimliği taşıyabilir. */
@@ -1595,9 +1609,9 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     }
     // Çok bölümlü plan: bütün bölümler veri okunmadan birlikte doğrulanır; biri geçersizse hiçbiri yürütülmez.
     let parts = [];
-    if (plan?.plan.additionalRequests && declared?.ok && declared.request) {
+    if (plan?.plan.additionalRequests) {
       const primary = preparePlan(turn, [], declared);
-      const checked = primary.ok ? prepareParts(turn, [plan.plan.request, ...plan.plan.additionalRequests], primary.request) : primary;
+      const checked = prepareParts(turn, [plan.plan.request, ...plan.plan.additionalRequests], primary);
       if (!checked.ok) {
         turn.route = TURN_ROUTES.ROTA;
         if (rejectDeclaration(modelCalls, checked.details, checked.hints)) continue;
