@@ -257,6 +257,24 @@ test('önceki sonuç kapsamı sunucu kökenli kanıtta ve defterde korunur', asy
   }
 });
 
+test('önceki görev kapsamını desteklemeyen tek araç bütün yürütme kümesini okumadan reddeder', async (t) => {
+  const stack = stackFor(t);
+  const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL });
+  const prior = { scope: { type: 'task', taskIds: [TASKS.OVERDUE] }, entries: first.ledger.authorizationEntries() };
+  for (const names of [['rota_task_search', 'rota_portfolio_summary'], ['rota_portfolio_summary', 'rota_task_analytics']]) {
+    const ledger = createEvidenceLedger();
+    const executor = createToolExecutor({ context: first.context, ledger, resultScope: () => prior });
+    const before = stack.db.aiToolLog.length;
+    const results = await executor.runRound(names.map(name => ({ id: name, name, arguments: '{}' })));
+    assert.ok(results.every(message => JSON.parse(message.content).error?.code === 'INVALID_ARGUMENTS'));
+    assert.equal(stack.db.aiToolLog.length, before);
+    assert.equal(ledger.size(), 0);
+  }
+  const portfolio = await callRotaTool(stack, AYSE, 'rota_portfolio_summary');
+  assert.equal(portfolio.result.ok, true);
+  assert.equal(portfolio.result.data.previousResult, undefined);
+});
+
 test('arama sıralı, sayfalı ve kesin toplamlıdır; imleç süzgece bağlıdır', async (t) => {
   const stack = stackFor(t);
   const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, sort: 'title_asc', limit: 3 });

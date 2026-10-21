@@ -5,7 +5,7 @@ import { recordAiToolCall } from '../aiTelemetry.js';
 import { parseToolArguments } from './toolArguments.js';
 import { isTurnFatal, TOOL_ERROR_CODES, ToolError, toToolError } from './toolErrors.js';
 import { TOOL_LIMITS } from './toolLimits.js';
-import { getRotaTool } from './toolRegistry.js';
+import { getRotaTool, TASK_RESULT_SCOPE_TOOLS } from './toolRegistry.js';
 import { fitToolResult } from './toolResultPolicy.js';
 import { claimableContract, projectEvidenceData } from '../../../domain/ai/claimableEvidence.js';
 import { trackResultText } from './toolResultText.js';
@@ -74,7 +74,7 @@ export function createToolExecutor({
    * Tek çağrı: doğrulama → yürütme. Sonuç `{ outcome }` ya da aynı model
    * yanıtındaki özdeş çağrı için `{ sameAs }`dir.
    */
-  async function execute(call, tool, pending, index) {
+  async function execute(call, tool, pending, index, prior) {
     if (call.oversize) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$:tooLarge'] });
     const args = parseToolArguments(tool.parameters, call.arguments);
     validateCall?.(tool.name, args);
@@ -89,7 +89,6 @@ export function createToolExecutor({
     let populationNoted = false;
     const projectPopulation = [];
     try {
-      const prior = resultScope?.();
       const scoped = Object.freeze({
         taskIds: prior?.scope.taskIds || null,
         sicil: context.sicil,
@@ -156,6 +155,8 @@ export function createToolExecutor({
 
   /** Bir model yanıtındaki araç çağrılarını yürütür; çağrı sırasıyla araç iletileri döner. */
   async function executeRound(toolCalls = []) {
+    const prior = resultScope?.();
+    const unsupportedScope = prior && toolCalls.some(call => !TASK_RESULT_SCOPE_TOOLS.includes(call.name));
     context.beginRound();
     state.rounds += 1;
     const plans = toolCalls.map((call, index) => {
@@ -166,6 +167,8 @@ export function createToolExecutor({
       if (state.attempted > limits.maxTotalCalls) {
         return { call, tool: null, rejected: new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED) };
       }
+      if (unsupportedScope) return { call, tool: null,
+        rejected: new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.previousResult:unsupported'] }) };
       const tool = resolveTool(call.name);
       if (!tool) return { call, tool: null, rejected: new ToolError(TOOL_ERROR_CODES.UNKNOWN_TOOL) };
       state.calls += 1;
@@ -187,7 +190,7 @@ export function createToolExecutor({
         onProgress?.({ topic: plan.tool.topic });
         const startedAt = clock();
         try {
-          results[index] = { ...(await execute(plan.call, plan.tool, pending, index)), durationMs: clock() - startedAt, generatedAt: new Date().toISOString() };
+          results[index] = { ...(await execute(plan.call, plan.tool, pending, index, prior)), durationMs: clock() - startedAt, generatedAt: new Date().toISOString() };
         } catch (error) {
           if (isTurnFatal(error)) throw error;
           results[index] = { error: toToolError(error), durationMs: clock() - startedAt };

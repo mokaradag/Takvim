@@ -7,7 +7,7 @@ import { canonicalActualId } from '../../../domain/identity/actualId.js';
 import { effectivePageSize } from './rota/rotaToolSupport.js';
 import { addDays, normalizeTaskFilters, searchText } from './rota/taskFacts.js';
 import { parseToolArguments } from './toolArguments.js';
-import { getRotaTool, toolCatalogForModel } from './toolRegistry.js';
+import { getRotaTool, TASK_RESULT_SCOPE_TOOLS, toolCatalogForModel } from './toolRegistry.js';
 import { containmentText, populationArguments } from './toolScope.js';
 
 /**
@@ -325,6 +325,13 @@ function resolvesDeclared(type, text, entities) {
 export function completeRequest(request, calls, { today, allowedTextFields = [] }) {
   const problems = [];
   const hints = [];
+  // Onarım yolu normalleştirilmiş sıraya değil, modelin özgün alan yuvasına aittir.
+  for (const [index, field] of (request.fields || []).entries()) {
+    if (request.previousResult && !TASK_RESULT_SCOPE_TOOLS.includes(field.tool)) {
+      problems.push(`$.fields[${index}]:previousResult`);
+      hints.push('Önceki görev kümesinin alanları yalnızca rota_task_search veya rota_task_analytics ile okunabilir; previousResult bağını koru.');
+    }
+  }
   const filters = { ...request.filters };
   let population = request.population ? { ...request.population } : null;
   const entities = [...request.entities];

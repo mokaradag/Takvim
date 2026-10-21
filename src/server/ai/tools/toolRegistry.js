@@ -28,6 +28,9 @@ const NAME = /^rota_[a-z]+(?:_[a-z]+){0,4}$/;
 const FORBIDDEN_PROPERTY = /^(?:sicil|currentUserSicil|actorSicil|userSicil|authenticatedUser|user|userId|username|role|isAdmin|accessLevel|sql|query|where|orderBy|column|columns|table|select|filterSql)$/i;
 const MAX_DESCRIPTION_CHARS = 700;
 
+/** Önceki görev kimlikleriyle okunan nüfusu gerçekten daraltan araçlar. */
+export const TASK_RESULT_SCOPE_TOOLS = Object.freeze(['rota_task_search', 'rota_task_analytics']);
+
 function propertyNames(schema, names = []) {
   if (schema?.type === 'object') {
     for (const [name, property] of Object.entries(schema.properties || {})) {

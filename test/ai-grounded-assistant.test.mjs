@@ -956,6 +956,45 @@ test('4C takip: önceki gerçek küme özellik/süzgeç/sayı için yeniden okun
   });
 });
 
+test('4C takip: önceki görev kümesi portföy alanıyla genişletilemez ve onarım bağı düşüremez', async (t) => {
+  for (const tool of ['rota_task_search', 'rota_task_analytics']) await t.test(tool, async (t) => {
+    const stack = groundedStack(t);
+    const { conversationId } = await previousTaskSet(stack);
+    const before = stack.db.aiToolLog.length;
+    const saved = stack.db.aiMessageEvidence.length;
+    const request = { previousResult: true, operation: 'value', metrics: tool === 'rota_task_search' ? ['tasks.total'] : ['tasks.total', 'tasks.overdue'], population: { tool },
+      fields: [{ metric: 'tasks.total', tool: 'rota_portfolio_summary', path: 'data.totals.tasks' }] };
+    const declare = request => ({ type: 'tool-calls', preface: [declared(request)], calls: [] });
+    stack.provider.enqueue(declare(request), declare({ ...request, previousResult: false }), declare(request));
+    const done = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, message: 'Önceki görevlerin toplam ve gecikmiş sayısı' }));
+    assert.equal(done.assistantMessage.finishReason, 'grounding_failed');
+    assert.deepEqual(done.assistantMessage.evidence, []);
+    assert.equal(stack.db.aiToolLog.length, before, 'karışık türetilen kümede hiçbir Rota okuması çalışamaz');
+    assert.equal(stack.db.aiMessageEvidence.length, saved);
+    const replies = JSON.stringify(stack.provider.calls.slice(1).flatMap(call => call.messages.filter(message => message.role === 'tool')));
+    assert.match(replies, /\$\.fields\[0\]:previousResult/);
+    assert.match(replies, /repairScope/);
+  });
+});
+
+test('4C takip: kapsam dışı alan onarımı önceki küme bağını ve dar sayımı korur', async (t) => {
+  const stack = groundedStack(t);
+  const { conversationId, scope } = await previousTaskSet(stack);
+  const before = stack.db.aiToolLog.length;
+  const request = { previousResult: true, operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' },
+    fields: [{ metric: 'tasks.total', tool: 'rota_portfolio_summary', path: 'data.totals.tasks' }] };
+  const repaired = { ...request, fields: [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' }] };
+  stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [] },
+    { type: 'tool-calls', preface: [declared(repaired)], calls: [] });
+  const done = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, message: 'Önceki görevlerin sayısı' }));
+  assert.equal(done.assistantMessage.finishReason, 'stop');
+  const evidence = JSON.parse(stack.db.aiMessageEvidence.at(-1).EvidenceJson);
+  assert.equal(evidence.tool, 'rota_task_analytics');
+  assert.equal(evidence.data.totals.total, scope.taskIds.length);
+  assert.equal(evidence.data.previousResult.count, scope.taskIds.length);
+  assert.ok(!stack.db.aiToolLog.slice(before).some(entry => entry.query === 'portfolio'));
+});
+
 test('4C takip: yeni konuşma ve araya giren genel yanıt yapılandırılmış gönderge üretmez', async (t) => {
   for (const prior of [false, true]) await t.test(String(prior), async (t) => {
     const stack = groundedStack(t);

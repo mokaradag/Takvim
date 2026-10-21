@@ -12,7 +12,7 @@ import {
 import { recordGroundedAnswer, recordGroundedTurn, recordPlannerDecision, recordPlannerRejection } from '../aiTelemetry.js';
 import { createEvidenceLedger } from '../tools/evidenceLedger.js';
 import { createToolExecutor } from '../tools/toolExecutor.js';
-import { getRotaTool, toolCatalogForModel } from '../tools/toolRegistry.js';
+import { getRotaTool, TASK_RESULT_SCOPE_TOOLS, toolCatalogForModel } from '../tools/toolRegistry.js';
 import { parseEvidenceResponse } from '../../../domain/ai/evidenceVerification.js';
 import { invalidArguments, isTurnFatal, TOOL_ERROR_CODES, ToolError } from '../tools/toolErrors.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
@@ -378,7 +378,7 @@ function preparePlan(turn, calls, declared, parts = []) {
     { today: turn.context.today, allowedTextFields: turn.allowedTextFields });
   if (completion.problems.length) return { ok: false, details: completion.problems, hints: completion.hints };
   if (completion.request.previousResult && (!turn.previousResult || parts.length || completion.request.entities.length
-    || !['rota_task_search', 'rota_task_analytics'].includes(completion.request.population.tool))
+    || !TASK_RESULT_SCOPE_TOOLS.includes(completion.request.population.tool))
     || parts.some(part => part.request.previousResult)) {
     return { ok: false, details: ['$.previousResult:unavailable'], hints: ['previousResult yalnızca sunucunun hemen önceki görev kümesi varsa, tek bölümlü kimliksiz görev arama/analiz isteğinde kullanılabilir.'] };
   }
