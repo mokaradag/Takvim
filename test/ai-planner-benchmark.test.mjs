@@ -619,6 +619,22 @@ test('4C anlamsal artifakt tüm 136 soruyu ve tüm belge skorlarını kapsar; be
     && /sorgu satırları girdiyle eşleşmiyor/.test(error.message) && /planner-evaluation.mjs input/.test(error.message));
   const stale = clone(run); stale.benchmark = 'private-marker';
   assert.throws(() => read(stale), error => error.code === 'SEMANTIC_RUN_INVALID' && /bayat/.test(error.message) && !error.message.includes('private-marker'));
+  for (const [mutate, reason] of [
+    [r => { r.format = 'private-marker'; }, /biçimi tanınmadı/],
+    [r => { r.embedding.queries[0].text = 'private-marker'; }, /sorgu metni girdiyle aynı değil/],
+    [r => { r.embedding.documents[0].text = 'private-marker'; }, /belge metni girdiyle aynı değil/],
+    [r => { r.embedding.queries[1] = clone(r.embedding.queries[0]); }, /yinelenen, yabancı ya da bozuk sorgu/],
+    [r => { r.embedding.queries[0].latencyMs = -1; }, /sorgu gecikmesi geçersiz/],
+    [r => { r.embedding.queries[0].failure = 'private-marker'; }, /sorgu sonucu tutarsız/],
+    [r => { r.embedding.queryPrefix = 'private-marker'; }, /ön ekler|önekler/],
+    [r => { r.rerank.provider = ''; }, /yeniden sıralama modeli kökeni geçersiz/]
+  ]) {
+    const invalid = clone(run); mutate(invalid);
+    assert.throws(() => read(invalid), error => error.code === 'SEMANTIC_RUN_INVALID' && reason.test(error.message) && !error.message.includes('private-marker'));
+  }
+  writeFileSync(file, JSON.stringify(run));
+  assert.throws(() => candidatesFromRun(file, { ...loaded, cases: { map() { throw new TypeError('private-marker'); } } }),
+    error => error.code === 'SEMANTIC_RUN_INVALID' && !error.message.includes('private-marker'));
   const failed = clone(run); failed.rerank.queries[0] = { case: 'tr-001', failure: 'INFERENCE_FAILED', latencyMs: 1 };
   assert.equal(read(failed).byCase.get('tr-001').status, 'first_stage');
   const failedQuery = clone(run); failedQuery.embedding.queries[0] = { case: 'tr-001', text: loaded.cases[0].text, failure: 'INFERENCE_FAILED', latencyMs: 1 };

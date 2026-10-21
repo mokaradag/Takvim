@@ -618,6 +618,13 @@ function pinRepair(turn, plan, details, calls = [], executionCalls = [], matched
     && own.some(detail => /\.metrics(?:\[\d+\])?:(?:population|maxItems)$/.test(String(detail)))
     && !sections.some(part => Array.isArray(part?.entities) && part.entities.some(entity => entity?.from === index));
   const snapshot = turn.repairPins.get('snapshot');
+  const unrelated = [...new Set(details.flatMap(detail => {
+    const match = /^\$\.calls\[(\d+)\].*\.request:unrelated$/.exec(String(detail));
+    return match ? [Number(match[1])] : [];
+  }))].map(index => executionCalls[index]).filter(Boolean);
+  const additions = [...new Map([...(snapshot?.additions || []), ...repairCalls(turn, unrelated)]
+    .map(call => [readKey(call.name, { ...call.args, limit: 1 }, turn.context.today), call])).values()];
+  if (snapshot) snapshot.additions = additions;
   // Eşleşmiş bölme artık aynı anlamın yeni yuvalarıdır; sonraki ret yalnızca kendi yolunu açar.
   if (snapshot && !(matched && snapshot.pins.some(pin => pin.split))) {
     const used = new Set();
@@ -650,12 +657,7 @@ function pinRepair(turn, plan, details, calls = [], executionCalls = [], matched
     const split = canSplit(raw, index, own);
     return { raw, index, paths, split, projection: repairProjection(turn, raw, index, index ? [] : calls, sections, paths) };
   });
-  const unrelated = [...new Set(details.flatMap(detail => {
-    const match = /^\$\.calls\[(\d+)\].*\.request:unrelated$/.exec(String(detail));
-    return match ? [Number(match[1])] : [];
-  }))].map(index => executionCalls[index]).filter(Boolean);
-  const additions = [...new Map(repairCalls(turn, unrelated).map(call => [readKey(call.name, { ...call.args, limit: 1 }, turn.context.today), call])).values()];
-  const next = { count: sections.length, sections, pins, calls, additions: snapshot?.additions || additions };
+  const next = { count: sections.length, sections, pins, calls, additions };
   if (snapshot) Object.assign(snapshot, next);
   else turn.repairPins.set('snapshot', next);
 }
@@ -862,11 +864,17 @@ function settlePart(turn, verdict, selectedBy) {
   }
   turn.answers.sort((a, b) => a.index - b.index);
   const clarifications = turn.answers.filter((answer) => answer.verdict.clarification);
+  const unavailableShown = new Set();
   // Kalıcı aday sözleşmesi bölüm kimliği taşımaz; çok bölümlü yanıtta küresel numaralı seçim üretilmez.
-  const texts = turn.answers.flatMap((answer, position) => [answer.verdict.clarification
-    ? (answer === clarifications[0] ? renderPlannerClarification({ reason: 'missing_referent', locale: turn.locale }) : '') : answer.verdict.normalized,
+  const texts = turn.answers.flatMap((answer, position) => {
+    const unavailable = answer.verdict.kind === 'unavailable' && answer.selectedBy === 'server';
+    const repeated = unavailable && unavailableShown.has(answer.index);
+    if (unavailable) unavailableShown.add(answer.index);
+    return [answer.verdict.clarification
+      ? (answer === clarifications[0] ? renderPlannerClarification({ reason: 'missing_referent', locale: turn.locale }) : '') : repeated ? '' : answer.verdict.normalized,
     ...(turn.partNotes.has(answer.index) && turn.answers[position + 1]?.index !== answer.index
-      ? [renderDependentLimit({ shown: turn.partNotes.get(answer.index), locale: turn.locale })] : [])]);
+      ? [renderDependentLimit({ shown: turn.partNotes.get(answer.index), locale: turn.locale })] : [])];
+  });
   const kind = turn.answers.every((answer) => answer.verdict.kind === 'grounded') ? 'grounded'
     : clarifications.length ? 'clarification' : turn.answers.some((answer) => answer.verdict.kind === 'unavailable') ? 'unavailable'
       : turn.answers.some((answer) => answer.verdict.kind === 'grounded') ? 'grounded' : 'not_found';

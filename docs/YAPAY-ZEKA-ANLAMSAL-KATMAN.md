@@ -1526,7 +1526,7 @@ bir başlık aynı telemetri hatasının tekrarıdır, iki başlık mevcut sözl
 | Küme | Yorum kimlikleri | Sonuç ve odaklı doğrulama |
 | --- | --- | --- |
 | Kalan telemetri durumu | 4332597100, 4332918304 (tekrar) | Eksik `grounding.abstained` sıfırlanır; mevcut sayaçlar ve sonraki artışlar korunur. |
-| Ret sınıfı | 4332605939 | Yalnızca kayıtlı büyük harfli araç hata kodları ayrı sayılır; bilinmeyen içerik kaydedilmez. |
+| Ret sınıfı | 4332605939 | Sınırlı küçük harfle başlayan doğrulayıcı son ekleri ayrı sayılır; eşleşmezse yalnızca kayıtlı büyük harfli araç hata kodları kullanılır. Tür sayısı sınırı ve `invalid` geri dönüşü korunur. |
 | Sınırlı öğe ve bölme onarımı | 4332903844, 4334001052 | Hatalı alan yolu kaldırılabilir; geçerli kardeşler birebir kalır. Önceki pimle eşleşmiş bölme aynı sunucu anlık görüntüsüne yeniden bağlanır; sonraki ret yalnızca kendi hatalı yolunu açar. Kapsam/ölçü/kardeş kaybı reddedilir. |
 | Korumalı metin | 4332605953 | Son jokerden önceki alan kullanılır; `activity.changes` karma hatada da sıfır okumayla izin uyarısı verir. |
 | Windows süreç sahipliği | 4332918294 | Çıkmış veya sinyalle bitmiş kök için `taskkill` çağrılmaz; yaşayan kökün mevcut ağaç temizliği korunur. Platform ikizi bu üç durumu doğrular. |
@@ -1538,3 +1538,26 @@ bir başlık aynı telemetri hatasının tekrarıdır, iki başlık mevcut sözl
 Sekiz odaklı regresyon seçimi başlangıç kodunda başarısız olup düzeltmelerden sonra geçer.
 Üretim sınırları, onarım/çağrı bütçeleri, kimlik ve yetki sözleşmeleri değişmez; yeni uç, araç,
 bağımlılık, girdi biçimi veya Aşama 4D davranışı yoktur. Gerçek model kabul kapısı hâlâ bekler.
+
+### Aynı gün — dört yeni başlığın sınırlı düzeltmesi
+
+Başlangıç HEAD: `3d704735293e4e0208a94af199134758443ef078`. Düzenlemeden önce okunan
+`FROZEN_UNRESOLVED_SET` yalnızca şu dört başlıktır:
+
+```text
+PRRT_kwDOSQ6ZIs6ur61x
+PRRT_kwDOSQ6ZIs6usLiQ
+PRRT_kwDOSQ6ZIs6usdfm
+PRRT_kwDOSQ6ZIs6ustXB
+```
+
+| Yorum | Kök neden ve düzeltme |
+| --- | --- |
+| 4334728587 | Bağımlı örnekler aynı bölüm kimliğini paylaşır. Sunucunun eksik bölüm notu birleştirmede bölüm başına bir kez yazılır; farklı bölümlerin notları, geçerli sonuçlar, kanıtlar ve takip sınırı korunur. |
+| 4334839380 | Telemetri denetim notu düzeltildi: küçük harfle başlayan sınırlı doğrulayıcı son ekleri ve kayıtlı büyük harfli araç kodu geri dönüşü birlikte açıklanır. Çalışan sınıflandırma değiştirilmedi. |
+| 4334958867 | Anlamsal koşu doğrulayıcısının sabit retleri kendi içinde işaretlenir. Planlayıcı değerlendiricisi bu retlerin tamamını gösterir; işaretlenmemiş beklenmeyen iç hatanın iletisini gizler ve koşuyu yine reddeder. Artifakt değerleri yansıtılmaz. |
+| 4335062436 | Sonraki reddin sunucu tarafından ilgisiz bulunan çağrıları, mevcut onarım anlık görüntüsüne erken dönüşten önce eklenir; kanonik okuma anahtarıyla tekilleştirilir. Hem mevcut pim hem eşleşmiş bölmenin yeniden bağlanması aynı birleşik izinleri kullanır. Geçerli kapsam ve ilgisiz yeni bölüm yasağı korunur. |
+
+Üç davranış regresyonu başlangıç kodunda başarısız oldu. Düzeltmelerden sonra eksik/karma bağımlı
+sonuçlar, üç bildirimli onarımın iki anlık görüntü yolu, kapsam değişikliği olumsuzları ve sabit
+anlamsal ret nedenleri doğrulanır. Yürütme/onarım bütçesi, kabul edilen girdi ve yetki sınırı değişmez.

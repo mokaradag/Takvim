@@ -1098,3 +1098,45 @@ test('4C donmuş bulgular: yıldızla biten korumalı metin ölçüsü izin uyar
     assert.equal(result.text, renderTextFieldsRequired({ locale: 'tr' }));
   }
 });
+
+test('4C ek dört bulgu: bağımlı örneklerin eksik notu bölüm başına bir kez gösterilir', async (t) => {
+  const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
+  const { renderPartUnavailable } = await import('../src/domain/ai/plannerOutcome.js');
+  const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me' } };
+  const dependent = { operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', from: 0 }] };
+  for (const [budget, extra] of [[1, false], [2, false], [1, true]]) {
+    const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request, additionalRequests: [dependent, ...(extra ? [notifications] : [])] })],
+      { limits: { ...TOOL_LIMITS, maxToolRounds: budget } });
+    const notice = renderPartUnavailable({ locale: 'tr' });
+    assert.equal(result.text.split(notice).length - 1, extra ? 2 : 1, `${budget}/${extra}`);
+    assert.equal(result.text.split('ilk 3 kayıt').length - 1, 1);
+    assert.equal(result.outcome, 'unavailable');
+    assert.equal(result.evidence.length, budget, 'önceki kanıtlar korunur');
+    assert.equal(result.stats.toolRounds, budget);
+  }
+});
+
+test('4C ek dört bulgu: sonraki ret ek soruyu açar; ilk bölümün kapsamı sabit kalır', async () => {
+  const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
+  const original = rota({ ...request, metrics: ['tasks.typo'] });
+  const second = plan({ intent: 'rota', language: 'tr', request, calls: [{ name: 'rota_task_analytics', arguments: { assignee: 'me' } },
+    { name: 'rota_notifications', arguments: {} }] });
+  const third = (primary, additional) => plan({ intent: 'rota', language: 'tr', request: primary, additionalRequests: [additional] });
+  const fixed = await repairDecision([original, second, third(request, notifications)]);
+  assert.equal(fixed.outcome.outcome, 'planned');
+  assert.equal(fixed.remaining, 0);
+  assert.equal(fixed.inputs.length, 3);
+  assert.match(JSON.stringify(fixed.inputs[2]), /request:unrelated/);
+  const unscoped = { ...request, filters: {} };
+  const rebuilt = await repairDecision([rota({ ...unscoped, population: { tool: 'rota_notifications' } }),
+    plan({ intent: 'rota', language: 'tr', request: unscoped, calls: [{ name: 'rota_task_analytics', arguments: {} }, { name: 'rota_notifications', arguments: {} }] }),
+    third(unscoped, notifications)]);
+  assert.equal(rebuilt.outcome.outcome, 'planned', 'bölme pimi yeniden bağlanırken yeni ek soru izni korunur');
+  assert.equal(rebuilt.inputs.length, 3);
+  for (const [primary, additional] of [[{ ...request, filters: {} }, notifications], [request,
+    { operation: 'value', metrics: ['requests.actionRequired'], population: { tool: 'rota_schedule_requests' } }]]) {
+    const rejected = await repairDecision([original, second, third(primary, additional)]);
+    assert.equal(rejected.outcome.outcome, 'failed');
+    assert.equal(rejected.outcome.decisions.some(decision => decision.intent === 'rota'), false);
+  }
+});

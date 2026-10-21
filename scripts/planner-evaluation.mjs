@@ -261,9 +261,7 @@ function candidatesFromRun(file, benchmark) {
   try { trusted = readModelRun(run, { catalogue: items, benchmark: { fingerprint: benchmark.semanticFingerprint, cases: benchmark.cases } }); }
   catch (error) {
     // Yalnızca sabit doğrulayıcı nedenleri; ham iç hata ya da artifakt değeri gösterilmez.
-    const stale = 'Koşu dosyası bayat: başka bir kıyas kümesi ya da araç kataloğuyla üretilmiş. Girdiyi yeniden üretip modelleri yeniden koşun.';
-    const rows = ['belge', 'sorgu', 'yeniden sıralama', 'skor'].map(label => `Koşu dosyasında ${label} satırları girdiyle eşleşmiyor.`);
-    const reason = [stale, ...rows].find(message => message === error?.message);
+    const reason = error?.code === 'SEMANTIC_RUN_REJECTED' ? error.message : null;
     throw Object.assign(new Error(`SEMANTIC_RUN_INVALID${reason ? `: ${reason}` : ''} (girdi: planner-evaluation.mjs input)`), { code: 'SEMANTIC_RUN_INVALID' });
   }
   const { space, documents, queries, rerank } = trusted;

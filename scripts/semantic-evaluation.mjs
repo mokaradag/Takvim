@@ -130,18 +130,23 @@ const boundedText = (value) => typeof value === 'string' && value.length <= MAX_
 const isBatchSize = (value) => Number.isSafeInteger(value) && value >= 1 && value <= MAX_BATCH_SIZE;
 const isScore = (value) => typeof value === 'number' && Number.isFinite(value);
 
+/** Yalnızca sabit doğrulama iletileri; artifakt değeri ya da iç hata taşınmaz. */
+function rejectRun(message) {
+  throw Object.assign(new Error(message), { code: 'SEMANTIC_RUN_REJECTED' });
+}
+
 function closed(record, fields, label) {
-  if (!isRecord(record) || Object.keys(record).some((key) => !fields.includes(key))) fail(`Koşu dosyasında ${label} bölümü tanınmadı.`);
+  if (!isRecord(record) || Object.keys(record).some((key) => !fields.includes(key))) rejectRun(`Koşu dosyasında ${label} bölümü tanınmadı.`);
   return record;
 }
 
 /** Satırlar beklenen anahtar kümesinin her öğesini tam bir kez taşımalıdır; eksik, fazla ya da yinelenen satır reddedilir. */
 function exactRows(rows, key, expected, label) {
-  if (!Array.isArray(rows) || rows.length !== expected.length) fail(`Koşu dosyasında ${label} satırları girdiyle eşleşmiyor.`);
+  if (!Array.isArray(rows) || rows.length !== expected.length) rejectRun(`Koşu dosyasında ${label} satırları girdiyle eşleşmiyor.`);
   const byKey = new Map();
   for (let i = 0; i < rows.length; i += 1) {
     const row = rows[i];
-    if (!isRecord(row) || !expected.includes(row[key]) || byKey.has(row[key])) fail(`Koşu dosyasında yinelenen, yabancı ya da bozuk ${label} satırı var.`);
+    if (!isRecord(row) || !expected.includes(row[key]) || byKey.has(row[key])) rejectRun(`Koşu dosyasında yinelenen, yabancı ya da bozuk ${label} satırı var.`);
     byKey.set(row[key], row);
   }
   return byKey;
@@ -150,9 +155,9 @@ function exactRows(rows, key, expected, label) {
 // Sorgu satırı ya vektör ya da güvenli hata kodu taşır; gecikme ölçülmüş ve negatif olmayan bir süredir.
 function readOutcomeRow(row, fields, payload, label) {
   closed(row, fields, label);
-  if (!isLatency(row.latencyMs)) fail(`Koşu dosyasında ${label} gecikmesi geçersiz.`);
+  if (!isLatency(row.latencyMs)) rejectRun(`Koşu dosyasında ${label} gecikmesi geçersiz.`);
   if (Object.hasOwn(row, 'failure') ? row.failure !== INFERENCE_FAILED || Object.hasOwn(row, payload) : !Object.hasOwn(row, payload)) {
-    fail(`Koşu dosyasında ${label} sonucu tutarsız.`);
+    rejectRun(`Koşu dosyasında ${label} sonucu tutarsız.`);
   }
   return row;
 }
@@ -161,7 +166,7 @@ function readEnvironment(environment) {
   if (environment == null) return null;
   const entries = isRecord(environment) ? Object.entries(environment) : null;
   if (!entries || entries.length > 16 || entries.some(([, value]) => !(value === null || boundedText(value) || Number.isFinite(value)))) {
-    fail('Koşu dosyasındaki ortam künyesi geçersiz.');
+    rejectRun('Koşu dosyasındaki ortam künyesi geçersiz.');
   }
   return Object.fromEntries(entries);
 }
@@ -174,21 +179,21 @@ function readEnvironment(environment) {
  */
 export function readModelRun(raw, { catalogue, benchmark }) {
   const run = closed(raw, RUN_FIELDS, 'üst düzey');
-  if (run.format !== MODEL_RUN_FORMAT || run.version !== 1) fail('Koşu dosyasının biçimi tanınmadı.');
+  if (run.format !== MODEL_RUN_FORMAT || run.version !== 1) rejectRun('Koşu dosyasının biçimi tanınmadı.');
   if (run.benchmark !== benchmark.fingerprint || run.catalogue !== catalogue.fingerprint) {
-    fail('Koşu dosyası bayat: başka bir kıyas kümesi ya da araç kataloğuyla üretilmiş. Girdiyi yeniden üretip modelleri yeniden koşun.');
+    rejectRun('Koşu dosyası bayat: başka bir kıyas kümesi ya da araç kataloğuyla üretilmiş. Girdiyi yeniden üretip modelleri yeniden koşun.');
   }
   const embedding = closed(run.embedding, EMBEDDING_FIELDS, 'gömme');
   const { queryPrefix, documentPrefix } = embedding;
   if (!boundedText(queryPrefix) || !boundedText(documentPrefix) || (embedding.runtime !== undefined && !boundedText(embedding.runtime))) {
-    fail('Koşu dosyasındaki önek ya da çalışma ortamı künyesi geçersiz.');
+    rejectRun('Koşu dosyasındaki önek ya da çalışma ortamı künyesi geçersiz.');
   }
   // Önek varsa ön işleme belirteci onu adlandırır; önek yoksa belirteç "none" kalır.
-  if (Boolean(queryPrefix || documentPrefix) === (embedding.preprocessing === 'none')) fail('Koşu dosyasındaki önekler ön işleme belirteciyle çelişiyor.');
+  if (Boolean(queryPrefix || documentPrefix) === (embedding.preprocessing === 'none')) rejectRun('Koşu dosyasındaki önekler ön işleme belirteciyle çelişiyor.');
   const space = createEmbeddingSpace(provenanceOf(embedding, AI_PROFILES.EMBEDDING, 'embedding'), embedding.preprocessing);
-  if (!space) fail('Koşu dosyasındaki gömme modeli kökeni ya da ön işleme belirteci geçersiz.');
-  if (!isLatency(embedding.documentLatencyMs)) fail('Koşu dosyasındaki katalog gömme gecikmesi geçersiz.');
-  if (!isBatchSize(embedding.batchSize)) fail('Koşu dosyasındaki gömme toplu iş boyutu geçersiz.');
+  if (!space) rejectRun('Koşu dosyasındaki gömme modeli kökeni ya da ön işleme belirteci geçersiz.');
+  if (!isLatency(embedding.documentLatencyMs)) rejectRun('Koşu dosyasındaki katalog gömme gecikmesi geçersiz.');
+  if (!isBatchSize(embedding.batchSize)) rejectRun('Koşu dosyasındaki gömme toplu iş boyutu geçersiz.');
   const itemIds = catalogue.items.map((item) => item.id);
   const caseIds = benchmark.cases.map((testCase) => testCase.id);
   const textOfItem = new Map(catalogue.items.map((item) => [item.id, item.text]));
@@ -196,19 +201,19 @@ export function readModelRun(raw, { catalogue, benchmark }) {
   const documents = exactRows(embedding.documents, 'id', itemIds, 'belge');
   for (const [id, row] of documents) {
     closed(row, ['id', 'text', 'vector'], 'belge');
-    if (row.text !== textOfItem.get(id)) fail('Koşu dosyasındaki belge metni girdiyle aynı değil; değiştirilmiş metin puanlanmaz.');
+    if (row.text !== textOfItem.get(id)) rejectRun('Koşu dosyasındaki belge metni girdiyle aynı değil; değiştirilmiş metin puanlanmaz.');
   }
   const queries = exactRows(embedding.queries, 'case', caseIds, 'sorgu');
   for (const [id, row] of queries) {
     readOutcomeRow(row, ['case', 'text', 'vector', 'failure', 'latencyMs'], 'vector', 'sorgu');
-    if (row.text !== textOfCase.get(id)) fail('Koşu dosyasındaki sorgu metni girdiyle aynı değil; değiştirilmiş metin puanlanmaz.');
+    if (row.text !== textOfCase.get(id)) rejectRun('Koşu dosyasındaki sorgu metni girdiyle aynı değil; değiştirilmiş metin puanlanmaz.');
   }
   let rerank = null;
   if (run.rerank != null) {
     const section = closed(run.rerank, RERANK_FIELDS, 'yeniden sıralama');
     const provenance = provenanceOf(section, AI_PROFILES.RERANK, 'rerank');
-    if (!provenance || (section.runtime !== undefined && !boundedText(section.runtime))) fail('Koşu dosyasındaki yeniden sıralama modeli kökeni geçersiz.');
-    if (!isBatchSize(section.batchSize)) fail('Koşu dosyasındaki yeniden sıralama toplu iş boyutu geçersiz.');
+    if (!provenance || (section.runtime !== undefined && !boundedText(section.runtime))) rejectRun('Koşu dosyasındaki yeniden sıralama modeli kökeni geçersiz.');
+    if (!isBatchSize(section.batchSize)) rejectRun('Koşu dosyasındaki yeniden sıralama toplu iş boyutu geçersiz.');
     const rows = exactRows(section.queries, 'case', caseIds, 'yeniden sıralama');
     const scores = new Map();
     const outcomes = new Map();
@@ -222,7 +227,7 @@ export function readModelRun(raw, { catalogue, benchmark }) {
       for (const score of byItem.values()) {
         closed(score, ['id', 'score'], 'skor');
         // JSON'daki null sonlu olmayan model skorudur; eksik/metin alan bozuk artifakttır.
-        if (!Object.hasOwn(score, 'score') || score.score !== null && typeof score.score !== 'number') fail('Koşu dosyasındaki skor biçimi geçersiz.');
+        if (!Object.hasOwn(score, 'score') || score.score !== null && typeof score.score !== 'number') rejectRun('Koşu dosyasındaki skor biçimi geçersiz.');
       }
       // Koşucu her sorguda bütün kataloğu puanlar: çağrının geçerliliği raporun aday sınırına değil bütün çıktıya bağlıdır.
       const valid = [...byItem.values()].every((score) => isScore(score.score));
