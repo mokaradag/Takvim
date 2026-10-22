@@ -80,3 +80,16 @@ jobs:
         with:
           name: production-build-log
           path: build-output.log
+
+  planner-command-windows:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Verify planner command lifecycle on Windows
+        run: node --test --test-name-pattern="Claude|4C kayıtlı dış komut|4C takip nitelendirmesi" test/ai-planner-benchmark.test.mjs

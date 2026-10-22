@@ -784,17 +784,31 @@ test('4C sahte sağlayıcı: metinsel plan düşünme olaylarını gerçek ağ g
 });
 
 test('4C dış komut çağıranın klasörüne göre çözülür ve geçici klasörü ayrıdır', async (t) => {
-  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
+  const { existsSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
   const path = await import('node:path');
   const { externalModel } = await import('../scripts/planner-evaluation.mjs');
   const dir = mkdtempSync(path.join(process.cwd(), 'planner-relative-test-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'model.cjs');
-  writeFileSync(file, `process.stdout.write(JSON.stringify({text:process.cwd(),toolCalls:[],models:[],usage:{thinkingTokens:0},thinking:'off', isolated:process.env.TMPDIR !== process.cwd()}));`);
+  writeFileSync(file, `
+    const fs = require('node:fs');
+    fs.writeFileSync(require('node:path').join(process.env.TMPDIR, 'isolation-marker'), 'ok');
+    process.stdout.write(JSON.stringify({text:JSON.stringify({cwd:process.cwd(),tmp:process.env.TMPDIR,temp:process.env.TEMP,short:process.env.TMP}),toolCalls:[],models:[],usage:{thinkingTokens:0},thinking:'off'}));
+  `);
   const model = externalModel({ command: `"${process.execPath}" "${path.relative(process.cwd(), file)}"`, guard: () => {} });
-  try { const reply = await model.complete({ messages: [], tools: [], toolChoice: 'none' }); assert.equal(reply.error, null); assert.equal(reply.text, process.cwd()); }
-  finally { model.dispose(); }
+  let seen;
+  try {
+    const reply = await model.complete({ messages: [], tools: [], toolChoice: 'none' });
+    assert.equal(reply.error, null);
+    seen = JSON.parse(reply.text);
+    assert.equal(seen.cwd, process.cwd());
+    assert.ok(seen.tmp && seen.tmp !== seen.cwd);
+    assert.equal(seen.temp, seen.tmp);
+    assert.equal(seen.short, seen.tmp);
+    assert.equal(readFileSync(path.join(seen.tmp, 'isolation-marker'), 'utf8'), 'ok');
+    assert.equal(existsSync(path.join(seen.cwd, 'isolation-marker')), false);
+  } finally { model.dispose(); }
+  assert.equal(existsSync(seen.tmp), false);
 });
 
 test('4C yakınsama: ham yapılandırılmış metindeki gold sızıntısı kararlı kodla durur', async () => {
@@ -926,6 +940,12 @@ test('4C yakınsama: canlı değerlendirici ortak Sicil kabul sınırını aşma
   assert.equal(server.state.requests.length, 3);
 });
 
+/** Yerel süreçlerin işletim sistemi ortamı; model/uygulama ayarı ve kimlik bilgisi içermez. */
+function commandPlatformEnv() {
+  const keep = /^(PATH|SystemRoot|SystemDrive|WINDIR|ComSpec|TEMP|TMP|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA|ProgramData|ProgramFiles(?:\(x86\))?|CommonProgramFiles(?:\(x86\))?|PSModulePath|PATHEXT)$/i;
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => keep.test(key)));
+}
+
 test('Claude model komutu: geçersiz bütçe, kayıtsız bütçe ve tükenen çağrı hakkı modele gitmeden reddedilir', async () => {
   const { spawnSync } = await import('node:child_process');
   const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
@@ -935,16 +955,297 @@ test('Claude model komutu: geçersiz bütçe, kayıtsız bütçe ve tükenen ça
   const log = path.join(dir, 'calls.jsonl');
   const input = JSON.stringify({ messages: [{ role: 'system', content: 'x' }, { role: 'user', content: 'y' }], tools: [], toolChoice: 'auto' });
   // PATH boş: denetim geçseydi CLI bulunamazdı; beklenen kod yalnızca ön denetimden gelir.
-  const run = (env) => JSON.parse(spawnSync(process.execPath, ['scripts/planner-claude-model.mjs'], { input, encoding: 'utf8', env: { PATH: '', ...env } }).stdout).error;
+  const run = (env) => JSON.parse(spawnSync(process.execPath, ['scripts/planner-claude-model.mjs'], { input, encoding: 'utf8', env: { ...commandPlatformEnv(), PATH: '', ...env } }).stdout).error;
   try {
     for (const value of ['abc', '-1', '1.5', '0']) assert.equal(run({ PLANNER_CLAUDE_MAX_CALLS: value, PLANNER_CLAUDE_LOG: log }), 'PLANNER_LIMIT_INVALID', value);
     assert.equal(run({ PLANNER_CLAUDE_MAX_CALLS: '2' }), 'PLANNER_LEDGER_REQUIRED');
     assert.equal(run({ PLANNER_CLAUDE_REQUIRE_CACHE: '1' }), 'PLANNER_LEDGER_REQUIRED');
+    for (const value of ['1e3', '0x100', '0', '-1', '1.5', 'abc', ' ', '19', '600001']) {
+      assert.equal(run({ PLANNER_MODEL_TIMEOUT_MS: value, PLANNER_CLAUDE_LOG: log }), 'PLANNER_LIMIT_INVALID', value);
+    }
     writeFileSync(log, `${JSON.stringify({ reserved: true })}\n${JSON.stringify({ reserved: true })}\n`);
     assert.equal(run({ PLANNER_CLAUDE_MAX_CALLS: '2', PLANNER_CLAUDE_LOG: log }), 'PLANNER_BUDGET_CALLS');
+    for (const value of ['20', ' 1000 ', '600000', '']) {
+      assert.equal(run({ PLANNER_MODEL_TIMEOUT_MS: value, PLANNER_CLAUDE_MAX_CALLS: '2' }), 'PLANNER_LEDGER_REQUIRED', value);
+    }
     writeFileSync(log, `${JSON.stringify({ usage: { input_tokens: 10, cache_creation_input_tokens: 90 } })}\n`);
     assert.equal(run({ PLANNER_CLAUDE_MAX_UNCACHED: '100', PLANNER_CLAUDE_LOG: log }), 'PLANNER_BUDGET_TOKENS');
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** Gerçek komut sınırı; yerel CLI ikizi yalnızca açık dosya bariyerinde tamamlanır. */
+async function claudeCommandFixture(t, { reuse = false, commandTimeoutMs = 8000, ...limits } = {}) {
+  const { spawn, spawnSync } = await import('node:child_process');
+  const { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, watch, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+  const dir = mkdtempSync(path.join(tmpdir(), 'rota-claude-command-'));
+  const entered = path.join(dir, 'entered');
+  mkdirSync(entered);
+  const log = path.join(dir, 'calls.jsonl');
+  const release = path.join(dir, 'release');
+  const children = [];
+  const killed = new Set();
+  const kill = child => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    killed.add(child);
+    if (process.platform === 'win32') {
+      const result = spawnSync(path.join(process.env.SystemRoot, 'System32', 'taskkill.exe'), ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+      if (result.error) throw result.error;
+    } else try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+  };
+  t.after(async () => {
+    children.forEach(({ child }) => kill(child));
+    await Promise.allSettled(children.map(({ done }) => done));
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const model = path.join(dir, 'claude.cjs');
+  const adapter = path.join(dir, 'model.mjs');
+  writeFileSync(adapter, `import { runAdapter } from ${JSON.stringify(pathToFileURL(path.resolve('scripts/planner-claude-model.mjs')).href)};
+    await runAdapter({ command: process.execPath, prefixArgs: [process.argv[2]] });`);
+  writeFileSync(model, `
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const root = __dirname;
+    fs.writeFileSync(path.join(root, 'entered', String(process.pid)), 'ready');
+    const finish = () => {
+      if (!fs.existsSync(path.join(root, 'release'))) return;
+      watcher.close();
+      const cached = ${reuse} && fs.readdirSync(path.join(root, 'entered')).length > 1;
+      for (const event of [
+        {type:'system',subtype:'init',tools:[]},
+        {type:'assistant',message:{id:'one',model:'claude-haiku-4-5-20251001',content:[{type:'text',text:'ok'}]}},
+        {type:'result',num_turns:1,stop_reason:'end_turn',usage:{input_tokens:10,cache_creation_input_tokens:90,cache_read_input_tokens:cached?100:0,output_tokens:1}}
+      ]) console.log(JSON.stringify(event));
+    };
+    const watcher = fs.watch(root, finish);
+    process.stdin.resume();
+    finish();
+  `);
+  const waitFor = predicate => new Promise((resolve, reject) => {
+    let settled = false;
+    const done = error => { if (settled) return; settled = true; watcher.close(); clearTimeout(timer); error ? reject(error) : resolve(); };
+    const check = () => { if (predicate()) done(); };
+    const watcher = watch(dir, { recursive: true }, check);
+    const timer = setTimeout(() => done(new Error('CLI bariyeri beklenirken süre aşıldı')), 5000);
+    children.at(-1)?.done.then(reply => { if (!settled && !predicate()) done(new Error(`Bağdaştırıcı hazır olmadan bitti: ${reply.error || reply.signal || 'no provider call'}`)); }, done);
+    check();
+  });
+  const start = (extra = {}) => {
+    const child = spawn(process.execPath, [adapter, model], { detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...commandPlatformEnv(), PLANNER_CLAUDE_HOME: path.join(dir, 'home'), PLANNER_CLAUDE_LOG: log, ...limits, ...extra } });
+    let out = ''; let err = '';
+    child.stdout.on('data', chunk => { out += chunk; });
+    child.stderr.on('data', chunk => { err += chunk; });
+    const done = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { kill(child); reject(new Error('Bağdaştırıcı tamamlanmadı')); }, commandTimeoutMs);
+      child.on('close', (code, signal) => {
+        clearTimeout(timer);
+        if (killed.has(child)) return resolve({ terminated: true, signal });
+        try { assert.equal(code, 0, err); resolve(JSON.parse(out)); } catch (error) { reject(error); }
+      });
+    });
+    children.push({ child, done });
+    child.stdin.end(JSON.stringify({ messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }], tools: [], toolChoice: 'none' }));
+    return { child, done };
+  };
+  return { start, kill, waitFor, log, release: () => writeFileSync(release, 'go'),
+    count: () => readdirSync(entered).length,
+    locked: () => existsSync(`${log}.lock`),
+    waiting: () => readdirSync(dir).some(name => name.startsWith('calls.jsonl.lock-')),
+    rows: () => readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) };
+}
+
+test('Claude yakınsama: eşzamanlı aynı önek tamamlanan çağrıya göre önbellek denetler', async (t) => {
+  for (const reuse of [false, true]) await t.test(String(reuse), async (t) => {
+    const cli = await claudeCommandFixture(t, { reuse, PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
+    const first = cli.start();
+    await cli.waitFor(() => cli.count() === 1);
+    const second = cli.start();
+    await cli.waitFor(() => cli.waiting() || cli.count() === 2);
+    assert.equal(cli.count(), 1, 'önceki kullanım kaydedilmeden ikinci model çağrısı başlamaz');
+    cli.release();
+    const replies = await Promise.all([first.done, second.done]);
+    assert.equal(replies[0].error, undefined);
+    assert.equal(replies[1].error, reuse ? undefined : 'PLANNER_CACHE_NOT_REUSED');
+    assert.equal(cli.count(), 2);
+    assert.equal(cli.rows().filter(row => row.usage).length, 2);
+    assert.equal(cli.locked(), false);
+  });
+});
+
+test('Claude yakınsama: eşzamanlı çağrı tükenen belirteç bütçesini aşarak modele gitmez', async (t) => {
+  const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_MAX_UNCACHED: '100' });
+  const first = cli.start();
+  await cli.waitFor(() => cli.count() === 1);
+  const second = cli.start();
+  await cli.waitFor(() => cli.waiting() || cli.count() === 2);
+  assert.equal(cli.count(), 1);
+  cli.release();
+  const replies = await Promise.all([first.done, second.done]);
+  assert.equal(replies[0].error, undefined);
+  assert.equal(replies[1].error, 'PLANNER_BUDGET_TOKENS');
+  assert.equal(cli.count(), 1, 'reddedilen çağrı sağlayıcıya ulaşmaz');
+  assert.equal(cli.rows().filter(row => row.reserved).length, 1);
+  assert.equal(cli.locked(), false);
+});
+
+test('Claude yakınsama: öldürülen kilit sahibi kurtarılır; bilinmeyen harcama kapalı kalır', async (t) => {
+  const cli = await claudeCommandFixture(t);
+  const first = cli.start();
+  await cli.waitFor(() => cli.count() === 1);
+  assert.equal(cli.locked(), true);
+  cli.kill(first.child);
+  assert.equal((await first.done).terminated, true);
+  const denied = await cli.start({ PLANNER_CLAUDE_MAX_UNCACHED: '100' }).done;
+  assert.equal(denied.error, 'PLANNER_BUDGET_UNVERIFIED');
+  assert.equal(cli.count(), 1, 'yarım kalan kullanım sıfır sayılmaz');
+  cli.release();
+  const recovered = await Promise.all([cli.start({ PLANNER_CLAUDE_MAX_CALLS: '2' }).done, cli.start({ PLANNER_CLAUDE_MAX_CALLS: '2' }).done]);
+  assert.equal(recovered.filter(reply => reply.text === 'ok').length, 1);
+  assert.equal(recovered.filter(reply => reply.error === 'PLANNER_BUDGET_CALLS').length, 1);
+  assert.equal(cli.count(), 2);
+  assert.equal(cli.locked(), false);
+});
+
+test('Claude yakınsama: otuz saniyeden uzun geçerli çağrı bekleyen çağrıyı düşürmez', { timeout: 60000 }, async (t) => {
+  const cli = await claudeCommandFixture(t, { reuse: true, commandTimeoutMs: 45000, PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
+  const first = cli.start();
+  await cli.waitFor(() => cli.count() === 1);
+  const second = cli.start();
+  await cli.waitFor(() => cli.waiting());
+  await new Promise(resolve => setTimeout(resolve, 32000));
+  assert.equal(cli.count(), 1);
+  cli.release();
+  const replies = await Promise.all([first.done, second.done]);
+  assert.ok(replies.every(reply => !reply.error && reply.text === 'ok'));
+  assert.equal(cli.count(), 2);
+  assert.equal(cli.locked(), false);
+});
+
+test('Claude yakınsama: canlı sahip korunur, bekleyen kendi komut bütçesinde sonlanır', async (t) => {
+  const cli = await claudeCommandFixture(t);
+  const first = cli.start();
+  await cli.waitFor(() => cli.count() === 1);
+  const blocked = await cli.start({ PLANNER_MODEL_TIMEOUT_MS: '100' }).done;
+  assert.equal(blocked.error, 'PLANNER_LEDGER_LOCKED');
+  assert.equal(cli.locked(), true);
+  assert.equal(cli.count(), 1);
+  cli.release();
+  assert.equal((await first.done).text, 'ok');
+  assert.equal(cli.locked(), false);
+});
+
+test('Claude yakınsama: yeniden kullanılan canlı PID eski süreç örneğinin kilidini tutamaz', async (t) => {
+  const { randomUUID } = await import('node:crypto');
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const path = await import('node:path');
+  const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_MAX_CALLS: '1', PLANNER_MODEL_TIMEOUT_MS: '5000' });
+  let identity = 'previous-process-instance';
+  if (process.platform === 'linux') {
+    const stat = readFileSync('/proc/self/stat', 'utf8');
+    const start = BigInt(stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19]);
+    identity = `linux:${readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()}:${stat.slice(0, stat.indexOf(' '))}:${start + 1n}`;
+  }
+  mkdirSync(`${cli.log}.lock`);
+  writeFileSync(path.join(`${cli.log}.lock`, `${process.pid}-${randomUUID()}`), JSON.stringify({ pid: process.pid, identity }));
+  cli.release();
+  const replies = await Promise.all([cli.start().done, cli.start().done]);
+  assert.equal(replies.filter(reply => reply.text === 'ok').length, 1);
+  assert.equal(replies.filter(reply => reply.error === 'PLANNER_BUDGET_CALLS').length, 1);
+  assert.equal(cli.count(), 1);
+  assert.equal(cli.locked(), false);
+  assert.doesNotThrow(() => process.kill(process.pid, 0), 'yeni PID sahibi sonlandırılmaz');
+});
+
+test('4C kayıtlı dış komut: kuyruk yürütme süresini tüketmez; kapanış bekleyenleri başlatmaz', async (t) => {
+  const { mkdtempSync, rmSync, watch, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { externalModel } = await import('../scripts/planner-evaluation.mjs');
+  const dir = mkdtempSync(path.join(tmpdir(), 'rota-queued-command-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const trace = path.join(dir, 'trace.jsonl');
+  const file = path.join(dir, 'model.cjs');
+  writeFileSync(trace, '');
+  writeFileSync(file, `
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const id = JSON.parse(fs.readFileSync(0, 'utf8')).messages[0].content;
+    const record = phase => fs.appendFileSync(path.join(__dirname, 'trace.jsonl'), JSON.stringify({id,phase,budget:process.env.PLANNER_MODEL_TIMEOUT_MS})+'\\n');
+    record('start');
+    setTimeout(() => {record('end'); console.log(JSON.stringify({text:'ok',toolCalls:[]}));}, 350);
+  `);
+  const create = () => externalModel({ command: `"${process.execPath}" "${file}"`, guard: () => {}, ledger: path.join(dir, 'calls.jsonl'), timeoutMs: 1000 });
+  const input = id => ({ messages: [{ role: 'user', content: String(id) }], tools: [], toolChoice: 'none' });
+  const rows = () => readFileSync(trace, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const model = create();
+  t.after(() => model.dispose());
+  const replies = await Promise.all([1, 2, 3, 4].map(id => model.complete(input(id))));
+  assert.ok(replies.every(reply => reply.error === null && reply.text === 'ok'));
+  assert.deepEqual(rows().map(({ id, phase }) => [id, phase]), [1, 2, 3, 4].flatMap(id => [[String(id), 'start'], [String(id), 'end']]));
+  assert.ok(rows().every(row => row.budget === '1000'));
+  model.dispose();
+  writeFileSync(trace, '');
+  const cancelled = create();
+  t.after(() => cancelled.dispose());
+  const started = new Promise((resolve, reject) => {
+    const watcher = watch(dir, () => { if (rows().length) { clearTimeout(timer); watcher.close(); resolve(); } });
+    const timer = setTimeout(() => { watcher.close(); reject(new Error('Komut başlamadı')); }, 5000);
+  });
+  const waiting = [1, 2, 3].map(id => cancelled.complete(input(id)));
+  await started;
+  cancelled.dispose();
+  assert.ok((await Promise.all(waiting)).every(reply => reply.error === 'MODEL_COMMAND_ERROR'));
+  assert.equal(rows().filter(row => row.phase === 'start').length, 1);
+});
+
+test('4C takip nitelendirmesi: açık bitiş nedeni korunur, bilinmeyen neden sağlayıcıya geçmez', async () => {
+  const { realModelProvider } = await import('../scripts/planner-followup-qualification.mjs');
+  for (const reason of [undefined, null, '', 'unknown', 'error_max_turns', 'stop', 'end_turn', 'eos', 'stop_sequence', 'tool_calls', 'length', 'content_filter']) {
+    for (const toolCalls of [[], [{ name: 'rota_task_search', arguments: {} }]]) {
+      const provider = realModelProvider({ completeRound: async () => ({ text: '', toolCalls, finishReason: reason, models: ['claude-haiku-4-5-20251001'], thinking: 'off' }) });
+      const input = { model: 'standard', messages: [], tools: [], toolChoice: 'auto' };
+      if ([undefined, null, '', 'unknown', 'error_max_turns'].includes(reason)) {
+        await assert.rejects(provider.streamToolCompletion(input), /PLANNER_COMPLETION_UNVERIFIED/);
+        assert.equal(provider.calls.length, 0);
+      } else {
+        const stream = await provider.streamToolCompletion(input);
+        const events = [];
+        for await (const event of stream.events) events.push(event);
+        assert.equal(events.find(event => event.type === 'done').finishReason, reason);
+      }
+    }
+  }
+});
+
+test('4C takip nitelendirmesi: başarısız senaryo ve devir raporlandıktan sonra komut başarısız olur', async (t) => {
+  const { spawnSync } = await import('node:child_process');
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+  const dir = mkdtempSync(path.join(tmpdir(), 'rota-followup-exit-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'model.mjs');
+  const out = path.join(dir, 'report.jsonl');
+  writeFileSync(file, `
+    import test from 'node:test';
+    import { readFileSync } from 'node:fs';
+    import { finalizeQualification } from ${JSON.stringify(pathToFileURL(path.resolve('scripts/planner-followup-qualification.mjs')).href)};
+    const result = JSON.parse(readFileSync(new URL('./result.json', import.meta.url), 'utf8'));
+    test('fixture', () => {});
+    test.after(() => finalizeQualification(result));
+  `);
+  for (const [failed, escalations, expected] of [[[], 0, 0], [[{ reason: 'wrong answer' }], 0, 1], [[], 1, 1]]) {
+    const result = { chains: 1, turns: 1, passed: failed.length ? 0 : 1, failed, modelCalls: 0, escalations, models: [] };
+    writeFileSync(path.join(dir, 'result.json'), JSON.stringify(result));
+    rmSync(out, { force: true });
+    const run = spawnSync(process.execPath, ['--test', file], { encoding: 'utf8', env: { ...commandPlatformEnv(), PLANNER_FOLLOWUP_OUT: out } });
+    assert.equal(run.status, expected, run.stdout + run.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), result, 'başarısız rapor da korunur');
   }
 });

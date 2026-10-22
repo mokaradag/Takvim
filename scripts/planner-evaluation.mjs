@@ -161,10 +161,13 @@ function verifyModel(models, usage, expectedModel, thinkingMode) {
  * işlev araçları) alır; stdout `{ text, toolCalls: [{ name, arguments }], finishReason, usage, models, thinking: "off" }` yazar. Komut modele
  * kendi yerel araç çağırma biçimini verir (ör. bir sağlayıcının yerel araç arayüzü); araç yürütmez.
  */
-function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes = 4 * 1024 * 1024 }) {
+function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes = 4 * 1024 * 1024, ledger = process.env.PLANNER_CLAUDE_LOG || null }) {
   const workdir = mkdtempSync(path.join(tmpdir(), 'rota-planner-'));
   const active = new Set();
+  let disposed = false;
+  let pending = Promise.resolve();
   const dispose = () => {
+    disposed = true;
     process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); process.off('SIGHUP', hangup);
     for (const stop of active) stop();
     active.clear();
@@ -177,7 +180,8 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
   let sequence = 0;
   const run = (payload) => new Promise((resolve, reject) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^MERGEN_ROTA_/.test(key)));
-    const child = spawn(command, { shell: true, detached: process.platform !== 'win32', cwd: process.cwd(), env: { ...env, TMPDIR: workdir, TEMP: workdir, TMP: workdir }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(command, { shell: true, detached: process.platform !== 'win32', cwd: process.cwd(), env: { ...env, TMPDIR: workdir, TEMP: workdir, TMP: workdir,
+      PLANNER_MODEL_TIMEOUT_MS: String(timeoutMs), ...(ledger ? { PLANNER_CLAUDE_LOG: ledger } : {}) }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const out = [];
     let bytes = 0;
     let settled = false;
@@ -215,6 +219,17 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
     child.on('close', (code) => finish(code === 0 ? null : 'MODEL_COMMAND_ERROR', Buffer.concat(out).toString('utf8')));
     child.stdin.end(payload);
   });
+  // Kayıtlı çağrının beklemesi yürütme zamanlayıcısından öncedir; kapanış kuyruktakileri başlatmaz.
+  const scheduled = async payload => {
+    const previous = pending;
+    let release;
+    if (ledger) pending = new Promise(resolve => { release = resolve; });
+    if (ledger) await previous;
+    try {
+      if (disposed) fail('MODEL_COMMAND_ERROR');
+      return await run(payload);
+    } finally { release?.(); }
+  };
   return {
     async complete({ messages, tools, toolChoice }) {
       const payload = JSON.stringify({ messages, tools, toolChoice });
@@ -228,7 +243,7 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
       }
       const startedAt = Date.now();
       let reply;
-      try { reply = JSON.parse(await run(payload)); } catch (error) { reply = { text: '', toolCalls: [], error: ['MODEL_COMMAND_TIMEOUT', 'MODEL_COMMAND_OUTPUT_LIMIT'].includes(error.code) ? error.code : 'MODEL_COMMAND_ERROR' }; }
+      try { reply = JSON.parse(await scheduled(payload)); } catch (error) { reply = { text: '', toolCalls: [], error: ['MODEL_COMMAND_TIMEOUT', 'MODEL_COMMAND_OUTPUT_LIMIT'].includes(error.code) ? error.code : 'MODEL_COMMAND_ERROR' }; }
       if (reply?.error) reply = { text: '', toolCalls: [], error: ['MODEL_COMMAND_TIMEOUT', 'MODEL_COMMAND_OUTPUT_LIMIT'].includes(reply.error) ? reply.error : 'MODEL_COMMAND_ERROR' };
       if (inputs) writeFileSync(path.join(inputs, 'completions.jsonl'), `${JSON.stringify({ call: id, error: reply?.error ?? null, usage: normalizedUsage(reply?.usage) })}\n`, { flag: 'a' });
       const toolCalls = (Array.isArray(reply?.toolCalls) ? reply.toolCalls : []).filter((call) => call && typeof call.name === 'string')
@@ -543,7 +558,7 @@ function printReport(run, flags) {
 }
 
 /** Sınamalar planlama sınırını aynı yoldan çalıştırır (komut satırı yalnızca doğrudan çalıştırmada). */
-export { candidatesFromRun, externalModel, liveTurn, leakGuard, parseArguments, planCase, recordOf, runEvaluation };
+export { candidatesFromRun, externalModel, liveTurn, leakGuard, parseArguments, planCase, recordOf, runEvaluation, verifyCompletion };
 
 const direct = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 try {

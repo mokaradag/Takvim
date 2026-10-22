@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { createAiStack, sendTurn } from '../test/helpers/aiStack.mjs';
 import { createFakeAiProvider } from '../test/helpers/fakeAiProvider.mjs';
 import { ALI_2, AYSE, MEHMET, NOW, TASKS, ZEYNEP, rotaToolSeed } from '../test/helpers/aiToolFixtures.mjs';
+import { verifyCompletion } from './planner-evaluation.mjs';
 
 const ADAPTER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'planner-claude-model.mjs');
 const OUT = process.env.PLANNER_FOLLOWUP_OUT || null;
@@ -36,7 +37,7 @@ function complete(input) {
 }
 
 /** Sınama sağlayıcısının gerçek akış biçimi; davranışı her araçlı turda gerçek model belirler. */
-function realModelProvider() {
+export function realModelProvider({ completeRound = complete } = {}) {
   const fake = createFakeAiProvider({ semanticQueue: false });
   let standard = null;
   return { ...fake, async streamToolCompletion(input) {
@@ -47,12 +48,13 @@ function realModelProvider() {
       throw new Error('DEEP_ESCALATION');
     }
     summary.modelCalls += 1;
-    const reply = await complete({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice });
+    const reply = await completeRound({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice });
     if (reply.error) throw new Error(`MODEL_INFRASTRUCTURE ${reply.error}`);
     if (!reply.models?.length || reply.models.some((model) => model !== EXPECTED_MODEL) || reply.thinking !== 'off') throw new Error('MODEL_INFRASTRUCTURE PLANNER_MODEL_UNVERIFIED');
     reply.models.forEach((model) => summary.models.add(model));
     // Sağlayıcının bitiş nedeni korunur: çıktı sınırında kesilen yanıt üretimdeki kesilme yolundan geçer.
-    const finishReason = reply.finishReason === 'length' ? 'length' : reply.toolCalls.length ? 'tool_calls' : 'stop';
+    verifyCompletion(reply.finishReason);
+    const finishReason = reply.finishReason;
     fake.enqueue(reply.toolCalls.length ? { type: 'tool-calls', calls: reply.toolCalls, preface: reply.text ? [reply.text] : [], finishReason }
       : { type: 'answer', text: reply.text, finishReason });
     return fake.streamToolCompletion(input);
@@ -92,11 +94,16 @@ async function chain(t, name, turns) {
   }
 }
 
-test.after(() => {
-  const result = { ...summary, models: [...summary.models] };
+/** Tanı raporu yazıldıktan sonra başarısız nitelendirme komutu da başarısız olur. */
+export function finalizeQualification(result) {
   process.stderr.write(`${JSON.stringify(result)}\n`);
   if (OUT) appendFileSync(OUT, `${JSON.stringify(result)}\n`);
-});
+  assert.equal(result.failed.length, 0, 'FOLLOWUP_QUALIFICATION_FAILED');
+  assert.equal(result.escalations, 0, 'FOLLOWUP_ESCALATION_FORBIDDEN');
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+test.after(() => finalizeQualification({ ...summary, models: [...summary.models] }));
 
 test('takip zinciri: kişi değişimi, "bunlardan", "ilk görev", "onun"', async (t) => {
   await chain(t, 'A', [
@@ -168,3 +175,4 @@ test('önceki sonucu süzgeçle daraltma', async (t) => {
     }]
   ]);
 });
+}

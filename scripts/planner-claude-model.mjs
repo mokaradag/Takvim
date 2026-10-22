@@ -20,9 +20,9 @@
  * çağrıdan sonra önbellek okuması zorunlu). Ev klasörü yalıtıldığı için CLI'nin kayıtlı oturumu görünmez; kimlik bilgisi
  * ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN ya da CLAUDE_CODE_OAUTH_TOKEN (ya da barındırılan oturumun ortamı) ile verilir.
  */
-import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -83,21 +83,77 @@ function limitFromEnv(name) {
   return Number.parseInt(value, 10);
 }
 
-/** Süreçler arası kilit: bütçe denetimi ve çağrı ayırımı eşzamanlı komutlarda tek tek yapılır. */
-async function withLock(file, work) {
-  const lock = `${file}.lock`;
-  for (let attempt = 0; ; attempt += 1) {
-    try { mkdirSync(lock); break; } catch (error) {
-      if (error.code !== 'EEXIST' || attempt > 600) throw Object.assign(new Error('lock'), { code: 'PLANNER_LEDGER_LOCKED' });
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-  }
-  try { return work(); } finally { rmdirSync(lock); }
+/** Yalnızca bu sahibin dosyasını kaldırır; yeni sahibin dolu dizini silinemez. */
+function releaseLock(lock, owner) {
+  try { if (owner) unlinkSync(path.join(lock, owner)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  try { rmdirSync(lock); } catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error; }
 }
 
-function runClaude(args, env, cwd, input) {
+/** PID yeniden kullanılsa da aynı süreç örneği olduğu doğrulanır. */
+function processIdentity(pid, expected = null, timeoutMs = 120000) {
+  if (process.platform === 'linux') {
+    try {
+      const recorded = /^linux:[0-9a-f-]{36}:([0-9]+):[0-9]+$/.exec(expected || '');
+      const stat = readFileSync(expected ? `/proc/${recorded?.[1] || pid}/stat` : '/proc/self/stat', 'utf8');
+      const start = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19];
+      if (!/^[0-9]+$/.test(start)) throw new Error('PLANNER_LEDGER_OWNER_UNVERIFIED');
+      return `linux:${readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()}:${stat.slice(0, stat.indexOf(' '))}:${start}`;
+    } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  }
+  try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') return null; if (error.code !== 'EPERM') throw error; }
+  const result = process.platform === 'win32'
+    ? spawnSync(path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop'; try { [System.Diagnostics.Process]::GetProcessById([int]$env:ROTA_LOCK_OWNER_PID).StartTime.ToUniversalTime().Ticks } catch { exit 3 }"],
+      { encoding: 'utf8', windowsHide: true, timeout: timeoutMs, env: { ...process.env, ROTA_LOCK_OWNER_PID: String(pid) } })
+    : spawnSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8', timeout: timeoutMs, env: { ...process.env, LC_ALL: 'C' } });
+  if (result.error?.code === 'ETIMEDOUT') throw Object.assign(new Error('lock'), { code: 'PLANNER_LEDGER_LOCKED' });
+  const identity = result.stdout?.trim();
+  if (result.status === 0 && identity) return identity;
+  try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') return null; }
+  throw new Error('PLANNER_LEDGER_OWNER_UNVERIFIED');
+}
+
+/** Kilit sahipliği atomik yayımlanır; bekleme bütçesi komutun yürütme bütçesidir. */
+async function withLock(file, work, timeoutMs) {
+  const lock = `${file}.lock`;
+  const candidate = mkdtempSync(`${lock}-`);
+  const owner = `${process.pid}-${randomUUID()}`;
+  const deadline = performance.now() + timeoutMs;
+  try {
+    const identity = processIdentity(process.pid, null, timeoutMs);
+    if (!identity) throw new Error('PLANNER_LEDGER_OWNER_UNVERIFIED');
+    writeFileSync(path.join(candidate, owner), JSON.stringify({ pid: process.pid, identity }));
+    for (;;) {
+      try { renameSync(candidate, lock); break; } catch (error) {
+        if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes(error.code) || performance.now() >= deadline) throw Object.assign(new Error('lock'), { code: 'PLANNER_LEDGER_LOCKED' });
+        try {
+          const owners = readdirSync(lock);
+          if (!owners.length) releaseLock(lock, null); // Eski sürümün sahipsiz kilidi.
+          for (const name of owners) {
+            if (!/^[1-9][0-9]*-[0-9a-f-]{36}$/.test(name)) continue;
+            const record = JSON.parse(readFileSync(path.join(lock, name), 'utf8'));
+            const pid = typeof record === 'number' ? record : record.pid;
+            if (!Number.isSafeInteger(pid) || pid < 1) continue;
+            if (typeof record === 'number') {
+              try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') releaseLock(lock, name); else if (error.code !== 'EPERM') throw error; }
+              continue;
+            }
+            const current = processIdentity(pid, record.identity, Math.max(1, Math.floor(deadline - performance.now())));
+            if (current === null || record.identity && record.identity !== current) releaseLock(lock, name);
+          }
+        } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    try { return await work(); } finally { releaseLock(lock, owner); }
+  } finally {
+    rmSync(candidate, { recursive: true, force: true });
+  }
+}
+
+function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] }) {
   return new Promise((resolve) => {
-    const child = spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(command, [...prefixArgs, ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     const events = [];
     const decoder = new StringDecoder('utf8');
     let buffer = '';
@@ -117,15 +173,17 @@ function runClaude(args, env, cwd, input) {
   });
 }
 
-async function complete() {
+function reportFailure(log, error, extra = {}) {
+  if (log) appendFileSync(log, `${JSON.stringify({ at: new Date().toISOString(), error, ...extra })}\n`);
+  process.stdout.write(`${JSON.stringify({ text: '', toolCalls: [], error })}\n`);
+}
+
+async function complete(launcher) {
   const payload = JSON.parse(readFileSync(0, 'utf8'));
   const model = process.env.PLANNER_CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
   const effort = process.env.PLANNER_CLAUDE_EFFORT || 'low';
   const log = process.env.PLANNER_CLAUDE_LOG || null;
-  const fail = (error, extra = {}) => {
-    if (log) appendFileSync(log, `${JSON.stringify({ at: new Date().toISOString(), error, ...extra })}\n`);
-    process.stdout.write(`${JSON.stringify({ text: '', toolCalls: [], error })}\n`);
-  };
+  const fail = (error, extra) => reportFailure(log, error, extra);
   const [system, ...rest] = payload.messages;
   if (system?.role !== 'system') return fail('PLANNER_SYSTEM_MISSING');
   const all = payload.toolChoice === 'none' ? [] : payload.tools;
@@ -139,19 +197,20 @@ async function complete() {
   try { maxCalls = limitFromEnv('PLANNER_CLAUDE_MAX_CALLS'); maxUncached = limitFromEnv('PLANNER_CLAUDE_MAX_UNCACHED'); } catch (error) { return fail(error.code); }
   // Çağrılar arası denetimlerin durumu kayıt dosyasıdır: kayıt yoksa sınır ya da önbellek kapısı sessizce kapanmaz.
   if (!log && (maxCalls || maxUncached || process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1')) return fail('PLANNER_LEDGER_REQUIRED');
-  let prior;
-  try {
-    prior = log ? await withLock(log, () => {
-      const rows = ledger(log);
-      // Her çağrı başlamadan ayrılır (ayırım satırı); eşzamanlı komutlar aynı kalan hakkı paylaşamaz.
-      if (maxCalls && rows.filter((row) => row.reserved).length >= maxCalls) return 'PLANNER_BUDGET_CALLS';
-      const uncached = rows.reduce((sum, row) => sum + (row.usage ? row.usage.input_tokens + row.usage.cache_creation_input_tokens : 0), 0);
-      if (maxUncached && uncached >= maxUncached) return 'PLANNER_BUDGET_TOKENS';
-      appendFileSync(log, `${JSON.stringify({ at: new Date().toISOString(), reserved: true })}\n`);
-      return rows;
-    }) : [];
-  } catch (error) { return fail(error.code || 'PLANNER_LEDGER_LOCKED'); }
-  if (typeof prior === 'string') return fail(prior);
+  const prior = log ? ledger(log) : [];
+  const callId = log ? randomUUID() : null;
+  if (log) {
+    // Kilit, ayırımdan kullanım kaydına dek tutulur; sonraki çağrı tamamlanan harcamayı görür.
+    const reservations = prior.filter((row) => row.reserved);
+    if (maxCalls && reservations.length >= maxCalls) return fail('PLANNER_BUDGET_CALLS');
+    const measured = prior.filter((row) => row.usage && Number.isSafeInteger(row.usage.input_tokens) && row.usage.input_tokens >= 0
+      && Number.isSafeInteger(row.usage.cache_creation_input_tokens) && row.usage.cache_creation_input_tokens >= 0);
+    if (maxUncached && (reservations.some((row) => row.callId && !measured.some((item) => item.callId === row.callId))
+      || reservations.filter((row) => !row.callId).length > measured.filter((row) => !row.callId).length)) return fail('PLANNER_BUDGET_UNVERIFIED');
+    const uncached = measured.reduce((sum, row) => sum + row.usage.input_tokens + row.usage.cache_creation_input_tokens, 0);
+    if (maxUncached && uncached >= maxUncached) return fail('PLANNER_BUDGET_TOKENS');
+    appendFileSync(log, `${JSON.stringify({ at: new Date().toISOString(), reserved: true, callId })}\n`);
+  }
 
   // Kararlı yalıtılmış ev ve çalışma klasörü: depo bağlamı, kullanıcı ayarı ya da proje yönergesi modele girmez.
   const home = process.env.PLANNER_CLAUDE_HOME || path.join(tmpdir(), 'rota-planner-claude-home');
@@ -170,7 +229,7 @@ async function complete() {
       ...(forced ? ['--json-schema', JSON.stringify({ ...forced.parameters, description: forced.description })] : []), '--output-format', 'stream-json', '--verbose',
       '--max-turns', '1', '--no-session-persistence', '--disable-slash-commands'];
     const startedAt = Date.now();
-    const { code, events } = await runClaude(args, env, cwd, conversationText(rest));
+    const { code, events } = await runClaude(args, env, cwd, conversationText(rest), launcher);
     const init = events.find((event) => event.type === 'system' && event.subtype === 'init');
     const result = events.find((event) => event.type === 'result');
     const assistants = events.filter((event) => event.type === 'assistant' && !event.parent_tool_use_id).map((event) => event.message);
@@ -187,7 +246,7 @@ async function complete() {
       thinkingBlocks: blocks.filter((block) => block.type === 'thinking' || block.type === 'redacted_thinking').length
     };
     const offered = (init?.tools || []).filter((name) => name.startsWith(PREFIX)).map((name) => name.slice(PREFIX.length));
-    const row = { at: new Date().toISOString(), models, effort, thinking: usage.output_tokens_details.thinking_tokens || usage.thinkingBlocks ? 'on' : 'off', usage,
+    const row = { at: new Date().toISOString(), ...(callId ? { callId } : {}), models, effort, thinking: usage.output_tokens_details.thinking_tokens || usage.thinkingBlocks ? 'on' : 'off', usage,
       apiCalls: ids.size, numTurns: result?.num_turns ?? null, stopReason: blocks.some((block) => block.type === 'tool_use') ? 'tool_use' : result?.stop_reason ?? null,
       durationMs: Date.now() - startedAt, rateLimit: limit ? { status: limit.status, utilization: limit.utilization ?? null } : null, staticPromptHash, toolCatalogHash, toolOrderHash: hash(JSON.stringify(offered)), tailChars: conversationText(rest).length };
     if (code !== 0 && !result || result?.is_error && result?.subtype !== 'error_max_turns' || rejected || result?.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null });
@@ -213,5 +272,19 @@ async function complete() {
   }
 }
 
-if (process.argv[2] === 'mcp') serveTools(process.argv[3]);
-else await complete();
+export async function runAdapter(launcher = {}) {
+  const log = process.env.PLANNER_CLAUDE_LOG || null;
+  let timeoutMs;
+  try { timeoutMs = limitFromEnv('PLANNER_MODEL_TIMEOUT_MS') ?? 120000; } catch (error) { return reportFailure(log, error.code); }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 20 || timeoutMs > 600000) return reportFailure(log, 'PLANNER_LIMIT_INVALID');
+  const run = () => complete(launcher);
+  try { await (log ? withLock(log, run, timeoutMs) : run()); } catch (error) {
+    if (error.code !== 'PLANNER_LEDGER_LOCKED') throw error;
+    reportFailure(log, error.code);
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.argv[2] === 'mcp') serveTools(process.argv[3]);
+  else await runAdapter();
+}
