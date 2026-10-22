@@ -1468,11 +1468,13 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
   // Veri okunmadıysa Derin yeniden planlar; ortak araç turu bütçesi tükendiyse planı yürütemez.
   const evidenceReady = () => Boolean(turn.request && requestEvidenceReady(turn.request, partEntries(turn), turn.context.today, containment.boundSelection()));
   const deepCanHelp = () => canEscalate() && (frozen() ? evidenceReady() : toolsAvailable());
+  let missingPreviousResult = null;
   const fallback = async (reason) => {
     if (turn.textFieldsRequired) {
       emitPlanned(turn, { intent: 'text_fields' });
       return finish(turn, { ok: true, kind: 'clarification', normalized: renderTextFieldsRequired({ locale: turn.locale }), citedIds: [], issues: [] }, onText);
     }
+    if (missingPreviousResult) return plannerChoice(turn, missingPreviousResult, onText);
     if (deepCanHelp()) return escalation(turn, reason);
     if (turn.partCount > 1 && !ledger.revoked()) {
       const outcome = settlePart(turn, { ok: true, kind: 'unavailable', normalized: renderPartUnavailable({ locale: turn.locale }), citedIds: [], issues: [] }, 'server');
@@ -1495,6 +1497,12 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     if (planNeedsText(turn, rejectedPlan) || details.length && details.every((detail) => TEXT_FIELDS_REQUIRED.test(String(detail))) && turn.declarationsLeft <= 0) {
       turn.textFieldsRequired = true;
       if (rejectedPlan?.language) turn.locale = rejectedPlan.language;
+      return false;
+    }
+    // Olmayan gönderge onarımla silinmez; yeni tam soru ayrı turda yeniden doğrulanır.
+    if (!turn.previousResult && details.includes('$.previousResult:unavailable')) {
+      missingPreviousResult = { intent: PLANNER_INTENTS.CLARIFY, language: rejectedPlan?.language,
+        clarify: { reason: 'missing_referent' } };
       return false;
     }
     if (turn.declarationsLeft <= 0) return false;

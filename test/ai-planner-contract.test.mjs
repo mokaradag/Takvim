@@ -285,14 +285,17 @@ test('4C çok bölüm: önceki sonuç bayrağı bütün bölümlerde okumadan ö
     await t.test(`${prior}:${request.population.tool}:${Boolean(request.previousResult)}`, async (t) => {
       let stack;
       const invalid = plan({ intent: 'rota', language: 'tr', request, additionalRequests: [additional] });
-      const { result } = await turn(t, [invalid, input => {
+      const rounds = [invalid, input => {
         assert.match(JSON.stringify(input.messages.filter(message => message.role === 'tool')), /\$\.previousResult:unavailable/);
         assert.equal(stack.db.aiToolLog?.length || 0, 0);
         return invalid;
-      }, invalid], { user: 'Radar iş paketi ve önceki sonuç sayısı', setup: value => { stack = value; },
+      }, invalid];
+      const { result } = await turn(t, prior ? rounds : [invalid], { user: 'Radar iş paketi ve önceki sonuç sayısı', setup: value => { stack = value; },
         previousResult: prior ? { scope: { type: 'task', taskIds: [TASKS.OVERDUE] }, entries: [{}] } : null });
       assert.equal(result.stats.attempted, 0);
-      assert.equal(result.outcome, 'failed');
+      assert.equal(stack.db.aiToolLog?.length || 0, 0);
+      assert.deepEqual(result.evidence, []);
+      assert.equal(result.outcome, prior ? 'failed' : 'clarification');
     });
   }
 });

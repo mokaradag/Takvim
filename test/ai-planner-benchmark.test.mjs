@@ -471,6 +471,25 @@ test('4C izin girdisi altından bağımsızdır; puanlı ve tanısal turlar ayn�
   }
 });
 
+test('4C §12.5 metin izni sözleşmesi açık vaka girdisidir; altın izin açmaz', async () => {
+  const documentation = readFileSync(new URL('../docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md', import.meta.url), 'utf8');
+  const section = documentation.split('### 12.5 ')[1].split('### 12.6 ')[0];
+  assert.match(section, /input\.allowedTextFields/);
+  assert.doesNotMatch(section, /yalnızca altın sözleşmesi bunu gerektiren/);
+  const loaded = loadPlannerBenchmark();
+  const c = loaded.cases.find(item => item.id === 'tr-001');
+  const args = answerPlan(c, loaded.referenceDate);
+  args.request.population.textFields = ['description'];
+  const run = testCase => planCase({ testCase, model: scriptedModel(args), adviceFor: unavailable, now: loaded.now, catalog });
+  const gold = { groups: [{ any: [{ textFields: ['description'] }] }] };
+  const closed = await run({ ...c, gold });
+  assert.equal(closed.outcome, 'clarification');
+  assert.equal(closed.plan, undefined);
+  const opened = await run({ ...c, gold: {}, input: { allowedTextFields: ['description'] } });
+  assert.equal(opened.outcome, 'planned');
+  assert.deepEqual(opened.plan.requests[0].population.textFields, ['description']);
+});
+
 test('4C zorunlu kimlikler kapalıdır; eksik ya da değiştirilmiş 19 ek vaka kabul edilmez', () => {
   for (const mutate of [(d) => d.supplementary.pop(), (d) => d.supplementary[0].id = 'pl-020',
     (d) => d.supplementary[1].id = d.supplementary[0].id]) {

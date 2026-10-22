@@ -1030,6 +1030,39 @@ test('4C takip: önceki küme güncel görünürlük ve proje kökenini atlayama
   assert.ok(!stack.db.aiToolLog.slice(before).some(entry => entry.query === 'task-facts'));
 });
 
+test('4C takip: eksik önceki küme açıklamayla kapanır; yeni soru taze doğrulanır', async (t) => {
+  for (const language of ['tr', 'en']) await t.test(language, async (t) => {
+    const stack = groundedStack(t);
+    const logs = captureConsole(t);
+    const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
+    const declare = request => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'rota', language, request } }] });
+    const question = language === 'tr' ? 'Bana atanan kaç görev var?' : 'How many tasks are assigned to me?';
+    stack.provider.enqueue(declare({ ...request, previousResult: true }));
+    const before = stack.db.aiToolLog?.length || 0;
+    const first = doneOf(await sendTurn({ turnId: randomUUID(), message: question }));
+    assert.equal(first.assistantMessage.finishReason, 'clarification');
+    assert.deepEqual(first.assistantMessage.evidence, []);
+    assert.equal(stack.db.aiToolLog?.length || 0, before);
+    assert.equal(stack.db.aiMessageEvidence.length, 0);
+    assert.equal(stack.provider.calls.length, 1, 'kayıp gönderge onarımla ya da Derin devriyle genişletilemez');
+    assert.match(first.assistantMessage.content, language === 'tr' ? /adını veya kodunu/ : /name or code/);
+    const decisions = aiTelemetrySnapshot().planner.decisions;
+    assert.equal(decisions.clarify, 1);
+    assert.equal(Object.values(decisions).reduce((sum, count) => sum + count, 0), 1);
+    assert.equal(logs.filter(line => line.includes('AI_GROUNDED_TURN')).length, 1);
+    assert.ok(!logs.join('\n').includes(question));
+    stack.provider.enqueue(declare(request));
+    const second = doneOf(await sendTurn({ turnId: randomUUID(), conversationId: first.conversation.id, expectedSequence: 2, message: question }));
+    assert.equal(second.assistantMessage.finishReason, 'stop');
+    assert.ok(second.assistantMessage.evidence.length > 0);
+    assert.ok(stack.db.aiToolLog.slice(before).some(entry => entry.query === 'task-facts'));
+    const evidence = JSON.parse(stack.db.aiMessageEvidence.at(-1).EvidenceJson);
+    assert.equal(evidence.data.filters.assignee, 'me');
+    assert.equal(evidence.data.previousResult, undefined);
+    assert.equal(evidence.scope.previousResult, undefined);
+  });
+});
+
 test('4C takip: unavailable reddi önceki küme bağını silerek onarım izni vermez', async (t) => {
   for (const combination of ['entity', 'multipart', 'missing_scope']) for (const repair of ['false', 'omitted']) {
     await t.test(`${combination}:${repair}`, async (t) => {
@@ -1050,10 +1083,15 @@ test('4C takip: unavailable reddi önceki küme bağını silerek onarım izni v
       stack.provider.enqueue(declare(original), declare(attempted), declare(attempted));
       const done = doneOf(await sendTurn({ turnId: randomUUID(), ...(prior ? { conversationId: prior.conversationId, expectedSequence: 2 } : {}),
         message: `Önceki görevlerin sayısı ${PROJECTS.FULL}` }));
-      assert.equal(done.assistantMessage.finishReason, 'grounding_failed');
+      assert.equal(done.assistantMessage.finishReason, prior ? 'grounding_failed' : 'clarification');
       assert.deepEqual(done.assistantMessage.evidence, []);
       assert.equal(stack.db.aiToolLog?.length || 0, before);
       assert.equal(stack.db.aiMessageEvidence.length, saved);
+      if (!prior) {
+        assert.equal(stack.provider.calls.length - calls, 1, 'olmayan önceki küme için kapsamı düşüren onarım denenmez');
+        assert.match(done.assistantMessage.content, /adını veya kodunu/);
+        return;
+      }
       const replies = JSON.stringify(stack.provider.calls.slice(calls).flatMap(call => call.messages.filter(message => message.role === 'tool')));
       assert.match(replies, /\$\.previousResult:unavailable/);
       assert.match(replies, /repairScope/);

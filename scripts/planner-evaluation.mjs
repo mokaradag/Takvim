@@ -305,8 +305,7 @@ async function planCase({ testCase, model = null, runTurn = null, adviceFor, now
   const rounds = [];
   let captured = null;
   const options = {
-    // "Notlar ve iletiler" açık: planlayıcı serbest metin isteyen soruda da planıyla değerlendirilir (kapalıyken
-    // sunucunun sabit uyarısı ayrı sınamada).
+    // Korumalı metin izni yalnızca açık vaka girdisidir; altın etiket izin açmaz.
     messages: built.messages, catalog, context: createToolTurnContext({ sicil: EVALUATION_SICIL, now }),
     allowedTextFields: [...(testCase.input?.allowedTextFields || [])],
     onText: async () => {}, deferDisclosure: true, escalation: false,

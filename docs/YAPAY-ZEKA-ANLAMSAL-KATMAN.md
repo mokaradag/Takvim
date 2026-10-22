@@ -1340,6 +1340,9 @@ Planın tamamı doğrulanmadan yetki/veri okuması başlamaz. Eski kanıtın dö
 mevcut denetimden geçmezse okuma kapalı kalır. Yeni konuşma, araya giren başka yanıt, bozuk ya da
 kayıpsız saklanamayan kapsam gönderge sağlamaz. Önceki asistan metni güncel kanıt değildir;
 zamir/anahtar sözcük tanıma yoktur. Yeni alan mevcut monoton düzeltme eşitliğinde korunur.
+Gönderge yokken `previousResult: true` bildirimi veri okumayan `missing_referent` açıklamasıyla
+biter; bayrak silinerek geniş okuma yapılmaz. Kullanıcının yeniden yazdığı tam soru sonraki
+turda eski yürütme durumu taşınmadan olağan plan doğrulamasından geçer.
 
 ### 12.3 Sunucu yönergesi
 
@@ -1366,7 +1369,7 @@ yapılandırılmış nedeni, mevcut `TIMEOUT` sayacına normalleştirilir; diğe
 - Her vaka **üretimdeki planlama sınırından** geçer: sunucu bağlamı,
   `semanticPlanningAdvice`, kayıt defteri araçları ve `rota_plan`,
   `runGroundedTurn` döngüsü (düzeltmeler dâhil). İlk SQL'den hemen önce tur
-  durur; Rota verisi okunmaz. Korumalı metin yalnızca altın sözleşmesi bunu gerektiren vakalarda açıktır; olağan sorularda kapalıdır.
+  durur; Rota verisi okunmaz. Korumalı metin yalnızca vakanın açık `input.allowedTextFields` girdisinde verilen alanlar için açıktır (altın etiketten türetilmez); olağan sorularda kapalıdır.
 - Model kaynağı: `--model-command` (stdin `{ messages, tools, toolChoice }`,
   stdout `{ text, toolCalls, finishReason, usage, models, thinking: "off" }`) ya da `--model live`
   (ağ geçidinin `chat.tools` oturumu). Anlamsal kaynak: `--semantic
