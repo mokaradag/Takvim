@@ -531,6 +531,7 @@ function printReport(run, flags) {
   }
   const lines = [`# Planlayıcı değerlendirmesi`, '', `Kıyas: ${summary.benchmark} · referans gün ${summary.referenceDate} · geçiş ${summary.passes}`,
     `Model: beklenen ${run.qualification.expectedModel} · gözlenen ${summary.models.join(', ') || '—'} · anlamsal ${summary.semantic.mode} · kapı ${summary.gatePassed ? 'GEÇTİ' : 'KALDI'}`,
+    ...(summary.semanticUnavailable.length ? [`Anlamsal danışmanlık yok (kapıyı düşürür): ${summary.semanticUnavailable.length} kayıt — ${summary.semanticUnavailable.slice(0, 20).join(', ')}`] : []),
     `Zayıf model hedefi: ${WEAK_PLANNER_MODEL}`, ''];
   for (const pass of summary.byPass) {
     lines.push(`## Geçiş ${pass.pass}: ${pass.correct}/${pass.total} doğru (answer ${pass.byExpect.answer.correct}/${pass.byExpect.answer.total}, clarify ${pass.byExpect.clarify.correct}/${pass.byExpect.clarify.total}, abstain ${pass.byExpect.abstain.correct}/${pass.byExpect.abstain.total}, general ${pass.byExpect.general.correct}/${pass.byExpect.general.total}; kanonik ${pass.canonical.correct}/${pass.canonical.total}, ek ${pass.supplementary.correct}/${pass.supplementary.total})`);

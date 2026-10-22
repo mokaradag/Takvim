@@ -9,7 +9,7 @@ import test from 'node:test';
 import { setImmediate as immediate } from 'node:timers/promises';
 import { captureConsole, createAiStack, readSse, sendTurn, turnRequest, turnsRoute } from './helpers/aiStack.mjs';
 import { AYSE, MEHMET, NOW, PROJECTS, rotaToolSeed, TASKS } from './helpers/aiToolFixtures.mjs';
-import { declared } from './helpers/evidenceScenario.mjs';
+import { declared, systemText } from './helpers/evidenceScenario.mjs';
 
 const { GROUNDING_FAILURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
@@ -87,8 +87,8 @@ test('a declared synthesis request is finalized once by Deep thinking with the s
   assert.deepEqual(handedOver.map((result) => [result.ok, result.evidenceId]), [[true, 'R1']]);
   assert.ok(handedOver[0].data.tasks.some((row) => row.title === NAMED), 'Derin düşünme kanıtın değerlerini görür');
   // Tek düzeltme bütçesi Standart modelde harcanmaz: aynı sorunu devredilen tur düzeltir.
-  assert.doesNotMatch(stack.provider.calls[1].messages[0].content, /SUNUCU DOĞRULAMASI/);
-  assert.match(stack.provider.calls[2].messages[0].content, /SUNUCU DOĞRULAMASI/);
+  assert.doesNotMatch(systemText(stack.provider.calls[1].messages), /SUNUCU DOĞRULAMASI/);
+  assert.match(systemText(stack.provider.calls[2].messages), /SUNUCU DOĞRULAMASI/);
   assert.ok(queriesBeforeDeep > 0);
   assert.equal(toolQueries(stack), queriesBeforeDeep, 'araç SQL’i Derin düşünmede yeniden çalışmaz');
   const done = doneOf(response);

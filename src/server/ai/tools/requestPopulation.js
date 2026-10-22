@@ -386,6 +386,8 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
   if (operation !== 'value' && !population.collection) {
     const fitting = listCollections(tool, request.metrics, shaped);
     if (fitting.length === 1) population.collection = fitting[0];
+    // Aracın bu varlık biçimindeki tek satır koleksiyonu belirsiz değildir: sunucu varsayılanıdır.
+    else if (!fitting.length && shaped.length === 1) population.collection = shaped[0];
   }
   // Planın nüfus çağrıları: istekte verilmeyen koşul ve boyutlar onlardan alınır; çelişki ve belirsizlik reddedilir.
   const own = calls.filter((call) => call.name === tool);

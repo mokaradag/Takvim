@@ -184,7 +184,7 @@ function referenceIdentity(reference) {
  * @param {{ candidates: object[], selected: object|null }|null} [options.clarification]
  *   Önceki turun açıklama adayları ve sunucunun kullanıcının seçimine bağladığı aday.
  */
-export function createToolScope({ today = businessDate(new Date()), userText = '', allowedTextFields = null, clarification = null } = {}) {
+export function createToolScope({ today = businessDate(new Date()), userText = '', allowedTextFields = null, clarification = null, referents = [] } = {}) {
   const ids = { tasks: new Set(), projects: new Set(), wbs: new Set(), baselines: new Set(), people: new Set() };
   const roots = new Map();
   let established = false;
@@ -213,8 +213,18 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
     return Boolean(needle) && (trustedTexts.has(needle) || phrasePositions(userNeedle, needle).length > 0);
   }
 
+  // Önceki doğrulanmış görev sonucunun satırları: yalnızca bildirimin açıkça başvurduğu satır kimlik olur.
+  const referenced = new Set();
+  function referent(row) {
+    const id = Number.isSafeInteger(row) && row >= 1 ? referents[row - 1] : null;
+    if (!id) return null;
+    referenced.add(String(id));
+    return String(id);
+  }
+
   function identityTrusted(population, id) {
     if (bound && referenceIdentity(bound).join(':') === `${population}:${id}`) return true;
+    if (population === 'tasks' && referenced.has(String(id))) return true;
     if (population === 'people') {
       const text = containmentText(userText);
       return text === String(id) || new RegExp(`(?:^| )sicil(?:i|li)? ${id}(?: |$)|(?:^| )${id} sicil(?:i|li)?(?: |$)`).test(text);
@@ -226,6 +236,7 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
   return Object.freeze({
     textTrusted,
     identityTrusted,
+    referent,
     /** Önceki açıklamada kullanıcının numarasıyla seçtiği ve sunucunun bağladığı aday. */
     boundSelection() {
       if (!named.length) return bound ? { ...bound } : null;

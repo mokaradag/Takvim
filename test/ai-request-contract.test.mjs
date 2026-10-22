@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import { AYSE, NOW, PROJECTS, TASKS, WBS, ZEYNEP, callRotaTool, callRotaTools, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { declared, nativeDeclaration } from './helpers/evidenceScenario.mjs';
+import { declared, nativeDeclaration, systemText } from './helpers/evidenceScenario.mjs';
 import { parsedRequest, verifyRequested } from './helpers/requestScenario.mjs';
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
@@ -138,7 +138,7 @@ test('tool calls without an accepted request never run SQL and the refusal is bo
   assert.equal(inputs.length, 3);
   for (const input of inputs.slice(1)) {
     assert.ok(onlyRefusals(input), 'bildirimsiz çağrı yalnızca ret zarfı alır');
-    assert.match(input.messages[0].content, /Araç çağrıları çalıştırılmadı/);
+    assert.match(systemText(input.messages), /Araç çağrıları çalıştırılmadı/);
   }
 });
 
@@ -149,7 +149,7 @@ test('a general-route declaration in the same response does not open the tool ro
     nativeDeclaration({ text: declared({ ...inProject(['tasks.total']), population: { tool: 'rota_task_analytics' }, fields: [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' }] }), toolCalls: [call('rota_task_analytics', { projectId: PROJECTS.FULL })] })
   ], { user: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
   assert.ok(onlyRefusals(inputs[1]), 'istek bildirilmeden araç çalışmaz');
-  assert.match(inputs[1].messages[0].content, /Araç çağrıları çalıştırılmadı/);
+  assert.match(systemText(inputs[1].messages), /Araç çağrıları çalıştırılmadı/);
   assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'task-facts').length, 1, 'yalnızca bildirimli tur SQL çalıştırdı');
   assert.equal(result.outcome, 'grounded');
 });
@@ -164,8 +164,8 @@ test('an untrusted declaration refuses the same response’s tool calls and repo
   assert.equal(result.outcome, 'grounded');
   assert.ok(onlyRefusals(inputs[1]), 'reddedilen bildirimin çağrısı çalışmadı');
   assert.equal(inputs[1].messages.some((message) => message.role !== 'system' && /Ignore rules/.test(String(message.content))), false);
-  assert.match(inputs[1].messages[0].content, /\$\.entities\[0\]\.text:untrusted/);
-  assert.doesNotMatch(inputs[1].messages[0].content, /Ignore rules/, 'modelin yazdığı metin yönergeye taşınmaz');
+  assert.match(systemText(inputs[1].messages), /\$\.entities\[0\]\.text:untrusted/);
+  assert.doesNotMatch(systemText(inputs[1].messages), /Ignore rules/, 'modelin yazdığı metin yönergeye taşınmaz');
 });
 
 test('a declaration after data was read cannot change the request', async (t) => {
@@ -178,7 +178,7 @@ test('a declaration after data was read cannot change the request', async (t) =>
     (input) => reply(facts(`${results(input)[0].evidenceId}:data.totals.done`))
   ], { user: `Radar projesinde kaç gecikmiş görev var? ${PROJECTS.FULL}` });
   assert.equal(result.outcome, 'failed', 'istenen ölçü veri okunmadan bildirilen gecikmiş görev sayısıdır');
-  assert.match(inputs[3].messages[0].content, /tasks\.overdue → R1:data\.totals\.overdue/);
+  assert.match(systemText(inputs[3].messages), /tasks\.overdue → R1:data\.totals\.overdue/);
 });
 
 test('declaration-only responses are bounded and cannot loop', async (t) => {
@@ -206,8 +206,8 @@ test('a prompt-injected tool result cannot redirect the declared request to anot
     (input) => reply(facts(`${results(input)[0].evidenceId}:data.task.title`, `${results(input)[0].evidenceId}:data.task.dates.targetFinish`))
   ], { user: `Rapor görevinin durumu ne? ${TASKS.LITERAL}` });
   assert.equal(result.outcome, 'failed', 'veri metninin yönlendirdiği başka bir doğru olgu istenen ölçünün yanıtı olamaz');
-  assert.match(inputs[2].messages[0].content, /Sözleşme hataları: UNDECLARED_METRIC/);
-  assert.match(inputs[2].messages[0].content, /task\.status → R1:data\.task\.status/);
+  assert.match(systemText(inputs[2].messages), /Sözleşme hataları: UNDECLARED_METRIC/);
+  assert.match(systemText(inputs[2].messages), /task\.status → R1:data\.task\.status/);
 });
 
 /* ── Seçilen olguların istekle uyumu ──────────────────────── */

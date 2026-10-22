@@ -18,7 +18,7 @@ import test from 'node:test';
 import { assistantReadiness, captureConsole, createAiStack, listAssistantConversations, sendTurn } from './helpers/aiStack.mjs';
 import { startFakeOpenAiCompatibleServer } from './helpers/fakeOpenAiCompatibleServer.mjs';
 import { AYSE, callRotaTool, LEAD, NOW, PROJECTS, TASKS, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { declared } from './helpers/evidenceScenario.mjs';
+import { declared, systemText } from './helpers/evidenceScenario.mjs';
 import { parsedRequest } from './helpers/requestScenario.mjs';
 
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
@@ -299,8 +299,8 @@ test('an invalid legacy declaration gets a schema-derived repair hint, runs no S
     { type: 'answer', text: declared({ ...ONGOING_COUNT, filters: { status: 'in_progress', assignee: 'me' } }) },
     { type: 'script', respond: (call) => {
       sqlAtRepair = sqlCalls(stack);
-      assert.match(call.messages[0].content, /Bildirim sorunları: \$\.filters\.status:type/);
-      assert.match(call.messages[0].content, /Beklenen biçim: filters\.status: string dizisi todo\|in_progress\|done/);
+      assert.match(systemText(call.messages), /Bildirim sorunları: \$\.filters\.status:type/);
+      assert.match(systemText(call.messages), /Beklenen biçim: filters\.status: string dizisi todo\|in_progress\|done/);
       return nativePlan(ONGOING_COUNT, [{ name: 'rota_task_search', arguments: ONGOING_MINE }]);
     } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Kaç devam eden görevim var?' })).assistantMessage;
@@ -602,7 +602,7 @@ test('a recorded weak-model plan with a wrong collection is repaired from regist
   stack.provider.enqueue(recordedAnalyticsPlan,
     { type: 'script', respond: (call) => {
       sqlAtRepair = sqlCalls(stack) - queriesBefore;
-      assert.match(call.messages[0].content, /population\.collection \(rota_task_analytics\): overdueAging\.buckets\|groups; value isteğinde gerekmez/);
+      assert.match(systemText(call.messages), /population\.collection \(rota_task_analytics\): overdueAging\.buckets\|groups; value isteğinde gerekmez/);
       const fixed = structuredClone(recordedAnalyticsPlan);
       delete fixed.calls[0].arguments.request.population.collection;
       return fixed;
@@ -632,8 +632,8 @@ test('a declared aggregate that the population tool cannot carry is refused befo
     { name: 'rota_task_search', arguments: { ...MINE, limit: 1 } }] },
     { type: 'script', respond: (call) => {
       sqlAtRepair = sqlCalls(stack) - queriesBefore;
-      assert.match(call.messages[0].content, /Bildirim sorunları: \$\.metrics\[0\]:population/);
-      const [refusedCall, ...refusals] = call.messages.slice(-3);
+      assert.match(systemText(call.messages), /Bildirim sorunları: \$\.metrics\[0\]:population/);
+      const [refusedCall, ...refusals] = call.messages.slice(call.messages.findLastIndex((message) => message.role === 'assistant')).filter((message) => message.role !== 'system');
       assert.deepEqual(refusedCall.toolCalls.map((item) => item.name), ['rota_plan', 'rota_task_search'], 'model reddedilen kendi planını görür');
       const [plan, sibling] = refusals.map((message) => JSON.parse(message.content));
       assert.deepEqual(plan.error.details, ['$.metrics[0]:population']);

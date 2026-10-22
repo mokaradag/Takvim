@@ -63,14 +63,17 @@ function roundLimitNote() {
   return 'SUNUCU DOĞRULAMASI: Araç çağrı sınırına ulaşıldı. Yeni araç çağırma; yalnızca eldeki kanıtlarla yanıtla ve eksik kalan kısmı açıkça belirt.';
 }
 
+/**
+ * Sunucu notu dökümün SONUNA ayrı sistem iletisi olarak eklenir: sistem yönergesi ve araç şemaları tur boyunca ve
+ * turlar arasında bayt bayt aynı kalır (sağlayıcı önek önbelleği; düzeltme turu öneki yeniden işletmez).
+ */
 function appendServerInstruction(transcript, instruction) {
-  const systemIndex = transcript.findIndex((message) => message.role === 'system');
-  if (systemIndex < 0) {
-    transcript.unshift({ role: 'system', content: instruction });
-    return;
-  }
-  const current = transcript[systemIndex];
-  transcript[systemIndex] = { ...current, content: `${current.content}\n\n${instruction}` };
+  transcript.push({ role: 'system', content: instruction });
+}
+
+/** Tur başındaki not kullanıcının güncel sorusundan hemen önce durur; soru son ileti kalır. */
+function noteBeforeQuestion(transcript, content) {
+  transcript.splice(Math.max(0, transcript.findLastIndex((message) => message.role === 'user')), 0, { role: 'system', content });
 }
 
 function toolMessageBody(message) {
@@ -88,6 +91,9 @@ function safeToolCallsForTranscript(toolCalls, toolMessages) {
     return body?.ok === true ? call : { ...call, arguments: '{}' };
   });
 }
+
+/** Karar öncesi turların araç seçimi: yalnızca türlü plan aracı (adlı işlev seçimi). */
+const PLAN_TOOL_CHOICE = Object.freeze({ name: 'rota_plan' });
 
 /** Proje kimliğiyle daraltılabilen araçlar: ad çözümünden sonra erişilebilir (kapsam sınırı yine uygulanır). */
 const PROJECT_SCOPED_FOLLOW_UPS = Object.freeze(['rota_activity_search', 'rota_recurrence_inspect', 'rota_workload_summary', 'rota_schedule_requests', 'rota_assignment_requests']);
@@ -348,7 +354,7 @@ function acceptDeclaration(turn, declaration, route) {
   try {
     request = parseRequestDeclaration(raw, {
       textTrusted: turn.containment.textTrusted,
-      identityTrusted: turn.containment.identityTrusted,
+      identityTrusted: turn.containment.identityTrusted, referent: turn.containment.referent,
       today: turn.context.today
     });
   } catch (error) {
@@ -432,7 +438,7 @@ function repairSemantic(turn, raw, index, calls = []) {
     return Object.fromEntries(Object.entries(value).filter(([, item]) => item != null
       && !(Array.isArray(item) && !item.length) && !(typeof item === 'object' && !Object.keys(item).length)).map(([key, item]) => [key, clean(item)]));
   };
-  const parsed = parseRequestDeclaration(clean(raw), { textTrusted: turn.containment.textTrusted, identityTrusted: turn.containment.identityTrusted,
+  const parsed = parseRequestDeclaration(clean(raw), { textTrusted: turn.containment.textTrusted, identityTrusted: turn.containment.identityTrusted, referent: turn.containment.referent,
     today: turn.context.today, priorParts: index });
   const completion = completeRequest(parsed, calls, { today: turn.context.today, allowedTextFields: turn.allowedTextFields });
   const request = completion.request;
@@ -756,7 +762,7 @@ function prepareParts(turn, requests, primary) {
     const at = (details) => details.map((detail) => `$.additionalRequests[${index - 1}]${String(detail).replace(/^\$(?:\.request(?!\w))?/, '')}`);
     let request;
     try {
-      request = parseRequestDeclaration(requests[index], { textTrusted: turn.containment.textTrusted, identityTrusted: turn.containment.identityTrusted,
+      request = parseRequestDeclaration(requests[index], { textTrusted: turn.containment.textTrusted, identityTrusted: turn.containment.identityTrusted, referent: turn.containment.referent,
         today: turn.context.today, priorParts: index });
     } catch (error) {
       if (error?.code !== TOOL_ERROR_CODES.INVALID_ARGUMENTS) throw error;
@@ -944,11 +950,8 @@ function requestCallValidator(turn, request, reads = null) {
 function clearAcceptedNote(turn) {
   if (!turn.acceptedNote) return;
   for (const transcript of [turn.transcript, turn.baseline]) {
-    transcript.forEach((message, index) => {
-      if (message.role === 'system' && message.content.includes(turn.acceptedNote)) {
-        transcript[index] = { ...message, content: message.content.replace(`\n\n${turn.acceptedNote}`, '') };
-      }
-    });
+    const index = transcript.findIndex((message) => message.role === 'system' && message.content === turn.acceptedNote);
+    if (index >= 0) transcript.splice(index, 1);
   }
   turn.acceptedNote = null;
 }
@@ -996,12 +999,13 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
   // Kullanıcının bu turdaki iletisi (açıklama yanıtında önceki sorusu da) arama metni için güvenilir niyettir.
   const userText = [clarification?.selected ? clarification.question : null, currentUser?.content].filter(Boolean).join('\n');
   const advice = planning || { state: 'unavailable', candidates: [], reason: 'UNAVAILABLE' };
+  const prior = previousResult && taskResultScope(previousResult.scope) && previousResult.entries?.length ? previousResult : null;
   const turn = {
     catalog,
     // Anlamsal danışmanlık yalnızca planlayıcıya aday sırası notudur; araç kümesi ve sırası kayıt defterinindir.
     planning: Object.freeze({ state: advice.state, candidates: Object.freeze([...advice.candidates]), reason: advice.reason }),
     onPlanned,
-    previousResult: previousResult && taskResultScope(previousResult.scope) && previousResult.entries?.length ? previousResult : null,
+    previousResult: prior,
     decision: null,
     decisionCounted: false,
     readStarted: false,
@@ -1033,7 +1037,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     allowedTextFields,
     callId: createCallIds(),
     declarationsLeft: DECLARATION_ROUNDS,
-    containment: createToolScope({ today: context.today, userText, allowedTextFields, clarification }),
+    containment: createToolScope({ today: context.today, userText, allowedTextFields, clarification, referents: prior?.scope.taskIds || [] }),
     // Çalışan döküm ve Derin düşünmeye devredilecek temiz döküm (düzeltme notları olmadan).
     transcript: [...messages],
     baseline: [...messages],
@@ -1069,21 +1073,15 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     }
   });
   if (turn.previousResult) {
-    const note = { role: 'system', content: `Önceki doğrulanmış Rota sonuç kapsamı: ${JSON.stringify({ type: 'task', count: turn.previousResult.scope.taskIds.length })}. Bu yalnızca göndergedir, güncel kanıt değildir. Kullanıcının sorusu bu kümeye ilişkinse request.previousResult=true ile rota_task_search (görev özellikleri/süzgeç) ya da rota_task_analytics (sayı) bildir; kimlik/önceki süzgeç kopyalama. Yeni veya adı verilmiş kayıt sorusunda kullanma. Önceki asistan metninden veri çıkarma.` };
-    for (const transcript of [turn.transcript, turn.baseline]) {
-      transcript.splice(Math.max(0, transcript.findLastIndex((message) => message.role === 'user')), 0, note);
-    }
+    const note = { role: 'system', content: `Önceki doğrulanmış Rota sonuç kapsamı: ${JSON.stringify({ type: 'task', count: turn.previousResult.scope.taskIds.length })}. Bu yalnızca göndergedir, güncel kanıt değildir. Kullanıcının sorusu bu kümeye ilişkinse ("bunlar", "bunlardan", "onun") request.previousResult=true ile rota_task_search (görev özellikleri/süzgeç) ya da rota_task_analytics (sayı) bildir; kimlik/önceki süzgeç kopyalama. Soru kümenin TEK bir görevine sıra ile başvuruyorsa ("ilk görev", "2. görev"; tek görevli kümede "o görev") previousResult yazma; entities:[{"type":"task","previous":<1 tabanlı sıra>}] ile o görevin aracını (ör. öncül/ardıl için rota_dependency_inspect, alanları için rota_task_detail) bildir. Yeni veya adı verilmiş kayıt sorusunda (ör. başka bir kişi) kullanma; önceki sorunun koşullarını yeni kayda uygula. Önceki asistan metninden veri çıkarma.` };
+    for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note.content);
   }
-  if (clarification) instruct(turn, selectionInstruction(clarification));
-  if (turn.planning.candidates.length) {
-    const note = { role: 'system', content: plannerCandidateNote(turn.planning.candidates) };
-    for (const transcript of [turn.transcript, turn.baseline]) {
-      transcript.splice(Math.max(0, transcript.findLastIndex((message) => message.role === 'user')), 0, note);
-    }
-  }
-  if (!allowedTextFields.length) {
-    instruct(turn, 'Bu turda kullanıcı kayıtlı serbest metni (açıklama, talep/karar iletisi, değişiklik metni) açmadı: textFields kullanma. Soru bu metinleri gerektiriyorsa yine planla; sunucu veri okumadan kullanıcıdan "Notlar ve iletiler" anahtarını açmasını ister.');
-  }
+  const notes = [
+    clarification ? selectionInstruction(clarification) : null,
+    turn.planning.candidates.length ? plannerCandidateNote(turn.planning.candidates) : null,
+    allowedTextFields.length ? null : 'Bu turda kullanıcı kayıtlı serbest metni (açıklama, talep/karar iletisi, değişiklik metni) açmadı: textFields kullanma. Soru bu metinleri gerektiriyorsa yine planla; sunucu veri okumadan kullanıcıdan "Notlar ve iletiler" anahtarını açmasını ister.'
+  ].filter(Boolean);
+  for (const note of notes) for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note);
   return turn;
 }
 
@@ -1209,9 +1207,18 @@ async function revalidate(turn, disclosureSignal = turn.session.signal) {
 }
 
 /** Tek anlamlı görev listesinin dönen satırları; model metni ve seçtiği olgular kimlik kaynağı değildir. */
+/** Tek görevin araçları: doğrulanmış yanıtın konusu tek görevse "onun …" takibi o göreve başvurur. */
+const SINGLE_TASK_TOOLS = Object.freeze(['rota_task_detail', 'rota_dependency_inspect', 'rota_recurrence_inspect']);
+
 function completedResultScope(turn, verdict) {
-  if (verdict.kind !== 'grounded' || turn.partCount !== 1 || !['list', 'rank'].includes(turn.request?.operation)
-    || turn.request.population?.tool !== 'rota_task_search') return null;
+  if (verdict.kind !== 'grounded' || turn.partCount !== 1) return null;
+  const tool = turn.request?.population?.tool;
+  if (SINGLE_TASK_TOOLS.includes(tool) && turn.request.entities.length === 1 && turn.request.entities[0].type === 'task') {
+    const subjects = new Set(turn.ledger.requestEntries().filter((entry) => verdict.citedIds.includes(entry.id) && entry.tool === tool)
+      .map((entry) => (entry.payload?.entity?.type === 'task' ? entry.payload.entity.id : null)));
+    return subjects.size === 1 && !subjects.has(null) ? taskResultScope({ type: 'task', taskIds: [...subjects] }) : null;
+  }
+  if (!['list', 'rank'].includes(turn.request?.operation) || tool !== 'rota_task_search') return null;
   const taskIds = new Set();
   for (const entry of turn.ledger.requestEntries()) {
     if (!verdict.citedIds.includes(entry.id) || entry.tool !== 'rota_task_search') continue;
@@ -1500,7 +1507,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       return false;
     }
     // Olmayan gönderge onarımla silinmez; yeni tam soru ayrı turda yeniden doğrulanır.
-    if (!turn.previousResult && details.includes('$.previousResult:unavailable')) {
+    if (!turn.previousResult && details.some((detail) => detail === '$.previousResult:unavailable' || /^\$\.entities\[\d+\]\.previous:unavailable$/.test(String(detail)))) {
       missingPreviousResult = { intent: PLANNER_INTENTS.CLARIFY, language: rejectedPlan?.language,
         clarify: { reason: 'missing_referent' } };
       return false;
@@ -1565,7 +1572,8 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
         // Veri okunmadan araç kümesi kayıt defterinin tamamıdır ve sırası sabittir (önek önbelleği soruya göre
         // bozulmaz); anlamsal danışmanlık yalnızca sistem notundaki aday sırasıdır.
         tools: turn.decision === PLANNER_INTENTS.GENERAL ? [] : !frozen() ? [typedPlanningTool(catalog), ...catalog] : turn.permittedTools ? catalog.filter((tool) => turn.permittedTools.has(tool.name)) : catalog,
-        toolChoice: canCallTools ? 'auto' : 'none',
+        // Karar verilmeden (düzeltme turları dâhil) yanıt yalnızca plan çağrısı olabilir: zayıf model düz metne kaçamaz.
+        toolChoice: !canCallTools ? 'none' : !frozen() && !turn.decision ? PLAN_TOOL_CHOICE : 'auto',
         onEvent: async (event) => {
           turn.progress();
           if (event.type === 'thinking') status(ASSISTANT_STREAM_PHASES.THINKING);

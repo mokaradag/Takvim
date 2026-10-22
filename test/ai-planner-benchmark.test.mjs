@@ -569,7 +569,13 @@ test('4C bozuk kayıt raporu TypeError yerine PLANNER_RUN_INVALID verir; anlams�
   assert.match(report.stdout, /general \d+\/\d+/);
   assert.match(report.stdout, /claude-haiku-4-5-20251001/);
   run.records.at(-1).semantic = { state: 'unavailable', candidates: [] };
-  assert.equal(scorePlannerRun(run, loaded).gatePassed, false, 'tek ek vakada bile danışmanlık yoksa kabul yoktur');
+  const lost = scorePlannerRun(run, loaded);
+  assert.equal(lost.gatePassed, false, 'tek ek vakada bile danışmanlık yoksa kabul yoktur');
+  assert.deepEqual(lost.semanticUnavailable, [`1:${run.records.at(-1).case}`], 'kapıyı düşüren danışmanlık kaybı vaka adıyla raporlanır');
+  writeFileSync(file, JSON.stringify(run));
+  const lostReport = spawnSync(process.execPath, ['scripts/planner-evaluation.mjs', 'report', '--run', file], { encoding: 'utf8' });
+  assert.equal(lostReport.status, 1);
+  assert.match(lostReport.stdout, new RegExp(`kapı KALDI[\\s\\S]*Anlamsal danışmanlık yok \\(kapıyı düşürür\\): 1 kayıt — 1:${run.records.at(-1).case}`));
 });
 
 test('4C canlı yol aynı sızıntı ve model denetimini uygular; eksik kullanım yalnızca kayıtlı düşünmesiz rotada sıfırdır', async () => {

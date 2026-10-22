@@ -28,3 +28,8 @@ export function nativeDeclaration(response) {
   if (value?.name !== 'rota_plan' || !value.arguments) return response;
   return { ...response, text: '', toolCalls: [{ id: 'declaration', name: 'rota_plan', arguments: JSON.stringify(value.arguments) }, ...(response.toolCalls || [])] };
 }
+
+/** Modele giden bütün sistem iletileri: sabit yönerge ve dökümün sonuna eklenen sunucu notları. */
+export function systemText(messages) {
+  return messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n\n');
+}

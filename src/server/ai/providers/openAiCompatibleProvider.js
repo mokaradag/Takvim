@@ -333,6 +333,13 @@ function wireMessages(messages) {
   });
 }
 
+/** `auto`, `none` ya da sunulan araçlardan birinin zorunlu çağrısı (`{ name }` → OpenAI uyumlu adlı işlev seçimi). */
+function wireToolChoice(toolChoice, tools) {
+  if (toolChoice === 'none') return 'none';
+  if (toolChoice?.name && tools.some((tool) => tool.name === toolChoice.name)) return { type: 'function', function: { name: toolChoice.name } };
+  return 'auto';
+}
+
 function wireTools(tools) {
   return tools.map((tool) => ({
     type: 'function',
@@ -460,7 +467,7 @@ export function createOpenAiCompatibleProvider({
           messages: wireMessages(messages),
           stream: true,
           ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}),
-          ...(withTools ? { tools: wireTools(tools), tool_choice: toolChoice === 'none' ? 'none' : 'auto' } : {})
+          ...(withTools ? { tools: wireTools(tools), tool_choice: wireToolChoice(toolChoice, tools) } : {})
         })
       }, signal);
       if (!response.ok) {

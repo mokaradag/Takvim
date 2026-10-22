@@ -81,7 +81,8 @@ export function requestSchema() {
     properties: {
       previousResult: { type: 'boolean', description: 'Yalnızca sunucunun sağladığı hemen önceki görev sonuç kümesine başvurur. Kimlik verme; sunucu kümeyi güncel yetkiyle yeniden okur. Tek bölümlü rota_task_search veya rota_task_analytics isteğinde kullanılır.' },
       operation: { type: 'string', enum: [...REQUEST_OPERATIONS] },
-      metrics: { type: 'array', minItems: 1, maxItems: REQUEST_LIMITS.maxMetrics, uniqueItems: true, items: metric },
+      metrics: { type: 'array', minItems: 1, maxItems: REQUEST_LIMITS.maxMetrics, uniqueItems: true, items: metric,
+        description: 'YALNIZCA sorunun istediği ölçüler, fazladan sütun yok. Liste/sıralama: adlandıran alan (task.title, project.name …) + sorunun koşulunu ya da sorulan değeri gösteren alan (gecikme → task.overdueDays; termin/tarih aralığı → task.targetFinish). Durum, öncelik, proje, sorumlu, ilerleme yalnızca soruda geçiyorsa. Sayı sorusu: yalnızca toplam (tasks.total).' },
       layout: { type: 'string', enum: ['auto', 'list', 'table'] },
       reasoning: { type: 'string', enum: ['deterministic', 'synthesis'] },
       population: {
@@ -111,7 +112,8 @@ export function requestSchema() {
           properties: {
             type: { type: 'string', enum: [...REQUEST_ENTITY_TYPES] },
             id: { type: 'string', maxLength: 36, pattern: ID_PATTERN },
-            text: { type: 'string', minLength: 2, maxLength: 120 }
+            text: { type: 'string', minLength: 2, maxLength: 120 },
+            previous: { type: 'integer', minimum: 1, maximum: REQUEST_LIMITS.maxPreviousResultRows, description: 'Yalnızca task: sunucunun hemen önceki doğrulanmış görev sonucundaki 1 tabanlı satır ("ilk görev" = 1, tek görevli sonuçta "o görev" = 1). id/text ile verilmez.' }
           }
         }
       },
@@ -176,7 +178,7 @@ function splitDependents(raw, priorParts) {
   return { raw: { ...raw, entities: placeholder }, dependents, problems };
 }
 
-export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, today, priorParts = 0 }) {
+export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, today, priorParts = 0, referent = null }) {
   if (raw == null) throw invalidArguments(['$.request:required']);
   const split = splitDependents(raw, priorParts);
   const value = parseToolArguments(requestSchema(), JSON.stringify(populationShape(split.raw)));
@@ -192,6 +194,16 @@ export function parseRequestDeclaration(raw, { textTrusted, identityTrusted, tod
   const entities = (value.entities || []).map((entity, index) => {
     const path = `$.entities[${index}]`;
     if (split.dependents.has(index)) return split.dependents.get(index);
+    // Önceki sonuç göndergesi: kimliği yalnızca sunucunun doğruladığı önceki görev kümesinden bağlanır.
+    if (entity.previous != null) {
+      if (entity.type !== 'task' || entity.id != null || entity.text != null) {
+        problems.push(`${path}.previous:invalid`);
+        return null;
+      }
+      const id = referent?.(entity.previous) ?? null;
+      if (id == null) problems.push(`${path}.previous:unavailable`);
+      return Object.freeze({ type: 'task', id, text: null });
+    }
     if ((entity.id == null) === (entity.text == null)) {
       problems.push(`${path}:idOrText`);
       return null;

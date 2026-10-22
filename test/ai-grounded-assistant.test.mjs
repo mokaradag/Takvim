@@ -18,7 +18,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { claimFor, declared, nativeDeclaration, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { claimFor, declared, nativeDeclaration, evidenceReply, systemText } from './helpers/evidenceScenario.mjs';
 import {
   assistantReadiness,
   captureConsole,
@@ -219,14 +219,14 @@ test('atıflı yanıt: araç sonucu kanıt olur, yanıt doğrulanıp tek parça 
   assert.equal(stack.provider.calls.length, 1);
   assert.equal(first.kind, 'tools');
   assert.equal(first.model, STANDARD_TOOL_MODEL);
-  assert.equal(first.toolChoice, 'auto');
+  assert.deepEqual(first.toolChoice, { name: 'rota_plan' });
   // Plan aracı salt okunur araçlarla birlikte sunulur; plan araç şemalarını yinelemez.
   assert.equal(first.tools[0].name, 'rota_plan');
   assert.deepEqual(first.tools.slice(1).map((tool) => tool.name).sort(), rotaToolNames().sort());
   assert.deepEqual([...first.tools[0].parameters.properties.calls.items.properties.name.enum].sort(), rotaToolNames().sort());
   assert.equal(JSON.stringify(first.tools[0]).includes('oneOf'), false);
   assert.equal(first.tools.some((tool) => /sql|execute|update|delete|create/i.test(tool.name)), false);
-  assert.match(first.messages[0].content, /KAYNAK GÖSTERME/);
+  assert.match(systemText(first.messages), /KAYNAK GÖSTERME/);
   assert.equal(first.messages.at(-1).content, `Radar projesinde kaç görev var? ${PROJECTS.FULL}`);
   const result = storedEvidence(stack);
   assert.equal(result.ok, true);
@@ -309,9 +309,9 @@ test('uydurma atıf: "Projede 42 gecikmiş görev var. 【R99】" bir kez düzel
   const repair = stack.provider.calls[2];
   assert.equal(repair.toolChoice, 'none', 'kanıt varken düzeltme yalnızca yeniden yazımdır');
   assert.equal(repair.messages[0].role, 'system');
-  assert.match(repair.messages[0].content, /SUNUCU DOĞRULAMASI/);
-  assert.doesNotMatch(repair.messages[0].content, /R99|42 gecikmiş/);
-  assert.ok(repair.messages.slice(1).filter((message) => message.role === 'system').every((message) => message.content.startsWith('SUNUCU (anlamsal danışmanlık)')), 'ayrı sistem notu yalnızca sunucunun aday sırasıdır');
+  assert.match(systemText(repair.messages), /SUNUCU DOĞRULAMASI/);
+  assert.doesNotMatch(systemText(repair.messages), /R99|42 gecikmiş/);
+  assert.ok(repair.messages.slice(1).filter((message) => message.role === 'system').every((message) => /^(SUNUCU|Bu turda kullanıcı)/.test(message.content)), 'ayrı sistem notları yalnızca sunucu notlarıdır');
   assert.notEqual(repair.messages.at(-1)?.role, 'assistant', 'düzeltme isteği reddedilmiş asistan taslağıyla bitmez');
   assert.equal(response.text.includes('42 gecikmiş'), false, 'doğrulanamayan taslak hiçbir olayda gösterilmez');
   assert.deepEqual(eventsOf(response, 'delta').map((event) => event.data.text), [GROUNDING_FAILURE_TEXT]);
@@ -400,14 +400,14 @@ test('genel sohbeti yalnızca kullanıcı seçebilir; veri kipinde kanıt uyduru
   stack.provider.enqueue({ type: 'answer', text: 'Projede 3 görev var. 【R1】' }, { type: 'answer', text: 'Projede 3 görev var. 【R1】' });
   const fabricated = await sendTurn({ turnId: randomUUID(), message: 'Kaç görev var?' });
   assert.equal(doneOf(fabricated).assistantMessage.content, GROUNDING_FAILURE_TEXT);
-  assert.equal(stack.provider.calls[2].toolChoice, 'auto', 'kanıt yokken düzeltme turunda araç çağrılabilir');
+  assert.deepEqual(stack.provider.calls[2].toolChoice, { name: 'rota_plan' }, 'kanıt yokken düzeltme turunda araç çağrılabilir');
 
   // Rota olgusu sorusunda model araç çağrısını atlarsa atıfsız metin de doğrudan kabul edilmez.
   const before = stack.provider.calls.length;
   stack.provider.enqueue({ type: 'answer', text: 'Atlas projesi gecikiyor.' }, { type: 'answer', text: 'Atlas projesi gecikiyor.' });
   const skipped = await sendTurn({ turnId: randomUUID(), message: 'Atlas projesi gecikiyor mu?' });
   assert.equal(doneOf(skipped).assistantMessage.content, GROUNDING_FAILURE_TEXT);
-  assert.equal(stack.provider.calls[before + 1].toolChoice, 'auto');
+  assert.deepEqual(stack.provider.calls[before + 1].toolChoice, { name: 'rota_plan' });
   assert.equal(skipped.text.includes('Atlas projesi gecikiyor.'), false);
 });
 
@@ -446,7 +446,7 @@ test('araç ön sözü ve iç protokol hiçbir zaman kullanıcıya gösterilmez;
   const refused = stack.provider.calls[1].messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).filter((body) => body.tool !== 'rota_plan');
   assert.ok(refused.length && refused.every((result) => result.ok === false && result.error.code === 'INVALID_ARGUMENTS' && !Object.hasOwn(result, 'data')));
   assert.equal(stack.provider.calls[1].messages.some((message) => String(message.content).includes('Elbette')), false, 'ön söz modele geri taşınmaz');
-  assert.match(stack.provider.calls[1].messages[0].content, /Araç çağrıları çalıştırılmadı/);
+  assert.match(systemText(stack.provider.calls[1].messages), /Araç çağrıları çalıştırılmadı/);
   assert.equal(stack.db.aiToolLog.filter((entry) => entry.query === 'portfolio').length > 0, true);
   const done = doneOf(response);
   assert.equal(after[0], done.assistantMessage.content);
@@ -531,7 +531,7 @@ test('araç turu sınırında eksik liste kabul edilmez ve yeni SQL çalışmaz'
     { type: 'script', respond: () => { afterReads = taskQueries(); return read(2); } }, read(3),
     { type: 'script', respond: (call) => {
       assert.equal(call.toolChoice, 'none');
-      assert.match(call.messages[0].content, /Araç çağrı sınırına ulaşıldı/);
+      assert.match(systemText(call.messages), /Araç çağrı sınırına ulaşıldı/);
       callsAtLimit = taskQueries();
       return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R2:data.tasks.*.title'] }) };
     } }, { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: ['R2:data.tasks.*.title'] }) });
@@ -602,7 +602,7 @@ test('kanıtlı geçmişte uzun ve tanınmayan takip ifadesi genel niyetle kanı
   assert.equal(doneOf(second).assistantMessage.finishReason, 'clarification');
   assert.deepEqual(doneOf(second).assistantMessage.evidence, []);
   assert.equal(second.text.includes('Alfa kesin olarak bitti.'), false);
-  assert.equal(stack.provider.calls[1].toolChoice, 'auto');
+  assert.deepEqual(stack.provider.calls[1].toolChoice, { name: 'rota_plan' });
 });
 
 test('soru sözcüklerinden bağımsız arama sonucu ayrıntı ve analiz araçlarını açık tutar', async (t) => {
@@ -782,7 +782,7 @@ test('English grounded turns receive English deterministic scope disclosures and
   assert.match(answer, /Note: This answer covers only records/);
   assert.doesNotMatch(answer, /yalnızca|doğrulanamadı/);
   // Dil, sunucunun sözcük listesiyle değil modelin bildirimiyle seçilir.
-  assert.doesNotMatch(stack.provider.calls[0].messages[0].content, /Reply in English/);
+  assert.doesNotMatch(systemText(stack.provider.calls[0].messages), /Reply in English/);
   // Proje adı ve kodu aynı ölçüyü taşır: olguları model seçer; doğrulanamayan seçim İngilizce güvenli iletiyle biter.
   const projectOf = { operation: 'value', metrics: ['task.project'], reasoning: 'synthesis', fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] };
   stack.provider.enqueue({ type: 'answer', text: declared(projectOf, { language: 'en' }) },
@@ -955,6 +955,64 @@ test('4C takip: önceki gerçek küme özellik/süzgeç/sayı için yeniden okun
     assert.ok(stack.db.aiToolLog.slice(before).some(entry => entry.query === 'task-facts'));
   });
 });
+
+/* ── Takip sürekliliği: önceki sonucun satırı ve tek görevli sonuç ───────── */
+
+test('4C takip zinciri: "ilk görev" önceki doğrulanmış listenin 1. satırına bağlanır, "onun" o tek göreve başvurur', async (t) => {
+  const stack = groundedStack(t);
+  const { conversationId, scope } = await previousTaskSet(stack);
+  const first = scope.taskIds[0];
+  const dependency = { operation: 'list', metrics: ['task.title', 'dependency.type'], population: { tool: 'rota_dependency_inspect' }, entities: [{ type: 'task', previous: 1 }] };
+  let readsAtPlan = null;
+  const before = stack.db.aiToolLog.length;
+  stack.provider.enqueue({ type: 'script', respond: (call) => {
+    readsAtPlan = stack.db.aiToolLog.length - before;
+    assert.ok(call.messages.some((message) => message.role === 'system' && message.content.includes('"previous":<1 tabanlı sıra>')));
+    assert.equal(call.messages.at(-1).role, 'user', 'güncel soru son iletidir');
+    return { type: 'tool-calls', preface: [declared(dependency)], calls: [] };
+  } });
+  const second = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, message: 'İlk görevin öncülü var mı?' }));
+  assert.equal(readsAtPlan, 0, 'plan doğrulanmadan Rota okuması yok');
+  assert.equal(second.assistantMessage.finishReason, 'stop');
+  const inspected = stack.db.aiMessageEvidence.filter((row) => row.ToolName === 'rota_dependency_inspect').map((row) => JSON.parse(row.EvidenceJson));
+  assert.ok(inspected.length > 0);
+  assert.ok(inspected.every((row) => row.entity.id === first), 'satır göndergesi yalnızca önceki listenin 1. görevini okur');
+  assert.deepEqual(inspected.filter((row) => row.resultScope).at(-1).resultScope, { type: 'task', taskIds: [first] }, 'tek görevli yanıt kendi göndergesini kaydeder');
+
+  const deadline = { previousResult: true, operation: 'list', metrics: ['task.title', 'task.targetFinish'], population: { tool: 'rota_task_search', collection: 'tasks' } };
+  stack.provider.enqueue({ type: 'tool-calls', preface: [declared(deadline)], calls: [] });
+  const third = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 4, message: 'Onun termin tarihi ne?' }));
+  assert.equal(third.assistantMessage.finishReason, 'stop');
+  const latest = JSON.parse(stack.db.aiMessageEvidence.at(-1).EvidenceJson);
+  assert.deepEqual(latest.data.previousResult, { type: 'task', count: 1 });
+  assert.deepEqual(latest.data.tasks.map((row) => row.taskId), [first], '"onun" önceki yanıtın tek görevidir');
+});
+
+test('4C takip: satır göndergesi yalnızca bildirilen satırı kimlik yapar; aralık dışı ve göndergesiz satır veri okutmaz', async (t) => {
+  for (const scenario of ['out-of-range', 'raw-id', 'no-previous']) await t.test(scenario, async (t) => {
+    const stack = groundedStack(t);
+    let conversationId = null;
+    let scope = null;
+    if (scenario !== 'no-previous') ({ conversationId, scope } = await previousTaskSet(stack));
+    const entity = scenario === 'raw-id' ? { type: 'task', id: scope.taskIds[1] } : { type: 'task', previous: scenario === 'out-of-range' ? 50 : 1 };
+    const request = { operation: 'list', metrics: ['task.title', 'dependency.type'], population: { tool: 'rota_dependency_inspect' }, entities: [entity] };
+    const before = (stack.db.aiToolLog || []).length;
+    const details = [];
+    const respond = { type: 'script', respond: (call) => {
+      const refusal = call.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).at(-1);
+      if (refusal) details.push(...(refusal.error?.details || []));
+      return { type: 'tool-calls', preface: [declared(request)], calls: [] };
+    } };
+    stack.provider.enqueue(respond, respond, respond, respond);
+    const done = doneOf(await sendTurn({ turnId: randomUUID(), ...(conversationId ? { conversationId, expectedSequence: 2 } : {}), message: 'İlk görevin öncülü var mı?' }));
+    assert.equal((stack.db.aiToolLog || []).slice(before).filter((entry) => entry.query !== 'task-visibility').length, 0, 'doğrulanmayan gönderge Rota okutmaz');
+    assert.notEqual(done.assistantMessage.finishReason, 'stop');
+    if (scenario === 'no-previous') assert.equal(done.assistantMessage.finishReason, 'clarification', 'önceki sonuç yoksa sunucu göndergeyi sorar');
+    if (scenario === 'out-of-range') assert.ok(details.includes('$.entities[0].previous:unavailable'));
+    if (scenario === 'raw-id') assert.ok(details.includes('$.entities[0].id:untrusted'), 'önceki kümenin bildirilmeyen kimliği güvenilmez');
+  });
+});
+
 
 test('4C takip: önceki görev kümesi portföy alanıyla genişletilemez ve onarım bağı düşüremez', async (t) => {
   for (const tool of ['rota_task_search', 'rota_task_analytics']) await t.test(tool, async (t) => {

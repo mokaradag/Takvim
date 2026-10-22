@@ -611,13 +611,15 @@ export function scorePlannerRun(run, loaded) {
   const thinking = run.records.flatMap((record) => record.rounds.map((round) => round.thinking)).filter((value) => value != null);
   const models = [...new Set(run.records.flatMap((record) => record.rounds.flatMap((round) => round.models || [])))];
   const declarations = run.records.map((record) => record.declarations ?? 0);
+  // Danışmanlıksız kayıt kapıyı düşürür; nedeni raporda vaka adıyla görünür (planlayıcı hatasından ayrı).
+  const semanticUnavailable = run.records.filter((record) => record.semantic.state === 'unavailable').map((record) => `${record.pass}:${record.case}`);
   return {
     benchmark: loaded.fingerprint, semanticBenchmark: loaded.semanticFingerprint, referenceDate: loaded.referenceDate, passes: run.passes,
-    semantic: run.semantic, models, thinkingTokens: { calls: thinking.length, max: thinking.length ? Math.max(...thinking) : null },
+    semantic: run.semantic, semanticUnavailable, models, thinkingTokens: { calls: thinking.length, max: thinking.length ? Math.max(...thinking) : null },
     modelCalls: run.records.reduce((sum, record) => sum + record.rounds.length, 0),
     repairs: { plansWithRepair: run.records.filter((record) => (record.declarations ?? 0) > 1).length, maxDeclarations: declarations.length ? Math.max(...declarations) : 0 },
     byPass,
-    gatePassed: ['run', 'live'].includes(run.semantic.mode) && run.records.every((record) => record.semantic.state !== 'unavailable') && byPass.every((pass) => pass.correct === pass.total && pass.canonical.total === CANONICAL_IDS.length
+    gatePassed: ['run', 'live'].includes(run.semantic.mode) && !semanticUnavailable.length && byPass.every((pass) => pass.correct === pass.total && pass.canonical.total === CANONICAL_IDS.length
       && pass.supplementary.total === SUPPLEMENTARY_IDS.length)
   };
 }

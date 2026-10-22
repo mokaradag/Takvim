@@ -86,7 +86,8 @@ test('adaylar araç kümesini ve sırasını değiştirmez; yalnızca sistem not
   const planning = { state: 'reranked', candidates: ['rota_notifications', 'rota_task_search'] };
   const { inputs } = await turn(t, [plan({ intent: 'abstain', language: 'tr', abstain: { reason: 'write' } })], { planning });
   assert.deepEqual(inputs[0].tools, ['rota_plan', ...names]);
-  const system = inputs[0].messages.at(-2).content;
+  const system = inputs[0].messages.find((message, index) => index > 0 && message.role === 'system' && message.content.includes('anlamsal danışmanlık')).content;
+  assert.equal(inputs[0].messages.at(-1).role, 'user');
   assert.ok(!inputs[0].messages[0].content.includes('rota_notifications, rota_task_search'));
   assert.match(system, /rota_notifications, rota_task_search/);
   assert.match(system, /yalnızca öneridir/);

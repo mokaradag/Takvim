@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import { ADMIN, ALI_1, AYSE, BASELINE_ID, CALENDAR_ID, MEHMET, NOW, PROJECTS, TASKS, WBS, ZEYNEP, callRotaTool, callRotaTools, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { claimFor, declared, nativeDeclaration, evidenceReply } from './helpers/evidenceScenario.mjs';
+import { claimFor, declared, nativeDeclaration, evidenceReply, systemText } from './helpers/evidenceScenario.mjs';
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
 const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
@@ -235,7 +235,7 @@ test('output truncation recovers with fewer claims and never replays partial JSO
     (input) => reply(evidenceReply(claimFor(results(input)[0], 'data.tasks.0.status'), claimFor(results(input)[0], 'data.tasks.0.project.name')))], { user: 'Radar test planı görevinin durumu ve projesi nedir?' });
   assert.equal(result.outcome, 'grounded');
   assert.equal(result.repaired, true);
-  assert.match(inputs[2].messages[0].content, /En fazla 8 iddia/);
+  assert.match(systemText(inputs[2].messages), /En fazla 8 iddia/);
   assert.equal(inputs[2].messages.some((message) => message.content === '{"kind":"rota","claims":['), false);
 });
 
