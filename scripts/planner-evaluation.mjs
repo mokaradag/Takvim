@@ -245,12 +245,13 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
       let reply;
       try { reply = JSON.parse(await scheduled(payload)); } catch (error) { reply = { text: '', toolCalls: [], error: ['MODEL_COMMAND_TIMEOUT', 'MODEL_COMMAND_OUTPUT_LIMIT'].includes(error.code) ? error.code : 'MODEL_COMMAND_ERROR' }; }
       if (reply?.error) reply = { text: '', toolCalls: [], error: ['MODEL_COMMAND_TIMEOUT', 'MODEL_COMMAND_OUTPUT_LIMIT'].includes(reply.error) ? reply.error : 'MODEL_COMMAND_ERROR' };
-      if (inputs) writeFileSync(path.join(inputs, 'completions.jsonl'), `${JSON.stringify({ call: id, error: reply?.error ?? null, usage: normalizedUsage(reply?.usage) })}\n`, { flag: 'a' });
       const toolCalls = (Array.isArray(reply?.toolCalls) ? reply.toolCalls : []).filter((call) => call && typeof call.name === 'string')
         .map((call, index) => ({ id: `call_${id}_${index + 1}`, name: call.name, arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments ?? {}), oversize: false }));
       guard.observe?.({ toolCalls });
-      return { text: typeof reply?.text === 'string' ? reply.text : '', toolCalls, usage: normalizedUsage(reply?.usage), thinking: reply?.thinking === 'off' ? 'off' : 'unverified', models: Array.isArray(reply?.models) ? reply.models : [],
+      const completion = { text: typeof reply?.text === 'string' ? reply.text : '', toolCalls, usage: normalizedUsage(reply?.usage), thinking: reply?.thinking === 'off' ? 'off' : 'unverified', models: Array.isArray(reply?.models) ? reply.models : [],
         finishReason: reply?.finishReason ?? null, error: reply?.error ?? null, durationMs: Date.now() - startedAt };
+      if (inputs) writeFileSync(path.join(inputs, 'completions.jsonl'), `${JSON.stringify({ call: id, ...completion })}\n`, { flag: 'a' });
+      return completion;
     },
     dispose
   };

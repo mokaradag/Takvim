@@ -1234,3 +1234,49 @@ test('4C tek bulgu: yapılandırılmış gateway timeout semantik telemetride TI
     TIMEOUT: 2, MODEL_UNAVAILABLE: 1, INTERNAL_UNAVAILABLE: 1, PROFILE_DISABLED: 1, PROFILE_NOT_CONFIGURED: 1, OTHER: 1
   });
 });
+
+test('4C son yedi: okuma kurulamayan plan kabul edilmez; onarım ve doğrudan çağrı da veri okumaz', async (t) => {
+  const request = { operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' },
+    entities: [{ type: 'task', id: TASKS.OVERDUE }], filters: { status: ['todo'] } };
+  const declare = value => plan({ intent: 'rota', language: 'tr', request: value });
+  for (const mode of ['original', 'repaired', 'direct']) await t.test(mode, async (t) => {
+    const noAcceptedState = input => {
+      assert.equal(input.toolChoice.name, 'rota_plan');
+      assert.ok(!input.messages.some(message => message.role === 'system' && message.content.includes('istek kabul edildi')));
+    };
+    const { result, decisions } = await turn(t, [
+      declare(mode === 'repaired' ? { ...request, metrics: ['task.typo'] } : request),
+      input => {
+        noAcceptedState(input);
+        if (mode !== 'repaired') assert.match(JSON.stringify(input.messages), /calls:required/);
+        if (mode === 'direct') return { text: '', toolCalls: [{ id: 'read', name: 'rota_task_detail', arguments: JSON.stringify({ taskId: TASKS.HIDDEN }) }], finishReason: 'tool_calls' };
+        return declare(request);
+      },
+      input => {
+        noAcceptedState(input);
+        assert.match(JSON.stringify(input.messages), mode === 'direct' ? /plan:required/ : /calls:required/);
+        return declare(request);
+      }
+    ], { user: `${TASKS.OVERDUE} görevinin durumu ne?` });
+    assert.equal(result.outcome, 'failed');
+    assert.equal(result.stats.attempted, 0);
+    assert.deepEqual(result.evidence, []);
+    assert.ok(decisions.every(decision => decision.intent !== 'rota'));
+  });
+});
+
+test('4C son yedi: kabul edilen çoklu plan tekrar zorlanmaz; ilgisiz çağrı kardeş kanıtı kirletmez', async (t) => {
+  const unresolved = { operation: 'value', metrics: ['project.baselineCount'], population: { tool: 'rota_task_search' },
+    entities: [{ type: 'wbs', text: 'Radar' }], layout: 'auto' };
+  const invalid = input => {
+    assert.equal(input.toolChoice, 'auto');
+    return { text: '', finishReason: 'tool_calls', toolCalls: [{ name: 'rota_task_analytics', arguments: '{}' }] };
+  };
+  const { result, decisions } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: unresolved, additionalRequests: [notifications] }), invalid, invalid],
+    { user: 'Radar iş paketi baz plan sayısı ve bildirim sayım' });
+  assert.equal(result.stats.attempted, 1);
+  assert.equal(result.evidence.length, 1);
+  assert.equal(result.evidenceRows[0].toolName, 'rota_notifications');
+  assert.match(result.text, /okunmamış/);
+  assert.deepEqual(decisions.map(decision => decision.intent), ['rota']);
+});

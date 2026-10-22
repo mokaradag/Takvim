@@ -155,6 +155,8 @@ function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] 
   return new Promise((resolve) => {
     const child = spawn(command, [...prefixArgs, ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     const events = [];
+    let launched = false;
+    child.once('spawn', () => { launched = true; });
     const decoder = new StringDecoder('utf8');
     let buffer = '';
     child.stdout.on('data', (chunk) => {
@@ -167,7 +169,7 @@ function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] 
       }
     });
     child.stderr.on('data', () => {});
-    child.on('error', () => resolve({ code: -1, events }));
+    child.on('error', () => resolve({ code: -1, events, launchFailed: !launched }));
     child.on('close', (code) => resolve({ code, events }));
     child.stdin.end(input);
   });
@@ -229,7 +231,7 @@ async function complete(launcher) {
       ...(forced ? ['--json-schema', JSON.stringify({ ...forced.parameters, description: forced.description })] : []), '--output-format', 'stream-json', '--verbose',
       '--max-turns', '1', '--no-session-persistence', '--disable-slash-commands'];
     const startedAt = Date.now();
-    const { code, events } = await runClaude(args, env, cwd, conversationText(rest), launcher);
+    const { events, launchFailed } = await runClaude(args, env, cwd, conversationText(rest), launcher);
     const init = events.find((event) => event.type === 'system' && event.subtype === 'init');
     const result = events.find((event) => event.type === 'result');
     const assistants = events.filter((event) => event.type === 'assistant' && !event.parent_tool_use_id).map((event) => event.message);
@@ -240,7 +242,7 @@ async function complete(launcher) {
     const models = [...new Set([...Object.keys(modelUsage), ...assistants.map((message) => message.model)])];
     const ids = new Set(assistants.map((message) => message.id));
     const usage = {
-      input_tokens: result?.usage?.input_tokens ?? null, cache_creation_input_tokens: result?.usage?.cache_creation_input_tokens ?? 0,
+      input_tokens: result?.usage?.input_tokens ?? (launchFailed ? 0 : null), cache_creation_input_tokens: result?.usage?.cache_creation_input_tokens ?? 0,
       cache_read_input_tokens: result?.usage?.cache_read_input_tokens ?? 0, output_tokens: result?.usage?.output_tokens ?? null,
       output_tokens_details: { thinking_tokens: Object.values(modelUsage).reduce((sum, item) => sum + (item.thinkingTokens ?? 0), 0) },
       thinkingBlocks: blocks.filter((block) => block.type === 'thinking' || block.type === 'redacted_thinking').length
@@ -249,7 +251,7 @@ async function complete(launcher) {
     const row = { at: new Date().toISOString(), ...(callId ? { callId } : {}), models, effort, thinking: usage.output_tokens_details.thinking_tokens || usage.thinkingBlocks ? 'on' : 'off', usage,
       apiCalls: ids.size, numTurns: result?.num_turns ?? null, stopReason: blocks.some((block) => block.type === 'tool_use') ? 'tool_use' : result?.stop_reason ?? null,
       durationMs: Date.now() - startedAt, rateLimit: limit ? { status: limit.status, utilization: limit.utilization ?? null } : null, staticPromptHash, toolCatalogHash, toolOrderHash: hash(JSON.stringify(offered)), tailChars: conversationText(rest).length };
-    if (code !== 0 && !result || result?.is_error && result?.subtype !== 'error_max_turns' || rejected || result?.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null });
+    if (!result || result.is_error && result.subtype !== 'error_max_turns' || rejected || result.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null });
     // CLI araçları kendi kararlı sırasıyla sunar: küme birebir aynı olmalı, sıra (toolOrderHash) çağrılar arasında sabit kalmalıdır.
     if (JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort())) return fail('PLANNER_TOOLS_NOT_OFFERED', { ...row, offered });
     if (prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash)) return fail('PLANNER_TOOL_ORDER_UNSTABLE', row);

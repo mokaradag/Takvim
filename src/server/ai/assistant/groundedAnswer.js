@@ -1580,8 +1580,8 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
         // Veri okunmadan araç kümesi kayıt defterinin tamamıdır ve sırası sabittir (önek önbelleği soruya göre
         // bozulmaz); anlamsal danışmanlık yalnızca sistem notundaki aday sırasıdır.
         tools: turn.decision === PLANNER_INTENTS.GENERAL ? [] : !frozen() ? [typedPlanningTool(catalog), ...catalog] : turn.permittedTools ? catalog.filter((tool) => turn.permittedTools.has(tool.name)) : catalog,
-        // Karar verilmeden (düzeltme turları dâhil) yanıt yalnızca plan çağrısı olabilir: zayıf model düz metne kaçamaz.
-        toolChoice: !canCallTools ? 'none' : !frozen() && !turn.decision ? PLAN_TOOL_CHOICE : 'auto',
+        // İstek kabul edilene dek (düzeltme turları dâhil) yanıt yalnızca plan çağrısı olabilir: zayıf model düz metne kaçamaz.
+        toolChoice: !canCallTools ? 'none' : !frozen() && !turn.decision && !turn.request ? PLAN_TOOL_CHOICE : 'auto',
         onEvent: async (event) => {
           turn.progress();
           if (event.type === 'thinking') status(ASSISTANT_STREAM_PHASES.THINKING);
@@ -1683,7 +1683,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       const completed = preparePlan(turn, [], declared);
       // İlk tur yalnızca birincil bölümü okur; diğer bölümler sırayla yürür.
       calls = completed.ok ? derivedCalls(turn, completed.request) : [];
-      if (!calls.length && plan && !completed.ok) {
+      if (!calls.length && plan && (!completed.ok || !parts.length)) {
         // Okuma kurulamadıysa önce isteğin kendi sorunları (ör. aracın metin süzgeci yok) bildirilir; yoksa çağrı istenir.
         const reasons = preparePlan(turn, [], declared);
         const details = reasons.ok ? ['$.calls:required'] : reasons.details;

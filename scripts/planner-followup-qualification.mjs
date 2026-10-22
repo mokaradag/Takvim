@@ -20,18 +20,63 @@ import { createAiStack, sendTurn } from '../test/helpers/aiStack.mjs';
 import { createFakeAiProvider } from '../test/helpers/fakeAiProvider.mjs';
 import { ALI_2, AYSE, MEHMET, NOW, TASKS, ZEYNEP, rotaToolSeed } from '../test/helpers/aiToolFixtures.mjs';
 import { verifyCompletion } from './planner-evaluation.mjs';
+import { AI_ERROR_CODES } from '../src/domain/ai/aiErrorCatalog.js';
+
+const { AiError } = await import('../src/server/ai/aiErrors.js');
 
 const ADAPTER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'planner-claude-model.mjs');
 const OUT = process.env.PLANNER_FOLLOWUP_OUT || null;
 const EXPECTED_MODEL = process.env.PLANNER_CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
 const summary = { chains: 0, turns: 0, passed: 0, failed: [], modelCalls: 0, escalations: 0, models: new Set() };
 
-function complete(input) {
+function complete(input, signal) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [ADAPTER], { stdio: ['pipe', 'pipe', 'inherit'] });
+    const raw = String(process.env.PLANNER_MODEL_TIMEOUT_MS || '120000').trim();
+    const timeoutMs = Number(raw);
+    if (!/^[1-9][0-9]*$/.test(raw) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 20 || timeoutMs > 600000) return reject(new Error('MODEL_INFRASTRUCTURE PLANNER_LIMIT_INVALID'));
+    if (signal?.aborted) return reject(signal.reason instanceof AiError ? signal.reason : new AiError(AI_ERROR_CODES.AI_CANCELLED));
+    const child = spawn(process.execPath, [ADAPTER], { stdio: ['pipe', 'pipe', 'inherit'], detached: process.platform !== 'win32',
+      env: { ...process.env, PLANNER_MODEL_TIMEOUT_MS: String(timeoutMs) } });
     let out = '';
+    let settled = false;
+    const terminate = () => {
+      if (!child.pid) return;
+      if (process.platform === 'win32') {
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+        killer.on('error', () => child.kill('SIGKILL'));
+      } else {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+      }
+    };
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+      process.off('SIGINT', interrupt); process.off('SIGTERM', terminateSignal); process.off('SIGHUP', hangup);
+      terminate();
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const cancel = () => finish(signal?.reason instanceof AiError ? signal.reason : new AiError(AI_ERROR_CODES.AI_CANCELLED));
+    const interrupt = () => { try { cancel(); } finally { process.exit(130); } };
+    const terminateSignal = () => { try { cancel(); } finally { process.exit(143); } };
+    const hangup = () => { try { cancel(); } finally { process.exit(129); } };
+    const timer = setTimeout(() => finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_TIMEOUT')), timeoutMs);
+    process.once('SIGINT', interrupt); process.once('SIGTERM', terminateSignal); process.once('SIGHUP', hangup);
     child.stdout.on('data', (chunk) => { out += chunk; });
-    child.on('close', () => { try { resolve(JSON.parse(out)); } catch { reject(new Error('ADAPTER_OUTPUT_INVALID')); } });
+    child.on('error', () => finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_ERROR')));
+    child.stdin.on('error', () => finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_ERROR')));
+    child.on('close', (code) => {
+      if (settled) return;
+      if (code !== 0) return finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_ERROR'));
+      let reply;
+      try { reply = JSON.parse(out); } catch { return finish(new Error('ADAPTER_OUTPUT_INVALID')); }
+      finish(null, reply);
+    });
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) return cancel();
     child.stdin.end(JSON.stringify(input));
   });
 }
@@ -48,7 +93,7 @@ export function realModelProvider({ completeRound = complete } = {}) {
       throw new Error('DEEP_ESCALATION');
     }
     summary.modelCalls += 1;
-    const reply = await completeRound({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice });
+    const reply = await completeRound({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice }, input.signal);
     if (reply.error) throw new Error(`MODEL_INFRASTRUCTURE ${reply.error}`);
     if (!reply.models?.length || reply.models.some((model) => model !== EXPECTED_MODEL) || reply.thinking !== 'off') throw new Error('MODEL_INFRASTRUCTURE PLANNER_MODEL_UNVERIFIED');
     reply.models.forEach((model) => summary.models.add(model));
@@ -109,7 +154,9 @@ test('takip zinciri: kişi değişimi, "bunlardan", "ilk görev", "onun"', async
   await chain(t, 'A', [
     ['Görevlerimi listele.', ({ finish, rows }) => {
       assert.equal(finish, 'stop');
-      assert.ok(taskIds(rows).includes(TASKS.OVERDUE));
+      // Yedi görünür atama 50 satırlık mevcut liste sınırının altındadır; arşiv ve başka kişiler dışarıda kalır.
+      assert.deepEqual([...new Set(taskIds(rows))].sort(), [TASKS.OVERDUE, TASKS.LITERAL, TASKS.SERIES,
+        TASKS.OCCURRENCE_DONE, TASKS.OCCURRENCE_OPEN, TASKS.PARTIAL_OWN, TASKS.PARTIAL_SHARED].sort());
     }],
     ["Peki Zeynep'inkiler?", ({ finish, rows }) => {
       assert.equal(finish, 'stop');
