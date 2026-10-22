@@ -960,8 +960,16 @@ test('4C takip: önceki gerçek küme özellik/süzgeç/sayı için yeniden okun
 
 test('4C takip zinciri: "ilk görev" önceki doğrulanmış listenin 1. satırına bağlanır, "onun" o tek göreve başvurur', async (t) => {
   const stack = groundedStack(t);
-  const { conversationId, scope } = await previousTaskSet(stack);
+  const { conversationId, scope, done } = await previousTaskSet(stack);
   const first = scope.taskIds[0];
+  // "İlk görev" kullanıcının gördüğü sıradır: kapsam sırası çizilen satır sırasıyla aynıdır.
+  let at = -1;
+  for (const id of scope.taskIds) {
+    const title = stack.db.tasks.find((row) => row.TaskId === id).Title;
+    const next = done.assistantMessage.content.indexOf(title, at + 1);
+    assert.ok(next > at, `kapsam sırası yanıttaki satır sırasıdır: ${title}`);
+    at = next;
+  }
   const dependency = { operation: 'list', metrics: ['task.title', 'dependency.type'], population: { tool: 'rota_dependency_inspect' }, entities: [{ type: 'task', previous: 1 }] };
   let readsAtPlan = null;
   const before = stack.db.aiToolLog.length;
@@ -1007,8 +1015,8 @@ test('4C takip: satır göndergesi yalnızca bildirilen satırı kimlik yapar; a
     const done = doneOf(await sendTurn({ turnId: randomUUID(), ...(conversationId ? { conversationId, expectedSequence: 2 } : {}), message: 'İlk görevin öncülü var mı?' }));
     assert.equal((stack.db.aiToolLog || []).slice(before).filter((entry) => entry.query !== 'task-visibility').length, 0, 'doğrulanmayan gönderge Rota okutmaz');
     assert.notEqual(done.assistantMessage.finishReason, 'stop');
-    if (scenario === 'no-previous') assert.equal(done.assistantMessage.finishReason, 'clarification', 'önceki sonuç yoksa sunucu göndergeyi sorar');
-    if (scenario === 'out-of-range') assert.ok(details.includes('$.entities[0].previous:unavailable'));
+    if (scenario !== 'raw-id') assert.equal(done.assistantMessage.finishReason, 'clarification', 'bulunamayan satır onarımla düşürülmez; sunucu göndergeyi sorar');
+    if (scenario !== 'raw-id') assert.deepEqual(details, [], 'düzeltme turu yok');
     if (scenario === 'raw-id') assert.ok(details.includes('$.entities[0].id:untrusted'), 'önceki kümenin bildirilmeyen kimliği güvenilmez');
   });
 });

@@ -925,3 +925,26 @@ test('4C yakınsama: canlı değerlendirici ortak Sicil kabul sınırını aşma
   assert.ok(run.records.every(record => record.outcome === 'general_redirect'));
   assert.equal(server.state.requests.length, 3);
 });
+
+test('Claude model komutu: geçersiz bütçe, kayıtsız bütçe ve tükenen çağrı hakkı modele gitmeden reddedilir', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const dir = mkdtempSync(path.join(tmpdir(), 'rota-claude-budget-'));
+  const log = path.join(dir, 'calls.jsonl');
+  const input = JSON.stringify({ messages: [{ role: 'system', content: 'x' }, { role: 'user', content: 'y' }], tools: [], toolChoice: 'auto' });
+  // PATH boş: denetim geçseydi CLI bulunamazdı; beklenen kod yalnızca ön denetimden gelir.
+  const run = (env) => JSON.parse(spawnSync(process.execPath, ['scripts/planner-claude-model.mjs'], { input, encoding: 'utf8', env: { PATH: '', ...env } }).stdout).error;
+  try {
+    for (const value of ['abc', '-1', '1.5', '0']) assert.equal(run({ PLANNER_CLAUDE_MAX_CALLS: value, PLANNER_CLAUDE_LOG: log }), 'PLANNER_LIMIT_INVALID', value);
+    assert.equal(run({ PLANNER_CLAUDE_MAX_CALLS: '2' }), 'PLANNER_LEDGER_REQUIRED');
+    assert.equal(run({ PLANNER_CLAUDE_REQUIRE_CACHE: '1' }), 'PLANNER_LEDGER_REQUIRED');
+    writeFileSync(log, `${JSON.stringify({ reserved: true })}\n${JSON.stringify({ reserved: true })}\n`);
+    assert.equal(run({ PLANNER_CLAUDE_MAX_CALLS: '2', PLANNER_CLAUDE_LOG: log }), 'PLANNER_BUDGET_CALLS');
+    writeFileSync(log, `${JSON.stringify({ usage: { input_tokens: 10, cache_creation_input_tokens: 90 } })}\n`);
+    assert.equal(run({ PLANNER_CLAUDE_MAX_UNCACHED: '100', PLANNER_CLAUDE_LOG: log }), 'PLANNER_BUDGET_TOKENS');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -15,16 +15,18 @@
  * bunu altyapı hatası sayar ve koşuyu durdurur.
  *
  * Ortam: PLANNER_CLAUDE_MODEL (varsayılan claude-haiku-4-5-20251001), PLANNER_CLAUDE_EFFORT (low),
- * PLANNER_CLAUDE_LOG (çağrı başına içeriksiz ölçüm satırı), PLANNER_CLAUDE_MAX_CALLS, PLANNER_CLAUDE_MAX_UNCACHED
+ * PLANNER_CLAUDE_LOG (çağrı başına içeriksiz ölçüm satırı; bütçe ve önbellek kapısının durumu), PLANNER_CLAUDE_MAX_CALLS, PLANNER_CLAUDE_MAX_UNCACHED
  * (önbellekten okunmayan girdi belirteçlerinin toplam üst sınırı), PLANNER_CLAUDE_REQUIRE_CACHE=1 (aynı önekle ikinci
- * çağrıdan sonra önbellek okuması zorunlu).
+ * çağrıdan sonra önbellek okuması zorunlu). Ev klasörü yalıtıldığı için CLI'nin kayıtlı oturumu görünmez; kimlik bilgisi
+ * ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN ya da CLAUDE_CODE_OAUTH_TOKEN (ya da barındırılan oturumun ortamı) ile verilir.
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
+import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 
 const SERVER = 'rota';
@@ -72,13 +74,35 @@ function ledger(file) {
   return readFileSync(file, 'utf8').split('\n').filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
 }
 
+/** Pozitif tam sayı ortam sınırı; geçersiz değer sınırı kapatmaz, koşuyu durdurur. */
+function limitFromEnv(name) {
+  const raw = process.env[name];
+  if (raw == null || raw === '') return null;
+  const value = String(raw).trim();
+  if (!/^[1-9][0-9]{0,11}$/.test(value)) throw Object.assign(new Error(name), { code: 'PLANNER_LIMIT_INVALID' });
+  return Number.parseInt(value, 10);
+}
+
+/** Süreçler arası kilit: bütçe denetimi ve çağrı ayırımı eşzamanlı komutlarda tek tek yapılır. */
+async function withLock(file, work) {
+  const lock = `${file}.lock`;
+  for (let attempt = 0; ; attempt += 1) {
+    try { mkdirSync(lock); break; } catch (error) {
+      if (error.code !== 'EEXIST' || attempt > 600) throw Object.assign(new Error('lock'), { code: 'PLANNER_LEDGER_LOCKED' });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  try { return work(); } finally { rmdirSync(lock); }
+}
+
 function runClaude(args, env, cwd, input) {
   return new Promise((resolve) => {
     const child = spawn('claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     const events = [];
+    const decoder = new StringDecoder('utf8');
     let buffer = '';
     child.stdout.on('data', (chunk) => {
-      buffer += chunk;
+      buffer += decoder.write(chunk);
       let index;
       while ((index = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, index);
@@ -110,11 +134,24 @@ async function complete() {
   const tools = forced ? all.filter((tool) => tool !== forced) : all;
   const staticPromptHash = hash(system.content);
   const toolCatalogHash = hash(JSON.stringify([forced?.name ?? null, all]));
-  const prior = ledger(log);
-  const calls = prior.filter((row) => row.usage).length;
-  const uncached = prior.reduce((sum, row) => sum + (row.usage ? row.usage.input_tokens + row.usage.cache_creation_input_tokens : 0), 0);
-  if (process.env.PLANNER_CLAUDE_MAX_CALLS && calls >= Number(process.env.PLANNER_CLAUDE_MAX_CALLS)) return fail('PLANNER_BUDGET_CALLS');
-  if (process.env.PLANNER_CLAUDE_MAX_UNCACHED && uncached >= Number(process.env.PLANNER_CLAUDE_MAX_UNCACHED)) return fail('PLANNER_BUDGET_TOKENS');
+  let maxCalls;
+  let maxUncached;
+  try { maxCalls = limitFromEnv('PLANNER_CLAUDE_MAX_CALLS'); maxUncached = limitFromEnv('PLANNER_CLAUDE_MAX_UNCACHED'); } catch (error) { return fail(error.code); }
+  // Çağrılar arası denetimlerin durumu kayıt dosyasıdır: kayıt yoksa sınır ya da önbellek kapısı sessizce kapanmaz.
+  if (!log && (maxCalls || maxUncached || process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1')) return fail('PLANNER_LEDGER_REQUIRED');
+  let prior;
+  try {
+    prior = log ? await withLock(log, () => {
+      const rows = ledger(log);
+      // Her çağrı başlamadan ayrılır (ayırım satırı); eşzamanlı komutlar aynı kalan hakkı paylaşamaz.
+      if (maxCalls && rows.filter((row) => row.reserved).length >= maxCalls) return 'PLANNER_BUDGET_CALLS';
+      const uncached = rows.reduce((sum, row) => sum + (row.usage ? row.usage.input_tokens + row.usage.cache_creation_input_tokens : 0), 0);
+      if (maxUncached && uncached >= maxUncached) return 'PLANNER_BUDGET_TOKENS';
+      appendFileSync(log, `${JSON.stringify({ at: new Date().toISOString(), reserved: true })}\n`);
+      return rows;
+    }) : [];
+  } catch (error) { return fail(error.code || 'PLANNER_LEDGER_LOCKED'); }
+  if (typeof prior === 'string') return fail(prior);
 
   // Kararlı yalıtılmış ev ve çalışma klasörü: depo bağlamı, kullanıcı ayarı ya da proje yönergesi modele girmez.
   const home = process.env.PLANNER_CLAUDE_HOME || path.join(tmpdir(), 'rota-planner-claude-home');
@@ -125,7 +162,7 @@ async function complete() {
     writeFileSync(path.join(work, 'system.txt'), system.content, 'utf8');
     writeFileSync(path.join(work, 'tools.json'), JSON.stringify(tools), 'utf8');
     writeFileSync(path.join(work, 'mcp.json'), JSON.stringify({ mcpServers: { [SERVER]: { type: 'stdio', command: process.execPath, args: [fileURLToPath(import.meta.url), 'mcp', path.join(work, 'tools.json')] } } }), 'utf8');
-    const keep = /^(PATH|LANG|LC_ALL|TZ|HTTPS?_PROXY|https?_proxy|NO_PROXY|no_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|ANTHROPIC_BASE_URL|CLAUDE_CODE_(REMOTE.*|PROVIDER_MANAGED_BY_HOST|ORGANIZATION_UUID|ACCOUNT_UUID|CONTAINER_ID|ENTRYPOINT|USE_CCR_V2|PROXY_RESOLVES_HOSTS|WORKER_EPOCH|ENVIRONMENT_RUNNER_VERSION)|CLAUDE_SESSION_INGRESS_TOKEN_FILE|SESSION_INGRESS_URL|CCR_.*|GLOBAL_AGENT_.*)$/;
+    const keep = /^(PATH|LANG|LC_ALL|TZ|HTTPS?_PROXY|https?_proxy|NO_PROXY|no_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|ANTHROPIC_BASE_URL|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CODE_(REMOTE.*|PROVIDER_MANAGED_BY_HOST|ORGANIZATION_UUID|ACCOUNT_UUID|CONTAINER_ID|ENTRYPOINT|USE_CCR_V2|PROXY_RESOLVES_HOSTS|WORKER_EPOCH|ENVIRONMENT_RUNNER_VERSION)|CLAUDE_SESSION_INGRESS_TOKEN_FILE|SESSION_INGRESS_URL|CCR_.*|GLOBAL_AGENT_.*)$/;
     const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => keep.test(key))), HOME: home, MAX_THINKING_TOKENS: '0',
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: '4096', ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
     const args = ['-p', '--model', model, '--effort', effort, '--system-prompt-file', path.join(work, 'system.txt'), '--tools', '',
@@ -160,9 +197,12 @@ async function complete() {
     const first = prior.find((item) => !item.error && item.staticPromptHash === staticPromptHash && item.toolCatalogHash === toolCatalogHash);
     if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && first && !usage.cache_read_input_tokens) return fail('PLANNER_CACHE_NOT_REUSED', row);
     if (row.apiCalls !== 1) return fail('PLANNER_CALL_COUNT_UNEXPECTED', row);
+    if (!models.length || models.some((item) => item !== model)) return fail('PLANNER_MODEL_MISMATCH', row);
+    if (row.thinking !== 'off') return fail('PLANNER_THINKING_ON', row);
     if (log) appendFileSync(log, `${JSON.stringify(row)}\n`);
-    const toolCalls = blocks.filter((block) => block.type === 'tool_use' && (block.name.startsWith(PREFIX) || forced && block.name === 'StructuredOutput'))
-      .map((block) => ({ name: block.name === 'StructuredOutput' ? forced.name : block.name.slice(PREFIX.length), arguments: block.input ?? {} }));
+    // Zorunlu turda öteki araçlar yalnızca görünürdür (üretimdeki gibi); üretimin kısıtlı çözümü başka çağrı üretemez, burada da iletilmez.
+    const toolCalls = blocks.filter((block) => block.type === 'tool_use' && (forced ? block.name === 'StructuredOutput' : block.name.startsWith(PREFIX)))
+      .map((block) => ({ name: forced ? forced.name : block.name.slice(PREFIX.length), arguments: block.input ?? {} }));
     const stop = row.stopReason;
     process.stdout.write(`${JSON.stringify({
       text: blocks.filter((block) => block.type === 'text').map((block) => block.text).join(''), toolCalls,

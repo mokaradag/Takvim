@@ -1207,21 +1207,27 @@ async function revalidate(turn, disclosureSignal = turn.session.signal) {
 }
 
 /** Tek anlamlı görev listesinin dönen satırları; model metni ve seçtiği olgular kimlik kaynağı değildir. */
-/** Tek görevin araçları: doğrulanmış yanıtın konusu tek görevse "onun …" takibi o göreve başvurur. */
-const SINGLE_TASK_TOOLS = Object.freeze(['rota_task_detail', 'rota_dependency_inspect', 'rota_recurrence_inspect']);
+/**
+ * Tek görevin araçları: doğrulanmış yanıtın konusu tek görevse "onun …" takibi o göreve başvurur. Yalnızca
+ * kanıt öznesi okunan görevin kendisi olan araçlar (tekrar incelemesinin öznesi seri şablonu olabilir).
+ */
+const SINGLE_TASK_TOOLS = Object.freeze(['rota_task_detail', 'rota_dependency_inspect']);
 
 function completedResultScope(turn, verdict) {
   if (verdict.kind !== 'grounded' || turn.partCount !== 1) return null;
   const tool = turn.request?.population?.tool;
   if (SINGLE_TASK_TOOLS.includes(tool) && turn.request.entities.length === 1 && turn.request.entities[0].type === 'task') {
+    // Özne okumanın görev seçicisiyle aynı olmalıdır: kanıtın adlandırdığı başka bir kayıt gönderge olmaz.
     const subjects = new Set(turn.ledger.requestEntries().filter((entry) => verdict.citedIds.includes(entry.id) && entry.tool === tool)
-      .map((entry) => (entry.payload?.entity?.type === 'task' ? entry.payload.entity.id : null)));
+      .map((entry) => (entry.payload?.entity?.type === 'task' && entry.payload.entity.id === entry.args?.taskId ? entry.payload.entity.id : null)));
     return subjects.size === 1 && !subjects.has(null) ? taskResultScope({ type: 'task', taskIds: [...subjects] }) : null;
   }
   if (!['list', 'rank'].includes(turn.request?.operation) || tool !== 'rota_task_search') return null;
   const taskIds = new Set();
-  for (const entry of turn.ledger.requestEntries()) {
-    if (!verdict.citedIds.includes(entry.id) || entry.tool !== 'rota_task_search') continue;
+  // Satır sırası kullanıcının gördüğü sıradır: atfedilen kanıt sırası, kanıt içinde satır (sıralamada sıralama) sırası.
+  const entries = new Map(turn.ledger.requestEntries().map((entry) => [entry.id, entry]));
+  for (const entry of verdict.citedIds.map((id) => entries.get(id))) {
+    if (!entry || entry.tool !== 'rota_task_search') continue;
     const evidence = requestEvidence(turn.request, [entry], turn.context.today).get(entry.id);
     if (!evidence?.populationMatch || !evidence.dimensionsMatch) return null;
     const rows = entry.payload?.data?.tasks || [];
@@ -1507,7 +1513,9 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       return false;
     }
     // Olmayan gönderge onarımla silinmez; yeni tam soru ayrı turda yeniden doğrulanır.
-    if (!turn.previousResult && details.some((detail) => detail === '$.previousResult:unavailable' || /^\$\.entities\[\d+\]\.previous:unavailable$/.test(String(detail)))) {
+    // Bulunamayan satır göndergesi (kapsam yok ya da sıra dışı, her bölüm derinliğinde) onarımla düşürülmez: sunucu sorar.
+    if (!turn.previousResult && details.includes('$.previousResult:unavailable')
+      || details.some((detail) => /entities\[\d+\]\.previous:unavailable$/.test(String(detail)))) {
       missingPreviousResult = { intent: PLANNER_INTENTS.CLARIFY, language: rejectedPlan?.language,
         clarify: { reason: 'missing_referent' } };
       return false;

@@ -22,6 +22,7 @@ import { ALI_2, AYSE, MEHMET, NOW, TASKS, ZEYNEP, rotaToolSeed } from '../test/h
 
 const ADAPTER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'planner-claude-model.mjs');
 const OUT = process.env.PLANNER_FOLLOWUP_OUT || null;
+const EXPECTED_MODEL = process.env.PLANNER_CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
 const summary = { chains: 0, turns: 0, passed: 0, failed: [], modelCalls: 0, escalations: 0, models: new Set() };
 
 function complete(input) {
@@ -40,12 +41,20 @@ function realModelProvider() {
   let standard = null;
   return { ...fake, async streamToolCompletion(input) {
     standard ??= input.model;
-    if (input.model !== standard) summary.escalations += 1;
+    // Derin devir nitelendirmede yasaktır: devredilen tur modele gitmez, tur başarısız sayılır.
+    if (input.model !== standard) {
+      summary.escalations += 1;
+      throw new Error('DEEP_ESCALATION');
+    }
     summary.modelCalls += 1;
     const reply = await complete({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice });
     if (reply.error) throw new Error(`MODEL_INFRASTRUCTURE ${reply.error}`);
+    if (!reply.models?.length || reply.models.some((model) => model !== EXPECTED_MODEL) || reply.thinking !== 'off') throw new Error('MODEL_INFRASTRUCTURE PLANNER_MODEL_UNVERIFIED');
     reply.models.forEach((model) => summary.models.add(model));
-    fake.enqueue(reply.toolCalls.length ? { type: 'tool-calls', calls: reply.toolCalls, preface: reply.text ? [reply.text] : [] } : { type: 'answer', text: reply.text });
+    // Sağlayıcının bitiş nedeni korunur: çıktı sınırında kesilen yanıt üretimdeki kesilme yolundan geçer.
+    const finishReason = reply.finishReason === 'length' ? 'length' : reply.toolCalls.length ? 'tool_calls' : 'stop';
+    fake.enqueue(reply.toolCalls.length ? { type: 'tool-calls', calls: reply.toolCalls, preface: reply.text ? [reply.text] : [], finishReason }
+      : { type: 'answer', text: reply.text, finishReason });
     return fake.streamToolCompletion(input);
   } };
 }
@@ -70,7 +79,7 @@ async function chain(t, name, turns) {
     try {
       assert.ok(done, `yanıt yok: ${response.status}`);
       const rows = evidenceOf(stack, from);
-      check({ done, rows, finish: done.assistantMessage.finishReason, history });
+      check({ done, rows, finish: done.assistantMessage.finishReason, content: String(done.assistantMessage.content || ''), history });
       history.push({ message, rows });
       summary.passed += 1;
     } catch (error) {
@@ -101,18 +110,22 @@ test('takip zinciri: kişi değişimi, "bunlardan", "ilk görev", "onun"', async
       assert.ok(ids.includes(TASKS.DUE_SOON), 'Zeynep\'in görevleri okunur');
       assert.ok(!ids.includes(TASKS.OVERDUE), 'önceki kişinin kümesi sızmaz');
     }],
-    ['Bunlardan bu hafta bitecek olanlar?', ({ finish, rows }) => {
+    ['Bunlardan bu hafta bitecek olanlar?', ({ finish, rows, content }) => {
       assert.equal(finish, 'stop');
       assert.deepEqual(taskIds(rows), [TASKS.DUE_SOON]);
+      assert.match(content, /Anten kalibrasyonu/);
     }],
-    ['İlk görevin öncülü var mı?', ({ finish, rows }) => {
+    ['İlk görevin öncülü var mı?', ({ finish, rows, content }) => {
       assert.equal(finish, 'stop');
+      assert.match(content, /Radar test planı/, 'yanıt öncülü söyler');
       const inspected = rows.filter((row) => row.tool === 'rota_dependency_inspect');
       assert.ok(inspected.length && inspected.every((row) => row.entity?.id === TASKS.DUE_SOON), 'önceki listenin ilk görevi');
     }],
-    ['Onun termin tarihi ne?', ({ finish, rows }) => {
+    ['Onun termin tarihi ne?', ({ finish, rows, content }) => {
       assert.equal(finish, 'stop');
       assert.ok(mentions(rows, TASKS.DUE_SOON) && mentions(rows, '2026-10-02'), 'önceki yanıtın görevi ve termini');
+      assert.match(content, /Anten kalibrasyonu/, 'yanıt doğru görevi söyler');
+      assert.match(content, /2026-10-02|0?2[./]10[./]2026|2 Ekim 2026/, 'yanıt kanıttaki termini söyler');
     }]
   ]);
 });
