@@ -45,7 +45,7 @@ export const REQUEST_LIMITS = Object.freeze({ maxMetrics: 8, maxEntities: 4, max
 export function taskResultScope(value) {
   if (!value || value.type !== 'task' || Object.keys(value).some(key => !['type', 'taskIds'].includes(key))
     || !Array.isArray(value.taskIds) || !value.taskIds.length || value.taskIds.length > REQUEST_LIMITS.maxPreviousResultRows) return null;
-  const taskIds = value.taskIds.map(canonicalActualId);
+  const taskIds = value.taskIds.map(id => typeof id === 'string' ? canonicalActualId(id) : null);
   if (taskIds.some(id => !id) || new Set(taskIds).size !== taskIds.length) return null;
   return Object.freeze({ type: 'task', taskIds: Object.freeze(taskIds) });
 }

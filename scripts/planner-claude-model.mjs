@@ -113,7 +113,7 @@ function processIdentity(pid, expected = null, timeoutMs = 120000) {
   throw new Error('PLANNER_LEDGER_OWNER_UNVERIFIED');
 }
 
-/** Kilit sahipliği atomik yayımlanır; bekleme bütçesi komutun yürütme bütçesidir. */
+/** Kilit sahipliği atomik yayımlanır; bekleme bütçesi model yürütmesinden ayrıdır. */
 async function withLock(file, work, timeoutMs) {
   const lock = `${file}.lock`;
   const candidate = mkdtempSync(`${lock}-`);
@@ -151,11 +151,64 @@ async function withLock(file, work, timeoutMs) {
   }
 }
 
-function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] }) {
+export const MODEL_CLEANUP_TIMEOUT_MS = 5000;
+
+const cleanupCommand = (command, args) => new Promise((resolveCleanup, rejectCleanup) => {
+  const killer = spawn(command, args, { stdio: 'ignore', windowsHide: true });
+  let done = false;
+  const finishCleanup = (error) => {
+    if (done) return;
+    done = true;
+    clearTimeout(cleanupTimer);
+    if (error) rejectCleanup(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_CLEANUP_ERROR', { cause: error }));
+    else resolveCleanup();
+  };
+  const cleanupTimer = setTimeout(() => {
+    try { killer.kill('SIGKILL'); } catch { /* Başarısız temizleme aşağıda raporlanır. */ }
+    finishCleanup(new Error('cleanup timeout'));
+  }, MODEL_CLEANUP_TIMEOUT_MS);
+  killer.once('error', finishCleanup);
+  killer.once('close', (code) => finishCleanup(code === 0 ? null : new Error('cleanup exit')));
+});
+
+/** Geliştirme komutunun temizleme sahibi: Windows ağacı ya da POSIX süreç/grup. */
+export async function terminateModelCommand(child, { group = true } = {}) {
+  if (!child.pid) return;
+  if (process.platform === 'win32') {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try { await cleanupCommand('taskkill', ['/pid', String(child.pid), '/T', '/F']); }
+    catch {
+      // Kök süreçten önce çocukları durdur; taskkill'in çıkışı da temizleme sonucuna dahildir.
+      const script = `$ErrorActionPreference='Stop'; function Stop-Tree([int]$ownerId) { Get-CimInstance Win32_Process -Filter "ParentProcessId=$ownerId" | ForEach-Object { Stop-Tree $_.ProcessId }; if (Get-Process -Id $ownerId -ErrorAction SilentlyContinue) { Stop-Process -Id $ownerId -Force } }; Stop-Tree ${child.pid}`;
+      try { await cleanupCommand(path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', script]); }
+      catch (error) {
+        try { child.kill('SIGKILL'); } catch { /* Ağaç temizleme hatası korunur. */ }
+        throw error;
+      }
+    }
+  } else {
+    try { process.kill(group ? -child.pid : child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+  }
+}
+
+function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] }, timeoutMs) {
   return new Promise((resolve) => {
     const child = spawn(command, [...prefixArgs, ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     const events = [];
     let launched = false;
+    let timedOut = false;
+    let cleanup = null;
+    const finish = async (result) => {
+      clearTimeout(timer);
+      let cleanupFailed = false;
+      try { await cleanup; } catch { cleanupFailed = true; }
+      resolve({ ...result, timedOut, cleanupFailed });
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      cleanup = terminateModelCommand(child, { group: false });
+      finish({ code: -1, events });
+    }, timeoutMs);
     child.once('spawn', () => { launched = true; });
     const decoder = new StringDecoder('utf8');
     let buffer = '';
@@ -169,8 +222,8 @@ function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] 
       }
     });
     child.stderr.on('data', () => {});
-    child.on('error', () => resolve({ code: -1, events, launchFailed: !launched }));
-    child.on('close', (code) => resolve({ code, events }));
+    child.on('error', () => finish({ code: -1, events, launchFailed: !launched }));
+    child.on('close', (code) => finish({ code, events }));
     child.stdin.end(input);
   });
 }
@@ -180,7 +233,7 @@ function reportFailure(log, error, extra = {}) {
   process.stdout.write(`${JSON.stringify({ text: '', toolCalls: [], error })}\n`);
 }
 
-async function complete(launcher) {
+async function complete(launcher, timeoutMs) {
   const payload = JSON.parse(readFileSync(0, 'utf8'));
   const model = process.env.PLANNER_CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
   const effort = process.env.PLANNER_CLAUDE_EFFORT || 'low';
@@ -231,7 +284,7 @@ async function complete(launcher) {
       ...(forced ? ['--json-schema', JSON.stringify({ ...forced.parameters, description: forced.description })] : []), '--output-format', 'stream-json', '--verbose',
       '--max-turns', '1', '--no-session-persistence', '--disable-slash-commands'];
     const startedAt = Date.now();
-    const { events, launchFailed } = await runClaude(args, env, cwd, conversationText(rest), launcher);
+    const { events, launchFailed, timedOut, cleanupFailed } = await runClaude(args, env, cwd, conversationText(rest), launcher, timeoutMs);
     const init = events.find((event) => event.type === 'system' && event.subtype === 'init');
     const result = events.find((event) => event.type === 'result');
     const assistants = events.filter((event) => event.type === 'assistant' && !event.parent_tool_use_id).map((event) => event.message);
@@ -251,11 +304,16 @@ async function complete(launcher) {
     const row = { at: new Date().toISOString(), ...(callId ? { callId } : {}), models, effort, thinking: usage.output_tokens_details.thinking_tokens || usage.thinkingBlocks ? 'on' : 'off', usage,
       apiCalls: ids.size, numTurns: result?.num_turns ?? null, stopReason: blocks.some((block) => block.type === 'tool_use') ? 'tool_use' : result?.stop_reason ?? null,
       durationMs: Date.now() - startedAt, rateLimit: limit ? { status: limit.status, utilization: limit.utilization ?? null } : null, staticPromptHash, toolCatalogHash, toolOrderHash: hash(JSON.stringify(offered)), tailChars: conversationText(rest).length };
+    if (timedOut) return fail(cleanupFailed ? 'MODEL_COMMAND_TIMEOUT MODEL_COMMAND_CLEANUP_ERROR' : 'MODEL_COMMAND_TIMEOUT', row);
     if (!result || result.is_error && result.subtype !== 'error_max_turns' || rejected || result.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null });
     // CLI araçları kendi kararlı sırasıyla sunar: küme birebir aynı olmalı, sıra (toolOrderHash) çağrılar arasında sabit kalmalıdır.
     if (JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort())) return fail('PLANNER_TOOLS_NOT_OFFERED', { ...row, offered });
     if (prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash)) return fail('PLANNER_TOOL_ORDER_UNSTABLE', row);
-    const first = prior.find((item) => !item.error && item.staticPromptHash === staticPromptHash && item.toolCatalogHash === toolCatalogHash);
+    const first = prior.find((item) => {
+      const ageMs = startedAt - Date.parse(item.at);
+      return !item.error && item.staticPromptHash === staticPromptHash && item.toolCatalogHash === toolCatalogHash
+        && ageMs >= 0 && ageMs < 5 * 60 * 1000;
+    });
     if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && first && !usage.cache_read_input_tokens) return fail('PLANNER_CACHE_NOT_REUSED', row);
     if (row.apiCalls !== 1) return fail('PLANNER_CALL_COUNT_UNEXPECTED', row);
     if (!models.length || models.some((item) => item !== model)) return fail('PLANNER_MODEL_MISMATCH', row);
@@ -279,7 +337,7 @@ export async function runAdapter(launcher = {}) {
   let timeoutMs;
   try { timeoutMs = limitFromEnv('PLANNER_MODEL_TIMEOUT_MS') ?? 120000; } catch (error) { return reportFailure(log, error.code); }
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 20 || timeoutMs > 600000) return reportFailure(log, 'PLANNER_LIMIT_INVALID');
-  const run = () => complete(launcher);
+  const run = () => complete(launcher, timeoutMs);
   try { await (log ? withLock(log, run, timeoutMs) : run()); } catch (error) {
     if (error.code !== 'PLANNER_LEDGER_LOCKED') throw error;
     reportFailure(log, error.code);

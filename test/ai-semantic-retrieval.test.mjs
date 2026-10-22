@@ -774,7 +774,11 @@ test('çağıranın iptali her evrede iptal kalır; geç gelen model sonucu uygu
 
 test('4C son geçiş: yeniden sıralama süre sınırı kendi evresinde ölçülür', async (t) => {
   const { retrieve, provider, rerankCalls } = setup(t);
+  const health = () => snapshotOperations().filter(row => row.operation === 'ai.semantic.retrieve')
+    .reduce((sum, row) => ({ count: sum.count + row.count, errors: sum.errors + row.errorCount }), { count: 0, errors: 0 });
   await retrieve();
+  const before = health();
+  const retrievals = aiTelemetrySnapshot().semantic.retrievals;
   provider.enqueue({ type: 'reply' }, { type: 'deferred' });
   const controller = new AbortController();
   const pending = retrieve(QUERY, { signal: controller.signal });
@@ -782,6 +786,25 @@ test('4C son geçiş: yeniden sıralama süre sınırı kendi evresinde ölçül
   controller.abort(new AiError('AI_TIMEOUT'));
   await assert.rejects(pending);
   assert.equal(aiTelemetrySnapshot().semantic.lastFailure.stage, 'rerank');
+  assert.equal(aiTelemetrySnapshot().semantic.lastFailure.category, 'timeout');
+  assert.deepEqual(health(), { count: before.count + 1, errors: before.errors + 1 });
+  assert.equal(aiTelemetrySnapshot().semantic.retrievals, retrievals + 1, 'tek terminal ölçüm');
+  rerankCalls().at(-1).resolve();
+  await new Promise(setImmediate);
+  assert.deepEqual(health(), { count: before.count + 1, errors: before.errors + 1 }, 'geç sonuç başarı eklemez');
+  assert.equal((await retrieve()).status, 'reranked', 'sonraki çağrı süre aşımını devralmaz');
+  const beforeCancel = health();
+  provider.enqueue({ type: 'reply' }, { type: 'deferred' });
+  const cancelled = new AbortController();
+  const cancellation = retrieve(QUERY, { signal: cancelled.signal });
+  await until(() => rerankCalls().length === 4, 'iptal edilecek yeniden sıralama başladı');
+  cancelled.abort();
+  await assert.rejects(cancellation, { code: 'AI_CANCELLED' });
+  assert.deepEqual(health(), { count: beforeCancel.count + 1, errors: beforeCancel.errors }, 'kullanıcı iptali hizmet hatası değildir');
+  assert.equal(aiTelemetrySnapshot().semantic.byStatus.cancelled, 1);
+  rerankCalls().at(-1).resolve();
+  await new Promise(setImmediate);
+  assert.deepEqual(health(), { count: beforeCancel.count + 1, errors: beforeCancel.errors });
 });
 
 test('iptal model sonucu geldikten sonra ama sonuç döndürülmeden önce gelirse de sonuç uygulanmaz', async (t) => {

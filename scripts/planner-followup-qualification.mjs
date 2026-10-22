@@ -20,6 +20,7 @@ import { createAiStack, sendTurn } from '../test/helpers/aiStack.mjs';
 import { createFakeAiProvider } from '../test/helpers/fakeAiProvider.mjs';
 import { ALI_2, AYSE, MEHMET, NOW, TASKS, ZEYNEP, rotaToolSeed } from '../test/helpers/aiToolFixtures.mjs';
 import { verifyCompletion } from './planner-evaluation.mjs';
+import { MODEL_CLEANUP_TIMEOUT_MS, terminateModelCommand } from './planner-claude-model.mjs';
 import { AI_ERROR_CODES } from '../src/domain/ai/aiErrorCatalog.js';
 
 const { AiError } = await import('../src/server/ai/aiErrors.js');
@@ -39,31 +40,26 @@ function complete(input, signal) {
       env: { ...process.env, PLANNER_MODEL_TIMEOUT_MS: String(timeoutMs) } });
     let out = '';
     let settled = false;
-    const terminate = () => {
-      if (!child.pid) return;
-      if (process.platform === 'win32') {
-        if (child.exitCode !== null || child.signalCode !== null) return;
-        const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-        killer.on('error', () => child.kill('SIGKILL'));
-      } else {
-        try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
-      }
-    };
-    const finish = (error, value) => {
+    const finish = async (error, value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener('abort', cancel);
       process.off('SIGINT', interrupt); process.off('SIGTERM', terminateSignal); process.off('SIGHUP', hangup);
-      terminate();
+      try { await terminateModelCommand(child); } catch (cleanupError) {
+        const failure = new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_CLEANUP_ERROR', { cause: cleanupError });
+        if (error) error.cause = failure;
+        else error = failure;
+      }
       if (error) reject(error);
       else resolve(value);
     };
     const cancel = () => finish(signal?.reason instanceof AiError ? signal.reason : new AiError(AI_ERROR_CODES.AI_CANCELLED));
-    const interrupt = () => { try { cancel(); } finally { process.exit(130); } };
-    const terminateSignal = () => { try { cancel(); } finally { process.exit(143); } };
-    const hangup = () => { try { cancel(); } finally { process.exit(129); } };
-    const timer = setTimeout(() => finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_TIMEOUT')), timeoutMs);
+    const interrupt = () => cancel().finally(() => process.exit(130));
+    const terminateSignal = () => cancel().finally(() => process.exit(143));
+    const hangup = () => cancel().finally(() => process.exit(129));
+    // Bağdaştırıcı kilidi ve modeli ayrı ayrı bu bütçeyle sınırlar; üst süre ikisini de kapsar.
+    const timer = setTimeout(() => finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_TIMEOUT')), 2 * timeoutMs + 2 * MODEL_CLEANUP_TIMEOUT_MS + 1000);
     process.once('SIGINT', interrupt); process.once('SIGTERM', terminateSignal); process.once('SIGHUP', hangup);
     child.stdout.on('data', (chunk) => { out += chunk; });
     child.on('error', () => finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_ERROR')));

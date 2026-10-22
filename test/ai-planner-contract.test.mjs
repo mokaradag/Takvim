@@ -46,6 +46,44 @@ async function turn(t, steps, { user = 'Rota verisini incele', planning = null, 
 
 /* ── Anlamsal danışmanlık sınırı ───────────────────────────── */
 
+test('4C son yakınsama: bozuk görev kapsamı dönüştürülmez; takip açıklaması sonraki turu etkilemez', async (t) => {
+  const { taskResultScope } = await import('../src/domain/ai/requestContract.js');
+  const { sendTurn } = await import('./helpers/aiStack.mjs');
+  const { randomUUID } = await import('node:crypto');
+  let coerced = false;
+  const hostile = { toString() { coerced = true; throw new Error('coercion'); } };
+  for (const id of [Object.create(null), hostile, { toString: null }, 1, null, new String(TASKS.OVERDUE)]) {
+    assert.equal(taskResultScope({ type: 'task', taskIds: [id] }), null);
+  }
+  assert.equal(coerced, false);
+  assert.deepEqual(taskResultScope({ type: 'task', taskIds: [TASKS.OVERDUE.toUpperCase()] }).taskIds, [TASKS.OVERDUE]);
+  assert.equal(taskResultScope({ type: 'task', taskIds: [TASKS.OVERDUE, TASKS.OVERDUE.toUpperCase()] }), null);
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const stack = stackFor(t);
+  const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me' } };
+  const enqueue = request => stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr', request } }] });
+  enqueue(request);
+  const doneOf = response => response.events.find(event => event.event === 'done').data;
+  const first = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Görevlerimi listele.' }));
+  assert.equal(first.assistantMessage.finishReason, 'stop');
+  assert.ok(stack.db.aiMessageEvidence.length);
+  for (const row of stack.db.aiMessageEvidence) {
+    const evidence = JSON.parse(row.EvidenceJson);
+    assert.ok(evidence.resultScope?.taskIds.length);
+    evidence.resultScope.taskIds = [{ toString: null }];
+    row.EvidenceJson = JSON.stringify(evidence);
+  }
+  const before = stack.db.aiToolLog.length;
+  enqueue({ ...request, previousResult: true });
+  const second = doneOf(await sendTurn({ turnId: randomUUID(), conversationId: first.conversation.id, expectedSequence: 2, message: 'Bunları göster.' }));
+  assert.equal(second.assistantMessage.finishReason, 'clarification');
+  assert.equal(stack.db.aiToolLog.length, before, 'geçersiz önceki kapsam veri okuması açmaz');
+  enqueue(request);
+  const third = doneOf(await sendTurn({ turnId: randomUUID(), conversationId: first.conversation.id, expectedSequence: 4, message: 'Görevlerimi yeniden listele.' }));
+  assert.equal(third.assistantMessage.finishReason, 'stop');
+  assert.ok(stack.db.aiToolLog.length > before);
+});
+
 test('anlamsal adaylar kayıt defterine karşı yeniden doğrulanır; bozuk küme danışmanlık değildir', async () => {
   const advise = (result) => semanticPlanningAdvice({ query: 'x', catalog, retrieve: async () => result });
   const valid = await advise({ status: 'reranked', candidates: [candidate('rota_task_search', 1), candidate('rota_task_detail', 2)], failure: null });
@@ -216,6 +254,38 @@ test('çelişkili termin penceresi SQL öncesinde reddedilir ve ipucu modelin g�
   const rejection = inputs[1].messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).at(-1);
   assert.deepEqual(rejection.error.details, ['$.filters.deadline:conflict']);
   assert.ok(rejection.error.hints.some((hint) => hint.includes('deadline')));
+});
+
+test('4C son yakınsama: iş akışı durum dizisinin ipucu atomik ve sınırlı onarıma ulaşır', async (t) => {
+  const { metricIdHints } = await import('../src/server/ai/tools/requestDeclaration.js');
+  const itemProblem = '$.filters.status[0]:enum';
+  for (const tool of ['rota_schedule_requests', 'rota_assignment_requests']) await t.test(tool, async (t) => {
+    const request = { operation: 'value', metrics: ['requests.sent'], population: { tool }, filters: { tab: 'sent', workflowStatus: 'PENDING', status: ['pending'] } };
+    assert.ok(metricIdHints([itemProblem], { ...request, filters: { status: ['pending'] } }).some(hint => hint.includes('filters.workflowStatus')));
+    const sibling = { operation: 'value', metrics: ['notifications.unread'], population: { tool: 'rota_notifications' } };
+    const fixed = { ...request, filters: { tab: 'sent', workflowStatus: 'PENDING', status: ['todo'] } };
+    let stack;
+    const multi = request => plan({ intent: 'rota', language: 'tr', request, additionalRequests: [sibling] });
+    const { result, inputs, decisions } = await turn(t, [multi(request), input => {
+      const rejection = input.messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content)).at(-1);
+      assert.ok(rejection.error.details.some(problem => problem.includes(itemProblem)), JSON.stringify(rejection));
+      assert.ok(rejection.error.hints.some(hint => hint.includes('filters.workflowStatus')), JSON.stringify(rejection));
+      assert.equal(stack.db.aiToolLog?.length || 0, 0, 'kardeş bölüm de onarım öncesinde okunmaz');
+      return multi(fixed);
+    }, input => {
+      // İpucu doğrulamayı geçmez: görev durumu geçerli enum olsa da bu nüfusta desteklenmez.
+      const rejection = input.messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content)).at(-1);
+      assert.ok(rejection.error.details.includes('$.filters.status:unsupported'));
+      assert.equal(stack.db.aiToolLog?.length || 0, 0);
+      return multi({ ...request, filters: { tab: 'sent', workflowStatus: 'PENDING' } });
+    }], { user: 'Gönderdiğim bekleyen taleplerin sayısı ve okunmamış bildirimlerim', setup: value => { stack = value; } });
+    assert.equal(inputs.length, 3);
+    assert.equal(result.stats.attempted, 2);
+    assert.equal(result.outcome, 'grounded');
+    assert.equal(decisions.filter(decision => decision.intent === 'rota').length, 1);
+    assert.ok(metricIdHints(['$.filters.status:type'], request).some(hint => hint.includes('filters.workflowStatus')), 'skaler tip hatası da korunur');
+  });
+  assert.deepEqual(metricIdHints([itemProblem], { population: { tool: 'rota_task_search' } }), [], 'görev durumu iş akışına çevrilmez');
 });
 
 test('proje aramasının kendi varlığı adla bildirildiğinde sunucunun kurduğu arama reddedilmez', async (t) => {

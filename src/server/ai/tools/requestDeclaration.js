@@ -287,7 +287,7 @@ export function metricIdHints(problems, raw) {
       return paths.length ? [`fields[${field[1]}].path (${item.metric}, ${item.tool}): ${paths.join('|')}`] : [];
     }
     // Talep nüfusunda durum koşulu talebin iş akışı durumudur (filters.status görev durumudur).
-    if (/^\$\.filters\.status:(?:type|enum)$/.test(String(problem)) && WORKFLOW_TOOLS.includes(raw?.population?.tool)) {
+    if (/^\$\.filters\.status(?:\[\d+\])?:(?:type|enum)$/.test(String(problem)) && WORKFLOW_TOOLS.includes(raw?.population?.tool)) {
       return [`filters.status görev durumudur; talep durumu filters.workflowStatus: ${requestSchema().properties.filters.properties.workflowStatus.enum.join('|')}`];
     }
     const index = /^\$\.metrics\[(\d+)\]:enum$/.exec(String(problem))?.[1];
