@@ -335,10 +335,16 @@ function wireMessages(messages) {
   });
 }
 
+// Bu modelin kurum içi ucu adlı `tool_choice` ile akış hatası veriyor; plan yine sunucuda fail-closed doğrulanır.
+const NAMED_TOOL_CHOICE_AUTO_MODELS = new Set(['Qwen3-Next-80B-A3B-Instruct']);
+
 /** `auto`, `none` ya da sunulan araçlardan birinin zorunlu çağrısı (`{ name }` → OpenAI uyumlu adlı işlev seçimi). */
-function wireToolChoice(toolChoice, tools) {
+function wireToolChoice(toolChoice, tools, model) {
   if (toolChoice === 'none') return 'none';
-  if (toolChoice?.name && tools.some((tool) => tool.name === toolChoice.name)) return { type: 'function', function: { name: toolChoice.name } };
+  if (toolChoice?.name && tools.some((tool) => tool.name === toolChoice.name)) {
+    if (NAMED_TOOL_CHOICE_AUTO_MODELS.has(model)) return 'auto';
+    return { type: 'function', function: { name: toolChoice.name } };
+  }
   return 'auto';
 }
 
@@ -469,7 +475,7 @@ export function createOpenAiCompatibleProvider({
           messages: wireMessages(messages),
           stream: true,
           ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}),
-          ...(withTools ? { tools: wireTools(tools), tool_choice: wireToolChoice(toolChoice, tools) } : {})
+          ...(withTools ? { tools: wireTools(tools), tool_choice: wireToolChoice(toolChoice, tools, model) } : {})
         })
       }, signal);
       if (!response.ok) {

@@ -102,9 +102,11 @@ test('istek: katalog "function" aracı, seçim kipi ve araçlı döküm OpenAI t
   await collect(await toolStream(provider, { toolChoice: 'none' }));
   await collect(await toolStream(provider, { toolChoice: { name: 'rota_task_search' } }));
   await collect(await toolStream(provider, { toolChoice: { name: 'rota_unknown' } }));
-  const [auto, none, named, unknown] = requests;
+  await collect(await toolStream(provider, { model: 'Qwen3-Next-80B-A3B-Instruct', toolChoice: { name: 'rota_task_search' } }));
+  const [auto, none, named, unknown, qwenNamed] = requests;
   assert.deepEqual(named.body.tool_choice, { type: 'function', function: { name: 'rota_task_search' } }, 'zorunlu plan aracı adlı işlev seçimidir');
   assert.equal(unknown.body.tool_choice, 'auto', 'sunulmayan araç zorunlu seçilemez');
+  assert.equal(qwenNamed.body.tool_choice, 'auto', 'Qwen3-Next adlı seçim yerine uyumlu auto kullanır');
   assert.equal(auto.url, 'http://ag-gecidi.test/v1/chat/completions');
   assert.equal(auto.body.stream, true);
   assert.equal(auto.body.max_tokens, 512);
