@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createAiStack } from './helpers/aiStack.mjs';
+import { captureConsole, createAiStack } from './helpers/aiStack.mjs';
 import { AYSE, NOW, PROJECTS, TASKS, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
@@ -25,6 +25,92 @@ const candidate = (id, rank) => ({ id, kind: 'tool', rank, similarity: 0.5 });
 const plan = (args) => ({ text: '', toolCalls: [{ id: 'p1', name: 'rota_plan', arguments: JSON.stringify(args) }], finishReason: 'tool_calls' });
 const prose = (text) => ({ text, toolCalls: [], finishReason: 'stop' });
 const stackFor = (t) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed({}) });
+
+test('4C posted convergence: predecision failures sample once without becoming invalid plans', async (t) => {
+  for (const code of ['AI_PROVIDER_UNAVAILABLE', 'AI_TIMEOUT', 'AI_CANCELLED']) await t.test(code, async (t) => {
+    const stack = stackFor(t);
+    const logs = captureConsole(t);
+    const startedAt = Date.now() - 1500;
+    const failure = new AiError(code);
+    let planned = 0;
+    const session = { signal: new AbortController().signal, round: async () => { throw failure; } };
+    await assert.rejects(runGroundedTurn(session, {
+      messages: buildGroundedContext({ userContent: 'Görevlerimi göster', now: NOW }).messages,
+      catalog, context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => assert.fail('failure cannot emit success'),
+      planning: { state: 'first_stage', candidates: [], reason: null, startedAt }, onPlanned: () => { planned += 1; }
+    }), error => error === failure);
+    const planner = aiTelemetrySnapshot().planner;
+    assert.equal(planner.decisions.invalid, 0);
+    assert.equal(Object.values(planner.decisions).reduce((sum, count) => sum + count, 0), 0);
+    assert.equal(planner.latency.count, 1);
+    assert.equal(planner.semantic.first_stage, 1);
+    assert.ok(planner.latency.p50Ms >= 1500);
+    assert.equal(planned, 0, 'failure is telemetry, never a captured plan');
+    assert.equal(stack.db.aiToolLog?.length || 0, 0);
+    const trace = logs.map(line => JSON.parse(line.slice(line.indexOf('{')))).find(row => row.operation === 'ai.grounded.turn');
+    assert.equal(trace.context.outcome, 'error');
+    assert.equal(trace.context.code, code);
+  });
+});
+
+test('4C final convergence: escalation retains planner ownership until terminal failure', async (t) => {
+  const stack = stackFor(t);
+  const empty = new AiError('AI_PROVIDER_RESPONSE_INVALID', { details: { reason: 'EMPTY_COMPLETION' } });
+  const options = {
+    messages: buildGroundedContext({ userContent: 'Görevlerimi göster', now: NOW }).messages,
+    catalog, context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {}, escalation: true,
+    planning: { state: 'unavailable', candidates: [], reason: 'PROFILE_DISABLED', startedAt: Date.now() - 1500 }
+  };
+  const session = { signal: new AbortController().signal, remainingMs: () => 0, round: async () => { throw empty; } };
+  const result = await runGroundedTurn(session, options);
+  assert.equal(result.outcome, 'escalate');
+  assert.equal(aiTelemetrySnapshot().planner.decisions.invalid, 0, 'handoff is not a terminal decision');
+  await assert.rejects(runGroundedTurn(session, { ...options, resume: result.resume, escalation: false }), error => error === empty);
+  result.traceError(empty);
+  result.traceError(empty);
+  assert.throws(() => result.fallback(() => {}), error => error === empty);
+  const planner = aiTelemetrySnapshot().planner;
+  assert.equal(planner.decisions.invalid, 0);
+  assert.equal(planner.latency.count, 1);
+  assert.equal(planner.semantic.unavailable, 1);
+  assert.ok(planner.latency.p50Ms >= 1500);
+  assert.equal(stack.db.aiToolLog?.length || 0, 0);
+});
+
+test('4C posted convergence: storage-bound scope omission preserves data and reaches the existing terminal trace', async (t) => {
+  stackFor(t);
+  const logs = captureConsole(t);
+  const request = { operation: 'list', metrics: ['task.title', 'task.status'], population: { tool: 'rota_task_search', collection: 'tasks' } };
+  const options = { messages: buildGroundedContext({ userContent: 'Görevleri listele', now: NOW }).messages,
+    catalog, context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {}, escalation: true };
+  const signal = new AbortController().signal;
+  const first = await runGroundedTurn({ signal, remainingMs: () => 0, round: async () => {
+    throw new AiError('AI_PROVIDER_RESPONSE_INVALID', { details: { reason: 'EMPTY_COMPLETION' } });
+  } }, options);
+  assert.equal(first.outcome, 'escalate');
+  const ledger = first.resume.ledger;
+  const result = await runGroundedTurn({ signal, round: async () => plan({ intent: 'rota', language: 'tr', request }) }, {
+    ...options, resume: first.resume, escalation: false, onText: async () => {
+      const [entry] = ledger.authorizationEntries();
+      assert.ok(entry);
+      const payload = JSON.parse(entry.payload);
+      payload.data.padding = '';
+      entry.payload = JSON.stringify(payload);
+      const base = ledger.persistable([entry.id])[0].evidenceJson.length;
+      payload.data.padding = 'x'.repeat(31990 - base);
+      entry.payload = JSON.stringify(payload);
+    }
+  });
+  assert.equal(result.outcome, 'grounded');
+  const saved = JSON.parse(result.evidenceRows[0].evidenceJson);
+  assert.equal(saved.dataOmitted, undefined);
+  assert.ok(saved.data.tasks.some(row => row.taskId === TASKS.OVERDUE));
+  assert.equal(saved.resultScope, undefined);
+  const traces = logs.map(line => JSON.parse(line.slice(line.indexOf('{')))).filter(row => row.operation === 'ai.grounded.turn');
+  assert.equal(traces.length, 1);
+  assert.equal(traces[0].context.resultScopeOmitted, true);
+  assert.ok(!JSON.stringify(traces).includes(TASKS.OVERDUE), 'omission diagnostics contain no task identity or evidence');
+});
 
 async function turn(t, steps, { user = 'Rota verisini incele', planning = null, allowedTextFields = [], limits, setup = null, signal = null, previousResult = null } = {}) {
   const stack = stackFor(t);

@@ -22,7 +22,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -317,6 +317,8 @@ function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] 
       for (const directory of (env.PATH || '').split(';').filter(Boolean)) {
         const native = path.join(directory, 'claude.exe');
         if (existsSync(native)) { command = native; break; }
+        const packaged = path.join(directory, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+        if (existsSync(path.join(directory, 'claude.cmd')) && existsSync(packaged)) { command = packaged; break; }
         const entry = path.join(directory, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
         if (existsSync(path.join(directory, 'claude.cmd')) && existsSync(entry)) { command = process.execPath; prefixArgs = [entry]; break; }
       }
@@ -446,7 +448,7 @@ async function complete(launcher, timeoutMs) {
       ...(forced ? ['--json-schema', JSON.stringify({ ...forced.parameters, description: forced.description })] : []), '--output-format', 'stream-json', '--verbose',
       '--max-turns', '1', '--no-session-persistence', '--disable-slash-commands'];
     const startedAt = Date.now();
-    const { events, launchFailed, timedOut, cleanupFailed } = await runClaude(args, env, cwd, conversationText(rest), launcher, timeoutMs);
+    const { code, events, launchFailed, timedOut, cleanupFailed } = await runClaude(args, env, cwd, conversationText(rest), launcher, timeoutMs);
     const init = events.find((event) => event.type === 'system' && event.subtype === 'init');
     const result = events.find((event) => event.type === 'result');
     const assistants = events.filter((event) => event.type === 'assistant' && !event.parent_tool_use_id).map((event) => event.message);
@@ -468,7 +470,10 @@ async function complete(launcher, timeoutMs) {
       durationMs: Date.now() - startedAt, rateLimit: limit ? { status: limit.status, utilization: limit.utilization ?? null } : null, staticPromptHash, toolCatalogHash, toolOrderHash: hash(JSON.stringify(offered)), tailChars: conversationText(rest).length };
     if (timedOut) return fail(cleanupFailed ? 'MODEL_COMMAND_TIMEOUT MODEL_COMMAND_CLEANUP_ERROR' : 'MODEL_COMMAND_TIMEOUT', row);
     if (cleanupFailed) return fail('MODEL_COMMAND_CLEANUP_ERROR', row);
-    if (!result || result.is_error && result.subtype !== 'error_max_turns' || rejected || result.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null });
+    // --max-turns 1 ends a native tool handoff with this documented CLI status; it is not a failed completion.
+    const toolHandoff = !forced && code === 1 && result?.is_error === true && result.subtype === 'error_max_turns'
+      && blocks.some(block => block.type === 'tool_use' && block.name?.startsWith(PREFIX));
+    if (code !== 0 && !toolHandoff || !result || result.is_error && result.subtype !== 'error_max_turns' || rejected || result.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null });
     // CLI araçları kendi kararlı sırasıyla sunar: küme birebir aynı olmalı, sıra (toolOrderHash) çağrılar arasında sabit kalmalıdır.
     if (JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort())) return fail('PLANNER_TOOLS_NOT_OFFERED', { ...row, offered });
     if (prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash)) return fail('PLANNER_TOOL_ORDER_UNSTABLE', row);
@@ -510,7 +515,11 @@ export async function runAdapter(launcher = {}) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const direct = (() => {
+  try { return Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+})();
+if (direct) {
   if (process.argv[2] === 'mcp') serveTools(process.argv[3]);
   else if (process.send && process.env.ROTA_MODEL_COMMAND_OWNER === 'supervisor') ownModelCommand();
   else if (process.send && process.env.ROTA_MODEL_COMMAND_OWNER === 'monitor') monitorModelCommand();

@@ -1313,3 +1313,28 @@ test('4C frozen 16: continuation scope uses a persisted verifiable carrier', asy
     if (mode !== 'no-carrier') assert.ok(JSON.parse(rows.at(-1).evidenceJson).resultScope);
   });
 });
+
+test('4C final convergence: adding continuation scope never discards fitting evidence data', async (t) => {
+  for (const alreadyCompact of [false, true]) await t.test(String(alreadyCompact), async (t) => {
+    const stack = stackFor(t);
+    const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL });
+    const executor = createToolExecutor({ context: first.context, ledger: first.ledger, signal: new AbortController().signal });
+    await executor.runRound([{ id: 'second', name: 'rota_task_search', arguments: JSON.stringify({ projectId: PROJECTS.FULL, status: ['todo'] }) }]);
+    const [entry] = first.ledger.authorizationEntries();
+    const payload = JSON.parse(entry.payload);
+    payload.data.padding = '';
+    entry.payload = JSON.stringify(payload);
+    const unpadded = first.ledger.persistable(['R1'])[0].evidenceJson.length;
+    payload.data.padding = 'x'.repeat((alreadyCompact ? 32500 : 31990) - unpadded);
+    entry.payload = JSON.stringify(payload);
+    const baseline = JSON.parse(first.ledger.persistable(['R1'])[0].evidenceJson);
+    assert.equal(baseline.dataOmitted, alreadyCompact ? 'size' : undefined);
+    const scope = { type: 'task', taskIds: [TASKS.OVERDUE] };
+    const rows = first.ledger.persistable(['R1', 'R2'], { resultScope: scope }).map(row => JSON.parse(row.evidenceJson));
+    assert.equal(rows[0].dataOmitted, baseline.dataOmitted);
+    assert.deepEqual(rows[0].data, baseline.data);
+    assert.equal(rows.filter(row => row.resultScope).length, 1);
+    assert.deepEqual(rows[alreadyCompact ? 0 : 1].resultScope, scope);
+    for (const row of rows) assert.ok(decodeAuthorizationPopulation(row.authorizationPopulation));
+  });
+});

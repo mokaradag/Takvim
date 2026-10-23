@@ -911,14 +911,20 @@ function settlePart(turn, verdict, selectedBy) {
   };
 }
 
+function countPlannerDecision(turn, decision) {
+  if (turn.decisionCounted) return;
+  recordPlannerDecision({ decision: decision.intent, parts: decision.requests?.length || 0, semantic: turn.planning.state,
+    candidates: turn.planning.candidates.length, declarations: turn.trace.declarations,
+    latencyMs: Date.now() - turn.trace.startedAt, semanticReason: turn.planning.reason });
+  turn.decisionCounted = true;
+}
+
 /** Planlama kararının gözlemcisi ve içeriksiz telemetrisi. Karar donmuş bir özettir; turu değiştiremez. */
 function emitPlanned(turn, decision) {
   turn.decision = decision.intent;
   const summary = Object.freeze({ ...decision, language: turn.locale, semantic: turn.planning.state, candidates: turn.planning.candidates.length,
     declarations: turn.trace.declarations, latencyMs: Date.now() - turn.trace.startedAt });
-  if (!turn.decisionCounted) recordPlannerDecision({ decision: summary.intent, parts: summary.requests?.length || 0, semantic: summary.semantic,
-    candidates: summary.candidates, declarations: summary.declarations, latencyMs: summary.latencyMs, semanticReason: turn.planning.reason });
-  turn.decisionCounted = true;
+  countPlannerDecision(turn, decision);
   turn.onPlanned?.(summary);
 }
 
@@ -1143,11 +1149,12 @@ function traceRound(turn, { purpose, startedAt, result = null, error = null }) {
   });
 }
 
-function traceTurn(turn, outcome, { selectedBy = null, code = null } = {}) {
+function traceTurn(turn, outcome, { selectedBy = null, code = null, resultScopeOmitted = false } = {}) {
   if (turn.trace.recorded) return;
+  countPlannerDecision(turn, { intent: turn.decision });
   turn.trace.recorded = true;
   recordGroundedTurn({
-    outcome, code, selectedBy, escalated: turn.escalated, durationMs: Date.now() - turn.trace.startedAt,
+    outcome, code, selectedBy, resultScopeOmitted, escalated: turn.escalated, durationMs: Date.now() - turn.trace.startedAt,
     modelRounds: turn.modelRounds, toolRounds: turn.toolRounds, declarations: turn.trace.declarations, repairs: turn.trace.repairs,
     revalidationMs: turn.trace.revalidationMs, verificationMs: turn.trace.verificationMs, rounds: turn.trace.rounds,
     ...turn.executor.stats(), ...turn.context.stats()
@@ -1212,25 +1219,32 @@ async function revalidate(turn, disclosureSignal = turn.session.signal) {
 const SINGLE_TASK_TOOLS = Object.freeze(['rota_task_detail', 'rota_dependency_inspect']);
 
 function completedResultScope(turn, verdict) {
-  if (verdict.kind !== 'grounded' || turn.partCount !== 1) return null;
-  const tool = turn.request?.population?.tool;
-  if (SINGLE_TASK_TOOLS.includes(tool) && turn.request.entities.length === 1 && turn.request.entities[0].type === 'task') {
+  if (verdict.kind !== 'grounded') return null;
+  const sources = turn.partCount === 1 ? [{ request: turn.request, verdict, entries: partEntries(turn) }] : turn.answers;
+  const candidates = sources.filter(({ request }) => SINGLE_TASK_TOOLS.includes(request?.population?.tool)
+    && request.entities.length === 1 && request.entities[0].type === 'task'
+    || ['list', 'rank'].includes(request?.operation) && request.population.tool === 'rota_task_search');
+  if (candidates.length !== 1 || candidates[0].verdict.kind !== 'grounded') return null;
+  const { request, verdict: selected, entries: sourceEntries } = candidates[0];
+  const active = new Set(turn.ledger.requestEntries().map(entry => entry.id));
+  const entries = sourceEntries.filter(entry => active.has(entry.id) && selected.citedIds.includes(entry.id));
+  const tool = request.population.tool;
+  if (SINGLE_TASK_TOOLS.includes(tool)) {
     // Özne okumanın görev seçicisiyle aynı olmalıdır: kanıtın adlandırdığı başka bir kayıt gönderge olmaz.
-    const subjects = new Set(turn.ledger.requestEntries().filter((entry) => verdict.citedIds.includes(entry.id) && entry.tool === tool)
+    const subjects = new Set(entries.filter((entry) => entry.tool === tool)
       .map((entry) => (entry.payload?.entity?.type === 'task' && entry.payload.entity.id === entry.args?.taskId ? entry.payload.entity.id : null)));
     return subjects.size === 1 && !subjects.has(null) ? taskResultScope({ type: 'task', taskIds: [...subjects] }) : null;
   }
-  if (!['list', 'rank'].includes(turn.request?.operation) || tool !== 'rota_task_search') return null;
   const taskIds = new Set();
   // Satır sırası kullanıcının gördüğü sıradır: atfedilen kanıt sırası, kanıt içinde satır (sıralamada sıralama) sırası.
-  const entries = new Map(turn.ledger.requestEntries().map((entry) => [entry.id, entry]));
-  for (const entry of verdict.citedIds.map((id) => entries.get(id))) {
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  for (const entry of selected.citedIds.map((id) => byId.get(id))) {
     if (!entry || entry.tool !== 'rota_task_search') continue;
-    const evidence = requestEvidence(turn.request, [entry], turn.context.today).get(entry.id);
+    const evidence = requestEvidence(request, [entry], turn.context.today).get(entry.id);
     if (!evidence?.populationMatch || !evidence.dimensionsMatch) return null;
     const rows = entry.payload?.data?.tasks || [];
-    const indexes = turn.request.operation === 'rank'
-      ? (rankedRowIndexes(turn.request, entry.tool, entry.payload, 'tasks', 'tasks') || [])
+    const indexes = request.operation === 'rank'
+      ? (rankedRowIndexes(request, entry.tool, entry.payload, 'tasks', 'tasks') || [])
       : rows.map((_, index) => index);
     for (const index of indexes) taskIds.add(rows[index]?.taskId);
   }
@@ -1245,13 +1259,17 @@ async function finish(turn, verdict, onText, selectedBy = 'model') {
   const finalText = cited.length > 0 ? disclosure.text : verdict.normalized;
   await onText(finalText);
   const outcome = verdict.kind;
+  const resultScope = completedResultScope(turn, verdict);
+  const evidenceRows = ledger.persistable(verdict.citedIds, { clarification: verdict.clarification || null, resultScope });
+  const resultScopeOmitted = Boolean(resultScope) && !evidenceRows.some(row => JSON.parse(row.evidenceJson).resultScope);
   const completeDisclosure = (deliveredOutcome, code = null) => {
     if (turn.trace.recorded) return;
     if (deliveredOutcome !== 'error') {
       recordGroundedAnswer({ outcome: deliveredOutcome, rounds: turn.modelRounds, evidence: deliveredOutcome === outcome ? cited.length : 0,
         repaired: turn.repaired, disclosed: deliveredOutcome === outcome && disclosure.disclosed });
     }
-    traceTurn(turn, deliveredOutcome, { selectedBy: deliveredOutcome === 'grounded' ? selectedBy : null, code: typeof code === 'string' ? code : null });
+    traceTurn(turn, deliveredOutcome, { selectedBy: deliveredOutcome === 'grounded' ? selectedBy : null, code: typeof code === 'string' ? code : null,
+      resultScopeOmitted: deliveredOutcome === outcome && resultScopeOmitted });
   };
   if (!turn.deferDisclosure) completeDisclosure(outcome);
   return {
@@ -1261,7 +1279,7 @@ async function finish(turn, verdict, onText, selectedBy = 'model') {
       : ['not_found', 'clarification', 'unavailable'].includes(outcome) ? outcome : 'stop',
     outcome,
     evidence: cited,
-    evidenceRows: ledger.persistable(verdict.citedIds, { clarification: verdict.clarification || null, resultScope: completedResultScope(turn, verdict) }),
+    evidenceRows,
     streamedLive: false,
     repaired: turn.repaired,
     disclosed: disclosure.disclosed,

@@ -696,12 +696,12 @@ const MAX_PLANNER_REJECTION_KINDS = 32;
 /**
  * Planlayıcının veri okumadan önceki kararı (Aşama 4C): karar türü, çok bölümlü plan, anlamsal
  * danışmanlığın durumu ve aday sayısı, bildirim sayısı ve karara kadar geçen süre. Soru, istem,
- * plan, araç bağımsız değişkeni ya da Sicil yazılmaz.
+ * plan, araç bağımsız değişkeni ya da Sicil yazılmaz. Karar öncesi hata `null` kararla yalnızca örneklere girer.
  */
 export function recordPlannerDecision({ decision, parts = 0, semantic = 'unavailable', candidates = 0, declarations = 0, latencyMs = 0, semanticReason = null }) {
   safely(() => {
     const current = state().planner;
-    current.decisions[PLANNER_DECISIONS.has(decision) ? decision : 'invalid'] += 1;
+    if (decision != null) current.decisions[PLANNER_DECISIONS.has(decision) ? decision : 'invalid'] += 1;
     if (parts > 1) current.multiPart += 1;
     const normalizedReason = semanticReason === 'AI_TIMEOUT' ? 'TIMEOUT' : semanticReason;
     const reason = ['TIMEOUT', 'PROFILE_DISABLED', 'PROFILE_NOT_CONFIGURED', 'MODEL_UNAVAILABLE', 'INTERNAL_UNAVAILABLE'].includes(normalizedReason) ? normalizedReason : 'OTHER';
@@ -776,6 +776,7 @@ export function recordGroundedTurn(trace = {}) {
       sqlMs: millis(trace.sqlMs),
       sqlQueries: safeCount(trace.queries),
       scopeLoads: safeCount(trace.authorizationLoads),
+      ...(trace.resultScopeOmitted === true ? { resultScopeOmitted: true } : {}),
       revalidationMs: millis(trace.revalidationMs),
       verificationMs: millis(trace.verificationMs),
       rounds: (Array.isArray(trace.rounds) ? trace.rounds : []).slice(0, 16).map((round) => ({

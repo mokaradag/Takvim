@@ -686,6 +686,25 @@ test('4C anlamsal artifakt tüm 136 soruyu ve tüm belge skorlarını kapsar; be
     (r) => { r.rerank.queries[0].latencyMs = '1'; }]) {
     const invalid = clone(run); mutate(invalid); assert.throws(() => read(invalid), /SEMANTIC_/);
   }
+  const canonicalOnly = clone(run);
+  const canonical = new Set(loaded.cases.filter(row => row.canonical).map(row => row.id));
+  canonicalOnly.embedding.queries = canonicalOnly.embedding.queries.filter(row => canonical.has(row.case));
+  canonicalOnly.rerank.queries = canonicalOnly.rerank.queries.filter(row => canonical.has(row.case));
+  assert.throws(() => read(canonicalOnly), /sorgu satırları girdiyle eşleşmiyor/, '117 rows cannot fabricate supplementary advice');
+  read(run);
+  const { parseArguments, runEvaluation } = await import('../scripts/planner-evaluation.mjs');
+  const model = path.join(dir, 'model.cjs');
+  const response = { text: '', toolCalls: [{ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } }],
+    finishReason: 'tool_calls', models: ['scripted'], thinking: 'off', usage: { input_tokens: 1, output_tokens: 1, output_tokens_details: { thinking_tokens: 0 } } };
+  writeFileSync(model, `process.stdout.write(${JSON.stringify(JSON.stringify(response))});`);
+  for (const diagnostic of [false, true]) {
+    const { flags } = parseArguments(['run', '--model-command', `"${process.execPath}" "${model}"`, '--semantic', file,
+      '--cases', 'tr-001,pl-019', '--expected-model', 'scripted', '--reference-date', loaded.referenceDate, ...(diagnostic ? ['--no-score'] : [])]);
+    const evaluated = await runEvaluation(flags);
+    assert.equal(evaluated.records.length, 2);
+    assert.ok(evaluated.records.every(record => record.semantic.state === 'reranked' && record.outcome === 'clarification'));
+    assert.equal(evaluated.semantic.mode, 'run');
+  }
 });
 
 test('4C son geçiş: modelin kendi hatalı anahtarı sızıntı değildir; sunucu girdisi denetlenir', async () => {
@@ -2017,4 +2036,153 @@ test('Claude frozen 22: Windows CLI uses the isolated profile and required syste
   for (const [key, value] of Object.entries(windows)) assert.equal(normalized[key.toLowerCase()], value);
   assert.equal(seen.APPDATA, undefined);
   assert.equal(seen.CLAUDE_CONFIG_DIR, undefined);
+});
+
+test('4C final convergence: symlinked evaluator and Claude entrypoints execute', async (t) => {
+  const { spawnSync } = await import('node:child_process');
+  const { mkdtempSync, rmSync, symlinkSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const dir = mkdtempSync(path.join(tmpdir(), 'planner-symlink-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const link = path.join(dir, 'checkout');
+  symlinkSync(path.resolve('.'), link, process.platform === 'win32' ? 'junction' : 'dir');
+  const evaluator = spawnSync(process.execPath, [path.join(link, 'scripts/planner-evaluation.mjs'), 'input'], { encoding: 'utf8' });
+  assert.equal(evaluator.status, 0, evaluator.stderr);
+  const input = JSON.parse(evaluator.stdout);
+  assert.equal(input.queries.length, 136);
+  assert.equal(new Set(input.queries.map(row => row.case)).size, 136);
+  const adapter = spawnSync(process.execPath, [path.join(link, 'scripts/planner-claude-model.mjs')], {
+    input: JSON.stringify({ messages: [], tools: [], toolChoice: 'none' }), encoding: 'utf8',
+    env: { ...commandPlatformEnv(), PLANNER_CLAUDE_LOG: '' }
+  });
+  assert.equal(adapter.status, 0, adapter.stderr);
+  assert.equal(JSON.parse(adapter.stdout).error, 'PLANNER_SYSTEM_MISSING');
+});
+
+test('4C takip nitelendirmesi final convergence: symlinked follow-up qualification registers tests and finalizes', async (t) => {
+  const { spawnSync } = await import('node:child_process');
+  const { existsSync, mkdtempSync, rmSync, symlinkSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const dir = mkdtempSync(path.join(tmpdir(), 'followup-symlink-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const link = path.join(dir, 'checkout');
+  symlinkSync(path.resolve('.'), link, process.platform === 'win32' ? 'junction' : 'dir');
+  const report = path.join(dir, 'report.jsonl');
+  const ledger = path.join(dir, 'calls.jsonl');
+  const child = spawnSync(process.execPath, ['--test', '--test-reporter=tap', path.join(link, 'scripts/planner-followup-qualification.mjs')], {
+    encoding: 'utf8', env: { ...commandPlatformEnv(), PLANNER_MODEL_TIMEOUT_MS: 'invalid', PLANNER_FOLLOWUP_OUT: report, PLANNER_CLAUDE_LOG: ledger }
+  });
+  assert.equal(child.status, 1, child.stderr);
+  assert.match(child.stdout, /FOLLOWUP_QUALIFICATION_FAILED/);
+  assert.doesNotMatch(child.stdout, /^1\.\.0$/m);
+  const summary = JSON.parse(readFileSync(report, 'utf8').trim());
+  assert.ok(summary.chains > 0);
+  assert.ok(summary.failed.length > 0);
+  assert.ok(summary.modelCalls > 0, 'registered chains attempt the model boundary');
+  assert.deepEqual(summary.models, []);
+  assert.equal(existsSync(ledger), false, 'invalid local budget never launches the adapter');
+});
+
+test('Claude final convergence: packaged Windows executable uses the fixed command without a shell', async (t) => {
+  const { mkdirSync, writeFileSync, existsSync } = await import('node:fs');
+  const path = await import('node:path');
+  const cli = await claudeCommandFixture(t);
+  const bin = path.join(cli.dir, 'npm path & literal%');
+  const packaged = path.join(bin, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+  mkdirSync(path.dirname(packaged), { recursive: true });
+  writeFileSync(packaged, 'native executable fixture');
+  const marker = path.join(cli.dir, 'SHELL_EXECUTED');
+  writeFileSync(path.join(bin, 'claude.cmd'), '@echo off\necho forbidden > "' + marker + '"\n');
+  writeFileSync(cli.adapter, `import cp from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    import assert from 'node:assert/strict';
+    const original = cp.spawn;
+    cp.spawn = (command, args, options) => {
+      assert.equal(command, ${JSON.stringify(packaged)});
+      assert.ok(!options.shell);
+      assert.equal(args[args.indexOf('--effort') + 1], 'low');
+      assert.equal(args[args.indexOf('--model') + 1], 'claude-haiku-4-5-20251001');
+      assert.equal(options.env.MAX_THINKING_TOKENS, '0');
+      return original(process.execPath, [${JSON.stringify(cli.model)}, ...args], options);
+    };
+    syncBuiltinESMExports();
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    ` + readFileSync(cli.adapter, 'utf8'));
+  cli.release();
+  const reply = await cli.start({ PATH: bin, PLANNER_CLAUDE_LOG: '' }, 'claude').done;
+  assert.equal(reply.text, 'ok');
+  assert.equal(existsSync(marker), false);
+});
+
+test('Claude final convergence: a valid result followed by a failed exit never qualifies', async (t) => {
+  for (const exit of ['process.exitCode = 7;', "process.stdout.write('', () => process.kill(process.pid, 'SIGTERM'));"]) await t.test(exit, async (t) => {
+    const { writeFileSync } = await import('node:fs');
+    const cli = await claudeCommandFixture(t);
+    writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('}, 0);', exit + ' }, 0);'));
+    cli.release();
+    const reply = await cli.start().done;
+    assert.equal(reply.error, 'PLANNER_PROVIDER_ERROR');
+    assert.deepEqual(reply.toolCalls, []);
+    assert.equal(reply.text, '');
+    assert.equal(cli.rows().at(-1).error, 'PLANNER_PROVIDER_ERROR');
+    assert.equal(cli.rows().at(-1).usage.input_tokens, 10, 'the valid result event was observed before failure');
+    assert.equal(cli.locked(), false);
+  });
+});
+
+test('Claude posted convergence: only the documented one-turn tool handoff permits exit 1', async (t) => {
+  for (const scenario of [
+    { code: 1, subtype: 'error_max_turns', tool: true, error: false },
+    { code: 1, subtype: 'success', tool: true, error: true },
+    { code: 1, subtype: 'error_max_turns', tool: false, error: true },
+    { code: 7, subtype: 'error_max_turns', tool: true, error: true }
+  ]) await t.test(JSON.stringify(scenario), async (t) => {
+    const { writeFileSync } = await import('node:fs');
+    const call = { name: 'rota_task_search', arguments: {} };
+    const cli = await claudeCommandFixture(t, { payload: {
+      messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }],
+      tools: [{ name: call.name, parameters: { type: 'object' } }], toolChoice: 'auto'
+    }, events: [
+      { type: 'system', subtype: 'init', tools: ['mcp__rota__rota_task_search'] },
+      { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: scenario.tool
+        ? [{ type: 'tool_use', name: 'mcp__rota__rota_task_search', input: {} }] : [{ type: 'text', text: 'not a tool handoff' }] } },
+      { type: 'result', is_error: scenario.subtype === 'error_max_turns', subtype: scenario.subtype,
+        num_turns: 1, stop_reason: scenario.tool ? 'tool_use' : 'end_turn', usage: { input_tokens: 10, output_tokens: 1 } }
+    ] });
+    writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('}, 0);', `process.exitCode = ${scenario.code}; }, 0);`));
+    cli.release();
+    const reply = await cli.start().done;
+    if (scenario.error) {
+      assert.equal(reply.error, 'PLANNER_PROVIDER_ERROR');
+      assert.deepEqual(reply.toolCalls, []);
+    } else {
+      assert.equal(reply.error, undefined);
+      assert.deepEqual(reply.toolCalls, [call]);
+      assert.equal(reply.finishReason, 'tool_calls');
+      assert.equal(reply.thinking, 'off');
+    }
+    assert.equal(cli.locked(), false);
+  });
+});
+
+test('4C final convergence: distinct later-part reads score only against their owning request', async () => {
+  const { derivedReads, requestBoundCall } = await import('../src/server/ai/tools/requestPopulation.js');
+  const { bindRequestEntities } = await import('../src/server/ai/tools/requestDeclaration.js');
+  const loaded = loadPlannerBenchmark();
+  const testCase = loaded.cases.find(row => row.id === 'tr-060');
+  const { record } = await decide(loaded, testCase, answerPlan(testCase, loaded.referenceDate));
+  assert.equal(record.plan.requests.length, 2);
+  const second = record.plan.requests[1];
+  const reads = derivedReads(second, bindRequestEntities(second, []), { today: loaded.referenceDate, attempted: new Set() });
+  const later = reads.find(call => !requestBoundCall(record.plan.requests[0], call.name, call.args, { today: loaded.referenceDate }));
+  assert.ok(later, 'the second section must require a distinct read');
+  record.plan.calls.push({ name: later.name, args: later.args });
+  assert.deepEqual(scoreDecision(testCase, record, { referenceDate: loaded.referenceDate }), { correct: true, reasons: [] });
+  const wrong = clone(record);
+  wrong.plan.calls.at(-1).args = { ...later.args, projectId: '00000000-0000-4000-8000-000000000099' };
+  assert.ok(scoreDecision(testCase, wrong, { referenceDate: loaded.referenceDate }).reasons.includes('calls:unrelated'));
+  wrong.plan.calls.at(-1).name = 'rota_calendar_inspect';
+  assert.ok(scoreDecision(testCase, wrong, { referenceDate: loaded.referenceDate }).reasons.includes('calls:unrelated'));
 });

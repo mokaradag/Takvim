@@ -81,6 +81,8 @@ export function RotaDataDrawerFields({ rotaData, telemetry }) {
   const tools = telemetry.tools || {};
   const grounding = telemetry.grounding || {};
   const planner = telemetry.planner || {};
+  const withoutDecision = Math.max(0, Object.values(planner.semantic || {}).reduce((sum, count) => sum + count, 0)
+    - Object.values(planner.decisions || {}).reduce((sum, count) => sum + count, 0));
   const evidence = rotaData.evidenceSchema?.ready === true ? 'Hazır' : rotaData.evidenceSchema?.ready === false ? 'Kurulmamış (0018)' : 'Henüz denetlenmedi';
   const failures = Object.entries(tools.byOutcome || {}).filter(([code]) => code !== 'OK');
   const escalations = grounding.escalations || {};
@@ -104,6 +106,7 @@ export function RotaDataDrawerFields({ rotaData, telemetry }) {
           ...(outcomes.length ? [`Sonuç: ${countList(outcomes, ESCALATION_OUTCOME_LABELS)}`] : [])].join(' · ')}
       />
       <DrawerField label="Planlayıcı kararları" value={countList(Object.entries(planner.decisions || {}), { rota: 'Rota', general: 'Genel', clarify: 'Açıklama', abstain: 'Çekimser', invalid: 'Geçersiz', text_fields: 'Metin izni' }) || 'Henüz karar yok'} />
+      <DrawerField label="Plan kararı oluşmayan turlar" value={withoutDecision} />
       <DrawerField label="Planlayıcı ret türleri" value={countList(Object.entries(planner.rejections || {}), {}) || 'Yok'} />
       <DrawerField label="Anlamsal danışmanlık" value={[countList(Object.entries(planner.semantic || {}), { reranked: 'Yeniden sıralı', first_stage: 'İlk aşama', unavailable: 'Kullanılamıyor' }) || 'Henüz ölçüm yok', countList(Object.entries(planner.semanticReasons || {}), { TIMEOUT: 'Süre aşımı', PROFILE_DISABLED: 'Kapalı', PROFILE_NOT_CONFIGURED: 'Tanımsız', MODEL_UNAVAILABLE: 'Model yok', INTERNAL_UNAVAILABLE: 'İç hata', OTHER: 'Diğer' }), `Çok bölümlü: ${planner.multiPart ?? 0}`].filter(Boolean).join(' · ')} />
       <DrawerField label="Görünür çıktısız model yanıtı" value={`${telemetry.emptyCompletions ?? 0}`} />

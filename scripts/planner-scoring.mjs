@@ -509,7 +509,7 @@ export function scoreDecision(testCase, record, { referenceDate }) {
   const reads = record.plan.calls.map((call) => readKey(call.name, { ...call.args, limit: 1 }, referenceDate));
   if (new Set(reads).size !== reads.length) reasons.push('calls:duplicate');
   for (const call of record.plan.calls) {
-    if (!requestBoundCall(parts[0], call.name, call.args, { today: referenceDate })) reasons.push('calls:unrelated');
+    if (!parts.some(part => requestBoundCall(part, call.name, call.args, { today: referenceDate }))) reasons.push('calls:unrelated');
   }
   for (const tool of new Set([...partTools, ...callTools])) {
     if (testCase.avoid.includes(tool)) reasons.push(`avoid:${tool}`);

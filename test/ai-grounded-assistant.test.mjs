@@ -1254,3 +1254,60 @@ test('4C frozen 16: planner latency includes semantic advice for success and una
     assert.equal(stack.db.aiToolLog?.length || 0, 0, 'a clarification decision must not read Rota');
   });
 });
+
+test('4C final convergence: a combined answer preserves only its unique validated task-list referent', async (t) => {
+  for (const [listFirst, revoked] of [[true, false], [false, false], [true, true]]) await t.test(`${listFirst}/${revoked}`, async (t) => {
+    const stack = groundedStack(t);
+    const list = { operation: 'list', metrics: ['task.title', 'task.status'], population: { tool: 'rota_task_search', collection: 'tasks' },
+      filters: { assignee: 'me', dateFrom: '2026-09-01', dateTo: '2026-10-04' } };
+    const count = { operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary' },
+      fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }] };
+    stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: {
+      intent: 'rota', language: 'tr', request: listFirst ? list : count, additionalRequests: [listFirst ? count : list]
+    } }] });
+    const first = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Tarih aralığındaki görevlerimi listele ve iş yükümü göster' }));
+    assert.equal(first.assistantMessage.finishReason, 'stop');
+    const persisted = stack.db.aiMessageEvidence.map(row => JSON.parse(row.EvidenceJson));
+    const taskList = persisted.find(row => row.tool === 'rota_task_search');
+    assert.ok(taskList?.data.tasks.length > 1);
+    const scope = persisted.find(row => row.resultScope)?.resultScope;
+    assert.deepEqual(scope, { type: 'task', taskIds: taskList.data.tasks.map(row => row.taskId) });
+    assert.equal(persisted.filter(row => row.resultScope).length, 1);
+    if (revoked) stack.db.tasks.find(row => row.TaskId === scope.taskIds[0]).ProjectId = PROJECTS.HIDDEN;
+    const before = stack.db.aiToolLog.length;
+    stack.provider.enqueue({ type: 'script', respond: call => {
+      assert.ok(stack.db.aiToolLog.slice(before).every(row => row.query === 'task-visibility'), 'fresh validation precedes Rota result reads');
+      assert.ok(call.messages.some(row => row.role === 'system' && row.content.includes('request.previousResult=true')));
+      return { type: 'tool-calls', preface: [declared({ previousResult: true, operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' } })], calls: [] };
+    } });
+    if (revoked) stack.provider.enqueue({ type: 'answer', text: JSON.stringify({ kind: 'not_found' }) });
+    const second = doneOf(await sendTurn({ turnId: randomUUID(), conversationId: first.conversation.id, expectedSequence: 2, message: 'Bunlar kaç görev?' }));
+    if (revoked) {
+      assert.notEqual(second.assistantMessage.finishReason, 'stop');
+      assert.deepEqual(second.assistantMessage.evidence, []);
+      assert.ok(!stack.db.aiToolLog.slice(before).some(row => row.query === 'task-facts'));
+      return;
+    }
+    assert.equal(second.assistantMessage.finishReason, 'stop');
+    const latest = JSON.parse(stack.db.aiMessageEvidence.at(-1).EvidenceJson);
+    assert.deepEqual(latest.data.previousResult, { type: 'task', count: scope.taskIds.length });
+    assert.equal(latest.scope.completeProjectView, false);
+  });
+});
+
+test('4C final convergence: two task-list sections never choose a continuation referent', async (t) => {
+  const stack = groundedStack(t);
+  const request = status => ({ operation: 'list', metrics: ['task.title', 'task.status'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { status: [status] } });
+  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: {
+    intent: 'rota', language: 'tr', request: request('todo'), additionalRequests: [request('done')]
+  } }] });
+  const first = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Açık ve tamamlanmış görevleri ayrı listele' }));
+  assert.equal(first.assistantMessage.finishReason, 'stop');
+  assert.ok(stack.db.aiMessageEvidence.length >= 2);
+  assert.ok(stack.db.aiMessageEvidence.every(row => !JSON.parse(row.EvidenceJson).resultScope));
+  const before = stack.db.aiToolLog.length;
+  stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ previousResult: true, operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' } })], calls: [] });
+  const second = doneOf(await sendTurn({ turnId: randomUUID(), conversationId: first.conversation.id, expectedSequence: 2, message: 'Bunlar kaç görev?' }));
+  assert.equal(second.assistantMessage.finishReason, 'clarification');
+  assert.equal(stack.db.aiToolLog.length, before);
+});

@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -149,7 +149,11 @@ export function finalizeQualification(result) {
   assert.equal(result.escalations, 0, 'FOLLOWUP_ESCALATION_FORBIDDEN');
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const direct = (() => {
+  try { return Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+})();
+if (direct) {
 test.after(() => finalizeQualification({ ...summary, models: [...summary.models] }));
 
 test('takip zinciri: kişi değişimi, "bunlardan", "ilk görev", "onun"', async (t) => {

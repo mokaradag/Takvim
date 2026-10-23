@@ -1776,8 +1776,8 @@ temeli gevşetmeden eklemelidir.
 Ayrıntılı belge: [YAPAY-ZEKA-ALAN-ARACLARI.md](YAPAY-ZEKA-ALAN-ARACLARI.md). Özet:
 
 Rota verisinde plan, seçilen kipin araç profilinde (Standart `chat.tools`,
-Derin düşünme `chat.tools.reasoning`) `rota_plan` yerel çağrısıyla ya da metin
-olarak dönen aynı planla doğrulanır; sıradan asistan metni gerekmez.
+Derin düşünme `chat.tools.reasoning`) yalnızca `rota_plan` yerel araç çağrısıyla
+doğrulanır; metin olarak dönen JSON plan bildirimi kabul edilmez.
 Türlü araç/koleksiyon ve semantik boyutlar bağlıysa sunucu olguları aynı
 doğrulayıcıyla seçer; belirsizlikte seçimi seçilen kipin modeli yapar.
 Standart kipte gerçek `synthesis` ihtiyacı ya da ucuz kurtarmadan sonra kalan
@@ -1796,7 +1796,7 @@ gönderilir ve tur telemetrisi bu son kararı kaydeder.
   hesaplar. Kısmi kapsam kısmi kalır; gizli görev sayısı sızmaz. Kanıt görev başına kimlik görünürlüğünü de temsil eden kalıcı yetki epoch’una bağlıdır; sonraki küme ve son çizim öncesi okuma değişen erişimde eski kanıtı geçersiz yapar. Bu uygulama denetimi atomik SQL/model/teslim işlemi değildir.
 - **Kanıt:** başarılı sonuçlar `R1`, `R2` … ve tur için rastgele olgu öneki
   taşır. Model doğal dili yorumlar, veri okumadan önce isteği türlü olarak
-  bildirir (`{"kind":"route","intent":"rota","language":"tr","request":{"operation":…,"metrics":[…],"entities":[…],"filters":{…}}}`)
+  bildirir (`rota_plan` bağımsız değişkenleri: `{"intent":"rota","language":"tr","request":{"operation":…,"metrics":[…],"entities":[…],"filters":{…}}}`)
   ve kanıttaki olguları seçer (`{"kind":"rota","facts":["R1:data.…"]}`; eski
   türlü iddia biçimi de kabul edilir). Geçerli istek olmadan araç çalışmaz;
   istek veri okunduktan sonra değişmez. Değer, özne, birim ve süzgeç sunucunun
