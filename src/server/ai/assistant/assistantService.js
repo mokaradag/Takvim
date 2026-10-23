@@ -918,11 +918,12 @@ function planningQuery(turn) {
  * yazılır. Durdurulan ya da süresi dolan tur yazılmaz.
  */
 async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress = null, onText, onDelivery = null, onGenerated = null }) {
+  const startedAt = Date.now();
   const catalog = toolCatalogForModel();
   // Aşama 4C: planlamadan önce Aşama 4B keşfi (kendi kirası ve süre bütçesiyle, araç oturumundan ayrı).
   // Danışmanlık kaybı planlamayı Aşama 3 davranışına döndürür; iptal ve kimlik/yetki hatası yukarı taşınır.
   onProgress?.();
-  const planning = await semanticPlanningAdvice({ query: planningQuery(turn), catalog, signal });
+  const planning = { ...await semanticPlanningAdvice({ query: planningQuery(turn), catalog, signal }), startedAt };
   onProgress?.();
   const options = {
     messages: turn.modelMessages,

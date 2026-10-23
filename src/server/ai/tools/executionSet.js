@@ -33,13 +33,18 @@ export function createCallIds() {
  */
 export function typedPlanningTool(catalog) {
   const names = catalog.map((tool) => tool.name);
+  const request = { ...requestSchema(), required: [...requestSchema().required, 'population', 'layout'] };
+  const entities = request.properties.entities;
+  const additionalRequest = { ...request, properties: { ...request.properties, entities: { ...entities, items: {
+    ...entities.items, properties: { ...entities.items.properties, from: { type: 'integer', minimum: 0, maximum: PLANNER_LIMITS.maxRequests - 2 } }
+  } } } };
   return { name: 'rota_plan', description: 'Kullanıcının her yeni sorusuna ilk yanıt bu araçla verilir (açıklama ve ret dâhil; kullanıcıya metni sunucu yazar). Veri okumadan türlü kararı bildir: rota (request; ileti ayrı okuma gerektiren başka sorular da soruyorsa ayrıca additionalRequests), clarify, abstain ya da general. calls isteğe bağlıdır: verilmezse sunucu okumaları istekten kurar.',
     parameters: { type: 'object', additionalProperties: false, required: ['intent', 'language'], properties: {
       intent: { type: 'string', enum: Object.values(PLANNER_INTENTS), description: 'rota: Rota verisiyle yanıtlanır; general: Rota ile ilgisiz sohbet; clarify: gerçek belirsizlik, veri okunmaz; abstain: yazma, desteklenmeyen hesap, Rota dışı veri ya da kimlik/yetki/SQL girişimi, veri okunmaz.' },
       language: { type: 'string', enum: ['tr', 'en'] },
-      request: { ...requestSchema(), required: [...requestSchema().required, 'population', 'layout'] },
+      request,
       additionalRequests: { type: 'array', minItems: 1, maxItems: PLANNER_LIMITS.maxRequests - 1, description: 'Yalnızca ileti request ile yanıtlanmayan, ayrı okuma (başka araç ya da aynı aracın başka nüfusu) gerektiren bir ya da iki soru daha soruyorsa request ile aynı düzeyde verilir; her öğe request ile aynı alanları taşır. Bölüm sırası: 0 = request, 1 = ilk ek istek. Bir öğe önceki bölümün satırlarındaki kayıtlar için soruyorsa o varlık {"type":"task|project","from":<bölüm sırası>} olarak yazılır. additionalRequests ile calls verilmez.',
-        items: { type: 'object', description: 'request ile aynı alanlar (operation, metrics, population, layout, entities, filters …).' } },
+        items: additionalRequest },
       clarify: { type: 'object', additionalProperties: false, required: ['reason'], description: 'intent clarify için.', properties: {
         reason: { type: 'string', enum: [...CLARIFY_REASONS], description: 'missing_referent: soru adı verilmemiş bir kayda gönderme yapıyor; ambiguous: istek birden çok Rota yeteneğine eşit uyuyor.' },
         topics: { type: 'array', minItems: 2, maxItems: PLANNER_LIMITS.maxClarifyTopics, uniqueItems: true, items: { type: 'string', enum: names }, description: 'ambiguous: soruya uyan yetenekler.' }

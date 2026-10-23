@@ -10,7 +10,6 @@
  * denetlenir; Derin devri sayılır ve sıfır olmalıdır.
  */
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import path from 'node:path';
@@ -20,7 +19,7 @@ import { createAiStack, sendTurn } from '../test/helpers/aiStack.mjs';
 import { createFakeAiProvider } from '../test/helpers/fakeAiProvider.mjs';
 import { ALI_2, AYSE, MEHMET, NOW, TASKS, ZEYNEP, rotaToolSeed } from '../test/helpers/aiToolFixtures.mjs';
 import { verifyCompletion } from './planner-evaluation.mjs';
-import { MODEL_CLEANUP_TIMEOUT_MS, terminateModelCommand } from './planner-claude-model.mjs';
+import { MODEL_CLEANUP_TIMEOUT_MS, spawnModelCommand, terminateModelCommand } from './planner-claude-model.mjs';
 import { AI_ERROR_CODES } from '../src/domain/ai/aiErrorCatalog.js';
 
 const { AiError } = await import('../src/server/ai/aiErrors.js');
@@ -36,7 +35,7 @@ function complete(input, signal) {
     const timeoutMs = Number(raw);
     if (!/^[1-9][0-9]*$/.test(raw) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 20 || timeoutMs > 600000) return reject(new Error('MODEL_INFRASTRUCTURE PLANNER_LIMIT_INVALID'));
     if (signal?.aborted) return reject(signal.reason instanceof AiError ? signal.reason : new AiError(AI_ERROR_CODES.AI_CANCELLED));
-    const child = spawn(process.execPath, [ADAPTER], { stdio: ['pipe', 'pipe', 'inherit'], detached: process.platform !== 'win32',
+    const child = spawnModelCommand(process.execPath, [ADAPTER], { stdio: ['pipe', 'pipe', 'inherit'],
       env: { ...process.env, PLANNER_MODEL_TIMEOUT_MS: String(timeoutMs) } });
     let out = '';
     let settled = false;
@@ -64,13 +63,14 @@ function complete(input, signal) {
     child.stdout.on('data', (chunk) => { out += chunk; });
     child.on('error', () => finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_ERROR')));
     child.stdin.on('error', () => finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_ERROR')));
-    child.on('close', (code) => {
+    child.on('command-close', (code) => {
       if (settled) return;
       if (code !== 0) return finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_ERROR'));
       let reply;
       try { reply = JSON.parse(out); } catch { return finish(new Error('ADAPTER_OUTPUT_INVALID')); }
       finish(null, reply);
     });
+    child.on('close', () => { if (!settled) finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_ERROR')); });
     signal?.addEventListener('abort', cancel, { once: true });
     if (signal?.aborted) return cancel();
     child.stdin.end(JSON.stringify(input));
@@ -79,7 +79,8 @@ function complete(input, signal) {
 
 /** Sınama sağlayıcısının gerçek akış biçimi; davranışı her araçlı turda gerçek model belirler. */
 export function realModelProvider({ completeRound = complete } = {}) {
-  const fake = createFakeAiProvider({ semanticQueue: false });
+  const fake = createFakeAiProvider({ semanticQueue: false,
+    respond: call => ['embeddings', 'rerank'].includes(call.kind) ? { type: 'status', status: 503 } : null });
   let standard = null;
   return { ...fake, async streamToolCompletion(input) {
     standard ??= input.model;
@@ -90,6 +91,11 @@ export function realModelProvider({ completeRound = complete } = {}) {
     }
     summary.modelCalls += 1;
     const reply = await completeRound({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice }, input.signal);
+    if (!reply || typeof reply !== 'object' || Array.isArray(reply) || typeof reply.text !== 'string' || !Array.isArray(reply.toolCalls)
+      || reply.toolCalls.some(call => !call || typeof call !== 'object' || Array.isArray(call) || typeof call.name !== 'string'
+        || !(typeof call.arguments === 'string' || call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments)))
+      || reply.error != null && typeof reply.error !== 'string'
+      || !reply.error && !Array.isArray(reply.models)) throw new Error('MODEL_INFRASTRUCTURE ADAPTER_OUTPUT_INVALID');
     if (reply.error) throw new Error(`MODEL_INFRASTRUCTURE ${reply.error}`);
     if (!reply.models?.length || reply.models.some((model) => model !== EXPECTED_MODEL) || reply.thinking !== 'off') throw new Error('MODEL_INFRASTRUCTURE PLANNER_MODEL_UNVERIFIED');
     reply.models.forEach((model) => summary.models.add(model));

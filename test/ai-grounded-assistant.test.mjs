@@ -1208,3 +1208,49 @@ test('4C takip: bozuk/eski kanıt kaydı göndergeyi prose üzerinden yeniden ku
     assert.equal(stack.db.aiToolLog.length, before);
   });
 });
+
+test('4C frozen 16: mixed unverifiable evidence cannot become continuation authority', async (t) => {
+  const stack = groundedStack(t);
+  const { conversationId } = await previousTaskSet(stack);
+  const original = stack.db.aiMessageEvidence[0];
+  const bad = JSON.parse(original.EvidenceJson);
+  delete bad.resultScope;
+  bad.authorizationPopulation = { v: 1, complete: false };
+  stack.db.aiMessageEvidence.push({ ...original, Ordinal: 2, EvidenceJson: JSON.stringify(bad) });
+  const before = stack.db.aiToolLog.length;
+  let carriedScope = null;
+  stack.provider.enqueue({ type: 'script', respond: call => {
+    carriedScope = call.messages.some(message => message.content?.includes('Önceki doğrulanmış Rota sonuç kapsamı:'));
+    return { type: 'tool-calls', preface: [declared({ previousResult: true, operation: 'value', metrics: ['tasks.total'],
+      population: { tool: 'rota_task_analytics' } })], calls: [] };
+  } });
+  const followup = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, message: 'Bunlardan kaç tane var?' }));
+  assert.equal(followup.assistantMessage.finishReason, 'clarification');
+  assert.equal(carriedScope, false);
+  assert.equal(stack.db.aiToolLog.length, before, 'invalid continuation must not reach a Rota read');
+  assert.deepEqual(followup.assistantMessage.evidence, []);
+});
+
+test('4C frozen 16: planner latency includes semantic advice for success and unavailable', async (t) => {
+  for (const unavailable of [false, true]) await t.test(String(unavailable), async (t) => {
+    const stack = groundedStack(t);
+    let elapsed = 0;
+    const embed = stack.provider.embeddings;
+    stack.provider.embeddings = async input => {
+      elapsed += 1500;
+      t.mock.timers.tick(1500);
+      if (unavailable) {
+        const { AiError } = await import('../src/server/ai/aiErrors.js');
+        throw new AiError('AI_PROVIDER_UNAVAILABLE');
+      }
+      return embed(input);
+    };
+    stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } }] });
+    const done = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Merhaba' }));
+    assert.equal(done.assistantMessage.finishReason, 'clarification');
+    assert.ok(elapsed > 0, 'real semantic-advice path was exercised');
+    assert.ok(aiTelemetrySnapshot().planner.latency.p50Ms >= elapsed);
+    assert.equal(aiTelemetrySnapshot().planner.decisions.clarify, 1);
+    assert.equal(stack.db.aiToolLog?.length || 0, 0, 'a clarification decision must not read Rota');
+  });
+});

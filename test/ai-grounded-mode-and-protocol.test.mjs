@@ -1021,3 +1021,23 @@ test('legacy window is normalized into the typed filters before any read', async
   assert.equal(evidence.data.range.to, '2026-09-29');
   drained(stack);
 });
+
+test('4C frozen 18: a system-first-only gateway fails closed before Rota access', async (t) => {
+  const requests = [];
+  const provider = createOpenAiCompatibleProvider({ fetchImpl: async (_url, init) => {
+    const body = JSON.parse(init.body);
+    requests.push(body);
+    return new Response('unsupported system ordering', { status: 400, headers: { 'content-type': 'text/plain' } });
+  } });
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed(), provider, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
+  const response = await sendTurn({ turnId: randomUUID(), message: 'Görevlerimi listele' });
+  assert.equal(response.events.find(event => event.event === 'error').data.code, 'AI_REQUEST_INVALID');
+  const tools = requests.filter(body => body.tools);
+  assert.equal(tools.length, 1);
+  assert.equal(tools[0].messages[0].role, 'system');
+  assert.ok(tools[0].messages.slice(1).some(message => message.role === 'system'));
+  assert.equal(stack.db.aiToolLog?.length || 0, 0);
+  assert.equal(stack.db.aiMessageEvidence?.length || 0, 0);
+  assert.equal(response.events.filter(event => ['done', 'error'].includes(event.event)).length, 1);
+});

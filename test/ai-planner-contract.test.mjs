@@ -1350,3 +1350,40 @@ test('4C son yedi: kabul edilen çoklu plan tekrar zorlanmaz; ilgisiz çağrı k
   assert.match(result.text, /okunmamış/);
   assert.deepEqual(decisions.map(decision => decision.intent), ['rota']);
 });
+
+test('4C frozen 16: additional requests advertise the existing closed declaration contract', async () => {
+  const { parseToolArguments } = await import('../src/server/ai/tools/toolArguments.js');
+  const extra = typedPlanningTool(catalog).parameters.properties.additionalRequests.items;
+  const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, layout: 'list' };
+  assert.doesNotThrow(() => parseToolArguments(extra, JSON.stringify(request)));
+  assert.doesNotThrow(() => parseToolArguments(extra, JSON.stringify({ ...request, entities: [{ type: 'task', from: 0 }] })));
+  for (const malformed of [{}, { ...request, invented: true }, { ...request, population: undefined }, { ...request, layout: undefined },
+    { ...request, entities: [{ type: 'task', from: -1 }] }, { ...request, entities: [{ type: 'task', from: 3 }] }]) {
+    assert.throws(() => parseToolArguments(extra, JSON.stringify(malformed)), { code: 'INVALID_ARGUMENTS' });
+  }
+});
+
+test('4C frozen 22: multipart generation repairs share one turn budget', async (t) => {
+  const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, reasoning: 'synthesis' };
+  const additionalRequests = ['critical', 'high'].map(priority => ({ ...request, filters: { priority: [priority] } }));
+  const truncated = { text: '', toolCalls: [], finishReason: 'length' };
+  const { result, inputs } = await turn(t, [plan({ intent: 'rota', language: 'tr', request, additionalRequests }),
+    truncated, truncated, truncated, truncated]);
+  assert.equal(result.stats.modelRounds, 5, 'three generation attempts plus one shared repair, after planning');
+  assert.equal(inputs.length, 5);
+  assert.equal(result.stats.attempted, 3);
+  assert.equal(result.outcome, 'unavailable');
+  assert.deepEqual(result.evidence, []);
+});
+
+test('4C frozen 22: dependent instances cannot replenish the turn repair budget', async (t) => {
+  const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me' } };
+  const dependent = { operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', from: 0 }], reasoning: 'synthesis' };
+  const truncated = { text: '', toolCalls: [], finishReason: 'length' };
+  const { result, inputs } = await turn(t, [plan({ intent: 'rota', language: 'tr', request, additionalRequests: [dependent] }),
+    truncated, truncated, truncated, truncated]);
+  assert.equal(result.stats.modelRounds, 5, 'three dependent instances share the single repair');
+  assert.equal(inputs.length, 5);
+  assert.equal(result.stats.attempted, 4);
+  assert.equal(result.evidence.length, 1, 'failed dependent generations cannot claim their evidence');
+});

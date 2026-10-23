@@ -403,3 +403,17 @@ test('araç oturumu açık bir SQL işlemi içinde başlatılamaz', async (t) =>
   );
   assert.equal(provider.calls.length, 0);
 });
+
+test('4C frozen 18: supported templates retain non-leading system notes and the static prefix', async () => {
+  const system = { role: 'system', content: 'STATIC_PREFIX' };
+  const note = { role: 'system', content: 'SERVER_VALIDATION_NOTE' };
+  const messages = [system, { role: 'user', content: 'question' }, note];
+  const supported = providerWith(() => sseResponse([chunk({ content: 'ok' }), chunk({}, { finish_reason: 'stop' }), 'data: [DONE]\n\n']));
+  await collect(await toolStream(supported.provider, { messages }));
+  assert.deepEqual(supported.requests[0].body.messages, messages);
+  assert.equal(supported.requests[0].body.messages[0].content, 'STATIC_PREFIX');
+  const unsupported = providerWith(() => new Response('system must be first', { status: 400 }));
+  await assert.rejects(toolStream(unsupported.provider, { messages }), error => error.status === 400);
+  assert.deepEqual(unsupported.requests[0].body.messages, messages);
+  assert.equal(unsupported.requests.length, 1, 'unsupported templates do not trigger an alternate request');
+});

@@ -41,6 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { registerServerOnlyShim } from '../test/helpers/serverOnlyShim.mjs';
 import { readModelRun } from './semantic-evaluation.mjs';
 import { loadPlannerBenchmark, PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, WEAK_PLANNER_MODEL, validCalendarDate, scorePlannerRun } from './planner-scoring.mjs';
+import { MODEL_CLEANUP_TIMEOUT_MS, spawnModelCommand, terminateModelCommand } from './planner-claude-model.mjs';
 
 registerServerOnlyShim();
 
@@ -169,45 +170,58 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
   const dispose = () => {
     disposed = true;
     process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); process.off('SIGHUP', hangup);
-    for (const stop of active) stop();
-    active.clear();
-    rmSync(workdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    const cleanup = () => rmSync(workdir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    const stopping = [...active].map(stop => stop());
+    if (stopping.length) return Promise.all(stopping).then(cleanup);
+    cleanup();
   };
-  const interrupt = () => { try { dispose(); } finally { process.exit(130); } };
-  const terminate = () => { try { dispose(); } finally { process.exit(143); } };
-  const hangup = () => { try { dispose(); } finally { process.exit(129); } };
+  const interrupt = () => Promise.resolve(dispose()).then(() => process.exit(130), () => process.exit(1));
+  const terminate = () => Promise.resolve(dispose()).then(() => process.exit(143), () => process.exit(1));
+  const hangup = () => Promise.resolve(dispose()).then(() => process.exit(129), () => process.exit(1));
   process.once('SIGINT', interrupt); process.once('SIGTERM', terminate); process.once('SIGHUP', hangup);
   let sequence = 0;
   const run = (payload) => new Promise((resolve, reject) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^MERGEN_ROTA_/.test(key)));
-    const child = spawn(command, { shell: true, detached: process.platform !== 'win32', cwd: process.cwd(), env: { ...env, TMPDIR: workdir, TEMP: workdir, TMP: workdir,
+    const child = spawnModelCommand(command, [], { shell: true, cwd: process.cwd(), env: { ...env, TMPDIR: workdir, TEMP: workdir, TMP: workdir,
       PLANNER_MODEL_TIMEOUT_MS: String(timeoutMs), ...(ledger ? { PLANNER_CLAUDE_LOG: ledger } : {}) }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const out = [];
     let bytes = 0;
     let settled = false;
     const terminate = () => {
-      if (process.platform === 'win32') {
-        // Çıkmış kökün PID'si başka bir sürece atanmış olabilir.
-        if (child.exitCode !== null || child.signalCode !== null) return;
+      if (process.platform !== 'win32') return terminateModelCommand(child);
+      if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
+      return new Promise((resolve, reject) => {
         const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-        killer.on('error', () => child.kill('SIGKILL'));
-      } else {
-        try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
-      }
+        const finish = error => { clearTimeout(timer); error ? reject(error) : resolve(); };
+        const timer = setTimeout(() => {
+          try { killer.kill('SIGKILL'); } catch (error) { finish(error); return; }
+          finish(new Error('cleanup timeout'));
+        }, MODEL_CLEANUP_TIMEOUT_MS);
+        killer.once('close', code => finish(code === 0 ? null : new Error('cleanup exit')));
+        killer.once('error', error => {
+          try { child.kill('SIGKILL'); } catch (cleanupError) { error = cleanupError; }
+          finish(error);
+        });
+      });
     };
-    active.add(terminate);
+    let finalization = null;
+    const stop = () => finish('MODEL_COMMAND_ERROR');
+    active.add(stop);
     const finish = (error, value) => {
-      if (settled) return;
+      if (finalization) return finalization;
       settled = true;
-      // POSIX süreç grubu temizlenir; Windows ağacı yalnızca kök yaşarken sonlandırılır.
-      terminate();
-      active.delete(terminate);
       clearTimeout(timer);
-      if (error) { reject(Object.assign(new Error(error), { code: error })); }
-      else resolve(value);
+      finalization = Promise.resolve().then(async () => {
+        try { await terminate(); } catch { error = error ? error + ' MODEL_COMMAND_CLEANUP_ERROR' : 'MODEL_COMMAND_CLEANUP_ERROR'; }
+        active.delete(stop);
+        if (error) reject(Object.assign(new Error(error), { code: error }));
+        else resolve(value);
+      });
+      return finalization;
     };
     const timer = setTimeout(() => finish('MODEL_COMMAND_TIMEOUT'), timeoutMs);
     const capture = (chunk, stdout) => {
+      if (settled) return;
       bytes += chunk.length;
       if (bytes > outputBytes) { finish('MODEL_COMMAND_OUTPUT_LIMIT'); return; }
       if (stdout) out.push(chunk);
@@ -216,7 +230,8 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
     child.stderr.on('data', (chunk) => capture(chunk, false));
     child.on('error', () => finish('MODEL_COMMAND_ERROR'));
     child.stdin.on('error', () => finish('MODEL_COMMAND_ERROR'));
-    child.on('close', (code) => finish(code === 0 ? null : 'MODEL_COMMAND_ERROR', Buffer.concat(out).toString('utf8')));
+    child.on('command-close', (code) => finish(code === 0 ? null : 'MODEL_COMMAND_ERROR', Buffer.concat(out).toString('utf8')));
+    child.on('close', () => { if (!settled) finish('MODEL_COMMAND_ERROR'); });
     child.stdin.end(payload);
   });
   // Kayıtlı çağrının beklemesi yürütme zamanlayıcısından öncedir; kapanış kuyruktakileri başlatmaz.
@@ -243,8 +258,9 @@ function externalModel({ command, inputs, guard, timeoutMs = 120000, outputBytes
       }
       const startedAt = Date.now();
       let reply;
-      try { reply = JSON.parse(await scheduled(payload)); } catch (error) { reply = { text: '', toolCalls: [], error: ['MODEL_COMMAND_TIMEOUT', 'MODEL_COMMAND_OUTPUT_LIMIT'].includes(error.code) ? error.code : 'MODEL_COMMAND_ERROR' }; }
-      if (reply?.error) reply = { text: '', toolCalls: [], error: ['MODEL_COMMAND_TIMEOUT', 'MODEL_COMMAND_OUTPUT_LIMIT'].includes(reply.error) ? reply.error : 'MODEL_COMMAND_ERROR' };
+      const boundedCode = code => typeof code === 'string' && /^(?:MODEL_COMMAND|PLANNER)_[A-Z_]{1,48}(?: MODEL_COMMAND_CLEANUP_ERROR)?$/.test(code) ? code : 'MODEL_COMMAND_ERROR';
+      try { reply = JSON.parse(await scheduled(payload)); } catch (error) { reply = { text: '', toolCalls: [], error: boundedCode(error.code) }; }
+      if (reply?.error) reply = { text: '', toolCalls: [], error: boundedCode(reply.error) };
       const toolCalls = (Array.isArray(reply?.toolCalls) ? reply.toolCalls : []).filter((call) => call && typeof call.name === 'string')
         .map((call, index) => ({ id: `call_${id}_${index + 1}`, name: call.name, arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments ?? {}), oversize: false }));
       guard.observe?.({ toolCalls });
@@ -525,7 +541,7 @@ async function runEvaluation(flags) {
       if (infrastructure) break;
     }
   } finally {
-    model?.dispose();
+    await model?.dispose();
   }
   if (infrastructure) fail(`Geçiş altyapı hatasıyla durdu (${infrastructure}); koşu geçersizdir ve kaydedilmedi.`);
   // Koşu UTC gün dönümünü geçtiyse dış modelin ortam günü referans günden ayrılmış olabilir: koşu geçersizdir.

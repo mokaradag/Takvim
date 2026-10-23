@@ -56,6 +56,18 @@ async function decide(loaded, testCase, args) {
 const answerPlan = (testCase, referenceDate) => ({ intent: 'rota', language: testCase.language, ...resolveExample(testCase.example, referenceDate) });
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
+/** Model tamamlanması ile yaşayan grup sahibinin kapanışı ayrı olaylardır. */
+function finishFixtureCommand(child, code = 0) {
+  if (process.platform === 'win32') {
+    child.exitCode = code;
+    child.emit('close', code);
+  } else {
+    child.stdout.emit('end');
+    child.stderr?.emit('end');
+    child.emit('message', { type: 'model-command-complete', code });
+  }
+}
+
 test('4C donmuş bulgular: Windows temizliği yalnızca yaşayan kök PID üzerinde çalışır', async (t) => {
   const childProcess = (await import('node:child_process')).default;
   const { syncBuiltinESMExports } = await import('node:module');
@@ -69,7 +81,7 @@ test('4C donmuş bulgular: Windows temizliği yalnızca yaşayan kök PID üzeri
   Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
   t.after(() => { Object.defineProperty(process, 'platform', platform); childProcess.spawn = spawn; syncBuiltinESMExports(); });
   childProcess.spawn = (command, args) => {
-    if (command === 'taskkill') { killed.push(args); return new EventEmitter(); }
+    if (command === 'taskkill') { killed.push(args); const killer = new EventEmitter(); queueMicrotask(() => killer.emit('close', 0)); return killer; }
     const child = Object.assign(new EventEmitter(), { pid: 1234, exitCode: null, signalCode: null,
       stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill() { assert.fail('beklenmeyen kill'); } });
     child.stdin.on('finish', () => queueMicrotask(() => {
@@ -976,8 +988,9 @@ test('Claude model komutu: geçersiz bütçe, kayıtsız bütçe ve tükenen ça
 });
 
 /** Gerçek komut sınırı; yerel CLI ikizi yalnızca açık dosya bariyerinde tamamlanır. */
-async function claudeCommandFixture(t, { reuse = false, events = null, executionDelayMs = 0, commandTimeoutMs = 8000, ...limits } = {}) {
+async function claudeCommandFixture(t, { reuse = false, events = null, newline = true, descendant = false, standalone = false, payload = null, executionDelayMs = 0, commandTimeoutMs = 8000, ...limits } = {}) {
   const { spawn, spawnSync } = await import('node:child_process');
+  const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
   const { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, watch, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const path = await import('node:path');
@@ -1010,16 +1023,21 @@ async function claudeCommandFixture(t, { reuse = false, events = null, execution
     const fs = require('node:fs');
     const path = require('node:path');
     const root = __dirname;
+    if (${descendant}) {
+      const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+      child.unref();
+      fs.writeFileSync(path.join(root, 'descendant'), String(child.pid));
+    }
     fs.writeFileSync(path.join(root, 'entered', String(process.pid)), 'ready');
     const finish = () => {
       if (!fs.existsSync(path.join(root, 'release'))) return;
       watcher.close();
       const cached = ${reuse} && fs.readdirSync(path.join(root, 'entered')).length > 1;
-      setTimeout(() => { for (const event of ${events ? JSON.stringify(events) : `[
+      setTimeout(() => { const events = ${events ? JSON.stringify(events) : `[
         {type:'system',subtype:'init',tools:[]},
         {type:'assistant',message:{id:'one',model:'claude-haiku-4-5-20251001',content:[{type:'text',text:'ok'}]}},
         {type:'result',num_turns:1,stop_reason:'end_turn',usage:{input_tokens:10,cache_creation_input_tokens:90,cache_read_input_tokens:cached?100:0,output_tokens:1}}
-      ]`}) console.log(JSON.stringify(event)); }, ${executionDelayMs});
+      ]`}; events.forEach((event, index) => process.stdout.write(JSON.stringify(event) + (${newline} || index < events.length - 1 ? '\\n' : ''))); }, ${executionDelayMs});
     };
     const watcher = fs.watch(root, finish);
     process.stdin.resume();
@@ -1027,32 +1045,39 @@ async function claudeCommandFixture(t, { reuse = false, events = null, execution
   `);
   const waitFor = predicate => new Promise((resolve, reject) => {
     let settled = false;
-    const done = error => { if (settled) return; settled = true; watcher.close(); clearTimeout(timer); error ? reject(error) : resolve(); };
-    const check = () => { if (predicate()) done(); };
-    const watcher = watch(dir, { recursive: true }, check);
+    const done = error => { if (settled) return; settled = true; watchers.forEach(watcher => watcher.close()); clearTimeout(timer); error ? reject(error) : resolve(); };
+    const check = () => { if (!settled && predicate()) done(); };
+    const watchers = [watch(dir, check), watch(entered, check)];
+    watchers.forEach(watcher => watcher.on('error', done));
     const timer = setTimeout(() => done(new Error('CLI bariyeri beklenirken süre aşıldı')), 5000);
     children.at(-1)?.done.then(reply => { if (!settled && !predicate()) done(new Error(`Bağdaştırıcı hazır olmadan bitti: ${reply.error || reply.signal || 'no provider call'}`)); }, done);
     check();
   });
   const start = (extra = {}, command = null) => {
-    const child = spawn(process.execPath, [adapter, model, ...(command ? [command] : [])], { detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
+    const launch = standalone ? spawn : spawnModelCommand;
+    const child = launch(process.execPath, [adapter, model, ...(command ? [command] : [])], { detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...commandPlatformEnv(), PLANNER_CLAUDE_HOME: path.join(dir, 'home'), PLANNER_CLAUDE_LOG: log, ...limits, ...extra } });
     let out = ''; let err = '';
     child.stdout.on('data', chunk => { out += chunk; });
     child.stderr.on('data', chunk => { err += chunk; });
     const done = new Promise((resolve, reject) => {
+      let settled = false;
       const timer = setTimeout(() => { kill(child); reject(new Error('Bağdaştırıcı tamamlanmadı')); }, commandTimeoutMs);
-      child.on('close', (code, signal) => {
+      const finish = async (code, signal) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         if (killed.has(child)) return resolve({ terminated: true, signal });
-        try { assert.equal(code, 0, err); resolve(JSON.parse(out)); } catch (error) { reject(error); }
-      });
+        try { await terminateModelCommand(child); assert.equal(code, 0, err); resolve(JSON.parse(out)); } catch (error) { reject(error); }
+      };
+      child.on('command-close', finish);
+      child.on('close', (code, signal) => { if (standalone || !settled) finish(code, signal); });
     });
     children.push({ child, done });
-    child.stdin.end(JSON.stringify({ messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }], tools: [], toolChoice: 'none' }));
+    child.stdin.end(JSON.stringify(payload || { messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }], tools: [], toolChoice: 'none' }));
     return { child, done };
   };
-  return { start, kill, waitFor, log, release: () => writeFileSync(release, 'go'),
+  return { start, kill, waitFor, log, dir, adapter, model, command: '"' + process.execPath + '" "' + adapter + '" "' + model + '"', descendantPid: () => Number(readFileSync(path.join(dir, 'descendant'), 'utf8')), release: () => writeFileSync(release, 'go'),
     count: () => readdirSync(entered).length,
     locked: () => existsSync(`${log}.lock`),
     waiting: () => readdirSync(dir).some(name => name.startsWith('calls.jsonl.lock-')),
@@ -1088,8 +1113,12 @@ test('4C takip nitelendirmesi: üst süre kilit ve yürütme bütçelerini kapsa
   let kills = 0;
   Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
   t.after(() => { cp.spawn = original.spawn; process.kill = original.kill; Object.defineProperty(process, 'platform', platform); syncBuiltinESMExports(); });
-  cp.spawn = () => (child = Object.assign(new EventEmitter(), { pid: 1234, stdin: new PassThrough(), stdout: new PassThrough() }));
-  process.kill = () => { kills += 1; };
+  cp.spawn = () => (child = Object.assign(new EventEmitter(), { pid: 1234, exitCode: null, signalCode: null, stdin: new PassThrough(), stdout: new PassThrough(), send() {} }));
+  process.kill = (pid, signal) => {
+    if (signal === 0) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+    kills += 1;
+    if (signal === 'SIGKILL') queueMicrotask(() => { child.signalCode = signal; child.emit('close', null); });
+  };
   syncBuiltinESMExports();
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const provider = realModelProvider();
@@ -1099,7 +1128,7 @@ test('4C takip nitelendirmesi: üst süre kilit ve yürütme bütçelerini kapsa
   t.mock.timers.tick(200000);
   assert.equal(kills, 0, 'üst süre ikinci evreyi erken kesmez');
   child.stdout.emit('data', Buffer.from(JSON.stringify({ text: 'ok', toolCalls: [], finishReason: 'end_turn', models: ['claude-haiku-4-5-20251001'], thinking: 'off' })));
-  child.emit('close', 0);
+  finishFixtureCommand(child);
   const completed = await observed;
   assert.equal(completed.error, undefined);
   for await (const event of completed.value.events) assert.notEqual(event.type, 'error');
@@ -1107,7 +1136,7 @@ test('4C takip nitelendirmesi: üst süre kilit ve yürütme bütçelerini kapsa
   const failure = assert.rejects(next, /MODEL_COMMAND_TIMEOUT/);
   t.mock.timers.tick(251000);
   await failure;
-  assert.equal(kills, 2, 'başarı ve zaman aşımı birer kez temizlenir');
+  assert.equal(kills, 2, 'başarı ve zaman aşımı grupları birer kez temizlenir');
 });
 
 test('Claude yakınsama: eşzamanlı aynı önek tamamlanan çağrıya göre önbellek denetler', async (t) => {
@@ -1392,11 +1421,15 @@ test('4C takip nitelendirmesi son yedi: süreç sahibi zaman aşımı, iptal ve 
   childProcess.spawn = (command, args, options) => {
     if (command === 'taskkill') { kills.push(args); const killer = new EventEmitter(); queueMicrotask(() => killer.emit('close', 0)); return killer; }
     const child = Object.assign(new EventEmitter(), { pid: 1234, exitCode: null, signalCode: null,
-      options, stdin: new PassThrough(), stdout: new PassThrough(), kill() { kills.push('child'); } });
+      options, stdin: new PassThrough(), stdout: new PassThrough(), send() {}, kill() { kills.push('child'); } });
     children.push(child);
     return child;
   };
-  process.kill = (pid, signal) => { kills.push([pid, signal]); };
+  process.kill = (pid, signal) => {
+    if (signal === 0) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+    kills.push([pid, signal]);
+    if (signal === 'SIGKILL') { const child = children.at(-1); queueMicrotask(() => { child.signalCode = signal; child.emit('close', null); }); }
+  };
   syncBuiltinESMExports();
   for (const os of ['linux', 'win32']) {
     Object.defineProperty(process, 'platform', { ...platform, value: os });
@@ -1421,15 +1454,14 @@ test('4C takip nitelendirmesi son yedi: süreç sahibi zaman aşımı, iptal ve 
         assert.equal(settled, true, `${mode}: komut tek terminal sonuca ulaşır`);
       }
       if (mode === 'success') {
-        child.exitCode = 0;
         child.stdout.emit('data', Buffer.from(JSON.stringify({ text: 'ok', toolCalls: [], finishReason: 'end_turn', models: ['claude-haiku-4-5-20251001'], thinking: 'off' })));
-        child.emit('close', 0);
+        finishFixtureCommand(child);
         const stream = await pending;
         for await (const event of stream.events) assert.notEqual(event.type, 'error');
       } else {
         await assert.rejects(pending, mode === 'timeout' ? /MODEL_COMMAND_TIMEOUT/ : mode === 'deadline' ? error => error.code === 'AI_TIMEOUT' : ['cancel', 'signal'].includes(mode) ? error => error.code === 'AI_CANCELLED' : /MODEL_COMMAND_ERROR/);
         assert.equal(child.options.detached, os !== 'win32');
-        if (mode !== 'error') assert.equal(kills.length, before + 1, 'süreç ağacı sonlandırılır');
+        if (mode !== 'error') assert.equal(kills.length, before + 1, 'süreç ağacı tek temizleme kararıyla sonlandırılır');
         assert.equal(provider.calls.length, 0, 'başarısız çıktı sağlayıcıya geçmez');
       }
       const terminalKills = kills.length;
@@ -1472,10 +1504,14 @@ test('4C takip nitelendirmesi: temizleme hatası tek sonucu ve sonraki çağrıy
       return killer;
     }
     child = Object.assign(new EventEmitter(), { pid: 1234, exitCode: null, signalCode: null,
-      stdin: new PassThrough(), stdout: new PassThrough(), kill() { commands.push({ command: 'root' }); return true; } });
+      stdin: new PassThrough(), stdout: new PassThrough(), send() {}, kill() { commands.push({ command: 'root' }); return true; } });
     return child;
   };
-  process.kill = () => { if (cleanupMode !== 'ok') throw Object.assign(new Error('denied'), { code: 'EPERM' }); };
+  process.kill = (pid, signal) => {
+    if (cleanupMode !== 'ok') throw Object.assign(new Error('denied'), { code: 'EPERM' });
+    if (signal === 0) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+    if (signal === 'SIGKILL') queueMicrotask(() => { child.signalCode = signal; child.emit('close', null); });
+  };
   syncBuiltinESMExports();
   for (const os of ['linux', 'win32']) for (const mode of os === 'linux' ? ['denied'] : ['nonzero', 'spawn-error', 'both-fail', 'hang']) {
     Object.defineProperty(process, 'platform', { ...platform, value: os });
@@ -1488,9 +1524,7 @@ test('4C takip nitelendirmesi: temizleme hatası tek sonucu ve sonraki çağrıy
       const observed = pending.then(value => ({ value }), error => ({ error }));
       if (outcome === 'success') {
         child.stdout.emit('data', Buffer.from(JSON.stringify({ text: 'ok', toolCalls: [], finishReason: 'end_turn', models: ['claude-haiku-4-5-20251001'], thinking: 'off' })));
-        // POSIX cleanup still owns the process group after the root closes.
-        child.exitCode = 0;
-        child.emit('close', 0);
+        finishFixtureCommand(child);
       } else if (outcome === 'timeout') t.mock.timers.tick(300000);
       else controller.abort(outcome === 'deadline' ? new AiError('AI_TIMEOUT') : undefined);
       await new Promise(setImmediate);
@@ -1519,9 +1553,8 @@ test('4C takip nitelendirmesi: temizleme hatası tek sonucu ve sonraki çağrıy
       assert.deepEqual(['SIGINT', 'SIGTERM', 'SIGHUP'].map(name => process.listenerCount(name)), listeners);
       cleanupMode = 'ok';
       const next = provider.streamToolCompletion({ model: 'standard', messages: [], tools: [], toolChoice: 'none' });
-      child.exitCode = 0;
       child.stdout.emit('data', Buffer.from(JSON.stringify({ text: 'ok', toolCalls: [], finishReason: 'end_turn', models: ['claude-haiku-4-5-20251001'], thinking: 'off' })));
-      child.emit('close', 0);
+      finishFixtureCommand(child);
       for await (const event of (await next).events) assert.notEqual(event.type, 'error');
     }
   }
@@ -1566,14 +1599,14 @@ test('4C takip nitelendirmesi son yedi: ilk liste tam görünür atama nüfusunu
     import { PassThrough } from 'node:stream';
     let calls = 0;
     cp.spawn = () => {
-      const child = Object.assign(new EventEmitter(), {exitCode: null, signalCode: null, stdin:new PassThrough(),stdout:new PassThrough(),kill(){}});
+      const child = Object.assign(new EventEmitter(), {exitCode: null, signalCode: null, stdin:new PassThrough(),stdout:new PassThrough(),send(){},kill(){}});
       child.stdin.resume();
       child.stdin.on('finish', () => queueMicrotask(() => {
         const filters = process.env.POPULATION_CASE === 'subset' ? {assignee:'me', priority:['critical']} : process.env.POPULATION_CASE === 'extra' ? {} : {assignee:'me'};
         const plan = calls++ === 0 ? {intent:'rota',language:'tr',request:{operation:'list',metrics:['task.title'],population:{tool:'rota_task_search',collection:'tasks'},filters}} : {intent:'abstain',language:'tr',abstain:{reason:'outside_data'}};
         child.stdout.emit('data',Buffer.from(JSON.stringify({text:'',toolCalls:[{name:'rota_plan',arguments:plan}],finishReason:'tool_calls',models:['claude-haiku-4-5-20251001'],thinking:'off'})));
-        child.exitCode = 0;
-        child.emit('close',0);
+        if (process.platform === 'win32') { child.exitCode = 0; child.emit('close',0); }
+        else { child.stdout.emit('end'); child.emit('message',{type:'model-command-complete',code:0}); }
       }));
       return child;
     };
@@ -1590,4 +1623,398 @@ test('4C takip nitelendirmesi son yedi: ilk liste tam görünür atama nüfusunu
     assert.equal(Boolean(openingFailure), mode !== 'complete', `${mode}: ${run.stderr}`);
     assert.equal(report.turns, 5, 'sonraki gönderge kontrolleri de bağımsız çalışır');
   }
+});
+
+test('Claude frozen 16: cache age comes from request start, not completion', async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
+  const first = cli.start();
+  await cli.waitFor(() => cli.count() === 1);
+  cli.release();
+  assert.equal((await first.done).text, 'ok');
+  const rows = cli.rows();
+  rows.find(row => row.usage).durationMs = 6 * 60 * 1000;
+  writeFileSync(cli.log, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+  assert.equal((await cli.start().done).text, 'ok', 'expired prefix must be allowed to warm again');
+  assert.equal((await cli.start().done).error, 'PLANNER_CACHE_NOT_REUSED', 'a genuinely recent request still requires reuse');
+});
+
+test('Claude frozen 16: corrupt ledger never authorizes a model reservation', async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_MAX_CALLS: '1' });
+  cli.release();
+  for (const corrupt of ['{broken', 'null', '[]', '42', '{}', '{"reserved":false}', '{"reserved":"true"}', '{"usage":"broken"}']) {
+    writeFileSync(cli.log, corrupt + '\n');
+    assert.equal((await cli.start().done).error, 'PLANNER_BUDGET_UNVERIFIED');
+    assert.equal(cli.count(), 0, 'no model command may launch from partial budget history');
+    assert.ok(!readFileSync(cli.log, 'utf8').split('\n').slice(1).filter(Boolean).some(line => JSON.parse(line).reserved));
+  }
+});
+
+test('Claude frozen 16: final stream event is consumed at EOF', async (t) => {
+  const cli = await claudeCommandFixture(t, { newline: false });
+  const pending = cli.start();
+  await cli.waitFor(() => cli.count() === 1);
+  cli.release();
+  assert.equal((await pending.done).text, 'ok');
+});
+
+test('Claude frozen 16: forced calls originate only from validated final output', async (t) => {
+  const attempted = { intent: 'general', language: 'tr' };
+  const accepted = { intent: 'abstain', language: 'tr', abstain: { reason: 'security' } };
+  for (const structured of [null, accepted]) await t.test(structured ? 'accepted' : 'rejected', async (t) => {
+    const cli = await claudeCommandFixture(t, { payload: {
+      messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }],
+      tools: [{ name: 'rota_plan', parameters: { type: 'object' } }], toolChoice: { name: 'rota_plan' }
+    }, events: [
+      { type: 'system', subtype: 'init', tools: [] },
+      { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'tool_use', name: 'StructuredOutput', input: attempted }] } },
+      { type: 'result', num_turns: 1, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 }, ...(structured ? { structured_output: structured } : {}) }
+    ] });
+    const pending = cli.start();
+    await cli.waitFor(() => cli.count() === 1);
+    cli.release();
+    const reply = await pending.done;
+    assert.deepEqual(reply.toolCalls, structured ? [{ name: 'rota_plan', arguments: accepted }] : []);
+    assert.equal(reply.finishReason, structured ? 'tool_calls' : 'end_turn');
+  });
+});
+
+test('Claude frozen 16: refusal and pause preserve model misses', async (t) => {
+  const { verifyCompletion } = await import('../scripts/planner-evaluation.mjs');
+  for (const [stop, expected] of [['refusal', 'content_filter'], ['pause_turn', 'stop'], ['unexpected', 'unexpected']]) {
+    await t.test(stop, async (t) => {
+      const cli = await claudeCommandFixture(t, { events: [
+        { type: 'system', subtype: 'init', tools: [] },
+        { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [] } },
+        { type: 'result', num_turns: 1, stop_reason: stop, usage: { input_tokens: 1, output_tokens: 0 } }
+      ] });
+      const pending = cli.start();
+      await cli.waitFor(() => cli.count() === 1);
+      cli.release();
+      const reply = await pending.done;
+      assert.equal(reply.finishReason, expected);
+      assert.deepEqual(reply.toolCalls, []);
+      if (stop === 'unexpected') assert.throws(() => verifyCompletion(reply.finishReason), /PLANNER_COMPLETION_UNVERIFIED/);
+      else {
+        assert.doesNotThrow(() => verifyCompletion(reply.finishReason));
+        const loaded = loadPlannerBenchmark();
+        const outcome = await planCase({ testCase: loaded.cases[0], model: { complete: async () => reply }, adviceFor: unavailable, now: loaded.now, catalog });
+        assert.notEqual(outcome.outcome, 'error');
+        assert.equal(scoreDecision(loaded.cases[0], recordOf(loaded.cases[0], 1, outcome), { referenceDate: loaded.referenceDate }).correct, false);
+      }
+    });
+  }
+});
+
+test('4C frozen 16: adapter diagnostics remain bounded and classified', async (t) => {
+  const { externalModel } = await import('../scripts/planner-evaluation.mjs');
+  for (const code of ['PLANNER_BUDGET_TOKENS', 'PLANNER_BUDGET_CALLS', 'PLANNER_BUDGET_UNVERIFIED', 'PLANNER_MODEL_MISMATCH', 'PLANNER_THINKING_ON', 'PLANNER_CACHE_NOT_REUSED', 'PLANNER_LEDGER_LOCKED', 'PLANNER_PROVIDER_ERROR', 'MODEL_COMMAND_TIMEOUT MODEL_COMMAND_CLEANUP_ERROR', 'PRIVATE secret']) {
+    const command = '"' + process.execPath + '" -e ' + JSON.stringify('process.stdout.write(JSON.stringify({error:' + JSON.stringify(code) + '}))');
+    const model = externalModel({ command, guard: () => {} });
+    try {
+      const reply = await model.complete({ messages: [], tools: [], toolChoice: 'none' });
+      assert.equal(reply.error, code === 'PRIVATE secret' ? 'MODEL_COMMAND_ERROR' : code);
+      assert.deepEqual(reply.toolCalls, []);
+      assert.equal(reply.text, '');
+    } finally { model.dispose(); }
+  }
+});
+
+test('4C takip nitelendirmesi frozen 16: malformed envelopes never reach the provider', async () => {
+  const { realModelProvider } = await import('../scripts/planner-followup-qualification.mjs');
+  const valid = { text: '', toolCalls: [], finishReason: 'end_turn', models: ['claude-haiku-4-5-20251001'], thinking: 'off' };
+  for (const reply of [null, [], { ...valid, toolCalls: undefined }, { ...valid, toolCalls: {} }, { ...valid, toolCalls: [null] }, { ...valid, text: 3 }, { ...valid, models: 'wrong' }, { ...valid, error: {} }]) {
+    const provider = realModelProvider({ completeRound: async () => reply });
+    await assert.rejects(provider.streamToolCompletion({ model: 'standard', messages: [], tools: [], toolChoice: 'none' }),
+      /MODEL_INFRASTRUCTURE ADAPTER_OUTPUT_INVALID/);
+    assert.equal(provider.calls.length, 0);
+  }
+});
+
+test('4C frozen 16: a planned artifact requires a request-bound first read', async () => {
+  const { validatePlannerRun } = await import('../scripts/planner-scoring.mjs');
+  const loaded = loadPlannerBenchmark();
+  const testCase = loaded.cases.find(c => c.expect === 'answer');
+  const { record } = await decide(loaded, testCase, answerPlan(testCase, loaded.referenceDate));
+  assert.equal(scoreDecision(testCase, record, { referenceDate: loaded.referenceDate }).correct, true);
+  const empty = clone(record);
+  empty.plan.calls = [];
+  assert.equal(scoreDecision(testCase, empty, { referenceDate: loaded.referenceDate }).correct, false);
+  const { PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION } = await import('../scripts/planner-scoring.mjs');
+  const run = { format: PLANNER_RUN_FORMAT, version: PLANNER_RUN_VERSION, benchmark: loaded.fingerprint, semanticBenchmark: loaded.semanticFingerprint,
+    referenceDate: loaded.referenceDate, passes: 1, cases: [testCase.id], records: [record], semantic: { mode: 'none' }, model: { commandHash: '0'.repeat(64) }, qualification: { expectedModel: 'scripted', thinking: 'off' } };
+  assert.doesNotThrow(() => validatePlannerRun(run, loaded));
+  run.records[0].plan.calls = [];
+  assert.throws(() => validatePlannerRun(run, loaded), /PLANNER_RUN_INVALID/);
+});
+
+
+test('Claude frozen 16: standalone timeout owns the model descendant group', async (t) => {
+  const cli = await claudeCommandFixture(t, { descendant: true, standalone: true, PLANNER_MODEL_TIMEOUT_MS: '1000' });
+  const pending = cli.start();
+  await cli.waitFor(() => cli.count() === 1);
+  const pid = cli.descendantPid();
+  t.after(() => { try { process.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } });
+  const reply = await pending.done;
+  assert.equal(reply.error, 'MODEL_COMMAND_TIMEOUT');
+  let running = true;
+  try {
+    process.kill(pid, 0);
+    if (process.platform === 'linux') running = readFileSync('/proc/' + pid + '/stat', 'utf8').split(') ')[1][0] !== 'Z';
+  } catch (error) { if (error.code !== 'ESRCH' && error.code !== 'ENOENT') throw error; running = false; }
+  assert.equal(running, false, 'timeout cannot settle while a model descendant is running');
+});
+
+test('Claude frozen 16: completed commands cannot signal a reused process group', async (t) => {
+  const { terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
+  const kill = process.kill;
+  const signals = [];
+  process.kill = (pid, signal) => { signals.push([pid, signal]); };
+  t.after(() => { process.kill = kill; });
+  for (const terminal of [{ exitCode: 0, signalCode: null }, { exitCode: null, signalCode: 'SIGTERM' }]) {
+    await terminateModelCommand({ pid: process.pid, ...terminal });
+    assert.deepEqual(signals.filter(([, signal]) => signal !== 0), [], 'the completed child PID is now owned by another live process');
+  }
+});
+
+
+test('Claude frozen 16: outer disposal drains the adapter-owned descendant group', async (t) => {
+  const { externalModel } = await import('../scripts/planner-evaluation.mjs');
+  const cli = await claudeCommandFixture(t, { descendant: true });
+  const model = externalModel({ command: cli.command, guard: () => {}, timeoutMs: 8000 });
+  t.after(() => model.dispose());
+  const pending = model.complete({ messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }], tools: [], toolChoice: 'none' });
+  await cli.waitFor(() => cli.count() === 1);
+  const pid = cli.descendantPid();
+  t.after(() => { try { process.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } });
+  await model.dispose();
+  const reply = await pending;
+  assert.equal(reply.error, 'MODEL_COMMAND_ERROR');
+  let running = true;
+  try {
+    process.kill(pid, 0);
+    if (process.platform === 'linux') running = readFileSync('/proc/' + pid + '/stat', 'utf8').split(') ')[1][0] !== 'Z';
+  } catch (error) { if (error.code !== 'ESRCH' && error.code !== 'ENOENT') throw error; running = false; }
+  assert.equal(running, false, 'outer cancellation must drain the owned model group');
+  await model.dispose();
+});
+
+test('Claude frozen 16: the command owner remains alive until cleanup', async (t) => {
+  const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
+  const { once } = await import('node:events');
+  const child = spawnModelCommand(process.execPath, ['-e', 'process.stdout.write("done")'], { env: commandPlatformEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => terminateModelCommand(child));
+  child.stdout.resume(); child.stderr.resume();
+  const completed = once(child, 'command-close');
+  child.stdin.end();
+  const [code, launchFailed] = await completed;
+  assert.equal(code, 0);
+  if (process.platform !== 'win32') {
+    assert.equal(launchFailed, false);
+    assert.equal(child.exitCode, null, 'the owned group leader cannot be recycled before cleanup');
+    assert.doesNotThrow(() => process.kill(child.pid, 0));
+    const exited = once(child, 'exit');
+    child.disconnect();
+    await exited;
+    assert.equal(child.signalCode, 'SIGKILL', 'loss of the owning channel must terminate the owned group');
+  }
+  await terminateModelCommand(child);
+});
+
+test('4C frozen 16: external finalization owns cleanup before reentrant completion', async (t) => {
+  const cp = (await import('node:child_process')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { EventEmitter } = await import('node:events');
+  const { PassThrough } = await import('node:stream');
+  const { externalModel } = await import('../scripts/planner-evaluation.mjs');
+  const original = { spawn: cp.spawn, kill: process.kill };
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+  t.after(() => { cp.spawn = original.spawn; process.kill = original.kill; Object.defineProperty(process, 'platform', platform); syncBuiltinESMExports(); });
+  let child;
+  let signals = 0;
+  cp.spawn = () => (child = Object.assign(new EventEmitter(), { pid: 2147483647, exitCode: null, signalCode: null,
+    stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), send() {} }));
+  process.kill = (pid, signal) => {
+    if (signal === 0) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+    signals += 1;
+    if (signals === 1) { child.signalCode = 'SIGKILL'; child.emit('close', null); }
+  };
+  syncBuiltinESMExports();
+  const model = externalModel({ command: 'fixture', guard: () => {} });
+  t.after(() => model.dispose());
+  const pending = model.complete({ messages: [], tools: [], toolChoice: 'none' });
+  child.stdout.emit('data', Buffer.from(JSON.stringify({ text: 'ok', toolCalls: [] })));
+  finishFixtureCommand(child);
+  const reply = await pending;
+  assert.equal(reply.text, 'ok');
+  assert.equal(reply.error, null);
+  assert.equal(signals, 1, 'a reentrant completion cannot start another cleanup');
+  child.stdout.emit('data', Buffer.from('stale'));
+  child.emit('close', 0);
+  await model.dispose();
+  assert.equal(signals, 1);
+});
+
+test('Claude frozen 16 blocker: recycled group between probe and signal is never killed', async (t) => {
+  const { terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const kill = process.kill;
+  let recycled = false;
+  const unauthorized = [];
+  Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+  process.kill = (pid, signal) => {
+    if (signal === 0) {
+      // The probe observed absence; the caller is then preempted while a new group gets this ID.
+      recycled = true;
+      throw Object.assign(new Error('previous owner is gone'), { code: 'ESRCH' });
+    }
+    if (recycled) unauthorized.push([pid, signal]);
+  };
+  t.after(() => { process.kill = kill; Object.defineProperty(process, 'platform', platform); });
+  await terminateModelCommand({ pid: 1234, exitCode: 0, signalCode: null });
+  assert.deepEqual(unauthorized, [], 'cleanup must retain ownership atomically through the signal');
+});
+
+test('Claude frozen 18: standard Windows npm launcher passes arguments without a shell', async (t) => {
+  const { mkdirSync, writeFileSync, existsSync } = await import('node:fs');
+  const path = await import('node:path');
+  const cli = await claudeCommandFixture(t);
+  const bin = path.join(cli.dir, 'npm path & literal%');
+  const pkg = path.join(bin, 'node_modules', '@anthropic-ai', 'claude-code');
+  mkdirSync(pkg, { recursive: true });
+  const argv = path.join(cli.dir, 'argv.json');
+  const marker = path.join(cli.dir, 'SHELL_EXECUTED');
+  writeFileSync(path.join(bin, 'claude.cmd'), '@echo off\necho forbidden > "' + marker + '"\n');
+  writeFileSync(path.join(pkg, 'package.json'), '{"type":"commonjs"}');
+  writeFileSync(path.join(pkg, 'cli.js'),
+    'require("node:fs").writeFileSync(' + JSON.stringify(argv) + ', JSON.stringify(process.argv.slice(2)));\n' +
+    readFileSync(cli.model, 'utf8').replace('const root = __dirname;', 'const root = ' + JSON.stringify(cli.dir) + ';'));
+  writeFileSync(cli.adapter, 'Object.defineProperty(process,"platform",{value:"win32"});\n' + readFileSync(cli.adapter, 'utf8'));
+  const pending = cli.start({ PATH: bin, PLANNER_CLAUDE_LOG: '' }, 'claude');
+  await cli.waitFor(() => cli.count() === 1);
+  cli.release();
+  const reply = await pending.done;
+  assert.equal(reply.text, 'ok');
+  assert.equal(existsSync(marker), false);
+  const args = JSON.parse(readFileSync(argv, 'utf8'));
+  assert.ok(args.includes('--strict-mcp-config'));
+  assert.equal(args[args.indexOf('--effort') + 1], 'low');
+  assert.equal(args[args.indexOf('--model') + 1], 'claude-haiku-4-5-20251001');
+});
+
+test('4C takip nitelendirmesi frozen 18: hash advice never reaches the real model', async (t) => {
+  const { realModelProvider } = await import('../scripts/planner-followup-qualification.mjs');
+  const { createAiStack, sendTurn } = await import('./helpers/aiStack.mjs');
+  const { AYSE, NOW, rotaToolSeed } = await import('./helpers/aiToolFixtures.mjs');
+  const { randomUUID } = await import('node:crypto');
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const inputs = [];
+  const provider = realModelProvider({ completeRound: async input => {
+    inputs.push(input);
+    return { text: '', toolCalls: [{ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } }],
+      finishReason: 'tool_calls', models: ['claude-haiku-4-5-20251001'], thinking: 'off' };
+  } });
+  const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed(), env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, provider });
+  const response = await sendTurn({ turnId: randomUUID(), message: 'Onun durumu?' });
+  assert.equal(response.events.find(event => event.event === 'done').data.assistantMessage.finishReason, 'clarification');
+  assert.equal(inputs.length, 1);
+  assert.ok(!JSON.stringify(inputs[0].messages).includes('SUNUCU (anlamsal danışmanlık)'));
+  assert.ok(provider.semanticCalls.some(call => call.kind === 'embeddings'));
+  assert.ok(!provider.semanticCalls.some(call => call.kind === 'rerank'));
+  assert.equal(stack.db.aiToolLog?.length || 0, 0);
+});
+
+test('4C frozen 16 sibling: a crashed group owner drains its model job before failure', async (t) => {
+  const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
+  const { once } = await import('node:events');
+  const script = 'const child=require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});child.unref();process.stdout.write(JSON.stringify([process.pid,child.pid])+"\\n");setInterval(()=>{},1000);';
+  const child = spawnModelCommand(process.execPath, ['-e', script], { env: commandPlatformEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => terminateModelCommand(child));
+  child.stderr.resume(); child.stdin.end();
+  const [data] = await once(child.stdout, 'data');
+  const pids = JSON.parse(String(data));
+  t.after(() => pids.forEach(pid => { try { process.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; } }));
+  if (process.platform === 'win32') {
+    await terminateModelCommand(child);
+  } else {
+    const closed = once(child, 'close');
+    process.kill(child.pid, 'SIGKILL');
+    await closed;
+    await terminateModelCommand(child);
+  }
+  for (const pid of pids) {
+    let running = true;
+    try {
+      process.kill(pid, 0);
+      if (process.platform === 'linux') running = readFileSync('/proc/' + pid + '/stat', 'utf8').split(') ')[1][0] !== 'Z';
+    } catch (error) { if (error.code !== 'ESRCH' && error.code !== 'ENOENT') throw error; running = false; }
+    assert.equal(running, false, 'unexpected owner loss cannot leave a model job running');
+  }
+});
+
+test('4C frozen 16 sibling: exited owners wait for cleanup without signaling a recycled group', async (t) => {
+  const { terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
+  const { EventEmitter } = await import('node:events');
+  const { PassThrough } = await import('node:stream');
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const kill = process.kill;
+  Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+  process.kill = () => assert.fail('an exited owner must never signal a possibly recycled process group');
+  t.after(() => { process.kill = kill; Object.defineProperty(process, 'platform', platform); });
+  const witness = new PassThrough();
+  const child = Object.assign(new EventEmitter(), { pid: 1234, exitCode: 1, signalCode: null, stdio: [null, null, null, null, witness] });
+  let settled = false;
+  const cleanup = terminateModelCommand(child).then(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(settled, false, 'failure waits for the surviving group member to finish cleanup');
+  witness.destroy();
+  await cleanup;
+  assert.equal(settled, true);
+});
+
+test('4C frozen 16 sibling: follow-up command cleanup preserves inherited stderr', async () => {
+  const { spawn } = await import('node:child_process');
+  const { once } = await import('node:events');
+  const moduleUrl = new URL('../scripts/planner-claude-model.mjs', import.meta.url).href;
+  const script = `import {spawnModelCommand,terminateModelCommand} from ${JSON.stringify(moduleUrl)};
+    import {once} from 'node:events';
+    for(let i=0;i<2;i++) {
+      const child=spawnModelCommand(process.execPath,['-e','process.stdout.write("ok")'],{env:{...process.env},stdio:['pipe','pipe','inherit']});
+      child.stdout.resume(); child.stdin.end();
+      await once(child,'command-close'); await terminateModelCommand(child);
+      await new Promise((resolve,reject)=>process.stderr.write('diagnostic-'+i+'\\n',error=>error?reject(error):resolve()));
+    }`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script], { env: commandPlatformEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+  let err = '';
+  child.stdout.resume();
+  child.stderr.on('data', chunk => { err += chunk; });
+  const [code] = await once(child, 'close');
+  assert.equal(code, 0, err);
+  assert.equal(err, 'diagnostic-0\ndiagnostic-1\n');
+});
+
+test('Claude frozen 22: Windows CLI uses the isolated profile and required system environment', async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  const path = await import('node:path');
+  const cli = await claudeCommandFixture(t);
+  const capture = path.join(cli.dir, 'environment.json');
+  writeFileSync(cli.adapter, 'Object.defineProperty(process,"platform",{value:"win32"});\n' + readFileSync(cli.adapter, 'utf8'));
+  writeFileSync(cli.model, 'require("node:fs").writeFileSync(' + JSON.stringify(capture) + ',JSON.stringify(process.env));\n' + readFileSync(cli.model, 'utf8'));
+  const systemRoot = process.env.SystemRoot || 'C:\\Windows';
+  const windows = { SystemRoot: systemRoot, windir: process.env.windir || systemRoot,
+    ComSpec: process.env.ComSpec || systemRoot + '\\System32\\cmd.exe', PATHEXT: process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD' };
+  const pending = cli.start({ ...windows, PLANNER_CLAUDE_LOG: '', USERPROFILE: path.join(cli.dir, 'operator-profile'),
+    APPDATA: path.join(cli.dir, 'operator-data'), CLAUDE_CONFIG_DIR: path.join(cli.dir, 'operator-config') });
+  await cli.waitFor(() => cli.count() === 1);
+  cli.release();
+  assert.equal((await pending.done).text, 'ok');
+  const seen = JSON.parse(readFileSync(capture, 'utf8'));
+  assert.equal(seen.USERPROFILE, path.join(cli.dir, 'home'));
+  assert.equal(seen.HOME, seen.USERPROFILE);
+  const normalized = Object.fromEntries(Object.entries(seen).map(([key, value]) => [key.toLowerCase(), value]));
+  for (const [key, value] of Object.entries(windows)) assert.equal(normalized[key.toLowerCase()], value);
+  assert.equal(seen.APPDATA, undefined);
+  assert.equal(seen.CLAUDE_CONFIG_DIR, undefined);
 });

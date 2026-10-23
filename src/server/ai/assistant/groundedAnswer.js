@@ -852,7 +852,6 @@ function beginPart(turn) {
 function acceptPart(turn, spec) {
   turn.containment.beginPart();
   turn.partIndex = spec.index;
-  turn.repairsLeft = turn.limits.maxRepairRounds;
   acceptRequest(turn, spec.request, null, { part: spec.index, count: turn.partCount });
   beginPart(turn);
 }
@@ -1057,7 +1056,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     revalidatedAt: null,
     models: [],
     // İçeriksiz tur izi: tur amaçları, süreler, belirteç sayıları ve sayaçlar.
-    trace: { startedAt: Date.now(), rounds: [], declarations: 0, repairs: 0, revalidationMs: 0, verificationMs: 0, pending: null }
+    trace: { startedAt: planning?.startedAt ?? Date.now(), rounds: [], declarations: 0, repairs: 0, revalidationMs: 0, verificationMs: 0, pending: null }
   };
   turn.executor = createToolExecutor({
     resolveTool: (name) => !turn.permittedTools || turn.permittedTools.has(name) ? getRotaTool(name) : null,
@@ -1206,7 +1205,6 @@ async function revalidate(turn, disclosureSignal = turn.session.signal) {
   return unavailable;
 }
 
-/** Tek anlamlı görev listesinin dönen satırları; model metni ve seçtiği olgular kimlik kaynağı değildir. */
 /**
  * Tek görevin araçları: doğrulanmış yanıtın konusu tek görevse "onun …" takibi o göreve başvurur. Yalnızca
  * kanıt öznesi okunan görevin kendisi olan araçlar (tekrar incelemesinin öznesi seri şablonu olabilir).

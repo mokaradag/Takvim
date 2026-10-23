@@ -309,6 +309,8 @@ async function* completionAsStream(completion, limits, { reasoning = false } = {
  * Sağlayıcıdan bağımsız ileti biçimi → OpenAI uyumlu tel biçimi. Araç çağrısı
  * yapan asistan iletisi `tool_calls`, araç sonucu `role: tool` ve
  * `tool_call_id` taşır. Tel biçimi bu modülün dışına çıkmaz.
+ * Araçlı ağ geçidi, ara sistem iletilerini destekleyen şablon gerektirir;
+ * sunucu notları başka role taşınmaz ve sabit önekle birleştirilmez.
  */
 function wireMessages(messages) {
   return messages.map((message) => {

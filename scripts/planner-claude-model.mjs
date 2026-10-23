@@ -71,7 +71,18 @@ function conversationText(messages) {
 
 function ledger(file) {
   if (!file || !existsSync(file)) return [];
-  return readFileSync(file, 'utf8').split('\n').filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
+  return readFileSync(file, 'utf8').split('\n').filter(line => line.trim()).map(line => {
+    let row;
+    try { row = JSON.parse(line); } catch { /* Eksik bütçe geçmişiyle model çağrılmaz. */ }
+    if (!row || typeof row !== 'object' || Array.isArray(row)
+      || row.reserved !== true && !row.usage && typeof row.error !== 'string'
+      || row.reserved !== undefined && row.reserved !== true
+      || row.usage != null && (typeof row.usage !== 'object' || Array.isArray(row.usage)
+        || ['input_tokens', 'cache_creation_input_tokens'].some(key => row.usage[key] != null && (!Number.isSafeInteger(row.usage[key]) || row.usage[key] < 0)))) {
+      throw Object.assign(new Error('ledger'), { code: 'PLANNER_BUDGET_UNVERIFIED' });
+    }
+    return row;
+  });
 }
 
 /** Pozitif tam sayı ortam sınırı; geçersiz değer sınırı kapatmaz, koşuyu durdurur. */
@@ -95,7 +106,9 @@ function processIdentity(pid, expected = null, timeoutMs = 120000) {
     try {
       const recorded = /^linux:[0-9a-f-]{36}:([0-9]+):[0-9]+$/.exec(expected || '');
       const stat = readFileSync(expected ? `/proc/${recorded?.[1] || pid}/stat` : '/proc/self/stat', 'utf8');
-      const start = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19];
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+      if (fields[0] === 'Z' || fields[0] === 'X') return null;
+      const start = fields[19];
       if (!/^[0-9]+$/.test(start)) throw new Error('PLANNER_LEDGER_OWNER_UNVERIFIED');
       return `linux:${readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()}:${stat.slice(0, stat.indexOf(' '))}:${start}`;
     } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -153,6 +166,97 @@ async function withLock(file, work, timeoutMs) {
 
 export const MODEL_CLEANUP_TIMEOUT_MS = 5000;
 
+/** Grup üyesi, lider düşse de grup kimliğini tutarak kalan komutu sonlandırır. */
+function monitorModelCommand() {
+  let group = null;
+  process.once('disconnect', () => { if (group) process.kill(-group, 'SIGKILL'); else process.exit(1); });
+  process.once('message', ({ command, args, shell, groupId }) => {
+    group = groupId;
+    process.env.ROTA_MODEL_COMMAND_OWNER = String(group);
+    const child = spawn(command, args, { shell, stdio: 'inherit' });
+    let launchFailed = false;
+    child.once('error', () => { launchFailed = true; });
+    child.once('close', code => {
+      let remaining = 2;
+      const flushed = () => { if (!--remaining) process.send({ type: 'model-command-complete', code: launchFailed ? -1 : code, launchFailed }, error => { if (error) process.kill(-group, 'SIGKILL'); }); };
+      process.stdout.end(flushed);
+      process.stderr.end(flushed);
+    });
+  });
+  process.channel.ref();
+}
+
+/** İç IPC modele geçmez; sahip ve gözetmen birbirinin kaybında aynı grubu temizler. */
+function ownModelCommand() {
+  const stop = () => process.kill(-process.pid, 'SIGKILL');
+  process.once('disconnect', stop);
+  process.once('message', ({ command, args, shell, pipedStderr }) => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+      env: { ...process.env, ROTA_MODEL_COMMAND_OWNER: 'monitor' }, stdio: ['inherit', 'pipe', 'pipe', 'ipc', 4]
+    });
+    child.stdout.pipe(process.stdout, { end: false });
+    child.stderr.pipe(process.stderr, { end: false });
+    child.once('error', stop);
+    child.once('exit', stop);
+    let completion = null;
+    let ended = 0;
+    const publish = () => {
+      if (!completion || ended !== 2) return;
+      let remaining = 2;
+      const flushed = () => { if (!--remaining) process.send(completion, error => { if (error) stop(); }); };
+      process.stdout.end(flushed);
+      if (pipedStderr) process.stderr.end(flushed);
+      else process.stderr.write('', flushed);
+    };
+    child.stdout.once('end', () => { ended += 1; publish(); });
+    child.stderr.once('end', () => { ended += 1; publish(); });
+    child.once('message', value => { completion = value; publish(); });
+    child.send({ command, args, shell, groupId: process.pid }, error => { if (error) stop(); });
+  });
+  // Lider ve gözetmen, başlatanın grup temizliğine kadar yaşar.
+  process.channel.ref();
+}
+
+/** Mevcut komutu aynı yeteneklerle çalıştırır; POSIX grup lideri sonuçtan sonra yeniden kullanılamaz. */
+export function spawnModelCommand(command, args, options) {
+  if (process.platform === 'win32' || process.env.ROTA_MODEL_COMMAND_OWNER) {
+    const child = spawn(command, args, { ...options, detached: false });
+    Object.defineProperty(child, 'modelCommandGroup', { value: false });
+    child.once('close', code => child.emit('command-close', code));
+    return child;
+  }
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+    ...options, shell: false, detached: true,
+    env: { ...options.env, ROTA_MODEL_COMMAND_OWNER: 'supervisor' },
+    stdio: [...options.stdio, 'ipc', 'pipe']
+  });
+  // Gözetmenin de tuttuğu uç kapanmadan ChildProcess.close tamamlanamaz.
+  child.stdio?.[4]?.resume();
+  let completion = null;
+  let stdoutEnded = false;
+  let stderrEnded = !child.stderr;
+  const completed = () => {
+    if (completion && stdoutEnded && stderrEnded) {
+      const code = completion.code;
+      const launchFailed = completion.launchFailed === true;
+      completion = null;
+      child.emit('command-close', code, launchFailed);
+    }
+  };
+  child.stdout.once('end', () => { stdoutEnded = true; completed(); });
+  child.stderr?.once('end', () => { stderrEnded = true; completed(); });
+  child.once('message', value => {
+    if (value?.type !== 'model-command-complete' || !(value.code === null || Number.isInteger(value.code))) {
+      child.emit('error', new Error('MODEL_COMMAND_ERROR'));
+      return;
+    }
+    completion = value;
+    completed();
+  });
+  child.send({ command, args, shell: options.shell === true, pipedStderr: Boolean(child.stderr) }, error => { if (error) child.emit('error', error); });
+  return child;
+}
+
 const cleanupCommand = (command, args) => new Promise((resolveCleanup, rejectCleanup) => {
   const killer = spawn(command, args, { stdio: 'ignore', windowsHide: true });
   let done = false;
@@ -173,9 +277,10 @@ const cleanupCommand = (command, args) => new Promise((resolveCleanup, rejectCle
 
 /** Geliştirme komutunun temizleme sahibi: Windows ağacı ya da POSIX süreç/grup. */
 export async function terminateModelCommand(child, { group = true } = {}) {
-  if (!child.pid) return;
+  const exited = child.exitCode !== null || child.signalCode !== null;
+  const ownerPipe = child.stdio?.[4];
+  if (!child.pid || ownerPipe?.closed || exited && !ownerPipe) return;
   if (process.platform === 'win32') {
-    if (child.exitCode !== null || child.signalCode !== null) return;
     try { await cleanupCommand('taskkill', ['/pid', String(child.pid), '/T', '/F']); }
     catch {
       // Kök süreçten önce çocukları durdur; taskkill'in çıkışı da temizleme sonucuna dahildir.
@@ -187,26 +292,72 @@ export async function terminateModelCommand(child, { group = true } = {}) {
       }
     }
   } else {
-    try { process.kill(group ? -child.pid : child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    await new Promise((resolve, reject) => {
+      const completion = ownerPipe || child;
+      const finish = error => {
+        clearTimeout(timer);
+        completion.off('close', closed); completion.off('error', failed);
+        if (error) reject(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_CLEANUP_ERROR', { cause: error }));
+        else resolve();
+      };
+      const closed = () => finish();
+      const failed = error => finish(error);
+      const timer = setTimeout(() => finish(new Error('cleanup timeout')), MODEL_CLEANUP_TIMEOUT_MS);
+      completion.once('close', closed); completion.once('error', failed);
+      try { if (!exited) process.kill(group && child.modelCommandGroup !== false ? -child.pid : child.pid, 'SIGKILL'); }
+      catch (error) { finish(error.code === 'ESRCH' ? null : error); }
+    });
   }
 }
 
 function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] }, timeoutMs) {
   return new Promise((resolve) => {
-    const child = spawn(command, [...prefixArgs, ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    // npm'nin sabit Claude girişini Node ile aç: .cmd içeriği ve model argümanları kabukta yorumlanmaz.
+    if (process.platform === 'win32' && command === 'claude') {
+      for (const directory of (env.PATH || '').split(';').filter(Boolean)) {
+        const native = path.join(directory, 'claude.exe');
+        if (existsSync(native)) { command = native; break; }
+        const entry = path.join(directory, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
+        if (existsSync(path.join(directory, 'claude.cmd')) && existsSync(entry)) { command = process.execPath; prefixArgs = [entry]; break; }
+      }
+    }
+    const child = spawnModelCommand(command, [...prefixArgs, ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     const events = [];
     let launched = false;
     let timedOut = false;
     let cleanup = null;
-    const finish = async (result) => {
+    let settled = false;
+    let stopping = false;
+    const removeSignals = () => {
+      process.off('SIGINT', interrupt); process.off('SIGTERM', terminate); process.off('SIGHUP', hangup);
+    };
+    const stop = async code => {
+      if (stopping) return;
+      stopping = true;
+      settled = true;
       clearTimeout(timer);
+      cleanup ||= terminateModelCommand(child);
+      try { await cleanup; } catch { code = 1; }
+      removeSignals();
+      process.exit(code);
+    };
+    const interrupt = () => stop(130);
+    const terminate = () => stop(143);
+    const hangup = () => stop(129);
+    process.once('SIGINT', interrupt); process.once('SIGTERM', terminate); process.once('SIGHUP', hangup);
+    const finish = async (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup ||= terminateModelCommand(child);
       let cleanupFailed = false;
       try { await cleanup; } catch { cleanupFailed = true; }
-      resolve({ ...result, timedOut, cleanupFailed });
+      removeSignals();
+      if (!stopping) resolve({ ...result, timedOut, cleanupFailed });
     };
     const timer = setTimeout(() => {
       timedOut = true;
-      cleanup = terminateModelCommand(child, { group: false });
+      cleanup = terminateModelCommand(child);
       finish({ code: -1, events });
     }, timeoutMs);
     child.once('spawn', () => { launched = true; });
@@ -223,7 +374,15 @@ function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] 
     });
     child.stderr.on('data', () => {});
     child.on('error', () => finish({ code: -1, events, launchFailed: !launched }));
-    child.on('close', (code) => finish({ code, events }));
+    child.on('command-close', (code, launchFailed = false) => {
+      if (settled) return;
+      buffer += decoder.end();
+      if (buffer.trim()) {
+        try { events.push(JSON.parse(buffer)); } catch { /* CLI dışı son satır */ }
+      }
+      finish({ code, events, launchFailed });
+    });
+    child.on('close', () => { if (!settled) finish({ code: -1, events }); });
     child.stdin.end(input);
   });
 }
@@ -277,7 +436,10 @@ async function complete(launcher, timeoutMs) {
     writeFileSync(path.join(work, 'tools.json'), JSON.stringify(tools), 'utf8');
     writeFileSync(path.join(work, 'mcp.json'), JSON.stringify({ mcpServers: { [SERVER]: { type: 'stdio', command: process.execPath, args: [fileURLToPath(import.meta.url), 'mcp', path.join(work, 'tools.json')] } } }), 'utf8');
     const keep = /^(PATH|LANG|LC_ALL|TZ|HTTPS?_PROXY|https?_proxy|NO_PROXY|no_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|ANTHROPIC_BASE_URL|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CODE_(REMOTE.*|PROVIDER_MANAGED_BY_HOST|ORGANIZATION_UUID|ACCOUNT_UUID|CONTAINER_ID|ENTRYPOINT|USE_CCR_V2|PROXY_RESOLVES_HOSTS|WORKER_EPOCH|ENVIRONMENT_RUNNER_VERSION)|CLAUDE_SESSION_INGRESS_TOKEN_FILE|SESSION_INGRESS_URL|CCR_.*|GLOBAL_AGENT_.*)$/;
-    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => keep.test(key))), HOME: home, MAX_THINKING_TOKENS: '0',
+    const windows = process.platform === 'win32'
+      ? Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(SystemRoot|windir|ComSpec|PATHEXT)$/i.test(key))) : {};
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => keep.test(key))), ...windows, PATH: process.env.PATH || '', HOME: home,
+      ...(process.platform === 'win32' ? { USERPROFILE: home } : {}), MAX_THINKING_TOKENS: '0',
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: '4096', ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
     const args = ['-p', '--model', model, '--effort', effort, '--system-prompt-file', path.join(work, 'system.txt'), '--tools', '',
       '--strict-mcp-config', ...(tools.length ? ['--mcp-config', path.join(work, 'mcp.json')] : []),
@@ -302,15 +464,16 @@ async function complete(launcher, timeoutMs) {
     };
     const offered = (init?.tools || []).filter((name) => name.startsWith(PREFIX)).map((name) => name.slice(PREFIX.length));
     const row = { at: new Date().toISOString(), ...(callId ? { callId } : {}), models, effort, thinking: usage.output_tokens_details.thinking_tokens || usage.thinkingBlocks ? 'on' : 'off', usage,
-      apiCalls: ids.size, numTurns: result?.num_turns ?? null, stopReason: blocks.some((block) => block.type === 'tool_use') ? 'tool_use' : result?.stop_reason ?? null,
+      apiCalls: ids.size, numTurns: result?.num_turns ?? null, stopReason: !forced && blocks.some((block) => block.type === 'tool_use') ? 'tool_use' : result?.stop_reason ?? null,
       durationMs: Date.now() - startedAt, rateLimit: limit ? { status: limit.status, utilization: limit.utilization ?? null } : null, staticPromptHash, toolCatalogHash, toolOrderHash: hash(JSON.stringify(offered)), tailChars: conversationText(rest).length };
     if (timedOut) return fail(cleanupFailed ? 'MODEL_COMMAND_TIMEOUT MODEL_COMMAND_CLEANUP_ERROR' : 'MODEL_COMMAND_TIMEOUT', row);
+    if (cleanupFailed) return fail('MODEL_COMMAND_CLEANUP_ERROR', row);
     if (!result || result.is_error && result.subtype !== 'error_max_turns' || rejected || result.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null });
     // CLI araçları kendi kararlı sırasıyla sunar: küme birebir aynı olmalı, sıra (toolOrderHash) çağrılar arasında sabit kalmalıdır.
     if (JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort())) return fail('PLANNER_TOOLS_NOT_OFFERED', { ...row, offered });
     if (prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash)) return fail('PLANNER_TOOL_ORDER_UNSTABLE', row);
     const first = prior.find((item) => {
-      const ageMs = startedAt - Date.parse(item.at);
+      const ageMs = Number.isSafeInteger(item.durationMs) && item.durationMs >= 0 ? startedAt - (Date.parse(item.at) - item.durationMs) : NaN;
       return !item.error && item.staticPromptHash === staticPromptHash && item.toolCatalogHash === toolCatalogHash
         && ageMs >= 0 && ageMs < 5 * 60 * 1000;
     });
@@ -320,12 +483,15 @@ async function complete(launcher, timeoutMs) {
     if (row.thinking !== 'off') return fail('PLANNER_THINKING_ON', row);
     if (log) appendFileSync(log, `${JSON.stringify(row)}\n`);
     // Zorunlu turda öteki araçlar yalnızca görünürdür (üretimdeki gibi); üretimin kısıtlı çözümü başka çağrı üretemez, burada da iletilmez.
-    const toolCalls = blocks.filter((block) => block.type === 'tool_use' && (forced ? block.name === 'StructuredOutput' : block.name.startsWith(PREFIX)))
-      .map((block) => ({ name: forced ? forced.name : block.name.slice(PREFIX.length), arguments: block.input ?? {} }));
+    const structured = !result.is_error && result.structured_output && typeof result.structured_output === 'object' && !Array.isArray(result.structured_output);
+    const toolCalls = forced ? structured ? [{ name: forced.name, arguments: result.structured_output }] : []
+      : blocks.filter((block) => block.type === 'tool_use' && block.name.startsWith(PREFIX))
+        .map((block) => ({ name: block.name.slice(PREFIX.length), arguments: block.input ?? {} }));
     const stop = row.stopReason;
     process.stdout.write(`${JSON.stringify({
       text: blocks.filter((block) => block.type === 'text').map((block) => block.text).join(''), toolCalls,
-      finishReason: stop === 'tool_use' ? 'tool_calls' : stop === 'max_tokens' ? 'length' : stop || null, usage, models, thinking: row.thinking
+      finishReason: forced && toolCalls.length || stop === 'tool_use' ? 'tool_calls' : stop === 'max_tokens' ? 'length'
+        : stop === 'refusal' ? 'content_filter' : stop === 'pause_turn' ? 'stop' : stop || null, usage, models, thinking: row.thinking
     })}\n`);
   } finally {
     rmSync(work, { recursive: true, force: true });
@@ -339,12 +505,14 @@ export async function runAdapter(launcher = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 20 || timeoutMs > 600000) return reportFailure(log, 'PLANNER_LIMIT_INVALID');
   const run = () => complete(launcher, timeoutMs);
   try { await (log ? withLock(log, run, timeoutMs) : run()); } catch (error) {
-    if (error.code !== 'PLANNER_LEDGER_LOCKED') throw error;
+    if (!['PLANNER_LEDGER_LOCKED', 'PLANNER_BUDGET_UNVERIFIED'].includes(error.code)) throw error;
     reportFailure(log, error.code);
   }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv[2] === 'mcp') serveTools(process.argv[3]);
+  else if (process.send && process.env.ROTA_MODEL_COMMAND_OWNER === 'supervisor') ownModelCommand();
+  else if (process.send && process.env.ROTA_MODEL_COMMAND_OWNER === 'monitor') monitorModelCommand();
   else await runAdapter();
 }

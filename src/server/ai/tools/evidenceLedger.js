@@ -2,7 +2,7 @@ import 'server-only';
 import { randomBytes } from 'node:crypto';
 import { claimableContract } from '../../../domain/ai/claimableEvidence.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
-import { encodeAuthorizationPopulation, evidenceTaskReferences, PAYLOAD_POPULATION_TOOLS, unverifiableAuthorizationPopulation } from './evidenceAuthorization.js';
+import { decodeAuthorizationPopulation, encodeAuthorizationPopulation, evidenceTaskReferences, PAYLOAD_POPULATION_TOOLS, unverifiableAuthorizationPopulation } from './evidenceAuthorization.js';
 import {
   EVIDENCE_LIMITS,
   evidenceIdFor,
@@ -162,6 +162,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
      */
     persistable(ids, { clarification = null, resultScope = null } = {}) {
       const wanted = new Set(ids);
+      let scopeStored = false;
       return entries
         .filter((entry) => entry.valid && wanted.has(entry.id) && entry.payload)
         .slice(0, EVIDENCE_LIMITS.maxEvidencePerAnswer)
@@ -169,6 +170,14 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
           const summaryJson = JSON.stringify(entry.summary);
           const payload = JSON.parse(entry.payload);
           const clarificationContext = clarification?.evidenceId === entry.id ? clarification.references : null;
+          let evidenceJson = persistedEvidenceJson(entry, payload, clarificationContext, null);
+          if (resultScope && !scopeStored && entry.authorizationEpoch) {
+            const candidate = persistedEvidenceJson(entry, payload, clarificationContext, resultScope);
+            if (decodeAuthorizationPopulation(JSON.parse(candidate).authorizationPopulation) !== null) {
+              evidenceJson = candidate;
+              scopeStored = true;
+            }
+          }
           return {
             ordinal: evidenceOrdinal(entry.id),
             toolName: entry.tool,
@@ -182,7 +191,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
             summaryJson: summaryJson.length <= MAX_SUMMARY_JSON_CHARS
               ? summaryJson
               : JSON.stringify({ ...entry.summary, highlights: [] }),
-            evidenceJson: persistedEvidenceJson(entry, payload, clarificationContext, entry.id === ids[0] ? resultScope : null)
+            evidenceJson
           };
         });
     }
