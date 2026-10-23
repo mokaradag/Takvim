@@ -1338,6 +1338,40 @@ test('4C takip nitelendirmesi: açık bitiş nedeni korunur, bilinmeyen neden sa
   }
 });
 
+test('4C takip nitelendirmesi: gerçek metin ve araç önsözü yerel plan çağrısına çevrilmez', async () => {
+  const { realModelProvider } = await import('../scripts/planner-followup-qualification.mjs');
+  const text = JSON.stringify({ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } });
+  for (const toolCalls of [[], [{ id: 'real-call', name: 'rota_task_search', arguments: '{}' }], [{ id: 'native-plan', name: 'rota_plan', arguments: '{"intent":"general","language":"tr"}' }]]) {
+    const provider = realModelProvider({ completeRound: async () => ({ text, toolCalls, finishReason: toolCalls.length ? 'tool_calls' : 'end_turn',
+      models: ['claude-haiku-4-5-20251001'], thinking: 'off' }) });
+    const stream = await provider.streamToolCompletion({ model: 'standard', messages: [], tools: [], toolChoice: 'auto' });
+    const events = [];
+    for await (const event of stream.events) events.push(event);
+    assert.equal(events.filter(event => event.type === 'text').map(event => event.text).join(''), text);
+    assert.deepEqual(events.at(-1).toolCalls || [], toolCalls.map(call => ({ ...call, oversize: false })));
+  }
+});
+
+test('4C takip nitelendirmesi: metin planı üretim sınırında reddedilir ve yerel çağrıyla onarılır', async (t) => {
+  const { realModelProvider } = await import('../scripts/planner-followup-qualification.mjs');
+  const { createAiStack, sendTurn } = await import('./helpers/aiStack.mjs');
+  const { AYSE, NOW, rotaToolSeed } = await import('./helpers/aiToolFixtures.mjs');
+  const { randomUUID } = await import('node:crypto');
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const plan = { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } };
+  let rounds = 0;
+  const provider = realModelProvider({ completeRound: async () => ({
+    text: ++rounds === 1 ? JSON.stringify({ name: 'rota_plan', arguments: plan }) : '',
+    toolCalls: rounds === 1 ? [] : [{ name: 'rota_plan', arguments: plan }],
+    finishReason: rounds === 1 ? 'end_turn' : 'tool_calls', models: ['claude-haiku-4-5-20251001'], thinking: 'off'
+  }) });
+  const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed(), env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, provider });
+  const response = await sendTurn({ turnId: randomUUID(), message: 'Onun durumu?' });
+  assert.equal(response.events.find(event => event.event === 'done').data.assistantMessage.finishReason, 'clarification');
+  assert.equal(rounds, 2, 'metin JSON ilk plan kararı olarak kabul edilmez');
+  assert.equal(stack.db.aiToolLog?.length || 0, 0);
+});
+
 test('4C takip nitelendirmesi: başarısız senaryo ve devir raporlandıktan sonra komut başarısız olur', async (t) => {
   const { spawnSync } = await import('node:child_process');
   const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');

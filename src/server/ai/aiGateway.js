@@ -995,6 +995,7 @@ export function createAiGateway({
                 baseUrl: config.baseUrl,
                 apiKey: credential.apiKey,
                 model: route.model,
+                profile: route.profile,
                 messages: safeMessages,
                 tools,
                 toolChoice,

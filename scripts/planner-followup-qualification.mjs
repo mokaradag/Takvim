@@ -102,8 +102,8 @@ export function realModelProvider({ completeRound = complete } = {}) {
     // Sağlayıcının bitiş nedeni korunur: çıktı sınırında kesilen yanıt üretimdeki kesilme yolundan geçer.
     verifyCompletion(reply.finishReason);
     const finishReason = reply.finishReason;
-    fake.enqueue(reply.toolCalls.length ? { type: 'tool-calls', calls: reply.toolCalls, preface: reply.text ? [reply.text] : [], finishReason }
-      : { type: 'answer', text: reply.text, finishReason });
+    fake.enqueue(reply.toolCalls.length ? { type: 'tool-calls', calls: reply.toolCalls, preface: reply.text ? [reply.text] : [], finishReason, native: true }
+      : { type: 'answer', text: reply.text, finishReason, native: true });
     return fake.streamToolCompletion(input);
   } };
 }

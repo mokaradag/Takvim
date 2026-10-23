@@ -374,16 +374,19 @@ export function createFakeAiProvider({
    * Araçlı model turu (`streamToolCompletion`). Davranışlar:
    *  - `{ type: 'tool-calls', calls: [{ name, arguments, id? }], preface?: [metin parçaları] }`
    *  - `{ type: 'answer', text, chunks? }` (ya da `reply` / `stream`)
+   *  - `native: true`: gerçek modelin metni ve araç çağrıları dönüştürülmez.
    *  - `{ type: 'script', respond: (call) => davranış }` — isteğin iletilerine
    *    (araç sonuçları, kanıt kimlikleri) bakarak yanıt kuran senaryo
    *  - `status`, `network`, `stall`, `deferred-stream`, `interrupt` akışlı sohbetle aynı.
    */
   function openToolStream(behavior, call, input) {
     let resolved = behavior.type === 'script' ? (behavior.respond(call) || { type: 'answer', text: '' }) : behavior;
-    const native = nativeDeclaration({ text: resolved.type === 'tool-calls' ? (resolved.preface || []).join('') : resolved.text, toolCalls: resolved.calls || [] });
-    if (['answer', 'reply', 'stream', 'tool-calls'].includes(resolved.type) && resolved.finishReason !== 'length'
-      && resolved.chunks === undefined && native.toolCalls.some((tool) => tool.name === 'rota_plan')) {
-      resolved = { ...resolved, type: 'tool-calls', preface: native.text === '' ? [] : resolved.preface || [], calls: native.toolCalls };
+    if (!resolved.native && ['answer', 'reply', 'stream', 'tool-calls'].includes(resolved.type) && resolved.finishReason !== 'length'
+      && resolved.chunks === undefined) {
+      const native = nativeDeclaration({ text: resolved.type === 'tool-calls' ? (resolved.preface || []).join('') : resolved.text, toolCalls: resolved.calls || [] });
+      if (native.toolCalls.some((tool) => tool.name === 'rota_plan')) {
+        resolved = { ...resolved, type: 'tool-calls', preface: native.text === '' ? [] : resolved.preface || [], calls: native.toolCalls };
+      }
     }
     call.behavior = resolved.type;
     if (resolved.type === 'tool-calls') {

@@ -1595,3 +1595,16 @@ Başlangıç HEAD: `ab53343e6af7ebe363c66a2ae088ff87938d9e2d`. Düzenleme önces
 Odaklı sınamalar iki/üç bölümün birlikte onarımını, birincil ve ek bağımlı kaynaklarını, geçerli
 kardeş kapsamının korunmasını ve sıfır veri okumasıyla reddi kapsar. Bütçe, araç, yetki, girdi
 biçimi veya Aşama 4D davranışı eklenmedi.
+
+### 23 Ekim 2026 — sağlayıcı uyumluluğu ve takip nitelendirmesi
+
+`chat.tools` için adlı araç seçiminin `auto` tel biçimine çevrilmesi, varsayılan model kimliği
+yerine ağ geçidinin etkin kayıttan doğruladığı profil üzerinden belirlenir. Özel kayıt başka model
+seçse de standart profil aynı uyumluluğu kullanır; aynı modelin `chat.tools.reasoning` profili adlı
+seçimi, açık `none` seçimi de veri aracı yasağını korur. Plan doğrulaması değişmez.
+
+Takip nitelendirmesinde gerçek model yanıtları `native: true` ile sınama sağlayıcısına aktarılır.
+Metindeki veya araç önsözündeki JSON plan bildirimi yerel araç çağrısına dönüştürülmez; yalnızca
+modelin gerçekten ürettiği araç çağrıları korunur. Metin planı üretimdeki ret ve sınırlı onarım
+yolundan geçer. Regresyonlar özel kayıt/standart/Derin seçimini, gerçek metin/önsöz/yerel çağrı
+ayrımını ve veri okumadan metin planının reddini doğrular. Gerçek model kabul kapısı hâlâ bekler.

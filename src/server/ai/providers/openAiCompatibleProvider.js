@@ -3,7 +3,6 @@ import { randomBytes } from 'node:crypto';
 import { AI_ERROR_CODES } from '../../../domain/ai/aiErrorCatalog.js';
 import { SEMANTIC_LIMITS } from '../../../domain/ai/semanticContract.js';
 import { AiError } from '../aiErrors.js';
-import { DEFAULT_AI_MODEL_REGISTRY } from '../defaultModelRegistry.js';
 import {
   AI_STREAM_LIMITS,
   createLeadingThinkFilter,
@@ -336,14 +335,12 @@ function wireMessages(messages) {
   });
 }
 
-// Standart araç profilinin kurum içi ucu adlı `tool_choice` ile akış hatası veriyor; plan yine sunucuda fail-closed doğrulanır.
-const NAMED_TOOL_CHOICE_AUTO_MODELS = new Set([DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'].model]);
-
 /** `auto`, `none` ya da sunulan araçlardan birinin zorunlu çağrısı (`{ name }` → OpenAI uyumlu adlı işlev seçimi). */
-function wireToolChoice(toolChoice, tools, model) {
+function wireToolChoice(toolChoice, tools, profile) {
   if (toolChoice === 'none') return 'none';
   if (toolChoice?.name && tools.some((tool) => tool.name === toolChoice.name)) {
-    if (NAMED_TOOL_CHOICE_AUTO_MODELS.has(model)) return 'auto';
+    // Uyumluluk etkin standart araç profiline aittir; Derin profilinin sözleşmesi değişmez.
+    if (profile === 'chat.tools') return 'auto';
     return { type: 'function', function: { name: toolChoice.name } };
   }
   return 'auto';
@@ -466,7 +463,7 @@ export function createOpenAiCompatibleProvider({
      * birleştirilmiş çağrıları taşıyan tek `done`. Bağımsız değişkenler burada
      * çözülmez; doğrulama sunucunun araç kayıt defterinindir.
      */
-    async streamToolCompletion({ baseUrl, apiKey, model, messages, tools = [], toolChoice = 'auto', maxOutputTokens = null, signal }) {
+    async streamToolCompletion({ baseUrl, apiKey, model, profile = null, messages, tools = [], toolChoice = 'auto', maxOutputTokens = null, signal }) {
       const withTools = Array.isArray(tools) && tools.length > 0;
       const response = await send(`${baseUrl}/chat/completions`, {
         method: 'POST',
@@ -476,7 +473,7 @@ export function createOpenAiCompatibleProvider({
           messages: wireMessages(messages),
           stream: true,
           ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}),
-          ...(withTools ? { tools: wireTools(tools), tool_choice: wireToolChoice(toolChoice, tools, model) } : {})
+          ...(withTools ? { tools: wireTools(tools), tool_choice: wireToolChoice(toolChoice, tools, profile) } : {})
         })
       }, signal);
       if (!response.ok) {

@@ -102,11 +102,11 @@ test('istek: katalog "function" aracı, seçim kipi ve araçlı döküm OpenAI t
   await collect(await toolStream(provider, { toolChoice: 'none' }));
   await collect(await toolStream(provider, { toolChoice: { name: 'rota_task_search' } }));
   await collect(await toolStream(provider, { toolChoice: { name: 'rota_unknown' } }));
-  await collect(await toolStream(provider, { model: 'Qwen3-Next-80B-A3B-Instruct', toolChoice: { name: 'rota_task_search' } }));
+  await collect(await toolStream(provider, { model: 'Qwen3-Next-80B-A3B-Instruct', profile: 'chat.tools', toolChoice: { name: 'rota_task_search' } }));
   const [auto, none, named, unknown, qwenNamed] = requests;
   assert.deepEqual(named.body.tool_choice, { type: 'function', function: { name: 'rota_task_search' } }, 'zorunlu plan aracı adlı işlev seçimidir');
   assert.equal(unknown.body.tool_choice, 'auto', 'sunulmayan araç zorunlu seçilemez');
-  assert.equal(qwenNamed.body.tool_choice, 'auto', 'Qwen3-Next adlı seçim yerine uyumlu auto kullanır');
+  assert.equal(qwenNamed.body.tool_choice, 'auto', 'standart araç profili adlı seçim yerine uyumlu auto kullanır');
   assert.equal(auto.url, 'http://ag-gecidi.test/v1/chat/completions');
   assert.equal(auto.body.stream, true);
   assert.equal(auto.body.max_tokens, 512);
@@ -282,6 +282,30 @@ function gatewayFor(t, { provider = createFakeAiProvider(), registry = validateM
   });
   return { gateway, admission, provider };
 }
+
+test('araç seçimi etkin özel kayıt profilini izler; aynı modelin Derin profili adlı seçimi korur', async (t) => {
+  const document = structuredClone(DEFAULT_AI_MODEL_REGISTRY);
+  const model = 'custom-tool-model';
+  document.models.push({ ...document.models.find(entry => entry.id === document.profiles['chat.tools'].model), id: model, capabilities: ['chat', 'tools', 'reasoning'] });
+  document.profiles['chat.tools'].model = model;
+  document.profiles['chat.tools.reasoning'].model = model;
+  const validated = validateModelRegistry(document);
+  assert.equal(validated.ok, true);
+  const requests = [];
+  const provider = createOpenAiCompatibleProvider({ fetchImpl: async (url, init) => {
+    const body = JSON.parse(init.body);
+    requests.push(body);
+    return sseResponse([sse({ model, choices: [{ index: 0, delta: { content: 'Tamam' }, finish_reason: 'stop' }] }), 'data: [DONE]\n\n']);
+  } });
+  const { gateway } = gatewayFor(t, { provider, registry: validated.registry });
+  for (const [profile, toolChoice] of [['chat.tools', { name: TOOLS[0].name }], ['chat.tools.reasoning', { name: TOOLS[0].name }], ['chat.tools', 'none']]) {
+    await gateway.runToolSession({ profile, run: session => session.round({ messages: TRANSCRIPT.slice(0, 2), tools: TOOLS, toolChoice }) });
+  }
+  assert.deepEqual(requests.map(body => body.model), [model, model, model]);
+  assert.equal(requests[0].tool_choice, 'auto');
+  assert.deepEqual(requests[1].tool_choice, { type: 'function', function: { name: TOOLS[0].name } });
+  assert.equal(requests[2].tool_choice, 'none');
+});
 
 test('buffered protocol text does not mark provider errors or health as partial delivery', async (t) => {
   const provider = createFakeAiProvider();
