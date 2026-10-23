@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { AI_ERROR_CODES } from '../../../domain/ai/aiErrorCatalog.js';
 import { SEMANTIC_LIMITS } from '../../../domain/ai/semanticContract.js';
 import { AiError } from '../aiErrors.js';
+import { DEFAULT_AI_MODEL_REGISTRY } from '../defaultModelRegistry.js';
 import {
   AI_STREAM_LIMITS,
   createLeadingThinkFilter,
@@ -335,8 +336,8 @@ function wireMessages(messages) {
   });
 }
 
-// Bu modelin kurum içi ucu adlı `tool_choice` ile akış hatası veriyor; plan yine sunucuda fail-closed doğrulanır.
-const NAMED_TOOL_CHOICE_AUTO_MODELS = new Set(['Qwen3-Next-80B-A3B-Instruct']);
+// Standart araç profilinin kurum içi ucu adlı `tool_choice` ile akış hatası veriyor; plan yine sunucuda fail-closed doğrulanır.
+const NAMED_TOOL_CHOICE_AUTO_MODELS = new Set([DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'].model]);
 
 /** `auto`, `none` ya da sunulan araçlardan birinin zorunlu çağrısı (`{ name }` → OpenAI uyumlu adlı işlev seçimi). */
 function wireToolChoice(toolChoice, tools, model) {
