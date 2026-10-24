@@ -1878,7 +1878,10 @@ Ayrıntılı belge: [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.m
   defterine karşı doğrulayıp planlayıcıya danışman not olarak verir (araç
   kümesi ve sırası değişmez). Planlayıcı veri okumadan türlü karar verir
   (`rota_plan`: rota / clarify / abstain / general, en çok 3 bölüm);
-  açıklama ve çekimserlik sıfır SQL ile sunucu metnidir. Değerlendirici
+  açıklama, çekimserlik ve Genel sohbete yönlendirme sıfır SQL ile sunucu
+  metnidir. Geçerli `general` kararı ek model turu olmadan `general_redirect`
+  sonucuyla biter. Bağımlı sıralama bölümleri sınırdaki eşit kayıtları korur;
+  ilk üç kayıt sınırı ve eksik kalan kayıt açıklaması bundan sonra uygulanır. Değerlendirici
   `scripts/planner-evaluation.mjs`; tarihsel Haiku 4.5 88/117 ölçümü
   düzeltilmiş kapıdan önceye aittir. Güncel kabul ölçümü bekliyor:
   117/117 + zorunlu ek 19/19; ayrıntı ve bekleyenler anlamsal katman §12.

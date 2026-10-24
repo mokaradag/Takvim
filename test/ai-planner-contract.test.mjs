@@ -272,17 +272,15 @@ test('ilk karar yerine gelen düz metin gösterilmez: boş plan reddi olarak dü
   assert.match(rejection.error.hints[0], /rota_plan/);
 });
 
-test('genel sohbet kararından sonraki metin karar reddine düşmez', async (t) => {
-  // Düz genel metin Aşama 3'ün yanıt biçimi düzeltmesine gider; plan reddi değildir.
-  const { result, inputs } = await turn(t, [plan({ intent: 'general', language: 'tr' }), prose('Merhaba! Size nasıl yardımcı olabilirim?'),
-    prose('{"kind":"general","text":"Merhaba!"}')], { user: 'Merhaba' });
+test('genel sohbet kararı ek model yanıtı istemeden biter', async (t) => {
+  const { result, inputs } = await turn(t, [plan({ intent: 'general', language: 'tr' })], { user: 'Merhaba' });
   assert.equal(result.outcome, 'general_redirect');
   assert.ok(inputs.every((input) => !JSON.stringify(input.messages).includes('plan:required')));
 });
 
 test('4C yakınsama: bildirim bütçesi bitince genel karar yine tek kez kabul edilir', async (t) => {
   const { result, decisions } = await turn(t, [prose('Merhaba'), prose('Merhaba'),
-    plan({ intent: 'general', language: 'tr' }), prose('{"kind":"general","text":"Merhaba"}')]);
+    plan({ intent: 'general', language: 'tr' })]);
   assert.equal(result.outcome, 'general_redirect');
   assert.equal(result.stats.attempted, 0);
   assert.deepEqual(decisions.map(d => d.intent), ['general']);
@@ -396,13 +394,11 @@ test('planlayıcı telemetrisi içeriksizdir: soru, aday metni, gerekçe ya da S
 });
 
 test('general kararı donuktur: sonraki model planı veri erişimini yeniden açamaz', async (t) => {
-  const request = { operation: 'value', metrics: ['notifications.unread'], population: { tool: 'rota_notifications' }, layout: 'auto' };
-  const { result, inputs, decisions } = await turn(t, [plan({ intent: 'general', language: 'tr' }),
-    (input) => { assert.equal(input.toolChoice, 'none'); assert.deepEqual(input.tools, []); return plan({ intent: 'rota', language: 'tr', request }); },
-    prose('{"kind":"general","text":"Merhaba"}')], { user: 'Merhaba' });
+  const { result, inputs, decisions } = await turn(t, [plan({ intent: 'general', language: 'tr' })], { user: 'Merhaba' });
+  assert.equal(result.outcome, 'general_redirect');
   assert.equal(result.stats.attempted, 0);
   assert.deepEqual(decisions.map((item) => item.intent), ['general']);
-  assert.equal(inputs.length, 3);
+  assert.equal(inputs.length, 1);
 });
 
 test('kazara eklenen textFields sınırlı düzeltmeyle kaldırılır; izin açılmaz', async (t) => {
@@ -709,11 +705,9 @@ test('4C Deep devri önceki onarım kapsamını temizler; etkin karar gözlemciy
   resetAiTelemetryForTests(); decisions.length = 0;
   const retry = await runGroundedTurn({ signal: new AbortController().signal, round: async () => bad }, options);
   let rounds = 0;
-  const general = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
-    if (!rounds++) return plan({ intent: 'general', language: 'tr' });
-    assert.deepEqual(input.tools, []);
-    assert.equal(input.toolChoice, 'none');
-    return { ...prose('{"kind":"general","text":"Merhaba"}'), toolCalls: [{ id: 'forbidden', name: 'rota_notifications', arguments: '{}' }] };
+  const general = await runGroundedTurn({ signal: new AbortController().signal, round: async () => {
+    assert.equal(rounds++, 0, 'general sonrası Deep model yeniden çağrılmaz');
+    return plan({ intent: 'general', language: 'tr' });
   } }, { ...options, resume: retry.resume });
   assert.equal(general.outcome, 'general_redirect');
   assert.equal(general.stats.attempted, 0);
@@ -1472,4 +1466,71 @@ test('4C frozen 22: dependent instances cannot replenish the turn repair budget'
   assert.equal(inputs.length, 5);
   assert.equal(result.stats.attempted, 4);
   assert.equal(result.evidence.length, 1, 'failed dependent generations cannot claim their evidence');
+});
+
+test('4C general kararı ek model turu ve SQL olmadan sunucu yönlendirmesiyle biter', async (t) => {
+  for (const language of ['tr', 'en']) await t.test(language, async (t) => {
+    const stack = stackFor(t);
+    const decisions = [];
+    const texts = [];
+    let rounds = 0;
+    const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => {
+      rounds += 1;
+      return rounds === 1 ? plan({ intent: 'general', language }) : prose('Merhaba! Size nasıl yardımcı olabilirim?');
+    } }, { messages: buildGroundedContext({ userContent: 'Merhaba', now: NOW }).messages, catalog,
+      context: createToolTurnContext({ sicil: AYSE, now: NOW }), escalation: true,
+      onPlanned: decision => decisions.push(decision.intent), onText: async text => texts.push(text) });
+    assert.equal(result.outcome, 'general_redirect');
+    assert.equal(result.finishReason, 'clarification');
+    assert.equal(result.text, renderPlannerAbstention({ reason: 'general', locale: language }));
+    assert.deepEqual(texts, [result.text]);
+    assert.equal(rounds, 1);
+    assert.equal(result.repaired, false);
+    assert.equal(result.stats.attempted, 0);
+    assert.equal(stack.db.aiToolLog?.length ?? 0, 0);
+    assert.deepEqual(result.evidence, []);
+    assert.deepEqual(result.evidenceRows, []);
+    assert.deepEqual(decisions, ['general']);
+    assert.equal(aiTelemetrySnapshot().grounding.general_redirect, 1);
+    assert.equal(aiTelemetrySnapshot().grounding.failed, 0);
+  });
+});
+
+test('4C bağımlı sıralama sınırdaki eşitleri korur; üç kayıt sınırı ve açıklaması sonradan uygulanır', async (t) => {
+  const request = { operation: 'rank', metrics: ['project.name', 'tasks.overdue'],
+    population: { tool: 'rota_portfolio_summary', collection: 'projects' }, rank: { metric: 'tasks.overdue', order: 'desc', limit: 1 }, layout: 'auto' };
+  const detail = { operation: 'value', metrics: ['project.lead'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', from: 0 }], layout: 'auto' };
+  const visible = [PROJECTS.FULL, PROJECTS.READ, PROJECTS.PARTIAL, PROJECTS.TEAM];
+  for (const count of [2, 4]) await t.test(`${count} eşit proje`, async (t) => {
+    let db;
+    const expected = visible.slice(0, count);
+    const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request, additionalRequests: [detail] })], {
+      user: 'En çok geciken projesi olan kayıtları ve proje liderlerini göster', setup: stack => {
+        db = stack.db;
+        for (const project of db.projects) if (visible.includes(project.ProjectId)) {
+          project.IsActive = expected.includes(project.ProjectId) ? 1 : 0;
+          project.SourceType = 'MANUAL';
+          project.LeadSicil = AYSE;
+        }
+        for (const task of db.tasks) if (visible.includes(task.ProjectId)) {
+          task.Status = 'planned';
+          task.TargetFinish = '2026-12-01';
+        }
+      }
+    });
+    assert.equal(result.outcome, 'grounded');
+    assert.equal(result.stats.failures, 0);
+    const reads = db.aiToolLog.filter(row => row.query === 'project-detail').map(row => row.params.projectId.toLowerCase());
+    assert.equal(reads.length, Math.min(count, 3));
+    assert.ok(reads.every(id => expected.includes(id)));
+    const ranked = [...expected].sort((a, b) => result.text.indexOf(db.projects.find(project => project.ProjectId === a).ProjectName)
+      - result.text.indexOf(db.projects.find(project => project.ProjectId === b).ProjectName));
+    assert.deepEqual(reads, ranked.slice(0, 3), 'takip okumaları görünen sıralama sırasını korur');
+    for (const id of expected) assert.ok(result.text.includes(db.projects.find(project => project.ProjectId === id).ProjectName));
+    if (count <= 3) {
+      assert.deepEqual(new Set(reads), new Set(expected));
+      assert.doesNotMatch(result.text, /Takip bölümü kaynaktaki/);
+    } else assert.match(result.text, /Takip bölümü kaynaktaki ilk 3 kayıtla sınırlıdır/);
+    assert.doesNotMatch(result.text, /Gizli Proje/);
+  });
 });

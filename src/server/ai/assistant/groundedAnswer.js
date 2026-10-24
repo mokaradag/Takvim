@@ -813,7 +813,7 @@ function dependentRows(turn, from, type) {
       for (const concrete of concreteCollections(entry.payload, collection)) {
         const rows = concrete.rows;
         const order = source.request.operation === 'rank'
-          ? (rankedRowIndexes(source.request, entry.tool, entry.payload, collection, concrete.collection.replace(/^data\./, '')) || []).slice(0, source.request.rank.limit || 1)
+          ? (rankedRowIndexes(source.request, entry.tool, entry.payload, collection, concrete.collection.replace(/^data\./, '')) || [])
           : rows.map((_, index) => index);
         for (const index of order) {
           const row = rows[index];
@@ -928,16 +928,17 @@ function emitPlanned(turn, decision) {
   turn.onPlanned?.(summary);
 }
 
-/** Açıklama ya da çekimserlik: veri okunmaz; kullanıcı sunucunun sabit metnini görür. */
+/** Veri okumayan son kararlar: kullanıcı sunucunun sabit metnini görür. */
 function plannerChoice(turn, plan, onText) {
   if (plan.language) turn.locale = plan.language;
   const clarify = plan.intent === PLANNER_INTENTS.CLARIFY;
+  const general = plan.intent === PLANNER_INTENTS.GENERAL;
   emitPlanned(turn, clarify ? { intent: plan.intent, reason: plan.clarify.reason, topics: Object.freeze([...(plan.clarify.topics || [])]) }
-    : { intent: plan.intent, reason: plan.abstain.reason });
+    : general ? { intent: plan.intent } : { intent: plan.intent, reason: plan.abstain.reason });
   const normalized = clarify
     ? renderPlannerClarification({ reason: plan.clarify.reason, topics: (plan.clarify.topics || []).map((name) => getRotaTool(name)?.topic), locale: turn.locale })
-    : renderPlannerAbstention({ reason: plan.abstain.reason, locale: turn.locale });
-  return finish(turn, { ok: true, kind: clarify ? 'clarification' : 'abstained', normalized, citedIds: [], issues: [] }, onText);
+    : renderPlannerAbstention({ reason: general ? 'general' : plan.abstain.reason, locale: turn.locale });
+  return finish(turn, { ok: true, kind: clarify ? 'clarification' : general ? 'general_redirect' : 'abstained', normalized, citedIds: [], issues: [] }, onText);
 }
 
 /** Modelin bulduğu kimlik yeni bir okuma yükümlülüğü açmaz; istek bağlı çağrı sunucunun biçimiyle yürür. */
@@ -1718,9 +1719,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
         if (declared.request) acceptPlan(turn, prepared.request, declared.language, parts);
         else {
           turn.declared = null;
-          if (declared.language) turn.locale = declared.language;
-          emitPlanned(turn, { intent: PLANNER_INTENTS.GENERAL });
-          allowTools = false;
+          return plannerChoice(turn, plan.plan, onText);
         }
         turn.declarationsLeft = Math.max(0, turn.declarationsLeft - 1);
         instruct(turn, `Bu turun veri okunmadan belirlenen yönlendirmesi: ${turn.route}. Şimdi bu niyete göre yanıtla; Rota olguları yalnızca araç kanıtıyla sunulur.`);

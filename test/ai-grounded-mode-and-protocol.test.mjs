@@ -521,8 +521,7 @@ test('a tool whose SQL never returns (and ignores cancellation) is cut at the to
 test('a general redirect keeps its own outcome although it is stored as a clarification', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
-  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'general', language: 'tr' } }] },
-    { type: 'answer', text: JSON.stringify({ kind: 'general', text: 'Genel bir açıklama.' }) });
+  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'general', language: 'tr' } }] });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Proje yönetimi nedir?' })).assistantMessage;
   assert.equal(answer.finishReason, 'clarification');
   const { grounding } = aiTelemetrySnapshot();

@@ -412,7 +412,7 @@ test('general-chat redirects are counted separately from candidate clarification
   const { result } = await turn(t, [() => {
     before = { ...aiTelemetrySnapshot().grounding };
     return nativeDeclaration({ text: JSON.stringify({ name: 'rota_plan', arguments: { intent: 'general', language: 'tr' } }), toolCalls: [] });
-  }, reply('{"kind":"general","text":"Proje yönetimi bir disiplindir."}')], { user: 'Proje yönetimi nedir?' });
+  }], { user: 'Proje yönetimi nedir?' });
   assert.equal(result.outcome, 'general_redirect');
   const after = aiTelemetrySnapshot().grounding;
   assert.equal(after.general_redirect - before.general_redirect, 1);
