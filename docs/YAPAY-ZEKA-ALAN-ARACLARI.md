@@ -1543,3 +1543,21 @@ gerçek bitişi bilinen tamamlanan yinelemelerden en yeni gün ve kararlı göre
 kimliğiyle seçilir; planlanan oluşum tarihi bitiş yerine kullanılamaz.
 Gerçek bitişi eksik tamamlanmış yineleme varsa `completionDatesComplete=false`
 ve sonuç eksiktir; bilinen gerçek bitiş yoksa `lastCompleted=null` olur.
+
+### Aşama 4D: doğrulanmış yanıtın doğal düzeni
+
+Alan araçları, yetki yükleyicisi, kanıt defteri ve doğrulayıcı değişmedi. Doğrulanmış yanıt artık isteğe bağlı bir
+sunum katmanından geçebilir (anlamsal katman §13): `analyzeGroundedAnswer` doğrulanan olguları sunum için de döndürür
+(`presentation`), `evidenceNarrative.js` anlatımla aynı satır/sütun betimini düzene verir (`narrativeGroups`,
+`describeRowCollection`, `renderGroupRows`, `renderGroupDetails`; davranış korunarak ayrıştırıldı). Olgu sayfası
+yalnızca bu doğrulanmış olgulardan kurulur ve araç sonucunu, kimlikleri ya da ham alan yollarını taşımaz. Düzen
+kaynak işareti yazamaz; atıflar ve kapsam notu sunucunundur, kalıcı kanıt kümesi düzenden bağımsızdır (sınama aynı
+kayıt ve takip kümesini doğrular). Sunucu yeniden yetki doğrulamadan olguları sağlayıcıya ikinci kez göndermez.
+
+Gözlemlenebilirlik: `ai.grounded.turn` satırı tek ve içeriksizdir; `presentation` (`mode`, `reason`, `issue`,
+`blocks`, `chart`, `ms`), `usage` (belirteç toplamları, ilk olay süresi, `length` duruşları) ve varsa `escalation`
+alanlarını taşır; ayrı `ai.grounded.escalation` satırı yazılmaz. Tur listesinde düzen turu `purpose: "compose"` ve
+kendi bütçesiyle görünür. Bağlam günlük temizleyicisinin nesne başına 25 alan sınırının içinde kalır.
+
+Kısmi çok bölümlü yanıt (bir bölüm tamamlanamadı) doğrulanmış tek görev listesi bölümünün kümesini sonraki takip için
+kaydeder; tamamlanamayan bölüm hiçbir küme vermez ve güncel yetki takipte yine denetlenir.

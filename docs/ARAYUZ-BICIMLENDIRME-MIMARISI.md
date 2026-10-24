@@ -164,7 +164,7 @@ Yalıtılmış bileşende iç çizim sırası için küçük yerel z-index değe
 
 Üst çubuk `overflow: visible` kalır; yalnızca `.topbar-emblem-clip`, dönen dekoratif amblemi keser. Süzgeç açılır pencereleri ortak açılır pencere katmanını kullanır; Görev Ayrıntısı çekmecesi bunların üstündedir.
 
-Rota AI paneli bilinçli bir anlamsal katmandır (`--z-assistant: 150`). Olağan içerik, yapışkan çalışma alanı şeritleri (`--z-chrome`) ve kenar çubuğunun üstündedir; yerleşik durumdayken üstü örtülmez. Bütün açılır pencerelerin, Görev Ayrıntısı çekmecesinin, komut paletinin ve modal pencerelerin altındadır; bunlardan biri açıldığında öne geçer. Üst çubuk açılır pencereleri üst çubuğun yığılma bağlamında bulunur; dışa aktarma menüsü gibi, açık bildirim penceresi de üst çubuğu `--z-popover` düzeyine yükseltir (`.topbar:has(.schedule-request-popover)`), böylece yerleşik panel onu örtemez. Geçici kayıt durumu panelin üstünde kalır. Dar ekranlarda (≤ 760 px, `ASSISTANT_SHEET_QUERY` ile ortak) panel, çekmece katmanında (`--z-drawer`) odak tuzaklı tam ekran modal sayfaya dönüşür. Panelin üst uzaklığı üst çubuk yüksekliğine eşittir; yüksekliği `var(--app-viewport-h, 100vh)` kullanır. `test/ai-architecture-contract.test.mjs`, katman sırasını ve `assistant.css` içinde sayısal z-index bulunmamasını korur.
+Rota AI paneli bilinçli bir anlamsal katmandır (`--z-assistant: 150`). Olağan içerik, yapışkan çalışma alanı şeritleri (`--z-chrome`) ve kenar çubuğunun üstündedir; yerleşik durumdayken üstü örtülmez. Bütün açılır pencerelerin, Görev Ayrıntısı çekmecesinin, komut paletinin ve modal pencerelerin altındadır; bunlardan biri açıldığında öne geçer. Üst çubuk açılır pencereleri üst çubuğun yığılma bağlamında bulunur; dışa aktarma menüsü gibi, açık bildirim penceresi de üst çubuğu `--z-popover` düzeyine yükseltir (`.topbar:has(.schedule-request-popover)`), böylece yerleşik panel onu örtemez. Geçici kayıt durumu panelin üstünde kalır. Dar ekranlarda (≤ 760 px, `ASSISTANT_SHEET_QUERY` ile ortak) panel, çekmece katmanında (`--z-drawer`) odak tuzaklı tam ekran modal sayfaya dönüşür. Panelin üst uzaklığı üst çubuk yüksekliğine eşittir; yüksekliği `var(--app-viewport-h, 100vh)` kullanır. `test/ai-architecture-contract.test.mjs`, katman sırasını ve `assistant.css` içinde sayısal z-index bulunmamasını korur. Masaüstü odak görünümü (`.rota-assistant.is-focused`) aynı paneli kipli bir yüzeye çevirir ve dar ekran sayfasıyla aynı çekmece katmanını (`--z-drawer`) kullanır: üst çubuğu da örter, açılır pencerelerin ve komut paletinin altında kalır; yeni bir katman değişkeni eklenmedi. Odak görünümünde içerik sütunu `--focus-gutter` ile ortalanır; dar ekranda ikinci bir tam ekran durumu yoktur.
 
 ## 10. Ortak görsel temel bileşenlerin sorumluluğu
 
@@ -184,6 +184,16 @@ Vurgu (fareyle üzerine gelme/seçim) yalnızca **iç** yarıçapı değiştirir
 ### 10.1 Grafik eksen etiketleri
 
 Eksen etiketleri SVG `<text>` değil, HTML'dir. Grafik SVG'leri kart genişliğine ölçeklenir (`width: 100%`; CFD ayrıca `preserveAspectRatio="none"` kullanır); bu nedenle SVG içindeki `font-size` da kartla ölçeklenir: geniş Özet ekranında etiketler amaçlanan boyutun yaklaşık iki katına çıkıyor, `none` altında yatay da uzuyordu. `.chart-axis-labels`, gerçek metni çizim alanının üzerine yüzdelik uzaklıklarla yerleştirir ve SVG dönüşümünden etkilenmez. Etiket kapsayıcısı **yalnızca** çizimi sarmalıdır; aksi durumda etiketler altta çizilen açıklamaların üzerine gelir.
+
+### 10.2 Yanıt grafikleri
+
+Rota AI yanıtındaki grafik (`AnswerChart.jsx`, biçimi `assistant.css`) halka geometrisini ortak `donutGeometry.js`
+modülünden, ipucunu ortak `Tooltip` temel bileşeninden alır; yeni bir grafik kitaplığı yoktur. Renkler yalnızca tema
+belirteçleridir (`--accent`, `--c-purple`, … sıra sınıflarıyla `--series`); tanım renk taşımaz. Genişlik kapsayıcı
+sorgusuyla (`container: assistant-chart`) uyarlanır: dar kartta çubuk etiketi üste, halka açıklaması alta geçer.
+Yanıt Markdown'unun liste girintisi grafik listelerine taşınmaz: grafik listeleri `.assistant-chart :is(...)` ile
+yanıt listelerinden daha özgül seçicilerle sıfırlanır. `Tooltip`'in `asChild` kipi çocuğun kendi olay işleyicilerini
+(klavye gezintisi, odak) korur ve ipucununkilerle birlikte çağırır.
 
 ## 11. Özelliğe özgü biçim sorumluluğu
 

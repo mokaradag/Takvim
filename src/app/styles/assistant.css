@@ -602,14 +602,27 @@
 .assistant-md strong { color: var(--text); font-weight: 700; }
 /* Kapsam ve eksiklik notu: yanıta bağlı ama ondan ikincil. */
 .assistant-md .assistant-md-note { color: var(--text-muted); font-size: 12px; line-height: 1.55; }
-.assistant-md .assistant-md-heading { margin: 1em 0 .45em; font-size: 14px; font-weight: 700; line-height: 1.35; }
+.assistant-md .assistant-md-heading { margin: 1.1em 0 .4em; font-size: 14px; font-weight: 700; letter-spacing: -0.005em; line-height: 1.35; }
 .assistant-md h3.assistant-md-heading { font-size: 15px; }
+.assistant-md > .assistant-md-heading:first-child { margin-top: 0; }
 .assistant-md ul,
 .assistant-md ol { margin: 0 0 .7em; padding-left: 1.4em; }
 .assistant-md li { margin: .2em 0; }
 .assistant-md li > p { margin: 0 0 .4em; }
 .assistant-md .assistant-md-list.is-tight > li > p { margin: 0; }
-.assistant-md blockquote { margin: 0 0 .7em; padding: 2px 0 2px 12px; border-left: 3px solid var(--border-strong); color: var(--text-muted); }
+.assistant-md blockquote { margin: .15em 0 .85em; padding: 2px 0 2px 12px; border-left: 3px solid var(--border-strong); color: var(--text-muted); }
+/* Kanıta dayalı yanıtta yorum ve öneri olgulardan ayrı, sakin bir not kutusudur ("Değerlendirme"). */
+.assistant-md blockquote:has(> p:only-child > strong:first-child) {
+  padding: 9px 12px;
+  border: 1px solid color-mix(in oklab, var(--c-purple) 24%, var(--border));
+  border-left: 3px solid color-mix(in oklab, var(--c-purple) 72%, var(--border));
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--c-purple) 6%, var(--bg-elev));
+  color: var(--text-muted);
+  font-size: .96em;
+}
+.assistant-md blockquote > p:last-child { margin-bottom: 0; }
+.assistant-md blockquote strong:first-child { color: var(--text); font-weight: 650; }
 .assistant-md hr { margin: 1em 0; border: 0; border-top: 1px solid var(--border); }
 .assistant-md a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .assistant-md a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
@@ -664,10 +677,141 @@
 .assistant-md-table table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .assistant-md-table th,
 .assistant-md-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
-.assistant-md-table th { background: var(--bg-elev-2); font-weight: 650; }
+.assistant-md-table th { background: var(--bg-elev-2); color: var(--text-muted); font-size: 11.5px; font-weight: 650; letter-spacing: .01em; white-space: nowrap; }
 .assistant-md-table tr:last-child td { border-bottom: 0; }
+.assistant-md-table tbody tr { transition: background-color .12s ease; }
+.assistant-md-table tbody tr:hover { background: color-mix(in oklab, var(--bg-hover) 70%, transparent); }
+.assistant-md-table td.is-right,
+.assistant-md-table th.is-right { font-variant-numeric: tabular-nums; }
+.assistant-md-table td:first-child { min-width: 12ch; }
 .assistant-md-table .is-center { text-align: center; }
 .assistant-md-table .is-right { text-align: right; }
+
+/* ── Kanıtlı yanıt grafikleri ──────────────────────────────────── */
+/* Tanımı sunucu doğrular, bileşen uygulamanındır. Renkler tema belirteçleridir; dilim ve
+   sözlük aynı sıra sınıfını, ipucu (gövdeye taşınan ortak zengin ipucu) aynı vurguyu kullanır. */
+.assistant-chart-series-1 { --series: var(--accent); }
+.assistant-chart-series-2 { --series: var(--c-purple); }
+.assistant-chart-series-3 { --series: var(--c-cyan); }
+.assistant-chart-series-4 { --series: var(--c-emerald); }
+.assistant-chart-series-5 { --series: var(--c-amber); }
+.assistant-chart-series-6 { --series: var(--c-rose); }
+.assistant-chart {
+  container: assistant-chart / inline-size;
+  margin: .15em 0 .9em;
+  padding: 12px 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--bg-elev-2) 45%, var(--bg-elev));
+}
+.assistant-chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.assistant-chart-title { min-width: 0; color: var(--text); font-size: 12.5px; font-weight: 650; letter-spacing: -0.005em; }
+.assistant-chart-meta { flex: 0 0 auto; color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+/* Yanıt Markdown'unun liste girintisi ve aralıkları grafik listelerine taşınmaz. */
+.assistant-chart :is(.assistant-chart-bars, .assistant-chart-legend) { margin: 0; padding: 0; list-style: none; }
+.assistant-chart :is(.assistant-chart-bars, .assistant-chart-legend) > li { margin: 0; }
+.assistant-chart-bars { display: grid; gap: 2px; }
+.assistant-chart-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 36%) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 0 -6px;
+  padding: 4px 6px;
+  border-radius: var(--r-sm);
+  cursor: default;
+  transition: background-color .12s ease;
+}
+.assistant-chart-row:hover,
+.assistant-chart-row:focus-visible { background: var(--bg-hover); }
+.assistant-chart-row:focus-visible,
+.assistant-chart-legend-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.assistant-chart-label { min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.assistant-chart-row:hover .assistant-chart-label,
+.assistant-chart-row:focus-visible .assistant-chart-label { color: var(--text); }
+.assistant-chart-track { position: relative; height: 14px; overflow: hidden; border-radius: 4px; background: var(--bg-elev-2); }
+.assistant-chart-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--chart-ratio, 0) * 100%);
+  border-radius: inherit;
+  background: linear-gradient(90deg, color-mix(in oklab, var(--accent) 72%, var(--bg-elev)), var(--accent));
+  transform-origin: left center;
+  animation: assistant-chart-grow .55s cubic-bezier(.2, .8, .2, 1) both;
+  transition: filter .12s ease;
+}
+.assistant-chart-row:hover .assistant-chart-fill,
+.assistant-chart-row:focus-visible .assistant-chart-fill { filter: saturate(1.15) brightness(1.06); }
+.assistant-chart-value { min-width: 28px; color: var(--text); font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.assistant-chart-donut { display: grid; grid-template-columns: 132px minmax(0, 1fr); align-items: center; gap: 18px; }
+.assistant-chart-ring { display: block; width: 132px; height: 132px; overflow: visible; }
+.assistant-chart-ring-track { fill: var(--bg-elev-2); }
+.assistant-chart-slices { animation: assistant-chart-fade .4s ease both; }
+.assistant-chart-slice { fill: var(--series); cursor: default; transition: opacity .12s ease; }
+.assistant-chart-slices:has(.is-active) .assistant-chart-slice:not(.is-active) { opacity: .45; }
+.assistant-chart-ring-total { fill: var(--text); font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.assistant-chart-ring-caption { fill: var(--text-dim); font-size: 10.5px; }
+.assistant-chart-legend { display: grid; gap: 1px; max-width: 420px; }
+.assistant-chart-legend-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: var(--r-sm);
+  cursor: default;
+  transition: background-color .12s ease;
+}
+.assistant-chart-legend-item:hover,
+.assistant-chart-legend-item.is-active { background: var(--bg-hover); }
+.assistant-chart-swatch { flex: 0 0 auto; display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: var(--series, var(--accent)); }
+@container assistant-chart (max-width: 340px) {
+  .assistant-chart-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 3px; }
+  .assistant-chart-row .assistant-chart-label { grid-column: 1 / -1; }
+  .assistant-chart-donut { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+  .assistant-chart-legend { width: 100%; }
+}
+
+/* ── Odak görünümü (masaüstü) ──────────────────────────────────── */
+/* Panel aynı bileşendir: bütün görünümü kaplayan kipli çalışma alanına dönüşür. İçerik ortadaki
+   okuma sütununda durur (kaydırma çubukları kenarda kalır); düzyazı rahat satır boyunda, tablo ve
+   grafik sütunun tamamında. Çekmece katmanını kullanır; dar ekranda bu kip yoktur. */
+.rota-assistant.is-focused {
+  --focus-column: 920px;
+  --focus-gutter: max(24px, calc((100% - var(--focus-column)) / 2));
+  top: 0;
+  right: 0;
+  z-index: var(--z-drawer);
+  width: var(--app-viewport-w, 100vw);
+  height: var(--app-viewport-h, 100vh);
+  border-left: 0;
+  background: var(--bg);
+  box-shadow: none;
+  animation-name: rota-assistant-focus-in;
+}
+.rota-assistant.is-focused .rota-assistant-head {
+  padding: 14px var(--focus-gutter) 12px;
+  border-bottom-color: color-mix(in oklab, var(--border) 70%, transparent);
+  background: var(--bg);
+}
+.rota-assistant.is-focused .rota-assistant-heading h2 { font-size: 15.5px; }
+.rota-assistant.is-focused .rota-assistant-scroll { padding: 28px var(--focus-gutter); }
+.rota-assistant.is-focused .rota-assistant-thread { gap: 30px; padding: 28px var(--focus-gutter) 18px; }
+.rota-assistant.is-focused .rota-assistant-body > .rota-assistant-notice { margin-inline: var(--focus-gutter); }
+.rota-assistant.is-focused .rota-assistant-user { max-width: min(72%, 680px); }
+.rota-assistant.is-focused .rota-assistant-user-text { font-size: 14px; }
+.rota-assistant.is-focused .rota-assistant-answer { font-size: 14.5px; line-height: 1.7; }
+.rota-assistant.is-focused .assistant-md > p,
+.rota-assistant.is-focused .assistant-md > ul,
+.rota-assistant.is-focused .assistant-md > ol,
+.rota-assistant.is-focused .assistant-md > blockquote { max-width: 76ch; }
+.rota-assistant.is-focused .assistant-md-table table { font-size: 13px; }
+.rota-assistant.is-focused .rota-assistant-composer {
+  padding: 10px var(--focus-gutter) 20px;
+  border-top-color: transparent;
+  background: var(--bg);
+}
+.rota-assistant-head-actions .rota-assistant-focus-toggle.is-active { background: var(--accent-soft); color: var(--accent); }
 
 /* ── Dar ekran: tam ekran kipli sayfa ──────────────────────────── */
 /* Ekran klavyesi açılınca görünür alan küçülür; yükseklik ve üst konum
@@ -721,6 +865,10 @@ body.high-contrast .assistant-md-code,
 body.high-contrast .assistant-md-table,
 body.high-contrast .assistant-md-inline-code { border-color: var(--border-strong); }
 body.high-contrast .rota-assistant-evidence { border-color: var(--border-strong); }
+body.high-contrast .assistant-chart,
+body.high-contrast .assistant-md blockquote { border-color: var(--border-strong); }
+body.high-contrast .assistant-chart-track { box-shadow: inset 0 0 0 1px var(--border-strong); }
+body.high-contrast .assistant-chart-label { color: var(--text); }
 body.high-contrast .rota-assistant-seg { box-shadow: inset 0 0 0 1px var(--border-strong); }
 body.high-contrast .rota-assistant-seg button,
 body.high-contrast .rota-assistant-toggle,
@@ -745,6 +893,9 @@ body.high-contrast .assistant-md a { text-decoration-thickness: 2px; }
 @keyframes rota-assistant-sheet-in { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 @keyframes rota-assistant-pulse { 0%, 100% { opacity: .35; transform: scale(.85); } 50% { opacity: 1; transform: scale(1); } }
 @keyframes rota-assistant-caret { 50% { opacity: 0; } }
+@keyframes rota-assistant-focus-in { from { opacity: .55; transform: scale(.992); } to { opacity: 1; transform: none; } }
+@keyframes assistant-chart-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes assistant-chart-fade { from { opacity: 0; } to { opacity: 1; } }
 
 /* "Hareketi azalt" (işletim sistemi ya da uygulama ayarı) bütün panel
    hareketini kapatır; `!important` yalnızca bu açık tercih içindir. */

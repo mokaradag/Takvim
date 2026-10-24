@@ -344,7 +344,11 @@ function rowKind(collection, tool) {
 
 const ROW_TITLES = Object.freeze(['title', 'name', 'task.title', 'person.name', 'label']);
 
-function renderRows(collection, rows, { evidenceId, locale, layout }) {
+/**
+ * Satır kümesinin sütunları: başlık alanı, sütun anahtarları, bir satırın sütun değerleri ve sütun etiketi.
+ * Liste/tablo çizimi ile kanıta dayalı yanıt düzeni (grafik adayları) aynı sütun tanımını kullanır.
+ */
+function rowColumns(rows, locale) {
   const pattern = (rel) => rel.replace(/\.\d+(?=\.|$)/g, '.*');
   // Değişiklik değeri kendi değişen alanının sütunudur: aynı yoldaki başka alanın değeri onun etiketi altına yazılmaz.
   const columnKey = ({ rel, fact }) => (fact.changeField ? `${pattern(rel)}|${fact.changeField}` : pattern(rel));
@@ -360,7 +364,6 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
       columns.push(columnKey(entry));
     }
   }
-  const lang = language(locale);
   const valuesOf = (row, key) => row.entries.filter((entry) => columnKey(entry) === key).map(({ fact }) => fact);
   const columnLabel = (key) => {
     const sample = rows.flatMap((row) => valuesOf(row, key))[0];
@@ -372,6 +375,58 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
     if (key.startsWith('project.') && labels.length > 1) return `${labels.at(-2)} ${labels.at(-1).toLocaleLowerCase(locale === 'en' ? 'en-US' : 'tr-TR')}`;
     return labelOf(sample, locale);
   };
+  const numericColumns = columns.filter((key) => rows.every((row) => valuesOf(row, key).every(isCount)));
+  return { titleKey, columns, columnKey, valuesOf, columnLabel, numericColumns };
+}
+
+/** Satırı adlandıran kaçışsız metin: kanıttaki satır bağlamının adı, başlık alanı ya da öznesi. */
+/** Satır adının yanında yazılan kaçışsız bağlam: görevin projesi (kod · ad) ve kişinin birimi. */
+function rowContext(row) {
+  const context = row.entries[0]?.fact.semantic?.row;
+  return Object.freeze({ project: context?.project ? [context.projectCode, context.project].filter(Boolean).join(' · ') : null, organization: context?.organization || null });
+}
+
+function rowTitleText(row, titleKey, valuesOf) {
+  const context = row.entries[0]?.fact.semantic?.row;
+  const names = titleKey ? valuesOf(row, titleKey) : [];
+  return String(context?.name || (names[0] && names.map((fact) => fact.value).join(', ')) || row.subject || '');
+}
+
+/**
+ * Çok satırlı koleksiyonun kaçışsız betimi: satır adları ve sütunlar (etiket, sayısallık, satır başına
+ * olgular). Yalnızca doğrulanmış olgulardan kurulur; değer eklemez.
+ */
+export function describeRowCollection(group, collection, locale = 'tr') {
+  const rows = [...(group.collections.get(collection)?.values() || [])];
+  const { titleKey, columns, valuesOf, columnLabel, numericColumns } = rowColumns(rows, locale);
+  return {
+    head: ROW_NOUNS[collection.split('.').at(-1)]?.[language(locale)] || (locale === 'en' ? 'Record' : 'Kayıt'),
+    rows: rows.map((row) => ({ title: rowTitleText(row, titleKey, valuesOf), titleFacts: titleKey ? valuesOf(row, titleKey) : [], context: rowContext(row), entries: row.entries,
+      cells: columns.map((key) => valuesOf(row, key)) })),
+    columns: columns.map((key) => ({ key, label: columnLabel(key), numeric: numericColumns.includes(key) }))
+  };
+}
+
+/** Olgunun kaçışsız gösterim değeri (model girdisi ve grafik etiketi); Markdown'a doğrudan yazılmaz. */
+export function narrativePlainValue(fact, locale = 'tr') {
+  const raw = fact.value;
+  if (fact.semantic?.valueType === 'date' && typeof raw === 'string' && DAY.test(raw) && fact.semantic?.displayValue == null) return formatDay(raw, locale);
+  if (fact.semantic?.valueType === 'instant' && typeof raw === 'string' && INSTANT.test(raw)) return formatInstant(raw, locale);
+  const { value } = factPresentation(fact, locale);
+  if (typeof raw === 'number' && /Percent$/.test(leafOf(fact.field))) return locale === 'en' ? `${value}%` : `%${value}`;
+  return value;
+}
+
+/** Olgunun kullanıcıya gösterilen etiketi ve sayımın nüfusunu belirleyen kaçışsız ölçütü. */
+export function narrativeLabel(fact, locale = 'tr') {
+  const parts = factPresentation(fact, locale).qualifierParts;
+  const valueText = (value, key) => (['dateFrom', 'dateTo'].includes(key) && DAY.test(value) ? formatDay(value, locale) : String(value));
+  return { label: labelOf(fact, locale), criteria: parts.map((part) => `${part.label}: ${valueText(part.value, part.key)}`).join('; ') };
+}
+
+function renderRows(collection, rows, { evidenceId, locale, layout }) {
+  const { titleKey, columns, valuesOf, columnLabel, numericColumns } = rowColumns(rows, locale);
+  const lang = language(locale);
   const rowCriteria = (row) => qualifierText(row.entries, locale, { omit: row.entries[0]?.fact.semantic?.row?.project ? ['project'] : [] });
   // Bütün satırların ortak ölçütü bir kez yazılır; satırlar arasında farklıysa her satır kendininkini taşır.
   const criteria = rows.every((row) => rowCriteria(row) === rowCriteria(rows[0])) ? rowCriteria(rows[0]) : null;
@@ -384,7 +439,6 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
   };
   const cell = (facts, plain) => facts.map((fact) => (plain ? narrativeValue(fact, locale) : strong(narrativeValue(fact, locale)))).join(facts[0]?.field.includes('wbsPath') ? ' › ' : ', ');
   // Karşılaştırma doğal olduğunda (en az üç satır; üç sütun ya da iki sayısal sütun) tablo; aksi hâlde liste.
-  const numericColumns = columns.filter((key) => rows.every((row) => valuesOf(row, key).every(isCount)));
   // Açıkça istenen tablo yalnızca ad sütunundan da oluşabilir.
   const table = layout === 'table' || (columns.length >= 1 && layout !== 'list' && rows.length >= 3 && (columns.length >= 3 || numericColumns.length >= 2));
   if (table) {
@@ -490,18 +544,17 @@ function recordRelative(tool, field) {
 }
 
 /**
- * Doğrulanmış olgu seçimini Markdown anlatıma dönüştürür.
- * @param {{ evidenceId: string, fact: object }[]} items Sunucunun doğruladığı olgular (seçim sırasıyla).
+ * Doğrulanmış olguların kanıt başına gruplanması: kayıt olguları (`main`), zarf sayıları (`envelope`) ve
+ * satır koleksiyonları (`collections`: koleksiyon yolu → satır yolu → satır). Anlatım ve kanıta dayalı
+ * yanıt düzeni aynı gruplamayı kullanır; olgu eklenmez ya da çıkarılmaz.
  */
-export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto', operation = null, empty = [] } = {}) {
-  const chosenLayout = layoutFrom(layout, operation);
+export function narrativeGroups(items) {
   const byEvidence = new Map();
   for (const item of items) {
     if (!byEvidence.has(item.evidenceId)) byEvidence.set(item.evidenceId, []);
     byEvidence.get(item.evidenceId).push(item.fact);
   }
-  const blocks = [];
-  for (const [evidenceId, facts] of byEvidence) {
+  return [...byEvidence].map(([evidenceId, facts]) => {
     const tool = facts[0]?.semantic?.provenance?.tool || null;
     const envelope = facts.filter((fact) => ENVELOPE_FIELDS.has(fact.field));
     const collections = new Map();
@@ -524,27 +577,69 @@ export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto',
       main.entries.push({ rel, fact });
     }
     main.anonymous = !main.subject || main.subject === 'Rota';
-    const sentences = [];
-    if (main.entries.length) sentences.push(...recordSentences(main, locale));
-    // Tek satırlık koleksiyon bir kayıttır; çok satırlı koleksiyon liste ya da tablodur.
-    const lists = [];
-    for (const [collection, rows] of collections) {
-      const role = ROW_ROLES[collection.split('.').at(-1)];
-      // Açıkça bildirilen tablo düzeni tek satırda da tablodur.
-      if (rows.size === 1 && layout !== 'table') {
-        const [row] = rows.values();
-        const record = recordSentences({ tool, kind: rowKind(collection, tool), subject: row.subject, entries: row.entries, anonymous: false, row: true }, locale);
-        sentences.push(...(role && record.length ? [`${role[0][language(locale)]}: ${record[0]}`, ...record.slice(1)] : record));
-      } else {
-        lists.push({ ...renderRows(collection, [...rows.values()], { evidenceId, locale, layout: chosenLayout === 'prose' ? 'list' : chosenLayout }), role });
-      }
-    }
-    sentences.push(...envelopeSentences(envelope, { tool, locale, empty: empty.includes(evidenceId) }));
+    return { evidenceId, tool, envelope, main, collections };
+  });
+}
+
+/** Tek satırlık koleksiyon bir kayıttır: satırın olguları kayıt cümlesi olarak yazılır. */
+function singleRowSentences(group, collection, row, locale) {
+  const role = ROW_ROLES[collection.split('.').at(-1)];
+  const record = recordSentences({ tool: group.tool, kind: rowKind(collection, group.tool), subject: row.subject, entries: row.entries, anonymous: false, row: true }, locale);
+  return role && record.length ? [`${role[0][language(locale)]}: ${record[0]}`, ...record.slice(1)] : record;
+}
+
+/** Kaydın, tek satırlık koleksiyonlarının ve zarf sayılarının cümleleri; çok satırlı koleksiyonlar dışarıda kalır. */
+function groupSentences(group, { locale, layout, empty }) {
+  const sentences = [];
+  if (group.main.entries.length) sentences.push(...recordSentences(group.main, locale));
+  for (const [collection, rows] of group.collections) {
+    // Açıkça bildirilen tablo düzeni tek satırda da tablodur.
+    if (rows.size === 1 && layout !== 'table') sentences.push(...singleRowSentences(group, collection, [...rows.values()][0], locale));
+  }
+  sentences.push(...envelopeSentences(group.envelope, { tool: group.tool, locale, empty: empty.includes(group.evidenceId) }));
+  return sentences;
+}
+
+/** Çok satırlı koleksiyonun liste ya da tablo bloğu; ortak ölçüt yukarıdaki cümlede yoksa başta yazılır. */
+function groupRowsBlock(group, collection, { locale, layout, stated = '' }) {
+  const role = ROW_ROLES[collection.split('.').at(-1)];
+  const { body, criteria } = renderRows(collection, [...group.collections.get(collection).values()], { evidenceId: group.evidenceId, locale, layout });
+  const lead = criteria && !stated.includes(criteria) ? `_${capitalize(criteria.trim().slice(1, -1))}_\n\n` : '';
+  return `${role ? `**${role[1][language(locale)]}**\n\n` : ''}${lead}${body}`;
+}
+
+/** Bir kanıt grubunun liste/tablo düzenine giren koleksiyonları. */
+export function narrativeRowCollections(group, layout = 'auto') {
+  return [...group.collections].filter(([, rows]) => rows.size > 1 || layout === 'table').map(([collection]) => collection);
+}
+
+/**
+ * Kanıt grubunun kayıt cümleleri (kanıt atfıyla); yazılacak olgu yoksa boş metin. Düzen anlatımdakiyle
+ * aynıdır: açıkça istenen tabloda tek satırlı koleksiyon tablodadır, cümlelerde yinelenmez.
+ */
+export function renderGroupDetails(group, { locale = 'tr', empty = [], layout = 'auto' } = {}) {
+  const sentences = groupSentences(group, { locale, layout, empty });
+  return sentences.length ? `${sentences.join(' ')} ${citation([group.evidenceId])}` : '';
+}
+
+/** Kanıt grubunun tek koleksiyonunu liste (`list`) ya da tablo (`table`) olarak yazar. */
+export function renderGroupRows(group, collection, { locale = 'tr', layout = 'list' } = {}) {
+  return group.collections.has(collection) ? groupRowsBlock(group, collection, { locale, layout }) : '';
+}
+
+/**
+ * Doğrulanmış olgu seçimini Markdown anlatıma dönüştürür.
+ * @param {{ evidenceId: string, fact: object }[]} items Sunucunun doğruladığı olgular (seçim sırasıyla).
+ */
+export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto', operation = null, empty = [] } = {}) {
+  const chosenLayout = layoutFrom(layout, operation);
+  const blocks = [];
+  for (const group of narrativeGroups(items)) {
+    const sentences = groupSentences(group, { locale, layout, empty });
     const stated = sentences.join(' ');
-    // Ortak ölçüt üstteki cümlede (ör. sayımda) yazılmadıysa listenin başında bir kez yazılır.
-    const lead = (criteria) => (criteria && !stated.includes(criteria) ? `_${capitalize(criteria.trim().slice(1, -1))}_\n\n` : '');
-    const listBlocks = lists.map(({ body, criteria, role }) => `${role ? `**${role[1][language(locale)]}**\n\n` : ''}${lead(criteria)}${body}`);
-    if (sentences.length) blocks.push(`${sentences.join(' ')} ${citation([evidenceId])}`);
+    const listBlocks = narrativeRowCollections(group, layout)
+      .map((collection) => groupRowsBlock(group, collection, { locale, layout: chosenLayout === 'prose' ? 'list' : chosenLayout, stated }));
+    if (sentences.length) blocks.push(`${stated} ${citation([group.evidenceId])}`);
     blocks.push(...listBlocks);
   }
   return blocks.join('\n\n');

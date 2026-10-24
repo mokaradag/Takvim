@@ -228,6 +228,10 @@ export function aiHealthComponent({ now = Date.now() } = {}) {
     if (toolFailure && TOOL_SERVICE_FAILURES.has(toolFailure.code) && now - epoch(toolFailure.at) <= BUSY_ATTENTION_WINDOW_MS) {
       return warning(`Son Rota verisi aracı hizmet hatasıyla sonuçlandı (${toolFailure.code}). ${loadText}`);
     }
+    // Geçersiz düzen ayarı yanıtı bozmaz (doğrulanmış belirlenimci anlatım gösterilir); yönetici yine görür.
+    if (config.answerCompositionFlagInvalid) {
+      return warning(`Doğal yanıt düzeni ayarı (MERGEN_ROTA_AI_ANSWER_COMPOSITION) geçersiz; Rota verisi yanıtları doğrulanmış belirlenimci anlatımla gösteriliyor. ${loadText}`);
+    }
     const evidenceObservedAt = epoch(detail.rotaData.evidenceSchema.observedAt);
     const evidenceFresh = evidenceObservedAt != null && now - evidenceObservedAt <= SCHEMA_FRESHNESS_MS;
     if (detail.rotaData.evidenceSchema.ready !== true || !evidenceFresh) {
