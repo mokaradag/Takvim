@@ -56,7 +56,10 @@ const BASE_ENV = Object.freeze({
   MERGEN_ROTA_AI_ENABLED: 'true',
   MERGEN_ROTA_AI_BASE_URL: 'http://127.0.0.1:9/v1',
   MERGEN_ROTA_AI_DEFAULT_API_KEY: DEFAULT_KEY,
-  MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: MASTER_KEY
+  MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: MASTER_KEY,
+  // Kanıta dayalı yolun sözleşme sınamaları doğrulanmış belirlenimci anlatımı (düzenin geri dönüş yolu)
+  // ve tam model turu sayılarını denetler; doğal yanıt düzeni kendi sınamalarında açıkça açılır.
+  MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'false'
 });
 
 function resetAi() {

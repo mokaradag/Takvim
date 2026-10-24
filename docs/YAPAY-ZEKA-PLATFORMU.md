@@ -1884,3 +1884,14 @@ Ayrıntılı belge: [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.m
   `scripts/planner-evaluation.mjs`; tarihsel Haiku 4.5 88/117 ölçümü
   düzeltilmiş kapıdan önceye aittir. Güncel kabul ölçümü bekliyor:
   117/117 + zorunlu ek 19/19; ayrıntı ve bekleyenler anlamsal katman §12.
+- **4D (uygulandı; kurum içi kabul açık):** doğrulanmış yanıtın isteğe bağlı sunum katmanı. Model yalnızca kapalı
+  bir düzen (`{"blocks":[...]}`) yazar; değerleri, tabloları, grafikleri ve kaynak işaretlerini sunucu yerleştirir
+  (`src/domain/ai/groundedComposition.js`, `src/server/ai/assistant/answerComposition.js`). Düzen turu aynı oturumda,
+  araçsız ve dar çıktı sınırıyla (Standart 1200 belirteç) bir kez yürür; geçersiz, kesik, boş, geç ya da başarısız
+  düzen doğrulanmış belirlenimci anlatıma döner — düzeltme turu ve Derin devri yoktur. Akış evresi `composing`
+  ("Yanıt yazılıyor…"). Kapalı grafik tanımı (`rota-chart`, çubuk/halka) sunucuda kurulur, istemcide yeniden
+  doğrulanır ve yalnızca yanıtın kanıtına bağlıysa çizilir. Masaüstünde panel aynı bileşenle odak görünümüne
+  genişler (konuşma, taslak ve süren yanıt korunur; Esc önce odaktan çıkar). Tur başına tek içeriksiz tamamlanma
+  satırı (`ai.grounded.turn`: `presentation`, `usage`, `escalation`). İşletim anahtarı
+  `MERGEN_ROTA_AI_ANSWER_COMPOSITION` (varsayılan açık). Haiku 4.5 vekil ölçümü ve kurum içi kabul yolu: anlamsal
+  katman §13.

@@ -132,14 +132,14 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
 
   if (asChild && React.isValidElement(children)) {
     // attach handlers to the existing child element (no extra wrapper)
+    // Çocuğun kendi işleyicileri (ör. klavyeyle gezinme) de korunur: ikisi birlikte çalışır.
+    const composed = Object.fromEntries(Object.entries(handlers).map(([name, handler]) => [name, (e) => {
+      handler(e);
+      if (children.props[name]) children.props[name](e);
+    }]));
     return (
       <>
-        {React.cloneElement(children, {
-          ...handlers,
-          onMouseEnter: (e) => { handlers.onMouseEnter(e); if (children.props.onMouseEnter) children.props.onMouseEnter(e); },
-          onMouseLeave: (e) => { handlers.onMouseLeave(e); if (children.props.onMouseLeave) children.props.onMouseLeave(e); },
-          onMouseMove: (e) => { handlers.onMouseMove(e); if (children.props.onMouseMove) children.props.onMouseMove(e); }
-        })}
+        {React.cloneElement(children, composed)}
         {tip}
       </>
     );

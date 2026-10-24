@@ -752,7 +752,8 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       // Geçmiş yanıtlar bağlama yer tutucu olarak girer: yalnızca kanıt dönemleri gerekir.
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id }, { revalidate: false });
       const prior = history.at(-1);
-      const scope = useTools && prior?.role === 'assistant' && prior.finishReason === 'stop'
+      // Kısmi yanıtın (unavailable) kümesi yalnızca doğrulanmış bölümden kaydedilmiş olabilir; güncel yetki yine denetlenir.
+      const scope = useTools && prior?.role === 'assistant' && ['stop', 'unavailable'].includes(prior.finishReason)
         ? priorEvidence?.resultScopeByMessage?.get(prior.id) : null;
       const entries = priorEvidence?.authorizationByMessage?.get(prior?.id);
       if (scope && entries?.length && !priorEvidence.unverifiable?.has(prior.id)) previousResult = { scope, entries };
@@ -779,6 +780,8 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       mode: prepared.answer?.mode || input.mode,
       profile: prepared.answer ? assistantProfileForMode(prepared.answer.mode) : (useTools ? assistantToolProfileForMode(input.mode) : profile),
       grounded: useTools,
+      // Doğrulanmış kanıttan doğal yanıt düzeni (işletim anahtarı; kapalıyken belirlenimci anlatım).
+      composeAnswers: useTools && config.answerComposition === true,
       // Yalnızca Standart kip Derin profile BİR kez devredebilir; Derin kip kendine devretmez.
       escalationProfile: useTools && input.mode === ASSISTANT_MODES.STANDARD && toolRouteAvailable(registry, ASSISTANT_MODES.DEEP)
         ? assistantToolProfileForMode(ASSISTANT_MODES.DEEP) : null,
@@ -882,9 +885,9 @@ function evidenceSchemaMissing() {
 
 /** Veri sonrası muhakeme devri; iptal, kimlik ve süre aşımı yukarı taşınır. */
 async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
-  const telemetry = (outcome, models = []) => recordGroundedEscalation({
+  const telemetry = (outcome, models = []) => request.noteEscalation?.(recordGroundedEscalation({
     requestedMode: turn.mode, models: [...request.models, ...models], reason: request.reason, toolsReused: request.toolsReused, outcome
-  });
+  }));
   let result;
   try {
     result = await runIn(turn.escalationProfile, { resume: request.resume });
@@ -936,7 +939,8 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
     onStatus,
     onProgress,
     onText: async () => {},
-    deferDisclosure: true
+    deferDisclosure: true,
+    composeAnswers: turn.composeAnswers === true
   };
   const lifecycle = { deadline: null };
   const runIn = (profile, extra) => getAiGateway().runToolSession({

@@ -18,6 +18,8 @@
  * korunur); akış sırasında yarım kalan yapı (kapanmamış kod bloğu) güvenle çizilir.
  */
 
+import { ANSWER_CHART_FENCE, answerChartText, parseAnswerChart } from '../../../domain/ai/answerChart.js';
+
 export const MARKDOWN_LIMITS = Object.freeze({
   maxDepth: 6,
   maxDelimiters: 400,
@@ -658,7 +660,7 @@ export function createAssistantMarkdownParser() {
  * maddeleri görünen madde işaretini ya da sıra numarasını taşır; iç içe
  * maddeler girintiyle korunur.
  */
-export function assistantMarkdownText(text) {
+export function assistantMarkdownText(text, { evidenceIds = null } = {}) {
   const inline = (nodes) => nodes.map((node) => node.type === 'break' ? '\n'
     : node.type === 'cite' ? `[${node.id}]`
       : node.children ? `${node.image ? 'Görsel: ' : ''}${inline(node.children)}` : node.value || '').join('');
@@ -666,6 +668,11 @@ export function assistantMarkdownText(text) {
     .map((line, index) => (index === 0 ? `${marker} ${line}` : line ? `${' '.repeat(marker.length + 1)}${line}` : line))
     .join('\n');
   const blocks = (items, separator = '\n\n') => items.map((block) => {
+    // Kanıtlı yanıtın grafiği çizimle aynı kuralla verisinin düz metin karşılığı olarak kopyalanır; çizilmeyen grafik kopyalanmaz.
+    if (block.type === 'code' && block.language === ANSWER_CHART_FENCE) {
+      const spec = parseAnswerChart(block.text);
+      return spec && evidenceIds && spec.evidence.every((id) => evidenceIds.has(id)) ? answerChartText(spec) : null;
+    }
     if (block.type === 'code') return block.text;
     if (block.type === 'quote') return blocks(block.children);
     if (block.type === 'list') {
@@ -676,6 +683,6 @@ export function assistantMarkdownText(text) {
     }
     if (block.type === 'table') return [block.header, ...block.rows].map((row) => row.map(inline).join('\t')).join('\n');
     return block.children ? inline(block.children) : '';
-  }).join(separator);
+  }).filter((part) => part !== null).join(separator);
   return blocks(parseAssistantMarkdown(text));
 }

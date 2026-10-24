@@ -4,7 +4,7 @@
  *
  *   node scripts/planner-evaluation.mjs run --model-command 'node scripts/planner-claude-model.mjs' --semantic kosu.json
  *
- * stdin: üretim turunun girdisi `{ messages, tools, toolChoice }`; stdout: `{ text, toolCalls, finishReason, usage, models,
+ * stdin: üretim turunun girdisi `{ messages, tools, toolChoice, maxOutputTokens? }`; stdout: `{ text, toolCalls, finishReason, usage, models,
  * thinking }`. Araçlar modele yerel araç çağırma arayüzüyle (yalnızca bu araçları sunan, hiçbir aracı yürütmeyen yerel MCP
  * sunucusu) KAYIT SIRASIYLA verilir; ilk sistem iletisi değişmeyen sistem yönergesidir, kalan iletiler tek kullanıcı
  * iletisine sırasıyla yazılır. Böylece araçlar ve sistem yönergesi önbelleğe alınabilir önek olarak bayt bayt sabit kalır.
@@ -416,6 +416,8 @@ async function complete(launcher, timeoutMs) {
   // Zorunlu adlı araç (üretimde OpenAI uyumlu adlı işlev seçimi) CLI'nin yapılandırılmış çıktısıyla verilir: yanıt o aracın şemasıdır.
   const forced = payload.toolChoice?.name ? all.find((tool) => tool.name === payload.toolChoice.name) || null : null;
   const tools = forced ? all.filter((tool) => tool !== forced) : all;
+  // Üretim turunun çıktı sınırı (ör. doğal yanıt düzeninin dar sınırı) korunur; verilmemişse planlayıcı sınırı.
+  const outputLimit = Number.isSafeInteger(payload.maxOutputTokens) && payload.maxOutputTokens > 0 ? Math.min(payload.maxOutputTokens, 4096) : 4096;
   const staticPromptHash = hash(system.content);
   const toolCatalogHash = hash(JSON.stringify([forced?.name ?? null, all]));
   let maxCalls;
@@ -452,7 +454,7 @@ async function complete(launcher, timeoutMs) {
       ? Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(SystemRoot|windir|ComSpec|PATHEXT)$/i.test(key))) : {};
     const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => keep.test(key))), ...windows, PATH: process.env.PATH || '', HOME: home,
       ...(process.platform === 'win32' ? { USERPROFILE: home } : {}), MAX_THINKING_TOKENS: '0',
-      CLAUDE_CODE_MAX_OUTPUT_TOKENS: '4096', ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(outputLimit), ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
     const args = ['-p', '--model', model, '--effort', effort, '--system-prompt-file', path.join(work, 'system.txt'), '--tools', '',
       '--strict-mcp-config', ...(tools.length ? ['--mcp-config', path.join(work, 'mcp.json')] : []),
       ...(forced ? ['--json-schema', JSON.stringify({ ...forced.parameters, description: forced.description })] : []), '--output-format', 'stream-json', '--verbose',

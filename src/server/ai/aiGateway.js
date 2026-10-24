@@ -968,15 +968,23 @@ export function createAiGateway({
         model: route.model,
         reportedModel,
         maxOutputTokens: outputLimit,
+        // Yalnızca yetenek adları (ör. düşünme yeteneği); model, adres ya da anahtar değil.
+        capabilities: Object.freeze([...route.capabilities]),
         signal: deadline.signal,
         remainingMs: () => deadline.remainingMs(),
-        async round({ messages, tools = [], toolChoice = 'auto', onEvent = null }) {
+        /**
+         * `maxOutputTokens` bu turun çıktı sınırını yalnızca DARALTABİLİR (profil sınırı aşılamaz);
+         * `signal` çağıranın bu tur için koyduğu daha kısa süre sınırıdır, oturumu sonlandırmaz.
+         */
+        async round({ messages, tools = [], toolChoice = 'auto', onEvent = null, maxOutputTokens: roundOutputTokens = null, signal: roundSignal = null }) {
           // Araç SQL'i ya da kalıcılık işlemi model beklenirken açık kalamaz.
           assertOutsideSqlTransaction();
           if (deadline.failure()) throw deadline.failure();
           const safeMessages = requireToolMessages(messages);
+          const roundLimit = Number.isSafeInteger(roundOutputTokens) && roundOutputTokens > 0 ? Math.min(roundOutputTokens, outputLimit) : outputLimit;
           const roundScope = new AbortController();
           const unlinkRound = linkAbort(providerScope.signal, roundScope);
+          const unlinkCaller = roundSignal ? linkAbort(roundSignal, roundScope) : () => {};
           // Her model turu kendi ilerleme sınırıyla yürür: ilerlemeyen tur oturumun süresini tüketemez.
           const watch = watchProvider(config, deadline, roundScope);
           progress.rounds += 1;
@@ -999,7 +1007,7 @@ export function createAiGateway({
                 messages: safeMessages,
                 tools,
                 toolChoice,
-                maxOutputTokens: outputLimit,
+                maxOutputTokens: roundLimit,
                 signal: roundScope.signal
               })
             });
@@ -1073,10 +1081,16 @@ export function createAiGateway({
               modelMismatch: typeof final.model === 'string' && final.model !== route.model, usage: final.usage ?? null,
               durationMs: Math.max(0, now() - roundStartedAt), firstEventMs: firstEventAt == null ? null : Math.max(0, firstEventAt - roundStartedAt) };
           } catch (error) {
+            // Çağıranın tur sınırı oturumun hatası değildir: gerekçesi (iptal) olduğu gibi döner.
+            if (roundSignal?.aborted && !deadline.failure() && !watch.failure()) {
+              progress.recorded = true;
+              throw toAiFailure(roundSignal.reason);
+            }
             throw watch.failureOf(error);
           } finally {
             watch.release();
             unlinkRound();
+            unlinkCaller();
             roundScope.abort();
           }
         }
