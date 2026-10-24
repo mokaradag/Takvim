@@ -111,8 +111,8 @@ döngüsü yerine açık bir hata yanıtı döner.
 
 `MERGEN_ROTA_KEYCLOAK_FLOW=implicit-bridge` seçiliyken:
 
-1. Kullanıcı **aynı** kurumsal oturum açma eylemine tıklar
-   (`GET /api/mergen-rota/auth/login`).
+1. Gerçek Sistem açılışında oturum yoksa tarayıcı **aynı** kurumsal oturum açma
+   ucuna (`GET /api/mergen-rota/auth/login`) otomatik yönlendirilir.
 2. Sunucu kriptografik rastgele bir `state` üretir. **PKCE üretilmez.**
 3. Sunucu imzalı, HttpOnly ve kısa ömürlü işlem çerezini yazar:
    `{ flow: 'implicit-bridge', state, returnTo, exp }`.
@@ -421,15 +421,19 @@ yazdırılmaz.
 ## 10. Doğrulama adımları
 
 1. `npm run build && npm run start:prod` ile uygulamayı 8008 portunda başlatın.
-2. **Gerçek Sistem** seçin. Oturum yoksa açılış perdesinde "Kurumsal oturum aç"
-   görünmelidir.
-3. Oturum açın; Keycloak'a yönlendirildiğinizi ve geri döndüğünüzü doğrulayın.
+2. **Gerçek Sistem** seçin. Oturum yoksa `auth/status` denetiminden sonra
+   `auth/login` üzerinden seçili Keycloak akışına otomatik yönlendirildiğinizi
+   doğrulayın; uygulama içinde ayrıca bir giriş düğmesine basılmaz.
+3. Keycloak'ta oturum açın ve uygulamaya geri döndüğünüzü doğrulayın.
 4. Kenar çubuğunda kendi adınızı, fotoğrafınızı ve departmanınızı görün.
 5. Tarayıcı geliştirici araçlarında `mergen_rota_session` çerezinin `HttpOnly`
    olduğunu ve `localStorage`'da jeton bulunmadığını doğrulayın.
 6. Yetkiniz olmayan bir projede yazma denemesinin `FORBIDDEN`, oturumsuz bir
    isteğin `UNAUTHORIZED` döndüğünü doğrulayın.
 7. Oturumu kapatın; korunan verinin artık gelmediğini doğrulayın.
+
+Açılış perdesindeki `Yeniden Dene` ve `Demo kipine geç` seçenekleri yalnızca
+oturum denetimi hata verdiğinde görünür; oturum yokluğu tek başına hata değildir.
 
 ---
 
