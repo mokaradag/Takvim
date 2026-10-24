@@ -1,703 +1,222 @@
 # MERGEN Rota — Görev Yönetimi
 
-Endüstriyel/kontrol paneli tarzında bir görev yönetimi uygulaması: Temel Kipte sadeleştirilmiş Özet ile hızlı görev/termin takibi; her iki kipte Özet, Görevler, Talepler, Takvim, Ayarlar ve komut arama; Kapsamlı Kipte ayrıca İş Kırılım Yapısı, Gantt, Kanban, Raporlar ve Ekip sayfaları. Next.js App Router ve React kullanır.
+MERGEN Rota, kurum içi (on-premise) kullanım için geliştirilen bir proje ve
+görev yönetimi uygulamasıdır. Kurumsal personel, organizasyon ve proje
+kaynaklarıyla çalışır; görev takibini, ekip koordinasyonunu ve proje
+planlamasını aynı çalışma alanında toplar. Üretim verisi SQL Server'da
+saklanır; örnek verilerle deneme için ayrı bir Demo Kipi bulunur.
 
-MERGEN Rota artık iki tümüyle yalıtılmış **Veri Kipi** sunar:
+## Temel özellikler
 
-- **Demo Kipi** — mevcut zengin örnek veri kümesini kullanan, asenkron ve kalıcı olmayan bellek deposu. Demo kayıtları SQL Server'a veya Gerçek Sistem API'sine gönderilmez.
-- **Gerçek Sistem** — tarayıcıdaki API deposundan Next.js sunucu katmanına, sunucu tarafı yetkilendirmeye ve SQL Server deposuna giden kalıcı üretim veri yolu. Tarayıcı SQL Server'a hiçbir zaman doğrudan bağlanmaz.
+- **Özet:** görev durumu, yaklaşan terminler, portföy sağlığı ve iş yükü.
+- **Görevler:** sorumlular, öncelik, etiketler, tarihler ve tekrarlayan görevler.
+- **Talepler / Atama Koordinasyonu:** tarih önerileri, bölüm dışı atama
+  talepleri, karar geçmişi ve ortak bildirim merkezi.
+- **Takvim:** görevlerin termin gününe göre izlenmesi.
+- **Proje Yapısı / İş Kırılım Yapısı (WBS):** proje ve hiyerarşi yönetimi;
+  kurumsal projelerde CN43N kaynaklı salt okunur yapı.
+- **Gantt / CPM:** zaman çizelgesi, bağımlılıklar ve tam proje ağında kritik yol.
+- **Kanban:** görevlerin durum panosunda takibi.
+- **Raporlar / Ekip:** performans, görev hareketleri ve ekip iş yükü;
+  Excel (`.xlsx`), CSV ve CSV paketi dışa aktarma.
+- **Outlook / e-posta:** görev terminlerinin kişisel Outlook takvimine tek
+  yönlü aktarımı, elle/otomatik hatırlatmalar ve isteğe bağlı atama postaları.
+- **Sistem Yönetimi:** yalnızca `SYSTEM_ADMIN` için sağlık, performans,
+  kuyruklar, olaylar, entegrasyonlar ve aktif kullanıcı görünümü.
+- **Bilgin / Rota AI:** kurum içi modelle sohbet ve etkinleştirildiğinde
+  kullanıcının yetkili Rota verisinden kanıta dayalı, salt okunur yanıtlar.
 
-Veri Kipi, **Temel Kip / Kapsamlı Kip** kullanım seçiminden bağımsızdır. Veri Kipi değiştiğinde uygulama durum sağlayıcısı yeniden kurulur; Demo ve Gerçek Sistem anlık görüntüleri birleştirilmez. Demo etkin olduğunda sürekli görünen `DEMO` göstergesi vardır.
+Bilgin varsayılan olarak kapalıdır (`MERGEN_ROTA_AI_ENABLED=false`). Rota
+verisi araçları ayrıca `MERGEN_ROTA_AI_TOOLS_ENABLED` ile açılır. Planlayıcı,
+anlamsal aday keşfi ve kanıt doğrulaması sunucuda çalışır; model görev veya
+atama değiştiremez. Kurulum ve sınırlar için [AI platformu](docs/YAPAY-ZEKA-PLATFORMU.md)
+ve [anlamsal katman](docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md) belgelerine bakın.
 
-## Sabit çalışma alanları ve Outlook iptali
+## Kullanım kipleri
 
-Özet ve Proje Yapısı → Proje Tanımı şeritleri, kaydırılan içeriği üst boşluk boyunca örten opak zemin ve altta 10 piksel nefes payı kullanır. Raporlar'da sekmeler ile tarih/organizasyon şeridi birlikte sabit kalır; Sistem Yönetimi'nde sağlık şeridi ve sekmelerin altındaki panel kayar. Görev hatırlatma sonucu komşu satır simgelerinin önünde görünür. Outlook iptalleri Exchange'in zorunlu tuttuğu tüm gün tarihini önceki davetten korur. Ayrıntılar: [arayüz yerleşimi](docs/ARAYUZ-BICIMLENDIRME-MIMARISI.md), [Sistem Yönetimi](docs/SISTEM-YONETIMI.md), [Outlook ileti biçimi](docs/OUTLOOK-TAKVIM.md#i̇leti-biçimi-mime).
+**Temel Kip**, hızlı görev tanımı ve termin takibi içindir. Sade Özet,
+Görevler, Talepler ve Takvim üzerinden çalışılır; ileri planlama alanları
+bu kipte gösterilmez.
 
-Kesin gönderilmeyen Outlook tarih değişiklikleri iptal tarihini değiştirmez; yeniden deneme kuyruğu ve önceki belirsiz teslimat bilgileri korunur.
+**Kapsamlı Kip**, bunlara Proje Yapısı, WBS, Gantt, CPM, Kanban, Raporlar ve
+Ekip araçlarını ekler. Güncel plan, hedef ve gerçekleşen tarihler ayrı izlenir.
+Kip seçimi kullanıcının veri erişim yetkisini değiştirmez.
 
-Outlook kuyruk sorguları, `msnodesqlv8` havuzundan önceki işlemin `SERIALIZABLE` oturum ayarını devralsa da kendi `READ COMMITTED` sözleşmesini kurar. Boş kuyruk başarılı tamamlanır; gerçek SQL hataları aşama, güvenli hata kodu ve sınırlı sürücü künyesiyle bildirilir. [Kuyruk yürütme tanısı](docs/OUTLOOK-TAKVIM.md#kuyruk-yürütme-tanısı) üretim doğrulamasını açıklar.
+İki kipte de Ayarlar, Kullanım Rehberi ve komut arama bulunur. Ayrıntılar:
+[Temel Kip ve arayüz](docs/TEMEL-KIP-VE-ARAYUZ.md).
 
-## Otomatik veri yenileme
+## Veri kipleri
 
-Gerçek Sistem verisi, sekme görünürken varsayılan olarak **60 saniyede bir** uygulamanın mevcut `reloadData()` ve anlık görüntü yaşam döngüsüyle yenilenir. Bu bir tarayıcı sayfası yenilemesi değildir: çalışma alanı, arama, görev tablosu süzgeçleri ve Direktörlük/Müdürlük/Birim seçimi korunur; seçili proje ile açık görev çekmecesi ise dayandıkları kayıtlar yetkili anlık görüntüde geçerli kaldığı sürece korunur. Proje artık geçerli değilse Portföy kipine dönülür, seçili görev artık geçerli değilse çekmece kapatılır. Eşdeğer anlık görüntülerde değişmeyen nesne ve koleksiyon referansları yeniden kullanılır. Yenilenen yetkili kişi/görev projeksiyonunda kurumsal yol gerçekten kaybolmuşsa yalnızca geçersiz alt seçim en yakın geçerli üst kapsama indirilir. Manuel yenileme denetimi de kullanılabilir durumda kalır.
+| Kip | Veri kaynağı ve kalıcılık |
+| --- | --- |
+| **Demo Kipi** | Örnek verili bellek deposu; tarayıcı yenilendiğinde değişiklikler korunmaz. SQL Server'a veya Gerçek Sistem veri API'sine kayıt göndermez. |
+| **Gerçek Sistem** | Kurumsal oturum ve sunucu yetkilendirmesi üzerinden SQL Server'da kalıcı veri. |
 
-Aralık, gizli olmayan ve derleme sırasında istemci paketine gömülen `NEXT_PUBLIC_MERGEN_ROTA_AUTO_REFRESH_INTERVAL_MS` değişkeniyle ayarlanır. Varsayılan `60000`, izin verilen en küçük değer `30000` milisaniyedir. Eksik, boş, sayısal olmayan, sıfır, negatif, alt sınırdan küçük veya tarayıcı zamanlayıcı sınırını aşan değerler güvenli biçimde `60000` değerine döner; değişiklikten sonra üretim paketi yeniden derlenmelidir.
+Veri kipi, Temel/Kapsamlı kullanım seçiminden bağımsızdır. **Demo ve Gerçek
+Sistem verileri karışmaz.** Gerçek Sistem hatasında sessizce Demo'ya dönülmez.
+Tarayıcı SQL Server'a doğrudan bağlanmaz.
 
-Gizli sekmede periyodik yoklama durur. Sekmeye dönüldüğünde veri aralık kadar eskimişse hemen yenilenir; değilse kalan süre beklenir. Tek-uçuş denetimi otomatik ve manuel yenilemelerin üst üste binmesini önler. Otomatik tur sürerken başlatılan manuel yenileme, arka plan sonucuna katılmak yerine turun hemen arkasına tek kez alınır; böylece manuel isteğin yükleme ve hata durumu görünür kalır. Otomatik yenileme önce bekleyen yazmaları mevcut sıralı kalıcılık kuyruğuyla tamamlar; çözülememiş başarısız görev yaması varsa yenilemeyi sessizce atlar ve yerel düzenlemeyi hiçbir zaman otomatik olarak silmez. Geçici arka plan bağlantı hataları mevcut veriyi kullanılamaz hâle getirmez; oturum/kimlik hataları mevcut uygulama akışında işlenmeye devam eder.
+Gerçek Sistem verisi görünür sekmede otomatik yenilenir. Yenileme, bekleyen
+yazmalar ve yerel düzenlemeler için sözleşme [kalıcılık sınırındadır](docs/KALICILIK-SINIRI.md).
 
-Demo Kipi bellek içi depoya karşı otomatik yoklama yapmaz. Her otomatik tur normal anlık görüntü ucunu kullanır; istemci ayrı bir CN43N eşitlemesi başlatmaz. Kurumsal WBS eşitlemesi bağımsız `MERGEN_ROTA_WBS_SYNC_TTL_MS` penceresi, tek-uçuş kilidi ve içerik parmak iziyle korunmaya devam eder; 60 saniyelik veri yenilemesi CN43N'yi 60 saniyede bir zorla eşitlemez.
+## Mimari — genel görünüm
 
-Projenin resmî dokümantasyon dili Türkçedir. `docs/` altındaki belgeler Türkçe ASCII dosya adları kullanır; sistemdeki teknik tanımlayıcılar, komutlar ve yapılandırma anahtarları özgün biçimleriyle korunur.
+Uygulama Next.js App Router, React ve Node.js üzerinde çalışır. Gerçek Sistem
+veri yolu şöyledir:
+
+```mermaid
+flowchart TD
+    A["Tarayıcı / React"] --> B["Next.js / API"]
+    B --> C["Kimlik doğrulama ve yetkilendirme"]
+    C --> D["Uygulama servisleri / repository"]
+    D --> E["SQL Server / kurumsal veri kaynakları"]
+```
+
+Demo, aynı depo sözleşmesini bellek bağdaştırıcısıyla uygular. İş kuralları,
+zamanlama hesapları, durum yönetimi ve veri erişimi ayrı katmanlardır.
+CPM ve görünüm özetleri kanonik veriden türetilir.
+
+Personel/organizasyon, proje kataloğu ve proje sorumlulukları kurumsal
+kaynaklardan salt okunur alınır; CN43N WBS kaynağı ayrı veritabanı bağlantısı
+kullanır. Rota kendi iş verisini `MR_*` nesnelerinde yönetir.
+
+Katmanlar için [Mimari](docs/MIMARI.md), veri yolu ve kurumsal kaynak
+sözleşmeleri için [Kalıcı Veri Saklama](docs/KALICI-VERI-SAKLAMA.md) esastır.
+
+## Güvenlik ve kurumsal sınırlar
+
+- Kimlik ve yetkilendirme sunucuda uygulanır; istemcide düğme gizlemek yetki
+  denetiminin yerine geçmez. Yazmalar işlem sınırında yeniden doğrulanır.
+- Kurumsal kişi kimliği **SicilNo / Sicil**'dir; ad-soyad yetki kimliği değildir.
+- Keycloak varsayılan kimlik sağlayıcısıdır. `authorization-code` + PKCE
+  tercih edilir; `implicit-bridge` açıkça seçilen uyumluluk akışıdır.
+- Geliştirme kimliği yalnızca açıkça etkinleştirilen yerel seçenek olup
+  **üretim yedeği değildir**. Eksik kimlik yönetici yetkisine dönüşmez.
+- SQL bağlantıları ve sırlar sunucuda kalır; sunucu sırları `NEXT_PUBLIC_`
+  değişkenlerine konmaz ve gerçek değerler depoya işlenmez.
+- Görev görünürlüğü, doğrudan atama ve koordinasyon ayrı yetkilerdir. Kısmi
+  görev kümesinden tam proje kritik yolu hesaplanmaz.
+- AI çıktısı güvenilir veri veya yetki kaynağı sayılmaz. Rota okumaları
+  doğrulanmış plan, güncel erişim ve kanıt denetiminden geçer; kayıtlı not ve
+  ileti metinlerini okumak kullanıcının ilgili iletide açık seçimini gerektirir.
+- Kurum içi ve dış internete kapalı işletim temel gereksinimdir. Outlook,
+  kurum içi SMTP + iCalendar kullanır; Graph, Entra ID veya EWS gerektirmez.
+
+Ayrıntılı kurallar: [Yetkilendirme Modeli](docs/YETKILENDIRME-MODELI.md),
+[Keycloak SSO](docs/KEYCLOAK-SSO.md) ve [AI alan araçları](docs/YAPAY-ZEKA-ALAN-ARACLARI.md).
+
+## Gereksinimler
+
+- **Node.js 24 ve npm.** Quality CI, Node.js `24.14.0` kullanır.
+- Bağımlılık kurulumu için onaylı npm registry veya kurum içi proxy.
+  Çalışma zamanında dış CDN, font, JavaScript veya CSS hizmeti gerekmez.
+- **Gerçek Sistem için:** SQL Server, kurumsal kaynaklara gerekli erişim,
+  Keycloak yapılandırması ve Windows Tümleşik Kimlik Doğrulamasıyla çalışan
+  hizmet hesabı. Microsoft ODBC Driver 18 for SQL Server gerekir; yerel
+  sürücü kurulum koşulları [kalıcılık belgesindedir](docs/KALICI-VERI-SAKLAMA.md).
+- Outlook veya e-posta işlevleri için kurumsal SMTP; Bilgin için
+  yapılandırılmış OpenAI uyumlu kurum içi AI ucu ve model kaydı gerekir.
 
 ## Yerel geliştirme
 
-Gereksinim: Node.js 24 (üretim ve Quality CI: 24.14.0)
+Depo kökünde:
 
 ```bash
 npm install
 npm run dev
 ```
 
-`http://localhost:8008` adresinde açılır. MERGEN Rota **8008** portunu kullanır; **8009** portu ayrı bir uygulama olan MERGEN Bilge'ye aittir.
+[http://localhost:8008](http://localhost:8008) adresini açıp **Demo Kipini Aç**
+seçeneğiyle başlayın. Demo için kurumsal SQL veya Keycloak kurulumu gerekmez.
+MERGEN Rota'nın varsayılan portu **8008**'dir.
 
-### Diğer komutlar
+Gerçek Sistem geliştirmesinde `.env.example` dosyasından `.env.local`
+oluşturun; SQL, kurumsal oturum ve gereken entegrasyonları kendi ortamınıza
+göre doldurun. Şablon `/rota` ters vekil dağıtımına yöneliktir: doğrudan yerel
+erişimde dış yol önekini ve Keycloak dönüş adreslerini yerel URL ile uyumlu
+seçin. Kurulum sırası [Kalıcı Veri Saklama](docs/KALICI-VERI-SAKLAMA.md),
+oturum adımları [Keycloak SSO](docs/KEYCLOAK-SSO.md) belgesindedir.
 
-- `npm run build` — üretim derlemesi
-- `npm run start:prod` — üretim sunucusunu `0.0.0.0:8008` üzerinde başlatır
-- `npm run start` — üretim sunucusunu varsayılan ayarlarla başlatır (`npm run start -- -H 0.0.0.0 -p 8008`)
-- `npm run lint` — Next.js/ESLint kod kalite kontrolü
-- `npm test` — alan, zamanlama, durum, kalıcılık, SQL şeması ve yetkilendirme regresyon testleri
+## Derleme ve test
 
-## Veri Kipi ve kullanım kipleri
-
-İlk Veri Kipi seçiminde kullanıcı **Demo Kipini Aç** veya **Gerçek Sisteme Geç** seçeneklerinden birini seçer. Gerçek Sistem yüklenemezse Demo'ya sessiz dönüş yapılmaz; veritabanı, kimlik veya yetki hatası açıkça gösterilir ve Demo'ya dönüş kullanıcı kararıyla gerçekleşir.
-
-Gerçek Sistem seçildiğinde uygulama durum sağlayıcısı kurulmadan önce kurumsal oturum denetlenir. Oturum yoksa kullanıcı doğrudan seçili Keycloak akışına yönlendirilir; uygulama içinde ayrıca `Oturum açmanız gerekiyor` kutusu gösterilmez.
-
-Kullanım kipleri aynı seçili veri kaynağı üzerinde çalışır:
-
-- **Temel Kip**: Proje, görev, anahtar sözcük, sorumlu, öncelik ve termin tarihiyle hızlı giriş; açılış sayfası olan sadeleştirilmiş **Özet** panosu, sütun filtreli sadeleştirilmiş **Görevler** listesi ve termin günü Takvim takibi. İlerleme, başlangıç tarihleri, bağımlılıklar ve ileri planlama alanları Temel Kipte gösterilmez.
-- **Kapsamlı Kip**: WBS, bağımlılıklar, güncel plan/hedef/gerçekleşen tarihler, Gantt, CPM, Kanban, raporlar ve portföy araçları.
-
-Her iki kipin **Görevler** ve **Takvim**, ayrıca Kapsamlı Kipin **Kanban** araç çubuğunda Ekip sayfasıyla aynı kararlı kurumsal yol semantiğini kullanan **Direktörlük → Müdürlük → Birim** süzgeçleri bulunur. Süzgeç, görevin oluşturucusuna veya proje sorumlusuna değil görev sorumlularına bakar; çok sorumlulu görevde en az bir sorumlunun seçili kapsamda olması yeterlidir. Bu yalnızca istemci tarafı daraltmadır: önce sunucunun yetkilendirdiği anlık görüntü ve seçili çalışma alanı/proje uygulanır, kurumsal seçim bunlara yeni görev veya kişi ekleyemez. Temel/Kapsamlı Kip ile Görevler/Kanban/Takvim geçişleri aynı oturum içindeki kurumsal seçimi paylaşır. Kanban araması görev, proje adı/kodu, sorumlu, etiket ve öncelikle kurumsal seçimi birlikte uygular; sütun sayıları süzülmüş görevleri sayar. Filtreleri temizle aramayı ve kurumsal seçimi sıfırlar.
-
-Planlanan/gerçekleşen saat alanları veritabanı ve API uyumluluğu için korunur ancak normal uygulama arayüzünde hiçbir kipte gösterilmez; kullanıcı ilerlemeyi `İlerleme` üzerinden izler.
-
-## SQL Server ile kalıcı veri saklama mimarisi
-
-```text
-Tarayıcı / MERGEN Rota arayüzü
-  → durum eylemleri ve sıralı kalıcılık düzenlemesi
-  → istemci tarafı API AppRepository
-  → Next.js Node API/servis katmanı
-  → CurrentUserProvider
-  → yetkilendirme servisi
-  → SQL Server AppRepository
-  → SQL Server
-```
-
-SQL bağlantısı yalnızca `src/server` altında bulunur. Özellikler, istemci bileşenleri ve durum kancaları `mssql`, bağlantı kodu veya SQL sorgusu içe aktarmaz. SQL Server sürücüsü yerel npm bağımlılığıdır; çalışma zamanı dış internete gereksinim duymaz.
-
-Gerçek Sistem kipi API uçları:
-
-- `GET /api/mergen-rota/auth/status` — SQL'e gitmeden kurumsal oturumun varlığını denetler
-- `GET /api/mergen-rota/session`
-- `GET /api/mergen-rota/snapshot`
-- `POST /api/mergen-rota/commit`
-
-Her yazma işlemi sunucuda yeniden yetkilendirilir ve bir `commitChanges()` çağrısı tek SQL işlemi olarak uygulanır. SQL Server `rowversion` değerleri opak Base64 sürüm belirteçleri olarak taşınır; eski sürümle güncelleme/silme `CONFLICT` / HTTP 409 döndürür.
-
-## Kurumsal veri kaynakları
-
-MERGEN Rota şu kurumsal tabloları yalnızca okur:
-
-- `HR02_rehisRehberwithMasrafYeri` — çalışan ve organizasyon kaynağı. İş kimliği `sicil` değeridir; ayrı `MR_People` veya `MR_Employees` tablosu oluşturulmaz.
-- `A01_ProjeUrunFaaliyetRaporu` — kurumsal Proje kataloğu. Yalnızca `Tur`, `Tur_Aciklama`, `ProjeKodu`, `ProjeAdi` seçilir ve sorgu bu dört alanla `GROUP BY` kullanır.
-- `HR09_projeSorumlu` — kurumsal Proje FULL erişimi. `pptcSicil` virgülle ayrılmış değerleri `STRING_SPLIT`, kırpma ve `TRY_CONVERT(int, ...)` ile tam belirteç olarak ayrıştırılır; `LIKE '%sicil%'` kullanılmaz.
-
-Kurumsal proje kodu/adı/türü sunucu tarafından yönetilir. Senkronizasyon eksik kayıtları `MR_Projects` içine ekler, kök WBS oluşturur, kaynak alanları değiştiğinde günceller, uygulama üst verisini korur ve kaynakta geçici olarak kaybolan kaydı silmek yerine pasif yapar.
-
-### Kurumsal iş dağılım ağacı: `CN43N`
-
-Kurumsal projelerin İş Dağılım Ağacı MERGEN Rota içinde tanımlanmaz; **farklı bir veritabanında** bulunan `CN43N` tablosundan eşitlenir. Bu nedenle ikinci bir bağlantı tanımı gerekir (`.env.example` içindeki `MERGEN_ROTA_WBS_DB_*` bloğu). Eşleştirme `Proje tanımı` kolonu ile proje kodu üzerinden yapılır; `WBS element`, `Name`, `Level`, `Status`, `PYP kodu` ve `Proj.type` kolonları kullanılır, `Kontrol kodu` ile planlanan tarih kolonları kullanılmaz.
-
-Yapı uygulama üzerinden değiştirilemez: hem arayüz hem sunucu kurumsal WBS yazma girişimlerini reddeder. Görevlerin bu düğümlere atanması ve düğümler arasında taşınması mümkündür. Bağlantı tanımlanmazsa eşitleme atlanır ve kurumsal projeler yalnızca kök düğümle görünür; kaynak erişilemezse veri yüklemesi kurumsal WBS olmadan sürer. Ayrıntılar: `docs/IS-KIRILIM-YAPISI-VE-CALISMA-ALANLARI.md`.
-
-Eşitleme her istekte baştan çalışmaz. Proje başına içerik parmak izi `MR_CorporateWbsSyncState` tablosunda tutulur; kaynak değişmediğinde `MR_WBS` birleştirmesi hiç yapılmaz. Ayrıca `MERGEN_ROTA_WBS_SYNC_TTL_MS` (varsayılan 5 dakika) süresince kurumsal kaynak yeniden okunmaz ve eşzamanlı istekler tek bir eşitlemeyi paylaşır. Bu iki katman olmadan 38 bin satırlık kurulumda tek bir açılış isteği 30 saniyeyi aşıyordu.
-
-## Yetkilendirme
-
-Öncelik sırası:
-
-1. `SYSTEM_ADMIN`
-2. Proje bazlı `FULL` (kurumsal sorumluluk, açık erişim veya etkin manuel proje sorumluluğu)
-3. Yönetici alt-organizasyon görünürlüğü (`PARTIAL`, salt okunur)
-4. Kendi atandığı görevler (`PARTIAL`, yalnızca o görevin iş alanlarını düzenleyebilir; görevi tanımlayan kişi künyesi görünür)
-5. Varsayılan ret
-
-**Görev atama kapsamı** görünürlükten ayrı bir kavramdır. Müdür, direktör ve takım liderleri (HR02'den türeyen mevcut `isExecutive` soyutlaması; koda gömülü kullanıcı listesi yoktur) yeni görev tanımlarken proje seçicisinde **tüm etkin CN43N kataloğunu** görür; böylece kendi personeline, kendisinde `corporateprojectaccess` bulunmayan bir kurumsal projede de iş atayabilir. Bu genişleme yalnızca seçime ve görev yazmasına açıktır: görev görünürlüğü, proje üst verisi, iş dağılım ağacı ve yönetici işlevleri değişmez ve sunucu her atananın `MR_V_ExecutiveScope` içinde olmasını arar. Sıradan kullanıcının seçicisi eskisi gibi yalnızca kendi `corporateprojectaccess` projeleridir. Ayrıntılar: `docs/YETKILENDIRME-MODELI.md`.
-
-`MR_UserRoles` oluşturma betiği sistem yöneticilerini parametreli tohumlar: kurulumdan önce `@SystemAdminSicils` değişkenine virgülle ayrılmış Sicil listesi yazılır. Gerçek Sicil değerleri kişisel veridir ve depoya işlenmez. HR09 sorumlulukları kurumsal FULL erişim sağlar. Manuel açık erişimler `MR_ProjectAccess` içinde tutulur. Sistem yöneticileri ile HR02'de dinamik olarak yönetici görünen kullanıcılar manuel proje oluşturabilir; Proje, kök WBS, oluşturucu için FULL OWNER erişimi ve denetim kayıtları aynı veritabanı işlemi içinde oluşturulur. Seçilen manuel Proje sorumlusu ayrıca türetilmiş FULL erişim alır; bu erişim proje sorumlusu değişikliğini izler ve bağımsız erişim kayıtlarını silmez.
-
-SYSTEM_ADMIN yalnızca hiç görev kaydı olmayan manuel bir projeyi kaldırabilir. İşlem projeyi ve etkin erişimlerini pasifleştirir, denetim/WBS geçmişini korur; kurumsal/CN43N projeleri bu yolla silinemez.
-
-PARTIAL görünürlük tam proje yönetim yetkisi vermez. Kısmi görev ağı üzerinde yanıltıcı CPM/kritik yol hesaplanmaz; Proje zamanlama sonucu `suppressed-partial` olarak işaretlenir.
-
-## Kimlik doğrulama (Keycloak)
-
-Kimlik doğrulama **Keycloak** ile yapılır ve varsayılan kiptir (`MERGEN_ROTA_AUTH_MODE=keycloak`). Erişim jetonu tarayıcıda **saklanmaz**, sunucuda doğrulanır ve yalnızca doğrulanmış **Sicil** HttpOnly bir oturum çerezine yazılır.
-
-Oturum açma akışı `MERGEN_ROTA_KEYCLOAK_FLOW` ile **açıkça** seçilir; tanınmayan bir değer yapılandırma hatasıdır ve sessizce başka akışa düşülmez:
-
-| Değer | Açıklama |
-| --- | --- |
-| `authorization-code` | **Varsayılan ve tercih edilen.** Authorization Code + PKCE. Kod → jeton takası sunucuda yapılır; jeton tarayıcıya hiç ulaşmaz. Keycloak istemcisi gizli (confidential) ise bu takas geçerli bir istemci kimlik doğrulaması gerektirir. |
-| `implicit-bridge` | **Uyumluluk kipi.** Hâlihazırda implicit akışla çalışan bir Keycloak istemcisi için. Jeton ucu kullanılmaz, istemci gizli değeri gerekmez; jeton yine sunucuda tam olarak doğrulanır. |
-
-- `GET /api/mergen-rota/auth/status` — HttpOnly MERGEN Rota oturumunu kişisel alanları açmadan denetler
-- `GET /api/mergen-rota/auth/login` — seçili akışa göre Keycloak'a yönlendirir
-- `GET /api/mergen-rota/auth/callback` — (yalnızca Authorization Code) kodu sunucuda jetonla takas eder, doğrular, oturum çerezini yazar
-- `GET /auth/implicit-callback` — (yalnızca implicit köprü) URL parçasını okuyup **hemen silen** küçük geri dönüş sayfası
-- `POST /api/mergen-rota/auth/implicit-session` — (yalnızca implicit köprü) imzalı işlem çerezi + `state` + `Bearer` jetonunu doğrulayıp HttpOnly oturuma çevirir
-- `POST /api/mergen-rota/auth/session` — genel uyumluluk ucu: `Authorization: Bearer` jetonunu doğrulayıp HttpOnly oturuma çevirir
-- `POST|GET /api/mergen-rota/auth/logout` — MERGEN Rota oturumunu kapatır ve Keycloak `end_session` adresine yönlendirir
-
-Gerçek Sistem açılışında tarayıcı önce `auth/status` ucunu çağırır. Yanıt `authenticated: false` ise `auth/login?returnTo=<uygulama-kökü>` adresine `location.replace` ile geçilir. Böylece korunan `session` ve `snapshot` uçları oturum oluşmadan çağrılmaz; geri düğmesi de eski oturumsuz sayfaya yönlendirme döngüsü oluşturmaz.
-
-Implicit köprüde erişim jetonu tarayıcıya kısa süreliğine URL parçasında ulaşır; parça `history.replaceState` ile derhâl silinir, jeton `localStorage`/`sessionStorage`/`IndexedDB`/çerez veya sorgu dizesinde **saklanmaz** ve yalnızca tek bir POST isteğiyle sunucuya gönderilir. Sunucu tarafındaki JWT ve Sicil doğrulaması her iki akışta da **aynıdır**.
-
-Güvenilen kimlik yalnızca doğrulanmış `sicil` beyanıdır. Beyan yoksa isteğe bağlı olarak `preferred_username → HR02 kurumsal kullanıcı adı → Sicil` çözümü yapılır; sonuç tekil değilse **UNAUTHORIZED** döner. Keycloak `resource_access` rollerinden MERGEN Rota SYSTEM_ADMIN yetkisi **türetilmez**.
-
-Sicil; istek gövdesi, sorgu dizesi, tarayıcı başlığı, localStorage veya görüntüleme alanlarından kabul edilmez. Kimlik yoksa yönetici, Demo veya geliştirme kimliğine sessizce düşülmez.
-
-Yerel geliştirme kimliği yalnızca `MERGEN_ROTA_AUTH_MODE=development` **ve** `MERGEN_ROTA_DEV_IDENTITY_ENABLED=true` birlikte verildiğinde çalışır; varsayılan olarak kapalıdır. Geliştirme kimliği bir üretim yedeği **değildir**: Keycloak akışı çalışmıyorsa çözüm yapılandırmayı düzeltmektir. Üretim HTTPS kullanmalı ve `MERGEN_ROTA_SESSION_COOKIE_SECURE=true` kalmalıdır.
-
-Her iki akışta da sunucu realm JWKS ucundan imza anahtarlarını çeker; kurumsal kök sertifika gerekiyorsa Node başlatılmadan önce `NODE_EXTRA_CA_CERTS` ayarlanmalıdır.
-
-Ayrıntılar, ortam değişkenleri, IT'nin kaydetmesi gereken adresler ve sorun giderme: [`docs/KEYCLOAK-SSO.md`](docs/KEYCLOAK-SSO.md). Otomatik açılış sınırı: [`docs/OTOMATIK-KURUMSAL-OTURUM-ONYUKLEMESI.md`](docs/OTOMATIK-KURUMSAL-OTURUM-ONYUKLEMESI.md).
-
-## Kullanıcı fotoğrafları
-
-Kurumsal fotoğraflar `<TABAN_URL>/<SICIL>.jpg` biçiminde üretilir. Taban adres `NEXT_PUBLIC_MERGEN_ROTA_USER_PHOTO_BASE_URL` değişkeninden okunur; tarayıcı tarafından istendiği için **sır değildir** ve istemci paketine gömülür. Gerçek adres yalnızca `.env.local` içinde tutulur ve depoya işlenmez.
-
-Değer boşsa, sicil eksik/bozuksa veya görsel yüklenemezse tüm avatarlar baş harflere döner. Üretilen adres hiçbir tabloda saklanmaz; fotoğraf tamamen sunum verisidir ve başarısız bir görsel isteği kimlik doğrulamayı veya veri yüklemeyi engellemez.
-
-## Veritabanı kurulumu
-
-1. Hedef veritabanının yedeğini alın.
-2. Yeni kurulumda `database/MR_Create_Durable_Persistence.sql` dosyasını çalıştırın. Mevcut kurulumda bunun yerine yükseltme betiklerini sırayla çalıştırın; güncel `database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` sonrasında `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`, onun ardından da `database/MR_Upgrade_0012_System_Observability.sql`, `database/MR_Upgrade_0013_Corporate_Wbs_Sync_Freshness.sql`, `database/MR_Upgrade_0014_Task_Creator_Index.sql`, `database/MR_Upgrade_0015_Assignment_Coordination_And_Presence.sql`, `database/MR_Upgrade_0016_Ai_User_Credentials.sql`, `database/MR_Upgrade_0017_Ai_Assistant_Conversations.sql` ve `database/MR_Upgrade_0018_Ai_Message_Evidence.sql` uygulanmalıdır. Mevcut çalışanları göçten önce durdurun. Yükseltme betikleri yeniden çalıştırılabilir ve var olan veriyi korur.
-3. `.env.example` içindeki yalnızca sunucuya ait SQL değişkenlerini yapılandırın (MERGEN Rota veritabanı ve isteğe bağlı `CN43N` kurumsal WBS veritabanı).
-4. Keycloak istemcisini kaydedin ve `.env.local` içinde kimlik doğrulama değişkenlerini doldurun (bkz. `docs/KEYCLOAK-SSO.md`). Geçici geliştirme kimliği yalnızca yerel geliştirmede etkinleştirilir.
-5. Outlook teslimatı, elle/otomatik hatırlatma veya atama e-postası (**Sorumlulara e-posta bildirimi gönder**) kullanılıyorsa SMTP zorunludur; en az geçerli `SMTP_HOST` ve `SMTP_FROM` ile `.env.local` içindeki SMTP bloğunu doldurun (`docs/GOREV-HATIRLATMALARI.md`, `docs/OUTLOOK-TAKVIM.md`). Outlook çalışanı Node sunucusuyla otomatik başlar; OS zamanlayıcısı yalnız otomatik hatırlatma e-postaları için gereklidir.
-6. `npm ci`
-7. `npm run build`
-8. `npm run start -- -H 0.0.0.0 -p 8008`
-9. **Gerçek Sistem** seçerek yetki ve kalıcılığı doğrulayın.
-
-Build aşamasında tüm MERGEN Rota nesnelerini kaldırmak için `database/MR_Rollback_Durable_Persistence.sql` çalıştırılabilir. **Bu işlem tüm MR_* uygulama verisini kalıcı olarak siler.** HR02, A01 ve HR09 tablolarına dokunmaz.
-
-## On-prem / internet erişimi olmayan ortam
-
-Uygulama çalışma zamanında CDN, uzak font, public API, uzak JavaScript veya uzak CSS gerektirmez. İlk `npm ci` işlemi için onaylı npm registry ya da kurum içi proxy gerekir; kurulmuş bağımlılıklar, Next.js sunucusu ve SQL Server erişimi tümüyle kurum içinde çalışır.
-
-Windows UNC örneği:
-
-```cmd
-pushd "\\rehisds\uygulamalar\Primavera\PYB\08 - MERGEN Rota"
+```bash
 npm run build
-npm run start -- -H 0.0.0.0 -p 8008
+npm run lint
+npm test
 ```
 
-## Yapı
+Tekrarlanabilir bağımlılık kurulumu için `npm ci` kullanın. Linux CI'daki
+`npm ci --ignore-scripts`, yerel Windows SQL sürücüsünü derlemeden kontrol
+sağlar; Gerçek Sistem için çalışan ODBC/yerel sürücü kurulumunun yerine geçmez.
 
-- `src/domain` — `Project`, `Task`, `Dependency`, `Person`, `WBS`, `Baseline` türleri, etiket kataloğu, takvim kavramları ve Gerçek Sistem kimlik kuralları
-- `src/scheduling` — tarih, çalışma günü, dependency, tekrar kuralları (RFC 5545) ve saf CPM hesapları
-- `src/data` — AppRepository sözleşmesi, Demo adapter ve Actual API adapter
-- `src/server` — yalnızca sunucuda kimlik, yetkilendirme, SQL yapılandırması/havuzu (MERGEN Rota + kurumsal WBS kaynağı), kalıcı depo, SMTP taşıması (`mail`), hatırlatma servisi/zamanlayıcısı (`reminders`) ve Outlook takvim abonelikleri (`outlook`)
-- `src/state` — yükleme, sıralı değişiklik kuyruğu, görev yamalarının birleştirilmesi ve yetkiye duyarlı zamanlama seçicileri
-- `src/features` — uygulama özellikleri; SQL veya API route import etmez
-- `src/components/shell` — uygulama kabuğu, sabitlenebilir/daraltılabilir kenar çubuğu, görünüm kontrolleri ve kalıcılık durumları
-- `src/lib/xlsx` — bağımlılıksız `.xlsx` ve ZIP yazıcısı (dışa aktarma çıktısı)
-- `database` — deterministic create ve destructive rollback SQL betikleri
+Olağan testler kurumsal SQL, SMTP veya gerçek AI modeli gerektirmez.
+Canlı kalıcılık, Exchange/Outlook ve model nitelendirme kontrolleri ilgili
+teknik belgelerde ayrıca tanımlıdır. Arayüz kontrol listesi:
+[Görsel Duman Testleri](docs/GORSEL-DUMAN-TESTLERI.md).
 
-Ayrıntılar:
+## Üretim / dağıtım
 
-- `docs/KEYCLOAK-SSO.md`
-- `docs/OTOMATIK-KURUMSAL-OTURUM-ONYUKLEMESI.md`
-- `docs/KALICI-VERI-SAKLAMA.md`
-- `docs/VERITABANI-SEMASI.md`
-- `docs/YETKILENDIRME-MODELI.md`
-- `docs/MIMARI.md`
-- `docs/KALICILIK-SINIRI.md`
-- `docs/IS-KIRILIM-YAPISI-VE-CALISMA-ALANLARI.md`
-- `docs/ZAMANLAMA-VERI-MODELI.md`
-- `docs/CPM.md`
-- `docs/ETIKETLER-VE-TEKRARLAYAN-GOREVLER.md`
-- `docs/GOREV-HATIRLATMALARI.md`
-- `docs/OUTLOOK-TAKVIM.md`
-- `docs/TEMEL-KIP-VE-ARAYUZ.md`
-- `docs/ZAMANLAMA.md`
-- `docs/ARAYUZ-BICIMLENDIRME-MIMARISI.md`
-- `docs/GORSEL-DUMAN-TESTLERI.md`
-
-## Etiketler ve tekrarlayan görevler
-
-Proje etiketleri ad, renk ve simge taşıyan kontrollü bir katalogdur; ad
-değişikliği o etiketi kullanan görevlere taşınır. Tekrarlayan görevler RFC 5545
-(iCalendar) `RRULE` altkümesiyle tanımlanır: kural seri şablonunda yaşar,
-üretilen yinelemeler `recurrenceParentId` ile şablona bağlı sıradan görevlerdir.
-Ayrıntılar: `docs/ETIKETLER-VE-TEKRARLAYAN-GOREVLER.md`.
-
-## Görev ilişkileri ve öncelik
-
-Bağımlılık kenarı **tek yerde** saklanır: ardılın `deps` listesinde. Görev
-panelindeki *İlişkiler ve bağımlılıklar* bölümü aynı kenarı iki yönden düzenler —
-*Öncüller* sekmesi görevin kendi listesini, *Ardıllar* sekmesi ise karşı görevin
-listesini yamalar. Döngü oluşturacak seçimler listeye hiç girmez.
-
-Görev önceliği (`Kritik` / `Yüksek` / `Orta` / `Düşük`) görev panelindeki
-**Öncelik** bölümünden tanımlanır ve Görevler, Gantt, Kanban ile Raporlar risk
-matrisini besler. Öncelik bir planlama kısıtı değildir; CPM sonuçlarını
-etkilemez.
-
-**Kilometre taşı** aynı panelin *Güncel plan* kartındaki anahtarla tanımlanır
-(tam proje yetkisi gerekir): görev sıfır süreli tek bir güne indirgenir ve Gantt
-görünümlerinde çubuk yerine eşkenar dörtgenle çizilir. Ayrıntılar:
-`docs/ZAMANLAMA.md`.
-
-## Dışa aktarma
-
-Üst çubuktaki **Dışa aktar** menüsü üç çıktı sunar. Üçü de aynı sayfa
-modelinden üretilir (`src/lib/exportProjectData.js`), böylece Excel ve CSV
-içerikleri birbirinden ayrı düşmez:
-
-| Çıktı | Dosya | İçerik |
-| --- | --- | --- |
-| **Excel çalışma kitabı** | `<ad>_Raporu.xlsx` | Özet, Görevler, İş Dağılım Ağacı ve portföy çıktısında Projeler sayfaları |
-| **CSV paketi** | `<ad>_CSV.zip` | Aynı sayfaların her biri ayrı `.csv` dosyası (UTF-8 BOM) |
-| **Görev listesi** | `<ad>_Gorevler.csv` | Tek dosyalık düz görev tablosu (veri aktarımı için) |
-
-Excel çıktısı **gerçek bir `.xlsx` kabıdır**: başlık satırı dondurulmuş ve
-otomatik süzgeçlidir, tarihler gerçek tarih, ilerleme gerçek yüzde hücresidir,
-sütun genişlikleri içeriğe göre ayarlanır. Önceki sürüm `.xls` uzantılı bir HTML
-tablosu yazdığı için Excel her açılışta "biçim ve uzantı eşleşmiyor" uyarısı
-gösteriyordu. Yazıcı bağımlılıksızdır (`src/lib/xlsx`); çevrimdışı kurulumda ek
-paket gerekmez. Her iki çıktıda da `=`, `+`, `-`, `@` ile başlayan metin formül
-enjeksiyonuna karşı nötrlenir ve dışarı yalnızca ekranda da görülen alanlar
-çıkar — iç kimlikler, sürüm anahtarları ve yetki alanları taşınmaz.
-
-## Sistem Yönetimi ve üretim gözlemlenebilirliği
-
-Kenar çubuğundaki **Sistem Yönetimi** sayfası yalnızca `SYSTEM_ADMIN` rolüne açıktır ve bir yapılandırma dökümü değil bir **işletim kokpitidir**: sistem sağlıklı mı, ne bozuk, ne zaman bozuldu, ne yapmalıyım. Yedi sekme vardır: **Genel Durum**, **Performans**, **Kuyruklar ve İşler**, **Hatalar ve Olaylar**, **Entegrasyonlar**, **Aktif Kullanıcılar** ve **Hatırlatma E-postaları**. Hatırlatma yönetimi bağımsız bir sayfa olmaktan çıkıp bu sayfanın sekmesine taşınmıştır; davranışı değişmemiştir.
-
-Gezinme öğesini gizlemek güvenlik değildir: `/api/mergen-rota/admin/system/*` uçlarının tümü yetkiyi her istekte yeniden denetler ve yetkisiz kullanıcıya `403 FORBIDDEN` döner. Sayfa Temel ve Kapsamlı Kipte aynı biçimde açılır, projeye değil sisteme aittir (üst çubukta proje künyesi ve dışa aktarma gösterilmez) ve rol kaybında kullanıcıyı güvenle Özet'e alır.
-
-Durum modeli dürüsttür: **Sağlıklı · Dikkat · Kritik · Bilinmiyor** ve ayrı bir **bayat** bayrağı. Ölçülemeyen bileşen hiçbir koşulda sağlıklı sayılmaz; SQL yoklanamadığında durum `Bilinmiyor`/`Kritik` olur, `Sağlıklı` olmaz. Genel durum bileşenlerden türetilir, kodlanmaz.
-
-Telemetri **üretim güvenlidir**: yüksek sıklıklı gözlemler bellekte beş dakikalık kovalarda toplanır, yalnızca kapanmış kovaların özeti SQL'e yazılır (`MR_TelemetryOperationSamples`, `MR_TelemetryGaugeSamples`), işletim olayları ve otomatik uyarılar yinelenenler toplanarak saklanır (`MR_OperationalEvents`, `MR_OperationalAlerts`). Saklama sınırlıdır (varsayılan 30 gün) ve temizlik küçük yığınlar hâlinde yapılır. Telemetri hatası çekirdek uygulamayı düşürmez; 0012 göçü uygulanmadığında konsol çalışmaya devam eder ve eksik şemayı açıkça bildirir.
-
-**Aktif Kullanıcılar** sekmesi yalnızca `SYSTEM_ADMIN` rolüne açıktır ve yetkiyi sunucuda her istekte yeniden denetler. Tanım açıktır ve arayüzde de yazar: **aktif = son 3 dakika içinde kimliği doğrulanmış bir nabız görülmüş kullanıcı**. Nabız 90 saniyede bir gönderilir ve aynı kullanıcının birden çok sekmesi varsa yalnızca kilidi tutan **tek sekme** gönderir; hiçbir olağan istek yan etki olarak varlık yazmaz. Tablo Sicil başına **tek** satır tutar; sayfa yoklaması yalnızca sekme etkinken sürer.
-
-Konsol yoklama ile tazelenir (varsayılan 10 sn): üst üste binen istek yoktur, gizli sekmede yoklama durur, dönüşte bayat veri hemen tazelenir ve geçici bir hata son geçerli bilgiyi silmez. Bu döngü normal görev verisi yenilemesinden bağımsızdır. Demo Kipinde üretim uçları hiç çağrılmaz. Yönetim yanıtları parola, jeton, çerez, bağlantı dizesi, SMTP kimlik bilgisi, iCalendar gövdesi ve gereksiz alıcı adresi taşımaz. Ayrıntılar: `docs/SISTEM-YONETIMI.md`.
-
-## Yapay zekâ altyapısı (Aşama 1)
-
-Yapay zekâ özellikleri varsayılan olarak kapalıdır (`MERGEN_ROTA_AI_ENABLED=false`) ve yalnızca sunucu tarafında, OpenAI uyumlu kurum içi bir uca bağlanır; tarayıcı yalnızca MERGEN Rota sunucusuyla konuşur. Aşama 1 bir sohbet ürünü değil, sonraki aşamaların temelidir: **Ayarlar → Yapay zekâ erişimi** kartında her kullanıcı kişisel API anahtarını ekler, doğrular, değiştirir ya da kaldırır ve kısa bir bağlantı denemesi yapar. Kişisel anahtar varsa istekler **yalnızca** onunla yapılır; reddedilse bile kurumsal anahtara geçilmez. Kurumsal varsayılan anahtar yalnızca kişisel anahtarı olmayan kullanıcılar için kullanılır.
-
-Kişisel anahtarlar Sicil'e bağlı olarak AES-256-GCM ile şifrelenir (`MR_AiUserCredentials`, göç `0016`) ve kaydedildikten sonra bir daha gösterilmez. İstekler sınırlı eşzamanlılık, sıra, süre sınırı ve iptal altında yürür; yavaş ya da yanıt vermeyen bir yapay zekâ ucu olağan görev akışını, anlık görüntüyü ve kaydı bekletmez. Sistem Yönetimi'nde **Yapay zekâ hizmeti** sağlık bileşeni ve **Yapay zekâ sağlayıcısı** entegrasyon kartı bulunur. Güncel kurum içi model kataloğunun sürümlenen referansı `config/ai-model-registry.onprem.json` dosyasındadır; üretimde `MERGEN_ROTA_AI_MODEL_REGISTRY_PATH` bunun sunucuya dağıtılmış mutlak yolunu gösterir. Ayrıntılar, ortam değişkenleri, model profilleri, dağıtım sırası ve elle kabul listesi: `docs/YAPAY-ZEKA-PLATFORMU.md`.
-
-**Aşama 1 gerçek ortam kabulü (28.09.2026):** Windows/SQL Server/Keycloak ve
-gerçek kurum içi model zincirinde kişisel/kurumsal anahtar akışları, Sicil
-yalıtımı, şifreli saklama, reddedilen kişisel anahtarda kurumsal anahtara
-düşmeme, model kaydı, gizli değer sızıntısı ve 20 saniyelik sağlayıcı
-gecikmesinde Rota çalışma yolu yalıtımı doğrulandı. TEST sırasında durum
-değiştiren AI uçlarında görülen aynı-kaynak 403'ünün nedeni ters vekilin özgün
-ana makine/şema bilgisini iletmemesiydi; `Host`, `X-Forwarded-Host` ve
-`X-Forwarded-Proto` iletimi düzeltilince uçtan uca sınama geçti. Ayrıntılar:
-`docs/YAPAY-ZEKA-PLATFORMU.md` §15 ve `docs/NGINX-ROTA-ON-EKI.md`.
-
-### Rota AI (Aşama 2)
-
-Üst çubuktaki **Bilgin** düğmesi (ya da Ctrl K → *Bilgin’e sor*) uygulamanın her yerinden açılan yardımcı paneli getirir; yardımcının arayüzdeki adı Bilgin'dir, yapılandırma ve kod adları (`MERGEN_ROTA_AI_*`, Rota AI) değişmez. `MERGEN_ROTA_AI_ENABLED` açık değilse düğme, panel ve komut paleti girdisi hiç gösterilmez (değer her sayfa isteğinde sunucu ortamından okunur; `next start` ile çalışan sunucuda `.env.local` değişikliği yeniden başlatmayla geçerli olur). Yanıtlar kurum içi modelden sunucu üzerinden tarayıcıya **akarak** gelir; **Durdur**, yeniden deneme, *Standart* ve *Derin düşünme* kipleri, kopyalama ve güvenli biçimli (Markdown) yanıt desteklenir. Konuşmalar Sicil'e aittir ve kalıcıdır (`MR_AiConversations`, `MR_AiConversationMessages`, göç `0017`); başka bir kullanıcı ne listeleyebilir ne açabilir. Rota AI bu aşamada Rota verisine erişmez ve işlem yapmaz; Demo Kipinde istek göndermez. Her istek Aşama 1'in aynı ağ geçidi, anahtar, kapasite ve süre sınırı kurallarıyla yürür. Ters vekilde akışın ara belleğe alınmaması ve özgün ana makine/şemanın iletilmesi gerekir (`docs/NGINX-ROTA-ON-EKI.md`). Mimari, akış protokolü, kalıcılık, iptal ve yeniden deneme kuralları ile elle kabul listesi: `docs/YAPAY-ZEKA-PLATFORMU.md` §18.
-
-**Aşama 2 gerçek TEST ortamı kabulü (29.09.2026):** PR #92 birleştirildikten sonra
-Rota AI, gerçek TEST ortamında kullanıcı kabul sınamalarından geçti. Gerçek
-`/bilge` Nginx yolu üzerinden akışlı yanıt, *Standart* / *Derin düşünme*,
-**Durdur** / **Yeniden dene**, konuşma kalıcılığı, tarayıcı yenileme, konuşmalar
-arası geçiş ve silme, taslak koruma, iki sekmede bayat konuşma koruması, iki
-Sicil arasında tam yalıtım, kişisel/kurumsal anahtar davranışı, yavaş sağlayıcı
-sırasında olağan Rota işlemlerinin yalıtımı, Markdown/kopyalama/kaydırma ve
-kipli pencere/odak davranışları doğrulandı. Ters vekilin akışı ara belleğe
-almadığı, uzun üretimde bağlantının sürdüğü ve gizli değer/konuşma içeriğinin
-telemetriye sızmadığı da kabul kapsamında doğrulandı. Kullanıcı kabulünde
-yanıtların hızlı, arayüzün temiz ve kararlı çalıştığı gözlendi. Aşama 2 bu
-kabul ile dondurulmuş temel kabul edilir; Aşama 3 çalışmaları bu tabanın üzerine
-eklemeli ilerlemelidir.
-
-### Rota AI: kanıta dayalı Rota verisi (Aşama 3)
-
-`MERGEN_ROTA_AI_TOOLS_ENABLED=true` (varsayılan `false`) iken Rota AI görevler,
-projeler, iş dağılım ağacı, iş yükü, hareketler, talepler, bildirimler, baz plan,
-bağımlılıklar, tekrar serileri, takvim, Outlook durumu ve plan veri kalitesi
-hakkındaki soruları sunucunun **19 salt okunur alan aracıyla**, kullanıcının
-kendi yetkisi içinde yanıtlar. Genel bir SQL aracı yoktur; model SQL üretemez,
-kimlik ya da yetki bilgisi veremez. Model veri okumadan önce sorunun türlü
-isteğini (işlem, ölçüler, varlıklar, koşullar) bildirir; sunucu Türkçe ya da
-İngilizce cümleyi anahtar sözcükle yorumlamaz, yanıtı bu isteğe ve kanıta
-belirlenimci olarak bağlar (doğal dil anlamsal çıkarımı Aşama 4'ün işidir).
-Model yalnızca kanıttaki olguları seçer;
-değerleri sunucu kendi yetkili verisinden okur, doğrular ve paragraf, liste ya
-da tablo olarak çizer; Rota verisine dayanan her ifade `【R1】` biçiminde kanıta
-atıf yapar. Standart kipte kurtarılabilir bir model hatası aynı kanıtla bir kez
-*Derin düşünme*ye devredilir; doğrulanamayan yanıt yerine sabit güvenli ileti
-gösterilir. Kayıtlı açıklama ve ileti metinleri yalnızca kullanıcı o iletide
-**Notlar ve iletiler** anahtarını açtıysa okunur. Yanıtın altında
-"N Rota kaynağı · Veri zamanı" paneli bulunur; atıf yapılan kanıtlar yanıtla
-birlikte kaydedilir (`MR_AiMessageEvidence`, göç `0018`). Kısmi yetkide sayılar
-yalnızca görülebilen kayıtları kapsar ve yanıt bunu belirtir. Kaynak seçimi **Rota verisi** (varsayılan) ve **Genel sohbet** olarak açıktır;
-modelin genel niyet önerisi kanıt denetimini kapatamaz. Veri hizmeti hazır
-değilse sabit kullanılamıyor yanıtı gösterilir; Genel sohbet kullanıcı seçimiyle
-veri okumayan akışı açar. Kalıcı yanıt/kanıt açma ve tekrar sırasında güncel
-yetkiyle doğrulanır; kaldırılmış yetkinin metni ve kaynakları gösterilmez.
-Özellik kapalıyken Rota AI Aşama 2 gibi genel sohbetle çalışır. Araç
-kataloğu, yetki, kanıt sözleşmesi, sınırlar, belirlenimci tanımlar, dağıtım
-sırası ve elle kabul listesi: `docs/YAPAY-ZEKA-ALAN-ARACLARI.md`.
-
-Araç yolu veri öncesi açık tur yönlendirmesi, güvenilir varlık/süzgeç sınırı ve
-sunucuya ait kanonik iddia sözleşmesi kullanır. Kanıt yetki epoch’una bağlıdır;
-son çizimden önce erişim yeniden okunur. Aday seçimi, bulunamadı ve hizmet
-kullanılamıyor meşru ayrı sonuçlardır. Araç profilleri varsayılan 4096 / 8192
-çıktı tokenı kullanır; dağıtılan dış model kaydı da güncellenmelidir.
-
-### Rota AI: anlamsal katman (Aşama 4)
-
-Aşama 4, Türkçe doğal dilin gömme ve yeniden sıralama modelleriyle anlamsal
-olarak anlaşılmasını Aşama 3'ün yetki, SQL ve kanıt sınırını gevşetmeden
-ekler ve dondurulmuş dört adımdan oluşur: 4A anlamsal temel ve değerlendirme,
-4B gerçek anlamsal erişim ve yeniden sıralama, 4C akıllı planlayıcı ve zayıf
-model doğrulaması, 4D insan kalitesinde yanıt ve kurum içi yakınsama. 4A
-model çıktısını güvenilmez veri olarak doğrulayan saf sözleşmeleri,
-sürüm/parmak izi kurallarını, 117 vakalık sentetik Türkçe kıyas kümesini,
-ölçüleri, belirlenimci sınama ikizlerini ve elle çalıştırılan gerçek model
-nitelendirme mekanizmasını kurar. 4B, model kaydındaki `embedding` ve `rerank`
-profilleriyle ağ geçidi üzerinden gerçek gömme ile sunucuya ait araç
-kataloğunda sınırlı aday keşfi ve yeniden sıralama yapar (süreç içi dizin,
-vektör veritabanı yok). 4C bu adayları doğrulayıp planlayıcıya danışman not
-olarak verir; planlayıcı veri okumadan türlü karar (yanıt, açıklama,
-çekimserlik) verir. 4C kabulü bekliyor: düzeltilmiş kapıda gerçek zayıf modelle kanonik 117/117 ve zorunlu ek 19/19,
-üretim eşdeğeri anlamsal danışmanlık ve düşünmesiz model kökeni birlikte gereklidir.
-Tarihsel Haiku 4.5 88/117 ölçümü düzeltilmiş kapıdan önceye aittir.
-Katalog dizini kurumsal anahtarla (`MERGEN_ROTA_AI_DEFAULT_API_KEY`) kurulur.
-4B gömme/yeniden sıralama nitelendirmesi uygulama dizininde yapılır (`.env.local` okunur):
+Veritabanını yedekleyin; yeni kurulum veya mevcut şema için uygun yükseltme
+sırasını [Kalıcı Veri Saklama](docs/KALICI-VERI-SAKLAMA.md) belgesinden izleyin.
+Üretim HTTPS ve yönetilen, uzun ömürlü bir Node.js hizmeti kullanır:
 
 ```bash
-node scripts/semantic-evaluation.mjs live --json
+npm ci
+npm run build
+npm run start:prod
 ```
 
-4C planlayıcı nitelendirmesi ayrı komuttur; kayıtlı düşünmesiz planlayıcıyı ve
-üretim anlamsal danışmanlığını bütün 136 vakada çalıştırır:
-
-```bash
-node scripts/planner-evaluation.mjs live --passes 3 --out planner-run.json --json
-```
-
-Her geçişte kanonik **117/117** ve zorunlu ek **19/19**, doğrulanmış amaçlanan
-model kimliği ve düşünmesiz çalışma birlikte gereklidir. Kısmi vaka seçimi,
-`--no-score` ya da yalnızca 4B komutunun başarısı 4C kabulü sağlamaz.
-Regex ya da anahtar sözcükle doğal dil
-yorumu yasaktır; anlamsal benzerlik yetki değildir. Yol haritası, değişmezler,
-ölçüler ve kurum içi kabul: `docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md`.
-
-## Kurum dışı görev atama ve Atama Koordinasyonu
-
-Bir kişiyi **bulabilmek**, ona **doğrudan atayabilmek** ve onun için **resmî bir
-koordinasyon başlatmak** birbirinden ayrı üç yetkidir. Var olan atama kapsamı
-(`MR_V_ExecutiveScope`, `corporateprojectaccess`, `SYSTEM_ADMIN`) hiçbir yerde
-gevşetilmez; yeni olan yalnızca kapsam dışı kaldığında ne olacağıdır.
-
-Görev panelindeki **Diğer birimlerden personel göster** anahtarı varsayılan
-olarak **kapalıdır**. Açıldığında sorgu anlık görüntüden değil sunucudaki hafif
-dizin aramasından gelir: en az iki karakter, gecikmeli (debounce) istek, sınırlı
-sonuç kümesi, adın yanında kurumsal yol. Üç binden fazla kişilik kurum rehberi
-anlık görüntüye **hiçbir koşulda** yüklenmez. Uç kimlik doğrular, hız sınırı uygular
-ve yalnızca ad/Sicil/kurumsal yol döner; yetki her zaman **SicilNo** ile
-kurulur, ad-soyad ile değil — aynı adlı iki çalışan ayrı kimliklerdir.
-
-Kaydetme sırasında sunucu kararı yeniden verir:
-
-| Atayan | Hedef | Sonuç |
-| --- | --- | --- |
-| Herhangi bir kullanıcı | kendisi | doğrudan atama (değişmedi) |
-| Sıradan kullanıcı | başka biri | **talep** (`REQUEST`) — sorumlu yazılmaz |
-| Yönetici | kendi kapsamındaki personel | doğrudan atama (değişmedi) |
-| Yönetici | kapsam dışı personel | **talep** (`REQUEST`) — sorumlu yazılmaz |
-| `SYSTEM_ADMIN` / proje `FULL` | kendi kurumsal biriminden personel | doğrudan atama (değişmedi) |
-| `SYSTEM_ADMIN` / proje `FULL` | kurum dışı personel | doğrudan atama **+ kalıcı koordinasyon kaydı** (`NOTICE`) ve karşı yönetim zincirine bildirim |
-
-Bekleyen bir talep **asla** `MR_TaskAssignees` satırı yazmaz: iş yükü, Özet,
-Kanban, hatırlatma ve Outlook yalnızca gerçek sorumluyu görür. Talep geçmişi de
-görev görünürlüğü vermez.
-
-**Talepler** sayfasına yeni bir kenar çubuğu sayfası eklenmeden birinci sınıf bir
-**Atama Koordinasyonu** sekmesi eklenir: arama, durum, proje, talep eden,
-sorumlu, kurumsal yol ve tarih aralığı süzgeçleriyle sunucu tarafında
-sayfalanır. Karşı yönetim zinciri (birim ve müdürlük yöneticisi) kaydı kendi
-gelen kutusunda görür ve dört eylemden birini seçer: **Onayla**, **Değişiklik
-İste**, **Reddet**, **Atamanın Kaldırılmasını İste**. Karar görev düzenleme
-yetkisi vermez; yalnızca o Sicilin atanması/kaldırılması uygulanır ve görünmeyen
-diğer sorumlular sessizce silinmez. Onay anında yetki canlı veriden yeniden
-türetilir, sorumlu kümesi kilitlenmiş görevle karşılaştırılır ve plan bu arada
-değiştiyse kayıt `STALE` olur. Sonuç talep edene zil bildirimiyle döner.
-
-Ayrıntılar: [Talepler ve bildirimler](docs/TALEPLER-VE-BILDIRIMLER.md),
-[yetki modeli](docs/YETKILENDIRME-MODELI.md).
-
-## Atama bildirimleri ve isteğe bağlı e-posta
-
-Bir göreve sorumlu eklendiğinde/çıkarıldığında var olan **zil** bildirim
-merkezine kalıcı bir kayıt yazılır — ikinci bir zil, ikinci bir bildirim sistemi
-yoktur. Bildirim hangi görev, hangi proje, kimin yaptığı, hedef tarih ve ne
-zaman bilgisini taşır; tıklanınca kullanıcının erişimi varsa görev açılır.
-Kullanıcı kendi yaptığı değişiklik için bildirim almaz, sorumlu kümesi gerçekten
-değişmediğinde (yalnızca açıklama/etiket düzenlemesi gibi) bildirim üretilmez ve
-toplu/tekrarlı kaydetme alıcı başına tek satır yazar. Kayıt `EventKey` ile
-tekilleştirilir, yeniden çalıştırma yinelenen bildirim doğurmaz ve sunucu
-yeniden başladığında bildirimler kaybolmaz.
-
-Her iki görev panelinde (Temel ve Kapsamlı) **Sorumlulara e-posta bildirimi
-gönder** kutusu vardır. Varsayılan **kapalıdır**, saklanan bir tercih değil
-**tek bir işlem için** geçerli bir seçimdir ve işaretlenmediğinde hiçbir posta
-üretilmez. İşaretlendiğinde kayıt işlemi **aynı veritabanı işlemi** içinde
-`MR_TaskMailOutbox` satırını yazar; SMTP'yi ayrı bir çalışan tüketir. Böylece
-`api.commit` hiçbir koşulda posta sunucusunu beklemez ve geçici bir SMTP arızası
-görev kaydetmeyi düşürmez. Tam olarak bir kez teslimat garanti edilmez: SMTP
-kabulünden sonra `SENT` yazılamadan çalışan durursa ya da durum yazması
-başarısız olursa aynı posta kira dolunca yeniden gönderilebilir; ancak her
-kiralama bir deneme sayılır ve yeniden sahiplenme `TASK_MAIL_MAX_ATTEMPTS`
-ile sınırlıdır. Alıcı adresi var olan `Sicil → MR_V_PeopleDirectory.Username → DC01_userr.EmailAddress`
-zinciriyle sunucuda çözülür; tarayıcı alıcı belirleyemez. Çalışanın yoklama
-aralığı `MERGEN_ROTA_TASK_MAIL_POLL_MS` (varsayılan 30000 ms) ile ayarlanır.
-
-Rota bu üç akışın (koordinasyon, zil, e-posta) **tek doğruluk kaynağıdır**;
-e-posta bir taşıma katmanıdır, iş akışı durumu değildir. Bir postanın
-gönderilememesi kararı, bildirimi veya atamayı geçersiz kılmaz.
-
-## Görev hatırlatma postaları
-
-Her görev için sorumlularına hatırlatma e-postası gönderilebilir. İki akış vardır ve ikisi de aynı alıcı çözümleme, şablon işleme ve SMTP servisini kullanır:
-
-- **Elle gönderim** — görev satırındaki ve görev panelindeki zarf düğmesi (Silme düğmesinin yanında, her iki kipte). Otomatik hatırlatmalar kapalıyken de çalışır, görevi değiştirmez ve yalnızca SMTP sunucusu iletiyi kabul ettiğinde başarı bildirir.
-- **Otomatik gönderim** — yöneticinin belirlediği pencere (`kalan süre = termin - şimdi`, örn. 7 gün) ve sıklıkla (örn. 2 günde bir) sunucu tarafındaki zamanlayıcı üzerinden. Görev tamamlandığında, iptal edildiğinde, silindiğinde, otomatik gönderim kapatıldığında veya termin gününe ulaşıldığında durur; sınırsız gecikme postası gönderilmez.
-
-Alıcılar sunucuda `MR_TaskAssignees.Sicil → MR_V_PeopleDirectory.Username → DC01_userr.Name → DC01_userr.EmailAddress` zinciriyle çözülür; tarayıcı alıcı belirleyemez. Konu/gövde şablonu ile otomatik gönderim ilkesi **Sistem Yönetimi → Hatırlatma E-postaları** sekmesinden düzenlenir ve veritabanında saklanır. SMTP bağlantı bilgileri yalnızca sunucu tarafındaki `.env.local` içinde tutulur.
-
-Elle gönderim, aynı kullanıcı–görev çifti için **beş dakikada bir** ile
-sınırlıdır (`429` + `retry-after`); şifrelenmemiş bir SMTP kanalında kimlik
-bilgisi gönderilmez; zamanlayıcı ucu tur hiç başlayamadığında `503` döner. Süreç
-gönderim sırasında sonlanırsa `PENDING` kalan aralık 30 dakika sonra yeniden
-sahiplenilir, böylece o hatırlatma kalıcı olarak kaybolmaz. Ayrıntılar:
-`docs/GOREV-HATIRLATMALARI.md`.
-
-## Outlook takvim tümleştirmesi
-
-Rota gün düzeyinde görev yönetir; saat/dakika toplanmaz. Outlook, Takvim ile aynı `taskCalendarDate()` kuralından tek günlük all-day FREE/TRANSPARENT termin işareti üretir; başlangıç–bitiş dönemi aktarılmaz. **Rota → Outlook tek yönlüdür**; Outlook’ta elle değiştirilen alanlar okunmaz ve sonraki Rota güncellemesi bunları değiştirebilir. Etkin bağlantı/SMTP kabulü, kullanıcının kabul ettiğini veya öğenin takvimde durduğunu doğrulamaz. Yeniden gönderim kullanılabilir.
-
-Bugün/gelecek tarihli abone görev tamamlanınca CANCEL gönderilir, abonelik tercihi korunur; geçmiş kayıt tamamlanma nedeniyle değiştirilmez. Yeniden açılma aynı UID ve daha yüksek SEQUENCE ile REQUEST üretir. Açık kaldırma, silme ve erişim kaybı kapanmış aboneliği kendiliğinden açmaz. Tekrar görevleri bağımsız TaskId/UID öğeleridir; Outlook tekrar ana kaydı veya Tasks/To Do yoktur.
-
-SMTP yalnızca hem e-posta hatırlatma işlevleri hem Outlook teslimatı kullanılmıyorsa isteğe bağlıdır. SMTP olmadan davetler kuyrukta teslim edilmemiş kalır. Varsayılan Outlook özelliği açıktır; üretimde SMTP yapılandırılmalıdır.
-
-Tekil/toplu ekleme, yeniden gönderme ve kaldırma kalıcı kuyruğa yazılır; gönderimi Next.js Node sunucusuyla başlayan Outlook çalışanı yapar. İlk tur açılışta, sonraki turlar önceki tamamlandıktan varsayılan 5 saniye sonra çalışır (`MERGEN_ROTA_OUTLOOK_POLL_INTERVAL_MS`). Otomatik hatırlatma kapalı olsa da Outlook teslimatı ve yeniden denemeleri sürer; yönetici düğmesi veya Outlook için OS zamanlayıcısı gerekmez. Arayüz bekleyen, başarısız ve teslim edilmiş sonuçları ayırır. Sorumlu/proje lideri değişiklikleri, kurumsal proje eşitlemesi ve kabul edilen tarih talepleri aynı işlemde kuyruğa yansır. PR #72 öncesindeki eski 0010 betiği uygulanmışsa dağıtımdan önce güncel betiği yeniden çalıştırın; abonelikler korunarak iptal/yeniden gönderim niyeti, olası SMTP teslimatı ve görünürlük doğrulama alanları eklenir. Güncel PR #72/0010 bulunan mevcut kurulumlarda da `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql` uygulanmalıdır. Bekleyen işi olmayan aboneliklerin dış yetki kaynakları da periyodik olarak doğrulanır. Teslimat kirası bir dakikadır ve yenilenir; kuyruk bütçesi varsayılan 45 saniyedir. SQL bağlantısı edinmeye 15 saniye, her sonuç/hata yazımına bağımsız 5 saniye ayrılır; otomatik tur tek sonuçlandırmayla 65, zaman aşımından sonra hata yazımı da gerekirse 70 saniyeye kadar çıkabilir. Deneme eşiğine ulaşan işler kaybolmaz ve HTTP 503 ile görünür kalır; otomatik sahiplenme durur ve açık ekleme/yeniden gönderme/kaldırma eylemi deneme durumunu sıfırlayana kadar yeniden denenmez.
-
-Kullanıcı, görebildiği bir görevi **kendi** Outlook takvimine ekleyebilir. Görev
-panelinin alt çubuğundaki **Outlook'a Ekle** eylemi hem düzenlenebilir hem salt
-okunur panelde bulunur ve görev düzenleme yetkisi gerektirmez; davet teslim edildikten sonra
-**✓ Outlook bağlantısı etkin** durumuna geçip sıkışık bir menü açar (daveti yeniden
-gönder · Outlook'tan kaldır). Görevler tablosundaki seçim kutularıyla birden çok
-görev tek işlemde eklenebilir; **her görev kendi bağımsız randevusunu** alır.
-
-Tümleştirme **kurum içi SMTP + iCalendar** ile çalışır: Microsoft Graph, Entra ID
-ve EWS kullanılmaz, internet erişimi gerekmez, yeni paket bağımlılığı eklenmez.
-Davet, oturum sahibinin kurumsal e-posta adresine gider; adres sunucuda
-`Sicil → MR_V_PeopleDirectory.Username → DC01_userr.EmailAddress` zinciriyle
-çözülür ve tarayıcı alıcı belirleyemez.
-
-Termin değiştiğinde MERGEN Rota **aynı `UID` ve daha yüksek `SEQUENCE`** ile bir
-güncelleme gönderir; Outlook ikinci bir randevu açmaz. Etiket, yorum, ilerleme
-gibi randevuya yazılmayan alanlar hiç ileti üretmez. Kaldırma, görev silme ve
-görünürlük kaybı `METHOD:CANCEL` üretir. Gönderim **dayanıklı bir kuyrukla**
-yapılır: görev kaydı hiçbir koşulda SMTP'ye bağlı değildir, bekleyen teslimatlar
-otomatik Outlook çalışanında sınırlı yığınlar hâlinde yeniden denenir. Yönetici “Turu şimdi çalıştır” eylemi tanı içindir; hatırlatma ve Outlook sayaçları, HTTP 503 olsa da güvenli hata nedenleriyle ayrı gösterilir. Son otomatik tur yerel sürece, kuyruk sağlık sayıları ortak veritabanına aittir. Şema göçü
-`database/MR_Upgrade_0010_Outlook_Calendar_Subscriptions.sql` ve ardından `database/MR_Upgrade_0011_Outlook_Completion_Lifecycle.sql`; ayrıntılar:
-`docs/OUTLOOK-TAKVIM.md`.
-
-## Kanban süzme ve sıralama
-
-Kanban araç çubuğunda Direktörlük/Müdürlük/Birim seçicileriyle **aynı satırda**
-bir **Sorumlu** süzgeci bulunur. Seçenekler o anda süzülmüş görev kümesinden
-türetilir ve **Sicil** ile eşleşir, ad ile değil; çok sorumlulu görevde en az bir
-sorumlunun seçilmiş olması yeterlidir. Süzgeç arama ve kurumsal seçimle birlikte
-çalışır, **Filtreleri temizle** ile sıfırlanır ve ek bir sunucu sorgusu
-başlatmaz. Dar ekranda denetimler aynı satırda sıkışarak sarmalanır.
-
-Her sütun başlığında, sayacın yanında küçük bir **hedef tarihe göre sırala**
-düğmesi vardır. Varsayılan artan (en yakın hedef üstte), tıklama yönü çevirir ve
-**yön sütun başınadır**: bir panoyu azalan yaparken diğerleri değişmez. Hedefi
-olmayan görev her iki yönde de en altta kalır, eşitlikte sıra kararlıdır. İşlem
-tümüyle istemci tarafındadır; yeni istek üretmez.
-
-## Özet · Tüm Görevleri Gör
-
-**Tüm görevleri gör** penceresi kanonik hedef bitiş alanına göre **eskiden
-yeniye** açılır (Kapsamlı Kipte **Hedef**, Temel Kipte **Termin** adıyla aynı
-alan). Tarihi olmayan görev her iki yönde de en altta kalır, sıralama
-deterministiktir ve kullanıcı istediği sütuna geçebilir. Pencere ayrıca var olan
-kanonik öncelik modelini kullanan bir **Öncelik** sütunu gösterir; ikinci bir
-öncelik kataloğu tanımlanmaz. Süzme, sıralama ve sayfalama var olan pencere
-altyapısını kullanır.
-
-## Sekme simgesi
-
-Sekme simgesi uygulama pusula logosunun sadeleştirilmiş hâlidir: aynı gövde
-çemberi, aynı ibre açısı ve aynı merkez. 16 ve 32 pikselde okunaklı kalması için
-derece çizgisi, gölge ve eğim yoktur; kendi zemini olduğundan açık ve koyu sekme
-çubuğunda aynı karşıtlıkta görünür. SVG veri URI'si olarak gömülür, yanında
-`alternate icon` ve `apple-touch-icon` bildirimleri vardır: ek ağ isteği, ayrı
-dosya ve derleme adımı gerekmez.
-
-## Görünüm tercihleri
-
-Ayarlar sayfası tema, yoğunluk, vurgu rengi ve yazı boyutunun yanında şunları da
-taşır:
-
-- **Açılış sayfası** — Kapsamlı Kip açıldığında gösterilecek sayfa. Seçim
-  **uygulanır**: oturum açıldığında ve tarayıcı yenilendiğinde uygulama bu
-  sayfayla açılır. (Daha önce tercih saklanıyor ama her açılışta yok sayılıyor,
-  uygulama her zaman Özet ile başlıyordu.) Saklanan değer gezinmede yoksa ya da
-  role bağlı yönetici sayfasıysa Özet'e düşülür; Temel Kip kendi açılış
-  sayfasını kullanır.
-- **Tarih biçimi** — `gg/aa/yyyy` veya `18 Ağu 2026`. Daha önce koda gömülüydü.
-  Tercih gösterilen tarihlerin yanı sıra **düzenlenebilir** tarih kutularını da
-  kapsar; okuma her iki biçimi de kabul eder.
-- **Yüksek karşıtlık** — sınırları ve ikincil metni koyulaştırır; parlak ortamda
-  ve açık temada okunabilirliği artırır.
-
-Tema, **Temel Kip / Kapsamlı Kip** seçimi ve oturum kapatma eylemleri kenar
-çubuğunun alt araç alanında tek sırada bulunur. Kip seçicisi iki sade seçenek
-sunar. Kenar çubuğu varsayılan olarak açık ve sabitlenmiş başlar. Raptiye
-kaldırıldığında üzerine gelince açılır ve fare görünen çubuğun dışına çıkar
-çıkmaz daralır; sayfa seçiminin bıraktığı odak çubuğu açık tutmaz. Klavye ile
-gezinirken odak içeride kaldıkça açık kalır. Gereksiz çalışma alanı başlıkları
-ve daraltma oku kaldırılmıştır. Tercih tarayıcıda korunur; alt sürüm satırı
-yalnızca `MERGEN Rota · Sürüm 1.0` bilgisini taşır.
-
-## Görev oluşturma ve oluşturan künyesi
-
-Kapsamlı Kipteki **Yeni Görev** eylemi veritabanına hemen kayıt yazmaz; yerel
-bir görev taslağı açar. Alan değişiklikleri taslakta kalır, kapatma taslağı
-atar ve ilk kalıcı `task/create` işlemi yalnızca paneldeki **Kaydet** düğmesiyle
-başlar. Mevcut görev panellerindeki birincil düğmenin adı da aynı eylem diliyle
-**Kaydet**tir. Mevcut görevdeki tüm alan ve ardıl bağlantısı düzenlemeleri de yalnızca bu düğmeyle tek istekte yazılır; alan değişimi, odak kaybı ve kapatma kayıt başlatmaz. Başarısız kayıtta taslak açık kalır.
-
-Görev başlığının altında kısa bir **Görevi tanımlayan** künyesi; oluşturanın
-fotoğrafını, tam adını ve oluşturma tarihini saat ve dakika ile gösterir. Künye
-rozet yerine sade bir bilgi satırıdır; Kaydet düğmesi kayıt simgesi taşır. Doğrudan görev sorumlusu,
-dar `PARTIAL` görünümde de `MR_Tasks.CreatedBySicil` ve yetkili ad projeksiyonunu
-alır. Bu kimlik aynı zamanda **Yeni tarih öner** talebinin karar sahibidir;
-istemci kişi dizininin dar olması oluşturanı `—` değerine düşürmez.
-
-Yazı boyutu ölçeği gövdeye `zoom` uygular. Tam ekran kaplayan her yükseklik bu
-ölçeğe bölünmüş `--app-viewport-h` değişkenini kullanır; aksi hâlde yazı
-büyütüldüğünde panel alt çubuğu ekranın dışına itiliyordu. Ölçek, tema ve
-erişilebilirlik sınıflarıyla birlikte **ilk boyamadan önce** uygulanır
-(`src/lib/tweaksBootstrap.js`): `AppShell` monte olmadan çizilen veri kipi ve
-oturum ekranları da doğru ölçekte açılır, yerleşim zıplaması olmaz. Açılır listeler,
-ipuçları ve süzgeç kutuları da ölçeği hesaba katıp görünüm alanına sığdırılır.
-Ayrıntılar: `docs/ARAYUZ-BICIMLENDIRME-MIMARISI.md`.
-
-## Gantt sorumlu görünümü
-
-Görev ve kilometre taşı ipuçlarında her sorumlunun fotoğrafı adıyla birlikte
-gösterilir; bu davranış portföy ve proje/WBS görünümünde ortaktır. **Sorumluya
-göre** gruplamada ilk sorumlunun avatarı özet satırında da görünür. Aynı adlı
-kişiler Sicil kimliğiyle ayrı gruplarda tutulur. Fotoğraf adresi tanımlı
-değilse veya yüklenemezse baş harfler gösterilir. Görev kapsamlı kimlikler
-kullanılır; kişi dizini ve yetki kapsamı genişletilmez.
-
-## Zamanlama ve baz plan ilkeleri
-
-Kanonik görev; güncel planı (`plannedStart`, `plannedFinish`, `plannedDurationDays`), yönetim hedefini (`targetFinish`) ve gerçekleşen tarihleri (`actualStart`, `actualFinish`) ayrı tutar. `remainingDurationDays` gelecekteki ilerleme duyarlı planlama için null olabilen uyumluluk alanı olarak korunur; mevcut arayüz ve planlama motoru bu alanı kullanmaz. Proje `dataDate` taşır. Baz plan verisi ayrı değişmez `Baseline` ve `TaskBaselineSnapshot` kayıtlarıdır; olağan Görev/WBS değişiklikleri eski baz planları değiştirmez.
-
-CPM erken/geç tarihler, bolluk, kritik bayraklar, WBS özetleri ve Özet toplamları SQL'e yazılmaz. Bunlar yalnızca tam proje ağı için türetilir.
-
-
-### Çalışma günü hesapları SONLANIR
-
-Bütün çalışma günü aramaları sınırlıdır. İki sıradan girdi eskiden tarayıcı
-sekmesini tümüyle donduruyordu — kullanıcıların "görev oluşturup **Kaydet**'e
-basınca uygulama donuyor" olarak bildirdiği hata:
-
-- takvimin `workingDays` listesi **boşsa** (sunucu, `MR_CalendarWorkingDays`
-  tablosunda satırı olmayan takvimi böyle yansıtır) `isWorkingDay()` her gün için
-  `false` dönüyor, `moveToWorkingDay()`/`addWorkingDays()` hiç bitmiyordu.
-  `createNewTask()` bu işlevi çağırdığı için o projede görev açmak sekmeyi
-  kilitliyordu. Boş liste artık **varsayılan haftaya** düşer;
-- çözülemeyen bir tarih Geçersiz Tarih üretiyor, `diffWorkingDays()` içindeki
-  eşitlik hiç sağlanmıyordu. Geçersiz tarih artık `0` (ya da girdinin kendisi)
-  döner ve her tarama on yıllık üst sınırda durur.
-
-Kritik yol sayımı da sınırlıdır (`MAX_CRITICAL_PATHS`): art arda elmas desenleri
-yol sayısını üstel büyütür. Kritik **görev** kümesi tam kalır; yalnızca yol
-listesi kesilir ve `criticalPathsTruncated` ile bildirilir. Ayrıntılar:
-`docs/ZAMANLAMA.md` ve `docs/CPM.md`.
-
-## Sonraki aşama
-
-Keycloak entegrasyonu tamamlanmıştır: kimlik doğrulama yalnızca `CurrentUserProvider` katmanını değiştirmiş; SQL şeması, yetkilendirme önceliği ve depo işlem modeli korunmuştur. Bundan sonraki iş kalemleri kimlik doğrulamayla ilgili değildir.
-
-
-### Görev akışı ve görünüm güncellemesi
-
-- Her iki kipte kenar çubuğundan proje/portföy seçimi; arşivlenmiş projeleri gösterme tercihi **Ayarlar → Çalışma alanı** altında.
-- Temel Kip tablosunda ölçeğe uyumlu sütunlar; koyu Takvimde belirgin hafta sonları ve daha geniş gün/görev pencereleri.
-- Takvimde iki kip için ortak direktörlük/müdürlük/birim filtresi; Görevler ile paylaşılan seçim.
-- Görevi oluşturan yöneticiye kapsam içi sorumlu yönetimi ve silme; normal kullanıcı ve kapsam dışı personel sınırları korunur.
-- **Tekrarları hazırla** tekrar üretimini taslağa ekler; **Kaydet** şablonu ve tekrarları tek işlemde yazar.
-- Kilometre taşında tek gerçekleşen tarih ve ikili tamamlanma durumu.
-- Tarih önerisi/kararı sırasında SQL 1205 için veritabanı işlemi için sınırlı yeniden deneme. Veritabanı şema değişikliği gerekmez.
-- Açılış logosu: `.env.example` → `MERGEN_ROTA_COMPANY_LOGO_PATH`. UNC/Windows SVG yolu sunucudan okunur; Node hizmet hesabının okuma yetkisi olmalıdır. Eski `NEXT_PUBLIC_MERGEN_ROTA_COMPANY_LOGO_URL` içindeki UNC veya HTTPS değeri de desteklenir. Ayar değişince hizmeti yeniden başlatın.
-
-Ayrıntılar: [Arayüz](docs/TEMEL-KIP-VE-ARAYUZ.md), [Tekrarlar](docs/ETIKETLER-VE-TEKRARLAYAN-GOREVLER.md), [Takvim veri modeli](docs/ZAMANLAMA-VERI-MODELI.md), [Görsel yapı](docs/ARAYUZ-BICIMLENDIRME-MIMARISI.md).
-
-### Sicil, kayıt ve arayüz düzeltmeleri
-
-Personel atamaları SicilNo üzerinden yapılır; aynı adlı çalışanlar ayrı kimliklerle korunur. Yönetici, FULL erişimli manuel projelerinde de yalnızca kurumsal kapsamındaki personeli atayabilir. Görev penceresinde Kaydet dışındaki alan değişiklikleri yerel taslaktır; görev, değişen ardıl bağlantıları ve istenen tekrarlar tek işlemde yazılır. Değişmeyen atamalar yeniden doğrulanıp silinerek eklenmez.
-
-Temel Kip eylem başlığı kaydırmada sabit kalır. Takvim kurumsal seçicileri tarih denetimleriyle aynı satırdadır. Tarih talebi rozetleri ve Görevi aç akışı, kilometre taşı gerçekleşen tarih genişliği, yıldızlı açılış ekranı ve daralan kenar çubuğunun menü/fotoğraf yerleşimi güncellenmiştir. Ayrıntılar: [arayüz](docs/TEMEL-KIP-VE-ARAYUZ.md), [yetki modeli](docs/YETKILENDIRME-MODELI.md), [logo ve görünüm](docs/ARAYUZ-BICIMLENDIRME-MIMARISI.md). Veritabanı şema yükseltmesi gerekmez.
-
-Yeni görev oluştururken de **Öncüller** ve **Ardıllar** tanımlanabilir. Ardılın türü/gecikmesi ve kaldırılması taslakta tutulur; Kaydet yeni görevle tüm bağlantıları aynı veritabanı işlemi içinde yazar. Kapatma bağlantıları da bırakır; döngü, farklı proje, yetki veya sürüm hatasında hiçbir kısmi kayıt oluşmaz. Proje seçimi değişirse önceki projeye ait bekleyen ardıl bağlantıları temizlenir. Bağımlılık düzenlemesi tam proje yetkisi gerektirir.
-
-
-### Talepler, bildirimler ve ayrıntılı görev listeleri
-
-**Talepler** her iki kipte düz kenar çubuğunda yer alır: Bekleyenler, Gönderdiklerim ve Geçmiş sekmeleri sunucuda arama/süzme ve 25 kayıtlık sayfalama kullanır. Zil en fazla sekiz önizleme gösterir; okuma/temizleme yalnızca kullanıcıya ait bildirim durumunu değiştirir. Açık kararlar görünür kalır, talep/audit geçmişi silinmez. **Özet** KPI kartlarının zengin açılır listeleri korunur; **Tüm görevleri gör** arama, tüm sütunlarda zengin süzgeç/sıralama, Direktörlük/Müdürlük/Birim seçimi ve sayfalama içeren geniş pencereyi açar. Penceredeki **Filtreleri Temizle** yalnızca pencere seçimlerini sıfırlar; KPI kategorisi, Özet kapsamı ve yetkili görev kümesi korunur. **Projeler** beşli, **Portföy sağlığı** altılı sayfalanır; **Ekip iş yükü** ve **Yaklaşan teslimler** için 5 (varsayılan), 10, 20 veya 50 sonuç seçilebilir. Görev panelinden geri dönünce pencerenin arama ve sayfa durumu korunur.
-
-**Temel Kip** aynı panoyu sade profille kullanır (`<DashboardView variant="simple" />`): Özet açılış sayfasıdır, tarih denetimi yalnızca Termin'i okuyan **Termin aralığı**dır, KPI penceresi Proje / Görev / Kısa açıklama / Sorumlular / Öncelik / Durum / Termin sütunlarını gösterir ve **+ Yeni Görev** var olan Hızlı Görev Tanımı sekmesine geçer. Plan bütünlüğü, bağımlılık riski ve planlanan/gerçekleşen tarih kavramları Kapsamlı Kipte kalır. **Temel Kip** Gantt içermez; **Ara veya komut çalıştır...** ve Ctrl/Cmd+K iki kipte de kullanılabilir, sonuçlar kip/rol sınırlarını izler. Görevler durumları birbirini dışlar: geciken bir görev Yapılacak veya Devam ediyor süzgecinde gösterilmez. Kapsamlı Kip Görevler tablosunda Başlangıç/Bitiş gerçekleşen tarih varsa onu, yoksa planlanan tarihi gösterir; sıralama ve süzme aynı tarihi kullanır. Küçük, nötr ✓ gerçekleşen tarihi belirtir. Açıklama ile İlk/Önceki/Sonraki/Son gezinmesi aynı alt satırdadır.
-
-**Dağıtım:** Mevcut veritabanında 0007 sonrasında `database/MR_Upgrade_0008_Request_Notifications.sql` ve `database/MR_Upgrade_0009_Task_Activity_Report.sql` sırasıyla çalıştırılmalıdır; ardından uygulamayı derleyip hizmeti yeniden başlatın. Ayrıntılar: [Talepler ve bildirimler](docs/TALEPLER-VE-BILDIRIMLER.md), [arayüz sözleşmeleri](docs/TEMEL-KIP-VE-ARAYUZ.md).
-
-Raporlar artık **Performans** ve **Görev Hareketleri** sekmelerini içerir. Görev Hareketleri, MR_AuditLog üzerinden yetkili ekibin/görevlerin kalıcı değişikliklerini, gerçek aktör kimliği ve Türkiye takvim günüyle raporlar. [Kapsam, süzgeçler ve tarihçe](docs/GOREV-HAREKET-RAPORU.md).
-
-Özet ve Raporlar’daki **Filtreleri Temizle**, tarih ve paylaşılan kurumsal seçimleri sıfırlar. Raporlar → Görev Hareketleri kendi dönem/kapsam/kişi/proje/tür/kurumsal seçimlerini ve sayfasını varsayılana döndürür. Görünürlük yetkileri ve seçili çalışma alanı korunur.
-
-Görev yaşam döngüsü istemci ve SQL yazma sınırında merkezîdir: başlatma eksik gerçek başlangıcı, tamamlama eksik gerçek bitişi doldurur ve ilerlemeyi %100 yapar. İlerleme tek başına kapatma eylemi değildir. Yeniden açma bitişi temizleyip başlangıç/ilerlemeyi korur; Yapılacak'a dönüşte tarih temizleme onayı gerekir. Proje değişikliğiyle aynı istekte tamamlanan görev hedef projenin etkin takvim gününü kullanır. Yeni tekrar oluşumlarının günü, plan tarihleri, termini ve süresi sunucuda şablon planıyla doğrulanır. Normal kullanıcı Kapsamlı Kipte kendi yetkili, yalnız kendisine atanmış görevini tekrarlayabilir; proje/WBS/atama yetkileri genişlemez. Özet/Performans filtreleri ve Proje Yapısı sekmeleri yapışkandır; Görev Hareketleri tek dikey tablo alanında kayar. Ayrıntılar: [yaşam döngüsü](docs/ZAMANLAMA-VERI-MODELI.md), [tekrar yetkisi](docs/ETIKETLER-VE-TEKRARLAYAN-GOREVLER.md), [arayüz](docs/TEMEL-KIP-VE-ARAYUZ.md).
-
-Outlook deneme sınırına ulaşan teslimatlar otomatik yeniden denenmez; açık yeniden ekleme, yeniden gönderme veya kaldırma eylemiyle tekrar işlenebilir. Tamamlanmada bekletilen bağlantılar periyodik taramaya alınmaz; yeniden açılma sırasında erişim yeniden doğrulanır. Ayrıntılar: [Outlook takvim bağlantısı](docs/OUTLOOK-TAKVIM.md).
-
-Sistem Yönetimi doğruluk güvenceleri: uyarılar olay süzgeçlerine uyar; bellek
-uyarıları süreç bazında izlenir; SMTP/Outlook bağlantı testleri toplam altı
-saniyeyle sınırlıdır ve 0012 göçü mevcut şemayı doğrulamadan başarı kaydı yazmaz.
-Ayrıntılar: [Sistem Yönetimi](docs/SISTEM-YONETIMI.md).
-
-Sistem Yönetimi yenilemeleri görünürlük dönüşünde tek zamanlayıcı kullanır;
-eylem sonrası yenileme süren yoklamadan sonra yeni veri alır. Açık ayrıntılar
-son ölçüme bağlanır, kuyruk yaşı dağıtımın eşiğiyle değerlendirilir. Saklama
-birikimi sınırlı yığınlarla eritilir; olay birleştirme tek SQL işlemi içinde yapılır.
-
-Sistem Yönetimi eylemleri, uygulama örnekleri arasında SQL kilidiyle korunur.
-Telemetri hataları bağımsız sağlık ve saklama adımlarını durdurmaz; SMTP, kimlik
-ve hatırlatma sağlığı ölçüm tazeliğini gözetir. Ayrıntılar için
-[Sistem Yönetimi](docs/SISTEM-YONETIMI.md) belgesine bakın.
-
-0012 yükseltmesinde Türkçe harmanlamalı veritabanlarının kısıt doğrulaması
-düzeltildi. 51012 hatası alan kurulumlar güncel yükseltme dosyasının tamamını
-mevcut veritabanında yeniden çalıştırabilir; tabloların silinmesi gerekmez.
-
-Anlık görüntü SQL, yetkili görev ve sorumlu projeksiyonunu tek sorgu paketinde
-üretir; yönetici çalışan kapsamı aynı pakette tekrar kullanılır. Sorumlu işi
-artık `phase.snapshot.main-query` ölçümüne dahildir. Görev düzeyi yetki kararı
-pakette bir kez verilip taşınır: KISMİ projelerde görünür küme proje boyunca
-taranmaz, yönetim kapsamı yalnızca yöneticide okunur. `phase.snapshot.main-query`
-altında SQL beklemesi ile JavaScript izdüşümü ayrı ölçülür; iç içe süreler
-toplanmaz. Yetki sınırları, ölçüm karşılaştırması ve dağıtım kontrolü için
-[Anlık görüntü SQL doğrulaması](docs/SISTEM-YONETIMI.md#anlık-görüntü-sql-birleştirmesi-ve-üretim-doğrulaması)
-ve [ana sorgu görev kapsamı daraltması](docs/SISTEM-YONETIMI.md#ana-sorgu-görev-kapsamı-daraltması-ve-üretim-doğrulaması).
+Son komut `0.0.0.0:8008` üzerinde dinler; eşdeğeri
+`npm run start -- -H 0.0.0.0 -p 8008` komutudur. `/rota` dış yol öneki,
+vekil başlıkları ve AI akışı için [NGINX Dağıtımı](docs/NGINX-ROTA-ON-EKI.md)
+belgesini izleyin. `NEXT_PUBLIC_` ayarları değişince yeniden derleyin.
+
+Outlook ve atama postası çalışanları Node hizmetiyle başlar; otomatik
+hatırlatma e-postaları ayrıca işletim sistemi zamanlayıcısı gerektirir.
+AI konuşma uçları aynı veritabanı için tek Node sürecine yönlendirilmelidir;
+dağıtım sınırları [AI platformunda](docs/YAPAY-ZEKA-PLATFORMU.md) açıklanır.
+
+## Depo yapısı
+
+| Dizin | Sorumluluk |
+| --- | --- |
+| `src/app` | Next.js sayfaları, API uçları ve genel stiller |
+| `src/domain` | Kanonik iş kavramları, kimlik ve saf kurallar |
+| `src/scheduling` | Takvim, bağımlılık, tekrar ve CPM hesapları |
+| `src/data` | Depo sözleşmesi, Demo ve API bağdaştırıcıları |
+| `src/state` | Uygulama durumu, kalıcılık kuyruğu ve seçiciler |
+| `src/server` | Kimlik, yetki, SQL, entegrasyonlar ve AI servisleri |
+| `src/features`, `src/components` | Özellik arayüzleri ve ortak bileşenler |
+| `src/lib` | Ortak yardımcılar ve dışa aktarma |
+| `database` | Kurulum, sıralı yükseltme ve geri alma SQL betikleri |
+| `config`, `scripts`, `test` | Model kaydı, işletim/değerlendirme araçları ve testler |
+| `docs` | Ayrıntılı teknik sözleşmeler ve işletim belgeleri |
+
+## Dokümantasyon
+
+Resmî dokümantasyon dili Türkçedir. Ayrıntılı davranış ve işletim
+sözleşmelerinin yetkili kaynağı aşağıdaki belgelerdir. `docs/` dosya adları
+Türkçe ASCII düzenini, teknik tanımlayıcılar özgün yazımını korur.
+
+| Konu | Belge |
+| --- | --- |
+| Mimari ve dışa aktarma hattı | [Mimari](docs/MIMARI.md) |
+| Kalıcılık, kurumsal kaynaklar ve dağıtım | [Kalıcı Veri Saklama](docs/KALICI-VERI-SAKLAMA.md) · [Kalıcılık Sınırı](docs/KALICILIK-SINIRI.md) |
+| Veritabanı şeması | [Veritabanı Şeması](docs/VERITABANI-SEMASI.md) |
+| Yetkilendirme ve atama kapsamı | [Yetkilendirme Modeli](docs/YETKILENDIRME-MODELI.md) |
+| WBS ve çalışma alanları | [İş Kırılım Yapısı](docs/IS-KIRILIM-YAPISI-VE-CALISMA-ALANLARI.md) |
+| Proje portföyü ve dizini | [Proje Portföyü](docs/PROJE-PORTFOYU-VE-DIZINI.md) |
+| Zamanlama, görev yaşam döngüsü ve baz plan | [Veri Modeli](docs/ZAMANLAMA-VERI-MODELI.md) · [Zamanlama](docs/ZAMANLAMA.md) · [CPM](docs/CPM.md) |
+| Etiketler ve tekrarlar | [Etiketler ve Tekrarlayan Görevler](docs/ETIKETLER-VE-TEKRARLAYAN-GOREVLER.md) |
+| Outlook | [Outlook Takvim Bağlantısı](docs/OUTLOOK-TAKVIM.md) |
+| SMTP ve hatırlatmalar | [Görev Hatırlatmaları](docs/GOREV-HATIRLATMALARI.md) |
+| Talepler, bildirimler ve koordinasyon | [Talepler ve Bildirimler](docs/TALEPLER-VE-BILDIRIMLER.md) |
+| Görev hareket raporu | [Görev Hareketleri](docs/GOREV-HAREKET-RAPORU.md) |
+| Sistem yönetimi ve gözlemlenebilirlik | [Sistem Yönetimi](docs/SISTEM-YONETIMI.md) |
+| AI platformu, anahtarlar ve konuşmalar | [Yapay Zekâ Platformu](docs/YAPAY-ZEKA-PLATFORMU.md) |
+| AI veri araçları ve kanıt | [AI Alan Araçları](docs/YAPAY-ZEKA-ALAN-ARACLARI.md) |
+| AI planlama, anlamsal erişim ve nitelendirme | [AI Anlamsal Katmanı](docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md) |
+| Kullanım kipleri ve arayüz | [Temel Kip ve Arayüz](docs/TEMEL-KIP-VE-ARAYUZ.md) · [Biçimlendirme Mimarisi](docs/ARAYUZ-BICIMLENDIRME-MIMARISI.md) |
+| SSO ve oturum açılışı | [Keycloak SSO](docs/KEYCLOAK-SSO.md) · [Otomatik Oturum Önyüklemesi](docs/OTOMATIK-KURUMSAL-OTURUM-ONYUKLEMESI.md) |
+| Ters vekil ve üretim yolu | [NGINX Dağıtımı](docs/NGINX-ROTA-ON-EKI.md) |
+| Elle arayüz doğrulaması | [Görsel Duman Testleri](docs/GORSEL-DUMAN-TESTLERI.md) |

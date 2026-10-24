@@ -240,6 +240,14 @@ karşılaştırılırsa, önümüzdeki bir yıla yayılmış 240 saatlik yük de
 saat" gibi görünüyordu. İş, planlanan aralığın ufukla kesişimi oranında
 sayılır; planlanmamış ve gecikmiş işin kalanı bugünün yüküdür.
 
+## Görünüm tercihleri
+
+Ayarlar; tema, yoğunluk, vurgu rengi ve yazı boyutunun yanında açılış sayfası, tarih biçimi ve yüksek karşıtlık tercihlerini taşır. Tercihler tarayıcıda korunur.
+
+**Açılış sayfası**, Kapsamlı Kipte oturum açılışında ve tarayıcı yenilendiğinde uygulanır. `src/components/shell/navigation.js` içindeki `initialLandingView`, saklanan değer gezinmede yoksa veya role bağlı yönetim sayfasıysa Özet'e döner. Temel Kip kendi Özet açılışını kullanır.
+
+**Yüksek karşıtlık**, sınırları ve ikincil metni belirginleştirerek açık temada ve parlak ortamda okunabilirliği artırır. Tercihlerin ilk boyamadan önce uygulanması [Biçimlendirme Mimarisi](ARAYUZ-BICIMLENDIRME-MIMARISI.md) belgesinde tanımlıdır.
+
 ## Tarih biçimi düzenlenebilir alanlarda da geçerlidir
 
 Ayarlar sayfasındaki **Tarih biçimi** seçeneği (`gg/aa/yyyy` ↔ `18 Ağu 2026`) yalnızca pasif etiketleri değiştiriyordu: `18 Ağu 2026` seçen kullanıcı görev panelinde `18/08/2026` bekleyen bir kutu görüyordu.

@@ -268,9 +268,13 @@ attığı için `"/\t/evil.example"` gibi bir değer denetimden geçip
 | Oturum yok, çerez bozuk, süresi dolmuş, jeton geçersiz, Sicil çözülemedi | `401 UNAUTHORIZED` |
 | Kimlik geçerli ama uygulama yetkisi yetersiz | `403 FORBIDDEN` |
 
-Kimlik doğrulanmadığında istemci yarım yüklenmiş Gerçek Sistem verisi görmez;
-açılış perdesinde açık bir "Kurumsal oturum aç" eylemi gösterilir. **Demo Kipi
-bir kimlik yedeği değildir**; yalnızca kullanıcının bilinçli seçimidir.
+Gerçek Sistem açılışında istemci önce SQL okumayan `auth/status` ucunu denetler;
+oturum yoksa doğrudan seçili Keycloak akışına yönlenir. `AppStateProvider`,
+oturum doğrulanmadan kurulmaz. Oturum denetimi başarısızsa yeniden deneme ve
+kullanıcının bilinçli Demo seçimi sunulur; **Demo Kipi bir kimlik yedeği değildir**.
+Açılış sırası ve veri yüklemesi sırasında oturum kaybı davranışı için
+[Otomatik Kurumsal Oturum Önyüklemesi](OTOMATIK-KURUMSAL-OTURUM-ONYUKLEMESI.md)
+esastır.
 
 ---
 
@@ -324,6 +328,11 @@ Bu değer **tarayıcıya açıktır** (istemci paketine gömülür) ve bir sır 
 `<TABAN_URL>/<SICIL>.jpg` biçiminde üretilir; sondaki eğik çizgiler normalize
 edilir ve sicil URL için kodlanır. Değer boşsa veya sicil eksik/bozuksa avatar
 baş harflere döner.
+
+Görsel yüklenemezse de baş harf yedeği kullanılır. Üretilen adres tabloda
+saklanmaz; fotoğraf yalnızca sunum verisidir ve görsel isteğinin başarısızlığı
+kimlik doğrulamayı veya veri yüklemeyi engellemez. Gerçek taban adresi
+`.env.local` içinde tutulur ve depoya işlenmez.
 
 ---
 

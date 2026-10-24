@@ -1,6 +1,6 @@
-# Kalıcılığa Hazır Durum ve Veri Sınırı
+# Durum ve Kalıcılık Sınırı
 
-MERGEN Rota, özellik davranışını kanonik proje yönetimi verisini saklayan mekanizmadan ayırır. Mevcut bağdaştırıcı asenkron ve bellekte değiştirilebilirdir; böylece bu geliştirme adımında yapay HTTP katmanı veya veritabanı eklenmeden, gelecekteki API destekli deponun gerektireceği yükleme, kayıt, hata ve sıralama anlamları uygulamada kullanılabilir.
+MERGEN Rota, özellik davranışını kanonik proje yönetimi verisini saklayan mekanizmadan ayırır. Bu belge Demo bellek deposu ve Gerçek Sistem API deposunun ortak yükleme, kayıt, hata, sıralama ve uzlaştırma sözleşmesini anlatır. Gerçek Sistem SQL/işlem/yetkilendirme ayrıntılarının sahibi [Kalıcı Veri Saklama](KALICI-VERI-SAKLAMA.md) belgesidir.
 
 ## 1. Depo sorumluluğu
 
@@ -21,7 +21,7 @@ commitChanges({
 
 `loadSnapshot()`, saklanan kanonik uygulama verisini döndürür: Takvimler, Projeler, Kişiler, WBS düğümleri, Görevler, `Baseline` ve `TaskBaselineSnapshot` kayıtları.
 
-`commitChanges()` yalnızca o anda değiştirilebilir varlıkların değişikliklerini kalıcı saklar. Tek atomik değişiklik kümesi işlemidir; böylece birden çok varlığı etkileyen görev taşıma ve WBS alt ağacını yeniden kodlama daha sonra tek sunucu/veritabanı işlemine eşlenebilir. Reducer eylem protokolü değildir ve her düzenlemede tüm anlık görüntünün yeniden yazılmasını gerektirmez.
+`commitChanges()` yalnızca o anda değiştirilebilir varlıkların değişikliklerini kalıcı saklar. Tek atomik değişiklik kümesi işlemidir; böylece birden çok varlığı etkileyen görev taşıma ve WBS alt ağacını yeniden kodlama Gerçek Sistem kipinde tek sunucu/veritabanı işlemine eşlenir. Reducer eylem protokolü değildir ve her düzenlemede tüm anlık görüntünün yeniden yazılmasını gerektirmez.
 
 Depo; WBS iş doğrulaması, çalışma alanı seçimi, CPM hesapları veya arayüz durumundan sorumlu değildir.
 
@@ -198,7 +198,7 @@ Kuyruk kalıcı kayıt etkilerini sıralar; görev açma veya çalışma alanı 
 
 ## 9. Sık görev düzenlemeleri
 
-Görev Ayrıntısı, yazmanın akıcı kalması için anlık yerel taslak davranışını korur. Kalıcılık sınırı her klavye karakteri için ayrı yazmayı önler.
+Güncel görev pencerelerinde alan değişiklikleri yalnızca **Kaydet** ile kalıcılaşır; kapatma taslağı bırakır, başarısız Kaydet taslağı açık tutar. Kullanıcıya görünen sözleşme [Görev penceresinde açık kayıt](TEMEL-KIP-VE-ARAYUZ.md#görev-penceresinde-açık-kayıt) bölümündedir. Aşağıdaki birleştirme ve gönderim kuralları alt düzey `src/state/persistence.js` görev yaması kuyruğuna aittir; görev pencerelerinin otomatik kayıt yaptığı anlamına gelmez.
 
 Uyumlu görev alanı yamaları, görev başına kısa bir 250 ms pencerede birleştirilir. Aynı düzenleme serisindeki başlık, açıklama, ilerleme, durum, öncelik ve tarih değişiklikleri tek kanonik yamada birleşir ve aynı sıralı kuyruktan saklanır. Yapısal işlemler de sırayı korur: yıkıcı işlem, görev WBS taşıması veya uygulama yeniden yüklemesi ilerlemeden önce etkilenen görevin bekleyen yaması gönderilir. Bekleyen kayıt başarısızsa bağımlı işlem hatalı yazmanın üzerinden sessizce devam etmez.
 
@@ -206,7 +206,7 @@ Görev ayrıntı panelini kapatmak bu gönderimi hemen ister ve aynı sürmekte 
 
 SQL kayıt yanıtı, yazma işlemi açıkken yetki süzgeçli portföy anlık görüntüsünün tamamını yeniden kurmak yerine yalnızca değişikliğin dokunduğu yetkili satırları (ve gerekli görünür sorumlu/bağımlılıklarını) yeniden kurar. İyimser rowversion denetimleri, yetkilendirme ve bütünlük doğrulaması işlem içinde kalır; tarayıcının mevcut 30 saniyelik istek zaman aşımı değişmez.
 
-Böylece Görev Ayrıntısı açık Kaydet düğmesi etrafında yeniden tasarlanmadan gelecekteki API için güvenli kayıt sınırı sağlanır.
+Açık Kaydet işlemi, ilgili görevlerin eski bekleyen yamalarını önce tamamlar; taslak, görev ve değişen ardıl bağlantıları tek değişiklik kümesinde yazılır. Alt düzey kuyruk ile panel taslağı ayrı sorumluluklardır.
 
 ### 9.1 Birleştirilmiş düzenleme kaybı sessiz olmamalıdır
 
@@ -264,12 +264,12 @@ operation
 details
 ```
 
-Mevcut depo hata kodları bilinçli olarak şunlarla sınırlıdır:
+Ortak depo tabanının yükleme/yazma hata kodları şunlardır:
 
 - `LOAD_FAILED`;
 - `MUTATION_FAILED`.
 
-Bu yapı, şimdi kullanılmayan davranışlar icat etmeden çakışma gibi gelecekteki API'ye özgü hatalara yer bırakır.
+Gerçek Sistem API deposu ayrıca kimlik, yetki, sürüm çakışması ve erişilebilirlik kodlarını taşır. Güncel kodlar ve HTTP eşlemeleri [Kalıcı Veri Saklama](KALICI-VERI-SAKLAMA.md#hatalar) belgesindedir.
 
 Ham fırlatılan değerler uygulama durumuna girmeden normalleştirilir. Olağan arayüz, uygulama ayrıntıları yerine genel ve güvenli iletiler gösterir.
 
@@ -299,7 +299,7 @@ Gerçek Sistem kimlikleri SQL Server `uniqueidentifier` değerleridir. İki kura
 
 Yeniden yüklemeden önce bekleyen görev yamaları gönderilir ve sıralı değişiklik kuyruğunun sonuçlanması beklenir. Ardından depo anlık görüntüsü yüklenir ve normalleştirilir.
 
-Gerçek Sistem'de aynı mekanizma görünür sekmede otomatik olarak da çağrılır. Dağıtım aralığı `NEXT_PUBLIC_MERGEN_ROTA_AUTO_REFRESH_INTERVAL_MS` ile belirlenir (varsayılan `60000`, alt sınır `30000` milisaniye; geçersiz değer varsayılana döner). Kendini zamanlayan tek-uçuşlu denetleyici sekme gizlenince zamanlayıcıyı kaldırır; görünür olduğunda son başarılı anlık görüntü aralık kadar eskiyse hemen, değilse kalan süre sonunda çalışır. Demo deposu için denetleyici kurulmaz.
+Gerçek Sistem'de aynı mekanizma görünür sekmede otomatik olarak da çağrılır. Dağıtım aralığı `NEXT_PUBLIC_MERGEN_ROTA_AUTO_REFRESH_INTERVAL_MS` ile belirlenir: varsayılan `60000`, alt sınır `30000`, tarayıcı zamanlayıcı üst sınırı `2147483647` milisaniyedir. Eksik, boş, sayısal olmayan, sıfır, negatif veya bu sınırlar dışındaki değer `60000` olur. Bu sır içermeyen ayar istemci paketine gömülür; değiştirilince yeniden derleme gerekir. Kendini zamanlayan tek-uçuşlu denetleyici sekme gizlenince zamanlayıcıyı kaldırır; görünür olduğunda son başarılı anlık görüntü aralık kadar eskiyse hemen, değilse kalan süre sonunda çalışır. Demo deposu için denetleyici kurulmaz.
 
 Otomatik çağrı `discardFailedTaskUpdates` seçeneğini hiçbir zaman kullanmaz. Bekleyen yazmalar normal sırayla tamamlanır; reddedilmiş yerel görev yaması varsa güvenlik denetimi anlık görüntü yükünü atlar ve sonraki aralıkta yeniden değerlendirir. Atlanan ya da başarısız deneme tam aralık beklemeden tekrar edilmez. Geçici arka plan yükleme hatası mevcut başarılı anlık görüntüyü hata durumuna çevirmez; `SESSION_REQUIRED`, `UNAUTHORIZED` ve `FORBIDDEN` ise mevcut kimlik/yetki davranışına aktarılır. Manuel yenileme aynı giriş noktasında kalır ve ortak etkin-yük denetimi iki yenilemenin yarışmasını engeller. Otomatik yük sürerken gelen manuel istek onun sessiz arka plan sonucunu paylaşmaz; otomatik turun arkasına tek kez alınır ve kendi görünür yükleme/hata yaşam döngüsünü çalıştırır.
 
@@ -313,7 +313,9 @@ Yeniden yüklemeden sonra:
 - Görev/WBS ilişkileri kanonik sınırdan normalleştirilir;
 - proje kapsamlı CPM projeksiyonu yeni kanonik Görev, Proje ve Takvimlerden yeniden türetilir.
 
-Yeniden yüklemeler arasında eski varlık nesnesi başvuruları tutulmaz.
+Başarılı anlık görüntüler yapısal paylaşımla uzlaştırılır: eşdeğer varlık ve koleksiyon başvuruları yeniden kullanılır, değişenler güncellenir. Çalışma alanı, arama ve görünüm süzgeçleri korunur; geçersiz proje/görev seçimi yukarıdaki kurallarla temizlenir. Kurumsal yolda kaybolan alt seçim en yakın geçerli üst kapsama indirilir. Bu bir tarayıcı sayfası yenilemesi değildir.
+
+Her tur mevcut anlık görüntü ucunu kullanır; istemci ayrı CN43N eşitlemesi başlatmaz. Kurumsal katalog yenilemesi bağımsız TTL, tek-uçuş ve parmak izi denetimine tabidir; ayrıntılar [WBS eşitleme kuralları](IS-KIRILIM-YAPISI-VE-CALISMA-ALANLARI.md) belgesindedir.
 
 ## 13. Asenkron bellek bağdaştırıcısının anlamı
 
@@ -368,9 +370,9 @@ Bu değerler seçiciler ve saf zamanlama katmanı üzerinden kanonik durumdan t�
 
 `Baseline` ve `TaskBaselineSnapshot` kayıtları depodan yüklenir; mevcut arayüz işlemlerinde salt okunur kalır. Olağan Görev/WBS değişiklikleri bunları yeniden yazmaz.
 
-## 16. Gelecekteki API ve SQL Server yolu
+## 16. Gerçek Sistem API ve SQL Server yolu
 
-Amaçlanan kalıcı veri saklama yönü şöyledir:
+Gerçek Sistem veri yolu şöyledir:
 
 ```text
 Tarayıcı / MERGEN Rota Arayüzü
@@ -390,21 +392,10 @@ SQL Server
 
 Tarayıcı SQL Server'a hiçbir zaman doğrudan bağlanmamalıdır.
 
-Gelecekteki istemci API bağdaştırıcısı aynı uygulamaya açık `loadSnapshot()` ve `commitChanges()` anlamlarını uygulamalıdır. Sunucu servisi, özellik bileşenlerini değiştirmeden atomik değişiklik kümelerini veritabanı işlemlerine dönüştürebilir ve yetkili kanonik varlıkları döndürebilir.
+İstemci API bağdaştırıcısı aynı `loadSnapshot()` ve `commitChanges()` sözleşmesini uygular. Sunucu servisi atomik değişiklik kümelerini yetkilendirilmiş SQL işlemlerine dönüştürür ve kanonik sonuçları döndürür. Kimlik, yetki, denetim, kurulum ve hata kodları [Kalıcı Veri Saklama](KALICI-VERI-SAKLAMA.md) belgesinde tanımlıdır.
 
-## 17. Mevcut kapsam dışı konular
+## 17. Bu sınırın sorumluluğu dışında kalanlar
 
-Bu kalıcılık sınırı geliştirme adımı şunları uygulamaz:
+SQL bağlantısı, şema yükseltmeleri, kimlik doğrulama, yetkilendirme ve denetim Gerçek Sistem sunucu katmanında uygulanır; bu istemci durum sözleşmesinin içinde yeniden tanımlanmaz. Demo belleği tarayıcı yenilemesinde kalıcı değildir; Gerçek Sistem SQL verisi kalıcıdır. Proje Prisma, Sequelize veya TypeORM kullanmaz.
 
-- SQL Server veya başka veritabanı;
-- veritabanı geçişleri veya bağlantı dizeleri;
-- Prisma, Sequelize, TypeORM veya başka ORM;
-- yapay REST uçları veya yerel HTTP gidiş-dönüşleri;
-- kimlik doğrulama veya yetkilendirme;
-- denetim günlüğü;
-- baz plan yakalama/yeniden baz plan CRUD işlemleri;
-- tarayıcı yenilemesinde kalıcı veri koruma;
-- çakışma çözüm arayüzü;
-- ilerlemeyi dikkate alan CPM veya Veri Tarihine göre yeniden zamanlama.
-
-Sonraki kalıcılık adımı gerçek API/sunucu tarafı kalıcılık uygulamasıdır. İlerlemeye duyarlı zamanlama ayrı bir geliştirme hattı olarak kalır.
+Özel çakışma çözüm arayüzü, baz plan yakalama/yeniden baz plan CRUD işlemleri, ilerlemeye duyarlı CPM ve Veri Tarihine göre yeniden zamanlama mevcut ürün kapsamına dahil değildir. Güncel sınırlar [Zamanlama Veri Modeli](ZAMANLAMA-VERI-MODELI.md) ve [CPM](CPM.md) belgelerindedir.
