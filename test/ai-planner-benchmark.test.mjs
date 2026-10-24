@@ -1277,6 +1277,107 @@ test('Claude yakınsama: yeniden kullanılan canlı PID eski süreç örneğinin
   assert.doesNotThrow(() => process.kill(process.pid, 0), 'yeni PID sahibi sonlandırılmaz');
 });
 
+test('Claude Windows kilit temizliği: geçici dosya paylaşımı hatası sahipliği ve çağrı bütçesini korur', async (t) => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  for (const [phase, method, code] of [['stale', 'unlinkSync', 'EPERM'], ['owner', 'unlinkSync', 'EBUSY'], ['directory', 'rmdirSync', 'EPERM']]) {
+    await t.test(phase, async (t) => {
+      const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_MAX_CALLS: '1', PLANNER_MODEL_TIMEOUT_MS: '5000' });
+      const lock = `${cli.log}.lock`;
+      if (phase === 'stale') {
+        fs.mkdirSync(lock);
+        fs.writeFileSync(path.join(lock, `${process.pid}-00000000-0000-4000-8000-000000000001`), JSON.stringify({ pid: process.pid, identity: 'previous-process-instance' }));
+      }
+      fs.writeFileSync(cli.adapter, `
+        import fs from 'node:fs';
+        import path from 'node:path';
+        import { syncBuiltinESMExports } from 'node:module';
+        const original = fs[${JSON.stringify(method)}];
+        let failures = 0;
+        fs[${JSON.stringify(method)}] = function(file, ...args) {
+          const target = ${JSON.stringify(phase)} === 'directory' ? file === ${JSON.stringify(lock)}
+            : path.dirname(file) === ${JSON.stringify(lock)} && path.basename(file).startsWith(String(${phase === 'stale' ? process.pid : 'process.pid'}) + '-');
+          if (target && failures++ < 2) {
+            fs.appendFileSync(${JSON.stringify(`${cli.log}.faults`)}, '${code}\\n');
+            throw Object.assign(new Error('sharing violation'), { code: '${code}' });
+          }
+          return original(file, ...args);
+        };
+        syncBuiltinESMExports();
+      ` + fs.readFileSync(cli.adapter, 'utf8'));
+      cli.release();
+      const replies = await Promise.all([cli.start().done, cli.start().done]);
+      assert.equal(replies.filter(reply => reply.text === 'ok').length, 1);
+      assert.equal(replies.filter(reply => reply.error === 'PLANNER_BUDGET_CALLS').length, 1);
+      assert.ok(fs.readFileSync(`${cli.log}.faults`, 'utf8').trim().split('\n').length >= 2);
+      assert.equal(cli.count(), 1);
+      assert.equal(cli.locked(), false);
+      assert.doesNotThrow(() => process.kill(process.pid, 0));
+    });
+  }
+});
+
+test('Claude Windows kilit temizliği: kalıcı hata süre sınırında kapalı kalır', async (t) => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  for (const code of ['EPERM', 'EACCES']) await t.test(code, async (t) => {
+    const cli = await claudeCommandFixture(t, { PLANNER_MODEL_TIMEOUT_MS: '2000' });
+    const lock = `${cli.log}.lock`;
+    const owner = path.join(lock, `${process.pid}-00000000-0000-4000-8000-000000000001`);
+    fs.mkdirSync(lock);
+    fs.writeFileSync(owner, JSON.stringify({ pid: process.pid, identity: 'previous-process-instance' }));
+    fs.writeFileSync(cli.adapter, `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      const original = fs.unlinkSync;
+      fs.unlinkSync = function(file, ...args) {
+        if (file === ${JSON.stringify(owner)}) {
+          fs.appendFileSync(${JSON.stringify(`${cli.log}.faults`)}, '${code}\\n');
+          throw Object.assign(new Error('permanent failure'), { code: '${code}' });
+        }
+        return original(file, ...args);
+      };
+      syncBuiltinESMExports();
+    ` + fs.readFileSync(cli.adapter, 'utf8'));
+    await assert.rejects(cli.start().done, new RegExp(code));
+    const failures = fs.readFileSync(`${cli.log}.faults`, 'utf8').trim().split('\n').length;
+    assert.ok(code === 'EPERM' ? failures > 1 : failures === 1);
+    assert.equal(cli.count(), 0);
+    assert.equal(fs.existsSync(owner), true);
+  });
+});
+
+test('Claude Windows kilit temizliği: yineleme sırasında gelen yeni sahip silinmez', async (t) => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const cli = await claudeCommandFixture(t, { PLANNER_MODEL_TIMEOUT_MS: '2000' });
+  const lock = `${cli.log}.lock`;
+  const owner = path.join(lock, `${process.pid}-00000000-0000-4000-8000-000000000001`);
+  const replacement = path.join(lock, `${process.pid}-00000000-0000-4000-8000-000000000002`);
+  fs.mkdirSync(lock);
+  fs.writeFileSync(owner, JSON.stringify({ pid: process.pid, identity: 'previous-process-instance' }));
+  fs.writeFileSync(cli.adapter, `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    const original = fs.unlinkSync;
+    let replaced = false;
+    fs.unlinkSync = function(file, ...args) {
+      if (file === ${JSON.stringify(owner)} && !replaced) {
+        replaced = true;
+        original(file, ...args);
+        fs.writeFileSync(${JSON.stringify(replacement)}, '${process.pid}');
+        throw Object.assign(new Error('sharing violation'), { code: 'EPERM' });
+      }
+      return original(file, ...args);
+    };
+    syncBuiltinESMExports();
+  ` + fs.readFileSync(cli.adapter, 'utf8'));
+  assert.equal((await cli.start().done).error, 'PLANNER_LEDGER_LOCKED');
+  assert.equal(cli.count(), 0);
+  assert.equal(fs.existsSync(replacement), true);
+  assert.doesNotThrow(() => process.kill(process.pid, 0));
+});
+
 test('4C kayıtlı dış komut: kuyruk yürütme süresini tüketmez; kapanış bekleyenleri başlatmaz', async (t) => {
   const { mkdtempSync, rmSync, watch, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');

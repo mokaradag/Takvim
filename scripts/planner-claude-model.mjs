@@ -95,9 +95,19 @@ function limitFromEnv(name) {
 }
 
 /** Yalnızca bu sahibin dosyasını kaldırır; yeni sahibin dolu dizini silinemez. */
-function releaseLock(lock, owner) {
-  try { if (owner) unlinkSync(path.join(lock, owner)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  try { rmdirSync(lock); } catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error; }
+async function releaseLock(lock, owner, deadline = performance.now() + MODEL_CLEANUP_TIMEOUT_MS) {
+  for (;;) {
+    try {
+      try { if (owner) unlinkSync(path.join(lock, owner)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      try { rmdirSync(lock); } catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error; }
+      return;
+    } catch (error) {
+      const remaining = deadline - performance.now();
+      if (!['EPERM', 'EBUSY'].includes(error.code) || remaining <= 0) throw error;
+      // Windows paylaşım kilidi geçicidir; aynı sahip dosyası sınırlı sürede yeniden denenir.
+      await new Promise(resolve => setTimeout(resolve, Math.min(50, remaining)));
+    }
+  }
 }
 
 /** PID yeniden kullanılsa da aynı süreç örneği olduğu doğrulanır. */
@@ -141,24 +151,24 @@ async function withLock(file, work, timeoutMs) {
         if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes(error.code) || performance.now() >= deadline) throw Object.assign(new Error('lock'), { code: 'PLANNER_LEDGER_LOCKED' });
         try {
           const owners = readdirSync(lock);
-          if (!owners.length) releaseLock(lock, null); // Eski sürümün sahipsiz kilidi.
+          if (!owners.length) await releaseLock(lock, null, deadline); // Eski sürümün sahipsiz kilidi.
           for (const name of owners) {
             if (!/^[1-9][0-9]*-[0-9a-f-]{36}$/.test(name)) continue;
             const record = JSON.parse(readFileSync(path.join(lock, name), 'utf8'));
             const pid = typeof record === 'number' ? record : record.pid;
             if (!Number.isSafeInteger(pid) || pid < 1) continue;
             if (typeof record === 'number') {
-              try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') releaseLock(lock, name); else if (error.code !== 'EPERM') throw error; }
+              try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') await releaseLock(lock, name, deadline); else if (error.code !== 'EPERM') throw error; }
               continue;
             }
             const current = processIdentity(pid, record.identity, Math.max(1, Math.floor(deadline - performance.now())));
-            if (current === null || record.identity && record.identity !== current) releaseLock(lock, name);
+            if (current === null || record.identity && record.identity !== current) await releaseLock(lock, name, deadline);
           }
         } catch (error) { if (error.code !== 'ENOENT') throw error; }
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
     }
-    try { return await work(); } finally { releaseLock(lock, owner); }
+    try { return await work(); } finally { await releaseLock(lock, owner); }
   } finally {
     rmSync(candidate, { recursive: true, force: true });
   }
