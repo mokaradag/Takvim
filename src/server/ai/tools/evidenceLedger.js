@@ -2,7 +2,7 @@ import 'server-only';
 import { randomBytes } from 'node:crypto';
 import { claimableContract } from '../../../domain/ai/claimableEvidence.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
-import { encodeAuthorizationPopulation, evidenceTaskReferences, PAYLOAD_POPULATION_TOOLS, unverifiableAuthorizationPopulation } from './evidenceAuthorization.js';
+import { decodeAuthorizationPopulation, encodeAuthorizationPopulation, evidenceTaskReferences, PAYLOAD_POPULATION_TOOLS, unverifiableAuthorizationPopulation } from './evidenceAuthorization.js';
 import {
   EVIDENCE_LIMITS,
   evidenceIdFor,
@@ -41,12 +41,12 @@ function highlightPairs(highlights = []) {
  * yeniden üretilebilirlik verisi bırakılır); nüfus da sığmazsa kanıt kalıcı
  * olarak "doğrulanamaz" işaretlenir ve yeniden açılışta gösterilmez.
  */
-function persistedEvidenceJson(entry, payload, clarificationContext) {
+function persistedEvidenceJson(entry, payload, clarificationContext, resultScope) {
   const authorization = {
     authorizationEpoch: entry.authorizationEpoch,
     ...(entry.scopedAuthorization ? { scopedAuthorization: entry.scopedAuthorization } : {})
   };
-  const clarification = clarificationContext ? { clarificationContext } : {};
+  const clarification = { ...(clarificationContext ? { clarificationContext } : {}), ...(resultScope ? { resultScope } : {}) };
   const population = encodeAuthorizationPopulation(entry.taskReferences || evidenceTaskReferences(payload));
   const full = JSON.stringify({ ...payload, ...authorization, authorizationPopulation: population, ...clarification });
   if (full.length <= MAX_EVIDENCE_JSON_CHARS) return full;
@@ -160,8 +160,9 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
      * yanıtında sunucunun aday kimlikleri (sıra → proje/görev/Sicil) ilgili
      * kanıtla birlikte saklanır; sonraki turdaki numaralı seçim bunlara bağlanır.
      */
-    persistable(ids, { clarification = null } = {}) {
+    persistable(ids, { clarification = null, resultScope = null } = {}) {
       const wanted = new Set(ids);
+      let scopeStored = false;
       return entries
         .filter((entry) => entry.valid && wanted.has(entry.id) && entry.payload)
         .slice(0, EVIDENCE_LIMITS.maxEvidencePerAnswer)
@@ -169,6 +170,16 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
           const summaryJson = JSON.stringify(entry.summary);
           const payload = JSON.parse(entry.payload);
           const clarificationContext = clarification?.evidenceId === entry.id ? clarification.references : null;
+          let evidenceJson = persistedEvidenceJson(entry, payload, clarificationContext, null);
+          if (resultScope && !scopeStored && entry.authorizationEpoch) {
+            const candidate = persistedEvidenceJson(entry, payload, clarificationContext, resultScope);
+            const stored = JSON.parse(candidate);
+            if (stored.dataOmitted === JSON.parse(evidenceJson).dataOmitted
+              && decodeAuthorizationPopulation(stored.authorizationPopulation) !== null) {
+              evidenceJson = candidate;
+              scopeStored = true;
+            }
+          }
           return {
             ordinal: evidenceOrdinal(entry.id),
             toolName: entry.tool,
@@ -182,7 +193,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
             summaryJson: summaryJson.length <= MAX_SUMMARY_JSON_CHARS
               ? summaryJson
               : JSON.stringify({ ...entry.summary, highlights: [] }),
-            evidenceJson: persistedEvidenceJson(entry, payload, clarificationContext)
+            evidenceJson
           };
         });
     }

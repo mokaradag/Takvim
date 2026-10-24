@@ -1,3 +1,4 @@
+import { nativeDeclaration } from './evidenceScenario.mjs';
 /**
  * Belirlenimci yapay zekâ sağlayıcısı ikizi (süreç içi).
  *
@@ -68,9 +69,14 @@ export function createFakeAiProvider({
   embed = (text) => hashedVector(text),
   rerank = hashedScore,
   // Sırada davranış yoksa çağrıya göre davranış seçer (ör. yalnızca katalog gömmesini bekletmek); `null` olağan yanıttır.
-  respond = null
+  respond = null,
+  // Gömme ve yeniden sıralama çağrıları ortak sırayı tüketir mi? Kapalıyken (kanıta dayalı tur yığını) yalnızca
+  // `kind: 'embeddings' | 'rerank'` ile işaretlenmiş davranışları alır; Aşama 4C'nin planlama öncesi keşfi sohbet
+  // turu için sıraya konmuş davranışları tüketmez.
+  semanticQueue = true
 } = {}) {
   const calls = [];
+  const semanticCalls = [];
   const queue = [];
   const active = new Set();
   const listeners = new Set();
@@ -188,6 +194,13 @@ export function createFakeAiProvider({
     }
   }
 
+  /** Çağrı türünün sıradaki davranışı: işaretsiz davranış her türe, `kind` ile işaretli davranış yalnızca o türe gider. */
+  function take(kind) {
+    const semantic = kind === 'embeddings' || kind === 'rerank';
+    const index = !semantic || semanticQueue ? queue.findIndex((item) => !item.kind || item.kind === kind) : queue.findIndex((item) => item.kind === kind);
+    return index >= 0 ? queue.splice(index, 1)[0] : null;
+  }
+
   async function execute(kind, input) {
     // Gerçek ağ geçitleri gibi anahtarsız ya da geçersiz anahtarlı model listesi
     // varsayılan olarak 401 döner.
@@ -210,17 +223,23 @@ export function createFakeAiProvider({
       aborted: false,
       settled: false
     };
-    const behavior = queue.shift() || respond?.(call) || fallback;
-    calls.push(call);
-    active.add(call);
-    peakActive = Math.max(peakActive, active.size);
-    notify();
+    const behavior = take(kind) || respond?.(call) || fallback;
+    // Ortak sıra dışındaki planlama öncesi keşif sohbet çağrılarının sayımını ve sırasını değiştirmez.
+    const hidden = !semanticQueue && (kind === 'embeddings' || kind === 'rerank');
+    (hidden ? semanticCalls : calls).push(call);
+    if (!hidden) {
+      active.add(call);
+      peakActive = Math.max(peakActive, active.size);
+      notify();
+    }
     try {
       return await run(behavior, call, input);
     } finally {
       call.settled = true;
-      active.delete(call);
-      notify();
+      if (!hidden) {
+        active.delete(call);
+        notify();
+      }
     }
   }
 
@@ -264,8 +283,8 @@ export function createFakeAiProvider({
       push,
       text: (text) => push({ event: { type: 'text', text } }),
       reasoning: () => push({ event: { type: 'reasoning' } }),
-      done: ({ finishReason = 'stop', model = call.model, usage = null } = {}) => {
-        push({ event: { type: 'done', finishReason, model, usage } });
+      done: ({ finishReason = 'stop', model = call.model, usage = null, toolCalls = [] } = {}) => {
+        push({ event: { type: 'done', finishReason, model, usage, toolCalls } });
         push({ end: true });
       },
       fail: (error) => push({ error }),
@@ -288,6 +307,10 @@ export function createFakeAiProvider({
     const feed = createFeed(signal, call, { ignoreAbort: behavior.ignoreAbort });
     if (behavior.type === 'deferred-stream') {
       call.emit = feed.text;
+      call.emitPlan = (arguments_) => {
+        feed.push({ event: { type: 'tool_call_started' } });
+        feed.done({ finishReason: 'tool_calls', toolCalls: [{ id: 'native_plan', name: 'rota_plan', arguments: JSON.stringify(arguments_) }] });
+      };
       call.think = feed.reasoning;
       call.complete = feed.done;
       call.fail = feed.fail;
@@ -305,7 +328,7 @@ export function createFakeAiProvider({
   }
 
   async function executeStream(input) {
-    const behavior = queue.shift() || { type: 'reply' };
+    const behavior = take('chat') || { type: 'reply' };
     const call = {
       kind: 'stream',
       model: input.model ?? null,
@@ -351,15 +374,24 @@ export function createFakeAiProvider({
    * Araçlı model turu (`streamToolCompletion`). Davranışlar:
    *  - `{ type: 'tool-calls', calls: [{ name, arguments, id? }], preface?: [metin parçaları] }`
    *  - `{ type: 'answer', text, chunks? }` (ya da `reply` / `stream`)
+   *  - `native: true`: gerçek modelin metni ve araç çağrıları dönüştürülmez.
    *  - `{ type: 'script', respond: (call) => davranış }` — isteğin iletilerine
    *    (araç sonuçları, kanıt kimlikleri) bakarak yanıt kuran senaryo
    *  - `status`, `network`, `stall`, `deferred-stream`, `interrupt` akışlı sohbetle aynı.
    */
   function openToolStream(behavior, call, input) {
-    const resolved = behavior.type === 'script' ? (behavior.respond(call) || { type: 'answer', text: '' }) : behavior;
+    let resolved = behavior.type === 'script' ? (behavior.respond(call) || { type: 'answer', text: '' }) : behavior;
+    if (!resolved.native && ['answer', 'reply', 'stream', 'tool-calls'].includes(resolved.type) && resolved.finishReason !== 'length'
+      && resolved.chunks === undefined) {
+      const native = nativeDeclaration({ text: resolved.type === 'tool-calls' ? (resolved.preface || []).join('') : resolved.text, toolCalls: resolved.calls || [] });
+      if (native.toolCalls.some((tool) => tool.name === 'rota_plan')) {
+        resolved = { ...resolved, type: 'tool-calls', preface: native.text === '' ? [] : resolved.preface || [], calls: native.toolCalls };
+      }
+    }
     call.behavior = resolved.type;
     if (resolved.type === 'tool-calls') {
       const feed = createFeed(input.signal, call, { ignoreAbort: resolved.ignoreAbort });
+      for (let index = 0; index < (resolved.reasoning ?? 0); index += 1) feed.reasoning();
       for (const chunk of resolved.preface ?? []) feed.text(chunk);
       const toolCalls = resolved.calls.map((entry, index) => ({
         id: entry.id ?? `call_${call.index}_${index + 1}`,
@@ -368,7 +400,8 @@ export function createFakeAiProvider({
         oversize: Boolean(entry.oversize)
       }));
       for (let index = 0; index < toolCalls.length; index += 1) feed.push({ event: { type: 'tool_call_started' } });
-      feed.push({ event: { type: 'done', finishReason: 'tool_calls', model: input.model, usage: null, toolCalls } });
+      feed.push({ event: { type: 'done', finishReason: resolved.finishReason ?? 'tool_calls',
+        model: resolved.model === undefined ? input.model : resolved.model, usage: resolved.usage ?? null, toolCalls } });
       feed.push({ end: true });
       return Promise.resolve({ events: feed.iterate() });
     }
@@ -377,7 +410,7 @@ export function createFakeAiProvider({
   }
 
   async function executeToolStream(input) {
-    const behavior = queue.shift() || { type: 'reply' };
+    const behavior = take('chat') || { type: 'reply' };
     const call = {
       kind: 'tools',
       index: calls.length + 1,
@@ -424,6 +457,8 @@ export function createFakeAiProvider({
 
   return {
     calls,
+    /** Ortak sırayı kullanmayan (semanticQueue: false) gömme ve yeniden sıralama çağrıları. */
+    semanticCalls,
     get pendingCount() { return queue.length; },
     get activeCount() { return active.size; },
     get peakActive() { return peakActive; },

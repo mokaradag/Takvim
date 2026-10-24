@@ -5,7 +5,7 @@ import { recordAiToolCall } from '../aiTelemetry.js';
 import { parseToolArguments } from './toolArguments.js';
 import { isTurnFatal, TOOL_ERROR_CODES, ToolError, toToolError } from './toolErrors.js';
 import { TOOL_LIMITS } from './toolLimits.js';
-import { getRotaTool } from './toolRegistry.js';
+import { getRotaTool, TASK_RESULT_SCOPE_TOOLS } from './toolRegistry.js';
 import { fitToolResult } from './toolResultPolicy.js';
 import { claimableContract, projectEvidenceData } from '../../../domain/ai/claimableEvidence.js';
 import { trackResultText } from './toolResultText.js';
@@ -51,6 +51,7 @@ export function createToolExecutor({
   resolveTool = getRotaTool,
   onProgress = null,
   validateCall = null,
+  resultScope = null,
   clock = Date.now
 }) {
   const state = { calls: 0, resultBytes: 0, toolMs: 0, roundStartedAt: null, attempted: 0, failures: 0, rounds: 0 };
@@ -73,7 +74,7 @@ export function createToolExecutor({
    * Tek çağrı: doğrulama → yürütme. Sonuç `{ outcome }` ya da aynı model
    * yanıtındaki özdeş çağrı için `{ sameAs }`dir.
    */
-  async function execute(call, tool, pending, index) {
+  async function execute(call, tool, pending, index, prior) {
     if (call.oversize) throw new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$:tooLarge'] });
     const args = parseToolArguments(tool.parameters, call.arguments);
     validateCall?.(tool.name, args);
@@ -89,6 +90,7 @@ export function createToolExecutor({
     const projectPopulation = [];
     try {
       const scoped = Object.freeze({
+        taskIds: prior?.scope.taskIds || null,
         sicil: context.sicil,
         today: context.today,
         now: context.now,
@@ -100,9 +102,25 @@ export function createToolExecutor({
         noteProjects: (projectIds) => { projectPopulation.push(...projectIds); }
       });
       await context.authorization?.(deadline.signal);
-      const outcome = await raceWithAbort(() => trackResultText(() => tool.handler(args, scoped),
+      if (prior) {
+        const authorized = await context.revalidateEvidence(prior.entries, deadline.signal);
+        if (!prior.entries.every(entry => authorized.has(entry.id))) throw new ToolError(TOOL_ERROR_CODES.NOT_FOUND);
+      }
+      let outcome = await raceWithAbort(() => trackResultText(() => tool.handler(args, scoped),
         (data) => projectEvidenceData(data, args.textFields || [])), deadline.signal);
-      return { outcome, cacheKey, args, population: populationNoted ? [...population.values()] : null, projectPopulation };
+      // Önceki küme kısıtı modelden gelmez; kanıt ve kalıcı özet de bu dar nüfusu belirtir.
+      if (prior) {
+        const previousResult = { type: 'task', count: prior.scope.taskIds.length };
+        outcome = { ...outcome,
+          data: { ...outcome.data, previousResult, filters: { ...outcome.data.filters, previousResult: true } },
+          scope: { ...outcome.scope, previousResult, completeProjectView: false,
+            note: 'Sonuç yalnızca önceki doğrulanmış görev kümesinin güncel ve yetkili kayıtlarını kapsar.' },
+          evidence: { ...outcome.evidence, label: `${outcome.evidence.label} · önceki sonuç`,
+            highlights: [`Kapsam: önceki sonuç (${previousResult.count} görev)`, ...(outcome.evidence.highlights || [])] }
+        };
+      }
+      return { outcome, cacheKey, args: prior ? { ...args, previousResult: true } : args,
+        population: populationNoted ? [...population.values()] : null, projectPopulation };
     } catch (error) {
       const failure = deadline.failure();
       if (failure?.code === AI_ERROR_CODES.AI_CANCELLED) throw failure;
@@ -137,6 +155,8 @@ export function createToolExecutor({
 
   /** Bir model yanıtındaki araç çağrılarını yürütür; çağrı sırasıyla araç iletileri döner. */
   async function executeRound(toolCalls = []) {
+    const prior = resultScope?.();
+    const unsupportedScope = prior && toolCalls.some(call => !TASK_RESULT_SCOPE_TOOLS.includes(call.name));
     context.beginRound();
     state.rounds += 1;
     const plans = toolCalls.map((call, index) => {
@@ -147,6 +167,8 @@ export function createToolExecutor({
       if (state.attempted > limits.maxTotalCalls) {
         return { call, tool: null, rejected: new ToolError(TOOL_ERROR_CODES.LIMIT_EXCEEDED) };
       }
+      if (unsupportedScope) return { call, tool: null,
+        rejected: new ToolError(TOOL_ERROR_CODES.INVALID_ARGUMENTS, { details: ['$.previousResult:unsupported'] }) };
       const tool = resolveTool(call.name);
       if (!tool) return { call, tool: null, rejected: new ToolError(TOOL_ERROR_CODES.UNKNOWN_TOOL) };
       state.calls += 1;
@@ -168,7 +190,7 @@ export function createToolExecutor({
         onProgress?.({ topic: plan.tool.topic });
         const startedAt = clock();
         try {
-          results[index] = { ...(await execute(plan.call, plan.tool, pending, index)), durationMs: clock() - startedAt, generatedAt: new Date().toISOString() };
+          results[index] = { ...(await execute(plan.call, plan.tool, pending, index, prior)), durationMs: clock() - startedAt, generatedAt: new Date().toISOString() };
         } catch (error) {
           if (isTurnFatal(error)) throw error;
           results[index] = { error: toToolError(error), durationMs: clock() - startedAt };

@@ -103,7 +103,7 @@ test('a declaration without calls is read by the server; a missing declaration c
   assert.equal(stack.provider.calls.length, 3);
   assert.deepEqual(turnTraces(logs).map(({ context }) => [context.selectedBy, context.toolCalls, context.rounds.map((round) => round.purpose)]),
     [['server', 1, ['plan']], ['server', 1, ['tools', 'declaration']]]);
-  assert.deepEqual(turnTraces(logs).map(({ context }) => context.declarations), [1, 1]);
+  assert.deepEqual(turnTraces(logs).map(({ context }) => context.declarations), [1, 2]);
   assert.ok(stack.provider.calls.every((call) => call.model === DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model));
   drained(stack.provider);
 });
@@ -146,7 +146,7 @@ test('a newer complete snapshot supersedes duplicate older rows without another 
   assert.equal(answer.finishReason, 'stop');
   assert.deepEqual(answer.evidence.map((item) => item.id), ['R2']);
   const [trace] = turnTraces(logs);
-  assert.deepEqual([trace.context.selectedBy, trace.context.rounds.map((round) => round.purpose)], ['server', ['tools']]);
+  assert.deepEqual([trace.context.selectedBy, trace.context.rounds.map((round) => round.purpose)], ['server', ['plan']]);
   assert.equal(aiTelemetrySnapshot().grounding.serverSelected, 1);
   drained(stack.provider);
 });
@@ -209,6 +209,21 @@ test('an empty completion keeps timing and usage, retries once cheaply, then use
   assert.equal(typeof empty.ms, 'number');
   assert.equal(retry.purpose, 'retry');
   assert.equal(trace.context.escalated, false);
+  drained(stack.provider);
+});
+
+test('an empty completion preserves the allowed reported model mismatch in its trace', async (t) => {
+  const stack = stackFor(t);
+  const logs = captureConsole(t);
+  const reported = DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model;
+  stack.provider.enqueue({ ...emptyRound, model: reported }, nativePlan());
+  assert.equal(doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION, mode: 'deep' })).assistantMessage.finishReason, 'stop');
+  const [trace] = turnTraces(logs);
+  const [empty, retry] = trace.context.rounds;
+  assert.equal(empty.model, reported);
+  assert.equal(empty.configuredModel, DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model);
+  assert.equal(empty.modelMismatch, true);
+  assert.equal(retry.modelMismatch, false);
   drained(stack.provider);
 });
 

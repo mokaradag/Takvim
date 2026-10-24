@@ -995,6 +995,7 @@ export function createAiGateway({
                 baseUrl: config.baseUrl,
                 apiKey: credential.apiKey,
                 model: route.model,
+                profile: route.profile,
                 messages: safeMessages,
                 tools,
                 toolChoice,
@@ -1057,7 +1058,8 @@ export function createAiGateway({
               const empty = new AiError(AI_ERROR_CODES.AI_PROVIDER_RESPONSE_INVALID, {
                 details: { reason: 'EMPTY_COMPLETION' }
               });
-              empty.roundMeasurements = { usage: final.usage ?? null, finishReason: final.finishReason ?? null,
+              empty.roundMeasurements = { model: reportedModel(final.model), modelMismatch: typeof final.model === 'string' && final.model !== route.model,
+                usage: final.usage ?? null, finishReason: final.finishReason ?? null,
                 durationMs: Math.max(0, now() - roundStartedAt), firstEventMs: firstEventAt == null ? null : Math.max(0, firstEventAt - roundStartedAt) };
               recordProviderCall({ operation: 'ai.provider.stream', latencyMs: now() - providerStartedAt,
                 code: empty.code, healthFailure: healthFailure(empty), source: credential.source });

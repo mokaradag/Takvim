@@ -45,6 +45,7 @@ import {
 } from './conversationStore.js';
 import { buildGroundedContext } from './groundedPrompt.js';
 import { runGroundedTurn } from './groundedAnswer.js';
+import { semanticPlanningAdvice } from './semanticPlanning.js';
 import { EVIDENCE_TEXT_FIELDS } from '../../../domain/ai/claimableEvidence.js';
 import { clarificationReferences, selectedCandidateOrdinal } from '../../../domain/ai/clarification.js';
 
@@ -290,7 +291,7 @@ async function loadEvidenceFor(sicil, signal, { conversationId, messageId = null
   if (!result.knownSicil) throw unknownSicil();
   noteEvidenceSchema(result.ready);
   return { ready: result.ready, byMessage: result.byMessage, epochsByMessage: result.epochsByMessage,
-    authorizationByMessage: result.authorizationByMessage, clarificationByMessage: result.clarificationByMessage };
+    authorizationByMessage: result.authorizationByMessage, clarificationByMessage: result.clarificationByMessage, resultScopeByMessage: result.resultScopeByMessage };
 }
 
 /* ── Hazırlık durumu ─────────────────────────────────────────── */
@@ -746,9 +747,15 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     claim.bindConversation(prepared.conversation.id);
     const useTools = grounded && !prepared.answer;
     let history = prepared.history;
+    let previousResult = null;
     if (!prepared.answer && history.some((message) => message.role === 'assistant')) {
       // Geçmiş yanıtlar bağlama yer tutucu olarak girer: yalnızca kanıt dönemleri gerekir.
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id }, { revalidate: false });
+      const prior = history.at(-1);
+      const scope = useTools && prior?.role === 'assistant' && prior.finishReason === 'stop'
+        ? priorEvidence?.resultScopeByMessage?.get(prior.id) : null;
+      const entries = priorEvidence?.authorizationByMessage?.get(prior?.id);
+      if (scope && entries?.length && !priorEvidence.unverifiable?.has(prior.id)) previousResult = { scope, entries };
       history = fallbackAssistantHistory(history, priorEvidence);
       const last = history.at(-1);
       if (useTools && last?.role === 'assistant' && last.finishReason === 'clarification') {
@@ -778,6 +785,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       general: input.source === 'general',
       allowedTextFields: input.includeText ? [...EVIDENCE_TEXT_FIELDS] : [],
       clarification,
+      previousResult,
       dataUnavailable: config.toolsEnabled && input.source !== 'general' && !grounded,
       conversation: prepared.conversation,
       userMessage: prepared.turn.message,
@@ -897,6 +905,12 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
   return result;
 }
 
+/** Anlamsal danışmanlığın sorusu: kullanıcının bu turdaki iletisi; numaralı aday seçiminde önceki soru. */
+function planningQuery(turn) {
+  if (turn.clarification?.selected && turn.clarification.question) return turn.clarification.question;
+  return String(turn.modelMessages.findLast((message) => message.role === 'user')?.content ?? '');
+}
+
 /**
  * Rota verisi araçlarıyla, kanıta dayalı yanıt. Model ve araç turları SQL
  * işlemi dışında çalışır; yanıt ve atıf yaptığı kanıtlar yalnızca yanıt
@@ -904,12 +918,21 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
  * yazılır. Durdurulan ya da süresi dolan tur yazılmaz.
  */
 async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress = null, onText, onDelivery = null, onGenerated = null }) {
+  const startedAt = Date.now();
+  const catalog = toolCatalogForModel();
+  // Aşama 4C: planlamadan önce Aşama 4B keşfi (kendi kirası ve süre bütçesiyle, araç oturumundan ayrı).
+  // Danışmanlık kaybı planlamayı Aşama 3 davranışına döndürür; iptal ve kimlik/yetki hatası yukarı taşınır.
+  onProgress?.();
+  const planning = { ...await semanticPlanningAdvice({ query: planningQuery(turn), catalog, signal }), startedAt };
+  onProgress?.();
   const options = {
     messages: turn.modelMessages,
-    catalog: toolCatalogForModel(),
+    catalog,
+    planning,
     context: createToolTurnContext({ sicil: turn.sicil }),
     allowedTextFields: turn.allowedTextFields || [],
     clarification: turn.clarification || null,
+    previousResult: turn.previousResult || null,
     onStatus,
     onProgress,
     onText: async () => {},
@@ -989,7 +1012,7 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
     // Gösterilen yanıt turun kendi yanıtıysa özgün sonuç (ör. general_redirect) korunur.
     const replaced = !own || answer.content !== grounded.text || answer.finishReason !== grounded.finishReason;
     const deliveredOutcome = !replaced ? grounded.outcome
-      : answer.finishReason === 'stop' ? 'grounded' : answer.finishReason === 'grounding_failed' ? 'failed' : answer.finishReason;
+      : answer.finishReason === 'unsupported' ? 'abstained' : answer.finishReason === 'stop' ? 'grounded' : answer.finishReason === 'grounding_failed' ? 'failed' : answer.finishReason;
     // Tur izi yalnızca metin gerçekten teslim edildikten sonra son sonucunu alır; teslim hatası `error` olur.
     grounded.completeDisclosure?.(deliveredOutcome);
   } catch (error) {

@@ -72,9 +72,6 @@ const STAGE = Object.freeze({ QUERY: 'query', CATALOGUE: 'catalogue', EMBEDDING:
 const CATEGORY_OF_CODE = Object.freeze({
   [AI_ERROR_CODES.AI_DISABLED]: 'disabled',
   [AI_ERROR_CODES.AI_CONFIGURATION_ERROR]: 'configuration',
-  [AI_ERROR_CODES.AI_KEY_MISSING]: 'credential',
-  [AI_ERROR_CODES.AI_KEY_INVALID]: 'credential',
-  [AI_ERROR_CODES.AI_UNAUTHORIZED]: 'credential',
   [AI_ERROR_CODES.AI_BUSY]: 'capacity',
   [AI_ERROR_CODES.AI_QUEUE_TIMEOUT]: 'capacity',
   [AI_ERROR_CODES.AI_RATE_LIMITED]: 'capacity',
@@ -285,6 +282,7 @@ export function createSemanticRetrieval({
 
     const firstStage = (outcome) => ({ ...outcome, status: SEMANTIC_RETRIEVAL_STATUS.FIRST_STAGE, candidates: ranked.candidates });
     if (routes.rerank) return firstStage(profileOutcome(STAGE.RERANK, routes.rerank));
+    trace.stage = STAGE.RERANK;
     let scored;
     try {
       scored = await getGateway().rerankTexts({
@@ -323,7 +321,9 @@ export function createSemanticRetrieval({
       outcome = await discover(query, signal, trace);
       if (signal?.aborted) throw new AiError(AI_ERROR_CODES.AI_CANCELLED);
     } catch (error) {
-      if (signal?.aborted) recordSemanticRetrieval({ status: 'cancelled', index: trace.index, durationMs: now() - startedAt });
+      if (signal?.aborted) recordSemanticRetrieval(signal.reason?.code === AI_ERROR_CODES.AI_TIMEOUT
+        ? { status: 'unavailable', failure: { stage: trace.stage, category: 'timeout', reason: 'TIMEOUT' }, serviceFailure: true, index: trace.index, durationMs: now() - startedAt }
+        : { status: 'cancelled', index: trace.index, durationMs: now() - startedAt });
       throw error;
     }
     const status = outcome.status ?? SEMANTIC_RETRIEVAL_STATUS.UNAVAILABLE;

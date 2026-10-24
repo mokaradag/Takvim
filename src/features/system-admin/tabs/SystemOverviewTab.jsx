@@ -71,7 +71,7 @@ function AiDrawerFields({ detail }) {
 
 const ESCALATION_REASON_LABELS = Object.freeze({ VERIFICATION_FAILED: 'Doğrulanamayan', LENGTH: 'Uzunluk sınırı', EMPTY_COMPLETION: 'Boş yanıt', REQUEST_DECLARATION: 'İstek bildirimi', OTHER: 'Diğer' });
 const ESCALATION_OUTCOME_LABELS = Object.freeze({
-  grounded: 'Kanıtlı', clarification: 'Açıklama', not_found: 'Bulunamadı', unavailable: 'Kullanılamıyor', general_redirect: 'Yönlendirme', failed: 'Doğrulanamayan', error: 'Hata', timeout: 'Süre aşımı', other: 'Diğer'
+  grounded: 'Kanıtlı', abstained: 'Çekimser', clarification: 'Açıklama', not_found: 'Bulunamadı', unavailable: 'Kullanılamıyor', general_redirect: 'Yönlendirme', failed: 'Doğrulanamayan', error: 'Hata', timeout: 'Süre aşımı', other: 'Diğer'
 });
 const countList = (entries, labels) => entries.map(([key, count]) => `${labels[key] || key} ${count}`).join(' · ');
 
@@ -80,6 +80,9 @@ export function RotaDataDrawerFields({ rotaData, telemetry }) {
   if (!rotaData?.enabled) return <DrawerField label="Rota verisi araçları" value="Kapalı" />;
   const tools = telemetry.tools || {};
   const grounding = telemetry.grounding || {};
+  const planner = telemetry.planner || {};
+  const withoutDecision = Math.max(0, Object.values(planner.semantic || {}).reduce((sum, count) => sum + count, 0)
+    - Object.values(planner.decisions || {}).reduce((sum, count) => sum + count, 0));
   const evidence = rotaData.evidenceSchema?.ready === true ? 'Hazır' : rotaData.evidenceSchema?.ready === false ? 'Kurulmamış (0018)' : 'Henüz denetlenmedi';
   const failures = Object.entries(tools.byOutcome || {}).filter(([code]) => code !== 'OK');
   const escalations = grounding.escalations || {};
@@ -94,7 +97,7 @@ export function RotaDataDrawerFields({ rotaData, telemetry }) {
       )}
       <DrawerField
         label="Kanıta dayalı yanıtlar"
-        value={`Kanıtlı ${grounding.grounded ?? 0} · Genel sohbete yönlendirilen ${grounding.general_redirect ?? 0} · Açıklama ${grounding.clarification ?? 0} · Bulunamadı ${grounding.not_found ?? 0} · Kullanılamıyor ${grounding.unavailable ?? 0} · Doğrulanamayan ${grounding.failed ?? 0} · Düzeltilen ${grounding.repaired ?? 0}`}
+        value={`Kanıtlı ${grounding.grounded ?? 0} · Genel sohbete yönlendirilen ${grounding.general_redirect ?? 0} · Çekimser ${grounding.abstained ?? 0} · Açıklama ${grounding.clarification ?? 0} · Bulunamadı ${grounding.not_found ?? 0} · Kullanılamıyor ${grounding.unavailable ?? 0} · Doğrulanamayan ${grounding.failed ?? 0} · Düzeltilen ${grounding.repaired ?? 0}`}
       />
       <DrawerField
         label="Standart → Derin düşünme devri"
@@ -102,6 +105,10 @@ export function RotaDataDrawerFields({ rotaData, telemetry }) {
           ...(reasons.length ? [`Neden: ${countList(reasons, ESCALATION_REASON_LABELS)}`] : []),
           ...(outcomes.length ? [`Sonuç: ${countList(outcomes, ESCALATION_OUTCOME_LABELS)}`] : [])].join(' · ')}
       />
+      <DrawerField label="Planlayıcı kararları" value={countList(Object.entries(planner.decisions || {}), { rota: 'Rota', general: 'Genel', clarify: 'Açıklama', abstain: 'Çekimser', invalid: 'Geçersiz', text_fields: 'Metin izni' }) || 'Henüz karar yok'} />
+      <DrawerField label="Plan kararı oluşmayan turlar" value={withoutDecision} />
+      <DrawerField label="Planlayıcı ret türleri" value={countList(Object.entries(planner.rejections || {}), {}) || 'Yok'} />
+      <DrawerField label="Anlamsal danışmanlık" value={[countList(Object.entries(planner.semantic || {}), { reranked: 'Yeniden sıralı', first_stage: 'İlk aşama', unavailable: 'Kullanılamıyor' }) || 'Henüz ölçüm yok', countList(Object.entries(planner.semanticReasons || {}), { TIMEOUT: 'Süre aşımı', PROFILE_DISABLED: 'Kapalı', PROFILE_NOT_CONFIGURED: 'Tanımsız', MODEL_UNAVAILABLE: 'Model yok', INTERNAL_UNAVAILABLE: 'İç hata', OTHER: 'Diğer' }), `Çok bölümlü: ${planner.multiPart ?? 0}`].filter(Boolean).join(' · ')} />
       <DrawerField label="Görünür çıktısız model yanıtı" value={`${telemetry.emptyCompletions ?? 0}`} />
       {rotaData.toolGate && (
         <DrawerField label="Araç SQL kapısı" value={`Etkin ${rotaData.toolGate.active} · Sırada ${rotaData.toolGate.queued}`} mono />

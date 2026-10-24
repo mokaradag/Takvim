@@ -228,7 +228,10 @@ test('girdi parmak izli ve kanoniktir; kâhin koşu dosyası aynı sözleşmeden
     assert.equal(result.code, 1, limit);
     assert.match(result.stderr, /--limit/, limit);
   }
-  assert.equal((await cli('report')).code, 1);
+  const missingRun = await cli('report');
+  assert.equal(missingRun.code, 1);
+  assert.match(missingRun.stderr, /--run/);
+  assert.doesNotMatch(missingRun.stderr, /\bat (?:file:|\w)|Error:/);
   assert.equal((await cli('bilinmeyen')).code, 1);
   // Bağlantılı yoldan çağrılan komut da çalışır; sessizce başarılı çıkmaz.
   const linked = path.join(directory, 'depo');

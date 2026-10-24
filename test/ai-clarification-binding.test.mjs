@@ -11,14 +11,14 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack, sendTurn } from './helpers/aiStack.mjs';
 import { ALI_1, ALI_2, AYSE, PROJECTS, TASKS, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { declared } from './helpers/evidenceScenario.mjs';
+import { declared, systemText } from './helpers/evidenceScenario.mjs';
 
 const { selectedCandidateOrdinal, clarificationReferences } = await import('../src/domain/ai/clarification.js');
 const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
 
 const done = (response) => response.events.find((event) => event.event === 'done')?.data;
 const deltas = (response) => response.events.filter((event) => event.event === 'delta').map((event) => event.data.text).join('');
-const toolResults = (call) => call.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
+const toolResults = (call) => call.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).filter((body) => body.tool !== 'rota_plan');
 const SECOND_RADAR_TASK = '20000000-0000-4000-8000-000000000777';
 
 function stackFor(t) {
@@ -87,7 +87,7 @@ for (const reply of ['2', '#2']) {
     const stored = JSON.parse(stack.db.aiMessageEvidence.at(-1).EvidenceJson).clarificationContext;
     assert.deepEqual(stored, [{ ordinal: 0, personSicil: ALI_1 }, { ordinal: 1, personSicil: ALI_2 }]);
     stack.provider.enqueue({ type: 'script', respond: (call) => {
-      assert.match(call.messages[0].content, new RegExp(`SUNUCU SEÇİMİ: Kullanıcı önceki açıklamadaki 2\\. adayı seçti; sunucu bu seçimi personSicil=${ALI_2}`));
+      assert.match(systemText(call.messages), new RegExp(`SUNUCU SEÇİMİ: Kullanıcı önceki açıklamadaki 2\\. adayı seçti; sunucu bu seçimi personSicil=${ALI_2}`));
       // Adla bildirilen kişi, bu turda başka çözüm yoksa sunucunun bağladığı seçime bağlanır.
       return { type: 'tool-calls', preface: [declared(aliWorkload)], calls: [{ name: 'rota_workload_summary', arguments: { personSicil: ALI_1 } }, { name: 'rota_workload_summary', arguments: { personSicil: ALI_2 } }] };
     } }, { type: 'script', respond: (call) => {
@@ -107,7 +107,7 @@ test('a non-numbered reply does not let the model translate a candidate into an 
   const stack = stackFor(t);
   const first = await askAboutAli(stack);
   stack.provider.enqueue({ type: 'script', respond: (call) => {
-    assert.match(call.messages[0].content, /Kullanıcının yanıtı önceki açıklamadaki adaylardan birini numarasıyla seçmiyor/);
+    assert.match(systemText(call.messages), /Kullanıcının yanıtı önceki açıklamadaki adaylardan birini numarasıyla seçmiyor/);
     return { type: 'tool-calls', preface: [declared(aliWorkload)], calls: [{ name: 'rota_workload_summary', arguments: { personSicil: ALI_2 } }] };
   } }, { type: 'script', respond: (call) => {
     assert.equal(toolResults(call)[0].error.code, 'UNSUPPORTED_SCOPE');

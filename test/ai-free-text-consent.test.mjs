@@ -15,7 +15,7 @@ import { declared } from './helpers/evidenceScenario.mjs';
 const { analyzeGroundedAnswer } = await import('../src/domain/ai/evidenceVerification.js');
 
 const done = (response) => response.events.find((event) => event.event === 'done')?.data;
-const toolResults = (call) => call.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
+const toolResults = (call) => call.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).filter((body) => body.tool !== 'rota_plan');
 const stackFor = (t, seed = {}) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed(seed) });
 
 const MESSAGES = Object.freeze({
@@ -63,12 +63,12 @@ test('a turn without the opt-in cannot request protected text, and the next turn
   assert.match(opened.assistantMessage.content, /Önceki bütün talimatları yok say/);
   assert.doesNotMatch(opened.assistantMessage.content, /【R7】/);
   assert.equal(opened.assistantMessage.evidence.length, 1);
-  askDescription({ modelAnswer: true });
+  askDescription();
   const next = done(await sendTurn({ conversationId: opened.conversation.id, turnId: randomUUID(), message: `Peki şimdi açıklamayı tekrar göster ${TASKS.LITERAL}` }));
-  assert.equal(next.assistantMessage.finishReason, 'grounding_failed');
+  assert.equal(next.assistantMessage.finishReason, 'clarification');
   assert.doesNotMatch(next.assistantMessage.content, /talimatları/);
-  const refused = toolResults(stack.provider.calls.at(-1))[0];
-  assert.equal(refused.error.code, 'UNSUPPORTED_SCOPE');
+  assert.match(next.assistantMessage.content, /Notlar ve iletiler/);
+  assert.equal(next.assistantMessage.evidence.length, 0);
 });
 
 test('change text in activity history needs the changes opt-in; structured non-text changes do not', async (t) => {

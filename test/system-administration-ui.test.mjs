@@ -338,6 +338,23 @@ test('Rota data drawer translates request-declaration, timeout and fallback tele
   view.unmount();
 });
 
+test('Rota posted convergence: predecision failures stay separate from invalid plans after sample saturation', async (t) => {
+  const { recordPlannerDecision, aiTelemetrySnapshot, resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
+  resetAiTelemetryForTests();
+  t.after(() => resetAiTelemetryForTests());
+  for (let index = 0; index < 220; index += 1) recordPlannerDecision({ decision: 'rota', semantic: 'first_stage' });
+  recordPlannerDecision({ decision: 'invalid', semantic: 'first_stage' });
+  for (let index = 0; index < 3; index += 1) recordPlannerDecision({ decision: null, semantic: 'unavailable' });
+  const telemetry = aiTelemetrySnapshot();
+  assert.equal(telemetry.planner.latency.count, 200, 'latency storage remains bounded');
+  assert.equal(telemetry.planner.decisions.invalid, 1, 'outages do not inflate invalid model plans');
+  const view = mountComponent(RotaDataDrawerFields, { rotaData: { enabled: true }, telemetry });
+  const absent = findElement(view.output, node => node.props?.label === 'Plan kararı oluşmayan turlar');
+  assert.equal(absent.props.value, 3, 'the counter uses cumulative samples rather than the bounded latency window');
+  assert.match(JSON.stringify(view.output), /Geçersiz 1/);
+  view.unmount();
+});
+
 test('Rota verisi ayrıntısı Derin düşünme devirlerini ve görünür çıktısız yanıtları yalnızca sayı olarak gösterir', () => {
   const telemetry = {
     tools: { calls: 4, latency: { p95Ms: 120 }, byOutcome: { OK: 4 } },

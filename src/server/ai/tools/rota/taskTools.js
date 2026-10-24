@@ -104,6 +104,7 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false }
   const range = coarseTargetRange(filters, call.today);
   const result = await call.sql((executor) => readTaskFacts(executor, scope, {
     projectId: filters.projectId,
+    taskIds: call.taskIds || [],
     wbsId: filters.wbsId,
     text: filters.text,
     openOnly: filtersOpenOnly(filters),

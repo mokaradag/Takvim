@@ -309,6 +309,8 @@ async function* completionAsStream(completion, limits, { reasoning = false } = {
  * Sağlayıcıdan bağımsız ileti biçimi → OpenAI uyumlu tel biçimi. Araç çağrısı
  * yapan asistan iletisi `tool_calls`, araç sonucu `role: tool` ve
  * `tool_call_id` taşır. Tel biçimi bu modülün dışına çıkmaz.
+ * Araçlı ağ geçidi, ara sistem iletilerini destekleyen şablon gerektirir;
+ * sunucu notları başka role taşınmaz ve sabit önekle birleştirilmez.
  */
 function wireMessages(messages) {
   return messages.map((message) => {
@@ -331,6 +333,17 @@ function wireMessages(messages) {
     }
     return { role: message.role, content: message.content };
   });
+}
+
+/** `auto`, `none` ya da sunulan araçlardan birinin zorunlu çağrısı (`{ name }` → OpenAI uyumlu adlı işlev seçimi). */
+function wireToolChoice(toolChoice, tools, profile) {
+  if (toolChoice === 'none') return 'none';
+  if (toolChoice?.name && tools.some((tool) => tool.name === toolChoice.name)) {
+    // Uyumluluk etkin standart araç profiline aittir; Derin profilinin sözleşmesi değişmez.
+    if (profile === 'chat.tools') return 'auto';
+    return { type: 'function', function: { name: toolChoice.name } };
+  }
+  return 'auto';
 }
 
 function wireTools(tools) {
@@ -450,7 +463,7 @@ export function createOpenAiCompatibleProvider({
      * birleştirilmiş çağrıları taşıyan tek `done`. Bağımsız değişkenler burada
      * çözülmez; doğrulama sunucunun araç kayıt defterinindir.
      */
-    async streamToolCompletion({ baseUrl, apiKey, model, messages, tools = [], toolChoice = 'auto', maxOutputTokens = null, signal }) {
+    async streamToolCompletion({ baseUrl, apiKey, model, profile = null, messages, tools = [], toolChoice = 'auto', maxOutputTokens = null, signal }) {
       const withTools = Array.isArray(tools) && tools.length > 0;
       const response = await send(`${baseUrl}/chat/completions`, {
         method: 'POST',
@@ -460,7 +473,7 @@ export function createOpenAiCompatibleProvider({
           messages: wireMessages(messages),
           stream: true,
           ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}),
-          ...(withTools ? { tools: wireTools(tools), tool_choice: toolChoice === 'none' ? 'none' : 'auto' } : {})
+          ...(withTools ? { tools: wireTools(tools), tool_choice: wireToolChoice(toolChoice, tools, profile) } : {})
         })
       }, signal);
       if (!response.ok) {

@@ -7,7 +7,7 @@ import { canonicalActualId } from '../../../domain/identity/actualId.js';
 import { effectivePageSize } from './rota/rotaToolSupport.js';
 import { addDays, normalizeTaskFilters, searchText } from './rota/taskFacts.js';
 import { parseToolArguments } from './toolArguments.js';
-import { getRotaTool, toolCatalogForModel } from './toolRegistry.js';
+import { getRotaTool, TASK_RESULT_SCOPE_TOOLS, toolCatalogForModel } from './toolRegistry.js';
 import { containmentText, populationArguments } from './toolScope.js';
 
 /**
@@ -226,7 +226,7 @@ function entityProperty(request, metric) {
 
 const carriesMetric = (tool, metric) => metricPaths(tool, metric).length > 0;
 /** Ölçünün bu araçtaki korumalı serbest metin alanları (ör. açıklama). */
-const textLeaves = (tool, metric) => metricPaths(tool, metric).map((path) => path.split('.').at(-1)).filter((leaf) => EVIDENCE_TEXT_FIELDS.includes(leaf));
+const textLeaves = (tool, metric) => metricPaths(tool, metric).map((path) => path.split('.').findLast((part) => part !== '*')).filter((leaf) => EVIDENCE_TEXT_FIELDS.includes(leaf));
 
 /**
  * Nüfus aracının taşımadığı, bildirilen bir varlığın kendi özelliği: o varlığı seçen taşıyıcı araç
@@ -325,6 +325,13 @@ function resolvesDeclared(type, text, entities) {
 export function completeRequest(request, calls, { today, allowedTextFields = [] }) {
   const problems = [];
   const hints = [];
+  // Onarım yolu normalleştirilmiş sıraya değil, modelin özgün alan yuvasına aittir.
+  for (const [index, field] of (request.fields || []).entries()) {
+    if (request.previousResult && !TASK_RESULT_SCOPE_TOOLS.includes(field.tool)) {
+      problems.push(`$.fields[${index}]:previousResult`);
+      hints.push('Önceki görev kümesinin alanları yalnızca rota_task_search veya rota_task_analytics ile okunabilir; previousResult bağını koru.');
+    }
+  }
   const filters = { ...request.filters };
   let population = request.population ? { ...request.population } : null;
   const entities = [...request.entities];
@@ -379,6 +386,8 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
   if (operation !== 'value' && !population.collection) {
     const fitting = listCollections(tool, request.metrics, shaped);
     if (fitting.length === 1) population.collection = fitting[0];
+    // Aracın bu varlık biçimindeki tek satır koleksiyonu belirsiz değildir: sunucu varsayılanıdır.
+    else if (!fitting.length && shaped.length === 1) population.collection = shaped[0];
   }
   // Planın nüfus çağrıları: istekte verilmeyen koşul ve boyutlar onlardan alınır; çelişki ve belirsizlik reddedilir.
   const own = calls.filter((call) => call.name === tool);
@@ -438,8 +447,9 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
     hints.push(...[...new Set(undeclared.map((call) => NAME_RESOLVERS[call.name]))]
       .map((type) => `request.entities: [{"type":"${type}","text":"<kullanıcının yazdığı ad>"}] ekle (adla aranan ${type} bildirilen varlıktır)`));
   }
-  // Aynı ad hem proje/kişi varlığı hem görev başlığı araması olamaz: filters.text yalnızca görev başlığında arar.
-  if (typeof filters.text === 'string' && entities.some((entity) => ['project', 'person'].includes(entity.type) && entity.text
+  // Aynı ad hem proje/kişi varlığı hem görev başlığı araması olamaz: görev nüfusunda filters.text yalnızca görev
+  // başlığında arar. Proje ya da kişi aramasında ise metin adlandırılan varlığın kendi aramasıdır.
+  if (FAMILIES[tool] === 'task' && typeof filters.text === 'string' && entities.some((entity) => ['project', 'person'].includes(entity.type) && entity.text
     && containmentText(entity.text) === containmentText(filters.text))) {
     problems.push('$.filters.text:entity');
     hints.push('filters.text: proje ya da kişi adı entities içinde bildirilir; filters.text yalnızca görev başlığında aranan metindir (gerekmiyorsa kaldır)');
@@ -483,7 +493,10 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
 export function requestCapabilityProblems(request, { allowedTextFields = [] } = {}) {
   const problems = [];
   const hints = [];
-  const carrierHint = (name, metric) => `${metric}: fields ile istenen kayıtlı alanı bağla; ${name}: ${metricPaths(name, metric).join('|')}`;
+  const carrierHint = (name, metric) => {
+    const paths = metricPaths(name, metric);
+    return `${metric}: fields ile kayıtlı alanı bağla (ölçü metrics içinde kalır), ör. {"metric":"${metric}","tool":"${name}","path":"${paths[0]}"}; path seçenekleri: ${paths.join('|')}`;
+  };
   for (const field of request.fields || []) {
     if (!request.metrics.includes(field.metric) || metricEntry(field.tool, field.path.replace(/^data\./, ''))?.metric !== field.metric) problems.push('$.fields:metric');
   }
@@ -535,7 +548,7 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
   }
   if (requestTextFields(request).some((field) => !allowedTextFields.includes(field))) {
     problems.push('$.population.textFields:not-authorized');
-    hints.push('population.textFields: kullanıcı bu turda serbest metni açmadı; bu alan okunamaz (kullanıcıya "Notlar ve iletiler" anahtarını öner)');
+    hints.push('population.textFields: kullanıcı bu turda serbest metni açmadı; bu alan okunamaz (sunucu kullanıcıdan "Notlar ve iletiler" anahtarını açmasını ister)');
   }
   const active = Object.entries(request.filters).filter(([, value]) => value != null).map(([key]) => key);
   const fieldTools = (metric) => [...new Set((request.fields || []).filter((field) => field.metric === metric).map((field) => field.tool))];
@@ -652,6 +665,27 @@ function entityReadElsewhere(request, entity, index) {
       && Object.hasOwn(getRotaTool(field.tool).parameters.properties, param));
 }
 
+/** Bölme karşılaştırmasında kapsam yalnızca onu gerçekten taşıyan araçta korunur. */
+export function requestScopeForTool(request, tool) {
+  const properties = getRotaTool(tool)?.parameters.properties || {};
+  const source = { ...request, population: { ...request.population, tool },
+    entities: (Array.isArray(request.entities) ? request.entities : []).map(entity => entity || {}),
+    fields: (Array.isArray(request.fields) ? request.fields : []).filter(field => getRotaTool(field?.tool)),
+    bindings: (Array.isArray(request.bindings) ? request.bindings : []).filter(binding => binding && typeof binding === 'object') };
+  const indexes = (Array.isArray(request.entities) ? request.entities : []).flatMap((entity, index) => {
+    const bound = source.bindings.filter(binding => binding.entity === index);
+    if (bound.length && !bound.some(binding => request.metrics.includes(binding.metric))
+      && request.metrics.every(metric => source.bindings.some(binding => binding.metric === metric))) return [];
+    return Object.hasOwn(properties, SELECTOR_PARAMS[entity?.type]) || entity && entityReadElsewhere(source, entity, index) ? [index] : [];
+  });
+  const rank = request.rank && request.metrics.includes(request.rank.metric) ? request.rank : null;
+  const operation = request.operation === 'value' ? 'value' : rank ? 'rank'
+    : listCollections(tool, request.metrics, request.population?.collection ? [request.population.collection] : undefined).length ? 'list' : 'value';
+  return { ...source, operation, rank, filters: Object.fromEntries(Object.entries(request.filters || {}).filter(([key]) => familyKeys(tool).includes(key))),
+    entities: indexes.map(index => request.entities[index]),
+    bindings: source.bindings.filter(binding => request.metrics.includes(binding.metric) && indexes.includes(binding.entity)).map(binding => ({ ...binding, entity: indexes.indexOf(binding.entity) })) };
+}
+
 function rowMetricsOf(tool, collection) {
   return Object.keys(METRICS).filter((metric) => rowMetricFields(tool, collection, metric).length);
 }
@@ -716,7 +750,8 @@ function parsedRead(tool, args) {
  * `[{ name, args }]`; kurulamıyorsa ya da hepsi zaten yürütüldüyse boş.
  */
 export function derivedReads(request, bound, { today, attempted = new Set() } = {}) {
-  if (!request?.population?.tool) return [];
+  // Bağımlı bölümün varlığı önceki bölümün kanıtından bağlanmadan okuma kurulmaz: seçicisiz okuma nüfusu genişletirdi.
+  if (!request?.population?.tool || request.entities?.some((entity) => entity.from != null)) return [];
   const key = (call) => readKey(call.name, call.args, today);
   const fresh = (calls) => calls.filter((call, index) => !attempted.has(key(call)) && calls.findIndex((other) => key(other) === key(call)) === index);
   const unresolved = bound.filter((entity) => !entity.bound && entity.text);

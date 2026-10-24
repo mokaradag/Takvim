@@ -6,6 +6,7 @@ import { COMPONENTS, EVENT_SEVERITIES } from '../../domain/observability/eventMo
 import { GAUGE_KEYS, summarizeDurations } from '../../domain/observability/metrics.js';
 import { logEvent } from '../observability/structuredLogger.js';
 import { recordGauge, recordOperation } from '../observability/telemetryRegistry.js';
+import { TOOL_ERROR_CODES } from './tools/toolErrors.js';
 
 /**
  * Yapay zekâ telemetrisi (var olan kaydedici ve günlük üzerinden).
@@ -63,8 +64,11 @@ function createState() {
     // Rota verisi araçları: yalnızca araç adı, sonuç sınıfı ve süre (içerik YOK).
     tools: { calls: 0, byOutcome: {}, byTool: {}, latencyMs: [], lastFailure: null },
     // Kanıta dayalı yanıtların sonucu: grounded (kanıtlı), direct (araçsız), failed (doğrulanamadı).
-    grounding: { grounded: 0, general_redirect: 0, clarification: 0, not_found: 0, unavailable: 0, failed: 0, repaired: 0, disclosed: 0, serverSelected: 0, rounds: [], evidence: [],
+    grounding: { grounded: 0, general_redirect: 0, clarification: 0, abstained: 0, not_found: 0, unavailable: 0, failed: 0, repaired: 0, disclosed: 0, serverSelected: 0, rounds: [], evidence: [],
       escalations: { total: 0, byReason: {}, byOutcome: {} } },
+    // Aşama 4C planlayıcısı: karar, anlamsal durum, aday sayısı, bildirim/düzeltme sayısı ve süre (soru, istem ya da plan içeriği YOK).
+    planner: { decisions: { rota: 0, general: 0, clarify: 0, abstain: 0, invalid: 0, text_fields: 0 }, multiPart: 0,
+      semantic: { reranked: 0, first_stage: 0, unavailable: 0 }, semanticReasons: {}, rejections: {}, declarations: [], candidates: [], latencyMs: [] },
     // Anlamsal aday keşfi: yalnızca sonuç, başarısızlık sınıfı, dizin kullanımı ve süre (sorgu, vektör ya da aday metni YOK).
     semantic: { retrievals: 0, byStatus: { reranked: 0, first_stage: 0, unavailable: 0, cancelled: 0 }, failures: {},
       index: { hit: 0, built: 0, shared: 0 }, latencyMs: [], lastFailure: null },
@@ -104,8 +108,10 @@ function createState() {
 }
 
 function state() {
-  globalThis[STATE_KEY] ||= createState();
-  return globalThis[STATE_KEY];
+  const current = globalThis[STATE_KEY] ||= createState();
+  current.planner ||= createState().planner;
+  current.grounding.abstained ??= 0;
+  return current;
 }
 
 function safely(work) {
@@ -438,6 +444,7 @@ export function aiTelemetrySnapshot() {
       grounded: current.grounding.grounded,
       general_redirect: current.grounding.general_redirect,
       clarification: current.grounding.clarification,
+      abstained: current.grounding.abstained,
       not_found: current.grounding.not_found,
       unavailable: current.grounding.unavailable,
       failed: current.grounding.failed,
@@ -451,6 +458,16 @@ export function aiTelemetrySnapshot() {
         byReason: { ...current.grounding.escalations.byReason },
         byOutcome: { ...current.grounding.escalations.byOutcome }
       }
+    },
+    planner: {
+      decisions: { ...current.planner.decisions },
+      multiPart: current.planner.multiPart,
+      semantic: { ...current.planner.semantic },
+      semanticReasons: { ...current.planner.semanticReasons },
+      rejections: { ...current.planner.rejections },
+      declarations: countPercentiles(current.planner.declarations),
+      candidates: countPercentiles(current.planner.candidates),
+      latency: percentiles(current.planner.latencyMs)
     },
     semantic: {
       retrievals: current.semantic.retrievals,
@@ -640,7 +657,7 @@ export function recordSemanticRetrieval({ status, failure = null, serviceFailure
 }
 
 const ESCALATION_REASONS = new Set(['SYNTHESIS_REQUIRED', 'VERIFICATION_FAILED', 'LENGTH', 'EMPTY_COMPLETION', 'REQUEST_DECLARATION']);
-const ESCALATION_OUTCOMES = new Set(['grounded', 'clarification', 'not_found', 'unavailable', 'general_redirect', 'failed', 'timeout', 'error']);
+const ESCALATION_OUTCOMES = new Set(['grounded', 'clarification', 'abstained', 'not_found', 'unavailable', 'general_redirect', 'failed', 'timeout', 'error']);
 
 /**
  * Standart kipteki kanıta dayalı turun Derin düşünme ile sonlandırılması:
@@ -672,6 +689,44 @@ export function recordGroundedEscalation({ requestedMode, models = [], reason, t
   }));
 }
 
+const PLANNER_DECISIONS = new Set(['rota', 'general', 'clarify', 'abstain', 'invalid', 'text_fields']);
+const PLANNER_SEMANTIC_STATES = new Set(['reranked', 'first_stage', 'unavailable']);
+const MAX_PLANNER_REJECTION_KINDS = 32;
+
+/**
+ * Planlayıcının veri okumadan önceki kararı (Aşama 4C): karar türü, çok bölümlü plan, anlamsal
+ * danışmanlığın durumu ve aday sayısı, bildirim sayısı ve karara kadar geçen süre. Soru, istem,
+ * plan, araç bağımsız değişkeni ya da Sicil yazılmaz. Karar öncesi hata `null` kararla yalnızca örneklere girer.
+ */
+export function recordPlannerDecision({ decision, parts = 0, semantic = 'unavailable', candidates = 0, declarations = 0, latencyMs = 0, semanticReason = null }) {
+  safely(() => {
+    const current = state().planner;
+    if (decision != null) current.decisions[PLANNER_DECISIONS.has(decision) ? decision : 'invalid'] += 1;
+    if (parts > 1) current.multiPart += 1;
+    const normalizedReason = semanticReason === 'AI_TIMEOUT' ? 'TIMEOUT' : semanticReason;
+    const reason = ['TIMEOUT', 'PROFILE_DISABLED', 'PROFILE_NOT_CONFIGURED', 'MODEL_UNAVAILABLE', 'INTERNAL_UNAVAILABLE'].includes(normalizedReason) ? normalizedReason : 'OTHER';
+    if (semantic === 'unavailable') current.semanticReasons[reason] = (current.semanticReasons[reason] || 0) + 1;
+    current.semantic[PLANNER_SEMANTIC_STATES.has(semantic) ? semantic : 'unavailable'] += 1;
+    pushSample(current.declarations, safeCount(declarations));
+    pushSample(current.candidates, safeCount(candidates));
+    pushSample(current.latencyMs, latencyMs);
+  });
+}
+
+/**
+ * Reddedilen plan bildiriminin yalnızca sorun TÜRÜ (`$.population.tool:enum` → `enum`). Yol, değer ya
+ * da model metni yazılmaz; tür sayısı sınırlıdır.
+ */
+export function recordPlannerRejection(detail) {
+  safely(() => {
+    const value = String(detail ?? '');
+    const kind = /:([a-z][a-zA-Z-]{0,31})$/.exec(value)?.[1]
+      || Object.values(TOOL_ERROR_CODES).find(code => value.endsWith(`:${code}`)) || 'invalid';
+    const current = state().planner.rejections;
+    if (Object.hasOwn(current, kind) || Object.keys(current).length < MAX_PLANNER_REJECTION_KINDS) current[kind] = (current[kind] || 0) + 1;
+  });
+}
+
 /** Kanıta dayalı yanıtın sonucu (içerik taşımaz). */
 export function recordGroundedAnswer({ outcome, rounds = 0, evidence = 0, repaired = false, disclosed = false }) {
   safely(() => {
@@ -684,7 +739,7 @@ export function recordGroundedAnswer({ outcome, rounds = 0, evidence = 0, repair
   });
 }
 
-const TURN_OUTCOMES = new Set(['grounded', 'clarification', 'not_found', 'unavailable', 'general_redirect', 'failed', 'error']);
+const TURN_OUTCOMES = new Set(['grounded', 'clarification', 'abstained', 'not_found', 'unavailable', 'general_redirect', 'failed', 'error']);
 const ROUND_PURPOSES = new Set(['plan', 'tools', 'follow-up', 'select', 'repair', 'declaration', 'retry']);
 const FINISH_REASONS = new Set(['stop', 'end_turn', 'eos', 'stop_sequence', 'length', 'content_filter', 'tool_calls', 'function_call', 'error']);
 export const safeFinishReason = (value) => FINISH_REASONS.has(value) ? value : null;
@@ -721,6 +776,7 @@ export function recordGroundedTurn(trace = {}) {
       sqlMs: millis(trace.sqlMs),
       sqlQueries: safeCount(trace.queries),
       scopeLoads: safeCount(trace.authorizationLoads),
+      ...(trace.resultScopeOmitted === true ? { resultScopeOmitted: true } : {}),
       revalidationMs: millis(trace.revalidationMs),
       verificationMs: millis(trace.verificationMs),
       rounds: (Array.isArray(trace.rounds) ? trace.rounds : []).slice(0, 16).map((round) => ({

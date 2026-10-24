@@ -235,6 +235,46 @@ test('Türkiye günü sınırı: UTC 21:30’da termini “dün” olan görev g
   assert.equal(overdueBefore.result.totalCount, 0);
 });
 
+test('önceki sonuç kapsamı sunucu kökenli kanıtta ve defterde korunur', async (t) => {
+  const stack = stackFor(t);
+  const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL });
+  assert.equal(first.result.data.previousResult, undefined);
+  assert.equal(first.ledger.requestEntries()[0].args.previousResult, undefined);
+  const taskIds = [TASKS.OVERDUE, TASKS.DONE];
+  const prior = { scope: { type: 'task', taskIds }, entries: first.ledger.authorizationEntries() };
+  for (const name of ['rota_task_search', 'rota_task_analytics']) {
+    const ledger = createEvidenceLedger();
+    const executor = createToolExecutor({ context: first.context, ledger, resultScope: () => prior });
+    const [message] = await executor.runRound([{ id: name, name, arguments: '{}' }]);
+    const result = JSON.parse(message.content);
+    assert.equal(result.ok, true);
+    assert.equal(result.totalCount, 2);
+    assert.equal(ledger.requestEntries()[0].args.previousResult, true);
+    assert.deepEqual(result.scope.previousResult, { type: 'task', count: 2 });
+    // Model kendi kapsam bayrağını araç bağımsız değişkeni olarak kabul ettiremez.
+    const [invalid] = await executor.runRound([{ id: 'invalid', name, arguments: '{"previousResult":true}' }]);
+    assert.equal(JSON.parse(invalid.content).error.code, 'INVALID_ARGUMENTS');
+  }
+});
+
+test('önceki görev kapsamını desteklemeyen tek araç bütün yürütme kümesini okumadan reddeder', async (t) => {
+  const stack = stackFor(t);
+  const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL });
+  const prior = { scope: { type: 'task', taskIds: [TASKS.OVERDUE] }, entries: first.ledger.authorizationEntries() };
+  for (const names of [['rota_task_search', 'rota_portfolio_summary'], ['rota_portfolio_summary', 'rota_task_analytics']]) {
+    const ledger = createEvidenceLedger();
+    const executor = createToolExecutor({ context: first.context, ledger, resultScope: () => prior });
+    const before = stack.db.aiToolLog.length;
+    const results = await executor.runRound(names.map(name => ({ id: name, name, arguments: '{}' })));
+    assert.ok(results.every(message => JSON.parse(message.content).error?.code === 'INVALID_ARGUMENTS'));
+    assert.equal(stack.db.aiToolLog.length, before);
+    assert.equal(ledger.size(), 0);
+  }
+  const portfolio = await callRotaTool(stack, AYSE, 'rota_portfolio_summary');
+  assert.equal(portfolio.result.ok, true);
+  assert.equal(portfolio.result.data.previousResult, undefined);
+});
+
 test('arama sıralı, sayfalı ve kesin toplamlıdır; imleç süzgece bağlıdır', async (t) => {
   const stack = stackFor(t);
   const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, sort: 'title_asc', limit: 3 });
@@ -1242,4 +1282,59 @@ test('a provenance refusal is a server contract failure, not a size error the mo
   assert.equal(JSON.parse(messages[0].content).evidenceId, 'R1');
   assert.equal(JSON.parse(messages[1].content).error?.code, 'LIMIT_EXCEEDED', messages[1].content);
   assert.equal(full.full(), true);
+});
+
+test('4C frozen 16: continuation scope uses a persisted verifiable carrier', async (t) => {
+  for (const mode of ['filtered', 'payloadless', 'oversize', 'no-carrier']) await t.test(mode, async (t) => {
+    const stack = stackFor(t);
+    const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL });
+    const executor = createToolExecutor({ context: first.context, ledger: first.ledger, signal: new AbortController().signal });
+    await executor.runRound([{ id: 'second', name: 'rota_task_search', arguments: JSON.stringify({ projectId: PROJECTS.FULL, status: ['todo'] }) }]);
+    const entries = first.ledger.authorizationEntries();
+    assert.equal(entries.length, 2);
+    if (mode === 'filtered') first.ledger.retainAuthorized(new Set(['R2']));
+    else if (mode === 'payloadless') entries[0].payload = null;
+    else {
+      const oversized = Array.from({ length: 1800 }, (_, index) => ({
+        taskId: '80000000-0000-4000-8000-' + String(index + 1).padStart(12, '0'),
+        projectId: '90000000-0000-4000-8000-' + String(index + 1).padStart(12, '0')
+      }));
+      entries[0].taskReferences = oversized;
+      if (mode === 'no-carrier') entries[1].taskReferences = oversized;
+    }
+    const scope = { type: 'task', taskIds: [TASKS.OVERDUE] };
+    const rows = first.ledger.persistable(['R1', 'R2'], { resultScope: scope });
+    const carriers = rows.map(row => JSON.parse(row.evidenceJson)).filter(row => row.resultScope);
+    assert.equal(carriers.length, mode === 'no-carrier' ? 0 : 1);
+    for (const row of carriers) {
+      assert.deepEqual(row.resultScope, scope);
+      assert.ok(decodeAuthorizationPopulation(row.authorizationPopulation), 'unverifiable evidence never carries scope');
+    }
+    if (mode !== 'no-carrier') assert.ok(JSON.parse(rows.at(-1).evidenceJson).resultScope);
+  });
+});
+
+test('4C final convergence: adding continuation scope never discards fitting evidence data', async (t) => {
+  for (const alreadyCompact of [false, true]) await t.test(String(alreadyCompact), async (t) => {
+    const stack = stackFor(t);
+    const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL });
+    const executor = createToolExecutor({ context: first.context, ledger: first.ledger, signal: new AbortController().signal });
+    await executor.runRound([{ id: 'second', name: 'rota_task_search', arguments: JSON.stringify({ projectId: PROJECTS.FULL, status: ['todo'] }) }]);
+    const [entry] = first.ledger.authorizationEntries();
+    const payload = JSON.parse(entry.payload);
+    payload.data.padding = '';
+    entry.payload = JSON.stringify(payload);
+    const unpadded = first.ledger.persistable(['R1'])[0].evidenceJson.length;
+    payload.data.padding = 'x'.repeat((alreadyCompact ? 32500 : 31990) - unpadded);
+    entry.payload = JSON.stringify(payload);
+    const baseline = JSON.parse(first.ledger.persistable(['R1'])[0].evidenceJson);
+    assert.equal(baseline.dataOmitted, alreadyCompact ? 'size' : undefined);
+    const scope = { type: 'task', taskIds: [TASKS.OVERDUE] };
+    const rows = first.ledger.persistable(['R1', 'R2'], { resultScope: scope }).map(row => JSON.parse(row.evidenceJson));
+    assert.equal(rows[0].dataOmitted, baseline.dataOmitted);
+    assert.deepEqual(rows[0].data, baseline.data);
+    assert.equal(rows.filter(row => row.resultScope).length, 1);
+    assert.deepEqual(rows[alreadyCompact ? 0 : 1].resultScope, scope);
+    for (const row of rows) assert.ok(decodeAuthorizationPopulation(row.authorizationPopulation));
+  });
 });

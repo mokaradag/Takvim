@@ -29,11 +29,26 @@ const FOLLOW_UP_TASK_PATHS = Object.freeze({
   rota_schedule_requests: ['items.*.task.taskId'],
   rota_assignment_requests: ['items.*.task.taskId'],
   rota_outlook_status: ['task.taskId', 'items.*.task.taskId'],
-  rota_notifications: ['scheduleRequests.latest.*.taskId', 'assignmentCoordination.latest.*.taskId', 'taskEvents.latest.*.taskId']
+  rota_notifications: ['scheduleRequests.latest.*.taskId', 'assignmentCoordination.latest.*.taskId', 'taskEvents.latest.*.taskId'],
+  rota_baseline_compare: ['mostSlipped.*.taskId']
 });
 
 export function followUpTaskPaths(name) {
   return FOLLOW_UP_TASK_PATHS[name] || [];
+}
+
+/**
+ * Satır koleksiyonundaki takip kimliğinin satıra göre yolu (çok bölümlü planın bağımlı bölümü
+ * önceki bölümün satırlarına yalnızca bu kimliklerle bağlanır); kimlik takibe açık değilse null.
+ */
+export function rowIdentityPath(name, collection, type) {
+  if (type === 'task') {
+    const prefix = `${collection}.*.`;
+    const path = followUpTaskPaths(name).find((item) => item.startsWith(prefix) && !item.slice(prefix.length).includes('*'));
+    return path ? path.slice(prefix.length) : null;
+  }
+  return type === 'project' && (name === 'rota_portfolio_summary' && collection === 'projects'
+    || name === 'rota_project_search' && collection === 'matches') ? 'projectId' : null;
 }
 
 function valuesAt(value, parts) {
@@ -169,7 +184,7 @@ function referenceIdentity(reference) {
  * @param {{ candidates: object[], selected: object|null }|null} [options.clarification]
  *   Önceki turun açıklama adayları ve sunucunun kullanıcının seçimine bağladığı aday.
  */
-export function createToolScope({ today = businessDate(new Date()), userText = '', allowedTextFields = null, clarification = null } = {}) {
+export function createToolScope({ today = businessDate(new Date()), userText = '', allowedTextFields = null, clarification = null, referents = [] } = {}) {
   const ids = { tasks: new Set(), projects: new Set(), wbs: new Set(), baselines: new Set(), people: new Set() };
   const roots = new Map();
   let established = false;
@@ -198,8 +213,18 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
     return Boolean(needle) && (trustedTexts.has(needle) || phrasePositions(userNeedle, needle).length > 0);
   }
 
+  // Önceki doğrulanmış görev sonucunun satırları: yalnızca bildirimin açıkça başvurduğu satır kimlik olur.
+  const referenced = new Set();
+  function referent(row) {
+    const id = Number.isSafeInteger(row) && row >= 1 ? referents[row - 1] : null;
+    if (!id) return null;
+    referenced.add(String(id));
+    return String(id);
+  }
+
   function identityTrusted(population, id) {
     if (bound && referenceIdentity(bound).join(':') === `${population}:${id}`) return true;
+    if (population === 'tasks' && referenced.has(String(id))) return true;
     if (population === 'people') {
       const text = containmentText(userText);
       return text === String(id) || new RegExp(`(?:^| )sicil(?:i|li)? ${id}(?: |$)|(?:^| )${id} sicil(?:i|li)?(?: |$)`).test(text);
@@ -211,6 +236,7 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
   return Object.freeze({
     textTrusted,
     identityTrusted,
+    referent,
     /** Önceki açıklamada kullanıcının numarasıyla seçtiği ve sunucunun bağladığı aday. */
     boundSelection() {
       if (!named.length) return bound ? { ...bound } : null;
@@ -236,6 +262,22 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
     declareTextFields(fields) {
       if (established) return;
       for (const field of fields || []) if (!allowedTextFields || allowedTextFields.includes(field)) textFields.add(field);
+    },
+    /** Sunucunun önceden doğruladığı yeni bölüm: kök nüfusu yereldir, yetkili takip kimlikleri ortaktır. */
+    beginPart(selectedRows = []) {
+      // Yalnızca doğrulanmış kaynak bölümün seçili sonuç satırları; aday koleksiyonu kimlik değildir.
+      for (const { tool, collection, row } of selectedRows) {
+        for (const [type, population] of [['task', 'tasks'], ['project', 'projects']]) {
+          const field = rowIdentityPath(tool, collection, type);
+          const id = field?.split('.').reduce((value, key) => value?.[key], row);
+          if (typeof id === 'string' || typeof id === 'number') ids[population].add(String(id));
+        }
+      }
+      roots.clear();
+      broadRoots.clear();
+      broadProjects = false;
+      projectScope = false;
+      established = false;
     },
     establish(calls, messages) {
       const successful = messages.map((message, index) => {
@@ -296,7 +338,7 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
         // İlk turda da arama metni kullanıcının bu turdaki iletisinden gelmelidir.
         if (args.text != null && !textTrusted(args.text)) fail();
         for (const [key, population] of Object.entries(IDENTITY_ARGUMENTS)) {
-          if (args[key] != null && !identityTrusted(population, args[key])) fail();
+          if (args[key] != null && !ids[population].has(String(args[key])) && !identityTrusted(population, args[key])) fail();
         }
         return;
       }
