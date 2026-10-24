@@ -176,7 +176,7 @@ Kalıcı kayıt hataları kullanıcıya olduğu gibi gösterilir. `PersistenceSt
 6. `.env.local` içinde Keycloak değişkenlerini yapılandırın ve `docs/KEYCLOAK-SSO.md` içindeki yönlendirme URI'lerini kaydedin. Geliştirme kimliğini yalnızca yerel geliştirme ortamında açın.
 7. `npm ci` çalıştırın.
 8. `npm run build` çalıştırın.
-9. **Outlook teslimi veya elle/otomatik e-posta hatırlatmaları kullanıldığında SMTP zorunludur.** En az `SMTP_HOST` ve geçerli `SMTP_FROM` ile kurumsal SMTP sunucusunun gerektirdiği ayarları yapın. SMTP yalnızca hem e-posta hatırlatmaları hem Outlook teslimi kapalıysa isteğe bağlıdır. SMTP olmadan Outlook davetleri kuyrukta kalır ve teslim edilmez. `.env.local` içinde SMTP bloğunu yapılandırın; yalnızca otomatik hatırlatma e-postası isteniyorsa `docs/GOREV-HATIRLATMALARI.md` içinde anlatıldığı gibi zamanlayıcıyı (Windows Task Scheduler veya cron) kaydedin. Yönetici **Hatırlatma** sayfasından açana kadar otomatik hatırlatmalar kapalıdır; SMTP yapılandırılınca elle gönder düğmesi çalışır. Outlook teslimi bağımsızdır: Next.js Node başlangıç kancası, hatırlatmalar kapalıyken bile kalıcı kuyruk çalışanını otomatik başlatır; yönetici tıklaması veya işletim sistemi görevi gerekmez. Aynı kanca atama postası çalışanını da başlatır (`MERGEN_ROTA_TASK_MAIL_POLL_MS`, varsayılan 30 saniye); bu çalışan isteğe bağlı “Sorumlulara e-posta bildirimi gönder” çıkış kuyruğunu boşaltır. İşletim sistemi görevi gerektirmez ve kullanıcı kayıtta kutuyu işaretlemedikçe gönderim yapmaz. Node uygulamasını yönetilen hizmet olarak çalışır tutun. Dağıtımdan önce yeni 0011 tamamlanma yaşam döngüsü geçişi dahil 2. adımı tamamlayın. Bkz. `docs/OUTLOOK-TAKVIM.md`.
+9. **Outlook teslimi, elle/otomatik hatırlatma veya isteğe bağlı atama e-postası kullanıldığında SMTP zorunludur.** En az `SMTP_HOST` ve geçerli `SMTP_FROM` ile kurumsal SMTP sunucusunun gerektirdiği ayarları yapın. SMTP yalnızca bu üç e-posta işlevi de kullanılmıyorsa isteğe bağlıdır. SMTP olmadan Outlook davetleri kuyrukta kalır ve teslim edilmez. `.env.local` içinde SMTP bloğunu yapılandırın; yalnızca otomatik hatırlatma e-postası isteniyorsa `docs/GOREV-HATIRLATMALARI.md` içinde anlatıldığı gibi zamanlayıcıyı (Windows Task Scheduler veya cron) kaydedin. Yönetici **Sistem Yönetimi → Hatırlatma E-postaları** sekmesinden açana kadar otomatik hatırlatmalar kapalıdır; SMTP yapılandırılınca elle gönder düğmesi çalışır. Outlook teslimi bağımsızdır: Next.js Node başlangıç kancası, hatırlatmalar kapalıyken bile kalıcı kuyruk çalışanını otomatik başlatır; yönetici tıklaması veya işletim sistemi görevi gerekmez. Aynı kanca atama postası çalışanını da başlatır (`MERGEN_ROTA_TASK_MAIL_POLL_MS`, varsayılan 30 saniye); bu çalışan isteğe bağlı “Sorumlulara e-posta bildirimi gönder” çıkış kuyruğunu boşaltır. İşletim sistemi görevi gerektirmez ve kullanıcı kayıtta kutuyu işaretlemedikçe gönderim yapmaz. Node uygulamasını yönetilen hizmet olarak çalışır tutun. Dağıtımdan önce 2. adımdaki gereken yükseltmeleri tamamlayın. Bkz. `docs/OUTLOOK-TAKVIM.md`.
 10. Onaylı Windows/etki alanı hesabıyla `npm run start -- -H 0.0.0.0 -p 8008` (veya `npm run start:prod`) başlatın. MERGEN Rota 8008 portunu kullanır; 8009 MERGEN Bilge'ye aittir.
 11. **Gerçek Sistem** seçip yetkilendirmeyi ve kalıcılığı doğrulayın.
 
@@ -202,6 +202,15 @@ Tam Visual Studio IDE kurulumu gerekmez. Hatayı aşmak için `.env.local` dosya
 ## Çevrimdışı/kurum içi işletim
 
 Çalışma zamanı tamamen kurum içinde kalır. CDN, uzak yazı tipi, dış API, uzak JavaScript veya CSS bağımlılığı eklenmez. `mssql` ve `msnodesqlv8`, onaylı kayıt deposu veya iç vekilden kurulan yerel npm bağımlılıklarıdır. Yerel ikililer ve Microsoft ODBC sürücüsü kurum içi yazılım dağıtım sınırında bulunmalıdır.
+
+Node.js 24 kullanılır; Quality CI sürümü `.github/workflows/quality.yml` içinde `24.14.0` olarak sabittir. İlk `npm ci` için onaylı npm registry veya kurum içi proxy erişimi gerekir; kurulan bağımlılıklar çalışma zamanında dış internet gerektirmez. Kaynak Windows UNC paylaşımındaysa komut isteminde önce çalışma dizinine geçin (yer tutucuları kendi ortamınızla değiştirin):
+
+```cmd
+pushd "\\<DOSYA_SUNUCUSU>\<PAYLASIM>\MERGEN-Rota"
+npm ci
+npm run build
+npm run start -- -H 0.0.0.0 -p 8008
+```
 
 ## Doğrulama sınırı
 

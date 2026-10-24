@@ -1,34 +1,33 @@
 # Yapay Zekâ Altyapısı ve Rota AI
 
-Bu belge MERGEN Rota'nın yapay zekâ **temelini** (Aşama 1) ve bu temelin
-üzerine kurulan **Rota AI akışlı sohbet yardımcısını** (Aşama 2) anlatır.
+Bu belge MERGEN Rota'nın **Bilgin** adlı yardımcısının ortak altyapısını,
+anahtar yönetimini, model kaydını, akışlı konuşmayı ve dağıtım sınırlarını
+anlatır. Kod ve yapılandırma adı **Rota AI** / `MERGEN_ROTA_AI_*` olarak kalır.
 
-Aşama 1: kişisel ve kurumsal API anahtarının yönetimi, sağlayıcı soyutlaması,
-model/yetenek kaydı, sınırlı eşzamanlılık, iptal ve süre sınırları, hata
-sınıflandırması, gözlemlenebilirlik ve tek bir uçtan uca bağlantı sınaması
-(§1–§17). Aşama 1 kapsam dışı bırakılanlar
-[§16](#16-aşama-1-kapsamı-dışında-kalanlar)'da listelenir.
+## Güncel ürün ve belge sınırı
 
-Aşama 2: uygulama kabuğundaki **Rota AI** paneli; gerçek (sağlayıcıdan
-tarayıcıya) akışlı yanıt, Durdur, yeniden deneme, standart ve derin düşünme
-kipleri, Sicil'e ait kalıcı konuşma geçmişi (0017) ve güvenli yanıt çizimi
-([§18](#18-rota-ai-akışlı-sohbet-aşama-2)). Aşama 2 de Aşama 1 mimarisini
-değiştirmez: her istek aynı `aiGateway` yolundan, aynı kimlik, anahtar,
-kapasite, süre sınırı ve telemetri kurallarıyla geçer.
+Bilgin, `MERGEN_ROTA_AI_ENABLED` ile açılır (varsayılan `false`). Gerçek Sistem
+kipinde sunucu üzerinden kurum içi OpenAI uyumlu uca bağlanır; Demo gerçek
+istek göndermez. Standart/Derin düşünme, Durdur, yeniden deneme ve Sicil'e ait
+kalıcı konuşmalar ortak altyapıyı kullanır.
 
-Aşama 3: Rota AI'nin Rota verisini **yetkili, salt okunur ve kanıta dayalı**
-yanıtlaması — sunucuya ait 19 alan aracı, kanıt kimlikleri (`R1`, `R2` …) ve
-belirlenimci atıf doğrulaması, kanıt kaydı (0018). İsteğe bağlıdır
-(`MERGEN_ROTA_AI_TOOLS_ENABLED`); kapalıyken Aşama 2 davranışı değişmez. Özet
-[§19](#19-rota-ai-kanıta-dayalı-alan-araçları-aşama-3)'da, ayrıntı
-[YAPAY-ZEKA-ALAN-ARACLARI.md](YAPAY-ZEKA-ALAN-ARACLARI.md)'dedir.
+`MERGEN_ROTA_AI_TOOLS_ENABLED` ayrıca açık ve veri hizmeti hazırsa yardımcı,
+19 salt okunur alan aracıyla kullanıcının yetkili Rota verisini kanıta dayalı
+yanıtlar. Plan veri okumadan doğrulanır; anlamsal adaylar yetki veya kanıt
+sayılmaz. Genel sohbet veri okumaz. Model görev, atama veya iş akışı kararı
+yazamaz. Olağan görev ve anlık görüntü akışı AI sağlayıcısını beklemez.
 
-Aşama 4: gömme ve yeniden sıralama modelleriyle Türkçe doğal dilin anlamsal
-olarak anlaşılması; Aşama 3'ün kimlik, yetki, SQL ve kanıt sınırı değişmez.
-Dondurulmuş dört adımlı yol haritası (4A–4D), değişmezler, değerlendirme,
-4B'nin gerçek gömme ile aday keşfi ve yeniden sıralaması ve kurum içi kabul
-sözleşmesi [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.md)'dedir;
-özet [§20](#20-rota-ai-anlamsal-katman-aşama-4)'de.
+| Ayrıntının sahibi | Kapsam |
+| --- | --- |
+| Bu belge §1–§17 | Anahtarlar, sağlayıcı/ağ geçidi, model profilleri, kapasite, süre sınırı, sağlık ve altyapı kabulü (Aşama 1) |
+| [§18](#18-rota-ai-akışlı-sohbet-aşama-2) | Akış, konuşma kalıcılığı, iptal/yeniden deneme, sunum ve tek süreçli dağıtım (Aşama 2) |
+| [AI Alan Araçları](YAPAY-ZEKA-ALAN-ARACLARI.md) | Yetkili veri, 19 araç, korunan metin seçimi, kanıt ve atıf; bu belgedeki [§19](#19-rota-ai-kanıta-dayalı-alan-araçları-aşama-3) özet niteliğindedir |
+| [AI Anlamsal Katmanı](YAPAY-ZEKA-ANLAMSAL-KATMAN.md) | Gömme/yeniden sıralama, doğrulanmış planlama, açıklama ve takip, onarım, değerlendirme ve gerçek model nitelendirme kapıları; [§20](#20-rota-ai-anlamsal-katman-aşama-4) özettir |
+
+Aşağıdaki aşama etiketleri teknik sözleşmelerin gelişimini ve tarihli kabul
+kayıtlarını ayırır. Uygulanmış kod veya belirlenimci test başarısı, gerçek
+modelin kurum içi kabul kapısını geçtiği anlamına gelmez; güncel nitelendirme
+koşulları anlamsal katman belgesinde tutulur.
 
 ---
 

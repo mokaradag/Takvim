@@ -61,6 +61,8 @@ Yazı boyutu tercihi `document.body.style.zoom` olarak uygulanır. Yakınlaştı
 
 Tam yükseklikteki flex kapsayıcılarda kaydırılan alt öğe ayrıca `min-height: 0`, sabit başlık/altlık ise `flex: 0 0 auto` gerektirir; aksi durumda gövde içerik yüksekliğine büyür ve kapsayıcı yüksekliğinden bağımsız olarak altlığı ekran dışına iter.
 
+Ölçek, tema, yüksek karşıtlık ve hareket azaltma tercihleri `src/lib/tweaksBootstrap.js` ile **ilk boyamadan önce** gövdeye uygulanır. `AppShell` kurulmadan gösterilen veri kipi ve oturum ekranları da aynı tercihleri kullanır; uygulama açılınca ölçek veya tema değişiminden kaynaklanan yerleşim sıçraması oluşmaz.
+
 ### 2.2 Üst katman yerleşimi saf işlevdir
 
 Açılır pencereler, seçim panelleri ve sütun süzgeci kutuları `document.body` üzerine portal ile taşınır; böylece kenar çubuğunun `overflow: hidden` kuralı ve yığılma bağlamları bunları kesemez. Kesilmeden kurtulmak yetmez: üst katman **görünüm alanıyla sınırlanmalı** ve yakınlaştırılmış koordinat sisteminden dönüşüm yapmalıdır.
@@ -214,6 +216,8 @@ Sayfa başlıkları düz `var(--text)` dolgusu ve altında kısa vurgu çizgisi 
 
 
 ## Açılış ekranı ve kurum logosu
+
+Sekme simgesi `src/lib/appFavicon.js` içinde uygulama pusula logosunun sadeleştirilmiş biçimidir: gövde çemberi, ibre açısı ve merkez korunur; 16 ve 32 pikselde okunaklı olması için derece çizgileri ve gölge kullanılmaz. Kendi zemini açık/koyu sekme çubuklarında karşıtlığı korur. `src/app/layout.js`, SVG simgesini ve PNG `alternate icon` / `apple-touch-icon` yedeğini veri URI'si olarak gömer; ek ağ isteği, ayrı simge dosyası veya derleme adımı gerekmez.
 
 Açılış ekranı koyu lacivert zemin, hafif ışık geçişleri, birbirinden bağımsız hareket eden yıldız katmanları ve sade bir marka kartı kullanır. Hareket ilk saniyelerden itibaren görülebilir. İşletim sistemi veya uygulamanın hareket azaltma tercihi yıldızları, arka planı ve ilerleme animasyonunu durdurur.
 

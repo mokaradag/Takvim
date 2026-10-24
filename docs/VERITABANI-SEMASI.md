@@ -78,6 +78,8 @@ Hesaplanan CPM tarihleri, bolluk, kritiklik bayrakları, WBS zamanlama özetleri
 
 ## Atamalar ve dış kimlik
 
+Personel ve organizasyonun kesin kaynağı `HR02_rehisRehberwithMasrafYeri`, iş kimliği `sicil` değeridir. Ayrı `MR_People` veya `MR_Employees` ana veri tablosu oluşturulmaz; `MR_V_PeopleDirectory` kurumsal kaynağı yansıtır.
+
 Atamalar `(TaskId, Sicil)` başına tek satır saklar. Virgülle ayrılmış kimlik alanı veya HR02'ye FK kullanılmaz. Sunucu, atama değişikliklerini kaydetmeden önce Sicil'i normalleştirilmiş kişi görünümünden doğrular.
 
 ## Tarih değişikliği talepleri

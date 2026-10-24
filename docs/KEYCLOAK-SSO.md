@@ -111,8 +111,8 @@ döngüsü yerine açık bir hata yanıtı döner.
 
 `MERGEN_ROTA_KEYCLOAK_FLOW=implicit-bridge` seçiliyken:
 
-1. Kullanıcı **aynı** kurumsal oturum açma eylemine tıklar
-   (`GET /api/mergen-rota/auth/login`).
+1. Gerçek Sistem açılışında oturum yoksa tarayıcı **aynı** kurumsal oturum açma
+   ucuna (`GET /api/mergen-rota/auth/login`) otomatik yönlendirilir.
 2. Sunucu kriptografik rastgele bir `state` üretir. **PKCE üretilmez.**
 3. Sunucu imzalı, HttpOnly ve kısa ömürlü işlem çerezini yazar:
    `{ flow: 'implicit-bridge', state, returnTo, exp }`.
@@ -268,9 +268,13 @@ attığı için `"/\t/evil.example"` gibi bir değer denetimden geçip
 | Oturum yok, çerez bozuk, süresi dolmuş, jeton geçersiz, Sicil çözülemedi | `401 UNAUTHORIZED` |
 | Kimlik geçerli ama uygulama yetkisi yetersiz | `403 FORBIDDEN` |
 
-Kimlik doğrulanmadığında istemci yarım yüklenmiş Gerçek Sistem verisi görmez;
-açılış perdesinde açık bir "Kurumsal oturum aç" eylemi gösterilir. **Demo Kipi
-bir kimlik yedeği değildir**; yalnızca kullanıcının bilinçli seçimidir.
+Gerçek Sistem açılışında istemci önce SQL okumayan `auth/status` ucunu denetler;
+oturum yoksa doğrudan seçili Keycloak akışına yönlenir. `AppStateProvider`,
+oturum doğrulanmadan kurulmaz. Oturum denetimi başarısızsa yeniden deneme ve
+kullanıcının bilinçli Demo seçimi sunulur; **Demo Kipi bir kimlik yedeği değildir**.
+Açılış sırası ve veri yüklemesi sırasında oturum kaybı davranışı için
+[Otomatik Kurumsal Oturum Önyüklemesi](OTOMATIK-KURUMSAL-OTURUM-ONYUKLEMESI.md)
+esastır.
 
 ---
 
@@ -324,6 +328,11 @@ Bu değer **tarayıcıya açıktır** (istemci paketine gömülür) ve bir sır 
 `<TABAN_URL>/<SICIL>.jpg` biçiminde üretilir; sondaki eğik çizgiler normalize
 edilir ve sicil URL için kodlanır. Değer boşsa veya sicil eksik/bozuksa avatar
 baş harflere döner.
+
+Görsel yüklenemezse de baş harf yedeği kullanılır. Üretilen adres tabloda
+saklanmaz; fotoğraf yalnızca sunum verisidir ve görsel isteğinin başarısızlığı
+kimlik doğrulamayı veya veri yüklemeyi engellemez. Gerçek taban adresi
+`.env.local` içinde tutulur ve depoya işlenmez.
 
 ---
 
@@ -412,15 +421,19 @@ yazdırılmaz.
 ## 10. Doğrulama adımları
 
 1. `npm run build && npm run start:prod` ile uygulamayı 8008 portunda başlatın.
-2. **Gerçek Sistem** seçin. Oturum yoksa açılış perdesinde "Kurumsal oturum aç"
-   görünmelidir.
-3. Oturum açın; Keycloak'a yönlendirildiğinizi ve geri döndüğünüzü doğrulayın.
+2. **Gerçek Sistem** seçin. Oturum yoksa `auth/status` denetiminden sonra
+   `auth/login` üzerinden seçili Keycloak akışına otomatik yönlendirildiğinizi
+   doğrulayın; uygulama içinde ayrıca bir giriş düğmesine basılmaz.
+3. Keycloak'ta oturum açın ve uygulamaya geri döndüğünüzü doğrulayın.
 4. Kenar çubuğunda kendi adınızı, fotoğrafınızı ve departmanınızı görün.
 5. Tarayıcı geliştirici araçlarında `mergen_rota_session` çerezinin `HttpOnly`
    olduğunu ve `localStorage`'da jeton bulunmadığını doğrulayın.
 6. Yetkiniz olmayan bir projede yazma denemesinin `FORBIDDEN`, oturumsuz bir
    isteğin `UNAUTHORIZED` döndüğünü doğrulayın.
 7. Oturumu kapatın; korunan verinin artık gelmediğini doğrulayın.
+
+Açılış perdesindeki `Yeniden Dene` ve `Demo kipine geç` seçenekleri yalnızca
+oturum denetimi hata verdiğinde görünür; oturum yokluğu tek başına hata değildir.
 
 ---
 

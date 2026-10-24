@@ -1,6 +1,6 @@
 # MERGEN Rota Mimarisi
 
-MERGEN Rota, özellik arayüzünün genel veri kümesini sahiplenmeyeceği ve verinin mevcut asenkron bellek bağdaştırıcısından, gelecekteki API'den veya SQL destekli sunucu servisinden gelmesine bağımlı olmayacağı biçimde düzenlenmiştir.
+MERGEN Rota, özellik arayüzünü veri kaynağından ayırır. Demo Kipi asenkron bellek bağdaştırıcısını, Gerçek Sistem ise Next.js API üzerinden yetkilendirilmiş SQL Server deposunu kullanır. İki veri yolu aynı `AppRepository` sözleşmesini uygular ve verileri birleştirilmez.
 
 ## Bağımlılık yönü
 
@@ -57,11 +57,11 @@ Anlık görüntü; takvimler, projeler, kişiler, WBS, kanonik görevler, baz pl
 
 `mock/createMockRepository.js` mevcut asenkron değiştirilebilir bellek bağdaştırıcısı, `mock/seed.js` örnek veri kümesidir. Başarılı değişiklikler depo örneğinin ömrü boyunca sonraki `loadSnapshot()` çağrılarında erişilebilir kalır. Yeni depo örneği verilen başlangıç verisiyle başlar; tarayıcı/süreç/sanal makine yeniden başlatmasında kalıcılık sağlanmaz.
 
-Bağdaştırıcı dış girdi/çıktıları derin kopyalar; yalnızca test için odaklı gecikme/yükleme/değişiklik hatası yapılandırması destekler. Eski zamanlama özellik adlarını, kayıt kanonik görev olmadan önce yalnızca özel geçiş bağdaştırıcısı kabul eder. Bu çalışmada veritabanı veya yapay HTTP API uygulanmaz.
+Bağdaştırıcı dış girdi/çıktıları derin kopyalar; yalnızca test için odaklı gecikme/yükleme/değişiklik hatası yapılandırması destekler. Eski zamanlama özellik adlarını, kayıt kanonik görev olmadan önce yalnızca özel geçiş bağdaştırıcısı kabul eder. Bellek deposu yalnızca Demo ve sınama içindir; Gerçek Sistem API bağdaştırıcısı ayrıdır.
 
 Deneme bağdaştırıcısı anlamlı çok düzeyli WBS hiyerarşileri ve geçerli Görev-WBS ilişkileri sağlar. Proje kapsamlı CPM'i doğrulayan bilinçli projeler arası bağımlılık veri senaryosunda kalır.
 
-Gelecekteki tarayıcı API depo bağdaştırıcısı aynı uygulamaya açık sözleşmeyi uygulamalı ve `AppStateProvider` içine verilmelidir. Arka kaynak değişince özellik modülleri değişmemelidir.
+`src/data/api/createApiRepository.js`, Gerçek Sistem API bağdaştırıcısıdır ve aynı sözleşmeyle `AppStateProvider` içine verilir. Arka kaynak seçimi özellik modüllerini değiştirmez.
 
 ### `src/state`
 
@@ -185,7 +185,17 @@ Ortak katman değişkenleri yapışkan öğe, çerçeve, açılır pencere, çek
 
 ## Dışa aktarma hattı
 
+`ProjectExportMenu` üç çıktı sunar; `<ad>` seçili proje veya portföy için dosya taban adıdır:
+
+| Çıktı | Dosya | İçerik |
+| --- | --- | --- |
+| Excel çalışma kitabı | `<ad>_Raporu.xlsx` | Özet, Görevler, İş Dağılım Ağacı; portföyde ayrıca Projeler |
+| CSV paketi | `<ad>_CSV.zip` | Aynı sayfalar, ayrı UTF-8 BOM `.csv` dosyaları |
+| Görev listesi | `<ad>_Gorevler.csv` | Veri aktarımı için düz görev tablosu |
+
 Dışa aktarma çıktısı tek sayfa modeli ve iki üretici kullanır. `lib/exportProjectData.js`, sayfa tanımlarını (`buildExportSheets`) kurar: Özet, Görevler, İş Dağılım Ağacı ve yalnızca portföy dışa aktarımında Projeler. Her sütun anahtar, genişlik ve isteğe bağlı hücre türü (`date`, `percent`, `number`) veya satıra göre tür alanı (`typeKey`) tanımlar. Özet sayfası bunu sayıların sayı, rapor tarihinin tarih, ortalama ilerlemenin yüzde kalması için kullanır. Excel üreticisi (`buildProjectWorkbook`) ve CSV üreticisi (`sheetToCsv`, `buildProjectCsvBundle`) aynı tanımları kullanır; iki çıktı ayrışamaz. Eski tek dosyalı `buildProjectCsv`, makine tüketicileri için düz sütun sözleşmesini korur.
+
+Çıktı yalnızca yetkili görünümün kullanıcıya açık alanlarını taşır; iç kimlikler, sürüm anahtarları ve yetki alanları dışarı aktarılmaz. `=`, `+`, `-`, `@` ile başlayan metinler Excel ve CSV üreticilerinde formül enjeksiyonuna karşı nötrlenir. Hücre türü tanımları tarihlerin tarih, ilerlemenin yüzde olarak yazılmasını sağlar; çevrimdışı kurulum için ek paket gerekmez.
 
 Tarihler `toISOString()` yerine yerel takvimden gelir: UTC+3'te UTC günü 03:00'e kadar dündür; bu hem gecikme sayısını hem rapor tarihini kaydırıyordu. Kurumsal projeler görüntüleme adı yerine kimlik taşıdığından proje sorumlusu `leadId` ile yetkili kişi anlık görüntüsünden çözümlenir.
 
@@ -206,11 +216,11 @@ Saklanan ve hesaplanan zamanlama verilerinin anlamları bilinçli olarak farklı
 
 Asenkron yükleme/değişiklik anlamı için `docs/KALICILIK-SINIRI.md`, zamanlama sözleşmesi için `docs/ZAMANLAMA-VERI-MODELI.md`, çalışma alanı ve hiyerarşi kuralları için `docs/IS-KIRILIM-YAPISI-VE-CALISMA-ALANLARI.md` belgesine bakın.
 
-## Veritabanı/API geçiş yolu
+## Veritabanı/API veri yolu
 
-Uygulama `getAppRepository()` üzerinden başlar; bu erişim işlevi ihtiyaç anında Demo Kipinin asenkron bellek bağdaştırıcısını çözümler. Modül sabiti yerine erişim işlevi kullanılır; oturum Gerçek Sistem verisindeyken içe aktarım anında demo başlangıç verisi kurulmaz. Kalıcı uygulama, özellik kancalarını değiştirmeden durum düzenleme sınırının arkasındaki veri bağdaştırıcısını değiştirmelidir.
+Veri kipi seçimi durum sağlayıcısına verilecek depoyu belirler. `getAppRepository()`, ihtiyaç anında yalnızca Demo Kipinin asenkron bellek bağdaştırıcısını çözümler; Gerçek Sistem API deposu ayrı kurulur. Modül sabiti yerine erişim işlevi kullanıldığından Gerçek Sistem oturumunda içe aktarım anında Demo başlangıç verisi kurulmaz.
 
-Amaçlanan yön şöyledir:
+Gerçek Sistem veri yolu şöyledir:
 
 ```text
 Tarayıcı / MERGEN Rota Arayüzü
@@ -228,9 +238,9 @@ Sunucu tarafı SQL deposu/servisi
 SQL Server
 ```
 
-Tarayıcı SQL Server'a hiçbir zaman doğrudan bağlanmamalıdır. Sunucu/veritabanı uygulaması atomik `commitChanges()` anlamını korumalı ve yetkili kanonik varlıkları döndürmelidir.
+Tarayıcı SQL Server'a hiçbir zaman doğrudan bağlanmaz. Sunucu, güvenilir oturum ve yetki denetimleri altında atomik `commitChanges()` çağrısını tek SQL işlemine uygular ve yetkili kanonik varlıkları döndürür.
 
-Gelecekteki kalıcılık şeması Proje → WBS → Aktivite ilişkilerini ayrı kararlı kimlik ilişkileri olarak korumalı; güncel plan, gerçekleşenler, baz plan anlık görüntüleri ve hesaplanan CPM çıktısının anlamsal ayrımını sürdürmelidir. SQL Server, Next.js rota işleyicileri, REST istemcileri, Primavera/SAP bütünleşmesi, yetkilendirme ve denetim geçmişi mevcut uygulama kapsamı dışında kalır.
+Kalıcı şema Proje → WBS → Aktivite ilişkilerini ayrı kararlı kimliklerle korur; güncel plan, gerçekleşenler, baz plan anlık görüntüleri ve hesaplanan CPM çıktısı ayrı kalır. SQL, yetkilendirme, iyimser eşzamanlılık ve denetim işlemleri için [Kalıcı Veri Saklama](KALICI-VERI-SAKLAMA.md), tablo sözleşmeleri için [Veritabanı Şeması](VERITABANI-SEMASI.md) esastır.
 
 
 ## Talep geçmişi ve görev ayrıntı katmanı
