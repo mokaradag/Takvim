@@ -1245,6 +1245,54 @@ test('4C donmuş bulgular: hatalı alan yolu atılabilir; geçerli kardeşler bi
   }
 });
 
+test('4C alan onarımı: kaldırılan yuvadan sonraki ret güncel alan dizisine bağlanır', async (t) => {
+  const total = { metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' };
+  const overdue = { metric: 'tasks.overdue', tool: 'rota_task_analytics', path: 'data.totals.overdue' };
+  for (const sibling of [false, true]) await t.test(sibling ? 'geçerli kardeş korunur' : 'bildirilen iki adımlı onarım', async (t) => {
+    const base = { operation: 'value', metrics: sibling ? ['tasks.total', 'tasks.overdue'] : ['tasks.total'],
+      population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' }, fields: [total, ...(sibling ? [overdue] : [])] };
+    const shifted = { ...base, fields: [{ ...total, path: 'data.invalid' }, ...base.fields.slice(1)] };
+    const original = { ...shifted, fields: [null, ...shifted.fields] };
+    let stack;
+    const { result, inputs, decisions } = await turn(t, [rota(original), rota(shifted), input => {
+      assert.match(JSON.stringify(input.messages), /fields\[0\]\.path:unknown/);
+      assert.doesNotMatch(JSON.stringify(input.messages), /repairScope/);
+      assert.equal(stack.db.aiToolLog?.length ?? 0, 0, 'tam doğrulamadan önce veri okunmaz');
+      return rota(base);
+    }], { setup: value => { stack = value; } });
+    assert.equal(inputs.length, 3);
+    assert.equal(result.outcome, 'grounded');
+    assert.equal(result.stats.attempted, 1);
+    assert.equal(result.stats.failures, 0);
+    assert.deepEqual(decisions.map(decision => decision.intent), ['rota']);
+    assert.equal(result.evidence.length, 1);
+  });
+});
+
+test('4C alan onarımı: güncellenen yuvanın maskesi geçerli kardeşi ve kapsamı serbest bırakmaz', async (t) => {
+  const fields = [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' },
+    { metric: 'tasks.overdue', tool: 'rota_task_analytics', path: 'data.totals.overdue' }];
+  const base = { operation: 'value', metrics: ['tasks.total', 'tasks.overdue'], population: { tool: 'rota_task_analytics' },
+    filters: { assignee: 'me' }, fields };
+  const shifted = { ...base, fields: [{ ...fields[0], path: 'data.invalid' }, fields[1]] };
+  const original = { ...shifted, fields: [null, ...shifted.fields] };
+  for (const [name, changed] of [
+    ['kardeş silme', { ...base, fields: [fields[0]] }],
+    ['kardeş değiştirme', { ...base, fields: [fields[0], fields[0]] }],
+    ['yeni yuva', { ...base, fields: [...fields, fields[0]] }],
+    ['filtre silme', { ...base, filters: {} }],
+    ['ölçü silme', { ...base, metrics: ['tasks.total'] }]
+  ]) await t.test(name, async (t) => {
+    let stack;
+    const { result, decisions } = await turn(t, [rota(original), rota(shifted), rota(changed)], { setup: value => { stack = value; } });
+    assert.equal(result.outcome, 'failed');
+    assert.equal(result.stats.attempted, 0);
+    assert.equal(stack.db.aiToolLog?.length ?? 0, 0);
+    assert.equal(aiTelemetrySnapshot().planner.rejections.repairScope, 1);
+    assert.ok(decisions.every(decision => decision.intent !== 'rota'));
+  });
+});
+
 test('4C donmuş bulgular: bölmeden sonraki alan onarımı yalnızca reddedilen yolu açar', async () => {
   const metrics = ['tasks.total', 'tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent'];
   const fields = [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' },

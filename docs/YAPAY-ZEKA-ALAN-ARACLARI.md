@@ -1377,6 +1377,10 @@ kullanıcı cümlesini yorumlamaz; hepsi kayıt defterinden ve kanıttan türeti
   Başlık metni aynı metinle adlandırılan göreve daraltılabilir; tersi değil. Veri
   okunmadan reddedilen bildirim, plan doğrulamasındaki retle aynı biçimde
   modelin kendi çağrısı ve araç hatası olarak dökümde kalır.
+  Kapsam eşleşmesini geçen onarımda sabitlenen istek ve hata yolları güncellenir:
+  bozuk dizi yuvası kaldırıldıktan sonra yeni ret, kalan alanların güncel
+  indekslerine bağlanır. Geçerli kardeşler korunur; önceki hata maskesi yeni
+  yuvaya taşınmaz ve düzeltilmiş alanları yeniden serbest bırakmaz.
 - *Tek kaydın iç koleksiyonu.* Görevle okunan tek serinin yineleme sayısı
   (`series.upcomingCount`) `series.next` koleksiyonunun kendi sayısıdır; boş
   yaklaşan liste bu sayıyla yanıtlanır.

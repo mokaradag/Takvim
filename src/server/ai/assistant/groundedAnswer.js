@@ -638,8 +638,8 @@ function pinRepair(turn, plan, details, calls = [], executionCalls = [], matched
   const additions = [...new Map([...(snapshot?.additions || []), ...repairCalls(turn, unrelated)]
     .map(call => [readKey(call.name, { ...call.args, limit: 1 }, turn.context.today), call])).values()];
   if (snapshot) snapshot.additions = additions;
-  // Eşleşmiş bölme artık aynı anlamın yeni yuvalarıdır; sonraki ret yalnızca kendi yolunu açar.
-  if (snapshot && !(matched && snapshot.pins.some(pin => pin.split))) {
+  // Eşleşmiş onarım güncel yuvaları sabitler; sonraki ret yalnızca güncel hatalı yolları açar.
+  if (snapshot && !matched) {
     const used = new Set();
     const references = new Map();
     for (const pin of snapshot.pins) {
