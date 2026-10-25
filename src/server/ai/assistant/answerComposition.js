@@ -36,14 +36,20 @@ function outputBudget(session) {
   return Math.min(COMPOSITION_RUNTIME.maxOutputTokens, limit);
 }
 
+/** Düzen turu açılmadan önce ayrılabilecek süre; yetki okuması gerektirmez. */
+export function compositionWindowMs(session) {
+  const remaining = Number(session.remainingMs?.() ?? 0);
+  const windowMs = Math.min(COMPOSITION_RUNTIME.timeoutMs, remaining - COMPOSITION_RUNTIME.reserveMs);
+  return Number.isFinite(windowMs) && windowMs >= COMPOSITION_RUNTIME.minMs ? windowMs : null;
+}
+
 /**
  * @returns {Promise<{ ok: true, text: string, citedIds: string[], chart: string|null, charts: number, blocks: number }
  *   | { ok: false, reason: string, issue?: string }>}
  */
-export async function composeGroundedAnswer({ session, composition, onProgress = null, onRound = null }) {
-  const remaining = Number(session.remainingMs?.() ?? 0);
-  const windowMs = Math.min(COMPOSITION_RUNTIME.timeoutMs, remaining - COMPOSITION_RUNTIME.reserveMs);
-  if (!Number.isFinite(windowMs) || windowMs < COMPOSITION_RUNTIME.minMs) return { ok: false, reason: 'BUDGET' };
+export async function composeGroundedAnswer({ session, composition, onStart = null, onProgress = null, onRound = null }) {
+  const windowMs = compositionWindowMs(session);
+  if (windowMs == null) return { ok: false, reason: 'BUDGET' };
   const budget = outputBudget(session);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new AiError(AI_ERROR_CODES.AI_CANCELLED, { details: { reason: 'COMPOSITION_BUDGET' } })), windowMs);
@@ -51,7 +57,9 @@ export async function composeGroundedAnswer({ session, composition, onProgress =
   const startedAt = Date.now();
   let result;
   try {
-    result = await session.round({ messages: compositionMessages(composition.view), tools: [], toolChoice: 'none', maxOutputTokens: budget, signal: controller.signal, onEvent: () => { onProgress?.(); } });
+    const messages = compositionMessages(composition.view);
+    onStart?.();
+    result = await session.round({ messages, resend: false, tools: [], toolChoice: 'none', maxOutputTokens: budget, signal: controller.signal, onEvent: () => { onProgress?.(); } });
   } catch (error) {
     onRound?.({ startedAt, budget, error });
     // Turun kendisi bittiyse (kullanıcı iptali, oturum süre sınırı) düzen beklenmez; hata turu sonlandırır.

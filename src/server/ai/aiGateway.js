@@ -974,9 +974,10 @@ export function createAiGateway({
         remainingMs: () => deadline.remainingMs(),
         /**
          * `maxOutputTokens` bu turun çıktı sınırını yalnızca DARALTABİLİR (profil sınırı aşılamaz);
+         * `resend: false` rolünden bağımsız olarak hassas kanıtın yeniden gönderimini kapatır.
          * `signal` çağıranın bu tur için koyduğu daha kısa süre sınırıdır, oturumu sonlandırmaz.
          */
-        async round({ messages, tools = [], toolChoice = 'auto', onEvent = null, maxOutputTokens: roundOutputTokens = null, signal: roundSignal = null }) {
+        async round({ messages, tools = [], toolChoice = 'auto', onEvent = null, maxOutputTokens: roundOutputTokens = null, signal: roundSignal = null, resend = true }) {
           // Araç SQL'i ya da kalıcılık işlemi model beklenirken açık kalamaz.
           assertOutsideSqlTransaction();
           if (deadline.failure()) throw deadline.failure();
@@ -998,7 +999,7 @@ export function createAiGateway({
               healthFailure,
               // Araç sonucu taşıyan tur kanıtın sağlayıcıya açıklanmasıdır: çağıranın güncel erişim
               // denetiminden geçmeden yeniden gönderilmez; bağlantı hatası tura döner.
-              resend: !safeMessages.some((message) => message.role === 'tool'),
+              resend: resend === true && !safeMessages.some((message) => message.role === 'tool'),
               invoke: () => getProvider().streamToolCompletion({
                 baseUrl: config.baseUrl,
                 apiKey: credential.apiKey,

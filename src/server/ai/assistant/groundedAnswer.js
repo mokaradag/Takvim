@@ -1,6 +1,6 @@
 import 'server-only';
 import { AI_ERROR_CODES } from '../../../domain/ai/aiErrorCatalog.js';
-import { ASSISTANT_STREAM_PHASES } from '../../../domain/ai/assistantContract.js';
+import { ASSISTANT_LIMITS, ASSISTANT_STREAM_PHASES } from '../../../domain/ai/assistantContract.js';
 import {
   analyzeGroundedAnswer,
   analyzeUngroundedAnswer,
@@ -29,8 +29,8 @@ import { createAiDeadline } from '../aiDeadline.js';
 import { concreteCollections, rankedRowIndexes, taskResultScope } from '../../../domain/ai/requestContract.js';
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderPartUnavailable, renderPlannerAbstention, renderPlannerClarification, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
-import { buildComposition } from '../../../domain/ai/groundedComposition.js';
-import { composeGroundedAnswer } from './answerComposition.js';
+import { buildComposition, hasCompositionChoice } from '../../../domain/ai/groundedComposition.js';
+import { composeGroundedAnswer, compositionWindowMs } from './answerComposition.js';
 import { plannerCandidateNote } from './groundedPrompt.js';
 
 /**
@@ -1066,6 +1066,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     // Model, araç ya da oturum işinin sayacı; yetki yalnızca bu değişince yeniden okunur.
     work: 0,
     revalidatedAt: null,
+    compositionStarted: false,
     models: [],
     // İçeriksiz tur izi: tur amaçları, süreler, belirteç sayıları ve sayaçlar.
     trace: { startedAt: planning?.startedAt ?? Date.now(), rounds: [], declarations: 0, repairs: 0, revalidationMs: 0, verificationMs: 0, pending: null }
@@ -1304,10 +1305,15 @@ async function presentVerdict(turn, verdict, compose) {
     turn.trace.presentation = { mode: 'narrative', reason: 'SHEET_LIMIT' };
     return verdict;
   }
+  if (!hasCompositionChoice(composition)) return verdict;
+  if (compositionWindowMs(turn.session) == null) {
+    turn.trace.presentation = { mode: 'narrative', reason: 'BUDGET' };
+    return verdict;
+  }
   if (turn.ledger.ids().length && turn.revalidatedAt !== turn.work && (await revalidate(turn) || turn.ledger.revoked())) return unavailableVerdict(turn.locale);
   turn.status(ASSISTANT_STREAM_PHASES.COMPOSING);
   const startedAt = Date.now();
-  const result = await composeGroundedAnswer({ session: turn.session, composition, onProgress: () => turn.progress(),
+  const result = await composeGroundedAnswer({ session: turn.session, composition, onStart: () => { turn.compositionStarted = true; }, onProgress: () => turn.progress(),
     onRound: ({ startedAt: roundStartedAt, budget, result: round = null, error = null }) => {
       turn.modelRounds += 1;
       traceRound(turn, { purpose: 'compose', startedAt: roundStartedAt, result: round, error, budget });
@@ -1324,19 +1330,43 @@ async function presentVerdict(turn, verdict, compose) {
   return { ...verdict, normalized: [result.text, ...input.notes].join('\n\n') };
 }
 
+/** Teslim ve kalıcılık aynı, kapsam notu dahil sınırlanmış metni kullanır. */
+export function finalGroundedDisclosure(verdict, { fallback = null, summaries, locale = 'tr' }) {
+  const disclose = (value) => {
+    const sources = summaries(value.citedIds);
+    return sources.length ? withScopeDisclosure(value.normalized, sources, locale) : { text: value.normalized, disclosed: false };
+  };
+  let disclosure = disclose(verdict);
+  const overflow = disclosure.text.length > ASSISTANT_LIMITS.maxAnswerChars;
+  if (overflow && fallback) {
+    verdict = fallback;
+    disclosure = disclose(verdict);
+  }
+  if (disclosure.text.length > ASSISTANT_LIMITS.maxAnswerChars) {
+    verdict = unavailableVerdict(locale);
+    disclosure = disclose(verdict);
+  }
+  return { verdict, disclosure, overflow };
+}
+
 /** Doğrulanmış sonucun gösterimi: kapsam notunu sunucu ekler, yalnızca atfedilen kanıt kaydedilir. */
 async function finish(turn, settled, onText, selectedBy = 'model', { compose = true } = {}) {
   let verdict = await presentVerdict(turn, settled, compose);
   // Model/araç beklemesinden sonra, yanıt ve kalıcı kanıt kurulmadan önce son yetki sınırı.
-  if (turn.ledger.revoked() || (turn.ledger.ids().length && turn.revalidatedAt !== turn.work && (await revalidate(turn) || turn.ledger.revoked()))) {
+  if (turn.ledger.revoked() || (turn.compositionStarted && turn.ledger.ids().length && (await revalidate(turn) || turn.ledger.revoked()))) {
     verdict = unavailableVerdict(turn.locale);
-    turn.trace.presentation = { mode: 'narrative', reason: 'AUTHORIZATION' };
+    if (turn.compositionStarted) turn.trace.presentation = { mode: 'narrative', reason: 'AUTHORIZATION' };
   }
   const { ledger, locale } = turn;
+  const bounded = finalGroundedDisclosure(verdict, {
+    fallback: ledger.revoked() ? null : settled, summaries: (ids) => ledger.summaries(ids), locale
+  });
+  verdict = bounded.verdict;
+  const disclosure = bounded.disclosure;
+  if (bounded.overflow && turn.compositionStarted) turn.trace.presentation = { mode: 'narrative', reason: 'LENGTH' };
   const cited = ledger.summaries(verdict.citedIds);
   turn.trace.evidence = cited.length;
-  const disclosure = cited.length > 0 ? withScopeDisclosure(verdict.normalized, cited, locale) : { text: verdict.normalized, disclosed: false };
-  const finalText = cited.length > 0 ? disclosure.text : verdict.normalized;
+  const finalText = disclosure.text;
   await onText(finalText);
   const outcome = verdict.kind;
   const resultScope = completedResultScope(turn, verdict);

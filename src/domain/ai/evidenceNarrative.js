@@ -617,14 +617,14 @@ export function narrativeRowCollections(group, layout = 'auto') {
  * Kanıt grubunun kayıt cümleleri (kanıt atfıyla); yazılacak olgu yoksa boş metin. Düzen anlatımdakiyle
  * aynıdır: açıkça istenen tabloda tek satırlı koleksiyon tablodadır, cümlelerde yinelenmez.
  */
-export function renderGroupDetails(group, { locale = 'tr', empty = [], layout = 'auto' } = {}) {
+export function renderGroupDetails(group, { locale = 'tr', empty = [], layout = 'auto', cite = true } = {}) {
   const sentences = groupSentences(group, { locale, layout, empty });
-  return sentences.length ? `${sentences.join(' ')} ${citation([group.evidenceId])}` : '';
+  return sentences.length ? `${sentences.join(' ')}${cite ? ` ${citation([group.evidenceId])}` : ''}` : '';
 }
 
 /** Kanıt grubunun tek koleksiyonunu liste (`list`) ya da tablo (`table`) olarak yazar. */
-export function renderGroupRows(group, collection, { locale = 'tr', layout = 'list' } = {}) {
-  return group.collections.has(collection) ? groupRowsBlock(group, collection, { locale, layout }) : '';
+export function renderGroupRows(group, collection, { locale = 'tr', layout = 'list', stated = '' } = {}) {
+  return group.collections.has(collection) ? groupRowsBlock(group, collection, { locale, layout, stated }) : '';
 }
 
 /**

@@ -58,7 +58,7 @@ const detail = (previous) => ({ operation: 'value', metrics: ['task.priority', '
  * yazdığı yuva değerleri). Son tur ölçülür; önceki turlar takip bağlamını kurar ve onların düzen turları da sayılır.
  */
 export const COMPOSITION_CASES = Object.freeze([
-  { id: 'overdue-list', stage: 'smoke', turns: [{ question: 'Geciken görevlerimi göster.', plan: plan(OVERDUE), expect: ['3', '23', 'Haftalık durum toplantısı'] }] },
+  { id: 'overdue-list', stage: 'smoke', turns: [{ question: 'Geciken görevlerimi göster.', plan: plan(OVERDUE), expect: ['**3**', '23', 'Haftalık durum toplantısı'] }] },
   { id: 'task-record', stage: 'smoke', turns: [{ question: 'Radar test planı görevinin önceliği ve termini ne?',
     plan: plan({ operation: 'value', metrics: ['task.priority', 'task.targetFinish'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', text: 'Radar test planı' }] }),
     expect: ['Kritik', '20 Eylül 2026'] }] },
@@ -103,7 +103,7 @@ export function qualificationProvider(rounds, { provider = PROVIDER, completeRou
   return { ...fake, async streamToolCompletion(input) {
     if (!isCompositionCall(input)) return fake.streamToolCompletion(input);
     const view = compositionView(input);
-    const measured = { shape: view.shape, language: view.language, facts: view.facts.length, tables: view.tables.length, charts: view.charts.length,
+    const measured = { language: view.language, details: view.details.length, tables: view.tables.length, charts: view.charts.length,
       budget: input.maxOutputTokens ?? null, model: input.model };
     rounds.push(measured);
     const startedAt = performance.now();
@@ -200,7 +200,7 @@ export async function runCase(t, item, { providerOptions = {}, report = summary 
     const presentation = line?.context?.presentation || null;
     result = { id: item.id, stage: item.stage, turn: index + 1, mode: presentation?.mode ?? null, reason: presentation?.reason ?? null, issue: presentation?.issue ?? null,
       blocks: presentation?.blocks ?? null, chart: presentation?.chart ?? null, failures,
-      rounds: measured.map(({ shape, language, facts, tables, charts, budget, finish, latencyMs, usage, infrastructure }) => ({ shape, language, facts, tables, charts, budget, finish: finish ?? null, latencyMs: latencyMs ?? null, usage: usage ?? null, infrastructure: infrastructure ?? null })) };
+      rounds: measured.map(({ language, details, tables, charts, budget, finish, latencyMs, usage, infrastructure }) => ({ language, details, tables, charts, budget, finish: finish ?? null, latencyMs: latencyMs ?? null, usage: usage ?? null, infrastructure: infrastructure ?? null })) };
     if (presentation?.mode) report[presentation.mode] += 1;
     if (presentation?.reason) report.reasons[presentation.reason] = (report.reasons[presentation.reason] || 0) + 1;
     if (presentation?.issue) report.issues[presentation.issue] = (report.issues[presentation.issue] || 0) + 1;

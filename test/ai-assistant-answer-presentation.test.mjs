@@ -86,9 +86,9 @@ test('grafik satırları tek sekme durağıdır; ok, Home ve End tuşlarıyla ge
   const rowAt = (index) => bars.output.props.children[index].props.children.props.children;
   SPEC.items.forEach((_, index) => rowAt(index).ref(nodes[index]));
   assert.deepEqual(SPEC.items.map((_, index) => rowAt(index).props.tabIndex), [0, -1, -1]);
-  const key = (index, name) => {
+  const key = (index, name, modifiers = {}) => {
     let prevented = false;
-    rowAt(index).props.onKeyDown({ key: name, preventDefault: () => { prevented = true; } });
+    rowAt(index).props.onKeyDown({ key: name, ...modifiers, preventDefault: () => { prevented = true; } });
     bars.render();
     return prevented;
   };
@@ -99,6 +99,12 @@ test('grafik satırları tek sekme durağıdır; ok, Home ve End tuşlarıyla ge
   key(2, 'Home');
   assert.deepEqual(focused, [1, 2, 2, 0], 'sınırda kalır');
   assert.equal(key(0, 'a'), false, 'başka tuş tüketilmez');
+  for (const modifier of ['altKey', 'ctrlKey', 'metaKey', 'shiftKey']) {
+    for (const name of ['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft', 'Home', 'End']) {
+      assert.equal(key(0, name, { [modifier]: true }), false);
+    }
+  }
+  assert.deepEqual(focused, [1, 2, 2, 0], 'değiştiricili kısayollar odağı taşımaz');
   // Ortak ipucu çocuğun kendi işleyicilerini ezmez: odak ve tuş olayları ikisine de ulaşır.
   const seen = [];
   const tooltip = mountComponent(Tooltip, { asChild: true, content: 'İpucu', children: React.createElement('div', { onFocus: () => seen.push('focus'), onKeyDown: (event) => seen.push(event.key) }) });
@@ -314,7 +320,9 @@ test('grafik sayı hassasiyeti sıfır sınırını korur ve kayan nokta gürül
   const donut = findElement(mountComponent(AnswerChart, { spec }).output, named('DonutChart'));
   const slices = mountComponent(donut.type, donut.props);
   const tooltip = findElement(slices.output, (node) => node.type === Tooltip && node.props.title === 'Küçük pay');
-  assert.ok(renderToStaticMarkup(tooltip.props.content).includes('class="rt-val">%0,0001</span>'), 'küçük pozitif pay da sıfır gösterilmez');
+  const content = renderToStaticMarkup(tooltip.props.content);
+  assert.ok(content.includes('class="rt-val">%0,0001</span>'), 'küçük pozitif pay da sıfır gösterilmez');
+  assert.ok(content.includes('width:0.00009999999999999999%'), content);
 });
 
 test('iki azaltılmış hareket yolu grafik animasyonunu kapatır; temel grafik durumu görünürdür', () => {

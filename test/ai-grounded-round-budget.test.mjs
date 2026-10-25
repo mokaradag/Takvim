@@ -359,6 +359,8 @@ test('the fullest grounded turn line stays inside the log sanitizer key limit an
 test('tur belirteç toplamı her metriğin bütün model turlarında bildirilmesini gerektirir', async (t) => {
   const { recordGroundedTurn } = await import('../src/server/ai/aiTelemetry.js');
   const logs = captureConsole(t);
+  recordGroundedTurn({ outcome: 'error' });
+  assert.deepEqual(turnTraces(logs).at(-1).context.usage, { input: null, completion: null, reasoning: null, firstEventMs: null, lengthStops: 0 });
   const complete = { input: 10, completion: 4, reasoning: 0 };
   for (const [rounds, expected, modelRounds = rounds.length] of [
     [[complete, complete], [20, 8, 0]],

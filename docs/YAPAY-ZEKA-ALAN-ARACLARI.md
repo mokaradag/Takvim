@@ -1571,3 +1571,15 @@ temizleyicisinin nesne başına 25 alan sınırının içinde kalır.
 
 Kısmi çok bölümlü yanıt (bir bölüm tamamlanamadı) doğrulanmış tek görev listesi bölümünün kümesini sonraki takip için
 kaydeder; tamamlanamayan bölüm hiçbir küme vermez ve güncel yetki takipte yine denetlenir.
+
+
+Phase 4D yakınsama: düzen sayfası yalnızca kapalı kaynak betimlerini taşır; eski olgu yuvaları,
+`shape`, `required` ve önizleme bütçeleri kaldırıldı. Tek ayrıntı veya sabit tek tablo için anlamlı
+seçim yoksa model turu açılmaz. Her tablo kendi ayrıntısına bağlıdır; ayrıntı tablo/grafikten önce bir
+kez çizilir ve aynı sunucu çizicisinin `stated` sözleşmesi ortak ölçütü yinelemez. Düzen turu açıkça
+`resend: false` kullanır; bağlantı hatası kanıtı yeniden göndermez. Ek son yetki kontrolü ve yetki
+kaynaklı sunum geri dönüş sayacı yalnızca gerçekten başlayan düzen turuna bağlıdır; teslim koruması
+her durumda korunur. Teslim ve kalıcılık metni kapsam notları dahil `ASSISTANT_LIMITS.maxAnswerChars`
+sınırından geçer; aşımda kesmeden doğrulanmış anlatıma, o da sığmıyorsa erişilemez sonuca dönülür.
+Grafik etiketi UTF-16 çiftini bölmez; ipucu geometrisi gerçek oranı kullanır ve değiştiricili tuşlar
+uygulama dışı kısayollara bırakılır. Model turu olmayan kullanım toplamları ölçülmüş sıfır değil `null` kalır.

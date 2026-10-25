@@ -1,12 +1,9 @@
 import { ANSWER_CHART_LIMITS, answerChartFence, answerChartLabel } from './answerChart.js';
-import { escapedFactText } from './evidenceFacts.js';
 import {
   describeRowCollection,
   narrativeGroups,
   narrativeLabel,
-  narrativePlainValue,
   narrativeRowCollections,
-  narrativeValue,
   renderGroupDetails,
   renderGroupRows
 } from './evidenceNarrative.js';
@@ -19,16 +16,13 @@ import {
  */
 
 export const COMPOSITION_LIMITS = Object.freeze({
-  maxSlots: 72,
-  maxPreviewRows: 8,
   maxTables: 6,
   maxDetails: 6,
   maxCharts: 4,
   maxBlocks: 10,
   maxValueChars: 160,
   maxQuestionChars: 600,
-  maxResponseChars: 16000,
-  simpleSlots: 4
+  maxResponseChars: 16000
 });
 
 export const COMPOSITION_BLOCK_TYPES = Object.freeze(['rows', 'details', 'chart']);
@@ -39,10 +33,6 @@ const BLOCK_KEYS = Object.freeze({
   chart: [['type', 'source'], ['style']]
 });
 const ROW_STYLES = new Set(['list', 'table']);
-/** Kaydın öznesini adlandıran yuvanın etiketi (kayıt türüne göre). */
-const SUBJECT_NOUNS = Object.freeze({ task: ['Görev', 'Task'], project: ['Proje', 'Project'], person: ['Kişi', 'Person'] });
-/** Satır adının bağlamı (anlatımda adın yanında yazılır); düzende satıra bağlı ayrı bir yuvadır. */
-const CONTEXT_LABELS = Object.freeze({ project: ['Proje', 'Project'], organization: ['Birim', 'Organization'] });
 const COUNT_MEASURES = new Set(['tasks', 'notifications', 'occurrences', 'events', 'people', 'projects', 'wbs-nodes', 'dependencies', 'baselines', 'tags', 'count']);
 
 const leafOf = (field) => String(field).split('.').filter((part) => !/^\d+$/.test(part)).at(-1);
@@ -68,14 +58,6 @@ function exactKeys(value, keys, optional = []) {
   return keys.every((key) => Object.hasOwn(value, key)) && present.every((key) => keys.includes(key) || optional.includes(key));
 }
 
-function slotKind(fact) {
-  if (fact.value === null) return 'empty';
-  if (typeof fact.value === 'boolean') return 'flag';
-  if (typeof fact.value === 'number') return /Percent$/.test(leafOf(fact.field)) ? 'percent' : 'number';
-  if (['date', 'instant'].includes(fact.semantic?.valueType)) return 'date';
-  return 'text';
-}
-
 /**
  * Olgu sayfasını kurar.
  *
@@ -85,70 +67,14 @@ function slotKind(fact) {
  * @param {{ index: number, topic?: string, kind: 'unavailable'|'not_found' }[]} [input.missing] Tamamlanamayan bölümler.
  * @returns {{ view: object, render: object } | null} Model girdisi (`view`) ve sunucunun çizim verisi (`render`).
  */
-export function buildComposition(input = {}) {
-  // Sayfa sınırına sığmayan önizleme daraltılır; tablolar o zaman yalnızca tablo bloğuyla temsil edilir.
-  for (const previewRows of [COMPOSITION_LIMITS.maxPreviewRows, 4, 2, 0]) {
-    const built = composeSheet(input, previewRows);
-    if (built !== undefined) return built;
-  }
-  return null;
-}
-
-/** `undefined`: bu önizleme boyuyla sayfa sınırı aşıldı; `null`: düzen kurulamaz. */
-function composeSheet({ parts = [], missing = [], locale = 'tr', question = '', previousQuestion = null, today = null }, previewRows) {
-  const slots = new Map();
+export function buildComposition({ parts = [], missing = [], locale = 'tr', question = '', previousQuestion = null, today = null } = {}) {
   const tables = new Map();
   const details = new Map();
   const charts = new Map();
-  const viewFacts = [];
   const viewTables = [];
   const viewDetails = [];
   const viewCharts = [];
   let overflow = false;
-
-  const addSlot = ({ part, evidenceId, facts, label, criteria = null, subject = null, table = null, row = null, record = null, role = 'value', markdown, plain, kind, required = true }) => {
-    if (slots.size >= COMPOSITION_LIMITS.maxSlots) { overflow = true; return null; }
-    const id = `F${slots.size + 1}`;
-    const value = clip(String(plain ?? ''), COMPOSITION_LIMITS.maxValueChars);
-    slots.set(id, Object.freeze({ id, part, evidenceId, markdown, kind, table, row, record, role, required, facts }));
-    viewFacts.push({ id, part, label: clip(String(label || ''), COMPOSITION_LIMITS.maxValueChars), value, kind,
-      ...(criteria ? { criteria: clip(criteria, COMPOSITION_LIMITS.maxValueChars) } : {}),
-      ...(subject ? { subject: clip(String(subject), COMPOSITION_LIMITS.maxValueChars) } : {}),
-      ...(table ? { table, row: row.index } : row?.detail ? { detail: row.detail, row: row.index } : {}), ...(role === 'label' ? { role } : {}) });
-    return id;
-  };
-  const factSlot = (part, evidenceId, facts, extra = {}) => {
-    const [first] = facts;
-    const separator = first.field.includes('wbsPath') ? ' › ' : ', ';
-    const kind = facts.length === 1 ? slotKind(first) : 'text';
-    const values = facts.map((fact) => narrativeValue(fact, locale));
-    const { label, criteria } = narrativeLabel(first, locale);
-    // Satır olgularının ortak ölçütü tabloda bir kez yazılır.
-    return addSlot({ part, evidenceId, facts, label: extra.label || label, criteria: extra.row ? null : criteria || null, kind,
-      markdown: Object.freeze({ plain: values.join(separator), strong: values.map((value) => `**${value}**`).join(separator) }),
-      plain: facts.map((fact) => narrativePlainValue(fact, locale)).join(separator), ...extra });
-  };
-  const rowSlots = (part, evidenceId, row, rowRef, label, cells, columns) => {
-    const ids = [];
-    const labelId = row.titleFacts.length ? factSlot(part, evidenceId, row.titleFacts, { table: rowRef.table, row: rowRef, role: 'label', label })
-      : addSlot({ part, evidenceId, facts: [], label, table: rowRef.table, row: rowRef, role: 'label', kind: 'text',
-        markdown: Object.freeze({ plain: escapedFactText(row.title), strong: `**${escapedFactText(row.title)}**` }), plain: row.title });
-    if (labelId) ids.push(labelId);
-    for (const [key, value] of Object.entries(row.context || {})) {
-      if (!value) continue;
-      // Bağlam yalnızca istenen olguysa (ör. "projesi ne?") kapsam için zorunludur; aksi hâlde satır adının eşlikçisidir.
-      const id = addSlot({ part, evidenceId, facts: [], label: CONTEXT_LABELS[key][locale === 'en' ? 1 : 0], table: rowRef.table, row: rowRef, kind: 'text',
-        required: row.entries.some(({ rel }) => rel.startsWith(`${key}.`)),
-        markdown: Object.freeze({ plain: escapedFactText(value), strong: escapedFactText(value) }), plain: value });
-      if (id) ids.push(id);
-    }
-    cells.forEach((facts, column) => {
-      if (!facts.length) return;
-      const id = factSlot(part, evidenceId, facts, { table: rowRef.table, row: rowRef, label: columns[column].label });
-      if (id) ids.push(id);
-    });
-    return ids;
-  };
 
   for (const part of parts) {
     const presentation = part.presentation;
@@ -161,19 +87,14 @@ function composeSheet({ parts = [], missing = [], locale = 'tr', question = '', 
         const id = `T${tables.size + 1}`;
         const described = describeRowCollection(group, collection, locale);
         const columns = described.columns.map((column, index) => ({ id: `C${index + 1}`, label: column.label, numeric: column.numeric }));
-        const preview = [];
-        described.rows.slice(0, previewRows).forEach((row, index) => {
-          preview.push(rowSlots(ordinal, group.evidenceId, row, { table: id, index: index + 1 }, described.head, row.cells, columns));
-        });
-        const slotIds = preview.flat();
         const complete = described.rows.every((row) => row.entries.every(({ fact }) => fact.semantic?.complete === true));
         const rowCriteria = [...new Set(described.rows.map((row) => narrativeLabel(row.entries[0].fact, locale).criteria))];
         const criteria = rowCriteria.length === 1 ? rowCriteria[0] : group.envelope.map((fact) => narrativeLabel(fact, locale).criteria).find(Boolean) || '';
         const labels = chartLabels(described.rows);
-        tables.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, group, collection, rows: described.rows.length, previewRows: preview.length, slotIds, columns, complete, criteria,
+        tables.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, group, collection, rows: described.rows.length, columns, complete, criteria, detail: null,
           layout: presentation.layout }));
         viewTables.push({ id, part: ordinal, title: described.head, rows: described.rows.length,
-          ...(criteria ? { criteria: clip(criteria, COMPOSITION_LIMITS.maxValueChars) } : {}), previewRows: preview.length, columns, complete });
+          ...(criteria ? { criteria: clip(criteria, COMPOSITION_LIMITS.maxValueChars) } : {}), columns, complete });
         // Grafik adayı: satır başına tek, sonlu ve negatif olmayan sayı taşıyan sütun.
         described.columns.forEach((column, index) => {
           if (!column.numeric || !labels || charts.size >= COMPOSITION_LIMITS.maxCharts) return;
@@ -196,77 +117,38 @@ function composeSheet({ parts = [], missing = [], locale = 'tr', question = '', 
           viewCharts.push({ id: chartId, table: id, column: columns[index].id, title: column.label, types });
         });
       }
-      const recordSlots = [];
-      const detailId = `D${details.size + 1}`;
-      const byPattern = new Map();
-      for (const entry of group.main.entries) {
-        const key = `${entry.rel.replace(/\.\d+(?=\.|$)/g, '.*')}|${entry.fact.changeField || ''}`;
-        if (!byPattern.has(key)) byPattern.set(key, []);
-        byPattern.get(key).push(entry.fact);
-      }
-      const subject = group.main.anonymous ? null : group.main.subject;
-      for (const facts of byPattern.values()) {
-        const role = ['title', 'name'].includes(leafOf(facts[0].field)) && facts.length === 1 ? 'label' : 'value';
-        const id = factSlot(ordinal, group.evidenceId, facts, { subject, role, record: group.evidenceId });
-        if (id) recordSlots.push(id);
-      }
-      // Kaydın adı da doğrulanmış kanıttandır: model adı kopyalamadan yuvayla yazabilir (kapsam için zorunlu değil).
-      if (subject && recordSlots.length && !recordSlots.some((id) => slots.get(id).role === 'label')) {
-        const noun = SUBJECT_NOUNS[group.main.kind]?.[locale === 'en' ? 1 : 0] || (locale === 'en' ? 'Record' : 'Kayıt');
-        const id = addSlot({ part: ordinal, evidenceId: group.evidenceId, facts: [], label: noun, kind: 'text', role: 'label', required: false, record: group.evidenceId,
-          markdown: Object.freeze({ plain: escapedFactText(subject), strong: `**${escapedFactText(subject)}**` }), plain: subject });
-        if (id) recordSlots.push(id);
-      }
-      for (const collection of group.collections.keys()) {
-        if (multi.has(collection)) continue;
-        const described = describeRowCollection(group, collection, locale);
-        const [row] = described.rows;
-        const rowRef = { table: null, index: 1, key: `${group.evidenceId}|${collection}`, detail: detailId };
-        recordSlots.push(...rowSlots(ordinal, group.evidenceId, row, rowRef, described.head, row.cells, described.columns));
-      }
-      for (const fact of group.envelope) {
-        if (!['totalCount', 'returnedCount'].includes(fact.field)) continue;
-        const id = factSlot(ordinal, group.evidenceId, [fact], { subject });
-        if (id) recordSlots.push(id);
-      }
-      const emptyProof = (presentation.empty || []).includes(group.evidenceId);
       const detailText = renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout });
       if (detailText) {
         if (details.size >= COMPOSITION_LIMITS.maxDetails) { overflow = true; continue; }
-        const id = detailId;
-        // Eksik, kısaltılmış ya da eşleşmesiz sonucun notu (yuvası yoktur) ve yuvasız ayrıntı her zaman gösterilir.
-        // Sayısal özetin anlamı/kapsamı modelin serbest cümlesine bırakılamaz; doğrulanmış anlatım eşlik eder.
-        const requiredScope = recordSlots.some((id) => {
-          const slot = slots.get(id);
-          return !slot.row && ['number', 'percent'].includes(slot.kind);
-        });
-        const required = !recordSlots.length || group.envelope.some((fact) => (fact.field === 'complete' && (fact.value === false || emptyProof))
-          || (fact.field === 'truncated' && fact.value === true));
-        details.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, text: detailText, slotIds: recordSlots, required, requiredScope }));
-        viewDetails.push({ id, part: ordinal, ...(subject ? { subject: clip(String(subject), COMPOSITION_LIMITS.maxValueChars) } : {}), facts: recordSlots,
-          ...(required || requiredScope ? { required: true } : {}) });
+        const id = `D${details.size + 1}`;
+        const ownedTables = [...tables.values()].filter((table) => table.group === group);
+        details.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, text: detailText }));
+        for (const table of ownedTables) tables.set(table.id, Object.freeze({ ...table, detail: id }));
+        viewDetails.push({ id, part: ordinal, text: clip(renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, cite: false }), COMPOSITION_LIMITS.maxValueChars) });
       }
     }
   }
-  // Sayfa sınırı aşıldıysa düzen istenmez: bütün olguları temsil edemeyen sayfa yanlış bir yanıta yol açabilir.
-  if (overflow) return tables.size || !previewRows ? undefined : null;
-  if (!slots.size && !tables.size) return null;
+  if (overflow || (!details.size && !tables.size)) return null;
   const partCount = new Set(parts.map((part) => part.index)).size + missing.length;
-  const shape = partCount === 1 && !tables.size && slots.size <= COMPOSITION_LIMITS.simpleSlots ? 'simple' : 'standard';
   const view = {
     language: locale === 'en' ? 'en' : 'tr',
     ...(today ? { today } : {}),
     question: clip(String(question || ''), COMPOSITION_LIMITS.maxQuestionChars),
     ...(previousQuestion ? { previousQuestion: clip(String(previousQuestion), COMPOSITION_LIMITS.maxQuestionChars) } : {}),
-    shape,
     parts: partCount,
-    facts: viewFacts,
     tables: viewTables,
     details: viewDetails,
     charts: viewCharts,
     missing: missing.map((item) => ({ part: item.index + 1, ...(item.topic ? { topic: item.topic } : {}) }))
   };
-  return Object.freeze({ view: Object.freeze(view), render: Object.freeze({ locale: view.language, slots, tables, details, charts, question: String(question || '') }) });
+  return Object.freeze({ view: Object.freeze(view), render: Object.freeze({ locale: view.language, tables, details, charts, question: String(question || '') }) });
+}
+
+/** Tek ayrıntı ve sabit satır düzeni model seçimi gerektirmez. */
+export function hasCompositionChoice(composition) {
+  const { tables, details, charts } = composition.render;
+  return charts.size > 0 || details.size > 1 || tables.size > 1
+    || [...tables.values()].some((table) => !['table', 'list', 'prose'].includes(table.layout));
 }
 
 /* ── Model yanıtının ayrıştırılması ve doğrulanması ────────────── */
@@ -337,18 +219,27 @@ export function renderComposition(composition, validated) {
   const cited = [];
   let chart = null;
   let charts = 0;
+  const shown = new Set();
+  const showDetail = (id) => {
+    if (!id || shown.has(id)) return;
+    const detail = render.details.get(id);
+    if (!detail) return;
+    out.push(detail.text);
+    cited.push(detail.evidenceId);
+    shown.add(id);
+  };
   for (const block of validated.blocks) {
     if (block.type === 'rows') {
       const table = render.tables.get(block.source);
-      out.push(renderGroupRows(table.group, table.collection, { locale, layout: block.style }));
+      showDetail(table.detail);
+      out.push(renderGroupRows(table.group, table.collection, { locale, layout: block.style, stated: render.details.get(table.detail)?.text || '' }));
       cited.push(table.evidenceId);
     } else if (block.type === 'details') {
-      const detail = render.details.get(block.source);
-      out.push(detail.text);
-      cited.push(detail.evidenceId);
+      showDetail(block.source);
     } else if (block.type === 'chart') {
       const candidate = render.charts.get(block.source);
       if (render.tables.get(candidate.table)?.evidenceId !== candidate.evidenceId) continue;
+      showDetail(render.tables.get(candidate.table)?.detail);
       const fence = answerChartFence({ version: 1, type: block.style, locale, title: candidate.title, unit: candidate.unit, evidence: [candidate.evidenceId],
         items: candidate.items });
       if (!fence) continue;
@@ -359,11 +250,8 @@ export function renderComposition(composition, validated) {
     }
   }
   // Bütün ayrıntılar sunucudan gelir; modelin atlaması kapsamı ya da kaydı düşüremez.
-  const shown = new Set(validated.blocks.filter((block) => block.type === 'details').map((block) => block.source));
   for (const detail of render.details.values()) {
-    if (shown.has(detail.id)) continue;
-    out.push(detail.text);
-    cited.push(detail.evidenceId);
+    showDetail(detail.id);
   }
   return { text: out.join('\n\n'), citedIds: [...new Set(cited)], chart, charts, blocks: validated.blocks.length };
 }

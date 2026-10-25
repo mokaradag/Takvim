@@ -30,7 +30,11 @@ const UNSAFE_TEXT = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/;
 /** Üretici ve doğrulayıcı aynı metin güvenliği sözleşmesini kullanır. */
 export function answerChartLabel(value, max = ANSWER_CHART_LIMITS.maxLabelChars) {
   const text = String(value ?? '').normalize('NFC').replace(/\s+/g, ' ').replace(new RegExp(UNSAFE_TEXT.source, 'g'), '').replace(/ +/g, ' ').trim() || '—';
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  if (text.length <= max) return text;
+  let end = Math.max(0, max - 1);
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${text.slice(0, end)}…`;
 }
 
 function exactKeys(value, keys) {

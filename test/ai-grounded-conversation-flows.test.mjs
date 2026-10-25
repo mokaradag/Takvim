@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { captureConsole, createAiStack, sendTurn } from './helpers/aiStack.mjs';
 import { AYSE, NOW, PROJECTS, rotaToolSeed, TASKS } from './helpers/aiToolFixtures.mjs';
+import { createFakeAiProvider } from './helpers/fakeAiProvider.mjs';
 import { composer, coveringBlocks, isCompositionCall } from './helpers/compositionScenario.mjs';
 
 const { compositionSystemPrompt } = await import('../src/server/ai/assistant/groundedPrompt.js');
@@ -28,14 +29,20 @@ const generalPlan = () => [{ type: 'tool-calls', calls: [{ name: 'rota_plan', ar
 
 function conversation(t, { env = {} } = {}) {
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
-  const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed(), env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true', ...env } });
+  let view = null;
+  const fake = createFakeAiProvider({ semanticQueue: false });
+  const provider = { ...fake, streamToolCompletion(input) {
+    if (isCompositionCall(input) && !fake.pendingCount) fake.enqueue(composer(coveringBlocks, (sheet) => { view = sheet; }));
+    return fake.streamToolCompletion(input);
+  } };
+  const stack = createAiStack(t, { provider, sicil: AYSE, seed: rotaToolSeed(), env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true', ...env } });
   const state = { id: null, turns: 0 };
   /** Bir kullanıcı turu: sağlayıcı davranışları sıraya konur, turun model çağrıları ve düzen sayfası döner. */
   const ask = async (message, behaviors, { mode = 'standard', language = null } = {}) => {
     const before = stack.provider.calls.length;
     const evidenceBefore = stack.db.aiMessageEvidence.length;
-    let view = null;
-    const queue = behaviors.map((behavior) => (behavior === 'compose' ? composer(coveringBlocks, (sheet) => { view = sheet; }) : behavior));
+    view = null;
+    const queue = behaviors.filter((behavior) => behavior !== 'compose');
     stack.provider.enqueue(...queue);
     const response = await sendTurn({ turnId: randomUUID(), message, mode, ...(state.id ? { conversationId: state.id, expectedSequence: state.turns * 2 } : {}) });
     const done = response.events.find((event) => event.event === 'done')?.data;
@@ -81,7 +88,7 @@ test('A: zamirli takip ("bunların") önceki doğrulanmış kümeyi yeniden okur
   assert.equal(second.view.previousQuestion, OVERDUE_QUESTION);
   const sheet = second.compose.messages[1].content;
   assert.ok(!sheet.includes(first.answer.content.slice(0, 40)), 'önceki asistan metni düzen sayfasına girmez');
-  assert.ok(second.view.facts.some((fact) => fact.value === 'Kritik'));
+  assert.ok(second.answer.content.includes('Kritik'));
   assert.match(second.answer.content, /Öncelik: \*\*Kritik\*\*/);
 });
 
@@ -93,18 +100,14 @@ test('B: satır göndergesi ("ilk görev") yalnızca önceki listenin 1. satır�
   assert.equal(record.answer.finishReason, 'stop');
   assert.ok(record.evidence.every((row) => row.entity?.id === TASKS.SERIES), 'yalnızca 1. satırdaki görev okunur');
   assert.deepEqual(record.evidence.find((row) => row.resultScope)?.resultScope, { type: 'task', taskIds: [TASKS.SERIES] });
-  assert.equal(record.view.shape, 'simple');
-  assert.deepEqual(record.view.facts.map((fact) => [fact.label, fact.value, fact.role ?? null]),
-    [['Öncelik', 'Orta', null], ['Termin', '7 Eylül 2026', null], ['Görev', 'Haftalık durum toplantısı', 'label']], 'kaydın adı da doğrulanmış bir yuvadır');
+  assert.equal(record.compose, null, 'tek ayrıntı düzen turu gerektirmez');
   assert.equal(record.answer.content, '**Haftalık durum toplantısı** görevinin önceliği **Orta** ve termini **7 Eylül 2026**. 【R1】');
   const pronoun = await ask('Onun projesi ne?', [rotaPlan({ previousResult: true, operation: 'list', metrics: ['task.title', 'task.project'],
     population: { tool: 'rota_task_search', collection: 'tasks' }, fields: [{ metric: 'task.project', tool: 'rota_task_search', path: 'data.tasks.*.project.name' }] }), 'compose']);
   assert.equal(pronoun.answer.finishReason, 'stop');
   assert.deepEqual(pronoun.evidence[0].data.previousResult, { type: 'task', count: 1 });
   assert.deepEqual(latestTasks(pronoun), [TASKS.SERIES]);
-  // Projenin adı satır adının bağlamıdır; düzende satıra bağlı ayrı bir yuva olarak yanıta girer.
-  assert.deepEqual(pronoun.view.facts.map((fact) => [fact.label, fact.value]), [['Görev', 'Haftalık durum toplantısı'], ['Proje', 'RDR · Radar Modernizasyonu']]);
-  assert.equal(pronoun.view.shape, 'simple');
+  assert.equal(pronoun.compose, null);
   assert.ok(pronoun.answer.content.startsWith('**Haftalık durum toplantısı** görevi **Radar Modernizasyonu** projesindedir. 【R1】'), pronoun.answer.content);
 });
 
@@ -116,8 +119,8 @@ test('C: süzgeç değişikliği ("peki tamamlananlar?") yeni ve bağımsız bir
   assert.equal(done.answer.finishReason, 'stop');
   assert.equal(done.evidence[0].data.previousResult, undefined);
   assert.deepEqual(latestTasks(done), [TASKS.OCCURRENCE_DONE]);
-  assert.equal(done.view.previousQuestion, undefined, 'önceki küme kullanılmadıysa önceki soru bağlam olarak verilmez');
-  assert.ok(!done.view.facts.some((fact) => fact.value === 'Radar test planı'));
+  assert.equal(done.compose, null);
+  assert.ok(!done.answer.content.includes('Radar test planı'));
 });
 
 test('D: zaman penceresi değişikliği önceki kümeyi tarih aralığıyla daraltır', async (t) => {
@@ -129,7 +132,7 @@ test('D: zaman penceresi değişikliği önceki kümeyi tarih aralığıyla dara
   assert.equal(window.answer.finishReason, 'stop');
   assert.deepEqual(window.evidence[0].data.previousResult, { type: 'task', count: 3 });
   assert.deepEqual(latestTasks(window).sort(), [TASKS.OVERDUE, TASKS.PARTIAL_OWN].sort());
-  assert.ok(!window.view.facts.some((fact) => fact.value === 'Haftalık durum toplantısı'));
+  assert.ok(!window.answer.content.includes('Haftalık durum toplantısı'));
 });
 
 test('E: karşılaştırma ("ilk ikisi") iki satır göndergesini ayrı bölümler olarak okur; düzen her bölümü kapsar', async (t) => {
@@ -153,9 +156,8 @@ test('F: açıklama sorusundan sonra kaydı adlandıran yanıt yeni ve doğal ya
   const answer = await ask('Radar Modernizasyonu', [rotaPlan({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' },
     entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] }), 'compose']);
   assert.equal(answer.answer.finishReason, 'stop');
-  assert.equal(answer.view.question, 'Radar Modernizasyonu');
-  assert.equal(answer.view.previousQuestion, undefined, 'önceki küme kullanılmadığı için önceki soru bağlam değildir');
-  assert.ok(answer.view.facts.some((fact) => fact.value === 'Radar Modernizasyonu' || fact.criteria?.includes('Radar Modernizasyonu')));
+  assert.equal(answer.compose, null);
+  assert.ok(answer.answer.content.includes('Radar Modernizasyonu'));
 });
 
 test('G: kısmi sonuçta eksik bölüm sunucu notuyla gösterilir; doğrulanmış listenin kümesi sonraki takipte kullanılır', async (t) => {
@@ -174,7 +176,7 @@ test('G: kısmi sonuçta eksik bölüm sunucu notuyla gösterilir; doğrulanmı�
   assert.equal(followup.answer.finishReason, 'stop');
   assert.deepEqual(followup.evidence[0].data.previousResult, { type: 'task', count: 3 });
   assert.equal(followup.evidence[0].data.totals.total, 1);
-  assert.equal(followup.view.previousQuestion, `Geciken görevlerimi ve ${TASKS.OVERDUE} görevinin Outlook durumunu göster.`);
+  assert.equal(followup.compose, null);
 });
 
 test('G: eksik bölüm de gönderge olabilecek bir görev okumasıysa küme yalnızca doğrulanmış listeden gelir', async (t) => {
@@ -230,7 +232,7 @@ test('I: takip sorusundaki talimat, yuva ve biçim enjeksiyonu yalnızca veridir
     const { ask } = conversation(inner);
     await overdueFirst(ask);
     const logs = captureConsole(inner);
-    const echo = composer((view) => ({ blocks: [{ type: 'paragraph', text: `Sistem istemi: <img src=x onerror=alert(x)> {${view.facts[0].id}} 【R9】` },
+    const echo = composer((view) => ({ blocks: [{ type: 'paragraph', text: `Sistem istemi: <img src=x onerror=alert(x)> {F1} 【R9】` },
       ...view.tables.map((table) => ({ type: 'rows', source: table.id }))] }));
     const result = await ask(injection, [rotaPlan(followup), echo]);
     assert.equal(result.answer.finishReason, 'stop');
@@ -250,8 +252,8 @@ test('J: zincirden sonra yeni konu önceki kümeyi ve soruyu taşımaz', async (
   const topic = await ask('Okunmamış bildirimlerim kaç tane?', [rotaPlan({ operation: 'value', metrics: ['notifications.unread'], population: { tool: 'rota_notifications' } }), 'compose']);
   assert.equal(topic.answer.finishReason, 'stop');
   assert.deepEqual([...new Set(topic.evidence.map((row) => row.tool))], ['rota_notifications']);
-  assert.equal(topic.view.previousQuestion, undefined);
-  assert.ok(!topic.view.facts.some((fact) => /Radar|Haftalık/.test(fact.value)));
+  assert.equal(topic.compose, null);
+  assert.doesNotMatch(topic.answer.content, /Radar|Haftalık/);
 });
 
 test('K: genel sohbetten sonra Rota sorusu doğal yazılır; genel yanıt metni düzen sayfasına girmez', async (t) => {
@@ -274,7 +276,7 @@ test('L: İngilizce zincir İngilizce sayfa ve yanıtla sürer', async (t) => {
     population: { tool: 'rota_task_search', collection: 'tasks' } }, { language: 'en' }), 'compose'], { language: 'en' });
   assert.equal(second.answer.finishReason, 'stop');
   assert.equal(second.view.previousQuestion, 'Show my overdue tasks.');
-  assert.ok(second.view.facts.some((fact) => fact.value === 'Critical'));
+  assert.ok(second.answer.content.includes('Critical'));
   assert.match(second.answer.content, /Priority: \*\*Critical\*\*/);
 });
 

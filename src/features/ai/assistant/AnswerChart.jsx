@@ -26,6 +26,7 @@ function useRovingFocus(count) {
   const [active, setActive] = useState(0);
   const refs = useRef([]);
   const move = (event, index) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     const next = { ArrowDown: index + 1, ArrowRight: index + 1, ArrowUp: index - 1, ArrowLeft: index - 1, Home: 0, End: count - 1 }[event.key];
     if (next == null) return;
     event.preventDefault();
@@ -53,7 +54,7 @@ function TipBody({ spec, item, ratio, copy }) {
     <>
       <div className="rt-row"><span className="rt-label">{spec.title}</span><span className="rt-val">{answerChartValue(item.value, spec.unit, spec.locale)}</span></div>
       <div className="rt-row"><span className="rt-label">{donut ? copy.share : copy.rank}</span><span className="rt-val">{donut ? percentText(ratio, spec.locale) : `${rankOf(spec.items, item.value)} / ${spec.items.length}`}</span></div>
-      <div className="rt-bar"><div style={{ width: `${Math.round(ratio * 1000) / 10}%` }} /></div>
+      <div className="rt-bar"><div style={{ width: `${Math.max(0, Math.min(1, ratio)) * 100}%` }} /></div>
       <div className="rt-foot">{`${copy.source}: ${spec.evidence.join(', ')} · ${copy.verified}`}</div>
     </>
   );

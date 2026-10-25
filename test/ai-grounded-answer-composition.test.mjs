@@ -101,7 +101,7 @@ test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; d�
   const failures = [
     ['düz metin', { type: 'answer', native: true, text: 'Şu anda üç gecikmiş göreviniz var.' }, 'INVALID', 'SHAPE_INVALID'],
     ['uydurma yuva', composer(() => ({ blocks: [{ type: 'paragraph', text: 'Toplam {F99}.' }, { type: 'rows', source: 'T1' }] })), 'INVALID', 'BLOCK_INVALID'],
-    ['uydurma sayı', composer((view) => ({ blocks: [{ type: 'paragraph', text: `Toplam {${view.facts.find((fact) => fact.row == null).id}}, bunların 2 tanesi kritik.` }, { type: 'rows', source: 'T1' }] })), 'INVALID', 'BLOCK_INVALID'],
+    ['uydurma sayı', composer(() => ({ blocks: [{ type: 'paragraph', text: 'Toplam {F1}, bunların 2 tanesi kritik.' }, { type: 'rows', source: 'T1' }] })), 'INVALID', 'BLOCK_INVALID'],
     ['eksik kapsam', composer(() => ({ blocks: [{ type: 'details', source: 'D1' }] })), 'INVALID', 'COVERAGE_INCOMPLETE'],
     ['kesik çıktı', { type: 'answer', native: true, text: '{"blocks":[{"type":"paragraph","text":"Şu', finishReason: 'length' }, 'LENGTH', null],
     ['boş yanıt', { type: 'answer', native: true, text: '', chunks: [], finishReason: 'stop' }, 'EMPTY', null],
@@ -195,7 +195,7 @@ test('İngilizce plan İngilizce olgu sayfası ve yanıt üretir', async (t) => 
   stack.provider.enqueue(plan(OVERDUE_LIST, { language: 'en' }), composer(coveringBlocks, (view) => { sheet = view; }));
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Show my overdue tasks.' })).assistantMessage;
   assert.equal(sheet.language, 'en');
-  assert.ok(sheet.facts.some((fact) => fact.value === '7 September 2026'));
+  assert.equal(Object.hasOwn(sheet, 'facts'), false);
   assert.match(answer.content, /^\*\*3\*\* matching tasks were found/);
   assert.match(answer.content, /\| Task \| Deadline \| Overdue days \|/);
 });
@@ -246,7 +246,7 @@ test('düzen beklerken geri alınan yetki başarılı ve başarısız düzende k
     const pending = sendTurn({ turnId: randomUUID(), message: 'Geciken görevleri göster.' });
     await stack.provider.waitForCalls(2);
     const call = stack.provider.calls[1];
-    assert.ok(JSON.stringify(call.messages).includes('Okuma görevi bir'), 'hibeyle okunan kayıt düzen öncesinde yetkilidir');
+    assert.ok(isCompositionCall(call), 'doğrulanmış sayfa sağlayıcıya ulaştı');
     stack.db.projectAccess = [];
     call.emit(valid ? JSON.stringify(coveringBlocks(compositionView(call))) : '{}');
     call.complete();
@@ -260,4 +260,79 @@ test('düzen beklerken geri alınan yetki başarılı ve başarısız düzende k
     assert.equal(saved[0].Content, answer.content);
     assert.equal(turnLines(logs)[0].context.presentation.reason, 'AUTHORIZATION');
   });
+});
+
+test('düzen yaşam döngüsü yalnızca başlayan turdan sonra yetki yeniler; teslim koruması her durumda kalır', async (t) => {
+  const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
+  const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
+  const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
+  const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
+  for (const variant of ['composed', 'disabled', 'single', 'budget', 'revoked']) await t.test(variant, async (inner) => {
+    const stack = stackFor(inner);
+    const logs = captureConsole(inner);
+    const context = { ...createToolTurnContext({ sicil: AYSE, now: NOW }) };
+    let checks = 0;
+    const recheck = context.revalidateAuthorization;
+    context.revalidateAuthorization = async (...args) => {
+      checks += 1;
+      if (variant === 'revoked') stack.db.projectAccess = [];
+      return recheck(...args);
+    };
+    const request = variant === 'single' ? { operation: 'value', metrics: ['tasks.total'], reasoning: 'synthesis', population: { tool: 'rota_task_search' }, filters: { deadline: 'overdue', assignee: 'me' } }
+      : { ...OVERDUE_LIST, reasoning: 'synthesis', filters: { deadline: 'overdue' } };
+    let rounds = 0;
+    const session = { signal: new AbortController().signal, profile: 'chat.tools', model: STANDARD.model,
+      remainingMs: () => variant === 'budget' ? 0 : 120000,
+      round: async (input) => {
+        rounds += 1;
+        if (rounds === 1) return { text: '', finishReason: 'tool_calls', toolCalls: [{ id: 'plan', name: 'rota_plan', arguments: JSON.stringify({ intent: 'rota', language: 'tr', request }) }] };
+        if (!isCompositionCall(input)) return { text: JSON.stringify({ kind: 'rota', facts: variant === 'single' ? ['R1:totalCount']
+          : ['R1:totalCount', 'R1:data.tasks.*.title', 'R1:data.tasks.*.targetFinish', 'R1:data.tasks.*.overdueDays'] }), toolCalls: [], finishReason: 'stop' };
+        assert.equal(input.resend, false);
+        return { text: JSON.stringify(coveringBlocks(compositionView(input))), toolCalls: [], finishReason: 'stop' };
+      } };
+    const result = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: QUESTION, now: NOW }).messages,
+      catalog: toolCatalogForModel(), context, onText: async () => {}, composeAnswers: variant !== 'disabled' });
+    assert.equal(rounds, variant === 'composed' ? 3 : variant === 'revoked' ? 1 : 2);
+    assert.equal(checks, variant === 'composed' ? 3 : variant === 'revoked' ? 1 : 2, 'yalnızca gerçek düzen ek yetki okuması yapar');
+    if (variant === 'revoked') {
+      assert.equal(result.outcome, 'unavailable');
+      assert.deepEqual(result.evidenceRows, []);
+      assert.equal(turnLines(logs)[0].context.presentation, null);
+      assert.equal(aiTelemetrySnapshot().grounding.presentation.narrative, 0);
+    } else {
+      assert.equal(result.outcome, 'grounded');
+      const before = checks;
+      assert.equal(await result.guardDisclosure(), true);
+      assert.equal(checks, before + 1, 'son teslim koruması korunur');
+    }
+  });
+});
+
+test('olgu sayfası bağlantı hatasında yeniden gönderilmez', async (t) => {
+  const stack = stackFor(t);
+  const logs = captureConsole(t);
+  stack.provider.enqueue(plan(), { type: 'network', code: 'ECONNREFUSED' }, composer());
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
+  assert.equal(answer.finishReason, 'stop');
+  assert.equal(stack.provider.calls.length, 2);
+  assert.equal(stack.provider.pendingCount, 1, 'ikinci olgu sayfası gönderimi yapılmaz');
+  assert.equal(aiTelemetrySnapshot().retries, 0);
+  assert.equal(turnLines(logs)[0].context.presentation.reason, 'PROVIDER');
+});
+
+test('son metin sınırı kapsam notunu da içerir; doğrulanmış geri dönüş kesilmez veya yeniden düzenlenmez', async () => {
+  const { finalGroundedDisclosure } = await import('../src/server/ai/assistant/groundedAnswer.js');
+  const { ASSISTANT_LIMITS } = await import('../src/domain/ai/assistantContract.js');
+  const summaries = (ids) => ids.map((id) => ({ id, partial: true }));
+  const fallback = { kind: 'grounded', normalized: 'Doğrulanmış yanıt', citedIds: ['R1'] };
+  const composed = { ...fallback, normalized: 'x'.repeat(ASSISTANT_LIMITS.maxAnswerChars) };
+  const result = finalGroundedDisclosure(composed, { fallback, summaries });
+  assert.equal(result.overflow, true, 'yalnızca kapsam notu sınırı aştırır');
+  assert.equal(result.verdict, fallback);
+  assert.ok(result.disclosure.text.startsWith(fallback.normalized));
+  assert.ok(result.disclosure.text.length < ASSISTANT_LIMITS.maxAnswerChars);
+  const unavailable = finalGroundedDisclosure(composed, { fallback: composed, summaries });
+  assert.equal(unavailable.verdict.kind, 'unavailable');
+  assert.deepEqual(unavailable.verdict.citedIds, []);
 });
