@@ -29,7 +29,11 @@ saklanır; örnek verilerle deneme için ayrı bir Demo Kipi bulunur.
 Bilgin varsayılan olarak kapalıdır (`MERGEN_ROTA_AI_ENABLED=false`). Rota
 verisi araçları ayrıca `MERGEN_ROTA_AI_TOOLS_ENABLED` ile açılır. Planlayıcı,
 anlamsal aday keşfi ve kanıt doğrulaması sunucuda çalışır; model görev veya
-atama değiştiremez. Kurulum ve sınırlar için [AI platformu](docs/YAPAY-ZEKA-PLATFORMU.md)
+atama değiştiremez. Rota verisi yanıtları doğrulanmış kanıttan doğal dille
+yazılır: değerleri, tabloları, grafikleri ve kaynakları sunucu yerleştirir;
+düzen kurulamazsa doğrulanmış belirlenimci anlatım gösterilir
+(`MERGEN_ROTA_AI_ANSWER_COMPOSITION`, varsayılan açık). Masaüstünde panel odak
+görünümüne genişletilebilir. Kurulum ve sınırlar için [AI platformu](docs/YAPAY-ZEKA-PLATFORMU.md)
 ve [anlamsal katman](docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md) belgelerine bakın.
 
 ## Kullanım kipleri

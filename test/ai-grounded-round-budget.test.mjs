@@ -66,8 +66,11 @@ for (const mode of ['standard', 'deep']) {
 
     const [trace] = turnTraces(logs);
     const { rounds, ...counters } = trace.context;
-    assert.deepEqual(Object.keys(counters).sort(), ['code', 'declarations', 'escalated', 'modelRounds', 'outcome', 'repairs', 'resultBytes', 'revalidationMs',
-      'scopeLoads', 'selectedBy', 'sqlMs', 'sqlQueries', 'toolCalls', 'toolFailures', 'toolRounds', 'verificationMs']);
+    assert.deepEqual(Object.keys(counters).sort(), ['code', 'declarations', 'escalated', 'evidence', 'modelRounds', 'outcome', 'parts', 'presentation', 'repairs',
+      'resultBytes', 'revalidationMs', 'scopeLoads', 'selectedBy', 'sqlMs', 'sqlQueries', 'toolCalls', 'toolFailures', 'toolRounds', 'usage', 'verificationMs']);
+    assert.deepEqual({ parts: counters.parts, evidence: counters.evidence, presentation: counters.presentation }, { parts: 1, evidence: 1, presentation: null });
+    assert.deepEqual(Object.keys(counters.usage).sort(), ['completion', 'firstEventMs', 'input', 'lengthStops', 'reasoning']);
+    assert.equal(counters.usage.lengthStops, 0);
     assert.deepEqual({ outcome: counters.outcome, selectedBy: counters.selectedBy, escalated: counters.escalated, modelRounds: counters.modelRounds,
       toolRounds: counters.toolRounds, toolCalls: counters.toolCalls, declarations: counters.declarations, repairs: counters.repairs },
     { outcome: 'grounded', selectedBy: 'server', escalated: false, modelRounds: 1, toolRounds: 1, toolCalls: 1, declarations: 1, repairs: 0 });
@@ -334,4 +337,20 @@ test('an allowed reported model remains distinct from the configured route model
   assert.equal(trace.context.rounds[1].configuredModel, DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model);
   assert.equal(trace.context.rounds[1].modelMismatch, true);
   drained(stack.provider);
+});
+
+test('the fullest grounded turn line stays inside the log sanitizer key limit and keeps every round', async (t) => {
+  const { recordGroundedTurn } = await import('../src/server/ai/aiTelemetry.js');
+  const logs = captureConsole(t);
+  const round = (purpose) => ({ purpose, profile: PLANNING_PROFILE, model: DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model, durationMs: 5, budget: 1600, finishReason: 'stop', input: 10, completion: 5 });
+  recordGroundedTurn({ outcome: 'grounded', selectedBy: 'server', escalated: true, resultScopeOmitted: true, parts: 2, evidence: 3,
+    escalation: { requestedMode: 'standard', models: ['m'], reason: 'VERIFICATION_FAILED', toolsReused: true, outcome: 'grounded' },
+    presentation: { mode: 'composed', blocks: 3, chart: 'bar', ms: 9 }, rounds: [round('plan'), round('select'), round('compose')] });
+  const [trace] = turnTraces(logs);
+  // Günlük temizleyicisi nesne başına 25 alanın ötesini atar: tek satırlık tamamlanma kaydı bu sınırın içinde kalır.
+  assert.ok(Object.keys(trace.context).length <= 25, String(Object.keys(trace.context).length));
+  assert.deepEqual(trace.context.rounds.map((item) => item.purpose), ['plan', 'select', 'compose']);
+  assert.equal(trace.context.resultScopeOmitted, true);
+  assert.equal(trace.context.escalation.reason, 'VERIFICATION_FAILED');
+  assert.deepEqual(trace.context.usage, { input: 30, completion: 15, reasoning: null, firstEventMs: null, lengthStops: 0 });
 });

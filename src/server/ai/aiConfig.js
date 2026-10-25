@@ -28,7 +28,8 @@ const NAMES = Object.freeze({
   REQUEST_TIMEOUT_MS: 'MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS',
   PROVIDER_FIRST_EVENT_TIMEOUT_MS: 'MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS',
   PROVIDER_IDLE_TIMEOUT_MS: 'MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS',
-  TOOLS_ENABLED: 'MERGEN_ROTA_AI_TOOLS_ENABLED'
+  TOOLS_ENABLED: 'MERGEN_ROTA_AI_TOOLS_ENABLED',
+  ANSWER_COMPOSITION: 'MERGEN_ROTA_AI_ANSWER_COMPOSITION'
 });
 
 export const AI_CONFIG_NAMES = NAMES;
@@ -179,7 +180,9 @@ function disabledConfig(issues) {
       idleMs: INTEGER_SETTINGS[NAMES.PROVIDER_IDLE_TIMEOUT_MS].fallback
     }),
     toolsEnabled: false,
-    toolsFlagInvalid: false
+    toolsFlagInvalid: false,
+    answerComposition: false,
+    answerCompositionFlagInvalid: false
   });
 }
 
@@ -212,6 +215,11 @@ export function parseAiConfig(env = process.env) {
   const toolIssues = [];
   const toolsEnabled = parseBoolean(env, NAMES.TOOLS_ENABLED, false, toolIssues);
   const toolsFlagInvalid = toolIssues.length > 0;
+  // Doğrulanmış kanıttan doğal yanıt düzeni varsayılan olarak açıktır; kapalıyken (ya da geçersiz değerde)
+  // kanıta dayalı yanıt, doğrulanmış belirlenimci anlatımla gösterilir. Genel yapılandırmayı bozmaz.
+  const compositionIssues = [];
+  const answerComposition = parseBoolean(env, NAMES.ANSWER_COMPOSITION, true, compositionIssues) && compositionIssues.length === 0;
+  const answerCompositionFlagInvalid = compositionIssues.length > 0;
   if (!text(env, NAMES.DEFAULT_API_KEY) && !text(env, NAMES.MASTER_KEY)) issues.push(NO_CREDENTIAL_SOURCE);
   const uniqueIssues = Object.freeze([...new Set(issues)]);
 
@@ -231,7 +239,9 @@ export function parseAiConfig(env = process.env) {
     requestTimeoutMs,
     providerProgress,
     toolsEnabled,
-    toolsFlagInvalid
+    toolsFlagInvalid,
+    answerComposition,
+    answerCompositionFlagInvalid
   });
 }
 
@@ -282,7 +292,8 @@ export function aiConfigurationSummary(config) {
     limits: { ...config.limits },
     queueTimeoutMs: config.queueTimeoutMs,
     requestTimeoutMs: config.requestTimeoutMs,
-    toolsEnabled: Boolean(config.toolsEnabled)
+    toolsEnabled: Boolean(config.toolsEnabled),
+    answerComposition: Boolean(config.answerComposition)
   };
 }
 

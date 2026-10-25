@@ -27,6 +27,12 @@ import { assistantFailureView, DEMO_NOTICE, effectiveAssistantSource, readinessN
  * Panel kapanınca durum KORUNUR: denetleyici kabukla birlikte yaşar; açık
  * konuşma, taslak ve süren yanıt kapanıp açılınca kaybolmaz. Demo Kipinde
  * hiçbir istek gönderilmez; yalnızca açıklama gösterilir.
+ *
+ * Masaüstünde kullanıcı paneli odak çalışma alanına genişletebilir: aynı
+ * bileşen (yeniden kurulmadan) bütün görünümü kaplayan, kipli bir yüzey olur;
+ * konuşma, taslak ve süren yanıt aynı kalır, istek yinelenmez. Esc önce odak
+ * kipinden çıkar, ikinci Esc paneli kapatır. Dar ekranda zaten tam ekran
+ * sayfa olduğu için ikinci bir tam ekran durumu yoktur.
  */
 
 export const ROTA_ASSISTANT_PANEL_ID = 'rota-assistant-panel';
@@ -64,6 +70,7 @@ export function useRotaAssistant() {
   const [enabled] = useState(() => assistantEnabledInDocument());
   const [controller] = useState(() => createAssistantController());
   const [open, setOpen] = useState(false);
+  const [focused, setFocused] = useState(false);
   const [focusRequest, setFocusRequest] = useState(0);
   const launcherRef = useRef(null);
 
@@ -92,15 +99,20 @@ export function useRotaAssistant() {
     setOpen(true);
     setFocusRequest((value) => value + 1);
   }, [enabled]);
-  const toggle = useCallback(() => { if (enabled) setOpen((value) => !value); }, [enabled]);
+  const toggle = useCallback(() => {
+    if (!enabled) return;
+    setOpen((value) => !value);
+    setFocused(false);
+  }, [enabled]);
   const close = useCallback(({ restoreFocus = true } = {}) => {
     setOpen(false);
+    setFocused(false);
     if (restoreFocus) (globalThis.requestAnimationFrame || setTimeout)(() => launcherRef.current?.focus?.());
   }, []);
 
   return useMemo(() => ({
-    controller, enabled, open, actual, focusRequest, launcherRef, openPanel, toggle, close
-  }), [controller, enabled, open, actual, focusRequest, openPanel, toggle, close]);
+    controller, enabled, open, actual, focusRequest, launcherRef, openPanel, toggle, close, focused, setFocused
+  }), [controller, enabled, open, actual, focusRequest, openPanel, toggle, close, focused]);
 }
 
 const hasRunningGeneration = (state) => Object.keys(state.running).length > 0;
@@ -233,6 +245,10 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   const { controller, open, actual, focusRequest, launcherRef, close } = assistant;
   const state = useAssistantState(controller);
   const sheet = useSheetLayout();
+  // Odak kipi yalnızca masaüstündedir; dar ekranda panel zaten tam ekran sayfadır.
+  const focused = Boolean(assistant.focused) && !sheet;
+  const setFocused = assistant.setFocused;
+  const modal = sheet || focused;
   const reducedMotion = useReducedMotion();
   const titleId = useId();
   const panelRef = useRef(null);
@@ -259,14 +275,17 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   }, [draftKey, recoveredDraft]);
   const held = heldDrafts[draftKey] || null;
   const restoreFocusEnabledRef = useRef(true);
-  useEffect(() => { if (open) restoreFocusEnabledRef.current = sheet; }, [open, sheet]);
+  useEffect(() => { if (open) restoreFocusEnabledRef.current = modal; }, [open, modal]);
   const focusTargetRef = useMemo(() => ({
     get current() {
       return inputRef.current && !inputRef.current.disabled ? inputRef.current : headingRef.current;
     }
   }), []);
 
-  useModalFocusTrap({ containerRef: panelRef, initialFocusRef: focusTargetRef, restoreFocusRef: launcherRef, restoreFocusEnabledRef, onClose: close, enabled: open && sheet });
+  // Esc odak kipinden çıkar; aynı paneldeki geçerli odak ve yazma konumu korunur.
+  const exitFocus = useCallback(() => setFocused?.(false), [setFocused]);
+  useModalFocusTrap({ containerRef: panelRef, initialFocusRef: focusTargetRef, restoreFocusRef: launcherRef, restoreFocusEnabledRef,
+    onClose: focused ? exitFocus : close, enabled: open && modal });
   useVisualViewportFit(panelRef, open && sheet);
 
   const composerAvailable = actual && state.status === 'ready' && !state.refreshing && !state.active.loading && state.readiness?.available
@@ -286,7 +305,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
   }, [open, focusRequest, focusTargetRef, composerAvailable, state.status, state.readiness, actual, launcherRef]);
 
   useEffect(() => {
-    if (!open || sheet) return undefined;
+    if (!open || modal) return undefined;
     const onKeyDown = (event) => {
       if (modalTrapDepth() > 0) return;
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
@@ -297,7 +316,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
     };
     globalThis.window?.addEventListener?.('keydown', onKeyDown);
     return () => globalThis.window?.removeEventListener?.('keydown', onKeyDown);
-  }, [open, sheet, close]);
+  }, [open, modal, close]);
 
   if (!open) return null;
 
@@ -473,9 +492,9 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
     <aside
       ref={panelRef}
       id={ROTA_ASSISTANT_PANEL_ID}
-      className={`rota-assistant${sheet ? ' is-sheet' : ''}`}
-      role={sheet ? 'dialog' : 'complementary'}
-      aria-modal={sheet ? 'true' : undefined}
+      className={`rota-assistant${sheet ? ' is-sheet' : ''}${focused ? ' is-focused' : ''}`}
+      role={modal ? 'dialog' : 'complementary'}
+      aria-modal={modal ? 'true' : undefined}
       aria-labelledby={titleId}
     >
       <header className="rota-assistant-head">
@@ -509,7 +528,19 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
               <Icons.MessagePlus size={15} aria-hidden="true" />
             </button>
           )}
-          <button type="button" className="icon-btn" aria-label="Bilgin’i kapat" title="Kapat (Esc)" onClick={() => close()}>
+          {!sheet && (
+            <button
+              type="button"
+              className={`icon-btn rota-assistant-focus-toggle${focused ? ' is-active' : ''}`}
+              aria-pressed={focused}
+              aria-label={focused ? 'Odak görünümünden çık' : 'Odak görünümüne geç'}
+              title={focused ? 'Odak görünümünden çık (Esc)' : 'Odak görünümü'}
+              onClick={() => setFocused?.(!focused)}
+            >
+              {focused ? <Icons.Minimize size={15} aria-hidden="true" /> : <Icons.Maximize size={15} aria-hidden="true" />}
+            </button>
+          )}
+          <button type="button" className="icon-btn" aria-label="Bilgin’i kapat" title={focused ? 'Kapat' : 'Kapat (Esc)'} onClick={() => close()}>
             <Icons.Close size={15} aria-hidden="true" />
           </button>
         </div>

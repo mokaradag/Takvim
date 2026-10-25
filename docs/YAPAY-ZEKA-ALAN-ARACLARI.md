@@ -1013,9 +1013,9 @@ bağımsız değişken, sonuç içeriği, SQL ya da anahtar kaydedilmez.
   bütçesinden en az bir tur kalmalıdır. Sonuç devredilen turun kendi sonucudur: doğrulanan yanıt
   (`grounded`, `clarification` …), `failed` (devirde de doğrulanamadı),
   `timeout` (sağlayıcı süre sınırı) ya da `error` (başka hizmet hatası).
-  Her devir `ai.grounded.escalation` bilgi olayı yazar: istenen kip, kullanılan
-  yapılandırılmış modeller, neden, kanıtın
-  yeniden kullanılıp kullanılmadığı ve sonuç.
+  Devir özeti turun tek `ai.grounded.turn` tamamlanma kaydında `context.escalation` altında yer alır:
+  `requestedMode` (istenen kip), `models` (yapılandırılmış modeller), `reason` (neden),
+  `toolsReused` (kanıtın yeniden kullanımı) ve `outcome` (sonuç). `context.escalated` devir durumunu gösterir.
 - `emptyCompletions`: görünür çıktı üretmeden biten model çağrıları. Her biri
   `ai.provider.empty_completion` uyarı olayı yazar: profil, model, bitiş nedeni,
   sağlayıcının bildirdiği girdi / akıl yürütme / tamamlama / görünür belirteç
@@ -1543,3 +1543,29 @@ gerçek bitişi bilinen tamamlanan yinelemelerden en yeni gün ve kararlı göre
 kimliğiyle seçilir; planlanan oluşum tarihi bitiş yerine kullanılamaz.
 Gerçek bitişi eksik tamamlanmış yineleme varsa `completionDatesComplete=false`
 ve sonuç eksiktir; bilinen gerçek bitiş yoksa `lastCompleted=null` olur.
+
+### Aşama 4D: doğrulanmış yanıtın doğal düzeni
+
+Alan araçları, yetki yükleyicisi, kanıt defteri ve doğrulayıcı değişmedi. Doğrulanmış yanıt artık isteğe bağlı bir
+sunum katmanından geçebilir (anlamsal katman §13): `analyzeGroundedAnswer` doğrulanan olguları sunum için de döndürür
+(`presentation`), `evidenceNarrative.js` anlatımla aynı satır/sütun betimini düzene verir (`narrativeGroups`,
+`describeRowCollection`, `renderGroupRows`, `renderGroupDetails`; davranış korunarak ayrıştırıldı). Olgu sayfası
+yalnızca bu doğrulanmış olgulardan kurulur ve araç sonucunu, kimlikleri ya da ham alan yollarını taşımaz. Düzen
+kaynak işareti yazamaz; atıflar ve kapsam notu sunucunundur, kalıcı kanıt kümesi düzenden bağımsızdır (sınama aynı
+kayıt ve takip kümesini doğrular). Sunucu yeniden yetki doğrulamadan olguları sağlayıcıya ikinci kez göndermez.
+
+Sayısal özetin doğrulanmış anlatımı ve ölçütleri sunucu tarafından zorunlu eklenir; tablo yerine düzyazı seçilirse
+tablonun ortak ölçütü de korunur. Yuva dışındaki Türkçe/İngilizce sayı sözcükleri ve yaygın ekleri belirlenimci
+denetimde `UNSUPPORTED_NUMBER` ile anlatıma düşer. Grafik etiketleri ortak güvenlik kuralıyla temizlenir;
+aynı adlar yalnızca doğrulanmış proje/birim bağlamıyla ayrıştırılır. Temizleme/kırpma sonrasında tekillik
+sağlanamıyorsa grafik adayı sunulmaz. Nitelendirme aracında model/altyapı hataları üretimdeki güvenli geri
+dönüşten ayrı kaydedilir ve son nitelendirme kapısını başarısız kılar; geçersiz düzen geri dönüşü altyapı hatası sayılmaz.
+
+Gözlemlenebilirlik: `ai.grounded.turn` satırı tek ve içeriksizdir; `presentation` (`mode`, `reason`, `issue`,
+`blocks`, `chart`, `charts`, `ms`), `usage` (belirteç toplamları, ilk olay süresi, `length` duruşları) ve varsa `escalation`
+alanlarını taşır; ayrı `ai.grounded.escalation` satırı yazılmaz. Tur listesinde düzen turu `purpose: "compose"` ve
+kendi bütçesiyle görünür. `charts` gerçekten çizilen grafik sayısıdır; reddedilen adaylar sayılmaz. Bağlam günlük
+temizleyicisinin nesne başına 25 alan sınırının içinde kalır.
+
+Kısmi çok bölümlü yanıt (bir bölüm tamamlanamadı) doğrulanmış tek görev listesi bölümünün kümesini sonraki takip için
+kaydeder; tamamlanamayan bölüm hiçbir küme vermez ve güncel yetki takipte yine denetlenir.

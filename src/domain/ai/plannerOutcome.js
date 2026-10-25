@@ -62,6 +62,11 @@ const ABSTAIN_TEXT = Object.freeze({
 
 const localeIndex = (locale) => (locale === 'en' ? 1 : 0);
 
+/** Kayıt defterindeki aracın sunucuya ait konu adı (ör. eksik bölümün konusu); tanınmayan konu `null`. */
+export function plannerTopicLabel(topic, locale = 'tr') {
+  return TOPIC_LABELS[topic]?.[localeIndex(locale)] || null;
+}
+
 /** Plan geçerli ama yalnızca kullanıcının açmadığı kayıtlı serbest metni gerektiriyor: veri okunmaz. */
 export function renderTextFieldsRequired({ locale = 'tr' } = {}) {
   return localeIndex(locale)

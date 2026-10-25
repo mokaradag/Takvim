@@ -281,6 +281,8 @@ export function generationPhaseLabel(phase, topic = null) {
       return TOOL_TOPIC_LABELS[topic] || 'Rota verisi okunuyor…';
     case ASSISTANT_STREAM_PHASES.VERIFYING:
       return 'Yanıt kaynaklarla doğrulanıyor…';
+    case ASSISTANT_STREAM_PHASES.COMPOSING:
+      return 'Yanıt yazılıyor…';
     default:
       return null;
   }

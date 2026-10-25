@@ -1,6 +1,8 @@
 'use client';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Icons } from '../../../components/icons';
+import { ANSWER_CHART_FENCE, parseAnswerChart } from '../../../domain/ai/answerChart.js';
+import { AnswerChart } from './AnswerChart.jsx';
 import { copyTextToClipboard } from './assistantInteraction.js';
 import { createAssistantMarkdownParser } from './assistantMarkdown.js';
 
@@ -90,8 +92,14 @@ export function renderBlock(block, key = 'b', evidenceIds = null) {
       const Tag = HEADING_TAGS[block.level] || 'h5';
       return <Tag key={key} className="assistant-md-heading">{renderInline(block.children, key, evidenceIds)}</Tag>;
     }
-    case 'code':
+    case 'code': {
+      if (block.language === ANSWER_CHART_FENCE) {
+        // Grafik yalnızca bu yanıtın sunucuya bağlı kanıtlarına dayanıyorsa çizilir; aksi hâlde hiç gösterilmez.
+        const spec = parseAnswerChart(block.text);
+        return spec && evidenceIds && spec.evidence.every((id) => evidenceIds.has(id)) ? <AnswerChart key={key} spec={spec} /> : null;
+      }
       return <CodeBlock key={key} language={block.language} text={block.text} />;
+    }
     case 'rule':
       return <hr key={key} />;
     case 'quote':

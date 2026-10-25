@@ -29,7 +29,8 @@ const OUT = process.env.PLANNER_FOLLOWUP_OUT || null;
 const EXPECTED_MODEL = process.env.PLANNER_CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
 const summary = { chains: 0, turns: 0, passed: 0, failed: [], modelCalls: 0, escalations: 0, models: new Set() };
 
-function complete(input, signal) {
+/** Tek model turu bağdaştırıcı komutuyla; doğal yanıt düzeni nitelendirmesi de aynı yolu kullanır. */
+export function completeModelRound(input, signal) {
   return new Promise((resolve, reject) => {
     const raw = String(process.env.PLANNER_MODEL_TIMEOUT_MS || '120000').trim();
     const timeoutMs = Number(raw);
@@ -78,7 +79,7 @@ function complete(input, signal) {
 }
 
 /** Sınama sağlayıcısının gerçek akış biçimi; davranışı her araçlı turda gerçek model belirler. */
-export function realModelProvider({ completeRound = complete } = {}) {
+export function realModelProvider({ completeRound = completeModelRound } = {}) {
   const fake = createFakeAiProvider({ semanticQueue: false,
     respond: call => ['embeddings', 'rerank'].includes(call.kind) ? { type: 'status', status: 503 } : null });
   let standard = null;

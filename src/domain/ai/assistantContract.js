@@ -69,7 +69,9 @@ export const ASSISTANT_STREAM_PHASES = Object.freeze({
   /** Yetkili Rota verisi alan araçlarıyla okunuyor; `topic` hangi veri alanı olduğunu söyler. */
   TOOLS: 'tools',
   /** Taslak yanıt kanıt sözleşmesine göre doğrulanıyor. */
-  VERIFYING: 'verifying'
+  VERIFYING: 'verifying',
+  /** Doğrulanmış olgulardan doğal yanıt yazılıyor (sunucu düzeni ayrıca doğrular). */
+  COMPOSING: 'composing'
 });
 
 /** `tools` evresinin konu başlıkları; araç adı ya da bağımsız değişkeni tarayıcıya gitmez. */

@@ -28,7 +28,9 @@ import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
 import { createAiDeadline } from '../aiDeadline.js';
 import { concreteCollections, rankedRowIndexes, taskResultScope } from '../../../domain/ai/requestContract.js';
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
-import { PLANNER_INTENTS, PLANNER_LIMITS, renderDependentLimit, renderPartUnavailable, renderPlannerAbstention, renderPlannerClarification, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
+import { PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderPartUnavailable, renderPlannerAbstention, renderPlannerClarification, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
+import { buildComposition } from '../../../domain/ai/groundedComposition.js';
+import { composeGroundedAnswer } from './answerComposition.js';
 import { plannerCandidateNote } from './groundedPrompt.js';
 
 /**
@@ -1008,6 +1010,9 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
   const prior = previousResult && taskResultScope(previousResult.scope) && previousResult.entries?.length ? previousResult : null;
   const turn = {
     catalog,
+    // Doğal yanıt düzeninin soru bağlamı: kullanıcının kendi iletileri (önceki asistan metni değil).
+    question: Object.freeze({ text: clarification?.selected && clarification.question ? clarification.question : String(currentUser?.content ?? ''),
+      previous: prior ? String(userMessages.at(-2)?.content ?? '') || null : null, userText }),
     // Anlamsal danışmanlık yalnızca planlayıcıya aday sırası notudur; araç kümesi ve sırası kayıt defterinindir.
     planning: Object.freeze({ state: advice.state, candidates: Object.freeze([...advice.candidates]), reason: advice.reason }),
     onPlanned,
@@ -1125,11 +1130,11 @@ function roundPurpose(turn, canCallTools) {
   return canCallTools ? 'follow-up' : 'select';
 }
 
-function traceRound(turn, { purpose, startedAt, result = null, error = null }) {
+function traceRound(turn, { purpose, startedAt, result = null, error = null, budget = null }) {
   if (turn.trace.rounds.length >= MAX_TRACED_ROUNDS) return;
   const measured = result || error?.roundMeasurements;
   const usage = measured?.usage || {};
-  if (!['repair', 'declaration', 'retry'].includes(purpose) && result) {
+  if (!['repair', 'declaration', 'retry', 'compose'].includes(purpose) && result) {
     purpose = result.toolCalls?.some((call) => call.name === 'rota_plan') ? 'plan'
       : result.toolCalls?.length ? (turn.toolsAttempted ? 'follow-up' : 'tools') : turn.ledger.ids().length ? 'select' : 'plan';
   }
@@ -1141,7 +1146,7 @@ function traceRound(turn, { purpose, startedAt, result = null, error = null }) {
     modelMismatch: measured?.modelMismatch === true,
     durationMs: measured?.durationMs ?? Date.now() - startedAt,
     firstEventMs: measured?.firstEventMs ?? null,
-    budget: turn.session.maxOutputTokens ?? null,
+    budget: budget ?? turn.session.maxOutputTokens ?? null,
     finishReason: error && !measured ? 'error' : measured?.finishReason,
     toolCalls: result?.toolCalls?.length || 0,
     input: usage.promptTokens ?? null,
@@ -1158,6 +1163,7 @@ function traceTurn(turn, outcome, { selectedBy = null, code = null, resultScopeO
     outcome, code, selectedBy, resultScopeOmitted, escalated: turn.escalated, durationMs: Date.now() - turn.trace.startedAt,
     modelRounds: turn.modelRounds, toolRounds: turn.toolRounds, declarations: turn.trace.declarations, repairs: turn.trace.repairs,
     revalidationMs: turn.trace.revalidationMs, verificationMs: turn.trace.verificationMs, rounds: turn.trace.rounds,
+    parts: turn.partCount, evidence: turn.trace.evidence ?? 0, presentation: turn.trace.presentation || null, escalation: turn.trace.escalation || null,
     ...turn.executor.stats(), ...turn.context.stats()
   });
 }
@@ -1220,8 +1226,11 @@ async function revalidate(turn, disclosureSignal = turn.session.signal) {
 const SINGLE_TASK_TOOLS = Object.freeze(['rota_task_detail', 'rota_dependency_inspect']);
 
 function completedResultScope(turn, verdict) {
-  if (verdict.kind !== 'grounded') return null;
-  const sources = turn.partCount === 1 ? [{ request: turn.request, verdict, entries: partEntries(turn) }] : turn.answers;
+  // Kısmi çok bölümlü yanıtta doğrulanmış bölümün kümesi gönderge olarak kalır; eksik bölüm hiçbir küme vermez.
+  const partial = verdict.kind === 'unavailable' && turn.partCount > 1 && turn.answers.some((answer) => answer.verdict.kind === 'grounded');
+  if (verdict.kind !== 'grounded' && !partial) return null;
+  const sources = turn.partCount === 1 ? [{ request: turn.request, verdict, entries: partEntries(turn) }]
+    : turn.answers.filter((answer) => !partial || answer.verdict.kind === 'grounded');
   const candidates = sources.filter(({ request }) => SINGLE_TASK_TOOLS.includes(request?.population?.tool)
     && request.entities.length === 1 && request.entities[0].type === 'task'
     || ['list', 'rank'].includes(request?.operation) && request.population.tool === 'rota_task_search');
@@ -1252,10 +1261,75 @@ function completedResultScope(turn, verdict) {
   return taskResultScope({ type: 'task', taskIds: [...taskIds] });
 }
 
+/** Doğal yanıt düzeninin girdisi: doğrulanmış bölümler, tamamlanamayan bölümler ve sunucu notları. */
+function compositionInput(turn, verdict) {
+  if (!['grounded', 'unavailable'].includes(verdict.kind)) return null;
+  const answers = turn.partCount === 1 && !turn.answers.length ? [{ index: 0, verdict, request: turn.request }] : turn.answers;
+  if (answers.some((answer) => answer.verdict.clarification || answer.verdict.kind === 'clarification')) return null;
+  const parts = answers.filter((answer) => answer.verdict.kind === 'grounded' && answer.verdict.presentation)
+    .map((answer) => ({ index: answer.index, presentation: answer.verdict.presentation }));
+  if (!parts.length) return null;
+  const missing = [];
+  const notes = [];
+  for (const answer of answers) {
+    if (answer.verdict.kind === 'grounded') continue;
+    const topic = plannerTopicLabel(getRotaTool(answer.request?.population?.tool)?.topic, turn.locale);
+    if (!missing.some((item) => item.index === answer.index)) missing.push({ index: answer.index, kind: answer.verdict.kind, topic });
+    // Eksik bölümün sunucu notu hangi konuya ait olduğunu söyler; metin doğrulanmış anlatımdakiyle aynıdır.
+    const note = answer.verdict.normalized && (topic ? `**${topic}:** ${answer.verdict.normalized}` : answer.verdict.normalized);
+    if (note && !notes.includes(note)) notes.push(note);
+  }
+  for (const [index, shown] of turn.partNotes || []) {
+    if (answers.some((answer) => answer.index === index)) notes.push(renderDependentLimit({ shown, locale: turn.locale }));
+  }
+  // Önceki soru yalnızca yanıt önceki doğrulanmış kümeye ya da onun bir satırına dayanıyorsa bağlamdır.
+  const priorIds = new Set(turn.previousResult?.scope.taskIds || []);
+  const continues = answers.some((answer) => answer.request?.previousResult
+    || answer.request?.entities?.some((entity) => entity.type === 'task' && priorIds.has(entity.id)));
+  return { parts, missing, notes, locale: turn.locale, question: turn.question.text, previousQuestion: continues ? turn.question.previous : null,
+    userText: turn.question.userText, today: turn.context.today };
+}
+
+/**
+ * Doğrulanmış yanıtın doğal dil düzeni (yalnızca açıksa ve kanıtlı bölüm varsa). Olgular sağlayıcıya
+ * yeniden gönderilmeden önce güncel yetki doğrulanır. Düzen kurulamazsa ya da doğrulanamazsa doğrulanmış
+ * belirlenimci anlatım değişmeden kalır; kaynaklar, kapsam ve kalıcı kanıt aynıdır.
+ */
+async function presentVerdict(turn, verdict, compose) {
+  if (!compose || !turn.composeAnswers || !turn.session || turn.ledger.revoked() || turn.session.signal?.aborted) return verdict;
+  const input = compositionInput(turn, verdict);
+  if (!input) return verdict;
+  const composition = buildComposition(input);
+  if (!composition) {
+    turn.trace.presentation = { mode: 'narrative', reason: 'SHEET_LIMIT' };
+    return verdict;
+  }
+  if (turn.ledger.ids().length && turn.revalidatedAt !== turn.work && (await revalidate(turn) || turn.ledger.revoked())) return unavailableVerdict(turn.locale);
+  turn.status(ASSISTANT_STREAM_PHASES.COMPOSING);
+  const startedAt = Date.now();
+  const result = await composeGroundedAnswer({ session: turn.session, composition, userText: input.userText,
+    onRound: ({ startedAt: roundStartedAt, budget, result: round = null, error = null }) => {
+      turn.modelRounds += 1;
+      traceRound(turn, { purpose: 'compose', startedAt: roundStartedAt, result: round, error, budget });
+      const reported = round ? turn.session.reportedModel?.(round.model) ?? turn.session.model : null;
+      if (reported) turn.models.push(reported);
+    } });
+  turn.work += 1;
+  const composedMs = Date.now() - startedAt;
+  if (!result.ok || !result.citedIds.every((id) => verdict.citedIds.includes(id))) {
+    turn.trace.presentation = { mode: 'narrative', reason: result.ok ? 'CITATION_SCOPE' : result.reason, issue: result.issue ?? null, ms: composedMs };
+    return verdict;
+  }
+  turn.trace.presentation = { mode: 'composed', blocks: result.blocks, chart: result.chart, charts: result.charts, ms: composedMs };
+  return { ...verdict, normalized: [result.text, ...input.notes].join('\n\n') };
+}
+
 /** Doğrulanmış sonucun gösterimi: kapsam notunu sunucu ekler, yalnızca atfedilen kanıt kaydedilir. */
-async function finish(turn, verdict, onText, selectedBy = 'model') {
+async function finish(turn, settled, onText, selectedBy = 'model', { compose = true } = {}) {
+  const verdict = await presentVerdict(turn, settled, compose);
   const { ledger, locale } = turn;
   const cited = ledger.summaries(verdict.citedIds);
+  turn.trace.evidence = cited.length;
   const disclosure = cited.length > 0 ? withScopeDisclosure(verdict.normalized, cited, locale) : { text: verdict.normalized, disclosed: false };
   const finalText = cited.length > 0 ? disclosure.text : verdict.normalized;
   await onText(finalText);
@@ -1328,7 +1402,8 @@ async function failTurn(turn, onText) {
     // Sağlayıcı kesildiyse sıradaki bölümler de açıkça eksik gösterilir.
     for (const part of turn.parts.splice(0)) turn.answers.push({ index: part.index, request: part.request, entries: [], selectedBy: 'server', verdict });
     const outcome = settlePart(turn, verdict, 'server');
-    return finish(turn, outcome.verdict, onText, outcome.selectedBy);
+    // Sağlayıcı kesildikten sonra yeni model turu açılmaz: doğrulanmış bölümler belirlenimci anlatımla gösterilir.
+    return finish(turn, outcome.verdict, onText, outcome.selectedBy, { compose: false });
   }
   const failureText = groundingFailureText(turn.locale);
   await onText(failureText);
@@ -1386,6 +1461,8 @@ function escalation(turn, reason, { error = null } = {}) {
     reason,
     resume: turn,
     toolsReused: turn.ledger.ids().length > 0,
+    // Devrin içeriksiz özeti ayrı günlük satırı değil, turun tek tamamlanma kaydının parçasıdır.
+    noteEscalation: (summary) => { turn.trace.escalation = summary; },
     traceError: (error) => traceTurn(turn, 'error', { code: error?.code }),
     models: [...turn.models],
     fallback: (onText) => {
@@ -1469,11 +1546,13 @@ export async function runGroundedTurn(session, {
   resume = null,
   deferDisclosure = false,
   planning = null,
-  onPlanned = null
+  onPlanned = null,
+  composeAnswers = false
 }) {
   const turn = resume || startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, previousResult, onStatus, onProgress, planning, onPlanned });
   turn.session = session;
   turn.deferDisclosure = deferDisclosure;
+  turn.composeAnswers = composeAnswers === true;
   // Yeni oturum (kuyruk beklemesi dâhil) yetkinin yeniden okunmasını gerektirir.
   turn.work += 1;
   // Oturumun kurulması (kira, kimlik bilgisi) ilerlemedir: üretim gözcüsünün kurulum payı her oturumu, Derin devri dâhil,

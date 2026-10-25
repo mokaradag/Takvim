@@ -507,7 +507,8 @@ halde bağımlılık erişilemez hale geldikten sonra da kart sağlıklı kalır
   *Görünür çıktısız model yanıtı* sayısı ve araç SQL kapısının doluluğu. Devir
   ve boş yanıt ayrıntıları (istenen kip, kullanılan modeller, neden, kanıtın
   yeniden kullanımı, sonuç; bitiş nedeni, belirteç sayıları ve süreler)
-  `ai.grounded.escalation` ve `ai.provider.empty_completion` işletim olaylarında
+  sırasıyla `ai.grounded.turn` tamamlanma kaydının `context.escalation` alanında ve
+  `ai.provider.empty_completion` işletim olayında
   içeriksiz olarak yazılır. `BUSY` de araç hizmeti sağlık uyarısına katılır. Bileşen şu durumlarda uyarır: araç kayıt defteri
   geçersiz, 0018 kurulmamış (veri kaynağı unavailable verir), araç yetenekli
   profiller (`chat.tools`, `chat.tools.reasoning`) kullanılamıyor ya da son
@@ -764,7 +765,7 @@ Derin UI kipinde modele bağlı bütün Rota turları `chat.tools.reasoning`
 kullanır ve tur izinde bu profil görünür; Derin kip için `chat.tools` kurulu
 olması gerekmez. Standart kipte gerçek muhakeme ya da ucuz kurtarmadan sonra
 kalan bildirim/biçim/boş yanıt hatası `chat.tools.reasoning` profiline bir kez
-devredilir (`ai.grounded.escalation`). Sıradan asistan metni boş olan yerel
+devredilir (`ai.grounded.turn` kaydında `context.escalation`). Sıradan asistan metni boş olan yerel
 `rota_plan` çağrısı ve metin olarak dönen aynı plan geçerlidir. Tur izi güvenilir model adını ve kapalı
 bitiş nedenini kaydeder; son sonucu görünür çıktıdan önceki kayıttan sonraki
 güncel erişim denetimi belirler.
