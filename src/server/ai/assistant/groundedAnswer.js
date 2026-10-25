@@ -1066,7 +1066,6 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     // Model, araç ya da oturum işinin sayacı; yetki yalnızca bu değişince yeniden okunur.
     work: 0,
     revalidatedAt: null,
-    compositionStarted: false,
     models: [],
     // İçeriksiz tur izi: tur amaçları, süreler, belirteç sayıları ve sayaçlar.
     trace: { startedAt: planning?.startedAt ?? Date.now(), rounds: [], declarations: 0, repairs: 0, revalidationMs: 0, verificationMs: 0, pending: null }
@@ -1305,7 +1304,10 @@ async function presentVerdict(turn, verdict, compose) {
     turn.trace.presentation = { mode: 'narrative', reason: 'SHEET_LIMIT' };
     return verdict;
   }
-  if (!hasCompositionChoice(composition)) return verdict;
+  if (!hasCompositionChoice(composition)) {
+    turn.trace.presentation = { mode: 'narrative', reason: 'NO_CHOICE' };
+    return verdict;
+  }
   if (compositionWindowMs(turn.session) == null) {
     turn.trace.presentation = { mode: 'narrative', reason: 'BUDGET' };
     return verdict;
@@ -1313,7 +1315,7 @@ async function presentVerdict(turn, verdict, compose) {
   if (turn.ledger.ids().length && turn.revalidatedAt !== turn.work && (await revalidate(turn) || turn.ledger.revoked())) return unavailableVerdict(turn.locale);
   turn.status(ASSISTANT_STREAM_PHASES.COMPOSING);
   const startedAt = Date.now();
-  const result = await composeGroundedAnswer({ session: turn.session, composition, onStart: () => { turn.compositionStarted = true; }, onProgress: () => turn.progress(),
+  const result = await composeGroundedAnswer({ session: turn.session, composition, onProgress: () => turn.progress(),
     onRound: ({ startedAt: roundStartedAt, budget, result: round = null, error = null }) => {
       turn.modelRounds += 1;
       traceRound(turn, { purpose: 'compose', startedAt: roundStartedAt, result: round, error, budget });
@@ -1342,20 +1344,22 @@ export function finalGroundedDisclosure(verdict, { fallback = null, summaries, l
     verdict = fallback;
     disclosure = disclose(verdict);
   }
-  if (disclosure.text.length > ASSISTANT_LIMITS.maxAnswerChars) {
+  const exhausted = disclosure.text.length > ASSISTANT_LIMITS.maxAnswerChars;
+  if (exhausted) {
     verdict = unavailableVerdict(locale);
     disclosure = disclose(verdict);
   }
-  return { verdict, disclosure, overflow };
+  return { verdict, disclosure, overflow, exhausted,
+    presentation: exhausted ? { mode: 'unavailable', reason: 'LENGTH_UNAVAILABLE' } : overflow ? { mode: 'narrative', reason: 'LENGTH' } : null };
 }
 
 /** Doğrulanmış sonucun gösterimi: kapsam notunu sunucu ekler, yalnızca atfedilen kanıt kaydedilir. */
 async function finish(turn, settled, onText, selectedBy = 'model', { compose = true } = {}) {
   let verdict = await presentVerdict(turn, settled, compose);
   // Model/araç beklemesinden sonra, yanıt ve kalıcı kanıt kurulmadan önce son yetki sınırı.
-  if (turn.ledger.revoked() || (turn.compositionStarted && turn.ledger.ids().length && (await revalidate(turn) || turn.ledger.revoked()))) {
+  if (turn.ledger.revoked() || (verdict.citedIds.length && turn.revalidatedAt !== turn.work && (await revalidate(turn) || turn.ledger.revoked()))) {
     verdict = unavailableVerdict(turn.locale);
-    if (turn.compositionStarted) turn.trace.presentation = { mode: 'narrative', reason: 'AUTHORIZATION' };
+    turn.trace.presentation = { mode: 'unavailable', reason: 'AUTHORIZATION' };
   }
   const { ledger, locale } = turn;
   const bounded = finalGroundedDisclosure(verdict, {
@@ -1363,7 +1367,7 @@ async function finish(turn, settled, onText, selectedBy = 'model', { compose = t
   });
   verdict = bounded.verdict;
   const disclosure = bounded.disclosure;
-  if (bounded.overflow && turn.compositionStarted) turn.trace.presentation = { mode: 'narrative', reason: 'LENGTH' };
+  if (bounded.presentation) turn.trace.presentation = bounded.presentation;
   const cited = ledger.summaries(verdict.citedIds);
   turn.trace.evidence = cited.length;
   const finalText = disclosure.text;

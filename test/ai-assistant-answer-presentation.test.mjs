@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
+import ReactDOM from 'react-dom';
 import { readFileSync } from 'node:fs';
 import postcss from 'postcss';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -193,7 +194,7 @@ test('odak görünümü aynı paneli kipli tam görünüme genişletir; konuşma
   const aside = () => findElement(panel.output, (node) => node.type === 'aside');
   const toggle = () => findElement(panel.output, (node) => typeof node.props?.className === 'string' && node.props.className.includes('rota-assistant-focus-toggle'));
   assert.equal(toggle().props['aria-pressed'], false);
-  assert.equal(toggle().props['aria-label'], 'Odak görünümüne geç');
+  assert.equal(toggle().props['aria-label'], 'Odak görünümü');
   assert.equal(aside().props.role, 'complementary');
 
   controller.send('Geciken görevlerimi göster');
@@ -206,7 +207,7 @@ test('odak görünümü aynı paneli kipli tam görünüme genişletir; konuşma
   assert.equal(aside().props.role, 'dialog');
   assert.equal(aside().props['aria-modal'], 'true');
   assert.equal(toggle().props['aria-pressed'], true);
-  assert.equal(toggle().props['aria-label'], 'Odak görünümünden çık');
+  assert.equal(toggle().props['aria-label'], 'Odak görünümü');
   assert.equal(turns.length, 1, 'genişletme yeni istek göndermez');
   assert.deepEqual(controller.getState().running, running, 'süren yanıt aynı yanıttır');
 
@@ -354,4 +355,46 @@ test('grafik başlığının dar kutuda bölünmesi ve üstbilginin sarılması 
   const spec = { ...SPEC, title: 'X'.repeat(80) };
   assert.ok(answerChartFence(spec), 'geçerli başlık sınırı daraltılmadı');
   assert.ok(renderToStaticMarkup(React.createElement(AnswerChart, { spec })).includes(spec.title));
+});
+
+
+test('dilimden gerçek açıklama odağına geçiş yalnızca açıklama ipucunu açık tutar', (t) => {
+  browserDouble(t);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(ReactDOM, 'createPortal', (content) => content);
+  const spec = { ...SPEC, type: 'donut', unit: 'count' };
+  const element = findElement(mountComponent(AnswerChart, { spec }).output, named('DonutChart'));
+  const donut = mountComponent(element.type, element.props);
+  const sliceElement = () => findElement(donut.output, (node) => node.type === Tooltip && node.props.children.type === 'path');
+  const legendElement = () => findElement(donut.output, (node) => node.type === Tooltip && node.props.children.props.className.startsWith('assistant-chart-legend-item'));
+  const slice = mountComponent(Tooltip, sliceElement().props);
+  const legend = mountComponent(Tooltip, legendElement().props);
+  const child = (tip) => tip.output.props.children[0];
+  const node = { focus() { document.activeElement = this; child(legend).props.onFocus({ currentTarget: this }); } };
+  legendElement().props.children.ref(node);
+  child(slice).props.onMouseEnter({ clientX: 20, clientY: 20 });
+  t.mock.timers.tick(100);
+  slice.render();
+  assert.ok(findElement(slice.output, (item) => item.props?.className === 'rich-tip'));
+  child(slice).props.onClick();
+  donut.render();
+  slice.render(sliceElement().props);
+  legend.render(legendElement().props);
+  t.mock.timers.tick(100);
+  slice.render();
+  legend.render();
+  assert.equal(document.activeElement, node, 'gerçek odak aktarımı korunur');
+  assert.equal(findElement(slice.output, (item) => item.props?.className === 'rich-tip'), null);
+  assert.ok(findElement(legend.output, (item) => item.props?.className === 'rich-tip'));
+  child(legend).props.onKeyDown({ key: 'Escape', preventDefault() {} });
+  legend.render();
+  assert.equal(findElement(legend.output, (item) => item.props?.className === 'rich-tip'), null);
+  child(legend).props.onBlur();
+  donut.render();
+  slice.render(sliceElement().props);
+  child(slice).props.onMouseEnter({ clientX: 20, clientY: 20 });
+  t.mock.timers.tick(100);
+  slice.render();
+  assert.ok(findElement(slice.output, (item) => item.props?.className === 'rich-tip'), 'odak ayrılınca fare ipucu yeniden açılır');
+  slice.unmount(); legend.unmount(); donut.unmount();
 });

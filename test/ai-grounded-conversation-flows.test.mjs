@@ -31,7 +31,7 @@ function conversation(t, { env = {} } = {}) {
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
   let view = null;
   const fake = createFakeAiProvider({ semanticQueue: false });
-  const provider = { ...fake, streamToolCompletion(input) {
+  const provider = { ...fake, get pendingCount() { return fake.pendingCount; }, streamToolCompletion(input) {
     if (isCompositionCall(input) && !fake.pendingCount) fake.enqueue(composer(coveringBlocks, (sheet) => { view = sheet; }));
     return fake.streamToolCompletion(input);
   } };
@@ -296,4 +296,12 @@ test('M: uzun konuşma kısaltıldığında takip sözleşmesi ve düzen sayfas�
   assert.equal(followup.view.previousQuestion, OVERDUE_QUESTION);
   const sizes = [rota, followup].map((item) => item.compose.messages.reduce((sum, message) => sum + message.content.length, 0));
   assert.ok(sizes.every((size) => size < 16000), `düzen turu konuşma uzunluğundan bağımsızdır: ${sizes}`);
+});
+
+
+test('konuşma sağlayıcısının bekleyen davranış sayısı canlıdır', (t) => {
+  const { stack } = conversation(t);
+  assert.equal(stack.provider.pendingCount, 0);
+  stack.provider.enqueue({ type: 'answer', text: 'unused' });
+  assert.equal(stack.provider.pendingCount, 1, 'kullanılmayan davranış sıfır anlık görüntüsünde gizlenmez');
 });

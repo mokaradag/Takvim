@@ -489,8 +489,9 @@ test('nitelendirme altyapı/model hatası güvenli üretim geri dönüşünde de
     await runCase(inner, COMPOSITION_CASES[0], { report, providerOptions: { provider: 'claude', completeRound, expectedModel: model, ...overrides } });
     assert.equal(report.results[0].mode, 'narrative', 'üründe güvenli belirlenimci geri dönüş korunur');
     if (legitimate) {
-      assert.deepEqual(report.results[0].failures, []);
-      assert.doesNotThrow(() => finalizeCompositionQualification(report));
+      assert.deepEqual(report.results[0].failures, ['COMPOSITION_REQUIRED']);
+      assert.equal(report.passed, 0);
+      assert.throws(() => finalizeCompositionQualification(report), /COMPOSITION_CHECKS_FAILED/);
     } else {
       assert.ok(report.results[0].rounds[0].infrastructure);
       assert.ok(report.results[0].failures.some((failure) => failure.includes('altyapı')));
@@ -546,4 +547,74 @@ test('eksik sonucun tamlık ve kısaltma bilgisi kendi tablosunun önünde kalı
   assert.ok(before.includes('Sonuç eksiktir.'), before);
   assert.ok(before.includes('Sonuç kısaltılmamıştır.'), before);
   assert.equal(rendered.text.split('Sonuç kısaltılmamıştır.').length, 2);
+});
+
+
+test('ortak görevli kişi grupları görevlerin birbirini dışlayan payları değildir', async (t) => {
+  const stack = stackFor(t);
+  // Aynı görev iki kişiye atanır; toplam grup sayısı görev sayısını aşar.
+  stack.db.taskAssignees.push({ TaskId: TASKS.OVERDUE, Sicil: 910002 });
+  const grouped = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'assignee' });
+  assert.ok(grouped.result.data.groups.reduce((sum, row) => sum + row.count, 0) > grouped.result.data.totals.total);
+  const verdict = verifyRequested(grouped.ledger, ['data.groups.*.label', 'data.groups.*.count'],
+    { operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'assignee' }, entities: [{ type: 'project', id: PROJECTS.FULL }] });
+  assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+  const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }] });
+  assert.ok(sheet.view.charts.length > 0);
+  assert.ok(sheet.view.charts.every((chart) => chart.types.join(',') === 'bar'));
+});
+
+test('bağımlılık gecikmesi yalnızca uyumlu doğrulanmış birimle çizilir', async (t) => {
+  for (const units of [['day', 'week'], ['day', 'month'], ['week', 'week'], ['day', 'day']]) await t.test(units.join('/'), async (inner) => {
+    const stack = stackFor(inner);
+    const relations = stack.db.taskDependencies.filter((row) => row.PredecessorTaskId === TASKS.OVERDUE);
+    assert.equal(relations.length, 2);
+    relations.forEach((row, index) => Object.assign(row, { LagValue: 2 - index, LagUnit: units[index], LagDays: 2 - index }));
+    const { ledger } = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.OVERDUE });
+    const verdict = verifyRequested(ledger, ['data.successors.*.title', 'data.successors.*.lag.value'],
+      { operation: 'list', metrics: ['task.title', 'dependency.lag'], population: { tool: 'rota_dependency_inspect', collection: 'successors' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] });
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+    const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }] });
+    assert.equal(sheet.view.tables.length, 1, 'tablo her durumda korunur');
+    if (units.every((unit) => unit === 'day')) {
+      assert.equal(sheet.render.charts.size, 1);
+      assert.equal(sheet.render.charts.get('G1').unit, 'days');
+    } else assert.equal(sheet.render.charts.size, 0, 'uyumsuz veya desteklenmeyen birim ham sayı grafiği olamaz');
+  });
+});
+
+test('nitelendirme no-choice vakasını doğrular; model kapısı sıfır çağrıyla geçmez', async (t) => {
+  const { COMPOSITION_CASES, runCase, finalizeCompositionQualification } = await import('../scripts/answer-composition-qualification.mjs');
+  const report = { cases: 0, passed: 0, calls: 0, composed: 0, narrative: 0, escalations: 0, charts: 0, reasons: {}, issues: {},
+    usage: { input: 0, output: 0, thinking: 0, cacheCreate: 0, cacheRead: 0 }, results: [] };
+  await runCase(t, COMPOSITION_CASES.find((item) => item.id === 'task-record'), { report });
+  assert.equal(report.calls, 0);
+  assert.equal(report.passed, 1);
+  assert.deepEqual([report.results[0].mode, report.results[0].reason], ['narrative', 'NO_CHOICE']);
+  assert.doesNotThrow(() => finalizeCompositionQualification(report));
+  for (const provider of ['live', 'claude']) assert.throws(() => finalizeCompositionQualification({ ...report, provider }), /COMPOSITION_NO_MODEL_CALLS/);
+});
+
+
+test('düzen gerektiren vaka sessiz no-choice atlamasıyla nitelendirilemez', async (t) => {
+  const { COMPOSITION_CASES, runCase } = await import('../scripts/answer-composition-qualification.mjs');
+  const report = { cases: 0, passed: 0, calls: 0, composed: 0, narrative: 0, escalations: 0, charts: 0, reasons: {}, issues: {}, usage: {}, results: [] };
+  await runCase(t, { ...COMPOSITION_CASES.find((item) => item.id === 'task-record'), requiresComposition: true }, { report });
+  assert.equal(report.calls, 0);
+  assert.equal(report.passed, 0);
+  assert.deepEqual(report.results[0].failures, ['COMPOSITION_REQUIRED']);
+});
+
+test('model nitelendirmesinde başarılı kapalı düzen gerçek ölçülen çağrıyı gerektirir', async (t) => {
+  const { COMPOSITION_CASES, runCase, finalizeCompositionQualification } = await import('../scripts/answer-composition-qualification.mjs');
+  const { compositionView } = await import('./helpers/compositionScenario.mjs');
+  const report = { cases: 0, passed: 0, calls: 0, composed: 0, narrative: 0, escalations: 0, charts: 0, reasons: {}, issues: {},
+    usage: { input: 0, output: 0, thinking: 0, cacheCreate: 0, cacheRead: 0 }, results: [] };
+  const model = 'claude-haiku-4-5-20251001';
+  await runCase(t, COMPOSITION_CASES[0], { report, providerOptions: { provider: 'claude', expectedModel: model, completeRound: async (input) => ({
+    text: JSON.stringify(coveringBlocks(compositionView(input))), toolCalls: [], models: [model], thinking: 'off', finishReason: 'end_turn',
+    usage: { input_tokens: 10, output_tokens: 2, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens_details: { thinking_tokens: 0 } }
+  }) } });
+  assert.deepEqual([report.calls, report.passed, report.composed], [1, 1, 1]);
+  assert.doesNotThrow(() => finalizeCompositionQualification(report));
 });

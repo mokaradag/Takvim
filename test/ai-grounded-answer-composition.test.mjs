@@ -87,7 +87,7 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
     assert.equal(logs.some((text) => text.includes(secret)), false, `günlük içerik taşımaz: ${secret}`);
   }
   const { grounding } = aiTelemetrySnapshot();
-  assert.deepEqual(grounding.presentation, { composed: 1, narrative: 0, byReason: {}, charts: 1 });
+  assert.deepEqual(grounding.presentation, { composed: 1, narrative: 0, unavailable: 0, byReason: {}, charts: 1 });
   assert.equal(grounding.escalations.total, 0);
 });
 
@@ -262,7 +262,7 @@ test('düzen beklerken geri alınan yetki başarılı ve başarısız düzende k
   });
 });
 
-test('düzen yaşam döngüsü yalnızca başlayan turdan sonra yetki yeniler; teslim koruması her durumda kalır', async (t) => {
+test('yetki iş sayacına göre yenilenir; güncel yollarda ek okuma yoktur ve teslim koruması kalır', async (t) => {
   const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
   const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
   const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
@@ -298,10 +298,12 @@ test('düzen yaşam döngüsü yalnızca başlayan turdan sonra yetki yeniler; t
     if (variant === 'revoked') {
       assert.equal(result.outcome, 'unavailable');
       assert.deepEqual(result.evidenceRows, []);
-      assert.equal(turnLines(logs)[0].context.presentation, null);
+      assert.equal(turnLines(logs)[0].context.presentation.mode, 'unavailable');
+      assert.equal(turnLines(logs)[0].context.presentation.reason, 'AUTHORIZATION');
       assert.equal(aiTelemetrySnapshot().grounding.presentation.narrative, 0);
     } else {
       assert.equal(result.outcome, 'grounded');
+      if (variant === 'single') assert.deepEqual([turnLines(logs)[0].context.presentation.mode, turnLines(logs)[0].context.presentation.reason], ['narrative', 'NO_CHOICE']);
       const before = checks;
       assert.equal(await result.guardDisclosure(), true);
       assert.equal(checks, before + 1, 'son teslim koruması korunur');
@@ -321,18 +323,65 @@ test('olgu sayfası bağlantı hatasında yeniden gönderilmez', async (t) => {
   assert.equal(turnLines(logs)[0].context.presentation.reason, 'PROVIDER');
 });
 
-test('son metin sınırı kapsam notunu da içerir; doğrulanmış geri dönüş kesilmez veya yeniden düzenlenmez', async () => {
+test('son metin sınırı kapsam notunu da içerir; iz teslim edilen sonucun kipini taşır', async (t) => {
+  const logs = captureConsole(t);
+  const { recordGroundedTurn } = await import('../src/server/ai/aiTelemetry.js');
   const { finalGroundedDisclosure } = await import('../src/server/ai/assistant/groundedAnswer.js');
   const { ASSISTANT_LIMITS } = await import('../src/domain/ai/assistantContract.js');
   const summaries = (ids) => ids.map((id) => ({ id, partial: true }));
   const fallback = { kind: 'grounded', normalized: 'Doğrulanmış yanıt', citedIds: ['R1'] };
   const composed = { ...fallback, normalized: 'x'.repeat(ASSISTANT_LIMITS.maxAnswerChars) };
   const result = finalGroundedDisclosure(composed, { fallback, summaries });
+  assert.equal(result.exhausted, false);
+  assert.deepEqual(result.presentation, { mode: 'narrative', reason: 'LENGTH' });
   assert.equal(result.overflow, true, 'yalnızca kapsam notu sınırı aştırır');
   assert.equal(result.verdict, fallback);
   assert.ok(result.disclosure.text.startsWith(fallback.normalized));
   assert.ok(result.disclosure.text.length < ASSISTANT_LIMITS.maxAnswerChars);
   const unavailable = finalGroundedDisclosure(composed, { fallback: composed, summaries });
+  assert.equal(unavailable.exhausted, true);
+  assert.deepEqual(unavailable.presentation, { mode: 'unavailable', reason: 'LENGTH_UNAVAILABLE' });
+  const noComposition = finalGroundedDisclosure(composed, { summaries });
+  assert.deepEqual(noComposition.presentation, unavailable.presentation);
+  assert.equal(noComposition.verdict.kind, 'unavailable');
   assert.equal(unavailable.verdict.kind, 'unavailable');
   assert.deepEqual(unavailable.verdict.citedIds, []);
+  for (const bounded of [result, unavailable, noComposition]) recordGroundedTurn({ outcome: bounded.verdict.kind, presentation: bounded.presentation });
+  assert.deepEqual(turnLines(logs).map((line) => [line.context.outcome, line.context.presentation.mode, line.context.presentation.reason]),
+    [['grounded', 'narrative', 'LENGTH'], ['unavailable', 'unavailable', 'LENGTH_UNAVAILABLE'], ['unavailable', 'unavailable', 'LENGTH_UNAVAILABLE']]);
+});
+
+
+test('çok bölümlü uzunluk geri dönüşü son model işinden sonra kalıcı kanıtın yetkisini yeniler', async (t) => {
+  const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
+  const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
+  const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
+  const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
+  const { TASKS } = await import('./helpers/aiToolFixtures.mjs');
+  for (const revoked of [false, true]) await t.test(revoked ? 'yetki geri alındı' : 'yetki güncel', async (inner) => {
+    const stack = stackFor(inner, { composition: false });
+    const context = createToolTurnContext({ sicil: AYSE, now: NOW });
+    let rounds = 0;
+    const session = { signal: new AbortController().signal, profile: 'chat.tools', model: STANDARD.model, remainingMs: () => 120000,
+      round: async () => {
+        rounds += 1;
+        if (rounds === 1) return { text: '', finishReason: 'tool_calls', toolCalls: [{ id: 'plan', name: 'rota_plan', arguments: JSON.stringify({ intent: 'rota', language: 'tr',
+          request: { ...OVERDUE_LIST, filters: { deadline: 'overdue' } },
+          additionalRequests: [{ operation: 'value', reasoning: 'synthesis', metrics: ['task.priority'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] }] }) }] };
+        if (rounds === 3 && revoked) stack.db.projectAccess = [];
+        return { text: '{', finishReason: 'length', toolCalls: [] };
+      } };
+    const result = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: `${QUESTION} ${TASKS.OVERDUE} görevinin önceliğini de açıkla.`, now: NOW }).messages,
+      catalog: toolCatalogForModel(), context, onText: async () => {}, composeAnswers: false });
+    assert.equal(rounds, 3, 'son bölüm düzeltme bütçesini tüketir');
+    assert.equal(result.outcome, 'unavailable');
+    if (revoked) {
+      assert.deepEqual(result.evidence, []);
+      assert.deepEqual(result.evidenceRows, [], 'geri alınan önceki bölümün kanıtı kalıcı olamaz');
+      assert.doesNotMatch(result.text, /Radar test planı|Haftalık durum toplantısı/);
+    } else {
+      assert.ok(result.evidenceRows.length > 0, 'yetkili önceki bölümün kanıtı korunur');
+      assert.ok(result.text.includes('Radar test planı'));
+    }
+  });
 });

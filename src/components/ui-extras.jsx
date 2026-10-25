@@ -26,7 +26,7 @@ export { OPTION_SEARCH_THRESHOLD, matchesOptionQuery };
  * bilgi klavye kullanıcısına hiç açılmıyordu. Her ipucunu sekme durağı yapmak
  * ise klavye gezinmesini bozardı; bu yüzden davranış açıkça seçilir.
  */
-export function Tooltip({ children, content, icon, title, delay = 90, asChild = false, wrapperStyle, accent, focusable = false, ariaLabel }) {
+export function Tooltip({ children, content, icon, title, delay = 90, asChild = false, wrapperStyle, accent, focusable = false, ariaLabel, disabled = false }) {
   const [show, setShow] = useSx(false);
   const [pos, setPos] = useSx({ x: 0, y: 0, ready: false });
   const tipRef = useRx(null);
@@ -65,6 +65,7 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
   };
 
   const enter = (e) => {
+    if (disabled) return;
     clearTimeout(timer.current);
     const x = e.clientX, y = e.clientY;
     lastMouse.current = { x, y };
@@ -83,6 +84,8 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
   useEx(() => {
     if (show && tipRef.current) place(lastMouse.current.x, lastMouse.current.y);
   }, [show]);
+
+  useEx(() => { if (disabled) leave(); }, [disabled]);
 
   // Cleanup on unmount
   useEx(() => () => { clearTimeout(timer.current); }, []);
@@ -103,7 +106,7 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
     }
   };
 
-  const tip = show && ReactDOM.createPortal(
+  const tip = show && !disabled && ReactDOM.createPortal(
     (
       <div
         ref={tipRef}

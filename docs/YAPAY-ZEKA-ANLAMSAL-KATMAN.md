@@ -1627,12 +1627,11 @@ gösterilir. Planlayıcı, 4C sözleşmesi, yazma araçları ve sağlayıcılar 
 1. Tur 4C yolunda doğrulanır (`analyzeGroundedAnswer` artık sunum için olguları da döndürür: `presentation`).
 2. `compositionInput` doğrulanmış bölümleri, tamamlanamayan bölümleri (yalnızca konu etiketi) ve sunucu notlarını
    toplar. Eksik bölümün notu konusuyla yazılır (ör. `**Outlook takvimi:** Rota verisine şu anda ulaşılamıyor.`).
-3. `buildComposition` (`src/domain/ai/groundedComposition.js`) **olgu sayfasını** kurar: yuvalar `F#` (etiket,
-   gösterim değeri, tür, ölçüt, satır/ayrıntı bağı, kaydın adı için `role: "label"`), tablolar `T#` (sütunlar `C#`,
-   en çok 8 satır önizleme), kayıt ayrıntıları `D#`, grafik adayları `G#`, `shape` (`simple`|`standard`) ve eksik
-   bölümler. Satır adının bağlamı (görevin projesi, kişinin birimi) satıra bağlı ayrı bir yuvadır; yalnızca soru o
-   olguyu istediyse kapsam için zorunludur. Bu önizleme sunum seçimine yardımcı veridir; model bu yuvalardan
-   cümle kuramaz, bütün kayıt metinlerini sunucu çizer. Sayfa kimlik, kanıt kimliği, ham alan yolu ya da Sicil taşımaz.
+3. `buildComposition` (`src/domain/ai/groundedComposition.js`) kapalı sunum sayfasını kurar: `language`,
+   `question`, bölüm sayısı `parts`, tablolar `T#` (sütunlar `C#`), sunucu metinli ayrıntılar `D#`, grafik adayları
+   `G#` ve tamamlanamayan bölümler `missing`. Tarih varsa `today`, doğrulanmış takip bağlamı varsa
+   `previousQuestion` eklenir. Model yalnızca bu kaynakları seçer; kayıt metinlerini ve bütün değerleri sunucu
+   çizer. Sayfa kimlik, kanıt kimliği, ham alan yolu ya da Sicil taşımaz.
 4. Güncel yetki yeniden doğrulanır; düzen turu **aynı oturumda**, `tools: []`, `toolChoice: "none"`, iki iletiyle
    (bayt bayt sabit yönerge + sayfa) yürür. Konuşma geçmişi, araç sonuçları ve önceki asistan metni gönderilmez.
 5. `validateComposition` yanıtı kapalı sözleşmeye göre denetler; `renderComposition` geçerli düzeni Markdown'a
@@ -1703,7 +1702,10 @@ Tur başına **tek** içeriksiz tamamlanma satırı (`ai.grounded.turn`): sonuç
 toplamları, ilk olay süresi, `length` duruşları), varsa `escalation` (ayrı `ai.grounded.escalation` satırı kaldırıldı)
 ve tur listesi (`purpose: "compose"` ile bütçe). Bağlam günlük temizleyicisinin nesne başına 25 alan sınırının
 içindedir (sınama korur). Soru, yanıt, kayıt adı, kanıt, Sicil, anahtar ya da model çıktısı günlüğe yazılmaz;
-reddedilen düzen metni de yazılmaz. Sayaçlar: `grounding.presentation` (`composed`, `narrative`, `byReason`, `charts`).
+reddedilen düzen metni de yazılmaz. Sayaçlar: `grounding.presentation` (`composed`, `narrative`, `unavailable`, `byReason`, `charts`).
+`NO_CHOICE`, model turu gerekmeyen belirlenimci sunumdur; `BUDGET` ve sağlayıcı/çıktı hataları geri dönüş
+nedenlerini ayırır. Metin sınırında anlatım teslim edilmişse `narrative` / `LENGTH`, anlatım da sığmadıysa
+`unavailable` / `LENGTH_UNAVAILABLE` yazılır. Yetki kaybında kip `unavailable`, neden `AUTHORIZATION` olur.
 `charts`, başarılı çizilen çit sayısıdır; reddedilen ya da kanıtına bağlı olmayan grafikler sayılmaz. Her belirteç
 metriği ancak bütün model turları bildirdiyse toplanır; eksik metrik `null` kalır. Tur izi kesilmişse toplam tam görünmez.
 
@@ -1720,7 +1722,11 @@ düzen doğrulayıcısı, çizici); planlama turları sabit `rota_plan` ile beli
 gider. Kabul üretimin kendisidir (düzen doğrulanıp çizildi mi), ayrıca beklenen doğrulanmış değerler ve çözülmemiş
 yuva denetlenir. Rapor içerik taşımaz. Sağlayıcılar: `dry` (model yok; vakaların kuru sınaması), `claude`
 (`scripts/planner-claude-model.mjs`, düşünme kapalı, en düşük çaba, çağrı ve önbelleksiz girdi bütçesiyle) ve `live`
-(kurum içi uç). Aşamalar: `smoke` (2 vaka), `targeted` (4 vaka, 5 düzen turu), `broad` (6 vaka, 8 düzen turu).
+(kurum içi uç). Aşamalar: `smoke` (2 vaka, 1 düzen turu), `targeted` (4 vaka, 5 düzen turu), `broad` (6 vaka, 6 düzen turu).
+Her vaka `requiresComposition` sözleşmesini taşır. Düzen gereken turun gerçekten çağrılıp `composed` olması
+zorunludur; geri dönüş model kabulü sayılmaz. Tek ayrıntılı `task-record`, `project-summary` ve `notifications`
+vakaları çağrısız `narrative` / `NO_CHOICE` sonucuyla geçer. `live` ve `claude` koşusunda toplam model çağrısı
+sıfırsa kapı düşer; `dry` dış model çağrısı gerektirmez.
 
 ```
 COMPOSITION_QUALIFICATION_PROVIDER=claude COMPOSITION_QUALIFICATION_STAGE=smoke \

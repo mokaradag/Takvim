@@ -103,6 +103,7 @@ function DonutChart({ spec, copy }) {
   const total = segments.reduce((sum, segment) => sum + segment.value, 0);
   const roving = useRovingFocus(spec.items.length);
   const [active, setActive] = useState(null);
+  const [focusedLegend, setFocusedLegend] = useState(null);
   const center = RING.size / 2;
   const inner = center - RING.thickness;
   const tip = (index) => ({
@@ -117,7 +118,7 @@ function DonutChart({ spec, copy }) {
         <path className="assistant-chart-ring-track" d={donutSlicePath(center, center, center, inner, -90, 270)} fillRule="evenodd" />
         <g className="assistant-chart-slices">
           {segments.map((segment) => (
-            <Tooltip key={segment.index} asChild {...tip(segment.index)}>
+            <Tooltip key={segment.index} asChild disabled={focusedLegend !== null} {...tip(segment.index)}>
               <path
                 className={`assistant-chart-slice ${series(segment.index)}${active === segment.index ? ' is-active' : ''}`}
                 d={donutSlicePath(center, center, center, active === segment.index ? inner - DONUT_EMPHASIS : inner, segment.startAngle, segment.endAngle)}
@@ -144,8 +145,8 @@ function DonutChart({ spec, copy }) {
                   role="group"
                   tabIndex={roving.active === index ? 0 : -1}
                   aria-label={`${item.label}: ${value}`}
-                  onFocus={() => { roving.setActive(index); setActive(index); }}
-                  onBlur={() => setActive(null)}
+                  onFocus={() => { setFocusedLegend(index); roving.setActive(index); setActive(index); }}
+                  onBlur={() => { setFocusedLegend(null); setActive(null); }}
                   onMouseEnter={() => setActive(index)}
                   onMouseLeave={() => setActive(null)}
                   onKeyDown={(event) => roving.move(event, index)}

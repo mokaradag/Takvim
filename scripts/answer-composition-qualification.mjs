@@ -58,32 +58,32 @@ const detail = (previous) => ({ operation: 'value', metrics: ['task.priority', '
  * yazdığı yuva değerleri). Son tur ölçülür; önceki turlar takip bağlamını kurar ve onların düzen turları da sayılır.
  */
 export const COMPOSITION_CASES = Object.freeze([
-  { id: 'overdue-list', stage: 'smoke', turns: [{ question: 'Geciken görevlerimi göster.', plan: plan(OVERDUE), expect: ['**3**', '23', 'Haftalık durum toplantısı'] }] },
-  { id: 'task-record', stage: 'smoke', turns: [{ question: 'Radar test planı görevinin önceliği ve termini ne?',
+  { id: 'overdue-list', requiresComposition: true, stage: 'smoke', turns: [{ question: 'Geciken görevlerimi göster.', plan: plan(OVERDUE), expect: ['**3**', '23', 'Haftalık durum toplantısı'] }] },
+  { id: 'task-record', requiresComposition: false, stage: 'smoke', turns: [{ question: 'Radar test planı görevinin önceliği ve termini ne?',
     plan: plan({ operation: 'value', metrics: ['task.priority', 'task.targetFinish'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', text: 'Radar test planı' }] }),
     expect: ['Kritik', '20 Eylül 2026'] }] },
-  { id: 'priority-distribution', stage: 'targeted', turns: [{ question: 'Görevlerimin önceliğe göre dağılımı nasıl?',
+  { id: 'priority-distribution', requiresComposition: true, stage: 'targeted', turns: [{ question: 'Görevlerimin önceliğe göre dağılımı nasıl?',
     plan: plan({ operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'priority' }, filters: { assignee: 'me' } }),
     expect: ['Orta'] }] },
-  { id: 'english-overdue', stage: 'targeted', turns: [{ question: 'Show my overdue tasks.', plan: plan(OVERDUE, { language: 'en' }), expect: ['23', '7 September 2026'] }] },
-  { id: 'followup-priority', stage: 'targeted', turns: [
+  { id: 'english-overdue', requiresComposition: true, stage: 'targeted', turns: [{ question: 'Show my overdue tasks.', plan: plan(OVERDUE, { language: 'en' }), expect: ['23', '7 September 2026'] }] },
+  { id: 'followup-priority', requiresComposition: true, stage: 'targeted', turns: [
     { question: 'Geciken görevlerimi göster.', plan: plan(OVERDUE) },
     { question: 'Bunların öncelikleri ne?', plan: plan({ previousResult: true, operation: 'list', metrics: ['task.title', 'task.priority'], population: { tool: 'rota_task_search', collection: 'tasks' } }),
       expect: ['Kritik', 'Radar test planı'] }] },
-  { id: 'partial-section', stage: 'targeted', failure: { outlook: 'ESOCKET' }, turns: [{ question: `Geciken görevlerimi ve ${TASKS.OVERDUE} görevinin Outlook durumunu göster.`,
+  { id: 'partial-section', requiresComposition: true, stage: 'targeted', failure: { outlook: 'ESOCKET' }, turns: [{ question: `Geciken görevlerimi ve ${TASKS.OVERDUE} görevinin Outlook durumunu göster.`,
     plan: plan(OVERDUE, { additionalRequests: [{ operation: 'value', metrics: ['subscriptions.active'], population: { tool: 'rota_outlook_status' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] }] }),
     expect: ['23', 'ulaşılamıyor'], outcome: 'unavailable' }] },
-  { id: 'comparison', stage: 'broad', turns: [
+  { id: 'comparison', requiresComposition: true, stage: 'broad', turns: [
     { question: 'Geciken görevlerimi göster.', plan: plan(OVERDUE) },
     { question: 'İlk ikisinin öncelik, termin ve durumlarını karşılaştır.', plan: plan(detail(1), { additionalRequests: [detail(2)] }), expect: ['Orta', 'Kritik', '7 Eylül 2026', '20 Eylül 2026'] }] },
-  { id: 'my-tasks', stage: 'broad', turns: [{ question: 'Görevlerimi listele.', plan: plan(MY_TASKS), expect: ['Radar test planı', 'Kısmi ortak görev'] }] },
-  { id: 'project-summary', stage: 'broad', turns: [{ question: 'Radar Modernizasyonu projesini özetle.',
+  { id: 'my-tasks', requiresComposition: true, stage: 'broad', turns: [{ question: 'Görevlerimi listele.', plan: plan(MY_TASKS), expect: ['Radar test planı', 'Kısmi ortak görev'] }] },
+  { id: 'project-summary', requiresComposition: false, stage: 'broad', turns: [{ question: 'Radar Modernizasyonu projesini özetle.',
     plan: plan({ operation: 'value', metrics: ['project.name', 'tasks.total', 'tasks.overdue', 'tasks.done'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] }),
     expect: ['Radar Modernizasyonu'] }] },
-  { id: 'notifications', stage: 'broad', turns: [{ question: 'Okunmamış bildirimlerim kaç tane?', plan: plan({ operation: 'value', metrics: ['notifications.unread'], population: { tool: 'rota_notifications' } }) }] },
-  { id: 'status-distribution', stage: 'broad', turns: [{ question: 'Radar Modernizasyonu projesindeki görevler duruma göre nasıl dağılıyor?',
+  { id: 'notifications', requiresComposition: false, stage: 'broad', turns: [{ question: 'Okunmamış bildirimlerim kaç tane?', plan: plan({ operation: 'value', metrics: ['notifications.unread'], population: { tool: 'rota_notifications' } }) }] },
+  { id: 'status-distribution', requiresComposition: true, stage: 'broad', turns: [{ question: 'Radar Modernizasyonu projesindeki görevler duruma göre nasıl dağılıyor?',
     plan: plan({ operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'status' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] }) }] },
-  { id: 'english-followup', stage: 'broad', turns: [
+  { id: 'english-followup', requiresComposition: true, stage: 'broad', turns: [
     { question: 'Show my overdue tasks.', plan: plan(OVERDUE, { language: 'en' }) },
     { question: 'What are their priorities?', plan: plan({ previousResult: true, operation: 'list', metrics: ['task.title', 'task.priority'], population: { tool: 'rota_task_search', collection: 'tasks' } }, { language: 'en' }),
       expect: ['Critical'] }] }
@@ -100,7 +100,7 @@ const usageOf = (reply) => ({
 export function qualificationProvider(rounds, { provider = PROVIDER, completeRound = completeModelRound, expectedModel = EXPECTED_MODEL, liveProvider = null } = {}) {
   const fake = createFakeAiProvider({ semanticQueue: false, respond: (call) => (['embeddings', 'rerank'].includes(call.kind) ? { type: 'status', status: 503 } : null) });
   const live = provider === 'live' ? liveProvider || createOpenAiCompatibleProvider() : null;
-  return { ...fake, async streamToolCompletion(input) {
+  return { ...fake, get pendingCount() { return fake.pendingCount; }, async streamToolCompletion(input) {
     if (!isCompositionCall(input)) return fake.streamToolCompletion(input);
     const view = compositionView(input);
     const measured = { language: view.language, details: view.details.length, tables: view.tables.length, charts: view.charts.length,
@@ -167,6 +167,8 @@ const summary = { provider: PROVIDER, stage: STAGE, model: PROVIDER === 'claude'
 const turnLine = (logs) => logs.map((line) => (line.includes('"operation":"ai.grounded.turn"') ? JSON.parse(line.slice(line.indexOf('{'))) : null)).filter(Boolean).at(-1);
 
 export async function runCase(t, item, { providerOptions = {}, report = summary } = {}) {
+  report.provider = providerOptions.provider || PROVIDER;
+  assert.equal(typeof item.requiresComposition, 'boolean', 'COMPOSITION_CASE_CONTRACT');
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
   const env = { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true',
     ...(PROVIDER === 'live' ? Object.fromEntries(LIVE_ENV.filter((key) => process.env[key]).map((key) => [key, process.env[key]])) : {}) };
@@ -198,10 +200,13 @@ export async function runCase(t, item, { providerOptions = {}, report = summary 
       if (/\{F\d+\}|【(R\d+)】\s*【\1】/.test(answer.content)) failures.push('çözülmemiş yuva ya da yinelenen kaynak');
     }
     const presentation = line?.context?.presentation || null;
-    result = { id: item.id, stage: item.stage, turn: index + 1, mode: presentation?.mode ?? null, reason: presentation?.reason ?? null, issue: presentation?.issue ?? null,
+    if (item.requiresComposition) {
+      if (measured.length !== 1 || presentation?.mode !== 'composed') failures.push('COMPOSITION_REQUIRED');
+    } else if (measured.length || presentation?.mode !== 'narrative' || presentation?.reason !== 'NO_CHOICE') failures.push('COMPOSITION_NO_CHOICE_REQUIRED');
+    result = { id: item.id, requiresComposition: item.requiresComposition, stage: item.stage, turn: index + 1, mode: presentation?.mode ?? null, reason: presentation?.reason ?? null, issue: presentation?.issue ?? null,
       blocks: presentation?.blocks ?? null, chart: presentation?.chart ?? null, failures,
       rounds: measured.map(({ language, details, tables, charts, budget, finish, latencyMs, usage, infrastructure }) => ({ language, details, tables, charts, budget, finish: finish ?? null, latencyMs: latencyMs ?? null, usage: usage ?? null, infrastructure: infrastructure ?? null })) };
-    if (presentation?.mode) report[presentation.mode] += 1;
+    if (presentation?.mode) report[presentation.mode] = (report[presentation.mode] || 0) + 1;
     if (presentation?.reason) report.reasons[presentation.reason] = (report.reasons[presentation.reason] || 0) + 1;
     if (presentation?.issue) report.issues[presentation.issue] = (report.issues[presentation.issue] || 0) + 1;
     report.charts += presentation?.charts ?? 0;
@@ -209,18 +214,20 @@ export async function runCase(t, item, { providerOptions = {}, report = summary 
     process.stderr.write(`[${item.id}#${index + 1}] ${presentation?.mode ?? '-'} ${presentation?.reason ?? ''} ${presentation?.issue ?? ''} ${failures.join('; ')}\n`);
   }
   report.cases += 1;
-  // Vaka, ölçülen son turun doğal düzenle yazılması ve bütün değer denetimlerinin geçmesiyle başarılıdır.
-  if (result && result.mode === 'composed' && report.results.filter((row) => row.id === item.id).every((row) => !row.failures.length)) report.passed += 1;
+  // Bütün turlar kendi düzen sözleşmesini ve doğrulanmış değer denetimlerini karşılamalıdır.
+  if (result && report.results.filter((row) => row.id === item.id).every((row) => !row.failures.length)) report.passed += 1;
 }
 
 /**
  * Rapor yazıldıktan sonra yanıtsız tur, değer denetimi hatası, Derin devri ya da düşünme komutu başarısız kılar.
- * Doğrulanmış anlatıma dönüşler doğru yanıttır; komutu düşürmez, oranı ve nedeniyle raporlanır.
+ * Düzen gereken vakada geri dönüş üretimde güvenlidir; model nitelendirmesi için başarı değildir.
  */
 export function finalizeCompositionQualification(report) {
   process.stderr.write(`${JSON.stringify(report)}\n`);
   if (OUT) appendFileSync(OUT, `${JSON.stringify(report)}\n`);
   assert.deepEqual(report.results.filter((row) => row.failures.length).map((row) => `${row.id}#${row.turn}`), [], 'COMPOSITION_CHECKS_FAILED');
+  if (['live', 'claude'].includes(report.provider)) assert.ok(report.calls > 0, 'COMPOSITION_NO_MODEL_CALLS');
+  assert.equal(report.passed, report.cases, 'COMPOSITION_CASES_FAILED');
   assert.equal(report.escalations, 0, 'COMPOSITION_ESCALATION_FORBIDDEN');
   assert.equal(report.usage.thinking, 0, 'COMPOSITION_THINKING_FORBIDDEN');
 }

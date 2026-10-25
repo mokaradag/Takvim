@@ -453,7 +453,7 @@ export function aiTelemetrySnapshot() {
       serverSelected: current.grounding.serverSelected,
       presentation: current.grounding.presentation
         ? { ...current.grounding.presentation, byReason: { ...current.grounding.presentation.byReason } }
-        : { composed: 0, narrative: 0, byReason: {}, charts: 0 },
+        : { composed: 0, narrative: 0, unavailable: 0, byReason: {}, charts: 0 },
       rounds: countPercentiles(current.grounding.rounds),
       evidence: countPercentiles(current.grounding.evidence),
       escalations: {
@@ -738,8 +738,8 @@ export function recordGroundedAnswer({ outcome, rounds = 0, evidence = 0, repair
 
 const TURN_OUTCOMES = new Set(['grounded', 'clarification', 'abstained', 'not_found', 'unavailable', 'general_redirect', 'failed', 'error']);
 const ROUND_PURPOSES = new Set(['plan', 'tools', 'follow-up', 'select', 'repair', 'declaration', 'retry', 'compose']);
-const PRESENTATION_MODES = new Set(['composed', 'narrative']);
-const PRESENTATION_REASONS = new Set(['SHEET_LIMIT', 'AUTHORIZATION', 'CITATION_SCOPE', 'BUDGET', 'TIMEOUT', 'PROVIDER', 'LENGTH', 'EMPTY', 'INVALID', 'INTERNAL']);
+const PRESENTATION_MODES = new Set(['composed', 'narrative', 'unavailable']);
+const PRESENTATION_REASONS = new Set(['NO_CHOICE', 'LENGTH_UNAVAILABLE', 'SHEET_LIMIT', 'AUTHORIZATION', 'CITATION_SCOPE', 'BUDGET', 'TIMEOUT', 'PROVIDER', 'LENGTH', 'EMPTY', 'INVALID', 'INTERNAL']);
 const CHART_TYPES = new Set(['bar', 'donut']);
 const SAFE_ISSUE = /^[A-Z][A-Z0-9_]{0,40}$/;
 
@@ -773,7 +773,7 @@ export function recordGroundedTurn(trace = {}) {
     const grounding = state().grounding;
     if (trace.selectedBy === 'server') grounding.serverSelected += 1;
     if (presentation) {
-      grounding.presentation ||= { composed: 0, narrative: 0, byReason: {}, charts: 0 };
+      grounding.presentation ||= { composed: 0, narrative: 0, unavailable: 0, byReason: {}, charts: 0 };
       grounding.presentation[presentation.mode] += 1;
       if (presentation.reason) grounding.presentation.byReason[presentation.reason] = (grounding.presentation.byReason[presentation.reason] || 0) + 1;
       grounding.presentation.charts += presentation.charts;

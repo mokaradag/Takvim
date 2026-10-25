@@ -102,11 +102,15 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           const values = described.rows.map((row) => row.cells[index]);
           if (!values.every((facts) => facts.length === 1 && Number.isFinite(facts[0].value) && facts[0].value >= 0 && facts[0].value <= ANSWER_CHART_LIMITS.maxValue)) return;
           const sample = values[0][0];
+          // Bir sütunun bütün değerleri aynı doğrulanmış ölçü ve birimde olmalıdır.
+          if (!values.every(([fact]) => fact.semantic?.measure === sample.semantic?.measure && fact.semantic?.unit === sample.semantic?.unit)) return;
+          if (sample.semantic?.measure === 'lag' && sample.semantic.unit !== 'day') return;
           const unit = /Percent$/.test(leafOf(sample.field)) ? 'percent' : sample.semantic?.unit === 'hours' ? 'hours'
-            : sample.semantic?.measure === 'days' ? 'days'
+            : sample.semantic?.measure === 'days' || sample.semantic?.measure === 'lag' ? 'days'
               : values.every((facts) => Number.isSafeInteger(facts[0].value)) && (COUNT_MEASURES.has(sample.semantic?.measure) || sample.semantic?.measure == null) ? 'count' : 'number';
           const total = values.reduce((sum, facts) => sum + facts[0].value, 0);
           const distribution = group.tool === 'rota_task_analytics' && collection.endsWith('groups') && complete
+            && values.every(([fact]) => ['status', 'priority', 'project', 'deadline', 'target_month'].includes(fact.semantic?.groupBy))
             && described.rows.length <= ANSWER_CHART_LIMITS.maxDonutItems && total > 0 && unit === 'count';
           const chartId = `G${charts.size + 1}`;
           const items = labels.map((label, position) => ({ label, value: values[position][0].value }));

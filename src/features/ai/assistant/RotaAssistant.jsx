@@ -533,7 +533,7 @@ export function RotaAssistantPanel({ assistant, onOpenSettings }) {
               type="button"
               className={`icon-btn rota-assistant-focus-toggle${focused ? ' is-active' : ''}`}
               aria-pressed={focused}
-              aria-label={focused ? 'Odak görünümünden çık' : 'Odak görünümüne geç'}
+              aria-label="Odak görünümü"
               title={focused ? 'Odak görünümünden çık (Esc)' : 'Odak görünümü'}
               onClick={() => setFocused?.(!focused)}
             >
