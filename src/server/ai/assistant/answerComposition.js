@@ -2,6 +2,7 @@ import 'server-only';
 import { AI_ERROR_CODES } from '../../../domain/ai/aiErrorCatalog.js';
 import { AI_CAPABILITIES } from '../../../domain/ai/aiModelRegistry.js';
 import { parseCompositionResponse, renderComposition, validateComposition } from '../../../domain/ai/groundedComposition.js';
+import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import { AiError, isAiError } from '../aiErrors.js';
 import { compositionMessages } from './groundedPrompt.js';
 
@@ -22,7 +23,8 @@ export const COMPOSITION_RUNTIME = Object.freeze({
   maxOutputTokens: 1200,
   /** Düzen turunun en uzun süresi; oturumun kalan süresinden ayrıca `reserveMs` teslim payı kalır. */
   timeoutMs: 60000,
-  reserveMs: 5000,
+  /** Son yetki okumasının tamamı ve mevcut teslim payı düzen penceresinden ayrılır. */
+  reserveMs: TOOL_LIMITS.callTimeoutMs + 5000,
   /** Bu süreden az kaldıysa düzen istenmez. */
   minMs: 8000
 });

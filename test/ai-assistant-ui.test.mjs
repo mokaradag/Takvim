@@ -2077,6 +2077,7 @@ test('kapalı ipucu Escape olayını tüketmez; açılmayı bekleyen ipucu tüke
   trigger().props.onKeyDown(closed);
   assert.equal(closed.defaultPrevented, false, 'kapalı ipucu Escape’i üstteki pencereye bırakır');
   trigger().props.onFocus({ currentTarget: { getBoundingClientRect: () => ({ left: 0, width: 10, bottom: 10 }) } });
+  view.render();
   const pending = escape();
   trigger().props.onKeyDown(pending);
   assert.equal(pending.defaultPrevented, true, 'açılmayı bekleyen ipucu iptal edilir');

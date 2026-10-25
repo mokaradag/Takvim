@@ -385,3 +385,59 @@ test('çok bölümlü uzunluk geri dönüşü son model işinden sonra kalıcı 
     }
   });
 });
+
+test('düzen zaman aşımı son yetki okumasının tam bütçesini teslim payıyla korur', async (t) => {
+  const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
+  const { compositionWindowMs } = await import('../src/server/ai/assistant/answerComposition.js');
+  const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
+  const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
+  const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
+  const { createAiDeadline, abortableDelay } = await import('../src/server/ai/aiDeadline.js');
+  const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: NOW });
+  createAiStack(t, { sicil: AYSE, seed: rotaToolSeed(), env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
+  const logs = captureConsole(t);
+  const deadline = createAiDeadline({ timeoutMs: 30000 });
+  t.after(() => deadline.dispose());
+  let composing = false;
+  let validating = false;
+  let finalReads = 0;
+  const context = { ...createToolTurnContext({ sicil: AYSE, now: NOW }) };
+  const recheck = context.revalidateAuthorization;
+  context.revalidateAuthorization = async (signal) => {
+    if (composing) {
+      finalReads += 1;
+      validating = true;
+      await abortableDelay(TOOL_LIMITS.callTimeoutMs - 1000, signal);
+    }
+    return recheck(signal);
+  };
+  const session = { signal: deadline.signal, remainingMs: deadline.remainingMs, profile: 'chat.tools', model: STANDARD.model,
+    round: async (input) => {
+      if (!isCompositionCall(input)) return { text: '', finishReason: 'tool_calls', toolCalls: [{ id: 'plan', name: 'rota_plan', arguments: JSON.stringify({ intent: 'rota', language: 'tr', request: OVERDUE_LIST }) }] };
+      composing = true;
+      return new Promise((_resolve, reject) => input.signal.addEventListener('abort', () => reject(input.signal.reason), { once: true }));
+    } };
+  const windowMs = compositionWindowMs(session);
+  assert.equal(compositionWindowMs({ remainingMs: () => COMPOSITION_RUNTIME.reserveMs + COMPOSITION_RUNTIME.minMs - 1 }), null);
+  const delivered = [];
+  const pending = runGroundedTurn(session, { messages: buildGroundedContext({ userContent: QUESTION, now: NOW }).messages,
+    catalog: toolCatalogForModel(), context, composeAnswers: true, onText: async (text) => delivered.push(text) });
+  pending.catch(() => {});
+  const until = async (predicate) => {
+    for (let index = 0; index < 400 && !predicate(); index += 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(predicate());
+  };
+  await until(() => composing);
+  t.mock.timers.tick(windowMs + 1);
+  await until(() => validating);
+  t.mock.timers.tick(TOOL_LIMITS.callTimeoutMs - 1000);
+  const result = await pending;
+  assert.equal(result.outcome, 'grounded');
+  assert.equal(finalReads, 1);
+  assert.equal(deadline.signal.aborted, false, 'son yetki okuması oturum süresini tüketmez');
+  assert.ok(deadline.remainingMs() >= 5000, 'mevcut teslim payı korunur');
+  assert.deepEqual(delivered, [result.text]);
+  assert.ok(result.evidenceRows.length > 0);
+  assert.deepEqual([turnLines(logs)[0].context.presentation.mode, turnLines(logs)[0].context.presentation.reason], ['narrative', 'TIMEOUT']);
+});

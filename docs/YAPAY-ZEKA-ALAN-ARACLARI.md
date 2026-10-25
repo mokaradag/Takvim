@@ -996,9 +996,9 @@ bağımsız değişken, sonuç içeriği, SQL ya da anahtar kaydedilmez.
 - Her kanıta dayalı tur `ai.grounded.turn` bilgi olayı yazar: sonuç ve güvenli
   hata kodu, seçimi kimin yaptığı (`server` / `model`), devir, model ve araç
   turu, araç çağrısı/hatası, sonuç baytı, bildirim ve düzeltme sayısı, SQL
-  süresi/sorgu sayısı, yetki yüklemesi, yeniden doğrulama ve doğrulama süreleri;
+  süresi/sorgu sayısı, yetki yüklemesi, yeniden doğrulama ve doğrulama süreleri, `presentation` sunum özeti ve `usage` belirteç toplamları;
   her model turu için (en fazla 16) amaç (`plan`, `tools`, `follow-up`,
-  `select`, `repair`, `declaration`, `retry`), profil, model, süre, ilk olaya
+  `select`, `repair`, `declaration`, `retry`, `compose`), profil, model, süre, ilk olaya
   kadar geçen süre, çıktı sınırı, bitiş nedeni, çağrı sayısı ve sağlayıcının
   bildirdiği girdi/tamamlama/akıl yürütme belirteçleri. Soru, yanıt, bağımsız
   değişken, kanıt içeriği, Sicil ya da anahtar yazılmaz.

@@ -115,7 +115,7 @@ export function answerChartValue(value, unit, locale = 'tr') {
   const precision = value !== 0 && Math.abs(value) < 0.01 ? { maximumSignificantDigits: 3, notation: Math.abs(value) < 0.000001 ? 'scientific' : 'standard' } : { maximumFractionDigits: 2 };
   const number = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'tr-TR', precision).format(value);
   if (unit === 'percent') return locale === 'en' ? `${number}%` : `%${number}`;
-  if (unit === 'days') return `${number} ${locale === 'en' ? 'days' : 'gün'}`;
+  if (unit === 'days') return new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'tr-TR', { ...precision, style: 'unit', unit: 'day', unitDisplay: 'long' }).format(value);
   if (unit === 'hours') return `${number} ${locale === 'en' ? 'h' : 'sa'}`;
   return number;
 }

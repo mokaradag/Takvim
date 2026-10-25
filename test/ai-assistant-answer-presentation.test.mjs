@@ -373,6 +373,7 @@ test('dilimden gerçek açıklama odağına geçiş yalnızca açıklama ipucunu
   const node = { focus() { document.activeElement = this; child(legend).props.onFocus({ currentTarget: this }); } };
   legendElement().props.children.ref(node);
   child(slice).props.onMouseEnter({ clientX: 20, clientY: 20 });
+  slice.render();
   t.mock.timers.tick(100);
   slice.render();
   assert.ok(findElement(slice.output, (item) => item.props?.className === 'rich-tip'));
@@ -385,16 +386,84 @@ test('dilimden gerçek açıklama odağına geçiş yalnızca açıklama ipucunu
   legend.render();
   assert.equal(document.activeElement, node, 'gerçek odak aktarımı korunur');
   assert.equal(findElement(slice.output, (item) => item.props?.className === 'rich-tip'), null);
-  assert.ok(findElement(legend.output, (item) => item.props?.className === 'rich-tip'));
+  const portal = findElement(legend.output, (item) => item.props?.role === 'tooltip');
+  assert.ok(portal);
+  assert.equal(child(legend).props['aria-describedby'], portal.props.id);
+  assert.equal(child(slice).props['aria-describedby'], undefined);
   child(legend).props.onKeyDown({ key: 'Escape', preventDefault() {} });
   legend.render();
   assert.equal(findElement(legend.output, (item) => item.props?.className === 'rich-tip'), null);
+  assert.equal(child(legend).props['aria-describedby'], undefined);
   child(legend).props.onBlur();
   donut.render();
   slice.render(sliceElement().props);
-  child(slice).props.onMouseEnter({ clientX: 20, clientY: 20 });
   t.mock.timers.tick(100);
   slice.render();
-  assert.ok(findElement(slice.output, (item) => item.props?.className === 'rich-tip'), 'odak ayrılınca fare ipucu yeniden açılır');
+  assert.ok(findElement(slice.output, (item) => item.props?.className === 'rich-tip'), 'odak ayrılınca fare ipucu yeni enter olmadan açılır');
+  assert.ok(sliceElement().props.children.props.className.includes('is-active'), 'süren fare temasının vurgusu geri gelir');
   slice.unmount(); legend.unmount(); donut.unmount();
+});
+
+
+test('ipucu açıklama bağı odak, fare, Escape ve devre dışı durumu ile eşleşir', (t) => {
+  browserDouble(t);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(ReactDOM, 'createPortal', (content) => content);
+  const props = { asChild: true, content: 'Pay ve kaynak', children: React.createElement('div', { 'aria-describedby': 'existing-description' }) };
+  const tip = mountComponent(Tooltip, props);
+  const trigger = () => tip.output.props.children[0];
+  const portal = () => findElement(tip.output, (node) => node.props?.role === 'tooltip');
+  const open = () => { tip.render(); t.mock.timers.tick(100); tip.render(); };
+  assert.equal(trigger().props['aria-describedby'], 'existing-description');
+  trigger().props.onFocus({ currentTarget: {} });
+  open();
+  const id = portal().props.id;
+  assert.ok(id);
+  assert.equal(trigger().props['aria-describedby'], `existing-description ${id}`);
+  trigger().props.onMouseEnter({ clientX: 12, clientY: 15 });
+  tip.render();
+  trigger().props.onMouseLeave();
+  tip.render();
+  assert.equal(portal().props.id, id, 'fare ayrılması odağın açıklamasını kapatmaz');
+  let prevented = false;
+  trigger().props.onKeyDown({ key: 'Escape', preventDefault() { prevented = true; } });
+  tip.render();
+  t.mock.timers.tick(100);
+  tip.render();
+  assert.equal(prevented, true);
+  assert.equal(portal(), null);
+  assert.equal(trigger().props['aria-describedby'], 'existing-description');
+  trigger().props.onBlur(); tip.render();
+  trigger().props.onFocus({ currentTarget: {} }); open();
+  assert.equal(portal().props.id, id, 'yeniden açılınca kimlik değişmez');
+  trigger().props.onBlur(); tip.render();
+  trigger().props.onMouseEnter({ clientX: 12, clientY: 15 }); open();
+  tip.render({ ...props, disabled: true });
+  assert.equal(portal(), null);
+  assert.equal(trigger().props['aria-describedby'], 'existing-description');
+  tip.render(props); open();
+  assert.equal(portal().props.id, id, 'süren fare teması yeni enter olmadan geri gelir');
+  tip.render({ ...props, disabled: true });
+  trigger().props.onMouseLeave(); tip.render({ ...props, disabled: true });
+  tip.render(props); open();
+  assert.equal(portal(), null, 'devre dışıyken ayrılan fare hayalet ipucu açmaz');
+  tip.unmount();
+});
+
+test('gün birimi yerelleştirmesi etiket, ipucu, erişilebilir ad ve kopyada tutarlıdır', () => {
+  for (const [locale, expected] of [['en', ['0 days', '1 day', '2 days']], ['tr', ['0 gün', '1 gün', '2 gün']]]) {
+    const spec = { ...SPEC, locale, items: [0, 1, 2].map((value) => ({ label: `Item ${value}`, value })) };
+    assert.deepEqual(spec.items.map((item) => answerChartValue(item.value, 'days', locale)), expected);
+    const markup = renderToStaticMarkup(React.createElement(AnswerChart, { spec }));
+    const copied = assistantMarkdownText(answer(spec), { evidenceIds: new Set(['R1']) });
+    const barElement = findElement(mountComponent(AnswerChart, { spec }).output, named('BarChart'));
+    const bars = mountComponent(barElement.type, barElement.props);
+    for (const [index, value] of expected.entries()) {
+      assert.ok(markup.includes(`aria-label="Item ${index}: ${value}"`));
+      assert.ok(markup.includes(`aria-hidden="true">${value}</span>`));
+      assert.ok(copied.split('\n').includes(`Item ${index}\t${value}`));
+      const tooltip = bars.output.props.children[index].props.children;
+      assert.ok(renderToStaticMarkup(tooltip.props.content).includes(`class="rt-val">${value}</span>`));
+    }
+  }
 });

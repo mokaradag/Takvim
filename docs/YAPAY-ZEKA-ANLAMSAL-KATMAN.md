@@ -1667,7 +1667,8 @@ aşan yanıt mevcut belirlenimci anlatıma döner. Serbest metin reddi dilin sö
 1200 belirteç sınırı kapalı blok düzeninde korunur; profil sınırını yalnızca daraltır. `LENGTH` belirlenimci
 anlatıma döner. Genel profil sınırları artırılmadı. Önceki serbest metin protokolünde gözlenen en
 büyük düzen çıktısı 251 belirteçti (13.8). Düzen turunun kendi süre penceresi vardır (en çok 60 sn; oturumun kalan
-süresinden 5 sn teslim payı ayrılır; 8 sn'den az kaldıysa düzen istenmez — `BUDGET`). Düzen **Derin düşünmeye devretmez,
+süresinden son yetki okumasının 8 sn bütçesi ve 5 sn teslim payı ayrılır; kalan düzen penceresi 8 sn'den
+azsa düzen istenmez — `BUDGET`). Düzen **Derin düşünmeye devretmez,
 düzeltme turu açmaz**; daha güzel düzyazı için devir üretilmez. İptal yukarı taşınır ve hiçbir şey yazılmaz.
 
 Geri dönüş nedenleri: `SHEET_LIMIT`, `AUTHORIZATION`, `CITATION_SCOPE`, `BUDGET`, `TIMEOUT`, `PROVIDER`, `LENGTH`, `EMPTY`, `INVALID`
@@ -1770,9 +1771,9 @@ COMPOSITION_QUALIFICATION_PROVIDER=live COMPOSITION_QUALIFICATION_STAGE=all \
 
 Bu geliştirme ortamında kurum içi uca erişim olmadığı için gerçek modelle **çalıştırılmadı**; Qwen3-Next-80B-A3B-Instruct
 üzerinde doğal düzen oranı, ret nedenleri ve gecikme ölçülmedi. Yolun kendisi (üretim sağlayıcı bağdaştırıcısı, gerçek
-HTTP/SSE, model rotası, ölçüm) deponun OpenAI uyumlu sahte ağ geçidine (`test/helpers/fakeOpenAiCompatibleServer.mjs`)
-karşı 12 vakanın 15 düzen turuyla uçtan uca çalıştırıldı; bu yalnızca bağlantı doğrulamasıdır, model kalitesi ölçümü
-değildir. Uç ya da anahtar verilmezse komut veri okumadan durur. Kabul için önerilen kapı: Derin devri 0, değer denetimi
+HTTP/SSE, model rotası, ölçüm) deponun OpenAI uyumlu sahte ağ geçidiyle (`test/helpers/fakeOpenAiCompatibleServer.mjs`)
+sınanır. Güncel 12 vaka 12 düzen turu kullanır; 3 vaka tasarım gereği `NO_CHOICE` yolundadır. Bu, model kalitesi
+ölçümü değildir. Uç ya da anahtar verilmezse komut veri okumadan durur. Kabul için önerilen kapı: Derin devri 0, değer denetimi
 başarısızlığı 0, düzen turu bitişlerinde `length` 0 ve raporun `composed`/`narrative` dağılımının ve ret
 nedenlerinin incelenmesi (geri dönüşler tasarım gereği doğru yanıttır, ancak doğal düzen oranı ürün kalitesini belirler).
 

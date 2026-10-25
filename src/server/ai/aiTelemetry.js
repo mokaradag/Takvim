@@ -111,6 +111,7 @@ function state() {
   const current = globalThis[STATE_KEY] ||= createState();
   current.planner ||= createState().planner;
   current.grounding.abstained ??= 0;
+  if (current.grounding.presentation) current.grounding.presentation.unavailable = safeCount(current.grounding.presentation.unavailable) ?? 0;
   return current;
 }
 

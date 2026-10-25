@@ -3,7 +3,7 @@
    Extra UI primitives — Tooltip, InfoButton, AnimatedNumber,
    ColumnFilter, AnimatedBar, ChartTooltip
    ============================================================ */
-import React, { useCallback as useCb, useState as useSx, useEffect as useEx, useRef as useRx } from 'react';
+import React, { useCallback as useCb, useState as useSx, useEffect as useEx, useRef as useRx, useId as useIx } from 'react';
 import ReactDOM from 'react-dom';
 import { modalTrapDepth } from '../hooks/useModalFocusTrap.js';
 import { DateInput } from './DateInput';
@@ -28,6 +28,12 @@ export { OPTION_SEARCH_THRESHOLD, matchesOptionQuery };
  */
 export function Tooltip({ children, content, icon, title, delay = 90, asChild = false, wrapperStyle, accent, focusable = false, ariaLabel, disabled = false }) {
   const [show, setShow] = useSx(false);
+  const [hovered, setHovered] = useSx(false);
+  const [focused, setFocused] = useSx(false);
+  const [dismissed, setDismissed] = useSx(false);
+  const tooltipId = useIx();
+  const requested = !disabled && !dismissed && (hovered || focused);
+  const visible = requested && show;
   const [pos, setPos] = useSx({ x: 0, y: 0, ready: false });
   const tipRef = useRx(null);
   const timer = useRx(null);
@@ -65,51 +71,54 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
   };
 
   const enter = (e) => {
-    if (disabled) return;
-    clearTimeout(timer.current);
-    const x = e.clientX, y = e.clientY;
-    lastMouse.current = { x, y };
-    pending.current = true;
-    timer.current = setTimeout(() => {
-      pending.current = false;
-      setShow(true);
-    }, delay);
+    lastMouse.current = { x: e.clientX, y: e.clientY };
+    setHovered(true);
+    setDismissed(false);
   };
   const move = (e) => {
     lastMouse.current = { x: e.clientX, y: e.clientY };
-    if (show) place(e.clientX, e.clientY);
+    if (visible) place(e.clientX, e.clientY);
   };
-  const leave = () => { clearTimeout(timer.current); pending.current = false; setShow(false); setPos(p => ({ ...p, ready: false })); };
+
+  // Devre dışıyken niyet korunur; odak sahibi ayrılınca süren fare teması yeniden açılır.
+  useEx(() => {
+    if (requested) {
+      pending.current = true;
+      timer.current = setTimeout(() => { pending.current = false; setShow(true); }, delay);
+    } else {
+      setShow(false);
+      setPos(p => ({ ...p, ready: false }));
+    }
+    return () => { clearTimeout(timer.current); pending.current = false; };
+  }, [requested, delay]);
 
   useEx(() => {
-    if (show && tipRef.current) place(lastMouse.current.x, lastMouse.current.y);
-  }, [show]);
-
-  useEx(() => { if (disabled) leave(); }, [disabled]);
-
-  // Cleanup on unmount
-  useEx(() => () => { clearTimeout(timer.current); }, []);
+    if (visible && tipRef.current) place(lastMouse.current.x, lastMouse.current.y);
+  }, [visible]);
 
   const handlers = {
     onMouseEnter: enter,
-    onMouseLeave: leave,
+    onMouseLeave: () => setHovered(false),
     onMouseMove: move,
     onFocus: (e) => {
       const r = e.currentTarget.getBoundingClientRect ? e.currentTarget.getBoundingClientRect() : null;
       if (r) { lastMouse.current = { x: r.left + r.width / 2, y: r.bottom }; }
-      enter({ clientX: lastMouse.current.x, clientY: lastMouse.current.y });
+      setFocused(true);
+      setDismissed(false);
     },
-    onBlur: leave,
+    onBlur: () => setFocused(false),
     onKeyDown: (e) => {
-      // Yalnızca açık ya da açılmayı bekleyen ipucu Esc'i tüketir; aksi hâlde Esc üstteki pencereye ulaşır.
-      if (e.key === 'Escape' && (show || pending.current)) { e.preventDefault(); leave(); }
+      // Kapalı ipucu Esc'i tüketmez; kapatılan ipucu yeni etkileşime kadar açılmaz.
+      if (e.key === 'Escape' && (visible || pending.current)) { e.preventDefault(); setDismissed(true); }
     }
   };
 
-  const tip = show && !disabled && ReactDOM.createPortal(
+  const tip = visible && ReactDOM.createPortal(
     (
       <div
         ref={tipRef}
+        id={tooltipId}
+        role="tooltip"
         className="rich-tip"
         style={{
           position: 'fixed',
@@ -140,9 +149,10 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
       handler(e);
       if (children.props[name]) children.props[name](e);
     }]));
+    const describedBy = [children.props['aria-describedby'], visible ? tooltipId : null].filter(Boolean).join(' ') || undefined;
     return (
       <>
-        {React.cloneElement(children, composed)}
+        {React.cloneElement(children, { ...composed, 'aria-describedby': describedBy })}
         {tip}
       </>
     );
@@ -152,6 +162,7 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
     <>
       <span
         {...handlers}
+        aria-describedby={visible ? tooltipId : undefined}
         {...(focusable ? { tabIndex: 0, role: 'button', 'aria-label': ariaLabel || title } : null)}
         style={{ display: 'inline-flex', alignItems: 'center', ...wrapperStyle }}
       >

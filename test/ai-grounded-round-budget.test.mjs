@@ -381,3 +381,20 @@ test('tur belirteç toplamı her metriğin bütün model turlarında bildirilmes
       rounds.slice(0, 16).map((round) => [round.input ?? null, round.completion ?? null, round.reasoning ?? null]));
   }
 });
+
+
+test('önceki modülden kalan sunum sayaçları okunurken ve artırılırken taşınır', async (t) => {
+  const { recordGroundedTurn, resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
+  resetAiTelemetryForTests();
+  t.after(resetAiTelemetryForTests);
+  captureConsole(t);
+  const state = globalThis[Symbol.for('mergen-rota.ai-telemetry')];
+  const previous = { composed: 3, narrative: 4, byReason: { INVALID: 2 }, charts: 1 };
+  state.grounding.presentation = { ...previous, byReason: { ...previous.byReason } };
+  assert.deepEqual(aiTelemetrySnapshot().grounding.presentation, { ...previous, unavailable: 0 });
+  for (let index = 0; index < 2; index += 1) recordGroundedTurn({ outcome: 'unavailable', presentation: { mode: 'unavailable', reason: 'AUTHORIZATION' } });
+  assert.deepEqual(aiTelemetrySnapshot().grounding.presentation, { ...previous, unavailable: 2, byReason: { INVALID: 2, AUTHORIZATION: 2 } });
+  state.grounding.presentation.unavailable = NaN;
+  recordGroundedTurn({ outcome: 'unavailable', presentation: { mode: 'unavailable', reason: 'LENGTH_UNAVAILABLE' } });
+  assert.equal(JSON.parse(JSON.stringify(aiTelemetrySnapshot())).grounding.presentation.unavailable, 1);
+});
