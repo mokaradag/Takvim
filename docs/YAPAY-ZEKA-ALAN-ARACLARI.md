@@ -1554,9 +1554,10 @@ yalnızca bu doğrulanmış olgulardan kurulur ve araç sonucunu, kimlikleri ya 
 kaynak işareti yazamaz; atıflar ve kapsam notu sunucunundur, kalıcı kanıt kümesi düzenden bağımsızdır (sınama aynı
 kayıt ve takip kümesini doğrular). Sunucu yeniden yetki doğrulamadan olguları sağlayıcıya ikinci kez göndermez.
 
-Sayısal özetin doğrulanmış anlatımı ve ölçütleri sunucu tarafından zorunlu eklenir; tablo yerine düzyazı seçilirse
-tablonun ortak ölçütü de korunur. Yuva dışındaki Türkçe/İngilizce sayı sözcükleri ve yaygın ekleri belirlenimci
-denetimde `UNSUPPORTED_NUMBER` ile anlatıma düşer. Grafik etiketleri ortak güvenlik kuralıyla temizlenir;
+Düzen yalnızca `details`, `rows` ve `chart` kaynak kimliklerini seçer; bütün tablolar gösterilir ve atlanan bütün
+ayrıntılar sunucu tarafından eklenir. Serbest model metni ve metin içi yuvalar reddedilir; Türkçe/İngilizce sayı,
+sıralama veya çekim sözcüğü denetimi yoktur. Düzen turu ilerlemeyi dış gözcüye bildirir. Turdan sonra, yanıt ve
+kalıcı kanıt kurulmadan önce yetki tekrar doğrulanır; geri alınmış kanıt kaydedilmez. Grafik etiketleri ortak güvenlik kuralıyla temizlenir;
 aynı adlar yalnızca doğrulanmış proje/birim bağlamıyla ayrıştırılır. Temizleme/kırpma sonrasında tekillik
 sağlanamıyorsa grafik adayı sunulmaz. Nitelendirme aracında model/altyapı hataları üretimdeki güvenli geri
 dönüşten ayrı kaydedilir ve son nitelendirme kapısını başarısız kılar; geçersiz düzen geri dönüşü altyapı hatası sayılmaz.
@@ -1564,7 +1565,8 @@ dönüşten ayrı kaydedilir ve son nitelendirme kapısını başarısız kılar
 Gözlemlenebilirlik: `ai.grounded.turn` satırı tek ve içeriksizdir; `presentation` (`mode`, `reason`, `issue`,
 `blocks`, `chart`, `charts`, `ms`), `usage` (belirteç toplamları, ilk olay süresi, `length` duruşları) ve varsa `escalation`
 alanlarını taşır; ayrı `ai.grounded.escalation` satırı yazılmaz. Tur listesinde düzen turu `purpose: "compose"` ve
-kendi bütçesiyle görünür. `charts` gerçekten çizilen grafik sayısıdır; reddedilen adaylar sayılmaz. Bağlam günlük
+kendi bütçesiyle görünür. `charts` gerçekten çizilen grafik sayısıdır; reddedilen adaylar sayılmaz. Belirteç toplamları her metrik için
+bütün model turlarında bildirim gerektirir; eksik bildirim `null` olur. Bağlam günlük
 temizleyicisinin nesne başına 25 alan sınırının içinde kalır.
 
 Kısmi çok bölümlü yanıt (bir bölüm tamamlanamadı) doğrulanmış tek görev listesi bölümünün kümesini sonraki takip için

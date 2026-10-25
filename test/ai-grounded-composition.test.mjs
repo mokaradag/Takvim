@@ -3,13 +3,14 @@
  *
  * Olgu sayfası gerçek araç çıktısından ve gerçek doğrulayıcıdan kurulur. Model yalnızca kapalı bir blok
  * listesi yazar; sınanan güvenceler: değerleri, tabloları, grafiği ve kaynak işaretlerini sunucu yazar;
- * modelin metninde rakam, kaynak işareti, bağlantı, HTML ya da biçim sözdizimi yer alamaz; istenen her
+ * model yalnızca sunucu kaynaklarını seçebilir; serbest metin kabul edilmez; istenen her
  * olgu temsil edilir; satır değeri kendi satırının adıyla geçer; bozuk ya da düşmanca her düzen reddedilir.
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import { AYSE, PROJECTS, TASKS, callRotaTool, callRotaTools, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { coveringBlocks } from './helpers/compositionScenario.mjs';
 import { verifyRequested } from './helpers/requestScenario.mjs';
 
 const { buildComposition, COMPOSITION_LIMITS, parseCompositionResponse, renderComposition, validateComposition } = await import('../src/domain/ai/groundedComposition.js');
@@ -34,10 +35,7 @@ const slot = (composition, predicate) => composition.view.facts.find(predicate)?
 const totalSlot = (composition) => slot(composition, (fact) => !fact.table && fact.kind === 'number');
 const firstRow = (composition) => ({ label: slot(composition, (fact) => fact.role === 'label' && fact.row === 1), days: slot(composition, (fact) => fact.row === 1 && fact.kind === 'number') });
 
-function validLead(composition) {
-  const row = firstRow(composition);
-  return { type: 'paragraph', text: `Şu anda {${totalSlot(composition)}} gecikmiş göreviniz var; en uzun süredir geciken {${row.label}}, {${row.days}} gündür bekliyor.` };
-}
+function validLead() { return { type: 'details', source: 'D1' }; }
 const check = (composition, response, options = {}) => validateComposition(composition, response, { userText: QUESTION, ...options });
 const issue = (result) => (result.ok ? null : result.issues[0]);
 
@@ -86,64 +84,60 @@ test('sayfa sınırı aşılınca önizleme daralır; tablo o zaman yalnızca ta
   const composition = buildComposition({ parts, question: QUESTION });
   assert.ok(composition, 'altı bölüm de sayfaya sığar');
   assert.ok(composition.view.facts.length <= COMPOSITION_LIMITS.maxSlots);
-  assert.ok(composition.view.tables.every((table) => table.previewRows < table.rows || table.previewRows <= COMPOSITION_LIMITS.maxPreviewRows));
+  // Üç satırın tüm yuvaları altı bölümde sınırı aşar; fikstür daraltmayı zorunlu kılar.
+  const fullSheet = buildComposition({ parts: parts.slice(0, 1), question: QUESTION });
+  assert.equal(fullSheet.view.tables[0].previewRows, 3);
+  assert.ok(fullSheet.view.facts.length * parts.length > COMPOSITION_LIMITS.maxSlots);
+  assert.ok(composition.view.tables.every((table) => table.previewRows < table.rows), 'önizleme gerçekten daraldı');
+  assert.equal(issue(check(composition, { blocks: [validLead()] })), 'COVERAGE_INCOMPLETE');
+  const rows = composition.view.tables.map((table) => ({ type: 'rows', source: table.id }));
+  assert.equal(check(composition, { blocks: rows }).ok, true, 'bütün satırlar sunucu bloklarıyla korunur');
   const tooMany = Array.from({ length: COMPOSITION_LIMITS.maxTables + 1 }, (_, index) => ({ index, presentation: verdict.presentation }));
   assert.equal(buildComposition({ parts: tooMany, question: QUESTION }), null, 'bütün olguları temsil edemeyen sayfa düzen istemez');
 });
 
 /* ── Geçerli düzen ve çizim ──────────────────────────────────── */
 
-test('geçerli düzen: değerler, tablo, grafik ve kaynaklar sunucudan; model metni kaçışlanmış düz metindir', async (t) => {
+test('kapalı düzen değerleri, tabloyu, grafiği ve kaynakları yalnızca sunucudan çizer', async (t) => {
   const { composition } = await overdueComposition(t);
-  const response = { blocks: [validLead(composition), { type: 'rows', source: 'T1', style: 'table' }, { type: 'chart', source: 'G1', style: 'bar' },
-    { type: 'assessment', text: `Önce {${firstRow(composition).label}} görevini ele almanızı öneririm.` }] };
-  const validated = check(composition, response);
+  const validated = check(composition, { blocks: [validLead(), { type: 'rows', source: 'T1', style: 'table' }, { type: 'chart', source: 'G1', style: 'bar' }] });
   assert.equal(validated.ok, true, JSON.stringify(validated.issues));
   const rendered = renderComposition(composition, validated);
   assert.deepEqual(rendered.citedIds, ['R1']);
   assert.equal(rendered.chart, 'bar');
-  assert.match(rendered.text, /^Şu anda \*\*3\*\* gecikmiş göreviniz var; en uzun süredir geciken \*\*Haftalık durum toplantısı\*\*, \*\*23\*\* gündür bekliyor\\\. 【R1】$/m);
+  assert.ok(rendered.text.startsWith(composition.render.details.get('D1').text));
   assert.match(rendered.text, /^\| Görev \| Termin \| Gecikme \(gün\) \|$/m);
-  assert.match(rendered.text, /^> \*\*Değerlendirme:\*\* Önce \*\*Haftalık durum toplantısı\*\* görevini ele almanızı öneririm\\\. 【R1】$/m, 'yorum ayrı, etiketli ve dayanağıyla');
-  // Dayanaksız yorum yanıtı düşürmez, yalnızca gösterilmez; yalnızca yorumdan oluşan düzen giriş paragrafı istemiyle reddedilir.
-  const unanchored = check(composition, { ...response, blocks: [...response.blocks.slice(0, 3), { type: 'assessment', text: 'Outlook takvimini başka kaynaktan denetleyin.' }] });
-  assert.equal(unanchored.omitted, 1);
-  assert.doesNotMatch(renderComposition(composition, unanchored).text, /Değerlendirme|Outlook/);
-  assert.equal(issue(check(composition, { blocks: [{ type: 'assessment', text: 'Yorum.' }] })), 'LEAD_REQUIRED');
   const blocks = parseAssistantMarkdown(rendered.text);
-  const chart = blocks.find((block) => block.type === 'code' && block.language === ANSWER_CHART_FENCE);
-  const spec = parseAnswerChart(chart.text);
+  const spec = parseAnswerChart(blocks.find((block) => block.type === 'code' && block.language === ANSWER_CHART_FENCE).text);
   assert.deepEqual(spec.items.map((item) => item.value), [23, 10, 1]);
   assert.deepEqual(spec.evidence, ['R1']);
   assert.equal(spec.unit, 'days');
   assert.equal(spec.locale, 'tr');
-  // Modelin yazdığı metinde sayı yoktur: bütün sayılar sunucunun yuvalarından gelir.
-  const prose = rendered.text.split('\n\n')[0].replace(/\*\*[^*]+\*\*/g, '');
-  assert.doesNotMatch(prose.replace(/【R1】/g, ''), /\d/);
+  assert.equal(rendered.text.match(/Eşleşen \*\*3\*\*/g).length, 1, 'ayrıntı yinelenmez');
 });
 
-test('her değer kendi kaydının adıyla eşleşir: çapraz eşleme ve sırasız satır anma reddedilir, iki yönlü doğal sıra kabul edilir', async (t) => {
+test('geçerli yuvalarla yanlış sıralama, çapraz kayıt ve ters karşılaştırma serbest metinle yetki kazanamaz', async (t) => {
   const { composition } = await overdueComposition(t);
-  const row = (index) => ({ label: slot(composition, (fact) => fact.role === 'label' && fact.row === index), days: slot(composition, (fact) => fact.row === index && fact.kind === 'number') });
-  const [first, second, third] = [row(1), row(2), row(3)];
-  const total = totalSlot(composition);
-  const paragraph = (text, extra = [{ type: 'rows', source: 'T1' }]) => ({ blocks: [{ type: 'paragraph', text }, ...extra] });
-  assert.equal(issue(check(composition, paragraph(`{${first.label}} için {${second.days}} gün, {${second.label}} için {${first.days}} gün; toplam {${total}}.`))), 'ROW_PAIRING');
-  assert.equal(check(composition, paragraph(`{${first.label}} {${first.days}} gün, {${second.label}} {${second.days}} gün gecikmiş; toplam {${total}}.`)).ok, true);
-  assert.equal(check(composition, paragraph(`{${first.days}} gündür bekleyen {${first.label}} ve {${second.days}} gündür bekleyen {${second.label}}; toplam {${total}}.`)).ok, true);
-  // Yön metin içinde değişebilir; eşlemeler kesişemez.
-  assert.equal(check(composition, paragraph(`En uzun gecikme {${first.days}} gün: {${first.label}}. Ardından {${second.label}} {${second.days}} gün; toplam {${total}}.`)).ok, true);
-  assert.equal(issue(check(composition, paragraph(`{${first.label}} {${second.days}} gün, {${first.days}} gün {${second.label}}; toplam {${total}}.`))), 'ROW_PAIRING');
-  // Tablo gösterilmiyorsa satırlar doğrulanmış sırayla anılır; tablo gösteriliyorsa düzyazı sırası serbesttir.
-  const facts = (index) => composition.view.facts.filter((fact) => fact.table === 'T1' && fact.row === index).map((fact) => `{${fact.id}}`).join(' ');
-  const details = { type: 'details', source: 'D1' };
-  assert.equal(issue(check(composition, paragraph(`${facts(1)}; ${facts(3)}; ${facts(2)}.`, [details]))), 'ROW_ORDER');
-  assert.equal(check(composition, paragraph(`${facts(1)}; ${facts(2)}; ${facts(3)}.`, [details])).ok, true);
-  assert.equal(check(composition, paragraph(`{${third.label}} en yenisi, {${first.label}} en eskisi; toplam {${total}}.`)).ok, true);
+  const first = firstRow(composition);
+  const second = { label: slot(composition, (fact) => fact.role === 'label' && fact.row === 2), days: slot(composition, (fact) => fact.row === 2 && fact.kind === 'number') };
+  for (const text of [
+    `En kısa gecikme {${first.label}}: {${first.days}} gün; toplam {${totalSlot(composition)}}.`,
+    `The shortest delay is {${first.label}}: {${first.days}} days.`,
+    `{${first.label}} için {${second.days}} gün, {${second.label}} için {${first.days}} gün.`,
+    `{${second.label}} en uzun süredir geciken görevdir.`,
+    `Geçerli yuvalar: ${composition.view.facts.map((fact) => `{${fact.id}}`).join(', ')}.`
+  ]) {
+    const response = { blocks: [{ type: 'paragraph', text }, { type: 'rows', source: 'T1', style: 'table' }] };
+    assert.equal(issue(check(composition, response)), 'BLOCK_INVALID', text);
+  }
+  const valid = check(composition, coveringBlocks(composition.view));
+  assert.equal(valid.ok, true);
+  const text = renderComposition(composition, valid).text;
+  assert.ok(text.indexOf('Haftalık durum toplantısı') < text.indexOf('Radar test planı'));
+  assert.match(text, /Haftalık durum toplantısı[^\n]*23/);
+  assert.match(text, /Radar test planı[^\n]*10/);
 
-  // Birden çok kayıtlı yanıtta kaydın değeri de kendi adıyla anılır.
   const stack = stackFor(t);
-  // Bölümler üretimdeki gibi tek kanıt defterini paylaşır (R1, R2).
   const { ledger } = await callRotaTools(stack, AYSE, [['rota_task_detail', { taskId: TASKS.SERIES }], ['rota_task_detail', { taskId: TASKS.OVERDUE }]]);
   const parts = [TASKS.SERIES, TASKS.OVERDUE].map((taskId, index) => {
     const verdict = verifyRequested(ledger, [`R${index + 1}:data.task.priority`], { operation: 'value', metrics: ['task.priority'], entities: [{ type: 'task', id: taskId }] });
@@ -151,12 +145,10 @@ test('her değer kendi kaydının adıyla eşleşir: çapraz eşleme ve sırası
     return { index, presentation: verdict.presentation };
   });
   const records = buildComposition({ parts, question: 'İkisinin önceliğini karşılaştır' });
-  const [priority1, name1, priority2, name2] = records.view.facts.map((fact) => fact.id);
-  const compare = (text) => check(records, { blocks: [{ type: 'paragraph', text }] }, { userText: 'İkisinin önceliğini karşılaştır' });
-  assert.equal(issue(compare(`{${name1}} {${priority2}}, {${name2}} ise {${priority1}} öncelikli.`)), 'ROW_PAIRING');
-  assert.equal(issue(compare(`Öncelikler {${priority1}} ve {${priority2}}.`)), 'ROW_LABEL_REQUIRED');
-  const valid = compare(`{${name1}} {${priority1}}, {${name2}} ise {${priority2}} öncelikli.`);
-  assert.equal(valid.ok, true, JSON.stringify(valid.issues));
+  const ordered = check(records, { blocks: [{ type: 'details', source: 'D2' }, { type: 'details', source: 'D1' }] });
+  assert.equal(ordered.ok, true);
+  assert.deepEqual(renderComposition(records, ordered).citedIds, ['R2', 'R1']);
+  assert.equal(renderComposition(records, ordered).text, [records.render.details.get('D2').text, records.render.details.get('D1').text].join('\n\n'));
 });
 
 test('açıkça istenen tablo düzeni korunur; tek satır tabloda ve ayrıntıda yinelenmez', async (t) => {
@@ -167,10 +159,9 @@ test('açıkça istenen tablo düzeni korunur; tek satır tabloda ve ayrıntıda
   const composition = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }], question: 'Radar test planını tablo olarak göster' });
   assert.equal(composition.view.tables.length, 1, 'tek satır da tablodur');
   assert.ok([...composition.render.details.values()].every((detail) => !detail.text.includes('Kritik')), 'satır ayrıntıda yinelenmez');
-  const label = slot(composition, (fact) => fact.role === 'label');
-  const validated = check(composition, { blocks: [{ type: 'paragraph', text: `İstediğiniz kayıt {${label}}.` }, { type: 'rows', source: 'T1', style: 'list' }] }, { userText: 'Radar test planı' });
+  const validated = check(composition, { blocks: [{ type: 'rows', source: 'T1', style: 'list' }] }, { userText: 'Radar test planı' });
   assert.equal(validated.ok, true, JSON.stringify(validated.issues));
-  assert.equal(validated.blocks[1].style, 'table', 'kullanıcının istediği düzen modelin seçiminden önce gelir');
+  assert.equal(validated.blocks[0].style, 'table', 'kullanıcının istediği düzen modelin seçiminden önce gelir');
   assert.match(renderComposition(composition, validated).text, /^\| Görev \| Öncelik \|$/m);
 });
 
@@ -184,60 +175,52 @@ test('eşleşmesiz bölümün notu düzende atlanırsa sunucu ekler; bölüm yan
   const required = composition.view.details.filter((detail) => detail.required);
   const emptyDetail = required.find((detail) => !detail.facts.length);
   assert.ok(emptyDetail, 'eşleşmesiz bölümün ayrıntısı zorunludur');
-  const validated = check(composition, { blocks: [validLead(composition), { type: 'rows', source: 'T1' }, { type: 'details', source: 'D1' }] });
+  const validated = check(composition, { blocks: [validLead(composition), { type: 'rows', source: 'T1' }] });
   assert.equal(validated.ok, true, JSON.stringify(validated.issues));
   const rendered = renderComposition(composition, validated);
   assert.match(rendered.text, /Eşleşen görev bulunmadı[^\n]*【R1】$/);
   assert.equal(rendered.text.match(/bulunmadı/g).length, 1, 'model eklediyse sunucu yinelemez');
-  const shown = renderComposition(composition, check(composition, { blocks: [validLead(composition), { type: 'rows', source: 'T1' }, { type: 'details', source: 'D1' }, { type: 'details', source: emptyDetail.id }] }));
+  const shown = renderComposition(composition, check(composition, { blocks: [validLead(composition), { type: 'rows', source: 'T1' }, { type: 'details', source: emptyDetail.id }] }));
   assert.equal(shown.text.match(/bulunmadı/g).length, 1);
 });
 
-test('satırın proje bağlamı ve kaydın adı doğrulanmış yuvadır; model adları kopyalamak zorunda kalmaz', async (t) => {
+test('kaydın adı ve proje bağlamı sunucu satırında kendi değeriyle kalır', async (t) => {
   const { composition } = await overdueComposition(t);
   const context = composition.view.facts.filter((fact) => fact.label === 'Proje');
   assert.deepEqual(context.map((fact) => [fact.row, fact.value]), [[1, 'RDR · Radar Modernizasyonu'], [2, 'RDR · Radar Modernizasyonu'], [3, 'PRT · Kısmi Proje']]);
-  const second = (predicate) => slot(composition, (fact) => fact.row === 2 && predicate(fact));
-  const project = second((fact) => fact.label === 'Proje');
-  // Bağlam da satır değeridir: kendi satırının adı olmadan başka bir kayda iliştirilemez.
-  assert.equal(issue(check(composition, { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}}; {${project}} projesinde bekleyen var.` }, { type: 'rows', source: 'T1' }] })), 'ROW_LABEL_REQUIRED');
-  const valid = check(composition, { blocks: [{ type: 'paragraph', text: `{${second((fact) => fact.role === 'label')}} görevi {${project}} projesindedir.` }, { type: 'rows', source: 'T1' }, { type: 'details', source: 'D1' }] });
-  assert.equal(valid.ok, true, JSON.stringify(valid.issues));
-  assert.match(renderComposition(composition, valid).text, /^\*\*Radar test planı\*\* görevi RDR · Radar Modernizasyonu projesindedir\\\. 【R1】$/m);
-
+  const validated = check(composition, coveringBlocks(composition.view));
+  assert.equal(validated.ok, true);
+  assert.match(renderComposition(composition, validated).text, /Radar test planı[^\n]*RDR · Radar Modernizasyonu/);
   const stack = stackFor(t);
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.OVERDUE });
   const detail = verifyRequested(ledger, ['data.task.priority'], { operation: 'value', metrics: ['task.priority'], entities: [{ type: 'task', id: TASKS.OVERDUE }] });
-  assert.equal(detail.ok, true, JSON.stringify(detail.issues));
-  const record = buildComposition({ parts: [{ index: 0, presentation: detail.presentation }], question: 'Bu görevin önceliği ne?' });
-  assert.deepEqual(record.view.facts.map((fact) => [fact.label, fact.value, fact.role ?? null]), [['Öncelik', 'Kritik', null], ['Görev', 'Radar test planı', 'label']]);
-  // Ad yuvası kapsam için zorunlu değildir; kullanılırsa sunucunun değeriyle yazılır.
-  assert.equal(check(record, { blocks: [{ type: 'paragraph', text: 'Önceliği {F1}.' }] }, { userText: 'Bu görevin önceliği ne?' }).ok, true);
-  const named = check(record, { blocks: [{ type: 'paragraph', text: '{F2} görevinin önceliği {F1}.' }] }, { userText: 'Bu görevin önceliği ne?' });
-  assert.equal(renderComposition(record, named).text, '**Radar test planı** görevinin önceliği **Kritik**\\. 【R1】');
+  const record = buildComposition({ parts: [{ index: 0, presentation: detail.presentation }] });
+  const named = check(record, coveringBlocks(record.view));
+  assert.equal(named.ok, true);
+  assert.match(renderComposition(record, named).text, /Radar test planı[^\n]*Kritik/);
 });
 
-test('Türkçe ek yuvaya yapışır; kalın yazı dengeli ve boşluk dışarıda kalır', async (t) => {
-  const { composition } = await overdueComposition(t);
-  const total = totalSlot(composition);
-  const row = firstRow(composition);
-  const response = { blocks: [{ type: 'paragraph', text: `Gecikmiş görev sayınız {${total}}; **en eskisi {${row.label}} ** ve {${row.days}}'lük gecikmeyle başı çekiyor.` }, { type: 'rows', source: 'T1' }] };
-  const validated = check(composition, response);
-  assert.equal(validated.ok, true, JSON.stringify(validated.issues));
-  const text = renderComposition(composition, validated).text;
-  assert.match(text, /\*\*en eskisi Haftalık durum toplantısı\*\* ve \*\*23\*\*'lük gecikmeyle/);
-  const strongs = parseAssistantMarkdown(text)[0].children.filter((node) => node.type === 'strong');
-  assert.ok(strongs.length >= 3);
+test('Türkçe bir ve İngilizce one içeren doğal kayıt metni sözcük denetimine takılmaz', async (t) => {
+  for (const title of ['Bir görev için bir risk değerlendirmesi', 'One task needs a first review']) await t.test(title, async (inner) => {
+    const stack = stackFor(inner);
+    stack.db.tasks.find((row) => row.TaskId === TASKS.SERIES).Title = title;
+    const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { deadline: 'overdue', assignee: 'me' });
+    const verdict = verifyRequested(ledger, OVERDUE_FACTS, OVERDUE_LIST);
+    const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }], question: 'Bir görev için bir değerlendirme yap.' });
+    const validated = check(sheet, coveringBlocks(sheet.view));
+    assert.equal(validated.ok, true);
+    assert.ok(renderComposition(sheet, validated).text.includes(title));
+  });
 });
 
 test('İngilizce sayfa İngilizce değerler ve etiketler taşır', async (t) => {
   const { composition } = await overdueComposition(t, { locale: 'en' });
   assert.equal(composition.view.language, 'en');
   assert.ok(composition.view.facts.some((fact) => fact.value === '7 September 2026'));
-  const response = { blocks: [{ type: 'paragraph', text: `You have {${totalSlot(composition)}} overdue tasks.` }, { type: 'rows', source: 'T1', style: 'list' }], language: 'en' };
+  const response = { blocks: [validLead(), { type: 'rows', source: 'T1', style: 'list' }], language: 'en' };
   const validated = check(composition, response, { userText: 'Show my overdue tasks.' });
   assert.equal(validated.ok, true, JSON.stringify(validated.issues));
-  assert.match(renderComposition(composition, validated).text, /^You have \*\*3\*\* overdue tasks\\\. 【R1】/);
+  assert.match(renderComposition(composition, validated).text, /\*\*3\*\* matching tasks were found/);
   assert.equal(issue(check(composition, { ...response, language: 'tr' })), 'LANGUAGE_MISMATCH');
 });
 
@@ -251,65 +234,55 @@ test('bozuk, uydurma ya da düşmanca düzenlerin her biri reddedilir', async (t
     ['boş nesne', {}, 'SHAPE_INVALID'],
     ['fazla alan', { blocks: [lead, rows], note: 'x' }, 'SHAPE_INVALID'],
     ['boş liste', { blocks: [] }, 'BLOCK_COUNT'],
+    ['seyrek bloklar', { blocks: [lead, , rows] }, 'BLOCK_INVALID'],
+    ['metin olmayan kaynak', { blocks: [{ type: 'rows', source: { id: 'T1' } }] }, 'SOURCE_INVALID'],
+    ['yanlış kaynak türü', { blocks: [{ type: 'rows', source: 'D1' }] }, 'UNKNOWN_SOURCE'],
+    ['veri alanı ekleme', { blocks: [lead, { ...rows, items: [{ value: 0 }] }] }, 'BLOCK_INVALID'],
     ['aşırı blok', { blocks: [lead, rows, ...Array.from({ length: 10 }, (_, index) => ({ type: 'assessment', text: `Not ${'a'.repeat(index + 1)}` }))] }, 'BLOCK_COUNT'],
     ['bilinmeyen tür', { blocks: [lead, { type: 'html', text: '<b>x</b>' }] }, 'BLOCK_INVALID'],
     ['blokta fazla alan', { blocks: [{ ...lead, color: 'red' }, rows] }, 'BLOCK_INVALID'],
-    ['uydurma yuva', { blocks: [{ type: 'paragraph', text: 'Şu anda {F99} gecikmiş göreviniz var.' }, rows] }, 'UNKNOWN_SLOT'],
+    ['uydurma yuva', { blocks: [{ type: 'paragraph', text: 'Şu anda {F99} gecikmiş göreviniz var.' }, rows] }, 'BLOCK_INVALID'],
     ['uydurma kaynak', { blocks: [lead, { type: 'rows', source: 'T9' }] }, 'UNKNOWN_SOURCE'],
     ['yinelenen kaynak', { blocks: [lead, rows, rows] }, 'DUPLICATE_SOURCE'],
-    ['yinelenen paragraf', { blocks: [lead, lead, rows] }, 'DUPLICATE_BLOCK'],
-    ['uydurma sayı', { blocks: [{ type: 'paragraph', text: `Şu anda {${totalSlot(composition)}} görevden 5 tanesi kritik.` }, rows] }, 'UNSUPPORTED_NUMBER'],
-    ['Arap-Hint rakamı', { blocks: [{ type: 'paragraph', text: `Şu anda {${totalSlot(composition)}} görevden ٣ tanesi kritik.` }, rows] }, 'UNSUPPORTED_NUMBER'],
-    ['tam genişlik rakam', { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}}, ７ gün.` }, rows] }, 'UNSUPPORTED_NUMBER'],
-    ['üst simge', { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}} görev²` }, rows] }, 'UNSUPPORTED_NUMBER'],
-    ['kaynak işareti', { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}} görev 【R2】` }, rows] }, 'CITATION_FORBIDDEN'],
-    ['bağlantı', { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}}; ayrıntı için https://ornek.test adresine bakın.` }, rows] }, 'LINK_FORBIDDEN'],
-    ['yarım yuva', { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}} {F` }, rows] }, 'SLOT_SYNTAX'],
-    ['başlıkta yuva', { blocks: [lead, { type: 'heading', text: `Görev {${totalSlot(composition)}}` }, rows, { type: 'assessment', text: 'Not.' }] }, 'HEADING_SLOT'],
-    ['ilk blok paragraf değil', { blocks: [rows, lead] }, 'LEAD_REQUIRED'],
-    ['dayanaksız paragraf', { blocks: [lead, { type: 'paragraph', text: 'Projeleriniz genel olarak iyi gidiyor.' }, rows] }, 'UNANCHORED_PROSE'],
-    ['satır adı olmadan değer', { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}}; en uzun gecikme {${firstRow(composition).days}} gün.` }, rows] }, 'ROW_LABEL_REQUIRED'],
-    ['tablo eksik', { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}} gecikmiş göreviniz var.` }] }, 'COVERAGE_INCOMPLETE'],
-    ['tablo gösterilmeden sayı eksik', { blocks: [{ type: 'paragraph', text: composition.view.facts.filter((fact) => fact.table === 'T1').map((fact) => `{${fact.id}}`).join(', ') }] }, 'COVERAGE_INCOMPLETE'],
-    ['iki değerlendirme', { blocks: [lead, rows, { type: 'assessment', text: `Öneri {${totalSlot(composition)}}.` }, { type: 'assessment', text: `Not {${totalSlot(composition)}}.` }] }, 'ASSESSMENT_INVALID'],
+    ['yinelenen ayrıntı', { blocks: [lead, lead, rows] }, 'DUPLICATE_SOURCE'],
+    ['uydurma sayı', { blocks: [{ type: 'paragraph', text: `Şu anda {${totalSlot(composition)}} görevden 5 tanesi kritik.` }, rows] }, 'BLOCK_INVALID'],
+    ['Arap-Hint rakamı', { blocks: [{ type: 'paragraph', text: `Şu anda {${totalSlot(composition)}} görevden ٣ tanesi kritik.` }, rows] }, 'BLOCK_INVALID'],
+    ['tam genişlik rakam', { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}}, ７ gün.` }, rows] }, 'BLOCK_INVALID'],
+    ['üst simge', { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}} görev²` }, rows] }, 'BLOCK_INVALID'],
+    ['kaynak işareti', { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}} görev 【R2】` }, rows] }, 'BLOCK_INVALID'],
+    ['bağlantı', { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}}; ayrıntı için https://ornek.test adresine bakın.` }, rows] }, 'BLOCK_INVALID'],
+    ['yarım yuva', { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}} {F` }, rows] }, 'BLOCK_INVALID'],
+    ['başlıkta yuva', { blocks: [lead, { type: 'heading', text: `Görev {${totalSlot(composition)}}` }, rows, { type: 'assessment', text: 'Not.' }] }, 'BLOCK_INVALID'],
+    ['ilk blok grafik', { blocks: [{ type: 'chart', source: 'G1' }, rows] }, 'LEAD_REQUIRED'],
+    ['dayanaksız paragraf', { blocks: [lead, { type: 'paragraph', text: 'Projeleriniz genel olarak iyi gidiyor.' }, rows] }, 'BLOCK_INVALID'],
+    ['satır adı olmadan değer', { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}}; en uzun gecikme {${firstRow(composition).days}} gün.` }, rows] }, 'BLOCK_INVALID'],
+    ['tablo eksik', { blocks: [lead] }, 'COVERAGE_INCOMPLETE'],
+    ['yalnız yuvalar', { blocks: [{ type: 'paragraph', text: composition.view.facts.filter((fact) => fact.table === 'T1').map((fact) => `{${fact.id}}`).join(', ') }] }, 'BLOCK_INVALID'],
+    ['iki değerlendirme', { blocks: [lead, rows, { type: 'assessment', text: `Öneri {${totalSlot(composition)}}.` }, { type: 'assessment', text: `Not {${totalSlot(composition)}}.` }] }, 'BLOCK_INVALID'],
     ['geçersiz grafik türü', { blocks: [lead, rows, { type: 'chart', source: 'G1', style: 'donut' }] }, 'STYLE_INVALID'],
     ['geçersiz tablo biçimi', { blocks: [lead, { type: 'rows', source: 'T1', style: 'grid' }] }, 'STYLE_INVALID'],
-    ['son blok başlık', { blocks: [lead, rows, { type: 'assessment', text: 'Not.' }, { type: 'heading', text: 'Sonuç' }] }, 'HEADING_MISPLACED'],
-    ['aşırı uzun paragraf', { blocks: [{ type: 'paragraph', text: `{${totalSlot(composition)}} ${'uzun '.repeat(200)}` }, rows] }, 'PROSE_TOO_LONG'],
-    ['metin olmayan paragraf', { blocks: [{ type: 'paragraph', text: ['{F1}'] }, rows] }, 'PROSE_INVALID'],
-    ['seyrek madde listesi', { blocks: [lead, rows, { type: 'points', items: [, `{${firstRow(composition).label}}`] }] }, 'POINTS_INVALID']
+    ['son blok başlık', { blocks: [lead, rows, { type: 'assessment', text: 'Not.' }, { type: 'heading', text: 'Sonuç' }] }, 'BLOCK_INVALID'],
+    ['aşırı uzun paragraf', { blocks: [{ type: 'paragraph', text: `{${totalSlot(composition)}} ${'uzun '.repeat(200)}` }, rows] }, 'BLOCK_INVALID'],
+    ['metin olmayan paragraf', { blocks: [{ type: 'paragraph', text: ['{F1}'] }, rows] }, 'BLOCK_INVALID'],
+    ['seyrek madde listesi', { blocks: [lead, rows, { type: 'points', items: [, `{${firstRow(composition).label}}`] }] }, 'BLOCK_INVALID']
   ];
   for (const [name, response, expected] of cases) assert.equal(issue(check(composition, response)), expected, name);
-  // Tam tablosu gösterilen kümenin eşleşen kayıt sayısı tablonun kendisiyle temsil edilir.
-  assert.equal(check(composition, { blocks: [{ type: 'paragraph', text: `En uzun süredir geciken {${firstRow(composition).label}}.` }, rows] }).ok, true);
-  // İki satırın değeri aynı maddede eşlenemez.
-  const second = composition.view.facts.find((fact) => fact.role === 'label' && fact.row === 2).id;
-  const secondDays = composition.view.facts.find((fact) => fact.row === 2 && fact.kind === 'number').id;
-  const mixed = { blocks: [lead, rows, { type: 'points', items: [`{${firstRow(composition).label}} ve {${second}}: {${firstRow(composition).days}} ile {${secondDays}}`] }] };
-  assert.equal(issue(check(composition, mixed)), 'ROW_MIXED');
+  assert.equal(check(composition, { blocks: [rows] }).ok, true, 'sunucu eksik ayrıntıları da ekler');
 });
 
-test('kullanıcının yazdığı harfli kod metinde yer alabilir; yalın sayı alamaz', async (t) => {
+test('kullanıcı kodu serbest model metnine olgusal yetki vermez', async (t) => {
   const { composition } = await overdueComposition(t);
-  const response = (text) => ({ blocks: [{ type: 'paragraph', text: `${text} {${totalSlot(composition)}} gecikmiş görev var.` }, { type: 'rows', source: 'T1' }] });
-  assert.equal(check(composition, response('MRG-24 kapsamında'), { userText: 'MRG-24 için geciken görevler' }).ok, true);
-  assert.equal(issue(check(composition, response('MRG-25 kapsamında'), { userText: 'MRG-24 için geciken görevler' })), 'UNSUPPORTED_NUMBER');
-  assert.equal(issue(check(composition, response('Son 7 günde'), { userText: 'son 7 günde geciken görevler' })), 'UNSUPPORTED_NUMBER');
+  for (const text of ['MRG-24 kapsamında', 'MRG-25 kapsamında', 'Son 7 günde']) {
+    assert.equal(issue(check(composition, { blocks: [{ type: 'paragraph', text: `${text} {F1} görev var.` }, { type: 'rows', source: 'T1' }] }, { userText: 'MRG-24 son 7 gün' })), 'BLOCK_INVALID');
+  }
 });
 
-test('HTML, Markdown ve görünmez karakter enjeksiyonu yalnızca metin olarak görünür', async (t) => {
+test('modelin HTML, Markdown ve görünmez karakter enjeksiyonu kapalı blok sözleşmesinde reddedilir', async (t) => {
   const { composition } = await overdueComposition(t);
-  const total = totalSlot(composition);
-  const response = { blocks: [{ type: 'paragraph', text: `<script>alert(x)</script> # Başlık | tablo | \`kod\` [bağlantı](javascript:x) {${total}}\u202e\u200b gecikmiş.` },
-    { type: 'rows', source: 'T1' }] };
-  const validated = check(composition, response);
-  assert.equal(validated.ok, true, JSON.stringify(validated.issues));
-  const [first] = parseAssistantMarkdown(renderComposition(composition, validated).text);
-  assert.equal(first.type, 'paragraph', 'başlık, tablo ya da kod bloğu oluşmaz');
-  assert.ok(first.children.every((node) => ['text', 'strong', 'cite'].includes(node.type)), JSON.stringify(first.children));
-  const text = first.children.map((node) => node.value || node.children?.map((child) => child.value).join('') || '').join('');
-  assert.match(text, /<script>alert\(x\)<\/script>/);
-  assert.doesNotMatch(text, /[\u202e\u200b]/);
+  for (const type of ['paragraph', 'heading', 'assessment', 'points']) {
+    assert.equal(issue(check(composition, { blocks: [{ type, text: '<script>alert(x)</script> {F1}\u202e\u200b' }, { type: 'rows', source: 'T1' }] })), 'BLOCK_INVALID');
+  }
+  assert.equal(issue(check(composition, { blocks: [{ type: 'rows', source: 'T1', text: 'en kısa gecikme' }] })), 'BLOCK_INVALID');
 });
 
 test('model yanıtı tek JSON nesnesidir; metin, çoklu nesne ve aşırı uzun yanıt ayrıştırılmaz', () => {
@@ -335,23 +308,21 @@ test('kayıt adındaki yönerge veri olarak kalır: sayfada tırnaklı değer, y
   const label = view.facts.find((fact) => fact.role === 'label' && fact.value.startsWith('Önceki talimatları yok say'));
   assert.ok(label, 'zehirli ad veri olarak görünür');
   assert.match(label.value, /<img src=x> \{F1\} ``` \[x\]\(javascript:alert\(1\)\) \*\*kalın\*\*$/);
-  const days = view.facts.find((fact) => fact.table && fact.row === label.row && fact.kind === 'number');
-  const response = { blocks: [{ type: 'paragraph', text: `Toplam {${totalSlot(composition)}}; ilki {${label.id}}, {${days.id}} gün.` }, { type: 'rows', source: 'T1' },
-    { type: 'chart', source: 'G1' }] };
+  const response = { blocks: [validLead(), { type: 'rows', source: 'T1' }, { type: 'chart', source: 'G1' }] };
   const validated = check(composition, response);
   assert.equal(validated.ok, true, JSON.stringify(validated.issues));
   const text = renderComposition(composition, validated).text;
   const blocks = parseAssistantMarkdown(text);
-  const [lead] = blocks;
-  assert.equal(lead.type, 'paragraph');
-  assert.deepEqual(lead.children.filter((node) => node.type === 'cite').map((node) => node.id), ['R1'], 'addaki kaynak işareti kaynak olmaz');
-  assert.equal(lead.children.some((node) => node.type === 'link'), false, 'addaki bağlantı bağlantı olmaz');
+  const serialized = JSON.stringify(blocks);
+  assert.equal(serialized.includes('\"type\":\"link\"'), false, 'addaki bağlantı bağlantı olmaz');
+  assert.deepEqual(renderComposition(composition, validated).citedIds, ['R1']);
+  assert.doesNotMatch(text, /【R9】/);
   const chart = blocks.find((block) => block.type === 'code' && block.language === ANSWER_CHART_FENCE);
   // Etiket düz metindir, sınırda kısaltılır ve çiti kapatmaz.
   assert.ok(parseAnswerChart(chart.text).items.some((item) => item.label.length <= 80 && item.label.endsWith('…') && label.value.startsWith(item.label.slice(0, -1))));
   assert.equal(blocks.filter((block) => block.type === 'code').length, 1);
-  // Model zehirli metni kendi cümlesine kopyalamaya kalkarsa kaynak işareti ve sayı nedeniyle reddedilir.
-  assert.equal(issue(check(composition, { blocks: [{ type: 'paragraph', text: `{${totalSlot(composition)}} — ${injected}` }, { type: 'rows', source: 'T1' }] })), 'CITATION_FORBIDDEN');
+  // Modelin zehirli metni kopyaladığı serbest blok kapalı sözleşmede reddedilir.
+  assert.equal(issue(check(composition, { blocks: [{ type: 'paragraph', text: `{${totalSlot(composition)}} — ${injected}` }, { type: 'rows', source: 'T1' }] })), 'BLOCK_INVALID');
 });
 
 /* ── Grafik tanımı ───────────────────────────────────────────── */
@@ -434,42 +405,36 @@ test('grafik etiketi ortak doğrulayıcıyla uyumludur: denetim/bidi temizliği,
   assert.equal(spec.items[0].label, 'Güvenli ad son');
 });
 
-test('yazıyla uydurulan miktarlar yuva dışındaysa Türkçe/İngilizce reddedilir; belirsiz sözcüklerin sayısal olmayan kullanımları geçer', async (t) => {
+test('miktar ve sıralama iddiaları dil veya çekimden bağımsız olarak model metninden kabul edilmez', async (t) => {
   for (const locale of ['tr', 'en']) await t.test(locale, async (inner) => {
     const { composition } = await overdueComposition(inner, { locale });
-    const response = (text) => ({ blocks: [{ type: 'paragraph', text: `{${totalSlot(composition)}}; ${text}.` }, { type: 'rows', source: 'T1' }] });
-    const rejected = locale === 'tr' ? ['ikisi gecikmiş', 'ikisinin termini geçmiş', 'ikimizin görevi', 'doksan dokuz görev var', 'üçer görev', 'beşinci görev', 'bir görev gecikmiş', 'biri açık']
-      : ['three tasks are late', 'twenty-one tasks', 'one task is late', 'the one task is late', 'one of the tasks', 'only one can be late', 'two hundred tasks', 'a third task', 'twice as many tasks'];
-    for (const text of rejected) assert.equal(issue(check(composition, response(text))), 'UNSUPPORTED_NUMBER', text);
-    for (const text of ['İKİ görev', 'FIVE tasks']) assert.equal(issue(check(composition, response(text))), 'UNSUPPORTED_NUMBER', 'dil karıştırmak sayı denetimini aşmaz');
-    const allowed = locale === 'tr' ? ['bir sonraki adım değerlendirilebilir', 'bir arada gösteriliyor', 'bir değerlendirme yapılabilir', 'birim onayı bekliyor', 'yüzey incelemesinin altında açıklama var', 'onlar yüz yüze görüşebilir', 'onun terminine göre', 'ona göre onu inceleyin']
-      : ['one can inspect the verified result', 'the one shown here is verified', 'based on the verified data', 'someone may review the work', 'the milestone is shown'];
-    for (const text of allowed) assert.equal(check(composition, response(text)).ok, true, text);
-    assert.equal(check(composition, response('THREE-24'), { userText: 'THREE-24' }).ok, true, 'kullanıcının harf/rakam kodu istisnası korunur');
-    assert.equal(check(composition, response('')).ok, true, 'sayısal yuva değeri sözcük denetiminden muaftır');
+    for (const text of ['ikimizin görevi', 'üçer görev', 'bir görev gecikmiş', 'bir risk olabilir', 'one task', 'first', 'twice as many', 'shortest', 'en uzununki', '更少']) {
+      assert.equal(issue(check(composition, { blocks: [{ type: 'paragraph', text: `{F1}; ${text}.` }, { type: 'rows', source: 'T1' }] })), 'BLOCK_INVALID', text);
+    }
+    assert.equal(check(composition, coveringBlocks(composition.view)).ok, true);
   });
 });
 
-test('süzülmüş dağılımın satırları yalnız yuvalarla yazılsa da ortak ölçüt kaybolmaz', async (t) => {
+test('süzülmüş dağılımın kapsamı sunucu satırlarında korunur', async (t) => {
   const stack = stackFor(t);
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'me', groupBy: 'priority' });
   const verdict = verifyRequested(ledger, ['data.groups.*.label', 'data.groups.*.count'],
     { operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'priority' }, filters: { assignee: 'me' } });
   assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
   const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }] });
-  const valid = check(sheet, { blocks: [{ type: 'paragraph', text: sheet.view.facts.filter((fact) => fact.table).map((fact) => `{${fact.id}}`).join(', ') }] });
+  const valid = check(sheet, { blocks: [{ type: 'rows', source: 'T1' }] });
   assert.equal(valid.ok, true, JSON.stringify(valid.issues));
-  assert.match(renderComposition(sheet, valid).text, /Ölçüt: Sorumlu\\: Ben/);
+  assert.match(renderComposition(sheet, valid).text, /Ölçüt: Sorumlu: Ben/);
 });
 
-test('yalnız sayım yuvası kullanılsa da doğrulanmış ölçüt sunucu ayrıntısıyla zorunlu gösterilir', async (t) => {
+test('sayımın kapsamı sunucu ayrıntısıyla zorunlu gösterilir', async (t) => {
   for (const locale of ['tr', 'en']) await t.test(locale, async (inner) => {
     const stack = stackFor(inner);
     const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { deadline: 'overdue', assignee: 'me' });
     const verdict = verifyRequested(ledger, ['totalCount'], { operation: 'value', metrics: ['tasks.total'], filters: { deadline: 'overdue', assignee: 'me' } }, { locale });
     assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
     const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }], locale });
-    const valid = check(sheet, { blocks: [{ type: 'paragraph', text: locale === 'en' ? 'There are {F1} tasks.' : '{F1} görev var.' }] });
+    const valid = check(sheet, { blocks: [{ type: 'details', source: 'D1' }] });
     assert.equal(valid.ok, true, JSON.stringify(valid.issues));
     assert.equal(sheet.view.details[0].required, true);
     const rendered = renderComposition(sheet, valid);

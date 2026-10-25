@@ -191,6 +191,10 @@ Rota AI yanıtındaki grafik (`AnswerChart.jsx`, biçimi `assistant.css`) halka 
 modülünden, ipucunu ortak `Tooltip` temel bileşeninden alır; yeni bir grafik kitaplığı yoktur. Renkler yalnızca tema
 belirteçleridir (`--accent`, `--c-purple`, … sıra sınıflarıyla `--series`); tanım renk taşımaz. Genişlik kapsayıcı
 sorgusuyla (`container: assistant-chart`) uyarlanır: dar kartta çubuk etiketi üste, halka açıklaması alta geçer.
+Üstbilgi sarılır, başlık ve kaynak alanı daralabilir; kesintisiz geçerli başlıklar `overflow-wrap: anywhere` ile
+bölünür. Küçük sıfır dışı değerler üç anlamlı basamakla, çok küçükleri bilimsel gösterimle yazılır; diğer değerlerde
+iki ondalık korunur. Etiket, ipucu, erişilebilir ad ve kopyalama aynı sayı biçimini kullanır. Dilim grubunun temel
+durumu görünürdür; işletim sistemi ve `body.reduce-motion` yalnızca animasyonu kapatır.
 Yanıt Markdown'unun liste girintisi grafik listelerine taşınmaz: grafik listeleri `.assistant-chart :is(...)` ile
 yanıt listelerinden daha özgül seçicilerle sıfırlanır. `Tooltip`'in `asChild` kipi çocuğun kendi olay işleyicilerini
 (klavye gezintisi, odak) korur ve ipucununkilerle birlikte çağırır.

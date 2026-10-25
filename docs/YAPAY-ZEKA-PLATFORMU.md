@@ -1885,7 +1885,8 @@ Ayrıntılı belge: [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.m
   düzeltilmiş kapıdan önceye aittir. Güncel kabul ölçümü bekliyor:
   117/117 + zorunlu ek 19/19; ayrıntı ve bekleyenler anlamsal katman §12.
 - **4D (uygulandı; kurum içi kabul açık):** doğrulanmış yanıtın isteğe bağlı sunum katmanı. Model yalnızca kapalı
-  bir düzen (`{"blocks":[...]}`) yazar; değerleri, tabloları, grafikleri ve kaynak işaretlerini sunucu yerleştirir
+  bir düzen (`{"blocks":[...]}`, yalnızca `details`, `rows`, `chart`) seçer; serbest model metni kabul edilmez.
+  Olgusal ilişkileri, metni, değerleri, tabloları, grafikleri ve kaynak işaretlerini sunucu yerleştirir
   (`src/domain/ai/groundedComposition.js`, `src/server/ai/assistant/answerComposition.js`). Düzen turu aynı oturumda,
   araçsız ve dar çıktı sınırıyla (Standart 1200 belirteç) bir kez yürür; geçersiz, kesik, boş, geç ya da başarısız
   düzen doğrulanmış belirlenimci anlatıma döner — düzeltme turu ve Derin devri yoktur. Akış evresi `composing`

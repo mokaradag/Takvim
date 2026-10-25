@@ -107,7 +107,9 @@ export function answerChartFence(spec) {
 
 /** Sayının yerel yazımı ve birimi; grafik etiketi ve kopyalanan metin aynı biçimi kullanır. */
 export function answerChartValue(value, unit, locale = 'tr') {
-  const number = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'tr-TR', { maximumFractionDigits: 2 }).format(value);
+  // Küçük değerler sıfıra yuvarlanmaz; üç anlamlı basamak kayan nokta gürültüsünü sınırlar.
+  const precision = value !== 0 && Math.abs(value) < 0.01 ? { maximumSignificantDigits: 3, notation: Math.abs(value) < 0.000001 ? 'scientific' : 'standard' } : { maximumFractionDigits: 2 };
+  const number = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'tr-TR', precision).format(value);
   if (unit === 'percent') return locale === 'en' ? `${number}%` : `%${number}`;
   if (unit === 'days') return `${number} ${locale === 'en' ? 'days' : 'gün'}`;
   if (unit === 'hours') return `${number} ${locale === 'en' ? 'h' : 'sa'}`;

@@ -17,24 +17,13 @@ export function compositionView(call) {
 }
 
 /**
- * Bütün olguları temsil eden geçerli düzen: kısa bir giriş paragrafı ve her tablo/ayrıntı bloğu.
- * Basit sayfada bütün yuvalar tek paragrafta kullanılır.
+ * Bütün tablo/ayrıntıları sunucu kaynaklarından seçer; atlanan ayrıntıları çizici ekler.
  */
-export function coveringBlocks(view, { lead = null } = {}) {
-  const english = view.language === 'en';
-  if (view.shape === 'simple') {
-    const ids = view.facts.map((fact) => `{${fact.id}}`).join(', ');
-    return { blocks: [{ type: 'paragraph', text: lead ? lead(view) : (english ? `Verified result: ${ids}.` : `Doğrulanmış sonuç: ${ids}.`) }] };
-  }
-  // Giriş, kayda bağlı olmayan bir olguya (ör. toplam) ya da bir kaydın adına dayanır; adsız kayıt değeri birden çok
-  // kayıtlı yanıtta reddedilir.
-  const anchor = view.facts.find((fact) => fact.row == null && fact.role === 'label') || view.facts.find((fact) => fact.row == null && !fact.subject)
-    || view.facts.find((fact) => fact.role === 'label');
+export function coveringBlocks(view) {
   return { blocks: [
-    { type: 'paragraph', text: lead ? lead(view) : (english ? `Here is what the verified data shows, starting with {${anchor.id}}.` : `Doğrulanmış veriye göre öne çıkan {${anchor.id}}.`) },
-    ...view.tables.map((table) => ({ type: 'rows', source: table.id })),
-    ...view.details.map((detail) => ({ type: 'details', source: detail.id }))
-  ] };
+    ...view.details.map((detail) => ({ type: 'details', source: detail.id })),
+    ...view.tables.map((table) => ({ type: 'rows', source: table.id }))
+  ].slice(-10) };
 }
 
 /** Düzen turunu yanıtlayan sahte sağlayıcı davranışı; `inspect` sayfayı ve çağrıyı görür. */

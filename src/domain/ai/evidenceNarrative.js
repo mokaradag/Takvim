@@ -379,13 +379,13 @@ function rowColumns(rows, locale) {
   return { titleKey, columns, columnKey, valuesOf, columnLabel, numericColumns };
 }
 
-/** Satırı adlandıran kaçışsız metin: kanıttaki satır bağlamının adı, başlık alanı ya da öznesi. */
 /** Satır adının yanında yazılan kaçışsız bağlam: görevin projesi (kod · ad) ve kişinin birimi. */
 function rowContext(row) {
   const context = row.entries[0]?.fact.semantic?.row;
   return Object.freeze({ project: context?.project ? [context.projectCode, context.project].filter(Boolean).join(' · ') : null, organization: context?.organization || null });
 }
 
+/** Satırı adlandıran kaçışsız metin: kanıttaki satır bağlamının adı, başlık alanı ya da öznesi. */
 function rowTitleText(row, titleKey, valuesOf) {
   const context = row.entries[0]?.fact.semantic?.row;
   const names = titleKey ? valuesOf(row, titleKey) : [];

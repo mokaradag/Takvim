@@ -37,7 +37,7 @@ function useRovingFocus(count) {
 }
 
 function percentText(value, locale) {
-  return new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'tr-TR', { style: 'percent', maximumFractionDigits: 1 }).format(value);
+  return answerChartValue(value * 100, 'percent', locale);
 }
 
 /** Değerin büyükten küçüğe sırası (eşit değerler aynı sırayı alır). */

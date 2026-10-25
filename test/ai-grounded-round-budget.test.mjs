@@ -354,3 +354,28 @@ test('the fullest grounded turn line stays inside the log sanitizer key limit an
   assert.equal(trace.context.escalation.reason, 'VERIFICATION_FAILED');
   assert.deepEqual(trace.context.usage, { input: 30, completion: 15, reasoning: null, firstEventMs: null, lengthStops: 0 });
 });
+
+
+test('tur belirteç toplamı her metriğin bütün model turlarında bildirilmesini gerektirir', async (t) => {
+  const { recordGroundedTurn } = await import('../src/server/ai/aiTelemetry.js');
+  const logs = captureConsole(t);
+  const complete = { input: 10, completion: 4, reasoning: 0 };
+  for (const [rounds, expected, modelRounds = rounds.length] of [
+    [[complete, complete], [20, 8, 0]],
+    [[{}, {}], [null, null, null]],
+    [[complete, {}], [null, null, null]],
+    [[{ input: 10, completion: 4 }, complete], [20, 8, null]],
+    [[{ input: 10, reasoning: 0 }, complete], [20, null, 0]],
+    [[{ completion: 4, reasoning: 0 }, complete], [null, 8, 0]],
+    [[{ input: 0, completion: 0, reasoning: 0 }], [0, 0, 0]],
+    [[], [null, null, null]],
+    [[complete], [null, null, null], 2],
+    [[...Array(16).fill(complete), {}], [null, null, null]]
+  ]) {
+    recordGroundedTurn({ outcome: 'grounded', rounds, modelRounds });
+    const line = turnTraces(logs).at(-1);
+    assert.deepEqual([line.context.usage.input, line.context.usage.completion, line.context.usage.reasoning], expected);
+    assert.deepEqual(line.context.rounds.map((round) => [round.input, round.completion, round.reasoning]),
+      rounds.slice(0, 16).map((round) => [round.input ?? null, round.completion ?? null, round.reasoning ?? null]));
+  }
+});

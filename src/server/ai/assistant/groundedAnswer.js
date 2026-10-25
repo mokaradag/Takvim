@@ -1287,7 +1287,7 @@ function compositionInput(turn, verdict) {
   const continues = answers.some((answer) => answer.request?.previousResult
     || answer.request?.entities?.some((entity) => entity.type === 'task' && priorIds.has(entity.id)));
   return { parts, missing, notes, locale: turn.locale, question: turn.question.text, previousQuestion: continues ? turn.question.previous : null,
-    userText: turn.question.userText, today: turn.context.today };
+    today: turn.context.today };
 }
 
 /**
@@ -1307,7 +1307,7 @@ async function presentVerdict(turn, verdict, compose) {
   if (turn.ledger.ids().length && turn.revalidatedAt !== turn.work && (await revalidate(turn) || turn.ledger.revoked())) return unavailableVerdict(turn.locale);
   turn.status(ASSISTANT_STREAM_PHASES.COMPOSING);
   const startedAt = Date.now();
-  const result = await composeGroundedAnswer({ session: turn.session, composition, userText: input.userText,
+  const result = await composeGroundedAnswer({ session: turn.session, composition, onProgress: () => turn.progress(),
     onRound: ({ startedAt: roundStartedAt, budget, result: round = null, error = null }) => {
       turn.modelRounds += 1;
       traceRound(turn, { purpose: 'compose', startedAt: roundStartedAt, result: round, error, budget });
@@ -1326,7 +1326,12 @@ async function presentVerdict(turn, verdict, compose) {
 
 /** Doğrulanmış sonucun gösterimi: kapsam notunu sunucu ekler, yalnızca atfedilen kanıt kaydedilir. */
 async function finish(turn, settled, onText, selectedBy = 'model', { compose = true } = {}) {
-  const verdict = await presentVerdict(turn, settled, compose);
+  let verdict = await presentVerdict(turn, settled, compose);
+  // Model/araç beklemesinden sonra, yanıt ve kalıcı kanıt kurulmadan önce son yetki sınırı.
+  if (turn.ledger.revoked() || (turn.ledger.ids().length && turn.revalidatedAt !== turn.work && (await revalidate(turn) || turn.ledger.revoked()))) {
+    verdict = unavailableVerdict(turn.locale);
+    turn.trace.presentation = { mode: 'narrative', reason: 'AUTHORIZATION' };
+  }
   const { ledger, locale } = turn;
   const cited = ledger.summaries(verdict.citedIds);
   turn.trace.evidence = cited.length;

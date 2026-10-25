@@ -1631,44 +1631,32 @@ gösterilir. Planlayıcı, 4C sözleşmesi, yazma araçları ve sağlayıcılar 
    gösterim değeri, tür, ölçüt, satır/ayrıntı bağı, kaydın adı için `role: "label"`), tablolar `T#` (sütunlar `C#`,
    en çok 8 satır önizleme), kayıt ayrıntıları `D#`, grafik adayları `G#`, `shape` (`simple`|`standard`) ve eksik
    bölümler. Satır adının bağlamı (görevin projesi, kişinin birimi) satıra bağlı ayrı bir yuvadır; yalnızca soru o
-   olguyu istediyse kapsam için zorunludur. Kaydın adı da yuvadır (kapsam için zorunlu değil): model adları
-   kopyalamak zorunda kalmaz. Sayfa kimlik, kanıt kimliği, ham alan yolu ya da Sicil taşımaz.
+   olguyu istediyse kapsam için zorunludur. Bu önizleme sunum seçimine yardımcı veridir; model bu yuvalardan
+   cümle kuramaz, bütün kayıt metinlerini sunucu çizer. Sayfa kimlik, kanıt kimliği, ham alan yolu ya da Sicil taşımaz.
 4. Güncel yetki yeniden doğrulanır; düzen turu **aynı oturumda**, `tools: []`, `toolChoice: "none"`, iki iletiyle
    (bayt bayt sabit yönerge + sayfa) yürür. Konuşma geçmişi, araç sonuçları ve önceki asistan metni gönderilmez.
 5. `validateComposition` yanıtı kapalı sözleşmeye göre denetler; `renderComposition` geçerli düzeni Markdown'a
-   çevirir. Kapsam notu ve kalıcı kanıt 4C'deki gibi sunucu tarafından eklenir.
+   çevirir. Düzen tamamlandıktan sonra güncel yetki tekrar doğrulanır; ancak bundan sonra yanıt ve kalıcı kanıt
+   kurulur. Yetki geri alındıysa kullanılamıyor yanıtı verilir, yetkisiz kanıt kaydedilmez.
 
-Akış evresi `composing` olarak yayımlanır; arayüz "Yanıt yazılıyor…" gösterir.
+Akış evresi `composing` olarak yayımlanır; arayüz "Yanıt yazılıyor…" gösterir. Düzen turundaki sağlayıcı
+olayları dış üretim gözcüsüne ilerleme bildirir; ham düzen çıktısı kullanıcıya aktarılmaz.
 
 ### 13.3 Kapalı düzen sözleşmesi ve doğrulayıcı
 
-Blok türleri: `paragraph`, `points` (≤ 8 madde), `rows` (tablo/liste), `details`, `chart`, `heading` (yalnızca
-uzun çok bölümlü yanıtta), `assessment` (en çok bir, ilk blok olamaz). İlk blok her zaman soruyu doğrudan yanıtlayan
-paragraftır. Model metninde **değer yazılmaz**: `{F1}` yuvası sunucunun doğrulanmış gösterim değeriyle değiştirilir
-(kalın), Türkçe ek yuvanın ardına yazılır (`{F1}'in`).
+Model yalnızca `details` (`D#`), `rows` (`T#`, `style: table|list`) ve `chart` (`G#`, adayın türlerinden biri)
+bloklarını seçer ve düzenler. İlk blok `details` veya `rows` olur. Her tablo kendi `rows` bloğuyla gösterilir;
+önizleme veya grafik kapsamın yerine geçemez. Kullanıcının açık tablo/liste tercihi önceliklidir. Atlanan bütün
+kayıt ayrıntıları, sayısal kapsam ve eksik/eşleşmesiz sonuç notları sunucu tarafından kaynaklarıyla eklenir.
 
-Reddedilen durumlar (her biri belirlenimci anlatıma döner): biçim (`SHAPE_INVALID`, `BLOCK_COUNT`, `BLOCK_INVALID`,
-`POINTS_INVALID`, `STYLE_INVALID`), uydurma ya da bozuk yuva/kaynak (`UNKNOWN_SLOT`, `SLOT_SYNTAX`, `UNKNOWN_SOURCE`,
-`DUPLICATE_SOURCE`, `DUPLICATE_BLOCK`), yuva dışında rakam — Unicode `\p{N}`, kullanıcının yazdığı harfli kodlar
-hariç — veya Türkçe/İngilizce sayı sözcüğü ve yaygın eki (`UNSUPPORTED_NUMBER`), kaynak işareti (`CITATION_FORBIDDEN`), bağlantı (`LINK_FORBIDDEN`), yuvasız paragraf ya
-da madde (`UNANCHORED_PROSE`), satır değerinin kendi satır adı olmadan yazılması (`ROW_LABEL_REQUIRED`; birden çok
-kayıtlı yanıtta kayıt değerleri için de), değerin başka bir kaydın adıyla eşlenmesi (`ROW_PAIRING`: bir metinde her
-değer kendinden önceki ya da sonraki en yakın adın kaydıdır ve eşlemeler kesişmez), iki
-satırın değerinin aynı maddede eşlenmesi (`ROW_MIXED`), tablo `rows` bloğuyla gösterilmiyorsa satırların doğrulanmış
-sıradan farklı anılması (`ROW_ORDER`; sıralama ve "ikinci görev" takibi bu sıraya dayanır), istenen bir olgunun temsil
-edilmemesi (`COVERAGE_INCOMPLETE`), giriş paragrafının olmaması (`LEAD_REQUIRED`), dil uyuşmazlığı, uzunluk ve biçim
-sınırları. Kullanıcının açıkça istediği tablo/liste düzeni modelin `style` seçiminden önce gelir; ayrıntı metni de
-aynı düzenle yazılır (tabloya giren tek satır ayrıntıda yinelenmez). HTML, Markdown ve görünmez
-karakterler kaçışlanır; model metni yalnızca düz metindir (en çok 4 kalın aralık).
+Serbest model metni, `paragraph`, `points`, `heading`, `assessment`, metin içi yuvalar ve ek alanlar kabul edilmez.
+Geçerli yuvalar çevrelerindeki cümlenin sayımını, karşılaştırmasını veya sıralamasını doğrulamaz. Bu nedenle sunucu
+model cümlesini anlamaya çalışmaz: sayı sözcüğü, anahtar sözcük veya Türkçe ek sözlüğü yoktur. Miktar, kayıt ilişkisi,
+sıra ve kapsamın anlamı mevcut doğrulanmış belirlenimci anlatımdan gelir. Doğal Türkçe ve İngilizce kayıt metinleri
+sözcük denetiminden geçmez; kaçışlı sunucu verisi olarak çizilir. Model yalnızca sunum seçer, olgusal ilişki yazamaz.
 
-Bilinçli gevşetmeler: yuvasız `assessment` yanıtı düşürmez, yalnızca gösterilmez; tam tablosu (`complete`, satır
-sayısı sayıyla aynı) `rows` bloğuyla gösterilen kümenin "Eşleşen kayıt" sayısı ayrıca yazılmak zorunda değildir.
-
-Zorunlu ayrıntılar: eksik ya da kısaltılmış sonuç notu ve eşleşmesiz bölüm notu (yuvası olmayan ayrıntı) sayfada
-`required: true` taşır; sayısal özetin kapsamını açıklayan doğrulanmış ayrıntı da zorunludur. Model `details`
-bloğunu eklemediyse sunucu ayrıntıyı atfıyla yanıtın sonuna ekler. Tablo yalnız yuvalarla anlatılıyorsa ortak
-ölçüt de sunucu tarafından gösterilir; olgu kapsamı/eşleme denetimleri korunur. Böylece çok
-bölümlü yanıtta eşleşmesi olmayan bölüm ya da sonucun eksik olduğu bilgisi kaybolmaz.
+Geçersiz biçim, bilinmeyen/yinelenen kaynak, geçersiz stil, eksik tablo kapsamı, dil uyuşmazlığı veya blok sınırını
+aşan yanıt mevcut belirlenimci anlatıma döner. Serbest metin reddi dilin sözcüklerine bağlı değildir.
 
 ### 13.4 Bütçe, süre ve devir
 
@@ -1677,13 +1665,13 @@ bölümlü yanıtta eşleşmesi olmayan bölüm ya da sonucun eksik olduğu bilg
 | Standart (`chat.tools`) | 1200 belirteç (`COMPOSITION_RUNTIME.maxOutputTokens`) | plan + düzen = 2 | Yok |
 | Derin (`chat.tools.reasoning`) | Profil sınırı (akıl yürütme payı) | plan + düzen = 2 | Yok |
 
-1200 sınırı en uzun geçerli düzene (2400 karakter düzyazı, ≤ 10 blok ve JSON yapısı ≈ bin belirteç) göre seçildi;
-daha uzun çıktı zaten geçersizdir ve `LENGTH` ile anlatıma döner. Genel profil sınırları artırılmadı. Gözlenen en
+1200 belirteç sınırı kapalı blok düzeninde korunur; profil sınırını yalnızca daraltır. `LENGTH` belirlenimci
+anlatıma döner. Genel profil sınırları artırılmadı. Önceki serbest metin protokolünde gözlenen en
 büyük düzen çıktısı 251 belirteçti (13.8). Düzen turunun kendi süre penceresi vardır (en çok 60 sn; oturumun kalan
 süresinden 5 sn teslim payı ayrılır; 8 sn'den az kaldıysa düzen istenmez — `BUDGET`). Düzen **Derin düşünmeye devretmez,
 düzeltme turu açmaz**; daha güzel düzyazı için devir üretilmez. İptal yukarı taşınır ve hiçbir şey yazılmaz.
 
-Geri dönüş nedenleri: `SHEET_LIMIT`, `CITATION_SCOPE`, `BUDGET`, `TIMEOUT`, `PROVIDER`, `LENGTH`, `EMPTY`, `INVALID`
+Geri dönüş nedenleri: `SHEET_LIMIT`, `AUTHORIZATION`, `CITATION_SCOPE`, `BUDGET`, `TIMEOUT`, `PROVIDER`, `LENGTH`, `EMPTY`, `INVALID`
 (doğrulayıcı sorun kodu ayrıca), `INTERNAL`.
 
 ### 13.5 Grafikler — `src/domain/ai/answerChart.js`, `src/features/ai/assistant/AnswerChart.jsx`
@@ -1716,12 +1704,16 @@ toplamları, ilk olay süresi, `length` duruşları), varsa `escalation` (ayrı 
 ve tur listesi (`purpose: "compose"` ile bütçe). Bağlam günlük temizleyicisinin nesne başına 25 alan sınırının
 içindedir (sınama korur). Soru, yanıt, kayıt adı, kanıt, Sicil, anahtar ya da model çıktısı günlüğe yazılmaz;
 reddedilen düzen metni de yazılmaz. Sayaçlar: `grounding.presentation` (`composed`, `narrative`, `byReason`, `charts`).
-`charts`, başarılı çizilen çit sayısıdır; reddedilen ya da kanıtına bağlı olmayan grafikler sayılmaz.
+`charts`, başarılı çizilen çit sayısıdır; reddedilen ya da kanıtına bağlı olmayan grafikler sayılmaz. Her belirteç
+metriği ancak bütün model turları bildirdiyse toplanır; eksik metrik `null` kalır. Tur izi kesilmişse toplam tam görünmez.
 
 İşletim anahtarı: `MERGEN_ROTA_AI_ANSWER_COMPOSITION` (varsayılan `true`; geçersiz değer güvenle `false` sayılır ve
 yapılandırma uyarısı verir). Kapalıyken model turu yoktur; 4C belirlenimci anlatımı aynen çalışır.
 
 ### 13.8 Nitelendirme — `scripts/answer-composition-qualification.mjs`
+
+Aşağıdaki eski Haiku ölçümleri önceki serbest metin protokolüne aittir; kapalı kaynak seçimi protokolünün model kabulü değildir.
+Yeni protokol için `dry` aşamaları belirlenimci kontrol sağlar; canlı model kabulü ayrıca yapılmalıdır.
 
 Vakalar üretimdeki asistan hizmetinden geçer (konuşma kaydı, salt okunur araçlar, doğrulayıcılar, kalıcı kanıt, sayfa,
 düzen doğrulayıcısı, çizici); planlama turları sabit `rota_plan` ile belirlenimcidir, yalnızca düzen turu modele
@@ -1780,9 +1772,8 @@ nedenlerinin incelenmesi (geri dönüşler tasarım gereği doğru yanıttır, a
 
 ### 13.10 Bilinen sınırlar
 
-- Bağlayıcı düzyazı modelindir: rakam, bağlantı, kaynak işareti, HTML ve yapı reddedilir; Türkçe/İngilizce sayı
-  sözcükleri kapalı sözcük/ek sözlüğüyle denetlenir. Nitel ifadeler ve modelin yuva yerine elle yazdığı adlar
-  belirlenimci olarak doğrulanmaz. Miktar denetimi genel doğal dil anlayışı ya da planlayıcı değildir.
+- Model yalnızca doğrulanmış sunucu bloklarını seçebilir; serbest özet, yorum, başlık ve öneri üretemez.
+  Daha geniş doğal dil yüzeyi, keyfî düzyazıyı denetleyen sözcük kurallarıyla açılamaz.
 - Düzeltme turu yoktur: geçersiz düzen doğrudan anlatıma döner (zayıf modelde geri dönüş oranı artar, gecikme
   sınırlı kalır).
 - Grafik tek dizili çubuk ve halka ile sınırlıdır; zaman serisi ve çok dizili karşılaştırma yoktur.

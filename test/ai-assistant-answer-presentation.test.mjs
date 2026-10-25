@@ -10,6 +10,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import postcss from 'postcss';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { findElement, mountComponent } from './helpers/clientComponentHarness.mjs';
 import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
@@ -21,7 +23,7 @@ const { AnswerChart } = await import('../src/features/ai/assistant/AnswerChart.j
 const { Tooltip } = await import('../src/components/ui-extras.jsx');
 const { RotaAssistantPanel, useRotaAssistant } = await import('../src/features/ai/assistant/RotaAssistant.jsx');
 const { createAssistantController } = await import('../src/features/ai/assistant/assistantController.js');
-const { answerChartFence } = await import('../src/domain/ai/answerChart.js');
+const { answerChartFence, answerChartValue } = await import('../src/domain/ai/answerChart.js');
 const { assistantMarkdownText, parseAssistantMarkdown } = await import('../src/features/ai/assistant/assistantMarkdown.js');
 const presentation = await import('../src/features/ai/assistant/assistantPresentation.js');
 const { ASSISTANT_STREAM_PHASES } = await import('../src/domain/ai/assistantContract.js');
@@ -276,4 +278,72 @@ test('dar ekranda panel zaten tam ekran sayfadır: odak düğmesi yoktur ve odak
   assert.doesNotMatch(aside.props.className, /\bis-focused\b/);
   assert.equal(findElement(panel.output, (node) => typeof node.props?.className === 'string' && node.props.className.includes('rota-assistant-focus-toggle')), null);
   panel.unmount();
+});
+
+
+test('küçük doğrulanmış grafik değeri görünür etiket, ipucu, erişilebilir ad ve kopyada aynıdır', () => {
+  for (const locale of ['tr', 'en']) {
+    const value = locale === 'tr' ? '0,001 gün' : '0.001 days';
+    const spec = { ...SPEC, locale, items: [{ label: 'Küçük değer', value: 0.001 }, { label: 'Sıfır', value: 0 }] };
+    assert.equal(answerChartValue(0.001, 'days', locale), value);
+    const markup = renderToStaticMarkup(React.createElement(AnswerChart, { spec }));
+    assert.ok(markup.includes(`aria-label="Küçük değer: ${value}"`));
+    assert.ok(markup.includes(`aria-hidden="true">${value}</span>`));
+    const bar = findElement(mountComponent(AnswerChart, { spec }).output, named('BarChart'));
+    const bars = mountComponent(bar.type, bar.props);
+    const tooltip = bars.output.props.children[0].props.children;
+    assert.ok(renderToStaticMarkup(tooltip.props.content).includes(`class="rt-val">${value}</span>`));
+    assert.ok(assistantMarkdownText(answer(spec), { evidenceIds: new Set(['R1']) }).includes(`Küçük değer\t${value}`));
+  }
+});
+
+test('grafik sayı hassasiyeti sıfır sınırını korur ve kayan nokta gürültüsünü göstermez', () => {
+  for (const [input, expected] of [[0, '0'], [-0, '-0'], [0.001, '0.001'], [0.0049, '0.0049'], [0.005, '0.005'],
+    [0.00999, '0.00999'], [0.01, '0.01'], [0.1 + 0.2, '0.3'], [1e-7, '1E-7'], [Number.MIN_VALUE, '5E-324']]) {
+    assert.equal(answerChartValue(input, 'number', 'en'), expected);
+  }
+  for (const value of [Number.MIN_VALUE, 1e-100, 1e-8, 0.000001, 0.000999, 0.004999, 0.005001]) {
+    assert.notEqual(answerChartValue(value, 'number', 'en'), '0');
+    assert.notEqual(answerChartValue(value, 'number', 'tr'), '0');
+  }
+  assert.equal(answerChartValue(1234, 'count', 'tr'), '1.234');
+  assert.equal(answerChartValue(1234, 'count', 'en'), '1,234');
+  assert.equal(answerChartValue(0.001, 'percent', 'tr'), '%0,001');
+  assert.equal(answerChartValue(0.001, 'hours', 'en'), '0.001 h');
+  const spec = { ...SPEC, type: 'donut', unit: 'count', items: [{ label: 'Küçük pay', value: 1 }, { label: 'Kalan', value: 999999 }] };
+  const donut = findElement(mountComponent(AnswerChart, { spec }).output, named('DonutChart'));
+  const slices = mountComponent(donut.type, donut.props);
+  const tooltip = findElement(slices.output, (node) => node.type === Tooltip && node.props.title === 'Küçük pay');
+  assert.ok(renderToStaticMarkup(tooltip.props.content).includes('class="rt-val">%0,0001</span>'), 'küçük pozitif pay da sıfır gösterilmez');
+});
+
+test('iki azaltılmış hareket yolu grafik animasyonunu kapatır; temel grafik durumu görünürdür', () => {
+  const root = postcss.parse(readFileSync(new URL('../src/app/styles/assistant.css', import.meta.url), 'utf8'));
+  const base = root.nodes.find((node) => node.type === 'rule' && node.selector === '.assistant-chart-slices');
+  assert.ok(base, 'dilim grubunun temel kuralı');
+  assert.equal(base.nodes.some((node) => node.prop === 'opacity' && Number(node.value) < 1), false, 'animasyon olmadan SVG varsayılanı görünür kalır');
+  const media = root.nodes.find((node) => node.type === 'atrule' && node.name === 'media' && node.params === '(prefers-reduced-motion: reduce)');
+  const disables = (rule) => rule.nodes.some((node) => node.prop === 'animation' && node.value === 'none' && node.important);
+  assert.ok(media.nodes.some((node) => node.type === 'rule' && node.selectors.includes('.rota-assistant *') && disables(node)));
+  assert.ok(root.nodes.some((node) => node.type === 'rule' && node.selectors.includes('body.reduce-motion .rota-assistant *') && disables(node)));
+  for (const selector of ['.assistant-chart-fill', '.assistant-chart-slices']) {
+    const rule = root.nodes.find((node) => node.type === 'rule' && node.selector === selector);
+    assert.equal(rule.nodes.some((node) => node.prop === 'opacity' && Number(node.value) === 0 || node.prop === 'transform' && node.value.includes('scaleX(0)')), false, selector);
+  }
+});
+
+test('grafik başlığının dar kutuda bölünmesi ve üstbilginin sarılması CSS sözleşmesidir', () => {
+  const root = postcss.parse(readFileSync(new URL('../src/app/styles/assistant.css', import.meta.url), 'utf8'));
+  const declarations = (selector) => Object.fromEntries(root.nodes.find((node) => node.type === 'rule' && node.selector === selector).nodes.filter((node) => node.type === 'decl').map((node) => [node.prop, node.value]));
+  assert.equal(declarations('.assistant-chart-head')['flex-wrap'], 'wrap');
+  const title = declarations('.assistant-chart-title');
+  assert.equal(title['min-width'], '0');
+  assert.equal(title['overflow-wrap'], 'anywhere');
+  const meta = declarations('.assistant-chart-meta');
+  assert.equal(meta['min-width'], '0');
+  assert.equal(meta['overflow-wrap'], 'anywhere');
+  assert.notEqual(meta['white-space'], 'nowrap');
+  const spec = { ...SPEC, title: 'X'.repeat(80) };
+  assert.ok(answerChartFence(spec), 'geçerli başlık sınırı daraltılmadı');
+  assert.ok(renderToStaticMarkup(React.createElement(AnswerChart, { spec })).includes(spec.title));
 });

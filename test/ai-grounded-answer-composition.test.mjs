@@ -11,9 +11,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { captureConsole, createAiStack, sendTurn } from './helpers/aiStack.mjs';
+import { captureConsole, createAiStack, readSse, sendTurn } from './helpers/aiStack.mjs';
 import { AYSE, NOW, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { composer, coveringBlocks, isCompositionCall } from './helpers/compositionScenario.mjs';
+import { composer, compositionView, coveringBlocks, isCompositionCall } from './helpers/compositionScenario.mjs';
 import { declared } from './helpers/evidenceScenario.mjs';
 
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
@@ -57,11 +57,7 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   const logs = captureConsole(t);
   let sheet;
   stack.provider.enqueue(plan(), composer((view) => {
-    const total = view.facts.find((fact) => fact.row == null && fact.kind === 'number');
-    const label = view.facts.find((fact) => fact.role === 'label' && fact.row === 1);
-    const days = view.facts.find((fact) => fact.table && fact.row === 1 && fact.kind === 'number');
-    return { blocks: [{ type: 'paragraph', text: `Şu anda {${total.id}} gecikmiş göreviniz var; en uzun süredir geciken {${label.id}}, {${days.id}} gündür bekliyor.` },
-      { type: 'rows', source: 'T1', style: 'table' }, { type: 'chart', source: 'G1', style: 'bar' }] };
+    return { blocks: [{ type: 'details', source: 'D1' }, { type: 'rows', source: 'T1', style: 'table' }, { type: 'chart', source: 'G1', style: 'bar' }] };
   }, (view) => { sheet = view; }));
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
   const answer = doneOf(response).assistantMessage;
@@ -74,7 +70,7 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   assert.equal(compose.messages.length, 2, 'düzen turu konuşma geçmişini ve araç sonuçlarını yeniden göndermez');
   assert.equal(sheet.question, QUESTION);
   assert.ok(response.events.some((event) => event.event === 'status' && event.data.phase === 'composing'));
-  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var; en uzun süredir geciken \*\*Haftalık durum toplantısı\*\*, \*\*23\*\* gündür bekliyor\\\. 【R1】/);
+  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
   const blocks = parseAssistantMarkdown(answer.content);
   const chart = parseAnswerChart(blocks.find((block) => block.type === 'code').text);
   assert.deepEqual(chart.items.map((item) => [item.label, item.value]), [['Haftalık durum toplantısı', 23], ['Radar test planı', 10], ['Kısmi kendi görevim', 1]]);
@@ -104,9 +100,9 @@ test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; d�
   });
   const failures = [
     ['düz metin', { type: 'answer', native: true, text: 'Şu anda üç gecikmiş göreviniz var.' }, 'INVALID', 'SHAPE_INVALID'],
-    ['uydurma yuva', composer(() => ({ blocks: [{ type: 'paragraph', text: 'Toplam {F99}.' }, { type: 'rows', source: 'T1' }] })), 'INVALID', 'UNKNOWN_SLOT'],
-    ['uydurma sayı', composer((view) => ({ blocks: [{ type: 'paragraph', text: `Toplam {${view.facts.find((fact) => fact.row == null).id}}, bunların 2 tanesi kritik.` }, { type: 'rows', source: 'T1' }] })), 'INVALID', 'UNSUPPORTED_NUMBER'],
-    ['eksik kapsam', composer((view) => ({ blocks: [{ type: 'paragraph', text: `Toplam {${view.facts.find((fact) => fact.row == null).id}}.` }] })), 'INVALID', 'COVERAGE_INCOMPLETE'],
+    ['uydurma yuva', composer(() => ({ blocks: [{ type: 'paragraph', text: 'Toplam {F99}.' }, { type: 'rows', source: 'T1' }] })), 'INVALID', 'BLOCK_INVALID'],
+    ['uydurma sayı', composer((view) => ({ blocks: [{ type: 'paragraph', text: `Toplam {${view.facts.find((fact) => fact.row == null).id}}, bunların 2 tanesi kritik.` }, { type: 'rows', source: 'T1' }] })), 'INVALID', 'BLOCK_INVALID'],
+    ['eksik kapsam', composer(() => ({ blocks: [{ type: 'details', source: 'D1' }] })), 'INVALID', 'COVERAGE_INCOMPLETE'],
     ['kesik çıktı', { type: 'answer', native: true, text: '{"blocks":[{"type":"paragraph","text":"Şu', finishReason: 'length' }, 'LENGTH', null],
     ['boş yanıt', { type: 'answer', native: true, text: '', chunks: [], finishReason: 'stop' }, 'EMPTY', null],
     ['sağlayıcı hatası', { type: 'status', status: 503 }, 'PROVIDER', null]
@@ -133,7 +129,7 @@ test('Derin kipte düzen Derin oturumunda yürür ve düşünmeye yer bırakan p
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION, mode: 'deep' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.deepEqual(stack.provider.calls.map((call) => [call.model, call.maxOutputTokens]), [[DEEP.model, DEEP.maxOutputTokens], [DEEP.model, DEEP.maxOutputTokens]]);
-  assert.match(answer.content, /^Doğrulanmış veriye göre öne çıkan /);
+  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
 });
 
 test('kalan süre düzen penceresine yetmiyorsa düzen istenmez; doğrulanmış anlatım gösterilir', async (t) => {
@@ -200,7 +196,7 @@ test('İngilizce plan İngilizce olgu sayfası ve yanıt üretir', async (t) => 
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Show my overdue tasks.' })).assistantMessage;
   assert.equal(sheet.language, 'en');
   assert.ok(sheet.facts.some((fact) => fact.value === '7 September 2026'));
-  assert.match(answer.content, /^Here is what the verified data shows/);
+  assert.match(answer.content, /^\*\*3\*\* matching tasks were found/);
   assert.match(answer.content, /\| Task \| Deadline \| Overdue days \|/);
 });
 
@@ -209,4 +205,59 @@ test('kısmi kapsamlı kanıtın notu düzenlenmiş yanıta da sunucu tarafında
   stack.provider.enqueue(plan(), composer());
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
   assert.ok(answer.content.trimEnd().endsWith('_Not: Bu yanıt yalnızca görüntüleme yetkiniz bulunan kayıtları kapsar; ilgili projelerin tamamını yansıtmayabilir._'));
+});
+
+
+test('etkin düzen akışı kısa dış gözcüye ilerleme bildirir; ham model metni yayımlanmaz', async (t) => {
+  const { assistantStreamResponse } = await import('../src/server/ai/assistant/assistantStreamResponse.js');
+  const stack = stackFor(t);
+  stack.provider.enqueue(plan(), { type: 'deferred-stream' });
+  const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: QUESTION, mode: 'standard' }) });
+  t.after(() => turn.claim.release());
+  const stallMs = 100;
+  let clock = 0;
+  t.mock.method(performance, 'now', () => clock);
+  assert.ok(stallMs < COMPOSITION_RUNTIME.timeoutMs);
+  const pending = readSse(assistantStreamResponse(turn, { stallMs, keepaliveMs: 10, progressEventMs: 10 }));
+  await stack.provider.waitForCalls(2);
+  const call = stack.provider.calls[1];
+  // Toplam bekleme dış gözcüyü aşar; her olay kendi başına ilerlemedir.
+  for (let index = 0; index < 12; index += 1) {
+    clock += stallMs / 3;
+    call.think();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  call.emit(JSON.stringify(coveringBlocks(compositionView(call))));
+  call.complete();
+  const response = await pending;
+  assert.equal(response.events.some((event) => event.event === 'error'), false, response.text);
+  assert.equal(doneOf(response).assistantMessage.finishReason, 'stop');
+  assert.ok(response.events.some((event) => event.event === 'progress'));
+  assert.equal(response.events.some((event) => event.event === 'delta' && event.data.text?.includes('"blocks"')), false);
+  assert.equal(call.streamClosed, true);
+  assert.equal(stack.db.aiMessageEvidence.length, 1);
+});
+
+test('düzen beklerken geri alınan yetki başarılı ve başarısız düzende kalıcı kanıta ulaşamaz', async (t) => {
+  for (const valid of [true, false]) await t.test(valid ? 'geçerli düzen' : 'belirlenimci geri dönüş', async (inner) => {
+    const stack = stackFor(inner);
+    const logs = captureConsole(inner);
+    stack.provider.enqueue(plan({ ...OVERDUE_LIST, filters: { deadline: 'overdue' } }), { type: 'deferred-stream' });
+    const pending = sendTurn({ turnId: randomUUID(), message: 'Geciken görevleri göster.' });
+    await stack.provider.waitForCalls(2);
+    const call = stack.provider.calls[1];
+    assert.ok(JSON.stringify(call.messages).includes('Okuma görevi bir'), 'hibeyle okunan kayıt düzen öncesinde yetkilidir');
+    stack.db.projectAccess = [];
+    call.emit(valid ? JSON.stringify(coveringBlocks(compositionView(call))) : '{}');
+    call.complete();
+    const answer = doneOf(await pending).assistantMessage;
+    assert.equal(stack.db.aiMessageEvidence.length, 0, 'yetkisiz kanıt teslimden önce de kaydedilmez');
+    assert.equal(answer.finishReason, 'unavailable');
+    assert.deepEqual(answer.evidence, []);
+    assert.doesNotMatch(answer.content, /Okuma görevi bir|Haftalık durum toplantısı|Radar test planı/);
+    const saved = stack.db.aiConversationMessages.filter((row) => row.Role === 'assistant');
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].Content, answer.content);
+    assert.equal(turnLines(logs)[0].context.presentation.reason, 'AUTHORIZATION');
+  });
 });

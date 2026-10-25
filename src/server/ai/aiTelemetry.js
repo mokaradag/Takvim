@@ -739,7 +739,7 @@ export function recordGroundedAnswer({ outcome, rounds = 0, evidence = 0, repair
 const TURN_OUTCOMES = new Set(['grounded', 'clarification', 'abstained', 'not_found', 'unavailable', 'general_redirect', 'failed', 'error']);
 const ROUND_PURPOSES = new Set(['plan', 'tools', 'follow-up', 'select', 'repair', 'declaration', 'retry', 'compose']);
 const PRESENTATION_MODES = new Set(['composed', 'narrative']);
-const PRESENTATION_REASONS = new Set(['SHEET_LIMIT', 'CITATION_SCOPE', 'BUDGET', 'TIMEOUT', 'PROVIDER', 'LENGTH', 'EMPTY', 'INVALID', 'INTERNAL']);
+const PRESENTATION_REASONS = new Set(['SHEET_LIMIT', 'AUTHORIZATION', 'CITATION_SCOPE', 'BUDGET', 'TIMEOUT', 'PROVIDER', 'LENGTH', 'EMPTY', 'INVALID', 'INTERNAL']);
 const CHART_TYPES = new Set(['bar', 'donut']);
 const SAFE_ISSUE = /^[A-Z][A-Z0-9_]{0,40}$/;
 
@@ -779,9 +779,11 @@ export function recordGroundedTurn(trace = {}) {
       grounding.presentation.charts += presentation.charts;
     }
   });
-  const rounds = (Array.isArray(trace.rounds) ? trace.rounds : []).slice(0, 16);
-  // Sağlayıcının bildirdiği sayıların toplamı; hiçbir tur bildirmediyse bilinmiyor (`null`).
-  const total = (key) => rounds.reduce((sum, round) => (safeCount(round?.[key]) == null ? sum : (sum ?? 0) + round[key]), null);
+  const allRounds = Array.isArray(trace.rounds) ? trace.rounds : [];
+  const rounds = allRounds.slice(0, 16);
+  // Her metrik ancak bütün model turları bildirdiyse tamdır; bilinmeyen kullanım sıfır değildir.
+  const total = (key) => allRounds.length && (trace.modelRounds == null || trace.modelRounds === allRounds.length) && allRounds.every((round) => safeCount(round?.[key]) != null)
+    ? allRounds.reduce((sum, round) => sum + round[key], 0) : null;
   const escalation = trace.escalation && typeof trace.escalation === 'object' ? {
     requestedMode: ['standard', 'deep'].includes(trace.escalation.requestedMode) ? trace.escalation.requestedMode : null,
     models: (Array.isArray(trace.escalation.models) ? trace.escalation.models : []).map(safeModel).filter(Boolean).slice(0, 4),

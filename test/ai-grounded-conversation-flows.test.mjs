@@ -96,7 +96,7 @@ test('B: satır göndergesi ("ilk görev") yalnızca önceki listenin 1. satır�
   assert.equal(record.view.shape, 'simple');
   assert.deepEqual(record.view.facts.map((fact) => [fact.label, fact.value, fact.role ?? null]),
     [['Öncelik', 'Orta', null], ['Termin', '7 Eylül 2026', null], ['Görev', 'Haftalık durum toplantısı', 'label']], 'kaydın adı da doğrulanmış bir yuvadır');
-  assert.equal(record.answer.content, 'Doğrulanmış sonuç\\: **Orta**, **7 Eylül 2026**, **Haftalık durum toplantısı**\\. 【R1】');
+  assert.equal(record.answer.content, '**Haftalık durum toplantısı** görevinin önceliği **Orta** ve termini **7 Eylül 2026**. 【R1】');
   const pronoun = await ask('Onun projesi ne?', [rotaPlan({ previousResult: true, operation: 'list', metrics: ['task.title', 'task.project'],
     population: { tool: 'rota_task_search', collection: 'tasks' }, fields: [{ metric: 'task.project', tool: 'rota_task_search', path: 'data.tasks.*.project.name' }] }), 'compose']);
   assert.equal(pronoun.answer.finishReason, 'stop');
@@ -105,7 +105,7 @@ test('B: satır göndergesi ("ilk görev") yalnızca önceki listenin 1. satır�
   // Projenin adı satır adının bağlamıdır; düzende satıra bağlı ayrı bir yuva olarak yanıta girer.
   assert.deepEqual(pronoun.view.facts.map((fact) => [fact.label, fact.value]), [['Görev', 'Haftalık durum toplantısı'], ['Proje', 'RDR · Radar Modernizasyonu']]);
   assert.equal(pronoun.view.shape, 'simple');
-  assert.ok(pronoun.answer.content.includes('RDR · Radar Modernizasyonu'));
+  assert.ok(pronoun.answer.content.startsWith('**Haftalık durum toplantısı** görevi **Radar Modernizasyonu** projesindedir. 【R1】'), pronoun.answer.content);
 });
 
 test('C: süzgeç değişikliği ("peki tamamlananlar?") yeni ve bağımsız bir istektir; önceki küme taşınmaz', async (t) => {
@@ -269,7 +269,7 @@ test('K: genel sohbetten sonra Rota sorusu doğal yazılır; genel yanıt metni 
 test('L: İngilizce zincir İngilizce sayfa ve yanıtla sürer', async (t) => {
   const { ask } = conversation(t);
   const first = await ask('Show my overdue tasks.', [rotaPlan(OVERDUE_LIST, { language: 'en' }), 'compose'], { language: 'en' });
-  assert.match(first.answer.content, /^Here is what the verified data shows/);
+  assert.match(first.answer.content, /^\*\*3\*\* matching tasks were found/);
   const second = await ask('What are their priorities?', [rotaPlan({ previousResult: true, operation: 'list', metrics: ['task.title', 'task.priority'],
     population: { tool: 'rota_task_search', collection: 'tasks' } }, { language: 'en' }), 'compose'], { language: 'en' });
   assert.equal(second.answer.finishReason, 'stop');

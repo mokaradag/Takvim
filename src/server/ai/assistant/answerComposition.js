@@ -17,8 +17,7 @@ import { compositionMessages } from './groundedPrompt.js';
  */
 export const COMPOSITION_RUNTIME = Object.freeze({
   /**
-   * Düşünmesiz modelde düzenin çıktı sınırı. En uzun geçerli düzen (2400 karakter düzyazı, en çok on blok ve JSON
-   * yapısı) yaklaşık bin belirteçtir; daha uzun çıktı zaten geçersizdir, kesilip belirlenimci anlatıma döner.
+   * Düşünmesiz modelde kapalı düzenin çıktı sınırı; profil sınırını yalnızca daraltır.
    */
   maxOutputTokens: 1200,
   /** Düzen turunun en uzun süresi; oturumun kalan süresinden ayrıca `reserveMs` teslim payı kalır. */
@@ -41,7 +40,7 @@ function outputBudget(session) {
  * @returns {Promise<{ ok: true, text: string, citedIds: string[], chart: string|null, charts: number, blocks: number }
  *   | { ok: false, reason: string, issue?: string }>}
  */
-export async function composeGroundedAnswer({ session, composition, userText = '', onRound = null }) {
+export async function composeGroundedAnswer({ session, composition, onProgress = null, onRound = null }) {
   const remaining = Number(session.remainingMs?.() ?? 0);
   const windowMs = Math.min(COMPOSITION_RUNTIME.timeoutMs, remaining - COMPOSITION_RUNTIME.reserveMs);
   if (!Number.isFinite(windowMs) || windowMs < COMPOSITION_RUNTIME.minMs) return { ok: false, reason: 'BUDGET' };
@@ -52,7 +51,7 @@ export async function composeGroundedAnswer({ session, composition, userText = '
   const startedAt = Date.now();
   let result;
   try {
-    result = await session.round({ messages: compositionMessages(composition.view), tools: [], toolChoice: 'none', maxOutputTokens: budget, signal: controller.signal });
+    result = await session.round({ messages: compositionMessages(composition.view), tools: [], toolChoice: 'none', maxOutputTokens: budget, signal: controller.signal, onEvent: () => { onProgress?.(); } });
   } catch (error) {
     onRound?.({ startedAt, budget, error });
     // Turun kendisi bittiyse (kullanıcı iptali, oturum süre sınırı) düzen beklenmez; hata turu sonlandırır.
@@ -70,7 +69,7 @@ export async function composeGroundedAnswer({ session, composition, userText = '
   try {
     const parsed = parseCompositionResponse(result.text);
     if (!parsed) return { ok: false, reason: 'INVALID', issue: 'SHAPE_INVALID' };
-    const validated = validateComposition(composition, parsed, { userText });
+    const validated = validateComposition(composition, parsed);
     if (!validated.ok) return { ok: false, reason: 'INVALID', issue: validated.issues[0] };
     const rendered = renderComposition(composition, validated);
     return rendered.text.trim() ? { ok: true, ...rendered } : { ok: false, reason: 'INVALID', issue: 'EMPTY_RENDER' };
