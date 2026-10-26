@@ -1173,7 +1173,7 @@ HTTP durumu değişemeyeceği için her akış **tam olarak bir** sonlandırıc�
 | Olay | Yük | Anlam |
 | --- | --- | --- |
 | `accepted` | `{ v: 1, conversation, userMessage, mode, replay, context: { trimmed, omittedMessages } }` | İstek kabul edildi; kullanıcı iletisi kaydedildi (ilk olay) |
-| `status` | `{ phase: 'generating' \| 'thinking' }` | Gerçek evre geçişi (sağlayıcı yanıt vermeye başladı / model düşünüyor) |
+| `status` | `{ phase: 'generating' \| 'thinking' \| 'tools' \| 'verifying' \| 'composing' }` | Gerçek evre geçişi (sağlayıcı yanıt vermeye başladı / model düşünüyor / yetkili Rota verisi okunuyor / yanıtın kanıtları doğrulanıyor / doğrulanmış yanıtın düzeni hazırlanıyor) |
 | `progress` | `{}` | Görünür olay üretmeyen gerçek üretim ilerlemesi (gizli akıl yürütme, araç bağımsız değişkeni, araç yürütmesi); en fazla 10 sn'de bir |
 | `delta` | `{ text }` | Görünür yanıt metninin sıradaki parçası |
 | `done` | `{ conversation, assistantMessage (metinsiz, uzunluklu), replayed }` | Yanıt tamamlandı VE kaydedildi |
@@ -1884,3 +1884,15 @@ Ayrıntılı belge: [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.m
   `scripts/planner-evaluation.mjs`; tarihsel Haiku 4.5 88/117 ölçümü
   düzeltilmiş kapıdan önceye aittir. Güncel kabul ölçümü bekliyor:
   117/117 + zorunlu ek 19/19; ayrıntı ve bekleyenler anlamsal katman §12.
+- **4D (uygulandı; kurum içi kabul açık):** doğrulanmış yanıtın isteğe bağlı sunum katmanı. Model yalnızca kapalı
+  bir düzen (`{"blocks":[...]}`, yalnızca `details`, `rows`, `chart`) seçer; serbest model metni kabul edilmez.
+  Olgusal ilişkileri, metni, değerleri, tabloları, grafikleri ve kaynak işaretlerini sunucu yerleştirir
+  (`src/domain/ai/groundedComposition.js`, `src/server/ai/assistant/answerComposition.js`). Düzen turu aynı oturumda,
+  araçsız ve dar çıktı sınırıyla (Standart 1200 belirteç) bir kez yürür; geçersiz, kesik, boş, geç ya da başarısız
+  düzen doğrulanmış belirlenimci anlatıma döner — düzeltme turu ve Derin devri yoktur. Akış evresi `composing`
+  ("Yanıt yazılıyor…"). Kapalı grafik tanımı (`rota-chart`, çubuk/halka) sunucuda kurulur, istemcide yeniden
+  doğrulanır ve yalnızca yanıtın kanıtına bağlıysa çizilir. Masaüstünde panel aynı bileşenle odak görünümüne
+  genişler (konuşma, taslak ve süren yanıt korunur; Esc önce odaktan çıkar). Tur başına tek içeriksiz tamamlanma
+  satırı (`ai.grounded.turn`: `presentation`, `usage`, `escalation`). Sunum ve grafik sayaçları yalnızca gerçekten teslim edilen kendi yanıtını sayar; kayıtta/teslimde hata veya son anda yanıt değişimi olursa girişimdeki sunum sayılmaz, model turu ölçümleri korunur. İşletim anahtarı
+  `MERGEN_ROTA_AI_ANSWER_COMPOSITION` (varsayılan açık). Haiku 4.5 vekil ölçümü ve kurum içi kabul yolu: anlamsal
+  katman §13.

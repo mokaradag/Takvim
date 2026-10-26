@@ -242,5 +242,7 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
   const rendered = request ? renderableFacts(request, selection.facts, evidence, answer, emptyProperties) : selection.facts;
   const normalized = renderVerifiedNarrative(rendered, { locale, layout, operation: request?.operation || null, empty: emptyProofs });
   if (normalized.length > FACT_LIMITS.maxAnswerChars) return { ok: false, citedIds: [], issues: [{ code: 'ANSWER_TOO_LARGE' }] };
-  return { ok: true, normalized, citedIds, facts: selection.facts, issues: [] };
+  // Anlatımın girdisi, kanıta dayalı yanıt düzeni için de aynı doğrulanmış olgulardır (yeni olgu eklenmez).
+  const presentation = Object.freeze({ facts: Object.freeze(rendered), layout, operation: request?.operation || null, empty: Object.freeze([...emptyProofs]) });
+  return { ok: true, normalized, citedIds, facts: selection.facts, presentation, issues: [] };
 }

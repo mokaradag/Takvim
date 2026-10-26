@@ -87,6 +87,8 @@ export const Icons = {
   ArrowDown: (p) => <Icon {...p} d='<path d="M12 5v14M19 12l-7 7-7-7"/>' />,
   Stop: (p) => <Icon {...p} d='<rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/>' />,
   History: (p) => <Icon {...p} d='<path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5"/><path d="M12 7.5V12l3 2"/>' />,
+  Maximize: (p) => <Icon {...p} d='<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>' />,
+  Minimize: (p) => <Icon {...p} d='<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>' />,
   MessagePlus: (p) => <Icon {...p} d='<path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7v6M9 10h6"/>' />,
   Message: (p) => <Icon {...p} d='<path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 8.5h8M8 12h5"/>' />,
   Notes: (p) => <Icon {...p} d='<path d="M14.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7.5z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>' />,

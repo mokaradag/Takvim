@@ -3,7 +3,7 @@
    Extra UI primitives — Tooltip, InfoButton, AnimatedNumber,
    ColumnFilter, AnimatedBar, ChartTooltip
    ============================================================ */
-import React, { useCallback as useCb, useState as useSx, useEffect as useEx, useRef as useRx } from 'react';
+import React, { useCallback as useCb, useState as useSx, useEffect as useEx, useRef as useRx, useId as useIx } from 'react';
 import ReactDOM from 'react-dom';
 import { modalTrapDepth } from '../hooks/useModalFocusTrap.js';
 import { DateInput } from './DateInput';
@@ -26,8 +26,24 @@ export { OPTION_SEARCH_THRESHOLD, matchesOptionQuery };
  * bilgi klavye kullanıcısına hiç açılmıyordu. Her ipucunu sekme durağı yapmak
  * ise klavye gezinmesini bozardı; bu yüzden davranış açıkça seçilir.
  */
-export function Tooltip({ children, content, icon, title, delay = 90, asChild = false, wrapperStyle, accent, focusable = false, ariaLabel }) {
+export function Tooltip({ children, content, icon, title, delay = 90, asChild = false, wrapperStyle, accent, focusable = false, ariaLabel, disabled = false, onFocusOwnershipChange }) {
   const [show, setShow] = useSx(false);
+  const [hovered, setHovered] = useSx(false);
+  // Odak hedefi ile kalıcı ipucu sahipliği ayrıdır; fare odağı yalnızca hover kullanır.
+  const [focus, setFocus] = useSx(null);
+  const focused = Boolean(focus?.persistent);
+  const focusListener = useRx(onFocusOwnershipChange);
+  focusListener.current = onFocusOwnershipChange;
+  // Grafik vurgusu da aynı kalıcı odak sahibini izler; pointer odağını yeniden yorumlamaz.
+  useEx(() => {
+    focusListener.current?.(focused);
+    return () => focusListener.current?.(false);
+  }, [focused]);
+  const pointerOrigin = useRx(null);
+  const [dismissed, setDismissed] = useSx(false);
+  const tooltipId = useIx();
+  const requested = !disabled && !dismissed && (hovered || focused);
+  const visible = requested && show;
   const [pos, setPos] = useSx({ x: 0, y: 0, ready: false });
   const tipRef = useRx(null);
   const timer = useRx(null);
@@ -65,48 +81,110 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
   };
 
   const enter = (e) => {
-    clearTimeout(timer.current);
-    const x = e.clientX, y = e.clientY;
-    lastMouse.current = { x, y };
-    pending.current = true;
-    timer.current = setTimeout(() => {
-      pending.current = false;
-      setShow(true);
-    }, delay);
+    if (!focused) lastMouse.current = { x: e.clientX, y: e.clientY };
+    setHovered(true);
+    setDismissed(false);
   };
   const move = (e) => {
+    if (focused) return;
     lastMouse.current = { x: e.clientX, y: e.clientY };
-    if (show) place(e.clientX, e.clientY);
+    if (visible) place(e.clientX, e.clientY);
   };
-  const leave = () => { clearTimeout(timer.current); pending.current = false; setShow(false); setPos(p => ({ ...p, ready: false })); };
+
+  // Devre dışıyken niyet korunur; odak sahibi ayrılınca süren fare teması yeniden açılır.
+  useEx(() => {
+    if (requested) {
+      pending.current = true;
+      timer.current = setTimeout(() => { pending.current = false; setShow(true); }, delay);
+    } else {
+      setShow(false);
+      setPos(p => ({ ...p, ready: false }));
+    }
+    return () => { clearTimeout(timer.current); pending.current = false; };
+  }, [requested, delay]);
 
   useEx(() => {
-    if (show && tipRef.current) place(lastMouse.current.x, lastMouse.current.y);
-  }, [show]);
+    if (visible && tipRef.current) place(lastMouse.current.x, lastMouse.current.y);
+  }, [visible]);
 
-  // Cleanup on unmount
-  useEx(() => () => { clearTimeout(timer.current); }, []);
+  // Sarmalayıcının içindeki gerçek odak hedefi açıklanır; diğer açıklamalar korunur.
+  useEx(() => {
+    const target = focus?.target;
+    if (!visible || !focus?.nested || !target?.getAttribute) return;
+    const ids = () => (target.getAttribute('aria-describedby') || '').split(' ').filter(Boolean);
+    target.setAttribute('aria-describedby', [...new Set([...ids(), tooltipId])].join(' '));
+    return () => {
+      const remaining = ids().filter(id => id !== tooltipId).join(' ');
+      if (remaining) target.setAttribute('aria-describedby', remaining);
+      else target.removeAttribute('aria-describedby');
+    };
+  }, [visible, focus?.target, focus?.nested, tooltipId]);
 
+  // Dokunuş odağı olmayan tarayıcılarda da açılır; dış dokunuş sahipliği bırakır.
+  useEx(() => {
+    if (!focus?.touchRoot) return;
+    const outside = (event) => {
+      if (!focus.touchRoot.contains(event.target)) { setFocus(null); setHovered(false); }
+    };
+    document.addEventListener('pointerdown', outside, true);
+    return () => document.removeEventListener('pointerdown', outside, true);
+  }, [focus?.touchRoot]);
+
+  const anchor = (target) => {
+    const r = target?.getBoundingClientRect?.();
+    if (r) lastMouse.current = { x: r.left + r.width / 2, y: r.bottom };
+  };
   const handlers = {
+    onPointerDownCapture: (e) => {
+      pointerOrigin.current = e.pointerType;
+      if (e.pointerType !== 'touch') setFocus(current => current ? { ...current, persistent: false, touchRoot: null } : null);
+    },
+    onPointerCancel: () => { pointerOrigin.current = null; },
+    onClick: (e) => {
+      if (pointerOrigin.current === 'touch') {
+        const root = e.currentTarget;
+        const target = e.target?.closest?.('button, a[href], input, select, textarea, [tabindex]');
+        if (target && root.contains(target)) {
+          target.focus();
+          if (document.activeElement === target) {
+            anchor(target);
+            setFocus({ target, nested: target !== root, persistent: true, touchRoot: root });
+            setDismissed(false);
+          }
+        }
+      }
+      pointerOrigin.current = null;
+    },
     onMouseEnter: enter,
-    onMouseLeave: leave,
+    onMouseLeave: () => { setHovered(false); if (pointerOrigin.current !== 'touch') pointerOrigin.current = null; },
     onMouseMove: move,
     onFocus: (e) => {
-      const r = e.currentTarget.getBoundingClientRect ? e.currentTarget.getBoundingClientRect() : null;
-      if (r) { lastMouse.current = { x: r.left + r.width / 2, y: r.bottom }; }
-      enter({ clientX: lastMouse.current.x, clientY: lastMouse.current.y });
+      const target = e.target || e.currentTarget;
+      const persistent = !pointerOrigin.current || pointerOrigin.current === 'touch';
+      if (persistent) anchor(target);
+      setFocus({ target, nested: target !== e.currentTarget, persistent });
+      setDismissed(false);
     },
-    onBlur: leave,
+    onBlur: () => { setFocus(null); pointerOrigin.current = null; },
     onKeyDown: (e) => {
-      // Yalnızca açık ya da açılmayı bekleyen ipucu Esc'i tüketir; aksi hâlde Esc üstteki pencereye ulaşır.
-      if (e.key === 'Escape' && (show || pending.current)) { e.preventDefault(); leave(); }
+      pointerOrigin.current = null;
+      if (e.key !== 'Escape' && !e.altKey && !e.ctrlKey && !e.metaKey) {
+        if (focus && !focus.persistent) {
+          anchor(focus.target);
+          setFocus({ ...focus, persistent: true });
+        }
+      }
+      // Kapalı ipucu Esc'i tüketmez; kapatılan ipucu yeni etkileşime kadar açılmaz.
+      if (e.key === 'Escape' && (visible || pending.current)) { e.preventDefault(); setDismissed(true); }
     }
   };
 
-  const tip = show && ReactDOM.createPortal(
+  const tip = visible && ReactDOM.createPortal(
     (
       <div
         ref={tipRef}
+        id={tooltipId}
+        role="tooltip"
         className="rich-tip"
         style={{
           position: 'fixed',
@@ -132,14 +210,17 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
 
   if (asChild && React.isValidElement(children)) {
     // attach handlers to the existing child element (no extra wrapper)
+    // Çocuğun kendi işleyicileri (ör. klavyeyle gezinme) de korunur: ikisi birlikte çalışır.
+    const composed = Object.fromEntries(Object.entries(handlers).map(([name, handler]) => [name, (e) => {
+      // Tıklama içindeki programatik odak da aynı pointer etkileşimine aittir.
+      if (name === 'onClick') children.props[name]?.(e);
+      handler(e);
+      if (name !== 'onClick') children.props[name]?.(e);
+    }]));
+    const describedBy = [children.props['aria-describedby'], visible && !focus?.nested ? tooltipId : null].filter(Boolean).join(' ') || undefined;
     return (
       <>
-        {React.cloneElement(children, {
-          ...handlers,
-          onMouseEnter: (e) => { handlers.onMouseEnter(e); if (children.props.onMouseEnter) children.props.onMouseEnter(e); },
-          onMouseLeave: (e) => { handlers.onMouseLeave(e); if (children.props.onMouseLeave) children.props.onMouseLeave(e); },
-          onMouseMove: (e) => { handlers.onMouseMove(e); if (children.props.onMouseMove) children.props.onMouseMove(e); }
-        })}
+        {React.cloneElement(children, { ...composed, 'aria-describedby': describedBy })}
         {tip}
       </>
     );
@@ -149,6 +230,7 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
     <>
       <span
         {...handlers}
+        aria-describedby={visible && focusable && !focus?.nested ? tooltipId : undefined}
         {...(focusable ? { tabIndex: 0, role: 'button', 'aria-label': ariaLabel || title } : null)}
         style={{ display: 'inline-flex', alignItems: 'center', ...wrapperStyle }}
       >

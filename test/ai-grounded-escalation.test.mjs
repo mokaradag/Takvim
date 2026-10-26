@@ -103,8 +103,12 @@ test('a declared synthesis request is finalized once by Deep thinking with the s
   assert.deepEqual(grounding.escalations, { total: 1, byReason: { SYNTHESIS_REQUIRED: 1 }, byOutcome: { grounded: 1 } });
   assert.equal(grounding.grounded, 1);
   assert.equal(grounding.failed, 0);
-  const [event] = logLines(logs, 'ai.grounded.escalation');
-  assert.deepEqual(event.context, { requestedMode: 'standard', models: [STANDARD, DEEP], reason: 'SYNTHESIS_REQUIRED', toolsReused: true, outcome: 'grounded' });
+  // Devir ayrı bir başarı satırı yazmaz: özeti turun tek tamamlanma kaydındadır.
+  assert.deepEqual(logLines(logs, 'ai.grounded.escalation'), []);
+  const turnLines = logLines(logs, 'ai.grounded.turn');
+  assert.equal(turnLines.length, 1);
+  assert.deepEqual(turnLines[0].context.escalation, { requestedMode: 'standard', models: [STANDARD, DEEP], reason: 'SYNTHESIS_REQUIRED', toolsReused: true, outcome: 'grounded' });
+  assert.equal(turnLines[0].context.escalated, true);
   for (const secret of [NAMED_QUESTION, NAMED, INVALID, 'Radar Modernizasyonu', String(AYSE)]) {
     assert.equal(logs.some((line) => line.includes(secret)), false, `günlük içerik taşımaz: ${secret}`);
   }
@@ -144,7 +148,9 @@ test('a Deep escalation that times out ends as a bounded timeout, not as a verif
   const { grounding } = aiTelemetrySnapshot();
   assert.deepEqual(grounding.escalations, { total: 1, byReason: { SYNTHESIS_REQUIRED: 1 }, byOutcome: { timeout: 1 } });
   assert.equal(grounding.failed, 0, 'sağlayıcı süre aşımı doğrulama hatası sayılmaz');
-  assert.equal(logLines(logs, 'ai.grounded.escalation')[0].context.outcome, 'timeout');
+  assert.deepEqual(logLines(logs, 'ai.grounded.escalation'), []);
+  const [turnLine] = logLines(logs, 'ai.grounded.turn');
+  assert.deepEqual([turnLine.context.outcome, turnLine.context.code, turnLine.context.escalation.outcome], ['error', 'AI_TIMEOUT', 'timeout']);
 });
 
 for (const cancelled of [false, true]) {

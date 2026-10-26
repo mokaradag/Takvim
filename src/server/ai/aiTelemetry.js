@@ -111,6 +111,7 @@ function state() {
   const current = globalThis[STATE_KEY] ||= createState();
   current.planner ||= createState().planner;
   current.grounding.abstained ??= 0;
+  if (current.grounding.presentation) current.grounding.presentation.unavailable = safeCount(current.grounding.presentation.unavailable) ?? 0;
   return current;
 }
 
@@ -451,6 +452,9 @@ export function aiTelemetrySnapshot() {
       repaired: current.grounding.repaired,
       disclosed: current.grounding.disclosed,
       serverSelected: current.grounding.serverSelected,
+      presentation: current.grounding.presentation
+        ? { ...current.grounding.presentation, byReason: { ...current.grounding.presentation.byReason } }
+        : { composed: 0, narrative: 0, unavailable: 0, byReason: {}, charts: 0 },
       rounds: countPercentiles(current.grounding.rounds),
       evidence: countPercentiles(current.grounding.evidence),
       escalations: {
@@ -662,7 +666,8 @@ const ESCALATION_OUTCOMES = new Set(['grounded', 'clarification', 'abstained', '
 /**
  * Standart kipteki kanıta dayalı turun Derin düşünme ile sonlandırılması:
  * istenen kip, kullanılan modeller, neden, kanıtın yeniden kullanılıp
- * kullanılmadığı ve son sonuç (içerik taşımaz).
+ * kullanılmadığı ve son sonuç (içerik taşımaz). Ayrı günlük satırı yazılmaz:
+ * dönen içeriksiz özet turun TEK tamamlanma kaydına (`ai.grounded.turn`) eklenir.
  */
 export function recordGroundedEscalation({ requestedMode, models = [], reason, toolsReused = false, outcome }) {
   const safeReason = ESCALATION_REASONS.has(reason) ? reason : 'OTHER';
@@ -673,20 +678,13 @@ export function recordGroundedEscalation({ requestedMode, models = [], reason, t
     current.byReason[safeReason] = (current.byReason[safeReason] || 0) + 1;
     current.byOutcome[safeOutcome] = (current.byOutcome[safeOutcome] || 0) + 1;
   });
-  safely(() => logEvent({
-    severity: EVENT_SEVERITIES.INFO,
-    component: COMPONENTS.AI,
-    operation: 'ai.grounded.escalation',
-    code: 'AI_GROUNDED_ESCALATION',
-    message: 'Standart kipteki Rota verisi yanıtı Derin düşünme ile sonlandırıldı.',
-    context: {
-      requestedMode: ['standard', 'deep'].includes(requestedMode) ? requestedMode : null,
-      models: [...new Set(models.map(safeModel).filter(Boolean))].slice(0, 4),
-      reason: safeReason,
-      toolsReused: toolsReused === true,
-      outcome: safeOutcome
-    }
-  }));
+  return Object.freeze({
+    requestedMode: ['standard', 'deep'].includes(requestedMode) ? requestedMode : null,
+    models: Object.freeze([...new Set(models.map(safeModel).filter(Boolean))].slice(0, 4)),
+    reason: safeReason,
+    toolsReused: toolsReused === true,
+    outcome: safeOutcome
+  });
 }
 
 const PLANNER_DECISIONS = new Set(['rota', 'general', 'clarify', 'abstain', 'invalid', 'text_fields']);
@@ -740,7 +738,25 @@ export function recordGroundedAnswer({ outcome, rounds = 0, evidence = 0, repair
 }
 
 const TURN_OUTCOMES = new Set(['grounded', 'clarification', 'abstained', 'not_found', 'unavailable', 'general_redirect', 'failed', 'error']);
-const ROUND_PURPOSES = new Set(['plan', 'tools', 'follow-up', 'select', 'repair', 'declaration', 'retry']);
+const ROUND_PURPOSES = new Set(['plan', 'tools', 'follow-up', 'select', 'repair', 'declaration', 'retry', 'compose']);
+const PRESENTATION_MODES = new Set(['composed', 'narrative', 'unavailable']);
+const PRESENTATION_REASONS = new Set(['NO_CHOICE', 'LENGTH_UNAVAILABLE', 'SHEET_LIMIT', 'AUTHORIZATION', 'CITATION_SCOPE', 'BUDGET', 'TIMEOUT', 'PROVIDER', 'LENGTH', 'EMPTY', 'INVALID', 'INTERNAL']);
+const CHART_TYPES = new Set(['bar', 'donut']);
+const SAFE_ISSUE = /^[A-Z][A-Z0-9_]{0,40}$/;
+
+/** Yanıt düzeninin içeriksiz özeti: kip, düşüş nedeni ve sınırlı doğrulama kodu, blok sayısı, grafik türü ve süre. */
+function presentationSummary(value) {
+  if (!value || typeof value !== 'object' || !PRESENTATION_MODES.has(value.mode)) return null;
+  return {
+    mode: value.mode,
+    reason: PRESENTATION_REASONS.has(value.reason) ? value.reason : null,
+    issue: SAFE_ISSUE.test(String(value.issue ?? '')) ? value.issue : null,
+    blocks: safeCount(value.blocks),
+    chart: CHART_TYPES.has(value.chart) ? value.chart : null,
+    charts: value.mode === 'composed' ? safeCount(value.charts) ?? 0 : 0,
+    ms: millis(value.ms)
+  };
+}
 const FINISH_REASONS = new Set(['stop', 'end_turn', 'eos', 'stop_sequence', 'length', 'content_filter', 'tool_calls', 'function_call', 'error']);
 export const safeFinishReason = (value) => FINISH_REASONS.has(value) ? value : null;
 
@@ -753,7 +769,29 @@ export const safeFinishReason = (value) => FINISH_REASONS.has(value) ? value : n
  */
 export function recordGroundedTurn(trace = {}) {
   const outcome = TURN_OUTCOMES.has(trace.outcome) ? trace.outcome : 'error';
-  safely(() => { if (trace.selectedBy === 'server') state().grounding.serverSelected += 1; });
+  const presentation = outcome === 'error' ? null : presentationSummary(trace.presentation);
+  safely(() => {
+    const grounding = state().grounding;
+    if (trace.selectedBy === 'server') grounding.serverSelected += 1;
+    if (presentation) {
+      grounding.presentation ||= { composed: 0, narrative: 0, unavailable: 0, byReason: {}, charts: 0 };
+      grounding.presentation[presentation.mode] += 1;
+      if (presentation.reason) grounding.presentation.byReason[presentation.reason] = (grounding.presentation.byReason[presentation.reason] || 0) + 1;
+      grounding.presentation.charts += presentation.charts;
+    }
+  });
+  const allRounds = Array.isArray(trace.rounds) ? trace.rounds : [];
+  const rounds = allRounds.slice(0, 16);
+  // Her metrik ancak bütün model turları bildirdiyse tamdır; bilinmeyen kullanım sıfır değildir.
+  const total = (key) => allRounds.length && (trace.modelRounds == null || trace.modelRounds === allRounds.length) && allRounds.every((round) => safeCount(round?.[key]) != null)
+    ? allRounds.reduce((sum, round) => sum + round[key], 0) : null;
+  const escalation = trace.escalation && typeof trace.escalation === 'object' ? {
+    requestedMode: ['standard', 'deep'].includes(trace.escalation.requestedMode) ? trace.escalation.requestedMode : null,
+    models: (Array.isArray(trace.escalation.models) ? trace.escalation.models : []).map(safeModel).filter(Boolean).slice(0, 4),
+    reason: ESCALATION_REASONS.has(trace.escalation.reason) ? trace.escalation.reason : 'OTHER',
+    toolsReused: trace.escalation.toolsReused === true,
+    outcome: ESCALATION_OUTCOMES.has(trace.escalation.outcome) ? trace.escalation.outcome : 'other'
+  } : null;
   safely(() => logEvent({
     severity: EVENT_SEVERITIES.INFO,
     component: COMPONENTS.AI,
@@ -766,6 +804,13 @@ export function recordGroundedTurn(trace = {}) {
       code: isAiErrorCode(trace.code) ? trace.code : null,
       selectedBy: ['server', 'model'].includes(trace.selectedBy) ? trace.selectedBy : null,
       escalated: trace.escalated === true,
+      ...(escalation ? { escalation } : {}),
+      parts: safeCount(trace.parts),
+      evidence: safeCount(trace.evidence),
+      presentation,
+      // Turun model kullanımı tek nesnede: bağlam alanı sınırı (25) ve kısa tek satır korunur.
+      usage: { input: total('input'), completion: total('completion'), reasoning: total('reasoning'),
+        firstEventMs: millis(rounds[0]?.firstEventMs), lengthStops: rounds.filter((round) => round?.finishReason === 'length').length },
       modelRounds: safeCount(trace.modelRounds),
       toolRounds: safeCount(trace.toolRounds),
       toolCalls: safeCount(trace.calls),
@@ -779,7 +824,7 @@ export function recordGroundedTurn(trace = {}) {
       ...(trace.resultScopeOmitted === true ? { resultScopeOmitted: true } : {}),
       revalidationMs: millis(trace.revalidationMs),
       verificationMs: millis(trace.verificationMs),
-      rounds: (Array.isArray(trace.rounds) ? trace.rounds : []).slice(0, 16).map((round) => ({
+      rounds: rounds.map((round) => ({
         purpose: ROUND_PURPOSES.has(round?.purpose) ? round.purpose : null,
         profile: isKnownAiProfile(round?.profile) ? round.profile : null,
         model: safeModel(round?.model),

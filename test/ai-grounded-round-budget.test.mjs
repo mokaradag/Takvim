@@ -66,8 +66,11 @@ for (const mode of ['standard', 'deep']) {
 
     const [trace] = turnTraces(logs);
     const { rounds, ...counters } = trace.context;
-    assert.deepEqual(Object.keys(counters).sort(), ['code', 'declarations', 'escalated', 'modelRounds', 'outcome', 'repairs', 'resultBytes', 'revalidationMs',
-      'scopeLoads', 'selectedBy', 'sqlMs', 'sqlQueries', 'toolCalls', 'toolFailures', 'toolRounds', 'verificationMs']);
+    assert.deepEqual(Object.keys(counters).sort(), ['code', 'declarations', 'escalated', 'evidence', 'modelRounds', 'outcome', 'parts', 'presentation', 'repairs',
+      'resultBytes', 'revalidationMs', 'scopeLoads', 'selectedBy', 'sqlMs', 'sqlQueries', 'toolCalls', 'toolFailures', 'toolRounds', 'usage', 'verificationMs']);
+    assert.deepEqual({ parts: counters.parts, evidence: counters.evidence, presentation: counters.presentation }, { parts: 1, evidence: 1, presentation: null });
+    assert.deepEqual(Object.keys(counters.usage).sort(), ['completion', 'firstEventMs', 'input', 'lengthStops', 'reasoning']);
+    assert.equal(counters.usage.lengthStops, 0);
     assert.deepEqual({ outcome: counters.outcome, selectedBy: counters.selectedBy, escalated: counters.escalated, modelRounds: counters.modelRounds,
       toolRounds: counters.toolRounds, toolCalls: counters.toolCalls, declarations: counters.declarations, repairs: counters.repairs },
     { outcome: 'grounded', selectedBy: 'server', escalated: false, modelRounds: 1, toolRounds: 1, toolCalls: 1, declarations: 1, repairs: 0 });
@@ -334,4 +337,76 @@ test('an allowed reported model remains distinct from the configured route model
   assert.equal(trace.context.rounds[1].configuredModel, DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model);
   assert.equal(trace.context.rounds[1].modelMismatch, true);
   drained(stack.provider);
+});
+
+test('the fullest grounded turn line stays inside the log sanitizer key limit and keeps every round', async (t) => {
+  const { recordGroundedTurn } = await import('../src/server/ai/aiTelemetry.js');
+  const logs = captureConsole(t);
+  const round = (purpose) => ({ purpose, profile: PLANNING_PROFILE, model: DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model, durationMs: 5, budget: 1600, finishReason: 'stop', input: 10, completion: 5 });
+  recordGroundedTurn({ outcome: 'grounded', selectedBy: 'server', escalated: true, resultScopeOmitted: true, parts: 2, evidence: 3,
+    escalation: { requestedMode: 'standard', models: ['m'], reason: 'VERIFICATION_FAILED', toolsReused: true, outcome: 'grounded' },
+    presentation: { mode: 'composed', blocks: 3, chart: 'bar', ms: 9 }, rounds: [round('plan'), round('select'), round('compose')] });
+  const [trace] = turnTraces(logs);
+  // Günlük temizleyicisi nesne başına 25 alanın ötesini atar: tek satırlık tamamlanma kaydı bu sınırın içinde kalır.
+  assert.ok(Object.keys(trace.context).length <= 25, String(Object.keys(trace.context).length));
+  assert.deepEqual(trace.context.rounds.map((item) => item.purpose), ['plan', 'select', 'compose']);
+  assert.equal(trace.context.resultScopeOmitted, true);
+  assert.equal(trace.context.escalation.reason, 'VERIFICATION_FAILED');
+  assert.deepEqual(trace.context.usage, { input: 30, completion: 15, reasoning: null, firstEventMs: null, lengthStops: 0 });
+});
+
+
+test('tur belirteç toplamı her metriğin bütün model turlarında bildirilmesini gerektirir', async (t) => {
+  const { recordGroundedTurn } = await import('../src/server/ai/aiTelemetry.js');
+  const logs = captureConsole(t);
+  recordGroundedTurn({ outcome: 'error' });
+  assert.deepEqual(turnTraces(logs).at(-1).context.usage, { input: null, completion: null, reasoning: null, firstEventMs: null, lengthStops: 0 });
+  const complete = { input: 10, completion: 4, reasoning: 0 };
+  for (const [rounds, expected, modelRounds = rounds.length] of [
+    [[complete, complete], [20, 8, 0]],
+    [[{}, {}], [null, null, null]],
+    [[complete, {}], [null, null, null]],
+    [[{ input: 10, completion: 4 }, complete], [20, 8, null]],
+    [[{ input: 10, reasoning: 0 }, complete], [20, null, 0]],
+    [[{ completion: 4, reasoning: 0 }, complete], [null, 8, 0]],
+    [[{ input: 0, completion: 0, reasoning: 0 }], [0, 0, 0]],
+    [[], [null, null, null]],
+    [[complete], [null, null, null], 2],
+    [[...Array(16).fill(complete), {}], [null, null, null]]
+  ]) {
+    recordGroundedTurn({ outcome: 'grounded', rounds, modelRounds });
+    const line = turnTraces(logs).at(-1);
+    assert.deepEqual([line.context.usage.input, line.context.usage.completion, line.context.usage.reasoning], expected);
+    assert.deepEqual(line.context.rounds.map((round) => [round.input, round.completion, round.reasoning]),
+      rounds.slice(0, 16).map((round) => [round.input ?? null, round.completion ?? null, round.reasoning ?? null]));
+  }
+});
+
+
+test('önceki modülden kalan sunum sayaçları okunurken ve artırılırken taşınır', async (t) => {
+  const { recordGroundedTurn, resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
+  resetAiTelemetryForTests();
+  t.after(resetAiTelemetryForTests);
+  captureConsole(t);
+  const state = globalThis[Symbol.for('mergen-rota.ai-telemetry')];
+  const previous = { composed: 3, narrative: 4, byReason: { INVALID: 2 }, charts: 1 };
+  state.grounding.presentation = { ...previous, byReason: { ...previous.byReason } };
+  assert.deepEqual(aiTelemetrySnapshot().grounding.presentation, { ...previous, unavailable: 0 });
+  for (let index = 0; index < 2; index += 1) recordGroundedTurn({ outcome: 'unavailable', presentation: { mode: 'unavailable', reason: 'AUTHORIZATION' } });
+  assert.deepEqual(aiTelemetrySnapshot().grounding.presentation, { ...previous, unavailable: 2, byReason: { INVALID: 2, AUTHORIZATION: 2 } });
+  state.grounding.presentation.unavailable = NaN;
+  recordGroundedTurn({ outcome: 'unavailable', presentation: { mode: 'unavailable', reason: 'LENGTH_UNAVAILABLE' } });
+  assert.equal(JSON.parse(JSON.stringify(aiTelemetrySnapshot())).grounding.presentation.unavailable, 1);
+});
+
+test('hata sonlanan tur teslim edilmeyen sunumu saymaz; düzen turunun iş ölçümü kalır', async (t) => {
+  const { recordGroundedTurn } = await import('../src/server/ai/aiTelemetry.js');
+  const logs = captureConsole(t);
+  const before = { ...aiTelemetrySnapshot().grounding.presentation };
+  recordGroundedTurn({ outcome: 'error', presentation: { mode: 'composed', chart: 'bar', charts: 2, blocks: 3 },
+    modelRounds: 1, rounds: [{ purpose: 'compose', finishReason: 'stop' }] });
+  const [trace] = turnTraces(logs);
+  assert.equal(trace.context.presentation, null);
+  assert.equal(trace.context.rounds[0].purpose, 'compose');
+  assert.deepEqual(aiTelemetrySnapshot().grounding.presentation, before);
 });
