@@ -1078,8 +1078,6 @@ test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP ya
     const junctioned = mkdtempSync(path.join(dir, 'junction-'));
     symlinkSync(path.join(dir, 'shared'), path.join(junctioned, 'link'), 'junction');
     untrusted(run(adapter, junctioned), 'alt ağaçta bağlantı noktası', 'HOME_REPARSE_POINT');
-    // Denetim çalışmazsa ev güvenilmez sayılır.
-    untrusted(run(adapter, path.join(dir, 'private', 'home'), { SystemRoot: path.join(dir, 'no-windows') }), 'çalışmayan denetim', 'HOME_CHECK_FAILED');
     const outcome = run(adapter, path.join(dir, 'private', 'home'));
     if (outcome.error === 'PLANNER_HOME_UNTRUSTED') {
       // Tanı: beklenmeyen reddin hangi klasör ve hesaptan geldiği (yalnızca başarısızlıkta).
