@@ -1173,7 +1173,7 @@ HTTP durumu değişemeyeceği için her akış **tam olarak bir** sonlandırıc�
 | Olay | Yük | Anlam |
 | --- | --- | --- |
 | `accepted` | `{ v: 1, conversation, userMessage, mode, replay, context: { trimmed, omittedMessages } }` | İstek kabul edildi; kullanıcı iletisi kaydedildi (ilk olay) |
-| `status` | `{ phase: 'generating' \| 'thinking' }` | Gerçek evre geçişi (sağlayıcı yanıt vermeye başladı / model düşünüyor) |
+| `status` | `{ phase: 'generating' \| 'thinking' \| 'tools' \| 'verifying' \| 'composing' }` | Gerçek evre geçişi (sağlayıcı yanıt vermeye başladı / model düşünüyor / yetkili Rota verisi okunuyor / yanıtın kanıtları doğrulanıyor / doğrulanmış yanıtın düzeni hazırlanıyor) |
 | `progress` | `{}` | Görünür olay üretmeyen gerçek üretim ilerlemesi (gizli akıl yürütme, araç bağımsız değişkeni, araç yürütmesi); en fazla 10 sn'de bir |
 | `delta` | `{ text }` | Görünür yanıt metninin sıradaki parçası |
 | `done` | `{ conversation, assistantMessage (metinsiz, uzunluklu), replayed }` | Yanıt tamamlandı VE kaydedildi |
