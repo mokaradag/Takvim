@@ -102,9 +102,12 @@ function DonutChart({ spec, copy }) {
   const segments = donutSegments(spec.items);
   const total = segments.reduce((sum, segment) => sum + segment.value, 0);
   const roving = useRovingFocus(spec.items.length);
-  const [hovered, setHovered] = useState(null);
+  const [hoveredSlice, setHoveredSlice] = useState(null);
+  const [hoveredLegend, setHoveredLegend] = useState(null);
   const [focusedLegend, setFocusedLegend] = useState(null);
-  const active = focusedLegend ?? hovered;
+  // Açıklamanın ipucu ve dilim vurgusu aynı öğeyi izler; fare ayrılınca odak geri gelir.
+  const activeLegend = hoveredLegend ?? focusedLegend;
+  const active = activeLegend ?? hoveredSlice;
   const center = RING.size / 2;
   const inner = center - RING.thickness;
   const tip = (index) => ({
@@ -119,12 +122,12 @@ function DonutChart({ spec, copy }) {
         <path className="assistant-chart-ring-track" d={donutSlicePath(center, center, center, inner, -90, 270)} fillRule="evenodd" />
         <g className="assistant-chart-slices">
           {segments.map((segment) => (
-            <Tooltip key={segment.index} asChild disabled={focusedLegend !== null} {...tip(segment.index)}>
+            <Tooltip key={segment.index} asChild disabled={activeLegend !== null} {...tip(segment.index)}>
               <path
                 className={`assistant-chart-slice ${series(segment.index)}${active === segment.index ? ' is-active' : ''}`}
                 d={donutSlicePath(center, center, center, active === segment.index ? inner - DONUT_EMPHASIS : inner, segment.startAngle, segment.endAngle)}
-                onMouseEnter={() => setHovered(segment.index)}
-                onMouseLeave={() => setHovered(null)}
+                onMouseEnter={() => setHoveredSlice(segment.index)}
+                onMouseLeave={() => setHoveredSlice(null)}
                 // Dokunmatik ekranda dilime dokunmak açıklamadaki karşılığını odaklar: aynı ipucu klavye ve dokunuşla da açılır.
                 onClick={() => roving.refs.current[segment.index]?.focus()}
               />
@@ -139,17 +142,17 @@ function DonutChart({ spec, copy }) {
           const value = answerChartValue(item.value, spec.unit, spec.locale);
           return (
             <li key={`${index}-${item.label}`}>
-              <Tooltip asChild {...tip(index)}>
+              <Tooltip asChild disabled={activeLegend !== index} {...tip(index)}>
                 <div
                   ref={(node) => { roving.refs.current[index] = node; }}
                   className={`assistant-chart-legend-item${active === index ? ' is-active' : ''}`}
                   role="group"
                   tabIndex={roving.active === index ? 0 : -1}
                   aria-label={`${item.label}: ${value}`}
-                  onFocus={() => { setFocusedLegend(index); roving.setActive(index); }}
+                  onFocus={() => { setHoveredLegend(null); setFocusedLegend(index); roving.setActive(index); }}
                   onBlur={() => setFocusedLegend(null)}
-                  onMouseEnter={() => setHovered(index)}
-                  onMouseLeave={() => setHovered(null)}
+                  onMouseEnter={() => setHoveredLegend(index)}
+                  onMouseLeave={() => setHoveredLegend(null)}
                   onKeyDown={(event) => roving.move(event, index)}
                 >
                   <Swatch index={index} />

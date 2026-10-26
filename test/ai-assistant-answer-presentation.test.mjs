@@ -405,6 +405,49 @@ test('dilimden gerçek açıklama odağına geçiş yalnızca açıklama ipucunu
 });
 
 
+test('halka açıklamasında fare ve klavye aynı dilimi ve tek ipucunu etkinleştirir', (t) => {
+  browserDouble(t);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(ReactDOM, 'createPortal', (content) => content);
+  const spec = { ...SPEC, type: 'donut', unit: 'count' };
+  const element = findElement(mountComponent(AnswerChart, { spec }).output, named('DonutChart'));
+  const donut = mountComponent(element.type, element.props);
+  const sliceElements = () => findElement(donut.output, (node) => node.props?.className === 'assistant-chart-slices').props.children;
+  const legendElements = () => findElement(donut.output, (node) => node.props?.className === 'assistant-chart-legend').props.children.map((item) => item.props.children);
+  const slices = sliceElements().map((item) => mountComponent(Tooltip, item.props));
+  const legends = legendElements().map((item) => mountComponent(Tooltip, item.props));
+  t.after(() => { for (const component of [...slices, ...legends, donut]) component.unmount(); });
+  const child = (tip) => tip.output.props.children[0];
+  const nodes = legends.map((tip) => ({ focus() { document.activeElement = this; child(tip).props.onFocus({ currentTarget: this }); } }));
+  legendElements().forEach((item, index) => item.props.children.ref(nodes[index]));
+  const settle = () => {
+    donut.render();
+    slices.forEach((tip, index) => tip.render(sliceElements()[index].props));
+    legends.forEach((tip, index) => tip.render(legendElements()[index].props));
+    t.mock.timers.tick(100);
+    for (const tip of [...slices, ...legends]) tip.render();
+  };
+  const assertActive = (index) => {
+    assert.deepEqual(sliceElements().map((item) => item.props.children.props.className.includes('is-active')), spec.items.map((_, i) => i === index));
+    assert.deepEqual(legendElements().map((item) => item.props.children.props.className.includes('is-active')), spec.items.map((_, i) => i === index));
+    const open = [...slices, ...legends].filter((tip) => findElement(tip.output, (node) => node.props?.role === 'tooltip'));
+    assert.equal(open.length, 1, 'yalnız etkin öğenin ipucu görünür');
+    assert.equal(open[0], legends[index]);
+    assert.ok(child(legends[index]).props['aria-describedby']);
+  };
+  nodes[0].focus(); settle(); assertActive(0);
+  child(legends[1]).props.onMouseEnter({ clientX: 40, clientY: 40 });
+  settle(); assertActive(1);
+  assert.equal(document.activeElement, nodes[0], 'fare odağı taşımaz');
+  child(legends[1]).props.onMouseLeave();
+  settle(); assertActive(0);
+  child(legends[2]).props.onMouseEnter({ clientX: 50, clientY: 50 });
+  settle(); assertActive(2);
+  child(legends[0]).props.onKeyDown({ key: 'ArrowDown', preventDefault() {} });
+  settle(); assertActive(1);
+  assert.equal(document.activeElement, nodes[1], 'ok tuşu fare teması sürerken de odağı ve ipucunu taşır');
+});
+
 test('ipucu açıklama bağı odak, fare, Escape ve devre dışı durumu ile eşleşir', (t) => {
   browserDouble(t);
   t.mock.timers.enable({ apis: ['setTimeout'] });

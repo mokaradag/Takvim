@@ -198,6 +198,8 @@ durumu görünürdür; işletim sistemi ve `body.reduce-motion` yalnızca animas
 Yanıt Markdown'unun liste girintisi grafik listelerine taşınmaz: grafik listeleri `.assistant-chart :is(...)` ile
 yanıt listelerinden daha özgül seçicilerle sıfırlanır. `Tooltip`'in `asChild` kipi çocuğun kendi olay işleyicilerini
 (klavye gezintisi, odak) korur ve ipucununkilerle birlikte çağırır.
+Halka açıklamasında fareyle gösterilen öğenin ipucu ve dilim vurgusu birlikte değişir; fare ayrılınca
+odaklı öğeye döner. Klavye odağı değiştiğinde yeni öğe etkinleşir; aynı anda tek ipucu gösterilir.
 
 ## 11. Özelliğe özgü biçim sorumluluğu
 
