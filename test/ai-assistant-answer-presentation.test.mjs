@@ -460,18 +460,25 @@ test('halka açıklamasında fare ve klavye aynı dilimi ve tek ipucunu etkinle�
   child(legends[0]).props.onKeyDown({ key: 'ArrowDown', preventDefault() {} });
   settle(); assertActive(1);
   assert.equal(document.activeElement, nodes[1], 'ok tuşu fare teması sürerken de odağı ve ipucunu taşır');
-  child(legends[1]).props.onMouseEnter({ clientX: 40, clientY: 40 });
-  child(legends[1]).props.onPointerDownCapture?.({ pointerType: 'mouse' });
-  nodes[1].focus();
-  child(legends[1]).props.onClick({ currentTarget: nodes[1], target: nodes[1] });
-  child(legends[1]).props.onMouseLeave(); settle();
-  assert.equal(document.activeElement, nodes[1], 'fare tıklamasının DOM odağı korunur');
-  child(slices[2]).props.onMouseEnter({ clientX: 70, clientY: 70 }); settle();
+  child(legends[2]).props.onMouseEnter({ clientX: 40, clientY: 40 });
+  settle(); assertActive(2);
+  const hoverId = child(legends[2]).props['aria-describedby'];
+  child(legends[2]).props.onPointerDownCapture?.({ pointerType: 'mouse' });
+  nodes[2].focus();
+  settle(); assertActive(2);
+  child(legends[2]).props.onClick({ currentTarget: nodes[2], target: nodes[2] });
+  settle(); assertActive(2);
+  assert.equal(child(legends[2]).props['aria-describedby'], hoverId, 'tıklama süren hover açıklamasını korur');
+  child(legends[2]).props.onMouseLeave(); settle();
+  assert.equal(document.activeElement, nodes[2], 'fare tıklamasının DOM odağı korunur');
+  assert.equal([...slices, ...legends].some((tip) => findElement(tip.output, (node) => node.props?.role === 'tooltip')), false, 'fare ayrılınca ipucu kapanır');
+  assert.ok(sliceElements().every((item) => !item.props.children.props.className.includes('is-active')), 'fare odağı dilimi vurgulu bırakmaz');
+  child(slices[1]).props.onMouseEnter({ clientX: 70, clientY: 70 }); settle();
   const open = [...slices, ...legends].filter((tip) => findElement(tip.output, (node) => node.props?.role === 'tooltip'));
-  assert.deepEqual(open, [slices[2]], 'eski fare odağı başka dilimin ipucunu engellemez');
-  assert.deepEqual(sliceElements().map((item) => item.props.children.props.className.includes('is-active')), [false, false, true]);
-  child(slices[2]).props.onMouseLeave();
-  child(legends[1]).props.onKeyDown({ key: 'Home', preventDefault() {} }); settle(); assertActive(0);
+  assert.deepEqual(open, [slices[1]], 'eski fare odağı başka dilimin ipucunu engellemez');
+  assert.deepEqual(sliceElements().map((item) => item.props.children.props.className.includes('is-active')), [false, true, false]);
+  child(slices[1]).props.onMouseLeave();
+  child(legends[2]).props.onKeyDown({ key: 'Home', preventDefault() {} }); settle(); assertActive(0);
 
 });
 
