@@ -19,10 +19,12 @@
  * (önbellekten okunmayan girdi belirteçlerinin toplam üst sınırı), PLANNER_CLAUDE_REQUIRE_CACHE=1 (aynı önekle ikinci
  * çağrıdan sonra önbellek okuması zorunlu). Ev klasörü yalıtıldığı için CLI'nin kayıtlı oturumu görünmez; kimlik bilgisi
  * ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN ya da CLAUDE_CODE_OAUTH_TOKEN (ya da barındırılan oturumun ortamı) ile verilir.
+ * PLANNER_CLAUDE_HOME (varsayılan geçici kökte `rota-planner-claude-home`) yalnızca bu kullanıcıya ait ve başkasının
+ * yazamadığı bir klasör olabilir; doğrulanamayan ev PLANNER_HOME_UNTRUSTED ile reddedilir.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -399,6 +401,53 @@ function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] 
   });
 }
 
+/**
+ * Windows ev denetimi: ev ve her atası bu kullanıcıya, SYSTEM'e, Yöneticiler'e ya da TrustedInstaller'a aittir ve
+ * devralınmak üzere bekleyen (yalnızca devralma) girdiler dışında başka bir hesaba evde yazma, silme ya da izin/sahiplik
+ * değiştirme; atalarda alt öğe silme (yeniden adlandırma), kendini silme ya da izin/sahiplik değiştirme hakkı vermez.
+ * Herhangi bir hata sıfırdan farklı çıkış kodudur. Denetimin süresi model bütçesinden ayrıdır.
+ */
+const HOME_CHECK_TIMEOUT_MS = 30000;
+const WINDOWS_HOME_CHECK = "$ErrorActionPreference='Stop'; $sid=[Security.Principal.SecurityIdentifier]; "
+  + "$trusted=@([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544',"
+  + "'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'); $mask=0x500D0156; $p=$env:ROTA_PLANNER_HOME; "
+  + "while ($p) { $acl=[IO.Directory]::GetAccessControl($p); if ($trusted -notcontains $acl.GetOwner($sid).Value) { exit 3 }; "
+  + "foreach ($rule in $acl.GetAccessRules($true,$true,$sid)) { if ($rule.AccessControlType -eq 'Allow' "
+  + "-and -not ([int]$rule.PropagationFlags -band 2) -and ([long]$rule.FileSystemRights -band $mask) "
+  + "-and $trusted -notcontains $rule.IdentityReference.Value) { exit 3 } }; "
+  + "$mask=0x100D0040; $p=[IO.Path]::GetDirectoryName($p) }; exit 0";
+
+/**
+ * Yürütülebilir MCP yapılandırmasının, CLI ayarlarının ve çalışma klasörünün evi.
+ *
+ * Ortak geçici kökteki öngörülebilir ad başka bir yerel kullanıcı tarafından önceden oluşturulabiliyor; o kullanıcı
+ * yazılan `mcp.json` dosyasını (ya da ev ayarlarını) değiştirip CLI'ye kendi komutunu çalıştırtabiliyordu. Ev bu
+ * yüzden kullanılmadan önce doğrulanır ve bağlantıları çözülmüş yoluyla kullanılır. POSIX'te ev bu kullanıcıya ait
+ * olmalı ve başkasına yazılabilir olmamalıdır; her ata da bu kullanıcıya ya da köke aittir ve başkasına yazılabilirse
+ * yapışkan bitlidir. Windows'ta aynı kural ACL üzerinden denetlenir (`WINDOWS_HOME_CHECK`); denetim çalışmazsa ev
+ * güvenilmez sayılır.
+ */
+function trustedHome() {
+  const requested = path.resolve(process.env.PLANNER_CLAUDE_HOME || path.join(tmpdir(), 'rota-planner-claude-home'));
+  mkdirSync(requested, { recursive: true, mode: 0o700 });
+  const home = realpathSync(requested);
+  if (process.platform === 'win32') {
+    const result = spawnSync(path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_HOME_CHECK],
+      { encoding: 'utf8', windowsHide: true, timeout: HOME_CHECK_TIMEOUT_MS, env: { ...process.env, ROTA_PLANNER_HOME: home } });
+    if (result.status !== 0) throw new Error('PLANNER_HOME_UNTRUSTED');
+    return home;
+  }
+  const uid = process.getuid();
+  const own = lstatSync(home);
+  if (!own.isDirectory() || own.uid !== uid || own.mode & 0o022) throw new Error('PLANNER_HOME_UNTRUSTED');
+  for (let directory = path.dirname(home); ; directory = path.dirname(directory)) {
+    const stat = lstatSync(directory);
+    if (stat.uid !== 0 && stat.uid !== uid || stat.mode & 0o022 && !(stat.mode & 0o1000)) throw new Error('PLANNER_HOME_UNTRUSTED');
+    if (path.dirname(directory) === directory) return home;
+  }
+}
+
 function reportFailure(log, error, extra = {}) {
   if (log) appendFileSync(log, `${JSON.stringify({ at: new Date().toISOString(), error, ...extra })}\n`);
   process.stdout.write(`${JSON.stringify({ text: '', toolCalls: [], error })}\n`);
@@ -428,7 +477,6 @@ async function complete(launcher, timeoutMs) {
   const prior = log ? ledger(log) : [];
   const callId = log ? randomUUID() : null;
   if (log) {
-    // Kilit, ayırımdan kullanım kaydına dek tutulur; sonraki çağrı tamamlanan harcamayı görür.
     const reservations = prior.filter((row) => row.reserved);
     if (maxCalls && reservations.length >= maxCalls) return fail('PLANNER_BUDGET_CALLS');
     const measured = prior.filter((row) => row.usage && Number.isSafeInteger(row.usage.input_tokens) && row.usage.input_tokens >= 0
@@ -437,11 +485,14 @@ async function complete(launcher, timeoutMs) {
       || reservations.filter((row) => !row.callId).length > measured.filter((row) => !row.callId).length)) return fail('PLANNER_BUDGET_UNVERIFIED');
     const uncached = measured.reduce((sum, row) => sum + row.usage.input_tokens + row.usage.cache_creation_input_tokens, 0);
     if (maxUncached && uncached >= maxUncached) return fail('PLANNER_BUDGET_TOKENS');
-    appendFileSync(log, `${JSON.stringify({ at: new Date().toISOString(), reserved: true, callId })}\n`);
   }
 
   // Kararlı yalıtılmış ev ve çalışma klasörü: depo bağlamı, kullanıcı ayarı ya da proje yönergesi modele girmez.
-  const home = process.env.PLANNER_CLAUDE_HOME || path.join(tmpdir(), 'rota-planner-claude-home');
+  // Güvenilmeyen ev bütçe ayırımından ÖNCE reddedilir; model hiç çağrılmaz.
+  let home;
+  try { home = trustedHome(); } catch { return fail('PLANNER_HOME_UNTRUSTED'); }
+  // Kilit, ayırımdan kullanım kaydına dek tutulur; sonraki çağrı tamamlanan harcamayı görür.
+  if (log) appendFileSync(log, `${JSON.stringify({ at: new Date().toISOString(), reserved: true, callId })}\n`);
   const cwd = path.join(home, 'work');
   mkdirSync(cwd, { recursive: true });
   const work = mkdtempSync(path.join(home, 'call-'));

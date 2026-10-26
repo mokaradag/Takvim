@@ -1,4 +1,5 @@
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../../server/errors.js';
+import { assertBrowserMutationIntent } from '../../../../../../server/identity/sameOriginRequest.js';
 import { loadSystemAdminContext } from '../../../../../../server/observability/adminRequestContext.js';
 import { withRouteObservability } from '../../../../../../server/observability/observeOperation.js';
 import {
@@ -101,6 +102,7 @@ export const GET = withRouteObservability('api.admin.system.events', async (requ
  */
 export const POST = withRouteObservability('api.admin.system.events.acknowledge', async (request) => {
   try {
+    assertBrowserMutationIntent(request, { json: true });
     const { pool, actor } = await loadSystemAdminContext();
     const body = await request.json().catch(() => null);
     if (String(body?.action || '') !== 'acknowledge') {

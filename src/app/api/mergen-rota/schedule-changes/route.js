@@ -1,5 +1,6 @@
 import { queryScheduleChanges, updateScheduleNotifications } from '../../../../server/schedule-change/scheduleRequestQueries.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../server/errors.js';
+import { assertBrowserMutationIntent } from '../../../../server/identity/sameOriginRequest.js';
 import { createScheduleChange } from '../../../../server/schedule-change/scheduleChangeStore.js';
 
 export const runtime = 'nodejs';
@@ -8,6 +9,7 @@ export const revalidate = 0;
 
 export async function POST(request) {
   try {
+    assertBrowserMutationIntent(request, { json: true });
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== 'object') {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Geçerli bir tarih talebi gönderilmelidir.', { status: 400 });
@@ -28,6 +30,7 @@ export async function GET(request) {
 
 export async function PATCH(request) {
   try {
+    assertBrowserMutationIntent(request, { json: true });
     const body = await request.json().catch(() => null);
     return Response.json(await updateScheduleNotifications(body || {}), { headers: { 'cache-control': 'no-store' } });
   } catch (error) { return safeErrorResponse(error); }

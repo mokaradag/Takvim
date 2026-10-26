@@ -1,4 +1,5 @@
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../server/errors.js';
+import { assertBrowserMutationIntent } from '../../../../../server/identity/sameOriginRequest.js';
 import { decideScheduleChange } from '../../../../../server/schedule-change/scheduleChangeStore.js';
 
 export const runtime = 'nodejs';
@@ -7,6 +8,7 @@ export const revalidate = 0;
 
 export async function PATCH(request, { params }) {
   try {
+    assertBrowserMutationIntent(request, { json: true });
     const requestId = params?.requestId;
     const body = await request.json().catch(() => null);
     if (!requestId || !body || typeof body !== 'object') {

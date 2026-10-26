@@ -40,7 +40,7 @@ test('commit validation only accepts statuses the Actual-mode client can persist
 
 test('manual project code collisions are normalized, locked and rejected before SQL writes', () => {
   const source = read('src/server/repository/orderedSqlAppRepository.js');
-  const guardPosition = source.indexOf('assertManualProjectCodesAvailable(transaction, orderedChanges)');
+  const guardPosition = source.indexOf('assertManualProjectCodesAvailable(transaction, orderedChanges, actor)');
   const commitPosition = source.indexOf('repository.commitChanges(orderedChanges)');
 
   assert.match(source, /const pendingProjectCodes = new Map\(\)/);

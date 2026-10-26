@@ -129,6 +129,22 @@ function workingDaysOf(calendar) {
   return Array.isArray(days) && days.length ? days : DEFAULT_WORKING_DAYS;
 }
 
+/**
+ * `addWorkingDays(_, amount, calendar)` taramasının, tarama yapılmadan bulunan
+ * üst sınırı (takvim günü). Ardışık her 7 günde haftalık desenin çalışma günü
+ * sayısı kadar iş günü vardır: haftada tek günlük desen aynı iş günü sayısı
+ * için beş günlük desenin yaklaşık beş katı gün tarar. Tatiller veritabanında
+ * tanımlı başvuru verisidir; taramayı en fazla motorun kendi sınırına
+ * (`workingDayScanBudget`) dek uzatır. Deseni geçersiz takvim o sınırın
+ * tamamını tarar.
+ */
+export function workingDayScanBound(amount, calendar = DEFAULT_CALENDAR) {
+  const magnitude = Math.abs(Number.isFinite(amount) ? Math.trunc(amount) : 0);
+  const weekdays = new Set(workingDaysOf(calendar).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)).size;
+  const budget = workingDayScanBudget(magnitude);
+  return weekdays ? Math.min(budget, 7 * Math.ceil(magnitude / weekdays)) : budget;
+}
+
 export function normalizeCalendar(calendar = DEFAULT_CALENDAR) {
   // `calendarById` bulamadığı takvim için `null` döndürür ve çağıranların bir
   // kısmı bu sonucu doğrudan buraya veriyordu: varsayılan parametre yalnızca

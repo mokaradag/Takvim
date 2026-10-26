@@ -235,6 +235,7 @@ ile ekleyebilirdi.
 Seri bütünlüğü kalıcı katmanda korunur:
 
 - yeni yinelemenin ham tekrar günü, şablon kuralının ve çalışma takviminin ürettiği bir oluşumla eşleşmelidir; planlanan başlangıç, bitiş, termin ve iş günü süresi de aynı oluşumun değerlerini taşımalıdır. Uyumsuz bir satır bütün kayıt işlemini geri alır. Oluşturulduktan sonra yinelemenin kendi planı mevcut yetki ve sürüm kurallarıyla düzenlenebilir;
+- üyelik bitiş aritmetiğinden ÖNCE denetlenir: şablonun yalnızca tekrar günleri üretilir (aynı işlemde aynı şablon sürümü için yeniden kullanılır) ve iş günü taraması yalnızca istenen oluşumun bitişi için yapılır. Bir kayıt isteğindeki bütün yeni yinelemelerin bitiş taraması `10 × MAX_WORKING_DAY_SPAN` takvim günü ile sınırlıdır; her yinelemenin payı tarama yapılmadan, takvimin haftalık desenine göre üst sınır olarak hesaplanır (haftada tek çalışma günlü takvim aynı süre için yaklaşık yedi kat gün tarar) ve aşan istek açık bir hatayla reddedilir;
 
 - yineleme, şablonuyla **aynı projede** olmak zorundadır ve şablonun kendisi
   başka bir serinin yinelemesi olamaz;

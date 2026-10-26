@@ -1,7 +1,7 @@
 import 'server-only';
 import { normalizeTaskLifecycle } from '../../domain/taskLifecycle.js';
 import { businessDate } from '../../domain/calendar/businessDate.js';
-import { resolveTaskCalendar } from '../../scheduling/calendars/index.js';
+import { MAX_WORKING_DAY_SPAN, resolveTaskCalendar } from '../../scheduling/calendars/index.js';
 import { randomUUID } from 'node:crypto';
 import { normalizePriorityId } from '../../domain/constants/index.js';
 import { canonicalActualId, sameActualId } from '../../domain/identity/actualId.js';
@@ -17,7 +17,13 @@ import { applyTaskAssigneeProjection } from './taskAssigneeProjection.js';
 import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { assertCanCreateManualProject, assertProjectWriteAccess, hasTaskAssignmentScope } from '../authorization/authorization.js';
 import { mergeProjectTagAppearance, planProjectTagPropagation, projectTagNames } from '../../domain/tags/index.js';
-import { formatRecurrenceRule, normalizeRecurrenceRule, planRecurringOccurrences } from '../../scheduling/recurrence/index.js';
+import {
+  formatRecurrenceRule,
+  normalizeRecurrenceRule,
+  occurrenceFinishCost,
+  occurrenceFinishes,
+  planRecurringOccurrences
+} from '../../scheduling/recurrence/index.js';
 import { calculatePlannedDurationDays } from '../../scheduling/plans/index.js';
 import {
   enqueueOutlookProjectChange,
@@ -45,6 +51,7 @@ import { synchronizeCorporateWbs } from './corporateWbsSync.js';
 const DEPENDENCY_PLANNING_VERIFIED = Symbol.for('mergen-rota.dependency-planning-verified');
 import { runCorporateWbsSync } from './corporateWbsSyncSchedule.js';
 import { decodeVersion, encodeVersion } from './versionTokens.js';
+import { assertSuccessorsReconciledWithoutDisclosure } from './dependencyReconciliationValidation.js';
 
 // SQL Server GUID değerlerini büyük harf döndürür; istemci küçük harf gönderir.
 // Tüm kimlikler bu iki yardımcı üzerinden kanonikleştirilir, böylece sunucudaki
@@ -1915,10 +1922,13 @@ function assertAssigneeWorkFieldsOnly(before, task, { allowRecurrence = false } 
   }
 }
 
-/** Tam proje veya görev oluşturucusu olmayan kapsam plan tarihlerini doğrudan yazamaz. */
-function assertControlledScheduleUnchanged(before, task) {
+/**
+ * Tam proje veya görev oluşturucusu olmayan kapsam plan tarihlerini doğrudan
+ * yazamaz. Karar, gönderilen alanlara değil YAZILACAK değerlere verilir.
+ */
+function assertControlledScheduleUnchanged(before, effective) {
   const changed = CONTROLLED_SCHEDULE_FIELDS.some(([field, storedField]) => (
-    hasSubmittedField(task, field) && (task[field] || null) !== isoDate(before[storedField])
+    effective[field] !== isoDate(before[storedField])
   ));
   if (changed) {
     throw new ServerPersistenceError(
@@ -1974,7 +1984,27 @@ function assertAssigneeTaskCreateFieldsOnly(task, parent = null) {
   }
 }
 
-async function commitTask(executor, actor, task, correlationId, { dependencyPlanningVerified = false } = {}) {
+/**
+ * Bir değişiklik kümesindeki yeni yinelemelerin bitiş aritmetiği için takvim
+ * taraması üst sınırı (gün).
+ *
+ * Her yinelemenin bitişi şablon süresi kadar iş günü taranarak hesaplanır.
+ * Eskiden TEK yineleme doğrulanırken serinin tamamının bitişleri hesaplanıyordu;
+ * COUNT=400 ve 20 000 iş günlük bir şablon, açık SERIALIZABLE işlem içinde her
+ * yineleme için saniyelerce olay döngüsünü tutuyordu. Sınır gerçekçi serilerin
+ * çok üstündedir ve aşıldığında küme açık bir hatayla reddedilir.
+ */
+const RECURRENCE_COMMIT_FINISH_BUDGET_DAYS = 10 * MAX_WORKING_DAY_SPAN;
+
+/** Bir işlemdeki yineleme doğrulamalarının ortak durumu: şablon planları ve harcanan takvim işi. */
+function createRecurrenceCommitContext() {
+  return { plans: new Map(), spentDays: 0 };
+}
+
+async function commitTask(executor, actor, task, correlationId, {
+  dependencyPlanningVerified = false,
+  recurrence = createRecurrenceCommitContext()
+} = {}) {
   const taskId = uuid(task.id);
   const projectId = uuid(task.projectId);
   const before = await taskRow(executor, taskId);
@@ -2008,6 +2038,16 @@ async function commitTask(executor, actor, task, correlationId, { dependencyPlan
     }
   }
 
+  // Kontrollü plan tarihlerinin YAZILACAK değerleri yetki kararından önce
+  // çözülür. Tam proje yetkisi olmayan güncellemede gönderilmeyen tarih kalıcı
+  // değeri korur: kanonikleştirme eksik alanı `undefined` anahtarı olarak
+  // ekliyordu; denetim onu "gönderilmedi" sayıp atlıyor, yazma ise NULL
+  // yazıyordu ve atama kapsamındaki aktör korunan tarihleri silebiliyordu.
+  const keepsStoredDate = (field) => Boolean(before) && !fullProjectWrite && !hasSubmittedField(task, field);
+  const plannedStart = keepsStoredDate('plannedStart') ? isoDate(before.PlannedStart) : (task.plannedStart || null);
+  const plannedFinish = keepsStoredDate('plannedFinish') ? isoDate(before.PlannedFinish) : (task.plannedFinish || null);
+  const targetFinish = keepsStoredDate('targetFinish') ? isoDate(before.TargetFinish) : (task.targetFinish || null);
+
   // PROJE yetkisi, sorumlu doğrulamasından ÖNCE denetlenir. `ensurePeople`
   // önce çalıştığında, erişimi olmayan bir kullanıcı bilinmeyen sicil için
   // "geçersiz çalışan", var olan sicil için FORBIDDEN alıyor ve bu farkla
@@ -2031,7 +2071,7 @@ async function commitTask(executor, actor, task, correlationId, { dependencyPlan
       : await assertTaskProjectScope(executor, actor, projectId, {
         allowAssigneeCreate: !before
       });
-    if (before && !fullProjectWrite) assertControlledScheduleUnchanged(before, task);
+    if (before && !fullProjectWrite) assertControlledScheduleUnchanged(before, { plannedStart, plannedFinish, targetFinish });
   }
 
   // Dar sorumlu yazması ürün yüzeyinden kaldırılmış saat/finans alanlarını
@@ -2073,17 +2113,6 @@ async function commitTask(executor, actor, task, correlationId, { dependencyPlan
     throw new ServerPersistenceError('MUTATION_FAILED', 'Görev projesi bulunamadı.');
   }
 
-  // Dar görev yazmaları eksik tarih alanlarını NULL saymaz. Oluşturucu tarihi
-  // değiştirirse ve sorumlu yalnızca içerik yazarsa kalıcı plan korunur.
-  const plannedStart = before && narrowTaskWrite && !hasSubmittedField(task, 'plannedStart')
-    ? isoDate(before.PlannedStart)
-    : (task.plannedStart || null);
-  const plannedFinish = before && narrowTaskWrite && !hasSubmittedField(task, 'plannedFinish')
-    ? isoDate(before.PlannedFinish)
-    : (task.plannedFinish || null);
-  const targetFinish = before && narrowTaskWrite && !hasSubmittedField(task, 'targetFinish')
-    ? isoDate(before.TargetFinish)
-    : (task.targetFinish || null);
   const requestedCalendarId = narrowTaskWrite ? id(before.CalendarId) : (task.calendarId || null);
   const planContext = await loadTaskPlanContext(executor, projectId, requestedCalendarId);
   const effectiveCalendarId = planContext.projects[0]?.calendarId || null;
@@ -2216,14 +2245,32 @@ async function commitTask(executor, actor, task, correlationId, { dependencyPlan
         parentContext.calendars
       );
       const templateDate = isoDate(parent.RecurrenceOccurrenceDate) || isoDate(parent.PlannedStart);
-      const occurrences = planRecurringOccurrences({
+      const template = {
         plannedStart: isoDate(parent.PlannedStart), plannedFinish: isoDate(parent.PlannedFinish),
         targetFinish: isoDate(parent.TargetFinish), plannedDurationDays: nullableNumber(parent.PlannedDurationDays)
-      }, parentRule, { calendar: parentCalendar }).filter((occurrence) => occurrence.occurrenceDate !== templateDate);
-      const occurrence = occurrences.find((item) => item.occurrenceDate === recurrenceOccurrenceDate);
-      if (!occurrence) {
+      };
+      // Üyelik önce denetlenir: yalnızca tekrar günleri üretilir ve aynı şablon
+      // sürümü için işlem boyunca yeniden kullanılır. Kardeş yinelemelerin
+      // bitişleri hiç hesaplanmaz.
+      const planKey = `${id(recurrenceParentId)}:${encodeVersion(parent.RowVersion)}:${normalizedParentCalendarId || ''}`;
+      let occurrences = recurrence.plans.get(planKey);
+      if (!occurrences) {
+        occurrences = planRecurringOccurrences(template, parentRule, { calendar: parentCalendar, finishes: false })
+          .filter((occurrence) => occurrence.occurrenceDate !== templateDate);
+        recurrence.plans.set(planKey, occurrences);
+      }
+      const planned = occurrences.find((item) => item.occurrenceDate === recurrenceOccurrenceDate);
+      if (!planned) {
         throw new ServerPersistenceError('MUTATION_FAILED', 'Tekrar günü şablonun kuralı ve çalışma takvimiyle uyumlu olmalıdır.');
       }
+      recurrence.spentDays += occurrenceFinishCost(template, { calendar: parentCalendar });
+      if (recurrence.spentDays > RECURRENCE_COMMIT_FINISH_BUDGET_DAYS) {
+        throw new ServerPersistenceError(
+          'MUTATION_FAILED',
+          'Değişiklik kümesindeki yinelemelerin plan hesabı işlem sınırını aşıyor; yinelemeleri daha küçük gruplar hâlinde oluşturun.'
+        );
+      }
+      const occurrence = { ...planned, ...occurrenceFinishes(template, planned.plannedStart, { calendar: parentCalendar }) };
       const expectedDuration = calculatePlannedDurationDays({
         ...occurrence, projectId, calendarId: normalizedParentCalendarId, milestone: Boolean(parent.IsMilestone)
       }, parentContext);
@@ -2279,6 +2326,17 @@ async function commitTask(executor, actor, task, correlationId, { dependencyPlan
     );
   }
   if (projectChanged) {
+    // Taşıma görevin GELEN ve GİDEN bütün bağımlılık satırlarını siler: kaynak
+    // projenin bağımlılık modeli ve ardılların kendi modelleri değişir.
+    // Doğrudan bağımlılık düzenlemesi kaynak projede FULL yetki ister; görevi
+    // taşıma yetkisi bu hakkı vermez. Yetkisi olmayan aktör bağımlılıklı
+    // görevi taşıyamaz, satırlar sessizce silinmez.
+    if (!hasFullProjectWriteAccess(actor, beforeProjectId) && await hasDependencyRows(executor, taskId)) {
+      throw new ServerPersistenceError(
+        'FORBIDDEN',
+        'Bağımlılıkları olan bir görev yalnızca kaynak projede tam proje yetkisiyle başka projeye taşınabilir.'
+      );
+    }
     const dependencyCleanup = request(executor);
     dependencyCleanup.input('taskId', sql.UniqueIdentifier, taskId);
     const cleanup = await dependencyCleanup.query(`
@@ -2626,7 +2684,19 @@ async function publishAssignmentChanges(executor, actor, correlationId, changes,
   }
 }
 
-async function deleteTask(executor, actor, entry, correlationId) {
+/** Görevin gelen ya da giden bağımlılık satırı var mı (kilit altında). */
+async function hasDependencyRows(executor, taskId) {
+  const req = request(executor);
+  req.input('taskId', sql.UniqueIdentifier, taskId);
+  const result = await req.query(`
+    SELECT TOP (1) dependency.TaskId
+    FROM dbo.MR_TaskDependencies dependency WITH (UPDLOCK, HOLDLOCK)
+    WHERE dependency.TaskId = @taskId OR dependency.PredecessorTaskId = @taskId;
+  `);
+  return Boolean(result.recordset?.length);
+}
+
+async function deleteTask(executor, actor, entry, correlationId, changes = {}) {
   const taskId = uuid(entry.id);
   const before = await taskRowForUpdate(executor, taskId);
   if (!before) return null;
@@ -2660,6 +2730,9 @@ async function deleteTask(executor, actor, entry, correlationId) {
       'Bu görev, yetki alanınız dışındaki görevlerle ilişkili (yineleme ya da bağımlılık). Silme işlemi tam proje yetkisi gerektirir.'
     );
   }
+  // Ardılların uzlaştırılması bağımlılıkları GÖREMEYEN aktör için yetki
+  // kararından SONRA ve kimliksiz denetlenir (bkz. dependencyReconciliationValidation).
+  if (!fullProjectWrite) await assertSuccessorsReconciledWithoutDisclosure(executor, taskId, changes);
   if (!before.RowVersion || Buffer.compare(Buffer.from(before.RowVersion), Buffer.from(expectedVersion)) !== 0) {
     throw new ServerPersistenceError('CONFLICT', 'Görev silinmeden önce başka bir kullanıcı tarafından değiştirildi. Verileri yeniden yükleyin.');
   }
@@ -2940,6 +3013,7 @@ export function createSqlAppRepository() {
       return withSqlTransaction(async (transaction) => {
         const actor = await observePhase('phase.commit.authorization', () => loadAuthorizationContext(transaction));
         const correlationId = randomUUID();
+        const recurrence = createRecurrenceCommitContext();
         const consumedRootIds = new Set();
         const tagPlans = [];
         const touchedTaskProjects = new Set();
@@ -2958,7 +3032,7 @@ export function createSqlAppRepository() {
         const assignmentChanges = [];
         for (const task of changes.taskUpserts) {
           const touched = await observePhase('phase.commit.task-mutation', () => commitTask(
-            transaction, actor, task, correlationId, { dependencyPlanningVerified }
+            transaction, actor, task, correlationId, { dependencyPlanningVerified, recurrence }
           ));
           if (touched.projectId) touchedTaskProjects.add(touched.projectId);
           if (touched.beforeProjectId) touchedTaskProjects.add(touched.beforeProjectId);
@@ -2981,7 +3055,7 @@ export function createSqlAppRepository() {
           propagatedTaskIds.push(...await propagateProjectTagChanges(transaction, actor.sicil, entry.projectId, entry.plan));
         }
         for (const entry of changes.taskDeletes) {
-          const touched = await deleteTask(transaction, actor, entry, correlationId);
+          const touched = await deleteTask(transaction, actor, entry, correlationId, changes);
           if (touched?.projectId) touchedTaskProjects.add(touched.projectId);
           for (const relatedTaskId of touched?.relatedTaskIds || []) relatedTaskIds.add(relatedTaskId);
         }

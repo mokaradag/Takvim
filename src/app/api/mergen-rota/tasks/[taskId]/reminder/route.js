@@ -2,6 +2,7 @@ import { extractActualId } from '../../../../../../domain/identity/actualId.js';
 import { loadAuthorizationContext } from '../../../../../../server/authorization/loadAuthorizationContext.js';
 import { getSqlPool } from '../../../../../../server/db/pool.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../../server/errors.js';
+import { assertBrowserMutationIntent } from '../../../../../../server/identity/sameOriginRequest.js';
 import { assertTaskReminderAccess } from '../../../../../../server/reminders/reminderAccess.js';
 import { sendManualReminder } from '../../../../../../server/reminders/reminderService.js';
 
@@ -19,8 +20,9 @@ export const revalidate = 0;
  *
  * Otomatik hatırlatma kapalı olsa da bu uç çalışır.
  */
-export async function POST(_request, context) {
+export async function POST(request, context) {
   try {
+    assertBrowserMutationIntent(request);
     const rawTaskId = (await context?.params)?.taskId;
     // Gerçek kipte YENİ oluşturulan görevler `task-<uuid>` istemci takma adını
     // korur ve arayüz `task.id` değerini olduğu gibi yollar. Yalnızca çıplak

@@ -977,6 +977,21 @@ function commandPlatformEnv() {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => keep.test(key)));
 }
 
+/**
+ * Windows'u taklit eden POSIX çağrılarının ev denetimi ikizi: `SystemRoot` altındaki sahte PowerShell, çözülmüş ev
+ * yolunda `untrusted` geçen evi reddeder, ötekini kabul eder. Gerçek ACL denetimi Windows işinde sınanır.
+ */
+async function windowsHomeCheckStandIn(dir) {
+  const { chmodSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const path = await import('node:path');
+  const systemRoot = path.join(dir, 'windows');
+  const folder = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(path.join(folder, 'powershell.exe'), '#!/bin/sh\ncase "$ROTA_PLANNER_HOME" in *untrusted*) exit 3 ;; esac\nexit 0\n');
+  chmodSync(path.join(folder, 'powershell.exe'), 0o755);
+  return systemRoot;
+}
+
 test('Claude model komutu: geçersiz bütçe, kayıtsız bütçe ve tükenen çağrı hakkı modele gitmeden reddedilir', async () => {
   const { spawnSync } = await import('node:child_process');
   const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
@@ -1004,6 +1019,91 @@ test('Claude model komutu: geçersiz bütçe, kayıtsız bütçe ve tükenen ça
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP yapılandırması yazılmadan ve bütçe ayrılmadan reddedilir', async (t) => {
+  const { spawnSync } = await import('node:child_process');
+  const { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+  const dir = mkdtempSync(path.join(tmpdir(), 'rota-claude-home-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const input = JSON.stringify({ messages: [{ role: 'system', content: 'x' }, { role: 'user', content: 'y' }], tools: [], toolChoice: 'auto' });
+  let calls = 0;
+  const run = (script, home, env = {}) => {
+    const log = path.join(dir, `calls-${calls += 1}.jsonl`);
+    const result = spawnSync(process.execPath, [script], { input, encoding: 'utf8',
+      env: { ...commandPlatformEnv(), PATH: '', PLANNER_CLAUDE_LOG: log, PLANNER_CLAUDE_HOME: home, ...env } });
+    const rows = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
+    return { error: JSON.parse(result.stdout).error, reserved: rows.some(row => row.reserved) };
+  };
+  const untrusted = (outcome, label) => {
+    assert.equal(outcome.error, 'PLANNER_HOME_UNTRUSTED', label);
+    assert.equal(outcome.reserved, false, `${label}: güvenilmeyen ev bütçe ayırmaz`);
+  };
+
+  const adapter = 'scripts/planner-claude-model.mjs';
+  if (process.platform === 'win32') {
+    // Gerçek ACL: başka hesaba devredilen yazma hakkı evi, yalnızca bu klasörde verilen alt öğe silme hakkı atayı
+    // güvenilmez kılar. Kullanıcının kendi geçici klasörü altındaki ev kabul edilir.
+    const grant = (target, rights) => assert.equal(spawnSync('icacls', [target, '/grant', `*S-1-1-0:${rights}`], { encoding: 'utf8' }).status, 0);
+    const shared = path.join(dir, 'shared');
+    mkdirSync(shared);
+    grant(shared, '(OI)(CI)M');
+    untrusted(run(adapter, path.join(shared, 'home')), 'herkese yazılabilir ev');
+    assert.deepEqual(readdirSync(path.join(shared, 'home')), [], 'reddedilen eve yürütülebilir yapılandırma yazılmaz');
+    const renamable = path.join(dir, 'renamable');
+    mkdirSync(renamable);
+    grant(renamable, '(DC)');
+    untrusted(run(adapter, path.join(renamable, 'home')), 'alt öğesi başkasınca silinebilen ata');
+    const outcome = run(adapter, path.join(dir, 'private', 'home'));
+    if (outcome.error === 'PLANNER_HOME_UNTRUSTED') {
+      // Tanı: beklenmeyen reddin hangi klasör ve hesaptan geldiği (yalnızca başarısızlıkta).
+      const dump = spawnSync(path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-Command',
+        "$p=$env:ROTA_PLANNER_HOME; while ($p) { $a=[IO.Directory]::GetAccessControl($p); $t=[Security.Principal.SecurityIdentifier]; '{0} {1}' -f $p, $a.GetOwner($t).Value; "
+        + "foreach ($r in $a.GetAccessRules($true,$true,$t)) { '  {0} {1} {2:X} {3}' -f $r.IdentityReference.Value, $r.AccessControlType, [long]$r.FileSystemRights, $r.PropagationFlags }; $p=[IO.Path]::GetDirectoryName($p) }"],
+      { encoding: 'utf8', env: { ...process.env, ROTA_PLANNER_HOME: path.join(dir, 'private', 'home') } });
+      assert.fail(`özel ev reddedildi:\n${dump.stdout}${dump.stderr}`);
+    }
+    return;
+  }
+
+  // Windows yolu her platformda bağlantısıyla sınanır: denetim süreci (sahte PowerShell) çözülmüş evi alır, sıfırdan
+  // farklı çıkış ya da çalışmayan denetim evi reddeder. Taklit edilen platformda kayıt kilidi Windows sürecini
+  // sorgulayacağı için bu çağrılar kayıtsızdır.
+  const windows = path.join(dir, 'windows.mjs');
+  writeFileSync(windows, `Object.defineProperty(process, 'platform', { value: 'win32' });
+    const { runAdapter } = await import(${JSON.stringify(pathToFileURL(path.resolve(adapter)).href)});
+    await runAdapter();`);
+  const windowsEnv = { SystemRoot: await windowsHomeCheckStandIn(dir), PLANNER_CLAUDE_LOG: '' };
+  untrusted(run(windows, path.join(dir, 'untrusted-home'), windowsEnv), 'denetimin reddettiği ev');
+  assert.deepEqual(readdirSync(path.join(dir, 'untrusted-home')), [], 'reddedilen eve yürütülebilir yapılandırma yazılmaz');
+  mkdirSync(path.join(dir, 'untrusted-target'));
+  symlinkSync(path.join(dir, 'untrusted-target'), path.join(dir, 'linked-home'));
+  untrusted(run(windows, path.join(dir, 'linked-home'), windowsEnv), 'bağlantının çözülmüş hedefi denetlenir');
+  untrusted(run(windows, path.join(dir, 'unchecked-home'), { PLANNER_CLAUDE_LOG: '' }), 'çalışmayan denetim');
+  assert.deepEqual(readdirSync(path.join(dir, 'unchecked-home')), []);
+  assert.notEqual(run(windows, path.join(dir, 'private-home'), windowsEnv).error, 'PLANNER_HOME_UNTRUSTED');
+
+  const shared = path.join(dir, 'shared');
+  mkdirSync(shared);
+  chmodSync(shared, 0o777);
+  untrusted(run(adapter, path.join(shared, 'home')), 'başkasına yazılabilir yapışkansız ata');
+  assert.deepEqual(readdirSync(path.join(shared, 'home')), []);
+  const open = path.join(dir, 'open');
+  mkdirSync(open);
+  chmodSync(open, 0o777);
+  untrusted(run(adapter, open), 'başkasına yazılabilir ev');
+  assert.deepEqual(readdirSync(open), []);
+  // Bağlantı çözülür ve hedefin kendisi denetlenir: güvenli klasörden açık eve giden bağ da reddedilir.
+  symlinkSync(open, path.join(dir, 'link'));
+  untrusted(run(adapter, path.join(dir, 'link')), 'açık eve yönelen bağlantı');
+  // Yapışkan bitli ortak kök (ör. /tmp) altındaki kendi klasörü güvenilirdir.
+  const sticky = path.join(dir, 'sticky');
+  mkdirSync(sticky);
+  chmodSync(sticky, 0o1777);
+  assert.notEqual(run(adapter, path.join(sticky, 'home')).error, 'PLANNER_HOME_UNTRUSTED');
 });
 
 /** Gerçek komut sınırı; yerel CLI ikizi yalnızca açık dosya bariyerinde tamamlanır. */
@@ -2046,7 +2146,7 @@ test('Claude frozen 18: standard Windows npm launcher passes arguments without a
     'require("node:fs").writeFileSync(' + JSON.stringify(argv) + ', JSON.stringify(process.argv.slice(2)));\n' +
     readFileSync(cli.model, 'utf8').replace('const root = __dirname;', 'const root = ' + JSON.stringify(cli.dir) + ';'));
   writeFileSync(cli.adapter, 'Object.defineProperty(process,"platform",{value:"win32"});\n' + readFileSync(cli.adapter, 'utf8'));
-  const pending = cli.start({ PATH: bin, PLANNER_CLAUDE_LOG: '' }, 'claude');
+  const pending = cli.start({ PATH: bin, PLANNER_CLAUDE_LOG: '', SystemRoot: process.env.SystemRoot || await windowsHomeCheckStandIn(cli.dir) }, 'claude');
   await cli.waitFor(() => cli.count() === 1);
   cli.release();
   const reply = await pending.done;
@@ -2156,7 +2256,7 @@ test('Claude frozen 22: Windows CLI uses the isolated profile and required syste
   const capture = path.join(cli.dir, 'environment.json');
   writeFileSync(cli.adapter, 'Object.defineProperty(process,"platform",{value:"win32"});\n' + readFileSync(cli.adapter, 'utf8'));
   writeFileSync(cli.model, 'require("node:fs").writeFileSync(' + JSON.stringify(capture) + ',JSON.stringify(process.env));\n' + readFileSync(cli.model, 'utf8'));
-  const systemRoot = process.env.SystemRoot || 'C:\\Windows';
+  const systemRoot = process.env.SystemRoot || await windowsHomeCheckStandIn(cli.dir);
   const windows = { SystemRoot: systemRoot, windir: process.env.windir || systemRoot,
     ComSpec: process.env.ComSpec || systemRoot + '\\System32\\cmd.exe', PATHEXT: process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD' };
   const pending = cli.start({ ...windows, PLANNER_CLAUDE_LOG: '', USERPROFILE: path.join(cli.dir, 'operator-profile'),
@@ -2246,7 +2346,7 @@ test('Claude final convergence: packaged Windows executable uses the fixed comma
     Object.defineProperty(process, 'platform', { value: 'win32' });
     ` + readFileSync(cli.adapter, 'utf8'));
   cli.release();
-  const reply = await cli.start({ PATH: bin, PLANNER_CLAUDE_LOG: '' }, 'claude').done;
+  const reply = await cli.start({ PATH: bin, PLANNER_CLAUDE_LOG: '', SystemRoot: process.env.SystemRoot || await windowsHomeCheckStandIn(cli.dir) }, 'claude').done;
   assert.equal(reply.text, 'ok');
   assert.equal(existsSync(marker), false);
 });

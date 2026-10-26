@@ -1,4 +1,5 @@
 import { safeErrorResponse, ServerPersistenceError } from '../../../../server/errors.js';
+import { assertBrowserMutationIntent } from '../../../../server/identity/sameOriginRequest.js';
 import { createAssignmentCoordination } from '../../../../server/assignment/assignmentCoordinationStore.js';
 import { queryAssignmentCoordinations } from '../../../../server/assignment/assignmentCoordinationQueries.js';
 import { withRouteObservability } from '../../../../server/observability/observeOperation.js';
@@ -10,6 +11,7 @@ export const revalidate = 0;
 /** Atama talebi oluşturur. Yetki sunucuda türetilir; istemci anahtarı yalnızca arayüzdür. */
 export const POST = withRouteObservability('api.assignment-coordination.create', async (request) => {
   try {
+    assertBrowserMutationIntent(request, { json: true });
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== 'object') {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Geçerli bir atama talebi gönderilmelidir.', { status: 400 });

@@ -8,6 +8,7 @@ import { findCommitProjectWbsIssue } from '../../../../server/repository/commitP
 import { canonicalizeCommitScalars } from '../../../../server/repository/commitScalarCanonicalization.js';
 import { findCommitScalarIssue } from '../../../../server/repository/commitScalarValidation.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../server/errors.js';
+import { assertBrowserMutationIntent } from '../../../../server/identity/sameOriginRequest.js';
 import { observePhase, withRouteObservability } from '../../../../server/observability/observeOperation.js';
 
 export const runtime = 'nodejs';
@@ -94,6 +95,7 @@ async function handleCommit(request) {
   try {
     let notifyAssignees = false;
     const changes = await observePhase('phase.commit.request-validation', async () => {
+      assertBrowserMutationIntent(request, { json: true });
       assertBodyWithinLimit(request);
       const raw = await readBodyWithinLimit(request);
       let body = null;

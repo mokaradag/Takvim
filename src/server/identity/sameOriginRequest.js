@@ -1,4 +1,5 @@
 import 'server-only';
+import { ServerPersistenceError } from '../errors.js';
 
 /**
  * İSTEĞİN aynı kaynaktan geldiğini doğrular (CSRF savunması).
@@ -70,4 +71,28 @@ export function isSameOriginRequest(request) {
     target?.host
   ].filter(Boolean).map((value) => canonicalHost(claimed.protocol, value)).filter(Boolean));
   return expected.has(claimed.host);
+}
+
+/** Ortam türünün özü (`tür/alt tür`); parametreler ve büyük/küçük harf yok sayılır. */
+function mediaTypeEssence(value) {
+  return String(value ?? '').split(';', 1)[0].trim().toLowerCase();
+}
+
+/**
+ * Oturum çereziyle kimliği doğrulanan DURUM DEĞİŞTİREN isteğin kullanıcı
+ * niyetini rota sınırında, her yan etkiden ÖNCE kanıtlar.
+ *
+ * İstek aynı kaynaktan gelmelidir (`isSameOriginRequest`). JSON gövdeli uçlar
+ * ayrıca `application/json` ister: `text/plain` gövdeli basit bir POST CORS ön
+ * denetimi olmadan gönderilebiliyor ve gövde sonradan JSON olarak
+ * ayrıştırılıyordu. Zamanlayıcı anahtarı gibi çerez dışı kimlikler bu
+ * denetimin konusu değildir.
+ */
+export function assertBrowserMutationIntent(request, { json = false } = {}) {
+  if (!isSameOriginRequest(request)) {
+    throw new ServerPersistenceError('FORBIDDEN', 'İstek aynı kaynaktan gelmelidir.');
+  }
+  if (json && mediaTypeEssence(request.headers.get('content-type')) !== 'application/json') {
+    throw new ServerPersistenceError('MUTATION_FAILED', 'İstek gövdesi application/json olmalıdır.', { status: 415 });
+  }
 }

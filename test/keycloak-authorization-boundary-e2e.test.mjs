@@ -180,8 +180,12 @@ test('kimliği doğrulanmamış yazma isteği de reddedilir', async () => {
 });
 
 test('yetkisiz yazma UNAUTHORIZED değil FORBIDDEN döner (ayrım korunur)', async () => {
-  // Kimlik geçerli, ancak kullanıcı bu proje üzerinde FULL yetkiye sahip değil.
-  const stack = await createKeycloakStack(corporateSeed({ systemAdminSicils: [] }));
+  // Kimlik geçerli; kullanıcı projeyi READ hibesiyle görür ama FULL yetkiye
+  // sahip değil. Göremediği proje var olmayan projeyle aynı yanıtı alır.
+  const stack = await createKeycloakStack(corporateSeed({
+    systemAdminSicils: [],
+    projectAccess: [{ ProjectId: CORPORATE_PROJECT_ID, Sicil: TEST_SICIL, AccessLevel: 'READ', GrantSource: 'MANUAL_GRANT' }]
+  }));
   try {
     const session = await stack.repository.loadSessionContext();
     assert.equal(session.isSystemAdmin, false);

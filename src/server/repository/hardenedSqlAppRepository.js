@@ -363,7 +363,10 @@ async function planTaskCommits(executor, changes) {
     taskDeletes
   });
   if (issue) {
-    throw new ServerPersistenceError('MUTATION_FAILED', taskReferenceMessage(issue), { details: issue });
+    // Öncülün projesi aktöre görünmeyebilir; yanıt yalnızca gönderilen kimlikleri taşır.
+    const details = { ...issue };
+    delete details.predecessorProjectId;
+    throw new ServerPersistenceError('MUTATION_FAILED', taskReferenceMessage(issue), { details });
   }
 
   return {

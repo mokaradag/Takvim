@@ -30,7 +30,7 @@ import {
   DEFAULT_WORKING_DAYS
 } from '../src/scheduling/calendars/index.js';
 import { fmtISO, isValidDate, parseDate } from '../src/scheduling/dates/index.js';
-import { calculateCpm } from '../src/scheduling/cpm/engine.js';
+import { MAX_CRITICAL_PATH_STEPS, calculateCpm } from '../src/scheduling/cpm/engine.js';
 import { createNewTask } from '../src/state/appState.js';
 import { createTaskUpdateTracker } from '../src/features/task-detail/taskDraft.js';
 
@@ -182,6 +182,53 @@ test('kritik yol sayımı üst sınırda kesilir ve kritik görevler eksilmez', 
   assert.ok(result.criticalPaths.length <= 500, 'yol sayımı üst sınırı aşmamalıdır');
   assert.ok(result.criticalTaskIds.length >= layers, 'kritik görev kümesi eksilmemelidir');
   assert.ok(Date.now() - started < 10000, 'hesap makul sürede bitmelidir');
+});
+
+test('uzun ortak kuyruğa bağlanan yüzlerce kritik kök toplam yol bütçesini aşamaz', () => {
+  // Yol sayısı sınırın altında kalır; iş, her kökün uzun kuyruğu yeniden
+  // kopyalamasından doğar. Toplam yayımlanan öğe sayısı iş bütçesiyle sınırlıdır.
+  const roots = 500;
+  const tail = 600;
+  const tasks = [];
+  for (let index = 0; index < roots; index += 1) {
+    tasks.push({ id: `r${index}`, projectId: 'p', plannedStart: '2026-08-24', plannedDurationDays: 1, deps: [] });
+  }
+  for (let index = 0; index < tail; index += 1) {
+    tasks.push({
+      id: `t${index}`,
+      projectId: 'p',
+      plannedDurationDays: 1,
+      deps: index === 0
+        ? Array.from({ length: roots }, (_, root) => ({ predecessorId: `r${root}`, type: 'FS', lagDays: 0 }))
+        : [{ predecessorId: `t${index - 1}`, type: 'FS', lagDays: 0 }]
+    });
+  }
+
+  const result = calculateCpm(tasks, { projects: [{ id: 'p', name: 'P' }], calendars: [] });
+  const emitted = result.criticalPaths.reduce((sum, path) => sum + path.length, 0);
+
+  assert.equal(result.criticalPathsTruncated, true, 'kesilen liste bildirilir');
+  assert.ok(emitted <= MAX_CRITICAL_PATH_STEPS, `yayımlanan yol öğesi bütçeyi aşmamalıdır (${emitted})`);
+  assert.equal(result.criticalTaskIds.length, roots + tail, 'kritik görev kümesi eksilmemelidir');
+  for (const path of result.criticalPaths) assert.equal(path.length, tail + 1);
+});
+
+test('meşru çok uzun tek kritik zincir kesilmeden ve yığın taşmadan listelenir', () => {
+  // Özyinelemeli gezinti bu derinlikte çağrı yığınını tüketiyordu.
+  const length = 15000;
+  const tasks = Array.from({ length }, (_, index) => ({
+    id: `c${index}`,
+    projectId: 'p',
+    plannedDurationDays: 1,
+    ...(index === 0 ? { plannedStart: '2026-08-24' } : {}),
+    deps: index === 0 ? [] : [{ predecessorId: `c${index - 1}`, type: 'FS', lagDays: 0 }]
+  }));
+
+  const result = calculateCpm(tasks, { projects: [{ id: 'p', name: 'P' }], calendars: [] });
+
+  assert.equal(result.criticalPathsTruncated, false);
+  assert.equal(result.criticalPaths.length, 1);
+  assert.deepEqual(result.criticalPaths[0], tasks.map((task) => task.id));
 });
 
 /* ── "Tamam" düğmesinin bekleme zinciri ─────────────────────────── */

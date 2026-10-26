@@ -236,6 +236,7 @@ test('commit ucu gövde boyutunu işlemden ÖNCE sınırlar', async () => {
   });
   const response = await POST(new Request('http://localhost/api/mergen-rota/commit', {
     method: 'POST',
+    headers: { 'content-type': 'application/json' },
     body,
     duplex: 'half'
   }));

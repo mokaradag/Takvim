@@ -2041,6 +2041,12 @@ function runQuery(db, statement, params, { database }) {
         LagUnit: entry.LagUnit
       }))]);
   }
+  if (sqlText.includes('WHERE dependency.TaskId = @taskId OR dependency.PredecessorTaskId = @taskId')) {
+    return result([db.taskDependencies
+      .filter((entry) => sameGuid(entry.TaskId, params.taskId) || sameGuid(entry.PredecessorTaskId, params.taskId))
+      .slice(0, 1)
+      .map((entry) => ({ TaskId: entry.TaskId }))]);
+  }
   if (sqlText.includes('SELECT DISTINCT dependency.TaskId')) {
     return result([db.taskDependencies
       .filter((entry) => sameGuid(entry.PredecessorTaskId, params.predecessorId))

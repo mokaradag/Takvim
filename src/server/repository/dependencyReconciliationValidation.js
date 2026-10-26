@@ -42,19 +42,40 @@ async function loadIncomingTaskIds(executor, predecessorId) {
   return (result.recordset || []).map((row) => id(row.TaskId));
 }
 
-export async function assertTaskDependencyReconciliationCovered(executor, changes = {}) {
+/** Bağımlılık ilişkileri yalnızca projede FULL yetkisi olana görünür; anlık görüntü de yalnızca ona yükler. */
+function seesDependencies(actor, projectId) {
+  return Boolean(actor?.isSystemAdmin || actor?.effective?.access?.get(projectId)?.accessLevel === 'FULL');
+}
+
+/**
+ * Taşınan ya da silinen öncülün ardıllarının aynı değişiklik kümesinde
+ * uzlaştırıldığını doğrular. Ardıl kimlikleri hatada yalnızca bu ilişkileri
+ * zaten görebilen aktöre döner. Öteki aktörlerde aynı kural temel depoda,
+ * işlem yetkisi doğrulandıktan SONRA ve kimliksiz uygulanır
+ * (`assertSuccessorsReconciledWithoutDisclosure`); bağımlılıklı taşıma ise
+ * kaynak projede FULL yetki ister.
+ */
+export async function assertTaskDependencyReconciliationCovered(executor, changes, actor) {
+  // Aktörsüz çağrı denetimi sessizce atlamaz: görünürlük süzgeci aktör olmadan her öncülü düşürürdü.
+  if (!actor) throw new TypeError('Dependency reconciliation requires the authorized actor.');
   const taskUpserts = [...(changes.taskUpserts || [])]
     .sort((left, right) => String(left.id).localeCompare(String(right.id)));
   const taskDeleteIds = (changes.taskDeletes || []).map(deleteId).filter(Boolean);
   const invalidatedPredecessorIds = new Set(taskDeleteIds);
+  const storedProjects = new Map();
+  for (const taskId of taskDeleteIds) storedProjects.set(taskId, await loadStoredProjectId(executor, taskId));
 
   for (const task of taskUpserts) {
     const taskId = id(task.id);
     const nextProjectId = id(task.projectId);
     const storedProjectId = await loadStoredProjectId(executor, taskId);
+    storedProjects.set(taskId, storedProjectId);
     if (storedProjectId && storedProjectId !== nextProjectId) {
       invalidatedPredecessorIds.add(taskId);
     }
+  }
+  for (const predecessorId of invalidatedPredecessorIds) {
+    if (!seesDependencies(actor, storedProjects.get(predecessorId))) invalidatedPredecessorIds.delete(predecessorId);
   }
 
   if (!invalidatedPredecessorIds.size) return;
@@ -86,5 +107,25 @@ export async function assertTaskDependencyReconciliationCovered(executor, change
       predecessorId: issue.predecessorId,
       taskIds: issue.taskIds
     }
+  });
+}
+
+/**
+ * Bağımlılık ilişkilerini GÖREMEYEN aktörün silmesi için aynı uzlaştırma
+ * kuralı. Temel depoda silme yetkisi doğrulandıktan SONRA çağrılır; hata
+ * ardıl kimliklerini taşımaz.
+ */
+export async function assertSuccessorsReconciledWithoutDisclosure(executor, predecessorId, changes = {}) {
+  const predecessor = id(predecessorId);
+  const issue = findTaskDependencyReconciliationIssue({
+    invalidatedPredecessorIds: [predecessor],
+    incomingTaskIdsByPredecessor: new Map([[predecessor, await loadIncomingTaskIds(executor, predecessor)]]),
+    taskUpsertIds: (changes.taskUpserts || []).map((task) => id(task.id)),
+    taskDeleteIds: (changes.taskDeletes || []).map(deleteId).filter(Boolean)
+  });
+  if (!issue) return;
+  throw new ServerPersistenceError('MUTATION_FAILED', issue.message, {
+    status: 400,
+    details: { code: issue.code, predecessorId: issue.predecessorId }
   });
 }

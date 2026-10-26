@@ -201,14 +201,18 @@ test('sıradan kullanıcı erişimi olmayan projeye görev yazamaz', async () =>
     const session = await stack.repository.loadSessionContext();
     assert.equal(session.canAssignAllCorporateProjects, false);
 
-    await assert.rejects(
-      stack.repository.commitChanges(taskChanges({ assigneeIds: [String(PLAIN_SICIL)] })),
-      (error) => {
-        assert.equal(error.code, 'FORBIDDEN');
-        assert.match(error.message, /tam yazma yetkiniz yok/);
-        return true;
-      }
-    );
+    // Görünmeyen proje var olmayan projeyle AYNI yanıtı alır: kimliğin var
+    // olduğu "yetkiniz yok" yanıtından öğrenilemez.
+    const hidden = await stack.repository.commitChanges(taskChanges({ assigneeIds: [String(PLAIN_SICIL)] }))
+      .then(() => null, (error) => error);
+    const [task] = taskChanges({ assigneeIds: [String(PLAIN_SICIL)] }).taskUpserts;
+    const missing = await stack.repository.commitChanges({
+      taskUpserts: [{ ...task, projectId: 'a0a0a0a0-0000-4000-8000-0000000000a0' }]
+    }).then(() => null, (error) => error);
+    assert.equal(hidden?.code, 'MUTATION_FAILED');
+    assert.match(hidden.message, /Hedef proje bulunamadı/);
+    assert.deepEqual([hidden.code, hidden.message], [missing?.code, missing?.message]);
+    assert.equal(stack.db.tasks.length, 0);
   } finally {
     await stack.dispose();
   }

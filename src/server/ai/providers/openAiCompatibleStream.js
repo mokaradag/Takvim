@@ -117,6 +117,11 @@ export function createSseEventParser({ maxEventChars = AI_STREAM_LIMITS.maxEvent
  * içinde gönderen modeller). Etiketler parçalar arasında bölünebilir; bellek
  * sınırlıdır (blok içinde yalnızca kapanış etiketini yakalayacak kadar metin
  * tutulur). Görünür yanıtın baştaki boşlukları atılır.
+ *
+ * Baştaki boşluk hiçbir zaman görünmez ve geldiği anda atılır: başlangıçta
+ * yalnızca etiketin çözülmemiş öneki tutulur. Eskiden boşluk biriktiriliyor ve
+ * her SSE parçasında baştan yeniden taranıyordu; görünür çıktı sınırı devreye
+ * girmeden önce paylaşılan olay döngüsünde karesel iş oluşuyordu.
  */
 export function createLeadingThinkFilter() {
   let phase = 'start';
@@ -138,22 +143,28 @@ export function createLeadingThinkFilter() {
     get thinking() {
       return phase === 'thinking';
     },
+    /** Henüz çözülmemiş, tutulan metnin uzunluğu (yalnızca etiket önekleri kadar). */
+    get retainedLength() {
+      return buffer.length;
+    },
 
     push(text) {
       if (phase === 'open' || phase === 'leading') return visible(text);
-      buffer += text;
       if (phase === 'start') {
-        const trimmed = buffer.replace(/^\s+/, '');
-        if (!trimmed) return '';
-        if (trimmed.length < THINK_OPEN.length && THINK_OPEN.startsWith(trimmed)) return '';
-        if (!trimmed.startsWith(THINK_OPEN)) {
+        buffer = (buffer + text).replace(/^\s+/, '');
+        if (!buffer) return '';
+        if (buffer.length < THINK_OPEN.length && THINK_OPEN.startsWith(buffer)) return '';
+        if (!buffer.startsWith(THINK_OPEN)) {
+          const opened = buffer;
           buffer = '';
           phase = 'open';
-          return trimmed;
+          return opened;
         }
         phase = 'thinking';
         sawThinking = true;
-        buffer = trimmed.slice(THINK_OPEN.length);
+        buffer = buffer.slice(THINK_OPEN.length);
+      } else {
+        buffer += text;
       }
       const close = buffer.indexOf(THINK_CLOSE);
       if (close < 0) {

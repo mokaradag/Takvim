@@ -220,6 +220,145 @@ test('atama kapsamı oluşturucu olmadan görevi silemez ve kapsam dışı yinel
   }
 });
 
+/* ── 3a. Proje taşıma bağımlılık modeline yazma hakkı vermez ────── */
+
+const SECOND_PROJECT_ID = 'e7e7e7e7-0000-4000-8000-000000000001';
+const SECOND_ROOT_WBS_ID = 'e7e7e7e7-0000-4000-8000-000000000002';
+const MOVED_TASK_ID = 'e7e7e7e7-0000-4000-8000-000000000003';
+const SUCCESSOR_TASK_ID = 'e7e7e7e7-0000-4000-8000-000000000004';
+
+function moveSeed() {
+  const base = assignmentSeed();
+  const task = (TaskId, Title) => ({
+    TaskId, ProjectId: CORPORATE_PROJECT_ID, WbsId: CORPORATE_ROOT_WBS_ID, Title, Status: 'planned', Priority: 'medium',
+    PlannedStart: '2026-08-17', PlannedFinish: '2026-08-20', TargetFinish: '2026-08-21', CreatedBySicil: 900010
+  });
+  return {
+    ...base,
+    corporateProjects: [...base.corporateProjects,
+      { ProjectCode: 'P4417042', ProjectName: 'İkinci kurumsal proje', ProjectTypeCode: 'GD', ProjectTypeName: 'Garanti dışı faaliyetler' }],
+    corporateProjectAccess: [
+      { ProjectCode: 'P4417041', Sicil: 900010, RoleCode: 'PROJECT_MANAGER' },
+      { ProjectCode: 'P4417042', Sicil: 900010, RoleCode: 'PROJECT_MANAGER' }
+    ],
+    projects: [...base.projects, {
+      ...base.projects[0], ProjectId: SECOND_PROJECT_ID, ProjectCode: 'P4417042', ProjectName: 'İkinci kurumsal proje'
+    }],
+    wbs: [...base.wbs, {
+      WbsId: SECOND_ROOT_WBS_ID, ProjectId: SECOND_PROJECT_ID, ParentWbsId: null, Code: 'P4417042',
+      Name: 'İkinci kurumsal proje', SortOrder: 0, SourceType: 'CORPORATE'
+    }],
+    tasks: [task(MOVED_TASK_ID, 'Taşınan öncül'), task(SUCCESSOR_TASK_ID, 'Ardıl')],
+    taskAssignees: [MOVED_TASK_ID, SUCCESSOR_TASK_ID].map((TaskId) => ({ TaskId, Sicil: SUBORDINATE_SICIL })),
+    taskDependencies: [{
+      TaskDependencyId: 'e7e7e7e7-0000-4000-8000-000000000005', ProjectId: CORPORATE_PROJECT_ID,
+      TaskId: SUCCESSOR_TASK_ID, PredecessorTaskId: MOVED_TASK_ID, DependencyType: 'FS', LagDays: 0
+    }]
+  };
+}
+
+test('atama kapsamıyla başka projeye taşınan öncül, FULL yetkisi olmayan aktöre ardılın bağımlılığını sildirmez', async () => {
+  const find = (snapshot, id) => snapshot.tasks.find((task) => String(task.id).toLowerCase().includes(id.slice(-12)));
+  const stack = await createActualStack(moveSeed(), { sicil: MANAGER_SICIL });
+  try {
+    const snapshot = await stack.repository.loadSnapshot();
+    const moved = find(snapshot, MOVED_TASK_ID);
+    const successor = find(snapshot, SUCCESSOR_TASK_ID);
+    assert.deepEqual([moved.deps, successor.deps], [[], []], 'KISMİ görünüm bağımlılık taşımaz');
+    // Taşıma ve ardılın değişmeyen, boş bağımlılıklı güncellemesi aynı kümede.
+    await assert.rejects(
+      stack.repository.commitChanges({ taskUpserts: [{ ...moved, projectId: SECOND_PROJECT_ID, wbsId: null }, successor] }),
+      (error) => error.code === 'FORBIDDEN' && /kaynak projede tam proje yetkisiyle/.test(error.message)
+    );
+    assert.equal(stack.db.taskDependencies.length, 1, 'ardılın bağımlılığı korunur');
+    assert.equal(String(stack.db.tasks.find((row) => String(row.TaskId).toLowerCase() === MOVED_TASK_ID).ProjectId).toLowerCase(), CORPORATE_PROJECT_ID.toLowerCase());
+  } finally {
+    await stack.dispose();
+  }
+
+  // İki projede FULL yetkili, ardılı uzlaştırarak taşımaya devam eder.
+  const lead = await createActualStack(moveSeed(), { sicil: 900010 });
+  try {
+    const snapshot = await lead.repository.loadSnapshot();
+    const moved = find(snapshot, MOVED_TASK_ID);
+    const successor = find(snapshot, SUCCESSOR_TASK_ID);
+    assert.equal(successor.deps.length, 1);
+    await lead.repository.commitChanges({
+      taskUpserts: [{ ...moved, projectId: SECOND_PROJECT_ID, wbsId: SECOND_ROOT_WBS_ID }, { ...successor, deps: [] }]
+    });
+    assert.equal(lead.db.taskDependencies.length, 0);
+    assert.equal(String(lead.db.tasks.find((row) => String(row.TaskId).toLowerCase() === MOVED_TASK_ID).ProjectId).toLowerCase(), SECOND_PROJECT_ID);
+  } finally {
+    await lead.dispose();
+  }
+});
+
+/* ── 3b. Kontrollü tarihler: YAZILACAK değer yetkilendirilir ────── */
+
+function datedTaskSeed(overrides = {}) {
+  return {
+    TaskId: NEW_TASK_ID,
+    ProjectId: CORPORATE_PROJECT_ID,
+    WbsId: CORPORATE_ROOT_WBS_ID,
+    Title: 'Kontrollü planlı görev',
+    Status: 'planned',
+    Priority: 'medium',
+    PlannedStart: '2026-08-17',
+    PlannedFinish: '2026-08-20',
+    TargetFinish: '2026-08-21',
+    CreatedBySicil: PLAIN_SICIL,
+    ...overrides
+  };
+}
+
+test('atama kapsamı gönderilmeyen kontrollü tarihleri SİLEMEZ; açık temizleme ve değişiklik yetkisiz kalır', async () => {
+  const SECOND_SUBORDINATE = 900504;
+  const base = assignmentSeed();
+  const seed = assignmentSeed({
+    people: [...base.people, { Sicil: SECOND_SUBORDINATE, DisplayName: 'İkinci Ast', Username: 'ikinciast' }],
+    executiveScope: [...base.executiveScope, { ManagerSicil: MANAGER_SICIL, EmployeeSicil: SECOND_SUBORDINATE, ScopeType: 'UNIT' }]
+  });
+  seed.tasks = [datedTaskSeed()];
+  seed.taskAssignees = [{ TaskId: NEW_TASK_ID, Sicil: SUBORDINATE_SICIL }];
+
+  const stack = await createActualStack(seed, { sicil: MANAGER_SICIL });
+  const stored = () => stack.db.tasks.find((row) => String(row.TaskId).toLowerCase().includes('aa11bb22'));
+  const dates = () => ['PlannedStart', 'PlannedFinish', 'TargetFinish'].map((field) => (stored()[field] == null ? null : String(stored()[field]).slice(0, 10)));
+  try {
+    const snapshot = await stack.repository.loadSnapshot();
+    const visible = snapshot.tasks.find((task) => String(task.id).toLowerCase().includes('aa11bb22'));
+    // Kanonikleştirme eksik alanı `undefined` anahtarına çevirir: tarihler hiç gönderilmez.
+    const { plannedStart, plannedFinish, targetFinish, ...withoutDates } = visible;
+    assert.deepEqual([plannedStart, plannedFinish, targetFinish], ['2026-08-17', '2026-08-20', '2026-08-21']);
+
+    const reassigned = await stack.repository.commitChanges({ taskUpserts: [{ ...withoutDates, assigneeIds: [String(SECOND_SUBORDINATE)] }] });
+    assert.deepEqual(dates(), ['2026-08-17', '2026-08-20', '2026-08-21'], 'yalnızca atama değişikliği tarihleri korur');
+
+    const current = reassigned.taskUpserts.find((task) => String(task.id).toLowerCase().includes('aa11bb22'));
+    for (const patch of [{ plannedStart: null }, { plannedFinish: null }, { targetFinish: null }, { plannedFinish: '2026-08-25' }]) {
+      await assert.rejects(
+        stack.repository.commitChanges({ taskUpserts: [{ ...withoutDates, ...patch, assigneeIds: current.assigneeIds, version: current.version }] }),
+        (error) => error.code === 'FORBIDDEN',
+        JSON.stringify(patch)
+      );
+    }
+    assert.deepEqual(dates(), ['2026-08-17', '2026-08-20', '2026-08-21']);
+  } finally {
+    await stack.dispose();
+  }
+
+  // Tam proje yetkilisi açık temizlemeyi yapabilmeye devam eder.
+  const full = await createActualStack({ ...corporateSeed(), tasks: [datedTaskSeed()] }, { sicil: 900010 });
+  try {
+    const snapshot = await full.repository.loadSnapshot();
+    const visible = snapshot.tasks.find((task) => String(task.id).toLowerCase().includes('aa11bb22'));
+    await full.repository.commitChanges({ taskUpserts: [{ ...visible, targetFinish: null }] });
+    assert.equal(full.db.tasks.find((row) => String(row.TaskId).toLowerCase().includes('aa11bb22')).TargetFinish, null);
+  } finally {
+    await full.dispose();
+  }
+});
+
 /* ── 4. Sistem yöneticisi ve etkin proje ────────────────────────── */
 
 test('sistem yöneticisi ETKİN OLMAYAN projeye görev yazamaz', async () => {
@@ -269,10 +408,11 @@ test('yetki, kurumsal rehber yoklamasından ÖNCE denetlenir', async () => {
       .then(() => null, (error) => error);
 
     assert.ok(unknown && known, 'iki istek de reddedilmelidir');
-    // İkisi de AYNI yetki hatasıdır: bilinmeyen Sicil için "geçersiz çalışan",
+    // İkisi de AYNI hatadır: bilinmeyen Sicil için "geçersiz çalışan",
     // gerçek Sicil için FORBIDDEN dönseydi bu fark rehberi yoklamaya yarardı.
-    assert.equal(unknown.code, 'FORBIDDEN');
-    assert.equal(known.code, 'FORBIDDEN');
+    // Kullanıcının göremediği proje var olmayan projeyle aynı yanıtı alır.
+    assert.equal(unknown.code, 'MUTATION_FAILED');
+    assert.equal(known.code, 'MUTATION_FAILED');
     assert.equal(unknown.message, known.message);
     assert.equal(/Geçersiz çalışan Sicil/.test(unknown.message), false);
   } finally {

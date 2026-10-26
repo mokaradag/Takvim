@@ -253,6 +253,17 @@ zaman gönderir: başlık varsa isteğin kendi kaynağıyla eşleşmelidir, aksi
 uç `403` döner. Başlık hiç yoksa istek tarayıcıdan gelmiyordur (betik, test,
 sunucudan sunucuya) ve CSRF vektörü oluşmaz.
 
+Aynı kural oturum çereziyle kimliği doğrulanan **bütün durum değiştiren uçlara**
+uygulanır (`assertBrowserMutationIntent`, `src/server/identity/sameOriginRequest.js`):
+commit, tarih ve atama talepleri ile kararları, zil bildirimleri, elle
+hatırlatma, Outlook tekil/toplu abonelik, yönetici kuyruk eylemleri, uyarı
+onayı, hatırlatma ayarları, yöneticinin başlattığı hatırlatma turu ve nabız.
+Denetim her yan etkiden ve veritabanı erişiminden önce yapılır. JSON gövdeli
+uçlar ayrıca `application/json` ister (`415`); `text/plain` gövdeli basit bir
+POST CORS ön denetimi olmadan gönderilebildiği için kabul edilmez. Zamanlayıcının
+`x-mergen-rota-reminder-key` anahtarıyla çalıştırdığı tur çerez kullanmaz ve
+kendi anahtar sözleşmesiyle doğrulanmaya devam eder.
+
 Implicit köprünün geri dönüş sayfası, `returnTo` değerini **denetim
 karakterleri temizlendikten sonra** doğrular ve yapılandırılmış uygulama köküne
 (`APP_ROOT_PATH`) düşer. Tarayıcı adresi çözmeden önce sekme/CR/LF karakterlerini

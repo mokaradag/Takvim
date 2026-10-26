@@ -2,6 +2,7 @@ import { reminderRunOutcome, reminderFailureMessage } from '../../../../../domai
 import { loadAuthorizationContext } from '../../../../../server/authorization/loadAuthorizationContext.js';
 import { getSqlPool } from '../../../../../server/db/pool.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../server/errors.js';
+import { assertBrowserMutationIntent } from '../../../../../server/identity/sameOriginRequest.js';
 import { runOutlookCalendarOutbox } from '../../../../../server/outlook/outlookCalendarService.js';
 import { isOutlookCalendarEnabled, outlookApplicationLink, outlookMaxAttempts, outlookRunBudgetMs } from '../../../../../server/outlook/outlookConfig.js';
 import { outlookFailureCode } from '../../../../../server/outlook/outlookFailure.js';
@@ -29,6 +30,9 @@ function runErrorResponse(error) {
 async function handleReminderRun(request) {
   const automatic = hasReminderSchedulerKey(request);
   try {
+    // Zamanlayıcı kendi anahtarıyla doğrulanır; yöneticinin çerezle başlattığı
+    // tur ise tarayıcı niyetini kanıtlamalıdır.
+    if (!automatic) assertBrowserMutationIntent(request);
     const runSafely = async (name, operation) => {
       try { return await operation(); }
       catch (error) {

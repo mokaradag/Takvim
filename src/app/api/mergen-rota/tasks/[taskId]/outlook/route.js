@@ -3,6 +3,7 @@ import { extractActualId } from '../../../../../../domain/identity/actualId.js';
 import { loadAuthorizationContext } from '../../../../../../server/authorization/loadAuthorizationContext.js';
 import { getSqlPool } from '../../../../../../server/db/pool.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../../server/errors.js';
+import { assertBrowserMutationIntent } from '../../../../../../server/identity/sameOriginRequest.js';
 import {
   addTaskToOutlook,
   outlookMessage,
@@ -40,6 +41,7 @@ const STATUS_CODES = Object.freeze({
 
 async function handle(request, context, action) {
   try {
+    assertBrowserMutationIntent(request);
     if (!isOutlookCalendarEnabled()) {
       throw new ServerPersistenceError('FORBIDDEN', outlookMessage('DISABLED'));
     }
