@@ -40,7 +40,9 @@ test('commit validation only accepts statuses the Actual-mode client can persist
 
 test('manual project code collisions are normalized, locked and rejected before SQL writes', () => {
   const source = read('src/server/repository/orderedSqlAppRepository.js');
-  const guardPosition = source.indexOf('assertManualProjectCodesAvailable(transaction, orderedChanges, actor)');
+  // Kod uygunluğu, proje satırlarının yetkisi kurulduktan SONRA bildirilir.
+  const authorizationPosition = source.indexOf('await assertProjectUpsertsAuthorized(transaction, orderedChanges, actor)');
+  const guardPosition = source.indexOf('assertManualProjectCodesAvailable(transaction, orderedChanges)');
   const commitPosition = source.indexOf('repository.commitChanges(orderedChanges)');
 
   assert.match(source, /const pendingProjectCodes = new Map\(\)/);
@@ -50,6 +52,7 @@ test('manual project code collisions are normalized, locked and rejected before 
   assert.match(source, /PROJECT_CODE_RESERVED/);
   assert.match(source, /PROJECT_CODE_CONFLICT/);
   assert.match(source, /new ServerPersistenceError\('CONFLICT'/);
-  assert.ok(guardPosition >= 0);
+  assert.ok(authorizationPosition >= 0);
+  assert.ok(guardPosition > authorizationPosition);
   assert.ok(commitPosition > guardPosition);
 });

@@ -30,6 +30,26 @@ function personFromRow(row) {
   };
 }
 
+const transactionAuthorization = new WeakMap();
+
+/**
+ * Bir SQL işleminin TEK yetki bağlamı.
+ *
+ * Commit katmanları (sıralı ve temel depo) aynı işlemde yetkiyi ayrı ayrı
+ * yüklüyordu; ağır kapsam sorgusu her kayıtta iki kez, SERIALIZABLE kilitler
+ * altında çalışıyordu. Bağlam yalnızca bu modülde ve İŞLEM NESNESİNE bağlı
+ * tutulur: çağıran bağlam enjekte edemez, başka bir işlem (ör. kilitlenme
+ * sonrası yeniden deneme) onu paylaşmaz ve aynı anlık görüntüden okunur.
+ */
+export function loadTransactionAuthorizationContext(transaction) {
+  let context = transactionAuthorization.get(transaction);
+  if (!context) {
+    context = loadAuthorizationContext(transaction);
+    transactionAuthorization.set(transaction, context);
+  }
+  return context;
+}
+
 export async function loadAuthorizationContext(executor = null, { includeScopeIdentities = false, maxScopeRows = null } = {}) {
   const sicil = await getTrustedCurrentSicil();
   const pool = executor || await getSqlPool();

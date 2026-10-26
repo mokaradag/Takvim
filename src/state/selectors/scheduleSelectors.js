@@ -56,12 +56,9 @@ function findCrossProjectDependencies(project, projectTasks, tasksById) {
   return unsupported;
 }
 
-function criticalDependencyKeys(criticalPaths) {
-  const keys = new Set();
-  for (const path of criticalPaths || []) {
-    for (let index = 1; index < path.length; index += 1) keys.add(`${path[index - 1]}::${path[index]}`);
-  }
-  return [...keys];
+/** Vurgulanan oklar, sınırlı yol listesinden değil TAM kritik ilişki kümesinden türetilir. */
+function criticalDependencyKeys(criticalDependencies) {
+  return [...new Set((criticalDependencies || []).map(([predecessorId, successorId]) => `${predecessorId}::${successorId}`))];
 }
 
 function scheduleShape(projectId, status, error = null) {
@@ -155,7 +152,7 @@ export function buildPortfolioSchedule({ tasks = [], projects = [], calendars = 
         criticalPaths: cpm.criticalPaths.map((path) => [...path]),
         // Yol sayımı üst sınırda kesildiyse arayüz "tam liste" iddia etmemelidir.
         criticalPathsTruncated: Boolean(cpm.criticalPathsTruncated),
-        criticalDependencyKeys: criticalDependencyKeys(cpm.criticalPaths),
+        criticalDependencyKeys: criticalDependencyKeys(cpm.criticalDependencies),
         tasks: projectedTasks,
         status: 'valid',
         error: null

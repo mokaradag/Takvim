@@ -130,19 +130,35 @@ function workingDaysOf(calendar) {
 }
 
 /**
- * `addWorkingDays(_, amount, calendar)` taramasının, tarama yapılmadan bulunan
- * üst sınırı (takvim günü). Ardışık her 7 günde haftalık desenin çalışma günü
- * sayısı kadar iş günü vardır: haftada tek günlük desen aynı iş günü sayısı
- * için beş günlük desenin yaklaşık beş katı gün tarar. Tatiller veritabanında
- * tanımlı başvuru verisidir; taramayı en fazla motorun kendi sınırına
- * (`workingDayScanBudget`) dek uzatır. Deseni geçersiz takvim o sınırın
- * tamamını tarar.
+ * Takvim taramasının ORTAK iş sayacı.
+ *
+ * Bütün tarama döngüleri (`moveToWorkingDay`, `addWorkingDays`,
+ * `diffWorkingDays`, `countWorkingDays`) gün başına bir `isWorkingDay`
+ * değerlendirmesi yapar; sayaç orada, YAPILAN iş kadar düşer. Tahmin yerine
+ * muhasebe: tatiller, seyrek haftalık desen ve sonraki her geçiş (ör. süre
+ * doğrulaması) kendiliğinden sayılır. Sayaç yalnızca `meterCalendarScans`
+ * çağrısı süresince etkindir; iş eşzamanlı olmalıdır.
  */
-export function workingDayScanBound(amount, calendar = DEFAULT_CALENDAR) {
-  const magnitude = Math.abs(Number.isFinite(amount) ? Math.trunc(amount) : 0);
-  const weekdays = new Set(workingDaysOf(calendar).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)).size;
-  const budget = workingDayScanBudget(magnitude);
-  return weekdays ? Math.min(budget, 7 * Math.ceil(magnitude / weekdays)) : budget;
+let activeScanMeter = null;
+
+export class CalendarScanBudgetExceededError extends Error {
+  constructor() {
+    super('Calendar scan budget exceeded.');
+    this.name = 'CalendarScanBudgetExceededError';
+  }
+}
+
+/** Bütçesi `{ remainingDays }` olan sayaçla eşzamanlı `work` çalıştırır; bütçe bitince taramayı keser. */
+export function meterCalendarScans(meter, work) {
+  const previous = activeScanMeter;
+  activeScanMeter = meter;
+  try {
+    const result = work();
+    if (typeof result?.then === 'function') throw new TypeError('meterCalendarScans requires synchronous work.');
+    return result;
+  } finally {
+    activeScanMeter = previous;
+  }
 }
 
 export function normalizeCalendar(calendar = DEFAULT_CALENDAR) {
@@ -201,6 +217,10 @@ export function holidayFor(value, calendar = DEFAULT_CALENDAR) {
 }
 
 export function isWorkingDay(value, calendar = DEFAULT_CALENDAR) {
+  if (activeScanMeter) {
+    if (activeScanMeter.remainingDays <= 0) throw new CalendarScanBudgetExceededError();
+    activeScanMeter.remainingDays -= 1;
+  }
   const date = localDate(value);
   // Çözülemeyen tarih çalışma günü DEĞİLDİR; aramalar bu durumu sınırla ayıklar.
   if (!isValidDate(date)) return false;

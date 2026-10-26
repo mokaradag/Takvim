@@ -32,6 +32,7 @@ import {
 import { fmtISO, isValidDate, parseDate } from '../src/scheduling/dates/index.js';
 import { MAX_CRITICAL_PATH_STEPS, calculateCpm } from '../src/scheduling/cpm/engine.js';
 import { createNewTask } from '../src/state/appState.js';
+import { buildPortfolioSchedule } from '../src/state/selectors/scheduleSelectors.js';
 import { createTaskUpdateTracker } from '../src/features/task-detail/taskDraft.js';
 
 /** Sunucunun çalışma günü satırı olmayan takvim için ürettiği biçim. */
@@ -211,6 +212,18 @@ test('uzun ortak kuyruğa bağlanan yüzlerce kritik kök toplam yol bütçesini
   assert.ok(emitted <= MAX_CRITICAL_PATH_STEPS, `yayımlanan yol öğesi bütçeyi aşmamalıdır (${emitted})`);
   assert.equal(result.criticalTaskIds.length, roots + tail, 'kritik görev kümesi eksilmemelidir');
   for (const path of result.criticalPaths) assert.equal(path.length, tail + 1);
+
+  // Yol listesi kesilir ama kritik İLİŞKİ kümesi tamdır: her kökün kuyruğa oku vurgulanır.
+  assert.ok(result.criticalPaths.length < roots, 'liste bütün kökleri taşımaz');
+  const expected = [
+    ...Array.from({ length: roots }, (_, root) => `r${root}::t0`),
+    ...Array.from({ length: tail - 1 }, (_, index) => `t${index}::t${index + 1}`)
+  ].sort();
+  assert.deepEqual(result.criticalDependencies.map(([from, to]) => `${from}::${to}`).sort(), expected);
+  const schedule = buildPortfolioSchedule({ tasks, projects: [{ id: 'p', name: 'P' }], calendars: [] });
+  const projectSchedule = schedule.projects.p;
+  assert.equal(projectSchedule.criticalPathsTruncated, true);
+  assert.deepEqual([...projectSchedule.criticalDependencyKeys].sort(), expected, 'Gantt okları kesilen listeden türetilmez');
 });
 
 test('meşru çok uzun tek kritik zincir kesilmeden ve yığın taşmadan listelenir', () => {

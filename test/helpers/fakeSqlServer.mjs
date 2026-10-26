@@ -2041,11 +2041,18 @@ function runQuery(db, statement, params, { database }) {
         LagUnit: entry.LagUnit
       }))]);
   }
-  if (sqlText.includes('WHERE dependency.TaskId = @taskId OR dependency.PredecessorTaskId = @taskId')) {
-    return result([db.taskDependencies
-      .filter((entry) => sameGuid(entry.TaskId, params.taskId) || sameGuid(entry.PredecessorTaskId, params.taskId))
-      .slice(0, 1)
-      .map((entry) => ({ TaskId: entry.TaskId }))]);
+  if (sqlText.includes(';WITH ScopedWbsChain AS')) {
+    const sicil = Number(params.sicil);
+    const chain = new Set();
+    for (const task of db.tasks.filter((row) => sameGuid(row.ProjectId, params.projectId) && db.taskAssignees.some((entry) => sameGuid(entry.TaskId, row.TaskId)
+      && db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil)))) {
+      let node = db.wbs.find((row) => sameGuid(row.WbsId, task.WbsId) && sameGuid(row.ProjectId, params.projectId));
+      while (node && !chain.has(guid(node.WbsId))) {
+        chain.add(guid(node.WbsId));
+        node = db.wbs.find((row) => sameGuid(row.WbsId, node.ParentWbsId) && sameGuid(row.ProjectId, params.projectId));
+      }
+    }
+    return result([chain.has(guid(params.wbsId)) ? [{ Found: 1 }] : []]);
   }
   if (sqlText.includes('SELECT DISTINCT dependency.TaskId')) {
     return result([db.taskDependencies

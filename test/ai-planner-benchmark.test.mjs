@@ -1023,7 +1023,7 @@ test('Claude model komutu: geçersiz bütçe, kayıtsız bütçe ve tükenen ça
 
 test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP yapılandırması yazılmadan ve bütçe ayrılmadan reddedilir', async (t) => {
   const { spawnSync } = await import('node:child_process');
-  const { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } = await import('node:fs');
+  const { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const path = await import('node:path');
   const { pathToFileURL } = await import('node:url');
@@ -1036,11 +1036,12 @@ test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP ya
     const result = spawnSync(process.execPath, [script], { input, encoding: 'utf8',
       env: { ...commandPlatformEnv(), PATH: '', PLANNER_CLAUDE_LOG: log, PLANNER_CLAUDE_HOME: home, ...env } });
     const rows = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
-    return { error: JSON.parse(result.stdout).error, reserved: rows.some(row => row.reserved) };
+    return { error: JSON.parse(result.stdout).error, reserved: rows.some(row => row.reserved), reason: rows.find(row => row.reason)?.reason, at: rows.find(row => row.reason)?.path };
   };
-  const untrusted = (outcome, label) => {
+  const untrusted = (outcome, label, reason = null) => {
     assert.equal(outcome.error, 'PLANNER_HOME_UNTRUSTED', label);
     assert.equal(outcome.reserved, false, `${label}: güvenilmeyen ev bütçe ayırmaz`);
+    if (reason) assert.equal(outcome.reason, reason, `${label}: işletmeciye neden bildirilir`);
   };
 
   const adapter = 'scripts/planner-claude-model.mjs';
@@ -1057,6 +1058,28 @@ test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP ya
     mkdirSync(renamable);
     grant(renamable, '(DC)');
     untrusted(run(adapter, path.join(renamable, 'home')), 'alt öğesi başkasınca silinebilen ata');
+    // Evde etkisiz, yalnızca devralınan girdi: yeni `call-*`, `mcp.json` ve `work` girdilerine etkin olarak geçerdi.
+    const inheritOnly = path.join(dir, 'inherit-only');
+    mkdirSync(inheritOnly);
+    grant(inheritOnly, '(OI)(CI)(IO)M');
+    untrusted(run(adapter, inheritOnly), 'yalnızca alt öğelere geçen yazma hakkı', 'HOME_ACL_UNTRUSTED');
+    assert.deepEqual(readdirSync(inheritOnly), [], 'reddedilen eve çalışma klasörü de yazılmaz');
+    // Var olan alt öğeler de sınırdadır: çalışma klasörü ve CLI ayar dosyası.
+    for (const relative of [['work'], ['.claude', 'settings.json']]) {
+      const home = mkdtempSync(path.join(dir, 'descendant-'));
+      const target = path.join(home, ...relative);
+      mkdirSync(path.dirname(target), { recursive: true });
+      if (relative.length > 1) writeFileSync(target, '{}'); else mkdirSync(target);
+      grant(target, relative.length > 1 ? 'M' : '(OI)(CI)M');
+      const outcome = run(adapter, home);
+      untrusted(outcome, relative.join('/'), 'HOME_ACL_UNTRUSTED');
+      assert.ok(outcome.at?.endsWith(path.join(...relative)), `${outcome.at}`);
+    }
+    const junctioned = mkdtempSync(path.join(dir, 'junction-'));
+    symlinkSync(path.join(dir, 'shared'), path.join(junctioned, 'link'), 'junction');
+    untrusted(run(adapter, junctioned), 'alt ağaçta bağlantı noktası', 'HOME_REPARSE_POINT');
+    // Denetim çalışmazsa ev güvenilmez sayılır.
+    untrusted(run(adapter, path.join(dir, 'private', 'home'), { SystemRoot: path.join(dir, 'no-windows') }), 'çalışmayan denetim', 'HOME_CHECK_FAILED');
     const outcome = run(adapter, path.join(dir, 'private', 'home'));
     if (outcome.error === 'PLANNER_HOME_UNTRUSTED') {
       // Tanı: beklenmeyen reddin hangi klasör ve hesaptan geldiği (yalnızca başarısızlıkta).
@@ -1066,6 +1089,12 @@ test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP ya
       { encoding: 'utf8', env: { ...process.env, ROTA_PLANNER_HOME: path.join(dir, 'private', 'home') } });
       assert.fail(`özel ev reddedildi:\n${dump.stdout}${dump.stderr}`);
     }
+    // Sonradan oluşturulan girdiler doğrulanmış evin devralma girdileriyle özeldir ve sonraki çağrının denetimini geçer.
+    assert.ok(existsSync(path.join(dir, 'private', 'home', 'work')));
+    writeFileSync(path.join(dir, 'private', 'home', 'work', 'mcp.json'), '{}');
+    mkdirSync(path.join(dir, 'private', 'home', '.claude'));
+    writeFileSync(path.join(dir, 'private', 'home', '.claude', 'settings.json'), '{}');
+    assert.notEqual(run(adapter, path.join(dir, 'private', 'home')).error, 'PLANNER_HOME_UNTRUSTED');
     return;
   }
 
@@ -1089,16 +1118,71 @@ test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP ya
   const shared = path.join(dir, 'shared');
   mkdirSync(shared);
   chmodSync(shared, 0o777);
-  untrusted(run(adapter, path.join(shared, 'home')), 'başkasına yazılabilir yapışkansız ata');
+  untrusted(run(adapter, path.join(shared, 'home')), 'başkasına yazılabilir yapışkansız ata', 'HOME_ANCESTOR_UNTRUSTED');
   assert.deepEqual(readdirSync(path.join(shared, 'home')), []);
-  const open = path.join(dir, 'open');
-  mkdirSync(open);
-  chmodSync(open, 0o777);
-  untrusted(run(adapter, open), 'başkasına yazılabilir ev');
-  assert.deepEqual(readdirSync(open), []);
-  // Bağlantı çözülür ve hedefin kendisi denetlenir: güvenli klasörden açık eve giden bağ da reddedilir.
-  symlinkSync(open, path.join(dir, 'link'));
-  untrusted(run(adapter, path.join(dir, 'link')), 'açık eve yönelen bağlantı');
+  // Bağlantı çözülür ve hedefin ATALARI denetlenir: güvenli klasörden açık ata altındaki eve giden bağ da reddedilir.
+  symlinkSync(path.join(shared, 'home'), path.join(dir, 'link'));
+  untrusted(run(adapter, path.join(dir, 'link')), 'açık ata altındaki eve yönelen bağlantı', 'HOME_ANCESTOR_UNTRUSTED');
+
+  // Eski sürümün izin veren umask ile bıraktığı kendi KLASÖRLERİ yukarıdan aşağı daraltılır ve ev kabul edilir:
+  // açık kaldığı sürede başkasının eklediği girdi sahibinden, yazabildiği dosya izninden yakalanırdı.
+  const legacy = path.join(dir, 'legacy');
+  mkdirSync(path.join(legacy, 'work', '.claude'), { recursive: true });
+  for (const folder of [legacy, path.join(legacy, 'work'), path.join(legacy, 'work', '.claude')]) chmodSync(folder, 0o777);
+  assert.notEqual(run(adapter, legacy).error, 'PLANNER_HOME_UNTRUSTED');
+  for (const folder of [legacy, path.join(legacy, 'work'), path.join(legacy, 'work', '.claude')]) assert.equal(lstatSync(folder).mode & 0o022, 0, folder);
+
+  // CLI'nin yürüttüğü ayar ve kanca yolları: başkasına yazılabilir DOSYA onarılmaz, neden ve yolla reddedilir.
+  for (const relative of [['work', '.claude', 'settings.json'], ['.claude', 'settings.json'], ['call-eski', 'mcp.json']]) {
+    const home = mkdtempSync(path.join(dir, 'tampered-'));
+    const target = path.join(home, ...relative);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, '{"hooks":{}}');
+    chmodSync(target, 0o666);
+    const outcome = run(adapter, home);
+    untrusted(outcome, relative.join('/'), 'HOME_ENTRY_WRITABLE_BY_OTHERS');
+    assert.ok(outcome.at?.endsWith(path.join(...relative)), `${outcome.at}`);
+  }
+  if (process.getuid() === 0) {
+    // Başka hesabın bıraktığı girdi (yalnızca kök kullanıcıyla kurulabilir): sahibinden reddedilir.
+    const home = mkdtempSync(path.join(dir, 'foreign-'));
+    mkdirSync(path.join(home, 'work', '.claude'), { recursive: true });
+    writeFileSync(path.join(home, 'work', '.claude', 'settings.json'), '{}', { mode: 0o600 });
+    chownSync(path.join(home, 'work', '.claude', 'settings.json'), 65534, 65534);
+    untrusted(run(adapter, home), 'başka hesaba ait ayar', 'HOME_ENTRY_FOREIGN_OWNER');
+    chownSync(path.join(home, 'work'), 65534, 65534);
+    untrusted(run(adapter, home), 'başka hesaba ait çalışma klasörü', 'HOME_ENTRY_FOREIGN_OWNER');
+  }
+
+  // İzin veren umask altında bile üretilen çağrı klasörü, MCP yapılandırması, çalışma klasörü ve CLI'nin yazdığı
+  // durum yalnızca bu kullanıcıya açıktır; CLI başlarken bunları gözlemler.
+  const bin = path.join(dir, 'bin');
+  const observed = path.join(dir, 'observed.json');
+  mkdirSync(bin);
+  writeFileSync(path.join(bin, 'claude'), `#!${process.execPath}
+    const fs = require('node:fs'); const path = require('node:path');
+    const config = process.argv[process.argv.indexOf('--mcp-config') + 1];
+    fs.mkdirSync(path.join(process.env.HOME, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(process.env.HOME, '.claude', 'state.json'), '{}');
+    const mode = (target) => fs.lstatSync(target).mode & 0o777;
+    fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify([mode(config), mode(path.dirname(config)), mode(process.cwd()), mode(path.join(process.env.HOME, '.claude', 'state.json'))]));
+    process.exit(1);
+`);
+  chmodSync(path.join(bin, 'claude'), 0o755);
+  const generatedHome = path.join(dir, 'generated');
+  const withTools = JSON.stringify({ messages: [{ role: 'system', content: 'x' }, { role: 'user', content: 'y' }],
+    tools: [{ name: 'ara', description: 'ara', parameters: { type: 'object', properties: {} } }], toolChoice: 'auto' });
+  const previous = process.umask(0o002);
+  try {
+    for (let round = 0; round < 2; round += 1) {
+      const result = spawnSync(process.execPath, [adapter], { input: withTools, encoding: 'utf8',
+        env: { ...commandPlatformEnv(), PATH: bin, PLANNER_CLAUDE_HOME: generatedHome } });
+      assert.equal(JSON.parse(result.stdout).error, 'PLANNER_PROVIDER_ERROR', `tur ${round}: ev kabul edilir, CLI çalışır`);
+      assert.deepEqual(JSON.parse(readFileSync(observed, 'utf8')).map((mode) => mode & 0o077), [0, 0, 0, 0], `tur ${round}`);
+    }
+  } finally {
+    process.umask(previous);
+  }
   // Yapışkan bitli ortak kök (ör. /tmp) altındaki kendi klasörü güvenilirdir.
   const sticky = path.join(dir, 'sticky');
   mkdirSync(sticky);

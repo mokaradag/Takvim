@@ -19,12 +19,14 @@
  * (önbellekten okunmayan girdi belirteçlerinin toplam üst sınırı), PLANNER_CLAUDE_REQUIRE_CACHE=1 (aynı önekle ikinci
  * çağrıdan sonra önbellek okuması zorunlu). Ev klasörü yalıtıldığı için CLI'nin kayıtlı oturumu görünmez; kimlik bilgisi
  * ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN ya da CLAUDE_CODE_OAUTH_TOKEN (ya da barındırılan oturumun ortamı) ile verilir.
- * PLANNER_CLAUDE_HOME (varsayılan geçici kökte `rota-planner-claude-home`) yalnızca bu kullanıcıya ait ve başkasının
- * yazamadığı bir klasör olabilir; doğrulanamayan ev PLANNER_HOME_UNTRUSTED ile reddedilir.
+ * PLANNER_CLAUDE_HOME (varsayılan geçici kökte `rota-planner-claude-home`) alt ağacıyla birlikte yalnızca bu kullanıcıya
+ * ait ve başkasının yazamadığı bir klasör olabilir; doğrulanamayan ev PLANNER_HOME_UNTRUSTED ile reddedilir ve neden ile
+ * yol kayda (PLANNER_CLAUDE_LOG) yazılır. Eski sürümlerin açık bıraktığı kendi klasörleri daraltılır; başkasına
+ * yazılabilir dosya onarılmaz, ev kaldırılmalıdır.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -402,30 +404,78 @@ function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] 
 }
 
 /**
- * Windows ev denetimi: ev ve her atası bu kullanıcıya, SYSTEM'e, Yöneticiler'e ya da TrustedInstaller'a aittir ve
- * devralınmak üzere bekleyen (yalnızca devralma) girdiler dışında başka bir hesaba evde yazma, silme ya da izin/sahiplik
- * değiştirme; atalarda alt öğe silme (yeniden adlandırma), kendini silme ya da izin/sahiplik değiştirme hakkı vermez.
- * Herhangi bir hata sıfırdan farklı çıkış kodudur. Denetimin süresi model bütçesinden ayrıdır.
+ * Windows ev denetimi. Ev ve her atası bu kullanıcıya, SYSTEM'e, Yöneticiler'e ya da TrustedInstaller'a aittir. Evde
+ * başka bir hesaba yazma, silme ya da izin/sahiplik değiştirme hakkı veren girdi YOKTUR; yalnızca devralma (IO)
+ * girdisi de sayılır: evde etkisizdir ama yeni `call-*`, `mcp.json` ve `work` girdilerine etkin olarak geçer. Tek
+ * istisna CREATOR OWNER'dır; alt öğede onu oluşturan hesaba dönüşür. Atalarda yalnızca etkin girdiler (alt öğe silme,
+ * kendini silme, izin/sahiplik değiştirme) sayılır; devralınanlar evde etkin girdi olarak görünür. Ev doğrulandıktan
+ * sonra `work` oluşturulur ve ALT AĞACIN tamamı aynı kuralla denetlenir; bağlantı noktası (reparse) reddedilir.
+ * Çıkış 3: güvenilmeyen sahip/ACL, 4: bağlantı noktası; sorunlu yol standart çıktıya yazılır. Herhangi bir hata
+ * sıfırdan farklı çıkış kodudur. Denetimin süresi model bütçesinden ayrıdır.
  */
 const HOME_CHECK_TIMEOUT_MS = 30000;
 const WINDOWS_HOME_CHECK = "$ErrorActionPreference='Stop'; $sid=[Security.Principal.SecurityIdentifier]; "
   + "$trusted=@([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544',"
-  + "'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'); $mask=0x500D0156; $p=$env:ROTA_PLANNER_HOME; "
-  + "while ($p) { $acl=[IO.Directory]::GetAccessControl($p); if ($trusted -notcontains $acl.GetOwner($sid).Value) { exit 3 }; "
-  + "foreach ($rule in $acl.GetAccessRules($true,$true,$sid)) { if ($rule.AccessControlType -eq 'Allow' "
-  + "-and -not ([int]$rule.PropagationFlags -band 2) -and ([long]$rule.FileSystemRights -band $mask) "
-  + "-and $trusted -notcontains $rule.IdentityReference.Value) { exit 3 } }; "
-  + "$mask=0x100D0040; $p=[IO.Path]::GetDirectoryName($p) }; exit 0";
+  + "'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'); $write=0x500D0156; "
+  + "function Unsafe($acl, $mask, $inheritable) { if ($trusted -notcontains $acl.GetOwner($sid).Value) { return $true }; "
+  + "foreach ($rule in $acl.GetAccessRules($true,$true,$sid)) { $id=$rule.IdentityReference.Value; "
+  + "if ($rule.AccessControlType -ne 'Allow' -or -not ([long]$rule.FileSystemRights -band $mask) -or $trusted -contains $id) { continue }; "
+  + "if (([int]$rule.PropagationFlags -band 2) -and (-not $inheritable -or $id -eq 'S-1-3-0')) { continue }; return $true }; return $false }; "
+  + "function Reject($code, $path) { [Console]::Out.Write($path); exit $code }; "
+  + "$root=$env:ROTA_PLANNER_HOME; if (Unsafe ([IO.Directory]::GetAccessControl($root)) $write $true) { Reject 3 $root }; "
+  + "$p=[IO.Path]::GetDirectoryName($root); while ($p) { if (Unsafe ([IO.Directory]::GetAccessControl($p)) 0x100D0040 $false) { Reject 3 $p }; "
+  + "$p=[IO.Path]::GetDirectoryName($p) }; [void][IO.Directory]::CreateDirectory([IO.Path]::Combine($root,'work')); "
+  + "$pending=New-Object Collections.Stack; $pending.Push($root); while ($pending.Count) { $d=$pending.Pop(); "
+  + "foreach ($e in [IO.Directory]::GetFileSystemEntries($d)) { $a=[IO.File]::GetAttributes($e); "
+  + "if ($a -band [IO.FileAttributes]::ReparsePoint) { Reject 4 $e }; "
+  + "if ($a -band [IO.FileAttributes]::Directory) { $acl=[IO.Directory]::GetAccessControl($e); $pending.Push($e) } "
+  + "else { $acl=[IO.File]::GetAccessControl($e) }; if (Unsafe $acl $write $true) { Reject 3 $e } } }; exit 0";
+
+class PlannerHomeUntrusted extends Error {
+  constructor(reason, at) {
+    super('PLANNER_HOME_UNTRUSTED');
+    this.detail = { reason, path: at };
+  }
+}
 
 /**
- * Yürütülebilir MCP yapılandırmasının, CLI ayarlarının ve çalışma klasörünün evi.
+ * POSIX alt ağaç denetimi: her girdi bu kullanıcıya aittir; klasör ve dosyalar başkasına yazılabilir değildir.
+ * Bağlantılar izlenmez (yalnızca sahibi denetlenir): onları yalnızca bu kullanıcı oluşturabilmiştir.
+ *
+ * Eski sürümlerin izin veren umask ile oluşturduğu KLASÖRLER yukarıdan aşağı daraltılır: daraltılan klasörün
+ * girdisini artık başkası değiştiremez, bu yüzden sıradaki girdi denetimle değişiklik arasında yer değiştiremez.
+ * Klasörün açık kaldığı sürede başkasının eklediği girdi sahibinden yakalanır. Başkasına yazılabilir DOSYA ise
+ * onarılmaz: içeriği değiştirilmiş olabilir; ev açık bir nedenle reddedilir ve işletmeci onu kaldırır.
+ */
+function assertPrivateTree(home, uid) {
+  const pending = [home];
+  while (pending.length) {
+    const directory = pending.pop();
+    const stat = lstatSync(directory);
+    if (!stat.isDirectory() || stat.uid !== uid) throw new PlannerHomeUntrusted('HOME_ENTRY_FOREIGN_OWNER', directory);
+    if (stat.mode & 0o022) chmodSync(directory, stat.mode & 0o7755);
+    if (lstatSync(directory).mode & 0o022) throw new PlannerHomeUntrusted('HOME_ENTRY_WRITABLE_BY_OTHERS', directory);
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const target = path.join(directory, entry.name);
+      if (entry.isDirectory()) { pending.push(target); continue; }
+      const own = lstatSync(target);
+      if (own.uid !== uid) throw new PlannerHomeUntrusted('HOME_ENTRY_FOREIGN_OWNER', target);
+      if (!own.isSymbolicLink() && own.mode & 0o022) throw new PlannerHomeUntrusted('HOME_ENTRY_WRITABLE_BY_OTHERS', target);
+    }
+  }
+}
+
+/**
+ * Yürütülebilir MCP yapılandırmasının, CLI ayarlarının ve çalışma klasörünün evi; ALT AĞACIYLA birlikte güven sınırı.
  *
  * Ortak geçici kökteki öngörülebilir ad başka bir yerel kullanıcı tarafından önceden oluşturulabiliyor; o kullanıcı
- * yazılan `mcp.json` dosyasını (ya da ev ayarlarını) değiştirip CLI'ye kendi komutunu çalıştırtabiliyordu. Ev bu
- * yüzden kullanılmadan önce doğrulanır ve bağlantıları çözülmüş yoluyla kullanılır. POSIX'te ev bu kullanıcıya ait
- * olmalı ve başkasına yazılabilir olmamalıdır; her ata da bu kullanıcıya ya da köke aittir ve başkasına yazılabilirse
- * yapışkan bitlidir. Windows'ta aynı kural ACL üzerinden denetlenir (`WINDOWS_HOME_CHECK`); denetim çalışmazsa ev
- * güvenilmez sayılır.
+ * yazılan `mcp.json` dosyasını, ev ya da çalışma klasörü ayarlarını (`.claude/settings.json` kancaları) değiştirip
+ * CLI'ye kendi komutunu çalıştırtabiliyordu. Yalnızca evin kendisini denetlemek yetmiyordu: CLI bu dosyaları evin
+ * ALTINDAN okur. Ev bu yüzden kullanılmadan önce bütün alt ağacıyla doğrulanır ve bağlantıları çözülmüş yoluyla
+ * kullanılır; sonradan oluşturulan girdiler yapı gereği özeldir (POSIX'te umask 077, Windows'ta devralma girdileri
+ * doğrulanmış ev ACL'i). POSIX'te her ata da bu kullanıcıya ya da köke aittir ve başkasına yazılabilirse yapışkan
+ * bitlidir. Windows'ta aynı kural ACL üzerinden denetlenir (`WINDOWS_HOME_CHECK`); denetim çalışmazsa ev güvenilmez
+ * sayılır.
  */
 function trustedHome() {
   const requested = path.resolve(process.env.PLANNER_CLAUDE_HOME || path.join(tmpdir(), 'rota-planner-claude-home'));
@@ -435,17 +485,24 @@ function trustedHome() {
     const result = spawnSync(path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
       ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_HOME_CHECK],
       { encoding: 'utf8', windowsHide: true, timeout: HOME_CHECK_TIMEOUT_MS, env: { ...process.env, ROTA_PLANNER_HOME: home } });
-    if (result.status !== 0) throw new Error('PLANNER_HOME_UNTRUSTED');
+    if (result.status !== 0) {
+      const reason = result.status === 3 ? 'HOME_ACL_UNTRUSTED' : result.status === 4 ? 'HOME_REPARSE_POINT' : 'HOME_CHECK_FAILED';
+      throw new PlannerHomeUntrusted(reason, result.stdout?.trim() || home);
+    }
+    mkdirSync(path.join(home, 'work'), { recursive: true });
     return home;
   }
   const uid = process.getuid();
-  const own = lstatSync(home);
-  if (!own.isDirectory() || own.uid !== uid || own.mode & 0o022) throw new Error('PLANNER_HOME_UNTRUSTED');
   for (let directory = path.dirname(home); ; directory = path.dirname(directory)) {
     const stat = lstatSync(directory);
-    if (stat.uid !== 0 && stat.uid !== uid || stat.mode & 0o022 && !(stat.mode & 0o1000)) throw new Error('PLANNER_HOME_UNTRUSTED');
-    if (path.dirname(directory) === directory) return home;
+    if (stat.uid !== 0 && stat.uid !== uid || stat.mode & 0o022 && !(stat.mode & 0o1000)) throw new PlannerHomeUntrusted('HOME_ANCESTOR_UNTRUSTED', directory);
+    if (path.dirname(directory) === directory) break;
   }
+  const own = lstatSync(home);
+  if (!own.isDirectory() || own.uid !== uid) throw new PlannerHomeUntrusted('HOME_ENTRY_FOREIGN_OWNER', home);
+  mkdirSync(path.join(home, 'work'), { recursive: true, mode: 0o700 });
+  assertPrivateTree(home, uid);
+  return home;
 }
 
 function reportFailure(log, error, extra = {}) {
@@ -488,18 +545,22 @@ async function complete(launcher, timeoutMs) {
   }
 
   // Kararlı yalıtılmış ev ve çalışma klasörü: depo bağlamı, kullanıcı ayarı ya da proje yönergesi modele girmez.
-  // Güvenilmeyen ev bütçe ayırımından ÖNCE reddedilir; model hiç çağrılmaz.
+  // Güvenilmeyen ev bütçe ayırımından ÖNCE reddedilir; model hiç çağrılmaz. Bu süreç ve CLI yalnızca kullanıcıya
+  // açık girdiler oluşturur (CLI umask'ı devralır).
+  if (process.platform !== 'win32') process.umask(0o077);
   let home;
-  try { home = trustedHome(); } catch { return fail('PLANNER_HOME_UNTRUSTED'); }
+  try { home = trustedHome(); } catch (error) {
+    return fail('PLANNER_HOME_UNTRUSTED', error instanceof PlannerHomeUntrusted ? error.detail : { reason: 'HOME_CHECK_FAILED' });
+  }
   // Kilit, ayırımdan kullanım kaydına dek tutulur; sonraki çağrı tamamlanan harcamayı görür.
   if (log) appendFileSync(log, `${JSON.stringify({ at: new Date().toISOString(), reserved: true, callId })}\n`);
   const cwd = path.join(home, 'work');
-  mkdirSync(cwd, { recursive: true });
   const work = mkdtempSync(path.join(home, 'call-'));
   try {
-    writeFileSync(path.join(work, 'system.txt'), system.content, 'utf8');
-    writeFileSync(path.join(work, 'tools.json'), JSON.stringify(tools), 'utf8');
-    writeFileSync(path.join(work, 'mcp.json'), JSON.stringify({ mcpServers: { [SERVER]: { type: 'stdio', command: process.execPath, args: [fileURLToPath(import.meta.url), 'mcp', path.join(work, 'tools.json')] } } }), 'utf8');
+    const privateFile = { encoding: 'utf8', mode: 0o600 };
+    writeFileSync(path.join(work, 'system.txt'), system.content, privateFile);
+    writeFileSync(path.join(work, 'tools.json'), JSON.stringify(tools), privateFile);
+    writeFileSync(path.join(work, 'mcp.json'), JSON.stringify({ mcpServers: { [SERVER]: { type: 'stdio', command: process.execPath, args: [fileURLToPath(import.meta.url), 'mcp', path.join(work, 'tools.json')] } } }), privateFile);
     const keep = /^(PATH|LANG|LC_ALL|TZ|HTTPS?_PROXY|https?_proxy|NO_PROXY|no_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|ANTHROPIC_BASE_URL|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CODE_(REMOTE.*|PROVIDER_MANAGED_BY_HOST|ORGANIZATION_UUID|ACCOUNT_UUID|CONTAINER_ID|ENTRYPOINT|USE_CCR_V2|PROXY_RESOLVES_HOSTS|WORKER_EPOCH|ENVIRONMENT_RUNNER_VERSION)|CLAUDE_SESSION_INGRESS_TOKEN_FILE|SESSION_INGRESS_URL|CCR_.*|GLOBAL_AGENT_.*)$/;
     const windows = process.platform === 'win32'
       ? Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(SystemRoot|windir|ComSpec|PATHEXT)$/i.test(key))) : {};

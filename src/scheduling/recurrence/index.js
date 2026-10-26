@@ -1,5 +1,5 @@
 import { addDays, fmtISO, parseDate } from '../dates/index.js';
-import { addWorkingDays, countWorkingDays, isWorkingDay, moveToWorkingDay, workingDayScanBound } from '../calendars/index.js';
+import { addWorkingDays, countWorkingDays, isWorkingDay, moveToWorkingDay } from '../calendars/index.js';
 
 /**
  * Tekrarlayan görev kuralları — RFC 5545 (iCalendar) RRULE altkümesi.
@@ -544,29 +544,6 @@ export function occurrenceFinishes(template, plannedStart, { calendar = null } =
     plannedFinish: spanFinishIso(start, spans.duration, calendar),
     targetFinish: spanFinishIso(start, spans.target, calendar)
   };
-}
-
-/**
- * `occurrenceFinishes` hesabının takvim taramasının ÜST SINIRI (gün), tarama
- * yapılmadan hesaplanır. Takvimsiz aritmetik taramasızdır. Bildirilen iş günü
- * süresinin eklenmesi takvimin haftalık desenine göre sınırlanır
- * (`workingDayScanBound`): seyrek desen aynı süre için katlarca gün tarar.
- * Şablon tarihlerinden ölçülen aralık, sayım için aralığın kendisi kadar; o
- * aralıkta sayılan iş günlerinin yeniden eklenmesi için de aralığı örten tam
- * haftalar kadar gün tarar.
- */
-export function occurrenceFinishCost(template, { calendar = null } = {}) {
-  if (!calendar || !template?.plannedStart) return 0;
-  const reach = (value) => {
-    if (!value) return 0;
-    const days = Math.abs(dayGap(template.plannedStart, value)) + 1;
-    return days + 7 * Math.ceil(days / 7);
-  };
-  const declared = template.plannedDurationDays;
-  const duration = Number.isFinite(declared) && declared >= 0
-    ? workingDayScanBound(Math.round(declared), calendar)
-    : reach(template.plannedFinish);
-  return duration + reach(template.targetFinish);
 }
 
 /**

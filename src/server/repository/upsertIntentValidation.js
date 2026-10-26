@@ -69,23 +69,59 @@ async function targetProjectForUpdate(executor, target, id) {
 }
 
 /**
+ * WBS düğümü, yöneticinin kapsamındaki bir sorumlunun görevinin bağlı olduğu
+ * düğüm ya da onun atası mı? Anlık görüntünün `RequiredPartialWbs` kümesiyle
+ * aynı kural; yönetim kapsamı kataloğun geri kalanını açmaz.
+ */
+async function executiveScopedWbsVisible(executor, actor, wbsId, projectId) {
+  const request = executor.request();
+  request.input('wbsId', sql.UniqueIdentifier, wbsId);
+  request.input('projectId', sql.UniqueIdentifier, projectId);
+  request.input('sicil', sql.Int, actor.sicil);
+  const result = await request.query(`
+    ;WITH ScopedWbsChain AS (
+      SELECT w.WbsId, w.ParentWbsId
+      FROM dbo.MR_WBS w
+      WHERE w.ProjectId = @projectId AND EXISTS (
+        SELECT 1
+        FROM dbo.MR_Tasks t
+        JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = t.TaskId
+        JOIN dbo.MR_V_ExecutiveScope es ON es.EmployeeSicil = ta.Sicil AND es.ManagerSicil = @sicil
+        WHERE t.ProjectId = @projectId AND t.WbsId = w.WbsId
+      )
+      UNION ALL
+      SELECT parent.WbsId, parent.ParentWbsId
+      FROM dbo.MR_WBS parent
+      JOIN ScopedWbsChain child ON child.ParentWbsId = parent.WbsId
+      WHERE parent.ProjectId = @projectId
+    )
+    SELECT TOP (1) 1 AS Found FROM ScopedWbsChain WHERE WbsId = @wbsId
+    OPTION (MAXRECURSION 1000);
+  `);
+  return Boolean(result.recordset?.length);
+}
+
+/**
  * Kayıt aktöre GÖRÜNÜR mü?
  *
  * Görünmeyen kayıt sürümlü güncelleme ve silme niyetinde YOK sayılır. Aksi
  * hâlde yetkisiz çağıran, korunan bir görev/WBS/proje kimliğinin var olduğunu
  * "bulunamadı" (409) ile "yetkiniz yok" (403) yanıtları arasındaki farktan
- * öğrenebiliyordu. Görünürlük anlık görüntüyle aynı yetki bağlamından türetilir.
+ * öğrenebiliyordu. Görünürlük anlık görüntüyle aynı kuraldır: görünen kayıt
+ * yetki denetimine ulaşır, görünmeyen var olmayanla aynı yanıtı alır.
+ * Kimlikler commit sınırında (`canonicalizeCommitChanges`) kanonikleşmiştir.
  */
-function observableTo(actor, entityType, id, projectId) {
+async function observableTo(executor, actor, entityType, id, projectId) {
   if (actor?.isSystemAdmin) return true;
   const access = actor?.effective?.access?.get(projectId);
   if (!access) return false;
   if (entityType === 'PROJECT' || access.accessLevel === 'FULL' || access.reasons?.includes(ACCESS_REASONS.MANUAL_GRANT)) return true;
-  // KISMİ projede görev yalnızca kendi kapsamıyla; WBS kataloğu ise aktörün
-  // kendi görevi (sorumlu ya da oluşturucu) bulunan projede görünür.
-  return entityType === 'TASK'
-    ? Boolean(actor.effective.partialTaskIds?.has(id))
-    : Boolean(access.reasons?.some((reason) => reason === ACCESS_REASONS.ASSIGNEE || reason === ACCESS_REASONS.TASK_CREATOR));
+  // KISMİ projede görev yalnızca kendi kapsamıyla; WBS kataloğu aktörün kendi
+  // görevi (sorumlu ya da oluşturucu) bulunan projede görünür.
+  if (entityType === 'TASK') return Boolean(actor.effective.partialTaskIds?.has(id));
+  if (access.reasons?.some((reason) => reason === ACCESS_REASONS.ASSIGNEE || reason === ACCESS_REASONS.TASK_CREATOR)) return true;
+  return Boolean(access.reasons?.includes(ACCESS_REASONS.EXECUTIVE_SCOPE))
+    && executiveScopedWbsVisible(executor, actor, id, projectId);
 }
 
 /**
@@ -106,7 +142,7 @@ export async function assertUpsertIntentMatchesPersistence(executor, changes = {
       if (projectId && target.entityType === 'TASK') storedTaskProjects.set(id, projectId);
       const updateIntent = entry.version != null && String(entry.version).trim() !== '';
       const issue = findUpsertIntentIssue({
-        exists: Boolean(projectId) && (!updateIntent || observableTo(actor, target.entityType, id, projectId)),
+        exists: Boolean(projectId) && (!updateIntent || await observableTo(executor, actor, target.entityType, id, projectId)),
         version: entry.version,
         entityType: target.entityType,
         id
@@ -136,7 +172,7 @@ export async function assertDeleteIntentMatchesPersistence(executor, changes = {
       const id = String(entry.id);
       const projectId = await targetProjectForUpdate(executor, target, id);
       const issue = findDeleteIntentIssue({
-        exists: Boolean(projectId) && observableTo(actor, target.entityType, id, projectId),
+        exists: Boolean(projectId) && await observableTo(executor, actor, target.entityType, id, projectId),
         version: entry.version,
         entityType: target.entityType,
         id

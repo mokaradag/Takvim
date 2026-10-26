@@ -1,7 +1,12 @@
 import 'server-only';
 import { normalizeTaskLifecycle } from '../../domain/taskLifecycle.js';
 import { businessDate } from '../../domain/calendar/businessDate.js';
-import { MAX_WORKING_DAY_SPAN, resolveTaskCalendar } from '../../scheduling/calendars/index.js';
+import {
+  CalendarScanBudgetExceededError,
+  MAX_WORKING_DAY_SPAN,
+  meterCalendarScans,
+  resolveTaskCalendar
+} from '../../scheduling/calendars/index.js';
 import { randomUUID } from 'node:crypto';
 import { normalizePriorityId } from '../../domain/constants/index.js';
 import { canonicalActualId, sameActualId } from '../../domain/identity/actualId.js';
@@ -14,13 +19,12 @@ import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { ServerPersistenceError } from '../errors.js';
 import { observePhase, recordPhaseDuration } from '../observability/observeOperation.js';
 import { applyTaskAssigneeProjection } from './taskAssigneeProjection.js';
-import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
+import { loadAuthorizationContext, loadTransactionAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { assertCanCreateManualProject, assertProjectWriteAccess, hasTaskAssignmentScope } from '../authorization/authorization.js';
 import { mergeProjectTagAppearance, planProjectTagPropagation, projectTagNames } from '../../domain/tags/index.js';
 import {
   formatRecurrenceRule,
   normalizeRecurrenceRule,
-  occurrenceFinishCost,
   occurrenceFinishes,
   planRecurringOccurrences
 } from '../../scheduling/recurrence/index.js';
@@ -1985,20 +1989,35 @@ function assertAssigneeTaskCreateFieldsOnly(task, parent = null) {
 }
 
 /**
- * Bir değişiklik kümesindeki yeni yinelemelerin bitiş aritmetiği için takvim
- * taraması üst sınırı (gün).
+ * Bir değişiklik kümesindeki yineleme doğrulamalarının TOPLAM takvim taraması
+ * (değerlendirilen gün).
  *
- * Her yinelemenin bitişi şablon süresi kadar iş günü taranarak hesaplanır.
- * Eskiden TEK yineleme doğrulanırken serinin tamamının bitişleri hesaplanıyordu;
- * COUNT=400 ve 20 000 iş günlük bir şablon, açık SERIALIZABLE işlem içinde her
- * yineleme için saniyelerce olay döngüsünü tutuyordu. Sınır gerçekçi serilerin
- * çok üstündedir ve aşıldığında küme açık bir hatayla reddedilir.
+ * Üyelik, bitiş aritmetiği ve süre doğrulaması açık SERIALIZABLE işlem içinde
+ * iş günü tarar. Eskiden iş tarama yapılmadan TAHMİN ediliyordu; tahmin
+ * tatilleri ve sonraki süre doğrulamasını saymadığı için gerçek iş sınırın
+ * katlarına çıkabiliyordu. Sayaç artık her taranan günde düşer
+ * (`meterCalendarScans`) ve bittiği anda tarama kesilir; küme açık bir
+ * hatayla reddedilir. Sınır, standart haftada temsil edilebilen en uzun
+ * süreli ve terminli bir yinelemeyi kabul eder.
  */
-const RECURRENCE_COMMIT_FINISH_BUDGET_DAYS = 10 * MAX_WORKING_DAY_SPAN;
+const RECURRENCE_COMMIT_SCAN_BUDGET_DAYS = 10 * MAX_WORKING_DAY_SPAN;
 
-/** Bir işlemdeki yineleme doğrulamalarının ortak durumu: şablon planları ve harcanan takvim işi. */
+/** Bir işlemdeki yineleme doğrulamalarının ortak durumu: şablon planları ve kalan takvim işi. */
 function createRecurrenceCommitContext() {
-  return { plans: new Map(), spentDays: 0 };
+  return { plans: new Map(), meter: { remainingDays: RECURRENCE_COMMIT_SCAN_BUDGET_DAYS } };
+}
+
+/** Yineleme doğrulamasının takvim işini işlemin ortak sayacından düşer. */
+function meteredRecurrenceWork(recurrence, work) {
+  try {
+    return meterCalendarScans(recurrence.meter, work);
+  } catch (error) {
+    if (!(error instanceof CalendarScanBudgetExceededError)) throw error;
+    throw new ServerPersistenceError(
+      'MUTATION_FAILED',
+      'Değişiklik kümesindeki yinelemelerin plan hesabı işlem sınırını aşıyor; yinelemeleri daha küçük gruplar hâlinde oluşturun.'
+    );
+  }
 }
 
 async function commitTask(executor, actor, task, correlationId, {
@@ -2255,7 +2274,7 @@ async function commitTask(executor, actor, task, correlationId, {
       const planKey = `${id(recurrenceParentId)}:${encodeVersion(parent.RowVersion)}:${normalizedParentCalendarId || ''}`;
       let occurrences = recurrence.plans.get(planKey);
       if (!occurrences) {
-        occurrences = planRecurringOccurrences(template, parentRule, { calendar: parentCalendar, finishes: false })
+        occurrences = meteredRecurrenceWork(recurrence, () => planRecurringOccurrences(template, parentRule, { calendar: parentCalendar, finishes: false }))
           .filter((occurrence) => occurrence.occurrenceDate !== templateDate);
         recurrence.plans.set(planKey, occurrences);
       }
@@ -2263,17 +2282,15 @@ async function commitTask(executor, actor, task, correlationId, {
       if (!planned) {
         throw new ServerPersistenceError('MUTATION_FAILED', 'Tekrar günü şablonun kuralı ve çalışma takvimiyle uyumlu olmalıdır.');
       }
-      recurrence.spentDays += occurrenceFinishCost(template, { calendar: parentCalendar });
-      if (recurrence.spentDays > RECURRENCE_COMMIT_FINISH_BUDGET_DAYS) {
-        throw new ServerPersistenceError(
-          'MUTATION_FAILED',
-          'Değişiklik kümesindeki yinelemelerin plan hesabı işlem sınırını aşıyor; yinelemeleri daha küçük gruplar hâlinde oluşturun.'
-        );
-      }
-      const occurrence = { ...planned, ...occurrenceFinishes(template, planned.plannedStart, { calendar: parentCalendar }) };
-      const expectedDuration = calculatePlannedDurationDays({
-        ...occurrence, projectId, calendarId: normalizedParentCalendarId, milestone: Boolean(parent.IsMilestone)
-      }, parentContext);
+      const { occurrence, expectedDuration } = meteredRecurrenceWork(recurrence, () => {
+        const finishes = { ...planned, ...occurrenceFinishes(template, planned.plannedStart, { calendar: parentCalendar }) };
+        return {
+          occurrence: finishes,
+          expectedDuration: calculatePlannedDurationDays({
+            ...finishes, projectId, calendarId: normalizedParentCalendarId, milestone: Boolean(parent.IsMilestone)
+          }, parentContext)
+        };
+      });
       if (plannedStart !== occurrence.plannedStart || plannedFinish !== occurrence.plannedFinish
         || targetFinish !== (occurrence.targetFinish || null)
         || nullableNumber(task.plannedDurationDays) !== expectedDuration) {
@@ -2317,6 +2334,14 @@ async function commitTask(executor, actor, task, correlationId, {
 
   const relatedTaskIds = new Set();
   const projectChanged = before && !sameActualId(before.ProjectId, projectId);
+  // Taşıma görevin GELEN ve GİDEN bütün bağımlılık satırlarını siler; doğrudan
+  // bağımlılık düzenlemesi kaynak projede FULL yetki ister ve görevi taşıma
+  // yetkisi bu hakkı vermez. Karar satırların VARLIĞINA bakmaz: KISMİ görünüm
+  // bağımlılık taşımaz ve satır varken başka, yokken başka yanıt alan aktör
+  // gizli ilişkilerin varlığını yoklayabiliyordu.
+  if (projectChanged && !hasFullProjectWriteAccess(actor, beforeProjectId)) {
+    throw new ServerPersistenceError('FORBIDDEN', 'Görev yalnızca kaynak projede tam proje yetkisiyle başka projeye taşınabilir.');
+  }
   if (projectChanged && await countRecurrenceChildren(executor, taskId)) {
     // Şablon taşınırsa yinelemeleri eski projede kalır ve seri iki projeye
     // bölünür: yeni proje "hiç yineleme yok" görüp ikinci bir seri üretebilirdi.
@@ -2326,17 +2351,6 @@ async function commitTask(executor, actor, task, correlationId, {
     );
   }
   if (projectChanged) {
-    // Taşıma görevin GELEN ve GİDEN bütün bağımlılık satırlarını siler: kaynak
-    // projenin bağımlılık modeli ve ardılların kendi modelleri değişir.
-    // Doğrudan bağımlılık düzenlemesi kaynak projede FULL yetki ister; görevi
-    // taşıma yetkisi bu hakkı vermez. Yetkisi olmayan aktör bağımlılıklı
-    // görevi taşıyamaz, satırlar sessizce silinmez.
-    if (!hasFullProjectWriteAccess(actor, beforeProjectId) && await hasDependencyRows(executor, taskId)) {
-      throw new ServerPersistenceError(
-        'FORBIDDEN',
-        'Bağımlılıkları olan bir görev yalnızca kaynak projede tam proje yetkisiyle başka projeye taşınabilir.'
-      );
-    }
     const dependencyCleanup = request(executor);
     dependencyCleanup.input('taskId', sql.UniqueIdentifier, taskId);
     const cleanup = await dependencyCleanup.query(`
@@ -2684,18 +2698,6 @@ async function publishAssignmentChanges(executor, actor, correlationId, changes,
   }
 }
 
-/** Görevin gelen ya da giden bağımlılık satırı var mı (kilit altında). */
-async function hasDependencyRows(executor, taskId) {
-  const req = request(executor);
-  req.input('taskId', sql.UniqueIdentifier, taskId);
-  const result = await req.query(`
-    SELECT TOP (1) dependency.TaskId
-    FROM dbo.MR_TaskDependencies dependency WITH (UPDLOCK, HOLDLOCK)
-    WHERE dependency.TaskId = @taskId OR dependency.PredecessorTaskId = @taskId;
-  `);
-  return Boolean(result.recordset?.length);
-}
-
 async function deleteTask(executor, actor, entry, correlationId, changes = {}) {
   const taskId = uuid(entry.id);
   const before = await taskRowForUpdate(executor, taskId);
@@ -3011,7 +3013,7 @@ export function createSqlAppRepository() {
       const dependencyPlanningVerified = input?.[DEPENDENCY_PLANNING_VERIFIED] === true;
       const changes = normalizeChanges(input);
       return withSqlTransaction(async (transaction) => {
-        const actor = await observePhase('phase.commit.authorization', () => loadAuthorizationContext(transaction));
+        const actor = await observePhase('phase.commit.authorization', () => loadTransactionAuthorizationContext(transaction));
         const correlationId = randomUUID();
         const recurrence = createRecurrenceCommitContext();
         const consumedRootIds = new Set();

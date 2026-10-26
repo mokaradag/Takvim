@@ -24,6 +24,7 @@ const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
 const { snapshotOperations } = await import('../src/server/observability/telemetryRegistry.js');
 const { createOpenAiCompatibleProvider, embeddingResponseBudget } = await import('../src/server/ai/providers/openAiCompatibleProvider.js');
 const { SEMANTIC_LIMITS } = await import('../src/domain/ai/semanticContract.js');
+const { MAX_PREFIX_CHARS } = await import('../src/domain/ai/aiModelRegistry.js');
 const { getAiGateway } = await import('../src/server/ai/aiRuntime.js');
 const { withSqlTransaction } = await import('../src/server/db/pool.js');
 
@@ -69,32 +70,41 @@ test('sahte yeniden sıralama sorgu, belge sayısı ve belge uzunluğuyla sını
   const post = (body) => fetch(`${server.baseUrl}/rerank`, {
     method: 'POST', headers: { authorization: 'Bearer anahtar', 'content-type': 'application/json' }, body: JSON.stringify(body)
   });
-  // Üretim sözleşmesiyle aynı biçimler reddedilir: boş liste ya da metin, öğe ve sorgu uzunluğu sınırı aşımı.
+  const embed = (input) => fetch(`${server.baseUrl}/embeddings`, {
+    method: 'POST', headers: { authorization: 'Bearer anahtar', 'content-type': 'application/json' }, body: JSON.stringify({ input })
+  });
+  // Sınırlar ÜRETİM sözleşmesinden okunur ve uç başınadır: yeniden sıralama aday sınırını ve öneksiz belge
+  // uzunluğunu, gömme katalog sınırını ve önek payını taşır. İkiz üretimin reddettiği girdiyi kabul etmez.
+  const { maxCandidates, maxCatalogueItems, maxItemTextChars, maxQueryChars } = SEMANTIC_LIMITS;
+  assert.deepEqual([maxCandidates, maxItemTextChars], [20, 4000]);
+  const texts = (count, chars = 1) => Array.from({ length: count }, () => 'd'.repeat(chars));
   for (const body of [
-    { query: 'q', documents: Array.from({ length: FAKE_SEMANTIC_LIMITS.maxItems + 1 }, () => 'd') },
-    { query: 'q'.repeat(FAKE_SEMANTIC_LIMITS.maxQueryChars + 1), documents: ['d'] },
+    { query: 'q', documents: texts(maxCandidates + 1) },
+    { query: 'q', documents: texts(1, maxItemTextChars + 1) },
+    { query: 'q'.repeat(maxQueryChars + 1), documents: ['d'] },
     { query: '', documents: ['d'] },
     { query: 'q', documents: [] },
     { query: 'q', documents: ['d', ''] },
-    { query: 'q', documents: ['d'.repeat(FAKE_SEMANTIC_LIMITS.maxItemChars + 1)] }
+    { query: 'q', documents: 'dizi değil' }
   ]) {
     assert.equal((await post(body)).status, 400, JSON.stringify(body).slice(0, 80));
   }
-  for (const input of [[], [''], ['g'.repeat(FAKE_SEMANTIC_LIMITS.maxItemChars + 1)]]) {
-    const response = await fetch(`${server.baseUrl}/embeddings`, {
-      method: 'POST', headers: { authorization: 'Bearer anahtar', 'content-type': 'application/json' }, body: JSON.stringify({ input })
-    });
-    assert.equal(response.status, 400, `gömme ${JSON.stringify(input).slice(0, 40)}`);
+  assert.equal((await post({ query: 'q'.repeat(maxQueryChars), documents: texts(maxCandidates, maxItemTextChars) })).status, 200,
+    'sınırdaki yeniden sıralama girdisi kabul edilir');
+
+  for (const input of [[], [''], ['g'.repeat(maxItemTextChars + MAX_PREFIX_CHARS + 1)], texts(maxCatalogueItems + 1)]) {
+    assert.equal((await embed(input)).status, 400, `gömme ${JSON.stringify(input).slice(0, 40)}`);
   }
-  assert.equal((await post({ query: 'q'.repeat(FAKE_SEMANTIC_LIMITS.maxQueryChars), documents: ['d'.repeat(FAKE_SEMANTIC_LIMITS.maxItemChars)] })).status, 200,
-    'sınırdaki girdi kabul edilir');
+  assert.equal((await embed(['g'.repeat(maxItemTextChars + MAX_PREFIX_CHARS)])).status, 200, 'önekli sınırdaki gömme öğesi kabul edilir');
+  assert.equal((await embed(texts(maxCatalogueItems))).status, 200, 'katalog sınırındaki gömme kabul edilir');
+  assert.deepEqual(FAKE_SEMANTIC_LIMITS.rerank, { maxItems: maxCandidates, maxItemChars: maxItemTextChars, maxQueryChars });
 
   const original = crypto.createHash;
   let hashes = 0;
   crypto.createHash = (...args) => { hashes += 1; return original(...args); };
   syncBuiltinESMExports();
   let response;
-  const documents = Array.from({ length: 50 }, (_, index) => `belge ${index}`);
+  const documents = Array.from({ length: maxCandidates }, (_, index) => `belge ${index}`);
   try {
     response = await post({ query: 'uzun sorgu '.repeat(100), documents });
   } finally {

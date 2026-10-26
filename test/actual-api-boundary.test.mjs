@@ -27,30 +27,31 @@ test('current Task status vocabulary round-trips through SQL boundary', () => {
 const ORIGIN = 'https://rota.example.internal';
 const ROUTE_TASK_ID = '2d9f0b82-bf72-4b9d-b44e-21506f486697';
 const MUTATING_ROUTES = [
-  ['commit', 'commit/route.js', 'POST', true],
-  ['tarih talebi', 'schedule-changes/route.js', 'POST', true],
-  ['tarih talebi bildirimi', 'schedule-changes/route.js', 'PATCH', true],
-  ['tarih talebi kararı', 'schedule-changes/[requestId]/route.js', 'PATCH', true, { requestId: ROUTE_TASK_ID }],
-  ['atama talebi', 'assignment-coordination/route.js', 'POST', true],
-  ['atama kararı', 'assignment-coordination/[coordinationId]/route.js', 'PATCH', true, { coordinationId: ROUTE_TASK_ID }],
-  ['zil bildirimi', 'notifications/route.js', 'PATCH', true],
-  ['hatırlatma ayarı', 'admin/reminder-settings/route.js', 'PUT', true],
-  ['yönetici kuyruk eylemi', 'admin/system/queues/route.js', 'POST', true],
-  ['uyarı onayı', 'admin/system/events/route.js', 'POST', true],
-  ['toplu Outlook', 'outlook/tasks/route.js', 'POST', true],
-  ['elle hatırlatma', 'tasks/[taskId]/reminder/route.js', 'POST', false, { taskId: ROUTE_TASK_ID }],
-  ['Outlook ekleme', 'tasks/[taskId]/outlook/route.js', 'POST', false, { taskId: ROUTE_TASK_ID }],
-  ['Outlook yeniden davet', 'tasks/[taskId]/outlook/route.js', 'PUT', false, { taskId: ROUTE_TASK_ID }],
-  ['Outlook kaldırma', 'tasks/[taskId]/outlook/route.js', 'DELETE', false, { taskId: ROUTE_TASK_ID }],
-  ['yönetici hatırlatma turu', 'reminders/run/route.js', 'POST', false],
-  ['nabız', 'presence/heartbeat/route.js', 'POST', false]
+  ['commit', 'commit/route.js', 'POST', true, null, [200]],
+  ['tarih talebi', 'schedule-changes/route.js', 'POST', true, null, [400, 'MUTATION_FAILED']],
+  ['tarih talebi bildirimi', 'schedule-changes/route.js', 'PATCH', true, null, [400, 'MUTATION_FAILED']],
+  ['tarih talebi kararı', 'schedule-changes/[requestId]/route.js', 'PATCH', true, { requestId: ROUTE_TASK_ID }, [400, 'MUTATION_FAILED']],
+  ['atama talebi', 'assignment-coordination/route.js', 'POST', true, null, [400, 'MUTATION_FAILED']],
+  ['atama kararı', 'assignment-coordination/[coordinationId]/route.js', 'PATCH', true, { coordinationId: ROUTE_TASK_ID }, [400, 'MUTATION_FAILED']],
+  ['zil bildirimi', 'notifications/route.js', 'PATCH', true, null, [400, 'MUTATION_FAILED']],
+  ['hatırlatma ayarı', 'admin/reminder-settings/route.js', 'PUT', true, null, [200]],
+  ['yönetici kuyruk eylemi', 'admin/system/queues/route.js', 'POST', true, null, [400, 'MUTATION_FAILED']],
+  ['uyarı onayı', 'admin/system/events/route.js', 'POST', true, null, [200]],
+  ['toplu Outlook', 'outlook/tasks/route.js', 'POST', true, null, [400, 'MUTATION_FAILED']],
+  ['elle hatırlatma', 'tasks/[taskId]/reminder/route.js', 'POST', false, { taskId: ROUTE_TASK_ID }, [403, 'FORBIDDEN']],
+  ['Outlook ekleme', 'tasks/[taskId]/outlook/route.js', 'POST', false, { taskId: ROUTE_TASK_ID }, [404, 'TASK_NOT_FOUND']],
+  ['Outlook yeniden davet', 'tasks/[taskId]/outlook/route.js', 'PUT', false, { taskId: ROUTE_TASK_ID }, [404, 'NOT_SUBSCRIBED']],
+  ['Outlook kaldırma', 'tasks/[taskId]/outlook/route.js', 'DELETE', false, { taskId: ROUTE_TASK_ID }, [404, 'NOT_SUBSCRIBED']],
+  ['yönetici hatırlatma turu', 'reminders/run/route.js', 'POST', false, null, [503, 'SMTP_NOT_CONFIGURED']],
+  ['nabız', 'presence/heartbeat/route.js', 'POST', false, null, [200]]
 ];
 
 async function callRoute([, file, method, json, params], headers) {
   const route = await import(`../src/app/api/mergen-rota/${file}`);
   const body = json ? JSON.stringify({ action: 'acknowledge', alertId: 1, changes: {} }) : undefined;
   const response = await route[method](new Request(`${ORIGIN}/api/mergen-rota/${file}`, { method, headers, body }), { params: params || {} });
-  return { status: response.status, message: (await response.json().catch(() => ({})))?.error?.message };
+  const payload = await response.json().catch(() => ({}));
+  return { status: response.status, code: payload?.error?.code, message: payload?.error?.message, payload };
 }
 
 test('çerezli durum değiştiren uçlar başka kaynaktan ve text/plain JSON ile hiçbir SQL yan etkisi olmadan reddedilir', async () => {
@@ -91,18 +92,24 @@ test('aynı kaynaktan gelen tarayıcı isteği ve zamanlayıcı anahtarlı tur n
   process.env.MERGEN_ROTA_REMINDER_CRON_SECRET = 'zamanlayici-gizli-anahtari';
   const stack = await createActualStack(corporateSeed());
   try {
+    // Kabul, rotanın niyet denetiminden SONRAKİ kendi sonucuyla kanıtlanır: beklenmeyen bir hata 500
+    // üretir ve bu tabloyla eşleşmez; aynı FORBIDDEN kodunu taşıyan rota yanıtı niyet iletisinden ayrılır.
     for (const route of MUTATING_ROUTES) {
+      const [label, , , json, , [status, code]] = route;
       for (const headers of [{ origin: ORIGIN, 'sec-fetch-site': 'same-origin' }, {}]) {
-        const outcome = await callRoute(route, { ...(route[3] ? { 'content-type': 'application/json; charset=utf-8' } : {}), ...headers });
-        assert.notEqual(outcome.message, 'İstek aynı kaynaktan gelmelidir.', `${route[0]} ${JSON.stringify(headers)}`);
-        assert.notEqual(outcome.status, 415, route[0]);
+        const outcome = await callRoute(route, { ...(json ? { 'content-type': 'application/json; charset=utf-8' } : {}), ...headers });
+        assert.deepEqual([outcome.status, outcome.code], [status, code], `${label} ${JSON.stringify(headers)}: ${outcome.message}`);
+        assert.notEqual(outcome.message, 'İstek aynı kaynaktan gelmelidir.', `${label} ${JSON.stringify(headers)}`);
       }
     }
-    // Zamanlayıcı çerez kullanmaz: anahtarlı tur kendi sözleşmesiyle doğrulanır.
+    // Zamanlayıcı çerez kullanmaz: anahtarlı tur kendi sözleşmesiyle doğrulanır ve tur özetine ulaşır.
     const run = MUTATING_ROUTES.find(([label]) => label === 'yönetici hatırlatma turu');
     const scheduled = await callRoute(run, { 'x-mergen-rota-reminder-key': 'zamanlayici-gizli-anahtari', origin: 'https://zamanlayici.example.internal' });
-    assert.notEqual(scheduled.message, 'İstek aynı kaynaktan gelmelidir.');
-    assert.notEqual(scheduled.status, 403);
+    assert.equal(scheduled.status, 503);
+    assert.equal(scheduled.payload.enabled, false, 'yapılandırılmamış SMTP ile tur çalışır ve devre dışı özetini döndürür');
+    assert.ok(scheduled.payload.reminders, 'hatırlatma turu sonucu döner');
+    const wrongKey = await callRoute(run, { 'x-mergen-rota-reminder-key': 'yanlis-anahtar', origin: 'https://zamanlayici.example.internal' });
+    assert.deepEqual([wrongKey.status, wrongKey.message], [403, 'İstek aynı kaynaktan gelmelidir.'], 'yanlış anahtar çerez yoluna düşer');
   } finally {
     await stack.dispose();
     if (previousSecret == null) delete process.env.MERGEN_ROTA_REMINDER_CRON_SECRET;

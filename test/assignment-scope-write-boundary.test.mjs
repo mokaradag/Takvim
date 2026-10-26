@@ -276,6 +276,25 @@ test('atama kapsamıyla başka projeye taşınan öncül, FULL yetkisi olmayan a
     await stack.dispose();
   }
 
+  // Bağımlılık satırı olan ve olmayan görevin reddedilen taşıması ayırt edilemez: KISMİ görünüm
+  // bağımlılık taşımaz, yanıt gizli satırların varlığını söylememelidir.
+  const moveResponse = async (seed) => {
+    const actorStack = await createActualStack(seed, { sicil: MANAGER_SICIL });
+    try {
+      const moved = find(await actorStack.repository.loadSnapshot(), MOVED_TASK_ID);
+      const error = await actorStack.repository.commitChanges({ taskUpserts: [{ ...moved, projectId: SECOND_PROJECT_ID, wbsId: null }] })
+        .then(() => null, (failure) => failure);
+      assert.equal(actorStack.db.taskDependencies.length, seed.taskDependencies.length, 'satırlar korunur');
+      return JSON.stringify({ code: error?.code, message: error?.message, details: error?.details ?? null });
+    } finally {
+      await actorStack.dispose();
+    }
+  };
+  const withDependencies = await moveResponse(moveSeed());
+  const withoutDependencies = await moveResponse({ ...moveSeed(), taskDependencies: [] });
+  assert.equal(withDependencies, withoutDependencies);
+  assert.match(withDependencies, /"code":"FORBIDDEN".*kaynak projede tam proje yetkisiyle/);
+
   // İki projede FULL yetkili, ardılı uzlaştırarak taşımaya devam eder.
   const lead = await createActualStack(moveSeed(), { sicil: 900010 });
   try {

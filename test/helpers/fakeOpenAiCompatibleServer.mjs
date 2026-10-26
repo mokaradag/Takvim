@@ -50,28 +50,36 @@ export function hashedScorer(query) {
 const DEFAULT_SEMANTIC = Object.freeze({ embed: (text) => hashedVector(text), rerank: hashedScore });
 
 /**
- * Anlamsal uçların girdi sınırları: üretim sözleşmesinin (`boundedTexts`) TEL
- * üzerindeki karşılığı. Ağ geçidi metni kendi sınırında doğrular, gömme önekini
- * (kayıtta en fazla `MAX_PREFIX_CHARS`) sonra ekler; öğe sınırı bu yüzden
- * ikisinin toplamıdır. Toplam iş öğe sayısı × öğe uzunluğuyla sınırlıdır. Tek
- * başına dinleyici de bunlarla korunur; aşan istek işlenmeden 400 alır.
+ * Anlamsal uçların UÇ BAŞINA girdi sınırları: üretim sözleşmesinin
+ * (`aiGateway` · `boundedTexts`) TEL üzerindeki karşılığı. Gömme kataloğu en
+ * fazla `maxCatalogueItems` öğe taşır ve ağ geçidi metni doğruladıktan sonra
+ * gömme önekini (kayıtta en fazla `MAX_PREFIX_CHARS`) ekler. Yeniden sıralama
+ * en fazla `maxCandidates` aday taşır ve belgeye önek eklenmez. Tek başına
+ * dinleyici de bunlarla korunur; aşan istek işlenmeden 400 alır.
  */
 export const FAKE_SEMANTIC_LIMITS = Object.freeze({
-  maxItems: SEMANTIC_LIMITS.maxCatalogueItems,
-  maxItemChars: SEMANTIC_LIMITS.maxItemTextChars + MAX_PREFIX_CHARS,
-  maxQueryChars: SEMANTIC_LIMITS.maxQueryChars
+  embeddings: Object.freeze({
+    maxItems: SEMANTIC_LIMITS.maxCatalogueItems,
+    maxItemChars: SEMANTIC_LIMITS.maxItemTextChars + MAX_PREFIX_CHARS
+  }),
+  rerank: Object.freeze({
+    maxItems: SEMANTIC_LIMITS.maxCandidates,
+    maxItemChars: SEMANTIC_LIMITS.maxItemTextChars,
+    maxQueryChars: SEMANTIC_LIMITS.maxQueryChars
+  })
 });
 
 const boundedText = (text, maxChars) => typeof text === 'string' && text.length > 0 && text.length <= maxChars;
 
 /** Anlamsal girdinin türü ve sınırları; sorun varsa nedeni, yoksa `null`. */
 function semanticInputIssue(kind, body) {
+  const limits = FAKE_SEMANTIC_LIMITS[kind];
   const texts = kind === 'embeddings'
     ? (Array.isArray(body?.input) ? body.input : [body?.input])
     : body?.documents;
-  if (!Array.isArray(texts) || texts.length < 1 || texts.length > FAKE_SEMANTIC_LIMITS.maxItems) return 'item count';
-  if (!texts.every((text) => boundedText(text, FAKE_SEMANTIC_LIMITS.maxItemChars))) return 'item';
-  return kind === 'rerank' && !boundedText(body?.query, FAKE_SEMANTIC_LIMITS.maxQueryChars) ? 'query' : null;
+  if (!Array.isArray(texts) || texts.length < 1 || texts.length > limits.maxItems) return 'item count';
+  if (!texts.every((text) => boundedText(text, limits.maxItemChars))) return 'item';
+  return kind === 'rerank' && !boundedText(body?.query, limits.maxQueryChars) ? 'query' : null;
 }
 
 function semanticPayload(kind, body, semantic) {

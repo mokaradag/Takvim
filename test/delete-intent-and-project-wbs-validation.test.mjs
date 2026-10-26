@@ -280,11 +280,103 @@ test('aynı kümede oluşturulan projedeki bağımlı görevler oluşturanın FU
     assert.ok(manager.db.taskDependencies.some((row) => String(row.TaskId).toLowerCase() === second
       && String(row.PredecessorTaskId).toLowerCase() === first), 'bağımlılık yazılır');
 
-    const existing = { taskUpserts: [{ ...task('c1c1c1c1-0000-4000-8000-0000000000b3', 'Gizli projede', [{ predecessorId: first, type: 'FS', lagDays: 0 }]),
-      projectId: MANUAL_PROJECT_ID, wbsId: MANUAL_ROOT_WBS_ID }], projectUpserts: [{ id: MANUAL_PROJECT_ID }] };
-    assert.doesNotMatch(await probe(existing, MANUAL_PROJECT_ID), /^200 /, 'var olan projeye oluşturma muafiyeti uygulanmaz');
+    // Var olan projenin SÜRÜMLÜ, kodsuz güncellemesi niyet denetimini geçer (READ hibesiyle görünür); 409
+    // çakışmasına değil yetki kapısına ulaşır. Oluşturma muafiyeti yalnızca kaydı olmayan projeye aittir ve
+    // var olan proje temel deponun FULL yazma kuralıyla, bağımlılık planından önce reddedilir.
+    manager.db.projectAccess.push({ ProjectId: MANUAL_PROJECT_ID.toUpperCase(), Sicil: MANAGER_SICIL, AccessLevel: 'READ', GrantSource: 'MANUAL_GRANT', IsActive: 1 });
+    const stored = (await manager.repository.loadSnapshot()).projects.find((project) => String(project.id).toLowerCase() === MANUAL_PROJECT_ID);
+    assert.ok(stored?.version, 'proje READ hibesiyle görünür');
+    const dependent = task('c1c1c1c1-0000-4000-8000-0000000000b3', 'Gizli projede', [{ predecessorId: first, type: 'FS', lagDays: 0 }]);
+    const existing = { taskUpserts: [{ ...dependent, projectId: MANUAL_PROJECT_ID, wbsId: MANUAL_ROOT_WBS_ID }], projectUpserts: [{ ...stored, code: null }] };
+    assert.equal(await probe(existing, MANUAL_PROJECT_ID),
+      `403 ${JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Bu proje için tam yazma yetkiniz yok.', details: null } })}`,
+      'var olan projeye oluşturma muafiyeti uygulanmaz');
+    // Proje satırı gönderilmeden de aynı görev bağımlılık kapısında durur.
+    assert.equal(await probe({ taskUpserts: existing.taskUpserts }, MANUAL_PROJECT_ID),
+      `403 ${JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Görev bağımlılıkları yalnızca tam proje yetkisiyle düzenlenebilir.', details: null } })}`);
+    assert.equal(manager.db.tasks.some((row) => String(row.TaskId).toLowerCase() === dependent.id), false);
   } finally {
     await manager.dispose();
+  }
+});
+
+test('proje oluşturamayan aktör kodsuz sahte projeyle gizli öncül kimliği yoklayamaz', async () => {
+  const plain = await disclosureStack(PLAIN_SICIL);
+  try {
+    const attempt = async (predecessorId) => {
+      const changes = projectCreate(null);
+      const projectId = changes.projectUpserts[0].id;
+      changes.taskUpserts = [{
+        id: 'c1c1c1c1-0000-4000-8000-0000000000c1', projectId, wbsId: changes.wbsUpserts[0].id, calendarId: null, task: 'Yoklama',
+        description: null, keyword: null, status: 'planned', priority: 'medium', isMilestone: false, plannedStart: null,
+        plannedFinish: null, plannedDurationDays: null, targetFinish: null, actualStart: null, actualFinish: null,
+        remainingDurationDays: null, progress: 0, sortOrder: null, assigneeIds: [String(PLAIN_SICIL)],
+        deps: [{ predecessorId, type: 'FS', lagDays: 0 }]
+      }];
+      return probe(changes, predecessorId);
+    };
+    const hidden = await attempt(HIDDEN_TASK_ID);
+    const missing = await attempt(MISSING_TASK_ID);
+    assert.equal(hidden, missing, 'gizli öncül var olmayanla aynı yanıtı alır');
+    assert.match(hidden, /^403 .*manuel proje oluşturabilir/, 'oluşturma yetkisi bağımlılık planından önce reddeder');
+    assert.equal(plain.db.projects.some((project) => String(project.ProjectId).toLowerCase() === 'c1c1c1c1-0000-4000-8000-0000000000aa'), false);
+  } finally {
+    await plain.dispose();
+  }
+});
+
+test('yönetim kapsamıyla görünen WBS atası niyet denetiminde var sayılır; gizli düğüm var olmayanla aynı kalır', async () => {
+  const manager = await disclosureStack(MANAGER_SICIL);
+  try {
+    const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
+    const SCOPED_WBS_ID = 'c1c1c1c1-0000-4000-8000-000000000008';
+    manager.db.wbs.push({ WbsId: SCOPED_WBS_ID.toUpperCase(), ProjectId: CORPORATE_PROJECT_ID, ParentWbsId: CORPORATE_ROOT_WBS_ID, Code: 'K', Name: 'Kapsam düğümü', SortOrder: 3, RowVersion: Buffer.from([0, 0, 0, 0, 0, 0, 0, 9]) });
+    manager.db.tasks.find((row) => String(row.TaskId).toLowerCase() === LONE_TASK_ID).WbsId = SCOPED_WBS_ID.toUpperCase();
+    const snapshot = await manager.repository.loadSnapshot();
+    const visibleIds = snapshot.wbs.map((node) => String(node.id).toLowerCase());
+    const scoped = snapshot.wbs.find((node) => String(node.id).toLowerCase() === SCOPED_WBS_ID);
+    assert.ok(scoped && visibleIds.includes(CORPORATE_ROOT_WBS_ID.toLowerCase()), 'anlık görüntü astın görevinin WBS zincirini döndürür');
+    assert.equal(visibleIds.includes(HIDDEN_WBS_ID), false, 'kapsam dışı düğüm anlık görüntüde yoktur');
+
+    // Görünen düğüm yetki denetimine ulaşır (KISMİ proje WBS yazamaz); 409 "bulunamadı" almaz.
+    assert.equal(await probe({ wbsDeletes: [{ id: scoped.id, version: scoped.version }] }, scoped.id),
+      `403 ${JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Bu proje için tam yazma yetkiniz yok.', details: null } })}`);
+    // Görünmeyen ve var olmayan düğüm aynı yanıtı alır.
+    const hidden = await probe({ wbsDeletes: [{ id: HIDDEN_WBS_ID, version: STALE_VERSION }] }, HIDDEN_WBS_ID);
+    assert.equal(hidden, await probe({ wbsDeletes: [{ id: MISSING_WBS_ID, version: STALE_VERSION }] }, MISSING_WBS_ID));
+    assert.match(hidden, /^409 .*DELETE_TARGET_MISSING/);
+  } finally {
+    await manager.dispose();
+  }
+});
+
+test('commit işlemi yetkiyi bir kez yükler; kilitlenme kurbanı baştan yinelenir', async () => {
+  const lead = await disclosureStack(900010);
+  try {
+    const snapshot = await lead.repository.loadSnapshot();
+    const lone = snapshot.tasks.find((task) => String(task.id).toLowerCase() === LONE_TASK_ID);
+    const firstStatement = lead.db.statements.length;
+    const firstTransaction = lead.db.transactions.length;
+    let deadlocks = 0;
+    lead.db.commitHook = () => {
+      if (deadlocks++ === 0) throw Object.assign(new Error('Transaction was deadlocked'), { number: 1205 });
+    };
+    await lead.repository.commitChanges({ taskUpserts: [{ ...lone, task: 'Yinelenen kayıt' }] });
+    lead.db.commitHook = null;
+
+    const attempts = lead.db.transactions.slice(firstTransaction);
+    assert.deepEqual(attempts.map((attempt) => [attempt.rollbackStatementIndex != null, attempt.commitStatementIndex != null]),
+      [[true, false], [false, true]], 'kurban geri alınır, yeni işlem tamamlanır');
+    for (const attempt of attempts) {
+      const end = attempt.commitStatementIndex ?? attempt.rollbackStatementIndex;
+      const authorizationReads = lead.db.statements.slice(attempt.statementIndex, end)
+        .filter((statement) => statement.sql.includes('FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil'));
+      assert.equal(authorizationReads.length, 1, 'yetki bağlamı işlem başına bir kez yüklenir');
+    }
+    assert.ok(attempts[0].statementIndex >= firstStatement);
+    assert.equal(lead.db.tasks.find((row) => String(row.TaskId).toLowerCase() === LONE_TASK_ID).Title, 'Yinelenen kayıt');
+  } finally {
+    await lead.dispose();
   }
 });
 

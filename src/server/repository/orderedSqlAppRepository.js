@@ -3,7 +3,7 @@ import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import { assertCanCreateManualProject, assertProjectWriteAccess } from '../authorization/authorization.js';
-import { loadAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
+import { loadTransactionAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { observePhase } from '../observability/observeOperation.js';
 import { canonicalizeCommitChanges } from './commitChangeValidation.js';
 import { canonicalizeCommitScalars } from './commitScalarCanonicalization.js';
@@ -32,20 +32,39 @@ async function lockedProjectRow(transaction, projectId) {
 }
 
 /**
- * Proje kodu uygunluğu yalnızca o proje işlemine yetkili aktöre bildirilir.
- * Kurumsal ayrılmış kod ile başka projede kullanılan kod farklı yanıt alır;
- * denetim yetkiden önce çalıştığında yetkisiz çağıran kod tahminlerini
- * yoklayabiliyordu. Yetki temel deponun kuralıyla aynıdır ve aynı FORBIDDEN'ı
- * döndürür.
+ * Proje upsert'lerinin yetkisi, kalıcı duruma bağlı sonraki denetimlerden
+ * (kod uygunluğu, bağımlılık planı) ÖNCE ve temel deponun kuralıyla kurulur:
+ * var olan projeye FULL yazma, kaydı olmayan projeye manuel proje oluşturma
+ * yetkisi. Eskiden yetki yalnızca kodlu projede denetleniyordu; kodsuz sahte
+ * proje bağımlılık muafiyetini alıyor ve proje oluşturamayan aktör gizli öncül
+ * kimliklerini plan hatalarından yoklayabiliyordu.
+ *
+ * @returns {Set<string>} oluşturma yetkisi kanıtlanmış, kaydı olmayan projeler
  */
-async function assertManualProjectCodesAvailable(transaction, changes, actor) {
+async function assertProjectUpsertsAuthorized(transaction, changes, actor) {
+  const createdProjectIds = new Set();
+  for (const project of changes.projectUpserts || []) {
+    if (await lockedProjectRow(transaction, project.id)) {
+      assertProjectWriteAccess(actor.effective, project.id);
+    } else {
+      assertCanCreateManualProject(actor);
+      createdProjectIds.add(canonicalActualId(project.id));
+    }
+  }
+  return createdProjectIds;
+}
+
+/**
+ * Proje kodu uygunluğu yalnızca o proje işlemine yetkili aktöre bildirilir
+ * (bkz. assertProjectUpsertsAuthorized). Kurumsal ayrılmış kod ile başka
+ * projede kullanılan kod farklı yanıt alır.
+ */
+async function assertManualProjectCodesAvailable(transaction, changes) {
   const pendingProjectCodes = new Map();
 
   for (const project of changes.projectUpserts || []) {
     const projectCode = normalizedProjectCode(project.code);
     if (!projectCode) continue;
-    if (await lockedProjectRow(transaction, project.id)) assertProjectWriteAccess(actor.effective, project.id);
-    else assertCanCreateManualProject(actor);
 
     const request = transaction.request();
     request.input('projectId', sql.UniqueIdentifier, project.id);
@@ -98,19 +117,14 @@ function hasFullProjectAccess(actor, projectId) {
  * Sertleştirilmiş planlama öncüllerin varlığını, projesini ve döngü yolunu
  * kalıcı durumdan okur. Bağımlılık düzenlemesi temel depoda kaynak ve hedef
  * projede FULL yetki ister; yetkisiz aktörün isteği bu okumalara ulaşmadan aynı
- * FORBIDDEN ile reddedilir. Aynı kümede oluşturulan (kaydı olmayan) proje
- * temel depoda oluşturana FULL sahiplikle yazıldığı için bu denetimde FULL
- * sayılır; oluşturma yetkisi orada denetlenir. Aktörün göremediği ve atama
- * kapsamına girmeyen MEVCUT hedef proje, var olmayan projeyle aynı yanıtı alır.
+ * FORBIDDEN ile reddedilir. Aynı kümede oluşturulan proje temel depoda
+ * oluşturana FULL sahiplikle yazıldığı için FULL sayılır; muafiyet yalnızca
+ * oluşturma yetkisi ÖNCEDEN kanıtlanmış projelere verilir. Aktörün göremediği
+ * ve atama kapsamına girmeyen MEVCUT hedef proje, var olmayan projeyle aynı
+ * yanıtı alır.
  */
-async function assertTaskTargetsDisclosable(transaction, changes, actor, storedTaskProjects) {
+async function assertTaskTargetsDisclosable(transaction, changes, actor, storedTaskProjects, createdProjectIds) {
   const upsertedProjectIds = [...new Set((changes.projectUpserts || []).map((project) => canonicalActualId(project.id)).filter(Boolean))].sort();
-  const createdProjectIds = new Set();
-  if ((changes.taskUpserts || []).some((task) => (task.deps || []).length)) {
-    for (const projectId of upsertedProjectIds) {
-      if (!(await lockedProjectRow(transaction, projectId))) createdProjectIds.add(projectId);
-    }
-  }
   for (const task of changes.taskUpserts || []) {
     if (!(task.deps || []).length) continue;
     const storedProjectId = storedTaskProjects.get(String(task.id));
@@ -150,11 +164,17 @@ export function createOrderedSqlAppRepository() {
         // kurulur. Niyet, proje kodu ve bağımlılık uzlaştırma denetimleri
         // eskiden kimlik doğrulanmadan çalışıyor; kimliksiz ya da yetkisiz
         // çağıran kayıt varlığını, ayrılmış kodları ve gizli ardıl kimliklerini
-        // farklı yanıtlardan öğrenebiliyordu.
+        // farklı yanıtlardan öğrenebiliyordu. Bağlam temel depoyla paylaşılır.
+        //
+        // Yetki okuması SERIALIZABLE paylaşımlı kilitlerini güncelleme
+        // kilitlerinden ÖNCE alır; aynı görevi kaydeden iki istek birbirinin
+        // paylaşımlı kilidini bekleyerek kilitlenebilir. Sıra açıklama sınırı
+        // gereğidir; kurban işlem baştan yinelenir ve kazananın ardından ya
+        // tamamlanır ya da eskimiş sürüm çakışması alır.
         let actor;
         let storedTaskProjects;
         await observePhase('phase.commit.intent-validation', async () => {
-          actor = await loadAuthorizationContext(transaction);
+          actor = await loadTransactionAuthorizationContext(transaction);
           // `projectDeletes` isteğe bağlıdır ve kanonikleştirme onu `undefined`
           // olarak korur: doğrudan `.length` okuması, alanı hiç göndermeyen
           // (tamamen geçerli) bir istekte işlem başlamadan TypeError üretiyordu.
@@ -162,15 +182,16 @@ export function createOrderedSqlAppRepository() {
             throw new ServerPersistenceError('FORBIDDEN', 'Projeyi yalnızca sistem yöneticisi silebilir.');
           }
           storedTaskProjects = await assertUpsertIntentMatchesPersistence(transaction, orderedChanges, actor);
-          await assertManualProjectCodesAvailable(transaction, orderedChanges, actor);
+          const createdProjectIds = await assertProjectUpsertsAuthorized(transaction, orderedChanges, actor);
+          await assertManualProjectCodesAvailable(transaction, orderedChanges);
           await assertDeleteIntentMatchesPersistence(transaction, orderedChanges, actor);
-          await assertTaskTargetsDisclosable(transaction, orderedChanges, actor, storedTaskProjects);
+          await assertTaskTargetsDisclosable(transaction, orderedChanges, actor, storedTaskProjects, createdProjectIds);
         });
         await observePhase('phase.commit.dependency-reconciliation', async () => {
           await assertTaskDependencyReconciliationCovered(transaction, orderedChanges, actor);
         });
         return repository.commitChanges(orderedChanges);
-      }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE }));
+      }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE, deadlockRetries: 2 }));
     }
   };
 }

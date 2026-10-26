@@ -18,11 +18,11 @@ import {
   MAX_RECURRENCE_OCCURRENCES,
   expandRecurrence,
   findRecurrenceRuleIssue,
-  occurrenceFinishCost,
   occurrenceFinishes,
   planRecurringOccurrences
 } from '../src/scheduling/recurrence/index.js';
-import { MAX_WORKING_DAY_SPAN, addWorkingDays } from '../src/scheduling/calendars/index.js';
+import { CalendarScanBudgetExceededError, MAX_WORKING_DAY_SPAN, addWorkingDays, meterCalendarScans } from '../src/scheduling/calendars/index.js';
+import { calculatePlannedDurationDays } from '../src/scheduling/plans/index.js';
 import { addDays, fmtISO } from '../src/scheduling/dates/index.js';
 import { findCommitScalarIssue } from '../src/server/repository/commitScalarValidation.js';
 
@@ -217,20 +217,40 @@ test('yineleme üyeliği bitiş aritmetiği yapmadan belirlenir; tek yinelemenin
   const single = occurrenceFinishes(template, dates[3].plannedStart, { calendar: counting });
   const full = planRecurringOccurrences(template, { ...rule, count: 4 }, { calendar: WORK_WEEK })[3];
   assert.deepEqual(single, { plannedFinish: full.plannedFinish, targetFinish: full.targetFinish }, 'bitişler tam planla aynıdır');
-  assert.equal(occurrenceFinishCost(template), 0, 'takvimsiz aritmetik tarama yapmaz');
+});
 
-  // Bütçelenen gün, taranan günün ÜST sınırıdır; haftada tek çalışma günlü seyrek desen aynı süre için yedi kat
-  // gün tarar ve bütçeye yansır. Bildirilen süre ve şablon tarihlerinden ölçülen süre ayrı ayrı sınanır.
-  const sparse = { get workingDays() { reads += 1; return [1]; }, holidays: [] };
-  const measured = { plannedStart: '2026-08-17', plannedFinish: '2027-08-16', targetFinish: '2026-12-31' };
-  for (const [calendar, label] of [[counting, 'beş günlük'], [sparse, 'haftada tek günlük']]) {
-    for (const shape of [template, measured]) {
-      const cost = occurrenceFinishCost(shape, { calendar });
-      reads = 0;
-      occurrenceFinishes(shape, dates[3].plannedStart, { calendar });
-      assert.ok(reads > 0 && reads <= cost, `${label} takvimde tek yineleme bütçelenen işi aşmaz (${reads} / ${cost})`);
-    }
+test('takvim tarama sayacı yapılan işi sayar: tatil, seyrek desen ve sonraki süre doğrulaması bütçeyi aşamaz', () => {
+  // Her gün değerlendirmesi takvimin çalışma günlerini bir kez okur; okuma sayısı taranan gündür.
+  let reads = 0;
+  const counted = (workingDays, holidays = []) => ({ id: 'sayilan', get workingDays() { reads += 1; return workingDays; }, holidays });
+  const holidayHeavy = counted([1, 2, 3, 4, 5], Array.from({ length: 400 }, (_, index) => ({ date: fmtISO(addDays('2026-08-18', index)), name: 'Tatil' })));
+  const template = { plannedStart: '2026-08-17', plannedDurationDays: 5, targetFinish: null };
+  const validate = (calendar) => {
+    const finishes = occurrenceFinishes(template, '2026-08-17', { calendar });
+    return calculatePlannedDurationDays({ plannedStart: '2026-08-17', ...finishes, calendarId: calendar.id }, { calendars: [calendar], projects: [] });
+  };
+
+  for (const [calendar, label] of [[counted([1, 2, 3, 4, 5]), 'beş günlük'], [counted([1]), 'haftada tek günlük'], [holidayHeavy, 'tatil yoğun']]) {
+    reads = 0;
+    const unmetered = validate(calendar);
+    const work = reads;
+    // Sayaç tam yapılan işi düşer; bitiş taraması ile süre doğrulamasının ikinci taraması birlikte sayılır.
+    const meter = { remainingDays: work };
+    reads = 0;
+    assert.equal(meterCalendarScans(meter, () => validate(calendar)), unmetered, label);
+    assert.deepEqual([reads, meter.remainingDays], [work, 0], `${label}: ${work} gün`);
+    // Bir gün eksik bütçe taramayı bütçede keser; sınırın ötesine tek gün bile taranmaz.
+    reads = 0;
+    assert.throws(() => meterCalendarScans({ remainingDays: work - 1 }, () => validate(calendar)), CalendarScanBudgetExceededError);
+    assert.equal(reads, work - 1, `${label}: kesinti bütçede`);
   }
+  // Tatil bloğu taramaya yansır: beş iş günü 400 günlük tatili aşmak zorundadır.
+  reads = 0;
+  validate(holidayHeavy);
+  assert.ok(reads > 2 * 400, `tatil günleri sayılır (${reads})`);
+  // Sayaç yalnızca çağrı süresince etkindir ve eşzamansız iş kabul edilmez.
+  assert.equal(addWorkingDays('2026-08-17', 5, counted([1])) != null, true);
+  assert.throws(() => meterCalendarScans({ remainingDays: 10 }, async () => {}), TypeError);
 });
 
 /* ── 3 · Kalıcı katmanda seri bütünlüğü ──────────────────────── */
@@ -400,6 +420,36 @@ test('uzun şablonlu büyük seride yineleme doğrulaması kardeş bitişlerini 
       error.code === 'MUTATION_FAILED' && /işlem sınırını aşıyor/.test(error.message)
     ));
     assert.equal(stack.db.tasks.length, 2, 'bütçeyi aşan küme bütünüyle geri alınır');
+  } finally {
+    await stack.dispose();
+  }
+});
+
+test('yineleme işlem bütçesi süre doğrulamasının ikinci taramasını da sayar', { timeout: 60000 }, async () => {
+  // Terminsiz, en uzun süreli yinelemeler: bitiş için ~28 000 gün, süre doğrulaması için aynı aralık bir kez daha
+  // taranır. Yalnızca bitiş taramasını tahmin eden eski hesap yedi yinelemeyi ~196 000 günle bütçe içinde sayıyordu.
+  const stack = await createActualStack(corporateSeed());
+  try {
+    assert.equal((await stack.persistence.commitChanges('project/create', manualProjectChanges())).ok, true);
+    const finish = fmtISO(addWorkingDays('2026-08-17', MAX_WORKING_DAY_SPAN - 1, WORK_WEEK));
+    const shape = { plannedStart: '2026-08-17', plannedFinish: finish, targetFinish: null, plannedDurationDays: MAX_WORKING_DAY_SPAN };
+    await stack.repository.commitChanges({ taskUpserts: [seriesTask({
+      recurrence: `FREQ=WEEKLY;BYDAY=MO;COUNT=${MAX_RECURRENCE_OCCURRENCES}`, ...shape
+    })] });
+    const child = (index, date) => seriesTask({
+      id: `task-9${index.toString(16).padStart(7, '0')}-9999-4999-8999-999999999999`,
+      recurrence: null, recurrenceParentId: TASK_ID, recurrenceOccurrenceDate: date,
+      plannedStart: date, plannedDurationDays: MAX_WORKING_DAY_SPAN,
+      ...occurrenceFinishes(shape, date, { calendar: WORK_WEEK })
+    });
+    const dates = Array.from({ length: 7 }, (_, index) => fmtISO(addDays('2026-08-24', index * 7)));
+    await assert.rejects(stack.repository.commitChanges({ taskUpserts: dates.map((date, index) => child(index + 1, date)) }), (error) => (
+      error.code === 'MUTATION_FAILED' && /işlem sınırını aşıyor/.test(error.message)
+    ));
+    assert.equal(stack.db.tasks.length, 1, 'küme geri alınır');
+    // Aynı yinelemeler bütçeye sığan gruplar hâlinde kabul edilir.
+    await stack.repository.commitChanges({ taskUpserts: dates.slice(0, 3).map((date, index) => child(index + 1, date)) });
+    assert.equal(stack.db.tasks.length, 4);
   } finally {
     await stack.dispose();
   }
