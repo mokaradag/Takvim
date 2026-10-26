@@ -1226,6 +1226,9 @@ async function revalidate(turn, disclosureSignal = turn.session.signal) {
 const SINGLE_TASK_TOOLS = Object.freeze(['rota_task_detail', 'rota_dependency_inspect']);
 
 function completedResultScope(turn, verdict) {
+  // Son teslimin açıklamadığı ara yanıtlar takip kümesi oluşturamaz.
+  const disclosed = new Set(verdict.citedIds);
+  if (!disclosed.size) return null;
   // Kısmi çok bölümlü yanıtta doğrulanmış bölümün kümesi gönderge olarak kalır; eksik bölüm hiçbir küme vermez.
   const partial = verdict.kind === 'unavailable' && turn.partCount > 1 && turn.answers.some((answer) => answer.verdict.kind === 'grounded');
   if (verdict.kind !== 'grounded' && !partial) return null;
@@ -1237,7 +1240,8 @@ function completedResultScope(turn, verdict) {
   if (candidates.length !== 1 || candidates[0].verdict.kind !== 'grounded') return null;
   const { request, verdict: selected, entries: sourceEntries } = candidates[0];
   const active = new Set(turn.ledger.requestEntries().map(entry => entry.id));
-  const entries = sourceEntries.filter(entry => active.has(entry.id) && selected.citedIds.includes(entry.id));
+  if (!selected.citedIds.every(id => disclosed.has(id))) return null;
+  const entries = sourceEntries.filter(entry => active.has(entry.id) && disclosed.has(entry.id) && selected.citedIds.includes(entry.id));
   const tool = request.population.tool;
   if (SINGLE_TASK_TOOLS.includes(tool)) {
     // Özne okumanın görev seçicisiyle aynı olmalıdır: kanıtın adlandırdığı başka bir kayıt gönderge olmaz.

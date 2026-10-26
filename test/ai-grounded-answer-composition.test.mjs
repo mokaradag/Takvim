@@ -239,11 +239,17 @@ test('etkin düzen akışı kısa dış gözcüye ilerleme bildirir; ham model m
 });
 
 test('düzen beklerken geri alınan yetki başarılı ve başarısız düzende kalıcı kanıta ulaşamaz', async (t) => {
-  for (const valid of [true, false]) await t.test(valid ? 'geçerli düzen' : 'belirlenimci geri dönüş', async (inner) => {
+  for (const valid of [true, false]) for (const multipart of [false, true]) await t.test(`${valid ? 'geçerli düzen' : 'belirlenimci geri dönüş'} / ${multipart ? 'çok bölüm' : 'tek bölüm'}`, async (inner) => {
     const stack = stackFor(inner);
     const logs = captureConsole(inner);
-    stack.provider.enqueue(plan({ ...OVERDUE_LIST, filters: { deadline: 'overdue' } }), { type: 'deferred-stream' });
-    const pending = sendTurn({ turnId: randomUUID(), message: 'Geciken görevleri göster.' });
+    const request = { ...OVERDUE_LIST, filters: { deadline: 'overdue' } };
+    const { TASKS } = await import('./helpers/aiToolFixtures.mjs');
+    if (multipart) stack.db.aiToolFailure = { outlook: Object.assign(new Error('erişilemiyor'), { code: 'ESOCKET' }) };
+    const planned = multipart ? { type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr', request,
+      additionalRequests: [{ operation: 'value', metrics: ['subscriptions.active'], population: { tool: 'rota_outlook_status' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] }] } }] }
+      : plan(request);
+    stack.provider.enqueue(planned, { type: 'deferred-stream' });
+    const pending = sendTurn({ turnId: randomUUID(), message: multipart ? `Geciken görevleri ve ${TASKS.OVERDUE} görevinin Outlook durumunu göster.` : 'Geciken görevleri göster.' });
     await stack.provider.waitForCalls(2);
     const call = stack.provider.calls[1];
     assert.ok(isCompositionCall(call), 'doğrulanmış sayfa sağlayıcıya ulaştı');
@@ -259,6 +265,7 @@ test('düzen beklerken geri alınan yetki başarılı ve başarısız düzende k
     assert.equal(saved.length, 1);
     assert.equal(saved[0].Content, answer.content);
     assert.equal(turnLines(logs)[0].context.presentation.reason, 'AUTHORIZATION');
+    assert.equal(turnLines(logs)[0].context.resultScopeOmitted, undefined, 'teslim edilmeyen bölümün kümesi yoktur; saklamada atlanmış sayılmaz');
   });
 });
 
@@ -440,4 +447,58 @@ test('düzen zaman aşımı son yetki okumasının tam bütçesini teslim payıy
   assert.deepEqual(delivered, [result.text]);
   assert.ok(result.evidenceRows.length > 0);
   assert.deepEqual([turnLines(logs)[0].context.presentation.mode, turnLines(logs)[0].context.presentation.reason], ['narrative', 'TIMEOUT']);
+});
+
+
+test('çok bölümlü son teslim: kısmi yanıt kümesi korunur; LENGTH_UNAVAILABLE eski bölümden küme üretmez', async (t) => {
+  const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
+  const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
+  const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
+  const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
+  const { AiError } = await import('../src/server/ai/aiErrors.js');
+  const { TASKS } = await import('./helpers/aiToolFixtures.mjs');
+  const { ASSISTANT_LIMITS } = await import('../src/domain/ai/assistantContract.js');
+  for (const exhausted of [false, true]) await t.test(exhausted ? 'son metin sınırı' : 'gerçek kısmi yanıt', async (inner) => {
+    stackFor(inner, { composition: false });
+    const logs = captureConsole(inner);
+    const signal = new AbortController().signal;
+    const options = { messages: buildGroundedContext({ userContent: `${QUESTION} ${TASKS.OVERDUE} görevinin önceliğini de açıkla.`, now: NOW }).messages,
+      catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE, now: NOW }), composeAnswers: false, onText: async () => {} };
+    const first = await runGroundedTurn({ signal, remainingMs: () => 0, round: async () => {
+      throw new AiError('AI_PROVIDER_RESPONSE_INVALID', { details: { reason: 'EMPTY_COMPLETION' } });
+    } }, { ...options, escalation: true });
+    assert.equal(first.outcome, 'escalate');
+    let rounds = 0;
+    const session = { signal, remainingMs: () => 120000, round: async () => {
+      rounds += 1;
+      if (rounds === 1) return { text: '', finishReason: 'tool_calls', toolCalls: [{ id: 'plan', name: 'rota_plan', arguments: JSON.stringify({ intent: 'rota', language: 'tr',
+        request: OVERDUE_LIST, additionalRequests: [{ operation: 'value', reasoning: 'synthesis', metrics: ['task.priority'],
+          population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] }] }) }] };
+      const part = first.resume.answers[0];
+      assert.ok(part, 'önceki bölüm doğrulanıp biriktirildi');
+      assert.equal(part.verdict.kind, 'grounded');
+      // Ayrı ayrı doğrulanmış bölümlerin birleşimi son teslim sınırını aşabilir.
+      if (exhausted) part.verdict.normalized = 'Görünmemesi gereken bölüm. '.repeat(Math.ceil(ASSISTANT_LIMITS.maxAnswerChars / 25));
+      return { text: '{', finishReason: 'length', toolCalls: [] };
+    } };
+    const delivered = [];
+    const result = await runGroundedTurn(session, { ...options, resume: first.resume, onText: async (text) => delivered.push(text) });
+    assert.equal(rounds, 3);
+    assert.equal(result.outcome, 'unavailable');
+    assert.deepEqual(delivered, [result.text], 'yalnızca nihai yanıt teslim edilir');
+    const trace = turnLines(logs)[0].context;
+    assert.equal(trace.resultScopeOmitted, undefined, 'olmayan küme, saklamada atlanan geçerli küme değildir');
+    if (exhausted) {
+      assert.equal(trace.presentation.reason, 'LENGTH_UNAVAILABLE');
+      assert.deepEqual(result.evidence, []);
+      assert.deepEqual(result.evidenceRows, []);
+      assert.ok(!result.text.includes('Görünmemesi gereken bölüm'));
+    } else {
+      assert.ok(result.text.includes('Radar test planı'));
+      assert.deepEqual(result.evidence.map((row) => row.id), ['R1']);
+      assert.ok(result.text.includes('【R1】'));
+      assert.deepEqual(JSON.parse(result.evidenceRows[0].evidenceJson).resultScope,
+        { type: 'task', taskIds: [TASKS.SERIES, TASKS.OVERDUE, TASKS.PARTIAL_OWN] });
+    }
+  });
 });

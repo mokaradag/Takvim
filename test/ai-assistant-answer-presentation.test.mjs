@@ -21,7 +21,7 @@ registerServerOnlyShim();
 
 const { renderBlock } = await import('../src/features/ai/assistant/AssistantMarkdown.jsx');
 const { AnswerChart } = await import('../src/features/ai/assistant/AnswerChart.jsx');
-const { Tooltip } = await import('../src/components/ui-extras.jsx');
+const { Tooltip, InfoButton } = await import('../src/components/ui-extras.jsx');
 const { RotaAssistantPanel, useRotaAssistant } = await import('../src/features/ai/assistant/RotaAssistant.jsx');
 const { createAssistantController } = await import('../src/features/ai/assistant/assistantController.js');
 const { answerChartFence, answerChartValue } = await import('../src/domain/ai/answerChart.js');
@@ -177,6 +177,7 @@ function browserDouble(t, { narrow = false } = {}) {
   t.after(() => Object.assign(globalThis, saved));
   const escape = () => Object.assign(new Event('keydown', { cancelable: true }), { key: 'Escape' });
   return {
+    pointerDown(target) { for (const { fn } of documentListeners.filter((item) => item.type === 'pointerdown')) fn({ target }); },
     pressDocumentKey(key) { const event = Object.assign(new Event('keydown', { cancelable: true }), { key }); for (const { fn } of documentListeners.filter((item) => item.type === 'keydown')) fn(event); return event; },
     pressDocumentEscape() { const event = escape(); for (const { fn } of documentListeners.filter((item) => item.type === 'keydown')) fn(event); return event; },
     pressWindowEscape() { windowEvents.dispatchEvent(escape()); }
@@ -377,7 +378,8 @@ test('dilimden gerçek açıklama odağına geçiş yalnızca açıklama ipucunu
   t.mock.timers.tick(100);
   slice.render();
   assert.ok(findElement(slice.output, (item) => item.props?.className === 'rich-tip'));
-  child(slice).props.onClick();
+  child(slice).props.onPointerDownCapture?.({ pointerType: 'touch' });
+  child(slice).props.onClick({ target: { closest: () => null }, currentTarget: {} });
   donut.render();
   slice.render(sliceElement().props);
   legend.render(legendElement().props);
@@ -509,4 +511,163 @@ test('gün birimi yerelleştirmesi etiket, ipucu, erişilebilir ad ve kopyada tu
       assert.ok(renderToStaticMarkup(tooltip.props.content).includes(`class="rt-val">${value}</span>`));
     }
   }
+});
+
+
+function tooltipNode(describedBy = 'existing-description') {
+  const attributes = new Map([['aria-describedby', describedBy]]);
+  return {
+    getAttribute: (name) => attributes.get(name) ?? null,
+    setAttribute: (name, value) => attributes.set(name, value),
+    removeAttribute: (name) => attributes.delete(name),
+    getBoundingClientRect: () => ({ left: 20, width: 40, bottom: 60 }),
+    contains(target) { return target === this; },
+    closest() { return this; }
+  };
+}
+
+for (const asChild of [false, true]) {
+  test(`ipucu fare odağı pointer ayrılınca kapanır; klavye sahipliği aynı odakta başlayabilir (${asChild ? 'asChild' : 'sarmalayıcı'})`, (t) => {
+    browserDouble(t);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    t.mock.method(ReactDOM, 'createPortal', (content) => content);
+    const node = tooltipNode();
+    const wrapper = { contains: (target) => target === node };
+    const seen = [];
+    const ref = (value) => seen.push(value);
+    const children = React.createElement('button', { ref, 'aria-describedby': 'existing-description',
+      onFocus: () => seen.push('focus'), onClick: () => seen.push('click'), onPointerDownCapture: () => seen.push('pointer') });
+    const props = { asChild, content: 'Ayrıntı', children };
+    const tip = mountComponent(Tooltip, props);
+    t.after(() => tip.unmount());
+    const trigger = () => tip.output.props.children[0];
+    const portal = () => findElement(tip.output, (item) => item.props?.role === 'tooltip');
+    const settle = () => { tip.render(); t.mock.timers.tick(100); tip.render(); };
+    const currentTarget = asChild ? node : wrapper;
+    trigger().props.onMouseEnter({ clientX: 12, clientY: 15 }); settle();
+    assert.ok(portal());
+    trigger().props.onPointerDownCapture?.({ pointerType: 'mouse', currentTarget, target: node });
+    document.activeElement = node;
+    trigger().props.onFocus({ currentTarget, target: node });
+    trigger().props.onPointerUp?.({ pointerType: 'mouse' });
+    trigger().props.onClick?.({ currentTarget, target: node }); settle();
+    trigger().props.onMouseLeave(); settle();
+    assert.equal(document.activeElement, node, 'fare ayrılırken gerçek odak kalır');
+    assert.equal(portal(), null, 'fare odağı ipucunu sabitlemez');
+    tip.render({ ...props, disabled: true });
+    tip.render(props); settle();
+    assert.equal(portal(), null, 'baskılama kalkınca eski fare odağı açılmaz');
+    trigger().props.onKeyDown({ key: 'ArrowRight' }); settle();
+    assert.ok(portal(), 'aynı kontrol klavyeyle kullanılınca odak sahipliği başlar');
+    const id = portal().props.id;
+    assert.equal(asChild ? trigger().props['aria-describedby'] : node.getAttribute('aria-describedby'), `existing-description ${id}`);
+    if (asChild) {
+      assert.equal(trigger().ref, ref);
+      trigger().ref(node);
+      assert.deepEqual(seen, ['pointer', 'focus', 'click', node]);
+    }
+    trigger().props.onBlur(); settle();
+    assert.equal(portal(), null);
+    assert.equal(asChild ? trigger().props['aria-describedby'] : node.getAttribute('aria-describedby'), 'existing-description');
+  });
+}
+
+test('InfoButton gerçek odak hedefi açıklanır; dekoratif sarmalayıcıya odak veya açıklama eklenmez', (t) => {
+  browserDouble(t);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(ReactDOM, 'createPortal', (content) => content);
+  const info = mountComponent(InfoButton, { title: 'Bilgi', children: 'Ayrıntı' });
+  assert.equal(info.output.props.children.type, 'button');
+  const props = info.output.props;
+  const tip = mountComponent(Tooltip, props);
+  t.after(() => { tip.unmount(); info.unmount(); });
+  const trigger = () => tip.output.props.children[0];
+  const portal = () => findElement(tip.output, (item) => item.props?.role === 'tooltip');
+  const settle = () => { tip.render(); t.mock.timers.tick(100); tip.render(); };
+  const node = tooltipNode();
+  const wrapper = {};
+  assert.equal(trigger().props.tabIndex, undefined);
+  trigger().props.onFocus({ currentTarget: wrapper, target: node }); settle();
+  const id = portal().props.id;
+  assert.equal(node.getAttribute('aria-describedby'), `existing-description ${id}`);
+  assert.equal(trigger().props['aria-describedby'], undefined);
+  trigger().props.onMouseEnter({ clientX: 99, clientY: 99 });
+  trigger().props.onMouseMove({ clientX: 199, clientY: 199 });
+  trigger().props.onMouseLeave(); tip.render();
+  assert.equal(portal().props.id, id, 'fare hareketi klavye sahipliğini almaz');
+  trigger().props.onKeyDown({ key: 'Escape', preventDefault() {} }); settle();
+  assert.equal(portal(), null);
+  assert.equal(node.getAttribute('aria-describedby'), 'existing-description');
+  trigger().props.onBlur(); tip.render();
+  trigger().props.onFocus({ currentTarget: wrapper, target: node }); settle();
+  assert.equal(portal().props.id, id, 'programatik/erişilebilirlik odağı aynı kimliği açar');
+  tip.render({ ...props, disabled: true });
+  assert.equal(node.getAttribute('aria-describedby'), 'existing-description');
+  tip.render(props); settle();
+  assert.equal(node.getAttribute('aria-describedby'), `existing-description ${id}`);
+  node.setAttribute('aria-describedby', `existing-description ${id} later-description`);
+  tip.unmount();
+  assert.equal(node.getAttribute('aria-describedby'), 'existing-description later-description');
+});
+
+test('dokunuş gerçek kontrolü odaklar; dış dokunuş ve Escape ipucunu bırakır, bekleyen Escape de tüketilir', (t) => {
+  const browser = browserDouble(t);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(ReactDOM, 'createPortal', (content) => content);
+  const node = tooltipNode();
+  const tip = mountComponent(Tooltip, { asChild: true, content: 'Ayrıntı', children: React.createElement('button') });
+  t.after(() => tip.unmount());
+  const trigger = () => tip.output.props.children[0];
+  const portal = () => findElement(tip.output, (item) => item.props?.role === 'tooltip');
+  const settle = () => { tip.render(); t.mock.timers.tick(100); tip.render(); };
+  node.focus = () => { document.activeElement = node; trigger().props.onFocus({ currentTarget: node, target: node }); };
+  const tap = () => {
+    trigger().props.onPointerDownCapture?.({ pointerType: 'touch' });
+    trigger().props.onPointerUp?.({ pointerType: 'touch' });
+    trigger().props.onClick?.({ currentTarget: node, target: node });
+  };
+  tap(); settle();
+  assert.equal(document.activeElement, node);
+  assert.ok(portal());
+  browser.pointerDown({}); settle();
+  assert.equal(portal(), null);
+  tap(); settle();
+  trigger().props.onKeyDown({ key: 'Escape', preventDefault() {} }); settle();
+  assert.equal(portal(), null);
+  trigger().props.onBlur(); tip.render();
+  trigger().props.onFocus({ currentTarget: node, target: node }); tip.render();
+  let prevented = false;
+  trigger().props.onKeyDown({ key: 'Escape', preventDefault() { prevented = true; } }); settle();
+  assert.equal(prevented, true);
+  assert.equal(portal(), null, 'gecikme dolunca yeniden açılmaz');
+});
+
+
+test('asChild tıklama işleyicisinde alınan odak da fareye aittir; bağımsız programatik odak kalıcıdır', (t) => {
+  browserDouble(t);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(ReactDOM, 'createPortal', (content) => content);
+  const node = tooltipNode();
+  let clicked = 0;
+  const children = React.createElement('button', { onClick() {
+    clicked += 1;
+    document.activeElement = node;
+    trigger().props.onFocus({ currentTarget: node, target: node });
+  } });
+  const tip = mountComponent(Tooltip, { asChild: true, content: 'Ayrıntı', children });
+  t.after(() => tip.unmount());
+  const trigger = () => tip.output.props.children[0];
+  const portal = () => findElement(tip.output, (item) => item.props?.role === 'tooltip');
+  const settle = () => { tip.render(); t.mock.timers.tick(100); tip.render(); };
+  trigger().props.onMouseEnter({ clientX: 12, clientY: 15 }); settle();
+  trigger().props.onPointerDownCapture?.({ pointerType: 'mouse' });
+  trigger().props.onPointerUp?.({ pointerType: 'mouse' });
+  trigger().props.onClick({ currentTarget: node, target: node });
+  trigger().props.onMouseLeave(); settle();
+  assert.equal(clicked, 1);
+  assert.equal(document.activeElement, node);
+  assert.equal(portal(), null, 'tıklama sırasında odak alınsa da hover sonunda kapanır');
+  trigger().props.onBlur(); tip.render();
+  trigger().props.onFocus({ currentTarget: node, target: node }); settle();
+  assert.ok(portal(), 'pointer etkileşimi dışındaki programatik odak kalıcıdır');
 });

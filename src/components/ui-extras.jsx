@@ -29,7 +29,10 @@ export { OPTION_SEARCH_THRESHOLD, matchesOptionQuery };
 export function Tooltip({ children, content, icon, title, delay = 90, asChild = false, wrapperStyle, accent, focusable = false, ariaLabel, disabled = false }) {
   const [show, setShow] = useSx(false);
   const [hovered, setHovered] = useSx(false);
-  const [focused, setFocused] = useSx(false);
+  // Odak hedefi ile kalıcı ipucu sahipliği ayrıdır; fare odağı yalnızca hover kullanır.
+  const [focus, setFocus] = useSx(null);
+  const focused = Boolean(focus?.persistent);
+  const pointerOrigin = useRx(null);
   const [dismissed, setDismissed] = useSx(false);
   const tooltipId = useIx();
   const requested = !disabled && !dismissed && (hovered || focused);
@@ -71,11 +74,12 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
   };
 
   const enter = (e) => {
-    lastMouse.current = { x: e.clientX, y: e.clientY };
+    if (!focused) lastMouse.current = { x: e.clientX, y: e.clientY };
     setHovered(true);
     setDismissed(false);
   };
   const move = (e) => {
+    if (focused) return;
     lastMouse.current = { x: e.clientX, y: e.clientY };
     if (visible) place(e.clientX, e.clientY);
   };
@@ -96,18 +100,73 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
     if (visible && tipRef.current) place(lastMouse.current.x, lastMouse.current.y);
   }, [visible]);
 
+  // Sarmalayıcının içindeki gerçek odak hedefi açıklanır; diğer açıklamalar korunur.
+  useEx(() => {
+    const target = focus?.target;
+    if (!visible || !focus?.nested || !target?.getAttribute) return;
+    const ids = () => (target.getAttribute('aria-describedby') || '').split(' ').filter(Boolean);
+    target.setAttribute('aria-describedby', [...new Set([...ids(), tooltipId])].join(' '));
+    return () => {
+      const remaining = ids().filter(id => id !== tooltipId).join(' ');
+      if (remaining) target.setAttribute('aria-describedby', remaining);
+      else target.removeAttribute('aria-describedby');
+    };
+  }, [visible, focus?.target, focus?.nested, tooltipId]);
+
+  // Dokunuş odağı olmayan tarayıcılarda da açılır; dış dokunuş sahipliği bırakır.
+  useEx(() => {
+    if (!focus?.touchRoot) return;
+    const outside = (event) => {
+      if (!focus.touchRoot.contains(event.target)) { setFocus(null); setHovered(false); }
+    };
+    document.addEventListener('pointerdown', outside, true);
+    return () => document.removeEventListener('pointerdown', outside, true);
+  }, [focus?.touchRoot]);
+
+  const anchor = (target) => {
+    const r = target?.getBoundingClientRect?.();
+    if (r) lastMouse.current = { x: r.left + r.width / 2, y: r.bottom };
+  };
   const handlers = {
+    onPointerDownCapture: (e) => {
+      pointerOrigin.current = e.pointerType;
+      if (e.pointerType !== 'touch') setFocus(current => current ? { ...current, persistent: false, touchRoot: null } : null);
+    },
+    onPointerCancel: () => { pointerOrigin.current = null; },
+    onClick: (e) => {
+      if (pointerOrigin.current === 'touch') {
+        const root = e.currentTarget;
+        const target = e.target?.closest?.('button, a[href], input, select, textarea, [tabindex]');
+        if (target && root.contains(target)) {
+          target.focus();
+          if (document.activeElement === target) {
+            anchor(target);
+            setFocus({ target, nested: target !== root, persistent: true, touchRoot: root });
+            setDismissed(false);
+          }
+        }
+      }
+      pointerOrigin.current = null;
+    },
     onMouseEnter: enter,
-    onMouseLeave: () => setHovered(false),
+    onMouseLeave: () => { setHovered(false); if (pointerOrigin.current !== 'touch') pointerOrigin.current = null; },
     onMouseMove: move,
     onFocus: (e) => {
-      const r = e.currentTarget.getBoundingClientRect ? e.currentTarget.getBoundingClientRect() : null;
-      if (r) { lastMouse.current = { x: r.left + r.width / 2, y: r.bottom }; }
-      setFocused(true);
+      const target = e.target || e.currentTarget;
+      const persistent = !pointerOrigin.current || pointerOrigin.current === 'touch';
+      if (persistent) anchor(target);
+      setFocus({ target, nested: target !== e.currentTarget, persistent });
       setDismissed(false);
     },
-    onBlur: () => setFocused(false),
+    onBlur: () => { setFocus(null); pointerOrigin.current = null; },
     onKeyDown: (e) => {
+      pointerOrigin.current = null;
+      if (e.key !== 'Escape' && !e.altKey && !e.ctrlKey && !e.metaKey) {
+        if (focus && !focus.persistent) {
+          anchor(focus.target);
+          setFocus({ ...focus, persistent: true });
+        }
+      }
       // Kapalı ipucu Esc'i tüketmez; kapatılan ipucu yeni etkileşime kadar açılmaz.
       if (e.key === 'Escape' && (visible || pending.current)) { e.preventDefault(); setDismissed(true); }
     }
@@ -146,10 +205,12 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
     // attach handlers to the existing child element (no extra wrapper)
     // Çocuğun kendi işleyicileri (ör. klavyeyle gezinme) de korunur: ikisi birlikte çalışır.
     const composed = Object.fromEntries(Object.entries(handlers).map(([name, handler]) => [name, (e) => {
+      // Tıklama içindeki programatik odak da aynı pointer etkileşimine aittir.
+      if (name === 'onClick') children.props[name]?.(e);
       handler(e);
-      if (children.props[name]) children.props[name](e);
+      if (name !== 'onClick') children.props[name]?.(e);
     }]));
-    const describedBy = [children.props['aria-describedby'], visible ? tooltipId : null].filter(Boolean).join(' ') || undefined;
+    const describedBy = [children.props['aria-describedby'], visible && !focus?.nested ? tooltipId : null].filter(Boolean).join(' ') || undefined;
     return (
       <>
         {React.cloneElement(children, { ...composed, 'aria-describedby': describedBy })}
@@ -162,7 +223,7 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
     <>
       <span
         {...handlers}
-        aria-describedby={visible ? tooltipId : undefined}
+        aria-describedby={visible && focusable && !focus?.nested ? tooltipId : undefined}
         {...(focusable ? { tabIndex: 0, role: 'button', 'aria-label': ariaLabel || title } : null)}
         style={{ display: 'inline-flex', alignItems: 'center', ...wrapperStyle }}
       >
