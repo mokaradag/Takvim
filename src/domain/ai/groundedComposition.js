@@ -110,6 +110,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
               : values.every((facts) => Number.isSafeInteger(facts[0].value)) && (COUNT_MEASURES.has(sample.semantic?.measure) || sample.semantic?.measure == null) ? 'count' : 'number';
           const total = values.reduce((sum, facts) => sum + facts[0].value, 0);
           const distribution = group.tool === 'rota_task_analytics' && collection.endsWith('groups') && complete
+            && values.every(([fact]) => fact.semantic?.row?.collectionSize === described.rows.length)
             && values.every(([fact]) => ['status', 'priority', 'project', 'deadline', 'target_month'].includes(fact.semantic?.groupBy))
             && described.rows.length <= ANSWER_CHART_LIMITS.maxDonutItems && total > 0 && unit === 'count';
           const chartId = `G${charts.size + 1}`;

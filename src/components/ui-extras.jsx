@@ -26,12 +26,19 @@ export { OPTION_SEARCH_THRESHOLD, matchesOptionQuery };
  * bilgi klavye kullanıcısına hiç açılmıyordu. Her ipucunu sekme durağı yapmak
  * ise klavye gezinmesini bozardı; bu yüzden davranış açıkça seçilir.
  */
-export function Tooltip({ children, content, icon, title, delay = 90, asChild = false, wrapperStyle, accent, focusable = false, ariaLabel, disabled = false }) {
+export function Tooltip({ children, content, icon, title, delay = 90, asChild = false, wrapperStyle, accent, focusable = false, ariaLabel, disabled = false, onFocusOwnershipChange }) {
   const [show, setShow] = useSx(false);
   const [hovered, setHovered] = useSx(false);
   // Odak hedefi ile kalıcı ipucu sahipliği ayrıdır; fare odağı yalnızca hover kullanır.
   const [focus, setFocus] = useSx(null);
   const focused = Boolean(focus?.persistent);
+  const focusListener = useRx(onFocusOwnershipChange);
+  focusListener.current = onFocusOwnershipChange;
+  // Grafik vurgusu da aynı kalıcı odak sahibini izler; pointer odağını yeniden yorumlamaz.
+  useEx(() => {
+    focusListener.current?.(focused);
+    return () => focusListener.current?.(false);
+  }, [focused]);
   const pointerOrigin = useRx(null);
   const [dismissed, setDismissed] = useSx(false);
   const tooltipId = useIx();

@@ -1678,12 +1678,12 @@ Geri dönüş nedenleri: `SHEET_LIMIT`, `AUTHORIZATION`, `CITATION_SCOPE`, `BUDG
 
 Grafik yalnızca sayfadaki aday (`G#`) seçilerek istenir; tanımı sunucu kurar: `{version:1, type, locale, title, unit,
 evidence, items}` kapalı anahtarlarla, `bar` (2–12 öge) ya da `donut` (2–6 öge; yalnızca `rota_task_analytics`
-gruplarının tam ve pozitif toplamlı sayımı). Birimler `count`, `days`, `hours`, `percent`, `number`; değerler sonlu ve
+gruplarının tam ve pozitif toplamlı sayımı; gösterilen satırlar kanıttaki bütün grupları kapsamalıdır, yalnız üst grupları gösteren sıralama halka olamaz). Birimler `count`, `days`, `hours`, `percent`, `number`; değerler sonlu ve
 negatif değildir; renk, URL, HTML ya da SVG taşımaz. İstemci tanımı yeniden doğrular ve yalnızca bütün `evidence`
 kimlikleri o yanıtın kanıtlarındaysa çizer; aksi hâlde (kanıtsız yanıt ve genel sohbet dâhil) ham tanımı da göstermez.
 Kopyalanan metin aynı kuralla grafiğin düz veri karşılığını taşır. Çizim uygulamanın ortak zengin ipucunu
 (`Tooltip`, fare ve klavye), ortak halka geometrisini ve tema renk belirteçlerini kullanır; satırlar tek sekme
-durağıdır ve ok/Home/End ile gezilir. İpucunda değer, halkada toplamdaki pay, çubukta sıra ve kaynak gösterilir.
+durağıdır ve ok/Home/End ile gezilir. Halka vurgusu ve ipucu, ortak `Tooltip` bileşeninin kalıcı odak sahipliğini izler; fare tıklamasının DOM odağı başka dilimlerin fare ipuçlarını engellemez. İpucunda değer, halkada toplamdaki pay, çubukta sıra ve kaynak gösterilir.
 
 ### 13.6 Takip soruları
 

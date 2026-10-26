@@ -1018,7 +1018,7 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
     const deliveredOutcome = !replaced ? grounded.outcome
       : answer.finishReason === 'unsupported' ? 'abstained' : answer.finishReason === 'stop' ? 'grounded' : answer.finishReason === 'grounding_failed' ? 'failed' : answer.finishReason;
     // Tur izi yalnızca metin gerçekten teslim edildikten sonra son sonucunu alır; teslim hatası `error` olur.
-    grounded.completeDisclosure?.(deliveredOutcome);
+    grounded.completeDisclosure?.(deliveredOutcome, null, { replaced });
   } catch (error) {
     // Kayıt ya da açıklama hatası da turun tek son izini bırakır.
     grounded.completeDisclosure?.('error', error?.code);

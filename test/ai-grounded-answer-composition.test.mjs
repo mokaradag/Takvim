@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { captureConsole, createAiStack, readSse, sendTurn } from './helpers/aiStack.mjs';
-import { AYSE, NOW, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { AYSE, LEAD, NOW, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { composer, compositionView, coveringBlocks, isCompositionCall } from './helpers/compositionScenario.mjs';
 import { declared } from './helpers/evidenceScenario.mjs';
 
@@ -501,4 +501,61 @@ test('çok bölümlü son teslim: kısmi yanıt kümesi korunur; LENGTH_UNAVAILA
         { type: 'task', taskIds: [TASKS.SERIES, TASKS.OVERDUE, TASKS.PARTIAL_OWN] });
     }
   });
+});
+
+
+test('sunum telemetrisi yalnız teslim edilen kendi yanıtını ve grafiklerini sayar', async (t) => {
+  for (const delivery of ['retained', 'revoked', 'unavailable', 'stored-replacement', 'persistence-error', 'delivery-error']) {
+    await t.test(delivery, async (inner) => {
+      const stack = stackFor(inner);
+      const logs = captureConsole(inner);
+      stack.provider.enqueue(plan(), composer(() => ({ blocks: [
+        { type: 'details', source: 'D1' }, { type: 'rows', source: 'T1' }, { type: 'chart', source: 'G1', style: 'bar' }
+      ] })));
+      const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: QUESTION, mode: 'standard' }) });
+      inner.after(() => turn.claim.release());
+      const failure = Object.assign(new Error('teslim sınırı sınaması'), { code: 'TEST_DELIVERY' });
+      if (delivery === 'persistence-error') stack.db.aiConversationHooks = { beforeAppend() { throw failure; } };
+      if (delivery === 'stored-replacement') stack.db.aiConversationHooks = { beforeAppend(params) { params.content = 'Kayıtlı doğrulanmış yanıt. 【R1】'; } };
+      const delivered = [];
+      const pending = generateAssistantAnswer(turn, { onText: async () => {}, onDelivery: async (prepare) => {
+        assert.equal(aiTelemetrySnapshot().grounding.presentation.composed, 0, 'teslim beklerken sayılmaz');
+        if (delivery === 'delivery-error') throw failure;
+        if (delivery === 'revoked') {
+          stack.db.projectAccess = [];
+          stack.db.taskAssignees = [];
+          stack.db.executiveScope = [];
+          for (const project of stack.db.projects) project.LeadSicil = LEAD;
+        }
+        if (delivery === 'unavailable') stack.db.aiToolFailure = { 'task-visibility': Object.assign(new Error('erişilemiyor'), { code: 'DATABASE_UNAVAILABLE' }) };
+        const result = await prepare();
+        delivered.push(result.answer);
+      } });
+      if (delivery.endsWith('-error')) {
+        await assert.rejects(pending, error => error === failure);
+        assert.deepEqual(delivered, []);
+      } else {
+        const result = await pending;
+        assert.deepEqual(delivered.map(answer => answer.content), [result.answer.content]);
+        assert.equal(result.finishReason, delivery === 'revoked' ? 'not_found' : delivery === 'unavailable' ? 'unavailable' : 'stop');
+        if (delivery === 'retained') {
+          assert.ok(result.answer.content.includes('rota-chart'));
+          assert.deepEqual(result.answer.evidence.map(row => row.id), ['R1']);
+        } else assert.ok(!result.answer.content.includes('rota-chart'), 'girişimdeki grafik teslim edilmez');
+      }
+      const traces = turnLines(logs);
+      assert.equal(traces.length, 1);
+      const trace = traces[0].context;
+      const counters = aiTelemetrySnapshot().grounding.presentation;
+      assert.ok(trace.rounds.some(round => round.purpose === 'compose'), 'düzen girişiminin iş ölçümü korunur');
+      assert.equal(counters.composed, delivery === 'retained' ? 1 : 0);
+      assert.equal(counters.charts, delivery === 'retained' ? 1 : 0);
+      if (delivery === 'retained') assert.equal(trace.presentation.mode, 'composed');
+      else {
+        assert.equal(trace.presentation, null, 'teslim edilmeyen sunum son izde kalmaz');
+        assert.equal(trace.evidence, 0);
+      }
+      assert.equal(trace.outcome, delivery.endsWith('-error') ? 'error' : delivery === 'revoked' ? 'not_found' : delivery === 'unavailable' ? 'unavailable' : 'grounded');
+    });
+  }
 });

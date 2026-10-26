@@ -1380,14 +1380,17 @@ async function finish(turn, settled, onText, selectedBy = 'model', { compose = t
   const resultScope = completedResultScope(turn, verdict);
   const evidenceRows = ledger.persistable(verdict.citedIds, { clarification: verdict.clarification || null, resultScope });
   const resultScopeOmitted = Boolean(resultScope) && !evidenceRows.some(row => JSON.parse(row.evidenceJson).resultScope);
-  const completeDisclosure = (deliveredOutcome, code = null) => {
+  const completeDisclosure = (deliveredOutcome, code = null, { replaced = false } = {}) => {
     if (turn.trace.recorded) return;
+    const retained = !replaced && deliveredOutcome === outcome && deliveredOutcome !== 'error';
+    // Sunum ve kanıt sayısı girişimi değil, gerçekten teslim edilen yanıtı anlatır.
+    if (!retained) { turn.trace.presentation = null; turn.trace.evidence = 0; }
     if (deliveredOutcome !== 'error') {
-      recordGroundedAnswer({ outcome: deliveredOutcome, rounds: turn.modelRounds, evidence: deliveredOutcome === outcome ? cited.length : 0,
-        repaired: turn.repaired, disclosed: deliveredOutcome === outcome && disclosure.disclosed });
+      recordGroundedAnswer({ outcome: deliveredOutcome, rounds: turn.modelRounds, evidence: retained ? cited.length : 0,
+        repaired: turn.repaired, disclosed: retained && disclosure.disclosed });
     }
-    traceTurn(turn, deliveredOutcome, { selectedBy: deliveredOutcome === 'grounded' ? selectedBy : null, code: typeof code === 'string' ? code : null,
-      resultScopeOmitted: deliveredOutcome === outcome && resultScopeOmitted });
+    traceTurn(turn, deliveredOutcome, { selectedBy: retained && deliveredOutcome === 'grounded' ? selectedBy : null, code: typeof code === 'string' ? code : null,
+      resultScopeOmitted: retained && resultScopeOmitted });
   };
   if (!turn.deferDisclosure) completeDisclosure(outcome);
   return {

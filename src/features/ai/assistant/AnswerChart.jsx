@@ -142,15 +142,15 @@ function DonutChart({ spec, copy }) {
           const value = answerChartValue(item.value, spec.unit, spec.locale);
           return (
             <li key={`${index}-${item.label}`}>
-              <Tooltip asChild disabled={activeLegend !== index} {...tip(index)}>
+              <Tooltip asChild disabled={activeLegend !== index} {...tip(index)}
+                onFocusOwnershipChange={(owned) => setFocusedLegend(current => owned ? index : current === index ? null : current)}>
                 <div
                   ref={(node) => { roving.refs.current[index] = node; }}
                   className={`assistant-chart-legend-item${active === index ? ' is-active' : ''}`}
                   role="group"
                   tabIndex={roving.active === index ? 0 : -1}
                   aria-label={`${item.label}: ${value}`}
-                  onFocus={() => { setHoveredLegend(null); setFocusedLegend(index); roving.setActive(index); }}
-                  onBlur={() => setFocusedLegend(null)}
+                  onFocus={() => { setHoveredLegend(null); roving.setActive(index); }}
                   onMouseEnter={() => setHoveredLegend(index)}
                   onMouseLeave={() => setHoveredLegend(null)}
                   onKeyDown={(event) => roving.move(event, index)}

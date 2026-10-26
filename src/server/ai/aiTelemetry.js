@@ -769,7 +769,7 @@ export const safeFinishReason = (value) => FINISH_REASONS.has(value) ? value : n
  */
 export function recordGroundedTurn(trace = {}) {
   const outcome = TURN_OUTCOMES.has(trace.outcome) ? trace.outcome : 'error';
-  const presentation = presentationSummary(trace.presentation);
+  const presentation = outcome === 'error' ? null : presentationSummary(trace.presentation);
   safely(() => {
     const grounding = state().grounding;
     if (trace.selectedBy === 'server') grounding.serverSelected += 1;

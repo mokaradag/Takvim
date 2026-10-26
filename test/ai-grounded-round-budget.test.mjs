@@ -398,3 +398,15 @@ test('önceki modülden kalan sunum sayaçları okunurken ve artırılırken ta�
   recordGroundedTurn({ outcome: 'unavailable', presentation: { mode: 'unavailable', reason: 'LENGTH_UNAVAILABLE' } });
   assert.equal(JSON.parse(JSON.stringify(aiTelemetrySnapshot())).grounding.presentation.unavailable, 1);
 });
+
+test('hata sonlanan tur teslim edilmeyen sunumu saymaz; düzen turunun iş ölçümü kalır', async (t) => {
+  const { recordGroundedTurn } = await import('../src/server/ai/aiTelemetry.js');
+  const logs = captureConsole(t);
+  const before = { ...aiTelemetrySnapshot().grounding.presentation };
+  recordGroundedTurn({ outcome: 'error', presentation: { mode: 'composed', chart: 'bar', charts: 2, blocks: 3 },
+    modelRounds: 1, rounds: [{ purpose: 'compose', finishReason: 'stop' }] });
+  const [trace] = turnTraces(logs);
+  assert.equal(trace.context.presentation, null);
+  assert.equal(trace.context.rounds[0].purpose, 'compose');
+  assert.deepEqual(aiTelemetrySnapshot().grounding.presentation, before);
+});

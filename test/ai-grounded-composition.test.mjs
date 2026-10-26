@@ -8,6 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { randomUUID } from 'node:crypto';
 import { createAiStack } from './helpers/aiStack.mjs';
 import { AYSE, PROJECTS, TASKS, callRotaTool, callRotaTools, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { coveringBlocks } from './helpers/compositionScenario.mjs';
@@ -617,4 +618,34 @@ test('model nitelendirmesinde başarılı kapalı düzen gerçek ölçülen ça�
   }) } });
   assert.deepEqual([report.calls, report.passed, report.composed], [1, 1, 1]);
   assert.doesNotThrow(() => finalizeCompositionQualification(report));
+});
+
+
+test('sıralanmış dağılım yalnız bütün gruplar gösterildiğinde halka olabilir', async (t) => {
+  const stack = stackFor(t);
+  const template = stack.db.tasks[0];
+  stack.db.tasks = Array.from({ length: 10 }, (_, index) => ({ ...template, TaskId: randomUUID(), Title: `Görev ${index + 1}`,
+    Priority: index < 6 ? 'critical' : index < 9 ? 'high' : 'medium' }));
+  const { ledger, result } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'priority' });
+  assert.deepEqual(result.data.groups.map(row => row.count).sort((a, b) => b - a), [6, 3, 1]);
+  for (const limit of [2, 3]) {
+    const request = { operation: 'rank', metrics: ['tasks.total'], rank: { metric: 'tasks.total', order: 'desc', limit },
+      population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'priority' }, entities: [{ type: 'project', id: PROJECTS.FULL }] };
+    const fields = result.data.groups.map((_, index) => index).sort((a, b) => result.data.groups[b].count - result.data.groups[a].count)
+      .slice(0, limit).flatMap(index => [`data.groups.${index}.label`, `data.groups.${index}.count`]);
+    const verdict = verifyRequested(ledger, fields, request);
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+    const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }] });
+    const chart = sheet.view.charts[0];
+    assert.deepEqual(chart.types, limit === 2 ? ['bar'] : ['bar', 'donut']);
+    assert.deepEqual(sheet.render.charts.get(chart.id).items.map(item => item.value), limit === 2 ? [6, 3] : [6, 3, 1]);
+    const blocks = [{ type: 'rows', source: 'T1' }, { type: 'chart', source: chart.id, style: 'donut' }];
+    const validation = validateComposition(sheet, { blocks });
+    assert.equal(validation.ok, limit === 3, 'eksik grupların toplamı tam nüfusmuş gibi çizilmez');
+    if (validation.ok) {
+      const rendered = renderComposition(sheet, validation);
+      const spec = parseAnswerChart(parseAssistantMarkdown(rendered.text).find(block => block.type === 'code').text);
+      assert.equal(spec.items.reduce((sum, item) => sum + item.value, 0), 10);
+    } else assert.equal(validation.issues[0], 'STYLE_INVALID');
+  }
 });

@@ -1893,6 +1893,6 @@ Ayrıntılı belge: [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.m
   ("Yanıt yazılıyor…"). Kapalı grafik tanımı (`rota-chart`, çubuk/halka) sunucuda kurulur, istemcide yeniden
   doğrulanır ve yalnızca yanıtın kanıtına bağlıysa çizilir. Masaüstünde panel aynı bileşenle odak görünümüne
   genişler (konuşma, taslak ve süren yanıt korunur; Esc önce odaktan çıkar). Tur başına tek içeriksiz tamamlanma
-  satırı (`ai.grounded.turn`: `presentation`, `usage`, `escalation`). İşletim anahtarı
+  satırı (`ai.grounded.turn`: `presentation`, `usage`, `escalation`). Sunum ve grafik sayaçları yalnızca gerçekten teslim edilen kendi yanıtını sayar; kayıtta/teslimde hata veya son anda yanıt değişimi olursa girişimdeki sunum sayılmaz, model turu ölçümleri korunur. İşletim anahtarı
   `MERGEN_ROTA_AI_ANSWER_COMPOSITION` (varsayılan açık). Haiku 4.5 vekil ölçümü ve kurum içi kabul yolu: anlamsal
   katman §13.

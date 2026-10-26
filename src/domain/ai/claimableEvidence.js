@@ -349,7 +349,9 @@ function rowContext(envelope, parts) {
   if (index < 0 || index === parts.length - 1) return null;
   const row = parts.slice(1, index + 1).reduce((value, key) => value?.[key], envelope.data);
   if (!row || typeof row !== 'object') return null;
+  const collection = parts.slice(1, index).reduce((value, key) => value?.[key], envelope.data);
   return { path: parts.slice(0, index + 1).join('.'),
+    collectionSize: Array.isArray(collection) ? collection.length : null,
     identity: row.taskId || row.projectId || row.wbsId || row.requestId || row.coordinationId || row.sicil || row.key || null,
     name: row.title || row.name || row.task?.title || row.person?.name || row.label || null,
     project: typeof row.project === 'string' ? row.project : row.project?.name || null,
