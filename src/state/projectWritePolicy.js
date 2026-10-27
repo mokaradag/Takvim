@@ -38,10 +38,10 @@ export function writableProjects(projects = []) {
  * görevlerde atama/yapı yönetimi yetkisi vermez.
  */
 export function assigneeTaskCreateProjects(state = {}) {
-  const projectIds = new Set((state.tasks || [])
+  const projectIds = (state.tasks || [])
     .filter((task) => task?.isCurrentUserAssignee && task.projectId != null)
-    .map((task) => String(task.projectId)));
-  return (state.projects || []).filter((project) => projectIds.has(String(project.id)));
+    .map((task) => task.projectId);
+  return (state.projects || []).filter((project) => projectIds.some((id) => sameActualId(project.id, id)));
 }
 
 /**
@@ -56,18 +56,16 @@ export function assigneeTaskCreateProjects(state = {}) {
  * görev görünürlüğü etkilenmez.
  */
 export function taskAssignableProjects(state = {}) {
-  const visible = writableProjects(state.projects || []);
-  const known = new Set(visible.map((project) => String(project.id)));
-  const scoped = (state.assignableProjects || []).filter((project) => {
-    if (!project) return false;
-    const id = String(project.id);
-    if (known.has(id)) return false;
-    known.add(id);
+  const known = [];
+  return [
+    ...writableProjects(state.projects || []),
+    ...(state.assignableProjects || []),
+    ...assigneeTaskCreateProjects(state)
+  ].filter((project) => {
+    if (!project || known.some((id) => sameActualId(id, project.id))) return false;
+    known.push(project.id);
     return true;
   });
-  const assigneeScoped = assigneeTaskCreateProjects(state)
-    .filter((project) => !known.has(String(project.id)));
-  return [...visible, ...scoped, ...assigneeScoped];
 }
 
 /**
@@ -79,8 +77,8 @@ export function taskCreationScopeInProject(state = {}, value = null) {
   if (!id) return null;
   const visible = findProject(state.projects, id);
   if (canWriteProject(visible)) return 'FULL';
-  if ((state.assignableProjects || []).some((project) => String(project.id) === id)) return 'ASSIGNMENT';
-  if (assigneeTaskCreateProjects(state).some((project) => String(project.id) === id)) return 'ASSIGNEE_CREATE';
+  if ((state.assignableProjects || []).some((project) => sameActualId(project.id, id))) return 'ASSIGNMENT';
+  if (assigneeTaskCreateProjects(state).some((project) => sameActualId(project.id, id))) return 'ASSIGNEE_CREATE';
   return null;
 }
 
@@ -94,7 +92,7 @@ export function canAssignTasksInProject(state = {}, projectId = null) {
   if (!id) return false;
   const visible = findProject(state.projects, id);
   if (canWriteProject(visible)) return true;
-  return (state.assignableProjects || []).some((project) => String(project.id) === id);
+  return (state.assignableProjects || []).some((project) => sameActualId(project.id, id));
 }
 
 function findAssignableProject(state = {}, value = null) {
@@ -396,11 +394,10 @@ export function resolveWbsMutationAccess(state = {}, nodeId, targetNodeId = null
   if (targetNodeId != null) {
     const targetNode = nodes.find((item) => String(item.id) === String(targetNodeId)) || null;
     const targetProject = targetNode ? findProject(state.projects, targetNode.projectId) : null;
-    // Proje kimlikleri METİN olarak karşılaştırılır (modülün geri kalanı gibi):
-    // bir kayıt sayısal, ötekisi metin kimlik taşıdığında geçerli bir taşıma
-    // "çapraz proje" sanılıp reddediliyordu.
+    // Proje eşitliği ortak kimlik sözleşmesini izler: GUID harf biçimi ve
+    // sayısal/metin gösterimi aynı projeyi çapraz proje yapmaz.
     if (!targetNode || !canWriteProject(targetProject)
-      || String(targetNode.projectId) !== String(node.projectId)) {
+      || !sameActualId(targetNode.projectId, node.projectId)) {
       return {
         ok: false,
         code: 'PROJECT_WRITE_FORBIDDEN',
@@ -439,7 +436,7 @@ export function resolveTaskWbsMoveAccess(state = {}, taskIds = [], targetWbsId =
         message: 'Bu görev için WBS seçme yetkiniz bulunmuyor.'
       };
     }
-    if (String(access.task.projectId) !== String(target.projectId)) {
+    if (!sameActualId(access.task.projectId, target.projectId)) {
       return {
         ok: false,
         code: 'CROSS_PROJECT_TASK_WBS_MOVE',

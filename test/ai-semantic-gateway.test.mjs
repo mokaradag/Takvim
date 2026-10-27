@@ -92,7 +92,7 @@ test('sahte yeniden sıralama sorgu, belge sayısı ve belge uzunluğuyla sını
   assert.equal((await post({ query: 'q'.repeat(maxQueryChars), documents: texts(maxCandidates, maxItemTextChars) })).status, 200,
     'sınırdaki yeniden sıralama girdisi kabul edilir');
 
-  for (const input of [[], [''], ['g'.repeat(maxItemTextChars + MAX_PREFIX_CHARS + 1)], texts(maxCatalogueItems + 1)]) {
+  for (const input of ['scalar embedding', [], [''], ['g'.repeat(maxItemTextChars + MAX_PREFIX_CHARS + 1)], texts(maxCatalogueItems + 1)]) {
     assert.equal((await embed(input)).status, 400, `gömme ${JSON.stringify(input).slice(0, 40)}`);
   }
   assert.equal((await embed(['g'.repeat(maxItemTextChars + MAX_PREFIX_CHARS)])).status, 200, 'önekli sınırdaki gömme öğesi kabul edilir');

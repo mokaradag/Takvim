@@ -418,10 +418,8 @@ test('uzun şablonlu büyük seride yineleme doğrulaması kardeş bitişlerini 
     assert.equal(stored.TargetFinish, legitimate.targetFinish);
 
     const batch = Array.from({ length: 80 }, (_, index) => child(index + 3, fmtISO(addDays('2026-08-31', index * 7))));
-    await assert.rejects(stack.repository.commitChanges({ taskUpserts: batch }), (error) => (
-      error.code === 'MUTATION_FAILED' && /işlem sınırını aşıyor/.test(error.message)
-    ));
-    assert.equal(stack.db.tasks.length, 2, 'bütçeyi aşan küme bütünüyle geri alınır');
+    await stack.repository.commitChanges({ taskUpserts: batch });
+    assert.equal(stack.db.tasks.length, 82, 'desteklenen seri tek işlemde kabul edilir');
   } finally {
     await stack.dispose();
   }
@@ -429,7 +427,7 @@ test('uzun şablonlu büyük seride yineleme doğrulaması kardeş bitişlerini 
 
 test('yineleme işlem bütçesi süre doğrulamasının ikinci taramasını da sayar', { timeout: 60000 }, async () => {
   // Terminsiz oluşum başına bitiş ve süre doğrulaması ayrı ayrı sayılır;
-  // 80 oluşum türetilmiş tek-oluşum bütçesini aşar, küçük gruplar kabul edilir.
+  // işlem bütçesi desteklenen serinin bütün çocuklarına yeter.
   const stack = await createActualStack(corporateSeed());
   try {
     assert.equal((await stack.persistence.commitChanges('project/create', manualProjectChanges())).ok, true);
@@ -445,13 +443,8 @@ test('yineleme işlem bütçesi süre doğrulamasının ikinci taramasını da s
       ...occurrenceFinishes(shape, date, { calendar: WORK_WEEK })
     });
     const dates = Array.from({ length: 80 }, (_, index) => fmtISO(addDays('2026-08-24', index * 7)));
-    await assert.rejects(stack.repository.commitChanges({ taskUpserts: dates.map((date, index) => child(index + 1, date)) }), (error) => (
-      error.code === 'MUTATION_FAILED' && /işlem sınırını aşıyor/.test(error.message)
-    ));
-    assert.equal(stack.db.tasks.length, 1, 'küme geri alınır');
-    // Aynı yinelemeler bütçeye sığan gruplar hâlinde kabul edilir.
-    await stack.repository.commitChanges({ taskUpserts: dates.slice(0, 3).map((date, index) => child(index + 1, date)) });
-    assert.equal(stack.db.tasks.length, 4);
+    await stack.repository.commitChanges({ taskUpserts: dates.map((date, index) => child(index + 1, date)) });
+    assert.equal(stack.db.tasks.length, 81);
   } finally {
     await stack.dispose();
   }
@@ -630,15 +623,59 @@ test('en uzun tek yineleme seyrek ve tatil yoğun takvimde terminli veya termins
       const finish = fmtISO(addWorkingDays('2026-08-17', MAX_WORKING_DAY_SPAN - 1, calendar));
       const shape = { plannedStart: '2026-08-17', plannedFinish: finish,
         targetFinish: withTarget ? finish : null, plannedDurationDays: MAX_WORKING_DAY_SPAN };
-      await stack.repository.commitChanges({ taskUpserts: [seriesTask({ recurrence: 'FREQ=WEEKLY;BYDAY=MO;COUNT=2', ...shape })] });
+      await stack.repository.commitChanges({ taskUpserts: [seriesTask({ recurrence: 'FREQ=WEEKLY;BYDAY=MO;COUNT=8', ...shape })] });
       const child = seriesTask({ id: CHILD_ID, recurrence: null, recurrenceParentId: TASK_ID,
         recurrenceOccurrenceDate: '2026-08-24', plannedStart: '2026-08-24', plannedDurationDays: MAX_WORKING_DAY_SPAN,
         ...occurrenceFinishes(shape, '2026-08-24', { calendar }) });
+      const children = [child, ...Array.from({ length: 6 }, (_, index) => {
+        const date = fmtISO(addDays('2026-08-31', index * 7));
+        return { ...child, id: `task-9000000${index}-9999-4999-8999-999999999999`,
+          recurrenceOccurrenceDate: date, plannedStart: date, ...occurrenceFinishes(shape, date, { calendar }) };
+      })];
       await stack.repository.commitChanges({ taskUpserts: [child] });
+      assert.equal(stack.db.tasks.length, 2, 'tek azami oluşum da bağımsız kabul edilir');
+      await stack.repository.commitChanges({ taskUpserts: children.slice(1) });
+      assert.equal(stack.db.tasks.length, 8);
       const stored = stack.db.tasks.find(row => String(row.TaskId).toLowerCase().includes('2bbbbbbb'));
       assert.equal(stored.PlannedFinish, child.plannedFinish);
       assert.equal(stored.TargetFinish, child.targetFinish);
       assert.equal(stored.PlannedDurationDays, MAX_WORKING_DAY_SPAN);
     } finally { await stack.dispose(); }
   }
+});
+
+test('birden çok pahalı seri işlem tavanını paylaşır ve kısmi yazmaların tamamı geri alınır', { timeout: 600000 }, async () => {
+  const calendar = { workingDays: [1], holidays: [] };
+  const seed = corporateSeed();
+  seed.calendars[0].WorkingDays = calendar.workingDays;
+  seed.calendars[0].Holidays = [];
+  const stack = await createActualStack(seed);
+  try {
+    assert.equal((await stack.persistence.commitChanges('project/create', manualProjectChanges())).ok, true);
+    // Haftada bir iş günü: kapalı biçimli beklenen tarihler testte pahalı bir ikinci tarama gerektirmez.
+    const start = '2026-08-17';
+    const finish = fmtISO(addDays(start, (MAX_WORKING_DAY_SPAN - 1) * 7));
+    const parents = Array.from({ length: 3 }, (_, index) => seriesTask({
+      id: `task-a000000${index}-9999-4999-8999-999999999999`,
+      recurrence: `FREQ=WEEKLY;BYDAY=MO;COUNT=${MAX_RECURRENCE_OCCURRENCES}`,
+      plannedStart: start, plannedFinish: finish, targetFinish: finish, plannedDurationDays: MAX_WORKING_DAY_SPAN
+    }));
+    await stack.repository.commitChanges({ taskUpserts: parents });
+    const before = JSON.stringify({ tasks: stack.db.tasks, audit: stack.db.auditLog, assignments: stack.db.taskAssignees });
+    const children = parents.flatMap((parent, series) => Array.from({ length: 300 }, (_, index) => {
+      const date = fmtISO(addDays(start, (index + 1) * 7));
+      const end = fmtISO(addDays(date, (MAX_WORKING_DAY_SPAN - 1) * 7));
+      return { ...parent, id: `task-b${(series * 300 + index).toString(16).padStart(7, '0')}-9999-4999-8999-999999999999`,
+        recurrence: null, recurrenceParentId: parent.id, recurrenceOccurrenceDate: date,
+        plannedStart: date, plannedFinish: end, targetFinish: end };
+    }));
+    const queryStart = stack.db.statements.length;
+    await assert.rejects(stack.repository.commitChanges({ taskUpserts: children }), error => (
+      error.code === 'MUTATION_FAILED' && /işlem sınırını aşıyor/.test(error.message)
+    ));
+    assert.ok(stack.db.statements.slice(queryStart).some(entry => entry.sql.includes('INSERT dbo.MR_Tasks')),
+      'ortak sayaç ilk çocukları kabul ettikten sonra tükenir; çocuk başına sıfırlansa bu küme geçerdi');
+    assert.equal(JSON.stringify({ tasks: stack.db.tasks, audit: stack.db.auditLog, assignments: stack.db.taskAssignees }), before,
+      'görevler, sorumlular ve denetim kayıtları birlikte geri alınır');
+  } finally { await stack.dispose(); }
 });

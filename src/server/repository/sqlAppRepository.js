@@ -1946,16 +1946,23 @@ function assertAssigneeTaskCreateFieldsOnly(task, parent = null) {
 }
 
 /**
- * Tek azami oluşumun kanıtlanabilir üst sınırı: üyelikte en çok 400 adayın
- * gün denetimi ve kaydırması; süre/termin sayımları, iki bitiş ve süre
- * doğrulaması için beş azami takvim taraması. Tatiller her taramada sayılır.
+ * Bir serinin üyelik/kaydırma payı ve oluşum başına beş takvim geçişi:
+ * şablon süresi/termini, iki bitiş, doğrulanan süre. Dahil sayımların son
+ * günü de sayılır. Aynı işlem en çok ürünün 400 oluşumluk serisi kadar
+ * azami oluşum işi alabilir; çoklu şablonlar da bu SABİT tavanı paylaşır.
+ * İstek sayısı bu sınırda kırpılır, hiçbir çarpan sınırsız değildir.
  */
-const RECURRENCE_COMMIT_SCAN_BUDGET_DAYS = MAX_RECURRENCE_OCCURRENCES * (1 + MAX_WORKING_DAY_SEARCH_CHECKS)
-  + 5 * MAX_CALENDAR_SPAN_DAYS;
+const RECURRENCE_MEMBERSHIP_SCAN_BUDGET_DAYS = MAX_RECURRENCE_OCCURRENCES * (1 + MAX_WORKING_DAY_SEARCH_CHECKS);
+const RECURRENCE_OCCURRENCE_SCAN_BUDGET_DAYS = 5 * (MAX_CALENDAR_SPAN_DAYS + 1);
+const RECURRENCE_COMMIT_SCAN_BUDGET_DAYS = RECURRENCE_MEMBERSHIP_SCAN_BUDGET_DAYS
+  + MAX_RECURRENCE_OCCURRENCES * RECURRENCE_OCCURRENCE_SCAN_BUDGET_DAYS;
 
-/** Bir işlemdeki yineleme doğrulamalarının ortak durumu: şablon planları ve kalan takvim işi. */
-function createRecurrenceCommitContext() {
-  return { plans: new Map(), meter: { remainingDays: RECURRENCE_COMMIT_SCAN_BUDGET_DAYS } };
+/** Bir işlemde tek ortak sayaç; çocuklar arasında yeniden kurulmaz. */
+function createRecurrenceCommitContext(taskUpserts = []) {
+  const children = Math.min(MAX_RECURRENCE_OCCURRENCES,
+    taskUpserts.filter((task) => task.recurrenceParentId).length);
+  const allowance = RECURRENCE_MEMBERSHIP_SCAN_BUDGET_DAYS + children * RECURRENCE_OCCURRENCE_SCAN_BUDGET_DAYS;
+  return { plans: new Map(), meter: { remainingDays: Math.min(allowance, RECURRENCE_COMMIT_SCAN_BUDGET_DAYS) } };
 }
 
 /** Yineleme doğrulamasının takvim işini işlemin ortak sayacından düşer. */
@@ -1973,7 +1980,7 @@ function meteredRecurrenceWork(recurrence, work) {
 
 async function commitTask(executor, actor, task, correlationId, {
   dependencyPlanningVerified = false,
-  recurrence = createRecurrenceCommitContext()
+  recurrence = createRecurrenceCommitContext([task])
 } = {}) {
   const taskId = uuid(task.id);
   const projectId = uuid(task.projectId);
@@ -2942,7 +2949,7 @@ export function createSqlAppRepository() {
       return withSqlTransaction(async (transaction) => {
         const actor = await loadTransactionAuthorizationContext(transaction);
         const correlationId = randomUUID();
-        const recurrence = createRecurrenceCommitContext();
+        const recurrence = createRecurrenceCommitContext(changes.taskUpserts);
         const consumedRootIds = new Set();
         const tagPlans = [];
         const touchedTaskProjects = new Set();

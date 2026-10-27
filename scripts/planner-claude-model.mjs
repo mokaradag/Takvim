@@ -19,7 +19,7 @@
  * (önbellekten okunmayan girdi belirteçlerinin toplam üst sınırı), PLANNER_CLAUDE_REQUIRE_CACHE=1 (aynı önekle ikinci
  * çağrıdan sonra önbellek okuması zorunlu). Ev klasörü yalıtıldığı için CLI'nin kayıtlı oturumu görünmez; kimlik bilgisi
  * ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN ya da CLAUDE_CODE_OAUTH_TOKEN (ya da barındırılan oturumun ortamı) ile verilir.
- * PLANNER_CLAUDE_HOME (varsayılan geçici kökte `rota-planner-claude-home`) alt ağacıyla birlikte yalnızca bu kullanıcıya
+ * PLANNER_CLAUDE_HOME (varsayılan geçici kökte POSIX için `rota-planner-claude-home-<uid>`, Windows için `rota-planner-claude-home`) alt ağacıyla birlikte yalnızca bu kullanıcıya
  * ait ve başkasının yazamadığı bir klasör olabilir; doğrulanamayan ev PLANNER_HOME_UNTRUSTED ile reddedilir ve neden ile
  * yol kayda (PLANNER_CLAUDE_LOG) yazılır. Eski sürümlerin açık bıraktığı kendi klasörleri daraltılır; başkasına
  * yazılabilir dosya onarılmaz, ev kaldırılmalıdır.
@@ -404,7 +404,8 @@ function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] 
 }
 
 /**
- * Windows ev denetimi. Ev ve her atası bu kullanıcıya, SYSTEM'e, Yöneticiler'e ya da TrustedInstaller'a aittir. Evde
+ * Windows ev denetimi. Özgün istek yolunda ev ve atalar reparse için oluşturma/çözümleme öncesinde denetlenir.
+ * Ev ve her atası bu kullanıcıya, SYSTEM'e, Yöneticiler'e ya da TrustedInstaller'a aittir. Evde
  * başka bir hesaba yazma, silme ya da izin/sahiplik değiştirme hakkı veren girdi YOKTUR; yalnızca devralma (IO)
  * girdisi de sayılır: evde etkisizdir ama yeni `call-*`, `mcp.json` ve `work` girdilerine etkin olarak geçer. Tek
  * istisna CREATOR OWNER'dır; alt öğede onu oluşturan hesaba dönüşür. Atalarda yalnızca etkin girdiler (alt öğe silme,
@@ -422,10 +423,14 @@ export const WINDOWS_HOME_CHECK = "$ErrorActionPreference='Stop'; $sid=[Security
   + "if ($rule.AccessControlType -ne 'Allow' -or -not ([long]$rule.FileSystemRights -band $mask) -or $trusted -contains $id) { continue }; "
   + "if (([int]$rule.PropagationFlags -band 2) -and (-not $inheritable -or $id -eq 'S-1-3-0')) { continue }; return $true }; return $false }; "
   + "function Reject($code, $path) { [Console]::Out.Write($path); exit $code }; "
-  + "$root=$env:ROTA_PLANNER_HOME; if (Unsafe ([IO.Directory]::GetAccessControl($root)) $write $true) { Reject 3 $root }; "
+  + "function Gone($record) { $cause=$record.Exception.GetBaseException(); return ($cause -is [IO.FileNotFoundException] -or $cause -is [IO.DirectoryNotFoundException]) }; "
+  + "$root=$env:ROTA_PLANNER_HOME; $p=$root; while ($p) { try { "
+  + "if ([IO.File]::GetAttributes($p) -band [IO.FileAttributes]::ReparsePoint) { Reject 4 $p } "
+  + "} catch { if (-not (Gone $_)) { throw } }; $p=[IO.Path]::GetDirectoryName($p) }; "
+  + "[void][IO.Directory]::CreateDirectory($root); "
+  + "if (Unsafe ([IO.Directory]::GetAccessControl($root)) $write $true) { Reject 3 $root }; "
   + "$p=[IO.Path]::GetDirectoryName($root); while ($p) { if (Unsafe ([IO.Directory]::GetAccessControl($p)) 0x100D0040 $false) { Reject 3 $p }; "
   + "$p=[IO.Path]::GetDirectoryName($p) }; "
-  + "function Gone($record) { $cause=$record.Exception.GetBaseException(); return ($cause -is [IO.FileNotFoundException] -or $cause -is [IO.DirectoryNotFoundException]) }; "
   + "$pending=New-Object Collections.Stack; $pending.Push($root); while ($pending.Count) { $d=$pending.Pop(); "
   + "try { $entries=[IO.Directory]::GetFileSystemEntries($d) } catch { if ($d -ne $root -and (Gone $_)) { continue }; throw }; "
   + "foreach ($e in $entries) { try { $a=[IO.File]::GetAttributes($e); "
@@ -571,20 +576,23 @@ export function assertPrivateTree(home, uid) {
  * sayılır.
  */
 function trustedHome() {
-  const requested = path.resolve(process.env.PLANNER_CLAUDE_HOME || path.join(tmpdir(), 'rota-planner-claude-home'));
-  mkdirSync(requested, { recursive: true, mode: 0o700 });
-  const home = realpathSync(requested);
+  const requested = path.resolve(process.env.PLANNER_CLAUDE_HOME || path.join(tmpdir(),
+    process.platform === 'win32' ? 'rota-planner-claude-home' : `rota-planner-claude-home-${process.getuid()}`));
   if (process.platform === 'win32') {
     const result = spawnSync(path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
       ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_HOME_CHECK],
-      { encoding: 'utf8', windowsHide: true, timeout: HOME_CHECK_TIMEOUT_MS, env: { ...process.env, ROTA_PLANNER_HOME: home } });
+      { encoding: 'utf8', windowsHide: true, timeout: HOME_CHECK_TIMEOUT_MS, env: { ...process.env, ROTA_PLANNER_HOME: requested } });
     if (result.status !== 0) {
       const reason = result.status === 3 ? 'HOME_ACL_UNTRUSTED' : result.status === 4 ? 'HOME_REPARSE_POINT' : 'HOME_CHECK_FAILED';
-      throw new PlannerHomeUntrusted(reason, result.stdout?.trim() || home);
+      throw new PlannerHomeUntrusted(reason, result.stdout?.trim() || requested);
     }
+    // Özgün yol ve ataları reparse değildir; çözümleme bu doğrulanmış dizini korur.
+    const home = realpathSync(requested);
     mkdirSync(path.join(home, 'work'), { recursive: true });
     return home;
   }
+  mkdirSync(requested, { recursive: true, mode: 0o700 });
+  const home = realpathSync(requested);
   const uid = process.getuid();
   for (let directory = path.dirname(home); ; directory = path.dirname(directory)) {
     const stat = lstatSync(directory);

@@ -75,7 +75,7 @@ const boundedText = (text, maxChars) => typeof text === 'string' && text.length 
 function semanticInputIssue(kind, body) {
   const limits = FAKE_SEMANTIC_LIMITS[kind];
   const texts = kind === 'embeddings'
-    ? (Array.isArray(body?.input) ? body.input : [body?.input])
+    ? body?.input
     : body?.documents;
   if (!Array.isArray(texts) || texts.length < 1 || texts.length > limits.maxItems) return 'item count';
   if (!texts.every((text) => boundedText(text, limits.maxItemChars))) return 'item';

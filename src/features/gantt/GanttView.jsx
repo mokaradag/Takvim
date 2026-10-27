@@ -115,6 +115,9 @@ export function GanttView() {
   const projects = useProjects();
   const people = usePeople();
   const schedule = usePortfolioSchedule();
+  const criticalDependencySets = useMemo2(() => Object.fromEntries(
+    Object.entries(schedule.projects).map(([id, project]) => [id, new Set(project.criticalDependencyKeys || [])])
+  ), [schedule.projects]);
   const { openTask: onOpenTask } = useTaskActions();
   const today_ = today();
   const [groupBy, setGroupBy] = useState2('proje');
@@ -408,8 +411,7 @@ export function GanttView() {
         else if (type === 'FF') { fromX = predEnd; toX = succEnd; fromSide = 'R'; toSide = 'R'; }
         else { fromX = predStart; toX = succEnd; fromSide = 'L'; toSide = 'R'; }
 
-        const projectSchedule = schedule.projects[r.task.projectId];
-        const critical = !!projectSchedule?.criticalDependencyKeys?.includes(`${dId}::${r.task.id}`);
+        const critical = Boolean(criticalDependencySets[r.task.projectId]?.has(`${dId}::${r.task.id}`));
         arrows.push({
           id: `${dId}-${r.task.id}-${type}`,
           type, fromX, fromY, toX, toY, fromSide, toSide,
@@ -421,7 +423,7 @@ export function GanttView() {
     });
     return arrows;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, range, zoom, hotTaskId, rowTops, schedule]);
+  }, [rows, range, zoom, hotTaskId, rowTops, criticalDependencySets]);
 
   function buildArrowPath(a) {
     const { fromX, fromY, toX, toY, fromSide, toSide } = a;

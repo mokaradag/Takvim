@@ -120,7 +120,7 @@ function hasFullProjectAccess(actor, projectId) {
  * FORBIDDEN ile reddedilir. Aynı kümede oluşturulan proje temel depoda
  * oluşturana FULL sahiplikle yazıldığı için FULL sayılır; muafiyet yalnızca
  * oluşturma yetkisi ÖNCEDEN kanıtlanmış projelere verilir. Aktörün göremediği
- * ve atama kapsamına girmeyen MEVCUT hedef proje, var olmayan projeyle aynı
+ * ve atama kapsamına girmeyen hedef proje, var olmayan projeyle aynı
  * yanıtı alır.
  */
 async function assertTaskTargetsDisclosable(transaction, changes, actor, storedTaskProjects, createdProjectIds) {
@@ -141,7 +141,7 @@ async function assertTaskTargetsDisclosable(transaction, changes, actor, storedT
   for (const projectId of [...destinations].sort()) {
     if (actor.effective.access.has(projectId)) continue;
     const row = await lockedProjectRow(transaction, projectId);
-    if (!row || (actor.canAssignAllCorporateProjects && row.SourceType === 'CORPORATE')) continue;
+    if (actor.canAssignAllCorporateProjects && row?.SourceType === 'CORPORATE') continue;
     throw new ServerPersistenceError('MUTATION_FAILED', 'Hedef proje bulunamadı veya etkin değil.', {
       details: { projectId }
     });

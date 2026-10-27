@@ -45,7 +45,7 @@ test('WBS Gantt gates critical-path data behind a valid project schedule', () =>
   assert.match(source, /const scheduleAvailable = projectSchedule\?\.status === 'valid'/);
   assert.match(source, /const criticalPathUnavailable = projectSchedule\?\.status === 'invalid'/);
   assert.match(source, /const scheduleTasks = scheduleAvailable \? projectSchedule\.tasks : EMPTY_SCHEDULE_TASKS/);
-  assert.match(source, /critical:\s*scheduleAvailable && Boolean/);
+  assert.match(source, /critical:\s*scheduleAvailable && criticalDependencySet\.has/);
   assert.match(source, /const critical = scheduleAvailable && Boolean/);
   assert.match(source, /Kritik yol bilgisi şu anda kullanılamıyor/);
   assert.match(source, /Görev tarihleri veya bağımlılık ilişkileri gözden geçirilmeli/);
@@ -111,4 +111,18 @@ test('proje dışı bağımlılık, görev kimliği SAYI iken de yakalanır', ()
   assert.equal(schedule.projects['p-a'].status, 'invalid');
   assert.equal(schedule.projects['p-a'].error.code, 'CROSS_PROJECT_DEPENDENCY');
   assert.equal(schedule.projects['p-a'].error.details.dependencies[0].predecessorProjectId, 'p-b');
+});
+
+test('iki Gantt görünümü kritik ok üyeliğini döngü dışında önbelleklenen kümeyle arar', () => {
+  for (const name of ['GanttView', 'WbsGanttView']) {
+    const source = read(`src/features/gantt/${name}.jsx`);
+    assert.ok(source.includes('new Set(') && source.includes('criticalDependencyKeys'), `${name}: tam kritik kenar dizisinden küme türetilir`);
+    assert.ok(source.includes('criticalDependencySets') || source.includes('criticalDependencySet'));
+    assert.equal(source.includes('criticalDependencyKeys?.includes('), false, `${name}: ok başına doğrusal arama yok`);
+    const arrowStart = source.indexOf('const arrows =');
+    const arrows = source.slice(arrowStart, source.indexOf('}, [', arrowStart));
+    assert.match(source, /const criticalDependencySets? = useMemo2?\(/);
+    assert.equal(arrows.includes('new Set('), false, `${name}: hover kümeyi yeniden oluşturmaz`);
+    assert.ok(arrows.includes('.has('), `${name}: sabit zamanlı üyelik`);
+  }
 });

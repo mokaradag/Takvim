@@ -501,3 +501,46 @@ test('kısmi oluşturucunun silme yetkisi gizli bağımlılık varlığından ba
     assert.equal(manager.db.taskDependencies.length, 0);
   } finally { await manager.dispose(); }
 });
+
+test('gizli ve olmayan hedef projeler aynı tam yanıtı verir; görünür ve kurumsal atama korunur', async () => {
+  const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
+  for (const sicil of [PLAIN_SICIL, MANAGER_SICIL]) {
+    const stack = await disclosureStack(sicil);
+    try {
+      const taskId = 'c1c1c1c1-0000-4000-8000-0000000000d1';
+      const task = (projectId, wbsId = null) => ({
+        id: taskId, projectId, wbsId, task: 'Yeni görev', status: 'planned', priority: 'medium',
+        assigneeIds: [String(sicil === MANAGER_SICIL ? SUBORDINATE_SICIL : sicil)], deps: []
+      });
+      const attempt = async (projectId) => {
+        const start = stack.db.statements.length;
+        const response = await fetch('http://localhost/api/mergen-rota/commit', { method: 'POST',
+          body: JSON.stringify({ changes: { taskUpserts: [task(projectId)] } }) });
+        return { status: response.status, body: await response.text(), headers: [...response.headers].map(([name, value]) => [name, name === 'x-mergen-rota-correlation-id' ? '<correlation>' : value]),
+          queries: stack.db.statements.slice(start).map(entry => entry.sql) };
+      };
+      const before = JSON.stringify(stack.db.tasks);
+      const hidden = await attempt(MANUAL_PROJECT_ID);
+      const missing = await attempt('c1c1c1c1-0000-4000-8000-0000000000d2');
+      // İstemcinin bildiği hedef kimliği ve istek başına rastgele korelasyon değeri dışında yanıt bütünüyle aynıdır.
+      assert.deepEqual({ ...hidden, body: hidden.body.replaceAll(MANUAL_PROJECT_ID, '<id>') },
+        { ...missing, body: missing.body.replaceAll('c1c1c1c1-0000-4000-8000-0000000000d2', '<id>') });
+      assert.equal(hidden.status, 400);
+      assert.equal(JSON.stringify(stack.db.tasks), before, 'her iki ret de hiçbir görev yazmaz');
+      // Aynı istek kimliğiyle satırın varlığı değiştirildiğinde de ham yanıt aynıdır.
+      const row = stack.db.projects.findIndex(item => String(item.ProjectId).toLowerCase() === MANUAL_PROJECT_ID);
+      const [removed] = stack.db.projects.splice(row, 1);
+      assert.deepEqual(await attempt(MANUAL_PROJECT_ID), hidden);
+      stack.db.projects.push(removed);
+      if (sicil === MANAGER_SICIL) {
+        stack.db.taskAssignees = []; // Kurumsal hedef artık PARTIAL görünürlük de sağlamaz.
+        assert.match(await probe({ taskUpserts: [task(CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID)] }, taskId), /^200 /,
+          'görünür olmayan kurumsal projeye mevcut yönetici atama kapsamı korunur');
+      } else {
+        stack.db.projectAccess.push({ ProjectId: MANUAL_PROJECT_ID, Sicil: sicil, AccessLevel: 'FULL', GrantSource: 'MANUAL_GRANT', IsActive: 1 });
+        assert.match(await probe({ taskUpserts: [task(MANUAL_PROJECT_ID, MANUAL_ROOT_WBS_ID)] }, taskId), /^200 /);
+      }
+      assert.equal(stack.db.tasks.length, JSON.parse(before).length + 1);
+    } finally { await stack.dispose(); }
+  }
+});
