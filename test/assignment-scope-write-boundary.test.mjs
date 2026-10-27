@@ -337,7 +337,7 @@ test('atama kapsamı gönderilmeyen kontrollü tarihleri SİLEMEZ; açık temizl
     people: [...base.people, { Sicil: SECOND_SUBORDINATE, DisplayName: 'İkinci Ast', Username: 'ikinciast' }],
     executiveScope: [...base.executiveScope, { ManagerSicil: MANAGER_SICIL, EmployeeSicil: SECOND_SUBORDINATE, ScopeType: 'UNIT' }]
   });
-  seed.tasks = [datedTaskSeed()];
+  seed.tasks = [datedTaskSeed({ PlannedDurationDays: 4 })];
   seed.taskAssignees = [{ TaskId: NEW_TASK_ID, Sicil: SUBORDINATE_SICIL }];
 
   const stack = await createActualStack(seed, { sicil: MANAGER_SICIL });
@@ -347,13 +347,16 @@ test('atama kapsamı gönderilmeyen kontrollü tarihleri SİLEMEZ; açık temizl
     const snapshot = await stack.repository.loadSnapshot();
     const visible = snapshot.tasks.find((task) => String(task.id).toLowerCase().includes('aa11bb22'));
     // Kanonikleştirme eksik alanı `undefined` anahtarına çevirir: tarihler hiç gönderilmez.
-    const { plannedStart, plannedFinish, targetFinish, ...withoutDates } = visible;
+    const { plannedStart, plannedFinish, plannedDurationDays, targetFinish, ...withoutDates } = visible;
     assert.deepEqual([plannedStart, plannedFinish, targetFinish], ['2026-08-17', '2026-08-20', '2026-08-21']);
+    assert.equal(plannedDurationDays, 4);
 
     const reassigned = await stack.repository.commitChanges({ taskUpserts: [{ ...withoutDates, assigneeIds: [String(SECOND_SUBORDINATE)] }] });
     assert.deepEqual(dates(), ['2026-08-17', '2026-08-20', '2026-08-21'], 'yalnızca atama değişikliği tarihleri korur');
 
     const current = reassigned.taskUpserts.find((task) => String(task.id).toLowerCase().includes('aa11bb22'));
+    assert.equal(current.plannedDurationDays, 4, 'yalnızca atama değişikliği kanonik süreyi korur');
+    assert.equal(stored().PlannedDurationDays, 4, 'gönderilmeyen süre kalıcı satırdan silinmez');
     for (const patch of [{ plannedStart: null }, { plannedFinish: null }, { targetFinish: null }, { plannedFinish: '2026-08-25' }]) {
       await assert.rejects(
         stack.repository.commitChanges({ taskUpserts: [{ ...withoutDates, ...patch, assigneeIds: current.assigneeIds, version: current.version }] }),
@@ -362,8 +365,23 @@ test('atama kapsamı gönderilmeyen kontrollü tarihleri SİLEMEZ; açık temizl
       );
     }
     assert.deepEqual(dates(), ['2026-08-17', '2026-08-20', '2026-08-21']);
+    assert.equal(stored().PlannedDurationDays, 4, 'yetkisiz tarih değişikliği süreyi de değiştirmez');
   } finally {
     await stack.dispose();
+  }
+
+  // Süre gönderilmese de sorumlunun gerçek plan tarihi değişikliği yeniden hesaplanır.
+  const assignee = await createActualStack(seed, { sicil: SUBORDINATE_SICIL });
+  try {
+    const { plannedDurationDays, ...task } = assignee.state.tasks.find((task) => String(task.id).toLowerCase().includes('aa11bb22'));
+    assert.equal(plannedDurationDays, 4);
+    const updated = await assignee.repository.commitChanges({
+      taskUpserts: [{ ...task, plannedFinish: '2026-08-21', assigneeMutation: false }]
+    });
+    assert.equal(updated.taskUpserts[0].plannedDurationDays, 5);
+    assert.equal(assignee.db.tasks.find((row) => String(row.TaskId).toLowerCase().includes('aa11bb22')).PlannedDurationDays, 5);
+  } finally {
+    await assignee.dispose();
   }
 
   // Tam proje yetkilisi açık temizlemeyi yapabilmeye devam eder.

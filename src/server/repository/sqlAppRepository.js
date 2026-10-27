@@ -2008,6 +2008,8 @@ async function commitTask(executor, actor, task, correlationId, {
   const plannedStart = keepsStoredDate('plannedStart') ? isoDate(before.PlannedStart) : (task.plannedStart || null);
   const plannedFinish = keepsStoredDate('plannedFinish') ? isoDate(before.PlannedFinish) : (task.plannedFinish || null);
   const targetFinish = keepsStoredDate('targetFinish') ? isoDate(before.TargetFinish) : (task.targetFinish || null);
+  const keepsStoredDuration = keepsStoredDate('plannedDurationDays')
+    && !hasSubmittedField(task, 'plannedStart') && !hasSubmittedField(task, 'plannedFinish');
 
   // PROJE yetkisi, sorumlu doğrulamasından ÖNCE denetlenir. `ensurePeople`
   // önce çalıştığında, erişimi olmayan bir kullanıcı bilinmeyen sicil için
@@ -2310,7 +2312,7 @@ async function commitTask(executor, actor, task, correlationId, {
       if (!sameActualId(row.RelatedTaskId, taskId)) relatedTaskIds.add(id(row.RelatedTaskId));
     }
   }
-  let plannedDurationDays = assigneeWorkOnly
+  let plannedDurationDays = assigneeWorkOnly || keepsStoredDuration
     ? nullableNumber(before.PlannedDurationDays)
     : nullableNumber(task.plannedDurationDays);
   // Sorumlu artık plan tarihlerini düzenleyebildiği için süre de YENİDEN
