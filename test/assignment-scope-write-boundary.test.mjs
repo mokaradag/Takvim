@@ -28,6 +28,7 @@ import { plainTextToHtml } from '../src/features/reminders/plainTextHtml.js';
 import { planTemplateStartAlignment } from '../src/features/task-detail/recurrenceTemplateAlignment.js';
 import { canDeleteTask, resolveTaskCreationProject } from '../src/state/projectWritePolicy.js';
 import { canResolveTaskAssignee } from '../src/state/appState.js';
+import { calculateCpm } from '../src/scheduling/cpm/engine.js';
 
 const MANAGER_SICIL = 900500;
 const SUBORDINATE_SICIL = 900501;
@@ -332,8 +333,10 @@ function datedTaskSeed(overrides = {}) {
 
 test('atama kapsamı gönderilmeyen kontrollü tarihleri SİLEMEZ; açık temizleme ve değişiklik yetkisiz kalır', async () => {
   const SECOND_SUBORDINATE = 900504;
+  const OTHER_CALENDAR_ID = 'c0a80101-2222-4222-8222-222222222222';
   const base = assignmentSeed();
   const seed = assignmentSeed({
+    calendars: [...base.calendars, { CalendarId: OTHER_CALENDAR_ID, Name: 'Üç Günlük Takvim', IsDefault: 0, IsActive: 1, WorkingDays: [1, 2, 3] }],
     people: [...base.people, { Sicil: SECOND_SUBORDINATE, DisplayName: 'İkinci Ast', Username: 'ikinciast' }],
     executiveScope: [...base.executiveScope, { ManagerSicil: MANAGER_SICIL, EmployeeSicil: SECOND_SUBORDINATE, ScopeType: 'UNIT' }]
   });
@@ -366,6 +369,16 @@ test('atama kapsamı gönderilmeyen kontrollü tarihleri SİLEMEZ; açık temizl
     }
     assert.deepEqual(dates(), ['2026-08-17', '2026-08-20', '2026-08-21']);
     assert.equal(stored().PlannedDurationDays, 4, 'yetkisiz tarih değişikliği süreyi de değiştirmez');
+
+    const changed = await stack.repository.commitChanges({
+      taskUpserts: [{ ...withoutDates, calendarId: OTHER_CALENDAR_ID, assigneeIds: current.assigneeIds, version: current.version }]
+    });
+    const changedTask = changed.taskUpserts.find((task) => String(task.id).toLowerCase().includes('aa11bb22'));
+    assert.equal(changedTask.plannedDurationDays, null, 'farklı etkin takvimde mevcut gönderilen süre yolu kullanılır');
+    assert.equal(stored().PlannedDurationDays, null);
+    assert.equal(String(stored().CalendarId).toLowerCase(), OTHER_CALENDAR_ID);
+    assert.deepEqual(dates(), ['2026-08-17', '2026-08-20', '2026-08-21']);
+    assert.equal(calculateCpm([changedTask], stack.state).tasks[changedTask.id].durationDays, 3, 'mevcut CPM hesabı yeni takvimi kullanır');
   } finally {
     await stack.dispose();
   }

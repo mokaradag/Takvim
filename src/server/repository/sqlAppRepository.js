@@ -2312,7 +2312,11 @@ async function commitTask(executor, actor, task, correlationId, {
       if (!sameActualId(row.RelatedTaskId, taskId)) relatedTaskIds.add(id(row.RelatedTaskId));
     }
   }
-  let plannedDurationDays = assigneeWorkOnly || keepsStoredDuration
+  const keepsStoredDurationForCalendar = keepsStoredDuration && !narrowTaskWrite && (
+    sameNullableId(id(before.CalendarId) || id(auditProject.CalendarId), effectiveCalendarId)
+    || sameNullableId((await loadTaskPlanContext(executor, projectId, id(before.CalendarId))).projects[0]?.calendarId, effectiveCalendarId)
+  );
+  let plannedDurationDays = assigneeWorkOnly || keepsStoredDurationForCalendar
     ? nullableNumber(before.PlannedDurationDays)
     : nullableNumber(task.plannedDurationDays);
   // Sorumlu artık plan tarihlerini düzenleyebildiği için süre de YENİDEN
