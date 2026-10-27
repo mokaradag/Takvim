@@ -2317,7 +2317,7 @@ async function commitTask(executor, actor, task, correlationId, {
     : null;
   const keepsStoredDurationForCalendar = keepsStoredDuration && !narrowTaskWrite && (
     sameNullableId(storedPlanCalendarId, effectiveCalendarId)
-    || (!storedPlanCalendarId && sameNullableId((await loadTaskPlanContext(executor, beforeProjectId, null)).projects[0]?.calendarId, effectiveCalendarId))
+    || (!id(before.CalendarId) && sameNullableId((await loadTaskPlanContext(executor, beforeProjectId, null)).projects[0]?.calendarId, effectiveCalendarId))
   );
   let plannedDurationDays = assigneeWorkOnly || keepsStoredDurationForCalendar
     ? nullableNumber(before.PlannedDurationDays)

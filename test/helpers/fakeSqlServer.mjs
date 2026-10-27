@@ -1576,10 +1576,9 @@ function runQuery(db, statement, params, { database }) {
   if (sqlText.includes('AS PlanCalendarId') && sqlText.includes('FROM dbo.MR_Projects p')) {
     const project = projectById(db, params.projectId);
     const defaultCalendar = db.calendars.find((entry) => entry.IsDefault && entry.IsActive) || null;
-    const calendar = db.calendars.find((entry) => entry.IsActive && sameGuid(
-      entry.CalendarId,
-      params.calendarId || project?.CalendarId || defaultCalendar?.CalendarId
-    )) || null;
+    const calendar = [params.calendarId, project?.CalendarId, defaultCalendar?.CalendarId]
+      .map((calendarId) => db.calendars.find((entry) => entry.IsActive && sameGuid(entry.CalendarId, calendarId)))
+      .find(Boolean) || null;
     if (!project || !calendar) return result([[]]);
     const rows = [];
     const weekdays = calendar.WorkingDays.length ? calendar.WorkingDays : [null];

@@ -428,10 +428,17 @@ test('gönderilmeyen süre kaynak proje takvimini izler; etkin olmayan görev ta
     tasks: [datedTaskSeed({ CalendarId: OTHER_CALENDAR_ID, PlannedDurationDays: 4 })],
     taskAssignees: [{ TaskId: NEW_TASK_ID, Sicil: SUBORDINATE_SICIL }]
   });
+  const inherited = assignmentSeed({
+    calendars: [base.calendars[0], { CalendarId: OTHER_CALENDAR_ID, Name: 'Eski Proje Takvimi', IsDefault: 0, IsActive: 0, WorkingDays: [1, 2, 3] }],
+    projects: [{ ...base.projects[0], CalendarId: OTHER_CALENDAR_ID }],
+    tasks: [datedTaskSeed({ PlannedDurationDays: 4 })],
+    taskAssignees: [{ TaskId: NEW_TASK_ID, Sicil: SUBORDINATE_SICIL }]
+  });
 
-  for (const [name, seed, patch] of [
+  for (const [name, seed, patch, duration = null, workingDays = 3] of [
     ['kaynak FULL, hedef atama kapsamı', moved, { projectId: SECOND_PROJECT_ID, wbsId: SECOND_ROOT_WBS_ID }],
-    ['etkin olmayan override temizliği', inactive, {}]
+    ['etkin olmayan override temizliği', inactive, {}],
+    ['etkin olmayan proje takvimi etkin varsayılanı miras alır', inherited, {}, 4, 4]
   ]) {
     const stack = await createActualStack(seed, { sicil: MANAGER_SICIL });
     try {
@@ -439,12 +446,12 @@ test('gönderilmeyen süre kaynak proje takvimini izler; etkin olmayan görev ta
       for (const field of ['plannedStart', 'plannedFinish', 'plannedDurationDays', 'calendarId']) delete task[field];
       const result = await stack.repository.commitChanges({ taskUpserts: [{ ...task, ...patch }] });
       const updated = result.taskUpserts[0];
-      assert.equal(updated.plannedDurationDays, null, name);
-      assert.equal(stack.db.tasks[0].PlannedDurationDays, null, name);
+      assert.equal(updated.plannedDurationDays, duration, name);
+      assert.equal(stack.db.tasks[0].PlannedDurationDays, duration, name);
       assert.equal(stack.db.tasks[0].CalendarId, null, name);
       assert.equal(updated.projectId.toLowerCase(), (patch.projectId || CORPORATE_PROJECT_ID).toLowerCase(), name);
       await stack.reload();
-      assert.equal(calculateCpm(stack.state.tasks, stack.state).tasks[updated.id].durationDays, 3, name);
+      assert.equal(calculateCpm(stack.state.tasks, stack.state).tasks[updated.id].durationDays, workingDays, name);
     } finally {
       await stack.dispose();
     }
