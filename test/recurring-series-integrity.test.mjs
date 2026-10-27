@@ -215,6 +215,8 @@ test('yineleme üyeliği bitiş aritmetiği yapmadan belirlenir; tek yinelemenin
 
   reads = 0;
   const single = occurrenceFinishes(template, dates[3].plannedStart, { calendar: counting });
+  const finishChecks = 7 * Math.ceil((MAX_WORKING_DAY_SPAN - 1) / WORK_WEEK.workingDays.length);
+  assert.ok(reads <= finishChecks + 2 * 7, `tek bitiş ve beş günlük termin taraması (${reads})`);
   const full = planRecurringOccurrences(template, { ...rule, count: 4 }, { calendar: WORK_WEEK })[3];
   assert.deepEqual(single, { plannedFinish: full.plannedFinish, targetFinish: full.targetFinish }, 'bitişler tam planla aynıdır');
 });
@@ -415,7 +417,7 @@ test('uzun şablonlu büyük seride yineleme doğrulaması kardeş bitişlerini 
     assert.equal(stored.PlannedFinish, legitimate.plannedFinish);
     assert.equal(stored.TargetFinish, legitimate.targetFinish);
 
-    const batch = Array.from({ length: 12 }, (_, index) => child(index + 3, fmtISO(addDays('2026-08-31', index * 7))));
+    const batch = Array.from({ length: 80 }, (_, index) => child(index + 3, fmtISO(addDays('2026-08-31', index * 7))));
     await assert.rejects(stack.repository.commitChanges({ taskUpserts: batch }), (error) => (
       error.code === 'MUTATION_FAILED' && /işlem sınırını aşıyor/.test(error.message)
     ));
@@ -426,8 +428,8 @@ test('uzun şablonlu büyük seride yineleme doğrulaması kardeş bitişlerini 
 });
 
 test('yineleme işlem bütçesi süre doğrulamasının ikinci taramasını da sayar', { timeout: 60000 }, async () => {
-  // Terminsiz, en uzun süreli yinelemeler: bitiş için ~28 000 gün, süre doğrulaması için aynı aralık bir kez daha
-  // taranır. Yalnızca bitiş taramasını tahmin eden eski hesap yedi yinelemeyi ~196 000 günle bütçe içinde sayıyordu.
+  // Terminsiz oluşum başına bitiş ve süre doğrulaması ayrı ayrı sayılır;
+  // 80 oluşum türetilmiş tek-oluşum bütçesini aşar, küçük gruplar kabul edilir.
   const stack = await createActualStack(corporateSeed());
   try {
     assert.equal((await stack.persistence.commitChanges('project/create', manualProjectChanges())).ok, true);
@@ -442,7 +444,7 @@ test('yineleme işlem bütçesi süre doğrulamasının ikinci taramasını da s
       plannedStart: date, plannedDurationDays: MAX_WORKING_DAY_SPAN,
       ...occurrenceFinishes(shape, date, { calendar: WORK_WEEK })
     });
-    const dates = Array.from({ length: 7 }, (_, index) => fmtISO(addDays('2026-08-24', index * 7)));
+    const dates = Array.from({ length: 80 }, (_, index) => fmtISO(addDays('2026-08-24', index * 7)));
     await assert.rejects(stack.repository.commitChanges({ taskUpserts: dates.map((date, index) => child(index + 1, date)) }), (error) => (
       error.code === 'MUTATION_FAILED' && /işlem sınırını aşıyor/.test(error.message)
     ));
@@ -614,3 +616,29 @@ test('yükseltme göçü mevcut veritabanına yeni sütunları ekler', () => {
 function readSource(relativePath) {
   return readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
 }
+
+
+test('en uzun tek yineleme seyrek ve tatil yoğun takvimde terminli veya terminsiz kabul edilir', { timeout: 60000 }, async () => {
+  for (const withTarget of [false, true]) {
+    const calendar = { workingDays: [1], holidays: Array.from({ length: 52 }, (_, index) => ({ date: fmtISO(addDays('2027-01-04', index * 7)) })) };
+    const seed = corporateSeed();
+    seed.calendars[0].WorkingDays = calendar.workingDays;
+    seed.calendars[0].Holidays = calendar.holidays;
+    const stack = await createActualStack(seed);
+    try {
+      assert.equal((await stack.persistence.commitChanges('project/create', manualProjectChanges())).ok, true);
+      const finish = fmtISO(addWorkingDays('2026-08-17', MAX_WORKING_DAY_SPAN - 1, calendar));
+      const shape = { plannedStart: '2026-08-17', plannedFinish: finish,
+        targetFinish: withTarget ? finish : null, plannedDurationDays: MAX_WORKING_DAY_SPAN };
+      await stack.repository.commitChanges({ taskUpserts: [seriesTask({ recurrence: 'FREQ=WEEKLY;BYDAY=MO;COUNT=2', ...shape })] });
+      const child = seriesTask({ id: CHILD_ID, recurrence: null, recurrenceParentId: TASK_ID,
+        recurrenceOccurrenceDate: '2026-08-24', plannedStart: '2026-08-24', plannedDurationDays: MAX_WORKING_DAY_SPAN,
+        ...occurrenceFinishes(shape, '2026-08-24', { calendar }) });
+      await stack.repository.commitChanges({ taskUpserts: [child] });
+      const stored = stack.db.tasks.find(row => String(row.TaskId).toLowerCase().includes('2bbbbbbb'));
+      assert.equal(stored.PlannedFinish, child.plannedFinish);
+      assert.equal(stored.TargetFinish, child.targetFinish);
+      assert.equal(stored.PlannedDurationDays, MAX_WORKING_DAY_SPAN);
+    } finally { await stack.dispose(); }
+  }
+});

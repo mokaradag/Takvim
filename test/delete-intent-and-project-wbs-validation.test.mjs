@@ -341,22 +341,34 @@ test('yönetim kapsamıyla görünen WBS atası niyet denetiminde var sayılır;
     // Görünen düğüm yetki denetimine ulaşır (KISMİ proje WBS yazamaz); 409 "bulunamadı" almaz.
     assert.equal(await probe({ wbsDeletes: [{ id: scoped.id, version: scoped.version }] }, scoped.id),
       `403 ${JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Bu proje için tam yazma yetkiniz yok.', details: null } })}`);
+    const root = snapshot.wbs.find(node => String(node.id).toLowerCase() === CORPORATE_ROOT_WBS_ID.toLowerCase());
+    assert.match(await probe({ wbsUpserts: [{ ...root, name: 'Görünür ata' }] }, root.id), /^403 /, 'görünür ata da yetki sınırına ulaşır');
     // Görünmeyen ve var olmayan düğüm aynı yanıtı alır.
     const hidden = await probe({ wbsDeletes: [{ id: HIDDEN_WBS_ID, version: STALE_VERSION }] }, HIDDEN_WBS_ID);
     assert.equal(hidden, await probe({ wbsDeletes: [{ id: MISSING_WBS_ID, version: STALE_VERSION }] }, MISSING_WBS_ID));
     assert.match(hidden, /^409 .*DELETE_TARGET_MISSING/);
+    const update = id => probe({ wbsUpserts: [{ id, projectId: CORPORATE_PROJECT_ID, parentId: CORPORATE_ROOT_WBS_ID, name: 'Düğüm', code: 'X', version: STALE_VERSION }] }, id);
+    assert.equal(await update(HIDDEN_WBS_ID), await update(MISSING_WBS_ID));
   } finally {
     await manager.dispose();
   }
 });
 
-test('commit işlemi yetkiyi bir kez yükler; kilitlenme kurbanı baştan yinelenir', async () => {
+test('commit işlemi yetkiyi bir kez yükler; kilitlenme kurbanı baştan yinelenir', async (t) => {
   const lead = await disclosureStack(900010);
   try {
     const snapshot = await lead.repository.loadSnapshot();
     const lone = snapshot.tasks.find((task) => String(task.id).toLowerCase() === LONE_TASK_ID);
     const firstStatement = lead.db.statements.length;
     const firstTransaction = lead.db.transactions.length;
+    const { resetTelemetryRegistryForTests, snapshotOperations } = await import('../src/server/observability/telemetryRegistry.js');
+    resetTelemetryRegistryForTests();
+    let clock = 1800000000000;
+    t.mock.method(Date, 'now', () => clock);
+    lead.db.queryBarrier = { match(statement) {
+      if (statement.includes('FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil')) clock += 250;
+      return false;
+    } };
     let deadlocks = 0;
     lead.db.commitHook = () => {
       if (deadlocks++ === 0) throw Object.assign(new Error('Transaction was deadlocked'), { number: 1205 });
@@ -373,6 +385,11 @@ test('commit işlemi yetkiyi bir kez yükler; kilitlenme kurbanı baştan yinele
         .filter((statement) => statement.sql.includes('FROM dbo.MR_V_PeopleDirectory WHERE Sicil = @sicil'));
       assert.equal(authorizationReads.length, 1, 'yetki bağlamı işlem başına bir kez yüklenir');
     }
+    const metrics = snapshotOperations();
+    const authorization = metrics.find(row => row.operation === 'phase.commit.authorization');
+    assert.equal(authorization.count, 2, 'her denemenin ilk yetki yüklemesi bir kez ölçülür');
+    assert.equal(authorization.avgMs, 250, 'asıl sorgu yetki fazında ölçülür');
+    assert.equal(metrics.find(row => row.operation === 'phase.commit.intent-validation').avgMs, 0, 'niyet fazı yetki sorgusunu içermez');
     assert.ok(attempts[0].statementIndex >= firstStatement);
     assert.equal(lead.db.tasks.find((row) => String(row.TaskId).toLowerCase() === LONE_TASK_ID).Title, 'Yinelenen kayıt');
   } finally {
@@ -417,4 +434,70 @@ test('görevi görebilen ama silemeyen aktör gizli ardıl ilişkisini öğrenem
   } finally {
     await lead.dispose();
   }
+});
+
+
+test('FULL kaynak proje yetkisi gizli öncülleri açmaz; görünür öncüller ayrıntılı çapraz proje kuralını korur', async () => {
+  const lead = await disclosureStack(900010);
+  try {
+    const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
+    const hidden = lead.db.tasks.find(row => String(row.TaskId).toLowerCase() === HIDDEN_TASK_ID);
+    hidden.CreatedBySicil = MANAGER_SICIL;
+    hidden.ProjectId = MANUAL_PROJECT_ID.toUpperCase();
+    hidden.WbsId = MANUAL_ROOT_WBS_ID.toUpperCase();
+    lead.db.projects.find(row => String(row.ProjectId).toLowerCase() === MANUAL_PROJECT_ID).LeadSicil = MANAGER_SICIL;
+    const taskId = 'c1c1c1c1-0000-4000-8000-0000000000d1';
+    const task = (predecessorId) => ({ id: taskId, projectId: CORPORATE_PROJECT_ID, wbsId: CORPORATE_ROOT_WBS_ID,
+      task: 'Öncül yoklama', status: 'planned', priority: 'medium', assigneeIds: [],
+      deps: [{ predecessorId, type: 'FS', lagDays: 0 }] });
+    const attempt = predecessor => probe({ taskUpserts: [task(predecessor)] }, predecessor);
+    const missing = await attempt(MISSING_TASK_ID);
+    assert.equal(await attempt(HIDDEN_TASK_ID), missing, 'yanıtın tamamı aynı olmalıdır');
+    const raw = await probe({ taskUpserts: [task(HIDDEN_TASK_ID)] });
+    const saved = structuredClone(lead.db.tasks);
+    lead.db.tasks = lead.db.tasks.filter(row => String(row.TaskId).toLowerCase() !== HIDDEN_TASK_ID);
+    assert.equal(await probe({ taskUpserts: [task(HIDDEN_TASK_ID)] }), raw, 'aynı gönderilen kimlikte gizli-var ve yok yanıtları bayt bayt aynıdır');
+    lead.db.tasks = saved;
+    assert.match(missing, /DEPENDENCY_TARGET_NOT_FOUND/);
+    assert.doesNotMatch(missing, new RegExp(MANUAL_PROJECT_ID));
+    assert.equal(lead.db.tasks.some(row => String(row.TaskId).toLowerCase() === taskId), false);
+    lead.db.projectAccess.push({ ProjectId: MANUAL_PROJECT_ID.toUpperCase(), Sicil: 900010, AccessLevel: 'READ', GrantSource: 'MANUAL_GRANT', IsActive: 1 });
+    assert.match(await attempt(HIDDEN_TASK_ID), /CROSS_PROJECT_DEPENDENCY/);
+    assert.match(await attempt(LONE_TASK_ID), /^200 /, 'aynı projedeki görünür öncül kabul edilir');
+  } finally { await lead.dispose(); }
+});
+
+test('kısmi oluşturucunun silme yetkisi gizli bağımlılık varlığından bağımsızdır; FULL silme atomiktir', async () => {
+  const manager = await disclosureStack(MANAGER_SICIL);
+  try {
+    const { CORPORATE_PROJECT_ID } = await import('./helpers/actualStack.mjs');
+    for (const task of manager.db.tasks) task.CreatedBySicil = MANAGER_SICIL;
+    const snapshot = await manager.repository.loadSnapshot();
+    const get = id => snapshot.tasks.find(task => String(task.id).toLowerCase() === id);
+    const attempt = id => probe({ taskDeletes: [{ id, version: get(id).version }] }, id);
+    const firstStatement = manager.db.statements.length;
+    const withDependencies = await attempt(HIDDEN_TASK_ID);
+    assert.equal(withDependencies, await attempt(LONE_TASK_ID));
+    assert.match(withDependencies, /^403 .*Görev silme işlemi tam proje yetkisi/);
+    assert.doesNotMatch(withDependencies, new RegExp(SUCCESSOR_TASK_ID));
+    assert.equal(manager.db.tasks.length, 3);
+    assert.equal(manager.db.taskDependencies.length, 1);
+    assert.equal(manager.db.statements.slice(firstStatement).some(statement => statement.sql.includes('MR_TaskDependencies')), false, 'ret ilişki sorgusu çalıştırmaz');
+    // Var olmayan ilişki ve gizli ilişki aynı kararı verir; silme ilişkileri okumaz.
+    manager.db.taskDependencies = [];
+    assert.equal(await attempt(HIDDEN_TASK_ID), withDependencies);
+    manager.db.taskDependencies.push({ ProjectId: CORPORATE_PROJECT_ID, TaskId: SUCCESSOR_TASK_ID, PredecessorTaskId: HIDDEN_TASK_ID, DependencyType: 'FS', LagDays: 0 });
+    manager.db.corporateProjectAccess.push({ ProjectCode: 'P4417041', Sicil: MANAGER_SICIL, RoleCode: 'PROJECT_MANAGER' });
+    const full = await manager.repository.loadSnapshot();
+    const predecessor = full.tasks.find(task => String(task.id).toLowerCase() === HIDDEN_TASK_ID);
+    const successor = full.tasks.find(task => String(task.id).toLowerCase() === SUCCESSOR_TASK_ID);
+    manager.db.commitHook = () => { throw new Error('rollback-test'); };
+    await assert.rejects(manager.repository.commitChanges({ taskDeletes: [{ id: predecessor.id, version: predecessor.version }], taskUpserts: [{ ...successor, deps: [] }] }));
+    assert.equal(manager.db.tasks.length, 3);
+    assert.equal(manager.db.taskDependencies.length, 1, 'başarısız silme ilişkiyi de geri alır');
+    manager.db.commitHook = null;
+    await manager.repository.commitChanges({ taskDeletes: [{ id: predecessor.id, version: predecessor.version }], taskUpserts: [{ ...successor, deps: [] }] });
+    assert.equal(manager.db.tasks.length, 2);
+    assert.equal(manager.db.taskDependencies.length, 0);
+  } finally { await manager.dispose(); }
 });

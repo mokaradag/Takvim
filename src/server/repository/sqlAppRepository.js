@@ -3,7 +3,8 @@ import { normalizeTaskLifecycle } from '../../domain/taskLifecycle.js';
 import { businessDate } from '../../domain/calendar/businessDate.js';
 import {
   CalendarScanBudgetExceededError,
-  MAX_WORKING_DAY_SPAN,
+  MAX_CALENDAR_SPAN_DAYS,
+  MAX_WORKING_DAY_SEARCH_CHECKS,
   meterCalendarScans,
   resolveTaskCalendar
 } from '../../scheduling/calendars/index.js';
@@ -20,9 +21,10 @@ import { ServerPersistenceError } from '../errors.js';
 import { observePhase, recordPhaseDuration } from '../observability/observeOperation.js';
 import { applyTaskAssigneeProjection } from './taskAssigneeProjection.js';
 import { loadAuthorizationContext, loadTransactionAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
-import { assertCanCreateManualProject, assertProjectWriteAccess, hasTaskAssignmentScope } from '../authorization/authorization.js';
+import { assertCanCreateManualProject, assertProjectWriteAccess, assertTaskDeleteAccess, hasTaskAssignmentScope } from '../authorization/authorization.js';
 import { mergeProjectTagAppearance, planProjectTagPropagation, projectTagNames } from '../../domain/tags/index.js';
 import {
+  MAX_RECURRENCE_OCCURRENCES,
   formatRecurrenceRule,
   normalizeRecurrenceRule,
   occurrenceFinishes,
@@ -55,7 +57,6 @@ import { synchronizeCorporateWbs } from './corporateWbsSync.js';
 const DEPENDENCY_PLANNING_VERIFIED = Symbol.for('mergen-rota.dependency-planning-verified');
 import { runCorporateWbsSync } from './corporateWbsSyncSchedule.js';
 import { decodeVersion, encodeVersion } from './versionTokens.js';
-import { assertSuccessorsReconciledWithoutDisclosure } from './dependencyReconciliationValidation.js';
 
 // SQL Server GUID değerlerini büyük harf döndürür; istemci küçük harf gönderir.
 // Tüm kimlikler bu iki yardımcı üzerinden kanonikleştirilir, böylece sunucudaki
@@ -1745,50 +1746,6 @@ async function projectRootWbsId(executor, projectId) {
   return id(result.recordset?.[0]?.WbsId) || null;
 }
 
-/**
- * Silme, KAPSAM DIŞI görevlere de yazar mı?
- *
- * Görev silinirken yinelemeleri ayrılır ve ardıl bağımlılıkları temizlenir.
- * Bu ilişkili görevler görünmez ve yöneticinin kapsamı dışında olabilir; tam
- * yetkisi olmayan bir aktör için silme o satırlara dokunmamalıdır.
- */
-async function hasRelatedTasksOutsideScope(executor, actor, taskId) {
-  const req = request(executor);
-  req.input('taskId', sql.UniqueIdentifier, taskId);
-  req.input('managerSicil', sql.Int, actor.sicil);
-  const result = await req.query(`
-    SELECT TOP (1) related.TaskId
-    FROM (
-      SELECT TaskId FROM dbo.MR_Tasks WITH (UPDLOCK, HOLDLOCK) WHERE RecurrenceParentTaskId = @taskId
-      UNION
-      SELECT TaskId FROM dbo.MR_TaskDependencies WITH (UPDLOCK, HOLDLOCK) WHERE PredecessorTaskId = @taskId
-      UNION
-      SELECT PredecessorTaskId AS TaskId
-      FROM dbo.MR_TaskDependencies WITH (UPDLOCK, HOLDLOCK)
-      WHERE TaskId = @taskId
-    ) related
-    WHERE related.TaskId <> @taskId
-      AND NOT EXISTS (
-        SELECT 1
-        FROM dbo.MR_Tasks owned
-        WHERE owned.TaskId = related.TaskId
-          AND owned.CreatedBySicil = @managerSicil
-      )
-      AND (
-        NOT EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees ta WITH (UPDLOCK, HOLDLOCK) WHERE ta.TaskId = related.TaskId)
-        OR EXISTS (
-          SELECT 1 FROM dbo.MR_TaskAssignees ta WITH (UPDLOCK, HOLDLOCK)
-          WHERE ta.TaskId = related.TaskId
-            AND NOT EXISTS (
-              SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-              WHERE es.ManagerSicil = @managerSicil AND es.EmployeeSicil = ta.Sicil
-            )
-        )
-      );
-  `);
-  return Boolean(result.recordset?.length);
-}
-
 /** Görevin kalıcı sorumlu sicilleri (mevcut hâli). */
 async function taskAssigneeSicils(executor, taskId) {
   const req = request(executor);
@@ -1989,18 +1946,12 @@ function assertAssigneeTaskCreateFieldsOnly(task, parent = null) {
 }
 
 /**
- * Bir değişiklik kümesindeki yineleme doğrulamalarının TOPLAM takvim taraması
- * (değerlendirilen gün).
- *
- * Üyelik, bitiş aritmetiği ve süre doğrulaması açık SERIALIZABLE işlem içinde
- * iş günü tarar. Eskiden iş tarama yapılmadan TAHMİN ediliyordu; tahmin
- * tatilleri ve sonraki süre doğrulamasını saymadığı için gerçek iş sınırın
- * katlarına çıkabiliyordu. Sayaç artık her taranan günde düşer
- * (`meterCalendarScans`) ve bittiği anda tarama kesilir; küme açık bir
- * hatayla reddedilir. Sınır, standart haftada temsil edilebilen en uzun
- * süreli ve terminli bir yinelemeyi kabul eder.
+ * Tek azami oluşumun kanıtlanabilir üst sınırı: üyelikte en çok 400 adayın
+ * gün denetimi ve kaydırması; süre/termin sayımları, iki bitiş ve süre
+ * doğrulaması için beş azami takvim taraması. Tatiller her taramada sayılır.
  */
-const RECURRENCE_COMMIT_SCAN_BUDGET_DAYS = 10 * MAX_WORKING_DAY_SPAN;
+const RECURRENCE_COMMIT_SCAN_BUDGET_DAYS = MAX_RECURRENCE_OCCURRENCES * (1 + MAX_WORKING_DAY_SEARCH_CHECKS)
+  + 5 * MAX_CALENDAR_SPAN_DAYS;
 
 /** Bir işlemdeki yineleme doğrulamalarının ortak durumu: şablon planları ve kalan takvim işi. */
 function createRecurrenceCommitContext() {
@@ -2230,6 +2181,7 @@ async function commitTask(executor, actor, task, correlationId, {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Yinelemeler üretildikten sonra tekrar kuralı veya seri planı değiştirilemez.');
   }
 
+  let recurrenceExpectedDuration;
   if (recurrenceParentId) {
     // Yabancı anahtar yalnızca kimliğin var olduğunu kanıtlar. Şablonun aynı
     // projede ve gerçekten bir şablon olduğu burada doğrulanır; aksi hâlde bir
@@ -2291,6 +2243,7 @@ async function commitTask(executor, actor, task, correlationId, {
           }, parentContext)
         };
       });
+      recurrenceExpectedDuration = expectedDuration;
       if (plannedStart !== occurrence.plannedStart || plannedFinish !== occurrence.plannedFinish
         || targetFinish !== (occurrence.targetFinish || null)
         || nullableNumber(task.plannedDurationDays) !== expectedDuration) {
@@ -2379,7 +2332,7 @@ async function commitTask(executor, actor, task, correlationId, {
     }, planContext);
   }
   if (limitedCreatorWrite || assigneeCreate) {
-    plannedDurationDays = calculatePlannedDurationDays({
+    plannedDurationDays = recurrenceExpectedDuration !== undefined ? recurrenceExpectedDuration : calculatePlannedDurationDays({
       projectId,
       calendarId: persistedCalendarId,
       plannedStart,
@@ -2698,43 +2651,17 @@ async function publishAssignmentChanges(executor, actor, correlationId, changes,
   }
 }
 
-async function deleteTask(executor, actor, entry, correlationId, changes = {}) {
+async function deleteTask(executor, actor, entry, correlationId) {
   const taskId = uuid(entry.id);
   const before = await taskRowForUpdate(executor, taskId);
   if (!before) return null;
   const expectedVersion = decodeVersion(entry.version);
   const projectId = id(before.ProjectId);
   const assigneeSicils = await taskAssigneeSicilsForUpdate(executor, taskId);
-  const fullProjectWrite = hasFullProjectWriteAccess(actor, projectId);
-  if (fullProjectWrite) {
-    await assertTaskProjectAccess(executor, actor, projectId, assigneeSicils);
-  } else {
-    await assertActiveProject(executor, projectId);
-    if (Number(before.CreatedBySicil) !== Number(actor.sicil)) {
-      throw new ServerPersistenceError('FORBIDDEN', 'Yalnızca kendi oluşturduğunuz görevleri silebilirsiniz.');
-    }
-    const creatorCanAssign = actor.isExecutive
-      && (await projectRow(executor, projectId))?.SourceType === 'CORPORATE';
-    if (creatorCanAssign && assigneeSicils.some((sicil) => Number(sicil) !== Number(actor.sicil))) {
-      await assertTaskProjectAccess(executor, actor, projectId, assigneeSicils);
-    } else if (assigneeSicils.some((sicil) => Number(sicil) !== Number(actor.sicil))) {
-      throw new ServerPersistenceError('FORBIDDEN', 'Bu görevde başka sorumlular bulunduğu için silemezsiniz.');
-    }
-  }
-  // Silme yalnızca bu satırı değil, yinelemelerini ve ardıllarının bağımlılık
-  // satırlarını da değiştirir. Tam yetkisi olmayan aktör için bu ilişkili
-  // görevlerin de kapsam içinde olduğu doğrulanır; aksi hâlde kapsam içi bir
-  // görevi silmek, hiç görülmeyen görevlere yazardı.
-  if (!fullProjectWrite
-    && await hasRelatedTasksOutsideScope(executor, actor, taskId)) {
-    throw new ServerPersistenceError(
-      'FORBIDDEN',
-      'Bu görev, yetki alanınız dışındaki görevlerle ilişkili (yineleme ya da bağımlılık). Silme işlemi tam proje yetkisi gerektirir.'
-    );
-  }
-  // Ardılların uzlaştırılması bağımlılıkları GÖREMEYEN aktör için yetki
-  // kararından SONRA ve kimliksiz denetlenir (bkz. dependencyReconciliationValidation).
-  if (!fullProjectWrite) await assertSuccessorsReconciledWithoutDisclosure(executor, taskId, changes);
+  // Silme bağımlılıkları da kaldırır; kısmi görüntüde ilişkilerin varlığına
+  // bakmak bile yoklama olur. Yetki kararı ilişki sorgusundan önce sabittir.
+  assertTaskDeleteAccess(actor, projectId);
+  await assertTaskProjectAccess(executor, actor, projectId, assigneeSicils);
   if (!before.RowVersion || Buffer.compare(Buffer.from(before.RowVersion), Buffer.from(expectedVersion)) !== 0) {
     throw new ServerPersistenceError('CONFLICT', 'Görev silinmeden önce başka bir kullanıcı tarafından değiştirildi. Verileri yeniden yükleyin.');
   }
@@ -3013,7 +2940,7 @@ export function createSqlAppRepository() {
       const dependencyPlanningVerified = input?.[DEPENDENCY_PLANNING_VERIFIED] === true;
       const changes = normalizeChanges(input);
       return withSqlTransaction(async (transaction) => {
-        const actor = await observePhase('phase.commit.authorization', () => loadTransactionAuthorizationContext(transaction));
+        const actor = await loadTransactionAuthorizationContext(transaction);
         const correlationId = randomUUID();
         const recurrence = createRecurrenceCommitContext();
         const consumedRootIds = new Set();
@@ -3057,7 +2984,7 @@ export function createSqlAppRepository() {
           propagatedTaskIds.push(...await propagateProjectTagChanges(transaction, actor.sicil, entry.projectId, entry.plan));
         }
         for (const entry of changes.taskDeletes) {
-          const touched = await deleteTask(transaction, actor, entry, correlationId, changes);
+          const touched = await deleteTask(transaction, actor, entry, correlationId);
           if (touched?.projectId) touchedTaskProjects.add(touched.projectId);
           for (const relatedTaskId of touched?.relatedTaskIds || []) relatedTaskIds.add(relatedTaskId);
         }

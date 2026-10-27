@@ -62,7 +62,7 @@ function taskChanges({ assigneeIds }) {
   };
 }
 
-test('birim yöneticisi kendi görevinde sorumlu ekler, çıkarır, etiket ve tarih düzenler; son sürümle silebilir', async () => {
+test('birim yöneticisi kendi görevinde sorumlu ekler, çıkarır, etiket ve tarih düzenler; silme için FULL yetki gerekir', async () => {
   const seed = assignmentSeed();
   seed.executiveScope.push({ ManagerSicil: MANAGER_SICIL, EmployeeSicil: PLAIN_SICIL, ScopeType: 'UNIT' });
   const stack = await createActualStack(seed, { sicil: MANAGER_SICIL });
@@ -75,7 +75,7 @@ test('birim yöneticisi kendi görevinde sorumlu ekler, çıkarır, etiket ve ta
     assert.equal(access.ok, true);
     assert.equal(access.canManageAssignees, true);
     assert.equal(access.canManageStructure, false);
-    assert.equal(access.canDelete, true);
+    assert.equal(access.canDelete, false);
     const originalVersion = stack.state.tasks[0].version;
     const added = await Promise.all([
       stack.persistence.updateTask(NEW_TASK_ID, { assigneeIds: [String(SUBORDINATE_SICIL), String(PLAIN_SICIL)] }),
@@ -90,6 +90,11 @@ test('birim yöneticisi kendi görevinde sorumlu ekler, çıkarır, etiket ve ta
     const renamed = await stack.persistence.updateTask(NEW_TASK_ID, { task: 'Gözden geçirilen iş', targetFinish: '2026-08-24' });
     assert.equal(renamed.ok, true, renamed.error?.message);
     assert.equal(stack.state.tasks[0].targetFinish, '2026-08-24');
+    assert.equal(resolveTaskDeleteAccess(stack.state, NEW_TASK_ID).canDelete, false);
+    await assert.rejects(stack.repository.commitChanges({ taskDeletes: [{ id: NEW_TASK_ID, version: stack.state.tasks[0].version }] }),
+      error => error.code === 'FORBIDDEN' && error.message === 'Görev silme işlemi tam proje yetkisi gerektirir.');
+    stack.db.corporateProjectAccess.push({ ProjectCode: 'P4417041', Sicil: MANAGER_SICIL, RoleCode: 'PROJECT_MANAGER' });
+    await stack.reload();
     assert.equal(resolveTaskDeleteAccess(stack.state, NEW_TASK_ID).canDelete, true);
     const deleted = await stack.persistence.mutate('task/delete', { type: 'task/delete', id: NEW_TASK_ID });
     assert.equal(deleted.ok, true, deleted.error?.message);

@@ -50,10 +50,8 @@ function seesDependencies(actor, projectId) {
 /**
  * Taşınan ya da silinen öncülün ardıllarının aynı değişiklik kümesinde
  * uzlaştırıldığını doğrular. Ardıl kimlikleri hatada yalnızca bu ilişkileri
- * zaten görebilen aktöre döner. Öteki aktörlerde aynı kural temel depoda,
- * işlem yetkisi doğrulandıktan SONRA ve kimliksiz uygulanır
- * (`assertSuccessorsReconciledWithoutDisclosure`); bağımlılıklı taşıma ise
- * kaynak projede FULL yetki ister.
+ * zaten görebilen aktöre döner. Silme ve taşıma kaynak projede FULL yetki
+ * ister; kısmi görüntüde gizli ilişkiler için uzlaştırma istenmez.
  */
 export async function assertTaskDependencyReconciliationCovered(executor, changes, actor) {
   // Aktörsüz çağrı denetimi sessizce atlamaz: görünürlük süzgeci aktör olmadan her öncülü düşürürdü.
@@ -107,25 +105,5 @@ export async function assertTaskDependencyReconciliationCovered(executor, change
       predecessorId: issue.predecessorId,
       taskIds: issue.taskIds
     }
-  });
-}
-
-/**
- * Bağımlılık ilişkilerini GÖREMEYEN aktörün silmesi için aynı uzlaştırma
- * kuralı. Temel depoda silme yetkisi doğrulandıktan SONRA çağrılır; hata
- * ardıl kimliklerini taşımaz.
- */
-export async function assertSuccessorsReconciledWithoutDisclosure(executor, predecessorId, changes = {}) {
-  const predecessor = id(predecessorId);
-  const issue = findTaskDependencyReconciliationIssue({
-    invalidatedPredecessorIds: [predecessor],
-    incomingTaskIdsByPredecessor: new Map([[predecessor, await loadIncomingTaskIds(executor, predecessor)]]),
-    taskUpsertIds: (changes.taskUpserts || []).map((task) => id(task.id)),
-    taskDeleteIds: (changes.taskDeletes || []).map(deleteId).filter(Boolean)
-  });
-  if (!issue) return;
-  throw new ServerPersistenceError('MUTATION_FAILED', issue.message, {
-    status: 400,
-    details: { code: issue.code, predecessorId: issue.predecessorId }
   });
 }

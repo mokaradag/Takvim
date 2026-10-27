@@ -1122,6 +1122,20 @@ test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP ya
   symlinkSync(path.join(shared, 'home'), path.join(dir, 'link'));
   untrusted(run(adapter, path.join(dir, 'link')), 'açık ata altındaki eve yönelen bağlantı', 'HOME_ANCESTOR_UNTRUSTED');
 
+  for (const relative of [['work'], ['.claude', 'settings.json'], ['other-link']]) {
+    const home = mkdtempSync(path.join(dir, 'linked-descendant-'));
+    const outside = mkdtempSync(path.join(dir, 'outside-'));
+    chmodSync(outside, 0o777);
+    const target = path.join(home, ...relative);
+    mkdirSync(path.dirname(target), { recursive: true });
+    const external = relative.length > 1 ? path.join(outside, 'settings.json') : outside;
+    if (relative.length > 1) writeFileSync(external, '{"hooks":{}}');
+    symlinkSync(external, target);
+    untrusted(run(adapter, home), relative.join('/'), 'HOME_SYMLINK');
+    assert.deepEqual(readdirSync(outside), relative.length > 1 ? ['settings.json'] : []);
+    assert.equal(readdirSync(home).some(name => name.startsWith('call-')), false);
+  }
+
   // Eski sürümün izin veren umask ile bıraktığı kendi KLASÖRLERİ yukarıdan aşağı daraltılır ve ev kabul edilir:
   // açık kaldığı sürede başkasının eklediği girdi sahibinden, yazabildiği dosya izninden yakalanırdı.
   const legacy = path.join(dir, 'legacy');
@@ -1141,7 +1155,8 @@ test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP ya
     untrusted(outcome, relative.join('/'), 'HOME_ENTRY_WRITABLE_BY_OTHERS');
     assert.ok(outcome.at?.endsWith(path.join(...relative)), `${outcome.at}`);
   }
-  if (process.getuid() === 0) {
+  const singleUidNamespace = existsSync('/proc/self/uid_map') && readFileSync('/proc/self/uid_map', 'utf8').trim().split(/\s+/).at(-1) === '1';
+  if (process.getuid() === 0 && !singleUidNamespace) {
     // Başka hesabın bıraktığı girdi (yalnızca kök kullanıcıyla kurulabilir): sahibinden reddedilir.
     const home = mkdtempSync(path.join(dir, 'foreign-'));
     mkdirSync(path.join(home, 'work', '.claude'), { recursive: true });
@@ -2502,4 +2517,246 @@ test('4C final convergence: distinct later-part reads score only against their o
   assert.ok(scoreDecision(testCase, wrong, { referenceDate: loaded.referenceDate }).reasons.includes('calls:unrelated'));
   wrong.plan.calls.at(-1).name = 'rota_calendar_inspect';
   assert.ok(scoreDecision(testCase, wrong, { referenceDate: loaded.referenceDate }).reasons.includes('calls:unrelated'));
+});
+
+test('Claude özel ev yürüyüşü: kaybolan alt öğeler geçilir; kök, erişim ve bağlantı hataları reddedilir', async (t) => {
+  const fs = await import('node:fs');
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { assertPrivateTree, WINDOWS_HOME_CHECK } = await import('../scripts/planner-claude-model.mjs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(tmpdir(), 'claude-walk-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  if (process.platform === 'win32') {
+    const shell = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const run = script => spawnSync(shell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8', env: { ...process.env, ROTA_PLANNER_HOME: dir }
+    });
+    for (const leaf of ['vanishing-file', 'vanishing-directory']) {
+      const target = path.join(dir, leaf);
+      if (leaf.endsWith('directory')) fs.mkdirSync(target); else fs.writeFileSync(target, '');
+      const remove = `if ([IO.Path]::GetFileName($e) -eq '${leaf}') { if ([IO.Directory]::Exists($e)) { [IO.Directory]::Delete($e) } else { [IO.File]::Delete($e) } }; `;
+      for (const point of ['$a=[IO.File]::GetAttributes($e);', '$acl=[IO.Directory]::GetAccessControl($e)', '$acl=[IO.File]::GetAccessControl($e)']) {
+        if (!fs.existsSync(target)) { if (leaf.endsWith('directory')) fs.mkdirSync(target); else fs.writeFileSync(target, ''); }
+        const checked = run(WINDOWS_HOME_CHECK.replace(point, `${remove}${point}`));
+        assert.equal(checked.status, 0, `${point}: ${checked.stderr}`);
+      }
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+    fs.mkdirSync(path.join(dir, 'queued'));
+    const queued = run(WINDOWS_HOME_CHECK.replace('$entries=[IO.Directory]::GetFileSystemEntries($d)',
+      "if ([IO.Path]::GetFileName($d) -eq 'queued') { [IO.Directory]::Delete($d) }; $entries=[IO.Directory]::GetFileSystemEntries($d)"));
+    assert.equal(queued.status, 0, queued.stderr);
+    assert.notEqual(run(WINDOWS_HOME_CHECK.replace('$a=[IO.File]::GetAttributes($e);', "throw [UnauthorizedAccessException]::new('denied');")).status, 0);
+    const failure = run(WINDOWS_HOME_CHECK.replace('$a=[IO.File]::GetAttributes($e);', "throw [IO.IOException]::new('unreadable metadata');"));
+    assert.notEqual(failure.status, 0);
+    const rootGone = run(WINDOWS_HOME_CHECK.replace('$pending=New-Object Collections.Stack;', "[IO.Directory]::Delete($root,$true); $pending=New-Object Collections.Stack;"));
+    assert.notEqual(rootGone.status, 0);
+    return;
+  }
+  const realRead = fs.default.readdirSync;
+  const realStat = fs.default.lstatSync;
+  try {
+    for (const directory of [false, true]) {
+      const target = path.join(dir, 'transient');
+      if (directory) fs.mkdirSync(target); else fs.writeFileSync(target, '');
+      t.mock.method(fs.default, 'readdirSync', (...args) => {
+        const result = realRead(...args);
+        if (args[0] === dir) fs.rmSync(target, { recursive: true });
+        return result;
+      });
+      syncBuiltinESMExports();
+      assert.doesNotThrow(() => assertPrivateTree(dir, process.getuid()));
+      t.mock.restoreAll(); syncBuiltinESMExports();
+    }
+    const child = path.join(dir, 'queued');
+    fs.mkdirSync(child);
+    t.mock.method(fs.default, 'readdirSync', (...args) => {
+      if (args[0] === child) fs.rmSync(child, { recursive: true });
+      return realRead(...args);
+    });
+    syncBuiltinESMExports();
+    assert.doesNotThrow(() => assertPrivateTree(dir, process.getuid()));
+    t.mock.restoreAll(); syncBuiltinESMExports();
+    for (const directory of [false, true]) {
+      if (directory) fs.mkdirSync(child); else fs.writeFileSync(child, '');
+      t.mock.method(fs.default, 'lstatSync', (...args) => {
+        const stat = realStat(...args);
+        return args[0] === child ? Object.assign(Object.create(stat), { uid: process.getuid() + 1 }) : stat;
+      });
+      syncBuiltinESMExports();
+      assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.detail?.reason === 'HOME_ENTRY_FOREIGN_OWNER');
+      t.mock.restoreAll(); syncBuiltinESMExports(); fs.rmSync(child, { recursive: true });
+    }
+    for (const code of ['EACCES', 'EPERM', 'EIO']) {
+      fs.writeFileSync(child, '');
+      t.mock.method(fs.default, 'lstatSync', (...args) => {
+        if (args[0] === child) throw Object.assign(new Error(code), { code });
+        return realStat(...args);
+      });
+      syncBuiltinESMExports();
+      assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.code === code);
+      t.mock.restoreAll(); syncBuiltinESMExports(); fs.rmSync(child);
+    }
+    const childProcess = await import('node:child_process');
+    const peer = path.join(dir, 'remaining');
+    fs.writeFileSync(child, ''); fs.writeFileSync(peer, '');
+    let removed = false;
+    t.mock.method(childProcess.default, 'spawnSync', (command, args, options) => {
+      if (command === '/bin/ls' && args.includes(child) && !removed) { fs.rmSync(child); removed = true; }
+      return spawnSync(command, args, options);
+    });
+    syncBuiltinESMExports();
+    assert.doesNotThrow(() => assertPrivateTree(dir, process.getuid()));
+    assert.equal(removed, true, 'dosya stat ile toplu ACL okuması arasında silinir');
+    t.mock.restoreAll(); syncBuiltinESMExports();
+    t.mock.method(childProcess.default, 'spawnSync', (command, args, options) => (
+      command === '/bin/ls' && args.includes(peer) ? { status: 2, stdout: '', stderr: 'permission denied' } : spawnSync(command, args, options)
+    ));
+    syncBuiltinESMExports();
+    assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.detail?.reason === 'HOME_ACL_UNVERIFIED');
+    t.mock.restoreAll(); syncBuiltinESMExports(); fs.rmSync(peer);
+    fs.writeFileSync(child, '');
+    let replaced = false;
+    t.mock.method(childProcess.default, 'spawnSync', (command, args, options) => {
+      const result = spawnSync(command, args, options);
+      if (command === '/bin/ls' && args.includes(child) && !replaced) {
+        fs.rmSync(child); fs.symlinkSync(tmpdir(), child); replaced = true;
+      }
+      return result;
+    });
+    syncBuiltinESMExports();
+    assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.detail?.reason === 'HOME_SYMLINK');
+    assert.equal(replaced, true, 'toplu metadata okumasından sonra beliren bağlantı reddedilir');
+    t.mock.restoreAll(); syncBuiltinESMExports(); fs.rmSync(child);
+    assert.throws(() => assertPrivateTree(path.join(dir, 'missing-root'), process.getuid()), { code: 'ENOENT' });
+    fs.mkdirSync(child);
+    t.mock.method(fs.default, 'readdirSync', (...args) => {
+      const result = realRead(...args);
+      if (args[0] === dir) { fs.rmSync(child, { recursive: true }); fs.symlinkSync(tmpdir(), child); }
+      return result;
+    });
+    syncBuiltinESMExports();
+    assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.detail?.reason === 'HOME_SYMLINK');
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+});
+
+test('Claude POSIX ACL: özel mod genişletilmiş ya da miras alınan yazma hakkını gizleyemez', async (t) => {
+  if (process.platform === 'win32') {
+    // Windows ACL kararı ana ev testinde gerçek icacls ile doğrulanır.
+    const { WINDOWS_HOME_CHECK } = await import('../scripts/planner-claude-model.mjs');
+    assert.ok(WINDOWS_HOME_CHECK.includes('GetAccessRules'));
+    return;
+  }
+  const fs = await import('node:fs');
+  const { spawnSync } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { assertPrivateTree } = await import('../scripts/planner-claude-model.mjs');
+  const dir = fs.mkdtempSync(path.join(tmpdir(), 'claude-acl-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(home, { mode: 0o700 });
+  if (process.platform === 'linux') {
+    // Gerçek Linux POSIX ACL xattr; setfacl paketi gerektirmez. Varsayılan ACL chmod 0700 ile silinmez.
+    const apply = spawnSync('python3', ['-c', `import os,struct,sys
+entries=[(1,7,0xffffffff),(2,7,os.getuid()),(4,0,0xffffffff),(16,7,0xffffffff),(32,0,0xffffffff)]
+acl=struct.pack('<I',2)+b''.join(struct.pack('<HHI',*entry) for entry in entries)
+os.setxattr(sys.argv[1],'system.posix_acl_default',acl)`, home], { encoding: 'utf8' });
+    assert.equal(apply.status, 0, apply.stderr);
+  } else {
+    const apply = spawnSync('/bin/chmod', ['+a', 'everyone allow write,append,delete,add_file,add_subdirectory,file_inherit,directory_inherit', home], { encoding: 'utf8' });
+    assert.equal(apply.status, 0, apply.stderr);
+  }
+  fs.chmodSync(home, 0o700);
+  assert.equal(fs.lstatSync(home).mode & 0o077, 0);
+  assert.throws(() => assertPrivateTree(home, process.getuid()), error => error.detail?.reason === 'HOME_ACL_UNTRUSTED');
+  const log = path.join(dir, 'budget.jsonl');
+  const attempt = spawnSync(process.execPath, ['scripts/planner-claude-model.mjs'], {
+    input: JSON.stringify({ messages: [{ role: 'system', content: 'x' }], tools: [], toolChoice: 'auto' }), encoding: 'utf8',
+    env: { ...commandPlatformEnv(), PATH: '', PLANNER_CLAUDE_HOME: home, PLANNER_CLAUDE_LOG: log }
+  });
+  assert.equal(JSON.parse(attempt.stdout).error, 'PLANNER_HOME_UNTRUSTED');
+  assert.equal(fs.readdirSync(home).length, 0, 'ACL reddi ayar veya çalışma klasörü yazmaz');
+  assert.equal(fs.readFileSync(log, 'utf8').trim().split('\n').some(line => JSON.parse(line).reserved), false);
+  const batch = path.join(dir, 'batch');
+  fs.mkdirSync(batch, { mode: 0o700 });
+  for (let index = 0; index < 160; index += 1) fs.writeFileSync(path.join(batch, `settings-${String(index).padStart(3, '0')}.json`), '{}', { mode: 0o600 });
+  for (const name of ['line\nbreak.json', 'tab\tname.json']) fs.writeFileSync(path.join(batch, name), '{}', { mode: 0o600 });
+  const childProcess = await import('node:child_process');
+  const { syncBuiltinESMExports } = await import('node:module');
+  let scans = 0;
+  t.mock.method(childProcess.default, 'spawnSync', (...args) => {
+    if (args[0] === '/bin/ls') scans += 1;
+    return spawnSync(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.doesNotThrow(() => assertPrivateTree(batch, process.getuid()));
+    assert.ok(scans <= 6, `162 dosya için dosya başına süreç açılmaz (${scans})`);
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  const settings = path.join(batch, 'settings-080.json');
+  if (process.platform === 'linux') {
+    const apply = spawnSync('python3', ['-c', `import os,struct,sys
+entries=[(1,6,0xffffffff),(2,4,os.getuid()),(4,0,0xffffffff),(16,4,0xffffffff),(32,0,0xffffffff)]
+os.setxattr(sys.argv[1],'system.posix_acl_access',struct.pack('<I',2)+b''.join(struct.pack('<HHI',*entry) for entry in entries))`, settings], { encoding: 'utf8' });
+    assert.equal(apply.status, 0, apply.stderr);
+  } else {
+    const apply = spawnSync('/bin/chmod', ['+a', 'everyone allow write,append,delete', settings], { encoding: 'utf8' });
+    assert.equal(apply.status, 0, apply.stderr);
+  }
+  assert.throws(() => assertPrivateTree(batch, process.getuid()), error => error.detail?.reason === 'HOME_ACL_UNTRUSTED', 'toplu tarama ortadaki güvensiz ACL dosyasını atlamaz');
+});
+
+
+test('Claude macOS ACL ayrıştırması xattr göstergesinin gizlediği yazmayı ve doğrulanamayan metadatayı reddeder', async (t) => {
+  if (process.platform === 'win32') return;
+  const fs = await import('node:fs');
+  const childProcess = await import('node:child_process');
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { assertPrivateTree } = await import('../scripts/planner-claude-model.mjs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(tmpdir(), 'claude-acl-parser-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  let result;
+  t.mock.method(childProcess.default, 'spawnSync', () => result);
+  syncBuiltinESMExports();
+  Object.defineProperty(process, 'platform', { value: 'darwin' });
+  try {
+    for (const marker of ['+', '@']) {
+      result = { status: 0, stdout: `drwx------${marker} 1 owner group 0 Jan 1 home\n 0: user:other allow write,append,file_inherit\n` };
+      assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.detail?.reason === 'HOME_ACL_UNTRUSTED');
+    }
+    result = { status: 0, stdout: 'drwx------@ 1 owner group 0 Jan 1 home\n 0: group:everyone deny delete\n' };
+    assert.doesNotThrow(() => assertPrivateTree(dir, process.getuid()));
+    for (const invalid of [{ status: 1, stdout: '' }, { status: 0, stdout: 'drwx------? unknown' }, { status: 0, stdout: 'drwx------+ 1 owner group 0 Jan 1 home\nmalformed ACL\n' }]) {
+      result = invalid;
+      assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.detail?.reason === 'HOME_ACL_UNVERIFIED');
+    }
+  } finally {
+    Object.defineProperty(process, 'platform', platform);
+    t.mock.restoreAll(); syncBuiltinESMExports();
+  }
+});
+
+test('Claude macOS kapısı üç hedef testin tamamını zorunlu tutar', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const workflow = readFileSync('.github/workflows/quality.yml', 'utf8');
+  const extract = source => source.replaceAll('\r\n', '\n').split("node --input-type=module <<'NODE'\n")[1]?.split('\n          NODE')[0];
+  const script = extract(workflow);
+  assert.ok(script, 'macOS kapısının çalıştırılabilir gövdesi bulunur');
+  assert.equal(extract(workflow.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n')), script, 'Windows CRLF gövdesi aynı betiğe çözülür');
+  const body = script.split('\n').map(line => line.slice(10)).join('\n');
+  const selector = '--test-name-pattern=Claude.*(özel ev|POSIX ACL|başka kullanıcının)';
+  for (const [selection, count] of [['NO_SUCH_PLANNER_TEST', 0], ['Claude.*POSIX ACL', 1], ['Claude.*(POSIX ACL|özel ev)', 2], ['Claude.*(özel ev|POSIX ACL|başka kullanıcının)', 3]]) {
+    const result = spawnSync(process.execPath, ['--input-type=module'], {
+      input: body.replace(selector, `--test-name-pattern=${selection}`), env: commandPlatformEnv(), encoding: 'utf8', timeout: 120000
+    });
+    assert.equal(result.error, undefined, result.error?.message);
+    assert.ok(result.stdout.split('\n').map(line => line.trim()).includes(count === 0 ? '1..0' : `# pass ${count}`), result.stdout + result.stderr);
+    assert.equal(result.status, count === 3 ? 0 : 1, `${count} hedef test: ${result.stdout}${result.stderr}`);
+  }
 });

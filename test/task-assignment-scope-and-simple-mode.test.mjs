@@ -304,3 +304,25 @@ test('Temel Kip düzenleyicisi gelişmiş alanları açmaz', () => {
   // Buna karşılık hatırlatma eylemi her iki kipte de bulunur.
   assert.match(drawer, /<TaskReminderButton task=\{task\}/);
 });
+
+test('atama kapsamı kaynak projede FULL olmadan taşıma sunmaz; aynı proje ve FULL kaynak korunur', () => {
+  const state = executiveState();
+  const expected = {
+    ok: false, code: 'PROJECT_WRITE_FORBIDDEN', field: 'projectId', projectId: FULL_PROJECT.id,
+    message: 'Görev yalnızca kaynak projede tam proje yetkisiyle başka projeye taşınabilir.'
+  };
+  for (const patch of [{ projectId: FULL_PROJECT.id }, { proje: FULL_PROJECT.name }]) {
+    assert.deepEqual(resolveTaskMutationAccess(state, 't-scope', patch), expected);
+  }
+  assert.equal(resolveTaskMutationAccess(state, 't-scope', { projectId: SCOPE_PROJECT.id }).ok, true);
+  assert.equal(resolveTaskMutationAccess(state, 't-scope', { task: 'Aynı projede düzenleme' }).ok, true);
+  assert.equal(resolveTaskMutationAccess(state, 't-full', { projectId: SCOPE_PROJECT.id }).ok, true);
+
+  const source = 'd5d70aec-0a88-f111-9136-00505699bacd';
+  const destination = 'd5d70aec-0a88-f111-9136-00505699bace';
+  const actual = { ...state, projects: [{ id: source, accessLevel: 'PARTIAL' }],
+    assignableProjects: [{ id: source, accessLevel: 'ASSIGN' }, { id: destination, accessLevel: 'ASSIGN' }],
+    tasks: [{ id: 'actual-task', projectId: source }] };
+  assert.equal(resolveTaskMutationAccess(actual, 'actual-task', { projectId: source.toUpperCase() }).ok, true);
+  assert.deepEqual(resolveTaskMutationAccess(actual, 'actual-task', { projectId: destination.toUpperCase() }), { ...expected, projectId: destination });
+});

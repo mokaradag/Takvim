@@ -341,7 +341,7 @@ test('geçersiz takvim günü sunucuda reddedilir', async () => {
   }
 });
 
-test('sınırlı oluşturucu kendi görevinde plan, hedef ve gerçekleşen tarihlerle mevcut WBS seçer; yapıyı değiştiremez ve solo görevi silebilir', async () => {
+test('sınırlı oluşturucu kendi görevinde plan, hedef ve gerçekleşen tarihlerle mevcut WBS seçer; yapıyı değiştiremez ve silme FULL ister', async () => {
   const original = seed();
   const creatorSeed = seed({
     tasks: [{ ...original.tasks[0], ActualStart: '2026-09-01', ActualFinish: '2026-09-02' }],
@@ -393,6 +393,9 @@ test('sınırlı oluşturucu kendi görevinde plan, hedef ve gerçekleşen tarih
     );
 
     const visible = directlyUpdated.taskUpserts[0];
+    await assert.rejects(stack.repository.commitChanges({ taskDeletes: [{ id: TASK_ID, version: visible.version }] }),
+      error => error.code === 'FORBIDDEN' && error.message === 'Görev silme işlemi tam proje yetkisi gerektirir.');
+    stack.db.projectAccess.push({ ProjectId: PROJECT_ID, Sicil: CREATOR, AccessLevel: 'FULL', GrantSource: 'MANUAL_GRANT', IsActive: 1 });
     const deleted = await stack.repository.commitChanges({ taskDeletes: [{ id: TASK_ID, version: visible.version }] });
     assert.deepEqual(deleted.taskDeletes, [TASK_ID]);
     assert.equal(stack.db.tasks.length, 0);
@@ -407,7 +410,7 @@ test('oluşturucu başka sorumlu bulunduğunda ve oluşturucu olmayan sorumlu he
   try {
     await assert.rejects(
       creatorStack.repository.commitChanges({ taskDeletes: [{ id: TASK_ID, version: creatorStack.state.tasks[0].version }] }),
-      (error) => error.code === 'FORBIDDEN' && /başka sorumlular/.test(error.message)
+      (error) => error.code === 'FORBIDDEN' && error.message === 'Görev silme işlemi tam proje yetkisi gerektirir.'
     );
   } finally {
     await creatorStack.dispose();
@@ -417,7 +420,7 @@ test('oluşturucu başka sorumlu bulunduğunda ve oluşturucu olmayan sorumlu he
   try {
     await assert.rejects(
       assigneeStack.repository.commitChanges({ taskDeletes: [{ id: TASK_ID, version: assigneeStack.state.tasks[0].version }] }),
-      (error) => error.code === 'FORBIDDEN' && /kendi oluşturduğunuz/.test(error.message)
+      (error) => error.code === 'FORBIDDEN' && error.message === 'Görev silme işlemi tam proje yetkisi gerektirir.'
     );
   } finally {
     await assigneeStack.dispose();
@@ -658,7 +661,7 @@ test('sınırlı oluşturucu kapsam dışı öncül bağı olan görevi silemez'
     const task = stack.state.tasks.find((entry) => entry.id === TASK_ID);
     await assert.rejects(
       stack.repository.commitChanges({ taskDeletes: [{ id: TASK_ID, version: task.version }] }),
-      (error) => error.code === 'FORBIDDEN' && /yetki alanınız dışındaki/.test(error.message)
+      (error) => error.code === 'FORBIDDEN' && error.message === 'Görev silme işlemi tam proje yetkisi gerektirir.'
     );
     assert.equal(stack.db.tasks.some((entry) => String(entry.TaskId).toLowerCase() === TASK_ID), true);
     assert.equal(stack.db.taskDependencies.length, 1);
@@ -667,7 +670,7 @@ test('sınırlı oluşturucu kapsam dışı öncül bağı olan görevi silemez'
   }
 });
 
-test('sınırlı oluşturucu kendi oluşturduğu sorumlusuz yinelemeyi ayırarak şablonu silebilir', async () => {
+test('şablon silme FULL yetkiyle sorumlusuz yinelemeyi ayırır', async () => {
   const childId = '33333333-3333-4333-8333-777777777779';
   const base = seed();
   const stack = await createActualStack(seed({
@@ -686,6 +689,10 @@ test('sınırlı oluşturucu kendi oluşturduğu sorumlusuz yinelemeyi ayırarak
   }), { sicil: CREATOR, corporateWbsSource: false });
   try {
     const template = stack.state.tasks.find((entry) => entry.id === TASK_ID);
+    await assert.rejects(stack.repository.commitChanges({ taskDeletes: [{ id: TASK_ID, version: template.version }] }),
+      error => error.code === 'FORBIDDEN' && error.message === 'Görev silme işlemi tam proje yetkisi gerektirir.');
+    assert.equal(stack.db.tasks.length, 2);
+    stack.db.projectAccess.push({ ProjectId: PROJECT_ID, Sicil: CREATOR, AccessLevel: 'FULL', GrantSource: 'MANUAL_GRANT', IsActive: 1 });
     const deleted = await stack.repository.commitChanges({
       taskDeletes: [{ id: TASK_ID, version: template.version }]
     });
@@ -705,17 +712,14 @@ test('görev silme, yıkıcı deyimlerden önce görev ve ilişki aralıkların�
   assert.ok(start >= 0, 'deleteTask gövdesi bulunmalıdır');
   assert.ok(end > start, 'deleteWbs işareti deleteTask sonrasında bulunmalıdır');
   const body = source.slice(start, end);
-  const scopeStart = source.indexOf('async function hasRelatedTasksOutsideScope');
-  const scopeEnd = source.indexOf('async function taskAssigneeSicils', scopeStart);
-  assert.ok(scopeStart >= 0, 'ilişkili görev kapsam denetimi bulunmalıdır');
-  assert.ok(scopeEnd > scopeStart, 'sorumlu okuma işareti kapsam denetiminden sonra bulunmalıdır');
-  const scopeBody = source.slice(scopeStart, scopeEnd);
   assert.match(body, /taskRowForUpdate\(executor, taskId\)/);
   assert.match(body, /taskAssigneeSicilsForUpdate\(executor, taskId\)/);
-  assert.match(body, /hasRelatedTasksOutsideScope\(executor, actor, taskId\)/);
-  assert.match(scopeBody, /MR_TaskDependencies WITH \(UPDLOCK, HOLDLOCK\).*PredecessorTaskId = @taskId/s);
-  assert.match(scopeBody, /MR_TaskDependencies WITH \(UPDLOCK, HOLDLOCK\)[\s\S]*WHERE TaskId = @taskId/);
-  assert.match(scopeBody, /MR_Tasks WITH \(UPDLOCK, HOLDLOCK\).*RecurrenceParentTaskId = @taskId/s);
+  const gate = body.indexOf('assertTaskDeleteAccess(actor, projectId)');
+  const mutation = body.indexOf('const result = await req.query');
+  assert.ok(gate >= 0 && mutation > gate, 'FULL yetki yıkıcı SQL öncesinde doğrulanır');
+  assert.ok(source.includes('assertTaskDeleteAccess'));
+  assert.doesNotMatch(body.slice(0, gate), /MR_TaskDependencies/);
+
 });
 
 test('WBS kataloğu görev kapsamlı projeleri satır başına görev sorgulamadan önceden hesaplar', () => {

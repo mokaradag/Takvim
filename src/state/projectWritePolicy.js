@@ -1,3 +1,4 @@
+import { sameActualId } from '../domain/identity/actualId.js';
 import { CORPORATE_WBS_READ_ONLY_MESSAGE, supportsManualWbsEditing } from '../domain/projectTypes.js';
 
 export { CORPORATE_WBS_READ_ONLY_MESSAGE };
@@ -12,7 +13,7 @@ function projectId(value) {
 
 function findProject(projects = [], value = null) {
   const id = projectId(value);
-  return id ? (projects || []).find((project) => String(project.id) === id) || null : null;
+  return id ? (projects || []).find((project) => sameActualId(project.id, id)) || null : null;
 }
 
 function findProjectByName(projects = [], value = '') {
@@ -99,7 +100,7 @@ export function canAssignTasksInProject(state = {}, projectId = null) {
 function findAssignableProject(state = {}, value = null) {
   const id = projectId(value);
   if (!id) return null;
-  return taskAssignableProjects(state).find((project) => String(project.id) === id) || null;
+  return taskAssignableProjects(state).find((project) => sameActualId(project.id, id)) || null;
 }
 
 export function resolveTaskCreationProject(state = {}, requestedProjectId = null) {
@@ -211,9 +212,6 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
         message: 'Görev oluşturucusu tarih ve mevcut WBS seçimini yönetebilir; proje, sorumlu ve genel proje yapısını yönetemez.'
       };
     }
-    const visibleAssignees = (task.assigneeIds || []).map(String);
-    const hasOtherAssignee = visibleAssignees.some((id) => !currentUserId || id !== currentUserId)
-      || Number(task.assigneeCount ?? visibleAssignees.length) > visibleAssignees.length;
     return {
       ok: true,
       task,
@@ -232,8 +230,8 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       // Görevi kendisi oluşturduğu için HEDEF bitişi de belirleyebilir.
       canEditTargetFinish: true,
       canProposeSchedule: false,
-      canDelete: creatorCanAssign || !hasOtherAssignee,
-      deleteReason: !creatorCanAssign && hasOtherAssignee ? 'Bu görevde başka sorumlular bulunduğu için silemezsiniz.' : null
+      canDelete: false,
+      deleteReason: 'Görev silme işlemi tam proje yetkisi gerektirir.'
     };
   }
 
@@ -281,7 +279,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       canEditTargetFinish: false,
       canProposeSchedule: !isTaskCreator,
       canDelete: false,
-      deleteReason: 'Yalnızca kendi oluşturduğunuz görevleri silebilirsiniz.'
+      deleteReason: 'Görev silme işlemi tam proje yetkisi gerektirir.'
     };
   }
 
@@ -291,6 +289,16 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
   } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'proje')) {
     destinationProject = findProjectByName(state.projects, patch.proje)
       || findProjectByName(state.assignableProjects, patch.proje);
+  }
+
+  if (!hasFullSourceProject && destinationProject && !sameActualId(destinationProject.id, task.projectId)) {
+    return {
+      ok: false,
+      code: 'PROJECT_WRITE_FORBIDDEN',
+      field: 'projectId',
+      projectId: destinationProject.id,
+      message: 'Görev yalnızca kaynak projede tam proje yetkisiyle başka projeye taşınabilir.'
+    };
   }
 
   if (!canAssignTasksInProject(state, destinationProject?.id)) {

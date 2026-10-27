@@ -2,7 +2,7 @@ import 'server-only';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
-import { assertCanCreateManualProject, assertProjectWriteAccess } from '../authorization/authorization.js';
+import { assertCanCreateManualProject, assertProjectWriteAccess, assertTaskDeleteAccess } from '../authorization/authorization.js';
 import { loadTransactionAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
 import { observePhase } from '../observability/observeOperation.js';
 import { canonicalizeCommitChanges } from './commitChangeValidation.js';
@@ -171,10 +171,9 @@ export function createOrderedSqlAppRepository() {
         // paylaşımlı kilidini bekleyerek kilitlenebilir. Sıra açıklama sınırı
         // gereğidir; kurban işlem baştan yinelenir ve kazananın ardından ya
         // tamamlanır ya da eskimiş sürüm çakışması alır.
-        let actor;
+        const actor = await loadTransactionAuthorizationContext(transaction);
         let storedTaskProjects;
         await observePhase('phase.commit.intent-validation', async () => {
-          actor = await loadTransactionAuthorizationContext(transaction);
           // `projectDeletes` isteğe bağlıdır ve kanonikleştirme onu `undefined`
           // olarak korur: doğrudan `.length` okuması, alanı hiç göndermeyen
           // (tamamen geçerli) bir istekte işlem başlamadan TypeError üretiyordu.
@@ -184,7 +183,8 @@ export function createOrderedSqlAppRepository() {
           storedTaskProjects = await assertUpsertIntentMatchesPersistence(transaction, orderedChanges, actor);
           const createdProjectIds = await assertProjectUpsertsAuthorized(transaction, orderedChanges, actor);
           await assertManualProjectCodesAvailable(transaction, orderedChanges);
-          await assertDeleteIntentMatchesPersistence(transaction, orderedChanges, actor);
+          const deletedTaskProjects = await assertDeleteIntentMatchesPersistence(transaction, orderedChanges, actor);
+          for (const projectId of deletedTaskProjects.values()) assertTaskDeleteAccess(actor, projectId);
           await assertTaskTargetsDisclosable(transaction, orderedChanges, actor, storedTaskProjects, createdProjectIds);
         });
         await observePhase('phase.commit.dependency-reconciliation', async () => {

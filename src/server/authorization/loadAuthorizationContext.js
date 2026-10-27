@@ -2,6 +2,7 @@ import 'server-only';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { getSqlPool, sql } from '../db/pool.js';
 import { getTrustedCurrentSicil } from '../identity/currentUserProvider.js';
+import { observePhase } from '../observability/observeOperation.js';
 import { ServerPersistenceError } from '../errors.js';
 import { ACCESS_REASONS, deriveEffectiveAccess, hasTaskAssignmentScope } from './authorization.js';
 
@@ -44,7 +45,7 @@ const transactionAuthorization = new WeakMap();
 export function loadTransactionAuthorizationContext(transaction) {
   let context = transactionAuthorization.get(transaction);
   if (!context) {
-    context = loadAuthorizationContext(transaction);
+    context = observePhase('phase.commit.authorization', () => loadAuthorizationContext(transaction));
     transactionAuthorization.set(transaction, context);
   }
   return context;

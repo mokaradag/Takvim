@@ -112,3 +112,11 @@ export function projectSchedulingCapability(accessLevel) {
     ? { canRunCompleteCpm: true, canShowCriticalPath: true }
     : { canRunCompleteCpm: false, canShowCriticalPath: false };
 }
+
+/** Silme gizli bağımlılıkları da değiştirir; ilişki varlığı yetki kararına katılmaz. */
+export function assertTaskDeleteAccess(actor, projectId) {
+  const project = canonicalActualId(projectId) ?? String(projectId);
+  if (!actor.isSystemAdmin && actor.effective.access.get(project)?.accessLevel !== 'FULL') {
+    throw new ServerPersistenceError('FORBIDDEN', 'Görev silme işlemi tam proje yetkisi gerektirir.');
+  }
+}

@@ -206,7 +206,7 @@ test('atama kapsamı oluşturucu olmadan görevi silemez ve kapsam dışı yinel
       stack.repository.commitChanges({ taskDeletes: [{ id: visible.id, version: visible.version }] }),
       (error) => {
         assert.equal(error.code, 'FORBIDDEN');
-        assert.match(error.message, /kendi oluşturduğunuz görevleri/i);
+        assert.equal(error.message, 'Görev silme işlemi tam proje yetkisi gerektirir.');
         return true;
       }
     );

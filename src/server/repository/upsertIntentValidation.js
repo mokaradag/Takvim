@@ -163,6 +163,7 @@ export async function assertUpsertIntentMatchesPersistence(executor, changes = {
 }
 
 export async function assertDeleteIntentMatchesPersistence(executor, changes = {}, actor = null) {
+  const storedTaskProjects = new Map();
   for (const target of DELETE_TARGETS) {
     const entries = [...(changes[target.collection] || [])]
       .map(normalizedDelete)
@@ -171,6 +172,7 @@ export async function assertDeleteIntentMatchesPersistence(executor, changes = {
     for (const entry of entries) {
       const id = String(entry.id);
       const projectId = await targetProjectForUpdate(executor, target, id);
+      if (projectId && target.entityType === 'TASK') storedTaskProjects.set(id, projectId);
       const issue = findDeleteIntentIssue({
         exists: Boolean(projectId) && await observableTo(executor, actor, target.entityType, id, projectId),
         version: entry.version,
@@ -189,4 +191,5 @@ export async function assertDeleteIntentMatchesPersistence(executor, changes = {
       }
     }
   }
+  return storedTaskProjects;
 }

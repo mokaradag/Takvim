@@ -64,6 +64,7 @@ export const DEFAULT_CALENDAR = Object.freeze({
  * Sınır, BOZUK bir takvimi hatalı sonuca değil, giriş tarihine düşürür.
  */
 const BASE_CALENDAR_SCAN_DAYS = 3660;
+export const MAX_WORKING_DAY_SEARCH_CHECKS = BASE_CALENDAR_SCAN_DAYS + 1;
 
 /**
  * `addWorkingDays` için taranacak takvim günü bütçesi.

@@ -414,7 +414,7 @@ function runClaude(args, env, cwd, input, { command = 'claude', prefixArgs = [] 
  * sıfırdan farklı çıkış kodudur. Denetimin süresi model bütçesinden ayrıdır.
  */
 const HOME_CHECK_TIMEOUT_MS = 30000;
-const WINDOWS_HOME_CHECK = "$ErrorActionPreference='Stop'; $sid=[Security.Principal.SecurityIdentifier]; "
+export const WINDOWS_HOME_CHECK = "$ErrorActionPreference='Stop'; $sid=[Security.Principal.SecurityIdentifier]; "
   + "$trusted=@([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544',"
   + "'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'); $write=0x500D0156; "
   + "function Unsafe($acl, $mask, $inheritable) { if ($trusted -notcontains $acl.GetOwner($sid).Value) { return $true }; "
@@ -424,12 +424,19 @@ const WINDOWS_HOME_CHECK = "$ErrorActionPreference='Stop'; $sid=[Security.Princi
   + "function Reject($code, $path) { [Console]::Out.Write($path); exit $code }; "
   + "$root=$env:ROTA_PLANNER_HOME; if (Unsafe ([IO.Directory]::GetAccessControl($root)) $write $true) { Reject 3 $root }; "
   + "$p=[IO.Path]::GetDirectoryName($root); while ($p) { if (Unsafe ([IO.Directory]::GetAccessControl($p)) 0x100D0040 $false) { Reject 3 $p }; "
-  + "$p=[IO.Path]::GetDirectoryName($p) }; [void][IO.Directory]::CreateDirectory([IO.Path]::Combine($root,'work')); "
+  + "$p=[IO.Path]::GetDirectoryName($p) }; "
+  + "function Gone($record) { $cause=$record.Exception.GetBaseException(); return ($cause -is [IO.FileNotFoundException] -or $cause -is [IO.DirectoryNotFoundException]) }; "
   + "$pending=New-Object Collections.Stack; $pending.Push($root); while ($pending.Count) { $d=$pending.Pop(); "
-  + "foreach ($e in [IO.Directory]::GetFileSystemEntries($d)) { $a=[IO.File]::GetAttributes($e); "
+  + "try { $entries=[IO.Directory]::GetFileSystemEntries($d) } catch { if ($d -ne $root -and (Gone $_)) { continue }; throw }; "
+  + "foreach ($e in $entries) { try { $a=[IO.File]::GetAttributes($e); "
   + "if ($a -band [IO.FileAttributes]::ReparsePoint) { Reject 4 $e }; "
-  + "if ($a -band [IO.FileAttributes]::Directory) { $acl=[IO.Directory]::GetAccessControl($e); $pending.Push($e) } "
-  + "else { $acl=[IO.File]::GetAccessControl($e) }; if (Unsafe $acl $write $true) { Reject 3 $e } } }; exit 0";
+  + "if ($a -band [IO.FileAttributes]::Directory) { $acl=[IO.Directory]::GetAccessControl($e) } "
+  + "else { $acl=[IO.File]::GetAccessControl($e) }; if (Unsafe $acl $write $true) { Reject 3 $e }; "
+  + "if ($a -band [IO.FileAttributes]::Directory) { $pending.Push($e) } "
+  + "} catch { if (Gone $_) { continue }; throw } } }; "
+  + "if (Unsafe ([IO.Directory]::GetAccessControl($root)) $write $true) { Reject 3 $root }; "
+  + "if ([IO.File]::GetAttributes($root) -band [IO.FileAttributes]::ReparsePoint) { Reject 4 $root }; "
+  + "[void][IO.Directory]::CreateDirectory([IO.Path]::Combine($root,'work')); exit 0";
 
 class PlannerHomeUntrusted extends Error {
   constructor(reason, at) {
@@ -438,31 +445,117 @@ class PlannerHomeUntrusted extends Error {
   }
 }
 
-/**
- * POSIX alt ağaç denetimi: her girdi bu kullanıcıya aittir; klasör ve dosyalar başkasına yazılabilir değildir.
- * Bağlantılar izlenmez (yalnızca sahibi denetlenir): onları yalnızca bu kullanıcı oluşturabilmiştir.
- *
- * Eski sürümlerin izin veren umask ile oluşturduğu KLASÖRLER yukarıdan aşağı daraltılır: daraltılan klasörün
- * girdisini artık başkası değiştiremez, bu yüzden sıradaki girdi denetimle değişiklik arasında yer değiştiremez.
- * Klasörün açık kaldığı sürede başkasının eklediği girdi sahibinden yakalanır. Başkasına yazılabilir DOSYA ise
- * onarılmaz: içeriği değiştirilmiş olabilir; ev açık bir nedenle reddedilir ve işletmeci onu kaldırır.
- */
-function assertPrivateTree(home, uid) {
+/** Yerel ACL göstergeleri; dosya adları kaçırılır, her kaydın metadatası doğrulanır. */
+function assertPosixAcl(targets, allowMissing = false) {
+  const linux = process.platform === 'linux';
+  let pending = (Array.isArray(targets) ? [...targets] : [targets])
+    .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+  if (!linux && process.platform !== 'darwin') throw new PlannerHomeUntrusted('HOME_ACL_UNSUPPORTED', pending[0]);
+  while (pending.length) {
+    const args = linux
+      ? ['--directory', '--format=long', '--numeric-uid-gid', '--sort=none', '--quoting-style=escape', '--', ...pending]
+      : ['-ldben', ...pending];
+    const result = spawnSync('/bin/ls', args, {
+      encoding: 'utf8', timeout: HOME_CHECK_TIMEOUT_MS, env: { ...process.env, LC_ALL: 'C', TIME_STYLE: 'long-iso' }
+    });
+    if (result.status !== 0) {
+      const remaining = [];
+      for (const target of pending) {
+        try { lstatSync(target); remaining.push(target); }
+        catch (error) { if (!allowMissing || error.code !== 'ENOENT') throw error; }
+      }
+      if (remaining.length === pending.length) throw new PlannerHomeUntrusted('HOME_ACL_UNVERIFIED', pending[0]);
+      // Yalnızca kayıp alt öğeler çıkarılır; her deneme kümeyi kesin küçültür.
+      pending = remaining;
+      continue;
+    }
+    const records = [];
+    for (const line of result.stdout.trimEnd().split('\n')) {
+      if (line.startsWith(' ')) {
+        if (linux || !records.length) throw new PlannerHomeUntrusted('HOME_ACL_UNVERIFIED', pending[0]);
+        records.at(-1).entries.push(line);
+      } else records.push({ permissions: line.split(' ')[0], entries: [] });
+    }
+    if (records.length !== pending.length) throw new PlannerHomeUntrusted('HOME_ACL_UNVERIFIED', pending[0]);
+    const readOnly = new Set(['read', 'list', 'search', 'execute', 'readattr', 'readextattr', 'readsecurity', 'file_inherit', 'directory_inherit', 'only_inherit', 'limit_inherit', 'inherited']);
+    for (let index = 0; index < records.length; index += 1) {
+      const { permissions, entries } = records[index];
+      const target = pending[index];
+      const marker = permissions[10];
+      if (permissions[0] === 'l') throw new PlannerHomeUntrusted('HOME_SYMLINK', target);
+      if (!['d', '-'].includes(permissions[0]) || permissions.length < 10 || permissions.length > 11
+        || marker && !(linux ? ['+', '.'] : ['+', '@']).includes(marker)) {
+        throw new PlannerHomeUntrusted('HOME_ACL_UNVERIFIED', target);
+      }
+      if (linux && marker === '+') throw new PlannerHomeUntrusted('HOME_ACL_UNTRUSTED', target);
+      if (!linux && (marker === '+' || entries.length)) {
+        if (!entries.length) throw new PlannerHomeUntrusted('HOME_ACL_UNVERIFIED', target);
+        for (const entry of entries) {
+          const fields = entry.trim().split(/\s+/);
+          const decision = fields.findIndex(field => field === 'allow' || field === 'deny');
+          if (decision < 0 || decision !== fields.length - 2) throw new PlannerHomeUntrusted('HOME_ACL_UNVERIFIED', target);
+          if (fields[decision] === 'allow' && fields.at(-1).split(',').some(right => !readOnly.has(right))) {
+            throw new PlannerHomeUntrusted('HOME_ACL_UNTRUSTED', target);
+          }
+        }
+      }
+    }
+    return;
+  }
+}
+
+/** Özel alt ağaç: bağlantı izlenmez; yalnızca kaybolmuş alt öğe atlanabilir. */
+export function assertPrivateTree(home, uid) {
+  const root = lstatSync(home);
   const pending = [home];
   while (pending.length) {
     const directory = pending.pop();
-    const stat = lstatSync(directory);
-    if (!stat.isDirectory() || stat.uid !== uid) throw new PlannerHomeUntrusted('HOME_ENTRY_FOREIGN_OWNER', directory);
-    if (stat.mode & 0o022) chmodSync(directory, stat.mode & 0o7755);
-    if (lstatSync(directory).mode & 0o022) throw new PlannerHomeUntrusted('HOME_ENTRY_WRITABLE_BY_OTHERS', directory);
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const target = path.join(directory, entry.name);
-      if (entry.isDirectory()) { pending.push(target); continue; }
-      const own = lstatSync(target);
-      if (own.uid !== uid) throw new PlannerHomeUntrusted('HOME_ENTRY_FOREIGN_OWNER', target);
-      if (!own.isSymbolicLink() && own.mode & 0o022) throw new PlannerHomeUntrusted('HOME_ENTRY_WRITABLE_BY_OTHERS', target);
+    try {
+      const stat = lstatSync(directory);
+      if (stat.isSymbolicLink()) throw new PlannerHomeUntrusted('HOME_SYMLINK', directory);
+      if (!stat.isDirectory() || stat.uid !== uid) throw new PlannerHomeUntrusted('HOME_ENTRY_FOREIGN_OWNER', directory);
+      assertPosixAcl(directory);
+      if (stat.mode & 0o022) chmodSync(directory, stat.mode & 0o7755);
+      if (lstatSync(directory).mode & 0o022) throw new PlannerHomeUntrusted('HOME_ENTRY_WRITABLE_BY_OTHERS', directory);
+      const files = [];
+      for (const entry of readdirSync(directory)) {
+        const target = path.join(directory, entry);
+        try {
+          const own = lstatSync(target);
+          if (own.isSymbolicLink()) throw new PlannerHomeUntrusted('HOME_SYMLINK', target);
+          if (own.uid !== uid) throw new PlannerHomeUntrusted('HOME_ENTRY_FOREIGN_OWNER', target);
+          if (own.isDirectory()) { pending.push(target); continue; }
+          if (!own.isFile() || own.mode & 0o022) throw new PlannerHomeUntrusted('HOME_ENTRY_WRITABLE_BY_OTHERS', target);
+          files.push(target);
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+        }
+      }
+      // Yerel argv sınırı korunur; süreç sayısı dosya sayısı yerine küçük kümelerle büyür.
+      for (let index = 0; index < files.length; index += 64) {
+        const batch = files.slice(index, index + 64);
+        assertPosixAcl(batch, true);
+        // Yerel sorgu sırasında tür, sahiplik ya da izin değişmişse eski stat güven sayılmaz.
+        for (const target of batch) {
+          try {
+            const own = lstatSync(target);
+            if (own.isSymbolicLink()) throw new PlannerHomeUntrusted('HOME_SYMLINK', target);
+            if (own.uid !== uid) throw new PlannerHomeUntrusted('HOME_ENTRY_FOREIGN_OWNER', target);
+            if (!own.isFile() || own.mode & 0o022) throw new PlannerHomeUntrusted('HOME_ENTRY_WRITABLE_BY_OTHERS', target);
+          } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        }
+      }
+    } catch (error) {
+      if (directory !== home && error.code === 'ENOENT') continue;
+      throw error;
     }
   }
+  const finalRoot = lstatSync(home);
+  if (finalRoot.isSymbolicLink() || finalRoot.ino !== root.ino || finalRoot.dev !== root.dev
+    || finalRoot.uid !== uid || finalRoot.mode & 0o022) {
+    throw new PlannerHomeUntrusted('HOME_ROOT_CHANGED', home);
+  }
+  assertPosixAcl(home);
 }
 
 /**
@@ -495,13 +588,14 @@ function trustedHome() {
   const uid = process.getuid();
   for (let directory = path.dirname(home); ; directory = path.dirname(directory)) {
     const stat = lstatSync(directory);
+    assertPosixAcl(directory);
     if (stat.uid !== 0 && stat.uid !== uid || stat.mode & 0o022 && !(stat.mode & 0o1000)) throw new PlannerHomeUntrusted('HOME_ANCESTOR_UNTRUSTED', directory);
     if (path.dirname(directory) === directory) break;
   }
   const own = lstatSync(home);
   if (!own.isDirectory() || own.uid !== uid) throw new PlannerHomeUntrusted('HOME_ENTRY_FOREIGN_OWNER', home);
-  mkdirSync(path.join(home, 'work'), { recursive: true, mode: 0o700 });
   assertPrivateTree(home, uid);
+  mkdirSync(path.join(home, 'work'), { recursive: true, mode: 0o700 });
   return home;
 }
 

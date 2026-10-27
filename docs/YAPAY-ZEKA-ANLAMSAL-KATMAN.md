@@ -1787,3 +1787,6 @@ nedenlerinin incelenmesi (geri dönüşler tasarım gereği doğru yanıttır, a
 - Kişi sonuç kümeleri 4C sözleşmesi gereği takip göndergesi değildir.
 - Düzen bir model turu ekler (Haiku/CLI ölçümünde ortanca 2,6 sn); kurum içi gecikme ölçülmedi.
 - Odak görünümü yalnızca masaüstündedir ve panel kapanınca sıfırlanır.
+
+
+Claude değerlendirme adaptörünün `PLANNER_CLAUDE_HOME` alt ağacında sembolik bağlantı/Windows reparse noktası kabul edilmez. Windows yerel PowerShell ACL denetimi; GNU/Linux ACL destekli yerel `/bin/ls` ve macOS `/bin/ls -lde` ile ACL denetimi kullanılır; başka POSIX platformları ve doğrulanamayan metadata kapalı ret verir. Linux genişletilmiş ve varsayılan ACL'leri reddeder; macOS salt okuma/deny ACL'lerine izin verir, yazma veren veya tanınmayan allow haklarını reddeder. `chmod` ACL temizleme kanıtı sayılmaz. Atalar da denetlenir. POSIX dosya ACL metadatası, kaçırılmış dosya adlarıyla en çok 64 dosyalık kümelerde okunur; her dosyada ayrı süreç açılmaz ve hiçbir kayıt atlanmaz. Kaybolan dosyalar kümeden çıkarılabilir; öteki metadata hataları reddedilir. Aynı özel evi kullanan paralel çağrılarda yalnızca kaybolmuş alt öğe tolere edilir; kök kaybı, erişim, sahiplik, ACL ve bağlantı hataları modeli başlatmadan ve bütçe ayırmadan reddedilir.
