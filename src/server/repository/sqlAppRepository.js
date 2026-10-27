@@ -2312,9 +2312,12 @@ async function commitTask(executor, actor, task, correlationId, {
       if (!sameActualId(row.RelatedTaskId, taskId)) relatedTaskIds.add(id(row.RelatedTaskId));
     }
   }
+  const storedPlanCalendarId = keepsStoredDuration && !narrowTaskWrite
+    ? id(before.CalendarId) || id((projectChanged ? await projectRow(executor, beforeProjectId) : auditProject)?.CalendarId)
+    : null;
   const keepsStoredDurationForCalendar = keepsStoredDuration && !narrowTaskWrite && (
-    sameNullableId(id(before.CalendarId) || id(auditProject.CalendarId), effectiveCalendarId)
-    || sameNullableId((await loadTaskPlanContext(executor, projectId, id(before.CalendarId))).projects[0]?.calendarId, effectiveCalendarId)
+    sameNullableId(storedPlanCalendarId, effectiveCalendarId)
+    || (!storedPlanCalendarId && sameNullableId((await loadTaskPlanContext(executor, beforeProjectId, null)).projects[0]?.calendarId, effectiveCalendarId))
   );
   let plannedDurationDays = assigneeWorkOnly || keepsStoredDurationForCalendar
     ? nullableNumber(before.PlannedDurationDays)

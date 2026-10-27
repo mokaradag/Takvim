@@ -409,6 +409,48 @@ test('atama kapsamı gönderilmeyen kontrollü tarihleri SİLEMEZ; açık temizl
   }
 });
 
+test('gönderilmeyen süre kaynak proje takvimini izler; etkin olmayan görev takviminin süresi korunmaz', async () => {
+  const OTHER_CALENDAR_ID = 'c0a80101-3333-4333-8333-333333333333';
+  const moved = moveSeed();
+  moved.calendars.push({ CalendarId: OTHER_CALENDAR_ID, Name: 'Üç Günlük Takvim', IsDefault: 0, IsActive: 1, WorkingDays: [1, 2, 3] });
+  moved.projects[1].CalendarId = OTHER_CALENDAR_ID;
+  moved.corporateProjectAccess.push({ ProjectCode: 'P4417041', Sicil: MANAGER_SICIL, RoleCode: 'PROJECT_MANAGER' });
+  moved.tasks = [{ ...moved.tasks[0], PlannedDurationDays: 4 }];
+  moved.taskAssignees = [moved.taskAssignees[0]];
+  moved.taskDependencies = [];
+
+  const base = assignmentSeed();
+  const inactive = assignmentSeed({
+    calendars: [
+      { ...base.calendars[0], WorkingDays: [1, 2, 3] },
+      { CalendarId: OTHER_CALENDAR_ID, Name: 'Eski Takvim', IsDefault: 0, IsActive: 0, WorkingDays: [1, 2, 3, 4, 5] }
+    ],
+    tasks: [datedTaskSeed({ CalendarId: OTHER_CALENDAR_ID, PlannedDurationDays: 4 })],
+    taskAssignees: [{ TaskId: NEW_TASK_ID, Sicil: SUBORDINATE_SICIL }]
+  });
+
+  for (const [name, seed, patch] of [
+    ['kaynak FULL, hedef atama kapsamı', moved, { projectId: SECOND_PROJECT_ID, wbsId: SECOND_ROOT_WBS_ID }],
+    ['etkin olmayan override temizliği', inactive, {}]
+  ]) {
+    const stack = await createActualStack(seed, { sicil: MANAGER_SICIL });
+    try {
+      const task = { ...stack.state.tasks[0] };
+      for (const field of ['plannedStart', 'plannedFinish', 'plannedDurationDays', 'calendarId']) delete task[field];
+      const result = await stack.repository.commitChanges({ taskUpserts: [{ ...task, ...patch }] });
+      const updated = result.taskUpserts[0];
+      assert.equal(updated.plannedDurationDays, null, name);
+      assert.equal(stack.db.tasks[0].PlannedDurationDays, null, name);
+      assert.equal(stack.db.tasks[0].CalendarId, null, name);
+      assert.equal(updated.projectId.toLowerCase(), (patch.projectId || CORPORATE_PROJECT_ID).toLowerCase(), name);
+      await stack.reload();
+      assert.equal(calculateCpm(stack.state.tasks, stack.state).tasks[updated.id].durationDays, 3, name);
+    } finally {
+      await stack.dispose();
+    }
+  }
+});
+
 /* ── 4. Sistem yöneticisi ve etkin proje ────────────────────────── */
 
 test('sistem yöneticisi ETKİN OLMAYAN projeye görev yazamaz', async () => {
