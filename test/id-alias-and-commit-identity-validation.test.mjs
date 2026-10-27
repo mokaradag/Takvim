@@ -7,7 +7,7 @@ import {
   persistActualIdAliases
 } from '../src/data/api/actualIdAliasStorage.js';
 import { restoreActualSnapshotIds } from '../src/data/api/createApiRepository.js';
-import { sameActualReference } from '../src/domain/identity/actualId.js';
+import { actualIdComparisonKey, sameActualId, sameActualReference } from '../src/domain/identity/actualId.js';
 import {
   canonicalizeCommitChanges,
   findCommitChangeIssue
@@ -170,4 +170,21 @@ test('commit change validation requires complete manual project creation fields'
     wbsDeletes: [],
     taskDeletes: []
   }), null);
+});
+
+
+test('karşılaştırma dizini GUID ve mevcut metin eşitliğini korur; yokluk yetki kimliği olmaz', () => {
+  for (const [left, right, equal] of [
+    [PROJECT_UUID.toUpperCase(), PROJECT_UUID, true],
+    [PROJECT_UUID, TASK_UUID, false],
+    [null, null, false], [null, undefined, false], ['', ' ', false],
+    [' Demo-ID ', 'demo-id', true], [1, '1', true], [0, '0', true],
+    ['01', 1, false], ['I', 'i', true], ['İ', 'i', false], ['ß', 'SS', false],
+    [PROJECT_CLIENT_ID.toUpperCase(), PROJECT_CLIENT_ID, true],
+    [PROJECT_CLIENT_ID, PROJECT_UUID, false]
+  ]) {
+    const key = actualIdComparisonKey(left);
+    assert.equal(key !== null && key === actualIdComparisonKey(right), equal, `${left} / ${right}`);
+    assert.equal(sameActualId(left, right), equal, `${left} / ${right}`);
+  }
 });

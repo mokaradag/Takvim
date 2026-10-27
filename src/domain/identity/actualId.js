@@ -85,14 +85,15 @@ export function sameActualReference(left, right) {
  * açık null-null davranışını korur ve bu değişiklikten etkilenmez.
  */
 export function sameActualId(left, right) {
-  const first = canonicalActualId(left);
-  const second = canonicalActualId(right);
-  if (first && second) return first === second;
-  const leftText = text(left);
-  const rightText = text(right);
-  // YOKLUK kimlik saymaz: bu işlev NOT NULL sütunlar içindir ve iki boş değeri
-  // "aynı proje" saymak, kapsam denetimini sessizce gevşetirdi. Boş değerin
-  // anlamlı olduğu NULL yapılabilir sütunlar için `sameNullableId` kullanılır.
-  if (!leftText || !rightText) return false;
-  return leftText.toLowerCase() === rightText.toLowerCase();
+  const first = actualIdComparisonKey(left);
+  return first !== null && first === actualIdComparisonKey(right);
+}
+
+/**
+ * `sameActualId` eşitliğinin dizin anahtarı; doğrulama veya yeni kimlik biçimi değildir.
+ * GUID kanoniği ve mevcut metin yedeği tek yerde kalır. Yokluk anahtar üretmez.
+ */
+export function actualIdComparisonKey(value) {
+  const normalized = text(value);
+  return normalized ? (canonicalActualId(normalized) ?? normalized.toLowerCase()) : null;
 }

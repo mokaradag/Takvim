@@ -375,3 +375,19 @@ test('WBS kapsamı aynı GUID harf biçimlerini eşit, farklı projeleri ayrı t
   assert.equal(resolveWbsMutationAccess(state, 'source', 'same').ok, false);
   assert.equal(resolveTaskWbsMoveAccess(state, ['task'], 'same').ok, false);
 });
+
+test('proje seçimi büyük portföyde kimlikleri doğrusal sayıda okur ve ilk adayı korur', () => {
+  let reads = 0;
+  const count = 256;
+  const ids = Array.from({ length: count }, (_, index) => `a1b2c3d4-0000-4000-8000-${index.toString(16).padStart(12, '0')}`);
+  const record = (id, accessLevel) => ({ get id() { reads += 1; return id; }, accessLevel });
+  const state = {
+    projects: ids.map(id => record(id, 'PARTIAL')),
+    assignableProjects: ids.flatMap(id => [record(id.toUpperCase()), record(id)]),
+    tasks: ids.map(projectId => ({ projectId: projectId.toUpperCase(), isCurrentUserAssignee: true }))
+  };
+  const selected = taskAssignableProjects(state);
+  assert.equal(selected.length, count);
+  assert.ok(selected.every((project, index) => project === state.assignableProjects[index * 2]));
+  assert.ok(reads <= 20 * count, `kimlik okuması portföyle doğrusal kalır (${reads})`);
+});

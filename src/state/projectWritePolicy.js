@@ -1,4 +1,4 @@
-import { sameActualId } from '../domain/identity/actualId.js';
+import { actualIdComparisonKey, sameActualId } from '../domain/identity/actualId.js';
 import { CORPORATE_WBS_READ_ONLY_MESSAGE, supportsManualWbsEditing } from '../domain/projectTypes.js';
 
 export { CORPORATE_WBS_READ_ONLY_MESSAGE };
@@ -38,10 +38,10 @@ export function writableProjects(projects = []) {
  * görevlerde atama/yapı yönetimi yetkisi vermez.
  */
 export function assigneeTaskCreateProjects(state = {}) {
-  const projectIds = (state.tasks || [])
+  const projectIds = new Set((state.tasks || [])
     .filter((task) => task?.isCurrentUserAssignee && task.projectId != null)
-    .map((task) => task.projectId);
-  return (state.projects || []).filter((project) => projectIds.some((id) => sameActualId(project.id, id)));
+    .map((task) => actualIdComparisonKey(task.projectId)).filter((id) => id !== null));
+  return (state.projects || []).filter((project) => projectIds.has(actualIdComparisonKey(project.id)));
 }
 
 /**
@@ -56,14 +56,15 @@ export function assigneeTaskCreateProjects(state = {}) {
  * görev görünürlüğü etkilenmez.
  */
 export function taskAssignableProjects(state = {}) {
-  const known = [];
+  const known = new Set();
   return [
     ...writableProjects(state.projects || []),
     ...(state.assignableProjects || []),
     ...assigneeTaskCreateProjects(state)
   ].filter((project) => {
-    if (!project || known.some((id) => sameActualId(id, project.id))) return false;
-    known.push(project.id);
+    const id = actualIdComparisonKey(project?.id);
+    if (id === null || known.has(id)) return false;
+    known.add(id);
     return true;
   });
 }
