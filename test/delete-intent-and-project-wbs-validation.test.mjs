@@ -502,6 +502,51 @@ test('kısmi oluşturucunun silme yetkisi gizli bağımlılık varlığından ba
   } finally { await manager.dispose(); }
 });
 
+test('FULL yönetici sorumlusuz veya kapsam dışı sorumlulu görevi silebilir; denetim ve geri alma korunur', async () => {
+  for (const assignees of [[], [PLAIN_SICIL]]) {
+    const stack = await disclosureStack(MANAGER_SICIL);
+    try {
+      stack.db.corporateProjectAccess.push({ ProjectCode: 'P4417041', Sicil: MANAGER_SICIL, RoleCode: 'PROJECT_MANAGER' });
+      stack.db.taskAssignees = stack.db.taskAssignees.filter(row => String(row.TaskId).toLowerCase() !== LONE_TASK_ID);
+      stack.db.taskAssignees.push(...assignees.map(Sicil => ({ TaskId: LONE_TASK_ID.toUpperCase(), Sicil })));
+      const snapshot = await stack.repository.loadSnapshot();
+      const task = snapshot.tasks.find(task => String(task.id).toLowerCase() === LONE_TASK_ID);
+      assert.ok(task?.version, 'FULL görüntü, atama kapsamı dışındaki görevi de gösterir');
+      const changes = { taskDeletes: [{ id: task.id, version: task.version }] };
+      const before = JSON.stringify({ tasks: stack.db.tasks, assignees: stack.db.taskAssignees, dependencies: stack.db.taskDependencies, audit: stack.db.auditLog });
+      let reachedCommit = false;
+      stack.db.commitHook = () => { reachedCommit = true; throw new Error('delete-rollback'); };
+      await assert.rejects(stack.repository.commitChanges(changes));
+      assert.equal(reachedCommit, true, 'silme commit aşamasına ulaşır');
+      assert.equal(JSON.stringify({ tasks: stack.db.tasks, assignees: stack.db.taskAssignees, dependencies: stack.db.taskDependencies, audit: stack.db.auditLog }), before);
+      stack.db.commitHook = null;
+      await stack.repository.commitChanges(changes);
+      assert.equal(stack.db.tasks.some(row => String(row.TaskId).toLowerCase() === LONE_TASK_ID), false);
+      assert.equal(stack.db.taskAssignees.some(row => String(row.TaskId).toLowerCase() === LONE_TASK_ID), false);
+      assert.equal(stack.db.taskDependencies.length, 1, 'ilgisiz bağımlılıklar korunur');
+      const deletion = stack.db.auditLog.find(row => row.ActionCode === 'DELETE' && String(row.EntityId).toLowerCase() === LONE_TASK_ID);
+      assert.deepEqual(JSON.parse(deletion.BeforeJson).assigneeIds, assignees, 'kilitli sorumlu okuması silme denetim kaydında korunur');
+    } finally { await stack.dispose(); }
+  }
+});
+
+test('FULL silme düzeltmesi etkin olmayan proje kapısını aşamaz', async () => {
+  const stack = await disclosureStack(MANAGER_SICIL);
+  try {
+    const { createSqlAppRepository } = await import('../src/server/repository/sqlAppRepository.js');
+    // Sistem yöneticisi FULL kapısını geçse bile temel depoda etkinlik denetlenir.
+    stack.db.systemAdminSicils.push(MANAGER_SICIL);
+    const snapshot = await stack.repository.loadSnapshot();
+    const task = snapshot.tasks.find(task => String(task.id).toLowerCase() === LONE_TASK_ID);
+    for (const project of stack.db.projects) project.IsActive = 0;
+    await assert.rejects(createSqlAppRepository().commitChanges({ taskDeletes: [{ id: task.id, version: task.version }] }), {
+      code: 'FORBIDDEN', message: 'Etkin olmayan bir projede görev yazılamaz.'
+    });
+    assert.equal(stack.db.tasks.length, 3);
+    assert.equal(stack.db.taskDependencies.length, 1);
+  } finally { await stack.dispose(); }
+});
+
 test('gizli ve olmayan hedef projeler aynı tam yanıtı verir; görünür ve kurumsal atama korunur', async () => {
   const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
   for (const sicil of [PLAIN_SICIL, MANAGER_SICIL]) {

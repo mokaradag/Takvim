@@ -7,6 +7,7 @@
 // yinelemeler kaybolmaz.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 
 import {
@@ -16,6 +17,7 @@ import {
 } from './helpers/actualStack.mjs';
 import {
   MAX_RECURRENCE_OCCURRENCES,
+  createOccurrenceFinishCalculator,
   expandRecurrence,
   findRecurrenceRuleIssue,
   occurrenceFinishes,
@@ -34,6 +36,34 @@ const PROJECT_ID = 'project-4ddddddd-4444-4444-8444-444444444444';
 const ROOT_WBS_ID = 'wbs-5eeeeeee-5555-4555-8555-555555555555';
 const OTHER_PROJECT_ID = 'project-6fffffff-6666-4666-8666-666666666666';
 const OTHER_ROOT_WBS_ID = 'wbs-7aaaaaaa-7777-4777-8777-777777777777';
+
+// Temel deponun GERÇEK sayacını gözle: hesapları değiştirmeden harcanan işi
+// ve işlem boyunca aynı sayaç nesnesinin kullanıldığını ölçer.
+const calendarModule = new URL('../src/scheduling/calendars/index.js', import.meta.url).href;
+const repositoryModule = new URL('../src/server/repository/sqlAppRepository.js', import.meta.url).href;
+const countedCalendarModule = `data:text/javascript,${encodeURIComponent(`
+  export * from '${calendarModule}';
+  import { meterCalendarScans as original } from '${calendarModule}';
+  export const measurements = [];
+  export function meterCalendarScans(meter, work) {
+    const before = meter.remainingDays;
+    try { return original(meter, work); }
+    finally { measurements.push({ meter, before, scans: before - meter.remainingDays }); }
+  }
+`)}`;
+const { measurements } = await import(countedCalendarModule);
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (context.parentURL === repositoryModule && specifier === '../../scheduling/calendars/index.js') {
+      return { url: countedCalendarModule, shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  }
+});
+
+const scansUsed = () => measurements.reduce((sum, entry) => sum + entry.scans, 0);
+const transactionalTables = (db) => JSON.stringify(Object.fromEntries(Object.entries(db)
+  .filter(([key, value]) => Array.isArray(value) && !['statements', 'transactions'].includes(key))));
 
 /* ── 1 · RRULE kesin olarak doğrulanır ───────────────────────── */
 
@@ -255,6 +285,31 @@ test('takvim tarama sayacı yapılan işi sayar: tatil, seyrek desen ve sonraki 
   assert.throws(() => meterCalendarScans({ remainingDays: 10 }, async () => {}), TypeError);
 });
 
+test('kardeş oluşumlar şablon sürelerini bir kez ölçer; eşit bitişleri tek taramayla hesaplar', () => {
+  let reads = 0;
+  const calendar = { get workingDays() { reads += 1; return [1]; }, holidays: [] };
+  const template = { plannedStart: '2026-08-17', plannedFinish: '2026-09-07', targetFinish: '2026-09-07' };
+  const finishForStart = createOccurrenceFinishCalculator(template, { calendar });
+  const templateReads = reads;
+  assert.equal(templateReads, 2 * 22, 'bildirilmemiş süre ve termin yalnızca şablondan ölçülür');
+  for (let index = 1; index <= 8; index += 1) {
+    reads = 0;
+    const date = fmtISO(addDays(template.plannedStart, 7 * index));
+    const actual = finishForStart(date);
+    assert.equal(reads, 21, 'kardeş şablonu yeniden saymaz; eşit iki bitişi bir kez hesaplar');
+    assert.deepEqual(actual, { plannedFinish: fmtISO(addDays(date, 21)), targetFinish: fmtISO(addDays(date, 21)) });
+  }
+  // Farklı, önceki veya olmayan termin aynı takvim semantiğini korur.
+  for (const targetFinish of [null, '2026-08-10', '2026-08-17', '2026-08-24']) {
+    const shape = { ...template, targetFinish };
+    const date = '2026-09-14';
+    const full = planRecurringOccurrences(shape, { freq: 'WEEKLY', byWeekday: ['MO'], count: 5 }, { calendar }).at(-1);
+    assert.deepEqual(createOccurrenceFinishCalculator(shape, { calendar })(date), {
+      plannedFinish: full.plannedFinish, targetFinish: full.targetFinish
+    });
+  }
+});
+
 /* ── 3 · Kalıcı katmanda seri bütünlüğü ──────────────────────── */
 
 function manualProjectChanges() {
@@ -418,14 +473,19 @@ test('uzun şablonlu büyük seride yineleme doğrulaması kardeş bitişlerini 
     assert.equal(stored.TargetFinish, legitimate.targetFinish);
 
     const batch = Array.from({ length: 80 }, (_, index) => child(index + 3, fmtISO(addDays('2026-08-31', index * 7))));
+    measurements.length = 0;
     await stack.repository.commitChanges({ taskUpserts: batch });
     assert.equal(stack.db.tasks.length, 82, 'desteklenen seri tek işlemde kabul edilir');
+    // 400 üyelik + şablonun bir termin sayımı + çocuk başına bir bitiş ve
+    // süre doğrulaması. Şablon sayımı/aynı bitiş tekrar edilse sınır aşılır.
+    assert.ok(scansUsed() < 4_600_000, `80 kardeşin gerçek işi: ${scansUsed()}`);
+    assert.equal(new Set(measurements.map(entry => entry.meter)).size, 1);
   } finally {
     await stack.dispose();
   }
 });
 
-test('yineleme işlem bütçesi süre doğrulamasının ikinci taramasını da sayar', { timeout: 60000 }, async () => {
+test('normal çoklu yineleme işlem bütçesinde süre doğrulamasıyla birlikte kabul edilir', { timeout: 60000 }, async () => {
   // Terminsiz oluşum başına bitiş ve süre doğrulaması ayrı ayrı sayılır;
   // işlem bütçesi desteklenen serinin bütün çocuklarına yeter.
   const stack = await createActualStack(corporateSeed());
@@ -644,7 +704,41 @@ test('en uzun tek yineleme seyrek ve tatil yoğun takvimde terminli veya termins
   }
 });
 
-test('birden çok pahalı seri işlem tavanını paylaşır ve kısmi yazmaların tamamı geri alınır', { timeout: 600000 }, async () => {
+test('399 çocuklu seyrek seri sabit iş tavanında durur ve bütün işlem tabloları geri alınır', { timeout: 60000 }, async () => {
+  const seed = corporateSeed();
+  seed.calendars[0].WorkingDays = [1];
+  seed.calendars[0].Holidays = [];
+  const stack = await createActualStack(seed);
+  try {
+    assert.equal((await stack.persistence.commitChanges('project/create', manualProjectChanges())).ok, true);
+    const start = '2026-08-17';
+    const end = (date) => fmtISO(addDays(date, (MAX_WORKING_DAY_SPAN - 1) * 7));
+    const parent = seriesTask({ recurrence: `FREQ=WEEKLY;BYDAY=MO;COUNT=${MAX_RECURRENCE_OCCURRENCES}`,
+      plannedStart: start, plannedFinish: end(start), targetFinish: end(start), plannedDurationDays: MAX_WORKING_DAY_SPAN });
+    await stack.repository.commitChanges({ taskUpserts: [parent] });
+    const children = Array.from({ length: MAX_RECURRENCE_OCCURRENCES - 1 }, (_, index) => {
+      const date = fmtISO(addDays(start, (index + 1) * 7));
+      return { ...parent, id: `task-b${index.toString(16).padStart(7, '0')}-9999-4999-8999-999999999999`,
+        recurrence: null, recurrenceParentId: parent.id, recurrenceOccurrenceDate: date,
+        plannedStart: date, plannedFinish: end(date), targetFinish: end(date) };
+    });
+    const before = transactionalTables(stack.db);
+    const queryStart = stack.db.statements.length;
+    measurements.length = 0;
+    await assert.rejects(stack.repository.commitChanges({ taskUpserts: children }), error => (
+      error.code === 'MUTATION_FAILED' && /işlem sınırını aşıyor/.test(error.message)
+    ));
+    assert.equal(scansUsed(), 5_000_000, 'tavanın ötesine tek gün bile taranmaz');
+    assert.equal(new Set(measurements.map(entry => entry.meter)).size, 1, '399 çocuk tek sayaç paylaşır');
+    assert.equal(measurements.at(-1).meter.remainingDays, 0);
+    const writes = stack.db.statements.slice(queryStart).filter(entry => entry.sql.includes('INSERT dbo.MR_Tasks'));
+    assert.ok(writes.length > 0 && writes.length < children.length, 'sınır kısmi yazmadan sonra tükenir');
+    assert.equal(transactionalTables(stack.db), before, 'görev, sorumlu, bağımlılık, geçmiş, bildirim ve kuyruklar geri alınır');
+    assert.ok(stack.db.transactions.at(-1).rollbackStatementIndex != null);
+  } finally { await stack.dispose(); }
+});
+
+test('birden çok pahalı seri işlem tavanını paylaşır ve kısmi yazmaların tamamı geri alınır', { timeout: 60000 }, async () => {
   const calendar = { workingDays: [1], holidays: [] };
   const seed = corporateSeed();
   seed.calendars[0].WorkingDays = calendar.workingDays;
@@ -661,21 +755,36 @@ test('birden çok pahalı seri işlem tavanını paylaşır ve kısmi yazmaları
       plannedStart: start, plannedFinish: finish, targetFinish: finish, plannedDurationDays: MAX_WORKING_DAY_SPAN
     }));
     await stack.repository.commitChanges({ taskUpserts: parents });
-    const before = JSON.stringify({ tasks: stack.db.tasks, audit: stack.db.auditLog, assignments: stack.db.taskAssignees });
-    const children = parents.flatMap((parent, series) => Array.from({ length: 300 }, (_, index) => {
+    const before = transactionalTables(stack.db);
+    const children = parents.flatMap((parent, series) => Array.from({ length: 8 }, (_, index) => {
       const date = fmtISO(addDays(start, (index + 1) * 7));
       const end = fmtISO(addDays(date, (MAX_WORKING_DAY_SPAN - 1) * 7));
-      return { ...parent, id: `task-b${(series * 300 + index).toString(16).padStart(7, '0')}-9999-4999-8999-999999999999`,
+      return { ...parent, id: `task-b${(series * 8 + index).toString(16).padStart(7, '0')}-9999-4999-8999-999999999999`,
         recurrence: null, recurrenceParentId: parent.id, recurrenceOccurrenceDate: date,
         plannedStart: date, plannedFinish: end, targetFinish: end };
     }));
+    // Her şablonun sekiz çocuğu tek başına kabul edilir; toplamları aynı işlem
+    // sayacını tüketir. Şablon başına sayaç kurulsa bu test yanlışlıkla geçerdi.
+    for (const parent of parents) {
+      const ownChildren = children.filter(child => child.recurrenceParentId === parent.id);
+      let reachedCommit = false;
+      stack.db.commitHook = () => { reachedCommit = true; throw new Error('tek-seri-ölçümü'); };
+      measurements.length = 0;
+      await assert.rejects(stack.repository.commitChanges({ taskUpserts: ownChildren }));
+      assert.equal(reachedCommit, true, 'sekiz çocuk iş tavanını aşmadan commit aşamasına ulaşır');
+      assert.ok(scansUsed() > 0 && scansUsed() < 5_000_000);
+      assert.equal(transactionalTables(stack.db), before);
+    }
+    stack.db.commitHook = null;
     const queryStart = stack.db.statements.length;
+    measurements.length = 0;
     await assert.rejects(stack.repository.commitChanges({ taskUpserts: children }), error => (
       error.code === 'MUTATION_FAILED' && /işlem sınırını aşıyor/.test(error.message)
     ));
     assert.ok(stack.db.statements.slice(queryStart).some(entry => entry.sql.includes('INSERT dbo.MR_Tasks')),
       'ortak sayaç ilk çocukları kabul ettikten sonra tükenir; çocuk başına sıfırlansa bu küme geçerdi');
-    assert.equal(JSON.stringify({ tasks: stack.db.tasks, audit: stack.db.auditLog, assignments: stack.db.taskAssignees }), before,
-      'görevler, sorumlular ve denetim kayıtları birlikte geri alınır');
+    assert.equal(scansUsed(), 5_000_000);
+    assert.equal(new Set(measurements.map(entry => entry.meter)).size, 1, 'şablonlar arasında sayaç sıfırlanmaz');
+    assert.equal(transactionalTables(stack.db), before, 'bütün işlem tabloları birlikte geri alınır');
   } finally { await stack.dispose(); }
 });

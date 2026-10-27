@@ -536,14 +536,22 @@ function recurrenceSpans(template, calendar) {
   };
 }
 
-/** Tek yinelemenin bitişleri; `plannedStart` planın (kaydırılmış) başlangıcıdır. */
-export function occurrenceFinishes(template, plannedStart, { calendar = null } = {}) {
+/** Aynı şablon/takvim için değişmeyen süreleri bir kez ölçer; yalnızca işlem içinde yeniden kullanılır. */
+export function createOccurrenceFinishCalculator(template, { calendar = null } = {}) {
   const spans = recurrenceSpans(template, calendar);
-  const start = parseDate(plannedStart);
-  return {
-    plannedFinish: spanFinishIso(start, spans.duration, calendar),
-    targetFinish: spanFinishIso(start, spans.target, calendar)
+  return (plannedStart) => {
+    const start = parseDate(plannedStart);
+    const plannedFinish = spanFinishIso(start, spans.duration, calendar);
+    return {
+      plannedFinish,
+      targetFinish: spans.target === spans.duration ? plannedFinish : spanFinishIso(start, spans.target, calendar)
+    };
   };
+}
+
+/** Tek yinelemenin bitişleri; `plannedStart` planın (kaydırılmış) başlangıcıdır. */
+export function occurrenceFinishes(template, plannedStart, options = {}) {
+  return createOccurrenceFinishCalculator(template, options)(plannedStart);
 }
 
 /**

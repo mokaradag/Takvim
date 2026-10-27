@@ -115,7 +115,7 @@ export function GanttView() {
   const projects = useProjects();
   const people = usePeople();
   const schedule = usePortfolioSchedule();
-  const criticalDependencySets = useMemo2(() => Object.fromEntries(
+  const criticalDependencySets = useMemo2(() => new Map(
     Object.entries(schedule.projects).map(([id, project]) => [id, new Set(project.criticalDependencyKeys || [])])
   ), [schedule.projects]);
   const { openTask: onOpenTask } = useTaskActions();
@@ -411,7 +411,7 @@ export function GanttView() {
         else if (type === 'FF') { fromX = predEnd; toX = succEnd; fromSide = 'R'; toSide = 'R'; }
         else { fromX = predStart; toX = succEnd; fromSide = 'L'; toSide = 'R'; }
 
-        const critical = Boolean(criticalDependencySets[r.task.projectId]?.has(`${dId}::${r.task.id}`));
+        const critical = Boolean(criticalDependencySets.get(String(r.task.projectId))?.has(`${dId}::${r.task.id}`));
         arrows.push({
           id: `${dId}-${r.task.id}-${type}`,
           type, fromX, fromY, toX, toY, fromSide, toSide,

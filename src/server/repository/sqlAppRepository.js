@@ -3,8 +3,6 @@ import { normalizeTaskLifecycle } from '../../domain/taskLifecycle.js';
 import { businessDate } from '../../domain/calendar/businessDate.js';
 import {
   CalendarScanBudgetExceededError,
-  MAX_CALENDAR_SPAN_DAYS,
-  MAX_WORKING_DAY_SEARCH_CHECKS,
   meterCalendarScans,
   resolveTaskCalendar
 } from '../../scheduling/calendars/index.js';
@@ -24,10 +22,9 @@ import { loadAuthorizationContext, loadTransactionAuthorizationContext } from '.
 import { assertCanCreateManualProject, assertProjectWriteAccess, assertTaskDeleteAccess, hasTaskAssignmentScope } from '../authorization/authorization.js';
 import { mergeProjectTagAppearance, planProjectTagPropagation, projectTagNames } from '../../domain/tags/index.js';
 import {
-  MAX_RECURRENCE_OCCURRENCES,
+  createOccurrenceFinishCalculator,
   formatRecurrenceRule,
   normalizeRecurrenceRule,
-  occurrenceFinishes,
   planRecurringOccurrences
 } from '../../scheduling/recurrence/index.js';
 import { calculatePlannedDurationDays } from '../../scheduling/plans/index.js';
@@ -1723,12 +1720,6 @@ async function assertAssigneeScope(executor, actor, projectId, assigneeSicils, p
   }
 }
 
-/** Proje ve sorumlu denetimlerinin bileşimi. */
-async function assertTaskProjectAccess(executor, actor, projectId, assigneeSicils) {
-  const projectScope = await assertTaskProjectScope(executor, actor, projectId);
-  await assertAssigneeScope(executor, actor, projectId, assigneeSicils, projectScope);
-}
-
 /**
  * Projenin KÖK iş dağılım düğümü.
  *
@@ -1946,23 +1937,16 @@ function assertAssigneeTaskCreateFieldsOnly(task, parent = null) {
 }
 
 /**
- * Bir serinin üyelik/kaydırma payı ve oluşum başına beş takvim geçişi:
- * şablon süresi/termini, iki bitiş, doğrulanan süre. Dahil sayımların son
- * günü de sayılır. Aynı işlem en çok ürünün 400 oluşumluk serisi kadar
- * azami oluşum işi alabilir; çoklu şablonlar da bu SABİT tavanı paylaşır.
- * İstek sayısı bu sınırda kırpılır, hiçbir çarpan sınırsız değildir.
+ * Eşzamanlı takvim işinin sabit işlem tavanı; çocuk/şablon sayısıyla büyümez.
+ * Tek azami seyrek oluşumun üyelik ve beş geçiş üst sınırı (2.183.140 gün)
+ * korunur; 80 azami süreli olağan takvim oluşumu da sığar. Daha pahalı
+ * kümeler kilitler açıkken yüz milyonlarca gün taramak yerine geri alınır.
  */
-const RECURRENCE_MEMBERSHIP_SCAN_BUDGET_DAYS = MAX_RECURRENCE_OCCURRENCES * (1 + MAX_WORKING_DAY_SEARCH_CHECKS);
-const RECURRENCE_OCCURRENCE_SCAN_BUDGET_DAYS = 5 * (MAX_CALENDAR_SPAN_DAYS + 1);
-const RECURRENCE_COMMIT_SCAN_BUDGET_DAYS = RECURRENCE_MEMBERSHIP_SCAN_BUDGET_DAYS
-  + MAX_RECURRENCE_OCCURRENCES * RECURRENCE_OCCURRENCE_SCAN_BUDGET_DAYS;
+const RECURRENCE_COMMIT_SCAN_BUDGET_DAYS = 5_000_000;
 
 /** Bir işlemde tek ortak sayaç; çocuklar arasında yeniden kurulmaz. */
-function createRecurrenceCommitContext(taskUpserts = []) {
-  const children = Math.min(MAX_RECURRENCE_OCCURRENCES,
-    taskUpserts.filter((task) => task.recurrenceParentId).length);
-  const allowance = RECURRENCE_MEMBERSHIP_SCAN_BUDGET_DAYS + children * RECURRENCE_OCCURRENCE_SCAN_BUDGET_DAYS;
-  return { plans: new Map(), meter: { remainingDays: Math.min(allowance, RECURRENCE_COMMIT_SCAN_BUDGET_DAYS) } };
+function createRecurrenceCommitContext() {
+  return { plans: new Map(), meter: { remainingDays: RECURRENCE_COMMIT_SCAN_BUDGET_DAYS } };
 }
 
 /** Yineleme doğrulamasının takvim işini işlemin ortak sayacından düşer. */
@@ -1980,7 +1964,7 @@ function meteredRecurrenceWork(recurrence, work) {
 
 async function commitTask(executor, actor, task, correlationId, {
   dependencyPlanningVerified = false,
-  recurrence = createRecurrenceCommitContext([task])
+  recurrence = createRecurrenceCommitContext()
 } = {}) {
   const taskId = uuid(task.id);
   const projectId = uuid(task.projectId);
@@ -2230,19 +2214,23 @@ async function commitTask(executor, actor, task, correlationId, {
       // Üyelik önce denetlenir: yalnızca tekrar günleri üretilir ve aynı şablon
       // sürümü için işlem boyunca yeniden kullanılır. Kardeş yinelemelerin
       // bitişleri hiç hesaplanmaz.
-      const planKey = `${id(recurrenceParentId)}:${encodeVersion(parent.RowVersion)}:${normalizedParentCalendarId || ''}`;
-      let occurrences = recurrence.plans.get(planKey);
-      if (!occurrences) {
-        occurrences = meteredRecurrenceWork(recurrence, () => planRecurringOccurrences(template, parentRule, { calendar: parentCalendar, finishes: false }))
-          .filter((occurrence) => occurrence.occurrenceDate !== templateDate);
-        recurrence.plans.set(planKey, occurrences);
+      const planKey = `${id(recurrenceParentId)}:${encodeVersion(parent.RowVersion)}:${parentCalendar.id}`;
+      let plan = recurrence.plans.get(planKey);
+      if (!plan) {
+        plan = { occurrences: meteredRecurrenceWork(recurrence, () => planRecurringOccurrences(template, parentRule, { calendar: parentCalendar, finishes: false }))
+          .filter((occurrence) => occurrence.occurrenceDate !== templateDate) };
+        recurrence.plans.set(planKey, plan);
       }
+      const { occurrences } = plan;
       const planned = occurrences.find((item) => item.occurrenceDate === recurrenceOccurrenceDate);
       if (!planned) {
         throw new ServerPersistenceError('MUTATION_FAILED', 'Tekrar günü şablonun kuralı ve çalışma takvimiyle uyumlu olmalıdır.');
       }
       const { occurrence, expectedDuration } = meteredRecurrenceWork(recurrence, () => {
-        const finishes = { ...planned, ...occurrenceFinishes(template, planned.plannedStart, { calendar: parentCalendar }) };
+        // Yalnızca kalıcı şablondan türetilir; sürüm/takvim değişirse önbellek
+        // anahtarı da değişir. Geçersiz üyelik için süre taraması yapılmaz.
+        plan.finishForStart ??= createOccurrenceFinishCalculator(template, { calendar: parentCalendar });
+        const finishes = { ...planned, ...plan.finishForStart(planned.plannedStart) };
         return {
           occurrence: finishes,
           expectedDuration: calculatePlannedDurationDays({
@@ -2668,7 +2656,8 @@ async function deleteTask(executor, actor, entry, correlationId) {
   // Silme bağımlılıkları da kaldırır; kısmi görüntüde ilişkilerin varlığına
   // bakmak bile yoklama olur. Yetki kararı ilişki sorgusundan önce sabittir.
   assertTaskDeleteAccess(actor, projectId);
-  await assertTaskProjectAccess(executor, actor, projectId, assigneeSicils);
+  // FULL silme yetkisi yeterlidir; sorumlu atama kapsamı silmeye uygulanmaz.
+  await assertTaskProjectScope(executor, actor, projectId);
   if (!before.RowVersion || Buffer.compare(Buffer.from(before.RowVersion), Buffer.from(expectedVersion)) !== 0) {
     throw new ServerPersistenceError('CONFLICT', 'Görev silinmeden önce başka bir kullanıcı tarafından değiştirildi. Verileri yeniden yükleyin.');
   }
@@ -2949,7 +2938,7 @@ export function createSqlAppRepository() {
       return withSqlTransaction(async (transaction) => {
         const actor = await loadTransactionAuthorizationContext(transaction);
         const correlationId = randomUUID();
-        const recurrence = createRecurrenceCommitContext(changes.taskUpserts);
+        const recurrence = createRecurrenceCommitContext();
         const consumedRootIds = new Set();
         const tagPlans = [];
         const touchedTaskProjects = new Set();
