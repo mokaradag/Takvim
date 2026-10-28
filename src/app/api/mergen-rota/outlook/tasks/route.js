@@ -3,6 +3,7 @@ import { extractActualId } from '../../../../../domain/identity/actualId.js';
 import { loadAuthorizationContext } from '../../../../../server/authorization/loadAuthorizationContext.js';
 import { getSqlPool } from '../../../../../server/db/pool.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../server/errors.js';
+import { assertBrowserMutationIntent } from '../../../../../server/identity/sameOriginRequest.js';
 import { withRouteObservability } from '../../../../../server/observability/observeOperation.js';
 import { isSmtpConfigured } from '../../../../../server/mail/smtpConfig.js';
 import {
@@ -69,6 +70,7 @@ async function handleOutlookState() {
 
 async function handleOutlookBulkAdd(request) {
   try {
+    assertBrowserMutationIntent(request, { json: true });
     if (!isOutlookCalendarEnabled()) {
       throw new ServerPersistenceError('FORBIDDEN', outlookMessage('DISABLED'));
     }

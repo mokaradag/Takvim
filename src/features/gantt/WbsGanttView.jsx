@@ -120,6 +120,10 @@ export function WbsGanttView() {
   const today_ = useMemo(() => today(), []);
   const hasWbs = wbs.length > 0;
   const scheduleAvailable = projectSchedule?.status === 'valid';
+  const criticalDependencySet = useMemo(
+    () => new Set(projectSchedule?.criticalDependencyKeys || []),
+    [projectSchedule?.criticalDependencyKeys]
+  );
   const criticalPathUnavailable = projectSchedule?.status === 'invalid';
 
   // Açık dallar YALNIZCA proje değişiminde sıfırlanır. Etki `wbs` dizisine de
@@ -237,12 +241,12 @@ export function WbsGanttView() {
           fromY: rowTops.tops[predecessorIndex] + ROW_H / 2,
           toY: rowTops.tops[rowIndex] + ROW_H / 2,
           hot: hotTaskId === predecessorId || hotTaskId === row.task.id,
-          critical: scheduleAvailable && Boolean(projectSchedule?.criticalDependencyKeys?.includes(`${predecessorId}::${row.task.id}`))
+          critical: scheduleAvailable && criticalDependencySet.has(`${predecessorId}::${row.task.id}`)
         });
       }
     });
     return result;
-  }, [visibleRows, taskRowIndex, rowTops, xForDate, zoom, hotTaskId, scheduleAvailable, projectSchedule]);
+  }, [visibleRows, taskRowIndex, rowTops, xForDate, zoom, hotTaskId, scheduleAvailable, criticalDependencySet]);
 
   useEffect(() => {
     if (!hasWbs) return undefined;

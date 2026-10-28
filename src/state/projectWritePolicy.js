@@ -1,3 +1,4 @@
+import { actualIdComparisonKey, sameActualId } from '../domain/identity/actualId.js';
 import { CORPORATE_WBS_READ_ONLY_MESSAGE, supportsManualWbsEditing } from '../domain/projectTypes.js';
 
 export { CORPORATE_WBS_READ_ONLY_MESSAGE };
@@ -12,7 +13,7 @@ function projectId(value) {
 
 function findProject(projects = [], value = null) {
   const id = projectId(value);
-  return id ? (projects || []).find((project) => String(project.id) === id) || null : null;
+  return id ? (projects || []).find((project) => sameActualId(project.id, id)) || null : null;
 }
 
 function findProjectByName(projects = [], value = '') {
@@ -39,8 +40,8 @@ export function writableProjects(projects = []) {
 export function assigneeTaskCreateProjects(state = {}) {
   const projectIds = new Set((state.tasks || [])
     .filter((task) => task?.isCurrentUserAssignee && task.projectId != null)
-    .map((task) => String(task.projectId)));
-  return (state.projects || []).filter((project) => projectIds.has(String(project.id)));
+    .map((task) => actualIdComparisonKey(task.projectId)).filter((id) => id !== null));
+  return (state.projects || []).filter((project) => projectIds.has(actualIdComparisonKey(project.id)));
 }
 
 /**
@@ -55,18 +56,17 @@ export function assigneeTaskCreateProjects(state = {}) {
  * görev görünürlüğü etkilenmez.
  */
 export function taskAssignableProjects(state = {}) {
-  const visible = writableProjects(state.projects || []);
-  const known = new Set(visible.map((project) => String(project.id)));
-  const scoped = (state.assignableProjects || []).filter((project) => {
-    if (!project) return false;
-    const id = String(project.id);
-    if (known.has(id)) return false;
+  const known = new Set();
+  return [
+    ...writableProjects(state.projects || []),
+    ...(state.assignableProjects || []),
+    ...assigneeTaskCreateProjects(state)
+  ].filter((project) => {
+    const id = actualIdComparisonKey(project?.id);
+    if (id === null || known.has(id)) return false;
     known.add(id);
     return true;
   });
-  const assigneeScoped = assigneeTaskCreateProjects(state)
-    .filter((project) => !known.has(String(project.id)));
-  return [...visible, ...scoped, ...assigneeScoped];
 }
 
 /**
@@ -78,8 +78,8 @@ export function taskCreationScopeInProject(state = {}, value = null) {
   if (!id) return null;
   const visible = findProject(state.projects, id);
   if (canWriteProject(visible)) return 'FULL';
-  if ((state.assignableProjects || []).some((project) => String(project.id) === id)) return 'ASSIGNMENT';
-  if (assigneeTaskCreateProjects(state).some((project) => String(project.id) === id)) return 'ASSIGNEE_CREATE';
+  if ((state.assignableProjects || []).some((project) => sameActualId(project.id, id))) return 'ASSIGNMENT';
+  if (assigneeTaskCreateProjects(state).some((project) => sameActualId(project.id, id))) return 'ASSIGNEE_CREATE';
   return null;
 }
 
@@ -93,13 +93,13 @@ export function canAssignTasksInProject(state = {}, projectId = null) {
   if (!id) return false;
   const visible = findProject(state.projects, id);
   if (canWriteProject(visible)) return true;
-  return (state.assignableProjects || []).some((project) => String(project.id) === id);
+  return (state.assignableProjects || []).some((project) => sameActualId(project.id, id));
 }
 
 function findAssignableProject(state = {}, value = null) {
   const id = projectId(value);
   if (!id) return null;
-  return taskAssignableProjects(state).find((project) => String(project.id) === id) || null;
+  return taskAssignableProjects(state).find((project) => sameActualId(project.id, id)) || null;
 }
 
 export function resolveTaskCreationProject(state = {}, requestedProjectId = null) {
@@ -211,9 +211,6 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
         message: 'Görev oluşturucusu tarih ve mevcut WBS seçimini yönetebilir; proje, sorumlu ve genel proje yapısını yönetemez.'
       };
     }
-    const visibleAssignees = (task.assigneeIds || []).map(String);
-    const hasOtherAssignee = visibleAssignees.some((id) => !currentUserId || id !== currentUserId)
-      || Number(task.assigneeCount ?? visibleAssignees.length) > visibleAssignees.length;
     return {
       ok: true,
       task,
@@ -232,8 +229,8 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       // Görevi kendisi oluşturduğu için HEDEF bitişi de belirleyebilir.
       canEditTargetFinish: true,
       canProposeSchedule: false,
-      canDelete: creatorCanAssign || !hasOtherAssignee,
-      deleteReason: !creatorCanAssign && hasOtherAssignee ? 'Bu görevde başka sorumlular bulunduğu için silemezsiniz.' : null
+      canDelete: false,
+      deleteReason: 'Görev silme işlemi tam proje yetkisi gerektirir.'
     };
   }
 
@@ -281,7 +278,7 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
       canEditTargetFinish: false,
       canProposeSchedule: !isTaskCreator,
       canDelete: false,
-      deleteReason: 'Yalnızca kendi oluşturduğunuz görevleri silebilirsiniz.'
+      deleteReason: 'Görev silme işlemi tam proje yetkisi gerektirir.'
     };
   }
 
@@ -291,6 +288,16 @@ export function resolveTaskMutationAccess(state = {}, taskId, patch = {}) {
   } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'proje')) {
     destinationProject = findProjectByName(state.projects, patch.proje)
       || findProjectByName(state.assignableProjects, patch.proje);
+  }
+
+  if (!hasFullSourceProject && destinationProject && !sameActualId(destinationProject.id, task.projectId)) {
+    return {
+      ok: false,
+      code: 'PROJECT_WRITE_FORBIDDEN',
+      field: 'projectId',
+      projectId: destinationProject.id,
+      message: 'Görev yalnızca kaynak projede tam proje yetkisiyle başka projeye taşınabilir.'
+    };
   }
 
   if (!canAssignTasksInProject(state, destinationProject?.id)) {
@@ -388,11 +395,10 @@ export function resolveWbsMutationAccess(state = {}, nodeId, targetNodeId = null
   if (targetNodeId != null) {
     const targetNode = nodes.find((item) => String(item.id) === String(targetNodeId)) || null;
     const targetProject = targetNode ? findProject(state.projects, targetNode.projectId) : null;
-    // Proje kimlikleri METİN olarak karşılaştırılır (modülün geri kalanı gibi):
-    // bir kayıt sayısal, ötekisi metin kimlik taşıdığında geçerli bir taşıma
-    // "çapraz proje" sanılıp reddediliyordu.
+    // Proje eşitliği ortak kimlik sözleşmesini izler: GUID harf biçimi ve
+    // sayısal/metin gösterimi aynı projeyi çapraz proje yapmaz.
     if (!targetNode || !canWriteProject(targetProject)
-      || String(targetNode.projectId) !== String(node.projectId)) {
+      || !sameActualId(targetNode.projectId, node.projectId)) {
       return {
         ok: false,
         code: 'PROJECT_WRITE_FORBIDDEN',
@@ -431,7 +437,7 @@ export function resolveTaskWbsMoveAccess(state = {}, taskIds = [], targetWbsId =
         message: 'Bu görev için WBS seçme yetkiniz bulunmuyor.'
       };
     }
-    if (String(access.task.projectId) !== String(target.projectId)) {
+    if (!sameActualId(access.task.projectId, target.projectId)) {
       return {
         ok: false,
         code: 'CROSS_PROJECT_TASK_WBS_MOVE',

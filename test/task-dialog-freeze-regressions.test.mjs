@@ -19,6 +19,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   addWorkingDays,
@@ -30,8 +31,9 @@ import {
   DEFAULT_WORKING_DAYS
 } from '../src/scheduling/calendars/index.js';
 import { fmtISO, isValidDate, parseDate } from '../src/scheduling/dates/index.js';
-import { calculateCpm } from '../src/scheduling/cpm/engine.js';
+import { MAX_CRITICAL_PATH_STEPS, calculateCpm } from '../src/scheduling/cpm/engine.js';
 import { createNewTask } from '../src/state/appState.js';
+import { buildPortfolioSchedule } from '../src/state/selectors/scheduleSelectors.js';
 import { createTaskUpdateTracker } from '../src/features/task-detail/taskDraft.js';
 
 /** Sunucunun çalışma günü satırı olmayan takvim için ürettiği biçim. */
@@ -182,6 +184,86 @@ test('kritik yol sayımı üst sınırda kesilir ve kritik görevler eksilmez', 
   assert.ok(result.criticalPaths.length <= 500, 'yol sayımı üst sınırı aşmamalıdır');
   assert.ok(result.criticalTaskIds.length >= layers, 'kritik görev kümesi eksilmemelidir');
   assert.ok(Date.now() - started < 10000, 'hesap makul sürede bitmelidir');
+});
+
+test('kritik yol iş bütçesi yeni köke geçmeden denetlenir; tam biten liste kesilmiş sayılmaz', () => {
+  const source = readFileSync(new URL('../src/scheduling/cpm/engine.js', import.meta.url), 'utf8');
+  const body = source.slice(source.indexOf('function findCriticalPaths('), source.indexOf('function serializeSchedule('))
+    .replaceAll('steps += 1;', 'countSteps(1); steps += 1;')
+    .replace('steps += path.length;', 'countSteps(path.length); steps += path.length;');
+  let steps = 0;
+  // Aynı gezinti küçük bir bütçeyle çalıştırılır; her ziyaret ve yayımlama sayılır.
+  const enumerate = new Function('MAX_CRITICAL_PATH_STEPS', 'MAX_CRITICAL_PATHS', 'countSteps', `${body}; return findCriticalPaths;`)(2, 500, (count) => {
+    steps += count;
+    assert.ok(steps <= 2, 'ziyaret ve yayımlama sert bütçeyi aşamaz');
+  });
+  const schedules = new Map([['a', { totalFloatDays: 0 }], ['b', { totalFloatDays: 0 }]]);
+  assert.equal(enumerate({ topologicalOrder: ['a'], edges: [] }, schedules, new Map()).truncated, false);
+  assert.equal(steps, 2);
+  steps = 0;
+  const result = enumerate({ topologicalOrder: ['a', 'b'], edges: [] }, schedules, new Map());
+  assert.deepEqual(result.paths, [['a']]);
+  assert.equal(result.truncated, true);
+  assert.equal(steps, 2);
+});
+
+test('uzun ortak kuyruğa bağlanan yüzlerce kritik kök toplam yol bütçesini aşamaz', () => {
+  // Yol sayısı sınırın altında kalır; iş, her kökün uzun kuyruğu yeniden
+  // kopyalamasından doğar. Toplam yayımlanan öğe sayısı iş bütçesiyle sınırlıdır.
+  const roots = 500;
+  const tail = 600;
+  const tasks = [];
+  for (let index = 0; index < roots; index += 1) {
+    tasks.push({ id: `r${index}`, projectId: 'p', plannedStart: '2026-08-24', plannedDurationDays: 1, deps: [] });
+  }
+  for (let index = 0; index < tail; index += 1) {
+    tasks.push({
+      id: `t${index}`,
+      projectId: 'p',
+      plannedDurationDays: 1,
+      deps: index === 0
+        ? Array.from({ length: roots }, (_, root) => ({ predecessorId: `r${root}`, type: 'FS', lagDays: 0 }))
+        : [{ predecessorId: `t${index - 1}`, type: 'FS', lagDays: 0 }]
+    });
+  }
+
+  const result = calculateCpm(tasks, { projects: [{ id: 'p', name: 'P' }], calendars: [] });
+  const emitted = result.criticalPaths.reduce((sum, path) => sum + path.length, 0);
+
+  assert.equal(result.criticalPathsTruncated, true, 'kesilen liste bildirilir');
+  assert.ok(emitted <= MAX_CRITICAL_PATH_STEPS, `yayımlanan yol öğesi bütçeyi aşmamalıdır (${emitted})`);
+  assert.equal(result.criticalTaskIds.length, roots + tail, 'kritik görev kümesi eksilmemelidir');
+  for (const path of result.criticalPaths) assert.equal(path.length, tail + 1);
+
+  // Yol listesi kesilir ama kritik İLİŞKİ kümesi tamdır: her kökün kuyruğa oku vurgulanır.
+  assert.ok(result.criticalPaths.length < roots, 'liste bütün kökleri taşımaz');
+  const expected = [
+    ...Array.from({ length: roots }, (_, root) => `r${root}::t0`),
+    ...Array.from({ length: tail - 1 }, (_, index) => `t${index}::t${index + 1}`)
+  ].sort();
+  assert.deepEqual(result.criticalDependencies.map(([from, to]) => `${from}::${to}`).sort(), expected);
+  const schedule = buildPortfolioSchedule({ tasks, projects: [{ id: 'p', name: 'P' }], calendars: [] });
+  const projectSchedule = schedule.projects.p;
+  assert.equal(projectSchedule.criticalPathsTruncated, true);
+  assert.deepEqual([...projectSchedule.criticalDependencyKeys].sort(), expected, 'Gantt okları kesilen listeden türetilmez');
+});
+
+test('meşru çok uzun tek kritik zincir kesilmeden ve yığın taşmadan listelenir', () => {
+  // Özyinelemeli gezinti bu derinlikte çağrı yığınını tüketiyordu.
+  const length = 15000;
+  const tasks = Array.from({ length }, (_, index) => ({
+    id: `c${index}`,
+    projectId: 'p',
+    plannedDurationDays: 1,
+    ...(index === 0 ? { plannedStart: '2026-08-24' } : {}),
+    deps: index === 0 ? [] : [{ predecessorId: `c${index - 1}`, type: 'FS', lagDays: 0 }]
+  }));
+
+  const result = calculateCpm(tasks, { projects: [{ id: 'p', name: 'P' }], calendars: [] });
+
+  assert.equal(result.criticalPathsTruncated, false);
+  assert.equal(result.criticalPaths.length, 1);
+  assert.deepEqual(result.criticalPaths[0], tasks.map((task) => task.id));
 });
 
 /* ── "Tamam" düğmesinin bekleme zinciri ─────────────────────────── */

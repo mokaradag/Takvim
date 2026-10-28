@@ -977,6 +977,21 @@ function commandPlatformEnv() {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => keep.test(key)));
 }
 
+/**
+ * Windows'u taklit eden POSIX çağrılarının ev denetimi ikizi: `SystemRoot` altındaki sahte PowerShell, özgün ev
+ * yolunda `linked-home` veya `untrusted` geçen evi reddeder, ötekini oluşturup kabul eder. Gerçek ACL denetimi Windows işinde sınanır.
+ */
+async function windowsHomeCheckStandIn(dir) {
+  const { chmodSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const path = await import('node:path');
+  const systemRoot = path.join(dir, 'windows');
+  const folder = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(path.join(folder, 'powershell.exe'), '#!/bin/sh\ncase "$ROTA_PLANNER_HOME" in *linked-home*) exit 4 ;; *untrusted*) exit 3 ;; esac\n/bin/mkdir -p \"$ROTA_PLANNER_HOME\"\nexit 0\n');
+  chmodSync(path.join(folder, 'powershell.exe'), 0o755);
+  return systemRoot;
+}
+
 test('Claude model komutu: geçersiz bütçe, kayıtsız bütçe ve tükenen çağrı hakkı modele gitmeden reddedilir', async () => {
   const { spawnSync } = await import('node:child_process');
   const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
@@ -1004,6 +1019,232 @@ test('Claude model komutu: geçersiz bütçe, kayıtsız bütçe ve tükenen ça
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP yapılandırması yazılmadan ve bütçe ayrılmadan reddedilir', async (t) => {
+  const { spawnSync } = await import('node:child_process');
+  const { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+  const dir = mkdtempSync(path.join(tmpdir(), 'rota-claude-home-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const input = JSON.stringify({ messages: [{ role: 'system', content: 'x' }, { role: 'user', content: 'y' }], tools: [], toolChoice: 'auto' });
+  let calls = 0;
+  const run = (script, home, env = {}) => {
+    const log = path.join(dir, `calls-${calls += 1}.jsonl`);
+    const result = spawnSync(process.execPath, [script], { input, encoding: 'utf8',
+      env: { ...commandPlatformEnv(), PATH: '', PLANNER_CLAUDE_LOG: log, PLANNER_CLAUDE_HOME: home, ...env } });
+    const rows = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
+    return { observed: rows.some(row => row.error === 'PLANNER_HOME_UNTRUSTED'), error: JSON.parse(result.stdout).error, reserved: rows.some(row => row.reserved), reason: rows.find(row => row.reason)?.reason, at: rows.find(row => row.reason)?.path };
+  };
+  const untrusted = (outcome, label, reason = null) => {
+    assert.equal(outcome.error, 'PLANNER_HOME_UNTRUSTED', label);
+    assert.equal(outcome.observed, true, `${label}: ret gerçek kayıt dosyasında gözlenir`);
+    assert.equal(outcome.reserved, false, `${label}: güvenilmeyen ev bütçe ayırmaz`);
+    if (reason) assert.equal(outcome.reason, reason, `${label}: işletmeciye neden bildirilir`);
+  };
+
+  const adapter = 'scripts/planner-claude-model.mjs';
+  if (process.platform === 'win32') {
+    // Gerçek ACL: başka hesaba devredilen yazma hakkı evi, yalnızca bu klasörde verilen alt öğe silme hakkı atayı
+    // güvenilmez kılar. Kullanıcının kendi geçici klasörü altındaki ev kabul edilir.
+    const grant = (target, rights) => assert.equal(spawnSync('icacls', [target, '/grant', `*S-1-1-0:${rights}`], { encoding: 'utf8' }).status, 0);
+    const shared = path.join(dir, 'shared');
+    mkdirSync(shared);
+    grant(shared, '(OI)(CI)M');
+    untrusted(run(adapter, path.join(shared, 'home')), 'herkese yazılabilir ev');
+    assert.deepEqual(readdirSync(path.join(shared, 'home')), [], 'reddedilen eve yürütülebilir yapılandırma yazılmaz');
+    const renamable = path.join(dir, 'renamable');
+    mkdirSync(renamable);
+    grant(renamable, '(DC)');
+    untrusted(run(adapter, path.join(renamable, 'home')), 'alt öğesi başkasınca silinebilen ata');
+    // Evde etkisiz, yalnızca devralınan girdi: yeni `call-*`, `mcp.json` ve `work` girdilerine etkin olarak geçerdi.
+    const inheritOnly = path.join(dir, 'inherit-only');
+    mkdirSync(inheritOnly);
+    grant(inheritOnly, '(OI)(CI)(IO)M');
+    untrusted(run(adapter, inheritOnly), 'yalnızca alt öğelere geçen yazma hakkı', 'HOME_ACL_UNTRUSTED');
+    assert.deepEqual(readdirSync(inheritOnly), [], 'reddedilen eve çalışma klasörü de yazılmaz');
+    // Var olan alt öğeler de sınırdadır: çalışma klasörü ve CLI ayar dosyası.
+    for (const relative of [['work'], ['.claude', 'settings.json']]) {
+      const home = mkdtempSync(path.join(dir, 'descendant-'));
+      const target = path.join(home, ...relative);
+      mkdirSync(path.dirname(target), { recursive: true });
+      if (relative.length > 1) writeFileSync(target, '{}'); else mkdirSync(target);
+      grant(target, relative.length > 1 ? 'M' : '(OI)(CI)M');
+      const outcome = run(adapter, home);
+      untrusted(outcome, relative.join('/'), 'HOME_ACL_UNTRUSTED');
+      assert.ok(outcome.at?.endsWith(path.join(...relative)), `${outcome.at}`);
+    }
+    const junctioned = mkdtempSync(path.join(dir, 'junction-'));
+    symlinkSync(path.join(dir, 'shared'), path.join(junctioned, 'link'), 'junction');
+    untrusted(run(adapter, junctioned), 'alt ağaçta bağlantı noktası', 'HOME_REPARSE_POINT');
+    const ambient = path.join(dir, 'ambient-profile');
+    mkdirSync(path.join(ambient, '.claude'), { recursive: true });
+    writeFileSync(path.join(ambient, '.claude', 'settings.json'), '{"hooks":{}}');
+    const original = readFileSync(path.join(ambient, '.claude', 'settings.json'), 'utf8');
+    for (const [link, home] of [
+      [path.join(dir, 'requested-junction'), path.join(dir, 'requested-junction')],
+      [path.join(dir, 'ancestor-junction'), path.join(dir, 'ancestor-junction', 'not-created')]
+    ]) {
+      symlinkSync(ambient, link, 'junction');
+      untrusted(run(adapter, home), 'istenen ev ya da atası bağlantı noktası', 'HOME_REPARSE_POINT');
+      assert.deepEqual(readdirSync(ambient), ['.claude'], 'hedefe çalışma klasörü veya MCP yapılandırması yazılmaz');
+      assert.equal(readFileSync(path.join(ambient, '.claude', 'settings.json'), 'utf8'), original);
+    }
+    const outcome = run(adapter, path.join(dir, 'private', 'home'));
+    if (outcome.error === 'PLANNER_HOME_UNTRUSTED') {
+      // Tanı: beklenmeyen reddin hangi klasör ve hesaptan geldiği (yalnızca başarısızlıkta).
+      const dump = spawnSync(path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-Command',
+        "$p=$env:ROTA_PLANNER_HOME; while ($p) { $a=[IO.Directory]::GetAccessControl($p); $t=[Security.Principal.SecurityIdentifier]; '{0} {1}' -f $p, $a.GetOwner($t).Value; "
+        + "foreach ($r in $a.GetAccessRules($true,$true,$t)) { '  {0} {1} {2:X} {3}' -f $r.IdentityReference.Value, $r.AccessControlType, [long]$r.FileSystemRights, $r.PropagationFlags }; $p=[IO.Path]::GetDirectoryName($p) }"],
+      { encoding: 'utf8', env: { ...process.env, ROTA_PLANNER_HOME: path.join(dir, 'private', 'home') } });
+      assert.fail(`özel ev reddedildi:\n${dump.stdout}${dump.stderr}`);
+    }
+    // Sonradan oluşturulan girdiler doğrulanmış evin devralma girdileriyle özeldir ve sonraki çağrının denetimini geçer.
+    assert.ok(existsSync(path.join(dir, 'private', 'home', 'work')));
+    writeFileSync(path.join(dir, 'private', 'home', 'work', 'mcp.json'), '{}');
+    mkdirSync(path.join(dir, 'private', 'home', '.claude'));
+    writeFileSync(path.join(dir, 'private', 'home', '.claude', 'settings.json'), '{}');
+    assert.notEqual(run(adapter, path.join(dir, 'private', 'home')).error, 'PLANNER_HOME_UNTRUSTED');
+    return;
+  }
+
+  // Windows yolu her platformda özgün istek yoluyla sınanır. Yalnızca süreç başlangıç kimliği taklit edilir;
+  // gerçek kayıt/kilit yolu bütçe ayırımını gözlenebilir tutar.
+  const windows = path.join(dir, 'windows.mjs');
+  writeFileSync(windows, `import cp from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    const spawn = cp.spawnSync;
+    cp.spawnSync = (...args) => args[2]?.env?.ROTA_LOCK_OWNER_PID
+      ? { status: 0, stdout: 'simulated-process-start' } : spawn(...args);
+    syncBuiltinESMExports();
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const { runAdapter } = await import(${JSON.stringify(pathToFileURL(path.resolve(adapter)).href)});
+    await runAdapter();`);
+  const windowsEnv = { SystemRoot: await windowsHomeCheckStandIn(dir) };
+  untrusted(run(windows, path.join(dir, 'untrusted-home'), windowsEnv), 'denetimin reddettiği ev');
+  assert.deepEqual(existsSync(path.join(dir, 'untrusted-home')) ? readdirSync(path.join(dir, 'untrusted-home')) : [], [], 'reddedilen eve yürütülebilir yapılandırma yazılmaz');
+  mkdirSync(path.join(dir, 'private-target'));
+  symlinkSync(path.join(dir, 'private-target'), path.join(dir, 'linked-home'));
+  untrusted(run(windows, path.join(dir, 'linked-home'), windowsEnv), 'özgün bağlantı yolu denetlenir');
+  untrusted(run(windows, path.join(dir, 'unchecked-home'), { SystemRoot: path.join(dir, 'missing-windows') }), 'çalışmayan denetim');
+  assert.deepEqual(existsSync(path.join(dir, 'unchecked-home')) ? readdirSync(path.join(dir, 'unchecked-home')) : [], []);
+  assert.notEqual(run(windows, path.join(dir, 'private-home'), windowsEnv).error, 'PLANNER_HOME_UNTRUSTED');
+
+  const redirected = path.join(dir, 'redirected-profile');
+  const settings = path.join(redirected, '.claude', 'settings.json');
+  mkdirSync(path.dirname(settings), { recursive: true });
+  chmodSync(path.dirname(settings), 0o775);
+  writeFileSync(settings, '{"hooks":{}}', { mode: 0o600 });
+  const originalMode = lstatSync(path.dirname(settings)).mode;
+  const defaultRoot = mkdtempSync(path.join(dir, 'default-root-'));
+  const defaultAdapter = path.join(dir, 'default-home.mjs');
+  writeFileSync(defaultAdapter, `import os from 'node:os';
+    import { syncBuiltinESMExports } from 'node:module';
+    os.tmpdir = () => ${JSON.stringify(defaultRoot)};
+    syncBuiltinESMExports();
+    const { runAdapter } = await import(${JSON.stringify(pathToFileURL(path.resolve(adapter)).href)});
+    await runAdapter();`);
+  for (const [script, link, env] of [
+    [adapter, path.join(dir, 'requested-posix-link'), {}],
+    [defaultAdapter, path.join(defaultRoot, `rota-planner-claude-home-${process.getuid()}`), { PLANNER_CLAUDE_HOME: '' }]
+  ]) {
+    symlinkSync(redirected, link);
+    untrusted(run(script, link, env), 'istenen POSIX ev yaprağı bağlantıdır', 'HOME_SYMLINK');
+    assert.deepEqual(readdirSync(redirected), ['.claude'], 'bağlantı hedefine work veya call-* yazılmaz');
+    assert.equal(lstatSync(path.dirname(settings)).mode, originalMode, 'hedefin dizin izinleri değiştirilmez');
+    assert.equal(readFileSync(settings, 'utf8'), '{"hooks":{}}');
+  }
+
+  const shared = path.join(dir, 'shared');
+  mkdirSync(shared);
+  chmodSync(shared, 0o777);
+  untrusted(run(adapter, path.join(shared, 'home')), 'başkasına yazılabilir yapışkansız ata', 'HOME_ANCESTOR_UNTRUSTED');
+  assert.deepEqual(readdirSync(path.join(shared, 'home')), []);
+  // İstenen yaprak bağlantısı, hedefi ve ataları çözülmeden reddedilir.
+  symlinkSync(path.join(shared, 'home'), path.join(dir, 'link'));
+  untrusted(run(adapter, path.join(dir, 'link')), 'açık ata altındaki eve yönelen bağlantı', 'HOME_SYMLINK');
+
+  for (const relative of [['work'], ['.claude', 'settings.json'], ['other-link']]) {
+    const home = mkdtempSync(path.join(dir, 'linked-descendant-'));
+    const outside = mkdtempSync(path.join(dir, 'outside-'));
+    chmodSync(outside, 0o777);
+    const target = path.join(home, ...relative);
+    mkdirSync(path.dirname(target), { recursive: true });
+    const external = relative.length > 1 ? path.join(outside, 'settings.json') : outside;
+    if (relative.length > 1) writeFileSync(external, '{"hooks":{}}');
+    symlinkSync(external, target);
+    untrusted(run(adapter, home), relative.join('/'), 'HOME_SYMLINK');
+    assert.deepEqual(readdirSync(outside), relative.length > 1 ? ['settings.json'] : []);
+    assert.equal(readdirSync(home).some(name => name.startsWith('call-')), false);
+  }
+
+  // Eski sürümün izin veren umask ile bıraktığı kendi KLASÖRLERİ yukarıdan aşağı daraltılır ve ev kabul edilir:
+  // açık kaldığı sürede başkasının eklediği girdi sahibinden, yazabildiği dosya izninden yakalanırdı.
+  const legacy = path.join(dir, 'legacy');
+  mkdirSync(path.join(legacy, 'work', '.claude'), { recursive: true });
+  for (const folder of [legacy, path.join(legacy, 'work'), path.join(legacy, 'work', '.claude')]) chmodSync(folder, 0o777);
+  assert.notEqual(run(adapter, legacy).error, 'PLANNER_HOME_UNTRUSTED');
+  for (const folder of [legacy, path.join(legacy, 'work'), path.join(legacy, 'work', '.claude')]) assert.equal(lstatSync(folder).mode & 0o022, 0, folder);
+
+  // CLI'nin yürüttüğü ayar ve kanca yolları: başkasına yazılabilir DOSYA onarılmaz, neden ve yolla reddedilir.
+  for (const relative of [['work', '.claude', 'settings.json'], ['.claude', 'settings.json'], ['call-eski', 'mcp.json']]) {
+    const home = mkdtempSync(path.join(dir, 'tampered-'));
+    const target = path.join(home, ...relative);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, '{"hooks":{}}');
+    chmodSync(target, 0o666);
+    const outcome = run(adapter, home);
+    untrusted(outcome, relative.join('/'), 'HOME_ENTRY_WRITABLE_BY_OTHERS');
+    assert.ok(outcome.at?.endsWith(path.join(...relative)), `${outcome.at}`);
+  }
+  const singleUidNamespace = existsSync('/proc/self/uid_map') && readFileSync('/proc/self/uid_map', 'utf8').trim().split(/\s+/).at(-1) === '1';
+  if (process.getuid() === 0 && !singleUidNamespace) {
+    // Başka hesabın bıraktığı girdi (yalnızca kök kullanıcıyla kurulabilir): sahibinden reddedilir.
+    const home = mkdtempSync(path.join(dir, 'foreign-'));
+    mkdirSync(path.join(home, 'work', '.claude'), { recursive: true });
+    writeFileSync(path.join(home, 'work', '.claude', 'settings.json'), '{}', { mode: 0o600 });
+    chownSync(path.join(home, 'work', '.claude', 'settings.json'), 65534, 65534);
+    untrusted(run(adapter, home), 'başka hesaba ait ayar', 'HOME_ENTRY_FOREIGN_OWNER');
+    chownSync(path.join(home, 'work'), 65534, 65534);
+    untrusted(run(adapter, home), 'başka hesaba ait çalışma klasörü', 'HOME_ENTRY_FOREIGN_OWNER');
+  }
+
+  // İzin veren umask altında bile üretilen çağrı klasörü, MCP yapılandırması, çalışma klasörü ve CLI'nin yazdığı
+  // durum yalnızca bu kullanıcıya açıktır; CLI başlarken bunları gözlemler.
+  const bin = path.join(dir, 'bin');
+  const observed = path.join(dir, 'observed.json');
+  mkdirSync(bin);
+  writeFileSync(path.join(bin, 'claude'), `#!${process.execPath}
+    const fs = require('node:fs'); const path = require('node:path');
+    const config = process.argv[process.argv.indexOf('--mcp-config') + 1];
+    fs.mkdirSync(path.join(process.env.HOME, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(process.env.HOME, '.claude', 'state.json'), '{}');
+    const mode = (target) => fs.lstatSync(target).mode & 0o777;
+    fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify([mode(config), mode(path.dirname(config)), mode(process.cwd()), mode(path.join(process.env.HOME, '.claude', 'state.json'))]));
+    process.exit(1);
+`);
+  chmodSync(path.join(bin, 'claude'), 0o755);
+  const generatedHome = path.join(dir, 'generated');
+  const withTools = JSON.stringify({ messages: [{ role: 'system', content: 'x' }, { role: 'user', content: 'y' }],
+    tools: [{ name: 'ara', description: 'ara', parameters: { type: 'object', properties: {} } }], toolChoice: 'auto' });
+  const previous = process.umask(0o002);
+  try {
+    for (let round = 0; round < 2; round += 1) {
+      const result = spawnSync(process.execPath, [adapter], { input: withTools, encoding: 'utf8',
+        env: { ...commandPlatformEnv(), PATH: bin, PLANNER_CLAUDE_HOME: generatedHome } });
+      assert.equal(JSON.parse(result.stdout).error, 'PLANNER_PROVIDER_ERROR', `tur ${round}: ev kabul edilir, CLI çalışır`);
+      assert.deepEqual(JSON.parse(readFileSync(observed, 'utf8')).map((mode) => mode & 0o077), [0, 0, 0, 0], `tur ${round}`);
+    }
+  } finally {
+    process.umask(previous);
+  }
+  // Yapışkan bitli ortak kök (ör. /tmp) altındaki kendi klasörü güvenilirdir.
+  const sticky = path.join(dir, 'sticky');
+  mkdirSync(sticky);
+  chmodSync(sticky, 0o1777);
+  assert.notEqual(run(adapter, path.join(sticky, 'home')).error, 'PLANNER_HOME_UNTRUSTED');
 });
 
 /** Gerçek komut sınırı; yerel CLI ikizi yalnızca açık dosya bariyerinde tamamlanır. */
@@ -1379,45 +1620,85 @@ test('Claude Windows kilit temizliği: yineleme sırasında gelen yeni sahip sil
 });
 
 test('4C kayıtlı dış komut: kuyruk yürütme süresini tüketmez; kapanış bekleyenleri başlatmaz', async (t) => {
-  const { mkdtempSync, rmSync, watch, writeFileSync } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
-  const path = await import('node:path');
+  const childProcess = (await import('node:child_process')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { EventEmitter } = await import('node:events');
+  const { PassThrough } = await import('node:stream');
   const { externalModel } = await import('../scripts/planner-evaluation.mjs');
-  const dir = mkdtempSync(path.join(tmpdir(), 'rota-queued-command-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const trace = path.join(dir, 'trace.jsonl');
-  const file = path.join(dir, 'model.cjs');
-  writeFileSync(trace, '');
-  writeFileSync(file, `
-    const fs = require('node:fs');
-    const path = require('node:path');
-    const id = JSON.parse(fs.readFileSync(0, 'utf8')).messages[0].content;
-    const record = phase => fs.appendFileSync(path.join(__dirname, 'trace.jsonl'), JSON.stringify({id,phase,budget:process.env.PLANNER_MODEL_TIMEOUT_MS})+'\\n');
-    record('start');
-    setTimeout(() => {record('end'); console.log(JSON.stringify({text:'ok',toolCalls:[]}));}, 350);
-  `);
-  const create = () => externalModel({ command: `"${process.execPath}" "${file}"`, guard: () => {}, ledger: path.join(dir, 'calls.jsonl'), timeoutMs: 1000 });
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const spawn = childProcess.spawn;
+  const children = [];
+  const rows = [];
+  const killed = [];
+  // Süreç soğuk başlatma süresi kuyruk sözleşmesi değildir. Gerçek üretim kuyruğu ve
+  // 1000 ms zamanlayıcısı, denetlenen süreç olaylarıyla sınanır; yerel yaşam döngüsü ayrı testlerdedir.
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+  childProcess.spawn = (command, args, options) => {
+    if (command === 'taskkill') {
+      killed.push(args);
+      const killer = new EventEmitter();
+      queueMicrotask(() => {
+        const child = children.find(item => String(item.pid) === args[1]);
+        child.signalCode = 'SIGKILL'; child.emit('close', null);
+        killer.emit('close', 0);
+      });
+      return killer;
+    }
+    const child = Object.assign(new EventEmitter(), { pid: 1000 + children.length, exitCode: null, signalCode: null,
+      options, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+    child.stdin.on('data', data => {
+      child.id = JSON.parse(data).messages[0].content;
+      rows.push({ id: child.id, phase: 'start', budget: options.env.PLANNER_MODEL_TIMEOUT_MS });
+    });
+    children.push(child);
+    return child;
+  };
+  syncBuiltinESMExports();
+  const create = () => externalModel({ command: 'controlled-model', guard: () => {}, ledger: 'controlled-ledger.jsonl', timeoutMs: 1000 });
   const input = id => ({ messages: [{ role: 'user', content: String(id) }], tools: [], toolChoice: 'none' });
-  const rows = () => readFileSync(trace, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
-  const model = create();
-  t.after(() => model.dispose());
-  const replies = await Promise.all([1, 2, 3, 4].map(id => model.complete(input(id))));
-  assert.ok(replies.every(reply => reply.error === null && reply.text === 'ok'));
-  assert.deepEqual(rows().map(({ id, phase }) => [id, phase]), [1, 2, 3, 4].flatMap(id => [[String(id), 'start'], [String(id), 'end']]));
-  assert.ok(rows().every(row => row.budget === '1000'));
-  model.dispose();
-  writeFileSync(trace, '');
-  const cancelled = create();
-  t.after(() => cancelled.dispose());
-  const started = new Promise((resolve, reject) => {
-    const watcher = watch(dir, () => { if (rows().length) { clearTimeout(timer); watcher.close(); resolve(); } });
-    const timer = setTimeout(() => { watcher.close(); reject(new Error('Komut başlamadı')); }, 5000);
-  });
-  const waiting = [1, 2, 3].map(id => cancelled.complete(input(id)));
-  await started;
-  cancelled.dispose();
-  assert.ok((await Promise.all(waiting)).every(reply => reply.error === 'MODEL_COMMAND_ERROR'));
-  assert.equal(rows().filter(row => row.phase === 'start').length, 1);
+  const flush = () => new Promise(setImmediate);
+  let model;
+  let cancelled;
+  try {
+    model = create();
+    const pending = [1, 2, 3, 4].map(id => model.complete(input(id)));
+    await flush();
+    for (let index = 0; index < 4; index += 1) {
+      assert.equal(children.length, index + 1, 'önceki çağrı bitmeden sonraki süreç başlamaz');
+      t.mock.timers.tick(750);
+      await flush();
+      const child = children[index];
+      assert.equal(child.signalCode, null, 'kuyrukta geçen süre yürütme bütçesini tüketmez');
+      rows.push({ id: child.id, phase: 'end', budget: child.options.env.PLANNER_MODEL_TIMEOUT_MS });
+      child.stdout.write(JSON.stringify({ text: 'ok', toolCalls: [] }));
+      child.exitCode = 0; child.emit('close', 0);
+      await flush();
+    }
+    const replies = await Promise.all(pending);
+    assert.ok(replies.every(reply => reply.error === null && reply.text === 'ok'), JSON.stringify(replies));
+    assert.equal(replies.at(-1).durationMs, 3000, 'kuyruk beklemesi tek yürütme bütçesini aşar');
+    assert.deepEqual(rows.map(({ id, phase }) => [id, phase]), [1, 2, 3, 4].flatMap(id => [[String(id), 'start'], [String(id), 'end']]));
+    assert.ok(rows.every(row => row.budget === '1000'));
+    // Gerçek yürütme sınırı kaldırılmadı: başlamış ama tamamlanmayan çağrı tam sınırda kesilir.
+    const expired = model.complete(input('expired'));
+    await flush(); t.mock.timers.tick(1000);
+    assert.equal((await expired).error, 'MODEL_COMMAND_TIMEOUT');
+    assert.equal(killed.length, 1);
+    await model.dispose();
+    cancelled = create();
+    const before = children.length;
+    const waiting = [1, 2, 3].map(id => cancelled.complete(input(id)));
+    await flush();
+    assert.equal(children.length, before + 1);
+    await cancelled.dispose();
+    assert.ok((await Promise.all(waiting)).every(reply => reply.error === 'MODEL_COMMAND_ERROR'));
+    assert.equal(children.length, before + 1, 'kapanış kuyruktaki iki süreci başlatmaz');
+    assert.equal(killed.length, 2);
+  } finally {
+    await model?.dispose(); await cancelled?.dispose();
+    Object.defineProperty(process, 'platform', platform); childProcess.spawn = spawn; syncBuiltinESMExports();
+  }
 });
 
 test('4C takip nitelendirmesi: açık bitiş nedeni korunur, bilinmeyen neden sağlayıcıya geçmez', async () => {
@@ -2046,7 +2327,7 @@ test('Claude frozen 18: standard Windows npm launcher passes arguments without a
     'require("node:fs").writeFileSync(' + JSON.stringify(argv) + ', JSON.stringify(process.argv.slice(2)));\n' +
     readFileSync(cli.model, 'utf8').replace('const root = __dirname;', 'const root = ' + JSON.stringify(cli.dir) + ';'));
   writeFileSync(cli.adapter, 'Object.defineProperty(process,"platform",{value:"win32"});\n' + readFileSync(cli.adapter, 'utf8'));
-  const pending = cli.start({ PATH: bin, PLANNER_CLAUDE_LOG: '' }, 'claude');
+  const pending = cli.start({ PATH: bin, PLANNER_CLAUDE_LOG: '', SystemRoot: process.env.SystemRoot || await windowsHomeCheckStandIn(cli.dir) }, 'claude');
   await cli.waitFor(() => cli.count() === 1);
   cli.release();
   const reply = await pending.done;
@@ -2156,7 +2437,7 @@ test('Claude frozen 22: Windows CLI uses the isolated profile and required syste
   const capture = path.join(cli.dir, 'environment.json');
   writeFileSync(cli.adapter, 'Object.defineProperty(process,"platform",{value:"win32"});\n' + readFileSync(cli.adapter, 'utf8'));
   writeFileSync(cli.model, 'require("node:fs").writeFileSync(' + JSON.stringify(capture) + ',JSON.stringify(process.env));\n' + readFileSync(cli.model, 'utf8'));
-  const systemRoot = process.env.SystemRoot || 'C:\\Windows';
+  const systemRoot = process.env.SystemRoot || await windowsHomeCheckStandIn(cli.dir);
   const windows = { SystemRoot: systemRoot, windir: process.env.windir || systemRoot,
     ComSpec: process.env.ComSpec || systemRoot + '\\System32\\cmd.exe', PATHEXT: process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD' };
   const pending = cli.start({ ...windows, PLANNER_CLAUDE_LOG: '', USERPROFILE: path.join(cli.dir, 'operator-profile'),
@@ -2246,7 +2527,7 @@ test('Claude final convergence: packaged Windows executable uses the fixed comma
     Object.defineProperty(process, 'platform', { value: 'win32' });
     ` + readFileSync(cli.adapter, 'utf8'));
   cli.release();
-  const reply = await cli.start({ PATH: bin, PLANNER_CLAUDE_LOG: '' }, 'claude').done;
+  const reply = await cli.start({ PATH: bin, PLANNER_CLAUDE_LOG: '', SystemRoot: process.env.SystemRoot || await windowsHomeCheckStandIn(cli.dir) }, 'claude').done;
   assert.equal(reply.text, 'ok');
   assert.equal(existsSync(marker), false);
 });
@@ -2320,4 +2601,278 @@ test('4C final convergence: distinct later-part reads score only against their o
   assert.ok(scoreDecision(testCase, wrong, { referenceDate: loaded.referenceDate }).reasons.includes('calls:unrelated'));
   wrong.plan.calls.at(-1).name = 'rota_calendar_inspect';
   assert.ok(scoreDecision(testCase, wrong, { referenceDate: loaded.referenceDate }).reasons.includes('calls:unrelated'));
+});
+
+test('Claude özel ev yürüyüşü: kaybolan alt öğeler geçilir; kök, erişim ve bağlantı hataları reddedilir', async (t) => {
+  const fs = await import('node:fs');
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { assertPrivateTree, WINDOWS_HOME_CHECK } = await import('../scripts/planner-claude-model.mjs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(tmpdir(), 'claude-walk-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  if (process.platform === 'win32') {
+    const shell = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const run = script => spawnSync(shell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8', env: { ...process.env, ROTA_PLANNER_HOME: dir }
+    });
+    for (const leaf of ['vanishing-file', 'vanishing-directory']) {
+      const target = path.join(dir, leaf);
+      if (leaf.endsWith('directory')) fs.mkdirSync(target); else fs.writeFileSync(target, '');
+      const remove = `if ([IO.Path]::GetFileName($e) -eq '${leaf}') { if ([IO.Directory]::Exists($e)) { [IO.Directory]::Delete($e) } else { [IO.File]::Delete($e) } }; `;
+      for (const point of ['$a=[IO.File]::GetAttributes($e);', '$acl=[IO.Directory]::GetAccessControl($e)', '$acl=[IO.File]::GetAccessControl($e)']) {
+        if (!fs.existsSync(target)) { if (leaf.endsWith('directory')) fs.mkdirSync(target); else fs.writeFileSync(target, ''); }
+        const checked = run(WINDOWS_HOME_CHECK.replace(point, `${remove}${point}`));
+        assert.equal(checked.status, 0, `${point}: ${checked.stderr}`);
+      }
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+    fs.mkdirSync(path.join(dir, 'queued'));
+    const queued = run(WINDOWS_HOME_CHECK.replace('$entries=[IO.Directory]::GetFileSystemEntries($d)',
+      "if ([IO.Path]::GetFileName($d) -eq 'queued') { [IO.Directory]::Delete($d) }; $entries=[IO.Directory]::GetFileSystemEntries($d)"));
+    assert.equal(queued.status, 0, queued.stderr);
+    assert.notEqual(run(WINDOWS_HOME_CHECK.replace('$a=[IO.File]::GetAttributes($e);', "throw [UnauthorizedAccessException]::new('denied');")).status, 0);
+    const failure = run(WINDOWS_HOME_CHECK.replace('$a=[IO.File]::GetAttributes($e);', "throw [IO.IOException]::new('unreadable metadata');"));
+    assert.notEqual(failure.status, 0);
+    const rootGone = run(WINDOWS_HOME_CHECK.replace('$pending=New-Object Collections.Stack;', "[IO.Directory]::Delete($root,$true); $pending=New-Object Collections.Stack;"));
+    assert.notEqual(rootGone.status, 0);
+    return;
+  }
+  const realRead = fs.default.readdirSync;
+  const realStat = fs.default.lstatSync;
+  try {
+    for (const directory of [false, true]) {
+      const target = path.join(dir, 'transient');
+      if (directory) fs.mkdirSync(target); else fs.writeFileSync(target, '');
+      t.mock.method(fs.default, 'readdirSync', (...args) => {
+        const result = realRead(...args);
+        if (args[0] === dir) fs.rmSync(target, { recursive: true });
+        return result;
+      });
+      syncBuiltinESMExports();
+      assert.doesNotThrow(() => assertPrivateTree(dir, process.getuid()));
+      t.mock.restoreAll(); syncBuiltinESMExports();
+    }
+    const child = path.join(dir, 'queued');
+    fs.mkdirSync(child);
+    t.mock.method(fs.default, 'readdirSync', (...args) => {
+      if (args[0] === child) fs.rmSync(child, { recursive: true });
+      return realRead(...args);
+    });
+    syncBuiltinESMExports();
+    assert.doesNotThrow(() => assertPrivateTree(dir, process.getuid()));
+    t.mock.restoreAll(); syncBuiltinESMExports();
+    for (const directory of [false, true]) {
+      if (directory) fs.mkdirSync(child); else fs.writeFileSync(child, '');
+      t.mock.method(fs.default, 'lstatSync', (...args) => {
+        const stat = realStat(...args);
+        return args[0] === child ? Object.assign(Object.create(stat), { uid: process.getuid() + 1 }) : stat;
+      });
+      syncBuiltinESMExports();
+      assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.detail?.reason === 'HOME_ENTRY_FOREIGN_OWNER');
+      t.mock.restoreAll(); syncBuiltinESMExports(); fs.rmSync(child, { recursive: true });
+    }
+    for (const code of ['EACCES', 'EPERM', 'EIO']) {
+      fs.writeFileSync(child, '');
+      t.mock.method(fs.default, 'lstatSync', (...args) => {
+        if (args[0] === child) throw Object.assign(new Error(code), { code });
+        return realStat(...args);
+      });
+      syncBuiltinESMExports();
+      assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.code === code);
+      t.mock.restoreAll(); syncBuiltinESMExports(); fs.rmSync(child);
+    }
+    const childProcess = await import('node:child_process');
+    const peer = path.join(dir, 'remaining');
+    fs.writeFileSync(child, '', { mode: 0o600 }); fs.writeFileSync(peer, '', { mode: 0o600 });
+    let removed = false;
+    t.mock.method(childProcess.default, 'spawnSync', (command, args, options) => {
+      if (command === '/bin/ls' && args.includes(child) && !removed) { fs.rmSync(child); removed = true; }
+      return spawnSync(command, args, options);
+    });
+    syncBuiltinESMExports();
+    assert.doesNotThrow(() => assertPrivateTree(dir, process.getuid()));
+    assert.equal(removed, true, 'dosya stat ile toplu ACL okuması arasında silinir');
+    t.mock.restoreAll(); syncBuiltinESMExports();
+    t.mock.method(childProcess.default, 'spawnSync', (command, args, options) => (
+      command === '/bin/ls' && args.includes(peer) ? { status: 2, stdout: '', stderr: 'permission denied' } : spawnSync(command, args, options)
+    ));
+    syncBuiltinESMExports();
+    assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.detail?.reason === 'HOME_ACL_UNVERIFIED');
+    t.mock.restoreAll(); syncBuiltinESMExports(); fs.rmSync(peer);
+    fs.writeFileSync(child, '', { mode: 0o600 });
+    let replaced = false;
+    t.mock.method(childProcess.default, 'spawnSync', (command, args, options) => {
+      const result = spawnSync(command, args, options);
+      if (command === '/bin/ls' && args.includes(child) && !replaced) {
+        fs.rmSync(child); fs.symlinkSync(tmpdir(), child); replaced = true;
+      }
+      return result;
+    });
+    syncBuiltinESMExports();
+    assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.detail?.reason === 'HOME_SYMLINK');
+    assert.equal(replaced, true, 'toplu metadata okumasından sonra beliren bağlantı reddedilir');
+    t.mock.restoreAll(); syncBuiltinESMExports(); fs.rmSync(child);
+    assert.throws(() => assertPrivateTree(path.join(dir, 'missing-root'), process.getuid()), { code: 'ENOENT' });
+    fs.mkdirSync(child);
+    t.mock.method(fs.default, 'readdirSync', (...args) => {
+      const result = realRead(...args);
+      if (args[0] === dir) { fs.rmSync(child, { recursive: true }); fs.symlinkSync(tmpdir(), child); }
+      return result;
+    });
+    syncBuiltinESMExports();
+    assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.detail?.reason === 'HOME_SYMLINK');
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+});
+
+test('Claude POSIX ACL: özel mod genişletilmiş ya da miras alınan yazma hakkını gizleyemez', async (t) => {
+  if (process.platform === 'win32') {
+    // Windows ACL kararı ana ev testinde gerçek icacls ile doğrulanır.
+    const { WINDOWS_HOME_CHECK } = await import('../scripts/planner-claude-model.mjs');
+    assert.ok(WINDOWS_HOME_CHECK.includes('GetAccessRules'));
+    return;
+  }
+  const fs = await import('node:fs');
+  const { spawnSync } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { assertPrivateTree } = await import('../scripts/planner-claude-model.mjs');
+  const dir = fs.mkdtempSync(path.join(tmpdir(), 'claude-acl-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(home, { mode: 0o700 });
+  if (process.platform === 'linux') {
+    // Gerçek Linux POSIX ACL xattr; setfacl paketi gerektirmez. Varsayılan ACL chmod 0700 ile silinmez.
+    const apply = spawnSync('python3', ['-c', `import os,struct,sys
+entries=[(1,7,0xffffffff),(2,7,os.getuid()),(4,0,0xffffffff),(16,7,0xffffffff),(32,0,0xffffffff)]
+acl=struct.pack('<I',2)+b''.join(struct.pack('<HHI',*entry) for entry in entries)
+os.setxattr(sys.argv[1],'system.posix_acl_default',acl)`, home], { encoding: 'utf8' });
+    assert.equal(apply.status, 0, apply.stderr);
+  } else {
+    const xattr = spawnSync('/usr/bin/xattr', ['-w', 'com.mergen-rota.planner-test', 'private', home], { encoding: 'utf8' });
+    assert.equal(xattr.status, 0, xattr.stderr);
+    const metadata = spawnSync('/bin/ls', ['-ldben', home], { encoding: 'utf8' });
+    assert.equal(metadata.status, 0, metadata.stderr);
+    assert.equal(metadata.stdout.split(' ')[0].at(-1), '@');
+    assert.equal(metadata.stdout.trimEnd().split('\n').length, 1, 'gerçek xattr-only girdinin ACL kaydı yoktur');
+    assert.doesNotThrow(() => assertPrivateTree(home, process.getuid()));
+    const apply = spawnSync('/bin/chmod', ['+a', 'everyone allow write,append,delete,add_file,add_subdirectory,file_inherit,directory_inherit', home], { encoding: 'utf8' });
+    assert.equal(apply.status, 0, apply.stderr);
+  }
+  fs.chmodSync(home, 0o700);
+  assert.equal(fs.lstatSync(home).mode & 0o077, 0);
+  assert.throws(() => assertPrivateTree(home, process.getuid()), error => error.detail?.reason === 'HOME_ACL_UNTRUSTED');
+  const log = path.join(dir, 'budget.jsonl');
+  const attempt = spawnSync(process.execPath, ['scripts/planner-claude-model.mjs'], {
+    input: JSON.stringify({ messages: [{ role: 'system', content: 'x' }], tools: [], toolChoice: 'auto' }), encoding: 'utf8',
+    env: { ...commandPlatformEnv(), PATH: '', PLANNER_CLAUDE_HOME: home, PLANNER_CLAUDE_LOG: log }
+  });
+  assert.equal(JSON.parse(attempt.stdout).error, 'PLANNER_HOME_UNTRUSTED');
+  assert.equal(fs.readdirSync(home).length, 0, 'ACL reddi ayar veya çalışma klasörü yazmaz');
+  assert.equal(fs.readFileSync(log, 'utf8').trim().split('\n').some(line => JSON.parse(line).reserved), false);
+  const batch = path.join(dir, 'batch');
+  fs.mkdirSync(batch, { mode: 0o700 });
+  for (let index = 0; index < 160; index += 1) fs.writeFileSync(path.join(batch, `settings-${String(index).padStart(3, '0')}.json`), '{}', { mode: 0o600 });
+  for (const name of ['line\nbreak.json', 'tab\tname.json']) fs.writeFileSync(path.join(batch, name), '{}', { mode: 0o600 });
+  const childProcess = await import('node:child_process');
+  const { syncBuiltinESMExports } = await import('node:module');
+  let scans = 0;
+  t.mock.method(childProcess.default, 'spawnSync', (...args) => {
+    if (args[0] === '/bin/ls') scans += 1;
+    return spawnSync(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.doesNotThrow(() => assertPrivateTree(batch, process.getuid()));
+    assert.ok(scans <= 6, `162 dosya için dosya başına süreç açılmaz (${scans})`);
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  const settings = path.join(batch, 'settings-080.json');
+  if (process.platform === 'linux') {
+    const apply = spawnSync('python3', ['-c', `import os,struct,sys
+entries=[(1,6,0xffffffff),(2,4,os.getuid()),(4,0,0xffffffff),(16,4,0xffffffff),(32,0,0xffffffff)]
+os.setxattr(sys.argv[1],'system.posix_acl_access',struct.pack('<I',2)+b''.join(struct.pack('<HHI',*entry) for entry in entries))`, settings], { encoding: 'utf8' });
+    assert.equal(apply.status, 0, apply.stderr);
+  } else {
+    const apply = spawnSync('/bin/chmod', ['+a', 'everyone allow write,append,delete', settings], { encoding: 'utf8' });
+    assert.equal(apply.status, 0, apply.stderr);
+  }
+  assert.throws(() => assertPrivateTree(batch, process.getuid()), error => error.detail?.reason === 'HOME_ACL_UNTRUSTED', 'toplu tarama ortadaki güvensiz ACL dosyasını atlamaz');
+});
+
+
+test('Claude macOS ACL ayrıştırması xattr göstergesinin gizlediği yazmayı ve doğrulanamayan metadatayı reddeder', async (t) => {
+  if (process.platform === 'win32') return;
+  const fs = await import('node:fs');
+  const childProcess = await import('node:child_process');
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { assertPrivateTree } = await import('../scripts/planner-claude-model.mjs');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(tmpdir(), 'claude-acl-parser-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  let result;
+  t.mock.method(childProcess.default, 'spawnSync', () => result);
+  syncBuiltinESMExports();
+  Object.defineProperty(process, 'platform', { value: 'darwin' });
+  try {
+    for (const marker of ['+', '@']) {
+      result = { status: 0, stdout: `drwx------${marker} 1 owner group 0 Jan 1 home\n 0: user:other allow write,append,file_inherit\n` };
+      assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.detail?.reason === 'HOME_ACL_UNTRUSTED');
+    }
+    result = { status: 0, stdout: 'drwx------@ 1 owner group 0 Jan 1 home\n' };
+    assert.doesNotThrow(() => assertPrivateTree(dir, process.getuid()), 'xattr tek başına ACL kaydı gerektirmez');
+    result = { status: 0, stdout: 'drwx------@ 1 owner group 0 Jan 1 home\n 0: group:everyone deny delete\n' };
+    assert.doesNotThrow(() => assertPrivateTree(dir, process.getuid()));
+    for (const invalid of [{ status: 0, stdout: 'drwx------+ 1 owner group 0 Jan 1 home\n' }, { status: 0, stdout: 'drwx------@ 1 owner group 0 Jan 1 home\n 0: malformed\n' }, { status: 1, stdout: '' }, { status: 0, stdout: 'drwx------? unknown' }, { status: 0, stdout: 'drwx------+ 1 owner group 0 Jan 1 home\nmalformed ACL\n' }]) {
+      result = invalid;
+      assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.detail?.reason === 'HOME_ACL_UNVERIFIED');
+    }
+  } finally {
+    Object.defineProperty(process, 'platform', platform);
+    t.mock.restoreAll(); syncBuiltinESMExports();
+  }
+});
+
+test('Claude macOS kapısı üç hedef testin tamamını zorunlu tutar', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const workflow = readFileSync('.github/workflows/quality.yml', 'utf8');
+  const extract = source => source.replaceAll('\r\n', '\n').split("node --input-type=module <<'NODE'\n")[1]?.split('\n          NODE')[0];
+  const script = extract(workflow);
+  assert.ok(script, 'macOS kapısının çalıştırılabilir gövdesi bulunur');
+  assert.equal(extract(workflow.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n')), script, 'Windows CRLF gövdesi aynı betiğe çözülür');
+  const body = script.split('\n').map(line => line.slice(10)).join('\n');
+  const selector = '--test-name-pattern=Claude.*(özel ev|POSIX ACL|başka kullanıcının)';
+  for (const [selection, count] of [['NO_SUCH_PLANNER_TEST', 0], ['Claude.*POSIX ACL', 1], ['Claude.*(POSIX ACL|özel ev)', 2], ['Claude.*(özel ev|POSIX ACL|başka kullanıcının)', 3]]) {
+    const result = spawnSync(process.execPath, ['--input-type=module'], {
+      input: body.replace(selector, `--test-name-pattern=${selection}`), env: commandPlatformEnv(), encoding: 'utf8', timeout: 120000
+    });
+    assert.equal(result.error, undefined, result.error?.message);
+    assert.ok(result.stdout.split('\n').map(line => line.trim()).includes(count === 0 ? '1..0' : `# pass ${count}`), result.stdout + result.stderr);
+    assert.equal(result.status, count === 3 ? 0 : 1, `${count} hedef test: ${result.stdout}${result.stderr}`);
+  }
+});
+
+
+test('Claude varsayılan evi POSIX UID ile ayırır; açık ayar aynen korunur', async (t) => {
+  const fs = await import('node:fs');
+  const { spawnSync } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(tmpdir(), 'claude-default-home-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const expected = path.join(dir, process.platform === 'win32' ? 'rota-planner-claude-home' : `rota-planner-claude-home-${process.getuid()}`);
+  const run = (home) => spawnSync(process.execPath, ['scripts/planner-claude-model.mjs'], {
+    input: JSON.stringify({ messages: [{ role: 'system', content: 'x' }], tools: [], toolChoice: 'auto' }), encoding: 'utf8',
+    env: { ...commandPlatformEnv(), PATH: '', TMPDIR: dir, TMP: dir, TEMP: dir, PLANNER_CLAUDE_HOME: home }
+  });
+  const result = run('');
+  assert.equal(result.status, 0, result.stderr);
+  assert.notEqual(JSON.parse(result.stdout).error, 'PLANNER_HOME_UNTRUSTED');
+  assert.ok(fs.existsSync(path.join(expected, 'work')), 'varsayılan ev doğru yerel kullanıcıya ayrılır');
+  const configured = path.join(dir, 'explicit-private-home');
+  const explicit = run(configured);
+  assert.notEqual(JSON.parse(explicit.stdout).error, 'PLANNER_HOME_UNTRUSTED');
+  assert.ok(fs.existsSync(path.join(configured, 'work')), 'açık ev ayarı yeniden adlandırılmaz');
 });

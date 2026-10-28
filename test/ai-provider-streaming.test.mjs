@@ -211,6 +211,37 @@ test('<think> süzgeci: yanıtın ORTASINDAKİ etiket metindir; kapanmayan blok 
   assert.equal(prefix.end(), '<th', 'etikete benzeyen ama tamamlanmayan baş metin kaybolmaz');
 });
 
+test('<think> süzgeci: baştaki boşluk artımlı atılır; tutulan önek sınırlı ve tarama işi doğrusal kalır', () => {
+  // İş belirlenimci sayılır: süzgecin taradığı karakterler toplanır, süre ölçülmez.
+  const fragments = 20000;
+  const fragment = ' \n\t';
+  let scanned = 0;
+  const replace = String.prototype.replace;
+  String.prototype.replace = function countingReplace(...args) {
+    scanned += this.length;
+    return replace.apply(this, args);
+  };
+  let filter;
+  try {
+    filter = createLeadingThinkFilter();
+    for (let index = 0; index < fragments; index += 1) assert.equal(filter.push(fragment), '');
+  } finally {
+    String.prototype.replace = replace;
+  }
+  assert.ok(scanned <= 2 * fragments * fragment.length, `tarama doğrusal kalmalıdır (${scanned})`);
+  assert.equal(filter.retainedLength, 0, 'görünmeyen boşluk tutulmaz');
+
+  assert.equal(filter.push('  <thi'), '');
+  assert.ok(filter.retainedLength <= '<think>'.length, 'yalnızca etiketin çözülmemiş öneki tutulur');
+  assert.equal(filter.push('nk>gizli düşünce</th') + filter.push('ink>\n\n  Görünür yanıt'), 'Görünür yanıt');
+  assert.equal(filter.sawThinking, true);
+
+  const plain = createLeadingThinkFilter();
+  for (let index = 0; index < 1000; index += 1) plain.push('\n');
+  assert.equal(plain.push('  Merhaba '), 'Merhaba ', 'boşluktan sonraki ilk görünür metin aynen korunur');
+  assert.equal(plain.push(' dünya'), ' dünya');
+});
+
 test('bozuk olaylar AI_PROVIDER_RESPONSE_INVALID olur; beklenmeyen rol kabul edilmez', async () => {
   const cases = [
     ['data: {bozuk json\n\n', 'STREAM_EVENT_MALFORMED'],

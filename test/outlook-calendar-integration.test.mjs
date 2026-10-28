@@ -1588,7 +1588,7 @@ test('toplu HTTP sınırı normalleştirilmiş benzersiz görevleri sayar', asyn
     const { POST } = await import('../src/app/api/mergen-rota/outlook/tasks/route.js');
     const taskIds = Array.from({ length: 26 }, (_, index) => index % 2 ? TASK_ID : `actual-${TASK_ID.toLowerCase()}`);
     const response = await POST(new Request('http://localhost/outlook/tasks', {
-      method: 'POST', body: JSON.stringify({ taskIds })
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ taskIds })
     }));
     assert.equal(response.status, 200);
     assert.equal((await response.json()).results.length, 1);

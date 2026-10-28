@@ -1,4 +1,5 @@
 import { safeErrorResponse } from '../../../../../server/errors.js';
+import { assertBrowserMutationIntent } from '../../../../../server/identity/sameOriginRequest.js';
 import { submitPresenceHeartbeat } from '../../../../../server/presence/presenceStore.js';
 import { withRouteObservability } from '../../../../../server/observability/observeOperation.js';
 
@@ -12,8 +13,9 @@ export const revalidate = 0;
  * Sicil başına TEK satır güncellenir; istek düzeyinde telemetri yazılmaz.
  * Kimlik oturumdan türetilir, gövdeden okunmaz.
  */
-export const POST = withRouteObservability('api.presence.heartbeat', async () => {
+export const POST = withRouteObservability('api.presence.heartbeat', async (request) => {
   try {
+    assertBrowserMutationIntent(request);
     return Response.json(await submitPresenceHeartbeat(), { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
     return safeErrorResponse(error);

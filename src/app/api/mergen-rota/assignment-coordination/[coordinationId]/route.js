@@ -1,4 +1,5 @@
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../server/errors.js';
+import { assertBrowserMutationIntent } from '../../../../../server/identity/sameOriginRequest.js';
 import { decideAssignmentCoordination } from '../../../../../server/assignment/assignmentCoordinationStore.js';
 import { withRouteObservability } from '../../../../../server/observability/observeOperation.js';
 
@@ -9,6 +10,7 @@ export const revalidate = 0;
 /** Onayla / Reddet / Değişiklik İste / Kaldırılmasını İste / Geri Çek. */
 export const PATCH = withRouteObservability('api.assignment-coordination.decide', async (request, context) => {
   try {
+    assertBrowserMutationIntent(request, { json: true });
     const coordinationId = context?.params?.coordinationId;
     const body = await request.json().catch(() => null);
     if (!coordinationId || !body || typeof body !== 'object') {

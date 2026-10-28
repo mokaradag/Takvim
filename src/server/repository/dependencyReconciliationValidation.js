@@ -14,19 +14,6 @@ function deleteId(value) {
   return id(typeof value === 'string' ? value : value?.id);
 }
 
-async function loadStoredProjectId(executor, taskId) {
-  const request = executor.request();
-  request.input('taskId', sql.UniqueIdentifier, taskId);
-  const result = await request.query(`
-    SELECT TOP (1) ProjectId
-    FROM dbo.MR_Tasks WITH (UPDLOCK, HOLDLOCK)
-    WHERE TaskId = @taskId;
-  `);
-  return result.recordset?.[0]?.ProjectId == null
-    ? null
-    : id(result.recordset[0].ProjectId);
-}
-
 async function loadIncomingTaskIds(executor, predecessorId) {
   const request = executor.request();
   request.input('predecessorId', sql.UniqueIdentifier, predecessorId);
@@ -42,7 +29,20 @@ async function loadIncomingTaskIds(executor, predecessorId) {
   return (result.recordset || []).map((row) => id(row.TaskId));
 }
 
-export async function assertTaskDependencyReconciliationCovered(executor, changes = {}) {
+/** Bağımlılık ilişkileri yalnızca projede FULL yetkisi olana görünür; anlık görüntü de yalnızca ona yükler. */
+function seesDependencies(actor, projectId) {
+  return Boolean(actor?.isSystemAdmin || actor?.effective?.access?.get(projectId)?.accessLevel === 'FULL');
+}
+
+/**
+ * Taşınan ya da silinen öncülün ardıllarının aynı değişiklik kümesinde
+ * uzlaştırıldığını doğrular. Ardıl kimlikleri hatada yalnızca bu ilişkileri
+ * zaten görebilen aktöre döner. Silme ve taşıma kaynak projede FULL yetki
+ * ister; kısmi görüntüde gizli ilişkiler için uzlaştırma istenmez.
+ */
+export async function assertTaskDependencyReconciliationCovered(executor, changes, actor, storedProjects) {
+  // Aktörsüz çağrı denetimi sessizce atlamaz: görünürlük süzgeci aktör olmadan her öncülü düşürürdü.
+  if (!actor) throw new TypeError('Dependency reconciliation requires the authorized actor.');
   const taskUpserts = [...(changes.taskUpserts || [])]
     .sort((left, right) => String(left.id).localeCompare(String(right.id)));
   const taskDeleteIds = (changes.taskDeletes || []).map(deleteId).filter(Boolean);
@@ -51,10 +51,13 @@ export async function assertTaskDependencyReconciliationCovered(executor, change
   for (const task of taskUpserts) {
     const taskId = id(task.id);
     const nextProjectId = id(task.projectId);
-    const storedProjectId = await loadStoredProjectId(executor, taskId);
+    const storedProjectId = storedProjects.get(taskId);
     if (storedProjectId && storedProjectId !== nextProjectId) {
       invalidatedPredecessorIds.add(taskId);
     }
+  }
+  for (const predecessorId of invalidatedPredecessorIds) {
+    if (!seesDependencies(actor, storedProjects.get(predecessorId))) invalidatedPredecessorIds.delete(predecessorId);
   }
 
   if (!invalidatedPredecessorIds.size) return;

@@ -18,10 +18,13 @@ import { readFileSync } from 'node:fs';
 import {
   canAssignTasksInProject,
   canWriteProject,
+  assigneeTaskCreateProjects,
   resolveTaskCreationProject,
   resolveTaskMutationAccess,
   resolveWbsMutationAccess,
-  taskAssignableProjects
+  resolveTaskWbsMoveAccess,
+  taskAssignableProjects,
+  taskCreationScopeInProject
 } from '../src/state/projectWritePolicy.js';
 import { selectAssignableProjects } from '../src/state/appState.js';
 import { hasTaskAssignmentScope } from '../src/server/authorization/authorization.js';
@@ -303,4 +306,88 @@ test('Temel Kip düzenleyicisi gelişmiş alanları açmaz', () => {
   }
   // Buna karşılık hatırlatma eylemi her iki kipte de bulunur.
   assert.match(drawer, /<TaskReminderButton task=\{task\}/);
+});
+
+test('atama kapsamı kaynak projede FULL olmadan taşıma sunmaz; aynı proje ve FULL kaynak korunur', () => {
+  const state = executiveState();
+  const expected = {
+    ok: false, code: 'PROJECT_WRITE_FORBIDDEN', field: 'projectId', projectId: FULL_PROJECT.id,
+    message: 'Görev yalnızca kaynak projede tam proje yetkisiyle başka projeye taşınabilir.'
+  };
+  for (const patch of [{ projectId: FULL_PROJECT.id }, { proje: FULL_PROJECT.name }]) {
+    assert.deepEqual(resolveTaskMutationAccess(state, 't-scope', patch), expected);
+  }
+  assert.equal(resolveTaskMutationAccess(state, 't-scope', { projectId: SCOPE_PROJECT.id }).ok, true);
+  assert.equal(resolveTaskMutationAccess(state, 't-scope', { task: 'Aynı projede düzenleme' }).ok, true);
+  assert.equal(resolveTaskMutationAccess(state, 't-full', { projectId: SCOPE_PROJECT.id }).ok, true);
+
+  const source = 'd5d70aec-0a88-f111-9136-00505699bacd';
+  const destination = 'd5d70aec-0a88-f111-9136-00505699bace';
+  const actual = { ...state, projects: [{ id: source, accessLevel: 'PARTIAL' }],
+    assignableProjects: [{ id: source, accessLevel: 'ASSIGN' }, { id: destination, accessLevel: 'ASSIGN' }],
+    tasks: [{ id: 'actual-task', projectId: source }] };
+  assert.equal(resolveTaskMutationAccess(actual, 'actual-task', { projectId: source.toUpperCase() }).ok, true);
+  assert.deepEqual(resolveTaskMutationAccess(actual, 'actual-task', { projectId: destination.toUpperCase() }), { ...expected, projectId: destination });
+});
+
+test('kısmi commit sonrası farklı GUID harf biçimi proje kapsamını değiştirmez', () => {
+  const full = 'd5d70aec-0a88-f111-9136-00505699bacd';
+  const assigned = 'd5d70aec-0a88-f111-9136-00505699bace';
+  const own = 'd5d70aec-0a88-f111-9136-00505699bacf';
+  const other = 'd5d70aec-0a88-f111-9136-00505699bad0';
+  // Kısmi yanıt görevdeki özgün harf biçimini geri yükler; atama kataloğu yenilenmez.
+  const state = {
+    currentUser: { id: '900001' },
+    projects: [{ id: full, accessLevel: 'FULL' }, { id: full.toUpperCase(), accessLevel: 'FULL' },
+      { id: own, accessLevel: 'PARTIAL' }, { id: other, accessLevel: 'READ' }],
+    assignableProjects: [{ id: full.toUpperCase() }, { id: assigned }, { id: assigned.toUpperCase() }],
+    tasks: [{ id: 'restored', projectId: assigned.toUpperCase() },
+      { id: 'own', projectId: own.toUpperCase(), isCurrentUserAssignee: true, assigneeIds: ['900001'] }]
+  };
+  assert.deepEqual(taskAssignableProjects(state).map(project => project.id), [full, assigned, own]);
+  assert.deepEqual(assigneeTaskCreateProjects(state).map(project => project.id), [own]);
+  assert.equal(taskCreationScopeInProject(state, full.toUpperCase()), 'FULL');
+  assert.equal(taskCreationScopeInProject(state, assigned.toUpperCase()), 'ASSIGNMENT');
+  assert.equal(taskCreationScopeInProject(state, own.toUpperCase()), 'ASSIGNEE_CREATE');
+  assert.equal(resolveTaskMutationAccess(state, 'restored', { task: 'Güncelleme' }).ok, true);
+  assert.equal(resolveTaskMutationAccess(state, 'own', { task: 'Kendi işi' }).scope, 'ASSIGNEE');
+  assert.equal(canAssignTasksInProject(state, assigned.toUpperCase()), true);
+  assert.equal(canAssignTasksInProject(state, own.toUpperCase()), false);
+  assert.equal(taskCreationScopeInProject(state, other.toUpperCase()), null);
+  assert.equal(resolveTaskCreationProject(state, other.toUpperCase()), null);
+  assert.equal(resolveTaskMutationAccess(state, 'restored', { projectId: full }).ok, false);
+});
+
+
+test('WBS kapsamı aynı GUID harf biçimlerini eşit, farklı projeleri ayrı tutar', () => {
+  const source = 'd5d70aec-0a88-f111-9136-00505699bacd';
+  const other = 'd5d70aec-0a88-f111-9136-00505699bace';
+  const state = {
+    projects: [{ id: source, accessLevel: 'FULL' }, { id: other, accessLevel: 'FULL' }],
+    tasks: [{ id: 'task', projectId: source }],
+    wbs: [{ id: 'source', projectId: source }, { id: 'same', projectId: source.toUpperCase() }, { id: 'other', projectId: other }]
+  };
+  assert.equal(resolveWbsMutationAccess(state, 'source', 'same').ok, true);
+  assert.equal(resolveTaskWbsMoveAccess(state, ['task'], 'same').ok, true);
+  assert.equal(resolveWbsMutationAccess(state, 'source', 'other').ok, false);
+  assert.equal(resolveTaskWbsMoveAccess(state, ['task'], 'other').code, 'CROSS_PROJECT_TASK_WBS_MOVE');
+  state.projects[0].accessLevel = 'PARTIAL';
+  assert.equal(resolveWbsMutationAccess(state, 'source', 'same').ok, false);
+  assert.equal(resolveTaskWbsMoveAccess(state, ['task'], 'same').ok, false);
+});
+
+test('proje seçimi büyük portföyde kimlikleri doğrusal sayıda okur ve ilk adayı korur', () => {
+  let reads = 0;
+  const count = 256;
+  const ids = Array.from({ length: count }, (_, index) => `a1b2c3d4-0000-4000-8000-${index.toString(16).padStart(12, '0')}`);
+  const record = (id, accessLevel) => ({ get id() { reads += 1; return id; }, accessLevel });
+  const state = {
+    projects: ids.map(id => record(id, 'PARTIAL')),
+    assignableProjects: ids.flatMap(id => [record(id.toUpperCase()), record(id)]),
+    tasks: ids.map(projectId => ({ projectId: projectId.toUpperCase(), isCurrentUserAssignee: true }))
+  };
+  const selected = taskAssignableProjects(state);
+  assert.equal(selected.length, count);
+  assert.ok(selected.every((project, index) => project === state.assignableProjects[index * 2]));
+  assert.ok(reads <= 20 * count, `kimlik okuması portföyle doğrusal kalır (${reads})`);
 });

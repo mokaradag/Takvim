@@ -153,9 +153,10 @@ test('yetkili görev sorumlusu doğrudan sunucu isteğiyle aynı projede kendisi
 test('dar kapsam başka proje, başka sorumlu ve yapısal yönetim için kullanılamaz', async () => {
   const stack = await createActualStack(seed(), { sicil: ASSIGNEE, corporateWbsSource: false });
   try {
+    // Görünmeyen proje var olmayan projeyle aynı yanıtı alır: varlığı "yetkiniz yok" yanıtından öğrenilemez.
     await assert.rejects(
       stack.repository.commitChanges({ taskUpserts: [newTask(TASK_B, { projectId: PROJECT_Q, wbsId: WBS_Q })] }),
-      (error) => error.code === 'FORBIDDEN'
+      (error) => error.code === 'MUTATION_FAILED' && /Hedef proje bulunamadı/.test(error.message)
     );
     await assert.rejects(
       stack.repository.commitChanges({ taskUpserts: [newTask(TASK_B, { assigneeIds: [String(OUTSIDER)] })] }),
@@ -209,9 +210,10 @@ test('işlemden önce yetkili sorumluluk kaldırılırsa eski istemci isteği su
     stack.db.taskAssignees = stack.db.taskAssignees
       .filter((entry) => !(String(entry.TaskId).toLowerCase() === TASK_A && entry.Sicil === ASSIGNEE));
 
+    // Sorumluluk kalkınca proje artık görünmez: yanıt var olmayan projeninkiyle aynıdır.
     await assert.rejects(
       stack.repository.commitChanges({ taskUpserts: [forgedFromStaleSnapshot] }),
-      (error) => error.code === 'FORBIDDEN'
+      (error) => error.code === 'MUTATION_FAILED' && /Hedef proje bulunamadı/.test(error.message)
     );
     assert.equal(stack.db.tasks.some((task) => String(task.TaskId).toLowerCase() === TASK_C), false);
   } finally {

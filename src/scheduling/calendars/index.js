@@ -64,6 +64,7 @@ export const DEFAULT_CALENDAR = Object.freeze({
  * Sınır, BOZUK bir takvimi hatalı sonuca değil, giriş tarihine düşürür.
  */
 const BASE_CALENDAR_SCAN_DAYS = 3660;
+export const MAX_WORKING_DAY_SEARCH_CHECKS = BASE_CALENDAR_SCAN_DAYS + 1;
 
 /**
  * `addWorkingDays` için taranacak takvim günü bütçesi.
@@ -129,6 +130,38 @@ function workingDaysOf(calendar) {
   return Array.isArray(days) && days.length ? days : DEFAULT_WORKING_DAYS;
 }
 
+/**
+ * Takvim taramasının ORTAK iş sayacı.
+ *
+ * Bütün tarama döngüleri (`moveToWorkingDay`, `addWorkingDays`,
+ * `diffWorkingDays`, `countWorkingDays`) gün başına bir `isWorkingDay`
+ * değerlendirmesi yapar; sayaç orada, YAPILAN iş kadar düşer. Tahmin yerine
+ * muhasebe: tatiller, seyrek haftalık desen ve sonraki her geçiş (ör. süre
+ * doğrulaması) kendiliğinden sayılır. Sayaç yalnızca `meterCalendarScans`
+ * çağrısı süresince etkindir; iş eşzamanlı olmalıdır.
+ */
+let activeScanMeter = null;
+
+export class CalendarScanBudgetExceededError extends Error {
+  constructor() {
+    super('Calendar scan budget exceeded.');
+    this.name = 'CalendarScanBudgetExceededError';
+  }
+}
+
+/** Bütçesi `{ remainingDays }` olan sayaçla eşzamanlı `work` çalıştırır; bütçe bitince taramayı keser. */
+export function meterCalendarScans(meter, work) {
+  const previous = activeScanMeter;
+  activeScanMeter = meter;
+  try {
+    const result = work();
+    if (typeof result?.then === 'function') throw new TypeError('meterCalendarScans requires synchronous work.');
+    return result;
+  } finally {
+    activeScanMeter = previous;
+  }
+}
+
 export function normalizeCalendar(calendar = DEFAULT_CALENDAR) {
   // `calendarById` bulamadığı takvim için `null` döndürür ve çağıranların bir
   // kısmı bu sonucu doğrudan buraya veriyordu: varsayılan parametre yalnızca
@@ -185,6 +218,10 @@ export function holidayFor(value, calendar = DEFAULT_CALENDAR) {
 }
 
 export function isWorkingDay(value, calendar = DEFAULT_CALENDAR) {
+  if (activeScanMeter) {
+    if (activeScanMeter.remainingDays <= 0) throw new CalendarScanBudgetExceededError();
+    activeScanMeter.remainingDays -= 1;
+  }
   const date = localDate(value);
   // Çözülemeyen tarih çalışma günü DEĞİLDİR; aramalar bu durumu sınırla ayıklar.
   if (!isValidDate(date)) return false;

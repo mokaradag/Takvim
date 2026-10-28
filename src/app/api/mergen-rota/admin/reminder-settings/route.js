@@ -3,6 +3,7 @@ import { REMINDER_PLACEHOLDERS } from '../../../../../domain/reminders/reminderT
 import { loadAuthorizationContext } from '../../../../../server/authorization/loadAuthorizationContext.js';
 import { getSqlPool } from '../../../../../server/db/pool.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../server/errors.js';
+import { assertBrowserMutationIntent } from '../../../../../server/identity/sameOriginRequest.js';
 import { withRouteObservability } from '../../../../../server/observability/observeOperation.js';
 import { assertReminderAdmin } from '../../../../../server/reminders/reminderAccess.js';
 import { isSmtpConfigured } from '../../../../../server/mail/smtpConfig.js';
@@ -63,6 +64,7 @@ async function handleLoadReminderSettings() {
 
 async function handleSaveReminderSettings(request) {
   try {
+    assertBrowserMutationIntent(request, { json: true });
     const pool = await getSqlPool();
     const actor = await loadAuthorizationContext(pool);
     assertReminderAdmin(actor);

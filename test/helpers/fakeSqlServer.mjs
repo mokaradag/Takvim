@@ -1576,10 +1576,9 @@ function runQuery(db, statement, params, { database }) {
   if (sqlText.includes('AS PlanCalendarId') && sqlText.includes('FROM dbo.MR_Projects p')) {
     const project = projectById(db, params.projectId);
     const defaultCalendar = db.calendars.find((entry) => entry.IsDefault && entry.IsActive) || null;
-    const calendar = db.calendars.find((entry) => entry.IsActive && sameGuid(
-      entry.CalendarId,
-      params.calendarId || project?.CalendarId || defaultCalendar?.CalendarId
-    )) || null;
+    const calendar = [params.calendarId, project?.CalendarId, defaultCalendar?.CalendarId]
+      .map((calendarId) => db.calendars.find((entry) => entry.IsActive && sameGuid(entry.CalendarId, calendarId)))
+      .find(Boolean) || null;
     if (!project || !calendar) return result([[]]);
     const rows = [];
     const weekdays = calendar.WorkingDays.length ? calendar.WorkingDays : [null];
@@ -2040,6 +2039,19 @@ function runQuery(db, statement, params, { database }) {
         LagValue: entry.LagValue,
         LagUnit: entry.LagUnit
       }))]);
+  }
+  if (sqlText.includes(';WITH ScopedWbsChain AS')) {
+    const sicil = Number(params.sicil);
+    const chain = new Set();
+    for (const task of db.tasks.filter((row) => sameGuid(row.ProjectId, params.projectId) && db.taskAssignees.some((entry) => sameGuid(entry.TaskId, row.TaskId)
+      && db.executiveScope.some((scope) => Number(scope.ManagerSicil) === sicil && Number(scope.EmployeeSicil) === Number(entry.Sicil))))) {
+      let node = db.wbs.find((row) => sameGuid(row.WbsId, task.WbsId) && sameGuid(row.ProjectId, params.projectId));
+      while (node && !chain.has(guid(node.WbsId))) {
+        chain.add(guid(node.WbsId));
+        node = db.wbs.find((row) => sameGuid(row.WbsId, node.ParentWbsId) && sameGuid(row.ProjectId, params.projectId));
+      }
+    }
+    return result([chain.has(guid(params.wbsId)) ? [{ Found: 1 }] : []]);
   }
   if (sqlText.includes('SELECT DISTINCT dependency.TaskId')) {
     return result([db.taskDependencies

@@ -1,6 +1,8 @@
 import 'server-only';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { ServerPersistenceError } from '../errors.js';
+import { loadTransactionAuthorizationContext } from '../authorization/loadAuthorizationContext.js';
+import { ACCESS_REASONS } from '../authorization/authorization.js';
 import { observePhase } from '../observability/observeOperation.js';
 import { sql, withSqlTransaction } from '../db/pool.js';
 import { sqlIdentifier } from '../db/sqlIdentifier.js';
@@ -303,6 +305,7 @@ function taskReferenceMessage(issue) {
 }
 
 async function planTaskCommits(executor, changes) {
+  const actor = await loadTransactionAuthorizationContext(executor);
   const normalizedUpserts = changes.taskUpserts.map((task) => ({
     ...task,
     id: uuid(task.id, 'Görev kimliği'),
@@ -357,13 +360,22 @@ async function planTaskCommits(executor, changes) {
     if (row) existingTaskProjects.set(predecessorId, rowId(row.ProjectId));
   }
 
+  const observableTaskProjects = new Map([...existingTaskProjects].filter(([taskId, projectId]) => {
+    const access = actor.effective.access.get(projectId);
+    return actor.isSystemAdmin || access?.accessLevel === 'FULL'
+      || access?.reasons?.includes(ACCESS_REASONS.MANUAL_GRANT)
+      || actor.effective.partialTaskIds.has(taskId);
+  }));
   const issue = findFinalTaskReferenceIssue({
-    existingTaskProjects,
+    existingTaskProjects: observableTaskProjects,
     taskUpserts: validatedUpserts,
     taskDeletes
   });
   if (issue) {
-    throw new ServerPersistenceError('MUTATION_FAILED', taskReferenceMessage(issue), { details: issue });
+    // Öncülün projesi aktöre görünmeyebilir; yanıt yalnızca gönderilen kimlikleri taşır.
+    const details = { ...issue };
+    delete details.predecessorProjectId;
+    throw new ServerPersistenceError('MUTATION_FAILED', taskReferenceMessage(issue), { details });
   }
 
   return {

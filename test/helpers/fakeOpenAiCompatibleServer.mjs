@@ -21,6 +21,8 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
+import { MAX_PREFIX_CHARS } from '../../src/domain/ai/aiModelRegistry.js';
+import { SEMANTIC_LIMITS } from '../../src/domain/ai/semanticContract.js';
 
 /**
  * Gömme ve yeniden sıralama uçlarının varsayılan ikizi anlam çıkarmaz: değer
@@ -36,7 +38,49 @@ export function hashedScore(query, document) {
   return createHash('sha256').update(`${query}\n${document}`).digest()[0] / 255;
 }
 
+/**
+ * `hashedScore` ile aynı puanı verir; sorgu öneki bir kez özetlenir ve her
+ * belge için özet durumu kopyalanır. Sorgu her belgede baştan özetlenmez.
+ */
+export function hashedScorer(query) {
+  const prefix = createHash('sha256').update(`${query}\n`);
+  return (document) => prefix.copy().update(`${document}`).digest()[0] / 255;
+}
+
 const DEFAULT_SEMANTIC = Object.freeze({ embed: (text) => hashedVector(text), rerank: hashedScore });
+
+/**
+ * Anlamsal uçların UÇ BAŞINA girdi sınırları: üretim sözleşmesinin
+ * (`aiGateway` · `boundedTexts`) TEL üzerindeki karşılığı. Gömme kataloğu en
+ * fazla `maxCatalogueItems` öğe taşır ve ağ geçidi metni doğruladıktan sonra
+ * gömme önekini (kayıtta en fazla `MAX_PREFIX_CHARS`) ekler. Yeniden sıralama
+ * en fazla `maxCandidates` aday taşır ve belgeye önek eklenmez. Tek başına
+ * dinleyici de bunlarla korunur; aşan istek işlenmeden 400 alır.
+ */
+export const FAKE_SEMANTIC_LIMITS = Object.freeze({
+  embeddings: Object.freeze({
+    maxItems: SEMANTIC_LIMITS.maxCatalogueItems,
+    maxItemChars: SEMANTIC_LIMITS.maxItemTextChars + MAX_PREFIX_CHARS
+  }),
+  rerank: Object.freeze({
+    maxItems: SEMANTIC_LIMITS.maxCandidates,
+    maxItemChars: SEMANTIC_LIMITS.maxItemTextChars,
+    maxQueryChars: SEMANTIC_LIMITS.maxQueryChars
+  })
+});
+
+const boundedText = (text, maxChars) => typeof text === 'string' && text.length > 0 && text.length <= maxChars;
+
+/** Anlamsal girdinin türü ve sınırları; sorun varsa nedeni, yoksa `null`. */
+function semanticInputIssue(kind, body) {
+  const limits = FAKE_SEMANTIC_LIMITS[kind];
+  const texts = kind === 'embeddings'
+    ? body?.input
+    : body?.documents;
+  if (!Array.isArray(texts) || texts.length < 1 || texts.length > limits.maxItems) return 'item count';
+  if (!texts.every((text) => boundedText(text, limits.maxItemChars))) return 'item';
+  return kind === 'rerank' && !boundedText(body?.query, limits.maxQueryChars) ? 'query' : null;
+}
 
 function semanticPayload(kind, body, semantic) {
   if (kind === 'embeddings') {
@@ -44,7 +88,8 @@ function semanticPayload(kind, body, semantic) {
     return { object: 'list', model: body?.model, data: inputs.map((text, index) => ({ object: 'embedding', index, embedding: semantic.embed(text, body?.model, body?.embeddingTokens?.[index]) })) };
   }
   const documents = Array.isArray(body?.documents) ? body.documents : [];
-  const results = documents.map((text, index) => ({ index, document: { text }, relevance_score: semantic.rerank(body?.query, text, body?.model) }))
+  const score = semantic.rerank === hashedScore ? hashedScorer(body?.query) : (text) => semantic.rerank(body?.query, text, body?.model);
+  const results = documents.map((text, index) => ({ index, document: { text }, relevance_score: score(text) }))
     .sort((left, right) => right.relevance_score - left.relevance_score);
   return { id: 'rerank-fake', model: body?.model, results };
 }
@@ -208,8 +253,7 @@ export async function startFakeOpenAiCompatibleServer({
       response.on('close', () => {
         if (!answered && !response.writableFinished) state.closedBeforeResponse += 1;
       });
-      const respond = () => {
-        answered = true;
+      const answer = () => {
         const publicList = state.publicModels && request.url.endsWith('/models');
         const accepted = publicList || (state.validKeys ? state.validKeys.has(bearer) : bearer.length > 0);
         if (!accepted) {
@@ -241,6 +285,11 @@ export async function startFakeOpenAiCompatibleServer({
         const semanticKind = request.method !== 'POST' ? null
           : request.url.endsWith('/embeddings') ? 'embeddings' : request.url.endsWith('/rerank') ? 'rerank' : null;
         if (semanticKind && !scenario.malformed && !scenario.oversizedBytes) {
+          const issue = semanticInputIssue(semanticKind, body);
+          if (issue) {
+            json(response, 400, { error: { message: `invalid semantic input: ${issue}`, type: 'BadRequestError' } });
+            return;
+          }
           const windowed = semanticKind === 'embeddings' && scenario.embeddingWindow ? applyEmbeddingWindow(body, scenario.embeddingWindow) : body;
           if (!windowed) {
             json(response, 400, { error: { message: `maximum context length exceeded ${authorization}`, type: 'BadRequestError' } });
@@ -272,6 +321,17 @@ export async function startFakeOpenAiCompatibleServer({
           return;
         }
         json(response, 200, completion(body?.model || 'fake-model', scenario.text || text));
+      };
+      // Eşzamanlı işleme hatası istek sınırında kalır: süreç düşmez, öteki
+      // istemciler etkilenmez ve bu istek denetimli bir hata alır.
+      const respond = () => {
+        answered = true;
+        try {
+          answer();
+        } catch {
+          if (response.headersSent) response.destroy();
+          else json(response, 500, { error: { message: 'fake server error', type: 'InternalServerError' } });
+        }
       };
       if (scenario.stall) return;
       const wait = scenario.delayMs ?? state.delayMs;

@@ -171,10 +171,12 @@ test('sorumlu olmayan ve başka yazma yetkisi bulunmayan kullanıcı görevi de�
     process.env.MERGEN_ROTA_DEV_SICIL = String(OUTSIDER);
     await stack.reload();
     assert.equal(stack.state.tasks.length, 0);
+    // Görünmeyen görev var olmayan görevle aynı yanıtı alır ve değişmez.
     await assert.rejects(
       stack.repository.commitChanges({ taskUpserts: [forged] }),
-      (error) => error.code === 'FORBIDDEN'
+      (error) => error.code === 'CONFLICT' && /Kayıt artık bulunamadı/.test(error.message)
     );
+    assert.notEqual(stack.db.tasks[0].Title, 'Yetkisiz');
   } finally {
     await stack.dispose();
   }

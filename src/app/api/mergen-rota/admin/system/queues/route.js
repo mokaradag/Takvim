@@ -1,5 +1,6 @@
 import { queueAgeAlertMinutes } from '../../../../../../server/observability/observabilityConfig.js';
 import { safeErrorResponse, ServerPersistenceError } from '../../../../../../server/errors.js';
+import { assertBrowserMutationIntent } from '../../../../../../server/identity/sameOriginRequest.js';
 import { sql } from '../../../../../../server/db/pool.js';
 import {
   loadSystemAdminContext,
@@ -241,6 +242,7 @@ const ACTIONS = Object.freeze({
  */
 export const POST = withRouteObservability('api.admin.system.queues.action', async (request) => {
   try {
+    assertBrowserMutationIntent(request, { json: true });
     const { pool, actor } = await loadSystemAdminContext();
     const body = await request.json().catch(() => null);
     const action = String(body?.action || '');

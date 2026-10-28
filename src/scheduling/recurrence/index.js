@@ -435,6 +435,11 @@ function plannedSpanDays(template, calendar) {
  * uygulanır: kullanıcı üç yineleme istediyse üç görev oluşur ve hiçbir görev
  * UNTIL tarihinden sonraya kalıcılaştırılmaz.
  *
+ * `finishes: false` yalnızca yineleme günlerini üretir. Bitiş aritmetiği her
+ * yineleme için iş günü taraması yapar (şablon süresi kadar); üyelik ya da
+ * önizleme için gerekmediğinde yapılmaz, tek yinelemenin bitişi
+ * `occurrenceFinishes` ile hesaplanır.
+ *
  * @returns {Array<{index: number, plannedStart: string, plannedFinish: string|null,
  *   targetFinish: string|null}>}
  */
@@ -447,7 +452,8 @@ export function planRecurringOccurrences(template, rule, {
   // İsteğe bağlı ÇIKTI nesnesi: güvenlik tavanına dayanıldıysa
   // `rawCapReached` doğru yapılır. Dönüş türü dizi olarak korunur (bütün
   // çağıranlar onu bekler); tavan bilgisi yalnızca özetleyiciye gerekir.
-  capReport = null
+  capReport = null,
+  finishes = true
 } = {}) {
   const normalized = normalizeRecurrenceRule(rule);
   const start = template?.plannedStart;
@@ -465,10 +471,7 @@ export function planRecurringOccurrences(template, rule, {
   const untilDate = normalized.until ? parseDate(normalized.until) : null;
   const shiftCalendar = skipNonWorkingDays ? calendar : null;
 
-  const durationSpan = plannedSpanDays(template, calendar);
-  // Şablonun yönetsel terminini koru: olmayan bir termin uydurulmaz, planlanan
-  // bitişten önceye konmuş bir termin de bitişe kadar ötelenmez.
-  const targetSpan = template?.targetFinish ? spanBetween(start, template.targetFinish, calendar) : null;
+  const spans = finishes ? recurrenceSpans(template, calendar) : null;
 
   const seen = new Set();
   const plan = [];
@@ -510,12 +513,45 @@ export function planRecurringOccurrences(template, rule, {
       // yineleme ikinci kez üretilmez.
       occurrenceDate: fmtISO(date),
       plannedStart: iso,
-      plannedFinish: spanFinishIso(shifted, durationSpan, calendar),
-      targetFinish: spanFinishIso(shifted, targetSpan, calendar)
+      ...(spans ? {
+        plannedFinish: spanFinishIso(shifted, spans.duration, calendar),
+        targetFinish: spanFinishIso(shifted, spans.target, calendar)
+      } : {})
     });
     if (plan.length >= planCap) break;
   }
   return plan;
+}
+
+/**
+ * Şablonun yinelemelere aktarılan süreleri: planlanan süre ve yönetsel
+ * termin aralığı. Şablonun yönetsel terminini koru: olmayan bir termin
+ * uydurulmaz, planlanan bitişten önceye konmuş bir termin de bitişe kadar
+ * ötelenmez.
+ */
+function recurrenceSpans(template, calendar) {
+  return {
+    duration: plannedSpanDays(template, calendar),
+    target: template?.targetFinish ? spanBetween(template.plannedStart, template.targetFinish, calendar) : null
+  };
+}
+
+/** Aynı şablon/takvim için değişmeyen süreleri bir kez ölçer; yalnızca işlem içinde yeniden kullanılır. */
+export function createOccurrenceFinishCalculator(template, { calendar = null } = {}) {
+  const spans = recurrenceSpans(template, calendar);
+  return (plannedStart) => {
+    const start = parseDate(plannedStart);
+    const plannedFinish = spanFinishIso(start, spans.duration, calendar);
+    return {
+      plannedFinish,
+      targetFinish: spans.target === spans.duration ? plannedFinish : spanFinishIso(start, spans.target, calendar)
+    };
+  };
+}
+
+/** Tek yinelemenin bitişleri; `plannedStart` planın (kaydırılmış) başlangıcıdır. */
+export function occurrenceFinishes(template, plannedStart, options = {}) {
+  return createOccurrenceFinishCalculator(template, options)(plannedStart);
 }
 
 /**
@@ -551,11 +587,14 @@ export function summarizeRecurrencePlan(template, rule, { calendar = null, previ
   // kuralında ise güvenlik tavanına dayanıldığını yalnızca böyle ayırt
   // edebiliriz. Fazlalık sayıya katılmaz.
   const capReport = {};
+  // Özet yalnızca günleri gösterir; bitiş aritmetiği görüntüleyen her
+  // kullanıcının tarayıcısında şablon süresi kadar tarama yapardı.
   const probed = planRecurringOccurrences(template, normalized, {
     calendar,
     limit: boundedLimit + 1,
     hardCap: MAX_RECURRENCE_OCCURRENCES + 1,
-    capReport
+    capReport,
+    finishes: false
   });
   const hasMore = probed.length > boundedLimit;
   const occurrences = hasMore ? probed.slice(0, boundedLimit) : probed;

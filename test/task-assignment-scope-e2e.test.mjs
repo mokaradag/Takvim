@@ -62,7 +62,7 @@ function taskChanges({ assigneeIds }) {
   };
 }
 
-test('birim yöneticisi kendi görevinde sorumlu ekler, çıkarır, etiket ve tarih düzenler; son sürümle silebilir', async () => {
+test('birim yöneticisi kendi görevinde sorumlu ekler, çıkarır, etiket ve tarih düzenler; silme için FULL yetki gerekir', async () => {
   const seed = assignmentSeed();
   seed.executiveScope.push({ ManagerSicil: MANAGER_SICIL, EmployeeSicil: PLAIN_SICIL, ScopeType: 'UNIT' });
   const stack = await createActualStack(seed, { sicil: MANAGER_SICIL });
@@ -75,7 +75,7 @@ test('birim yöneticisi kendi görevinde sorumlu ekler, çıkarır, etiket ve ta
     assert.equal(access.ok, true);
     assert.equal(access.canManageAssignees, true);
     assert.equal(access.canManageStructure, false);
-    assert.equal(access.canDelete, true);
+    assert.equal(access.canDelete, false);
     const originalVersion = stack.state.tasks[0].version;
     const added = await Promise.all([
       stack.persistence.updateTask(NEW_TASK_ID, { assigneeIds: [String(SUBORDINATE_SICIL), String(PLAIN_SICIL)] }),
@@ -90,6 +90,11 @@ test('birim yöneticisi kendi görevinde sorumlu ekler, çıkarır, etiket ve ta
     const renamed = await stack.persistence.updateTask(NEW_TASK_ID, { task: 'Gözden geçirilen iş', targetFinish: '2026-08-24' });
     assert.equal(renamed.ok, true, renamed.error?.message);
     assert.equal(stack.state.tasks[0].targetFinish, '2026-08-24');
+    assert.equal(resolveTaskDeleteAccess(stack.state, NEW_TASK_ID).canDelete, false);
+    await assert.rejects(stack.repository.commitChanges({ taskDeletes: [{ id: NEW_TASK_ID, version: stack.state.tasks[0].version }] }),
+      error => error.code === 'FORBIDDEN' && error.message === 'Görev silme işlemi tam proje yetkisi gerektirir.');
+    stack.db.corporateProjectAccess.push({ ProjectCode: 'P4417041', Sicil: MANAGER_SICIL, RoleCode: 'PROJECT_MANAGER' });
+    await stack.reload();
     assert.equal(resolveTaskDeleteAccess(stack.state, NEW_TASK_ID).canDelete, true);
     const deleted = await stack.persistence.mutate('task/delete', { type: 'task/delete', id: NEW_TASK_ID });
     assert.equal(deleted.ok, true, deleted.error?.message);
@@ -201,14 +206,18 @@ test('sıradan kullanıcı erişimi olmayan projeye görev yazamaz', async () =>
     const session = await stack.repository.loadSessionContext();
     assert.equal(session.canAssignAllCorporateProjects, false);
 
-    await assert.rejects(
-      stack.repository.commitChanges(taskChanges({ assigneeIds: [String(PLAIN_SICIL)] })),
-      (error) => {
-        assert.equal(error.code, 'FORBIDDEN');
-        assert.match(error.message, /tam yazma yetkiniz yok/);
-        return true;
-      }
-    );
+    // Görünmeyen proje var olmayan projeyle AYNI yanıtı alır: kimliğin var
+    // olduğu "yetkiniz yok" yanıtından öğrenilemez.
+    const hidden = await stack.repository.commitChanges(taskChanges({ assigneeIds: [String(PLAIN_SICIL)] }))
+      .then(() => null, (error) => error);
+    const [task] = taskChanges({ assigneeIds: [String(PLAIN_SICIL)] }).taskUpserts;
+    const missing = await stack.repository.commitChanges({
+      taskUpserts: [{ ...task, projectId: 'a0a0a0a0-0000-4000-8000-0000000000a0' }]
+    }).then(() => null, (error) => error);
+    assert.equal(hidden?.code, 'MUTATION_FAILED');
+    assert.match(hidden.message, /Hedef proje bulunamadı/);
+    assert.deepEqual([hidden.code, hidden.message], [missing?.code, missing?.message]);
+    assert.equal(stack.db.tasks.length, 0);
   } finally {
     await stack.dispose();
   }
@@ -229,7 +238,7 @@ test('atama kapsamı proje üst verisi ya da iş dağılım ağacı yazmasına a
     }));
     assert.equal(stack.db.projects[0].ProjectName, 'İHA Hava Savunma Sistemi ELDD Projesi');
 
-    // İş dağılım ağacına düğüm eklemek de reddedilir.
+    // Görünmeyen proje WBS hedefi, var olmayan projeyle aynı yanıtla reddedilir.
     await assert.rejects(
       stack.repository.commitChanges({
         wbsUpserts: [{
@@ -242,7 +251,8 @@ test('atama kapsamı proje üst verisi ya da iş dağılım ağacı yazmasına a
         }]
       }),
       (error) => {
-        assert.equal(error.code, 'FORBIDDEN');
+        assert.equal(error.code, 'MUTATION_FAILED');
+        assert.equal(error.message, 'Hedef proje bulunamadı veya etkin değil.');
         return true;
       }
     );

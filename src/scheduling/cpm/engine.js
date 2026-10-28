@@ -197,6 +197,19 @@ function relationshipSlack(edge, schedules, metadata) {
  */
 const MAX_CRITICAL_PATHS = 500;
 
+/**
+ * Yol listelemenin TOPLAM iş üst sınırı: ziyaret edilen ve yayımlanan yol
+ * öğelerinin sayısı.
+ *
+ * Yol sayısı sınırı tek başına yetmiyordu: her adımda biriken yolun tamamı
+ * kopyalanıyordu ve uzun ortak bir kuyruğa bağlanan yüzlerce kök, kalıcı küçük
+ * bir ağı başka kullanıcıların tarayıcısında saniyelerce süren karesel bir işe
+ * çeviriyordu. Yol artık tek bir değişken yığında tutulur ve yalnızca
+ * tamamlandığında kopyalanır; bütçeye ulaşıldığında listeleme kesilir ve yine
+ * `criticalPathsTruncated` ile bildirilir.
+ */
+export const MAX_CRITICAL_PATH_STEPS = 250000;
+
 function findCriticalPaths(graph, schedules, metadata) {
   const criticalIds = new Set(
     graph.topologicalOrder.filter((id) => schedules.get(id).totalFloatDays <= 0)
@@ -204,9 +217,14 @@ function findCriticalPaths(graph, schedules, metadata) {
   const criticalOutgoing = new Map(graph.topologicalOrder.map((id) => [id, []]));
   const criticalIncomingCount = new Map(graph.topologicalOrder.map((id) => [id, 0]));
 
+  // Kritik alt ağın HER kenarı bir kök-yaprak yolundadır (sonlu DAG); kenar
+  // kümesi bu yüzden yol listesinin birleşimine eşittir ve listeden bağımsız,
+  // tam olarak döner. Yol listesi sınırda kesilse de vurgulanan oklar eksilmez.
+  const edges = [];
   for (const edge of graph.edges) {
     if (!criticalIds.has(edge.predecessorId) || !criticalIds.has(edge.successorId)) continue;
     if (relationshipSlack(edge, schedules, metadata) !== 0) continue;
+    edges.push([edge.predecessorId, edge.successorId]);
     criticalOutgoing.get(edge.predecessorId).push(edge.successorId);
     criticalIncomingCount.set(edge.successorId, criticalIncomingCount.get(edge.successorId) + 1);
   }
@@ -215,24 +233,41 @@ function findCriticalPaths(graph, schedules, metadata) {
     (id) => criticalIds.has(id) && criticalIncomingCount.get(id) === 0
   );
   const paths = [];
-  let truncated = false;
+  let steps = 0;
 
-  function visit(taskId, path) {
-    if (paths.length >= MAX_CRITICAL_PATHS) {
-      truncated = true;
-      return;
+  // Özyinelemesiz derinlik öncelikli gezinti: `path` geçerli yol, `next` her
+  // düğümün sıradaki ardılının sırasıdır. Ziyaret sırası eski özyinelemeli
+  // gezintiyle aynıdır; sonuç belirlenimcidir.
+  const path = [];
+  const next = [];
+  for (const start of starts) {
+    if (steps >= MAX_CRITICAL_PATH_STEPS) return { paths, truncated: true, edges };
+    path.push(start);
+    next.push(0);
+    steps += 1;
+    while (path.length) {
+      const top = path.length - 1;
+      const successors = criticalOutgoing.get(path[top]);
+      if (!successors.length) {
+        if (paths.length >= MAX_CRITICAL_PATHS || steps + path.length > MAX_CRITICAL_PATH_STEPS) {
+          return { paths, truncated: true, edges };
+        }
+        paths.push(path.slice());
+        steps += path.length;
+      }
+      if (next[top] >= successors.length) {
+        path.pop();
+        next.pop();
+        continue;
+      }
+      if (steps >= MAX_CRITICAL_PATH_STEPS) return { paths, truncated: true, edges };
+      path.push(successors[next[top]]);
+      next[top] += 1;
+      next.push(0);
+      steps += 1;
     }
-    const nextPath = [...path, taskId];
-    const successors = criticalOutgoing.get(taskId);
-    if (!successors.length) {
-      paths.push(nextPath);
-      return;
-    }
-    for (const successorId of successors) visit(successorId, nextPath);
   }
-
-  for (const taskId of starts) visit(taskId, []);
-  return { paths, truncated };
+  return { paths, truncated: false, edges };
 }
 
 function serializeSchedule(schedule) {
@@ -264,6 +299,7 @@ export function calculateCpm(tasks, {
       criticalTaskIds: [],
       criticalPaths: [],
       criticalPathsTruncated: false,
+      criticalDependencies: [],
       tasks: {}
     };
   }
@@ -374,7 +410,11 @@ export function calculateCpm(tasks, {
 
   const actualProjectStart = earliestDate([...schedules.values()].map((schedule) => schedule.earlyStart));
   const criticalTaskIds = graph.topologicalOrder.filter((id) => schedules.get(id).totalFloatDays <= 0);
-  const { paths: criticalPaths, truncated: criticalPathsTruncated } = findCriticalPaths(graph, schedules, metadata);
+  const {
+    paths: criticalPaths,
+    truncated: criticalPathsTruncated,
+    edges: criticalDependencies
+  } = findCriticalPaths(graph, schedules, metadata);
   const serializedTasks = Object.fromEntries(
     graph.topologicalOrder.map((id) => [id, serializeSchedule(schedules.get(id))])
   );
@@ -387,6 +427,8 @@ export function calculateCpm(tasks, {
     criticalPaths,
     // Kritik GÖREV kümesi her zaman tamdır; kesilen yalnızca yol SAYIMIdır.
     criticalPathsTruncated,
+    // Sıfır bolluklu kritik ilişkilerin TAMAMI (`[öncül, ardıl]`).
+    criticalDependencies,
     tasks: serializedTasks
   };
 }

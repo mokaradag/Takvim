@@ -72,7 +72,7 @@ const MODEL_FIELDS = new Set(['id', 'provider', 'capabilities', 'contextTokens',
 const PROFILE_FIELDS = new Set(['model', 'enabled', 'maxOutputTokens', 'timeoutMs']);
 const PREPROCESSING_FIELDS = new Set(['id', 'queryPrefix', 'documentPrefix', 'truncateTokens']);
 const PREPROCESSING_ID_PATTERN = /^[a-z0-9][a-z0-9.:-]{0,63}$/;
-const MAX_PREFIX_CHARS = 200;
+export const MAX_PREFIX_CHARS = 200;
 const MAX_REPORTED_MODELS = 8;
 
 /** Gömme girdisinin amacı: kullanıcı sorgusu ya da sunucuya ait katalog belgesi. */

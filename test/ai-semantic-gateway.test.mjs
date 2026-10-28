@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { startFakeOpenAiCompatibleServer } from './helpers/fakeOpenAiCompatibleServer.mjs';
+import { FAKE_SEMANTIC_LIMITS, hashedScore, startFakeOpenAiCompatibleServer } from './helpers/fakeOpenAiCompatibleServer.mjs';
 import { DEFAULT_KEY, PERSONAL_KEY_A, captureConsole, createAiStack } from './helpers/aiStack.mjs';
 import { DEFAULT_REGISTRY as REGISTRY, assertIdle as idle, registryWith, semanticGatewayFor as gatewayFor } from './helpers/semanticGateway.mjs';
 
@@ -24,6 +24,7 @@ const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
 const { snapshotOperations } = await import('../src/server/observability/telemetryRegistry.js');
 const { createOpenAiCompatibleProvider, embeddingResponseBudget } = await import('../src/server/ai/providers/openAiCompatibleProvider.js');
 const { SEMANTIC_LIMITS } = await import('../src/domain/ai/semanticContract.js');
+const { MAX_PREFIX_CHARS } = await import('../src/domain/ai/aiModelRegistry.js');
 const { getAiGateway } = await import('../src/server/ai/aiRuntime.js');
 const { withSqlTransaction } = await import('../src/server/db/pool.js');
 
@@ -33,6 +34,90 @@ const RERANK = resolveModelProfile(REGISTRY, AI_PROFILES.RERANK).route;
 const embedQuery = (gateway, options = {}) => gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts: ['Gecikmiş işlerim'], purpose: 'query', ...options });
 const embedDocuments = (gateway, options = {}) => gateway.embedTexts({ profile: AI_PROFILES.EMBEDDING, texts: ['Belge A', 'Belge B'], purpose: 'document', ...options });
 const rerank = (gateway, options = {}) => gateway.rerankTexts({ profile: AI_PROFILES.RERANK, query: 'Soru', documents: ['Belge A', 'Belge B'], ...options });
+
+/* ── Yerel HTTP ikizinin kendi sınırı (tek başına dinleyici de olabilir) ── */
+
+test('sahte sağlayıcı bozuk anlamsal girdide süreci düşürmez; işleme hatası istek sınırında kalır', async (t) => {
+  const failing = await startFakeOpenAiCompatibleServer({ semantic: { embed: () => { throw new Error('ikiz hatası'); } } });
+  const server = await startFakeOpenAiCompatibleServer();
+  t.after(() => Promise.all([failing.close(), server.close()]));
+  const post = (base, path, body) => fetch(`${base}${path}`, {
+    method: 'POST', headers: { authorization: 'Bearer anahtar', 'content-type': 'application/json' }, body: JSON.stringify(body)
+  });
+  // İlkel değere çevrilemeyen nesneler eskiden yakalanmayan TypeError ile dinleyici sürecini sonlandırıyordu.
+  const unconvertible = { toString: 1, valueOf: 1 };
+  for (const [path, body] of [
+    ['/embeddings', { input: [unconvertible] }],
+    ['/embeddings', { input: unconvertible }],
+    ['/embeddings', { input: [1, 2] }],
+    ['/rerank', { query: unconvertible, documents: ['a'] }],
+    ['/rerank', { query: 'q', documents: [unconvertible] }],
+    ['/rerank', { query: 'q', documents: 'dizi değil' }]
+  ]) {
+    assert.equal((await post(server.baseUrl, path, body)).status, 400, `${path} ${JSON.stringify(body)}`);
+  }
+  const failed = await post(failing.baseUrl, '/embeddings', { input: ['metin'] });
+  assert.equal(failed.status, 500);
+  assert.equal((await post(server.baseUrl, '/embeddings', { input: ['metin'] })).status, 200, 'dinleyici yanıt vermeyi sürdürür');
+  assert.equal((await post(failing.baseUrl, '/rerank', { query: 'q', documents: ['a'] })).status, 200);
+});
+
+test('sahte yeniden sıralama sorgu, belge sayısı ve belge uzunluğuyla sınırlıdır; sorgu bir kez özetlenir ve puanlar değişmez', async (t) => {
+  const crypto = (await import('node:crypto')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const server = await startFakeOpenAiCompatibleServer();
+  t.after(() => server.close());
+  const post = (body) => fetch(`${server.baseUrl}/rerank`, {
+    method: 'POST', headers: { authorization: 'Bearer anahtar', 'content-type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const embed = (input) => fetch(`${server.baseUrl}/embeddings`, {
+    method: 'POST', headers: { authorization: 'Bearer anahtar', 'content-type': 'application/json' }, body: JSON.stringify({ input })
+  });
+  // Sınırlar ÜRETİM sözleşmesinden okunur ve uç başınadır: yeniden sıralama aday sınırını ve öneksiz belge
+  // uzunluğunu, gömme katalog sınırını ve önek payını taşır. İkiz üretimin reddettiği girdiyi kabul etmez.
+  const { maxCandidates, maxCatalogueItems, maxItemTextChars, maxQueryChars } = SEMANTIC_LIMITS;
+  assert.deepEqual([maxCandidates, maxItemTextChars], [20, 4000]);
+  const texts = (count, chars = 1) => Array.from({ length: count }, () => 'd'.repeat(chars));
+  for (const body of [
+    { query: 'q', documents: texts(maxCandidates + 1) },
+    { query: 'q', documents: texts(1, maxItemTextChars + 1) },
+    { query: 'q'.repeat(maxQueryChars + 1), documents: ['d'] },
+    { query: '', documents: ['d'] },
+    { query: 'q', documents: [] },
+    { query: 'q', documents: ['d', ''] },
+    { query: 'q', documents: 'dizi değil' }
+  ]) {
+    assert.equal((await post(body)).status, 400, JSON.stringify(body).slice(0, 80));
+  }
+  assert.equal((await post({ query: 'q'.repeat(maxQueryChars), documents: texts(maxCandidates, maxItemTextChars) })).status, 200,
+    'sınırdaki yeniden sıralama girdisi kabul edilir');
+
+  for (const input of ['scalar embedding', [], [''], ['g'.repeat(maxItemTextChars + MAX_PREFIX_CHARS + 1)], texts(maxCatalogueItems + 1)]) {
+    assert.equal((await embed(input)).status, 400, `gömme ${JSON.stringify(input).slice(0, 40)}`);
+  }
+  assert.equal((await embed(['g'.repeat(maxItemTextChars + MAX_PREFIX_CHARS)])).status, 200, 'önekli sınırdaki gömme öğesi kabul edilir');
+  assert.equal((await embed(texts(maxCatalogueItems))).status, 200, 'katalog sınırındaki gömme kabul edilir');
+  assert.deepEqual(FAKE_SEMANTIC_LIMITS.rerank, { maxItems: maxCandidates, maxItemChars: maxItemTextChars, maxQueryChars });
+
+  const original = crypto.createHash;
+  let hashes = 0;
+  crypto.createHash = (...args) => { hashes += 1; return original(...args); };
+  syncBuiltinESMExports();
+  let response;
+  const documents = Array.from({ length: maxCandidates }, (_, index) => `belge ${index}`);
+  try {
+    response = await post({ query: 'uzun sorgu '.repeat(100), documents });
+  } finally {
+    crypto.createHash = original;
+    syncBuiltinESMExports();
+  }
+  assert.equal(response.status, 200);
+  assert.equal(hashes, 1, 'sorgu her belge için baştan özetlenmez');
+  const { results } = await response.json();
+  for (const result of results) {
+    assert.equal(result.relevance_score, hashedScore('uzun sorgu '.repeat(100), documents[result.index]));
+  }
+});
 
 /* ── Sağlayıcı bağdaştırıcısı (gerçek fetch, yerel HTTP ikizi) ── */
 

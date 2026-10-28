@@ -100,3 +100,24 @@ jobs:
           process.stderr.write(result.stderr || '');
           if (result.error || result.status !== 0 || /^1\.\.0$/m.test(result.stdout) || !/^# pass [1-9][0-9]*$/m.test(result.stdout)) process.exit(1);
           '@ | node --input-type=module
+
+  planner-home-macos:
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Verify native POSIX ACL and concurrent traversal
+        run: |
+          node --input-type=module <<'NODE'
+          import { spawnSync } from 'node:child_process';
+          const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', '--test-name-pattern=Claude.*(özel ev|POSIX ACL|başka kullanıcının)', 'test/ai-planner-benchmark.test.mjs'], { encoding: 'utf8' });
+          process.stdout.write(result.stdout || '');
+          process.stderr.write(result.stderr || '');
+          const summary = (result.stdout || '').split('\n').map(line => line.trim());
+          if (result.error || result.status !== 0 || !['# tests 3', '# pass 3', '# fail 0', '# skipped 0'].every(line => summary.includes(line))) process.exit(1);
+          NODE
