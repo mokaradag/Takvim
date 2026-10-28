@@ -1,5 +1,8 @@
 import { PERSISTED_TASK_STATUSES } from '../../domain/constants/index.js';
 import { extractActualId, isActualId } from '../../domain/identity/actualId.js';
+import { creationEntries } from '../../domain/identity/creationIds.js';
+import { createCreationIdStorage } from './creationIdStorage.js';
+import { activateActualIdAliases } from './activeActualIdAliases.js';
 import { AppRepositoryError, REPOSITORY_ERROR_CODES } from '../contracts/appRepository.js';
 import {
   loadActualIdAliases,
@@ -103,7 +106,7 @@ function rememberClientId(map, value) {
   if (value == null || value === '') return;
   const original = String(value);
   const actual = toActualUuid(original);
-  if (actual && original !== actual) map.set(actual, original);
+  if (actual && original !== actual && ![...map.values()].includes(original)) map.set(actual, original);
 }
 
 function rememberDeleteId(map, entry) {
@@ -412,6 +415,35 @@ export function createApiRepository({
   aliasStorageKey
 } = {}) {
   const clientIdAliases = loadActualIdAliases(aliasStorage, aliasStorageKey);
+  const creationIds = createCreationIdStorage(aliasStorage, aliasStorageKey);
+  creationIds.restoreAliases(clientIdAliases);
+  activateActualIdAliases(clientIdAliases);
+  let preparation = Promise.resolve();
+  function prepare(changes) {
+    const result = preparation.then(async () => {
+      collectClientIds(changes, clientIdAliases);
+      const normalized = normalizeActualChanges(changes);
+      let prepared = creationIds.prepare(normalized, clientIdAliases);
+      if (creationEntries(prepared).some(({ entry }) => !entry.creationProof)) {
+        const { allocations } = await requestJson(`${basePath}/commit`, { method: 'POST',
+          body: JSON.stringify({ operation: 'allocate-creation-ids', changes: {}, allocationChanges: prepared }) }, 'commitChanges');
+        if (!Array.isArray(allocations)) throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+          message: 'Oluşturma kimliği alınamadı.', operation: 'commitChanges' });
+        creationIds.remember(allocations, clientIdAliases, changes);
+        prepared = creationIds.prepare(normalized, clientIdAliases);
+        if (creationEntries(prepared).some(({ entry }) => !entry.creationProof)) throw new AppRepositoryError({
+          code: REPOSITORY_ERROR_CODES.MUTATION_FAILED, message: 'Oluşturma kimliği alınamadı.', operation: 'commitChanges' });
+      }
+      if (!persistActualIdAliases(clientIdAliases, aliasStorage, aliasStorageKey) && aliasStorage) {
+        throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+          message: 'Oluşturma kimliği saklanamadı.', operation: 'commitChanges' });
+      }
+      activateActualIdAliases(clientIdAliases);
+      return prepared;
+    });
+    preparation = result.then(() => undefined, () => undefined);
+    return result;
+  }
   return {
     kind: 'actual-api',
     async loadSessionContext() {
@@ -440,12 +472,11 @@ export function createApiRepository({
      * tamamlanması garanti altına alınır.
      */
     async commitChanges(changes, { keepalive = false, notifyAssignees = false } = {}) {
-      collectClientIds(changes, clientIdAliases);
-      persistActualIdAliases(clientIdAliases, aliasStorage, aliasStorageKey);
+      const prepared = await prepare(changes);
       // `notifyAssignees` işlem BAŞINA bir tercihtir: kalıcı bir kullanıcı ayarı
       // olarak saklanmaz ve yalnızca kullanıcı açıkça seçtiğinde gönderilir.
       const body = JSON.stringify({
-        changes: normalizeActualChanges(changes),
+        changes: prepared,
         ...(notifyAssignees === true ? { notifyAssignees: true } : {})
       });
       // Büyük gövde `keepalive` sınırını aşar ve istek hiç gönderilmez; sıradan
@@ -456,6 +487,7 @@ export function createApiRepository({
         keepalive: useKeepalive,
         body
       }, 'commitChanges');
+      creationIds.complete(prepared);
       return restoreActualCommitIds(committed, changes, clientIdAliases);
     },
     async flush() {}

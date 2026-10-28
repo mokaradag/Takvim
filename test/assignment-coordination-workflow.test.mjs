@@ -134,7 +134,7 @@ const directorySearch = await import('../src/server/directory/directorySearch.js
 
 function assigneesOf(stack, taskId) {
   return stack.db.taskAssignees
-    .filter((row) => row.TaskId.toUpperCase() === taskId.toUpperCase())
+    .filter((row) => row.TaskId.toUpperCase() === stack.actualId(taskId).toUpperCase())
     .map((row) => Number(row.Sicil))
     .sort((left, right) => left - right);
 }

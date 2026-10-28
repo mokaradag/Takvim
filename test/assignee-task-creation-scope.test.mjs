@@ -140,9 +140,9 @@ test('yetkili görev sorumlusu doğrudan sunucu isteğiyle aynı projede kendisi
     assert.equal(committed.taskUpserts[0].wbsId, WBS_P_CHILD);
     assert.equal(committed.taskUpserts[0].targetFinish, '2026-08-28');
     assert.equal(committed.taskUpserts[0].plannedDurationDays, 4);
-    assert.equal(stack.db.tasks.find((task) => String(task.TaskId).toLowerCase() === TASK_B).PlannedDurationDays, 4);
+    assert.equal(stack.db.tasks.find((task) => String(task.TaskId).toLowerCase() === stack.actualId(TASK_B)).PlannedDurationDays, 4);
     assert.deepEqual(
-      stack.db.taskAssignees.filter((entry) => String(entry.TaskId).toLowerCase() === TASK_B).map((entry) => entry.Sicil),
+      stack.db.taskAssignees.filter((entry) => String(entry.TaskId).toLowerCase() === stack.actualId(TASK_B)).map((entry) => entry.Sicil),
       [ASSIGNEE]
     );
   } finally {
@@ -197,7 +197,7 @@ test('dar sorumlu oluşturması WBS bulunmayan projede boş WbsId ile güvenle t
   try {
     const committed = await stack.repository.commitChanges({ taskUpserts: [newTask(TASK_B, { wbsId: null })] });
     assert.equal(committed.taskUpserts[0].wbsId, null);
-    assert.equal(stack.db.tasks.some((task) => String(task.TaskId).toLowerCase() === TASK_B), true);
+    assert.equal(stack.db.tasks.some((task) => String(task.TaskId).toLowerCase() === stack.actualId(TASK_B)), true);
   } finally {
     await stack.dispose();
   }

@@ -14,6 +14,7 @@ import {
   assertUpsertIntentMatchesPersistence
 } from './upsertIntentValidation.js';
 import { orderWbsUpsertsByParents } from './wbsCommitPlanning.js';
+import { allocateCreationIds, consumeCreationAllocations } from './creationAllocations.js';
 
 function hasVersion(entry) {
   return entry.version != null && String(entry.version).trim() !== '';
@@ -163,6 +164,19 @@ export function createOrderedSqlAppRepository() {
   const repository = createHardenedSqlAppRepository();
   return {
     ...repository,
+    allocateCreationIds(changes) {
+      return withSqlTransaction(async (transaction) => {
+        const actor = await loadTransactionAuthorizationContext(transaction);
+        return allocateCreationIds(transaction, actor, changes, async (proposed) => {
+          const creating = Object.fromEntries(['projectUpserts', 'wbsUpserts', 'taskUpserts'].map((collection) =>
+            [collection, (proposed[collection] || []).filter((entry) => !hasVersion(entry))]));
+          const createdProjectIds = await assertProjectUpsertsAuthorized(transaction, proposed, actor);
+          await assertTaskDestinationsDisclosable(transaction, creating, actor);
+          await assertTaskTargetsDisclosable(transaction, creating, actor, new Map(), createdProjectIds);
+          await assertUpsertIntentMatchesPersistence(transaction, creating, actor, { createdProjectIds, deferCreateCollisions: true });
+        });
+      }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE, deadlockRetries: 2 });
+    },
     commitChanges(changes = {}) {
       const canonicalChanges = canonicalizeCommitScalars(canonicalizeCommitChanges(changes));
       const orderedChanges = {
@@ -183,6 +197,7 @@ export function createOrderedSqlAppRepository() {
         // gereğidir; kurban işlem baştan yinelenir ve kazananın ardından ya
         // tamamlanır ya da eskimiş sürüm çakışması alır.
         const actor = await loadTransactionAuthorizationContext(transaction);
+        await consumeCreationAllocations(transaction, actor, orderedChanges);
         let storedTaskProjects;
         await observePhase('phase.commit.intent-validation', async () => {
           // `projectDeletes` isteğe bağlıdır ve kanonikleştirme onu `undefined`

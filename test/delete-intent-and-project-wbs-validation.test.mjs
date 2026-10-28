@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
+import { creationEntries, remapCommitIds } from '../src/domain/identity/creationIds.js';
+import { canonicalizeCommitChanges } from '../src/server/repository/commitChangeValidation.js';
 import { fileURLToPath } from 'node:url';
 
 import { findCommitProjectWbsIssue } from '../src/server/repository/commitProjectWbsValidation.js';
@@ -197,10 +199,29 @@ async function disclosureStack(sicil) {
   }, { sicil });
 }
 
-/** Commit ucunun gözlenebilir yanıtı; çağıranın kendi gönderdiği kimlik maskelenir. */
-async function probe(changes, submittedId) {
-  const response = await fetch('http://localhost/api/mergen-rota/commit', { method: 'POST', body: JSON.stringify({ changes }) });
-  return `${response.status} ${JSON.stringify(await response.json()).replaceAll(submittedId, '<id>')}`;
+/** Raw probes cover the proof gate; normal requests follow the allocation protocol. */
+async function sendCommit(changes, { raw = false } = {}) {
+  changes = canonicalizeCommitChanges(changes);
+  const post = (body) => fetch('http://localhost/api/mergen-rota/commit', { method: 'POST', body: JSON.stringify(body) });
+  const aliases = [];
+  if (!raw && creationEntries(changes).length) {
+    const response = await post({ operation: 'allocate-creation-ids', changes: {}, allocationChanges: changes });
+    if (!response.ok) return { response, aliases };
+    const { allocations } = await response.json();
+    const mappings = new Map(allocations.map((row) => [`${row.entityType}:${row.clientId}`, row.id]));
+    changes = remapCommitIds(changes, mappings);
+    for (const { entry, entityType } of creationEntries(changes)) {
+      entry.creationProof = allocations.find((row) => row.entityType === entityType && row.id === entry.id)?.proof;
+    }
+    for (const row of allocations) aliases.push([row.id, row.clientId]);
+  }
+  return { response: await post({ changes }), aliases };
+}
+async function probe(changes, submittedId, options) {
+  const { response, aliases } = await sendCommit(changes, options);
+  let body = JSON.stringify(await response.json());
+  for (const [actual, client] of aliases) body = body.replaceAll(actual, client);
+  return `${response.status} ${body.replaceAll(submittedId, '<id>')}`;
 }
 
 function projectCreate(code) {
@@ -303,8 +324,10 @@ test('aynı kümede oluşturulan projedeki bağımlı görevler oluşturanın FU
     });
     changes.taskUpserts = [task(first, 'Öncül', []), task(second, 'Ardıl', [{ predecessorId: first, type: 'FS', lagDays: 0 }])];
     assert.match(await probe(changes, projectId), /^200 /);
-    assert.ok(manager.db.taskDependencies.some((row) => String(row.TaskId).toLowerCase() === second
-      && String(row.PredecessorTaskId).toLowerCase() === first), 'bağımlılık yazılır');
+    const firstStored = manager.db.tasks.find((row) => row.Title === 'Öncül');
+    const secondStored = manager.db.tasks.find((row) => row.Title === 'Ardıl');
+    assert.ok(manager.db.taskDependencies.some((row) => row.TaskId === secondStored.TaskId
+      && row.PredecessorTaskId === firstStored.TaskId), 'bağımlılık yazılır');
 
     // Var olan projenin SÜRÜMLÜ, kodsuz güncellemesi niyet denetimini geçer (READ hibesiyle görünür); 409
     // çakışmasına değil yetki kapısına ulaşır. Oluşturma muafiyeti yalnızca kaydı olmayan projeye aittir ve
@@ -606,7 +629,7 @@ test('gizli ve olmayan hedef projeler aynı tam yanıtı verir; görünür ve ku
       // İstemcinin bildiği hedef kimliği ve istek başına rastgele korelasyon değeri dışında yanıt bütünüyle aynıdır.
       assert.deepEqual({ ...hidden, body: hidden.body.replaceAll(MANUAL_PROJECT_ID, '<id>') },
         { ...missing, body: missing.body.replaceAll('c1c1c1c1-0000-4000-8000-0000000000d2', '<id>') });
-      assert.equal(hidden.status, 400);
+      assert.equal(hidden.status, 409);
       assert.equal(JSON.stringify(stack.db.tasks), before, 'her iki ret de hiçbir görev yazmaz');
       // Aynı istek kimliğiyle satırın varlığı değiştirildiğinde de ham yanıt aynıdır.
       const row = stack.db.projects.findIndex(item => String(item.ProjectId).toLowerCase() === MANUAL_PROJECT_ID);
@@ -695,7 +718,7 @@ for (const scenario of ['corporate-wbs', 'narrow-assignees', 'narrow-fields', 'a
   });
 }
 
-test('otherwise authorized creation retains the narrow F-024 collision residual without overwrite', async () => {
+test('otherwise authorized creation now closes F-024 without overwrite or replacement on collision', async () => {
   const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
   const stack = await disclosureStack(PLAIN_SICIL);
   try {
@@ -704,7 +727,9 @@ test('otherwise authorized creation retains the narrow F-024 collision residual 
     stack.db.projectAccess.push({ ProjectId: CORPORATE_PROJECT_ID, Sicil: PLAIN_SICIL, AccessLevel: 'FULL', IsActive: 1 });
     const task = { projectId: CORPORATE_PROJECT_ID, wbsId: CORPORATE_ROOT_WBS_ID, task: 'Authorized create', status: 'planned', priority: 'medium', assigneeIds: [String(PLAIN_SICIL)], deps: [] };
     const before = JSON.stringify(hidden);
-    assert.match(await probe({ taskUpserts: [{ ...task, id: HIDDEN_TASK_ID }] }, HIDDEN_TASK_ID), /^409 .*UPSERT_CREATE_COLLISION/);
+    const existing = await probe({ taskUpserts: [{ ...task, id: HIDDEN_TASK_ID }] }, HIDDEN_TASK_ID, { raw: true });
+    assert.equal(await probe({ taskUpserts: [{ ...task, id: MISSING_TASK_ID }] }, MISSING_TASK_ID, { raw: true }), existing);
+    assert.match(existing, /^409 .*CREATION_ALLOCATION_INVALID/);
     assert.equal(JSON.stringify(stack.db.tasks.find((row) => row.TaskId.toLowerCase() === HIDDEN_TASK_ID)), before);
     assert.match(await probe({ taskUpserts: [{ ...task, id: MISSING_TASK_ID }] }, MISSING_TASK_ID), /^200 /);
   } finally { await stack.dispose(); }
@@ -751,17 +776,17 @@ test('project-create intent stays independent of candidate rows until calendar a
   } finally { await stack.dispose(); }
 });
 
-test('valid project creation keeps collision safety for both the proposed project and its consumed root', async () => {
+test('unallocated project/root candidates reject before collision; allocated creation succeeds', async () => {
   const stack = await disclosureStack(MANAGER_SICIL);
   try {
     const before = JSON.stringify([stack.db.projects, stack.db.wbs]);
     const changes = projectCreate('AVAILABLE-CODE');
     changes.projectUpserts[0].id = MANUAL_PROJECT_ID; changes.wbsUpserts[0].projectId = MANUAL_PROJECT_ID;
-    assert.match(await probe(changes, MANUAL_PROJECT_ID), /^409 .*UPSERT_CREATE_COLLISION/);
+    assert.match(await probe(changes, MANUAL_PROJECT_ID, { raw: true }), /^409 .*CREATION_ALLOCATION_INVALID/);
     assert.equal(JSON.stringify([stack.db.projects, stack.db.wbs]), before);
     changes.projectUpserts[0].id = MISSING_TASK_ID; changes.wbsUpserts[0].projectId = MISSING_TASK_ID;
     changes.wbsUpserts[0].id = MANUAL_ROOT_WBS_ID;
-    assert.match(await probe(changes, MANUAL_ROOT_WBS_ID), /^409 .*UPSERT_CREATE_COLLISION/);
+    assert.match(await probe(changes, MANUAL_ROOT_WBS_ID, { raw: true }), /^409 .*CREATION_ALLOCATION_INVALID/);
     assert.equal(JSON.stringify([stack.db.projects, stack.db.wbs]), before);
     changes.wbsUpserts[0].id = MISSING_WBS_ID;
     assert.match(await probe(changes, MISSING_TASK_ID), /^200 /);

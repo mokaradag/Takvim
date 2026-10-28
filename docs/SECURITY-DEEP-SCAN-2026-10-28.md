@@ -1,5 +1,47 @@
 # CodeRabbit security validation — 28 October 2026
 
+## F-024 — authorized server-issued creation IDs
+
+This follow-up starts at live PR HEAD `a524984084cdd370713c5e8b89825906f2ae1c91`, base `main` at `ed4a0aa1679ac336e7b58e8b5840f502c1ec1ab2`. The branch still had four commits, 39 changed files and 26 resolved review threads (zero unresolved). The user explicitly authorized eliminating F-024 with the proposed narrow allocation protocol. **F-024 is now fixed; the earlier OPEN decisions below are historical.** No new visibility, personnel, assignment, dependency, recurrence or project mutation permission is introduced.
+
+The defect was the creation contract itself: an otherwise valid arbitrary candidate ID succeeded when unused and collided when hidden. Creation IDs are now fresh server UUIDs. The existing authenticated, same-origin commit route reserves caller/type/project-bound proof records in SQL; arbitrary client IDs serve only as local reference labels. The normal commit requires every project/WBS/task creation's proof before any candidate-object lookup. Missing, malformed, foreign, wrong-type, wrong-destination, expired and consumed proofs return the same `409 / CREATION_ALLOCATION_INVALID`, independent of hidden entity existence.
+
+Consumption deletes matching allocation records inside the existing SERIALIZABLE mutation transaction. Failure rolls it back; success consumes it once, including after the created entity is subsequently deleted. Concurrent use has one winner. All canonical authorization and persistence checks still run: allocation never confers mutation rights. The existing locked collision validators remain defense in depth. Versioned edits and deletes keep their existing contracts. Server-generated implicit roots need no caller proof because their IDs are never client-selected.
+
+The client preserves its local object/reference graph through durable, entity-typed aliases, saves pending proofs before mutation, and reuses the same proof after a lost response. It never automatically reserves a replacement for an acknowledged or uncertain creation. Reminder, Outlook, activity, assignment and schedule adapters translate those entity IDs consistently; stable employee IDs are not translated. A reservation request carries `changes: {}` and its proposal in `allocationChanges`, so an older server treats it as a no-op rather than accidentally committing it. An older client fails closed against the new server.
+
+Per-request cardinality/body bounds remain unchanged. Pending allocations are capped at 4,000 per caller (two maximum commit batches), expire after 24 hours, and receive caller-scoped bounded cleanup during allocation. SQL remains the only durable service. There are no new routes, external dependencies, environment variables, origins, network/SMTP permissions or filesystem trust changes.
+
+**Deployment:** apply `database/MR_Upgrade_0019_Creation_Allocations.sql` after 0018 and before deploying the application. Clean creation and full rollback include the same table. The migration is transactional/idempotent and rejects incompatible columns, keys/indexes and the type constraint. Missing allocation schema returns a controlled 503; there is no legacy-ID fallback. Deploy the new server to all instances before enabling its new client assets; old servers do not enforce the new proof gate. Expired or uncertain creations require reconciliation/reload rather than blind re-creation.
+
+| Production file(s) | Why required for F-024 |
+|---|---|
+| `src/server/repository/creationAllocations.js` | Reserve fresh IDs; enforce caller/type/destination/expiry and atomic one-use consumption. |
+| `src/server/repository/orderedSqlAppRepository.js` | Reuse canonical issuance scope checks and place consumption before candidate reads in the existing transaction. |
+| `src/app/api/mergen-rota/commit/route.js` | Use the existing bounded, same-origin route for reservation and normal proof-bearing commits. |
+| `src/domain/identity/creationIds.js` | Remap only project/WBS/task references, including dependency predecessors and recurrence parents; leave personnel/calendar/dependency-row IDs unchanged. |
+| `src/data/api/createApiRepository.js`, `creationIdStorage.js`, `actualIdAliasStorage.js`, `activeActualIdAliases.js` | Save/reuse pending proofs, persist server-ID aliases, serialize preparation and preserve save/reload/retry behavior. |
+| `src/data/api/scheduleChangeClient.js`, `src/features/shared/jsonRequest.js` | Keep existing task/project feature requests and responses consistent with server-issued IDs. |
+| `database/MR_Upgrade_0019_Creation_Allocations.sql`, `MR_Create_Durable_Persistence.sql`, `MR_Rollback_Durable_Persistence.sql` | Durable multi-process allocation without a new service; consistent existing-install, clean-install and rollback lifecycle. |
+
+Regression coverage uses the real route/repository stack with its SQL behavioral double and exact SQL/transaction assertions. It does not claim evaluation against a live SQL Server. It covers all three arbitrary hidden/unused candidate types, binding failures, replay after deletion, lost-response retry across a new client instance, authorization revocation, whole-batch rollback, competing proof consumption, expiry/capacity, storage/schema failure, project/root/dependency graphs and old-server envelopes. Existing creation, recurrence, assignment and rollback assertions now resolve actual IDs from real allocation responses; no visibility/mutation assertions were weakened. Canonical error and calendar-meter tests still reach their original validation paths after obtaining legitimate allocations. The reservation transaction is counted separately from the single atomic mutation commit.
+
+Final local validation on this follow-up's production/test code:
+
+| Gate | Result |
+|---|---|
+| Targeted 17-file protocol/creation/authorization/recurrence/deployment regressions | **246 passed**, zero failures/skips/cancellations. |
+| `npm test -- --test-concurrency=1 --test-reporter=tap` | **4,681 passed**, zero failures/skips/cancellations (333 seconds). |
+| `npm run lint` | Passed, no ESLint warnings/errors. |
+| `npm run build` | Passed. |
+| `git diff --check` | Passed. |
+| Quality's lockfile-consistency gate | Isolated `npm install --package-lock-only --ignore-scripts --offline` output is byte-identical to the committed lockfile. |
+| Warning comparison | The same 14 existing test warnings: 12 React SSR layout-effect, one React key, one TLS-IP deprecation; no additions/suppression. The npm environment warning is unchanged. |
+
+The additional typed-alias regression uses identical task/project UUID text and confirms correct save, reload, update and feature-request routing without rewriting other namespaces. The final adversarial review found no visibility/personnel-ID/write/dependency/assignment/recurrence widening, new caller-selected candidate read, work-bound removal, SMTP/uncertain-delivery change, or transaction-isolation change. Invalid proof batches roll back all consumption. No validated P0–P3 production defect or F-024 residual is intentionally left open.
+
+The published HEAD's PR checks provide remote validation. No organizational SQL/SMTP/Keycloak/model deployment validation is claimed; the SQL double is not a live SQL evaluator. Earlier sections retain immutable evidence for the prior convergence fixes and their thread dispositions.
+
 ## User-authorized thread closure and additional findings
 
 This pass starts from live PR HEAD `6b63502003af3c3581c4040378620c3ac05e8a13` and the same base `ed4a0aa1679ac336e7b58e8b5840f502c1ec1ab2`. Seventeen threads were unresolved: thirteen from the preceding pass and four new CodeRabbit comments. The user explicitly requested evidence-based replies and resolution. Exact thread IDs, top-level comment IDs and authors were verified in PR #107 before replying; no unrelated audience is added.
@@ -39,7 +81,7 @@ git diff --check
 
 The first complete run found one old source-shape assertion for unconditional `ProjectId <> @projectId`; the assertion now checks create-versus-update behavior and retains the authorization/locking checks. The complete final run then passed. No production error was hidden by changing a test expectation. [Live checks on the published PR head](https://github.com/mokaradag/Takvim/pull/107/checks) validate the documentation successor's identical production/test code; those remote results are not misattributed to this code commit before publication.
 
-### F-024: explicit creation-contract decision
+### Historical F-024 decision before the new authorization
 
 The earlier instruction explicitly forbids replacement IDs, changing client-selected-ID semantics, silent collision success and hidden-object overwrite. Under those constraints an otherwise valid request necessarily has these outcomes:
 
@@ -48,11 +90,11 @@ The earlier instruction explicitly forbids replacement IDs, changing client-sele
 | Unused | Creation succeeds. |
 | Already exists, including hidden | Creation fails without overwrite. |
 
-The success/failure bit is the residual oracle; identical error text cannot remove it. It must not be mislabeled fixed by changing only collision error codes. All rejected-create variants are fixed separately. F-024 remains OPEN unless the original creation-contract restriction is explicitly changed.
+The success/failure bit is the residual oracle; identical error text cannot remove it. It must not be mislabeled fixed by changing only collision error codes. All rejected-create variants are fixed separately. At that revision, F-024 remained OPEN pending an explicit change to the original creation-contract restriction. The newly authorized protocol above now closes it.
 
 A concrete narrow replacement contract is server-issued creation IDs with caller-bound allocation records in the existing SQL database. The client reserves IDs through the existing commit surface, then submits its unchanged object/reference graph using those IDs plus allocation proof. The server checks owner, entity type and destination before any candidate-row lookup, consumes the allocation atomically with the existing commit, and never reuses consumed allocations. An actor cannot obtain proof for an arbitrary hidden ID. Versioned edits and all visibility/mutation rules remain unchanged. A reservation table is needed to keep allocation, replay protection and retry behavior durable across processes/restarts; no external service, origin, filesystem trust or SMTP change is needed.
 
-This proposal requires explicit exceptions to the prior client-ID, API-surface and schema restrictions. It is a reviewable scope decision, not an implemented permissive fallback. Until that decision is made, this report does not claim unconditional security convergence.
+This was the reviewable scope decision presented before implementation. The user subsequently authorized the narrow client-ID/proof/schema changes; the implementation and current disposition are recorded above.
 
 ## PR #107 surgical follow-up — disposition at 6b63502
 
@@ -138,15 +180,15 @@ git diff --check
 
 The validated and published commit for this pass is `6b63502003af3c3581c4040378620c3ac05e8a13`, with tree `805beac1d84c227b6b364afc605b3699a0ea4820`, parent `7daef0dfd514b30ca6745830e6dcda9a088d111e`. Its local results above are 213 targeted and 4,660 serial tests. Remote Quality (including Windows/macOS), Dependency Review and all CodeQL analyses passed on this exact commit: [Quality](https://github.com/mokaradag/Takvim/actions/runs/40730349146), [Dependency Review](https://github.com/mokaradag/Takvim/actions/runs/40730349051), [CodeQL](https://github.com/mokaradag/Takvim/actions/runs/40730341296). The aggregate CodeQL result reports no new alerts. Cubic was neutral due to its review limit. CodeRabbit subsequently posted the additional comments addressed in the closure pass below.
 
-Only the explicitly accepted F-024 residual may remain: a fully authorized valid creation with a hidden existing client-selected ID collides, while an unused ID creates. No other validated posted production defect is intentionally left open. No schema, migration, dependency, origin, endpoint, configuration knob or external service was added. AI/Outlook disclosure code, filesystem/network trust, scheduler authentication and transaction isolation are unchanged.
+Historical residual before the latest authorization (now closed above): a fully authorized valid creation with a hidden existing client-selected ID collides, while an unused ID creates. No other validated posted production defect is intentionally left open. No schema, migration, dependency, origin, endpoint, configuration knob or external service was added. AI/Outlook disclosure code, filesystem/network trust, scheduler authentication and transaction isolation are unchanged.
 
 ---
 
 ## Original pass: result and remaining constraint
 
-All 26 findings were independently evaluated against fetched production HEAD. Eleven require fixes, fourteen are already fixed in production, and **F-024 remains partially remediated/open**. Complete security convergence is not claimed.
+All 26 findings were independently evaluated against fetched production HEAD. Eleven require fixes, fourteen are already fixed in production, and **F-024 was partially remediated/open at that revision**. The current authorized follow-up above closes that remaining contract defect.
 
-F-024: unauthorized destination writers now receive indistinguishable hidden-existing/missing task/WBS responses before collision lookup. An authorized creator can still distinguish an unused client-selected globally unique ID (creation succeeds) from an ID belonging to a hidden resource (collision must fail). A controlled same-ID reproduction returned `409 / UPSERT_CREATE_COLLISION` versus `200`. Error redaction cannot make successful creation indistinguishable from rejected creation. Eliminating that remainder requires a change to ID allocation/creation semantics, such as server-issued creation IDs with reference remapping, which the governing instructions did not authorize. No such redesign, permissive overwrite, silent success or expanded disclosure right was introduced.
+Historical F-024 evidence at the initial revision: unauthorized destination writers received indistinguishable hidden-existing/missing task/WBS responses before collision lookup. An authorized creator can still distinguish an unused client-selected globally unique ID (creation succeeds) from an ID belonging to a hidden resource (collision must fail). A controlled same-ID reproduction returned `409 / UPSERT_CREATE_COLLISION` versus `200`. Error redaction cannot make successful creation indistinguishable from rejected creation. Eliminating that remainder requires a change to ID allocation/creation semantics, such as server-issued creation IDs with reference remapping, which the governing instructions did not authorize. No such redesign, permissive overwrite, silent success or expanded disclosure right was introduced.
 
 ## Original scan provenance (historical)
 
@@ -159,7 +201,7 @@ Root `package.json`, Next configuration, CI and deployment documentation build/u
 
 ## Individual dispositions
 
-Paths in this table are source-of-truth production paths unless explicitly under `test/`. An additional OPEN disposition is necessary for F-024; assigning a closed disposition would be inaccurate.
+Paths in this table are source-of-truth production paths unless explicitly under `test/`. F-024 was subsequently fixed by the explicitly authorized allocation protocol above; other dispositions retain their original evidence.
 
 | ID | Disposition | Evidence / root cause and changed source |
 |---|---|---|
@@ -186,7 +228,7 @@ Paths in this table are source-of-truth production paths unless explicitly under
 | F-021 | FIXED | `src/server/outlook/outlookQueries.js` now reuses the existing task visibility predicate in the subscription-state SELECT and joins current active tasks/projects. Owning an active subscription no longer discloses later completion metadata after revocation. Regression keeps the subscription active, revokes access, checks empty state, then restores READ and verifies legitimate metadata. |
 | F-022 | ALREADY FIXED / NOT PRESENT | Commit and schedule-change routes already validate same-origin intent and JSON media type before mutation. Existing sibling-origin/simple-request tests cover the actual boundaries. |
 | F-023 | FIXED | `src/server/repository/sqlAppRepository.js` checks current canonical parent task visibility using the existing `loadOutlookTask` visibility query before reading parent-specific rule/project/span metadata. Identical submitted IDs produce identical full responses for hidden/absent parents; authorized parents retain normal recurrence validation. |
-| F-024 | PARTIALLY REMEDIATED / OPEN | `orderedSqlAppRepository.js` and `upsertIntentValidation.js` authorize task/WBS creation destinations and dependency authority before collision reads, reusing the existing exported task-create scope. Unauthorized hidden/absent probes are indistinguishable. The authorized-creator success/collision oracle remains, as explained above. |
+| F-024 | FIXED by authorized allocation protocol above | `orderedSqlAppRepository.js` and `upsertIntentValidation.js` authorize task/WBS creation destinations and dependency authority before collision reads, reusing the existing exported task-create scope. Unauthorized hidden/absent probes are indistinguishable. The former authorized-creator success/collision oracle is closed by requiring caller-bound server-issued creation proofs before candidate lookup. |
 | F-025 | ALREADY FIXED / NOT PRESENT | Supported standalone local test helper `test/helpers/fakeOpenAiCompatibleServer.mjs` already validates semantic strings/arrays before conversion and catches processing exceptions at the HTTP boundary. Existing malformed-object/listener-survival tests cover it. Production AI behavior was not modified for this helper. |
 | F-026 | ALREADY FIXED / NOT PRESENT | The fake helper already enforces query/count/document/embedding bounds and uses `hashedScorer` to hash the common query once. Existing tests count hashes, test boundaries and verify unchanged deterministic scores. |
 

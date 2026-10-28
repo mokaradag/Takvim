@@ -32,7 +32,7 @@ test('yeni şablon ve tekrarlar tek kalıcı istekle oluşur; yeniden üretim ko
       mutate: (operation, factory) => stack.persistence.mutate(operation, (state) => taskCreationWithRecurrences(state, factory(state))) });
     assert.equal(result.ok, true, result.error?.message);
     assert.equal(created.id, taskId);
-    assert.equal(stack.requests.filter((request) => request.path.endsWith('/commit')).length, 1);
+    assert.equal(stack.requests.filter((request) => request.path.endsWith('/commit') && !request.operation).length, 1);
     assert.equal(stack.db.tasks.length, 3);
     assert.ok(stack.db.tasks.every((task) => task.PlannedDurationDays === 1));
     assert.deepEqual(stack.state.tasks.map((task) => task.plannedStart).sort(), ['2026-09-07', '2026-09-14', '2026-09-21']);

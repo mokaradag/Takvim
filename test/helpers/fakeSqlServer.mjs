@@ -269,6 +269,8 @@ export function createFakeDatabase(seed = {}) {
     corporateWbsRows: seed.corporateWbsRows || [],
     // Uçtan uca başarım savlarının kanıtı: her deyim ve her işlem yalıtım
     // düzeyi kaydedilir; testler kaç kez birleştirme yapıldığını sayabilir.
+    creationAllocations: seed.creationAllocations || [],
+    creationAllocationSchema: seed.creationAllocationSchema ?? true,
     statements: [],
     transactions: [],
     corporateWbsSyncState: (seed.corporateWbsSyncState || []).map((entry) => ({
@@ -1250,6 +1252,30 @@ function runOutlookQuery(db, sqlText, params) {
 function runQuery(db, statement, params, { database }) {
   const sqlText = String(statement);
   const sicil = params.sicil;
+
+  if (sqlText.includes('-- creation-allocation:')) {
+    if (!db.creationAllocationSchema) throw Object.assign(new Error('Invalid object name MR_CreationAllocations'), { number: 208 });
+    const allocations = JSON.parse(params.allocations);
+    if (sqlText.includes('-- creation-allocation: reserve')) {
+      db.creationAllocations = db.creationAllocations.filter((row) => row.Sicil !== sicil || new Date(row.ExpiresAt) > new Date());
+      if (db.creationAllocations.filter((row) => row.Sicil === sicil).length + allocations.length > params.pendingLimit) return result([[{ Reserved: 0 }]]);
+      for (const allocation of allocations) {
+        if (db.projects.some((row) => sameGuid(row.ProjectId, allocation.id))
+          || db.wbs.some((row) => sameGuid(row.WbsId, allocation.id))
+          || db.tasks.some((row) => sameGuid(row.TaskId, allocation.id))
+          || db.creationAllocations.some((row) => sameGuid(row.EntityId, allocation.id))) throw new Error('Creation allocation collision');
+        db.creationAllocations.push({ Proof: guid(allocation.proof), EntityId: guid(allocation.id),
+          EntityType: allocation.entityType, ProjectId: guid(allocation.projectId), Sicil: sicil,
+          ExpiresAt: new Date(Date.now() + 24 * 3600000).toISOString() });
+      }
+      return result([[{ Reserved: 1 }]]);
+    }
+    const consumed = db.creationAllocations.filter((row) => row.Sicil === sicil && new Date(row.ExpiresAt) > new Date()
+      && allocations.some((entry) => sameGuid(row.Proof, entry.proof) && sameGuid(row.EntityId, entry.id)
+        && row.EntityType === entry.entityType && sameGuid(row.ProjectId, entry.projectId)));
+    db.creationAllocations = db.creationAllocations.filter((row) => !consumed.includes(row));
+    return result([consumed.map((row) => ({ Proof: row.Proof }))]);
+  }
 
   // Rota AI alan araçlarının sabit SQL metinleri ayrı bir modülde karşılanır.
   const aiTool = runAiToolQuery(db, sqlText, params);
@@ -2442,6 +2468,7 @@ function tableRows(db, table) {
  */
 export function createFakeSqlServerDriver(db) {
   db.adminActionLocks ||= new Map();
+  const allocationLocks = new Map();
   class FakeRequest {
     constructor(pool) {
       this.pool = pool;
@@ -2457,6 +2484,19 @@ export function createFakeSqlServerDriver(db) {
     async query(statement) {
       const database = this.pool.config?.database || 'MERGEN_Rota';
       db.statements.push({ sql: String(statement), database });
+      if (String(statement).includes('-- creation-allocation:') && this.pool.began) {
+        // Model the allocation owner/proof update locks until commit/rollback.
+        // Waiting transactions take their rollback snapshot after the winner.
+        const key = this.params.sicil;
+        const previous = allocationLocks.get(key);
+        let release;
+        const held = new Promise((resolve) => { release = resolve; });
+        allocationLocks.set(key, held);
+        if (previous) await previous;
+        this.pool.allocationRelease = () => { release(); if (allocationLocks.get(key) === held) allocationLocks.delete(key); };
+        this.pool.savedTables = deserialize(serialize(Object.fromEntries(Object.entries(db)
+          .filter(([name, value]) => Array.isArray(value) && !['statements', 'transactions'].includes(name)))));
+      }
       // Test kancası: eşleşen sorgu, test bariyeri açana kadar bekler (ör. yavaş
       // bir rehber sorgusunun ortak havuzu ne kadar meşgul ettiğini ölçmek için).
       if (db.queryBarrier?.match(String(statement))) {
@@ -2512,6 +2552,7 @@ export function createFakeSqlServerDriver(db) {
       db.transactions.push(this.transactionRecord);
     }
     releaseLocks() {
+      this.allocationRelease?.();
       for (const [key, owner] of db.adminActionLocks) {
         if (owner === this) db.adminActionLocks.delete(key);
       }
