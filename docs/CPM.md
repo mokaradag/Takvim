@@ -122,6 +122,7 @@ orderedTaskIds
 criticalTaskIds
 criticalPaths
 criticalPathsTruncated
+criticalDependencies
 tasks
   <taskId>
     id

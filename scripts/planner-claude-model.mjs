@@ -592,6 +592,7 @@ function trustedHome() {
     return home;
   }
   mkdirSync(requested, { recursive: true, mode: 0o700 });
+  if (lstatSync(requested).isSymbolicLink()) throw new PlannerHomeUntrusted('HOME_SYMLINK', requested);
   const home = realpathSync(requested);
   const uid = process.getuid();
   for (let directory = path.dirname(home); ; directory = path.dirname(directory)) {

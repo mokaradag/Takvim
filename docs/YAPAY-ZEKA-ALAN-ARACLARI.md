@@ -1144,8 +1144,8 @@ geri alma betiği kanıtı iletilerden önce düşürür.
 | `test/ai-assistant-availability.test.mjs` | `MERGEN_ROTA_AI_ENABLED` kapalıyken başlatıcının, panelin ve komut paleti girdisinin gösterilmemesi; işaretin her istekte ortamdan okunması ve yapılandırma değeri taşımaması |
 
 Yerel/CI doğrulaması: tüm Node sınamaları `--test-concurrency=1` ile,
-`npm run lint` ve `npm run build`. CI Node 24.14.0 kullanır; Node 22
-uyumluluğu da tam paketle doğrulanır. SQL ikizi davranış ve yetki matrisini
+`npm run lint` ve `npm run build`. CI Node 24.14.0 kullanır; yerel doğrulama
+da README'deki Node.js 24 gereksinimini izler. SQL ikizi davranış ve yetki matrisini
 sınar; gerçek SQL Server sözdizimi/yürütme planı testi yerine geçmez. Dağıtım
 öncesinde admin proje kapısı ve baz planın seçili/seçili olmayan dalları
 gerçek veritabanında elle kabul kapsamındadır.

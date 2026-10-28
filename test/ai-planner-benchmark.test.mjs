@@ -1132,14 +1132,39 @@ test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP ya
   assert.deepEqual(existsSync(path.join(dir, 'unchecked-home')) ? readdirSync(path.join(dir, 'unchecked-home')) : [], []);
   assert.notEqual(run(windows, path.join(dir, 'private-home'), windowsEnv).error, 'PLANNER_HOME_UNTRUSTED');
 
+  const redirected = path.join(dir, 'redirected-profile');
+  const settings = path.join(redirected, '.claude', 'settings.json');
+  mkdirSync(path.dirname(settings), { recursive: true });
+  chmodSync(path.dirname(settings), 0o775);
+  writeFileSync(settings, '{"hooks":{}}', { mode: 0o600 });
+  const originalMode = lstatSync(path.dirname(settings)).mode;
+  const defaultRoot = mkdtempSync(path.join(dir, 'default-root-'));
+  const defaultAdapter = path.join(dir, 'default-home.mjs');
+  writeFileSync(defaultAdapter, `import os from 'node:os';
+    import { syncBuiltinESMExports } from 'node:module';
+    os.tmpdir = () => ${JSON.stringify(defaultRoot)};
+    syncBuiltinESMExports();
+    const { runAdapter } = await import(${JSON.stringify(pathToFileURL(path.resolve(adapter)).href)});
+    await runAdapter();`);
+  for (const [script, link, env] of [
+    [adapter, path.join(dir, 'requested-posix-link'), {}],
+    [defaultAdapter, path.join(defaultRoot, `rota-planner-claude-home-${process.getuid()}`), { PLANNER_CLAUDE_HOME: '' }]
+  ]) {
+    symlinkSync(redirected, link);
+    untrusted(run(script, link, env), 'istenen POSIX ev yaprağı bağlantıdır', 'HOME_SYMLINK');
+    assert.deepEqual(readdirSync(redirected), ['.claude'], 'bağlantı hedefine work veya call-* yazılmaz');
+    assert.equal(lstatSync(path.dirname(settings)).mode, originalMode, 'hedefin dizin izinleri değiştirilmez');
+    assert.equal(readFileSync(settings, 'utf8'), '{"hooks":{}}');
+  }
+
   const shared = path.join(dir, 'shared');
   mkdirSync(shared);
   chmodSync(shared, 0o777);
   untrusted(run(adapter, path.join(shared, 'home')), 'başkasına yazılabilir yapışkansız ata', 'HOME_ANCESTOR_UNTRUSTED');
   assert.deepEqual(readdirSync(path.join(shared, 'home')), []);
-  // Bağlantı çözülür ve hedefin ATALARI denetlenir: güvenli klasörden açık ata altındaki eve giden bağ da reddedilir.
+  // İstenen yaprak bağlantısı, hedefi ve ataları çözülmeden reddedilir.
   symlinkSync(path.join(shared, 'home'), path.join(dir, 'link'));
-  untrusted(run(adapter, path.join(dir, 'link')), 'açık ata altındaki eve yönelen bağlantı', 'HOME_ANCESTOR_UNTRUSTED');
+  untrusted(run(adapter, path.join(dir, 'link')), 'açık ata altındaki eve yönelen bağlantı', 'HOME_SYMLINK');
 
   for (const relative of [['work'], ['.claude', 'settings.json'], ['other-link']]) {
     const home = mkdtempSync(path.join(dir, 'linked-descendant-'));
