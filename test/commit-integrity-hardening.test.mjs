@@ -71,7 +71,7 @@ test('recurrence occurrence creation locks the template in the same hardened tra
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
   assert.match(source, /recurrenceParentId:\s*task\.recurrenceParentId\s*\?\s*uuid\(task\.recurrenceParentId, 'Tekrar şablonu kimliği'\)/);
   assert.match(source, /\.filter\(\(task\) => task\.recurrenceParentId\)\s*\.map\(\(task\) => task\.recurrenceParentId\)/);
-  assert.match(source, /for \(const taskId of \[\.\.\.referencedTaskIds\]\.sort\(\)\) \{\s+const row = await rowForUpdate\(executor, 'MR_Tasks', 'TaskId', taskId/s);
+  assert.match(source, /for \(const taskId of \[\.\.\.referencedTaskIds\]\.sort\(\)\) \{\s+if \(creatingTaskIds\.has\(taskId\)\) continue;\s+const row = await rowForUpdate\(executor, 'MR_Tasks', 'TaskId', taskId/s);
   assert.match(source, /FROM dbo\.\$\{safeTable\} WITH \(UPDLOCK, HOLDLOCK\)/);
 });
 

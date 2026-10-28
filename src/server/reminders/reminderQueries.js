@@ -194,6 +194,7 @@ export const REMINDER_CLAIM_SQL = `
     AND SlotKey = @slotKey
     AND ReminderKind = 'AUTOMATIC'
     AND Status = 'PENDING'
+    AND CompletedAt IS NULL
     AND CreatedAt < @staleBefore;
 
   SELECT TOP (1) @logId = TaskReminderLogId FROM @reclaimed;

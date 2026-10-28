@@ -563,6 +563,38 @@ test('SMTP akışı Python karşılığıyla aynı sırayı izler', () => {
 test('malformed attribute names are scanned once and template size is bounded before parsing', async () => {
   const { sanitizeReminderHtml, MAX_REMINDER_TEMPLATE_CHARS } = await import('../src/domain/reminders/reminderTemplate.js');
   assert.equal(sanitizeReminderHtml(`<a ${'a'.repeat(40000)}>safe</a>`), '<a>safe</a>');
-  assert.throws(() => sanitizeReminderHtml('a'.repeat(MAX_REMINDER_TEMPLATE_CHARS + 1)), RangeError);
+  assert.equal(sanitizeReminderHtml('a'.repeat(MAX_REMINDER_TEMPLATE_CHARS + 1)), null);
   assert.equal(sanitizeReminderHtml('<a href="https://example.internal" onclick="bad()" title="a > b">safe</a>'), '<a href="https://example.internal" title="a &gt; b">safe</a>');
+});
+
+test('template bounds include sanitized output; rendered escaping has a separate controlled bound', async () => {
+  const { MAX_REMINDER_RENDER_CHARS } = await import('../src/domain/reminders/reminderTemplate.js');
+  assert.equal(sanitizeReminderHtml('&'.repeat(14000)), null);
+  const rendered = renderReminderEmail({ body: '<p>{{description}}</p>' }, { description: '&<>"\''.repeat(14000) });
+  assert.equal(rendered.ok, undefined); assert.equal(rendered.text, '&<>"\''.repeat(14000));
+  assert.doesNotMatch(rendered.bodyHtml, /<script|onclick/);
+  assert.equal(renderReminderEmail({ body: 'a'.repeat(65537) }).code, 'REMINDER_TEMPLATE_TOO_LARGE');
+  const large = renderReminderEmail({ body: '{{description}}{{description}}' }, { description: 'a'.repeat(MAX_REMINDER_RENDER_CHARS / 2 + 1) });
+  assert.equal(large.code, 'REMINDER_RENDER_TOO_LARGE'); assert.equal(large.html, '');
+});
+
+test('Turkish Unicode before script/style blocks preserves original closing offsets and sanitization', () => {
+  for (const tag of ['ScRiPt', 'StYlE']) {
+    assert.equal(sanitizeReminderHtml(`İİ<p>önce</p><${tag}>bad()</${tag}><p>sonra</p>`), 'İİ<p>önce</p><p>sonra</p>');
+    const rendered = renderReminderEmail({ body: `{{project_name}}<${tag}>bad()</${tag}><p>sonra</p>` }, { project_name: 'İHA Projesi' });
+    assert.equal(rendered.bodyHtml, 'İHA Projesi<p>sonra</p>');
+  }
+});
+
+test('SMTP reply boundaries reject near-miss codes and retain multiline and bare final replies', async () => {
+  for (const reply of ['2501 foo\r\n', '250OK\r\n', '250-hello\r\n2501 foo\r\n']) {
+    const socket = new EventEmitter(); socket.setEncoding = () => {}; socket.destroy = () => {};
+    const dialogue = createSmtpDialogue(socket, 1000), result = dialogue.read();
+    socket.emit('data', reply);
+    await assert.rejects(result, { code: 'SMTP_SEND_FAILED' }); dialogue.dispose();
+  }
+  const socket = new EventEmitter(); socket.setEncoding = () => {};
+  const dialogue = createSmtpDialogue(socket, 1000), result = dialogue.read();
+  socket.emit('data', '250-hello\r\n250\r\n');
+  assert.equal((await result).code, 250); dialogue.dispose();
 });

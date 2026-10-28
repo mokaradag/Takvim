@@ -222,7 +222,8 @@ test('Actual UUID normalization still strips only local creation prefixes', () =
 test('existing WBS updates authorize the stored project and reject forged project reassignment', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitWbs'), source.indexOf('async function commitTask'));
-  assert.ok(body.indexOf('const before = await wbsRowForUpdate(executor, wbsId)') < body.indexOf('assertProjectWriteAccess(actor.effective, storedProjectId)'));
+  const loadIndex = body.indexOf('const before = hasVersion(node.version) ? await wbsRowForUpdate(executor, wbsId) : null');
+  assert.ok(loadIndex >= 0 && loadIndex < body.indexOf('assertProjectWriteAccess(actor.effective, storedProjectId)'));
   assert.match(body, /const storedProjectId = id\(before\.ProjectId\);/);
   // Karşılaştırma kanoniktir: SQL Server büyük harfli GUID döndürdüğü için
   // düz `!==` aynı projeyi farklı sanıp yazmayı reddediyordu.
@@ -232,7 +233,7 @@ test('existing WBS updates authorize the stored project and reject forged projec
 test('existing task updates authorize both stored source and requested destination projects', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitTask'), source.indexOf('async function deleteTask'));
-  const loadIndex = body.indexOf('const before = await taskRow(executor, taskId)');
+  const loadIndex = body.indexOf('const before = hasVersion(task.version) ? await taskRow(executor, taskId) : null');
   // Proje yetkisi, sorumlu doğrulamasından ÖNCE verilir: `ensurePeople` daha
   // erken çalıştığında yetkisiz bir kullanıcı, geçerli ve geçersiz sicillerin
   // farklı hata üretmesinden kurumsal rehberi okuyabiliyordu.
@@ -423,7 +424,7 @@ test('WBS reparent validation holds update and serializable locks across the anc
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitWbs'), source.indexOf('async function commitTask'));
   assert.match(source, /FROM dbo\.MR_WBS WITH \(UPDLOCK, HOLDLOCK\) WHERE WbsId = @id/);
-  assert.match(body, /const before = await wbsRowForUpdate\(executor, wbsId\)/);
+  assert.match(body, /const before = hasVersion\(node\.version\) \? await wbsRowForUpdate\(executor, wbsId\) : null/);
   assert.match(body, /let parent = await wbsRowForUpdate\(executor, node\.parentId\)/);
   assert.match(body, /await wbsRowForUpdate\(executor, parent\.ParentWbsId\)/);
 });

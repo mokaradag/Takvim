@@ -188,20 +188,33 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
     }
   }
   const candidates = [...candidateByIdentity.values()];
-  if (maxEvidencePeople != null && new Set(candidates.map((row) => row.sicil)).size > maxEvidencePeople) {
-    const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error;
-  }
   if (candidates.length) {
     const names = executor.request();
     names.input('activityIdentityCandidates', sql.NVarChar(sql.MAX), JSON.stringify(candidates));
     names.input('sicil', sql.Int, actor.sicil);
-    const found = await names.query(`SELECT DISTINCT candidate.TaskId, candidate.ProjectId, candidate.Sicil, pd.DisplayName
+    // Display-name permission also includes direct co-assignees. It must never
+    // grant the stricter stable-ID/write permission (including numeric fallback).
+    const identityVisible = taskIdentityVisibleSql();
+    const found = await names.query(`SELECT DISTINCT candidate.TaskId, candidate.ProjectId, candidate.Sicil, pd.DisplayName,
+        CASE WHEN ${identityVisible} THEN 1 ELSE 0 END AS StableIdentityVisible
       FROM OPENJSON(@activityIdentityCandidates) WITH (TaskId uniqueidentifier '$.taskId', ProjectId uniqueidentifier '$.projectId', Sicil int '$.sicil') candidate
-      JOIN dbo.MR_Projects p ON p.ProjectId = candidate.ProjectId AND p.IsActive = 1
+      LEFT JOIN dbo.MR_Projects p ON p.ProjectId = candidate.ProjectId
       LEFT JOIN dbo.MR_Tasks t ON t.TaskId = candidate.TaskId AND t.ProjectId = candidate.ProjectId
+      OUTER APPLY (SELECT TOP (1) d.BeforeJson FROM dbo.MR_AuditLog d
+        WHERE NOT EXISTS (SELECT 1 FROM dbo.MR_Tasks live WHERE live.TaskId = candidate.TaskId)
+          AND d.EntityType = 'TASK' AND d.ActionCode = 'DELETE'
+          AND TRY_CONVERT(uniqueidentifier, d.EntityId) = candidate.TaskId AND d.ProjectId = candidate.ProjectId
+        ORDER BY d.OccurredAt DESC, d.AuditId DESC) deleted
       LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = candidate.Sicil
-      WHERE ${taskIdentityVisibleSql()};`);
-    for (const row of found.recordset || []) {
+      WHERE EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1)
+        OR (p.IsActive = 1 AND (${identityVisible}
+          OR TRY_CONVERT(int, JSON_VALUE(deleted.BeforeJson, '$.CreatedBySicil')) = @sicil
+          OR EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil)));`);
+    const visiblePeople = (found.recordset || []).filter((row) => row.StableIdentityVisible || String(row.DisplayName || '').trim());
+    if (maxEvidencePeople != null && new Set(visiblePeople.map((row) => row.Sicil)).size > maxEvidencePeople) {
+      const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error;
+    }
+    for (const row of visiblePeople) {
       const key = `${canonicalActualId(row.ProjectId)}:${canonicalActualId(row.TaskId)}`;
       if (!peopleByTask.has(key)) peopleByTask.set(key, new Map());
       peopleByTask.get(key).set(String(row.Sicil), row.DisplayName);

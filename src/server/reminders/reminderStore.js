@@ -80,7 +80,7 @@ export async function loadReminderSettings(executor) {
     subject: row?.SubjectTemplate || DEFAULT_REMINDER_SUBJECT,
     // Saklanan gövde okunurken DE temizlenir: kayıt eski bir sürümde ya da
     // doğrudan veritabanından yazılmış olabilir.
-    body: sanitizeReminderHtml(row?.BodyTemplate || DEFAULT_REMINDER_BODY),
+    body: sanitizeReminderHtml(row?.BodyTemplate || DEFAULT_REMINDER_BODY) ?? DEFAULT_REMINDER_BODY,
     updatedAt: row?.UpdatedAt ? new Date(row.UpdatedAt).toISOString() : null,
     updatedBySicil: row?.UpdatedBySicil == null ? null : Number(row.UpdatedBySicil),
     // Satır sürümü İSTEMCİYE kadar taşınır: yönetici ekranı düzenlediği sürümü
@@ -130,6 +130,9 @@ export async function saveReminderSettings(executor, actorSicil, input = {}) {
     throw new ServerPersistenceError('MUTATION_FAILED', 'Hatırlatma şablonu en fazla 65536 karakter olabilir.');
   }
   const body = sanitizeReminderHtml(input.body || DEFAULT_REMINDER_BODY);
+  if (body == null) {
+    throw new ServerPersistenceError('MUTATION_FAILED', 'Temizlenmiş hatırlatma şablonu en fazla 65536 karakter olabilir.');
+  }
 
   const request = executor.request();
   request.input('automaticEnabled', sql.Bit, settings.automaticEnabled);

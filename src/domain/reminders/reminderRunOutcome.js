@@ -3,7 +3,10 @@ import { outlookFailureMessage, safeOutlookFailureCode } from '../outlook/outloo
 const MESSAGES = Object.freeze({
   TASK_NOT_FOUND: 'Hatırlatma gönderilecek görev bulunamadı.',
   PROJECT_INACTIVE: 'Görevin projesi devre dışı olduğu için hatırlatma gönderilemedi.',
-  NO_RECIPIENTS: 'Hatırlatma için geçerli alıcı adresi bulunamadı.'
+  NO_RECIPIENTS: 'Hatırlatma için geçerli alıcı adresi bulunamadı.',
+  MAIL_DELIVERY_UNCERTAIN: 'Bazı teslimatların sonucu belirsiz; otomatik yeniden gönderilmeyecek.',
+  REMINDER_TEMPLATE_TOO_LARGE: 'Hatırlatma şablonu boyut sınırını aşıyor.',
+  REMINDER_RENDER_TOO_LARGE: 'Hatırlatma içeriği gönderim boyutu sınırını aşıyor.'
 });
 
 export function safeReminderFailureCode(code) {
@@ -16,7 +19,7 @@ export function reminderFailureMessage(code) {
 }
 
 export function reminderRunOutcome(summary = {}) {
-  const failedItems = (summary.results || []).filter((item) => item.status === 'FAILED');
+  const failedItems = (summary.results || []).filter((item) => item.status === 'FAILED' || item.reason === 'MAIL_DELIVERY_UNCERTAIN');
   const failed = Math.max(Number(summary.failed) || 0, failedItems.length);
   const ok = summary.ok !== false && failed === 0;
   return { ...summary, failed, ok,

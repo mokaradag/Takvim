@@ -4,6 +4,34 @@ import { calculatePlannedDurationDays, normalizeTaskPlan } from '../src/scheduli
 import { MAX_WORKING_DAY_SPAN, meterCalendarScans } from '../src/scheduling/calendars/index.js';
 import { calculateCpm, CPM_CALENDAR_SCAN_BUDGET_DAYS } from '../src/scheduling/cpm/engine.js';
 import { addDays, fmtISO } from '../src/scheduling/dates/index.js';
+import { createInitialState, appStateReducer } from '../src/state/appState.js';
+import { countWorkingDays } from '../src/scheduling/calendars/index.js';
+
+test('fresh persisted long-span snapshots recalculate within bounded work and react to calendar changes', () => {
+  const calendar = { id: 'calendar', workingDays: [1], holidays: [] };
+  const start = '2026-08-17', finish = fmtISO(addDays(start, (MAX_WORKING_DAY_SPAN - 1) * 7));
+  const tasks = Array.from({ length: 40 }, (_, index) => ({ id: `long-${index}`, calendarId: calendar.id,
+    task: 'Persisted', plannedStart: start, plannedFinish: finish, plannedDurationDays: MAX_WORKING_DAY_SPAN, deps: [] }));
+  const state = createInitialState({ calendars: [calendar], tasks });
+  assert.equal(state.tasks.length, 40);
+  assert.ok(state.tasks.every((task) => task.plannedDurationDays === MAX_WORKING_DAY_SPAN));
+  const changed = appStateReducer(state, { type: 'data/load-success', snapshot: {
+    calendars: [{ ...calendar, holidays: [{ date: start }] }], tasks
+  } });
+  assert.ok(changed.tasks.every((task) => task.plannedDurationDays === MAX_WORKING_DAY_SPAN - 1));
+  assert.equal(meterCalendarScans({ remainingDays: 0 }, () => countWorkingDays(start, finish, calendar, { byWeeks: true })), MAX_WORKING_DAY_SPAN);
+});
+
+test('bounded week counting matches day scans including malformed weekdays, duplicate holidays and reverse spans', () => {
+  for (const workingDays of [[1], [0, 2, 6], [], '1,2,3', [1, 1, 9, '2']]) {
+    const calendar = { id: 'calendar', workingDays, holidays: [{ date: '2026-08-17' }, { date: '2026-08-17' }, { date: '2026-08-22' }] };
+    for (const [start, end] of [['2026-08-17', '2026-10-04'], ['2026-10-04', '2026-08-17'], ['2026-08-22', '2026-08-22']]) {
+      for (const maxCount of [Infinity, 3]) assert.equal(countWorkingDays(start, end, calendar, { byWeeks: true, maxCount }), countWorkingDays(start, end, calendar, { maxCount }));
+    }
+  }
+  const calendar = { id: 'calendar', workingDays: '1,2,3', holidays: [] };
+  assert.equal(calculatePlannedDurationDays({ plannedStart: '2026-01-01', plannedFinish: '2080-12-31', calendarId: calendar.id }, { calendars: [calendar] }), 14349);
+});
 
 test('excessive ordinary duration is rejected before any calendar-day scan', () => {
   const calendar = { id: 'calendar', workingDays: [1, 2, 3, 4, 5], holidays: [] };

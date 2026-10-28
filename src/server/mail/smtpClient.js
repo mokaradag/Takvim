@@ -74,7 +74,7 @@ export function createSmtpDialogue(socket, timeoutMs) {
       lineBytes = 0;
       if (!raw.endsWith('\r\n')) return rejectReply();
       const line = raw.slice(0, -2);
-      const match = /^(\d{3})([ -])?(.*)$/.exec(line);
+      const match = /^(\d{3})(?:([ -])(.*))?$/.exec(line);
       if (!match) return rejectReply();
       pending.push(line);
       if (match[2] !== '-') {

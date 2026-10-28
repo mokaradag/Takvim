@@ -17,7 +17,7 @@ function validDate(value) {
   return date;
 }
 
-export function calculatePlannedDurationDays(task, { projects = [], calendars = [] } = {}) {
+export function calculatePlannedDurationDays(task, { projects = [], calendars = [], countByWeeks = false } = {}) {
   if (task?.milestone) return 0;
 
   const start = validDate(task?.plannedStart);
@@ -33,7 +33,7 @@ export function calculatePlannedDurationDays(task, { projects = [], calendars = 
   const calendar = resolveTaskCalendar(task, projects, calendars);
   const spanDays = Math.round((finish.getTime() - start.getTime()) / MS_PER_DAY) + 1;
   if (spanDays > MAX_WORKING_DAY_SPAN) {
-    const weekdays = calendar?.workingDays?.length ? calendar.workingDays : [1, 2, 3, 4, 5];
+    const weekdays = Array.isArray(calendar?.workingDays) && calendar.workingDays.length ? calendar.workingDays : [1, 2, 3, 4, 5];
     const weeklyCount = new Set(weekdays.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)).size;
     if (Math.floor(spanDays / 7) * weeklyCount - (calendar?.holidays?.length || 0) > MAX_WORKING_DAY_SPAN) return null;
   }
@@ -42,7 +42,7 @@ export function calculatePlannedDurationDays(task, { projects = [], calendars = 
   // Gantt özetlerinde kilometre taşı gibi çiziliyor ve ilerleme ağırlığı
   // sıfırlanıyordu. Kilometre taşı OLMAYAN, tarihleri geçerli bir görev en az
   // bir gün sürer.
-  const duration = Math.max(1, countWorkingDays(start, finish, calendar, { maxCount: MAX_WORKING_DAY_SPAN }));
+  const duration = Math.max(1, countWorkingDays(start, finish, calendar, { maxCount: MAX_WORKING_DAY_SPAN, byWeeks: countByWeeks }));
   // Planlama UFKUNU aşan süre de "bilinmiyor" sayılır. Bu değer doğrudan
   // `MR_Tasks.PlannedDurationDays` alanına yazılır ve CPM daha sonra onu
   // zamanlayamaz; sıradan görev yazmalarında sınır `commitScalarValidation`

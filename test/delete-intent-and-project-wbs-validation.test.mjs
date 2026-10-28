@@ -652,3 +652,60 @@ test('creation collision checks cannot disclose hidden task/WBS IDs to an unauth
     }
   } finally { await stack.dispose(); }
 });
+
+for (const scenario of ['corporate-wbs', 'narrow-assignees', 'narrow-fields', 'assignment-wbs', 'missing-dependency', 'hidden-dependency', 'missing-parent']) {
+  test(`invalid create has identical hidden/unused candidate-ID rejection (${scenario})`, async () => {
+    const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
+    const narrow = scenario.startsWith('narrow');
+    const stack = await disclosureStack(narrow ? PLAIN_SICIL : MANAGER_SICIL);
+    try {
+      // The probed ID is truly hidden, in another project, with no direct grant.
+      const hidden = stack.db.tasks.find((row) => row.TaskId.toLowerCase() === HIDDEN_TASK_ID);
+      hidden.ProjectId = MANUAL_PROJECT_ID; hidden.WbsId = MANUAL_ROOT_WBS_ID;
+      if (narrow) stack.db.taskAssignees.find((row) => row.TaskId.toLowerCase() === LONE_TASK_ID).Sicil = PLAIN_SICIL;
+      if (['corporate-wbs', 'missing-dependency', 'hidden-dependency', 'missing-parent'].includes(scenario)) {
+        stack.db.projectAccess.push({ ProjectId: CORPORATE_PROJECT_ID, Sicil: MANAGER_SICIL, AccessLevel: 'FULL', IsActive: 1 });
+      }
+      const task = { id: HIDDEN_TASK_ID, projectId: CORPORATE_PROJECT_ID, wbsId: CORPORATE_ROOT_WBS_ID,
+        task: 'Candidate', status: 'planned', priority: 'medium', assigneeIds: [String(narrow ? PLAIN_SICIL : SUBORDINATE_SICIL)], deps: [] };
+      if (scenario === 'narrow-assignees') task.assigneeIds = [String(SUBORDINATE_SICIL)];
+      if (scenario === 'narrow-fields') task.isMilestone = true;
+      if (scenario === 'assignment-wbs') task.wbsId = HIDDEN_WBS_ID;
+      if (scenario.endsWith('dependency')) task.deps = [{ predecessorId: scenario === 'hidden-dependency' ? SUCCESSOR_TASK_ID : MISSING_TASK_ID, type: 'FS', lagDays: 0 }];
+      if (scenario === 'missing-parent') { task.recurrenceParentId = MISSING_TASK_ID; task.recurrenceOccurrenceDate = '2026-08-24'; }
+      const collection = scenario === 'corporate-wbs' ? 'wbsUpserts' : 'taskUpserts';
+      const entry = collection === 'wbsUpserts' ? { id: HIDDEN_WBS_ID, projectId: CORPORATE_PROJECT_ID, parentId: CORPORATE_ROOT_WBS_ID, code: 'new', name: 'new' } : task;
+      if (scenario === 'hidden-dependency') {
+        const predecessor = stack.db.tasks.find((row) => row.TaskId.toLowerCase() === SUCCESSOR_TASK_ID);
+        predecessor.ProjectId = MANUAL_PROJECT_ID; predecessor.WbsId = MANUAL_ROOT_WBS_ID;
+        stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId.toLowerCase() !== SUCCESSOR_TASK_ID);
+      }
+      const existingId = entry.id;
+      const before = JSON.stringify(stack.db.tasks);
+      const existing = await probe({ [collection]: [entry] }, existingId);
+      const compare = async (id) => probe({ [collection]: [{ ...entry, id }] }, id);
+      const first = existing;
+      const missing = await compare(collection === 'wbsUpserts' ? MISSING_WBS_ID : 'c1c1c1c1-0000-4000-8000-0000000000fd');
+      assert.equal(first, missing); assert.doesNotMatch(first, /UPSERT_CREATE_COLLISION/);
+      entry.version = ' ';
+      assert.equal(await compare(existingId), await compare(collection === 'wbsUpserts' ? MISSING_WBS_ID : 'c1c1c1c1-0000-4000-8000-0000000000fd'), 'blank versions retain create intent at every boundary');
+      assert.match(first, scenario.endsWith('dependency') ? /DEPENDENCY_TARGET_NOT_FOUND/ : scenario === 'missing-parent' ? /Tekrar şablonu bulunamadı/ : /FORBIDDEN/);
+      assert.equal(JSON.stringify(stack.db.tasks), before);
+    } finally { await stack.dispose(); }
+  });
+}
+
+test('otherwise authorized creation retains the narrow F-024 collision residual without overwrite', async () => {
+  const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
+  const stack = await disclosureStack(PLAIN_SICIL);
+  try {
+    const hidden = stack.db.tasks.find((row) => row.TaskId.toLowerCase() === HIDDEN_TASK_ID);
+    hidden.ProjectId = MANUAL_PROJECT_ID; hidden.WbsId = MANUAL_ROOT_WBS_ID;
+    stack.db.projectAccess.push({ ProjectId: CORPORATE_PROJECT_ID, Sicil: PLAIN_SICIL, AccessLevel: 'FULL', IsActive: 1 });
+    const task = { projectId: CORPORATE_PROJECT_ID, wbsId: CORPORATE_ROOT_WBS_ID, task: 'Authorized create', status: 'planned', priority: 'medium', assigneeIds: [String(PLAIN_SICIL)], deps: [] };
+    const before = JSON.stringify(hidden);
+    assert.match(await probe({ taskUpserts: [{ ...task, id: HIDDEN_TASK_ID }] }, HIDDEN_TASK_ID), /^409 .*UPSERT_CREATE_COLLISION/);
+    assert.equal(JSON.stringify(stack.db.tasks.find((row) => row.TaskId.toLowerCase() === HIDDEN_TASK_ID)), before);
+    assert.match(await probe({ taskUpserts: [{ ...task, id: MISSING_TASK_ID }] }, MISSING_TASK_ID), /^200 /);
+  } finally { await stack.dispose(); }
+});

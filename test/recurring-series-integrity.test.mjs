@@ -816,3 +816,26 @@ test('recurrence parent absence and hidden existence return the same response be
     const hidden = await attempt(); stack.db.tasks = []; assert.deepEqual(await attempt(), hidden); assert.equal(hidden[0], 400); assert.match(hidden[1], /Tekrar şablonu bulunamadı/); assert.doesNotMatch(hidden[1], /protected template|FREQ|aynı projede/);
   } finally { await stack.dispose(); }
 });
+
+test('ordinary recurrence-child edits keep an unchanged invisible parent but cannot establish a hidden link', async () => {
+  const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
+  const parent = 'be000000-0000-4000-8000-000000000001', child = 'be000000-0000-4000-8000-000000000002';
+  const stack = await createActualStack(corporateSeed({ systemAdminSicils: [],
+    tasks: [
+      { TaskId: parent, ProjectId: CORPORATE_PROJECT_ID, WbsId: CORPORATE_ROOT_WBS_ID, Title: 'hidden template', CreatedBySicil: 900010, RecurrenceRule: 'FREQ=WEEKLY;COUNT=3' },
+      { TaskId: child, ProjectId: CORPORATE_PROJECT_ID, WbsId: CORPORATE_ROOT_WBS_ID, Title: 'visible child', CreatedBySicil: 900010,
+        RecurrenceParentTaskId: parent, RecurrenceOccurrenceDate: '2026-08-24', PlannedStart: '2026-08-24', PlannedFinish: '2026-08-24', PlannedDurationDays: 1 }
+    ], taskAssignees: [{ TaskId: child, Sicil: 900001 }] }));
+  try {
+    assert.equal(stack.state.tasks.some((task) => task.id === parent), false);
+    assert.equal((await stack.persistence.updateTask(child, { description: 'ordinary edit' })).ok, true);
+    assert.equal((await stack.persistence.flush()).ok, true);
+    const saved = stack.db.tasks.find((task) => task.TaskId.toLowerCase() === child);
+    assert.equal(saved.Description, 'ordinary edit'); assert.equal(saved.RecurrenceParentTaskId.toLowerCase(), parent);
+    const response = await fetch('/api/mergen-rota/commit', { method: 'POST', body: JSON.stringify({ changes: { taskUpserts: [{
+      ...stack.state.tasks.find((task) => task.id === child), status: 'planned', recurrenceParentId: 'be000000-0000-4000-8000-000000000003'
+    }] } }) });
+    assert.equal(response.status, 403, await response.text());
+    assert.equal(stack.db.tasks.find((task) => task.TaskId.toLowerCase() === child).RecurrenceParentTaskId.toLowerCase(), parent);
+  } finally { await stack.dispose(); }
+});

@@ -197,7 +197,7 @@ export function createOrderedSqlAppRepository() {
             wbsUpserts: (orderedChanges.wbsUpserts || []).filter((entry) => !hasVersion(entry)) };
           await assertTaskDestinationsDisclosable(transaction, creating, actor);
           await assertTaskTargetsDisclosable(transaction, creating, actor, new Map(), createdProjectIds);
-          storedTaskProjects = await assertUpsertIntentMatchesPersistence(transaction, { ...orderedChanges, projectUpserts: [] }, actor, { createdProjectIds });
+          storedTaskProjects = await assertUpsertIntentMatchesPersistence(transaction, { ...orderedChanges, projectUpserts: [] }, actor, { createdProjectIds, deferCreateCollisions: true });
           await assertTaskDestinationsDisclosable(transaction, { ...orderedChanges,
             taskUpserts: (orderedChanges.taskUpserts || []).filter((entry) => hasVersion(entry)),
             wbsUpserts: (orderedChanges.wbsUpserts || []).filter((entry) => hasVersion(entry)) }, actor);

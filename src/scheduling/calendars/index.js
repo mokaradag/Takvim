@@ -312,7 +312,35 @@ export function diffWorkingDays(a, b, calendar = DEFAULT_CALENDAR) {
   return difference;
 }
 
-export function countWorkingDays(start, end, calendar = DEFAULT_CALENDAR, { maxCount = Infinity } = {}) {
+function countWorkingDaysByWeeks(first, last, calendar, maxCount) {
+  // Count whole weeks instead of scanning every date. Fresh snapshots cannot
+  // reuse prior task objects; their individually valid spans must not exhaust
+  // a transient aggregate day-scan meter. Work is O(7 + holiday input size).
+  const dayNumber = (date) => {
+    const utc = new Date(0);
+    utc.setUTCFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+    return utc.getTime() / 86400000;
+  };
+  const firstDay = dayNumber(first);
+  const span = Math.min(dayNumber(last) - firstDay, MAX_CALENDAR_SPAN_DAYS) + 1;
+  const days = workingDaysOf(calendar);
+  const working = Array.from({ length: 7 }, (_, day) => days.includes(day));
+  let count = Math.floor(span / 7) * working.filter(Boolean).length;
+  for (let offset = 0; offset < span % 7; offset += 1) {
+    if (working[(first.getDay() + offset) % 7]) count += 1;
+  }
+  const holidays = new Set();
+  for (const holiday of calendar?.holidays || []) {
+    const date = localDate(holiday.date);
+    if (!isValidDate(date) || fmtISO(date) !== holiday.date) continue;
+    const day = dayNumber(date);
+    if (day >= firstDay && day < firstDay + span && working[date.getDay()]) holidays.add(day);
+  }
+  count -= holidays.size;
+  return Math.min(count, Math.floor(maxCount) + 1);
+}
+
+export function countWorkingDays(start, end, calendar = DEFAULT_CALENDAR, { maxCount = Infinity, byWeeks = false } = {}) {
   let first = localDate(start);
   let last = localDate(end);
   if (!isValidDate(first) || !isValidDate(last)) return 0;
@@ -322,6 +350,8 @@ export function countWorkingDays(start, end, calendar = DEFAULT_CALENDAR, { maxC
     [first, last] = [last, first];
     sign = -1;
   }
+
+  if (byWeeks) return countWorkingDaysByWeeks(first, last, calendar, maxCount) * sign;
 
   let count = 0;
   let current = first;

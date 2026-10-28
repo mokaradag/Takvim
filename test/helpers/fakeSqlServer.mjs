@@ -1286,10 +1286,21 @@ function runQuery(db, statement, params, { database }) {
     || db.executiveScope.some((entry) => Number(entry.ManagerSicil) === Number(params.sicil) && Number(entry.EmployeeSicil) === Number(person))
   ));
   if (params.activityIdentityCandidates != null) {
-    return result([JSON.parse(params.activityIdentityCandidates).filter((row) => identityPermitted(
-      taskById(db, row.taskId), projectById(db, row.projectId), row.sicil))
-      .map((row) => ({ TaskId: row.taskId, ProjectId: row.projectId, Sicil: Number(row.sicil),
-        DisplayName: db.people.find((person) => Number(person.Sicil) === Number(row.sicil))?.DisplayName }))]);
+    const authorized = JSON.parse(params.activityIdentityCandidates).flatMap((row) => {
+      const live = taskById(db, row.taskId), project = projectById(db, row.projectId);
+      const task = live && sameGuid(live.ProjectId, row.projectId) ? live : null;
+      const deletion = !live && db.auditLog.filter((entry) => entry.EntityType === 'TASK' && entry.ActionCode === 'DELETE'
+        && sameGuid(entry.EntityId, row.taskId) && sameGuid(entry.ProjectId, row.projectId))
+        .sort((a, b) => new Date(b.OccurredAt) - new Date(a.OccurredAt) || b.AuditId - a.AuditId)[0];
+      const creator = deletion && Number(JSON.parse(deletion.BeforeJson)?.CreatedBySicil) === Number(params.sicil);
+      const admin = db.systemAdminSicils.includes(Number(params.sicil));
+      const stable = admin || identityPermitted(task, project, row.sicil);
+      const own = task && db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId) && Number(entry.Sicil) === Number(params.sicil));
+      if (!admin && !(project?.IsActive && (stable || creator || own))) return [];
+      return [{ TaskId: row.taskId, ProjectId: row.projectId, Sicil: Number(row.sicil), StableIdentityVisible: stable ? 1 : 0,
+        DisplayName: db.people.find((person) => Number(person.Sicil) === Number(row.sicil))?.DisplayName }];
+    });
+    return result([authorized]);
   }
   if (/FROM \[\w+\]\.\[\w+\]/.test(sqlText) && sqlText.includes('WBS element')) {
     return result([corporateWbsSourceRows(db, params)]);
@@ -1818,6 +1829,7 @@ function runQuery(db, statement, params, { database }) {
       const staleMinutes = Math.max(1, Number(params.staleMinutes) || 30);
       const staleBefore = Date.now() - (staleMinutes * 60000);
       const abandoned = existing.Status === 'PENDING'
+        && existing.CompletedAt == null
         && new Date(existing.CreatedAt).getTime() < staleBefore;
       if (!abandoned) return result([[{ TaskReminderLogId: null }]]);
       existing.Status = 'PENDING';

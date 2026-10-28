@@ -16,6 +16,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import net from 'node:net';
 
 import { createFakeDatabase, createFakeSqlServerDriver } from './helpers/fakeSqlServer.mjs';
 import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
@@ -119,6 +120,68 @@ async function withReminderStack(seed, run, { sicil = 900001 } = {}) {
 function at(year, month, day, hour = 9) {
   return new Date(year, month - 1, day, hour, 0, 0);
 }
+
+test('sanitized expansion cannot persist an unloadable template and old oversized settings load safely', async () => {
+  await withReminderStack(reminderSeed(), async ({ db, pool }) => {
+    const { loadReminderSettings, saveReminderSettings } = await import('../src/server/reminders/reminderStore.js');
+    const before = JSON.stringify(db.reminderSettings);
+    await assert.rejects(saveReminderSettings(pool, 900001, { body: '&'.repeat(14000) }), { code: 'MUTATION_FAILED' });
+    assert.equal(JSON.stringify(db.reminderSettings), before);
+    db.reminderSettings.BodyTemplate = 'a'.repeat(65537);
+    const { DEFAULT_REMINDER_BODY } = await import('../src/domain/reminders/reminderTemplate.js');
+    assert.equal((await loadReminderSettings(pool)).body, DEFAULT_REMINDER_BODY);
+    db.tasks[0].Description = '&'.repeat(14000);
+    const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+    const mailer = recordingMailer();
+    assert.equal((await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: mailer.send })).ok, true);
+    assert.match(mailer.sent[0].html, /(?:&amp;){14000}/);
+  });
+});
+
+test('mixed accepted and uncertain recipients stay terminally uncertain and are never reclaimed', async () => {
+  await withReminderStack(reminderSeed({ taskAssignees: [{ TaskId: TASK_ID, Sicil: 900001 }, { TaskId: TASK_ID, Sicil: 900002 }] }), async ({ db, pool }) => {
+    const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
+    const messages = [];
+    const send = async (message) => { messages.push(message); return messages.length === 1
+      ? { ok: false, code: 'SMTP_CONNECTION_FAILED', deliveryMayHaveEscaped: true }
+      : { ok: true, accepted: message.to }; };
+    const result = await runAutomaticReminders(pool, { now: at(2026, 8, 17), send });
+    assert.equal(result.ok, false); assert.equal(result.reason, 'MAIL_DELIVERY_UNCERTAIN');
+    assert.equal(result.sent, 0); assert.equal(result.results[0].status, 'PENDING');
+    assert.equal(db.taskReminderLog[0].Status, 'PENDING');
+    assert.equal(db.taskReminderLog[0].FailureCode, 'MAIL_DELIVERY_UNCERTAIN');
+    assert.equal(db.taskReminderLog[0].RecipientCount, 1); assert.ok(db.taskReminderLog[0].CompletedAt);
+    assert.deepEqual(messages.map((message) => message.to), [['ayse.yilmaz@example.internal'], ['mehmet.demir@example.internal']]);
+    db.taskReminderLog[0].CreatedAt = '2000-01-01T00:00:00.000Z';
+    const next = await runAutomaticReminders(pool, { now: at(2026, 8, 17), send });
+    assert.equal(next.skipped, 1); assert.equal(messages.length, 2);
+  });
+});
+
+test('a stalled real SMTP server consumes one shared deadline for 200 isolated recipients', async () => {
+  const sockets = new Set(); let connections = 0;
+  const server = net.createServer((socket) => { connections += 1; sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const env = { SMTP_HOST: '127.0.0.1', SMTP_PORT: String(server.address().port), SMTP_FROM: 'rota@example.internal', SMTP_TIMEOUT_MS: '80', SMTP_USERNAME: '', SMTP_PASSWORD: '' };
+  const prior = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]])); Object.assign(process.env, env);
+  try {
+    const people = Array.from({ length: 200 }, (_, index) => ({ Sicil: 900001 + index, DisplayName: `Person ${index}`, Username: `person${index}` }));
+    await withReminderStack(reminderSeed({ people, corporateUsers: people.map((person) => ({ Name: person.Username, EmailAddress: `${person.Username}@example.internal` })),
+      taskAssignees: people.map((person) => ({ TaskId: TASK_ID, Sicil: person.Sicil })) }), async ({ db, pool }) => {
+      const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+      const started = performance.now();
+      const result = await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001 });
+      assert.equal(result.ok, false); assert.ok(performance.now() - started < 1500);
+      assert.equal(connections, 1); assert.equal(db.taskReminderLog[0].RecipientCount, 1);
+      assert.equal(db.taskReminderLog[0].Status, 'FAILED');
+      assert.match(result.warnings.join(' '), /kalan sorumlulara gönderim denenmedi/);
+    });
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    for (const [key, value] of Object.entries(prior)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
 
 /* ── Elle gönderim ──────────────────────────────────────────────── */
 

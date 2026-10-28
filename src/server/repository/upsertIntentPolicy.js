@@ -1,4 +1,4 @@
-function hasVersion(value) {
+export function hasVersion(value) {
   return value != null && String(value).trim() !== '';
 }
 

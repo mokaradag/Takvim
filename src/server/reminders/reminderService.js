@@ -10,7 +10,7 @@ import { buildReminderValues } from '../../domain/reminders/reminderValues.js';
 import { renderReminderEmail } from '../../domain/reminders/reminderTemplate.js';
 import { evaluateReminderEligibility } from '../../domain/reminders/reminderPolicy.js';
 import { sendMail } from '../mail/mailService.js';
-import { isSmtpConfigured } from '../mail/smtpConfig.js';
+import { getSmtpConfig, isSmtpConfigured } from '../mail/smtpConfig.js';
 import {
   claimAutomaticReminder,
   completeReminderLog,
@@ -101,15 +101,50 @@ export async function deliverTaskReminder(executor, {
     now
   });
   const rendered = renderReminderEmail({ subject: settings.subject, body: settings.body }, values);
+  if (rendered.ok === false) {
+    await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: rendered.code });
+    return { ok: false, code: rendered.code, message: rendered.message, problems, warnings };
+  }
   const delivered = [];
   let failed = null;
-  for (const email of recipients) {
-    const sent = await send({ to: [email], subject: rendered.subject, html: rendered.html, text: rendered.text });
-    if (sent.ok) delivered.push(email);
-    else failed = sent;
+  let uncertain = false, attempted = 0;
+  // One shared deadline, one connection at a time. Per-command SMTP timeouts
+  // remain configured as before; the task cannot multiply them by its assignees.
+  const controller = new AbortController();
+  const budgetMs = isSmtpConfigured() ? getSmtpConfig().timeoutMs : 20000;
+  const deadline = Date.now() + budgetMs;
+  const timer = setTimeout(() => controller.abort(), budgetMs);
+  try {
+    for (const email of recipients) {
+      if (controller.signal.aborted || Date.now() >= deadline) break;
+      attempted += 1;
+      let sent;
+      try {
+        sent = await send({ to: [email], subject: rendered.subject, html: rendered.html, text: rendered.text, signal: controller.signal });
+      } catch {
+        sent = { ok: false, code: 'SMTP_SEND_FAILED', deliveryMayHaveEscaped: true };
+      }
+      if (sent.ok) delivered.push(email);
+      else if (sent.deliveryMayHaveEscaped) uncertain = true;
+      else failed = sent;
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+  if (attempted < recipients.length) {
+    warnings.push('Gönderim süresi dolduğu için kalan sorumlulara gönderim denenmedi.');
+    failed ||= { code: 'SMTP_TIMEOUT', message: 'Hatırlatma gönderim süresi doldu.' };
+  }
+  if (uncertain) {
+    const code = 'MAIL_DELIVERY_UNCERTAIN';
+    const message = 'Bazı teslimatların sonucu belirsiz; yinelenen posta riskine karşı otomatik yeniden gönderilmeyecek.';
+    // PENDING + CompletedAt + a distinct code is terminal uncertainty, not SENT
+    // or definite failure. Stale-claim recovery must not retry this delivery.
+    await finalizeLog(executor, logId, { status: 'PENDING', recipients: delivered, failureCode: code });
+    return { ok: false, code, message, deliveryMayHaveEscaped: true, recipientCount: delivered.length, problems, warnings: [...warnings, message] };
   }
   if (!delivered.length) {
-    await finalizeLog(executor, logId, { status: 'FAILED', recipients, failureCode: failed?.code });
+    await finalizeLog(executor, logId, { status: 'FAILED', recipients: recipients.slice(0, attempted), failureCode: failed?.code });
     return { ok: false, code: failed?.code, message: failed?.message, problems, warnings };
   }
   if (failed) warnings.push('Bazı sorumlulara hatırlatma iletilemedi.');
@@ -385,7 +420,7 @@ export async function runAutomaticReminders(executor, {
         failed += 1;
         results.push({
           taskId: candidate.id,
-          status: 'FAILED',
+          status: delivery.deliveryMayHaveEscaped ? 'PENDING' : 'FAILED',
           reason: delivery.code,
           warnings: delivery.warnings || []
         });

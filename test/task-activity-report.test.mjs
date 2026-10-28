@@ -209,8 +209,57 @@ for (const permission of ['PARTIAL', 'FULL', 'READ']) {
     try {
       const { value } = await fetchTaskActivities(range);
       const serialized = JSON.stringify(value.items);
-      if (permission === 'PARTIAL') assert.doesNotMatch(serialized, /Kapsam dışı|950003|950099/);
+      if (permission === 'PARTIAL') { assert.equal(value.items.length, 1); assert.doesNotMatch(serialized, /Kapsam dışı|950003|950099/); assert.deepEqual(value.items[0].changes, ['Gizli sorumlu bilgisi değişti.']); }
       else { assert.match(serialized, /Kapsam dışı/); assert.match(serialized, /Çalışan 950099/, 'authorized unresolved identities retain their fallback'); }
     } finally { await stack.dispose(); }
   });
 }
+
+for (const scenario of ['inactive-admin', 'deleted-creator', 'direct-assignee']) {
+  test(`historical display-name policy preserves ${scenario} without granting stable IDs`, async () => {
+    const history = event(1, { BeforeJson: JSON.stringify({ assigneeIds: [employee, outsider, 950099] }), AfterJson: JSON.stringify({ assigneeIds: [employee] }) });
+    const data = seed({ executiveScope: [], auditLog: [history] });
+    let sicil = employee;
+    if (scenario === 'inactive-admin') { sicil = manager; data.systemAdminSicils = [manager]; data.projects[0].IsActive = 0; }
+    if (scenario === 'deleted-creator') {
+      data.tasks = []; data.taskAssignees = [];
+      data.auditLog.push(event(2, { ActionCode: 'DELETE', BeforeJson: JSON.stringify({ CreatedBySicil: employee, assigneeIds: [employee] }), AfterJson: null }));
+    }
+    const stack = await createActualStack(data, { sicil, corporateWbsSource: false });
+    try {
+      const { value } = await fetchTaskActivities({ ...range, scope: 'visible' });
+      assert.ok(value.items.length > 0);
+      const changes = value.items.flatMap((item) => item.changes).join('\n');
+      assert.match(changes, /Sorumlu çıkarıldı: Kapsam dışı/);
+      if (scenario !== 'inactive-admin') {
+        assert.doesNotMatch(changes, /950099/);
+        assert.equal(value.items.flatMap((item) => item.changes).filter((line) => line === 'Gizli sorumlu bilgisi değişti.').length, 1);
+      }
+      if (scenario === 'direct-assignee') {
+        const { getSqlPool } = await import('../src/server/db/pool.js');
+        const pool = await getSqlPool();
+        const request = pool.request(); request.input('taskId', TASK); request.input('sicil', employee);
+        const { taskIdentityVisibleSql } = await import('../src/server/authorization/taskIdentityVisibility.js');
+        const ids = await request.query(`SELECT ta.Sicil FROM dbo.MR_TaskAssignees ta JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1 WHERE ta.TaskId = @taskId AND (${taskIdentityVisibleSql('ta.Sicil')});`);
+        assert.deepEqual(ids.recordset.map((row) => row.Sicil), [employee]);
+      }
+    } finally { await stack.dispose(); }
+  });
+}
+
+test('hidden historical identities do not consume the authorized evidence-person cap', async () => {
+  const hidden = Array.from({ length: 2001 }, (_, index) => 960000 + index);
+  const stack = await createActualStack(seed({ auditLog: [event(1, {
+    BeforeJson: JSON.stringify({ assigneeIds: [employee, ...hidden] }), AfterJson: JSON.stringify({ assigneeIds: [employee] })
+  })] }), { sicil: manager, corporateWbsSource: false });
+  try {
+    const { getSqlPool } = await import('../src/server/db/pool.js');
+    const { loadAuthorizationContext } = await import('../src/server/authorization/loadAuthorizationContext.js');
+    const { readTaskActivityReport } = await import('../src/server/reports/taskActivityReport.js');
+    const pool = await getSqlPool(), actor = await loadAuthorizationContext(pool);
+    const report = await readTaskActivityReport(pool, actor, range, undefined, { maxEvidencePeople: 1 });
+    assert.equal(report.items.length, 1); assert.deepEqual(report.items[0].changes, ['Gizli sorumlu bilgisi değişti.']);
+    stack.db.projectAccess.push({ ProjectId: PROJECT, Sicil: manager, AccessLevel: 'FULL', IsActive: 1 });
+    await assert.rejects(readTaskActivityReport(pool, actor, range, undefined, { maxEvidencePeople: 1 }), { number: 51001 });
+  } finally { await stack.dispose(); }
+});
