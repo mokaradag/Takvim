@@ -1,8 +1,62 @@
 # CodeRabbit security validation — 28 October 2026
 
-## PR #107 surgical follow-up — current disposition
+## User-authorized thread closure and additional findings
 
-This follow-up supersedes the original pass's boundary behavior described below. It starts from PR HEAD `7daef0dfd514b30ca6745830e6dcda9a088d111e`, on `security/deep-scan-convergence-20261028`, with base `main` at `ed4a0aa1679ac336e7b58e8b5840f502c1ec1ab2`. Both refs were fetched and rechecked. The starting PR contains one commit and 30 changed files. All 22 unresolved threads, review submissions, discussion comments and checks were fetched. Twenty production findings appear in nineteen threads (one comment contains two findings); three threads concern tests only. No thread was resolved or dismissed.
+This pass starts from live PR HEAD `6b63502003af3c3581c4040378620c3ac05e8a13` and the same base `ed4a0aa1679ac336e7b58e8b5840f502c1ec1ab2`. Seventeen threads were unresolved: thirteen from the preceding pass and four new CodeRabbit comments. The user explicitly requested evidence-based replies and resolution. Exact thread IDs, top-level comment IDs and authors were verified in PR #107 before replying; no unrelated audience is added.
+
+| New comment | Disposition and evidence |
+|---|---|
+| [4403711685](https://github.com/mokaradag/Takvim/pull/107#discussion_r4403711685) | FIXED: the already-authorized deletion snapshot also supplies direct-assignee display-name entitlement. The stable-ID predicate is unchanged; unresolved identities still have one hidden marker. A deleted-assignee regression checks names, hidden IDs and loss of report access when the snapshot no longer authorizes the actor. |
+| [4403711707](https://github.com/mokaradag/Takvim/pull/107#discussion_r4403711707) | FIXED: project create intent stays independent of candidate rows through authorization, code/calendar/root/dependency planning and canonical create validation. Create code checks include all occupied codes, without accidentally excluding a hidden candidate row. The same locked collision validator checks the project and consumed root immediately before INSERT. Hidden/manual/corporate candidate IDs produce the same reserved/conflicting-code errors as unused IDs; valid collisions remain protected. |
+| [4403711674](https://github.com/mokaradag/Takvim/pull/107#discussion_r4403711674) | FIXED: obsolete current-state claims were replaced with explicitly historical provenance. Exact validated commits and their check results are recorded in this repository, including the separate code-validation record below. |
+| [4403711722](https://github.com/mokaradag/Takvim/pull/107#discussion_r4403711722) | ADDRESSED: the direct-assignee regression captures the generated SQL and asserts the self/executive stable-ID branches and exclusion of display-only allowances. The fake driver remains a behavioral test double, not a claimed SQL evaluator. |
+
+The old unresolved production comments are fixed by `6b63502` and its regressions; duplicate comments share those fixes. The two remaining old test comments are now addressed: both preliminary reads must reach the cooldown barrier, and twelve maximum malformed-attribute inputs must complete in a child process within a three-second deadline, with exact output assertions. This adds no production dependency or configuration.
+
+Additional production files changed here are limited to `taskActivityReport.js` and the existing ordered/hardened/base/upsert-intent repository files. The report change restores only display names. The repository changes extend the already-used deferred-create boundary to projects and consumed project roots; update authorization, SERIALIZABLE isolation, UPDLOCK/HOLDLOCK, retry behavior and collision rejection remain intact.
+
+### Recorded code validation for the closure pass
+
+Validated code commit: [`55541d420d785d4bb0fdb7eb237724cae71db551`](https://github.com/mokaradag/Takvim/commit/55541d420d785d4bb0fdb7eb237724cae71db551). Its parent is `6b63502003af3c3581c4040378620c3ac05e8a13`; its source tree is `4e21cfa1b629235d6e72d8d9f815762b5f9da8b6`. This immutable code/test commit is followed by a documentation-only record, which changes no production or test source. This avoids a circular requirement for a commit to contain its own SHA.
+
+| Check against that code | Result |
+|---|---|
+| Targeted ten-file regression suite | 220 passed; 0 failed, cancelled or skipped. |
+| `npm test -- --test-concurrency=1 --test-reporter=tap` | 4,664 passed; 0 failed, cancelled or skipped. |
+| `npm run lint` | Passed; no ESLint warnings/errors. |
+| `npm run build` | Passed, including normal lint/type validation. |
+| Lockfile-consistency gate | Passed; isolated offline resolution is byte-identical to the committed lockfile. |
+| `git diff --check` | Passed. |
+| Warning comparison | Fourteen test warnings exactly match the unchanged-base run; no warnings suppressed. The npm environment warning also reproduces on base. |
+
+```sh
+node --test --test-concurrency=1 --test-reporter=tap test/delete-intent-and-project-wbs-validation.test.mjs test/task-activity-report.test.mjs test/task-reminder-emails.test.mjs test/task-reminder-integration.test.mjs test/commit-integrity-hardening.test.mjs test/actual-mode-commit-and-authorization-regressions.test.mjs test/recurring-series-integrity.test.mjs test/security-calendar-bounds.test.mjs test/smtp-delivery-lifecycle.test.mjs test/task-status-round-trip-and-project-codes.test.mjs
+npm test -- --test-concurrency=1 --test-reporter=tap
+npm run lint
+npm run build
+git diff --check
+```
+
+The first complete run found one old source-shape assertion for unconditional `ProjectId <> @projectId`; the assertion now checks create-versus-update behavior and retains the authorization/locking checks. The complete final run then passed. No production error was hidden by changing a test expectation. [Live checks on the published PR head](https://github.com/mokaradag/Takvim/pull/107/checks) validate the documentation successor's identical production/test code; those remote results are not misattributed to this code commit before publication.
+
+### F-024: explicit creation-contract decision
+
+The earlier instruction explicitly forbids replacement IDs, changing client-selected-ID semantics, silent collision success and hidden-object overwrite. Under those constraints an otherwise valid request necessarily has these outcomes:
+
+| Caller-selected candidate ID | Required outcome |
+|---|---|
+| Unused | Creation succeeds. |
+| Already exists, including hidden | Creation fails without overwrite. |
+
+The success/failure bit is the residual oracle; identical error text cannot remove it. It must not be mislabeled fixed by changing only collision error codes. All rejected-create variants are fixed separately. F-024 remains OPEN unless the original creation-contract restriction is explicitly changed.
+
+A concrete narrow replacement contract is server-issued creation IDs with caller-bound allocation records in the existing SQL database. The client reserves IDs through the existing commit surface, then submits its unchanged object/reference graph using those IDs plus allocation proof. The server checks owner, entity type and destination before any candidate-row lookup, consumes the allocation atomically with the existing commit, and never reuses consumed allocations. An actor cannot obtain proof for an arbitrary hidden ID. Versioned edits and all visibility/mutation rules remain unchanged. A reservation table is needed to keep allocation, replay protection and retry behavior durable across processes/restarts; no external service, origin, filesystem trust or SMTP change is needed.
+
+This proposal requires explicit exceptions to the prior client-ID, API-surface and schema restrictions. It is a reviewable scope decision, not an implemented permissive fallback. Until that decision is made, this report does not claim unconditional security convergence.
+
+## PR #107 surgical follow-up — disposition at 6b63502
+
+This follow-up supersedes the original pass's boundary behavior described below. It starts from PR HEAD `7daef0dfd514b30ca6745830e6dcda9a088d111e`, on `security/deep-scan-convergence-20261028`, with base `main` at `ed4a0aa1679ac336e7b58e8b5840f502c1ec1ab2`. Both refs were fetched and rechecked. The starting PR contains one commit and 30 changed files. All 22 unresolved threads, review submissions, discussion comments and checks were fetched. Twenty production findings appear in nineteen threads (one comment contains two findings); three threads concern tests only. No review thread was manually resolved during that pass; subsequent closure is authorized by the user and tracked on PR #107.
 
 Starting checks: test-and-build, native Windows planner, native macOS planner, Dependency Review, CodeQL (actions, Python, JavaScript/TypeScript and aggregate), and CodeRabbit succeeded. Cubic was neutral because its review allowance was exhausted. These are starting-HEAD results, not follow-up validation.
 
@@ -44,7 +98,7 @@ Comment numbers link to the original review data, independently verified against
 | [4402723167](https://github.com/mokaradag/Takvim/pull/107#discussion_r4402723167) | P2 invalid dependency-target oracle | FIXED BY E; missing and hidden predecessors reject before candidate lookup. Blank versions also preserve create intent. An otherwise valid hidden-ID creation still collides while an unused ID succeeds (F-024). |
 | [4400490847](https://github.com/mokaradag/Takvim/pull/107#discussion_r4400490847) | P2 ordinary recurrence-child update rejected | FIXED BY F; an authorized child edit succeeds with its unchanged hidden parent; new hidden-parent creation remains rejected. |
 
-No posted production finding was dismissed as invalid or assumed fixed without verification. Test-only threads: 4401113706 (barrier completeness) and 4403006511 (attribute-bound proof) are outside this production convergence pass; the current sticky attribute scanner is forward-only. 4403006476 (nonempty PARTIAL report) was strengthened as part of B's actual redaction regression, including its exact hidden marker. None of these threads was resolved.
+No posted production finding was dismissed as invalid or assumed fixed without verification. The later user-authorized closure pass also addresses test-only threads 4401113706 (assert both barrier arrivals), 4403006511 (bounded worker deadline for malformed attributes), and 4403711722 (inspect the emitted strict stable-ID predicate). 4403006476 already has a nonempty PARTIAL report assertion and its exact hidden marker.
 
 ### Follow-up production-file inventory
 
@@ -82,7 +136,7 @@ npm run build
 git diff --check
 ```
 
-Ending commit, publication and exact-HEAD remote check results are reported in the delivery. Native-platform and CodeQL/Dependency Review results for the final commit require the repository's remote checks; local success is not substituted for them.
+The validated and published commit for this pass is `6b63502003af3c3581c4040378620c3ac05e8a13`, with tree `805beac1d84c227b6b364afc605b3699a0ea4820`, parent `7daef0dfd514b30ca6745830e6dcda9a088d111e`. Its local results above are 213 targeted and 4,660 serial tests. Remote Quality (including Windows/macOS), Dependency Review and all CodeQL analyses passed on this exact commit: [Quality](https://github.com/mokaradag/Takvim/actions/runs/40730349146), [Dependency Review](https://github.com/mokaradag/Takvim/actions/runs/40730349051), [CodeQL](https://github.com/mokaradag/Takvim/actions/runs/40730341296). The aggregate CodeQL result reports no new alerts. Cubic was neutral due to its review limit. CodeRabbit subsequently posted the additional comments addressed in the closure pass below.
 
 Only the explicitly accepted F-024 residual may remain: a fully authorized valid creation with a hidden existing client-selected ID collides, while an unused ID creates. No other validated posted production defect is intentionally left open. No schema, migration, dependency, origin, endpoint, configuration knob or external service was added. AI/Outlook disclosure code, filesystem/network trust, scheduler authentication and transaction isolation are unchanged.
 
@@ -94,16 +148,12 @@ All 26 findings were independently evaluated against fetched production HEAD. El
 
 F-024: unauthorized destination writers now receive indistinguishable hidden-existing/missing task/WBS responses before collision lookup. An authorized creator can still distinguish an unused client-selected globally unique ID (creation succeeds) from an ID belonging to a hidden resource (collision must fail). A controlled same-ID reproduction returned `409 / UPSERT_CREATE_COLLISION` versus `200`. Error redaction cannot make successful creation indistinguishable from rejected creation. Eliminating that remainder requires a change to ID allocation/creation semantics, such as server-issued creation IDs with reference remapping, which the governing instructions did not authorize. No such redesign, permissive overwrite, silent success or expanded disclosure right was introduced.
 
-## Live state and source
+## Original scan provenance (historical)
 
-- Repository: https://github.com/mokaradag/Takvim
-- Starting branch/base: `main`; starting/base SHA: `ed4a0aa1679ac336e7b58e8b5840f502c1ec1ab2`.
-- Working branch: `security/deep-scan-convergence-20261028`.
-- Clean independent checkout. Unrelated prior checkouts were left untouched.
-- GitHub was queried first, and queried again after runtime recovery: no open PR exists. Historical PR #106 was already merged; its old remote branch was deleted. No PR was created, replaced, reopened or merged.
-- Remote was fetched before work. No pull/rebase was needed; the working branch starts at fetched `main`.
-- The runtime reset removed the first uncommitted checkout/test processes. The patches were reconstructed against the same freshly fetched base and immediately checkpointed in Git. Earlier test runs are historical observations, not substitutes for recovered-commit validation.
-- Final commit SHA, push status and exact-HEAD check results are supplied in the delivery message.
+- PR #107 is open at https://github.com/mokaradag/Takvim/pull/107. It is updated in place; it has not been merged or replaced.
+- The original security commit is `7daef0dfd514b30ca6745830e6dcda9a088d111e`, based on `main` at `ed4a0aa1679ac336e7b58e8b5840f502c1ec1ab2`.
+- Its source tree is `57fb579a1bd985284aaa7ba9d141ea113448fefc`. The later validated follow-up commit and exact check results are recorded above.
+- These historical scan dispositions explain the original 30-file change. They do not describe a separate current PR or a currently missing PR.
 
 Root `package.json`, Next configuration, CI and deployment documentation build/use root `src/`. They do not import or launch `coderabbit_review_runtime`. That directory is a stale review copy and is not regenerated by the normal build. No mirror was modified. Recent relevant history was inspected, including `aeddf50`, `971ce43`, `a55cd8e`, `6c88c77`, `77b2007`, `3a9ae05` and the later calendar-preservation commits incorporated in the merge base.
 
@@ -173,20 +223,8 @@ No dependency, schema, external service, telemetry, CDN, Unix-only filesystem/pr
 
 Split: **18 production files, 11 test/helper files, 1 report**. Test helpers model the changed real SQL; no authorization branch is bypassed. The shared-To assertion was replaced with stronger individual-header assertions. The SMTP-failure source-shape test now checks aggregate delivery outcome; runtime failure/retry assertions remain. No hostile input or security assertion was weakened.
 
-## Validation and limitations
+## Original pass validation (historical)
 
-Exact recovered-commit commands/results are supplied in the delivery message:
+Commit `7daef0dfd514b30ca6745830e6dcda9a088d111e` recorded 489 targeted and 4,639 full-suite passing tests. Commit `6b63502003af3c3581c4040378620c3ac05e8a13` recorded 213 targeted and 4,660 full-suite passing tests; its exact remote checks are linked above. The closure pass below records its own validated code commit separately, so these counts are not presented as validation of a later source tree.
 
-```sh
-node --test --test-reporter=tap --test-concurrency=1 test/security-calendar-bounds.test.mjs test/smtp-delivery-lifecycle.test.mjs test/task-activity-report.test.mjs test/task-reminder-integration.test.mjs test/task-reminder-emails.test.mjs test/delete-intent-and-project-wbs-validation.test.mjs test/recurring-series-integrity.test.mjs test/ai-disclosure-invariants.test.mjs test/actual-api-boundary.test.mjs test/ai-semantic-gateway.test.mjs test/working-calendars.test.mjs test/cpm-validation-edge-cases.test.mjs test/outlook-calendar-integration.test.mjs test/ai-domain-tools.test.mjs test/ai-evidence-boundaries.test.mjs
-npm test -- --test-concurrency=1 --test-reporter=tap
-npm run lint
-npm run build
-git diff --check
-```
-
-No separate typecheck script exists; Next production build includes its normal lint/type-validation stage. Runtime is Node 24.22.1; CI specifies 24.14.0. The dependency tree was copied from an existing installed checkout with a byte-identical package lock; no dependency/lockfile change. The earlier offline installation attempt failed because a tarball was absent from cache.
-
-Historical pre-reset results: targeted 376/376, an additional Outlook test 1/1, related activity/AI 127/127, adversarial 178/178, extended disclosure 66/66. The superseded full run found two count-free hidden-assignment marker expectations, corrected without changing their tests. Baseline focused regressions failed on the original disclosure behavior; read-only probes confirmed the old duration path scans before rejecting and old SMTP does not close oversized unterminated input. These historical observations are not final recovered-HEAD validation.
-
-Native Windows/macOS CI, live SQL Server/organizational SMTP/Keycloak/model systems and CodeRabbit deep-scan tooling are unavailable locally. The complete available suite uses supported SQL/provider/mail doubles and loopback servers; no external production service was called. No fresh scanner-success claim is made. Final HEAD/push status and final warning disposition are recorded in the delivery, not guessed here.
+No separate typecheck script exists; the Next production build performs its normal lint/type validation. No live organizational SQL Server, SMTP, Keycloak or model systems were called during local validation. Tests use supported doubles and loopback servers. Native Windows/macOS validation is supplied by the linked remote Quality workflow, rather than claimed as a local native run.
