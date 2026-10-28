@@ -35,7 +35,7 @@ function failEvidenceReads(t, pool, code) {
   });
 }
 
-for (const delivery of ['retained', 'recovered', 'unavailable', 'revoked', 'deleted']) {
+for (const delivery of ['retained', 'recovered', 'unavailable', 'revoked', 'deleted', 'conversation-deleted']) {
   test(`saved replay validates the original answer once at delivery (${delivery})`, async (t) => {
     const stack = stackFor(t);
     citeTask(stack, TASKS.OVERDUE);
@@ -69,6 +69,11 @@ for (const delivery of ['retained', 'recovered', 'unavailable', 'revoked', 'dele
     if (delivery === 'revoked') {
       stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
       stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
+    }
+    if (delivery === 'conversation-deleted') {
+      await conversationRoute.DELETE(aiRequest(`/assistant/conversations/${saved.conversation.id}`, { method: 'DELETE' }),
+        { params: { conversationId: saved.conversation.id } });
+      assert.equal(stack.db.aiMessageEvidence.length, 0, 'the real delete cascades evidence');
     }
     if (delivery === 'deleted') stack.db.tasks = stack.db.tasks.filter((row) => row.TaskId !== TASKS.OVERDUE);
     const { parseSseText } = await import('./helpers/aiStack.mjs');
@@ -632,4 +637,25 @@ test('the ledger rejects a protected aggregate without contributor provenance, i
   ] }), null);
   assert.deepEqual(ledger.ids(), []);
   assert.equal(ledger.register({ ...metadata, populationReferences: [] }), 'R1');
+});
+
+test('conversation deletion between history and evidence reads cannot put protected text into model context', async (t) => {
+  const stack = stackFor(t); citeTask(stack, TASKS.OVERDUE);
+  const saved = done(await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` }));
+  const { prepareAssistantTurn } = await import('../src/server/ai/assistant/assistantService.js');
+  const { deleteConversation } = await import('../src/server/ai/assistant/conversationStore.js');
+  const pool = await getSqlPool(), request = pool.request.bind(pool);
+  let deleted = false;
+  t.mock.method(pool, 'request', () => {
+    const value = request(), query = value.query.bind(value);
+    value.query = async (statement) => {
+      if (!deleted && statement.includes('AS EvidenceReady')) { deleted = true; assert.equal((await deleteConversation(pool, AYSE, { conversationId: saved.conversation.id })).deleted, true); }
+      return query(statement);
+    }; return value;
+  });
+  const turn = await prepareAssistantTurn({ readBody: async () => ({ conversationId: saved.conversation.id, turnId: randomUUID(), source: 'general', message: 'Genel olarak açıkla', mode: 'standard' }) });
+  t.after(() => turn.claim?.release());
+  assert.equal(deleted, true); assert.equal(stack.db.aiMessageEvidence.length, 0);
+  const history = turn.modelMessages.filter(message => message.role === 'assistant');
+  assert.equal(history.length, 1); assert.ok(history.every(message => !message.content.includes(saved.assistantMessage.content))); assert.match(history[0].content, /güncel kanıt olmadığı/);
 });

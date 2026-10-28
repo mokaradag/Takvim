@@ -127,9 +127,18 @@ function sanitizeHref(value) {
 
 function sanitizeAttributes(raw) {
   const attributes = [];
-  const pattern = /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
-  let match;
-  while ((match = pattern.exec(raw))) {
+  const pattern = /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/y;
+  let index = 0;
+  while (index < raw.length) {
+    // Skip an entire malformed attribute token, never retry each suffix of it.
+    while (index < raw.length && /\s/.test(raw[index])) index += 1;
+    pattern.lastIndex = index;
+    const match = pattern.exec(raw);
+    if (!match) {
+      while (index < raw.length && !/\s/.test(raw[index])) index += 1;
+      continue;
+    }
+    index = pattern.lastIndex;
     const name = match[1].toLowerCase();
     if (!ALLOWED_ATTRIBUTES.has(name)) continue;
     // Öznitelik değeri kaynakta kodlu gelir; önce çözülür ki denetim gerçek
@@ -182,10 +191,14 @@ function findTagEnd(source, start) {
   return -1;
 }
 
+export const MAX_REMINDER_TEMPLATE_CHARS = 65536;
+
 export function sanitizeReminderHtml(input) {
   const source = String(input ?? '');
+  if (source.length > MAX_REMINDER_TEMPLATE_CHARS) throw new RangeError('Hatırlatma şablonu en fazla 65536 karakter olabilir.');
   let output = '';
   let index = 0;
+  let lowerSource = null;
 
   while (index < source.length) {
     const start = source.indexOf('<', index);
@@ -222,7 +235,8 @@ export function sanitizeReminderHtml(input) {
       // `script`/`style` gövdesi de atılır: yalnızca etiketi düşürmek, kodu
       // düz metin olarak bırakırdı.
       if (tag === 'script' || tag === 'style') {
-        const closeIndex = source.toLowerCase().indexOf(`</${tag}>`, end + 1);
+        lowerSource ??= source.toLowerCase();
+        const closeIndex = lowerSource.indexOf(`</${tag}>`, end + 1);
         index = closeIndex < 0 ? source.length : closeIndex + tag.length + 3;
         continue;
       }

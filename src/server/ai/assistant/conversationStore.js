@@ -275,11 +275,13 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     return { knownSicil: true, ready: false, byMessage: new Map() };
   }
   const [[state] = [], rows = []] = recordsetsOf(result);
+  const presentMessages = state?.EvidenceReady ? new Set(rows.map((row) => idOrNull(row.MessageId))) : undefined;
   const epochsByMessage = new Map();
   const clarificationByMessage = new Map();
   const resultScopeByMessage = new Map();
   const authorizationByMessage = new Map();
   for (const row of rows) {
+    if (row.Ordinal == null) continue;
     const id = idOrNull(row.MessageId);
     if (!epochsByMessage.has(id)) epochsByMessage.set(id, []);
     epochsByMessage.get(id).push(row.AuthorizationEpoch ?? null);
@@ -314,6 +316,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
   return {
     knownSicil: Boolean(state?.KnownSicil),
     ready: Boolean(state?.EvidenceReady),
+    presentMessages,
     epochsByMessage,
     authorizationByMessage,
     clarificationByMessage,

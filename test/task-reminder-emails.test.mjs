@@ -362,7 +362,7 @@ test('gönderim kaydı ÖNCE sahiplenilir, sonra gönderilir', () => {
 
 test('SMTP başarısızlığı asla "gönderildi" olarak raporlanmaz', () => {
   const service = read('src/server/reminders/reminderService.js');
-  assert.match(service, /if \(!sent\.ok\) \{[\s\S]*?status: 'FAILED'/);
+  assert.match(service, /if \(!delivered\.length\) \{[\s\S]*?status: 'FAILED'[\s\S]*?return \{ ok: false/);
   const client = read('src/server/mail/smtpClient.js');
   // Söz yalnızca sunucu 250 döndüğünde çözülür.
   assert.match(client, /if \(accepted\.code !== 250\) \{[\s\S]*?throw new SmtpError\('SMTP_SEND_FAILED'/);
@@ -558,4 +558,11 @@ test('SMTP akışı Python karşılığıyla aynı sırayı izler', () => {
   }
   // Python uygulamasındaki gibi TLS sonrası EHLO tekrarlanır.
   assert.equal((client.match(/EHLO mergen-rota/g) || []).length, 2);
+});
+
+test('malformed attribute names are scanned once and template size is bounded before parsing', async () => {
+  const { sanitizeReminderHtml, MAX_REMINDER_TEMPLATE_CHARS } = await import('../src/domain/reminders/reminderTemplate.js');
+  assert.equal(sanitizeReminderHtml(`<a ${'a'.repeat(40000)}>safe</a>`), '<a>safe</a>');
+  assert.throws(() => sanitizeReminderHtml('a'.repeat(MAX_REMINDER_TEMPLATE_CHARS + 1)), RangeError);
+  assert.equal(sanitizeReminderHtml('<a href="https://example.internal" onclick="bad()" title="a > b">safe</a>'), '<a href="https://example.internal" title="a &gt; b">safe</a>');
 });

@@ -1,6 +1,7 @@
+import { assertTaskProjectScope } from './sqlAppRepository.js';
 import 'server-only';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
-import { ACCESS_REASONS, assertCanCreateManualProject } from '../authorization/authorization.js';
+import { ACCESS_REASONS, assertCanCreateManualProject, assertProjectWriteAccess } from '../authorization/authorization.js';
 import { sql } from '../db/pool.js';
 import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { ServerPersistenceError } from '../errors.js';
@@ -129,7 +130,7 @@ async function observableTo(executor, actor, entityType, id, projectId) {
  * projelerini döndürür. Proje oluşturma yetkisi, kimlik çakışması okunmadan
  * denetlenir; oluşturamayan aktör gizli projeyi var olmayandan ayıramaz.
  */
-export async function assertUpsertIntentMatchesPersistence(executor, changes = {}, actor = null) {
+export async function assertUpsertIntentMatchesPersistence(executor, changes = {}, actor = null, { createdProjectIds = new Set() } = {}) {
   const storedTaskProjects = new Map();
   for (const target of UPSERT_TARGETS) {
     const entries = [...(changes[target.collection] || [])]
@@ -139,6 +140,12 @@ export async function assertUpsertIntentMatchesPersistence(executor, changes = {
       const id = String(entry.id);
       const updateIntent = entry.version != null && String(entry.version).trim() !== '';
       if (target.entityType === 'PROJECT' && !updateIntent) assertCanCreateManualProject(actor);
+      if (!updateIntent && target.entityType !== 'PROJECT') {
+        const destination = canonicalActualId(entry.projectId);
+        if (createdProjectIds.has(destination)) assertCanCreateManualProject(actor);
+        else if (target.entityType === 'WBS') assertProjectWriteAccess(actor.effective, destination);
+        else await assertTaskProjectScope(executor, actor, destination, { allowAssigneeCreate: true });
+      }
       const projectId = await targetProjectForUpdate(executor, target, id);
       if (projectId && target.entityType === 'TASK') storedTaskProjects.set(id, projectId);
       const issue = findUpsertIntentIssue({

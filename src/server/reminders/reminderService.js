@@ -78,7 +78,7 @@ export async function deliverTaskReminder(executor, {
   send = sendMail
 }) {
   const rows = await loadReminderRecipientRows(executor, task.id);
-  const { recipients, resolved, problems } = resolveReminderRecipients(rows);
+  const { recipients, problems } = resolveReminderRecipients(rows);
   // Uyarılar KİMLİK TAŞIMAZ: kapsam dışı bir eş sorumlunun adı yanıtla dışarı
   // sızmamalıdır (ayrıntılı `problems` sunucuda kalır).
   const warnings = summarizeRecipientProblems(problems);
@@ -94,40 +94,40 @@ export async function deliverTaskReminder(executor, {
     };
   }
 
+  // Direct task assignees may see co-assignee display names in the canonical
+  // snapshot projection. Usernames and directory identities are not a fallback.
   const values = buildReminderValues(task, {
-    // Sorumlu listesi BÜTÜN atama satırlarından kurulur. Yalnızca adresi
-    // çözülenleri yazmak, adresi olmayan sorumluyu görevden sorumlu DEĞİLMİŞ
-    // gibi gösteriyordu; `resolved` yalnızca SMTP alıcı listesini belirler.
-    assigneeNames: rows.map((row) => String(row?.name || row?.username || '').trim()).filter(Boolean),
+    assigneeNames: rows.map((row) => String(row?.name || '').trim()).filter(Boolean),
     now
   });
   const rendered = renderReminderEmail({ subject: settings.subject, body: settings.body }, values);
-  const sent = await send({
-    to: recipients,
-    subject: rendered.subject,
-    html: rendered.html,
-    text: rendered.text
-  });
-
-  if (!sent.ok) {
-    await finalizeLog(executor, logId, { status: 'FAILED', recipients, failureCode: sent.code });
-    return { ok: false, code: sent.code, message: sent.message, problems, warnings };
+  const delivered = [];
+  let failed = null;
+  for (const email of recipients) {
+    const sent = await send({ to: [email], subject: rendered.subject, html: rendered.html, text: rendered.text });
+    if (sent.ok) delivered.push(email);
+    else failed = sent;
   }
+  if (!delivered.length) {
+    await finalizeLog(executor, logId, { status: 'FAILED', recipients, failureCode: failed?.code });
+    return { ok: false, code: failed?.code, message: failed?.message, problems, warnings };
+  }
+  if (failed) warnings.push('Bazı sorumlulara hatırlatma iletilemedi.');
 
   // Kısmi alıcı çözümü geçmişte de GÖRÜNÜR kalır: durum SENT'tir ama neden
   // alanı eksik sorumlu olduğunu söyler.
   const audited = await finalizeLog(executor, logId, {
     status: 'SENT',
-    recipients,
-    failureCode: problems.length ? 'PARTIAL_RECIPIENTS' : null
+    recipients: delivered,
+    failureCode: problems.length || failed ? 'PARTIAL_RECIPIENTS' : null
   });
   return {
     ok: true,
-    recipientCount: recipients.length,
+    recipientCount: delivered.length,
     // Adresler istemciye DÖNMEZ: kişisel veri gereksiz yere tarayıcıya taşınmaz.
-    message: `Hatırlatma e-postası ${recipients.length} sorumluya gönderildi.`,
+    message: `Hatırlatma e-postası ${delivered.length} sorumluya gönderildi.`,
     problems,
-    partial: problems.length > 0,
+    partial: problems.length > 0 || Boolean(failed),
     warnings: audited
       ? warnings
       : [...warnings, 'Hatırlatma gönderildi; gönderim geçmişi kaydı güncellenemedi.']

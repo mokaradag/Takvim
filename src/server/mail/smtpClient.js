@@ -33,44 +33,60 @@ export class SmtpError extends Error {
   }
 }
 
+export const SMTP_REPLY_LIMITS = Object.freeze({ maxLineBytes: 4096, maxResponseBytes: 65536 });
+
 export function createSmtpDialogue(socket, timeoutMs) {
-  let buffer = '';
-  // Çok satırlı yanıtın biriken satırları: ARA satırlar da yetenek taşır ve
-  // atılırsa AUTH duyurusu görünmez olur.
+  let lineParts = [];
+  let lineBytes = 0;
+  let responseBytes = 0;
   let pending = [];
+  let failure = null;
   const waiters = [];
 
-  const flush = () => {
-    // Yanıt satırları CRLF ile gelir; çok satırlı yanıtta ara satırlar
-    // `250-...`, son satır `250 ...` biçimindedir.
-    let index = buffer.indexOf('\r\n');
-    while (index >= 0) {
-      const line = buffer.slice(0, index);
-      buffer = buffer.slice(index + 2);
-      const match = /^(\d{3})([ -])?(.*)$/.exec(line);
-      if (match) {
-        pending.push(line);
-        if (match[2] !== '-') {
-          const lines = pending;
-          pending = [];
-          const waiter = waiters.shift();
-          // `text` yanıtın TAMAMIDIR; `lastLine` yalnızca kapanış satırı.
-          if (waiter) waiter.resolve({ code: Number(match[1]), text: lines.join('\n'), lines, lastLine: line });
-        }
-      }
-      index = buffer.indexOf('\r\n');
-    }
-  };
-
-  const onData = (chunk) => { buffer += chunk; flush(); };
   const onError = (error) => {
+    failure = error;
+    lineParts = [];
+    pending = [];
     while (waiters.length) waiters.shift().reject(error);
   };
-  const onClose = () => {
-    while (waiters.length) {
-      waiters.shift().reject(new SmtpError('SMTP_CONNECTION_FAILED', 'SMTP bağlantısı beklenmedik biçimde kapandı.'));
+  const rejectReply = () => {
+    onError(new SmtpError('SMTP_SEND_FAILED', 'SMTP yanıtı geçersiz veya çok büyük.'));
+    socket.destroy();
+  };
+  const onData = (chunk) => {
+    if (failure) return;
+    // Only search the newly received chunk. A line is joined exactly once.
+    let offset = 0;
+    while (offset < chunk.length) {
+      const newline = chunk.indexOf('\n', offset);
+      const end = newline < 0 ? chunk.length : newline + 1;
+      const fragment = chunk.slice(offset, end);
+      const bytes = Buffer.byteLength(fragment, 'utf8');
+      if (lineBytes + bytes > SMTP_REPLY_LIMITS.maxLineBytes
+        || responseBytes + bytes > SMTP_REPLY_LIMITS.maxResponseBytes) return rejectReply();
+      lineBytes += bytes;
+      responseBytes += bytes;
+      lineParts.push(fragment);
+      offset = end;
+      if (newline < 0) break;
+      const raw = lineParts.join('');
+      lineParts = [];
+      lineBytes = 0;
+      if (!raw.endsWith('\r\n')) return rejectReply();
+      const line = raw.slice(0, -2);
+      const match = /^(\d{3})([ -])?(.*)$/.exec(line);
+      if (!match) return rejectReply();
+      pending.push(line);
+      if (match[2] !== '-') {
+        const lines = pending;
+        pending = [];
+        responseBytes = 0;
+        const waiter = waiters.shift();
+        if (waiter) waiter.resolve({ code: Number(match[1]), text: lines.join('\n'), lines, lastLine: line });
+      }
     }
   };
+  const onClose = () => onError(failure || new SmtpError('SMTP_CONNECTION_FAILED', 'SMTP bağlantısı beklenmedik biçimde kapandı.'));
 
   socket.setEncoding('utf8');
   socket.on('data', onData);
@@ -78,6 +94,7 @@ export function createSmtpDialogue(socket, timeoutMs) {
   socket.on('close', onClose);
 
   const read = () => new Promise((resolve, reject) => {
+    if (failure) { reject(failure); return; }
     // Zaman aşımına uğrayan bekleyici KUYRUKTAN DÜŞÜRÜLÜR. Ölü kayıt kuyrukta
     // kalınca sunucunun bir sonraki satırı ona teslim ediliyor ve bundan sonraki
     // bütün yanıtlar bir kayıyordu: zaman aşımından sonra devam eden çağıran
@@ -118,7 +135,9 @@ export function createSmtpDialogue(socket, timeoutMs) {
       while (waiters.length) {
         waiters.shift().reject(new SmtpError('SMTP_CONNECTION_FAILED', 'SMTP oturumu yükseltildi.'));
       }
-      buffer = '';
+      lineParts = [];
+      lineBytes = 0;
+      responseBytes = 0;
       pending = [];
     }
   };

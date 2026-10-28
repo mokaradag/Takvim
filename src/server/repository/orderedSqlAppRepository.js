@@ -15,6 +15,10 @@ import {
 } from './upsertIntentValidation.js';
 import { orderWbsUpsertsByParents } from './wbsCommitPlanning.js';
 
+function hasVersion(entry) {
+  return entry.version != null && String(entry.version).trim() !== '';
+}
+
 function normalizedProjectCode(value) {
   const code = value == null ? '' : String(value).trim().toUpperCase();
   return code || null;
@@ -124,7 +128,6 @@ function hasFullProjectAccess(actor, projectId) {
  * yanıtı alır.
  */
 async function assertTaskTargetsDisclosable(transaction, changes, actor, storedTaskProjects, createdProjectIds) {
-  const upsertedProjectIds = [...new Set((changes.projectUpserts || []).map((project) => canonicalActualId(project.id)).filter(Boolean))].sort();
   for (const task of changes.taskUpserts || []) {
     if (!(task.deps || []).length) continue;
     const storedProjectId = storedTaskProjects.get(String(task.id));
@@ -133,7 +136,10 @@ async function assertTaskTargetsDisclosable(transaction, changes, actor, storedT
       throw new ServerPersistenceError('FORBIDDEN', 'Görev bağımlılıkları yalnızca tam proje yetkisiyle düzenlenebilir.');
     }
   }
+}
 
+async function assertTaskDestinationsDisclosable(transaction, changes, actor) {
+  const upsertedProjectIds = [...new Set((changes.projectUpserts || []).map((project) => canonicalActualId(project.id)).filter(Boolean))].sort();
   const destinations = new Set([...(changes.taskUpserts || []), ...(changes.wbsUpserts || [])]
     .map((entry) => canonicalActualId(entry.projectId))
     .filter((projectId) => projectId && !upsertedProjectIds.includes(projectId)));
@@ -183,9 +189,18 @@ export function createOrderedSqlAppRepository() {
           if ((orderedChanges.projectDeletes || []).length && !actor.isSystemAdmin) {
             throw new ServerPersistenceError('FORBIDDEN', 'Projeyi yalnızca sistem yöneticisi silebilir.');
           }
-          storedTaskProjects = await assertUpsertIntentMatchesPersistence(transaction, orderedChanges, actor);
+          await assertUpsertIntentMatchesPersistence(transaction, { projectUpserts: orderedChanges.projectUpserts }, actor);
           const createdProjectIds = await assertProjectUpsertsAuthorized(transaction, orderedChanges, actor);
           await assertManualProjectCodesAvailable(transaction, orderedChanges);
+          const creating = { ...orderedChanges,
+            taskUpserts: (orderedChanges.taskUpserts || []).filter((entry) => !hasVersion(entry)),
+            wbsUpserts: (orderedChanges.wbsUpserts || []).filter((entry) => !hasVersion(entry)) };
+          await assertTaskDestinationsDisclosable(transaction, creating, actor);
+          await assertTaskTargetsDisclosable(transaction, creating, actor, new Map(), createdProjectIds);
+          storedTaskProjects = await assertUpsertIntentMatchesPersistence(transaction, { ...orderedChanges, projectUpserts: [] }, actor, { createdProjectIds });
+          await assertTaskDestinationsDisclosable(transaction, { ...orderedChanges,
+            taskUpserts: (orderedChanges.taskUpserts || []).filter((entry) => hasVersion(entry)),
+            wbsUpserts: (orderedChanges.wbsUpserts || []).filter((entry) => hasVersion(entry)) }, actor);
           const deletedTaskProjects = await assertDeleteIntentMatchesPersistence(transaction, orderedChanges, actor);
           for (const projectId of deletedTaskProjects.values()) assertTaskDeleteAccess(actor, projectId);
           for (const [taskId, projectId] of deletedTaskProjects) storedTaskProjects.set(taskId, projectId);

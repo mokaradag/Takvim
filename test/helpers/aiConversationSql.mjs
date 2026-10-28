@@ -393,7 +393,7 @@ function evidence(db, params, sicil, known) {
   const messages = conversation ? messagesOf(db, conversation.ConversationId) : [];
   const ids = messages.filter((row) => !params.messageId || sameGuid(row.MessageId, params.messageId)).map((row) => row.MessageId);
   const order = new Map(messages.map((row) => [guid(row.MessageId), row.Sequence]));
-  const rows = evidenceRowsFor(db, ids)
+  const rows = [...evidenceRowsFor(db, ids), ...ids.filter((id) => !db.aiMessageEvidence.some((row) => sameGuid(row.MessageId, id))).map((MessageId) => ({ MessageId, Ordinal: null }))]
     .sort((left, right) => order.get(guid(left.MessageId)) - order.get(guid(right.MessageId)) || left.Ordinal - right.Ordinal)
     .slice(0, Number(params.maxEvidence));
   return [[{ KnownSicil: 1, EvidenceReady: 1 }], rows];

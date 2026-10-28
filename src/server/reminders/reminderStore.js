@@ -2,6 +2,7 @@ import 'server-only';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { normalizePriorityId } from '../../domain/constants/index.js';
 import {
+  MAX_REMINDER_TEMPLATE_CHARS,
   DEFAULT_REMINDER_BODY,
   DEFAULT_REMINDER_SUBJECT,
   sanitizeReminderHtml
@@ -125,6 +126,9 @@ export function decodeRowVersion(value) {
 export async function saveReminderSettings(executor, actorSicil, input = {}) {
   const settings = normalizeReminderSettings(input);
   const subject = String(input.subject || DEFAULT_REMINDER_SUBJECT).replace(/[\r\n]+/g, ' ').trim().slice(0, 400);
+  if (String(input.body || '').length > MAX_REMINDER_TEMPLATE_CHARS) {
+    throw new ServerPersistenceError('MUTATION_FAILED', 'Hatırlatma şablonu en fazla 65536 karakter olabilir.');
+  }
   const body = sanitizeReminderHtml(input.body || DEFAULT_REMINDER_BODY);
 
   const request = executor.request();

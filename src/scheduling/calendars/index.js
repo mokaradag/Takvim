@@ -312,7 +312,7 @@ export function diffWorkingDays(a, b, calendar = DEFAULT_CALENDAR) {
   return difference;
 }
 
-export function countWorkingDays(start, end, calendar = DEFAULT_CALENDAR) {
+export function countWorkingDays(start, end, calendar = DEFAULT_CALENDAR, { maxCount = Infinity } = {}) {
   let first = localDate(start);
   let last = localDate(end);
   if (!isValidDate(first) || !isValidDate(last)) return 0;
@@ -337,6 +337,7 @@ export function countWorkingDays(start, end, calendar = DEFAULT_CALENDAR) {
     if (scanned > MAX_CALENDAR_SPAN_DAYS) break;
     scanned += 1;
     if (isWorkingDay(current, calendar)) count += 1;
+    if (count > maxCount) return count * sign;
     current = addDays(current, 1);
   }
 

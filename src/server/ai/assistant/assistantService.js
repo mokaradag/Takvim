@@ -290,7 +290,7 @@ async function loadEvidenceFor(sicil, signal, { conversationId, messageId = null
   }));
   if (!result.knownSicil) throw unknownSicil();
   noteEvidenceSchema(result.ready);
-  return { ready: result.ready, byMessage: result.byMessage, epochsByMessage: result.epochsByMessage,
+  return { ready: result.ready, presentMessages: result.presentMessages, byMessage: result.byMessage, epochsByMessage: result.epochsByMessage,
     authorizationByMessage: result.authorizationByMessage, clarificationByMessage: result.clarificationByMessage, resultScopeByMessage: result.resultScopeByMessage };
 }
 
@@ -524,6 +524,11 @@ function citedWithoutKnownEvidence(message, evidence) {
   return /【R[1-9]\d?】/.test(String(message.content || ''));
 }
 
+function savedMessageMissing(message, evidence) {
+  if (message.source === 'general' || message.finishReason === 'general') return false;
+  return Boolean(evidence?.presentMessages && !evidence.presentMessages.has(message.id));
+}
+
 const UNVERIFIABLE_SAVED_ANSWER_TEXT = 'Bu kayıtlı yanıt çok sayıda kayda dayandığı için güncel yetkinizle yeniden doğrulanamıyor. Güncel bilgi için soruyu yeniden sorun.';
 
 function discloseSavedMessages(messages, evidence) {
@@ -534,7 +539,8 @@ function discloseSavedMessages(messages, evidence) {
     }
     const saved = evidence?.byMessage?.get(message.id);
     if (saved?.length) return { ...message, evidence: saved };
-    if (evidence?.epochsByMessage?.has(message.id) || citedWithoutKnownEvidence(message, evidence)) {
+    if (savedMessageMissing(message, evidence)
+      || evidence?.epochsByMessage?.has(message.id) || citedWithoutKnownEvidence(message, evidence)) {
       if (evidence?.unavailable || evidence?.ready === false || evidence?.unavailableMessages?.has(message.id)) {
         return { ...message, content: 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', evidence: [], finishReason: 'unavailable' };
       }
@@ -564,7 +570,7 @@ const FALLBACK_GROUNDED_HISTORY_TEXT = '[Önceki Rota verisi yanıtı güncel ka
 function fallbackAssistantHistory(history, evidence) {
   return history.map((message) => {
     if (message.role !== 'assistant') return message;
-    const grounded = evidence?.epochsByMessage?.has(message.id) || citedWithoutKnownEvidence(message, evidence);
+    const grounded = savedMessageMissing(message, evidence) || evidence?.epochsByMessage?.has(message.id) || citedWithoutKnownEvidence(message, evidence);
     if (grounded) return { ...message, content: FALLBACK_GROUNDED_HISTORY_TEXT };
     return message;
   });

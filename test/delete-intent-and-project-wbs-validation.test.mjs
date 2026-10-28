@@ -625,3 +625,30 @@ test('gizli ve olmayan hedef projeler aynı tam yanıtı verir; görünür ve ku
     } finally { await stack.dispose(); }
   }
 });
+
+test('assignment-only creation rejects personnel scope before inspecting directory membership', async () => {
+  const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
+  const stack = await disclosureStack(MANAGER_SICIL);
+  try {
+    const task = { id: MISSING_TASK_ID, projectId: CORPORATE_PROJECT_ID, wbsId: CORPORATE_ROOT_WBS_ID, calendarId: null, task: 'New assignment', status: 'planned', priority: 'medium', milestone: false,
+      plannedStart: null, plannedFinish: null, plannedDurationDays: null, targetFinish: null, actualStart: null, actualFinish: null, remainingDurationDays: null, progress: 0,
+      description: null, keyword: null, plannedHours: null, actualHours: null, budget: null, spent: null, assigneeIds: ['900010'], deps: [] };
+    const existing = await probe({ taskUpserts: [task] }, MISSING_TASK_ID);
+    stack.db.people = stack.db.people.filter((person) => person.Sicil !== 900010);
+    assert.equal(await probe({ taskUpserts: [task] }, MISSING_TASK_ID), existing); assert.match(existing, /^403 .*FORBIDDEN/);
+    task.assigneeIds = [String(SUBORDINATE_SICIL)]; assert.match(await probe({ taskUpserts: [task] }, MISSING_TASK_ID), /^200 /);
+  } finally { await stack.dispose(); }
+});
+
+test('creation collision checks cannot disclose hidden task/WBS IDs to an unauthorized destination writer', async () => {
+  const { CORPORATE_PROJECT_ID } = await import('./helpers/actualStack.mjs');
+  const stack = await disclosureStack(PLAIN_SICIL);
+  try {
+    for (const [collection, id, table, key] of [['taskUpserts', HIDDEN_TASK_ID, 'tasks', 'TaskId'], ['wbsUpserts', HIDDEN_WBS_ID, 'wbs', 'WbsId']]) {
+      const entry = collection === 'taskUpserts' ? { id, projectId: CORPORATE_PROJECT_ID, task: 'new', assigneeIds: [String(PLAIN_SICIL)], deps: [] } : { id, projectId: CORPORATE_PROJECT_ID, parentId: null, code: 'new', name: 'new', sortOrder: 0 };
+      const existing = await probe({ [collection]: [entry] }, id);
+      stack.db[table] = stack.db[table].filter(row => String(row[key]).toLowerCase() !== id);
+      assert.equal(await probe({ [collection]: [entry] }, id), existing); assert.doesNotMatch(existing, /UPSERT_CREATE_COLLISION/); assert.match(existing, /^400 .*MUTATION_FAILED/);
+    }
+  } finally { await stack.dispose(); }
+});

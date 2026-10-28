@@ -974,9 +974,10 @@ function runOutlookQuery(db, sqlText, params) {
     return result([entry ? [outlookOutputRow(entry)] : []]);
   }
 
-  if (sqlText.includes('WHERE UserSicil = @sicil AND IsActive = 1')) {
+  if ((sqlText.includes('WHERE UserSicil = @sicil AND IsActive = 1') || sqlText.includes('WHERE s.UserSicil = @sicil AND s.IsActive = 1'))) {
     return result([rows
-      .filter((entry) => Number(entry.UserSicil) === Number(params.sicil) && entry.IsActive === 1)
+      .filter((entry) => Number(entry.UserSicil) === Number(params.sicil) && entry.IsActive === 1
+        && (!sqlText.includes('WHERE s.UserSicil = @sicil AND s.IsActive = 1') || taskVisibleToSicil(db, taskById(db, entry.TaskId), params.sicil)))
       .map((entry) => ({
         TaskId: entry.TaskId,
         PendingMethod: entry.PendingMethod,
@@ -1275,7 +1276,21 @@ function runQuery(db, statement, params, { database }) {
 
   // ── Kurumsal WBS kaynağı (ikinci veritabanı) ───────────────
   if (sqlText.includes('INTO #TaskActivityScope')) return result(taskActivityRecordsets(db, params));
-  if (params.activityAssignees != null) return result([db.people.filter((person) => params.activityAssignees.split(',').includes(String(person.Sicil)))]);
+  const identityPermitted = (task, project, person) => Boolean(project?.IsActive && (
+    db.systemAdminSicils.includes(Number(params.sicil))
+    || (project.SourceType === 'MANUAL' && Number(project.LeadSicil) === Number(params.sicil))
+    || (project.SourceType === 'CORPORATE' && db.corporateProjectAccess.some((entry) => Number(entry.Sicil) === Number(params.sicil) && String(entry.ProjectCode).toUpperCase() === String(project.ProjectCode || '').toUpperCase()))
+    || db.projectAccess.some((entry) => sameGuid(entry.ProjectId, project.ProjectId) && Number(entry.Sicil) === Number(params.sicil) && entry.IsActive && ['FULL', 'READ'].includes(entry.AccessLevel))
+    || Number(task?.CreatedBySicil) === Number(params.sicil)
+    || Number(person) === Number(params.sicil)
+    || db.executiveScope.some((entry) => Number(entry.ManagerSicil) === Number(params.sicil) && Number(entry.EmployeeSicil) === Number(person))
+  ));
+  if (params.activityIdentityCandidates != null) {
+    return result([JSON.parse(params.activityIdentityCandidates).filter((row) => identityPermitted(
+      taskById(db, row.taskId), projectById(db, row.projectId), row.sicil))
+      .map((row) => ({ TaskId: row.taskId, ProjectId: row.projectId, Sicil: Number(row.sicil),
+        DisplayName: db.people.find((person) => Number(person.Sicil) === Number(row.sicil))?.DisplayName }))]);
+  }
   if (/FROM \[\w+\]\.\[\w+\]/.test(sqlText) && sqlText.includes('WBS element')) {
     return result([corporateWbsSourceRows(db, params)]);
   }

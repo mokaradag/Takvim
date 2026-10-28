@@ -137,7 +137,9 @@ test('elle gönderim sorumluların DC01_userr adreslerine ulaşır', async () =>
 
     assert.equal(result.ok, true);
     assert.equal(result.recipientCount, 2);
-    assert.deepEqual(mailer.sent[0].to, ['ayse.yilmaz@example.internal', 'mehmet.demir@example.internal']);
+    assert.deepEqual(mailer.sent.map((message) => message.to), [['ayse.yilmaz@example.internal'], ['mehmet.demir@example.internal']]);
+    assert.match(mailer.sent[0].text, /Mehmet Demir/);
+    assert.match(mailer.sent[1].text, /Ayşe Yılmaz/);
     assert.match(mailer.sent[0].subject, /Teklif dosyasının hazırlanması/);
     // Kalan süre gönderim anında hesaplanır.
     assert.match(mailer.sent[0].subject, /3 gün kaldı/);
@@ -639,5 +641,68 @@ test('başarısız elle gönderim beş dakikalık aralığı TUTMAZ', async () =
     const retry = await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: mailer.send });
     assert.equal(retry.ok, true);
     assert.equal(mailer.sent.length, 1);
+  });
+});
+
+test('reminder headers isolate addresses and preserve authorized task-scoped names without username fallback', async () => {
+  const seed = reminderSeed({ executiveScope: [{ ManagerSicil: 900001, EmployeeSicil: 900002 }],
+    taskAssignees: [900001, 900002, 900003].map(Sicil => ({ TaskId: TASK_ID, Sicil })),
+    corporateUsers: [{ Name: 'ayilmaz', EmailAddress: 'manager@example.internal' }, { Name: 'mdemir', EmailAddress: 'member@example.internal' }, { Name: 'adressiz', EmailAddress: 'outsider@example.internal' }] });
+  await withReminderStack(seed, async ({ pool, db }) => {
+    const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+    const mailer = recordingMailer();
+    assert.equal((await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: mailer.send })).ok, true);
+    const manager = mailer.sent.find(message => message.to[0] === 'manager@example.internal');
+    assert.match(manager.text, /Ayşe Yılmaz/); assert.match(manager.text, /Mehmet Demir/); assert.match(manager.text, /Adressiz Kişi/);
+    assert.doesNotMatch(manager.text, /900003|adressiz/);
+    for (const message of mailer.sent) assert.equal(message.to.length, 1);
+    assert.match(mailer.sent.find(message => message.to[0] === 'member@example.internal').text, /Ayşe Yılmaz/);
+    db.people.find(person => person.Sicil === 900003).DisplayName = '';
+    db.people.find(person => person.Sicil === 900003).Username = 'secret_username';
+    db.corporateUsers.find(person => person.Name === 'adressiz').Name = 'secret_username';
+    db.projectAccess.push({ ProjectId: PROJECT_ID, Sicil: 900001, AccessLevel: 'FULL', IsActive: 1 });
+    const full = recordingMailer();
+    await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: full.send, minIntervalMs: 0 });
+    assert.doesNotMatch(full.sent.find(message => message.to[0] === 'manager@example.internal').text, /secret_username|900003/);
+  });
+});
+
+test('overlapping manual reminders atomically reserve only one actor/task window', async () => {
+  await withReminderStack(reminderSeed(), async ({ pool, db }) => {
+    const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+    let release; const entered = new Promise(resolve => { release = resolve; });
+    let finish; const held = new Promise(resolve => { finish = resolve; });
+    let sends = 0;
+    const send = async () => { sends += 1; release(); await held; return { ok: true }; };
+    const first = sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send });
+    await entered;
+    try {
+      const second = await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send });
+      assert.equal(second.code, 'MANUAL_REMINDER_RATE_LIMITED'); assert.equal(sends, 1); assert.equal(db.taskReminderLog.length, 1);
+    } finally { finish(); }
+    assert.equal((await first).ok, true);
+  });
+});
+
+test('two requests that both read an empty cooldown cannot both claim delivery', async (t) => {
+  await withReminderStack(reminderSeed(), async ({ pool, db }) => {
+    const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+    const { REMINDER_LAST_MANUAL_SQL } = await import('../src/server/reminders/reminderQueries.js');
+    let arrived = 0, release; const together = new Promise(resolve => { release = resolve; });
+    const request = pool.request.bind(pool);
+    t.mock.method(pool, 'request', () => {
+      const value = request(), query = value.query.bind(value);
+      value.query = async (statement) => {
+        const result = await query(statement);
+        if (statement === REMINDER_LAST_MANUAL_SQL && arrived < 2) { arrived += 1; if (arrived === 2) release(); await together; }
+        return result;
+      };
+      return value;
+    });
+    const mailer = recordingMailer();
+    const outcomes = await Promise.all([1, 2].map(() => sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: mailer.send })));
+    assert.equal(outcomes.filter(result => result.ok).length, 1);
+    assert.equal(outcomes.filter(result => result.code === 'MANUAL_REMINDER_RATE_LIMITED').length, 1);
+    assert.equal(mailer.sent.length, 1); assert.equal(db.taskReminderLog.length, 1);
   });
 });

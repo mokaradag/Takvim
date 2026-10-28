@@ -1,4 +1,5 @@
 import 'server-only';
+import { taskIdentityVisibleSql } from '../authorization/taskIdentityVisibility.js';
 import { PERSISTED_TASK_STATUSES } from '../../domain/constants/index.js';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { ACCESS_REASONS } from '../authorization/authorization.js';
@@ -178,15 +179,33 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
   }
   const result = await request.query(statement);
   const [actorRows = [], projectRows = [], counts = [], events = []] = result.recordsets || [];
-  const people = new Map();
-  const ids = includeChangeText ? auditAssigneeIds(events) : [];
-  if (maxEvidencePeople != null && ids.length > maxEvidencePeople) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
-  if (ids.length) {
+  const peopleByTask = new Map();
+  const candidateByIdentity = new Map();
+  if (includeChangeText) for (const event of events) {
+    const taskId = canonicalActualId(event.EntityId), projectId = canonicalActualId(event.ProjectId);
+    for (const sicil of auditAssigneeIds([event])) {
+      candidateByIdentity.set(`${projectId}:${taskId}:${sicil}`, { taskId, projectId, sicil });
+    }
+  }
+  const candidates = [...candidateByIdentity.values()];
+  if (maxEvidencePeople != null && new Set(candidates.map((row) => row.sicil)).size > maxEvidencePeople) {
+    const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error;
+  }
+  if (candidates.length) {
     const names = executor.request();
-    names.input('activityAssignees', sql.NVarChar(sql.MAX), ids.join(','));
-    const found = await names.query(`SELECT Sicil, DisplayName FROM dbo.MR_V_PeopleDirectory
-      WHERE Sicil IN (SELECT TRY_CONVERT(int, value) FROM STRING_SPLIT(@activityAssignees, ','));`);
-    for (const row of found.recordset || []) people.set(String(row.Sicil), row.DisplayName);
+    names.input('activityIdentityCandidates', sql.NVarChar(sql.MAX), JSON.stringify(candidates));
+    names.input('sicil', sql.Int, actor.sicil);
+    const found = await names.query(`SELECT DISTINCT candidate.TaskId, candidate.ProjectId, candidate.Sicil, pd.DisplayName
+      FROM OPENJSON(@activityIdentityCandidates) WITH (TaskId uniqueidentifier '$.taskId', ProjectId uniqueidentifier '$.projectId', Sicil int '$.sicil') candidate
+      JOIN dbo.MR_Projects p ON p.ProjectId = candidate.ProjectId AND p.IsActive = 1
+      LEFT JOIN dbo.MR_Tasks t ON t.TaskId = candidate.TaskId AND t.ProjectId = candidate.ProjectId
+      LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = candidate.Sicil
+      WHERE ${taskIdentityVisibleSql()};`);
+    for (const row of found.recordset || []) {
+      const key = `${canonicalActualId(row.ProjectId)}:${canonicalActualId(row.TaskId)}`;
+      if (!peopleByTask.has(key)) peopleByTask.set(key, new Map());
+      peopleByTask.get(key).set(String(row.Sicil), row.DisplayName);
+    }
   }
   const groups = new Map();
   for (const event of events) {
@@ -200,7 +219,7 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
     // grubun kesin özeti (oluşturma/silme/tamamlama) ve kısaltma notu verilir.
     const omitted = evidenceSnapshotLimit != null
       && (Number(last.EventCount) > rows.length || rows.some((row) => row.DetailJsonClipped));
-    const computed = taskActivityChanges(rows, people, { includeStructuredChanges });
+    const computed = taskActivityChanges(rows, peopleByTask.get(`${canonicalActualId(last.ProjectId)}:${canonicalActualId(last.EntityId)}`) || new Map(), { includeStructuredChanges, restrictAssignees: true });
     const change = omitted
       ? { ...computed, ...(includeStructuredChanges ? { structuredChanges: [] } : {}), changes: [
         ...(last.Created ? ['Yeni görev oluşturuldu'] : []), ...(last.Deleted ? ['Görev silindi'] : []), ...(last.Completed ? ['Tamamlandı'] : []),

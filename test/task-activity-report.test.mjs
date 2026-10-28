@@ -201,3 +201,16 @@ test('kaydedilen görev denetimi kalıcı değerleri ve atamaları taşır; dar 
     assert.equal(changes.length, 3);
   } finally { await stack.dispose(); }
 });
+
+for (const permission of ['PARTIAL', 'FULL', 'READ']) {
+  test(`historical assignment identities use canonical personnel scope (${permission})`, async () => {
+    const history = event(1, { BeforeJson: JSON.stringify({ assigneeIds: [employee, outsider, 950099] }), AfterJson: JSON.stringify({ assigneeIds: [employee] }) });
+    const stack = await createActualStack(seed({ auditLog: [history], ...(permission !== 'PARTIAL' ? { projectAccess: [{ ProjectId: PROJECT, Sicil: manager, AccessLevel: permission }] } : {}) }), { sicil: manager, corporateWbsSource: false });
+    try {
+      const { value } = await fetchTaskActivities(range);
+      const serialized = JSON.stringify(value.items);
+      if (permission === 'PARTIAL') assert.doesNotMatch(serialized, /Kapsam dışı|950003|950099/);
+      else { assert.match(serialized, /Kapsam dışı/); assert.match(serialized, /Çalışan 950099/, 'authorized unresolved identities retain their fallback'); }
+    } finally { await stack.dispose(); }
+  });
+}

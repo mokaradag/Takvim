@@ -31,12 +31,18 @@ export function calculatePlannedDurationDays(task, { projects = [], calendars = 
   if (Math.round((finish.getTime() - start.getTime()) / MS_PER_DAY) > MAX_CALENDAR_SPAN_DAYS) return null;
 
   const calendar = resolveTaskCalendar(task, projects, calendars);
+  const spanDays = Math.round((finish.getTime() - start.getTime()) / MS_PER_DAY) + 1;
+  if (spanDays > MAX_WORKING_DAY_SPAN) {
+    const weekdays = calendar?.workingDays?.length ? calendar.workingDays : [1, 2, 3, 4, 5];
+    const weeklyCount = new Set(weekdays.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)).size;
+    if (Math.floor(spanDays / 7) * weeklyCount - (calendar?.holidays?.length || 0) > MAX_WORKING_DAY_SPAN) return null;
+  }
   // Kızılötesi durum: başlangıç ve bitiş geçerli ama aralıkta hiç çalışma günü
   // yok (tek günlük hafta sonu/tatil görevi). Ham sayım 0 döndüğünde görev
   // Gantt özetlerinde kilometre taşı gibi çiziliyor ve ilerleme ağırlığı
   // sıfırlanıyordu. Kilometre taşı OLMAYAN, tarihleri geçerli bir görev en az
   // bir gün sürer.
-  const duration = Math.max(1, countWorkingDays(start, finish, calendar));
+  const duration = Math.max(1, countWorkingDays(start, finish, calendar, { maxCount: MAX_WORKING_DAY_SPAN }));
   // Planlama UFKUNU aşan süre de "bilinmiyor" sayılır. Bu değer doğrudan
   // `MR_Tasks.PlannedDurationDays` alanına yazılır ve CPM daha sonra onu
   // zamanlayamaz; sıradan görev yazmalarında sınır `commitScalarValidation`
@@ -48,8 +54,11 @@ export function calculatePlannedDurationDays(task, { projects = [], calendars = 
 }
 
 export function normalizeTaskPlan(task, context = {}) {
+  const prior = context.previousTask;
+  const reusable = prior && context.previousCalendar === resolveTaskCalendar(task, context.projects, context.calendars)
+    && ['plannedStart', 'plannedFinish', 'milestone'].every((field) => prior[field] === task[field]);
   return {
     ...task,
-    plannedDurationDays: calculatePlannedDurationDays(task, context)
+    plannedDurationDays: reusable ? prior.plannedDurationDays : calculatePlannedDurationDays(task, context)
   };
 }
