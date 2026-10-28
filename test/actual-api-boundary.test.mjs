@@ -89,9 +89,14 @@ test('çerezli durum değiştiren uçlar başka kaynaktan ve text/plain JSON ile
 test('aynı kaynaktan gelen tarayıcı isteği ve zamanlayıcı anahtarlı tur niyet denetiminden geçer', async () => {
   const { corporateSeed, createActualStack } = await import('./helpers/actualStack.mjs');
   const previousSecret = process.env.MERGEN_ROTA_REMINDER_CRON_SECRET;
+  const previousSmtpHost = process.env.SMTP_HOST;
+  const previousSmtpFrom = process.env.SMTP_FROM;
   process.env.MERGEN_ROTA_REMINDER_CRON_SECRET = 'zamanlayici-gizli-anahtari';
-  const stack = await createActualStack(corporateSeed());
+  delete process.env.SMTP_HOST;
+  delete process.env.SMTP_FROM;
+  let stack;
   try {
+    stack = await createActualStack(corporateSeed());
     // Kabul, rotanın niyet denetiminden SONRAKİ kendi sonucuyla kanıtlanır: beklenmeyen bir hata 500
     // üretir ve bu tabloyla eşleşmez; aynı FORBIDDEN kodunu taşıyan rota yanıtı niyet iletisinden ayrılır.
     for (const route of MUTATING_ROUTES) {
@@ -111,8 +116,12 @@ test('aynı kaynaktan gelen tarayıcı isteği ve zamanlayıcı anahtarlı tur n
     const wrongKey = await callRoute(run, { 'x-mergen-rota-reminder-key': 'yanlis-anahtar', origin: 'https://zamanlayici.example.internal' });
     assert.deepEqual([wrongKey.status, wrongKey.message], [403, 'İstek aynı kaynaktan gelmelidir.'], 'yanlış anahtar çerez yoluna düşer');
   } finally {
-    await stack.dispose();
     if (previousSecret == null) delete process.env.MERGEN_ROTA_REMINDER_CRON_SECRET;
     else process.env.MERGEN_ROTA_REMINDER_CRON_SECRET = previousSecret;
+    if (previousSmtpHost == null) delete process.env.SMTP_HOST;
+    else process.env.SMTP_HOST = previousSmtpHost;
+    if (previousSmtpFrom == null) delete process.env.SMTP_FROM;
+    else process.env.SMTP_FROM = previousSmtpFrom;
+    await stack?.dispose();
   }
 });

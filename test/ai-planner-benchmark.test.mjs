@@ -2660,7 +2660,7 @@ test('Claude özel ev yürüyüşü: kaybolan alt öğeler geçilir; kök, eriş
     }
     const childProcess = await import('node:child_process');
     const peer = path.join(dir, 'remaining');
-    fs.writeFileSync(child, ''); fs.writeFileSync(peer, '');
+    fs.writeFileSync(child, '', { mode: 0o600 }); fs.writeFileSync(peer, '', { mode: 0o600 });
     let removed = false;
     t.mock.method(childProcess.default, 'spawnSync', (command, args, options) => {
       if (command === '/bin/ls' && args.includes(child) && !removed) { fs.rmSync(child); removed = true; }
@@ -2676,7 +2676,7 @@ test('Claude özel ev yürüyüşü: kaybolan alt öğeler geçilir; kök, eriş
     syncBuiltinESMExports();
     assert.throws(() => assertPrivateTree(dir, process.getuid()), error => error.detail?.reason === 'HOME_ACL_UNVERIFIED');
     t.mock.restoreAll(); syncBuiltinESMExports(); fs.rmSync(peer);
-    fs.writeFileSync(child, '');
+    fs.writeFileSync(child, '', { mode: 0o600 });
     let replaced = false;
     t.mock.method(childProcess.default, 'spawnSync', (command, args, options) => {
       const result = spawnSync(command, args, options);

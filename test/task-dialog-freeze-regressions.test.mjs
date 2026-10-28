@@ -19,6 +19,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   addWorkingDays,
@@ -183,6 +184,27 @@ test('kritik yol sayımı üst sınırda kesilir ve kritik görevler eksilmez', 
   assert.ok(result.criticalPaths.length <= 500, 'yol sayımı üst sınırı aşmamalıdır');
   assert.ok(result.criticalTaskIds.length >= layers, 'kritik görev kümesi eksilmemelidir');
   assert.ok(Date.now() - started < 10000, 'hesap makul sürede bitmelidir');
+});
+
+test('kritik yol iş bütçesi yeni köke geçmeden denetlenir; tam biten liste kesilmiş sayılmaz', () => {
+  const source = readFileSync(new URL('../src/scheduling/cpm/engine.js', import.meta.url), 'utf8');
+  const body = source.slice(source.indexOf('function findCriticalPaths('), source.indexOf('function serializeSchedule('))
+    .replaceAll('steps += 1;', 'countSteps(1); steps += 1;')
+    .replace('steps += path.length;', 'countSteps(path.length); steps += path.length;');
+  let steps = 0;
+  // Aynı gezinti küçük bir bütçeyle çalıştırılır; her ziyaret ve yayımlama sayılır.
+  const enumerate = new Function('MAX_CRITICAL_PATH_STEPS', 'MAX_CRITICAL_PATHS', 'countSteps', `${body}; return findCriticalPaths;`)(2, 500, (count) => {
+    steps += count;
+    assert.ok(steps <= 2, 'ziyaret ve yayımlama sert bütçeyi aşamaz');
+  });
+  const schedules = new Map([['a', { totalFloatDays: 0 }], ['b', { totalFloatDays: 0 }]]);
+  assert.equal(enumerate({ topologicalOrder: ['a'], edges: [] }, schedules, new Map()).truncated, false);
+  assert.equal(steps, 2);
+  steps = 0;
+  const result = enumerate({ topologicalOrder: ['a', 'b'], edges: [] }, schedules, new Map());
+  assert.deepEqual(result.paths, [['a']]);
+  assert.equal(result.truncated, true);
+  assert.equal(steps, 2);
 });
 
 test('uzun ortak kuyruğa bağlanan yüzlerce kritik kök toplam yol bütçesini aşamaz', () => {

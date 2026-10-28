@@ -241,6 +241,7 @@ function findCriticalPaths(graph, schedules, metadata) {
   const path = [];
   const next = [];
   for (const start of starts) {
+    if (steps >= MAX_CRITICAL_PATH_STEPS) return { paths, truncated: true, edges };
     path.push(start);
     next.push(0);
     steps += 1;

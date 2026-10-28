@@ -137,11 +137,14 @@ async function assertTaskTargetsDisclosable(transaction, changes, actor, storedT
   const destinations = new Set([...(changes.taskUpserts || []), ...(changes.wbsUpserts || [])]
     .map((entry) => canonicalActualId(entry.projectId))
     .filter((projectId) => projectId && !upsertedProjectIds.includes(projectId)));
+  const wbsDestinations = new Set((changes.wbsUpserts || []).map((entry) => canonicalActualId(entry.projectId)));
   if (actor.isSystemAdmin) return;
   for (const projectId of [...destinations].sort()) {
     if (actor.effective.access.has(projectId)) continue;
-    const row = await lockedProjectRow(transaction, projectId);
-    if (actor.canAssignAllCorporateProjects && row?.SourceType === 'CORPORATE') continue;
+    if (actor.canAssignAllCorporateProjects && !wbsDestinations.has(projectId)) {
+      const row = await lockedProjectRow(transaction, projectId);
+      if (row?.SourceType === 'CORPORATE') continue;
+    }
     throw new ServerPersistenceError('MUTATION_FAILED', 'Hedef proje bulunamadı veya etkin değil.', {
       details: { projectId }
     });
@@ -185,10 +188,11 @@ export function createOrderedSqlAppRepository() {
           await assertManualProjectCodesAvailable(transaction, orderedChanges);
           const deletedTaskProjects = await assertDeleteIntentMatchesPersistence(transaction, orderedChanges, actor);
           for (const projectId of deletedTaskProjects.values()) assertTaskDeleteAccess(actor, projectId);
+          for (const [taskId, projectId] of deletedTaskProjects) storedTaskProjects.set(taskId, projectId);
           await assertTaskTargetsDisclosable(transaction, orderedChanges, actor, storedTaskProjects, createdProjectIds);
         });
         await observePhase('phase.commit.dependency-reconciliation', async () => {
-          await assertTaskDependencyReconciliationCovered(transaction, orderedChanges, actor);
+          await assertTaskDependencyReconciliationCovered(transaction, orderedChanges, actor, storedTaskProjects);
         });
         return repository.commitChanges(orderedChanges);
       }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE, deadlockRetries: 2 }));

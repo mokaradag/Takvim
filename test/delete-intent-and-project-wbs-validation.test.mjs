@@ -221,13 +221,15 @@ async function oracleProbes() {
     plannedDurationDays: null, targetFinish: null, actualStart: null, actualFinish: null, remainingDurationDays: null,
     progress: 0, sortOrder: null, assigneeIds: [], deps: [], version: STALE_VERSION
   }] }, id);
+  const createProject = (id) => probe({ projectUpserts: [{ ...projectCreate(null).projectUpserts[0], id }] }, id);
   return {
     // Var olmayan, ardılı olan ve ardılı olmayan korunan görev ayırt edilemez.
     taskDeletes: [await del('taskDeletes', MISSING_TASK_ID), await del('taskDeletes', HIDDEN_TASK_ID), await del('taskDeletes', LONE_TASK_ID)],
     taskUpdates: [await update(MISSING_TASK_ID), await update(HIDDEN_TASK_ID)],
     wbsDeletes: [await del('wbsDeletes', MISSING_WBS_ID), await del('wbsDeletes', HIDDEN_WBS_ID)],
     // Kullanılmayan, kurumsal ayrılmış ve başka projede kullanılan kod ayırt edilemez.
-    projectCodes: [await probe(projectCreate('BOS-KOD')), await probe(projectCreate('P4417041')), await probe(projectCreate('GIZLI-KOD'))]
+    projectCodes: [await probe(projectCreate('BOS-KOD')), await probe(projectCreate('P4417041')), await probe(projectCreate('GIZLI-KOD'))],
+    projectCreates: [await createProject(PROJECT_ID), await createProject(MANUAL_PROJECT_ID)]
   };
 }
 
@@ -249,6 +251,7 @@ test('kimliksiz ve yetkisiz çağıran korunan kayıt, kod ve ardıl varlığın
     assert.match(authenticated.taskUpdates[0], /^409 .*UPSERT_TARGET_MISSING/);
     assert.match(authenticated.wbsDeletes[0], /^409 .*DELETE_TARGET_MISSING/);
     assert.match(authenticated.projectCodes[0], /^403 /);
+    assert.match(authenticated.projectCreates[0], /^403 /);
 
     setCurrentUserProvider({ getCurrentSicil: async () => { throw new ServerPersistenceError('SESSION_REQUIRED', 'Oturum bulunamadı.'); } });
     const anonymous = await oracleProbes();
@@ -257,6 +260,29 @@ test('kimliksiz ve yetkisiz çağıran korunan kayıt, kod ve ardıl varlığın
   } finally {
     setCurrentUserProvider(null);
     await plain.dispose();
+  }
+});
+
+test('yönetici görev atama istisnasıyla gizli WBS hedef projesinin varlığını öğrenemez', async () => {
+  const manager = await disclosureStack(MANAGER_SICIL);
+  try {
+    const { CORPORATE_PROJECT_ID } = await import('./helpers/actualStack.mjs');
+    manager.db.tasks.length = 0;
+    manager.db.taskAssignees.length = 0;
+    manager.db.taskDependencies.length = 0;
+    assert.equal((await manager.repository.loadSessionContext()).projectAccess.length, 0);
+    for (const includeTask of [false, true]) {
+      const attempt = (projectId) => probe({
+        wbsUpserts: [{ id: WBS_ID, projectId, parentId: null, name: 'Yoklama', code: '1' }],
+        ...(includeTask ? { taskUpserts: [{ id: MISSING_TASK_ID, projectId, task: 'Yoklama', status: 'planned', priority: 'medium', assigneeIds: [String(SUBORDINATE_SICIL)] }] } : {})
+      }, projectId);
+      const hidden = await attempt(CORPORATE_PROJECT_ID.toLowerCase());
+      assert.equal(hidden, await attempt(PROJECT_ID), 'gizli ve eksik proje aynı yanıtı alır; karma görev/WBS isteği istisna sağlamaz');
+      assert.match(hidden, /^400 .*MUTATION_FAILED/);
+    }
+    assert.equal(manager.db.wbs.some((row) => row.WbsId === WBS_ID), false);
+  } finally {
+    await manager.dispose();
   }
 });
 
@@ -349,6 +375,13 @@ test('yönetim kapsamıyla görünen WBS atası niyet denetiminde var sayılır;
     assert.match(hidden, /^409 .*DELETE_TARGET_MISSING/);
     const update = id => probe({ wbsUpserts: [{ id, projectId: CORPORATE_PROJECT_ID, parentId: CORPORATE_ROOT_WBS_ID, name: 'Düğüm', code: 'X', version: STALE_VERSION }] }, id);
     assert.equal(await update(HIDDEN_WBS_ID), await update(MISSING_WBS_ID));
+    manager.db.executiveScope.forEach((row) => { row.ManagerSicil = String(row.ManagerSicil); row.EmployeeSicil = String(row.EmployeeSicil); });
+    manager.db.taskAssignees.forEach((row) => { row.Sicil = String(row.Sicil); });
+    const request = new manager.driver.ConnectionPool({}).request();
+    request.input('sicil', null, MANAGER_SICIL);
+    request.input('projectId', null, CORPORATE_PROJECT_ID);
+    request.input('wbsId', null, root.id);
+    assert.equal((await request.query(';WITH ScopedWbsChain AS')).recordset.length, 1, 'SQL Int eşitliği metin Sicil fixture değerlerinde de WBS atasını korur');
   } finally {
     await manager.dispose();
   }
@@ -420,6 +453,7 @@ test('görevi görebilen ama silemeyen aktör gizli ardıl ilişkisini öğrenem
   try {
     const snapshot = await lead.repository.loadSnapshot();
     const predecessor = snapshot.tasks.find((task) => String(task.id).toLowerCase().includes(HIDDEN_TASK_ID.slice(-12)));
+    const statementStart = lead.db.statements.length;
     const response = await fetch('http://localhost/api/mergen-rota/commit', {
       method: 'POST', body: JSON.stringify({ changes: { taskDeletes: [{ id: HIDDEN_TASK_ID, version: predecessor.version }] } })
     });
@@ -427,6 +461,8 @@ test('görevi görebilen ama silemeyen aktör gizli ardıl ilişkisini öğrenem
     assert.equal(response.status, 400);
     assert.equal(body.error.details.code, 'TASK_DEPENDENCY_RECONCILIATION_REQUIRED');
     assert.deepEqual(body.error.details.taskIds, [SUCCESSOR_TASK_ID], 'FULL yetkili ardılları zaten görür');
+    assert.equal(lead.db.statements.slice(statementStart).filter(({ sql }) => sql.includes('SELECT TOP (1) ProjectId') && sql.includes('FROM dbo.MR_Tasks WITH (UPDLOCK, HOLDLOCK)')).length,
+      1, 'uzlaştırma niyet denetimindeki kilitli proje sonucunu yeniden sorgulamadan kullanır');
     // Görünürlük süzgeci aktörsüz çağrıda her öncülü düşürürdü; denetim sessizce atlanmaz, çağrı reddedilir.
     const { assertTaskDependencyReconciliationCovered } = await import('../src/server/repository/dependencyReconciliationValidation.js');
     const executor = { request: () => ({ input() {}, query: async () => ({ recordset: [] }) }) };

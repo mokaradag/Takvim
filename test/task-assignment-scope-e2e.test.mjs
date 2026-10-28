@@ -238,7 +238,7 @@ test('atama kapsamı proje üst verisi ya da iş dağılım ağacı yazmasına a
     }));
     assert.equal(stack.db.projects[0].ProjectName, 'İHA Hava Savunma Sistemi ELDD Projesi');
 
-    // İş dağılım ağacına düğüm eklemek de reddedilir.
+    // Görünmeyen proje WBS hedefi, var olmayan projeyle aynı yanıtla reddedilir.
     await assert.rejects(
       stack.repository.commitChanges({
         wbsUpserts: [{
@@ -251,7 +251,8 @@ test('atama kapsamı proje üst verisi ya da iş dağılım ağacı yazmasına a
         }]
       }),
       (error) => {
-        assert.equal(error.code, 'FORBIDDEN');
+        assert.equal(error.code, 'MUTATION_FAILED');
+        assert.equal(error.message, 'Hedef proje bulunamadı veya etkin değil.');
         return true;
       }
     );

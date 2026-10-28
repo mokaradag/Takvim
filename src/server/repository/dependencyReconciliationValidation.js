@@ -14,19 +14,6 @@ function deleteId(value) {
   return id(typeof value === 'string' ? value : value?.id);
 }
 
-async function loadStoredProjectId(executor, taskId) {
-  const request = executor.request();
-  request.input('taskId', sql.UniqueIdentifier, taskId);
-  const result = await request.query(`
-    SELECT TOP (1) ProjectId
-    FROM dbo.MR_Tasks WITH (UPDLOCK, HOLDLOCK)
-    WHERE TaskId = @taskId;
-  `);
-  return result.recordset?.[0]?.ProjectId == null
-    ? null
-    : id(result.recordset[0].ProjectId);
-}
-
 async function loadIncomingTaskIds(executor, predecessorId) {
   const request = executor.request();
   request.input('predecessorId', sql.UniqueIdentifier, predecessorId);
@@ -53,21 +40,18 @@ function seesDependencies(actor, projectId) {
  * zaten görebilen aktöre döner. Silme ve taşıma kaynak projede FULL yetki
  * ister; kısmi görüntüde gizli ilişkiler için uzlaştırma istenmez.
  */
-export async function assertTaskDependencyReconciliationCovered(executor, changes, actor) {
+export async function assertTaskDependencyReconciliationCovered(executor, changes, actor, storedProjects) {
   // Aktörsüz çağrı denetimi sessizce atlamaz: görünürlük süzgeci aktör olmadan her öncülü düşürürdü.
   if (!actor) throw new TypeError('Dependency reconciliation requires the authorized actor.');
   const taskUpserts = [...(changes.taskUpserts || [])]
     .sort((left, right) => String(left.id).localeCompare(String(right.id)));
   const taskDeleteIds = (changes.taskDeletes || []).map(deleteId).filter(Boolean);
   const invalidatedPredecessorIds = new Set(taskDeleteIds);
-  const storedProjects = new Map();
-  for (const taskId of taskDeleteIds) storedProjects.set(taskId, await loadStoredProjectId(executor, taskId));
 
   for (const task of taskUpserts) {
     const taskId = id(task.id);
     const nextProjectId = id(task.projectId);
-    const storedProjectId = await loadStoredProjectId(executor, taskId);
-    storedProjects.set(taskId, storedProjectId);
+    const storedProjectId = storedProjects.get(taskId);
     if (storedProjectId && storedProjectId !== nextProjectId) {
       invalidatedPredecessorIds.add(taskId);
     }

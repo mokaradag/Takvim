@@ -2044,7 +2044,7 @@ function runQuery(db, statement, params, { database }) {
     const sicil = Number(params.sicil);
     const chain = new Set();
     for (const task of db.tasks.filter((row) => sameGuid(row.ProjectId, params.projectId) && db.taskAssignees.some((entry) => sameGuid(entry.TaskId, row.TaskId)
-      && db.executiveScope.some((scope) => scope.ManagerSicil === sicil && scope.EmployeeSicil === entry.Sicil)))) {
+      && db.executiveScope.some((scope) => Number(scope.ManagerSicil) === sicil && Number(scope.EmployeeSicil) === Number(entry.Sicil))))) {
       let node = db.wbs.find((row) => sameGuid(row.WbsId, task.WbsId) && sameGuid(row.ProjectId, params.projectId));
       while (node && !chain.has(guid(node.WbsId))) {
         chain.add(guid(node.WbsId));

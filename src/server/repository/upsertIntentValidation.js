@@ -1,6 +1,6 @@
 import 'server-only';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
-import { ACCESS_REASONS } from '../authorization/authorization.js';
+import { ACCESS_REASONS, assertCanCreateManualProject } from '../authorization/authorization.js';
 import { sql } from '../db/pool.js';
 import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { ServerPersistenceError } from '../errors.js';
@@ -126,9 +126,8 @@ async function observableTo(executor, actor, entityType, id, projectId) {
 
 /**
  * Upsert niyetini kalıcı durumla karşılaştırır ve kalıcı görev hedeflerinin
- * projelerini döndürür. Oluşturma niyeti var olan kimlikle çakışmayı yine
- * bildirir: istemci kimlikleri tahmin edilemeyen UUID'lerdir ve yanıt yalnızca
- * çağıranın kendi gönderdiği kimliği taşır.
+ * projelerini döndürür. Proje oluşturma yetkisi, kimlik çakışması okunmadan
+ * denetlenir; oluşturamayan aktör gizli projeyi var olmayandan ayıramaz.
  */
 export async function assertUpsertIntentMatchesPersistence(executor, changes = {}, actor = null) {
   const storedTaskProjects = new Map();
@@ -138,9 +137,10 @@ export async function assertUpsertIntentMatchesPersistence(executor, changes = {
 
     for (const entry of entries) {
       const id = String(entry.id);
+      const updateIntent = entry.version != null && String(entry.version).trim() !== '';
+      if (target.entityType === 'PROJECT' && !updateIntent) assertCanCreateManualProject(actor);
       const projectId = await targetProjectForUpdate(executor, target, id);
       if (projectId && target.entityType === 'TASK') storedTaskProjects.set(id, projectId);
-      const updateIntent = entry.version != null && String(entry.version).trim() !== '';
       const issue = findUpsertIntentIssue({
         exists: Boolean(projectId) && (!updateIntent || await observableTo(executor, actor, target.entityType, id, projectId)),
         version: entry.version,
