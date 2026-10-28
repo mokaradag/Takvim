@@ -91,6 +91,7 @@ async function assertActiveProjectMutationTargets(executor, changes) {
 
   for (const project of changes.projectUpserts) {
     const projectId = uuid(project.id, 'Proje kimliği');
+    if (!hasVersion(project.version)) { newProjectIds.add(projectId); continue; }
     const row = await loadProject(projectId);
     if (!row) {
       newProjectIds.add(projectId);
@@ -187,12 +188,13 @@ async function assertSingleRootWbs(executor, changes) {
   const newProjectIds = new Set();
   for (const project of changes.projectUpserts) {
     const projectId = uuid(project.id, 'Proje kimliği');
+    if (!hasVersion(project.version)) { newProjectIds.add(projectId); continue; }
     const existing = await rowForUpdate(executor, 'MR_Projects', 'ProjectId', projectId, 'Proje kimliği');
     if (!existing) newProjectIds.add(projectId);
   }
 
   for (const projectId of [...affectedProjectIds].sort()) {
-    const rows = await loadWbsRowsForUpdate(executor, projectId);
+    const rows = newProjectIds.has(projectId) ? [] : await loadWbsRowsForUpdate(executor, projectId);
     const existingRoots = rows.filter((row) => row.ParentWbsId == null).map((row) => rowId(row.WbsId));
     if (existingRoots.length > 1) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Projede birden fazla kök WBS düğümü bulundu.');
@@ -412,8 +414,9 @@ async function assertAcyclicTaskDependencies(executor, changes) {
   for (const task of dependencyUpserts) affectedProjectIds.add(uuid(task.projectId, 'Proje kimliği'));
 
   const projectEdges = new Map();
+  const newProjectIds = new Set(changes.projectUpserts.filter((project) => !hasVersion(project.version)).map((project) => uuid(project.id, 'Proje kimliği')));
   for (const projectId of [...affectedProjectIds].sort()) {
-    projectEdges.set(projectId, await loadProjectDependencyEdgesForUpdate(executor, projectId));
+    projectEdges.set(projectId, newProjectIds.has(projectId) ? [] : await loadProjectDependencyEdgesForUpdate(executor, projectId));
   }
 
   for (const task of dependencyUpserts) {

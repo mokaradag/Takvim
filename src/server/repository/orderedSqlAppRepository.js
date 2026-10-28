@@ -38,21 +38,22 @@ async function lockedProjectRow(transaction, projectId) {
 /**
  * Proje upsert'lerinin yetkisi, kalıcı duruma bağlı sonraki denetimlerden
  * (kod uygunluğu, bağımlılık planı) ÖNCE ve temel deponun kuralıyla kurulur:
- * var olan projeye FULL yazma, kaydı olmayan projeye manuel proje oluşturma
- * yetkisi. Eskiden yetki yalnızca kodlu projede denetleniyordu; kodsuz sahte
+ * sürümlü güncellemeye FULL yazma, oluşturma niyetine manuel proje oluşturma
+ * yetkisi. Oluşturma kimliğinin çakışması tam doğrulamadan sonra denetlenir.
+ * Eskiden yetki yalnızca kodlu projede denetleniyordu; kodsuz sahte
  * proje bağımlılık muafiyetini alıyor ve proje oluşturamayan aktör gizli öncül
  * kimliklerini plan hatalarından yoklayabiliyordu.
  *
- * @returns {Set<string>} oluşturma yetkisi kanıtlanmış, kaydı olmayan projeler
+ * @returns {Set<string>} oluşturma yetkisi kanıtlanmış önerilen projeler
  */
 async function assertProjectUpsertsAuthorized(transaction, changes, actor) {
   const createdProjectIds = new Set();
   for (const project of changes.projectUpserts || []) {
-    if (await lockedProjectRow(transaction, project.id)) {
-      assertProjectWriteAccess(actor.effective, project.id);
-    } else {
+    if (!hasVersion(project)) {
       assertCanCreateManualProject(actor);
       createdProjectIds.add(canonicalActualId(project.id));
+    } else {
+      assertProjectWriteAccess(actor.effective, project.id);
     }
   }
   return createdProjectIds;
@@ -73,10 +74,11 @@ async function assertManualProjectCodesAvailable(transaction, changes) {
     const request = transaction.request();
     request.input('projectId', sql.UniqueIdentifier, project.id);
     request.input('projectCode', sql.NVarChar(255), projectCode);
+    request.input('isCreate', sql.Bit, !hasVersion(project));
     const result = await request.query(`
       SELECT TOP (1) SourceType
       FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK)
-      WHERE ProjectId = @projectId;
+      WHERE @isCreate = 0 AND ProjectId = @projectId;
 
       SELECT TOP (1) ProjectCode
       FROM dbo.MR_V_CorporateProjects
@@ -84,7 +86,7 @@ async function assertManualProjectCodesAvailable(transaction, changes) {
 
       SELECT TOP (1) ProjectId
       FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK)
-      WHERE ProjectId <> @projectId AND UPPER(ProjectCode) = @projectCode;
+      WHERE (@isCreate = 1 OR ProjectId <> @projectId) AND UPPER(ProjectCode) = @projectCode;
     `);
 
     const storedSourceType = result.recordsets?.[0]?.[0]?.SourceType || null;
@@ -189,7 +191,7 @@ export function createOrderedSqlAppRepository() {
           if ((orderedChanges.projectDeletes || []).length && !actor.isSystemAdmin) {
             throw new ServerPersistenceError('FORBIDDEN', 'Projeyi yalnızca sistem yöneticisi silebilir.');
           }
-          await assertUpsertIntentMatchesPersistence(transaction, { projectUpserts: orderedChanges.projectUpserts }, actor);
+          await assertUpsertIntentMatchesPersistence(transaction, { projectUpserts: orderedChanges.projectUpserts }, actor, { deferCreateCollisions: true });
           const createdProjectIds = await assertProjectUpsertsAuthorized(transaction, orderedChanges, actor);
           await assertManualProjectCodesAvailable(transaction, orderedChanges);
           const creating = { ...orderedChanges,

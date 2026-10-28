@@ -215,15 +215,15 @@ for (const permission of ['PARTIAL', 'FULL', 'READ']) {
   });
 }
 
-for (const scenario of ['inactive-admin', 'deleted-creator', 'direct-assignee']) {
+for (const scenario of ['inactive-admin', 'deleted-creator', 'direct-assignee', 'deleted-assignee']) {
   test(`historical display-name policy preserves ${scenario} without granting stable IDs`, async () => {
     const history = event(1, { BeforeJson: JSON.stringify({ assigneeIds: [employee, outsider, 950099] }), AfterJson: JSON.stringify({ assigneeIds: [employee] }) });
     const data = seed({ executiveScope: [], auditLog: [history] });
     let sicil = employee;
     if (scenario === 'inactive-admin') { sicil = manager; data.systemAdminSicils = [manager]; data.projects[0].IsActive = 0; }
-    if (scenario === 'deleted-creator') {
+    if (scenario === 'deleted-creator' || scenario === 'deleted-assignee') {
       data.tasks = []; data.taskAssignees = [];
-      data.auditLog.push(event(2, { ActionCode: 'DELETE', BeforeJson: JSON.stringify({ CreatedBySicil: employee, assigneeIds: [employee] }), AfterJson: null }));
+      data.auditLog.push(event(2, { ActionCode: 'DELETE', BeforeJson: JSON.stringify({ CreatedBySicil: scenario === 'deleted-creator' ? employee : outsider, assigneeIds: [employee, outsider] }), AfterJson: null }));
     }
     const stack = await createActualStack(data, { sicil, corporateWbsSource: false });
     try {
@@ -240,8 +240,18 @@ for (const scenario of ['inactive-admin', 'deleted-creator', 'direct-assignee'])
         const pool = await getSqlPool();
         const request = pool.request(); request.input('taskId', TASK); request.input('sicil', employee);
         const { taskIdentityVisibleSql } = await import('../src/server/authorization/taskIdentityVisibility.js');
-        const ids = await request.query(`SELECT ta.Sicil FROM dbo.MR_TaskAssignees ta JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1 WHERE ta.TaskId = @taskId AND (${taskIdentityVisibleSql('ta.Sicil')});`);
+        const statement = `SELECT ta.Sicil FROM dbo.MR_TaskAssignees ta JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1 WHERE ta.TaskId = @taskId AND (${taskIdentityVisibleSql('ta.Sicil')});`;
+        const ids = await request.query(statement);
+        const generated = stack.db.statements.at(-1).sql;
+        assert.equal(generated, statement);
+        assert.match(generated, /OR ta\.Sicil = @sicil/);
+        assert.match(generated, /es\.ManagerSicil = @sicil AND es\.EmployeeSicil = ta\.Sicil/);
+        assert.doesNotMatch(generated, /own\.TaskId|OPENJSON|deleted\.BeforeJson/, 'display-only allowances never enter the stable-ID/write predicate');
         assert.deepEqual(ids.recordset.map((row) => row.Sicil), [employee]);
+      }
+      if (scenario === 'deleted-assignee') {
+        stack.db.auditLog.at(-1).BeforeJson = JSON.stringify({ CreatedBySicil: outsider, assigneeIds: [outsider] });
+        assert.equal((await fetchTaskActivities({ ...range, scope: 'visible' })).value.items.length, 0, 'historical name permission cannot grant report-row visibility');
       }
     } finally { await stack.dispose(); }
   });

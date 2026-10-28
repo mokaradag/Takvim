@@ -48,7 +48,9 @@ test('manual project code collisions are normalized, locked and rejected before 
   assert.match(source, /const pendingProjectCodes = new Map\(\)/);
   assert.match(source, /pendingProjectCodes\.get\(projectCode\)/);
   assert.match(source, /FROM dbo\.MR_Projects WITH \(UPDLOCK, HOLDLOCK\)/);
-  assert.match(source, /WHERE ProjectId <> @projectId AND UPPER\(ProjectCode\) = @projectCode/);
+  assert.match(source, /request\.input\('isCreate', sql\.Bit, !hasVersion\(project\)\)/);
+  assert.match(source, /WHERE @isCreate = 0 AND ProjectId = @projectId/);
+  assert.match(source, /WHERE \(@isCreate = 1 OR ProjectId <> @projectId\) AND UPPER\(ProjectCode\) = @projectCode/);
   assert.match(source, /PROJECT_CODE_RESERVED/);
   assert.match(source, /PROJECT_CODE_CONFLICT/);
   assert.match(source, /new ServerPersistenceError\('CONFLICT'/);

@@ -1293,10 +1293,11 @@ function runQuery(db, statement, params, { database }) {
         && sameGuid(entry.EntityId, row.taskId) && sameGuid(entry.ProjectId, row.projectId))
         .sort((a, b) => new Date(b.OccurredAt) - new Date(a.OccurredAt) || b.AuditId - a.AuditId)[0];
       const creator = deletion && Number(JSON.parse(deletion.BeforeJson)?.CreatedBySicil) === Number(params.sicil);
+      const deletedOwn = deletion && (JSON.parse(deletion.BeforeJson)?.assigneeIds || []).map(Number).includes(Number(params.sicil));
       const admin = db.systemAdminSicils.includes(Number(params.sicil));
       const stable = admin || identityPermitted(task, project, row.sicil);
       const own = task && db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId) && Number(entry.Sicil) === Number(params.sicil));
-      if (!admin && !(project?.IsActive && (stable || creator || own))) return [];
+      if (!admin && !(project?.IsActive && (stable || creator || own || deletedOwn))) return [];
       return [{ TaskId: row.taskId, ProjectId: row.projectId, Sicil: Number(row.sicil), StableIdentityVisible: stable ? 1 : 0,
         DisplayName: db.people.find((person) => Number(person.Sicil) === Number(row.sicil))?.DisplayName }];
     });
@@ -2017,13 +2018,13 @@ function runQuery(db, statement, params, { database }) {
     return result([reserved ? [{ ProjectCode: code }] : []]);
   }
   if (sqlText.includes('SELECT TOP (1) SourceType')) {
-    const project = projectById(db, params.projectId);
+    const project = params.isCreate ? null : projectById(db, params.projectId);
     const code = String(params.projectCode || '').toUpperCase();
     return result([
       project ? [{ SourceType: project.SourceType }] : [],
       db.corporateProjects.some((entry) => String(entry.ProjectCode).toUpperCase() === code) ? [{ ProjectCode: code }] : [],
       db.projects
-        .filter((entry) => !sameGuid(entry.ProjectId, params.projectId)
+        .filter((entry) => (params.isCreate || !sameGuid(entry.ProjectId, params.projectId))
           && String(entry.ProjectCode || '').toUpperCase() === code)
         .map((entry) => ({ ProjectId: entry.ProjectId }))
     ]);

@@ -709,3 +709,61 @@ test('otherwise authorized creation retains the narrow F-024 collision residual 
     assert.match(await probe({ taskUpserts: [{ ...task, id: MISSING_TASK_ID }] }, MISSING_TASK_ID), /^200 /);
   } finally { await stack.dispose(); }
 });
+
+test('rejected project creates validate codes independently of hidden candidate IDs and source types', async () => {
+  const { CORPORATE_PROJECT_ID } = await import('./helpers/actualStack.mjs');
+  const stack = await disclosureStack(MANAGER_SICIL);
+  try {
+    stack.db.taskAssignees = [];
+    const before = JSON.stringify([stack.db.projects, stack.db.wbs]);
+    const attempt = async (candidate, code) => {
+      const changes = projectCreate(code);
+      changes.projectUpserts[0].id = candidate;
+      changes.wbsUpserts[0].projectId = candidate;
+      const start = stack.db.statements.length;
+      const value = await probe(changes, candidate);
+      assert.equal(stack.db.statements.slice(start).some((statement) => /FROM dbo\.MR_Projects WITH \(UPDLOCK, HOLDLOCK\)\s+WHERE ProjectId = @entityId/.test(statement.sql)), false,
+        'rejected create never performs the candidate collision lookup');
+      return value;
+    };
+    for (const [code, expected] of [['P4417041', 'PROJECT_CODE_RESERVED'], ['GIZLI-KOD', 'PROJECT_CODE_CONFLICT']]) {
+      const missing = await attempt(MISSING_TASK_ID, code);
+      for (const candidate of [MANUAL_PROJECT_ID, CORPORATE_PROJECT_ID]) assert.equal(await attempt(candidate, code), missing);
+      assert.match(missing, new RegExp(`^409 .*${expected}`));
+    }
+    assert.equal(JSON.stringify([stack.db.projects, stack.db.wbs]), before);
+  } finally { await stack.dispose(); }
+});
+
+test('project-create intent stays independent of candidate rows until calendar and root validation finish', async () => {
+  const stack = await disclosureStack(MANAGER_SICIL);
+  try {
+    const attempt = async (candidate, invalid) => {
+      const changes = projectCreate('AVAILABLE-CODE'); changes.projectUpserts[0].id = candidate; changes.wbsUpserts[0].projectId = candidate;
+      if (invalid === 'calendar') changes.projectUpserts[0].calendarId = MISSING_WBS_ID;
+      else changes.wbsUpserts.push({ ...changes.wbsUpserts[0], id: MISSING_WBS_ID });
+      return probe(changes, candidate);
+    };
+    for (const invalid of ['calendar', 'roots']) {
+      const existing = await attempt(MANUAL_PROJECT_ID, invalid), missing = await attempt(MISSING_TASK_ID, invalid);
+      assert.equal(existing, missing); assert.match(existing, /^400 .*MUTATION_FAILED/);
+    }
+  } finally { await stack.dispose(); }
+});
+
+test('valid project creation keeps collision safety for both the proposed project and its consumed root', async () => {
+  const stack = await disclosureStack(MANAGER_SICIL);
+  try {
+    const before = JSON.stringify([stack.db.projects, stack.db.wbs]);
+    const changes = projectCreate('AVAILABLE-CODE');
+    changes.projectUpserts[0].id = MANUAL_PROJECT_ID; changes.wbsUpserts[0].projectId = MANUAL_PROJECT_ID;
+    assert.match(await probe(changes, MANUAL_PROJECT_ID), /^409 .*UPSERT_CREATE_COLLISION/);
+    assert.equal(JSON.stringify([stack.db.projects, stack.db.wbs]), before);
+    changes.projectUpserts[0].id = MISSING_TASK_ID; changes.wbsUpserts[0].projectId = MISSING_TASK_ID;
+    changes.wbsUpserts[0].id = MANUAL_ROOT_WBS_ID;
+    assert.match(await probe(changes, MANUAL_ROOT_WBS_ID), /^409 .*UPSERT_CREATE_COLLISION/);
+    assert.equal(JSON.stringify([stack.db.projects, stack.db.wbs]), before);
+    changes.wbsUpserts[0].id = MISSING_WBS_ID;
+    assert.match(await probe(changes, MISSING_TASK_ID), /^200 /);
+  } finally { await stack.dispose(); }
+});

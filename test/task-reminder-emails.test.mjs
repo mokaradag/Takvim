@@ -18,6 +18,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
 
@@ -563,6 +564,14 @@ test('SMTP akışı Python karşılığıyla aynı sırayı izler', () => {
 test('malformed attribute names are scanned once and template size is bounded before parsing', async () => {
   const { sanitizeReminderHtml, MAX_REMINDER_TEMPLATE_CHARS } = await import('../src/domain/reminders/reminderTemplate.js');
   assert.equal(sanitizeReminderHtml(`<a ${'a'.repeat(40000)}>safe</a>`), '<a>safe</a>');
+  const moduleUrl = new URL('../src/domain/reminders/reminderTemplate.js', import.meta.url).href;
+  const bounded = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { sanitizeReminderHtml } from ${JSON.stringify(moduleUrl)};
+    for (let count = 0; count < 12; count += 1) assert.equal(sanitizeReminderHtml('<a ' + 'a'.repeat(40000) + '>safe</a>'), '<a>safe</a>');
+  `], { encoding: 'utf8', timeout: 3000 });
+  assert.equal(bounded.error, undefined, 'malformed attributes must complete within a bounded worker deadline');
+  assert.equal(bounded.status, 0, bounded.stderr);
   assert.equal(sanitizeReminderHtml('a'.repeat(MAX_REMINDER_TEMPLATE_CHARS + 1)), null);
   assert.equal(sanitizeReminderHtml('<a href="https://example.internal" onclick="bad()" title="a > b">safe</a>'), '<a href="https://example.internal" title="a &gt; b">safe</a>');
 });

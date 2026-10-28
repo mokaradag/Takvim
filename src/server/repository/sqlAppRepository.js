@@ -1371,7 +1371,7 @@ async function propagateProjectTagChanges(executor, actorSicil, projectId, plan 
 async function commitProject(executor, actor, project, rootWbs, correlationId) {
   const projectId = uuid(project.id);
   const projectCode = project.code == null ? null : (String(project.code).trim().toUpperCase() || null);
-  const before = await projectRow(executor, projectId);
+  const before = hasVersion(project.version) ? await projectRow(executor, projectId) : null;
   if (!before) {
     if ((project.source || project.sourceType || 'manual').toUpperCase() !== 'MANUAL') {
       throw new ServerPersistenceError('FORBIDDEN', 'Kurumsal projeler istemci tarafından oluşturulamaz.');
@@ -1400,6 +1400,9 @@ async function commitProject(executor, actor, project, rootWbs, correlationId) {
     req.input('rootName', sql.NVarChar(1000), authoritativeRoot.name);
     req.input('rootSort', sql.Int, authoritativeRoot.sortOrder);
     req.input('actorSicil', sql.Int, actor.sicil);
+    await assertUpsertIntentMatchesPersistence(executor, {
+      projectUpserts: [project], wbsUpserts: [authoritativeRoot]
+    }, actor, { createdProjectIds: new Set([projectId]) });
     await req.query(`
       INSERT dbo.MR_Projects(
         ProjectId, SourceType, ProjectCode, ProjectName, LeadSicil, DataDate,

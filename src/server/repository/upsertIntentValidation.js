@@ -151,8 +151,8 @@ export async function assertUpsertIntentMatchesPersistence(executor, changes = {
         }
         // Canonical persistence validation must finish before testing a proposed
         // ID. Otherwise any later rejection becomes a hidden-ID collision oracle.
-        if (deferCreateCollisions) continue;
       }
+      if (!updateIntent && deferCreateCollisions) continue;
       const projectId = await targetProjectForUpdate(executor, target, id);
       if (projectId && target.entityType === 'TASK') storedTaskProjects.set(id, projectId);
       const issue = findUpsertIntentIssue({

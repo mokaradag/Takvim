@@ -764,6 +764,7 @@ test('two requests that both read an empty cooldown cannot both claim delivery',
     });
     const mailer = recordingMailer();
     const outcomes = await Promise.all([1, 2].map(() => sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: mailer.send })));
+    assert.equal(arrived, 2, 'both preliminary reads must reach the overlap barrier');
     assert.equal(outcomes.filter(result => result.ok).length, 1);
     assert.equal(outcomes.filter(result => result.code === 'MANUAL_REMINDER_RATE_LIMITED').length, 1);
     assert.equal(mailer.sent.length, 1); assert.equal(db.taskReminderLog.length, 1);

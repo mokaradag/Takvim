@@ -209,6 +209,7 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
       WHERE EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1)
         OR (p.IsActive = 1 AND (${identityVisible}
           OR TRY_CONVERT(int, JSON_VALUE(deleted.BeforeJson, '$.CreatedBySicil')) = @sicil
+          OR EXISTS (SELECT 1 FROM OPENJSON(deleted.BeforeJson, '$.assigneeIds') member WHERE TRY_CONVERT(int, member.value) = @sicil)
           OR EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil)));`);
     const visiblePeople = (found.recordset || []).filter((row) => row.StableIdentityVisible || String(row.DisplayName || '').trim());
     if (maxEvidencePeople != null && new Set(visiblePeople.map((row) => row.Sicil)).size > maxEvidencePeople) {
