@@ -78,3 +78,10 @@ test('malformed snapshot task collections keep the existing empty-array fallback
     assert.deepEqual(refreshed.tasks, [], 'fallback follows incoming membership and never retains revoked prior tasks');
   }
 });
+
+test('bounded weekly duration ignores null and malformed holiday entries', () => {
+  const calendar = { id: 'malformed', workingDays: [1, 2, 3, 4, 5],
+    holidays: [null, undefined, {}, false, { date: 'bad' }, { date: '2026-08-18' }] };
+  assert.equal(meterCalendarScans({ remainingDays: 0 }, () => countWorkingDays('2026-08-17', '2026-08-21', calendar, { byWeeks: true })), 4);
+  assert.equal(calculatePlannedDurationDays({ plannedStart: '2026-01-01', plannedFinish: '2080-12-31', calendarId: calendar.id }, { calendars: [calendar], countByWeeks: true }), 14348);
+});

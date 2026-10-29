@@ -523,15 +523,15 @@ test('SQL işleri model üretiminden bağımsızdır: üretim sırasında işlem
   provider.streamChatCompletion = (input) => {
     observations.push({
       insideTransaction: isWithinSqlTransaction(),
-      statements: db.aiConversationLog.statements.map((entry) => (entry.sql.includes('AS PrepareOutcome') ? 'prepare' : entry.sql.includes('AS AnswerPersisted') ? 'append' : 'other')),
+      statements: db.aiConversationLog.statements.map((entry) => (entry.sql.includes('AS PrepareOutcome') ? 'prepare' : entry.sql.includes('AS AnswerPersisted') ? 'append' : entry.sql.includes('AS ConversationPresent') ? 'presence' : 'other')),
       userMessages: db.aiConversationMessages.filter((row) => row.Role === 'user').length,
       answers: db.aiConversationMessages.filter((row) => row.Role === 'assistant').length
     });
     return streamChatCompletion(input);
   };
   await startConversation('SQL bağımsızlık sorusu');
-  assert.deepEqual(observations, [{ insideTransaction: false, statements: ['prepare', 'prepare'], userMessages: 1, answers: 0 }]);
-  assert.deepEqual(db.aiConversationLog.statements.map((entry) => (entry.sql.includes('AS AnswerPersisted') ? 'append' : 'prepare')), ['prepare', 'prepare', 'append']);
+  assert.deepEqual(observations, [{ insideTransaction: false, statements: ['prepare', 'prepare', 'presence'], userMessages: 1, answers: 0 }]);
+  assert.deepEqual(db.aiConversationLog.statements.map((entry) => (entry.sql.includes('AS AnswerPersisted') ? 'append' : entry.sql.includes('AS ConversationPresent') ? 'presence' : 'prepare')), ['prepare', 'prepare', 'presence', 'append']);
 });
 
 test('konuşma tabloları kurulmamışsa (0017 uygulanmamış) anlaşılır yapılandırma hatası döner; model çağrılmaz', async (t) => {
@@ -771,7 +771,10 @@ test('kayıtlı yanıt araması salt okunurdur: kilit almaz ve işlem açmaz', a
   assert.equal(terminal(replay).data.replayed, true);
   const statements = db.aiConversationLog.statements;
   assert.equal(statements[0].params.readOnly, true, 'yanıt araması salt okunur hazırlanır');
-  assert.equal(statements.length, 1, 'genel sohbetin yeniden oynatılması gereksiz kanıt okuması yapmaz');
+  assert.equal(statements.length, 3, 'replay checks presence at stream start and answer disclosure');
+  assert.ok(statements.slice(1).every((entry) => entry.sql.includes('AS ConversationPresent')));
+  assert.ok(statements.every((entry) => !entry.sql.includes('AS EvidenceReady')), 'general replay needs presence, not evidence');
+  assert.ok(statements.slice(1).every((entry) => !/UPDLOCK|HOLDLOCK|BEGIN TRAN/i.test(entry.sql)));
 });
 
 test('başlık her satırdaki başlık ve alıntı işaretini atar', () => {

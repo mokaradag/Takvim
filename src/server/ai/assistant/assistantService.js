@@ -37,6 +37,7 @@ import {
   isMissingEvidenceSchema,
   listConversations,
   loadConversation,
+  loadConversationPresence,
   loadConversationEvidence,
   prepareConversationTurn,
   noteConversationSchema,
@@ -463,6 +464,7 @@ export async function loadAssistantConversation({ conversationId, signal = null 
   if (!result.knownSicil) throw unknownSicil();
   if (!result.conversation) throw conversationNotFound();
   const evidence = await optionalEvidence(sicil, signal, { conversationId: id });
+  if (!evidence.conversationPresent) throw conversationNotFound();
   return {
     conversation: result.conversation,
     messages: discloseSavedMessages(result.messages, evidence)
@@ -474,8 +476,9 @@ export async function loadAssistantConversation({ conversationId, signal = null 
  * Kanıt ya da yetki okunamazsa korunan metin ve özetler birlikte gizlenir.
  */
 async function optionalEvidence(sicil, signal, target, { revalidate = true } = {}) {
+  let evidence;
   try {
-    const evidence = await loadEvidenceFor(sicil, signal, target);
+    evidence = await loadEvidenceFor(sicil, signal, target);
     // Kimlikler parçalar hâlinde doğrulanır (bkz. revalidateEvidence): uzun bir
     // konuşmanın bütün yanıtları tek bir sınır aşımıyla gizlenmez.
     // Nüfusu kalıcı kayda sığmayan yanıt güncel yetkiyle doğrulanamaz; bu durum
@@ -505,11 +508,27 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
         evidence.byMessage = visible;
       } finally { deadline.dispose(); }
     }
-    return evidence;
   } catch (error) {
     if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;
-    return { unavailable: true };
+    evidence = { unavailable: true };
   }
+  // Check after evidence and authorization reads, including their failure paths.
+  // Presence errors propagate: unavailable evidence must not authorize stale text.
+  return { ...evidence, ...await currentPresence(sicil, signal, target) };
+}
+
+async function currentPresence(sicil, signal, target) {
+  const presence = await withConversationSql(sicil, signal, (scope) => loadConversationPresence(directExecutor(scope), sicil, {
+    ...target, maxMessages: ASSISTANT_LIMITS.maxConversationMessages
+  }));
+  if (!presence.knownSicil) throw unknownSicil();
+  return presence;
+}
+
+/** Validate metadata/user content immediately before the stream's first event. */
+export async function assertAssistantTurnPresent(turn, signal) {
+  const presence = await currentPresence(turn.sicil, signal, { conversationId: turn.conversation.id });
+  if (!presence.conversationPresent || !presence.presentMessages.has(turn.userMessage.id)) throw conversationNotFound();
 }
 
 /**
@@ -525,7 +544,7 @@ function citedWithoutKnownEvidence(message, evidence) {
 }
 
 function savedMessageMissing(message, evidence) {
-  return Boolean(evidence?.presentMessages && !evidence.presentMessages.has(message.id));
+  return !evidence?.presentMessages?.has(message.id);
 }
 
 const UNVERIFIABLE_SAVED_ANSWER_TEXT = 'Bu kayıtlı yanıt çok sayıda kayda dayandığı için güncel yetkinizle yeniden doğrulanamıyor. Güncel bilgi için soruyu yeniden sorun.';
@@ -533,13 +552,13 @@ const UNVERIFIABLE_SAVED_ANSWER_TEXT = 'Bu kayıtlı yanıt çok sayıda kayda d
 function discloseSavedMessages(messages, evidence) {
   return messages.filter((message) => message.role === 'assistant' || !savedMessageMissing(message, evidence)).map((message) => {
     if (message.role !== 'assistant') return message;
+    if (savedMessageMissing(message, evidence)) return { ...message, content: 'Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.', evidence: [], finishReason: 'not_found' };
     if (evidence?.unverifiable?.has(message.id)) {
       return { ...message, content: UNVERIFIABLE_SAVED_ANSWER_TEXT, evidence: [], finishReason: 'unavailable' };
     }
     const saved = evidence?.byMessage?.get(message.id);
     if (saved?.length) return { ...message, evidence: saved };
-    if (savedMessageMissing(message, evidence)
-      || evidence?.epochsByMessage?.has(message.id) || citedWithoutKnownEvidence(message, evidence)) {
+    if (evidence?.epochsByMessage?.has(message.id) || citedWithoutKnownEvidence(message, evidence)) {
       if (evidence?.unavailable || evidence?.ready === false || evidence?.unavailableMessages?.has(message.id)) {
         return { ...message, content: 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', evidence: [], finishReason: 'unavailable' };
       }
@@ -1004,13 +1023,16 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
       // yanıt yalnızca SONRAKİ açılışlarda doğrulanamaz sayılır. Kayıtlı kanıtın tekrar
       // okunamaması (geçici hata) güncel yetkinin bilinmemesi değildir: yetki bellekteki
       // defterle yeniden doğrulanır; doğrulanamazsa ya da erişim kalktıysa yanıt gösterilmez.
+      if (!evidence.conversationPresent) throw conversationNotFound();
       const own = stored.message.id === messageId;
       const reloadFailed = evidence?.unavailable === true || evidence?.ready === false
         || evidence?.unavailableMessages?.has(messageId) || evidence?.unverifiable?.has(messageId);
-      const liveAuthorized = own && reloadFailed && await grounded.guardDisclosure?.(signal);
-      answer = liveAuthorized
+      const liveAuthorized = own && !savedMessageMissing(stored.message, evidence) && reloadFailed && await grounded.guardDisclosure?.(signal);
+      const presence = liveAuthorized ? await currentPresence(turn.sicil, signal, { conversationId: turn.conversation.id, messageId: stored.message.id }) : evidence;
+      if (!presence.conversationPresent) throw conversationNotFound();
+      answer = liveAuthorized && !savedMessageMissing(stored.message, presence)
         ? { ...stored.message, evidence: grounded.evidence }
-        : discloseSavedMessages([stored.message], evidence)[0];
+        : discloseSavedMessages([stored.message], { ...evidence, ...presence })[0];
       return { conversation: stored.conversation, answer: { ...answer, evidence: answer.evidence || [] },
         reconciled: !own, finishReason: answer.finishReason, contentAuthoritative: true, firstTokenMs: null };
     };
@@ -1041,8 +1063,10 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
 
 /** Kayıtlı yanıt da teslim sınırında güncel erişimden geçer. */
 export async function discloseAssistantMessage(turn, message, signal) {
-  if (message.source === 'general' || message.finishReason === 'general') return message;
-  return discloseSavedMessages([message], await optionalEvidence(turn.sicil, signal, {
-    conversationId: turn.conversation.id, messageId: message.id
-  }))[0];
+  const target = { conversationId: turn.conversation.id, messageId: message.id };
+  const evidence = message.source === 'general' || message.finishReason === 'general'
+    ? await currentPresence(turn.sicil, signal, target)
+    : await optionalEvidence(turn.sicil, signal, target);
+  if (!evidence.conversationPresent) throw conversationNotFound();
+  return discloseSavedMessages([message], evidence)[0];
 }

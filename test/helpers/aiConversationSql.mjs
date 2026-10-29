@@ -408,6 +408,13 @@ export function runAiConversationQuery(db, sqlText, params) {
   if (sqlText.includes('AS PrepareOutcome')) return prepare(db, params, sicil, known);
   if (sqlText.includes('AS AnswerInserted')) return appendGrounded(db, params, sicil);
   if (sqlText.includes('AS AnswerPersisted')) return append(db, params, sicil);
+  if (sqlText.includes('AS ConversationPresent')) {
+    const conversation = known && ownedConversation(db, sicil, params.conversationId);
+    const rows = conversation ? messagesOf(db, conversation.ConversationId)
+      .filter((row) => !params.messageId || sameGuid(row.MessageId, params.messageId))
+      .slice(-params.maxMessages).map((row) => ({ MessageId: row.MessageId })) : [];
+    return [rows, [{ KnownSicil: known ? 1 : 0, ConversationPresent: conversation ? 1 : 0 }]];
+  }
   if (sqlText.includes('AS EvidenceReady')) return evidence(db, params, sicil, known);
   if (sqlText.includes('DELETE c FROM dbo.MR_AiConversations c')) return remove(db, params, sicil, known);
   if (sqlText.includes('TOP (@maxMessages)')) return load(db, params, sicil, known);

@@ -838,10 +838,20 @@ test('ordinary recurrence-child edits keep an unchanged invisible parent but can
     assert.equal((await stack.persistence.flush()).ok, true);
     const saved = stack.db.tasks.find((task) => task.TaskId.toLowerCase() === child);
     assert.equal(saved.Description, 'ordinary edit'); assert.equal(saved.RecurrenceParentTaskId.toLowerCase(), parent);
+    // Give the actor full child-project write access, then target an EXISTING
+    // parent in a different, invisible project so only the visibility gate fails.
+    const hiddenProject = 'be000000-0000-4000-8000-000000000004';
+    const hiddenParent = 'be000000-0000-4000-8000-000000000003';
+    stack.db.corporateProjectAccess.push({ ProjectCode: 'P4417041', Sicil: 900001, RoleCode: 'PROJECT_MANAGER' });
+    stack.db.projects.push({ ProjectId: hiddenProject, SourceType: 'MANUAL', ProjectName: 'invisible', LeadSicil: 900010, CalendarId: DEFAULT_CALENDAR_ID });
+    stack.db.tasks.push({ TaskId: hiddenParent, ProjectId: hiddenProject, Title: 'invisible parent', CreatedBySicil: 900010, RecurrenceRule: 'FREQ=WEEKLY;COUNT=3' });
     const response = await fetch('/api/mergen-rota/commit', { method: 'POST', body: JSON.stringify({ changes: { taskUpserts: [{
-      ...stack.state.tasks.find((task) => task.id === child), status: 'planned', recurrenceParentId: 'be000000-0000-4000-8000-000000000003'
+      ...stack.state.tasks.find((task) => task.id === child), status: 'planned', recurrenceParentId: hiddenParent
     }] } }) });
-    assert.equal(response.status, 403, await response.text());
+    const rejected = await response.json();
+    assert.equal(response.status, 400, JSON.stringify(rejected));
+    assert.equal(rejected.error.code, 'MUTATION_FAILED');
+    assert.match(rejected.error.message, /Tekrar şablonu bulunamadı/);
     assert.equal(stack.db.tasks.find((task) => task.TaskId.toLowerCase() === child).RecurrenceParentTaskId.toLowerCase(), parent);
   } finally { await stack.dispose(); }
 });

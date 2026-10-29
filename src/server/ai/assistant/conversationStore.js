@@ -12,6 +12,7 @@ import {
   AI_CONVERSATION_SCAN_SQL,
   AI_CONVERSATION_LIST_SQL,
   AI_CONVERSATION_LOAD_SQL,
+  AI_CONVERSATION_PRESENCE_SQL,
   AI_CONVERSATION_PREPARE_TURN_SQL
 } from './conversationQueries.js';
 
@@ -359,4 +360,14 @@ export async function appendGroundedConversationAnswer(executor, sicil, {
     message,
     evidence: message ? (evidenceByMessage(evidenceRows).get(message.id) || []) : []
   };
+}
+
+export async function loadConversationPresence(executor, sicil, { conversationId, messageId = null, maxMessages }) {
+  const request = sicilRequest(executor, sicil);
+  request.input('conversationId', sql.UniqueIdentifier, conversationId);
+  request.input('messageId', sql.UniqueIdentifier, messageId);
+  request.input('maxMessages', sql.Int, maxMessages);
+  const [rows = [], [state] = []] = recordsetsOf(await request.query(AI_CONVERSATION_PRESENCE_SQL));
+  return { knownSicil: Boolean(state?.KnownSicil), conversationPresent: Boolean(state?.ConversationPresent),
+    presentMessages: new Set(state?.ConversationPresent ? rows.map((row) => idOrNull(row.MessageId)) : []) };
 }

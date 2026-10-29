@@ -844,3 +844,117 @@ test('fake allocation owner lock is reentrant and preserves competing-transactio
     await stack.dispose();
   }
 });
+
+for (const clientPath of ['../src/features/shared/jsonRequest.js', '../src/data/api/scheduleChangeClient.js']) {
+  test(`feature account transitions preserve the request/result boundary (${clientPath})`, async () => {
+    const { activateActualIdAliases } = await import('../src/data/api/activeActualIdAliases.js');
+    const { actualIdAliasType } = await import('../src/data/api/actualIdAliasStorage.js');
+    const { AppRepositoryError } = await import('../src/data/contracts/appRepository.js');
+    const { requestJson } = await import(clientPath);
+    const id = randomUUID(), client = `project-${randomUUID()}`, aliases = new Map([[id, client]]);
+    actualIdAliasType(aliases, id, 'PROJECT');
+    let current = false, calls = 0;
+    const guard = () => { if (!current) throw new AppRepositoryError({ code: 'UNAUTHORIZED', message: 'Account changed' }); };
+    activateActualIdAliases(aliases, guard);
+    const fetch = globalThis.fetch;
+    const body = { currentProjectId: id, projectId: id, message: id };
+    try {
+      globalThis.fetch = async () => { calls += 1; return Response.json(body); };
+      assert.deepEqual(await requestJson('/api/mergen-rota/schedule-changes', { method: 'POST', body: '{}' }),
+        { ok: false, code: 'UNAUTHORIZED', message: 'Account changed' });
+      assert.equal(calls, 0, 'account mismatch cannot issue a network mutation');
+      current = true;
+      const success = await requestJson('/api/mergen-rota/schedule-changes', { method: 'POST', body: '{}' });
+      const restored = success.value || success;
+      assert.equal(restored.currentProjectId, client); assert.equal(restored.projectId, client);
+      assert.equal(restored.message, id, 'non-entity fields are not rewritten');
+      globalThis.fetch = async () => { calls += 1; current = false; return Response.json(body); };
+      const changed = await requestJson('/api/mergen-rota/schedule-changes', { method: 'POST', body: '{}' });
+      assert.equal(changed.ok, true, 'an applied mutation remains successful');
+      assert.equal((changed.value || changed).currentProjectId, id);
+      assert.equal(calls, 2);
+    } finally { globalThis.fetch = fetch; activateActualIdAliases(new Map()); }
+  });
+}
+
+test('creation storage preserves the unauthorized account error raised inside its lock', async () => {
+  const { createCreationIdStorage } = await import('../src/data/api/creationIdStorage.js');
+  const { AppRepositoryError } = await import('../src/data/contracts/appRepository.js');
+  const error = new AppRepositoryError({ code: 'UNAUTHORIZED', message: 'Account changed' });
+  const store = createCreationIdStorage(null, undefined, { accountId: '900001', validateAccount() { throw error; } });
+  for (const changes of [{ taskUpserts: [task()] }, { taskDeletes: [{ id: randomUUID(), version: 'version' }] }]) {
+    await assert.rejects(store.prepare(changes, new Map()), (received) => received === error);
+  }
+});
+
+test('release response loss and expiry cleanup retain a bound retry receipt without replaying consumption', async (t) => {
+  const stack = await createActualStack(seed(), { sicil: 900010 });
+  const shared = sharedCreationStorage(), fetch = globalThis.fetch;
+  const changes = { taskUpserts: [task(`task-${randomUUID()}`)] };
+  let phase = 'not-sent', releaseAttempts = 0;
+  globalThis.fetch = async (url, init) => {
+    if (init.method === 'GET') return fetch(url, init);
+    const body = JSON.parse(init.body);
+    if (!body.operation && phase === 'not-sent') throw new TypeError('mutation not sent');
+    const response = await fetch(url, init);
+    if (body.operation === 'release-creation-ids' && ++releaseAttempts === 1) throw new TypeError('release response lost');
+    return response;
+  };
+  try {
+    const repository = createApiRepository({ aliasStorage: shared.client() });
+    await assert.rejects(repository.commitChanges(changes));
+    const old = shared.state().pending[0];
+    const { CREATION_ALLOCATION_CLIENT_TTL_MS } = await import('../src/data/api/creationIdStorage.js');
+    t.mock.method(Date, 'now', () => old.allocatedAt + CREATION_ALLOCATION_CLIENT_TTL_MS + 1);
+    stack.db.creationAllocations[0].ExpiresAt = new Date(new Date().getTime() - 1000).toISOString();
+    // Another reservation runs normal expiry cleanup before the old draft resumes.
+    await allocate({ taskUpserts: [task()] });
+    assert.ok(stack.db.creationAllocations.some((row) => row.Proof.toLowerCase() === old.proof));
+    phase = 'retry';
+    await assert.rejects(createApiRepository({ aliasStorage: shared.client() }).commitChanges(changes));
+    assert.equal(shared.state().pending[0].proof, old.proof);
+    assert.equal(releaseAttempts, 1, 'the first release lost only its response');
+    const saved = await createApiRepository({ aliasStorage: shared.client() }).commitChanges(changes);
+    assert.equal(saved.taskUpserts[0].id, changes.taskUpserts[0].id);
+    assert.equal(releaseAttempts, 2); assert.deepEqual(shared.state().pending, []);
+    assert.equal(stack.db.tasks.filter((row) => row.Title === 'Allocated task').length, 1);
+    const oldChanges = { taskUpserts: [{ ...task(old.id), creationProof: old.proof }] };
+    assert.deepEqual((await post(oldChanges, 'release-creation-ids')).body.released, [{ id: old.id, entityType: 'TASK' }]);
+    assert.equal((await post(oldChanges)).status, 409, 'released receipt cannot be consumed');
+    for (const altered of [{ ...oldChanges.taskUpserts[0], id: randomUUID() },
+      { ...oldChanges.taskUpserts[0], projectId: HIDDEN_PROJECT }, { ...oldChanges.taskUpserts[0], creationProof: randomUUID() }]) {
+      assert.deepEqual((await post({ taskUpserts: [altered] }, 'release-creation-ids')).body.released, []);
+    }
+    assert.deepEqual((await post({ wbsUpserts: [{ ...oldChanges.taskUpserts[0], parentId: null, code: '2', name: 'wrong type' }] }, 'release-creation-ids')).body.released, []);
+    process.env.MERGEN_ROTA_DEV_SICIL = '900001';
+    assert.deepEqual((await post(oldChanges, 'release-creation-ids')).body.released, [], 'receipt remains private to its caller');
+    process.env.MERGEN_ROTA_DEV_SICIL = '900010';
+    const consumed = await allocate({ taskUpserts: [task()] });
+    assert.equal((await post(consumed.changes)).status, 200);
+    assert.deepEqual((await post(consumed.changes, 'release-creation-ids')).body.released, [], 'consumed proof never becomes releasable');
+    assert.equal((await post(consumed.changes)).status, 409);
+  } finally { globalThis.fetch = fetch; await stack.dispose(); }
+});
+
+test('expired abandoned local proofs free capacity while referenced drafts and typed aliases stay protected', async () => {
+  const { createCreationIdStorage, CREATION_ALLOCATION_SERVER_TTL_MS } = await import('../src/data/api/creationIdStorage.js');
+  const { MAX_ACTUAL_ID_ALIASES } = await import('../src/data/api/actualIdAliasStorage.js');
+  const shared = sharedCreationStorage(), now = Date.now();
+  const records = Array.from({ length: MAX_ACTUAL_ID_ALIASES }, () => ({ clientId: randomUUID(), id: randomUUID(), proof: randomUUID(),
+    projectId: CORPORATE_PROJECT_ID.toLowerCase(), entityType: 'TASK', allocatedAt: now - CREATION_ALLOCATION_SERVER_TTL_MS - 1 }));
+  shared.values.set('mergen-rota.actual-id-aliases.v1.account.900001.creations.v1', JSON.stringify({ version: 2, pending: records,
+    aliases: records.map((row) => [row.id, row.clientId, row.entityType]) }));
+  const store = createCreationIdStorage(shared.client(), undefined, { accountId: '900001', now: () => now });
+  const aliases = new Map(); store.restoreAliases(aliases);
+  // An existing expired draft must go through server reconciliation, never replacement.
+  await assert.rejects(store.prepare({ taskUpserts: [task(records[0].clientId)] }, aliases));
+  assert.equal(shared.state().pending.length, MAX_ACTUAL_ID_ALIASES);
+  await store.prepare({ taskUpserts: [{ ...task(), deps: [{ predecessorId: records[0].clientId, type: 'FS' }] }] }, aliases);
+  assert.equal(shared.state().pending.length, 1, 'references in the operation protect an expired draft record');
+  assert.equal(shared.state().pending[0].proof, records[0].proof);
+  assert.equal((await store.prepare({ taskUpserts: [task()] }, aliases)).taskUpserts.length, 1);
+  assert.equal(shared.state().pending.length, 0);
+  assert.ok(shared.state().aliases.some(([id]) => id === records[0].id));
+  await assert.rejects(store.prepare({ taskUpserts: [task(records[0].clientId)] }, aliases),
+    (error) => error.details.code === 'CREATION_ALLOCATION_STORAGE');
+});

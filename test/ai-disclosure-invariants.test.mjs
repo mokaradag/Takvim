@@ -78,6 +78,12 @@ for (const delivery of ['retained', 'recovered', 'unavailable', 'revoked', 'dele
     if (delivery === 'deleted') stack.db.tasks = stack.db.tasks.filter((row) => row.TaskId !== TASKS.OVERDUE);
     const { parseSseText } = await import('./helpers/aiStack.mjs');
     const replay = parseSseText(await assistantStreamResponse(turn).text());
+    if (delivery === 'conversation-deleted') {
+      assert.deepEqual(replay.events.map((event) => event.event), ['error']);
+      assert.equal(JSON.stringify(replay.events).includes(saved.conversation.title), false);
+      assert.equal(JSON.stringify(replay.events).includes(saved.assistantMessage.content), false);
+      return;
+    }
     assert.deepEqual(replay.events.map((event) => event.event), ['accepted', 'delta', 'done']);
     assert.equal(done(replay).replayed, true);
     const answer = done(replay).assistantMessage;
@@ -137,7 +143,7 @@ test('disabling tools still hides recorded grounded answers on evidence-read fai
   const hidden = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
   assert.equal(hidden.finishReason, 'unavailable');
   assert.deepEqual(hidden.evidence, []);
-  const replay = await sendTurn({ ...input, conversationId: saved.conversation.id });
+  const replay = await sendTurn({ ...input, conversationId: saved.conversation.id, mode: 'standard' });
   assert.equal(done(replay).assistantMessage.finishReason, 'unavailable');
   stack.provider.enqueue({ type: 'stream', text: 'Genel açıklama.' });
   await sendTurn({ conversationId: saved.conversation.id, turnId: randomUUID(), message: 'Açıkla' });
@@ -163,7 +169,7 @@ test('previously available evidence remains protected across repeated missing-sc
     assert.equal(answer.finishReason, 'unavailable');
     assert.deepEqual(answer.evidence, []);
   }
-  assert.equal(done(await sendTurn({ ...input, conversationId: saved.conversation.id })).assistantMessage.finishReason, 'unavailable');
+  assert.equal(done(await sendTurn({ ...input, conversationId: saved.conversation.id, mode: 'standard' })).assistantMessage.finishReason, 'unavailable');
   stack.provider.enqueue({ type: 'stream', text: 'Genel açıklama.' });
   await sendTurn({ conversationId: saved.conversation.id, turnId: randomUUID(), message: 'Açıkla' });
   assert.ok(stack.provider.calls.at(-1).messages.filter((message) => message.role === 'assistant').every((message) => !message.content.includes('【R1】')));
@@ -687,8 +693,13 @@ for (const deleted of [false, true]) {
       return value;
     });
     const opened = await loadAssistantConversation(saved.conversation.id);
-    assert.equal(opened.status, 200);
     assert.equal(evidenceReads, 1);
+    if (deleted) {
+      assert.equal(opened.status, 404);
+      for (const secret of [text, userText, saved.conversation.title]) assert.equal(JSON.stringify(opened.body).includes(secret), false);
+      return;
+    }
+    assert.equal(opened.status, 200);
     const answer = opened.body.messages.find((message) => message.role === 'assistant');
     assert.deepEqual(answer.evidence || [], []);
     assert.equal(answer.content, deleted ? NON_ENUMERATING_FAILURE_TEXT : text);
@@ -700,3 +711,75 @@ for (const deleted of [false, true]) {
     } else assert.equal(opened.body.messages.find((message) => message.role === 'user')?.content, userText);
   });
 }
+
+for (const evidenceMode of ['ready', 'missing', 'failed']) {
+  for (const boundary of ['evidence', 'presence']) test(`conversation reopen suppresses deleted messages and title (${evidenceMode}, delete at ${boundary})`, async (t) => {
+    const stack = stackFor(t), secret = `Deleted user title ${randomUUID()}`, answer = `Deleted general answer ${randomUUID()}`;
+    stack.provider.enqueue({ type: 'stream', text: answer });
+    const saved = done(await sendTurn({ turnId: randomUUID(), source: 'general', message: secret }));
+    const pool = await getSqlPool(), request = pool.request.bind(pool);
+    const { deleteConversation } = await import('../src/server/ai/assistant/conversationStore.js');
+    if (evidenceMode === 'missing') stack.db.aiEvidenceSchemaMissing = true;
+    let deleted = false, presenceReads = 0;
+    t.mock.method(pool, 'request', () => {
+      const value = request(), query = value.query.bind(value);
+      value.query = async (sql) => {
+        const evidence = sql.includes('AS EvidenceReady'), presence = sql.includes('AS ConversationPresent');
+        if (presence) presenceReads += 1;
+        if (!deleted && (boundary === 'evidence' ? evidence : presence)) {
+          deleted = true; assert.equal((await deleteConversation(pool, AYSE, { conversationId: saved.conversation.id })).deleted, true);
+        }
+        if (evidence && evidenceMode === 'failed') throw Object.assign(new Error('evidence unavailable'), { code: 'DATABASE_UNAVAILABLE' });
+        return query(sql);
+      }; return value;
+    });
+    const opened = await loadAssistantConversation(saved.conversation.id);
+    assert.equal(deleted, true); assert.equal(presenceReads, 1); assert.equal(opened.status, 404);
+    for (const text of [secret, answer, saved.conversation.title]) assert.equal(JSON.stringify(opened.body).includes(text), false);
+  });
+}
+
+for (const evidenceMode of ['ready', 'missing', 'failed']) test(`general replay checks saved answer presence at disclosure (${evidenceMode})`, async (t) => {
+  const stack = stackFor(t), text = `General replay secret ${randomUUID()}`;
+  stack.provider.enqueue({ type: 'stream', text });
+  const input = { turnId: randomUUID(), source: 'general', message: 'A general question' };
+  const saved = done(await sendTurn(input));
+  const { prepareAssistantTurn } = await import('../src/server/ai/assistant/assistantService.js');
+  const { assistantStreamResponse } = await import('../src/server/ai/assistant/assistantStreamResponse.js');
+  const { parseSseText } = await import('./helpers/aiStack.mjs');
+  const turn = await prepareAssistantTurn({ readBody: async () => ({ ...input, conversationId: saved.conversation.id, mode: 'standard' }) });
+  const pool = await getSqlPool(), request = pool.request.bind(pool);
+  if (evidenceMode === 'missing') stack.db.aiEvidenceSchemaMissing = true;
+  let deleted = false, presenceReads = 0;
+  t.mock.method(pool, 'request', () => {
+    const value = request(), query = value.query.bind(value);
+    value.query = async (sql) => {
+      if (sql.includes('AS ConversationPresent') && ++presenceReads === 2) {
+        deleted = true;
+        stack.db.aiConversationMessages = stack.db.aiConversationMessages.filter((row) => row.MessageId.toLowerCase() !== saved.assistantMessage.id);
+      }
+      if (evidenceMode === 'failed' && sql.includes('AS EvidenceReady')) throw Object.assign(new Error('evidence unavailable'), { code: 'DATABASE_UNAVAILABLE' });
+      return query(sql);
+    }; return value;
+  });
+  const replay = parseSseText(await assistantStreamResponse(turn).text());
+  assert.equal(deleted, true); assert.equal(JSON.stringify(replay.events).includes(text), false);
+  assert.equal(done(replay).assistantMessage.finishReason, 'not_found');
+  assert.equal(deltas(replay), NON_ENUMERATING_FAILURE_TEXT);
+});
+
+test('unverifiable message presence fails closed even when evidence is unavailable', async (t) => {
+  const stack = stackFor(t), text = `Unavailable presence ${randomUUID()}`;
+  stack.provider.enqueue({ type: 'stream', text });
+  const saved = done(await sendTurn({ turnId: randomUUID(), source: 'general', message: 'A question' }));
+  const pool = await getSqlPool(), request = pool.request.bind(pool);
+  t.mock.method(pool, 'request', () => {
+    const value = request(), query = value.query.bind(value);
+    value.query = async (sql) => {
+      if (sql.includes('AS EvidenceReady') || sql.includes('AS ConversationPresent')) throw Object.assign(new Error('read unavailable'), { code: 'DATABASE_UNAVAILABLE' });
+      return query(sql);
+    }; return value;
+  });
+  const opened = await loadAssistantConversation(saved.conversation.id);
+  assert.ok(opened.status >= 500); assert.equal(JSON.stringify(opened.body).includes(text), false);
+});

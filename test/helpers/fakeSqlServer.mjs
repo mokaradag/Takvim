@@ -1257,8 +1257,8 @@ function runQuery(db, statement, params, { database }) {
     if (!db.creationAllocationSchema) throw Object.assign(new Error('Invalid object name MR_CreationAllocations'), { number: 208 });
     const allocations = JSON.parse(params.allocations);
     if (sqlText.includes('-- creation-allocation: reserve')) {
-      db.creationAllocations = db.creationAllocations.filter((row) => row.Sicil !== sicil || new Date(row.ExpiresAt) > new Date());
-      if (db.creationAllocations.filter((row) => row.Sicil === sicil).length + allocations.length > params.pendingLimit) return result([[{ Reserved: 0 }]]);
+      db.creationAllocations = db.creationAllocations.filter((row) => row.Sicil !== sicil || new Date(row.ExpiresAt).getTime() > Date.now() - params.receiptDays * 86400000);
+      if (db.creationAllocations.filter((row) => row.Sicil === sicil && new Date(row.ExpiresAt) > new Date()).length + allocations.length > params.pendingLimit) return result([[{ Reserved: 0 }]]);
       for (const allocation of allocations) {
         if (db.projects.some((row) => sameGuid(row.ProjectId, allocation.id))
           || db.wbs.some((row) => sameGuid(row.WbsId, allocation.id))
@@ -1273,7 +1273,9 @@ function runQuery(db, statement, params, { database }) {
     const consumed = db.creationAllocations.filter((row) => row.Sicil === sicil && (sqlText.includes('-- creation-allocation: release') || new Date(row.ExpiresAt) > new Date())
       && allocations.some((entry) => sameGuid(row.Proof, entry.proof) && sameGuid(row.EntityId, entry.id)
         && row.EntityType === entry.entityType && sameGuid(row.ProjectId, entry.projectId)));
-    db.creationAllocations = db.creationAllocations.filter((row) => !consumed.includes(row));
+    if (sqlText.includes('-- creation-allocation: release')) {
+      for (const row of consumed) if (new Date(row.ExpiresAt) > new Date()) row.ExpiresAt = new Date(Date.now() - 1000).toISOString();
+    } else db.creationAllocations = db.creationAllocations.filter((row) => !consumed.includes(row));
     return result([consumed.map((row) => ({ Proof: row.Proof }))]);
   }
 
@@ -1925,9 +1927,17 @@ function runQuery(db, statement, params, { database }) {
     const entry = db.taskReminderLog.filter((row) => sameGuid(row.TaskId, params.taskId)
       && row.ReminderKind === 'MANUAL' && Number(row.RequestedBySicil) === Number(params.actorSicil))
       .sort((a, b) => b.TaskReminderLogId - a.TaskReminderLogId)[0];
-    if (!entry || entry.Status !== 'PENDING' || entry.FailureCode !== 'RECIPIENTS_PENDING' || entry.CompletedAt == null) return result([[]]);
+    if (!entry || entry.Status !== 'PENDING' || entry.FailureCode !== 'RECIPIENTS_PENDING' || entry.CompletedAt == null
+      || new Date(entry.CompletedAt).getTime() < Date.now() - params.resumeWindowMinutes * 60000) return result([[]]);
     entry.CompletedAt = null; entry.CreatedAt = new Date().toISOString(); entry.FailureCode = 'DELIVERY_IN_PROGRESS';
     return result([[{ TaskReminderLogId: entry.TaskReminderLogId }]]);
+  }
+  if (sqlText.includes("SET CompletedAt = SYSUTCDATETIME(), FailureCode = 'RECIPIENTS_PENDING'")) {
+    const entry = db.taskReminderLog.find((row) => row.TaskReminderLogId === Number(params.logId));
+    if (entry?.Status === 'PENDING' && entry.CompletedAt == null) {
+      entry.CompletedAt = new Date().toISOString(); entry.FailureCode = 'RECIPIENTS_PENDING';
+    }
+    return result([[]]);
   }
   if (sqlText.includes('SELECT RecipientDigest FROM dbo.MR_TaskReminderLog')) {
     return result([db.taskReminderLog.filter((row) => row.TaskReminderLogId === Number(params.logId)).map((row) => ({ RecipientDigest: row.RecipientDigest }))]);

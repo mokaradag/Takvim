@@ -15,6 +15,7 @@ import {
   ABANDONED_CLAIM_MINUTES,
   claimAutomaticReminder,
   completeReminderLog,
+  deferReminderLog,
   loadLastManualReminderAt,
   loadReminderProgress,
   resumeManualReminder,
@@ -99,8 +100,16 @@ export async function deliverTaskReminder(executor, {
 
   // Direct task assignees may see co-assignee display names in the canonical
   // snapshot projection. Usernames and directory identities are not a fallback.
+  const assigneeNames = [], seenSicils = new Set();
+  for (const row of rows) {
+    const sicil = String(row?.sicil ?? '').trim();
+    if (sicil && seenSicils.has(sicil)) continue;
+    if (sicil) seenSicils.add(sicil);
+    const name = String(row?.name || '').trim();
+    if (name) assigneeNames.push(name);
+  }
   const values = buildReminderValues(task, {
-    assigneeNames: rows.map((row) => String(row?.name || '').trim()).filter(Boolean),
+    assigneeNames,
     now
   });
   const rendered = renderReminderEmail({ subject: settings.subject, body: settings.body }, values);
@@ -115,17 +124,20 @@ export async function deliverTaskReminder(executor, {
   const fingerprint = createHash('sha256').update(JSON.stringify(recipients.map((email) => email.toLowerCase()))).digest('hex');
   const prefix = `delivery1:${fingerprint}:`;
   const previous = await loadReminderProgress(executor, logId);
-  if (previous?.startsWith('delivery1:') && (!previous.startsWith(prefix)
+  const unattempted = /^delivery1:[a-f0-9]{64}:0+$/.test(previous || '');
+  const matches = previous?.startsWith(prefix) && previous.slice(prefix.length).length === recipients.length;
+  if (previous?.startsWith('delivery1:') && !unattempted && (!previous.startsWith(prefix)
     || previous.slice(prefix.length).length !== recipients.length || /[^0-3]/.test(previous.slice(prefix.length)))) {
     await finalizeLog(executor, logId, { status: 'PENDING', failureCode: 'MAIL_DELIVERY_UNCERTAIN' });
     return { ok: false, code: 'MAIL_DELIVERY_UNCERTAIN', deliveryMayHaveEscaped: true, problems,
       warnings: [...warnings, 'Alıcı listesi değişti; önceki teslimatlar otomatik yinelenmeyecek.'] };
   }
-  const states = previous?.startsWith(prefix) ? previous.slice(prefix.length).split('') : recipients.map(() => '0');
+  const states = matches ? previous.slice(prefix.length).split('') : recipients.map(() => '0');
   const progress = () => prefix + states.join('');
   if (progress().length > 400) return { ok: false, code: 'NO_RECIPIENTS', problems, warnings };
   const delivered = recipients.filter((_email, index) => states[index] === '2');
   let failed = states.includes('3') ? { code: 'SMTP_SEND_FAILED' } : null;
+  let checkpointFailed = false;
   let uncertain = states.includes('1'), attempted = states.filter((state) => state !== '0').length;
   const checkpoint = () => completeReminderLog(executor, logId, { status: 'PENDING', recipients: delivered,
     failureCode: 'DELIVERY_IN_PROGRESS', progress: progress(), active: true });
@@ -149,7 +161,12 @@ export async function deliverTaskReminder(executor, {
       // Persist terminal uncertainty BEFORE transport. A process loss can never
       // turn a possibly accepted message into an automatic resend.
       states[index] = '1';
-      try { await checkpoint(); } catch { states[index] = '0'; break; }
+      try { await checkpoint(); } catch {
+        states[index] = '0';
+        checkpointFailed = true;
+        failed = { code: 'UNEXPECTED_ERROR', message: 'Gönderim ilerlemesi kaydedilemedi.' };
+        break;
+      }
       if (controller.signal.aborted || Date.now() >= deadline) {
         states[index] = '0';
         break;
@@ -164,21 +181,22 @@ export async function deliverTaskReminder(executor, {
       if (sent.ok) { delivered.push(email); states[index] = '2'; }
       else if (sent.deliveryMayHaveEscaped) uncertain = true;
       else { failed = sent; states[index] = '3'; }
-      try { await checkpoint(); } catch { uncertain = true; break; }
+      try { await checkpoint(); } catch { checkpointFailed = true; uncertain = true; break; }
     }
   } finally {
     clearTimeout(timer);
   }
   if (attempted < recipients.length) {
-    warnings.push('Gönderim süresi dolduğu için kalan sorumlulara gönderim denenmedi.');
-    failed ||= { code: 'SMTP_TIMEOUT', message: 'Hatırlatma gönderim süresi doldu.' };
+    warnings.push(checkpointFailed
+      ? 'Gönderim ilerlemesi kaydedilemediği için kalan sorumlulara gönderim denenmedi.'
+      : 'Gönderim süresi dolduğu için kalan sorumlulara gönderim denenmedi.');
   }
   const remaining = states.includes('0');
   if (remaining) {
     const recorded = await finalizeLog(executor, logId, { status: 'PENDING', recipients: delivered,
       failureCode: 'RECIPIENTS_PENDING', progress: progress() });
-    const code = uncertain ? 'MAIL_DELIVERY_UNCERTAIN' : 'SMTP_TIMEOUT';
-    return { ok: false, code, deliveryMayHaveEscaped: uncertain, recipientCount: delivered.length, problems,
+    const code = uncertain ? 'MAIL_DELIVERY_UNCERTAIN' : !recorded ? 'UNEXPECTED_ERROR' : failed?.code || 'RECIPIENTS_PENDING';
+    return { ok: false, code, retryable: recorded && !uncertain && !failed, deliveryMayHaveEscaped: uncertain, recipientCount: delivered.length, problems,
       warnings: [...warnings, recorded ? 'Denenmeyen alıcılar sonraki gönderimde devam edecek.' : 'Gönderim ilerlemesi doğrulanamadı.'] };
   }
   if (uncertain) {
@@ -271,6 +289,7 @@ export async function sendManualReminder(executor, {
   if (!task) return unloadableTaskFailure(executor, taskId);
   if (authorize) await authorize(task);
 
+  const settings = await loadReminderSettings(executor);
   const resumedLogId = await resumeManualReminder(executor, task.id, actorSicil);
 
   // EN KÜÇÜK ARALIK: görevi görebilen herkes bu ucu çağırabilir ve her çağrı
@@ -301,7 +320,6 @@ export async function sendManualReminder(executor, {
     if (elapsedMs >= 0 && elapsedMs < minIntervalMs) return rateLimited();
   }
 
-  const settings = await loadReminderSettings(executor);
   // Elle gönderim, otomatik hatırlatma KAPALI olsa da çalışır.
   const logId = resumedLogId ?? await logManualReminder(executor, {
     taskId: task.id,
@@ -314,7 +332,14 @@ export async function sendManualReminder(executor, {
   // hakkı az önce almış. Hiçbir posta gönderilmez.
   if (logId == null && minIntervalMs > 0) return rateLimited();
 
-  return deliverTaskReminder(executor, { task, settings, kind: 'MANUAL', logId, actorSicil, now, send });
+  try {
+    return await deliverTaskReminder(executor, { task, settings, kind: 'MANUAL', logId, actorSicil, now, send });
+  } catch (error) {
+    // Keep the most recent durable recipient checkpoint, including any sends
+    // confirmed since resume. Never restore a stale copy over that checkpoint.
+    await deferReminderLog(executor, logId);
+    throw error;
+  }
 }
 
 /** Durdurma anahtarının yeniden okunma aralığı (ms). */
@@ -467,10 +492,10 @@ export async function runAutomaticReminders(executor, {
           warnings: delivery.warnings || []
         });
       } else {
-        failed += 1;
+        if (!delivery.retryable) failed += 1;
         results.push({
           taskId: candidate.id,
-          status: delivery.deliveryMayHaveEscaped ? 'PENDING' : 'FAILED',
+          status: delivery.retryable || delivery.deliveryMayHaveEscaped ? 'PENDING' : 'FAILED',
           reason: delivery.code,
           warnings: delivery.warnings || []
         });

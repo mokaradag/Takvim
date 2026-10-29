@@ -13,7 +13,9 @@ import { translateEntityRequest, restoreEntityResponse } from './activeActualIdA
 const REQUEST_TIMEOUT_MS = 30000;
 
 export async function requestJson(path, init) {
-  ({ path, init } = translateEntityRequest(path, init));
+  const translated = translateEntityRequest(path, init);
+  if (translated.failure) return translated.failure;
+  ({ path, init } = translated);
   const abortable = typeof AbortController === 'function';
   const controller = abortable ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS) : null;

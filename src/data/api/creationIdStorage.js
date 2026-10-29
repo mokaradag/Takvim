@@ -1,4 +1,4 @@
-import { creationEntries, remapCommitIds } from '../../domain/identity/creationIds.js';
+import { CREATION_COLLECTIONS, creationEntries, remapCommitIds } from '../../domain/identity/creationIds.js';
 import { extractActualId, isActualId } from '../../domain/identity/actualId.js';
 import { ACTUAL_ID_ALIAS_STORAGE_KEY, MAX_ACTUAL_ID_ALIASES, actualIdAliasType,
   decodeActualIdAliases, encodeActualIdAliases } from './actualIdAliasStorage.js';
@@ -152,7 +152,7 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
         aliases: encodeActualIdAliases(state.aliases, { pendingIds: new Set([...state.records.values()].map((record) => record.id)) }) }));
       publish(state, aliases);
       return result;
-    }).catch((error) => { if (error?.details?.code === 'CREATION_ALLOCATION_CAPACITY') throw error; throw storageError(); });
+    }).catch((error) => { if (error?.code === 'UNAUTHORIZED' || error?.details?.code === 'CREATION_ALLOCATION_CAPACITY') throw error; throw storageError(); });
   }
 
   function prepareFrom(changes, state, aliases) {
@@ -207,12 +207,31 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
         return await mutate(aliases, (state) => {
           if (reconciliationRecords(state, changes).length) throw storageError();
           const mappings = new Map([...mappingsFor({ aliases }), ...mappingsFor(state)]);
+          // Retire only expired proofs unrelated to this operation. Keep typed
+          // aliases: an uncertain old draft must never acquire a second identity.
+          const referenced = new Set();
+          const reference = (type, id) => { if (id) referenced.add(`${type}:${extractActualId(id)}`); };
+          const translated = remapCommitIds(changes, mappings);
+          for (const [collection, type] of CREATION_COLLECTIONS) {
+            for (const entry of translated[collection] || []) {
+              reference(type, entry.id); reference('PROJECT', entry.projectId);
+              reference('WBS', entry.wbsId); reference('WBS', entry.parentId);
+              reference('TASK', entry.recurrenceParentId);
+              for (const dependency of entry.deps || []) reference('TASK', dependency.predecessorId);
+            }
+            for (const entry of translated[collection.replace('Upserts', 'Deletes')] || []) reference(type, typeof entry === 'string' ? entry : entry.id);
+          }
+          const time = now();
+          for (const [key, record] of state.records) {
+            if (Number.isFinite(record.allocatedAt) && time - record.allocatedAt >= CREATION_ALLOCATION_SERVER_TTL_MS
+              && !referenced.has(`${record.entityType}:${record.id}`)) state.records.delete(key);
+          }
           const needed = creationEntries(changes).filter(({ entry, entityType }) => !mappings.has(`${entityType}:${extractActualId(entry.id)}`)).length;
           if (state.records.size + needed > MAX_ACTUAL_ID_ALIASES) throw capacityError();
           return prepareFrom(changes, state, aliases);
         });
       } catch (error) {
-        if (creationEntries(changes).length) throw error;
+        if (error?.code === 'UNAUTHORIZED' || creationEntries(changes).length) throw error;
         // Storage availability must not block versioned edits/deletions.
         return remapCommitIds(changes, mappingsFor({ aliases }));
       }

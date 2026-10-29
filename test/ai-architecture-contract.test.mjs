@@ -480,6 +480,7 @@ test('konuşma tablolarına yalnızca konuşma deposu, sabit ve Sicil sahipliği
     'AI_CONVERSATION_LIST_SQL',
     'AI_CONVERSATION_LOAD_SQL',
     'AI_CONVERSATION_PREPARE_TURN_SQL',
+    'AI_CONVERSATION_PRESENCE_SQL',
     'AI_CONVERSATION_SCAN_SQL'
   ]);
   // Kanıt tablosuna da yalnızca konuşma deposu erişir; kanıt yalnızca Sicil'e ait
@@ -491,6 +492,8 @@ test('konuşma tablolarına yalnızca konuşma deposu, sabit ve Sicil sahipliği
   assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /JSON_VALUE\(e\.EvidenceJson, '\$\.authorizationEpoch'\)/);
   assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /JSON_QUERY\(e\.EvidenceJson, '\$\.clarificationContext'\)/);
   assert.doesNotMatch(queries.AI_CONVERSATION_EVIDENCE_SQL, /SELECT[^;]*,\s*e\.EvidenceJson\s*(?:,|FROM)/, 'ham kanıt yükü açıklanmaz');
+  assert.doesNotMatch(queries.AI_CONVERSATION_PRESENCE_SQL, /MR_AiMessageEvidence|m\.Content|c\.Title/);
+  assert.match(queries.AI_CONVERSATION_PRESENCE_SQL, /SELECT TOP \(@maxMessages\) m\.MessageId/);
   const grounded = queries.AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL;
   const evidenceInsert = grounded.indexOf('INSERT dbo.MR_AiMessageEvidence');
   assert.ok(evidenceInsert > grounded.indexOf("VALUES (@messageId, @conversationId, @sequence, 'assistant'"), 'kanıt yanıtla aynı bloğa yazılır');

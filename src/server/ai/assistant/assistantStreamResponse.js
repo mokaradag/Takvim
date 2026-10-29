@@ -12,7 +12,7 @@ import { ServerPersistenceError } from '../../errors.js';
 import { AiError } from '../aiErrors.js';
 import { readAiConfig } from '../aiConfig.js';
 import { recordAssistantTurn } from '../aiTelemetry.js';
-import { discloseAssistantMessage, generateAssistantAnswer } from './assistantService.js';
+import { assertAssistantTurnPresent, discloseAssistantMessage, generateAssistantAnswer } from './assistantService.js';
 
 /**
  * Rota AI akış yanıtı (tarayıcıya giden sürümlü protokol).
@@ -315,6 +315,7 @@ export function assistantStreamResponse(turn, {
     ticker.unref?.();
     generationSignal.addEventListener('abort', onAbort, { once: true });
     try {
+      if (turn.sicil) await assertAssistantTurnPresent(turn, generationSignal);
       send(ASSISTANT_STREAM_EVENTS.ACCEPTED, acceptedPayload(turn));
       if (turn.replay) {
         await deliver(async () => ({ conversation: turn.conversation,

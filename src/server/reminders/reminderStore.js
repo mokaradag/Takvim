@@ -11,7 +11,7 @@ import { DEFAULT_REMINDER_SETTINGS, normalizeReminderSettings } from '../../doma
 import { sql } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import {
-  REMINDER_PROGRESS_SQL, REMINDER_RESUME_MANUAL_SQL,
+  REMINDER_PROGRESS_SQL, REMINDER_RESUME_MANUAL_SQL, REMINDER_DEFER_SQL,
   REMINDER_CANDIDATES_SQL,
   REMINDER_CLAIM_SQL,
   REMINDER_COMPLETE_SQL,
@@ -397,5 +397,12 @@ export async function resumeManualReminder(executor, taskId, actorSicil) {
   const request = executor.request();
   request.input('taskId', sql.UniqueIdentifier, taskId);
   request.input('actorSicil', sql.Int, actorSicil);
+  request.input('resumeWindowMinutes', sql.Int, ABANDONED_CLAIM_MINUTES);
   return (await request.query(REMINDER_RESUME_MANUAL_SQL)).recordset?.[0]?.TaskReminderLogId ?? null;
+}
+
+export async function deferReminderLog(executor, logId) {
+  const request = executor.request();
+  request.input('logId', sql.BigInt, logId);
+  await request.query(REMINDER_DEFER_SQL);
 }

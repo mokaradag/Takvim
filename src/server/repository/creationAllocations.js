@@ -7,6 +7,8 @@ import { ServerPersistenceError } from '../errors.js';
 import { MAX_COMMIT_TOTAL_ENTRIES } from './commitChangeValidation.js';
 
 const MAX_PENDING_ALLOCATIONS = MAX_COMMIT_TOTAL_ENTRIES * 2;
+// Expired/revoked rows are bound non-consumption receipts for release retries.
+const RELEASE_RECEIPT_DAYS = 7;
 
 function invalidAllocation() {
   return new ServerPersistenceError('CONFLICT', 'Oluşturma kimliği onaylanamadı. Verileri yeniden yükleyin.', {
@@ -43,14 +45,15 @@ export async function allocateCreationIds(transaction, actor, changes, authorize
   request.input('sicil', sql.Int, actor.sicil);
   request.input('allocations', sql.NVarChar(sql.MAX), JSON.stringify(allocations));
   request.input('pendingLimit', sql.Int, MAX_PENDING_ALLOCATIONS);
+  request.input('receiptDays', sql.Int, RELEASE_RECEIPT_DAYS);
   const result = await allocationQuery(request, `
     -- creation-allocation: reserve; the owner range serializes concurrent issuers.
     DECLARE @pending int;
     SELECT @pending = COUNT(*) FROM dbo.MR_CreationAllocations WITH (UPDLOCK, HOLDLOCK)
-    WHERE Sicil = @sicil;
+    WHERE Sicil = @sicil AND ExpiresAt > SYSUTCDATETIME();
     DELETE TOP (4000) FROM dbo.MR_CreationAllocations
-    WHERE Sicil = @sicil AND ExpiresAt <= SYSUTCDATETIME();
-    SELECT @pending = COUNT(*) FROM dbo.MR_CreationAllocations WHERE Sicil = @sicil;
+    WHERE Sicil = @sicil AND ExpiresAt <= DATEADD(day, -@receiptDays, SYSUTCDATETIME());
+    SELECT @pending = COUNT(*) FROM dbo.MR_CreationAllocations WHERE Sicil = @sicil AND ExpiresAt > SYSUTCDATETIME();
     DECLARE @issued TABLE (EntityId uniqueidentifier, EntityType varchar(7), ProjectId uniqueidentifier, Proof uniqueidentifier);
     INSERT @issued SELECT id, entityType, projectId, proof FROM OPENJSON(@allocations)
       WITH (id uniqueidentifier, entityType varchar(7), projectId uniqueidentifier, proof uniqueidentifier);
@@ -98,7 +101,8 @@ export async function consumeCreationAllocations(transaction, actor, changes) {
 }
 
 /** Reconcile by revoking a still-unconsumed capability, even after expiry.
- * Missing/consumed/pruned capabilities remain indistinguishable and fail closed.
+ * ExpiresAt also marks revocation; retained bound rows make retries idempotent.
+ * Missing/consumed/foreign capabilities remain indistinguishable and fail closed.
  * No entity lookup is authorized by this operation. The same transaction lock
  * orders it against an in-flight commit: exactly one can consume the proof.
  */
@@ -110,8 +114,10 @@ export async function releaseCreationIds(transaction, actor, changes) {
   request.input('sicil', sql.Int, actor.sicil);
   request.input('allocations', sql.NVarChar(sql.MAX), JSON.stringify(allocations));
   const result = await allocationQuery(request, `
-    -- creation-allocation: release; only a surviving bound proof proves non-commit.
-    DELETE a OUTPUT deleted.Proof
+    -- creation-allocation: release; retain a bound non-consumption receipt.
+    UPDATE a SET ExpiresAt = CASE WHEN a.ExpiresAt > DATEADD(second, -1, SYSUTCDATETIME())
+      THEN DATEADD(second, -1, SYSUTCDATETIME()) ELSE a.ExpiresAt END
+    OUTPUT inserted.Proof
     FROM dbo.MR_CreationAllocations a WITH (UPDLOCK, HOLDLOCK)
     JOIN OPENJSON(@allocations) WITH (id uniqueidentifier, entityType varchar(7), projectId uniqueidentifier, proof uniqueidentifier) i
       ON a.Proof = i.proof AND a.EntityId = i.id AND a.EntityType = i.entityType AND a.ProjectId = i.projectId

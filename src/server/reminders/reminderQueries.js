@@ -295,4 +295,11 @@ export const REMINDER_RESUME_MANUAL_SQL = `
   OUTPUT inserted.TaskReminderLogId
   WHERE TaskReminderLogId = (SELECT MAX(TaskReminderLogId) FROM dbo.MR_TaskReminderLog
     WHERE TaskId = @taskId AND ReminderKind = 'MANUAL' AND RequestedBySicil = @actorSicil)
-    AND Status = 'PENDING' AND FailureCode = 'RECIPIENTS_PENDING' AND CompletedAt IS NOT NULL;`;
+    AND Status = 'PENDING' AND FailureCode = 'RECIPIENTS_PENDING' AND CompletedAt IS NOT NULL
+    AND CompletedAt >= DATEADD(minute, -@resumeWindowMinutes, SYSUTCDATETIME());`;
+
+// Release a claimed continuation without overwriting its latest durable states.
+export const REMINDER_DEFER_SQL = `
+  UPDATE dbo.MR_TaskReminderLog
+  SET CompletedAt = SYSUTCDATETIME(), FailureCode = 'RECIPIENTS_PENDING'
+  WHERE TaskReminderLogId = @logId AND Status = 'PENDING' AND CompletedAt IS NULL;`;

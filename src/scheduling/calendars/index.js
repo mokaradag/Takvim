@@ -356,8 +356,8 @@ function countWorkingDaysByWeeks(first, last, calendar, maxCount) {
   }
   const holidays = new Set();
   for (const holiday of calendar?.holidays || []) {
-    const date = localDate(holiday.date);
-    if (!isValidDate(date) || fmtISO(date) !== holiday.date) continue;
+    const date = localDate(holiday?.date);
+    if (!isValidDate(date) || fmtISO(date) !== holiday?.date) continue;
     const day = dayNumber(date);
     if (day >= firstDay && day < firstDay + span && working[date.getDay()]) holidays.add(day);
   }

@@ -20,10 +20,13 @@ export function clearActualAccount(storage) {
 
 function outgoing(value, type) { return outgoingIds.get(`${type}:${extractActualId(value)}`) || value; }
 function incoming(value) { return activeAliases.get(extractActualId(value)) || value; }
-const ENTITY_KEYS = new Map([['taskId', 'TASK'], ['projectId', 'PROJECT'], ['wbsId', 'WBS']]);
+const ENTITY_KEYS = new Map([['taskId', 'TASK'], ['projectId', 'PROJECT'], ['currentProjectId', 'PROJECT'], ['wbsId', 'WBS']]);
 
 export function translateEntityRequest(path, init) {
-  accountGuard?.();
+  try { accountGuard?.(); } catch (error) {
+    if (error?.code !== 'UNAUTHORIZED') throw error;
+    return { failure: { ok: false, code: error.code, message: error.message } };
+  }
   if (!outgoingIds.size) return { path, init };
   const url = new URL(path, 'http://localhost');
   for (const [key, type] of ENTITY_KEYS) if (url.searchParams.has(key)) url.searchParams.set(key, outgoing(url.searchParams.get(key), type));
@@ -43,9 +46,17 @@ export function translateEntityRequest(path, init) {
 }
 
 export function restoreEntityResponse(value) {
-  accountGuard?.();
-  if (Array.isArray(value)) return value.map(restoreEntityResponse);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key,
-    ENTITY_KEYS.has(key) ? incoming(item) : restoreEntityResponse(item)]));
+  // A successful server mutation stays successful if the account changed while
+  // awaiting its response. Never restore it with another account's aliases.
+  try { accountGuard?.(); } catch (error) {
+    if (error?.code !== 'UNAUTHORIZED') throw error;
+    return value;
+  }
+  function restore(item) {
+    if (Array.isArray(item)) return item.map(restore);
+    if (!item || typeof item !== 'object') return item;
+    return Object.fromEntries(Object.entries(item).map(([key, child]) => [key,
+      ENTITY_KEYS.has(key) ? incoming(child) : restore(child)]));
+  }
+  return restore(value);
 }

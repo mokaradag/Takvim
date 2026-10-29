@@ -552,7 +552,10 @@ test('uzlaştırılan yanıt gösterilmiş taslağın yerini alır: revise ardı
   const { createAssistantStreamDecoder } = await import('../src/features/ai/assistant/assistantClient.js');
   const stamp = '2026-10-13T10:00:00.000Z';
   const { turn: base } = fakeTurn();
-  const { turn, released } = fakeTurn({ sicil: 1, conversation: { ...base.conversation, createdAt: stamp, updatedAt: stamp } });
+  const { db } = createAiStack(t);
+  const { turn, released } = fakeTurn({ sicil: 900001, conversation: { ...base.conversation, createdAt: stamp, updatedAt: stamp } });
+  db.aiConversations.push({ ConversationId: turn.conversation.id, OwnerSicil: turn.sicil, Title: turn.conversation.title });
+  db.aiConversationMessages.push({ MessageId: turn.userMessage.id, ConversationId: turn.conversation.id, Sequence: 1, Role: 'user' });
   const draft = 'T'.repeat(30);
   const stored = 'K'.repeat(30);
   const response = assistantStreamResponse(turn, {
@@ -562,6 +565,7 @@ test('uzlaştırılan yanıt gösterilmiş taslağın yerini alır: revise ardı
       onGenerated?.();
       // Aynı turun yanıtını başka bir yazıcı kaydetmişti: kayıtlı (yetkili) yanıt döner.
       const result = finalAnswer(turn, stored);
+      db.aiConversationMessages.push({ MessageId: result.answer.id, ConversationId: turn.conversation.id, Sequence: 2, Role: 'assistant' });
       return { ...result, answer: { ...result.answer, finishReason: 'general', createdAt: stamp }, reconciled: true };
     }
   });

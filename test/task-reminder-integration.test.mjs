@@ -810,7 +810,8 @@ test('healthy slow loopback SMTP continues three recipients exactly once across 
       const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
       const options = { now: at(2026, 8, 17) };
       const first = await runAutomaticReminders(pool, options);
-      assert.equal(first.failed, 1);
+      assert.equal(first.failed, 0); assert.equal(first.ok, true);
+      assert.equal(first.results[0].status, 'PENDING'); assert.equal(first.results[0].reason, 'RECIPIENTS_PENDING');
       assert.equal(db.taskReminderLog[0].Status, 'PENDING');
       assert.equal(db.taskReminderLog[0].FailureCode, 'RECIPIENTS_PENDING');
       for (let run = 0; run < 3 && db.taskReminderLog[0].FailureCode === 'RECIPIENTS_PENDING'; run += 1) {
@@ -921,7 +922,7 @@ for (const uncertainFirst of [false, true]) {
         };
         const options = { now: at(2026, 8, 17), send };
         const first = await runAutomaticReminders(pool, options);
-        assert.equal(first.failed, 1); assert.equal(sent.length, 2);
+        assert.equal(first.failed, uncertainFirst ? 1 : 0); assert.equal(first.ok, !uncertainFirst); assert.equal(sent.length, 2);
         assert.equal(db.taskReminderLog[0].Status, 'PENDING'); assert.equal(db.taskReminderLog[0].FailureCode, 'RECIPIENTS_PENDING');
         await runAutomaticReminders(pool, options);
         assert.equal(sent.length, 3); assert.equal(new Set(sent).size, 3);
@@ -943,3 +944,124 @@ for (const uncertainFirst of [false, true]) {
     }
   });
 }
+
+for (const attempted of [false, true]) test(`recipient changes rebind only all-unattempted durable progress (attempted=${attempted})`, async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-17T09:00:00Z') });
+  await withReminderStack(reminderSeed({ taskAssignees: [{ TaskId: TASK_ID, Sicil: 900001 }, { TaskId: TASK_ID, Sicil: 900002 }] }), async ({ db, pool }) => {
+    const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
+    const { REMINDER_COMPLETE_SQL } = await import('../src/server/reminders/reminderQueries.js');
+    const request = pool.request.bind(pool);
+    let firstCheckpoint = true;
+    t.mock.method(pool, 'request', () => {
+      const value = request(), query = value.query.bind(value);
+      value.query = async (sql) => {
+        const result = await query(sql);
+        if (!attempted && firstCheckpoint && sql === REMINDER_COMPLETE_SQL) { firstCheckpoint = false; t.mock.timers.tick(40001); }
+        return result;
+      }; return value;
+    });
+    const sends = [];
+    const options = { now: at(2026, 8, 17), send: async ({ to }) => { sends.push(to[0]); if (sends.length === 1) t.mock.timers.tick(40001); return { ok: true }; } };
+    const first = await runAutomaticReminders(pool, options);
+    assert.equal(first.ok, true); assert.equal(first.failed, 0); assert.equal(first.results[0].reason, 'RECIPIENTS_PENDING');
+    assert.equal(sends.length, attempted ? 1 : 0);
+    assert.equal(db.taskReminderLog[0].RecipientDigest.split(':').at(-1), attempted ? '20' : '00');
+    db.corporateUsers[0].EmailAddress = 'changed@example.internal';
+    const second = await runAutomaticReminders(pool, { ...options, send: async ({ to }) => { sends.push(to[0]); return { ok: true }; } });
+    if (attempted) {
+      assert.equal(second.ok, false); assert.equal(second.reason, 'MAIL_DELIVERY_UNCERTAIN');
+      assert.equal(sends.length, 1); assert.equal(db.taskReminderLog[0].FailureCode, 'MAIL_DELIVERY_UNCERTAIN');
+    } else {
+      assert.equal(second.ok, true); assert.equal(second.sent, 1); assert.equal(sends.length, 2);
+      assert.ok(sends.includes('changed@example.internal')); assert.equal(db.taskReminderLog[0].Status, 'SENT');
+    }
+    assert.equal(db.taskReminderLog.length, 1);
+  });
+});
+
+for (const failingRead of ['recipients', 'progress']) test(`manual resume releases a claim after a ${failingRead} read throws without losing confirmed sends`, async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-17T09:00:00Z') });
+  await withReminderStack(reminderSeed({ taskAssignees: [{ TaskId: TASK_ID, Sicil: 900001 }, { TaskId: TASK_ID, Sicil: 900002 }] }), async ({ db, pool }) => {
+    const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+    const { REMINDER_PROGRESS_SQL } = await import('../src/server/reminders/reminderQueries.js');
+    const sends = [], options = { taskId: TASK_ID, actorSicil: 900001, send: async ({ to }) => {
+      sends.push(to[0]); if (sends.length === 1) t.mock.timers.tick(40001); return { ok: true };
+    } };
+    await sendManualReminder(pool, options);
+    const digest = db.taskReminderLog[0].RecipientDigest;
+    assert.equal(digest.split(':').at(-1), '20');
+    const request = pool.request.bind(pool); let fail = true;
+    t.mock.method(pool, 'request', () => {
+      const value = request(), query = value.query.bind(value);
+      value.query = async (sql) => {
+        if (fail && (failingRead === 'progress' ? sql === REMINDER_PROGRESS_SQL : sql.includes('SELECT ta.Sicil'))) {
+          fail = false; throw new Error('transient read failure');
+        }
+        return query(sql);
+      }; return value;
+    });
+    await assert.rejects(sendManualReminder(pool, options), /transient read failure/);
+    assert.equal(db.taskReminderLog[0].FailureCode, 'RECIPIENTS_PENDING'); assert.ok(db.taskReminderLog[0].CompletedAt);
+    assert.equal(db.taskReminderLog[0].RecipientDigest, digest);
+    assert.equal((await sendManualReminder(pool, options)).ok, true);
+    assert.equal(sends.length, 2); assert.equal(new Set(sends).size, 2); assert.equal(db.taskReminderLog.length, 1);
+  });
+});
+
+for (const checkpoint of ['pre', 'post']) test(`a ${checkpoint}-send checkpoint error retains persistence attribution`, async (t) => {
+  await withReminderStack(reminderSeed({ taskAssignees: [{ TaskId: TASK_ID, Sicil: 900001 }, { TaskId: TASK_ID, Sicil: 900002 }] }), async ({ db, pool }) => {
+    const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
+    const { REMINDER_COMPLETE_SQL } = await import('../src/server/reminders/reminderQueries.js');
+    const request = pool.request.bind(pool); let checkpoints = 0, sends = 0;
+    t.mock.method(pool, 'request', () => {
+      const value = request(), query = value.query.bind(value);
+      value.query = async (sql) => {
+        if (sql === REMINDER_COMPLETE_SQL && ++checkpoints === (checkpoint === 'pre' ? 1 : 2)) throw new Error('checkpoint failed');
+        return query(sql);
+      }; return value;
+    });
+    const outcome = await runAutomaticReminders(pool, { now: at(2026, 8, 17), send: async () => { sends += 1; return { ok: true }; } });
+    assert.equal(sends, checkpoint === 'pre' ? 0 : 1); assert.equal(outcome.ok, false); assert.equal(outcome.failed, 1);
+    assert.equal(outcome.results[0].reason, checkpoint === 'pre' ? 'UNEXPECTED_ERROR' : 'MAIL_DELIVERY_UNCERTAIN');
+    assert.match(outcome.results[0].warnings.join(' '), /ilerlemesi kaydedilemedi/);
+    assert.doesNotMatch(outcome.results[0].warnings.join(' '), /süresi doldu/);
+    assert.equal(db.taskReminderLog[0].RecipientDigest.split(':').at(-1), checkpoint === 'pre' ? '00' : '20');
+  });
+});
+
+test('manual continuation SQL enforces its bound resume window without claiming stale progress', async () => {
+  await withReminderStack(reminderSeed(), async ({ db, pool }) => {
+    const { resumeManualReminder, ABANDONED_CLAIM_MINUTES } = await import('../src/server/reminders/reminderStore.js');
+    const { REMINDER_RESUME_MANUAL_SQL } = await import('../src/server/reminders/reminderQueries.js');
+    assert.match(REMINDER_RESUME_MANUAL_SQL, /CompletedAt >= DATEADD\(minute, -@resumeWindowMinutes, SYSUTCDATETIME\(\)\)/);
+    db.taskReminderLog.push({ TaskReminderLogId: 123, TaskId: TASK_ID, RequestedBySicil: 900001, ReminderKind: 'MANUAL', Status: 'PENDING',
+      FailureCode: 'RECIPIENTS_PENDING', CompletedAt: new Date(Date.now() - (ABANDONED_CLAIM_MINUTES + 1) * 60000).toISOString(), RecipientDigest: 'unchanged' });
+    assert.equal(await resumeManualReminder(pool, TASK_ID, 900001), null);
+    assert.equal(db.taskReminderLog[0].FailureCode, 'RECIPIENTS_PENDING'); assert.equal(db.taskReminderLog[0].RecipientDigest, 'unchanged');
+    db.taskReminderLog[0].CompletedAt = new Date().toISOString();
+    assert.equal(await resumeManualReminder(pool, TASK_ID, 900001), 123);
+  });
+});
+
+test('assignee display names share sicil deduplication while preserving unnamed-identity rows', async (t) => {
+  await withReminderStack(reminderSeed(), async ({ pool }) => {
+    const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+    const request = pool.request.bind(pool);
+    t.mock.method(pool, 'request', () => {
+      const value = request(), query = value.query.bind(value);
+      value.query = async (sql) => sql.includes('SELECT ta.Sicil') ? { recordset: [
+        { Sicil: 900001, Name: 'First name', Username: 'first', Email: 'first@example.internal' },
+        { Sicil: ' 900001 ', Name: 'Duplicate name', Username: 'other', Email: 'other@example.internal' },
+        { Sicil: null, Name: 'No identifier', Username: '', Email: '' },
+        { Sicil: '', Name: 'Second no identifier', Username: '', Email: '' },
+        { Sicil: 900002, Name: '   ', Username: '', Email: '' }
+      ] } : query(sql);
+      return value;
+    });
+    const mailer = recordingMailer();
+    assert.equal((await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: mailer.send })).ok, true);
+    assert.equal(mailer.sent.length, 1);
+    assert.match(mailer.sent[0].text, /First name, No identifier, Second no identifier/);
+    assert.doesNotMatch(mailer.sent[0].text, /Duplicate name/);
+  });
+});
