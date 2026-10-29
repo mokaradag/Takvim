@@ -148,7 +148,9 @@ export async function deliverTaskReminder(executor, {
     const message = 'Bazı teslimatların sonucu belirsiz; yinelenen posta riskine karşı otomatik yeniden gönderilmeyecek.';
     // PENDING + CompletedAt + a distinct code is terminal uncertainty, not SENT
     // or definite failure. Stale-claim recovery must not retry this delivery.
-    await finalizeLog(executor, logId, { status: 'PENDING', recipients: delivered, failureCode: code });
+    const outcome = { status: 'PENDING', recipients: delivered, failureCode: code };
+    const recorded = await finalizeLog(executor, logId, outcome) || await finalizeLog(executor, logId, outcome);
+    if (!recorded) warnings.push('Gönderim geçmişi kaydının tamamlandığı doğrulanamadı.');
     return { ok: false, code, message, deliveryMayHaveEscaped: true, recipientCount: delivered.length, problems, warnings: [...warnings, message] };
   }
   if (!delivered.length) {

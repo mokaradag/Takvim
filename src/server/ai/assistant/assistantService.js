@@ -525,7 +525,6 @@ function citedWithoutKnownEvidence(message, evidence) {
 }
 
 function savedMessageMissing(message, evidence) {
-  if (message.source === 'general' || message.finishReason === 'general') return false;
   return Boolean(evidence?.presentMessages && !evidence.presentMessages.has(message.id));
 }
 

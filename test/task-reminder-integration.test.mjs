@@ -848,3 +848,41 @@ for (const timeoutMs of [80, 300000]) test(`the final delivery deadline bounds a
     for (const [key, value] of Object.entries(prior)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   }
 });
+
+for (const failures of [1, 2]) {
+  test(`uncertain delivery retries history finalization once without resending (${failures} failures)`, async (t) => {
+    await withReminderStack(reminderSeed(), async ({ pool, db }) => {
+      const { deliverTaskReminder } = await import('../src/server/reminders/reminderService.js');
+      const { claimAutomaticReminder, loadReminderTask, loadReminderSettings } = await import('../src/server/reminders/reminderStore.js');
+      const { REMINDER_COMPLETE_SQL } = await import('../src/server/reminders/reminderQueries.js');
+      const logId = await claimAutomaticReminder(pool, { taskId: TASK_ID, projectId: PROJECT_ID, slotKey: 'uncertain-retry', actorSicil: 900001 });
+      const request = pool.request.bind(pool);
+      const attempts = [];
+      t.mock.method(pool, 'request', () => {
+        const value = request(), query = value.query.bind(value);
+        value.query = async (sql) => {
+          if (sql === REMINDER_COMPLETE_SQL) {
+            attempts.push(sql);
+            if (attempts.length <= failures) throw Object.assign(new Error('history unavailable'), { code: 'ETIMEOUT' });
+          }
+          return query(sql);
+        };
+        return value;
+      });
+      let sends = 0;
+      const result = await deliverTaskReminder(pool, { task: await loadReminderTask(pool, TASK_ID), settings: await loadReminderSettings(pool),
+        kind: 'AUTOMATIC', logId, send: async () => { sends += 1; return { ok: false, code: 'SMTP_TIMEOUT', deliveryMayHaveEscaped: true }; } });
+      assert.equal(sends, 1); assert.equal(attempts.length, 2);
+      assert.equal(result.ok, false); assert.equal(result.code, 'MAIL_DELIVERY_UNCERTAIN');
+      assert.equal(result.deliveryMayHaveEscaped, true);
+      assert.equal(result.warnings.some((warning) => warning.includes('geçmişi')), failures === 2);
+      if (failures === 1) {
+        assert.equal(db.taskReminderLog[0].FailureCode, 'MAIL_DELIVERY_UNCERTAIN');
+        assert.ok(db.taskReminderLog[0].CompletedAt);
+        // A terminal uncertain row is not reclaimable, even after its lease.
+        db.taskReminderLog[0].CreatedAt = '2000-01-01T00:00:00.000Z';
+        assert.equal(await claimAutomaticReminder(pool, { taskId: TASK_ID, projectId: PROJECT_ID, slotKey: 'uncertain-retry', actorSicil: 900001 }), null);
+      } else assert.equal(db.taskReminderLog[0].CompletedAt, null);
+    });
+  });
+}

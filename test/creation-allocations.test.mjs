@@ -296,7 +296,7 @@ test('failed proof persistence publishes no memory state; retry remains durable 
   const values = new Map();
   let rejectProof = true;
   const storage = { getItem: (key) => values.get(key), setItem(key, value) {
-    if (key.endsWith('.creations.v1') && rejectProof) { rejectProof = false; throw new Error('quota'); }
+    if (key.endsWith('.creations.v1') && JSON.parse(value).pending.length && rejectProof) { rejectProof = false; throw new Error('quota'); }
     values.set(key, value);
   } };
   const fetch = globalThis.fetch;
@@ -318,7 +318,7 @@ test('failed proof persistence publishes no memory state; retry remains durable 
     assert.equal(sent.filter((body) => body.operation).length, 2, 'a failed remember left no reusable proof in memory');
     const submitted = sent.find((body) => !body.operation).changes.taskUpserts[0];
     assert.notEqual(submitted.id, firstId);
-    const persisted = JSON.parse([...values].find(([key]) => key.endsWith('.creations.v1'))[1]);
+    const persisted = JSON.parse([...values].find(([key]) => key.endsWith('.creations.v1'))[1]).pending;
     assert.equal(persisted[0].proof, submitted.creationProof);
     assert.equal(persisted[0].id, submitted.id);
     await assert.rejects(createApiRepository({ aliasStorage: storage }).commitChanges(changes),
@@ -338,4 +338,232 @@ test('proof durability requirements do not block versioned edits when browser st
     assert.equal(result.taskUpserts[0].task, 'Versioned edit');
     assert.equal(stack.db.creationAllocations.length, 0);
   } finally { await stack.dispose(); }
+});
+
+function sharedCreationStorage() {
+  const values = new Map();
+  return { values, client: () => ({ getItem: (key) => values.get(key) || null, setItem: (key, value) => values.set(key, value) }),
+    state: () => JSON.parse([...values].find(([key]) => key.endsWith('.creations.v1'))?.[1] || '{}') };
+}
+
+for (const entityType of ['TASK', 'WBS']) {
+  test(`moved ${entityType} draft replaces the project-bound proof and preserves its client ID`, async () => {
+    const base = seed();
+    const projectB = randomUUID(), wbsB = randomUUID();
+    const stack = await createActualStack({ ...base,
+      projects: [...base.projects, { ProjectId: projectB, SourceType: 'MANUAL', ProjectName: 'B', LeadSicil: 900010, CalendarId: DEFAULT_CALENDAR_ID }],
+      wbs: [...base.wbs, { WbsId: wbsB, ProjectId: projectB, ParentWbsId: null, Code: '1', Name: 'B root' }] }, { sicil: 900010 });
+    const shared = sharedCreationStorage();
+    const fetch = globalThis.fetch, sent = [];
+    let fail = true;
+    globalThis.fetch = async (url, init) => {
+      const body = JSON.parse(init.body); sent.push(body);
+      if (!body.operation && fail) { fail = false; throw new TypeError('commit did not reach server'); }
+      return fetch(url, init);
+    };
+    try {
+      const clientId = `${entityType.toLowerCase()}-${randomUUID()}`;
+      const collection = entityType === 'TASK' ? 'taskUpserts' : 'wbsUpserts';
+      const entry = entityType === 'TASK' ? task(clientId) : { id: clientId, projectId: CORPORATE_PROJECT_ID, parentId: CORPORATE_ROOT_WBS_ID, code: '2', name: 'New WBS' };
+      const repository = createApiRepository({ aliasStorage: shared.client() });
+      await assert.rejects(repository.commitChanges({ [collection]: [entry] }));
+      const old = shared.state().pending[0];
+      const moved = { ...entry, projectId: projectB, ...(entityType === 'TASK' ? { wbsId: wbsB } : { parentId: wbsB }) };
+      const saved = await repository.commitChanges({ [collection]: [moved] });
+      assert.equal(saved[collection][0].id, clientId);
+      assert.equal(sent.filter((body) => body.operation).length, 2);
+      const submitted = sent.at(-1).changes[collection][0];
+      assert.equal(submitted.projectId, projectB);
+      assert.notEqual(submitted.id, old.id);
+      assert.notEqual(submitted.creationProof, old.proof);
+      assert.equal(shared.state().aliases.some(([id]) => id === old.id), false);
+      assert.deepEqual(shared.state().pending, []);
+      // The same move to an unauthorized destination is still rejected server-side.
+      await assert.rejects(repository.commitChanges({ [collection]: [{ ...entry, id: `${entityType.toLowerCase()}-${randomUUID()}`, projectId: HIDDEN_PROJECT }] }));
+    } finally { globalThis.fetch = fetch; await stack.dispose(); }
+  });
+}
+
+test('stale independent tabs merge interleaved proofs and completion never resurrects another pending record', async () => {
+  const base = seed(), projectB = randomUUID(), rootB = randomUUID();
+  const stack = await createActualStack({ ...base,
+    projects: [...base.projects, { ProjectId: projectB, SourceType: 'MANUAL', ProjectName: 'B', LeadSicil: 900010, CalendarId: DEFAULT_CALENDAR_ID }],
+    wbs: [...base.wbs, { WbsId: rootB, ProjectId: projectB, ParentWbsId: null, Code: '1', Name: 'B root' }] }, { sicil: 900010 });
+  const shared = sharedCreationStorage();
+  const a = createApiRepository({ aliasStorage: shared.client() });
+  const b = createApiRepository({ aliasStorage: shared.client() });
+  const changesA = { taskUpserts: [task(`task-${randomUUID()}`)] };
+  const changesB = { wbsUpserts: [{ id: `wbs-${randomUUID()}`, projectId: projectB, parentId: rootB, code: '2', name: 'Tab B' }] };
+  const fetch = globalThis.fetch;
+  let allocatedB, releaseB;
+  const bAllocated = new Promise((resolve) => { allocatedB = resolve; });
+  const bHeld = new Promise((resolve) => { releaseB = resolve; });
+  let failCommits = true;
+  const sent = [];
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body); sent.push(body);
+    if (!body.operation && failCommits) throw new TypeError('commit not sent');
+    const response = await fetch(url, init);
+    if (body.operation && body.allocationChanges.wbsUpserts.length) { allocatedB(); await bHeld; }
+    return response;
+  };
+  try {
+    // Both clients started empty. B's allocation is in flight while A persists;
+    // B must subsequently read shared storage instead of overwriting from memory.
+    const pendingB = assert.rejects(b.commitChanges(changesB));
+    await bAllocated;
+    await assert.rejects(a.commitChanges(changesA));
+    const proofA = shared.state().pending[0];
+    releaseB(); await pendingB;
+    const state = shared.state();
+    assert.equal(state.pending.length, 2);
+    const proofB = state.pending.find((record) => record.entityType === 'WBS');
+    assert.deepEqual(state.pending.find((record) => record.entityType === 'TASK'), proofA);
+    assert.equal(state.aliases.find(([id]) => id === proofA.id)[2], 'TASK');
+    assert.equal(state.aliases.find(([id]) => id === proofB.id)[2], 'WBS');
+    // Original stale clients and fresh clients all recover the durable proof.
+    for (const [repository, changes, proof] of [[a, changesA, proofA], [b, changesB, proofB],
+      [createApiRepository({ aliasStorage: shared.client() }), changesA, proofA]]) {
+      await assert.rejects(repository.commitChanges(changes));
+      const submitted = sent.at(-1).changes;
+      assert.equal(creationEntries(submitted)[0].entry.creationProof, proof.proof);
+    }
+    failCommits = false;
+    assert.equal((await a.commitChanges(changesA)).taskUpserts[0].id, changesA.taskUpserts[0].id);
+    assert.deepEqual(shared.state().pending.map((record) => record.id), [proofB.id]);
+    await b.commitChanges(changesB);
+    assert.deepEqual(shared.state().pending, []);
+    assert.equal(shared.state().aliases.filter((entry) => ['TASK', 'WBS'].includes(entry[2])).length, 2);
+    await assert.rejects(a.commitChanges(changesA), (error) => error.details.code === 'CREATION_ALLOCATION_STORAGE');
+    assert.deepEqual(shared.state().pending, [], 'a completed proof cannot be resurrected by a stale tab');
+    assert.equal(sent.filter((body) => body.operation).length, 2);
+  } finally { releaseB(); globalThis.fetch = fetch; await stack.dispose(); }
+});
+
+test('pending proof lifetime has a safety margin, drops undated legacy state, and keeps completed typed aliases', async () => {
+  const { createCreationIdStorage, CREATION_ALLOCATION_CLIENT_TTL_MS, CREATION_ALLOCATION_SERVER_TTL_MS,
+    CREATION_ALLOCATION_SAFETY_MARGIN_MS } = await import('../src/data/api/creationIdStorage.js');
+  const { actualIdAliasType } = await import('../src/data/api/actualIdAliasStorage.js');
+  assert.equal(CREATION_ALLOCATION_SERVER_TTL_MS, 24 * 60 * 60 * 1000);
+  assert.equal(CREATION_ALLOCATION_CLIENT_TTL_MS + CREATION_ALLOCATION_SAFETY_MARGIN_MS, CREATION_ALLOCATION_SERVER_TTL_MS);
+  assert.ok(CREATION_ALLOCATION_SAFETY_MARGIN_MS > 0);
+  let time = 1000000000;
+  const shared = sharedCreationStorage(), aliases = new Map();
+  const storage = shared.client();
+  const lifecycle = createCreationIdStorage(storage, undefined, { now: () => time });
+  const changes = { taskUpserts: [task()] };
+  const allocation = { entityType: 'TASK', clientId: changes.taskUpserts[0].id, id: randomUUID(), projectId: CORPORATE_PROJECT_ID, proof: randomUUID() };
+  await lifecycle.remember([allocation], aliases, changes);
+  const allocatedAt = time;
+  assert.equal((await lifecycle.prepare(changes, aliases)).taskUpserts[0].creationProof, allocation.proof);
+  time += CREATION_ALLOCATION_CLIENT_TTL_MS - 1;
+  assert.equal((await lifecycle.prepare(changes, aliases)).taskUpserts[0].creationProof, allocation.proof);
+  // Restoring also excludes the expired proof/alias before any request uses it.
+  time += 1;
+  const restoredAliases = new Map();
+  const restored = createCreationIdStorage(storage, undefined, { now: () => time });
+  restored.restoreAliases(restoredAliases);
+  assert.equal(restoredAliases.has(allocation.id), false);
+  const fresh = (await restored.prepare(changes, restoredAliases)).taskUpserts[0];
+  assert.equal(fresh.id, allocation.clientId); assert.equal(fresh.creationProof, undefined);
+  assert.deepEqual(shared.state().pending, []); assert.deepEqual(shared.state().aliases, []);
+  assert.equal(actualIdAliasType(restoredAliases, allocation.id), undefined);
+  const replacement = { ...allocation, id: randomUUID(), proof: randomUUID() };
+  await restored.remember([replacement], restoredAliases, changes);
+  const prepared = await restored.prepare(changes, restoredAliases);
+  await restored.complete(prepared, restoredAliases);
+  time += 3 * CREATION_ALLOCATION_SERVER_TTL_MS;
+  const completedAliases = new Map();
+  createCreationIdStorage(storage, undefined, { now: () => time }).restoreAliases(completedAliases);
+  assert.equal(completedAliases.get(replacement.id), replacement.clientId);
+  assert.equal(actualIdAliasType(completedAliases, replacement.id), 'TASK');
+  // Older builds saved pending aliases separately and had no allocation age.
+  const legacy = sharedCreationStorage();
+  legacy.values.set('mergen-rota.actual-id-aliases.v1', JSON.stringify([[allocation.id, allocation.clientId, 'TASK'], [replacement.id, `task-${replacement.id}`, 'TASK']]));
+  legacy.values.set('mergen-rota.actual-id-aliases.v1.creations.v1', JSON.stringify([{ ...allocation, clientAlias: allocation.clientId }]));
+  const legacyAliases = new Map();
+  const migrated = createCreationIdStorage(legacy.client(), undefined, { now: () => allocatedAt });
+  migrated.restoreAliases(legacyAliases);
+  assert.equal(legacyAliases.has(allocation.id), false);
+  assert.equal(legacyAliases.get(replacement.id), `task-${replacement.id}`, 'completed legacy aliases are retained');
+  const retry = await migrated.prepare(changes, legacyAliases);
+  assert.equal(retry.taskUpserts[0].id, allocation.clientId);
+  assert.equal(retry.taskUpserts[0].creationProof, undefined);
+  assert.equal(legacy.state().pending.length, 0);
+  assert.equal(legacy.state().aliases.some(([id]) => id === allocation.id), false);
+});
+
+for (const legacy of [false, true]) {
+  test(`expired ${legacy ? 'legacy undated' : 'dated'} allocation gets replaced through the real repository`, async (t) => {
+    const stack = await createActualStack(seed(), { sicil: 900010 });
+    const shared = sharedCreationStorage();
+    const fetch = globalThis.fetch;
+    let fail = true, allocations = 0;
+    globalThis.fetch = async (url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.operation) allocations += 1;
+      else if (fail) { fail = false; throw new TypeError('not sent'); }
+      return fetch(url, init);
+    };
+    try {
+      const changes = { taskUpserts: [task(`task-${randomUUID()}`)] };
+      await assert.rejects(createApiRepository({ aliasStorage: shared.client() }).commitChanges(changes));
+      const state = shared.state(), old = state.pending[0];
+      if (legacy) {
+        delete old.allocatedAt;
+        shared.values.set('mergen-rota.actual-id-aliases.v1', JSON.stringify(state.aliases));
+        shared.values.set('mergen-rota.actual-id-aliases.v1.creations.v1', JSON.stringify(state.pending));
+      } else {
+        const { CREATION_ALLOCATION_CLIENT_TTL_MS } = await import('../src/data/api/creationIdStorage.js');
+        t.mock.method(Date, 'now', () => old.allocatedAt + CREATION_ALLOCATION_CLIENT_TTL_MS + 1);
+      }
+      const result = await createApiRepository({ aliasStorage: shared.client() }).commitChanges(changes);
+      assert.equal(result.taskUpserts[0].id, changes.taskUpserts[0].id);
+      assert.equal(allocations, 2);
+      assert.equal(shared.state().aliases.some(([id]) => id === old.id), false);
+      assert.equal(stack.db.tasks.length, 2);
+    } finally { globalThis.fetch = fetch; await stack.dispose(); }
+  });
+}
+
+test('entity translation passes malformed/non-object string bodies through byte for byte', async () => {
+  const { activateActualIdAliases } = await import('../src/data/api/activeActualIdAliases.js');
+  const { actualIdAliasType } = await import('../src/data/api/actualIdAliasStorage.js');
+  const actual = randomUUID(), client = `task-${randomUUID()}`;
+  const aliases = new Map([[actual, client]]); actualIdAliasType(aliases, actual, 'TASK'); activateActualIdAliases(aliases);
+  try {
+    for (const body of [' { malformed ', ' null ', ' [1, 2] ', ' "text" ', ' 42 ', ' true ', ' false ']) {
+      const init = { method: 'POST', body };
+      const result = translateEntityRequest(`/api/mergen-rota/tasks/${client}/reminder?taskId=${client}`, init);
+      assert.equal(result.init, init); assert.equal(result.init.body, body);
+      assert.equal(result.path, `/api/mergen-rota/tasks/${actual}/reminder?taskId=${actual}`);
+    }
+    const result = translateEntityRequest('/api/mergen-rota/tasks', { body: JSON.stringify({ taskId: client, taskIds: [client], other: client }) });
+    assert.deepEqual(JSON.parse(result.init.body), { taskId: actual, taskIds: [actual], other: client });
+  } finally { activateActualIdAliases(new Map()); }
+});
+
+test('cross-context storage mutations read only after acquiring the shared browser lock', async (t) => {
+  const { createCreationIdStorage } = await import('../src/data/api/creationIdStorage.js');
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  t.after(() => { if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; });
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let queue = held;
+  const names = [];
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { navigator: { locks: {
+    request(name, mutation) { names.push(name); const result = queue.then(mutation); queue = result.catch(() => {}); return result; }
+  } } } });
+  const shared = sharedCreationStorage(), aliasesA = new Map(), aliasesB = new Map();
+  let reads = 0;
+  const client = () => ({ getItem: (key) => { reads += 1; return shared.values.get(key); }, setItem: (key, value) => shared.values.set(key, value) });
+  const a = createCreationIdStorage(client()), b = createCreationIdStorage(client());
+  const allocations = ['TASK', 'WBS'].map((entityType) => ({ entityType, clientId: randomUUID(), id: randomUUID(), proof: randomUUID(), projectId: CORPORATE_PROJECT_ID }));
+  const pendingA = a.remember([allocations[0]], aliasesA, { taskUpserts: [{ id: allocations[0].clientId }] });
+  const pendingB = b.remember([allocations[1]], aliasesB, { wbsUpserts: [{ id: allocations[1].clientId }] });
+  assert.equal(reads, 0); assert.equal(aliasesA.size, 0); assert.equal(aliasesB.size, 0);
+  release(); await Promise.all([pendingA, pendingB]);
+  assert.equal(new Set(names).size, 1); assert.equal(names.length, 2);
+  assert.equal(shared.state().pending.length, 2);
+  assert.equal(aliasesB.get(allocations[0].id), allocations[0].clientId, 'the later lock holder publishes the merged state');
 });

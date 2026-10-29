@@ -23,10 +23,13 @@ export function translateEntityRequest(path, init) {
     `${prefix}${encodeURIComponent(outgoing(decodeURIComponent(id), 'TASK'))}${suffix}`);
   let translated = init;
   if (typeof init?.body === 'string') {
-    const body = JSON.parse(init.body);
-    for (const [key, type] of ENTITY_KEYS) if (Object.hasOwn(body, key)) body[key] = outgoing(body[key], type);
-    if (Array.isArray(body.taskIds)) body.taskIds = body.taskIds.map((value) => outgoing(value, 'TASK'));
-    translated = { ...init, body: JSON.stringify(body) };
+    let body;
+    try { body = JSON.parse(init.body); } catch { /* Not an entity payload. */ }
+    if (body && typeof body === 'object' && !Array.isArray(body)) {
+      for (const [key, type] of ENTITY_KEYS) if (Object.hasOwn(body, key)) body[key] = outgoing(body[key], type);
+      if (Array.isArray(body.taskIds)) body.taskIds = body.taskIds.map((value) => outgoing(value, 'TASK'));
+      translated = { ...init, body: JSON.stringify(body) };
+    }
   }
   return { path: `${url.pathname}${url.search}`, init: translated };
 }

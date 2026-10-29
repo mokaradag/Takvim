@@ -659,3 +659,39 @@ test('conversation deletion between history and evidence reads cannot put protec
   const history = turn.modelMessages.filter(message => message.role === 'assistant');
   assert.equal(history.length, 1); assert.ok(history.every(message => !message.content.includes(saved.assistantMessage.content))); assert.match(history[0].content, /güncel kanıt olmadığı/);
 });
+
+for (const deleted of [false, true]) {
+  test(`saved general text with literal citation markers requires current presence (deleted=${deleted})`, async (t) => {
+    const stack = stackFor(t);
+    const text = 'Genel sohbet etiketi: 【R1】.';
+    stack.provider.enqueue({ type: 'stream', text });
+    const saved = done(await sendTurn({ turnId: randomUUID(), source: 'general', message: 'Etiketi açıkla' }));
+    const pool = await getSqlPool();
+    const request = pool.request.bind(pool);
+    let evidenceReads = 0;
+    t.mock.method(pool, 'request', () => {
+      const value = request(), query = value.query.bind(value);
+      value.query = async (sql) => {
+        if (sql.includes('AS EvidenceReady')) {
+          evidenceReads += 1;
+          if (deleted) {
+            // A competing tab deletes after loadConversation read its snapshot.
+            const response = await conversationRoute.DELETE(aiRequest(`/assistant/conversations/${saved.conversation.id}`, { method: 'DELETE' }),
+              { params: { conversationId: saved.conversation.id } });
+            assert.equal(response.status, 200);
+          }
+        }
+        return query(sql);
+      };
+      return value;
+    });
+    const opened = await loadAssistantConversation(saved.conversation.id);
+    assert.equal(opened.status, 200);
+    assert.equal(evidenceReads, 1);
+    const answer = opened.body.messages.find((message) => message.role === 'assistant');
+    assert.deepEqual(answer.evidence || [], []);
+    assert.equal(answer.content, deleted ? NON_ENUMERATING_FAILURE_TEXT : text);
+    assert.equal(answer.finishReason, deleted ? 'not_found' : saved.assistantMessage.finishReason);
+    if (deleted) assert.equal(JSON.stringify(opened.body).includes(text), false);
+  });
+}

@@ -23,6 +23,11 @@ function allocationResponse(changes) {
   const allocations = creationEntries(changes).map(({ entry, entityType }) => ({
     clientId: entry.id, entityType, id: randomUUID(), proof: randomUUID()
   }));
+  for (const record of allocations) {
+    const { entry } = creationEntries(changes).find(({ entry, entityType }) => entityType === record.entityType && entry.id === record.clientId);
+    record.projectId = record.entityType === 'PROJECT' ? record.id
+      : allocations.find((value) => value.entityType === 'PROJECT' && value.clientId === entry.projectId)?.id || entry.projectId;
+  }
   return { ok: true, status: 200, async json() { return { allocations }; } };
 }
 

@@ -5,8 +5,7 @@ import { createCreationIdStorage } from './creationIdStorage.js';
 import { activateActualIdAliases } from './activeActualIdAliases.js';
 import { AppRepositoryError, REPOSITORY_ERROR_CODES } from '../contracts/appRepository.js';
 import {
-  loadActualIdAliases,
-  persistActualIdAliases
+  loadActualIdAliases
 } from './actualIdAliasStorage.js';
 
 const CODE_BY_STATUS = {
@@ -423,20 +422,17 @@ export function createApiRepository({
     const result = preparation.then(async () => {
       collectClientIds(changes, clientIdAliases);
       const normalized = normalizeActualChanges(changes);
-      let prepared = creationIds.prepare(normalized, clientIdAliases);
+      let prepared = await creationIds.prepare(normalized, clientIdAliases);
       if (creationEntries(prepared).some(({ entry }) => !entry.creationProof)) {
+        const allocatedAt = Date.now();
         const { allocations } = await requestJson(`${basePath}/commit`, { method: 'POST',
           body: JSON.stringify({ operation: 'allocate-creation-ids', changes: {}, allocationChanges: prepared }) }, 'commitChanges');
         if (!Array.isArray(allocations)) throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
           message: 'Oluşturma kimliği alınamadı.', operation: 'commitChanges' });
-        creationIds.remember(allocations, clientIdAliases, changes);
-        prepared = creationIds.prepare(normalized, clientIdAliases);
+        await creationIds.remember(allocations, clientIdAliases, changes, allocatedAt);
+        prepared = await creationIds.prepare(normalized, clientIdAliases);
         if (creationEntries(prepared).some(({ entry }) => !entry.creationProof)) throw new AppRepositoryError({
           code: REPOSITORY_ERROR_CODES.MUTATION_FAILED, message: 'Oluşturma kimliği alınamadı.', operation: 'commitChanges' });
-      }
-      if (!persistActualIdAliases(clientIdAliases, aliasStorage, aliasStorageKey) && aliasStorage && creationEntries(prepared).length) {
-        throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
-          message: 'Oluşturma kimliği saklanamadı.', operation: 'commitChanges' });
       }
       activateActualIdAliases(clientIdAliases);
       return prepared;
@@ -487,7 +483,7 @@ export function createApiRepository({
         keepalive: useKeepalive,
         body
       }, 'commitChanges');
-      creationIds.complete(prepared);
+      await creationIds.complete(prepared, clientIdAliases);
       return restoreActualCommitIds(committed, changes, clientIdAliases);
     },
     async flush() {}
