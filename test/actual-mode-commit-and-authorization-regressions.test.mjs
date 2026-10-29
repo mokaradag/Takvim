@@ -39,6 +39,7 @@ test('Actual commit responses map normalized SQL UUIDs back to pending client ID
   let postedChanges;
 
   globalThis.fetch = async (_url, init) => {
+    if (String(_url).endsWith('/session')) return Response.json({ authenticated: true, currentUser: { sicil: 900001 } });
     const payload = JSON.parse(init.body);
     if (payload.operation) return allocationResponse(payload.allocationChanges);
     postedChanges = payload.changes;
@@ -341,6 +342,7 @@ test('Actual repository keeps client ID aliases across later snapshot loads and 
   let allocated;
 
   globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith('/session')) return Response.json({ authenticated: true, currentUser: { sicil: 900001 } });
     if (init?.body) {
       const payload = JSON.parse(init.body);
       if (payload.operation) return allocationResponse(payload.allocationChanges);
@@ -366,6 +368,7 @@ test('Actual repository keeps client ID aliases across later snapshot loads and 
         status: 200,
         async json() {
           return {
+            session: { authenticated: true, currentUser: { sicil: 900001 } },
             projects: [{ id: allocated.projectUpserts[0].id, name: 'Persistent Alias' }],
             wbs: [{ id: allocated.wbsUpserts[0].id, projectId: allocated.projectUpserts[0].id, parentId: null, code: '1', name: 'Root' }],
             tasks: [{ id: allocated.taskUpserts[0].id, projectId: allocated.projectUpserts[0].id, wbsId: allocated.wbsUpserts[0].id, status: 'planned', deps: [] }]

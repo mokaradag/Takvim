@@ -64,10 +64,12 @@ test('manuel proje oluşturucusu OWNER kalır, seçilen proje sorumlusu da FULL 
 
     process.env.MERGEN_ROTA_DEV_SICIL = String(LEAD);
     await stack.reload();
-    const project = stack.state.projects.find((entry) => entry.id === OTHER_PROJECT_ID);
+    const otherServerId = stack.actualId(OTHER_PROJECT_ID);
+    const project = stack.state.projects.find((entry) => entry.id === otherServerId);
     assert.equal(project.accessLevel, 'FULL');
+    assert.equal(stack.state.projects.some((entry) => entry.id === OTHER_PROJECT_ID), false, 'new account receives no creator-owned client alias');
     assert.equal(stack.state.projects.some((entry) => entry.id === SELF_PROJECT_ID), false);
-    const root = stack.state.wbs.find((entry) => entry.projectId === OTHER_PROJECT_ID);
+    const root = stack.state.wbs.find((entry) => entry.projectId === otherServerId);
     const renamed = await stack.repository.commitChanges({ wbsUpserts: [{ ...root, name: 'Liderin yönettiği ağaç' }] });
     assert.equal(renamed.wbsUpserts[0].name, 'Liderin yönettiği ağaç');
 
@@ -75,10 +77,10 @@ test('manuel proje oluşturucusu OWNER kalır, seçilen proje sorumlusu da FULL 
       projectUpserts: [{ ...project, leadId: String(NEXT_LEAD) }]
     });
     assert.deepEqual(transferred.projectUpserts, []);
-    assert.deepEqual(transferred.projectDeletes, [OTHER_PROJECT_ID], 'eski liderin istemcisinde yetkisiz proje bırakılmaz');
+    assert.deepEqual(transferred.projectDeletes, [otherServerId], 'eski liderin istemcisinde yetkisiz proje bırakılmaz');
     const scrubbed = appStateReducer(stack.state, { type: 'data/apply-changes', changes: transferred });
-    assert.equal(scrubbed.projects.some((entry) => entry.id === OTHER_PROJECT_ID), false);
-    assert.equal(scrubbed.wbs.some((entry) => entry.projectId === OTHER_PROJECT_ID), false);
+    assert.equal(scrubbed.projects.some((entry) => entry.id === otherServerId), false);
+    assert.equal(scrubbed.wbs.some((entry) => entry.projectId === otherServerId), false);
     await stack.reload();
     assert.equal(stack.state.projects.length, 0);
 

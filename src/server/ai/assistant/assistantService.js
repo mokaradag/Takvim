@@ -531,7 +531,7 @@ function savedMessageMissing(message, evidence) {
 const UNVERIFIABLE_SAVED_ANSWER_TEXT = 'Bu kayıtlı yanıt çok sayıda kayda dayandığı için güncel yetkinizle yeniden doğrulanamıyor. Güncel bilgi için soruyu yeniden sorun.';
 
 function discloseSavedMessages(messages, evidence) {
-  return messages.map((message) => {
+  return messages.filter((message) => message.role === 'assistant' || !savedMessageMissing(message, evidence)).map((message) => {
     if (message.role !== 'assistant') return message;
     if (evidence?.unverifiable?.has(message.id)) {
       return { ...message, content: UNVERIFIABLE_SAVED_ANSWER_TEXT, evidence: [], finishReason: 'unavailable' };

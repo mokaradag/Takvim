@@ -238,6 +238,20 @@ test('kuyruk sorgusu hatası hatırlatma ayarlarını düşürmeden güvenli tan
   assert.doesNotMatch(JSON.stringify(body), /SELECT|secret|password/);
 });
 
+test('mixed reminder failures preserve uncertainty and existing operator failure counts', async () => {
+  const { reminderRunOutcome } = await import('../src/domain/reminders/reminderRunOutcome.js');
+  const summary = { enabled: true, failureCodes: { SMTP_SEND_FAILED: 4, NO_RECIPIENTS: 2 }, results: [
+    { status: 'FAILED', reason: 'SMTP_SEND_FAILED' },
+    { status: 'PENDING', reason: 'MAIL_DELIVERY_UNCERTAIN' },
+    { status: 'PENDING', reason: 'MAIL_DELIVERY_UNCERTAIN' }
+  ] };
+  const result = reminderRunOutcome(summary);
+  assert.equal(result.failed, 3);
+  assert.deepEqual(result.failureCodes, { SMTP_SEND_FAILED: 4, NO_RECIPIENTS: 2, MAIL_DELIVERY_UNCERTAIN: 2 });
+  assert.match(deliveryRunMessage({ reminders: result }).text, /MAIL_DELIVERY_UNCERTAIN.*otomatik yeniden gönderilmeyecek/);
+  assert.match(deliveryRunMessage({ reminders: result }).text, /SMTP_SEND_FAILED/);
+});
+
 for (const summary of [
   { ok: true, failed: 2 },
   { ok: true, results: [{ status: 'FAILED', reason: 'PROJECT_INACTIVE' }] },

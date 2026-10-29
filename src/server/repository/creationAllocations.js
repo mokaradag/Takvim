@@ -96,3 +96,28 @@ export async function consumeCreationAllocations(transaction, actor, changes) {
   `);
   if (result.recordset?.length !== allocations.length) throw invalidAllocation();
 }
+
+/** Reconcile by revoking a still-unconsumed capability, even after expiry.
+ * Missing/consumed/pruned capabilities remain indistinguishable and fail closed.
+ * No entity lookup is authorized by this operation. The same transaction lock
+ * orders it against an in-flight commit: exactly one can consume the proof.
+ */
+export async function releaseCreationIds(transaction, actor, changes) {
+  const allocations = creationEntries(changes).map(({ entry, entityType }) => ({ id: entry.id, entityType,
+    projectId: entityType === 'PROJECT' ? entry.id : entry.projectId, proof: canonicalActualId(entry.creationProof) }));
+  if (!allocations.length || allocations.some((entry) => !entry.proof)) throw invalidAllocation();
+  const request = transaction.request();
+  request.input('sicil', sql.Int, actor.sicil);
+  request.input('allocations', sql.NVarChar(sql.MAX), JSON.stringify(allocations));
+  const result = await allocationQuery(request, `
+    -- creation-allocation: release; only a surviving bound proof proves non-commit.
+    DELETE a OUTPUT deleted.Proof
+    FROM dbo.MR_CreationAllocations a WITH (UPDLOCK, HOLDLOCK)
+    JOIN OPENJSON(@allocations) WITH (id uniqueidentifier, entityType varchar(7), projectId uniqueidentifier, proof uniqueidentifier) i
+      ON a.Proof = i.proof AND a.EntityId = i.id AND a.EntityType = i.entityType AND a.ProjectId = i.projectId
+    WHERE a.Sicil = @sicil;
+  `);
+  const released = new Set((result.recordset || []).map((row) => canonicalActualId(row.Proof)));
+  return { released: allocations.filter((entry) => released.has(entry.proof))
+    .map(({ id, entityType }) => ({ id, entityType })) };
+}

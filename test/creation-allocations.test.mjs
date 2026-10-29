@@ -130,7 +130,8 @@ test('client persists allocation proof before commit; lost responses replay the 
     let lose = true;
     const sent = [];
     globalThis.fetch = async (url, init) => {
-      const body = JSON.parse(init.body); sent.push(body);
+      if (init.method === 'GET') return fetch(url, init);
+    const body = JSON.parse(init.body); sent.push(body);
       const response = await fetch(url, init);
       if (!body.operation && lose) { lose = false; throw new TypeError('response lost'); }
       return response;
@@ -139,7 +140,7 @@ test('client persists allocation proof before commit; lost responses replay the 
     await assert.rejects(createApiRepository({ aliasStorage: storage }).commitChanges(changes));
     assert.equal(stack.db.tasks.length, 2);
     await assert.rejects(createApiRepository({ aliasStorage: storage }).commitChanges(changes), (error) => error.details.code === 'CREATION_ALLOCATION_INVALID');
-    assert.equal(sent.filter((body) => body.operation).length, 1);
+    assert.equal(sent.filter((body) => body.operation === 'allocate-creation-ids').length, 1);
     assert.deepEqual(sent[1].changes, sent[2].changes);
     assert.equal(stack.db.tasks.length, 2);
     globalThis.fetch = fetch;
@@ -254,6 +255,7 @@ test('new client cannot accidentally commit an allocation request to an older se
   const fetch = globalThis.fetch;
   const envelopes = [];
   globalThis.fetch = async (_url, init) => {
+    if (init.method === 'GET') return Response.json({ authenticated: true, currentUser: { sicil: 900010 } });
     const body = JSON.parse(init.body); envelopes.push(body);
     // The old commit handler ignores unknown operation/allocationChanges fields.
     assert.deepEqual(body.changes, {});
@@ -303,6 +305,7 @@ test('failed proof persistence publishes no memory state; retry remains durable 
   const sent = [];
   let loseResponse = true;
   globalThis.fetch = async (url, init) => {
+    if (init.method === 'GET') return fetch(url, init);
     const body = JSON.parse(init.body); sent.push(body);
     const response = await fetch(url, init);
     if (!body.operation && loseResponse) { loseResponse = false; throw new TypeError('response lost'); }
@@ -315,7 +318,7 @@ test('failed proof persistence publishes no memory state; retry remains durable 
     assert.equal(stack.db.tasks.length, 1);
     const firstId = stack.db.creationAllocations[0].EntityId.toLowerCase();
     await assert.rejects(repository.commitChanges(changes));
-    assert.equal(sent.filter((body) => body.operation).length, 2, 'a failed remember left no reusable proof in memory');
+    assert.equal(sent.filter((body) => body.operation === 'allocate-creation-ids').length, 2, 'a failed remember left no reusable proof in memory');
     const submitted = sent.find((body) => !body.operation).changes.taskUpserts[0];
     assert.notEqual(submitted.id, firstId);
     const persisted = JSON.parse([...values].find(([key]) => key.endsWith('.creations.v1'))[1]).pending;
@@ -323,7 +326,7 @@ test('failed proof persistence publishes no memory state; retry remains durable 
     assert.equal(persisted[0].id, submitted.id);
     await assert.rejects(createApiRepository({ aliasStorage: storage }).commitChanges(changes),
       (error) => error.details.code === 'CREATION_ALLOCATION_INVALID');
-    assert.equal(sent.filter((body) => body.operation).length, 2, 'reload replays the durably stored proof');
+    assert.equal(sent.filter((body) => body.operation === 'allocate-creation-ids').length, 2, 'reload replays the durably stored proof');
     assert.equal(stack.db.tasks.length, 2);
   } finally { globalThis.fetch = fetch; await stack.dispose(); }
 });
@@ -334,6 +337,7 @@ test('proof durability requirements do not block versioned edits when browser st
     const current = stack.state.tasks.find((row) => row.id === HIDDEN_TASK);
     assert.ok(current?.version);
     const repository = createApiRepository({ aliasStorage: { getItem() { return null; }, setItem() { throw new Error('quota'); } } });
+    await repository.loadSnapshot();
     const result = await repository.commitChanges({ taskUpserts: [{ ...current, task: 'Versioned edit' }] });
     assert.equal(result.taskUpserts[0].task, 'Versioned edit');
     assert.equal(stack.db.creationAllocations.length, 0);
@@ -357,7 +361,8 @@ for (const entityType of ['TASK', 'WBS']) {
     const fetch = globalThis.fetch, sent = [];
     let fail = true;
     globalThis.fetch = async (url, init) => {
-      const body = JSON.parse(init.body); sent.push(body);
+      if (init.method === 'GET') return fetch(url, init);
+    const body = JSON.parse(init.body); sent.push(body);
       if (!body.operation && fail) { fail = false; throw new TypeError('commit did not reach server'); }
       return fetch(url, init);
     };
@@ -371,7 +376,7 @@ for (const entityType of ['TASK', 'WBS']) {
       const moved = { ...entry, projectId: projectB, ...(entityType === 'TASK' ? { wbsId: wbsB } : { parentId: wbsB }) };
       const saved = await repository.commitChanges({ [collection]: [moved] });
       assert.equal(saved[collection][0].id, clientId);
-      assert.equal(sent.filter((body) => body.operation).length, 2);
+      assert.equal(sent.filter((body) => body.operation === 'allocate-creation-ids').length, 2);
       const submitted = sent.at(-1).changes[collection][0];
       assert.equal(submitted.projectId, projectB);
       assert.notEqual(submitted.id, old.id);
@@ -401,6 +406,7 @@ test('stale independent tabs merge interleaved proofs and completion never resur
   let failCommits = true;
   const sent = [];
   globalThis.fetch = async (url, init) => {
+    if (init.method === 'GET') return fetch(url, init);
     const body = JSON.parse(init.body); sent.push(body);
     if (!body.operation && failCommits) throw new TypeError('commit not sent');
     const response = await fetch(url, init);
@@ -436,91 +442,47 @@ test('stale independent tabs merge interleaved proofs and completion never resur
     assert.equal(shared.state().aliases.filter((entry) => ['TASK', 'WBS'].includes(entry[2])).length, 2);
     await assert.rejects(a.commitChanges(changesA), (error) => error.details.code === 'CREATION_ALLOCATION_STORAGE');
     assert.deepEqual(shared.state().pending, [], 'a completed proof cannot be resurrected by a stale tab');
-    assert.equal(sent.filter((body) => body.operation).length, 2);
+    assert.equal(sent.filter((body) => body.operation === 'allocate-creation-ids').length, 2);
   } finally { releaseB(); globalThis.fetch = fetch; await stack.dispose(); }
 });
 
-test('pending proof lifetime has a safety margin, drops undated legacy state, and keeps completed typed aliases', async () => {
-  const { createCreationIdStorage, CREATION_ALLOCATION_CLIENT_TTL_MS, CREATION_ALLOCATION_SERVER_TTL_MS,
-    CREATION_ALLOCATION_SAFETY_MARGIN_MS } = await import('../src/data/api/creationIdStorage.js');
-  const { actualIdAliasType } = await import('../src/data/api/actualIdAliasStorage.js');
-  assert.equal(CREATION_ALLOCATION_SERVER_TTL_MS, 24 * 60 * 60 * 1000);
-  assert.equal(CREATION_ALLOCATION_CLIENT_TTL_MS + CREATION_ALLOCATION_SAFETY_MARGIN_MS, CREATION_ALLOCATION_SERVER_TTL_MS);
-  assert.ok(CREATION_ALLOCATION_SAFETY_MARGIN_MS > 0);
-  let time = 1000000000;
-  const shared = sharedCreationStorage(), aliases = new Map();
-  const storage = shared.client();
-  const lifecycle = createCreationIdStorage(storage, undefined, { now: () => time });
-  const changes = { taskUpserts: [task()] };
-  const allocation = { entityType: 'TASK', clientId: changes.taskUpserts[0].id, id: randomUUID(), projectId: CORPORATE_PROJECT_ID, proof: randomUUID() };
-  await lifecycle.remember([allocation], aliases, changes);
-  const allocatedAt = time;
-  assert.equal((await lifecycle.prepare(changes, aliases)).taskUpserts[0].creationProof, allocation.proof);
-  time += CREATION_ALLOCATION_CLIENT_TTL_MS - 1;
-  assert.equal((await lifecycle.prepare(changes, aliases)).taskUpserts[0].creationProof, allocation.proof);
-  // Restoring also excludes the expired proof/alias before any request uses it.
-  time += 1;
-  const restoredAliases = new Map();
-  const restored = createCreationIdStorage(storage, undefined, { now: () => time });
-  restored.restoreAliases(restoredAliases);
-  assert.equal(restoredAliases.has(allocation.id), false);
-  const fresh = (await restored.prepare(changes, restoredAliases)).taskUpserts[0];
-  assert.equal(fresh.id, allocation.clientId); assert.equal(fresh.creationProof, undefined);
-  assert.deepEqual(shared.state().pending, []); assert.deepEqual(shared.state().aliases, []);
-  assert.equal(actualIdAliasType(restoredAliases, allocation.id), undefined);
-  const replacement = { ...allocation, id: randomUUID(), proof: randomUUID() };
-  await restored.remember([replacement], restoredAliases, changes);
-  const prepared = await restored.prepare(changes, restoredAliases);
-  await restored.complete(prepared, restoredAliases);
-  time += 3 * CREATION_ALLOCATION_SERVER_TTL_MS;
-  const completedAliases = new Map();
-  createCreationIdStorage(storage, undefined, { now: () => time }).restoreAliases(completedAliases);
-  assert.equal(completedAliases.get(replacement.id), replacement.clientId);
-  assert.equal(actualIdAliasType(completedAliases, replacement.id), 'TASK');
-  // Older builds saved pending aliases separately and had no allocation age.
-  const legacy = sharedCreationStorage();
-  legacy.values.set('mergen-rota.actual-id-aliases.v1', JSON.stringify([[allocation.id, allocation.clientId, 'TASK'], [replacement.id, `task-${replacement.id}`, 'TASK']]));
-  legacy.values.set('mergen-rota.actual-id-aliases.v1.creations.v1', JSON.stringify([{ ...allocation, clientAlias: allocation.clientId }]));
-  const legacyAliases = new Map();
-  const migrated = createCreationIdStorage(legacy.client(), undefined, { now: () => allocatedAt });
-  migrated.restoreAliases(legacyAliases);
-  assert.equal(legacyAliases.has(allocation.id), false);
-  assert.equal(legacyAliases.get(replacement.id), `task-${replacement.id}`, 'completed legacy aliases are retained');
-  const retry = await migrated.prepare(changes, legacyAliases);
-  assert.equal(retry.taskUpserts[0].id, allocation.clientId);
-  assert.equal(retry.taskUpserts[0].creationProof, undefined);
-  assert.equal(legacy.state().pending.length, 0);
-  assert.equal(legacy.state().aliases.some(([id]) => id === allocation.id), false);
-});
-
-for (const legacy of [false, true]) {
-  test(`expired ${legacy ? 'legacy undated' : 'dated'} allocation gets replaced through the real repository`, async (t) => {
+for (const committed of [false, true]) {
+  test(`expired uncertain creation reconciles before replacement (committed=${committed})`, async (t) => {
     const stack = await createActualStack(seed(), { sicil: 900010 });
-    const shared = sharedCreationStorage();
-    const fetch = globalThis.fetch;
-    let fail = true, allocations = 0;
+    const shared = sharedCreationStorage(), fetch = globalThis.fetch, sent = [];
+    let lose = true;
     globalThis.fetch = async (url, init) => {
-      const body = JSON.parse(init.body);
-      if (body.operation) allocations += 1;
-      else if (fail) { fail = false; throw new TypeError('not sent'); }
+      if (init.method === 'GET') return fetch(url, init);
+      const body = JSON.parse(init.body); sent.push(body);
+      if (!body.operation && lose) {
+        lose = false;
+        if (committed) await fetch(url, init);
+        throw new TypeError('response lost');
+      }
       return fetch(url, init);
     };
     try {
       const changes = { taskUpserts: [task(`task-${randomUUID()}`)] };
       await assert.rejects(createApiRepository({ aliasStorage: shared.client() }).commitChanges(changes));
-      const state = shared.state(), old = state.pending[0];
-      if (legacy) {
-        delete old.allocatedAt;
-        shared.values.set('mergen-rota.actual-id-aliases.v1', JSON.stringify(state.aliases));
-        shared.values.set('mergen-rota.actual-id-aliases.v1.creations.v1', JSON.stringify(state.pending));
+      const old = shared.state().pending[0];
+      const { CREATION_ALLOCATION_CLIENT_TTL_MS } = await import('../src/data/api/creationIdStorage.js');
+      t.mock.method(Date, 'now', () => old.allocatedAt + CREATION_ALLOCATION_CLIENT_TTL_MS + 600000);
+      for (const row of stack.db.creationAllocations) row.ExpiresAt = new Date(0).toISOString();
+      const repository = createApiRepository({ aliasStorage: shared.client() });
+      if (committed) {
+        await assert.rejects(repository.commitChanges(changes), (error) => error.details.code === 'CREATION_ALLOCATION_INVALID');
+        assert.equal(sent.filter((body) => body.operation === 'allocate-creation-ids').length, 1);
+        assert.equal((await repository.loadSnapshot()).tasks.find((entry) => entry.id === changes.taskUpserts[0].id)?.version != null, true);
+        assert.deepEqual(shared.state().pending, []);
+        assert.ok(shared.state().aliases.some(([id]) => id === old.id));
       } else {
-        const { CREATION_ALLOCATION_CLIENT_TTL_MS } = await import('../src/data/api/creationIdStorage.js');
-        t.mock.method(Date, 'now', () => old.allocatedAt + CREATION_ALLOCATION_CLIENT_TTL_MS + 1);
+        const saved = await repository.commitChanges(changes);
+        assert.equal(saved.taskUpserts[0].id, changes.taskUpserts[0].id);
+        assert.equal(sent.filter((body) => body.operation === 'allocate-creation-ids').length, 2);
+        assert.ok(sent.some((body) => body.operation === 'release-creation-ids'));
+        assert.deepEqual(shared.state().pending, []);
       }
-      const result = await createApiRepository({ aliasStorage: shared.client() }).commitChanges(changes);
-      assert.equal(result.taskUpserts[0].id, changes.taskUpserts[0].id);
-      assert.equal(allocations, 2);
-      assert.equal(shared.state().aliases.some(([id]) => id === old.id), false);
+      assert.equal(stack.db.tasks.filter((row) => row.Title === 'Allocated task').length, 1);
       assert.equal(stack.db.tasks.length, 2);
     } finally { globalThis.fetch = fetch; await stack.dispose(); }
   });
@@ -557,7 +519,7 @@ test('cross-context storage mutations read only after acquiring the shared brows
   const shared = sharedCreationStorage(), aliasesA = new Map(), aliasesB = new Map();
   let reads = 0;
   const client = () => ({ getItem: (key) => { reads += 1; return shared.values.get(key); }, setItem: (key, value) => shared.values.set(key, value) });
-  const a = createCreationIdStorage(client()), b = createCreationIdStorage(client());
+  const a = createCreationIdStorage(client(), undefined, { accountId: '900010' }), b = createCreationIdStorage(client(), undefined, { accountId: '900010' });
   const allocations = ['TASK', 'WBS'].map((entityType) => ({ entityType, clientId: randomUUID(), id: randomUUID(), proof: randomUUID(), projectId: CORPORATE_PROJECT_ID }));
   const pendingA = a.remember([allocations[0]], aliasesA, { taskUpserts: [{ id: allocations[0].clientId }] });
   const pendingB = b.remember([allocations[1]], aliasesB, { wbsUpserts: [{ id: allocations[1].clientId }] });
@@ -566,4 +528,219 @@ test('cross-context storage mutations read only after acquiring the shared brows
   assert.equal(new Set(names).size, 1); assert.equal(names.length, 2);
   assert.equal(shared.state().pending.length, 2);
   assert.equal(aliasesB.get(allocations[0].id), allocations[0].clientId, 'the later lock holder publishes the merged state');
+});
+
+test('account-scoped creation state restores only after the authenticated owner is known', async () => {
+  const stack = await createActualStack(seed(), { sicil: 900010 });
+  const shared = sharedCreationStorage(), fetch = globalThis.fetch;
+  const completed = { taskUpserts: [task(`task-${randomUUID()}`)] };
+  const pending = { taskUpserts: [task(`task-${randomUUID()}`)] };
+  try {
+    const a = createApiRepository({ aliasStorage: shared.client() });
+    await a.commitChanges(completed);
+    globalThis.fetch = async (url, init) => {
+      if (init.method !== 'GET' && !JSON.parse(init.body).operation) throw new TypeError('not sent');
+      return fetch(url, init);
+    };
+    await assert.rejects(a.commitChanges(pending));
+    globalThis.fetch = fetch;
+    const savedA = JSON.stringify(shared.state());
+    process.env.MERGEN_ROTA_DEV_SICIL = '900001';
+    const b = createApiRepository({ aliasStorage: shared.client() });
+    const snapshotB = await b.loadSnapshot();
+    assert.equal(snapshotB.tasks.some((entry) => entry.id === completed.taskUpserts[0].id), false);
+    assert.equal(translateEntityRequest(`/tasks?taskId=${completed.taskUpserts[0].id}`, {}).path,
+      `/tasks?taskId=${completed.taskUpserts[0].id}`);
+    await assert.rejects(a.commitChanges({ taskDeletes: [{ id: completed.taskUpserts[0].id, version: 'AAAAAAAAAAA=' }] }, { keepalive: true }),
+      { code: 'UNAUTHORIZED' });
+    assert.equal(JSON.stringify(shared.state()), savedA, 'another account cannot overwrite the owner envelope');
+    process.env.MERGEN_ROTA_DEV_SICIL = '900010';
+    const restoredA = createApiRepository({ aliasStorage: shared.client() });
+    assert.ok((await restoredA.loadSnapshot()).tasks.find((entry) => entry.id === completed.taskUpserts[0].id));
+    assert.equal(JSON.stringify(shared.state()), savedA);
+    assert.equal((await restoredA.commitChanges(pending)).taskUpserts[0].id, pending.taskUpserts[0].id);
+    assert.deepEqual(shared.state().pending, []);
+  } finally { globalThis.fetch = fetch; await stack.dispose(); }
+});
+
+test('unscoped legacy creation envelopes are never activated for an authenticated account', async () => {
+  const stack = await createActualStack(seed(), { sicil: 900010 });
+  const shared = sharedCreationStorage(), old = randomUUID(), client = randomUUID(), proof = randomUUID();
+  shared.values.set('mergen-rota.actual-id-aliases.v1', JSON.stringify([[old, client, 'TASK']]));
+  shared.values.set('mergen-rota.actual-id-aliases.v1.creations.v1', JSON.stringify({ version: 2,
+    aliases: [[old, client, 'TASK']], pending: [{ entityType: 'TASK', id: old, clientId: client, proof, projectId: CORPORATE_PROJECT_ID }] }));
+  try {
+    const repository = createApiRepository({ aliasStorage: shared.client() });
+    await repository.loadSnapshot();
+    const translated = translateEntityRequest(`/tasks?taskId=${client}`, { body: JSON.stringify({ taskId: client }) });
+    assert.equal(translated.path, `/tasks?taskId=${client}`);
+    assert.equal(JSON.parse(translated.init.body).taskId, client);
+    assert.equal(stack.db.creationAllocations.length, 0);
+  } finally { await stack.dispose(); }
+});
+
+test('bounded completed-alias compaction preserves older live identities and rebases fresh snapshots to canonical IDs', async () => {
+  const stack = await createActualStack(seed());
+  const shared = sharedCreationStorage();
+  const client = randomUUID();
+  const aliases = Array.from({ length: 5000 }, (_, index) => [index ? randomUUID() : HIDDEN_TASK, index ? randomUUID() : client, 'TASK']);
+  shared.values.set('mergen-rota.actual-id-aliases.v1.account.900001.creations.v1', JSON.stringify({ version: 2, pending: [], aliases }));
+  try {
+    const repository = createApiRepository({ aliasStorage: shared.client() });
+    const old = (await repository.loadSnapshot()).tasks.find((entry) => entry.id === client);
+    assert.ok(old?.version);
+    const otherTab = createApiRepository({ aliasStorage: shared.client() });
+    await otherTab.loadSnapshot();
+    const added = await repository.commitChanges({ taskUpserts: [task(randomUUID())] });
+    assert.ok(added.taskUpserts[0].version);
+    await otherTab.commitChanges({ taskUpserts: [task(randomUUID())] });
+    const edited = await repository.commitChanges({ taskUpserts: [{ ...old, task: 'Older identity still works' }] });
+    assert.equal(edited.taskUpserts[0].id, client);
+    assert.equal(stack.db.tasks.find((row) => row.TaskId.toLowerCase() === HIDDEN_TASK).Title, 'Older identity still works');
+    assert.equal(shared.state().aliases.filter((entry) => entry[2] === 'TASK').length, 5000);
+    assert.equal(stack.db.creationAllocations.length, 0);
+    const restarted = createApiRepository({ aliasStorage: shared.client() });
+    const canonical = (await restarted.loadSnapshot()).tasks.find((entry) => entry.id === HIDDEN_TASK);
+    assert.ok(canonical?.version, 'a new state uses the server ID for a retired completed alias');
+    assert.equal((await restarted.commitChanges({ taskUpserts: [{ ...canonical, task: 'Edited after restart' }] })).taskUpserts[0].id, HIDDEN_TASK);
+    assert.equal(stack.db.tasks.find((row) => row.TaskId.toLowerCase() === HIDDEN_TASK).Title, 'Edited after restart');
+  } finally { await stack.dispose(); }
+});
+
+test('verified keepalive update/delete dispatches fetch in the same task without Web Locks or IndexedDB', async (t) => {
+  const stack = await createActualStack(seed());
+  const shared = sharedCreationStorage(), fetch = globalThis.fetch;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const repository = createApiRepository({ aliasStorage: shared.client() });
+  const made = await repository.commitChanges({ taskUpserts: [task(randomUUID())] });
+  const serverId = stack.db.tasks.find((row) => row.Title === 'Allocated task').TaskId.toLowerCase();
+  const loaded = (await repository.loadSnapshot()).tasks.find((entry) => entry.id === made.taskUpserts[0].id);
+  let locks = 0, calls = [];
+  t.after(() => { if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow); else delete globalThis.window; });
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { navigator: { locks: {
+    request() { locks += 1; return new Promise(() => {}); }
+  } } } });
+  globalThis.fetch = (url, init) => { calls.push(init); return fetch(url, init); };
+  try {
+    const pending = repository.commitChanges({ taskUpserts: [{ ...loaded, task: 'Unload edit' }] }, { keepalive: true });
+    assert.equal(calls.length, 1); assert.equal(locks, 0);
+    assert.equal(calls[0].keepalive, true);
+    assert.equal(JSON.parse(calls[0].body).changes.taskUpserts[0].id, serverId);
+    const edited = await pending;
+    calls = [];
+    const deletion = repository.commitChanges({ taskDeletes: [{ id: loaded.id, version: edited.taskUpserts[0].version }] }, { keepalive: true });
+    assert.equal(calls.length, 1); assert.equal(locks, 0);
+    assert.equal(JSON.parse(calls[0].body).changes.taskDeletes[0].id, serverId);
+    await deletion;
+  } finally { globalThis.fetch = fetch; await stack.dispose(); }
+});
+
+test('a late session response cannot reactivate aliases after another account takes the browser', async () => {
+  const stack = await createActualStack(seed(), { sicil: 900010 });
+  const shared = sharedCreationStorage(), fetch = globalThis.fetch;
+  const a = createApiRepository({ aliasStorage: shared.client() });
+  let release, entered;
+  const held = new Promise((resolve) => { release = resolve; });
+  const started = new Promise((resolve) => { entered = resolve; });
+  try {
+    await a.loadSessionContext();
+    globalThis.fetch = async (url, init) => {
+      const response = await fetch(url, init);
+      if (url.endsWith('/session')) { entered(); await held; }
+      return response;
+    };
+    const pending = a.loadSessionContext();
+    await started;
+    shared.values.set('mergen-rota.actual-id-aliases.v1.active-account', '900001');
+    release();
+    await assert.rejects(pending, { code: 'UNAUTHORIZED' });
+    assert.equal(shared.values.get('mergen-rota.actual-id-aliases.v1.active-account'), '900001');
+  } finally { release?.(); globalThis.fetch = fetch; await stack.dispose(); }
+});
+
+test('an older server ignoring release cannot authorize replacing an uncertain identity', async (t) => {
+  const stack = await createActualStack(seed(), { sicil: 900010 });
+  const shared = sharedCreationStorage(), fetch = globalThis.fetch;
+  let lose = true, issued = 0;
+  globalThis.fetch = async (url, init) => {
+    if (init.method === 'GET') return fetch(url, init);
+    const body = JSON.parse(init.body);
+    if (body.operation === 'release-creation-ids') return Response.json({ taskUpserts: [] });
+    if (body.operation === 'allocate-creation-ids') issued += 1;
+    const response = await fetch(url, init);
+    if (!body.operation && lose) { lose = false; throw new TypeError('lost successful response'); }
+    return response;
+  };
+  try {
+    const changes = { taskUpserts: [task(randomUUID())] };
+    await assert.rejects(createApiRepository({ aliasStorage: shared.client() }).commitChanges(changes));
+    const old = shared.state().pending[0];
+    const { CREATION_ALLOCATION_CLIENT_TTL_MS } = await import('../src/data/api/creationIdStorage.js');
+    t.mock.method(Date, 'now', () => old.allocatedAt + CREATION_ALLOCATION_CLIENT_TTL_MS + 1);
+    await assert.rejects(createApiRepository({ aliasStorage: shared.client() }).commitChanges(changes));
+    assert.equal(issued, 1); assert.equal(stack.db.tasks.length, 2);
+    assert.equal(shared.state().pending[0].id, old.id);
+  } finally { globalThis.fetch = fetch; await stack.dispose(); }
+});
+
+test('expiry reconciliation retires consumed proofs without stranding a separate uncommitted draft in the same batch', async (t) => {
+  const stack = await createActualStack(seed(), { sicil: 900010 });
+  const shared = sharedCreationStorage(), fetch = globalThis.fetch;
+  const a = { taskUpserts: [{ ...task(randomUUID()), task: 'Committed once' }] };
+  const b = { taskUpserts: [{ ...task(randomUUID()), task: 'Uncommitted once' }] };
+  let phase = 'lost';
+  globalThis.fetch = async (url, init) => {
+    if (init.method === 'GET' || JSON.parse(init.body).operation) return fetch(url, init);
+    if (phase === 'lost') { await fetch(url, init); throw new TypeError('lost successful response'); }
+    if (phase === 'not-sent') throw new TypeError('not sent');
+    return fetch(url, init);
+  };
+  try {
+    const repository = createApiRepository({ aliasStorage: shared.client() });
+    await assert.rejects(repository.commitChanges(a));
+    phase = 'not-sent';
+    await assert.rejects(repository.commitChanges(b));
+    const pending = shared.state().pending;
+    assert.equal(pending.length, 2);
+    const { CREATION_ALLOCATION_CLIENT_TTL_MS } = await import('../src/data/api/creationIdStorage.js');
+    t.mock.method(Date, 'now', () => Math.max(...pending.map((record) => record.allocatedAt)) + CREATION_ALLOCATION_CLIENT_TTL_MS + 1);
+    for (const row of stack.db.creationAllocations) row.ExpiresAt = new Date(0).toISOString();
+    phase = 'retry';
+    const expiredRepository = createApiRepository({ aliasStorage: shared.client() });
+    await assert.rejects(expiredRepository.commitChanges({ taskUpserts: [...a.taskUpserts, ...b.taskUpserts] }),
+      (error) => error.details.code === 'CREATION_ALLOCATION_INVALID');
+    assert.deepEqual(shared.state().pending, []);
+    assert.equal((await expiredRepository.commitChanges(b)).taskUpserts[0].id, b.taskUpserts[0].id);
+    assert.equal(stack.db.tasks.filter((row) => row.Title === 'Committed once').length, 1);
+    assert.equal(stack.db.tasks.filter((row) => row.Title === 'Uncommitted once').length, 1);
+  } finally { globalThis.fetch = fetch; await stack.dispose(); }
+});
+
+test('expired uncommitted project/WBS/task allocations recover as one correctly rebound creation graph', async (t) => {
+  const stack = await createActualStack(seed());
+  const shared = sharedCreationStorage(), fetch = globalThis.fetch;
+  let fail = true;
+  globalThis.fetch = async (url, init) => {
+    if (init.method !== 'GET' && !JSON.parse(init.body).operation && fail) { fail = false; throw new TypeError('not sent'); }
+    return fetch(url, init);
+  };
+  try {
+    const projectId = randomUUID(), wbsId = randomUUID(), taskId = randomUUID();
+    const changes = { projectUpserts: [{ id: projectId, name: 'Expired graph', leadId: '900001', calendarId: DEFAULT_CALENDAR_ID, color: 'blue' }],
+      wbsUpserts: [{ id: wbsId, projectId, name: 'Root', code: '1', parentId: null }],
+      taskUpserts: [{ ...task(taskId), projectId, wbsId, assigneeIds: ['900001'] }] };
+    await assert.rejects(createApiRepository({ aliasStorage: shared.client() }).commitChanges(changes));
+    assert.equal(shared.state().pending.length, 3);
+    const old = shared.state().pending;
+    const { CREATION_ALLOCATION_CLIENT_TTL_MS } = await import('../src/data/api/creationIdStorage.js');
+    t.mock.method(Date, 'now', () => old[0].allocatedAt + CREATION_ALLOCATION_CLIENT_TTL_MS + 1);
+    for (const row of stack.db.creationAllocations) row.ExpiresAt = new Date(0).toISOString();
+    const saved = await createApiRepository({ aliasStorage: shared.client() }).commitChanges(changes);
+    assert.equal(saved.projectUpserts[0].id, projectId);
+    assert.equal(saved.wbsUpserts[0].projectId, projectId);
+    assert.equal(saved.taskUpserts[0].wbsId, wbsId);
+    assert.deepEqual(shared.state().pending, []);
+    assert.equal(stack.db.tasks.filter((row) => row.Title === 'Allocated task').length, 1);
+    assert.ok(old.every((record) => !shared.state().aliases.some(([id]) => id === record.id)));
+  } finally { globalThis.fetch = fetch; await stack.dispose(); }
 });

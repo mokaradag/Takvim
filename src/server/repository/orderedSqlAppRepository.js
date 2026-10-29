@@ -14,7 +14,7 @@ import {
   assertUpsertIntentMatchesPersistence
 } from './upsertIntentValidation.js';
 import { orderWbsUpsertsByParents } from './wbsCommitPlanning.js';
-import { allocateCreationIds, consumeCreationAllocations } from './creationAllocations.js';
+import { allocateCreationIds, consumeCreationAllocations, releaseCreationIds } from './creationAllocations.js';
 
 function hasVersion(entry) {
   return entry.version != null && String(entry.version).trim() !== '';
@@ -164,6 +164,11 @@ export function createOrderedSqlAppRepository() {
   const repository = createHardenedSqlAppRepository();
   return {
     ...repository,
+    releaseCreationIds(changes) {
+      return withSqlTransaction(async (transaction) => releaseCreationIds(transaction,
+        await loadTransactionAuthorizationContext(transaction), changes),
+      { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE, deadlockRetries: 2 });
+    },
     allocateCreationIds(changes) {
       return withSqlTransaction(async (transaction) => {
         const actor = await loadTransactionAuthorizationContext(transaction);

@@ -22,6 +22,13 @@ export function reminderRunOutcome(summary = {}) {
   const failedItems = (summary.results || []).filter((item) => item.status === 'FAILED' || item.reason === 'MAIL_DELIVERY_UNCERTAIN');
   const failed = Math.max(Number(summary.failed) || 0, failedItems.length);
   const ok = summary.ok !== false && failed === 0;
-  return { ...summary, failed, ok,
+  const failureCodes = { ...summary.failureCodes };
+  const observedCodes = {};
+  for (const item of failedItems) {
+    const code = safeReminderFailureCode(item.reason || item.code);
+    observedCodes[code] = (observedCodes[code] || 0) + 1;
+    failureCodes[code] = Math.max(Number(summary.failureCodes?.[code]) || 0, observedCodes[code]);
+  }
+  return { ...summary, failed, ok, failureCodes,
     ...(!ok ? { reason: safeReminderFailureCode(summary.reason || failedItems[0]?.reason || failedItems[0]?.code) } : {}) };
 }

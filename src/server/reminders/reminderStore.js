@@ -11,6 +11,7 @@ import { DEFAULT_REMINDER_SETTINGS, normalizeReminderSettings } from '../../doma
 import { sql } from '../db/pool.js';
 import { ServerPersistenceError } from '../errors.js';
 import {
+  REMINDER_PROGRESS_SQL, REMINDER_RESUME_MANUAL_SQL,
   REMINDER_CANDIDATES_SQL,
   REMINDER_CLAIM_SQL,
   REMINDER_COMPLETE_SQL,
@@ -350,13 +351,14 @@ export function maskRecipients(recipients = []) {
     .slice(0, 400);
 }
 
-export async function completeReminderLog(executor, logId, { status, recipients = [], failureCode = null }) {
+export async function completeReminderLog(executor, logId, { status, recipients = [], failureCode = null, progress = null, active = false }) {
   if (logId == null) return;
   const request = executor.request();
   request.input('logId', sql.BigInt, logId);
+  request.input('active', sql.Bit, active);
   request.input('status', sql.VarChar(20), status);
   request.input('recipientCount', sql.Int, recipients.length);
-  request.input('recipientDigest', sql.NVarChar(400), maskRecipients(recipients) || null);
+  request.input('recipientDigest', sql.NVarChar(400), progress || maskRecipients(recipients) || null);
   request.input('failureCode', sql.VarChar(60), failureCode);
   await request.query(REMINDER_COMPLETE_SQL);
 }
@@ -382,4 +384,18 @@ export async function loadReminderHistory(executor, limit = 20) {
     if (isMissingReminderSchema(error)) return [];
     throw error;
   }
+}
+
+export async function loadReminderProgress(executor, logId) {
+  if (logId == null) return null;
+  const request = executor.request();
+  request.input('logId', sql.BigInt, logId);
+  return (await request.query(REMINDER_PROGRESS_SQL)).recordset?.[0]?.RecipientDigest || null;
+}
+
+export async function resumeManualReminder(executor, taskId, actorSicil) {
+  const request = executor.request();
+  request.input('taskId', sql.UniqueIdentifier, taskId);
+  request.input('actorSicil', sql.Int, actorSicil);
+  return (await request.query(REMINDER_RESUME_MANUAL_SQL)).recordset?.[0]?.TaskReminderLogId ?? null;
 }

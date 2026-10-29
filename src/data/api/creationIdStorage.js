@@ -1,7 +1,7 @@
 import { creationEntries, remapCommitIds } from '../../domain/identity/creationIds.js';
 import { extractActualId, isActualId } from '../../domain/identity/actualId.js';
 import { ACTUAL_ID_ALIAS_STORAGE_KEY, MAX_ACTUAL_ID_ALIASES, actualIdAliasType,
-  loadActualIdAliases, decodeActualIdAliases, encodeActualIdAliases } from './actualIdAliasStorage.js';
+  decodeActualIdAliases, encodeActualIdAliases } from './actualIdAliasStorage.js';
 import { AppRepositoryError } from '../contracts/appRepository.js';
 
 // Server creationAllocations.js expires proofs after 24 hours. Stop reusing
@@ -9,6 +9,12 @@ import { AppRepositoryError } from '../contracts/appRepository.js';
 export const CREATION_ALLOCATION_SERVER_TTL_MS = 24 * 60 * 60 * 1000;
 export const CREATION_ALLOCATION_SAFETY_MARGIN_MS = 5 * 60 * 1000;
 export const CREATION_ALLOCATION_CLIENT_TTL_MS = CREATION_ALLOCATION_SERVER_TTL_MS - CREATION_ALLOCATION_SAFETY_MARGIN_MS;
+
+function capacityError() {
+  return new AppRepositoryError({ code: 'MUTATION_FAILED', operation: 'commitChanges',
+    message: 'Oluşturma kimliği saklama sınırına ulaşıldı. Mevcut kayıtları düzenleyebilirsiniz.',
+    details: { code: 'CREATION_ALLOCATION_CAPACITY' } });
+}
 
 function storageError() {
   return new AppRepositoryError({ code: 'MUTATION_FAILED', operation: 'commitChanges',
@@ -44,20 +50,23 @@ function serializeStorage(key, mutation) {
   return Promise.reject(storageError());
 }
 
-export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STORAGE_KEY, { now = Date.now } = {}) {
-  const key = `${aliasKey}.creations.v1`;
+export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STORAGE_KEY, { now = Date.now, accountId = null, validateAccount = () => {} } = {}) {
+  let owner = accountId;
+  const storageKey = () => {
+    if (!owner) throw storageError();
+    return `${aliasKey}.account.${owner}.creations.v1`;
+  };
   let memory = { records: new Map(), aliases: new Map() };
 
   function read() {
     if (!storage) return { records: new Map(memory.records), aliases: decodeActualIdAliases(encodeActualIdAliases(memory.aliases)) };
-    const saved = JSON.parse(storage.getItem(key) || '[]');
-    // Migrate the old two-map format on the first successful durable mutation.
-    // Thereafter the envelope is authoritative: stale tabs cannot resurrect
-    // completed records or abandoned aliases from an older map snapshot.
-    const legacy = Array.isArray(saved);
-    if (!legacy && (saved?.version !== 2 || !Array.isArray(saved.pending) || !Array.isArray(saved.aliases))) throw storageError();
-    const state = { records: new Map(), aliases: legacy ? loadActualIdAliases(storage, aliasKey) : decodeActualIdAliases(saved.aliases) };
-    for (const value of (legacy ? saved : saved.pending)) {
+    const saved = JSON.parse(storage.getItem(storageKey()) || 'null');
+    if (saved == null) return { records: new Map(), aliases: new Map() };
+    // Unscoped legacy envelopes have no verifiable owner and are never restored.
+    if (saved?.version !== 2 || !Array.isArray(saved.pending) || !Array.isArray(saved.aliases)
+      || saved.pending.length > MAX_ACTUAL_ID_ALIASES || saved.aliases.length > MAX_ACTUAL_ID_ALIASES * 2) throw storageError();
+    const state = { records: new Map(), aliases: decodeActualIdAliases(saved.aliases) };
+    for (const value of saved.pending) {
       if (!value || !isActualId(value.clientId) || !isActualId(value.id) || !isActualId(value.proof)
         || !['PROJECT', 'WBS', 'TASK'].includes(value.entityType)) continue;
       const record = { ...value, clientId: extractActualId(value.clientId), id: extractActualId(value.id), proof: extractActualId(value.proof) };
@@ -71,6 +80,7 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
 
   function abandon(state, recordKey, record) {
     state.records.delete(recordKey);
+    (state.removedAliases ||= new Set()).add(record.id);
     if (state.aliases.get(record.id) === record.clientAlias && actualIdAliasType(state.aliases, record.id) === record.entityType) state.aliases.delete(record.id);
   }
 
@@ -79,26 +89,44 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
       .map(([actual, client]) => [`${actualIdAliasType(state.aliases, actual)}:${extractActualId(client)}`, actual]));
   }
 
-  function prune(state, changes = {}) {
-    const time = now();
-    for (const [recordKey, record] of state.records) {
-      if (!Number.isFinite(record.allocatedAt) || record.allocatedAt > time
-        || time - record.allocatedAt >= CREATION_ALLOCATION_CLIENT_TTL_MS || !isActualId(record.projectId)) abandon(state, recordKey, record);
-    }
-    const mappings = mappingsFor(state);
-    for (const { entry, entityType } of creationEntries(changes)) {
-      const recordKey = `${entityType}:${extractActualId(entry.id)}`;
-      const record = state.records.get(recordKey) || [...state.records.values()].find((value) => value.entityType === entityType && value.id === entry.id);
-      if (!record) continue;
+  function reconciliationRecords(state, changes) {
+    const mappings = mappingsFor(state), time = now();
+    const entries = creationEntries(changes);
+    const candidates = entries.flatMap(({ entry, entityType }) => {
+      const record = state.records.get(`${entityType}:${extractActualId(entry.id)}`)
+        || [...state.records.values()].find((value) => value.entityType === entityType && value.id === entry.id);
+      if (!record) return [];
       const projectId = entityType === 'PROJECT' ? record.id
         : mappings.get(`PROJECT:${extractActualId(entry.projectId)}`) || extractActualId(entry.projectId);
-      if (extractActualId(record.projectId) !== projectId) abandon(state, `${record.entityType}:${record.clientId}`, record);
+      return !Number.isFinite(record.allocatedAt) || record.allocatedAt > time
+        || time - record.allocatedAt >= CREATION_ALLOCATION_CLIENT_TTL_MS
+        || extractActualId(record.projectId) !== projectId ? [record] : [];
+    });
+    const replacingProjects = new Set(candidates.filter((record) => record.entityType === 'PROJECT').map((record) => record.id));
+    for (const { entry, entityType } of entries) {
+      const record = state.records.get(`${entityType}:${extractActualId(entry.id)}`);
+      if (record && replacingProjects.has(extractActualId(record.projectId)) && !candidates.includes(record)) candidates.push(record);
     }
+    return candidates;
   }
 
   function publish(state, aliases) {
+    // Durable compaction may retire completed aliases, but an existing live
+    // client can still hold those IDs. Keep its verified immutable mappings in
+    // the SAME alias map until that client state is discarded. Fresh clients
+    // load retired rows under their canonical server IDs from the snapshot.
+    const currentMappings = mappingsFor(state);
+    const live = [...aliases].filter(([actual, client]) => {
+      const type = actualIdAliasType(aliases, actual);
+      const replacement = currentMappings.get(`${type}:${extractActualId(client)}`);
+      return type && !state.removedAliases?.has(actual) && (!replacement || replacement === actual);
+    }).map(([actual, client]) => [actual, client, actualIdAliasType(aliases, actual)]);
     for (const actual of aliases.keys()) actualIdAliasType(aliases, actual, null);
     aliases.clear();
+    for (const [actual, client, type] of live) {
+      aliases.set(actual, client);
+      actualIdAliasType(aliases, actual, type);
+    }
     for (const [actual, client] of state.aliases) {
       aliases.set(actual, client);
       actualIdAliasType(aliases, actual, actualIdAliasType(state.aliases, actual));
@@ -107,24 +135,28 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
   }
 
   function mutate(aliases, mutation) {
-    return serializeStorage(key, () => {
+    const account = owner;
+    return serializeStorage(storageKey(), () => {
+      validateAccount();
+      if (owner !== account) throw storageError();
       const state = read();
       // Formatting aliases collected for this request are safe to merge. Typed
       // creation aliases come only from the fresh durable lifecycle snapshot.
       for (const [actual, client] of aliases) if (!actualIdAliasType(aliases, actual)
         && extractActualId(client) === actual && !state.aliases.has(actual)) state.aliases.set(actual, client);
       const result = mutation(state);
-      if (state.records.size > MAX_ACTUAL_ID_ALIASES) throw storageError();
+      if (state.records.size > MAX_ACTUAL_ID_ALIASES) throw capacityError();
       // One atomic write contains both proofs and aliases, including removals.
       // No locally reusable state is published before this write succeeds.
-      storage?.setItem(key, JSON.stringify({ version: 2, pending: [...state.records.values()], aliases: encodeActualIdAliases(state.aliases) }));
+      storage?.setItem(storageKey(), JSON.stringify({ version: 2, pending: [...state.records.values()],
+        aliases: encodeActualIdAliases(state.aliases, { pendingIds: new Set([...state.records.values()].map((record) => record.id)) }) }));
       publish(state, aliases);
       return result;
-    }).catch(() => { throw storageError(); });
+    }).catch((error) => { if (error?.details?.code === 'CREATION_ALLOCATION_CAPACITY') throw error; throw storageError(); });
   }
 
-  function prepareFrom(changes, state) {
-    const mappings = mappingsFor(state);
+  function prepareFrom(changes, state, aliases) {
+    const mappings = new Map([...mappingsFor({ aliases }), ...mappingsFor(state)]);
     const prepared = remapCommitIds(changes, mappings);
     for (const { entry, entityType } of creationEntries(prepared)) {
       // Proofs are attached only from a current, fully bound pending record.
@@ -137,12 +169,48 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
   }
 
   return {
+    setAccount(account, aliases) {
+      if (owner === account) return;
+      owner = account;
+      memory = { records: new Map(), aliases: new Map() };
+      for (const actual of aliases.keys()) actualIdAliasType(aliases, actual, null);
+      aliases.clear();
+      publish(memory, aliases);
+    },
     restoreAliases(aliases) {
-      try { const state = read(); prune(state); publish(state, aliases); } catch { /* Creation-dependent commits will fail closed. */ }
+      try { const state = read(); publish(state, aliases); } catch { /* Creation-dependent commits will fail closed. */ }
+    },
+    prepareExisting(changes, aliases) {
+      return remapCommitIds(changes, mappingsFor({ aliases }));
+    },
+    reconciliationRecords(changes, aliases) {
+      return mutate(aliases, (state) => reconciliationRecords(state, changes));
+    },
+    release(records, aliases) {
+      return mutate(aliases, (state) => {
+        for (const record of records) {
+          const recordKey = `${record.entityType}:${record.clientId}`;
+          if (state.records.get(recordKey)?.proof === record.proof) abandon(state, recordKey, record);
+        }
+      });
+    },
+    retireProofs(records, aliases) {
+      return mutate(aliases, (state) => {
+        for (const record of records) {
+          const recordKey = `${record.entityType}:${record.clientId}`;
+          if (state.records.get(recordKey)?.proof === record.proof) state.records.delete(recordKey);
+        }
+      });
     },
     async prepare(changes, aliases) {
       try {
-        return await mutate(aliases, (state) => { prune(state, changes); return prepareFrom(changes, state); });
+        return await mutate(aliases, (state) => {
+          if (reconciliationRecords(state, changes).length) throw storageError();
+          const mappings = new Map([...mappingsFor({ aliases }), ...mappingsFor(state)]);
+          const needed = creationEntries(changes).filter(({ entry, entityType }) => !mappings.has(`${entityType}:${extractActualId(entry.id)}`)).length;
+          if (state.records.size + needed > MAX_ACTUAL_ID_ALIASES) throw capacityError();
+          return prepareFrom(changes, state, aliases);
+        });
       } catch (error) {
         if (creationEntries(changes).length) throw error;
         // Storage availability must not block versioned edits/deletions.
@@ -152,7 +220,6 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
     remember(allocations, aliases, changes, allocatedAt = now()) {
       const originals = new Map(creationEntries(changes).map(({ entry, entityType }) => [`${entityType}:${extractActualId(entry.id)}`, entry.id]));
       return mutate(aliases, (state) => {
-        prune(state);
         for (const value of allocations) {
           if (!isActualId(value.id) || !isActualId(value.clientId) || !isActualId(value.proof) || !isActualId(value.projectId)
             || !['PROJECT', 'WBS', 'TASK'].includes(value.entityType)) throw storageError();
@@ -161,7 +228,7 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
           // A competing tab may already have remembered or completed this draft.
           // Keep its pending proof; never replace a durable completed identity.
           if (state.records.has(recordKey)) continue;
-          if (mappingsFor(state).has(recordKey)) throw storageError();
+          if (mappingsFor(state).has(recordKey) || mappingsFor({ aliases }).has(recordKey)) throw storageError();
           record.clientAlias = originals.get(recordKey) || record.clientId;
           state.records.set(recordKey, record);
           if (state.aliases.get(record.clientId) === record.clientAlias) state.aliases.delete(record.clientId);
@@ -177,7 +244,6 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
             for (const [recordKey, record] of state.records) if (record.entityType === entityType && record.id === entry.id
               && record.proof === entry.creationProof) state.records.delete(recordKey);
           }
-          prune(state);
         });
       } catch { /* Keep the acknowledged commit; a consumed proof cannot create twice. */ }
     }

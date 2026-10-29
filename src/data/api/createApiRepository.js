@@ -5,7 +5,7 @@ import { createCreationIdStorage } from './creationIdStorage.js';
 import { activateActualIdAliases } from './activeActualIdAliases.js';
 import { AppRepositoryError, REPOSITORY_ERROR_CODES } from '../contracts/appRepository.js';
 import {
-  loadActualIdAliases
+  loadActualIdAliases, actualIdAliasType, ACTUAL_ID_ALIAS_STORAGE_KEY
 } from './actualIdAliasStorage.js';
 
 const CODE_BY_STATUS = {
@@ -414,14 +414,105 @@ export function createApiRepository({
   aliasStorageKey
 } = {}) {
   const clientIdAliases = loadActualIdAliases(aliasStorage, aliasStorageKey);
-  const creationIds = createCreationIdStorage(aliasStorage, aliasStorageKey);
-  creationIds.restoreAliases(clientIdAliases);
-  activateActualIdAliases(clientIdAliases);
+  const creationIds = createCreationIdStorage(aliasStorage, aliasStorageKey, { validateAccount: () => {
+    guardAccount();
+    if (!scopeAvailable) throw new Error('creation storage unavailable');
+  } });
+  // Legacy unscoped typed aliases have no authenticated owner.
+  for (const id of clientIdAliases.keys()) if (actualIdAliasType(clientIdAliases, id)) {
+    actualIdAliasType(clientIdAliases, id, null);
+    clientIdAliases.delete(id);
+  }
+  let account = null;
+  let scopeAvailable = false;
+  const accountKey = `${aliasStorageKey || ACTUAL_ID_ALIAS_STORAGE_KEY}.active-account`;
+  function guardAccount() {
+    if (!account || !scopeAvailable) return;
+    try {
+      if (aliasStorage && aliasStorage.getItem(accountKey) !== account) {
+        account = null;
+        creationIds.setAccount(null, clientIdAliases);
+        activateActualIdAliases(clientIdAliases, guardAccount);
+        throw new Error('account changed');
+      }
+    } catch {
+      throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.UNAUTHORIZED,
+        message: 'Oturum değişti. Verileri yeniden yükleyin.', operation: 'commitChanges' });
+    }
+  }
+  function accountStamp() {
+    try { return aliasStorage?.getItem(accountKey) ?? null; } catch { return null; }
+  }
+  function acceptSession(session, observedAccount = accountStamp()) {
+    const sicil = session?.authenticated === true ? Number(session.currentUser?.sicil ?? session.currentUser?.employeeNo) : NaN;
+    const next = Number.isSafeInteger(sicil) && sicil > 0 ? String(sicil) : null;
+    const current = accountStamp();
+    if (current !== observedAccount && current !== next) {
+      account = null;
+      creationIds.setAccount(null, clientIdAliases);
+      activateActualIdAliases(clientIdAliases, guardAccount);
+      throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.UNAUTHORIZED,
+        message: 'Oturum değişti. Verileri yeniden yükleyin.', operation: 'loadSessionContext' });
+    }
+    if (next !== account) {
+      account = next;
+      creationIds.setAccount(account, clientIdAliases);
+    }
+    scopeAvailable = !aliasStorage;
+    try {
+      if (aliasStorage?.getItem(accountKey) !== account) aliasStorage?.setItem(accountKey, account);
+      scopeAvailable = !aliasStorage || aliasStorage.getItem(accountKey) === account;
+    } catch { /* Versioned canonical-ID edits still work without durable storage. */ }
+    if (account && scopeAvailable) creationIds.restoreAliases(clientIdAliases);
+    else for (const id of clientIdAliases.keys()) if (actualIdAliasType(clientIdAliases, id)) {
+      actualIdAliasType(clientIdAliases, id, null);
+      clientIdAliases.delete(id);
+    }
+    activateActualIdAliases(clientIdAliases, guardAccount);
+  }
+  async function verifyAccount() {
+    const previous = account;
+    const observed = accountStamp();
+    acceptSession(await requestJson(`${basePath}/session`, { method: 'GET' }, 'loadSessionContext'), observed);
+    if (!account || (previous && previous !== account)) throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.UNAUTHORIZED,
+      message: 'Oturum doğrulanamadı. Verileri yeniden yükleyin.', operation: 'commitChanges' });
+  }
+  activateActualIdAliases(clientIdAliases, guardAccount);
   let preparation = Promise.resolve();
   function prepare(changes) {
     const result = preparation.then(async () => {
+      if (creationEntries(changes).length && !account) await verifyAccount();
       collectClientIds(changes, clientIdAliases);
       const normalized = normalizeActualChanges(changes);
+      if (creationEntries(normalized).length) {
+        const records = await creationIds.reconciliationRecords(normalized, clientIdAliases);
+        if (records.length) {
+          const allocationChanges = {};
+          for (const record of records) {
+            const collection = { PROJECT: 'projectUpserts', WBS: 'wbsUpserts', TASK: 'taskUpserts' }[record.entityType];
+            const original = normalized[collection].find((entry) => entry.id === record.clientId || entry.id === record.id);
+            (allocationChanges[collection] ||= []).push({ ...original, id: record.id, projectId: record.projectId,
+              creationProof: record.proof });
+          }
+          // Only the server can prove a pending identity was never committed.
+          // A consumed/pruned proof fails closed, retaining its identity mapping.
+          const result = await requestJson(`${basePath}/commit`, { method: 'POST', body: JSON.stringify({
+            operation: 'release-creation-ids', changes: {}, allocationChanges }) }, 'commitChanges');
+          if (!Array.isArray(result?.released) || result.released.some((entry) => !records.some((record) =>
+            record.id === entry.id && record.entityType === entry.entityType))) throw new AppRepositoryError({
+            code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+            message: 'Oluşturma işlemi doğrulanamadı. Verileri yeniden yükleyin.', operation: 'commitChanges' });
+          const released = records.filter((record) => result.released.some((entry) => record.id === entry.id && record.entityType === entry.entityType));
+          await creationIds.release(released, clientIdAliases);
+          const unknown = records.filter((record) => !released.includes(record));
+          if (unknown.length) {
+            await creationIds.retireProofs(unknown, clientIdAliases);
+            throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.CONFLICT,
+              message: 'Oluşturma kimliği onaylanamadı. Verileri yeniden yükleyin.', operation: 'commitChanges',
+              details: { code: 'CREATION_ALLOCATION_INVALID' } });
+          }
+        }
+      }
       let prepared = await creationIds.prepare(normalized, clientIdAliases);
       if (creationEntries(prepared).some(({ entry }) => !entry.creationProof)) {
         const allocatedAt = Date.now();
@@ -434,7 +525,7 @@ export function createApiRepository({
         if (creationEntries(prepared).some(({ entry }) => !entry.creationProof)) throw new AppRepositoryError({
           code: REPOSITORY_ERROR_CODES.MUTATION_FAILED, message: 'Oluşturma kimliği alınamadı.', operation: 'commitChanges' });
       }
-      activateActualIdAliases(clientIdAliases);
+      activateActualIdAliases(clientIdAliases, guardAccount);
       return prepared;
     });
     preparation = result.then(() => undefined, () => undefined);
@@ -443,7 +534,9 @@ export function createApiRepository({
   return {
     kind: 'actual-api',
     async loadSessionContext() {
+      const observed = accountStamp();
       const session = await requestJson(`${basePath}/session`, { method: 'GET' }, 'loadSessionContext');
+      acceptSession(session, observed);
       return restoreActualSessionIds(session, clientIdAliases);
     },
     /**
@@ -454,11 +547,13 @@ export function createApiRepository({
      */
     async loadSnapshot({ refreshMode = 'initial' } = {}) {
       const requestMode = ['manual', 'automatic'].includes(refreshMode) ? refreshMode : 'initial';
+      const observed = accountStamp();
       const body = await requestJson(`${basePath}/snapshot`, {
         method: 'GET',
         headers: { 'x-mergen-rota-refresh-mode': requestMode }
       }, 'loadSnapshot');
       const { session, ...snapshot } = body || {};
+      acceptSession(session, observed);
       const restored = restoreActualSnapshotIds(snapshot, clientIdAliases);
       return session ? { ...restored, session: restoreActualSessionIds(session, clientIdAliases) } : restored;
     },
@@ -468,7 +563,12 @@ export function createApiRepository({
      * tamamlanması garanti altına alınır.
      */
     async commitChanges(changes, { keepalive = false, notifyAssignees = false } = {}) {
-      const prepared = await prepare(changes);
+      guardAccount();
+      const prepared = !creationEntries(changes).length
+        ? creationIds.prepareExisting(normalizeActualChanges((collectClientIds(changes, clientIdAliases), changes)), clientIdAliases)
+        : await prepare(changes);
+      const preparedAccount = account;
+      const preparedScope = scopeAvailable;
       // `notifyAssignees` işlem BAŞINA bir tercihtir: kalıcı bir kullanıcı ayarı
       // olarak saklanmaz ve yalnızca kullanıcı açıkça seçtiğinde gönderilir.
       const body = JSON.stringify({
@@ -483,7 +583,10 @@ export function createApiRepository({
         keepalive: useKeepalive,
         body
       }, 'commitChanges');
-      await creationIds.complete(prepared, clientIdAliases);
+      guardAccount();
+      if (account !== preparedAccount || (preparedScope && !scopeAvailable)) throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.UNAUTHORIZED,
+        message: 'Oturum değişti. Verileri yeniden yükleyin.', operation: 'commitChanges' });
+      if (creationEntries(prepared).length) await creationIds.complete(prepared, clientIdAliases);
       return restoreActualCommitIds(committed, changes, clientIdAliases);
     },
     async flush() {}

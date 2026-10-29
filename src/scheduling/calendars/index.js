@@ -228,6 +228,17 @@ export function isWorkingDay(value, calendar = DEFAULT_CALENDAR) {
   return workingDaysOf(calendar).includes(date.getDay()) && !holidayFor(date, calendar);
 }
 
+// Only plain, holiday-free calendars use arithmetic. Accessor-backed or malformed
+// calendars retain the metered search and its existing per-operation limits.
+function weeklyPattern(calendar) {
+  const days = Object.getOwnPropertyDescriptor(calendar || DEFAULT_CALENDAR, 'workingDays');
+  const holidays = Object.getOwnPropertyDescriptor(calendar || DEFAULT_CALENDAR, 'holidays');
+  if (!days || !('value' in days) || !holidays || !Array.isArray(holidays.value) || holidays.value.length) return null;
+  const pattern = workingDaysOf(calendar);
+  if (pattern.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) return null;
+  return new Set(pattern);
+}
+
 /**
  * Verilen günü en yakın ÇALIŞMA gününe taşır.
  *
@@ -272,6 +283,14 @@ export function addWorkingDays(value, amount, calendar = DEFAULT_CALENDAR) {
   let current = origin;
   let scanned = 0;
 
+  const pattern = activeScanMeter?.weeklyArithmetic ? weeklyPattern(calendar) : null;
+  if (pattern?.size) {
+    // Leave the final partial week to the normal scan (including its meter).
+    const weeks = Math.floor((remaining - 1) / pattern.size);
+    current = addDays(current, direction * weeks * 7);
+    remaining -= weeks * pattern.size;
+  }
+
   while (remaining > 0) {
     // Tarama sınırı: çalışma günü bulunamayan takvimde döngü sonsuza gitmez.
     // Bütçe istekten türetildiği için buraya YALNIZCA bozuk takvim düşer.
@@ -294,6 +313,12 @@ export function diffWorkingDays(a, b, calendar = DEFAULT_CALENDAR) {
   const targetTime = target.getTime();
   const currentTime = current.getTime();
   if (targetTime === currentTime) return 0;
+
+  if (activeScanMeter?.weeklyArithmetic && weeklyPattern(calendar)) {
+    return targetTime > currentTime
+      ? countWorkingDays(addDays(current, 1), target, calendar, { byWeeks: true })
+      : -countWorkingDays(target, addDays(current, -1), calendar, { byWeeks: true });
+  }
 
   const direction = targetTime > currentTime ? 1 : -1;
   let difference = 0;

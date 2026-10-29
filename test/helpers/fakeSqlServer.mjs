@@ -1270,7 +1270,7 @@ function runQuery(db, statement, params, { database }) {
       }
       return result([[{ Reserved: 1 }]]);
     }
-    const consumed = db.creationAllocations.filter((row) => row.Sicil === sicil && new Date(row.ExpiresAt) > new Date()
+    const consumed = db.creationAllocations.filter((row) => row.Sicil === sicil && (sqlText.includes('-- creation-allocation: release') || new Date(row.ExpiresAt) > new Date())
       && allocations.some((entry) => sameGuid(row.Proof, entry.proof) && sameGuid(row.EntityId, entry.id)
         && row.EntityType === entry.entityType && sameGuid(row.ProjectId, entry.projectId)));
     db.creationAllocations = db.creationAllocations.filter((row) => !consumed.includes(row));
@@ -1855,14 +1855,12 @@ function runQuery(db, statement, params, { database }) {
       // yeniden denenebilir olmalıdır.
       const staleMinutes = Math.max(1, Number(params.staleMinutes) || 30);
       const staleBefore = Date.now() - (staleMinutes * 60000);
-      const abandoned = existing.Status === 'PENDING'
-        && existing.CompletedAt == null
-        && new Date(existing.CreatedAt).getTime() < staleBefore;
+      const abandoned = existing.Status === 'PENDING' && ((existing.CompletedAt == null
+        && new Date(existing.CreatedAt).getTime() < staleBefore)
+        || (existing.CompletedAt != null && existing.FailureCode === 'RECIPIENTS_PENDING'));
       if (!abandoned) return result([[{ TaskReminderLogId: null }]]);
       existing.Status = 'PENDING';
       existing.RequestedBySicil = params.actorSicil ?? null;
-      existing.RecipientCount = 0;
-      existing.RecipientDigest = null;
       existing.FailureCode = 'ABANDONED';
       existing.CreatedAt = new Date().toISOString();
       existing.CompletedAt = null;
@@ -1923,6 +1921,17 @@ function runQuery(db, statement, params, { database }) {
     });
     return result([[{ TaskReminderLogId: logId }]]);
   }
+  if (sqlText.includes('SET CompletedAt = NULL, CreatedAt = SYSUTCDATETIME()')) {
+    const entry = db.taskReminderLog.filter((row) => sameGuid(row.TaskId, params.taskId)
+      && row.ReminderKind === 'MANUAL' && Number(row.RequestedBySicil) === Number(params.actorSicil))
+      .sort((a, b) => b.TaskReminderLogId - a.TaskReminderLogId)[0];
+    if (!entry || entry.Status !== 'PENDING' || entry.FailureCode !== 'RECIPIENTS_PENDING' || entry.CompletedAt == null) return result([[]]);
+    entry.CompletedAt = null; entry.CreatedAt = new Date().toISOString(); entry.FailureCode = 'DELIVERY_IN_PROGRESS';
+    return result([[{ TaskReminderLogId: entry.TaskReminderLogId }]]);
+  }
+  if (sqlText.includes('SELECT RecipientDigest FROM dbo.MR_TaskReminderLog')) {
+    return result([db.taskReminderLog.filter((row) => row.TaskReminderLogId === Number(params.logId)).map((row) => ({ RecipientDigest: row.RecipientDigest }))]);
+  }
   if (sqlText.includes('UPDATE dbo.MR_TaskReminderLog')) {
     const entry = db.taskReminderLog.find((row) => row.TaskReminderLogId === Number(params.logId));
     if (entry) {
@@ -1930,7 +1939,7 @@ function runQuery(db, statement, params, { database }) {
       entry.RecipientCount = params.recipientCount ?? 0;
       entry.RecipientDigest = params.recipientDigest ?? null;
       entry.FailureCode = params.failureCode ?? null;
-      entry.CompletedAt = new Date().toISOString();
+      entry.CompletedAt = params.active ? null : new Date().toISOString();
     }
     return result([[]]);
   }

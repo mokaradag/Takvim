@@ -664,8 +664,9 @@ for (const deleted of [false, true]) {
   test(`saved general text with literal citation markers requires current presence (deleted=${deleted})`, async (t) => {
     const stack = stackFor(t);
     const text = 'Genel sohbet etiketi: 【R1】.';
+    const userText = `Etiketi açıkla. ${'Genel açıklama. '.repeat(20)}Silinen kullanıcı metni.`;
     stack.provider.enqueue({ type: 'stream', text });
-    const saved = done(await sendTurn({ turnId: randomUUID(), source: 'general', message: 'Etiketi açıkla' }));
+    const saved = done(await sendTurn({ turnId: randomUUID(), source: 'general', message: userText }));
     const pool = await getSqlPool();
     const request = pool.request.bind(pool);
     let evidenceReads = 0;
@@ -692,6 +693,10 @@ for (const deleted of [false, true]) {
     assert.deepEqual(answer.evidence || [], []);
     assert.equal(answer.content, deleted ? NON_ENUMERATING_FAILURE_TEXT : text);
     assert.equal(answer.finishReason, deleted ? 'not_found' : saved.assistantMessage.finishReason);
-    if (deleted) assert.equal(JSON.stringify(opened.body).includes(text), false);
+    if (deleted) {
+      assert.equal(JSON.stringify(opened.body).includes(text), false);
+      assert.equal(opened.body.messages.some((message) => message.role === 'user'), false);
+      assert.equal(JSON.stringify(opened.body).includes(userText), false);
+    } else assert.equal(opened.body.messages.find((message) => message.role === 'user')?.content, userText);
   });
 }

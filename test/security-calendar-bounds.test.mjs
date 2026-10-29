@@ -60,6 +60,16 @@ test('all CPM lag passes consume one fixed aggregate calendar allowance', () => 
   assert.equal(calculateCpm([root, successors[0]], { calendars: [calendar] }).orderedTaskIds.length, 2);
 });
 
+test('1192 supported independent 1000-day tasks do not pay repeatedly for whole-week scans', () => {
+  const calendar = { id: 'standard', workingDays: [1, 2, 3, 4, 5], holidays: [] };
+  const tasks = Array.from({ length: 1192 }, (_, index) => ({ id: `task-${index}`, calendarId: calendar.id,
+    plannedStart: '2026-08-17', plannedDurationDays: 1000, deps: [] }));
+  const result = calculateCpm(tasks, { calendars: [calendar] });
+  assert.equal(result.orderedTaskIds.length, 1192);
+  assert.equal(result.tasks['task-0'].earlyFinish, '2030-06-14');
+  assert.ok(Object.values(result.tasks).every((task) => task.totalFloatDays === 0));
+});
+
 test('malformed snapshot task collections keep the existing empty-array fallback on load and refresh', () => {
   const initial = createInitialState({ tasks: [{ id: 'prior', task: 'Prior task' }] });
   for (const tasks of ['invalid', { id: 'object' }, true, 42]) {

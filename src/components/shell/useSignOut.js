@@ -2,6 +2,7 @@
 import { useRef, useState } from 'react';
 import { DATA_MODES } from '../../data/dataMode';
 import { publicRotaPath } from '../../lib/publicPath.js';
+import { clearActualAccount } from '../../data/api/activeActualIdAliases.js';
 import { useSessionContext } from '../../state/hooks';
 import { useDataMode } from './DataModeContext';
 
@@ -49,6 +50,7 @@ export function useSignOut() {
       }
       // Yönlendirmeyi istemci yapar: sunucu 302 döndürseydi fetch akışında
       // yönlendirme döngüsü oluşabilirdi.
+      try { clearActualAccount(window.localStorage); } catch { clearActualAccount(); }
       window.location.assign(body?.endSessionUrl || appRoot);
     } catch {
       // İstek hiç tamamlanmadıysa (çevrimdışı, ağ hatası, iptal) oturum

@@ -1,14 +1,21 @@
 import { extractActualId } from '../../domain/identity/actualId.js';
-import { actualIdAliasType } from './actualIdAliasStorage.js';
+import { actualIdAliasType, ACTUAL_ID_ALIAS_STORAGE_KEY } from './actualIdAliasStorage.js';
 
 let activeAliases = new Map();
 let outgoingIds = new Map();
+let accountGuard = null;
 
 // Shared by the actual repository and its feature HTTP adapters, never by
 // server authorization. These aliases only translate IDs; they grant no access.
-export function activateActualIdAliases(aliases) {
+export function activateActualIdAliases(aliases, guard = null) {
+  accountGuard = guard;
   activeAliases = new Map([...aliases].filter(([actual, client]) => extractActualId(client) !== actual));
   outgoingIds = new Map([...activeAliases].map(([actual, client]) => [`${actualIdAliasType(aliases, actual)}:${extractActualId(client)}`, actual]));
+}
+
+export function clearActualAccount(storage) {
+  activateActualIdAliases(new Map());
+  try { storage?.removeItem(`${ACTUAL_ID_ALIAS_STORAGE_KEY}.active-account`); } catch { /* Storage can be unavailable. */ }
 }
 
 function outgoing(value, type) { return outgoingIds.get(`${type}:${extractActualId(value)}`) || value; }
@@ -16,6 +23,7 @@ function incoming(value) { return activeAliases.get(extractActualId(value)) || v
 const ENTITY_KEYS = new Map([['taskId', 'TASK'], ['projectId', 'PROJECT'], ['wbsId', 'WBS']]);
 
 export function translateEntityRequest(path, init) {
+  accountGuard?.();
   if (!outgoingIds.size) return { path, init };
   const url = new URL(path, 'http://localhost');
   for (const [key, type] of ENTITY_KEYS) if (url.searchParams.has(key)) url.searchParams.set(key, outgoing(url.searchParams.get(key), type));
@@ -35,6 +43,7 @@ export function translateEntityRequest(path, init) {
 }
 
 export function restoreEntityResponse(value) {
+  accountGuard?.();
   if (Array.isArray(value)) return value.map(restoreEntityResponse);
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key,

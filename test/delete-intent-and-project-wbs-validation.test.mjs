@@ -616,25 +616,34 @@ test('gizli ve olmayan hedef projeler aynı tam yanıtı verir; görünür ve ku
         id: taskId, projectId, wbsId, task: 'Yeni görev', status: 'planned', priority: 'medium',
         assigneeIds: [String(sicil === MANAGER_SICIL ? SUBORDINATE_SICIL : sicil)], deps: []
       });
-      const attempt = async (projectId) => {
+      const grant = { ProjectId: MANUAL_PROJECT_ID, Sicil: sicil, AccessLevel: 'FULL', GrantSource: 'MANUAL_GRANT', IsActive: 1 };
+      stack.db.projectAccess.push(grant);
+      const allocated = await fetch('http://localhost/api/mergen-rota/commit', { method: 'POST', body: JSON.stringify({
+        operation: 'allocate-creation-ids', changes: {}, allocationChanges: { taskUpserts: [task(MANUAL_PROJECT_ID)] } }) });
+      assert.equal(allocated.status, 200);
+      const allocation = (await allocated.json()).allocations[0];
+      stack.db.projectAccess = stack.db.projectAccess.filter((entry) => entry !== grant);
+      const changes = { taskUpserts: [{ ...task(MANUAL_PROJECT_ID), id: allocation.id, creationProof: allocation.proof }] };
+      const attempt = async () => {
         const start = stack.db.statements.length;
-        const response = await fetch('http://localhost/api/mergen-rota/commit', { method: 'POST',
-          body: JSON.stringify({ changes: { taskUpserts: [task(projectId)] } }) });
-        return { status: response.status, body: await response.text(), headers: [...response.headers].map(([name, value]) => [name, name === 'x-mergen-rota-correlation-id' ? '<correlation>' : value]),
-          queries: stack.db.statements.slice(start).map(entry => entry.sql) };
+        const { response } = await sendCommit(changes, { raw: true });
+        const queries = stack.db.statements.slice(start).map((entry) => entry.sql);
+        assert.ok(queries.some((sql) => sql.includes('-- creation-allocation: consume')));
+        assert.ok(queries.some((sql) => sql.includes('FROM dbo.MR_Projects')), 'destination validation runs after successful proof consumption');
+        return { status: response.status, body: await response.text(), headers: [...response.headers].map(([name, value]) =>
+          [name, name === 'x-mergen-rota-correlation-id' ? '<correlation>' : value]) };
       };
       const before = JSON.stringify(stack.db.tasks);
-      const hidden = await attempt(MANUAL_PROJECT_ID);
-      const missing = await attempt('c1c1c1c1-0000-4000-8000-0000000000d2');
-      // İstemcinin bildiği hedef kimliği ve istek başına rastgele korelasyon değeri dışında yanıt bütünüyle aynıdır.
-      assert.deepEqual({ ...hidden, body: hidden.body.replaceAll(MANUAL_PROJECT_ID, '<id>') },
-        { ...missing, body: missing.body.replaceAll('c1c1c1c1-0000-4000-8000-0000000000d2', '<id>') });
-      assert.equal(hidden.status, 409);
-      assert.equal(JSON.stringify(stack.db.tasks), before, 'her iki ret de hiçbir görev yazmaz');
-      // Aynı istek kimliğiyle satırın varlığı değiştirildiğinde de ham yanıt aynıdır.
-      const row = stack.db.projects.findIndex(item => String(item.ProjectId).toLowerCase() === MANUAL_PROJECT_ID);
+      const hidden = await attempt();
+      assert.equal(hidden.status, 400);
+      assert.notEqual(JSON.parse(hidden.body).error.details?.code, 'CREATION_ALLOCATION_INVALID');
+      assert.equal(stack.db.creationAllocations.length, 1, 'destination rejection rolls proof consumption back');
+      // Reuse the SAME valid proof after the authorized destination disappears.
+      const row = stack.db.projects.findIndex((item) => String(item.ProjectId).toLowerCase() === MANUAL_PROJECT_ID);
       const [removed] = stack.db.projects.splice(row, 1);
-      assert.deepEqual(await attempt(MANUAL_PROJECT_ID), hidden);
+      const missing = await attempt();
+      assert.deepEqual(missing, hidden);
+      assert.equal(JSON.stringify(stack.db.tasks), before);
       stack.db.projects.push(removed);
       if (sicil === MANAGER_SICIL) {
         stack.db.taskAssignees = []; // Kurumsal hedef artık PARTIAL görünürlük de sağlamaz.

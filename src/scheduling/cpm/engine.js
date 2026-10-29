@@ -440,7 +440,7 @@ export const CPM_CALENDAR_SCAN_BUDGET_DAYS = 5_000_000;
 /** All forward/backward/slack/path work shares one allowance, never one per edge. */
 export function calculateCpm(tasks, options = {}) {
   try {
-    return meterCalendarScans({ remainingDays: CPM_CALENDAR_SCAN_BUDGET_DAYS }, () => calculateCpmWithinBudget(tasks, options));
+    return meterCalendarScans({ remainingDays: CPM_CALENDAR_SCAN_BUDGET_DAYS, weeklyArithmetic: true }, () => calculateCpmWithinBudget(tasks, options));
   } catch (error) {
     if (!(error instanceof CalendarScanBudgetExceededError)) throw error;
     throw new CpmValidationError('CALENDAR_WORK_BUDGET_EXCEEDED', 'CPM calendar work exceeds the calculation limit.');
