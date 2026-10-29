@@ -2497,14 +2497,19 @@ export function createFakeSqlServerDriver(db) {
         // Model the allocation owner/proof update locks until commit/rollback.
         // Waiting transactions take their rollback snapshot after the winner.
         const key = this.params.sicil;
-        const previous = allocationLocks.get(key);
-        let release;
-        const held = new Promise((resolve) => { release = resolve; });
-        allocationLocks.set(key, held);
-        if (previous) await previous;
-        this.pool.allocationRelease = () => { release(); if (allocationLocks.get(key) === held) allocationLocks.delete(key); };
-        this.pool.savedTables = deserialize(serialize(Object.fromEntries(Object.entries(db)
-          .filter(([name, value]) => Array.isArray(value) && !['statements', 'transactions'].includes(name)))));
+        if (this.pool.allocationKey !== key) {
+          const previous = allocationLocks.get(key);
+          let release;
+          const held = new Promise((resolve) => { release = resolve; });
+          allocationLocks.set(key, held);
+          this.pool.allocationKey = key;
+          this.pool.allocationReady = Promise.resolve(previous).then(() => {
+            this.pool.allocationRelease = () => { release(); if (allocationLocks.get(key) === held) allocationLocks.delete(key); };
+            this.pool.savedTables = deserialize(serialize(Object.fromEntries(Object.entries(db)
+              .filter(([name, value]) => Array.isArray(value) && !['statements', 'transactions'].includes(name)))));
+          });
+        }
+        await this.pool.allocationReady;
       }
       // Test kancası: eşleşen sorgu, test bariyeri açana kadar bekler (ör. yavaş
       // bir rehber sorgusunun ortak havuzu ne kadar meşgul ettiğini ölçmek için).
@@ -2562,6 +2567,9 @@ export function createFakeSqlServerDriver(db) {
     }
     releaseLocks() {
       this.allocationRelease?.();
+      this.allocationRelease = null;
+      this.allocationKey = undefined;
+      this.allocationReady = null;
       for (const [key, owner] of db.adminActionLocks) {
         if (owner === this) db.adminActionLocks.delete(key);
       }

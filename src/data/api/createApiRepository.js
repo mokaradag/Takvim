@@ -101,43 +101,54 @@ export function normalizeActualChanges(changes = {}) {
   };
 }
 
-function rememberClientId(map, value) {
+function rememberClientId(map, value, values) {
   if (value == null || value === '') return;
   const original = String(value);
   const actual = toActualUuid(original);
-  if (actual && original !== actual && ![...map.values()].includes(original)) map.set(actual, original);
+  if (actual && original !== actual && !values.has(original)) {
+    if (map.has(actual)) {
+      const previous = map.get(actual), remaining = values.get(previous) - 1;
+      if (remaining) values.set(previous, remaining);
+      else values.delete(previous);
+    }
+    map.set(actual, original);
+    values.set(original, 1);
+  }
 }
 
-function rememberDeleteId(map, entry) {
-  rememberClientId(map, typeof entry === 'string' ? entry : entry?.id);
+function rememberDeleteId(map, entry, values) {
+  rememberClientId(map, typeof entry === 'string' ? entry : entry?.id, values);
 }
 
 function collectClientIds(changes = {}, map = new Map()) {
+  // Counts preserve overwrite/deduplication semantics when values are shared.
+  const values = new Map();
+  for (const value of map.values()) values.set(value, (values.get(value) || 0) + 1);
   for (const project of changes.projectUpserts || []) {
-    rememberClientId(map, project?.id);
-    rememberClientId(map, project?.calendarId);
+    rememberClientId(map, project?.id, values);
+    rememberClientId(map, project?.calendarId, values);
   }
-  for (const entry of changes.projectDeletes || []) rememberDeleteId(map, entry);
+  for (const entry of changes.projectDeletes || []) rememberDeleteId(map, entry, values);
 
   for (const node of changes.wbsUpserts || []) {
-    rememberClientId(map, node?.id);
-    rememberClientId(map, node?.projectId);
-    rememberClientId(map, node?.parentId);
+    rememberClientId(map, node?.id, values);
+    rememberClientId(map, node?.projectId, values);
+    rememberClientId(map, node?.parentId, values);
   }
-  for (const entry of changes.wbsDeletes || []) rememberDeleteId(map, entry);
+  for (const entry of changes.wbsDeletes || []) rememberDeleteId(map, entry, values);
 
   for (const task of changes.taskUpserts || []) {
-    rememberClientId(map, task?.id);
-    rememberClientId(map, task?.projectId);
-    rememberClientId(map, task?.wbsId);
-    rememberClientId(map, task?.calendarId);
-    rememberClientId(map, task?.recurrenceParentId);
+    rememberClientId(map, task?.id, values);
+    rememberClientId(map, task?.projectId, values);
+    rememberClientId(map, task?.wbsId, values);
+    rememberClientId(map, task?.calendarId, values);
+    rememberClientId(map, task?.recurrenceParentId, values);
     for (const dependency of Array.isArray(task?.deps) ? task.deps : []) {
-      rememberClientId(map, dependency?.id);
-      rememberClientId(map, dependency?.predecessorId);
+      rememberClientId(map, dependency?.id, values);
+      rememberClientId(map, dependency?.predecessorId, values);
     }
   }
-  for (const entry of changes.taskDeletes || []) rememberDeleteId(map, entry);
+  for (const entry of changes.taskDeletes || []) rememberDeleteId(map, entry, values);
   return map;
 }
 
@@ -228,8 +239,18 @@ export function restoreActualSessionIds(body, map) {
 
 export function restoreActualSnapshotIds(body, map) {
   if (!body || typeof body !== 'object' || !map?.size) return body;
+  const restoreInboxReferences = (items) => Array.isArray(items) ? items.map((item) => {
+    if (!item || typeof item !== 'object') return item;
+    const restored = { ...item };
+    for (const key of ['taskId', 'projectId', 'currentProjectId']) {
+      if (Object.hasOwn(item, key)) restored[key] = restoreClientId(item[key], map);
+    }
+    return restored;
+  }) : items;
   return {
     ...body,
+    ...Object.fromEntries(['scheduleRequests', 'assignmentCoordinations', 'taskNotifications']
+      .filter((key) => Object.hasOwn(body, key)).map((key) => [key, restoreInboxReferences(body[key])])),
     projects: Array.isArray(body.projects) ? body.projects.map((project) => ({
       ...project,
       id: restoreClientId(project.id, map),

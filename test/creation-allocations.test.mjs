@@ -744,3 +744,103 @@ test('expired uncommitted project/WBS/task allocations recover as one correctly 
     assert.ok(old.every((record) => !shared.state().aliases.some(([id]) => id === record.id)));
   } finally { globalThis.fetch = fetch; await stack.dispose(); }
 });
+
+test('snapshot inbox references open a server-allocated task using its live client identity across reloads', async () => {
+  const { sameActualReference } = await import('../src/domain/identity/actualId.js');
+  const stack = await createActualStack(seed());
+  const shared = sharedCreationStorage(), fetch = globalThis.fetch;
+  try {
+    const projectId = randomUUID(), wbsId = randomUUID(), taskId = randomUUID();
+    const repository = createApiRepository({ aliasStorage: shared.client() });
+    await repository.commitChanges({ projectUpserts: [{ id: projectId, name: 'Inbox project', calendarId: DEFAULT_CALENDAR_ID, leadId: '900001', color: 'blue' }],
+      wbsUpserts: [{ id: wbsId, projectId, parentId: null, code: '1', name: 'Root' }],
+      taskUpserts: [{ ...task(taskId), projectId, wbsId, assigneeIds: ['900001'] }] });
+    const actualTask = stack.actualId(taskId), actualProject = stack.actualId(projectId);
+    const row = { id: actualTask, taskId: actualTask, projectId: actualProject, currentProjectId: actualProject,
+      taskAvailable: true, requesterSicil: '900001', message: actualTask };
+    const collections = ['scheduleRequests', 'assignmentCoordinations', 'taskNotifications'];
+    let raw;
+    globalThis.fetch = async (url, init) => {
+      const response = await fetch(url, init);
+      if (!url.endsWith('/snapshot')) return response;
+      raw = { ...(await response.json()), ...Object.fromEntries(collections.map((key) => [key,
+        [row, { id: 'unavailable', taskId: null, projectId: null }, { id: 'without-project', taskId: actualTask }]])) };
+      return Response.json(raw);
+    };
+    for (const client of [repository, createApiRepository({ aliasStorage: shared.client() })]) {
+      for (const refreshMode of ['initial', 'manual']) {
+        const snapshot = await client.loadSnapshot({ refreshMode });
+        assert.ok(snapshot.tasks.some((entry) => entry.id === taskId));
+        for (const collection of collections) {
+          const [item, unavailable, withoutProject] = snapshot[collection];
+          assert.ok(snapshot.tasks.some((entry) => sameActualReference(entry.id, item.taskId)), `${collection} opens the accessible task`);
+          assert.equal(item.projectId, projectId); assert.equal(item.currentProjectId, projectId);
+          assert.equal(item.id, actualTask, 'the inbox row identity belongs to its own namespace');
+          assert.equal(item.message, actualTask); assert.equal(item.requesterSicil, '900001');
+          assert.equal(unavailable.taskId, null); assert.equal(unavailable.projectId, null);
+          assert.equal(Object.hasOwn(withoutProject, 'projectId'), false);
+          assert.equal(Object.hasOwn(withoutProject, 'currentProjectId'), false);
+        }
+        assert.equal(raw.scheduleRequests[0].taskId, actualTask, 'wire payload is not mutated');
+      }
+    }
+  } finally { globalThis.fetch = fetch; await stack.dispose(); }
+});
+
+test('large alias-heavy commits inspect existing alias values once without changing deduplication', async () => {
+  const { restoreActualCommitIds } = await import('../src/data/api/createApiRepository.js');
+  class CountedAliases extends Map {
+    scans = 0;
+    values() { assert.equal(++this.scans, 1, 'bulk ID collection must not repeatedly scan all live aliases'); return super.values(); }
+  }
+  const aliases = new CountedAliases(Array.from({ length: 10000 }, () => [randomUUID(), `task-${randomUUID()}`]));
+  const changes = { taskUpserts: Array.from({ length: 1000 }, () => ({ id: `task-${randomUUID()}`, projectId: `project-${randomUUID()}`,
+    wbsId: `wbs-${randomUUID()}`, calendarId: `calendar-${randomUUID()}`, deps: [{ id: `dependency-${randomUUID()}`, predecessorId: `task-${randomUUID()}` }] })),
+    wbsUpserts: Array.from({ length: 1000 }, () => ({ id: `wbs-${randomUUID()}`, projectId: `project-${randomUUID()}`, parentId: `wbs-${randomUUID()}` })) };
+  restoreActualCommitIds({}, changes, aliases);
+  assert.equal(aliases.scans, 1);
+  const actual = randomUUID(), other = randomUUID();
+  for (const duplicate of [false, true]) {
+    const map = new Map([[actual, `project-${actual}`], ...(duplicate ? [[other, `project-${actual}`]] : [])]);
+    restoreActualCommitIds({}, { taskUpserts: [{ id: `task-${actual}`, projectId: `project-${actual}` }] }, map);
+    assert.equal(map.get(actual), `${duplicate ? 'task' : 'project'}-${actual}`, 'overwritten values are retained only while another mapping still references them');
+  }
+});
+
+test('fake allocation owner lock is reentrant and preserves competing-transaction rollback snapshots', async () => {
+  const stack = await createActualStack(seed(), { sicil: 900010 });
+  const { getSqlPool } = await import('../src/server/db/pool.js');
+  const { allocateCreationIds, consumeCreationAllocations } = await import('../src/server/repository/creationAllocations.js');
+  const first = new stack.driver.Transaction(await getSqlPool());
+  const second = new stack.driver.Transaction(await getSqlPool());
+  let consume, waiting;
+  try {
+    await first.begin('SERIALIZABLE');
+    const changes = { taskUpserts: [task()] };
+    const issued = await allocateCreationIds(first, { sicil: 900010 }, changes, async () => {});
+    const record = issued.allocations[0];
+    const prepared = { taskUpserts: [{ ...changes.taskUpserts[0], id: record.id, creationProof: record.proof }] };
+    await second.begin('SERIALIZABLE');
+    let entered = false;
+    waiting = allocateCreationIds(second, { sicil: 900010 }, { taskUpserts: [task()] }, async () => {}).then((value) => { entered = true; return value; });
+    await new Promise(setImmediate);
+    assert.equal(entered, false, 'a different transaction must wait for the owner');
+    let consumed = false;
+    consume = consumeCreationAllocations(first, { sicil: 900010 }, prepared).then(() => { consumed = true; });
+    await new Promise(setImmediate);
+    assert.equal(consumed, true, 'the owner must not await its own release promise');
+    await first.rollback();
+    await waiting;
+    assert.equal(stack.db.creationAllocations.length, 1);
+    assert.notEqual(stack.db.creationAllocations[0].Proof.toLowerCase(), record.proof);
+    await second.rollback();
+    assert.deepEqual(stack.db.creationAllocations, [], 'the waiter snapshots after the first rollback, and repeated owner queries do not resnapshot their own writes');
+  } finally {
+    first.releaseLocks();
+    await waiting?.catch(() => {});
+    second.releaseLocks();
+    await consume?.catch(() => {});
+    first.releaseLocks();
+    await stack.dispose();
+  }
+});
