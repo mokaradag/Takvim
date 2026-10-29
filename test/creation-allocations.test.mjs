@@ -290,3 +290,52 @@ test('typed aliases never rewrite other entity namespaces, including after clien
     assert.deepEqual(JSON.parse(request.init.body), { projectId: local, taskId: serverId });
   } finally { await stack.dispose(); }
 });
+
+test('failed proof persistence publishes no memory state; retry remains durable across a lost response and reload', async () => {
+  const stack = await createActualStack(seed(), { sicil: 900010 });
+  const values = new Map();
+  let rejectProof = true;
+  const storage = { getItem: (key) => values.get(key), setItem(key, value) {
+    if (key.endsWith('.creations.v1') && rejectProof) { rejectProof = false; throw new Error('quota'); }
+    values.set(key, value);
+  } };
+  const fetch = globalThis.fetch;
+  const sent = [];
+  let loseResponse = true;
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body); sent.push(body);
+    const response = await fetch(url, init);
+    if (!body.operation && loseResponse) { loseResponse = false; throw new TypeError('response lost'); }
+    return response;
+  };
+  try {
+    const changes = { taskUpserts: [task(`task-${randomUUID()}`)] };
+    const repository = createApiRepository({ aliasStorage: storage });
+    await assert.rejects(repository.commitChanges(changes), (error) => error.details.code === 'CREATION_ALLOCATION_STORAGE');
+    assert.equal(stack.db.tasks.length, 1);
+    const firstId = stack.db.creationAllocations[0].EntityId.toLowerCase();
+    await assert.rejects(repository.commitChanges(changes));
+    assert.equal(sent.filter((body) => body.operation).length, 2, 'a failed remember left no reusable proof in memory');
+    const submitted = sent.find((body) => !body.operation).changes.taskUpserts[0];
+    assert.notEqual(submitted.id, firstId);
+    const persisted = JSON.parse([...values].find(([key]) => key.endsWith('.creations.v1'))[1]);
+    assert.equal(persisted[0].proof, submitted.creationProof);
+    assert.equal(persisted[0].id, submitted.id);
+    await assert.rejects(createApiRepository({ aliasStorage: storage }).commitChanges(changes),
+      (error) => error.details.code === 'CREATION_ALLOCATION_INVALID');
+    assert.equal(sent.filter((body) => body.operation).length, 2, 'reload replays the durably stored proof');
+    assert.equal(stack.db.tasks.length, 2);
+  } finally { globalThis.fetch = fetch; await stack.dispose(); }
+});
+
+test('proof durability requirements do not block versioned edits when browser storage is full', async () => {
+  const stack = await createActualStack(seed());
+  try {
+    const current = stack.state.tasks.find((row) => row.id === HIDDEN_TASK);
+    assert.ok(current?.version);
+    const repository = createApiRepository({ aliasStorage: { getItem() { return null; }, setItem() { throw new Error('quota'); } } });
+    const result = await repository.commitChanges({ taskUpserts: [{ ...current, task: 'Versioned edit' }] });
+    assert.equal(result.taskUpserts[0].task, 'Versioned edit');
+    assert.equal(stack.db.creationAllocations.length, 0);
+  } finally { await stack.dispose(); }
+});

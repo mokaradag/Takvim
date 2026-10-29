@@ -434,7 +434,7 @@ export function createApiRepository({
         if (creationEntries(prepared).some(({ entry }) => !entry.creationProof)) throw new AppRepositoryError({
           code: REPOSITORY_ERROR_CODES.MUTATION_FAILED, message: 'Oluşturma kimliği alınamadı.', operation: 'commitChanges' });
       }
-      if (!persistActualIdAliases(clientIdAliases, aliasStorage, aliasStorageKey) && aliasStorage) {
+      if (!persistActualIdAliases(clientIdAliases, aliasStorage, aliasStorageKey) && aliasStorage && creationEntries(prepared).length) {
         throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
           message: 'Oluşturma kimliği saklanamadı.', operation: 'commitChanges' });
       }

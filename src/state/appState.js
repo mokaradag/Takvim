@@ -337,7 +337,7 @@ function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())
   const previousTasks = new Map((previous.tasks || []).map((task) => [task.id, task]));
   const tasks = reconcileSnapshotCollection(
     previous.tasks,
-    meterCalendarScans({ remainingDays: 5_000_000 }, () => (snapshot.tasks || []).map((task) => {
+    meterCalendarScans({ remainingDays: 5_000_000 }, () => (Array.isArray(snapshot.tasks) ? snapshot.tasks : []).map((task) => {
       const previousTask = previousTasks.get(task.id);
       return normalizeTaskRecord(task, { ...context, countByWeeks: true, previousTask,
         previousCalendar: previousTask ? resolveTaskCalendar(previousTask, previous.projects, previous.calendars) : null });

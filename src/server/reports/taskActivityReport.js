@@ -203,7 +203,8 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
       OUTER APPLY (SELECT TOP (1) d.BeforeJson FROM dbo.MR_AuditLog d
         WHERE NOT EXISTS (SELECT 1 FROM dbo.MR_Tasks live WHERE live.TaskId = candidate.TaskId)
           AND d.EntityType = 'TASK' AND d.ActionCode = 'DELETE'
-          AND TRY_CONVERT(uniqueidentifier, d.EntityId) = candidate.TaskId AND d.ProjectId = candidate.ProjectId
+          AND d.EntityId IN (LOWER(CONVERT(nvarchar(36), candidate.TaskId)), UPPER(CONVERT(nvarchar(36), candidate.TaskId)))
+          AND d.ProjectId = candidate.ProjectId
         ORDER BY d.OccurredAt DESC, d.AuditId DESC) deleted
       LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = candidate.Sicil
       WHERE EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1)

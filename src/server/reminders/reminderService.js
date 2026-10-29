@@ -12,6 +12,7 @@ import { evaluateReminderEligibility } from '../../domain/reminders/reminderPoli
 import { sendMail } from '../mail/mailService.js';
 import { getSmtpConfig, isSmtpConfigured } from '../mail/smtpConfig.js';
 import {
+  ABANDONED_CLAIM_MINUTES,
   claimAutomaticReminder,
   completeReminderLog,
   loadLastManualReminderAt,
@@ -108,12 +109,19 @@ export async function deliverTaskReminder(executor, {
   const delivered = [];
   let failed = null;
   let uncertain = false, attempted = 0;
-  // One shared deadline, one connection at a time. Per-command SMTP timeouts
-  // remain configured as before; the task cannot multiply them by its assignees.
+  // Bound admission separately from an in-flight session. One isolated message
+  // has at most 14 timed stages: connect, greeting, EHLO, STARTTLS, TLS, EHLO,
+  // three LOGIN exchanges, MAIL, RCPT, DATA, acceptance and QUIT. Preserve those
+  // command timeouts instead of aborting a healthy message after just one.
   const controller = new AbortController();
-  const budgetMs = isSmtpConfigured() ? getSmtpConfig().timeoutMs : 20000;
+  const timeoutMs = isSmtpConfigured() ? getSmtpConfig().timeoutMs : 20000;
+  const budgetMs = Math.min(120000, timeoutMs * Math.min(recipients.length, 6));
   const deadline = Date.now() + budgetMs;
-  const timer = setTimeout(() => controller.abort(), budgetMs);
+  // A final hard deadline also bounds trickling TLS or a stalled transport.
+  // Leave half the existing abandoned-claim window for reads/finalization;
+  // a long configured timeout must not outlive automatic claim ownership.
+  const hardBudgetMs = Math.min(budgetMs + 14 * timeoutMs, ABANDONED_CLAIM_MINUTES * 30000);
+  const timer = setTimeout(() => controller.abort(), hardBudgetMs);
   try {
     for (const email of recipients) {
       if (controller.signal.aborted || Date.now() >= deadline) break;

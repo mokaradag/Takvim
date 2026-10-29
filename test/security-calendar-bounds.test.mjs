@@ -59,3 +59,12 @@ test('all CPM lag passes consume one fixed aggregate calendar allowance', () => 
   assert.ok(reads >= CPM_CALENDAR_SCAN_BUDGET_DAYS); assert.ok(reads <= CPM_CALENDAR_SCAN_BUDGET_DAYS + successors.length * 10, `bounded reads: ${reads}`);
   assert.equal(calculateCpm([root, successors[0]], { calendars: [calendar] }).orderedTaskIds.length, 2);
 });
+
+test('malformed snapshot task collections keep the existing empty-array fallback on load and refresh', () => {
+  const initial = createInitialState({ tasks: [{ id: 'prior', task: 'Prior task' }] });
+  for (const tasks of ['invalid', { id: 'object' }, true, 42]) {
+    assert.deepEqual(createInitialState({ tasks }).tasks, []);
+    const refreshed = appStateReducer(initial, { type: 'data/load-success', snapshot: { tasks } });
+    assert.deepEqual(refreshed.tasks, [], 'fallback follows incoming membership and never retains revoked prior tasks');
+  }
+});

@@ -249,6 +249,11 @@ for (const scenario of ['inactive-admin', 'deleted-creator', 'direct-assignee', 
         assert.doesNotMatch(generated, /own\.TaskId|OPENJSON|deleted\.BeforeJson/, 'display-only allowances never enter the stable-ID/write predicate');
         assert.deepEqual(ids.recordset.map((row) => row.Sicil), [employee]);
       }
+      if (scenario.startsWith('deleted-')) {
+        const lookup = stack.db.statements.findLast(({ sql }) => sql.includes('OUTER APPLY (SELECT TOP (1) d.BeforeJson')).sql;
+        assert.match(lookup, /d\.EntityId IN \(LOWER\(CONVERT\(nvarchar\(36\), candidate\.TaskId\)\), UPPER\(CONVERT\(nvarchar\(36\), candidate\.TaskId\)\)\)/);
+        assert.doesNotMatch(lookup, /TRY_CONVERT\(uniqueidentifier, d\.EntityId\)/, 'the indexed history key is not transformed');
+      }
       if (scenario === 'deleted-assignee') {
         stack.db.auditLog.at(-1).BeforeJson = JSON.stringify({ CreatedBySicil: outsider, assigneeIds: [outsider] });
         assert.equal((await fetchTaskActivities({ ...range, scope: 'visible' })).value.items.length, 0, 'historical name permission cannot grant report-row visibility');

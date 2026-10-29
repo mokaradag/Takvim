@@ -49,23 +49,31 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
     },
     remember(allocations, aliases, changes) {
       const originals = new Map(creationEntries(changes).map(({ entry, entityType }) => [`${entityType}:${extractActualId(entry.id)}`, entry.id]));
+      const pending = new Map(records);
+      const remembered = [];
       for (const record of allocations) {
         if (!isActualId(record.id) || !isActualId(record.clientId) || !isActualId(record.proof)
           || !['PROJECT', 'WBS', 'TASK'].includes(record.entityType)) throw storageError();
         const original = originals.get(`${record.entityType}:${record.clientId}`) || aliases.get(record.clientId) || record.clientId;
-        records.set(`${record.entityType}:${record.clientId}`, { ...record, clientAlias: original });
-        if (aliases.get(record.clientId) === original) aliases.delete(record.clientId);
-        aliases.set(record.id, original);
-        actualIdAliasType(aliases, record.id, record.entityType);
+        pending.set(`${record.entityType}:${record.clientId}`, { ...record, clientAlias: original });
+        remembered.push({ record, original });
       }
       // Save BEFORE submitting the commit. A lost response must replay the same
       // one-use proof, never reserve a replacement and accidentally create twice.
       if (storage) {
         try {
-          if (records.size > MAX_ACTUAL_ID_ALIASES) throw storageError();
-          storage.setItem(key, JSON.stringify([...records.values()]));
+          if (pending.size > MAX_ACTUAL_ID_ALIASES) throw storageError();
+          storage.setItem(key, JSON.stringify([...pending.values()]));
         }
         catch { throw storageError(); }
+      }
+      // Publish memory state only after durability. A failed write must leave
+      // no reusable proof or typed alias for a later same-session retry.
+      for (const [recordKey, record] of pending) records.set(recordKey, record);
+      for (const { record, original } of remembered) {
+        if (aliases.get(record.clientId) === original) aliases.delete(record.clientId);
+        aliases.set(record.id, original);
+        actualIdAliasType(aliases, record.id, record.entityType);
       }
     },
     complete(changes) {

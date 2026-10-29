@@ -158,7 +158,7 @@ test('mixed accepted and uncertain recipients stay terminally uncertain and are 
   });
 });
 
-test('a stalled real SMTP server consumes one shared deadline for 200 isolated recipients', async () => {
+test('a stalled real SMTP server has a bounded serial admission window for 200 isolated recipients', async () => {
   const sockets = new Set(); let connections = 0;
   const server = net.createServer((socket) => { connections += 1; sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -172,7 +172,7 @@ test('a stalled real SMTP server consumes one shared deadline for 200 isolated r
       const started = performance.now();
       const result = await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001 });
       assert.equal(result.ok, false); assert.ok(performance.now() - started < 1500);
-      assert.equal(connections, 1); assert.equal(db.taskReminderLog[0].RecipientCount, 1);
+      assert.ok(connections > 1 && connections <= 6); assert.equal(db.taskReminderLog[0].RecipientCount, connections);
       assert.equal(db.taskReminderLog[0].Status, 'FAILED');
       assert.match(result.warnings.join(' '), /kalan sorumlulara gönderim denenmedi/);
     });
@@ -769,4 +769,82 @@ test('two requests that both read an empty cooldown cannot both claim delivery',
     assert.equal(outcomes.filter(result => result.code === 'MANUAL_REMINDER_RATE_LIMITED').length, 1);
     assert.equal(mailer.sent.length, 1); assert.equal(db.taskReminderLog.length, 1);
   });
+});
+
+test('healthy isolated SMTP sessions can span multiple command timeouts without forced uncertainty', async () => {
+  const sockets = new Set(), messages = [];
+  const server = net.createServer((socket) => {
+    sockets.add(socket); socket.setEncoding('utf8'); socket.on('error', () => {});
+    const timers = new Set();
+    const reply = (line) => {
+      const timer = setTimeout(() => { timers.delete(timer); if (!socket.destroyed) socket.write(line + '\r\n'); }, 40);
+      timers.add(timer);
+    };
+    socket.on('close', () => { sockets.delete(socket); for (const timer of timers) clearTimeout(timer); });
+    reply('220 relay');
+    let buffer = '', data = null;
+    socket.on('data', (chunk) => {
+      buffer += chunk;
+      for (;;) {
+        const end = buffer.indexOf('\r\n'); if (end < 0) break;
+        const line = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+        if (data) {
+          if (line === '.') { messages.push(data.join('\r\n')); data = null; reply('250 accepted'); }
+          else data.push(line);
+        } else if (line.startsWith('EHLO') || line.startsWith('MAIL FROM') || line.startsWith('RCPT TO')) reply('250 OK');
+        else if (line === 'DATA') { data = []; reply('354 proceed'); }
+        else if (line === 'QUIT') reply('221 bye');
+      }
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const env = { SMTP_HOST: '127.0.0.1', SMTP_PORT: String(server.address().port), SMTP_FROM: 'rota@example.internal',
+    SMTP_TIMEOUT_MS: '200', SMTP_USERNAME: '', SMTP_PASSWORD: '', SMTP_USE_STARTTLS: 'false' };
+  const prior = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]])); Object.assign(process.env, env);
+  try {
+    await withReminderStack(reminderSeed({ taskAssignees: [{ TaskId: TASK_ID, Sicil: 900001 }, { TaskId: TASK_ID, Sicil: 900002 }] }), async ({ db, pool }) => {
+      const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+      const started = performance.now();
+      const result = await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001 });
+      assert.equal(result.ok, true); assert.equal(result.partial, false); assert.equal(result.recipientCount, 2);
+      assert.ok(performance.now() - started > 400, 'both complete sessions exceed the admission window but their individual replies stay within timeout');
+      assert.equal(db.taskReminderLog[0].Status, 'SENT'); assert.equal(db.taskReminderLog[0].FailureCode, null);
+      assert.equal(messages.length, 2);
+      for (const message of messages) assert.equal(message.match(/^To: /gm)?.length, 1);
+      assert.match(messages[0], /^To: ayse.yilmaz@example.internal\r?$/m);
+      assert.match(messages[1], /^To: mehmet.demir@example.internal\r?$/m);
+    });
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    for (const [key, value] of Object.entries(prior)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+});
+
+for (const timeoutMs of [80, 300000]) test(`the final delivery deadline bounds a stalled session within claim ownership (${timeoutMs})`, async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: new Date('2026-08-17T09:00:00Z') });
+  const env = { SMTP_HOST: 'relay.example.internal', SMTP_FROM: 'rota@example.internal', SMTP_TIMEOUT_MS: String(timeoutMs) };
+  const prior = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]])); Object.assign(process.env, env);
+  try {
+    await withReminderStack(reminderSeed({ taskAssignees: [{ TaskId: TASK_ID, Sicil: 900001 }, { TaskId: TASK_ID, Sicil: 900002 }] }), async ({ db, pool }) => {
+      const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+      let enter, signal, attempts = 0;
+      const entered = new Promise((resolve) => { enter = resolve; });
+      const pending = sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send(message) {
+        attempts += 1; signal = message.signal; enter();
+        return new Promise((resolve) => signal.addEventListener('abort', () => resolve({ ok: false, code: 'SMTP_TIMEOUT', deliveryMayHaveEscaped: false }), { once: true }));
+      } });
+      await entered;
+      t.mock.timers.tick(timeoutMs); assert.equal(signal.aborted, false, 'one command timeout is not a complete-message deadline');
+      t.mock.timers.tick(timeoutMs === 80 ? 1200 : 600000);
+      assert.equal(signal.aborted, true, 'the largest supported timeout cannot outlive the existing claim lease');
+      const result = await pending;
+      assert.equal(signal.aborted, true); assert.equal(attempts, 1);
+      assert.equal(result.ok, false); assert.equal(result.code, 'SMTP_TIMEOUT');
+      assert.equal(db.taskReminderLog[0].Status, 'FAILED'); assert.equal(db.taskReminderLog[0].RecipientCount, 1);
+      assert.match(result.warnings.join(' '), /kalan sorumlulara gönderim denenmedi/);
+    });
+  } finally {
+    for (const [key, value] of Object.entries(prior)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
 });
