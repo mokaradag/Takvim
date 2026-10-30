@@ -948,10 +948,11 @@ function planningQuery(turn) {
 async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgress = null, onText, onDelivery = null, onGenerated = null }) {
   const startedAt = Date.now();
   const catalog = toolCatalogForModel();
+  const beforeDispatch = (dispatchSignal) => assertAssistantTurnPresent(turn, dispatchSignal);
   // Aşama 4C: planlamadan önce Aşama 4B keşfi (kendi kirası ve süre bütçesiyle, araç oturumundan ayrı).
   // Danışmanlık kaybı planlamayı Aşama 3 davranışına döndürür; iptal ve kimlik/yetki hatası yukarı taşınır.
   onProgress?.();
-  const planning = { ...await semanticPlanningAdvice({ query: planningQuery(turn), catalog, signal }), startedAt };
+  const planning = { ...await semanticPlanningAdvice({ query: planningQuery(turn), catalog, signal, beforeDispatch }), startedAt };
   onProgress?.();
   const options = {
     messages: turn.modelMessages,
@@ -972,6 +973,7 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
     profile,
     signal,
     lifecycle,
+    beforeDispatch,
     run: (session) => {
       if (Number(session.sicil) !== Number(turn.sicil)) throw unknownSicil();
       return runGroundedTurn(session, { ...options, ...extra });

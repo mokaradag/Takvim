@@ -460,7 +460,7 @@ export function ReminderSettingsView() {
                     {history.map((entry) => (
                       <tr key={entry.id}>
                         <td>{entry.kind === 'AUTOMATIC' ? 'Otomatik' : 'Elle'}</td>
-                        <td>{entry.failureCode === 'MAIL_DELIVERY_UNCERTAIN' ? 'Teslimat belirsiz' : entry.status === 'SENT' ? 'Gönderildi' : entry.status === 'FAILED' ? `Başarısız (${entry.failureCode || '—'})` : 'Sürüyor'}</td>
+                        <td>{entry.failureCode === 'MAIL_DELIVERY_UNCERTAIN' ? 'Teslimat belirsiz' : entry.failureCode === 'RECIPIENTS_PENDING' ? 'Devam bekliyor' : entry.status === 'SENT' ? 'Gönderildi' : entry.status === 'FAILED' ? `Başarısız (${entry.failureCode || '—'})` : 'Sürüyor'}</td>
                         <td className="tabular">{entry.recipientCount}</td>
                         <td className="muted" style={{ fontSize: 11 }}>{entry.slotKey}</td>
                         <td className="muted" style={{ fontSize: 11 }}>{entry.completedAt || entry.createdAt}</td>

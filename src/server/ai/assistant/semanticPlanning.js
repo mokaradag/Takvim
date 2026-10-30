@@ -64,12 +64,12 @@ function validated(result, registered) {
  * `candidates` yalnızca kayıt defterindeki araç adlarıdır, anlamsal sırayla;
  * skor taşınmaz. `retrieve` yalnızca sınamalarda değiştirilir.
  */
-export async function semanticPlanningAdvice({ query, catalog, signal = null, retrieve = retrieveSemanticCandidates, budgetMs = SEMANTIC_PLANNING_BUDGET_MS }) {
+export async function semanticPlanningAdvice({ query, catalog, signal = null, retrieve = retrieveSemanticCandidates, budgetMs = SEMANTIC_PLANNING_BUDGET_MS, beforeDispatch = null }) {
   const registered = new Set(catalog.map((tool) => tool.name));
   if (signal?.aborted) throw new AiError(AI_ERROR_CODES.AI_CANCELLED);
   const deadline = createAiDeadline({ timeoutMs: budgetMs, parentSignal: signal });
   try {
-    const result = await raceWithAbort(() => retrieve({ query, signal: deadline.signal }), deadline.signal);
+    const result = await raceWithAbort(() => retrieve({ query, signal: deadline.signal, beforeDispatch }), deadline.signal);
     if (signal?.aborted) throw new AiError(AI_ERROR_CODES.AI_CANCELLED);
     return validated(result, registered);
   } catch (error) {

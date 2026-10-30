@@ -202,6 +202,31 @@ test('yönetici görünümü başarısız turda ayrı özetleri ve güvenli nede
   assert.match(JSON.stringify(view.output), /Otomatik Outlook işleme: açık/);
 });
 
+test('reminder history distinguishes idle continuations from active and terminal deliveries', async (t) => {
+  const oldFetch = globalThis.fetch, oldContext = DataModeContext._currentValue;
+  t.after(() => { globalThis.fetch = oldFetch; DataModeContext._currentValue = oldContext; });
+  DataModeContext._currentValue = { dataMode: 'actual' };
+  const history = [
+    ['PENDING', 'RECIPIENTS_PENDING', 'Devam bekliyor'],
+    ['PENDING', 'DELIVERY_IN_PROGRESS', 'Sürüyor'],
+    ['PENDING', 'MAIL_DELIVERY_UNCERTAIN', 'Teslimat belirsiz'],
+    ['SENT', null, 'Gönderildi'],
+    ['FAILED', 'SMTP_SEND_FAILED', 'Başarısız (SMTP_SEND_FAILED)']
+  ];
+  globalThis.fetch = async (url) => Response.json(String(url).endsWith('/admin/reminder-settings')
+    ? { settings: DEFAULT_REMINDER_SETTINGS, history: history.map(([status, failureCode], id) => ({
+      id, status, failureCode, kind: 'MANUAL', recipientCount: 0, completedAt: '2020-01-01T00:00:00Z'
+    })) } : { outlook: { enabled: false } });
+  const view = mountComponent(ReminderSettingsView, {});
+  t.after(() => view.unmount());
+  await immediate(); view.render();
+  const table = findElement(view.output, (node) => node.type === 'table' && node.props['aria-label'] === 'Son gönderimler');
+  history.forEach(([, , label], id) => {
+    const row = findElement(table, (node) => node.type === 'tr' && node.key === String(id));
+    assert.equal(row.props.children[1].props.children, label);
+  });
+});
+
 test('kuyruk durumu kalıcı ortak sayıları döndürür ve sır içermez', async (t) => {
   const { pool, db } = await stack(t);
   await addTaskToOutlook(pool, { taskId: TASK, sicil: SICIL, queueOnly: true });

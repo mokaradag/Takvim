@@ -366,6 +366,36 @@ for (const path of ['server', 'model']) {
   });
 }
 
+test('conversation deletion between grounded rounds prevents sending tool evidence to the provider', async (t) => {
+  const stack = stackFor(t);
+  const request = declared({ operation: 'value', metrics: ['task.title', 'task.project'], reasoning: 'synthesis',
+    fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }],
+    entities: [{ type: 'task', id: TASKS.OVERDUE }] });
+  stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_task_detail', arguments: { taskId: TASKS.OVERDUE } }] });
+  const { deleteConversation } = await import('../src/server/ai/assistant/conversationStore.js');
+  const open = stack.provider.streamToolCompletion.bind(stack.provider);
+  let deleted = false;
+  t.mock.method(stack.provider, 'streamToolCompletion', async (input) => {
+    const opened = await open(input);
+    return { events: (async function* () {
+      for await (const event of opened.events) {
+        if (!deleted && event.type === 'done') {
+          const conversationId = stack.db.aiConversations[0].ConversationId;
+          assert.equal((await deleteConversation(await getSqlPool(), AYSE, { conversationId })).deleted, true);
+          deleted = true;
+        }
+        yield event;
+      }
+    })() };
+  });
+  const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
+  assert.equal(deleted, true);
+  assert.equal(stack.provider.calls.length, 1, 'no subsequent dispatch of the prepared tool evidence');
+  assert.equal(deltas(response), '');
+  assert.equal(done(response), undefined);
+  assert.equal(response.events.at(-1).event, 'error');
+});
+
 test('a transient post-persist check fails closed before streaming and can recover on reopen', async (t) => {
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);

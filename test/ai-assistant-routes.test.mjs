@@ -903,12 +903,13 @@ test('a generation that resolves after its stall verdict never emits DONE', asyn
   assert.equal(released(), 1);
 });
 
-test('deletion after ACCEPTED is revalidated before dispatching the prepared prompt to the model', async (t) => {
-  const { provider } = createAiStack(t);
+for (const source of ['general', 'rota']) test(`deletion after ACCEPTED is revalidated before dispatching the prepared prompt to the model (${source})`, async (t) => {
+  const { provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
   const { deleteConversation } = await import('../src/server/ai/assistant/conversationStore.js');
   const { getSqlPool } = await import('../src/server/db/pool.js');
   const { prepareAssistantTurn, generateAssistantAnswer } = await import('../src/server/ai/assistant/assistantService.js');
-  const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: 'private pending prompt', mode: 'standard', source: 'general' }) });
+  const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: 'private pending prompt', mode: 'standard', source }) });
+  assert.equal(turn.grounded, source === 'rota');
   const response = assistantStreamResponse(turn, { generate: async (prepared, options) => {
     // A different server instance commits deletion without this process's claim notification.
     assert.equal((await deleteConversation(await getSqlPool(), prepared.sicil, { conversationId: prepared.conversation.id })).deleted, true);
@@ -917,6 +918,7 @@ test('deletion after ACCEPTED is revalidated before dispatching the prepared pro
   const events = parseSseText(await response.text()).events;
   assert.deepEqual(events.map((event) => event.event), ['accepted', 'error']);
   assert.equal(provider.calls.length, 0);
+  assert.equal(provider.semanticCalls.length, 0);
   assert.equal(activeAssistantGenerationCountForTests(), 0);
 });
 
@@ -942,15 +944,15 @@ test('deletion during generation aborts transport before the next delta can disc
   assert.deepEqual(db.aiConversationMessages, []);
 });
 
-test('a prompt deleted while queued never reaches transport after admission is granted', async (t) => {
-  const { db, provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_MAX_ACTIVE_REQUESTS: '1', MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER: '1' } });
+for (const source of ['general', 'rota']) test(`a prompt deleted while queued never reaches transport after admission is granted (${source})`, async (t) => {
+  const { db, provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', MERGEN_ROTA_AI_MAX_ACTIVE_REQUESTS: '1', MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER: '1' } });
   const { deleteConversation } = await import('../src/server/ai/assistant/conversationStore.js');
   const { getSqlPool } = await import('../src/server/db/pool.js');
   provider.enqueue({ type: 'deferred-stream' }, { type: 'stream', chunks: ['must not be generated'] });
   const first = await turnsRoute.POST(turnRequest({ turnId: randomUUID(), message: 'capacity holder', mode: 'standard', source: 'general' }));
   const firstBody = first.text();
   await provider.waitForActive(1);
-  const queued = await turnsRoute.POST(turnRequest({ turnId: randomUUID(), message: 'queued private prompt', mode: 'standard', source: 'general' }));
+  const queued = await turnsRoute.POST(turnRequest({ turnId: randomUUID(), message: 'queued private prompt', mode: 'standard', source }));
   const queuedBody = queued.text();
   await until(() => aiRuntimeLoad().queued === 1);
   const conversationId = db.aiConversations.at(-1).ConversationId;
@@ -959,6 +961,7 @@ test('a prompt deleted while queued never reaches transport after admission is g
   await firstBody;
   const events = parseSseText(await queuedBody).events;
   assert.equal(provider.calls.length, 1, 'revalidate after queue/credential waits and before opening provider transport');
+  assert.equal(provider.semanticCalls.length, 0);
   assert.equal(events.some((event) => event.event === 'delta'), false); assert.equal(events.at(-1).event, 'error');
   assert.equal(aiRuntimeLoad().active, 0); assert.equal(activeAssistantGenerationCountForTests(), 0);
 });
