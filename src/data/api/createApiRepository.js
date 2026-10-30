@@ -445,13 +445,17 @@ export function createApiRepository({
     clientIdAliases.delete(id);
   }
   let account = null;
+  let accountInvalidated = false;
   let scopeAvailable = false;
   const accountKey = `${aliasStorageKey || ACTUAL_ID_ALIAS_STORAGE_KEY}.active-account`;
   function guardAccount() {
-    if (!account || !scopeAvailable) return;
+    if (accountInvalidated) throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.UNAUTHORIZED,
+      message: 'Oturum değişti. Verileri yeniden yükleyin.', operation: 'commitChanges' });
+    if (!account || !scopeAvailable) return account;
     try {
       if (aliasStorage && aliasStorage.getItem(accountKey) !== account) {
         account = null;
+        accountInvalidated = true;
         creationIds.setAccount(null, clientIdAliases);
         activateActualIdAliases(clientIdAliases, guardAccount);
         throw new Error('account changed');
@@ -460,6 +464,7 @@ export function createApiRepository({
       throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.UNAUTHORIZED,
         message: 'Oturum değişti. Verileri yeniden yükleyin.', operation: 'commitChanges' });
     }
+    return account;
   }
   function accountStamp() {
     try { return aliasStorage?.getItem(accountKey) ?? null; } catch { return null; }
@@ -470,6 +475,7 @@ export function createApiRepository({
     const current = accountStamp();
     if (current !== observedAccount && current !== next) {
       account = null;
+      accountInvalidated = true;
       creationIds.setAccount(null, clientIdAliases);
       activateActualIdAliases(clientIdAliases, guardAccount);
       throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.UNAUTHORIZED,
@@ -479,10 +485,11 @@ export function createApiRepository({
       account = next;
       creationIds.setAccount(account, clientIdAliases);
     }
-    scopeAvailable = !aliasStorage;
+    accountInvalidated = false;
+    scopeAvailable = false;
     try {
       if (aliasStorage?.getItem(accountKey) !== account) aliasStorage?.setItem(accountKey, account);
-      scopeAvailable = !aliasStorage || aliasStorage.getItem(accountKey) === account;
+      scopeAvailable = Boolean(aliasStorage && aliasStorage.getItem(accountKey) === account);
     } catch { /* Versioned canonical-ID edits still work without durable storage. */ }
     if (account && scopeAvailable) creationIds.restoreAliases(clientIdAliases);
     else for (const id of clientIdAliases.keys()) if (actualIdAliasType(clientIdAliases, id)) {
@@ -541,7 +548,26 @@ export function createApiRepository({
           body: JSON.stringify({ operation: 'allocate-creation-ids', changes: {}, allocationChanges: prepared }) }, 'commitChanges');
         if (!Array.isArray(allocations)) throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
           message: 'Oluşturma kimliği alınamadı.', operation: 'commitChanges' });
-        await creationIds.remember(allocations, clientIdAliases, changes, allocatedAt);
+        const releaseUnused = async (records) => {
+          if (!records.length) return;
+          const allocationChanges = {};
+          for (const record of records) {
+            const collection = { PROJECT: 'projectUpserts', WBS: 'wbsUpserts', TASK: 'taskUpserts' }[record.entityType];
+            const original = prepared[collection]?.find((entry) => extractActualId(entry.id) === record.clientId);
+            (allocationChanges[collection] ||= []).push({ ...original, id: record.id, projectId: record.projectId, creationProof: record.proof });
+          }
+          await requestJson(`${basePath}/commit`, { method: 'POST', body: JSON.stringify({
+            operation: 'release-creation-ids', changes: {}, allocationChanges }) }, 'commitChanges');
+        };
+        let unused;
+        try { unused = await creationIds.remember(allocations, clientIdAliases, changes, allocatedAt); }
+        catch (error) {
+          // These allocations never reached commit. Release untracked capacity
+          // without replacing the original storage/account failure.
+          try { await releaseUnused(allocations); } catch { /* Server expiry remains the bound if recovery is unavailable. */ }
+          throw error;
+        }
+        await releaseUnused(unused);
         prepared = await creationIds.prepare(normalized, clientIdAliases);
         if (creationEntries(prepared).some(({ entry }) => !entry.creationProof)) throw new AppRepositoryError({
           code: REPOSITORY_ERROR_CODES.MUTATION_FAILED, message: 'Oluşturma kimliği alınamadı.', operation: 'commitChanges' });

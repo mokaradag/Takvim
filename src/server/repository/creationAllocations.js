@@ -54,10 +54,12 @@ export async function allocateCreationIds(transaction, actor, changes, authorize
     DELETE TOP (4000) FROM dbo.MR_CreationAllocations
     WHERE Sicil = @sicil AND ExpiresAt <= DATEADD(day, -@receiptDays, SYSUTCDATETIME());
     SELECT @pending = COUNT(*) FROM dbo.MR_CreationAllocations WHERE Sicil = @sicil AND ExpiresAt > SYSUTCDATETIME();
+    DECLARE @retained int = (SELECT COUNT(*) FROM dbo.MR_CreationAllocations WHERE Sicil = @sicil);
     DECLARE @issued TABLE (EntityId uniqueidentifier, EntityType varchar(7), ProjectId uniqueidentifier, Proof uniqueidentifier);
     INSERT @issued SELECT id, entityType, projectId, proof FROM OPENJSON(@allocations)
       WITH (id uniqueidentifier, entityType varchar(7), projectId uniqueidentifier, proof uniqueidentifier);
     IF @pending + (SELECT COUNT(*) FROM @issued) > @pendingLimit
+      OR @retained + (SELECT COUNT(*) FROM @issued) > @pendingLimit * 4
       SELECT 0 AS Reserved;
     ELSE BEGIN
       -- Only unpredictable SERVER candidates reach these global collision checks.

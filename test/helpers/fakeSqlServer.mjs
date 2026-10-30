@@ -1258,7 +1258,8 @@ function runQuery(db, statement, params, { database }) {
     const allocations = JSON.parse(params.allocations);
     if (sqlText.includes('-- creation-allocation: reserve')) {
       db.creationAllocations = db.creationAllocations.filter((row) => row.Sicil !== sicil || new Date(row.ExpiresAt).getTime() > Date.now() - params.receiptDays * 86400000);
-      if (db.creationAllocations.filter((row) => row.Sicil === sicil && new Date(row.ExpiresAt) > new Date()).length + allocations.length > params.pendingLimit) return result([[{ Reserved: 0 }]]);
+      if (db.creationAllocations.filter((row) => row.Sicil === sicil && new Date(row.ExpiresAt) > new Date()).length + allocations.length > params.pendingLimit
+        || db.creationAllocations.filter((row) => row.Sicil === sicil).length + allocations.length > params.pendingLimit * 4) return result([[{ Reserved: 0 }]]);
       for (const allocation of allocations) {
         if (db.projects.some((row) => sameGuid(row.ProjectId, allocation.id))
           || db.wbs.some((row) => sameGuid(row.WbsId, allocation.id))
@@ -1866,7 +1867,7 @@ function runQuery(db, statement, params, { database }) {
       existing.FailureCode = 'ABANDONED';
       existing.CreatedAt = new Date().toISOString();
       existing.CompletedAt = null;
-      return result([[{ TaskReminderLogId: existing.TaskReminderLogId }]]);
+      return result([[{ TaskReminderLogId: existing.TaskReminderLogId, Reclaimed: true }]]);
     }
     const logId = db.taskReminderLog.length + 1;
     db.taskReminderLog.push({
@@ -1946,8 +1947,10 @@ function runQuery(db, statement, params, { database }) {
     const entry = db.taskReminderLog.find((row) => row.TaskReminderLogId === Number(params.logId));
     if (entry) {
       entry.Status = params.status;
-      entry.RecipientCount = params.recipientCount ?? 0;
-      entry.RecipientDigest = params.recipientDigest ?? null;
+      if (!params.preserveRecipients) {
+        entry.RecipientCount = params.recipientCount ?? 0;
+        entry.RecipientDigest = params.recipientDigest ?? null;
+      }
       entry.FailureCode = params.failureCode ?? null;
       entry.CompletedAt = params.active ? null : new Date().toISOString();
     }
@@ -2502,7 +2505,7 @@ export function createFakeSqlServerDriver(db) {
 
     async query(statement) {
       const database = this.pool.config?.database || 'MERGEN_Rota';
-      db.statements.push({ sql: String(statement), database });
+      db.statements.push({ sql: String(statement), database, params: { ...this.params } });
       if (String(statement).includes('-- creation-allocation:') && this.pool.began) {
         // Model the allocation owner/proof update locks until commit/rollback.
         // Waiting transactions take their rollback snapshot after the winner.

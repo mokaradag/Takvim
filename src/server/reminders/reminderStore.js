@@ -250,7 +250,7 @@ export const ABANDONED_CLAIM_MINUTES = 30;
 /**
  * Otomatik aralığı sahiplenir.
  *
- * @returns {Promise<number|null>} günlük kaydı kimliği; aralık zaten
+ * @returns {Promise<{logId: number, reclaimed: boolean}|null>} sahiplenme; aralık zaten
  *   sahiplenilmişse `null` (bu turda gönderim YAPILMAZ). Süreç çökmesi yüzünden
  *   `PENDING` kalmış eski bir kayıt yeniden sahiplenilir.
  */
@@ -270,7 +270,7 @@ export async function claimAutomaticReminder(executor, {
   try {
     const result = await request.query(REMINDER_CLAIM_SQL);
     const logId = result.recordset?.[0]?.TaskReminderLogId;
-    return logId == null ? null : Number(logId);
+    return logId == null ? null : { logId: Number(logId), reclaimed: Boolean(result.recordset[0].Reclaimed) };
   } catch (error) {
     // Benzersiz dizin ihlali: aralığı başka bir çalıştırma (ya da başka bir
     // uygulama örneği) az önce sahiplendi.
@@ -351,11 +351,12 @@ export function maskRecipients(recipients = []) {
     .slice(0, 400);
 }
 
-export async function completeReminderLog(executor, logId, { status, recipients = [], failureCode = null, progress = null, active = false }) {
+export async function completeReminderLog(executor, logId, { status, recipients = [], failureCode = null, progress = null, active = false, preserveRecipients = false }) {
   if (logId == null) return;
   const request = executor.request();
   request.input('logId', sql.BigInt, logId);
   request.input('active', sql.Bit, active);
+  request.input('preserveRecipients', sql.Bit, preserveRecipients);
   request.input('status', sql.VarChar(20), status);
   request.input('recipientCount', sql.Int, recipients.length);
   request.input('recipientDigest', sql.NVarChar(400), progress || maskRecipients(recipients) || null);

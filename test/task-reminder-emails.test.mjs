@@ -356,7 +356,7 @@ test('gönderim kaydı ÖNCE sahiplenilir, sonra gönderilir', () => {
   const deliverIndex = service.indexOf('deliverTaskReminder(executor, {\n        task');
   assert.ok(claimIndex >= 0 && claimIndex < deliverIndex, 'aralık gönderimden önce sahiplenilmelidir');
   // Sahiplenilemeyen aralık atlanır; ikinci ileti gönderilmez.
-  assert.match(service, /if \(logId == null\) \{[\s\S]*?reason: 'ALREADY_SENT'/);
+  assert.match(service, /if \(claim == null\) \{[\s\S]*?reason: 'ALREADY_SENT'/);
   // Tek bir görevin hatası turu düşürmez.
   assert.match(service, /catch \(error\) \{[\s\S]*?results\.push\(\{ taskId: candidate\.id, status: 'FAILED', reason: 'UNEXPECTED_ERROR' \}\)/);
 });

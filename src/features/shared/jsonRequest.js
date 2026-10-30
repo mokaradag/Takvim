@@ -88,5 +88,5 @@ export async function requestJson(path, init, { timeoutMs = REQUEST_TIMEOUT_MS, 
           ? outlookFailureMessage(body?.outlook?.reason || body?.reason) : 'İşlem tamamlanamadı.')
     };
   }
-  return { ok: true, ...restoreEntityResponse(body) };
+  return { ok: true, ...restoreEntityResponse(body, { method: init?.method, guard: translated.responseGuard, account: translated.responseAccount }) };
 }

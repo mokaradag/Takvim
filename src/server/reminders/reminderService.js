@@ -76,6 +76,7 @@ export async function deliverTaskReminder(executor, {
   kind,
   logId = null,
   actorSicil = null,
+  reclaimed = false,
   now = new Date(),
   // Posta hizmeti ENJEKTE EDİLEBİLİR: testler SMTP sunucusu olmadan da
   // başarı/başarısızlık yollarını sınayabilir. Üretimde varsayılan kullanılır.
@@ -88,7 +89,7 @@ export async function deliverTaskReminder(executor, {
   const warnings = summarizeRecipientProblems(problems);
 
   if (!recipients.length) {
-    await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: 'NO_RECIPIENTS' });
+    await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: 'NO_RECIPIENTS', preserveRecipients: reclaimed });
     return {
       ok: false,
       code: 'NO_RECIPIENTS',
@@ -114,7 +115,7 @@ export async function deliverTaskReminder(executor, {
   });
   const rendered = renderReminderEmail({ subject: settings.subject, body: settings.body }, values);
   if (rendered.ok === false) {
-    await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: rendered.code });
+    await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: rendered.code, preserveRecipients: reclaimed });
     return { ok: false, code: rendered.code, message: rendered.message, problems, warnings };
   }
   // The bounded progress envelope contains no addresses. Bind positions to the
@@ -126,18 +127,24 @@ export async function deliverTaskReminder(executor, {
   const previous = await loadReminderProgress(executor, logId);
   const unattempted = /^delivery1:[a-f0-9]{64}:0+$/.test(previous || '');
   const matches = previous?.startsWith(prefix) && previous.slice(prefix.length).length === recipients.length;
-  if (previous?.startsWith('delivery1:') && !unattempted && (!previous.startsWith(prefix)
-    || previous.slice(prefix.length).length !== recipients.length || /[^0-3]/.test(previous.slice(prefix.length)))) {
-    await finalizeLog(executor, logId, { status: 'PENDING', failureCode: 'MAIL_DELIVERY_UNCERTAIN' });
+  if ((reclaimed && !previous?.startsWith('delivery1:')) || (previous?.startsWith('delivery1:') && !unattempted && (!previous.startsWith(prefix)
+    || previous.slice(prefix.length).length !== recipients.length || /[^0-3]/.test(previous.slice(prefix.length))))) {
+    await finalizeLog(executor, logId, { status: 'PENDING', failureCode: 'MAIL_DELIVERY_UNCERTAIN', preserveRecipients: true });
     return { ok: false, code: 'MAIL_DELIVERY_UNCERTAIN', deliveryMayHaveEscaped: true, problems,
-      warnings: [...warnings, 'Alıcı listesi değişti; önceki teslimatlar otomatik yinelenmeyecek.'] };
+      message: 'Önceki teslimat ilerlemesi doğrulanamadı; yinelenen posta riskine karşı yeniden gönderilmeyecek.',
+      warnings: [...warnings, 'Önceki alıcı ilerlemesi güncel listeyle doğrulanamadı; teslimatlar otomatik yinelenmeyecek.'] };
   }
   const states = matches ? previous.slice(prefix.length).split('') : recipients.map(() => '0');
   const progress = () => prefix + states.join('');
-  if (progress().length > 400) return { ok: false, code: 'NO_RECIPIENTS', problems, warnings };
+  if (progress().length > 400) {
+    const code = 'RECIPIENT_PROGRESS_LIMIT';
+    const message = 'Hatırlatma alıcı sayısı gönderim ilerlemesi sınırını aşıyor.';
+    await finalizeLog(executor, logId, { status: 'FAILED', failureCode: code, preserveRecipients: true });
+    return { ok: false, code, message, problems, warnings };
+  }
   const delivered = recipients.filter((_email, index) => states[index] === '2');
   let failed = states.includes('3') ? { code: 'SMTP_SEND_FAILED' } : null;
-  let checkpointFailed = false;
+  let checkpointFailed = false, failedThisRun = false;
   let uncertain = states.includes('1'), attempted = states.filter((state) => state !== '0').length;
   const checkpoint = () => completeReminderLog(executor, logId, { status: 'PENDING', recipients: delivered,
     failureCode: 'DELIVERY_IN_PROGRESS', progress: progress(), active: true });
@@ -180,7 +187,7 @@ export async function deliverTaskReminder(executor, {
       }
       if (sent.ok) { delivered.push(email); states[index] = '2'; }
       else if (sent.deliveryMayHaveEscaped) uncertain = true;
-      else { failed = sent; states[index] = '3'; }
+      else { failed = sent; failedThisRun = true; states[index] = '3'; }
       try { await checkpoint(); } catch { checkpointFailed = true; uncertain = true; break; }
     }
   } finally {
@@ -195,8 +202,10 @@ export async function deliverTaskReminder(executor, {
   if (remaining) {
     const recorded = await finalizeLog(executor, logId, { status: 'PENDING', recipients: delivered,
       failureCode: 'RECIPIENTS_PENDING', progress: progress() });
-    const code = uncertain ? 'MAIL_DELIVERY_UNCERTAIN' : !recorded ? 'UNEXPECTED_ERROR' : failed?.code || 'RECIPIENTS_PENDING';
-    return { ok: false, code, retryable: recorded && !uncertain && !failed, deliveryMayHaveEscaped: uncertain, recipientCount: delivered.length, problems,
+    const code = uncertain ? 'MAIL_DELIVERY_UNCERTAIN' : !recorded || checkpointFailed ? 'UNEXPECTED_ERROR' : failedThisRun ? failed.code : 'RECIPIENTS_PENDING';
+    return { ok: false, code, retryable: recorded && !uncertain && !failedThisRun && !checkpointFailed,
+      message: uncertain ? 'Bazı teslimatların sonucu belirsiz.' : code === 'RECIPIENTS_PENDING'
+        ? 'Denenmeyen alıcılara gönderim sonraki çalıştırmada devam edecek.' : failed?.message || 'Gönderim ilerlemesi kaydedilemedi.', deliveryMayHaveEscaped: uncertain, recipientCount: delivered.length, problems,
       warnings: [...warnings, recorded ? 'Denenmeyen alıcılar sonraki gönderimde devam edecek.' : 'Gönderim ilerlemesi doğrulanamadı.'] };
   }
   if (uncertain) {
@@ -204,7 +213,7 @@ export async function deliverTaskReminder(executor, {
     const message = 'Bazı teslimatların sonucu belirsiz; yinelenen posta riskine karşı otomatik yeniden gönderilmeyecek.';
     // PENDING + CompletedAt + a distinct code is terminal uncertainty, not SENT
     // or definite failure. Stale-claim recovery must not retry this delivery.
-    const outcome = { status: 'PENDING', recipients: delivered, failureCode: code };
+    const outcome = { status: 'PENDING', recipients: delivered, failureCode: code, progress: progress() };
     const recorded = await finalizeLog(executor, logId, outcome) || await finalizeLog(executor, logId, outcome);
     if (!recorded) warnings.push('Gönderim geçmişi kaydının tamamlandığı doğrulanamadı.');
     return { ok: false, code, message, deliveryMayHaveEscaped: true, recipientCount: delivered.length, problems, warnings: [...warnings, message] };
@@ -333,7 +342,7 @@ export async function sendManualReminder(executor, {
   if (logId == null && minIntervalMs > 0) return rateLimited();
 
   try {
-    return await deliverTaskReminder(executor, { task, settings, kind: 'MANUAL', logId, actorSicil, now, send });
+    return await deliverTaskReminder(executor, { task, settings, kind: 'MANUAL', logId, actorSicil, reclaimed: resumedLogId != null, now, send });
   } catch (error) {
     // Keep the most recent durable recipient checkpoint, including any sends
     // confirmed since resume. Never restore a stale copy over that checkpoint.
@@ -419,23 +428,25 @@ export async function runAutomaticReminders(executor, {
     // Sahiplenilen kayıt catch bloğundan da GÖRÜNÜR olmalıdır: beklenmedik bir
     // hata satırı `PENDING` bırakırsa benzersiz aralık kısıtı, sorun giderilse
     // bile o aralığı sonsuza dek gönderilmiş sayar.
-    let claimedLogId = null;
+    let claimedLogId = null, reclaimed = false;
     try {
       // Aralık ÖNCE sahiplenilir: aynı aralık için ikinci bir gönderim, tur
       // saatte bir çalışsa ya da ikinci bir uygulama örneği aynı anda başlasa
       // bile oluşamaz.
-      const logId = await claimAutomaticReminder(executor, {
+      const claim = await claimAutomaticReminder(executor, {
         taskId: candidate.id,
         projectId: candidate.projectId,
         slotKey: evaluation.slotKey,
         actorSicil
       });
-      if (logId == null) {
+      if (claim == null) {
         skipped += 1;
         results.push({ taskId: candidate.id, status: 'SKIPPED', reason: 'ALREADY_SENT' });
         continue;
       }
+      const logId = claim.logId;
       claimedLogId = logId;
+      reclaimed = claim.reclaimed;
 
       const task = await loadReminderTask(executor, candidate.id);
       if (!task) {
@@ -444,7 +455,7 @@ export async function runAutomaticReminders(executor, {
         // `TASK_NOT_FOUND` görmek, silinmemiş bir görevi araştıran yöneticiyi
         // yanlış yöne sürüklüyordu.
         const reason = await unloadableTaskReason(executor, candidate.id);
-        await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: reason });
+        await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: reason, preserveRecipients: reclaimed });
         failed += 1;
         results.push({ taskId: candidate.id, status: 'FAILED', reason });
         continue;
@@ -459,7 +470,8 @@ export async function runAutomaticReminders(executor, {
         await finalizeLog(executor, logId, {
           status: 'FAILED',
           recipients: [],
-          failureCode: recheck.eligible ? 'SLOT_CHANGED' : (recheck.reason || 'NOT_ELIGIBLE')
+          failureCode: recheck.eligible ? 'SLOT_CHANGED' : (recheck.reason || 'NOT_ELIGIBLE'),
+          preserveRecipients: reclaimed
         });
         skipped += 1;
         results.push({
@@ -475,6 +487,7 @@ export async function runAutomaticReminders(executor, {
         settings,
         kind: 'AUTOMATIC',
         logId,
+        reclaimed,
         actorSicil,
         now,
         send
@@ -503,7 +516,10 @@ export async function runAutomaticReminders(executor, {
     } catch (error) {
       // Tek bir görevin hatası turu düşürmez; kayıt kodu tutulur, ayrıntı
       // (bağlantı dizesi, parola vb.) günlüğe yazılmaz.
-      await finalizeLog(executor, claimedLogId, {
+      if (reclaimed) {
+        try { await deferReminderLog(executor, claimedLogId); }
+        catch { /* Keep the active checkpoint for stale-claim recovery if deferral is also unavailable. */ }
+      } else await finalizeLog(executor, claimedLogId, {
         status: 'FAILED',
         recipients: [],
         failureCode: 'UNEXPECTED_ERROR'

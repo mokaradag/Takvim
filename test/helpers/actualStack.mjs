@@ -18,7 +18,7 @@ import { createFakeDatabase, createFakeSqlServerDriver } from './fakeSqlServer.m
 import { registerServerOnlyShim } from './serverOnlyShim.mjs';
 import { extractActualId } from '../../src/domain/identity/actualId.js';
 
-function memoryStorage() {
+export function memoryStorage() {
   const values = new Map();
   return {
     getItem(key) { return values.has(key) ? values.get(key) : null; },

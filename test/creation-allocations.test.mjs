@@ -46,14 +46,19 @@ for (const [collection, hiddenId] of [['projectUpserts', HIDDEN_PROJECT], ['wbsU
         : collection === 'wbsUpserts' ? { id: hiddenId, projectId: CORPORATE_PROJECT_ID, parentId: CORPORATE_ROOT_WBS_ID, code: '2', name: 'Proposed' }
           : task(hiddenId);
       const start = stack.db.statements.length;
+      const candidateIds = new Set([hiddenId]);
       const hidden = await post({ [collection]: [entry] });
       assert.equal(hidden.status, 409);
       assert.equal(hidden.body.error.details.code, 'CREATION_ALLOCATION_INVALID');
       for (const creationProof of [undefined, 'bad', randomUUID()]) {
+        const unusedId = randomUUID(); candidateIds.add(unusedId);
         assert.deepEqual(await post({ [collection]: [{ ...entry, creationProof }] }),
-          await post({ [collection]: [{ ...entry, id: randomUUID(), creationProof }] }));
+          await post({ [collection]: [{ ...entry, id: unusedId, creationProof }] }));
       }
-      assert.equal(stack.db.statements.slice(start).some(({ sql }) => /WHERE (?:TaskId|WbsId|ProjectId) = @entityId/.test(sql)), false);
+      const reads = stack.db.statements.slice(start).filter(({ sql, params }) =>
+        /(?:FROM|JOIN)\s+dbo\.MR_(?:Projects|WBS|Tasks)\b/i.test(sql)
+        && Object.values(params).some((value) => candidateIds.has(String(value).toLowerCase())));
+      assert.deepEqual(reads, [], 'no candidate-table read may use any candidate parameter before proof validation');
       assert.equal(stack.db.tasks.length, 1);
     } finally { await stack.dispose(); }
   });
@@ -262,7 +267,7 @@ test('new client cannot accidentally commit an allocation request to an older se
     return Response.json({ projectUpserts: [], wbsUpserts: [], taskUpserts: [] });
   };
   try {
-    await assert.rejects(createApiRepository().commitChanges({ taskUpserts: [task()] }));
+    await assert.rejects(createApiRepository({ aliasStorage: sharedCreationStorage().client() }).commitChanges({ taskUpserts: [task()] }));
     assert.equal(envelopes.length, 1);
     assert.equal(envelopes[0].operation, 'allocate-creation-ids');
     assert.equal(envelopes[0].allocationChanges.taskUpserts.length, 1);
@@ -957,4 +962,143 @@ test('expired abandoned local proofs free capacity while referenced drafts and t
   assert.ok(shared.state().aliases.some(([id]) => id === records[0].id));
   await assert.rejects(store.prepare({ taskUpserts: [task(records[0].clientId)] }, aliases),
     (error) => error.details.code === 'CREATION_ALLOCATION_STORAGE');
+});
+
+for (const clientPath of ['../src/features/shared/jsonRequest.js', '../src/data/api/scheduleChangeClient.js']) {
+  test(`stale reads discard the previous account response (${clientPath})`, async () => {
+    const { activateActualIdAliases } = await import('../src/data/api/activeActualIdAliases.js');
+    const { requestJson } = await import(clientPath);
+    const fetch = globalThis.fetch;
+    let current = true;
+    const guard = () => { if (!current) throw { code: 'UNAUTHORIZED', message: 'Account changed' }; };
+    try {
+      for (const method of [undefined, 'GET', 'HEAD']) {
+        for (const replaceGuard of [false, true]) {
+          current = true; activateActualIdAliases(new Map(), guard);
+          globalThis.fetch = async () => {
+            current = false;
+            if (replaceGuard) activateActualIdAliases(new Map(), () => {});
+            return Response.json({ content: 'private previous-account text' });
+          };
+          const result = await requestJson('/api/mergen-rota/ai/assistant/conversations/private', { method });
+          assert.equal(result.ok, false); assert.equal(result.code, 'UNAUTHORIZED');
+          assert.equal(JSON.stringify(result).includes('private previous-account text'), false);
+        }
+      }
+      let owner = 'A';
+      const sameGuard = () => owner;
+      activateActualIdAliases(new Map(), sameGuard);
+      globalThis.fetch = async () => { owner = 'B'; return Response.json({ content: 'private previous-account text' }); };
+      const rebound = await requestJson('/api/mergen-rota/ai/assistant/conversations/private', { method: 'GET' });
+      assert.equal(rebound.ok, false); assert.equal(rebound.code, 'UNAUTHORIZED');
+      assert.equal(JSON.stringify(rebound).includes('private previous-account text'), false);
+    } finally { globalThis.fetch = fetch; activateActualIdAliases(new Map()); }
+  });
+}
+
+test('missing durable storage rejects creation before allocation while canonical versioned edits still work', async () => {
+  const stack = await createActualStack(seed());
+  try {
+    const repository = createApiRepository();
+    await assert.rejects(repository.commitChanges({ taskUpserts: [task()] }),
+      (error) => error.details.code === 'CREATION_ALLOCATION_STORAGE');
+    assert.equal(stack.db.creationAllocations.length, 0);
+    assert.equal(stack.db.tasks.length, 1);
+    const snapshot = await repository.loadSnapshot();
+    const existing = snapshot.tasks.find((row) => row.id === HIDDEN_TASK);
+    await repository.commitChanges({ taskUpserts: [{ ...existing, task: 'Still editable' }] });
+    assert.equal(stack.db.tasks[0].Title, 'Still editable');
+  } finally { await stack.dispose(); }
+});
+
+test('competing tabs release the unused reservation for the same draft without duplicating the task', async () => {
+  const stack = await createActualStack(seed(), { sicil: 900010 });
+  const shared = sharedCreationStorage(), fetch = globalThis.fetch;
+  let allocated = 0, release;
+  const bothAllocated = new Promise((resolve) => { release = resolve; });
+  globalThis.fetch = async (url, init) => {
+    const response = await fetch(url, init);
+    if (init.method !== 'GET' && JSON.parse(init.body).operation === 'allocate-creation-ids') {
+      if (++allocated === 2) release();
+      await bothAllocated;
+    }
+    return response;
+  };
+  try {
+    const changes = { taskUpserts: [task()] };
+    const results = await Promise.allSettled([createApiRepository({ aliasStorage: shared.client() }).commitChanges(changes),
+      createApiRepository({ aliasStorage: shared.client() }).commitChanges(changes)]);
+    assert.ok(results.some((result) => result.status === 'fulfilled'));
+    assert.equal(allocated, 2);
+    assert.equal(stack.db.tasks.filter((row) => row.Title === 'Allocated task').length, 1);
+    assert.equal(stack.db.creationAllocations.filter((row) => new Date(row.ExpiresAt) > new Date()).length, 0);
+    assert.equal(stack.db.creationAllocations.length, 1, 'the unused proof remains only as a released retry receipt');
+  } finally { globalThis.fetch = fetch; await stack.dispose(); }
+});
+
+test('proof write failure releases untracked server reservations before retry', async () => {
+  const stack = await createActualStack(seed(), { sicil: 900010 });
+  const shared = sharedCreationStorage(), storage = shared.client();
+  const setItem = storage.setItem;
+  storage.setItem = (key, value) => {
+    if (key.endsWith('.creations.v1') && JSON.parse(value).pending.length) throw new Error('quota');
+    setItem(key, value);
+  };
+  try {
+    await assert.rejects(createApiRepository({ aliasStorage: storage }).commitChanges({ taskUpserts: [task()] }));
+    assert.equal(stack.db.creationAllocations.length, 1);
+    assert.ok(new Date(stack.db.creationAllocations[0].ExpiresAt) < new Date());
+    assert.equal(stack.db.tasks.length, 1);
+    assert.deepEqual(shared.state().pending, []);
+  } finally { await stack.dispose(); }
+});
+
+test('retained release receipts share a bounded caller quota without reducing active capacity or crossing owners', async () => {
+  const stack = await createActualStack(seed(), { sicil: 900010 });
+  try {
+    const { allocateCreationIds } = await import('../src/server/repository/creationAllocations.js');
+    const { getSqlPool } = await import('../src/server/db/pool.js');
+    const receipt = () => ({ Proof: randomUUID(), EntityId: randomUUID(), EntityType: 'TASK', ProjectId: CORPORATE_PROJECT_ID,
+      Sicil: 900010, ExpiresAt: new Date(Date.now() - 1000).toISOString() });
+    stack.db.creationAllocations = Array.from({ length: 15999 }, receipt);
+    const transaction = new stack.driver.Transaction(await getSqlPool());
+    await transaction.begin('SERIALIZABLE');
+    await allocateCreationIds(transaction, { sicil: 900010 }, { taskUpserts: [task()] }, async () => {});
+    await transaction.commit();
+    assert.equal(stack.db.creationAllocations.length, 16000);
+    const full = await post({ taskUpserts: [task()] }, 'allocate-creation-ids');
+    assert.equal(full.status, 409); assert.equal(full.body.error.details.code, 'CREATION_ALLOCATION_LIMIT');
+    stack.db.creationAllocations[0].ExpiresAt = new Date(Date.now() - 8 * 86400000).toISOString();
+    await allocate({ taskUpserts: [task()] });
+    process.env.MERGEN_ROTA_DEV_SICIL = '900001';
+    await allocate({ taskUpserts: [task()] });
+    const reserve = stack.db.statements.find(({ sql }) => sql.includes('-- creation-allocation: reserve')).sql;
+    assert.match(reserve, /@retained.*COUNT\(\*\).*Sicil = @sicil/);
+    assert.match(reserve, /@retained \+.*> @pendingLimit \* 4/);
+    assert.match(reserve, /WITH \(UPDLOCK, HOLDLOCK\)/);
+  } finally { await stack.dispose(); }
+});
+
+test('large creation batches traverse maps linearly inside the storage critical section', async (t) => {
+  const { createCreationIdStorage } = await import('../src/data/api/creationIdStorage.js');
+  const shared = sharedCreationStorage(), storage = shared.client(), aliases = new Map();
+  const store = createCreationIdStorage(storage, undefined, { accountId: '900001' });
+  const records = Array.from({ length: 1200 }, () => ({ clientId: randomUUID(), id: randomUUID(), proof: randomUUID(),
+    projectId: CORPORATE_PROJECT_ID.toLowerCase(), entityType: 'TASK' }));
+  await store.remember(records, aliases, { taskUpserts: records.map((row) => task(row.clientId)) });
+  const more = Array.from({ length: 1000 }, () => ({ clientId: randomUUID(), id: randomUUID(), proof: randomUUID(),
+    projectId: CORPORATE_PROJECT_ID.toLowerCase(), entityType: 'TASK' }));
+  const changes = { taskUpserts: more.map((row) => task(row.clientId)) };
+  let visited = 0;
+  for (const key of [Symbol.iterator, 'values']) {
+    const original = Map.prototype[key];
+    t.mock.method(Map.prototype, key, function* () { for (const item of original.call(this)) { visited += 1; yield item; } });
+  }
+  await store.reconciliationRecords(changes, aliases);
+  await store.prepare(changes, aliases);
+  await store.remember(more, aliases, changes);
+  const prepared = await store.prepare(changes, aliases);
+  assert.equal(prepared.taskUpserts.length, 1000);
+  assert.ok(prepared.taskUpserts.every((entry) => entry.creationProof));
+  assert.ok(visited < 250000, `bounded linear traversals, observed ${visited} map entries`);
 });

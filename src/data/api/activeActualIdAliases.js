@@ -23,11 +23,12 @@ function incoming(value) { return activeAliases.get(extractActualId(value)) || v
 const ENTITY_KEYS = new Map([['taskId', 'TASK'], ['projectId', 'PROJECT'], ['currentProjectId', 'PROJECT'], ['wbsId', 'WBS']]);
 
 export function translateEntityRequest(path, init) {
-  try { accountGuard?.(); } catch (error) {
+  let responseAccount;
+  try { responseAccount = accountGuard?.(); } catch (error) {
     if (error?.code !== 'UNAUTHORIZED') throw error;
     return { failure: { ok: false, code: error.code, message: error.message } };
   }
-  if (!outgoingIds.size) return { path, init };
+  if (!outgoingIds.size) return { path, init, responseGuard: accountGuard, responseAccount };
   const url = new URL(path, 'http://localhost');
   for (const [key, type] of ENTITY_KEYS) if (url.searchParams.has(key)) url.searchParams.set(key, outgoing(url.searchParams.get(key), type));
   url.pathname = url.pathname.replace(/(\/tasks\/)([^/]+)(\/(?:outlook|reminder))$/, (_match, prefix, id, suffix) =>
@@ -42,14 +43,21 @@ export function translateEntityRequest(path, init) {
       translated = { ...init, body: JSON.stringify(body) };
     }
   }
-  return { path: `${url.pathname}${url.search}`, init: translated };
+  return { path: `${url.pathname}${url.search}`, init: translated, responseGuard: accountGuard, responseAccount };
 }
 
-export function restoreEntityResponse(value) {
+export function restoreEntityResponse(value, context = {}) {
+  const { method = 'GET', guard = accountGuard } = context;
   // A successful server mutation stays successful if the account changed while
   // awaiting its response. Never restore it with another account's aliases.
-  try { accountGuard?.(); } catch (error) {
+  try {
+    const current = guard?.();
+    if (guard !== accountGuard || (Object.hasOwn(context, 'account') && current !== context.account)) {
+      throw { code: 'UNAUTHORIZED', message: 'Oturum değişti. Verileri yeniden yükleyin.' };
+    }
+  } catch (error) {
     if (error?.code !== 'UNAUTHORIZED') throw error;
+    if (['GET', 'HEAD', 'OPTIONS'].includes(String(method).toUpperCase())) return { ok: false, code: error.code, message: error.message };
     return value;
   }
   function restore(item) {

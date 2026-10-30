@@ -91,10 +91,11 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
 
   function reconciliationRecords(state, changes) {
     const mappings = mappingsFor(state), time = now();
+    const byId = new Map([...state.records.values()].map((record) => [`${record.entityType}:${record.id}`, record]));
     const entries = creationEntries(changes);
     const candidates = entries.flatMap(({ entry, entityType }) => {
       const record = state.records.get(`${entityType}:${extractActualId(entry.id)}`)
-        || [...state.records.values()].find((value) => value.entityType === entityType && value.id === entry.id);
+        || byId.get(`${entityType}:${entry.id}`);
       if (!record) return [];
       const projectId = entityType === 'PROJECT' ? record.id
         : mappings.get(`PROJECT:${extractActualId(entry.projectId)}`) || extractActualId(entry.projectId);
@@ -157,13 +158,15 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
 
   function prepareFrom(changes, state, aliases) {
     const mappings = new Map([...mappingsFor({ aliases }), ...mappingsFor(state)]);
+    const mapped = new Set(mappings.values());
+    const byId = new Map([...state.records.values()].map((record) => [`${record.entityType}:${record.id}`, record]));
     const prepared = remapCommitIds(changes, mappings);
     for (const { entry, entityType } of creationEntries(prepared)) {
       // Proofs are attached only from a current, fully bound pending record.
       delete entry.creationProof;
-      const record = [...state.records.values()].find((value) => value.entityType === entityType && value.id === entry.id);
+      const record = byId.get(`${entityType}:${entry.id}`);
       if (record) entry.creationProof = record.proof;
-      else if ([...mappings.values()].includes(entry.id)) throw storageError();
+      else if (mapped.has(entry.id)) throw storageError();
     }
     return prepared;
   }
@@ -239,6 +242,8 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
     remember(allocations, aliases, changes, allocatedAt = now()) {
       const originals = new Map(creationEntries(changes).map(({ entry, entityType }) => [`${entityType}:${extractActualId(entry.id)}`, entry.id]));
       return mutate(aliases, (state) => {
+        const stateMappings = mappingsFor(state), liveMappings = mappingsFor({ aliases });
+        const unused = [];
         for (const value of allocations) {
           if (!isActualId(value.id) || !isActualId(value.clientId) || !isActualId(value.proof) || !isActualId(value.projectId)
             || !['PROJECT', 'WBS', 'TASK'].includes(value.entityType)) throw storageError();
@@ -246,14 +251,18 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
           const recordKey = `${record.entityType}:${record.clientId}`;
           // A competing tab may already have remembered or completed this draft.
           // Keep its pending proof; never replace a durable completed identity.
-          if (state.records.has(recordKey)) continue;
-          if (mappingsFor(state).has(recordKey) || mappingsFor({ aliases }).has(recordKey)) throw storageError();
+          if (state.records.has(recordKey)) {
+            if (state.records.get(recordKey).proof !== record.proof) unused.push(record);
+            continue;
+          }
+          if (stateMappings.has(recordKey) || liveMappings.has(recordKey)) throw storageError();
           record.clientAlias = originals.get(recordKey) || record.clientId;
           state.records.set(recordKey, record);
           if (state.aliases.get(record.clientId) === record.clientAlias) state.aliases.delete(record.clientId);
           state.aliases.set(record.id, record.clientAlias);
           actualIdAliasType(state.aliases, record.id, record.entityType);
         }
+        return unused;
       });
     },
     async complete(changes, aliases) {

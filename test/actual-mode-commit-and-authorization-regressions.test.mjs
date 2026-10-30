@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { memoryStorage } from './helpers/actualStack.mjs';
 import { creationEntries } from '../src/domain/identity/creationIds.js';
 import { fileURLToPath } from 'node:url';
 
@@ -65,7 +66,7 @@ test('Actual commit responses map normalized SQL UUIDs back to pending client ID
   };
 
   try {
-    const repository = createApiRepository({ basePath: '/test-api' });
+    const repository = createApiRepository({ basePath: '/test-api', aliasStorage: memoryStorage() });
     const result = await repository.commitChanges({
       projectUpserts: [{ id: projectClientId, name: 'New Project' }],
       wbsUpserts: [{ id: wbsClientId, projectId: projectClientId, parentId: null, code: '1', name: 'Root' }],
@@ -384,7 +385,7 @@ test('Actual repository keeps client ID aliases across later snapshot loads and 
   };
 
   try {
-    const repository = createApiRepository({ basePath: '/alias-api' });
+    const repository = createApiRepository({ basePath: '/alias-api', aliasStorage: memoryStorage() });
     await repository.commitChanges({
       projectUpserts: [{ id: projectClientId, name: 'Persistent Alias' }],
       wbsUpserts: [{ id: wbsClientId, projectId: projectClientId, parentId: null, code: '1', name: 'Root' }],

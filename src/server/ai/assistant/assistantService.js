@@ -865,6 +865,7 @@ export async function generateAssistantAnswer(turn, { signal = null, onStatus = 
     signal,
     onStatus,
     onProgress,
+    beforeDispatch: (dispatchSignal) => assertAssistantTurnPresent(turn, dispatchSignal),
     onText
   });
   if (turn.dataUnavailable) await onText(result.text);

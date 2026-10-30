@@ -209,7 +209,7 @@ export const REMINDER_CLAIM_SQL = `
     SELECT TOP (1) @logId = TaskReminderLogId FROM @created;
   END
 
-  SELECT @logId AS TaskReminderLogId;`;
+  SELECT @logId AS TaskReminderLogId, CAST(CASE WHEN EXISTS (SELECT 1 FROM @reclaimed) THEN 1 ELSE 0 END AS bit) AS Reclaimed;`;
 
 /**
  * Elle gönderim hakkını ATOMİK olarak sahiplenir.
@@ -254,8 +254,8 @@ export const REMINDER_MANUAL_LOG_SQL = `
 export const REMINDER_COMPLETE_SQL = `
   UPDATE dbo.MR_TaskReminderLog
   SET Status = @status,
-      RecipientCount = @recipientCount,
-      RecipientDigest = @recipientDigest,
+      RecipientCount = CASE WHEN @preserveRecipients = 1 THEN RecipientCount ELSE @recipientCount END,
+      RecipientDigest = CASE WHEN @preserveRecipients = 1 THEN RecipientDigest ELSE @recipientDigest END,
       FailureCode = @failureCode,
       CompletedAt = CASE WHEN @active = 1 THEN NULL ELSE SYSUTCDATETIME() END
   WHERE TaskReminderLogId = @logId;`;

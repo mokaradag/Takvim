@@ -741,7 +741,7 @@ export function createAiGateway({
    * yanıt otomatik olarak yeniden istenmez. Sonuç tam metni döndürür; süre
    * dolduktan ya da iptal edildikten sonra gelen parça uygulanmaz.
    */
-  async function streamChat({ profile, messages, maxOutputTokens = null, signal = null, onStatus = null, onProgress = null, onText }) {
+  async function streamChat({ profile, messages, maxOutputTokens = null, signal = null, onStatus = null, onProgress = null, beforeDispatch = null, onText }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     const progress = { emitted: false, reasoning: false, firstTokenMs: null, providerStartMs: null, providerStartedAt: null, recorded: false };
@@ -780,14 +780,17 @@ export function createAiGateway({
         context,
         source: credential.source,
         healthFailure: healthFailureFor(credential.source),
-        invoke: () => getProvider().streamChatCompletion({
-          baseUrl: config.baseUrl,
-          apiKey: credential.apiKey,
-          model: route.model,
-          messages: safeMessages,
-          maxOutputTokens: outputLimit,
-          signal: providerScope.signal
-        })
+        invoke: async () => {
+          await beforeDispatch?.(providerScope.signal);
+          return getProvider().streamChatCompletion({
+            baseUrl: config.baseUrl,
+            apiKey: credential.apiKey,
+            model: route.model,
+            messages: safeMessages,
+            maxOutputTokens: outputLimit,
+            signal: providerScope.signal
+          });
+        }
       });
       progress.providerStartedAt = providerStartedAt;
       progress.providerStartMs = now() - providerStartedAt;

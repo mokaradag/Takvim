@@ -658,7 +658,7 @@ test('gizli ve olmayan hedef projeler aynı tam yanıtı verir; görünür ve ku
   }
 });
 
-test('assignment-only creation rejects personnel scope before inspecting directory membership', async () => {
+test('assignment-only creation ignores client labels and rejects invalid personnel scope', async () => {
   const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
   const stack = await disclosureStack(MANAGER_SICIL);
   try {
@@ -672,7 +672,7 @@ test('assignment-only creation rejects personnel scope before inspecting directo
   } finally { await stack.dispose(); }
 });
 
-test('creation collision checks cannot disclose hidden task/WBS IDs to an unauthorized destination writer', async () => {
+test('unauthorized allocation rejection is independent of hidden task/WBS client labels', async () => {
   const { CORPORATE_PROJECT_ID } = await import('./helpers/actualStack.mjs');
   const stack = await disclosureStack(PLAIN_SICIL);
   try {
@@ -686,12 +686,12 @@ test('creation collision checks cannot disclose hidden task/WBS IDs to an unauth
 });
 
 for (const scenario of ['corporate-wbs', 'narrow-assignees', 'narrow-fields', 'assignment-wbs', 'missing-dependency', 'hidden-dependency', 'missing-parent']) {
-  test(`invalid create has identical hidden/unused candidate-ID rejection (${scenario})`, async () => {
+  test(`invalid allocation ignores hidden/unused client labels (${scenario})`, async () => {
     const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
     const narrow = scenario.startsWith('narrow');
     const stack = await disclosureStack(narrow ? PLAIN_SICIL : MANAGER_SICIL);
     try {
-      // The probed ID is truly hidden, in another project, with no direct grant.
+      // These labels name hidden rows, but allocation must replace them before any entity mutation.
       const hidden = stack.db.tasks.find((row) => row.TaskId.toLowerCase() === HIDDEN_TASK_ID);
       hidden.ProjectId = MANUAL_PROJECT_ID; hidden.WbsId = MANUAL_ROOT_WBS_ID;
       if (narrow) stack.db.taskAssignees.find((row) => row.TaskId.toLowerCase() === LONE_TASK_ID).Sicil = PLAIN_SICIL;
@@ -744,7 +744,7 @@ test('otherwise authorized creation now closes F-024 without overwrite or replac
   } finally { await stack.dispose(); }
 });
 
-test('rejected project creates validate codes independently of hidden candidate IDs and source types', async () => {
+test('rejected project allocations validate codes independently of client labels', async () => {
   const { CORPORATE_PROJECT_ID } = await import('./helpers/actualStack.mjs');
   const stack = await disclosureStack(MANAGER_SICIL);
   try {
@@ -757,7 +757,7 @@ test('rejected project creates validate codes independently of hidden candidate 
       const start = stack.db.statements.length;
       const value = await probe(changes, candidate);
       assert.equal(stack.db.statements.slice(start).some((statement) => /FROM dbo\.MR_Projects WITH \(UPDLOCK, HOLDLOCK\)\s+WHERE ProjectId = @entityId/.test(statement.sql)), false,
-        'rejected create never performs the candidate collision lookup');
+        'rejected allocation never performs a client-label collision lookup');
       return value;
     };
     for (const [code, expected] of [['P4417041', 'PROJECT_CODE_RESERVED'], ['GIZLI-KOD', 'PROJECT_CODE_CONFLICT']]) {

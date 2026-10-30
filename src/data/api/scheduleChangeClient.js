@@ -56,7 +56,8 @@ export async function requestJson(path, init) {
       message: body?.error?.message || 'İşlem tamamlanamadı.'
     };
   }
-  return { ok: true, value: restoreEntityResponse(body) };
+  const restored = restoreEntityResponse(body, { method: init?.method, guard: translated.responseGuard, account: translated.responseAccount });
+  return restored?.ok === false ? restored : { ok: true, value: restored };
 }
 
 export function submitScheduleChangeRequest(input) {

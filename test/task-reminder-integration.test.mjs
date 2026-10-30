@@ -566,7 +566,7 @@ test('en küçük aralık kullanıcı başınadır', async () => {
 
 /* ── Terk edilmiş aralığın kurtarılması ─────────────────────────── */
 
-test('süreç çökmesiyle PENDING kalan aralık eşikten sonra yeniden gönderilir', async () => {
+test('legacy PENDING claim recovery stays uncertain instead of resending without protocol progress', async () => {
   await withReminderStack(reminderSeed(), async ({ db, pool }) => {
     const { claimAutomaticReminder, ABANDONED_CLAIM_MINUTES } = await import('../src/server/reminders/reminderStore.js');
     const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
@@ -583,7 +583,7 @@ test('süreç çökmesiyle PENDING kalan aralık eşikten sonra yeniden gönderi
       settings,
       now
     ).slotKey;
-    const logId = await claimAutomaticReminder(pool, {
+    const { logId } = await claimAutomaticReminder(pool, {
       taskId: TASK_ID,
       projectId: PROJECT_ID,
       slotKey,
@@ -601,11 +601,13 @@ test('süreç çökmesiyle PENDING kalan aralık eşikten sonra yeniden gönderi
     stale.CreatedAt = new Date(Date.now() - ((ABANDONED_CLAIM_MINUTES + 5) * 60000)).toISOString();
 
     const recovered = await runAutomaticReminders(pool, { now, send: mailer.send });
-    assert.equal(recovered.sent, 1, 'terk edilmiş aralık kalıcı olarak kaybolmamalıdır');
-    assert.equal(mailer.sent.length, 1);
+    assert.equal(recovered.sent, 0);
+    assert.equal(recovered.reason, 'MAIL_DELIVERY_UNCERTAIN');
+    assert.equal(mailer.sent.length, 0, 'an absent legacy checkpoint cannot prove no SMTP delivery escaped');
     // İkinci satır AÇILMAZ: benzersiz dizin korunur, kayıt yerinde güncellenir.
     assert.equal(db.taskReminderLog.filter((entry) => entry.ReminderKind === 'AUTOMATIC').length, 1);
-    assert.equal(db.taskReminderLog[0].Status, 'SENT');
+    assert.equal(db.taskReminderLog[0].Status, 'PENDING');
+    assert.ok(db.taskReminderLog[0].CompletedAt);
   });
 });
 
@@ -870,7 +872,7 @@ for (const failures of [1, 2]) {
       const { deliverTaskReminder } = await import('../src/server/reminders/reminderService.js');
       const { claimAutomaticReminder, loadReminderTask, loadReminderSettings } = await import('../src/server/reminders/reminderStore.js');
       const { REMINDER_COMPLETE_SQL } = await import('../src/server/reminders/reminderQueries.js');
-      const logId = await claimAutomaticReminder(pool, { taskId: TASK_ID, projectId: PROJECT_ID, slotKey: 'uncertain-retry', actorSicil: 900001 });
+      const { logId } = await claimAutomaticReminder(pool, { taskId: TASK_ID, projectId: PROJECT_ID, slotKey: 'uncertain-retry', actorSicil: 900001 });
       const request = pool.request.bind(pool);
       const attempts = [];
       t.mock.method(pool, 'request', () => {
@@ -971,6 +973,8 @@ for (const attempted of [false, true]) test(`recipient changes rebind only all-u
     if (attempted) {
       assert.equal(second.ok, false); assert.equal(second.reason, 'MAIL_DELIVERY_UNCERTAIN');
       assert.equal(sends.length, 1); assert.equal(db.taskReminderLog[0].FailureCode, 'MAIL_DELIVERY_UNCERTAIN');
+      assert.equal(db.taskReminderLog[0].RecipientCount, 1);
+      assert.equal(db.taskReminderLog[0].RecipientDigest.split(':').at(-1), '20', 'recipient changes retain the previous audit');
     } else {
       assert.equal(second.ok, true); assert.equal(second.sent, 1); assert.equal(sends.length, 2);
       assert.ok(sends.includes('changed@example.internal')); assert.equal(db.taskReminderLog[0].Status, 'SENT');
@@ -1063,5 +1067,78 @@ test('assignee display names share sicil deduplication while preserving unnamed-
     assert.equal(mailer.sent.length, 1);
     assert.match(mailer.sent[0].text, /First name, No identifier, Second no identifier/);
     assert.doesNotMatch(mailer.sent[0].text, /Duplicate name/);
+  });
+});
+
+for (const failingRead of ['task', 'recipients', 'progress']) test(`automatic continuation preserves its checkpoint after a ${failingRead} read failure`, async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-17T09:00:00Z') });
+  await withReminderStack(reminderSeed({ taskAssignees: [{ TaskId: TASK_ID, Sicil: 900001 }, { TaskId: TASK_ID, Sicil: 900002 }] }), async ({ db, pool }) => {
+    const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
+    const { REMINDER_PROGRESS_SQL, REMINDER_TASK_SQL } = await import('../src/server/reminders/reminderQueries.js');
+    const sends = [], options = { now: at(2026, 8, 17), send: async ({ to }) => {
+      sends.push(to[0]); if (sends.length === 1) t.mock.timers.tick(40001); return { ok: true };
+    } };
+    await runAutomaticReminders(pool, options);
+    const digest = db.taskReminderLog[0].RecipientDigest;
+    assert.equal(digest.split(':').at(-1), '20');
+    const request = pool.request.bind(pool); let fail = true;
+    t.mock.method(pool, 'request', () => {
+      const value = request(), query = value.query.bind(value);
+      value.query = async (sql) => {
+        if (fail && (failingRead === 'progress' ? sql === REMINDER_PROGRESS_SQL
+          : failingRead === 'task' ? sql === REMINDER_TASK_SQL : sql.includes('SELECT ta.Sicil'))) {
+          fail = false; throw new Error('transient continuation read failure');
+        }
+        return query(sql);
+      }; return value;
+    });
+    const failed = await runAutomaticReminders(pool, options);
+    assert.equal(failed.failed, 1);
+    assert.equal(db.taskReminderLog[0].FailureCode, 'RECIPIENTS_PENDING');
+    assert.ok(db.taskReminderLog[0].CompletedAt);
+    assert.equal(db.taskReminderLog[0].RecipientDigest, digest); assert.equal(db.taskReminderLog[0].RecipientCount, 1);
+    assert.equal((await runAutomaticReminders(pool, options)).sent, 1);
+    assert.equal(sends.length, 2); assert.equal(new Set(sends).size, 2); assert.equal(db.taskReminderLog.length, 1);
+  });
+});
+
+test('a definite failure is counted only in its run while subsequent bounded continuations remain pending', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-17T09:00:00Z') });
+  await withReminderStack(reminderSeed({ taskAssignees: [900001, 900002, 900003].map((Sicil) => ({ TaskId: TASK_ID, Sicil })) }), async ({ db, pool }) => {
+    const { runAutomaticReminders, sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+    db.corporateUsers.find((row) => row.Name === 'adressiz').EmailAddress = 'z@example.internal';
+    let attempts = 0;
+    const send = async () => { attempts += 1; t.mock.timers.tick(60001); return attempts === 1
+      ? { ok: false, code: 'SMTP_SEND_FAILED', message: 'rejected' } : { ok: true }; };
+    const options = { now: at(2026, 8, 17), send };
+    const first = await runAutomaticReminders(pool, options);
+    assert.equal(first.failed, 1);
+    const second = await runAutomaticReminders(pool, options);
+    assert.equal(second.failed, 0); assert.equal(second.ok, true); assert.equal(second.results[0].reason, 'RECIPIENTS_PENDING');
+    const third = await runAutomaticReminders(pool, options);
+    assert.equal(third.sent, 1); assert.equal(third.partial, 1); assert.equal(attempts, 3);
+    assert.equal(db.taskReminderLog[0].FailureCode, 'PARTIAL_RECIPIENTS');
+    const manual = await sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, send: async () => { t.mock.timers.tick(60001); return { ok: true }; } });
+    assert.equal(manual.code, 'RECIPIENTS_PENDING'); assert.ok(manual.message);
+  });
+});
+
+test('oversized recipient progress finalizes the claim without SMTP or endless pending recovery', async (t) => {
+  await withReminderStack(reminderSeed(), async ({ db, pool }) => {
+    const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
+    const request = pool.request.bind(pool);
+    t.mock.method(pool, 'request', () => {
+      const value = request(), query = value.query.bind(value);
+      value.query = async (sql) => sql.includes('SELECT ta.Sicil') ? { recordset: Array.from({ length: 330 }, (_, i) =>
+        ({ Sicil: 900000 + i, Name: `Person ${i}`, Username: `person${i}`, Email: `person${i}@example.internal` })) } : query(sql);
+      return value;
+    });
+    let sends = 0;
+    const options = { now: at(2026, 8, 17), send: async () => { sends += 1; return { ok: true }; } };
+    const result = await runAutomaticReminders(pool, options);
+    assert.equal(result.results[0].reason, 'RECIPIENT_PROGRESS_LIMIT'); assert.equal(result.failed, 1);
+    assert.equal(db.taskReminderLog[0].Status, 'FAILED'); assert.ok(db.taskReminderLog[0].CompletedAt);
+    assert.equal((await runAutomaticReminders(pool, options)).results[0].reason, 'ALREADY_SENT');
+    assert.equal(sends, 0);
   });
 });

@@ -530,8 +530,8 @@ test('SQL işleri model üretiminden bağımsızdır: üretim sırasında işlem
     return streamChatCompletion(input);
   };
   await startConversation('SQL bağımsızlık sorusu');
-  assert.deepEqual(observations, [{ insideTransaction: false, statements: ['prepare', 'prepare', 'presence'], userMessages: 1, answers: 0 }]);
-  assert.deepEqual(db.aiConversationLog.statements.map((entry) => (entry.sql.includes('AS AnswerPersisted') ? 'append' : entry.sql.includes('AS ConversationPresent') ? 'presence' : 'prepare')), ['prepare', 'prepare', 'presence', 'append']);
+  assert.deepEqual(observations, [{ insideTransaction: false, statements: ['prepare', 'prepare', 'presence', 'presence'], userMessages: 1, answers: 0 }]);
+  assert.deepEqual(db.aiConversationLog.statements.map((entry) => (entry.sql.includes('AS AnswerPersisted') ? 'append' : entry.sql.includes('AS ConversationPresent') ? 'presence' : 'prepare')), ['prepare', 'prepare', 'presence', 'presence', 'presence', 'presence', 'append']);
 });
 
 test('konuşma tabloları kurulmamışsa (0017 uygulanmamış) anlaşılır yapılandırma hatası döner; model çağrılmaz', async (t) => {
