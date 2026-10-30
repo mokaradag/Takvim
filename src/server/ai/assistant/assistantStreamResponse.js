@@ -12,7 +12,7 @@ import { ServerPersistenceError } from '../../errors.js';
 import { AiError } from '../aiErrors.js';
 import { readAiConfig } from '../aiConfig.js';
 import { recordAssistantTurn } from '../aiTelemetry.js';
-import { discloseAssistantMessage, generateAssistantAnswer } from './assistantService.js';
+import { assertAssistantTurnPresent, discloseAssistantMessage, generateAssistantAnswer } from './assistantService.js';
 
 /**
  * Rota AI akış yanıtı (tarayıcıya giden sürümlü protokol).
@@ -275,10 +275,6 @@ export function assistantStreamResponse(turn, {
     return !closed && !generationSignal.aborted;
   }
 
-  async function sendWhenReady(event, data) {
-    return await waitForCapacity() && send(event, data);
-  }
-
   const deliveryFailure = () => stalled || (generationSignal.reason instanceof ServerPersistenceError ? generationSignal.reason : null)
     || new AiError(AI_ERROR_CODES.AI_CANCELLED);
 
@@ -315,6 +311,7 @@ export function assistantStreamResponse(turn, {
     ticker.unref?.();
     generationSignal.addEventListener('abort', onAbort, { once: true });
     try {
+      if (turn.sicil) await assertAssistantTurnPresent(turn, generationSignal);
       send(ASSISTANT_STREAM_EVENTS.ACCEPTED, acceptedPayload(turn));
       if (turn.replay) {
         await deliver(async () => ({ conversation: turn.conversation,
@@ -336,7 +333,12 @@ export function assistantStreamResponse(turn, {
         onText: async (text) => {
           progress({ visible: true });
           // Yanıt yalnızca metin gerçekten kuyruğa girdiyse "kısmi" sayılır.
-          if (await sendWhenReady(ASSISTANT_STREAM_EVENTS.DELTA, { text })) {
+          if (!await waitForCapacity()) throw deliveryFailure();
+          if (turn.sicil) {
+            try { await assertAssistantTurnPresent(turn, generationSignal); }
+            catch (error) { cancelled.abort(error); throw error; }
+          }
+          if (!generationSignal.aborted && !closed && send(ASSISTANT_STREAM_EVENTS.DELTA, { text })) {
             textSent = true;
             return;
           }
@@ -361,7 +363,7 @@ export function assistantStreamResponse(turn, {
       });
       recordOutcome();
     } catch (error) {
-      const failure = stalled || error;
+      const failure = stalled || (cancelled.signal.reason instanceof ServerPersistenceError ? cancelled.signal.reason : error);
       const payload = assistantStreamErrorPayload(failure, { partial: textSent });
       recordOutcome(failure);
       finalEvent(ASSISTANT_STREAM_EVENTS.ERROR, payload);

@@ -12,6 +12,7 @@ import {
   AI_CONVERSATION_SCAN_SQL,
   AI_CONVERSATION_LIST_SQL,
   AI_CONVERSATION_LOAD_SQL,
+  AI_CONVERSATION_PRESENCE_SQL,
   AI_CONVERSATION_PREPARE_TURN_SQL
 } from './conversationQueries.js';
 
@@ -275,11 +276,13 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     return { knownSicil: true, ready: false, byMessage: new Map() };
   }
   const [[state] = [], rows = []] = recordsetsOf(result);
+  const presentMessages = state?.EvidenceReady ? new Set(rows.map((row) => idOrNull(row.MessageId))) : undefined;
   const epochsByMessage = new Map();
   const clarificationByMessage = new Map();
   const resultScopeByMessage = new Map();
   const authorizationByMessage = new Map();
   for (const row of rows) {
+    if (row.Ordinal == null) continue;
     const id = idOrNull(row.MessageId);
     if (!epochsByMessage.has(id)) epochsByMessage.set(id, []);
     epochsByMessage.get(id).push(row.AuthorizationEpoch ?? null);
@@ -314,6 +317,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
   return {
     knownSicil: Boolean(state?.KnownSicil),
     ready: Boolean(state?.EvidenceReady),
+    presentMessages,
     epochsByMessage,
     authorizationByMessage,
     clarificationByMessage,
@@ -356,4 +360,14 @@ export async function appendGroundedConversationAnswer(executor, sicil, {
     message,
     evidence: message ? (evidenceByMessage(evidenceRows).get(message.id) || []) : []
   };
+}
+
+export async function loadConversationPresence(executor, sicil, { conversationId, messageId = null, maxMessages }) {
+  const request = sicilRequest(executor, sicil);
+  request.input('conversationId', sql.UniqueIdentifier, conversationId);
+  request.input('messageId', sql.UniqueIdentifier, messageId);
+  request.input('maxMessages', sql.Int, maxMessages);
+  const [rows = [], [state] = []] = recordsetsOf(await request.query(AI_CONVERSATION_PRESENCE_SQL));
+  return { knownSicil: Boolean(state?.KnownSicil), conversationPresent: Boolean(state?.ConversationPresent),
+    presentMessages: new Set(state?.ConversationPresent ? rows.map((row) => idOrNull(row.MessageId)) : []) };
 }

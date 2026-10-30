@@ -435,6 +435,7 @@ export function ReminderSettingsView() {
           <section className="card reminder-section">
             <div className="card-title"><Icons.Search size={14} /> Önizleme</div>
             <div className="reminder-preview-subject"><strong>Konu:</strong> {preview.subject}</div>
+            {preview.ok === false && <p role="alert">{preview.message}</p>}
             {/* Önizleme, gönderilecek gövdenin TEMİZLENMİŞ hâlidir: aynı
                 temizleyici sunucuda yazma ve gönderme yolunda da çalışır. */}
             <div className="reminder-preview-body" dangerouslySetInnerHTML={{ __html: preview.bodyHtml }} />
@@ -459,7 +460,7 @@ export function ReminderSettingsView() {
                     {history.map((entry) => (
                       <tr key={entry.id}>
                         <td>{entry.kind === 'AUTOMATIC' ? 'Otomatik' : 'Elle'}</td>
-                        <td>{entry.status === 'SENT' ? 'Gönderildi' : entry.status === 'FAILED' ? `Başarısız (${entry.failureCode || '—'})` : 'Sürüyor'}</td>
+                        <td>{entry.failureCode === 'MAIL_DELIVERY_UNCERTAIN' ? 'Teslimat belirsiz' : entry.failureCode === 'RECIPIENTS_PENDING' ? 'Devam bekliyor' : entry.status === 'SENT' ? 'Gönderildi' : entry.status === 'FAILED' ? `Başarısız (${entry.failureCode || '—'})` : 'Sürüyor'}</td>
                         <td className="tabular">{entry.recipientCount}</td>
                         <td className="muted" style={{ fontSize: 11 }}>{entry.slotKey}</td>
                         <td className="muted" style={{ fontSize: 11 }}>{entry.completedAt || entry.createdAt}</td>

@@ -133,13 +133,13 @@ test('karışık harfli yeni tekrar şablonu çocuktan sonra gelse de önce kili
     });
     assert.equal(committed.ok, true, committed.error?.message);
     assert.equal(stack.db.tasks.length, 2);
-    assert.equal(String(stack.db.tasks[1].RecurrenceParentTaskId).toLowerCase(), PARENT_ID);
+    assert.equal(String(stack.db.tasks[1].RecurrenceParentTaskId).toLowerCase(), stack.actualId(PARENT_ID));
 
-    assert.equal(stack.db.transactions.length, 1);
+    assert.equal(stack.db.transactions.length, 2);
     assert.equal(stack.db.transactions[0].statementIndex, 0);
     const parentLockIndex = trace.findIndex((entry) => (
       /FROM dbo\.MR_Tasks WITH \(UPDLOCK, HOLDLOCK\)/.test(entry.sql)
-      && String(entry.params.entityId || '').toLowerCase() === PARENT_ID
+      && String(entry.params.entityId || '').toLowerCase() === stack.actualId(PARENT_ID)
     ));
     const firstTaskInsertIndex = trace.findIndex((entry) => /INSERT dbo\.MR_Tasks\(/.test(entry.sql));
     assert.ok(parentLockIndex >= 0, 'tekrar şablonu sertleştirilmiş işlem içinde kilitlenmelidir');
@@ -180,7 +180,7 @@ test('normal görevden kilometre taşına dar yaşam döngüsü geçişi eski il
       }]
     });
 
-    const stored = stack.db.tasks.find((row) => String(row.TaskId).toLowerCase() === TASK_ID);
+    const stored = stack.db.tasks.find((row) => String(row.TaskId).toLowerCase() === stack.actualId(TASK_ID));
     assert.equal(stored.IsMilestone, 1);
     assert.equal(stored.Status, 'planned');
     assert.equal(stored.Progress, 0);
@@ -206,7 +206,7 @@ test('tamamlanan görevde otomatik gerçek başlangıç ve bitiş tam iş günü
       taskUpserts: [{ ...current, status: 'done' }]
     });
 
-    const stored = stack.db.tasks.find((row) => String(row.TaskId).toLowerCase() === TASK_ID);
+    const stored = stack.db.tasks.find((row) => String(row.TaskId).toLowerCase() === stack.actualId(TASK_ID));
     assert.equal(stored.Status, 'done');
     assert.equal(stored.Progress, 100);
     assert.equal(stored.ActualStart, '2026-09-10');

@@ -127,9 +127,18 @@ function sanitizeHref(value) {
 
 function sanitizeAttributes(raw) {
   const attributes = [];
-  const pattern = /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/g;
-  let match;
-  while ((match = pattern.exec(raw))) {
+  const pattern = /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/y;
+  let index = 0;
+  while (index < raw.length) {
+    // Skip an entire malformed attribute token, never retry each suffix of it.
+    while (index < raw.length && /\s/.test(raw[index])) index += 1;
+    pattern.lastIndex = index;
+    const match = pattern.exec(raw);
+    if (!match) {
+      while (index < raw.length && !/\s/.test(raw[index])) index += 1;
+      continue;
+    }
+    index = pattern.lastIndex;
     const name = match[1].toLowerCase();
     if (!ALLOWED_ATTRIBUTES.has(name)) continue;
     // Öznitelik değeri kaynakta kodlu gelir; önce çözülür ki denetim gerçek
@@ -182,8 +191,14 @@ function findTagEnd(source, start) {
   return -1;
 }
 
-export function sanitizeReminderHtml(input) {
+export const MAX_REMINDER_TEMPLATE_CHARS = 65536;
+// Delivery content has its own bound: HTML escaping can expand task text sixfold.
+export const MAX_REMINDER_RENDER_CHARS = 16 * 1024 * 1024;
+
+/** Returns null for oversized input/output; never parses or returns a partial template. */
+export function sanitizeReminderHtml(input, { maxChars = MAX_REMINDER_TEMPLATE_CHARS } = {}) {
   const source = String(input ?? '');
+  if (source.length > maxChars) return null;
   let output = '';
   let index = 0;
 
@@ -221,9 +236,11 @@ export function sanitizeReminderHtml(input) {
     if (!tag || !ALLOWED_TAGS.has(tag)) {
       // `script`/`style` gövdesi de atılır: yalnızca etiketi düşürmek, kodu
       // düz metin olarak bırakırdı.
-      if (tag === 'script' || tag === 'style') {
-        const closeIndex = source.toLowerCase().indexOf(`</${tag}>`, end + 1);
-        index = closeIndex < 0 ? source.length : closeIndex + tag.length + 3;
+      if (!closing && (tag === 'script' || tag === 'style')) {
+        const close = new RegExp(`</${tag}>`, 'gi');
+        close.lastIndex = end + 1;
+        const match = close.exec(source);
+        index = match ? close.lastIndex : source.length;
         continue;
       }
       index = end + 1;
@@ -240,7 +257,7 @@ export function sanitizeReminderHtml(input) {
     index = end + 1;
   }
 
-  return output;
+  return output.length > maxChars ? null : output;
 }
 
 /* ── Yer tutucu yerleştirme ───────────────────────────────────── */
@@ -257,18 +274,31 @@ const PLACEHOLDER_PATTERN = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
  *   DEĞİŞTİRİLMEZ: metin olduğu gibi kalır ve ayrıca raporlanır. Böylece
  *   yönetici yazım hatasını görür, ileti ise sessizce bozulmaz.
  */
-export function applyReminderPlaceholders(template, values = {}, { escape = escapeHtml } = {}) {
+export function applyReminderPlaceholders(template, values = {}, { escape = escapeHtml, maxChars = Infinity } = {}) {
   const unknown = new Set();
-  const text = String(template ?? '').replace(PLACEHOLDER_PATTERN, (match, key) => {
+  const source = String(template ?? '');
+  const parts = [];
+  let index = 0, length = 0;
+  for (const match of source.matchAll(PLACEHOLDER_PATTERN)) {
+    const key = match[1];
+    let replacement = match[0];
     if (!REMINDER_PLACEHOLDER_KEYS.includes(key)) {
       unknown.add(key);
-      return match;
+    } else {
+      const value = values[key];
+      const resolved = value == null || String(value).trim() === '' ? MISSING_VALUE_MARK : String(value);
+      if (resolved.length > maxChars) return { text: null, unknown: [...unknown] };
+      replacement = escape(resolved);
     }
-    const value = values[key];
-    const resolved = value == null || String(value).trim() === '' ? MISSING_VALUE_MARK : String(value);
-    return escape(resolved);
-  });
-  return { text, unknown: [...unknown] };
+    const prefix = source.slice(index, match.index);
+    length += prefix.length + replacement.length;
+    if (length > maxChars) return { text: null, unknown: [...unknown] };
+    parts.push(prefix, replacement);
+    index = match.index + match[0].length;
+  }
+  if (length + source.length - index > maxChars) return { text: null, unknown: [...unknown] };
+  parts.push(source.slice(index));
+  return { text: parts.join(''), unknown: [...unknown] };
 }
 
 /** HTML gövdesinden okunabilir düz metin karşılığı üretir. */
@@ -360,12 +390,17 @@ export function wrapReminderDocument(bodyHtml) {
  * @returns {{subject: string, html: string, text: string, unknownPlaceholders: string[]}}
  */
 export function renderReminderEmail(template, values = {}) {
+  const failure = (code, message) => ({ ok: false, code, message, subject: '', html: '', bodyHtml: '', text: '', unknownPlaceholders: [] });
+  const source = template?.body || DEFAULT_REMINDER_BODY;
+  if (sanitizeReminderHtml(source) == null) {
+    return failure('REMINDER_TEMPLATE_TOO_LARGE', 'Hatırlatma şablonu en fazla 65536 karakter olabilir.');
+  }
   const subjectResult = applyReminderPlaceholders(
     template?.subject || DEFAULT_REMINDER_SUBJECT,
     values,
     // Konu satırı HTML değildir; kaçış uygulanmaz, başlık temizliği MIME
     // katmanında yapılır (bkz. server/mail/mimeMessage.js).
-    { escape: (value) => value }
+    { escape: (value) => value, maxChars: MAX_REMINDER_RENDER_CHARS }
   );
   // SIRA ÖNEMLİDİR: yer tutucular ÖNCE yerleştirilir, temizlik SONRA çalışır.
   // Ters sırada `sanitizeStyle` ve `sanitizeHref` yalnızca şablonun kendisini
@@ -374,8 +409,12 @@ export function renderReminderEmail(template, values = {}) {
   // anahtar sözcük enjekte edilebiliyordu (`escapeHtml`, `(`, `)`, `:` ve `;`
   // karakterlerini kaçırmaz). Artık izin listeleri dinamik değerler için de
   // yetkilidir.
-  const substituted = applyReminderPlaceholders(template?.body || DEFAULT_REMINDER_BODY, values);
-  const bodyResult = { text: sanitizeReminderHtml(substituted.text), unknown: substituted.unknown };
+  const substituted = applyReminderPlaceholders(source, values, { maxChars: MAX_REMINDER_RENDER_CHARS });
+  const bodyHtml = substituted.text == null ? null : sanitizeReminderHtml(substituted.text, { maxChars: MAX_REMINDER_RENDER_CHARS });
+  if (subjectResult.text == null || bodyHtml == null) {
+    return failure('REMINDER_RENDER_TOO_LARGE', 'Hatırlatma içeriği gönderim boyutu sınırını aşıyor.');
+  }
+  const bodyResult = { text: bodyHtml, unknown: substituted.unknown };
   return {
     subject: subjectResult.text,
     // Tam ileti gövdesi (e-posta iskeletiyle birlikte).

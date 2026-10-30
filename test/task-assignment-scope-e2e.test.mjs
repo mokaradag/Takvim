@@ -112,7 +112,7 @@ test('yönetici oluşturucu kapsam dışı sorumlu atayamaz veya mevcut kapsam d
       await assert.rejects(stack.repository.commitChanges({ taskUpserts: [{ ...task, assigneeIds, assigneeMutation: true }] }),
         (error) => error.code === 'FORBIDDEN');
     }
-    stack.db.taskAssignees.push({ TaskId: NEW_TASK_ID, Sicil: OUTSIDER_SICIL });
+    stack.db.taskAssignees.push({ TaskId: stack.actualId(NEW_TASK_ID).toUpperCase(), Sicil: OUTSIDER_SICIL });
     await stack.reload();
     assert.equal(resolveTaskMutationAccess(stack.state, NEW_TASK_ID).canManageAssignees, false);
     assert.equal(resolveTaskDeleteAccess(stack.state, NEW_TASK_ID).canDelete, false);

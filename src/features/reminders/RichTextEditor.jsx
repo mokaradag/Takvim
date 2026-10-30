@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Icons } from '../../components/icons';
 import { sanitizeReminderHtml } from '../../domain/reminders/reminderTemplate.js';
 import { plainTextToHtml } from './plainTextHtml.js';
@@ -39,6 +39,7 @@ const TABLE_SNIPPET = [
 export function RichTextEditor({ value, onChange, ariaLabel = 'E-posta gövdesi', disabled = false }) {
   const editorRef = useRef(null);
   const lastValueRef = useRef('');
+  const [sizeError, setSizeError] = useState(false);
 
   // Dışarıdan gelen değer YALNIZCA farklıysa yazılır: her tuş vuruşunda içerik
   // yeniden atansaydı imleç her seferinde başa atlardı.
@@ -51,6 +52,8 @@ export function RichTextEditor({ value, onChange, ariaLabel = 'E-posta gövdesi'
     // noktadır: temizleme burada da yapılmazsa, zincirin herhangi bir ucunda
     // açılacak bir boşluk doğrudan çalıştırılabilir içeriğe dönüşürdü.
     const safeValue = sanitizeReminderHtml(value || '');
+    setSizeError(safeValue == null);
+    if (safeValue == null) return;
     lastValueRef.current = safeValue;
     element.innerHTML = safeValue;
   }, [value]);
@@ -59,6 +62,11 @@ export function RichTextEditor({ value, onChange, ariaLabel = 'E-posta gövdesi'
     const element = editorRef.current;
     if (!element) return;
     const html = sanitizeReminderHtml(element.innerHTML);
+    setSizeError(html == null);
+    if (html == null) {
+      element.innerHTML = lastValueRef.current;
+      return;
+    }
     lastValueRef.current = html;
     onChange?.(html);
   };
@@ -98,6 +106,7 @@ export function RichTextEditor({ value, onChange, ariaLabel = 'E-posta gövdesi'
 
   return (
     <div className={`rich-editor${disabled ? ' is-disabled' : ''}`}>
+      {sizeError && <p role="alert">Hatırlatma şablonu en fazla 65536 karakter olabilir.</p>}
       <div className="rich-editor-toolbar" role="toolbar" aria-label="Biçimlendirme">
         {TOOLBAR.map((entry) => (
           <button

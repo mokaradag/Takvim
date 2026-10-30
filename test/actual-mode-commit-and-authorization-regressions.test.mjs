@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
+import { randomUUID } from 'node:crypto';
+import { memoryStorage } from './helpers/actualStack.mjs';
+import { creationEntries } from '../src/domain/identity/creationIds.js';
 import { fileURLToPath } from 'node:url';
 
 import { createApiRepository, toActualUuid } from '../src/data/api/createApiRepository.js';
@@ -17,6 +20,18 @@ const PROJECT_ID = '2d9f0b82-bf72-4b9d-b44e-21506f486697';
 const WBS_ID = '3eaf1c93-c083-4cad-8f3f-32617f597708';
 const TASK_ID = '4fb02da4-d194-4dbe-9040-4372806a8819';
 
+function allocationResponse(changes) {
+  const allocations = creationEntries(changes).map(({ entry, entityType }) => ({
+    clientId: entry.id, entityType, id: randomUUID(), proof: randomUUID()
+  }));
+  for (const record of allocations) {
+    const { entry } = creationEntries(changes).find(({ entry, entityType }) => entityType === record.entityType && entry.id === record.clientId);
+    record.projectId = record.entityType === 'PROJECT' ? record.id
+      : allocations.find((value) => value.entityType === 'PROJECT' && value.clientId === entry.projectId)?.id || entry.projectId;
+  }
+  return { ok: true, status: 200, async json() { return { allocations }; } };
+}
+
 test('Actual commit responses map normalized SQL UUIDs back to pending client IDs', async () => {
   const projectClientId = `project-${PROJECT_ID}`;
   const wbsClientId = `wbs-${WBS_ID}`;
@@ -25,30 +40,33 @@ test('Actual commit responses map normalized SQL UUIDs back to pending client ID
   let postedChanges;
 
   globalThis.fetch = async (_url, init) => {
-    postedChanges = JSON.parse(init.body).changes;
+    if (String(_url).endsWith('/session')) return Response.json({ authenticated: true, currentUser: { sicil: 900001 } });
+    const payload = JSON.parse(init.body);
+    if (payload.operation) return allocationResponse(payload.allocationChanges);
+    postedChanges = payload.changes;
     return {
       ok: true,
       status: 200,
       async json() {
         return {
-          projectUpserts: [{ id: PROJECT_ID, name: 'New Project', version: 'project-version' }],
-          wbsUpserts: [{ id: WBS_ID, projectId: PROJECT_ID, parentId: null, code: '1', name: 'Root', version: 'wbs-version' }],
+          projectUpserts: [{ id: postedChanges.projectUpserts[0].id, name: 'New Project', version: 'project-version' }],
+          wbsUpserts: [{ id: postedChanges.wbsUpserts[0].id, projectId: postedChanges.projectUpserts[0].id, parentId: null, code: '1', name: 'Root', version: 'wbs-version' }],
           taskUpserts: [{
-            id: TASK_ID,
-            projectId: PROJECT_ID,
-            wbsId: WBS_ID,
+            id: postedChanges.taskUpserts[0].id,
+            projectId: postedChanges.projectUpserts[0].id,
+            wbsId: postedChanges.wbsUpserts[0].id,
             status: 'planned',
-            deps: [{ predecessorId: TASK_ID, type: 'FS' }],
+            deps: [{ predecessorId: postedChanges.taskUpserts[0].id, type: 'FS' }],
             version: 'task-version'
           }],
-          taskDeletes: [TASK_ID]
+          taskDeletes: [postedChanges.taskUpserts[0].id]
         };
       }
     };
   };
 
   try {
-    const repository = createApiRepository({ basePath: '/test-api' });
+    const repository = createApiRepository({ basePath: '/test-api', aliasStorage: memoryStorage() });
     const result = await repository.commitChanges({
       projectUpserts: [{ id: projectClientId, name: 'New Project' }],
       wbsUpserts: [{ id: wbsClientId, projectId: projectClientId, parentId: null, code: '1', name: 'Root' }],
@@ -62,9 +80,12 @@ test('Actual commit responses map normalized SQL UUIDs back to pending client ID
       taskDeletes: [taskClientId]
     });
 
-    assert.equal(postedChanges.projectUpserts[0].id, PROJECT_ID);
-    assert.equal(postedChanges.wbsUpserts[0].id, WBS_ID);
-    assert.equal(postedChanges.taskUpserts[0].id, TASK_ID);
+    assert.notEqual(postedChanges.projectUpserts[0].id, PROJECT_ID);
+    assert.ok(postedChanges.projectUpserts[0].creationProof);
+    assert.notEqual(postedChanges.wbsUpserts[0].id, WBS_ID);
+    assert.ok(postedChanges.wbsUpserts[0].creationProof);
+    assert.notEqual(postedChanges.taskUpserts[0].id, TASK_ID);
+    assert.ok(postedChanges.taskUpserts[0].creationProof);
     assert.equal(result.projectUpserts[0].id, projectClientId);
     assert.equal(result.projectUpserts[0].version, 'project-version');
     assert.equal(result.wbsUpserts[0].id, wbsClientId);
@@ -222,7 +243,8 @@ test('Actual UUID normalization still strips only local creation prefixes', () =
 test('existing WBS updates authorize the stored project and reject forged project reassignment', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitWbs'), source.indexOf('async function commitTask'));
-  assert.ok(body.indexOf('const before = await wbsRowForUpdate(executor, wbsId)') < body.indexOf('assertProjectWriteAccess(actor.effective, storedProjectId)'));
+  const loadIndex = body.indexOf('const before = hasVersion(node.version) ? await wbsRowForUpdate(executor, wbsId) : null');
+  assert.ok(loadIndex >= 0 && loadIndex < body.indexOf('assertProjectWriteAccess(actor.effective, storedProjectId)'));
   assert.match(body, /const storedProjectId = id\(before\.ProjectId\);/);
   // Karşılaştırma kanoniktir: SQL Server büyük harfli GUID döndürdüğü için
   // düz `!==` aynı projeyi farklı sanıp yazmayı reddediyordu.
@@ -232,7 +254,7 @@ test('existing WBS updates authorize the stored project and reject forged projec
 test('existing task updates authorize both stored source and requested destination projects', () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitTask'), source.indexOf('async function deleteTask'));
-  const loadIndex = body.indexOf('const before = await taskRow(executor, taskId)');
+  const loadIndex = body.indexOf('const before = hasVersion(task.version) ? await taskRow(executor, taskId) : null');
   // Proje yetkisi, sorumlu doğrulamasından ÖNCE verilir: `ensurePeople` daha
   // erken çalıştığında yetkisiz bir kullanıcı, geçerli ve geçersiz sicillerin
   // farklı hata üretmesinden kurumsal rehberi okuyabiliyordu.
@@ -318,8 +340,15 @@ test('Actual repository keeps client ID aliases across later snapshot loads and 
   const taskClientId = `task-${TASK_ID}`;
   const originalFetch = globalThis.fetch;
   let step = 0;
+  let allocated;
 
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith('/session')) return Response.json({ authenticated: true, currentUser: { sicil: 900001 } });
+    if (init?.body) {
+      const payload = JSON.parse(init.body);
+      if (payload.operation) return allocationResponse(payload.allocationChanges);
+      if (payload.changes.projectUpserts?.length) allocated = payload.changes;
+    }
     step += 1;
     if (String(url).endsWith('/commit') && step === 1) {
       return {
@@ -327,9 +356,9 @@ test('Actual repository keeps client ID aliases across later snapshot loads and 
         status: 200,
         async json() {
           return {
-            projectUpserts: [{ id: PROJECT_ID, name: 'Persistent Alias', version: 'pv' }],
-            wbsUpserts: [{ id: WBS_ID, projectId: PROJECT_ID, parentId: null, code: '1', name: 'Root', version: 'wv' }],
-            taskUpserts: [{ id: TASK_ID, projectId: PROJECT_ID, wbsId: WBS_ID, status: 'planned', deps: [], version: 'tv' }]
+            projectUpserts: [{ id: allocated.projectUpserts[0].id, name: 'Persistent Alias', version: 'pv' }],
+            wbsUpserts: [{ id: allocated.wbsUpserts[0].id, projectId: allocated.projectUpserts[0].id, parentId: null, code: '1', name: 'Root', version: 'wv' }],
+            taskUpserts: [{ id: allocated.taskUpserts[0].id, projectId: allocated.projectUpserts[0].id, wbsId: allocated.wbsUpserts[0].id, status: 'planned', deps: [], version: 'tv' }]
           };
         }
       };
@@ -340,9 +369,10 @@ test('Actual repository keeps client ID aliases across later snapshot loads and 
         status: 200,
         async json() {
           return {
-            projects: [{ id: PROJECT_ID, name: 'Persistent Alias' }],
-            wbs: [{ id: WBS_ID, projectId: PROJECT_ID, parentId: null, code: '1', name: 'Root' }],
-            tasks: [{ id: TASK_ID, projectId: PROJECT_ID, wbsId: WBS_ID, status: 'planned', deps: [] }]
+            session: { authenticated: true, currentUser: { sicil: 900001 } },
+            projects: [{ id: allocated.projectUpserts[0].id, name: 'Persistent Alias' }],
+            wbs: [{ id: allocated.wbsUpserts[0].id, projectId: allocated.projectUpserts[0].id, parentId: null, code: '1', name: 'Root' }],
+            tasks: [{ id: allocated.taskUpserts[0].id, projectId: allocated.projectUpserts[0].id, wbsId: allocated.wbsUpserts[0].id, status: 'planned', deps: [] }]
           };
         }
       };
@@ -350,12 +380,12 @@ test('Actual repository keeps client ID aliases across later snapshot loads and 
     return {
       ok: true,
       status: 200,
-      async json() { return { taskDeletes: [TASK_ID] }; }
+      async json() { return { taskDeletes: [allocated.taskUpserts[0].id] }; }
     };
   };
 
   try {
-    const repository = createApiRepository({ basePath: '/alias-api' });
+    const repository = createApiRepository({ basePath: '/alias-api', aliasStorage: memoryStorage() });
     await repository.commitChanges({
       projectUpserts: [{ id: projectClientId, name: 'Persistent Alias' }],
       wbsUpserts: [{ id: wbsClientId, projectId: projectClientId, parentId: null, code: '1', name: 'Root' }],
@@ -423,7 +453,7 @@ test('WBS reparent validation holds update and serializable locks across the anc
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitWbs'), source.indexOf('async function commitTask'));
   assert.match(source, /FROM dbo\.MR_WBS WITH \(UPDLOCK, HOLDLOCK\) WHERE WbsId = @id/);
-  assert.match(body, /const before = await wbsRowForUpdate\(executor, wbsId\)/);
+  assert.match(body, /const before = hasVersion\(node\.version\) \? await wbsRowForUpdate\(executor, wbsId\) : null/);
   assert.match(body, /let parent = await wbsRowForUpdate\(executor, node\.parentId\)/);
   assert.match(body, /await wbsRowForUpdate\(executor, parent\.ParentWbsId\)/);
 });

@@ -47,7 +47,7 @@ test('aynı adlı iki çalışan ve görev alanları tek Kaydet isteğinde Sicil
     const initialRequests = stack.requests.length;
     prepareTaskEditorCommit(stack.state, edits, { taskId, syncKeywordCatalog: true });
     assert.equal(stack.requests.length, initialRequests);
-    assert.equal(stack.db.tasks.find((row) => row.TaskId.toLowerCase() === taskId).Title, 'İlk görev');
+    assert.equal(stack.db.tasks.find((row) => row.TaskId.toLowerCase() === stack.actualId(taskId)).Title, 'İlk görev');
     const result = await save(stack, edits, { syncKeywordCatalog: true });
     assert.equal(result.ok, true, result.error?.message);
     assert.equal(stack.requests.slice(initialRequests).filter((request) => request.path.endsWith('/commit')).length, 1);
@@ -114,7 +114,7 @@ test('mevcut şablon düzenlemesi ve tekrarları aynı istekte kaydedilir', asyn
     const offset = stack.requests.length;
     const result = await save(stack, [{ id: taskId, version: task.version, patch: { task: 'Yeni seri başlığı', recurrence: 'FREQ=WEEKLY;COUNT=3' } }], { generateSeries: true });
     assert.equal(result.ok, true, result.error?.message);
-    assert.equal(stack.requests.length - offset, 1);
+    assert.equal(stack.requests.slice(offset).filter((request) => !request.operation).length, 1);
     assert.equal(stack.db.tasks.length, 3);
     assert.ok(stack.db.tasks.every((row) => row.Title === 'Yeni seri başlığı'));
   } finally { await stack.dispose(); }
@@ -149,7 +149,7 @@ test('yeni görev, öncülü, ardılı ve etiketi aynı Kaydet işleminde oluşt
       mutate: (operation, factory) => stack.persistence.mutate(operation, (current) => prepareTaskCreationCommit(current, factory(current), { relatedEdits, syncKeywordCatalog: true })) });
     assert.equal(result.result.ok, true, result.result.error?.message);
     assert.equal(result.created.id, newId);
-    assert.equal(stack.requests.length - offset, 1);
+    assert.equal(stack.requests.slice(offset).filter((request) => !request.operation).length, 1);
     await stack.reload();
     assert.equal(stack.state.tasks.find((task) => task.id === newId).deps[0].predecessorId, taskId);
     const dependency = stack.state.tasks.find((task) => task.id === successorId).deps[0];

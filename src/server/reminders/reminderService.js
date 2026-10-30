@@ -1,6 +1,6 @@
 import { reminderRunOutcome } from '../../domain/reminders/reminderRunOutcome.js';
 import 'server-only';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import {
   describeRecipientProblems,
   resolveReminderRecipients,
@@ -10,11 +10,15 @@ import { buildReminderValues } from '../../domain/reminders/reminderValues.js';
 import { renderReminderEmail } from '../../domain/reminders/reminderTemplate.js';
 import { evaluateReminderEligibility } from '../../domain/reminders/reminderPolicy.js';
 import { sendMail } from '../mail/mailService.js';
-import { isSmtpConfigured } from '../mail/smtpConfig.js';
+import { getSmtpConfig, isSmtpConfigured } from '../mail/smtpConfig.js';
 import {
+  ABANDONED_CLAIM_MINUTES,
   claimAutomaticReminder,
   completeReminderLog,
+  deferReminderLog,
   loadLastManualReminderAt,
+  loadReminderProgress,
+  resumeManualReminder,
   loadReminderCandidates,
   loadReminderRecipientRows,
   loadReminderSettings,
@@ -72,19 +76,20 @@ export async function deliverTaskReminder(executor, {
   kind,
   logId = null,
   actorSicil = null,
+  reclaimed = false,
   now = new Date(),
   // Posta hizmeti ENJEKTE EDİLEBİLİR: testler SMTP sunucusu olmadan da
   // başarı/başarısızlık yollarını sınayabilir. Üretimde varsayılan kullanılır.
   send = sendMail
 }) {
   const rows = await loadReminderRecipientRows(executor, task.id);
-  const { recipients, resolved, problems } = resolveReminderRecipients(rows);
+  const { recipients, problems } = resolveReminderRecipients(rows);
   // Uyarılar KİMLİK TAŞIMAZ: kapsam dışı bir eş sorumlunun adı yanıtla dışarı
   // sızmamalıdır (ayrıntılı `problems` sunucuda kalır).
   const warnings = summarizeRecipientProblems(problems);
 
   if (!recipients.length) {
-    await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: 'NO_RECIPIENTS' });
+    await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: 'NO_RECIPIENTS', preserveRecipients: reclaimed });
     return {
       ok: false,
       code: 'NO_RECIPIENTS',
@@ -94,40 +99,145 @@ export async function deliverTaskReminder(executor, {
     };
   }
 
+  // Direct task assignees may see co-assignee display names in the canonical
+  // snapshot projection. Usernames and directory identities are not a fallback.
+  const assigneeNames = [], seenSicils = new Set();
+  for (const row of rows) {
+    const sicil = String(row?.sicil ?? '').trim();
+    if (sicil && seenSicils.has(sicil)) continue;
+    if (sicil) seenSicils.add(sicil);
+    const name = String(row?.name || '').trim();
+    if (name) assigneeNames.push(name);
+  }
   const values = buildReminderValues(task, {
-    // Sorumlu listesi BÜTÜN atama satırlarından kurulur. Yalnızca adresi
-    // çözülenleri yazmak, adresi olmayan sorumluyu görevden sorumlu DEĞİLMİŞ
-    // gibi gösteriyordu; `resolved` yalnızca SMTP alıcı listesini belirler.
-    assigneeNames: rows.map((row) => String(row?.name || row?.username || '').trim()).filter(Boolean),
+    assigneeNames,
     now
   });
   const rendered = renderReminderEmail({ subject: settings.subject, body: settings.body }, values);
-  const sent = await send({
-    to: recipients,
-    subject: rendered.subject,
-    html: rendered.html,
-    text: rendered.text
-  });
-
-  if (!sent.ok) {
-    await finalizeLog(executor, logId, { status: 'FAILED', recipients, failureCode: sent.code });
-    return { ok: false, code: sent.code, message: sent.message, problems, warnings };
+  if (rendered.ok === false) {
+    await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: rendered.code, preserveRecipients: reclaimed });
+    return { ok: false, code: rendered.code, message: rendered.message, problems, warnings };
   }
+  // The bounded progress envelope contains no addresses. Bind positions to the
+  // complete recipient set so a directory/assignment change cannot replay them
+  // against different people. 0=unattempted, 1=uncertain, 2=sent, 3=definite failure.
+  recipients.sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0);
+  const fingerprint = createHash('sha256').update(JSON.stringify(recipients.map((email) => email.toLowerCase()))).digest('hex');
+  const prefix = `delivery1:${fingerprint}:`;
+  const previous = await loadReminderProgress(executor, logId);
+  const unattempted = /^delivery1:[a-f0-9]{64}:0+$/.test(previous || '');
+  const matches = previous?.startsWith(prefix) && previous.slice(prefix.length).length === recipients.length;
+  if ((reclaimed && !previous?.startsWith('delivery1:')) || (previous?.startsWith('delivery1:') && !unattempted && (!previous.startsWith(prefix)
+    || previous.slice(prefix.length).length !== recipients.length || /[^0-3]/.test(previous.slice(prefix.length))))) {
+    await finalizeLog(executor, logId, { status: 'PENDING', failureCode: 'MAIL_DELIVERY_UNCERTAIN', preserveRecipients: true });
+    return { ok: false, code: 'MAIL_DELIVERY_UNCERTAIN', deliveryMayHaveEscaped: true, problems,
+      message: 'Önceki teslimat ilerlemesi doğrulanamadı; yinelenen posta riskine karşı yeniden gönderilmeyecek.',
+      warnings: [...warnings, 'Önceki alıcı ilerlemesi güncel listeyle doğrulanamadı; teslimatlar otomatik yinelenmeyecek.'] };
+  }
+  const states = matches ? previous.slice(prefix.length).split('') : recipients.map(() => '0');
+  const progress = () => prefix + states.join('');
+  if (progress().length > 400) {
+    const code = 'RECIPIENT_PROGRESS_LIMIT';
+    const message = 'Hatırlatma alıcı sayısı gönderim ilerlemesi sınırını aşıyor.';
+    await finalizeLog(executor, logId, { status: 'FAILED', failureCode: code, preserveRecipients: true });
+    return { ok: false, code, message, problems, warnings };
+  }
+  const delivered = recipients.filter((_email, index) => states[index] === '2');
+  let failed = states.includes('3') ? { code: 'SMTP_SEND_FAILED' } : null;
+  let checkpointFailed = false, failedThisRun = false;
+  let uncertain = states.includes('1'), uncertainThisRun = false, attempted = states.filter((state) => state !== '0').length;
+  const checkpoint = () => completeReminderLog(executor, logId, { status: 'PENDING', recipients: delivered,
+    failureCode: 'DELIVERY_IN_PROGRESS', progress: progress(), active: true });
+  // Bound admission separately from an in-flight session. One isolated message
+  // has at most 14 timed stages: connect, greeting, EHLO, STARTTLS, TLS, EHLO,
+  // three LOGIN exchanges, MAIL, RCPT, DATA, acceptance and QUIT. Preserve those
+  // command timeouts instead of aborting a healthy message after just one.
+  const controller = new AbortController();
+  const timeoutMs = isSmtpConfigured() ? getSmtpConfig().timeoutMs : 20000;
+  const budgetMs = Math.min(120000, timeoutMs * Math.min(recipients.length, 6));
+  const deadline = Date.now() + budgetMs;
+  // A final hard deadline also bounds trickling TLS or a stalled transport.
+  // Leave half the existing abandoned-claim window for reads/finalization;
+  // a long configured timeout must not outlive automatic claim ownership.
+  const hardBudgetMs = Math.min(budgetMs + 14 * timeoutMs, ABANDONED_CLAIM_MINUTES * 30000);
+  const timer = setTimeout(() => controller.abort(), hardBudgetMs);
+  try {
+    for (const [index, email] of recipients.entries()) {
+      if (states[index] !== '0') continue;
+      if (controller.signal.aborted || Date.now() >= deadline) break;
+      // Persist terminal uncertainty BEFORE transport. A process loss can never
+      // turn a possibly accepted message into an automatic resend.
+      states[index] = '1';
+      try { await checkpoint(); } catch {
+        states[index] = '0';
+        checkpointFailed = true;
+        failed = { code: 'UNEXPECTED_ERROR', message: 'Gönderim ilerlemesi kaydedilemedi.' };
+        break;
+      }
+      if (controller.signal.aborted || Date.now() >= deadline) {
+        states[index] = '0';
+        break;
+      }
+      attempted += 1;
+      let sent;
+      try {
+        sent = await send({ to: [email], subject: rendered.subject, html: rendered.html, text: rendered.text, signal: controller.signal });
+      } catch {
+        sent = { ok: false, code: 'SMTP_SEND_FAILED', deliveryMayHaveEscaped: true };
+      }
+      if (sent.ok) { delivered.push(email); states[index] = '2'; }
+      else if (sent.deliveryMayHaveEscaped) { uncertain = true; uncertainThisRun = true; }
+      else { failed = sent; failedThisRun = true; states[index] = '3'; }
+      try { await checkpoint(); } catch { checkpointFailed = true; uncertain = true; uncertainThisRun = true; break; }
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+  if (attempted < recipients.length) {
+    warnings.push(checkpointFailed
+      ? 'Gönderim ilerlemesi kaydedilemediği için kalan sorumlulara gönderim denenmedi.'
+      : 'Gönderim süresi dolduğu için kalan sorumlulara gönderim denenmedi.');
+  }
+  const remaining = states.includes('0');
+  if (remaining) {
+    const recorded = await finalizeLog(executor, logId, { status: 'PENDING', recipients: delivered,
+      failureCode: 'RECIPIENTS_PENDING', progress: progress() });
+    const code = uncertainThisRun ? 'MAIL_DELIVERY_UNCERTAIN' : !recorded || checkpointFailed ? 'UNEXPECTED_ERROR' : failedThisRun ? failed.code : 'RECIPIENTS_PENDING';
+    return { ok: false, code, retryable: recorded && !uncertainThisRun && !failedThisRun && !checkpointFailed,
+      message: uncertainThisRun ? 'Bazı teslimatların sonucu belirsiz.' : code === 'RECIPIENTS_PENDING'
+        ? 'Denenmeyen alıcılara gönderim sonraki çalıştırmada devam edecek.' : failed?.message || 'Gönderim ilerlemesi kaydedilemedi.', deliveryMayHaveEscaped: uncertainThisRun, recipientCount: delivered.length, problems,
+      warnings: [...warnings, recorded ? 'Denenmeyen alıcılar sonraki gönderimde devam edecek.' : 'Gönderim ilerlemesi doğrulanamadı.'] };
+  }
+  if (uncertain) {
+    const code = 'MAIL_DELIVERY_UNCERTAIN';
+    const message = 'Bazı teslimatların sonucu belirsiz; yinelenen posta riskine karşı otomatik yeniden gönderilmeyecek.';
+    // PENDING + CompletedAt + a distinct code is terminal uncertainty, not SENT
+    // or definite failure. Stale-claim recovery must not retry this delivery.
+    const outcome = { status: 'PENDING', recipients: delivered, failureCode: code, progress: progress() };
+    const recorded = await finalizeLog(executor, logId, outcome) || await finalizeLog(executor, logId, outcome);
+    if (!recorded) warnings.push('Gönderim geçmişi kaydının tamamlandığı doğrulanamadı.');
+    return { ok: false, code, message, deliveryMayHaveEscaped: true, recipientCount: delivered.length, problems, warnings: [...warnings, message] };
+  }
+  if (!delivered.length) {
+    await finalizeLog(executor, logId, { status: 'FAILED', recipients: recipients.slice(0, attempted), failureCode: failed?.code });
+    return { ok: false, code: failed?.code, message: failed?.message, problems, warnings };
+  }
+  if (failed) warnings.push('Bazı sorumlulara hatırlatma iletilemedi.');
 
   // Kısmi alıcı çözümü geçmişte de GÖRÜNÜR kalır: durum SENT'tir ama neden
   // alanı eksik sorumlu olduğunu söyler.
   const audited = await finalizeLog(executor, logId, {
     status: 'SENT',
-    recipients,
-    failureCode: problems.length ? 'PARTIAL_RECIPIENTS' : null
+    recipients: delivered,
+    failureCode: problems.length || failed ? 'PARTIAL_RECIPIENTS' : null
   });
   return {
     ok: true,
-    recipientCount: recipients.length,
+    recipientCount: delivered.length,
     // Adresler istemciye DÖNMEZ: kişisel veri gereksiz yere tarayıcıya taşınmaz.
-    message: `Hatırlatma e-postası ${recipients.length} sorumluya gönderildi.`,
+    message: `Hatırlatma e-postası ${delivered.length} sorumluya gönderildi.`,
     problems,
-    partial: problems.length > 0,
+    partial: problems.length > 0 || Boolean(failed),
     warnings: audited
       ? warnings
       : [...warnings, 'Hatırlatma gönderildi; gönderim geçmişi kaydı güncellenemedi.']
@@ -188,6 +298,9 @@ export async function sendManualReminder(executor, {
   if (!task) return unloadableTaskFailure(executor, taskId);
   if (authorize) await authorize(task);
 
+  const settings = await loadReminderSettings(executor);
+  const resumedLogId = await resumeManualReminder(executor, task.id, actorSicil);
+
   // EN KÜÇÜK ARALIK: görevi görebilen herkes bu ucu çağırabilir ve her çağrı
   // bütün sorumlulara gerçek e-posta gönderir. Sınır olmadan uç üzerinde bir
   // döngü, iş arkadaşlarının posta kutularını doldurabilir ve SMTP aktarıcısını
@@ -210,15 +323,14 @@ export async function sendManualReminder(executor, {
     };
   };
 
-  const lastManualAt = await loadLastManualReminderAt(executor, task.id, actorSicil);
+  const lastManualAt = resumedLogId == null ? await loadLastManualReminderAt(executor, task.id, actorSicil) : null;
   if (lastManualAt && minIntervalMs > 0) {
     const elapsedMs = now.getTime() - lastManualAt.getTime();
     if (elapsedMs >= 0 && elapsedMs < minIntervalMs) return rateLimited();
   }
 
-  const settings = await loadReminderSettings(executor);
   // Elle gönderim, otomatik hatırlatma KAPALI olsa da çalışır.
-  const logId = await logManualReminder(executor, {
+  const logId = resumedLogId ?? await logManualReminder(executor, {
     taskId: task.id,
     projectId: task.projectId,
     slotKey: `manual:${randomUUID()}`,
@@ -229,7 +341,15 @@ export async function sendManualReminder(executor, {
   // hakkı az önce almış. Hiçbir posta gönderilmez.
   if (logId == null && minIntervalMs > 0) return rateLimited();
 
-  return deliverTaskReminder(executor, { task, settings, kind: 'MANUAL', logId, actorSicil, now, send });
+  try {
+    return await deliverTaskReminder(executor, { task, settings, kind: 'MANUAL', logId, actorSicil, reclaimed: resumedLogId != null, now, send });
+  } catch (error) {
+    // Keep the most recent durable recipient checkpoint, including any sends
+    // confirmed since resume. Never restore a stale copy over that checkpoint.
+    if (resumedLogId != null) await deferReminderLog(executor, logId);
+    else await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: 'UNEXPECTED_ERROR' });
+    throw error;
+  }
 }
 
 /** Durdurma anahtarının yeniden okunma aralığı (ms). */
@@ -309,23 +429,25 @@ export async function runAutomaticReminders(executor, {
     // Sahiplenilen kayıt catch bloğundan da GÖRÜNÜR olmalıdır: beklenmedik bir
     // hata satırı `PENDING` bırakırsa benzersiz aralık kısıtı, sorun giderilse
     // bile o aralığı sonsuza dek gönderilmiş sayar.
-    let claimedLogId = null;
+    let claimedLogId = null, reclaimed = false;
     try {
       // Aralık ÖNCE sahiplenilir: aynı aralık için ikinci bir gönderim, tur
       // saatte bir çalışsa ya da ikinci bir uygulama örneği aynı anda başlasa
       // bile oluşamaz.
-      const logId = await claimAutomaticReminder(executor, {
+      const claim = await claimAutomaticReminder(executor, {
         taskId: candidate.id,
         projectId: candidate.projectId,
         slotKey: evaluation.slotKey,
         actorSicil
       });
-      if (logId == null) {
+      if (claim == null) {
         skipped += 1;
         results.push({ taskId: candidate.id, status: 'SKIPPED', reason: 'ALREADY_SENT' });
         continue;
       }
+      const logId = claim.logId;
       claimedLogId = logId;
+      reclaimed = claim.reclaimed;
 
       const task = await loadReminderTask(executor, candidate.id);
       if (!task) {
@@ -334,7 +456,7 @@ export async function runAutomaticReminders(executor, {
         // `TASK_NOT_FOUND` görmek, silinmemiş bir görevi araştıran yöneticiyi
         // yanlış yöne sürüklüyordu.
         const reason = await unloadableTaskReason(executor, candidate.id);
-        await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: reason });
+        await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: reason, preserveRecipients: reclaimed });
         failed += 1;
         results.push({ taskId: candidate.id, status: 'FAILED', reason });
         continue;
@@ -349,7 +471,8 @@ export async function runAutomaticReminders(executor, {
         await finalizeLog(executor, logId, {
           status: 'FAILED',
           recipients: [],
-          failureCode: recheck.eligible ? 'SLOT_CHANGED' : (recheck.reason || 'NOT_ELIGIBLE')
+          failureCode: recheck.eligible ? 'SLOT_CHANGED' : (recheck.reason || 'NOT_ELIGIBLE'),
+          preserveRecipients: reclaimed
         });
         skipped += 1;
         results.push({
@@ -365,6 +488,7 @@ export async function runAutomaticReminders(executor, {
         settings,
         kind: 'AUTOMATIC',
         logId,
+        reclaimed,
         actorSicil,
         now,
         send
@@ -382,10 +506,10 @@ export async function runAutomaticReminders(executor, {
           warnings: delivery.warnings || []
         });
       } else {
-        failed += 1;
+        if (!delivery.retryable) failed += 1;
         results.push({
           taskId: candidate.id,
-          status: 'FAILED',
+          status: delivery.retryable || delivery.deliveryMayHaveEscaped ? 'PENDING' : 'FAILED',
           reason: delivery.code,
           warnings: delivery.warnings || []
         });
@@ -393,7 +517,10 @@ export async function runAutomaticReminders(executor, {
     } catch (error) {
       // Tek bir görevin hatası turu düşürmez; kayıt kodu tutulur, ayrıntı
       // (bağlantı dizesi, parola vb.) günlüğe yazılmaz.
-      await finalizeLog(executor, claimedLogId, {
+      if (reclaimed) {
+        try { await deferReminderLog(executor, claimedLogId); }
+        catch { /* Keep the active checkpoint for stale-claim recovery if deferral is also unavailable. */ }
+      } else await finalizeLog(executor, claimedLogId, {
         status: 'FAILED',
         recipients: [],
         failureCode: 'UNEXPECTED_ERROR'

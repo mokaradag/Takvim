@@ -228,6 +228,17 @@ export function isWorkingDay(value, calendar = DEFAULT_CALENDAR) {
   return workingDaysOf(calendar).includes(date.getDay()) && !holidayFor(date, calendar);
 }
 
+// Only plain, holiday-free calendars use arithmetic. Accessor-backed or malformed
+// calendars retain the metered search and its existing per-operation limits.
+function weeklyPattern(calendar) {
+  const days = Object.getOwnPropertyDescriptor(calendar || DEFAULT_CALENDAR, 'workingDays');
+  const holidays = Object.getOwnPropertyDescriptor(calendar || DEFAULT_CALENDAR, 'holidays');
+  if (!days || !('value' in days) || !holidays || !Array.isArray(holidays.value) || holidays.value.length) return null;
+  const pattern = workingDaysOf(calendar);
+  if (pattern.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) return null;
+  return new Set(pattern);
+}
+
 /**
  * Verilen günü en yakın ÇALIŞMA gününe taşır.
  *
@@ -272,6 +283,14 @@ export function addWorkingDays(value, amount, calendar = DEFAULT_CALENDAR) {
   let current = origin;
   let scanned = 0;
 
+  const pattern = activeScanMeter?.weeklyArithmetic ? weeklyPattern(calendar) : null;
+  if (pattern?.size) {
+    // Leave the final partial week to the normal scan (including its meter).
+    const weeks = Math.floor((remaining - 1) / pattern.size);
+    current = addDays(current, direction * weeks * 7);
+    remaining -= weeks * pattern.size;
+  }
+
   while (remaining > 0) {
     // Tarama sınırı: çalışma günü bulunamayan takvimde döngü sonsuza gitmez.
     // Bütçe istekten türetildiği için buraya YALNIZCA bozuk takvim düşer.
@@ -295,6 +314,12 @@ export function diffWorkingDays(a, b, calendar = DEFAULT_CALENDAR) {
   const currentTime = current.getTime();
   if (targetTime === currentTime) return 0;
 
+  if (activeScanMeter?.weeklyArithmetic && weeklyPattern(calendar)) {
+    return targetTime > currentTime
+      ? countWorkingDays(addDays(current, 1), target, calendar, { byWeeks: true })
+      : -countWorkingDays(target, addDays(current, -1), calendar, { byWeeks: true });
+  }
+
   const direction = targetTime > currentTime ? 1 : -1;
   let difference = 0;
   let scanned = 0;
@@ -312,7 +337,35 @@ export function diffWorkingDays(a, b, calendar = DEFAULT_CALENDAR) {
   return difference;
 }
 
-export function countWorkingDays(start, end, calendar = DEFAULT_CALENDAR) {
+function countWorkingDaysByWeeks(first, last, calendar, maxCount) {
+  // Count whole weeks instead of scanning every date. Fresh snapshots cannot
+  // reuse prior task objects; their individually valid spans must not exhaust
+  // a transient aggregate day-scan meter. Work is O(7 + holiday input size).
+  const dayNumber = (date) => {
+    const utc = new Date(0);
+    utc.setUTCFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+    return utc.getTime() / 86400000;
+  };
+  const firstDay = dayNumber(first);
+  const span = Math.min(dayNumber(last) - firstDay, MAX_CALENDAR_SPAN_DAYS) + 1;
+  const days = workingDaysOf(calendar);
+  const working = Array.from({ length: 7 }, (_, day) => days.includes(day));
+  let count = Math.floor(span / 7) * working.filter(Boolean).length;
+  for (let offset = 0; offset < span % 7; offset += 1) {
+    if (working[(first.getDay() + offset) % 7]) count += 1;
+  }
+  const holidays = new Set();
+  for (const holiday of calendar?.holidays || []) {
+    const date = localDate(holiday?.date);
+    if (!isValidDate(date) || fmtISO(date) !== holiday?.date) continue;
+    const day = dayNumber(date);
+    if (day >= firstDay && day < firstDay + span && working[date.getDay()]) holidays.add(day);
+  }
+  count -= holidays.size;
+  return Math.min(count, Math.floor(maxCount) + 1);
+}
+
+export function countWorkingDays(start, end, calendar = DEFAULT_CALENDAR, { maxCount = Infinity, byWeeks = false } = {}) {
   let first = localDate(start);
   let last = localDate(end);
   if (!isValidDate(first) || !isValidDate(last)) return 0;
@@ -322,6 +375,8 @@ export function countWorkingDays(start, end, calendar = DEFAULT_CALENDAR) {
     [first, last] = [last, first];
     sign = -1;
   }
+
+  if (byWeeks) return countWorkingDaysByWeeks(first, last, calendar, maxCount) * sign;
 
   let count = 0;
   let current = first;
@@ -337,6 +392,7 @@ export function countWorkingDays(start, end, calendar = DEFAULT_CALENDAR) {
     if (scanned > MAX_CALENDAR_SPAN_DAYS) break;
     scanned += 1;
     if (isWorkingDay(current, calendar)) count += 1;
+    if (count > maxCount) return count * sign;
     current = addDays(current, 1);
   }
 

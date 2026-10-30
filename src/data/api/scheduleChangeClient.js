@@ -1,4 +1,5 @@
 import { publicRotaPath } from '../../lib/publicPath.js';
+import { translateEntityRequest, restoreEntityResponse } from './activeActualIdAliases.js';
 
 /**
  * İstek SÜRESİ SINIRLIDIR.
@@ -12,6 +13,9 @@ import { publicRotaPath } from '../../lib/publicPath.js';
 const REQUEST_TIMEOUT_MS = 30000;
 
 export async function requestJson(path, init) {
+  const translated = translateEntityRequest(path, init);
+  if (translated.failure) return translated.failure;
+  ({ path, init } = translated);
   const abortable = typeof AbortController === 'function';
   const controller = abortable ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS) : null;
@@ -52,7 +56,8 @@ export async function requestJson(path, init) {
       message: body?.error?.message || 'İşlem tamamlanamadı.'
     };
   }
-  return { ok: true, value: body };
+  const restored = restoreEntityResponse(body, { method: init?.method, guard: translated.responseGuard, account: translated.responseAccount });
+  return restored?.ok === false ? restored : { ok: true, value: restored };
 }
 
 export function submitScheduleChangeRequest(input) {

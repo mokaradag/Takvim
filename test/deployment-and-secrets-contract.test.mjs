@@ -217,7 +217,7 @@ test('korunan veri uçları sunucu tarafı yetkilendirmeyi korur', () => {
   );
   assert.match(
     read('src/app/api/mergen-rota/commit/route.js'),
-    /createOrderedSqlAppRepository\(\)\.commitChanges\(\{ \.\.\.changes, notifyAssignees \}\)/
+    /repository\.commitChanges\(\{ \.\.\.changes, notifyAssignees \}\)/
   );
 
   // Yetki kararı React bileşenlerine taşınmadı.

@@ -18,6 +18,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 import { registerServerOnlyShim } from './helpers/serverOnlyShim.mjs';
 
@@ -355,14 +356,14 @@ test('gönderim kaydı ÖNCE sahiplenilir, sonra gönderilir', () => {
   const deliverIndex = service.indexOf('deliverTaskReminder(executor, {\n        task');
   assert.ok(claimIndex >= 0 && claimIndex < deliverIndex, 'aralık gönderimden önce sahiplenilmelidir');
   // Sahiplenilemeyen aralık atlanır; ikinci ileti gönderilmez.
-  assert.match(service, /if \(logId == null\) \{[\s\S]*?reason: 'ALREADY_SENT'/);
+  assert.match(service, /if \(claim == null\) \{[\s\S]*?reason: 'ALREADY_SENT'/);
   // Tek bir görevin hatası turu düşürmez.
   assert.match(service, /catch \(error\) \{[\s\S]*?results\.push\(\{ taskId: candidate\.id, status: 'FAILED', reason: 'UNEXPECTED_ERROR' \}\)/);
 });
 
 test('SMTP başarısızlığı asla "gönderildi" olarak raporlanmaz', () => {
   const service = read('src/server/reminders/reminderService.js');
-  assert.match(service, /if \(!sent\.ok\) \{[\s\S]*?status: 'FAILED'/);
+  assert.match(service, /if \(!delivered\.length\) \{[\s\S]*?status: 'FAILED'[\s\S]*?return \{ ok: false/);
   const client = read('src/server/mail/smtpClient.js');
   // Söz yalnızca sunucu 250 döndüğünde çözülür.
   assert.match(client, /if \(accepted\.code !== 250\) \{[\s\S]*?throw new SmtpError\('SMTP_SEND_FAILED'/);
@@ -558,4 +559,63 @@ test('SMTP akışı Python karşılığıyla aynı sırayı izler', () => {
   }
   // Python uygulamasındaki gibi TLS sonrası EHLO tekrarlanır.
   assert.equal((client.match(/EHLO mergen-rota/g) || []).length, 2);
+});
+
+test('malformed attribute names are scanned once and template size is bounded before parsing', async () => {
+  const { sanitizeReminderHtml, MAX_REMINDER_TEMPLATE_CHARS } = await import('../src/domain/reminders/reminderTemplate.js');
+  assert.equal(sanitizeReminderHtml(`<a ${'a'.repeat(40000)}>safe</a>`), '<a>safe</a>');
+  const moduleUrl = new URL('../src/domain/reminders/reminderTemplate.js', import.meta.url).href;
+  const bounded = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { sanitizeReminderHtml } from ${JSON.stringify(moduleUrl)};
+    for (let count = 0; count < 12; count += 1) assert.equal(sanitizeReminderHtml('<a ' + 'a'.repeat(40000) + '>safe</a>'), '<a>safe</a>');
+  `], { encoding: 'utf8', timeout: 3000 });
+  assert.equal(bounded.error, undefined, 'malformed attributes must complete within a bounded worker deadline');
+  assert.equal(bounded.status, 0, bounded.stderr);
+  assert.equal(sanitizeReminderHtml('a'.repeat(MAX_REMINDER_TEMPLATE_CHARS + 1)), null);
+  assert.equal(sanitizeReminderHtml('<a href="https://example.internal" onclick="bad()" title="a > b">safe</a>'), '<a href="https://example.internal" title="a &gt; b">safe</a>');
+});
+
+test('template bounds include sanitized output; rendered escaping has a separate controlled bound', async () => {
+  const { MAX_REMINDER_RENDER_CHARS } = await import('../src/domain/reminders/reminderTemplate.js');
+  assert.equal(sanitizeReminderHtml('&'.repeat(14000)), null);
+  const rendered = renderReminderEmail({ body: '<p>{{description}}</p>' }, { description: '&<>"\''.repeat(14000) });
+  assert.equal(rendered.ok, undefined); assert.equal(rendered.text, '&<>"\''.repeat(14000));
+  assert.doesNotMatch(rendered.bodyHtml, /<script|onclick/);
+  assert.equal(renderReminderEmail({ body: 'a'.repeat(65537) }).code, 'REMINDER_TEMPLATE_TOO_LARGE');
+  const large = renderReminderEmail({ body: '{{description}}{{description}}' }, { description: 'a'.repeat(MAX_REMINDER_RENDER_CHARS / 2 + 1) });
+  assert.equal(large.code, 'REMINDER_RENDER_TOO_LARGE'); assert.equal(large.html, '');
+});
+
+test('Turkish Unicode before script/style blocks preserves original closing offsets and sanitization', () => {
+  for (const tag of ['ScRiPt', 'StYlE']) {
+    assert.equal(sanitizeReminderHtml(`İİ<p>önce</p><${tag}>bad()</${tag}><p>sonra</p>`), 'İİ<p>önce</p><p>sonra</p>');
+    const rendered = renderReminderEmail({ body: `{{project_name}}<${tag}>bad()</${tag}><p>sonra</p>` }, { project_name: 'İHA Projesi' });
+    assert.equal(rendered.bodyHtml, 'İHA Projesi<p>sonra</p>');
+  }
+});
+
+test('stray script/style closing tags preserve following reminder content and sanitization', () => {
+  for (const tag of ['ScRiPt', 'StYlE']) {
+    assert.equal(sanitizeReminderHtml(`İİ<p>önce</p></${tag}><p>sonra</p>`), 'İİ<p>önce</p><p>sonra</p>');
+    const source = `İİ<p>önce</p></${tag}><p>{{task_name}}</p></${tag}><${tag}>bad()</${tag}><p>sonra</p>`;
+    const expected = 'İİ<p>önce</p><p>{{task_name}}</p><p>sonra</p>';
+    assert.equal(sanitizeReminderHtml(source), expected);
+    assert.equal(sanitizeReminderHtml(expected), expected);
+    assert.equal(renderReminderEmail({ body: source }, { task_name: '<img src=x onerror="bad()">' }).bodyHtml,
+      'İİ<p>önce</p><p>&lt;img src=x onerror=&quot;bad()&quot;&gt;</p><p>sonra</p>');
+  }
+});
+
+test('SMTP reply boundaries reject near-miss codes and retain multiline and bare final replies', async () => {
+  for (const reply of ['2501 foo\r\n', '250OK\r\n', '250-hello\r\n2501 foo\r\n']) {
+    const socket = new EventEmitter(); socket.setEncoding = () => {}; socket.destroy = () => {};
+    const dialogue = createSmtpDialogue(socket, 1000), result = dialogue.read();
+    socket.emit('data', reply);
+    await assert.rejects(result, { code: 'SMTP_SEND_FAILED' }); dialogue.dispose();
+  }
+  const socket = new EventEmitter(); socket.setEncoding = () => {};
+  const dialogue = createSmtpDialogue(socket, 1000), result = dialogue.read();
+  socket.emit('data', '250-hello\r\n250\r\n');
+  assert.equal((await result).code, 250); dialogue.dispose();
 });

@@ -552,7 +552,10 @@ test('uzlaştırılan yanıt gösterilmiş taslağın yerini alır: revise ardı
   const { createAssistantStreamDecoder } = await import('../src/features/ai/assistant/assistantClient.js');
   const stamp = '2026-10-13T10:00:00.000Z';
   const { turn: base } = fakeTurn();
-  const { turn, released } = fakeTurn({ sicil: 1, conversation: { ...base.conversation, createdAt: stamp, updatedAt: stamp } });
+  const { db } = createAiStack(t);
+  const { turn, released } = fakeTurn({ sicil: 900001, conversation: { ...base.conversation, createdAt: stamp, updatedAt: stamp } });
+  db.aiConversations.push({ ConversationId: turn.conversation.id, OwnerSicil: turn.sicil, Title: turn.conversation.title });
+  db.aiConversationMessages.push({ MessageId: turn.userMessage.id, ConversationId: turn.conversation.id, Sequence: 1, Role: 'user' });
   const draft = 'T'.repeat(30);
   const stored = 'K'.repeat(30);
   const response = assistantStreamResponse(turn, {
@@ -562,6 +565,7 @@ test('uzlaştırılan yanıt gösterilmiş taslağın yerini alır: revise ardı
       onGenerated?.();
       // Aynı turun yanıtını başka bir yazıcı kaydetmişti: kayıtlı (yetkili) yanıt döner.
       const result = finalAnswer(turn, stored);
+      db.aiConversationMessages.push({ MessageId: result.answer.id, ConversationId: turn.conversation.id, Sequence: 2, Role: 'assistant' });
       return { ...result, answer: { ...result.answer, finishReason: 'general', createdAt: stamp }, reconciled: true };
     }
   });
@@ -897,4 +901,67 @@ test('a generation that resolves after its stall verdict never emits DONE', asyn
   assert.equal(events.at(-1).event, 'error');
   assert.equal(events.at(-1).data.reason, 'GENERATION_STALLED');
   assert.equal(released(), 1);
+});
+
+for (const source of ['general', 'rota']) test(`deletion after ACCEPTED is revalidated before dispatching the prepared prompt to the model (${source})`, async (t) => {
+  const { provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
+  const { deleteConversation } = await import('../src/server/ai/assistant/conversationStore.js');
+  const { getSqlPool } = await import('../src/server/db/pool.js');
+  const { prepareAssistantTurn, generateAssistantAnswer } = await import('../src/server/ai/assistant/assistantService.js');
+  const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: 'private pending prompt', mode: 'standard', source }) });
+  assert.equal(turn.grounded, source === 'rota');
+  const response = assistantStreamResponse(turn, { generate: async (prepared, options) => {
+    // A different server instance commits deletion without this process's claim notification.
+    assert.equal((await deleteConversation(await getSqlPool(), prepared.sicil, { conversationId: prepared.conversation.id })).deleted, true);
+    return generateAssistantAnswer(prepared, options);
+  } });
+  const events = parseSseText(await response.text()).events;
+  assert.deepEqual(events.map((event) => event.event), ['accepted', 'error']);
+  assert.equal(provider.calls.length, 0);
+  assert.equal(provider.semanticCalls.length, 0);
+  assert.equal(activeAssistantGenerationCountForTests(), 0);
+});
+
+test('deletion during generation aborts transport before the next delta can disclose deleted content', async (t) => {
+  const { db, provider } = createAiStack(t);
+  const { deleteConversation } = await import('../src/server/ai/assistant/conversationStore.js');
+  const { getSqlPool } = await import('../src/server/db/pool.js');
+  provider.enqueue({ type: 'deferred-stream' });
+  const response = await turnsRoute.POST(turnRequest({ turnId: randomUUID(), message: 'private prompt for deletion', mode: 'standard', source: 'general' }));
+  const body = response.text();
+  await provider.waitForActive(1);
+  const conversationId = db.aiConversations[0].ConversationId;
+  // Shared durable deletion can originate in another process.
+  assert.equal((await deleteConversation(await getSqlPool(), 900001, { conversationId })).deleted, true);
+  provider.calls[0].emit('secret derived from deleted prompt');
+  provider.calls[0].complete();
+  const text = await body, events = parseSseText(text).events;
+  assert.equal(events.some((event) => event.event === 'delta'), false);
+  assert.equal(events.at(-1).event, 'error');
+  assert.equal(text.includes('secret derived from deleted prompt'), false);
+  await until(() => aiRuntimeLoad().active === 0 && activeAssistantGenerationCountForTests() === 0);
+  assert.equal(provider.calls[0].aborted, true);
+  assert.deepEqual(db.aiConversationMessages, []);
+});
+
+for (const source of ['general', 'rota']) test(`a prompt deleted while queued never reaches transport after admission is granted (${source})`, async (t) => {
+  const { db, provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', MERGEN_ROTA_AI_MAX_ACTIVE_REQUESTS: '1', MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER: '1' } });
+  const { deleteConversation } = await import('../src/server/ai/assistant/conversationStore.js');
+  const { getSqlPool } = await import('../src/server/db/pool.js');
+  provider.enqueue({ type: 'deferred-stream' }, { type: 'stream', chunks: ['must not be generated'] });
+  const first = await turnsRoute.POST(turnRequest({ turnId: randomUUID(), message: 'capacity holder', mode: 'standard', source: 'general' }));
+  const firstBody = first.text();
+  await provider.waitForActive(1);
+  const queued = await turnsRoute.POST(turnRequest({ turnId: randomUUID(), message: 'queued private prompt', mode: 'standard', source }));
+  const queuedBody = queued.text();
+  await until(() => aiRuntimeLoad().queued === 1);
+  const conversationId = db.aiConversations.at(-1).ConversationId;
+  assert.equal((await deleteConversation(await getSqlPool(), 900001, { conversationId })).deleted, true);
+  provider.calls[0].emit('holder response'); provider.calls[0].complete();
+  await firstBody;
+  const events = parseSseText(await queuedBody).events;
+  assert.equal(provider.calls.length, 1, 'revalidate after queue/credential waits and before opening provider transport');
+  assert.equal(provider.semanticCalls.length, 0);
+  assert.equal(events.some((event) => event.event === 'delta'), false); assert.equal(events.at(-1).event, 'error');
+  assert.equal(aiRuntimeLoad().active, 0); assert.equal(activeAssistantGenerationCountForTests(), 0);
 });

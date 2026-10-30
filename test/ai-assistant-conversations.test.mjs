@@ -516,6 +516,34 @@ test('uzun konuşmada bağlamın kısaldığı ilk olayda bildirilir', async (t)
 
 /* ── SQL ve model üretimi ─────────────────────────────────── */
 
+test('turn presence reads only its user message and rejects missing or other-owner targets', async (t) => {
+  const { db } = createAiStack(t);
+  const { conversationId } = await startConversation();
+  const { prepareAssistantTurn, assertAssistantTurnPresent } = await import('../src/server/ai/assistant/assistantService.js');
+  const { getSqlPool } = await import('../src/server/db/pool.js');
+  const turn = await prepareAssistantTurn({ readBody: async () => ({
+    conversationId, turnId: randomUUID(), message: 'Next question', mode: 'standard', source: 'general'
+  }) });
+  t.after(() => turn.claim.release());
+  assert.equal(db.aiConversationMessages.length, 3);
+  const pool = await getSqlPool(), request = pool.request.bind(pool), returned = [];
+  t.mock.method(pool, 'request', () => {
+    const value = request(), query = value.query.bind(value);
+    value.query = async (sql) => {
+      const result = await query(sql);
+      if (sql.includes('AS ConversationPresent')) returned.push(result.recordsets[0].length);
+      return result;
+    };
+    return value;
+  });
+  await assertAssistantTurnPresent(turn);
+  assert.deepEqual(returned, [1], 'prior history is not read for a single-message presence check');
+  await assert.rejects(assertAssistantTurnPresent({ ...turn, sicil: SICIL_B }), { code: 'NOT_FOUND' });
+  db.aiConversationMessages = db.aiConversationMessages.filter((row) => row.MessageId.toLowerCase() !== turn.userMessage.id);
+  await assert.rejects(assertAssistantTurnPresent(turn), { code: 'NOT_FOUND' });
+  assert.deepEqual(returned, [1, 0, 0]);
+});
+
 test('SQL işleri model üretiminden bağımsızdır: üretim sırasında işlem açık değildir, yanıt ancak tamamlanınca yazılır', async (t) => {
   const { db, provider } = createAiStack(t);
   const observations = [];
@@ -523,15 +551,15 @@ test('SQL işleri model üretiminden bağımsızdır: üretim sırasında işlem
   provider.streamChatCompletion = (input) => {
     observations.push({
       insideTransaction: isWithinSqlTransaction(),
-      statements: db.aiConversationLog.statements.map((entry) => (entry.sql.includes('AS PrepareOutcome') ? 'prepare' : entry.sql.includes('AS AnswerPersisted') ? 'append' : 'other')),
+      statements: db.aiConversationLog.statements.map((entry) => (entry.sql.includes('AS PrepareOutcome') ? 'prepare' : entry.sql.includes('AS AnswerPersisted') ? 'append' : entry.sql.includes('AS ConversationPresent') ? 'presence' : 'other')),
       userMessages: db.aiConversationMessages.filter((row) => row.Role === 'user').length,
       answers: db.aiConversationMessages.filter((row) => row.Role === 'assistant').length
     });
     return streamChatCompletion(input);
   };
   await startConversation('SQL bağımsızlık sorusu');
-  assert.deepEqual(observations, [{ insideTransaction: false, statements: ['prepare', 'prepare'], userMessages: 1, answers: 0 }]);
-  assert.deepEqual(db.aiConversationLog.statements.map((entry) => (entry.sql.includes('AS AnswerPersisted') ? 'append' : 'prepare')), ['prepare', 'prepare', 'append']);
+  assert.deepEqual(observations, [{ insideTransaction: false, statements: ['prepare', 'prepare', 'presence', 'presence'], userMessages: 1, answers: 0 }]);
+  assert.deepEqual(db.aiConversationLog.statements.map((entry) => (entry.sql.includes('AS AnswerPersisted') ? 'append' : entry.sql.includes('AS ConversationPresent') ? 'presence' : 'prepare')), ['prepare', 'prepare', 'presence', 'presence', 'presence', 'presence', 'append']);
 });
 
 test('konuşma tabloları kurulmamışsa (0017 uygulanmamış) anlaşılır yapılandırma hatası döner; model çağrılmaz', async (t) => {
@@ -771,7 +799,10 @@ test('kayıtlı yanıt araması salt okunurdur: kilit almaz ve işlem açmaz', a
   assert.equal(terminal(replay).data.replayed, true);
   const statements = db.aiConversationLog.statements;
   assert.equal(statements[0].params.readOnly, true, 'yanıt araması salt okunur hazırlanır');
-  assert.equal(statements.length, 1, 'genel sohbetin yeniden oynatılması gereksiz kanıt okuması yapmaz');
+  assert.equal(statements.length, 3, 'replay checks presence at stream start and answer disclosure');
+  assert.ok(statements.slice(1).every((entry) => entry.sql.includes('AS ConversationPresent')));
+  assert.ok(statements.every((entry) => !entry.sql.includes('AS EvidenceReady')), 'general replay needs presence, not evidence');
+  assert.ok(statements.slice(1).every((entry) => !/UPDLOCK|HOLDLOCK|BEGIN TRAN/i.test(entry.sql)));
 });
 
 test('başlık her satırdaki başlık ve alıntı işaretini atar', () => {

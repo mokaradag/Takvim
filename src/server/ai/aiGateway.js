@@ -382,9 +382,10 @@ export function createAiGateway({
    * ölçümü o kodla başarısız kaydedilir, sonuç yine çağırana döner.
    */
   async function callProvider({
-    operation, deadline, invoke, source = null, context = null, healthFailure = () => null, failureCodeOf = () => null
+    operation, deadline, invoke, source = null, context = null, healthFailure = () => null, failureCodeOf = () => null, beforeDispatch = null
   }) {
     for (let attempt = 1; ; attempt += 1) {
+      if (beforeDispatch) await raceWithAbort(() => beforeDispatch(deadline.signal), deadline.signal);
       if (context) context.attempts = attempt;
       const startedAt = now();
       try {
@@ -537,7 +538,7 @@ export function createAiGateway({
    * kullanmaz: sunucu kapasite anahtarı ve kurumsal anahtarla yürür. Paylaşılan
    * işin sonucu ve faturası onu başlatan kullanıcıya bağlı değildir.
    */
-  async function semanticCall({ profile, capability, operation, signal, fixed, serverOwned = false, prepare, request }) {
+  async function semanticCall({ profile, capability, operation, signal, fixed, serverOwned = false, prepare, request, beforeDispatch = null }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     let lease = null;
@@ -566,6 +567,7 @@ export function createAiGateway({
       const resolved = semanticRoute(route);
       const response = await callProvider({
         operation,
+        beforeDispatch,
         deadline,
         context,
         source: credential.source,
@@ -628,13 +630,14 @@ export function createAiGateway({
     return embedInput({ profile: AI_PROFILES.EMBEDDING, purpose: AI_EMBEDDING_PURPOSES.DOCUMENT, signal }, true);
   }
 
-  async function embedInput({ profile, texts, purpose, signal = null }, serverOwned = false) {
+  async function embedInput({ profile, texts, purpose, signal = null, beforeDispatch = null }, serverOwned = false) {
     const document = purpose === AI_EMBEDDING_PURPOSES.DOCUMENT;
     let catalogueFingerprint = null;
     const { response, ...call } = await semanticCall({
       profile,
       capability: AI_CAPABILITIES.EMBEDDING,
       operation: 'ai.provider.embeddings',
+      beforeDispatch,
       signal,
       fixed: serverOwned,
       serverOwned,
@@ -664,11 +667,12 @@ export function createAiGateway({
    * adresli `{ index, score }`) ve aday kümesinin bütünlüğü anlamsal sözleşmede
    * doğrulanır. İstek kullanıcının sorgusunu taşır.
    */
-  async function rerankTexts({ profile, query, documents, signal = null }) {
+  async function rerankTexts({ profile, query, documents, signal = null, beforeDispatch = null }) {
     const { response, ...call } = await semanticCall({
       profile,
       capability: AI_CAPABILITIES.RERANK,
       operation: 'ai.provider.rerank',
+      beforeDispatch,
       signal,
       fixed: false,
       prepare: () => {
@@ -689,8 +693,14 @@ export function createAiGateway({
    * gitmemiştir; yanıt başladıktan sonraki hiçbir hata yinelenmez (aynı yanıt
    * baştan ikinci kez üretilmez).
    */
-  async function connectStream({ deadline, watch, context, source, healthFailure, invoke, resend = true }) {
+  async function connectStream({ deadline, watch, context, source, healthFailure, invoke, beforeDispatch = null, resend = true }) {
     for (let attempt = 1; ; attempt += 1) {
+      // Local presence/authorization checks are not provider attempts. Recheck
+      // before each transport retry, under the existing overall deadline.
+      if (beforeDispatch) {
+        watch.pause();
+        await raceWithAbort(() => beforeDispatch(deadline.signal), deadline.signal);
+      }
       watch.restart();
       context.attempts = attempt;
       const startedAt = now();
@@ -741,7 +751,7 @@ export function createAiGateway({
    * yanıt otomatik olarak yeniden istenmez. Sonuç tam metni döndürür; süre
    * dolduktan ya da iptal edildikten sonra gelen parça uygulanmaz.
    */
-  async function streamChat({ profile, messages, maxOutputTokens = null, signal = null, onStatus = null, onProgress = null, onText }) {
+  async function streamChat({ profile, messages, maxOutputTokens = null, signal = null, onStatus = null, onProgress = null, beforeDispatch = null, onText }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     const progress = { emitted: false, reasoning: false, firstTokenMs: null, providerStartMs: null, providerStartedAt: null, recorded: false };
@@ -780,6 +790,7 @@ export function createAiGateway({
         context,
         source: credential.source,
         healthFailure: healthFailureFor(credential.source),
+        beforeDispatch,
         invoke: () => getProvider().streamChatCompletion({
           baseUrl: config.baseUrl,
           apiKey: credential.apiKey,
@@ -916,7 +927,7 @@ export function createAiGateway({
    * biçimi, araç çağrısı parçaları ve kimliği bu katmanın dışına çıkmaz; tur
    * yalnızca birleştirilmiş çağrıları (`{ id, name, arguments, oversize }`) görür.
    */
-  async function runToolSession({ profile, signal = null, run, lifecycle = null }) {
+  async function runToolSession({ profile, signal = null, run, lifecycle = null, beforeDispatch = null }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     const progress = { providerStartedAt: null, recorded: true, rounds: 0, emitted: false };
@@ -997,6 +1008,7 @@ export function createAiGateway({
               context,
               source: credential.source,
               healthFailure,
+              beforeDispatch,
               // Araç sonucu taşıyan tur kanıtın sağlayıcıya açıklanmasıdır: çağıranın güncel erişim
               // denetiminden geçmeden yeniden gönderilmez; bağlantı hatası tura döner.
               resend: resend === true && !safeMessages.some((message) => message.role === 'tool'),

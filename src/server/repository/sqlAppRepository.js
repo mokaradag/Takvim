@@ -1,3 +1,5 @@
+import { loadOutlookTask } from '../outlook/outlookStore.js';
+import { taskIdentityVisibleSql } from '../authorization/taskIdentityVisibility.js';
 import 'server-only';
 import { normalizeTaskLifecycle } from '../../domain/taskLifecycle.js';
 import { businessDate } from '../../domain/calendar/businessDate.js';
@@ -54,6 +56,8 @@ import { synchronizeCorporateWbs } from './corporateWbsSync.js';
 const DEPENDENCY_PLANNING_VERIFIED = Symbol.for('mergen-rota.dependency-planning-verified');
 import { runCorporateWbsSync } from './corporateWbsSyncSchedule.js';
 import { decodeVersion, encodeVersion } from './versionTokens.js';
+import { assertUpsertIntentMatchesPersistence } from './upsertIntentValidation.js';
+import { hasVersion } from './upsertIntentPolicy.js';
 
 // SQL Server GUID değerlerini büyük harf döndürür; istemci küçük harf gönderir.
 // Tüm kimlikler bu iki yardımcı üzerinden kanonikleştirilir, böylece sunucudaki
@@ -1367,7 +1371,7 @@ async function propagateProjectTagChanges(executor, actorSicil, projectId, plan 
 async function commitProject(executor, actor, project, rootWbs, correlationId) {
   const projectId = uuid(project.id);
   const projectCode = project.code == null ? null : (String(project.code).trim().toUpperCase() || null);
-  const before = await projectRow(executor, projectId);
+  const before = hasVersion(project.version) ? await projectRow(executor, projectId) : null;
   if (!before) {
     if ((project.source || project.sourceType || 'manual').toUpperCase() !== 'MANUAL') {
       throw new ServerPersistenceError('FORBIDDEN', 'Kurumsal projeler istemci tarafından oluşturulamaz.');
@@ -1396,6 +1400,9 @@ async function commitProject(executor, actor, project, rootWbs, correlationId) {
     req.input('rootName', sql.NVarChar(1000), authoritativeRoot.name);
     req.input('rootSort', sql.Int, authoritativeRoot.sortOrder);
     req.input('actorSicil', sql.Int, actor.sicil);
+    await assertUpsertIntentMatchesPersistence(executor, {
+      projectUpserts: [project], wbsUpserts: [authoritativeRoot]
+    }, actor, { createdProjectIds: new Set([projectId]) });
     await req.query(`
       INSERT dbo.MR_Projects(
         ProjectId, SourceType, ProjectCode, ProjectName, LeadSicil, DataDate,
@@ -1482,7 +1489,7 @@ async function assertWbsProjectIsWritableStructure(executor, projectId) {
 async function commitWbs(executor, actor, node, correlationId) {
   const wbsId = uuid(node.id);
   const projectId = uuid(node.projectId);
-  const before = await wbsRowForUpdate(executor, wbsId);
+  const before = hasVersion(node.version) ? await wbsRowForUpdate(executor, wbsId) : null;
   if (before) {
     const storedProjectId = id(before.ProjectId);
     assertProjectWriteAccess(actor.effective, storedProjectId);
@@ -1518,6 +1525,7 @@ async function commitWbs(executor, actor, node, correlationId) {
   req.input('sortOrder', sql.Int, node.sortOrder ?? null);
   req.input('actorSicil', sql.Int, actor.sicil);
   if (!before) {
+    await assertUpsertIntentMatchesPersistence(executor, { wbsUpserts: [node] }, actor);
     await req.query(`
       INSERT dbo.MR_WBS(WbsId, ProjectId, ParentWbsId, Code, Name, SortOrder, CreatedBySicil, UpdatedBySicil)
       VALUES(@wbsId, @projectId, @parentWbsId, @code, @name, @sortOrder, @actorSicil, @actorSicil);
@@ -1617,7 +1625,7 @@ async function assertActiveProject(executor, projectId) {
  * yetkisiz bir kullanıcı, geçersiz ve geçerli sicillerin farklı hata üretmesini
  * kullanarak kurumsal rehberi yoklayabiliyordu.
  */
-const TASK_PROJECT_SCOPES = Object.freeze({
+export const TASK_PROJECT_SCOPES = Object.freeze({
   FULL: 'FULL',
   ASSIGNMENT: 'ASSIGNMENT',
   ASSIGNEE_CREATE: 'ASSIGNEE_CREATE'
@@ -1645,7 +1653,7 @@ async function hasAuthoritativeAssigneeTaskCreateScope(executor, actor, projectI
   return result.recordset.length > 0;
 }
 
-async function assertTaskProjectScope(executor, actor, projectId, { allowAssigneeCreate = false } = {}) {
+export async function assertTaskProjectScope(executor, actor, projectId, { allowAssigneeCreate = false } = {}) {
   // Sistem yöneticisi kullanıcı bazlı yetkileri atlar ama ETKİN OLMAYAN projeye
   // yazamaz: etkin FULL yetkileri de yalnızca etkin projelerden kurulur ve
   // taşınan görev normal anlık görüntülerden tümüyle kaybolurdu.
@@ -1677,7 +1685,7 @@ async function assertTaskProjectScope(executor, actor, projectId, { allowAssigne
 }
 
 /** SORUMLU düzeyinde yetki: her sorumlu yöneticinin kapsamında olmalıdır. */
-async function assertAssigneeScope(executor, actor, projectId, assigneeSicils, projectScope = null) {
+export async function assertAssigneeScope(executor, actor, projectId, assigneeSicils, projectScope = null) {
   const fullAccess = hasFullProjectWriteAccess(actor, projectId);
   if (actor.isSystemAdmin || (fullAccess && !actor.isExecutive)) return;
 
@@ -1774,23 +1782,7 @@ async function visibleTaskAssigneeSicils(executor, actor, taskId) {
     JOIN dbo.MR_Tasks t ON t.TaskId = ta.TaskId
     JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
     WHERE ta.TaskId = @taskId AND (
-      @isAdmin = 1
-      OR (p.SourceType = 'MANUAL' AND p.LeadSicil = @sicil)
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_V_CorporateProjectAccess a
-        WHERE p.SourceType = 'CORPORATE' AND a.ProjectCode = UPPER(p.ProjectCode) AND a.Sicil = @sicil
-      )
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_ProjectAccess pa
-        WHERE pa.ProjectId = t.ProjectId AND pa.Sicil = @sicil AND pa.IsActive = 1
-          AND pa.AccessLevel IN ('FULL', 'READ')
-      )
-      OR t.CreatedBySicil = @sicil
-      OR ta.Sicil = @sicil
-      OR EXISTS (
-        SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-        WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = ta.Sicil
-      )
+      ${taskIdentityVisibleSql('ta.Sicil')}
     );
   `);
   return (result.recordset || []).map((row) => Number(row.Sicil));
@@ -1917,7 +1909,7 @@ function assertLimitedCreatorFieldsOnly(before, task, { allowAssigneeMutation = 
 }
 
 /** Dar sorumlu oluşturması yalnızca görev iş alanlarını başlatabilir. */
-function assertAssigneeTaskCreateFieldsOnly(task, parent = null) {
+export function assertAssigneeTaskCreateFieldsOnly(task, parent = null) {
   const structuralValue = Boolean(task.isMilestone || task.milestone) !== Boolean(parent?.IsMilestone)
     || (!task.recurrenceParentId && task.sortOrder != null)
     || (!task.recurrenceParentId && task.calendarId != null)
@@ -1957,7 +1949,7 @@ function meteredRecurrenceWork(recurrence, work) {
     if (!(error instanceof CalendarScanBudgetExceededError)) throw error;
     throw new ServerPersistenceError(
       'MUTATION_FAILED',
-      'Değişiklik kümesindeki yinelemelerin plan hesabı işlem sınırını aşıyor; yinelemeleri daha küçük gruplar hâlinde oluşturun.'
+      'Değişiklik kümesindeki görevlerin plan hesabı işlem sınırını aşıyor; görevleri daha küçük gruplar hâlinde kaydedin.'
     );
   }
 }
@@ -1968,7 +1960,7 @@ async function commitTask(executor, actor, task, correlationId, {
 } = {}) {
   const taskId = uuid(task.id);
   const projectId = uuid(task.projectId);
-  const before = await taskRow(executor, taskId);
+  const before = hasVersion(task.version) ? await taskRow(executor, taskId) : null;
   const beforeProjectId = before ? id(before.ProjectId) : null;
   const authoritativeAssigneeSicils = before ? await taskAssigneeSicils(executor, taskId) : [];
   const actorIsAssignee = authoritativeAssigneeSicils.includes(Number(actor.sicil));
@@ -2055,6 +2047,10 @@ async function commitTask(executor, actor, task, correlationId, {
   // Sorumlular sonra doğrulanır: görev atama kapsamı, yamanın SONUÇ
   // sorumlularına bakarak karar verir.
   const assigneesUnchanged = Boolean(before) && sameSicilSet(authoritativeAssigneeSicils, (task.assigneeIds || []).map(Number));
+  const submittedAssigneeScopeChecked = (!narrowTaskWrite || creatorAssigneeWrite) && !assigneesUnchanged;
+  if (submittedAssigneeScopeChecked) {
+    await assertAssigneeScope(executor, actor, projectId, task.assigneeIds || [], destinationProjectScope);
+  }
   const assigneeSicils = (narrowTaskWrite && !creatorAssigneeWrite) || assigneesUnchanged
     ? authoritativeAssigneeSicils
     : await ensurePeople(executor, task.assigneeIds || []);
@@ -2063,7 +2059,7 @@ async function commitTask(executor, actor, task, correlationId, {
     await assertAssigneeScope(executor, actor, beforeProjectId, authoritativeAssigneeSicils, sourceProjectScope);
   }
   if (!narrowTaskWrite || creatorAssigneeWrite) {
-    if (!before || beforeProjectId !== projectId || !fullProjectWrite || !sameSicilSet(authoritativeAssigneeSicils, assigneeSicils)) {
+    if (!submittedAssigneeScopeChecked && (!before || beforeProjectId !== projectId || !fullProjectWrite || !sameSicilSet(authoritativeAssigneeSicils, assigneeSicils))) {
       await assertAssigneeScope(executor, actor, projectId, assigneeSicils, destinationProjectScope);
     }
     if (!before && destinationProjectScope === TASK_PROJECT_SCOPES.ASSIGNEE_CREATE && !task.recurrenceParentId) {
@@ -2182,10 +2178,12 @@ async function commitTask(executor, actor, task, correlationId, {
     if (sameActualId(recurrenceParentId, taskId)) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Bir görev kendi tekrar şablonu olamaz.');
     }
-    const parent = await taskRow(executor, recurrenceParentId);
-    if (!parent) {
+    if ((!before || !sameNullableId(before.RecurrenceParentTaskId, recurrenceParentId))
+      && !(await loadOutlookTask(executor, recurrenceParentId, actor.sicil)).visible) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Tekrar şablonu bulunamadı.');
     }
+    const parent = await taskRow(executor, recurrenceParentId);
+    if (!parent) throw new ServerPersistenceError('MUTATION_FAILED', 'Tekrar şablonu bulunamadı.');
     if (!sameActualId(parent.ProjectId, projectId)) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Yineleme, tekrar şablonuyla aynı projede olmalıdır.');
     }
@@ -2327,22 +2325,22 @@ async function commitTask(executor, actor, task, correlationId, {
   // süre taşırdı.
   if (assigneeWorkOnly
     && (hasSubmittedField(task, 'plannedStart') || hasSubmittedField(task, 'plannedFinish'))) {
-    plannedDurationDays = calculatePlannedDurationDays({
+    plannedDurationDays = meteredRecurrenceWork(recurrence, () => calculatePlannedDurationDays({
       projectId,
       calendarId: persistedCalendarId,
       plannedStart,
       plannedFinish,
       milestone: isMilestone
-    }, planContext);
+    }, planContext));
   }
   if (limitedCreatorWrite || assigneeCreate) {
-    plannedDurationDays = recurrenceExpectedDuration !== undefined ? recurrenceExpectedDuration : calculatePlannedDurationDays({
+    plannedDurationDays = recurrenceExpectedDuration !== undefined ? recurrenceExpectedDuration : meteredRecurrenceWork(recurrence, () => calculatePlannedDurationDays({
       projectId,
       calendarId: persistedCalendarId,
       plannedStart,
       plannedFinish,
       milestone: isMilestone
-    }, planContext);
+    }, planContext));
   }
   const req = request(executor);
   req.input('taskId', sql.UniqueIdentifier, taskId);
@@ -2407,6 +2405,7 @@ async function commitTask(executor, actor, task, correlationId, {
   req.input('actorSicil', sql.Int, actor.sicil);
 
   if (!before) {
+    await assertUpsertIntentMatchesPersistence(executor, { taskUpserts: [task] }, actor);
     await req.query(`
       INSERT dbo.MR_Tasks(
         TaskId, ProjectId, WbsId, CalendarId, Title, Description, Keyword, Status, Priority,

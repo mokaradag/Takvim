@@ -94,6 +94,7 @@ async function readBodyWithinLimit(request) {
 async function handleCommit(request) {
   try {
     let notifyAssignees = false;
+    let allocationOperation = null;
     const changes = await observePhase('phase.commit.request-validation', async () => {
       assertBrowserMutationIntent(request, { json: true });
       assertBodyWithinLimit(request);
@@ -110,6 +111,18 @@ async function handleCommit(request) {
       // İsteğe bağlı e-posta bildirimi: yalnızca AÇIK `true` kabul edilir ve
       // kalıcı bir tercihe dönüşmez (bkz. server/notifications/taskMailOutbox.js).
       notifyAssignees = body.notifyAssignees === true;
+      if (body.operation != null && !['allocate-creation-ids', 'release-creation-ids'].includes(body.operation)) {
+        throw new ServerPersistenceError('MUTATION_FAILED', 'Geçersiz kayıt işlemi.', { status: 400 });
+      }
+      allocationOperation = body.operation;
+      if (allocationOperation) {
+        // Older servers ignore operation fields. Keep their changes envelope
+        // empty so a rolling deployment cannot mistake reservation for commit.
+        if (Object.keys(body.changes).length || !body.allocationChanges || typeof body.allocationChanges !== 'object') {
+          throw new ServerPersistenceError('MUTATION_FAILED', 'Geçersiz oluşturma kimliği isteği.', { status: 400 });
+        }
+        body.changes = body.allocationChanges;
+      }
       const changes = canonicalizeCommitScalars(canonicalizeCommitChanges(body.changes));
       const issue = findCommitChangeIssue(changes)
         || findNestedCommitCollectionIssue(changes)
@@ -123,7 +136,9 @@ async function handleCommit(request) {
       }
       return changes;
     });
-    const result = await createOrderedSqlAppRepository().commitChanges({ ...changes, notifyAssignees });
+    const repository = createOrderedSqlAppRepository();
+    const result = allocationOperation === 'release-creation-ids' ? await repository.releaseCreationIds(changes)
+      : allocationOperation ? await repository.allocateCreationIds(changes) : await repository.commitChanges({ ...changes, notifyAssignees });
     return observePhase('phase.commit.response', async () => Response.json(result, {
       headers: { 'cache-control': 'no-store' }
     }));

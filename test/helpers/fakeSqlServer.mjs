@@ -269,6 +269,8 @@ export function createFakeDatabase(seed = {}) {
     corporateWbsRows: seed.corporateWbsRows || [],
     // Uçtan uca başarım savlarının kanıtı: her deyim ve her işlem yalıtım
     // düzeyi kaydedilir; testler kaç kez birleştirme yapıldığını sayabilir.
+    creationAllocations: seed.creationAllocations || [],
+    creationAllocationSchema: seed.creationAllocationSchema ?? true,
     statements: [],
     transactions: [],
     corporateWbsSyncState: (seed.corporateWbsSyncState || []).map((entry) => ({
@@ -974,9 +976,10 @@ function runOutlookQuery(db, sqlText, params) {
     return result([entry ? [outlookOutputRow(entry)] : []]);
   }
 
-  if (sqlText.includes('WHERE UserSicil = @sicil AND IsActive = 1')) {
+  if ((sqlText.includes('WHERE UserSicil = @sicil AND IsActive = 1') || sqlText.includes('WHERE s.UserSicil = @sicil AND s.IsActive = 1'))) {
     return result([rows
-      .filter((entry) => Number(entry.UserSicil) === Number(params.sicil) && entry.IsActive === 1)
+      .filter((entry) => Number(entry.UserSicil) === Number(params.sicil) && entry.IsActive === 1
+        && (!sqlText.includes('WHERE s.UserSicil = @sicil AND s.IsActive = 1') || taskVisibleToSicil(db, taskById(db, entry.TaskId), params.sicil)))
       .map((entry) => ({
         TaskId: entry.TaskId,
         PendingMethod: entry.PendingMethod,
@@ -1250,6 +1253,33 @@ function runQuery(db, statement, params, { database }) {
   const sqlText = String(statement);
   const sicil = params.sicil;
 
+  if (sqlText.includes('-- creation-allocation:')) {
+    if (!db.creationAllocationSchema) throw Object.assign(new Error('Invalid object name MR_CreationAllocations'), { number: 208 });
+    const allocations = JSON.parse(params.allocations);
+    if (sqlText.includes('-- creation-allocation: reserve')) {
+      db.creationAllocations = db.creationAllocations.filter((row) => row.Sicil !== sicil || new Date(row.ExpiresAt).getTime() > Date.now() - params.receiptDays * 86400000);
+      if (db.creationAllocations.filter((row) => row.Sicil === sicil && new Date(row.ExpiresAt) > new Date()).length + allocations.length > params.pendingLimit
+        || db.creationAllocations.filter((row) => row.Sicil === sicil).length + allocations.length > params.pendingLimit * 4) return result([[{ Reserved: 0 }]]);
+      for (const allocation of allocations) {
+        if (db.projects.some((row) => sameGuid(row.ProjectId, allocation.id))
+          || db.wbs.some((row) => sameGuid(row.WbsId, allocation.id))
+          || db.tasks.some((row) => sameGuid(row.TaskId, allocation.id))
+          || db.creationAllocations.some((row) => sameGuid(row.EntityId, allocation.id))) throw new Error('Creation allocation collision');
+        db.creationAllocations.push({ Proof: guid(allocation.proof), EntityId: guid(allocation.id),
+          EntityType: allocation.entityType, ProjectId: guid(allocation.projectId), Sicil: sicil,
+          ExpiresAt: new Date(Date.now() + 24 * 3600000).toISOString() });
+      }
+      return result([[{ Reserved: 1 }]]);
+    }
+    const consumed = db.creationAllocations.filter((row) => row.Sicil === sicil && (sqlText.includes('-- creation-allocation: release') || new Date(row.ExpiresAt) > new Date())
+      && allocations.some((entry) => sameGuid(row.Proof, entry.proof) && sameGuid(row.EntityId, entry.id)
+        && row.EntityType === entry.entityType && sameGuid(row.ProjectId, entry.projectId)));
+    if (sqlText.includes('-- creation-allocation: release')) {
+      for (const row of consumed) if (new Date(row.ExpiresAt) > new Date()) row.ExpiresAt = new Date(Date.now() - 1000).toISOString();
+    } else db.creationAllocations = db.creationAllocations.filter((row) => !consumed.includes(row));
+    return result([consumed.map((row) => ({ Proof: row.Proof }))]);
+  }
+
   // Rota AI alan araçlarının sabit SQL metinleri ayrı bir modülde karşılanır.
   const aiTool = runAiToolQuery(db, sqlText, params);
   if (aiTool) return result(aiTool);
@@ -1275,7 +1305,33 @@ function runQuery(db, statement, params, { database }) {
 
   // ── Kurumsal WBS kaynağı (ikinci veritabanı) ───────────────
   if (sqlText.includes('INTO #TaskActivityScope')) return result(taskActivityRecordsets(db, params));
-  if (params.activityAssignees != null) return result([db.people.filter((person) => params.activityAssignees.split(',').includes(String(person.Sicil)))]);
+  const identityPermitted = (task, project, person) => Boolean(project?.IsActive && (
+    db.systemAdminSicils.includes(Number(params.sicil))
+    || (project.SourceType === 'MANUAL' && Number(project.LeadSicil) === Number(params.sicil))
+    || (project.SourceType === 'CORPORATE' && db.corporateProjectAccess.some((entry) => Number(entry.Sicil) === Number(params.sicil) && String(entry.ProjectCode).toUpperCase() === String(project.ProjectCode || '').toUpperCase()))
+    || db.projectAccess.some((entry) => sameGuid(entry.ProjectId, project.ProjectId) && Number(entry.Sicil) === Number(params.sicil) && entry.IsActive && ['FULL', 'READ'].includes(entry.AccessLevel))
+    || Number(task?.CreatedBySicil) === Number(params.sicil)
+    || Number(person) === Number(params.sicil)
+    || db.executiveScope.some((entry) => Number(entry.ManagerSicil) === Number(params.sicil) && Number(entry.EmployeeSicil) === Number(person))
+  ));
+  if (params.activityIdentityCandidates != null) {
+    const authorized = JSON.parse(params.activityIdentityCandidates).flatMap((row) => {
+      const live = taskById(db, row.taskId), project = projectById(db, row.projectId);
+      const task = live && sameGuid(live.ProjectId, row.projectId) ? live : null;
+      const deletion = !live && db.auditLog.filter((entry) => entry.EntityType === 'TASK' && entry.ActionCode === 'DELETE'
+        && sameGuid(entry.EntityId, row.taskId) && sameGuid(entry.ProjectId, row.projectId))
+        .sort((a, b) => new Date(b.OccurredAt) - new Date(a.OccurredAt) || b.AuditId - a.AuditId)[0];
+      const creator = deletion && Number(JSON.parse(deletion.BeforeJson)?.CreatedBySicil) === Number(params.sicil);
+      const deletedOwn = deletion && (JSON.parse(deletion.BeforeJson)?.assigneeIds || []).map(Number).includes(Number(params.sicil));
+      const admin = db.systemAdminSicils.includes(Number(params.sicil));
+      const stable = admin || identityPermitted(task, project, row.sicil);
+      const own = task && db.taskAssignees.some((entry) => sameGuid(entry.TaskId, task.TaskId) && Number(entry.Sicil) === Number(params.sicil));
+      if (!admin && !(project?.IsActive && (stable || creator || own || deletedOwn))) return [];
+      return [{ TaskId: row.taskId, ProjectId: row.projectId, Sicil: Number(row.sicil), StableIdentityVisible: stable ? 1 : 0,
+        DisplayName: db.people.find((person) => Number(person.Sicil) === Number(row.sicil))?.DisplayName }];
+    });
+    return result([authorized]);
+  }
   if (/FROM \[\w+\]\.\[\w+\]/.test(sqlText) && sqlText.includes('WBS element')) {
     return result([corporateWbsSourceRows(db, params)]);
   }
@@ -1802,17 +1858,16 @@ function runQuery(db, statement, params, { database }) {
       // yeniden denenebilir olmalıdır.
       const staleMinutes = Math.max(1, Number(params.staleMinutes) || 30);
       const staleBefore = Date.now() - (staleMinutes * 60000);
-      const abandoned = existing.Status === 'PENDING'
-        && new Date(existing.CreatedAt).getTime() < staleBefore;
+      const abandoned = existing.Status === 'PENDING' && ((existing.CompletedAt == null
+        && new Date(existing.CreatedAt).getTime() < staleBefore)
+        || (existing.CompletedAt != null && existing.FailureCode === 'RECIPIENTS_PENDING'));
       if (!abandoned) return result([[{ TaskReminderLogId: null }]]);
       existing.Status = 'PENDING';
       existing.RequestedBySicil = params.actorSicil ?? null;
-      existing.RecipientCount = 0;
-      existing.RecipientDigest = null;
       existing.FailureCode = 'ABANDONED';
       existing.CreatedAt = new Date().toISOString();
       existing.CompletedAt = null;
-      return result([[{ TaskReminderLogId: existing.TaskReminderLogId }]]);
+      return result([[{ TaskReminderLogId: existing.TaskReminderLogId, Reclaimed: true }]]);
     }
     const logId = db.taskReminderLog.length + 1;
     db.taskReminderLog.push({
@@ -1869,14 +1924,35 @@ function runQuery(db, statement, params, { database }) {
     });
     return result([[{ TaskReminderLogId: logId }]]);
   }
+  if (sqlText.includes('SET CompletedAt = NULL, CreatedAt = SYSUTCDATETIME()')) {
+    const entry = db.taskReminderLog.filter((row) => sameGuid(row.TaskId, params.taskId)
+      && row.ReminderKind === 'MANUAL' && Number(row.RequestedBySicil) === Number(params.actorSicil))
+      .sort((a, b) => b.TaskReminderLogId - a.TaskReminderLogId)[0];
+    if (!entry || entry.Status !== 'PENDING' || entry.FailureCode !== 'RECIPIENTS_PENDING' || entry.CompletedAt == null
+      || new Date(entry.CompletedAt).getTime() < Date.now() - params.resumeWindowMinutes * 60000) return result([[]]);
+    entry.CompletedAt = null; entry.CreatedAt = new Date().toISOString(); entry.FailureCode = 'DELIVERY_IN_PROGRESS';
+    return result([[{ TaskReminderLogId: entry.TaskReminderLogId }]]);
+  }
+  if (sqlText.includes("SET CompletedAt = SYSUTCDATETIME(), FailureCode = 'RECIPIENTS_PENDING'")) {
+    const entry = db.taskReminderLog.find((row) => row.TaskReminderLogId === Number(params.logId));
+    if (entry?.Status === 'PENDING' && entry.CompletedAt == null) {
+      entry.CompletedAt = new Date().toISOString(); entry.FailureCode = 'RECIPIENTS_PENDING';
+    }
+    return result([[]]);
+  }
+  if (sqlText.includes('SELECT RecipientDigest FROM dbo.MR_TaskReminderLog')) {
+    return result([db.taskReminderLog.filter((row) => row.TaskReminderLogId === Number(params.logId)).map((row) => ({ RecipientDigest: row.RecipientDigest }))]);
+  }
   if (sqlText.includes('UPDATE dbo.MR_TaskReminderLog')) {
     const entry = db.taskReminderLog.find((row) => row.TaskReminderLogId === Number(params.logId));
     if (entry) {
       entry.Status = params.status;
-      entry.RecipientCount = params.recipientCount ?? 0;
-      entry.RecipientDigest = params.recipientDigest ?? null;
+      if (!params.preserveRecipients) {
+        entry.RecipientCount = params.recipientCount ?? 0;
+        entry.RecipientDigest = params.recipientDigest ?? null;
+      }
       entry.FailureCode = params.failureCode ?? null;
-      entry.CompletedAt = new Date().toISOString();
+      entry.CompletedAt = params.active ? null : new Date().toISOString();
     }
     return result([[]]);
   }
@@ -1990,13 +2066,13 @@ function runQuery(db, statement, params, { database }) {
     return result([reserved ? [{ ProjectCode: code }] : []]);
   }
   if (sqlText.includes('SELECT TOP (1) SourceType')) {
-    const project = projectById(db, params.projectId);
+    const project = params.isCreate ? null : projectById(db, params.projectId);
     const code = String(params.projectCode || '').toUpperCase();
     return result([
       project ? [{ SourceType: project.SourceType }] : [],
       db.corporateProjects.some((entry) => String(entry.ProjectCode).toUpperCase() === code) ? [{ ProjectCode: code }] : [],
       db.projects
-        .filter((entry) => !sameGuid(entry.ProjectId, params.projectId)
+        .filter((entry) => (params.isCreate || !sameGuid(entry.ProjectId, params.projectId))
           && String(entry.ProjectCode || '').toUpperCase() === code)
         .map((entry) => ({ ProjectId: entry.ProjectId }))
     ]);
@@ -2414,6 +2490,7 @@ function tableRows(db, table) {
  */
 export function createFakeSqlServerDriver(db) {
   db.adminActionLocks ||= new Map();
+  const allocationLocks = new Map();
   class FakeRequest {
     constructor(pool) {
       this.pool = pool;
@@ -2428,7 +2505,25 @@ export function createFakeSqlServerDriver(db) {
 
     async query(statement) {
       const database = this.pool.config?.database || 'MERGEN_Rota';
-      db.statements.push({ sql: String(statement), database });
+      db.statements.push({ sql: String(statement), database, params: { ...this.params } });
+      if (String(statement).includes('-- creation-allocation:') && this.pool.began) {
+        // Model the allocation owner/proof update locks until commit/rollback.
+        // Waiting transactions take their rollback snapshot after the winner.
+        const key = this.params.sicil;
+        if (this.pool.allocationKey !== key) {
+          const previous = allocationLocks.get(key);
+          let release;
+          const held = new Promise((resolve) => { release = resolve; });
+          allocationLocks.set(key, held);
+          this.pool.allocationKey = key;
+          this.pool.allocationReady = Promise.resolve(previous).then(() => {
+            this.pool.allocationRelease = () => { release(); if (allocationLocks.get(key) === held) allocationLocks.delete(key); };
+            this.pool.savedTables = deserialize(serialize(Object.fromEntries(Object.entries(db)
+              .filter(([name, value]) => Array.isArray(value) && !['statements', 'transactions'].includes(name)))));
+          });
+        }
+        await this.pool.allocationReady;
+      }
       // Test kancası: eşleşen sorgu, test bariyeri açana kadar bekler (ör. yavaş
       // bir rehber sorgusunun ortak havuzu ne kadar meşgul ettiğini ölçmek için).
       if (db.queryBarrier?.match(String(statement))) {
@@ -2484,6 +2579,10 @@ export function createFakeSqlServerDriver(db) {
       db.transactions.push(this.transactionRecord);
     }
     releaseLocks() {
+      this.allocationRelease?.();
+      this.allocationRelease = null;
+      this.allocationKey = undefined;
+      this.allocationReady = null;
       for (const [key, owner] of db.adminActionLocks) {
         if (owner === this) db.adminActionLocks.delete(key);
       }

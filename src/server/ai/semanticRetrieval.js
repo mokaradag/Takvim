@@ -227,7 +227,13 @@ export function createSemanticRetrieval({
     return true;
   }
 
-  async function discover(query, signal, trace) {
+  async function discover(query, signal, trace, beforeDispatch) {
+    // Presence failures must not become optional embedding/rerank failures.
+    let dispatchFailure = null;
+    const guard = beforeDispatch && (async (dispatchSignal) => {
+      try { await beforeDispatch(dispatchSignal); }
+      catch (error) { dispatchFailure = error; throw error; }
+    });
     const normalized = normalizeSemanticQuery(query);
     if (!normalized.ok) return localOutcome(STAGE.QUERY, 'query', normalized.reason, { code: AI_ERROR_CODES.AI_REQUEST_INVALID, log: false });
     const built = createSemanticCatalogue(semanticToolDefinitions(loadTools()));
@@ -248,7 +254,7 @@ export function createSemanticRetrieval({
     let ranked;
     try {
       const embedded = await getGateway().embedTexts({
-        profile: AI_PROFILES.EMBEDDING, texts: [normalized.value], purpose: AI_EMBEDDING_PURPOSES.QUERY, signal
+        profile: AI_PROFILES.EMBEDDING, texts: [normalized.value], purpose: AI_EMBEDDING_PURPOSES.QUERY, signal, beforeDispatch: guard
       });
       const space = spaceOf(embedded.route);
       if (!space) return localOutcome(STAGE.EMBEDDING, 'configuration', 'SPACE_INVALID', { code: AI_ERROR_CODES.AI_CONFIGURATION_ERROR });
@@ -274,6 +280,7 @@ export function createSemanticRetrieval({
       ranked = { candidates: result.candidates, textOf: new Map(index.catalogue.items.map((item) => [item.id, item.text])) };
     } catch (error) {
       if (signal?.aborted) throw cancelled(error);
+      if (error === dispatchFailure) throw error;
       if (error instanceof SemanticStageFailure) return error.outcome;
       const outcome = gatewayOutcome(trace.stage, error);
       if (!outcome) throw error;
@@ -289,9 +296,11 @@ export function createSemanticRetrieval({
         profile: AI_PROFILES.RERANK,
         query: normalized.value,
         documents: ranked.candidates.map((candidate) => ranked.textOf.get(candidate.id)),
-        signal
+        signal,
+        beforeDispatch: guard
       });
     } catch (error) {
+      if (error === dispatchFailure) throw error;
       // Çağıranın iptali burada ilk aşamaya çevrilmez: `retrieve` sonucu döndürmeden önce iptali denetler.
       const outcome = gatewayOutcome(STAGE.RERANK, error);
       if (!outcome) throw error;
@@ -312,13 +321,13 @@ export function createSemanticRetrieval({
    * kullanılır; istemciye gönderilmez. Çağıran iptal ederse `AI_CANCELLED`
    * fırlar ve geç gelen model sonucu uygulanmaz.
    */
-  async function retrieve({ query, signal = null } = {}) {
+  async function retrieve({ query, signal = null, beforeDispatch = null } = {}) {
     const startedAt = now();
     const trace = { stage: STAGE.EMBEDDING, index: null };
     let outcome;
     try {
       if (signal?.aborted) throw new AiError(AI_ERROR_CODES.AI_CANCELLED);
-      outcome = await discover(query, signal, trace);
+      outcome = await discover(query, signal, trace, beforeDispatch);
       if (signal?.aborted) throw new AiError(AI_ERROR_CODES.AI_CANCELLED);
     } catch (error) {
       if (signal?.aborted) recordSemanticRetrieval(signal.reason?.code === AI_ERROR_CODES.AI_TIMEOUT

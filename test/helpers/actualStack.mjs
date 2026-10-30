@@ -16,8 +16,9 @@ import { createStateMutationOrchestrator, loadApplicationData } from '../../src/
 import { createApiRepository } from '../../src/data/api/createApiRepository.js';
 import { createFakeDatabase, createFakeSqlServerDriver } from './fakeSqlServer.mjs';
 import { registerServerOnlyShim } from './serverOnlyShim.mjs';
+import { extractActualId } from '../../src/domain/identity/actualId.js';
 
-function memoryStorage() {
+export function memoryStorage() {
   const values = new Map();
   return {
     getItem(key) { return values.has(key) ? values.get(key) : null; },
@@ -110,16 +111,22 @@ export async function createActualStack(seed = {}, options = {}) {
   const scheduleDecisionRoute = await import('../../src/app/api/mergen-rota/schedule-changes/[requestId]/route.js');
 
   const requests = [];
+  const allocatedIds = new Map();
   const fetchImplementation = async (url, init = {}) => {
     const path = String(url);
-    requests.push({ path, method: init.method || 'GET' });
+    const operation = path.endsWith('/commit') ? JSON.parse(init.body || '{}').operation : undefined;
+    requests.push({ path, method: init.method || 'GET', ...(operation ? { operation } : {}) });
     if (path.includes('/reports/task-activities')) return activityRoute.GET(new Request('http://localhost' + path));
     if (path.endsWith('/commit')) {
-      return commitRoute.POST(new Request('http://localhost' + path, {
+      const response = await commitRoute.POST(new Request('http://localhost' + path, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: init.body
       }));
+      if (operation === 'allocate-creation-ids' && response.ok) {
+        for (const allocation of (await response.clone().json()).allocations) allocatedIds.set(allocation.clientId, allocation.id);
+      }
+      return response;
     }
     if (path.endsWith('/snapshot')) {
       return snapshotRoute.GET(new Request('http://localhost' + path, {
@@ -182,6 +189,7 @@ export async function createActualStack(seed = {}, options = {}) {
     repository,
     persistence,
     requests,
+    actualId(value) { return allocatedIds.get(extractActualId(value)) || extractActualId(value); },
     reload,
     applyStateAction,
     get state() { return state; },

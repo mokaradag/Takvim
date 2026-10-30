@@ -1,3 +1,4 @@
+import { meterCalendarScans } from '../scheduling/calendars/index.js';
 import { taskPersonnelScope } from './taskPersonnelScope.js';
 import { normalizeTaskLifecycle, requiresActualDateReset, ACTUAL_DATE_RESET_MESSAGE } from '../domain/taskLifecycle.js';
 import { businessDate } from '../domain/calendar/businessDate.js';
@@ -333,9 +334,14 @@ function createStateFromSnapshot(snapshot = {}, previous = createLoadingState())
   // `wbs` ve `people` dizileri her görev için yeniden ayrılınca maliyet
   // görev × (proje + wbs) kadar büyüyordu.
   const context = taskContext(base);
+  const previousTasks = new Map((previous.tasks || []).map((task) => [task.id, task]));
   const tasks = reconcileSnapshotCollection(
     previous.tasks,
-    (snapshot.tasks || []).map((task) => normalizeTaskRecord(task, context))
+    meterCalendarScans({ remainingDays: 5_000_000 }, () => (Array.isArray(snapshot.tasks) ? snapshot.tasks : []).map((task) => {
+      const previousTask = previousTasks.get(task.id);
+      return normalizeTaskRecord(task, { ...context, countByWeeks: true, previousTask,
+        previousCalendar: previousTask ? resolveTaskCalendar(previousTask, previous.projects, previous.calendars) : null });
+    }))
   );
   const nextBase = { ...previous, ...base, tasks };
   const selection = workspaceState(nextBase, previous);

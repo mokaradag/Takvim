@@ -12,6 +12,7 @@ import {
   orderTaskUpsertsByDependencies
 } from './taskCommitPlanning.js';
 import { createSqlAppRepository as createBaseSqlAppRepository } from './sqlAppRepository.js';
+import { hasVersion } from './upsertIntentPolicy.js';
 
 const DEPENDENCY_PLANNING_VERIFIED = Symbol.for('mergen-rota.dependency-planning-verified');
 
@@ -90,6 +91,7 @@ async function assertActiveProjectMutationTargets(executor, changes) {
 
   for (const project of changes.projectUpserts) {
     const projectId = uuid(project.id, 'Proje kimliği');
+    if (!hasVersion(project.version)) { newProjectIds.add(projectId); continue; }
     const row = await loadProject(projectId);
     if (!row) {
       newProjectIds.add(projectId);
@@ -111,7 +113,7 @@ async function assertActiveProjectMutationTargets(executor, changes) {
 
   for (const node of changes.wbsUpserts) {
     await requireActiveProject(node.projectId);
-    const before = await rowForUpdate(executor, 'MR_WBS', 'WbsId', node.id, 'WBS kimliği');
+    const before = hasVersion(node.version) ? await rowForUpdate(executor, 'MR_WBS', 'WbsId', node.id, 'WBS kimliği') : null;
     if (before) await requireActiveProject(rowId(before.ProjectId));
   }
   for (const entry of changes.wbsDeletes) {
@@ -121,7 +123,7 @@ async function assertActiveProjectMutationTargets(executor, changes) {
 
   for (const task of changes.taskUpserts) {
     await requireActiveProject(task.projectId);
-    const before = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', task.id, 'Görev kimliği');
+    const before = hasVersion(task.version) ? await rowForUpdate(executor, 'MR_Tasks', 'TaskId', task.id, 'Görev kimliği') : null;
     if (before) await requireActiveProject(rowId(before.ProjectId));
   }
   for (const entry of changes.taskDeletes) {
@@ -186,12 +188,13 @@ async function assertSingleRootWbs(executor, changes) {
   const newProjectIds = new Set();
   for (const project of changes.projectUpserts) {
     const projectId = uuid(project.id, 'Proje kimliği');
+    if (!hasVersion(project.version)) { newProjectIds.add(projectId); continue; }
     const existing = await rowForUpdate(executor, 'MR_Projects', 'ProjectId', projectId, 'Proje kimliği');
     if (!existing) newProjectIds.add(projectId);
   }
 
   for (const projectId of [...affectedProjectIds].sort()) {
-    const rows = await loadWbsRowsForUpdate(executor, projectId);
+    const rows = newProjectIds.has(projectId) ? [] : await loadWbsRowsForUpdate(executor, projectId);
     const existingRoots = rows.filter((row) => row.ParentWbsId == null).map((row) => rowId(row.WbsId));
     if (existingRoots.length > 1) {
       throw new ServerPersistenceError('MUTATION_FAILED', 'Projede birden fazla kök WBS düğümü bulundu.');
@@ -330,8 +333,10 @@ async function planTaskCommits(executor, changes) {
       .map((task) => task.recurrenceParentId)
   ]);
   const existingTaskProjects = new Map();
+  const creatingTaskIds = new Set(normalizedUpserts.filter((task) => !hasVersion(task.version)).map((task) => task.id));
 
   for (const taskId of [...referencedTaskIds].sort()) {
+    if (creatingTaskIds.has(taskId)) continue;
     const row = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', taskId, 'Görev kimliği');
     if (row) existingTaskProjects.set(taskId, rowId(row.ProjectId));
   }
@@ -355,6 +360,7 @@ async function planTaskCommits(executor, changes) {
 
   for (const predecessorId of [...new Set(validatedUpserts
     .flatMap((task) => task.deps.map((dependency) => dependency.predecessorId)))].sort()) {
+    if (creatingTaskIds.has(predecessorId)) continue;
     if (existingTaskProjects.has(predecessorId)) continue;
     const row = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', predecessorId, 'Görev kimliği');
     if (row) existingTaskProjects.set(predecessorId, rowId(row.ProjectId));
@@ -395,8 +401,10 @@ async function assertAcyclicTaskDependencies(executor, changes) {
     ...dependencyUpserts.map((task) => uuid(task.id, 'Görev kimliği')),
     ...changes.taskDeletes.map((entry) => uuid(entry.id, 'Görev kimliği'))
   ]);
+  const creatingTaskIds = new Set(dependencyUpserts.filter((task) => !hasVersion(task.version)).map((task) => uuid(task.id, 'Görev kimliği')));
 
   for (const taskId of [...changedIds].sort()) {
+    if (creatingTaskIds.has(taskId)) continue;
     const row = await rowForUpdate(executor, 'MR_Tasks', 'TaskId', taskId, 'Görev kimliği');
     if (row) {
       changedTaskRows.set(taskId, row);
@@ -406,8 +414,9 @@ async function assertAcyclicTaskDependencies(executor, changes) {
   for (const task of dependencyUpserts) affectedProjectIds.add(uuid(task.projectId, 'Proje kimliği'));
 
   const projectEdges = new Map();
+  const newProjectIds = new Set(changes.projectUpserts.filter((project) => !hasVersion(project.version)).map((project) => uuid(project.id, 'Proje kimliği')));
   for (const projectId of [...affectedProjectIds].sort()) {
-    projectEdges.set(projectId, await loadProjectDependencyEdgesForUpdate(executor, projectId));
+    projectEdges.set(projectId, newProjectIds.has(projectId) ? [] : await loadProjectDependencyEdgesForUpdate(executor, projectId));
   }
 
   for (const task of dependencyUpserts) {

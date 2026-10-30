@@ -165,8 +165,8 @@ test('Actual repository restores persistent aliases in session and baseline refe
   try {
     const repository = createApiRepository({ basePath: '/test-api' });
     const committed = await repository.commitChanges({
-      projectUpserts: [{ id: projectId, calendarId: null }],
-      taskUpserts: [{ id: taskId, projectId, wbsId: null, calendarId: null, status: 'todo', deps: [] }]
+      projectUpserts: [{ id: projectId, calendarId: null, version: 'pv' }],
+      taskUpserts: [{ id: taskId, projectId, version: 'tv', wbsId: null, calendarId: null, status: 'todo', deps: [] }]
     });
     assert.equal(committed.projectUpserts[0].id, projectId);
     assert.equal(committed.taskUpserts[0].id, taskId);

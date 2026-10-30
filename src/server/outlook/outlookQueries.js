@@ -27,16 +27,7 @@ const SUBSCRIPTION_COLUMNS = `
  * çözülür: teslimat anında yetki yeniden değerlendirilir ve görünürlüğünü
  * yitirmiş bir kullanıcıya görev ayrıntısı gönderilmez.
  */
-export const OUTLOOK_TASK_SQL = `
-  DECLARE @isAdmin bit = CASE WHEN EXISTS (
-    SELECT 1 FROM dbo.MR_UserRoles
-    WHERE Sicil = @sicil AND RoleCode = 'SYSTEM_ADMIN' AND IsActive = 1
-  ) THEN 1 ELSE 0 END;
-
-  SELECT TOP (1)
-    t.TaskId, t.ProjectId, t.Title, t.Status, t.TargetFinish, t.PlannedFinish,
-    p.ProjectCode, p.ProjectName,
-    CASE WHEN (
+const OUTLOOK_TASK_VISIBILITY_SQL = `
       @isAdmin = 1
       OR EXISTS (
         SELECT 1
@@ -61,7 +52,18 @@ export const OUTLOOK_TASK_SQL = `
             )
           )
       )
-    ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Visible
+`;
+
+export const OUTLOOK_TASK_SQL = `
+  DECLARE @isAdmin bit = CASE WHEN EXISTS (
+    SELECT 1 FROM dbo.MR_UserRoles
+    WHERE Sicil = @sicil AND RoleCode = 'SYSTEM_ADMIN' AND IsActive = 1
+  ) THEN 1 ELSE 0 END;
+
+  SELECT TOP (1)
+    t.TaskId, t.ProjectId, t.Title, t.Status, t.TargetFinish, t.PlannedFinish,
+    p.ProjectCode, p.ProjectName,
+    CASE WHEN (${OUTLOOK_TASK_VISIBILITY_SQL}    ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS Visible
   FROM dbo.MR_Tasks t
   JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
   WHERE t.TaskId = @taskId;`;
@@ -161,9 +163,15 @@ export const OUTLOOK_SUBSCRIPTION_SQL = `
 
 /** Etkin abonelik tercihi ve son davetin teslimat durumu. */
 export const OUTLOOK_USER_SUBSCRIPTIONS_SQL = `
-  SELECT TaskId, PendingMethod, DeliveredSequence, LastFailureCode, CompletionSuspended, DeliveredMethod
-  FROM dbo.MR_TaskOutlookSubscriptions
-  WHERE UserSicil = @sicil AND IsActive = 1;`;
+  DECLARE @isAdmin bit = CASE WHEN EXISTS (
+    SELECT 1 FROM dbo.MR_UserRoles
+    WHERE Sicil = @sicil AND RoleCode = 'SYSTEM_ADMIN' AND IsActive = 1
+  ) THEN 1 ELSE 0 END;
+  SELECT s.TaskId, s.PendingMethod, s.DeliveredSequence, s.LastFailureCode, s.CompletionSuspended, s.DeliveredMethod
+  FROM dbo.MR_TaskOutlookSubscriptions s
+  JOIN dbo.MR_Tasks t ON t.TaskId = s.TaskId
+  JOIN dbo.MR_Projects p ON p.ProjectId = t.ProjectId AND p.IsActive = 1
+  WHERE s.UserSicil = @sicil AND s.IsActive = 1 AND (${OUTLOOK_TASK_VISIBILITY_SQL});`;
 
 /** Kullanıcının kendi aboneliğini KALDIRMA isteği: iptal kuyruğa alınır. */
 export const OUTLOOK_QUEUE_CANCEL_SQL = `

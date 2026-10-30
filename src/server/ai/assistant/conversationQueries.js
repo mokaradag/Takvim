@@ -261,7 +261,7 @@ const EVIDENCE_READY = `
 export const AI_CONVERSATION_EVIDENCE_SQL = `${KNOWN_SICIL}${EVIDENCE_READY}
   SELECT @knownSicil AS KnownSicil, @evidenceReady AS EvidenceReady;
   IF @knownSicil = 1 AND @evidenceReady = 1
-    SELECT TOP (@maxEvidence) e.MessageId, e.Ordinal, e.ToolName, e.SummaryJson,
+    SELECT TOP (@maxEvidence) m.MessageId, e.Ordinal, e.ToolName, e.SummaryJson,
       JSON_VALUE(e.EvidenceJson, '$.authorizationEpoch') AS AuthorizationEpoch,
       JSON_QUERY(e.EvidenceJson, '$.scopedAuthorization') AS ScopedAuthorization,
       JSON_QUERY(e.EvidenceJson, '$.authorizationPopulation') AS AuthorizationPopulation,
@@ -270,11 +270,11 @@ export const AI_CONVERSATION_EVIDENCE_SQL = `${KNOWN_SICIL}${EVIDENCE_READY}
         AND JSON_QUERY(e.EvidenceJson, '$.authorizationPopulation') IS NULL THEN e.EvidenceJson END AS LegacyEvidenceJson,
       JSON_QUERY(e.EvidenceJson, '$.clarificationContext') AS ClarificationContext,
       JSON_QUERY(e.EvidenceJson, '$.resultScope') AS ResultScope
-    FROM dbo.MR_AiMessageEvidence e
-    JOIN dbo.MR_AiConversationMessages m ON m.MessageId = e.MessageId
-    JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
+    FROM dbo.MR_AiConversationMessages m WITH (HOLDLOCK)
+    JOIN dbo.MR_AiConversations c WITH (HOLDLOCK) ON c.ConversationId = m.ConversationId
+    LEFT JOIN dbo.MR_AiMessageEvidence e ON e.MessageId = m.MessageId
     WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil
-      AND (@messageId IS NULL OR e.MessageId = @messageId)
+      AND (@messageId IS NULL OR m.MessageId = @messageId)
     ORDER BY m.Sequence, e.Ordinal;`;
 
 /**
@@ -355,3 +355,16 @@ export const AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL = `${KNOWN_SICIL}
   WHERE m.ReplyToMessageId = @replyToMessageId AND m.Role = 'assistant'
     AND m.ConversationId = @conversationId AND c.OwnerSicil = @sicil AND @knownSicil = 1
   ORDER BY e.Ordinal;`;
+
+/** Presence is independent of optional evidence schema 0018 and contains no text. */
+export const AI_CONVERSATION_PRESENCE_SQL = `${KNOWN_SICIL}
+  SELECT TOP (@maxMessages) m.MessageId
+  FROM dbo.MR_AiConversationMessages m
+  JOIN dbo.MR_AiConversations c ON c.ConversationId = m.ConversationId
+  WHERE @knownSicil = 1 AND c.OwnerSicil = @sicil AND c.ConversationId = @conversationId
+    AND (@messageId IS NULL OR m.MessageId = @messageId)
+  ORDER BY m.Sequence DESC;
+  SELECT @knownSicil AS KnownSicil, CASE WHEN @knownSicil = 1 AND EXISTS (
+    SELECT 1 FROM dbo.MR_AiConversations c
+    WHERE c.OwnerSicil = @sicil AND c.ConversationId = @conversationId
+  ) THEN 1 ELSE 0 END AS ConversationPresent;`;

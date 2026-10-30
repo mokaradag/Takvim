@@ -50,7 +50,7 @@ function canonicalChangeValue(value, column) {
   if (column.endsWith('Start') || column.endsWith('Finish')) return String(value).slice(0, 10);
   return String(value).slice(0, 500);
 }
-export function taskActivityChanges(events, people = new Map(), { includeStructuredChanges = false } = {}) {
+export function taskActivityChanges(events, people = new Map(), { includeStructuredChanges = false, restrictAssignees = false } = {}) {
   const changes = new Map();
   let created = false, deleted = false, completed = false;
   let title = '', projectName = '', projectCode = '';
@@ -93,10 +93,13 @@ export function taskActivityChanges(events, people = new Map(), { includeStructu
     if (change.column === 'RecurrenceRule') lines.push('Yineleme düzeni değiştirildi');
     else lines.push(`${change.label}: ${display(change.before, change.column)} → ${display(change.after, change.column)}`);
   }
+  let hiddenAssigneeChange = false;
   for (const [id, change] of assignees) {
     if (change.before === change.after) continue;
+    if (restrictAssignees && !people.has(id)) { hiddenAssigneeChange = true; continue; }
     lines.push(`Sorumlu ${change.after ? 'eklendi' : 'çıkarıldı'}: ${people.get(id) || `Çalışan ${id}`}`);
   }
+  if (hiddenAssigneeChange) lines.push('Gizli sorumlu bilgisi değişti.');
   return { title, projectName, projectCode, changes: lines.length ? lines : ['Görev güncellendi'],
     ...(includeStructuredChanges ? { structuredChanges } : {}),
     kind: deleted ? 'deleted' : created ? 'created' : completed ? 'completed' : 'updated' };

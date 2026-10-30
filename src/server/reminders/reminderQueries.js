@@ -184,8 +184,6 @@ export const REMINDER_CLAIM_SQL = `
   UPDATE dbo.MR_TaskReminderLog
   SET Status = 'PENDING',
       RequestedBySicil = @actorSicil,
-      RecipientCount = 0,
-      RecipientDigest = NULL,
       FailureCode = 'ABANDONED',
       CreatedAt = SYSUTCDATETIME(),
       CompletedAt = NULL
@@ -194,7 +192,8 @@ export const REMINDER_CLAIM_SQL = `
     AND SlotKey = @slotKey
     AND ReminderKind = 'AUTOMATIC'
     AND Status = 'PENDING'
-    AND CreatedAt < @staleBefore;
+    AND ((CompletedAt IS NULL AND CreatedAt < @staleBefore)
+      OR (CompletedAt IS NOT NULL AND FailureCode = 'RECIPIENTS_PENDING'));
 
   SELECT TOP (1) @logId = TaskReminderLogId FROM @reclaimed;
 
@@ -210,7 +209,7 @@ export const REMINDER_CLAIM_SQL = `
     SELECT TOP (1) @logId = TaskReminderLogId FROM @created;
   END
 
-  SELECT @logId AS TaskReminderLogId;`;
+  SELECT @logId AS TaskReminderLogId, CAST(CASE WHEN EXISTS (SELECT 1 FROM @reclaimed) THEN 1 ELSE 0 END AS bit) AS Reclaimed;`;
 
 /**
  * Elle gönderim hakkını ATOMİK olarak sahiplenir.
@@ -255,10 +254,10 @@ export const REMINDER_MANUAL_LOG_SQL = `
 export const REMINDER_COMPLETE_SQL = `
   UPDATE dbo.MR_TaskReminderLog
   SET Status = @status,
-      RecipientCount = @recipientCount,
-      RecipientDigest = @recipientDigest,
+      RecipientCount = CASE WHEN @preserveRecipients = 1 THEN RecipientCount ELSE @recipientCount END,
+      RecipientDigest = CASE WHEN @preserveRecipients = 1 THEN RecipientDigest ELSE @recipientDigest END,
       FailureCode = @failureCode,
-      CompletedAt = SYSUTCDATETIME()
+      CompletedAt = CASE WHEN @active = 1 THEN NULL ELSE SYSUTCDATETIME() END
   WHERE TaskReminderLogId = @logId;`;
 
 /**
@@ -286,3 +285,21 @@ export const REMINDER_HISTORY_SQL = `
     RecipientCount, FailureCode, CreatedAt, CompletedAt
   FROM dbo.MR_TaskReminderLog
   ORDER BY TaskReminderLogId DESC;`;
+
+export const REMINDER_PROGRESS_SQL = `
+  SELECT RecipientDigest FROM dbo.MR_TaskReminderLog WHERE TaskReminderLogId = @logId;`;
+
+export const REMINDER_RESUME_MANUAL_SQL = `
+  UPDATE dbo.MR_TaskReminderLog WITH (UPDLOCK, HOLDLOCK)
+  SET CompletedAt = NULL, CreatedAt = SYSUTCDATETIME(), FailureCode = 'DELIVERY_IN_PROGRESS'
+  OUTPUT inserted.TaskReminderLogId
+  WHERE TaskReminderLogId = (SELECT MAX(TaskReminderLogId) FROM dbo.MR_TaskReminderLog
+    WHERE TaskId = @taskId AND ReminderKind = 'MANUAL' AND RequestedBySicil = @actorSicil)
+    AND Status = 'PENDING' AND FailureCode = 'RECIPIENTS_PENDING' AND CompletedAt IS NOT NULL
+    AND CompletedAt >= DATEADD(minute, -@resumeWindowMinutes, SYSUTCDATETIME());`;
+
+// Release a claimed continuation without overwriting its latest durable states.
+export const REMINDER_DEFER_SQL = `
+  UPDATE dbo.MR_TaskReminderLog
+  SET CompletedAt = SYSUTCDATETIME(), FailureCode = 'RECIPIENTS_PENDING'
+  WHERE TaskReminderLogId = @logId AND Status = 'PENDING' AND CompletedAt IS NULL;`;

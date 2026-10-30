@@ -1,4 +1,5 @@
 import { publicRotaPath } from '../../lib/publicPath.js';
+import { translateEntityRequest, restoreEntityResponse } from '../../data/api/activeActualIdAliases.js';
 import { outlookFailureMessage, safeOutlookFailureCode } from '../../domain/outlook/outlookFailures.js';
 
 /**
@@ -15,6 +16,9 @@ import { outlookFailureMessage, safeOutlookFailureCode } from '../../domain/outl
 export const REQUEST_TIMEOUT_MS = 30000;
 
 export async function requestJson(path, init, { timeoutMs = REQUEST_TIMEOUT_MS, signal = null } = {}) {
+  const translated = translateEntityRequest(path, init);
+  if (translated.failure) return translated.failure;
+  ({ path, init } = translated);
   const abortable = typeof AbortController === 'function';
   const controller = abortable ? new AbortController() : null;
   let abortCause = signal?.aborted ? 'caller' : null;
@@ -84,5 +88,5 @@ export async function requestJson(path, init, { timeoutMs = REQUEST_TIMEOUT_MS, 
           ? outlookFailureMessage(body?.outlook?.reason || body?.reason) : 'İşlem tamamlanamadı.')
     };
   }
-  return { ok: true, ...body };
+  return { ok: true, ...restoreEntityResponse(body, { method: init?.method, guard: translated.responseGuard, account: translated.responseAccount }) };
 }

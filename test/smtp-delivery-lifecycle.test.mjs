@@ -96,3 +96,30 @@ test('SMTP kabul edilen iletiyi başarı olarak bildirir', async () => {
     assert.deepEqual(result.accepted, message.to);
   });
 });
+test('SMTP replies reject oversized unterminated and multiline input before unbounded buffering', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { createSmtpDialogue, SMTP_REPLY_LIMITS } = await import('../src/server/mail/smtpClient.js');
+  for (const multiline of [false, true]) {
+    const socket = new EventEmitter(); let destroyed = false; socket.setEncoding = () => {}; socket.destroy = () => { destroyed = true; };
+    const dialogue = createSmtpDialogue(socket, 1000), rejected = assert.rejects(dialogue.read(), error => error.code === 'SMTP_SEND_FAILED');
+    const chunk = multiline ? '250-x\r\n' : 'x', bound = multiline ? SMTP_REPLY_LIMITS.maxResponseBytes : SMTP_REPLY_LIMITS.maxLineBytes;
+    for (let bytes = 0; bytes <= bound && !destroyed; bytes += chunk.length) socket.emit('data', chunk);
+    await rejected; assert.equal(destroyed, true); await assert.rejects(dialogue.read(), error => error.code === 'SMTP_SEND_FAILED'); dialogue.dispose();
+  }
+});
+
+test('SMTP multiline replies survive every TCP split, including CRLF and UTF-8 fragments', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { createSmtpDialogue } = await import('../src/server/mail/smtpClient.js');
+  const reply = '250-test\r\n250-AUTH PLAIN LOGIN\r\n250 sıra\r\n';
+  for (let split = 0; split <= reply.length; split += 1) {
+    const socket = new EventEmitter(); socket.setEncoding = () => {}; socket.destroy = () => {};
+    const dialogue = createSmtpDialogue(socket, 1000), waiting = dialogue.read();
+    for (const chunk of [reply.slice(0, split), reply.slice(split)]) socket.emit('data', chunk);
+    const response = await waiting; assert.equal(response.code, 250); assert.deepEqual(response.lines, ['250-test', '250-AUTH PLAIN LOGIN', '250 sıra']); dialogue.dispose();
+  }
+  const socket = new EventEmitter(); socket.setEncoding = () => {}; socket.destroy = () => {};
+  const dialogue = createSmtpDialogue(socket, 1000), waiting = dialogue.read();
+  for (const character of reply) socket.emit('data', character);
+  assert.equal((await waiting).lastLine, '250 sıra'); dialogue.dispose();
+});

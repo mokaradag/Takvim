@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
+import { creationEntries, remapCommitIds } from '../src/domain/identity/creationIds.js';
+import { canonicalizeCommitChanges } from '../src/server/repository/commitChangeValidation.js';
 import { fileURLToPath } from 'node:url';
 
 import { findCommitProjectWbsIssue } from '../src/server/repository/commitProjectWbsValidation.js';
@@ -197,10 +199,29 @@ async function disclosureStack(sicil) {
   }, { sicil });
 }
 
-/** Commit ucunun gözlenebilir yanıtı; çağıranın kendi gönderdiği kimlik maskelenir. */
-async function probe(changes, submittedId) {
-  const response = await fetch('http://localhost/api/mergen-rota/commit', { method: 'POST', body: JSON.stringify({ changes }) });
-  return `${response.status} ${JSON.stringify(await response.json()).replaceAll(submittedId, '<id>')}`;
+/** Raw probes cover the proof gate; normal requests follow the allocation protocol. */
+async function sendCommit(changes, { raw = false } = {}) {
+  changes = canonicalizeCommitChanges(changes);
+  const post = (body) => fetch('http://localhost/api/mergen-rota/commit', { method: 'POST', body: JSON.stringify(body) });
+  const aliases = [];
+  if (!raw && creationEntries(changes).length) {
+    const response = await post({ operation: 'allocate-creation-ids', changes: {}, allocationChanges: changes });
+    if (!response.ok) return { response, aliases };
+    const { allocations } = await response.json();
+    const mappings = new Map(allocations.map((row) => [`${row.entityType}:${row.clientId}`, row.id]));
+    changes = remapCommitIds(changes, mappings);
+    for (const { entry, entityType } of creationEntries(changes)) {
+      entry.creationProof = allocations.find((row) => row.entityType === entityType && row.id === entry.id)?.proof;
+    }
+    for (const row of allocations) aliases.push([row.id, row.clientId]);
+  }
+  return { response: await post({ changes }), aliases };
+}
+async function probe(changes, submittedId, options) {
+  const { response, aliases } = await sendCommit(changes, options);
+  let body = JSON.stringify(await response.json());
+  for (const [actual, client] of aliases) body = body.replaceAll(actual, client);
+  return `${response.status} ${body.replaceAll(submittedId, '<id>')}`;
 }
 
 function projectCreate(code) {
@@ -303,8 +324,10 @@ test('aynı kümede oluşturulan projedeki bağımlı görevler oluşturanın FU
     });
     changes.taskUpserts = [task(first, 'Öncül', []), task(second, 'Ardıl', [{ predecessorId: first, type: 'FS', lagDays: 0 }])];
     assert.match(await probe(changes, projectId), /^200 /);
-    assert.ok(manager.db.taskDependencies.some((row) => String(row.TaskId).toLowerCase() === second
-      && String(row.PredecessorTaskId).toLowerCase() === first), 'bağımlılık yazılır');
+    const firstStored = manager.db.tasks.find((row) => row.Title === 'Öncül');
+    const secondStored = manager.db.tasks.find((row) => row.Title === 'Ardıl');
+    assert.ok(manager.db.taskDependencies.some((row) => row.TaskId === secondStored.TaskId
+      && row.PredecessorTaskId === firstStored.TaskId), 'bağımlılık yazılır');
 
     // Var olan projenin SÜRÜMLÜ, kodsuz güncellemesi niyet denetimini geçer (READ hibesiyle görünür); 409
     // çakışmasına değil yetki kapısına ulaşır. Oluşturma muafiyeti yalnızca kaydı olmayan projeye aittir ve
@@ -593,25 +616,34 @@ test('gizli ve olmayan hedef projeler aynı tam yanıtı verir; görünür ve ku
         id: taskId, projectId, wbsId, task: 'Yeni görev', status: 'planned', priority: 'medium',
         assigneeIds: [String(sicil === MANAGER_SICIL ? SUBORDINATE_SICIL : sicil)], deps: []
       });
-      const attempt = async (projectId) => {
+      const grant = { ProjectId: MANUAL_PROJECT_ID, Sicil: sicil, AccessLevel: 'FULL', GrantSource: 'MANUAL_GRANT', IsActive: 1 };
+      stack.db.projectAccess.push(grant);
+      const allocated = await fetch('http://localhost/api/mergen-rota/commit', { method: 'POST', body: JSON.stringify({
+        operation: 'allocate-creation-ids', changes: {}, allocationChanges: { taskUpserts: [task(MANUAL_PROJECT_ID)] } }) });
+      assert.equal(allocated.status, 200);
+      const allocation = (await allocated.json()).allocations[0];
+      stack.db.projectAccess = stack.db.projectAccess.filter((entry) => entry !== grant);
+      const changes = { taskUpserts: [{ ...task(MANUAL_PROJECT_ID), id: allocation.id, creationProof: allocation.proof }] };
+      const attempt = async () => {
         const start = stack.db.statements.length;
-        const response = await fetch('http://localhost/api/mergen-rota/commit', { method: 'POST',
-          body: JSON.stringify({ changes: { taskUpserts: [task(projectId)] } }) });
-        return { status: response.status, body: await response.text(), headers: [...response.headers].map(([name, value]) => [name, name === 'x-mergen-rota-correlation-id' ? '<correlation>' : value]),
-          queries: stack.db.statements.slice(start).map(entry => entry.sql) };
+        const { response } = await sendCommit(changes, { raw: true });
+        const queries = stack.db.statements.slice(start).map((entry) => entry.sql);
+        assert.ok(queries.some((sql) => sql.includes('-- creation-allocation: consume')));
+        assert.ok(queries.some((sql) => sql.includes('FROM dbo.MR_Projects')), 'destination validation runs after successful proof consumption');
+        return { status: response.status, body: await response.text(), headers: [...response.headers].map(([name, value]) =>
+          [name, name === 'x-mergen-rota-correlation-id' ? '<correlation>' : value]) };
       };
       const before = JSON.stringify(stack.db.tasks);
-      const hidden = await attempt(MANUAL_PROJECT_ID);
-      const missing = await attempt('c1c1c1c1-0000-4000-8000-0000000000d2');
-      // İstemcinin bildiği hedef kimliği ve istek başına rastgele korelasyon değeri dışında yanıt bütünüyle aynıdır.
-      assert.deepEqual({ ...hidden, body: hidden.body.replaceAll(MANUAL_PROJECT_ID, '<id>') },
-        { ...missing, body: missing.body.replaceAll('c1c1c1c1-0000-4000-8000-0000000000d2', '<id>') });
+      const hidden = await attempt();
       assert.equal(hidden.status, 400);
-      assert.equal(JSON.stringify(stack.db.tasks), before, 'her iki ret de hiçbir görev yazmaz');
-      // Aynı istek kimliğiyle satırın varlığı değiştirildiğinde de ham yanıt aynıdır.
-      const row = stack.db.projects.findIndex(item => String(item.ProjectId).toLowerCase() === MANUAL_PROJECT_ID);
+      assert.notEqual(JSON.parse(hidden.body).error.details?.code, 'CREATION_ALLOCATION_INVALID');
+      assert.equal(stack.db.creationAllocations.length, 1, 'destination rejection rolls proof consumption back');
+      // Reuse the SAME valid proof after the authorized destination disappears.
+      const row = stack.db.projects.findIndex((item) => String(item.ProjectId).toLowerCase() === MANUAL_PROJECT_ID);
       const [removed] = stack.db.projects.splice(row, 1);
-      assert.deepEqual(await attempt(MANUAL_PROJECT_ID), hidden);
+      const missing = await attempt();
+      assert.deepEqual(missing, hidden);
+      assert.equal(JSON.stringify(stack.db.tasks), before);
       stack.db.projects.push(removed);
       if (sicil === MANAGER_SICIL) {
         stack.db.taskAssignees = []; // Kurumsal hedef artık PARTIAL görünürlük de sağlamaz.
@@ -624,4 +656,148 @@ test('gizli ve olmayan hedef projeler aynı tam yanıtı verir; görünür ve ku
       assert.equal(stack.db.tasks.length, JSON.parse(before).length + 1);
     } finally { await stack.dispose(); }
   }
+});
+
+test('assignment-only creation ignores client labels and rejects invalid personnel scope', async () => {
+  const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
+  const stack = await disclosureStack(MANAGER_SICIL);
+  try {
+    const task = { id: MISSING_TASK_ID, projectId: CORPORATE_PROJECT_ID, wbsId: CORPORATE_ROOT_WBS_ID, calendarId: null, task: 'New assignment', status: 'planned', priority: 'medium', milestone: false,
+      plannedStart: null, plannedFinish: null, plannedDurationDays: null, targetFinish: null, actualStart: null, actualFinish: null, remainingDurationDays: null, progress: 0,
+      description: null, keyword: null, plannedHours: null, actualHours: null, budget: null, spent: null, assigneeIds: ['900010'], deps: [] };
+    const existing = await probe({ taskUpserts: [task] }, MISSING_TASK_ID);
+    stack.db.people = stack.db.people.filter((person) => person.Sicil !== 900010);
+    assert.equal(await probe({ taskUpserts: [task] }, MISSING_TASK_ID), existing); assert.match(existing, /^403 .*FORBIDDEN/);
+    task.assigneeIds = [String(SUBORDINATE_SICIL)]; assert.match(await probe({ taskUpserts: [task] }, MISSING_TASK_ID), /^200 /);
+  } finally { await stack.dispose(); }
+});
+
+test('unauthorized allocation rejection is independent of hidden task/WBS client labels', async () => {
+  const { CORPORATE_PROJECT_ID } = await import('./helpers/actualStack.mjs');
+  const stack = await disclosureStack(PLAIN_SICIL);
+  try {
+    for (const [collection, id, table, key] of [['taskUpserts', HIDDEN_TASK_ID, 'tasks', 'TaskId'], ['wbsUpserts', HIDDEN_WBS_ID, 'wbs', 'WbsId']]) {
+      const entry = collection === 'taskUpserts' ? { id, projectId: CORPORATE_PROJECT_ID, task: 'new', assigneeIds: [String(PLAIN_SICIL)], deps: [] } : { id, projectId: CORPORATE_PROJECT_ID, parentId: null, code: 'new', name: 'new', sortOrder: 0 };
+      const existing = await probe({ [collection]: [entry] }, id);
+      stack.db[table] = stack.db[table].filter(row => String(row[key]).toLowerCase() !== id);
+      assert.equal(await probe({ [collection]: [entry] }, id), existing); assert.doesNotMatch(existing, /UPSERT_CREATE_COLLISION/); assert.match(existing, /^400 .*MUTATION_FAILED/);
+    }
+  } finally { await stack.dispose(); }
+});
+
+for (const scenario of ['corporate-wbs', 'narrow-assignees', 'narrow-fields', 'assignment-wbs', 'missing-dependency', 'hidden-dependency', 'missing-parent']) {
+  test(`invalid allocation ignores hidden/unused client labels (${scenario})`, async () => {
+    const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
+    const narrow = scenario.startsWith('narrow');
+    const stack = await disclosureStack(narrow ? PLAIN_SICIL : MANAGER_SICIL);
+    try {
+      // These labels name hidden rows, but allocation must replace them before any entity mutation.
+      const hidden = stack.db.tasks.find((row) => row.TaskId.toLowerCase() === HIDDEN_TASK_ID);
+      hidden.ProjectId = MANUAL_PROJECT_ID; hidden.WbsId = MANUAL_ROOT_WBS_ID;
+      if (narrow) stack.db.taskAssignees.find((row) => row.TaskId.toLowerCase() === LONE_TASK_ID).Sicil = PLAIN_SICIL;
+      if (['corporate-wbs', 'missing-dependency', 'hidden-dependency', 'missing-parent'].includes(scenario)) {
+        stack.db.projectAccess.push({ ProjectId: CORPORATE_PROJECT_ID, Sicil: MANAGER_SICIL, AccessLevel: 'FULL', IsActive: 1 });
+      }
+      const task = { id: HIDDEN_TASK_ID, projectId: CORPORATE_PROJECT_ID, wbsId: CORPORATE_ROOT_WBS_ID,
+        task: 'Candidate', status: 'planned', priority: 'medium', assigneeIds: [String(narrow ? PLAIN_SICIL : SUBORDINATE_SICIL)], deps: [] };
+      if (scenario === 'narrow-assignees') task.assigneeIds = [String(SUBORDINATE_SICIL)];
+      if (scenario === 'narrow-fields') task.isMilestone = true;
+      if (scenario === 'assignment-wbs') task.wbsId = HIDDEN_WBS_ID;
+      if (scenario.endsWith('dependency')) task.deps = [{ predecessorId: scenario === 'hidden-dependency' ? SUCCESSOR_TASK_ID : MISSING_TASK_ID, type: 'FS', lagDays: 0 }];
+      if (scenario === 'missing-parent') { task.recurrenceParentId = MISSING_TASK_ID; task.recurrenceOccurrenceDate = '2026-08-24'; }
+      const collection = scenario === 'corporate-wbs' ? 'wbsUpserts' : 'taskUpserts';
+      const entry = collection === 'wbsUpserts' ? { id: HIDDEN_WBS_ID, projectId: CORPORATE_PROJECT_ID, parentId: CORPORATE_ROOT_WBS_ID, code: 'new', name: 'new' } : task;
+      if (scenario === 'hidden-dependency') {
+        const predecessor = stack.db.tasks.find((row) => row.TaskId.toLowerCase() === SUCCESSOR_TASK_ID);
+        predecessor.ProjectId = MANUAL_PROJECT_ID; predecessor.WbsId = MANUAL_ROOT_WBS_ID;
+        stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId.toLowerCase() !== SUCCESSOR_TASK_ID);
+      }
+      const existingId = entry.id;
+      const before = JSON.stringify(stack.db.tasks);
+      const existing = await probe({ [collection]: [entry] }, existingId);
+      const compare = async (id) => probe({ [collection]: [{ ...entry, id }] }, id);
+      const first = existing;
+      const missing = await compare(collection === 'wbsUpserts' ? MISSING_WBS_ID : 'c1c1c1c1-0000-4000-8000-0000000000fd');
+      assert.equal(first, missing); assert.doesNotMatch(first, /UPSERT_CREATE_COLLISION/);
+      entry.version = ' ';
+      assert.equal(await compare(existingId), await compare(collection === 'wbsUpserts' ? MISSING_WBS_ID : 'c1c1c1c1-0000-4000-8000-0000000000fd'), 'blank versions retain create intent at every boundary');
+      assert.match(first, scenario.endsWith('dependency') ? /DEPENDENCY_TARGET_NOT_FOUND/ : scenario === 'missing-parent' ? /Tekrar şablonu bulunamadı/ : /FORBIDDEN/);
+      assert.equal(JSON.stringify(stack.db.tasks), before);
+    } finally { await stack.dispose(); }
+  });
+}
+
+test('otherwise authorized creation now closes F-024 without overwrite or replacement on collision', async () => {
+  const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
+  const stack = await disclosureStack(PLAIN_SICIL);
+  try {
+    const hidden = stack.db.tasks.find((row) => row.TaskId.toLowerCase() === HIDDEN_TASK_ID);
+    hidden.ProjectId = MANUAL_PROJECT_ID; hidden.WbsId = MANUAL_ROOT_WBS_ID;
+    stack.db.projectAccess.push({ ProjectId: CORPORATE_PROJECT_ID, Sicil: PLAIN_SICIL, AccessLevel: 'FULL', IsActive: 1 });
+    const task = { projectId: CORPORATE_PROJECT_ID, wbsId: CORPORATE_ROOT_WBS_ID, task: 'Authorized create', status: 'planned', priority: 'medium', assigneeIds: [String(PLAIN_SICIL)], deps: [] };
+    const before = JSON.stringify(hidden);
+    const existing = await probe({ taskUpserts: [{ ...task, id: HIDDEN_TASK_ID }] }, HIDDEN_TASK_ID, { raw: true });
+    assert.equal(await probe({ taskUpserts: [{ ...task, id: MISSING_TASK_ID }] }, MISSING_TASK_ID, { raw: true }), existing);
+    assert.match(existing, /^409 .*CREATION_ALLOCATION_INVALID/);
+    assert.equal(JSON.stringify(stack.db.tasks.find((row) => row.TaskId.toLowerCase() === HIDDEN_TASK_ID)), before);
+    assert.match(await probe({ taskUpserts: [{ ...task, id: MISSING_TASK_ID }] }, MISSING_TASK_ID), /^200 /);
+  } finally { await stack.dispose(); }
+});
+
+test('rejected project allocations validate codes independently of client labels', async () => {
+  const { CORPORATE_PROJECT_ID } = await import('./helpers/actualStack.mjs');
+  const stack = await disclosureStack(MANAGER_SICIL);
+  try {
+    stack.db.taskAssignees = [];
+    const before = JSON.stringify([stack.db.projects, stack.db.wbs]);
+    const attempt = async (candidate, code) => {
+      const changes = projectCreate(code);
+      changes.projectUpserts[0].id = candidate;
+      changes.wbsUpserts[0].projectId = candidate;
+      const start = stack.db.statements.length;
+      const value = await probe(changes, candidate);
+      assert.equal(stack.db.statements.slice(start).some((statement) => /FROM dbo\.MR_Projects WITH \(UPDLOCK, HOLDLOCK\)\s+WHERE ProjectId = @entityId/.test(statement.sql)), false,
+        'rejected allocation never performs a client-label collision lookup');
+      return value;
+    };
+    for (const [code, expected] of [['P4417041', 'PROJECT_CODE_RESERVED'], ['GIZLI-KOD', 'PROJECT_CODE_CONFLICT']]) {
+      const missing = await attempt(MISSING_TASK_ID, code);
+      for (const candidate of [MANUAL_PROJECT_ID, CORPORATE_PROJECT_ID]) assert.equal(await attempt(candidate, code), missing);
+      assert.match(missing, new RegExp(`^409 .*${expected}`));
+    }
+    assert.equal(JSON.stringify([stack.db.projects, stack.db.wbs]), before);
+  } finally { await stack.dispose(); }
+});
+
+test('project-create intent stays independent of candidate rows until calendar and root validation finish', async () => {
+  const stack = await disclosureStack(MANAGER_SICIL);
+  try {
+    const attempt = async (candidate, invalid) => {
+      const changes = projectCreate('AVAILABLE-CODE'); changes.projectUpserts[0].id = candidate; changes.wbsUpserts[0].projectId = candidate;
+      if (invalid === 'calendar') changes.projectUpserts[0].calendarId = MISSING_WBS_ID;
+      else changes.wbsUpserts.push({ ...changes.wbsUpserts[0], id: MISSING_WBS_ID });
+      return probe(changes, candidate);
+    };
+    for (const invalid of ['calendar', 'roots']) {
+      const existing = await attempt(MANUAL_PROJECT_ID, invalid), missing = await attempt(MISSING_TASK_ID, invalid);
+      assert.equal(existing, missing); assert.match(existing, /^400 .*MUTATION_FAILED/);
+    }
+  } finally { await stack.dispose(); }
+});
+
+test('unallocated project/root candidates reject before collision; allocated creation succeeds', async () => {
+  const stack = await disclosureStack(MANAGER_SICIL);
+  try {
+    const before = JSON.stringify([stack.db.projects, stack.db.wbs]);
+    const changes = projectCreate('AVAILABLE-CODE');
+    changes.projectUpserts[0].id = MANUAL_PROJECT_ID; changes.wbsUpserts[0].projectId = MANUAL_PROJECT_ID;
+    assert.match(await probe(changes, MANUAL_PROJECT_ID, { raw: true }), /^409 .*CREATION_ALLOCATION_INVALID/);
+    assert.equal(JSON.stringify([stack.db.projects, stack.db.wbs]), before);
+    changes.projectUpserts[0].id = MISSING_TASK_ID; changes.wbsUpserts[0].projectId = MISSING_TASK_ID;
+    changes.wbsUpserts[0].id = MANUAL_ROOT_WBS_ID;
+    assert.match(await probe(changes, MANUAL_ROOT_WBS_ID, { raw: true }), /^409 .*CREATION_ALLOCATION_INVALID/);
+    assert.equal(JSON.stringify([stack.db.projects, stack.db.wbs]), before);
+    changes.wbsUpserts[0].id = MISSING_WBS_ID;
+    assert.match(await probe(changes, MISSING_TASK_ID), /^200 /);
+  } finally { await stack.dispose(); }
 });

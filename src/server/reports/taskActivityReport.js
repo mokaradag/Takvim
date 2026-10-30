@@ -1,4 +1,5 @@
 import 'server-only';
+import { taskIdentityVisibleSql } from '../authorization/taskIdentityVisibility.js';
 import { PERSISTED_TASK_STATUSES } from '../../domain/constants/index.js';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
 import { ACCESS_REASONS } from '../authorization/authorization.js';
@@ -178,15 +179,48 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
   }
   const result = await request.query(statement);
   const [actorRows = [], projectRows = [], counts = [], events = []] = result.recordsets || [];
-  const people = new Map();
-  const ids = includeChangeText ? auditAssigneeIds(events) : [];
-  if (maxEvidencePeople != null && ids.length > maxEvidencePeople) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
-  if (ids.length) {
+  const peopleByTask = new Map();
+  const candidateByIdentity = new Map();
+  if (includeChangeText) for (const event of events) {
+    const taskId = canonicalActualId(event.EntityId), projectId = canonicalActualId(event.ProjectId);
+    for (const sicil of auditAssigneeIds([event])) {
+      candidateByIdentity.set(`${projectId}:${taskId}:${sicil}`, { taskId, projectId, sicil });
+    }
+  }
+  const candidates = [...candidateByIdentity.values()];
+  if (candidates.length) {
     const names = executor.request();
-    names.input('activityAssignees', sql.NVarChar(sql.MAX), ids.join(','));
-    const found = await names.query(`SELECT Sicil, DisplayName FROM dbo.MR_V_PeopleDirectory
-      WHERE Sicil IN (SELECT TRY_CONVERT(int, value) FROM STRING_SPLIT(@activityAssignees, ','));`);
-    for (const row of found.recordset || []) people.set(String(row.Sicil), row.DisplayName);
+    names.input('activityIdentityCandidates', sql.NVarChar(sql.MAX), JSON.stringify(candidates));
+    names.input('sicil', sql.Int, actor.sicil);
+    // Display-name permission also includes direct co-assignees. It must never
+    // grant the stricter stable-ID/write permission (including numeric fallback).
+    const identityVisible = taskIdentityVisibleSql();
+    const found = await names.query(`SELECT DISTINCT candidate.TaskId, candidate.ProjectId, candidate.Sicil, pd.DisplayName,
+        CASE WHEN ${identityVisible} THEN 1 ELSE 0 END AS StableIdentityVisible
+      FROM OPENJSON(@activityIdentityCandidates) WITH (TaskId uniqueidentifier '$.taskId', ProjectId uniqueidentifier '$.projectId', Sicil int '$.sicil') candidate
+      LEFT JOIN dbo.MR_Projects p ON p.ProjectId = candidate.ProjectId
+      LEFT JOIN dbo.MR_Tasks t ON t.TaskId = candidate.TaskId AND t.ProjectId = candidate.ProjectId
+      OUTER APPLY (SELECT TOP (1) d.BeforeJson FROM dbo.MR_AuditLog d
+        WHERE NOT EXISTS (SELECT 1 FROM dbo.MR_Tasks live WHERE live.TaskId = candidate.TaskId)
+          AND d.EntityType = 'TASK' AND d.ActionCode = 'DELETE'
+          AND d.EntityId IN (LOWER(CONVERT(nvarchar(36), candidate.TaskId)), UPPER(CONVERT(nvarchar(36), candidate.TaskId)))
+          AND d.ProjectId = candidate.ProjectId
+        ORDER BY d.OccurredAt DESC, d.AuditId DESC) deleted
+      LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = candidate.Sicil
+      WHERE EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1)
+        OR (p.IsActive = 1 AND (${identityVisible}
+          OR TRY_CONVERT(int, JSON_VALUE(deleted.BeforeJson, '$.CreatedBySicil')) = @sicil
+          OR EXISTS (SELECT 1 FROM OPENJSON(deleted.BeforeJson, '$.assigneeIds') member WHERE TRY_CONVERT(int, member.value) = @sicil)
+          OR EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees own WHERE own.TaskId = t.TaskId AND own.Sicil = @sicil)));`);
+    const visiblePeople = (found.recordset || []).filter((row) => row.StableIdentityVisible || String(row.DisplayName || '').trim());
+    if (maxEvidencePeople != null && new Set(visiblePeople.map((row) => row.Sicil)).size > maxEvidencePeople) {
+      const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error;
+    }
+    for (const row of visiblePeople) {
+      const key = `${canonicalActualId(row.ProjectId)}:${canonicalActualId(row.TaskId)}`;
+      if (!peopleByTask.has(key)) peopleByTask.set(key, new Map());
+      peopleByTask.get(key).set(String(row.Sicil), row.DisplayName);
+    }
   }
   const groups = new Map();
   for (const event of events) {
@@ -200,7 +234,7 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
     // grubun kesin özeti (oluşturma/silme/tamamlama) ve kısaltma notu verilir.
     const omitted = evidenceSnapshotLimit != null
       && (Number(last.EventCount) > rows.length || rows.some((row) => row.DetailJsonClipped));
-    const computed = taskActivityChanges(rows, people, { includeStructuredChanges });
+    const computed = taskActivityChanges(rows, peopleByTask.get(`${canonicalActualId(last.ProjectId)}:${canonicalActualId(last.EntityId)}`) || new Map(), { includeStructuredChanges, restrictAssignees: true });
     const change = omitted
       ? { ...computed, ...(includeStructuredChanges ? { structuredChanges: [] } : {}), changes: [
         ...(last.Created ? ['Yeni görev oluşturuldu'] : []), ...(last.Deleted ? ['Görev silindi'] : []), ...(last.Completed ? ['Tamamlandı'] : []),

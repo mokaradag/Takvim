@@ -28,6 +28,19 @@ BEGIN TRY
         AppliedAt datetime2(7) NOT NULL CONSTRAINT DF_MR_SchemaMigrations_AppliedAt DEFAULT SYSUTCDATETIME()
     );
 
+    CREATE TABLE dbo.MR_CreationAllocations (
+        Proof uniqueidentifier NOT NULL,
+        Sicil int NOT NULL,
+        EntityType varchar(7) NOT NULL,
+        EntityId uniqueidentifier NOT NULL,
+        ProjectId uniqueidentifier NOT NULL,
+        ExpiresAt datetime2(3) NOT NULL,
+        CONSTRAINT PK_MR_CreationAllocations PRIMARY KEY (Proof),
+        CONSTRAINT UQ_MR_CreationAllocations_Entity UNIQUE (EntityId),
+        CONSTRAINT CK_MR_CreationAllocations_Type CHECK (EntityType IN ('PROJECT', 'WBS', 'TASK'))
+    );
+    CREATE INDEX IX_MR_CreationAllocations_Owner ON dbo.MR_CreationAllocations(Sicil, ExpiresAt);
+
     CREATE TABLE dbo.MR_UserRoles (
         Sicil int NOT NULL,
         RoleCode varchar(50) NOT NULL,
@@ -1042,7 +1055,8 @@ Bu ileti {{app_name}} tarafından {{today}} tarihinde otomatik olarak hazırlanm
            (N'0015_assignment_coordination_and_presence', N'Kurum dışı atama koordinasyonu, görev bildirimleri, dayanıklı posta kuyruğu ve kullanıcı varlığı'),
            (N'0016_ai_user_credentials', N'Sicil başına şifreli kişisel yapay zekâ API anahtarı (AES-256-GCM, düz metin saklanmaz)'),
            (N'0017_ai_assistant_conversations', N'Rota AI konuşma geçmişi: Sicil sahipli konuşmalar ve sıralı iletiler (akıl yürütme ve ham akış saklanmaz)'),
-           (N'0018_ai_message_evidence', N'Rota AI yanıt kanıtları: iletiye bağlı sınırlı ve güvenli araç sonucu görünümü (SQL, yetki ayrıntısı ve anahtar saklanmaz)');
+           (N'0018_ai_message_evidence', N'Rota AI yanıt kanıtları: iletiye bağlı sınırlı ve güvenli araç sonucu görünümü (SQL, yetki ayrıntısı ve anahtar saklanmaz)'),
+           (N'0019_creation_allocations', N'Caller-bound, expiring one-use server creation IDs');
 
     COMMIT TRANSACTION;
 END TRY

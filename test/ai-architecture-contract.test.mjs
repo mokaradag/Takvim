@@ -295,11 +295,12 @@ test('kişisel anahtar tablosuna yalnızca depo modülü, sabit ve Sicil ile sı
 
 test('0016 göçü sıralı, yinelenebilir ve düz metin anahtar sütunu içermez', () => {
   const upgrades = fs.readdirSync(path.join(ROOT, 'database')).filter((name) => /^MR_Upgrade_\d{4}_/.test(name)).sort();
-  // 0016 sıradaki yerini korur: kendisinden sonra yalnızca 0017 (konuşma geçmişi) ve 0018 (yanıt kanıtları) gelir.
-  assert.deepEqual(upgrades.slice(-3), [
+  // 0016 ve devamındaki göçlerin sırası korunur.
+  assert.deepEqual(upgrades.slice(-4), [
     'MR_Upgrade_0016_Ai_User_Credentials.sql',
     'MR_Upgrade_0017_Ai_Assistant_Conversations.sql',
-    'MR_Upgrade_0018_Ai_Message_Evidence.sql'
+    'MR_Upgrade_0018_Ai_Message_Evidence.sql',
+    'MR_Upgrade_0019_Creation_Allocations.sql'
   ]);
   assert.equal(upgrades.filter((name) => name.startsWith('MR_Upgrade_0016_')).length, 1);
 
@@ -479,6 +480,7 @@ test('konuşma tablolarına yalnızca konuşma deposu, sabit ve Sicil sahipliği
     'AI_CONVERSATION_LIST_SQL',
     'AI_CONVERSATION_LOAD_SQL',
     'AI_CONVERSATION_PREPARE_TURN_SQL',
+    'AI_CONVERSATION_PRESENCE_SQL',
     'AI_CONVERSATION_SCAN_SQL'
   ]);
   // Kanıt tablosuna da yalnızca konuşma deposu erişir; kanıt yalnızca Sicil'e ait
@@ -490,6 +492,8 @@ test('konuşma tablolarına yalnızca konuşma deposu, sabit ve Sicil sahipliği
   assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /JSON_VALUE\(e\.EvidenceJson, '\$\.authorizationEpoch'\)/);
   assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /JSON_QUERY\(e\.EvidenceJson, '\$\.clarificationContext'\)/);
   assert.doesNotMatch(queries.AI_CONVERSATION_EVIDENCE_SQL, /SELECT[^;]*,\s*e\.EvidenceJson\s*(?:,|FROM)/, 'ham kanıt yükü açıklanmaz');
+  assert.doesNotMatch(queries.AI_CONVERSATION_PRESENCE_SQL, /MR_AiMessageEvidence|m\.Content|c\.Title/);
+  assert.match(queries.AI_CONVERSATION_PRESENCE_SQL, /SELECT TOP \(@maxMessages\) m\.MessageId/);
   const grounded = queries.AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL;
   const evidenceInsert = grounded.indexOf('INSERT dbo.MR_AiMessageEvidence');
   assert.ok(evidenceInsert > grounded.indexOf("VALUES (@messageId, @conversationId, @sequence, 'assistant'"), 'kanıt yanıtla aynı bloğa yazılır');

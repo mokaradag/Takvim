@@ -1,9 +1,11 @@
 import { PERSISTED_TASK_STATUSES } from '../../domain/constants/index.js';
 import { extractActualId, isActualId } from '../../domain/identity/actualId.js';
+import { creationEntries } from '../../domain/identity/creationIds.js';
+import { createCreationIdStorage } from './creationIdStorage.js';
+import { activateActualIdAliases } from './activeActualIdAliases.js';
 import { AppRepositoryError, REPOSITORY_ERROR_CODES } from '../contracts/appRepository.js';
 import {
-  loadActualIdAliases,
-  persistActualIdAliases
+  loadActualIdAliases, actualIdAliasType, ACTUAL_ID_ALIAS_STORAGE_KEY
 } from './actualIdAliasStorage.js';
 
 const CODE_BY_STATUS = {
@@ -99,43 +101,54 @@ export function normalizeActualChanges(changes = {}) {
   };
 }
 
-function rememberClientId(map, value) {
+function rememberClientId(map, value, values) {
   if (value == null || value === '') return;
   const original = String(value);
   const actual = toActualUuid(original);
-  if (actual && original !== actual) map.set(actual, original);
+  if (actual && original !== actual && !values.has(original)) {
+    if (map.has(actual)) {
+      const previous = map.get(actual), remaining = values.get(previous) - 1;
+      if (remaining) values.set(previous, remaining);
+      else values.delete(previous);
+    }
+    map.set(actual, original);
+    values.set(original, 1);
+  }
 }
 
-function rememberDeleteId(map, entry) {
-  rememberClientId(map, typeof entry === 'string' ? entry : entry?.id);
+function rememberDeleteId(map, entry, values) {
+  rememberClientId(map, typeof entry === 'string' ? entry : entry?.id, values);
 }
 
 function collectClientIds(changes = {}, map = new Map()) {
+  // Counts preserve overwrite/deduplication semantics when values are shared.
+  const values = new Map();
+  for (const value of map.values()) values.set(value, (values.get(value) || 0) + 1);
   for (const project of changes.projectUpserts || []) {
-    rememberClientId(map, project?.id);
-    rememberClientId(map, project?.calendarId);
+    rememberClientId(map, project?.id, values);
+    rememberClientId(map, project?.calendarId, values);
   }
-  for (const entry of changes.projectDeletes || []) rememberDeleteId(map, entry);
+  for (const entry of changes.projectDeletes || []) rememberDeleteId(map, entry, values);
 
   for (const node of changes.wbsUpserts || []) {
-    rememberClientId(map, node?.id);
-    rememberClientId(map, node?.projectId);
-    rememberClientId(map, node?.parentId);
+    rememberClientId(map, node?.id, values);
+    rememberClientId(map, node?.projectId, values);
+    rememberClientId(map, node?.parentId, values);
   }
-  for (const entry of changes.wbsDeletes || []) rememberDeleteId(map, entry);
+  for (const entry of changes.wbsDeletes || []) rememberDeleteId(map, entry, values);
 
   for (const task of changes.taskUpserts || []) {
-    rememberClientId(map, task?.id);
-    rememberClientId(map, task?.projectId);
-    rememberClientId(map, task?.wbsId);
-    rememberClientId(map, task?.calendarId);
-    rememberClientId(map, task?.recurrenceParentId);
+    rememberClientId(map, task?.id, values);
+    rememberClientId(map, task?.projectId, values);
+    rememberClientId(map, task?.wbsId, values);
+    rememberClientId(map, task?.calendarId, values);
+    rememberClientId(map, task?.recurrenceParentId, values);
     for (const dependency of Array.isArray(task?.deps) ? task.deps : []) {
-      rememberClientId(map, dependency?.id);
-      rememberClientId(map, dependency?.predecessorId);
+      rememberClientId(map, dependency?.id, values);
+      rememberClientId(map, dependency?.predecessorId, values);
     }
   }
-  for (const entry of changes.taskDeletes || []) rememberDeleteId(map, entry);
+  for (const entry of changes.taskDeletes || []) rememberDeleteId(map, entry, values);
   return map;
 }
 
@@ -226,8 +239,18 @@ export function restoreActualSessionIds(body, map) {
 
 export function restoreActualSnapshotIds(body, map) {
   if (!body || typeof body !== 'object' || !map?.size) return body;
+  const restoreInboxReferences = (items) => Array.isArray(items) ? items.map((item) => {
+    if (!item || typeof item !== 'object') return item;
+    const restored = { ...item };
+    for (const key of ['taskId', 'projectId', 'currentProjectId']) {
+      if (Object.hasOwn(item, key)) restored[key] = restoreClientId(item[key], map);
+    }
+    return restored;
+  }) : items;
   return {
     ...body,
+    ...Object.fromEntries(['scheduleRequests', 'assignmentCoordinations', 'taskNotifications']
+      .filter((key) => Object.hasOwn(body, key)).map((key) => [key, restoreInboxReferences(body[key])])),
     projects: Array.isArray(body.projects) ? body.projects.map((project) => ({
       ...project,
       id: restoreClientId(project.id, map),
@@ -412,10 +435,155 @@ export function createApiRepository({
   aliasStorageKey
 } = {}) {
   const clientIdAliases = loadActualIdAliases(aliasStorage, aliasStorageKey);
+  const creationIds = createCreationIdStorage(aliasStorage, aliasStorageKey, { validateAccount: () => {
+    guardAccount();
+    if (!scopeAvailable) throw new Error('creation storage unavailable');
+  } });
+  // Legacy unscoped typed aliases have no authenticated owner.
+  for (const id of clientIdAliases.keys()) if (actualIdAliasType(clientIdAliases, id)) {
+    actualIdAliasType(clientIdAliases, id, null);
+    clientIdAliases.delete(id);
+  }
+  let account = null;
+  let accountInvalidated = false;
+  let scopeAvailable = false;
+  const accountKey = `${aliasStorageKey || ACTUAL_ID_ALIAS_STORAGE_KEY}.active-account`;
+  function guardAccount() {
+    if (accountInvalidated) throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.UNAUTHORIZED,
+      message: 'Oturum değişti. Verileri yeniden yükleyin.', operation: 'commitChanges' });
+    if (!account || !scopeAvailable) return account;
+    try {
+      if (aliasStorage && aliasStorage.getItem(accountKey) !== account) {
+        account = null;
+        accountInvalidated = true;
+        creationIds.setAccount(null, clientIdAliases);
+        activateActualIdAliases(clientIdAliases, guardAccount);
+        throw new Error('account changed');
+      }
+    } catch {
+      throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.UNAUTHORIZED,
+        message: 'Oturum değişti. Verileri yeniden yükleyin.', operation: 'commitChanges' });
+    }
+    return account;
+  }
+  function accountStamp() {
+    try { return aliasStorage?.getItem(accountKey) ?? null; } catch { return null; }
+  }
+  function acceptSession(session, observedAccount = accountStamp()) {
+    const sicil = session?.authenticated === true ? Number(session.currentUser?.sicil ?? session.currentUser?.employeeNo) : NaN;
+    const next = Number.isSafeInteger(sicil) && sicil > 0 ? String(sicil) : null;
+    const current = accountStamp();
+    if (current !== observedAccount && current !== next) {
+      account = null;
+      accountInvalidated = true;
+      creationIds.setAccount(null, clientIdAliases);
+      activateActualIdAliases(clientIdAliases, guardAccount);
+      throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.UNAUTHORIZED,
+        message: 'Oturum değişti. Verileri yeniden yükleyin.', operation: 'loadSessionContext' });
+    }
+    if (next !== account) {
+      account = next;
+      creationIds.setAccount(account, clientIdAliases);
+    }
+    accountInvalidated = false;
+    scopeAvailable = false;
+    try {
+      if (aliasStorage?.getItem(accountKey) !== account) aliasStorage?.setItem(accountKey, account);
+      scopeAvailable = Boolean(aliasStorage && aliasStorage.getItem(accountKey) === account);
+    } catch { /* Versioned canonical-ID edits still work without durable storage. */ }
+    if (account && scopeAvailable) creationIds.restoreAliases(clientIdAliases);
+    else for (const id of clientIdAliases.keys()) if (actualIdAliasType(clientIdAliases, id)) {
+      actualIdAliasType(clientIdAliases, id, null);
+      clientIdAliases.delete(id);
+    }
+    activateActualIdAliases(clientIdAliases, guardAccount);
+  }
+  async function verifyAccount() {
+    const previous = account;
+    const observed = accountStamp();
+    acceptSession(await requestJson(`${basePath}/session`, { method: 'GET' }, 'loadSessionContext'), observed);
+    if (!account || (previous && previous !== account)) throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.UNAUTHORIZED,
+      message: 'Oturum doğrulanamadı. Verileri yeniden yükleyin.', operation: 'commitChanges' });
+  }
+  activateActualIdAliases(clientIdAliases, guardAccount);
+  let preparation = Promise.resolve();
+  function prepare(changes) {
+    const result = preparation.then(async () => {
+      if (creationEntries(changes).length && !account) await verifyAccount();
+      collectClientIds(changes, clientIdAliases);
+      const normalized = normalizeActualChanges(changes);
+      if (creationEntries(normalized).length) {
+        const records = await creationIds.reconciliationRecords(normalized, clientIdAliases);
+        if (records.length) {
+          const allocationChanges = {};
+          for (const record of records) {
+            const collection = { PROJECT: 'projectUpserts', WBS: 'wbsUpserts', TASK: 'taskUpserts' }[record.entityType];
+            const original = normalized[collection].find((entry) => entry.id === record.clientId || entry.id === record.id);
+            (allocationChanges[collection] ||= []).push({ ...original, id: record.id, projectId: record.projectId,
+              creationProof: record.proof });
+          }
+          // Only the server can prove a pending identity was never committed.
+          // A consumed/pruned proof fails closed, retaining its identity mapping.
+          const result = await requestJson(`${basePath}/commit`, { method: 'POST', body: JSON.stringify({
+            operation: 'release-creation-ids', changes: {}, allocationChanges }) }, 'commitChanges');
+          if (!Array.isArray(result?.released) || result.released.some((entry) => !records.some((record) =>
+            record.id === entry.id && record.entityType === entry.entityType))) throw new AppRepositoryError({
+            code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+            message: 'Oluşturma işlemi doğrulanamadı. Verileri yeniden yükleyin.', operation: 'commitChanges' });
+          const released = records.filter((record) => result.released.some((entry) => record.id === entry.id && record.entityType === entry.entityType));
+          await creationIds.release(released, clientIdAliases);
+          const unknown = records.filter((record) => !released.includes(record));
+          if (unknown.length) {
+            await creationIds.retireProofs(unknown, clientIdAliases);
+            throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.CONFLICT,
+              message: 'Oluşturma kimliği onaylanamadı. Verileri yeniden yükleyin.', operation: 'commitChanges',
+              details: { code: 'CREATION_ALLOCATION_INVALID' } });
+          }
+        }
+      }
+      let prepared = await creationIds.prepare(normalized, clientIdAliases);
+      if (creationEntries(prepared).some(({ entry }) => !entry.creationProof)) {
+        const allocatedAt = Date.now();
+        const { allocations } = await requestJson(`${basePath}/commit`, { method: 'POST',
+          body: JSON.stringify({ operation: 'allocate-creation-ids', changes: {}, allocationChanges: prepared }) }, 'commitChanges');
+        if (!Array.isArray(allocations)) throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.MUTATION_FAILED,
+          message: 'Oluşturma kimliği alınamadı.', operation: 'commitChanges' });
+        const releaseUnused = async (records) => {
+          if (!records.length) return;
+          const allocationChanges = {};
+          for (const record of records) {
+            const collection = { PROJECT: 'projectUpserts', WBS: 'wbsUpserts', TASK: 'taskUpserts' }[record.entityType];
+            const original = prepared[collection]?.find((entry) => extractActualId(entry.id) === record.clientId);
+            (allocationChanges[collection] ||= []).push({ ...original, id: record.id, projectId: record.projectId, creationProof: record.proof });
+          }
+          await requestJson(`${basePath}/commit`, { method: 'POST', body: JSON.stringify({
+            operation: 'release-creation-ids', changes: {}, allocationChanges }) }, 'commitChanges');
+        };
+        let unused;
+        try { unused = await creationIds.remember(allocations, clientIdAliases, changes, allocatedAt); }
+        catch (error) {
+          // These allocations never reached commit. Release untracked capacity
+          // without replacing the original storage/account failure.
+          try { await releaseUnused(allocations); } catch { /* Server expiry remains the bound if recovery is unavailable. */ }
+          throw error;
+        }
+        await releaseUnused(unused);
+        prepared = await creationIds.prepare(normalized, clientIdAliases);
+        if (creationEntries(prepared).some(({ entry }) => !entry.creationProof)) throw new AppRepositoryError({
+          code: REPOSITORY_ERROR_CODES.MUTATION_FAILED, message: 'Oluşturma kimliği alınamadı.', operation: 'commitChanges' });
+      }
+      activateActualIdAliases(clientIdAliases, guardAccount);
+      return prepared;
+    });
+    preparation = result.then(() => undefined, () => undefined);
+    return result;
+  }
   return {
     kind: 'actual-api',
     async loadSessionContext() {
+      const observed = accountStamp();
       const session = await requestJson(`${basePath}/session`, { method: 'GET' }, 'loadSessionContext');
+      acceptSession(session, observed);
       return restoreActualSessionIds(session, clientIdAliases);
     },
     /**
@@ -426,11 +594,13 @@ export function createApiRepository({
      */
     async loadSnapshot({ refreshMode = 'initial' } = {}) {
       const requestMode = ['manual', 'automatic'].includes(refreshMode) ? refreshMode : 'initial';
+      const observed = accountStamp();
       const body = await requestJson(`${basePath}/snapshot`, {
         method: 'GET',
         headers: { 'x-mergen-rota-refresh-mode': requestMode }
       }, 'loadSnapshot');
       const { session, ...snapshot } = body || {};
+      acceptSession(session, observed);
       const restored = restoreActualSnapshotIds(snapshot, clientIdAliases);
       return session ? { ...restored, session: restoreActualSessionIds(session, clientIdAliases) } : restored;
     },
@@ -440,12 +610,16 @@ export function createApiRepository({
      * tamamlanması garanti altına alınır.
      */
     async commitChanges(changes, { keepalive = false, notifyAssignees = false } = {}) {
-      collectClientIds(changes, clientIdAliases);
-      persistActualIdAliases(clientIdAliases, aliasStorage, aliasStorageKey);
+      guardAccount();
+      const prepared = !creationEntries(changes).length
+        ? creationIds.prepareExisting(normalizeActualChanges((collectClientIds(changes, clientIdAliases), changes)), clientIdAliases)
+        : await prepare(changes);
+      const preparedAccount = account;
+      const preparedScope = scopeAvailable;
       // `notifyAssignees` işlem BAŞINA bir tercihtir: kalıcı bir kullanıcı ayarı
       // olarak saklanmaz ve yalnızca kullanıcı açıkça seçtiğinde gönderilir.
       const body = JSON.stringify({
-        changes: normalizeActualChanges(changes),
+        changes: prepared,
         ...(notifyAssignees === true ? { notifyAssignees: true } : {})
       });
       // Büyük gövde `keepalive` sınırını aşar ve istek hiç gönderilmez; sıradan
@@ -456,6 +630,10 @@ export function createApiRepository({
         keepalive: useKeepalive,
         body
       }, 'commitChanges');
+      guardAccount();
+      if (account !== preparedAccount || (preparedScope && !scopeAvailable)) throw new AppRepositoryError({ code: REPOSITORY_ERROR_CODES.UNAUTHORIZED,
+        message: 'Oturum değişti. Verileri yeniden yükleyin.', operation: 'commitChanges' });
+      if (creationEntries(prepared).length) await creationIds.complete(prepared, clientIdAliases);
       return restoreActualCommitIds(committed, changes, clientIdAliases);
     },
     async flush() {}

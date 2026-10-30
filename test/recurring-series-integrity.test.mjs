@@ -63,7 +63,7 @@ registerHooks({
 
 const scansUsed = () => measurements.reduce((sum, entry) => sum + entry.scans, 0);
 const transactionalTables = (db) => JSON.stringify(Object.fromEntries(Object.entries(db)
-  .filter(([key, value]) => Array.isArray(value) && !['statements', 'transactions'].includes(key))));
+  .filter(([key, value]) => Array.isArray(value) && !['statements', 'transactions', 'creationAllocations'].includes(key))));
 
 /* ── 1 · RRULE kesin olarak doğrulanır ───────────────────────── */
 
@@ -361,7 +361,7 @@ test('aynı seri günü için ikinci bir yineleme kalıcılaştırılamaz', asyn
 
     // Arayüz durumu (`todo`) depo sınırında kanonik kalıcı duruma çevrilir;
     // seri üretimi de sıradan görev oluşturmayla aynı yoldan geçer.
-    assert.equal(stack.db.tasks.find((row) => String(row.TaskId).toLowerCase().includes('1aaaaaaa')).Status, 'planned');
+    assert.equal(stack.db.tasks.find((row) => String(row.TaskId).toLowerCase() === stack.actualId(TASK_ID)).Status, 'planned');
 
     const first = await stack.persistence.commitChanges('task/series', {
       taskUpserts: [seriesTask({
@@ -434,7 +434,7 @@ test('geçerli tekrar gününe farklı plan veya süre yazılamaz; toplu işlem 
     assert.equal(stack.db.tasks.length, 1, 'önceki geçerli yineleme de geri alınır');
     await stack.repository.commitChanges({ taskUpserts: [child, second] });
     assert.equal(stack.db.tasks.length, 3);
-    const stored = stack.db.tasks.find((row) => String(row.TaskId).toLowerCase().includes('2bbbbbbb'));
+    const stored = stack.db.tasks.find((row) => String(row.TaskId).toLowerCase() === stack.actualId(CHILD_ID));
     assert.equal(stored.PlannedStart, child.plannedStart);
     assert.equal(stored.PlannedFinish, child.plannedFinish);
     assert.equal(stored.TargetFinish, child.targetFinish);
@@ -468,7 +468,7 @@ test('uzun şablonlu büyük seride yineleme doğrulaması kardeş bitişlerini 
     // Tek meşru yineleme kabul edilir ve şablonun ürettiği planla yazılır.
     const legitimate = child(2, '2026-08-24');
     await stack.repository.commitChanges({ taskUpserts: [legitimate] });
-    const stored = stack.db.tasks.find((row) => String(row.TaskId).toLowerCase().includes('90000002'));
+    const stored = stack.db.tasks.find((row) => String(row.TaskId).toLowerCase() === stack.actualId(legitimate.id));
     assert.equal(stored.PlannedFinish, legitimate.plannedFinish);
     assert.equal(stored.TargetFinish, legitimate.targetFinish);
 
@@ -634,7 +634,7 @@ test('şablon silindiğinde yinelemeler ayrılır, silinmez', async () => {
 
     // Her yineleme gerçek bir görevdir ve kendi ilerlemesini taşır: şablonun
     // silinmesi onları da silmemeli, yalnızca seriden ayırmalıdır.
-    const remaining = stack.db.tasks.filter((row) => String(row.TaskId).toLowerCase().includes('2bbbbbbb'));
+    const remaining = stack.db.tasks.filter((row) => String(row.TaskId).toLowerCase() === stack.actualId(CHILD_ID));
     assert.equal(remaining.length, 1);
     assert.equal(remaining[0].RecurrenceParentTaskId, null);
     assert.equal(remaining[0].RecurrenceOccurrenceDate, null);
@@ -696,7 +696,7 @@ test('en uzun tek yineleme seyrek ve tatil yoğun takvimde terminli veya termins
       assert.equal(stack.db.tasks.length, 2, 'tek azami oluşum da bağımsız kabul edilir');
       await stack.repository.commitChanges({ taskUpserts: children.slice(1) });
       assert.equal(stack.db.tasks.length, 8);
-      const stored = stack.db.tasks.find(row => String(row.TaskId).toLowerCase().includes('2bbbbbbb'));
+      const stored = stack.db.tasks.find(row => String(row.TaskId).toLowerCase() === stack.actualId(CHILD_ID));
       assert.equal(stored.PlannedFinish, child.plannedFinish);
       assert.equal(stored.TargetFinish, child.targetFinish);
       assert.equal(stored.PlannedDurationDays, MAX_WORKING_DAY_SPAN);
@@ -768,7 +768,10 @@ test('birden çok pahalı seri işlem tavanını paylaşır ve kısmi yazmaları
     for (const parent of parents) {
       const ownChildren = children.filter(child => child.recurrenceParentId === parent.id);
       let reachedCommit = false;
-      stack.db.commitHook = () => { reachedCommit = true; throw new Error('tek-seri-ölçümü'); };
+      stack.db.commitHook = (transaction) => {
+        if (!stack.db.statements.slice(transaction.transactionRecord.statementIndex).some((entry) => entry.sql.includes('INSERT dbo.MR_Tasks'))) return;
+        reachedCommit = true; throw new Error('tek-seri-ölçümü');
+      };
       measurements.length = 0;
       await assert.rejects(stack.repository.commitChanges({ taskUpserts: ownChildren }));
       assert.equal(reachedCommit, true, 'sekiz çocuk iş tavanını aşmadan commit aşamasına ulaşır');
@@ -786,5 +789,69 @@ test('birden çok pahalı seri işlem tavanını paylaşır ve kısmi yazmaları
     assert.equal(scansUsed(), 5_000_000);
     assert.equal(new Set(measurements.map(entry => entry.meter)).size, 1, 'şablonlar arasında sayaç sıfırlanmaz');
     assert.equal(transactionalTables(stack.db), before, 'bütün işlem tabloları birlikte geri alınır');
+  } finally { await stack.dispose(); }
+});
+
+test('ordinary self-assigned creations share the transaction calendar meter and roll back on aggregate exhaustion', { timeout: 60000 }, async () => {
+  const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
+  const seed = corporateSeed({ systemAdminSicils: [], tasks: [{ TaskId: 'ab000000-0000-4000-8000-000000000001', ProjectId: CORPORATE_PROJECT_ID, WbsId: CORPORATE_ROOT_WBS_ID, Title: 'Scope anchor', CreatedBySicil: 900010 }], taskAssignees: [{ TaskId: 'ab000000-0000-4000-8000-000000000001', Sicil: 900001 }] });
+  seed.calendars[0].WorkingDays = [1]; seed.calendars[0].Holidays = [];
+  const stack = await createActualStack(seed);
+  try {
+    const task = (index) => ({ id: `ac000000-0000-4000-8000-${String(index).padStart(12, '0')}`, projectId: CORPORATE_PROJECT_ID, wbsId: CORPORATE_ROOT_WBS_ID, calendarId: null, task: 'Ordinary task', status: 'planned', priority: 'medium', milestone: false, plannedStart: '2026-08-17', plannedFinish: fmtISO(addDays('2026-08-17', (MAX_WORKING_DAY_SPAN - 1) * 7)), assigneeIds: ['900001'], deps: [], description: null, keyword: null });
+    measurements.length = 0; await stack.repository.commitChanges({ taskUpserts: [task(1)] }); assert.ok(scansUsed() > 100000);
+    const before = transactionalTables(stack.db); measurements.length = 0;
+    await assert.rejects(stack.repository.commitChanges({ taskUpserts: Array.from({ length: 50 }, (_, index) => task(index + 2)) }), error => error.code === 'MUTATION_FAILED' && /işlem sınırını aşıyor/.test(error.message));
+    assert.equal(scansUsed(), 5_000_000); assert.equal(new Set(measurements.map(entry => entry.meter)).size, 1); assert.equal(transactionalTables(stack.db), before);
+  } finally { await stack.dispose(); }
+});
+
+test('recurrence parent absence and hidden existence return the same response before parent-specific checks', async () => {
+  const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
+  const hiddenProject = 'bd000000-0000-4000-8000-000000000001', hiddenParent = 'bd000000-0000-4000-8000-000000000002';
+  const seed = corporateSeed({ systemAdminSicils: [], corporateProjectAccess: [{ ProjectCode: 'P4417041', Sicil: 900001, RoleCode: 'PROJECT_MANAGER' }] });
+  seed.projects.push({ ProjectId: hiddenProject, SourceType: 'MANUAL', ProjectName: 'hidden', LeadSicil: 900010, CalendarId: DEFAULT_CALENDAR_ID });
+  seed.tasks = [{ TaskId: hiddenParent, ProjectId: hiddenProject, Title: 'protected template', CreatedBySicil: 900010, RecurrenceRule: 'FREQ=WEEKLY;COUNT=400', PlannedStart: '2026-08-17', PlannedFinish: '2026-08-17', PlannedDurationDays: 1 }];
+  const stack = await createActualStack(seed);
+  try {
+    const child = { ...seriesTask(), status: 'planned', id: CHILD_ID.slice(5), projectId: CORPORATE_PROJECT_ID, wbsId: CORPORATE_ROOT_WBS_ID, recurrence: null, recurrenceParentId: hiddenParent, recurrenceOccurrenceDate: '2026-08-24' };
+    const attempt = async () => {
+      try { await stack.repository.commitChanges({ taskUpserts: [child] }); return [200, '']; }
+      catch (error) { return [error.code, error.message]; }
+    };
+    const hidden = await attempt(); stack.db.tasks = []; assert.deepEqual(await attempt(), hidden); assert.equal(hidden[0], 'MUTATION_FAILED'); assert.match(hidden[1], /Tekrar şablonu bulunamadı/); assert.doesNotMatch(hidden[1], /protected template|FREQ|aynı projede/);
+  } finally { await stack.dispose(); }
+});
+
+test('ordinary recurrence-child edits keep an unchanged invisible parent but cannot establish a hidden link', async () => {
+  const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
+  const parent = 'be000000-0000-4000-8000-000000000001', child = 'be000000-0000-4000-8000-000000000002';
+  const stack = await createActualStack(corporateSeed({ systemAdminSicils: [],
+    tasks: [
+      { TaskId: parent, ProjectId: CORPORATE_PROJECT_ID, WbsId: CORPORATE_ROOT_WBS_ID, Title: 'hidden template', CreatedBySicil: 900010, RecurrenceRule: 'FREQ=WEEKLY;COUNT=3' },
+      { TaskId: child, ProjectId: CORPORATE_PROJECT_ID, WbsId: CORPORATE_ROOT_WBS_ID, Title: 'visible child', CreatedBySicil: 900010,
+        RecurrenceParentTaskId: parent, RecurrenceOccurrenceDate: '2026-08-24', PlannedStart: '2026-08-24', PlannedFinish: '2026-08-24', PlannedDurationDays: 1 }
+    ], taskAssignees: [{ TaskId: child, Sicil: 900001 }] }));
+  try {
+    assert.equal(stack.state.tasks.some((task) => task.id === parent), false);
+    assert.equal((await stack.persistence.updateTask(child, { description: 'ordinary edit' })).ok, true);
+    assert.equal((await stack.persistence.flush()).ok, true);
+    const saved = stack.db.tasks.find((task) => task.TaskId.toLowerCase() === child);
+    assert.equal(saved.Description, 'ordinary edit'); assert.equal(saved.RecurrenceParentTaskId.toLowerCase(), parent);
+    // Give the actor full child-project write access, then target an EXISTING
+    // parent in a different, invisible project so only the visibility gate fails.
+    const hiddenProject = 'be000000-0000-4000-8000-000000000004';
+    const hiddenParent = 'be000000-0000-4000-8000-000000000003';
+    stack.db.corporateProjectAccess.push({ ProjectCode: 'P4417041', Sicil: 900001, RoleCode: 'PROJECT_MANAGER' });
+    stack.db.projects.push({ ProjectId: hiddenProject, SourceType: 'MANUAL', ProjectName: 'invisible', LeadSicil: 900010, CalendarId: DEFAULT_CALENDAR_ID });
+    stack.db.tasks.push({ TaskId: hiddenParent, ProjectId: hiddenProject, Title: 'invisible parent', CreatedBySicil: 900010, RecurrenceRule: 'FREQ=WEEKLY;COUNT=3' });
+    const response = await fetch('/api/mergen-rota/commit', { method: 'POST', body: JSON.stringify({ changes: { taskUpserts: [{
+      ...stack.state.tasks.find((task) => task.id === child), status: 'planned', recurrenceParentId: hiddenParent
+    }] } }) });
+    const rejected = await response.json();
+    assert.equal(response.status, 400, JSON.stringify(rejected));
+    assert.equal(rejected.error.code, 'MUTATION_FAILED');
+    assert.match(rejected.error.message, /Tekrar şablonu bulunamadı/);
+    assert.equal(stack.db.tasks.find((task) => task.TaskId.toLowerCase() === child).RecurrenceParentTaskId.toLowerCase(), parent);
   } finally { await stack.dispose(); }
 });

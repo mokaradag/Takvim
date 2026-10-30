@@ -1,11 +1,12 @@
+import { assertAssigneeScope, assertAssigneeTaskCreateFieldsOnly, assertTaskProjectScope, TASK_PROJECT_SCOPES } from './sqlAppRepository.js';
 import 'server-only';
 import { canonicalActualId } from '../../domain/identity/actualId.js';
-import { ACCESS_REASONS, assertCanCreateManualProject } from '../authorization/authorization.js';
+import { ACCESS_REASONS, assertCanCreateManualProject, assertProjectWriteAccess } from '../authorization/authorization.js';
 import { sql } from '../db/pool.js';
 import { sqlIdentifier } from '../db/sqlIdentifier.js';
 import { ServerPersistenceError } from '../errors.js';
 import { findDeleteIntentIssue } from './deleteIntentPolicy.js';
-import { findUpsertIntentIssue } from './upsertIntentPolicy.js';
+import { findUpsertIntentIssue, hasVersion } from './upsertIntentPolicy.js';
 
 const UPSERT_TARGETS = Object.freeze([
   {
@@ -129,7 +130,7 @@ async function observableTo(executor, actor, entityType, id, projectId) {
  * projelerini döndürür. Proje oluşturma yetkisi, kimlik çakışması okunmadan
  * denetlenir; oluşturamayan aktör gizli projeyi var olmayandan ayıramaz.
  */
-export async function assertUpsertIntentMatchesPersistence(executor, changes = {}, actor = null) {
+export async function assertUpsertIntentMatchesPersistence(executor, changes = {}, actor = null, { createdProjectIds = new Set(), deferCreateCollisions = false } = {}) {
   const storedTaskProjects = new Map();
   for (const target of UPSERT_TARGETS) {
     const entries = [...(changes[target.collection] || [])]
@@ -137,8 +138,21 @@ export async function assertUpsertIntentMatchesPersistence(executor, changes = {
 
     for (const entry of entries) {
       const id = String(entry.id);
-      const updateIntent = entry.version != null && String(entry.version).trim() !== '';
+      const updateIntent = hasVersion(entry.version);
       if (target.entityType === 'PROJECT' && !updateIntent) assertCanCreateManualProject(actor);
+      if (!updateIntent && target.entityType !== 'PROJECT') {
+        const destination = canonicalActualId(entry.projectId);
+        if (createdProjectIds.has(destination)) assertCanCreateManualProject(actor);
+        else if (target.entityType === 'WBS') assertProjectWriteAccess(actor.effective, destination);
+        else {
+          const scope = await assertTaskProjectScope(executor, actor, destination, { allowAssigneeCreate: true });
+          await assertAssigneeScope(executor, actor, destination, entry.assigneeIds || [], scope);
+          if (scope === TASK_PROJECT_SCOPES.ASSIGNEE_CREATE && !entry.recurrenceParentId) assertAssigneeTaskCreateFieldsOnly(entry);
+        }
+        // Canonical persistence validation must finish before testing a proposed
+        // ID. Otherwise any later rejection becomes a hidden-ID collision oracle.
+      }
+      if (!updateIntent && deferCreateCollisions) continue;
       const projectId = await targetProjectForUpdate(executor, target, id);
       if (projectId && target.entityType === 'TASK') storedTaskProjects.set(id, projectId);
       const issue = findUpsertIntentIssue({

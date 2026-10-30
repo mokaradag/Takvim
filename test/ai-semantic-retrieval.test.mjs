@@ -106,6 +106,32 @@ function assertCandidates(candidates, expected, { relevance }) {
   assert.equal(Object.isFrozen(candidates), true);
 }
 
+for (const stage of ['embedding', 'rerank']) for (const retry of [false, true]) {
+  test(`semantic ${stage} presence failure stops disclosure without provider accounting or optional fallback (retry=${retry})`, async (t) => {
+    let refuse = false;
+    const ctx = setup(t, { respond: (call) => {
+      if (refuse && (stage === 'embedding' ? isQueryCall(call) : call.kind === 'rerank')) {
+        refuse = false; return { type: 'network', code: 'ECONNREFUSED' };
+      }
+      return null;
+    } });
+    assert.equal((await ctx.retrieve()).status, 'reranked');
+    const calls = ctx.provider.calls.length, measurements = aiTelemetrySnapshot().latency.provider.count;
+    const failure = new AiError('AI_BUSY', { details: { saturation: 'conversation' } });
+    const rejectAt = (stage === 'embedding' ? 1 : 2) + Number(retry);
+    let checks = 0;
+    refuse = retry;
+    await assert.rejects(ctx.retrieve(QUERY, { beforeDispatch: async () => {
+      if (++checks === rejectAt) throw failure;
+    } }), (error) => error === failure);
+    const dispatched = rejectAt - 1;
+    assert.equal(checks, rejectAt);
+    assert.equal(ctx.provider.calls.length - calls, dispatched);
+    assert.equal(aiTelemetrySnapshot().latency.provider.count - measurements, dispatched);
+    assertIdle(ctx.admission);
+  });
+}
+
 /* ── Olağan yol ve yeniden kullanım ─────────────────────── */
 
 test('sorgu gömülür, katalog bir kez gömülür, ilk aşama sınırlıdır ve yalnızca o adaylar yeniden sıralanır', async (t) => {
