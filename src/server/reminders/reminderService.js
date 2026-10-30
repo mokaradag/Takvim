@@ -145,7 +145,7 @@ export async function deliverTaskReminder(executor, {
   const delivered = recipients.filter((_email, index) => states[index] === '2');
   let failed = states.includes('3') ? { code: 'SMTP_SEND_FAILED' } : null;
   let checkpointFailed = false, failedThisRun = false;
-  let uncertain = states.includes('1'), attempted = states.filter((state) => state !== '0').length;
+  let uncertain = states.includes('1'), uncertainThisRun = false, attempted = states.filter((state) => state !== '0').length;
   const checkpoint = () => completeReminderLog(executor, logId, { status: 'PENDING', recipients: delivered,
     failureCode: 'DELIVERY_IN_PROGRESS', progress: progress(), active: true });
   // Bound admission separately from an in-flight session. One isolated message
@@ -186,9 +186,9 @@ export async function deliverTaskReminder(executor, {
         sent = { ok: false, code: 'SMTP_SEND_FAILED', deliveryMayHaveEscaped: true };
       }
       if (sent.ok) { delivered.push(email); states[index] = '2'; }
-      else if (sent.deliveryMayHaveEscaped) uncertain = true;
+      else if (sent.deliveryMayHaveEscaped) { uncertain = true; uncertainThisRun = true; }
       else { failed = sent; failedThisRun = true; states[index] = '3'; }
-      try { await checkpoint(); } catch { checkpointFailed = true; uncertain = true; break; }
+      try { await checkpoint(); } catch { checkpointFailed = true; uncertain = true; uncertainThisRun = true; break; }
     }
   } finally {
     clearTimeout(timer);
@@ -202,10 +202,10 @@ export async function deliverTaskReminder(executor, {
   if (remaining) {
     const recorded = await finalizeLog(executor, logId, { status: 'PENDING', recipients: delivered,
       failureCode: 'RECIPIENTS_PENDING', progress: progress() });
-    const code = uncertain ? 'MAIL_DELIVERY_UNCERTAIN' : !recorded || checkpointFailed ? 'UNEXPECTED_ERROR' : failedThisRun ? failed.code : 'RECIPIENTS_PENDING';
-    return { ok: false, code, retryable: recorded && !uncertain && !failedThisRun && !checkpointFailed,
-      message: uncertain ? 'Bazı teslimatların sonucu belirsiz.' : code === 'RECIPIENTS_PENDING'
-        ? 'Denenmeyen alıcılara gönderim sonraki çalıştırmada devam edecek.' : failed?.message || 'Gönderim ilerlemesi kaydedilemedi.', deliveryMayHaveEscaped: uncertain, recipientCount: delivered.length, problems,
+    const code = uncertainThisRun ? 'MAIL_DELIVERY_UNCERTAIN' : !recorded || checkpointFailed ? 'UNEXPECTED_ERROR' : failedThisRun ? failed.code : 'RECIPIENTS_PENDING';
+    return { ok: false, code, retryable: recorded && !uncertainThisRun && !failedThisRun && !checkpointFailed,
+      message: uncertainThisRun ? 'Bazı teslimatların sonucu belirsiz.' : code === 'RECIPIENTS_PENDING'
+        ? 'Denenmeyen alıcılara gönderim sonraki çalıştırmada devam edecek.' : failed?.message || 'Gönderim ilerlemesi kaydedilemedi.', deliveryMayHaveEscaped: uncertainThisRun, recipientCount: delivered.length, problems,
       warnings: [...warnings, recorded ? 'Denenmeyen alıcılar sonraki gönderimde devam edecek.' : 'Gönderim ilerlemesi doğrulanamadı.'] };
   }
   if (uncertain) {
@@ -346,7 +346,8 @@ export async function sendManualReminder(executor, {
   } catch (error) {
     // Keep the most recent durable recipient checkpoint, including any sends
     // confirmed since resume. Never restore a stale copy over that checkpoint.
-    await deferReminderLog(executor, logId);
+    if (resumedLogId != null) await deferReminderLog(executor, logId);
+    else await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: 'UNEXPECTED_ERROR' });
     throw error;
   }
 }

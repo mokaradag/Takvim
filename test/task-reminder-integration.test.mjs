@@ -1142,3 +1142,63 @@ test('oversized recipient progress finalizes the claim without SMTP or endless p
     assert.equal(sends, 0);
   });
 });
+
+for (const kind of ['automatic', 'manual']) {
+  test(`prior uncertainty does not count as a new ${kind} failure during intermediate continuations`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-17T09:00:00Z') });
+    await withReminderStack(reminderSeed({ taskAssignees: [900001, 900002, 900003].map((Sicil) => ({ TaskId: TASK_ID, Sicil })) }), async ({ db, pool }) => {
+      const { runAutomaticReminders, sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+      db.corporateUsers.find((row) => row.Name === 'adressiz').EmailAddress = 'z@example.internal';
+      const recipients = [];
+      const send = async ({ to }) => {
+        recipients.push(to[0]); t.mock.timers.tick(60001);
+        return recipients.length === 1 ? { ok: false, code: 'SMTP_TIMEOUT', deliveryMayHaveEscaped: true } : { ok: true };
+      };
+      const run = () => kind === 'automatic'
+        ? runAutomaticReminders(pool, { now: at(2026, 8, 17), send })
+        : sendManualReminder(pool, { taskId: TASK_ID, actorSicil: 900001, now: at(2026, 8, 17), send });
+      const first = await run();
+      assert.equal(kind === 'automatic' ? first.reason : first.code, 'MAIL_DELIVERY_UNCERTAIN');
+      assert.equal(db.taskReminderLog[0].RecipientDigest.split(':').at(-1), '100');
+      const second = await run();
+      if (kind === 'automatic') {
+        assert.equal(second.ok, true); assert.equal(second.failed, 0); assert.equal(second.results[0].reason, 'RECIPIENTS_PENDING');
+      } else {
+        assert.equal(second.code, 'RECIPIENTS_PENDING'); assert.equal(second.retryable, true);
+        assert.equal(second.deliveryMayHaveEscaped, false);
+      }
+      assert.equal(db.taskReminderLog[0].RecipientDigest.split(':').at(-1), '120');
+      const last = await run();
+      assert.equal(kind === 'automatic' ? last.reason : last.code, 'MAIL_DELIVERY_UNCERTAIN');
+      assert.equal(db.taskReminderLog[0].RecipientDigest.split(':').at(-1), '122');
+      assert.equal(recipients.length, 3); assert.equal(new Set(recipients).size, 3, 'uncertain recipients are never resent');
+      assert.equal(db.taskReminderLog[0].FailureCode, 'MAIL_DELIVERY_UNCERTAIN'); assert.ok(db.taskReminderLog[0].CompletedAt);
+    });
+  });
+}
+
+for (const failingRead of ['recipients', 'progress']) {
+  test(`a fresh manual ${failingRead} read failure permits retry instead of becoming a legacy uncertain continuation`, async (t) => {
+    await withReminderStack(reminderSeed(), async ({ db, pool }) => {
+      const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
+      const { REMINDER_PROGRESS_SQL } = await import('../src/server/reminders/reminderQueries.js');
+      const request = pool.request.bind(pool); let fail = true, sends = 0;
+      t.mock.method(pool, 'request', () => {
+        const value = request(), query = value.query.bind(value);
+        value.query = async (sql) => {
+          if (fail && (failingRead === 'progress' ? sql === REMINDER_PROGRESS_SQL : sql.includes('SELECT ta.Sicil'))) {
+            fail = false; throw new Error('fresh pre-send read failure');
+          }
+          return query(sql);
+        }; return value;
+      });
+      const options = { taskId: TASK_ID, actorSicil: 900001, send: async () => { sends += 1; return { ok: true }; } };
+      await assert.rejects(sendManualReminder(pool, options), /fresh pre-send read failure/);
+      assert.equal(sends, 0); assert.equal(db.taskReminderLog[0].Status, 'FAILED');
+      assert.equal(db.taskReminderLog[0].FailureCode, 'UNEXPECTED_ERROR');
+      assert.equal(db.taskReminderLog[0].RecipientDigest, null); assert.ok(db.taskReminderLog[0].CompletedAt);
+      assert.equal((await sendManualReminder(pool, options)).ok, true);
+      assert.equal(sends, 1); assert.equal(db.taskReminderLog.length, 2); assert.equal(db.taskReminderLog[1].Status, 'SENT');
+    });
+  });
+}

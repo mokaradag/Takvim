@@ -689,8 +689,14 @@ export function createAiGateway({
    * gitmemiştir; yanıt başladıktan sonraki hiçbir hata yinelenmez (aynı yanıt
    * baştan ikinci kez üretilmez).
    */
-  async function connectStream({ deadline, watch, context, source, healthFailure, invoke, resend = true }) {
+  async function connectStream({ deadline, watch, context, source, healthFailure, invoke, beforeDispatch = null, resend = true }) {
     for (let attempt = 1; ; attempt += 1) {
+      // Local presence/authorization checks are not provider attempts. Recheck
+      // before each transport retry, under the existing overall deadline.
+      if (beforeDispatch) {
+        watch.pause();
+        await raceWithAbort(() => beforeDispatch(deadline.signal), deadline.signal);
+      }
       watch.restart();
       context.attempts = attempt;
       const startedAt = now();
@@ -780,17 +786,15 @@ export function createAiGateway({
         context,
         source: credential.source,
         healthFailure: healthFailureFor(credential.source),
-        invoke: async () => {
-          await beforeDispatch?.(providerScope.signal);
-          return getProvider().streamChatCompletion({
-            baseUrl: config.baseUrl,
-            apiKey: credential.apiKey,
-            model: route.model,
-            messages: safeMessages,
-            maxOutputTokens: outputLimit,
-            signal: providerScope.signal
-          });
-        }
+        beforeDispatch,
+        invoke: () => getProvider().streamChatCompletion({
+          baseUrl: config.baseUrl,
+          apiKey: credential.apiKey,
+          model: route.model,
+          messages: safeMessages,
+          maxOutputTokens: outputLimit,
+          signal: providerScope.signal
+        })
       });
       progress.providerStartedAt = providerStartedAt;
       progress.providerStartMs = now() - providerStartedAt;

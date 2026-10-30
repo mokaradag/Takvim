@@ -553,3 +553,30 @@ for (const tools of [false, true]) {
     assert.equal(admission.status().active, 0);
   });
 }
+
+for (const code of ['NOT_FOUND', 'DATABASE_UNAVAILABLE', 'AI_BUSY']) {
+  test(`before-dispatch ${code} preserves the local error without recording a provider attempt`, async (t) => {
+    const { ServerPersistenceError } = await import('../src/server/errors.js');
+    const { stream, provider, admission } = gatewayFor(t);
+    const failure = new ServerPersistenceError(code, 'Local pre-dispatch failure');
+    await assert.rejects(stream({ beforeDispatch: async () => { throw failure; } }), (error) => error === failure);
+    assert.equal(provider.calls.length, 0);
+    assert.equal(aiTelemetrySnapshot().latency.provider.count, 0);
+    assert.equal(snapshotOperations().some((row) => row.operation === 'ai.provider.stream'), false);
+    assert.equal(admission.status().active, 0);
+  });
+}
+
+test('presence is rechecked before a connection retry without attributing its rejection to the provider', async (t) => {
+  const { ServerPersistenceError } = await import('../src/server/errors.js');
+  const provider = createFakeAiProvider();
+  provider.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'stream', text: 'must not dispatch' });
+  const { stream, admission } = gatewayFor(t, { provider });
+  const failure = new ServerPersistenceError('NOT_FOUND', 'Conversation deleted between attempts');
+  let checks = 0;
+  await assert.rejects(stream({ beforeDispatch: async () => { if (++checks === 2) throw failure; } }), (error) => error === failure);
+  assert.equal(checks, 2); assert.equal(provider.calls.length, 1);
+  assert.equal(aiTelemetrySnapshot().latency.provider.count, 1, 'only the actual refused connection is a provider attempt');
+  assert.equal(snapshotOperations().find((row) => row.operation === 'ai.provider.stream').errorCount, 1);
+  assert.equal(admission.status().active, 0);
+});
