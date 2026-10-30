@@ -516,6 +516,34 @@ test('uzun konuşmada bağlamın kısaldığı ilk olayda bildirilir', async (t)
 
 /* ── SQL ve model üretimi ─────────────────────────────────── */
 
+test('turn presence reads only its user message and rejects missing or other-owner targets', async (t) => {
+  const { db } = createAiStack(t);
+  const { conversationId } = await startConversation();
+  const { prepareAssistantTurn, assertAssistantTurnPresent } = await import('../src/server/ai/assistant/assistantService.js');
+  const { getSqlPool } = await import('../src/server/db/pool.js');
+  const turn = await prepareAssistantTurn({ readBody: async () => ({
+    conversationId, turnId: randomUUID(), message: 'Next question', mode: 'standard', source: 'general'
+  }) });
+  t.after(() => turn.claim.release());
+  assert.equal(db.aiConversationMessages.length, 3);
+  const pool = await getSqlPool(), request = pool.request.bind(pool), returned = [];
+  t.mock.method(pool, 'request', () => {
+    const value = request(), query = value.query.bind(value);
+    value.query = async (sql) => {
+      const result = await query(sql);
+      if (sql.includes('AS ConversationPresent')) returned.push(result.recordsets[0].length);
+      return result;
+    };
+    return value;
+  });
+  await assertAssistantTurnPresent(turn);
+  assert.deepEqual(returned, [1], 'prior history is not read for a single-message presence check');
+  await assert.rejects(assertAssistantTurnPresent({ ...turn, sicil: SICIL_B }), { code: 'NOT_FOUND' });
+  db.aiConversationMessages = db.aiConversationMessages.filter((row) => row.MessageId.toLowerCase() !== turn.userMessage.id);
+  await assert.rejects(assertAssistantTurnPresent(turn), { code: 'NOT_FOUND' });
+  assert.deepEqual(returned, [1, 0, 0]);
+});
+
 test('SQL işleri model üretiminden bağımsızdır: üretim sırasında işlem açık değildir, yanıt ancak tamamlanınca yazılır', async (t) => {
   const { db, provider } = createAiStack(t);
   const observations = [];

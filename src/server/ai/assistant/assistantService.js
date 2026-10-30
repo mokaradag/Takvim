@@ -527,7 +527,7 @@ async function currentPresence(sicil, signal, target) {
 
 /** Validate metadata/user content immediately before the stream's first event. */
 export async function assertAssistantTurnPresent(turn, signal) {
-  const presence = await currentPresence(turn.sicil, signal, { conversationId: turn.conversation.id });
+  const presence = await currentPresence(turn.sicil, signal, { conversationId: turn.conversation.id, messageId: turn.userMessage.id });
   if (!presence.conversationPresent || !presence.presentMessages.has(turn.userMessage.id)) throw conversationNotFound();
 }
 

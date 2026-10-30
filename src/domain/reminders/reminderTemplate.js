@@ -236,7 +236,7 @@ export function sanitizeReminderHtml(input, { maxChars = MAX_REMINDER_TEMPLATE_C
     if (!tag || !ALLOWED_TAGS.has(tag)) {
       // `script`/`style` gövdesi de atılır: yalnızca etiketi düşürmek, kodu
       // düz metin olarak bırakırdı.
-      if (tag === 'script' || tag === 'style') {
+      if (!closing && (tag === 'script' || tag === 'style')) {
         const close = new RegExp(`</${tag}>`, 'gi');
         close.lastIndex = end + 1;
         const match = close.exec(source);

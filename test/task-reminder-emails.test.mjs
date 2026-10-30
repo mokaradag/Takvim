@@ -595,6 +595,18 @@ test('Turkish Unicode before script/style blocks preserves original closing offs
   }
 });
 
+test('stray script/style closing tags preserve following reminder content and sanitization', () => {
+  for (const tag of ['ScRiPt', 'StYlE']) {
+    assert.equal(sanitizeReminderHtml(`İİ<p>önce</p></${tag}><p>sonra</p>`), 'İİ<p>önce</p><p>sonra</p>');
+    const source = `İİ<p>önce</p></${tag}><p>{{task_name}}</p></${tag}><${tag}>bad()</${tag}><p>sonra</p>`;
+    const expected = 'İİ<p>önce</p><p>{{task_name}}</p><p>sonra</p>';
+    assert.equal(sanitizeReminderHtml(source), expected);
+    assert.equal(sanitizeReminderHtml(expected), expected);
+    assert.equal(renderReminderEmail({ body: source }, { task_name: '<img src=x onerror="bad()">' }).bodyHtml,
+      'İİ<p>önce</p><p>&lt;img src=x onerror=&quot;bad()&quot;&gt;</p><p>sonra</p>');
+  }
+});
+
 test('SMTP reply boundaries reject near-miss codes and retain multiline and bare final replies', async () => {
   for (const reply of ['2501 foo\r\n', '250OK\r\n', '250-hello\r\n2501 foo\r\n']) {
     const socket = new EventEmitter(); socket.setEncoding = () => {}; socket.destroy = () => {};
