@@ -2001,8 +2001,143 @@ nedenlerinin incelenmesi (geri dönüşler tasarım gereği doğru yanıttır, a
 - Planlayıcının anlam hatası (geçerli ama yanlış niyetli plan, ör. dağılım sorusuna liste) yapısal olarak
   saptanamaz; böyle bir plan doğrulanmış ama soruya uymayan bir yanıt üretebilir. Bunun önlemi daha dar şema ve
   yönergedir, sözcük sınıflandırması değildir.
-- Grafik tek dizili çubuk ve halka ile sınırlıdır; zaman serisi ve çok dizili karşılaştırma yoktur.
+- Grafik tek dizili çubuk ve halka ile sınırlıdır; zaman serisi ve çok dizili karşılaştırma yoktur. (Aşama 4E'de çizgi,
+  yığılmış çubuk, gösterge kartı ve zaman çizelgesi eklendi; bkz. §14.5.)
 - Kişi sonuç kümeleri 4C sözleşmesi gereği takip göndergesi değildir.
 - Anlatım bir model turu ekler (Haiku/CLI ölçümünde 2,0–2,4 sn, girdi ~1,3–1,6 bin belirteç); kurum içi Qwen gecikmesi
   ölçülmedi. Önceden `NO_CHOICE` olan sayım + liste yanıtları artık anlatım turu açar.
 - Odak görünümü yalnızca masaüstündedir ve panel kapanınca sıfırlanır.
+
+## 14. Aşama 4E — doğal analist, güvenilir planlama, kapsam bilinçli analiz ve zengin sunum (UYGULANDI — kurum içi kabul AÇIK)
+
+Aşama 4E, 4D'den sonra **açıkça görevlendirilmiş** ayrı bir aşamadır (PR #108 birleştirildikten sonra). 4C/4D'nin güven
+sınırı aynen geçerlidir: sunucu neyin doğru olduğunu ve kimin neyi görebileceğini belirler; model yalnızca türlü bir
+niyet (plan) ve sunucunun yazdığı kimliklerden bir düzen seçer. 4E bu sınırı genişletmez: yeni ağ yolu, dinleyici, kimlik
+doğrulamasız uç, serbest SQL/HTML/SVG/betik, çalıştırılabilir grafik tanımı ya da kullanıcı tarafından yapılandırılan
+sağlayıcı yoktur. Yeni araç eklenmedi; var olan genel araçlar (`rota_task_search`, `rota_task_analytics`,
+`rota_workload_summary`, `rota_portfolio_summary`) birleştirilir.
+
+### 14.1 Kök nedenler
+
+**A — `4D fallback narrative (INVALID: POINTER_TARGET)`** ("görevlerimin dağılımını grafik olarak göster").
+Yönlendirme kuralı paragraftan sonraki **ilk** tablo/grafik bloğunun yönlendirilen blok olmasını istiyordu. Paragraf
+`["P1","P2","T1","G1"]` sonrası `rows T1` + `chart G1` düzeninde G1'in önünde T1 vardı ve geçerli düzen reddediliyordu.
+Düzeltme doğrulamayı gevşetmez, doğru ifade eder: yönlendirme cümlesi bloğun **türünü** söyler ("aşağıdaki tablo",
+"aşağıdaki grafik"); paragrafla hedef arasına **aynı türden** yönlendirilmemiş bir blok girerse "aşağıdaki" yanlış bloğu
+gösterir ve düzen reddedilir; farklı türden blok belirsizlik yaratmaz (`groundedComposition.js`, `POINTER_TARGET`).
+
+**B — "bu hafta işlerim açısından durumumu değerlendir" → `REQUEST_DECLARATION`, araç 0, kanıt 0.**
+Geniş bir değerlendirme sorusu tek bir `request` bildirimine sığmaz: model genel durum + gecikmiş + yaklaşan için
+ölçüleri, nüfusu, sıralamayı ve süzgeçleri birlikte uydurmaya çalışıyor, her denemede başka bir sözleşme alanını
+bozuyor ve düzeltme bütçesi bitiyordu. Daha çok yeniden deneme ya da devir kök nedeni çözmez. Düzeltme: türlü
+**analitik özet** (`rota_plan.analysis`, §14.2). Model "ne" sorulduğunu (kapsam, yönler, ufuk, görsel) bildirir;
+sunucu her yönü belirlenimci olarak doğrulanmış isteklere açar. Gerçek soru artık tek planlayıcı turunda üç bölümü
+okur, kanıt üretir ve doğrulanır (`test/ai-phase4e-analysis.test.mjs`).
+
+Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınamayla kilitli):
+- Kayıt defteri `rota_task_analytics` grup satırına bütün toplamları (`todo`, `inProgress`, `dueToday`, …) bağlıyordu; araç
+  grup başına yalnızca `count/open/overdue/done` üretir. "Durumlara göre yapılacak/devam eden" isteği bildirimden geçiyor,
+  sunucu seçemiyor ve zayıf model seçim turunda takılıyordu. Artık bildirimde `not-row-total` ile reddedilir ve eşdeğer
+  özet önerilir.
+- Analitik özette açık grafik isteği, aday yoksa sunucu düzeni yolunda sessizce düşüyordu; artık kısa sunucu notu eklenir.
+- Özetin `dateFrom/dateTo` ufku yalnızca `upcoming`/`schedule` yönlerine uygulanıyordu; `critical` da ufukla okunur ve
+  ufku taşıyan yön yoksa yaklaşan işler ufukla eklenir (bildirilen ufuk okunmadan geçmez).
+- Olmayan satır göndergesinin açıklama kuralı `row` arıyordu, ayrıntı `rows`dur; artık veri okumadan açıklama istenir.
+- Özet düzeltme notları `$.field.field:scope` gibi anonim yollarla gidiyordu; artık özetin alan adlarıyla (`$.analysis.rows:scope`).
+
+### 14.2 Analitik özet — `src/server/ai/tools/analysisPlan.js`
+
+`rota_plan` içinde `request`/`calls` yerine (birlikte verilemez: `$.analysis:request`):
+
+```json
+{"intent":"rota","language":"tr","analysis":{"scope":"self","focus":["overview","overdue","upcoming"],
+ "dateFrom":"2026-09-28","dateTo":"2026-10-04"},"visual":false}
+```
+
+- `scope`: `self`, `person` (+`names`), `team` (+isteğe bağlı `level`: `unit|department|directorate`), `project`
+  (+`names`), `projects` (portföy), `all`, `previous` (önceki analizin öznesi), `row` (+`rows`: önceki sonucun 1–2 satırı).
+  `within`: `self|team|all|previous` kapsamını adı verilen tek projeyle daraltır.
+- `focus` (önem sırasıyla): `overview`, `status`, `priority`, `deadlines`, `overdue`, `upcoming`, `workload`, `projects`,
+  `schedule`, `critical`. Sunucu en çok `PLANNER_LIMITS.maxRequests` (3) bölüm okur (`effectiveFocus`): liste uzunsa
+  overview'ün sayılarıyla zaten verilen `status` önce düşer, sonra modelin sırası korunur; ufuk varsa ufku taşıyan bir
+  yön, portföyde proje satırları her zaman yer alır. Fazla yön bir düzeltme turu harcatmaz.
+- Açılım (`expandAnalysis`) yalnızca türlü değerlerle çalışır, kullanıcı metnini okumaz; çıktı modelin yazacağı ham
+  isteklerdir ve 4C bildirim doğrulamasından, yetkiden ve kanıt seçiminden aynen geçer. Adlar 4C içerme kuralına
+  tabidir (kullanıcının bu iletisinde geçmeli).
+- Düzeltme: açılımın istek sorunları özetin alanlarına çevrilir (`analysisDetails`); ayrıntılı bir `request`
+  reddedildiğinde yalnızca türlü alanlarından eşdeğer özet önerilir (`analysisSuggestion`). Sistem yetkili notta serbest
+  metin (varlık adı) **yankılanmaz**.
+
+### 14.3 Kapsam ve yetki
+
+Model kapsamı **ister**, sunucu **yetkilendirir**; rol ve yönetim kapsamı yalnızca sunucu bağlamındandır.
+
+| Kapsam | Okuma | Yetki |
+| --- | --- | --- |
+| self | `assignee: me` | Kullanıcının görevleri |
+| person | kişi varlığı (ad çözümü) | 4C kişi kuralı: yalnızca kimliği açık sorumluluklar |
+| team / birim / bölüm / direktörlük | `assignee: team` (+`teamLevel`) | `MR_V_ExecutiveScope` yöneticisi; yoksa SQL `THROW 51002` → `UNSUPPORTED_SCOPE`, veri okunmaz, "yönetim kapsamınız bulunmuyor" (kaydın varlığı sızmaz) |
+| project | proje varlığı | 4C proje erişimi (FULL/READ/kısmi) |
+| projects | `rota_portfolio_summary` | Görünür projeler |
+| all | süzgeçsiz | Görünür görevler |
+| previous / row | önceki analizin sunucu bağlamı | Her turda güncel yetkiyle yeniden okunur |
+
+WBS kapsamı özetin değil 4C ayrıntılı isteğinin işidir (`wbsId`, `rota_wbs_inspect`).
+
+### 14.4 Takip bağlamı
+
+Doğrulanmış analiz turu kanıt kaydına kanonik bir bağlam yazar (`src/domain/ai/analysisContext.js`: kapsam, düzey,
+özne kimlikleri, daraltma, okunan yönler, ufuk, görsel, sıralı satır kimlikleri). Model kimlik görmez; planlayıcı notu
+yalnızca türü ve sayıları taşır (`analysisContextSummary`). `previous`/`row` açılımı kimlikleri bu bağlamdan alır ve
+`analysisReferents` yalnızca bu kimlikleri güvenilir kılar. Bağlam yalnızca **hemen önceki** doğrulanmış yanıttandır
+(açıklama turu bağlamı taşımaz); yoksa ya da satır yoksa veri okunmadan açıklama istenir. Önceki yanıt bir analizse
+görev kümesi notu yalnızca tek göreve sırayla başvuruyu anlatır (iki çelişen yönerge verilmez).
+
+### 14.5 Sunum
+
+- **Analist önermeleri** (`groundedPropositions.js` · `analystPropositions`): karşıtlık, baskı, olumlu durum, aciliyet,
+  yoğunlaşma (en büyük ≥ 2× ikinci ve ≥ 1/3 pay), denge, gecikme yoğunlaşması ve gerekçeli "ilk ele alınabilecek iş".
+  Her biri tam kanıtın önkoşuluna bağlıdır (kesilmiş listeden pay söylenmez); kişi hakkında yargı değil işlemsel dil.
+- **Yanıt ayrıntısı** (`answerDetail.js`): Kısa / Dengeli (varsayılan) / Ayrıntılı. Ayarlar → Bilgin kartı yalnızca Bilgin
+  açıkken görünür ve görünüm tercihine (`assistantDetail`) yazılır; istek gövdesine yalnızca varsayılan değilse gider.
+  Sözleşme bölüm başına asgari/azami anlatılan önerme ve not sayısıdır (`ANSWER_DETAIL_CONTRACT`), çıktı belirteci
+  sınırı değildir.
+- **Grafik dilbilgisi** (`answerChart.js`): `bar`, `donut`, `line` (≤ 24 nokta), `stacked` (≤ 10 öğe, ≤ 3 dizi), `kpi`
+  (≤ 6 kart), `timeline` (≤ 10 öğe). Hepsi sunucunun doğrulanmış tam kanıtından kurulur, istemcide yeniden doğrulanır,
+  biçim dışı tanım reddedilir; kopyalanabilir metin karşılığı ve erişilebilir adı vardır.
+- **Açık grafik isteği** (`visual: true`): geçerli aday varsa grafik zorunludur (model atlarsa `ensureChart` ekler);
+  aday yoksa kısa sunucu notu.
+- **Düzen sözleşmesi**: beş kesin kural yönergede ayrı listedir. Paragrafa yazılan `D#` sunucunun doğrulanmış
+  ayrıntısını paragrafın hemen ardına koyar (details bloğuyla aynı); bölüm karışımı ve yineleme yine reddedilir.
+  Model düzeni reddedilirse sunucunun belirlenimci düzeni (`defaultComposition`) analist önermeleriyle yazar; ret kodu
+  telemetride kalır.
+
+### 14.6 Nitelendirme — `scripts/phase4e-qualification.mjs` (Claude Haiku 4.5, düşünme kapalı, `effort: low`)
+
+Derin modele giden her çağrı modele **gitmez**; sayılır ve başarısızlıktır. Yeniden koşular yalnızca başarısız vakadır.
+Tier A deterministiktir (model çağrısı yok): 158 soruluk kıyas kümesi, 8 takip zinciri (29 tur), kapsam × yön açılımları.
+
+| Katman | İlk tam koşu | Yalnız-başarısız yeniden koşular sonrası | Kalan |
+| --- | --- | --- | --- |
+| B planlayıcı (46) | 33/46 (30 ilk bildirimde) | 44/46 | d01, d04: ekip düzeyi (birim/bölüm) yazılmadı |
+| C takip zinciri (8 zincir, 29 tur) | 2/8 | 5/8 zincir, 24/29 tur | B#5 bu iletide geçmeyen adı ipucuna rağmen yineledi; C#3–5 "projede çalışanlara indir" daraltmasını proje kapsamı sandı; G#2 "tüm bölümle karşılaştır"ı portföy okudu (yalnızca yetkili veri) |
+| D düzen (12) | 5/12 | 10/12 | d04 bölümü yalnızca not kutusuyla anlattı; d05 bir tabloyu düzene koymadı |
+| E uçtan uca (6) | 4/6 | 5/6 | e06 3. turda düzen reddi |
+
+Belirteç kullanımı (bütün koşular, `PLANNER_CLAUDE_LOG` defterlerinden): **302 çağrı**; önbelleksiz girdi 92 981;
+önbelleğe yazma 575 140; önbellekten okuma 9 566 968; çıktı 55 286; **düşünme 0** (düşünme bloğu 0); Derin devir
+girişimi 32 (hiçbiri çalıştırılmadı, hepsi başarısız sayıldı); tam koşu 4, yalnız-başarısız yeniden koşu 14, tek vakalık
+tanı koşusu 3. CLI uyarlayıcısının zorunlu araç öykünmesi ayrıca sayıldı: zorunlu yineleme 3, CLI şema reddi iletimi 17,
+düz metin iletimi 4. Tier B, sonraki yönerge/şema değişikliklerinden önce koşuldu ve yeniden koşulmadı.
+
+### 14.7 Bilinen sınırlar
+
+- Kurum içi Qwen ile nitelendirme yapılmadı; ölçümler Claude CLI uyarlayıcısıyla (zorunlu araç öykünmesi) alındı.
+- Uygulamanın tamamı bu ortamda çalıştırılamadı (SQL Server / Windows kimlik doğrulaması yok): arayüz, üretim
+  bileşenlerinin uygulama CSS'iyle sunucu tarafı çizimi ve Playwright ekran görüntüleriyle (açık/koyu, 1280/390 px)
+  denendi; bütün grafik türleri çizildi, ham çit metni ya da taşma görülmedi.
+- Takipte önceki öznenin adını yeniden yazan zayıf model 4C içerme kuralına takılır (ad bu iletide değil); sunucu
+  `previous` önerir ama model yinelerse tur Derin'e gider. Konuşmanın önceki kullanıcı iletilerini içerme kaynağı yapmak
+  ayrı bir yönetişim kararıdır.
+- Planlayıcının anlam hatası (geçerli ama yanlış kapsam) yapısal olarak saptanamaz; zararı yetkiyle sınırlıdır (G#2
+  yalnızca yetkili portföyü okudu).
