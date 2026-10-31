@@ -387,7 +387,14 @@ export function validateComposition(composition, response) {
     const inSay = normalized.some((block) => block.type === 'say' && block.items.some((id) => render.propositions.has(id)));
     if (!inSay || usedPropositions.size < Math.min(MIN_NARRATED_PROPOSITIONS, available)) return fail('NARRATION_REQUIRED');
   }
-  // Atlanan ayrıntıları (kapsam ve eksik sonuç notları dahil) çizici her zaman ekler.
+  // Çizici tablo ayrıntılarını yerinde, kalanları sonda ekler; onlar da son başlığın kapsamına uymalıdır.
+  const locatedDetails = new Set(blocks.filter((block) => block.type === 'details').map((block) => block.source));
+  for (const table of render.tables.values()) if (usedSources.has(table.id)) locatedDetails.add(table.detail);
+  for (const detail of render.details.values()) {
+    if (locatedDetails.has(detail.id) || usedPropositions.has(detail.covers)) continue;
+    const scope = owned([detail.part]);
+    if (scope) return fail(scope);
+  }
   return { ok: true, blocks: normalized };
 }
 

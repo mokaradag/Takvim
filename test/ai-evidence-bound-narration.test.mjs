@@ -29,7 +29,7 @@ const { requestSchema } = await import('../src/server/ai/tools/requestDeclaratio
 const { groundedTurnSummary, aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
 const { consoleLogFormat, logEvent } = await import('../src/server/observability/structuredLogger.js');
 const { parseAssistantMarkdown, assistantMarkdownText } = await import('../src/features/ai/assistant/assistantMarkdown.js');
-const { escapedFactText } = await import('../src/domain/ai/evidenceFacts.js');
+const { escapedFactText, createEvidenceFacts } = await import('../src/domain/ai/evidenceFacts.js');
 
 const STANDARD = DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'];
 const DEEP = DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'];
@@ -135,7 +135,7 @@ test('Örnek C: "büyük bölümü" yalnızca birbirini dışlayan tam dağılı
   assert.deepEqual(distribution([50, 50]).map(([kind]) => kind), ['total', 'breakdown'], 'eşit en büyük grup ne çoğunluk ne en büyük gruptur');
   assert.deepEqual(distribution([114, 47, 4], { groupBy: 'assignee' }), [], 'kişi grupları birbirini dışlamaz');
   assert.deepEqual(distribution([114, 47, 4], { complete: false }), [], 'eksik dağılımda ilişki yoktur');
-  assert.equal(sharePercent(1, 1000), 1, 'sıfır olmayan pay yuvarlamayla sıfır görünmez');
+  assert.equal(sharePercent(1, 1000), 0.1, 'küçük pay bir tam yüzdeye şişirilmez');
   assert.equal(sharePercent(999, 1000), 99, 'tamamı olmayan pay yüz görünmez');
 });
 
@@ -527,6 +527,23 @@ test('kesin çoğunluk %50 görünmez; en büyük grup dalına da kaymaz', () =>
   assert.deepEqual([majority.kind, majority.plain], ['majority', 'Görevlerinizin büyük bölümü (%50,05) Yapılacak durumunda.']);
 });
 
+test('küçük tamamlanma payı %1 olmaz; kesir Türkçe ve İngilizce korunur', () => {
+  const completion = (done, total, locale) => {
+    const table = syntheticTable([done, total - done], { groupBy: 'status', titles: ['Tamamlandı', 'Yapılacak'] });
+    table.described.rows.forEach((row, index) => { row.entries[0].fact.semantic.group = { key: index === 0 ? 'done' : 'todo' }; });
+    return tablePropositions({ ...table, distribution: true, locale }).find((item) => item.kind === 'completion');
+  };
+  assert.equal(sharePercent(1, 20000), 0.005);
+  assert.equal(completion(1, 20000, 'tr').plain, 'Görevlerinizin tamamlanma oranı %0,005; 19.999 görev hâlâ açık.');
+  assert.equal(completion(1, 20000, 'en').plain, '0.005% of your tasks are completed; 19,999 tasks are still open.');
+  assert.ok(completion(1, 20000, 'tr').markdown.includes('**%0,005**'));
+  assert.ok(completion(1, 1000, 'tr').plain.includes('%0,1;'));
+  assert.ok(completion(100, 20000, 'en').plain.startsWith('0.5%'));
+  assert.ok(completion(200, 20000, 'tr').plain.includes("%1'i tamamlandı"));
+  assert.equal(completion(0, 20000, 'tr'), undefined);
+  assert.equal(completion(20000, 20000, 'en'), undefined);
+});
+
 test('sayım kapsamı korunur: kilometre taşı süzgeci (false dahil) doğal cümlede düşmez, ölçütlü belirlenimci cümleye döner', async (t) => {
   const group = { tool: 'rota_task_search', evidenceId: 'R1' };
   const fallback = { markdown: 'ÖLÇÜTLÜ', plain: 'ÖLÇÜTLÜ' };
@@ -630,6 +647,34 @@ test('çok bölümlü yanıtta başlık, paragraf, not ve yönlendirme kendi bö
     ['başka bölümün notu', [...valid.slice(0, 3), { type: 'note', items: [p2[2]] }, ...valid.slice(3)], 'PART_SCOPE']
   ];
   for (const [name, blocks, expected] of cases) assert.equal(issue(validateComposition(sheet, { blocks })), expected, name);
+});
+
+test('otomatik eklenen sayım ayrıntısı başka bölümün başlığı altına düşemez', () => {
+  const part = (index, evidenceId, filters, totalCount, tasks, fields) => ({ index, presentation: { layout: 'auto', empty: [],
+    facts: createEvidenceFacts({ tool: 'rota_task_search', complete: true, totalCount, claimable: { textFields: ['title'] }, data: { filters, tasks } },
+      { prefix: `0123456789abcdef_${evidenceId}`, fields }).map((fact) => ({ evidenceId, fact })) } });
+  const sheet = buildComposition({ locale: 'en', parts: [
+    part(0, 'R1', { assignee: 'me' }, 7, [], ['totalCount']),
+    part(1, 'R2', { assignee: 'me', deadline: 'overdue' }, 3, [
+      { title: 'First', overdueDays: 9 }, { title: 'Second', overdueDays: 3 }, { title: 'Third', overdueDays: 1 }
+    ], ['totalCount', 'data.tasks.*.title', 'data.tasks.*.overdueDays'])
+  ] });
+  assert.deepEqual(sheet.view.titles.map((title) => [title.id, title.part]), [['H1', 1], ['H2', 2]]);
+  const items = sheet.view.propositions.filter((item) => item.part === 2 && item.kind !== 'count').slice(0, 3).map((item) => item.id);
+  assert.equal(items.length, 3);
+  const overdue = [{ type: 'title', source: 'H2' }, { type: 'say', items }, { type: 'rows', source: 'T1' }];
+  assert.equal(issue(validateComposition(sheet, { blocks: overdue })), 'PART_SCOPE');
+  for (const blocks of [
+    overdue.slice(1),
+    [{ type: 'title', source: 'H1' }, { type: 'details', source: 'D1' }, ...overdue],
+    [{ type: 'say', items: [sheet.view.propositions.find((item) => item.part === 1).id] }, ...overdue]
+  ]) {
+    const validated = validateComposition(sheet, { blocks });
+    assert.equal(validated.ok, true, JSON.stringify(validated.issues));
+    const text = renderComposition(sheet, validated).text;
+    assert.ok(text.includes('7'), 'genel nüfus sayımı yanıttan düşmez');
+    if (blocks[0].type === 'title') assert.ok(text.indexOf('7') < text.indexOf('#### Your overdue tasks'));
+  }
 });
 
 test('zengin kanıt zengin anlatım ister: önerme varken yalnızca tablo ya da başlık 4D değildir; az önermede kısa anlatım geçerlidir', async (t) => {

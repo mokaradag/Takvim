@@ -172,13 +172,17 @@ function groupPlace(groupBy, label, locale) {
     || [v(label), ' grubunda'];
 }
 
-/** Payın tam sayı yüzdesi; sıfır ya da tamamı olmayan pay yuvarlamayla 0 ya da 100 görünmez. */
+/** Küçük payın kesri korunur; sıfır ya da tamamı olmayan pay yuvarlamayla 0 ya da 100 görünmez. */
 export function sharePercent(value, total) {
-  const raw = Math.round((value / total) * 100);
-  return value > 0 && value < total ? Math.min(99, Math.max(1, raw)) : raw;
+  const raw = (value / total) * 100;
+  return value > 0 && value < total ? (raw < 1 ? raw : Math.min(99, Math.round(raw))) : Math.round(raw);
 }
 
-const percent = (value, locale) => (locale === 'en' ? `${value}%` : `%${value}`);
+const percent = (value, locale) => {
+  const shown = value > 0 && value < 1
+    ? new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'tr-TR', { maximumSignificantDigits: 3 }).format(value) : value;
+  return locale === 'en' ? `${shown}%` : `%${shown}`;
+};
 
 /**
  * Kesin çoğunluğun (pay > %50) yüzdesi: tam sayı yuvarlaması %50 gösterecekse en az ondalıkla aşağı kesilir
@@ -369,7 +373,8 @@ export function tablePropositions({ group, described, distribution, locale, popu
         const share = sharePercent(done, total);
         add('completion', en
           ? sentence([v(percent(share, locale)), ` of ${whose ? '' : 'the tasks in this result'}`, ...(whose || []), ' are completed; ', v(number(open, locale)), ` ${open === 1 ? 'task is' : 'tasks are'} still open.`])
-          : sentence([...(whose || ['bu sonuçtaki görevlerin']), ' ', v(percent(share, locale)), `${turkishPossessiveSuffix(share)} tamamlandı; `, v(number(open, locale)), ' görev hâlâ açık.']),
+          : sentence([...(whose || ['bu sonuçtaki görevlerin']), share < 1 ? ' tamamlanma oranı ' : ' ', v(percent(share, locale)),
+            share < 1 ? '; ' : `${turkishPossessiveSuffix(share)} tamamlandı; `, v(number(open, locale)), ' görev hâlâ açık.']),
         done * 2 > total ? 'success' : 'info');
       }
     }
