@@ -30,7 +30,7 @@ import { concreteCollections, rankedRowIndexes, taskResultScope } from '../../..
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderPartUnavailable, renderPlannerAbstention, renderChartUnavailable, renderPlannerClarification, renderScopeUnavailable, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
 import { buildComposition, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
-import { analysisDetails, analysisHints } from '../tools/analysisPlan.js';
+import { analysisDetails, analysisHints, analysisSchema, analysisSuggestion } from '../tools/analysisPlan.js';
 import { normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
 import { analysisContextSummary, normalizeAnalysisContext } from '../../../domain/ai/analysisContext.js';
 import { composeGroundedAnswer, compositionWindowMs } from './answerComposition.js';
@@ -292,7 +292,7 @@ const ESCALATING_DECLARATION_ROUNDS = 1;
 const schemaNames = (schema) => Object.entries(schema.properties || {}).flatMap(([name, child]) => [name, ...schemaNames(child)])
   .concat(schema.items ? schemaNames(schema.items) : []);
 const structuralNames = new Set(['plan', 'calls', 'request', 'additionalRequests', 'clarify', 'abstain', 'reason', 'topics', 'from', 'intent', 'language', 'name', 'arguments', 'metric', 'entity', 'field',
-  ...schemaNames(requestSchema()), ...toolCatalogForModel().flatMap((tool) => [tool.name, ...schemaNames(tool.parameters)])]);
+  'analysis', 'visual', ...schemaNames(analysisSchema()), ...schemaNames(requestSchema()), ...toolCatalogForModel().flatMap((tool) => [tool.name, ...schemaNames(tool.parameters)])]);
 const problemPaths = (details = []) => details.map((detail) => {
   const match = /^(\$[^:]*):([A-Za-z][A-Za-z-]*)$/.exec(String(detail));
   if (!match) return '$:invalid';
@@ -310,7 +310,7 @@ function declarationRepair(details = [], serverHints = []) {
     ...(problems.length ? [`Bildirim sorunları: ${problems.join(', ')}`] : []),
     ...(hints.length ? [`Beklenen biçim: ${hints.join('; ')}`] : []),
     'Yalnızca bildirilen sorunları düzelt; sorunsuz araç, ölçü, süzgeç ve çağrı bağımsız değişkenlerini değiştirme. Sorunlu ölçüyü SİLME: ölçü aynı soruya aitse ipucundaki taşıyıcı araçlardan birini population.tool yap; başka bir aracın yanıtladığı ayrı bir soruysa onu additionalRequests içinde o aracın ek bölümüne taşı. Sorun yolları request alanına göredir ($.entities = request.entities; ek bölümlerde $.additionalRequests[n]).',
-    'Yanıtın yeniden rota_plan çağrısı olmalıdır: Rota verisi gerekiyorsa intent rota, language tr|en, request (ileti ayrı okuma gerektiren başka sorular da soruyorsa ayrıca additionalRequests) içinde operation/metrics/population/layout (ve gerekiyorsa entities/filters); calls isteğe bağlıdır (sunucu okumaları istekten kurar). Soru gerçekten belirsizse intent clarify (clarify.reason), yapılamayan ya da güvensiz istekte intent abstain (abstain.reason). rota_plan olmadan tek başına doğrudan araç çağrısı ya da düz metin yanıt geçerli değildir; normal asistan metni gerekmez.',
+    'Yanıtın yeniden rota_plan çağrısı olmalıdır: Rota verisi gerekiyorsa intent rota, language tr|en ve ya analysis (genel durum, dağılım, sıralama, iş yükü, ekip/kişi/proje/portföy kapsamı; sunucu okumaları özetten kurar) ya da request (ileti ayrı okuma gerektiren başka sorular da soruyorsa ayrıca additionalRequests) içinde operation/metrics/population/layout (ve gerekiyorsa entities/filters); calls isteğe bağlıdır (sunucu okumaları istekten kurar). Soru gerçekten belirsizse intent clarify (clarify.reason), yapılamayan ya da güvensiz istekte intent abstain (abstain.reason). rota_plan olmadan tek başına doğrudan araç çağrısı ya da düz metin yanıt geçerli değildir; normal asistan metni gerekmez.',
     'entities[].text ve filters.text kullanıcının iletisinde geçen metin olmalıdır; entities[].id yalnızca kullanıcının yazdığı ya da sunucunun bağladığı kimliktir.'
   ].join('\n');
 }
@@ -1941,7 +1941,9 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     // Analitik özetin açılımı modelin yazdığı istek değildir: sorunlar özetin alanlarına çevrilir, onarım sabitlemesi yapılmaz.
     const analysisPlan = Boolean(rejectedPlan?.analysis);
     const details = analysisPlan ? analysisDetails(rawDetails || []) : rawDetails || [];
-    const hints = [...(analysisPlan ? [] : rawHints), ...analysisHints(details)];
+    // Reddedilen ayrıntılı isteğin türlü alanlarından (araç, sorumlu koşulu, varlıklar) eşdeğer analitik özet önerisi.
+    const suggestion = !analysisPlan ? analysisSuggestion(rejectedPlan?.request) : null;
+    const hints = [...(analysisPlan ? [] : rawHints), ...analysisHints(details), ...(suggestion ? [suggestion] : [])];
     recordPlannerRejection(details[0]);
     if (rejectedPlan && !analysisPlan && !details.includes('$.plan:repairScope')) pinRepair(turn, rejectedPlan, details, repairCalls(turn, executionCalls), executionCalls, repairMatched);
     if (calls.length) turn.toolsRequested = true;

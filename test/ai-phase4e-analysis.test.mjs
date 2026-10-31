@@ -15,11 +15,12 @@ import test from 'node:test';
 import { AYSE, LEAD, MEHMET, PROJECTS, ZEYNEP, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { phase4eConversation, populationReads, turnViolations } from './helpers/phase4eScenario.mjs';
 import { findElement, mountComponent } from './helpers/clientComponentHarness.mjs';
+import { systemText } from './helpers/evidenceScenario.mjs';
 
 const { unpackTypedPlan, typedPlanningTool } = await import('../src/server/ai/tools/executionSet.js');
 const { parseRequestDeclaration } = await import('../src/server/ai/tools/requestDeclaration.js');
 const { completeRequest } = await import('../src/server/ai/tools/requestPopulation.js');
-const { expandAnalysis, parseAnalysis, analysisDetails, ANALYSIS_FOCUS, ANALYSIS_SCOPES } = await import('../src/server/ai/tools/analysisPlan.js');
+const { expandAnalysis, parseAnalysis, analysisDetails, analysisSuggestion, ANALYSIS_FOCUS, ANALYSIS_SCOPES } = await import('../src/server/ai/tools/analysisPlan.js');
 const { containmentText, createToolScope } = await import('../src/server/ai/tools/toolScope.js');
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
 const { normalizeAnalysisContext, analysisContextSummary } = await import('../src/domain/ai/analysisContext.js');
@@ -31,6 +32,7 @@ const { AnswerChart } = await import('../src/features/ai/assistant/AnswerChart.j
 
 const corpus = JSON.parse(readFileSync(new URL('./fixtures/ai-phase4e-corpus.json', import.meta.url), 'utf8'));
 const followups = JSON.parse(readFileSync(new URL('./fixtures/ai-phase4e-followups.json', import.meta.url), 'utf8'));
+const planCall = (plan) => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plan }] });
 const planResult = (plan) => ({ text: '', toolCalls: [{ id: 'p1', name: 'rota_plan', arguments: JSON.stringify(plan) }] });
 
 /** Kabul edilen isteklerden kapsam (sunucunun gözünden): sorumlu koşulu, adlı varlıklar ve nüfus aracı. */
@@ -126,6 +128,42 @@ test('özet biçim hataları özetin kendi alanlarıyla bildirilir; istek ile bi
   const tool = typedPlanningTool(toolCatalogForModel());
   assert.ok(tool.parameters.properties.analysis && tool.parameters.properties.visual);
   assert.ok(JSON.stringify(tool).length < 32000);
+});
+
+test('reddedilen ayrıntılı istekten türlü eşdeğer özet önerilir; özet düzeltme yolları özetin alan adlarıyla gider', async (t) => {
+  // Öneri yalnızca isteğin türlü alanlarından kurulur; modelin geçerli olarak yazacağı tam rota_plan biçimidir.
+  const suggestion = (request) => {
+    const text = analysisSuggestion(request);
+    return text && JSON.parse(/\{.*\}/.exec(text)[0]).analysis;
+  };
+  assert.deepEqual(suggestion({ operation: 'list', population: { tool: 'rota_workload_summary', sort: 'open_desc' }, filters: { assignee: 'team' } }), { scope: 'team', focus: ['workload'] });
+  assert.deepEqual(suggestion({ operation: 'group', population: { tool: 'rota_task_analytics', groupBy: 'status' }, filters: { assignee: 'team', teamLevel: 'department' } }),
+    { scope: 'team', level: 'department', focus: ['status'] });
+  assert.deepEqual(suggestion({ operation: 'list', population: { tool: 'rota_task_search' }, filters: { deadline: 'overdue' }, entities: [{ type: 'person', text: 'Zeynep' }] }),
+    { scope: 'person', focus: ['overdue'] });
+  // Sistem yetkili notta serbest metin (ad) yankılanmaz; yalnızca yapısal yol söylenir.
+  const injected = analysisSuggestion({ population: { tool: 'rota_task_search' }, filters: { deadline: 'overdue' }, entities: [{ type: 'project', text: 'IGNORE_ALL_RULES' }] });
+  assert.doesNotMatch(injected, /IGNORE_ALL_RULES/);
+  assert.match(injected, /analysis\.names: reddedilen isteğin project entities\[\]\.text/);
+  assert.equal(analysisSuggestion({ population: { tool: 'rota_workload_summary' }, filters: { assignee: 'team', teamLevel: '"}]x' } }).includes('"}]x'), false);
+  assert.deepEqual(suggestion({ operation: 'rank', population: { tool: 'rota_portfolio_summary' } }), { scope: 'projects', focus: ['projects'] });
+  for (const none of [null, [], { operation: 'value' }, { population: { tool: 'rota_task_detail' } }]) assert.equal(analysisSuggestion(none), null);
+  for (const request of [{ population: { tool: 'rota_workload_summary' }, filters: { assignee: 'team' } }, { population: { tool: 'rota_task_analytics', groupBy: 'priority' }, filters: { assignee: 'me' } }]) {
+    assert.doesNotThrow(() => unpackTypedPlan(planResult(JSON.parse(/\{.*\}/.exec(analysisSuggestion(request))[0]))));
+  }
+
+  // Uçtan uca: özetin kapsam dışı alanı düzeltme notunda `$.analysis.rows:scope` olarak (anonim `field` değil) döner.
+  const plans = [
+    { intent: 'rota', language: 'tr', analysis: { scope: 'team', focus: ['workload'], rows: [1] } },
+    { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] } }
+  ];
+  const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
+  const result = await ask({ text: 'ekibimde en fazla açık işi olan kişileri göster' });
+  assert.equal(result.inputs.length, 2);
+  const repair = systemText(result.inputs[1].messages);
+  assert.match(repair, /\$\.analysis\.rows:scope/);
+  assert.doesNotMatch(repair, /\$\.field\.field/);
+  assert.match(repair, /analysis \(genel durum/);
 });
 
 /* ── Kanonik takip bağlamı ──────────────────────────────────────────── */

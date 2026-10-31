@@ -41,6 +41,7 @@ function calendarAnchors(now) {
   const nextMonthStart = day(32, monthStart).slice(0, 7) + '-01';
   const afterNextMonth = day(32, nextMonthStart).slice(0, 7) + '-01';
   return `Takvim çapaları: bugün ${today}; dün ${day(-1)}; yarın ${day(1)}; bu hafta ${day(-weekday)}–${day(6 - weekday)}; geçen hafta ${day(-weekday - 7)}–${day(-weekday - 1)}; `
+    + `gelecek hafta ${day(7 - weekday)}–${day(13 - weekday)}; önümüzdeki iki hafta ${today}–${day(13)}; `
     + `bu ay ${monthStart}–${day(-1, nextMonthStart)}; önümüzdeki ay ${nextMonthStart}–${day(-1, afterNextMonth)}.`;
 }
 
@@ -84,7 +85,7 @@ export function groundedSystemPrompt(now = new Date()) {
     '',
     'KAPSAM VE ANALİTİK ÖZET',
     '- Her sorunun bir öznesi vardır; kullanıcının kendisini varsayma. self: kullanıcının kendi görevleri; team: kullanıcının yönettiği ekip, takım, birim, bölüm/müdürlük ya da direktörlük (yönetim kapsamı; kullanıcı birim dediyse level unit, bölüm ya da müdürlük dediyse department, direktörlük dediyse directorate; ekip/takım dediyse level yazma); person: adı verilen kişi(ler); project: adı verilen proje(ler); projects: kullanıcının projelerinin tamamı/karşılaştırması; all: görebildiği bütün görevler. Yetkiyi sunucu denetler; sen yalnızca istenen kapsamı bildirirsin.',
-    '- Değerlendirme, genel durum, risk, öncelik, iş yükü, denge, karşılaştırma ya da "neye dikkat etmeliyim" gibi geniş sorularda request yazma; rota_plan içinde analysis ver: {"intent":"rota","language":"tr","analysis":{"scope":"self","focus":["overview","overdue","upcoming"],"dateFrom":"…","dateTo":"…"}}. Sunucu her yönü doğrulanmış okumalara açar. focus sorunun istediği 1-3 yöndür (genel değerlendirmede overview, overdue, upcoming; iş yükünde workload; dağılımda status ya da priority; zaman içinde schedule; projeler karşılaştırmasında scope projects ve projects). Zaman ufku varsa (bu hafta, önümüzdeki iki hafta, bu ay) takvim çapasından dateFrom/dateTo yaz. Adı geçen kişi ya da proje names içinde, kullanıcının yazdığı biçimde.',
+    '- Değerlendirme, genel durum, risk, öncelik, iş yükü, denge, karşılaştırma, dağılım, "en çok/en fazla" sıralaması ya da "neye dikkat etmeliyim" gibi sorularda ve kapsam ekip, kişi, proje ya da portföy olduğunda request yazma; rota_plan içinde analysis ver (request yalnızca tek kaydın alanı, belirli bir sayım ya da tam liste gibi kesin sorular içindir): {"intent":"rota","language":"tr","analysis":{"scope":"self","focus":["overview","overdue","upcoming"],"dateFrom":"…","dateTo":"…"}}. Sunucu her yönü doğrulanmış okumalara açar. focus sorunun istediği 1-3 yöndür (genel değerlendirmede overview, overdue, upcoming; iş yükünde workload; dağılımda status ya da priority; zaman içinde schedule; projeler karşılaştırmasında scope projects ve projects). Zaman ufku varsa (bu hafta, önümüzdeki iki hafta, bu ay) takvim çapasından dateFrom/dateTo yaz. Adı geçen kişi ya da proje names içinde, kullanıcının yazdığı biçimde.',
     '- Kullanıcı açıkça grafik, görselleştirme ya da çizim istiyorsa rota_plan içinde "visual":true yaz (analysis ya da request ile).',
     '',
     'TÜRLÜ İSTEK (ZORUNLU)',

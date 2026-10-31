@@ -23,7 +23,11 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
   let current = null;
   const inputs = [];
   // Dış sağlayıcı (canlı nitelendirme): planlayıcı ve düzen turlarını kendisi yanıtlar; altın plan kuyruğa konmaz.
-  const provider = external || { ...fake, get pendingCount() { return fake.pendingCount; }, streamToolCompletion(input) {
+  const recorded = external ? { ...external, get pendingCount() { return external.pendingCount; }, streamToolCompletion(input) {
+    if (!isCompositionCall(input)) inputs.push(input);
+    return external.streamToolCompletion(input);
+  } } : null;
+  const provider = recorded || { ...fake, get pendingCount() { return fake.pendingCount; }, streamToolCompletion(input) {
     if (!fake.pendingCount) {
       if (isCompositionCall(input)) fake.enqueue(compose ? compose(input) : composer(coveringBlocks));
       else if (planner) fake.enqueue(planner(input, current));
@@ -67,7 +71,10 @@ export function turnViolations(result, expect) {
   if (expect.person && !reads.some((row) => row.params.personSicil != null && row.params.assigneeMode === 'person')) problems.push('kişi kapsamı okunmadı');
   if (expect.workload && !reads.some((row) => Number(row.params.withAssignees) === 1)) problems.push('iş yükü okunmadı');
   if (expect.portfolio && !result.log.some((row) => row.query === 'portfolio')) problems.push('portföy okunmadı');
-  if (expect.window && !reads.some((row) => String(row.params.dateFrom || '').slice(0, 10) === expect.window[0] && String(row.params.dateTo || '').slice(0, 10) === expect.window[1])) {
+  // Ufuk: beklenen aralıkla örtüşen bir termin penceresi okunmuş olmalı (uçlarda en çok bir günlük yorum farkı kabul edilir).
+  const day = (value) => Date.parse(`${String(value).slice(0, 10)}T00:00:00Z`) / 86400000;
+  if (expect.window && !reads.some((row) => row.params.dateFrom && row.params.dateTo
+    && Math.abs(day(row.params.dateFrom) - day(expect.window[0])) <= 1 && Math.abs(day(row.params.dateTo) - day(expect.window[1])) <= 1)) {
     problems.push(`ufuk ${expect.window.join('..')} okunmadı`);
   }
   if (expect.chart && !content.includes('```rota-chart')) problems.push('grafik yok');

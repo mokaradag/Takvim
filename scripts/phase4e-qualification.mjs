@@ -119,6 +119,17 @@ async function conversationCase(t, turns, { plannerModel, composeModel, seed = r
     const measured = rounds.slice(before);
     if (measured.some((round) => round.infrastructure)) failures.push(`altyapı ${measured.find((round) => round.infrastructure).infrastructure}`);
     if (composeModel && turn.requireComposed && presentation?.mode !== 'composed') failures.push(`düzen ${presentation?.mode}/${presentation?.reason}/${presentation?.issue}`);
+    // Yerel tanı (PHASE4E_DEBUG): planlayıcının çağrıları ve sunucunun ret notları; rapora girmez.
+    if (process.env.PHASE4E_DEBUG && failures.length) {
+      // Her planlayıcı turunun, soru iletisinden sonraki kısmı: modelin çağrıları ve sunucunun ret notları.
+      const trail = result.inputs.flatMap((input) => {
+        const messages = input.messages || [];
+        const start = messages.findLastIndex((message) => message.role === 'user');
+        return messages.slice(start + 1).map((message) => ({ role: message.role, calls: (message.toolCalls || []).map((call) => `${call.name}(${String(call.arguments).slice(0, 700)})`),
+          content: String(message.content || '').slice(0, 600) }));
+      }).filter((item, index, all) => all.findIndex((other) => JSON.stringify(other) === JSON.stringify(item)) === index);
+      appendFileSync(process.env.PHASE4E_DEBUG, `${JSON.stringify({ turn: turn.text, failures, trail })}\n`);
+    }
     results.push({ text: turn.id || null, plannerRounds: measured.filter((round) => round.purpose === 'plan').length, declarations: line?.context?.declarations ?? null,
       mode: presentation?.mode ?? null, server: presentation?.server === true, chartInserted: presentation?.chartInserted === true, reason: presentation?.reason ?? null, issue: presentation?.issue ?? null, failures });
     summary.turns += 1;

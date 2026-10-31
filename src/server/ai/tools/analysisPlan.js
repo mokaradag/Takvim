@@ -241,3 +241,30 @@ export function analysisDetails(details = []) {
     return '$.analysis:invalid';
   }))];
 }
+
+/**
+ * Reddedilen ayrıntılı isteğin (request) EŞDEĞER analitik özeti — düzeltme ipucu olarak. Yalnızca isteğin türlü
+ * alanlarından türetilir (nüfus aracı, gruplama, termin koşulu, sorumlu koşulu, varlık türleri); kullanıcının cümlesi
+ * okunmaz. Not sistem yetkisiyle gittiği için serbest metin (varlık adı) ASLA yankılanmaz: adlı kapsamda adların
+ * modelin kendi entities[].text değerleri olduğu yalnızca yapısal olarak söylenir. Eşleme yoksa `null`. Model öneriyi
+ * benimsemek zorunda değildir; karar yine onundur.
+ */
+export function analysisSuggestion(request) {
+  if (!request || typeof request !== 'object' || Array.isArray(request)) return null;
+  const tool = request.population?.tool;
+  const filters = request.filters && typeof request.filters === 'object' ? request.filters : {};
+  const entities = Array.isArray(request.entities) ? request.entities.filter((entity) => entity && typeof entity === 'object') : [];
+  const groupBy = request.population?.groupBy;
+  const focus = tool === 'rota_workload_summary' ? 'workload' : tool === 'rota_portfolio_summary' ? 'projects'
+    : tool === 'rota_task_analytics' ? ({ status: 'status', priority: 'priority', deadline: 'deadlines', target_month: 'schedule', project: 'projects', assignee: 'workload' }[groupBy] || 'overview')
+      : tool === 'rota_task_search' ? (filters.deadline === 'overdue' ? 'overdue' : (filters.dateFrom || filters.dateTo || String(filters.deadline || '').startsWith('due_')) ? 'upcoming'
+        : Array.isArray(filters.priority) && filters.priority.length ? 'critical' : null) : null;
+  if (!focus) return null;
+  const named = (type) => entities.some((entity) => entity.type === type);
+  const scope = filters.assignee === 'me' ? 'self' : filters.assignee === 'team' ? 'team' : named('person') ? 'person' : named('project') ? 'project'
+    : tool === 'rota_portfolio_summary' ? 'projects' : 'all';
+  const level = scope === 'team' && ANALYSIS_LEVELS.includes(filters.teamLevel) ? filters.teamLevel : null;
+  const brief = { scope, ...(level ? { level } : {}), focus: [focus] };
+  const names = scope === 'person' || scope === 'project' ? ` (ayrıca analysis.names: reddedilen isteğin ${scope} entities[].text değerleri, en çok ${ANALYSIS_LIMITS.maxNames})` : '';
+  return `Bu soru analitik özetle de bildirilebilir (sunucu okumaları kendisi kurar): {"intent":"rota","language":"tr","analysis":${JSON.stringify(brief)}}${names}`;
+}
