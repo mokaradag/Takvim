@@ -401,6 +401,41 @@ test('göndergesiz takip (önceki analiz yok) veri okumadan açıklama ister', a
   assert.equal(result.log.length, 0);
 });
 
+test('olmayan satır göndergesi onarımla silinmez: önceki analizde satır yoksa veri okumadan açıklama istenir', async (t) => {
+  const { ask } = phase4eConversation(t);
+  await ask({ text: 'durumumu özetle', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] } } });
+  const result = await ask({ text: 'ilk kişiyi göster', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'row', rows: [1], focus: ['overview'] } } });
+  assert.equal(result.answer.finishReason, 'clarification');
+  assert.equal(result.inputs.length, 1, 'onarım turu yok');
+  assert.equal(result.log.length, 0);
+});
+
+test('takipte bu iletide geçmeyen ad yeniden yazılırsa sunucu önceki özneye kanonik göndergeyi önerir', async (t) => {
+  const plans = [
+    { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['Radar Modernizasyonu'], focus: ['overview'] } },
+    { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['Radar Modernizasyonu'], focus: ['workload'] }, visual: true },
+    { intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['workload'] }, visual: true }
+  ];
+  const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
+  await ask({ text: 'Radar Modernizasyonu projesini özetle' });
+  const result = await ask({ text: 'bunu grafikle göster' });
+  assert.equal(result.inputs.length, 2);
+  const repair = systemText(result.inputs[1].messages);
+  assert.match(repair, /\$\.analysis\.names:untrusted/);
+  assert.match(repair, /önceki analizin öznesi kastediliyorsa analysis\.scope "previous"/);
+  assert.deepEqual(turnViolations(result, { project: true, finish: 'stop', chart: true }), []);
+});
+
+test('analitik özette açık grafik isteği aday yoksa sessizce düşmez: sunucu düzeni kısa not ekler', async (t) => {
+  const { ask } = phase4eConversation(t, { composition: false });
+  const result = await ask({ text: 'bu haftaki kritik işlerimi grafikle göster',
+    plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['critical'], dateFrom: '2026-09-28', dateTo: '2026-10-04' }, visual: true } });
+  assert.equal(result.answer.finishReason, 'stop');
+  const charted = result.answer.content.includes('```rota-chart');
+  const noted = result.answer.content.includes('güvenle grafik çizilemedi');
+  assert.ok(charted !== noted, 'ya grafik ya da kısa açıklama (ikisi birden değil)');
+});
+
 /* ── Yanıt ayrıntısı ────────────────────────────────────────────────── */
 
 test('yanıt ayrıntısı kapalı sözlüktür ve sunum sözleşmesini değiştirir (çıktı belirteci sınırı değildir)', async (t) => {

@@ -1443,7 +1443,9 @@ async function presentVerdict(turn, verdict, compose) {
     const rendered = renderComposition(composition, validated);
     turn.trace.presentation = { mode: 'composed', server: true, reason, blocks: rendered.blocks, chart: rendered.chart, charts: rendered.charts, said: rendered.said,
       tables: rendered.tables, notes: rendered.notes, titled: rendered.titled };
-    return { ...verdict, normalized: [rendered.text, ...input.notes].join('\n\n') };
+    const laidOut = { ...verdict, normalized: [rendered.text, ...input.notes].join('\n\n') };
+    // Analitik düzen grafiksiz kurulduysa açık grafik isteği yine sessizce düşmez.
+    return visual && !rendered.charts ? withChartNote(turn, laidOut) : laidOut;
   };
   if (!turn.composeAnswers) return serverLayout('DISABLED');
   if (!hasCompositionChoice(composition)) {
@@ -1947,7 +1949,10 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     const details = analysisPlan ? analysisDetails(rawDetails || []) : rawDetails || [];
     // Reddedilen ayrıntılı isteğin türlü alanlarından (araç, sorumlu koşulu, varlıklar) eşdeğer analitik özet önerisi.
     const suggestion = !analysisPlan ? analysisSuggestion(rejectedPlan?.request) : null;
-    const hints = [...(analysisPlan ? [] : rawHints), ...analysisHints(details), ...(suggestion ? [suggestion] : [])];
+    // Takipte bu iletide geçmeyen ad: önceki analizin öznesine sunucunun kanonik göndergesiyle başvurulur (ad yeniden yazılmaz).
+    const followup = analysisPlan && turn.previousAnalysis && details.includes('$.analysis.names:untrusted')
+      ? ['Ad bu iletide geçmiyor: önceki analizin öznesi kastediliyorsa analysis.scope "previous" yaz (names verme); önceki sonucun bir satırı kastediliyorsa scope "row" ve rows'] : [];
+    const hints = [...(analysisPlan ? [] : rawHints), ...followup, ...analysisHints(details), ...(suggestion ? [suggestion] : [])];
     recordPlannerRejection(details[0]);
     if (rejectedPlan && !analysisPlan && !details.includes('$.plan:repairScope')) pinRepair(turn, rejectedPlan, details, repairCalls(turn, executionCalls), executionCalls, repairMatched);
     if (calls.length) turn.toolsRequested = true;
@@ -1962,7 +1967,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     // Bulunamayan satır göndergesi (kapsam yok ya da sıra dışı, her bölüm derinliğinde) onarımla düşürülmez: sunucu sorar.
     if (!turn.previousResult && details.includes('$.previousResult:unavailable')
       || details.some((detail) => /entities\[\d+\]\.previous:unavailable$/.test(String(detail)))
-      || details.some((detail) => /^\$\.analysis\.(?:scope|row):unavailable$/.test(String(detail)))) {
+      || details.some((detail) => /^\$\.analysis\.(?:scope|rows):unavailable$/.test(String(detail)))) {
       missingPreviousResult = { intent: PLANNER_INTENTS.CLARIFY, language: rejectedPlan?.language,
         clarify: { reason: 'missing_referent' } };
       return false;
