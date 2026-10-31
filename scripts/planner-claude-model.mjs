@@ -740,7 +740,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
         .map((block) => ({ name: block.name.slice(PREFIX.length), arguments: block.input ?? {} }));
     const stop = row.stopReason;
     // Yerel tanı (yalnızca PLANNER_CLAUDE_TRACE verilince): modelin ürettiği çağrılar; deftere ve rapora girmez.
-    if (process.env.PLANNER_CLAUDE_TRACE) appendFileSync(process.env.PLANNER_CLAUDE_TRACE, `${JSON.stringify({ at: row.at, callId: row.callId, toolCalls })}\n`, { mode: 0o600 });
+    if (process.env.PLANNER_CLAUDE_TRACE) appendFileSync(process.env.PLANNER_CLAUDE_TRACE, `${JSON.stringify({ at: row.at, callId: row.callId, toolCalls, text: blocks.filter((block) => block.type === 'text').map((block) => block.text).join('').slice(0, 4000) })}\n`, { mode: 0o600 });
     process.stdout.write(`${JSON.stringify({
       text: blocks.filter((block) => block.type === 'text').map((block) => block.text).join(''), toolCalls,
       finishReason: forced && toolCalls.length || stop === 'tool_use' ? 'tool_calls' : stop === 'max_tokens' ? 'length'

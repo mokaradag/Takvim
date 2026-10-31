@@ -16,6 +16,8 @@ import { AYSE, LEAD, MEHMET, PROJECTS, ZEYNEP, rotaToolSeed } from './helpers/ai
 import { phase4eConversation, populationReads, turnViolations } from './helpers/phase4eScenario.mjs';
 import { findElement, mountComponent } from './helpers/clientComponentHarness.mjs';
 import { systemText } from './helpers/evidenceScenario.mjs';
+import { captureConsole } from './helpers/aiStack.mjs';
+import { composer } from './helpers/compositionScenario.mjs';
 
 const { unpackTypedPlan, typedPlanningTool } = await import('../src/server/ai/tools/executionSet.js');
 const { parseRequestDeclaration } = await import('../src/server/ai/tools/requestDeclaration.js');
@@ -344,6 +346,37 @@ test('grafik adayı eklenmesi doğrulayıcıdan geçer; tablo grafikten önce ç
   assert.equal(ensured.chartInserted, true);
   assert.equal(renderComposition(sheet, ensured).charts, 1);
   assert.ok(defaultComposition(sheet).ok);
+});
+
+test('paragrafa yazılan D# sunucu ayrıntısını paragrafın ardına koyar; bölüm karışımı ve yineleme yine reddedilir', async (t) => {
+  const plan = { intent: 'rota', language: 'tr', analysis: { scope: 'team', focus: ['overview', 'workload', 'overdue'] } };
+  const run = async (t, layout) => {
+    const logs = captureConsole(t);
+    const { ask } = phase4eConversation(t, { compose: () => composer((view) => layout(view)) });
+    const result = await ask({ text: 'ekibimin durumunu değerlendir', plan });
+    const line = logs.map((row) => (row.includes('"operation":"ai.grounded.turn"') ? JSON.parse(row.slice(row.indexOf('{'))) : null)).filter(Boolean).at(-1);
+    return { result, presentation: line.context.presentation };
+  };
+  const ids = (view, kind, part) => view[kind].filter((item) => item.part === part).map((item) => item.id);
+  // Zayıf modelin gerçek düzeni (Haiku): son bölümün önermesi ve ayrıntısı aynı paragrafta.
+  let detailText = null;
+  const sub = async (name, layout) => { let out = null; await t.test(name, async (t) => { out = await run(t, layout); }); return out; };
+  const accepted = await sub('kabul', (view) => {
+    const [last] = view.details.filter((item) => ids(view, 'propositions', item.part).length && item.part !== view.details[0].part);
+    detailText = last.text.split('**')[1];
+    return { blocks: [{ type: 'say', items: [...ids(view, 'propositions', 1), ...ids(view, 'charts', 1)] }, { type: 'chart', source: ids(view, 'charts', 1)[0], style: 'kpi' },
+      { type: 'say', items: [...ids(view, 'propositions', last.part), last.id] }] };
+  });
+  assert.equal(accepted.presentation.mode, 'composed');
+  assert.notEqual(accepted.presentation.server, true, 'modelin düzeni kabul edildi (sunucu yedeği değil)');
+  const content = accepted.result.answer.content;
+  assert.ok(content.indexOf(detailText) > content.indexOf('İlk ele alınabilecek iş'), 'ayrıntı paragrafın ardında');
+  // Başka bölümün ayrıntısı paragrafa karışamaz; aynı ayrıntı iki kez kullanılamaz.
+  const mixed = await sub('bölüm karışımı', (view) => ({ blocks: [{ type: 'say', items: [...ids(view, 'propositions', 1), ids(view, 'details', 2)[0]] }] }));
+  assert.equal(mixed.presentation.issue, 'PART_MIXED');
+  const twice = await sub('yineleme', (view) => ({ blocks: [{ type: 'say', items: ids(view, 'propositions', 1) }, { type: 'details', source: ids(view, 'details', 1)[0] },
+    { type: 'say', items: [ids(view, 'details', 1)[0]] }] }));
+  assert.equal(twice.presentation.issue, 'DUPLICATE_SOURCE');
 });
 
 /* ── Analist önermeleri ─────────────────────────────────────────────── */

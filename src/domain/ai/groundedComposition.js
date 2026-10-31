@@ -394,7 +394,7 @@ export function validateComposition(composition, response) {
   // Bölüm sahipliği: başlık, ardından gelen blokların nüfusunu adlandırır; her blok tek bölümündür.
   const partOfSource = (type, source) => (type === 'title' ? render.titles.get(source)?.part : type === 'rows' ? render.tables.get(source)?.part
     : type === 'details' ? render.details.get(source)?.part : render.charts.get(source)?.part);
-  const partOfItem = (id) => render.propositions?.get(id)?.part ?? partOfSource(render.tables.has(id) ? 'rows' : 'chart', id);
+  const partOfItem = (id) => render.propositions?.get(id)?.part ?? partOfSource(render.tables.has(id) ? 'rows' : render.details?.has(id) ? 'details' : 'chart', id);
   let titledPart = null;
   const owned = (parts) => {
     const unique = new Set(parts);
@@ -439,6 +439,8 @@ export function validateComposition(composition, response) {
       const items = block.items;
       if (!Array.isArray(items) || items.length < 1 || items.length > COMPOSITION_LIMITS.maxSayItems) return fail('SAY_INVALID');
       if (blocks.filter((item) => item.type === 'say').length >= COMPOSITION_LIMITS.maxSayBlocks) return fail('SAY_INVALID');
+      const said = [];
+      const placed = [];
       for (let position = 0; position < items.length; position += 1) {
         if (!Object.hasOwn(items, position) || typeof items[position] !== 'string') return fail('SAY_INVALID');
         const id = items[position];
@@ -446,14 +448,23 @@ export function validateComposition(composition, response) {
           if (usedPropositions.has(id)) return fail('DUPLICATE_PROPOSITION');
           usedPropositions.add(id);
           spoken.add(id);
+          said.push(id);
         } else if (render.tables.has(id) || render.charts.has(id)) {
           if (pointers.some((pointer) => pointer.id === id)) return fail('DUPLICATE_POINTER');
-          pointers.push({ id, at: index });
+          pointers.push({ id, at: blocks.length });
+          said.push(id);
+        } else if (render.details?.has(id)) {
+          // Paragrafa yazılan D#, sunucunun doğrulanmış ayrıntısının yeridir: paragrafın hemen ardında kendi bloğu olarak
+          // çizilir (details bloğuyla aynı; model metin yazmaz, ayrıntı bir kez kullanılır).
+          if (usedSources.has(id)) return fail('DUPLICATE_SOURCE');
+          usedSources.add(id);
+          placed.push(id);
         } else return fail('UNKNOWN_PROPOSITION');
       }
       const scope = owned(items.map(partOfItem));
       if (scope) return fail(scope);
-      blocks.push({ type, items: [...items] });
+      if (said.length) blocks.push({ type, items: said });
+      for (const source of placed) blocks.push({ type: 'details', source });
       continue;
     }
     const source = block.source;

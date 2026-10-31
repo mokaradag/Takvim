@@ -1441,7 +1441,9 @@ async function presentVerdict(turn, verdict, compose) {
       return visual ? withChartNote(turn, verdict) : verdict;
     }
     const rendered = renderComposition(composition, validated);
-    turn.trace.presentation = { mode: 'composed', server: true, reason, blocks: rendered.blocks, chart: rendered.chart, charts: rendered.charts, said: rendered.said,
+    // Model düzeninin ret kodu (varsa) telemetride kalır: sunucu düzeni onun yerine geçti.
+    const issue = turn.trace.presentation?.issue ?? null;
+    turn.trace.presentation = { mode: 'composed', server: true, reason, ...(issue ? { issue } : {}), blocks: rendered.blocks, chart: rendered.chart, charts: rendered.charts, said: rendered.said,
       tables: rendered.tables, notes: rendered.notes, titled: rendered.titled };
     const laidOut = { ...verdict, normalized: [rendered.text, ...input.notes].join('\n\n') };
     // Analitik düzen grafiksiz kurulduysa açık grafik isteği yine sessizce düşmez.

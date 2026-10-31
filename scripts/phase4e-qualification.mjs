@@ -133,7 +133,8 @@ async function conversationCase(t, turns, { plannerModel, composeModel, seed = r
       appendFileSync(process.env.PHASE4E_DEBUG, `${JSON.stringify({ turn: turn.text, failures, finish: result.answer?.finishReason, reads, trail, answer: String(result.answer?.content || '').slice(0, 400) })}\n`);
     }
     results.push({ text: turn.id || null, plannerRounds: measured.filter((round) => round.purpose === 'plan').length, declarations: line?.context?.declarations ?? null,
-      mode: presentation?.mode ?? null, server: presentation?.server === true, chartInserted: presentation?.chartInserted === true, reason: presentation?.reason ?? null, issue: presentation?.issue ?? null, failures });
+      mode: presentation?.mode ?? null, server: presentation?.server === true, chartInserted: presentation?.chartInserted === true, reason: presentation?.reason ?? null, issue: presentation?.issue ?? null,
+      rejected: presentation?.rejected ?? null, failures });
     summary.turns += 1;
     if (routing.escalations > escalationsBefore) summary.escalations += 1;
   }
@@ -151,7 +152,8 @@ const COMPOSITION_CASES = Object.freeze([
   ['d08', "Ayşe Yılmaz ile Zeynep Kaya'nın iş yükünü karşılaştır", { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['workload'] }],
   ['d09', 'gecikmiş işlerimi değerlendir', { scope: 'self', focus: ['overdue'] }],
   ['d10', 'durumumu göstergelerle özetle', { scope: 'self', focus: ['overview'] }, true],
-  ['d11', 'ekibimin iş yükünü grafik olarak göster', { scope: 'team', focus: ['workload'] }, true],
+  // Sınama ekibinde görevli tek kişi vardır (iş yükü grafiği adaysızdır); ekip grafiği durum dağılımıyla sınanır.
+  ['d11', 'ekibimin görevlerinin durum dağılımını grafikle göster', { scope: 'team', focus: ['status'] }, true],
   ['d12', 'öncelik dağılımımı ve kritik işlerimi göster', { scope: 'self', focus: ['priority', 'critical'] }]
 ]);
 
