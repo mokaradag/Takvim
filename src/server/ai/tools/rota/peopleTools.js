@@ -5,7 +5,7 @@ import { MIN_DIRECTORY_QUERY_LENGTH, searchCorporateDirectory } from '../../../d
 import { invalidArguments } from '../toolErrors.js';
 import { dataText, ID_PROPERTY, LIMIT_PROPERTY, PERSON_SICIL_PROPERTY, searchedScope } from './rotaToolSupport.js';
 import { loadFilteredFacts } from './taskTools.js';
-import { assignmentState, foldText, isDueWithin, isOverdue, normalizeTaskFilters, DUE_SOON_DAYS } from './taskFacts.js';
+import { assignmentState, foldText, isDueWithin, isOverdue, normalizeTaskFilters, DUE_SOON_DAYS, TEAM_LEVELS } from './taskFacts.js';
 import { decimalFromScaled, scaledDecimal } from '../../../../domain/numbers/fixedDecimal.js';
 
 /* ── rota_workload_summary ────────────────────────────────── */
@@ -18,19 +18,24 @@ const workloadSummary = {
   topic: 'workload',
   evidenceKind: 'workload',
   authorization: 'Yalnızca görünür AÇIK görevler; kişiye atıf yalnızca kimliği kullanıcıya açık sorumluluklarla yapılır (gizli eş sorumlular kişi olarak sayılmaz).',
-  description: 'Açık görevlerin kişilere dağılımı: kişi başına açık, devam eden, gecikmiş ve 7 gün içinde terminli görev sayısı ile atandığı görevlerin planlanan saat toplamı. Bu saat task düzeyindedir, kişi-saat tahsisi değildir. "Kimde kaç iş var", "en yoğun kişi kim" gibi sorularda kullanın. Kapasite ya da aşırı yük yargısı üretmez.',
+  description: 'Açık görevlerin kişilere dağılımı: kişi başına açık, devam eden, gecikmiş ve 7 gün içinde terminli görev sayısı ile atandığı görevlerin planlanan saat toplamı. Bu saat task düzeyindedir, kişi-saat tahsisi değildir. "Kimde kaç iş var", "en yoğun kişi kim", "ekibimin iş yükü" gibi sorularda kullanın (assignee team: yalnızca yönetim kapsamındaki çalışanlar). Kapasite ya da aşırı yük yargısı üretmez.',
   parameters: {
     type: 'object',
     additionalProperties: false,
     properties: {
       projectId: ID_PROPERTY('Yalnızca bu proje.'),
       personSicil: PERSON_SICIL_PROPERTY,
+      assignee: { type: 'string', enum: ['team'], description: 'team = yalnızca yönetim kapsamınızdaki çalışanlar (ekibiniz; yalnızca yöneticiler).' },
+      teamLevel: { type: 'string', enum: Object.keys(TEAM_LEVELS), description: 'Yalnızca assignee team ile: unit = birim, department = müdürlük/bölüm, directorate = direktörlük.' },
       limit: LIMIT_PROPERTY(25, 10)
     }
   },
   async handler(args, call) {
     const limit = args.limit ?? 10;
-    const filters = normalizeTaskFilters({ projectId: args.projectId, status: ['todo', 'in_progress'], personSicil: args.personSicil });
+    const team = args.assignee === 'team';
+    if (team && args.personSicil != null) throw invalidArguments(['$.personSicil:conflict']);
+    const filters = normalizeTaskFilters({ projectId: args.projectId, status: ['todo', 'in_progress'], personSicil: args.personSicil,
+      ...(team ? { assignee: 'team', ...(args.teamLevel ? { teamLevel: args.teamLevel } : {}) } : args.teamLevel ? { teamLevel: args.teamLevel } : {}) });
     const { scope } = await call.authorization();
     const { facts, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
     const people = new Map();
@@ -41,7 +46,8 @@ const workloadSummary = {
         unassigned += 1;
         continue;
       }
-      const visible = (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null);
+      // Ekip kapsamında yalnızca yönetim kapsamındaki çalışanlar kişi olarak sayılır (eş sorumlu ekip dışıysa sayılmaz).
+      const visible = (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null && (!team || person.teamMember));
       if (!visible.length) continue;
       for (const person of visible) {
         if (args.personSicil != null && person.sicil !== args.personSicil) continue;
@@ -82,6 +88,7 @@ const workloadSummary = {
       } } : {}),
       data: {
         filters: {
+          ...(team ? { assignee: 'team', ...(filters.teamLevel ? { teamLevel: filters.teamLevel } : {}) } : {}),
           ...(filters.projectId ? { projectId: filters.projectId, ...(projectName ? { project: projectName } : {}) } : {}),
           ...(args.personSicil != null ? { personSicil: args.personSicil, ...(personName ? { person: dataText(personName, 120) } : {}) } : {})
         },

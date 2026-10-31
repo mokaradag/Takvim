@@ -37,6 +37,9 @@ function scoped(executor, scope, options) {
     try { return await query(statement); } catch (error) {
       const number = error?.number ?? error?.originalError?.info?.number;
       if (number === 51001 || ([AI_TOOL_WBS_SQL, AI_TOOL_WBS_SELECTOR_SQL].includes(statement) && number === 530)) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
+      // İstenen ekip düzeyinde yönetim kapsamı yok (kullanıcının kendi yetki bağlamı; başka kayıt açıklanmaz).
+      if (number === 51002 && statement === AI_TOOL_TASK_FACTS_SQL) throw new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE, {
+        message: 'Ekip kapsamı yalnızca yönetim kapsamı olan kullanıcılara açıktır.', details: ['$.assignee:team'] });
       throw error;
     }
   };
@@ -63,7 +66,7 @@ export async function readTaskFacts(executor, scope, {
   openOnly = false, targetFrom = null, targetTo = null, createdByMe = false,
   statuses = [], priorities = [], milestone = null, deadline = null,
   dateField = null, dateFrom = null, dateTo = null, today = null,
-  assigneeMode = 'any', personSicil = null, withAssignees = false, maxRows
+  assigneeMode = 'any', personSicil = null, teamLevel = null, withAssignees = false, maxRows
 }) {
   const request = scoped(executor, scope, { projectId, taskIds });
   request.input('maxRows', sql.Int, maxRows + 1);
@@ -85,6 +88,7 @@ export async function readTaskFacts(executor, scope, {
   request.input('createdByMe', sql.Bit, createdByMe ? 1 : 0);
   request.input('assigneeMode', sql.VarChar(12), assigneeMode);
   request.input('personSicil', sql.Int, personSicil);
+  request.input('teamLevel', sql.VarChar(20), teamLevel || '');
   request.input('withAssignees', sql.Bit, withAssignees ? 1 : 0);
   const [factRows = [], projectRows = [], assigneeRows = []] = recordsets(await request.query(AI_TOOL_TASK_FACTS_SQL));
   const { rows, truncated } = capped(factRows, maxRows);
@@ -106,6 +110,9 @@ export async function readVisibleTasks(executor, scope, taskIds) {
 export async function readTaskDetail(executor, scope, taskId) {
   const request = scoped(executor, scope, { taskIds: [taskId] });
   request.input('withAssignees', sql.Bit, 1);
+  // Ortak görev sütunları ekip bayrağını taşır; tek görev ayrıntısında süzgeç yoktur.
+  request.input('assigneeMode', sql.VarChar(12), 'any');
+  request.input('teamLevel', sql.VarChar(20), '');
   const [detailRows = [], chainRows = [], assigneeRows = []] = recordsets(await request.query(AI_TOOL_TASK_DETAIL_SQL));
   const row = detailRows[0] || null;
   if ([row?.PredecessorCount, row?.SuccessorCount].some((value) => Number(value) > TOOL_LIMITS.maxAnalyzedTasks)) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);

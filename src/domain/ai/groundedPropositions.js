@@ -71,7 +71,14 @@ const DEADLINE = Object.freeze({
   no_target_finish: { tr: 'terminsiz', after: 'without a deadline', relative: false }
 });
 const FILTER_KEYS = new Set(['text', 'projectId', 'project', 'wbsId', 'statuses', 'priorities', 'deadline', 'dateField', 'dateFrom', 'dateTo', 'assignee',
-  'personSicil', 'createdByMe', 'milestone']);
+  'personSicil', 'createdByMe', 'milestone', 'teamLevel']);
+/** Ekip kapsamının adı (Türkçe yer/iyelik biçimleri, İngilizce iyelik). Düzey yoksa bütün yönetim kapsamı "ekibiniz"dir. */
+const TEAM = Object.freeze({
+  null: { at: 'ekibinizde', of: 'ekibinizin', en: 'your team' },
+  unit: { at: 'biriminizde', of: 'biriminizin', en: 'your unit' },
+  department: { at: 'bölümünüzde', of: 'bölümünüzün', en: 'your department' },
+  directorate: { at: 'direktörlüğünüzde', of: 'direktörlüğünüzün', en: 'your directorate' }
+});
 
 /**
  * Görev nüfusunun doğal betimi; süzgeçlerin TAMAMI ifade edilemiyorsa `null` (genel cümleye dönülür).
@@ -85,7 +92,8 @@ function taskPopulation(filters, locale) {
   // Kilometre taşı süzgecinin iki değeri de nüfusu daraltır (`false` kilometre taşlarını dışlar; taskFacts.matchesTaskFilters).
   if (typeof f.milestone === 'boolean') return null;
   if (!neutral(f.projectId) && (typeof f.project !== 'string' || !f.project.trim())) return null;
-  if (!neutral(f.assignee) && !['me', 'unassigned'].includes(f.assignee)) return null;
+  if (!neutral(f.assignee) && !['me', 'unassigned', 'team'].includes(f.assignee)) return null;
+  if (!neutral(f.teamLevel) && (f.assignee !== 'team' || !TEAM[f.teamLevel])) return null;
   if (!neutral(f.dateField) && f.dateField !== 'targetFinish') return null;
   if ([f.dateFrom, f.dateTo].some((value) => !neutral(value) && !DAY.test(String(value)))) return null;
   const statuses = neutral(f.statuses) ? [] : f.statuses;
@@ -103,6 +111,7 @@ function taskPopulation(filters, locale) {
   ];
   return {
     me: f.assignee === 'me',
+    team: f.assignee === 'team' ? TEAM[neutral(f.teamLevel) ? 'null' : f.teamLevel] : null,
     adjectives,
     after: locale === 'en' && deadline?.after ? deadline.after : null,
     project: neutral(f.projectId) ? null : f.project.trim(),
@@ -131,17 +140,18 @@ function windowParts(population, locale) {
 function taskCountSentence(filters, count, locale, { total = false } = {}) {
   const population = taskPopulation(filters, locale);
   if (!population) return null;
-  const { me, adjectives, project, relative } = population;
+  const { me, team, adjectives, project, relative } = population;
   if (locale === 'en') {
     const noun = count === 1 ? 'task' : 'tasks';
     const tail = [...(population.after ? [` ${population.after}`] : []), ...(project ? [' in the ', v(project), ' project'] : []), ...windowParts(population, locale),
       ...(total ? [' in total'] : [])];
     const described = `${adjectives.length ? `${adjectives.join(', ')} ` : ''}${noun}`;
     const now = relative ? 'currently ' : '';
-    if (count === 0) return sentence([me ? `You ${now}have no ${described}` : `There are ${now}no ${described}`, ...tail, '.']);
-    return sentence([me ? `You ${now}have ` : `There ${count === 1 ? 'is' : 'are'} ${now}`, v(number(count, locale)), ` ${described}`, ...tail, '.']);
+    const owner = team ? `${team.en.charAt(0).toUpperCase()}${team.en.slice(1)} ${now}has` : `You ${now}have`;
+    if (count === 0) return sentence([me || team ? `${owner} no ${described}` : `There are ${now}no ${described}`, ...tail, '.']);
+    return sentence([me || team ? `${owner} ` : `There ${count === 1 ? 'is' : 'are'} ${now}`, v(number(count, locale)), ` ${described}`, ...tail, '.']);
   }
-  const lead = [...(relative && !total ? ['şu anda '] : []), ...(project ? [v(project), ' projesinde '] : []), ...windowParts(population, locale), ...(total ? ['toplam '] : [])];
+  const lead = [...(team ? [`${team.at} `] : []), ...(relative && !total ? ['şu anda '] : []), ...(project ? [v(project), ' projesinde '] : []), ...windowParts(population, locale), ...(total ? ['toplam '] : [])];
   const noun = `${adjectives.length ? `${adjectives.join(', ')} ` : ''}${me ? 'göreviniz' : 'görev'}`;
   if (count === 0) return sentence([...lead, `${noun} yok.`]);
   return sentence([...lead, v(number(count, locale)), ` ${noun} var.`]);
@@ -151,13 +161,13 @@ function taskCountSentence(filters, count, locale, { total = false } = {}) {
 function ownerParts(filters, locale) {
   const population = taskPopulation(filters, locale);
   if (!population || population.from || population.to) return null;
-  const { me, adjectives, project } = population;
+  const { me, team, adjectives, project } = population;
   if (locale === 'en') {
     const described = `${adjectives.length ? `${adjectives.join(', ')} ` : ''}tasks${population.after ? ` ${population.after}` : ''}`;
-    return [me ? `your ${described}` : `the visible ${described}`, ...(project ? [' in the ', v(project), ' project'] : [])];
+    return [me ? `your ${described}` : team ? `${team.en}'s ${described}` : `the visible ${described}`, ...(project ? [' in the ', v(project), ' project'] : [])];
   }
-  const described = `${adjectives.length ? `${adjectives.join(', ')} ` : ''}${me ? 'görevlerinizin' : 'görevlerin'}`;
-  return [...(project ? [v(project), ' projesindeki '] : me ? [] : ['görebildiğiniz ']), described];
+  const described = `${adjectives.length ? `${adjectives.join(', ')} ` : ''}${me ? 'görevlerinizin' : team ? 'görevlerinin' : 'görevlerin'}`;
+  return [...(team ? [`${team.of} `] : []), ...(project ? [v(project), ' projesindeki '] : me || team ? [] : ['görebildiğiniz ']), described];
 }
 
 const GROUP_NOUNS = Object.freeze({ status: ['Durumlara göre', 'By status'], priority: ['Önceliğe göre', 'By priority'], project: ['Projelere göre', 'By project'],
@@ -234,16 +244,17 @@ export function titleCandidate({ tool, filters, groupBy = null, locale }) {
   if (!TASK_TOOLS.has(tool) || (groupBy && !EXCLUSIVE_GROUP_BY.includes(groupBy))) return null;
   const population = taskPopulation(filters, locale);
   if (!population) return null;
-  const { me, adjectives, project } = population;
+  const { me, team, adjectives, project } = population;
   const adjective = adjectives.length ? `${adjectives.join(', ')} ` : '';
   let text;
   if (locale === 'en') {
-    const tasks = `${me ? 'your ' : ''}${adjective}tasks${population.after ? ` ${population.after}` : ''}${project ? ` in the ${project} project` : ''}`;
+    const tasks = `${me ? 'your ' : team ? `${team.en}'s ` : ''}${adjective}tasks${population.after ? ` ${population.after}` : ''}${project ? ` in the ${project} project` : ''}`;
     const dimension = groupBy ? GROUP_TITLES[groupBy][1] : null;
     text = dimension ? `${dimension} distribution of ${tasks}` : tasks;
   } else {
-    const place = project ? `${project} projesindeki ` : '';
-    text = groupBy ? `${place}${adjective}${me ? 'görevlerinizin' : 'görevlerin'} ${GROUP_TITLES[groupBy][0]} dağılımı` : `${place}${adjective}${me ? 'görevleriniz' : 'görevler'}`;
+    const place = `${team ? `${team.of} ` : ''}${project ? `${project} projesindeki ` : ''}`;
+    text = groupBy ? `${place}${adjective}${me ? 'görevlerinizin' : team ? 'görevlerinin' : 'görevlerin'} ${GROUP_TITLES[groupBy][0]} dağılımı`
+      : `${place}${adjective}${me ? 'görevleriniz' : team ? 'görevleri' : 'görevler'}`;
   }
   // Termin aralığı nüfusun parçasıdır: tek uçlu ve gruplanmış aralık da başlıkta yazılır (başlık nüfusu genişletemez).
   const { from, to } = population;
@@ -476,8 +487,12 @@ export function noteLabel(tone, locale) {
 }
 
 /** Sonraki bloğa yönlendiren düzen cümlesi: olgu değil, sunucunun çizdiği bloğun varlığıdır. */
-export function pointerSentence({ type, style, distribution = false }, locale) {
+export function pointerSentence({ type, style, distribution = false, chartType = null }, locale) {
   const en = locale === 'en';
+  if (type === 'chart' && chartType === 'kpi') return en ? 'The key figures are shown below.' : 'Öne çıkan göstergeleri aşağıda görebilirsiniz.';
+  if (type === 'chart' && chartType === 'timeline') return en ? 'The timeline below shows the upcoming dates.' : 'Tarihleri aşağıdaki zaman çizelgesinde görebilirsiniz.';
+  if (type === 'chart' && chartType === 'line') return en ? 'The chart below shows the change over time.' : 'Zaman içindeki değişimi aşağıdaki grafikte görebilirsiniz.';
+  if (type === 'chart' && chartType === 'stacked') return en ? 'The chart below shows the status breakdown.' : 'Durum kırılımını aşağıdaki grafikte görebilirsiniz.';
   if (type === 'chart') {
     return distribution ? (en ? 'The chart below shows the distribution.' : 'Dağılımı aşağıdaki grafikte görebilirsiniz.')
       : (en ? 'The chart below compares the values.' : 'Değerleri aşağıdaki grafikte karşılaştırabilirsiniz.');

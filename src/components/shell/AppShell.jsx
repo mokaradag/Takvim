@@ -474,7 +474,7 @@ export default function AppShell() {
           )}
           <div className="topbar-spacer" />
           <div className="topbar-actions">
-            {assistant.enabled && <AssistantShell onChange={setAssistantActions} onOpenSettings={() => navigate('ayarlar')} />}
+            {assistant.enabled && <AssistantShell onChange={setAssistantActions} onOpenSettings={() => navigate('ayarlar')} answerDetail={t.assistantDetail} />}
             <ScheduleRequestCenter onNavigate={navigate} />
             <DataRefreshControl />
             {exportVisible && (

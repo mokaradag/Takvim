@@ -12,6 +12,7 @@ import {
 } from './evidenceNarrative.js';
 import { escapedFactText } from './evidenceFacts.js';
 import { countProposition, noteLabel, pointerSentence, populationProposition, tablePropositions, titleCandidate } from './groundedPropositions.js';
+import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from './answerDetail.js';
 
 /** Anlatımın en az önerme sayısı: sayfada bu kadar önerme varsa düzen en az bu kadarını söyler (azsa hepsini). */
 export const MIN_NARRATED_PROPOSITIONS = 3;
@@ -31,7 +32,7 @@ export const MIN_NARRATED_PROPOSITIONS = 3;
 export const COMPOSITION_LIMITS = Object.freeze({
   maxTables: 6,
   maxDetails: 6,
-  maxCharts: 4,
+  maxCharts: 6,
   maxPropositions: 12,
   maxTitles: 3,
   maxBlocks: 12,
@@ -74,6 +75,85 @@ function chartLabels(rows) {
   return new Set(labels).size === rows.length ? labels : null;
 }
 
+const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+const KPI_MIN_ITEMS = 3;
+const DAY_VALUE = /^\d{4}-\d{2}-\d{2}$/;
+/** Durum bölümleri: birbirini dışlar ve birlikte (yapılacak + devam eden = açık) bir bütün verir; yığılmış çubuk ancak bunlarla. */
+const PARTITIONS = Object.freeze([['tasks.todo', 'tasks.inProgress', 'tasks.done'], ['tasks.todo', 'tasks.inProgress']]);
+
+function monthLabel(key, locale) {
+  return new Intl.DateTimeFormat(locale === 'en' ? 'en-GB' : 'tr-TR', { timeZone: 'UTC', month: 'short', year: 'numeric' }).format(new Date(`${key}-01T00:00:00Z`));
+}
+
+/** Adayın türüne göre kapalı grafik tanımı (doğrulama ve çizim aynı tanımı kullanır). */
+function chartSpec(candidate, type, locale) {
+  const base = { version: 1, type, locale, title: candidate.title, unit: candidate.unit, evidence: [candidate.evidenceId] };
+  if (type === 'stacked') return { ...base, series: candidate.series, items: candidate.stacked };
+  if (type === 'kpi') return { ...base, items: candidate.kpi };
+  if (type === 'timeline') return { ...base, items: candidate.timeline };
+  return { ...base, items: candidate.items };
+}
+
+const unitOf = (fact) => (/Percent$/.test(leafOf(fact.field)) ? 'percent' : fact.semantic?.unit === 'hours' ? 'hours'
+  : fact.semantic?.measure === 'days' ? 'days' : Number.isSafeInteger(fact.value) && (COUNT_MEASURES.has(fact.semantic?.measure) || fact.semantic?.measure == null) ? 'count' : 'number');
+
+/**
+ * Tablonun çok sütunlu ve tarih adayları: yığılmış çubuk (satır başına birbirini dışlayan durum bölümleri) ve zaman
+ * çizelgesi (görev satırlarının termin tarihi). Değerler yalnızca tablonun doğrulanmış hücreleridir.
+ */
+function tableCharts({ group, described, collection, complete, labels, locale, table }) {
+  const out = [];
+  const rows = described.rows;
+  if (!labels || rows.length < ANSWER_CHART_LIMITS.minItems) return out;
+  const single = (index) => rows.every((row) => row.cells[index]?.length === 1);
+  const metricOf = (index) => rows[0].cells[index]?.[0]?.semantic?.metric;
+  const numeric = described.columns.map((column, index) => (column.numeric && single(index) ? index : -1)).filter((index) => index >= 0);
+  const partition = complete && PARTITIONS.find((set) => set.every((metric) => numeric.some((index) => metricOf(index) === metric)));
+  if (partition && rows.length <= ANSWER_CHART_LIMITS.maxStackedItems) {
+    const indexes = partition.map((metric) => numeric.find((index) => metricOf(index) === metric));
+    const valid = indexes.every((index) => rows.every((row) => Number.isSafeInteger(row.cells[index][0].value) && row.cells[index][0].value >= 0
+      && row.cells[index][0].semantic?.metric === metricOf(index)));
+    if (valid) {
+      out.push({ table, column: indexes[0], columns: indexes, title: answerChartLabel(locale === 'en' ? 'Status breakdown' : 'Durum kırılımı', ANSWER_CHART_LIMITS.maxTitleChars),
+        unit: 'count', evidenceId: group.evidenceId, types: ['stacked'],
+        series: indexes.map((index) => answerChartLabel(described.columns[index].label)),
+        stacked: rows.map((row, position) => ({ label: labels[position], values: indexes.map((index) => row.cells[index][0].value) })) });
+    }
+  }
+  // Zaman çizelgesi: görev satırlarının tek tarih sütunu (ör. termin); tarih sırasıyla, en çok sınır kadar satır.
+  const dates = described.columns.map((column, index) => index).filter((index) => single(index)
+    && rows.every((row) => row.cells[index][0].semantic?.valueType === 'date' && typeof row.cells[index][0].value === 'string' && DAY_VALUE.test(row.cells[index][0].value)));
+  if (/(^|\.)tasks$/.test(collection) && dates.length === 1 && complete && rows.length <= ANSWER_CHART_LIMITS.maxTimelineItems) {
+    const [index] = dates;
+    const timeline = rows.map((row, position) => ({ label: labels[position], date: row.cells[index][0].value }))
+      .map((item, order) => ({ ...item, order })).sort((left, right) => left.date.localeCompare(right.date) || left.order - right.order)
+      .map(({ label, date }) => ({ label, date }));
+    out.push({ table, column: index, title: answerChartLabel(described.columns[index].label, ANSWER_CHART_LIMITS.maxTitleChars), unit: 'number',
+      evidenceId: group.evidenceId, types: ['timeline'], timeline });
+  }
+  return out;
+}
+
+/** Satır koleksiyonu olmayan kaydın başlık ölçüleri: sonlu, negatif olmayan, birimi bilinen doğrulanmış sayılar (2–6). */
+function kpiCandidate(group, locale) {
+  const facts = group.main.entries.map(({ fact }) => fact).filter((fact) => typeof fact.value === 'number' && Number.isFinite(fact.value) && fact.value >= 0
+    && fact.value <= ANSWER_CHART_LIMITS.maxValue && fact.semantic?.metric && (COUNT_MEASURES.has(fact.semantic?.measure) || /Percent$/.test(leafOf(fact.field))));
+  const seen = new Set();
+  const items = [];
+  for (const fact of facts) {
+    const label = answerChartLabel(capitalizeLabel(narrativeLabel(fact, locale).label, locale));
+    if (seen.has(label)) continue;
+    seen.add(label);
+    items.push({ label, value: fact.value, unit: unitOf(fact) });
+  }
+  // Bir ya da iki sayı kısa yanıttır: gösterge kartları ancak en az üç başlık ölçüsü olan genel görünümde.
+  if (items.length < KPI_MIN_ITEMS) return null;
+  return { title: answerChartLabel(locale === 'en' ? 'Key figures' : 'Öne çıkan göstergeler'), unit: 'number', evidenceId: group.evidenceId, types: ['kpi'],
+    kpi: items.slice(0, ANSWER_CHART_LIMITS.maxKpiItems) };
+}
+
+const capitalizeLabel = (text, locale) => `${String(text).charAt(0).toLocaleUpperCase(locale === 'en' ? 'en-US' : 'tr-TR')}${String(text).slice(1)}`;
+
 function exactKeys(value, keys, optional = []) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const present = Object.keys(value);
@@ -89,7 +169,9 @@ function exactKeys(value, keys, optional = []) {
  * @param {{ index: number, topic?: string, kind: 'unavailable'|'not_found' }[]} [input.missing] Tamamlanamayan bölümler.
  * @returns {{ view: object, render: object } | null} Model girdisi (`view`) ve sunucunun çizim verisi (`render`).
  */
-export function buildComposition({ parts = [], missing = [], locale = 'tr', question = '', previousQuestion = null, today = null, populations = new Map() } = {}) {
+export function buildComposition({ parts = [], missing = [], locale = 'tr', question = '', previousQuestion = null, today = null, populations = new Map(),
+  visual = false, detail = null, synthesis = null } = {}) {
+  const answerDetail = normalizeAnswerDetail(detail);
   const tables = new Map();
   const details = new Map();
   const charts = new Map();
@@ -171,6 +253,13 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         // Türetilmiş önermeler bütün sayımlardan sonra eklenir: sınır bir sayımı düşürüp türetilmişi tutamaz.
         for (const proposition of tablePropositions({ group, described, distribution: partition, locale, population, collection })) derived.push({ ordinal, proposition, table: id });
         // Grafik adayı: satır başına tek, sonlu ve negatif olmayan sayı taşıyan sütun.
+        const addChart = (candidate, viewExtra = {}) => {
+          if (charts.size >= COMPOSITION_LIMITS.maxCharts) return;
+          const chartId = `G${charts.size + 1}`;
+          if (!candidate.types.every((type) => answerChartFence(chartSpec(candidate, type, locale)))) return;
+          charts.set(chartId, Object.freeze({ id: chartId, part: ordinal, ...candidate }));
+          viewCharts.push({ id: chartId, part: ordinal, ...(candidate.table ? { table: candidate.table } : {}), ...viewExtra, title: candidate.title, types: candidate.types });
+        };
         described.columns.forEach((column, index) => {
           if (!column.numeric || !labels || charts.size >= COMPOSITION_LIMITS.maxCharts) return;
           if (described.rows.length < ANSWER_CHART_LIMITS.minItems || described.rows.length > ANSWER_CHART_LIMITS.maxBarItems) return;
@@ -188,14 +277,32 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
             && values.every(([fact]) => fact.semantic?.row?.collectionSize === described.rows.length)
             && values.every(([fact]) => ['status', 'priority', 'project', 'deadline', 'target_month'].includes(fact.semantic?.groupBy))
             && described.rows.length <= ANSWER_CHART_LIMITS.maxDonutItems && total > 0 && unit === 'count';
-          const chartId = `G${charts.size + 1}`;
           const items = labels.map((label, position) => ({ label, value: values[position][0].value }));
-          const types = distribution ? ['bar', 'donut'] : ['bar'];
-          const title = answerChartLabel(column.label, ANSWER_CHART_LIMITS.maxTitleChars);
-          if (!types.every((type) => answerChartFence({ version: 1, type, locale, title, unit, evidence: [group.evidenceId], items }))) return;
-          charts.set(chartId, Object.freeze({ id: chartId, table: id, column: index, title, unit, evidenceId: group.evidenceId, items, types }));
-          viewCharts.push({ id: chartId, table: id, column: columns[index].id, title: column.label, types });
+          // Zaman dizisi: termin ayına göre tam gruplar sıralı dönemlerdir (çizgi); diğer sütunlar kategorik karşılaştırmadır.
+          const months = group.tool === 'rota_task_analytics' && collection.endsWith('groups') && complete && unit === 'count'
+            && values.every(([fact]) => fact.semantic?.groupBy === 'target_month') && described.rows.every((row) => MONTH.test(row.title))
+            && described.rows.length <= ANSWER_CHART_LIMITS.maxLineItems;
+          const types = months ? ['line', 'bar'] : distribution ? ['bar', 'donut'] : ['bar'];
+          // Dağılım ve zaman dizisi grafiği nüfusun sunucu başlığını taşır (ör. "Görevlerinizin durum dağılımı"); diğerleri sütun adını.
+          const partTitle = distribution || months ? [...titles.values()].find((item) => item.part === ordinal)?.text : null;
+          const title = answerChartLabel(partTitle || column.label, ANSWER_CHART_LIMITS.maxTitleChars);
+          addChart({ table: id, column: index, title, unit, evidenceId: group.evidenceId,
+            items: months ? described.rows.map((row, position) => ({ label: monthLabel(row.title, locale), value: values[position][0].value })) : items, types },
+          { column: columns[index].id });
         });
+        // Çok sütunlu (yığılmış) ve tarih (zaman çizelgesi) adayları tek sütun adaylarından sonra gelir; kimlikleri kaymaz.
+        for (const candidate of tableCharts({ group, described, collection, complete, labels, locale, table: id })) {
+          addChart(candidate, Number.isInteger(candidate.column) ? { column: columns[candidate.column].id } : {});
+        }
+      }
+      // Başlık ölçüleri (KPI kartları): satır koleksiyonu olmayan kaydın doğrulanmış sayıları.
+      if (!multi.size && charts.size < COMPOSITION_LIMITS.maxCharts) {
+        const kpi = kpiCandidate(group, locale);
+        if (kpi && answerChartFence(chartSpec(kpi, 'kpi', locale))) {
+          const chartId = `G${charts.size + 1}`;
+          charts.set(chartId, Object.freeze({ id: chartId, part: ordinal, table: null, column: null, ...kpi }));
+          viewCharts.push({ id: chartId, part: ordinal, title: kpi.title, types: kpi.types });
+        }
       }
       const detailText = renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout });
       if (detailText) {
@@ -221,10 +328,14 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     titles.clear();
     viewTitles.length = 0;
   }
+  // Bölümler arası analist önermeleri (sunucunun doğrulanmış olgulardan türettiği karşıtlık, yoğunlaşma, öncelik).
+  for (const item of synthesis?.(propositions) || []) propose(item.part, item.proposition, { table: null });
   const partCount = new Set(parts.map((part) => part.index)).size + missing.length;
   const view = {
     language: locale === 'en' ? 'en' : 'tr',
     ...(today ? { today } : {}),
+    detail: answerDetail,
+    ...(visual ? { visual: true } : {}),
     question: clip(String(question || ''), COMPOSITION_LIMITS.maxQuestionChars),
     ...(previousQuestion ? { previousQuestion: clip(String(previousQuestion), COMPOSITION_LIMITS.maxQuestionChars) } : {}),
     parts: partCount,
@@ -235,7 +346,8 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     charts: viewCharts,
     missing: missing.map((item) => ({ part: item.index + 1, ...(item.topic ? { topic: item.topic } : {}) }))
   };
-  return Object.freeze({ view: Object.freeze(view), render: Object.freeze({ locale: view.language, tables, details, charts, propositions, titles, question: String(question || '') }) });
+  return Object.freeze({ view: Object.freeze(view), render: Object.freeze({ locale: view.language, tables, details, charts, propositions, titles, question: String(question || ''),
+    visual: Boolean(visual), detail: answerDetail }) });
 }
 
 /**
@@ -280,7 +392,7 @@ export function validateComposition(composition, response) {
   const pointers = [];
   // Bölüm sahipliği: başlık, ardından gelen blokların nüfusunu adlandırır; her blok tek bölümündür.
   const partOfSource = (type, source) => (type === 'title' ? render.titles.get(source)?.part : type === 'rows' ? render.tables.get(source)?.part
-    : type === 'details' ? render.details.get(source)?.part : render.tables.get(render.charts.get(source)?.table)?.part);
+    : type === 'details' ? render.details.get(source)?.part : render.charts.get(source)?.part);
   const partOfItem = (id) => render.propositions?.get(id)?.part ?? partOfSource(render.tables.has(id) ? 'rows' : 'chart', id);
   let titledPart = null;
   const owned = (parts) => {
@@ -363,13 +475,16 @@ export function validateComposition(composition, response) {
   }
   if (['chart', 'note'].includes(blocks[0].type) || blocks.at(-1).type === 'title') return fail('LEAD_REQUIRED');
   if (blocks.filter((item) => item.type === 'title').length > COMPOSITION_LIMITS.maxTitles) return fail('BLOCK_COUNT');
-  // Yönlendirme ("aşağıdaki tablo/grafik") paragrafın HEMEN ardından çizilen kanıt bloklarınadır: paragrafın k yönlendirmesi,
-  // ondan sonraki ilk k tablo/grafik bloğudur. Araya başka bir tablo ya da grafik giremez.
-  const evidenceAfter = (at) => blocks.slice(at + 1).filter((item) => item.type === 'rows' || item.type === 'chart').map((item) => item.source);
+  // Yönlendirme ("aşağıdaki tablo" / "aşağıdaki grafik") paragraftan SONRA çizilen kendi bloğunadır. Cümle bloğun türünü
+  // söyler: aynı türden yönlendirilmeyen bir blok (başka bir tablo ya da başka bir grafik) araya girerse "aşağıdaki"
+  // yanlış bloğu gösterir ve reddedilir. Farklı türden blok (tablodan önce çizilen grafik) belirsizlik yaratmaz.
   for (const at of new Set(pointers.map((pointer) => pointer.at))) {
     const targets = pointers.filter((pointer) => pointer.at === at).map((pointer) => pointer.id);
-    const next = evidenceAfter(at).slice(0, targets.length);
-    if (next.length !== targets.length || targets.some((id) => !next.includes(id))) return fail('POINTER_TARGET');
+    for (const id of targets) {
+      const kind = render.tables.has(id) ? 'rows' : 'chart';
+      const position = blocks.findIndex((item, place) => place > at && item.type === kind && item.source === id);
+      if (position < 0 || blocks.slice(at + 1, position).some((item) => item.type === kind && !targets.includes(item.source))) return fail('POINTER_TARGET');
+    }
     // Yönlendirilen blok paragrafın önermelerinden en az birini desteklemelidir: tablo kendi kanıtının önermelerini,
     // grafik yalnızca gösterdiği sütunun (aynı tablo ve sütun) önermelerini. Önermesiz yönlendirme paragrafı serbesttir.
     const said = blocks[at].items.map((id) => render.propositions?.get(id)).filter(Boolean);
@@ -394,9 +509,78 @@ export function validateComposition(composition, response) {
   for (const part of new Set(propositions.map((item) => item.part))) {
     const available = propositions.filter((item) => item.part === part);
     const inSay = normalized.some((block) => block.type === 'say' && block.items.some((id) => render.propositions.get(id)?.part === part));
-    if (!inSay || available.filter((item) => usedPropositions.has(item.id)).length < Math.min(MIN_NARRATED_PROPOSITIONS, available.length)) return fail('NARRATION_REQUIRED');
+    if (!inSay || available.filter((item) => usedPropositions.has(item.id)).length < Math.min(minNarrated(render), available.length)) return fail('NARRATION_REQUIRED');
   }
+  // Ayrıntı ayarının not kutusu sınırı (kısa yanıt tek vurgu taşır).
+  if (normalized.filter((block) => block.type === 'note').length > ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)].maxNotes) return fail('NOTE_INVALID');
   return { ok: true, blocks: normalized };
+}
+
+/** Bölüm başına en az anlatılacak önerme: ayrıntı ayarının sözleşmesi (eski sayfalarda varsayılan dengeli). */
+function minNarrated(render) {
+  return render.detail ? ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)].minNarrated : MIN_NARRATED_PROPOSITIONS;
+}
+
+/** Görselleştirme tercihi: dağılımda halka, zaman dizisinde çizgi, bölümlerde yığılmış çubuk; sonra çubuk, zaman çizelgesi, göstergeler. */
+const STYLE_PREFERENCE = Object.freeze(['donut', 'line', 'stacked', 'bar', 'timeline', 'kpi']);
+const preferredStyle = (candidate) => STYLE_PREFERENCE.find((style) => candidate.types.includes(style)) || candidate.types[0];
+
+/** Açıkça istenen görselleştirmenin en uygun adayı (ilk bölümden başlayarak); yoksa `null`. */
+export function preferredChart(render) {
+  const candidates = [...render.charts.values()];
+  for (const style of STYLE_PREFERENCE) {
+    const found = candidates.find((candidate) => preferredStyle(candidate) === style);
+    if (found) return { id: found.id, style };
+  }
+  return null;
+}
+
+/**
+ * Açık görselleştirme isteği + geçerli aday → grafik ZORUNLU. Model düzeni grafik içermiyorsa sunucu en uygun adayı
+ * kendi tablosunun hemen ardına (tablo yoksa bölümünün paragrafının ardına) ekler. Grafik doğrulanmış kanıtın sunucu
+ * tanımıdır; ekleme yeni olgu üretmez. Sonuç yine `validateComposition` ile denetlenir.
+ */
+export function ensureChart(composition, validated) {
+  const { render } = composition;
+  if (!render.visual || !validated?.ok || validated.blocks.some((block) => block.type === 'chart')) return validated;
+  const choice = preferredChart(render);
+  if (!choice) return validated;
+  const candidate = render.charts.get(choice.id);
+  const blocks = [...validated.blocks];
+  const tableAt = candidate.table ? blocks.findIndex((block) => block.type === 'rows' && block.source === candidate.table) : -1;
+  const partSay = blocks.findIndex((block) => block.type === 'say' && block.items.some((id) => render.propositions.get(id)?.part === candidate.part));
+  const at = tableAt >= 0 ? tableAt + 1 : partSay >= 0 ? partSay + 1 : blocks.length;
+  blocks.splice(at, 0, { type: 'chart', source: choice.id, style: choice.style });
+  const checked = validateComposition(composition, { blocks: blocks.map((block) => ({ ...block })) });
+  return checked.ok ? { ...checked, chartInserted: true } : validated;
+}
+
+/**
+ * Sunucunun belirlenimci düzeni (model düzeni yoksa ya da reddedildiyse): bölüm başına başlık, ayrıntı ayarı kadar önerme
+ * (bölümün kendi paragrafında), istenmişse ya da gösterge kartıysa grafik ve bütün tablolar. Aynı doğrulayıcıdan geçer.
+ */
+export function defaultComposition(composition) {
+  const { render } = composition;
+  const contract = ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)];
+  const parts = [...new Set([...render.propositions.values(), ...render.tables.values(), ...render.details.values()].map((item) => item.part))].sort((a, b) => a - b);
+  const chart = render.visual ? preferredChart(render) : null;
+  const blocks = [];
+  for (const part of parts.slice(0, COMPOSITION_LIMITS.maxSayBlocks)) {
+    const title = [...render.titles.values()].find((item) => item.part === part);
+    if (title) blocks.push({ type: 'title', source: title.id });
+    const said = [...render.propositions.values()].filter((item) => item.part === part).slice(0, Math.min(contract.maxNarrated, COMPOSITION_LIMITS.maxSayItems)).map((item) => item.id);
+    if (said.length) blocks.push({ type: 'say', items: said });
+    const partChart = chart && render.charts.get(chart.id).part === part ? chart : null;
+    const tables = [...render.tables.values()].filter((table) => table.part === part);
+    for (const table of tables) {
+      blocks.push({ type: 'rows', source: table.id });
+      if (partChart && render.charts.get(partChart.id).table === table.id) blocks.push({ type: 'chart', source: partChart.id, style: partChart.style });
+    }
+    if (partChart && render.charts.get(partChart.id).table == null) blocks.push({ type: 'chart', source: partChart.id, style: partChart.style });
+  }
+  if (!blocks.length || blocks.length > COMPOSITION_LIMITS.maxBlocks) return null;
+  const checked = validateComposition(composition, { blocks });
+  return checked.ok ? checked : null;
 }
 
 /**
@@ -407,7 +591,10 @@ function supports(render, id, proposition) {
   const table = render.tables.get(id);
   if (table) return proposition.table === id || (proposition.table == null && proposition.evidenceId === table.evidenceId && proposition.part === table.part);
   const chart = render.charts.get(id);
-  return Boolean(chart) && proposition.table === chart.table && proposition.column === chart.column;
+  if (!chart) return false;
+  // Başlık ölçüleri (KPI) tablosuzdur: aynı kanıtın tablosuz önermelerini destekler.
+  if (chart.table == null) return proposition.table == null && proposition.evidenceId === chart.evidenceId && proposition.part === chart.part;
+  return proposition.table === chart.table && (chart.columns || [chart.column]).includes(proposition.column);
 }
 
 /* ── Çizim ─────────────────────────────────────────────────────── */
@@ -450,11 +637,12 @@ export function renderComposition(composition, validated) {
   for (const block of validated.blocks) {
     if (block.type !== 'chart') continue;
     const candidate = render.charts.get(block.source);
-    if (render.tables.get(candidate.table)?.evidenceId !== candidate.evidenceId) continue;
-    const fence = answerChartFence({ version: 1, type: block.style, locale, title: candidate.title, unit: candidate.unit, evidence: [candidate.evidenceId], items: candidate.items });
+    if (candidate.table != null && render.tables.get(candidate.table)?.evidenceId !== candidate.evidenceId) continue;
+    const fence = answerChartFence(chartSpec(candidate, block.style, locale));
     if (fence) fences.set(block.source, fence);
   }
   const rowStyles = new Map(validated.blocks.filter((block) => block.type === 'rows').map((block) => [block.source, block.style]));
+  const chartStyles = new Map(validated.blocks.filter((block) => block.type === 'chart').map((block) => [block.source, block.style]));
   for (const block of validated.blocks) {
     if (block.type === 'say') {
       const sentences = [];
@@ -468,7 +656,7 @@ export function renderComposition(composition, validated) {
         } else if (render.tables.has(id)) {
           sentences.push(pointerSentence({ type: 'rows', style: rowStyles.get(id) }, locale));
         } else if (fences.has(id)) {
-          sentences.push(pointerSentence({ type: 'chart', distribution: render.charts.get(id).types.includes('donut') }, locale));
+          sentences.push(pointerSentence({ type: 'chart', chartType: chartStyles.get(id), distribution: render.charts.get(id).types.includes('donut') }, locale));
         }
       }
       if (!sentences.length) continue;
@@ -502,7 +690,7 @@ export function renderComposition(composition, validated) {
       const fence = fences.get(block.source);
       if (!fence) continue;
       const candidate = render.charts.get(block.source);
-      showDetail(render.tables.get(candidate.table)?.detail);
+      if (candidate.table != null) showDetail(render.tables.get(candidate.table)?.detail);
       out.push(fence);
       cited.push(candidate.evidenceId);
       chart = block.style;

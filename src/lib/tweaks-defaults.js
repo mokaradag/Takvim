@@ -14,6 +14,8 @@ export const TWEAK_DEFAULTS = {
   // Yüksek karşıtlık: sınırlar ve ikincil metin koyulaştırılır. Açık temada
   // ve parlak ortamlarda okunabilirliği belirgin biçimde artırır.
   highContrast: false,
+  // Bilgin yanıt ayrıntısı (Aşama 4E): kısa | dengeli | ayrıntılı. Yalnızca sunum sözleşmesidir; sunucu da doğrular.
+  assistantDetail: 'balanced',
 };
 
 export function mergeTweakPreferences(defaults, overrides) {

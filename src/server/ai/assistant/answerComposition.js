@@ -1,7 +1,7 @@
 import 'server-only';
 import { AI_ERROR_CODES } from '../../../domain/ai/aiErrorCatalog.js';
 import { AI_CAPABILITIES } from '../../../domain/ai/aiModelRegistry.js';
-import { parseCompositionResponse, renderComposition, validateComposition } from '../../../domain/ai/groundedComposition.js';
+import { ensureChart, parseCompositionResponse, renderComposition, validateComposition } from '../../../domain/ai/groundedComposition.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import { AiError, isAiError } from '../aiErrors.js';
 import { compositionMessages } from './groundedPrompt.js';
@@ -79,10 +79,12 @@ export async function composeGroundedAnswer({ session, composition, onStart = nu
   try {
     const parsed = parseCompositionResponse(result.text);
     if (!parsed) return { ok: false, reason: 'INVALID', issue: 'SHAPE_INVALID' };
-    const validated = validateComposition(composition, parsed);
-    if (!validated.ok) return { ok: false, reason: 'INVALID', issue: validated.issues[0] };
+    const checked = validateComposition(composition, parsed);
+    if (!checked.ok) return { ok: false, reason: 'INVALID', issue: checked.issues[0] };
+    // Açık görselleştirme isteğinde geçerli aday varsa grafik zorunludur: model atlarsa sunucu ekler.
+    const validated = ensureChart(composition, checked);
     const rendered = renderComposition(composition, validated);
-    return rendered.text.trim() ? { ok: true, ...rendered } : { ok: false, reason: 'INVALID', issue: 'EMPTY_RENDER' };
+    return rendered.text.trim() ? { ok: true, ...rendered, ...(validated.chartInserted ? { chartInserted: true } : {}) } : { ok: false, reason: 'INVALID', issue: 'EMPTY_RENDER' };
   } catch {
     // Doğrulayıcının beklenmeyen hatası doğrulanmış yanıtı düşürmez; belirlenimci anlatım gösterilir.
     return { ok: false, reason: 'INTERNAL' };

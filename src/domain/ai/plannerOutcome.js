@@ -106,6 +106,22 @@ export function renderDependentLimit({ shown, locale = 'tr' }) {
   return locale === 'en' ? `_Follow-up is limited to the first ${shown} source records._` : `_Takip bölümü kaynaktaki ilk ${shown} kayıtla sınırlıdır._`;
 }
 
+/**
+ * İstenen kurumsal kapsam (ekip, birim, bölüm, direktörlük) kullanıcının yetki bağlamında yok: sabit sunucu metni.
+ * Metin yalnızca kullanıcının KENDİ yönetim kapsamını anlatır; başka kişi ya da kaydın varlığını açıklamaz.
+ */
+export function renderScopeUnavailable({ locale = 'tr' } = {}) {
+  return locale === 'en'
+    ? 'You do not have a management scope for this team or organizational level, so Bilgin cannot analyze it. You can ask about your own tasks or about projects you can access.'
+    : 'Bu ekip ya da kurumsal düzey için yönetim kapsamınız bulunmuyor; Bilgin bu kapsamı analiz edemez. Kendi görevleriniz ya da erişiminiz olan projeler hakkında sorabilirsiniz.';
+}
+
+/** Açık görselleştirme isteği doğrulanmış veriden güvenle karşılanamadığında kısa sunucu notu. */
+export function renderChartUnavailable({ locale = 'tr' } = {}) {
+  return locale === 'en' ? '_A chart could not be drawn safely from this verified data; the results are shown as text and tables._'
+    : '_Bu doğrulanmış veriden güvenle grafik çizilemedi; sonuçlar metin ve tablo olarak gösterildi._';
+}
+
 /** Tamamlanamayan bölüm için içeriksiz, sabit sunucu notu. */
 export function renderPartUnavailable({ locale = 'tr' } = {}) {
   return locale === 'en' ? 'A requested section could not be completed safely. Please ask that section separately, including the record name or code.'

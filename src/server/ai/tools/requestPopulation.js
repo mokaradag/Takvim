@@ -25,7 +25,8 @@ import { containmentText, populationArguments } from './toolScope.js';
  */
 
 const FAMILY_KEYS = Object.freeze({
-  task: ['status', 'priority', 'deadline', 'dateField', 'dateFrom', 'dateTo', 'period', 'assignee', 'createdByMe', 'milestone', 'text'],
+  task: ['status', 'priority', 'deadline', 'dateField', 'dateFrom', 'dateTo', 'period', 'assignee', 'teamLevel', 'createdByMe', 'milestone', 'text'],
+  workload: ['assignee', 'teamLevel'],
   projectSearch: ['text'],
   personSearch: ['text'],
   workflow: ['tab', 'workflowStatus', 'dateFrom', 'dateTo', 'period', 'text'],
@@ -36,7 +37,8 @@ const FAMILY_KEYS = Object.freeze({
 const FAMILIES = Object.freeze({
   rota_task_search: 'task', rota_task_analytics: 'task', rota_project_search: 'projectSearch', rota_person_search: 'personSearch',
   rota_schedule_requests: 'workflow', rota_assignment_requests: 'workflow',
-  rota_portfolio_summary: 'portfolio', rota_activity_search: 'activity', rota_calendar_inspect: 'calendar'
+  rota_portfolio_summary: 'portfolio', rota_activity_search: 'activity', rota_calendar_inspect: 'calendar',
+  rota_workload_summary: 'workload'
 });
 const WORKFLOW_TOOLS = new Set(['rota_schedule_requests', 'rota_assignment_requests']);
 const TASK_SORT_RANKS = Object.freeze({
@@ -78,7 +80,8 @@ export function canonicalFacets(family, values, today) {
       const filters = normalizeTaskFilters({ ...values, ...periodWindow(values.period, today), period: undefined });
       return compact({ status: sorted(filters.statuses), priority: sorted(filters.priorities), deadline: filters.deadline,
         dateField: filters.dateField, dateFrom: filters.dateFrom, dateTo: filters.dateTo,
-        assignee: ['me', 'unassigned'].includes(filters.assignee) ? filters.assignee : null, createdByMe: filters.createdByMe || null,
+        assignee: ['me', 'unassigned', 'team'].includes(filters.assignee) ? filters.assignee : null,
+        teamLevel: filters.assignee === 'team' ? filters.teamLevel || null : null, createdByMe: filters.createdByMe || null,
         milestone: filters.milestone, text: searchText(filters.text) });
     }
     case 'projectSearch':
@@ -89,6 +92,10 @@ export function canonicalFacets(family, values, today) {
       return compact({ tab: values.tab && values.tab !== 'all' ? values.tab : null, workflowStatus: values.status || null, ...window,
         text: searchText(values.text) });
     }
+    case 'workload':
+      // İş yükü nüfusu: bütün görünür açık görevler ya da yalnızca ekip (yönetim kapsamı); başka sorumlu koşulu ifade edilemez.
+      return compact({ assignee: values.assignee === 'team' ? 'team' : values.assignee ?? null,
+        teamLevel: values.assignee === 'team' ? values.teamLevel || null : values.teamLevel ?? null });
     case 'portfolio':
       return compact({ source: values.source && values.source !== 'all' ? values.source : null, includeEmpty: values.includeEmpty === false ? false : null });
     case 'activity': {
@@ -549,6 +556,11 @@ export function requestCapabilityProblems(request, { allowedTextFields = [] } = 
   if (requestTextFields(request).some((field) => !allowedTextFields.includes(field))) {
     problems.push('$.population.textFields:not-authorized');
     hints.push('population.textFields: kullanıcı bu turda serbest metni açmadı; bu alan okunamaz (sunucu kullanıcıdan "Notlar ve iletiler" anahtarını açmasını ister)');
+  }
+  // İş yükü nüfusu yalnızca ekip kapsamıyla daraltılabilir; "benim" ya da "sorumsuz" koşulu bu araçta ifade edilemez.
+  if (tool.name === 'rota_workload_summary' && request.filters.assignee != null && request.filters.assignee !== 'team') {
+    problems.push('$.filters.assignee:unsupported');
+    hints.push('filters.assignee (rota_workload_summary): yalnızca team (ekip); kendi görevleriniz için rota_task_analytics');
   }
   const active = Object.entries(request.filters).filter(([, value]) => value != null).map(([key]) => key);
   const fieldTools = (metric) => [...new Set((request.fields || []).filter((field) => field.metric === metric).map((field) => field.tool))];

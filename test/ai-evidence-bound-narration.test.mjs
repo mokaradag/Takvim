@@ -367,7 +367,9 @@ test('Örnek A uçtan uca: tek araçsız düzen turu, insan anlatımı ve deği�
   assert.equal(compose.messages[0].content, compositionSystemPrompt());
   // Anlatıcının girdisi küçüktür: ham SQL, araç dökümü ya da kanıt yükü yoktur; yalnızca önerme sayfası.
   assert.ok(compose.messages[1].content.length < 2600, String(compose.messages[1].content.length));
-  assert.deepEqual(Object.keys(sheet), ['language', 'today', 'question', 'parts', 'titles', 'propositions', 'tables', 'details', 'charts', 'missing']);
+  // Aşama 4E: sayfa yanıt ayrıntısını (Ayarlar) taşır; varsayılan dengelidir.
+  assert.deepEqual(Object.keys(sheet), ['language', 'today', 'detail', 'question', 'parts', 'titles', 'propositions', 'tables', 'details', 'charts', 'missing']);
+  assert.equal(sheet.detail, 'balanced');
   assert.deepEqual(answer.evidence.map((item) => item.id), ['R1']);
   assert.equal(stack.db.aiMessageEvidence.length, 1);
   const [line] = turnLines(logs);
@@ -823,7 +825,28 @@ test('yönlendirme paragrafın hemen ardındaki kanıt bloğunadır; araya başk
   assert.equal(validateComposition(sheet, { blocks: [say, { type: 'rows', source: 'T1' }, second, { type: 'rows', source: 'T2' }] }).ok, true);
   // İki yönlendirme: ardından gelen ilk iki kanıt bloğu (sıra serbest).
   assert.equal(validateComposition(sheet, { blocks: [{ type: 'say', items: [...own, 'G1', 'T1'] }, { type: 'rows', source: 'T1' }, { type: 'chart', source: 'G1' }, second, { type: 'rows', source: 'T2' }] }).ok, true);
-  assert.equal(issue(validateComposition(sheet, { blocks: [{ type: 'say', items: [...own, 'G1', 'T1'] }, { type: 'rows', source: 'T1' }, { type: 'rows', source: 'T2' }, { type: 'chart', source: 'G1' }] })), 'POINTER_TARGET');
+  // Aşama 4E: araya giren FARKLI türden blok ("aşağıdaki grafik" için bir tablo) yönlendirmeyi belirsizleştirmez.
+  assert.equal(validateComposition(sheet, { blocks: [{ type: 'say', items: [...own, 'G1', 'T1'] }, { type: 'rows', source: 'T1' }, second, { type: 'rows', source: 'T2' }, { type: 'chart', source: 'G1' }] }).ok, true);
+  // Aynı türden yönlendirilmeyen blok araya girerse "aşağıdaki tablo" başka tabloyu gösterir: reddedilir.
+  assert.equal(issue(validateComposition(sheet, { blocks: [{ type: 'say', items: [...own, 'T1'] }, second, { type: 'rows', source: 'T2' }, { type: 'rows', source: 'T1' }] })), 'POINTER_TARGET');
+});
+
+test('Aşama 4E POINTER_TARGET kök nedeni: grafiğe yönlendiren paragraf ardından önce tablo, sonra grafik çizer (gerçek ret)', async (t) => {
+  const sheet = await statusSheet(t);
+  const chart = sheet.view.charts[0];
+  assert.ok(chart, 'dağılım grafiği adayı vardır');
+  const said = sheet.view.propositions.filter((item) => item.table === chart.table && item.column === chart.column).slice(0, 3).map((item) => item.id);
+  assert.ok(said.length, 'grafiğin sütununu taşıyan önerme vardır');
+  // Gözlenen üretim düzeni: kullanıcı grafik istedi, model paragrafta grafiğe yönlendirdi ve yönergedeki "tablo, sonra grafik" sırasını izledi.
+  const observed = { blocks: [{ type: 'title', source: 'H1' }, { type: 'say', items: [...said, chart.id] }, { type: 'rows', source: chart.table }, { type: 'chart', source: chart.id, style: 'donut' }] };
+  const validated = validateComposition(sheet, observed);
+  assert.equal(validated.ok, true, JSON.stringify(validated.issues));
+  const rendered = renderComposition(sheet, validated);
+  assert.equal(rendered.chart, 'donut');
+  assert.match(rendered.text, /Dağılımı aşağıdaki grafikte görebilirsiniz\./);
+  assert.ok(rendered.text.indexOf('```rota-chart') > rendered.text.indexOf('Dağılımı aşağıdaki grafikte'), 'grafik paragraftan sonra çizilir');
+  // Grafik paragraftan ÖNCE çizilirse yönlendirme yine reddedilir (kaynak bağı zayıflamaz).
+  assert.equal(issue(validateComposition(sheet, { blocks: [{ type: 'say', items: [said[0]] }, { type: 'chart', source: chart.id }, { type: 'say', items: [...said.slice(1), chart.id] }, { type: 'rows', source: chart.table }] })), 'POINTER_TARGET');
 });
 
 test('grafik yönlendirmesi yalnızca önermenin sütununu gösteren grafiğe olur (kaynak bağı); başka ölçünün grafiği reddedilir', async (t) => {

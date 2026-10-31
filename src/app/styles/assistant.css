@@ -782,7 +782,38 @@
 .assistant-chart-legend-item:hover,
 .assistant-chart-legend-item.is-active { background: var(--bg-hover); }
 .assistant-chart-swatch { flex: 0 0 auto; display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: var(--series, var(--accent)); }
+/* Aşama 4E görselleştirme dilbilgisi: çizgi, yığılmış çubuk, gösterge kartları ve zaman çizelgesi. Hepsi tema
+   belirteçleriyle; erişilebilir karşılık metin düğümleridir (SVG yalnızca görseldir). */
+.assistant-chart :is(.assistant-chart-line-values, .assistant-chart-series-legend, .assistant-chart-kpis, .assistant-chart-timeline) { margin: 0; padding: 0; list-style: none; }
+.assistant-chart :is(.assistant-chart-line-values, .assistant-chart-series-legend, .assistant-chart-kpis, .assistant-chart-timeline) > li { margin: 0; }
+.assistant-chart-line { display: grid; gap: 8px; }
+.assistant-chart-line-plot { display: block; width: 100%; height: 120px; overflow: visible; }
+.assistant-chart-line-axis { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.assistant-chart-line-path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.assistant-chart-line-point { fill: var(--bg-elev); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.assistant-chart-line-point.is-active { fill: var(--accent); }
+.assistant-chart-line-values { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 2px 8px; }
+.assistant-chart-line-value { display: flex; justify-content: space-between; gap: 6px; padding: 3px 6px; border-radius: var(--r-sm); cursor: default; }
+.assistant-chart-line-value:hover,
+.assistant-chart-line-value:focus-visible { background: var(--bg-hover); }
+.assistant-chart-line-value:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.assistant-chart-stacked { display: grid; gap: 8px; }
+.assistant-chart-series-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--text-muted); font-size: 11.5px; }
+.assistant-chart-series-legend > li { display: inline-flex; align-items: center; gap: 6px; }
+.assistant-chart-stack { display: flex; width: calc(var(--chart-ratio, 0) * 100%); background: transparent; }
+.assistant-chart-stack-part { flex: 0 1 0; min-width: 0; background: var(--series); }
+.assistant-chart-stack-part + .assistant-chart-stack-part { box-shadow: inset 1px 0 0 var(--bg-elev); }
+.assistant-chart-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
+.assistant-chart-kpi { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-elev); }
+.assistant-chart-kpi-value { color: var(--text); font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.assistant-chart-kpi-label { color: var(--text-muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.assistant-chart-timeline { position: relative; display: grid; gap: 6px; padding-left: 14px; }
+.assistant-chart-timeline::before { content: ''; position: absolute; top: 4px; bottom: 4px; left: 4px; width: 2px; border-radius: 1px; background: var(--border); }
+.assistant-chart-timeline-item { position: relative; display: grid; grid-template-columns: minmax(96px, auto) minmax(0, 1fr); align-items: baseline; gap: 10px; }
+.assistant-chart-timeline-dot { position: absolute; top: 5px; left: -14px; width: 10px; height: 10px; border: 2px solid var(--accent); border-radius: 50%; background: var(--bg-elev); }
+.assistant-chart-timeline-date { color: var(--text); font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
 @container assistant-chart (max-width: 340px) {
+  .assistant-chart-timeline-item { grid-template-columns: minmax(0, 1fr); gap: 1px; }
   .assistant-chart-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 3px; }
   .assistant-chart-row .assistant-chart-label { grid-column: 1 / -1; }
   .assistant-chart-donut { grid-template-columns: minmax(0, 1fr); justify-items: center; }

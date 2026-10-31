@@ -49,6 +49,12 @@ function executiveOf(db, manager, employee) {
   return db.executiveScope.some((entry) => entry.ManagerSicil === manager && entry.EmployeeSicil === employee);
 }
 
+/** Ekip üyeliği (MR_V_ExecutiveScope, kullanıcı hariç); düzey verilirse yalnızca o ScopeType. */
+function teamMemberOf(db, manager, employee, level) {
+  return Number(employee) !== Number(manager) && db.executiveScope.some((entry) => entry.ManagerSicil === manager && entry.EmployeeSicil === Number(employee)
+    && (!level || (entry.ScopeType || 'UNIT') === level));
+}
+
 function personName(db, sicil) {
   const person = db.people.find((entry) => Number(entry.Sicil) === Number(sicil));
   const name = person?.DisplayName ? String(person.DisplayName).trim() : '';
@@ -109,7 +115,7 @@ function assigneesOf(db, taskId) {
   return db.taskAssignees.filter((entry) => same(entry.TaskId, taskId));
 }
 
-function factRow(db, scope, entry) {
+function factRow(db, scope, entry, params = {}) {
   const { task } = entry;
   const assignees = assigneesOf(db, task.TaskId);
   return {
@@ -142,11 +148,12 @@ function factRow(db, scope, entry) {
     IsCreator: Number(task.CreatedBySicil) === scope.sicil ? 1 : 0,
     IsOwnAssignee: assignees.some((row) => row.Sicil === scope.sicil) ? 1 : 0,
     DisclosedAssigneeCount: assignees.filter((row) => entry.IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)).length,
-    ResolvedAssigneeCount: assignees.filter((row) => personName(db, row.Sicil) != null && (entry.IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil))).length
+    ResolvedAssigneeCount: assignees.filter((row) => personName(db, row.Sicil) != null && (entry.IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil))).length,
+    IsTeamTask: params.assigneeMode === 'team' && assignees.some((row) => teamMemberOf(db, scope.sicil, row.Sicil, params.teamLevel)) ? 1 : 0
   };
 }
 
-function assigneeRows(db, scope, facts) {
+function assigneeRows(db, scope, facts, params = {}) {
   const rows = [];
   for (const fact of facts) {
     for (const assignment of assigneesOf(db, fact.TaskId)) {
@@ -157,7 +164,8 @@ function assigneeRows(db, scope, facts) {
         Sicil: identityVisible ? assignment.Sicil : null,
         DisplayName: personName(db, assignment.Sicil) ?? (identityVisible ? String(assignment.Sicil) : null),
         IdentityVisible: identityVisible ? 1 : 0,
-        Resolved: personName(db, assignment.Sicil) != null ? 1 : 0
+        Resolved: personName(db, assignment.Sicil) != null ? 1 : 0,
+        TeamMember: params.assigneeMode === 'team' && teamMemberOf(db, scope.sicil, assignment.Sicil, params.teamLevel) ? 1 : 0
       });
     }
   }
@@ -165,6 +173,10 @@ function assigneeRows(db, scope, facts) {
 }
 
 function taskFacts(db, params) {
+  if (params.assigneeMode === 'team' && !db.executiveScope.some((entry) => entry.ManagerSicil === Number(params.sicil) && entry.EmployeeSicil !== Number(params.sicil)
+    && (!params.teamLevel || (entry.ScopeType || 'UNIT') === params.teamLevel))) {
+    const error = new Error('AI_TOOL_SCOPE_UNAVAILABLE'); error.number = 51002; throw error;
+  }
   const scope = scopeOf(db, params);
   const text = String(params.text || '');
   const statuses = new Set(String(params.statusCsv || '').split(',').filter(Boolean));
@@ -218,18 +230,19 @@ function taskFacts(db, params) {
       case 'unassigned': return IdentityBase === 1 && assignments.length === 0;
       case 'person': return assignments.some((row) => row.Sicil === Number(params.personSicil)
         && (IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)));
+      case 'team': return assignments.some((row) => teamMemberOf(db, scope.sicil, row.Sicil, params.teamLevel));
       default: return true;
     }
   }).sort((left, right) => upper(left.task.TaskId).localeCompare(upper(right.task.TaskId)))
     .slice(0, Number(params.maxRows));
-  const facts = matches.map((entry) => factRow(db, scope, entry));
+  const facts = matches.map((entry) => factRow(db, scope, entry, params));
   const projects = [...scope.projects.entries()]
     .filter(([id]) => params.projectId || facts.some((fact) => same(fact.ProjectId, id)))
     .map(([id, access]) => {
       const project = projectRow(db, id);
       return { ProjectId: project.ProjectId, ProjectName: project.ProjectName, ProjectCode: project.ProjectCode, SourceType: project.SourceType, ...access };
     });
-  return [facts, projects, params.withAssignees ? assigneeRows(db, scope, facts) : []];
+  return [facts, projects, params.withAssignees ? assigneeRows(db, scope, facts, params) : []];
 }
 
 function taskVisibility(db, params) {

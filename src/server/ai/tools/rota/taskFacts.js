@@ -27,6 +27,8 @@ export const TASK_STATUS_LABELS = Object.freeze({ todo: 'Yapılacak', in_progres
 export const TASK_STATUSES = Object.freeze(['todo', 'in_progress', 'done']);
 export const TASK_PRIORITIES = Object.freeze(['critical', 'high', 'medium', 'low']);
 export const DEADLINE_FILTERS = Object.freeze(['overdue', 'due_today', 'due_next_7_days', 'due_next_30_days', 'no_target_finish']);
+/** Ekip kapsamının kurumsal düzeyleri: birim, müdürlük, direktörlük (MR_V_ExecutiveScope.ScopeType). */
+export const TEAM_LEVELS = Object.freeze({ unit: 'UNIT', department: 'DEPARTMENT', directorate: 'DIRECTORATE' });
 export const DATE_FIELDS = Object.freeze(['targetFinish', 'calendarDate', 'plannedStart', 'plannedFinish', 'actualStart', 'actualFinish']);
 export const TASK_SORTS = Object.freeze([
   'target_finish_asc', 'target_finish_desc', 'overdue_days_desc', 'priority', 'planned_start_asc', 'updated_desc', 'title_asc'
@@ -114,6 +116,8 @@ export function factFromRow(row) {
     identityBase: Boolean(row.IdentityBase),
     isCreator: Boolean(row.IsCreator),
     isOwnAssignee: Boolean(row.IsOwnAssignee),
+    // Yönetim kapsamındaki (MR_V_ExecutiveScope) bir çalışana atanmış mı; yalnızca ekip süzgecinde SQL'in hesapladığı bayraktır.
+    isTeamTask: Boolean(row.IsTeamTask),
     disclosedAssigneeCount: Math.max(0, Number(row.DisclosedAssigneeCount) || 0),
     resolvedAssigneeCount: Math.max(0, Number(row.ResolvedAssigneeCount) || 0)
   };
@@ -198,12 +202,15 @@ export function normalizeTaskFilters(args = {}) {
     dateFrom: args.dateFrom || null,
     dateTo: args.dateTo || null,
     assignee: args.assignee || 'any',
+    // Ekip kapsamının kurumsal düzeyi (MR_V_ExecutiveScope.ScopeType); yalnızca assignee "team" ile anlamlıdır.
+    teamLevel: args.teamLevel || null,
     personSicil: args.personSicil ?? null,
     createdByMe: args.createdByMe === true,
     milestone: typeof args.milestone === 'boolean' ? args.milestone : null
   };
   const problems = [];
   if (filters.personSicil != null && filters.assignee !== 'any') problems.push('$.personSicil:conflict');
+  if (filters.teamLevel && filters.assignee !== 'team') problems.push('$.teamLevel:assignee');
   if ((filters.dateFrom || filters.dateTo) && !filters.dateField) filters.dateField = 'targetFinish';
   if (filters.dateField && !filters.dateFrom && !filters.dateTo) problems.push('$.dateField:range');
   if (filters.dateFrom && filters.dateTo && filters.dateFrom > filters.dateTo) problems.push('$.dateFrom:reversed');
@@ -241,6 +248,7 @@ export function assigneeMatches(fact, filters, assignees, sicil) {
   switch (filters.assignee) {
     case 'me': return fact.isOwnAssignee;
     case 'unassigned': return assignmentState(fact) === 'unassigned';
+    case 'team': return fact.isTeamTask;
     case 'person': return (assignees.get(fact.id) || []).some((person) => person.identityVisible && person.sicil === filters.personSicil)
       || (filters.personSicil === sicil && fact.isOwnAssignee);
     default: return true;
@@ -358,7 +366,9 @@ export function assigneesByTask(rows = []) {
       sicil: identityVisible && row.Sicil != null ? Number(row.Sicil) : null,
       name: row.DisplayName && String(row.DisplayName).trim() !== String(row.Sicil) ? String(row.DisplayName).trim() : null,
       identityVisible,
-      resolved: row.Resolved == null ? true : Boolean(row.Resolved)
+      resolved: row.Resolved == null ? true : Boolean(row.Resolved),
+      // Yönetim kapsamındaki çalışan (ekip süzgecinin düzeyiyle); kimliği her zaman açıktır.
+      teamMember: identityVisible && Boolean(row.TeamMember)
     };
     if (!person.name && person.sicil == null) continue;
     if (!byTask.has(taskId)) byTask.set(taskId, []);

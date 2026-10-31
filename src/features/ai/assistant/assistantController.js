@@ -9,6 +9,7 @@ import {
 } from '../../../domain/ai/assistantContract.js';
 import * as assistantApi from './assistantClient.js';
 import { assistantFailureView, effectiveAssistantSource, isSessionFailure } from './assistantPresentation.js';
+import { DEFAULT_ANSWER_DETAIL, normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
 
 /**
  * Rota AI'nin durum makinesi — React'ten bağımsız, saf JavaScript.
@@ -187,6 +188,8 @@ export function createAssistantController({
   const viewKeys = new Map();
   const listMutations = new Map();
   let mutationVersion = 0;
+  // Ayarlar'daki yanıt ayrıntısı (kabuk bildirir); yalnızca sunum tercihidir, çizim durumunu değiştirmez.
+  let answerDetail = DEFAULT_ANSWER_DETAIL;
 
   const draft = () => {
     const key = `draft:${createId()}`;
@@ -543,6 +546,7 @@ export function createAssistantController({
       mode: state.mode,
       source: effectiveAssistantSource(state.readiness, state.mode, state.source),
       includeText: state.includeText === true,
+      detail: answerDetail,
       controller: new AbortController(),
       text: '',
       phase: 'sending',
@@ -580,6 +584,8 @@ export function createAssistantController({
       mode: run.mode,
       ...(run.source === 'general' ? { source: run.source } : {}),
       ...(run.source === 'rota' && run.includeText ? { includeText: true } : {}),
+      // Yanıt ayrıntısı yalnızca varsayılandan farklıysa gönderilir (sunucu varsayılanı dengeli).
+      ...(run.source === 'rota' && run.detail !== DEFAULT_ANSWER_DETAIL ? { detail: run.detail } : {}),
       expectedSequence: active.messageCount || 0,
       signal: run.controller.signal,
       onEvent: (event) => onRunEvent(run, event)
@@ -1036,6 +1042,8 @@ export function createAssistantController({
     setMode,
     setSource,
     setIncludeText,
+    /** Ayarlar'daki Bilgin yanıt ayrıntısı; sonraki gönderimlerde kullanılır (sunucu ayrıca doğrular). */
+    setAnswerDetail(value) { answerDetail = normalizeAnswerDetail(value); },
     setView,
     newConversation,
     openConversation,

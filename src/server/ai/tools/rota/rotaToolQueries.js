@@ -212,11 +212,24 @@ const ASSIGNEE_ROWS = `
     CASE WHEN a.IdentityVisible = 1 THEN a.Sicil ELSE NULL END AS Sicil,
     NULLIF(LTRIM(RTRIM(d.DirectoryName)), N'') AS DisplayName,
     a.IdentityVisible,
-    CAST(CASE WHEN d.Sicil IS NULL THEN 0 ELSE 1 END AS bit) AS Resolved
+    CAST(CASE WHEN d.Sicil IS NULL THEN 0 ELSE 1 END AS bit) AS Resolved,
+    CAST(CASE WHEN @assigneeMode = 'team' AND a.Sicil <> @sicil AND EXISTS (
+      SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.Sicil
+        AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)) THEN 1 ELSE 0 END AS bit) AS TeamMember
   FROM #AiAssignees a
   LEFT JOIN (SELECT Sicil, MIN(DisplayName) AS DirectoryName FROM #AiDirectory GROUP BY Sicil) d ON d.Sicil = a.Sicil
   ORDER BY a.TaskId;
 `;
+
+/**
+ * Ekip görevi: yönetim kapsamındaki (MR_V_ExecutiveScope, yönetici = kullanıcı) bir çalışana atanmış görev. Kapsam İK
+ * ilişkisinden türetilir; kullanıcının kendisi ekip üyesi sayılmaz. Düzey (UNIT/DEPARTMENT/DIRECTORATE) verilirse yalnızca o
+ * kurumsal düzeydeki yönetim ilişkisi. Görünürlük ayrıca anlık görüntü kuralıyla (#AiTasks) sınırlıdır.
+ */
+const TEAM_TASK = `EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees member
+        JOIN dbo.MR_V_ExecutiveScope es ON es.EmployeeSicil = member.Sicil
+        WHERE member.TaskId = t.TaskId AND es.ManagerSicil = @sicil AND member.Sicil <> @sicil
+          AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel))`;
 
 const TASK_FACT_COLUMNS = `
     t.TaskId, t.ProjectId, t.WbsId, t.Title, t.Keyword, t.Status, t.Priority, t.IsMilestone,
@@ -227,7 +240,8 @@ const TASK_FACT_COLUMNS = `
     CAST(CASE WHEN t.CreatedBySicil = @sicil THEN 1 ELSE 0 END AS bit) AS IsCreator,
     CAST(COALESCE(assignment.IsOwnAssignee, 0) AS bit) AS IsOwnAssignee,
     COALESCE(assignment.DisclosedAssigneeCount, 0) AS DisclosedAssigneeCount,
-    COALESCE(assignment.ResolvedAssigneeCount, 0) AS ResolvedAssigneeCount`;
+    COALESCE(assignment.ResolvedAssigneeCount, 0) AS ResolvedAssigneeCount,
+    CAST(CASE WHEN @assigneeMode = 'team' AND ${TEAM_TASK} THEN 1 ELSE 0 END AS bit) AS IsTeamTask`;
 
 /**
  * Görev olguları: yetkili görev kümesi, yalnızca DARALTAN kaba süzgeçlerle
@@ -293,9 +307,14 @@ const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
           OR t.CreatedBySicil = @sicil OR person.Sicil = @sicil OR EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
             WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = person.Sicil))))
       OR (@assigneeMode = 'unassigned' AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR t.CreatedBySicil = @sicil)
-        AND NOT EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees person WHERE person.TaskId = t.TaskId)))`;
+        AND NOT EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees person WHERE person.TaskId = t.TaskId))
+      OR (@assigneeMode = 'team' AND ${TEAM_TASK}))`;
 
 export const AI_TOOL_TASK_FACTS_SQL = `/* rota-ai-tool:task-facts */
+  -- Ekip kapsamı İK ilişkisinden gelir: istenen düzeyde yönetilen çalışan yoksa nüfus yoktur; "0 görev" yerine kapalı ret.
+  IF @assigneeMode = 'team' AND NOT EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+    WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel))
+    THROW 51002, 'AI_TOOL_SCOPE_UNAVAILABLE', 1;
 ${SCOPE_PROJECTS}
 ${visibleTasks(TASK_ROW_FILTER)}
 ${ASSIGNMENT_FACTS}
@@ -315,7 +334,8 @@ ${ASSIGNMENT_FACTS}
         WHERE person.TaskId = t.TaskId AND person.Sicil = @personSicil
           AND (visible.IdentityBase = 1 OR person.Sicil = @sicil OR EXISTS (
             SELECT 1 FROM dbo.MR_V_ExecutiveScope es
-            WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = person.Sicil)))))
+            WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = person.Sicil))))
+      OR (@assigneeMode = 'team' AND ${TEAM_TASK}))
   ORDER BY t.TaskId;
 
   SELECT * FROM #AiFacts;

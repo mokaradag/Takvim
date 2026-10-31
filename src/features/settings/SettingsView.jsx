@@ -4,6 +4,8 @@ import { DataModeIndicator } from '../../components/shell/DataModeIndicator';
 import { HeroHeader } from '../../components/ui';
 import { TWEAK_DEFAULTS } from '../../lib/tweaks-defaults';
 import { AiAccessSettings } from '../ai/AiAccessSettings.jsx';
+import { assistantEnabledInDocument } from '../../lib/runtimeFeatures.js';
+import { ANSWER_DETAIL_LABELS, ANSWER_DETAILS, normalizeAnswerDetail } from '../../domain/ai/answerDetail.js';
 
 const MODE_STORAGE_KEY = 'mergen_rota_mode_selected_v1';
 
@@ -62,7 +64,28 @@ function ModeCard({ id, active, icon: Icon, title, kicker, description, points, 
   );
 }
 
+/**
+ * Bilgin yanıt ayrıntısı: yalnızca Bilgin ortam yapılandırmasıyla açıksa görünür. Tercih görünüm tercihleriyle aynı
+ * kayıtta saklanır; her turda sunucuya gönderilir ve orada kapalı sözlükle doğrulanır (yalnızca sunum sözleşmesi).
+ */
+function AssistantAnswerSettings({ value, onChange }) {
+  const detail = normalizeAnswerDetail(value);
+  return (
+    <div className="card" data-testid="assistant-answer-settings">
+      <div className="card-title" style={{ marginBottom: 4 }}>
+        <Icons.Sparkle size={14} /><span>Bilgin yanıtları</span>
+      </div>
+      <div className="card-sub">Bilgin'in Rota analizlerini ne kadar ayrıntılı anlatacağı. Yanıtlar her zaman doğrulanmış veriye dayanır.</div>
+      <SettingsRow title="Yanıt ayrıntısı" desc={ANSWER_DETAIL_LABELS[detail].description}>
+        <Segmented value={detail} onChange={(v) => onChange(v)}
+          options={ANSWER_DETAILS.map((key) => [key, ANSWER_DETAIL_LABELS[key].label])} />
+      </SettingsRow>
+    </div>
+  );
+}
+
 export function SettingsView({ t, setTweak }) {
+  const assistantEnabled = assistantEnabledInDocument();
   const fontScale = t.fontScale || 1;
   const appMode = t.appMode || 'advanced';
   const accents = [
@@ -334,6 +357,8 @@ export function SettingsView({ t, setTweak }) {
             </button>
           </SettingsRow>
         </div>
+
+        {assistantEnabled && <AssistantAnswerSettings value={t.assistantDetail} onChange={(v) => setTweak('assistantDetail', v)} />}
 
         <AiAccessSettings />
       </div>

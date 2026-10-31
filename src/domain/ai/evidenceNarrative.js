@@ -180,6 +180,13 @@ function scopePhrase(record, locale, { named = false, projects = null } = {}) {
   }
   if (record.kind === 'person') return locale === 'en' ? `${name}` : `${name} için`;
   if (record.kind === 'group') return locale === 'en' ? `the ${name} group` : `${name} grubunda`;
+  // Ekip kapsamı (yönetim kapsamı) nüfusun öznesidir: "görebildiğiniz bütün görevler" ile karıştırılmaz.
+  const filters = record.entries.find(({ fact }) => fact.semantic?.filters?.assignee)?.fact.semantic.filters;
+  if (filters?.assignee === 'team') {
+    const team = { unit: ['your unit', 'biriminizin görevleri arasında'], department: ['your department', 'bölümünüzün görevleri arasında'],
+      directorate: ['your directorate', 'direktörlüğünüzün görevleri arasında'] }[filters.teamLevel] || ['your team', 'ekibinizin görevleri arasında'];
+    return locale === 'en' ? `${team[0]}'s tasks` : team[1];
+  }
   return locale === 'en' ? 'your visible tasks' : 'görebildiğiniz görevler arasında';
 }
 
