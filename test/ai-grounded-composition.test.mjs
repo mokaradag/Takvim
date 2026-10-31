@@ -96,7 +96,8 @@ test('basit sayımda düzen seçimi yoktur; dağılım tam kanıtta pasta grafi�
 
 test('kapalı sayfa sınırı bütün tablo ve ayrıntıları korur; fazla kaynakta güvenle vazgeçilir', async (t) => {
   const { verdict } = await overdueComposition(t);
-  const parts = Array.from({ length: COMPOSITION_LIMITS.maxTables }, (_, index) => ({ index, presentation: verdict.presentation }));
+  const presentation = { ...verdict.presentation, facts: verdict.presentation.facts.filter(({ fact }) => fact.field === 'totalCount' || fact.field.endsWith('.title')) };
+  const parts = Array.from({ length: COMPOSITION_LIMITS.maxTables }, (_, index) => ({ index, presentation }));
   const composition = buildComposition({ parts, question: QUESTION });
   assert.equal(composition.view.tables.length, parts.length);
   assert.equal(composition.render.details.size, parts.length);
@@ -107,7 +108,7 @@ test('kapalı sayfa sınırı bütün tablo ve ayrıntıları korur; fazla kayna
   assert.equal(issue(check(composition, { blocks: [validLead()] })), 'COVERAGE_INCOMPLETE');
   assert.equal(issue(check(composition, { blocks: composition.view.tables.map((table) => ({ type: 'rows', source: table.id })) })), 'NARRATION_REQUIRED');
   assert.equal(issue(check(composition, narrated(narrate(composition), ...composition.view.tables.map((table) => ({ type: 'rows', source: table.id }))))), 'NARRATION_REQUIRED', 'every proposition-bearing part needs narration, even at the sheet limit');
-  assert.equal(buildComposition({ parts: [...parts, { index: 6, presentation: verdict.presentation }] }), null);
+  assert.equal(buildComposition({ parts: [...parts, { index: 6, presentation }] }), null);
 });
 
 /* ── Geçerli düzen ve çizim ──────────────────────────────────── */

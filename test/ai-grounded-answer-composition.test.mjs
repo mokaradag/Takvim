@@ -155,6 +155,32 @@ test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; ya
   });
 });
 
+test('narration admission queue expiry records timeout while delivering the verified fallback', async (t) => {
+  const stack = stackFor(t);
+  const logs = captureConsole(t);
+  const { getAiGateway } = await import('../src/server/ai/aiRuntime.js');
+  const { AiError } = await import('../src/server/ai/aiErrors.js');
+  const gateway = getAiGateway();
+  const run = gateway.runToolSession.bind(gateway);
+  let deepAdmissions = 0;
+  t.mock.method(gateway, 'runToolSession', async (options) => {
+    if (options.profile === 'chat.tools.reasoning') {
+      deepAdmissions += 1;
+      assert.equal(options.queueTimeoutMs, 5000);
+      throw new AiError('AI_QUEUE_TIMEOUT');
+    }
+    return run(options);
+  });
+  stack.provider.enqueue(plan(), composer(() => ({ blocks: [{ type: 'say', items: ['P99'] }, { type: 'rows', source: 'T1' }] })));
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
+  assert.equal(answer.finishReason, 'stop');
+  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.equal(deepAdmissions, 1);
+  assert.equal(stack.provider.calls.length, 2, 'queue expiry makes no Deep provider call or retry');
+  assert.deepEqual(aiTelemetrySnapshot().grounding.escalations.byOutcome, { timeout: 1 });
+  assert.equal(turnLines(logs)[0].context.escalation.outcome, 'timeout');
+});
+
 test('anlatım devrinde yetki Derin düzen çağrısından ÖNCE yeniden okunur: erişim kalktıysa önerme sayfası Derin sağlayıcıya gitmez', async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);

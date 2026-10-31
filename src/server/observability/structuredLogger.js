@@ -80,7 +80,7 @@ export function logEvent(input = {}) {
     // Biçim, olayın gerçekten yazıldığı akışa göre seçilir: console.warn/error stderr'e, console.info stdout'a yazar.
     const format = summary ? consoleLogFormat(process.env, method === 'info' ? process.stdout : process.stderr) : 'json';
     if (format !== 'json') console[method](`[mergen-rota] ${summary}${record.correlationId ? ` | ${String(record.correlationId).slice(0, 8)}` : ''}`);
-    if (format !== 'summary') console[method](`[mergen-rota] ${JSON.stringify(record)}`);
+    if (format !== 'summary') console[method](JSON.stringify(record));
   } catch {
     // Günlükleme hatası yutulur.
   }

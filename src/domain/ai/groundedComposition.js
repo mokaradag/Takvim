@@ -102,7 +102,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   const viewPropositions = [];
   const derived = [];
   let overflow = false;
-  // Önermeler isteğe bağlı bir anlatım katmanıdır: sınır aşılırsa fazlası sunulmaz, sayfa düşmez.
+  // Tek bölümde önermeler isteğe bağlıdır; çok bölümlü sayfada sınır bölümün türetilmiş olgularını düşüremez.
   const propose = (ordinal, proposition, extra = {}) => {
     if (!proposition || propositions.size >= COMPOSITION_LIMITS.maxPropositions) return null;
     const id = `P${propositions.size + 1}`;
@@ -211,10 +211,11 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     }
   }
   if (overflow || (!details.size && !tables.size)) return null;
+  const contentParts = new Set([...tables.values(), ...details.values()].map((item) => item.part));
+  if (contentParts.size > 1 && propositions.size + derived.length > COMPOSITION_LIMITS.maxPropositions) return null;
   for (const { ordinal, proposition, table } of derived) propose(ordinal, proposition, { table });
   // Çok bölümlü sayfada başlık, ardından gelen blokların nüfusunu adlandırır: başlığı olmayan bir bölüm varsa onun
   // olguları başka bölümün başlığı altına düşebilir. Bu durumda başlık seçeneği hiç sunulmaz (seçim daralır, olgu değişmez).
-  const contentParts = new Set([...tables.values(), ...details.values()].map((item) => item.part));
   const titledParts = new Set([...titles.values()].map((item) => item.part));
   if (contentParts.size > 1 && [...contentParts].some((part) => !titledParts.has(part))) {
     titles.clear();

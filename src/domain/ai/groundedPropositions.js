@@ -96,6 +96,7 @@ function taskPopulation(filters, locale) {
   const or = locale === 'en' ? ' or ' : ' ya da ';
   const adjectives = [
     ...(deadline?.tr && locale !== 'en' ? [deadline.tr] : deadline?.before ? [deadline.before] : []),
+    ...(deadline && f.deadline !== 'overdue' ? [locale === 'en' ? 'open' : 'açık'] : []),
     ...(priorities.length ? [priorities.map((key) => PRIORITY[key][lang(locale)]).join(or)] : []),
     ...(statuses.length ? [statuses.map((key) => STATUS[key][lang(locale)]).join(or)] : []),
     ...(f.assignee === 'unassigned' ? [locale === 'en' ? 'unassigned' : 'sorumlusuz'] : [])

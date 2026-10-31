@@ -929,7 +929,7 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
       throw error;
     }
     const timedOut = error.code === AI_ERROR_CODES.AI_TIMEOUT;
-    telemetry(timedOut ? 'timeout' : 'error');
+    telemetry(timedOut || error.code === AI_ERROR_CODES.AI_QUEUE_TIMEOUT ? 'timeout' : 'error');
     // Süre aşımı doğrulama hatası değildir: sağlayıcının yoğunluğu güvenli iletiyle gizlenmez. Anlatım devrinde
     // doğrulanmış yanıt hazırdır; teslim kendi yetki denetimiyle yine denenir.
     if (timedOut && request.kind !== 'narrate') { request.traceError?.(error); throw error; }

@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { captureConsole, createAiStack, loadAssistantConversation, sendTurn } from './helpers/aiStack.mjs';
 import { AYSE, NOW, PROJECTS, TASKS, callRotaTool, callRotaTools, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
-import { composer, isCompositionCall } from './helpers/compositionScenario.mjs';
+import { composer, coveringBlocks, isCompositionCall } from './helpers/compositionScenario.mjs';
 import { declared, nativeDeclaration } from './helpers/evidenceScenario.mjs';
 import { verifyRequested } from './helpers/requestScenario.mjs';
 
@@ -482,12 +482,17 @@ test('konsol biçimi ayrılabilir: json, summary ve both; ayarsız terminalde ö
     process.env.MERGEN_ROTA_LOG_FORMAT = format;
     const logs = captureConsole(t);
     const record = logEvent(event);
+    for (const line of logs) {
+      if (line.includes('"timestamp"')) assert.deepEqual(JSON.parse(line), JSON.parse(JSON.stringify(record)), 'the complete output line is valid JSON');
+      else assert.ok(line.startsWith('[mergen-rota] '), 'only the summary keeps its prefix');
+    }
     assert.equal(record.context.outcome, 'grounded', 'kayıt her biçimde aynıdır');
     assert.deepEqual(logs.map((line) => (line.includes('{"timestamp"') ? 'json' : 'summary')), expected, format);
   }
   process.env.MERGEN_ROTA_LOG_FORMAT = 'summary';
   const logs = captureConsole(t);
   logEvent({ component: 'AI', operation: 'ai.other', message: 'özetsiz olay' });
+  assert.equal(JSON.parse(logs[0]).operation, 'ai.other');
   assert.equal(logs.length, 1);
   assert.ok(logs[0].includes('"operation":"ai.other"'), 'özeti olmayan olay JSON kalır');
 });
@@ -542,6 +547,61 @@ test('küçük tamamlanma payı %1 olmaz; kesir Türkçe ve İngilizce korunur',
   assert.ok(completion(200, 20000, 'tr').plain.includes("%1'i tamamlandı"));
   assert.equal(completion(0, 20000, 'tr'), undefined);
   assert.equal(completion(20000, 20000, 'en'), undefined);
+});
+
+test('deadline population narration keeps the open-only restriction in multipart answers', async (t) => {
+  const stack = stackFor(t);
+  const completed = stack.db.tasks.find((task) => task.TaskId === TASKS.READ_2);
+  assert.equal(completed.Status, 'done');
+  assert.equal(completed.TargetFinish, null);
+  const { ledger } = await callRotaTools(stack, AYSE, [
+    ['rota_task_search', { projectId: PROJECTS.READ, deadline: 'no_target_finish' }],
+    ['rota_task_analytics', { assignee: 'me', groupBy: 'status' }]
+  ]);
+  for (const locale of ['tr', 'en']) {
+    const count = verifyRequested(ledger, ['R1:totalCount'], { operation: 'value', metrics: ['tasks.total'], filters: { deadline: 'no_target_finish' },
+      entities: [{ type: 'project', id: PROJECTS.READ }] }, { locale });
+    const distribution = verifyRequested(ledger, ['R2:data.groups.*.label', 'R2:data.groups.*.count'], STATUS_REQUEST, { locale });
+    assert.equal(count.ok && distribution.ok, true, JSON.stringify([count.issues, distribution.issues]));
+    const sheet = buildComposition({ parts: [{ index: 0, presentation: count.presentation }, { index: 1, presentation: distribution.presentation }], locale });
+    const proposition = sheet.view.propositions.find((item) => item.part === 1);
+    assert.ok(proposition.text.includes(locale === 'en' ? 'open tasks without a deadline' : 'terminsiz, açık görev'), proposition.text);
+    const validated = validateComposition(sheet, coveringBlocks(sheet.view));
+    assert.equal(validated.ok, true, JSON.stringify(validated.issues));
+    assert.ok(assistantMarkdownText(renderComposition(sheet, validated).text).includes(proposition.text));
+    for (const deadline of ['due_today', 'due_next_7_days', 'due_next_30_days']) {
+      const fact = { value: 0, semantic: { filters: { deadline } } };
+      assert.ok(countProposition({ tool: 'rota_task_search', evidenceId: 'R1' }, fact, locale).plain.includes(locale === 'en' ? 'open tasks' : 'açık görev'), deadline);
+      assert.ok(titleCandidate({ tool: 'rota_task_search', filters: { deadline }, locale }).includes(locale === 'en' ? 'Open tasks' : 'açık görev'), deadline);
+    }
+  }
+});
+
+test('multipart proposition overflow falls back without hiding later derived averages or increasing the cap', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const stack = stackFor(t, { MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true' });
+  const logs = captureConsole(t);
+  for (const task of stack.db.tasks) task.Progress = 10;
+  for (const [id, progress] of [[TASKS.OVERDUE, 80], [TASKS.SERIES, 60], [TASKS.PARTIAL_OWN, 50]]) stack.db.tasks.find((row) => row.TaskId === id).Progress = progress;
+  const { ledger } = await callRotaTools(stack, AYSE, [
+    ['rota_task_search', { deadline: 'overdue' }], ['rota_task_search', { deadline: 'overdue', assignee: 'me' }]
+  ]);
+  const first = verifyRequested(ledger, [...OVERDUE_FACTS, 'data.tasks.*.progressPercent'].map((field) => `R1:${field}`),
+    { ...OVERDUE_LIST, metrics: [...OVERDUE_LIST.metrics, 'task.progressPercent'], filters: { deadline: 'overdue' } });
+  const second = verifyRequested(ledger, OVERDUE_FACTS.map((field) => `R2:${field}`), OVERDUE_LIST);
+  assert.equal(first.ok && second.ok, true, JSON.stringify([first.issues, second.issues]));
+  const parts = [{ index: 0, presentation: first.presentation }, { index: 1, presentation: second.presentation }];
+  const singles = parts.map((part) => buildComposition({ parts: [part] }));
+  assert.ok(singles.every((sheet) => sheet.view.propositions.some((item) => item.kind === 'average')));
+  assert.ok(singles.reduce((sum, sheet) => sum + sheet.view.propositions.length, 0) > COMPOSITION_LIMITS.maxPropositions, JSON.stringify(singles.map((sheet) => sheet.view.propositions)));
+  assert.equal(buildComposition({ parts }), null);
+  const request = { ...OVERDUE_REQUEST, metrics: [...OVERDUE_REQUEST.metrics, 'task.progressPercent'], filters: { deadline: 'overdue' } };
+  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr', request, additionalRequests: [OVERDUE_REQUEST] } }] });
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Geciken tüm görevlerin ilerlemesini ve kendi geciken görevlerimi göster.' })).assistantMessage;
+  assert.equal(answer.finishReason, 'stop');
+  assert.ok(answer.content.includes('Kısmi kendi görevim'));
+  assert.equal(stack.provider.calls.some(isCompositionCall), false, 'oversized multipart sheets never reach a narrator');
+  assert.equal(turnLines(logs)[0].context.presentation.reason, 'SHEET_LIMIT');
 });
 
 test('numeric extrema and averages preserve typed percentage units in the rendered answer', async (t) => {
