@@ -293,7 +293,8 @@ async function loadEvidenceFor(sicil, signal, { conversationId, messageId = null
   if (!result.knownSicil) throw unknownSicil();
   noteEvidenceSchema(result.ready);
   return { ready: result.ready, presentMessages: result.presentMessages, byMessage: result.byMessage, epochsByMessage: result.epochsByMessage,
-    authorizationByMessage: result.authorizationByMessage, clarificationByMessage: result.clarificationByMessage, resultScopeByMessage: result.resultScopeByMessage };
+    authorizationByMessage: result.authorizationByMessage, clarificationByMessage: result.clarificationByMessage, resultScopeByMessage: result.resultScopeByMessage,
+    analysisByMessage: result.analysisByMessage };
 }
 
 /* ── Hazırlık durumu ─────────────────────────────────────────── */
@@ -777,6 +778,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     const useTools = grounded && !prepared.answer;
     let history = prepared.history;
     let previousResult = null;
+    let previousAnalysis = null;
     if (!prepared.answer && history.some((message) => message.role === 'assistant')) {
       // Geçmiş yanıtlar bağlama yer tutucu olarak girer: yalnızca kanıt dönemleri gerekir.
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id }, { revalidate: false });
@@ -786,6 +788,10 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
         ? priorEvidence?.resultScopeByMessage?.get(prior.id) : null;
       const entries = priorEvidence?.authorizationByMessage?.get(prior?.id);
       if (scope && entries?.length && !priorEvidence.unverifiable?.has(prior.id)) previousResult = { scope, entries };
+      // Aşama 4E takip bağlamı: yalnızca hemen önceki doğrulanmış yanıtın sunucu bağlamı (kimlikler güncel yetkiyle yeniden okunur).
+      if (useTools && prior?.role === 'assistant' && ['stop', 'unavailable'].includes(prior.finishReason) && !priorEvidence?.unverifiable?.has(prior.id)) {
+        previousAnalysis = priorEvidence?.analysisByMessage?.get(prior.id) || null;
+      }
       history = fallbackAssistantHistory(history, priorEvidence);
       const last = history.at(-1);
       if (useTools && last?.role === 'assistant' && last.finishReason === 'clarification') {
@@ -819,6 +825,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
       answerDetail: input.detail,
       clarification,
       previousResult,
+      previousAnalysis,
       dataUnavailable: config.toolsEnabled && input.source !== 'general' && !grounded,
       conversation: prepared.conversation,
       userMessage: prepared.turn.message,
@@ -979,6 +986,7 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
     allowedTextFields: turn.allowedTextFields || [],
     clarification: turn.clarification || null,
     previousResult: turn.previousResult || null,
+    previousAnalysis: turn.previousAnalysis || null,
     onStatus,
     onProgress,
     onText: async () => {},

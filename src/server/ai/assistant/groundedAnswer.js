@@ -32,6 +32,7 @@ import { PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimi
 import { buildComposition, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
 import { analysisDetails, analysisHints } from '../tools/analysisPlan.js';
 import { normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
+import { analysisContextSummary, normalizeAnalysisContext } from '../../../domain/ai/analysisContext.js';
 import { composeGroundedAnswer, compositionWindowMs } from './answerComposition.js';
 import { plannerCandidateNote } from './groundedPrompt.js';
 
@@ -1024,7 +1025,7 @@ function isEmptyCompletion(error) {
 }
 
 /** Turun durumu: kanıt defteri, kapsam, araç izinleri ve döküm. Devirde aynı durum sürer. */
-function startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, previousResult, onStatus, onProgress, planning, onPlanned }) {
+function startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, previousResult, previousAnalysis, onStatus, onProgress, planning, onPlanned }) {
   const status = (phase, extra = {}) => onStatus?.({ phase, ...extra });
   const userMessages = messages.filter((message) => message.role === 'user');
   const currentUser = userMessages.at(-1);
@@ -1032,6 +1033,8 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
   const userText = [clarification?.selected ? clarification.question : null, currentUser?.content].filter(Boolean).join('\n');
   const advice = planning || { state: 'unavailable', candidates: [], reason: 'UNAVAILABLE' };
   const prior = previousResult && taskResultScope(previousResult.scope) && previousResult.entries?.length ? previousResult : null;
+  const analysisPrior = normalizeAnalysisContext(previousAnalysis);
+  const analysisReferents = analysisPrior ? [...analysisPrior.subjects, ...analysisPrior.rows] : [];
   const turn = {
     catalog,
     // Doğal yanıt düzeninin soru bağlamı: kullanıcının kendi iletileri (önceki asistan metni değil).
@@ -1041,6 +1044,8 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     planning: Object.freeze({ state: advice.state, candidates: Object.freeze([...advice.candidates]), reason: advice.reason }),
     onPlanned,
     previousResult: prior,
+    // Önceki doğrulanmış analizin kanonik bağlamı (takip göndergesi; yetki değildir).
+    previousAnalysis: analysisPrior,
     decision: null,
     decisionCounted: false,
     readStarted: false,
@@ -1074,7 +1079,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     allowedTextFields,
     callId: createCallIds(),
     declarationsLeft: DECLARATION_ROUNDS,
-    containment: createToolScope({ today: context.today, userText, allowedTextFields, clarification, referents: prior?.scope.taskIds || [] }),
+    containment: createToolScope({ today: context.today, userText, allowedTextFields, clarification, referents: prior?.scope.taskIds || [], analysisReferents }),
     // Çalışan döküm ve Derin düşünmeye devredilecek temiz döküm (düzeltme notları olmadan).
     transcript: [...messages],
     baseline: [...messages],
@@ -1096,11 +1101,15 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     // İçeriksiz tur izi: tur amaçları, süreler, belirteç sayıları ve sayaçlar.
     trace: { startedAt: planning?.startedAt ?? Date.now(), rounds: [], declarations: 0, repairs: 0, revalidationMs: 0, verificationMs: 0, pending: null }
   };
-  turn.scopeOptions = Object.freeze({ today: context.today, userText, allowedTextFields, clarification, referents: prior?.scope.taskIds || [] });
+  turn.scopeOptions = Object.freeze({ today: context.today, userText, allowedTextFields, clarification, referents: prior?.scope.taskIds || [], analysisReferents });
   attachExecutor(turn);
   if (turn.previousResult) {
     const note = { role: 'system', content: `Önceki doğrulanmış Rota sonuç kapsamı: ${JSON.stringify({ type: 'task', count: turn.previousResult.scope.taskIds.length })}. Bu yalnızca göndergedir, güncel kanıt değildir. Kullanıcının sorusu bu kümeye ilişkinse ("bunlar", "bunlardan", "onun") request.previousResult=true ile rota_task_search (görev özellikleri/süzgeç) ya da rota_task_analytics (sayı) bildir; kimlik/önceki süzgeç kopyalama. Soru kümenin TEK bir görevine sıra ile başvuruyorsa ("ilk görev", "2. görev"; tek görevli kümede "o görev") previousResult yazma; entities:[{"type":"task","previous":<1 tabanlı sıra>}] ile o görevin aracını (ör. öncül/ardıl için rota_dependency_inspect, alanları için rota_task_detail) bildir. Yeni veya adı verilmiş kayıt sorusunda (ör. başka bir kişi) kullanma; önceki sorunun koşullarını yeni kayda uygula. Önceki asistan metninden veri çıkarma.` };
     for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note.content);
+  }
+  if (analysisPrior) {
+    const note = `Önceki doğrulanmış analiz bağlamı (yalnızca gönderge; güncel kanıt değil): ${JSON.stringify(analysisContextSummary(analysisPrior))}. Takip sorusu aynı özneyle sürüyorsa ("sadece gecikmişler", "kimlerde yoğunlaşıyor", "grafik olarak göster", "peki gelecek hafta?") analysis.scope "previous" yaz; focus, dateFrom/dateTo ve visual yeni soruya göre yeniden yazılır (değişmeyeni önceki değerden kopyala). Önceki sonucun bir satırına sırayla başvuruluyorsa ("ilk kişi", "2. proje") analysis.scope "row" ve analysis.row yaz. Önceki öznede birden çok kayıt varken (subjects 2) tek bir kayda zamirle başvuruluyorsa clarify missing_referent. Kullanıcı kapsamı açıkça değiştirdiyse (başka proje, ekibim, kendi işlerim, tüm projeler) yeni kapsamı yaz; önceki koşullar kendiliğinden taşınmaz.`;
+    for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note);
   }
   const notes = [
     clarification ? selectionInstruction(clarification) : null,
@@ -1307,6 +1316,49 @@ function completedResultScope(turn, verdict) {
   return taskResultScope({ type: 'task', taskIds: [...taskIds] });
 }
 
+/**
+ * Doğrulanmış yanıtın kanonik analiz bağlamı (Aşama 4E): sunucunun bağladığı özne kimlikleri, kapsam, analitik yönler, ufuk,
+ * görselleştirme ve sıralı kişi/proje satırları. Kaynak yalnızca bu turun kabul edilen istekleri ve doğrulanmış kanıtıdır.
+ */
+function completedAnalysisContext(turn, verdict) {
+  const grounded = (turn.partCount === 1 && !turn.answers.length) ? (verdict.kind === 'grounded' ? [{ request: turn.request, verdict, entries: partEntries(turn) }] : [])
+    : turn.answers.filter((answer) => answer.verdict.kind === 'grounded');
+  if (!grounded.length || !['grounded', 'unavailable'].includes(verdict.kind)) return null;
+  const first = grounded[0].request;
+  if (!first?.population) return null;
+  const entries = turn.ledger.requestEntries();
+  const bound = bindRequestEntities(first, entries, turn.containment.boundSelection());
+  const subjects = bound.filter((entity) => ['project', 'person'].includes(entity.type) && entity.bound != null)
+    .map((entity) => ({ type: entity.type, id: String(entity.bound) })).filter((item, index, all) => all.findIndex((other) => other.type === item.type && other.id === item.id) === index);
+  const types = new Set(subjects.map((item) => item.type));
+  const assignee = first.filters?.assignee;
+  const scope = assignee === 'me' ? 'self' : assignee === 'team' ? 'team' : types.size === 1 ? [...types][0]
+    : first.population.tool === 'rota_portfolio_summary' ? 'projects' : 'all';
+  const intent = turn.presentationIntent?.analysis;
+  // Sıralı satırlar: kişi (iş yükü) ya da proje (portföy) satırlarının doğrulanmış sırası; ilk uygun bölümden.
+  let rows = [];
+  for (const answer of grounded) {
+    const { request } = answer;
+    const tool = request.population?.tool;
+    const collection = tool === 'rota_workload_summary' ? 'people' : tool === 'rota_portfolio_summary' ? 'projects' : null;
+    if (!collection || !['list', 'rank'].includes(request.operation)) continue;
+    for (const entry of answer.entries || []) {
+      if (entry.tool !== tool || !answer.verdict.citedIds.includes(entry.id)) continue;
+      const items = entry.payload?.data?.[collection] || [];
+      const order = request.operation === 'rank' ? (rankedRowIndexes(request, tool, entry.payload, collection, collection) || []) : items.map((_, index) => index);
+      rows = order.map((index) => items[index]).map((row) => (collection === 'people' ? { type: 'person', id: row?.sicil == null ? null : String(row.sicil) }
+        : { type: 'project', id: row?.projectId ? String(row.projectId) : null })).filter((row) => row.id).slice(0, 10);
+      break;
+    }
+    if (rows.length) break;
+  }
+  return normalizeAnalysisContext({ v: 1, scope, ...(scope === 'team' && first.filters.teamLevel ? { level: first.filters.teamLevel } : {}),
+    subjects: ['person', 'project'].includes(scope) ? subjects.slice(0, 2) : [], focus: intent?.focus ? [...intent.focus] : [],
+    ...(turn.presentationIntent?.window?.dateFrom ? { dateFrom: turn.presentationIntent.window.dateFrom } : {}),
+    ...(turn.presentationIntent?.window?.dateTo ? { dateTo: turn.presentationIntent.window.dateTo } : {}),
+    ...(turn.presentationIntent?.visual ? { visual: true } : {}), rows });
+}
+
 /** Doğal yanıt düzeninin girdisi: doğrulanmış bölümler, tamamlanamayan bölümler ve sunucu notları. */
 function compositionInput(turn, verdict) {
   if (!['grounded', 'unavailable'].includes(verdict.kind)) return null;
@@ -1478,7 +1530,8 @@ async function finish(turn, settled, onText, selectedBy = 'model', { compose = t
   await onText(finalText);
   const outcome = verdict.kind;
   const resultScope = completedResultScope(turn, verdict);
-  const evidenceRows = ledger.persistable(verdict.citedIds, { clarification: verdict.clarification || null, resultScope });
+  const analysisContext = completedAnalysisContext(turn, verdict);
+  const evidenceRows = ledger.persistable(verdict.citedIds, { clarification: verdict.clarification || null, resultScope, analysisContext });
   const resultScopeOmitted = Boolean(resultScope) && !evidenceRows.some(row => JSON.parse(row.evidenceJson).resultScope);
   const completeDisclosure = (deliveredOutcome, code = null, { replaced = false } = {}) => {
     if (turn.trace.recorded) return;
@@ -1562,8 +1615,10 @@ async function serverSelection(turn) {
  * ve yönleri). Sunucu yalnızca bu alanları taşır; olgusal yetki kazandırmaz, sunum sözleşmesini değiştirir.
  */
 function presentationIntent(plan) {
-  return Object.freeze({ visual: plan?.visual === true, analysis: plan?.analysis ? Object.freeze({ scope: plan.analysis.scope, focus: plan.analysis.focus,
-    ...(plan.analysis.level ? { level: plan.analysis.level } : {}) }) : null });
+  const analysis = plan?.analysis;
+  return Object.freeze({ visual: plan?.visual === true, analysis: analysis ? Object.freeze({ scope: analysis.scope, focus: analysis.focus,
+    ...(analysis.level ? { level: analysis.level } : {}) }) : null,
+    window: analysis?.dateFrom || analysis?.dateTo ? Object.freeze({ ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) }) : null });
 }
 
 /** Bu bölümün isteği bir ekip kapsamı mı (yetkisizlik ancak o zaman kapsam yokluğudur, kaydın yokluğu değil)? */
@@ -1805,6 +1860,7 @@ export async function runGroundedTurn(session, {
   allowedTextFields = [],
   clarification = null,
   previousResult = null,
+  previousAnalysis = null,
   onStatus = null,
   onProgress = null,
   onText,
@@ -1816,7 +1872,7 @@ export async function runGroundedTurn(session, {
   composeAnswers = false,
   answerDetail = null
 }) {
-  const turn = resume || startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, previousResult, onStatus, onProgress, planning, onPlanned });
+  const turn = resume || startTurn({ messages, catalog, context, limits, allowedTextFields, clarification, previousResult, previousAnalysis, onStatus, onProgress, planning, onPlanned });
   turn.session = session;
   turn.deferDisclosure = deferDisclosure;
   turn.composeAnswers = composeAnswers === true;
@@ -1896,7 +1952,8 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     // Olmayan gönderge onarımla silinmez; yeni tam soru ayrı turda yeniden doğrulanır.
     // Bulunamayan satır göndergesi (kapsam yok ya da sıra dışı, her bölüm derinliğinde) onarımla düşürülmez: sunucu sorar.
     if (!turn.previousResult && details.includes('$.previousResult:unavailable')
-      || details.some((detail) => /entities\[\d+\]\.previous:unavailable$/.test(String(detail)))) {
+      || details.some((detail) => /entities\[\d+\]\.previous:unavailable$/.test(String(detail)))
+      || details.some((detail) => /^\$\.analysis\.(?:scope|row):unavailable$/.test(String(detail)))) {
       missingPreviousResult = { intent: PLANNER_INTENTS.CLARIFY, language: rejectedPlan?.language,
         clarify: { reason: 'missing_referent' } };
       return false;
@@ -2010,7 +2067,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     repairMatched = false;
     if (!frozen() && result.toolCalls.some((call) => call.name === 'rota_plan')) {
       try {
-        plan = unpackTypedPlan(result, { onDecoded: decoded => { rejectedPlan = decoded; } });
+        plan = unpackTypedPlan(result, { onDecoded: decoded => { rejectedPlan = decoded; }, previousAnalysis: turn.previousAnalysis });
         rejectedPlan = plan.plan;
         if (!plan.plan.analysis && !repairMatches(turn, plan.plan, repairCalls(turn, plan.calls))) throw invalidArguments(['$.plan:repairScope']);
         repairMatched = true;

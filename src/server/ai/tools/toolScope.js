@@ -184,7 +184,7 @@ function referenceIdentity(reference) {
  * @param {{ candidates: object[], selected: object|null }|null} [options.clarification]
  *   Önceki turun açıklama adayları ve sunucunun kullanıcının seçimine bağladığı aday.
  */
-export function createToolScope({ today = businessDate(new Date()), userText = '', allowedTextFields = null, clarification = null, referents = [] } = {}) {
+export function createToolScope({ today = businessDate(new Date()), userText = '', allowedTextFields = null, clarification = null, referents = [], analysisReferents = [] } = {}) {
   const ids = { tasks: new Set(), projects: new Set(), wbs: new Set(), baselines: new Set(), people: new Set() };
   const roots = new Map();
   let established = false;
@@ -222,8 +222,12 @@ export function createToolScope({ today = businessDate(new Date()), userText = '
     return String(id);
   }
 
+  // Önceki doğrulanmış analizin sunucunun bağladığı özne ve satır kimlikleri (Aşama 4E takip bağlamı): model bunları
+  // görmez; yalnızca sunucunun "previous"/"row" açılımı yazar. Güncel yetki her okumada araçlarda yeniden denetlenir.
+  const analysisIds = new Set(analysisReferents.map((item) => `${item.type === 'person' ? 'people' : 'projects'}:${item.id}`));
   function identityTrusted(population, id) {
     if (bound && referenceIdentity(bound).join(':') === `${population}:${id}`) return true;
+    if (analysisIds.has(`${population}:${id}`)) return true;
     if (population === 'tasks' && referenced.has(String(id))) return true;
     if (population === 'people') {
       const text = containmentText(userText);

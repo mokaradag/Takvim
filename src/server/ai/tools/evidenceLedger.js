@@ -41,12 +41,12 @@ function highlightPairs(highlights = []) {
  * yeniden üretilebilirlik verisi bırakılır); nüfus da sığmazsa kanıt kalıcı
  * olarak "doğrulanamaz" işaretlenir ve yeniden açılışta gösterilmez.
  */
-function persistedEvidenceJson(entry, payload, clarificationContext, resultScope) {
+function persistedEvidenceJson(entry, payload, clarificationContext, resultScope, analysisContext = null) {
   const authorization = {
     authorizationEpoch: entry.authorizationEpoch,
     ...(entry.scopedAuthorization ? { scopedAuthorization: entry.scopedAuthorization } : {})
   };
-  const clarification = { ...(clarificationContext ? { clarificationContext } : {}), ...(resultScope ? { resultScope } : {}) };
+  const clarification = { ...(clarificationContext ? { clarificationContext } : {}), ...(resultScope ? { resultScope } : {}), ...(analysisContext ? { analysisContext } : {}) };
   const population = encodeAuthorizationPopulation(entry.taskReferences || evidenceTaskReferences(payload));
   const full = JSON.stringify({ ...payload, ...authorization, authorizationPopulation: population, ...clarification });
   if (full.length <= MAX_EVIDENCE_JSON_CHARS) return full;
@@ -160,9 +160,10 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
      * yanıtında sunucunun aday kimlikleri (sıra → proje/görev/Sicil) ilgili
      * kanıtla birlikte saklanır; sonraki turdaki numaralı seçim bunlara bağlanır.
      */
-    persistable(ids, { clarification = null, resultScope = null } = {}) {
+    persistable(ids, { clarification = null, resultScope = null, analysisContext = null } = {}) {
       const wanted = new Set(ids);
       let scopeStored = false;
+      let analysisStored = false;
       return entries
         .filter((entry) => entry.valid && wanted.has(entry.id) && entry.payload)
         .slice(0, EVIDENCE_LIMITS.maxEvidencePerAnswer)
@@ -178,6 +179,16 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
               && decodeAuthorizationPopulation(stored.authorizationPopulation) !== null) {
               evidenceJson = candidate;
               scopeStored = true;
+            }
+          }
+          // Takip analiz bağlamı (Aşama 4E) tek kanıtta, kanıtın kendi kalıcı biçimini değiştirmeden saklanır.
+          if (analysisContext && !analysisStored && entry.authorizationEpoch) {
+            const current = JSON.parse(evidenceJson);
+            const candidate = persistedEvidenceJson(entry, payload, clarificationContext, current.resultScope || null, analysisContext);
+            const stored = JSON.parse(candidate);
+            if (stored.dataOmitted === current.dataOmitted && decodeAuthorizationPopulation(stored.authorizationPopulation) !== null) {
+              evidenceJson = candidate;
+              analysisStored = true;
             }
           }
           return {
