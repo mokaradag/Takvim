@@ -107,6 +107,68 @@ test('ortalama ve bir hafta eşiği sunucunun sabit hesabıdır; ton modelin de�
   assert.deepEqual(derived([9, 7], { total: 4 }), [], 'nüfusun bir kısmında eşik ya da ortalama iddiası yoktur');
 });
 
+test('equal-valued complete populations retain averages and overdue thresholds without extrema', async (t) => {
+  const stack = stackFor(t);
+  for (const [delay, targetFinish, tone] of [[9, '2026-09-21', 'warning'], [7, '2026-09-23', 'success']]) {
+    for (const id of [TASKS.OVERDUE, TASKS.SERIES, TASKS.PARTIAL_OWN]) stack.db.tasks.find((row) => row.TaskId === id).TargetFinish = targetFinish;
+    const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { deadline: 'overdue', assignee: 'me' });
+    for (const locale of ['tr', 'en']) {
+      const verdict = verifyRequested(ledger, OVERDUE_FACTS, OVERDUE_LIST, { locale });
+      assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+      const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }], locale });
+      const average = sheet.view.propositions.find((item) => item.kind === 'average');
+      const threshold = sheet.view.propositions.find((item) => item.kind === 'threshold');
+      assert.equal(average?.text, locale === 'en' ? `The average delay is ${delay} days.` : `Gecikmelerin ortalaması ${delay} gün.`);
+      assert.equal(threshold?.tone || 'info', tone);
+      assert.equal(sheet.view.propositions.some((item) => ['minimum', 'maximum', 'span'].includes(item.kind)), false);
+      const validated = validateComposition(sheet, coveringBlocks(sheet.view));
+      assert.equal(validated.ok, true, JSON.stringify(validated.issues));
+      const text = assistantMarkdownText(renderComposition(sheet, validated).text, { rotaData: true });
+      assert.ok(text.includes(average.text) && text.includes(threshold.text), text);
+    }
+  }
+  assert.deepEqual(tablePropositions({ ...syntheticTable([9, 9, 9], { complete: false }), distribution: false, locale: 'en' }), []);
+  assert.deepEqual(tablePropositions({ ...syntheticTable([9, 9, 9], { total: 4 }), distribution: false, locale: 'en' }), []);
+});
+
+test('verified deadline statistics survive unrelated progress narration and mixed overdue populations', async (t) => {
+  const stack = stackFor(t);
+  for (const task of stack.db.tasks) task.Progress = 40;
+  for (const [id, progress] of [[TASKS.OVERDUE, 80], [TASKS.SERIES, 60], [TASKS.PARTIAL_OWN, 50]]) stack.db.tasks.find((row) => row.TaskId === id).Progress = progress;
+  for (const variant of ['progress', 'overdue', 'mixed']) {
+    if (variant === 'mixed') stack.db.tasks.find((row) => row.TaskId === TASKS.OCCURRENCE_DONE).TargetFinish = '2026-09-05';
+    const filters = variant === 'mixed' ? { assignee: 'me', dateField: 'targetFinish', dateFrom: '2026-09-01', dateTo: '2026-09-29' }
+      : { deadline: 'overdue', assignee: 'me' };
+    const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', filters);
+    const fields = ['totalCount', 'data.tasks.*.title', 'data.tasks.*.progressPercent', 'data.tasks.*.targetFinish', ...(variant === 'progress' ? [] : ['data.tasks.*.overdueDays'])];
+    const metrics = ['tasks.total', 'task.progressPercent', 'task.targetFinish', ...(variant === 'progress' ? [] : ['task.overdueDays'])];
+    for (const locale of ['tr', 'en']) {
+      const verdict = verifyRequested(ledger, fields, { ...OVERDUE_LIST, filters, metrics }, { locale });
+      assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+      const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }], locale });
+      const dateColumn = sheet.view.tables[0].columns.find((item) => item.label === (locale === 'en' ? 'Deadline' : 'Termin')).id;
+      const dates = sheet.view.propositions.filter((item) => item.column === dateColumn);
+      if (variant === 'overdue') {
+        assert.deepEqual(dates, [], 'positive overdue-day statistics already describe the same deadline range');
+        continue;
+      }
+      assert.deepEqual(dates.map((item) => item.kind), ['minimum', 'span'], variant);
+      if (variant === 'progress') {
+        const average = sheet.view.propositions.find((item) => item.kind === 'average');
+        assert.ok(average.text.includes(locale === 'en' ? '63.3%' : '%63,3'), average.text);
+        assert.ok(dates[0].text.includes(locale === 'en' ? '7 September 2026' : '7 Eylül 2026'), dates[0].text);
+        assert.ok(dates[1].text.includes(locale === 'en' ? '29 September 2026' : '29 Eylül 2026'), dates[1].text);
+        const validated = validateComposition(sheet, { blocks: [{ type: 'say', items: [average.id, ...dates.map((item) => item.id)] }, { type: 'rows', source: 'T1' }] });
+        assert.equal(validated.ok, true, JSON.stringify(validated.issues));
+        const text = assistantMarkdownText(renderComposition(sheet, validated).text);
+        assert.ok(text.includes(average.text) && dates.every((item) => text.includes(item.text)), text);
+      } else {
+        assert.ok(dates[0].text.includes(locale === 'en' ? '5 September 2026' : '5 Eylül 2026'), 'completed tasks make the deadline range independent of overdue-day extrema');
+      }
+    }
+  }
+});
+
 test('en büyük/en küçük ilişkisi yalnızca bütün nüfus kanıttaysa ve sahibi tekilse adla vardır', () => {
   const ranked = (values, options) => tablePropositions({ ...syntheticTable(values, options), distribution: false, locale: 'tr' })
     .filter((item) => ['maximum', 'minimum'].includes(item.kind)).map((item) => [item.kind, item.plain]);

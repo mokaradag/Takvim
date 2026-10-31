@@ -397,23 +397,24 @@ export function tablePropositions({ group, described, distribution, locale, popu
   }
   // Satır istatistikleri (uç, ortalama, eşik, yayılma, yoğunlaşma) birden çok gözlem ister.
   if (described.rows.length < 2) return out;
-  // Sayısal sütunlar önce gelir; tarih sütunu yalnızca sayısal önerme yoksa (gecikmede en erken termin en uzun gecikmeyi yineler).
+  // Sayısal sütunlar önce gelir; yalnızca bütünü gecikmiş görevlerde termin aralığı gecikme uçlarını yineler.
   const order = described.columns.map((item, index) => ({ item, index })).sort((left, right) => Number(right.item.numeric) - Number(left.item.numeric));
   for (const { item: header, index } of order) {
     column = index;
     const type = header.numeric ? 'number' : 'date';
-    if (type === 'date' && out.length) continue;
     const facts = columnValues(described, index, type);
     if (!facts) continue;
     const values = facts.map((fact) => fact.value);
     const sorted = [...values].sort((left, right) => (type === 'number' ? left - right : left.localeCompare(right)));
-    if (sorted[0] === sorted.at(-1)) continue;
+    if (type === 'date' && sorted[0] === sorted.at(-1)) continue;
     const metric = facts[0].semantic?.metric || null;
     if (!facts.every((fact) => fact.semantic?.metric === metric && fact.semantic?.unit === facts[0].semantic?.unit && fact.semantic?.measure === facts[0].semantic?.measure)) continue;
     const semantic = facts[0].semantic || {};
     if (type === 'number' && numericValue(values[0], semantic, locale) == null) continue;
     const overdue = metric === 'task.overdueDays';
     if (type === 'date') {
+      if (metric === 'task.targetFinish' && out.some((item) => item.kind === 'maximum'
+        && described.rows.every((row) => row.cells[item.column]?.[0]?.semantic?.metric === 'task.overdueDays' && row.cells[item.column][0].value > 0))) continue;
       add('minimum', extremeSentence({ kind: 'minimum', metric, type, label: header.label, value: sorted[0], owner: soleRow(described, facts, sorted[0]), locale }));
       add('span', metric === 'task.targetFinish'
         ? sentence(en ? ['Deadlines range from ', v(day(sorted[0], locale)), ' to ', v(day(sorted.at(-1), locale)), '.'] : ['Terminler ', v(day(sorted[0], locale)), ' ile ', v(day(sorted.at(-1), locale)), ' arasında.'])
@@ -421,7 +422,7 @@ export function tablePropositions({ group, described, distribution, locale, popu
           : ['“', t(header.label), '” değerleri ', v(day(sorted[0], locale)), ' ile ', v(day(sorted.at(-1), locale)), ' arasında.']));
       continue;
     }
-    for (const kind of ['maximum', 'minimum']) {
+    if (sorted[0] !== sorted.at(-1)) for (const kind of ['maximum', 'minimum']) {
       const value = kind === 'maximum' ? sorted.at(-1) : sorted[0];
       add(kind, extremeSentence({ kind, metric, type, label: header.label, value, owner: soleRow(described, facts, value), locale, semantic }), overdue && kind === 'maximum' ? 'warning' : 'info');
     }
