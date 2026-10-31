@@ -58,8 +58,11 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
 /** Görev nüfusu okumaları (sayfa sorumlu okumaları değil). */
 export const populationReads = (log) => log.filter((row) => row.query === 'task-facts' && !String(row.params.taskIds || ''));
 
-/** Turun araç düzeyindeki beklentileri; ihlal listesi döner (boş: geçti). */
-export function turnViolations(result, expect) {
+/**
+ * Turun araç düzeyindeki beklentileri; ihlal listesi döner (boş: geçti). `live`: canlı modelin seçtiği yön tek satırlık
+ * kanıt verdiyse grafik adayı yoktur ve sunucunun kısa açıklaması kabul edilir (deterministik sınamada grafik zorunlu).
+ */
+export function turnViolations(result, expect, { live = false } = {}) {
   const problems = [];
   const reads = populationReads(result.log);
   const content = String(result.answer?.content || '');
@@ -77,7 +80,7 @@ export function turnViolations(result, expect) {
     && Math.abs(day(row.params.dateFrom) - day(expect.window[0])) <= 1 && Math.abs(day(row.params.dateTo) - day(expect.window[1])) <= 1)) {
     problems.push(`ufuk ${expect.window.join('..')} okunmadı`);
   }
-  if (expect.chart && !content.includes('```rota-chart')) problems.push('grafik yok');
+  if (expect.chart && !content.includes('```rota-chart') && !(live && /güvenle grafik çizilemedi|could not be drawn safely/.test(content))) problems.push('grafik yok');
   if (expect.scopeDenied && !/yönetim kapsamınız bulunmuyor|management scope/.test(content)) problems.push('kapsam reddi metni yok');
   if (expect.noData && reads.length) problems.push('veri okundu');
   if (expect.finish === 'stop' && (!reads.length && !result.log.some((row) => row.query === 'portfolio'))) problems.push('araç okuması yok');

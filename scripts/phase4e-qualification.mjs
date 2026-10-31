@@ -114,7 +114,7 @@ async function conversationCase(t, turns, { plannerModel, composeModel, seed = r
     const result = await ask({ ...turn, scripted: !plannerModel });
     const line = logs.map((row) => (row.includes('"operation":"ai.grounded.turn"') ? JSON.parse(row.slice(row.indexOf('{'))) : null)).filter(Boolean).at(-1);
     const presentation = line?.context?.presentation || null;
-    const failures = turnViolations(result, turn.expect || {});
+    const failures = turnViolations(result, turn.expect || {}, { live: Boolean(plannerModel) });
     if (routing.escalations > escalationsBefore) failures.push('DEEP_ESCALATION');
     const measured = rounds.slice(before);
     if (measured.some((round) => round.infrastructure)) failures.push(`altyapı ${measured.find((round) => round.infrastructure).infrastructure}`);
@@ -128,7 +128,9 @@ async function conversationCase(t, turns, { plannerModel, composeModel, seed = r
         return messages.slice(start + 1).map((message) => ({ role: message.role, calls: (message.toolCalls || []).map((call) => `${call.name}(${String(call.arguments).slice(0, 700)})`),
           content: String(message.content || '').slice(0, 600) }));
       }).filter((item, index, all) => all.findIndex((other) => JSON.stringify(other) === JSON.stringify(item)) === index);
-      appendFileSync(process.env.PHASE4E_DEBUG, `${JSON.stringify({ turn: turn.text, failures, trail })}\n`);
+      const reads = result.log.filter((row) => ['task-facts', 'portfolio'].includes(row.query)).map((row) => ({ query: row.query,
+        ...Object.fromEntries(['assigneeMode', 'teamLevel', 'projectId', 'personSicil', 'dateFrom', 'dateTo', 'withAssignees', 'taskIds'].filter((key) => row.params?.[key] != null && row.params[key] !== '').map((key) => [key, String(row.params[key]).slice(0, 40)])) }));
+      appendFileSync(process.env.PHASE4E_DEBUG, `${JSON.stringify({ turn: turn.text, failures, finish: result.answer?.finishReason, reads, trail, answer: String(result.answer?.content || '').slice(0, 400) })}\n`);
     }
     results.push({ text: turn.id || null, plannerRounds: measured.filter((round) => round.purpose === 'plan').length, declarations: line?.context?.declarations ?? null,
       mode: presentation?.mode ?? null, server: presentation?.server === true, chartInserted: presentation?.chartInserted === true, reason: presentation?.reason ?? null, issue: presentation?.issue ?? null, failures });

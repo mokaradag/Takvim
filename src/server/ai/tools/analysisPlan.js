@@ -44,9 +44,9 @@ export function analysisSchema() {
       within: { type: 'string', minLength: 2, maxLength: 120, description: 'self/team/all/previous kapsamını adı verilen tek projeyle daraltır (kullanıcının yazdığı proje adı).' },
       level: { type: 'string', enum: [...ANALYSIS_LEVELS], description: 'Yalnızca team, düzey söylendiyse: unit birim; department bölüm/müdürlük; directorate direktörlük.' },
       names: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxNames, items: { type: 'string', minLength: 2, maxLength: 120 }, description: 'person/project: kullanıcının yazdığı ad(lar), en çok 2.' },
-      focus: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxFocus, uniqueItems: true, items: { type: 'string', enum: [...ANALYSIS_FOCUS] },
-        description: 'overview sayılar+tamamlanma; status durum dağılımı; priority öncelik dağılımı; deadlines termin kovaları; overdue en çok gecikenler; upcoming yaklaşan terminler; workload kişilere göre iş; projects projelere göre; schedule termin aylarına göre; critical kritik/yüksek öncelikli açık işler.' },
-      dateFrom: { ...DATE, description: 'Yaklaşan termin ufkunun başı.' },
+      focus: { type: 'array', minItems: 1, maxItems: ANALYSIS_FOCUS.length, uniqueItems: true, items: { type: 'string', enum: [...ANALYSIS_FOCUS] },
+        description: 'Önem sırasıyla 1-3 yön (fazlası okunmaz). overview sayılar; status durum; priority öncelik; deadlines termin kovaları; overdue gecikenler; upcoming yaklaşan; workload kişilere göre; projects projelere göre; schedule aylara göre; critical kritik/yüksek açık işler.' },
+      dateFrom: { ...DATE, description: 'Termin ufkunun başı (upcoming, critical, schedule).' },
       dateTo: { ...DATE, description: 'Ufkun sonu.' },
       visual: { type: 'boolean' }
     }
@@ -78,9 +78,11 @@ export function analysisHints(problems) {
   const has = (prefix) => problems.some((problem) => String(problem).startsWith(prefix));
   if (has('$.analysis.names')) hints.push('analysis.names: person/project kapsamında kullanıcının yazdığı ad (zorunlu); diğer kapsamlarda verilmez');
   if (has('$.analysis.level')) hints.push('analysis.level yalnızca scope team ile');
-  if (has('$.analysis.focus')) hints.push(`analysis.focus: 1-${ANALYSIS_LIMITS.maxFocus} öğe, ${ANALYSIS_FOCUS.join('|')}`);
+  if (has('$.analysis.focus')) hints.push(`analysis.focus: önem sırasıyla 1-${ANALYSIS_LIMITS.maxFocus} öğe, ${ANALYSIS_FOCUS.join('|')}`);
   if (has('$.analysis.scope')) hints.push(`analysis.scope: ${ANALYSIS_SCOPES.join('|')}`);
   if (has('$.analysis.date')) hints.push('analysis.dateFrom/dateTo: YYYY-MM-DD, dateFrom ≤ dateTo');
+  if (has('$.analysis.rows')) hints.push('analysis.rows yalnızca scope "row" ile: önceki yanıtın satır sırası ([1] ya da [1,2]); kapsam satırdaki kişi/projedir');
+  if (has('$.analysis.within')) hints.push('analysis.within (tek proje adıyla daraltma) yalnızca scope self|team|all|previous ile');
   if (has('$.analysis:request')) hints.push('analysis ile request/additionalRequests/calls birlikte verilmez');
   return hints;
 }
@@ -88,6 +90,8 @@ export function analysisHints(problems) {
 /* ── Belirlenimci açılım ───────────────────────────────────────────── */
 
 const peopleScopes = new Set(['team', 'all', 'project', 'projects']);
+/** Termin ufkunu (dateFrom/dateTo) okumasına uygulayan yönler. */
+const WINDOW_FOCUS = new Set(['upcoming', 'critical', 'schedule']);
 
 /**
  * Önceki analizin öznesi (sunucunun bağladığı kanonik bağlam): kapsam ve kimlikler ondan gelir; model kimlik görmez ve yazmaz.
@@ -174,7 +178,7 @@ function focusRequest(focus, analysis, base) {
         filters: { status: [...OPEN], ...(window ? { ...window } : { deadline: 'due_next_7_days' }) } });
     case 'critical':
       return ranked(base, analysis, { metrics: ['tasks.total', 'task.title', 'task.priority', 'task.targetFinish'], rank: { metric: 'task.targetFinish', order: 'asc' },
-        filters: { status: [...OPEN], priority: ['critical', 'high'] } });
+        filters: { status: [...OPEN], priority: ['critical', 'high'], ...(window || {}) } });
     case 'workload':
       if (analysis.scope === 'self') return groups(base, 'project', { split: true });
       if (analysis.scope === 'person') {
@@ -211,19 +215,32 @@ export function expandAnalysis(analysis, { previous = null } = {}) {
   return expandWith(analysis, narrowed(scopeBase(analysis)));
 }
 
+/**
+ * Okunacak yönler (en çok PLANNER_LIMITS.maxRequests): modelin önem sırası korunur. Liste bütçeyi aşarsa overview'ün
+ * sayılarıyla zaten verilen status önce düşer; bildirilen termin ufkunu taşıyan bir yön ve portföyde proje satırları
+ * her zaman yer alır (modelin listesinden, yoksa upcoming / projects). Yalnızca türlü değerlerle çalışır.
+ */
+export function effectiveFocus(analysis) {
+  const limit = PLANNER_LIMITS.maxRequests;
+  let focus = [...analysis.focus];
+  if (focus.length > limit && focus.includes('overview')) focus = focus.filter((item) => item !== 'status');
+  focus = focus.slice(0, limit);
+  const window = (analysis.dateFrom || analysis.dateTo) && !focus.some((item) => WINDOW_FOCUS.has(item));
+  const required = [...(window ? [analysis.focus.find((item) => WINDOW_FOCUS.has(item)) || 'upcoming'] : []),
+    ...(analysis.scope === 'projects' && !focus.includes('projects') ? ['projects'] : [])];
+  return required.length ? [...focus.filter((item) => !required.includes(item)).slice(0, limit - required.length), ...required] : focus;
+}
+
 function expandWith(analysis, base) {
   const parts = [];
   const seen = new Set();
-  // Portföy kapsamının anlamı projelerin karşılaştırmasıdır: proje başına satırlar her zaman okunur (yön verilmemiş olsa da).
-  const focuses = analysis.scope === 'projects' && !analysis.focus.includes('projects') ? [...analysis.focus.slice(0, PLANNER_LIMITS.maxRequests - 1), 'projects'] : analysis.focus;
-  for (const focus of focuses) {
+  for (const focus of effectiveFocus(analysis)) {
     const item = focusRequest(focus, analysis, base);
     if (!item) continue;
     const key = JSON.stringify(item);
     if (seen.has(key)) continue;
     seen.add(key);
     parts.push(item);
-    if (parts.length >= PLANNER_LIMITS.maxRequests) break;
   }
   // Kapsamda anlamı olmayan yönlerin yerine kapsamın genel görünümü okunur (ör. tek projede "projelere göre").
   if (!parts.length) parts.push(focusRequest('overview', analysis, base));

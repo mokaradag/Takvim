@@ -20,7 +20,7 @@ import { systemText } from './helpers/evidenceScenario.mjs';
 const { unpackTypedPlan, typedPlanningTool } = await import('../src/server/ai/tools/executionSet.js');
 const { parseRequestDeclaration } = await import('../src/server/ai/tools/requestDeclaration.js');
 const { completeRequest } = await import('../src/server/ai/tools/requestPopulation.js');
-const { expandAnalysis, parseAnalysis, analysisDetails, analysisSuggestion, ANALYSIS_FOCUS, ANALYSIS_SCOPES } = await import('../src/server/ai/tools/analysisPlan.js');
+const { expandAnalysis, effectiveFocus, parseAnalysis, analysisDetails, analysisSuggestion, ANALYSIS_FOCUS, ANALYSIS_SCOPES } = await import('../src/server/ai/tools/analysisPlan.js');
 const { containmentText, createToolScope } = await import('../src/server/ai/tools/toolScope.js');
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
 const { normalizeAnalysisContext, analysisContextSummary } = await import('../src/domain/ai/analysisContext.js');
@@ -128,6 +128,24 @@ test('özet biçim hataları özetin kendi alanlarıyla bildirilir; istek ile bi
   const tool = typedPlanningTool(toolCatalogForModel());
   assert.ok(tool.parameters.properties.analysis && tool.parameters.properties.visual);
   assert.ok(JSON.stringify(tool).length < 32000);
+});
+
+test('okunacak yönler sınırlıdır ve modelin sırasını korur; bildirilen ufuk ve portföy satırları her zaman okunur', () => {
+  const focus = (raw) => effectiveFocus(parseAnalysis(raw));
+  const week = { dateFrom: '2026-10-05', dateTo: '2026-10-11' };
+  // Bütçeyi aşan liste reddedilmez (bir onarım turu harcanmaz); overview'ün kapsadığı status önce düşer, sonra sıra korunur.
+  assert.deepEqual(focus({ scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming'], ...week }), ['overview', 'overdue', 'upcoming']);
+  assert.deepEqual(focus({ scope: 'self', focus: ['overview', 'status', 'priority', 'overdue', 'upcoming'] }), ['overview', 'priority', 'overdue']);
+  // Ufku taşıyan yön yoksa ufuk yaklaşan işlerle okunur; ufuk kritik işlere de uygulanır.
+  assert.deepEqual(focus({ scope: 'self', focus: ['overview'], ...week }), ['overview', 'upcoming']);
+  assert.deepEqual(focus({ scope: 'team', focus: ['overview', 'workload', 'overdue', 'critical'], ...week }), ['overview', 'workload', 'critical']);
+  const [critical] = expandAnalysis(parseAnalysis({ scope: 'self', focus: ['critical'], ...week }));
+  assert.deepEqual([critical.filters.dateFrom, critical.filters.dateTo, critical.filters.priority], [week.dateFrom, week.dateTo, ['critical', 'high']]);
+  assert.deepEqual(focus({ scope: 'projects', focus: ['overview', 'overdue', 'upcoming', 'workload'] }), ['overview', 'overdue', 'projects']);
+  for (const raw of [{ scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming'], ...week }, { scope: 'projects', focus: ['overview', 'overdue', 'upcoming', 'workload'] }]) {
+    assert.ok(expandAnalysis(parseAnalysis(raw)).length <= 3);
+    assert.doesNotThrow(() => unpackTypedPlan(planResult({ intent: 'rota', language: 'tr', analysis: raw })));
+  }
 });
 
 test('reddedilen ayrıntılı istekten türlü eşdeğer özet önerilir; özet düzeltme yolları özetin alan adlarıyla gider', async (t) => {

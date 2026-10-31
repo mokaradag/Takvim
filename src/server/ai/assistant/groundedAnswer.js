@@ -30,7 +30,7 @@ import { concreteCollections, rankedRowIndexes, taskResultScope } from '../../..
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderPartUnavailable, renderPlannerAbstention, renderChartUnavailable, renderPlannerClarification, renderScopeUnavailable, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
 import { buildComposition, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
-import { analysisDetails, analysisHints, analysisSchema, analysisSuggestion } from '../tools/analysisPlan.js';
+import { analysisDetails, analysisHints, analysisSchema, analysisSuggestion, effectiveFocus } from '../tools/analysisPlan.js';
 import { normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
 import { analysisContextSummary, normalizeAnalysisContext } from '../../../domain/ai/analysisContext.js';
 import { composeGroundedAnswer, compositionWindowMs } from './answerComposition.js';
@@ -1103,12 +1103,16 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
   };
   turn.scopeOptions = Object.freeze({ today: context.today, userText, allowedTextFields, clarification, referents: prior?.scope.taskIds || [], analysisReferents });
   attachExecutor(turn);
-  if (turn.previousResult) {
+  if (turn.previousResult && analysisPrior?.focus.length) {
+    // Önceki yanıt bir analizse takip analiz bağlamıyla sürer; görev kümesi yalnızca tek göreve sırayla başvuru içindir (çelişen iki yönerge verilmez).
+    const note = `Önceki sonuçta ${turn.previousResult.scope.taskIds.length} görev satırı var (yalnızca gönderge). Yalnızca TEK bir göreve sırayla başvuruluyorsa ("ilk görev", "2. görev") entities:[{"type":"task","previous":<1 tabanlı sıra>}] ile o görevin aracını bildir; öteki takiplerde aşağıdaki analiz bağlamını kullan.`;
+    for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note);
+  } else if (turn.previousResult) {
     const note = { role: 'system', content: `Önceki doğrulanmış Rota sonuç kapsamı: ${JSON.stringify({ type: 'task', count: turn.previousResult.scope.taskIds.length })}. Bu yalnızca göndergedir, güncel kanıt değildir. Kullanıcının sorusu bu kümeye ilişkinse ("bunlar", "bunlardan", "onun") request.previousResult=true ile rota_task_search (görev özellikleri/süzgeç) ya da rota_task_analytics (sayı) bildir; kimlik/önceki süzgeç kopyalama. Soru kümenin TEK bir görevine sıra ile başvuruyorsa ("ilk görev", "2. görev"; tek görevli kümede "o görev") previousResult yazma; entities:[{"type":"task","previous":<1 tabanlı sıra>}] ile o görevin aracını (ör. öncül/ardıl için rota_dependency_inspect, alanları için rota_task_detail) bildir. Yeni veya adı verilmiş kayıt sorusunda (ör. başka bir kişi) kullanma; önceki sorunun koşullarını yeni kayda uygula. Önceki asistan metninden veri çıkarma.` };
     for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note.content);
   }
   if (analysisPrior) {
-    const note = `Önceki doğrulanmış analiz bağlamı (yalnızca gönderge; güncel kanıt değil): ${JSON.stringify(analysisContextSummary(analysisPrior))}. Takip sorusu aynı özneyle sürüyorsa ("sadece gecikmişler", "kimlerde yoğunlaşıyor", "grafik olarak göster", "peki gelecek hafta?") analysis.scope "previous" yaz; focus, dateFrom/dateTo ve visual yeni soruya göre yeniden yazılır (değişmeyeni önceki değerden kopyala). Önceki sonucun satırlarına sırayla başvuruluyorsa ("ilk kişi", "ilk iki proje") analysis.scope "row" ve analysis.rows ([1] ya da [1,2]) yaz. Kapsam adı verilen bir projeyle daraltılıyorsa analysis.within (proje adı). Önceki öznede birden çok kayıt varken (subjects 2) tek bir kayda zamirle başvuruluyorsa clarify missing_referent. Kullanıcı kapsamı açıkça değiştirdiyse (başka proje, ekibim, kendi işlerim, tüm projeler) yeni kapsamı yaz; önceki koşullar kendiliğinden taşınmaz.`;
+    const note = `Önceki doğrulanmış analiz bağlamı (yalnızca gönderge; güncel kanıt değil): ${JSON.stringify(analysisContextSummary(analysisPrior))}. Takip sorusu aynı özneyle sürüyorsa (zamirle de: "onun", "bunların"; ya da "sadece gecikmişler", "kimlerde yoğunlaşıyor", "grafik olarak göster", "peki gelecek hafta?") analysis.scope "previous" yaz; focus, dateFrom/dateTo ve visual yeni soruya göre yeniden yazılır (değişmeyeni önceki değerden kopyala). Önceki sonucun satırlarına sırayla ya da sıralamadaki yeriyle başvuruluyorsa ("ilk kişi", "ilk iki proje", "en riskli ikisi", "en yoğun olan"; satırlar önceki yanıttaki sırasıyladır) analysis.scope "row" ve analysis.rows ([1] ya da [1,2]) yaz. Kapsam adı verilen bir projeyle daraltılıyorsa analysis.within (proje adı). Önceki öznede birden çok kayıt varken (subjects 2) tek bir kayda zamirle başvuruluyorsa clarify missing_referent. Kullanıcı kapsamı açıkça değiştirdiyse (başka proje, ekibim, kendi işlerim, tüm projeler) yeni kapsamı yaz; önceki koşullar kendiliğinden taşınmaz.`;
     for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note);
   }
   const notes = [
@@ -1619,7 +1623,7 @@ async function serverSelection(turn) {
  */
 function presentationIntent(plan) {
   const analysis = plan?.analysis;
-  return Object.freeze({ visual: plan?.visual === true, analysis: analysis ? Object.freeze({ scope: analysis.scope, focus: analysis.focus,
+  return Object.freeze({ visual: plan?.visual === true, analysis: analysis ? Object.freeze({ scope: analysis.scope, focus: Object.freeze(effectiveFocus(analysis)),
     ...(analysis.level ? { level: analysis.level } : {}) }) : null,
     window: analysis?.dateFrom || analysis?.dateTo ? Object.freeze({ ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) }) : null });
 }
