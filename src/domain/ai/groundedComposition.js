@@ -1,33 +1,52 @@
 import { ANSWER_CHART_LIMITS, answerChartFence, answerChartLabel } from './answerChart.js';
 import {
   describeRowCollection,
+  envelopeOnlyGroup,
+  markdownPlainText,
   narrativeGroups,
   narrativeLabel,
   narrativeRowCollections,
+  renderEnvelopeSentences,
   renderGroupDetails,
   renderGroupRows
 } from './evidenceNarrative.js';
+import { escapedFactText } from './evidenceFacts.js';
+import { countProposition, noteLabel, pointerSentence, populationProposition, tablePropositions, titleCandidate } from './groundedPropositions.js';
 
 /**
- * Doğrulanmış yanıtın kapalı sunum düzeni.
- * Model yalnızca sunucunun tablo, ayrıntı ve grafik kimliklerini seçer/sıralar.
- * Serbest metin olgusal ilişkiyi kanıtlayamaz; hiçbir model cümlesi kabul edilmez.
- * Bütün değerleri, kayıt ilişkilerini, kapsamı ve kaynakları sunucu çizer.
+ * Doğrulanmış yanıtın KANITA BAĞLI ANLATIMI (Aşama 4D).
+ *
+ * Sunucu doğrulanmış olgulardan bir sayfa kurar: önermeler `P#` (sunucunun türettiği ve yazdığı olgusal
+ * iddialar: sayım, en büyük/en küçük, çoğunluk, toplam, döküm), tablolar `T#`, kalan ayrıntılar `D#` ve
+ * grafik adayları `G#`. Model YALNIZCA kimlik seçer ve sıralar: hangi önermelerin soruyu yanıtladığını,
+ * paragraflara nasıl bölüneceğini, tablo/grafiğin nerede duracağını ve hangi bloğa yönlendirileceğini.
+ * Model metni hiçbir zaman çizilmez: her cümleyi, değeri, ilişkiyi, kapsamı ve kaynak işaretini sunucu
+ * yazar. Doğrulama yapısaldır (kimlik, tür, sıra, kapsam); doğal dil anlaşılmaya çalışılmaz, sözcük
+ * listesi ya da kalıp yoktur. Geçersiz düzen reddedilir ve doğrulanmış belirlenimci anlatım gösterilir.
  */
 
 export const COMPOSITION_LIMITS = Object.freeze({
   maxTables: 6,
   maxDetails: 6,
   maxCharts: 4,
-  maxBlocks: 10,
+  maxPropositions: 12,
+  maxTitles: 3,
+  maxBlocks: 12,
+  maxSayBlocks: 4,
+  maxSayItems: 8,
+  maxNotes: 2,
+  maxNoteItems: 3,
   maxValueChars: 160,
   maxQuestionChars: 600,
   maxResponseChars: 16000
 });
 
-export const COMPOSITION_BLOCK_TYPES = Object.freeze(['rows', 'details', 'chart']);
+export const COMPOSITION_BLOCK_TYPES = Object.freeze(['title', 'say', 'note', 'rows', 'details', 'chart']);
 
 const BLOCK_KEYS = Object.freeze({
+  title: [['type', 'source'], []],
+  say: [['type', 'items'], []],
+  note: [['type', 'items'], []],
   rows: [['type', 'source'], ['style']],
   details: [['type', 'source'], []],
   chart: [['type', 'source'], ['style']]
@@ -67,20 +86,53 @@ function exactKeys(value, keys, optional = []) {
  * @param {{ index: number, topic?: string, kind: 'unavailable'|'not_found' }[]} [input.missing] Tamamlanamayan bölümler.
  * @returns {{ view: object, render: object } | null} Model girdisi (`view`) ve sunucunun çizim verisi (`render`).
  */
-export function buildComposition({ parts = [], missing = [], locale = 'tr', question = '', previousQuestion = null, today = null } = {}) {
+export function buildComposition({ parts = [], missing = [], locale = 'tr', question = '', previousQuestion = null, today = null, populations = new Map() } = {}) {
   const tables = new Map();
   const details = new Map();
   const charts = new Map();
+  const propositions = new Map();
+  const titles = new Map();
+  const viewTitles = [];
   const viewTables = [];
   const viewDetails = [];
   const viewCharts = [];
+  const viewPropositions = [];
+  const derived = [];
   let overflow = false;
+  // Önermeler isteğe bağlı bir anlatım katmanıdır: sınır aşılırsa fazlası sunulmaz, sayfa düşmez.
+  const propose = (ordinal, proposition, extra = {}) => {
+    if (!proposition || propositions.size >= COMPOSITION_LIMITS.maxPropositions) return null;
+    const id = `P${propositions.size + 1}`;
+    propositions.set(id, Object.freeze({ id, part: ordinal, ...proposition, ...extra }));
+    viewPropositions.push({ id, part: ordinal, kind: proposition.kind, ...(proposition.tone && proposition.tone !== 'info' ? { tone: proposition.tone } : {}),
+      text: clip(proposition.plain, COMPOSITION_LIMITS.maxValueChars * 2) });
+    return id;
+  };
+  // Başlık adayı nüfusu adlandırır (olgu taşımaz); her kanıt grubunda en çok bir aday.
+  const entitle = (ordinal, group, facts, groupBy = null) => {
+    if (titles.size >= COMPOSITION_LIMITS.maxTitles || !facts.length) return;
+    const { project: rowProject, ...filters } = facts[0].semantic?.filters || {};
+    const text = titleCandidate({ tool: group.tool, filters: filters.projectId ? { ...filters, project: rowProject } : filters, groupBy, locale });
+    if (!text || [...titles.values()].some((title) => title.text === text)) return;
+    const id = `H${titles.size + 1}`;
+    titles.set(id, Object.freeze({ id, part: ordinal, text, markdown: `#### ${escapedFactText(text)}` }));
+    viewTitles.push({ id, part: ordinal, text: clip(text, COMPOSITION_LIMITS.maxValueChars) });
+  };
 
   for (const part of parts) {
     const presentation = part.presentation;
     if (!presentation || !Array.isArray(presentation.facts)) continue;
     const ordinal = part.index + 1;
     for (const group of narrativeGroups(presentation.facts)) {
+      // Yalnızca zarf sayısından oluşan ayrıntının sayımı bir önermedir; önerme söylenirse ayrıntı yinelenmez.
+      const totalFact = group.envelope.find((fact) => fact.field === 'totalCount');
+      const countFallback = () => {
+        const text = renderEnvelopeSentences(group, { locale, empty: presentation.empty || [], only: ['totalCount'] }).join(' ');
+        return text ? { markdown: text, plain: markdownPlainText(text) } : null;
+      };
+      const countId = envelopeOnlyGroup(group, presentation.layout)
+        ? propose(ordinal, countProposition(group, totalFact, locale, totalFact ? countFallback() : null)) : null;
+      if (totalFact) entitle(ordinal, group, [totalFact]);
       const multi = new Set(narrativeRowCollections(group, presentation.layout));
       for (const collection of multi) {
         if (tables.size >= COMPOSITION_LIMITS.maxTables) { overflow = true; continue; }
@@ -95,6 +147,16 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           layout: presentation.layout }));
         viewTables.push({ id, part: ordinal, title: described.head, rows: described.rows.length,
           ...(criteria ? { criteria: clip(criteria, COMPOSITION_LIMITS.maxValueChars) } : {}), columns, complete });
+        const partition = group.tool === 'rota_task_analytics' && collection.endsWith('groups');
+        const rowFacts = described.rows.flatMap((row) => row.entries.map(({ fact }) => fact));
+        entitle(ordinal, group, rowFacts, partition ? rowFacts[0]?.semantic?.groupBy || null : null);
+        // Sayım ölçüsü seçilmemiş listede nüfusun tamamı kanıttaysa sayım, aynı kanıtın zarfından önerme olur.
+        const population = populations.get(group.evidenceId) ?? null;
+        if (!countId && !totalFact && population === described.rows.length) {
+          propose(ordinal, populationProposition({ group, described, size: population, locale }), { table: id });
+        }
+        // Türetilmiş önermeler bütün sayımlardan sonra eklenir: sınır bir sayımı düşürüp türetilmişi tutamaz.
+        for (const proposition of tablePropositions({ group, described, distribution: partition, locale, population })) derived.push({ ordinal, proposition, table: id });
         // Grafik adayı: satır başına tek, sonlu ve negatif olmayan sayı taşıyan sütun.
         described.columns.forEach((column, index) => {
           if (!column.numeric || !labels || charts.size >= COMPOSITION_LIMITS.maxCharts) return;
@@ -127,13 +189,16 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         if (details.size >= COMPOSITION_LIMITS.maxDetails) { overflow = true; continue; }
         const id = `D${details.size + 1}`;
         const ownedTables = [...tables.values()].filter((table) => table.group === group);
-        details.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, text: detailText }));
+        // Sayım önermesinin yerine geçtiği ayrıntıda zorunlu zarf notları (gösterilen kısım, eksiklik) önermeyle birlikte çizilir.
+        const notices = countId ? renderEnvelopeSentences(group, { locale, empty: presentation.empty || [], only: ['returnedCount', 'complete', 'truncated'] }) : [];
+        details.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, text: detailText, covers: countId, notices: Object.freeze(notices) }));
         for (const table of ownedTables) tables.set(table.id, Object.freeze({ ...table, detail: id }));
-        viewDetails.push({ id, part: ordinal, text: clip(renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, cite: false }), COMPOSITION_LIMITS.maxValueChars) });
+        if (!countId) viewDetails.push({ id, part: ordinal, text: clip(renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, cite: false }), COMPOSITION_LIMITS.maxValueChars) });
       }
     }
   }
   if (overflow || (!details.size && !tables.size)) return null;
+  for (const { ordinal, proposition, table } of derived) propose(ordinal, proposition, { table });
   const partCount = new Set(parts.map((part) => part.index)).size + missing.length;
   const view = {
     language: locale === 'en' ? 'en' : 'tr',
@@ -141,18 +206,23 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     question: clip(String(question || ''), COMPOSITION_LIMITS.maxQuestionChars),
     ...(previousQuestion ? { previousQuestion: clip(String(previousQuestion), COMPOSITION_LIMITS.maxQuestionChars) } : {}),
     parts: partCount,
+    titles: viewTitles,
+    propositions: viewPropositions,
     tables: viewTables,
     details: viewDetails,
     charts: viewCharts,
     missing: missing.map((item) => ({ part: item.index + 1, ...(item.topic ? { topic: item.topic } : {}) }))
   };
-  return Object.freeze({ view: Object.freeze(view), render: Object.freeze({ locale: view.language, tables, details, charts, question: String(question || '') }) });
+  return Object.freeze({ view: Object.freeze(view), render: Object.freeze({ locale: view.language, tables, details, charts, propositions, titles, question: String(question || '') }) });
 }
 
-/** Tek ayrıntı ve sabit satır düzeni model seçimi gerektirmez. */
+/**
+ * Model seçimi gerektirmeyen sayfa: tek ayrıntı, sabit satır düzeni ve tablo dışında tek başına duran tek
+ * önerme. Önerme tabloyla ya da başka bir önermeyle birlikteyse anlatımın seçimi modelindir.
+ */
 export function hasCompositionChoice(composition) {
-  const { tables, details, charts } = composition.render;
-  return charts.size > 0 || details.size > 1 || tables.size > 1
+  const { tables, details, charts, propositions } = composition.render;
+  return charts.size > 0 || details.size > 1 || tables.size > 1 || propositions.size > 1 || (propositions.size > 0 && tables.size > 0)
     || [...tables.values()].some((table) => !['table', 'list', 'prose'].includes(table.layout));
 }
 
@@ -182,11 +252,59 @@ export function validateComposition(composition, response) {
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > COMPOSITION_LIMITS.maxBlocks) return fail('BLOCK_COUNT');
   const blocks = [];
   const usedSources = new Set();
+  const usedPropositions = new Set();
+  const spoken = new Set();
+  const emphasized = new Set();
+  const pointers = [];
   for (let index = 0; index < raw.length; index += 1) {
     if (!Object.hasOwn(raw, index)) return fail('BLOCK_INVALID');
     const block = raw[index];
     const type = block?.type;
     if (!COMPOSITION_BLOCK_TYPES.includes(type) || !exactKeys(block, ...BLOCK_KEYS[type])) return fail('BLOCK_INVALID');
+    if (type === 'title') {
+      if (typeof block.source !== 'string' || !render.titles?.has(block.source)) return fail('UNKNOWN_SOURCE');
+      if (usedSources.has(block.source)) return fail('DUPLICATE_SOURCE');
+      usedSources.add(block.source);
+      blocks.push({ type, source: block.source });
+      continue;
+    }
+    if (type === 'note') {
+      // Not kutusu yalnızca sunucu önermeleridir; rengini önermelerin sunucu tonu belirler.
+      const items = block.items;
+      if (!Array.isArray(items) || items.length < 1 || items.length > COMPOSITION_LIMITS.maxNoteItems) return fail('NOTE_INVALID');
+      if (blocks.filter((item) => item.type === 'note').length >= COMPOSITION_LIMITS.maxNotes) return fail('NOTE_INVALID');
+      for (let position = 0; position < items.length; position += 1) {
+        if (!Object.hasOwn(items, position) || typeof items[position] !== 'string') return fail('NOTE_INVALID');
+        if (!render.propositions?.has(items[position])) return fail('UNKNOWN_PROPOSITION');
+        // Paragrafta söylenen önermenin not kutusunda vurgulanması yapısal olarak normalleştirilir (yalnızca kutuda kalır);
+        // başka her yineleme reddedilir. Bu, kimlik kümesini daraltır, içerik eklemez.
+        if (emphasized.has(items[position]) || (usedPropositions.has(items[position]) && !spoken.has(items[position]))) return fail('DUPLICATE_PROPOSITION');
+        usedPropositions.add(items[position]);
+        emphasized.add(items[position]);
+      }
+      blocks.push({ type, items: [...items] });
+      continue;
+    }
+    if (type === 'say') {
+      // Paragraf yalnızca sunucu önermelerinin ve sonraki bir bloğa yönlendirmenin kimlikleridir; metin taşımaz.
+      const items = block.items;
+      if (!Array.isArray(items) || items.length < 1 || items.length > COMPOSITION_LIMITS.maxSayItems) return fail('SAY_INVALID');
+      if (blocks.filter((item) => item.type === 'say').length >= COMPOSITION_LIMITS.maxSayBlocks) return fail('SAY_INVALID');
+      for (let position = 0; position < items.length; position += 1) {
+        if (!Object.hasOwn(items, position) || typeof items[position] !== 'string') return fail('SAY_INVALID');
+        const id = items[position];
+        if (render.propositions?.has(id)) {
+          if (usedPropositions.has(id)) return fail('DUPLICATE_PROPOSITION');
+          usedPropositions.add(id);
+          spoken.add(id);
+        } else if (render.tables.has(id) || render.charts.has(id)) {
+          if (pointers.some((pointer) => pointer.id === id)) return fail('DUPLICATE_POINTER');
+          pointers.push({ id, at: index });
+        } else return fail('UNKNOWN_PROPOSITION');
+      }
+      blocks.push({ type, items: [...items] });
+      continue;
+    }
     const source = block.source;
     if (typeof source !== 'string') return fail('SOURCE_INVALID');
     const known = type === 'rows' ? render.tables.get(source) : type === 'details' ? render.details.get(source) : render.charts.get(source);
@@ -203,19 +321,35 @@ export function validateComposition(composition, response) {
       blocks.push({ type, source, style: block.style ?? known.types[0] });
     } else blocks.push({ type, source });
   }
-  if (blocks[0].type === 'chart') return fail('LEAD_REQUIRED');
+  if (['chart', 'note'].includes(blocks[0].type) || blocks.at(-1).type === 'title') return fail('LEAD_REQUIRED');
+  if (blocks.filter((item) => item.type === 'title').length > COMPOSITION_LIMITS.maxTitles) return fail('BLOCK_COUNT');
+  // Yönlendirme yalnızca SONRAKİ bir blokta çizilen tablo ya da grafiğe olabilir ("aşağıdaki tablo").
+  for (const pointer of pointers) {
+    const kind = render.tables.has(pointer.id) ? 'rows' : 'chart';
+    if (!blocks.some((item, at) => at > pointer.at && item.type === kind && item.source === pointer.id)) return fail('POINTER_TARGET');
+  }
   // Önizleme ya da grafik bütün satırların yerine geçmez; kapsam yalnızca sunucu bloğuyla sağlanır.
   if ([...render.tables.keys()].some((id) => !usedSources.has(id))) return fail('COVERAGE_INCOMPLETE');
+  // Not kutusunda vurgulanan önerme paragraftan çıkar; boşalan paragraf düşer (yönlendirmelerin göreli sırası korunur).
+  if (emphasized.size) {
+    const normalized = blocks.map((block) => (block.type === 'say' ? { ...block, items: block.items.filter((id) => !emphasized.has(id)) } : block))
+      .filter((block) => block.type !== 'say' || block.items.length);
+    return normalized.length && !['chart', 'note'].includes(normalized[0].type) ? { ok: true, blocks: normalized } : fail('LEAD_REQUIRED');
+  }
   // Atlanan ayrıntıları (kapsam ve eksik sonuç notları dahil) çizici her zaman ekler.
   return { ok: true, blocks };
 }
 
 /* ── Çizim ─────────────────────────────────────────────────────── */
 
+const citation = (ids) => [...new Set(ids)].map((id) => `【${id}】`).join('');
+
 /**
- * Doğrulanmış düzeni Markdown yanıta çevirir. Değerler, tablolar, ayrıntılar, grafik ve kaynak
- * işaretleri sunucunundur; model metni çizime alınmaz.
- * @returns {{ text: string, citedIds: string[], chart: string|null, charts: number, blocks: number }}
+ * Doğrulanmış düzeni Markdown yanıta çevirir. Önerme cümleleri, değerler, tablolar, ayrıntılar, grafik,
+ * yönlendirmeler ve kaynak işaretleri sunucunundur; model metni çizime alınmaz. Söylenen sayım önermesi
+ * ayrıntısının yerine geçer (zorunlu zarf notları önermeyle birlikte yazılır); söylenmeyen her ayrıntı
+ * sunucu tarafından eklenir.
+ * @returns {{ text: string, citedIds: string[], chart: string|null, charts: number, blocks: number, said: number, tables: number, notes: number, titled: boolean }}
  */
 export function renderComposition(composition, validated) {
   const { render } = composition;
@@ -224,7 +358,15 @@ export function renderComposition(composition, validated) {
   const cited = [];
   let chart = null;
   let charts = 0;
+  let said = 0;
+  let tables = 0;
+  let notes = 0;
+  let titled = false;
   const shown = new Set();
+  const saidIds = new Set(validated.blocks.filter((block) => ['say', 'note'].includes(block.type)).flatMap((block) => block.items).filter((id) => render.propositions?.has(id)));
+  const coveredBy = new Map([...render.details.values()].filter((detail) => detail.covers && saidIds.has(detail.covers)).map((detail) => [detail.covers, detail]));
+  // Önermesi söylenen ayrıntı hiçbir konumda yeniden yazılmaz.
+  for (const detail of coveredBy.values()) shown.add(detail.id);
   const showDetail = (id) => {
     if (!id || shown.has(id)) return;
     const detail = render.details.get(id);
@@ -233,21 +375,64 @@ export function renderComposition(composition, validated) {
     cited.push(detail.evidenceId);
     shown.add(id);
   };
+  // Çizilecek grafikler önceden belirlenir: yönlendirme yalnızca gerçekten çizilen bloğa yazılır.
+  const fences = new Map();
   for (const block of validated.blocks) {
-    if (block.type === 'rows') {
+    if (block.type !== 'chart') continue;
+    const candidate = render.charts.get(block.source);
+    if (render.tables.get(candidate.table)?.evidenceId !== candidate.evidenceId) continue;
+    const fence = answerChartFence({ version: 1, type: block.style, locale, title: candidate.title, unit: candidate.unit, evidence: [candidate.evidenceId], items: candidate.items });
+    if (fence) fences.set(block.source, fence);
+  }
+  const rowStyles = new Map(validated.blocks.filter((block) => block.type === 'rows').map((block) => [block.source, block.style]));
+  for (const block of validated.blocks) {
+    if (block.type === 'say') {
+      const sentences = [];
+      const sources = [];
+      for (const id of block.items) {
+        const proposition = render.propositions?.get(id);
+        if (proposition) {
+          sentences.push(proposition.markdown, ...(coveredBy.get(id)?.notices || []));
+          sources.push(proposition.evidenceId);
+          said += 1;
+        } else if (render.tables.has(id)) {
+          sentences.push(pointerSentence({ type: 'rows', style: rowStyles.get(id) }, locale));
+        } else if (fences.has(id)) {
+          sentences.push(pointerSentence({ type: 'chart', distribution: render.charts.get(id).types.includes('donut') }, locale));
+        }
+      }
+      if (!sentences.length) continue;
+      out.push(`${sentences.join(' ')}${sources.length ? ` ${citation(sources)}` : ''}`);
+      cited.push(...sources);
+    } else if (block.type === 'title') {
+      out.push(render.titles.get(block.source).markdown);
+      titled = true;
+    } else if (block.type === 'note') {
+      const items = block.items.map((id) => render.propositions.get(id));
+      const tones = new Set(items.map((item) => item.tone || 'info'));
+      const tone = tones.size === 1 ? [...tones][0] : 'info';
+      const sentences = items.flatMap((item) => [item.markdown, ...(coveredBy.get(item.id)?.notices || [])]);
+      const sources = items.map((item) => item.evidenceId);
+      said += items.length;
+      notes += 1;
+      // Sunucunun not kutusu: tonu önermelerin sunucu tonudur; etiket ve cümleler sunucunundur.
+      out.push(`> [!${tone}]\n> **${noteLabel(tone, locale)}:** ${sentences.join(' ')} ${citation(sources)}`);
+      cited.push(...sources);
+    } else if (block.type === 'rows') {
       const table = render.tables.get(block.source);
       showDetail(table.detail);
-      out.push(renderGroupRows(table.group, table.collection, { locale, layout: block.style, stated: render.details.get(table.detail)?.text || '' }));
+      const detail = render.details.get(table.detail);
+      const stated = detail && coveredBy.get(detail.covers) === detail ? render.propositions.get(detail.covers).markdown : detail?.text || '';
+      out.push(renderGroupRows(table.group, table.collection, { locale, layout: block.style, stated }));
       cited.push(table.evidenceId);
+      tables += 1;
     } else if (block.type === 'details') {
       showDetail(block.source);
     } else if (block.type === 'chart') {
-      const candidate = render.charts.get(block.source);
-      if (render.tables.get(candidate.table)?.evidenceId !== candidate.evidenceId) continue;
-      showDetail(render.tables.get(candidate.table)?.detail);
-      const fence = answerChartFence({ version: 1, type: block.style, locale, title: candidate.title, unit: candidate.unit, evidence: [candidate.evidenceId],
-        items: candidate.items });
+      const fence = fences.get(block.source);
       if (!fence) continue;
+      const candidate = render.charts.get(block.source);
+      showDetail(render.tables.get(candidate.table)?.detail);
       out.push(fence);
       cited.push(candidate.evidenceId);
       chart = block.style;
@@ -258,5 +443,5 @@ export function renderComposition(composition, validated) {
   for (const detail of render.details.values()) {
     showDetail(detail.id);
   }
-  return { text: out.join('\n\n'), citedIds: [...new Set(cited)], chart, charts, blocks: validated.blocks.length };
+  return { text: out.join('\n\n'), citedIds: [...new Set(cited)], chart, charts, blocks: validated.blocks.length, said, tables, notes, titled };
 }

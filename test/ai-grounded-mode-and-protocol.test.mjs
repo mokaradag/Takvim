@@ -317,18 +317,17 @@ test('text that only names a read tool or an unknown tool never executes; cheap 
   const stack = stackFor(t);
   const logs = captureConsole(t);
   let sqlBeforeDeep = null;
-  // Standart iki bildirim düzeltmesi kullanır; ardından tek Derin devri.
+  // Standart tek ucuz bildirim düzeltmesi kullanır; ardından Derin temiz başlangıçtan planlar (kendi tek düzeltmesiyle).
   stack.provider.enqueue(
     { type: 'answer', text: JSON.stringify({ name: 'rota_task_search', arguments: OVERDUE_MINE }) },
-    { type: 'answer', text: JSON.stringify(plan(OVERDUE_LIST, [{ name: 'rota_sql_query', arguments: { sql: 'SELECT 1' } }])) },
-    { type: 'answer', text: JSON.stringify(plan(OVERDUE_LIST, [{ name: 'rota_task_search', arguments: { deadline: 'late' } }])) },
+    { type: 'answer', text: JSON.stringify(plan(OVERDUE_LIST, [{ name: 'rota_sql_query', arguments: { sql: 'SELECT 1' } }, { name: 'rota_task_search', arguments: { deadline: 'late' } }])) },
     { type: 'answer', text: JSON.stringify({ intent: 'rota', language: 'tr', calls: [{ name: 'rota_task_search', arguments: OVERDUE_MINE }] }) },
     { type: 'script', respond: () => { sqlBeforeDeep = sqlCalls(stack); return nativePlan(); } }
   );
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: OVERDUE_QUESTION })).assistantMessage;
   assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
   assert.equal(sqlBeforeDeep, 0);
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, DEEP, DEEP]);
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, DEEP, DEEP]);
   const [trace] = turnTraces(logs);
   assert.deepEqual([trace.escalated, trace.toolCalls], [true, 1]);
   drained(stack);

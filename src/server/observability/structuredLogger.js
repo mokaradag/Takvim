@@ -50,8 +50,23 @@ export function buildLogRecord({
   return record;
 }
 
+export const LOG_FORMATS = Object.freeze(['json', 'summary', 'both']);
+
 /**
- * Günlüğe yazar.
+ * Konsol biçimi: `MERGEN_ROTA_LOG_FORMAT` = `json` (her olay tek JSON satırı), `summary` (özet satırı olan
+ * olaylar için yalnızca kısa insan satırı; diğerleri JSON) ya da `both`. Verilmezse etkileşimli terminalde
+ * `summary`, yönlendirilmiş çıktıda (dosya, günlük toplayıcı, test) `json`. Kayıt (`buildLogRecord`) her
+ * biçimde aynıdır; biçim yalnızca konsola neyin yazıldığını seçer.
+ */
+export function consoleLogFormat(env = process.env, stream = process.stdout) {
+  const configured = String(env.MERGEN_ROTA_LOG_FORMAT ?? '').trim().toLowerCase();
+  if (LOG_FORMATS.includes(configured)) return configured;
+  return stream?.isTTY ? 'summary' : 'json';
+}
+
+/**
+ * Günlüğe yazar. `summary`, olayın içeriksiz bağlamından üretilmiş kısa insan satırıdır (ör. Bilgin turu);
+ * aynı temizleyiciden geçer ve JSON kaydının yerine değil, seçilen biçime göre yanında ya da önünde yazılır.
  *
  * Yazma HİÇBİR KOŞULDA yukarı hata taşımaz: gözlemlenebilirlik, gözlediği
  * uygulamayı düşüremez.
@@ -61,7 +76,10 @@ export function logEvent(input = {}) {
   try {
     record = buildLogRecord(input);
     const method = CONSOLE_METHOD[record.level] || 'info';
-    console[method](`[mergen-rota] ${JSON.stringify(record)}`);
+    const summary = typeof input.summary === 'string' ? sanitizeText(input.summary) : '';
+    const format = summary ? consoleLogFormat() : 'json';
+    if (format !== 'json') console[method](`[mergen-rota] ${summary}${record.correlationId ? ` | ${String(record.correlationId).slice(0, 8)}` : ''}`);
+    if (format !== 'summary') console[method](`[mergen-rota] ${JSON.stringify(record)}`);
   } catch {
     // Günlükleme hatası yutulur.
   }

@@ -55,7 +55,15 @@ test('olgu sayfası doğrulanmış olgulardan kurulur; kimlik, kanıt kimliği y
   assert.deepEqual(view.charts, [{ id: 'G1', table: 'T1', column: 'C2', title: 'Gecikme (gün)', types: ['bar'] }]);
   const serialized = JSON.stringify(view);
   for (const forbidden of ['taskId', 'R1', 'data.tasks', String(AYSE), 'factScope', 'sicil']) assert.equal(serialized.includes(forbidden), false, forbidden);
-  assert.deepEqual(Object.keys(view.details[0]), ['id', 'part', 'text']);
+  // Yalnızca zarf sayısından oluşan ayrıntı sayfada önermedir; metnini ve ilişkisini sunucu yazmıştır.
+  assert.deepEqual(view.details, []);
+  assert.deepEqual(view.propositions.slice(0, 3), [
+    { id: 'P1', part: 1, kind: 'count', tone: 'warning', text: 'Şu anda 3 gecikmiş göreviniz var.' },
+    { id: 'P2', part: 1, kind: 'maximum', tone: 'warning', text: 'En uzun süredir geciken görev Haftalık durum toplantısı (23 gün).' },
+    { id: 'P3', part: 1, kind: 'minimum', text: 'En kısa süredir geciken görev Kısmi kendi görevim (1 gün).' }
+  ]);
+  assert.deepEqual(view.titles, [{ id: 'H1', part: 1, text: 'Gecikmiş görevleriniz' }]);
+  assert.equal(composition.render.details.get('D1').covers, 'P1');
 });
 
 test('basit sayımda düzen seçimi yoktur; dağılım tam kanıtta pasta grafiği adayı olur', async (t) => {
@@ -80,7 +88,11 @@ test('kapalı sayfa sınırı bütün tablo ve ayrıntıları korur; fazla kayna
   const parts = Array.from({ length: COMPOSITION_LIMITS.maxTables }, (_, index) => ({ index, presentation: verdict.presentation }));
   const composition = buildComposition({ parts, question: QUESTION });
   assert.equal(composition.view.tables.length, parts.length);
-  assert.equal(composition.view.details.length, parts.length);
+  assert.equal(composition.render.details.size, parts.length);
+  // Her ayrıntı ya sayfadadır ya da yerine geçen sayım önermesiyle temsil edilir; sayımlar türetilmiş önermelerden önce gelir.
+  for (const detail of composition.render.details.values()) assert.notEqual(composition.view.details.some((item) => item.id === detail.id), Boolean(detail.covers));
+  assert.equal(composition.view.propositions.length, COMPOSITION_LIMITS.maxPropositions);
+  assert.deepEqual(composition.view.propositions.slice(0, parts.length).map((item) => item.kind), Array(parts.length).fill('count'));
   assert.equal(issue(check(composition, { blocks: [validLead()] })), 'COVERAGE_INCOMPLETE');
   assert.equal(check(composition, { blocks: composition.view.tables.map((table) => ({ type: 'rows', source: table.id })) }).ok, true);
   assert.equal(buildComposition({ parts: [...parts, { index: 6, presentation: verdict.presentation }] }), null);
@@ -225,7 +237,7 @@ test('bozuk, uydurma ya da düşmanca düzenlerin her biri reddedilir', async (t
     ['metin olmayan kaynak', { blocks: [{ type: 'rows', source: { id: 'T1' } }] }, 'SOURCE_INVALID'],
     ['yanlış kaynak türü', { blocks: [{ type: 'rows', source: 'D1' }] }, 'UNKNOWN_SOURCE'],
     ['veri alanı ekleme', { blocks: [lead, { ...rows, items: [{ value: 0 }] }] }, 'BLOCK_INVALID'],
-    ['aşırı blok', { blocks: [lead, rows, ...Array.from({ length: 10 }, (_, index) => ({ type: 'assessment', text: `Not ${'a'.repeat(index + 1)}` }))] }, 'BLOCK_COUNT'],
+    ['aşırı blok', { blocks: [lead, rows, ...Array.from({ length: COMPOSITION_LIMITS.maxBlocks }, (_, index) => ({ type: 'assessment', text: `Not ${'a'.repeat(index + 1)}` }))] }, 'BLOCK_COUNT'],
     ['bilinmeyen tür', { blocks: [lead, { type: 'html', text: '<b>x</b>' }] }, 'BLOCK_INVALID'],
     ['blokta fazla alan', { blocks: [{ ...lead, color: 'red' }, rows] }, 'BLOCK_INVALID'],
     ['uydurma yuva', { blocks: [{ type: 'paragraph', text: 'Şu anda {F99} gecikmiş göreviniz var.' }, rows] }, 'BLOCK_INVALID'],
@@ -490,7 +502,9 @@ test('nitelendirme altyapı/model hatası güvenli üretim geri dönüşünde de
     await runCase(inner, COMPOSITION_CASES[0], { report, providerOptions: { provider: 'claude', completeRound, expectedModel: model, ...overrides } });
     assert.equal(report.results[0].mode, 'narrative', 'üründe güvenli belirlenimci geri dönüş korunur');
     if (legitimate) {
-      assert.deepEqual(report.results[0].failures, ['COMPOSITION_REQUIRED']);
+      // Geçersiz zayıf anlatım tek Derin anlatım denemesi açar; nitelendirmede Derin çağrısı modele gitmez ve devir sayılır.
+      assert.deepEqual(report.results[0].failures, ['COMPOSITION_REQUIRED', 'DEEP_ESCALATION']);
+      assert.equal(report.escalations, 1);
       assert.equal(report.passed, 0);
       assert.throws(() => finalizeCompositionQualification(report), /COMPOSITION_CHECKS_FAILED/);
     } else {

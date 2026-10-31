@@ -778,7 +778,7 @@ test('rankable rows exclude missing values and require deterministic metric orde
     boundary === page.result.data.tasks[0].overdueDays ? 'RANK_MISMATCH' : null);
 });
 
-test('protocol evidence gaps never reopen exhausted budgets through Deep escalation', async (t) => {
+test('protocol evidence gaps never reopen shared resource budgets; a clean Deep restart happens at most once', async (t) => {
   const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
   for (const budget of [{ maxRepairRounds: 0 }, { maxToolRounds: 1 }, { maxTotalCalls: 1 }]) {
     const stack = stackFor(t);
@@ -797,10 +797,32 @@ test('protocol evidence gaps never reopen exhausted budgets through Deep escalat
     } };
     const initial = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: `Bütün görevler ${PROJECTS.FULL}`, now: NOW }).messages,
       catalog: toolCatalogForModel(), context, limits, onText: async () => {}, escalation: true });
-    assert.equal(initial.outcome, 'failed');
-    assert.equal(initial.stats.toolRounds <= limits.maxToolRounds, true);
-    assert.equal(initial.stats.attempted <= limits.maxTotalCalls, true);
     assert.equal(rounds <= 3, true);
+    if (budget.maxTotalCalls) {
+      // Ortak çağrı bütçesi yeni bir plan için yetmiyorsa temiz yeniden planlama açılmaz.
+      assert.equal(initial.outcome, 'failed');
+      assert.equal(initial.stats.attempted <= limits.maxTotalCalls, true);
+      continue;
+    }
+    // Kanıt bildirilen isteği karşılamadı ve onarım tükendi: zayıf deneme atılır, Derin temiz planlar.
+    assert.deepEqual([initial.outcome, initial.kind, initial.reason, initial.toolsReused], ['escalate', 'plan', 'VERIFICATION_FAILED', false]);
+    const resumed = initial.resume;
+    assert.deepEqual(resumed.ledger.ids(), [], 'atılan denemenin kanıtı Derin tura açılmaz');
+    assert.ok(resumed.priorExecutorStats.attempted >= 1);
+    assert.equal(resumed.limits.maxTotalCalls, limits.maxTotalCalls - resumed.priorExecutorStats.attempted, 'çağrı bütçesi ortak kalır');
+    assert.equal(resumed.repairsLeft, 0, 'tükenen onarım yeniden açılmaz');
+    assert.equal(resumed.transcript.some((message) => message.role === 'tool' || message.role === 'assistant'), false);
+    // Derin de aynı boşluğa düşerse tur güvenle biter; ikinci devir yoktur.
+    let deepRounds = 0;
+    const deep = { signal: new AbortController().signal, round: async () => {
+      deepRounds += 1;
+      if (deepRounds === 1) return nativeDeclaration({ text: declared(request), toolCalls: [call('rota_task_search', { projectId: PROJECTS.FULL, limit: 1 })], finishReason: 'tool_calls' });
+      return reply(facts('R1:data.tasks.*.title'));
+    } };
+    const final = await runGroundedTurn(deep, { resume: resumed, catalog: toolCatalogForModel(), context, limits, onText: async () => {} });
+    assert.equal(final.outcome, 'failed');
+    assert.equal(final.stats.attempted <= limits.maxTotalCalls, true);
+    assert.equal(deepRounds <= 3, true);
   }
 });
 

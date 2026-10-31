@@ -908,14 +908,18 @@ function evidenceSchemaMissing() {
   });
 }
 
-/** Veri sonrası muhakeme devri; iptal, kimlik ve süre aşımı yukarı taşınır. */
+/**
+ * Derin düşünmeye TEK devir; iptal, kimlik ve süre aşımı yukarı taşınır. `plan` temiz yeniden planlama,
+ * `select` hazır kanıtla son seçim, `narrate` doğrulanmış yanıtın anlatımıdır. Anlatım devri yanıtı
+ * değiştiremez: Derin oturumu açılamazsa ya da hata verirse doğrulanmış belirlenimci anlatım gösterilir.
+ */
 async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
   const telemetry = (outcome, models = []) => request.noteEscalation?.(recordGroundedEscalation({
-    requestedMode: turn.mode, models: [...request.models, ...models], reason: request.reason, toolsReused: request.toolsReused, outcome
+    requestedMode: turn.mode, models: [...request.models, ...models], reason: request.reason, toolsReused: request.toolsReused, kind: request.kind, outcome
   }));
   let result;
   try {
-    result = await runIn(turn.escalationProfile, { resume: request.resume });
+    result = await runIn(turn.escalationProfile, { resume: request.resume }, request.queueTimeoutMs ? { queueTimeoutMs: request.queueTimeoutMs } : {});
   } catch (error) {
     // Yalnızca yapay zekâ hizmetinin hatası Standart sonucuna döner; iptal, kimlik ve veri hataları turu bitirir.
     if (signal?.aborted || !isAiError(error) || error.code === AI_ERROR_CODES.AI_CANCELLED) {
@@ -925,9 +929,15 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
     }
     const timedOut = error.code === AI_ERROR_CODES.AI_TIMEOUT;
     telemetry(timedOut ? 'timeout' : 'error');
-    // Süre aşımı doğrulama hatası değildir: sağlayıcının yoğunluğu güvenli iletiyle gizlenmez.
-    if (timedOut) { request.traceError?.(error); throw error; }
-    return request.fallback(onText);
+    // Süre aşımı doğrulama hatası değildir: sağlayıcının yoğunluğu güvenli iletiyle gizlenmez. Anlatım devrinde
+    // doğrulanmış yanıt hazırdır; teslim kendi yetki denetimiyle yine denenir.
+    if (timedOut && request.kind !== 'narrate') { request.traceError?.(error); throw error; }
+    try {
+      return await request.fallback(onText);
+    } catch (fallbackError) {
+      request.traceError?.(fallbackError);
+      throw fallbackError;
+    }
   }
   telemetry(result.outcome, result.models);
   return result;
@@ -969,11 +979,12 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
     composeAnswers: turn.composeAnswers === true
   };
   const lifecycle = { deadline: null };
-  const runIn = (profile, extra) => getAiGateway().runToolSession({
+  const runIn = (profile, extra, sessionOptions = {}) => getAiGateway().runToolSession({
     profile,
     signal,
     lifecycle,
     beforeDispatch,
+    ...sessionOptions,
     run: (session) => {
       if (Number(session.sicil) !== Number(turn.sicil)) throw unknownSicil();
       return runGroundedTurn(session, { ...options, ...extra });

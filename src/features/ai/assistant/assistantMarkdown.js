@@ -299,6 +299,8 @@ function tokenizeInline(text, { links, budget }) {
 }
 
 const CITATION_TOKEN = /^【R([1-9]\d?)】/;
+/** Not kutusunun tonu: sunucunun kanıta bağlı anlatımının vurgu renkleri (bilgi, dikkat, olumlu). */
+const CALLOUT_TONE = /^\[!(info|warning|success)\]$/i;
 
 function tokenToNode(token) {
   if (token.type === 'delim') return textNode(token.char.repeat(token.count));
@@ -564,7 +566,9 @@ function parseBlockLines(lines, depth, budget = { blocks: 0 }) {
         quoted.push(lines[index].replace(QUOTE, ''));
         index += 1;
       }
-      blocks.push({ type: 'quote', children: parseBlockLines(quoted, depth + 1, budget), source: lines.slice(start, index).join('\n') });
+      // Not kutusu tonu (`> [!warning]`): yalnızca ilk satırın tamamı bilinen bir ton işaretiyse; işaret metin olarak gösterilmez.
+      const tone = CALLOUT_TONE.exec(String(quoted[0] ?? '').trim())?.[1]?.toLowerCase() || null;
+      blocks.push({ type: 'quote', ...(tone ? { tone } : {}), children: parseBlockLines(tone ? quoted.slice(1) : quoted, depth + 1, budget), source: lines.slice(start, index).join('\n') });
       continue;
     }
     if (listMarker(line)) {

@@ -103,7 +103,11 @@ export function renderBlock(block, key = 'b', evidenceIds = null) {
     case 'rule':
       return <hr key={key} />;
     case 'quote':
-      return <blockquote key={key}>{block.children.map((child, index) => renderBlock(child, `${key}-${index}`, evidenceIds))}</blockquote>;
+      return (
+        <blockquote key={key} className={block.tone ? `assistant-md-callout is-${block.tone}` : undefined}>
+          {block.children.map((child, index) => renderBlock(child, `${key}-${index}`, evidenceIds))}
+        </blockquote>
+      );
     case 'list': {
       const Tag = block.ordered ? 'ol' : 'ul';
       return (

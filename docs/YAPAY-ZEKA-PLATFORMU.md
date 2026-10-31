@@ -1884,12 +1884,20 @@ Ayrıntılı belge: [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.m
   `scripts/planner-evaluation.mjs`; tarihsel Haiku 4.5 88/117 ölçümü
   düzeltilmiş kapıdan önceye aittir. Güncel kabul ölçümü bekliyor:
   117/117 + zorunlu ek 19/19; ayrıntı ve bekleyenler anlamsal katman §12.
-- **4D (uygulandı; kurum içi kabul açık):** doğrulanmış yanıtın isteğe bağlı sunum katmanı. Model yalnızca kapalı
-  bir düzen (`{"blocks":[...]}`, yalnızca `details`, `rows`, `chart`) seçer; serbest model metni kabul edilmez.
-  Olgusal ilişkileri, metni, değerleri, tabloları, grafikleri ve kaynak işaretlerini sunucu yerleştirir
-  (`src/domain/ai/groundedComposition.js`, `src/server/ai/assistant/answerComposition.js`). Düzen turu aynı oturumda,
-  araçsız ve dar çıktı sınırıyla (Standart 1200 belirteç) bir kez yürür; geçersiz, kesik, boş, geç ya da başarısız
-  düzen doğrulanmış belirlenimci anlatıma döner — düzeltme turu ve Derin devri yoktur. Akış evresi `composing`
+- **4D (uygulandı; kurum içi kabul açık):** doğrulanmış yanıtın KANITA BAĞLI ANLATIMI. Sunucu neyin doğru olduğunu
+  belirler: doğrulanmış olgulardan önermeleri (`P#`: sayım, en büyük/en küçük, ortalama, bir haftayı aşan gecikme, proje
+  yoğunlaşması, tarih aralığı, çoğunluk ya da en büyük grup, tamamlanma, toplam, döküm), sunucu tonlarını ve başlık
+  adaylarını belirlenimci olarak türetir ve cümlelerini kendisi yazar (`src/domain/ai/groundedPropositions.js`). Model
+  doğrulanmış önermelerin nasıl anlatılacağını seçer: kapalı düzende (`{"blocks":[...]}`: `title`, `say`, `note`,
+  `rows`, `chart`, `details`) başlığı, analist paragrafında hangi önermelerin hangi sırayla söyleneceğini, tema renkli not
+  kutusunu ve hangi tabloya/grafiğe yönlendirileceğini
+  (`src/domain/ai/groundedComposition.js`, `src/server/ai/assistant/answerComposition.js`). Serbest model metni hiçbir
+  zaman çizilmez; doğrulama yapısaldır (kimlik, tür, sıra, kapsam), sözcük ya da kalıp yoktur. Düzen turu aynı
+  oturumda, araçsız ve dar çıktı sınırıyla (Standart 1200 belirteç) bir kez yürür; yapısal olarak reddedilen, boş ya
+  da kesik düzen süre yeterse BİR kez yalnızca önerme sayfasıyla Derin düşünmeye devredilir; o da olmazsa ya da hata,
+  süre veya sağlayıcı sorunu varsa doğrulanmış belirlenimci anlatım gösterilir — düzeltme turu yoktur. Planlayıcı
+  devri temiz yeniden planlamadır: zayıf modelin reddedilen planı, onarım izleri ve kanıtı atılır, Derin kanonik
+  başlangıçtan planlar. Akış evresi `composing`
   ("Yanıt yazılıyor…"). Kapalı grafik tanımı (`rota-chart`, çubuk/halka) sunucuda kurulur, istemcide yeniden
   doğrulanır ve yalnızca yanıtın kanıtına bağlıysa çizilir. Masaüstünde panel aynı bileşenle odak görünümüne
   genişler (konuşma, taslak ve süren yanıt korunur; Esc önce odaktan çıkar). Tur başına tek içeriksiz tamamlanma

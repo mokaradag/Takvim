@@ -457,10 +457,11 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
 
 /* ── Zarf sayıları ────────────────────────────────────────── */
 
-function envelopeSentences(facts, { tool, locale, empty = false }) {
+function envelopeSentences(facts, { tool, locale, empty = false, only = null }) {
   const noun = NOUNS[tool]?.[language(locale)] || (locale === 'en' ? 'records' : 'kayıt');
   const sentences = [];
   for (const fact of facts) {
+    if (only && !only.includes(fact.field)) continue;
     // Proje süzgeci sayımın öznesidir: sayı projesinden ayrı yazılmaz.
     const project = fact.semantic?.filters?.projectId && fact.subject && fact.subject !== 'Rota' ? strong(escapedFactText(fact.subject)) : null;
     const qualifiers = qualifierText([{ fact }], locale, { omit: project ? ['project'] : [] });
@@ -598,6 +599,24 @@ function groupSentences(group, { locale, layout, empty }) {
   }
   sentences.push(...envelopeSentences(group.envelope, { tool: group.tool, locale, empty: empty.includes(group.evidenceId) }));
   return sentences;
+}
+
+/**
+ * Kanıt grubunun yalnızca zarf cümleleri (`only` verilirse yalnızca o alanların). Boş sonucun "bulunmadı"
+ * cümlesi grubun BÜTÜN zarf olgularına göre karar verir; alan süzgeci anlamı değiştirmez.
+ */
+export function renderEnvelopeSentences(group, { locale = 'tr', empty = [], only = null } = {}) {
+  return envelopeSentences(group.envelope, { tool: group.tool, locale, empty: empty.includes(group.evidenceId), only });
+}
+
+/** Grubun anlatımı yalnızca zarf sayılarından mı oluşur (kayıt cümlesi ya da tek satırlı koleksiyon yok)? */
+export function envelopeOnlyGroup(group, layout = 'auto') {
+  return !group.main.entries.length && [...group.collections.values()].every((rows) => rows.size > 1 || layout === 'table');
+}
+
+/** Sunucunun Markdown cümlesinin düz metni (modelin sayfası için): vurgu ve kaçış işaretleri çıkarılır. */
+export function markdownPlainText(text) {
+  return String(text).replace(/\*\*/g, '').replace(/\\([\\`*_{}\[\]()#+.!|<>~:/-])/g, '$1').replace(/【R\d+】/g, '').trim();
 }
 
 /** Çok satırlı koleksiyonun liste ya da tablo bloğu; ortak ölçüt yukarıdaki cümlede yoksa başta yazılır. */

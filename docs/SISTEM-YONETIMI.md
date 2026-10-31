@@ -794,6 +794,7 @@ konsolu bu değerleri yalnızca yetkili uçtan öğrenir.
 | Değişken | Varsayılan | Sınır | Anlamı |
 | --- | --- | --- | --- |
 | `MERGEN_ROTA_TELEMETRY_ENABLED` | `true` | — | Telemetri toplama ve kalıcılaştırma |
+| `MERGEN_ROTA_LOG_FORMAT` | terminalde `summary`, yönlendirilmiş çıktıda `json` | `json`, `summary`, `both` | Konsol günlük biçimi (aşağıya bakın) |
 | `MERGEN_ROTA_TELEMETRY_RETENTION_DAYS` | `30` | 1–365 | Eğilim/olay saklama süresi |
 | `MERGEN_ROTA_ADMIN_REFRESH_INTERVAL_MS` | `10000` | 5000–120000 | Konsol yoklama aralığı |
 | `MERGEN_ROTA_ALERT_P95_MS` | `1500` | 100–60000 | P95 gecikme uyarı eşiği |
@@ -815,6 +816,31 @@ kendi isteklerini gizleyebilirdi. Başlık yalnızca onu HER istekte yeniden yaz
 güvenilir bir ters vekil sunucunun arkasında açılmalıdır.
 
 ---
+
+
+### 15.1 Konsol günlük biçimi
+
+Her günlük olayı aynı yapılandırılmış kaydı (`buildLogRecord`) üretir; `MERGEN_ROTA_LOG_FORMAT` yalnızca konsola
+neyin yazıldığını seçer. `json` her olayı tek JSON satırı olarak yazar (makine işleme ve günlük toplayıcı için).
+`summary`, kısa insan satırı olan olaylarda (şu an her Bilgin turu `ai.grounded.turn` ve boş model yanıtı
+`ai.provider.empty_completion`) JSON yerine bu satırı yazar; özet satırı olmayan bütün olaylar JSON kalır. `both`
+ikisini birlikte yazar (tanı). Değer verilmezse etkileşimli terminalde `summary`, dosyaya ya da günlük toplayıcıya
+yönlendirilmiş çıktıda `json` kullanılır; geçersiz değer bu varsayılana döner. Özet satırı içeriksiz bağlamdan
+kurulur (soru, yanıt, kayıt adı, Sicil yoktur) ve ilişkilendirme kimliğinin ilk sekiz karakteriyle biter:
+
+```
+[mergen-rota] AI OK grounded 6.8s | Qwen3-Next-80B-A3B-Instruct | rounds 2: plan, compose | tools 1 | evidence 1 | 4D composed (say 2, table 1, chart bar, 0.7s) | 1966a370
+[mergen-rota] AI OK grounded 18.4s | Qwen3-Next-80B-A3B-Instruct -> gemma-4-31B-it (plan: EMPTY_COMPLETION) | rounds 5: plan, declaration, retry, -> plan, compose | tools 1 | evidence 1 | 4D composed (say 1, table 1, 0.7s) | 46ca01b5
+[mergen-rota] AI OK grounded 3.1s | Qwen3-Next-80B-A3B-Instruct -> gemma-4-31B-it (narrate: NARRATION_FAILED) | rounds 3: plan, compose, -> compose | tools 1 | evidence 1 | 4D composed after UNKNOWN_PROPOSITION (say 2, table 1, 0.6s) | 92464430
+[mergen-rota] AI FAIL failed 7.1s | Qwen3-Next-80B-A3B-Instruct | rounds 5: plan, declaration, tools, select, repair | tools 1 | evidence 0 | 4D - | 60eda636
+```
+
+Satır sırasıyla şunu söyler: sonuç (`OK`/`WARN`/`FAIL` ve tur sonucu), toplam süre, planlayan model zinciri ve
+varsa tek devrin biçimi ve nedeni (`plan` temiz yeniden planlama, `select` hazır kanıtla seçim, `narrate` anlatım),
+model turlarının amaçları (`->` model değişimi), çalışan araç çağrısı, teslim edilen kanıt ve Aşama 4D anlatımı
+(`composed`: söylenen önerme, tablo ve grafik; `fallback narrative`: belirlenimci anlatıma dönüş nedeni; `no choice`:
+model turu gerekmedi). Ayrıntılı JSON bağlamı (tur listesi, belirteçler, SQL, yeniden doğrulama süreleri) `json`
+ya da `both` biçiminde aynen yazılır.
 
 ## 16. Demo Kipi
 

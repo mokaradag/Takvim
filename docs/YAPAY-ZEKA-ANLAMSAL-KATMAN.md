@@ -194,10 +194,11 @@ Aşama 4 **tam olarak dört** uygulama adımından oluşur ve 4D ile biter.
 
 ### 4D — İnsan kalitesinde yanıt ve kurum içi yakınsama (UYGULANDI — kurum içi kabul AÇIK)
 
-- Doğrulanmış kanıttan doğal, açıklayıcı Türkçe yanıt (paragraf, kısa liste,
-  karşılaştırma, açıklama); kanıta bağlılık korunur. Uygulama ve ölçümler §13.
+- Doğrulanmış kanıttan doğal, açıklayıcı Türkçe yanıt: sunucu doğruları ve
+  ilişkileri (önermeler) belirler, model onların anlatımını seçer; kanıta
+  bağlılık korunur. Uygulama ve ölçümler §13.
 - Gerçek üretim/kurum içi modellerle (§9) doğrulama; Aşama 4'ün kapanışı.
-  Kurum içi koşu yolu hazırdır (§13.9), gerçek Qwen ölçümü bekliyor.
+  Kurum içi koşu yolu hazırdır (§13.12), gerçek Qwen ölçümü bekliyor.
 
 ### Yol haritası yönetişimi
 
@@ -1612,70 +1613,185 @@ modelin gerçekten ürettiği araç çağrıları korunur. Metin planı üretimd
 yolundan geçer. Regresyonlar özel kayıt/standart/Derin seçimini, gerçek metin/önsöz/yerel çağrı
 ayrımını ve veri okumadan metin planının reddini doğrular. Gerçek model kabul kapısı hâlâ bekler.
 
-## 13. Aşama 4D — doğrulanmış kanıttan doğal yanıt ve odak görünümü (UYGULANDI — kurum içi kabul AÇIK)
+## 13. Aşama 4D — kanıta bağlı anlatım ve odak görünümü (UYGULANDI — kurum içi kabul AÇIK)
 
 ### 13.1 Amaç ve güven sınırı
 
+**Sunucu neyin doğru olduğunu belirler; model doğrulanmış doğruların insana nasıl anlatılacağını belirler.**
+
 4C'de doğrulanmış yanıt sunucunun belirlenimci anlatımıyla (`renderVerifiedNarrative`) yazılıyordu: doğru ama
-kalıplı. 4D, aynı doğrulanmış kanıtın üstüne isteğe bağlı bir **sunum katmanı** ekler: model yalnızca kapalı bir
-düzen (`{"blocks":[...]}`) yazar; her değer, tarih, ad, tablo, grafik ve kaynak işaretini sunucu yerleştirir.
-Kimlik (Sicil), yetki, SQL, hesap, kanıt, kapsam notu ve kalıcı kanıt kaydı değişmez; düzen kanıt değildir ve
-kanıt kümesini değiştiremez. Düzen kurulamazsa ya da doğrulanamazsa doğrulanmış belirlenimci anlatım **değişmeden**
-gösterilir. Planlayıcı, 4C sözleşmesi, yazma araçları ve sağlayıcılar değişmedi.
+kalıplı. 4D aynı doğrulanmış kanıtın üstüne isteğe bağlı bir anlatım katmanı ekler. Olgular ve olgusal ilişkiler —
+sayım, ad, tarih, süre, oran, durum, öncelik, kapsam, sahiplik, sıra, en büyük/en küçük, karşılaştırma, çoğunluk,
+gruplama ve kaynak — sunucunundur ve kanıta bağlıdır. Model yalnızca sunucunun yazdığı önermelerden hangilerinin
+soruyu yanıtladığını, sırasını, paragraflarını ve tablo/grafiğe yönlendirmesini seçer. Kimlik (Sicil), yetki, SQL,
+hesap, kanıt, kapsam notu ve kalıcı kanıt kaydı değişmez; anlatım kanıt değildir ve kanıt kümesini değiştiremez.
+Anlatım kurulamazsa ya da doğrulanamazsa doğrulanmış belirlenimci anlatım **değişmeden** gösterilir: insan anlatımı
+bir iyileştirmedir, olgusal doğruluğun önkoşulu değildir.
 
-### 13.2 Akış — `src/server/ai/assistant/groundedAnswer.js` → `answerComposition.js`
+### 13.2 Neden 4D bir süre 4C gibi görünüyordu (tarihçe)
 
-1. Tur 4C yolunda doğrulanır (`analyzeGroundedAnswer` artık sunum için olguları da döndürür: `presentation`).
+İlk 4D sürümü (PR #105) modelin kendi paragraflarını doğrulanmış yuvalarla (`{F1}`) yazmasına izin veriyordu.
+İnceleme şu kusurları buldu: geçerli yuvaların çevresine yanlış karşılaştırma/sıralama cümlesi yazılabiliyordu,
+satır adları ve değerleri çapraz eşlenebiliyordu, yuva dışına yazıyla sayı yazılabiliyordu; bunları yakalamak
+Türkçe/İngilizce sayı ve karşılaştırma sözcüğü denetimine (ve "bir görev" gibi doğal Türkçenin reddine) gidiyordu.
+Gömülü yuvaların doğruluğu, keyfî cümlenin anlamsal doğruluğunu kanıtlamaz. Yakınsama bu nedenle serbest model
+metnini tamamen kaldırdı ve model yalnızca `details`/`rows`/`chart` bloklarını seçer oldu: güvenliydi, ama anlatımın
+tamamı yine 4C cümleleriydi. PR #107 güvenlik düzeltmeleri bu durumun nedeni değildir.
+
+Güncel tasarım ikisini birleştirir: modelin anlatım gücü geri gelir, ama model HİÇBİR ZAMAN serbest kelime yazmaz.
+Kullanıcıya ulaşan her karakter ya sunucunun önerme cümlesi, ya sunucunun yönlendirme cümlesi, ya da sunucunun
+tablosu/grafiği/ayrıntısıdır. Modelin karakterlerini gösteren her kanal keyfî bir önerme taşıyabilir ve bunu dil
+anlamadan engellemek mümkün değildir; bu yüzden güvenlik sınırı metin değil, kimlik seçimidir.
+
+### 13.3 Akış — `src/server/ai/assistant/groundedAnswer.js` → `answerComposition.js`
+
+1. Tur 4C yolunda doğrulanır (`analyzeGroundedAnswer` sunum için olguları da döndürür: `presentation`).
 2. `compositionInput` doğrulanmış bölümleri, tamamlanamayan bölümleri (yalnızca konu etiketi) ve sunucu notlarını
    toplar. Eksik bölümün notu konusuyla yazılır (ör. `**Outlook takvimi:** Rota verisine şu anda ulaşılamıyor.`).
-3. `buildComposition` (`src/domain/ai/groundedComposition.js`) kapalı sunum sayfasını kurar: `language`,
-   `question`, bölüm sayısı `parts`, tablolar `T#` (sütunlar `C#`), sunucu metinli ayrıntılar `D#`, grafik adayları
-   `G#` ve tamamlanamayan bölümler `missing`. Tarih varsa `today`, doğrulanmış takip bağlamı varsa
-   `previousQuestion` eklenir. Model yalnızca bu kaynakları seçer; kayıt metinlerini ve bütün değerleri sunucu
-   çizer. Sayfa kimlik, kanıt kimliği, ham alan yolu ya da Sicil taşımaz.
+3. `buildComposition` (`src/domain/ai/groundedComposition.js`) sayfayı kurar: `language`, `today`, `question`, bölüm
+   sayısı `parts`, önermeler `P#` (`kind` ve düz metin), tablolar `T#` (sütunlar `C#`), önermeyle temsil edilmeyen
+   ayrıntılar `D#`, grafik adayları `G#` ve tamamlanamayan bölümler `missing`; doğrulanmış takip bağlamı varsa
+   `previousQuestion`. Sayfa kimlik, kanıt kimliği, ham alan yolu, SQL, araç dökümü ya da Sicil taşımaz.
 4. Güncel yetki yeniden doğrulanır; düzen turu **aynı oturumda**, `tools: []`, `toolChoice: "none"`, iki iletiyle
    (bayt bayt sabit yönerge + sayfa) yürür. Konuşma geçmişi, araç sonuçları ve önceki asistan metni gönderilmez.
-5. `validateComposition` yanıtı kapalı sözleşmeye göre denetler; `renderComposition` geçerli düzeni Markdown'a
+5. `validateComposition` yanıtı yapısal sözleşmeye göre denetler; `renderComposition` geçerli düzeni Markdown'a
    çevirir. Düzen tamamlandıktan sonra güncel yetki tekrar doğrulanır; ancak bundan sonra yanıt ve kalıcı kanıt
    kurulur. Yetki geri alındıysa kullanılamıyor yanıtı verilir, yetkisiz kanıt kaydedilmez.
 
 Akış evresi `composing` olarak yayımlanır; arayüz "Yanıt yazılıyor…" gösterir. Düzen turundaki sağlayıcı
 olayları dış üretim gözcüsüne ilerleme bildirir; ham düzen çıktısı kullanıcıya aktarılmaz.
 
-### 13.3 Kapalı düzen sözleşmesi ve doğrulayıcı
+### 13.4 Sunucunun önermeleri — `src/domain/ai/groundedPropositions.js`
 
-Model yalnızca `details` (`D#`), `rows` (`T#`, `style: table|list`) ve `chart` (`G#`, adayın türlerinden biri)
-bloklarını seçer ve düzenler. İlk blok `details` veya `rows` olur. Her tablo kendi `rows` bloğuyla gösterilir;
-önizleme veya grafik kapsamın yerine geçemez. Kullanıcının açık tablo/liste tercihi önceliklidir. Atlanan bütün
-kayıt ayrıntıları, sayısal kapsam ve eksik/eşleşmesiz sonuç notları sunucu tarafından kaynaklarıyla eklenir.
-
-Serbest model metni, `paragraph`, `points`, `heading`, `assessment`, metin içi yuvalar ve ek alanlar kabul edilmez.
-Geçerli yuvalar çevrelerindeki cümlenin sayımını, karşılaştırmasını veya sıralamasını doğrulamaz. Bu nedenle sunucu
-model cümlesini anlamaya çalışmaz: sayı sözcüğü, anahtar sözcük veya Türkçe ek sözlüğü yoktur. Miktar, kayıt ilişkisi,
-sıra ve kapsamın anlamı mevcut doğrulanmış belirlenimci anlatımdan gelir. Doğal Türkçe ve İngilizce kayıt metinleri
-sözcük denetiminden geçmez; kaçışlı sunucu verisi olarak çizilir. Model yalnızca sunum seçer, olgusal ilişki yazamaz.
-
-Geçersiz biçim, bilinmeyen/yinelenen kaynak, geçersiz stil, eksik tablo kapsamı, dil uyuşmazlığı veya blok sınırını
-aşan yanıt mevcut belirlenimci anlatıma döner. Serbest metin reddi dilin sözcüklerine bağlı değildir.
-
-### 13.4 Bütçe, süre ve devir
-
-| Kip | Düzen turu çıktı sınırı | Tur sayısı (sunucu seçimli yanıt) | Devir |
+| Tür | Türetildiği yer | Önkoşul (sağlanmazsa önerme yoktur) | Örnek (tr) |
 | --- | --- | --- | --- |
-| Standart (`chat.tools`) | 1200 belirteç (`COMPOSITION_RUNTIME.maxOutputTokens`) | plan + düzen = 2 | Yok |
+| `count` | Yalnızca zarf sayısından oluşan ayrıntının `totalCount` olgusu; sayım ölçüsü seçilmemiş görev listesinde atfedilen kanıtın kesin toplamı | Sayı bilinir (null değil); liste kanıtında okuma nüfusun tamamıdır (tam, kesilmemiş, imleçsiz, döndürülen = kesin toplam) ve tablo bütün satırları taşır | Şu anda **4** gecikmiş göreviniz var. |
+| `maximum` / `minimum` | Satır tablosunun sayısal (yoksa tarih) sütunu | Bütün satırlar tam kanıttan, koleksiyonun tamamı gösterilir ve `totalCount` = satır sayısı; değerler farklı; ad yalnızca değerin tek sahibi ve tabloda tekil adı varsa | En uzun süredir geciken görev **X** (**9 gün**). / En uzun gecikme **9 gün**. |
+| `total` | `rota_task_analytics` grupları | Grup boyutu birbirini dışlar (`status`, `priority`, `project`, `deadline`, `target_month`; kişi grupları değil), dağılım tam, toplam > 0 | Toplam **165** göreviniz var. |
+| `majority` | Aynı dağılım | Tekil en büyük grup ve payı %50'yi aşar | Görevlerinizin büyük bölümü (**%69**) **Tamamlandı** durumunda. |
+| `largest` | Aynı dağılım | Tekil en büyük grup, pay ≤ %50 | En büyük grup **Yapılacak**: **40** görev (**%40**). |
+| `breakdown` | Aynı dağılım | En çok 8 grup | Durumlara göre: Tamamlandı **114**, Yapılacak **47**, Devam ediyor **4**. |
+| `completion` | Durum dağılımı (`groupBy: status`) | Bütün grup anahtarları `todo`/`in_progress`/`done`; tamamlanan ve açık görev var | Görevlerinizin **%69**'u tamamlandı; **51** görev hâlâ açık. |
+| `average` | Satır tablosunun sayısal sütunu | Bütün nüfus; en az 3 satır | Gecikmelerin ortalaması **5,3 gün**. |
+| `threshold` | `task.overdueDays` sütunu | Bütün nüfus; sabit eşik 7 gün ("bir haftayı aşan" = 7'den büyük) | **4** görevin **1**'i bir haftadan uzun süredir gecikmiş. |
+| `concentration` | Görev satırlarının doğrulanmış proje bağlamı | Bütün nüfus; her satırın proje bağlamı var | Bu görevlerin tamamı **PAYKDM Bölüm Faaliyetleri** projesinde. |
+| `span` | Tarih sütunu (sayısal önerme yoksa) | Bütün nüfus; değerler farklı | Terminler **26 Ekim 2026** ile **30 Ekim 2026** arasında. |
+
+Her önermenin sunucu tonu vardır (`info`, `warning`, `success`): gecikmiş sayım, en uzun gecikme ve bir haftayı aşan
+gecikme `warning`; bir haftayı aşan gecikme olmaması ve tamamlananların çoğunluğu `success`; diğerleri `info`. Ton
+olgu değildir, yalnızca not kutusunun rengini seçer; model tonu seçemez ya da değiştiremez. Sayfa ayrıca bölüm başına
+en çok bir başlık adayı (`H#`, ör. "Gecikmiş görevleriniz", "Görevlerinizin durum dağılımı") taşır; başlık yalnızca
+nüfusu adlandırır, sayı ya da ilişki içermez ve süzgeçler doğal olarak ifade edilemiyorsa sunulmaz.
+
+Sayım cümlesinin nüfus betimi süzgeçlerden üretilir (sorumlu ben/sorumlusuz, termin kovası, durum, öncelik, proje,
+termin aralığı). Süzgeçlerin TAMAMI doğal olarak ifade edilemiyorsa (ör. başlık araması, kişi, WBS) önerme sunucunun
+ölçütlü belirlenimci cümlesidir (`Eşleşen 4 görev bulundu (ölçüt: …)`). Paylar tam sayı yüzdedir; sıfırdan büyük ve
+tamamdan küçük pay %0 ya da %100 görünmez. Tablonun `_Ölçüt: …_` satırı kapsam etiketi olarak her zaman korunur.
+Sayfada en çok 12 önerme vardır; bütün sayımlar türetilmiş önermelerden önce gelir. Bütün cümleler ve değer
+biçimleri (`**…**`, kaçış) sunucunundur; model metni hiçbir zaman okunmaz ya da yorumlanmaz.
+
+### 13.5 Anlatım sözleşmesi ve yapısal doğrulayıcı
+
+Model yalnızca tek JSON nesnesi döndürür: `{"blocks":[...]}` (en çok 12 blok).
+
+- `{"type":"title","source":"H1"}` — isteğe bağlı başlık (`#### …`); son blok olamaz, her aday bir kez.
+- `{"type":"say","items":["P1","P2","T1"]}` — paragraf (en çok 4 paragraf, paragrafta en çok 8 kimlik). `P#`
+  önermedir; `T#`/`G#` ise **sonraki bir blokta** çizilen tabloya/grafiğe yönlendiren sunucu cümlesidir
+  ("Ayrıntıları aşağıdaki tabloda görebilirsiniz.", "Dağılımı aşağıdaki grafikte görebilirsiniz.").
+- `{"type":"rows","source":"T1","style":"table|list"}` — her tablo bir kez zorunlu; açık düzen tercihi önceliklidir.
+- `{"type":"chart","source":"G1","style":"bar|donut"}` — isteğe bağlı; adayın türlerinden biri; ilk blok olamaz.
+- `{"type":"note","items":["P5"]}` — not kutusu (en çok 2 kutu, kutuda en çok 3 önerme, yalnızca `P#`); ilk blok olamaz.
+  Çizim `> [!warning]` / `> [!success]` / `> [!info]` işaretli alıntıdır; ton önermelerin sunucu tonudur (karışık tonlar
+  `info`), etiket sunucunundur (**Dikkat**, **Olumlu**, **Öne çıkan**). İstemci yalnızca bu üç işareti tanır ve alıntıyı
+  tema renkli kutu olarak çizer (`--status-overdue`, `--status-done`, `--c-blue`; kutudaki değerler tonun rengini alır);
+  işaret ne görünür ne kopyalanır. Kayıt adındaki `[`, `!`, `#` kaçışlıdır: veri işaret ya da başlık açamaz.
+- `{"type":"details","source":"D1"}` — sunucunun hazır ayrıntısı.
+
+Yönerge zayıf modelden analist üslubu ister: başlık varsa onunla başlar, ilk paragraf soruyu doğrudan yanıtlar ve
+sayfada varsa 3–5 önermeyi birleştirir (önce sayım/toplam, sonra en anlamlı ilişkiler), ardından tablo/grafik ve
+uygunsa `warning`/`success` tonlu bir not kutusu gelir. Paragraf uzunluğu doğrulama koşulu değildir (zayıf modelde
+geri dönüşü artırmamak için); örnek çıktı:
+
+```
+#### Gecikmiş görevleriniz
+
+Şu anda **4** gecikmiş göreviniz var. En uzun gecikme **9 gün**. Gecikmelerin ortalaması **5,3 gün**. Bu görevlerin
+tamamı **PAYKDM · PAYKDM Bölüm Faaliyetleri** projesinde. Ayrıntıları aşağıdaki tabloda görebilirsiniz. 【R1】
+
+(tablo)
+
+> [!warning]
+> **Dikkat:** **4** görevin **1**'i bir haftadan uzun süredir gecikmiş. 【R1】
+```
+
+Doğrulama yalnızca yapıyı denetler: tam anahtar kümesi, bilinen kimlik (`UNKNOWN_PROPOSITION`, `UNKNOWN_SOURCE`),
+yinelenmeyen önerme/kaynak/yönlendirme (`DUPLICATE_*`), yönlendirmenin sonraki bloğu (`POINTER_TARGET`), paragraf ve
+not sınırları (`SAY_INVALID`, `NOTE_INVALID`), ilk bloğun grafik ya da not, son bloğun başlık olmaması (`LEAD_REQUIRED`) ve bütün tabloların kapsamı
+(`COVERAGE_INCOMPLETE`). Tek normalleştirme: paragrafta söylenen önerme sonraki not kutusunda da seçildiyse paragraftan
+çıkarılır (yalnızca kutuda kalır; boşalan paragraf düşer); kutudan sonra yeniden söyleme ya da iki kutuda kullanma
+reddedilir. Paragraf, başlık ve not metin ya da ton taşımaz; metin/ton taşıyan her alan (`text`, `tone`, eski `paragraph`,
+`points`, `heading`, `assessment`) `BLOCK_INVALID`'dir. Doğrulayıcıda dil, sözcük listesi, sayı sözcüğü, çekim eki ya da
+kalıp yoktur (sınama doğrulayıcı kaynağında metin deseni olmadığını da denetler). Türetilmemiş bir ilişkiyi
+(ör. sayfada olmayan "en kısa gecikme") iddia etmenin tek yolu sayfada olmayan bir kimlik yazmaktır ve bu yapısal
+olarak reddedilir.
+
+Çizim: söylenen sayım önermesi kendi ayrıntısının yerine geçer (ayrıntı yinelenmez); söylenmeyen her ayrıntı
+sunucu tarafından eklenir. Paragraf, önermelerinin kanıt kimlikleriyle (`【R1】`) biter; atıflar yanıtın doğrulanmış
+kanıt kümesinin dışına çıkamaz (`CITATION_SCOPE`). Önerme ve tablo birlikteyse ya da birden çok önerme varsa anlatım
+modelindir; tek başına tek önerme (ör. yalnızca sayım) model turu açmaz (`NO_CHOICE`) ve belirlenimci anlatım gösterilir.
+
+### 13.6 Bütçe, süre ve devir
+
+| Kip | Düzen turu çıktı sınırı | Tur sayısı (sunucu seçimli yanıt) | Anlatım devri |
+| --- | --- | --- | --- |
+| Standart (`chat.tools`) | 1200 belirteç (`COMPOSITION_RUNTIME.maxOutputTokens`) | plan + düzen = 2 | En çok 1 (yalnızca yapısal ret, boş ya da kesik düzen) |
 | Derin (`chat.tools.reasoning`) | Profil sınırı (akıl yürütme payı) | plan + düzen = 2 | Yok |
 
-1200 belirteç sınırı kapalı blok düzeninde korunur; profil sınırını yalnızca daraltır. `LENGTH` belirlenimci
-anlatıma döner. Genel profil sınırları artırılmadı. Önceki serbest metin protokolünde gözlenen en
-büyük düzen çıktısı 251 belirteçti (13.8). Düzen turunun kendi süre penceresi vardır (en çok 60 sn; oturumun kalan
-süresinden son yetki okumasının 8 sn bütçesi ve 5 sn teslim payı ayrılır; kalan düzen penceresi 8 sn'den
-azsa düzen istenmez — `BUDGET`). Düzen **Derin düşünmeye devretmez,
-düzeltme turu açmaz**; daha güzel düzyazı için devir üretilmez. İptal yukarı taşınır ve hiçbir şey yazılmaz.
+Düzen turunun kendi süre penceresi vardır (en çok 60 sn; oturumun kalan süresinden son yetki okumasının 8 sn bütçesi
+ve 5 sn teslim payı ayrılır; kalan düzen penceresi 8 sn'den azsa düzen istenmez — `BUDGET`). Düzeltme turu yoktur.
 
-Geri dönüş nedenleri: `SHEET_LIMIT`, `AUTHORIZATION`, `CITATION_SCOPE`, `BUDGET`, `TIMEOUT`, `PROVIDER`, `LENGTH`, `EMPTY`, `INVALID`
-(doğrulayıcı sorun kodu ayrıca), `INTERNAL`.
+**Anlatım devri** (`NARRATION_ESCALATION`): Standart anlatım `INVALID`, `EMPTY` ya da `LENGTH` ile biterse, Derin
+profili kuruluysa, tur henüz devretmediyse ve ortak süreden en az 30 sn kaldıysa, aynı önerme sayfası (aynı iki
+ileti: sabit yönerge ve sayfa) Derin oturumuna BİR kez gönderilir. Derin kuyruğu en çok 5 sn beklenir. Derin'e zayıf
+modelin düzeni, plan, araç dökümü ya da kanıt yükü gönderilmez. Derin de başarısız olursa, oturum açılamazsa ya da
+hata verirse doğrulanmış belirlenimci anlatım gösterilir. Sağlayıcı hatası, süre ve `BUDGET` devredilmez: yanıt zaten
+doğrudur; kullanıcı yalnızca daha güzel bir cümle için bekletilmez.
 
-### 13.5 Grafikler — `src/domain/ai/answerChart.js`, `src/features/ai/assistant/AnswerChart.jsx`
+### 13.7 Planlayıcı devri — temiz yeniden planlama
+
+Devir turda **en fazla bir kez** olur ve iki biçimi vardır (`escalation.kind`):
+
+- `plan` — zayıf modelin planı doğrulanamadı: bildirim reddi tek ucuz düzeltmeden sonra da sürdü
+  (`REQUEST_DECLARATION`), boş yanıt yeniden denemeden sonra da sürdü (`EMPTY_COMPLETION`), uzunluk sınırı (`LENGTH`)
+  ya da veri okunduğu hâlde kanıt bildirilen isteği karşılamadı ve onarım tükendi (`VERIFICATION_FAILED`). Deneme
+  **atılır**: bildirim, plan, onarım izleri, sunucunun kabul/yönlendirme notları ve araç alışverişleri. Veri
+  okunduysa kanıt defteri, araç kapsamı ve okuma kaydı da yenilenir; atılan kanıt ne Derin'e ne kullanıcıya açılır,
+  kalıcı kayda girmez. Derin yalnızca kanonik başlangıcı görür (sistem yönergesi, sınırlı geçmiş, sunucunun tur
+  başı notları: önceki sonuç kapsamı, anlamsal aday sırası, metin alanı notu; kullanıcının sorusu) ve tek bir makine
+  okunur neden notu: `SUNUCU: … önceki planlama denemesi doğrulamadan geçmedi ve atıldı (neden: VERIFICATION_FAILED) …`.
+- `select` — istek veri okunduktan sonra donmuştur ve kanıt onu belirlenimci olarak karşılar (sentez gereksinimi ya
+  da seçim/biçim hatası). Derin aynı kanıtla yalnızca son seçimi yapar; dökümde onarım notları ve reddedilen planlar
+  yoktur.
+
+Bütçeler: Standart deneme tek ucuz bildirim düzeltmesi kullanır (devir yoksa — Derin kip ya da Derin profili yok —
+iki); Derin'in temiz yeniden planlaması da tek düzeltme hakkıyla başlar. Atılan denemenin araç turu hakkı yeniden
+başlar; ortak kaynak bütçeleri (toplam çağrı, toplam sonuç boyutu, SQL süresi, mutlak üretim süresi) ve tükenmiş
+kanıt onarımı yeniden açılmaz. Yeniden planlama yalnızca kanıt varken, hiçbir okuma hata vermemişken, doğrulanmış bir
+bölüm yokken ve en az iki çağrı hakkı kalmışken açılır; `NOT_FOUND`, kapsam dışı, desteklenmeyen istek ya da
+SQL/altyapı hatası devri engeller. Sıra hep `Standart → (tek düzeltme) → Derin → güvenli açıklama/ret/başarısızlık`
+biçimindedir; Derin'den Standart'a dönüş ya da ikinci devir yoktur.
+
+Gerekçe ("istek veri okunduktan sonra değiştirilemez" kuralı): kural, modelin okuduğu veriye göre isteğini
+değiştirmesini engeller. Temiz yeniden planlamada Derin atılan denemenin verisini hiç görmez; kendi isteğini kendi
+okumasından önce bildirir. Kullanıcıya ve kalıcı kayda yalnızca Derin'in kendi okumasının kanıtı ulaşır.
+
+Zayıf model için ek önlemler: planlayıcıya gösterilen `rota_plan` şeması ölçü kimliklerinin kapalı listesini yalnızca
+`metrics` içinde bir kez taşır (`fields`/`bindings`/`rank` aynı kimliği yineler); şema ~58 bin karakterden ~29 bine
+iner, sunucunun doğrulama şeması (`requestSchema`) değişmez. Yönerge, boyutu söylenmemiş dağılım/grafik/özet
+isteğinde `groupBy: "status"` varsayılanını modele söyler (yorum modelindir; sunucu cümleyi anahtar sözcükle
+yorumlamaz).
+
+### 13.8 Grafikler — `src/domain/ai/answerChart.js`, `src/features/ai/assistant/AnswerChart.jsx`
 
 Grafik yalnızca sayfadaki aday (`G#`) seçilerek istenir; tanımı sunucu kurar: `{version:1, type, locale, title, unit,
 evidence, items}` kapalı anahtarlarla, `bar` (2–12 öge) ya da `donut` (2–6 öge; yalnızca `rota_task_analytics`
@@ -1686,7 +1802,7 @@ Kopyalanan metin aynı kuralla grafiğin düz veri karşılığını taşır. Ç
 (`Tooltip`, fare ve klavye), ortak halka geometrisini ve tema renk belirteçlerini kullanır; satırlar tek sekme
 durağıdır ve ok/Home/End ile gezilir. Halka vurgusu ve ipucu, ortak `Tooltip` bileşeninin kalıcı odak sahipliğini izler; fare tıklamasının DOM odağı başka dilimlerin fare ipuçlarını engellemez. İpucunda değer, halkada toplamdaki pay, çubukta sıra ve kaynak gösterilir.
 
-### 13.6 Takip soruları
+### 13.9 Takip soruları
 
 Takip sözleşmesi 4C'dir (önceki doğrulanmış görev kümesi ya da onun bir satırı güncel yetkiyle yeniden okunur). Düzen
 sayfası yalnızca yanıt önceki kümeye ya da onun satırına dayanıyorsa önceki kullanıcı sorusunu bağlam olarak taşır
@@ -1697,11 +1813,13 @@ sayılmaz. Uçtan uca sınamalar
 açıklama sonrası istek, kısmi sonuç devamı, yetki değişikliği, talimat/yuva/HTML enjeksiyonu, zincirden sonra yeni
 konu, genel yönlendirmeden sonra Rota sorusu, İngilizce zincir ve kısaltılmış uzun konuşmayı kapsar.
 
-### 13.7 Günlük ve telemetri
+### 13.10 Günlük ve telemetri
 
 Tur başına **tek** içeriksiz tamamlanma satırı (`ai.grounded.turn`): sonuç, seçim, `parts`, `evidence`,
-`presentation` (`mode`, `reason`, `issue`, `blocks`, `chart`, `charts`, `ms`), `usage` (girdi, çıktı, akıl yürütme belirteci
-toplamları, ilk olay süresi, `length` duruşları), varsa `escalation` (ayrı `ai.grounded.escalation` satırı kaldırıldı)
+`presentation` (`mode`, `reason`, `issue`, `blocks`, `said` söylenen önerme, `tables` çizilen tablo, `chart`, `charts`, `ms`,
+`rejected` anlatım devrinde zayıf modelin reddedilen düzeninin kodu), `usage` (girdi, çıktı, akıl yürütme belirteci
+toplamları, ilk olay süresi, `length` duruşları), varsa `escalation` (`kind`: `plan`|`select`|`narrate`, `reason`,
+`models`, `toolsReused`, `outcome`; ayrı `ai.grounded.escalation` satırı kaldırıldı)
 ve tur listesi (`purpose: "compose"` ile bütçe). Bağlam günlük temizleyicisinin nesne başına 25 alan sınırının
 içindedir (sınama korur). Soru, yanıt, kayıt adı, kanıt, Sicil, anahtar ya da model çıktısı günlüğe yazılmaz;
 reddedilen düzen metni de yazılmaz. Sayaçlar: `grounding.presentation` (`composed`, `narrative`, `unavailable`, `byReason`, `charts`).
@@ -1711,13 +1829,91 @@ nedenlerini ayırır. Metin sınırında anlatım teslim edilmişse `narrative` 
 `charts`, başarılı çizilen çit sayısıdır; reddedilen ya da kanıtına bağlı olmayan grafikler sayılmaz. Her belirteç
 metriği ancak bütün model turları bildirdiyse toplanır; eksik metrik `null` kalır. Tur izi kesilmişse toplam tam görünmez.
 
+Konsolda aynı bağlamdan kurulan kısa insan satırı yazılır (`MERGEN_ROTA_LOG_FORMAT`: `json`, `summary`, `both`;
+ayarsız terminalde `summary`, yönlendirilmiş çıktıda `json`; ayrıntı ve örnekler Sistem Yönetimi §15.1). Önceki
+yoğun satır ile karşılaştırma:
+
+```
+önce:  [mergen-rota] {"timestamp":"…","level":"INFO","component":"AI","operation":"ai.grounded.turn","code":"AI_GROUNDED_TURN",…,"context":{"outcome":"failed",…,"rounds":[{"purpose":"plan","profile":"chat.tools","model":"Qwen3-Next-80B-A3B-Instruct",…}, … sekiz tur …]}}
+sonra: [mergen-rota] AI FAIL failed 7.1s | Qwen3-Next-80B-A3B-Instruct | rounds 5: plan, declaration, tools, select, repair | tools 1 | evidence 0 | 4D - | 60eda636
+```
+
 İşletim anahtarı: `MERGEN_ROTA_AI_ANSWER_COMPOSITION` (varsayılan `true`; geçersiz değer güvenle `false` sayılır ve
 yapılandırma uyarısı verir). Kapalıyken model turu yoktur; 4C belirlenimci anlatımı aynen çalışır.
 
-### 13.8 Nitelendirme — `scripts/answer-composition-qualification.mjs`
+### 13.11 Nitelendirme — `scripts/answer-composition-qualification.mjs`
 
-Aşağıdaki eski Haiku ölçümleri önceki serbest metin protokolüne aittir; kapalı kaynak seçimi protokolünün model kabulü değildir.
-Yeni protokol için `dry` aşamaları belirlenimci kontrol sağlar; canlı model kabulü ayrıca yapılmalıdır.
+**Kanıta bağlı anlatımın küçük kapısı (`COMPOSITION_QUALIFICATION_STAGE=phase4d`).** Sekiz vaka; her vaka birden çok
+sözleşme özelliğini birlikte sınar. Anlatım vakaları planlamayı betikler ve yalnızca anlatım turunu modele gönderir;
+iki planlayıcı vakası (`planner: 'model'`) üretimin gerçek planlayıcı yönergesini, `rota_plan` aracını ve kataloğunu
+da modele gönderir. Derin modele giden her çağrı modele gitmez, devir sayılır ve kapıyı düşürür. İlk altyapı
+hatasında kalan vakalar koşmaz. `COMPOSITION_QUALIFICATION_CASE=<vaka>` tek vakayı (ör. kodu değişen vakayı) yeniden
+ölçer.
+
+```
+COMPOSITION_QUALIFICATION_PROVIDER=claude COMPOSITION_QUALIFICATION_STAGE=phase4d \
+  PLANNER_CLAUDE_LOG=cagri.jsonl PLANNER_CLAUDE_MAX_CALLS=12 PLANNER_CLAUDE_MAX_UNCACHED=150000 \
+  node --test scripts/answer-composition-qualification.mjs
+```
+
+**Haiku 4.5 ölçümü (30 Ekim 2026, kanıta bağlı anlatım protokolü):** `claude-haiku-4-5-20251001`, çaba `low`,
+düşünme kapalı (`MAX_THINKING_TOKENS=0`; her çağrıda düşünme belirteci 0, düşünme bloğu 0), her çağrıda tek API
+çağrısı. Haiku yalnızca vekil zayıf modeldir; **Qwen üretim kabulünü kanıtlamaz.**
+
+| Vaka | Sınanan | Model çağrısı | Sonuç |
+| --- | --- | ---: | --- |
+| `p4d-overdue` | Örnek A: sayım + en uzun gecikme + tablo | 1 anlatım | composed, 3 önerme, çubuk grafik |
+| `p4d-my-tasks` | çok satırlı liste, insan girişi | 1 anlatım | composed, 3 önerme |
+| `p4d-status-chart` | "grafik olarak göster": dağılım + grafik | 1 anlatım | composed, 3 önerme, grafik |
+| `p4d-record` | tek kayıt sorgusu | 0 | narrative `NO_CHOICE` (tasarım gereği) |
+| `p4d-multipart` | iki bölümlü soru | 1 anlatım | composed, 3 önerme |
+| `p4d-followup` | önceki kümeye takip ("bunların") | 1 anlatım (bağlam turu betikli) | composed |
+| `p4d-planner-distribution` | Örnek B: "görevlerimin dağılımını göster", gerçek planlayıcı | 1 plan + 1 anlatım | durum dağılımı planlandı; composed, halka grafik |
+| `p4d-planner-overdue` | Örnek A, gerçek planlayıcı | 1 plan + 1 anlatım | composed, 3 önerme, grafik (aşağıdaki düzeltmeden sonra) |
+
+İlk koşu: 9 çağrı, 7/8 vaka. Başarısız vakada Haiku "Kaç gecikmiş görevim var ve hangileri?" sorusunu doğru süzgeç ve
+sırayla ama `tasks.total` ölçüsü olmadan planladı; sayfada sayım olmadığı için yanıt "kaç" sorusunu söylemedi (yanlış
+olgu yoktu). Düzeltme yapısaldır: atfedilen `rota_task_search` kanıtı nüfusun tamamıysa (tam, kesilmemiş, imleçsiz,
+döndürülen = kesin toplam) sunucu o kanıtın zarf sayısını sayım önermesi yapar (`populationSizes` →
+`populationProposition`). Planlayıcı yönergesi değişmedi. Tanı için aynı vakanın bir koşusu (2 çağrı, plan içeriği
+yalnızca yerel tanı çıktısında görüldü) ve düzeltmeden sonra yalnızca o vakanın yeniden ölçümü (2 çağrı) yapıldı:
+8/8 vaka, Derin devri 0, geri dönüş 0 (`NO_CHOICE` dışında).
+
+| Ölçüm | Ana koşu (9 çağrı) | Tanı + yeniden ölçüm (4 çağrı) | Toplam (13 çağrı) |
+| --- | ---: | ---: | ---: |
+| Önbelleksiz girdi belirteci | 9.957 | 2.770 | 12.727 |
+| Önbelleğe yazılan girdi | 36.672 | 0 | 36.672 |
+| Önbellekten okunan girdi | 34.381 | 71.058 | 105.439 |
+| Çıktı belirteci | 1.328 | 626 | 1.954 |
+| Düşünme belirteci | 0 | 0 | 0 |
+
+**Zengin analist anlatımı yeniden ölçümü (başlık, not kutusu, yeni önerme türleri; yönerge değiştiği için yalnızca
+anlatım vakaları).** İlk koşu 5 çağrı: 3/5 vaka; `p4d-overdue` ve `p4d-multipart` düzeni yapısal olarak reddedildi
+(güvenli geri dönüş; Derin çağrısı nitelendirmede engellendi). Tek tanı çağrısı (ilk tanı denemesinin çıktısı kesildiği
+için bir çağrı daha) nedeni gösterdi: Haiku vurgulamak istediği önermeyi hem paragrafa hem not kutusuna koymuştu
+(`DUPLICATE_PROPOSITION`). Düzeltme yapısaldır: paragrafta söylenip sonraki not kutusunda vurgulanan önerme yalnızca
+kutuda kalır (kimlik kümesi daralır, içerik eklenmez; başka her yineleme reddedilir); yönergeye "o önermeyi paragrafta
+tekrar etme" eklendi. Yalnızca iki vakanın yeniden ölçümü (2 çağrı): ikisi de composed.
+
+| Vaka (son ölçüm) | Başlık | Paragraftaki önerme | Not kutusu | Grafik |
+| --- | --- | ---: | ---: | --- |
+| `p4d-overdue` | var | 4 | 0 | çubuk |
+| `p4d-my-tasks` | var | 3 | 0 | — |
+| `p4d-status-chart` | var | 4 | 0 | halka |
+| `p4d-multipart` | var | 4 | 1 | çubuk |
+| `p4d-followup` (sayfada tek önerme) | — | 1 | 0 | — |
+
+İki planlayıcı vakası önceki anlatım yönergesiyle ölçüldü; planlayıcı yönergesi bu adımda değişmedi ve yeniden
+ölçülmedi. Bütün çalışmadaki toplam Haiku kullanımı: **22 çağrı**, önbelleksiz girdi **29.152**, önbelleğe yazılan
+**36.672**, önbellekten okunan **105.439**, çıktı **3.357**, düşünme **0** belirteç; CLI ölçümüyle toplam ~49 sn.
+
+Anlatım turu: girdi 1.274–1.925 belirteç (önerme sayfası + sabit yönerge; zengin sayfada ~1,6–1,9 bin), çıktı 74–210
+belirteç, CLI üzerinden uçtan uca 1,7–2,5 sn (CLI başlatma payı dâhil). Planlayıcı turu: ~35,5 bin belirteçlik sabit önek
+(yönerge + plan aracı + katalog; ilk çağrıda önbelleğe yazıldı, sonrakilerde okundu), çıktı 202–328 belirteç,
+3,6–5,1 sn. Deterministik sınamaların yaptığı işler (şema, önerme hesabı, yetki, tablo/grafik aritmetiği) modele
+yaptırılmadı.
+
+Aşağıdaki eski Haiku ölçümleri önceki serbest metin protokolüne aittir; güncel protokolün model kabulü değildir.
 
 Vakalar üretimdeki asistan hizmetinden geçer (konuşma kaydı, salt okunur araçlar, doğrulayıcılar, kalıcı kanıt, sayfa,
 düzen doğrulayıcısı, çizici); planlama turları sabit `rota_plan` ile belirlenimcidir, yalnızca düzen turu modele
@@ -1758,7 +1954,7 @@ oranı 12/15'e indirdi. Tanı çağrıları ve bütün yinelemeler dâhil oturum
 eksik bölüm hakkında yorum) yönergeye ve doğrulayıcıya yansıtıldı. Haiku yalnızca vekil bir zayıf modeldir; **Qwen
 üretim kabulünü kanıtlamaz.**
 
-### 13.9 Kurum içi kabul yolu
+### 13.12 Kurum içi kabul yolu
 
 Aynı vakalar kurum içi uçla, üretim sağlayıcı bağdaştırıcısıyla ve Standart profille koşar (uygulama dizininden
 çalıştırılınca `.env.local` okunur; kabukta verilen değer önceliklidir):
@@ -1778,13 +1974,19 @@ sınanır. Güncel 12 vaka 12 düzen turu kullanır; 3 vaka tasarım gereği `NO
 başarısızlığı 0, düzen turu bitişlerinde `length` 0 ve raporun `composed`/`narrative` dağılımının ve ret
 nedenlerinin incelenmesi (geri dönüşler tasarım gereği doğru yanıttır, ancak doğal düzen oranı ürün kalitesini belirler).
 
-### 13.10 Bilinen sınırlar
+### 13.13 Bilinen sınırlar
 
-- Model yalnızca doğrulanmış sunucu bloklarını seçebilir; serbest özet, yorum, başlık ve öneri üretemez.
-  Daha geniş doğal dil yüzeyi, keyfî düzyazıyı denetleyen sözcük kurallarıyla açılamaz.
-- Düzeltme turu yoktur: geçersiz düzen doğrudan anlatıma döner (zayıf modelde geri dönüş oranı artar, gecikme
-  sınırlı kalır).
+- Model kelime yazmaz: anlatımın ifade gücü sunucunun önerme türleriyle sınırlıdır (sayım, en büyük/en küçük,
+  çoğunluk/en büyük grup, toplam, döküm ve yönlendirme). Eğilim, iki dönem karşılaştırması ya da neden-sonuç gibi
+  ilişkiler için önce sunucuda belirlenimci önerme türü eklenmelidir; serbest model metni sözcük kurallarıyla açılamaz.
+- Önerme türetimi görev araçlarına (`rota_task_search` satırları, `rota_task_analytics` grupları) odaklıdır; diğer
+  araçların ayrıntıları belirlenimci cümle olarak kalır. Tek başına tek önerme (ör. yalnızca sayım) model turu açmaz.
+- Düzeltme turu yoktur: geçersiz düzen en çok bir kez Derin anlatımına, o da olmazsa belirlenimci anlatıma döner.
+- Planlayıcının anlam hatası (geçerli ama yanlış niyetli plan, ör. dağılım sorusuna liste) yapısal olarak
+  saptanamaz; böyle bir plan doğrulanmış ama soruya uymayan bir yanıt üretebilir. Bunun önlemi daha dar şema ve
+  yönergedir, sözcük sınıflandırması değildir.
 - Grafik tek dizili çubuk ve halka ile sınırlıdır; zaman serisi ve çok dizili karşılaştırma yoktur.
 - Kişi sonuç kümeleri 4C sözleşmesi gereği takip göndergesi değildir.
-- Düzen bir model turu ekler (Haiku/CLI ölçümünde ortanca 2,6 sn); kurum içi gecikme ölçülmedi.
+- Anlatım bir model turu ekler (Haiku/CLI ölçümünde 2,0–2,4 sn, girdi ~1,3–1,6 bin belirteç); kurum içi Qwen gecikmesi
+  ölçülmedi. Önceden `NO_CHOICE` olan sayım + liste yanıtları artık anlatım turu açar.
 - Odak görünümü yalnızca masaüstündedir ve panel kapanınca sıfırlanır.

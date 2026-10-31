@@ -587,6 +587,8 @@ export function recordEmptyCompletion({ profile, model = null, diagnostics = {} 
     code: 'AI_EMPTY_COMPLETION',
     message: 'Model görünür bir yanıt üretmeden durdu.',
     durationMs: millis(diagnostics.providerMs),
+    summary: `AI WARN empty completion | ${isKnownAiProfile(profile) ? profile : '-'} ${safeModel(model) || '-'} | finish ${safeFinishReason(diagnostics.finishReason) || '-'}`
+      + ` | ${seconds(millis(diagnostics.providerMs))}${diagnostics.reasoningReceived === true ? ' | reasoning only' : ''}`,
     context: {
       profile: isKnownAiProfile(profile) ? profile : null,
       model: safeModel(model),
@@ -660,7 +662,9 @@ export function recordSemanticRetrieval({ status, failure = null, serviceFailure
   }
 }
 
-const ESCALATION_REASONS = new Set(['SYNTHESIS_REQUIRED', 'VERIFICATION_FAILED', 'LENGTH', 'EMPTY_COMPLETION', 'REQUEST_DECLARATION']);
+const ESCALATION_REASONS = new Set(['SYNTHESIS_REQUIRED', 'VERIFICATION_FAILED', 'LENGTH', 'EMPTY_COMPLETION', 'REQUEST_DECLARATION', 'NARRATION_FAILED']);
+/** Devrin biçimi: temiz yeniden planlama, hazır kanıtla seçim ya da doğrulanmış yanıtın anlatımı. */
+const ESCALATION_KINDS = new Set(['plan', 'select', 'narrate']);
 const ESCALATION_OUTCOMES = new Set(['grounded', 'clarification', 'abstained', 'not_found', 'unavailable', 'general_redirect', 'failed', 'timeout', 'error']);
 
 /**
@@ -669,7 +673,7 @@ const ESCALATION_OUTCOMES = new Set(['grounded', 'clarification', 'abstained', '
  * kullanılmadığı ve son sonuç (içerik taşımaz). Ayrı günlük satırı yazılmaz:
  * dönen içeriksiz özet turun TEK tamamlanma kaydına (`ai.grounded.turn`) eklenir.
  */
-export function recordGroundedEscalation({ requestedMode, models = [], reason, toolsReused = false, outcome }) {
+export function recordGroundedEscalation({ requestedMode, models = [], reason, toolsReused = false, kind = null, outcome }) {
   const safeReason = ESCALATION_REASONS.has(reason) ? reason : 'OTHER';
   const safeOutcome = ESCALATION_OUTCOMES.has(outcome) ? outcome : 'other';
   safely(() => {
@@ -682,6 +686,7 @@ export function recordGroundedEscalation({ requestedMode, models = [], reason, t
     requestedMode: ['standard', 'deep'].includes(requestedMode) ? requestedMode : null,
     models: Object.freeze([...new Set(models.map(safeModel).filter(Boolean))].slice(0, 4)),
     reason: safeReason,
+    kind: ESCALATION_KINDS.has(kind) ? kind : null,
     toolsReused: toolsReused === true,
     outcome: safeOutcome
   });
@@ -744,7 +749,10 @@ const PRESENTATION_REASONS = new Set(['NO_CHOICE', 'LENGTH_UNAVAILABLE', 'SHEET_
 const CHART_TYPES = new Set(['bar', 'donut']);
 const SAFE_ISSUE = /^[A-Z][A-Z0-9_]{0,40}$/;
 
-/** Yanıt düzeninin içeriksiz özeti: kip, düşüş nedeni ve sınırlı doğrulama kodu, blok sayısı, grafik türü ve süre. */
+/**
+ * Yanıt düzeninin içeriksiz özeti: kip, düşüş nedeni ve sınırlı doğrulama kodu, blok sayısı, söylenen önerme
+ * ve çizilen tablo sayısı, grafik türü, süre ve (anlatım devrinde) zayıf modelin reddedilen düzeninin kodu.
+ */
 function presentationSummary(value) {
   if (!value || typeof value !== 'object' || !PRESENTATION_MODES.has(value.mode)) return null;
   return {
@@ -752,10 +760,52 @@ function presentationSummary(value) {
     reason: PRESENTATION_REASONS.has(value.reason) ? value.reason : null,
     issue: SAFE_ISSUE.test(String(value.issue ?? '')) ? value.issue : null,
     blocks: safeCount(value.blocks),
+    said: value.mode === 'composed' ? safeCount(value.said) ?? 0 : 0,
+    tables: value.mode === 'composed' ? safeCount(value.tables) ?? 0 : 0,
+    notes: value.mode === 'composed' ? safeCount(value.notes) ?? 0 : 0,
+    titled: value.mode === 'composed' && value.titled === true,
     chart: CHART_TYPES.has(value.chart) ? value.chart : null,
     charts: value.mode === 'composed' ? safeCount(value.charts) ?? 0 : 0,
-    ms: millis(value.ms)
+    ms: millis(value.ms),
+    rejected: SAFE_ISSUE.test(String(value.rejected ?? '')) ? value.rejected : null
   };
+}
+
+const TURN_STATUS = Object.freeze({ grounded: 'OK', clarification: 'OK', abstained: 'OK', not_found: 'OK', general_redirect: 'OK', unavailable: 'WARN', failed: 'FAIL', error: 'FAIL' });
+const seconds = (ms) => (Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)}s` : '?');
+
+/**
+ * Kanıta dayalı turun KISA insan satırı; yalnızca içeriksiz bağlamdan kurulur (soru, yanıt, kayıt ya da
+ * kimlik içermez). Örnek: `AI OK grounded 6.8s | Qwen -> gemma (plan: EMPTY_COMPLETION) | rounds 5: plan,
+ * declaration, retry -> plan, compose | tools 1 | evidence 1 | 4D composed (say 2, table 1, chart bar, 0.7s)`.
+ */
+export function groundedTurnSummary(context, durationMs) {
+  const rounds = Array.isArray(context?.rounds) ? context.rounds : [];
+  const models = [];
+  for (const round of rounds) {
+    const model = round.model || round.configuredModel;
+    if (model && models.at(-1) !== model) models.push(model);
+  }
+  const escalation = context.escalation;
+  const route = `${models.join(' -> ') || '-'}${escalation ? ` (${escalation.kind || 'escalated'}: ${escalation.reason}${escalation.outcome && escalation.outcome !== context.outcome ? `, ${escalation.outcome}` : ''})` : ''}`;
+  const steps = [];
+  rounds.forEach((round, index) => {
+    const label = `${index && round.profile !== rounds[index - 1].profile ? '-> ' : ''}${round.purpose || '?'}`;
+    const last = steps.at(-1);
+    if (last && last.label === label) last.count += 1;
+    else steps.push({ label, count: 1 });
+  });
+  const trace = steps.map(({ label, count }) => (count > 1 ? `${label} x${count}` : label)).join(', ');
+  const presentation = context.presentation;
+  const narration = !presentation ? '4D -'
+    : presentation.mode === 'composed'
+      ? `4D composed${presentation.rejected ? ` after ${presentation.rejected}` : ''} (${presentation.titled ? 'title, ' : ''}say ${presentation.said}, table ${presentation.tables}${presentation.notes ? `, note ${presentation.notes}` : ''}`
+        + `${presentation.chart ? `, chart ${presentation.chart}` : ''}${presentation.ms != null ? `, ${seconds(presentation.ms)}` : ''})`
+      : presentation.mode === 'narrative' && presentation.reason === 'NO_CHOICE' ? '4D narrative (no choice)'
+        : `4D ${presentation.mode === 'narrative' ? 'fallback narrative' : presentation.mode} (${[presentation.reason, presentation.issue].filter(Boolean).join(': ') || '-'})`;
+  const usage = context.usage?.input != null ? ` | tokens ${context.usage.input} in/${context.usage.completion ?? '?'} out` : '';
+  return `AI ${TURN_STATUS[context.outcome] || 'FAIL'} ${context.outcome}${context.code ? ` ${context.code}` : ''} ${seconds(durationMs)} | ${route} | rounds ${rounds.length}${trace ? `: ${trace}` : ''}`
+    + ` | tools ${context.toolCalls ?? 0}${context.toolFailures ? ` (${context.toolFailures} failed)` : ''} | evidence ${context.evidence ?? 0} | ${narration}${usage}`;
 }
 const FINISH_REASONS = new Set(['stop', 'end_turn', 'eos', 'stop_sequence', 'length', 'content_filter', 'tool_calls', 'function_call', 'error']);
 export const safeFinishReason = (value) => FINISH_REASONS.has(value) ? value : null;
@@ -789,17 +839,28 @@ export function recordGroundedTurn(trace = {}) {
     requestedMode: ['standard', 'deep'].includes(trace.escalation.requestedMode) ? trace.escalation.requestedMode : null,
     models: (Array.isArray(trace.escalation.models) ? trace.escalation.models : []).map(safeModel).filter(Boolean).slice(0, 4),
     reason: ESCALATION_REASONS.has(trace.escalation.reason) ? trace.escalation.reason : 'OTHER',
+    kind: ESCALATION_KINDS.has(trace.escalation.kind) ? trace.escalation.kind : null,
     toolsReused: trace.escalation.toolsReused === true,
     outcome: ESCALATION_OUTCOMES.has(trace.escalation.outcome) ? trace.escalation.outcome : 'other'
   } : null;
-  safely(() => logEvent({
-    severity: EVENT_SEVERITIES.INFO,
-    component: COMPONENTS.AI,
-    operation: 'ai.grounded.turn',
-    code: 'AI_GROUNDED_TURN',
-    message: 'Rota verisi turu tamamlandı.',
-    durationMs: millis(trace.durationMs),
-    context: {
+  safely(() => {
+    const context = groundedTurnContext(trace, { outcome, presentation, escalation, rounds, total });
+    logEvent({
+      severity: EVENT_SEVERITIES.INFO,
+      component: COMPONENTS.AI,
+      operation: 'ai.grounded.turn',
+      code: 'AI_GROUNDED_TURN',
+      message: 'Rota verisi turu tamamlandı.',
+      durationMs: millis(trace.durationMs),
+      summary: groundedTurnSummary(context, millis(trace.durationMs)),
+      context
+    });
+  });
+}
+
+/** Turun tek tamamlanma kaydının içeriksiz bağlamı (JSON satırı ve kısa insan satırı aynı bağlamdan kurulur). */
+function groundedTurnContext(trace, { outcome, presentation, escalation, rounds, total }) {
+  return {
       outcome,
       code: isAiErrorCode(trace.code) ? trace.code : null,
       selectedBy: ['server', 'model'].includes(trace.selectedBy) ? trace.selectedBy : null,
@@ -839,6 +900,5 @@ export function recordGroundedTurn(trace = {}) {
         completion: safeCount(round?.completion),
         reasoning: safeCount(round?.reasoning)
       }))
-    }
-  }));
+  };
 }
