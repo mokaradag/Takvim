@@ -380,13 +380,6 @@ export function validateComposition(composition, response) {
   const normalized = emphasized.size ? blocks.map((block) => (block.type === 'say' ? { ...block, items: block.items.filter((id) => !emphasized.has(id)) } : block))
     .filter((block) => block.type !== 'say' || block.items.length) : blocks;
   if (!normalized.length || ['chart', 'note'].includes(normalized[0].type)) return fail('LEAD_REQUIRED');
-  // Aşama 4D anlatımı: doğrulanmış önerme varsa düzen analist paragrafı içerir (yalnızca tablo/başlık 4C'dir) ve sayfanın
-  // izin verdiği ölçüde zengindir: en az MIN_NARRATED_PROPOSITIONS önerme (sayfada daha azı varsa hepsi). Önerme yoksa kısa kalır.
-  const available = render.propositions?.size || 0;
-  if (available) {
-    const inSay = normalized.some((block) => block.type === 'say' && block.items.some((id) => render.propositions.has(id)));
-    if (!inSay || usedPropositions.size < Math.min(MIN_NARRATED_PROPOSITIONS, available)) return fail('NARRATION_REQUIRED');
-  }
   // Çizici tablo ayrıntılarını yerinde, kalanları sonda ekler; onlar da son başlığın kapsamına uymalıdır.
   const locatedDetails = new Set(blocks.filter((block) => block.type === 'details').map((block) => block.source));
   for (const table of render.tables.values()) if (usedSources.has(table.id)) locatedDetails.add(table.detail);
@@ -394,6 +387,13 @@ export function validateComposition(composition, response) {
     if (locatedDetails.has(detail.id) || usedPropositions.has(detail.covers)) continue;
     const scope = owned([detail.part]);
     if (scope) return fail(scope);
+  }
+  // Her bölüm kendi analist paragrafını ve mevcut önerme sayısına göre asgari anlatımını alır.
+  const propositions = [...(render.propositions?.values() || [])];
+  for (const part of new Set(propositions.map((item) => item.part))) {
+    const available = propositions.filter((item) => item.part === part);
+    const inSay = normalized.some((block) => block.type === 'say' && block.items.some((id) => render.propositions.get(id)?.part === part));
+    if (!inSay || available.filter((item) => usedPropositions.has(item.id)).length < Math.min(MIN_NARRATED_PROPOSITIONS, available.length)) return fail('NARRATION_REQUIRED');
   }
   return { ok: true, blocks: normalized };
 }

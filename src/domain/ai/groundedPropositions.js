@@ -1,4 +1,4 @@
-import { escapedFactText } from './evidenceFacts.js';
+import { canonicalGroupLabel, escapedFactText } from './evidenceFacts.js';
 import { turkishPossessiveSuffix } from './evidenceNarrative.js';
 
 /**
@@ -162,6 +162,15 @@ function ownerParts(filters, locale) {
 const GROUP_NOUNS = Object.freeze({ status: ['Durumlara göre', 'By status'], priority: ['Önceliğe göre', 'By priority'], project: ['Projelere göre', 'By project'],
   deadline: ['Termine göre', 'By deadline'], target_month: ['Termin ayına göre', 'By deadline month'] });
 
+/** Desteklenmeyen birim birimsiz iddiaya dönüşmez. Etiket/alan adı yorumlanmaz. */
+function numericValue(value, semantic, locale) {
+  const shown = number(value, locale);
+  if (semantic.measure === 'percent' && semantic.unit == null) return locale === 'en' ? `${shown}%` : `%${shown}`;
+  if (semantic.measure === 'days' && semantic.unit == null) return `${shown} ${locale === 'en' ? (value === 1 ? 'day' : 'days') : 'gün'}`;
+  if (semantic.measure === 'hours' && semantic.unit === 'hours') return `${shown} ${locale === 'en' ? (value === 1 ? 'hour' : 'hours') : 'saat'}`;
+  return null;
+}
+
 /** Grubun konumu: "**Tamamlandı** durumunda", "have **Orta** priority". */
 function groupPlace(groupBy, label, locale) {
   if (locale === 'en') {
@@ -300,7 +309,7 @@ function soleRow(described, facts, target) {
   return title && described.rows.filter((row) => row.title === title).length === 1 ? title : null;
 }
 
-function extremeSentence({ kind, metric, type, label, value, owner, locale }) {
+function extremeSentence({ kind, metric, type, label, value, owner, locale, semantic }) {
   const en = locale === 'en';
   const named = owner ? [' (', v(owner), ')'] : [];
   if (metric === 'task.overdueDays') {
@@ -315,7 +324,7 @@ function extremeSentence({ kind, metric, type, label, value, owner, locale }) {
     return sentence(en ? [`The ${kind === 'minimum' ? 'earliest' : 'latest'} deadline is `, v(day(value, locale)), ...named, '.']
       : [`En ${kind === 'minimum' ? 'erken' : 'geç'} termin `, v(day(value, locale)), ...named, '.']);
   }
-  const shown = type === 'date' ? day(value, locale) : number(value, locale);
+  const shown = type === 'date' ? day(value, locale) : numericValue(value, semantic, locale);
   if (en) return sentence([`The ${type === 'date' ? (kind === 'minimum' ? 'earliest' : 'latest') : (kind === 'minimum' ? 'lowest' : 'highest')} “`, t(label), '” value is ', v(shown), ...named, '.']);
   return sentence(['“', t(label), `” sütununda en ${type === 'date' ? (kind === 'minimum' ? 'erken tarih' : 'geç tarih') : (kind === 'minimum' ? 'düşük değer' : 'yüksek değer')} `, v(shown), ...named, '.']);
 }
@@ -346,7 +355,8 @@ export function tablePropositions({ group, described, distribution, locale, popu
     const whose = ownerParts(filters, locale);
     add('total', TASK_TOOLS.has(group.tool) ? taskCountSentence(filters, total, locale, { total: true }) : null);
     const max = Math.max(...facts.map((fact) => fact.value));
-    const owner = soleRow(described, facts, max);
+    const ownerTitle = soleRow(described, facts, max);
+    const owner = ownerTitle == null ? null : canonicalGroupLabel(facts.find((fact) => fact.value === max), ownerTitle, locale);
     // Tek dolu grup (bütün görevler aynı grupta) çoğunluk değildir: toplam ve döküm onu söyler.
     if (owner && max < total) {
       const share = sharePercent(max, total);
@@ -379,7 +389,7 @@ export function tablePropositions({ group, described, distribution, locale, popu
       }
     }
     if (described.rows.length <= MAX_BREAKDOWN_GROUPS) {
-      const items = described.rows.flatMap((row, position) => [...(position ? [', '] : []), t(row.title), ' ', v(number(facts[position].value, locale))]);
+      const items = described.rows.flatMap((row, position) => [...(position ? [', '] : []), t(canonicalGroupLabel(facts[position], row.title, locale)), ' ', v(number(facts[position].value, locale))]);
       add('breakdown', sentence([`${GROUP_NOUNS[groupBy][lang(locale)]}: `, ...items, '.']));
     }
     return out;
@@ -398,7 +408,9 @@ export function tablePropositions({ group, described, distribution, locale, popu
     const sorted = [...values].sort((left, right) => (type === 'number' ? left - right : left.localeCompare(right)));
     if (sorted[0] === sorted.at(-1)) continue;
     const metric = facts[0].semantic?.metric || null;
-    if (!facts.every((fact) => fact.semantic?.metric === metric && fact.semantic?.unit === facts[0].semantic?.unit)) continue;
+    if (!facts.every((fact) => fact.semantic?.metric === metric && fact.semantic?.unit === facts[0].semantic?.unit && fact.semantic?.measure === facts[0].semantic?.measure)) continue;
+    const semantic = facts[0].semantic || {};
+    if (type === 'number' && numericValue(values[0], semantic, locale) == null) continue;
     const overdue = metric === 'task.overdueDays';
     if (type === 'date') {
       add('minimum', extremeSentence({ kind: 'minimum', metric, type, label: header.label, value: sorted[0], owner: soleRow(described, facts, sorted[0]), locale }));
@@ -410,10 +422,11 @@ export function tablePropositions({ group, described, distribution, locale, popu
     }
     for (const kind of ['maximum', 'minimum']) {
       const value = kind === 'maximum' ? sorted.at(-1) : sorted[0];
-      add(kind, extremeSentence({ kind, metric, type, label: header.label, value, owner: soleRow(described, facts, value), locale }), overdue && kind === 'maximum' ? 'warning' : 'info');
+      add(kind, extremeSentence({ kind, metric, type, label: header.label, value, owner: soleRow(described, facts, value), locale, semantic }), overdue && kind === 'maximum' ? 'warning' : 'info');
     }
     if (values.length >= 3) {
-      const mean = number(Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10, locale);
+      const value = Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10;
+      const mean = overdue ? number(value, locale) : numericValue(value, semantic, locale);
       add('average', overdue
         ? sentence(en ? ['The average delay is ', v(`${mean} days`), '.'] : ['Gecikmelerin ortalaması ', v(`${mean} gün`), '.'])
         : sentence(en ? ['The average “', t(header.label), '” is ', v(mean), '.'] : ['“', t(header.label), '” ortalaması ', v(mean), '.']));

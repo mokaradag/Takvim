@@ -14,8 +14,8 @@ import { findElement, mountComponent } from './helpers/clientComponentHarness.mj
 const { createAssistantStreamDecoder, loadAssistantConversationRequest } = await import('../src/features/ai/assistant/assistantClient.js');
 const { createAssistantController, turnsFromMessages } = await import('../src/features/ai/assistant/assistantController.js');
 const { AssistantTurn } = await import('../src/features/ai/assistant/AssistantThread.jsx');
-const { renderInline } = await import('../src/features/ai/assistant/AssistantMarkdown.jsx');
-const { assistantMarkdownText, parseAssistantMarkdown, parseInline } = await import('../src/features/ai/assistant/assistantMarkdown.js');
+const { AssistantMarkdown, renderInline } = await import('../src/features/ai/assistant/AssistantMarkdown.jsx');
+const { assistantMarkdownText, createAssistantMarkdownParser, parseAssistantMarkdown, parseInline } = await import('../src/features/ai/assistant/assistantMarkdown.js');
 const presentation = await import('../src/features/ai/assistant/assistantPresentation.js');
 const { GROUNDING_FAILURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
 
@@ -177,6 +177,92 @@ async function readyController() {
 async function drain() {
   for (let round = 0; round < 6; round += 1) await immediate();
 }
+
+test('callouts require explicit grounded authorization for display, incremental parsing and copy', () => {
+  const text = '> [!warning]\n> Verified text';
+  for (const rotaData of [undefined, false, 'true', true]) {
+    const trusted = rotaData === true;
+    const options = { rotaData };
+    const [quote] = parseAssistantMarkdown(text, options);
+    assert.equal(quote.tone, trusted ? 'warning' : undefined);
+    assert.equal(assistantMarkdownText(text, options).includes('[!warning]'), !trusted);
+    const parse = createAssistantMarkdownParser(options);
+    parse('Earlier\n\n' + text);
+    assert.deepEqual(parse('Earlier\n\n' + text + ' continued'), parseAssistantMarkdown('Earlier\n\n' + text + ' continued', options));
+    const view = mountComponent(AssistantMarkdown, { text, rotaData });
+    const block = findElement(view.output, (node) => node.props?.block?.type === 'quote');
+    const rendered = mountComponent(block.type.type, block.props);
+    const element = findElement(rendered.output, (node) => node.type === 'blockquote');
+    assert.equal(element.props.className, trusted ? 'assistant-md-callout is-warning' : undefined);
+    rendered.unmount();
+    view.unmount();
+  }
+  const view = mountComponent(AssistantMarkdown, { text, rotaData: true });
+  view.render({ text, rotaData: false });
+  assert.equal(findElement(view.output, (node) => node.props?.block?.type === 'quote').props.block.tone, undefined, 'same text must be reparsed when authorization changes');
+  view.unmount();
+});
+
+test('grounded authorization survives streaming, completion, history reload, reconciliation and an empty retry', async () => {
+  const text = '> [!warning]\n> Verified text';
+  for (const rotaData of [false, true]) {
+    const { controller, api, state } = await readyController();
+    controller.send('Soru');
+    const [run] = api.turns;
+    run.emit('accepted', { conversation, userMessage: { ...userMessage, turnId: run.input.turnId }, context: {}, rotaData });
+    run.emit('delta', { text });
+    assert.equal(state().active.turns[0].answer.rotaData, rotaData);
+    api.loadAssistantConversationRequest = async () => ({ ok: true, conversation, messages: [{ ...userMessage, turnId: run.input.turnId }] });
+    controller.newConversation();
+    await controller.openConversation(CONVERSATION_ID);
+    assert.equal(state().active.turns[0].answer.rotaData, rotaData, 'reattached streaming answer keeps its authorization');
+    const saved = { ...assistantMessage, content: text, rotaData, replyToId: userMessage.id };
+    run.resolve({ ok: true, done: { conversation, assistantMessage: saved } });
+    await drain();
+    const completed = state().active.turns[0].answer;
+    assert.equal(completed.rotaData, rotaData);
+    const reloaded = turnsFromMessages([userMessage, saved])[0].answer;
+    assert.equal(reloaded.rotaData, rotaData);
+    const view = mountComponent(AssistantTurn, { turn: state().active.turns[0] });
+    assert.equal(findElement(view.output, (node) => node.type === AssistantMarkdown).props.rotaData, rotaData);
+    const copy = findElement(view.output, (node) => node.type?.name === 'CopyAnswerButton');
+    assert.equal(copy.props.rotaData, rotaData);
+    view.unmount();
+    controller.dispose();
+
+    const interrupted = await readyController();
+    interrupted.controller.send('Soru');
+    const [pending] = interrupted.api.turns;
+    pending.emit('accepted', { conversation, userMessage: { ...userMessage, turnId: pending.input.turnId }, context: {}, rotaData });
+    pending.emit('delta', { text });
+    interrupted.api.loadAssistantConversationRequest = async () => ({ ok: true, conversation, messages: [userMessage, saved] });
+    pending.resolve({ ok: false, code: 'STREAM_INTERRUPTED', partial: true });
+    await drain();
+    assert.equal(interrupted.state().active.turns[0].answer.status, 'complete');
+    assert.equal(interrupted.state().active.turns[0].answer.rotaData, rotaData);
+    interrupted.controller.dispose();
+
+    const retry = await readyController();
+    retry.controller.send('Soru');
+    const [first] = retry.api.turns;
+    first.emit('accepted', { conversation, userMessage: { ...userMessage, turnId: first.input.turnId }, context: {}, rotaData });
+    first.emit('delta', { text });
+    first.resolve({ ok: false, code: 'STREAM_INTERRUPTED', partial: true });
+    await drain();
+    assert.equal(retry.controller.retry(retry.state().active.turns[0].key).ok, true);
+    retry.api.turns[1].resolve({ ok: false, code: 'AI_BUSY' });
+    await drain();
+    assert.equal(retry.state().active.turns[0].answer.content, text);
+    assert.equal(retry.state().active.turns[0].answer.rotaData, rotaData);
+    assert.equal(retry.controller.retry(retry.state().active.turns[0].key).ok, true);
+    retry.controller.stop();
+    assert.equal(retry.state().active.turns[0].answer.rotaData, rotaData, 'stopping an empty retry restores the previous answer authorization');
+    retry.api.turns[2].resolve({ ok: false, code: 'REQUEST_CANCELLED', cancelled: true });
+    await drain();
+    assert.equal(retry.state().active.turns[0].answer.rotaData, rotaData);
+    retry.controller.dispose();
+  }
+});
 
 test('queued revise after stop clears invalidated text through cancellation', async () => {
   const { controller, api, state } = await readyController();

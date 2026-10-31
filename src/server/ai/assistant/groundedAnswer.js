@@ -1583,6 +1583,7 @@ function restartPlanning(turn, reason) {
     turn.decisionRetracted = true;
   }
   turn.route = TURN_ROUTES.UNDECIDED;
+  turn.locale = 'tr'; // Kanonik tur başlangıcındaki varsayılan; atılan planın dili taşınmaz.
   turn.repairPins.clear();
   turn.textFieldsRequired = false;
   turn.namedScope = [];

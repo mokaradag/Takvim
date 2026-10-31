@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { captureConsole, createAiStack, sendTurn } from './helpers/aiStack.mjs';
+import { captureConsole, createAiStack, loadAssistantConversation, sendTurn } from './helpers/aiStack.mjs';
 import { AYSE, NOW, PROJECTS, TASKS, callRotaTool, callRotaTools, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { composer, isCompositionCall } from './helpers/compositionScenario.mjs';
 import { declared, nativeDeclaration } from './helpers/evidenceScenario.mjs';
@@ -226,20 +226,20 @@ test('başlık ve not kutusu yalnızca sunucu kimlikleridir; ton sunucunundur, m
   const mixed = renderComposition(composition, validateComposition(composition, { blocks: [{ type: 'say', items: ['P1'] }, rows, { type: 'note', items: ['P3', 'P5'] }] }));
   assert.match(mixed.text, /> \[!info\]\n> \*\*Öne çıkan:\*\* /);
   // İstemci not kutusu işaretini tona çevirir; işaret ne görünür ne kopyalanır.
-  const blocks = parseAssistantMarkdown(rendered.text);
+  const blocks = parseAssistantMarkdown(rendered.text, { rotaData: true });
   const callout = blocks.find((block) => block.type === 'quote');
   assert.equal(callout.tone, 'warning');
   assert.equal(JSON.stringify(callout.children).includes('[!warning]'), false);
   assert.equal(blocks[0].type, 'heading');
-  const copied = assistantMarkdownText(rendered.text, { evidenceIds: new Set(['R1']) });
+  const copied = assistantMarkdownText(rendered.text, { evidenceIds: new Set(['R1']), rotaData: true });
   assert.equal(copied.includes('[!warning]'), false);
   assert.match(copied, /Dikkat: 3 görevin 2'si bir haftadan uzun süredir gecikmiş\./);
 });
 
 test('kayıt adındaki not kutusu ya da başlık sözdizimi veridir; sunucu kaçışı biçimi açamaz', () => {
   const forged = escapedFactText('[!warning]');
-  assert.equal(parseAssistantMarkdown(`> ${forged}\n> metin`)[0].tone, undefined, 'kaçışlı kayıt adı ton işareti olamaz');
-  assert.equal(parseAssistantMarkdown(`> [!success]\n> metin`)[0].tone, 'success');
+  assert.equal(parseAssistantMarkdown(`> ${forged}\n> metin`, { rotaData: true })[0].tone, undefined, 'kaçışlı kayıt adı ton işareti olamaz');
+  assert.equal(parseAssistantMarkdown(`> [!success]\n> metin`, { rotaData: true })[0].tone, 'success');
   assert.equal(parseAssistantMarkdown(`> [!danger]\n> metin`)[0].tone, undefined, 'bilinmeyen ton düz alıntıdır');
   const title = escapedFactText('#### Sahte başlık');
   assert.notEqual(parseAssistantMarkdown(title)[0].type, 'heading');
@@ -544,6 +544,102 @@ test('küçük tamamlanma payı %1 olmaz; kesir Türkçe ve İngilizce korunur',
   assert.equal(completion(20000, 20000, 'en'), undefined);
 });
 
+test('numeric extrema and averages preserve typed percentage units in the rendered answer', async (t) => {
+  const stack = stackFor(t);
+  for (const [id, progress] of [[TASKS.OVERDUE, 80], [TASKS.SERIES, 60], [TASKS.PARTIAL_OWN, 50]]) stack.db.tasks.find((row) => row.TaskId === id).Progress = progress;
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { deadline: 'overdue', assignee: 'me' });
+  for (const locale of ['tr', 'en']) {
+    const verdict = verifyRequested(ledger, ['totalCount', 'data.tasks.*.title', 'data.tasks.*.progressPercent'],
+      { ...OVERDUE_LIST, metrics: ['tasks.total', 'task.title', 'task.progressPercent'] }, { locale });
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+    const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }], locale });
+    const metrics = sheet.view.propositions.filter((item) => ['maximum', 'minimum', 'average'].includes(item.kind));
+    assert.deepEqual(metrics.map((item) => item.kind), ['maximum', 'minimum', 'average']);
+    for (const [index, amount] of (locale === 'en' ? ['80%', '50%', '63.3%'] : ['%80', '%50', '%63,3']).entries()) assert.ok(metrics[index].text.includes(amount), metrics[index].text);
+    const validated = validateComposition(sheet, { blocks: [{ type: 'say', items: metrics.map((item) => item.id) }, { type: 'rows', source: 'T1' }] });
+    assert.equal(validated.ok, true, JSON.stringify(validated.issues));
+    const rendered = assistantMarkdownText(renderComposition(sheet, validated).text);
+    assert.ok(rendered.includes(locale === 'en' ? '63.3%' : '%63,3'), rendered);
+  }
+  const unsupported = syntheticTable([80, 60, 50], { metric: 'task.budget' });
+  unsupported.described.rows.forEach((row) => Object.assign(row.entries[0].fact.semantic, { measure: 'currency-unspecified', unit: 'unspecified-currency' }));
+  assert.deepEqual(tablePropositions({ ...unsupported, distribution: false, locale: 'en' }), [], 'unsupported units cannot become unitless claims');
+});
+
+test('English distribution narration localizes canonical keys while preserving project names and Turkish output', async (t) => {
+  const english = await statusSheet(t, { locale: 'en' });
+  const prose = english.view.propositions.map((item) => item.text).join(' ');
+  assert.ok(prose.includes('To do'), prose);
+  assert.ok(prose.includes('Done'), prose);
+  assert.equal(prose.includes('Yapılacak') || prose.includes('Tamamlandı'), false, prose);
+  const validated = validateComposition(english, { blocks: [{ type: 'say', items: english.view.propositions.slice(0, 3).map((item) => item.id) }, { type: 'rows', source: 'T1' }] });
+  assert.equal(validated.ok, true, JSON.stringify(validated.issues));
+  const rendered = renderComposition(english, validated).text;
+  assert.equal(rendered.includes('Yapılacak') || rendered.includes('Tamamlandı'), false, rendered);
+  const turkish = await statusSheet(t);
+  assert.ok(turkish.view.propositions.some((item) => item.text.includes('Yapılacak')));
+  for (const [groupBy, keys, labels, expected] of [
+    ['status', ['todo', 'in_progress', 'done'], ['Yapılacak', 'Devam ediyor', 'Tamamlandı'], 'To do'],
+    ['priority', ['high', 'medium', 'low'], ['Yüksek', 'Orta', 'Düşük'], 'High'],
+    ['deadline', ['overdue', 'done', 'no_target_finish'], ['Gecikmiş', 'Tamamlandı', 'Termini yok'], 'Overdue'],
+    ['target_month', ['none', '2026-11', '2026-12'], ['Termini yok', '2026-11', '2026-12'], 'No deadline'],
+    ['project', ['p1', 'p2', 'p3'], ['Yapılacak', 'Tamamlandı', 'Özel proje'], 'Yapılacak']
+  ]) {
+    const table = syntheticTable([4, 3, 2], { groupBy, titles: labels });
+    table.described.rows.forEach((row, index) => { row.entries[0].fact.semantic.group = { key: keys[index], label: labels[index] }; });
+    const propositions = tablePropositions({ ...table, distribution: true, locale: 'en' });
+    assert.ok(propositions.find((item) => item.kind === 'largest').plain.includes(expected), groupBy);
+    assert.ok(propositions.find((item) => item.kind === 'breakdown').plain.includes(expected), groupBy);
+  }
+});
+
+test('server callout authorization survives saved history and replay; general text receives none', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const stack = stackFor(t, { MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true' });
+  captureConsole(t);
+  stack.provider.enqueue(planCall(OVERDUE_REQUEST), composer(() => ({ blocks: [{ type: 'say', items: ['P1', 'P2', 'P3'] },
+    { type: 'rows', source: 'T1' }, { type: 'note', items: ['P5'] }] })));
+  const turnId = randomUUID();
+  const response = await sendTurn({ turnId, message: QUESTION_A });
+  const done = doneOf(response);
+  assert.equal(response.events.find((event) => event.event === 'accepted').data.rotaData, true);
+  assert.equal(done.assistantMessage.rotaData, true);
+  const saved = (await loadAssistantConversation(done.conversation.id)).body.messages.find((message) => message.role === 'assistant');
+  assert.equal(saved.rotaData, true);
+  assert.ok(parseAssistantMarkdown(saved.content, saved).some((block) => block.tone === 'warning'));
+  const replay = doneOf(await sendTurn({ conversationId: done.conversation.id, turnId, message: null }));
+  assert.equal(replay.assistantMessage.rotaData, true);
+  const generalText = '> [!success]\n> Unverified general text';
+  stack.provider.enqueue({ type: 'stream', text: generalText });
+  const generalResponse = await sendTurn({ turnId: randomUUID(), message: 'Bir açıklama yap.', source: 'general' });
+  const general = doneOf(generalResponse);
+  assert.ok(general, JSON.stringify(generalResponse.events || generalResponse.body));
+  assert.notEqual(general.assistantMessage.rotaData, true);
+  const loaded = (await loadAssistantConversation(general.conversation.id)).body.messages.find((message) => message.role === 'assistant');
+  assert.notEqual(loaded.rotaData, true);
+  assert.equal(parseAssistantMarkdown(loaded.content, loaded)[0].tone, undefined);
+  assert.ok(assistantMarkdownText(loaded.content, loaded).includes('[!success]'));
+});
+
+test('discarded weak-plan English locale cannot reach a clean Deep failure', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const stack = stackFor(t);
+  const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+  stack.db.tasks = Array.from({ length: 180 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}` }));
+  const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, layout: 'auto', entities: [{ type: 'project', id: PROJECTS.FULL }] };
+  const select = { type: 'script', respond: (call) => {
+    const id = call.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).find((body) => body.evidenceId)?.evidenceId;
+    return { type: 'answer', text: JSON.stringify({ kind: 'rota', facts: [`${id}:data.tasks.*.title`] }) };
+  } };
+  stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'en', request } },
+    { name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL, limit: 1 } }] }, select, select,
+  { type: 'answer', text: '', finishReason: 'stop' });
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `Bu projedeki bütün görevler ${PROJECTS.FULL}` })).assistantMessage;
+  assert.equal(stack.provider.calls.at(-1).model, DEEP.model);
+  assert.equal(answer.finishReason, 'grounding_failed');
+  assert.equal(answer.content, 'Rota verilerine ilişkin yanıt doğrulanamadı. Soruyu daha dar kapsamda yeniden deneyin.');
+});
+
 test('sayım kapsamı korunur: kilometre taşı süzgeci (false dahil) doğal cümlede düşmez, ölçütlü belirlenimci cümleye döner', async (t) => {
   const group = { tool: 'rota_task_search', evidenceId: 'R1' };
   const fallback = { markdown: 'ÖLÇÜTLÜ', plain: 'ÖLÇÜTLÜ' };
@@ -600,10 +696,11 @@ test('yönlendirme paragrafın hemen ardındaki kanıt bloğunadır; araya başk
   assert.deepEqual(sheet.view.titles, [], 'başlığı olmayan bölüm varken başlık sunulmaz');
   const own = sheet.view.propositions.filter((item) => item.part === 1).slice(0, 3).map((item) => item.id);
   const say = { type: 'say', items: [...own, 'T1'] };
+  const second = { type: 'say', items: sheet.view.propositions.filter((item) => item.part === 2).slice(0, 3).map((item) => item.id) };
   assert.equal(issue(validateComposition(sheet, { blocks: [say, { type: 'rows', source: 'T2' }, { type: 'rows', source: 'T1' }] })), 'POINTER_TARGET');
-  assert.equal(validateComposition(sheet, { blocks: [say, { type: 'rows', source: 'T1' }, { type: 'rows', source: 'T2' }] }).ok, true);
+  assert.equal(validateComposition(sheet, { blocks: [say, { type: 'rows', source: 'T1' }, second, { type: 'rows', source: 'T2' }] }).ok, true);
   // İki yönlendirme: ardından gelen ilk iki kanıt bloğu (sıra serbest).
-  assert.equal(validateComposition(sheet, { blocks: [{ type: 'say', items: [...own, 'G1', 'T1'] }, { type: 'rows', source: 'T1' }, { type: 'chart', source: 'G1' }, { type: 'rows', source: 'T2' }] }).ok, true);
+  assert.equal(validateComposition(sheet, { blocks: [{ type: 'say', items: [...own, 'G1', 'T1'] }, { type: 'rows', source: 'T1' }, { type: 'chart', source: 'G1' }, second, { type: 'rows', source: 'T2' }] }).ok, true);
   assert.equal(issue(validateComposition(sheet, { blocks: [{ type: 'say', items: [...own, 'G1', 'T1'] }, { type: 'rows', source: 'T1' }, { type: 'rows', source: 'T2' }, { type: 'chart', source: 'G1' }] })), 'POINTER_TARGET');
 });
 
@@ -640,6 +737,8 @@ test('çok bölümlü yanıtta başlık, paragraf, not ve yönlendirme kendi bö
   const valid = [{ type: 'title', source: 'H1' }, { type: 'say', items: [...p1, 'T1'] }, { type: 'rows', source: 'T1' },
     { type: 'title', source: 'H2' }, { type: 'say', items: [...p2, 'T2'] }, { type: 'rows', source: 'T2' }];
   assert.equal(validateComposition(sheet, { blocks: valid }).ok, true);
+  assert.equal(issue(validateComposition(sheet, { blocks: valid.filter((block) => block !== valid[4]) })), 'NARRATION_REQUIRED', 'part 1 cannot cover a table-only part 2');
+  assert.equal(issue(validateComposition(sheet, { blocks: valid.map((block) => block === valid[4] ? { type: 'say', items: [p2[0]] } : block) })), 'NARRATION_REQUIRED', 'part 2 needs its own minimum');
   const cases = [
     ['ikinci bölüm birinci başlığın altında', [valid[0], valid[1], valid[2], valid[4], valid[5]], 'PART_SCOPE'],
     ['paragrafta iki bölüm', [valid[0], { type: 'say', items: [p1[0], p2[0], p1[1]] }, valid[2], valid[3], valid[5]], 'PART_MIXED'],
@@ -664,10 +763,11 @@ test('otomatik eklenen sayım ayrıntısı başka bölümün başlığı altına
   assert.equal(items.length, 3);
   const overdue = [{ type: 'title', source: 'H2' }, { type: 'say', items }, { type: 'rows', source: 'T1' }];
   assert.equal(issue(validateComposition(sheet, { blocks: overdue })), 'PART_SCOPE');
+  assert.equal(issue(validateComposition(sheet, { blocks: overdue.slice(1) })), 'NARRATION_REQUIRED');
+  const count = { type: 'say', items: [sheet.view.propositions.find((item) => item.part === 1).id] };
   for (const blocks of [
-    overdue.slice(1),
-    [{ type: 'title', source: 'H1' }, { type: 'details', source: 'D1' }, ...overdue],
-    [{ type: 'say', items: [sheet.view.propositions.find((item) => item.part === 1).id] }, ...overdue]
+    [{ type: 'title', source: 'H1' }, count, { type: 'details', source: 'D1' }, ...overdue],
+    [count, ...overdue]
   ]) {
     const validated = validateComposition(sheet, { blocks });
     assert.equal(validated.ok, true, JSON.stringify(validated.issues));
@@ -723,7 +823,7 @@ test('kayıt değeri gerçek çizim yolunda başlık ya da not kutusu açamaz: k
   const validated = validateComposition(sheet, { blocks: [{ type: 'title', source: 'H1' }, { type: 'say', items: said }, { type: 'rows', source: 'T1' }, { type: 'note', items: [maximum.id] }] });
   assert.equal(validated.ok, true, JSON.stringify(validated.issues));
   const rendered = renderComposition(sheet, validated);
-  const blocks = parseAssistantMarkdown(rendered.text);
+  const blocks = parseAssistantMarkdown(rendered.text, { rotaData: true });
   const headings = blocks.filter((block) => block.type === 'heading');
   assert.equal(headings.length, 1, 'yalnızca sunucunun başlığı');
   assert.ok(JSON.stringify(headings[0]).includes('#### Sahte proje'), 'kayıt adı başlığın içinde düz metindir');
@@ -740,7 +840,7 @@ test('kayıt değeri gerçek çizim yolunda başlık ya da not kutusu açamaz: k
   // Savunma derinliği: araç katmanını atlayan satır sonlu bir değer de önerme cümlesinde yapı açamaz.
   const forged = tablePropositions({ ...syntheticTable([9, 3], { titles: ['\n#### Sahte başlık\n> [!success] sahte', 'Diğer'] }), distribution: false, locale: 'tr' })
     .find((item) => item.kind === 'maximum');
-  const parsed = parseAssistantMarkdown(`> [!warning]\n> **Dikkat:** ${forged.markdown}`);
+  const parsed = parseAssistantMarkdown(`> [!warning]\n> **Dikkat:** ${forged.markdown}`, { rotaData: true });
   assert.deepEqual(parsed.map((block) => [block.type, block.tone]), [['quote', 'warning']]);
   assert.equal(parseAssistantMarkdown(forged.markdown).some((block) => ['heading', 'quote'].includes(block.type)), false);
 });

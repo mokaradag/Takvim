@@ -1,4 +1,4 @@
-import { escapedFactText, factLabel, factPresentation } from './evidenceFacts.js';
+import { canonicalGroupLabel, escapedFactText, factLabel, factPresentation } from './evidenceFacts.js';
 import { semanticCarrierKey } from './claimableEvidence.js';
 import { factRow } from './requestContract.js';
 
@@ -386,10 +386,10 @@ function rowContext(row) {
 }
 
 /** Satırı adlandıran kaçışsız metin: kanıttaki satır bağlamının adı, başlık alanı ya da öznesi. */
-function rowTitleText(row, titleKey, valuesOf) {
+function rowTitleText(row, titleKey, valuesOf, locale) {
   const context = row.entries[0]?.fact.semantic?.row;
   const names = titleKey ? valuesOf(row, titleKey) : [];
-  return String(context?.name || (names[0] && names.map((fact) => fact.value).join(', ')) || row.subject || '');
+  return canonicalGroupLabel(row.entries[0]?.fact, String(context?.name || (names[0] && names.map((fact) => fact.value).join(', ')) || row.subject || ''), locale);
 }
 
 /**
@@ -401,7 +401,7 @@ export function describeRowCollection(group, collection, locale = 'tr') {
   const { titleKey, columns, valuesOf, columnLabel, numericColumns } = rowColumns(rows, locale);
   return {
     head: ROW_NOUNS[collection.split('.').at(-1)]?.[language(locale)] || (locale === 'en' ? 'Record' : 'Kayıt'),
-    rows: rows.map((row) => ({ title: rowTitleText(row, titleKey, valuesOf), titleFacts: titleKey ? valuesOf(row, titleKey) : [], context: rowContext(row), entries: row.entries,
+    rows: rows.map((row) => ({ title: rowTitleText(row, titleKey, valuesOf, locale), titleFacts: titleKey ? valuesOf(row, titleKey) : [], context: rowContext(row), entries: row.entries,
       cells: columns.map((key) => valuesOf(row, key)) })),
     columns: columns.map((key) => ({ key, label: columnLabel(key), numeric: numericColumns.includes(key) }))
   };
@@ -435,7 +435,7 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
     const names = titleKey ? valuesOf(row, titleKey) : [];
     const project = context?.project ? ` · ${escapedFactText([context.projectCode, context.project].filter(Boolean).join(' · '))}` : '';
     const organization = context?.organization ? ` · ${escapedFactText(context.organization)}` : '';
-    return `${escapedFactText(context?.name || names[0] && names.map((fact) => fact.value).join(', ') || row.subject)}${project}${organization}${criteria === null ? rowCriteria(row) : ''}`;
+    return `${escapedFactText(canonicalGroupLabel(row.entries[0]?.fact, context?.name || names[0] && names.map((fact) => fact.value).join(', ') || row.subject, locale))}${project}${organization}${criteria === null ? rowCriteria(row) : ''}`;
   };
   const cell = (facts, plain) => facts.map((fact) => (plain ? narrativeValue(fact, locale) : strong(narrativeValue(fact, locale)))).join(facts[0]?.field.includes('wbsPath') ? ' › ' : ', ');
   // Karşılaştırma doğal olduğunda (en az üç satır; üç sütun ya da iki sayısal sütun) tablo; aksi hâlde liste.

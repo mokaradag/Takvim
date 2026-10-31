@@ -566,8 +566,8 @@ function parseBlockLines(lines, depth, budget = { blocks: 0 }) {
         quoted.push(lines[index].replace(QUOTE, ''));
         index += 1;
       }
-      // Not kutusu tonu (`> [!warning]`): yalnızca ilk satırın tamamı bilinen bir ton işaretiyse; işaret metin olarak gösterilmez.
-      const tone = CALLOUT_TONE.exec(String(quoted[0] ?? '').trim())?.[1]?.toLowerCase() || null;
+      // Not kutusu tonu (`> [!warning]`): yalnızca yetkili Rota yanıtında ilk satır bilinen bir ton işaretiyse gizlenir.
+      const tone = budget.rotaData === true ? CALLOUT_TONE.exec(String(quoted[0] ?? '').trim())?.[1]?.toLowerCase() || null : null;
       blocks.push({ type: 'quote', ...(tone ? { tone } : {}), children: parseBlockLines(tone ? quoted.slice(1) : quoted, depth + 1, budget), source: lines.slice(start, index).join('\n') });
       continue;
     }
@@ -620,9 +620,9 @@ function parseBlockLines(lines, depth, budget = { blocks: 0 }) {
  * Yanıt metni → blok listesi. Her üst düzey blok kendi kaynak metnini
  * (`source`) taşır: akış sırasında yalnızca değişen son blok yeniden çizilir.
  */
-export function parseAssistantMarkdown(text) {
+export function parseAssistantMarkdown(text, { rotaData = false } = {}) {
   const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n').map(expandLeadingTabs);
-  return parseBlockLines(lines, 0);
+  return parseBlockLines(lines, 0, { blocks: 0, rotaData: rotaData === true });
 }
 
 /** Düğüm ağacının görünen düz metni (erişilebilir ad ve testler için). */
@@ -636,7 +636,7 @@ export function inlineText(nodes = []) {
 }
 
 /** Tamamlanan blokları korur; son iki blok ileri bakış için yeniden çözülür. */
-export function createAssistantMarkdownParser() {
+export function createAssistantMarkdownParser({ rotaData = false } = {}) {
   let previous = '';
   let blocks = [];
   let starts = [];
@@ -645,7 +645,7 @@ export function createAssistantMarkdownParser() {
     if (normalized === previous) return blocks;
     const keep = normalized.startsWith(previous) ? Math.max(0, blocks.length - 2) : 0;
     const offset = keep ? starts[keep] : 0;
-    const tail = parseBlockLines(normalized.slice(offset).split('\n'), 0, { blocks: keep ? blocks[keep - 1].blockBudget : 0 });
+    const tail = parseBlockLines(normalized.slice(offset).split('\n'), 0, { blocks: keep ? blocks[keep - 1].blockBudget : 0, rotaData: rotaData === true });
     let cursor = offset;
     const tailStarts = tail.map((block) => {
       const start = normalized.indexOf(block.source, cursor);
@@ -664,7 +664,7 @@ export function createAssistantMarkdownParser() {
  * maddeleri görünen madde işaretini ya da sıra numarasını taşır; iç içe
  * maddeler girintiyle korunur.
  */
-export function assistantMarkdownText(text, { evidenceIds = null } = {}) {
+export function assistantMarkdownText(text, { evidenceIds = null, rotaData = false } = {}) {
   const inline = (nodes) => nodes.map((node) => node.type === 'break' ? '\n'
     : node.type === 'cite' ? `[${node.id}]`
       : node.children ? `${node.image ? 'Görsel: ' : ''}${inline(node.children)}` : node.value || '').join('');
@@ -688,5 +688,5 @@ export function assistantMarkdownText(text, { evidenceIds = null } = {}) {
     if (block.type === 'table') return [block.header, ...block.rows].map((row) => row.map(inline).join('\t')).join('\n');
     return block.children ? inline(block.children) : '';
   }).filter((part) => part !== null).join(separator);
-  return blocks(parseAssistantMarkdown(text));
+  return blocks(parseAssistantMarkdown(text, { rotaData }));
 }

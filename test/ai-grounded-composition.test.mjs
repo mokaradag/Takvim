@@ -106,7 +106,7 @@ test('kapalı sayfa sınırı bütün tablo ve ayrıntıları korur; fazla kayna
   assert.deepEqual(composition.view.propositions.slice(0, parts.length).map((item) => item.kind), Array(parts.length).fill('count'));
   assert.equal(issue(check(composition, { blocks: [validLead()] })), 'COVERAGE_INCOMPLETE');
   assert.equal(issue(check(composition, { blocks: composition.view.tables.map((table) => ({ type: 'rows', source: table.id })) })), 'NARRATION_REQUIRED');
-  assert.equal(check(composition, narrated(narrate(composition), ...composition.view.tables.map((table) => ({ type: 'rows', source: table.id })))).ok, true);
+  assert.equal(issue(check(composition, narrated(narrate(composition), ...composition.view.tables.map((table) => ({ type: 'rows', source: table.id }))))), 'NARRATION_REQUIRED', 'every proposition-bearing part needs narration, even at the sheet limit');
   assert.equal(buildComposition({ parts: [...parts, { index: 6, presentation: verdict.presentation }] }), null);
 });
 
@@ -459,7 +459,7 @@ test('sayımın kapsamı sunucu ayrıntısıyla zorunlu gösterilir', async (t) 
 test('sunucu gerçekten çizilen grafik sayısını taşır; reddedilen ve bağlı olmayan grafik sayılmaz', async (t) => {
   const { verdict } = await overdueComposition(t);
   const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }, { index: 1, presentation: verdict.presentation }] });
-  const valid = check(sheet, narrated(validLead(sheet), narrate(sheet), { type: 'rows', source: 'T1' }, { type: 'rows', source: 'T2' },
+  const valid = check(sheet, narrated(validLead(sheet), narrate(sheet), { type: 'rows', source: 'T1' }, narrate(sheet, 2), { type: 'rows', source: 'T2' },
     { type: 'chart', source: 'G1' }, { type: 'chart', source: 'G2' }));
   assert.equal(valid.ok, true, JSON.stringify(valid.issues));
   const { recordGroundedTurn, aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
