@@ -277,7 +277,7 @@ test('K: genel sohbetten sonra Rota sorusu doğal yazılır; genel yanıt metni 
 test('L: İngilizce zincir İngilizce sayfa ve yanıtla sürer', async (t) => {
   const { ask } = conversation(t);
   const first = await ask('Show my overdue tasks.', [rotaPlan(OVERDUE_LIST, { language: 'en' }), 'compose'], { language: 'en' });
-  assert.match(first.answer.content, /^\*\*3\*\* matching tasks were found/);
+  assert.match(first.answer.content, /^You currently have \*\*3\*\* overdue tasks\./);
   const second = await ask('What are their priorities?', [rotaPlan({ previousResult: true, operation: 'list', metrics: ['task.title', 'task.priority'],
     population: { tool: 'rota_task_search', collection: 'tasks' } }, { language: 'en' }), 'compose'], { language: 'en' });
   assert.equal(second.answer.finishReason, 'stop');

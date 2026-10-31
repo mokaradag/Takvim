@@ -79,8 +79,11 @@ const FILTER_KEYS = new Set(['text', 'projectId', 'project', 'wbsId', 'statuses'
  */
 function taskPopulation(filters, locale) {
   const f = filters || {};
-  for (const [key, value] of Object.entries(f)) if (!FILTER_KEYS.has(key) && !neutral(value)) return null;
-  for (const key of ['text', 'wbsId', 'personSicil', 'createdByMe', 'milestone']) if (!neutral(f[key])) return null;
+  // Bilinmeyen süzgecin `false` değeri de bir kısıt olabilir: yalnızca boş değer nötrdür.
+  for (const [key, value] of Object.entries(f)) if (!FILTER_KEYS.has(key) && !(value == null || value === '' || (Array.isArray(value) && !value.length))) return null;
+  for (const key of ['text', 'wbsId', 'personSicil', 'createdByMe']) if (!neutral(f[key])) return null;
+  // Kilometre taşı süzgecinin iki değeri de nüfusu daraltır (`false` kilometre taşlarını dışlar; taskFacts.matchesTaskFilters).
+  if (typeof f.milestone === 'boolean') return null;
   if (!neutral(f.projectId) && (typeof f.project !== 'string' || !f.project.trim())) return null;
   if (!neutral(f.assignee) && !['me', 'unassigned'].includes(f.assignee)) return null;
   if (!neutral(f.dateField) && f.dateField !== 'targetFinish') return null;
@@ -178,6 +181,21 @@ export function sharePercent(value, total) {
 const percent = (value, locale) => (locale === 'en' ? `${value}%` : `%${value}`);
 
 /**
+ * Kesin çoğunluğun (pay > %50) yüzdesi: tam sayı yuvarlaması %50 gösterecekse en az ondalıkla aşağı kesilir
+ * (ör. 1001/2000 → %50,05). Gösterilen değer kesin paydan hiçbir zaman büyük değildir ve her zaman %50'yi aşar.
+ */
+export function majorityPercent(value, total, locale) {
+  const whole = sharePercent(value, total);
+  if (whole > 50) return number(whole, locale);
+  for (let digits = 1; digits <= 6; digits += 1) {
+    const scale = 10 ** digits;
+    const shown = Math.floor((value * 100 * scale) / total) / scale;
+    if (shown > 50) return new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'tr-TR', { maximumFractionDigits: digits }).format(shown);
+  }
+  return null;
+}
+
+/**
  * Sayım önermesi: çok satırlı tablosunun yanında tek başına duran zarf sayısı (`totalCount`). Görev
  * araçlarında doğal cümle; diğerlerinde ya da ifade edilemeyen süzgeçte sunucunun belirlenimci cümlesi
  * (`fallback`). Bilinmeyen (null) sayı önerme olmaz.
@@ -213,7 +231,11 @@ export function titleCandidate({ tool, filters, groupBy = null, locale }) {
     const place = project ? `${project} projesindeki ` : '';
     text = groupBy ? `${place}${adjective}${me ? 'görevlerinizin' : 'görevlerin'} ${GROUP_TITLES[groupBy][0]} dağılımı` : `${place}${adjective}${me ? 'görevleriniz' : 'görevler'}`;
   }
-  const window = !groupBy && population.from && population.to ? ` (${day(population.from, locale)} – ${day(population.to, locale)})` : '';
+  // Termin aralığı nüfusun parçasıdır: tek uçlu ve gruplanmış aralık da başlıkta yazılır (başlık nüfusu genişletemez).
+  const { from, to } = population;
+  const window = from && to ? ` (${day(from, locale)} – ${day(to, locale)})`
+    : from ? (locale === 'en' ? ` (due on or after ${day(from, locale)})` : ` (${day(from, locale)} ve sonrasında terminli)`)
+      : to ? (locale === 'en' ? ` (due on or before ${day(to, locale)})` : ` (${day(to, locale)} ve öncesinde terminli)`) : '';
   // Kayıt adıyla başlayan başlıkta veri değiştirilmez; yalnızca sunucu metniyle başlayan başlığın ilk harfi büyür.
   const lead = locale !== 'en' && project ? text : `${text.charAt(0).toLocaleUpperCase(locale === 'en' ? 'en-US' : 'tr-TR')}${text.slice(1)}`;
   return `${lead}${window}`;
@@ -221,11 +243,12 @@ export function titleCandidate({ tool, filters, groupBy = null, locale }) {
 
 /**
  * Tablonun bütün nüfusu kanıtta mı? Bütün satır olguları tam kanıttan gelir, koleksiyonun bütün
- * satırları gösterilir ve (görev listesinde) nüfus sayısı satır sayısına eşittir.
+ * satırları gösterilir ve (görev listesinde) nüfus sayısı satır sayısına eşittir. Tek satırlı tam nüfus da
+ * nüfustur (tek görev, tek grup); birden çok gözlem isteyen önermeler kendi en az satır koşullarını taşır.
  */
 export function wholePopulation({ group, described, distribution, population = null }) {
   const rows = described.rows;
-  if (rows.length < 2 || !rows.every((row) => row.entries.length && row.entries.every(({ fact }) => fact.semantic?.complete === true
+  if (rows.length < 1 || !rows.every((row) => row.entries.length && row.entries.every(({ fact }) => fact.semantic?.complete === true
     && fact.semantic?.row?.collectionSize === rows.length))) return false;
   if (distribution) return true;
   const total = group.envelope.find((fact) => fact.field === 'totalCount');
@@ -233,19 +256,27 @@ export function wholePopulation({ group, described, distribution, population = n
   return population === rows.length;
 }
 
+/** Nüfus betimi satırların doğrulanmış süzgecidir; satır başına proje bağlamı nüfusu daraltmaz. */
+export function populationScope(described) {
+  const filters = described.rows[0]?.entries[0]?.fact.semantic?.filters || {};
+  const { project: _rowProject, ...rest } = filters;
+  return rest.projectId ? filters : rest;
+}
+
 /**
  * Sayım ölçüsü seçilmemiş görev listesinin sayımı: sunucu, atfedilen kanıtın nüfusun tamamı olduğunu (tam,
  * kesilmemiş, imleçsiz, döndürülen = kesin toplam) doğruladıysa ve tablo o nüfusun bütün satırlarını taşıyorsa.
- * Nüfus betimi satırların doğrulanmış süzgecidir; satır başına proje bağlamı nüfusu daraltmaz.
+ * Tek görevlik tam nüfus da sayımdır.
+ * `fallback(scoped)`: doğal betim süzgeçlerin tamamını ifade edemezse sunucunun ölçütlü belirlenimci cümlesi
+ * (ör. kilometre taşı süzgeci); sayım hiçbir zaman süzgeçleri düşürülmüş daha geniş bir nüfusa yazılmaz.
  */
-export function populationProposition({ group, described, size, locale }) {
-  if (group.tool !== 'rota_task_search' || !Number.isSafeInteger(size) || size < 2 || described.rows.length !== size) return null;
+export function populationProposition({ group, described, size, locale, fallback = null }) {
+  if (group.tool !== 'rota_task_search' || !Number.isSafeInteger(size) || size < 1 || described.rows.length !== size) return null;
   const facts = described.rows.flatMap((row) => row.entries.map(({ fact }) => fact));
   if (!facts.every((fact) => fact.semantic?.complete === true)) return null;
-  const { project: _rowProject, ...filters } = facts[0].semantic?.filters || {};
-  const scoped = filters.projectId ? facts[0].semantic.filters : filters;
-  const realized = taskCountSentence(scoped, size, locale);
-  return realized ? { kind: 'count', tone: countTone(scoped, size), evidenceId: group.evidenceId, ...realized } : null;
+  const scoped = populationScope(described);
+  const realized = taskCountSentence(scoped, size, locale) || fallback?.(scoped) || null;
+  return realized ? { kind: 'count', tone: countTone(scoped, size), evidenceId: group.evidenceId, markdown: realized.markdown, plain: realized.plain } : null;
 }
 
 /** Tek değerli sayısal ya da tarih sütunu; değerler satır sırasıyla. */
@@ -289,15 +320,20 @@ function extremeSentence({ kind, metric, type, label, value, owner, locale }) {
  * Bütün nüfusu taşıyan tablonun türetilmiş önermeleri: dağılımda toplam, çoğunluk ya da en büyük grup
  * ve döküm; satır tablosunda sayısal ve tarih sütunlarının en büyük/en küçük değeri.
  */
-export function tablePropositions({ group, described, distribution, locale, population = null }) {
+export function tablePropositions({ group, described, distribution, locale, population = null, collection = null }) {
   if (!wholePopulation({ group, described, distribution, population })) return [];
   const out = [];
   const en = locale === 'en';
-  const add = (kind, realized, tone = 'info') => { if (realized) out.push({ kind, tone, evidenceId: group.evidenceId, ...realized }); };
+  // `column`: önermenin dayandığı tablo sütunu (sunucunun sütun sırası); grafik yönlendirmesi ancak aynı sütunu gösterir.
+  let column = null;
+  const add = (kind, realized, tone = 'info') => { if (realized) out.push({ kind, tone, evidenceId: group.evidenceId, ...(column == null ? {} : { column }), ...realized }); };
   if (distribution) {
-    const index = described.columns.findIndex((column) => column.numeric);
+    // Toplam, çoğunluk, en büyük grup, tamamlanma ve döküm yalnızca BÜTÜN görevleri sayan sütundan (tasks.total):
+    // açık, gecikmiş ya da tamamlanmış alt kümesi bütün görevlerin paydası değildir. Ölçü kimliği kanıtın türüdür.
+    const index = described.columns.findIndex((item, position) => item.numeric && columnValues(described, position, 'number')?.every((fact) => fact.semantic?.metric === 'tasks.total'));
     const facts = index >= 0 ? columnValues(described, index, 'number') : null;
     if (!facts || !facts.every((fact) => Number.isSafeInteger(fact.value) && fact.value >= 0)) return [];
+    column = index;
     const groupBy = facts[0].semantic?.groupBy;
     if (!EXCLUSIVE_GROUP_BY.includes(groupBy) || !facts.every((fact) => fact.semantic?.groupBy === groupBy)) return [];
     const total = facts.reduce((sum, fact) => sum + fact.value, 0);
@@ -307,15 +343,17 @@ export function tablePropositions({ group, described, distribution, locale, popu
     add('total', TASK_TOOLS.has(group.tool) ? taskCountSentence(filters, total, locale, { total: true }) : null);
     const max = Math.max(...facts.map((fact) => fact.value));
     const owner = soleRow(described, facts, max);
-    if (owner) {
+    // Tek dolu grup (bütün görevler aynı grupta) çoğunluk değildir: toplam ve döküm onu söyler.
+    if (owner && max < total) {
       const share = sharePercent(max, total);
       const place = groupPlace(groupBy, owner, locale);
       const done = groupBy === 'status' && facts[facts.findIndex((fact) => fact.value === max)].semantic?.group?.key === 'done';
       if (max * 2 > total) {
-        // Çoğunluk ("büyük bölümü") yalnızca birbirini dışlayan tam dağılımda pay yarıyı aştığında.
+        // Çoğunluk ("büyük bölümü") yalnızca birbirini dışlayan tam dağılımda pay yarıyı aştığında; gösterilen pay da %50'yi aşar.
+        const majority = majorityPercent(max, total, locale);
         add('majority', en
-          ? sentence([`Most of ${whose ? '' : 'the tasks in this result'}`, ...(whose || []), ' (', v(percent(share, locale)), ') ', ...place, '.'])
-          : sentence([...(whose || ['bu sonuçtaki görevlerin']), ' büyük bölümü (', v(percent(share, locale)), ') ', ...place, '.']), done ? 'success' : 'info');
+          ? sentence([`Most of ${whose ? '' : 'the tasks in this result'}`, ...(whose || []), ' (', v(percent(majority, locale)), ') ', ...place, '.'])
+          : sentence([...(whose || ['bu sonuçtaki görevlerin']), ' büyük bölümü (', v(percent(majority, locale)), ') ', ...place, '.']), done ? 'success' : 'info');
       } else {
         add('largest', en
           ? sentence(['The largest group is ', v(owner), ': ', v(number(max, locale)), ` ${max === 1 ? 'task' : 'tasks'} (`, v(percent(share, locale)), ').'])
@@ -341,10 +379,13 @@ export function tablePropositions({ group, described, distribution, locale, popu
     }
     return out;
   }
+  // Satır istatistikleri (uç, ortalama, eşik, yayılma, yoğunlaşma) birden çok gözlem ister.
+  if (described.rows.length < 2) return out;
   // Sayısal sütunlar önce gelir; tarih sütunu yalnızca sayısal önerme yoksa (gecikmede en erken termin en uzun gecikmeyi yineler).
-  const order = described.columns.map((column, index) => ({ column, index })).sort((left, right) => Number(right.column.numeric) - Number(left.column.numeric));
-  for (const { column, index } of order) {
-    const type = column.numeric ? 'number' : 'date';
+  const order = described.columns.map((item, index) => ({ item, index })).sort((left, right) => Number(right.item.numeric) - Number(left.item.numeric));
+  for (const { item: header, index } of order) {
+    column = index;
+    const type = header.numeric ? 'number' : 'date';
     if (type === 'date' && out.length) continue;
     const facts = columnValues(described, index, type);
     if (!facts) continue;
@@ -355,22 +396,22 @@ export function tablePropositions({ group, described, distribution, locale, popu
     if (!facts.every((fact) => fact.semantic?.metric === metric && fact.semantic?.unit === facts[0].semantic?.unit)) continue;
     const overdue = metric === 'task.overdueDays';
     if (type === 'date') {
-      add('minimum', extremeSentence({ kind: 'minimum', metric, type, label: column.label, value: sorted[0], owner: soleRow(described, facts, sorted[0]), locale }));
+      add('minimum', extremeSentence({ kind: 'minimum', metric, type, label: header.label, value: sorted[0], owner: soleRow(described, facts, sorted[0]), locale }));
       add('span', metric === 'task.targetFinish'
         ? sentence(en ? ['Deadlines range from ', v(day(sorted[0], locale)), ' to ', v(day(sorted.at(-1), locale)), '.'] : ['Terminler ', v(day(sorted[0], locale)), ' ile ', v(day(sorted.at(-1), locale)), ' arasında.'])
-        : sentence(en ? ['“', t(column.label), '” values range from ', v(day(sorted[0], locale)), ' to ', v(day(sorted.at(-1), locale)), '.']
-          : ['“', t(column.label), '” değerleri ', v(day(sorted[0], locale)), ' ile ', v(day(sorted.at(-1), locale)), ' arasında.']));
+        : sentence(en ? ['“', t(header.label), '” values range from ', v(day(sorted[0], locale)), ' to ', v(day(sorted.at(-1), locale)), '.']
+          : ['“', t(header.label), '” değerleri ', v(day(sorted[0], locale)), ' ile ', v(day(sorted.at(-1), locale)), ' arasında.']));
       continue;
     }
     for (const kind of ['maximum', 'minimum']) {
       const value = kind === 'maximum' ? sorted.at(-1) : sorted[0];
-      add(kind, extremeSentence({ kind, metric, type, label: column.label, value, owner: soleRow(described, facts, value), locale }), overdue && kind === 'maximum' ? 'warning' : 'info');
+      add(kind, extremeSentence({ kind, metric, type, label: header.label, value, owner: soleRow(described, facts, value), locale }), overdue && kind === 'maximum' ? 'warning' : 'info');
     }
     if (values.length >= 3) {
       const mean = number(Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10, locale);
       add('average', overdue
         ? sentence(en ? ['The average delay is ', v(`${mean} days`), '.'] : ['Gecikmelerin ortalaması ', v(`${mean} gün`), '.'])
-        : sentence(en ? ['The average “', t(column.label), '” is ', v(mean), '.'] : ['“', t(column.label), '” ortalaması ', v(mean), '.']));
+        : sentence(en ? ['The average “', t(header.label), '” is ', v(mean), '.'] : ['“', t(header.label), '” ortalaması ', v(mean), '.']));
     }
     if (overdue) {
       // Bir haftayı aşan gecikme: sunucunun sabit eşiği (7 gün), modelin yorumu değil.
@@ -381,26 +422,30 @@ export function tablePropositions({ group, described, distribution, locale, popu
         : [v(number(values.length, locale)), ' görevin ', v(number(late, locale)), `${turkishPossessiveSuffix(late)} bir haftadan uzun süredir gecikmiş.`]), 'warning');
     }
   }
-  add('concentration', projectConcentration(described, locale));
+  column = null;
+  // "Bu görevler" yalnızca görev koleksiyonunun satırlarıdır.
+  if (TASK_TOOLS.has(group.tool) && String(collection ?? '').split('.').at(-1) === 'tasks') add('concentration', projectConcentration(described, locale));
   return out;
 }
 
 /**
  * Görev satırlarının projelere dağılımı (satırın doğrulanmış proje bağlamından): tek projede toplanma, bir
- * projenin çoğunluğu ya da kaç projeye yayıldığı. Proje adı kanıttaki satır bağlamıdır.
+ * projenin çoğunluğu ya da kaç projeye yayıldığı. Gruplama doğrulanmış proje KİMLİĞİYLEdir (aynı adlı iki proje
+ * ayrıdır); ad yalnızca gösterimdir. Kimliği olmayan satırda yoğunlaşma iddiası yoktur.
  */
 function projectConcentration(described, locale) {
-  const projects = described.rows.map((row) => row.context?.project || null);
-  if (projects.length < 2 || projects.some((project) => !project)) return null;
+  const projects = described.rows.map((row) => ({ id: row.entries[0]?.fact.semantic?.row?.projectId || null, name: row.context?.project || null }));
+  if (projects.length < 2 || projects.some((project) => !project.id || !project.name)) return null;
   const counts = new Map();
-  for (const project of projects) counts.set(project, (counts.get(project) || 0) + 1);
+  for (const { id, name } of projects) counts.set(id, { name, count: (counts.get(id)?.count || 0) + 1 });
   const en = locale === 'en';
   const total = projects.length;
-  if (counts.size === 1) return sentence(en ? ['All of these tasks are in the ', v(projects[0]), ' project.'] : ['Bu görevlerin tamamı ', v(projects[0]), ' projesinde.']);
-  const ranked = [...counts].sort((left, right) => right[1] - left[1]);
-  if (ranked[0][1] * 2 > total) {
-    return sentence(en ? [v(number(ranked[0][1], locale)), ' of the ', v(number(total, locale)), ' tasks are in the ', v(ranked[0][0]), ' project.']
-      : [v(number(total, locale)), ' görevin ', v(number(ranked[0][1], locale)), `${turkishPossessiveSuffix(ranked[0][1])} `, v(ranked[0][0]), ' projesinde.']);
+  if (counts.size === 1) return sentence(en ? ['All of these tasks are in the ', v(projects[0].name), ' project.'] : ['Bu görevlerin tamamı ', v(projects[0].name), ' projesinde.']);
+  const ranked = [...counts.values()].sort((left, right) => right.count - left.count);
+  // Ad, kimliği ayırt etmiyorsa (başka bir proje aynı adı taşıyor) bir projeyi adıyla öne çıkarmak yanıltır.
+  if (ranked[0].count * 2 > total && ranked.filter((item) => item.name === ranked[0].name).length === 1) {
+    return sentence(en ? [v(number(ranked[0].count, locale)), ' of the ', v(number(total, locale)), ' tasks are in the ', v(ranked[0].name), ' project.']
+      : [v(number(total, locale)), ' görevin ', v(number(ranked[0].count, locale)), `${turkishPossessiveSuffix(ranked[0].count)} `, v(ranked[0].name), ' projesinde.']);
   }
   return sentence(en ? ['The tasks are spread across ', v(number(counts.size, locale)), ' projects.'] : ['Görevler ', v(number(counts.size, locale)), ' projeye dağılmış.']);
 }

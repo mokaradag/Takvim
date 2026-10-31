@@ -17,13 +17,21 @@ export function compositionView(call) {
 }
 
 /**
- * Bütün tablo/ayrıntıları sunucu kaynaklarından seçer; atlanan ayrıntıları çizici ekler.
+ * Bütün tablo/ayrıntıları sunucu kaynaklarından seçer; atlanan ayrıntıları çizici ekler. Önerme varsa her bölüm
+ * kendi önermelerini söyleyen bir paragrafla başlar (Aşama 4D: önerme varken yalnızca tablo geçerli anlatım değildir).
  */
 export function coveringBlocks(view) {
-  return { blocks: [
-    ...view.details.map((detail) => ({ type: 'details', source: detail.id })),
-    ...view.tables.map((table) => ({ type: 'rows', source: table.id }))
-  ].slice(-10) };
+  const propositions = view.propositions || [];
+  const parts = [...new Set([...propositions, ...view.details, ...view.tables].map((item) => item.part))].sort((left, right) => left - right);
+  // Paragraf sınırı (en çok dört): sonraki bölümler yalnızca kaynaklarıyla kapsanır.
+  return { blocks: parts.flatMap((part, position) => {
+    const said = position < 4 ? propositions.filter((item) => item.part === part).slice(0, 8).map((item) => item.id) : [];
+    return [
+      ...(said.length ? [{ type: 'say', items: said }] : []),
+      ...view.details.filter((detail) => detail.part === part).map((detail) => ({ type: 'details', source: detail.id })),
+      ...view.tables.filter((table) => table.part === part).map((table) => ({ type: 'rows', source: table.id }))
+    ];
+  }).slice(-12) };
 }
 
 /** Düzen turunu yanıtlayan sahte sağlayıcı davranışı; `inspect` sayfayı ve çağrıyı görür. */

@@ -780,11 +780,14 @@ test('rankable rows exclude missing values and require deterministic metric orde
 
 test('protocol evidence gaps never reopen shared resource budgets; a clean Deep restart happens at most once', async (t) => {
   const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
   for (const budget of [{ maxRepairRounds: 0 }, { maxToolRounds: 1 }, { maxTotalCalls: 1 }]) {
     const stack = stackFor(t);
     const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
     stack.db.tasks = Array.from({ length: 180 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}` }));
-    const context = createToolTurnContext({ sicil: AYSE, now: NOW });
+    const shared = createToolTurnContext({ sicil: AYSE, now: NOW });
+    // Her yetki okuması araç evresinde 2 sn harcar (sahte saat): atılan denemenin evre süresi ölçülebilir olur.
+    const context = { ...shared, authorization: async (signal) => { t.mock.timers.setTime(Date.now() + 2000); return shared.authorization(signal); } };
     const limits = { ...TOOL_LIMITS, ...budget };
     const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, entities: [{ type: 'project', id: PROJECTS.FULL }] };
     let rounds = 0;
@@ -798,10 +801,12 @@ test('protocol evidence gaps never reopen shared resource budgets; a clean Deep 
     const initial = await runGroundedTurn(session, { messages: buildGroundedContext({ userContent: `Bütün görevler ${PROJECTS.FULL}`, now: NOW }).messages,
       catalog: toolCatalogForModel(), context, limits, onText: async () => {}, escalation: true });
     assert.equal(rounds <= 3, true);
-    if (budget.maxTotalCalls) {
-      // Ortak çağrı bütçesi yeni bir plan için yetmiyorsa temiz yeniden planlama açılmaz.
+    if (budget.maxTotalCalls || budget.maxToolRounds) {
+      // Ortak çağrı ya da araç turu bütçesi yeni bir plan için yetmiyorsa temiz yeniden planlama açılmaz: temiz başlangıç
+      // tükenen bütçeyi yenilemez (önceden tek araç turu Derin'de yeni bir tur kazanıyordu).
       assert.equal(initial.outcome, 'failed');
       assert.equal(initial.stats.attempted <= limits.maxTotalCalls, true);
+      assert.equal(initial.stats.toolRounds <= limits.maxToolRounds, true);
       continue;
     }
     // Kanıt bildirilen isteği karşılamadı ve onarım tükendi: zayıf deneme atılır, Derin temiz planlar.
@@ -811,6 +816,14 @@ test('protocol evidence gaps never reopen shared resource budgets; a clean Deep 
     assert.ok(resumed.priorExecutorStats.attempted >= 1);
     assert.equal(resumed.limits.maxTotalCalls, limits.maxTotalCalls - resumed.priorExecutorStats.attempted, 'çağrı bütçesi ortak kalır');
     assert.equal(resumed.repairsLeft, 0, 'tükenen onarım yeniden açılmaz');
+    // Temiz başlangıç bir kaynak bütçesi yenilemesi değildir: araç turu, araç evresi süresi ve sonuç boyutu da daralır;
+    // SQL süresi aynı tur bağlamında (aynı nesne) sürer.
+    assert.ok(resumed.priorToolRounds >= 1);
+    assert.equal(resumed.limits.maxToolRounds, limits.maxToolRounds - resumed.priorToolRounds, 'araç turu bütçesi ortak kalır');
+    assert.ok(resumed.limits.maxToolPhaseMs <= limits.maxToolPhaseMs - 2000, `araç evresi süresi ortak kalır: ${resumed.limits.maxToolPhaseMs}`);
+    assert.equal(resumed.limits.maxTotalResultBytes, limits.maxTotalResultBytes - resumed.priorExecutorStats.resultBytes, 'sonuç boyutu bütçesi ortak kalır');
+    assert.equal(resumed.context, context, 'SQL süresi turun ortak bağlamında sürer');
+    assert.ok(resumed.context.stats().sqlMs >= 0 && resumed.context.stats().queries > 0);
     assert.equal(resumed.transcript.some((message) => message.role === 'tool' || message.role === 'assistant'), false);
     // Derin de aynı boşluğa düşerse tur güvenle biter; ikinci devir yoktur.
     let deepRounds = 0;
@@ -824,6 +837,38 @@ test('protocol evidence gaps never reopen shared resource budgets; a clean Deep 
     assert.equal(final.stats.attempted <= limits.maxTotalCalls, true);
     assert.equal(deepRounds <= 3, true);
   }
+});
+
+test('planner-decision telemetry counts the decision that survives a clean Deep restart, not the discarded weak plan', async (t) => {
+  const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
+  const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
+  const stack = stackFor(t);
+  const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+  stack.db.tasks = Array.from({ length: 180 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}` }));
+  const context = createToolTurnContext({ sicil: AYSE, now: NOW });
+  const limits = { ...TOOL_LIMITS, maxRepairRounds: 0 };
+  const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, entities: [{ type: 'project', id: PROJECTS.FULL }] };
+  const before = aiTelemetrySnapshot().planner;
+  let rounds = 0;
+  const weak = { signal: new AbortController().signal, round: async () => {
+    rounds += 1;
+    if (rounds === 1) return nativeDeclaration({ text: declared(request), toolCalls: [call('rota_task_search', { projectId: PROJECTS.FULL, limit: 1 })], finishReason: 'tool_calls' });
+    return reply(facts('R1:data.tasks.*.title'));
+  } };
+  const initial = await runGroundedTurn(weak, { messages: buildGroundedContext({ userContent: `Bütün görevler ${PROJECTS.FULL}`, now: NOW }).messages,
+    catalog: toolCatalogForModel(), context, limits, onText: async () => {}, escalation: true });
+  assert.deepEqual([initial.outcome, initial.kind], ['escalate', 'plan']);
+  // Atılan zayıf Rota kararı sayılmış olarak kalmaz.
+  assert.equal(aiTelemetrySnapshot().planner.decisions.rota, before.decisions.rota);
+  const deep = { signal: new AbortController().signal, round: async () => nativeDeclaration({
+    text: JSON.stringify({ name: 'rota_plan', arguments: { intent: 'abstain', language: 'tr', abstain: { reason: 'outside_data' } } }), toolCalls: [], finishReason: 'tool_calls' }) };
+  const final = await runGroundedTurn(deep, { resume: initial.resume, catalog: toolCatalogForModel(), context, limits, onText: async () => {} });
+  assert.equal(final.outcome, 'abstained');
+  const after = aiTelemetrySnapshot().planner;
+  assert.equal(after.decisions.rota - before.decisions.rota, 0, 'discarded Rota decision is not counted');
+  assert.equal(after.decisions.abstain - before.decisions.abstain, 1, 'the surviving Deep decision is counted once');
+  const turns = (snapshot) => Object.values(snapshot.semantic).reduce((sum, value) => sum + value, 0);
+  assert.equal(turns(after) - turns(before), 1, 'the turn semantic state is counted once');
 });
 
 test('a final cursor page is not an exhaustive population even when complete marks the end', async (t) => {

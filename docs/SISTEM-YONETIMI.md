@@ -825,7 +825,8 @@ neyin yazıldığını seçer. `json` her olayı tek JSON satırı olarak yazar 
 `summary`, kısa insan satırı olan olaylarda (şu an her Bilgin turu `ai.grounded.turn` ve boş model yanıtı
 `ai.provider.empty_completion`) JSON yerine bu satırı yazar; özet satırı olmayan bütün olaylar JSON kalır. `both`
 ikisini birlikte yazar (tanı). Değer verilmezse etkileşimli terminalde `summary`, dosyaya ya da günlük toplayıcıya
-yönlendirilmiş çıktıda `json` kullanılır; geçersiz değer bu varsayılana döner. Özet satırı içeriksiz bağlamdan
+yönlendirilmiş çıktıda `json` kullanılır; terminal denetimi olayın yazıldığı akıştadır (bilgi stdout'a, uyarı ve hata
+stderr'e: stdout terminal, stderr toplayıcıya yönlendirilmişse uyarılar JSON kalır); geçersiz değer bu varsayılana döner. Özet satırı içeriksiz bağlamdan
 kurulur (soru, yanıt, kayıt adı, Sicil yoktur) ve ilişkilendirme kimliğinin ilk sekiz karakteriyle biter:
 
 ```

@@ -58,7 +58,7 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   const logs = captureConsole(t);
   let sheet;
   stack.provider.enqueue(plan(), composer((view) => {
-    return { blocks: [{ type: 'details', source: 'D1' }, { type: 'rows', source: 'T1', style: 'table' }, { type: 'chart', source: 'G1', style: 'bar' }] };
+    return { blocks: [{ type: 'details', source: 'D1' }, { type: 'say', items: view.propositions.filter((item) => item.kind !== 'count').slice(0, 3).map((item) => item.id) }, { type: 'rows', source: 'T1', style: 'table' }, { type: 'chart', source: 'G1', style: 'bar' }] };
   }, (view) => { sheet = view; }));
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
   const answer = doneOf(response).assistantMessage;
@@ -81,7 +81,7 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   assert.deepEqual(stored.map((row) => [row.tool, row.resultScope]), deterministic.map((row) => [row.tool, row.resultScope]));
   const [line] = turnLines(logs);
   assert.equal(turnLines(logs).length, 1, 'tek tamamlanma kaydı');
-  assert.deepEqual({ ...line.context.presentation, ms: null }, { mode: 'composed', reason: null, issue: null, blocks: 3, said: 0, tables: 1, notes: 0, titled: false, chart: 'bar', charts: 1, ms: null, rejected: null });
+  assert.deepEqual({ ...line.context.presentation, ms: null }, { mode: 'composed', reason: null, issue: null, blocks: 4, said: 3, tables: 1, notes: 0, titled: false, chart: 'bar', charts: 1, ms: null, rejected: null });
   assert.deepEqual(line.context.rounds.map((round) => [round.purpose, round.budget, round.calls]), [['plan', STANDARD.maxOutputTokens, 1], ['compose', COMPOSITION_RUNTIME.maxOutputTokens, 0]]);
   assert.equal(line.context.escalated, false);
   for (const secret of [QUESTION, 'Haftalık durum toplantısı', 'Radar test planı', String(AYSE), 'gecikmiş göreviniz']) {
@@ -146,13 +146,33 @@ test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; ya
     const stack = stackFor(inner);
     const logs = captureConsole(inner);
     stack.provider.enqueue(plan(), composer(() => ({ blocks: [{ type: 'say', items: ['P7'] }, { type: 'rows', source: 'T1' }] })),
-      composer(() => ({ blocks: [{ type: 'say', items: ['P1', 'P2', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }] })));
+      composer(() => ({ blocks: [{ type: 'say', items: ['P1', 'P2', 'P3', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }] })));
     const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
-    assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\. En uzun süredir geciken görev \*\*Haftalık durum toplantısı\*\* \(\*\*23 gün\*\*\)\. Ayrıntıları aşağıdaki tabloda görebilirsiniz\. 【R1】/);
+    assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\. En uzun süredir geciken görev \*\*Haftalık durum toplantısı\*\* \(\*\*23 gün\*\*\)\. En kısa süredir geciken görev \*\*Kısmi kendi görevim\*\* \(\*\*1 gün\*\*\)\. Ayrıntıları aşağıdaki tabloda görebilirsiniz\. 【R1】/);
     const [line] = turnLines(logs);
-    assert.deepEqual([line.context.presentation.mode, line.context.presentation.rejected, line.context.presentation.said], ['composed', 'UNKNOWN_PROPOSITION', 2]);
+    assert.deepEqual([line.context.presentation.mode, line.context.presentation.rejected, line.context.presentation.said], ['composed', 'UNKNOWN_PROPOSITION', 3]);
     assert.equal(line.context.escalation.kind, 'narrate');
   });
+});
+
+test('anlatım devrinde yetki Derin düzen çağrısından ÖNCE yeniden okunur: erişim kalktıysa önerme sayfası Derin sağlayıcıya gitmez', async (t) => {
+  const stack = stackFor(t);
+  const logs = captureConsole(t);
+  // Zayıf anlatım yapısal olarak reddedilir; o sırada kullanıcının erişimi kalkar (Derin kuyruğu beklenirken olabilecek değişiklik).
+  stack.provider.enqueue(plan(), composer(() => {
+    stack.db.projectAccess = [];
+    stack.db.taskAssignees = [];
+    stack.db.executiveScope = [];
+    for (const project of stack.db.projects) project.LeadSicil = LEAD;
+    return { blocks: [{ type: 'say', items: ['P99'] }, { type: 'rows', source: 'T1' }] };
+  }));
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD.model, STANDARD.model], 'Derin düzen çağrısı yapılmaz');
+  assert.notEqual(answer.finishReason, 'stop');
+  assert.equal(answer.content.includes('Haftalık durum toplantısı'), false, 'iptal edilen kayıt açıklanmaz');
+  assert.equal(stack.db.aiMessageEvidence.length, 0);
+  const [line] = turnLines(logs);
+  assert.equal(line.context.escalation.kind, 'narrate');
 });
 
 test('Derin kipte düzen Derin oturumunda yürür ve düşünmeye yer bırakan profil sınırını kullanır', async (t) => {
@@ -161,7 +181,7 @@ test('Derin kipte düzen Derin oturumunda yürür ve düşünmeye yer bırakan p
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION, mode: 'deep' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.deepEqual(stack.provider.calls.map((call) => [call.model, call.maxOutputTokens]), [[DEEP.model, DEEP.maxOutputTokens], [DEEP.model, DEEP.maxOutputTokens]]);
-  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
 });
 
 test('kalan süre düzen penceresine yetmiyorsa düzen istenmez; doğrulanmış anlatım gösterilir', async (t) => {
@@ -228,7 +248,7 @@ test('İngilizce plan İngilizce olgu sayfası ve yanıt üretir', async (t) => 
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Show my overdue tasks.' })).assistantMessage;
   assert.equal(sheet.language, 'en');
   assert.equal(Object.hasOwn(sheet, 'facts'), false);
-  assert.match(answer.content, /^\*\*3\*\* matching tasks were found/);
+  assert.match(answer.content, /^You currently have \*\*3\*\* overdue tasks\./);
   assert.match(answer.content, /\| Task \| Deadline \| Overdue days \|/);
 });
 
@@ -541,8 +561,9 @@ test('sunum telemetrisi yalnız teslim edilen kendi yanıtını ve grafiklerini 
     await t.test(delivery, async (inner) => {
       const stack = stackFor(inner);
       const logs = captureConsole(inner);
-      stack.provider.enqueue(plan(), composer(() => ({ blocks: [
-        { type: 'details', source: 'D1' }, { type: 'rows', source: 'T1' }, { type: 'chart', source: 'G1', style: 'bar' }
+      stack.provider.enqueue(plan(), composer((view) => ({ blocks: [
+        { type: 'details', source: 'D1' }, { type: 'say', items: view.propositions.filter((item) => item.kind !== 'count').slice(0, 3).map((item) => item.id) },
+        { type: 'rows', source: 'T1' }, { type: 'chart', source: 'G1', style: 'bar' }
       ] })));
       const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: QUESTION, mode: 'standard' }) });
       inner.after(() => turn.claim.release());

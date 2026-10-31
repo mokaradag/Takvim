@@ -77,7 +77,8 @@ export function logEvent(input = {}) {
     record = buildLogRecord(input);
     const method = CONSOLE_METHOD[record.level] || 'info';
     const summary = typeof input.summary === 'string' ? sanitizeText(input.summary) : '';
-    const format = summary ? consoleLogFormat() : 'json';
+    // Biçim, olayın gerçekten yazıldığı akışa göre seçilir: console.warn/error stderr'e, console.info stdout'a yazar.
+    const format = summary ? consoleLogFormat(process.env, method === 'info' ? process.stdout : process.stderr) : 'json';
     if (format !== 'json') console[method](`[mergen-rota] ${summary}${record.correlationId ? ` | ${String(record.correlationId).slice(0, 8)}` : ''}`);
     if (format !== 'summary') console[method](`[mergen-rota] ${JSON.stringify(record)}`);
   } catch {

@@ -13,6 +13,9 @@ import {
 import { escapedFactText } from './evidenceFacts.js';
 import { countProposition, noteLabel, pointerSentence, populationProposition, tablePropositions, titleCandidate } from './groundedPropositions.js';
 
+/** Anlatımın en az önerme sayısı: sayfada bu kadar önerme varsa düzen en az bu kadarını söyler (azsa hepsini). */
+export const MIN_NARRATED_PROPOSITIONS = 3;
+
 /**
  * Doğrulanmış yanıtın KANITA BAĞLI ANLATIMI (Aşama 4D).
  *
@@ -104,7 +107,10 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     if (!proposition || propositions.size >= COMPOSITION_LIMITS.maxPropositions) return null;
     const id = `P${propositions.size + 1}`;
     propositions.set(id, Object.freeze({ id, part: ordinal, ...proposition, ...extra }));
+    // Kaynak bağı modele kimlikle gösterilir: önerme hangi tablonun (T#) hangi sütununa (C#) dayanır; grafik yönlendirmesi bununla seçilir.
+    const table = extra.table ?? null;
     viewPropositions.push({ id, part: ordinal, kind: proposition.kind, ...(proposition.tone && proposition.tone !== 'info' ? { tone: proposition.tone } : {}),
+      ...(table ? { table } : {}), ...(table && Number.isInteger(proposition.column) ? { column: `C${proposition.column + 1}` } : {}),
       text: clip(proposition.plain, COMPOSITION_LIMITS.maxValueChars * 2) });
     return id;
   };
@@ -153,10 +159,17 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         // Sayım ölçüsü seçilmemiş listede nüfusun tamamı kanıttaysa sayım, aynı kanıtın zarfından önerme olur.
         const population = populations.get(group.evidenceId) ?? null;
         if (!countId && !totalFact && population === described.rows.length) {
-          propose(ordinal, populationProposition({ group, described, size: population, locale }), { table: id });
+          // Doğal betim süzgeçlerin tamamını ifade edemezse sayım, aynı süzgeçlerin ölçütlü belirlenimci cümlesidir.
+          const fallback = (filters) => {
+            const subject = filters.projectId && typeof filters.project === 'string' ? filters.project : 'Rota';
+            const fact = Object.freeze({ field: 'totalCount', value: population, subject, semantic: Object.freeze({ filters, complete: true }) });
+            const text = renderEnvelopeSentences({ ...group, envelope: [fact] }, { locale, only: ['totalCount'] }).join(' ');
+            return text ? { markdown: text, plain: markdownPlainText(text) } : null;
+          };
+          propose(ordinal, populationProposition({ group, described, size: population, locale, fallback }), { table: id });
         }
         // Türetilmiş önermeler bütün sayımlardan sonra eklenir: sınır bir sayımı düşürüp türetilmişi tutamaz.
-        for (const proposition of tablePropositions({ group, described, distribution: partition, locale, population })) derived.push({ ordinal, proposition, table: id });
+        for (const proposition of tablePropositions({ group, described, distribution: partition, locale, population, collection })) derived.push({ ordinal, proposition, table: id });
         // Grafik adayı: satır başına tek, sonlu ve negatif olmayan sayı taşıyan sütun.
         described.columns.forEach((column, index) => {
           if (!column.numeric || !labels || charts.size >= COMPOSITION_LIMITS.maxCharts) return;
@@ -180,7 +193,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           const types = distribution ? ['bar', 'donut'] : ['bar'];
           const title = answerChartLabel(column.label, ANSWER_CHART_LIMITS.maxTitleChars);
           if (!types.every((type) => answerChartFence({ version: 1, type, locale, title, unit, evidence: [group.evidenceId], items }))) return;
-          charts.set(chartId, Object.freeze({ id: chartId, table: id, title, unit, evidenceId: group.evidenceId, items, types }));
+          charts.set(chartId, Object.freeze({ id: chartId, table: id, column: index, title, unit, evidenceId: group.evidenceId, items, types }));
           viewCharts.push({ id: chartId, table: id, column: columns[index].id, title: column.label, types });
         });
       }
@@ -199,6 +212,14 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   }
   if (overflow || (!details.size && !tables.size)) return null;
   for (const { ordinal, proposition, table } of derived) propose(ordinal, proposition, { table });
+  // Çok bölümlü sayfada başlık, ardından gelen blokların nüfusunu adlandırır: başlığı olmayan bir bölüm varsa onun
+  // olguları başka bölümün başlığı altına düşebilir. Bu durumda başlık seçeneği hiç sunulmaz (seçim daralır, olgu değişmez).
+  const contentParts = new Set([...tables.values(), ...details.values()].map((item) => item.part));
+  const titledParts = new Set([...titles.values()].map((item) => item.part));
+  if (contentParts.size > 1 && [...contentParts].some((part) => !titledParts.has(part))) {
+    titles.clear();
+    viewTitles.length = 0;
+  }
   const partCount = new Set(parts.map((part) => part.index)).size + missing.length;
   const view = {
     language: locale === 'en' ? 'en' : 'tr',
@@ -256,6 +277,17 @@ export function validateComposition(composition, response) {
   const spoken = new Set();
   const emphasized = new Set();
   const pointers = [];
+  // Bölüm sahipliği: başlık, ardından gelen blokların nüfusunu adlandırır; her blok tek bölümündür.
+  const partOfSource = (type, source) => (type === 'title' ? render.titles.get(source)?.part : type === 'rows' ? render.tables.get(source)?.part
+    : type === 'details' ? render.details.get(source)?.part : render.tables.get(render.charts.get(source)?.table)?.part);
+  const partOfItem = (id) => render.propositions?.get(id)?.part ?? partOfSource(render.tables.has(id) ? 'rows' : 'chart', id);
+  let titledPart = null;
+  const owned = (parts) => {
+    const unique = new Set(parts);
+    if (unique.size !== 1) return 'PART_MIXED';
+    const [part] = unique;
+    return titledPart != null && part !== titledPart ? 'PART_SCOPE' : null;
+  };
   for (let index = 0; index < raw.length; index += 1) {
     if (!Object.hasOwn(raw, index)) return fail('BLOCK_INVALID');
     const block = raw[index];
@@ -265,6 +297,7 @@ export function validateComposition(composition, response) {
       if (typeof block.source !== 'string' || !render.titles?.has(block.source)) return fail('UNKNOWN_SOURCE');
       if (usedSources.has(block.source)) return fail('DUPLICATE_SOURCE');
       usedSources.add(block.source);
+      titledPart = render.titles.get(block.source).part;
       blocks.push({ type, source: block.source });
       continue;
     }
@@ -282,6 +315,8 @@ export function validateComposition(composition, response) {
         usedPropositions.add(items[position]);
         emphasized.add(items[position]);
       }
+      const scope = owned(items.map(partOfItem));
+      if (scope) return fail(scope);
       blocks.push({ type, items: [...items] });
       continue;
     }
@@ -302,6 +337,8 @@ export function validateComposition(composition, response) {
           pointers.push({ id, at: index });
         } else return fail('UNKNOWN_PROPOSITION');
       }
+      const scope = owned(items.map(partOfItem));
+      if (scope) return fail(scope);
       blocks.push({ type, items: [...items] });
       continue;
     }
@@ -311,6 +348,8 @@ export function validateComposition(composition, response) {
     if (!known) return fail('UNKNOWN_SOURCE');
     if (usedSources.has(source)) return fail('DUPLICATE_SOURCE');
     usedSources.add(source);
+    const scope = owned([partOfSource(type, source)]);
+    if (scope) return fail(scope);
     if (type === 'rows') {
       if (block.style != null && !ROW_STYLES.has(block.style)) return fail('STYLE_INVALID');
       // Açıkça istenen düzen modelin seçiminden önce gelir; satır sırasını sunucu korur.
@@ -323,21 +362,44 @@ export function validateComposition(composition, response) {
   }
   if (['chart', 'note'].includes(blocks[0].type) || blocks.at(-1).type === 'title') return fail('LEAD_REQUIRED');
   if (blocks.filter((item) => item.type === 'title').length > COMPOSITION_LIMITS.maxTitles) return fail('BLOCK_COUNT');
-  // Yönlendirme yalnızca SONRAKİ bir blokta çizilen tablo ya da grafiğe olabilir ("aşağıdaki tablo").
-  for (const pointer of pointers) {
-    const kind = render.tables.has(pointer.id) ? 'rows' : 'chart';
-    if (!blocks.some((item, at) => at > pointer.at && item.type === kind && item.source === pointer.id)) return fail('POINTER_TARGET');
+  // Yönlendirme ("aşağıdaki tablo/grafik") paragrafın HEMEN ardından çizilen kanıt bloklarınadır: paragrafın k yönlendirmesi,
+  // ondan sonraki ilk k tablo/grafik bloğudur. Araya başka bir tablo ya da grafik giremez.
+  const evidenceAfter = (at) => blocks.slice(at + 1).filter((item) => item.type === 'rows' || item.type === 'chart').map((item) => item.source);
+  for (const at of new Set(pointers.map((pointer) => pointer.at))) {
+    const targets = pointers.filter((pointer) => pointer.at === at).map((pointer) => pointer.id);
+    const next = evidenceAfter(at).slice(0, targets.length);
+    if (next.length !== targets.length || targets.some((id) => !next.includes(id))) return fail('POINTER_TARGET');
+    // Yönlendirilen blok paragrafın önermelerinden en az birini desteklemelidir: tablo kendi kanıtının önermelerini,
+    // grafik yalnızca gösterdiği sütunun (aynı tablo ve sütun) önermelerini. Önermesiz yönlendirme paragrafı serbesttir.
+    const said = blocks[at].items.map((id) => render.propositions?.get(id)).filter(Boolean);
+    if (said.length && targets.some((id) => !said.some((proposition) => supports(render, id, proposition)))) return fail('POINTER_PROVENANCE');
   }
   // Önizleme ya da grafik bütün satırların yerine geçmez; kapsam yalnızca sunucu bloğuyla sağlanır.
   if ([...render.tables.keys()].some((id) => !usedSources.has(id))) return fail('COVERAGE_INCOMPLETE');
   // Not kutusunda vurgulanan önerme paragraftan çıkar; boşalan paragraf düşer (yönlendirmelerin göreli sırası korunur).
-  if (emphasized.size) {
-    const normalized = blocks.map((block) => (block.type === 'say' ? { ...block, items: block.items.filter((id) => !emphasized.has(id)) } : block))
-      .filter((block) => block.type !== 'say' || block.items.length);
-    return normalized.length && !['chart', 'note'].includes(normalized[0].type) ? { ok: true, blocks: normalized } : fail('LEAD_REQUIRED');
+  const normalized = emphasized.size ? blocks.map((block) => (block.type === 'say' ? { ...block, items: block.items.filter((id) => !emphasized.has(id)) } : block))
+    .filter((block) => block.type !== 'say' || block.items.length) : blocks;
+  if (!normalized.length || ['chart', 'note'].includes(normalized[0].type)) return fail('LEAD_REQUIRED');
+  // Aşama 4D anlatımı: doğrulanmış önerme varsa düzen analist paragrafı içerir (yalnızca tablo/başlık 4C'dir) ve sayfanın
+  // izin verdiği ölçüde zengindir: en az MIN_NARRATED_PROPOSITIONS önerme (sayfada daha azı varsa hepsi). Önerme yoksa kısa kalır.
+  const available = render.propositions?.size || 0;
+  if (available) {
+    const inSay = normalized.some((block) => block.type === 'say' && block.items.some((id) => render.propositions.has(id)));
+    if (!inSay || usedPropositions.size < Math.min(MIN_NARRATED_PROPOSITIONS, available)) return fail('NARRATION_REQUIRED');
   }
   // Atlanan ayrıntıları (kapsam ve eksik sonuç notları dahil) çizici her zaman ekler.
-  return { ok: true, blocks };
+  return { ok: true, blocks: normalized };
+}
+
+/**
+ * Yönlendirilen blok önermeyi destekliyor mu (yapısal kaynak bağı)? Tablo: önerme o tablodan türetilmiştir ya da
+ * tablosuz önerme (zarf sayımı) aynı kanıttandır. Grafik: önerme grafiğin tablosunun grafiğe dönüşen sütunundandır.
+ */
+function supports(render, id, proposition) {
+  const table = render.tables.get(id);
+  if (table) return proposition.table === id || (proposition.table == null && proposition.evidenceId === table.evidenceId && proposition.part === table.part);
+  const chart = render.charts.get(id);
+  return Boolean(chart) && proposition.table === chart.table && proposition.column === chart.column;
 }
 
 /* ── Çizim ─────────────────────────────────────────────────────── */

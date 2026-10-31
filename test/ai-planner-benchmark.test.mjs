@@ -1536,8 +1536,10 @@ test('Claude Windows kilit temizliği: geçici dosya paylaşımı hatası sahipl
         const original = fs[${JSON.stringify(method)}];
         let failures = 0;
         fs[${JSON.stringify(method)}] = function(file, ...args) {
-          const target = ${JSON.stringify(phase)} === 'directory' ? file === ${JSON.stringify(lock)}
-            : path.dirname(file) === ${JSON.stringify(lock)} && path.basename(file).startsWith(String(${phase === 'stale' ? process.pid : 'process.pid'}) + '-');
+          // Node 22'de fs.rmSync'in JavaScript uygulaması bu dışa aktarımı Buffer yoluyla çağırır (Node 24'te yerel); yol metne çevrilir.
+          const name = Buffer.isBuffer(file) ? file.toString() : String(file);
+          const target = ${JSON.stringify(phase)} === 'directory' ? name === ${JSON.stringify(lock)}
+            : path.dirname(name) === ${JSON.stringify(lock)} && path.basename(name).startsWith(String(${phase === 'stale' ? process.pid : 'process.pid'}) + '-');
           if (target && failures++ < 2) {
             fs.appendFileSync(${JSON.stringify(`${cli.log}.faults`)}, '${code}\\n');
             throw Object.assign(new Error('sharing violation'), { code: '${code}' });
@@ -2049,7 +2051,10 @@ test('4C takip nitelendirmesi son yedi: ilk liste tam görünür atama nüfusunu
   `);
   for (const mode of ['complete', 'subset', 'extra']) {
     rmSync(out, { force: true });
-    const run = spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, '--test', '--test-isolation=none', '--test-name-pattern=takip zinciri:', 'scripts/planner-followup-qualification.mjs'],
+    // Bayrak Node 23.6'da yeniden adlandırıldı (CI Node 24: --test-isolation; Node 22: --experimental-test-isolation); davranış aynıdır.
+    const [major, minor] = process.versions.node.split('.').map(Number);
+    const isolation = major > 23 || (major === 23 && minor >= 6) ? '--test-isolation=none' : '--experimental-test-isolation=none';
+    const run = spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, '--test', isolation, '--test-name-pattern=takip zinciri:', 'scripts/planner-followup-qualification.mjs'],
       { encoding: 'utf8', timeout: 15000, env: { ...commandPlatformEnv(), POPULATION_CASE: mode, PLANNER_FOLLOWUP_OUT: out } });
     assert.equal(run.error, undefined, run.stderr);
     assert.ok((await import('node:fs')).existsSync(out), run.stdout + run.stderr);

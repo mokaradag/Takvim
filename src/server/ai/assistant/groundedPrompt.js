@@ -134,12 +134,12 @@ export function compositionSystemPrompt() {
     'Yalnızca tek JSON nesnesi döndür: {"blocks":[...]}. En çok on iki blok. Kendi cümleni, sayını ya da alanını yazma: yalnızca sayfadaki kimlikleri seç; cümleleri sunucu yazar.',
     'Bloklar:',
     '{"type":"title","source":"H1"}: isteğe bağlı başlık; yalnızca sayfadaki H#.',
-    '{"type":"say","items":["P1","P2","P3","T1"]}: paragraf. P# önermelerdir. Sona eklenen T# ya da G# sonraki blokta gösterilen tabloya/grafiğe yönlendiren cümle olur.',
+    '{"type":"say","items":["P1","P2","P3","T1"]}: paragraf. P# önermelerdir. Sona eklenen T# ya da G# paragrafın HEMEN ardından gelen tablo/grafik bloğuna yönlendirir; G# yalnızca paragraftaki bir P# aynı table ve column değerini taşıyorsa.',
     '{"type":"rows","source":"T1","style":"table"}: tablo (table) ya da liste (list). Her tablo bir kez zorunlu.',
     '{"type":"chart","source":"G1","style":"bar"}: isteğe bağlı grafik; style adayın types değerlerinden biri.',
     '{"type":"note","items":["P5"]}: vurgulu not kutusu; yalnızca P#. Rengini önermenin tonu (tone) belirler.',
     '{"type":"details","source":"D1"}: sunucunun hazır ayrıntısı.',
-    'Yazım: başlık varsa onunla başla. İlk paragraf soruyu doğrudan yanıtlasın ve sayfada varsa 3-5 önermeyi birleştirsin: önce sayım ya da toplam, sonra en anlamlı ilişkiler (en büyük/en küçük, ortalama, çoğunluk, yoğunlaşma); tek cümlelik paragraf yazma. Sonra tablo ve uygunsa grafik; tone değeri warning ya da success olan dikkat çekici bir önermeyi not kutusuna koyabilirsin (o önermeyi paragrafta tekrar etme). Soruyla ilgisiz önermeyi seçme; her kimliği bir kez kullan. İlk blok grafik ya da not olamaz. Dil sayfanın language alanıdır.',
+    'Yazım: başlık varsa onunla başla. İlk paragraf soruyu doğrudan yanıtlasın ve sayfada varsa 3-5 önermeyi birleştirsin: önce sayım ya da toplam, sonra en anlamlı ilişkiler (en büyük/en küçük, ortalama, çoğunluk, yoğunlaşma); tek cümlelik paragraf yazma. Önerme varsa en az üçünü (daha azsa hepsini) söyle: yalnızca tablo ya da başlık yetmez. Sonra tablo ve uygunsa grafik; tone değeri warning ya da success olan dikkat çekici bir önermeyi not kutusuna koyabilirsin (o önermeyi paragrafta tekrar etme). Soruyla ilgisiz önermeyi seçme; her kimliği bir kez kullan. İlk blok grafik ya da not olamaz. parts birden çoksa bir paragraf ya da not yalnızca tek bölümün (part) kimliklerini taşır; başlık yalnızca kendi bölümünün bloklarının önünde durur. Dil sayfanın language alanıdır.',
     'Örnek: {"blocks":[{"type":"title","source":"H1"},{"type":"say","items":["P1","P2","P4","P6","T1"]},{"type":"rows","source":"T1","style":"table"},{"type":"note","items":["P5"]}]}'
   ].join('\n');
 }

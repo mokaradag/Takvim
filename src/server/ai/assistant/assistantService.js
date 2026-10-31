@@ -933,7 +933,8 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
     // doğrulanmış yanıt hazırdır; teslim kendi yetki denetimiyle yine denenir.
     if (timedOut && request.kind !== 'narrate') { request.traceError?.(error); throw error; }
     try {
-      return await request.fallback(onText);
+      // Doğrulanmış yanıtın teslimi, süresi dolmuş model oturumuna değil isteğin kendi iptal sinyaline bağlıdır.
+      return await request.fallback(onText, signal);
     } catch (fallbackError) {
       request.traceError?.(fallbackError);
       throw fallbackError;

@@ -1665,16 +1665,16 @@ olayları dış üretim gözcüsüne ilerleme bildirir; ham düzen çıktısı k
 
 | Tür | Türetildiği yer | Önkoşul (sağlanmazsa önerme yoktur) | Örnek (tr) |
 | --- | --- | --- | --- |
-| `count` | Yalnızca zarf sayısından oluşan ayrıntının `totalCount` olgusu; sayım ölçüsü seçilmemiş görev listesinde atfedilen kanıtın kesin toplamı | Sayı bilinir (null değil); liste kanıtında okuma nüfusun tamamıdır (tam, kesilmemiş, imleçsiz, döndürülen = kesin toplam) ve tablo bütün satırları taşır | Şu anda **4** gecikmiş göreviniz var. |
+| `count` | Yalnızca zarf sayısından oluşan ayrıntının `totalCount` olgusu; sayım ölçüsü seçilmemiş görev listesinde atfedilen kanıtın kesin toplamı | Sayı bilinir (null değil); liste kanıtında okuma nüfusun tamamıdır (tam, kesilmemiş, imleçsiz, döndürülen = kesin toplam) ve tablo bütün satırları taşır (tek görevlik tam nüfus da sayımdır) | Şu anda **4** gecikmiş göreviniz var. |
 | `maximum` / `minimum` | Satır tablosunun sayısal (yoksa tarih) sütunu | Bütün satırlar tam kanıttan, koleksiyonun tamamı gösterilir ve `totalCount` = satır sayısı; değerler farklı; ad yalnızca değerin tek sahibi ve tabloda tekil adı varsa | En uzun süredir geciken görev **X** (**9 gün**). / En uzun gecikme **9 gün**. |
-| `total` | `rota_task_analytics` grupları | Grup boyutu birbirini dışlar (`status`, `priority`, `project`, `deadline`, `target_month`; kişi grupları değil), dağılım tam, toplam > 0 | Toplam **165** göreviniz var. |
-| `majority` | Aynı dağılım | Tekil en büyük grup ve payı %50'yi aşar | Görevlerinizin büyük bölümü (**%69**) **Tamamlandı** durumunda. |
+| `total` | `rota_task_analytics` gruplarının **`tasks.total`** sütunu (açık/gecikmiş/tamamlanmış alt kümesi bütün görevlerin paydası değildir; ölçü kimliği kanıtın türüdür) | Grup boyutu birbirini dışlar (`status`, `priority`, `project`, `deadline`, `target_month`; kişi grupları değil), dağılım tam (tek grup da olabilir), toplam > 0 | Toplam **165** göreviniz var. |
+| `majority` | Aynı dağılım | Tekil en büyük grup, payı %50'yi aşar ve tek dolu grup değildir; gösterilen pay da %50'yi aşar (tam sayı %50 gösterecekse en az ondalıkla aşağı kesilir: 1001/2000 → %50,05) | Görevlerinizin büyük bölümü (**%69**) **Tamamlandı** durumunda. |
 | `largest` | Aynı dağılım | Tekil en büyük grup, pay ≤ %50 | En büyük grup **Yapılacak**: **40** görev (**%40**). |
 | `breakdown` | Aynı dağılım | En çok 8 grup | Durumlara göre: Tamamlandı **114**, Yapılacak **47**, Devam ediyor **4**. |
 | `completion` | Durum dağılımı (`groupBy: status`) | Bütün grup anahtarları `todo`/`in_progress`/`done`; tamamlanan ve açık görev var | Görevlerinizin **%69**'u tamamlandı; **51** görev hâlâ açık. |
-| `average` | Satır tablosunun sayısal sütunu | Bütün nüfus; en az 3 satır | Gecikmelerin ortalaması **5,3 gün**. |
+| `average` | Satır tablosunun sayısal sütunu | Bütün nüfus; en az 3 satır (bütün satır istatistikleri en az 2 satır ister) | Gecikmelerin ortalaması **5,3 gün**. |
 | `threshold` | `task.overdueDays` sütunu | Bütün nüfus; sabit eşik 7 gün ("bir haftayı aşan" = 7'den büyük) | **4** görevin **1**'i bir haftadan uzun süredir gecikmiş. |
-| `concentration` | Görev satırlarının doğrulanmış proje bağlamı | Bütün nüfus; her satırın proje bağlamı var | Bu görevlerin tamamı **PAYKDM Bölüm Faaliyetleri** projesinde. |
+| `concentration` | Görev koleksiyonu satırlarının doğrulanmış proje bağlamı | Bütün nüfus; her satırın proje KİMLİĞİ var (gruplama kimlikle, ad yalnızca gösterim; aynı adlı iki proje bir proje değildir ve adla öne çıkarılmaz) | Bu görevlerin tamamı **PAYKDM Bölüm Faaliyetleri** projesinde. |
 | `span` | Tarih sütunu (sayısal önerme yoksa) | Bütün nüfus; değerler farklı | Terminler **26 Ekim 2026** ile **30 Ekim 2026** arasında. |
 
 Her önermenin sunucu tonu vardır (`info`, `warning`, `success`): gecikmiş sayım, en uzun gecikme ve bir haftayı aşan
@@ -1685,7 +1685,9 @@ nüfusu adlandırır, sayı ya da ilişki içermez ve süzgeçler doğal olarak 
 
 Sayım cümlesinin nüfus betimi süzgeçlerden üretilir (sorumlu ben/sorumlusuz, termin kovası, durum, öncelik, proje,
 termin aralığı). Süzgeçlerin TAMAMI doğal olarak ifade edilemiyorsa (ör. başlık araması, kişi, WBS) önerme sunucunun
-ölçütlü belirlenimci cümlesidir (`Eşleşen 4 görev bulundu (ölçüt: …)`). Paylar tam sayı yüzdedir; sıfırdan büyük ve
+ölçütlü belirlenimci cümlesidir (`Eşleşen 4 görev bulundu (ölçüt: …)`). Kilometre taşı süzgecinin iki değeri de
+(`false` kilometre taşlarını dışlar) nüfusu daraltır; doğal cümle onu düşürüp "2 göreviniz var" demez. Başlık da termin
+aralığını (tek uçlu ve gruplanmış dahil) taşır ya da hiç sunulmaz; nüfusu genişletmez. Paylar tam sayı yüzdedir; sıfırdan büyük ve
 tamamdan küçük pay %0 ya da %100 görünmez. Tablonun `_Ölçüt: …_` satırı kapsam etiketi olarak her zaman korunur.
 Sayfada en çok 12 önerme vardır; bütün sayımlar türetilmiş önermelerden önce gelir. Bütün cümleler ve değer
 biçimleri (`**…**`, kaçış) sunucunundur; model metni hiçbir zaman okunmaz ya da yorumlanmaz.
@@ -1695,9 +1697,11 @@ biçimleri (`**…**`, kaçış) sunucunundur; model metni hiçbir zaman okunmaz
 Model yalnızca tek JSON nesnesi döndürür: `{"blocks":[...]}` (en çok 12 blok).
 
 - `{"type":"title","source":"H1"}` — isteğe bağlı başlık (`#### …`); son blok olamaz, her aday bir kez.
-- `{"type":"say","items":["P1","P2","T1"]}` — paragraf (en çok 4 paragraf, paragrafta en çok 8 kimlik). `P#`
-  önermedir; `T#`/`G#` ise **sonraki bir blokta** çizilen tabloya/grafiğe yönlendiren sunucu cümlesidir
-  ("Ayrıntıları aşağıdaki tabloda görebilirsiniz.", "Dağılımı aşağıdaki grafikte görebilirsiniz.").
+- `{"type":"say","items":["P1","P2","P3","T1"]}` — paragraf (en çok 4 paragraf, paragrafta en çok 8 kimlik). `P#`
+  önermedir; `T#`/`G#` ise paragrafın **hemen ardından** çizilen tabloya/grafiğe yönlendiren sunucu cümlesidir
+  ("Ayrıntıları aşağıdaki tabloda görebilirsiniz.", "Dağılımı aşağıdaki grafikte görebilirsiniz."). Sayfada her önerme
+  kaynak bağını kimlikle taşır (`table: "T1"`, sütuna dayanıyorsa `column: "C2"`); grafik `G#` yalnızca paragraftaki
+  bir önerme aynı tablo ve sütundansa seçilebilir.
 - `{"type":"rows","source":"T1","style":"table|list"}` — her tablo bir kez zorunlu; açık düzen tercihi önceliklidir.
 - `{"type":"chart","source":"G1","style":"bar|donut"}` — isteğe bağlı; adayın türlerinden biri; ilk blok olamaz.
 - `{"type":"note","items":["P5"]}` — not kutusu (en çok 2 kutu, kutuda en çok 3 önerme, yalnızca `P#`); ilk blok olamaz.
@@ -1709,8 +1713,9 @@ Model yalnızca tek JSON nesnesi döndürür: `{"blocks":[...]}` (en çok 12 blo
 
 Yönerge zayıf modelden analist üslubu ister: başlık varsa onunla başlar, ilk paragraf soruyu doğrudan yanıtlar ve
 sayfada varsa 3–5 önermeyi birleştirir (önce sayım/toplam, sonra en anlamlı ilişkiler), ardından tablo/grafik ve
-uygunsa `warning`/`success` tonlu bir not kutusu gelir. Paragraf uzunluğu doğrulama koşulu değildir (zayıf modelde
-geri dönüşü artırmamak için); örnek çıktı:
+uygunsa `warning`/`success` tonlu bir not kutusu gelir. Zengin kanıt zengin anlatım ister: sayfada önerme varsa düzen
+en az bir paragraf ve en az üç önerme (sayfada daha azı varsa hepsini) söyler; yalnızca tablo ya da başlık 4C görünümüdür
+ve reddedilir (`NARRATION_REQUIRED`). Seyrek kanıtta (bir-iki önerme) kısa anlatım doğrudur; dolgu istenmez. Örnek çıktı:
 
 ```
 #### Gecikmiş görevleriniz
@@ -1725,7 +1730,12 @@ tamamı **PAYKDM · PAYKDM Bölüm Faaliyetleri** projesinde. Ayrıntıları aş
 ```
 
 Doğrulama yalnızca yapıyı denetler: tam anahtar kümesi, bilinen kimlik (`UNKNOWN_PROPOSITION`, `UNKNOWN_SOURCE`),
-yinelenmeyen önerme/kaynak/yönlendirme (`DUPLICATE_*`), yönlendirmenin sonraki bloğu (`POINTER_TARGET`), paragraf ve
+yinelenmeyen önerme/kaynak/yönlendirme (`DUPLICATE_*`), yönlendirmenin paragrafın hemen ardındaki kanıt bloğu olması
+(`POINTER_TARGET`: paragrafın k yönlendirmesi ondan sonraki ilk k tablo/grafik bloğudur), yönlendirilen bloğun
+paragraftaki bir önermeyi desteklemesi (`POINTER_PROVENANCE`: tablo kendi kanıtının önermelerini, grafik yalnızca
+gösterdiği sütunun önermelerini), bölüm sahipliği (`PART_MIXED`: paragraf/not tek bölümün kimliklerini taşır;
+`PART_SCOPE`: başlık, ardından gelen blokların bölümünü adlandırır — başlığı olmayan bir bölüm varsa çok bölümlü
+sayfada başlık hiç sunulmaz), anlatım (`NARRATION_REQUIRED`), paragraf ve
 not sınırları (`SAY_INVALID`, `NOTE_INVALID`), ilk bloğun grafik ya da not, son bloğun başlık olmaması (`LEAD_REQUIRED`) ve bütün tabloların kapsamı
 (`COVERAGE_INCOMPLETE`). Tek normalleştirme: paragrafta söylenen önerme sonraki not kutusunda da seçildiyse paragraftan
 çıkarılır (yalnızca kutuda kalır; boşalan paragraf düşer); kutudan sonra yeniden söyleme ya da iki kutuda kullanma
@@ -1754,7 +1764,10 @@ ve 5 sn teslim payı ayrılır; kalan düzen penceresi 8 sn'den azsa düzen iste
 profili kuruluysa, tur henüz devretmediyse ve ortak süreden en az 30 sn kaldıysa, aynı önerme sayfası (aynı iki
 ileti: sabit yönerge ve sayfa) Derin oturumuna BİR kez gönderilir. Derin kuyruğu en çok 5 sn beklenir. Derin'e zayıf
 modelin düzeni, plan, araç dökümü ya da kanıt yükü gönderilmez. Derin de başarısız olursa, oturum açılamazsa ya da
-hata verirse doğrulanmış belirlenimci anlatım gösterilir. Sağlayıcı hatası, süre ve `BUDGET` devredilmez: yanıt zaten
+hata verirse doğrulanmış belirlenimci anlatım gösterilir. Derin anlatımın ortak yaşam döngüsü süresi dolsa da
+(`AI_TIMEOUT`) doğrulanmış yanıt teslim edilir: süre yalnızca model denemesini bitirir; son yetki doğrulaması süresi
+dolmuş oturum sinyaliyle değil, isteğin kendi iptal sinyaline bağlı taze ve sınırlı bir okumayla (`callTimeoutMs`)
+yapılır. Model süresi uzatılmaz, yetki denetimi atlanmaz. Sağlayıcı hatası, süre ve `BUDGET` devredilmez: yanıt zaten
 doğrudur; kullanıcı yalnızca daha güzel bir cümle için bekletilmez.
 
 ### 13.7 Planlayıcı devri — temiz yeniden planlama
@@ -1774,10 +1787,11 @@ Devir turda **en fazla bir kez** olur ve iki biçimi vardır (`escalation.kind`)
   yoktur.
 
 Bütçeler: Standart deneme tek ucuz bildirim düzeltmesi kullanır (devir yoksa — Derin kip ya da Derin profili yok —
-iki); Derin'in temiz yeniden planlaması da tek düzeltme hakkıyla başlar. Atılan denemenin araç turu hakkı yeniden
-başlar; ortak kaynak bütçeleri (toplam çağrı, toplam sonuç boyutu, SQL süresi, mutlak üretim süresi) ve tükenmiş
-kanıt onarımı yeniden açılmaz. Yeniden planlama yalnızca kanıt varken, hiçbir okuma hata vermemişken, doğrulanmış bir
-bölüm yokken ve en az iki çağrı hakkı kalmışken açılır; `NOT_FOUND`, kapsam dışı, desteklenmeyen istek ya da
+iki); Derin'in temiz yeniden planlaması da tek düzeltme hakkıyla başlar (turda en çok iki bildirim düzeltmesi).
+Temiz yeniden başlangıç bir model/kanıt bağlamı yenilemesidir, kaynak bütçesi yenilemesi değil: ortak bütçeler (toplam
+çağrı, toplam sonuç boyutu, araç turu, araç evresi süresi, SQL süresi, mutlak üretim süresi) atılan denemenin
+harcamasıyla daralır ve tükenmiş kanıt onarımı yeniden açılmaz. Yeniden planlama yalnızca kanıt varken, hiçbir okuma
+hata vermemişken, doğrulanmış bir bölüm yokken, en az iki çağrı, bir araç turu ve araç evresi süresi kalmışken açılır; `NOT_FOUND`, kapsam dışı, desteklenmeyen istek ya da
 SQL/altyapı hatası devri engeller. Sıra hep `Standart → (tek düzeltme) → Derin → güvenli açıklama/ret/başarısızlık`
 biçimindedir; Derin'den Standart'a dönüş ya da ikinci devir yoktur.
 
@@ -1847,8 +1861,10 @@ yapılandırma uyarısı verir). Kapalıyken model turu yoktur; 4C belirlenimci 
 sözleşme özelliğini birlikte sınar. Anlatım vakaları planlamayı betikler ve yalnızca anlatım turunu modele gönderir;
 iki planlayıcı vakası (`planner: 'model'`) üretimin gerçek planlayıcı yönergesini, `rota_plan` aracını ve kataloğunu
 da modele gönderir. Derin modele giden her çağrı modele gitmez, devir sayılır ve kapıyı düşürür. İlk altyapı
-hatasında kalan vakalar koşmaz. `COMPOSITION_QUALIFICATION_CASE=<vaka>` tek vakayı (ör. kodu değişen vakayı) yeniden
-ölçer.
+hatasında kalan vakalar koşmaz. `COMPOSITION_QUALIFICATION_CASE=<vaka>[,<vaka>…]` yalnızca o vakaları (ör. kodu değişen
+vakayı) yeniden ölçer; aşamada olmayan (yanlış yazılmış) bir kimlik ya da boş seçim sınama kaydından önce reddedilir ve
+hiç vaka koşmayan kapı başarı sayılmaz (`COMPOSITION_NO_CASES`, `COMPOSITION_CASES_NOT_RUN`). Kompozisyonlu her turda
+sayfadaki önermelerin en az üçü (azsa hepsi) söylenmelidir (`NARRATION_TOO_THIN`).
 
 ```
 COMPOSITION_QUALIFICATION_PROVIDER=claude COMPOSITION_QUALIFICATION_STAGE=phase4d \

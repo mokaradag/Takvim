@@ -280,6 +280,10 @@ export function createToolExecutor({
 
   return Object.freeze({
     runRound,
+    /** Araç evresinde harcanan süre (temiz yeniden planlamanın ortak bütçesi için). */
+    phaseSpentMs() {
+      return limits.maxToolPhaseMs - phaseRemainingMs();
+    },
     stats() {
       return { calls: state.calls, attempted: state.attempted, failures: state.failures, resultBytes: state.resultBytes };
     }

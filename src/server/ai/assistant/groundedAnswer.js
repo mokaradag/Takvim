@@ -9,7 +9,7 @@ import {
   groundingRepairInstruction,
   withScopeDisclosure
 } from '../../../domain/ai/evidenceContract.js';
-import { recordGroundedAnswer, recordGroundedTurn, recordPlannerDecision, recordPlannerRejection } from '../aiTelemetry.js';
+import { recordGroundedAnswer, recordGroundedTurn, recordPlannerDecision, recordPlannerRejection, retractPlannerDecision } from '../aiTelemetry.js';
 import { createEvidenceLedger } from '../tools/evidenceLedger.js';
 import { createToolExecutor } from '../tools/toolExecutor.js';
 import { getRotaTool, TASK_RESULT_SCOPE_TOOLS, toolCatalogForModel } from '../tools/toolRegistry.js';
@@ -933,9 +933,11 @@ function settlePart(turn, verdict, selectedBy) {
 
 function countPlannerDecision(turn, decision) {
   if (turn.decisionCounted) return;
-  recordPlannerDecision({ decision: decision.intent, parts: decision.requests?.length || 0, semantic: turn.planning.state,
+  const counted = Object.freeze({ decision: decision.intent, parts: decision.requests?.length || 0 });
+  recordPlannerDecision({ ...counted, semantic: turn.planning.state,
     candidates: turn.planning.candidates.length, declarations: turn.trace.declarations,
-    latencyMs: Date.now() - turn.trace.startedAt, semanticReason: turn.planning.reason });
+    latencyMs: Date.now() - turn.trace.startedAt, semanticReason: turn.planning.reason, revision: Boolean(turn.decisionRetracted) });
+  turn.countedDecision = counted;
   turn.decisionCounted = true;
 }
 
@@ -1424,11 +1426,11 @@ export function finalGroundedDisclosure(verdict, { fallback = null, summaries, l
 }
 
 /** Doğrulanmış sonucun gösterimi: kapsam notunu sunucu ekler, yalnızca atfedilen kanıt kaydedilir. */
-async function finish(turn, settled, onText, selectedBy = 'model', { compose = true } = {}) {
+async function finish(turn, settled, onText, selectedBy = 'model', { compose = true, disclosureSignal = turn.session.signal } = {}) {
   let verdict = await presentVerdict(turn, settled, compose);
   if (verdict === NARRATE_DEEP) return narrationEscalation(turn, settled, selectedBy);
   // Model/araç beklemesinden sonra, yanıt ve kalıcı kanıt kurulmadan önce son yetki sınırı.
-  if (turn.ledger.revoked() || (verdict.citedIds.length && turn.revalidatedAt !== turn.work && (await revalidate(turn) || turn.ledger.revoked()))) {
+  if (turn.ledger.revoked() || (verdict.citedIds.length && turn.revalidatedAt !== turn.work && (await revalidate(turn, disclosureSignal) || turn.ledger.revoked()))) {
     verdict = unavailableVerdict(turn.locale);
     turn.trace.presentation = { mode: 'unavailable', reason: 'AUTHORIZATION' };
   }
@@ -1556,8 +1558,13 @@ function restartPlanning(turn, reason) {
   const spent = turn.executor.stats();
   turn.priorExecutorStats = Object.fromEntries(Object.entries(spent).map(([key, value]) => [key, value + (turn.priorExecutorStats?.[key] || 0)]));
   turn.priorToolRounds = (turn.priorToolRounds || 0) + turn.toolRounds;
+  // Temiz yeniden başlangıç bir model/kanıt bağlamı yenilemesidir, kaynak bütçesi yenilemesi değil: araç çağrısı, sonuç
+  // boyutu, araç turu ve araç evresi süresi atılan denemenin harcamasıyla daralır. SQL süresi turun ortak bağlamında
+  // (`turn.context`), mutlak süre oturumların ortak yaşam döngüsünde, onarım hakkı (`repairsLeft`) turda sürer.
   turn.limits = Object.freeze({ ...turn.limits, maxTotalCalls: Math.max(0, turn.limits.maxTotalCalls - spent.attempted),
-    maxTotalResultBytes: Math.max(0, turn.limits.maxTotalResultBytes - spent.resultBytes) });
+    maxTotalResultBytes: Math.max(0, turn.limits.maxTotalResultBytes - spent.resultBytes),
+    maxToolRounds: Math.max(0, turn.limits.maxToolRounds - turn.toolRounds),
+    maxToolPhaseMs: Math.max(0, turn.limits.maxToolPhaseMs - turn.executor.phaseSpentMs()) });
   // Atılan denemenin kanıtı ve bildirimiyle genişlemiş kapsamı ne modele ne kullanıcıya açılır: yeni defter, kanonik
   // seçeneklerden yeni kapsam, yeni yürütücü.
   turn.ledger = createEvidenceLedger();
@@ -1569,6 +1576,12 @@ function restartPlanning(turn, reason) {
   turn.readStarted = false;
   turn.revalidatedAt = null;
   turn.decision = null;
+  // Atılan planın kararı sayımdan geri alınır; Derin'in yerine geçen kararı (rota, clarify, abstain …) sayılır.
+  if (turn.decisionCounted) {
+    retractPlannerDecision(turn.countedDecision);
+    turn.decisionCounted = false;
+    turn.decisionRetracted = true;
+  }
   turn.route = TURN_ROUTES.UNDECIDED;
   turn.repairPins.clear();
   turn.textFieldsRequired = false;
@@ -1647,9 +1660,16 @@ function narrationEscalation(turn, settled, selectedBy) {
     noteEscalation: (summary) => { turn.trace.escalation = summary; },
     traceError: (error) => traceTurn(turn, 'error', { code: error?.code }),
     models: [...turn.models],
-    fallback: (onText) => {
+    /**
+     * Derin anlatım açılamaz, hata verir ya da modelin ortak süresi dolarsa doğrulanmış belirlenimci anlatım teslim edilir.
+     * Model oturumunun süresi yalnızca model denemesini bitirir: son yetki doğrulaması, süresi dolmuş oturum sinyaliyle değil,
+     * isteğin kendi (iptal edilebilir) sinyaline bağlı taze ve sınırlı bir teslim süresiyle (`revalidate`: callTimeoutMs) yapılır.
+     * Model süresi uzatılmaz; yetki denetimi atlanmaz.
+     */
+    fallback: (onText, deliverySignal = null) => {
       turn.pendingNarration = null;
-      return finish(turn, settled, onText, selectedBy, { compose: false });
+      turn.work += 1;
+      return finish(turn, settled, onText, selectedBy, { compose: false, disclosureSignal: deliverySignal });
     }
   };
 }
@@ -1770,7 +1790,8 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
   // Veri okunmuş ama kanıt bildirilen isteği karşılamıyorsa planın kendisi hatalıdır: atılır ve Derin temiz
   // planlar. Okuma hatası (veri/altyapı), doğrulanmış bölüm ya da tükenen çağrı bütçesi yeniden planlamayı açmaz.
   const restartable = () => turn.readStarted && ledger.ids().length > 0 && !turn.answers.length && !turn.toolFailureCodes.size
-    && limits.maxTotalCalls - executor.stats().attempted >= RESTART_MIN_CALLS && !evidenceReady();
+    && limits.maxTotalCalls - executor.stats().attempted >= RESTART_MIN_CALLS && turn.toolRounds < limits.maxToolRounds
+    && executor.phaseSpentMs() < limits.maxToolPhaseMs && !evidenceReady();
   const deepCanHelp = () => canEscalate() && (frozen() ? evidenceReady() || restartable() : toolsAvailable());
   let missingPreviousResult = null;
   const fallback = async (reason) => {

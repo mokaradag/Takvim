@@ -181,13 +181,21 @@ export function qualificationProvider(rounds, { provider = PROVIDER, completeRou
         })() };
       }
       if (provider === 'dry') {
-        // Kuru anlatım: başlık, ilk dört önermelik paragraf, bütün kaynaklar, grafik ve tonlu bir not (vakaların ve ölçümün sınaması).
-        const covering = coveringBlocks(view).blocks;
-        const said = (view.propositions || []).slice(0, 4).map((item) => item.id);
-        const noted = (view.propositions || []).slice(4).find((item) => item.tone);
-        const chart = view.charts[0] ? [{ type: 'chart', source: view.charts[0].id, style: view.charts[0].types.at(-1) }] : [];
-        fake.enqueue({ type: 'answer', native: true, text: JSON.stringify({ blocks: [...(view.titles?.[0] ? [{ type: 'title', source: view.titles[0].id }] : []),
-          ...(said.length ? [{ type: 'say', items: said }] : []), ...covering, ...chart, ...(noted ? [{ type: 'note', items: [noted.id] }] : [])].slice(0, 12) }) });
+        // Kuru anlatım, bölüm bölüm: başlık, ilk dört önermelik paragraf, kaynaklar, ilk grafik ve tonlu bir not (vakaların ve ölçümün sınaması).
+        const propositions = view.propositions || [];
+        const firstChart = view.charts[0] || null;
+        const parts = [...new Set([...propositions, ...view.details, ...view.tables].map((item) => item.part))].sort((left, right) => left - right);
+        const blocks = parts.flatMap((part) => {
+          const own = propositions.filter((item) => item.part === part);
+          const said = own.slice(0, 4).map((item) => item.id);
+          const noted = own.slice(4).find((item) => item.tone);
+          const tables = view.tables.filter((table) => table.part === part);
+          const chart = firstChart && tables.some((table) => table.id === firstChart.table) ? [{ type: 'chart', source: firstChart.id, style: firstChart.types.at(-1) }] : [];
+          return [...(view.titles || []).filter((title) => title.part === part).slice(0, 1).map((title) => ({ type: 'title', source: title.id })),
+            ...(said.length ? [{ type: 'say', items: said }] : []), ...view.details.filter((detail) => detail.part === part).map((detail) => ({ type: 'details', source: detail.id })),
+            ...tables.map((table) => ({ type: 'rows', source: table.id })), ...chart, ...(noted ? [{ type: 'note', items: [noted.id] }] : [])];
+        });
+        fake.enqueue({ type: 'answer', native: true, text: JSON.stringify({ blocks: blocks.slice(0, 12) }) });
         return fake.streamToolCompletion(input);
       }
       const reply = await completeRound(composing ? { messages: input.messages, tools: [], toolChoice: 'none', maxOutputTokens: input.maxOutputTokens }
@@ -266,6 +274,9 @@ export async function runCase(t, item, { providerOptions = {}, report = summary 
     } else if (item.requiresComposition) {
       if (composed.length !== 1 || presentation?.mode !== 'composed') failures.push('COMPOSITION_REQUIRED');
       if (turn.say && !(presentation?.said > 0)) failures.push('NARRATION_REQUIRED');
+      // Zengin kanıt zengin anlatım ister: sayfada önerme varsa en az üçü (azsa hepsi) söylenir; 4C görünümü geçmez.
+      const available = composed[0]?.propositions ?? 0;
+      if (presentation?.mode === 'composed' && available && !(presentation.said >= Math.min(3, available))) failures.push('NARRATION_TOO_THIN');
       if (turn.chart && !(presentation?.charts > 0)) failures.push('CHART_REQUIRED');
     } else if (composed.length || presentation?.mode !== 'narrative' || presentation?.reason !== 'NO_CHOICE') failures.push('COMPOSITION_NO_CHOICE_REQUIRED');
     if (routing.escalations > escalationsBefore) failures.push('DEEP_ESCALATION');
@@ -292,11 +303,30 @@ export async function runCase(t, item, { providerOptions = {}, report = summary 
  * Rapor yazıldıktan sonra yanıtsız tur, değer denetimi hatası, Derin devri ya da düşünme komutu başarısız kılar.
  * Düzen gereken vakada geri dönüş üretimde güvenlidir; model nitelendirmesi için başarı değildir.
  */
+/**
+ * Aşamanın vakaları; COMPOSITION_QUALIFICATION_CASE verilirse yalnızca o vakalar. Kapı kapalı başarısız olur:
+ * aşamada olmayan (ör. yanlış yazılmış) bir kimlik ya da hiç vaka seçmeyen süzgeç sınama kaydından ÖNCE reddedilir.
+ */
+export function selectQualificationCases(stage, requested = null) {
+  const pool = stage === 'phase4d' ? PHASE4D_CASES : COMPOSITION_CASES.filter((entry) => stage === 'all' || entry.stage === stage);
+  const only = requested == null || requested === '' ? null : String(requested).split(',').map((id) => id.trim()).filter(Boolean);
+  if (only) {
+    const unknown = only.filter((id) => !pool.some((entry) => entry.id === id));
+    if (!only.length || unknown.length) throw new Error(`COMPOSITION_QUALIFICATION_CASE: ${stage} aşamasında bilinmeyen vaka: ${unknown.join(', ') || '(boş)'}`);
+  }
+  const cases = only ? pool.filter((entry) => only.includes(entry.id)) : pool;
+  if (!cases.length) throw new Error(`COMPOSITION_QUALIFICATION_CASE: ${stage} aşamasında seçilen vaka yok`);
+  return cases;
+}
+
 export function finalizeCompositionQualification(report) {
   process.stderr.write(`${JSON.stringify(report)}\n`);
   if (OUT) appendFileSync(OUT, `${JSON.stringify(report)}\n`);
   assert.deepEqual(report.results.filter((row) => row.failures.length).map((row) => `${row.id}#${row.turn}`), [], 'COMPOSITION_CHECKS_FAILED');
   if (['live', 'claude'].includes(report.provider)) assert.ok(report.calls > 0, 'COMPOSITION_NO_MODEL_CALLS');
+  // Hiç vaka koşmayan kapı başarı değildir (seçilen her vaka koşmuş ve geçmiş olmalı).
+  assert.ok(report.cases > 0, 'COMPOSITION_NO_CASES');
+  if (Number.isInteger(report.selected)) assert.equal(report.cases, report.selected, 'COMPOSITION_CASES_NOT_RUN');
   assert.equal(report.passed, report.cases, 'COMPOSITION_CASES_FAILED');
   assert.equal(report.escalations, 0, 'COMPOSITION_ESCALATION_FORBIDDEN');
   assert.equal(report.usage.thinking, 0, 'COMPOSITION_THINKING_FORBIDDEN');
@@ -314,8 +344,8 @@ if (direct) {
   if (PROVIDER === 'live' && !LIVE_ENV.slice(0, 2).every((key) => process.env[key])) throw new Error('MERGEN_ROTA_AI_BASE_URL ve MERGEN_ROTA_AI_DEFAULT_API_KEY gerekli.');
   test.after(() => finalizeCompositionQualification(summary));
   // COMPOSITION_QUALIFICATION_CASE tek vakayı koşturur (ör. yalnızca kodu değişen vakanın yeniden ölçümü).
-  const only = process.env.COMPOSITION_QUALIFICATION_CASE ? process.env.COMPOSITION_QUALIFICATION_CASE.split(',').map((id) => id.trim()) : null;
-  const cases = (STAGE === 'phase4d' ? PHASE4D_CASES : COMPOSITION_CASES.filter((entry) => STAGE === 'all' || entry.stage === STAGE)).filter((entry) => !only || only.includes(entry.id));
+  const cases = selectQualificationCases(STAGE, process.env.COMPOSITION_QUALIFICATION_CASE);
+  summary.selected = cases.length;
   for (const item of cases) {
     test(item.id, (t) => (summary.infrastructure ? t.skip('önceki altyapı hatası') : runCase(t, item)));
   }

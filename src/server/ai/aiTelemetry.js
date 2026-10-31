@@ -701,11 +701,13 @@ const MAX_PLANNER_REJECTION_KINDS = 32;
  * danışmanlığın durumu ve aday sayısı, bildirim sayısı ve karara kadar geçen süre. Soru, istem,
  * plan, araç bağımsız değişkeni ya da Sicil yazılmaz. Karar öncesi hata `null` kararla yalnızca örneklere girer.
  */
-export function recordPlannerDecision({ decision, parts = 0, semantic = 'unavailable', candidates = 0, declarations = 0, latencyMs = 0, semanticReason = null }) {
+export function recordPlannerDecision({ decision, parts = 0, semantic = 'unavailable', candidates = 0, declarations = 0, latencyMs = 0, semanticReason = null, revision = false }) {
   safely(() => {
     const current = state().planner;
     if (decision != null) current.decisions[PLANNER_DECISIONS.has(decision) ? decision : 'invalid'] += 1;
     if (parts > 1) current.multiPart += 1;
+    // Temiz yeniden planlamanın kararı turun YERİNE GEÇEN kararıdır: turun anlamsal durumu ve örnekleri bir kez sayılmıştır.
+    if (revision) return;
     const normalizedReason = semanticReason === 'AI_TIMEOUT' ? 'TIMEOUT' : semanticReason;
     const reason = ['TIMEOUT', 'PROFILE_DISABLED', 'PROFILE_NOT_CONFIGURED', 'MODEL_UNAVAILABLE', 'INTERNAL_UNAVAILABLE'].includes(normalizedReason) ? normalizedReason : 'OTHER';
     if (semantic === 'unavailable') current.semanticReasons[reason] = (current.semanticReasons[reason] || 0) + 1;
@@ -713,6 +715,19 @@ export function recordPlannerDecision({ decision, parts = 0, semantic = 'unavail
     pushSample(current.declarations, safeCount(declarations));
     pushSample(current.candidates, safeCount(candidates));
     pushSample(current.latencyMs, latencyMs);
+  });
+}
+
+/**
+ * Temiz yeniden planlamada atılan kararın sayımı geri alınır: "Planlayıcı kararları" turda gerçekten geçerli kalan
+ * kararı anlatır (yerine geçen karar `revision` ile sayılır). Sayaç sıfırın altına inmez.
+ */
+export function retractPlannerDecision({ decision, parts = 0 }) {
+  safely(() => {
+    const current = state().planner;
+    const key = PLANNER_DECISIONS.has(decision) ? decision : 'invalid';
+    if (decision != null) current.decisions[key] = Math.max(0, current.decisions[key] - 1);
+    if (parts > 1) current.multiPart = Math.max(0, current.multiPart - 1);
   });
 }
 
