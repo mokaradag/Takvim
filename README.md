@@ -30,9 +30,11 @@ Bilgin varsayılan olarak kapalıdır (`MERGEN_ROTA_AI_ENABLED=false`). Rota
 verisi araçları ayrıca `MERGEN_ROTA_AI_TOOLS_ENABLED` ile açılır. Planlayıcı,
 anlamsal aday keşfi ve kanıt doğrulaması sunucuda çalışır; model görev veya
 atama değiştiremez. Rota verisi yanıtları doğrulanmış kanıttan doğal dille
-yazılır: model yalnızca sunucunun ayrıntı, tablo ve grafik bloklarını seçer;
-metin, değerler, sıralama, kapsam ve kaynaklar sunucudan gelir;
-düzen kurulamazsa doğrulanmış belirlenimci anlatım gösterilir
+anlatılır: sunucu önermeleri (sayım, en büyük/en küçük, ortalama, çoğunluk,
+tamamlanma, toplam), başlıkları, cümleleri, değerleri, tabloları, grafikleri,
+tema renkli not kutularını ve kaynakları üretir; model yalnızca hangi önermenin
+hangi sırayla, hangi başlık, tablo/grafik ve not kutusuyla anlatılacağını seçer;
+anlatım doğrulanamazsa doğrulanmış belirlenimci anlatım gösterilir
 (`MERGEN_ROTA_AI_ANSWER_COMPOSITION`, varsayılan açık). Masaüstünde panel odak
 görünümüne genişletilebilir. Kurulum ve sınırlar için [AI platformu](docs/YAPAY-ZEKA-PLATFORMU.md)
 ve [anlamsal katman](docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md) belgelerine bakın.

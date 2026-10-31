@@ -1544,7 +1544,7 @@ kimliğiyle seçilir; planlanan oluşum tarihi bitiş yerine kullanılamaz.
 Gerçek bitişi eksik tamamlanmış yineleme varsa `completionDatesComplete=false`
 ve sonuç eksiktir; bilinen gerçek bitiş yoksa `lastCompleted=null` olur.
 
-### Aşama 4D: doğrulanmış yanıtın doğal düzeni
+### Aşama 4D: doğrulanmış yanıtın kanıta bağlı anlatımı
 
 Alan araçları, yetki yükleyicisi, kanıt defteri ve doğrulayıcı değişmedi. Doğrulanmış yanıt artık isteğe bağlı bir
 sunum katmanından geçebilir (anlamsal katman §13): `analyzeGroundedAnswer` doğrulanan olguları sunum için de döndürür
@@ -1554,16 +1554,23 @@ yalnızca bu doğrulanmış olgulardan kurulur ve araç sonucunu, kimlikleri ya 
 kaynak işareti yazamaz; atıflar ve kapsam notu sunucunundur, kalıcı kanıt kümesi düzenden bağımsızdır (sınama aynı
 kayıt ve takip kümesini doğrular). Sunucu yeniden yetki doğrulamadan olguları sağlayıcıya ikinci kez göndermez.
 
-Düzen yalnızca `details`, `rows` ve `chart` kaynak kimliklerini seçer; bütün tablolar gösterilir ve atlanan bütün
-ayrıntılar sunucu tarafından eklenir. Serbest model metni ve metin içi yuvalar reddedilir; Türkçe/İngilizce sayı,
-sıralama veya çekim sözcüğü denetimi yoktur. Düzen turu ilerlemeyi dış gözcüye bildirir. Turdan sonra, yanıt ve
+Sayfa ayrıca sunucunun önermelerini (`P#`, sunucu tonuyla) ve başlık adaylarını (`H#`) taşır: zarf sayısından ya da tam
+liste kanıtının kesin toplamından sayım; bütün nüfusu taşıyan tablodan en büyük/en küçük değer, ortalama, bir haftayı
+aşan gecikme, proje yoğunlaşması ve tarih aralığı; birbirini dışlayan tam dağılımdan toplam, çoğunluk ya da en büyük
+grup, tamamlanma ve döküm
+(`src/domain/ai/groundedPropositions.js`). Önermenin cümlesini, değerini ve ilişkisini sunucu yazar; önkoşulu
+sağlanmayan ilişki (ör. eksik sayfada "en uzun", %50'yi aşmayan payda "büyük bölümü") için önerme yoktur. Düzen
+yalnızca `title`, `say` (önerme kimlikleri ve sonraki tabloya/grafiğe yönlendirme), `note` (tonu sunucunun önerme
+tonu olan not kutusu), `rows`, `chart` ve `details` kimliklerini seçer; bütün tablolar gösterilir, söylenmeyen ayrıntılar sunucu tarafından eklenir, söylenen sayım önermesi kendi
+ayrıntısının yerine geçer. Serbest model metni ve metin içi yuvalar reddedilir; Türkçe/İngilizce sayı, sıralama veya
+çekim sözcüğü denetimi yoktur. Düzen turu ilerlemeyi dış gözcüye bildirir. Turdan sonra, yanıt ve
 kalıcı kanıt kurulmadan önce yetki tekrar doğrulanır; geri alınmış kanıt kaydedilmez. Grafik etiketleri ortak güvenlik kuralıyla temizlenir;
 aynı adlar yalnızca doğrulanmış proje/birim bağlamıyla ayrıştırılır. Temizleme/kırpma sonrasında tekillik
 sağlanamıyorsa grafik adayı sunulmaz. Nitelendirme aracında model/altyapı hataları üretimdeki güvenli geri
 dönüşten ayrı kaydedilir ve son nitelendirme kapısını başarısız kılar; geçersiz düzen geri dönüşü altyapı hatası sayılmaz.
 
 Gözlemlenebilirlik: `ai.grounded.turn` satırı tek ve içeriksizdir; `presentation` (`mode`, `reason`, `issue`,
-`blocks`, `chart`, `charts`, `ms`), `usage` (belirteç toplamları, ilk olay süresi, `length` duruşları) ve varsa `escalation`
+`blocks`, `said`, `tables`, `chart`, `charts`, `ms`, `rejected`), `usage` (belirteç toplamları, ilk olay süresi, `length` duruşları) ve varsa `escalation`
 alanlarını taşır; ayrı `ai.grounded.escalation` satırı yazılmaz. Tur listesinde düzen turu `purpose: "compose"` ve
 kendi bütçesiyle görünür. `charts` gerçekten çizilen grafik sayısıdır; reddedilen adaylar sayılmaz. Belirteç toplamları her metrik için
 bütün model turlarında bildirim gerektirir; eksik bildirim `null` olur. Bağlam günlük

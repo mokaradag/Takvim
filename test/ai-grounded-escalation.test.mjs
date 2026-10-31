@@ -107,7 +107,7 @@ test('a declared synthesis request is finalized once by Deep thinking with the s
   assert.deepEqual(logLines(logs, 'ai.grounded.escalation'), []);
   const turnLines = logLines(logs, 'ai.grounded.turn');
   assert.equal(turnLines.length, 1);
-  assert.deepEqual(turnLines[0].context.escalation, { requestedMode: 'standard', models: [STANDARD, DEEP], reason: 'SYNTHESIS_REQUIRED', toolsReused: true, outcome: 'grounded' });
+  assert.deepEqual(turnLines[0].context.escalation, { requestedMode: 'standard', models: [STANDARD, DEEP], reason: 'SYNTHESIS_REQUIRED', kind: 'select', toolsReused: true, outcome: 'grounded' });
   assert.equal(turnLines[0].context.escalated, true);
   for (const secret of [NAMED_QUESTION, NAMED, INVALID, 'Radar Modernizasyonu', String(AYSE)]) {
     assert.equal(logs.some((line) => line.includes(secret)), false, `günlük içerik taşımaz: ${secret}`);
@@ -313,17 +313,18 @@ test('a turn that ends without evidence because of NOT_FOUND, scope or SQL failu
   const cases = [
     { name: 'not found', calls: [{ name: 'rota_outlook_status', arguments: { taskId: TASKS.HIDDEN } }], message: `Gizli görevin Outlook durumu nedir? ${TASKS.HIDDEN}`, code: 'NOT_FOUND',
       request: { operation: 'value', metrics: ['subscriptions.active'], entities: [{ type: 'task', id: TASKS.HIDDEN }] } },
-    { name: 'scope', calls: [{ name: 'rota_task_search', arguments: { text: 'Başka bir konu' } }], message: 'Radar görevleri', code: 'UNSUPPORTED_SCOPE',
+    // Kapsam dışı çağrı veri okunmadan reddedilir: Standart tek ucuz düzeltmesini kullanır, devir engellenir.
+    { name: 'scope', calls: [{ name: 'rota_task_search', arguments: { text: 'Başka bir konu' } }], message: 'Radar görevleri', code: 'UNSUPPORTED_SCOPE', rounds: 2,
       request: { operation: 'value', metrics: ['tasks.total'], filters: { text: 'Radar' } } },
     { name: 'sql', calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }], message: QUESTION, code: 'DATABASE_UNAVAILABLE', failing: 'task-facts', request: countFull }
   ];
   for (const item of cases) {
     const stack = stackFor(t);
     if (item.failing) stack.db.aiToolFailure = { [item.failing]: Object.assign(new Error('bağlantı yok'), { code: 'ESOCKET' }) };
-    stack.provider.enqueue({ type: 'tool-calls', preface: [declared(item.request)], calls: item.calls }, reject, reject);
+    stack.provider.enqueue({ type: 'tool-calls', preface: [declared(item.request)], calls: item.calls }, ...Array((item.rounds || 3) - 1).fill(reject));
     const response = await sendTurn({ turnId: randomUUID(), message: item.message });
     assert.equal(toolResultsOf(stack.provider.calls[1])[0].error.code, item.code, item.name);
-    assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD], `${item.name}: Derin düşünmeye devredilmez`);
+    assert.deepEqual(stack.provider.calls.map((call) => call.model), Array(item.rounds || 3).fill(STANDARD), `${item.name}: Derin düşünmeye devredilmez`);
     assert.equal(doneOf(response).assistantMessage.content, GROUNDING_FAILURE_TEXT);
     assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
   }
@@ -353,13 +354,13 @@ test('without evidence and with the shared tool budget spent, the turn is not es
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
 });
 
-test('a missing declaration exhausts the Standard planning budget without SQL, then escalates once to Deep, which has its own bounded declaration budget', async (t) => {
+test('a missing declaration exhausts the single Standard repair without SQL, then restarts once on Deep, which has its own single repair', async (t) => {
   const stack = stackFor(t);
   const undeclared = { type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] };
-  stack.provider.enqueue(undeclared, undeclared, undeclared, undeclared, undeclared, undeclared);
+  stack.provider.enqueue(undeclared, undeclared, undeclared, undeclared);
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
-  // Standart: iki bildirim düzeltmesi; Derin: kendi iki düzeltmesi. Tur hiçbir koşulda tekrar Standart'a dönmez.
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, STANDARD, DEEP, DEEP, DEEP]);
+  // Standart: tek ucuz bildirim düzeltmesi; Derin: temiz başlangıç ve kendi tek düzeltmesi. Tur hiçbir koşulda tekrar Standart'a dönmez.
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, DEEP, DEEP]);
   assert.equal(toolQueries(stack), 0, 'geçerli istek olmadan hiçbir kipte SQL çalışmaz');
   assert.equal(doneOf(response).assistantMessage.content, GROUNDING_FAILURE_TEXT);
   assert.deepEqual(aiTelemetrySnapshot().grounding.escalations, { total: 1, byReason: { REQUEST_DECLARATION: 1 }, byOutcome: { failed: 1 } });

@@ -927,7 +927,7 @@ export function createAiGateway({
    * biçimi, araç çağrısı parçaları ve kimliği bu katmanın dışına çıkmaz; tur
    * yalnızca birleştirilmiş çağrıları (`{ id, name, arguments, oversize }`) görür.
    */
-  async function runToolSession({ profile, signal = null, run, lifecycle = null, beforeDispatch = null }) {
+  async function runToolSession({ profile, signal = null, run, lifecycle = null, beforeDispatch = null, queueTimeoutMs = null }) {
     const startedAt = now();
     const context = { profile, model: null, source: null, queueWaitMs: null, attempts: 0 };
     const progress = { providerStartedAt: null, recorded: true, rounds: 0, emitted: false };
@@ -952,7 +952,8 @@ export function createAiGateway({
         modelKey: route.model,
         modelLimit: route.maxConcurrency,
         signal: lifecycleSignal,
-        timeoutMs: config.queueTimeoutMs
+        // Çağıran (ör. isteğe bağlı anlatım devri) kuyruk beklemesini yalnızca KISALTABİLİR.
+        timeoutMs: Number.isSafeInteger(queueTimeoutMs) && queueTimeoutMs > 0 ? Math.min(queueTimeoutMs, config.queueTimeoutMs) : config.queueTimeoutMs
       });
       context.queueWaitMs = lease.queueWaitMs;
       const toolSessionTimeoutMs = (route.timeoutMs ?? config.requestTimeoutMs) + TOOL_LIMITS.maxToolPhaseMs;

@@ -31,9 +31,25 @@ export function createCallIds() {
  * şemaları planda yinelenmez: araçlar aynı turda ayrıca sunulur ve plan
  * çağrıları ya `calls` içinde ya da aynı yanıtta doğrudan taşıyabilir.
  */
+/**
+ * Modele gösterilen istek şeması: ölçü kimliklerinin kapalı listesi yalnızca `metrics` içinde bir kez yer alır;
+ * `fields`, `bindings` ve `rank` aynı kimliklerden birini tekrar eder ve listeyi yinelemez (planlayıcı turunun
+ * belirteç yükü yarıya iner). Doğrulama değişmez: bildirim her zaman tam `requestSchema()` ile ayrıştırılır.
+ */
+function modelRequestSchema() {
+  const schema = requestSchema();
+  const metric = { type: 'string', maxLength: 64, description: 'metrics içindeki ölçü kimliklerinden biri' };
+  const withMetric = (property) => (property.items
+    ? { ...property, items: { ...property.items, properties: { ...property.items.properties, metric } } }
+    : { ...property, properties: { ...property.properties, metric } });
+  return { ...schema, properties: { ...schema.properties, fields: withMetric(schema.properties.fields), bindings: withMetric(schema.properties.bindings),
+    rank: withMetric(schema.properties.rank) } };
+}
+
 export function typedPlanningTool(catalog) {
   const names = catalog.map((tool) => tool.name);
-  const request = { ...requestSchema(), required: [...requestSchema().required, 'population', 'layout'] };
+  const base = modelRequestSchema();
+  const request = { ...base, required: [...base.required, 'population', 'layout'] };
   const entities = request.properties.entities;
   const additionalRequest = { ...request, properties: { ...request.properties, entities: { ...entities, items: {
     ...entities.items, properties: { ...entities.items.properties, from: { type: 'integer', minimum: 0, maximum: PLANNER_LIMITS.maxRequests - 2 } }

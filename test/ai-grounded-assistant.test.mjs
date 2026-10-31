@@ -489,8 +489,8 @@ test('tanınmayan araç ve bozuk bağımsız değişken güvenli hata alır; SQL
   assert.ok(stack.provider.calls[1].tools.some((tool) => tool.name === 'rota_task_detail'),
     'veri alınmayan ilk tur kataloğu daraltmaz');
   assert.equal((stack.db.aiToolLog || []).length, 0, 'hiçbir araç SQL’i çalışmadı');
-  // Kanıtsız taslak gösterilmez; protokol düzeltmesi Standart kipte kalır.
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, DEEP_TOOL_MODEL, DEEP_TOOL_MODEL, DEEP_TOOL_MODEL]);
+  // Kanıtsız taslak gösterilmez; Standart tek ucuz düzeltmeden sonra Derin temiz başlangıçtan yeniden planlar.
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD_TOOL_MODEL, STANDARD_TOOL_MODEL, DEEP_TOOL_MODEL, DEEP_TOOL_MODEL]);
   assert.equal(stack.provider.calls[2].messages.some((message) => String(message.content || '').includes('12 görev')), false,
     'reddedilen taslak devredilen döküme girmez');
   assert.equal(response.text.includes('12 görev'), false);
@@ -1032,7 +1032,8 @@ test('4C takip: önceki görev kümesi portföy alanıyla genişletilemez ve ona
       fields: [{ metric: 'tasks.total', tool: 'rota_portfolio_summary', path: 'data.totals.tasks' }] };
     const declare = request => ({ type: 'tool-calls', preface: [declared(request)], calls: [] });
     stack.provider.enqueue(declare(request), declare({ ...request, previousResult: false }), declare(request));
-    const done = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, message: 'Önceki görevlerin toplam ve gecikmiş sayısı' }));
+    // Onarım sabitlemesi ikinci düzeltmede sınanır: devri olmayan kipte tek model iki düzeltme hakkını korur.
+    const done = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, message: 'Önceki görevlerin toplam ve gecikmiş sayısı', mode: 'deep' }));
     assert.equal(done.assistantMessage.finishReason, 'grounding_failed');
     assert.deepEqual(done.assistantMessage.evidence, []);
     assert.equal(stack.db.aiToolLog.length, before, 'karışık türetilen kümede hiçbir Rota okuması çalışamaz');
@@ -1147,8 +1148,9 @@ test('4C takip: unavailable reddi önceki küme bağını silerek onarım izni v
       const saved = stack.db.aiMessageEvidence.length;
       const calls = stack.provider.calls.length;
       stack.provider.enqueue(declare(original), declare(attempted), declare(attempted));
+      // Onarım sabitlemesi ikinci düzeltmede sınanır: devri olmayan kipte tek model iki düzeltme hakkını korur.
       const done = doneOf(await sendTurn({ turnId: randomUUID(), ...(prior ? { conversationId: prior.conversationId, expectedSequence: 2 } : {}),
-        message: `Önceki görevlerin sayısı ${PROJECTS.FULL}` }));
+        message: `Önceki görevlerin sayısı ${PROJECTS.FULL}`, mode: 'deep' }));
       assert.equal(done.assistantMessage.finishReason, prior ? 'grounding_failed' : 'clarification');
       assert.deepEqual(done.assistantMessage.evidence, []);
       assert.equal(stack.db.aiToolLog?.length || 0, before);
@@ -1177,11 +1179,12 @@ test('4C takip: onarım geçerli önceki-küme bağını düşüremez; yokken ba
       assert.ok(JSON.stringify(call.messages).includes('repairScope'));
       return declare(request);
     } });
-  const repaired = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, message: 'Takip sorusu' }));
+  // Onarım sabitlemesi ikinci düzeltmede sınanır: devri olmayan kipte tek model iki düzeltme hakkını korur.
+  const repaired = doneOf(await sendTurn({ turnId: randomUUID(), conversationId, expectedSequence: 2, message: 'Takip sorusu', mode: 'deep' }));
   assert.equal(repaired.assistantMessage.finishReason, 'stop');
   const reads = stack.db.aiToolLog.length;
   stack.provider.enqueue(declare(request), declare(request), { type: 'answer', text: JSON.stringify({ kind: 'not_found' }) });
-  const fresh = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Takip sorusu' }));
+  const fresh = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Takip sorusu', mode: 'deep' }));
   assert.notEqual(fresh.assistantMessage.finishReason, 'stop');
   assert.equal(stack.db.aiToolLog.length, reads);
 });

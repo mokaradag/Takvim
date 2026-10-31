@@ -20,8 +20,14 @@
  *           MERGEN_ROTA_AI_MODEL_REGISTRY_PATH; uygulama dizininden çalıştırılınca `.env.local` da okunur (kabuk
  *           değeri önceliklidir). Düzen turu üretim sağlayıcı bağdaştırıcısıyla Standart modele gider.
  *
- * Aşama (COMPOSITION_QUALIFICATION_STAGE): smoke | targeted | broad | all. Rapor: COMPOSITION_QUALIFICATION_OUT
+ * Aşama (COMPOSITION_QUALIFICATION_STAGE): smoke | targeted | broad | all | phase4d. Rapor: COMPOSITION_QUALIFICATION_OUT
  * (JSON satırı). Rapor içerik taşımaz: soru, yanıt, kayıt adı ya da kimlik yazılmaz; yalnızca vaka kimliği, sonuç ve ölçüm.
+ *
+ * `phase4d`: zayıf model kabulünün KÜÇÜK kapısı (kanıta bağlı anlatım). Anlatım vakaları planlamayı betikler ve yalnızca
+ * anlatım turunu modele gönderir; iki planlayıcı vakası (`planner: 'model'`) üretimin gerçek planlayıcı yönergesini, plan
+ * aracını ve kataloğunu da modele gönderir. Derin modele giden her çağrı modele gitmez: devir sayılır ve sağlayıcı hatasıyla
+ * yanıtlanır (üretimin güvenli geri dönüşü). İlk altyapı hatasında kalan vakalar çalıştırılmaz.
+ * COMPOSITION_QUALIFICATION_CASE=<vaka>[,<vaka>…] yalnızca o vakaları koşturur.
  */
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -43,6 +49,7 @@ const STAGE = process.env.COMPOSITION_QUALIFICATION_STAGE || 'smoke';
 const OUT = process.env.COMPOSITION_QUALIFICATION_OUT || null;
 const EXPECTED_MODEL = process.env.PLANNER_CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
 const STAGES = Object.freeze(['smoke', 'targeted', 'broad']);
+const SPECIAL_STAGES = Object.freeze(['phase4d']);
 const LIVE_ENV = Object.freeze(['MERGEN_ROTA_AI_BASE_URL', 'MERGEN_ROTA_AI_DEFAULT_API_KEY', 'MERGEN_ROTA_AI_MODEL_REGISTRY_PATH']);
 
 /* ── Vakalar ───────────────────────────────────────────────── */
@@ -89,6 +96,31 @@ export const COMPOSITION_CASES = Object.freeze([
       expect: ['Critical'] }] }
 ]);
 
+/**
+ * Aşama 4D küçük kapısı: her vaka birden çok sözleşme özelliğini birlikte sınar; toplam model çağrısı ~9.
+ * `say: true` anlatımın en az bir sunucu önermesini söylemesini; `chart: true` grafiğin çizilmesini ister.
+ * `dry: true` turu bağlam turudur (anlatımı betik yazar, model çağrılmaz).
+ */
+const OVERDUE_COUNTED = OVERDUE;
+const MY_TASKS_COUNTED = { operation: 'list', metrics: ['tasks.total', 'task.title', 'task.status', 'task.targetFinish'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me' } };
+const STATUS_CHART = { operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'status' }, filters: { assignee: 'me' } };
+export const PHASE4D_CASES = Object.freeze([
+  { id: 'p4d-overdue', requiresComposition: true, stage: 'phase4d', turns: [{ question: 'Kaç gecikmiş görevim var ve hangileri?', plan: plan(OVERDUE_COUNTED), say: true, expect: ['**3**', 'Haftalık durum toplantısı'] }] },
+  { id: 'p4d-my-tasks', requiresComposition: true, stage: 'phase4d', turns: [{ question: 'Görevlerimi listele.', plan: plan(MY_TASKS_COUNTED), say: true, expect: ['Radar test planı'] }] },
+  { id: 'p4d-status-chart', requiresComposition: true, stage: 'phase4d', turns: [{ question: 'Görevlerimi grafik olarak göster.', plan: plan(STATUS_CHART), say: true, chart: true, expect: ['**6**'] }] },
+  { id: 'p4d-record', requiresComposition: false, stage: 'phase4d', turns: [{ question: 'Radar test planı görevinin önceliği ve termini ne?',
+    plan: plan({ operation: 'value', metrics: ['task.priority', 'task.targetFinish'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', text: 'Radar test planı' }] }),
+    expect: ['Kritik', '20 Eylül 2026'] }] },
+  { id: 'p4d-multipart', requiresComposition: true, stage: 'phase4d', turns: [{ question: 'Geciken görevlerimi ve okunmamış bildirim sayımı göster.',
+    plan: plan(OVERDUE_COUNTED, { additionalRequests: [{ operation: 'value', metrics: ['notifications.unread'], population: { tool: 'rota_notifications' } }] }), expect: ['23'] }] },
+  { id: 'p4d-followup', requiresComposition: true, stage: 'phase4d', turns: [
+    { question: 'Geciken görevlerimi göster.', plan: plan(OVERDUE_COUNTED), dry: true },
+    { question: 'Bunların öncelikleri ne?', plan: plan({ previousResult: true, operation: 'list', metrics: ['task.title', 'task.priority'], population: { tool: 'rota_task_search', collection: 'tasks' } }),
+      expect: ['Kritik', 'Radar test planı'] }] },
+  { id: 'p4d-planner-distribution', requiresComposition: true, stage: 'phase4d', planner: 'model', turns: [{ question: 'görevlerimin dağılımını göster', dryPlan: plan(STATUS_CHART), say: true, expect: ['**6**'] }] },
+  { id: 'p4d-planner-overdue', requiresComposition: true, stage: 'phase4d', planner: 'model', turns: [{ question: 'Kaç gecikmiş görevim var ve hangileri?', dryPlan: plan(OVERDUE_COUNTED), say: true, expect: ['**3**'] }] }
+]);
+
 /* ── Sağlayıcı ─────────────────────────────────────────────── */
 
 const usageOf = (reply) => ({
@@ -97,14 +129,29 @@ const usageOf = (reply) => ({
 });
 
 /** Planlama betikli, düzen turu seçilen sağlayıcıda; her düzen turunun ölçümü `rounds` listesine yazılır. */
-export function qualificationProvider(rounds, { provider = PROVIDER, completeRound = completeModelRound, expectedModel = EXPECTED_MODEL, liveProvider = null } = {}) {
+export function qualificationProvider(rounds, { provider = PROVIDER, completeRound = completeModelRound, expectedModel = EXPECTED_MODEL, liveProvider = null, routing = null } = {}) {
   const fake = createFakeAiProvider({ semanticQueue: false, respond: (call) => (['embeddings', 'rerank'].includes(call.kind) ? { type: 'status', status: 503 } : null) });
   const live = provider === 'live' ? liveProvider || createOpenAiCompatibleProvider() : null;
+  let standard = null;
   return { ...fake, get pendingCount() { return fake.pendingCount; }, async streamToolCompletion(input) {
-    if (!isCompositionCall(input)) return fake.streamToolCompletion(input);
-    const view = compositionView(input);
-    const measured = { language: view.language, details: view.details.length, tables: view.tables.length, charts: view.charts.length,
-      budget: input.maxOutputTokens ?? null, model: input.model };
+    const composing = isCompositionCall(input);
+    standard ??= input.model;
+    // Derin devir model kabulüne girmez: çağrı modele gitmez, sayılır ve üretimin sağlayıcı hatası yoluna düşer.
+    if (routing && input.model !== standard && (composing || routing.planner)) {
+      routing.escalations += 1;
+      fake.enqueue({ type: 'status', status: 503 });
+      return fake.streamToolCompletion(input);
+    }
+    if (!composing && !routing?.planner) return fake.streamToolCompletion(input);
+    if (composing && routing?.dry) {
+      fake.enqueue({ type: 'answer', native: true, text: JSON.stringify(coveringBlocks(compositionView(input))) });
+      return fake.streamToolCompletion(input);
+    }
+    const view = composing ? compositionView(input) : null;
+    const measured = composing
+      ? { purpose: 'compose', language: view.language, propositions: view.propositions?.length ?? 0, details: view.details.length, tables: view.tables.length, charts: view.charts.length,
+        budget: input.maxOutputTokens ?? null, model: input.model }
+      : { purpose: 'plan', tools: input.tools?.length ?? 0, budget: input.maxOutputTokens ?? null, model: input.model };
     rounds.push(measured);
     const startedAt = performance.now();
     try {
@@ -134,21 +181,37 @@ export function qualificationProvider(rounds, { provider = PROVIDER, completeRou
         })() };
       }
       if (provider === 'dry') {
-        fake.enqueue({ type: 'answer', native: true, text: JSON.stringify(coveringBlocks(view)) });
+        // Kuru anlatım, bölüm bölüm: başlık, ilk dört önermelik paragraf, kaynaklar, ilk grafik ve tonlu bir not (vakaların ve ölçümün sınaması).
+        const propositions = view.propositions || [];
+        const firstChart = view.charts[0] || null;
+        const parts = [...new Set([...propositions, ...view.details, ...view.tables].map((item) => item.part))].sort((left, right) => left - right);
+        const blocks = parts.flatMap((part) => {
+          const own = propositions.filter((item) => item.part === part);
+          const said = own.slice(0, 4).map((item) => item.id);
+          const noted = own.slice(4).find((item) => item.tone);
+          const tables = view.tables.filter((table) => table.part === part);
+          const chart = firstChart && tables.some((table) => table.id === firstChart.table) ? [{ type: 'chart', source: firstChart.id, style: firstChart.types.at(-1) }] : [];
+          return [...(view.titles || []).filter((title) => title.part === part).slice(0, 1).map((title) => ({ type: 'title', source: title.id })),
+            ...(said.length ? [{ type: 'say', items: said }] : []), ...view.details.filter((detail) => detail.part === part).map((detail) => ({ type: 'details', source: detail.id })),
+            ...tables.map((table) => ({ type: 'rows', source: table.id })), ...chart, ...(noted ? [{ type: 'note', items: [noted.id] }] : [])];
+        });
+        fake.enqueue({ type: 'answer', native: true, text: JSON.stringify({ blocks: blocks.slice(0, 12) }) });
         return fake.streamToolCompletion(input);
       }
-      const reply = await completeRound({ messages: input.messages, tools: [], toolChoice: 'none', maxOutputTokens: input.maxOutputTokens }, input.signal);
+      const reply = await completeRound(composing ? { messages: input.messages, tools: [], toolChoice: 'none', maxOutputTokens: input.maxOutputTokens }
+        : { messages: input.messages, tools: input.tools, toolChoice: input.toolChoice }, input.signal);
       measured.latencyMs = Math.round(performance.now() - startedAt);
       const infrastructure = (reason) => { measured.infrastructure = reason; return new Error(`MODEL_INFRASTRUCTURE ${reason}`); };
       if (reply?.error) throw infrastructure(['PLANNER_BUDGET_CALLS', 'PLANNER_BUDGET_TOKENS'].includes(reply.error) ? reply.error : 'ADAPTER_ERROR');
       if (!reply || typeof reply !== 'object' || Array.isArray(reply) || typeof reply.text !== 'string'
-        || !Array.isArray(reply.toolCalls) || reply.toolCalls.length || !Array.isArray(reply.models)) throw infrastructure('ADAPTER_OUTPUT_INVALID');
+        || !Array.isArray(reply.toolCalls) || (composing && reply.toolCalls.length) || !Array.isArray(reply.models)) throw infrastructure('ADAPTER_OUTPUT_INVALID');
       if (!reply.models.length || reply.models.some((model) => model !== expectedModel)) throw infrastructure('PLANNER_MODEL_UNVERIFIED');
       if (reply.thinking !== 'off' || usageOf(reply).thinking !== 0) throw infrastructure('COMPOSITION_THINKING_FORBIDDEN');
       if (!Object.values(usageOf(reply)).every((value) => Number.isSafeInteger(value) && value >= 0)) throw infrastructure('ADAPTER_USAGE_INVALID');
       verifyCompletion(reply.finishReason);
       Object.assign(measured, { models: reply.models, thinking: reply.thinking, finish: reply.finishReason, usage: usageOf(reply) });
-      fake.enqueue({ type: 'answer', native: true, text: reply.text, finishReason: reply.finishReason });
+      fake.enqueue(reply.toolCalls.length ? { type: 'tool-calls', calls: reply.toolCalls, preface: reply.text ? [reply.text] : [], finishReason: reply.finishReason, native: true }
+        : { type: 'answer', native: true, text: reply.text, finishReason: reply.finishReason });
       return await fake.streamToolCompletion(input);
     } catch (error) {
       measured.infrastructure ||= 'ADAPTER_INVOCATION_FAILED';
@@ -173,14 +236,19 @@ export async function runCase(t, item, { providerOptions = {}, report = summary 
   const env = { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true',
     ...(PROVIDER === 'live' ? Object.fromEntries(LIVE_ENV.filter((key) => process.env[key]).map((key) => [key, process.env[key]])) : {}) };
   const rounds = [];
-  const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed(), env, provider: qualificationProvider(rounds, providerOptions) });
+  const providerName = providerOptions.provider || PROVIDER;
+  const routing = { planner: item.planner === 'model' && providerName !== 'dry', dry: false, escalations: 0 };
+  const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed(), env, provider: qualificationProvider(rounds, { ...providerOptions, routing }) });
   if (item.failure) stack.db.aiToolFailure = Object.fromEntries(Object.entries(item.failure).map(([query, code]) => [query, Object.assign(new Error('nitelendirme'), { code })]));
   const logs = captureConsole(t);
   let conversationId = null;
   let result = null;
   for (const [index, turn] of item.turns.entries()) {
     const before = rounds.length;
-    stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: turn.plan }] });
+    const escalationsBefore = routing.escalations;
+    routing.dry = turn.dry === true;
+    const scripted = turn.plan || (!routing.planner && turn.dryPlan);
+    if (scripted) stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: scripted }] });
     const response = await sendTurn({ turnId: randomUUID(), message: turn.question, ...(conversationId ? { conversationId, expectedSequence: index * 2 } : {}) });
     const done = response.events?.find((event) => event.event === 'done')?.data;
     const line = turnLine(logs);
@@ -189,7 +257,7 @@ export async function runCase(t, item, { providerOptions = {}, report = summary 
       report.calls += 1;
       for (const key of Object.keys(report.usage)) report.usage[key] += round.usage?.[key] ?? 0;
     }
-    if (line?.context?.escalated) report.escalations += 1;
+    if (line?.context?.escalated || routing.escalations > escalationsBefore) report.escalations += 1;
     const failures = measured.filter((round) => round.infrastructure).map((round) => `model altyapı hatası: ${round.infrastructure}`);
     if (!done) failures.push(`yanıt yok (${response.status})`);
     else {
@@ -200,18 +268,31 @@ export async function runCase(t, item, { providerOptions = {}, report = summary 
       if (/\{F\d+\}|【(R\d+)】\s*【\1】/.test(answer.content)) failures.push('çözülmemiş yuva ya da yinelenen kaynak');
     }
     const presentation = line?.context?.presentation || null;
-    if (item.requiresComposition) {
-      if (measured.length !== 1 || presentation?.mode !== 'composed') failures.push('COMPOSITION_REQUIRED');
-    } else if (measured.length || presentation?.mode !== 'narrative' || presentation?.reason !== 'NO_CHOICE') failures.push('COMPOSITION_NO_CHOICE_REQUIRED');
+    const composed = measured.filter((round) => round.purpose !== 'plan');
+    if (turn.dry) {
+      if (presentation?.mode !== 'composed') failures.push('CONTEXT_TURN_FAILED');
+    } else if (item.requiresComposition) {
+      if (composed.length !== 1 || presentation?.mode !== 'composed') failures.push('COMPOSITION_REQUIRED');
+      if (turn.say && !(presentation?.said > 0)) failures.push('NARRATION_REQUIRED');
+      // Zengin kanıt zengin anlatım ister: sayfada önerme varsa en az üçü (azsa hepsi) söylenir; 4C görünümü geçmez.
+      const available = composed[0]?.propositions ?? 0;
+      if (presentation?.mode === 'composed' && available && !(presentation.said >= Math.min(3, available))) failures.push('NARRATION_TOO_THIN');
+      if (turn.chart && !(presentation?.charts > 0)) failures.push('CHART_REQUIRED');
+    } else if (composed.length || presentation?.mode !== 'narrative' || presentation?.reason !== 'NO_CHOICE') failures.push('COMPOSITION_NO_CHOICE_REQUIRED');
+    if (routing.escalations > escalationsBefore) failures.push('DEEP_ESCALATION');
     result = { id: item.id, requiresComposition: item.requiresComposition, stage: item.stage, turn: index + 1, mode: presentation?.mode ?? null, reason: presentation?.reason ?? null, issue: presentation?.issue ?? null,
-      blocks: presentation?.blocks ?? null, chart: presentation?.chart ?? null, failures,
-      rounds: measured.map(({ language, details, tables, charts, budget, finish, latencyMs, usage, infrastructure }) => ({ language, details, tables, charts, budget, finish: finish ?? null, latencyMs: latencyMs ?? null, usage: usage ?? null, infrastructure: infrastructure ?? null })) };
+      blocks: presentation?.blocks ?? null, said: presentation?.said ?? null, titled: presentation?.titled ?? null, notes: presentation?.notes ?? null, chart: presentation?.chart ?? null, turnMs: line?.durationMs ?? null,
+      modelRounds: line?.context?.modelRounds ?? null, declarations: line?.context?.declarations ?? null, failures,
+      rounds: measured.map(({ purpose, language, propositions, details, tables, charts, budget, finish, latencyMs, usage, infrastructure }) => ({ purpose: purpose ?? 'compose', language, propositions, details, tables, charts, budget,
+        finish: finish ?? null, latencyMs: latencyMs ?? null, usage: usage ?? null, infrastructure: infrastructure ?? null })) };
     if (presentation?.mode) report[presentation.mode] = (report[presentation.mode] || 0) + 1;
     if (presentation?.reason) report.reasons[presentation.reason] = (report.reasons[presentation.reason] || 0) + 1;
     if (presentation?.issue) report.issues[presentation.issue] = (report.issues[presentation.issue] || 0) + 1;
     report.charts += presentation?.charts ?? 0;
     report.results.push(result);
     process.stderr.write(`[${item.id}#${index + 1}] ${presentation?.mode ?? '-'} ${presentation?.reason ?? ''} ${presentation?.issue ?? ''} ${failures.join('; ')}\n`);
+    // İlk altyapı hatasında koşu durur: altyapı geri dönüşü model kabulü sayılmaz ve bütçe harcanmaz.
+    if (measured.some((round) => round.infrastructure)) report.infrastructure = true;
   }
   report.cases += 1;
   // Bütün turlar kendi düzen sözleşmesini ve doğrulanmış değer denetimlerini karşılamalıdır.
@@ -222,11 +303,30 @@ export async function runCase(t, item, { providerOptions = {}, report = summary 
  * Rapor yazıldıktan sonra yanıtsız tur, değer denetimi hatası, Derin devri ya da düşünme komutu başarısız kılar.
  * Düzen gereken vakada geri dönüş üretimde güvenlidir; model nitelendirmesi için başarı değildir.
  */
+/**
+ * Aşamanın vakaları; COMPOSITION_QUALIFICATION_CASE verilirse yalnızca o vakalar. Kapı kapalı başarısız olur:
+ * aşamada olmayan (ör. yanlış yazılmış) bir kimlik ya da hiç vaka seçmeyen süzgeç sınama kaydından ÖNCE reddedilir.
+ */
+export function selectQualificationCases(stage, requested = null) {
+  const pool = stage === 'phase4d' ? PHASE4D_CASES : COMPOSITION_CASES.filter((entry) => stage === 'all' || entry.stage === stage);
+  const only = requested == null || requested === '' ? null : String(requested).split(',').map((id) => id.trim()).filter(Boolean);
+  if (only) {
+    const unknown = only.filter((id) => !pool.some((entry) => entry.id === id));
+    if (!only.length || unknown.length) throw new Error(`COMPOSITION_QUALIFICATION_CASE: ${stage} aşamasında bilinmeyen vaka: ${unknown.join(', ') || '(boş)'}`);
+  }
+  const cases = only ? pool.filter((entry) => only.includes(entry.id)) : pool;
+  if (!cases.length) throw new Error(`COMPOSITION_QUALIFICATION_CASE: ${stage} aşamasında seçilen vaka yok`);
+  return cases;
+}
+
 export function finalizeCompositionQualification(report) {
   process.stderr.write(`${JSON.stringify(report)}\n`);
   if (OUT) appendFileSync(OUT, `${JSON.stringify(report)}\n`);
   assert.deepEqual(report.results.filter((row) => row.failures.length).map((row) => `${row.id}#${row.turn}`), [], 'COMPOSITION_CHECKS_FAILED');
   if (['live', 'claude'].includes(report.provider)) assert.ok(report.calls > 0, 'COMPOSITION_NO_MODEL_CALLS');
+  // Hiç vaka koşmayan kapı başarı değildir (seçilen her vaka koşmuş ve geçmiş olmalı).
+  assert.ok(report.cases > 0, 'COMPOSITION_NO_CASES');
+  if (Number.isInteger(report.selected)) assert.equal(report.cases, report.selected, 'COMPOSITION_CASES_NOT_RUN');
   assert.equal(report.passed, report.cases, 'COMPOSITION_CASES_FAILED');
   assert.equal(report.escalations, 0, 'COMPOSITION_ESCALATION_FORBIDDEN');
   assert.equal(report.usage.thinking, 0, 'COMPOSITION_THINKING_FORBIDDEN');
@@ -238,12 +338,15 @@ const direct = (() => {
 })();
 if (direct) {
   if (!['dry', 'claude', 'live'].includes(PROVIDER)) throw new Error('COMPOSITION_QUALIFICATION_PROVIDER: dry | claude | live');
-  if (![...STAGES, 'all'].includes(STAGE)) throw new Error('COMPOSITION_QUALIFICATION_STAGE: smoke | targeted | broad | all');
+  if (![...STAGES, ...SPECIAL_STAGES, 'all'].includes(STAGE)) throw new Error('COMPOSITION_QUALIFICATION_STAGE: smoke | targeted | broad | all | phase4d');
   if (PROVIDER === 'claude' && !process.env.PLANNER_CLAUDE_LOG) throw new Error('PLANNER_CLAUDE_LOG gerekli: bütçe ve önbellek kapısı kayıt dosyasıyla izlenir.');
   if (PROVIDER === 'live') loadDeploymentEnvironment();
   if (PROVIDER === 'live' && !LIVE_ENV.slice(0, 2).every((key) => process.env[key])) throw new Error('MERGEN_ROTA_AI_BASE_URL ve MERGEN_ROTA_AI_DEFAULT_API_KEY gerekli.');
   test.after(() => finalizeCompositionQualification(summary));
-  for (const item of COMPOSITION_CASES.filter((entry) => STAGE === 'all' || entry.stage === STAGE)) {
-    test(item.id, (t) => runCase(t, item));
+  // COMPOSITION_QUALIFICATION_CASE tek vakayı koşturur (ör. yalnızca kodu değişen vakanın yeniden ölçümü).
+  const cases = selectQualificationCases(STAGE, process.env.COMPOSITION_QUALIFICATION_CASE);
+  summary.selected = cases.length;
+  for (const item of cases) {
+    test(item.id, (t) => (summary.infrastructure ? t.skip('önceki altyapı hatası') : runCase(t, item)));
   }
 }

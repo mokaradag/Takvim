@@ -146,6 +146,7 @@ export function turnsFromMessages(messages = []) {
           finishReason: message.finishReason || null,
           createdAt: message.createdAt,
           evidence: Array.isArray(message.evidence) ? message.evidence : null,
+          rotaData: message.rotaData === true,
           error: null
         };
         turn.contextTrimmed = Boolean(message.contextTrimmed);
@@ -308,6 +309,7 @@ export function createAssistantController({
     if (event.type === ASSISTANT_STREAM_EVENTS.ACCEPTED) {
       const { conversation, userMessage, context } = event.data;
       run.accepted = true;
+      run.rotaData = event.data.rotaData === true;
       run.mode = event.data.mode || run.mode;
       run.messageCount = conversation.messageCount;
       run.userMessageId = userMessage.id;
@@ -319,7 +321,7 @@ export function createAssistantController({
         active: patchTurn(current, run, (turn) => ({
           ...turn,
           user: { id: userMessage.id, content: userMessage.content, createdAt: userMessage.createdAt, pending: false },
-          answer: { ...turn.answer, mode: run.mode },
+          answer: { ...turn.answer, mode: run.mode, rotaData: run.rotaData },
           contextTrimmed: Boolean(context?.trimmed)
         }))
       }));
@@ -364,6 +366,7 @@ export function createAssistantController({
             finishReason: assistantMessage.finishReason || null,
             createdAt: assistantMessage.createdAt,
             evidence: Array.isArray(assistantMessage.evidence) ? assistantMessage.evidence : null,
+            rotaData: assistantMessage.rotaData === true,
             error: null
           }
         })),
@@ -419,6 +422,7 @@ export function createAssistantController({
           answer: {
             ...turn.answer,
             content: previous ?? text,
+            rotaData: previous != null ? run.previousAnswer.rotaData === true : (run.stopping ? run.stoppedRotaData : run.rotaData) === true,
             status,
             // Kaydı doğrulanmamış tur (kimliksiz kullanıcı iletisi) her zaman aynı kimlikle yeniden denenebilir.
             error: !turn.user.id && !closed && !sessionFailure ? { ...failure, retryable: true } : failure,
@@ -507,6 +511,7 @@ export function createAssistantController({
               finishReason: answer.finishReason || null,
               createdAt: answer.createdAt,
               evidence: Array.isArray(answer.evidence) ? answer.evidence : null,
+              rotaData: answer.rotaData === true,
               error: null
             }
           } : turn))
@@ -622,6 +627,7 @@ export function createAssistantController({
     run.stopping = true;
     // Yeni metin gelmeden durdurulan yeniden deneme önceki kısmi yanıtı korur.
     run.stoppedText = run.text || run.previousAnswer?.content || '';
+    run.stoppedRotaData = run.text ? run.rotaData === true : run.previousAnswer?.rotaData === true;
     run.cancelFlush?.();
     run.controller.abort();
     const text = run.stoppedText;
@@ -632,7 +638,7 @@ export function createAssistantController({
       active: patchTurn(current, run, (turn) => ({
         ...turn,
         user: { ...turn.user, pending: false },
-        answer: { ...turn.answer, content: text, status: 'stopped', error: failure, mode: run.mode }
+        answer: { ...turn.answer, content: text, rotaData: run.stoppedRotaData, status: 'stopped', error: failure, mode: run.mode }
       })),
       announcement: current.active?.key === run.key ? announce('Yanıt durduruldu.') : current.announcement
     }));
@@ -684,7 +690,7 @@ export function createAssistantController({
     const status = run.stopping ? 'stopped' : run.phase === 'streaming' ? 'streaming' : 'waiting';
     const exists = turns.some((turn) => turn.key === run.turnKey);
     const live = (turn) => ({ ...turn, contextTrimmed: Boolean(run.contextTrimmed), answer: turn.answer?.status === 'complete'
-      ? turn.answer : { status, content: run.text, error: null, mode: run.mode } });
+      ? turn.answer : { status, content: run.text, rotaData: run.rotaData === true, error: null, mode: run.mode } });
     return exists
       ? turns.map((turn) => (turn.key === run.turnKey ? live(turn) : turn))
       : [...turns, live({ key: run.turnKey, turnId: run.turnId, user: { id: null, content: run.content, createdAt: null, pending: false }, contextTrimmed: false })];

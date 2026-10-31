@@ -69,6 +69,7 @@ function messageView(message, { includeContent = true } = {}) {
     finishReason: message.finishReason,
     createdAt: message.createdAt,
     length: message.content.length,
+    ...(message.rotaData === true ? { rotaData: true } : {}),
     // Kanıta dayalı yanıtın kanıt özetleri (yalnızca güvenli künye; bkz. evidenceContract).
     ...(Array.isArray(message.evidence) ? { evidence: message.evidence } : {})
   };

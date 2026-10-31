@@ -552,12 +552,13 @@ const UNVERIFIABLE_SAVED_ANSWER_TEXT = 'Bu kayıtlı yanıt çok sayıda kayda d
 function discloseSavedMessages(messages, evidence) {
   return messages.filter((message) => message.role === 'assistant' || !savedMessageMissing(message, evidence)).map((message) => {
     if (message.role !== 'assistant') return message;
+    message = { ...message, rotaData: false };
     if (savedMessageMissing(message, evidence)) return { ...message, content: 'Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.', evidence: [], finishReason: 'not_found' };
     if (evidence?.unverifiable?.has(message.id)) {
       return { ...message, content: UNVERIFIABLE_SAVED_ANSWER_TEXT, evidence: [], finishReason: 'unavailable' };
     }
     const saved = evidence?.byMessage?.get(message.id);
-    if (saved?.length) return { ...message, evidence: saved };
+    if (saved?.length) return { ...message, evidence: saved, rotaData: message.source !== 'general' && message.finishReason !== 'general' };
     if (evidence?.epochsByMessage?.has(message.id) || citedWithoutKnownEvidence(message, evidence)) {
       if (evidence?.unavailable || evidence?.ready === false || evidence?.unavailableMessages?.has(message.id)) {
         return { ...message, content: 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.', evidence: [], finishReason: 'unavailable' };
@@ -908,14 +909,18 @@ function evidenceSchemaMissing() {
   });
 }
 
-/** Veri sonrası muhakeme devri; iptal, kimlik ve süre aşımı yukarı taşınır. */
+/**
+ * Derin düşünmeye TEK devir; iptal, kimlik ve süre aşımı yukarı taşınır. `plan` temiz yeniden planlama,
+ * `select` hazır kanıtla son seçim, `narrate` doğrulanmış yanıtın anlatımıdır. Anlatım devri yanıtı
+ * değiştiremez: Derin oturumu açılamazsa ya da hata verirse doğrulanmış belirlenimci anlatım gösterilir.
+ */
 async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
   const telemetry = (outcome, models = []) => request.noteEscalation?.(recordGroundedEscalation({
-    requestedMode: turn.mode, models: [...request.models, ...models], reason: request.reason, toolsReused: request.toolsReused, outcome
+    requestedMode: turn.mode, models: [...request.models, ...models], reason: request.reason, toolsReused: request.toolsReused, kind: request.kind, outcome
   }));
   let result;
   try {
-    result = await runIn(turn.escalationProfile, { resume: request.resume });
+    result = await runIn(turn.escalationProfile, { resume: request.resume }, request.queueTimeoutMs ? { queueTimeoutMs: request.queueTimeoutMs } : {});
   } catch (error) {
     // Yalnızca yapay zekâ hizmetinin hatası Standart sonucuna döner; iptal, kimlik ve veri hataları turu bitirir.
     if (signal?.aborted || !isAiError(error) || error.code === AI_ERROR_CODES.AI_CANCELLED) {
@@ -924,10 +929,17 @@ async function escalateGroundedTurn(turn, request, { signal, onText, runIn }) {
       throw error;
     }
     const timedOut = error.code === AI_ERROR_CODES.AI_TIMEOUT;
-    telemetry(timedOut ? 'timeout' : 'error');
-    // Süre aşımı doğrulama hatası değildir: sağlayıcının yoğunluğu güvenli iletiyle gizlenmez.
-    if (timedOut) { request.traceError?.(error); throw error; }
-    return request.fallback(onText);
+    telemetry(timedOut || error.code === AI_ERROR_CODES.AI_QUEUE_TIMEOUT ? 'timeout' : 'error');
+    // Süre aşımı doğrulama hatası değildir: sağlayıcının yoğunluğu güvenli iletiyle gizlenmez. Anlatım devrinde
+    // doğrulanmış yanıt hazırdır; teslim kendi yetki denetimiyle yine denenir.
+    if (timedOut && request.kind !== 'narrate') { request.traceError?.(error); throw error; }
+    try {
+      // Doğrulanmış yanıtın teslimi, süresi dolmuş model oturumuna değil isteğin kendi iptal sinyaline bağlıdır.
+      return await request.fallback(onText, signal);
+    } catch (fallbackError) {
+      request.traceError?.(fallbackError);
+      throw fallbackError;
+    }
   }
   telemetry(result.outcome, result.models);
   return result;
@@ -969,11 +981,12 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
     composeAnswers: turn.composeAnswers === true
   };
   const lifecycle = { deadline: null };
-  const runIn = (profile, extra) => getAiGateway().runToolSession({
+  const runIn = (profile, extra, sessionOptions = {}) => getAiGateway().runToolSession({
     profile,
     signal,
     lifecycle,
     beforeDispatch,
+    ...sessionOptions,
     run: (session) => {
       if (Number(session.sicil) !== Number(turn.sicil)) throw unknownSicil();
       return runGroundedTurn(session, { ...options, ...extra });
@@ -1034,7 +1047,7 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
       const presence = liveAuthorized ? await currentPresence(turn.sicil, signal, { conversationId: turn.conversation.id, messageId: stored.message.id }) : evidence;
       if (!presence.conversationPresent) throw conversationNotFound();
       answer = liveAuthorized && !savedMessageMissing(stored.message, presence)
-        ? { ...stored.message, evidence: grounded.evidence }
+        ? { ...stored.message, evidence: grounded.evidence, rotaData: true }
         : discloseSavedMessages([stored.message], { ...evidence, ...presence })[0];
       return { conversation: stored.conversation, answer: { ...answer, evidence: answer.evidence || [] },
         reconciled: !own, finishReason: answer.finishReason, contentAuthoritative: true, firstTokenMs: null };

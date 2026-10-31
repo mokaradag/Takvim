@@ -217,7 +217,7 @@ test('yapay zekâ işlemleri kendi ad alanında ölçülür ve olağan API gecik
   const failed = snapshotOperations().find((row) => row.operation === 'ai.request');
   assert.equal(failed.errorCount, 1);
   assert.equal(failed.topFailureCode, 'AI_PROVIDER_UNAVAILABLE');
-  const record = logs.map((line) => line.match(/\[mergen-rota\] (\{.*\})$/)?.[1]).filter(Boolean).map((json) => JSON.parse(json))
+  const record = logs.map((line) => JSON.parse(line))
     .find((entry) => entry.component === 'AI' && entry.code === 'AI_PROVIDER_UNAVAILABLE');
   assert.ok(record, 'sağlayıcı hatası yapılandırılmış günlüğe yazılır');
   assert.deepEqual(

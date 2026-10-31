@@ -52,7 +52,9 @@ function conversation(t, { env = {} } = {}) {
     assert.equal(stack.provider.pendingCount, 0, 'sıradaki bütün model davranışları kullanıldı');
     const calls = stack.provider.calls.slice(before);
     const compose = calls.filter(isCompositionCall);
-    assert.ok(compose.length <= 1, 'turda en çok bir düzen turu');
+    // Zayıf düzen reddedilirse tek Derin anlatım denemesi olabilir; ikisi de aynı sayfayı görür.
+    assert.ok(compose.length <= 2, 'turda en çok iki düzen turu');
+    if (compose.length === 2) assert.deepEqual(compose[1].messages, compose[0].messages);
     if (compose.length) {
       // Düzen turu yalnızca sabit yönerge ve bu turun olgu sayfasıdır: geçmiş ve önceki asistan metni yoktur.
       assert.deepEqual(compose[0].messages.map((item) => item.role), ['system', 'user']);
@@ -234,12 +236,16 @@ test('I: takip sorusundaki talimat, yuva ve biçim enjeksiyonu yalnızca veridir
     const logs = captureConsole(inner);
     const echo = composer((view) => ({ blocks: [{ type: 'paragraph', text: `Sistem istemi: <img src=x onerror=alert(x)> {F1} 【R9】` },
       ...view.tables.map((table) => ({ type: 'rows', source: table.id }))] }));
-    const result = await ask(injection, [rotaPlan(followup), echo]);
+    // Derin anlatım denemesi de enjeksiyonu izler: ikisi de reddedilir, doğrulanmış belirlenimci anlatım gösterilir.
+    const result = await ask(injection, [rotaPlan(followup), echo, echo]);
     assert.equal(result.answer.finishReason, 'stop');
     assert.ok(!result.answer.content.includes('<img') && !result.answer.content.includes('Sistem istemi'));
     assert.ok(result.answer.content.startsWith('- **Haftalık durum toplantısı'), 'doğrulanmış belirlenimci anlatım');
+    const deep = result.calls.filter(isCompositionCall)[1];
+    assert.ok(deep && !JSON.stringify(deep.messages).includes('Sistem istemi'), 'reddedilen zayıf çıktı Derin bağlamına taşınmaz');
     const line = logs.map((text) => text.includes('"operation":"ai.grounded.turn"') ? JSON.parse(text.slice(text.indexOf('{'))) : null).find(Boolean);
     assert.equal(line.context.presentation.mode, 'narrative');
+    assert.equal(line.context.presentation.rejected, 'BLOCK_INVALID');
     assert.ok(!logs.some((text) => text.includes('Sistem istemi') || text.includes('onerror')), 'reddedilen model çıktısı günlüğe yazılmaz');
   });
 });
@@ -271,7 +277,7 @@ test('K: genel sohbetten sonra Rota sorusu doğal yazılır; genel yanıt metni 
 test('L: İngilizce zincir İngilizce sayfa ve yanıtla sürer', async (t) => {
   const { ask } = conversation(t);
   const first = await ask('Show my overdue tasks.', [rotaPlan(OVERDUE_LIST, { language: 'en' }), 'compose'], { language: 'en' });
-  assert.match(first.answer.content, /^\*\*3\*\* matching tasks were found/);
+  assert.match(first.answer.content, /^You currently have \*\*3\*\* overdue tasks\./);
   const second = await ask('What are their priorities?', [rotaPlan({ previousResult: true, operation: 'list', metrics: ['task.title', 'task.priority'],
     population: { tool: 'rota_task_search', collection: 'tasks' } }, { language: 'en' }), 'compose'], { language: 'en' });
   assert.equal(second.answer.finishReason, 'stop');

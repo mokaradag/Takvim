@@ -179,18 +179,18 @@ test('repeated native data calls without a request never execute SQL; one Deep f
   const stack = stackFor(t);
   const logs = captureConsole(t);
   let sqlBeforeDeep = null;
-  stack.provider.enqueue(searchOverdue([]), searchOverdue([]), searchOverdue([]),
+  stack.provider.enqueue(searchOverdue([]), searchOverdue([]),
     { type: 'script', respond: () => { sqlBeforeDeep = (stack.db.aiToolLog || []).length; return nativePlan(); } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
   assert.equal(sqlBeforeDeep, 0, 'bildirimsiz çağrılar SQL çalıştırmaz');
-  assert.deepEqual(stack.provider.calls.map((call) => call.model), [...Array(3).fill(DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'].model),
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [...Array(2).fill(DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'].model),
     DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model]);
   const [trace] = turnTraces(logs);
   assert.deepEqual([trace.context.escalated, trace.context.toolCalls, trace.context.selectedBy], [true, 1, 'server']);
   assert.deepEqual(trace.context.rounds.map((round) => [round.purpose, round.profile]), [['tools', 'chat.tools'], ['declaration', 'chat.tools'],
-    ['declaration', 'chat.tools'], ['plan', 'chat.tools.reasoning']]);
+    ['plan', 'chat.tools.reasoning']]);
   assert.deepEqual(aiTelemetrySnapshot().grounding.escalations, { total: 1, byReason: { REQUEST_DECLARATION: 1 }, byOutcome: { grounded: 1 } });
   drained(stack.provider);
 });

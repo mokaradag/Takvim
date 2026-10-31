@@ -9,7 +9,7 @@ import {
   groundingRepairInstruction,
   withScopeDisclosure
 } from '../../../domain/ai/evidenceContract.js';
-import { recordGroundedAnswer, recordGroundedTurn, recordPlannerDecision, recordPlannerRejection } from '../aiTelemetry.js';
+import { recordGroundedAnswer, recordGroundedTurn, recordPlannerDecision, recordPlannerRejection, retractPlannerDecision } from '../aiTelemetry.js';
 import { createEvidenceLedger } from '../tools/evidenceLedger.js';
 import { createToolExecutor } from '../tools/toolExecutor.js';
 import { getRotaTool, TASK_RESULT_SCOPE_TOOLS, toolCatalogForModel } from '../tools/toolRegistry.js';
@@ -262,10 +262,28 @@ const ESCALATION_BLOCKING_TOOL_CODES = new Set([
 /** Boş yanıt aynı oturumda en fazla bir kez, yalnızca bu kadar süre kaldıysa yeniden istenir. */
 export const EMPTY_COMPLETION_RETRY_MIN_MS = 15000;
 
+/**
+ * Anlatımın Derin düşünmeye devri: yalnızca yapısal olarak reddedilen, boş ya da kesik düzende; oturumda
+ * bu kadar süre kaldıysa ve Derin kuyruğu kısa beklenerek. Doğrulanmış yanıt zaten hazırdır; devir yalnızca
+ * sunumu iyileştirir, kullanıcıyı uzun bekletmez.
+ */
+export const NARRATION_ESCALATION = Object.freeze({ reasons: Object.freeze(['INVALID', 'EMPTY', 'LENGTH']), minRemainingMs: 30000, queueTimeoutMs: 5000 });
+
+/** Temiz yeniden planlamanın en az kalan çağrı bütçesi (ad çözümü + nüfus okuması). */
+const RESTART_MIN_CALLS = 2;
+
+/** Anlatım devri işareti: `finish` doğrulanmış sonucu Derin oturumuna taşır. */
+const NARRATE_DEEP = Symbol('narrate-deep');
+
 const EVIDENCE_READY_NOTE = 'SUNUCU: Bu turun kanıtları hazır. Yeni araç çağırma; yalnızca eldeki kanıtlarla son yanıtı üret.';
 
-/** Veri okunmadan önceki bildirim turları (yalnız bildirim ya da reddedilen araç çağrısı) için sınır. */
+/**
+ * Veri okunmadan önceki bildirim düzeltmeleri (yalnız bildirim ya da reddedilen araç çağrısı). Devredilebilen
+ * Standart denemede ve Derin'in temiz yeniden planlamasında tek ucuz düzeltme vardır; devir yoksa (Derin kip ya
+ * da Derin profili kurulmamış) tek model iki düzeltme hakkını korur.
+ */
 const DECLARATION_ROUNDS = 2;
+const ESCALATING_DECLARATION_ROUNDS = 1;
 
 /** Bildirim hatası ayrıntıları yalnızca şema yoludur; modelin yazdığı metin yönergeye taşınmaz. */
 const schemaNames = (schema) => Object.entries(schema.properties || {}).flatMap(([name, child]) => [name, ...schemaNames(child)])
@@ -915,9 +933,11 @@ function settlePart(turn, verdict, selectedBy) {
 
 function countPlannerDecision(turn, decision) {
   if (turn.decisionCounted) return;
-  recordPlannerDecision({ decision: decision.intent, parts: decision.requests?.length || 0, semantic: turn.planning.state,
+  const counted = Object.freeze({ decision: decision.intent, parts: decision.requests?.length || 0 });
+  recordPlannerDecision({ ...counted, semantic: turn.planning.state,
     candidates: turn.planning.candidates.length, declarations: turn.trace.declarations,
-    latencyMs: Date.now() - turn.trace.startedAt, semanticReason: turn.planning.reason });
+    latencyMs: Date.now() - turn.trace.startedAt, semanticReason: turn.planning.reason, revision: Boolean(turn.decisionRetracted) });
+  turn.countedDecision = counted;
   turn.decisionCounted = true;
 }
 
@@ -1070,19 +1090,8 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     // İçeriksiz tur izi: tur amaçları, süreler, belirteç sayıları ve sayaçlar.
     trace: { startedAt: planning?.startedAt ?? Date.now(), rounds: [], declarations: 0, repairs: 0, revalidationMs: 0, verificationMs: 0, pending: null }
   };
-  turn.executor = createToolExecutor({
-    resolveTool: (name) => !turn.permittedTools || turn.permittedTools.has(name) ? getRotaTool(name) : null,
-    context,
-    ledger: turn.ledger,
-    validateCall: turn.containment.validate,
-    resultScope: () => turn.request?.previousResult ? turn.previousResult : null,
-    signal: () => turn.session?.signal ?? null,
-    limits,
-    onProgress: ({ topic }) => {
-      onProgress?.();
-      status(ASSISTANT_STREAM_PHASES.TOOLS, { topic });
-    }
-  });
+  turn.scopeOptions = Object.freeze({ today: context.today, userText, allowedTextFields, clarification, referents: prior?.scope.taskIds || [] });
+  attachExecutor(turn);
   if (turn.previousResult) {
     const note = { role: 'system', content: `Önceki doğrulanmış Rota sonuç kapsamı: ${JSON.stringify({ type: 'task', count: turn.previousResult.scope.taskIds.length })}. Bu yalnızca göndergedir, güncel kanıt değildir. Kullanıcının sorusu bu kümeye ilişkinse ("bunlar", "bunlardan", "onun") request.previousResult=true ile rota_task_search (görev özellikleri/süzgeç) ya da rota_task_analytics (sayı) bildir; kimlik/önceki süzgeç kopyalama. Soru kümenin TEK bir görevine sıra ile başvuruyorsa ("ilk görev", "2. görev"; tek görevli kümede "o görev") previousResult yazma; entities:[{"type":"task","previous":<1 tabanlı sıra>}] ile o görevin aracını (ör. öncül/ardıl için rota_dependency_inspect, alanları için rota_task_detail) bildir. Yeni veya adı verilmiş kayıt sorusunda (ör. başka bir kişi) kullanma; önceki sorunun koşullarını yeni kayda uygula. Önceki asistan metninden veri çıkarma.` };
     for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note.content);
@@ -1093,7 +1102,27 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     allowedTextFields.length ? null : 'Bu turda kullanıcı kayıtlı serbest metni (açıklama, talep/karar iletisi, değişiklik metni) açmadı: textFields kullanma. Soru bu metinleri gerektiriyorsa yine planla; sunucu veri okumadan kullanıcıdan "Notlar ve iletiler" anahtarını açmasını ister.'
   ].filter(Boolean);
   for (const note of notes) for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note);
+  // Kanonik başlangıç: yönerge, sınırlı geçmiş, sunucu notları ve soru. Modelin hiçbir çıktısı buraya girmez;
+  // Derin düşünmenin temiz yeniden planlaması yalnızca bu dökümden başlar.
+  turn.canonical = Object.freeze([...turn.baseline]);
   return turn;
+}
+
+/** Turun araç yürütücüsü: güncel defter, kapsam ve sınırlarla (temiz yeniden planlamada yeniden kurulur). */
+function attachExecutor(turn) {
+  turn.executor = createToolExecutor({
+    resolveTool: (name) => !turn.permittedTools || turn.permittedTools.has(name) ? getRotaTool(name) : null,
+    context: turn.context,
+    ledger: turn.ledger,
+    validateCall: turn.containment.validate,
+    resultScope: () => turn.request?.previousResult ? turn.previousResult : null,
+    signal: () => turn.session?.signal ?? null,
+    limits: turn.limits,
+    onProgress: ({ topic }) => {
+      turn.progress();
+      turn.status(ASSISTANT_STREAM_PHASES.TOOLS, { topic });
+    }
+  });
 }
 
 /** Sunucu notu; düzeltme notları yalnızca çalışan dökümde kalır. */
@@ -1117,8 +1146,15 @@ function escalationPermitted(turn) {
   return ![...turn.toolFailureCodes].some((code) => ESCALATION_BLOCKING_TOOL_CODES.has(code));
 }
 
+/** Yürütücü sayaçları; temiz yeniden planlamada atılan denemenin işi de turun ölçümüne dâhildir. */
+function executorStats(turn) {
+  const current = turn.executor.stats();
+  const prior = turn.priorExecutorStats;
+  return prior ? Object.fromEntries(Object.entries(current).map(([key, value]) => [key, value + (prior[key] || 0)])) : current;
+}
+
 function stats(turn) {
-  return { modelRounds: turn.modelRounds, toolRounds: turn.toolRounds, ...turn.executor.stats(), ...turn.context.stats() };
+  return { modelRounds: turn.modelRounds, toolRounds: turn.toolRounds + (turn.priorToolRounds || 0), ...executorStats(turn), ...turn.context.stats() };
 }
 
 const MAX_TRACED_ROUNDS = 16;
@@ -1161,10 +1197,10 @@ function traceTurn(turn, outcome, { selectedBy = null, code = null, resultScopeO
   turn.trace.recorded = true;
   recordGroundedTurn({
     outcome, code, selectedBy, resultScopeOmitted, escalated: turn.escalated, durationMs: Date.now() - turn.trace.startedAt,
-    modelRounds: turn.modelRounds, toolRounds: turn.toolRounds, declarations: turn.trace.declarations, repairs: turn.trace.repairs,
+    modelRounds: turn.modelRounds, toolRounds: turn.toolRounds + (turn.priorToolRounds || 0), declarations: turn.trace.declarations, repairs: turn.trace.repairs,
     revalidationMs: turn.trace.revalidationMs, verificationMs: turn.trace.verificationMs, rounds: turn.trace.rounds,
     parts: turn.partCount, evidence: turn.trace.evidence ?? 0, presentation: turn.trace.presentation || null, escalation: turn.trace.escalation || null,
-    ...turn.executor.stats(), ...turn.context.stats()
+    ...executorStats(turn), ...turn.context.stats()
   });
 }
 
@@ -1291,7 +1327,27 @@ function compositionInput(turn, verdict) {
   const continues = answers.some((answer) => answer.request?.previousResult
     || answer.request?.entities?.some((entity) => entity.type === 'task' && priorIds.has(entity.id)));
   return { parts, missing, notes, locale: turn.locale, question: turn.question.text, previousQuestion: continues ? turn.question.previous : null,
-    today: turn.context.today };
+    today: turn.context.today, populations: populationSizes(turn, answers) };
+}
+
+/**
+ * Atfedilen görev listesi kanıtının NÜFUS büyüklüğü, yalnızca okuma nüfusun tamamıysa: tam, kesilmemiş, imleçsiz
+ * ve döndürülen satır sayısı kesin toplama eşit. Değer aynı doğrulanmış kanıtın zarfıdır; model ya da istek
+ * bildirimi bu sayıyı üretemez. Anlatım, sayım ölçüsü istenmemiş liste yanıtında da "kaç" sorusunu bu sayıyla söyler.
+ */
+function populationSizes(turn, answers) {
+  const sizes = new Map();
+  for (const answer of answers) {
+    if (answer.verdict.kind !== 'grounded') continue;
+    for (const entry of answer.entries || partEntries(turn)) {
+      const payload = entry.payload;
+      if (entry.tool !== 'rota_task_search' || !answer.verdict.citedIds.includes(entry.id) || entry.args?.cursor != null) continue;
+      if (payload?.complete === true && payload.truncated !== true && Number.isSafeInteger(payload.totalCount) && payload.returnedCount === payload.totalCount) {
+        sizes.set(entry.id, payload.totalCount);
+      }
+    }
+  }
+  return sizes;
 }
 
 /**
@@ -1328,12 +1384,24 @@ async function presentVerdict(turn, verdict, compose) {
     } });
   turn.work += 1;
   const composedMs = Date.now() - startedAt;
+  const rejected = turn.trace.narrationRejected || null;
   if (!result.ok || !result.citedIds.every((id) => verdict.citedIds.includes(id))) {
-    turn.trace.presentation = { mode: 'narrative', reason: result.ok ? 'CITATION_SCOPE' : result.reason, issue: result.issue ?? null, ms: composedMs };
+    turn.trace.presentation = { mode: 'narrative', reason: result.ok ? 'CITATION_SCOPE' : result.reason, issue: result.issue ?? null, ms: composedMs, rejected };
+    if (!result.ok && narrationEscalationAllowed(turn, result.reason)) {
+      turn.trace.narrationRejected = result.issue || result.reason;
+      return NARRATE_DEEP;
+    }
     return verdict;
   }
-  turn.trace.presentation = { mode: 'composed', blocks: result.blocks, chart: result.chart, charts: result.charts, ms: composedMs };
+  turn.trace.presentation = { mode: 'composed', blocks: result.blocks, chart: result.chart, charts: result.charts, said: result.said, tables: result.tables, notes: result.notes,
+    titled: result.titled, ms: composedMs, rejected };
   return { ...verdict, normalized: [result.text, ...input.notes].join('\n\n') };
+}
+
+/** Zayıf anlatımın yapısal hatası Derin'e ancak devir kurulmuşsa, tur henüz devretmediyse ve süre yetiyorsa gider. */
+function narrationEscalationAllowed(turn, reason) {
+  return turn.escalationAvailable === true && !turn.escalated && NARRATION_ESCALATION.reasons.includes(reason) && !turn.ledger.revoked()
+    && Number(turn.session.remainingMs?.() ?? 0) >= NARRATION_ESCALATION.minRemainingMs;
 }
 
 /** Teslim ve kalıcılık aynı, kapsam notu dahil sınırlanmış metni kullanır. */
@@ -1358,10 +1426,11 @@ export function finalGroundedDisclosure(verdict, { fallback = null, summaries, l
 }
 
 /** Doğrulanmış sonucun gösterimi: kapsam notunu sunucu ekler, yalnızca atfedilen kanıt kaydedilir. */
-async function finish(turn, settled, onText, selectedBy = 'model', { compose = true } = {}) {
+async function finish(turn, settled, onText, selectedBy = 'model', { compose = true, disclosureSignal = turn.session.signal } = {}) {
   let verdict = await presentVerdict(turn, settled, compose);
+  if (verdict === NARRATE_DEEP) return narrationEscalation(turn, settled, selectedBy);
   // Model/araç beklemesinden sonra, yanıt ve kalıcı kanıt kurulmadan önce son yetki sınırı.
-  if (turn.ledger.revoked() || (verdict.citedIds.length && turn.revalidatedAt !== turn.work && (await revalidate(turn) || turn.ledger.revoked()))) {
+  if (turn.ledger.revoked() || (verdict.citedIds.length && turn.revalidatedAt !== turn.work && (await revalidate(turn, disclosureSignal) || turn.ledger.revoked()))) {
     verdict = unavailableVerdict(turn.locale);
     turn.trace.presentation = { mode: 'unavailable', reason: 'AUTHORIZATION' };
   }
@@ -1474,39 +1543,90 @@ async function failTurn(turn, onText) {
   };
 }
 
+/** Temiz yeniden planlamanın Derin düşünmeye verdiği tek, makine okunur not: atılan denemenin içeriği değil, nedeni. */
+export function restartNote(reason) {
+  return `SUNUCU: Bu soru için önceki planlama denemesi doğrulamadan geçmedi ve atıldı (neden: ${reason}). O deneme bu dökümde yoktur ve hiçbir sonucu kullanılmaz; kararı yalnızca kullanıcının sorusundan ve bu dökümdeki sunucu notlarından baştan ver.`;
+}
+
 /**
- * Standart kipte muhakeme ihtiyacı ya da ucuz kurtarmadan sonra kalan protokol
- * hatası aynı kanıt ve kapsamla Derin'e BİR kez devredilir.
+ * Zayıf modelin planlama denemesini ATAR: bildirim, plan, onarım izleri, kabul notları, araç alışverişleri
+ * ve (veri okunduysa) kanıt defteri, kapsam ve okuma kaydı. Döküm kanonik başlangıçtan ve tek bir neden
+ * notundan yeniden kurulur; Derin düşünme zayıf modelin hiçbir çıktısını görmez. Ortak sınırlar (toplam
+ * çağrı, sonuç boyutu, SQL süresi, mutlak süre) atılan denemenin harcamasıyla birlikte sürer.
+ */
+function restartPlanning(turn, reason) {
+  const spent = turn.executor.stats();
+  turn.priorExecutorStats = Object.fromEntries(Object.entries(spent).map(([key, value]) => [key, value + (turn.priorExecutorStats?.[key] || 0)]));
+  turn.priorToolRounds = (turn.priorToolRounds || 0) + turn.toolRounds;
+  // Temiz yeniden başlangıç bir model/kanıt bağlamı yenilemesidir, kaynak bütçesi yenilemesi değil: araç çağrısı, sonuç
+  // boyutu, araç turu ve araç evresi süresi atılan denemenin harcamasıyla daralır. SQL süresi turun ortak bağlamında
+  // (`turn.context`), mutlak süre oturumların ortak yaşam döngüsünde, onarım hakkı (`repairsLeft`) turda sürer.
+  turn.limits = Object.freeze({ ...turn.limits, maxTotalCalls: Math.max(0, turn.limits.maxTotalCalls - spent.attempted),
+    maxTotalResultBytes: Math.max(0, turn.limits.maxTotalResultBytes - spent.resultBytes),
+    maxToolRounds: Math.max(0, turn.limits.maxToolRounds - turn.toolRounds),
+    maxToolPhaseMs: Math.max(0, turn.limits.maxToolPhaseMs - turn.executor.phaseSpentMs()) });
+  // Atılan denemenin kanıtı ve bildirimiyle genişlemiş kapsamı ne modele ne kullanıcıya açılır: yeni defter, kanonik
+  // seçeneklerden yeni kapsam, yeni yürütücü.
+  turn.ledger = createEvidenceLedger();
+  turn.containment = createToolScope(turn.scopeOptions);
+  attachExecutor(turn);
+  turn.attemptedReads = new Set();
+  turn.partEvidence = new Set();
+  turn.toolRounds = 0;
+  turn.readStarted = false;
+  turn.revalidatedAt = null;
+  turn.decision = null;
+  // Atılan planın kararı sayımdan geri alınır; Derin'in yerine geçen kararı (rota, clarify, abstain …) sayılır.
+  if (turn.decisionCounted) {
+    retractPlannerDecision(turn.countedDecision);
+    turn.decisionCounted = false;
+    turn.decisionRetracted = true;
+  }
+  turn.route = TURN_ROUTES.UNDECIDED;
+  turn.locale = 'tr'; // Kanonik tur başlangıcındaki varsayılan; atılan planın dili taşınmaz.
+  turn.repairPins.clear();
+  turn.textFieldsRequired = false;
+  turn.namedScope = [];
+  turn.declarationsLeft = ESCALATING_DECLARATION_ROUNDS;
+  turn.declared = null;
+  turn.request = null;
+  turn.toolsAttempted = false;
+  turn.toolsRequested = false;
+  turn.toolFailureCodes.clear();
+  turn.permittedTools = null;
+  turn.parts = [];
+  turn.answers = [];
+  turn.partNotes = new Map();
+  turn.partIndex = 0;
+  turn.partCount = 1;
+  turn.acceptedNote = null;
+  turn.transcript = [...turn.canonical];
+  turn.baseline = [...turn.canonical];
+  instruct(turn, restartNote(reason));
+}
+
+/**
+ * Standart kipteki tur Derin düşünmeye BİR kez devredilir. İki biçim vardır:
+ * - `select`: bildirilen istek veri okunduktan sonra donmuştur ve kanıt onu belirlenimci olarak
+ *   karşılar (ör. sentez gereksinimi ya da seçim/biçim hatası). Derin aynı kanıtla yalnızca son
+ *   seçimi yapar; dökümde onarım notları ve reddedilen planlar yoktur.
+ * - `plan`: zayıf modelin planı doğrulanamadı (bildirim reddi, boş yanıt, kanıtın karşılamadığı ya da
+ *   onarımı tükenen istek). Deneme ATILIR ve Derin kanonik başlangıçtan temiz planlar (`restartPlanning`).
  */
 function escalation(turn, reason, { error = null } = {}) {
   turn.escalated = true;
-  turn.transcript = [...turn.baseline];
   turn.trace.pending = null;
-  // Kanıt okunmadıysa istek donmamıştır: Derin düşünme kendi planını ve bildirimini verebilir; eski kabul notu
-  // (ör. "istek değiştirilemez") Derin'i bağlamaz. Yürütülen okumaların kaydı korunur: aynı okuma yinelenmez.
-  if ((!turn.decision || turn.decision === PLANNER_INTENTS.ROTA) && !turn.readStarted) {
-    turn.decision = null;
-    turn.repairPins.clear();
-    turn.textFieldsRequired = false;
-    turn.namedScope = [];
-    turn.declarationsLeft = DECLARATION_ROUNDS;
-    turn.declared = null;
-    turn.request = null;
-    turn.toolsAttempted = false;
-    turn.permittedTools = null;
-    turn.parts = [];
-    turn.answers = [];
-    turn.partNotes = new Map();
-    turn.partIndex = 0;
-    turn.partCount = 1;
-    clearAcceptedNote(turn);
-  }
-  if (turn.ledger.ids().length) instruct(turn, EVIDENCE_READY_NOTE);
+  const select = turn.readStarted && evidenceSatisfied(turn);
+  if (select) {
+    turn.transcript = [...turn.baseline];
+    instruct(turn, EVIDENCE_READY_NOTE);
+  } else restartPlanning(turn, reason);
   return {
     outcome: 'escalate',
     reason,
+    kind: select ? 'select' : 'plan',
     resume: turn,
-    toolsReused: turn.ledger.ids().length > 0,
+    toolsReused: select,
     // Devrin içeriksiz özeti ayrı günlük satırı değil, turun tek tamamlanma kaydının parçasıdır.
     noteEscalation: (summary) => { turn.trace.escalation = summary; },
     traceError: (error) => traceTurn(turn, 'error', { code: error?.code }),
@@ -1514,6 +1634,43 @@ function escalation(turn, reason, { error = null } = {}) {
     fallback: (onText) => {
       if (error) { traceTurn(turn, 'error', { code: error.code }); throw error; }
       return failTurn(turn, onText);
+    }
+  };
+}
+
+/** Bildirilen istek bu turun kanıtıyla belirlenimci olarak karşılanıyor mu? */
+function evidenceSatisfied(turn) {
+  return Boolean(turn.request && requestEvidenceReady(turn.request, partEntries(turn), turn.context.today, turn.containment.boundSelection()));
+}
+
+/**
+ * Doğrulanmış yanıtın anlatımı Derin düşünmeye BİR kez devredilir: yanıt zaten doğrulanmıştır, Derin
+ * yalnızca aynı önerme sayfasından düzeni seçer (plan, araç, kanıt yükü ya da zayıf modelin düzeni
+ * gönderilmez). Devir başarısızsa ya da açılamazsa doğrulanmış belirlenimci anlatım gösterilir.
+ */
+function narrationEscalation(turn, settled, selectedBy) {
+  turn.escalated = true;
+  turn.pendingNarration = Object.freeze({ settled, selectedBy });
+  return {
+    outcome: 'escalate',
+    reason: 'NARRATION_FAILED',
+    kind: 'narrate',
+    resume: turn,
+    toolsReused: true,
+    queueTimeoutMs: NARRATION_ESCALATION.queueTimeoutMs,
+    noteEscalation: (summary) => { turn.trace.escalation = summary; },
+    traceError: (error) => traceTurn(turn, 'error', { code: error?.code }),
+    models: [...turn.models],
+    /**
+     * Derin anlatım açılamaz, hata verir ya da modelin ortak süresi dolarsa doğrulanmış belirlenimci anlatım teslim edilir.
+     * Model oturumunun süresi yalnızca model denemesini bitirir: son yetki doğrulaması, süresi dolmuş oturum sinyaliyle değil,
+     * isteğin kendi (iptal edilebilir) sinyaline bağlı taze ve sınırlı bir teslim süresiyle (`revalidate`: callTimeoutMs) yapılır.
+     * Model süresi uzatılmaz; yetki denetimi atlanmaz.
+     */
+    fallback: (onText, deliverySignal = null) => {
+      turn.pendingNarration = null;
+      turn.work += 1;
+      return finish(turn, settled, onText, selectedBy, { compose: false, disclosureSignal: deliverySignal });
     }
   };
 }
@@ -1599,12 +1756,21 @@ export async function runGroundedTurn(session, {
   turn.session = session;
   turn.deferDisclosure = deferDisclosure;
   turn.composeAnswers = composeAnswers === true;
+  turn.escalationAvailable = escalationAvailable === true;
+  // Derin'e devredilebilen zayıf denemede tek ucuz bildirim düzeltmesi: ikinci düzeltme yerine temiz yeniden planlama.
+  if (!resume && turn.escalationAvailable) turn.declarationsLeft = Math.min(turn.declarationsLeft, ESCALATING_DECLARATION_ROUNDS);
   // Yeni oturum (kuyruk beklemesi dâhil) yetkinin yeniden okunmasını gerektirir.
   turn.work += 1;
   // Oturumun kurulması (kira, kimlik bilgisi) ilerlemedir: üretim gözcüsünün kurulum payı her oturumu, Derin devri dâhil,
   // bir kez karşılar; turda en çok iki oturum vardır ve her biri kendi süre sınırıyla biter.
   turn.progress();
   try {
+    // Anlatım devri: doğrulanmış sonuç hazırdır; Derin oturumu yalnızca düzeni kurar ve tur biter.
+    if (turn.pendingNarration) {
+      const { settled, selectedBy } = turn.pendingNarration;
+      turn.pendingNarration = null;
+      return await finish(turn, settled, onText, selectedBy);
+    }
     return await continueTurn(turn, { escalationAvailable, onText, resumed: Boolean(resume) });
   } catch (error) {
     if (!resume) traceTurn(turn, 'error', { code: typeof error?.code === 'string' ? error.code : null });
@@ -1622,7 +1788,12 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
   // çağıramaz: devir yalnızca kanıt bildirilen isteği belirlenimci olarak karşılayabiliyorsa yapılır.
   // Veri okunmadıysa Derin yeniden planlar; ortak araç turu bütçesi tükendiyse planı yürütemez.
   const evidenceReady = () => Boolean(turn.request && requestEvidenceReady(turn.request, partEntries(turn), turn.context.today, containment.boundSelection()));
-  const deepCanHelp = () => canEscalate() && (frozen() ? evidenceReady() : toolsAvailable());
+  // Veri okunmuş ama kanıt bildirilen isteği karşılamıyorsa planın kendisi hatalıdır: atılır ve Derin temiz
+  // planlar. Okuma hatası (veri/altyapı), doğrulanmış bölüm ya da tükenen çağrı bütçesi yeniden planlamayı açmaz.
+  const restartable = () => turn.readStarted && ledger.ids().length > 0 && !turn.answers.length && !turn.toolFailureCodes.size
+    && limits.maxTotalCalls - executor.stats().attempted >= RESTART_MIN_CALLS && turn.toolRounds < limits.maxToolRounds
+    && executor.phaseSpentMs() < limits.maxToolPhaseMs && !evidenceReady();
+  const deepCanHelp = () => canEscalate() && (frozen() ? evidenceReady() || restartable() : toolsAvailable());
   let missingPreviousResult = null;
   const fallback = async (reason) => {
     if (turn.textFieldsRequired) {
@@ -1853,6 +2024,11 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
         if (!rejectDeclaration(modelCalls, declared.details, declared.hints)) return fallback('REQUEST_DECLARATION');
       }
       continue;
+    }
+    // Düzeltme hakkı tükenmişken gelen geçersiz plan bir yanıt değildir: kanıt düzeltmesi açılmaz, devir ya da güvenli ret.
+    if (declared && !declared.ok && !calls.length) {
+      if (rejectDeclaration(modelCalls, declared.details, declared.hints)) continue;
+      return fallback('REQUEST_DECLARATION');
     }
     if (calls.length && canCallTools) {
       let prepared;

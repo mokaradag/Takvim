@@ -5,7 +5,8 @@
  * SQL ikiziyle çalışır; yalnızca dil modeli belirlenimci ikizdir. Sınanan sözleşme: düzen turu aynı
  * oturumda, araçsız, dar çıktı sınırıyla ve tek kez yürür; değerleri, tabloları ve kaynakları sunucu
  * yazar; düzenin her başarısızlığı (bozuk çıktı, kesik çıktı, boş yanıt, sağlayıcı hatası, süre) aynı
- * doğrulanmış belirlenimci anlatıma döner; Derin düşünmeye devir ya da düzeltme turu yoktur; iptal
+ * doğrulanmış belirlenimci anlatıma döner; yapısal ret, boş ya da kesik düzen Derin düşünmeye yalnızca
+ * önerme sayfasıyla BİR kez devredilir (zayıf modelin çıktısı taşınmaz), düzeltme turu yoktur; iptal
  * hiçbir şey yazmaz; günlük içerik taşımaz.
  */
 import assert from 'node:assert/strict';
@@ -57,7 +58,7 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   const logs = captureConsole(t);
   let sheet;
   stack.provider.enqueue(plan(), composer((view) => {
-    return { blocks: [{ type: 'details', source: 'D1' }, { type: 'rows', source: 'T1', style: 'table' }, { type: 'chart', source: 'G1', style: 'bar' }] };
+    return { blocks: [{ type: 'details', source: 'D1' }, { type: 'say', items: view.propositions.filter((item) => item.kind !== 'count').slice(0, 3).map((item) => item.id) }, { type: 'rows', source: 'T1', style: 'table' }, { type: 'chart', source: 'G1', style: 'bar' }] };
   }, (view) => { sheet = view; }));
   const response = await sendTurn({ turnId: randomUUID(), message: QUESTION });
   const answer = doneOf(response).assistantMessage;
@@ -80,7 +81,7 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   assert.deepEqual(stored.map((row) => [row.tool, row.resultScope]), deterministic.map((row) => [row.tool, row.resultScope]));
   const [line] = turnLines(logs);
   assert.equal(turnLines(logs).length, 1, 'tek tamamlanma kaydı');
-  assert.deepEqual({ ...line.context.presentation, ms: null }, { mode: 'composed', reason: null, issue: null, blocks: 3, chart: 'bar', charts: 1, ms: null });
+  assert.deepEqual({ ...line.context.presentation, ms: null }, { mode: 'composed', reason: null, issue: null, blocks: 4, said: 3, tables: 1, notes: 0, titled: false, chart: 'bar', charts: 1, ms: null, rejected: null });
   assert.deepEqual(line.context.rounds.map((round) => [round.purpose, round.budget, round.calls]), [['plan', STANDARD.maxOutputTokens, 1], ['compose', COMPOSITION_RUNTIME.maxOutputTokens, 0]]);
   assert.equal(line.context.escalated, false);
   for (const secret of [QUESTION, 'Haftalık durum toplantısı', 'Radar test planı', String(AYSE), 'gecikmiş göreviniz']) {
@@ -91,7 +92,7 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   assert.equal(grounding.escalations.total, 0);
 });
 
-test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; düzeltme ya da Derin devri yoktur', async (t) => {
+test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; yapısal ret yalnızca sayfayla tek Derin anlatım denemesi açar', async (t) => {
   let baseline;
   await t.test('belirlenimci anlatım', async (inner) => {
     const stack = stackFor(inner, { composition: false });
@@ -102,25 +103,102 @@ test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; d�
     ['düz metin', { type: 'answer', native: true, text: 'Şu anda üç gecikmiş göreviniz var.' }, 'INVALID', 'SHAPE_INVALID'],
     ['uydurma yuva', composer(() => ({ blocks: [{ type: 'paragraph', text: 'Toplam {F99}.' }, { type: 'rows', source: 'T1' }] })), 'INVALID', 'BLOCK_INVALID'],
     ['uydurma sayı', composer(() => ({ blocks: [{ type: 'paragraph', text: 'Toplam {F1}, bunların 2 tanesi kritik.' }, { type: 'rows', source: 'T1' }] })), 'INVALID', 'BLOCK_INVALID'],
+    ['türetilmemiş ilişki', composer(() => ({ blocks: [{ type: 'say', items: ['P1', 'P9'] }, { type: 'rows', source: 'T1' }] })), 'INVALID', 'UNKNOWN_PROPOSITION'],
+    ['önermeye metin', composer(() => ({ blocks: [{ type: 'say', items: ['P1'], text: 'en kısa gecikme' }, { type: 'rows', source: 'T1' }] })), 'INVALID', 'BLOCK_INVALID'],
     ['eksik kapsam', composer(() => ({ blocks: [{ type: 'details', source: 'D1' }] })), 'INVALID', 'COVERAGE_INCOMPLETE'],
-    ['kesik çıktı', { type: 'answer', native: true, text: '{"blocks":[{"type":"paragraph","text":"Şu', finishReason: 'length' }, 'LENGTH', null],
-    ['boş yanıt', { type: 'answer', native: true, text: '', chunks: [], finishReason: 'stop' }, 'EMPTY', null],
-    ['sağlayıcı hatası', { type: 'status', status: 503 }, 'PROVIDER', null]
+    ['kesik çıktı', { type: 'answer', native: true, text: '{"blocks":[{"type":"say","items":["P', finishReason: 'length' }, 'LENGTH', null],
+    ['boş yanıt', { type: 'answer', native: true, text: '', chunks: [], finishReason: 'stop' }, 'EMPTY', null]
   ];
   for (const [name, behavior, reason, issue] of failures) await t.test(name, async (inner) => {
     const stack = stackFor(inner);
     const logs = captureConsole(inner);
-    stack.provider.enqueue(plan(), behavior);
+    // Derin anlatım da aynı biçimde başarısız olur: doğrulanmış anlatım değişmeden gösterilir, üçüncü düzen turu yoktur.
+    stack.provider.enqueue(plan(), behavior, behavior);
     const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
     assert.equal(answer.finishReason, 'stop');
     assert.equal(answer.content, baseline, 'doğrulanmış anlatım değişmeden gösterilir');
-    assert.equal(stack.provider.calls.length, 2, 'ikinci düzen turu, düzeltme ya da devir yok');
-    assert.ok(stack.provider.calls.every((call) => call.model === STANDARD.model));
+    assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD.model, STANDARD.model, DEEP.model], 'tek Derin anlatım denemesi; döngü yok');
+    const [weak, deep] = stack.provider.calls.slice(1);
+    assert.ok(isCompositionCall(weak) && isCompositionCall(deep));
+    // Derin yalnızca sabit yönerge ve AYNI önerme sayfasını görür: zayıf modelin çıktısı, plan ya da araç sonucu yoktur.
+    assert.deepEqual(deep.messages, weak.messages);
+    assert.deepEqual(deep.tools ?? [], []);
     assert.equal(stack.db.aiMessageEvidence.length, 1);
     const [line] = turnLines(logs);
-    assert.deepEqual([line.context.presentation.mode, line.context.presentation.reason, line.context.presentation.issue], ['narrative', reason, issue]);
+    assert.deepEqual([line.context.presentation.mode, line.context.presentation.reason, line.context.presentation.issue, line.context.presentation.rejected],
+      ['narrative', reason, issue, issue || reason]);
+    assert.deepEqual([line.context.escalation.kind, line.context.escalation.reason, line.context.escalation.outcome], ['narrate', 'NARRATION_FAILED', 'grounded']);
+    assert.deepEqual(aiTelemetrySnapshot().grounding.escalations.byReason, { NARRATION_FAILED: 1 });
+  });
+  await t.test('sağlayıcı hatası devredilmez', async (inner) => {
+    const stack = stackFor(inner);
+    const logs = captureConsole(inner);
+    stack.provider.enqueue(plan(), { type: 'status', status: 503 });
+    const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
+    assert.equal(answer.content, baseline);
+    assert.equal(stack.provider.calls.length, 2, 'ikinci düzen turu, düzeltme ya da devir yok');
+    assert.ok(stack.provider.calls.every((call) => call.model === STANDARD.model));
+    const [line] = turnLines(logs);
+    assert.deepEqual([line.context.presentation.mode, line.context.presentation.reason], ['narrative', 'PROVIDER']);
     assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
   });
+  await t.test('Derin anlatım başarılıysa zayıf modelin reddi kodla izlenir', async (inner) => {
+    const stack = stackFor(inner);
+    const logs = captureConsole(inner);
+    stack.provider.enqueue(plan(), composer(() => ({ blocks: [{ type: 'say', items: ['P7'] }, { type: 'rows', source: 'T1' }] })),
+      composer(() => ({ blocks: [{ type: 'say', items: ['P1', 'P2', 'P3', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }] })));
+    const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
+    assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\. En uzun süredir geciken görev \*\*Haftalık durum toplantısı\*\* \(\*\*23 gün\*\*\)\. En kısa süredir geciken görev \*\*Kısmi kendi görevim\*\* \(\*\*1 gün\*\*\)\. Ayrıntıları aşağıdaki tabloda görebilirsiniz\. 【R1】/);
+    const [line] = turnLines(logs);
+    assert.deepEqual([line.context.presentation.mode, line.context.presentation.rejected, line.context.presentation.said], ['composed', 'UNKNOWN_PROPOSITION', 3]);
+    assert.equal(line.context.escalation.kind, 'narrate');
+  });
+});
+
+test('narration admission queue expiry records timeout while delivering the verified fallback', async (t) => {
+  const stack = stackFor(t);
+  const logs = captureConsole(t);
+  const { getAiGateway } = await import('../src/server/ai/aiRuntime.js');
+  const { AiError } = await import('../src/server/ai/aiErrors.js');
+  const gateway = getAiGateway();
+  const run = gateway.runToolSession.bind(gateway);
+  let deepAdmissions = 0;
+  t.mock.method(gateway, 'runToolSession', async (options) => {
+    if (options.profile === 'chat.tools.reasoning') {
+      deepAdmissions += 1;
+      assert.equal(options.queueTimeoutMs, 5000);
+      throw new AiError('AI_QUEUE_TIMEOUT');
+    }
+    return run(options);
+  });
+  stack.provider.enqueue(plan(), composer(() => ({ blocks: [{ type: 'say', items: ['P99'] }, { type: 'rows', source: 'T1' }] })));
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
+  assert.equal(answer.finishReason, 'stop');
+  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.equal(deepAdmissions, 1);
+  assert.equal(stack.provider.calls.length, 2, 'queue expiry makes no Deep provider call or retry');
+  assert.deepEqual(aiTelemetrySnapshot().grounding.escalations.byOutcome, { timeout: 1 });
+  assert.equal(turnLines(logs)[0].context.escalation.outcome, 'timeout');
+});
+
+test('anlatım devrinde yetki Derin düzen çağrısından ÖNCE yeniden okunur: erişim kalktıysa önerme sayfası Derin sağlayıcıya gitmez', async (t) => {
+  const stack = stackFor(t);
+  const logs = captureConsole(t);
+  // Zayıf anlatım yapısal olarak reddedilir; o sırada kullanıcının erişimi kalkar (Derin kuyruğu beklenirken olabilecek değişiklik).
+  stack.provider.enqueue(plan(), composer(() => {
+    stack.db.projectAccess = [];
+    stack.db.taskAssignees = [];
+    stack.db.executiveScope = [];
+    for (const project of stack.db.projects) project.LeadSicil = LEAD;
+    return { blocks: [{ type: 'say', items: ['P99'] }, { type: 'rows', source: 'T1' }] };
+  }));
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
+  assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD.model, STANDARD.model], 'Derin düzen çağrısı yapılmaz');
+  assert.notEqual(answer.finishReason, 'stop');
+  assert.equal(answer.content.includes('Haftalık durum toplantısı'), false, 'iptal edilen kayıt açıklanmaz');
+  assert.equal(stack.db.aiMessageEvidence.length, 0);
+  const [line] = turnLines(logs);
+  assert.equal(line.context.escalation.kind, 'narrate');
 });
 
 test('Derin kipte düzen Derin oturumunda yürür ve düşünmeye yer bırakan profil sınırını kullanır', async (t) => {
@@ -129,7 +207,7 @@ test('Derin kipte düzen Derin oturumunda yürür ve düşünmeye yer bırakan p
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION, mode: 'deep' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.deepEqual(stack.provider.calls.map((call) => [call.model, call.maxOutputTokens]), [[DEEP.model, DEEP.maxOutputTokens], [DEEP.model, DEEP.maxOutputTokens]]);
-  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
 });
 
 test('kalan süre düzen penceresine yetmiyorsa düzen istenmez; doğrulanmış anlatım gösterilir', async (t) => {
@@ -196,7 +274,7 @@ test('İngilizce plan İngilizce olgu sayfası ve yanıt üretir', async (t) => 
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Show my overdue tasks.' })).assistantMessage;
   assert.equal(sheet.language, 'en');
   assert.equal(Object.hasOwn(sheet, 'facts'), false);
-  assert.match(answer.content, /^\*\*3\*\* matching tasks were found/);
+  assert.match(answer.content, /^You currently have \*\*3\*\* overdue tasks\./);
   assert.match(answer.content, /\| Task \| Deadline \| Overdue days \|/);
 });
 
@@ -509,8 +587,9 @@ test('sunum telemetrisi yalnız teslim edilen kendi yanıtını ve grafiklerini 
     await t.test(delivery, async (inner) => {
       const stack = stackFor(inner);
       const logs = captureConsole(inner);
-      stack.provider.enqueue(plan(), composer(() => ({ blocks: [
-        { type: 'details', source: 'D1' }, { type: 'rows', source: 'T1' }, { type: 'chart', source: 'G1', style: 'bar' }
+      stack.provider.enqueue(plan(), composer((view) => ({ blocks: [
+        { type: 'details', source: 'D1' }, { type: 'say', items: view.propositions.filter((item) => item.kind !== 'count').slice(0, 3).map((item) => item.id) },
+        { type: 'rows', source: 'T1' }, { type: 'chart', source: 'G1', style: 'bar' }
       ] })));
       const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: QUESTION, mode: 'standard' }) });
       inner.after(() => turn.claim.release());

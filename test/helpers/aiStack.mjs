@@ -59,7 +59,9 @@ const BASE_ENV = Object.freeze({
   MERGEN_ROTA_AI_CREDENTIAL_MASTER_KEY: MASTER_KEY,
   // Kanıta dayalı yolun sözleşme sınamaları doğrulanmış belirlenimci anlatımı (düzenin geri dönüş yolu)
   // ve tam model turu sayılarını denetler; doğal yanıt düzeni kendi sınamalarında açıkça açılır.
-  MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'false'
+  MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'false',
+  // Sınamalar JSON günlük satırlarını ayrıştırır: biçim test koşucusunun terminaline bağlı kalmaz.
+  MERGEN_ROTA_LOG_FORMAT: 'json'
 });
 
 function resetAi() {

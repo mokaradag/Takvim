@@ -612,7 +612,7 @@
 .assistant-md .assistant-md-list.is-tight > li > p { margin: 0; }
 .assistant-md blockquote { margin: .15em 0 .85em; padding: 2px 0 2px 12px; border-left: 3px solid var(--border-strong); color: var(--text-muted); }
 /* Kanıta dayalı yanıtta yorum ve öneri olgulardan ayrı, sakin bir not kutusudur ("Değerlendirme"). */
-.assistant-md blockquote:has(> p:only-child > strong:first-child) {
+.assistant-md blockquote:not(.assistant-md-callout):has(> p:only-child > strong:first-child) {
   padding: 9px 12px;
   border: 1px solid color-mix(in oklab, var(--c-purple) 24%, var(--border));
   border-left: 3px solid color-mix(in oklab, var(--c-purple) 72%, var(--border));
@@ -622,6 +622,23 @@
   font-size: .96em;
 }
 .assistant-md blockquote > p:last-child { margin-bottom: 0; }
+/* Kanıta bağlı anlatımın not kutusu: tonu sunucu belirler (bilgi, dikkat, olumlu); değerler tonun rengini alır. */
+.assistant-md blockquote.assistant-md-callout {
+  --callout: var(--c-blue);
+  padding: 9px 12px;
+  border: 1px solid color-mix(in oklab, var(--callout) 26%, var(--border));
+  border-left: 3px solid var(--callout);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--callout) 7%, var(--bg-elev));
+  color: var(--text);
+  font-size: .96em;
+}
+.assistant-md blockquote.assistant-md-callout.is-warning { --callout: var(--status-overdue); }
+.assistant-md blockquote.assistant-md-callout.is-success { --callout: var(--status-done); }
+.assistant-md blockquote.assistant-md-callout strong { color: color-mix(in oklab, var(--callout) 78%, var(--text)); }
+.assistant-md blockquote.assistant-md-callout strong:first-child { color: var(--callout); letter-spacing: .01em; }
+/* Yanıt başlığı: kısa, tema vurgulu bir üst satır. */
+.assistant-md h5.assistant-md-heading { margin: .2em 0 .55em; padding-left: 9px; border-left: 3px solid var(--accent); font-size: 14.5px; line-height: 1.3; }
 .assistant-md blockquote strong:first-child { color: var(--text); font-weight: 650; }
 .assistant-md hr { margin: 1em 0; border: 0; border-top: 1px solid var(--border); }
 .assistant-md a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }

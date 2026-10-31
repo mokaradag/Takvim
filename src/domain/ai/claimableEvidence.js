@@ -356,6 +356,8 @@ function rowContext(envelope, parts) {
     name: row.title || row.name || row.task?.title || row.person?.name || row.label || null,
     project: typeof row.project === 'string' ? row.project : row.project?.name || null,
     projectCode: row.project?.code || null,
+    // Proje kimliği yalnızca gruplama içindir (aynı adlı projeler ayrıdır); anlatımda ad gösterilir.
+    projectId: row.project?.projectId || null,
     organization: row.organization ? [row.organization.unit, row.organization.department, row.organization.directorate].filter(Boolean).join(' / ') : null };
 }
 

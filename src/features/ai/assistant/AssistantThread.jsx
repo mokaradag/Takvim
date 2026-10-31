@@ -43,13 +43,13 @@ const UNANSWERED_NOTICE = Object.freeze({
  * Kopyalanan metin (görünen yanıt) yalnızca tıklanınca çıkarılır: akış
  * sürerken her çizimde önceki bütün yanıtlar yeniden çözümlenmez.
  */
-function CopyAnswerButton({ source, evidence = null }) {
+function CopyAnswerButton({ source, evidence = null, rotaData = false }) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef(null);
   useEffect(() => () => clearTimeout(timerRef.current), []);
   const copy = async () => {
     const evidenceIds = new Set((Array.isArray(evidence) ? evidence : []).map((item) => item?.id).filter(Boolean));
-    const ok = await copyTextToClipboard(assistantMarkdownText(source, { evidenceIds }));
+    const ok = await copyTextToClipboard(assistantMarkdownText(source, { evidenceIds, rotaData }));
     setCopied(ok);
     clearTimeout(timerRef.current);
     if (ok) timerRef.current = setTimeout(() => setCopied(false), 2000);
@@ -169,7 +169,7 @@ export function AssistantTurn({ turn, phase = null, topic = null, canRetry = fal
             {generationPhaseLabel(phase || 'sending', topic) || 'Yanıt bekleniyor…'}
           </p>
         )}
-        {hasText && <AssistantMarkdown text={answer.content} evidence={answer.evidence} />}
+        {hasText && <AssistantMarkdown text={answer.content} evidence={answer.evidence} rotaData={answer.rotaData} />}
         {(reconciling || (hasText && (status === 'stopped' || status === 'interrupted' || status === 'failed'))) && (
           <p className="rota-assistant-partial-note">
             {reconciling
@@ -180,7 +180,7 @@ export function AssistantTurn({ turn, phase = null, topic = null, canRetry = fal
         {status === 'complete' && answer.evidence?.length > 0 && <AnswerEvidence evidence={answer.evidence} />}
         {status === 'complete' && (
           <div className="rota-assistant-answer-meta">
-            {!isGroundingFailure(answer.finishReason) && <CopyAnswerButton source={answer.content} evidence={answer.evidence} />}
+            {!isGroundingFailure(answer.finishReason) && <CopyAnswerButton source={answer.content} evidence={answer.evidence} rotaData={answer.rotaData} />}
             {answer.finishReason === 'general' && <span className="rota-assistant-mode-badge">Genel sohbet · Rota verisi okunmadı</span>}
             {deep && <span className="rota-assistant-mode-badge">{assistantModeLabel(ASSISTANT_MODES.DEEP)}</span>}
             {note && <small className="rota-assistant-finish-note">{note}</small>}
