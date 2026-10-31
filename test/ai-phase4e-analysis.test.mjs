@@ -186,6 +186,20 @@ test('reddedilen ayrıntılı istekten türlü eşdeğer özet önerilir; özet 
   assert.match(repair, /analysis \(genel durum/);
 });
 
+test('grup satırının taşımadığı toplam (durumlara göre yapılacak/devam eden) bildirimde reddedilir; eşdeğer özet önerilir', async (t) => {
+  // Kayıt defteri grup satırına yalnızca aracın ürettiği sayıları (count, open, overdue, done) bağlar: aksi hâlde istek kabul
+  // edilip sunucu seçemez ve zayıf model seçim turunda takılır (canlı nitelendirmede "görevlerimin dağılımını grafik olarak göster").
+  const request = { operation: 'list', metrics: ['tasks.total', 'tasks.todo', 'tasks.inProgress', 'tasks.done'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'status' }, filters: { assignee: 'me' } };
+  const plans = [{ intent: 'rota', language: 'tr', request, visual: true }, { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'] }, visual: true }];
+  const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
+  const result = await ask({ text: 'görevlerimin dağılımını grafik olarak göster' });
+  const repair = systemText(result.inputs[1].messages);
+  assert.match(repair, /\$\.metrics\[1\]:not-row-total/);
+  assert.match(repair, /"analysis":\{"scope":"self","focus":\["status"\]\}/);
+  assert.equal(result.answer.finishReason, 'stop');
+  assert.match(result.answer.content, /```rota-chart/);
+});
+
 /* ── Kanonik takip bağlamı ──────────────────────────────────────────── */
 
 test('analiz bağlamı kapalı biçimlidir; model kimlik görmez; önceki özne ve satırlar yalnızca sunucu açılımıyla okunur', () => {

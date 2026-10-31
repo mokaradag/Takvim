@@ -137,7 +137,8 @@ const REGISTRY_ENTRIES = Object.freeze({
   rota_task_analytics: [...fields('definitions', { overdue: DEFINITION, dueNext7Days: DEFINITION, completionRatePercent: DEFINITION, today: x('date'), assignee: DEFINITION }),
     ...fields('totals', TOTALS), ...fields('overdueAging.buckets.*', { label: x(), count: m('tasks.overdue', 'tasks') }),
     ['overdueAging.worstOverdueDays', m('tasks.worstOverdueDays', 'days')], ['hours.taskCount', m('tasks.total', 'tasks', 'tasks')], ...hoursPaths(),
-    ...fields('groups.*', { label: x(), count: TOTALS.total, ...TOTALS }), ['groupCount', m('tasks.groupCount', 'groups')]],
+    // Grup satırı yalnızca aracın ürettiği sayıları taşır (count, open, overdue, done); bildirilen başka toplam satır ölçüsü değildir.
+    ...fields('groups.*', { label: x(), count: TOTALS.total, open: TOTALS.open, overdue: TOTALS.overdue, done: TOTALS.done }), ['groupCount', m('tasks.groupCount', 'groups')]],
   rota_project_search: [...fields('matches.*', PROJECT), ...fields('matches.*.access', ACCESS), ['ambiguous', x('boolean')]],
   rota_project_detail: [...fields('project', PROJECT), ['project.tags.*', p('project.tags', 'text')], ...fields('access', ACCESS),
     ['access.reasons.*', p('project.accessReasons', 'enum')], ...fields('visibleTasks', TOTALS),
