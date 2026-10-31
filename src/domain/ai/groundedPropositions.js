@@ -500,3 +500,105 @@ export function pointerSentence({ type, style, distribution = false, chartType =
   return style === 'table' ? (en ? 'You can see the details in the table below.' : 'Ayrıntıları aşağıdaki tabloda görebilirsiniz.')
     : (en ? 'The details are listed below.' : 'Ayrıntılar aşağıda listeleniyor.');
 }
+
+/* ── Aşama 4E: analist önermeleri ─────────────────────────────────── */
+
+/** Doğrulanmış tam kanıttan sayı (sonlu, negatif olmayan tam sayı); değilse `null`. */
+const countOf = (entry) => (entry && Number.isSafeInteger(entry.fact.value) && entry.fact.value >= 0 ? entry.fact.value : null);
+const ofCount = (value, locale) => (locale === 'en' ? number(value, locale) : `${number(value, locale)}${turkishPossessiveSuffix(value)}`);
+
+/**
+ * Bölümün doğrulanmış olgularından ANALİST önermeleri: karşıtlık (olumlu tamamlanma + gecikme riski), zamanlama baskısı
+ * (açık işlerin gecikmiş payı), yakın termin yoğunluğu, kişiler arasında iş yükü yoğunlaşması ya da dengesi, gecikmelerin
+ * kişide yoğunlaşması ve kanıta dayalı dikkat önceliği (en uzun gecikme). Her ilişki önkoşuluyla vardır; değerler, adlar ve
+ * paylar yalnızca aynı tam kanıtın olgularıdır. Kişi hakkında yetkinlik ya da performans yargısı üretilmez: dil işlemseldir
+ * (iş yükü, gecikme, yaklaşan termin).
+ */
+export function analystPropositions(parts, locale = 'tr') {
+  const en = locale === 'en';
+  const out = [];
+  for (const part of parts) {
+    const ordinal = part.index + 1;
+    const items = (part.presentation?.facts || []).filter(({ fact }) => fact?.semantic?.complete === true);
+    const add = (evidenceId, kind, realized, tone = 'info') => { if (realized) out.push({ part: ordinal, proposition: { kind, tone, evidenceId, ...realized } }); };
+    // Genel görünüm: görev analizinin toplamları (aynı kanıt).
+    const totals = new Map();
+    for (const item of items) {
+      if (item.fact.semantic?.provenance?.tool === 'rota_task_analytics' && /^data\.totals\.[A-Za-z]+$/.test(item.fact.field)) totals.set(item.fact.semantic.metric, item);
+    }
+    const sameEvidence = (entries) => entries.every((entry) => entry && entry.evidenceId === entries[0].evidenceId);
+    const open = countOf(totals.get('tasks.open'));
+    const overdue = countOf(totals.get('tasks.overdue'));
+    const soon = countOf(totals.get('tasks.dueNext7Days'));
+    const rateEntry = totals.get('tasks.completionRatePercent');
+    const rate = rateEntry && Number.isFinite(rateEntry.fact.value) ? rateEntry.fact.value : null;
+    const evidence = totals.get('tasks.open')?.evidenceId;
+    if (open != null && overdue != null && sameEvidence([totals.get('tasks.open'), totals.get('tasks.overdue')])) {
+      if (rate != null && rate >= 50 && overdue > 0 && sameEvidence([totals.get('tasks.open'), rateEntry])) {
+        add(evidence, 'contrast', en
+          ? sentence(['The completion picture is positive (', v(percent(rate, locale)), '); however, ', v(number(overdue, locale)), ` overdue ${overdue === 1 ? 'task needs' : 'tasks need'} attention.`])
+          : sentence(['Tamamlanma görünümü olumlu (', v(percent(rate, locale)), '); buna karşılık ', v(number(overdue, locale)), ' gecikmiş görev dikkat gerektiriyor.']), 'warning');
+      } else if (open > 0 && overdue > 0) {
+        const share = sharePercent(overdue, open);
+        add(evidence, 'pressure', en
+          ? sentence([v(number(overdue, locale)), ` of the `, v(number(open, locale)), ` open ${open === 1 ? 'task is' : 'tasks are'} overdue (`, v(percent(share, locale)), ').'])
+          : sentence(['Açık ', v(number(open, locale)), ' görevin ', v(ofCount(overdue, locale)), ' (', v(percent(share, locale)), ') gecikmiş durumda.']), share >= 25 ? 'warning' : 'info');
+      } else if (open > 0 && overdue === 0) {
+        add(evidence, 'positive', en ? sentence(['There are currently no overdue tasks among the ', v(number(open, locale)), ' open tasks.'])
+          : sentence(['Açık ', v(number(open, locale)), ' görev arasında şu anda gecikmiş görev yok.']), 'success');
+      }
+      if (open > 0 && soon != null && soon > 0 && sameEvidence([totals.get('tasks.open'), totals.get('tasks.dueNext7Days')])) {
+        add(evidence, 'urgency', en
+          ? sentence([v(number(soon, locale)), ` open ${soon === 1 ? 'task is' : 'tasks are'} due within the next seven days.`])
+          : sentence(['Önümüzdeki yedi gün içinde ', v(number(soon, locale)), ' açık görevin termini var.']), soon * 2 >= open ? 'warning' : 'info');
+      }
+    }
+    // Kişiler arası iş yükü: iş yükü aracının TAM kişi satırları (kesilmemiş sıralama).
+    const people = new Map();
+    for (const item of items) {
+      const match = /^data\.people\.(\d+)\.(name|openTasks|overdue)$/.exec(item.fact.field);
+      if (!match || item.fact.semantic?.provenance?.tool !== 'rota_workload_summary') continue;
+      if (!people.has(match[1])) people.set(match[1], { evidenceId: item.evidenceId, size: item.fact.semantic?.row?.collectionSize ?? null });
+      people.get(match[1])[match[2]] = item.fact.value;
+    }
+    const rows = [...people.values()].filter((row) => typeof row.name === 'string' && Number.isSafeInteger(row.openTasks) && row.openTasks >= 0);
+    if (rows.length >= 3 && rows.length === people.size && rows.every((row) => row.size === rows.length) && sameEvidence(rows)) {
+      const sum = rows.reduce((total, row) => total + row.openTasks, 0);
+      const top = [...rows].sort((left, right) => right.openTasks - left.openTasks);
+      const unique = top[0].openTasks > top[1].openTasks;
+      const low = top.at(-1).openTasks;
+      if (sum > 0 && unique && top[0].openTasks * 100 >= sum * 40) {
+        const share = sharePercent(top[0].openTasks, sum);
+        add(rows[0].evidenceId, 'concentration', en
+          ? sentence([v(percent(share, locale)), ' of the open task assignments are on ', v(top[0].name), '; the workload is concentrated on this person.'])
+          : sentence(['Açık iş atamalarının ', v(`${percent(share, locale)}${turkishPossessiveSuffix(share)}`), ' ', v(top[0].name), ' üzerinde; iş yükü bu kişide yoğunlaşıyor.']), share >= 50 ? 'warning' : 'info');
+      } else if (low > 0 && top[0].openTasks * 2 <= low * 3) {
+        add(rows[0].evidenceId, 'balance', en
+          ? sentence(['Open work is spread fairly evenly across people (highest ', v(number(top[0].openTasks, locale)), ', lowest ', v(number(low, locale)), ').'])
+          : sentence(['Açık işler kişiler arasında görece dengeli dağılmış (en yüksek ', v(number(top[0].openTasks, locale)), ', en düşük ', v(number(low, locale)), ').']), 'success');
+      }
+      const late = rows.filter((row) => Number.isSafeInteger(row.overdue) && row.overdue >= 0);
+      const lateSum = late.length === rows.length ? late.reduce((total, row) => total + row.overdue, 0) : 0;
+      const worst = [...late].sort((left, right) => right.overdue - left.overdue);
+      if (lateSum >= 2 && worst[0].overdue > (worst[1]?.overdue ?? 0) && worst[0].overdue * 2 >= lateSum) {
+        add(rows[0].evidenceId, 'overdueConcentration', en
+          ? sentence([v(percent(sharePercent(worst[0].overdue, lateSum), locale)), ' of the overdue task assignments are on ', v(worst[0].name), '.'])
+          : sentence(['Gecikmiş iş atamalarının ', v(`${percent(sharePercent(worst[0].overdue, lateSum), locale)}${turkishPossessiveSuffix(sharePercent(worst[0].overdue, lateSum))}`), ' ', v(worst[0].name), ' üzerinde.']), 'warning');
+      }
+    }
+    // Dikkat önceliği: gecikmiş görev sıralamasının başı en az bir haftalık gecikmeyse (gerekçe sunucunun kuralıdır).
+    const delays = items.filter(({ fact }) => /^data\.tasks\.\d+\.overdueDays$/.test(fact.field) && fact.semantic?.filters?.deadline === 'overdue'
+      && Number.isSafeInteger(fact.value) && fact.value >= 7);
+    if (delays.length) {
+      const head = delays.reduce((best, item) => (item.fact.value > best.fact.value ? item : best));
+      const ties = delays.filter((item) => item.fact.value === head.fact.value).length;
+      const title = items.find(({ fact, evidenceId }) => evidenceId === head.evidenceId && fact.field === head.fact.field.replace(/overdueDays$/, 'title'))?.fact.value;
+      if (ties === 1 && typeof title === 'string') {
+        add(head.evidenceId, 'attention', en
+          ? sentence(['A sensible first focus is ', v(title), ', overdue for ', v(number(head.fact.value, locale)), ' days (basis: the longest delay).'])
+          : sentence(['İlk ele alınabilecek iş en uzun süredir geciken ', v(title), ' görünüyor (', v(number(head.fact.value, locale)), ' gün; gerekçe: en yüksek gecikme).']), 'warning');
+      }
+    }
+  }
+  return out;
+}

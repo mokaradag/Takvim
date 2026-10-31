@@ -1364,17 +1364,19 @@ function populationSizes(turn, answers) {
 async function presentVerdict(turn, verdict, compose) {
   // Açık görselleştirme isteği model düzeni kapalıyken de sunucunun belirlenimci düzeniyle grafik çizer (model çağrılmaz).
   const visual = turn.presentationIntent?.visual === true;
-  if (!compose || (!turn.composeAnswers && !visual) || !turn.session || turn.ledger.revoked() || turn.session.signal?.aborted) return verdict;
+  // Analitik özet de sunucunun belirlenimci düzeniyle analist önermelerini anlatır (model düzeni kapalıyken de).
+  const analytical = Boolean(turn.presentationIntent?.analysis);
+  if (!compose || (!turn.composeAnswers && !visual && !analytical) || !turn.session || turn.ledger.revoked() || turn.session.signal?.aborted) return verdict;
   const input = compositionInput(turn, verdict);
   if (!input) return visual && verdict.kind === 'grounded' ? withChartNote(turn, verdict) : verdict;
-  const composition = buildComposition({ ...input, visual, detail: turn.answerDetail, synthesis: turn.synthesis || null });
+  const composition = buildComposition({ ...input, visual, detail: turn.answerDetail, analyst: Boolean(turn.presentationIntent?.analysis) });
   if (!composition) {
     turn.trace.presentation = { mode: 'narrative', reason: 'SHEET_LIMIT' };
     return visual ? withChartNote(turn, verdict) : verdict;
   }
   // Sunucunun düzeni: model düzeni yoksa ya da kurulamadıysa açık grafik isteği yine karşılanır.
   const serverLayout = (reason) => {
-    const validated = visual && composition.render.charts.size ? defaultComposition(composition) : null;
+    const validated = (visual && composition.render.charts.size) || analytical ? defaultComposition(composition) : null;
     if (!validated) {
       turn.trace.presentation = { ...(turn.trace.presentation || {}), mode: 'narrative', reason };
       return visual ? withChartNote(turn, verdict) : verdict;

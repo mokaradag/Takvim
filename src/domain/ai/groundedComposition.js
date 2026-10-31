@@ -11,7 +11,7 @@ import {
   renderGroupRows
 } from './evidenceNarrative.js';
 import { escapedFactText } from './evidenceFacts.js';
-import { countProposition, noteLabel, pointerSentence, populationProposition, tablePropositions, titleCandidate } from './groundedPropositions.js';
+import { analystPropositions, countProposition, noteLabel, pointerSentence, populationProposition, tablePropositions, titleCandidate } from './groundedPropositions.js';
 import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from './answerDetail.js';
 
 /** Anlatımın en az önerme sayısı: sayfada bu kadar önerme varsa düzen en az bu kadarını söyler (azsa hepsini). */
@@ -170,7 +170,7 @@ function exactKeys(value, keys, optional = []) {
  * @returns {{ view: object, render: object } | null} Model girdisi (`view`) ve sunucunun çizim verisi (`render`).
  */
 export function buildComposition({ parts = [], missing = [], locale = 'tr', question = '', previousQuestion = null, today = null, populations = new Map(),
-  visual = false, detail = null, synthesis = null } = {}) {
+  visual = false, detail = null, analyst = false } = {}) {
   const answerDetail = normalizeAnswerDetail(detail);
   const tables = new Map();
   const details = new Map();
@@ -328,8 +328,8 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     titles.clear();
     viewTitles.length = 0;
   }
-  // Bölümler arası analist önermeleri (sunucunun doğrulanmış olgulardan türettiği karşıtlık, yoğunlaşma, öncelik).
-  for (const item of synthesis?.(propositions) || []) propose(item.part, item.proposition, { table: null });
+  // Analist önermeleri (analitik özette): sunucunun doğrulanmış olgulardan türettiği karşıtlık, baskı, yoğunlaşma ve dikkat önceliği.
+  if (analyst) for (const item of analystPropositions(parts, locale)) propose(item.part, item.proposition, { table: null });
   const partCount = new Set(parts.map((part) => part.index)).size + missing.length;
   const view = {
     language: locale === 'en' ? 'en' : 'tr',
@@ -570,7 +570,9 @@ export function defaultComposition(composition) {
     if (title) blocks.push({ type: 'title', source: title.id });
     const said = [...render.propositions.values()].filter((item) => item.part === part).slice(0, Math.min(contract.maxNarrated, COMPOSITION_LIMITS.maxSayItems)).map((item) => item.id);
     if (said.length) blocks.push({ type: 'say', items: said });
-    const partChart = chart && render.charts.get(chart.id).part === part ? chart : null;
+    // Analitik genel görünümün göstergeleri (KPI) ayrıntılı yanıtta ya da görselleştirme isteğinde gösterilir.
+    const kpi = !chart && normalizeAnswerDetail(render.detail) === 'detailed' ? [...render.charts.values()].find((item) => item.part === part && item.types[0] === 'kpi') : null;
+    const partChart = chart && render.charts.get(chart.id).part === part ? chart : kpi ? { id: kpi.id, style: 'kpi' } : null;
     const tables = [...render.tables.values()].filter((table) => table.part === part);
     for (const table of tables) {
       blocks.push({ type: 'rows', source: table.id });
