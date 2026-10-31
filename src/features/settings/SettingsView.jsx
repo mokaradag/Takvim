@@ -75,7 +75,7 @@ function AssistantAnswerSettings({ value, onChange }) {
       <div className="card-title" style={{ marginBottom: 4 }}>
         <Icons.Sparkle size={14} /><span>Bilgin yanıtları</span>
       </div>
-      <div className="card-sub">Bilgin'in Rota analizlerini ne kadar ayrıntılı anlatacağı. Yanıtlar her zaman doğrulanmış veriye dayanır.</div>
+      <div className="card-sub">Bilgin&apos;in Rota analizlerini ne kadar ayrıntılı anlatacağı. Yanıtlar her zaman doğrulanmış veriye dayanır.</div>
       <SettingsRow title="Yanıt ayrıntısı" desc={ANSWER_DETAIL_LABELS[detail].description}>
         <Segmented value={detail} onChange={(v) => onChange(v)}
           options={ANSWER_DETAILS.map((key) => [key, ANSWER_DETAIL_LABELS[key].label])} />

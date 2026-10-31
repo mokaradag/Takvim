@@ -16,7 +16,7 @@ export const ANALYSIS_CONTEXT_LIMITS = Object.freeze({ maxSubjects: 2, maxRows: 
 const LEVELS = Object.freeze(['unit', 'department', 'directorate']);
 const FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'overdue', 'upcoming', 'workload', 'projects', 'schedule', 'critical']);
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
-const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'focus', 'dateFrom', 'dateTo', 'visual', 'rows']);
+const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'rows']);
 
 function identity(item) {
   if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some((key) => !['type', 'id'].includes(key))) return null;
@@ -51,12 +51,15 @@ export function normalizeAnalysisContext(value) {
     if (!subjects || !rows) return null;
     if (['person', 'project'].includes(value.scope) && (!subjects.length || subjects.some((item) => item.type !== value.scope))) return null;
     if (!['person', 'project'].includes(value.scope) && subjects.length) return null;
+    // Daraltma: kendi/ekip/bütün görevler kapsamının sunucunun bağladığı tek proje kimliğiyle kesişimi.
+    const within = value.within == null ? null : identity(value.within);
+    if (value.within != null && (!within || within.type !== 'project' || !['self', 'team', 'all', 'person'].includes(value.scope))) return null;
     const focus = value.focus == null ? [] : value.focus;
     if (!Array.isArray(focus) || focus.length > ANALYSIS_CONTEXT_LIMITS.maxFocus || focus.some((item) => !FOCUS.includes(item)) || new Set(focus).size !== focus.length) return null;
     for (const key of ['dateFrom', 'dateTo']) if (value[key] != null && (typeof value[key] !== 'string' || !DAY.test(value[key]))) return null;
     if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) return null;
     if (value.visual != null && typeof value.visual !== 'boolean') return null;
-    return Object.freeze({ v: 1, scope: value.scope, ...(value.level ? { level: value.level } : {}), subjects, focus: Object.freeze([...focus]),
+    return Object.freeze({ v: 1, scope: value.scope, ...(value.level ? { level: value.level } : {}), subjects, ...(within ? { within } : {}), focus: Object.freeze([...focus]),
       ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}), ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual ? { visual: true } : {}), rows });
   } catch {
     return null;
@@ -69,7 +72,8 @@ export function normalizeAnalysisContext(value) {
  */
 export function analysisContextSummary(context) {
   const rows = context.rows.length ? { type: context.rows[0].type, count: context.rows.length } : null;
-  return { scope: context.scope, ...(context.level ? { level: context.level } : {}), subjects: context.subjects.length, ...(context.focus.length ? { focus: context.focus } : {}),
+  return { scope: context.scope, ...(context.level ? { level: context.level } : {}), subjects: context.subjects.length, ...(context.within ? { withinProject: true } : {}),
+    ...(context.focus.length ? { focus: context.focus } : {}),
     ...(context.dateFrom ? { dateFrom: context.dateFrom } : {}), ...(context.dateTo ? { dateTo: context.dateTo } : {}), ...(context.visual ? { visual: true } : {}),
     ...(rows ? { rows } : {}) };
 }

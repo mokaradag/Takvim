@@ -78,8 +78,8 @@ function chartLabels(rows) {
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const KPI_MIN_ITEMS = 3;
 const DAY_VALUE = /^\d{4}-\d{2}-\d{2}$/;
-/** Durum bölümleri: birbirini dışlar ve birlikte (yapılacak + devam eden = açık) bir bütün verir; yığılmış çubuk ancak bunlarla. */
-const PARTITIONS = Object.freeze([['tasks.todo', 'tasks.inProgress', 'tasks.done'], ['tasks.todo', 'tasks.inProgress']]);
+/** Durum bölümleri: birbirini dışlar ve birlikte bir bütün verir (açık + tamamlanan = toplam); yığılmış çubuk ancak bunlarla. */
+const PARTITIONS = Object.freeze([['tasks.todo', 'tasks.inProgress', 'tasks.done'], ['tasks.open', 'tasks.done'], ['tasks.todo', 'tasks.inProgress']]);
 
 function monthLabel(key, locale) {
   return new Intl.DateTimeFormat(locale === 'en' ? 'en-GB' : 'tr-TR', { timeZone: 'UTC', month: 'short', year: 'numeric' }).format(new Date(`${key}-01T00:00:00Z`));
@@ -141,7 +141,8 @@ function kpiCandidate(group, locale) {
   const seen = new Set();
   const items = [];
   for (const fact of facts) {
-    const label = answerChartLabel(capitalizeLabel(narrativeLabel(fact, locale).label, locale));
+    // Birim kartın değerindedir (ör. %14): etiketteki "(%)" eki yinelenmez.
+    const label = answerChartLabel(capitalizeLabel(narrativeLabel(fact, locale).label.replace(/\s*\(%\)$/, ''), locale));
     if (seen.has(label)) continue;
     seen.add(label);
     items.push({ label, value: fact.value, unit: unitOf(fact) });
@@ -521,8 +522,8 @@ function minNarrated(render) {
   return render.detail ? ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)].minNarrated : MIN_NARRATED_PROPOSITIONS;
 }
 
-/** Görselleştirme tercihi: dağılımda halka, zaman dizisinde çizgi, bölümlerde yığılmış çubuk; sonra çubuk, zaman çizelgesi, göstergeler. */
-const STYLE_PREFERENCE = Object.freeze(['donut', 'line', 'stacked', 'bar', 'timeline', 'kpi']);
+/** Görselleştirme tercihi: bölümlerde (açık + tamamlanan) yığılmış çubuk, dağılımda halka, zaman dizisinde çizgi; sonra çubuk, zaman çizelgesi, göstergeler. */
+const STYLE_PREFERENCE = Object.freeze(['stacked', 'donut', 'line', 'bar', 'timeline', 'kpi']);
 const preferredStyle = (candidate) => STYLE_PREFERENCE.find((style) => candidate.types.includes(style)) || candidate.types[0];
 
 /** Açıkça istenen görselleştirmenin en uygun adayı (ilk bölümden başlayarak); yoksa `null`. */

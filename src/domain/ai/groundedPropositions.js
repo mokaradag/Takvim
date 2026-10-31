@@ -524,7 +524,7 @@ export function analystPropositions(parts, locale = 'tr') {
     // Genel görünüm: görev analizinin toplamları (aynı kanıt).
     const totals = new Map();
     for (const item of items) {
-      if (item.fact.semantic?.provenance?.tool === 'rota_task_analytics' && /^data\.totals\.[A-Za-z]+$/.test(item.fact.field)) totals.set(item.fact.semantic.metric, item);
+      if (item.fact.semantic?.provenance?.tool === 'rota_task_analytics' && /^data\.totals\.[A-Za-z0-9]+$/.test(item.fact.field)) totals.set(item.fact.semantic.metric, item);
     }
     const sameEvidence = (entries) => entries.every((entry) => entry && entry.evidenceId === entries[0].evidenceId);
     const open = countOf(totals.get('tasks.open'));
@@ -567,7 +567,8 @@ export function analystPropositions(parts, locale = 'tr') {
       const top = [...rows].sort((left, right) => right.openTasks - left.openTasks);
       const unique = top[0].openTasks > top[1].openTasks;
       const low = top.at(-1).openTasks;
-      if (sum > 0 && unique && top[0].openTasks * 100 >= sum * 40) {
+      // Yoğunlaşma: en yüksek kişi ikinciyi en az iki kat aşar ve atamaların en az üçte birini taşır.
+      if (sum > 0 && unique && top[0].openTasks >= 2 * top[1].openTasks && top[0].openTasks * 3 >= sum) {
         const share = sharePercent(top[0].openTasks, sum);
         add(rows[0].evidenceId, 'concentration', en
           ? sentence([v(percent(share, locale)), ' of the open task assignments are on ', v(top[0].name), '; the workload is concentrated on this person.'])

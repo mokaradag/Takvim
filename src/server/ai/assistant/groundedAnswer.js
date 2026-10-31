@@ -1034,7 +1034,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
   const advice = planning || { state: 'unavailable', candidates: [], reason: 'UNAVAILABLE' };
   const prior = previousResult && taskResultScope(previousResult.scope) && previousResult.entries?.length ? previousResult : null;
   const analysisPrior = normalizeAnalysisContext(previousAnalysis);
-  const analysisReferents = analysisPrior ? [...analysisPrior.subjects, ...analysisPrior.rows] : [];
+  const analysisReferents = analysisPrior ? [...analysisPrior.subjects, ...analysisPrior.rows, ...(analysisPrior.within ? [analysisPrior.within] : [])] : [];
   const turn = {
     catalog,
     // Doğal yanıt düzeninin soru bağlamı: kullanıcının kendi iletileri (önceki asistan metni değil).
@@ -1108,7 +1108,7 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note.content);
   }
   if (analysisPrior) {
-    const note = `Önceki doğrulanmış analiz bağlamı (yalnızca gönderge; güncel kanıt değil): ${JSON.stringify(analysisContextSummary(analysisPrior))}. Takip sorusu aynı özneyle sürüyorsa ("sadece gecikmişler", "kimlerde yoğunlaşıyor", "grafik olarak göster", "peki gelecek hafta?") analysis.scope "previous" yaz; focus, dateFrom/dateTo ve visual yeni soruya göre yeniden yazılır (değişmeyeni önceki değerden kopyala). Önceki sonucun bir satırına sırayla başvuruluyorsa ("ilk kişi", "2. proje") analysis.scope "row" ve analysis.row yaz. Önceki öznede birden çok kayıt varken (subjects 2) tek bir kayda zamirle başvuruluyorsa clarify missing_referent. Kullanıcı kapsamı açıkça değiştirdiyse (başka proje, ekibim, kendi işlerim, tüm projeler) yeni kapsamı yaz; önceki koşullar kendiliğinden taşınmaz.`;
+    const note = `Önceki doğrulanmış analiz bağlamı (yalnızca gönderge; güncel kanıt değil): ${JSON.stringify(analysisContextSummary(analysisPrior))}. Takip sorusu aynı özneyle sürüyorsa ("sadece gecikmişler", "kimlerde yoğunlaşıyor", "grafik olarak göster", "peki gelecek hafta?") analysis.scope "previous" yaz; focus, dateFrom/dateTo ve visual yeni soruya göre yeniden yazılır (değişmeyeni önceki değerden kopyala). Önceki sonucun satırlarına sırayla başvuruluyorsa ("ilk kişi", "ilk iki proje") analysis.scope "row" ve analysis.rows ([1] ya da [1,2]) yaz. Kapsam adı verilen bir projeyle daraltılıyorsa analysis.within (proje adı). Önceki öznede birden çok kayıt varken (subjects 2) tek bir kayda zamirle başvuruluyorsa clarify missing_referent. Kullanıcı kapsamı açıkça değiştirdiyse (başka proje, ekibim, kendi işlerim, tüm projeler) yeni kapsamı yaz; önceki koşullar kendiliğinden taşınmaz.`;
     for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note);
   }
   const notes = [
@@ -1330,10 +1330,13 @@ function completedAnalysisContext(turn, verdict) {
   const bound = bindRequestEntities(first, entries, turn.containment.boundSelection());
   const subjects = bound.filter((entity) => ['project', 'person'].includes(entity.type) && entity.bound != null)
     .map((entity) => ({ type: entity.type, id: String(entity.bound) })).filter((item, index, all) => all.findIndex((other) => other.type === item.type && other.id === item.id) === index);
-  const types = new Set(subjects.map((item) => item.type));
   const assignee = first.filters?.assignee;
-  const scope = assignee === 'me' ? 'self' : assignee === 'team' ? 'team' : types.size === 1 ? [...types][0]
+  const persons = subjects.filter((item) => item.type === 'person');
+  const projects = subjects.filter((item) => item.type === 'project');
+  const scope = assignee === 'me' ? 'self' : assignee === 'team' ? 'team' : persons.length ? 'person' : projects.length ? 'project'
     : first.population.tool === 'rota_portfolio_summary' ? 'projects' : 'all';
+  // Kişi ya da kendi/ekip kapsamında tek proje, öznenin daraltmasıdır (ör. ekibimin bu projedeki işleri).
+  const within = scope !== 'project' && projects.length === 1 ? projects[0] : null;
   const intent = turn.presentationIntent?.analysis;
   // Sıralı satırlar: kişi (iş yükü) ya da proje (portföy) satırlarının doğrulanmış sırası; ilk uygun bölümden.
   let rows = [];
@@ -1353,7 +1356,7 @@ function completedAnalysisContext(turn, verdict) {
     if (rows.length) break;
   }
   return normalizeAnalysisContext({ v: 1, scope, ...(scope === 'team' && first.filters.teamLevel ? { level: first.filters.teamLevel } : {}),
-    subjects: ['person', 'project'].includes(scope) ? subjects.slice(0, 2) : [], focus: intent?.focus ? [...intent.focus] : [],
+    subjects: scope === 'person' ? persons.slice(0, 2) : scope === 'project' ? projects.slice(0, 2) : [], ...(within ? { within } : {}), focus: intent?.focus ? [...intent.focus] : [],
     ...(turn.presentationIntent?.window?.dateFrom ? { dateFrom: turn.presentationIntent.window.dateFrom } : {}),
     ...(turn.presentationIntent?.window?.dateTo ? { dateTo: turn.presentationIntent.window.dateTo } : {}),
     ...(turn.presentationIntent?.visual ? { visual: true } : {}), rows });
