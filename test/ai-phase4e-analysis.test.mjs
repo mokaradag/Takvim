@@ -227,7 +227,7 @@ test('düzeltme önerisi ve tanıları isteği değiştirmez: öncelik eşdeğer
   const brief = (request) => { const text = analysisSuggestion(request); return text && JSON.parse(/\{.*\}/.exec(text)[0]).analysis; };
   assert.equal(analysisSuggestion({ population: { tool: 'rota_task_search' }, filters: { priority: ['low'] } }), null, 'düşük öncelik kritik işe dönüşmez');
   assert.equal(analysisSuggestion({ population: { tool: 'rota_task_search' }, filters: { priority: ['medium', 'high'] } }), null);
-  assert.deepEqual(brief({ population: { tool: 'rota_task_search' }, filters: { priority: ['critical', 'high'] } }).focus, ['critical']);
+  assert.deepEqual(brief({ population: { tool: 'rota_task_search' }, filters: { priority: ['critical', 'high'], status: ['todo', 'in_progress'] } }).focus, ['critical']);
   assert.deepEqual(analysisDetails(['$.language:required', '$.plan:unknownField', '$.visual:type', '$.intent:enum', '$.analysis:request', '$.analysis.within:conflict', '$.metrics[0]:population']),
     ['$.language:required', '$.plan:unknownField', '$.visual:type', '$.intent:enum', '$.analysis:request', '$.analysis.within:conflict', '$.analysis:invalid']);
   assert.ok(analysisHints(analysisDetails(['$.analysis:request'])).some((hint) => hint.includes('request/additionalRequests/calls birlikte verilmez')));
@@ -257,7 +257,7 @@ test('bütçe aşılırsa hiçbir yön sessizce düşmez; geçmiş ufuk yaklaşa
     { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming'], ...week },
     { scope: 'projects', focus: ['overview', 'overdue', 'upcoming'] },
     { scope: 'team', focus: ['overview', 'workload', 'overdue'], ...week }
-  ]) assert.throws(() => expandAnalysis(parseAnalysis(raw), { today: '2026-09-30' }), (error) => error.details.includes('$.analysis.focus:requestBudget'));
+  ]) assert.throws(() => expandAnalysis(parseAnalysis(raw), { today: '2026-09-30' }), (error) => error.details.includes(raw.focus.length > 3 ? '$.analysis.focus:maxItems' : '$.analysis.focus:requestBudget'));
   assert.deepEqual(focus({ scope: 'self', focus: ['overview'], ...week }), ['overview', 'upcoming']);
   assert.deepEqual(focus({ scope: 'self', focus: ['overview'], ...week }, '2026-11-01'), ['overview', 'schedule']);
   assert.deepEqual(focus({ scope: 'self', focus: ['overdue'], dateTo: '2026-09-01' }), ['overdue', 'schedule']);
@@ -285,7 +285,7 @@ test('reddedilen ayrıntılı istekten türlü eşdeğer özet önerilir; özet 
   assert.equal(analysisSuggestion({ population: { tool: 'rota_workload_summary' }, filters: { assignee: 'team', teamLevel: '"}]x' } }), null);
   assert.deepEqual(suggestion({ operation: 'rank', population: { tool: 'rota_portfolio_summary' } }), { scope: 'projects', focus: ['projects'] });
   for (const none of [null, [], { operation: 'value' }, { population: { tool: 'rota_task_detail' } }]) assert.equal(analysisSuggestion(none), null);
-  for (const request of [{ population: { tool: 'rota_workload_summary' }, filters: { assignee: 'team' } }, { population: { tool: 'rota_task_analytics', groupBy: 'priority' }, filters: { assignee: 'me' } }]) {
+  for (const request of [{ population: { tool: 'rota_workload_summary' }, filters: { assignee: 'team' } }, { population: { tool: 'rota_task_analytics', groupBy: 'priority' }, filters: { assignee: 'me', status: ['todo', 'in_progress'] } }]) {
     assert.doesNotThrow(() => unpackTypedPlan(planResult(JSON.parse(/\{.*\}/.exec(analysisSuggestion(request))[0]))));
   }
 
@@ -422,7 +422,7 @@ test('analiz bağlamı kapalı biçimlidir; model kimlik görmez; önceki özne 
   const previous = expandAnalysis(parseAnalysis({ scope: 'previous', focus: ['overdue'] }), { previous: context });
   assert.deepEqual(previous[0].entities, [{ type: 'project', id: PROJECTS.FULL }]);
   const row = expandAnalysis(parseAnalysis({ scope: 'row', rows: [1], focus: ['overview'] }), { previous: context });
-  assert.deepEqual(row[0].entities, [{ type: 'person', id: String(ZEYNEP) }]);
+  assert.deepEqual(row[0].entities, [{ type: 'person', id: String(ZEYNEP) }, { type: 'project', id: PROJECTS.FULL }]);
   assert.throws(() => expandAnalysis(parseAnalysis({ scope: 'row', rows: [2], focus: ['overview'] }), { previous: context }), (error) => error.details[0] === '$.analysis.rows:unavailable');
   // Önceki kimlik yalnızca bu bağlamın kimliği olarak güvenilirdir; başka kimlik değildir.
   const scope = createToolScope({ userText: 'sadece gecikmişler', analysisReferents: [...context.subjects, ...context.rows] });
@@ -706,7 +706,7 @@ test('grafik ve düzen kanıttan güçlü anlam iddia etmez; sunucu düzeni ve a
     assert.equal(presentation.issue, 'NARRATION_LIMIT', 'bütün önermeleri anlatan kısa düzen reddedilir');
     assert.deepEqual([presentation.mode, presentation.server], ['composed', true], 'sunucu düzeni');
     assert.ok(presentation.said <= ANSWER_DETAIL_CONTRACT.short.maxNarrated, JSON.stringify(presentation));
-    assert.match(result.answer.content, /ilk ele alınabilecek iş/, 'analist sonucu kısa bütçede de söylenir');
+    assert.match(result.answer.content, /[İi]lk ele alınabilecek iş/, 'analist sonucu kısa bütçede de söylenir');
   });
 });
 

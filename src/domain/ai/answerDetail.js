@@ -15,7 +15,7 @@ export const ANSWER_DETAIL_LABELS = Object.freeze({
 
 /** Ayrıntının anlatım sözleşmesi: paragrafta en az söylenecek önerme (mevcut önerme sayısıyla sınırlı) ve not kutusu sınırı. */
 export const ANSWER_DETAIL_CONTRACT = Object.freeze({
-  short: Object.freeze({ minNarrated: 1, maxNarrated: 3, maxNotes: 1 }),
+  short: Object.freeze({ minNarrated: 1, maxNarrated: 2, maxNotes: 1 }),
   balanced: Object.freeze({ minNarrated: 3, maxNarrated: 6, maxNotes: 2 }),
   detailed: Object.freeze({ minNarrated: 5, maxNarrated: 8, maxNotes: 2 })
 });

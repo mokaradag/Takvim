@@ -1333,6 +1333,9 @@ function completedAnalysisContext(turn, verdict) {
   // Takip bağlamını yalnızca KABUL EDİLMİŞ analitik özet kurar; olağan istek bağlam yazmaz (görev kümesi takibi ayrıdır).
   const intent = turn.presentationIntent?.analysis;
   if (!intent) return null;
+  // An incomplete accepted analysis must never become a smaller subject set on the next turn.
+  if (verdict.kind !== 'grounded' || turn.answers.some((answer) => answer.verdict.kind !== 'grounded')
+    || turn.partNotes?.size) return null;
   const grounded = (turn.partCount === 1 && !turn.answers.length) ? (verdict.kind === 'grounded' ? [{ request: turn.request, verdict, entries: partEntries(turn) }] : [])
     : turn.answers.filter((answer) => answer.verdict.kind === 'grounded');
   if (!grounded.length || !['grounded', 'unavailable'].includes(verdict.kind)) return null;

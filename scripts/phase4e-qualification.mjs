@@ -17,6 +17,7 @@
  * PLANNER_CLAUDE_FORCED_RETRY=1: CLI zorunlu aracı kısıtlı çözümle uygulayamadığı için model zorunlu turda başka bir araç
  * çağırırsa tur bir kez yalnızca zorunlu şemayla yinelenir; sayısı raporda `usage.forcedRetries` olarak ayrıca verilir.
  */
+import { appendPrivateDiagnostic } from './private-diagnostic-trace.mjs';
 import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { test } from 'node:test';
@@ -159,7 +160,7 @@ async function conversationCase(t, turns, { plannerModel, composeModel, seed = r
       }).filter((item, index, all) => all.findIndex((other) => JSON.stringify(other) === JSON.stringify(item)) === index);
       const reads = result.log.filter((row) => ['task-facts', 'portfolio'].includes(row.query)).map((row) => ({ query: row.query,
         ...Object.fromEntries(['assigneeMode', 'teamLevel', 'projectId', 'personSicil', 'dateFrom', 'dateTo', 'withAssignees', 'taskIds'].filter((key) => row.params?.[key] != null && row.params[key] !== '').map((key) => [key, String(row.params[key]).slice(0, 40)])) }));
-      appendFileSync(process.env.PHASE4E_DEBUG, `${JSON.stringify({ turn: turn.text, failures, finish: result.answer?.finishReason, reads, trail, answer: String(result.answer?.content || '').slice(0, 400) })}\n`);
+      appendPrivateDiagnostic(process.env.PHASE4E_DEBUG, { turn: turn.text, failures, finish: result.answer?.finishReason, reads, trail, answer: result.answer?.content });
     }
     results.push({ text: turn.id || null, plannerRounds: measured.filter((round) => round.purpose === 'plan').length, declarations: line?.context?.declarations ?? null,
       mode: presentation?.mode ?? null, server: presentation?.server === true, chartInserted: presentation?.chartInserted === true, reason: presentation?.reason ?? null, issue: presentation?.issue ?? null,

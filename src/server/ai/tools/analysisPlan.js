@@ -45,7 +45,7 @@ export function analysisSchema() {
       within: { type: 'string', minLength: 2, maxLength: 120, description: 'self/team/all/previous kapsamını adı verilen tek projeyle daraltır (kullanıcının yazdığı proje adı).' },
       level: { type: 'string', enum: [...ANALYSIS_LEVELS], description: 'Yalnızca team, düzey söylendiyse: unit birim; department bölüm/müdürlük; directorate direktörlük.' },
       names: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxNames, items: { type: 'string', minLength: 2, maxLength: 120 }, description: 'person/project: kullanıcının yazdığı ad(lar), en çok 2.' },
-      focus: { type: 'array', minItems: 1, maxItems: ANALYSIS_FOCUS.length, uniqueItems: true, items: { type: 'string', enum: [...ANALYSIS_FOCUS] },
+      focus: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxFocus, uniqueItems: true, items: { type: 'string', enum: [...ANALYSIS_FOCUS] },
         description: '1-3 yön; açılım bütçesi aşılırsa reddedilir. overview sayılar; status durum; priority öncelik; deadlines termin kovaları; overdue gecikenler; upcoming yaklaşan; workload kişilere göre; projects projelere göre; schedule aylara göre; critical kritik/yüksek açık işler.' },
       dateFrom: { ...DATE, description: 'Termin ufkunun başı (upcoming, critical, schedule).' },
       dateTo: { ...DATE, description: 'Ufkun sonu.' },
@@ -106,7 +106,11 @@ function previousBase(analysis, previous) {
   if (analysis.scope === 'row') {
     const rows = analysis.rows.map((row) => previous.rows[row - 1]);
     if (rows.some((row) => !row) || new Set(rows.map((row) => row.type)).size !== 1) throw invalidArguments(['$.analysis.rows:unavailable']);
-    return { scope: rows[0].type, base: { filters: {}, entities: rows.map(({ type, id }) => ({ type, id })) } };
+    const entities = rows.map(({ type, id }) => ({ type, id }));
+    const projects = previous.within ? [previous.within] : previous.scope === 'project' ? previous.subjects : [];
+    if (rows[0].type === 'person' && projects.length > 1) throw invalidArguments(['$.analysis.rows:scope']);
+    if (rows[0].type === 'person' && projects.length) entities.push({ type: 'project', id: projects[0].id });
+    return { scope: rows[0].type, base: { filters: {}, entities } };
   }
   const scope = previous.scope;
   // Önceki daraltma (ör. ekip ∩ proje) öznenin parçasıdır: proje kimliği sunucunun bağladığı kimliktir.
@@ -357,7 +361,12 @@ export function analysisSuggestion(request) {
   const generated = focusRequest(focus, candidate,
     { filters: { ...(scope === 'self' ? { assignee: 'me' } : scope === 'team' ? { assignee: 'team', ...(level ? { teamLevel: level } : {}) } : {}) }, entities }, null);
   const equivalent = (left, right) => JSON.stringify(Array.isArray(left) ? [...left].sort() : left) === JSON.stringify(Array.isArray(right) ? [...right].sort() : right);
-  if (Object.entries(filters).some(([key, value]) => value != null && !equivalent(value, generated?.filters?.[key]))) return null;
+  const generatedRequests = (Array.isArray(generated) ? generated : [generated]).filter(Boolean);
+  if (!generatedRequests.length || generatedRequests.some((item) => Object.entries(filters).some(([key, value]) => value != null
+    && !equivalent(value, item.filters?.[key])))) return null;
+  // Deadline presets themselves select unfinished tasks. No other selector implies an open-status population.
+  if (generatedRequests.some((item) => Object.entries(item.filters || {}).some(([key, value]) => value != null
+    && !(key === 'status' && filters.deadline != null && equivalent(value, OPEN)) && !equivalent(filters[key], value)))) return null;
   const names = scope === 'person' || scope === 'project' ? ` (ayrıca analysis.names: reddedilen isteğin ${scope} entities[].text değerleri, en çok ${ANALYSIS_LIMITS.maxNames})` : '';
   return `Bu soru analitik özetle de bildirilebilir (sunucu okumaları kendisi kurar): {"intent":"rota","language":"tr","analysis":${JSON.stringify(brief)}}${names}`;
 }

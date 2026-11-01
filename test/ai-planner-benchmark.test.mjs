@@ -1248,6 +1248,25 @@ test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP ya
 });
 
 /** Gerçek komut sınırı; yerel CLI ikizi yalnızca açık dosya bariyerinde tamamlanır. */
+test('Claude diagnostic trace persists safe metadata without private model text', async (t) => {
+  const { statSync } = await import('node:fs');
+  const privateText = 'PRIVATE_MODEL_RESPONSE_109';
+  const cli = await claudeCommandFixture(t, { events: [
+    { type: 'system', subtype: 'init', tools: [] },
+    { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'text', text: privateText }] } },
+    { type: 'result', num_turns: 1, stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 1 } }
+  ] });
+  const path = `${cli.dir}/trace.jsonl`;
+  const invocation = cli.start({ PLANNER_CLAUDE_TRACE: path });
+  cli.release();
+  const reply = await invocation.done;
+  assert.equal(reply.text, privateText, 'the real adapter received the private response');
+  const persisted = readFileSync(path, 'utf8');
+  assert.equal(persisted.includes(privateText), false);
+  assert.equal(JSON.parse(persisted).textChars, privateText.length);
+  if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600);
+});
+
 async function claudeCommandFixture(t, { reuse = false, events = null, newline = true, descendant = false, standalone = false, payload = null, executionDelayMs = 0, commandTimeoutMs = 8000, ...limits } = {}) {
   const { spawn, spawnSync } = await import('node:child_process');
   const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');

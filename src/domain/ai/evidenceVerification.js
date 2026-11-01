@@ -157,6 +157,14 @@ export function resolveEvidenceSelection(answer, { evidenceIds = [], evidencePay
  */
 function renderableFacts(request, items, evidence, answer, emptyProperties = []) {
   const rendered = [...items];
+  // Completeness-dependent prose uses canonical facts from the same verified, population-matching source.
+  for (const evidenceId of new Set(items.map((item) => item.evidenceId))) {
+    const source = evidence.get(evidenceId);
+    if (source?.tool !== 'rota_workload_summary' || !source.populationMatch || !source.dimensionsMatch) continue;
+    for (const fact of source.facts.filter((fact) => ['data.populationComplete', 'data.unrepresentedOpenTasks', 'data.unassignedOpenTasks'].includes(fact.field))) {
+      if (!rendered.some((item) => item.evidenceId === evidenceId && item.fact.field === fact.field)) rendered.push({ evidenceId, fact });
+    }
+  }
   // Boşluğun sunumu kardeş olgudan değil, kendi kayıtlı alanından gelir.
   const emptyFact = (source, field, metric, template) => ({
     factId: `${source.envelope.factScope}:${field}`, subjectId: field.slice(0, field.lastIndexOf('.')), subject: template.subject,

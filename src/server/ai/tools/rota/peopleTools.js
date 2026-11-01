@@ -44,6 +44,9 @@ const workloadSummary = {
     let unrepresented = 0;
     let incompleteAssignments = false;
     for (const fact of facts) {
+      // A restricted identity view cannot prove that SQL returned all co-assignees. This is deliberately
+      // independent of whether a hidden assignment exists: no hidden-assignment count or existence oracle.
+      if (!fact.identityBase) incompleteAssignments = true;
       if (assignmentState(fact) === 'unassigned') {
         unassigned += 1;
         continue;

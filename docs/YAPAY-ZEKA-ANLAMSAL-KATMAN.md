@@ -2001,8 +2001,8 @@ nedenlerinin incelenmesi (geri dönüşler tasarım gereği doğru yanıttır, a
 - Planlayıcının anlam hatası (geçerli ama yanlış niyetli plan, ör. dağılım sorusuna liste) yapısal olarak
   saptanamaz; böyle bir plan doğrulanmış ama soruya uymayan bir yanıt üretebilir. Bunun önlemi daha dar şema ve
   yönergedir, sözcük sınıflandırması değildir.
-- Grafik tek dizili çubuk ve halka ile sınırlıdır; zaman serisi ve çok dizili karşılaştırma yoktur. (Aşama 4E'de çizgi,
-  yığılmış çubuk, gösterge kartı ve zaman çizelgesi eklendi; bkz. §14.5.)
+- Aşama 4E çubuk, halka, çizgi, yığılmış çubuk, gösterge kartı ve zaman çizelgesini destekler (bkz. §14.5).
+  Isı haritası ve serbest grafik türleri desteklenmez.
 - Kişi sonuç kümeleri 4C sözleşmesi gereği takip göndergesi değildir.
 - Anlatım bir model turu ekler (Haiku/CLI ölçümünde 2,0–2,4 sn, girdi ~1,3–1,6 bin belirteç); kurum içi Qwen gecikmesi
   ölçülmedi. Önceden `NO_CHOICE` olan sayım + liste yanıtları artık anlatım turu açar.
@@ -2067,7 +2067,8 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
 - Düzeltme: açılımın istek sorunları özetin alanlarına çevrilir (`analysisDetails`); ayrıntılı bir `request`
   reddedildiğinde yalnızca türlü alanlarından eşdeğer özet önerilir (`analysisSuggestion`). Sistem yetkili notta serbest
   metin (varlık adı) **yankılanmaz**. Özetin temsil edemediği tarih, durum veya başka bir süzgeç varsa öneri verilmez;
-  temsil edilen tarihler korunur. Onarım hiçbir nüfus koşulunu düşürerek okumayı genişletemez.
+  temsil edilen tarihler korunur. Onarım hiçbir nüfus koşulunu düşüremez veya yeni koşul ekleyemez; termin seçicisinin
+  kendi sözleşmesinden gelen açık-görev koşulu bunun dışındadır. Şema ve doğrulayıcı aynı odak sınırını kullanır.
 
 ### 14.3 Kapsam ve yetki
 
@@ -2097,6 +2098,8 @@ görev kümesi notu yalnızca tek göreve sırayla başvuruyu anlatır (iki çel
 Satır göndergesi ilk **gösterilen** kişi/proje koleksiyonunun sırasıdır; model bölümleri yeniden sıralasa da yürütme
 sırası kullanılmaz. Tek satırlı düzyazı ve çizilen tablolar/grafikler de bu sıraya katılır. Kalıcı tarihler planla aynı
 gerçek takvim günü doğrulamasından geçer; bozuk bağlam kullanılmaz.
+Kişi satırı takibi, önceki `within` veya tek-proje öznesini her okumada korur; birden çok proje kesişimi temsil
+edilemiyorsa okuma öncesinde reddedilir. Kısmi/başarısız analiz takip bağlamı yazmaz: karşılaştırma tek kişiye daralmaz.
 
 ### 14.5 Sunum
 
@@ -2105,11 +2108,20 @@ gerçek takvim günü doğrulamasından geçer; bozuk bağlam kullanılmaz.
   Her biri tam kanıtın önkoşuluna bağlıdır (kesilmiş listeden pay söylenmez); kişi hakkında yargı değil işlemsel dil.
   İş yükü sonucu temsil edilen, sorumlusuz ve temsil edilemeyen açık görevleri ayrı sayar. Sıfır yüklü ekip kadrosu
   bu okumadan bilinmediği veya atamalar çözümlenemediği için nüfus tam değilse denge/yoğunlaşma önermesi kurulmaz.
+  `populationComplete` yalnızca bütün atamaların temsil edildiği kanıtlanınca doğrudur; kısıtlı kimlik görünümü,
+  SQL'in gizlediği eş sorumlular, çözümlenemeyen atamalar ve kesilmiş kişi sayfası olumlu tamlık vermez. Gizli atama
+  sayısı/kimliği okunmaz veya açıklanmaz; aynı kısıtlı görünüm gizli atama olmasa da eksik sayılır. `unassignedOpenTasks`
+  sorumlusuzluğu kanıtlanan görevleri, `unrepresentedOpenTasks` hiçbir kişi satırında temsil edilemeyen görevleri
+  sayar; görünür + gizli eş sorumlulu görev görünür kişide temsil edilebilir ama dağılım tam sayılmaz. Tamlık ve bu
+  sayılar kanonik doğrulanmış olgulardır. Denge/yoğunlaşma ve kişi liderliği tamlık gerektirir; kesilmiş listeden lider
+  seçilmez. Karşılaştırmanın analist cümleleri her kanıt nüfusunun öznesini taşır.
   Aciliyetin yedi günlük dönemi bugünden başlar. Grafik telemetrisi ortak altı tür sözlüğünü kullanır.
 - **Yanıt ayrıntısı** (`answerDetail.js`): Kısa / Dengeli (varsayılan) / Ayrıntılı. Ayarlar → Bilgin kartı yalnızca Bilgin
   açıkken görünür ve görünüm tercihine (`assistantDetail`) yazılır; istek gövdesine yalnızca varsayılan değilse gider.
   Sözleşme bölüm başına asgari/azami anlatılan önerme ve not sayısıdır (`ANSWER_DETAIL_CONTRACT`), çıktı belirteci
-  sınırı değildir.
+  sınırı değildir. Bölüm başına Kısa 1–2, Dengeli 3–6, Ayrıntılı 5–8 önerme söyler (mevcut önerme sayısıyla sınırlı).
+  Kısa en çok bir tablo veya grafik gösterir; diğer zorunlu satır koleksiyonları listeyle korunur. İsteğe bağlı analist
+  önermeleri çok bölümlü sayfanın kalan bütçesine sığdırılır; geçerli temel düzeni ortadan kaldıramaz.
 - **Grafik dilbilgisi** (`answerChart.js`): `bar`, `donut`, `line` (≤ 24 nokta), `stacked` (≤ 10 öğe, ≤ 3 dizi), `kpi`
   (≤ 6 kart), `timeline` (≤ 10 öğe). Hepsi sunucunun doğrulanmış tam kanıtından kurulur, istemcide yeniden doğrulanır,
   biçim dışı tanım reddedilir; kopyalanabilir metin karşılığı ve erişilebilir adı vardır.
@@ -2121,6 +2133,10 @@ gerçek takvim günü doğrulamasından geçer; bozuk bağlam kullanılmaz.
   telemetride kalır.
 
 ### 14.6 Nitelendirme — `scripts/phase4e-qualification.mjs` (Claude Haiku 4.5, düşünme kapalı, `effort: low`)
+
+`PLANNER_CLAUDE_TRACE` ve `PHASE4E_DEBUG` yalnızca yapısal tanı metadatası saklar: ham soru/yanıt, kimlikler,
+araç bağımsız değişkenleri ve sorgu değerleri kayda girmez. Ortak yazıcı veriyi kalıcılıktan önce süzer; yeni ve mevcut
+dosyaları POSIX'te `0600` yapar. Windows'ta içerik süzme aynı şekilde uygulanır; POSIX kip bitleri ACL kanıtı sayılmaz.
 
 Derin modele giden her çağrı modele **gitmez**; sayılır ve başarısızlıktır. Yeniden koşular yalnızca başarısız vakadır.
 Tier A deterministiktir (model çağrısı yok): 158 soruluk kıyas kümesi, 8 takip zinciri (29 tur), kapsam × yön açılımları.

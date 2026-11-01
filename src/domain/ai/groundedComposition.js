@@ -346,8 +346,9 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   // Analist önermeleri (analitik özette) sınırın içinde sayılır ve isteğe bağlı türetilmiş önermelerden ÖNCE eklenir:
   // tek bölümlü sayfada sınır türetilmiş olanı düşürür, sonucu (karşıtlık, yoğunlaşma, öncelik) değil.
   const conclusions = analyst ? analystPropositions(parts, locale) : [];
-  if (contentParts.size > 1 && propositions.size + derived.length + conclusions.length > COMPOSITION_LIMITS.maxPropositions) return null;
-  for (const item of conclusions) propose(item.part, item.proposition, { table: null, analyst: true });
+  const room = COMPOSITION_LIMITS.maxPropositions - propositions.size - derived.length;
+  if (contentParts.size > 1 && room < 0) return null;
+  for (const item of contentParts.size > 1 ? conclusions.slice(0, room) : conclusions) propose(item.part, item.proposition, { table: null, analyst: true });
   for (const { ordinal, proposition, table } of derived) propose(ordinal, proposition, { table });
   // Çok bölümlü sayfada başlık, ardından gelen blokların nüfusunu adlandırır: başlığı olmayan bir bölüm varsa onun
   // olguları başka bölümün başlığı altına düşebilir. Bu durumda başlık seçeneği hiç sunulmaz (seçim daralır, olgu değişmez).
@@ -511,6 +512,17 @@ export function validateComposition(composition, response) {
     } else blocks.push({ type, source });
   }
   if (['chart', 'note'].includes(blocks[0].type) || blocks.at(-1).type === 'title') return fail('LEAD_REQUIRED');
+  // Short keeps every required row collection, using lists for the remaining evidence. One table OR chart per part.
+  if (normalizeAnswerDetail(render.detail) === 'short') {
+    const chartParts = blocks.filter((block) => block.type === 'chart').map((block) => partOfSource('chart', block.source));
+    if (new Set(chartParts).size !== chartParts.length) return fail('BLOCK_COUNT');
+    const visualParts = new Set(chartParts);
+    for (const block of blocks) if (block.type === 'rows' && block.style === 'table') {
+      const part = partOfSource('rows', block.source);
+      if (visualParts.has(part)) block.style = 'list';
+      else visualParts.add(part);
+    }
+  }
   if (blocks.filter((item) => item.type === 'title').length > COMPOSITION_LIMITS.maxTitles) return fail('BLOCK_COUNT');
   // Yönlendirme ("aşağıdaki tablo" / "aşağıdaki grafik") paragraftan SONRA çizilen kendi bloğunadır. Cümle bloğun türünü
   // söyler: aynı türden yönlendirilmeyen bir blok (başka bir tablo ya da başka bir grafik) araya girerse "aşağıdaki"

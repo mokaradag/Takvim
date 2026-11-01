@@ -40,6 +40,8 @@ const LABELS = Object.freeze({
   calendar: ['Takvim', 'Calendar'], range: ['Tarih aralığı', 'Date range'], from: ['Başlangıç', 'From'], to: ['Bitiş', 'To'],
   workingWeekdays: ['Çalışılan haftanın günü', 'Working weekday'], holidays: ['Tatiller', 'Holidays'], date: ['Tarih', 'Date'],
   openTasks: ['Açık görev', 'Open tasks'], unassignedOpenTasks: ['Görünür sorumlusu olmayan açık görev', 'Open tasks without a visible assignee'],
+  unrepresentedOpenTasks: ['Kişi satırlarında temsil edilmeyen açık görev', 'Open tasks not represented by person rows'],
+  populationComplete: ['Atama dağılımı tam', 'Assignment distribution complete'],
   tasksWithPlannedHours: ['Planlanan saati bilinen görev', 'Tasks with known planned hours'],
   directorate: ['Başkanlık', 'Directorate'], department: ['Müdürlük', 'Department'], organization: ['Organizasyon', 'Organization'],
   awaitingYourDecision: ['Kararınızı bekleyen', 'Awaiting your decision'], actionRequired: ['İşlem bekleyen', 'Action required'],
