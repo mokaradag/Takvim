@@ -1,4 +1,6 @@
 import 'server-only';
+import { isIsoDay } from '../../../domain/ai/isoDay.js';
+export { isIsoDay } from '../../../domain/ai/isoDay.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 import { TOOL_LIMITS } from './toolLimits.js';
 import { invalidArguments } from './toolErrors.js';
@@ -33,15 +35,6 @@ const CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 function isPlainObject(value) {
   return value != null && typeof value === 'object' && !Array.isArray(value)
     && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
-}
-
-/** Takvimde gerçekten bulunan `YYYY-MM-DD` günü (1900–2100). */
-export function isIsoDay(value) {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const year = Number(value.slice(0, 4));
-  if (year < 1900 || year > 2100) return false;
-  const time = Date.parse(`${value}T00:00:00Z`);
-  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === value;
 }
 
 /**

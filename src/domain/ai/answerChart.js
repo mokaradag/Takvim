@@ -1,4 +1,5 @@
 import { isEvidenceId } from './evidenceContract.js';
+import { isIsoDay } from './isoDay.js';
 
 /**
  * Kanıta dayalı yanıttaki grafik sözleşmesi — sunucu ile tarayıcının ORTAK, saf kuralları.
@@ -37,9 +38,6 @@ export const ANSWER_CHART_LIMITS = Object.freeze({
 
 const SPEC_KEYS = ['version', 'type', 'locale', 'title', 'unit', 'evidence', 'items'];
 const UNSAFE_TEXT = /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/;
-const DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
-/** Takvimde gerçekten bulunan gün: "2026-02-30" biçime uysa da tarihe yuvarlanmaz, reddedilir (sunucudaki `date` biçimiyle aynı). */
-const calendarDay = (value) => typeof value === 'string' && DAY.test(value) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 
 /** Üretici ve doğrulayıcı aynı metin güvenliği sözleşmesini kullanır. */
 export function answerChartLabel(value, max = ANSWER_CHART_LIMITS.maxLabelChars) {
@@ -97,7 +95,7 @@ function normalizeItem(type, item, spec, seriesCount) {
     return amount == null ? null : Object.freeze({ label: item.label, value: amount, unit: item.unit });
   }
   if (type === 'timeline') {
-    if (!exactKeys(item, ['label', 'date']) || !boundedText(item.label, ANSWER_CHART_LIMITS.maxLabelChars) || !calendarDay(item.date)) return null;
+    if (!exactKeys(item, ['label', 'date']) || !boundedText(item.label, ANSWER_CHART_LIMITS.maxLabelChars) || !isIsoDay(item.date)) return null;
     return Object.freeze({ label: item.label, date: item.date });
   }
   if (!exactKeys(item, ['label', 'value']) || !boundedText(item.label, ANSWER_CHART_LIMITS.maxLabelChars)) return null;

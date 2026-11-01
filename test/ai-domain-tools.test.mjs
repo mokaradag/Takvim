@@ -1338,3 +1338,32 @@ test('4C final convergence: adding continuation scope never discards fitting evi
     for (const row of rows) assert.ok(decodeAuthorizationPopulation(row.authorizationPopulation));
   });
 });
+
+test('üretim ekip SQL sözleşmesi her seçimde göreve, yöneticiye ve düzeye bağlıdır; yoksa okuma öncesi kapanır', () => {
+  const sql = toolQueries.AI_TOOL_TASK_FACTS_SQL;
+  const compact = (text) => text.replace(/\s+/g, ' ').trim();
+  const start = "OR (@assigneeMode = 'team'";
+  const expected = `OR (@assigneeMode = 'team' AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees member
+    JOIN dbo.MR_V_ExecutiveScope es ON es.EmployeeSicil = member.Sicil
+    WHERE member.TaskId = t.TaskId AND es.ManagerSicil = @sicil AND member.Sicil <> @sicil
+    AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)))`;
+  // Sorgu üretim modülünden gelir; SQL ikizinin işaretle seçtiği ikinci bir uygulama sınanmıyor.
+  const branches = [];
+  for (let at = sql.indexOf(start); at >= 0; at = sql.indexOf(start, at + start.length)) {
+    const open = sql.indexOf('(', at);
+    let depth = 0;
+    let end = open;
+    for (; end < sql.length; end += 1) {
+      if (sql[end] === '(') depth += 1;
+      else if (sql[end] === ')' && --depth === 0) break;
+    }
+    branches.push(compact(sql.slice(at, end + 1)));
+  }
+  assert.deepEqual(branches, Array(6).fill(compact(expected)), 'ön seçimler ve nihai okuma aynı dar ekip koşulunu uygular');
+  const guard = `IF @assigneeMode = 'team' AND NOT EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+    WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel))
+    THROW 51002, 'AI_TOOL_SCOPE_UNAVAILABLE', 1;`;
+  assert.ok(compact(sql).includes(compact(guard)));
+  assert.ok(sql.indexOf('THROW 51002') < sql.indexOf('CREATE TABLE #AiScopeProjects'), 'yönetim kapsamı yokken görev nüfusu kurulmaz');
+  assert.match(sql, /FROM #AiTasks visible\s+JOIN dbo\.MR_Tasks t ON t\.TaskId = visible\.TaskId/);
+});

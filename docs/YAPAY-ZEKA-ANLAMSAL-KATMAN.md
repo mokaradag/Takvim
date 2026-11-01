@@ -2040,8 +2040,8 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
   sunucu seçemiyor ve zayıf model seçim turunda takılıyordu. Artık bildirimde `not-row-total` ile reddedilir ve eşdeğer
   özet önerilir.
 - Analitik özette açık grafik isteği, aday yoksa sunucu düzeni yolunda sessizce düşüyordu; artık kısa sunucu notu eklenir.
-- Özetin `dateFrom/dateTo` ufku yalnızca `upcoming`/`schedule` yönlerine uygulanıyordu; `critical` da ufukla okunur ve
-  ufku taşıyan yön yoksa yaklaşan işler ufukla eklenir (bildirilen ufuk okunmadan geçmez).
+- Özetin `dateFrom/dateTo` ufku yalnızca `upcoming`/`schedule` yönlerine uygulanıyordu; `critical` da ufukla okunur.
+  Ufku taşıyan yön yoksa geçmiş ufuk `schedule`, bugün/gelecek ufuk `upcoming` ile okunur; gün turun kanonik bugünüdür.
 - Olmayan satır göndergesinin açıklama kuralı `row` arıyordu, ayrıntı `rows`dur; artık veri okumadan açıklama istenir.
 - Özet düzeltme notları `$.field.field:scope` gibi anonim yollarla gidiyordu; artık özetin alan adlarıyla (`$.analysis.rows:scope`).
 
@@ -2058,15 +2058,16 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
   (+`names`), `projects` (portföy), `all`, `previous` (önceki analizin öznesi), `row` (+`rows`: önceki sonucun 1–2 satırı).
   `within`: `self|team|all|previous` kapsamını adı verilen tek projeyle daraltır.
 - `focus` (önem sırasıyla): `overview`, `status`, `priority`, `deadlines`, `overdue`, `upcoming`, `workload`, `projects`,
-  `schedule`, `critical`. Sunucu en çok `PLANNER_LIMITS.maxRequests` (3) bölüm okur (`effectiveFocus`): liste uzunsa
-  overview'ün sayılarıyla zaten verilen `status` önce düşer, sonra modelin sırası korunur; ufuk varsa ufku taşıyan bir
-  yön, portföyde proje satırları her zaman yer alır. Fazla yön bir düzeltme turu harcatmaz.
+  `schedule`, `critical`. Sunucu en çok `PLANNER_LIMITS.maxRequests` (3) bölüm okur: yönlerin bütün fiziksel açılımı
+  (karşılaştırmada kayıt başına bölümler dâhil), ufuk bölümü ve portföy satırları bütçeye sığmalıdır. Sığmayan plan
+  veri okunmadan `$.analysis.focus:requestBudget` ile reddedilir; istenen yön sessizce düşürülmez.
 - Açılım (`expandAnalysis`) yalnızca türlü değerlerle çalışır, kullanıcı metnini okumaz; çıktı modelin yazacağı ham
   isteklerdir ve 4C bildirim doğrulamasından, yetkiden ve kanıt seçiminden aynen geçer. Adlar 4C içerme kuralına
   tabidir (kullanıcının bu iletisinde geçmeli).
 - Düzeltme: açılımın istek sorunları özetin alanlarına çevrilir (`analysisDetails`); ayrıntılı bir `request`
   reddedildiğinde yalnızca türlü alanlarından eşdeğer özet önerilir (`analysisSuggestion`). Sistem yetkili notta serbest
-  metin (varlık adı) **yankılanmaz**.
+  metin (varlık adı) **yankılanmaz**. Özetin temsil edemediği tarih, durum veya başka bir süzgeç varsa öneri verilmez;
+  temsil edilen tarihler korunur. Onarım hiçbir nüfus koşulunu düşürerek okumayı genişletemez.
 
 ### 14.3 Kapsam ve yetki
 
@@ -2083,6 +2084,7 @@ Model kapsamı **ister**, sunucu **yetkilendirir**; rol ve yönetim kapsamı yal
 | previous / row | önceki analizin sunucu bağlamı | Her turda güncel yetkiyle yeniden okunur |
 
 WBS kapsamı özetin değil 4C ayrıntılı isteğinin işidir (`wbsId`, `rota_wbs_inspect`).
+Kişi karşılaştırmasında `within` ortak proje kısıtıdır: her okuma kişi ∩ proje taşır, proje üçüncü özne olmaz.
 
 ### 14.4 Takip bağlamı
 
@@ -2092,12 +2094,18 @@ yalnızca türü ve sayıları taşır (`analysisContextSummary`). `previous`/`r
 `analysisReferents` yalnızca bu kimlikleri güvenilir kılar. Bağlam yalnızca **hemen önceki** doğrulanmış yanıttandır
 (açıklama turu bağlamı taşımaz); yoksa ya da satır yoksa veri okunmadan açıklama istenir. Önceki yanıt bir analizse
 görev kümesi notu yalnızca tek göreve sırayla başvuruyu anlatır (iki çelişen yönerge verilmez).
+Satır göndergesi ilk **gösterilen** kişi/proje koleksiyonunun sırasıdır; model bölümleri yeniden sıralasa da yürütme
+sırası kullanılmaz. Tek satırlı düzyazı ve çizilen tablolar/grafikler de bu sıraya katılır. Kalıcı tarihler planla aynı
+gerçek takvim günü doğrulamasından geçer; bozuk bağlam kullanılmaz.
 
 ### 14.5 Sunum
 
 - **Analist önermeleri** (`groundedPropositions.js` · `analystPropositions`): karşıtlık, baskı, olumlu durum, aciliyet,
   yoğunlaşma (en büyük ≥ 2× ikinci ve ≥ 1/3 pay), denge, gecikme yoğunlaşması ve gerekçeli "ilk ele alınabilecek iş".
   Her biri tam kanıtın önkoşuluna bağlıdır (kesilmiş listeden pay söylenmez); kişi hakkında yargı değil işlemsel dil.
+  İş yükü sonucu temsil edilen, sorumlusuz ve temsil edilemeyen açık görevleri ayrı sayar. Sıfır yüklü ekip kadrosu
+  bu okumadan bilinmediği veya atamalar çözümlenemediği için nüfus tam değilse denge/yoğunlaşma önermesi kurulmaz.
+  Aciliyetin yedi günlük dönemi bugünden başlar. Grafik telemetrisi ortak altı tür sözlüğünü kullanır.
 - **Yanıt ayrıntısı** (`answerDetail.js`): Kısa / Dengeli (varsayılan) / Ayrıntılı. Ayarlar → Bilgin kartı yalnızca Bilgin
   açıkken görünür ve görünüm tercihine (`assistantDetail`) yazılır; istek gövdesine yalnızca varsayılan değilse gider.
   Sözleşme bölüm başına asgari/azami anlatılan önerme ve not sayısıdır (`ANSWER_DETAIL_CONTRACT`), çıktı belirteci
@@ -2132,6 +2140,9 @@ düz metin iletimi 4. Tier B, sonraki yönerge/şema değişikliklerinden önce 
 
 ### 14.7 Bilinen sınırlar
 
+- Son yakınsama geçişinde Claude CLI bulunmadığından Haiku yeniden koşulmadı; yukarıdaki tarihsel sayılar son
+  yönerge, bütçe ve puanlama sözleşmesinin yeni nitelendirmesi değildir. Deterministik sınamalar yeniden çalıştırıldı.
+- Ekip iş yükü sıfır açık işi olan bütün üyelerin kadrosunu getirmez; bu nedenle ekip dengesi/yoğunlaşması çıkarılmaz.
 - Kurum içi Qwen ile nitelendirme yapılmadı; ölçümler Claude CLI uyarlayıcısıyla (zorunlu araç öykünmesi) alındı.
 - Uygulamanın tamamı bu ortamda çalıştırılamadı (SQL Server / Windows kimlik doğrulaması yok): arayüz, üretim
   bileşenlerinin uygulama CSS'iyle sunucu tarafı çizimi ve Playwright ekran görüntüleriyle (açık/koyu, 1280/390 px)

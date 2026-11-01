@@ -729,14 +729,14 @@ export function analystPropositions(parts, locale = 'tr') {
       if (open > 0 && soon != null && soon > 0 && sameEvidence([totals.get('tasks.open'), totals.get('tasks.dueNext7Days')])) {
         const due = en ? ` open ${soon === 1 ? 'task is' : 'tasks are'}` : ' açık görevin termini var';
         add(evidence, 'urgency', en
-          ? sentence([v(number(soon, locale)), ` open ${soon === 1 ? 'task is' : 'tasks are'} due within the next seven days.`])
-          : sentence(['Önümüzdeki yedi gün içinde ', v(number(soon, locale)), ' açık görevin termini var.']), soon * 2 >= open ? 'warning' : 'info',
-        // Gecikme cümlesinin devamı: "…; önümüzdeki yedi gün içinde de **1** açık görevin termini var." Gecikme yoksa ve yakın
+          ? sentence([v(number(soon, locale)), ` open ${soon === 1 ? 'task is' : 'tasks are'} due in the seven-day period starting today.`])
+          : sentence(['Bugün başlayan yedi günlük dönemde ', v(number(soon, locale)), ' açık görevin termini var.']), soon * 2 >= open ? 'warning' : 'info',
+        // Gecikme cümlesinin devamı: "…; bugün başlayan yedi günlük dönemde de **1** açık görevin termini var." Gecikme yoksa ve yakın
         // termin dikkat gerektiriyorsa karşıtlık ("ancak"), değilse yalın ek.
         { states: ['tasks.dueNext7Days'], follow: { key: 'totals',
-          also: en ? ['; ', v(number(soon, locale)), `${due} also due within the next seven days`] : ['; önümüzdeki yedi gün içinde de ', v(number(soon, locale)), due],
-          plain: en ? ['; ', v(number(soon, locale)), `${due} due within the next seven days`] : ['; önümüzdeki yedi gün içinde ', v(number(soon, locale)), due],
-          contrast: en ? ['; however, ', v(number(soon, locale)), `${due} due within the next seven days`] : ['; ancak önümüzdeki yedi gün içinde ', v(number(soon, locale)), due] } });
+          also: en ? ['; ', v(number(soon, locale)), `${due} also due in the seven-day period starting today`] : ['; bugün başlayan yedi günlük dönemde de ', v(number(soon, locale)), due],
+          plain: en ? ['; ', v(number(soon, locale)), `${due} due in the seven-day period starting today`] : ['; bugün başlayan yedi günlük dönemde ', v(number(soon, locale)), due],
+          contrast: en ? ['; however, ', v(number(soon, locale)), `${due} due in the seven-day period starting today`] : ['; ancak bugün başlayan yedi günlük dönemde ', v(number(soon, locale)), due] } });
       }
     }
     // Kişiler arası iş yükü: iş yükü aracının TAM kişi satırları (kesilmemiş sıralama).
@@ -748,7 +748,9 @@ export function analystPropositions(parts, locale = 'tr') {
       people.get(match[1])[match[2]] = item.fact.value;
     }
     const rows = [...people.values()].filter((row) => typeof row.name === 'string' && Number.isSafeInteger(row.openTasks) && row.openTasks >= 0);
-    if (rows.length >= 3 && rows.length === people.size && rows.every((row) => row.size === rows.length) && sameEvidence(rows)) {
+    const populationComplete = rows.length && items.some(({ fact, evidenceId }) => evidenceId === rows[0].evidenceId
+      && fact.field === 'data.populationComplete' && fact.value === true);
+    if (populationComplete && rows.length >= 3 && rows.length === people.size && rows.every((row) => row.size === rows.length) && sameEvidence(rows)) {
       const sum = rows.reduce((total, row) => total + row.openTasks, 0);
       const top = [...rows].sort((left, right) => right.openTasks - left.openTasks);
       const unique = top[0].openTasks > top[1].openTasks;

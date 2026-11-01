@@ -97,7 +97,8 @@ export function plannerScore(result, expect) {
   if (expect.intent === 'rota' && result.outcome === 'planned') {
     const scope = scopeOf(requests);
     if (scope !== expect.scope) failures.push(`kapsam ${scope} ≠ ${expect.scope}`);
-    if (expect.level && !requests.some((request) => request.filters?.teamLevel === expect.level)) failures.push(`düzey ${expect.level} yok`);
+    const teamRequests = requests.filter((request) => request.filters?.assignee === 'team');
+    if (expect.level && (!teamRequests.length || !teamRequests.every((request) => request.filters?.teamLevel === expect.level))) failures.push(`düzey ${expect.level} her ekip isteğinde değil`);
     for (const name of expect.names || []) {
       if (!requests.some((request) => request.entities.some((entity) => String(entity.query || '').toLocaleLowerCase('tr-TR') === name.toLocaleLowerCase('tr-TR')))) failures.push(`ad ${name} yok`);
     }

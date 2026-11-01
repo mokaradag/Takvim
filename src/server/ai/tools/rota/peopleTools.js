@@ -41,14 +41,18 @@ const workloadSummary = {
     const people = new Map();
     const hoursByPerson = new Map();
     let unassigned = 0;
+    let unrepresented = 0;
+    let incompleteAssignments = false;
     for (const fact of facts) {
       if (assignmentState(fact) === 'unassigned') {
         unassigned += 1;
         continue;
       }
       // Ekip kapsamında yalnızca yönetim kapsamındaki çalışanlar kişi olarak sayılır (eş sorumlu ekip dışıysa sayılmaz).
-      const visible = (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null && (!team || person.teamMember));
-      if (!visible.length) continue;
+      const relevant = (assignees.get(fact.id) || []).filter((person) => (!team || person.teamMember) && (args.personSicil == null || person.sicil === args.personSicil));
+      const visible = relevant.filter((person) => person.resolved && person.identityVisible && person.sicil != null);
+      if (visible.length !== relevant.length) incompleteAssignments = true;
+      if (!visible.length) { unrepresented += 1; continue; }
       for (const person of visible) {
         if (args.personSicil != null && person.sicil !== args.personSicil) continue;
         if (!people.has(person.sicil)) {
@@ -95,8 +99,14 @@ const workloadSummary = {
         openTaskCount: facts.length,
         people: page,
         unassignedOpenTasks: unassigned,
+        representedOpenTasks: facts.length - unassigned - unrepresented,
+        unrepresentedOpenTasks: unrepresented,
+        // Görev okuması sıfır yüklü ekip üyelerinin kadrosunu kanıtlamaz. Kimlik çözülmeyen atamalar da tam dağılım değildir.
+        populationComplete: page.length === ordered.length && !team && !incompleteAssignments && unrepresented === 0,
         notes: [
           WORKLOAD_NOTE,
+          ...(team ? ['Kişi satırları yalnızca çözümlenmiş, görünür atamaları kapsar; sıfır açık işi olan ekip üyelerinin tamamı bilinmediğinden ekip dengesi veya yoğunlaşması çıkarılamaz.'] : []),
+          ...(unrepresented ? [`${unrepresented} açık görev kişi satırlarında temsil edilemiyor; kimliği çözümlenmeyen sorumlular açıklanmaz.`] : []),
           'Birden çok sorumlusu olan görev her sorumluda ayrı sayılır.',
           'plannedHoursOnAssignedTasks, kişinin atandığı görevlerin task düzeyindeki planlanan saat toplamıdır; kişi-saat tahsisi değildir. Yalnızca değeri girilmiş görevler (tasksWithPlannedHours) toplanır; boş değer sıfır sayılmaz.'
         ]

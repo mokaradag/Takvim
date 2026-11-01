@@ -672,7 +672,7 @@ export function renderComposition(composition, validated) {
   const locale = render.locale;
   // Çizilen her parça bölümüyle tutulur: modelin yerleştirmediği ayrıntı kendi bölümünün içine girer (yanıtın sonuna değil).
   const out = [];
-  const emit = (text, part) => { if (text) out.push({ text, part }); };
+  const emit = (text, part, rowBearing = false) => { if (text) out.push({ text, part, rowBearing }); };
   const cited = [];
   let chart = null;
   let charts = 0;
@@ -708,8 +708,10 @@ export function renderComposition(composition, validated) {
     const text = detailText(detail);
     if (!text) return;
     cited.push(detail.evidenceId);
-    if (place) emit(text, detail.part);
-    else pending.push({ text, part: detail.part });
+    const rowBearing = detail.source && detail.source.layout !== 'table'
+      && [...detail.source.group.collections.values()].some((rows) => rows.size === 1);
+    if (place) emit(text, detail.part, rowBearing);
+    else pending.push({ text, part: detail.part, rowBearing });
   };
   // Çizilecek grafikler önceden belirlenir: yönlendirme yalnızca gerçekten çizilen bloğa yazılır.
   const fences = new Map();
@@ -763,7 +765,7 @@ export function renderComposition(composition, validated) {
       showDetail(table.detail);
       const detail = render.details.get(table.detail);
       const statedText = detail && coveredBy.get(detail.covers) === detail ? render.propositions.get(detail.covers).markdown : detail ? detailText(detail) : '';
-      emit(renderGroupRows(table.group, table.collection, { locale, layout: block.style, stated: statedText }), table.part);
+      emit(renderGroupRows(table.group, table.collection, { locale, layout: block.style, stated: statedText }), table.part, true);
       cited.push(table.evidenceId);
       tables += 1;
     } else if (block.type === 'details') {
@@ -773,7 +775,7 @@ export function renderComposition(composition, validated) {
       if (!fence) continue;
       const candidate = render.charts.get(block.source);
       if (candidate.table != null) showDetail(render.tables.get(candidate.table)?.detail);
-      emit(fence, candidate.part);
+      emit(fence, candidate.part, candidate.table != null);
       cited.push(candidate.evidenceId);
       chart = block.style;
       charts += 1;
@@ -788,5 +790,7 @@ export function renderComposition(composition, validated) {
     const at = last >= 0 ? last + 1 : later >= 0 ? later : out.length;
     out.splice(at, 0, item);
   }
-  return { text: out.map((chunk) => chunk.text).join('\n\n'), citedIds: [...new Set(cited)], chart, charts, blocks: validated.blocks.length, said, tables, notes, titled };
+  // Son sıraya eklenen ayrıntılar ve tek satırlı düzyazı da görünürdür; takip sırası nihai çizimin sırasıdır.
+  const rowParts = [...new Set(out.filter((chunk) => chunk.rowBearing).map((chunk) => chunk.part))];
+  return { text: out.map((chunk) => chunk.text).join('\n\n'), citedIds: [...new Set(cited)], chart, charts, blocks: validated.blocks.length, said, tables, notes, titled, rowParts };
 }

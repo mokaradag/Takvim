@@ -156,6 +156,7 @@ const REGISTRY_ENTRIES = Object.freeze({
     ...fields('people.*.organization', { directorate: p('person.organization', 'text'), department: p('person.organization', 'text'), unit: p('person.organization', 'text') }),
     ['ambiguous', x('boolean')]],
   rota_workload_summary: [['openTaskCount', TOTALS.open], ['unassignedOpenTasks', m('tasks.unassignedOpen', 'tasks')],
+    ['unrepresentedOpenTasks', x('tasks')], ['populationComplete', x('boolean')],
     ...fields('people.*', { name: c('person.name'), openTasks: TOTALS.open, inProgress: TOTALS.inProgress, overdue: TOTALS.overdue,
       dueNext7Days: TOTALS.dueNext7Days, plannedHoursOnAssignedTasks: m('tasks.plannedHours', 'hours'), tasksWithPlannedHours: m('tasks.withPlannedHours', 'tasks') })],
   rota_baseline_compare: [...fields('definitions', { varianceDays: DEFINITION, removedSinceBaseline: DEFINITION, addedSinceBaseline: DEFINITION, comparisonBasis: DEFINITION }),

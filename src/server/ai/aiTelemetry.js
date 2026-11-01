@@ -1,4 +1,5 @@
 import 'server-only';
+import { ANSWER_CHART_TYPES } from '../../domain/ai/answerChart.js';
 import { AI_CREDENTIAL_SOURCES } from '../../domain/ai/aiCredentialPolicy.js';
 import { AI_ERROR_CODES, aiErrorDefinition, isAiErrorCode } from '../../domain/ai/aiErrorCatalog.js';
 import { isKnownAiProfile } from '../../domain/ai/aiModelRegistry.js';
@@ -762,7 +763,7 @@ const ROUND_PURPOSES = new Set(['plan', 'tools', 'follow-up', 'select', 'repair'
 const PRESENTATION_MODES = new Set(['composed', 'narrative', 'unavailable']);
 const PRESENTATION_REASONS = new Set(['NO_CHOICE', 'LENGTH_UNAVAILABLE', 'SHEET_LIMIT', 'AUTHORIZATION', 'CITATION_SCOPE', 'BUDGET', 'TIMEOUT', 'PROVIDER', 'LENGTH', 'EMPTY', 'INVALID', 'INTERNAL',
   'DISABLED', 'NO_MODEL']);
-const CHART_TYPES = new Set(['bar', 'donut']);
+const CHART_TYPES = new Set(ANSWER_CHART_TYPES);
 const SAFE_ISSUE = /^[A-Z][A-Z0-9_]{0,40}$/;
 
 /**

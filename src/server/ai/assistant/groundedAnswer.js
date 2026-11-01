@@ -1356,7 +1356,8 @@ function completedAnalysisContext(turn, verdict) {
   const within = scope !== 'project' && projects.length === 1 ? projects[0] : null;
   // Sıralı satırlar: kişi (iş yükü), proje (portföy) ya da projelere göre görev grupları; gösterilen doğrulanmış sırayla.
   let rows = [];
-  for (const answer of grounded) {
+  const rowAnswers = turn.renderedRowParts ? turn.renderedRowParts.map((part) => grounded.find((answer) => (answer.index ?? 0) + 1 === part)).filter(Boolean) : grounded;
+  for (const answer of rowAnswers) {
     const { request } = answer;
     const tool = request.population?.tool;
     const projectGroups = tool === 'rota_task_analytics' && request.population?.groupBy === 'project';
@@ -1471,6 +1472,7 @@ async function presentVerdict(turn, verdict, compose) {
       return visual ? withChartNote(turn, verdict) : verdict;
     }
     const rendered = renderComposition(composition, validated);
+    turn.renderedRowParts = rendered.rowParts;
     // Model düzeninin ret kodu (varsa) telemetride kalır: sunucu düzeni onun yerine geçti.
     const issue = turn.trace.presentation?.issue ?? null;
     turn.trace.presentation = { mode: 'composed', server: true, reason, ...(issue ? { issue } : {}), blocks: rendered.blocks, chart: rendered.chart, charts: rendered.charts, said: rendered.said,
@@ -1511,6 +1513,7 @@ async function presentVerdict(turn, verdict, compose) {
   }
   turn.trace.presentation = { mode: 'composed', blocks: result.blocks, chart: result.chart, charts: result.charts, said: result.said, tables: result.tables, notes: result.notes,
     titled: result.titled, ms: composedMs, rejected, ...(result.chartInserted ? { chartInserted: true } : {}) };
+  turn.renderedRowParts = result.rowParts;
   const composed = { ...verdict, normalized: [result.text, ...input.notes].join('\n\n') };
   return visual && !result.charts ? withChartNote(turn, composed) : composed;
 }
@@ -1564,7 +1567,7 @@ async function finish(turn, settled, onText, selectedBy = 'model', { compose = t
   });
   verdict = bounded.verdict;
   const disclosure = bounded.disclosure;
-  if (bounded.presentation) turn.trace.presentation = bounded.presentation;
+  if (bounded.presentation) { turn.trace.presentation = bounded.presentation; turn.renderedRowParts = null; }
   const cited = ledger.summaries(verdict.citedIds);
   turn.trace.evidence = cited.length;
   const finalText = disclosure.text;
@@ -1655,9 +1658,9 @@ async function serverSelection(turn) {
  * Kabul edilen planın sunum niyeti (Aşama 4E): modelin türlü kararı (açık görselleştirme isteği, analitik özetin kapsamı
  * ve yönleri). Sunucu yalnızca bu alanları taşır; olgusal yetki kazandırmaz, sunum sözleşmesini değiştirir.
  */
-function presentationIntent(plan) {
+function presentationIntent(plan, today) {
   const analysis = plan?.analysis;
-  return Object.freeze({ visual: plan?.visual === true, analysis: analysis ? Object.freeze({ scope: analysis.scope, focus: Object.freeze(effectiveFocus(analysis)),
+  return Object.freeze({ visual: plan?.visual === true, analysis: analysis ? Object.freeze({ scope: analysis.scope, focus: Object.freeze(effectiveFocus(analysis, today)),
     ...(analysis.level ? { level: analysis.level } : {}) }) : null,
     window: analysis?.dateFrom || analysis?.dateTo ? Object.freeze({ ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) }) : null });
 }
@@ -2185,7 +2188,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
         }
         if (declared.request) {
           acceptPlan(turn, prepared.request, declared.language, parts);
-          turn.presentationIntent = presentationIntent(plan.plan);
+          turn.presentationIntent = presentationIntent(plan.plan, turn.context.today);
         }
         else {
           turn.declared = null;
@@ -2216,7 +2219,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
         }
         if (plan) {
           acceptPlan(turn, prepared.request, declared?.language, parts);
-          turn.presentationIntent = presentationIntent(plan.plan);
+          turn.presentationIntent = presentationIntent(plan.plan, turn.context.today);
         } else acceptRequest(turn, prepared.request);
       } else {
         prepared = prepareExecutionSet(calls, { catalog, permitted: turn.permittedTools, validateCall: requestCallValidator(turn, turn.request, derivedCalls(turn, turn.request)), limits,

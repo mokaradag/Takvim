@@ -1,4 +1,5 @@
 import { canonicalActualId } from '../identity/actualId.js';
+import { isIsoDay } from './isoDay.js';
 
 /**
  * Aşama 4E — takip sorularının SUNUCUYA AİT kanonik analiz bağlamı.
@@ -15,7 +16,6 @@ export const ANALYSIS_CONTEXT_SCOPES = Object.freeze(['self', 'team', 'person', 
 export const ANALYSIS_CONTEXT_LIMITS = Object.freeze({ maxSubjects: 2, maxRows: 10, maxFocus: 3 });
 const LEVELS = Object.freeze(['unit', 'department', 'directorate']);
 const FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'overdue', 'upcoming', 'workload', 'projects', 'schedule', 'critical']);
-const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'rows']);
 
 function identity(item) {
@@ -56,7 +56,7 @@ export function normalizeAnalysisContext(value) {
     if (value.within != null && (!within || within.type !== 'project' || !['self', 'team', 'all', 'person', 'projects'].includes(value.scope))) return null;
     const focus = value.focus == null ? [] : value.focus;
     if (!Array.isArray(focus) || focus.length > ANALYSIS_CONTEXT_LIMITS.maxFocus || focus.some((item) => !FOCUS.includes(item)) || new Set(focus).size !== focus.length) return null;
-    for (const key of ['dateFrom', 'dateTo']) if (value[key] != null && (typeof value[key] !== 'string' || !DAY.test(value[key]))) return null;
+    for (const key of ['dateFrom', 'dateTo']) if (value[key] != null && !isIsoDay(value[key])) return null;
     if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) return null;
     if (value.visual != null && typeof value.visual !== 'boolean') return null;
     return Object.freeze({ v: 1, scope: value.scope, ...(value.level ? { level: value.level } : {}), subjects, ...(within ? { within } : {}), focus: Object.freeze([...focus]),
