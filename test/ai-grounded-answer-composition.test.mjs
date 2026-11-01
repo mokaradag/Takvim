@@ -148,7 +148,7 @@ test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; ya
     stack.provider.enqueue(plan(), composer(() => ({ blocks: [{ type: 'say', items: ['P7'] }, { type: 'rows', source: 'T1' }] })),
       composer(() => ({ blocks: [{ type: 'say', items: ['P1', 'P2', 'P3', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }] })));
     const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
-    assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\. En uzun süredir geciken görev \*\*Haftalık durum toplantısı\*\* \(\*\*23 gün\*\*\)\. En kısa süredir geciken görev \*\*Kısmi kendi görevim\*\* \(\*\*1 gün\*\*\)\. Ayrıntıları aşağıdaki tabloda görebilirsiniz\. 【R1】/);
+    assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\. En uzun süredir geciken görev \*\*Haftalık durum toplantısı\*\* \(\*\*23 gün\*\*\), en kısa süredir geciken ise \*\*Kısmi kendi görevim\*\* \(\*\*1 gün\*\*\)\. Ayrıntıları aşağıdaki tabloda görebilirsiniz\. 【R1】/);
     const [line] = turnLines(logs);
     assert.deepEqual([line.context.presentation.mode, line.context.presentation.rejected, line.context.presentation.said], ['composed', 'UNKNOWN_PROPOSITION', 3]);
     assert.equal(line.context.escalation.kind, 'narrate');
@@ -207,7 +207,7 @@ test('Derin kipte düzen Derin oturumunda yürür ve düşünmeye yer bırakan p
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION, mode: 'deep' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.deepEqual(stack.provider.calls.map((call) => [call.model, call.maxOutputTokens]), [[DEEP.model, DEEP.maxOutputTokens], [DEEP.model, DEEP.maxOutputTokens]]);
-  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
+  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var ve ortalama gecikme \*\*11,3 gün\*\*\./);
 });
 
 test('kalan süre düzen penceresine yetmiyorsa düzen istenmez; doğrulanmış anlatım gösterilir', async (t) => {
@@ -274,7 +274,8 @@ test('İngilizce plan İngilizce olgu sayfası ve yanıt üretir', async (t) => 
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Show my overdue tasks.' })).assistantMessage;
   assert.equal(sheet.language, 'en');
   assert.equal(Object.hasOwn(sheet, 'facts'), false);
-  assert.match(answer.content, /^You currently have \*\*3\*\* overdue tasks\./);
+  assert.match(answer.content, /^You currently have \*\*3\*\* overdue tasks, with an average delay of \*\*11\\\.3 days\*\*\./);
+  assert.match(answer.content, /, and the shortest-overdue is \*\*Kısmi kendi görevim\*\* \(\*\*1 day\*\*\)\. Of these, \*\*2\*\* are more than a week overdue/);
   assert.match(answer.content, /\| Task \| Deadline \| Overdue days \|/);
 });
 

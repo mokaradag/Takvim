@@ -1400,13 +1400,16 @@ function compositionInput(turn, verdict) {
  * ve döndürülen satır sayısı kesin toplama eşit. Değer aynı doğrulanmış kanıtın zarfıdır; model ya da istek
  * bildirimi bu sayıyı üretemez. Anlatım, sayım ölçüsü istenmemiş liste yanıtında da "kaç" sorusunu bu sayıyla söyler.
  */
+const POPULATION_TOOLS = new Set(['rota_task_search', 'rota_portfolio_summary', 'rota_workload_summary']);
+
 function populationSizes(turn, answers) {
   const sizes = new Map();
   for (const answer of answers) {
     if (answer.verdict.kind !== 'grounded') continue;
     for (const entry of answer.entries || partEntries(turn)) {
       const payload = entry.payload;
-      if (entry.tool !== 'rota_task_search' || !answer.verdict.citedIds.includes(entry.id) || entry.args?.cursor != null) continue;
+      // Nüfusun tamamı kanıtta mı (tam, kesilmemiş, imleçsiz, dönen = kesin toplam): görev listesi, portföy ve iş yükü satırları.
+      if (!POPULATION_TOOLS.has(entry.tool) || !answer.verdict.citedIds.includes(entry.id) || entry.args?.cursor != null) continue;
       if (payload?.complete === true && payload.truncated !== true && Number.isSafeInteger(payload.totalCount) && payload.returnedCount === payload.totalCount) {
         sizes.set(entry.id, payload.totalCount);
       }

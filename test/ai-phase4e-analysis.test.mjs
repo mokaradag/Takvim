@@ -27,7 +27,7 @@ const { containmentText, createToolScope } = await import('../src/server/ai/tool
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
 const { normalizeAnalysisContext, analysisContextSummary } = await import('../src/domain/ai/analysisContext.js');
 const { normalizeAnswerChart, answerChartText, answerChartFence } = await import('../src/domain/ai/answerChart.js');
-const { analystPropositions } = await import('../src/domain/ai/groundedPropositions.js');
+const { analystPropositions, fluentParagraph } = await import('../src/domain/ai/groundedPropositions.js');
 const { buildComposition, defaultComposition, ensureChart, validateComposition, renderComposition } = await import('../src/domain/ai/groundedComposition.js');
 const { ANSWER_DETAILS, ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } = await import('../src/domain/ai/answerDetail.js');
 const { AnswerChart } = await import('../src/features/ai/assistant/AnswerChart.jsx');
@@ -243,7 +243,7 @@ test('ekip, bölüm ve proje analizi kendi kapsamında okur; yönetim kapsamı o
     const { ask } = phase4eConversation(t);
     const result = await ask({ text: 'ekibimin bu haftaki durumunu değerlendir', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'team', focus: ['overview', 'workload', 'overdue'] } } });
     assert.deepEqual(turnViolations(result, { assignee: 'team', workload: true, finish: 'stop' }), []);
-    assert.match(result.answer.content, /Ekibinizin/);
+    assert.match(result.answer.content, /Ekibinizde toplam \*\*2\*\* görev bulunuyor/);
     assert.match(result.answer.content, /Zeynep Kaya/);
     assert.equal(/Kısmi kendi görevim/.test(result.answer.content), false, 'kullanıcının kendi görevleri ekip analizine karışmaz');
   });
@@ -268,7 +268,8 @@ test('ekip, bölüm ve proje analizi kendi kapsamında okur; yönetim kapsamı o
       plan: { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['Radar Modernizasyonu'], focus: ['overview', 'overdue', 'workload'] } } });
     assert.deepEqual(turnViolations(result, { project: true, finish: 'stop' }), []);
     assert.ok(populationReads(result.log).every((row) => row.params.projectId), 'bütün bölümler aynı projeyle sınırlıdır');
-    assert.match(result.answer.content, /gerekçe: en yüksek gecikme/, 'öncelik önerisi kanıta dayalı gerekçesini söyler');
+    assert.match(result.answer.content, /En uzun süredir beklediği için ilk ele alınabilecek iş \*\*Haftalık durum toplantısı\*\* görünüyor|en uzun gecikme onda/,
+      'öncelik önerisi kanıta dayalı gerekçesini söyler');
   });
   await t.test('belirsiz proje adı sunucunun açıklaması', async (t) => {
     const { ask } = phase4eConversation(t);
@@ -372,25 +373,55 @@ test('paragrafa yazılan D# sunucu ayrıntısını paragrafın ardına koyar; b�
     return { result, presentation: line.context.presentation };
   };
   const ids = (view, kind, part) => view[kind].filter((item) => item.part === part).map((item) => item.id);
-  // Zayıf modelin gerçek düzeni (Haiku): son bölümün önermesi ve ayrıntısı aynı paragrafta.
-  let detailText = null;
+  // Zayıf modelin gerçek düzeni (Haiku): bölümün önermeleri ve ayrıntısı aynı paragrafta, ardından gösterge grafiği.
   const sub = async (name, layout) => { let out = null; await t.test(name, async (t) => { out = await run(t, layout); }); return out; };
   const accepted = await sub('kabul', (view) => {
-    const [last] = view.details.filter((item) => ids(view, 'propositions', item.part).length && item.part !== view.details[0].part);
-    detailText = last.text.split('**')[1];
-    return { blocks: [{ type: 'say', items: [...ids(view, 'propositions', 1), ...ids(view, 'charts', 1)] }, { type: 'chart', source: ids(view, 'charts', 1)[0], style: 'kpi' },
-      { type: 'say', items: [...ids(view, 'propositions', last.part), last.id] }] };
+    assert.ok(ids(view, 'propositions', 1).length && ids(view, 'details', 1).length && ids(view, 'charts', 1).length, 'sınama sayfası bölüm 1 önerme, ayrıntı ve grafik taşır');
+    return { blocks: [{ type: 'say', items: [...ids(view, 'propositions', 1), ids(view, 'details', 1)[0], ids(view, 'charts', 1)[0]] },
+      { type: 'chart', source: ids(view, 'charts', 1)[0], style: 'kpi' }] };
   });
   assert.equal(accepted.presentation.mode, 'composed');
   assert.notEqual(accepted.presentation.server, true, 'modelin düzeni kabul edildi (sunucu yedeği değil)');
   const content = accepted.result.answer.content;
-  assert.ok(content.indexOf(detailText) > content.indexOf('İlk ele alınabilecek iş'), 'ayrıntı paragrafın ardında');
+  const paragraph = content.indexOf('Açık **2** görevin');
+  const detail = content.indexOf('Ekibinizde toplam **2** görev bulunuyor');
+  assert.ok(paragraph === 0 && detail > paragraph && detail < content.indexOf('```rota-chart'), `ayrıntı paragrafın ardında, grafikten önce:\n${content}`);
+  assert.equal(content.split('Ekibinizde toplam').length - 1, 1, 'ayrıntı bir kez');
   // Başka bölümün ayrıntısı paragrafa karışamaz; aynı ayrıntı iki kez kullanılamaz.
   const mixed = await sub('bölüm karışımı', (view) => ({ blocks: [{ type: 'say', items: [...ids(view, 'propositions', 1), ids(view, 'details', 2)[0]] }] }));
   assert.equal(mixed.presentation.issue, 'PART_MIXED');
   const twice = await sub('yineleme', (view) => ({ blocks: [{ type: 'say', items: ids(view, 'propositions', 1) }, { type: 'details', source: ids(view, 'details', 1)[0] },
     { type: 'say', items: [ids(view, 'details', 1)[0]] }] }));
   assert.equal(twice.presentation.issue, 'DUPLICATE_SOURCE');
+});
+
+test('yanıt düzyazısı akıcıdır: aynı nüfusun önermeleri bağlanır, ayrıntı kendi bölümündedir, ölçüt yinelenmez', async (t) => {
+  await t.test('genel değerlendirme', async (t) => {
+    const { ask } = phase4eConversation(t, { composition: false });
+    const { answer } = await ask({ text: 'bu hafta işlerim açısından durumumu değerlendir',
+      plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'overdue', 'upcoming'], dateFrom: '2026-09-28', dateTo: '2026-10-04' } } });
+    const paragraphs = answer.content.split('\n\n');
+    // Gecikme payından sonra yakın termin aynı cümlede; genel görünümün ayrıntısı hemen ardından (yanıtın sonunda değil).
+    assert.equal(paragraphs[0], "Açık **6** görevin **3'ü** (**%50**) gecikmiş durumda; önümüzdeki yedi gün içinde de **1** açık görevin termini var. 【R1】");
+    assert.equal(paragraphs[1], "Sorumlusu olduğunuz toplam **7** görev bulunuyor. Bunların **1**'i tamamlanmış; tamamlanma oranı **%14**. 【R1】",
+      'analist cümlesinin söylediği açık/gecikmiş sayısı ayrıntıda yinelenmez; "Sorumlu: Ben" öznede');
+    assert.match(paragraphs[2], /^Şu anda \*\*3\*\* gecikmiş göreviniz var ve ortalama gecikme \*\*11,3 gün\*\*\. En uzun süredir geciken görev .+, en kısa süredir geciken ise .+\. Bunların \*\*2\*\*'si bir haftadan uzun süredir gecikmiş ve \*\*2\*\*'si de /);
+    assert.match(answer.content, /terminli \*\*1\*\* yapılacak ya da devam eden göreviniz var\./, 'tek satırlı sonuçta doğal sayım cümlesi');
+    assert.doesNotMatch(answer.content, /Eşleşen \*\*1\*\* görev bulundu/);
+    for (const paragraph of paragraphs) assert.ok(paragraph.split('(ölçüt:').length <= 2, `ölçüt paragrafta en çok bir kez: ${paragraph}`);
+  });
+  await t.test('portföy karşılaştırması', async (t) => {
+    const { ask } = phase4eConversation(t, { composition: false });
+    const { answer } = await ask({ text: 'projelerimi karşılaştır', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'projects', focus: ['projects'] } } });
+    // Tablo tek başına kalmaz: kapsama ve öndeki proje (sütun sütun istatistik listesi değil).
+    assert.match(answer.content, /^Listedeki \*\*4\*\* projenin hepsinde gecikmiş görev var\. \*\*Radar Modernizasyonu\*\*, açık görev \(\*\*6\*\*\), gecikmiş görev \(\*\*2\*\*\) ve yedi gün içinde terminli görev \(\*\*2\*\*\) sayısında en üstte\./);
+    assert.doesNotMatch(answer.content, /ortalaması|sütununda en/);
+  });
+  // Bağlaç yalnızca aynı kanıtın önermeleri arasındadır; başka kanıtın önermesi kendi cümlesiyle kalır.
+  const pressure = { kind: 'pressure', tone: 'warning', evidenceId: 'R1', markdown: 'A.', parts: ['a.'], fluent: { host: 'totals' } };
+  const urgency = { kind: 'urgency', tone: 'info', evidenceId: 'R2', markdown: 'B.', parts: ['b.'], fluent: { follow: { key: 'totals', also: ['; c'], plain: ['; c'] } } };
+  assert.equal(fluentParagraph([{ proposition: pressure }, { proposition: urgency }]), 'A. B.');
+  assert.equal(fluentParagraph([{ proposition: pressure }, { proposition: { ...urgency, evidenceId: 'R1' } }]), 'A; c.');
 });
 
 /* ── Analist önermeleri ─────────────────────────────────────────────── */

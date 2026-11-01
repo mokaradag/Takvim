@@ -124,7 +124,11 @@ test('equal-valued complete populations retain averages and overdue thresholds w
       const validated = validateComposition(sheet, coveringBlocks(sheet.view));
       assert.equal(validated.ok, true, JSON.stringify(validated.issues));
       const text = assistantMarkdownText(renderComposition(sheet, validated).text, { rotaData: true });
-      assert.ok(text.includes(average.text) && text.includes(threshold.text), text);
+      // Akıcı paragraf: ortalama sayım cümlesine bağlanır, eşik kümeyi "bunların" ile sürdürür (değerler aynıdır).
+      const joined = locale === 'en'
+        ? [`, with an average delay of ${delay} days.`, tone === 'warning' ? 'All of them are more than a week overdue' : 'None of them is more than a week overdue']
+        : [` var ve ortalama gecikme ${delay} gün.`, tone === 'warning' ? 'Bunların tamamı bir haftadan uzun süredir gecikmiş' : 'Bunların hiçbirinin gecikmesi bir haftayı aşmıyor'];
+      assert.ok(joined.every((phrase) => text.includes(phrase)), text);
     }
   }
   assert.deepEqual(tablePropositions({ ...syntheticTable([9, 9, 9], { complete: false }), distribution: false, locale: 'en' }), []);
@@ -161,7 +165,10 @@ test('verified deadline statistics survive unrelated progress narration and mixe
         const validated = validateComposition(sheet, { blocks: [{ type: 'say', items: [average.id, ...dates.map((item) => item.id)] }, { type: 'rows', source: 'T1' }] });
         assert.equal(validated.ok, true, JSON.stringify(validated.issues));
         const text = assistantMarkdownText(renderComposition(sheet, validated).text);
-        assert.ok(text.includes(average.text) && dates.every((item) => text.includes(item.text)), text);
+        // Aynı sütunun iki ucu tek cümledir: en erken termin ve (en erken yinelenmeden) en geç termin.
+        const range = locale === 'en' ? 'The earliest deadline is 7 September 2026 (Haftalık durum toplantısı), and the latest deadline is 29 September 2026.'
+          : 'En erken termin 7 Eylül 2026 (Haftalık durum toplantısı), en geç termin ise 29 Eylül 2026.';
+        assert.ok(text.includes(average.text) && text.includes(range), text);
       } else {
         assert.ok(dates[0].text.includes(locale === 'en' ? '5 September 2026' : '5 Eylül 2026'), 'completed tasks make the deadline range independent of overdue-day extrema');
       }
@@ -274,7 +281,7 @@ test('başlık ve not kutusu yalnızca sunucu kimlikleridir; ton sunucunundur, m
     { type: 'note', items: ['P5'] }] });
   assert.equal(validated.ok, true);
   const rendered = renderComposition(composition, validated);
-  assert.ok(rendered.text.startsWith('#### Gecikmiş görevleriniz\n\nŞu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**). Gecikmelerin ortalaması **11,3 gün**.'), rendered.text);
+  assert.ok(rendered.text.startsWith("#### Gecikmiş görevleriniz\n\nŞu anda **3** gecikmiş göreviniz var ve ortalama gecikme **11,3 gün**. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**). Bunların **2**'si **RDR · Radar Modernizasyonu** projesinde."), rendered.text);
   assert.ok(rendered.text.endsWith("> [!warning]\n> **Dikkat:** **3** görevin **2**'si bir haftadan uzun süredir gecikmiş. 【R1】"), rendered.text);
   assert.equal(rendered.said, 5);
   // Zayıf modelin gözlenen düzeni: vurgulanan önerme paragrafta da söylenmiş. Önerme yalnızca kutuda kalır, cümle yinelenmez.
@@ -312,7 +319,7 @@ test('Örnek A çizimi: model yalnızca seçer; cümle, değer, yönlendirme, ö
   const validated = validateComposition(composition, { blocks: [{ type: 'say', items: ['P1', 'P2', 'P3', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }] });
   assert.equal(validated.ok, true);
   const rendered = renderComposition(composition, validated);
-  assert.ok(rendered.text.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**). En kısa süredir geciken görev **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz. 【R1】\n\n_Ölçüt: Termin: Gecikmiş; Sorumlu: Ben_\n\n| Görev |'), rendered.text);
+  assert.ok(rendered.text.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz. 【R1】\n\n_Ölçüt: Termin: Gecikmiş; Sorumlu: Ben_\n\n| Görev |'), rendered.text);
   assert.equal(rendered.text.includes('Eşleşen'), false, 'söylenen sayım önermesi ayrıntısının yerine geçer');
   assert.deepEqual([rendered.said, rendered.tables, rendered.citedIds], [3, 1, ['R1']]);
   // Önerme söylenmezse sunucunun ayrıntısı eksiksiz eklenir.
@@ -360,7 +367,7 @@ test('Örnek A uçtan uca: tek araçsız düzen turu, insan anlatımı ve deği�
   stack.provider.enqueue(planCall(OVERDUE_REQUEST), composer(() => ({ blocks: [{ type: 'say', items: ['P1', 'P2', 'P3', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }] }), (view) => { sheet = view; }));
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION_A })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
-  assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**). En kısa süredir geciken görev **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz.'));
+  assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz.'));
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD.model, STANDARD.model]);
   const compose = stack.provider.calls[1];
   assert.deepEqual(compose.messages.map((message) => message.role), ['system', 'user']);
@@ -393,7 +400,7 @@ test('sayım ölçüsü bildirilmemiş listede (zayıf modelin gözlenen planı)
     ['maximum', 'En uzun süredir geciken görev Haftalık durum toplantısı (23 gün).'],
     ['minimum', 'En kısa süredir geciken görev Kısmi kendi görevim (1 gün).']
   ]);
-  assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**). En kısa süredir geciken görev **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz. 【R1】'));
+  assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz. 【R1】'));
   assert.deepEqual(answer.evidence.map((item) => item.id), ['R1']);
   // Sayfanın bir kısmı: kanıtın kesin toplamı satır sayısından büyükse sayım ve uç önerilmez.
   const partial = createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true' }, seed: rotaToolSeed() });

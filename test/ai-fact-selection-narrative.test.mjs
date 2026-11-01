@@ -109,7 +109,8 @@ test('list requests render lists, a table layout renders a table, and value requ
   assert.match(people.normalized, /^\| Görev \| Termin \| Gecikme \(gün\) \| Sorumlular \|$/m);
   const analytics = await callRotaTool(stack, AYSE, 'rota_task_analytics', { deadline: 'overdue', assignee: 'me' });
   const summary = verifyRequested(analytics.ledger, ['data.totals.total'], { operation: 'value', metrics: ['tasks.total'], ...overdueMine });
-  assert.match(summary.normalized, /^Görebildiğiniz görevler arasında toplam \*\*3\*\* görev bulunuyor \(ölçüt: .*Gecikmiş.*\)\. 【R1】$/);
+  // Kendi görevlerinde özne cümlededir ("Sorumlusu olduğunuz"); ölçüt yalnızca kalan süzgeci (gecikmiş) söyler.
+  assert.match(summary.normalized, /^Sorumlusu olduğunuz toplam \*\*3\*\* görev bulunuyor \(ölçüt: Termin: Gecikmiş\)\. 【R1】$/);
 });
 
 test('a criterion shared by every row is stated once, never repeated on each row', async (t) => {

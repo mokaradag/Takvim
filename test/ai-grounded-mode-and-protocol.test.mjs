@@ -644,7 +644,8 @@ test('a declared aggregate that the population tool cannot carry is refused befo
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Kaç devam eden görevim var?' })).assistantMessage;
   assert.equal(sqlAtRepair, 0, 'doğrulanamayacak istek için SQL çalışmaz');
   assert.equal(answer.finishReason, 'stop');
-  assert.match(answer.content, new RegExp(`\\*\\*${expected}\\*\\* devam eden görev bulunuyor \\(ölçüt: Sorumlu: Ben\\)`));
+  // Kendi görevlerinde sorumlu koşulu öznededir ("Sorumlusu olduğunuz"), ölçütte yinelenmez.
+  assert.match(answer.content, new RegExp(`^Sorumlusu olduğunuz \\*\\*${expected}\\*\\* devam eden görev bulunuyor\\. 【R1】`));
   const [trace] = turnTraces(logs);
   assert.deepEqual([trace.selectedBy, ...trace.rounds.map((round) => round.purpose)], ['server', 'plan', 'declaration']);
   assert.deepEqual([trace.toolCalls, trace.escalated], [1, false]);

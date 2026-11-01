@@ -11,7 +11,7 @@ import {
   renderGroupRows
 } from './evidenceNarrative.js';
 import { escapedFactText } from './evidenceFacts.js';
-import { analystPropositions, countProposition, noteLabel, pointerSentence, populationProposition, tablePropositions, titleCandidate } from './groundedPropositions.js';
+import { analystPropositions, countProposition, fluentParagraph, noteLabel, pointerSentence, populationProposition, tablePropositions, titleCandidate } from './groundedPropositions.js';
 import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from './answerDetail.js';
 
 /** Anlatımın en az önerme sayısı: sayfada bu kadar önerme varsa düzen en az bu kadarını söyler (azsa hepsini). */
@@ -305,14 +305,18 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           viewCharts.push({ id: chartId, part: ordinal, title: kpi.title, types: kpi.types });
         }
       }
-      const detailText = renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout });
+      // Tek satırlık görev sonucunda sayım, ölçüt listesi yerine doğal cümledir ("Ekibinizde şu anda **1** gecikmiş görev var.").
+      const single = !countId && totalFact && group.tool === 'rota_task_search' && !multi.size && [...group.collections.values()].some((rows) => rows.size === 1);
+      const lead = single ? countProposition(group, totalFact, locale, null)?.markdown ?? null : null;
+      const detailText = renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, lead });
       if (detailText) {
         if (details.size >= COMPOSITION_LIMITS.maxDetails) { overflow = true; continue; }
         const id = `D${details.size + 1}`;
         const ownedTables = [...tables.values()].filter((table) => table.group === group);
         // Sayım önermesinin yerine geçtiği ayrıntıda zorunlu zarf notları (gösterilen kısım, eksiklik) önermeyle birlikte çizilir.
         const notices = countId ? renderEnvelopeSentences(group, { locale, empty: presentation.empty || [], only: ['returnedCount', 'complete', 'truncated'] }) : [];
-        details.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, text: detailText, covers: countId, notices: Object.freeze(notices) }));
+        details.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, text: detailText, covers: countId, notices: Object.freeze(notices),
+          source: Object.freeze({ group, empty: presentation.empty || [], layout: presentation.layout, lead }) }));
         for (const table of ownedTables) tables.set(table.id, Object.freeze({ ...table, detail: id }));
         if (!countId) viewDetails.push({ id, part: ordinal, text: clip(renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, cite: false }), COMPOSITION_LIMITS.maxValueChars) });
       }
@@ -580,7 +584,12 @@ export function defaultComposition(composition) {
   for (const part of parts.slice(0, COMPOSITION_LIMITS.maxSayBlocks)) {
     const title = [...render.titles.values()].find((item) => item.part === part);
     if (title) blocks.push({ type: 'title', source: title.id });
-    const said = [...render.propositions.values()].filter((item) => item.part === part).slice(0, Math.min(contract.maxNarrated, COMPOSITION_LIMITS.maxSayItems)).map((item) => item.id);
+    // Tablosu çizilen bölümde döküm cümlesi tabloyu yineler: yalnızca bölümün asgari anlatımı için gerekiyorsa söylenir.
+    const tabled = [...render.tables.values()].some((table) => table.part === part);
+    const available = [...render.propositions.values()].filter((item) => item.part === part);
+    const preferred = tabled && available.filter((item) => item.kind !== 'breakdown').length >= Math.min(contract.minNarrated, available.length)
+      ? available.filter((item) => item.kind !== 'breakdown') : available;
+    const said = preferred.slice(0, Math.min(contract.maxNarrated, COMPOSITION_LIMITS.maxSayItems)).map((item) => item.id);
     if (said.length) blocks.push({ type: 'say', items: said });
     // Analitik genel görünümün göstergeleri (KPI) ayrıntılı yanıtta ya da görselleştirme isteğinde gösterilir.
     const kpi = !chart && normalizeAnswerDetail(render.detail) === 'detailed' ? [...render.charts.values()].find((item) => item.part === part && item.types[0] === 'kpi') : null;
@@ -625,7 +634,9 @@ const citation = (ids) => [...new Set(ids)].map((id) => `【${id}】`).join('');
 export function renderComposition(composition, validated) {
   const { render } = composition;
   const locale = render.locale;
+  // Çizilen her parça bölümüyle tutulur: modelin yerleştirmediği ayrıntı kendi bölümünün içine girer (yanıtın sonuna değil).
   const out = [];
+  const emit = (text, part) => { if (text) out.push({ text, part }); };
   const cited = [];
   let chart = null;
   let charts = 0;
@@ -638,13 +649,31 @@ export function renderComposition(composition, validated) {
   const coveredBy = new Map([...render.details.values()].filter((detail) => detail.covers && saidIds.has(detail.covers)).map((detail) => [detail.covers, detail]));
   // Önermesi söylenen ayrıntı hiçbir konumda yeniden yazılmaz.
   for (const detail of coveredBy.values()) shown.add(detail.id);
-  const showDetail = (id) => {
+  // Söylenen önermelerin ölçüleri aynı kanıtın ayrıntısında yinelenmez (ör. analist cümlesindeki açık/gecikmiş sayı).
+  const stated = new Map();
+  for (const id of saidIds) {
+    const proposition = render.propositions.get(id);
+    for (const metric of proposition.fluent?.states || []) {
+      if (!stated.has(proposition.evidenceId)) stated.set(proposition.evidenceId, new Set());
+      stated.get(proposition.evidenceId).add(metric);
+    }
+  }
+  const detailText = (detail) => {
+    const omit = stated.get(detail.evidenceId);
+    return omit?.size && detail.source ? renderGroupDetails(detail.source.group, { locale, empty: detail.source.empty, layout: detail.source.layout, lead: detail.source.lead, omitMetrics: omit })
+      : detail.text;
+  };
+  const pending = [];
+  const showDetail = (id, place = true) => {
     if (!id || shown.has(id)) return;
     const detail = render.details.get(id);
     if (!detail) return;
-    out.push(detail.text);
-    cited.push(detail.evidenceId);
     shown.add(id);
+    const text = detailText(detail);
+    if (!text) return;
+    cited.push(detail.evidenceId);
+    if (place) emit(text, detail.part);
+    else pending.push({ text, part: detail.part });
   };
   // Çizilecek grafikler önceden belirlenir: yönlendirme yalnızca gerçekten çizilen bloğa yazılır.
   const fences = new Map();
@@ -657,45 +686,48 @@ export function renderComposition(composition, validated) {
   }
   const rowStyles = new Map(validated.blocks.filter((block) => block.type === 'rows').map((block) => [block.source, block.style]));
   const chartStyles = new Map(validated.blocks.filter((block) => block.type === 'chart').map((block) => [block.source, block.style]));
+  const partOf = (id) => render.propositions?.get(id)?.part ?? render.tables.get(id)?.part ?? render.charts.get(id)?.part ?? null;
   for (const block of validated.blocks) {
     if (block.type === 'say') {
-      const sentences = [];
+      // Paragraf sunucunun akıcı düzyazısıdır: aynı nüfusun önermeleri bağlaçla birleşir (§ fluentParagraph).
+      const entries = [];
       const sources = [];
       for (const id of block.items) {
         const proposition = render.propositions?.get(id);
         if (proposition) {
-          sentences.push(proposition.markdown, ...(coveredBy.get(id)?.notices || []));
+          entries.push({ proposition }, ...(coveredBy.get(id)?.notices || []).map((text) => ({ text })));
           sources.push(proposition.evidenceId);
           said += 1;
         } else if (render.tables.has(id)) {
-          sentences.push(pointerSentence({ type: 'rows', style: rowStyles.get(id) }, locale));
+          entries.push({ text: pointerSentence({ type: 'rows', style: rowStyles.get(id) }, locale) });
         } else if (fences.has(id)) {
-          sentences.push(pointerSentence({ type: 'chart', chartType: chartStyles.get(id), distribution: render.charts.get(id).types.includes('donut') }, locale));
+          entries.push({ text: pointerSentence({ type: 'chart', chartType: chartStyles.get(id), distribution: render.charts.get(id).types.includes('donut') }, locale) });
         }
       }
-      if (!sentences.length) continue;
-      out.push(`${sentences.join(' ')}${sources.length ? ` ${citation(sources)}` : ''}`);
+      if (!entries.length) continue;
+      emit(`${fluentParagraph(entries, locale)}${sources.length ? ` ${citation(sources)}` : ''}`, partOf(block.items[0]));
       cited.push(...sources);
     } else if (block.type === 'title') {
-      out.push(render.titles.get(block.source).markdown);
+      const title = render.titles.get(block.source);
+      emit(title.markdown, title.part);
       titled = true;
     } else if (block.type === 'note') {
       const items = block.items.map((id) => render.propositions.get(id));
       const tones = new Set(items.map((item) => item.tone || 'info'));
       const tone = tones.size === 1 ? [...tones][0] : 'info';
-      const sentences = items.flatMap((item) => [item.markdown, ...(coveredBy.get(item.id)?.notices || [])]);
+      const sentence = fluentParagraph(items.flatMap((item) => [{ proposition: item }, ...(coveredBy.get(item.id)?.notices || []).map((text) => ({ text }))]), locale);
       const sources = items.map((item) => item.evidenceId);
       said += items.length;
       notes += 1;
       // Sunucunun not kutusu: tonu önermelerin sunucu tonudur; etiket ve cümleler sunucunundur.
-      out.push(`> [!${tone}]\n> **${noteLabel(tone, locale)}:** ${sentences.join(' ')} ${citation(sources)}`);
+      emit(`> [!${tone}]\n> **${noteLabel(tone, locale)}:** ${sentence} ${citation(sources)}`, items[0].part);
       cited.push(...sources);
     } else if (block.type === 'rows') {
       const table = render.tables.get(block.source);
       showDetail(table.detail);
       const detail = render.details.get(table.detail);
-      const stated = detail && coveredBy.get(detail.covers) === detail ? render.propositions.get(detail.covers).markdown : detail?.text || '';
-      out.push(renderGroupRows(table.group, table.collection, { locale, layout: block.style, stated }));
+      const statedText = detail && coveredBy.get(detail.covers) === detail ? render.propositions.get(detail.covers).markdown : detail ? detailText(detail) : '';
+      emit(renderGroupRows(table.group, table.collection, { locale, layout: block.style, stated: statedText }), table.part);
       cited.push(table.evidenceId);
       tables += 1;
     } else if (block.type === 'details') {
@@ -705,15 +737,20 @@ export function renderComposition(composition, validated) {
       if (!fence) continue;
       const candidate = render.charts.get(block.source);
       if (candidate.table != null) showDetail(render.tables.get(candidate.table)?.detail);
-      out.push(fence);
+      emit(fence, candidate.part);
       cited.push(candidate.evidenceId);
       chart = block.style;
       charts += 1;
     }
   }
-  // Bütün ayrıntılar sunucudan gelir; modelin atlaması kapsamı ya da kaydı düşüremez.
-  for (const detail of render.details.values()) {
-    showDetail(detail.id);
+  // Bütün ayrıntılar sunucudan gelir; modelin atlaması kapsamı ya da kaydı düşüremez. Yerleştirilmeyen ayrıntı kendi
+  // bölümünün son parçasından sonra (bölümün parçası yoksa sonraki bölümden önce) çizilir; bölüm sırası korunur.
+  for (const detail of render.details.values()) showDetail(detail.id, false);
+  for (const item of pending) {
+    const last = out.map((chunk) => chunk.part).lastIndexOf(item.part);
+    const later = out.findIndex((chunk) => chunk.part != null && item.part != null && chunk.part > item.part);
+    const at = last >= 0 ? last + 1 : later >= 0 ? later : out.length;
+    out.splice(at, 0, item);
   }
-  return { text: out.join('\n\n'), citedIds: [...new Set(cited)], chart, charts, blocks: validated.blocks.length, said, tables, notes, titled };
+  return { text: out.map((chunk) => chunk.text).join('\n\n'), citedIds: [...new Set(cited)], chart, charts, blocks: validated.blocks.length, said, tables, notes, titled };
 }
