@@ -19,6 +19,7 @@
  */
 import { appendPrivateDiagnostic } from './private-diagnostic-trace.mjs';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -39,9 +40,8 @@ const summary = { tier: TIER, model: EXPECTED_MODEL, cases: 0, passed: 0, failed
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
 const { analysisSuggestion } = await import('../src/server/ai/tools/analysisPlan.js');
-// Bu koşunun kullanımı: defterde daha önceki koşuların satırları sayılmaz (yeniden koşu aynı defteri kullanabilir).
-const LEDGER_START = process.env.PLANNER_CLAUDE_LOG && existsSync(process.env.PLANNER_CLAUDE_LOG)
-  ? readFileSync(process.env.PLANNER_CLAUDE_LOG, 'utf8').split('\n').filter(Boolean).length : 0;
+// Each invocation owns its rows even when earlier or concurrent runs share the append-only ledger.
+const RUN_ID = randomUUID();
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
 
 /* ── Tier B: planlayıcı ───────────────────────────────────────────── */
@@ -213,9 +213,9 @@ export function pickCases(items, only = ONLY) {
 
 /* ── Kayıt ve özet ───────────────────────────────────────────────── */
 
-export function usageTotals({ log = process.env.PLANNER_CLAUDE_LOG, start = LEDGER_START } = {}) {
-  const rows = log && existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).slice(start)
-    .map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter((row) => row?.usage) : [];
+export function usageTotals({ log = process.env.PLANNER_CLAUDE_LOG, runId = RUN_ID } = {}) {
+  const rows = log && existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean)
+    .map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter((row) => row?.runId === runId && row?.usage) : [];
   const sum = (key) => rows.reduce((total, row) => total + (row.usage[key] ?? 0), 0);
   return { calls: rows.length, forcedRetries: rows.filter((row) => row.forcedToolCall).length, schemaRejected: rows.filter((row) => row.schemaRejected).length, forcedText: rows.filter((row) => row.forcedText).length, input: sum('input_tokens'), cacheWrite: sum('cache_creation_input_tokens'), cacheRead: sum('cache_read_input_tokens'), output: sum('output_tokens'),
     thinking: rows.reduce((total, row) => total + (row.usage.output_tokens_details?.thinking_tokens ?? 0), 0), models: [...new Set(rows.flatMap((row) => row.models || []))] };
@@ -237,6 +237,7 @@ const direct = (() => {
 
 if (direct) {
   if (!process.env.PLANNER_CLAUDE_LOG) throw new Error('PLANNER_CLAUDE_LOG gerekli: belirteç bütçesi ve önbellek kayıt dosyasıyla izlenir.');
+  process.env.PLANNER_CLAUDE_RUN_ID = RUN_ID;
   test.after(() => {
     const totals = usageTotals();
     const report = { ...summary, usage: totals };

@@ -150,9 +150,9 @@ function totalsSentences(entries, { scope, locale, qualifiers }) {
     sentences.push(locale === 'en' ? `${capitalize(scope)} ${has} ${strong(narrativeValue(total, locale))} ${englishTasks(total)} in total${qualifiers}.`
       : `${capitalize(scope)} toplam ${strong(narrativeValue(total, locale))} görev bulunuyor${qualifiers}.`);
     // Tek bölüm "tamamlanmış" ve sıfırsa "0'ı tamamlanmış; tamamlanma oranı %0" yerine doğal olumsuz cümle.
-    if (parts.length === 1 && parts[0] === 'done' && byKey.get('done').value === 0 && (!rate || !isCount(rate) || rate.value === 0)) {
+    if (total.value > 0 && parts.length === 1 && parts[0] === 'done' && byKey.get('done').value === 0 && (!rate || !isCount(rate) || rate.value === 0)) {
       sentences.push(locale === 'en' ? 'None of them is completed yet.' : 'Bunların hiçbiri henüz tamamlanmamış.');
-    } else if (parts.length) {
+    } else if (total.value > 0 && parts.length) {
       const clauses = parts.map((key) => (locale === 'en' ? `${strong(narrativeValue(byKey.get(key), locale))} ${TOTAL_PREDICATES[key][1]}`
         : `${strong(narrativeValue(byKey.get(key), locale))}${turkishPossessiveSuffix(byKey.get(key).value)} ${TOTAL_PREDICATES[key][0]}`));
       const rateClause = rateText ? (locale === 'en' ? `; the completion rate is ${rateText}` : `; tamamlanma oranı ${rateText}`) : '';
@@ -240,7 +240,7 @@ function recordSentences(record, locale) {
     if (late) {
       // Proje ve gecikme tek cümlede: "**P** projesindeki **X** **15** gündür gecikmiş."
       used.add(late);
-      sentences.push(locale === 'en' ? `The ${subject} task in the ${project} project is ${strong(narrativeValue(late.fact, locale))} days overdue.`
+      sentences.push(locale === 'en' ? `The ${subject} task in the ${project} project is ${strong(narrativeValue(late.fact, locale))} ${late.fact.value === 1 ? 'day' : 'days'} overdue.`
         : `${project} projesindeki ${subject} ${strong(narrativeValue(late.fact, locale))} gündür gecikmiş.`);
     } else {
       sentences.push(locale === 'en' ? `${named ? `The ${subject} task` : 'The task'} belongs to the ${project} project.`
@@ -249,7 +249,7 @@ function recordSentences(record, locale) {
   }
 
   const overdue = take((rel, fact) => rel === 'overdueDays' && isCount(fact))[0];
-  if (overdue) sentences.push(locale === 'en' ? `It is ${strong(narrativeValue(overdue.fact, locale))} days overdue.` : `Görev ${strong(narrativeValue(overdue.fact, locale))} gündür gecikmiş.`);
+  if (overdue) sentences.push(locale === 'en' ? `It is ${strong(narrativeValue(overdue.fact, locale))} ${overdue.fact.value === 1 ? 'day' : 'days'} overdue.` : `Görev ${strong(narrativeValue(overdue.fact, locale))} gündür gecikmiş.`);
 
   const totals = take((rel, fact) => {
     const parts = rel.split('.');

@@ -1453,7 +1453,7 @@ export function presentationRoute({ compose, composeAnswers, visual, analytical 
  * yeniden gönderilmeden önce güncel yetki doğrulanır. Düzen kurulamazsa ya da doğrulanamazsa doğrulanmış
  * belirlenimci anlatım değişmeden kalır; kaynaklar, kapsam ve kalıcı kanıt aynıdır.
  */
-async function presentVerdict(turn, verdict, compose) {
+export async function presentVerdict(turn, verdict, compose) {
   // Açık görselleştirme isteği model düzeni kapalıyken de sunucunun belirlenimci düzeniyle grafik çizer (model çağrılmaz).
   const visual = turn.presentationIntent?.visual === true;
   // Analitik özet de sunucunun belirlenimci düzeniyle analist önermelerini anlatır (model düzeni kapalıyken de).
@@ -1475,6 +1475,10 @@ async function presentVerdict(turn, verdict, compose) {
       return visual ? withChartNote(turn, verdict) : verdict;
     }
     const rendered = renderComposition(composition, validated);
+    if (!rendered.citedIds.every((id) => verdict.citedIds.includes(id))) {
+      turn.trace.presentation = { mode: 'narrative', reason: 'CITATION_SCOPE' };
+      return visual ? withChartNote(turn, verdict) : verdict;
+    }
     turn.renderedRowParts = rendered.rowParts;
     // Model düzeninin ret kodu (varsa) telemetride kalır: sunucu düzeni onun yerine geçti.
     const issue = turn.trace.presentation?.issue ?? null;
@@ -1512,7 +1516,7 @@ async function presentVerdict(turn, verdict, compose) {
       turn.trace.narrationRejected = result.issue || result.reason;
       return NARRATE_DEEP;
     }
-    return result.ok ? verdict : serverLayout(result.reason);
+    return serverLayout(result.ok ? 'CITATION_SCOPE' : result.reason);
   }
   turn.trace.presentation = { mode: 'composed', blocks: result.blocks, chart: result.chart, charts: result.charts, said: result.said, tables: result.tables, notes: result.notes,
     titled: result.titled, ms: composedMs, rejected, ...(result.chartInserted ? { chartInserted: true } : {}) };

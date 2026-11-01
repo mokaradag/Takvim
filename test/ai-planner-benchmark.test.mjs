@@ -1267,6 +1267,47 @@ test('Claude diagnostic trace persists safe metadata without private model text'
   if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600);
 });
 
+test('Claude diagnostic trace failures preserve successful stdout and billed usage without disclosing paths', async (t) => {
+  const { mkdirSync, symlinkSync, writeFileSync } = await import('node:fs');
+  for (const target of ['missing-parent', 'directory', ...(process.platform !== 'win32' ? ['symlink'] : [])]) await t.test(target, async (t) => {
+    const cli = await claudeCommandFixture(t);
+    const privatePath = `${cli.dir}/PRIVATE_TRACE_DESTINATION`;
+    if (target === 'directory') mkdirSync(privatePath);
+    if (target === 'symlink') { writeFileSync(`${cli.dir}/destination`, 'unchanged'); symlinkSync(`${cli.dir}/destination`, privatePath); }
+    const invocation = cli.start({ PLANNER_CLAUDE_TRACE: target === 'missing-parent' ? `${privatePath}/trace.jsonl` : privatePath });
+    cli.release();
+    const reply = await invocation.done;
+    assert.equal(reply.text, 'ok');
+    assert.equal(reply.error, undefined);
+    assert.equal(reply.usage.output_tokens, 1);
+    assert.equal(cli.rows().filter((row) => row.usage).length, 1);
+    assert.equal(invocation.stderr(), 'PRIVATE_DIAGNOSTIC_WRITE_FAILED\n');
+    if (target === 'symlink') assert.equal(readFileSync(`${cli.dir}/destination`, 'utf8'), 'unchanged');
+  });
+});
+
+test('Claude qualification concurrent calls share a ledger without sharing run usage', async (t) => {
+  const { appendFileSync } = await import('node:fs');
+  const { usageTotals } = await import('../scripts/phase4e-qualification.mjs');
+  const cli = await claudeCommandFixture(t);
+  appendFileSync(cli.log, `${JSON.stringify({ runId: 'old-run', models: ['old-model'], usage: { output_tokens: 999, output_tokens_details: { thinking_tokens: 77 } } })}\n`);
+  const first = cli.start({ PLANNER_CLAUDE_RUN_ID: 'run-one' });
+  await cli.waitFor(() => cli.count() === 1);
+  const second = cli.start({ PLANNER_CLAUDE_RUN_ID: 'run-two' });
+  await cli.waitFor(() => cli.waiting());
+  cli.release();
+  assert.equal((await first.done).text, 'ok');
+  assert.equal((await second.done).text, 'ok');
+  assert.deepEqual(cli.rows().filter((row) => row.reserved).map((row) => row.runId), ['run-one', 'run-two']);
+  assert.deepEqual(cli.rows().filter((row) => row.usage).map((row) => row.runId), ['old-run', 'run-one', 'run-two']);
+  for (const runId of ['run-one', 'run-two']) {
+    const usage = usageTotals({ log: cli.log, runId });
+    assert.deepEqual({ calls: usage.calls, input: usage.input, output: usage.output, thinking: usage.thinking, models: usage.models }, {
+      calls: 1, input: 10, output: 1, thinking: 0, models: ['claude-haiku-4-5-20251001']
+    });
+  }
+});
+
 async function claudeCommandFixture(t, { reuse = false, events = null, newline = true, descendant = false, standalone = false, payload = null, executionDelayMs = 0, commandTimeoutMs = 8000, ...limits } = {}) {
   const { spawn, spawnSync } = await import('node:child_process');
   const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
@@ -1354,7 +1395,7 @@ async function claudeCommandFixture(t, { reuse = false, events = null, newline =
     });
     children.push({ child, done });
     child.stdin.end(JSON.stringify(payload || { messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }], tools: [], toolChoice: 'none' }));
-    return { child, done };
+    return { child, done, stderr: () => err };
   };
   return { start, kill, waitFor, log, dir, adapter, model, command: '"' + process.execPath + '" "' + adapter + '" "' + model + '"', descendantPid: () => Number(readFileSync(path.join(dir, 'descendant'), 'utf8')), release: () => writeFileSync(release, 'go'),
     count: () => readdirSync(entered).length,

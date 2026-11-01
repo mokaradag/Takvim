@@ -528,6 +528,7 @@
      },
      "expect": {
       "project": true,
+      "chart": true,
       "finish": "stop"
      }
     }

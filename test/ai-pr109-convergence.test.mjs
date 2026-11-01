@@ -3,15 +3,17 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { AYSE, MEHMET, ZEYNEP, LEAD, PROJECTS, TASKS, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { AYSE, MEHMET, ZEYNEP, LEAD, PROJECTS, TASKS, callRotaTool, callRotaTools, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { createAiStack } from './helpers/aiStack.mjs';
-import { phase4eConversation, populationReads } from './helpers/phase4eScenario.mjs';
+import { phase4eConversation, populationReads, turnViolations } from './helpers/phase4eScenario.mjs';
 import { verifyRequested } from './helpers/requestScenario.mjs';
+import { compositionView, coveringBlocks } from './helpers/compositionScenario.mjs';
 
 const { analysisSchema, ANALYSIS_LIMITS, analysisSuggestion, expandAnalysis, parseAnalysis } = await import('../src/server/ai/tools/analysisPlan.js');
 const { buildComposition, defaultComposition, renderComposition, validateComposition, COMPOSITION_LIMITS } = await import('../src/domain/ai/groundedComposition.js');
 const { analystPropositions } = await import('../src/domain/ai/groundedPropositions.js');
 const { ANSWER_DETAIL_CONTRACT } = await import('../src/domain/ai/answerDetail.js');
+const { renderVerifiedNarrative } = await import('../src/domain/ai/evidenceNarrative.js');
 const plan = (analysis) => ({ intent: 'rota', language: 'tr', analysis });
 const call = (arguments_) => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: arguments_ }] });
 
@@ -222,4 +224,163 @@ test('109: trace persistence strips sensitive values and restricts new and exist
       if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('109: zero totals never refer to completion subsets; positive totals retain natural none-completed prose', async (t) => {
+  for (const total of [0, 1]) for (const locale of ['tr', 'en']) for (const generic of [false, true]) {
+    await t.test(`${total}/${locale}/${generic}`, async (t) => {
+      const seed = completeWorkloadSeed([total, 0, 0]);
+      const stack = createAiStack(t, { sicil: AYSE, seed });
+      const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', {});
+      const verdict = verifyRequested(ledger, ['data.totals.total', 'data.totals.done', ...(generic ? ['data.totals.open'] : [])], {
+        operation: 'value', metrics: ['tasks.total', 'tasks.done', ...(generic ? ['tasks.open'] : [])]
+      }, { locale });
+      assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+      assert.match(verdict.normalized, new RegExp(`\\*\\*${total}\\*\\*`));
+      if (!total) assert.doesNotMatch(verdict.normalized, /None of them|Of these|Bunların/);
+      else if (!generic) assert.match(verdict.normalized, locale === 'en' ? /None of them is completed yet/ : /Bunların hiçbiri henüz tamamlanmamış/);
+      else assert.match(verdict.normalized, locale === 'en' ? /Of these/ : /Bunların/);
+    });
+  }
+});
+
+test('109: every English overdue narrative path realizes 0/1/2 days correctly', async (t) => {
+  for (const days of [0, 1, 2]) for (const project of [false, true]) await t.test(`${days}/${project}`, async (t) => {
+    const seed = rotaToolSeed();
+    seed.tasks.find((task) => task.TaskId === TASKS.OVERDUE).TargetFinish = `2026-09-${30 - Math.max(1, days)}`;
+    const stack = createAiStack(t, { sicil: AYSE, seed });
+    const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.OVERDUE });
+    const verdict = verifyRequested(ledger, ['data.task.title', 'data.task.overdueDays', ...(project ? ['data.task.project.name'] : [])], {
+      operation: 'value', metrics: ['task.title', 'task.overdueDays'], entities: [{ type: 'task', id: TASKS.OVERDUE }]
+    }, { locale: 'en' });
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+    // The tool omits overdueDays for an on-time task; zero exercises the renderer's numeric boundary directly.
+    const text = renderVerifiedNarrative(verdict.facts.map((item) => item.fact.field === 'data.task.overdueDays'
+      ? { ...item, fact: { ...item.fact, value: days } } : item), { locale: 'en' });
+    assert.ok(text.includes(`**${days}** ${days === 1 ? 'day' : 'days'} overdue.`), text);
+    assert.match(text, project ? /task in the .* project is/ : /It is/);
+  });
+});
+
+async function twoWorkloads(t) {
+  const first = completeWorkloadSeed([8, 2, 2]);
+  const second = completeWorkloadSeed([2, 2, 2]);
+  second.tasks = second.tasks.map((task) => ({ ...task, TaskId: task.TaskId.replace('20000000', '21000000'), ProjectId: PROJECTS.READ }));
+  second.taskAssignees = second.taskAssignees.map((row) => ({ ...row, TaskId: row.TaskId.replace('20000000', '21000000') }));
+  const seed = { ...first, tasks: [...first.tasks, ...second.tasks], taskAssignees: [...first.taskAssignees, ...second.taskAssignees] };
+  const stack = createAiStack(t, { sicil: AYSE, seed });
+  const { ledger, results } = await callRotaTools(stack, AYSE, [PROJECTS.FULL, PROJECTS.READ].map((projectId) => ['rota_workload_summary', { projectId }]));
+  const facts = results.flatMap((result, index) => {
+    assert.equal(result.ok, true);
+    assert.equal(result.data.populationComplete, true);
+    const evidence = `R${index + 1}`;
+    const verdict = verifyRequested(ledger, ['data.people.*.name', 'data.people.*.openTasks', 'data.people.*.overdue'].map((field) => `${evidence}:${field}`), {
+      operation: 'list', metrics: ['person.name', 'tasks.open', 'tasks.overdue'], population: { tool: 'rota_workload_summary', collection: 'people' },
+      entities: [{ type: 'project', id: [PROJECTS.FULL, PROJECTS.READ][index] }]
+    });
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+    return verdict.presentation.facts;
+  });
+  return facts;
+}
+
+test('109: overlapping workload row indices produce independent conclusions with their own evidence', async (t) => {
+  const facts = await twoWorkloads(t);
+  assert.deepEqual(facts.filter(({ fact }) => fact.field === 'data.people.0.openTasks').map(({ evidenceId, fact }) => [evidenceId, fact.value]), [['R1', 8], ['R2', 2]]);
+  const conclude = (items) => analystPropositions([{ index: 0, presentation: { facts: items } }]).map(({ proposition }) => ({
+    evidenceId: proposition.evidenceId, kind: proposition.kind, text: proposition.markdown
+  }));
+  const separate = ['R1', 'R2'].flatMap((id) => conclude(facts.filter(({ evidenceId }) => evidenceId === id)));
+  assert.ok(separate.some((item) => item.evidenceId === 'R1' && item.kind === 'concentration'));
+  assert.ok(separate.some((item) => item.evidenceId === 'R2' && item.kind === 'balance'));
+  assert.deepEqual(conclude(facts), separate, 'combining a part cannot overwrite fields or conclusions from either evidence population');
+  const incomplete = facts.map((item) => item.evidenceId === 'R2' && item.fact.field === 'data.populationComplete' ? { ...item, fact: { ...item.fact, value: false } } : item);
+  assert.ok(!conclude(incomplete).some((item) => item.evidenceId === 'R2'));
+});
+
+test('109: overdue attention selects within each evidence population and never borrows another population row', async (t) => {
+  const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
+  const { ledger } = await callRotaTools(stack, AYSE, [
+    ['rota_task_search', { assignee: 'me', deadline: 'overdue' }], ['rota_task_search', { projectId: PROJECTS.FULL, deadline: 'overdue' }]
+  ]);
+  const populations = ['R1', 'R2'].map((id, index) => {
+    const verdict = verifyRequested(ledger, ['data.tasks.*.title', 'data.tasks.*.overdueDays'].map((field) => `${id}:${field}`), {
+      operation: 'list', metrics: ['task.title', 'task.overdueDays'], filters: { ...(index === 0 ? { assignee: 'me' } : {}), deadline: 'overdue' },
+      ...(index === 1 ? { entities: [{ type: 'project', id: PROJECTS.FULL }] } : {})
+    });
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+    return verdict.presentation.facts;
+  });
+  const [first, second] = populations;
+  const conclude = (facts) => analystPropositions([{ index: 0, presentation: { facts } }]).filter(({ proposition }) => proposition.kind === 'attention');
+  assert.equal(conclude(first).length, 1);
+  assert.deepEqual(conclude([...first, ...second]), [...conclude(first), ...conclude(second)], 'equal delays across populations are not ties');
+  const row0 = (facts) => facts.filter(({ fact }) => fact.field.startsWith('data.tasks.0.'));
+  assert.deepEqual(conclude([...row0(first), ...row0(second)]), [], 'one row in each population is not two rows in either population');
+});
+
+test('109: diagnostic persistence failures at file validation, chmod and write remain nonfatal and privacy-safe', async (t) => {
+  const fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { appendPrivateDiagnostic } = await import('../scripts/private-diagnostic-trace.mjs');
+  const directory = mkdtempSync(join(tmpdir(), 'pr109-trace-failure-'));
+  try {
+    for (const method of ['fstatSync', 'fchmodSync', 'writeSync']) {
+      let stderr = '';
+      t.mock.method(process.stderr, 'write', (chunk) => { stderr += chunk; return true; });
+      t.mock.method(fs, method, () => { throw new Error('PRIVATE FAILURE'); });
+      syncBuiltinESMExports();
+      assert.equal(appendPrivateDiagnostic(join(directory, method), { text: 'PRIVATE RESPONSE' }), false);
+      assert.equal(stderr, 'PRIVATE_DIAGNOSTIC_WRITE_FAILED\n');
+      assert.equal(readFileSync(join(directory, method), 'utf8'), '');
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('109: chain F requires a real chart and its expectation rejects an answer without one', () => {
+  const followups = JSON.parse(readFileSync(new URL('./fixtures/ai-phase4e-followups.json', import.meta.url), 'utf8'));
+  const turn = followups.chains.find((chain) => chain.id === 'F').turns.at(-1);
+  assert.equal(turn.plan.visual, true);
+  assert.equal(turn.expect.chart, true);
+  const withoutChart = { answer: { finishReason: 'stop', content: 'verified results' }, log: [{ query: 'task-facts', params: { projectId: PROJECTS.FULL } }] };
+  assert.deepEqual(turnViolations(withoutChart, turn.expect), ['grafik yok']);
+});
+
+test('109: structurally valid compositions outside verdict citation scope retain the safe visual fallback', async (t) => {
+  const { presentVerdict } = await import('../src/server/ai/assistant/groundedAnswer.js');
+  const { composeGroundedAnswer } = await import('../src/server/ai/assistant/answerComposition.js');
+  for (const foreign of [false, true]) await t.test(String(foreign), async (t) => {
+    const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
+    const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'me' });
+    const verified = verifyRequested(ledger, ['total', 'open', 'done', 'overdue'].map((key) => `data.totals.${key}`), {
+      operation: 'value', metrics: ['tasks.total', 'tasks.open', 'tasks.done', 'tasks.overdue'], filters: { assignee: 'me' }
+    });
+    assert.equal(verified.ok, true, JSON.stringify(verified.issues));
+    // Defensive boundary fixture: a composition sheet contains extra, otherwise valid evidence, outside the final verdict.
+    const facts = [...verified.presentation.facts, ...(foreign ? verified.presentation.facts.map((item) => ({ ...item, evidenceId: 'R2' })) : [])];
+    const verdict = { ...verified, kind: 'grounded', presentation: { ...verified.presentation, facts } };
+    const session = { signal: new AbortController().signal, remainingMs: () => 120000, model: 'fixture', maxOutputTokens: 4096,
+      async round(input) { return { text: JSON.stringify(coveringBlocks(compositionView(input))), finishReason: 'stop' }; } };
+    const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }], visual: true });
+    assert.ok(sheet.render.charts.size > 0);
+    const composed = await composeGroundedAnswer({ session, composition: sheet });
+    assert.equal(composed.ok, true, JSON.stringify(composed));
+    assert.equal(composed.citedIds.includes('R2'), foreign, 'the real composition validator accepts the structure before the outer citation boundary');
+    const turn = { presentationIntent: { visual: true }, composeAnswers: true, session, ledger, partCount: 1, answers: [],
+      partEvidence: new Set(ledger.ids()), question: { text: 'grafikle göster' }, context: { today: '2026-09-30' },
+      trace: { rounds: [] }, models: [], modelRounds: 0, work: 0, revalidatedAt: 0, status() {}, progress() {} };
+    const answer = await presentVerdict(turn, verdict, true);
+    assert.deepEqual(answer.citedIds, verified.citedIds);
+    assert.doesNotMatch(answer.normalized, /【R2】/);
+    if (foreign) {
+      assert.equal(turn.trace.presentation.reason, 'CITATION_SCOPE');
+      assert.match(answer.normalized, /güvenle grafik çizilemedi/);
+    } else {
+      assert.equal(turn.trace.presentation.mode, 'composed');
+      assert.notEqual(turn.trace.presentation.server, true, 'passing model compositions retain their original path');
+      assert.match(answer.normalized, /```rota-chart/);
+    }
+  });
 });

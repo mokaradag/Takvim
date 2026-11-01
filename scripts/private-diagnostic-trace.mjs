@@ -27,12 +27,19 @@ export function diagnosticMetadata(record) {
 }
 
 export function appendPrivateDiagnostic(path, record) {
-  // Sanitize before opening or persisting. Existing traces are tightened too; symlink destinations are rejected.
-  const line = `${JSON.stringify(diagnosticMetadata(record))}\n`;
-  const fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NONBLOCK || 0) | (constants.O_NOFOLLOW || 0), 0o600);
+  // Optional persistence cannot fail the completed operation. Never report the path, error text or private record.
   try {
-    if (!fstatSync(fd).isFile()) throw new Error('DIAGNOSTIC_NOT_REGULAR_FILE');
-    fchmodSync(fd, 0o600);
-    writeSync(fd, line);
-  } finally { closeSync(fd); }
+    // Sanitize before opening or persisting. Existing traces are tightened too; symlink destinations are rejected.
+    const line = `${JSON.stringify(diagnosticMetadata(record))}\n`;
+    const fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NONBLOCK || 0) | (constants.O_NOFOLLOW || 0), 0o600);
+    try {
+      if (!fstatSync(fd).isFile()) throw new Error('DIAGNOSTIC_NOT_REGULAR_FILE');
+      fchmodSync(fd, 0o600);
+      writeSync(fd, line);
+    } finally { closeSync(fd); }
+    return true;
+  } catch {
+    process.stderr.write('PRIVATE_DIAGNOSTIC_WRITE_FAILED\n');
+    return false;
+  }
 }

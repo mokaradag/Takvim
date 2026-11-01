@@ -693,9 +693,19 @@ const ofCount = (value, locale) => (locale === 'en' ? number(value, locale) : `$
 export function analystPropositions(parts, locale = 'tr') {
   const en = locale === 'en';
   const out = [];
-  for (const part of parts) {
+  // Row indices, completeness, denominators and attention rankings belong to one canonical evidence population.
+  const evidenceParts = parts.flatMap((part) => {
+    const evidencePopulations = new Map();
+    for (const item of part.presentation?.facts || []) {
+      if (item.fact?.semantic?.complete !== true) continue;
+      if (!evidencePopulations.has(item.evidenceId)) evidencePopulations.set(item.evidenceId, []);
+      evidencePopulations.get(item.evidenceId).push(item);
+    }
+    return [...evidencePopulations.values()].map((facts) => ({ index: part.index, presentation: { facts } }));
+  });
+  for (const part of evidenceParts) {
     const ordinal = part.index + 1;
-    const items = (part.presentation?.facts || []).filter(({ fact }) => fact?.semantic?.complete === true);
+    const items = part.presentation.facts;
     const add = (evidenceId, kind, realized, tone = 'info', fluent = null) => {
       const sample = items.find((item) => item.evidenceId === evidenceId)?.fact.semantic;
       const filters = sample?.filters;

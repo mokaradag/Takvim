@@ -609,8 +609,12 @@ function trustedHome() {
   return home;
 }
 
+function appendLedger(log, record) {
+  if (log) appendFileSync(log, `${JSON.stringify({ ...record, ...(process.env.PLANNER_CLAUDE_RUN_ID ? { runId: process.env.PLANNER_CLAUDE_RUN_ID } : {}) })}\n`);
+}
+
 function reportFailure(log, error, extra = {}) {
-  if (log) appendFileSync(log, `${JSON.stringify({ at: new Date().toISOString(), error, ...extra })}\n`);
+  appendLedger(log, { at: new Date().toISOString(), error, ...extra });
   process.stdout.write(`${JSON.stringify({ text: '', toolCalls: [], error })}\n`);
 }
 
@@ -665,7 +669,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     return fail('PLANNER_HOME_UNTRUSTED', error instanceof PlannerHomeUntrusted ? error.detail : { reason: 'HOME_CHECK_FAILED' });
   }
   // Kilit, ayırımdan kullanım kaydına dek tutulur; sonraki çağrı tamamlanan harcamayı görür.
-  if (log) appendFileSync(log, `${JSON.stringify({ at: new Date().toISOString(), reserved: true, callId })}\n`);
+  appendLedger(log, { at: new Date().toISOString(), reserved: true, callId });
   const cwd = path.join(home, 'work');
   const work = mkdtempSync(path.join(home, 'call-'));
   try {
@@ -716,7 +720,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
       // Yinelenen ilk yanıt da aynı model ve düşünme denetiminden geçer: temiz bir yeniden deneme yasak düşünmeyi gizleyemez.
       const problem = responseProblem(row, model);
       if (problem) return fail(problem, { ...row, forcedToolCall: true });
-      if (log) appendFileSync(log, `${JSON.stringify({ ...row, forcedToolCall: true })}\n`);
+      appendLedger(log, { ...row, forcedToolCall: true });
       rmSync(work, { recursive: true, force: true });
       return complete(launcher, timeoutMs, payload, true);
     }
@@ -743,7 +747,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     if (row.apiCalls !== 1) return fail('PLANNER_CALL_COUNT_UNEXPECTED', row);
     if (!models.length || models.some((item) => item !== model)) return fail('PLANNER_MODEL_MISMATCH', row);
     if (row.thinking !== 'off') return fail('PLANNER_THINKING_ON', row);
-    if (log) appendFileSync(log, `${JSON.stringify(row)}\n`);
+    appendLedger(log, row);
     // Zorunlu turda öteki araçlar yalnızca görünürdür (üretimdeki gibi); üretimin kısıtlı çözümü başka çağrı üretemez, burada da iletilmez.
     const structured = !result.is_error && result.structured_output && typeof result.structured_output === 'object' && !Array.isArray(result.structured_output);
     const toolCalls = forced ? structured ? [{ name: forced.name, arguments: result.structured_output }] : schemaRejected ? [{ name: forced.name, arguments: attempted.input }] : []

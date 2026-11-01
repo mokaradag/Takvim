@@ -138,9 +138,11 @@ test('nitelendirme boş geçmez: ufuk, etkin yön, her istek kapsamı, sunucu ye
   const dir = mkdtempSync(join(tmpdir(), 'phase4e-usage-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const log = join(dir, 'calls.jsonl');
-  const row = (model, output) => JSON.stringify({ models: [model], usage: { input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: output, output_tokens_details: { thinking_tokens: 0 } } });
-  writeFileSync(log, [row('claude-sonnet-old', 50), JSON.stringify({ reserved: true }), row('claude-haiku-4-5-20251001', 7)].join('\n') + '\n');
-  assert.deepEqual([usageTotals({ log, start: 2 }).calls, usageTotals({ log, start: 2 }).output, usageTotals({ log, start: 2 }).models], [1, 7, ['claude-haiku-4-5-20251001']]);
+  const row = (runId, model, output) => JSON.stringify({ runId, models: [model], usage: { input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: output, output_tokens_details: { thinking_tokens: 0 } } });
+  writeFileSync(log, [row('prior', 'claude-sonnet-old', 50), JSON.stringify({ runId: 'current', reserved: true }),
+    row('current', 'claude-haiku-4-5-20251001', 7), row('foreign-concurrent', 'claude-opus-x', 90)].join('\n') + '\n');
+  const usage = usageTotals({ log, runId: 'current' });
+  assert.deepEqual([usage.calls, usage.output, usage.models], [1, 7, ['claude-haiku-4-5-20251001']]);
   const haiku = 'claude-haiku-4-5-20251001';
   assert.equal(responseProblem({ models: [haiku], thinking: 'on' }, haiku), 'PLANNER_THINKING_ON');
   assert.equal(responseProblem({ models: ['claude-opus-x'], thinking: 'off' }, haiku), 'PLANNER_MODEL_MISMATCH');
