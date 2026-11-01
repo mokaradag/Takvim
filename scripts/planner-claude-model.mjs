@@ -613,6 +613,13 @@ function reportFailure(log, error, extra = {}) {
   process.stdout.write(`${JSON.stringify({ text: '', toolCalls: [], error })}\n`);
 }
 
+/** Model yanıtının kabul önkoşulu (yinelenen ilk yanıt dâhil): yalnızca beklenen model, düşünme kapalı. */
+export function responseProblem(row, model) {
+  if (!row.models?.length || row.models.some((item) => item !== model)) return 'PLANNER_MODEL_MISMATCH';
+  if (row.thinking !== 'off') return 'PLANNER_THINKING_ON';
+  return null;
+}
+
 async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0, 'utf8')), hideTools = false) {
   const model = process.env.PLANNER_CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
   const effort = process.env.PLANNER_CLAUDE_EFFORT || 'low';
@@ -705,6 +712,9 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     const forcedToolCall = forced && !hideTools && code === 1 && result?.subtype === 'error_max_turns'
       && blocks.some(block => block.type === 'tool_use' && block.name?.startsWith(PREFIX));
     if (forcedToolCall && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
+      // Yinelenen ilk yanıt da aynı model ve düşünme denetiminden geçer: temiz bir yeniden deneme yasak düşünmeyi gizleyemez.
+      const problem = responseProblem(row, model);
+      if (problem) return fail(problem, { ...row, forcedToolCall: true });
       if (log) appendFileSync(log, `${JSON.stringify({ ...row, forcedToolCall: true })}\n`);
       rmSync(work, { recursive: true, force: true });
       return complete(launcher, timeoutMs, payload, true);

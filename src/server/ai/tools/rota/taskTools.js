@@ -428,7 +428,7 @@ function deadlineBucket(fact, today) {
   return ['later', 'Termini 30 gün veya daha sonra'];
 }
 
-function groupKeys(fact, groupBy, { projects, assignees, today }) {
+function groupKeys(fact, groupBy, { projects, assignees, today, teamOnly = false }) {
   switch (groupBy) {
     case 'status': return [[fact.status, statusLabelOf(fact.status)]];
     case 'priority': return [[fact.priority, priorityLabel(fact.priority)]];
@@ -441,7 +441,7 @@ function groupKeys(fact, groupBy, { projects, assignees, today }) {
     case 'assignee': {
       const state = assignmentState(fact);
       const people = state === 'visible'
-        ? (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null) : [];
+        ? (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null && (!teamOnly || person.teamMember === true)) : [];
       if (people.length) return people.map((person) => [`sicil:${person.sicil}`, person.name || 'Seçilen kişi']);
       return [ASSIGNMENT_GROUPS[state] || ASSIGNMENT_GROUPS.undisclosed];
     }
@@ -474,7 +474,8 @@ const taskAnalytics = {
     const limit = args.limit ?? 10;
     const { scope } = await call.authorization();
     const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' });
-    const context = { projects, assignees, today: call.today };
+    // Ekip kapsamında sorumlu gruplaması yalnızca yönetim kapsamındaki kişilerdir (görevin kapsam dışı eş sorumlusu sayılmaz).
+    const context = { projects, assignees, today: call.today, teamOnly: filters.assignee === 'team' };
     let groups = null;
     let groupCount = 0;
     if (groupBy) {

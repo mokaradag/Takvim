@@ -67,11 +67,13 @@ export function turnViolations(result, expect, { live = false } = {}) {
   const reads = populationReads(result.log);
   const content = String(result.answer?.content || '');
   if (expect.finish && result.answer?.finishReason !== expect.finish) problems.push(`finish ${result.answer?.finishReason} ≠ ${expect.finish}`);
-  if (expect.assignee && !reads.some((row) => row.params.assigneeMode === expect.assignee)) problems.push(`assignee ${expect.assignee} okunmadı`);
+  // Kapsam beklentileri HER nüfus okumasında geçerlidir: bir bölüm kapsamı korurken başka bir bölümün genişlemesi kabul edilmez.
+  const every = (predicate) => reads.length > 0 && reads.every(predicate);
+  if (expect.assignee && !every((row) => row.params.assigneeMode === expect.assignee)) problems.push(`assignee ${expect.assignee} her okumada değil`);
   if (expect.notAssignee && reads.some((row) => row.params.assigneeMode === expect.notAssignee)) problems.push(`assignee ${expect.notAssignee} taşındı`);
-  if (expect.project && !reads.some((row) => row.params.projectId)) problems.push('proje kapsamı okunmadı');
+  if (expect.project && !every((row) => row.params.projectId)) problems.push('proje kapsamı her okumada değil');
   if (expect.noProject && reads.some((row) => row.params.projectId)) problems.push('eski proje kapsamı taşındı');
-  if (expect.person && !reads.some((row) => row.params.personSicil != null && row.params.assigneeMode === 'person')) problems.push('kişi kapsamı okunmadı');
+  if (expect.person && !every((row) => row.params.personSicil != null && row.params.assigneeMode === 'person')) problems.push('kişi kapsamı her okumada değil');
   if (expect.workload && !reads.some((row) => Number(row.params.withAssignees) === 1)) problems.push('iş yükü okunmadı');
   if (expect.portfolio && !result.log.some((row) => row.query === 'portfolio')) problems.push('portföy okunmadı');
   // Ufuk: beklenen aralıkla örtüşen bir termin penceresi okunmuş olmalı (uçlarda en çok bir günlük yorum farkı kabul edilir).
@@ -82,7 +84,8 @@ export function turnViolations(result, expect, { live = false } = {}) {
   }
   if (expect.chart && !content.includes('```rota-chart') && !(live && /güvenle grafik çizilemedi|could not be drawn safely/.test(content))) problems.push('grafik yok');
   if (expect.scopeDenied && !/yönetim kapsamınız bulunmuyor|management scope/.test(content)) problems.push('kapsam reddi metni yok');
-  if (expect.noData && reads.length) problems.push('veri okundu');
+  // Veri okumayan tur hiçbir Rota sorgusu çalıştırmaz (görev kimliğiyle ya da portföy okuması dâhil; süzülmüş alt küme değil).
+  if (expect.noData && result.log.length) problems.push(`veri okundu: ${[...new Set(result.log.map((row) => row.query))].join(',')}`);
   if (expect.finish === 'stop' && (!reads.length && !result.log.some((row) => row.query === 'portfolio'))) problems.push('araç okuması yok');
   return problems;
 }

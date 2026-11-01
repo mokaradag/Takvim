@@ -188,7 +188,13 @@ function LineChart({ spec, copy }) {
       <svg className="assistant-chart-line-plot" viewBox={`0 0 ${LINE.width} ${LINE.height}`} preserveAspectRatio="none" aria-hidden="true" focusable="false">
         <line className="assistant-chart-line-axis" x1={LINE.pad} y1={LINE.height - LINE.pad} x2={LINE.width - LINE.pad} y2={LINE.height - LINE.pad} />
         <polyline className="assistant-chart-line-path" points={points.map(([px, py]) => `${px},${py}`).join(' ')} />
-        {points.map(([px, py], index) => <circle key={index} className={`assistant-chart-line-point${roving.active === index ? ' is-active' : ''}`} cx={px} cy={py} r={3.2} />)}
+        {/* Nokta, uzunluğu sıfır yuvarlak uçlu çizgidir: ölçeklenmeyen çizgi kalınlığıyla geniş kapsayıcıda elipse dönüşmez. */}
+        {points.map(([px, py], index) => (
+          <g key={index} className={`assistant-chart-line-point${roving.active === index ? ' is-active' : ''}`}>
+            <path className="assistant-chart-line-point-ring" d={`M${px} ${py}h0`} />
+            <path className="assistant-chart-line-point-core" d={`M${px} ${py}h0`} />
+          </g>
+        ))}
       </svg>
       <ol className="assistant-chart-line-values">
         {spec.items.map((item, index) => {

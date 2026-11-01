@@ -790,8 +790,10 @@
 .assistant-chart-line-plot { display: block; width: 100%; height: 120px; overflow: visible; }
 .assistant-chart-line-axis { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .assistant-chart-line-path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-.assistant-chart-line-point { fill: var(--bg-elev); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
-.assistant-chart-line-point.is-active { fill: var(--accent); }
+.assistant-chart-line-point path { fill: none; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.assistant-chart-line-point-ring { stroke: var(--accent); stroke-width: 8; }
+.assistant-chart-line-point-core { stroke: var(--bg-elev); stroke-width: 4; }
+.assistant-chart-line-point.is-active .assistant-chart-line-point-core { stroke: var(--accent); }
 .assistant-chart-line-values { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 2px 8px; }
 .assistant-chart-line-value { display: flex; justify-content: space-between; gap: 6px; padding: 3px 6px; border-radius: var(--r-sm); cursor: default; }
 .assistant-chart-line-value:hover,

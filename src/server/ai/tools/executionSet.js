@@ -128,7 +128,7 @@ function normalizePlan(plan) {
  * çağrıları `prepareExecutionSet` ile birlikte doğrulanır.
  * `{ plan: { intent, language, request, additionalRequests? }, calls }`.
  */
-export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis = null } = {}) {
+export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis = null, today = null } = {}) {
   const plans = result.toolCalls.filter((call) => call.name === 'rota_plan');
   if (plans.length !== 1 || plans[0].oversize) throw invalidArguments(['$.plan:single']);
   const [call] = plans;
@@ -169,7 +169,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // Analitik özet: sunucu her yönü kayıt defterinin sabit istek biçimine açar; okumaları yalnızca sunucu kurar.
     if (present('request') || present('additionalRequests') || planned.length || direct.length) throw invalidArguments(['$.analysis:request']);
     const analysis = parseAnalysis(plan.analysis);
-    const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis });
+    const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today });
     const visual = base.visual === true || analysis.visual === true;
     return { plan: { ...base, ...(visual ? { visual: true } : {}), analysis, request, ...(additionalRequests.length ? { additionalRequests } : {}) }, calls: [] };
   }

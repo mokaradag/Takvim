@@ -53,7 +53,7 @@ export function normalizeAnalysisContext(value) {
     if (!['person', 'project'].includes(value.scope) && subjects.length) return null;
     // Daraltma: kendi/ekip/bütün görevler kapsamının sunucunun bağladığı tek proje kimliğiyle kesişimi.
     const within = value.within == null ? null : identity(value.within);
-    if (value.within != null && (!within || within.type !== 'project' || !['self', 'team', 'all', 'person'].includes(value.scope))) return null;
+    if (value.within != null && (!within || within.type !== 'project' || !['self', 'team', 'all', 'person', 'projects'].includes(value.scope))) return null;
     const focus = value.focus == null ? [] : value.focus;
     if (!Array.isArray(focus) || focus.length > ANALYSIS_CONTEXT_LIMITS.maxFocus || focus.some((item) => !FOCUS.includes(item)) || new Set(focus).size !== focus.length) return null;
     for (const key of ['dateFrom', 'dateTo']) if (value[key] != null && (typeof value[key] !== 'string' || !DAY.test(value[key]))) return null;

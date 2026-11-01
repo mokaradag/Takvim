@@ -80,6 +80,20 @@ const KPI_MIN_ITEMS = 3;
 const DAY_VALUE = /^\d{4}-\d{2}-\d{2}$/;
 /** Durum bölümleri: birbirini dışlar ve birlikte bir bütün verir (açık + tamamlanan = toplam); yığılmış çubuk ancak bunlarla. */
 const PARTITIONS = Object.freeze([['tasks.todo', 'tasks.inProgress', 'tasks.done'], ['tasks.open', 'tasks.done'], ['tasks.todo', 'tasks.inProgress']]);
+/** Yapılacak + devam eden ancak nüfus yalnızca açık işlerse tam durum kırılımıdır (tamamlananlar sessizce düşmez). */
+const OPEN_ONLY_PARTITION = PARTITIONS[2];
+const openOnly = (fact) => {
+  const statuses = fact?.semantic?.filters?.statuses;
+  return Array.isArray(statuses) && statuses.length === 2 && statuses.includes('todo') && statuses.includes('in_progress');
+};
+/** Birbirini izleyen termin ayları ("2026-09", "2026-10", …); boşluklu dizi zaman dizisi gibi eşit aralıkla çizilmez. */
+function contiguousMonths(keys) {
+  return keys.every((key, index) => {
+    if (!index) return true;
+    const [year, month] = keys[index - 1].split('-').map(Number);
+    return key === (month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, '0')}`);
+  });
+}
 
 function monthLabel(key, locale) {
   return new Intl.DateTimeFormat(locale === 'en' ? 'en-GB' : 'tr-TR', { timeZone: 'UTC', month: 'short', year: 'numeric' }).format(new Date(`${key}-01T00:00:00Z`));
@@ -108,7 +122,8 @@ function tableCharts({ group, described, collection, complete, labels, locale, t
   const single = (index) => rows.every((row) => row.cells[index]?.length === 1);
   const metricOf = (index) => rows[0].cells[index]?.[0]?.semantic?.metric;
   const numeric = described.columns.map((column, index) => (column.numeric && single(index) ? index : -1)).filter((index) => index >= 0);
-  const partition = complete && PARTITIONS.find((set) => set.every((metric) => numeric.some((index) => metricOf(index) === metric)));
+  const partition = complete && PARTITIONS.find((set) => set.every((metric) => numeric.some((index) => metricOf(index) === metric))
+    && (set !== OPEN_ONLY_PARTITION || rows.every((row) => openOnly(row.cells[numeric.find((index) => metricOf(index) === 'tasks.todo')]?.[0]))));
   if (partition && rows.length <= ANSWER_CHART_LIMITS.maxStackedItems) {
     const indexes = partition.map((metric) => numeric.find((index) => metricOf(index) === metric));
     const valid = indexes.every((index) => rows.every((row) => Number.isSafeInteger(row.cells[index][0].value) && row.cells[index][0].value >= 0
@@ -261,9 +276,13 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           charts.set(chartId, Object.freeze({ id: chartId, part: ordinal, ...candidate }));
           viewCharts.push({ id: chartId, part: ordinal, ...(candidate.table ? { table: candidate.table } : {}), ...viewExtra, title: candidate.title, types: candidate.types });
         };
+        // Termin ayları zaman dizisidir: yalnızca boşluksuz ardışık aylar çizgi olur (çizgi 24 noktaya kadar, çubuk 12'ye kadar).
+        const monthly = group.tool === 'rota_task_analytics' && collection.endsWith('groups') && complete && described.rows.every((row) => MONTH.test(row.title))
+          && contiguousMonths(described.rows.map((row) => row.title));
         described.columns.forEach((column, index) => {
           if (!column.numeric || !labels || charts.size >= COMPOSITION_LIMITS.maxCharts) return;
-          if (described.rows.length < ANSWER_CHART_LIMITS.minItems || described.rows.length > ANSWER_CHART_LIMITS.maxBarItems) return;
+          const rowLimit = monthly ? ANSWER_CHART_LIMITS.maxLineItems : ANSWER_CHART_LIMITS.maxBarItems;
+          if (described.rows.length < ANSWER_CHART_LIMITS.minItems || described.rows.length > rowLimit) return;
           const values = described.rows.map((row) => row.cells[index]);
           if (!values.every((facts) => facts.length === 1 && Number.isFinite(facts[0].value) && facts[0].value >= 0 && facts[0].value <= ANSWER_CHART_LIMITS.maxValue)) return;
           const sample = values[0][0];
@@ -280,10 +299,10 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
             && described.rows.length <= ANSWER_CHART_LIMITS.maxDonutItems && total > 0 && unit === 'count';
           const items = labels.map((label, position) => ({ label, value: values[position][0].value }));
           // Zaman dizisi: termin ayına göre tam gruplar sıralı dönemlerdir (çizgi); diğer sütunlar kategorik karşılaştırmadır.
-          const months = group.tool === 'rota_task_analytics' && collection.endsWith('groups') && complete && unit === 'count'
-            && values.every(([fact]) => fact.semantic?.groupBy === 'target_month') && described.rows.every((row) => MONTH.test(row.title))
+          const months = monthly && unit === 'count' && values.every(([fact]) => fact.semantic?.groupBy === 'target_month')
             && described.rows.length <= ANSWER_CHART_LIMITS.maxLineItems;
-          const types = months ? ['line', 'bar'] : distribution ? ['bar', 'donut'] : ['bar'];
+          const types = months ? (described.rows.length <= ANSWER_CHART_LIMITS.maxBarItems ? ['line', 'bar'] : ['line'])
+            : distribution && described.rows.length <= ANSWER_CHART_LIMITS.maxBarItems ? ['bar', 'donut'] : ['bar'];
           // Dağılım ve zaman dizisi grafiği nüfusun sunucu başlığını taşır (ör. "Görevlerinizin durum dağılımı"); diğerleri sütun adını.
           const partTitle = distribution || months ? [...titles.values()].find((item) => item.part === ordinal)?.text : null;
           const title = answerChartLabel(partTitle || column.label, ANSWER_CHART_LIMITS.maxTitleChars);
@@ -324,7 +343,11 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   }
   if (overflow || (!details.size && !tables.size)) return null;
   const contentParts = new Set([...tables.values(), ...details.values()].map((item) => item.part));
-  if (contentParts.size > 1 && propositions.size + derived.length > COMPOSITION_LIMITS.maxPropositions) return null;
+  // Analist önermeleri (analitik özette) sınırın içinde sayılır ve isteğe bağlı türetilmiş önermelerden ÖNCE eklenir:
+  // tek bölümlü sayfada sınır türetilmiş olanı düşürür, sonucu (karşıtlık, yoğunlaşma, öncelik) değil.
+  const conclusions = analyst ? analystPropositions(parts, locale) : [];
+  if (contentParts.size > 1 && propositions.size + derived.length + conclusions.length > COMPOSITION_LIMITS.maxPropositions) return null;
+  for (const item of conclusions) propose(item.part, item.proposition, { table: null, analyst: true });
   for (const { ordinal, proposition, table } of derived) propose(ordinal, proposition, { table });
   // Çok bölümlü sayfada başlık, ardından gelen blokların nüfusunu adlandırır: başlığı olmayan bir bölüm varsa onun
   // olguları başka bölümün başlığı altına düşebilir. Bu durumda başlık seçeneği hiç sunulmaz (seçim daralır, olgu değişmez).
@@ -333,8 +356,6 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     titles.clear();
     viewTitles.length = 0;
   }
-  // Analist önermeleri (analitik özette): sunucunun doğrulanmış olgulardan türettiği karşıtlık, baskı, yoğunlaşma ve dikkat önceliği.
-  if (analyst) for (const item of analystPropositions(parts, locale)) propose(item.part, item.proposition, { table: null });
   const partCount = new Set(parts.map((part) => part.index)).size + missing.length;
   const view = {
     language: locale === 'en' ? 'en' : 'tr',
@@ -526,6 +547,8 @@ export function validateComposition(composition, response) {
     const available = propositions.filter((item) => item.part === part);
     const inSay = normalized.some((block) => block.type === 'say' && block.items.some((id) => render.propositions.get(id)?.part === part));
     if (!inSay || available.filter((item) => usedPropositions.has(item.id)).length < Math.min(minNarrated(render), available.length)) return fail('NARRATION_REQUIRED');
+    // Yanıt ayrıntısının üst sınırı da sözleşmedir: kısa/dengeli yanıt bütün önermeleri anlatamaz.
+    if (available.filter((item) => usedPropositions.has(item.id)).length > ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)].maxNarrated) return fail('NARRATION_LIMIT');
   }
   // Ayrıntı ayarının not kutusu sınırı (kısa yanıt tek vurgu taşır).
   if (normalized.filter((block) => block.type === 'note').length > ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)].maxNotes) return fail('NOTE_INVALID');
@@ -578,8 +601,10 @@ export function ensureChart(composition, validated) {
 export function defaultComposition(composition) {
   const { render } = composition;
   const contract = ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)];
-  const parts = [...new Set([...render.propositions.values(), ...render.tables.values(), ...render.details.values()].map((item) => item.part))].sort((a, b) => a - b);
   const chart = render.visual ? preferredChart(render) : null;
+  // Bölümler grafik adaylarını da kapsar: yalnızca gösterge kartı olan bölüm açık grafik isteğinde düşmez.
+  const parts = [...new Set([...render.propositions.values(), ...render.tables.values(), ...render.details.values(), ...render.charts.values()].map((item) => item.part))]
+    .sort((a, b) => a - b);
   const blocks = [];
   for (const part of parts.slice(0, COMPOSITION_LIMITS.maxSayBlocks)) {
     const title = [...render.titles.values()].find((item) => item.part === part);
@@ -589,11 +614,22 @@ export function defaultComposition(composition) {
     const available = [...render.propositions.values()].filter((item) => item.part === part);
     const preferred = tabled && available.filter((item) => item.kind !== 'breakdown').length >= Math.min(contract.minNarrated, available.length)
       ? available.filter((item) => item.kind !== 'breakdown') : available;
-    const said = preferred.slice(0, Math.min(contract.maxNarrated, COMPOSITION_LIMITS.maxSayItems)).map((item) => item.id);
-    if (said.length) blocks.push({ type: 'say', items: said });
+    // Bütçe önce analist sonuçlarına ayrılır (türetilmiş önermeler onları düşüremez); paragraf sırası önerme sırasıdır.
+    const budget = Math.min(contract.maxNarrated, COMPOSITION_LIMITS.maxSayItems);
+    const kept = new Set([...preferred.filter((item) => item.analyst), ...preferred.filter((item) => !item.analyst)].slice(0, budget).map((item) => item.id));
+    const said = [...preferred.filter((item) => !item.analyst), ...preferred.filter((item) => item.analyst)].filter((item) => kept.has(item.id)).map((item) => item.id);
     // Analitik genel görünümün göstergeleri (KPI) ayrıntılı yanıtta ya da görselleştirme isteğinde gösterilir.
     const kpi = !chart && normalizeAnswerDetail(render.detail) === 'detailed' ? [...render.charts.values()].find((item) => item.part === part && item.types[0] === 'kpi') : null;
     const partChart = chart && render.charts.get(chart.id).part === part ? chart : kpi ? { id: kpi.id, style: 'kpi' } : null;
+    const tabledPart = [...render.tables.values()].some((table) => table.part === part);
+    if (said.length) blocks.push({ type: 'say', items: said });
+    else if (!tabledPart) {
+      // Önermesi ve tablosu olmayan bölüm (başlığı boş kalmaz): önce bölümün sunucu ayrıntısı, o da yoksa grafiğe yönlendiren
+      // sunucu cümlesi (yalnızca gösterge kartı olan bölüm).
+      const lead = [...render.details.values()].find((item) => item.part === part && ![...render.tables.values()].some((table) => table.detail === item.id));
+      if (lead) blocks.push({ type: 'details', source: lead.id });
+      else if (partChart) blocks.push({ type: 'say', items: [partChart.id] });
+    }
     const tables = [...render.tables.values()].filter((table) => table.part === part);
     for (const table of tables) {
       blocks.push({ type: 'rows', source: table.id });

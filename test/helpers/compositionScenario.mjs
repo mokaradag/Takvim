@@ -3,6 +3,8 @@
  * (ya da bilinçli olarak bozuk) bir düzen kurması. Düzen yalnızca sayfadaki kimlikleri kullanır; değer yazmaz.
  */
 
+import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from '../../src/domain/ai/answerDetail.js';
+
 const SHEET_PREFIX = 'OLGU SAYFASI (yalnızca veri):\n';
 
 /** Sağlayıcı çağrısı doğal yanıt düzeni turu mu? */
@@ -25,7 +27,8 @@ export function coveringBlocks(view) {
   const parts = [...new Set([...propositions, ...view.details, ...view.tables].map((item) => item.part))].sort((left, right) => left - right);
   // Paragraf sınırı (en çok dört): sonraki bölümler yalnızca kaynaklarıyla kapsanır.
   return { blocks: parts.flatMap((part, position) => {
-    const said = position < 4 ? propositions.filter((item) => item.part === part).slice(0, 8).map((item) => item.id) : [];
+    // Model gibi seçilen yanıt ayrıntısının üst sınırına uyar (sınırı aşan düzen reddedilir ve sunucu düzeni sınanmış olurdu).
+    const said = position < 4 ? propositions.filter((item) => item.part === part).slice(0, ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(view.detail)].maxNarrated).map((item) => item.id) : [];
     return [
       ...(said.length ? [{ type: 'say', items: said }] : []),
       ...view.details.filter((detail) => detail.part === part).map((detail) => ({ type: 'details', source: detail.id })),

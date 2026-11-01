@@ -37,20 +37,36 @@ const followups = JSON.parse(readFileSync(new URL('../test/fixtures/ai-phase4e-f
 const summary = { tier: TIER, model: EXPECTED_MODEL, cases: 0, passed: 0, failed: [], firstPass: 0, repairs: 0, escalations: 0, turns: 0, results: [] };
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
+const { analysisSuggestion } = await import('../src/server/ai/tools/analysisPlan.js');
+// Bu koşunun kullanımı: defterde daha önceki koşuların satırları sayılmaz (yeniden koşu aynı defteri kullanabilir).
+const LEDGER_START = process.env.PLANNER_CLAUDE_LOG && existsSync(process.env.PLANNER_CLAUDE_LOG)
+  ? readFileSync(process.env.PLANNER_CLAUDE_LOG, 'utf8').split('\n').filter(Boolean).length : 0;
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
 
 /* ── Tier B: planlayıcı ───────────────────────────────────────────── */
 
+/** HER kabul edilen isteğin kapsamı (bir bölümün genişlemesi karışık sonuç verir); portföyde süzgeçsiz görev okuması portföydür. */
 const scopeOf = (requests) => {
-  const [first] = requests;
-  if (!first) return null;
-  if (first.filters?.assignee === 'me') return 'self';
-  if (first.filters?.assignee === 'team') return 'team';
-  if (first.entities.some((entity) => entity.type === 'person')) return 'person';
-  if (first.entities.some((entity) => entity.type === 'project')) return 'project';
-  if (first.population?.tool === 'rota_portfolio_summary') return 'projects';
-  return 'all';
+  if (!requests.length) return null;
+  const one = (request) => {
+    if (request.filters?.assignee === 'me') return 'self';
+    if (request.filters?.assignee === 'team') return 'team';
+    if (request.entities.some((entity) => entity.type === 'person')) return 'person';
+    if (request.entities.some((entity) => entity.type === 'project')) return 'project';
+    if (request.population?.tool === 'rota_portfolio_summary') return 'projects';
+    return 'all';
+  };
+  const scopes = new Set(requests.map(one));
+  if (scopes.has('projects') && [...scopes].every((scope) => ['projects', 'all'].includes(scope))) return 'projects';
+  return scopes.size === 1 ? [...scopes][0] : `mixed:${[...scopes].join(',')}`;
 };
+
+/** Ayrıntılı isteğin eşdeğer analitik yönü (sunucunun türlü eşlemesi); eşdeğeri yoksa yön yoktur. */
+const requestFocus = (request) => {
+  const text = analysisSuggestion(request);
+  return text ? JSON.parse(/\{.*\}/.exec(text)[0]).analysis.focus : [];
+};
+const day = (value) => Date.parse(`${String(value).slice(0, 10)}T00:00:00Z`) / 86400000;
 
 function liveTurn(rounds) {
   return (options) => runGroundedTurn(Object.freeze({
@@ -69,12 +85,9 @@ function liveTurn(rounds) {
   }), options);
 }
 
-async function plannerCase(item) {
-  const rounds = [];
-  const result = await planCase({ testCase: { id: 'q', text: item.text }, runTurn: liveTurn(rounds), adviceFor: async () => ({ state: 'unavailable', candidates: [] }),
-    now: new Date(`${corpus.today}T09:00:00.000Z`), catalog: toolCatalogForModel() });
+/** Tier B puanı: kabul edilen planın kararı, HER isteğin kapsamı, düzey, adlar, görsel bayrağı, etkin yönler ve ufuk. */
+export function plannerScore(result, expect) {
   const failures = [];
-  const expect = item.expect;
   const decision = result.decisions.at(-1) || null;
   const intent = result.outcome === 'planned' ? 'rota' : decision?.intent || result.outcome;
   if (result.outcome === 'error') failures.push(`hata ${result.error}`);
@@ -89,10 +102,24 @@ async function plannerCase(item) {
       if (!requests.some((request) => request.entities.some((entity) => String(entity.query || '').toLocaleLowerCase('tr-TR') === name.toLocaleLowerCase('tr-TR')))) failures.push(`ad ${name} yok`);
     }
     if (expect.visual && result.plan?.visual !== true) failures.push('görselleştirme bayrağı yok');
-    // Etkin yönler: portföy kapsamının açılımı proje başına satırları her zaman içerir (sunucunun açılımı).
-    const focus = [...(result.plan?.analysis?.focus || []), ...(result.plan?.analysis?.scope === 'projects' ? ['projects'] : [])];
-    if (result.plan?.analysis && expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|')} beklenenlerle kesişmiyor`);
+    // Sunucunun GERÇEKTEN okuduğu yönler: özetin etkin yönleri (bölüm bütçesi, ufuk ve portföy kuralları uygulanmış); özet
+    // yoksa kabul edilen ayrıntılı isteklerin eşdeğer yönleri. Bildirilen ama okunmayan yön sayılmaz.
+    const focus = result.plan?.analysis ? [...result.plan.analysis.focus] : requests.flatMap(requestFocus);
+    if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
+    // Beklenen ufuk kabul edilen bir okumanın aralığıdır (uçlarda en çok bir günlük yorum farkı).
+    if (expect.window && !requests.some((request) => request.filters?.dateFrom && request.filters?.dateTo
+      && Math.abs(day(request.filters.dateFrom) - day(expect.window[0])) <= 1 && Math.abs(day(request.filters.dateTo) - day(expect.window[1])) <= 1)) {
+      failures.push(`ufuk ${expect.window.join('..')} okunmuyor`);
+    }
   }
+  return failures;
+}
+
+async function plannerCase(item) {
+  const rounds = [];
+  const result = await planCase({ testCase: { id: 'q', text: item.text }, runTurn: liveTurn(rounds), adviceFor: async () => ({ state: 'unavailable', candidates: [] }),
+    now: new Date(`${corpus.today}T09:00:00.000Z`), catalog: toolCatalogForModel() });
+  const failures = plannerScore(result, item.expect);
   const firstPass = rounds.length === 1 && !failures.length;
   return { id: item.id, rounds: rounds.length, firstPass, analysis: Boolean(result.plan?.analysis), failures };
 }
@@ -118,7 +145,8 @@ async function conversationCase(t, turns, { plannerModel, composeModel, seed = r
     if (routing.escalations > escalationsBefore) failures.push('DEEP_ESCALATION');
     const measured = rounds.slice(before);
     if (measured.some((round) => round.infrastructure)) failures.push(`altyapı ${measured.find((round) => round.infrastructure).infrastructure}`);
-    if (composeModel && turn.requireComposed && presentation?.mode !== 'composed') failures.push(`düzen ${presentation?.mode}/${presentation?.reason}/${presentation?.issue}`);
+    const composed = composeModel && turn.requireComposed ? composedProblem(presentation) : null;
+    if (composed) failures.push(composed);
     // Yerel tanı (PHASE4E_DEBUG): planlayıcının çağrıları ve sunucunun ret notları; rapora girmez.
     if (process.env.PHASE4E_DEBUG && failures.length) {
       // Her planlayıcı turunun, soru iletisinden sonraki kısmı: modelin çağrıları ve sunucunun ret notları.
@@ -166,22 +194,39 @@ const E2E_CASES = Object.freeze([
   ['e06', followups.chains.find((chain) => chain.id === 'B').turns.slice(0, 4).map(({ text, expect }) => ({ text, expect }))]
 ]);
 
+/** Düzen katmanı MODELİN düzenini sınar: sunucunun belirlenimci yedeği (model düzeni reddedildi) geçer sayılmaz. */
+export function composedProblem(presentation) {
+  if (presentation?.mode === 'composed' && presentation.server !== true) return null;
+  return `düzen ${presentation?.mode}${presentation?.server ? '/sunucu' : ''}/${presentation?.reason}/${presentation?.issue}/${presentation?.rejected}`;
+}
+
+/** İstenen vaka kimliği bu katmanda yoksa (yazım hatası) koşu sıfır vakayla "geçmez": hata verir. */
+export function pickCases(items, only = ONLY) {
+  if (!only.length) return items;
+  const ids = items.map((item) => item.id ?? item[0]);
+  const unknown = only.filter((id) => !ids.includes(id));
+  if (unknown.length) throw new Error(`PHASE4E_CASES bu katmanda bulunmayan vaka: ${unknown.join(', ')}`);
+  return items.filter((item) => only.includes(item.id ?? item[0]));
+}
+
 /* ── Kayıt ve özet ───────────────────────────────────────────────── */
 
-function usageTotals() {
-  const log = process.env.PLANNER_CLAUDE_LOG;
-  const rows = log && existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter((row) => row?.usage) : [];
+export function usageTotals({ log = process.env.PLANNER_CLAUDE_LOG, start = LEDGER_START } = {}) {
+  const rows = log && existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).slice(start)
+    .map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter((row) => row?.usage) : [];
   const sum = (key) => rows.reduce((total, row) => total + (row.usage[key] ?? 0), 0);
   return { calls: rows.length, forcedRetries: rows.filter((row) => row.forcedToolCall).length, schemaRejected: rows.filter((row) => row.schemaRejected).length, forcedText: rows.filter((row) => row.forcedText).length, input: sum('input_tokens'), cacheWrite: sum('cache_creation_input_tokens'), cacheRead: sum('cache_read_input_tokens'), output: sum('output_tokens'),
     thinking: rows.reduce((total, row) => total + (row.usage.output_tokens_details?.thinking_tokens ?? 0), 0), models: [...new Set(rows.flatMap((row) => row.models || []))] };
 }
 
-function record(entry) {
+export function record(entry) {
   summary.cases += 1;
   if (!entry.failures.length) summary.passed += 1;
   else summary.failed.push(entry.id);
   summary.results.push(entry);
   process.stderr.write(`[${entry.id}] ${entry.failures.length ? `FAIL ${entry.failures.join('; ')}` : 'ok'}\n`);
+  // Kaydedilen başarısızlık koşuyu da başarısız kılar (`node --test` sıfırdan farklı çıkar); yalnızca yazılıp geçmez.
+  assert.deepEqual(entry.failures, [], `${entry.id}: ${entry.failures.join('; ')}`);
 }
 
 const direct = (() => {
@@ -198,7 +243,7 @@ if (direct) {
     assert.equal(totals.thinking, 0, 'THINKING_FORBIDDEN');
     assert.ok(totals.models.every((model) => model === EXPECTED_MODEL), 'MODEL_MISMATCH');
   });
-  const pick = (items) => (ONLY.length ? items.filter((item) => ONLY.includes(item.id ?? item[0])) : items);
+  const pick = (items) => pickCases(items);
   if (TIER === 'B') {
     for (const item of pick(corpus.cases.filter((entry) => entry.tierB))) {
       test(item.id, async () => {

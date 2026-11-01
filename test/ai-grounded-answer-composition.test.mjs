@@ -24,6 +24,7 @@ const { compositionSystemPrompt } = await import('../src/server/ai/assistant/gro
 const { COMPOSITION_RUNTIME } = await import('../src/server/ai/assistant/answerComposition.js');
 const { activeAssistantGenerationCountForTests } = await import('../src/server/ai/assistant/assistantGenerations.js');
 const { prepareAssistantTurn, generateAssistantAnswer } = await import('../src/server/ai/assistant/assistantService.js');
+const { presentationRoute } = await import('../src/server/ai/assistant/groundedAnswer.js');
 const { parseAnswerChart } = await import('../src/domain/ai/answerChart.js');
 const { parseAssistantMarkdown } = await import('../src/features/ai/assistant/assistantMarkdown.js');
 
@@ -81,7 +82,7 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   assert.deepEqual(stored.map((row) => [row.tool, row.resultScope]), deterministic.map((row) => [row.tool, row.resultScope]));
   const [line] = turnLines(logs);
   assert.equal(turnLines(logs).length, 1, 'tek tamamlanma kaydı');
-  assert.deepEqual({ ...line.context.presentation, ms: null }, { mode: 'composed', reason: null, issue: null, blocks: 4, said: 3, tables: 1, notes: 0, titled: false, chart: 'bar', charts: 1, ms: null, rejected: null });
+  assert.deepEqual({ ...line.context.presentation, ms: null }, { mode: 'composed', server: false, reason: null, issue: null, blocks: 4, said: 3, tables: 1, notes: 0, titled: false, chart: 'bar', charts: 1, ms: null, rejected: null });
   assert.deepEqual(line.context.rounds.map((round) => [round.purpose, round.budget, round.calls]), [['plan', STANDARD.maxOutputTokens, 1], ['compose', COMPOSITION_RUNTIME.maxOutputTokens, 0]]);
   assert.equal(line.context.escalated, false);
   for (const secret of [QUESTION, 'Haftalık durum toplantısı', 'Radar test planı', String(AYSE), 'gecikmiş göreviniz']) {
@@ -90,6 +91,17 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   const { grounding } = aiTelemetrySnapshot();
   assert.deepEqual(grounding.presentation, { composed: 1, narrative: 0, unavailable: 0, byReason: {}, charts: 1 });
   assert.equal(grounding.escalations.total, 0);
+});
+
+test('açık grafik isteği yeni model turu açılamadığında da sunucunun belirlenimci düzenine gider (sessizce düşmez)', () => {
+  // Kısmi yanıt (sonraki bölümde sağlayıcı kesildi) ya da düşen Derin anlatım `compose: false` ile biter: model çağrılmaz,
+  // ama açık grafik isteği sunucunun belirlenimci düzeniyle (grafik ya da kısa not) karşılanır.
+  assert.equal(presentationRoute({ compose: false, composeAnswers: true, visual: true, analytical: false }), 'server');
+  assert.equal(presentationRoute({ compose: false, composeAnswers: true, visual: true, analytical: true }), 'server');
+  assert.equal(presentationRoute({ compose: false, composeAnswers: true, visual: false, analytical: true }), 'verdict', 'grafiksiz kısmi yanıt doğrulanmış anlatımdır');
+  assert.equal(presentationRoute({ compose: true, composeAnswers: false, visual: false, analytical: true }), 'server');
+  assert.equal(presentationRoute({ compose: true, composeAnswers: false, visual: false, analytical: false }), 'verdict');
+  assert.equal(presentationRoute({ compose: true, composeAnswers: true, visual: false, analytical: false }), 'model');
 });
 
 test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; yapısal ret yalnızca sayfayla tek Derin anlatım denemesi açar', async (t) => {

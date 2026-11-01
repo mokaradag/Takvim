@@ -30,7 +30,8 @@ export const ANALYSIS_LEVELS = Object.freeze(['unit', 'department', 'directorate
 export const ANALYSIS_FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'overdue', 'upcoming', 'workload', 'projects', 'schedule', 'critical']);
 export const ANALYSIS_LIMITS = Object.freeze({ maxFocus: PLANNER_LIMITS.maxRequests, maxNames: 2, rankLimit: 8 });
 
-const DATE = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' };
+// Takvimde gerçekten bulunan gün (şema doğrulayıcısının kanonik `date` biçimi): "2026-02-31" SQL'e ulaşmadan reddedilir.
+const DATE = { type: 'string', format: 'date' };
 const OPEN = Object.freeze(['todo', 'in_progress']);
 
 /** Modelin gördüğü kapalı özet şeması; açıklamalar yalnızca sözleşmeyi anlatır, dili yorumlamaz. */
@@ -82,7 +83,9 @@ export function analysisHints(problems) {
   if (has('$.analysis.scope')) hints.push(`analysis.scope: ${ANALYSIS_SCOPES.join('|')}`);
   if (has('$.analysis.date')) hints.push('analysis.dateFrom/dateTo: YYYY-MM-DD, dateFrom ≤ dateTo');
   if (has('$.analysis.rows')) hints.push('analysis.rows yalnızca scope "row" ile: önceki yanıtın satır sırası ([1] ya da [1,2]); kapsam satırdaki kişi/projedir');
-  if (has('$.analysis.within')) hints.push('analysis.within (tek proje adıyla daraltma) yalnızca scope self|team|all|previous ile');
+  if (has('$.analysis.within:conflict')) hints.push('Önceki kapsam zaten bir projeyle sınırlı: analysis.within verilmez (aynı projeyse within yazma; başka bir projeyse scope project ve names ile yeni analiz)');
+  else if (has('$.analysis.within')) hints.push('analysis.within (tek proje adıyla daraltma) yalnızca scope self|team|all|previous ile');
+  if (has('$.analysis.dateTo:past')) hints.push('upcoming için dateTo bugünden önce olamaz; geçmiş terminler overdue yönüdür');
   if (has('$.analysis:request')) hints.push('analysis ile request/additionalRequests/calls birlikte verilmez');
   return hints;
 }
@@ -125,6 +128,13 @@ function scopeBase(analysis) {
 
 const request = (fields) => ({ layout: 'auto', ...fields });
 
+/**
+ * Portföy özeti (rota_portfolio_summary) yalnızca bütün portföy için okunur: aracın proje ya da kişi seçicisi yoktur.
+ * Kapsam daraltılmışsa (within projesi, ekip, kişi) aynı yön daraltılmış görev nüfusundan okunur; nüfus hiçbir zaman
+ * kabul edilen özetten geniş olmaz.
+ */
+const portfolioWide = (base) => !base.entities.length && !Object.keys(base.filters).length;
+
 /** Görev satırının bağlam sütunları: kişi kapsamında sorumlu, proje dışı kapsamda proje. */
 function rowContext(analysis, base) {
   const projectBound = analysis.scope === 'project' || base.entities.some((entity) => entity.type === 'project');
@@ -132,9 +142,35 @@ function rowContext(analysis, base) {
 }
 
 /** Birden çok adlı kayıt (karşılaştırma): her ölçü kendi varlığına bağlanır; sıralı liste yerine kayıt başına değer. */
-function comparison(base, metrics) {
+function comparison(base, metrics, filters = {}) {
+  const population = { ...base.filters, ...filters };
   return request({ operation: 'value', metrics, population: { tool: 'rota_task_analytics' }, entities: base.entities,
-    bindings: base.entities.flatMap((_, entity) => metrics.map((metric) => ({ metric, entity }))) });
+    bindings: base.entities.flatMap((_, entity) => metrics.map((metric) => ({ metric, entity }))), ...(Object.keys(population).length ? { filters: population } : {}) });
+}
+
+/**
+ * Karşılaştırmanın yönü: kayıt başına değerle ifade edilen yönler tek karşılaştırma bölümüdür (ufuk uygulanır); dağılım
+ * yönleri (öncelik, termin kovası, aylar, projeler) her kayıt için aynı gruplamadır (kayıt başına bir bölüm, hep birlikte).
+ */
+function comparisonFor(focus, analysis, base, window) {
+  switch (focus) {
+    case 'overview':
+    case 'workload': return comparison(base, ['tasks.open', 'tasks.overdue', 'tasks.dueNext7Days']);
+    case 'overdue': return comparison(base, ['tasks.overdue']);
+    case 'upcoming': return window ? comparison(base, ['tasks.total'], { status: [...OPEN], ...window }) : comparison(base, ['tasks.dueNext7Days']);
+    case 'critical': return comparison(base, ['tasks.total'], { status: [...OPEN], priority: ['critical', 'high'], ...(window || {}) });
+    case 'status': return comparison(base, ['tasks.todo', 'tasks.inProgress', 'tasks.done']);
+    case 'projects':
+    case 'priority':
+    case 'deadlines':
+    case 'schedule': {
+      // Projeler arası karşılaştırmada "projelere göre" her proje için tek gruptur: bilgi taşımaz.
+      if (focus === 'projects' && analysis.scope === 'project') return null;
+      const groupBy = { priority: 'priority', deadlines: 'deadline', schedule: 'target_month', projects: 'project' }[focus];
+      return base.entities.map((entity) => groups({ ...base, entities: [entity] }, groupBy, { open: focus !== 'projects', split: focus === 'projects', window: focus === 'schedule' ? window : null }));
+    }
+    default: return null;
+  }
 }
 
 function groups(base, groupBy, { open = true, window = null, split = false } = {}) {
@@ -153,15 +189,18 @@ function ranked(base, analysis, { metrics, rank, filters }) {
     filters: { ...base.filters, ...filters } });
 }
 
-/** Tek yönün isteği; kapsamda anlamı yoksa `null` (yön düşer, diğerleri kalır). */
-function focusRequest(focus, analysis, base) {
+/**
+ * Tek yönün isteği (ya da karşılaştırmada kayıt başına istekler); kapsamda anlamı yoksa `null` (yön düşer, diğerleri kalır).
+ * `today`: yaklaşan işin alt sınırı — yalnızca üst sınırı verilen ufuk geçmiş (gecikmiş) terminleri kapsamaz.
+ */
+function focusRequest(focus, analysis, base, today = null) {
   const compare = base.entities.filter((entity) => entity.type === (analysis.scope === 'person' ? 'person' : 'project')).length > 1 && ['person', 'project'].includes(analysis.scope);
   const window = analysis.dateFrom || analysis.dateTo ? { ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) } : null;
-  // Karşılaştırmada kayıt başına değerler: açık, gecikmiş ve yaklaşan iş (yön ne olursa olsun tek karşılaştırma bölümü; tekilleşir).
-  if (compare) return comparison(base, ['tasks.open', 'tasks.overdue', 'tasks.dueNext7Days']);
+  const ahead = window && !window.dateFrom && ['upcoming'].includes(focus) ? upcomingFrom(window, today) : window;
+  if (compare) return comparisonFor(focus, analysis, base, focus === 'upcoming' ? ahead : window);
   switch (focus) {
     case 'overview':
-      if (analysis.scope === 'projects') {
+      if (analysis.scope === 'projects' && portfolioWide(base)) {
         return request({ operation: 'value', metrics: ['projects.total', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'projects.withOverdue'],
           population: { tool: 'rota_portfolio_summary' } });
       }
@@ -175,7 +214,7 @@ function focusRequest(focus, analysis, base) {
       return ranked(base, analysis, { metrics: ['tasks.total', 'task.title', 'task.overdueDays'], rank: { metric: 'task.overdueDays', order: 'desc' }, filters: { deadline: 'overdue' } });
     case 'upcoming':
       return ranked(base, analysis, { metrics: ['tasks.total', 'task.title', 'task.targetFinish', 'task.status'], rank: { metric: 'task.targetFinish', order: 'asc' },
-        filters: { status: [...OPEN], ...(window ? { ...window } : { deadline: 'due_next_7_days' }) } });
+        filters: { status: [...OPEN], ...(ahead ? { ...ahead } : { deadline: 'due_next_7_days' }) } });
     case 'critical':
       return ranked(base, analysis, { metrics: ['tasks.total', 'task.title', 'task.priority', 'task.targetFinish'], rank: { metric: 'task.targetFinish', order: 'asc' },
         filters: { status: [...OPEN], priority: ['critical', 'high'], ...(window || {}) } });
@@ -190,7 +229,7 @@ function focusRequest(focus, analysis, base) {
         ...(analysis.scope === 'team' ? { filters: { ...base.filters } } : {}) });
     case 'projects':
       if (analysis.scope === 'project') return null;
-      if (analysis.scope === 'projects' || analysis.scope === 'all') {
+      if ((analysis.scope === 'projects' || analysis.scope === 'all') && portfolioWide(base)) {
         return request({ operation: 'rank', metrics: ['project.name', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'], rank: { metric: 'tasks.overdue', order: 'desc', limit: ANALYSIS_LIMITS.rankLimit },
           population: { tool: 'rota_portfolio_summary', collection: 'projects' } });
       }
@@ -200,19 +239,31 @@ function focusRequest(focus, analysis, base) {
   }
 }
 
+/** Yalnızca üst sınırı verilen yaklaşan iş ufku bugünden başlar; bugün bilinmiyorsa ya da ufuk geçmişteyse reddedilir. */
+function upcomingFrom(window, today) {
+  if (!today) throw invalidArguments(['$.analysis.dateFrom:required']);
+  if (window.dateTo < today) throw invalidArguments(['$.analysis.dateTo:past']);
+  return { dateFrom: today, ...window };
+}
+
 /**
  * Özetin bölümleri: her yön en çok bir istek; eşdeğer istekler tekilleşir; çok bölümlü planın sınırı aşılmaz.
  * Sonuç modelin yazacağı ham istek nesneleridir (`request` + `additionalRequests`), doğrulama sonrasındadır.
  */
-export function expandAnalysis(analysis, { previous = null } = {}) {
-  // Takip: önceki öznenin kapsamı; yön, ufuk ve görselleştirme yeni sorunundur (model yeniden bildirir).
-  const narrowed = (base) => (analysis.within ? { ...base, entities: [...base.entities.filter((entity) => entity.type !== 'project'), { type: 'project', text: analysis.within }] } : base);
+export function expandAnalysis(analysis, { previous = null, today = null } = {}) {
+  // Takip: önceki öznenin kapsamı; yön, ufuk ve görselleştirme yeni sorunundur (model yeniden bildirir). `within` kapsamı
+  // DARALTIR (kesişim): kapsam zaten bir projeyle sınırlıysa ikinci proje onun yerine geçmez, plan reddedilir.
+  const narrowed = (base) => {
+    if (!analysis.within) return base;
+    if (base.entities.some((entity) => entity.type === 'project')) throw invalidArguments(['$.analysis.within:conflict']);
+    return { ...base, entities: [...base.entities, { type: 'project', text: analysis.within }] };
+  };
   if (['previous', 'row'].includes(analysis.scope)) {
     const resolved = previousBase(analysis, previous);
     analysis = { ...analysis, scope: resolved.scope };
-    return expandWith(analysis, narrowed(resolved.base));
+    return expandWith(analysis, narrowed(resolved.base), today);
   }
-  return expandWith(analysis, narrowed(scopeBase(analysis)));
+  return expandWith(analysis, narrowed(scopeBase(analysis)), today);
 }
 
 /**
@@ -231,19 +282,19 @@ export function effectiveFocus(analysis) {
   return required.length ? [...focus.filter((item) => !required.includes(item)).slice(0, limit - required.length), ...required] : focus;
 }
 
-function expandWith(analysis, base) {
+function expandWith(analysis, base, today = null) {
   const parts = [];
   const seen = new Set();
   for (const focus of effectiveFocus(analysis)) {
-    const item = focusRequest(focus, analysis, base);
-    if (!item) continue;
-    const key = JSON.stringify(item);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    parts.push(item);
+    const produced = focusRequest(focus, analysis, base, today);
+    // Karşılaştırmanın kayıt başına bölümleri bütün olarak eklenir (yarım karşılaştırma okunmaz); bölüm bütçesi aşılmaz.
+    const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
+    if (!items.length || parts.length + items.length > PLANNER_LIMITS.maxRequests) continue;
+    for (const item of items) seen.add(JSON.stringify(item));
+    parts.push(...items);
   }
   // Kapsamda anlamı olmayan yönlerin yerine kapsamın genel görünümü okunur (ör. tek projede "projelere göre").
-  if (!parts.length) parts.push(focusRequest('overview', analysis, base));
+  if (!parts.length) parts.push(focusRequest('overview', analysis, base, today));
   return parts;
 }
 
@@ -254,7 +305,8 @@ export function analysisDetails(details = []) {
     if (/entities\[\d+\](?:\.text)?:untrusted$/.test(text) || /entities(?:\[\d+\])?:dropped$/.test(text)) return '$.analysis.names:untrusted';
     if (/filters\.(?:dateFrom|dateTo|period)/.test(text)) return '$.analysis.dateFrom:invalid';
     if (/filters\.(?:assignee|teamLevel)/.test(text)) return '$.analysis.scope:unsupported';
-    if (/^\$\.analysis\./.test(text)) return text;
+    // Özetin kendi alanları ve plan düzeyi sorunlar (dil, niyet, görsel bayrağı, bilinmeyen alan, özet + istek) adıyla kalır.
+    if (/^\$\.analysis[.:]/.test(text) || /^\$\.(?:language|intent|visual|plan|calls|clarify|abstain)(?:[.:[]|$)/.test(text)) return text;
     return '$.analysis:invalid';
   }))];
 }
@@ -275,7 +327,8 @@ export function analysisSuggestion(request) {
   const focus = tool === 'rota_workload_summary' ? 'workload' : tool === 'rota_portfolio_summary' ? 'projects'
     : tool === 'rota_task_analytics' ? ({ status: 'status', priority: 'priority', deadline: 'deadlines', target_month: 'schedule', project: 'projects', assignee: 'workload' }[groupBy] || 'overview')
       : tool === 'rota_task_search' ? (filters.deadline === 'overdue' ? 'overdue' : (filters.dateFrom || filters.dateTo || String(filters.deadline || '').startsWith('due_')) ? 'upcoming'
-        : Array.isArray(filters.priority) && filters.priority.length ? 'critical' : null) : null;
+        // critical yönü yalnızca kritik/yüksek öncelikli açık işlerdir: başka öncelik istendiyse eşdeğer özet yoktur.
+        : Array.isArray(filters.priority) && filters.priority.length && filters.priority.every((item) => ['critical', 'high'].includes(item)) ? 'critical' : null) : null;
   if (!focus) return null;
   const named = (type) => entities.some((entity) => entity.type === type);
   const scope = filters.assignee === 'me' ? 'self' : filters.assignee === 'team' ? 'team' : named('person') ? 'person' : named('project') ? 'project'

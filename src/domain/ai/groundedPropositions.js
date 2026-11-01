@@ -654,7 +654,8 @@ export function noteLabel(tone, locale) {
 export function pointerSentence({ type, style, distribution = false, chartType = null }, locale) {
   const en = locale === 'en';
   if (type === 'chart' && chartType === 'kpi') return en ? 'The key figures are shown below.' : 'Öne çıkan göstergeleri aşağıda görebilirsiniz.';
-  if (type === 'chart' && chartType === 'timeline') return en ? 'The timeline below shows the upcoming dates.' : 'Tarihleri aşağıdaki zaman çizelgesinde görebilirsiniz.';
+  // Zaman çizelgesi gecikmiş (geçmiş) terminleri de gösterebilir: cümle tarihleri "yaklaşan" diye nitelemez.
+  if (type === 'chart' && chartType === 'timeline') return en ? 'The timeline below shows these dates.' : 'Tarihleri aşağıdaki zaman çizelgesinde görebilirsiniz.';
   if (type === 'chart' && chartType === 'line') return en ? 'The chart below shows the change over time.' : 'Zaman içindeki değişimi aşağıdaki grafikte görebilirsiniz.';
   if (type === 'chart' && chartType === 'stacked') return en ? 'The chart below shows the status breakdown.' : 'Durum kırılımını aşağıdaki grafikte görebilirsiniz.';
   if (type === 'chart') {
@@ -666,6 +667,16 @@ export function pointerSentence({ type, style, distribution = false, chartType =
 }
 
 /* ── Aşama 4E: analist önermeleri ─────────────────────────────────── */
+
+/**
+ * Denge yargısının önkoşulu: aynı tam kanıtın sorumlusuz açık iş sayısı BİLİNİR ve bir kişinin ortalama yükünü aşmaz.
+ * Bilinmiyorsa ya da büyükse "açık işler dengeli dağılmış" denmez (asıl iş atanmamış olabilir).
+ */
+function unassignedSmall(items, rows, assigned) {
+  const fact = items.find(({ fact: item, evidenceId }) => item.field === 'data.unassignedOpenTasks' && evidenceId === rows[0].evidenceId);
+  const value = fact?.fact.value;
+  return Number.isSafeInteger(value) && value >= 0 && value * rows.length <= assigned;
+}
 
 /** Doğrulanmış tam kanıttan sayı (sonlu, negatif olmayan tam sayı); değilse `null`. */
 const countOf = (entry) => (entry && Number.isSafeInteger(entry.fact.value) && entry.fact.value >= 0 ? entry.fact.value : null);
@@ -749,7 +760,7 @@ export function analystPropositions(parts, locale = 'tr') {
           ? sentence([v(percent(share, locale)), ' of the open task assignments are on ', v(top[0].name), '; the workload is concentrated on this person.'])
           : sentence(['Açık iş atamalarının ', v(`${percent(share, locale)}${turkishPossessiveSuffix(share)}`), ' ', v(top[0].name), ' üzerinde; iş yükü bu kişide yoğunlaşıyor.']), share >= 50 ? 'warning' : 'info',
         { host: `person:${top[0].name}` });
-      } else if (low > 0 && top[0].openTasks * 2 <= low * 3) {
+      } else if (low > 0 && top[0].openTasks * 2 <= low * 3 && unassignedSmall(items, rows, sum)) {
         add(rows[0].evidenceId, 'balance', en
           ? sentence(['Open work is spread fairly evenly across people (highest ', v(number(top[0].openTasks, locale)), ', lowest ', v(number(low, locale)), ').'])
           : sentence(['Açık işler kişiler arasında görece dengeli dağılmış (en yüksek ', v(number(top[0].openTasks, locale)), ', en düşük ', v(number(low, locale)), ').']), 'success');
