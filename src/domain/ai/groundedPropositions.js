@@ -129,6 +129,8 @@ function taskPopulation(filters, locale) {
 function windowParts(population, locale) {
   const { from, to } = population;
   if (!from && !to) return [];
+  // Tek günlük aralık ("bugün terminli") iki kez aynı tarihle söylenmez.
+  if (from && to && from === to) return locale === 'en' ? [' due on ', v(day(from, locale))] : [v(day(from, locale)), ' tarihinde terminli '];
   if (locale === 'en') {
     if (from && to) return [' due between ', v(day(from, locale)), ' and ', v(day(to, locale))];
     return from ? [' due on or after ', v(day(from, locale))] : [' due on or before ', v(day(to, locale))];
@@ -263,7 +265,7 @@ export function titleCandidate({ tool, filters, groupBy = null, locale }) {
   }
   // Termin aralığı nüfusun parçasıdır: tek uçlu ve gruplanmış aralık da başlıkta yazılır (başlık nüfusu genişletemez).
   const { from, to } = population;
-  const window = from && to ? ` (${day(from, locale)} – ${day(to, locale)})`
+  const window = from && to && from === to ? ` (${day(from, locale)})` : from && to ? ` (${day(from, locale)} – ${day(to, locale)})`
     : from ? (locale === 'en' ? ` (due on or after ${day(from, locale)})` : ` (${day(from, locale)} ve sonrasında terminli)`)
       : to ? (locale === 'en' ? ` (due on or before ${day(to, locale)})` : ` (${day(to, locale)} ve öncesinde terminli)`) : '';
   // Kayıt adıyla başlayan başlıkta veri değiştirilmez; yalnızca sunucu metniyle başlayan başlığın ilk harfi büyür.

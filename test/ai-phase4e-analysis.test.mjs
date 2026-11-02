@@ -808,10 +808,9 @@ test('takipte bu iletide geçmeyen ad yeniden yazılırsa sunucu önceki özneye
   const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
   await ask({ text: 'Radar Modernizasyonu projesini özetle' });
   const result = await ask({ text: 'bunu grafikle göster' });
-  assert.equal(result.inputs.length, 2);
-  const repair = systemText(result.inputs[1].messages);
-  assert.match(repair, /\$\.analysis\.names:untrusted/);
-  assert.match(repair, /önceki analizin öznesi kastediliyorsa analysis\.scope "previous"/);
+  // Aynı türde ve sayıda önceki özneyi gösteren, bu iletide geçmeyen ad doğrudan kanonik göndergeye ("previous") çevrilir:
+  // onarım turu gerekmez, sonuç aynıdır (önceki proje, güncel yetkiyle, grafikli).
+  assert.equal(result.inputs.length, 1);
   assert.deepEqual(turnViolations(result, { project: true, finish: 'stop', chart: true }), []);
 });
 

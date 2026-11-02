@@ -2202,12 +2202,22 @@ kendi sözcükleri yapısal olarak olgu taşıyamaz:
   Markdown/HTML, bağlantı, görünmez karakter yoktur;
 - cümle başı ve iki nokta sonrası dışında büyük harfle başlayan sözcük (özel ad biçimi) yoktur; sayfadaki kayıt adları
   (proje, kişi, görev) yuva dışında ancak aynı cümledeki yuvanın KENDİ metninde geçiyorsa yazılabilir (çapraz eşleme olmaz);
-- her cümle en az bir yuva taşır; yuvadan hemen sonra yalnızca noktalama gelir (yan cümle sürdürülemez); **cümle son
-  yuvasıyla biter** — son yuvadan sonraki model yorumu (tahmin, öneri, abartı) çizilmez;
+- her cümle en az bir yuva taşır; yuvadan hemen sonra yalnızca noktalama ya da kapalı kümeden bir sıralama bağlacı
+  ("ve", "ama", "ancak", "fakat", "oysa", "üstelik", "ayrıca", "dolayısıyla"; İngilizcede "and", "but", …) gelir —
+  bağlaç yan cümleyi değiştirmez, ardındaki metin bir sonraki yuvanın çerçevesidir; **cümle son yuvasıyla biter** — son
+  yuvadan sonraki model yorumu (tahmin, öneri, olumsuzlama, abartı) çizilmez;
+- yuvayı ad öbeği gibi kullanan cümle ("Bu görev aynı zamanda {P4} olduğundan, …", "{P2} görev terminlenecek")
+  düşürülmez, **yuvada kısaltılır** (`clauseCut`): önceki geçerli yuvada biter; önceki yuva yoksa gömülü yuva tek başına
+  (ya da noktalamayla ayrılmış çerçevesiyle) kalır. Noktalamasız ardışık yuvalar ("{P1} {P2}") ayrı cümlelerdir;
 - tablo/grafik yönlendirmesi (`{T#}`, `{G#}`) yalnızca kendi başına bir cümledir ve sunucunun cümlesidir.
 
-İhlal taşıyan cümle düşürülür (yalnızca modelin içeriği azalır); düşürülen tutulandan çoksa paragraf reddedilir ve
-sunucunun belirlenimci düzeni gösterilir. Düzyazı düzeninde sunucu eksik kapsamı kendi içeriğiyle tamamlar: çizilmeyen
+Denetim çizilecek biçim üzerinde yapılır (kısaltma ve kuyruk kesimi önce). Yuvasız çerçeve cümlesi ve yinelenen yuva
+temiz düşer (yumuşak); diğer ihlal taşıyan cümle düşürülür (yalnızca modelin içeriği azalır) ve bu sert ihlaller tutulan
+cümleden çoksa paragraf reddedilir; bütün düzyazı paragrafları reddedilirse sunucunun belirlenimci düzeni gösterilir.
+Düzyazı yanıtında grafik bloğuna adayın çizemeyeceği tür yazılmışsa yalnızca o blok düşer (aday ve değerler
+sunucunundur; istenen tür varsa sunucu doğrulanmış adayı ekler); modelin başlık blokları yok sayılır ve Ayrıntılı'da
+başlığı sunucu, bölümün ilk bloğunun önüne koyar (bölümler ardışık değilse başlık konmaz). Onarım sayıları (düşen,
+kısaltılan cümle; düşen grafik bloğu; sunucu tamamlaması) tur izinde yalnızca sayı olarak tutulur. Düzyazı düzeninde sunucu eksik kapsamı kendi içeriğiyle tamamlar: çizilmeyen
 tablo, söylenmeyen zorunlu çekince ve bölümün asgari anlatımı sunucu paragrafı olarak eklenir; grafik sayısı ayrıntı
 sözleşmesiyle sınırlıdır. Bu normalleştirmelerin hiçbiri model metni eklemez.
 
@@ -2250,7 +2260,8 @@ cümledeki doğrulanmış olguyla birlikte, kalın değerler ve atıfla görün�
 | Bölüm başına anlatım (en az/en çok) | 1 / 2 | 3 / 6 | 6 / 14 |
 | Yapı (yönerge) | tek paragraf | 2–3 paragraf: sonuç, destek, karşıtlık | 3–5 paragraf: sonuç, etkenler, dağılım/karşılaştırma, zaman, emin olunamayanlar |
 | Grafik sınırı | 1 | 1 (+1 açık istekte) | 2 (+1 açık istekte) |
-| Anlatım çıktı bütçesi | 1200 | 1800 | 3000 |
+| Anlatım çıktı bütçesi | 800 | 1800 | 3000 |
+| Bölüm başlıkları | — | yok (bütünleşik metin) | her bölüm sunucu başlığıyla açılır |
 
 Fark yararlı içerikten gelir (daha geniş doğrulanmış okuma ve daha çok önerme); sözcük sayısı kuralı yoktur.
 
@@ -2260,12 +2271,75 @@ Plan düzeyinde `chart` (bar, donut, line, stacked, kpi, timeline) ve `table` al
 istenmiştir. Tür, takipte ve açıklama sonrasında sürer. İstenen tür bütün bölümlerin adaylarında aranır; model aynı
 adayı başka türle seçtiyse biçim istenen türe çevrilir; tür söylenmediyse veri grafiği gösterge kartından önce gelir.
 İstenen tür doğrulanmış kanıtla çizilemiyorsa sessizce başka tür çizilmez: türün gerektirdiği veri ve gösterilen grafik
-not olarak söylenir ("Zaman çizelgesi için tarihli görev satırları gerekir; …").
+not olarak söylenir ("Zaman çizelgesi için tarihli görev satırları gerekir; …"). Aday sınırı (6) tek sütunlu çubuk
+adaylarıyla dolsa da istenen türden aday yoksa onun için bir yer ayrılır (çok sütunlu portföy tablosu yığılmış adayı
+dışarıda bırakamaz).
 
-### 15.6 Sınamalar
+### 15.6 Ek soru sınıfları ve zayıf model biçim normalleştirmesi
+
+- **Kişi ile kendini karşılaştırma** (`analysis.withSelf`, yalnızca `person` + tek ad): iki özne aynı ölçülerle okunur;
+  kendi özne güvenilir oturumdur (`assignee: me`), model kimlik yazmaz. Analist önermeleri "Siz: …" öznesini taşır.
+- **Kesinlik takibi** (`act: certainty`): sayfaya her tablonun tamlığını söyleyen sunucu önermeleri (`certainty`) eklenir;
+  model kapsam iddiası kurmaz, yalnızca bu önermeleri ve zorunlu çekinceleri anlatır. Tablo bölümünün adıyla anılır
+  ("gecikmiş görevler tablosu …"), ilk sütun adıyla değil. Tek günlük termin aralığı tarihi bir kez söyler
+  ("**30 Eylül 2026** tarihinde terminli …").
+- **Dönemli durum dağılımı**: `status` yönü ufku taşır (geçmiş dönemin tamamlanma görünümü o dönemde terminli işlerdir).
+- **Grafik türünün okuması**: adı verilen tür, gerektirdiği okumayı sunucunun zorunlu bölümü olarak ekler (yığılmış →
+  proje başına açık/tamamlanan, zaman çizelgesi → tarihli görev satırları, çizgi → aylık termin dizisi, gösterge →
+  genel sayılar, halka → dağılım); toplam okuma bölümü en çok 4'tür.
+- **Satır göndergeleri**: görev listesinin satırı kendi projesidir (`row` → proje). Ayrıntılı istekle (özetsiz) listelenen
+  görevler yalnızca **satır-yalnız** bağlam yazar: `previous` kullanılamaz (isteğin süzgeçleri özetle temsil edilemediği
+  için önceki özne genişlerdi), satırın projesi incelenebilir; bu bağlam kanıt verisini sıkıştırma gerekçesi değildir.
+  Satırlar konumsaldır (aynı projede iki görev aynı proje kimliğini iki kez taşır). Karşılaştırma yanıtında satır
+  numaraları karşılaştırılan öznelerdir. Satıra inme, kaydın genel görünümüdür (önceki sıralama ölçüsü yinelenmez).
+- **Önceki özne adları**: takipte bu iletide geçmeyen ve önceki analizle aynı türde/sayıda özneyi gösteren adlar
+  `previous` sayılır (onarım kuralının eşdeğeri; ek model turu açılmaz).
+- **Yapısal normalleştirme** (dil yorumu değil): sözlük değerinin tekil/çoğul yazımı (`deadline` → `deadlines`); sözlük dışı
+  eylem düşer; ad listeli `projects` → `project`; satır listeli `previous` → `row`; özetin içine yazılan `chart`/`table`
+  plan düzeyine taşınır; görselin yeri (özet/plan) onarımda anlam değişikliği sayılmaz; şema sınırını aşan yön listesi
+  modelin kendi yönlerinin sıralı alt kümesine daraltılabilir; sunucunun zorunlu eklediği okuma modelin 3 yönlük
+  bütçesinden düşmez.
+- **Ayrıntılı bölümlüdür**: sayfa `sections` ana hattını taşır; her bölüm sunucunun başlığıyla açılır (doğal başlığı
+  olmayan bölüm kanıtının konu adını alır), model her bölüm için ayrı paragraf yazar. Aynı araç iki bölümde farklı
+  biçimde döndüğünde (portföy başlık ölçüleri ve proje karşılaştırma tablosu) başlıklar ayrışır ("Portföy özeti",
+  "Proje karşılaştırması"); bir bölüm başlıksız kalırsa olguların yanlış başlık altına düşmemesi için hiç başlık sunulmaz.
+  Dengeli başlıksız ve bütünleşiktir.
+
+### 15.7 Sınamalar
 
 `test/ai-phase4e-quality-convergence.test.mjs`: düzyazı denetimi (rakam, ad, özel ad biçimi, işaretleme, sahte yuva,
 yan cümle sürdürme, cümle içi yönlendirme, ad lisansı), çizim (yuva büyük/küçük harf, sözcük yinelemesi), uçtan uca
 model düzyazısı, zorunlu çekince, Dengeli/Ayrıntılı farkı (okuma, bölüm, önerme, bütçe), takip kalıtımı ve eylemleri,
 açıklama sonrası yeniden yürütme (model turu yok), takipte yetki kaybı, grafik türü (halka, zaman çizelgesi, açıklama),
-rol matrisi (yönetici ≠ ekip lideri; lider + yönetici; sıradan kullanıcı), seyrek veri ve onarım daraltması.
+rol matrisi (yönetici ≠ ekip lideri; lider + yönetici; sıradan kullanıcı), seyrek veri, onarım daraltması, kişi–kendi
+karşılaştırması, kesinlik takibi, satır-yalnız bağlam, grafik türü okuması, karşılaştırma takibi ve bölümlü Ayrıntılı.
+
+### 15.8 Gerçek arayüz kabulü (Haiku 4.5, düşünme kapalı)
+
+Kabul, üretim derlemesinin (`next build` + `next start`) tarayıcıda gerçek Bilgin paneliyle kullanılmasıyla yapıldı
+(`scripts/ui-acceptance/`): geliştirme kimliği, deponun bellek içi SQL Server ikizi (yalnızca sentetik kayıtlar), yerel
+OpenAI uyumlu köprü üzerinden `claude-haiku-4-5-20251001`. Köprü başka model istemini reddeder (devir girişimi sayılır);
+kayıt defterinde akıl yürütme profili yoktur (Derin devir yolu kapalı). Bütün çağrılar: model kimliği Haiku 4.5,
+düşünme `off`, düşünme belirteci 0, devir girişimi 0. Soru, yanıt ve kanıt metni günlüğe yazılmaz.
+
+Profiller (sentetik): A sıradan çalışan, B ekip lideri (dört kişi, bir proje lideri), C yönetim kapsamı olmayan yönetici
+(admin), D ekip lideri + yönetici, E proje odaklı kullanıcı, F kısıtlı görünürlük, G seyrek veri (görev yok).
+
+| Geçiş | Tur | Model düzeni | Sunucu düzeni | Güvenli ret / açıklama | Başarısız |
+| --- | --- | --- | --- | --- | --- |
+| Ana geçiş A–G (+B2: 20 soru listesi) | 73 | 52 | 8 | 6 | 7 |
+| Düzeltme sonrası yeniden sınama (RB, FB) | 22 | 8 | 9 | 1 | 4 |
+| Son düzeltmeler (FC, FD, FE) | 14 | 9 | 4 | 0 | 1 |
+
+Son düzeltmelerden sonra (düzyazı yuva onarımı, sunucu başlığı, istenen tür için aday yeri): Dengeli ve Ayrıntılı
+proje değerlendirmesi, yığılmış grafik (S13), tablo + model seçimli grafik (S12: çubuk + yığılmış), zaman çizelgesi
+(S14), bugünün üç önceliği (S18), yönetici özeti ve kesinlik takibi (S20 → S19) model düzeniyle çizildi; Ayrıntılı
+yanıt sunucu bölüm başlıklarıyla açıldı. Bölüm/direktörlük soruları (S07, S08) sentetik veride düzey hiyerarşisi
+olmadığı için güvenli biçimde reddedildi; yönetici (C) ekip sorusunda ekip lideri sayılmadı.
+
+Bilinen sınırlar: dört yönlü soru (gecikme + iş yükü + yaklaşan + genel) şema sınırı (3) nedeniyle bir onarım turu
+açar; onarım yeni yön eklerse (anlam değişikliği) tur açıkça başarısız olur (FE #2), yön sessizce düşmez. Haiku zaman
+zaman takip sorusunu önceki soru gibi planlar. Dengeli ile Ayrıntılı arasındaki fark yapısaldır (ek okuma, bölüm
+başlığı, ek grafik); modelin düzyazı uzunluğu iki ayarda benzer kalabilir. Bağlaç sonrası model çerçevesi dilbilgisi
+açısından denetlenmez (olgu taşıyamaz, ama kimi zaman kuşkulu ifade içerebilir).
+

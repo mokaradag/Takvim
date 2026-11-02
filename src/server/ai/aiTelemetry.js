@@ -786,7 +786,11 @@ function presentationSummary(value) {
     chart: CHART_TYPES.has(value.chart) ? value.chart : null,
     charts: value.mode === 'composed' ? safeCount(value.charts) ?? 0 : 0,
     ms: millis(value.ms),
-    rejected: SAFE_ISSUE.test(String(value.rejected ?? '')) ? value.rejected : null
+    rejected: SAFE_ISSUE.test(String(value.rejected ?? '')) ? value.rejected : null,
+    // Düzyazı onarım sayıları (yalnızca sayı): düşen ve kısaltılan cümle, düşen grafik bloğu, sunucu tamamlaması.
+    ...(value.mode === 'composed' && value.prose && typeof value.prose === 'object'
+      ? { prose: { dropped: safeCount(value.prose.dropped) ?? 0, cut: safeCount(value.prose.cut) ?? 0, charts: safeCount(value.prose.charts) ?? 0,
+        supplemented: safeCount(value.prose.supplemented) ?? 0 } } : {})
   };
 }
 

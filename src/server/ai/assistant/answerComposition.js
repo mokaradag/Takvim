@@ -95,7 +95,10 @@ export async function composeGroundedAnswer({ session, composition, onStart = nu
       if (fallback?.ok && fallback.blocks.some((block) => block.type === 'chart')) validated = { ...fallback, chartInserted: true };
     }
     const rendered = renderComposition(composition, validated);
-    return rendered.text.trim() ? { ok: true, ...rendered, ...(validated.chartInserted ? { chartInserted: true } : {}) } : { ok: false, reason: 'INVALID', issue: 'EMPTY_RENDER' };
+    // Düzyazı onarım sayıları (içeriksiz): düşen/kısaltılan cümle, düşen grafik bloğu, sunucu tamamlaması.
+    const prose = checked.prose ? { dropped: checked.prose.dropped, cut: checked.prose.cut, charts: checked.prose.charts, supplemented: checked.prose.supplemented } : null;
+    return rendered.text.trim() ? { ok: true, ...rendered, ...(validated.chartInserted ? { chartInserted: true } : {}), ...(prose ? { prose } : {}) }
+      : { ok: false, reason: 'INVALID', issue: 'EMPTY_RENDER' };
   } catch {
     // Doğrulayıcının beklenmeyen hatası doğrulanmış yanıtı düşürmez; belirlenimci anlatım gösterilir.
     return { ok: false, reason: 'INTERNAL' };

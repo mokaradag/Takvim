@@ -11,6 +11,8 @@ const path = require('path');
 
 const [scenarioFile, outDir] = process.argv.slice(2);
 const scenario = JSON.parse(fs.readFileSync(scenarioFile, 'utf8'));
+// İsteğe bağlı: yalnızca adı verilen konuşmalar (yarıda kalan koşunun kalanı için).
+if (process.env.UI_ONLY) scenario.conversations = scenario.conversations.filter((item) => process.env.UI_ONLY.split(',').includes(item.name));
 scenario.appLog = path.resolve(process.env.UI_ACCEPTANCE_DIR || '.', scenario.appLog);
 const CALLS = path.join(process.env.UI_ACCEPTANCE_DIR || path.join(__dirname, 'logs'), 'calls.jsonl');
 const lines = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean) : []);
@@ -18,6 +20,9 @@ const turnTraces = () => lines(scenario.appLog).filter((line) => line.includes('
   .map((line) => { try { return JSON.parse(line.slice(line.indexOf('{'))).context; } catch { return null; } }).filter(Boolean);
 
 async function setDetail(page, detail) {
+  // Odak görünümündeki Bilgin paneli sayfanın üstünde kipsel bir iletişim kutusudur: ayara gitmeden önce kapatılır.
+  const close = page.getByRole('button', { name: 'Bilgin’i kapat' });
+  if (await close.isVisible().catch(() => false)) { await close.click(); await page.waitForTimeout(400); }
   await page.getByRole('button', { name: 'Ayarlar' }).first().click();
   const label = { short: 'Kısa', balanced: 'Dengeli', detailed: 'Ayrıntılı' }[detail];
   const group = page.getByRole('group', { name: 'Yanıt ayrıntısı' });

@@ -60,10 +60,17 @@ function sentencesOf(tokens) {
   const sentences = [];
   let current = [];
   for (const [position, token] of tokens.entries()) {
-    if (token.slot) { current.push(token); continue; }
+    if (token.slot) {
+      // Arada metin olmadan bitişik iki yuva ("{P1}{P2}") da iki ayrı önerme cümlesidir.
+      if (tokens[position - 1]?.slot && current.length) { current.push({ text: '.' }); sentences.push(current); current = []; }
+      current.push(token);
+      continue;
+    }
     // Önerme cümlesi kendi noktasıyla biter: yuvadan sonra boşluk ve büyük harfle başlayan sözcük yeni cümledir
     // ("{P2} Buna ek olarak …"); örtük nokta eklenir.
-    if (tokens[position - 1]?.slot && /^\s+[\p{Lu}\p{Lt}]/u.test(token.text) && current.length) {
+    // Noktalamasız ardışık iki yuva ("{P1} {P2}") iki ayrı önerme cümlesidir.
+    const adjacent = tokens[position - 1]?.slot && !token.text.trim() && tokens[position + 1]?.slot;
+    if (tokens[position - 1]?.slot && (adjacent || /^\s+[\p{Lu}\p{Lt}]/u.test(token.text)) && current.length) {
       current.push({ text: '.' });
       sentences.push(current);
       current = [];
@@ -94,6 +101,38 @@ function sentencesOf(tokens) {
  */
 /** Yuvanın ardından yalnızca noktalama gelebilir: yan cümle bittiği yerde biter, modelin sözcüğü onu sürdüremez. */
 const AFTER_SLOT = /^\s*(?:$|[.,;:!?)\u2026\u2013\u2014"\u201d-])/u;
+/**
+ * Sıralama bağlacı yan cümleyi değiştirmez, yeni yan cümle açar ("{P1} ve bunların çoğu …: {P2}."). Bağlaçtan sonraki
+ * metin bir sonraki yuvanın çerçevesidir; ardında yuva yoksa cümle son yuvada biter (kuyruk çizilmez). Kapalı küme;
+ * soru yorumu değil, modelin cümle söz dizimidir.
+ */
+const CONTINUATION = Object.freeze({
+  tr: /^\s+(?:ve|ama|ancak|fakat|oysa|üstelik|ayrıca|dolayısıyla)\s/u,
+  en: /^\s+(?:and|but|while|whereas|yet|so)\s/u
+});
+const continues = (text, locale) => CONTINUATION[locale === 'en' ? 'en' : 'tr'].test(text);
+
+/**
+ * Yuvayı ad öbeği gibi kullanan cümlenin onarımı ("Bu görev aynı zamanda {P4} olduğundan, …"): yuvanın ardından gelen
+ * sözcük yan cümleyi sürdüremez. Cümle bir önceki geçerli yuvada biter; önceki yuva yoksa gömülü yuva tek başına (ya da
+ * noktalamayla ayrılmış çerçevesiyle) kalır. Yalnızca modelin metnini KISALTIR; çizilen her parça yine denetlenir.
+ * @returns {{ sentence: object[], cut: boolean }}
+ */
+function clauseCut(sentence, { pointer, locale }) {
+  for (let index = 0; index < sentence.length; index += 1) {
+    const token = sentence[index];
+    if (!token.slot || pointer(token.slot)) continue;
+    const next = sentence[index + 1];
+    const blankBeforeSlot = next?.text != null && !next.text.trim() && sentence[index + 2]?.slot;
+    if (!next || (!next.slot && !blankBeforeSlot && (AFTER_SLOT.test(next.text) || continues(next.text, locale)))) continue;
+    const previous = sentence.slice(0, index).findLastIndex((item) => item.slot);
+    if (previous >= 0) return { sentence: [...sentence.slice(0, previous + 1), { text: '.', trimmed: true }], cut: true };
+    const lead = sentence.slice(0, index).map((item) => item.text || '').join('');
+    const framed = !lead.trim() || /[:;,\u2013\u2014]\s*$/u.test(lead);
+    return { sentence: [...(framed ? sentence.slice(0, index) : []), token, { text: '.', trimmed: true }], cut: true };
+  }
+  return { sentence, cut: false };
+}
 
 function freeTextIssue(sentence, { names, licensed = [], locale, pointer = () => false }) {
   let atStart = true;
@@ -101,12 +140,13 @@ function freeTextIssue(sentence, { names, licensed = [], locale, pointer = () =>
   // Tablo/grafik yönlendirmesi kendi başına bir cümledir (sunucunun cümlesi); başka sözcük ya da yuva taşımaz.
   if (sentence.some((token) => token.slot && pointer(token.slot))
     && (sentence.filter((token) => token.slot).length > 1 || sentence.some((token) => token.text && /[\p{L}\p{N}]/u.test(token.text)))) return 'PROSE_POINTER';
+  // Onarımdan (clauseCut) sonra kalan cümlede yuvayı sürdüren sözcük olamaz; savunma derinliği için yine denetlenir.
   for (let index = 0; index < sentence.length; index += 1) {
     const token = sentence[index];
     if (token.slot && !pointer(token.slot)) {
       const next = sentence[index + 1];
       const blankBeforeSlot = next?.text != null && !next.text.trim() && sentence[index + 2]?.slot;
-      if (next && (next.slot || blankBeforeSlot || !AFTER_SLOT.test(next.text))) return 'PROSE_CLAUSE';
+      if (next && (next.slot || blankBeforeSlot || !(AFTER_SLOT.test(next.text) || continues(next.text, locale)))) return 'PROSE_CLAUSE';
     }
   }
   for (const token of sentence) {
@@ -139,12 +179,14 @@ function freeTextIssue(sentence, { names, licensed = [], locale, pointer = () =>
  * Model paragrafını doğrular ve cümlelere ayırır.
  *
  * Kural ihlali taşıyan CÜMLE düşürülür (çizilmez); düşürme yalnızca modelin içeriğini azaltır, hiçbir zaman olgu eklemez.
- * Düşürülen cümle tutulandan çoksa ya da hiç cümle kalmazsa paragraf reddedilir (ilk ihlalin koduyla). Kayıt adı ancak
- * aynı cümledeki bir yuvanın kendi metninde geçiyorsa yazılabilir (çapraz eşleme olamaz: ad, yuvanın önermesine aittir).
+ * Yuvayı ad öbeği gibi kullanan cümle düşürülmez, yuvada kısaltılır (`clauseCut`); son yuvadan sonraki kuyruk çizilmez.
+ * Denetim, çizilecek biçim üzerinde yapılır. Yuvasız çerçeve cümlesi ve yinelenen yuva temiz düşer (yumuşak); diğer
+ * ihlaller (sert) tutulan cümleden çoksa ya da hiç cümle kalmazsa paragraf reddedilir (ilk sert ihlalin koduyla). Kayıt
+ * adı ancak aynı cümledeki bir yuvanın kendi metninde geçiyorsa yazılabilir (çapraz eşleme olamaz: ad, yuvanın önermesine aittir).
  *
  * @param {string} text Modelin paragrafı (`{P#}`, `{T#}`, `{G#}` yuvalarıyla).
  * @param {{ known: (id: string) => boolean, names?: string[], locale?: string, slotText?: (id: string) => string, used?: Set<string> }} options
- * @returns {{ ok: true, ids: string[], sentences: object[][], dropped: number, issues: string[] } | { ok: false, issue: string }}
+ * @returns {{ ok: true, ids: string[], sentences: object[][], dropped: number, cut: number, issues: string[] } | { ok: false, issue: string }}
  */
 export function checkProse(text, { known, names = [], locale = 'tr', slotText = () => '', used = new Set() }) {
   if (typeof text !== 'string') return fail('PROSE_INVALID');
@@ -159,7 +201,12 @@ export function checkProse(text, { known, names = [], locale = 'tr', slotText = 
   const kept = [];
   const issues = [];
   const seen = new Set(used);
-  for (const sentence of all) {
+  const pointer = (id) => !id.startsWith('P');
+  let cut = 0;
+  for (const original of all) {
+    const repaired = clauseCut(original, { pointer, locale });
+    if (repaired.cut) cut += 1;
+    const sentence = endAtLastSlot(repaired.sentence);
     const slots = sentence.filter((token) => token.slot).map((token) => token.slot);
     // Yuva söz dizimine benzeyen ama yuva olmayan parantez (ör. "{F1}", yarım yuva) ya da sayfada olmayan kimlik.
     let issue = sentence.some((token) => token.text && /[{}]/u.test(token.text)) ? 'PROSE_SLOT'
@@ -169,16 +216,17 @@ export function checkProse(text, { known, names = [], locale = 'tr', slotText = 
     if (!issue) {
       // Aynı cümledeki yuvanın kendi metninde geçen kayıt adı yazılabilir; denetimden önce maskelenir.
       const licensed = folded.filter((name) => slots.some((id) => fold(slotText(id) || '', locale).includes(name)));
-      issue = freeTextIssue(sentence, { names: folded.filter((name) => !licensed.includes(name)), licensed, locale, pointer: (id) => !id.startsWith('P') });
+      issue = freeTextIssue(sentence, { names: folded.filter((name) => !licensed.includes(name)), licensed, locale, pointer });
     }
     if (issue) { issues.push(issue); continue; }
     for (const id of slots) seen.add(id);
-    kept.push(endAtLastSlot(sentence));
+    kept.push(sentence);
   }
   if (kept.length > PROSE_LIMITS.maxSentences) return fail('PROSE_LENGTH');
-  if (!kept.length || issues.length > kept.length) return fail(issues.find((issue) => issue !== 'PROSE_UNGROUNDED') || issues[0] || 'PROSE_UNGROUNDED');
+  const hard = issues.filter((issue) => !SOFT_ISSUES.has(issue));
+  if (!kept.length || hard.length > kept.length) return fail(hard[0] || issues[0] || 'PROSE_UNGROUNDED');
   const ids = kept.flatMap((sentence) => sentence.filter((token) => token.slot).map((token) => token.slot));
-  return { ok: true, ids, sentences: kept, dropped: issues.length, issues };
+  return { ok: true, ids, sentences: kept, dropped: issues.length, cut, issues };
 }
 
 /**
@@ -186,6 +234,9 @@ export function checkProse(text, { known, names = [], locale = 'tr', slotText = 
  * da öneri) çizilmez; yalnızca bitiş noktalaması kalır. Yorum yuvadan önce, çerçeve olarak yazılabilir. Bu yalnızca
  * modelin metnini kısaltır, olgu eklemez.
  */
+/** Temiz düşen ihlaller: yuvasız çerçeve cümlesi ve yinelenen yuva (kalan cümleler kendi başına kanıta bağlıdır). */
+const SOFT_ISSUES = new Set(['PROSE_UNGROUNDED', 'DUPLICATE_PROPOSITION']);
+
 function endAtLastSlot(sentence) {
   const last = sentence.findLastIndex((token) => token.slot);
   if (last < 0 || last === sentence.length - 1) return sentence;

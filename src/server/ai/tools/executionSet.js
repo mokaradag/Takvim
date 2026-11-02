@@ -196,7 +196,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const chart = base.chart || (follow && visual && !declined ? previousAnalysis.chart : null) || null;
     const table = base.table === true || Boolean(follow && previousAnalysis.table && plan.table !== false);
     const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
-    const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail });
+    const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null });
     return { plan: { ...base, ...(visual ? { visual: true } : {}), ...(chart ? { chart } : {}), ...(table ? { table: true } : {}), analysis, request,
       ...(additionalRequests.length ? { additionalRequests } : {}) }, calls: [] };
   }

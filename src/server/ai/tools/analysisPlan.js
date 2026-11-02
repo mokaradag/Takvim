@@ -59,7 +59,7 @@ export function analysisSchema() {
     type: 'object', additionalProperties: false, required: ['scope'],
     description: 'Geniş/değerlendirme sorusunda request yerine; sunucu yönleri okumalara açar.',
     properties: {
-      scope: { type: 'string', enum: [...ANALYSIS_SCOPES], description: 'self kendi; person adı verilen kişi; team yönettiği ekip/birim/bölüm; project adı verilen proje; projects bütün projeleri; all görebildiği her şey; previous önceki analizin öznesi; row önceki sonucun satırı.' },
+      scope: { type: 'string', enum: [...ANALYSIS_SCOPES], description: 'self kendisine atanmış işler; person adı verilen kişi; team yönettiği ekip/birim/bölüm; project adı verilen proje; projects yer aldığı/görebildiği projeler, proje bazında; all görebildiği her şey; previous önceki analizin öznesi; row önceki sonucun satırı.' },
       rows: { type: 'array', minItems: 1, maxItems: 2, uniqueItems: true, items: { type: 'integer', minimum: 1, maximum: 10 }, description: 'scope row: 1 tabanlı satır(lar).' },
       within: { type: 'string', minLength: 2, maxLength: 120, description: 'self/team/all/previous kapsamını adı verilen tek projeyle daraltır.' },
       level: { type: 'string', enum: [...ANALYSIS_LEVELS], description: 'Yalnızca team, düzey söylendiyse: unit birim; department bölüm/müdürlük; directorate direktörlük.' },
@@ -79,7 +79,8 @@ export function analysisSchema() {
 /**
  * Yapısal yazım normalleştirmesi (dil yorumu değil): kapalı yön sözlüğündeki bir değerin tekil/çoğul yazımı ("deadline" →
  * "deadlines") sözlükteki değere çevrilir; sözlük dışı konuşma eylemi yalnızca sunum ipucu olduğundan düşürülür (veri
- * okumasını değiştirmez). Başka her değer olduğu gibi doğrulanır.
+ * okumasını değiştirmez). Alanların kendisi kapsamı belirlediğinde (ad listesiyle `projects`, satır listesiyle `previous`)
+ * kapsam o alanın tek anlamına çevrilir. Başka her değer olduğu gibi doğrulanır.
  */
 function normalizedBrief(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
@@ -90,6 +91,9 @@ function normalizedBrief(raw) {
     out.focus = out.focus.filter((item, index) => out.focus.indexOf(item) === index);
   }
   if (out.act != null && !ANALYSIS_ACTS.includes(out.act)) delete out.act;
+  // Kapsam/alan tutarlılığı: adı verilen projeler portföy değil adlı proje kapsamıdır; satır sırası satır göndergesidir.
+  if (out.scope === 'projects' && Array.isArray(out.names) && out.names.length) out.scope = 'project';
+  if (out.scope === 'previous' && Array.isArray(out.rows) && out.rows.length) out.scope = 'row';
   return out;
 }
 
@@ -133,7 +137,8 @@ export function resolveAnalysisBrief(analysis, { previous = null } = {}) {
   if (!follow) return analysis;
   const rowType = analysis.scope === 'row' && previous ? previous.rows?.[(analysis.rows?.[0] ?? 1) - 1]?.type ?? null : null;
   const target = analysis.scope === 'row' ? rowType : previous?.scope;
-  let focus = analysis.focus?.length ? [...analysis.focus] : inheritableFocus(previous?.focus, target);
+  // Satıra inme ("ikinci sıradaki", "ilk kişiyi incele") o kaydın genel görünümüdür; önceki sıralama ölçüsünü yinelemez.
+  let focus = analysis.focus?.length ? [...analysis.focus] : analysis.scope === 'row' ? [...DEFAULT_FOLLOW_UP_FOCUS] : inheritableFocus(previous?.focus, target);
   if (!focus.length) focus = [...DEFAULT_FOLLOW_UP_FOCUS];
   const window = analysis.dateFrom || analysis.dateTo || analysis.scope !== 'previous' || !previous ? {}
     : { ...(previous.dateFrom ? { dateFrom: previous.dateFrom } : {}), ...(previous.dateTo ? { dateTo: previous.dateTo } : {}) };
@@ -173,7 +178,9 @@ function previousBase(analysis, previous) {
   // Satır-yalnız bağlam (ayrıntılı istekle listelenen görevler) önceki özne değildir: süzgeçleri özetle temsil edilemez.
   if (!previous || (analysis.scope === 'previous' && previous.rowsOnly)) throw invalidArguments(['$.analysis.scope:unavailable']);
   if (analysis.scope === 'row') {
-    const rows = analysis.rows.map((row) => previous.rows[row - 1]);
+    // Karşılaştırma yanıtının satır tablosu yoktur; görünen öğeler karşılaştırılan öznelerdir (gösterilen sırayla).
+    const items = previous.rows.length ? previous.rows : previous.subjects;
+    const rows = analysis.rows.map((row) => items[row - 1]);
     if (rows.some((row) => !row) || new Set(rows.map((row) => row.type)).size !== 1) throw invalidArguments(['$.analysis.rows:unavailable']);
     const entities = rows.map(({ type, id }) => ({ type, id }));
     if (rows[0].type === 'project') {
@@ -343,7 +350,7 @@ function upcomingFrom(window, today) {
  * Özetin bölümleri: her yön en çok bir istek; eşdeğer istekler tekilleşir; çok bölümlü planın sınırı aşılmaz.
  * Sonuç modelin yazacağı ham istek nesneleridir (`request` + `additionalRequests`), doğrulama sonrasındadır.
  */
-export function expandAnalysis(analysis, { previous = null, today = null, detail = null } = {}) {
+export function expandAnalysis(analysis, { previous = null, today = null, detail = null, chart = null } = {}) {
   analysis = resolveAnalysisBrief(analysis, { previous });
   // Takip: önceki öznenin kapsamı; yön, ufuk ve görselleştirme yeni sorunundur (model yeniden bildirir). `within` kapsamı
   // DARALTIR (kesişim): kapsam zaten bir projeyle sınırlıysa ikinci proje onun yerine geçmez, plan reddedilir.
@@ -355,9 +362,25 @@ export function expandAnalysis(analysis, { previous = null, today = null, detail
   if (['previous', 'row'].includes(analysis.scope)) {
     const resolved = previousBase(analysis, previous);
     analysis = { ...analysis, scope: resolved.scope };
-    return expandWith(analysis, narrowed(resolved.base), today, detail);
+    return expandWith(analysis, narrowed(resolved.base), today, detail, chart);
   }
-  return expandWith(analysis, narrowed(scopeBase(analysis)), today, detail);
+  return expandWith(analysis, narrowed(scopeBase(analysis)), today, detail, chart);
+}
+
+/**
+ * Adı verilen grafik türünün gerektirdiği okuma (kapalı eşleme; dil yorumu değil): yığılmış çubuk proje başına açık/tamamlanan
+ * kırılımı, zaman çizelgesi tarihli görev satırlarını, çizgi aylık termin dizisini, gösterge kartları genel sayıları, halka
+ * birbirini dışlayan dağılımı ister. Bildirilen yönler bunu zaten karşılıyorsa ek okuma yoktur.
+ */
+const CHART_FOCUS = Object.freeze({ stacked: [['projects'], 'projects'], timeline: [['overdue', 'upcoming', 'critical'], 'upcoming'], line: [['schedule'], 'schedule'],
+  kpi: [['overview'], 'overview'], donut: [['status', 'priority', 'deadlines', 'projects'], 'status'] });
+
+export function chartFocus(analysis, focus, chart) {
+  const rule = CHART_FOCUS[chart];
+  if (!rule || focus.some((item) => rule[0].includes(item))) return null;
+  // Tek adlı projede "projelere göre" okuması anlamsızdır; kişi kapsamında proje kırılımı kişinin işleridir.
+  if (rule[1] === 'projects' && analysis.scope === 'project') return null;
+  return rule[1];
 }
 
 /** Ayrıntılı yanıtın bütünleyici yönü: bildirilmemiş, kapsamda anlamı olan ilk aday (yoksa `null`). */
@@ -394,7 +417,7 @@ function selfComparison(base) {
     request({ operation: 'value', metrics, population: { tool: 'rota_task_analytics' }, ...(projects.length ? { entities: projects } : {}), filters: { ...base.filters, assignee: 'me' } })];
 }
 
-function expandWith(analysis, base, today = null, detail = null) {
+function expandWith(analysis, base, today = null, detail = null, chart = null) {
   if (analysis.withSelf && analysis.scope === 'person') return selfComparison(base);
   const parts = [];
   const seen = new Set();
@@ -411,6 +434,26 @@ function expandWith(analysis, base, today = null, detail = null) {
     if (parts.length + items.length > limit) throw invalidArguments(['$.analysis.focus:requestBudget']);
     for (const item of items) seen.add(JSON.stringify(item));
     parts.push(...items);
+  }
+  // Adı verilen grafik türünün okuması (sunucunun zorunlu eklediği okuma: en çok `maxParts`'a kadar; sığmazsa grafik
+  // notu türün neden çizilemediğini söyler).
+  // Portföy kapsamında "projelere göre" okuması portföy sıralamasıdır (bölüntü değil): yığılmış çubuk için proje başına
+  // açık/tamamlanan bölüntüsü ayrıca okunur.
+  const splitMissing = chart === 'stacked' && !parts.some((part) => part.population?.groupBy === 'project' && part.metrics?.includes('tasks.done'))
+    && analysis.scope !== 'project';
+  if (splitMissing) {
+    const split = groups(base, 'project', { split: true });
+    if (!seen.has(JSON.stringify(split)) && parts.length < ANALYSIS_LIMITS.maxParts) { seen.add(JSON.stringify(split)); parts.push(split); }
+  }
+  const needed = chart === 'stacked' ? null : chartFocus(analysis, declared, chart);
+  if (needed) {
+    let produced = null;
+    try { produced = focusRequest(needed, analysis, base, today); } catch { produced = null; }
+    const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
+    if (items.length && parts.length + items.length <= ANALYSIS_LIMITS.maxParts) {
+      for (const item of items) seen.add(JSON.stringify(item));
+      parts.push(...items);
+    }
   }
   // Ayrıntılı yanıt: bildirilen yönlerin yanına sunucu bir bütünleyici okuma ekler (ör. kendi işlerinde projelere göre
   // dağılım, ekipte kişilere göre iş yükü). Sığmayan ya da anlamı olmayan ek okuma sessizce eklenmez; bildirilen yön düşmez.

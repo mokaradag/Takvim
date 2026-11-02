@@ -57,7 +57,8 @@ export function compositionLimits(detail = null) {
   const normalized = normalizeAnswerDetail(detail);
   const contract = ANSWER_DETAIL_CONTRACT[normalized];
   const wide = normalized === 'detailed';
-  return Object.freeze({ ...COMPOSITION_LIMITS, maxPropositions: contract.maxPropositions, maxBlocks: wide ? 22 : 16, maxSayBlocks: wide ? 8 : 6, maxNotes: contract.maxNotes });
+  return Object.freeze({ ...COMPOSITION_LIMITS, maxPropositions: contract.maxPropositions, maxBlocks: wide ? 26 : 16, maxSayBlocks: wide ? 8 : 6, maxNotes: contract.maxNotes,
+    maxTitles: wide ? 6 : COMPOSITION_LIMITS.maxTitles });
 }
 
 /** Grafik türleri (istenen görselleştirme biçimi); sunucunun aday türleriyle aynı kapalı sözlük. */
@@ -220,14 +221,31 @@ function entityNames(parts) {
 /** Tablonun kesinlik önermesi: satırlar doğrulanmış nüfusun tamamı mı, yoksa gösterilen kısmı mı? */
 function certaintyProposition(table, title, locale) {
   const en = locale === 'en';
-  const name = String(title || (en ? 'this table' : 'bu tablo')).replace(/\s+/g, ' ').trim();
+  const name = String(title || '').replace(/\s+/g, ' ').trim();
   const lower = name.charAt(0).toLocaleLowerCase(en ? 'en-US' : 'tr-TR') + name.slice(1);
+  // Tablo, bölümünün adıyla anılır ("gecikmiş görevler tablosu"); ilk sütun adı ("Görev") nüfusu adlandırmaz.
+  const subject = name ? (en ? `the ${lower} table` : `${lower} tablosu`) : (en ? 'this table' : 'bu tablo');
   const text = table.complete
-    ? (en ? `${lower} covers every record you can see.` : `${lower} görebildiğiniz kayıtların tamamına dayanıyor.`)
-    : (en ? `${lower} shows only part of the records; conclusions from it are limited.` : `${lower} kayıtların yalnızca bir kısmını gösteriyor; buradan çıkan sonuçlar sınırlıdır.`);
+    ? (en ? `${subject} covers every record you can see.` : `${subject} görebildiğiniz kayıtların tamamına dayanıyor.`)
+    : (en ? `${subject} shows only part of the records; conclusions from it are limited.` : `${subject} kayıtların yalnızca bir kısmını gösteriyor; buradan çıkan sonuçlar sınırlıdır.`);
   const markdown = `${text.charAt(0).toLocaleUpperCase(en ? 'en-US' : 'tr-TR')}${text.slice(1)}`;
   return { kind: 'certainty', tone: table.complete ? 'success' : 'info', evidenceId: table.evidenceId, markdown: escapedFactText(markdown).replace(/\\\./g, '.'),
     plain: markdown, parts: Object.freeze([text]) };
+}
+
+/**
+ * Bölüm başlığı (sunucunun sabit konu adı; olgu taşımaz). Aynı araç bir bölümde başlık ölçüleri, başka bölümde satır
+ * tablosu döndürebilir (ör. portföy özeti ve proje karşılaştırması): başlık, bölümün tablo taşıyıp taşımadığına göre ayrışır.
+ */
+function sectionTitle(tool, locale, { rows = false } = {}) {
+  const en = locale === 'en';
+  const names = {
+    rota_portfolio_summary: rows ? ['Proje karşılaştırması', 'Project comparison'] : ['Portföy özeti', 'Portfolio summary'],
+    rota_workload_summary: ['Kişilere göre iş yükü', 'Workload by person'],
+    rota_task_analytics: rows ? ['Dağılım', 'Breakdown'] : ['Genel görünüm', 'Overview'],
+    rota_task_search: ['Görevler', 'Tasks']
+  };
+  return names[tool]?.[en ? 1 : 0] || null;
 }
 
 /**
@@ -271,7 +289,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   };
   // Başlık adayı nüfusu adlandırır (olgu taşımaz); her kanıt grubunda en çok bir aday.
   const entitle = (ordinal, group, facts, groupBy = null) => {
-    if (titles.size >= COMPOSITION_LIMITS.maxTitles || !facts.length) return;
+    if (titles.size >= limits.maxTitles || !facts.length) return;
     const { project: rowProject, ...filters } = facts[0].semantic?.filters || {};
     const text = titleCandidate({ tool: group.tool, filters: filters.projectId ? { ...filters, project: rowProject } : filters, groupBy, locale });
     if (!text || [...titles.values()].some((title) => title.text === text)) return;
@@ -333,7 +351,10 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         for (const proposition of tablePropositions({ group, described, distribution: partition, locale, population, collection })) derived.push({ ordinal, proposition, table: id });
         // Grafik adayı: satır başına tek, sonlu ve negatif olmayan sayı taşıyan sütun.
         const addChart = (candidate, viewExtra = {}) => {
-          if (charts.size >= COMPOSITION_LIMITS.maxCharts) return;
+          // İstenen tür, tek sütunlu çubuk adaylarının doldurduğu sınırın arkasında kalamaz: o türden aday yoksa bir yer ayrılır.
+          const reserved = requestedChart && candidate.types.includes(requestedChart) && charts.size < COMPOSITION_LIMITS.maxCharts + 1
+            && ![...charts.values()].some((item) => item.types.includes(requestedChart));
+          if (charts.size >= COMPOSITION_LIMITS.maxCharts && !reserved) return;
           const chartId = `G${charts.size + 1}`;
           if (!candidate.types.every((type) => answerChartFence(chartSpec(candidate, type, locale)))) return;
           charts.set(chartId, Object.freeze({ id: chartId, part: ordinal, ...candidate }));
@@ -413,13 +434,31 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   // eksik nüfusu tamamlanmış gibi gösteremez.
   for (const item of caveatPropositions(parts, locale)) propose(item.part, item.proposition, { table: null, required: true });
   // Kesinlik takibi: her tablonun nüfusun tamamına dayanıp dayanmadığı sunucunun kendi önermesidir (model kapsam iddia etmez).
-  if (certainty) for (const table of tables.values()) propose(table.part, certaintyProposition(table, viewTables.find((item) => item.id === table.id)?.title, locale), { table: table.id });
+  if (certainty) {
+    for (const table of tables.values()) {
+      const name = [...titles.values()].find((item) => item.part === table.part)?.text || viewTables.find((item) => item.id === table.id)?.title;
+      propose(table.part, certaintyProposition(table, name, locale), { table: table.id });
+    }
+  }
   const room = limits.maxPropositions - propositions.size - derived.length;
   if (contentParts.size > 1 && room < 0) return null;
   for (const item of contentParts.size > 1 ? conclusions.slice(0, room) : conclusions) propose(item.part, item.proposition, { table: null, analyst: true });
   for (const { ordinal, proposition, table } of derived) propose(ordinal, proposition, { table });
   // Çok bölümlü sayfada başlık, ardından gelen blokların nüfusunu adlandırır: başlığı olmayan bir bölüm varsa onun
   // olguları başka bölümün başlığı altına düşebilir. Bu durumda başlık seçeneği hiç sunulmaz (seçim daralır, olgu değişmez).
+  // Ayrıntılı yanıt bölümlere ayrılır: doğal başlığı olmayan bölüm, kanıtının sunucu konu adını başlık alır (olgu taşımaz).
+  if (limits !== COMPOSITION_LIMITS && answerDetail === 'detailed') {
+    for (const part of [...contentParts].sort((a, b) => a - b)) {
+      if ([...titles.values()].some((item) => item.part === part) || titles.size >= limits.maxTitles) continue;
+      const table = [...tables.values()].find((item) => item.part === part);
+      const owner = table?.group || [...details.values()].find((item) => item.part === part)?.source?.group;
+      const text = sectionTitle(owner?.tool || null, locale, { rows: Boolean(table) });
+      if (!text || [...titles.values()].some((item) => item.text === text)) continue;
+      const id = `H${titles.size + 1}`;
+      titles.set(id, Object.freeze({ id, part, text, markdown: `#### ${escapedFactText(text)}` }));
+      viewTitles.push({ id, part, text });
+    }
+  }
   const titledParts = new Set([...titles.values()].map((item) => item.part));
   if (contentParts.size > 1 && [...contentParts].some((part) => !titledParts.has(part))) {
     titles.clear();
@@ -436,6 +475,10 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     question: clip(String(question || ''), COMPOSITION_LIMITS.maxQuestionChars),
     ...(previousQuestion ? { previousQuestion: clip(String(previousQuestion), COMPOSITION_LIMITS.maxQuestionChars) } : {}),
     ...(followUp?.act ? { followUp: { act: followUp.act } } : {}),
+    // Ayrıntılı yanıtın ana hattı: bölüm sırası, başlığı ve önermeleri (model her bölüm için ayrı paragraf yazar).
+    ...(answerDetail === 'detailed' && limits !== COMPOSITION_LIMITS ? { sections: [...new Set(viewPropositions.map((item) => item.part))].sort((a, b) => a - b)
+      .map((part) => ({ part, ...(viewTitles.find((item) => item.part === part) ? { title: viewTitles.find((item) => item.part === part).id } : {}),
+        propositions: viewPropositions.filter((item) => item.part === part).map((item) => item.id) })) } : {}),
     parts: partCount,
     titles: viewTitles,
     propositions: viewPropositions,
@@ -489,6 +532,11 @@ export function validateComposition(composition, response) {
   const usedPropositions = new Set();
   const spoken = new Set();
   let proseDropped = 0;
+  let proseCut = 0;
+  // Düzyazı yanıtında modelin bir grafik adayına çizemeyeceği türü yazması yalnızca o grafik bloğunu düşürür (aday ve
+  // değerler sunucunundur); istenen tür varsa ensureChart doğrulanmış adayla ekler. Kimlik düzeni katı kalır.
+  const proseResponse = raw.some((item) => item?.type === 'say' && Object.hasOwn(item, 'text'));
+  let chartsDropped = 0;
   const proseRejected = [];
   const proseSpoken = new Set();
   const emphasized = new Set();
@@ -510,6 +558,9 @@ export function validateComposition(composition, response) {
     const type = block?.type;
     if (!COMPOSITION_BLOCK_TYPES.includes(type) || !exactKeys(block, ...BLOCK_KEYS[type])) return fail('BLOCK_INVALID');
     if (type === 'title') {
+      // Düzyazı yanıtında bölüm başlığını sunucu koyar (Ayrıntılı): başlık bölümün olgusudur, modelin seçtiği başlık
+      // kimliği içerikle eşleşmeyebilir (zayıf modelin H3 yerine H4 yazması). Modelin başlık bloğu yok sayılır.
+      if (proseResponse) continue;
       if (typeof block.source !== 'string' || !render.titles?.has(block.source)) return fail('UNKNOWN_SOURCE');
       if (usedSources.has(block.source)) return fail('DUPLICATE_SOURCE');
       usedSources.add(block.source);
@@ -558,6 +609,7 @@ export function validateComposition(composition, response) {
         items = checked.ids;
         sentences = checked.sentences;
         proseDropped += checked.dropped;
+        proseCut += checked.cut || 0;
       }
       if (!Array.isArray(items) || items.length < 1 || items.length > COMPOSITION_LIMITS.maxSayItems) return fail('SAY_INVALID');
       if (blocks.filter((item) => item.type === 'say').length >= limits.maxSayBlocks) return fail('SAY_INVALID');
@@ -608,7 +660,12 @@ export function validateComposition(composition, response) {
       const requested = render.table || known.layout === 'table' ? 'table' : ['list', 'prose'].includes(known.layout) ? 'list' : null;
       blocks.push({ type, source, style: requested ?? block.style ?? (known.columns.length >= 2 ? 'table' : 'list') });
     } else if (type === 'chart') {
-      if (block.style != null && !known.types.includes(block.style)) return fail('STYLE_INVALID');
+      if (block.style != null && !known.types.includes(block.style)) {
+        if (!proseResponse) return fail('STYLE_INVALID');
+        usedSources.delete(source);
+        chartsDropped += 1;
+        continue;
+      }
       blocks.push({ type, source, style: block.style ?? known.types[0] });
     } else blocks.push({ type, source });
   }
@@ -676,6 +733,21 @@ export function validateComposition(composition, response) {
         for (const pointer of pointers) pointer.at = pointer.at === lead ? 0 : pointer.at < lead ? pointer.at + 1 : pointer.at;
       }
     }
+    // Ayrıntılı yanıt: modelin koymadığı bölüm başlığı, o bölümün ilk bloğunun önüne sunucu tarafından konur. Başlık,
+    // ardından gelen blokların bölümünü adlandırır: bölümler ardışık değilse (model bölümleri iç içe yazdıysa) başlık
+    // yanlış blokları adlandırırdı; o yanıtta başlık konmaz (olgu değişmez, yalnızca başlık düşer).
+    const sequence = blocks.filter((block) => block.type !== 'title').map(partOfBlock);
+    const grouped = sequence.every((part, index) => index === 0 || part === sequence[index - 1] || !sequence.slice(0, index).includes(part));
+    if (grouped && normalizeAnswerDetail(render.detail) === 'detailed' && render.limits && render.limits !== COMPOSITION_LIMITS) {
+      for (const title of [...render.titles.values()].sort((a, b) => a.part - b.part)) {
+        if (usedSources.has(title.id)) continue;
+        const at = blocks.findIndex((block) => block.type !== 'title' && partOfBlock(block) === title.part);
+        if (at < 0) continue;
+        usedSources.add(title.id);
+        blocks.splice(at, 0, { type: 'title', source: title.id });
+        for (const pointer of pointers) if (pointer.at >= at) pointer.at += 1;
+      }
+    }
     while (blocks.at(-1)?.type === 'title') blocks.pop();
   }
   if (['chart', 'note'].includes(blocks[0].type) || blocks.at(-1).type === 'title') return fail('LEAD_REQUIRED');
@@ -739,8 +811,11 @@ export function validateComposition(composition, response) {
   // Çizici tablo ayrıntılarını yerinde, kalanları sonda ekler; onlar da son başlığın kapsamına uymalıdır.
   const locatedDetails = new Set(blocks.filter((block) => block.type === 'details').map((block) => block.source));
   for (const table of render.tables.values()) if (usedSources.has(table.id)) locatedDetails.add(table.detail);
+  // Çizici yerleştirilmeyen ayrıntıyı kendi bölümünün son parçasından sonra koyar: bölümün kendi başlığı varsa ayrıntı
+  // o başlığın altında kalır (bölümlü düzen); yoksa son başlığın kapsamına uymalıdır.
+  const titledSections = new Set(blocks.filter((block) => block.type === 'title').map((block) => render.titles.get(block.source)?.part));
   for (const detail of render.details.values()) {
-    if (locatedDetails.has(detail.id) || usedPropositions.has(detail.covers)) continue;
+    if (locatedDetails.has(detail.id) || usedPropositions.has(detail.covers) || titledSections.has(detail.part)) continue;
     const scope = owned([detail.part]);
     if (scope) return fail(scope);
   }
@@ -759,7 +834,7 @@ export function validateComposition(composition, response) {
   if (normalized.filter((block) => block.type === 'note').length > ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)].maxNotes) return fail('NOTE_INVALID');
   // Sunucu çekincesi (eksik nüfus) her düzende söylenir: akıcı anlatım onu atlayıp eksik nüfusu tam gösteremez.
   if (propositions.some((item) => item.required && !usedPropositions.has(item.id))) return fail('CAVEAT_REQUIRED');
-  return { ok: true, blocks: normalized, ...(proseMode ? { prose: { dropped: proseDropped, rejected: proseRejected.length, supplemented } } : {}) };
+  return { ok: true, blocks: normalized, ...(proseMode ? { prose: { dropped: proseDropped, cut: proseCut, rejected: proseRejected.length, supplemented, charts: chartsDropped } } : {}) };
 }
 
 /** Düzyazının kimlik paragrafına göre ek anlatım payı (bölüm başına önerme). */

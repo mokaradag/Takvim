@@ -1629,7 +1629,7 @@ export async function presentVerdict(turn, verdict, compose) {
     return serverLayout(result.ok ? 'CITATION_SCOPE' : result.reason);
   }
   turn.trace.presentation = { mode: 'composed', blocks: result.blocks, chart: result.chart, charts: result.charts, said: result.said, tables: result.tables, notes: result.notes,
-    titled: result.titled, ms: composedMs, rejected, ...(result.chartInserted ? { chartInserted: true } : {}) };
+    titled: result.titled, ms: composedMs, rejected, ...(result.chartInserted ? { chartInserted: true } : {}), ...(result.prose ? { prose: result.prose } : {}) };
   turn.renderedRowParts = result.rowParts;
   const composed = { ...verdict, normalized: [result.text, ...input.notes, ...chartTypeNote(turn, composition, result)].join('\n\n') };
   return visual && !result.charts ? withChartNote(turn, composed) : composed;
@@ -1796,6 +1796,19 @@ function presentationIntent(plan, today) {
     window: analysis?.dateFrom || analysis?.dateTo ? Object.freeze({ ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) }) : null,
     // Açıklama sonrasında yeniden yürütülecek kabul edilmiş özet (kimlik taşımaz; adlar kullanıcının kendi iletisindendir).
     pending: analysis ? pendingAnalysis(plan) : null });
+}
+
+/** Önceki öznelerin bu iletide geçmeyen adlarla yeniden yazılması → `previous` (aynı plan, adlar düşer). */
+function repeatedSubjects(turn, plan) {
+  const analysis = plan?.analysis;
+  const prior = turn.previousAnalysis;
+  if (!analysis || !['person', 'project'].includes(analysis.scope) || !analysis.names?.length || !prior || prior.scope !== analysis.scope
+    || prior.within || prior.subjects.length !== analysis.names.length || analysis.withSelf) return null;
+  if (analysis.names.some((name) => turn.containment.textTrusted(name))) return null;
+  const { names: _names, scope: _scope, ...rest } = analysis;
+  const rewritten = { intent: plan.intent, language: plan.language, analysis: { ...rest, scope: 'previous' },
+    ...(plan.visual ? { visual: true } : {}), ...(plan.chart ? { chart: plan.chart } : {}), ...(plan.table ? { table: true } : {}) };
+  return { text: '', toolCalls: [{ id: 'server_previous', name: 'rota_plan', arguments: JSON.stringify(rewritten) }] };
 }
 
 /** Bekleyen niyetin plan biçimi: modelin daha önce bildirdiği ve sunucunun kabul ettiği analitik özetin aynısı. */
@@ -2277,6 +2290,11 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     if (!frozen() && result.toolCalls.some((call) => call.name === 'rota_plan')) {
       try {
         plan = unpackTypedPlan(result, { onDecoded: decoded => { rejectedPlan = decoded; }, previousAnalysis: turn.previousAnalysis, today: turn.context.today, detail: turn.answerDetail });
+        // Takipte önceki öznelerin adlarını yeniden yazan plan: adlar bu iletide yoksa ve önceki analizle aynı türde ve
+        // sayıda özneyi gösteriyorsa kanonik gönderge ("previous") ile aynı anlamdadır (onarım kuralının eşdeğeri; kimlik ve
+        // yetki yine sunucunun bağladığı öznelerden, güncel yetkiyle).
+        const repeated = repeatedSubjects(turn, plan.plan);
+        if (repeated) plan = unpackTypedPlan(repeated, { previousAnalysis: turn.previousAnalysis, today: turn.context.today, detail: turn.answerDetail });
         rejectedPlan = plan.plan;
         if (!analysisRepairMatches(turn, plan.plan) || !plan.plan.analysis && !repairMatches(turn, plan.plan, repairCalls(turn, plan.calls))) throw invalidArguments(['$.plan:repairScope']);
         repairMatched = true;
