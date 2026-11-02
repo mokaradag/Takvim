@@ -75,13 +75,14 @@ for (const [source, document] of [['varsayılan', DEFAULT_AI_MODEL_REGISTRY], ['
     const validated = validateModelRegistry(document);
     assert.equal(validated.ok, true, JSON.stringify(validated.issues));
     assert.deepEqual([...validated.registry.models.keys()].sort(), [
-      'VoxCPM2', 'DeepSeek-V4.1-Flash', 'Qwen3.8-Flash-Next', 'FLUX.2-dev',
+      'VoxCPM2', 'DeepSeek-V4.1-Flash', 'qwen3.8-flash-next-FP8', 'FLUX.2-dev',
       'intfloat/multilingual-e5-large', 'tts-1-hd', 'whisper-large-v3',
       'openai/gpt-oss-120b', 'Qwen3-Next-80B-A3B-Instruct', 'tts-1',
       'Qwen3-Embedding-8B', 'bge-reranker-v2-m3', 'Qwen3-Reranker-8B',
-      'gemma-4-31B-it', 'Qwen3.6-35B-A3B', 'Qwen3-VL-8B-Instruct', 'Qwen3.8-27B'
+      'gemma-4-31B-it', 'Qwen3-VL-8B-Instruct'
     ].sort());
     for (const excluded of [
+      'Qwen3.8-Flash-Next', 'Qwen3.8-27B', 'Qwen3.6-35B-A3B',
       'dall-e-3', 'Qwen3.5-397B-A17B-FP8', 'laya-multilingual',
       'Qwen3-30B-A3B-Instruct-2507', 'Qwen3-Coder-30B-A3B-Instruct',
       'Qwen2.5-VL-7B-Instruct', 'Qwen3-VL-30B-A3B-Instruct'
@@ -97,7 +98,7 @@ for (const [source, document] of [['varsayılan', DEFAULT_AI_MODEL_REGISTRY], ['
   test(`${source}: yeni modeller ve güncellenen yetenekler platform kataloğuyla eşleşir`, () => {
     const { registry: parsed } = validateModelRegistry(document);
     for (const [id, capabilities, contextTokens] of [
-      ['Qwen3.8-Flash-Next', ['chat', 'tools', 'reasoning', 'vision'], 262144],
+      ['qwen3.8-flash-next-FP8', ['chat', 'tools', 'reasoning', 'vision'], 262144],
       ['DeepSeek-V4.1-Flash', ['chat', 'tools', 'reasoning', 'vision'], 524288],
       ['FLUX.2-dev', ['image.generation'], null],
       ['Qwen3-Reranker-8B', ['rerank'], 32768],
@@ -116,8 +117,8 @@ for (const [source, document] of [['varsayılan', DEFAULT_AI_MODEL_REGISTRY], ['
       'chat.fast': 'Qwen3-Next-80B-A3B-Instruct',
       'chat.general': 'Qwen3-Next-80B-A3B-Instruct',
       'chat.tools': 'Qwen3-Next-80B-A3B-Instruct',
-      'chat.reasoning': 'gemma-4-31B-it',
-      'chat.tools.reasoning': 'gemma-4-31B-it',
+      'chat.reasoning': 'qwen3.8-flash-next-FP8',
+      'chat.tools.reasoning': 'qwen3.8-flash-next-FP8',
       vision: 'Qwen3-VL-8B-Instruct',
       embedding: 'intfloat/multilingual-e5-large',
       rerank: 'Qwen3-Reranker-8B',

@@ -25,20 +25,7 @@
       "enabled": true
     },
     {
-      "id": "Qwen3.8-Flash-Next",
-      "provider": "onprem",
-      "capabilities": [
-        "chat",
-        "tools",
-        "reasoning",
-        "vision"
-      ],
-      "contextTokens": 262144,
-      "maxConcurrency": null,
-      "enabled": true
-    },
-    {
-      "id": "Qwen3.8-27B",
+      "id": "qwen3.8-flash-next-FP8",
       "provider": "onprem",
       "capabilities": [
         "chat",
@@ -173,19 +160,6 @@
       "enabled": true
     },
     {
-      "id": "Qwen3.6-35B-A3B",
-      "provider": "onprem",
-      "capabilities": [
-        "chat",
-        "tools",
-        "reasoning",
-        "vision"
-      ],
-      "contextTokens": 262144,
-      "maxConcurrency": null,
-      "enabled": true
-    },
-    {
       "id": "Qwen3-VL-8B-Instruct",
       "provider": "onprem",
       "capabilities": [
@@ -207,7 +181,7 @@
       "maxOutputTokens": 1024
     },
     "chat.reasoning": {
-      "model": "gemma-4-31B-it",
+      "model": "qwen3.8-flash-next-FP8",
       "maxOutputTokens": 2048,
       "timeoutMs": 180000
     },
@@ -216,7 +190,7 @@
       "maxOutputTokens": 4096
     },
     "chat.tools.reasoning": {
-      "model": "gemma-4-31B-it",
+      "model": "qwen3.8-flash-next-FP8",
       "maxOutputTokens": 8192,
       "timeoutMs": 180000
     },
