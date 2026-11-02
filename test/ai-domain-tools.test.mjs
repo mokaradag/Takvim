@@ -1367,3 +1367,36 @@ test('üretim ekip SQL sözleşmesi her seçimde göreve, yöneticiye ve düzeye
   assert.ok(sql.indexOf('THROW 51002') < sql.indexOf('CREATE TABLE #AiScopeProjects'), 'yönetim kapsamı yokken görev nüfusu kurulmaz');
   assert.match(sql, /FROM #AiTasks visible\s+JOIN dbo\.MR_Tasks t ON t\.TaskId = visible\.TaskId/);
 });
+
+test('109 final: revoking department membership invalidates evidence even with the same unit-visible employee', async (t) => {
+  const stack = stackFor(t, { executiveScope: ['UNIT', 'DEPARTMENT'].map((ScopeType) => ({ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP, ScopeType })) });
+  const { result, context, ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'team', teamLevel: 'department', projectId: PROJECTS.FULL });
+  assert.equal(result.ok, true);
+  const entries = ledger.authorizationEntries();
+  const signal = new AbortController().signal;
+  await context.revalidateAuthorization(signal);
+  assert.deepEqual([...await context.revalidateEvidence(entries, signal)], ['R1']);
+  stack.db.executiveScope = stack.db.executiveScope.filter((row) => row.ScopeType !== 'DEPARTMENT');
+  await context.revalidateAuthorization(signal);
+  assert.deepEqual([...await context.revalidateEvidence(entries, signal)], []);
+  assert.equal(context.isEvidenceAuthorized(entries[0]), false);
+  const current = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'team', teamLevel: 'unit', projectId: PROJECTS.FULL });
+  assert.equal(current.result.ok, true, 'unit relationship and project visibility still exist');
+});
+
+test('109 final: team grouping keeps an unresolved member distinct from a visible external co-assignee', async (t) => {
+  const seed = rotaToolSeed();
+  seed.tasks = seed.tasks.filter((row) => row.TaskId === TASKS.DUE_SOON);
+  seed.taskAssignees = [{ TaskId: TASKS.DUE_SOON, Sicil: ZEYNEP }, { TaskId: TASKS.DUE_SOON, Sicil: MEHMET }];
+  seed.people = seed.people.filter((person) => person.Sicil !== ZEYNEP);
+  const stack = createAiStack(t, { sicil: AYSE, seed });
+  const { result } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'team', groupBy: 'assignee' });
+  assert.equal(result.ok, true);
+  assert.equal(result.data.groups.length, 1);
+  assert.equal(result.data.groups[0].key, 'unresolved');
+  assert.equal(result.data.groups[0].count, 1);
+  assert.doesNotMatch(JSON.stringify(result.data.groups), /Mehmet|910002|undisclosed/);
+  stack.db.people.push({ Sicil: ZEYNEP, DisplayName: 'Zeynep Kaya' });
+  const resolved = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'team', groupBy: 'assignee' });
+  assert.equal(resolved.result.data.groups[0].key, `sicil:${ZEYNEP}`);
+});

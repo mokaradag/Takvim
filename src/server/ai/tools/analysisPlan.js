@@ -107,6 +107,15 @@ function previousBase(analysis, previous) {
     const rows = analysis.rows.map((row) => previous.rows[row - 1]);
     if (rows.some((row) => !row) || new Set(rows.map((row) => row.type)).size !== 1) throw invalidArguments(['$.analysis.rows:unavailable']);
     const entities = rows.map(({ type, id }) => ({ type, id }));
+    if (rows[0].type === 'project') {
+      const parent = previous.rowPopulation || (['self', 'team', 'person'].includes(previous.scope) ? previous : null);
+      if (parent) {
+        // Multiple projects under a person/team/self intersection have no faithful comparison representation.
+        if (rows.length !== 1 || parent.scope === 'person' && parent.subjects.length !== 1) throw invalidArguments(['$.analysis.rows:scope']);
+        const base = parent.scope === 'person' ? { filters: {}, entities: parent.subjects } : scopeBase(parent);
+        return { scope: parent.scope, base: { filters: base.filters, entities: [...base.entities, ...entities] } };
+      }
+    }
     const projects = previous.within ? [previous.within] : previous.scope === 'project' ? previous.subjects : [];
     if (rows[0].type === 'person' && projects.length > 1) throw invalidArguments(['$.analysis.rows:scope']);
     if (rows[0].type === 'person' && projects.length) entities.push({ type: 'project', id: projects[0].id });
@@ -206,7 +215,7 @@ function ranked(base, analysis, { metrics, rank, filters }) {
 function focusRequest(focus, analysis, base, today = null) {
   const compare = base.entities.filter((entity) => entity.type === (analysis.scope === 'person' ? 'person' : 'project')).length > 1 && ['person', 'project'].includes(analysis.scope);
   const window = analysis.dateFrom || analysis.dateTo ? { ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) } : null;
-  const ahead = window && !window.dateFrom && ['upcoming'].includes(focus) ? upcomingFrom(window, today) : window;
+  const ahead = window && focus === 'upcoming' ? upcomingFrom(window, today) : window;
   if (compare) return comparisonFor(focus, analysis, base, focus === 'upcoming' ? ahead : window);
   switch (focus) {
     case 'overview':
@@ -229,7 +238,7 @@ function focusRequest(focus, analysis, base, today = null) {
       return ranked(base, analysis, { metrics: ['tasks.total', 'task.title', 'task.priority', 'task.targetFinish'], rank: { metric: 'task.targetFinish', order: 'asc' },
         filters: { status: [...OPEN], priority: ['critical', 'high'], ...(window || {}) } });
     case 'workload':
-      if (analysis.scope === 'self') return groups(base, 'project', { split: true });
+      if (analysis.scope === 'self') return groups(base, 'project', { split: true, window });
       if (analysis.scope === 'person') {
         return request({ operation: 'list', metrics: ['person.name', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'], population: { tool: 'rota_workload_summary', collection: 'people' },
           entities: base.entities });
@@ -251,6 +260,8 @@ function focusRequest(focus, analysis, base, today = null) {
 
 /** Yalnızca üst sınırı verilen yaklaşan iş ufku bugünden başlar; bugün bilinmiyorsa ya da ufuk geçmişteyse reddedilir. */
 function upcomingFrom(window, today) {
+  if (window.dateFrom) return today && window.dateFrom < today && (!window.dateTo || window.dateTo >= today)
+    ? { ...window, dateFrom: today } : window;
   if (!today) throw invalidArguments(['$.analysis.dateFrom:required']);
   if (window.dateTo < today) throw invalidArguments(['$.analysis.dateTo:past']);
   return { dateFrom: today, ...window };
@@ -297,6 +308,7 @@ function expandWith(analysis, base, today = null) {
   const seen = new Set();
   for (const focus of effectiveFocus(analysis, today)) {
     const produced = focusRequest(focus, analysis, base, today);
+    if (!produced) throw invalidArguments(['$.analysis.focus:unsupported']);
     // Karşılaştırmanın kayıt başına bölümleri bütün olarak eklenir (yarım karşılaştırma okunmaz); bölüm bütçesi aşılmaz.
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
     if (!items.length) continue;
@@ -304,8 +316,6 @@ function expandWith(analysis, base, today = null) {
     for (const item of items) seen.add(JSON.stringify(item));
     parts.push(...items);
   }
-  // Kapsamda anlamı olmayan yönlerin yerine kapsamın genel görünümü okunur (ör. tek projede "projelere göre").
-  if (!parts.length) parts.push(focusRequest('overview', analysis, base, today));
   return parts;
 }
 
@@ -334,9 +344,12 @@ export function analysisSuggestion(request) {
   if (request.previousResult || (request.filters != null && (typeof request.filters !== 'object' || Array.isArray(request.filters)))) return null;
   if (request.entities != null && (!Array.isArray(request.entities) || request.entities.some((entity) => !entity || typeof entity !== 'object' || Array.isArray(entity)))) return null;
   const tool = request.population?.tool;
-  const filters = request.filters && typeof request.filters === 'object' ? request.filters : {};
+  const filters = { ...(request.filters && typeof request.filters === 'object' ? request.filters : {}), ...(tool === 'rota_workload_summary' ? { status: [...OPEN] } : {}) };
   const entities = Array.isArray(request.entities) ? request.entities.filter((entity) => entity && typeof entity === 'object') : [];
   const groupBy = request.population?.groupBy;
+  // Workload's implicit open-only population must be explicit in an equivalent analytics request.
+  if (tool === 'rota_task_analytics' && groupBy === 'assignee'
+    && !(Array.isArray(filters.status) && filters.status.length === OPEN.length && OPEN.every((status) => filters.status.includes(status)))) return null;
   const focus = tool === 'rota_workload_summary' ? 'workload' : tool === 'rota_portfolio_summary' ? 'projects'
     : tool === 'rota_task_analytics' ? ({ status: 'status', priority: 'priority', deadline: 'deadlines', target_month: 'schedule', project: 'projects', assignee: 'workload' }[groupBy] || 'overview')
       : tool === 'rota_task_search' ? (filters.deadline === 'overdue' ? 'overdue' : (filters.dateFrom || filters.dateTo || String(filters.deadline || '').startsWith('due_')) ? 'upcoming'
@@ -361,7 +374,8 @@ export function analysisSuggestion(request) {
   const generated = focusRequest(focus, candidate,
     { filters: { ...(scope === 'self' ? { assignee: 'me' } : scope === 'team' ? { assignee: 'team', ...(level ? { teamLevel: level } : {}) } : {}) }, entities }, null);
   const equivalent = (left, right) => JSON.stringify(Array.isArray(left) ? [...left].sort() : left) === JSON.stringify(Array.isArray(right) ? [...right].sort() : right);
-  const generatedRequests = (Array.isArray(generated) ? generated : [generated]).filter(Boolean);
+  const generatedRequests = (Array.isArray(generated) ? generated : [generated]).filter(Boolean)
+    .map((item) => item.population?.tool === 'rota_workload_summary' ? { ...item, filters: { ...item.filters, status: [...OPEN] } } : item);
   if (!generatedRequests.length || generatedRequests.some((item) => Object.entries(filters).some(([key, value]) => value != null
     && !equivalent(value, item.filters?.[key])))) return null;
   // Deadline presets themselves select unfinished tasks. No other selector implies an open-status population.

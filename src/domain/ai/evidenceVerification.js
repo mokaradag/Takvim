@@ -248,9 +248,11 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
   }
   const citedIds = [...new Set(selection.facts.map((item) => item.evidenceId))];
   const rendered = request ? renderableFacts(request, selection.facts, evidence, answer, emptyProperties) : selection.facts;
-  const normalized = renderVerifiedNarrative(rendered, { locale, layout, operation: request?.operation || null, empty: emptyProofs });
+  const contextOnly = new Set(['data.populationComplete', 'data.unrepresentedOpenTasks', 'data.unassignedOpenTasks']);
+  const narrated = rendered.filter((item) => !contextOnly.has(item.fact.field) || selection.facts.includes(item));
+  const normalized = renderVerifiedNarrative(narrated, { locale, layout, operation: request?.operation || null, empty: emptyProofs });
   if (normalized.length > FACT_LIMITS.maxAnswerChars) return { ok: false, citedIds: [], issues: [{ code: 'ANSWER_TOO_LARGE' }] };
   // Anlatımın girdisi, kanıta dayalı yanıt düzeni için de aynı doğrulanmış olgulardır (yeni olgu eklenmez).
-  const presentation = Object.freeze({ facts: Object.freeze(rendered), layout, operation: request?.operation || null, empty: Object.freeze([...emptyProofs]) });
+  const presentation = Object.freeze({ facts: Object.freeze(rendered), layout, requestedLayout: request?.layout || 'auto', operation: request?.operation || null, empty: Object.freeze([...emptyProofs]) });
   return { ok: true, normalized, citedIds, facts: selection.facts, presentation, issues: [] };
 }

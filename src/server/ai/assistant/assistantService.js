@@ -799,6 +799,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
         const current = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id, messageId: last.id });
         if (current?.byMessage?.has(last.id)) {
           history = [...history.slice(0, -1), { ...last, clarificationContext: current.clarificationByMessage?.get(last.id) }];
+          if (pendingClarification(history, prepared.turn.content)?.selected) previousAnalysis = current.analysisByMessage?.get(last.id) || null;
         }
       }
     }

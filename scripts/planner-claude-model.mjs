@@ -180,6 +180,11 @@ async function withLock(file, work, timeoutMs) {
 }
 
 export const MODEL_CLEANUP_TIMEOUT_MS = 5000;
+export const MODEL_FORCED_RETRY_ATTEMPTS = 2;
+export function modelCommandTimeoutMs(timeoutMs, forcedRetry = process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
+  const attempts = forcedRetry ? MODEL_FORCED_RETRY_ATTEMPTS : 1;
+  return (1 + attempts) * timeoutMs + attempts * 2 * MODEL_CLEANUP_TIMEOUT_MS + 1000;
+}
 
 /** Grup üyesi, lider düşse de grup kimliğini tutarak kalan komutu sonlandırır. */
 function monitorModelCommand() {
@@ -716,7 +721,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     // Zorunlu turda başka araç çağrısı: üretimde kısıtlı çözüm bunu engeller. İsteğe bağlı tek yeniden deneme (ayrı sayılır).
     const forcedToolCall = forced && !hideTools && code === 1 && result?.subtype === 'error_max_turns'
       && blocks.some(block => block.type === 'tool_use' && block.name?.startsWith(PREFIX));
-    if (forcedToolCall && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
+    if (forcedToolCall && MODEL_FORCED_RETRY_ATTEMPTS > 1 && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
       // Yinelenen ilk yanıt da aynı model ve düşünme denetiminden geçer: temiz bir yeniden deneme yasak düşünmeyi gizleyemez.
       const problem = responseProblem(row, model);
       if (problem) return fail(problem, { ...row, forcedToolCall: true });

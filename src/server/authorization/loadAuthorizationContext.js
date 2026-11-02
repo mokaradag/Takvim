@@ -120,7 +120,7 @@ export async function loadAuthorizationContext(executor = null, { includeScopeId
     WHERE t.CreatedBySicil = @sicil
       AND (@adminPredicateOnly = 0 OR NOT EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1))
     ${maxScopeRows != null ? ') authorizedTasks' : ''};
-    ${includeScopeIdentities ? `SELECT DISTINCT ${maxScopeRows != null ? 'TOP (@authorizationMaxRows)' : ''} EmployeeSicil FROM dbo.MR_V_ExecutiveScope WHERE ManagerSicil = @sicil AND NOT EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1) ORDER BY EmployeeSicil;` : ''}
+    ${includeScopeIdentities ? `SELECT DISTINCT ${maxScopeRows != null ? 'TOP (@authorizationMaxRows)' : ''} EmployeeSicil, ScopeType FROM dbo.MR_V_ExecutiveScope WHERE ManagerSicil = @sicil AND NOT EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1) ORDER BY EmployeeSicil;` : ''}
   `);
 
   if (maxScopeRows != null && [3, 4, 5].some((index) => (result.recordsets[index]?.length || 0) > maxScopeRows)) {
@@ -178,7 +178,8 @@ export async function loadAuthorizationContext(executor = null, { includeScopeId
     canAssignAllCorporateProjects: hasTaskAssignmentScope({ isSystemAdmin, isExecutive }),
     effective,
     ...(includeScopeIdentities ? {
-      scopeIdentities: (result.recordsets[5] || []).map((row) => Number(row.EmployeeSicil)),
+      scopeIdentities: [...new Set((result.recordsets[5] || []).map((row) => Number(row.EmployeeSicil)))],
+      scopeMemberships: (result.recordsets[5] || []).map((row) => [Number(row.EmployeeSicil), row.ScopeType]),
       scopeTaskRights: partialRows.map(({ projectId, taskId, reason }) => ({ projectId, taskId, reason }))
     } : {})
   };

@@ -540,7 +540,7 @@ function entityLead(described, noun, locale, add, allowLead = true) {
     .filter(({ facts }) => facts && facts.every((fact) => Number.isSafeInteger(fact.value) && fact.value >= 0 && String(fact.semantic?.metric || '').startsWith('tasks.')));
   const total = described.rows.length;
   const overdue = counts.find(({ facts }) => facts.every((fact) => fact.semantic?.metric === 'tasks.overdue'));
-  if (overdue) {
+  if (overdue && (noun === 'project' || allowLead)) {
     const late = overdue.facts.filter((fact) => fact.value > 0).length;
     const nouns = en ? (noun === 'project' ? ['project', 'projects'] : ['person', 'people']) : (noun === 'project' ? 'proje' : 'kişi');
     const realized = late === total
@@ -769,7 +769,7 @@ export function analystPropositions(parts, locale = 'tr') {
     for (const item of items) {
       const match = /^data\.people\.(\d+)\.(name|openTasks|overdue)$/.exec(item.fact.field);
       if (!match || item.fact.semantic?.provenance?.tool !== 'rota_workload_summary') continue;
-      if (!people.has(match[1])) people.set(match[1], { evidenceId: item.evidenceId, size: item.fact.semantic?.row?.collectionSize ?? null });
+      if (!people.has(match[1])) people.set(match[1], { evidenceId: item.evidenceId, identity: `person:${item.evidenceId}:data.people.${match[1]}`, size: item.fact.semantic?.row?.collectionSize ?? null });
       people.get(match[1])[match[2]] = item.fact.value;
     }
     const rows = [...people.values()].filter((row) => typeof row.name === 'string' && Number.isSafeInteger(row.openTasks) && row.openTasks >= 0);
@@ -786,7 +786,7 @@ export function analystPropositions(parts, locale = 'tr') {
         add(rows[0].evidenceId, 'concentration', en
           ? sentence([v(percent(share, locale)), ' of the open task assignments are on ', v(top[0].name), '; the workload is concentrated on this person.'])
           : sentence(['Açık iş atamalarının ', v(`${percent(share, locale)}${turkishPossessiveSuffix(share)}`), ' ', v(top[0].name), ' üzerinde; iş yükü bu kişide yoğunlaşıyor.']), share >= 50 ? 'warning' : 'info',
-        { host: `person:${top[0].name}` });
+        { host: top[0].identity });
       } else if (low > 0 && top[0].openTasks * 2 <= low * 3 && unassignedSmall(items, rows, sum)) {
         add(rows[0].evidenceId, 'balance', en
           ? sentence(['Open work is spread fairly evenly across people (highest ', v(number(top[0].openTasks, locale)), ', lowest ', v(number(low, locale)), ').'])
@@ -802,7 +802,7 @@ export function analystPropositions(parts, locale = 'tr') {
           ? sentence([shown, ' of the overdue task assignments are on ', v(worst[0].name), '.'])
           : sentence(['Gecikmiş iş atamalarının ', shown, ' ', v(worst[0].name), ' üzerinde.']), 'warning',
         // Aynı kişinin açık iş yoğunlaşmasından sonra: "…; iş yükü bu kişide yoğunlaşıyor, gecikmiş iş atamalarının %80'i de onda."
-        { follow: { key: `person:${worst[0].name}`, also: en ? [', and ', shown, ' of the overdue assignments are also on this person'] : [', gecikmiş iş atamalarının ', shown, ' de onda'] } });
+        { follow: { key: worst[0].identity, also: en ? [', and ', shown, ' of the overdue assignments are also on this person'] : [', gecikmiş iş atamalarının ', shown, ' de onda'] } });
       }
     }
     // Dikkat önceliği: gecikmiş görev sıralamasının başı en az bir haftalık gecikmeyse (gerekçe sunucunun kuralıdır).

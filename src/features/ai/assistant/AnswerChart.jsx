@@ -236,7 +236,7 @@ function StackedChart({ spec }) {
                 <span className="assistant-chart-label">{item.label}</span>
                 <span className="assistant-chart-track assistant-chart-stack" aria-hidden="true" style={{ '--chart-ratio': max > 0 ? totals[index] / max : 0 }}>
                   {item.values.map((value, position) => (
-                    <span key={position} className={`assistant-chart-stack-part ${series(position)}`} style={{ flexGrow: value }} />
+                    <span key={position} className={`assistant-chart-stack-part ${series(position)}`} style={{ flexGrow: totals[index] > 0 && Number.isFinite(value) && value > 0 ? value / totals[index] : 0 }} />
                   ))}
                 </span>
                 <span className="assistant-chart-value" aria-hidden="true">{answerChartValue(totals[index], spec.unit, spec.locale)}</span>

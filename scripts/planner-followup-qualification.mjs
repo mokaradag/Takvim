@@ -19,7 +19,7 @@ import { createAiStack, sendTurn } from '../test/helpers/aiStack.mjs';
 import { createFakeAiProvider } from '../test/helpers/fakeAiProvider.mjs';
 import { ALI_2, AYSE, MEHMET, NOW, TASKS, ZEYNEP, rotaToolSeed } from '../test/helpers/aiToolFixtures.mjs';
 import { verifyCompletion } from './planner-evaluation.mjs';
-import { MODEL_CLEANUP_TIMEOUT_MS, spawnModelCommand, terminateModelCommand } from './planner-claude-model.mjs';
+import { modelCommandTimeoutMs, spawnModelCommand, terminateModelCommand } from './planner-claude-model.mjs';
 import { AI_ERROR_CODES } from '../src/domain/ai/aiErrorCatalog.js';
 
 const { AiError } = await import('../src/server/ai/aiErrors.js');
@@ -59,7 +59,7 @@ export function completeModelRound(input, signal) {
     const terminateSignal = () => cancel().finally(() => process.exit(143));
     const hangup = () => cancel().finally(() => process.exit(129));
     // Bağdaştırıcı kilidi ve modeli ayrı ayrı bu bütçeyle sınırlar; üst süre ikisini de kapsar.
-    const timer = setTimeout(() => finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_TIMEOUT')), 2 * timeoutMs + 2 * MODEL_CLEANUP_TIMEOUT_MS + 1000);
+    const timer = setTimeout(() => finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_TIMEOUT')), modelCommandTimeoutMs(timeoutMs));
     process.once('SIGINT', interrupt); process.once('SIGTERM', terminateSignal); process.once('SIGHUP', hangup);
     child.stdout.on('data', (chunk) => { out += chunk; });
     child.on('error', () => finish(new Error('MODEL_INFRASTRUCTURE MODEL_COMMAND_ERROR')));

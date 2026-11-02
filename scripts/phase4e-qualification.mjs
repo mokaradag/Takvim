@@ -40,6 +40,7 @@ const summary = { tier: TIER, model: EXPECTED_MODEL, cases: 0, passed: 0, failed
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
 const { analysisSuggestion } = await import('../src/server/ai/tools/analysisPlan.js');
+const { containmentText } = await import('../src/server/ai/tools/toolScope.js');
 // Each invocation owns its rows even when earlier or concurrent runs share the append-only ledger.
 const RUN_ID = randomUUID();
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
@@ -100,17 +101,17 @@ export function plannerScore(result, expect) {
     if (scope !== expect.scope) failures.push(`kapsam ${scope} ≠ ${expect.scope}`);
     const teamRequests = requests.filter((request) => request.filters?.assignee === 'team');
     if (expect.level && (!teamRequests.length || !teamRequests.every((request) => request.filters?.teamLevel === expect.level))) failures.push(`düzey ${expect.level} her ekip isteğinde değil`);
-    for (const name of expect.names || []) {
-      if (!requests.some((request) => request.entities.some((entity) => String(entity.query || '').toLocaleLowerCase('tr-TR') === name.toLocaleLowerCase('tr-TR')))) failures.push(`ad ${name} yok`);
-    }
+    const names = (values) => JSON.stringify([...new Set(values.map((value) => containmentText(String(value))))].sort());
+    if (expect.names && names(requests.flatMap((request) => (request.entities || []).map((entity) => entity.query).filter((query) => query != null))) !== names(expect.names)) failures.push('ad kümesi beklenenle aynı değil');
     if (expect.visual && result.plan?.visual !== true) failures.push('görselleştirme bayrağı yok');
     // Sunucunun GERÇEKTEN okuduğu yönler: özetin etkin yönleri (bölüm bütçesi, ufuk ve portföy kuralları uygulanmış); özet
     // yoksa kabul edilen ayrıntılı isteklerin eşdeğer yönleri. Bildirilen ama okunmayan yön sayılmaz.
     const focus = result.plan?.analysis ? [...result.plan.analysis.focus] : requests.flatMap(requestFocus);
     if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
     // Beklenen ufuk kabul edilen bir okumanın aralığıdır (uçlarda en çok bir günlük yorum farkı).
-    if (expect.window && !requests.some((request) => request.filters?.dateFrom && request.filters?.dateTo
-      && Math.abs(day(request.filters.dateFrom) - day(expect.window[0])) <= 1 && Math.abs(day(request.filters.dateTo) - day(expect.window[1])) <= 1)) {
+    const bounded = requests.filter((request) => request.filters?.dateFrom || request.filters?.dateTo);
+    if (expect.window && (!bounded.length || !bounded.every((request) => request.filters?.dateFrom && request.filters?.dateTo
+      && Math.abs(day(request.filters.dateFrom) - day(expect.window[0])) <= 1 && Math.abs(day(request.filters.dateTo) - day(expect.window[1])) <= 1))) {
       failures.push(`ufuk ${expect.window.join('..')} okunmuyor`);
     }
   }

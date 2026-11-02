@@ -699,6 +699,36 @@ function pinRepair(turn, plan, details, calls = [], executionCalls = [], matched
   else turn.repairPins.set('snapshot', next);
 }
 
+function pinAnalysisRepair(turn, plan, details) {
+  if (!plan.analysis || typeof plan.analysis !== 'object' || Array.isArray(plan.analysis)) return;
+  const existing = turn.repairPins.get('analysis');
+  // A rejected semantic replacement cannot loosen the original repair boundary.
+  if (existing && !analysisRepairMatches(turn, plan)) return;
+  const paths = new Set(existing?.paths || []);
+  for (const detail of details) {
+    const [path, reason] = String(detail).split(':');
+    if (path.startsWith('$.analysis.') && !['unsupported', 'requestBudget', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
+  }
+  const raw = Object.fromEntries(Object.entries(existing?.raw || plan.analysis).filter(([key]) => Object.hasOwn(analysisSchema().properties, key)));
+  turn.repairPins.set('analysis', { raw, paths, projection: stable(repairOmit(raw, paths)),
+    visual: existing ? existing.visual : details.some((detail) => String(detail).startsWith('$.visual:') || String(detail).startsWith('$.analysis.visual:'))
+      ? null : (plan.visual === true || plan.analysis.visual === true) });
+}
+
+function analysisRepairMatches(turn, plan) {
+  const pin = turn.repairPins.get('analysis');
+  if (!pin || [PLANNER_INTENTS.CLARIFY, PLANNER_INTENTS.ABSTAIN].includes(plan.intent)) return true;
+  let analysis = plan.analysis;
+  // An invalid name may be replaced by the already canonical subject of the same scope and cardinality.
+  // This alias cannot add a prior project intersection or change a valid named subject.
+  const prior = turn.previousAnalysis;
+  if (analysis?.scope === 'previous' && pin.paths.has('names') && prior?.scope === pin.raw.scope && !prior.within
+    && prior.subjects.length === pin.raw.names?.length) analysis = { ...analysis, scope: prior.scope, ...(prior.level ? { level: prior.level } : {}) };
+  return plan.intent === PLANNER_INTENTS.ROTA && Boolean(plan.analysis)
+    && stable(repairOmit(analysis, pin.paths)) === pin.projection
+    && (pin.visual == null || (plan.visual === true || plan.analysis.visual === true) === pin.visual);
+}
+
 function repairMatches(turn, plan, calls = []) {
   const snapshot = turn.repairPins.get('snapshot');
   if (!snapshot) return true;
@@ -1351,14 +1381,16 @@ function completedAnalysisContext(turn, verdict) {
   // Kapsam kabul edilen özetin kapsamıdır (ilk bölümün aracından tahmin edilmez): takip önceki çözülmüş kapsamı, satır
   // göndergesi satırın türünü taşır.
   const prior = turn.previousAnalysis;
-  const declared = intent.scope === 'previous' ? prior?.scope : intent.scope === 'row' ? (persons.length ? 'person' : projects.length ? 'project' : null) : intent.scope;
+  const declared = intent.scope === 'previous' ? prior?.scope : intent.scope === 'row'
+    ? (first.filters?.assignee === 'me' ? 'self' : first.filters?.assignee === 'team' ? 'team' : persons.length ? 'person' : projects.length ? 'project' : null) : intent.scope;
   if (!declared) return null;
   const scope = declared;
-  const level = scope === 'team' ? (intent.scope === 'previous' ? prior?.level : intent.level) || null : null;
+  const level = scope === 'team' ? (intent.scope === 'previous' ? prior?.level : intent.scope === 'row' ? first.filters?.teamLevel : intent.level) || null : null;
   // Kişi ya da kendi/ekip/portföy kapsamında tek proje, öznenin daraltmasıdır (ör. ekibimin bu projedeki işleri).
   const within = scope !== 'project' && projects.length === 1 ? projects[0] : null;
   // Sıralı satırlar: kişi (iş yükü), proje (portföy) ya da projelere göre görev grupları; gösterilen doğrulanmış sırayla.
   let rows = [];
+  let rowPopulation = null;
   const rowAnswers = turn.renderedRowParts ? turn.renderedRowParts.map((part) => grounded.find((answer) => (answer.index ?? 0) + 1 === part)).filter(Boolean) : grounded;
   for (const answer of rowAnswers) {
     const { request } = answer;
@@ -1376,13 +1408,21 @@ function completedAnalysisContext(turn, verdict) {
         .filter((row) => row.id && (row.type !== 'project' || canonicalActualId(row.id))).slice(0, 10);
       break;
     }
-    if (rows.length) break;
+    if (rows.length) {
+      if (rows[0].type === 'project') {
+        const people = bindRequestEntities(request, entries, turn.containment.boundSelection()).filter((entity) => entity.type === 'person' && entity.bound != null)
+          .map((entity) => ({ type: 'person', id: String(entity.bound) }));
+        const parentScope = request.filters?.assignee === 'me' ? 'self' : request.filters?.assignee === 'team' ? 'team' : people.length ? 'person' : null;
+        if (parentScope) rowPopulation = { scope: parentScope, subjects: people, ...(request.filters?.teamLevel ? { level: request.filters.teamLevel } : {}) };
+      }
+      break;
+    }
   }
   return normalizeAnalysisContext({ v: 1, scope, ...(level ? { level } : {}),
     subjects: scope === 'person' ? persons.slice(0, 2) : scope === 'project' ? projects.slice(0, 2) : [], ...(within ? { within } : {}), focus: intent?.focus ? [...intent.focus] : [],
     ...(turn.presentationIntent?.window?.dateFrom ? { dateFrom: turn.presentationIntent.window.dateFrom } : {}),
     ...(turn.presentationIntent?.window?.dateTo ? { dateTo: turn.presentationIntent.window.dateTo } : {}),
-    ...(turn.presentationIntent?.visual ? { visual: true } : {}), rows });
+    ...(turn.presentationIntent?.visual ? { visual: true } : {}), rows, ...(rowPopulation ? { rowPopulation } : {}) });
 }
 
 /** Doğal yanıt düzeninin girdisi: doğrulanmış bölümler, tamamlanamayan bölümler ve sunucu notları. */
@@ -1461,7 +1501,7 @@ export async function presentVerdict(turn, verdict, compose) {
   const route = presentationRoute({ compose, composeAnswers: turn.composeAnswers, visual, analytical });
   if (route === 'verdict' || !turn.session || turn.ledger.revoked() || turn.session.signal?.aborted) return verdict;
   const input = compositionInput(turn, verdict);
-  if (!input) return visual && verdict.kind === 'grounded' ? withChartNote(turn, verdict) : verdict;
+  if (!input) return visual ? withChartNote(turn, verdict) : verdict;
   const composition = buildComposition({ ...input, visual, detail: turn.answerDetail, analyst: Boolean(turn.presentationIntent?.analysis) });
   if (!composition) {
     turn.trace.presentation = { mode: 'narrative', reason: 'SHEET_LIMIT' };
@@ -1527,7 +1567,7 @@ export async function presentVerdict(turn, verdict, compose) {
 
 /** Açık görselleştirme isteği doğrulanmış veriden güvenle karşılanamadıysa kısa sunucu notu (sessizce yok sayılmaz). */
 function withChartNote(turn, verdict) {
-  if (verdict.kind !== 'grounded') return verdict;
+  if (verdict.kind !== 'grounded' && !(verdict.kind === 'unavailable' && verdict.citedIds?.length)) return verdict;
   turn.trace.presentation = { ...(turn.trace.presentation || { mode: 'narrative' }), chartUnavailable: true };
   return { ...verdict, normalized: `${verdict.normalized}\n\n${renderChartUnavailable({ locale: turn.locale })}` };
 }
@@ -1581,7 +1621,8 @@ async function finish(turn, settled, onText, selectedBy = 'model', { compose = t
   await onText(finalText);
   const outcome = verdict.kind;
   const resultScope = completedResultScope(turn, verdict);
-  const analysisContext = completedAnalysisContext(turn, verdict);
+  // A numbered selection resumes this canonical subject, never the old authorization or old evidence.
+  const analysisContext = verdict.clarification && turn.presentationIntent?.analysis ? turn.previousAnalysis : completedAnalysisContext(turn, verdict);
   const evidenceRows = ledger.persistable(verdict.citedIds, { clarification: verdict.clarification || null, resultScope, analysisContext });
   const resultScopeOmitted = Boolean(resultScope) && !evidenceRows.some(row => JSON.parse(row.evidenceJson).resultScope);
   const completeDisclosure = (deliveredOutcome, code = null, { replaced = false } = {}) => {
@@ -1986,7 +2027,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
   let rejectedPlan = null;
   let repairMatched = false;
   const rejectDeclaration = (calls, rawDetails, rawHints = [], problems = null, executionCalls = calls) => {
-    // Analitik özetin açılımı modelin yazdığı istek değildir: sorunlar özetin alanlarına çevrilir, onarım sabitlemesi yapılmaz.
+    // Expansion errors refer to the brief; repair still preserves every unaffected semantic field.
     const analysisPlan = Boolean(rejectedPlan?.analysis);
     const details = analysisPlan ? analysisDetails(rawDetails || []) : rawDetails || [];
     // Reddedilen ayrıntılı isteğin türlü alanlarından (araç, sorumlu koşulu, varlıklar) eşdeğer analitik özet önerisi.
@@ -1996,6 +2037,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       ? ['Ad bu iletide geçmiyor: önceki analizin öznesi kastediliyorsa analysis.scope "previous" yaz (names verme); önceki sonucun bir satırı kastediliyorsa analysis.scope "row" ve analysis.rows (önceki yanıttaki 1 tabanlı satır sırası: [1] ya da [1,2]) yaz'] : [];
     const hints = [...(analysisPlan ? [] : rawHints), ...followup, ...analysisHints(details), ...(suggestion ? [suggestion] : [])];
     recordPlannerRejection(details[0]);
+    if (analysisPlan && !details.includes('$.plan:repairScope')) pinAnalysisRepair(turn, rejectedPlan, details);
     if (rejectedPlan && !analysisPlan && !details.includes('$.plan:repairScope')) pinRepair(turn, rejectedPlan, details, repairCalls(turn, executionCalls), executionCalls, repairMatched);
     if (calls.length) turn.toolsRequested = true;
     // Kapsam dışı çağrı veri okunmadan reddedilse de Derin düşünme devrini engeller.
@@ -2125,7 +2167,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       try {
         plan = unpackTypedPlan(result, { onDecoded: decoded => { rejectedPlan = decoded; }, previousAnalysis: turn.previousAnalysis, today: turn.context.today });
         rejectedPlan = plan.plan;
-        if (!plan.plan.analysis && !repairMatches(turn, plan.plan, repairCalls(turn, plan.calls))) throw invalidArguments(['$.plan:repairScope']);
+        if (!analysisRepairMatches(turn, plan.plan) || !plan.plan.analysis && !repairMatches(turn, plan.plan, repairCalls(turn, plan.calls))) throw invalidArguments(['$.plan:repairScope']);
         repairMatched = true;
       }
       catch (error) {

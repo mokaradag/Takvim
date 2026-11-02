@@ -2941,3 +2941,44 @@ test('Claude varsayılan evi POSIX UID ile ayırır; açık ayar aynen korunur',
   assert.notEqual(JSON.parse(explicit.stdout).error, 'PLANNER_HOME_UNTRUSTED');
   assert.ok(fs.existsSync(path.join(configured, 'work')), 'açık ev ayarı yeniden adlandırılmaz');
 });
+
+test('109 final: forced retry parent budget covers lock and both child attempts while default stays unchanged', async (t) => {
+  const childProcess = (await import('node:child_process')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { EventEmitter } = await import('node:events');
+  const { PassThrough } = await import('node:stream');
+  const { completeModelRound } = await import('../scripts/planner-followup-qualification.mjs');
+  const { modelCommandTimeoutMs, MODEL_CLEANUP_TIMEOUT_MS } = await import('../scripts/planner-claude-model.mjs');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const priorRetry = process.env.PLANNER_CLAUDE_FORCED_RETRY;
+  const priorTimeout = process.env.PLANNER_MODEL_TIMEOUT_MS;
+  t.after(() => {
+    if (priorRetry == null) delete process.env.PLANNER_CLAUDE_FORCED_RETRY; else process.env.PLANNER_CLAUDE_FORCED_RETRY = priorRetry;
+    if (priorTimeout == null) delete process.env.PLANNER_MODEL_TIMEOUT_MS; else process.env.PLANNER_MODEL_TIMEOUT_MS = priorTimeout;
+    t.mock.restoreAll(); syncBuiltinESMExports();
+  });
+  let child;
+  t.mock.method(childProcess, 'spawn', () => child = Object.assign(new EventEmitter(), {
+    pid: 1234, exitCode: null, signalCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), send() {}
+  }));
+  t.mock.method(process, 'kill', () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+  syncBuiltinESMExports();
+  const timeout = 100;
+  process.env.PLANNER_MODEL_TIMEOUT_MS = String(timeout);
+  const original = 2 * timeout + 2 * MODEL_CLEANUP_TIMEOUT_MS + 1000;
+  for (const retry of [false, true]) {
+    process.env.PLANNER_CLAUDE_FORCED_RETRY = retry ? '1' : '0';
+    const pending = completeModelRound({ messages: [] });
+    let terminal = false;
+    pending.then(() => { terminal = true; }, () => { terminal = true; });
+    t.mock.timers.tick(retry ? original + 1 : original - 1);
+    await new Promise(setImmediate);
+    assert.equal(terminal, false, 'valid completion remains alive through its supported execution path');
+    child.stdout.emit('data', Buffer.from('{"text":"ok"}'));
+    finishFixtureCommand(child);
+    assert.deepEqual(await pending, { text: 'ok' });
+  }
+  assert.equal(modelCommandTimeoutMs(timeout, false), original);
+  assert.ok(modelCommandTimeoutMs(timeout, true) >= 3 * timeout + 4 * MODEL_CLEANUP_TIMEOUT_MS + 1000);
+
+});

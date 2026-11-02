@@ -651,3 +651,41 @@ test('sunum telemetrisi yalnız teslim edilen kendi yanıtını ve grafiklerini 
     });
   }
 });
+
+test('109 final: an accepted twelve-block model layout falls back to a shorter verified chart layout', async (t) => {
+  const { buildComposition, validateComposition } = await import('../src/domain/ai/groundedComposition.js');
+  const { composeGroundedAnswer } = await import('../src/server/ai/assistant/answerComposition.js');
+  const { callRotaTools, PROJECTS } = await import('./helpers/aiToolFixtures.mjs');
+  const { verifyRequested } = await import('./helpers/requestScenario.mjs');
+  const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
+  const groupings = ['status', 'priority', 'deadline'];
+  const { ledger } = await callRotaTools(stack, AYSE, groupings.map((groupBy) => ['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy }]));
+  const parts = groupings.map((groupBy, index) => {
+    const fields = ['data.groups.*.label', 'data.groups.*.count'].map((field) => `R${index + 1}:${field}`);
+    const verdict = verifyRequested(ledger, fields, { operation: 'list', metrics: ['tasks.total'],
+      population: { tool: 'rota_task_analytics', collection: 'groups', groupBy }, entities: [{ type: 'project', id: PROJECTS.FULL }] });
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+    return { index, presentation: verdict.presentation };
+  });
+  const composition = buildComposition({ parts, visual: true });
+  assert.ok(composition?.render.charts.size);
+  const { propositions, titles, tables } = composition.render;
+  const blocks = [];
+  for (let part = 1; part <= 3; part += 1) {
+    blocks.push(...[...titles.values()].filter((item) => item.part === part).map((item) => ({ type: 'title', source: item.id })));
+    const ids = [...propositions.values()].filter((item) => item.part === part).slice(0, 3).map((item) => item.id);
+    assert.ok(ids.length >= 2);
+    blocks.push({ type: 'say', items: ids.slice(0, -1) });
+    blocks.push(part < 3 ? { type: 'note', items: ids.slice(-1) } : { type: 'say', items: ids.slice(-1) });
+    blocks.push(...[...tables.values()].filter((item) => item.part === part).map((item) => ({ type: 'rows', source: item.id })));
+  }
+  assert.equal(blocks.length, 12, 'three titles, four paragraphs, three tables and two notes');
+  const checked = validateComposition(composition, { blocks });
+  assert.equal(checked.ok, true, JSON.stringify(checked.issues));
+  const result = await composeGroundedAnswer({ session: { remainingMs: () => 120000, signal: new AbortController().signal,
+    round: async () => ({ text: JSON.stringify({ blocks }), finishReason: 'stop' }) }, composition });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.charts, 1);
+  assert.ok(result.blocks <= 12);
+  assert.deepEqual(new Set(result.citedIds), new Set(['R1', 'R2', 'R3']));
+});

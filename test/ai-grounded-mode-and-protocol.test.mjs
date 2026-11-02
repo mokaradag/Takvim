@@ -645,7 +645,11 @@ test('a declared aggregate that the population tool cannot carry is refused befo
   assert.equal(sqlAtRepair, 0, 'doğrulanamayacak istek için SQL çalışmaz');
   assert.equal(answer.finishReason, 'stop');
   // Kendi görevlerinde sorumlu koşulu öznededir ("Sorumlusu olduğunuz"), ölçütte yinelenmez.
-  assert.match(answer.content, new RegExp(`^Sorumlusu olduğunuz \\*\\*${expected}\\*\\* devam eden görev bulunuyor\\. 【R1】`));
+  const expectedOutput = `Sorumlusu olduğunuz **${expected}** devam eden görev bulunuyor. 【R1】\n\n_Not: Bu yanıt yalnızca görüntüleme yetkiniz bulunan kayıtları kapsar; ilgili projelerin tamamını yansıtmayabilir._`;
+  const protocol = new RegExp(`^${expectedOutput.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`);
+  assert.match(answer.content, protocol);
+  assert.equal(protocol.test(`${answer.content}\nTRAILING JUNK`), false);
+  assert.equal(protocol.test(`${answer.content}  \n`), true);
   const [trace] = turnTraces(logs);
   assert.deepEqual([trace.selectedBy, ...trace.rounds.map((round) => round.purpose)], ['server', 'plan', 'declaration']);
   assert.deepEqual([trace.toolCalls, trace.escalated], [1, false]);

@@ -171,6 +171,10 @@ test('analitik özetin her kapsam × yön × ad × ufuk açılımı sunucu doğr
       for (const names of ['person', 'project'].includes(scope) ? [['Ahmet Kaya'], ['Ahmet Kaya', 'Ayşe Demir']] : [undefined]) {
         for (const window of [null, { dateFrom: '2026-10-26', dateTo: '2026-11-01' }]) {
           const analysis = parseAnalysis({ scope, focus: [focus], ...(names ? { names } : {}), ...(window || {}) });
+          if (scope === 'project' && focus === 'projects') {
+            assert.throws(() => expandAnalysis(analysis), (error) => error.details.includes('$.analysis.focus:unsupported'));
+            continue;
+          }
           for (const [index, raw] of expandAnalysis(analysis).entries()) {
             const parsed = parseRequestDeclaration(raw, { textTrusted: () => true, identityTrusted: () => true, today: '2026-10-31', priorParts: index });
             assert.deepEqual(completeRequest(parsed, [], { today: '2026-10-31' }).problems, [], `${scope}/${focus}/${names?.length}`);
@@ -294,7 +298,7 @@ test('reddedilen ayrıntılı istekten türlü eşdeğer özet önerilir; özet 
   // Uçtan uca: özetin kapsam dışı alanı düzeltme notunda `$.analysis.rows:scope` olarak (anonim `field` değil) döner.
   const plans = [
     { intent: 'rota', language: 'tr', analysis: { scope: 'team', focus: ['workload'], rows: [1] } },
-    { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] } }
+    { intent: 'rota', language: 'tr', analysis: { scope: 'team', focus: ['workload'] } }
   ];
   const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
   const result = await ask({ text: 'ekibimde en fazla açık işi olan kişileri göster' });
@@ -551,7 +555,7 @@ test('görselleştirme dilbilgisi kapalıdır: çizgi, yığılmış çubuk, gö
     } else if (spec.type === 'stacked') {
       assert.equal((html.match(/class="assistant-chart-stack-part /g) || []).length, 4);
       assert.match(html, /aria-label="A: Yapılacak 2, Devam ediyor 1"/);
-      assert.match(html, /flex-grow:4/);
+      assert.match(html, /flex-grow:1/);
     } else if (spec.type === 'kpi') {
       assert.equal((html.match(/class="assistant-chart-kpi"/g) || []).length, 3);
       assert.match(html, /Tamamlanma: %14/);
@@ -645,7 +649,7 @@ test('yanıt düzyazısı akıcıdır: aynı nüfusun önermeleri bağlanır, ay
       'analist cümlesinin söylediği açık/gecikmiş sayısı ayrıntıda yinelenmez; "Sorumlu: Ben" öznede');
     // Dengeli yanıtın bütçesi önce analist sonucuna ayrılır: öneri (en uzun gecikme) türetilmiş proje yoğunlaşmasından önce gelir.
     assert.match(paragraphs[2], /^Şu anda \*\*3\*\* gecikmiş göreviniz var ve ortalama gecikme \*\*11,3 gün\*\*\. En uzun süredir geciken görev .+, en kısa süredir geciken ise .+\. Bunların \*\*2\*\*'si bir haftadan uzun süredir gecikmiş\. En uzun süredir beklediği için ilk ele alınabilecek iş \*\*Haftalık durum toplantısı\*\* görünüyor\./);
-    assert.match(answer.content, /terminli \*\*1\*\* yapılacak ya da devam eden göreviniz var\./, 'tek satırlı sonuçta doğal sayım cümlesi');
+    assert.match(answer.content, /30 Eylül 2026.*4 Ekim 2026.*terminli yapılacak ya da devam eden göreviniz yok\./, 'yaklaşan pencere gecikmiş işi tekrar saymaz');
     assert.doesNotMatch(answer.content, /Eşleşen \*\*1\*\* görev bulundu/);
     for (const paragraph of paragraphs) assert.ok(paragraph.split('(ölçüt:').length <= 2, `ölçüt paragrafta en çok bir kez: ${paragraph}`);
   });
@@ -985,7 +989,7 @@ test('satır takibi yürütme sırası yerine doğrulanmış görünür bölüm 
   const { ask } = phase4eConversation(t, { compose: () => composer((view) => {
     const blocks = coveringBlocks(view).blocks;
     const parts = [...new Set(view.tables.map((table) => table.part))].reverse();
-    const lead = blocks.find((block) => block.type === 'say' && view.propositions.some((item) => item.id === block.items[0] && item.part === 1));
+    const lead = blocks.find((block) => block.type === 'say');
     assert.ok(lead);
     return { blocks: [lead, ...parts.flatMap((part) => [
       ...(view.titles || []).filter((title) => title.part === part).map((title) => ({ type: 'title', source: title.id })),
@@ -1049,4 +1053,229 @@ test('yedi günlük aciliyetin bağımsız ve birleşik tüm biçimleri bugünü
     for (const form of ['also', 'plain', 'contrast']) assert.match(urgency.fluent.follow[form].filter((item) => typeof item === 'string').join(''), wording);
     assert.match(fluentParagraph(propositions.map(({ proposition }) => ({ proposition })), locale), wording);
   }
+});
+
+test('109 final: project row follow-ups keep self and department populations and reauthorize them', async (t) => {
+  for (const scope of ['self', 'team']) await t.test(scope, async (t) => {
+    const seed = rotaToolSeed();
+    seed.executiveScope = [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP, ScopeType: 'DEPARTMENT' }];
+    const { ask, stack } = phase4eConversation(t, { seed, composition: false });
+    const first = await ask({ text: 'projelerdeki işlerimiz', plan: { intent: 'rota', language: 'tr', analysis: { scope, ...(scope === 'team' ? { level: 'department' } : {}), focus: ['projects'] } } });
+    assert.equal(first.answer.finishReason, 'stop');
+    const follow = () => ask({ text: 'ilk projenin durumu', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'row', rows: [1], focus: ['overview'] } } });
+    const next = await follow();
+    assert.equal(next.answer.finishReason, 'stop', next.answer.content);
+    const reads = populationReads(next.log);
+    assert.ok(reads.length);
+    assert.ok(reads.every(({ params }) => params.projectId && params.assigneeMode === (scope === 'self' ? 'me' : 'team') && (scope === 'self' || params.teamLevel === 'DEPARTMENT')));
+    if (scope === 'team') {
+      stack.db.executiveScope = [];
+      const denied = await ask({ text: 'aynı nüfusun durumu', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['overview'] } } });
+      assert.notEqual(denied.answer.finishReason, 'stop');
+      assert.match(denied.answer.content, /yönetim kapsamınız bulunmuyor/);
+    }
+  });
+});
+
+test('109 final: numbered clarification restores the canonical analysis subject and reauthorizes it', async (t) => {
+  for (const revoke of [false, true]) await t.test(String(revoke), async (t) => {
+    const { ask, stack } = phase4eConversation(t, { composition: false });
+    const first = await ask({ text: 'Zeynep Kaya durumunu değerlendir', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'person', names: ['Zeynep Kaya'], focus: ['overview'] } } });
+    assert.equal(first.answer.finishReason, 'stop');
+    stack.db.projects.find((row) => String(row.ProjectId).toLowerCase() === PROJECTS.READ).ProjectName = 'Radar Denemesi';
+    const narrow = { intent: 'rota', language: 'tr', analysis: { scope: 'previous', within: 'Radar', focus: ['overview'] } };
+    const ambiguous = await ask({ text: 'Radar projesinde değerlendir', plan: narrow });
+    assert.equal(ambiguous.answer.finishReason, 'clarification', ambiguous.answer.content);
+    assert.equal(populationReads(ambiguous.log).length, 0);
+    if (revoke) {
+      stack.db.executiveScope = [];
+      stack.db.tasks = stack.db.tasks.filter((row) => String(row.ProjectId).toLowerCase() !== PROJECTS.FULL);
+    }
+    const selected = await ask({ text: '1', plan: narrow });
+    if (revoke) {
+      assert.notEqual(selected.answer.finishReason, 'stop');
+      assert.doesNotMatch(selected.answer.content, /Anten kalibrasyonu/);
+    } else {
+      assert.equal(selected.answer.finishReason, 'stop', selected.answer.content);
+      const reads = populationReads(selected.log);
+      assert.ok(reads.length);
+      assert.ok(reads.every(({ params }) => params.assigneeMode === 'person' && params.personSicil === ZEYNEP && params.projectId));
+    }
+  });
+});
+
+test('109 final: analysis repair cannot change unaffected scope focus names window or visual intent', async (t) => {
+  for (const changed of ['scope', 'focus', 'names', 'dateFrom', 'visual', 'level', 'within']) await t.test(changed, async (t) => {
+    const analysis = changed === 'names' ? { scope: 'person', names: ['Zeynep Kaya'], focus: ['overview'] }
+      : { scope: 'team', level: 'department', within: 'Radar', focus: ['workload'], dateFrom: '2026-10-01', dateTo: '2026-10-31', visual: true };
+    const alternative = { ...analysis, [changed]: { scope: 'all', focus: ['overview'], names: ['Ayşe Yılmaz'], dateFrom: '2026-10-02', visual: false, level: 'unit', within: 'Okuma' }[changed] };
+    if (changed === 'scope') { delete alternative.level; delete alternative.within; }
+    const plans = [{ intent: 'rota', analysis }, { intent: 'rota', language: 'tr', analysis: alternative }, { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
+    const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
+    const answer = await ask({ text: 'Radar ve Okuma; Zeynep Kaya ve Ayşe Yılmaz durumları' });
+    assert.equal(answer.answer.finishReason, 'clarification');
+    assert.equal(answer.log.length, 0, 'changed brief never reaches protected reads');
+    assert.ok(answer.inputs.length >= 3, 'semantic replacement requires another decision');
+  });
+  await t.test('only missing language repaired', async (t) => {
+    const analysis = { scope: 'self', focus: ['overview'] };
+    const plans = [{ intent: 'rota', analysis }, { intent: 'rota', language: 'tr', analysis }];
+    const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
+    assert.equal((await ask({ text: 'durumum' })).answer.finishReason, 'stop');
+  });
+});
+
+test('109 final: unsupported project focus never becomes a successful overview', async (t) => {
+  const plans = [{ intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['Radar'], focus: ['projects'] } },
+    { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['Radar'], focus: ['overview'] } },
+    { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
+  const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
+  const result = await ask({ text: 'Radar projelerine göre' });
+  assert.equal(result.answer.finishReason, 'clarification');
+  assert.equal(result.log.length, 0);
+});
+
+test('109 final: self workload keeps both accepted date bounds', () => {
+  const analysis = parseAnalysis({ scope: 'self', focus: ['workload'], dateFrom: '2026-10-01', dateTo: '2026-10-31' });
+  const [workload] = expandAnalysis(analysis, { today: '2026-10-15' });
+  assert.equal(workload.filters.dateFrom, '2026-10-01');
+  assert.equal(workload.filters.dateTo, '2026-10-31');
+});
+
+test('109 final: upcoming excludes the past side without changing the canonical window', () => {
+  const analysis = parseAnalysis({ scope: 'self', focus: ['overdue', 'upcoming'], dateFrom: '2026-10-01', dateTo: '2026-10-31' });
+  const [overdue, upcoming] = expandAnalysis(analysis, { today: '2026-10-15' });
+  assert.equal(overdue.filters.deadline, 'overdue');
+  assert.equal(upcoming.filters.dateFrom, '2026-10-15');
+  assert.equal(upcoming.filters.dateTo, '2026-10-31');
+  assert.equal(analysis.dateFrom, '2026-10-01');
+  assert.equal(expandAnalysis(analysis, { today: null })[1].filters.dateFrom, '2026-10-01');
+  assert.equal(expandAnalysis(parseAnalysis({ scope: 'self', focus: ['upcoming'], dateTo: '2026-10-31' }), { today: '2026-10-15' })[0].filters.dateFrom, '2026-10-15');
+});
+
+test('109 final: assignee analytics repairs require exactly the workload open population', () => {
+  const base = { operation: 'list', metrics: ['person.name', 'tasks.open'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'assignee' } };
+  assert.equal(analysisSuggestion(base), null);
+  for (const status of [[], ['todo'], ['todo', 'in_progress', 'done']]) assert.equal(analysisSuggestion({ ...base, filters: { status } }), null);
+  assert.match(analysisSuggestion({ ...base, filters: { status: ['in_progress', 'todo'] } }), /workload/);
+});
+
+test('109 final: qualification requires the exact Turkish-normalized name set', async () => {
+  const { plannerScore } = await import('../scripts/phase4e-qualification.mjs');
+  const score = (names) => plannerScore({ outcome: 'planned', decisions: [{ intent: 'rota' }], plan: { requests: names.map((query) => ({ entities: [{ type: 'project', query }], filters: {}, population: { tool: 'rota_task_search' } })) } }, { intent: 'rota', scope: 'project', names: ['PAYKDM'] });
+  assert.deepEqual(score(['paykdm']), []);
+  assert.ok(score(['PAYKDM', 'PAY']).length);
+  assert.ok(score(['PAY']).length);
+});
+
+test('109 final: qualification rejects a wrong window hidden beside a correct bounded read', async () => {
+  const { plannerScore } = await import('../scripts/phase4e-qualification.mjs');
+  const request = (filters) => ({ entities: [], filters: { assignee: 'me', ...filters }, population: { tool: 'rota_task_search' } });
+  const score = (requests) => plannerScore({ outcome: 'planned', decisions: [{ intent: 'rota' }], plan: { requests } }, { intent: 'rota', scope: 'self', window: ['2026-10-01', '2026-10-31'] });
+  const correct = request({ dateFrom: '2026-10-01', dateTo: '2026-10-31' });
+  assert.deepEqual(score([request({}), correct]), []);
+  assert.ok(score([correct, request({ dateFrom: '2026-11-01', dateTo: '2026-11-30' })]).length);
+});
+
+test('109 final: comparison fixtures reject a missing second person or an extra person', () => {
+  const reads = (people) => ({ answer: { finishReason: 'stop' }, log: people.map((personSicil) => ({ query: 'task-facts', params: { personSicil, assigneeMode: 'person' } })) });
+  const comparison = followups.chains.find((chain) => chain.id === 'H').turns[0].expect;
+  assert.deepEqual(comparison.people, [AYSE, ZEYNEP]);
+  assert.deepEqual(turnViolations(reads([ZEYNEP, AYSE, AYSE]), comparison), []);
+  assert.ok(turnViolations(reads([AYSE, AYSE]), comparison).length);
+  assert.ok(turnViolations(reads([AYSE, ZEYNEP, MEHMET]), comparison).length);
+});
+
+test('109 final: null planner or composer behavior uses the fake provider empty behavior contract', async (t) => {
+  for (const mode of ['planner', 'compose']) await t.test(mode, async (t) => {
+    const { ask } = phase4eConversation(t, mode === 'planner' ? { planner: () => null } : { compose: () => null });
+    const result = await ask({ text: 'durumumu değerlendir', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] } } });
+    assert.notEqual(result.answer.finishReason, 'error', result.answer.content);
+    if (mode === 'compose') assert.equal(result.answer.finishReason, 'stop');
+  });
+});
+
+test('109 final: fractional stacked rows fill their track without altering displayed values', async () => {
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const { createElement } = await import('react');
+  const spec = normalizeAnswerChart({ version: 1, type: 'stacked', title: 'Fractions', locale: 'en', evidence: ['R1'], unit: 'number', series: ['A', 'B'],
+    items: [{ label: 'Fraction', values: [0.2, 0.3] }, { label: 'Zero', values: [0, 0] }] });
+  assert.ok(spec);
+  const html = renderToStaticMarkup(createElement(AnswerChart, { spec }));
+  const grows = [...html.matchAll(/flex-grow:([\d.]+)/g)].map((match) => Number(match[1]));
+  assert.deepEqual(grows, [0.4, 0.6, 0, 0]);
+  assert.match(html, /Fraction: A 0.2, B 0.3/);
+  assert.equal(answerChartText(spec).includes('0.2\t0.3'), true);
+});
+
+test('109 final: segmented settings expose a labelled group and exactly one pressed choice', async (t) => {
+  const { SettingsView } = await import('../src/features/settings/SettingsView.jsx');
+  const { TWEAK_DEFAULTS } = await import('../src/lib/tweaks-defaults.js');
+  const previous = globalThis.__MERGEN_ROTA_FEATURES__;
+  t.after(() => { globalThis.__MERGEN_ROTA_FEATURES__ = previous; });
+  globalThis.__MERGEN_ROTA_FEATURES__ = { assistant: true };
+  const edits = [];
+  const tree = mountComponent(SettingsView, { t: { ...TWEAK_DEFAULTS, assistantDetail: 'detailed' }, setTweak: (key, value) => edits.push([key, value]) }).output;
+  const visit = (node, result = []) => {
+    if (Array.isArray(node)) { node.forEach((child) => visit(child, result)); return result; }
+    if (!node || typeof node !== 'object') return result;
+    if (typeof node.type === 'function') return ['Segmented', 'AssistantAnswerSettings', 'SettingsRow'].includes(node.type.name) ? visit(mountComponent(node.type, node.props).output, result) : visit(node.props?.children, result);
+    if (node.props?.className === 'seg' && node.props.role === 'group') result.push(node);
+    visit(node.props?.children, result);
+    return result;
+  };
+  const groups = visit(tree);
+  assert.deepEqual(groups.map((node) => node.props['aria-label']).sort(), ['Tema', 'Yoğunluk', 'Tarih biçimi', 'Yanıt ayrıntısı'].sort());
+  for (const group of groups) {
+    const buttons = group.props.children;
+    assert.equal(buttons.filter((button) => button.props['aria-pressed'] === true).length, 1);
+    assert.ok(buttons.every((button) => typeof button.props['aria-pressed'] === 'boolean'));
+  }
+  groups.find((node) => node.props['aria-label'] === 'Yanıt ayrıntısı').props.children[0].props.onClick();
+  assert.deepEqual(edits, [['assistantDetail', 'short']]);
+});
+
+test('109 final: short mode preserves explicit table plus chart while simplifying model-selected tables', async (t) => {
+  const { verifyRequested } = await import('./helpers/requestScenario.mjs');
+  const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { groupBy: 'status' });
+  for (const explicit of [false, true]) {
+    const verdict = verifyRequested(ledger, ['data.groups.*.label', 'data.groups.*.count'], {
+      operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'status' }, layout: explicit ? 'table' : 'auto'
+    }, { layout: 'table' });
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+    const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }], detail: 'short', visual: true });
+    assert.ok(sheet?.render.charts.size);
+    const checked = defaultComposition(sheet);
+    assert.equal(checked?.ok, true);
+    const rendered = renderComposition(sheet, checked);
+    assert.equal(rendered.charts, 1);
+    assert.equal(checked.blocks.find((block) => block.type === 'rows').style, explicit ? 'table' : 'list');
+    assert.equal(rendered.text.includes('| '), explicit);
+  }
+});
+
+test('109 final: fallback chart ranks analytical part before chart style', async () => {
+  const { preferredChart } = await import('../src/domain/ai/groundedComposition.js');
+  for (const first of ['bar', 'timeline', 'kpi']) {
+    const charts = new Map([['G1', { id: 'G1', part: 1, types: [first] }], ['G2', { id: 'G2', part: 2, types: ['stacked'] }]]);
+    assert.deepEqual(preferredChart({ charts }), { id: 'G1', style: first });
+    charts.set('G3', { id: 'G3', part: 1, types: ['donut'] });
+    assert.deepEqual(preferredChart({ charts }), { id: 'G3', style: 'donut' });
+  }
+});
+
+test('109 final: partial cited unavailable answers explain an unfulfilled chart request but pure unavailable does not', async (t) => {
+  for (const noEvidence of [false, true]) await t.test(String(noEvidence), async (t) => {
+    const { stack, ask } = phase4eConversation(t, { composition: false });
+    stack.db.aiToolFailure = { get 'task-facts'() {
+      return noEvidence || !stack.db.aiToolLog.at(-1)?.params.priorityCsv ? new Error('fixture unavailable') : null;
+    } };
+    const result = await ask({ text: 'kritik işlerim ve önceliklerim grafikle', plan: { intent: 'rota', language: 'tr', visual: true,
+      analysis: { scope: 'self', focus: ['critical', 'priority'], dateFrom: '2027-01-01', dateTo: '2027-01-31' } } });
+    assert.equal(result.answer.finishReason, 'unavailable');
+    assert.equal(/【R\d+】/.test(result.answer.content), !noEvidence);
+    assert.equal(result.answer.content.includes('güvenle grafik çizilemedi'), !noEvidence, result.answer.content);
+    assert.equal(result.answer.content.includes('```rota-chart'), false);
+  });
 });

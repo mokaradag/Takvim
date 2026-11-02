@@ -21,13 +21,14 @@ function SettingsRow({ title, desc, children }) {
   );
 }
 
-function Segmented({ value, options, onChange }) {
+function Segmented({ value, options, onChange, label }) {
   return (
-    <div className="seg">
+    <div className="seg" role="group" aria-label={label}>
       {options.map(([val, label]) => (
         <button
           key={String(val)}
           className={`seg-btn${value === val ? ' active' : ''}`}
+          aria-pressed={value === val}
           onClick={() => onChange(val)}
           type="button"
         >
@@ -77,7 +78,7 @@ function AssistantAnswerSettings({ value, onChange }) {
       </div>
       <div className="card-sub">Bilgin&apos;in Rota analizlerini ne kadar ayrıntılı anlatacağı. Yanıtlar her zaman doğrulanmış veriye dayanır.</div>
       <SettingsRow title="Yanıt ayrıntısı" desc={ANSWER_DETAIL_LABELS[detail].description}>
-        <Segmented value={detail} onChange={(v) => onChange(v)}
+        <Segmented label="Yanıt ayrıntısı" value={detail} onChange={(v) => onChange(v)}
           options={ANSWER_DETAILS.map((key) => [key, ANSWER_DETAIL_LABELS[key].label])} />
       </SettingsRow>
     </div>
@@ -182,14 +183,14 @@ export function SettingsView({ t, setTweak }) {
           <div className="card-sub">Tema ve arayüz yoğunluğu.</div>
 
           <SettingsRow title="Tema" desc="Açık veya koyu arayüz.">
-            <Segmented value={t.theme} onChange={(v) => setTweak('theme', v)}
+            <Segmented label="Tema" value={t.theme} onChange={(v) => setTweak('theme', v)}
               options={[["dark", 'Koyu'], ['light', 'Açık']]} />
           </SettingsRow>
 
           <div className="set-sep" />
 
           <SettingsRow title="Yoğunluk" desc="Satır ve kart boşluklarının sıklığı.">
-            <Segmented value={t.density} onChange={(v) => setTweak('density', v)}
+            <Segmented label="Yoğunluk" value={t.density} onChange={(v) => setTweak('density', v)}
               options={[["compact", 'Sıkışık'], ['balanced', 'Dengeli'], ['spacious', 'Ferah']]} />
           </SettingsRow>
 
@@ -307,6 +308,7 @@ export function SettingsView({ t, setTweak }) {
             desc="Gösterilen VE düzenlenen tarihlerin yazımını belirler; her iki biçimde yazılan giriş de kabul edilir. Grafik eksenleri her zaman kısa biçimi kullanır."
           >
             <Segmented
+              label="Tarih biçimi"
               value={t.dateFormat || 'dd/mm/yyyy'}
               onChange={(v) => setTweak('dateFormat', v)}
               options={[['dd/mm/yyyy', 'gg/aa/yyyy'], ['pattern', '18 Ağu 2026']]}

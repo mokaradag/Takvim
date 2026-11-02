@@ -16,7 +16,7 @@ export const ANALYSIS_CONTEXT_SCOPES = Object.freeze(['self', 'team', 'person', 
 export const ANALYSIS_CONTEXT_LIMITS = Object.freeze({ maxSubjects: 2, maxRows: 10, maxFocus: 3 });
 const LEVELS = Object.freeze(['unit', 'department', 'directorate']);
 const FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'overdue', 'upcoming', 'workload', 'projects', 'schedule', 'critical']);
-const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'rows']);
+const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'rows', 'rowPopulation']);
 
 function identity(item) {
   if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some((key) => !['type', 'id'].includes(key))) return null;
@@ -49,6 +49,14 @@ export function normalizeAnalysisContext(value) {
     const subjects = identities(value.subjects, ANALYSIS_CONTEXT_LIMITS.maxSubjects);
     const rows = identities(value.rows, ANALYSIS_CONTEXT_LIMITS.maxRows);
     if (!subjects || !rows) return null;
+    let rowPopulation = null;
+    if (value.rowPopulation != null) {
+      if (!value.rowPopulation || typeof value.rowPopulation !== 'object' || Array.isArray(value.rowPopulation)
+        || Object.keys(value.rowPopulation).some((key) => !['scope', 'level', 'subjects'].includes(key))) return null;
+      const normalized = normalizeAnalysisContext({ v: 1, ...value.rowPopulation });
+      if (!normalized || !['self', 'team', 'person'].includes(normalized.scope) || rows.some((row) => row.type !== 'project')) return null;
+      rowPopulation = { scope: normalized.scope, subjects: normalized.subjects, ...(normalized.level ? { level: normalized.level } : {}) };
+    }
     if (['person', 'project'].includes(value.scope) && (!subjects.length || subjects.some((item) => item.type !== value.scope))) return null;
     if (!['person', 'project'].includes(value.scope) && subjects.length) return null;
     // Daraltma: kendi/ekip/bütün görevler kapsamının sunucunun bağladığı tek proje kimliğiyle kesişimi.
@@ -60,7 +68,8 @@ export function normalizeAnalysisContext(value) {
     if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) return null;
     if (value.visual != null && typeof value.visual !== 'boolean') return null;
     return Object.freeze({ v: 1, scope: value.scope, ...(value.level ? { level: value.level } : {}), subjects, ...(within ? { within } : {}), focus: Object.freeze([...focus]),
-      ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}), ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual ? { visual: true } : {}), rows });
+      ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}), ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual ? { visual: true } : {}), rows,
+      ...(rowPopulation ? { rowPopulation: Object.freeze(rowPopulation) } : {}) });
   } catch {
     return null;
   }

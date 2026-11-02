@@ -443,6 +443,7 @@ function groupKeys(fact, groupBy, { projects, assignees, today, teamOnly = false
       const people = state === 'visible'
         ? (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null && (!teamOnly || person.teamMember === true)) : [];
       if (people.length) return people.map((person) => [`sicil:${person.sicil}`, person.name || 'Seçilen kişi']);
+      if (teamOnly && (assignees.get(fact.id) || []).some((person) => person.teamMember === true && person.identityVisible && !person.resolved)) return [ASSIGNMENT_GROUPS.unresolved];
       return [ASSIGNMENT_GROUPS[state] || ASSIGNMENT_GROUPS.undisclosed];
     }
     default: return [];

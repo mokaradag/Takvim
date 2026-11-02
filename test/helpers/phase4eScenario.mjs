@@ -29,8 +29,8 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
   } } : null;
   const provider = recorded || { ...fake, get pendingCount() { return fake.pendingCount; }, streamToolCompletion(input) {
     if (!fake.pendingCount) {
-      if (isCompositionCall(input)) fake.enqueue(compose ? compose(input) : composer(coveringBlocks));
-      else if (planner) fake.enqueue(planner(input, current));
+      const behavior = isCompositionCall(input) ? (compose ? compose(input) : composer(coveringBlocks)) : planner?.(input, current);
+      if (behavior != null) fake.enqueue(behavior);
     }
     if (!isCompositionCall(input)) inputs.push(input);
     return fake.streamToolCompletion(input);
@@ -74,6 +74,8 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.project && !every((row) => row.params.projectId)) problems.push('proje kapsamı her okumada değil');
   if (expect.noProject && reads.some((row) => row.params.projectId)) problems.push('eski proje kapsamı taşındı');
   if (expect.person && !every((row) => row.params.personSicil != null && row.params.assigneeMode === 'person')) problems.push('kişi kapsamı her okumada değil');
+  if (expect.people && JSON.stringify([...new Set(reads.map((row) => Number(row.params.personSicil)))].sort((a, b) => a - b))
+    !== JSON.stringify([...new Set(expect.people.map(Number))].sort((a, b) => a - b))) problems.push('kişi kümesi beklenenle aynı değil');
   if (expect.workload && !reads.some((row) => Number(row.params.withAssignees) === 1)) problems.push('iş yükü okunmadı');
   if (expect.portfolio && !result.log.some((row) => row.query === 'portfolio')) problems.push('portföy okunmadı');
   // Ufuk: beklenen aralıkla örtüşen bir termin penceresi okunmuş olmalı (uçlarda en çok bir günlük yorum farkı kabul edilir).

@@ -248,7 +248,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         const criteria = rowCriteria.length === 1 ? rowCriteria[0] : group.envelope.map((fact) => narrativeLabel(fact, locale).criteria).find(Boolean) || '';
         const labels = chartLabels(described.rows);
         tables.set(id, Object.freeze({ id, part: ordinal, evidenceId: group.evidenceId, group, collection, rows: described.rows.length, columns, complete, criteria, detail: null,
-          layout: presentation.layout }));
+          layout: presentation.layout, requestedLayout: presentation.requestedLayout }));
         viewTables.push({ id, part: ordinal, title: described.head, rows: described.rows.length,
           ...(criteria ? { criteria: clip(criteria, COMPOSITION_LIMITS.maxValueChars) } : {}), columns, complete });
         const partition = group.tool === 'rota_task_analytics' && collection.endsWith('groups');
@@ -519,7 +519,7 @@ export function validateComposition(composition, response) {
     const visualParts = new Set(chartParts);
     for (const block of blocks) if (block.type === 'rows' && block.style === 'table') {
       const part = partOfSource('rows', block.source);
-      if (visualParts.has(part)) block.style = 'list';
+      if (visualParts.has(part) && render.tables.get(block.source)?.requestedLayout !== 'table') block.style = 'list';
       else visualParts.add(part);
     }
   }
@@ -579,8 +579,9 @@ const preferredStyle = (candidate) => STYLE_PREFERENCE.find((style) => candidate
 /** Açıkça istenen görselleştirmenin en uygun adayı (ilk bölümden başlayarak); yoksa `null`. */
 export function preferredChart(render) {
   const candidates = [...render.charts.values()];
+  const firstPart = candidates[0]?.part;
   for (const style of STYLE_PREFERENCE) {
-    const found = candidates.find((candidate) => preferredStyle(candidate) === style);
+    const found = candidates.find((candidate) => candidate.part === firstPart && preferredStyle(candidate) === style);
     if (found) return { id: found.id, style };
   }
   return null;

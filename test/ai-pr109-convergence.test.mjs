@@ -384,3 +384,70 @@ test('109: structurally valid compositions outside verdict citation scope retain
     }
   });
 });
+
+test('109 final: incomplete workload cannot claim overdue coverage of the whole population', async (t) => {
+  for (const incomplete of [false, true]) await t.test(String(incomplete), async (t) => {
+    const seed = completeWorkloadSeed([12, 11, 10]);
+    if (incomplete) {
+      const task = { ...seed.tasks[0], TaskId: '20000000-0000-4000-8000-000000000999' };
+      seed.tasks.push(task);
+      seed.taskAssignees.push({ TaskId: task.TaskId, Sicil: 999999 });
+    }
+    const stack = createAiStack(t, { sicil: AYSE, seed });
+    const { ledger, result } = await callRotaTool(stack, AYSE, 'rota_workload_summary', { projectId: PROJECTS.FULL });
+    const verdict = verifyRequested(ledger, ['totalCount', 'data.people.*.name', 'data.people.*.overdue'], {
+      operation: 'list', metrics: ['people.total', 'person.name', 'tasks.overdue'], population: { tool: 'rota_workload_summary', collection: 'people' }, entities: [{ type: 'project', id: PROJECTS.FULL }]
+    });
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+    const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }] });
+    assert.equal(result.data.populationComplete, !incomplete);
+    assert.equal(sheet.view.propositions.some((item) => item.kind === 'coverage'), !incomplete);
+  });
+});
+
+test('109 final: employees with the same display name never acquire false narrative coreference', async (t) => {
+  const seed = completeWorkloadSeed([8, 2, 2]);
+  for (const person of seed.people) if ([AYSE, LEAD].includes(person.Sicil)) person.DisplayName = 'Ali Yılmaz';
+  seed.projects = seed.projects.filter((row) => row.ProjectId === PROJECTS.FULL);
+  const stack = createAiStack(t, { sicil: AYSE, seed });
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_workload_summary', {});
+  const verdict = verifyRequested(ledger, ['data.people.*.name', 'data.people.*.openTasks', 'data.people.*.overdue'], {
+    operation: 'list', metrics: ['person.name', 'tasks.open', 'tasks.overdue'], population: { tool: 'rota_workload_summary', collection: 'people' }
+  });
+  assert.equal(verdict.ok, true);
+  const selected = analystPropositions([{ index: 0, presentation: verdict.presentation }]).map((item) => item.proposition)
+    .filter((item) => ['concentration', 'overdueConcentration'].includes(item.kind));
+  assert.equal(selected.length, 2);
+  const { fluentParagraph } = await import('../src/domain/ai/groundedPropositions.js');
+  const joined = fluentParagraph(selected.map((proposition) => ({ proposition })), 'tr');
+  assert.doesNotMatch(JSON.stringify(joined), /de onda|also on this person/);
+  assert.notEqual(selected[0].fluent.host, selected[1].fluent.follow.key);
+  const same = { ...selected[1], fluent: { follow: { ...selected[1].fluent.follow, key: selected[0].fluent.host } } };
+  assert.match(JSON.stringify(fluentParagraph([selected[0], same].map((proposition) => ({ proposition })), 'tr')), /de onda/, 'positive control for the real fluent joining path');
+});
+
+test('109 final: bookkeeping stays available for composition but out of fallback prose', async (t) => {
+  const { verdict } = await workloadSheet(t);
+  const fields = ['data.populationComplete', 'data.unrepresentedOpenTasks', 'data.unassignedOpenTasks'];
+  assert.ok(fields.every((field) => verdict.presentation.facts.some((item) => item.fact.field === field)));
+  const narrated = verdict.presentation.facts.filter((item) => !fields.includes(item.fact.field));
+  assert.equal(verdict.normalized, renderVerifiedNarrative(narrated, { locale: 'tr', layout: null, operation: 'list', empty: [] }));
+  assert.doesNotMatch(verdict.normalized, /Değer:|tamlığı:|temsil edilmeyen|sorumlusuz açık/i);
+});
+
+test('109 final: link preflight protects diagnostic files on platforms without nofollow', async (t) => {
+  const fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { appendPrivateDiagnostic } = await import('../scripts/private-diagnostic-trace.mjs');
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  let opens = 0;
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+  t.mock.method(fs, 'lstatSync', () => ({ isSymbolicLink: () => true }));
+  t.mock.method(fs, 'openSync', () => { opens += 1; throw new Error('must not open target'); });
+  t.mock.method(process.stderr, 'write', () => true);
+  syncBuiltinESMExports();
+  try {
+    assert.equal(appendPrivateDiagnostic('private-destination', {}), false);
+    assert.equal(opens, 0, 'reject link/junction before following or chmodding it');
+  } finally { Object.defineProperty(process, 'platform', platform); t.mock.restoreAll(); syncBuiltinESMExports(); }
+});
