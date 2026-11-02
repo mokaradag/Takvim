@@ -32,6 +32,8 @@ function personFromRow(row) {
 }
 
 const transactionAuthorization = new WeakMap();
+// MR_V_ExecutiveScope, çalışan başına en çok UNIT, DEPARTMENT ve DIRECTORATE üyeliklerini döndürür.
+const MAX_MEMBERSHIPS_PER_EMPLOYEE = 3;
 
 /**
  * Bir SQL işleminin TEK yetki bağlamı.
@@ -57,6 +59,7 @@ export async function loadAuthorizationContext(executor = null, { includeScopeId
   const request = pool.request();
   request.input('sicil', sql.Int, sicil);
   if (maxScopeRows != null) request.input('authorizationMaxRows', sql.Int, maxScopeRows + 1);
+  if (includeScopeIdentities && maxScopeRows != null) request.input('authorizationMaxMemberships', sql.Int, maxScopeRows * MAX_MEMBERSHIPS_PER_EMPLOYEE + 1);
   request.input('adminPredicateOnly', sql.Bit, includeScopeIdentities ? 1 : 0);
   const result = await request.query(`
     SELECT TOP (1) Sicil, DisplayName, Username, JobTitle, Team, Sector, Directorate, Department, Unit
@@ -120,10 +123,12 @@ export async function loadAuthorizationContext(executor = null, { includeScopeId
     WHERE t.CreatedBySicil = @sicil
       AND (@adminPredicateOnly = 0 OR NOT EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1))
     ${maxScopeRows != null ? ') authorizedTasks' : ''};
-    ${includeScopeIdentities ? `SELECT DISTINCT ${maxScopeRows != null ? 'TOP (@authorizationMaxRows)' : ''} EmployeeSicil FROM dbo.MR_V_ExecutiveScope WHERE ManagerSicil = @sicil AND NOT EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1) ORDER BY EmployeeSicil;` : ''}
+    ${includeScopeIdentities ? `SELECT DISTINCT ${maxScopeRows != null ? 'TOP (@authorizationMaxMemberships)' : ''} EmployeeSicil, ScopeType FROM dbo.MR_V_ExecutiveScope WHERE ManagerSicil = @sicil AND NOT EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1) ORDER BY EmployeeSicil;` : ''}
   `);
 
-  if (maxScopeRows != null && [3, 4, 5].some((index) => (result.recordsets[index]?.length || 0) > maxScopeRows)) {
+  const scopeIdentities = new Set((result.recordsets[5] || []).map((row) => Number(row.EmployeeSicil)));
+  if (maxScopeRows != null && ([3, 4].some((index) => (result.recordsets[index]?.length || 0) > maxScopeRows)
+    || scopeIdentities.size > maxScopeRows || (result.recordsets[5]?.length || 0) > maxScopeRows * MAX_MEMBERSHIPS_PER_EMPLOYEE)) {
     throw new ServerPersistenceError('AI_SCOPE_LIMIT_EXCEEDED', 'Yetki kapsamı analiz sınırını aşıyor.');
   }
   const personRow = result.recordsets[0]?.[0];
@@ -178,7 +183,8 @@ export async function loadAuthorizationContext(executor = null, { includeScopeId
     canAssignAllCorporateProjects: hasTaskAssignmentScope({ isSystemAdmin, isExecutive }),
     effective,
     ...(includeScopeIdentities ? {
-      scopeIdentities: (result.recordsets[5] || []).map((row) => Number(row.EmployeeSicil)),
+      scopeIdentities: [...scopeIdentities],
+      scopeMemberships: (result.recordsets[5] || []).map((row) => [Number(row.EmployeeSicil), row.ScopeType]),
       scopeTaskRights: partialRows.map(({ projectId, taskId, reason }) => ({ projectId, taskId, reason }))
     } : {})
   };

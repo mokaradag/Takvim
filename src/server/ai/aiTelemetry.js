@@ -1,4 +1,5 @@
 import 'server-only';
+import { ANSWER_CHART_TYPES } from '../../domain/ai/answerChart.js';
 import { AI_CREDENTIAL_SOURCES } from '../../domain/ai/aiCredentialPolicy.js';
 import { AI_ERROR_CODES, aiErrorDefinition, isAiErrorCode } from '../../domain/ai/aiErrorCatalog.js';
 import { isKnownAiProfile } from '../../domain/ai/aiModelRegistry.js';
@@ -760,8 +761,9 @@ export function recordGroundedAnswer({ outcome, rounds = 0, evidence = 0, repair
 const TURN_OUTCOMES = new Set(['grounded', 'clarification', 'abstained', 'not_found', 'unavailable', 'general_redirect', 'failed', 'error']);
 const ROUND_PURPOSES = new Set(['plan', 'tools', 'follow-up', 'select', 'repair', 'declaration', 'retry', 'compose']);
 const PRESENTATION_MODES = new Set(['composed', 'narrative', 'unavailable']);
-const PRESENTATION_REASONS = new Set(['NO_CHOICE', 'LENGTH_UNAVAILABLE', 'SHEET_LIMIT', 'AUTHORIZATION', 'CITATION_SCOPE', 'BUDGET', 'TIMEOUT', 'PROVIDER', 'LENGTH', 'EMPTY', 'INVALID', 'INTERNAL']);
-const CHART_TYPES = new Set(['bar', 'donut']);
+const PRESENTATION_REASONS = new Set(['NO_CHOICE', 'LENGTH_UNAVAILABLE', 'SHEET_LIMIT', 'AUTHORIZATION', 'CITATION_SCOPE', 'BUDGET', 'TIMEOUT', 'PROVIDER', 'LENGTH', 'EMPTY', 'INVALID', 'INTERNAL',
+  'DISABLED', 'NO_MODEL']);
+const CHART_TYPES = new Set(ANSWER_CHART_TYPES);
 const SAFE_ISSUE = /^[A-Z][A-Z0-9_]{0,40}$/;
 
 /**
@@ -772,6 +774,8 @@ function presentationSummary(value) {
   if (!value || typeof value !== 'object' || !PRESENTATION_MODES.has(value.mode)) return null;
   return {
     mode: value.mode,
+    // Sunucunun belirlenimci düzeni mi (model düzeni değil): nitelendirme model düzenini sunucu yedeğinden ayırır.
+    server: value.server === true,
     reason: PRESENTATION_REASONS.has(value.reason) ? value.reason : null,
     issue: SAFE_ISSUE.test(String(value.issue ?? '')) ? value.issue : null,
     blocks: safeCount(value.blocks),

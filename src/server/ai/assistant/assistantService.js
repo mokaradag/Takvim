@@ -48,6 +48,7 @@ import { buildGroundedContext } from './groundedPrompt.js';
 import { runGroundedTurn } from './groundedAnswer.js';
 import { semanticPlanningAdvice } from './semanticPlanning.js';
 import { EVIDENCE_TEXT_FIELDS } from '../../../domain/ai/claimableEvidence.js';
+import { isAnswerDetail, normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
 import { clarificationReferences, selectedCandidateOrdinal } from '../../../domain/ai/clarification.js';
 
 /**
@@ -93,7 +94,7 @@ const ANSWER_PERSIST_BUDGET_MS = 2 * AI_CONVERSATION_SQL_TIMEOUT_MS;
 /** Tur isteği gövdesinin en büyük boyutu ve okunma süresi. */
 export const ASSISTANT_TURN_BODY_BYTES = 64 * 1024;
 const TURN_BODY_TIMEOUT_MS = 10000;
-const TURN_FIELDS = new Set(['conversationId', 'turnId', 'message', 'mode', 'expectedSequence', 'source', 'includeText']);
+const TURN_FIELDS = new Set(['conversationId', 'turnId', 'message', 'mode', 'expectedSequence', 'source', 'includeText', 'detail']);
 
 /**
  * Konuşma geçmişinin ortak SQL havuzuna giden işleri: en fazla dört iş aynı
@@ -292,7 +293,8 @@ async function loadEvidenceFor(sicil, signal, { conversationId, messageId = null
   if (!result.knownSicil) throw unknownSicil();
   noteEvidenceSchema(result.ready);
   return { ready: result.ready, presentMessages: result.presentMessages, byMessage: result.byMessage, epochsByMessage: result.epochsByMessage,
-    authorizationByMessage: result.authorizationByMessage, clarificationByMessage: result.clarificationByMessage, resultScopeByMessage: result.resultScopeByMessage };
+    authorizationByMessage: result.authorizationByMessage, clarificationByMessage: result.clarificationByMessage, resultScopeByMessage: result.resultScopeByMessage,
+    analysisByMessage: result.analysisByMessage };
 }
 
 /* ── Hazırlık durumu ─────────────────────────────────────────── */
@@ -652,6 +654,9 @@ function parseTurnInput(body) {
   // Kayıtlı serbest metnin (açıklama, ileti, değişiklik metni) okunması kullanıcının açık seçimidir; model açamaz.
   if (body.includeText != null && typeof body.includeText !== 'boolean') throw invalidRequest('INCLUDE_TEXT_INVALID');
   const includeText = body.includeText === true;
+  // Yanıt ayrıntısı (Ayarlar) yalnızca sunum sözleşmesidir; kapalı sözlük dışı değer reddedilir.
+  if (body.detail != null && !isAnswerDetail(body.detail)) throw invalidRequest('DETAIL_INVALID');
+  const detail = normalizeAnswerDetail(body.detail);
   let message = null;
   if (body.message != null) {
     const normalized = normalizeAssistantMessage(body.message);
@@ -661,7 +666,7 @@ function parseTurnInput(body) {
   if (message == null && conversationId == null) throw invalidRequest('MESSAGE_REQUIRED', 'İleti boş olamaz.');
   const expectedSequence = body.expectedSequence ?? null;
   if (expectedSequence != null && (!Number.isSafeInteger(expectedSequence) || expectedSequence < 0 || expectedSequence > ASSISTANT_LIMITS.maxConversationMessages)) throw invalidRequest('SEQUENCE_INVALID');
-  return { conversationId, turnId: body.turnId.toLowerCase(), mode: body.mode, source, includeText, message, expectedSequence };
+  return { conversationId, turnId: body.turnId.toLowerCase(), mode: body.mode, source, includeText, detail, message, expectedSequence };
 }
 
 function outcomeFailure(prepared, input) {
@@ -773,6 +778,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
     const useTools = grounded && !prepared.answer;
     let history = prepared.history;
     let previousResult = null;
+    let previousAnalysis = null;
     if (!prepared.answer && history.some((message) => message.role === 'assistant')) {
       // Geçmiş yanıtlar bağlama yer tutucu olarak girer: yalnızca kanıt dönemleri gerekir.
       const priorEvidence = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id }, { revalidate: false });
@@ -782,6 +788,10 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
         ? priorEvidence?.resultScopeByMessage?.get(prior.id) : null;
       const entries = priorEvidence?.authorizationByMessage?.get(prior?.id);
       if (scope && entries?.length && !priorEvidence.unverifiable?.has(prior.id)) previousResult = { scope, entries };
+      // Aşama 4E takip bağlamı: yalnızca hemen önceki doğrulanmış yanıtın sunucu bağlamı (kimlikler güncel yetkiyle yeniden okunur).
+      if (useTools && prior?.role === 'assistant' && ['stop', 'unavailable'].includes(prior.finishReason) && !priorEvidence?.unverifiable?.has(prior.id)) {
+        previousAnalysis = priorEvidence?.analysisByMessage?.get(prior.id) || null;
+      }
       history = fallbackAssistantHistory(history, priorEvidence);
       const last = history.at(-1);
       if (useTools && last?.role === 'assistant' && last.finishReason === 'clarification') {
@@ -789,6 +799,7 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
         const current = await optionalEvidence(sicil, signal, { conversationId: prepared.conversation.id, messageId: last.id });
         if (current?.byMessage?.has(last.id)) {
           history = [...history.slice(0, -1), { ...last, clarificationContext: current.clarificationByMessage?.get(last.id) }];
+          if (pendingClarification(history, prepared.turn.content)?.selected) previousAnalysis = current.analysisByMessage?.get(last.id) || null;
         }
       }
     }
@@ -812,8 +823,10 @@ export async function prepareAssistantTurn({ readBody, signal = null }) {
         ? assistantToolProfileForMode(ASSISTANT_MODES.DEEP) : null,
       general: input.source === 'general',
       allowedTextFields: input.includeText ? [...EVIDENCE_TEXT_FIELDS] : [],
+      answerDetail: input.detail,
       clarification,
       previousResult,
+      previousAnalysis,
       dataUnavailable: config.toolsEnabled && input.source !== 'general' && !grounded,
       conversation: prepared.conversation,
       userMessage: prepared.turn.message,
@@ -974,11 +987,13 @@ async function generateGroundedAssistantAnswer(turn, { signal, onStatus, onProgr
     allowedTextFields: turn.allowedTextFields || [],
     clarification: turn.clarification || null,
     previousResult: turn.previousResult || null,
+    previousAnalysis: turn.previousAnalysis || null,
     onStatus,
     onProgress,
     onText: async () => {},
     deferDisclosure: true,
-    composeAnswers: turn.composeAnswers === true
+    composeAnswers: turn.composeAnswers === true,
+    answerDetail: turn.answerDetail || null
   };
   const lifecycle = { deadline: null };
   const runIn = (profile, extra, sessionOptions = {}) => getAiGateway().runToolSession({

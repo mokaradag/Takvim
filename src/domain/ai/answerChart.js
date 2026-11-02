@@ -1,4 +1,5 @@
 import { isEvidenceId } from './evidenceContract.js';
+import { isIsoDay } from './isoDay.js';
 
 /**
  * Kanıta dayalı yanıttaki grafik sözleşmesi — sunucu ile tarayıcının ORTAK, saf kuralları.
@@ -11,12 +12,23 @@ import { isEvidenceId } from './evidenceContract.js';
  */
 
 export const ANSWER_CHART_FENCE = 'rota-chart';
-export const ANSWER_CHART_TYPES = Object.freeze(['bar', 'donut']);
+/**
+ * Kapalı görselleştirme dilbilgisi (Aşama 4E): her tür kanıt biçimiyle belirlenir, model yalnızca sunucunun
+ * sunduğu adaylardan seçer. bar = kategorik karşılaştırma; donut = küçük ve tam dağılım; line = zaman dizisi
+ * (sıralı dönemler); stacked = kategori × bölüm (birbirini dışlayan ve toplamı veren bölümler); kpi = başlık
+ * ölçüleri (kart); timeline = yaklaşan tarihler (sıralı kayıt/tarih). Isı haritası ve süs grafikleri yoktur.
+ */
+export const ANSWER_CHART_TYPES = Object.freeze(['bar', 'donut', 'line', 'stacked', 'kpi', 'timeline']);
 export const ANSWER_CHART_UNITS = Object.freeze(['count', 'days', 'hours', 'percent', 'number']);
 export const ANSWER_CHART_LIMITS = Object.freeze({
   minItems: 2,
   maxBarItems: 12,
   maxDonutItems: 6,
+  maxLineItems: 24,
+  maxStackedItems: 10,
+  maxSeries: 3,
+  maxKpiItems: 6,
+  maxTimelineItems: 10,
   maxTitleChars: 80,
   maxLabelChars: 80,
   maxEvidence: 4,
@@ -60,28 +72,66 @@ function denseArray(value, min, max) {
   return copy;
 }
 
+function amountOf(amount, unit) {
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0 || amount > ANSWER_CHART_LIMITS.maxValue) return null;
+  if (unit === 'count' && !Number.isSafeInteger(amount)) return null;
+  return amount;
+}
+
+const ITEM_LIMITS = Object.freeze({ bar: 'maxBarItems', donut: 'maxDonutItems', line: 'maxLineItems', stacked: 'maxStackedItems', kpi: 'maxKpiItems', timeline: 'maxTimelineItems' });
+
+/** Türün kapalı öğe biçimi; uymuyorsa `null`. */
+function normalizeItem(type, item, spec, seriesCount) {
+  if (type === 'stacked') {
+    if (!exactKeys(item, ['label', 'values']) || !boundedText(item.label, ANSWER_CHART_LIMITS.maxLabelChars)) return null;
+    const values = denseArray(item.values, seriesCount, seriesCount);
+    if (!values) return null;
+    const amounts = values.map((value) => amountOf(value, spec.unit));
+    return amounts.some((value) => value == null) ? null : Object.freeze({ label: item.label, values: Object.freeze(amounts) });
+  }
+  if (type === 'kpi') {
+    if (!exactKeys(item, ['label', 'value', 'unit']) || !boundedText(item.label, ANSWER_CHART_LIMITS.maxLabelChars) || !ANSWER_CHART_UNITS.includes(item.unit)) return null;
+    const amount = amountOf(item.value, item.unit);
+    return amount == null ? null : Object.freeze({ label: item.label, value: amount, unit: item.unit });
+  }
+  if (type === 'timeline') {
+    if (!exactKeys(item, ['label', 'date']) || !boundedText(item.label, ANSWER_CHART_LIMITS.maxLabelChars) || !isIsoDay(item.date)) return null;
+    return Object.freeze({ label: item.label, date: item.date });
+  }
+  if (!exactKeys(item, ['label', 'value']) || !boundedText(item.label, ANSWER_CHART_LIMITS.maxLabelChars)) return null;
+  const amount = amountOf(item.value, spec.unit);
+  return amount == null ? null : Object.freeze({ label: item.label, value: amount });
+}
+
 /** Kapalı biçimli grafik tanımı; uymuyorsa `null`. Dönen değer donmuş kopyadır. */
 export function normalizeAnswerChart(value) {
   try {
-    if (!exactKeys(value, SPEC_KEYS) || value.version !== 1) return null;
-    if (!ANSWER_CHART_TYPES.includes(value.type) || !ANSWER_CHART_UNITS.includes(value.unit) || !['tr', 'en'].includes(value.locale)) return null;
+    const type = value?.type;
+    if (!ANSWER_CHART_TYPES.includes(type)) return null;
+    if (!exactKeys(value, type === 'stacked' ? [...SPEC_KEYS, 'series'] : SPEC_KEYS) || value.version !== 1) return null;
+    if (!ANSWER_CHART_UNITS.includes(value.unit) || !['tr', 'en'].includes(value.locale)) return null;
     if (!boundedText(value.title, ANSWER_CHART_LIMITS.maxTitleChars)) return null;
     const evidence = denseArray(value.evidence, 1, ANSWER_CHART_LIMITS.maxEvidence);
     if (!evidence || !evidence.every(isEvidenceId) || new Set(evidence).size !== evidence.length) return null;
-    const max = value.type === 'donut' ? ANSWER_CHART_LIMITS.maxDonutItems : ANSWER_CHART_LIMITS.maxBarItems;
-    const items = denseArray(value.items, ANSWER_CHART_LIMITS.minItems, max);
+    let series = null;
+    if (type === 'stacked') {
+      series = denseArray(value.series, 2, ANSWER_CHART_LIMITS.maxSeries);
+      if (!series || !series.every((label) => boundedText(label, ANSWER_CHART_LIMITS.maxLabelChars)) || new Set(series).size !== series.length) return null;
+    }
+    const items = denseArray(value.items, ANSWER_CHART_LIMITS.minItems, ANSWER_CHART_LIMITS[ITEM_LIMITS[type]]);
     if (!items) return null;
     const normalized = [];
     for (const item of items) {
-      if (!exactKeys(item, ['label', 'value']) || !boundedText(item.label, ANSWER_CHART_LIMITS.maxLabelChars)) return null;
-      const amount = item.value;
-      if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0 || amount > ANSWER_CHART_LIMITS.maxValue) return null;
-      if (value.unit === 'count' && !Number.isSafeInteger(amount)) return null;
-      normalized.push(Object.freeze({ label: item.label, value: amount }));
+      const next = normalizeItem(type, item, value, series?.length || 0);
+      if (!next) return null;
+      normalized.push(next);
     }
     // Pasta dilimleri bir bütünün parçalarıdır: toplamı sıfır olan dağılım çizilmez.
-    if (value.type === 'donut' && !normalized.some((item) => item.value > 0)) return null;
-    return Object.freeze({ version: 1, type: value.type, locale: value.locale, title: value.title, unit: value.unit, evidence: Object.freeze([...evidence]), items: Object.freeze(normalized) });
+    if (type === 'donut' && !normalized.some((item) => item.value > 0)) return null;
+    // Zaman çizelgesi tarih sırasındadır (sunucu sıralar; bozuk sıra bir başka anlam taşıyamaz).
+    if (type === 'timeline' && normalized.some((item, index) => index && item.date < normalized[index - 1].date)) return null;
+    return Object.freeze({ version: 1, type, locale: value.locale, title: value.title, unit: value.unit, evidence: Object.freeze([...evidence]),
+      ...(series ? { series: Object.freeze([...series]) } : {}), items: Object.freeze(normalized) });
   } catch {
     // Okunurken fırlayan erişimci (getter/Proxy) doğrulamadan kaçamaz.
     return null;
@@ -120,9 +170,20 @@ export function answerChartValue(value, unit, locale = 'tr') {
   return number;
 }
 
+/** Takvim gününün yerel yazımı (zaman çizelgesi; saat dilimi kaydırması yoktur). */
+export function answerChartDate(day, locale = 'tr') {
+  return new Intl.DateTimeFormat(locale === 'en' ? 'en-GB' : 'tr-TR', { timeZone: 'UTC', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(`${day}T00:00:00Z`));
+}
+
 /** Grafiğin düz metin karşılığı (kopyalama ve erişilebilir özet). */
 export function answerChartText(spec) {
   const normalized = normalizeAnswerChart(spec);
   if (!normalized) return '';
-  return [normalized.title, ...normalized.items.map((item) => `${item.label}\t${answerChartValue(item.value, normalized.unit, normalized.locale)}`)].join('\n');
+  const { locale, unit } = normalized;
+  const lines = normalized.type === 'stacked'
+    ? [['', ...normalized.series].join('\t'), ...normalized.items.map((item) => [item.label, ...item.values.map((value) => answerChartValue(value, unit, locale))].join('\t'))]
+    : normalized.type === 'kpi' ? normalized.items.map((item) => `${item.label}\t${answerChartValue(item.value, item.unit, locale)}`)
+      : normalized.type === 'timeline' ? normalized.items.map((item) => `${answerChartDate(item.date, locale)}\t${item.label}`)
+        : normalized.items.map((item) => `${item.label}\t${answerChartValue(item.value, unit, locale)}`);
+  return [normalized.title, ...lines].join('\n');
 }

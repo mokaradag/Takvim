@@ -46,7 +46,8 @@ import {
   statusTotals,
   TASK_PRIORITIES,
   TASK_SORTS,
-  TASK_STATUSES
+  TASK_STATUSES,
+  TEAM_LEVELS
 } from './taskFacts.js';
 
 /* ── Ortak görev süzgeci şeması ───────────────────────────── */
@@ -76,8 +77,12 @@ const FILTER_PROPERTIES = Object.freeze({
   dateFrom: DATE_PROPERTY('Aralık başlangıcı (YYYY-MM-DD, dahil).'),
   dateTo: DATE_PROPERTY('Aralık bitişi (YYYY-MM-DD, dahil).'),
   assignee: {
-    type: 'string', enum: ['any', 'me', 'unassigned'],
-    description: 'me = kullanıcının kendisinin sorumlu olduğu görevler, unassigned = sorumlusu olmayan görevler.'
+    type: 'string', enum: ['any', 'me', 'unassigned', 'team'],
+    description: 'me = kullanıcının kendisinin sorumlu olduğu görevler, unassigned = sorumlusu olmayan görevler, team = yönetim kapsamınızdaki çalışanların (ekibinizin) görevleri (yalnızca yöneticiler).'
+  },
+  teamLevel: {
+    type: 'string', enum: Object.keys(TEAM_LEVELS),
+    description: 'Yalnızca assignee team ile: ekibin kurumsal düzeyi (unit = birim, department = müdürlük/bölüm, directorate = direktörlük). Verilmezse bütün yönetim kapsamı.'
   },
   personSicil: PERSON_SICIL_PROPERTY,
   createdByMe: { type: 'boolean', description: 'Yalnızca kullanıcının oluşturduğu görevler.' },
@@ -89,7 +94,22 @@ function sqlAssigneeMode(filters) {
 }
 
 /** Yetkili ve kaba süzgeçle daraltılmış görev olguları; sınır aşılırsa "çok büyük". */
+/**
+ * Ekip kapsamı sunucunun yetki bağlamından gelir: yönetim kapsamı (MR_V_ExecutiveScope) olmayan kullanıcı için
+ * kapsam yoktur ve okuma yapılmadan reddedilir. Model kapsam veremez; yalnızca istenen kapsamı bildirir.
+ */
+export async function requireTeamScope(call, filters) {
+  if (filters.assignee !== 'team') return;
+  const { auth } = await call.authorization();
+  const denied = () => new ToolError(TOOL_ERROR_CODES.UNSUPPORTED_SCOPE, {
+    message: 'Ekip kapsamı yalnızca yönetim kapsamı olan kullanıcılara açıktır.', details: ['$.assignee:team']
+  });
+  // İstenen kurumsal düzeyde yönetim ilişkisi yoksa görev SQL'i aynı kapalı reddi verir ("0 görev" yanıltıcı olurdu).
+  if (!auth?.isExecutive) throw denied();
+}
+
 async function loadFilteredFacts(call, scope, filters, { withAssignees = false } = {}) {
+  await requireTeamScope(call, filters);
   if (filters.wbsId) {
     const node = await call.sql((executor) => readWbsSelector(executor, scope, { projectId: filters.projectId, wbsId: filters.wbsId }));
     if (!node) throw notFound();
@@ -121,6 +141,7 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false }
     createdByMe: filters.createdByMe,
     assigneeMode: sqlAssigneeMode(filters),
     personSicil: filters.personSicil,
+    teamLevel: filters.assignee === 'team' && filters.teamLevel ? TEAM_LEVELS[filters.teamLevel] : null,
     withAssignees: withAssignees || filters.assignee === 'person',
     maxRows: TOOL_LIMITS.maxAnalyzedTasks
   }));
@@ -407,7 +428,7 @@ function deadlineBucket(fact, today) {
   return ['later', 'Termini 30 gün veya daha sonra'];
 }
 
-function groupKeys(fact, groupBy, { projects, assignees, today }) {
+function groupKeys(fact, groupBy, { projects, assignees, today, teamOnly = false }) {
   switch (groupBy) {
     case 'status': return [[fact.status, statusLabelOf(fact.status)]];
     case 'priority': return [[fact.priority, priorityLabel(fact.priority)]];
@@ -420,8 +441,9 @@ function groupKeys(fact, groupBy, { projects, assignees, today }) {
     case 'assignee': {
       const state = assignmentState(fact);
       const people = state === 'visible'
-        ? (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null) : [];
+        ? (assignees.get(fact.id) || []).filter((person) => person.resolved && person.identityVisible && person.sicil != null && (!teamOnly || person.teamMember === true)) : [];
       if (people.length) return people.map((person) => [`sicil:${person.sicil}`, person.name || 'Seçilen kişi']);
+      if (teamOnly && (assignees.get(fact.id) || []).some((person) => person.teamMember === true && person.identityVisible && !person.resolved)) return [ASSIGNMENT_GROUPS.unresolved];
       return [ASSIGNMENT_GROUPS[state] || ASSIGNMENT_GROUPS.undisclosed];
     }
     default: return [];
@@ -453,7 +475,8 @@ const taskAnalytics = {
     const limit = args.limit ?? 10;
     const { scope } = await call.authorization();
     const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' });
-    const context = { projects, assignees, today: call.today };
+    // Ekip kapsamında sorumlu gruplaması yalnızca yönetim kapsamındaki kişilerdir (görevin kapsam dışı eş sorumlusu sayılmaz).
+    const context = { projects, assignees, today: call.today, teamOnly: filters.assignee === 'team' };
     let groups = null;
     let groupCount = 0;
     if (groupBy) {

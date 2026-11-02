@@ -1,5 +1,6 @@
 import 'server-only';
 import { taskResultScope } from '../../../domain/ai/requestContract.js';
+import { normalizeAnalysisContext } from '../../../domain/ai/analysisContext.js';
 import { sql } from '../../db/pool.js';
 import { normalizeEvidenceSummary } from '../../../domain/ai/evidenceContract.js';
 import { decodeAuthorizationPopulation, PAYLOAD_POPULATION_TOOLS } from '../tools/evidenceAuthorization.js';
@@ -280,6 +281,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
   const epochsByMessage = new Map();
   const clarificationByMessage = new Map();
   const resultScopeByMessage = new Map();
+  const analysisByMessage = new Map();
   const authorizationByMessage = new Map();
   for (const row of rows) {
     if (row.Ordinal == null) continue;
@@ -310,6 +312,10 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
       if (scope && authorizationEpoch && !unverifiable) resultScopeByMessage.set(id, scope);
     } catch { /* Bozuk sonuç kapsamı kullanılmaz. */ }
     try {
+      const context = normalizeAnalysisContext(JSON.parse(row.AnalysisContext || 'null'));
+      if (context && authorizationEpoch && !unverifiable) analysisByMessage.set(id, context);
+    } catch { /* Bozuk analiz bağlamı kullanılmaz (takip göndergesizdir). */ }
+    try {
       const candidates = JSON.parse(row.ClarificationContext || 'null');
       if (Array.isArray(candidates)) clarificationByMessage.set(id, [...(clarificationByMessage.get(id) || []), ...candidates].sort((a, b) => a.ordinal - b.ordinal).slice(0, 10));
     } catch { /* Geçersiz açıklama durumu kullanılmaz. */ }
@@ -322,6 +328,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     authorizationByMessage,
     clarificationByMessage,
     resultScopeByMessage,
+    analysisByMessage,
     byMessage: evidenceByMessage(rows)
   };
 }

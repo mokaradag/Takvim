@@ -122,7 +122,8 @@ export function requestSchema() {
         properties: {
           status: task.status, priority: task.priority, deadline: task.deadline, dateField: task.dateField,
           dateFrom: task.dateFrom, dateTo: task.dateTo, period: { type: 'string', enum: [...REQUEST_PERIODS] },
-          assignee: { type: 'string', enum: ['me', 'unassigned'] }, createdByMe: task.createdByMe, milestone: task.milestone, text: task.text,
+          assignee: { type: 'string', enum: ['me', 'unassigned', 'team'], description: 'me = kendi görevleri; team = yönetim kapsamındaki çalışanlar (ekip); unassigned = sorumlusuz.' },
+          teamLevel: task.teamLevel, createdByMe: task.createdByMe, milestone: task.milestone, text: task.text,
           tab: { type: 'string', enum: ['pending', 'sent', 'history'], description: 'Talepler: pending = kararınızı ya da işleminizi bekleyen, sent = sizin gönderdikleriniz, history = sonuçlananlar.' }, workflowStatus: { type: 'string', enum: [...new Set(statuses)] },
           source: { type: 'string', enum: ['corporate', 'manual'] }, includeEmpty: { type: 'boolean' },
           activityScope: { type: 'string', enum: ['mine', 'team'] }, activityKind: getRotaTool('rota_activity_search').parameters.properties.kind

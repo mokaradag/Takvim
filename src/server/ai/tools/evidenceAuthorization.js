@@ -15,7 +15,10 @@ function partsOf(auth, scope) {
   if (!entry || entry.scope !== scope) {
     entry = {
       scope,
-      people: createHash('sha256').update(JSON.stringify([...(auth.scopeIdentities || [])].sort((a, b) => a - b))).digest('hex'),
+      people: createHash('sha256').update(JSON.stringify({
+        identities: [...new Set(auth.scopeIdentities || [])].sort((a, b) => a - b),
+        memberships: [...new Set((auth.scopeMemberships || []).map((row) => JSON.stringify(row)))].sort()
+      })).digest('hex'),
       full: null
     };
     canonicalParts.set(auth, entry);

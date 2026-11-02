@@ -124,7 +124,9 @@ test('the request schema speaks the closed metric vocabulary and the task tool f
   assert.deepEqual(schema.properties.metrics.items.enum, Object.keys(METRICS));
   const task = toolCatalogForModel().find((tool) => tool.name === 'rota_task_search').parameters.properties;
   for (const key of ['status', 'priority', 'deadline', 'dateField']) assert.deepEqual(schema.properties.filters.properties[key], task[key], key);
-  assert.deepEqual(schema.properties.filters.properties.assignee.enum, ['me', 'unassigned'], 'atanan kişi yalnızca varlık olarak bildirilir');
+  // Aşama 4E: ekip (yönetim kapsamı) bir kişi değil kapsamdır; adı verilen kişi yine yalnızca varlık olarak bildirilir.
+  assert.deepEqual(schema.properties.filters.properties.assignee.enum, ['me', 'unassigned', 'team'], 'atanan kişi yalnızca varlık olarak bildirilir');
+  assert.deepEqual(schema.properties.filters.properties.teamLevel, task.teamLevel);
 });
 
 /* ── Döngü: bildirimsiz veri okunmaz, istek sonradan değişmez ── */

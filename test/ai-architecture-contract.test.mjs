@@ -443,7 +443,9 @@ test('Rota AI özellik ve iş kodunda kurulu model adı, profil kimliği ya da s
 
 test('sohbet Sicil’i yalnızca güvenilir oturumdan alır; tur gövdesi yalnızca ileti alanları ve beklenen sıra numarasını kabul eder', () => {
   const service = code(read('src/server/ai/assistant/assistantService.js'));
-  assert.match(service, /const TURN_FIELDS = new Set\(\['conversationId', 'turnId', 'message', 'mode', 'expectedSequence', 'source', 'includeText'\]\);/);
+  // Aşama 4E: yanıt ayrıntısı yalnızca sunum tercihidir (kapalı sözlük); kimlik, profil ya da model seçmez.
+  assert.match(service, /const TURN_FIELDS = new Set\(\['conversationId', 'turnId', 'message', 'mode', 'expectedSequence', 'source', 'includeText', 'detail'\]\);/);
+  assert.match(service, /if \(body\.detail != null && !isAnswerDetail\(body\.detail\)\) throw invalidRequest\('DETAIL_INVALID'\);/);
   for (const operation of ['listAssistantConversations', 'loadAssistantConversation', 'deleteAssistantConversation', 'prepareAssistantTurn']) {
     const start = service.indexOf(`export async function ${operation}(`);
     assert.ok(start >= 0, operation);

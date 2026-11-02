@@ -1385,9 +1385,14 @@ function runQuery(db, statement, params, { database }) {
     const sets = authorizationRecordsets(db, sicil);
     if (params.adminPredicateOnly && db.systemAdminSicils.includes(sicil)) { sets[3] = []; sets[4] = []; }
     if (sqlText.includes('ORDER BY EmployeeSicil;')) {
-      sets.push(db.executiveScope.filter((entry) => entry.ManagerSicil === sicil && !(params.adminPredicateOnly && db.systemAdminSicils.includes(sicil))).map(({ EmployeeSicil }) => ({ EmployeeSicil })));
+      const memberships = sqlText.includes('EmployeeSicil, ScopeType');
+      const rows = db.executiveScope.filter((entry) => entry.ManagerSicil === sicil && !(params.adminPredicateOnly && db.systemAdminSicils.includes(sicil)))
+        .map(({ EmployeeSicil, ScopeType }) => ({ EmployeeSicil, ...(memberships ? { ScopeType: ScopeType || 'UNIT' } : {}) }));
+      sets.push([...new Map(rows.map((row) => [JSON.stringify(row), row])).values()].sort((a, b) => a.EmployeeSicil - b.EmployeeSicil));
     }
-    if (params.authorizationMaxRows) for (const index of [3, 4, 5]) if (sets[index]) sets[index] = sets[index].slice(0, params.authorizationMaxRows);
+    if (params.authorizationMaxRows) for (const index of [3, 4]) if (sets[index]) sets[index] = sets[index].slice(0, params.authorizationMaxRows);
+    const membershipLimit = params.authorizationMaxMemberships || params.authorizationMaxRows;
+    if (membershipLimit && sets[5]) sets[5] = sets[5].slice(0, membershipLimit);
     return result(sets);
   }
   if (sqlText.includes('CREATE TABLE #VisibleProjects')) {

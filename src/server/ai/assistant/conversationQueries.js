@@ -269,7 +269,8 @@ export const AI_CONVERSATION_EVIDENCE_SQL = `${KNOWN_SICIL}${EVIDENCE_READY}
       CASE WHEN JSON_QUERY(e.EvidenceJson, '$.authorizationReferences') IS NULL
         AND JSON_QUERY(e.EvidenceJson, '$.authorizationPopulation') IS NULL THEN e.EvidenceJson END AS LegacyEvidenceJson,
       JSON_QUERY(e.EvidenceJson, '$.clarificationContext') AS ClarificationContext,
-      JSON_QUERY(e.EvidenceJson, '$.resultScope') AS ResultScope
+      JSON_QUERY(e.EvidenceJson, '$.resultScope') AS ResultScope,
+      JSON_QUERY(e.EvidenceJson, '$.analysisContext') AS AnalysisContext
     FROM dbo.MR_AiConversationMessages m WITH (HOLDLOCK)
     JOIN dbo.MR_AiConversations c WITH (HOLDLOCK) ON c.ConversationId = m.ConversationId
     LEFT JOIN dbo.MR_AiMessageEvidence e ON e.MessageId = m.MessageId

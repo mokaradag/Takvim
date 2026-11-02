@@ -1338,3 +1338,89 @@ test('4C final convergence: adding continuation scope never discards fitting evi
     for (const row of rows) assert.ok(decodeAuthorizationPopulation(row.authorizationPopulation));
   });
 });
+
+test('üretim ekip SQL sözleşmesi her seçimde göreve, yöneticiye ve düzeye bağlıdır; yoksa okuma öncesi kapanır', () => {
+  const sql = toolQueries.AI_TOOL_TASK_FACTS_SQL;
+  const compact = (text) => text.replace(/\s+/g, ' ').trim();
+  const start = "OR (@assigneeMode = 'team'";
+  const expected = `OR (@assigneeMode = 'team' AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees member
+    JOIN dbo.MR_V_ExecutiveScope es ON es.EmployeeSicil = member.Sicil
+    WHERE member.TaskId = t.TaskId AND es.ManagerSicil = @sicil AND member.Sicil <> @sicil
+    AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)))`;
+  // Sorgu üretim modülünden gelir; SQL ikizinin işaretle seçtiği ikinci bir uygulama sınanmıyor.
+  const branches = [];
+  for (let at = sql.indexOf(start); at >= 0; at = sql.indexOf(start, at + start.length)) {
+    const open = sql.indexOf('(', at);
+    let depth = 0;
+    let end = open;
+    for (; end < sql.length; end += 1) {
+      if (sql[end] === '(') depth += 1;
+      else if (sql[end] === ')' && --depth === 0) break;
+    }
+    branches.push(compact(sql.slice(at, end + 1)));
+  }
+  assert.deepEqual(branches, Array(6).fill(compact(expected)), 'ön seçimler ve nihai okuma aynı dar ekip koşulunu uygular');
+  const guard = `IF @assigneeMode = 'team' AND NOT EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
+    WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel))
+    THROW 51002, 'AI_TOOL_SCOPE_UNAVAILABLE', 1;`;
+  assert.ok(compact(sql).includes(compact(guard)));
+  assert.ok(sql.indexOf('THROW 51002') < sql.indexOf('CREATE TABLE #AiScopeProjects'), 'yönetim kapsamı yokken görev nüfusu kurulmaz');
+  assert.match(sql, /FROM #AiTasks visible\s+JOIN dbo\.MR_Tasks t ON t\.TaskId = visible\.TaskId/);
+});
+
+test('109 son: aynı çalışan birimden görünse de bölüm üyeliğinin kaldırılması kanıtı geçersiz kılar', async (t) => {
+  const stack = stackFor(t, { executiveScope: ['UNIT', 'DEPARTMENT'].map((ScopeType) => ({ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP, ScopeType })) });
+  const { result, context, ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'team', teamLevel: 'department', projectId: PROJECTS.FULL });
+  assert.equal(result.ok, true);
+  const entries = ledger.authorizationEntries();
+  const signal = new AbortController().signal;
+  await context.revalidateAuthorization(signal);
+  assert.deepEqual([...await context.revalidateEvidence(entries, signal)], ['R1']);
+  stack.db.executiveScope = stack.db.executiveScope.filter((row) => row.ScopeType !== 'DEPARTMENT');
+  await context.revalidateAuthorization(signal);
+  assert.deepEqual([...await context.revalidateEvidence(entries, signal)], []);
+  assert.equal(context.isEvidenceAuthorized(entries[0]), false);
+  const current = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'team', teamLevel: 'unit', projectId: PROJECTS.FULL });
+  assert.equal(current.result.ok, true, 'birim ilişkisi ve proje görünürlüğü sürüyor');
+});
+
+test('109 son: ekip gruplaması çözülemeyen üyeyi görünür dış eş sorumludan ayırır', async (t) => {
+  const seed = rotaToolSeed();
+  seed.tasks = seed.tasks.filter((row) => row.TaskId === TASKS.DUE_SOON);
+  seed.taskAssignees = [{ TaskId: TASKS.DUE_SOON, Sicil: ZEYNEP }, { TaskId: TASKS.DUE_SOON, Sicil: MEHMET }];
+  seed.people = seed.people.filter((person) => person.Sicil !== ZEYNEP);
+  const stack = createAiStack(t, { sicil: AYSE, seed });
+  const { result } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'team', groupBy: 'assignee' });
+  assert.equal(result.ok, true);
+  assert.equal(result.data.groups.length, 1);
+  assert.equal(result.data.groups[0].key, 'unresolved');
+  assert.equal(result.data.groups[0].count, 1);
+  assert.doesNotMatch(JSON.stringify(result.data.groups), /Mehmet|910002|undisclosed/);
+  stack.db.people.push({ Sicil: ZEYNEP, DisplayName: 'Zeynep Kaya' });
+  const resolved = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'team', groupBy: 'assignee' });
+  assert.equal(resolved.result.data.groups[0].key, `sicil:${ZEYNEP}`);
+});
+
+test('109 takip: yetki sınırı çalışan sayısına uygulanır ve bütün kurumsal üyelikler korunur', async (t) => {
+  const seed = rotaToolSeed();
+  seed.projects = seed.projects.filter((project) => project.ProjectId === PROJECTS.FULL);
+  seed.tasks = [];
+  seed.taskAssignees = [];
+  seed.executiveScope = [ZEYNEP, MEHMET].flatMap((EmployeeSicil) => ['UNIT', 'DEPARTMENT', 'DIRECTORATE'].map((ScopeType) => ({ ManagerSicil: AYSE, EmployeeSicil, ScopeType })));
+  const stack = createAiStack(t, { sicil: AYSE, seed });
+  const limits = { ...TOOL_LIMITS, maxAuthorizationRows: 2 };
+  const { result, context, ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', {}, { limits });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const signal = new AbortController().signal;
+  const { auth } = await context.authorization(signal);
+  assert.deepEqual([...auth.scopeIdentities].sort(), [ZEYNEP, MEHMET].sort());
+  const expected = seed.executiveScope.map((row) => JSON.stringify([row.EmployeeSicil, row.ScopeType])).sort();
+  assert.deepEqual(auth.scopeMemberships.map((item) => JSON.stringify(item)).sort(), expected, 'TOP sonraki üyelikleri kesmemelidir');
+  stack.db.executiveScope = stack.db.executiveScope.filter((row) => !(row.EmployeeSicil === ZEYNEP && row.ScopeType === 'UNIT'));
+  await context.revalidateAuthorization(signal);
+  assert.equal(context.isEvidenceAuthorized(ledger.authorizationEntries()[0]), false, 'üyelik kaybı kanıtı geçersiz kılmaya devam eder');
+  stack.db.executiveScope.push({ ManagerSicil: AYSE, EmployeeSicil: LEAD, ScopeType: 'UNIT' });
+  const overflow = await callRotaTool(stack, AYSE, 'rota_task_analytics', {}, { limits });
+  assert.equal(overflow.result.ok, false);
+  assert.equal(overflow.result.error.code, 'RESULT_TOO_LARGE', 'çalışan sınırı gerçekten aşıldığında erişim kapalı biçimde reddedilir');
+});

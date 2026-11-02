@@ -332,6 +332,7 @@ function evidenceRowsFor(db, messageIds) {
         AuthorizationReferences: JSON.stringify(evidence.authorizationReferences ?? null),
         LegacyEvidenceJson: evidence.authorizationReferences || evidence.authorizationPopulation ? null : row.EvidenceJson,
         ResultScope: JSON.stringify(evidence.resultScope ?? null),
+        AnalysisContext: JSON.stringify(evidence.analysisContext ?? null),
         ClarificationContext: JSON.stringify(evidence.clarificationContext ?? null) };
     });
 }

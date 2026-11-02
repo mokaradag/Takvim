@@ -157,6 +157,14 @@ export function resolveEvidenceSelection(answer, { evidenceIds = [], evidencePay
  */
 function renderableFacts(request, items, evidence, answer, emptyProperties = []) {
   const rendered = [...items];
+  // Completeness-dependent prose uses canonical facts from the same verified, population-matching source.
+  for (const evidenceId of new Set(items.map((item) => item.evidenceId))) {
+    const source = evidence.get(evidenceId);
+    if (source?.tool !== 'rota_workload_summary' || !source.populationMatch || !source.dimensionsMatch) continue;
+    for (const fact of source.facts.filter((fact) => ['data.populationComplete', 'data.unrepresentedOpenTasks', 'data.unassignedOpenTasks'].includes(fact.field))) {
+      if (!rendered.some((item) => item.evidenceId === evidenceId && item.fact.field === fact.field)) rendered.push({ evidenceId, fact });
+    }
+  }
   // Boşluğun sunumu kardeş olgudan değil, kendi kayıtlı alanından gelir.
   const emptyFact = (source, field, metric, template) => ({
     factId: `${source.envelope.factScope}:${field}`, subjectId: field.slice(0, field.lastIndexOf('.')), subject: template.subject,
@@ -240,9 +248,11 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
   }
   const citedIds = [...new Set(selection.facts.map((item) => item.evidenceId))];
   const rendered = request ? renderableFacts(request, selection.facts, evidence, answer, emptyProperties) : selection.facts;
-  const normalized = renderVerifiedNarrative(rendered, { locale, layout, operation: request?.operation || null, empty: emptyProofs });
+  const contextOnly = new Set(['data.populationComplete', 'data.unrepresentedOpenTasks', 'data.unassignedOpenTasks']);
+  const narrated = rendered.filter((item) => !contextOnly.has(item.fact.field) || selection.facts.includes(item));
+  const normalized = renderVerifiedNarrative(narrated, { locale, layout, operation: request?.operation || null, empty: emptyProofs });
   if (normalized.length > FACT_LIMITS.maxAnswerChars) return { ok: false, citedIds: [], issues: [{ code: 'ANSWER_TOO_LARGE' }] };
   // Anlatımın girdisi, kanıta dayalı yanıt düzeni için de aynı doğrulanmış olgulardır (yeni olgu eklenmez).
-  const presentation = Object.freeze({ facts: Object.freeze(rendered), layout, operation: request?.operation || null, empty: Object.freeze([...emptyProofs]) });
+  const presentation = Object.freeze({ facts: Object.freeze(rendered), layout, requestedLayout: request?.layout || 'auto', operation: request?.operation || null, empty: Object.freeze([...emptyProofs]) });
   return { ok: true, normalized, citedIds, facts: selection.facts, presentation, issues: [] };
 }

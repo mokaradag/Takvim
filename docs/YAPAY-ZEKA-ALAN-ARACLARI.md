@@ -740,8 +740,8 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 ### 10.1 `rota_task_search` — görev arama
 
 - **Amaç:** Yetkili görevleri süzgeçle listelemek ve süzgece uyan kesin toplamı vermek.
-- **Girdiler:** `text`, `projectId`, `wbsId`, `status[]` (`todo`, `in_progress`, `done`), `priority[]`, `deadline` (`overdue`, `due_today`, `due_next_7_days`, `due_next_30_days`, `no_target_finish`), `dateField` + `dateFrom`/`dateTo`, `assignee` (`any`, `me`, `unassigned`), `personSicil`, `createdByMe`, `milestone`, `sort` (`target_finish_asc` varsayılan; gecikme süzgecinde `overdue_days_desc`), `limit` (1–50, varsayılan 20), `cursor`.
-- **Yetki:** Anlık görüntünün görev görünürlüğü; kişi süzgeci yalnızca kimliği kullanıcıya açık sorumluluklarla eşleşir.
+- **Girdiler:** `text`, `projectId`, `wbsId`, `status[]` (`todo`, `in_progress`, `done`), `priority[]`, `deadline` (`overdue`, `due_today`, `due_next_7_days`, `due_next_30_days`, `no_target_finish`), `dateField` + `dateFrom`/`dateTo`, `assignee` (`any`, `me`, `unassigned`, `team`), `teamLevel` (`unit`, `department`, `directorate`; yalnızca `assignee: team` ile), `personSicil`, `createdByMe`, `milestone`, `sort` (`target_finish_asc` varsayılan; gecikme süzgecinde `overdue_days_desc`), `limit` (1–50, varsayılan 20), `cursor`.
+- **Yetki:** Anlık görüntünün görev görünürlüğü; kişi süzgeci yalnızca kimliği kullanıcıya açık sorumluluklarla eşleşir. `assignee: team` (Aşama 4E) yalnızca `MR_V_ExecutiveScope` içinde kullanıcının **yönetici** olduğu çalışanların görevleridir (`teamLevel` verilirse yalnızca o kapsam türü: UNIT/DEPARTMENT/DIRECTORATE). Yönetim kapsamı olmayan kullanıcıda (ya da istenen düzeyde kapsamı olmayanda) SQL `THROW 51002` ile okumadan durur → `UNSUPPORTED_SCOPE`; yanıt "yönetim kapsamınız bulunmuyor" der, kaydın yokluğunu ya da varlığını söylemez. Ekip görevi de görünürlük kuralından geçer: kapsam yetkiyi genişletmez, yalnızca daraltır.
 - **Kaynak:** `AI_TOOL_TASK_FACTS_SQL` (yetki + daraltıcı kaba süzgeç) → tam süzgeç, sıralama ve sayfalama saf JS'de.
 - **Çıktı:** `tasks[]` (kimlik, başlık, proje, durum, öncelik, termin/plan/gerçekleşen tarihleri, gecikme günü, sorumlular), `sort`.
 - **Tamlık:** `totalCount` kesin toplam; liste bir sayfa; `nextCursor` süzgeç ve sıralı veri kümesi özetine bağlıdır. Canlı ekleme/silme/sıralama değişimi eski imleci reddeder; aynı imleçle sessizce kayıt atlanmaz veya tekrarlanmaz. Her sayfa güncel yetkiyle okunan ayrı kanıttır; sayfalar tek liste olarak birleştirilmez.
@@ -761,10 +761,10 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 ### 10.3 `rota_task_analytics` — görev toplamları
 
 - **Amaç:** Sayı, oran ve dağılım sorularının belirlenimci yanıtı.
-- **Girdiler:** `rota_task_search` süzgeçleri + `groupBy` (`status`, `priority`, `project`, `assignee`, `deadline`, `target_month`), `limit` (grup sayısı, 1–25).
+- **Girdiler:** `rota_task_search` süzgeçleri (ekip kapsamı dâhil) + `groupBy` (`status`, `priority`, `project`, `assignee`, `deadline`, `target_month`), `limit` (grup sayısı, 1–25).
 - **Yetki:** `rota_task_search` ile aynı; `assignee` grubunda gizli eş sorumlu kişi olarak sayılmaz ("Kimliği gösterilemeyen sorumlu").
 - **Kaynak:** `AI_TOOL_TASK_FACTS_SQL` + saf toplamlar.
-- **Çıktı:** `totals` (toplam, durumlar, açık, gecikmiş, bugün, 7 gün, terminsiz, gerçekleşen bitişi eksik tamamlanan, açık kilometre taşı, tamamlanma oranı), `overdueAging`, `hours` (saat/bütçe kapsamasıyla), `groups[]` (fazlası "Diğer n grup"), `definitions`.
+- **Çıktı:** `totals` (toplam, durumlar, açık, gecikmiş, bugün, 7 gün, terminsiz, gerçekleşen bitişi eksik tamamlanan, açık kilometre taşı, tamamlanma oranı), `overdueAging`, `hours` (saat/bütçe kapsamasıyla), `groups[]` (her grup yalnızca `count`, `open`, `overdue`, `done` taşır; fazlası "Diğer n grup"), `definitions`. Kayıt defteri grup satırına başka toplam bağlamaz: "durumlara göre yapılacak/devam eden" gibi satırda olmayan bir ölçü bildirimde `not-row-total` ile reddedilir (Aşama 4E).
 - **Tamlık:** Bütün yetkili eşleşmeler üzerinde; 20 000 satırı aşan küme `RESULT_TOO_LARGE`.
 - **Örnek sorular:** "Projede kaç gecikmiş görev var ve ne kadar süredir gecikiyorlar?", "Görevlerin aylara göre termin dağılımı?"
 
@@ -808,8 +808,8 @@ biçimindedir. Kimlik alanları GUID'dir ve arama araçlarının sonucundan geli
 ### 10.8 `rota_workload_summary` — iş yükü
 
 - **Amaç:** Açık görevlerin kişilere dağılımı.
-- **Girdiler:** `projectId`, `personSicil`, `limit` (1–25).
-- **Yetki:** Yalnızca görünür açık görevler; kişiye atıf yalnızca kimliği açık sorumluluklarla.
+- **Girdiler:** `projectId`, `personSicil`, `assignee` (yalnızca `team`), `teamLevel`, `limit` (1–25).
+- **Yetki:** Yalnızca görünür açık görevler; kişiye atıf yalnızca kimliği açık sorumluluklarla. `assignee: team` ile yalnızca kullanıcının yönetim kapsamındaki kişiler sayılır (kapsam yoksa `UNSUPPORTED_SCOPE`, bkz. §10.1).
 - **Kaynak:** `AI_TOOL_TASK_FACTS_SQL` + saf toplamlar.
 - **Çıktı:** `people[]` (açık, devam eden, gecikmiş, 7 gün, `plannedHoursOnAssignedTasks` ve kapsaması; bu değer kişi-saat tahsisi değildir), `unassignedOpenTasks`, notlar (kapasite yargısı yok). Gizli sorumlu kimliklerinden ayrı bir adet/türemiş toplam üretilmez.
 - **Örnek sorular:** "Ekipte kimde kaç açık iş var?"

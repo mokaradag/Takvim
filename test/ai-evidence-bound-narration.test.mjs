@@ -124,7 +124,11 @@ test('equal-valued complete populations retain averages and overdue thresholds w
       const validated = validateComposition(sheet, coveringBlocks(sheet.view));
       assert.equal(validated.ok, true, JSON.stringify(validated.issues));
       const text = assistantMarkdownText(renderComposition(sheet, validated).text, { rotaData: true });
-      assert.ok(text.includes(average.text) && text.includes(threshold.text), text);
+      // Akıcı paragraf: ortalama sayım cümlesine bağlanır, eşik kümeyi "bunların" ile sürdürür (değerler aynıdır).
+      const joined = locale === 'en'
+        ? [`, with an average delay of ${delay} days.`, tone === 'warning' ? 'All of them are more than a week overdue' : 'None of them is more than a week overdue']
+        : [` var ve ortalama gecikme ${delay} gün.`, tone === 'warning' ? 'Bunların tamamı bir haftadan uzun süredir gecikmiş' : 'Bunların hiçbirinin gecikmesi bir haftayı aşmıyor'];
+      assert.ok(joined.every((phrase) => text.includes(phrase)), text);
     }
   }
   assert.deepEqual(tablePropositions({ ...syntheticTable([9, 9, 9], { complete: false }), distribution: false, locale: 'en' }), []);
@@ -161,7 +165,10 @@ test('verified deadline statistics survive unrelated progress narration and mixe
         const validated = validateComposition(sheet, { blocks: [{ type: 'say', items: [average.id, ...dates.map((item) => item.id)] }, { type: 'rows', source: 'T1' }] });
         assert.equal(validated.ok, true, JSON.stringify(validated.issues));
         const text = assistantMarkdownText(renderComposition(sheet, validated).text);
-        assert.ok(text.includes(average.text) && dates.every((item) => text.includes(item.text)), text);
+        // Aynı sütunun iki ucu tek cümledir: en erken termin ve (en erken yinelenmeden) en geç termin.
+        const range = locale === 'en' ? 'The earliest deadline is 7 September 2026 (Haftalık durum toplantısı), and the latest deadline is 29 September 2026.'
+          : 'En erken termin 7 Eylül 2026 (Haftalık durum toplantısı), en geç termin ise 29 Eylül 2026.';
+        assert.ok(text.includes(average.text) && text.includes(range), text);
       } else {
         assert.ok(dates[0].text.includes(locale === 'en' ? '5 September 2026' : '5 Eylül 2026'), 'completed tasks make the deadline range independent of overdue-day extrema');
       }
@@ -274,7 +281,7 @@ test('başlık ve not kutusu yalnızca sunucu kimlikleridir; ton sunucunundur, m
     { type: 'note', items: ['P5'] }] });
   assert.equal(validated.ok, true);
   const rendered = renderComposition(composition, validated);
-  assert.ok(rendered.text.startsWith('#### Gecikmiş görevleriniz\n\nŞu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**). Gecikmelerin ortalaması **11,3 gün**.'), rendered.text);
+  assert.ok(rendered.text.startsWith("#### Gecikmiş görevleriniz\n\nŞu anda **3** gecikmiş göreviniz var ve ortalama gecikme **11,3 gün**. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**). Bunların **2**'si **RDR · Radar Modernizasyonu** projesinde."), rendered.text);
   assert.ok(rendered.text.endsWith("> [!warning]\n> **Dikkat:** **3** görevin **2**'si bir haftadan uzun süredir gecikmiş. 【R1】"), rendered.text);
   assert.equal(rendered.said, 5);
   // Zayıf modelin gözlenen düzeni: vurgulanan önerme paragrafta da söylenmiş. Önerme yalnızca kutuda kalır, cümle yinelenmez.
@@ -312,7 +319,7 @@ test('Örnek A çizimi: model yalnızca seçer; cümle, değer, yönlendirme, ö
   const validated = validateComposition(composition, { blocks: [{ type: 'say', items: ['P1', 'P2', 'P3', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }] });
   assert.equal(validated.ok, true);
   const rendered = renderComposition(composition, validated);
-  assert.ok(rendered.text.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**). En kısa süredir geciken görev **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz. 【R1】\n\n_Ölçüt: Termin: Gecikmiş; Sorumlu: Ben_\n\n| Görev |'), rendered.text);
+  assert.ok(rendered.text.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz. 【R1】\n\n_Ölçüt: Termin: Gecikmiş; Sorumlu: Ben_\n\n| Görev |'), rendered.text);
   assert.equal(rendered.text.includes('Eşleşen'), false, 'söylenen sayım önermesi ayrıntısının yerine geçer');
   assert.deepEqual([rendered.said, rendered.tables, rendered.citedIds], [3, 1, ['R1']]);
   // Önerme söylenmezse sunucunun ayrıntısı eksiksiz eklenir.
@@ -360,14 +367,16 @@ test('Örnek A uçtan uca: tek araçsız düzen turu, insan anlatımı ve deği�
   stack.provider.enqueue(planCall(OVERDUE_REQUEST), composer(() => ({ blocks: [{ type: 'say', items: ['P1', 'P2', 'P3', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }] }), (view) => { sheet = view; }));
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION_A })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
-  assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**). En kısa süredir geciken görev **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz.'));
+  assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz.'));
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD.model, STANDARD.model]);
   const compose = stack.provider.calls[1];
   assert.deepEqual(compose.messages.map((message) => message.role), ['system', 'user']);
   assert.equal(compose.messages[0].content, compositionSystemPrompt());
   // Anlatıcının girdisi küçüktür: ham SQL, araç dökümü ya da kanıt yükü yoktur; yalnızca önerme sayfası.
   assert.ok(compose.messages[1].content.length < 2600, String(compose.messages[1].content.length));
-  assert.deepEqual(Object.keys(sheet), ['language', 'today', 'question', 'parts', 'titles', 'propositions', 'tables', 'details', 'charts', 'missing']);
+  // Aşama 4E: sayfa yanıt ayrıntısını (Ayarlar) taşır; varsayılan dengelidir.
+  assert.deepEqual(Object.keys(sheet), ['language', 'today', 'detail', 'question', 'parts', 'titles', 'propositions', 'tables', 'details', 'charts', 'missing']);
+  assert.equal(sheet.detail, 'balanced');
   assert.deepEqual(answer.evidence.map((item) => item.id), ['R1']);
   assert.equal(stack.db.aiMessageEvidence.length, 1);
   const [line] = turnLines(logs);
@@ -391,7 +400,7 @@ test('sayım ölçüsü bildirilmemiş listede (zayıf modelin gözlenen planı)
     ['maximum', 'En uzun süredir geciken görev Haftalık durum toplantısı (23 gün).'],
     ['minimum', 'En kısa süredir geciken görev Kısmi kendi görevim (1 gün).']
   ]);
-  assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**). En kısa süredir geciken görev **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz. 【R1】'));
+  assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz. 【R1】'));
   assert.deepEqual(answer.evidence.map((item) => item.id), ['R1']);
   // Sayfanın bir kısmı: kanıtın kesin toplamı satır sayısından büyükse sayım ve uç önerilmez.
   const partial = createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true' }, seed: rotaToolSeed() });
@@ -823,7 +832,28 @@ test('yönlendirme paragrafın hemen ardındaki kanıt bloğunadır; araya başk
   assert.equal(validateComposition(sheet, { blocks: [say, { type: 'rows', source: 'T1' }, second, { type: 'rows', source: 'T2' }] }).ok, true);
   // İki yönlendirme: ardından gelen ilk iki kanıt bloğu (sıra serbest).
   assert.equal(validateComposition(sheet, { blocks: [{ type: 'say', items: [...own, 'G1', 'T1'] }, { type: 'rows', source: 'T1' }, { type: 'chart', source: 'G1' }, second, { type: 'rows', source: 'T2' }] }).ok, true);
-  assert.equal(issue(validateComposition(sheet, { blocks: [{ type: 'say', items: [...own, 'G1', 'T1'] }, { type: 'rows', source: 'T1' }, { type: 'rows', source: 'T2' }, { type: 'chart', source: 'G1' }] })), 'POINTER_TARGET');
+  // Aşama 4E: araya giren FARKLI türden blok ("aşağıdaki grafik" için bir tablo) yönlendirmeyi belirsizleştirmez.
+  assert.equal(validateComposition(sheet, { blocks: [{ type: 'say', items: [...own, 'G1', 'T1'] }, { type: 'rows', source: 'T1' }, second, { type: 'rows', source: 'T2' }, { type: 'chart', source: 'G1' }] }).ok, true);
+  // Aynı türden yönlendirilmeyen blok araya girerse "aşağıdaki tablo" başka tabloyu gösterir: reddedilir.
+  assert.equal(issue(validateComposition(sheet, { blocks: [{ type: 'say', items: [...own, 'T1'] }, second, { type: 'rows', source: 'T2' }, { type: 'rows', source: 'T1' }] })), 'POINTER_TARGET');
+});
+
+test('Aşama 4E POINTER_TARGET kök nedeni: grafiğe yönlendiren paragraf ardından önce tablo, sonra grafik çizer (gerçek ret)', async (t) => {
+  const sheet = await statusSheet(t);
+  const chart = sheet.view.charts[0];
+  assert.ok(chart, 'dağılım grafiği adayı vardır');
+  const said = sheet.view.propositions.filter((item) => item.table === chart.table && item.column === chart.column).slice(0, 3).map((item) => item.id);
+  assert.ok(said.length, 'grafiğin sütununu taşıyan önerme vardır');
+  // Gözlenen üretim düzeni: kullanıcı grafik istedi, model paragrafta grafiğe yönlendirdi ve yönergedeki "tablo, sonra grafik" sırasını izledi.
+  const observed = { blocks: [{ type: 'title', source: 'H1' }, { type: 'say', items: [...said, chart.id] }, { type: 'rows', source: chart.table }, { type: 'chart', source: chart.id, style: 'donut' }] };
+  const validated = validateComposition(sheet, observed);
+  assert.equal(validated.ok, true, JSON.stringify(validated.issues));
+  const rendered = renderComposition(sheet, validated);
+  assert.equal(rendered.chart, 'donut');
+  assert.match(rendered.text, /Dağılımı aşağıdaki grafikte görebilirsiniz\./);
+  assert.ok(rendered.text.indexOf('```rota-chart') > rendered.text.indexOf('Dağılımı aşağıdaki grafikte'), 'grafik paragraftan sonra çizilir');
+  // Grafik paragraftan ÖNCE çizilirse yönlendirme yine reddedilir (kaynak bağı zayıflamaz).
+  assert.equal(issue(validateComposition(sheet, { blocks: [{ type: 'say', items: [said[0]] }, { type: 'chart', source: chart.id }, { type: 'say', items: [...said.slice(1), chart.id] }, { type: 'rows', source: chart.table }] })), 'POINTER_TARGET');
 });
 
 test('grafik yönlendirmesi yalnızca önermenin sütununu gösteren grafiğe olur (kaynak bağı); başka ölçünün grafiği reddedilir', async (t) => {

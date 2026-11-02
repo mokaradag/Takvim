@@ -24,6 +24,7 @@ const { compositionSystemPrompt } = await import('../src/server/ai/assistant/gro
 const { COMPOSITION_RUNTIME } = await import('../src/server/ai/assistant/answerComposition.js');
 const { activeAssistantGenerationCountForTests } = await import('../src/server/ai/assistant/assistantGenerations.js');
 const { prepareAssistantTurn, generateAssistantAnswer } = await import('../src/server/ai/assistant/assistantService.js');
+const { presentationRoute } = await import('../src/server/ai/assistant/groundedAnswer.js');
 const { parseAnswerChart } = await import('../src/domain/ai/answerChart.js');
 const { parseAssistantMarkdown } = await import('../src/features/ai/assistant/assistantMarkdown.js');
 
@@ -81,7 +82,7 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   assert.deepEqual(stored.map((row) => [row.tool, row.resultScope]), deterministic.map((row) => [row.tool, row.resultScope]));
   const [line] = turnLines(logs);
   assert.equal(turnLines(logs).length, 1, 'tek tamamlanma kaydı');
-  assert.deepEqual({ ...line.context.presentation, ms: null }, { mode: 'composed', reason: null, issue: null, blocks: 4, said: 3, tables: 1, notes: 0, titled: false, chart: 'bar', charts: 1, ms: null, rejected: null });
+  assert.deepEqual({ ...line.context.presentation, ms: null }, { mode: 'composed', server: false, reason: null, issue: null, blocks: 4, said: 3, tables: 1, notes: 0, titled: false, chart: 'bar', charts: 1, ms: null, rejected: null });
   assert.deepEqual(line.context.rounds.map((round) => [round.purpose, round.budget, round.calls]), [['plan', STANDARD.maxOutputTokens, 1], ['compose', COMPOSITION_RUNTIME.maxOutputTokens, 0]]);
   assert.equal(line.context.escalated, false);
   for (const secret of [QUESTION, 'Haftalık durum toplantısı', 'Radar test planı', String(AYSE), 'gecikmiş göreviniz']) {
@@ -90,6 +91,17 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   const { grounding } = aiTelemetrySnapshot();
   assert.deepEqual(grounding.presentation, { composed: 1, narrative: 0, unavailable: 0, byReason: {}, charts: 1 });
   assert.equal(grounding.escalations.total, 0);
+});
+
+test('açık grafik isteği yeni model turu açılamadığında da sunucunun belirlenimci düzenine gider (sessizce düşmez)', () => {
+  // Kısmi yanıt (sonraki bölümde sağlayıcı kesildi) ya da düşen Derin anlatım `compose: false` ile biter: model çağrılmaz,
+  // ama açık grafik isteği sunucunun belirlenimci düzeniyle (grafik ya da kısa not) karşılanır.
+  assert.equal(presentationRoute({ compose: false, composeAnswers: true, visual: true, analytical: false }), 'server');
+  assert.equal(presentationRoute({ compose: false, composeAnswers: true, visual: true, analytical: true }), 'server');
+  assert.equal(presentationRoute({ compose: false, composeAnswers: true, visual: false, analytical: true }), 'verdict', 'grafiksiz kısmi yanıt doğrulanmış anlatımdır');
+  assert.equal(presentationRoute({ compose: true, composeAnswers: false, visual: false, analytical: true }), 'server');
+  assert.equal(presentationRoute({ compose: true, composeAnswers: false, visual: false, analytical: false }), 'verdict');
+  assert.equal(presentationRoute({ compose: true, composeAnswers: true, visual: false, analytical: false }), 'model');
 });
 
 test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; yapısal ret yalnızca sayfayla tek Derin anlatım denemesi açar', async (t) => {
@@ -148,7 +160,7 @@ test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; ya
     stack.provider.enqueue(plan(), composer(() => ({ blocks: [{ type: 'say', items: ['P7'] }, { type: 'rows', source: 'T1' }] })),
       composer(() => ({ blocks: [{ type: 'say', items: ['P1', 'P2', 'P3', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }] })));
     const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
-    assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\. En uzun süredir geciken görev \*\*Haftalık durum toplantısı\*\* \(\*\*23 gün\*\*\)\. En kısa süredir geciken görev \*\*Kısmi kendi görevim\*\* \(\*\*1 gün\*\*\)\. Ayrıntıları aşağıdaki tabloda görebilirsiniz\. 【R1】/);
+    assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\. En uzun süredir geciken görev \*\*Haftalık durum toplantısı\*\* \(\*\*23 gün\*\*\), en kısa süredir geciken ise \*\*Kısmi kendi görevim\*\* \(\*\*1 gün\*\*\)\. Ayrıntıları aşağıdaki tabloda görebilirsiniz\. 【R1】/);
     const [line] = turnLines(logs);
     assert.deepEqual([line.context.presentation.mode, line.context.presentation.rejected, line.context.presentation.said], ['composed', 'UNKNOWN_PROPOSITION', 3]);
     assert.equal(line.context.escalation.kind, 'narrate');
@@ -207,7 +219,7 @@ test('Derin kipte düzen Derin oturumunda yürür ve düşünmeye yer bırakan p
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION, mode: 'deep' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.deepEqual(stack.provider.calls.map((call) => [call.model, call.maxOutputTokens]), [[DEEP.model, DEEP.maxOutputTokens], [DEEP.model, DEEP.maxOutputTokens]]);
-  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
+  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var ve ortalama gecikme \*\*11,3 gün\*\*\./);
 });
 
 test('kalan süre düzen penceresine yetmiyorsa düzen istenmez; doğrulanmış anlatım gösterilir', async (t) => {
@@ -274,7 +286,8 @@ test('İngilizce plan İngilizce olgu sayfası ve yanıt üretir', async (t) => 
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Show my overdue tasks.' })).assistantMessage;
   assert.equal(sheet.language, 'en');
   assert.equal(Object.hasOwn(sheet, 'facts'), false);
-  assert.match(answer.content, /^You currently have \*\*3\*\* overdue tasks\./);
+  assert.match(answer.content, /^You currently have \*\*3\*\* overdue tasks, with an average delay of \*\*11\\\.3 days\*\*\./);
+  assert.match(answer.content, /, and the shortest-overdue is \*\*Kısmi kendi görevim\*\* \(\*\*1 day\*\*\)\. Of these, \*\*2\*\* are more than a week overdue/);
   assert.match(answer.content, /\| Task \| Deadline \| Overdue days \|/);
 });
 
@@ -637,4 +650,42 @@ test('sunum telemetrisi yalnız teslim edilen kendi yanıtını ve grafiklerini 
       assert.equal(trace.outcome, delivery.endsWith('-error') ? 'error' : delivery === 'revoked' ? 'not_found' : delivery === 'unavailable' ? 'unavailable' : 'grounded');
     });
   }
+});
+
+test('109 son: kabul edilen on iki bloklu model düzeni daha kısa doğrulanmış grafik düzenine döner', async (t) => {
+  const { buildComposition, validateComposition } = await import('../src/domain/ai/groundedComposition.js');
+  const { composeGroundedAnswer } = await import('../src/server/ai/assistant/answerComposition.js');
+  const { callRotaTools, PROJECTS } = await import('./helpers/aiToolFixtures.mjs');
+  const { verifyRequested } = await import('./helpers/requestScenario.mjs');
+  const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
+  const groupings = ['status', 'priority', 'deadline'];
+  const { ledger } = await callRotaTools(stack, AYSE, groupings.map((groupBy) => ['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy }]));
+  const parts = groupings.map((groupBy, index) => {
+    const fields = ['data.groups.*.label', 'data.groups.*.count'].map((field) => `R${index + 1}:${field}`);
+    const verdict = verifyRequested(ledger, fields, { operation: 'list', metrics: ['tasks.total'],
+      population: { tool: 'rota_task_analytics', collection: 'groups', groupBy }, entities: [{ type: 'project', id: PROJECTS.FULL }] });
+    assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+    return { index, presentation: verdict.presentation };
+  });
+  const composition = buildComposition({ parts, visual: true });
+  assert.ok(composition?.render.charts.size);
+  const { propositions, titles, tables } = composition.render;
+  const blocks = [];
+  for (let part = 1; part <= 3; part += 1) {
+    blocks.push(...[...titles.values()].filter((item) => item.part === part).map((item) => ({ type: 'title', source: item.id })));
+    const ids = [...propositions.values()].filter((item) => item.part === part).slice(0, 3).map((item) => item.id);
+    assert.ok(ids.length >= 2);
+    blocks.push({ type: 'say', items: ids.slice(0, -1) });
+    blocks.push(part < 3 ? { type: 'note', items: ids.slice(-1) } : { type: 'say', items: ids.slice(-1) });
+    blocks.push(...[...tables.values()].filter((item) => item.part === part).map((item) => ({ type: 'rows', source: item.id })));
+  }
+  assert.equal(blocks.length, 12, 'üç başlık, dört paragraf, üç tablo ve iki not');
+  const checked = validateComposition(composition, { blocks });
+  assert.equal(checked.ok, true, JSON.stringify(checked.issues));
+  const result = await composeGroundedAnswer({ session: { remainingMs: () => 120000, signal: new AbortController().signal,
+    round: async () => ({ text: JSON.stringify({ blocks }), finishReason: 'stop' }) }, composition });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.charts, 1);
+  assert.ok(result.blocks <= 12);
+  assert.deepEqual(new Set(result.citedIds), new Set(['R1', 'R2', 'R3']));
 });

@@ -180,6 +180,7 @@ test('tweak defaults expose exactly the settings consumed by the application', (
   assert.deepEqual(Object.keys(TWEAK_DEFAULTS).sort(), [
     'accent',
     'appMode',
+    'assistantDetail',
     'calLarge',
     'dateFormat',
     'density',

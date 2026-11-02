@@ -40,6 +40,8 @@ const LABELS = Object.freeze({
   calendar: ['Takvim', 'Calendar'], range: ['Tarih aralığı', 'Date range'], from: ['Başlangıç', 'From'], to: ['Bitiş', 'To'],
   workingWeekdays: ['Çalışılan haftanın günü', 'Working weekday'], holidays: ['Tatiller', 'Holidays'], date: ['Tarih', 'Date'],
   openTasks: ['Açık görev', 'Open tasks'], unassignedOpenTasks: ['Görünür sorumlusu olmayan açık görev', 'Open tasks without a visible assignee'],
+  unrepresentedOpenTasks: ['Kişi satırlarında temsil edilmeyen açık görev', 'Open tasks not represented by person rows'],
+  populationComplete: ['Atama dağılımı tam', 'Assignment distribution complete'],
   tasksWithPlannedHours: ['Planlanan saati bilinen görev', 'Tasks with known planned hours'],
   directorate: ['Başkanlık', 'Directorate'], department: ['Müdürlük', 'Department'], organization: ['Organizasyon', 'Organization'],
   awaitingYourDecision: ['Kararınızı bekleyen', 'Awaiting your decision'], actionRequired: ['İşlem bekleyen', 'Action required'],
@@ -293,11 +295,12 @@ export function factPresentation(fact, locale = 'tr') {
     statuses: ['Durum', 'Status'], priorities: ['Öncelik', 'Priority'], deadline: ['Termin', 'Deadline'],
     dateField: ['Tarih alanı', 'Date field'], dateFrom: ['İlk tarih', 'First date'], dateTo: ['Son tarih', 'Last date'],
     assignee: ['Sorumlu', 'Assignee'], personSicil: ['Kişi', 'Person'], createdByMe: ['Oluşturduklarım', 'Created by me'], milestone: ['Kilometre taşı', 'Milestone'],
-    depth: ['Derinlik', 'Depth'] };
+    teamLevel: ['Ekip düzeyi', 'Team level'], depth: ['Derinlik', 'Depth'] };
   const filterValues = { ...values.status, ...values.priority, overdue: ['Gecikmiş', 'Overdue'],
     due_today: ['Bugün', 'Today'], due_next_7_days: ['Bugün dahil yedi gün', 'Seven days including today'],
     due_next_30_days: ['Bugün dahil otuz gün', 'Thirty days including today'], no_target_finish: ['Terminsiz', 'No deadline'],
-    me: ['Ben', 'Me'], person: ['Seçilen kişi', 'Selected person'], unassigned: ['Sorumlusuz', 'Unassigned'] };
+    me: ['Ben', 'Me'], person: ['Seçilen kişi', 'Selected person'], unassigned: ['Sorumlusuz', 'Unassigned'], team: ['Ekibiniz', 'Your team'],
+    unit: ['Birim', 'Unit'], department: ['Müdürlük/bölüm', 'Department'], directorate: ['Direktörlük', 'Directorate'] };
   const tabValues = { pending: ['Bekleyen', 'Pending'], sent: ['Gönderilen', 'Sent'], history: ['Geçmiş', 'History'], all: ['Tümü', 'All'] };
   const filterValue = (value) => typeof value === 'boolean' ? (value ? ['Evet', 'Yes'] : ['Hayır', 'No'])[language]
     : filterValues[value]?.[language] || LABELS[value]?.[language] || (/^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? value : null);

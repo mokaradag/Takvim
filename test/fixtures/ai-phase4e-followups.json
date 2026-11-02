@@ -1,0 +1,624 @@
+{
+ "version": 1,
+ "today": "2026-09-30",
+ "note": "Aşama 4E takip zincirleri: her turun altın planı ve araç düzeyinde beklenen kapsam (Tier A deterministik, Tier C canlı).",
+ "chains": [
+  {
+   "id": "A",
+   "title": "self → risk filter → chart → next week",
+   "turns": [
+    {
+     "text": "bu hafta işlerim açısından durumumu değerlendir",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "self",
+       "focus": [
+        "overview",
+        "overdue",
+        "upcoming"
+       ],
+       "dateFrom": "2026-09-28",
+       "dateTo": "2026-10-04"
+      }
+     },
+     "expect": {
+      "assignee": "me",
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "sadece riskli olanları göster",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "overdue",
+        "upcoming"
+       ],
+       "dateFrom": "2026-09-28",
+       "dateTo": "2026-10-04"
+      }
+     },
+     "expect": {
+      "assignee": "me",
+      "finish": "stop",
+      "noProject": true
+     }
+    },
+    {
+     "text": "bunları grafik olarak göster",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "overdue",
+        "upcoming"
+       ],
+       "dateFrom": "2026-09-28",
+       "dateTo": "2026-10-04"
+      },
+      "visual": true
+     },
+     "expect": {
+      "assignee": "me",
+      "finish": "stop",
+      "chart": true
+     }
+    },
+    {
+     "text": "peki gelecek hafta?",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "upcoming"
+       ],
+       "dateFrom": "2026-10-05",
+       "dateTo": "2026-10-11"
+      }
+     },
+     "expect": {
+      "assignee": "me",
+      "finish": "stop",
+      "window": [
+       "2026-10-05",
+       "2026-10-11"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "B",
+   "title": "project retained → people → chart → horizon",
+   "turns": [
+    {
+     "text": "Radar Modernizasyonu projesinin genel durumunu değerlendir",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "project",
+       "focus": [
+        "overview",
+        "overdue",
+        "workload"
+       ],
+       "names": [
+        "Radar Modernizasyonu"
+       ]
+      }
+     },
+     "expect": {
+      "project": true,
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "sadece gecikmiş işleri göster",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "overdue"
+       ]
+      }
+     },
+     "expect": {
+      "project": true,
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "kimlerde yoğunlaşıyor?",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "workload"
+       ]
+      }
+     },
+     "expect": {
+      "project": true,
+      "workload": true,
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "bunu grafik olarak göster",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "workload"
+       ]
+      },
+      "visual": true
+     },
+     "expect": {
+      "project": true,
+      "chart": true,
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "gelecek iki haftayı da değerlendir",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "upcoming"
+       ],
+       "dateFrom": "2026-09-30",
+       "dateTo": "2026-10-13"
+      }
+     },
+     "expect": {
+      "project": true,
+      "window": [
+       "2026-09-30",
+       "2026-10-13"
+      ],
+      "finish": "stop"
+     }
+    }
+   ]
+  },
+  {
+   "id": "C",
+   "title": "team → ranking → week → team ∩ project → overdue",
+   "turns": [
+    {
+     "text": "ekibimin durumunu değerlendir",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "team",
+       "focus": [
+        "overview",
+        "workload",
+        "overdue"
+       ]
+      }
+     },
+     "expect": {
+      "assignee": "team",
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "iş yükü en yüksek olanları göster",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "workload"
+       ]
+      }
+     },
+     "expect": {
+      "assignee": "team",
+      "workload": true,
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "sadece bu hafta için",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "upcoming"
+       ],
+       "dateFrom": "2026-09-28",
+       "dateTo": "2026-10-04"
+      }
+     },
+     "expect": {
+      "assignee": "team",
+      "window": [
+       "2026-09-30",
+       "2026-10-04"
+      ],
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "Ekip Projesi projesinde çalışanlara indir",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "workload"
+       ],
+       "within": "Ekip Projesi"
+      }
+     },
+     "expect": {
+      "assignee": "team",
+      "project": true,
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "peki gecikmeler?",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "overdue"
+       ]
+      }
+     },
+     "expect": {
+      "assignee": "team",
+      "project": true,
+      "finish": "stop"
+     }
+    }
+   ]
+  },
+  {
+   "id": "D",
+   "title": "deliberate scope switches",
+   "turns": [
+    {
+     "text": "kendi işlerimi değerlendir",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "self",
+       "focus": [
+        "overview",
+        "overdue"
+       ]
+      }
+     },
+     "expect": {
+      "assignee": "me",
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "şimdi Radar Modernizasyonu projesine bak",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "project",
+       "focus": [
+        "overview",
+        "overdue"
+       ],
+       "names": [
+        "Radar Modernizasyonu"
+       ]
+      }
+     },
+     "expect": {
+      "project": true,
+      "notAssignee": "me",
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "peki ekibim?",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "team",
+       "focus": [
+        "overview",
+        "workload"
+       ]
+      }
+     },
+     "expect": {
+      "assignee": "team",
+      "noProject": true,
+      "finish": "stop"
+     }
+    }
+   ]
+  },
+  {
+   "id": "E",
+   "title": "person reference by row",
+   "turns": [
+    {
+     "text": "ekibimde en fazla açık işi olan kişileri göster",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "team",
+       "focus": [
+        "workload"
+       ]
+      }
+     },
+     "expect": {
+      "assignee": "team",
+      "workload": true,
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "ilk kişiyi değerlendir",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "row",
+       "focus": [
+        "overview",
+        "overdue"
+       ],
+       "rows": [
+        1
+       ]
+      }
+     },
+     "expect": {
+      "person": true,
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "onun gecikmiş işleri hangileri?",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "overdue"
+       ]
+      }
+     },
+     "expect": {
+      "person": true,
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "gelecek hafta durumu nasıl?",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "upcoming"
+       ],
+       "dateFrom": "2026-10-05",
+       "dateTo": "2026-10-11"
+      }
+     },
+     "expect": {
+      "person": true,
+      "window": [
+       "2026-10-05",
+       "2026-10-11"
+      ],
+      "finish": "stop"
+     }
+    }
+   ]
+  },
+  {
+   "id": "F",
+   "title": "portfolio comparison → two rows → workload → chart",
+   "turns": [
+    {
+     "text": "projelerimi gecikme açısından karşılaştır",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "projects",
+       "focus": [
+        "projects"
+       ]
+      }
+     },
+     "expect": {
+      "portfolio": true,
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "en riskli ikisini ayrıntılı göster",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "row",
+       "focus": [
+        "overview"
+       ],
+       "rows": [
+        1,
+        2
+       ]
+      }
+     },
+     "expect": {
+      "project": true,
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "iş yüklerini de karşılaştır",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "workload"
+       ]
+      }
+     },
+     "expect": {
+      "project": true,
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "bunu grafikle göster",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "previous",
+       "focus": [
+        "workload"
+       ]
+      },
+      "visual": true
+     },
+     "expect": {
+      "project": true,
+      "chart": true,
+      "finish": "stop"
+     }
+    }
+   ]
+  },
+  {
+   "id": "G",
+   "title": "authorization-sensitive broadening",
+   "turns": [
+    {
+     "text": "Radar Modernizasyonu projesini değerlendir",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "project",
+       "focus": [
+        "overview"
+       ],
+       "names": [
+        "Radar Modernizasyonu"
+       ]
+      }
+     },
+     "expect": {
+      "project": true,
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "tüm bölümle karşılaştır",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "team",
+       "focus": [
+        "overview"
+       ],
+       "level": "department"
+      }
+     },
+     "expect": {
+      "scopeDenied": true,
+      "finish": "unavailable"
+     }
+    }
+   ]
+  },
+  {
+   "id": "H",
+   "title": "ambiguous pronoun after two subjects",
+   "turns": [
+    {
+     "text": "Ayşe Yılmaz ile Zeynep Kaya'nın iş yükünü karşılaştır",
+     "plan": {
+      "intent": "rota",
+      "language": "tr",
+      "analysis": {
+       "scope": "person",
+       "focus": [
+        "workload"
+       ],
+       "names": [
+        "Ayşe Yılmaz",
+        "Zeynep Kaya"
+       ]
+      }
+     },
+     "expect": {
+      "person": true,
+      "people": [910001, 910003],
+      "finish": "stop"
+     }
+    },
+    {
+     "text": "peki onun durumu?",
+     "plan": {
+      "intent": "clarify",
+      "language": "tr",
+      "clarify": {
+       "reason": "missing_referent"
+      }
+     },
+     "expect": {
+      "finish": "clarification",
+      "noData": true
+     }
+    }
+   ]
+  }
+ ]
+}

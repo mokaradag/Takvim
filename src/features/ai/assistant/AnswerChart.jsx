@@ -2,7 +2,7 @@
 import { useRef, useState } from 'react';
 import { DONUT_EMPHASIS, donutSegments, donutSlicePath } from '../../../components/charts/donutGeometry.js';
 import { Tooltip } from '../../../components/ui-extras';
-import { answerChartValue } from '../../../domain/ai/answerChart.js';
+import { answerChartDate, answerChartValue } from '../../../domain/ai/answerChart.js';
 
 /**
  * Kanıta dayalı yanıttaki grafik — sunucunun doğruladığı kapalı tanımdan uygulamanın kendi bileşeniyle
@@ -171,6 +171,131 @@ function DonutChart({ spec, copy }) {
   );
 }
 
+const LINE = Object.freeze({ width: 320, height: 120, pad: 10 });
+
+/**
+ * Zaman dizisi: sıralı dönemler çizgiyle; noktalar odaklanabilir değildir, erişilebilir karşılığı aynı değerlerin
+ * sıralı listesidir (klavye ve ekran okuyucu listeyi gezer, ipucu satırdadır).
+ */
+function LineChart({ spec, copy }) {
+  const max = Math.max(...spec.items.map((item) => item.value), 0);
+  const roving = useRovingFocus(spec.items.length);
+  const step = spec.items.length > 1 ? (LINE.width - 2 * LINE.pad) / (spec.items.length - 1) : 0;
+  const y = (value) => LINE.height - LINE.pad - (max > 0 ? (value / max) * (LINE.height - 2 * LINE.pad) : 0);
+  const points = spec.items.map((item, index) => [LINE.pad + index * step, y(item.value)]);
+  return (
+    <div className="assistant-chart-line">
+      <svg className="assistant-chart-line-plot" viewBox={`0 0 ${LINE.width} ${LINE.height}`} preserveAspectRatio="none" aria-hidden="true" focusable="false">
+        <line className="assistant-chart-line-axis" x1={LINE.pad} y1={LINE.height - LINE.pad} x2={LINE.width - LINE.pad} y2={LINE.height - LINE.pad} />
+        <polyline className="assistant-chart-line-path" points={points.map(([px, py]) => `${px},${py}`).join(' ')} />
+        {/* Nokta, uzunluğu sıfır yuvarlak uçlu çizgidir: ölçeklenmeyen çizgi kalınlığıyla geniş kapsayıcıda elipse dönüşmez. */}
+        {points.map(([px, py], index) => (
+          <g key={index} className={`assistant-chart-line-point${roving.active === index ? ' is-active' : ''}`}>
+            <path className="assistant-chart-line-point-ring" d={`M${px} ${py}h0`} />
+            <path className="assistant-chart-line-point-core" d={`M${px} ${py}h0`} />
+          </g>
+        ))}
+      </svg>
+      <ol className="assistant-chart-line-values">
+        {spec.items.map((item, index) => {
+          const value = answerChartValue(item.value, spec.unit, spec.locale);
+          return (
+            <li key={`${index}-${item.label}`}>
+              <Tooltip asChild title={item.label} content={<TipBody spec={spec} item={item} ratio={max > 0 ? item.value / max : 0} copy={copy} />}>
+                <div ref={(node) => { roving.refs.current[index] = node; }} className="assistant-chart-line-value" role="group" tabIndex={roving.active === index ? 0 : -1}
+                  aria-label={`${item.label}: ${value}`} onFocus={() => roving.setActive(index)} onKeyDown={(event) => roving.move(event, index)}>
+                  <span className="assistant-chart-label">{item.label}</span>
+                  <span className="assistant-chart-value" aria-hidden="true">{value}</span>
+                </div>
+              </Tooltip>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+/** Kategori × bölüm: her satır birbirini dışlayan bölümlerin yığılmış çubuğudur; açıklama dizileri adlandırır. */
+function StackedChart({ spec }) {
+  const totals = spec.items.map((item) => item.values.reduce((sum, value) => sum + value, 0));
+  const max = Math.max(...totals, 0);
+  const roving = useRovingFocus(spec.items.length);
+  return (
+    <div className="assistant-chart-stacked">
+      <ul className="assistant-chart-series-legend" aria-hidden="true">
+        {spec.series.map((label, index) => <li key={label}><Swatch index={index} /><span>{label}</span></li>)}
+      </ul>
+      <ol className="assistant-chart-bars">
+        {spec.items.map((item, index) => {
+          const parts = item.values.map((value, position) => `${spec.series[position]} ${answerChartValue(value, spec.unit, spec.locale)}`).join(', ');
+          return (
+            <li key={`${index}-${item.label}`}>
+              <div ref={(node) => { roving.refs.current[index] = node; }} className="assistant-chart-row" role="group" tabIndex={roving.active === index ? 0 : -1}
+                aria-label={`${item.label}: ${parts}`} onFocus={() => roving.setActive(index)} onKeyDown={(event) => roving.move(event, index)}>
+                <span className="assistant-chart-label">{item.label}</span>
+                <span className="assistant-chart-track assistant-chart-stack" aria-hidden="true" style={{ '--chart-ratio': max > 0 ? totals[index] / max : 0 }}>
+                  {item.values.map((value, position) => (
+                    <span key={position} className={`assistant-chart-stack-part ${series(position)}`} style={{ flexGrow: totals[index] > 0 && Number.isFinite(value) && value > 0 ? value / totals[index] : 0 }} />
+                  ))}
+                </span>
+                <span className="assistant-chart-value" aria-hidden="true">{answerChartValue(totals[index], spec.unit, spec.locale)}</span>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+/** Başlık ölçüleri: her kart doğrulanmış tek bir sayıdır (birim kartın kendisindedir). */
+function KpiCards({ spec }) {
+  return (
+    <ul className="assistant-chart-kpis">
+      {spec.items.map((item, index) => {
+        const value = answerChartValue(item.value, item.unit, spec.locale);
+        return (
+          <li key={`${index}-${item.label}`} className="assistant-chart-kpi" aria-label={`${item.label}: ${value}`}>
+            <span className="assistant-chart-kpi-value" aria-hidden="true">{value}</span>
+            <span className="assistant-chart-kpi-label" aria-hidden="true">{item.label}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Yaklaşan tarihler: tarih sırasıyla kayıtlar; konum yalnızca görseldir, metin tarih ve adı taşır. */
+function Timeline({ spec }) {
+  return (
+    <ol className="assistant-chart-timeline">
+      {spec.items.map((item, index) => {
+        const date = answerChartDate(item.date, spec.locale);
+        return (
+          <li key={`${index}-${item.label}`} className="assistant-chart-timeline-item" aria-label={`${date}: ${item.label}`}>
+            <span className="assistant-chart-timeline-dot" aria-hidden="true" />
+            <time className="assistant-chart-timeline-date" dateTime={item.date} aria-hidden="true">{date}</time>
+            <span className="assistant-chart-label" aria-hidden="true">{item.label}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** Türün bileşeni (doğrudan öğe: figür yalnızca türün kendi bileşenini taşır). */
+function chartBody(spec, copy) {
+  switch (spec.type) {
+    case 'donut': return <DonutChart spec={spec} copy={copy} />;
+    case 'line': return <LineChart spec={spec} copy={copy} />;
+    case 'stacked': return <StackedChart spec={spec} />;
+    case 'kpi': return <KpiCards spec={spec} />;
+    case 'timeline': return <Timeline spec={spec} />;
+    default: return <BarChart spec={spec} copy={copy} />;
+  }
+}
+
 /** `spec` önceden `normalizeAnswerChart` ile doğrulanmış ve yanıtın kanıtlarına bağlanmış olmalıdır. */
 export function AnswerChart({ spec }) {
   const copy = COPY[spec.locale] || COPY.tr;
@@ -180,7 +305,7 @@ export function AnswerChart({ spec }) {
         <span className="assistant-chart-title">{spec.title}</span>
         <span className="assistant-chart-meta">{`${spec.items.length} ${copy.values} · ${copy.source} ${spec.evidence.join(', ')}`}</span>
       </figcaption>
-      {spec.type === 'donut' ? <DonutChart spec={spec} copy={copy} /> : <BarChart spec={spec} copy={copy} />}
+      {chartBody(spec, copy)}
     </figure>
   );
 }

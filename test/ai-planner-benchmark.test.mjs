@@ -1248,6 +1248,66 @@ test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP ya
 });
 
 /** Gerçek komut sınırı; yerel CLI ikizi yalnızca açık dosya bariyerinde tamamlanır. */
+test('Claude diagnostic trace persists safe metadata without private model text', async (t) => {
+  const { statSync } = await import('node:fs');
+  const privateText = 'PRIVATE_MODEL_RESPONSE_109';
+  const cli = await claudeCommandFixture(t, { events: [
+    { type: 'system', subtype: 'init', tools: [] },
+    { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'text', text: privateText }] } },
+    { type: 'result', num_turns: 1, stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 1 } }
+  ] });
+  const path = `${cli.dir}/trace.jsonl`;
+  const invocation = cli.start({ PLANNER_CLAUDE_TRACE: path });
+  cli.release();
+  const reply = await invocation.done;
+  assert.equal(reply.text, privateText, 'the real adapter received the private response');
+  const persisted = readFileSync(path, 'utf8');
+  assert.equal(persisted.includes(privateText), false);
+  assert.equal(JSON.parse(persisted).textChars, privateText.length);
+  if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600);
+});
+
+test('Claude diagnostic trace failures preserve successful stdout and billed usage without disclosing paths', async (t) => {
+  const { mkdirSync, symlinkSync, writeFileSync } = await import('node:fs');
+  for (const target of ['missing-parent', 'directory', ...(process.platform !== 'win32' ? ['symlink'] : [])]) await t.test(target, async (t) => {
+    const cli = await claudeCommandFixture(t);
+    const privatePath = `${cli.dir}/PRIVATE_TRACE_DESTINATION`;
+    if (target === 'directory') mkdirSync(privatePath);
+    if (target === 'symlink') { writeFileSync(`${cli.dir}/destination`, 'unchanged'); symlinkSync(`${cli.dir}/destination`, privatePath); }
+    const invocation = cli.start({ PLANNER_CLAUDE_TRACE: target === 'missing-parent' ? `${privatePath}/trace.jsonl` : privatePath });
+    cli.release();
+    const reply = await invocation.done;
+    assert.equal(reply.text, 'ok');
+    assert.equal(reply.error, undefined);
+    assert.equal(reply.usage.output_tokens, 1);
+    assert.equal(cli.rows().filter((row) => row.usage).length, 1);
+    assert.equal(invocation.stderr(), 'PRIVATE_DIAGNOSTIC_WRITE_FAILED\n');
+    if (target === 'symlink') assert.equal(readFileSync(`${cli.dir}/destination`, 'utf8'), 'unchanged');
+  });
+});
+
+test('Claude qualification concurrent calls share a ledger without sharing run usage', async (t) => {
+  const { appendFileSync } = await import('node:fs');
+  const { usageTotals } = await import('../scripts/phase4e-qualification.mjs');
+  const cli = await claudeCommandFixture(t);
+  appendFileSync(cli.log, `${JSON.stringify({ runId: 'old-run', models: ['old-model'], usage: { output_tokens: 999, output_tokens_details: { thinking_tokens: 77 } } })}\n`);
+  const first = cli.start({ PLANNER_CLAUDE_RUN_ID: 'run-one' });
+  await cli.waitFor(() => cli.count() === 1);
+  const second = cli.start({ PLANNER_CLAUDE_RUN_ID: 'run-two' });
+  await cli.waitFor(() => cli.waiting());
+  cli.release();
+  assert.equal((await first.done).text, 'ok');
+  assert.equal((await second.done).text, 'ok');
+  assert.deepEqual(cli.rows().filter((row) => row.reserved).map((row) => row.runId), ['run-one', 'run-two']);
+  assert.deepEqual(cli.rows().filter((row) => row.usage).map((row) => row.runId), ['old-run', 'run-one', 'run-two']);
+  for (const runId of ['run-one', 'run-two']) {
+    const usage = usageTotals({ log: cli.log, runId });
+    assert.deepEqual({ calls: usage.calls, input: usage.input, output: usage.output, thinking: usage.thinking, models: usage.models }, {
+      calls: 1, input: 10, output: 1, thinking: 0, models: ['claude-haiku-4-5-20251001']
+    });
+  }
+});
+
 async function claudeCommandFixture(t, { reuse = false, events = null, newline = true, descendant = false, standalone = false, payload = null, executionDelayMs = 0, commandTimeoutMs = 8000, ...limits } = {}) {
   const { spawn, spawnSync } = await import('node:child_process');
   const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
@@ -1335,7 +1395,7 @@ async function claudeCommandFixture(t, { reuse = false, events = null, newline =
     });
     children.push({ child, done });
     child.stdin.end(JSON.stringify(payload || { messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }], tools: [], toolChoice: 'none' }));
-    return { child, done };
+    return { child, done, stderr: () => err };
   };
   return { start, kill, waitFor, log, dir, adapter, model, command: '"' + process.execPath + '" "' + adapter + '" "' + model + '"', descendantPid: () => Number(readFileSync(path.join(dir, 'descendant'), 'utf8')), release: () => writeFileSync(release, 'go'),
     count: () => readdirSync(entered).length,
@@ -2880,4 +2940,45 @@ test('Claude varsayılan evi POSIX UID ile ayırır; açık ayar aynen korunur',
   const explicit = run(configured);
   assert.notEqual(JSON.parse(explicit.stdout).error, 'PLANNER_HOME_UNTRUSTED');
   assert.ok(fs.existsSync(path.join(configured, 'work')), 'açık ev ayarı yeniden adlandırılmaz');
+});
+
+test('109 son: zorunlu yeniden denemenin üst süre bütçesi kilidi ve iki alt denemeyi kapsar ve varsayılanı korur', async (t) => {
+  const childProcess = (await import('node:child_process')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const { EventEmitter } = await import('node:events');
+  const { PassThrough } = await import('node:stream');
+  const { completeModelRound } = await import('../scripts/planner-followup-qualification.mjs');
+  const { modelCommandTimeoutMs, MODEL_CLEANUP_TIMEOUT_MS } = await import('../scripts/planner-claude-model.mjs');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const priorRetry = process.env.PLANNER_CLAUDE_FORCED_RETRY;
+  const priorTimeout = process.env.PLANNER_MODEL_TIMEOUT_MS;
+  t.after(() => {
+    if (priorRetry == null) delete process.env.PLANNER_CLAUDE_FORCED_RETRY; else process.env.PLANNER_CLAUDE_FORCED_RETRY = priorRetry;
+    if (priorTimeout == null) delete process.env.PLANNER_MODEL_TIMEOUT_MS; else process.env.PLANNER_MODEL_TIMEOUT_MS = priorTimeout;
+    t.mock.restoreAll(); syncBuiltinESMExports();
+  });
+  let child;
+  t.mock.method(childProcess, 'spawn', () => child = Object.assign(new EventEmitter(), {
+    pid: 1234, exitCode: null, signalCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), send() {}
+  }));
+  t.mock.method(process, 'kill', () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+  syncBuiltinESMExports();
+  const timeout = 100;
+  process.env.PLANNER_MODEL_TIMEOUT_MS = String(timeout);
+  const original = 2 * timeout + 2 * MODEL_CLEANUP_TIMEOUT_MS + 1000;
+  for (const retry of [false, true]) {
+    process.env.PLANNER_CLAUDE_FORCED_RETRY = retry ? '1' : '0';
+    const pending = completeModelRound({ messages: [] });
+    let terminal = false;
+    pending.then(() => { terminal = true; }, () => { terminal = true; });
+    t.mock.timers.tick(retry ? original + 1 : original - 1);
+    await new Promise(setImmediate);
+    assert.equal(terminal, false, 'geçerli tamamlama desteklenen yürütme yolunda sonlandırılmaz');
+    child.stdout.emit('data', Buffer.from('{"text":"ok"}'));
+    finishFixtureCommand(child);
+    assert.deepEqual(await pending, { text: 'ok' });
+  }
+  assert.equal(modelCommandTimeoutMs(timeout, false), original);
+  assert.ok(modelCommandTimeoutMs(timeout, true) >= 3 * timeout + 4 * MODEL_CLEANUP_TIMEOUT_MS + 1000);
+
 });

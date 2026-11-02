@@ -63,7 +63,9 @@ test('olgu sayfası doğrulanmış olgulardan kurulur; kimlik, kanıt kimliği y
   assert.equal(view.tables[0].rows, 3);
   assert.equal(view.tables[0].criteria, 'Termin: Gecikmiş; Sorumlu: Ben');
   assert.deepEqual(view.tables[0].columns.map((column) => [column.label, column.numeric]), [['Termin', false], ['Gecikme (gün)', true]]);
-  assert.deepEqual(view.charts, [{ id: 'G1', table: 'T1', column: 'C2', title: 'Gecikme (gün)', types: ['bar'] }]);
+  // Aşama 4E: tarih sütunu zaman çizelgesi adayıdır; tek sütun adayları önce gelir (kimlikler kaymaz).
+  assert.deepEqual(view.charts, [{ id: 'G1', part: 1, table: 'T1', column: 'C2', title: 'Gecikme (gün)', types: ['bar'] },
+    { id: 'G2', part: 1, table: 'T1', column: 'C1', title: 'Termin', types: ['timeline'] }]);
   const serialized = JSON.stringify(view);
   for (const forbidden of ['taskId', 'R1', 'data.tasks', String(AYSE), 'factScope', 'sicil']) assert.equal(serialized.includes(forbidden), false, forbidden);
   // Yalnızca zarf sayısından oluşan ayrıntı sayfada önermedir; metnini ve ilişkisini sunucu yazmıştır.
@@ -343,7 +345,7 @@ test('grafik tanımı kapalıdır: biçim dışı, sınır dışı ve okunurken 
   const base = { version: 1, type: 'bar', locale: 'tr', title: 'Açık görev', unit: 'count', evidence: ['R1'], items: [{ label: 'Ayşe', value: 3 }, { label: 'Mehmet', value: 0 }] };
   assert.ok(normalizeAnswerChart(base));
   const invalid = [
-    { ...base, version: 2 }, { ...base, type: 'line' }, { ...base, locale: 'de' }, { ...base, unit: 'eur' }, { ...base, title: '' }, { ...base, title: 'x'.repeat(81) },
+    { ...base, version: 2 }, { ...base, type: 'pie' }, { ...base, type: 'heatmap' }, { ...base, type: 'stacked' }, { ...base, type: 'kpi' }, { ...base, locale: 'de' }, { ...base, unit: 'eur' }, { ...base, title: '' }, { ...base, title: 'x'.repeat(81) },
     { ...base, title: 'a\u202eb' }, { ...base, evidence: [] }, { ...base, evidence: ['X1'] }, { ...base, evidence: ['R1', 'R1'] },
     { ...base, items: [base.items[0]] }, { ...base, items: Array.from({ length: 13 }, (_, index) => ({ label: `K${index}`, value: index })) },
     { ...base, items: [{ label: 'Ayşe', value: -1 }, base.items[1]] }, { ...base, items: [{ label: 'Ayşe', value: Number.NaN }, base.items[1]] },
@@ -460,8 +462,10 @@ test('sayımın kapsamı sunucu ayrıntısıyla zorunlu gösterilir', async (t) 
 test('sunucu gerçekten çizilen grafik sayısını taşır; reddedilen ve bağlı olmayan grafik sayılmaz', async (t) => {
   const { verdict } = await overdueComposition(t);
   const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }, { index: 1, presentation: verdict.presentation }] });
+  // Her bölümün çubuk adayı (Aşama 4E'de zaman çizelgesi adayları da sayfadadır; burada çizilmez).
+  const [first, second] = sheet.view.charts.filter((chart) => chart.types[0] === 'bar').map((chart) => chart.id);
   const valid = check(sheet, narrated(validLead(sheet), narrate(sheet), { type: 'rows', source: 'T1' }, narrate(sheet, 2), { type: 'rows', source: 'T2' },
-    { type: 'chart', source: 'G1' }, { type: 'chart', source: 'G2' }));
+    { type: 'chart', source: first }, { type: 'chart', source: second }));
   assert.equal(valid.ok, true, JSON.stringify(valid.issues));
   const { recordGroundedTurn, aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
   const renderAndMeasure = (expected) => {
@@ -473,9 +477,9 @@ test('sunucu gerçekten çizilen grafik sayısını taşır; reddedilen ve bağl
     assert.equal(aiTelemetrySnapshot().grounding.presentation.charts - before, expected);
   };
   renderAndMeasure(2);
-  sheet.render.charts.set('G2', { ...sheet.render.charts.get('G2'), items: [{ label: 'Geçersiz', value: -1 }] });
+  sheet.render.charts.set(second, { ...sheet.render.charts.get(second), items: [{ label: 'Geçersiz', value: -1 }] });
   renderAndMeasure(1);
-  sheet.render.charts.set('G1', { ...sheet.render.charts.get('G1'), evidenceId: 'R99' });
+  sheet.render.charts.set(first, { ...sheet.render.charts.get(first), evidenceId: 'R99' });
   renderAndMeasure(0);
 });
 

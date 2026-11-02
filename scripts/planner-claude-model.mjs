@@ -24,6 +24,7 @@
  * yol kayda (PLANNER_CLAUDE_LOG) yazılır. Eski sürümlerin açık bıraktığı kendi klasörleri daraltılır; başkasına
  * yazılabilir dosya onarılmaz, ev kaldırılmalıdır.
  */
+import { appendPrivateDiagnostic } from './private-diagnostic-trace.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -179,6 +180,11 @@ async function withLock(file, work, timeoutMs) {
 }
 
 export const MODEL_CLEANUP_TIMEOUT_MS = 5000;
+export const MODEL_FORCED_RETRY_ATTEMPTS = 2;
+export function modelCommandTimeoutMs(timeoutMs, forcedRetry = process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
+  const attempts = forcedRetry ? MODEL_FORCED_RETRY_ATTEMPTS : 1;
+  return (1 + attempts) * timeoutMs + attempts * 2 * MODEL_CLEANUP_TIMEOUT_MS + 1000;
+}
 
 /** Grup üyesi, lider düşse de grup kimliğini tutarak kalan komutu sonlandırır. */
 function monitorModelCommand() {
@@ -608,13 +614,23 @@ function trustedHome() {
   return home;
 }
 
+function appendLedger(log, record) {
+  if (log) appendFileSync(log, `${JSON.stringify({ ...record, ...(process.env.PLANNER_CLAUDE_RUN_ID ? { runId: process.env.PLANNER_CLAUDE_RUN_ID } : {}) })}\n`);
+}
+
 function reportFailure(log, error, extra = {}) {
-  if (log) appendFileSync(log, `${JSON.stringify({ at: new Date().toISOString(), error, ...extra })}\n`);
+  appendLedger(log, { at: new Date().toISOString(), error, ...extra });
   process.stdout.write(`${JSON.stringify({ text: '', toolCalls: [], error })}\n`);
 }
 
-async function complete(launcher, timeoutMs) {
-  const payload = JSON.parse(readFileSync(0, 'utf8'));
+/** Model yanıtının kabul önkoşulu (yinelenen ilk yanıt dâhil): yalnızca beklenen model, düşünme kapalı. */
+export function responseProblem(row, model) {
+  if (!row.models?.length || row.models.some((item) => item !== model)) return 'PLANNER_MODEL_MISMATCH';
+  if (row.thinking !== 'off') return 'PLANNER_THINKING_ON';
+  return null;
+}
+
+async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0, 'utf8')), hideTools = false) {
   const model = process.env.PLANNER_CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
   const effort = process.env.PLANNER_CLAUDE_EFFORT || 'low';
   const log = process.env.PLANNER_CLAUDE_LOG || null;
@@ -624,11 +640,13 @@ async function complete(launcher, timeoutMs) {
   const all = payload.toolChoice === 'none' ? [] : payload.tools;
   // Zorunlu adlı araç (üretimde OpenAI uyumlu adlı işlev seçimi) CLI'nin yapılandırılmış çıktısıyla verilir: yanıt o aracın şemasıdır.
   const forced = payload.toolChoice?.name ? all.find((tool) => tool.name === payload.toolChoice.name) || null : null;
-  const tools = forced ? all.filter((tool) => tool !== forced) : all;
+  // Zorunlu araç turunda yalnızca zorunlu şema (PLANNER_CLAUDE_FORCED_RETRY yeniden denemesi): üretimin adlı araç seçimi
+  // modelin başka araç çağırmasını kısıtlı çözümle engeller; CLI bunu yapamaz, bu yüzden yeniden deneme ayrıca sayılır.
+  const tools = hideTools ? [] : forced ? all.filter((tool) => tool !== forced) : all;
   // Üretim turunun çıktı sınırı (ör. doğal yanıt düzeninin dar sınırı) korunur; verilmemişse planlayıcı sınırı.
   const outputLimit = Number.isSafeInteger(payload.maxOutputTokens) && payload.maxOutputTokens > 0 ? Math.min(payload.maxOutputTokens, 4096) : 4096;
   const staticPromptHash = hash(system.content);
-  const toolCatalogHash = hash(JSON.stringify([forced?.name ?? null, all]));
+  const toolCatalogHash = hash(JSON.stringify([forced?.name ?? null, all, hideTools]));
   let maxCalls;
   let maxUncached;
   try { maxCalls = limitFromEnv('PLANNER_CLAUDE_MAX_CALLS'); maxUncached = limitFromEnv('PLANNER_CLAUDE_MAX_UNCACHED'); } catch (error) { return fail(error.code); }
@@ -656,7 +674,7 @@ async function complete(launcher, timeoutMs) {
     return fail('PLANNER_HOME_UNTRUSTED', error instanceof PlannerHomeUntrusted ? error.detail : { reason: 'HOME_CHECK_FAILED' });
   }
   // Kilit, ayırımdan kullanım kaydına dek tutulur; sonraki çağrı tamamlanan harcamayı görür.
-  if (log) appendFileSync(log, `${JSON.stringify({ at: new Date().toISOString(), reserved: true, callId })}\n`);
+  appendLedger(log, { at: new Date().toISOString(), reserved: true, callId });
   const cwd = path.join(home, 'work');
   const work = mkdtempSync(path.join(home, 'call-'));
   try {
@@ -700,7 +718,28 @@ async function complete(launcher, timeoutMs) {
     // --max-turns 1 ends a native tool handoff with this documented CLI status; it is not a failed completion.
     const toolHandoff = !forced && code === 1 && result?.is_error === true && result.subtype === 'error_max_turns'
       && blocks.some(block => block.type === 'tool_use' && block.name?.startsWith(PREFIX));
-    if (code !== 0 && !toolHandoff || !result || result.is_error && result.subtype !== 'error_max_turns' || rejected || result.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null });
+    // Zorunlu turda başka araç çağrısı: üretimde kısıtlı çözüm bunu engeller. İsteğe bağlı tek yeniden deneme (ayrı sayılır).
+    const forcedToolCall = forced && !hideTools && code === 1 && result?.subtype === 'error_max_turns'
+      && blocks.some(block => block.type === 'tool_use' && block.name?.startsWith(PREFIX));
+    if (forcedToolCall && MODEL_FORCED_RETRY_ATTEMPTS > 1 && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
+      // Yinelenen ilk yanıt da aynı model ve düşünme denetiminden geçer: temiz bir yeniden deneme yasak düşünmeyi gizleyemez.
+      const problem = responseProblem(row, model);
+      if (problem) return fail(problem, { ...row, forcedToolCall: true });
+      appendLedger(log, { ...row, forcedToolCall: true });
+      rmSync(work, { recursive: true, force: true });
+      return complete(launcher, timeoutMs, payload, true);
+    }
+    // CLI'nin yapılandırılmış çıktı doğrulaması şemaya uymayan planı kendisi reddeder (turu bitirir). Üretimde bu JSON
+    // sunucuya ulaşır ve türlü düzeltme turu alır: denenen JSON zorunlu aracın çağrısı olarak iletilir (ayrı sayılır).
+    const attempted = forced ? blocks.filter((block) => block.type === 'tool_use' && !block.name?.startsWith(PREFIX)).at(-1) : null;
+    const schemaRejected = Boolean(forced && !forcedToolCall && code === 1 && result?.subtype === 'error_max_turns'
+      && attempted?.input && typeof attempted.input === 'object' && !Array.isArray(attempted.input));
+    if (schemaRejected) row.schemaRejected = true;
+    // Zorunlu turda düz metin: üretimde sunucu bunu `$.plan:required` reddi ve düzeltme turuyla karşılar; metin iletilir.
+    const forcedText = Boolean(forced && !forcedToolCall && !schemaRejected && code === 1 && result?.subtype === 'error_max_turns'
+      && !blocks.some((block) => block.type === 'tool_use') && blocks.some((block) => block.type === 'text'));
+    if (forcedText) row.forcedText = true;
+    if (code !== 0 && !toolHandoff && !schemaRejected && !forcedText || !result || result.is_error && result.subtype !== 'error_max_turns' || rejected || result.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null, subtype: result?.subtype ?? null, exitCode: code ?? null });
     // CLI araçları kendi kararlı sırasıyla sunar: küme birebir aynı olmalı, sıra (toolOrderHash) çağrılar arasında sabit kalmalıdır.
     if (JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort())) return fail('PLANNER_TOOLS_NOT_OFFERED', { ...row, offered });
     if (prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash)) return fail('PLANNER_TOOL_ORDER_UNSTABLE', row);
@@ -713,13 +752,15 @@ async function complete(launcher, timeoutMs) {
     if (row.apiCalls !== 1) return fail('PLANNER_CALL_COUNT_UNEXPECTED', row);
     if (!models.length || models.some((item) => item !== model)) return fail('PLANNER_MODEL_MISMATCH', row);
     if (row.thinking !== 'off') return fail('PLANNER_THINKING_ON', row);
-    if (log) appendFileSync(log, `${JSON.stringify(row)}\n`);
+    appendLedger(log, row);
     // Zorunlu turda öteki araçlar yalnızca görünürdür (üretimdeki gibi); üretimin kısıtlı çözümü başka çağrı üretemez, burada da iletilmez.
     const structured = !result.is_error && result.structured_output && typeof result.structured_output === 'object' && !Array.isArray(result.structured_output);
-    const toolCalls = forced ? structured ? [{ name: forced.name, arguments: result.structured_output }] : []
+    const toolCalls = forced ? structured ? [{ name: forced.name, arguments: result.structured_output }] : schemaRejected ? [{ name: forced.name, arguments: attempted.input }] : []
       : blocks.filter((block) => block.type === 'tool_use' && block.name.startsWith(PREFIX))
         .map((block) => ({ name: block.name.slice(PREFIX.length), arguments: block.input ?? {} }));
     const stop = row.stopReason;
+    // Yerel tanı (yalnızca PLANNER_CLAUDE_TRACE verilince): modelin ürettiği çağrılar; deftere ve rapora girmez.
+    if (process.env.PLANNER_CLAUDE_TRACE) appendPrivateDiagnostic(process.env.PLANNER_CLAUDE_TRACE, { toolCalls, text: blocks.filter((block) => block.type === 'text').map((block) => block.text).join('') });
     process.stdout.write(`${JSON.stringify({
       text: blocks.filter((block) => block.type === 'text').map((block) => block.text).join(''), toolCalls,
       finishReason: forced && toolCalls.length || stop === 'tool_use' ? 'tool_calls' : stop === 'max_tokens' ? 'length'

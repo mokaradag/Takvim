@@ -7,6 +7,7 @@ import { TOOL_LIMITS } from './toolLimits.js';
 import { requestSchema } from './requestDeclaration.js';
 import { getRotaTool } from './toolRegistry.js';
 import { readKey } from './requestPopulation.js';
+import { analysisSchema, expandAnalysis, parseAnalysis } from './analysisPlan.js';
 
 /**
  * Bir model yanıtının YÜRÜTME KÜMESİ: plan çağrıları ve aynı yanıttaki
@@ -54,10 +55,12 @@ export function typedPlanningTool(catalog) {
   const additionalRequest = { ...request, properties: { ...request.properties, entities: { ...entities, items: {
     ...entities.items, properties: { ...entities.items.properties, from: { type: 'integer', minimum: 0, maximum: PLANNER_LIMITS.maxRequests - 2 } }
   } } } };
-  return { name: 'rota_plan', description: 'Kullanıcının her yeni sorusuna ilk yanıt bu araçla verilir (açıklama ve ret dâhil; kullanıcıya metni sunucu yazar). Veri okumadan türlü kararı bildir: rota (request; ileti ayrı okuma gerektiren başka sorular da soruyorsa ayrıca additionalRequests), clarify, abstain ya da general. calls isteğe bağlıdır: verilmezse sunucu okumaları istekten kurar.',
+  return { name: 'rota_plan', description: 'Kullanıcının her yeni sorusuna ilk yanıt bu araçla verilir (açıklama ve ret dâhil; kullanıcıya metni sunucu yazar). Veri okumadan türlü kararı bildir: rota (değerlendirme/genel durum/risk/iş yükü/karşılaştırma gibi geniş sorularda analysis; tek ve kesin bir soruda request; ileti ayrı okuma gerektiren başka sorular da soruyorsa ayrıca additionalRequests), clarify, abstain ya da general. calls isteğe bağlıdır: verilmezse sunucu okumaları istekten kurar.',
     parameters: { type: 'object', additionalProperties: false, required: ['intent', 'language'], properties: {
       intent: { type: 'string', enum: Object.values(PLANNER_INTENTS), description: 'rota: Rota verisiyle yanıtlanır; general: Rota ile ilgisiz sohbet; clarify: gerçek belirsizlik, veri okunmaz; abstain: yazma, desteklenmeyen hesap, Rota dışı veri ya da kimlik/yetki/SQL girişimi, veri okunmaz.' },
       language: { type: 'string', enum: ['tr', 'en'] },
+      analysis: analysisSchema(),
+      visual: { type: 'boolean', description: 'Kullanıcı açıkça grafik/görselleştirme istediyse true.' },
       request,
       additionalRequests: { type: 'array', minItems: 1, maxItems: PLANNER_LIMITS.maxRequests - 1, description: 'Yalnızca ileti request ile yanıtlanmayan, ayrı okuma (başka araç ya da aynı aracın başka nüfusu) gerektiren bir ya da iki soru daha soruyorsa request ile aynı düzeyde verilir; her öğe request ile aynı alanları taşır. Bölüm sırası: 0 = request, 1 = ilk ek istek. Bir öğe önceki bölümün satırlarındaki kayıtlar için soruyorsa o varlık {"type":"task|project","from":<bölüm sırası>} olarak yazılır. additionalRequests ile calls verilmez.',
         items: additionalRequest },
@@ -81,7 +84,7 @@ export function typedPlanningTool(catalog) {
  * Bazı modeller iç içe nesneyi JSON metni olarak yazar (`"request": "{…}"`). Nesne ya da
  * dizi beklenen alandaki geçerli JSON metni çözülür; anlam yorumlanmaz, şema denetimi aynen uygulanır.
  */
-const NESTED_PLAN_FIELDS = Object.freeze({ plan: ['request', 'additionalRequests', 'calls', 'clarify', 'abstain'], request: ['metrics', 'population', 'entities', 'filters', 'fields', 'bindings', 'rank'] });
+const NESTED_PLAN_FIELDS = Object.freeze({ plan: ['request', 'additionalRequests', 'calls', 'clarify', 'abstain', 'analysis'], request: ['metrics', 'population', 'entities', 'filters', 'fields', 'bindings', 'rank'] });
 
 function decodedJson(value) {
   if (typeof value !== 'string' || !/^\s*[[{]/.test(value)) return value;
@@ -125,7 +128,7 @@ function normalizePlan(plan) {
  * çağrıları `prepareExecutionSet` ile birlikte doğrulanır.
  * `{ plan: { intent, language, request, additionalRequests? }, calls }`.
  */
-export function unpackTypedPlan(result, { onDecoded = () => {} } = {}) {
+export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis = null, today = null } = {}) {
   const plans = result.toolCalls.filter((call) => call.name === 'rota_plan');
   if (plans.length !== 1 || plans[0].oversize) throw invalidArguments(['$.plan:single']);
   const [call] = plans;
@@ -136,7 +139,9 @@ export function unpackTypedPlan(result, { onDecoded = () => {} } = {}) {
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw invalidArguments(['$.plan:shape']);
   onDecoded(plan);
   if (Array.isArray(plan.additionalRequests) && !plan.additionalRequests.length) delete plan.additionalRequests;
-  for (const key of ['request', 'clarify', 'abstain']) {
+  // Boş istek nesnesi analiz özetinin yanında anlam taşımaz (zayıf model şablonu doldurur).
+  if (plan.analysis && plan.request && typeof plan.request === 'object' && !Array.isArray(plan.request) && !Object.keys(plan.request).length) delete plan.request;
+  for (const key of ['request', 'clarify', 'abstain', 'analysis']) {
     if (key !== (plan.intent === PLANNER_INTENTS.ROTA ? 'request' : plan.intent) && plan[key] && typeof plan[key] === 'object' && !Array.isArray(plan[key]) && !Object.keys(plan[key]).length) delete plan[key];
   }
   if (plan.clarify?.reason === 'missing_referent' && Array.isArray(plan.clarify.topics) && !plan.clarify.topics.length) delete plan.clarify.topics;
@@ -146,7 +151,8 @@ export function unpackTypedPlan(result, { onDecoded = () => {} } = {}) {
     ...(Object.keys(plan).some((key) => !PLAN_KEYS.includes(key)) ? ['$.plan:unknownField'] : []),
     ...(plan.intent == null ? ['$.intent:required'] : !Object.values(PLANNER_INTENTS).includes(plan.intent) ? ['$.intent:enum'] : []),
     ...(plan.language == null ? ['$.language:required'] : !['tr', 'en'].includes(plan.language) ? ['$.language:enum'] : []),
-    ...(!Array.isArray(calls) ? ['$.calls:type'] : [])
+    ...(!Array.isArray(calls) ? ['$.calls:type'] : []),
+    ...(plan.visual != null && typeof plan.visual !== 'boolean' ? ['$.visual:type'] : [])
   ];
   if (shape.length) throw invalidArguments(shape);
   if (calls.length > TOOL_LIMITS.maxCallsPerRound * 2) throw invalidArguments(['$.calls:maxItems']);
@@ -157,8 +163,16 @@ export function unpackTypedPlan(result, { onDecoded = () => {} } = {}) {
   });
   const direct = result.toolCalls.filter((item) => item !== call);
   const present = (key) => plan[key] !== undefined && plan[key] !== null;
-  const only = (...allowed) => !['request', 'additionalRequests', 'clarify', 'abstain'].some((key) => present(key) && !allowed.includes(key));
-  const base = { intent: plan.intent, language: plan.language };
+  const only = (...allowed) => !['request', 'additionalRequests', 'clarify', 'abstain', 'analysis'].some((key) => present(key) && !allowed.includes(key));
+  const base = { intent: plan.intent, language: plan.language, ...(plan.visual === true ? { visual: true } : {}) };
+  if (plan.intent === PLANNER_INTENTS.ROTA && present('analysis')) {
+    // Analitik özet: sunucu her yönü kayıt defterinin sabit istek biçimine açar; okumaları yalnızca sunucu kurar.
+    if (present('request') || present('additionalRequests') || planned.length || direct.length) throw invalidArguments(['$.analysis:request']);
+    const analysis = parseAnalysis(plan.analysis);
+    const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today });
+    const visual = base.visual === true || analysis.visual === true;
+    return { plan: { ...base, ...(visual ? { visual: true } : {}), analysis, request, ...(additionalRequests.length ? { additionalRequests } : {}) }, calls: [] };
+  }
   if (plan.intent === PLANNER_INTENTS.ROTA) {
     if (!only('request', 'additionalRequests')) throw invalidArguments(['$.plan:rota']);
     if (!present('request')) throw invalidArguments(['$.request:required']);
@@ -196,7 +210,7 @@ function planChoice(schema, value, prefix) {
   }
 }
 
-const PLAN_KEYS = Object.freeze(['intent', 'language', 'request', 'additionalRequests', 'calls', 'clarify', 'abstain']);
+const PLAN_KEYS = Object.freeze(['intent', 'language', 'analysis', 'visual', 'request', 'additionalRequests', 'calls', 'clarify', 'abstain']);
 
 /** Plan düzeyindeki sorunların beklenen biçimi (yalnızca sözleşmeden; modelin değeri yansıtılmaz). */
 export function planShapeHints(problems) {
@@ -204,7 +218,8 @@ export function planShapeHints(problems) {
     '$.plan:unknownField': `rota_plan alanları: ${PLAN_KEYS.join('|')}`,
     '$.intent': `intent (zorunlu): ${Object.values(PLANNER_INTENTS).join('|')}`,
     '$.language': 'language (zorunlu): tr|en',
-    '$.request:required': 'intent rota için request zorunludur (ek sorular additionalRequests içinde)',
+    '$.request:required': 'intent rota için request ya da (geniş/değerlendirme sorusunda) analysis zorunludur',
+    '$.analysis': 'analysis: {"scope":"self|person|team|project|projects|all","focus":["overview","overdue","upcoming"],"names":["<ad>"] (yalnızca person/project)}; request/calls ile birlikte verilmez',
     '$.additionalRequests': 'additionalRequests: tek soru için alanı çıkar; bir ya da iki ek istek nesnesi ver; calls ile birlikte verme',
     '$.plan:repairScope': 'Yalnızca reddedilen yolları düzelt; önceki sorunsuz bölümleri, varlıkları ve koşulları aynen koru',
     '$.clarify': `clarify.reason: ${CLARIFY_REASONS.join('|')}`,
