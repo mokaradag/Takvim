@@ -181,7 +181,7 @@
       "maxOutputTokens": 1024
     },
     "chat.reasoning": {
-      "model": "Qwen3.8-Flash-Next-FP8",
+      "model": "DeepSeek-V4.1-Flash",
       "maxOutputTokens": 2048,
       "timeoutMs": 180000
     },
@@ -190,7 +190,7 @@
       "maxOutputTokens": 4096
     },
     "chat.tools.reasoning": {
-      "model": "Qwen3.8-Flash-Next-FP8",
+      "model": "DeepSeek-V4.1-Flash",
       "maxOutputTokens": 8192,
       "timeoutMs": 180000
     },
