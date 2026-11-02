@@ -1210,7 +1210,7 @@ bağlı kısım Derin profilde kalır, yetki/SQL/doğrulama/çizim yine sunucuda
 Genel sohbetin kip → profil eşlemesi (Standart/Derin → `chat.general` /
 `chat.reasoning`) bu değişiklikten etkilenmez. Profilin modeli
 kayıttan gelir: kurum içi katalogda hem `chat.reasoning` hem
-`chat.tools.reasoning` `qwen3.8-flash-next-FP8` modelindedir (bağlam 262144); bu
+`chat.tools.reasoning` `Qwen3.8-Flash-Next-FP8` modelindedir (bağlam 262144); bu
 kurumun model kararıdır, Rota verisi sözleşmesinin sonucu değildir.
 
 **Seçim uygunluğu.** Tam ilk sayfa ve tek aday yeterli değildir: amaçlanan

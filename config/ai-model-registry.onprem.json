@@ -25,7 +25,7 @@
       "enabled": true
     },
     {
-      "id": "qwen3.8-flash-next-FP8",
+      "id": "Qwen3.8-Flash-Next-FP8",
       "provider": "onprem",
       "capabilities": [
         "chat",
@@ -181,7 +181,7 @@
       "maxOutputTokens": 1024
     },
     "chat.reasoning": {
-      "model": "qwen3.8-flash-next-FP8",
+      "model": "Qwen3.8-Flash-Next-FP8",
       "maxOutputTokens": 2048,
       "timeoutMs": 180000
     },
@@ -190,7 +190,7 @@
       "maxOutputTokens": 4096
     },
     "chat.tools.reasoning": {
-      "model": "qwen3.8-flash-next-FP8",
+      "model": "Qwen3.8-Flash-Next-FP8",
       "maxOutputTokens": 8192,
       "timeoutMs": 180000
     },

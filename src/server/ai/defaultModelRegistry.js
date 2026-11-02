@@ -27,7 +27,7 @@ export const DEFAULT_AI_MODEL_REGISTRY = Object.freeze({
   models: [
     model('VoxCPM2', ['speech.tts']),
     model('DeepSeek-V4.1-Flash', ['chat', 'tools', 'reasoning', 'vision'], 524288),
-    model('qwen3.8-flash-next-FP8', ['chat', 'tools', 'reasoning', 'vision'], 262144),
+    model('Qwen3.8-Flash-Next-FP8', ['chat', 'tools', 'reasoning', 'vision'], 262144),
     model('intfloat/multilingual-e5-large', ['embedding'], 512, { preprocessing: E5_PREPROCESSING }),
     model('tts-1-hd', ['speech.tts']),
     model('FLUX.2-dev', ['image.generation']),
@@ -44,9 +44,9 @@ export const DEFAULT_AI_MODEL_REGISTRY = Object.freeze({
   profiles: {
     'chat.fast': { model: 'Qwen3-Next-80B-A3B-Instruct', maxOutputTokens: 512 },
     'chat.general': { model: 'Qwen3-Next-80B-A3B-Instruct', maxOutputTokens: 1024 },
-    'chat.reasoning': { model: 'qwen3.8-flash-next-FP8', maxOutputTokens: 2048, timeoutMs: 180000 },
+    'chat.reasoning': { model: 'Qwen3.8-Flash-Next-FP8', maxOutputTokens: 2048, timeoutMs: 180000 },
     'chat.tools': { model: 'Qwen3-Next-80B-A3B-Instruct', maxOutputTokens: 4096 },
-    'chat.tools.reasoning': { model: 'qwen3.8-flash-next-FP8', maxOutputTokens: 8192, timeoutMs: 180000 },
+    'chat.tools.reasoning': { model: 'Qwen3.8-Flash-Next-FP8', maxOutputTokens: 8192, timeoutMs: 180000 },
     vision: { model: 'Qwen3-VL-8B-Instruct', maxOutputTokens: 1024 },
     embedding: { model: 'intfloat/multilingual-e5-large' },
     rerank: { model: 'Qwen3-Reranker-8B' },
