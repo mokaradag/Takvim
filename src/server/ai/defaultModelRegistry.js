@@ -44,9 +44,9 @@ export const DEFAULT_AI_MODEL_REGISTRY = Object.freeze({
   profiles: {
     'chat.fast': { model: 'Qwen3-Next-80B-A3B-Instruct', maxOutputTokens: 512 },
     'chat.general': { model: 'Qwen3-Next-80B-A3B-Instruct', maxOutputTokens: 1024 },
-    'chat.reasoning': { model: 'DeepSeek-V4.1-Flash', maxOutputTokens: 2048, timeoutMs: 180000 },
+    'chat.reasoning': { model: 'Qwen3.8-Flash-Next-FP8', maxOutputTokens: 2048, timeoutMs: 180000 },
     'chat.tools': { model: 'Qwen3-Next-80B-A3B-Instruct', maxOutputTokens: 4096 },
-    'chat.tools.reasoning': { model: 'DeepSeek-V4.1-Flash', maxOutputTokens: 8192, timeoutMs: 180000 },
+    'chat.tools.reasoning': { model: 'Qwen3.8-Flash-Next-FP8', maxOutputTokens: 8192, timeoutMs: 180000 },
     vision: { model: 'Qwen3-VL-8B-Instruct', maxOutputTokens: 1024 },
     embedding: { model: 'intfloat/multilingual-e5-large' },
     rerank: { model: 'Qwen3-Reranker-8B' },

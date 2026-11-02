@@ -351,14 +351,14 @@ değişmez; JSON güncellenir ve Rota yeniden başlatılır.
 02.11.2026 tarihli platform kataloğuyla eşleşen kayıtta hız gerektiren
 `chat.fast`, `chat.general` ve `chat.tools` profilleri düşünme kipine sahip olmayan
 `Qwen3-Next-80B-A3B-Instruct` modeline; Derin düşünme profilleri
-`chat.reasoning` ve `chat.tools.reasoning` `DeepSeek-V4.1-Flash` modeline (bağlam
-524288); `vision` ise düşünme kipine sahip olmayan `Qwen3-VL-8B-Instruct`
+`chat.reasoning` ve `chat.tools.reasoning` `Qwen3.8-Flash-Next-FP8` modeline (bağlam
+262144); `vision` ise düşünme kipine sahip olmayan `Qwen3-VL-8B-Instruct`
 modeline bağlıdır. `embedding`, `intfloat/multilingual-e5-large` modelini;
 `speech.stt`, `whisper-large-v3` modelini; `speech.tts.fast` ve
 `speech.tts.quality` sırasıyla `tts-1` ve `tts-1-hd` modellerini kullanır.
 
 `Qwen3.8-Flash-Next-FP8`, 256K (262144 belirteç) bağlamla sohbet, araç kullanımı,
-akıl yürütme ve görsel anlama yetenekleriyle katalogda kalır; hiçbir profil ona bağlı değildir.
+akıl yürütme ve görsel anlama yetenekleriyle Derin düşünme profillerini çalıştırır.
 Model kimliği, platform ekranındaki büyük/küçük harflerle aynen korunur.
 `gemma-4-31B-it` etkin katalogda kalır ancak artık Derin düşünme profillerine bağlı değildir.
 Kaldırılacak `Qwen3.8-Flash-Next`, `Qwen3.8-27B`, `Qwen3.6-35B-A3B`,
@@ -366,8 +366,7 @@ Kaldırılacak `Qwen3.8-Flash-Next`, `Qwen3.8-27B`, `Qwen3.6-35B-A3B`,
 Platformda etkin görünen `laya-multilingual`, yalnız `Systemone` uç noktasını
 desteklediğinden Rota’nın desteklenen yetenek kaydına eklenmez.
 
-`DeepSeek-V4.1-Flash`, 512K (524288 belirteç) bağlamla aynı dört yeteneği taşır ve
-her iki Derin düşünme profilini çalıştırır. Görsel
+`DeepSeek-V4.1-Flash`, 512K (524288 belirteç) bağlamla aynı dört yeteneği taşır ancak hiçbir profil onu kullanmaz. Görsel
 anlama yeteneği, platform ekranlarında bu modelin yanında
 `Qwen3-VL-8B-Instruct` ile aynı görsel girdi simgesinin bulunmasına dayanır.
 
@@ -385,12 +384,12 @@ Kısaltılmış örnek:
   "version": 1,
   "models": [
     { "id": "Qwen3-Next-80B-A3B-Instruct", "provider": "onprem", "capabilities": ["chat", "tools"], "contextTokens": 262144, "enabled": true },
-    { "id": "DeepSeek-V4.1-Flash", "provider": "onprem", "capabilities": ["chat", "tools", "reasoning", "vision"], "contextTokens": 524288, "enabled": true },
+    { "id": "Qwen3.8-Flash-Next-FP8", "provider": "onprem", "capabilities": ["chat", "tools", "reasoning", "vision"], "contextTokens": 262144, "enabled": true },
     { "id": "Qwen3-VL-8B-Instruct", "provider": "onprem", "capabilities": ["chat", "vision"], "contextTokens": 32768, "enabled": true }
   ],
   "profiles": {
     "chat.fast": { "model": "Qwen3-Next-80B-A3B-Instruct", "maxOutputTokens": 512 },
-    "chat.reasoning": { "model": "DeepSeek-V4.1-Flash", "maxOutputTokens": 2048, "timeoutMs": 180000 },
+    "chat.reasoning": { "model": "Qwen3.8-Flash-Next-FP8", "maxOutputTokens": 2048, "timeoutMs": 180000 },
     "vision": { "model": "Qwen3-VL-8B-Instruct", "maxOutputTokens": 1024 }
   }
 }
