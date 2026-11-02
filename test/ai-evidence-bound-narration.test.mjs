@@ -17,7 +17,7 @@ import { composer, coveringBlocks, isCompositionCall } from './helpers/compositi
 import { declared, nativeDeclaration } from './helpers/evidenceScenario.mjs';
 import { verifyRequested } from './helpers/requestScenario.mjs';
 
-const { buildComposition, hasCompositionChoice, renderComposition, validateComposition, COMPOSITION_LIMITS } = await import('../src/domain/ai/groundedComposition.js');
+const { buildComposition, hasCompositionChoice, renderComposition, validateComposition, COMPOSITION_LIMITS, compositionLimits } = await import('../src/domain/ai/groundedComposition.js');
 const { tablePropositions, sharePercent, majorityPercent, populationProposition, titleCandidate, countProposition } = await import('../src/domain/ai/groundedPropositions.js');
 const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
 const { runGroundedTurn, restartNote, NARRATION_ESCALATION } = await import('../src/server/ai/assistant/groundedAnswer.js');
@@ -665,10 +665,18 @@ test('multipart proposition overflow falls back without hiding later derived ave
   const singles = parts.map((part) => buildComposition({ parts: [part] }));
   assert.ok(singles.every((sheet) => sheet.view.propositions.some((item) => item.kind === 'average')));
   assert.ok(singles.reduce((sum, sheet) => sum + sheet.view.propositions.length, 0) > COMPOSITION_LIMITS.maxPropositions, JSON.stringify(singles.map((sheet) => sheet.view.propositions)));
+  // Temel sınır (ayrıntısız sayfa) genişletilmez: sığmayan çok bölümlü sayfa kurulmaz, sonraki bölümün türetilmiş önermesi gizlenmez.
   assert.equal(buildComposition({ parts }), null);
+  // Ayrıntı sözleşmesinin sınırı bilinçli olarak daha geniştir; sayfa ancak her bölümün ortalaması sığarsa kurulur.
+  const total = singles.reduce((sum, sheet) => sum + sheet.view.propositions.length, 0);
+  const balanced = buildComposition({ parts, detail: 'balanced' });
+  if (total <= compositionLimits('balanced').maxPropositions) {
+    assert.deepEqual([...new Set(balanced.view.propositions.filter((item) => item.kind === 'average').map((item) => item.part))], [1, 2], 'iki bölümün ortalaması da sayfada');
+  } else assert.equal(balanced, null);
+  assert.equal(buildComposition({ parts, detail: 'short' }), null, 'kısa ayrıntının sınırı temel sınırdır');
   const request = { ...OVERDUE_REQUEST, metrics: [...OVERDUE_REQUEST.metrics, 'task.progressPercent'], filters: { deadline: 'overdue' } };
   stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr', request, additionalRequests: [OVERDUE_REQUEST] } }] });
-  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Geciken tüm görevlerin ilerlemesini ve kendi geciken görevlerimi göster.' })).assistantMessage;
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Geciken tüm görevlerin ilerlemesini ve kendi geciken görevlerimi göster.', detail: 'short' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.ok(answer.content.includes('Kısmi kendi görevim'));
   assert.equal(stack.provider.calls.some(isCompositionCall), false, 'oversized multipart sheets never reach a narrator');

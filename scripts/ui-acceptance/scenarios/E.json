@@ -1,0 +1,15 @@
+{
+ "profile": "E",
+ "port": 8105,
+ "appLog": "app-E.log",
+ "conversations": [
+  {
+   "name": "Proje-odakli",
+   "detail": "balanced",
+   "turns": [
+    "Hangi projem daha fazla dikkat istiyor?",
+    "Bu işlerde asıl problem nerede?"
+   ]
+  }
+ ]
+}

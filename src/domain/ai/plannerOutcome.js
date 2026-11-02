@@ -122,6 +122,32 @@ export function renderChartUnavailable({ locale = 'tr' } = {}) {
     : '_Bu doğrulanmış veriden güvenle grafik çizilemedi; sonuçlar metin ve tablo olarak gösterildi._';
 }
 
+const CHART_TYPE_NEEDS = Object.freeze({
+  bar: ['karşılaştırılabilir en az iki değer', 'at least two comparable values'],
+  donut: ['birbirini dışlayan tam bir dağılım', 'a complete, mutually exclusive distribution'],
+  line: ['ardışık aylara göre bir zaman dizisi', 'a time series over consecutive months'],
+  stacked: ['satır başına tam bir durum kırılımı', 'a complete status breakdown per row'],
+  kpi: ['en az üç başlık göstergesi', 'at least three headline figures'],
+  timeline: ['tarihli görev satırları', 'dated task rows']
+});
+const CHART_TYPE_NAMES = Object.freeze({ bar: ['çubuk grafik', 'bar chart'], donut: ['halka grafik', 'donut chart'], line: ['çizgi grafik', 'line chart'],
+  stacked: ['yığılmış çubuk grafik', 'stacked bar chart'], kpi: ['gösterge kartları', 'KPI cards'], timeline: ['zaman çizelgesi', 'timeline'] });
+
+/**
+ * İstenen grafik TÜRÜ doğrulanmış kanıttan çizilemediğinde türün gerektirdiği veriyi söyleyen kısa not; başka uygun bir
+ * grafik çizildiyse bunu da söyler (yanlış grafik sessizce istenenin yerine geçmez).
+ */
+export function renderChartTypeUnavailable({ type, substituted = null, locale = 'tr' } = {}) {
+  const en = locale === 'en';
+  const need = CHART_TYPE_NEEDS[type];
+  const name = CHART_TYPE_NAMES[type];
+  if (!need || !name) return renderChartUnavailable({ locale });
+  const other = substituted && CHART_TYPE_NAMES[substituted] ? CHART_TYPE_NAMES[substituted][en ? 1 : 0] : null;
+  return en
+    ? `_A ${name[1]} needs ${need[1]}, which this verified result does not contain${other ? `; the data is shown as a ${other} instead` : ''}._`
+    : `_${name[0].charAt(0).toLocaleUpperCase('tr-TR')}${name[0].slice(1)} için ${need[0]} gerekir; bu doğrulanmış sonuçta bu veri yok${other ? `, bu yüzden veri ${other} olarak gösterildi` : ''}._`;
+}
+
 /** Tamamlanamayan bölüm için içeriksiz, sabit sunucu notu. */
 export function renderPartUnavailable({ locale = 'tr' } = {}) {
   return locale === 'en' ? 'A requested section could not be completed safely. Please ask that section separately, including the record name or code.'

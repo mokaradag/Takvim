@@ -1,0 +1,14 @@
+{
+ "profile": "G",
+ "port": 8107,
+ "appLog": "app-G.log",
+ "conversations": [
+  {
+   "name": "Seyrek-veri",
+   "detail": "balanced",
+   "turns": [
+    "Şu anda en çok neye dikkat etmeliyim?"
+   ]
+  }
+ ]
+}

@@ -18,7 +18,7 @@ import { turkishPossessiveSuffix } from './evidenceNarrative.js';
  */
 
 export const PROPOSITION_KINDS = Object.freeze(['count', 'total', 'majority', 'largest', 'breakdown', 'completion', 'maximum', 'minimum', 'average', 'threshold',
-  'concentration', 'span', 'coverage', 'leader']);
+  'concentration', 'span', 'coverage', 'leader', 'completeness']);
 
 /**
  * Önermenin vurgu tonu SUNUCUNUNDUR (modelin seçimi değil): `warning` dikkat isteyen doğrulanmış durum (ör. gecikme),
@@ -103,11 +103,14 @@ function taskPopulation(filters, locale) {
   const deadline = neutral(f.deadline) ? null : DEADLINE[f.deadline];
   if (!neutral(f.deadline) && !deadline) return null;
   const or = locale === 'en' ? ' or ' : ' ya da ';
+  // Yapılacak + devam eden tam olarak "açık" işlerdir: iki durum adını yinelemek yerine tek doğal sıfat (nüfus aynıdır).
+  const openStatuses = statuses.length === 2 && statuses.includes('todo') && statuses.includes('in_progress');
+  const open = (deadline && f.deadline !== 'overdue') || openStatuses;
   const adjectives = [
     ...(deadline?.tr && locale !== 'en' ? [deadline.tr] : deadline?.before ? [deadline.before] : []),
-    ...(deadline && f.deadline !== 'overdue' ? [locale === 'en' ? 'open' : 'açık'] : []),
+    ...(open ? [locale === 'en' ? 'open' : 'açık'] : []),
     ...(priorities.length ? [priorities.map((key) => PRIORITY[key][lang(locale)]).join(or)] : []),
-    ...(statuses.length ? [statuses.map((key) => STATUS[key][lang(locale)]).join(or)] : []),
+    ...(statuses.length && !openStatuses ? [statuses.map((key) => STATUS[key][lang(locale)]).join(or)] : []),
     ...(f.assignee === 'unassigned' ? [locale === 'en' ? 'unassigned' : 'sorumlusuz'] : [])
   ];
   return {
@@ -703,13 +706,16 @@ export function analystPropositions(parts, locale = 'tr') {
     }
     return [...evidencePopulations.values()].map((facts) => ({ index: part.index, presentation: { facts } }));
   });
+  // Kişi ile kendisinin karşılaştırmasında kullanıcının kendi bölümünün önermeleri de öznesini taşır ("Siz: …").
+  const comparingPeople = evidenceParts.some((part) => part.presentation.facts.some((item) => item.fact?.semantic?.filters?.personSicil != null || item.fact?.semantic?.filters?.person));
   for (const part of evidenceParts) {
     const ordinal = part.index + 1;
     const items = part.presentation.facts;
     const add = (evidenceId, kind, realized, tone = 'info', fluent = null) => {
       const sample = items.find((item) => item.evidenceId === evidenceId)?.fact.semantic;
       const filters = sample?.filters;
-      const subject = [filters?.person || (filters?.personSicil != null && sample?.entity?.type === 'person' ? sample.entity.name : null),
+      const self = comparingPeople && filters?.assignee === 'me' ? (en ? 'You' : 'Siz') : null;
+      const subject = [self, filters?.person || (filters?.personSicil != null && sample?.entity?.type === 'person' ? sample.entity.name : null),
         filters?.projectId ? filters.project || (sample?.entity?.type === 'project' ? sample.entity.name : null) : null].filter(Boolean).join(' · ');
       if (filters?.personSicil != null && !subject) return;
       if (realized && subject) {
@@ -821,6 +827,30 @@ export function analystPropositions(parts, locale = 'tr') {
           : sentence(['İlk ele alınabilecek iş ', v(title), ' görünüyor: ', v(number(head.fact.value, locale)), ' gündür gecikmiş ve en uzun gecikme onda.']), 'warning',
         { refers: { title, short: en ? ['as the longest-overdue task, ', v(title), ' is a sensible first focus'] : ['en uzun süredir beklediği için ilk ele alınabilecek iş ', v(title), ' görünüyor'] } });
       }
+    }
+  }
+  return out;
+}
+
+/**
+ * Tamlığı kanıtlanmamış nüfusun SUNUCU ÇEKİNCESİ (zorunlu önerme): iş yükü kanıtı bütün atamaları temsil ettiğini
+ * kanıtlamadıysa (`data.populationComplete` false: ekip kadrosu bilinmiyor, kişi sayfası kesik, çözümlenemeyen ya da
+ * temsil edilemeyen atama) denge, yoğunlaşma ya da "en yoğun kişi" sonucu çıkarılamaz. Çekince nedeni ve sayısı
+ * söylenmez (gizli atamanın varlığı ya da sayısı açıklanmaz); yalnızca ne söylenemeyeceği söylenir.
+ */
+export function caveatPropositions(parts, locale = 'tr') {
+  const en = locale === 'en';
+  const out = [];
+  const seen = new Set();
+  for (const part of parts) {
+    for (const item of part.presentation?.facts || []) {
+      const fact = item.fact;
+      if (fact?.field !== 'data.populationComplete' || fact.value !== false) continue;
+      if (seen.has(item.evidenceId)) continue;
+      seen.add(item.evidenceId);
+      out.push({ part: part.index + 1, proposition: { kind: 'completeness', tone: 'info', evidenceId: item.evidenceId, ...sentence(en
+        ? ['this workload view covers only the open work you can see that is attributed to people, so whether the load is balanced or who carries the most cannot be stated with certainty.']
+        : ['bu iş yükü görünümü yalnızca görebildiğiniz ve kişilere bağlanabilen açık işleri kapsıyor; bu nedenle iş yükünün dengeli olup olmadığı ya da en çok yükün kimde olduğu kesin olarak söylenemez.']) } });
     }
   }
   return out;

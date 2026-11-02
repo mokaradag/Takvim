@@ -261,9 +261,13 @@ test('bütçe aşılırsa hiçbir yön sessizce düşmez; geçmiş ufuk yaklaşa
   const focus = (raw, today = '2026-09-30') => effectiveFocus(parseAnalysis(raw), today);
   for (const raw of [
     { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming'], ...week },
-    { scope: 'projects', focus: ['overview', 'overdue', 'upcoming'] },
-    { scope: 'team', focus: ['overview', 'workload', 'overdue'], ...week }
+    // Kayıt başına dağılım yönleri (2 proje × 3 yön) okuma bölümü sınırını aşar: yön sessizce düşmez, plan reddedilir.
+    { scope: 'project', names: ['Radar', 'Okuma'], focus: ['priority', 'deadlines', 'schedule'] }
   ]) assert.throws(() => expandAnalysis(parseAnalysis(raw), { today: '2026-09-30' }), (error) => error.details.includes(raw.focus.length > 3 ? '$.analysis.focus:maxItems' : '$.analysis.focus:requestBudget'));
+  // Sunucunun zorunlu eklediği okuma (portföyde projelere göre satırlar, ufuk yönü) modelin üç yönlük bütçesinden düşmez.
+  for (const raw of [{ scope: 'projects', focus: ['overview', 'overdue', 'upcoming'] }, { scope: 'team', focus: ['overview', 'workload', 'overdue'], ...week }]) {
+    assert.equal(expandAnalysis(parseAnalysis(raw), { today: '2026-09-30' }).length, 4, JSON.stringify(raw));
+  }
   assert.deepEqual(focus({ scope: 'self', focus: ['overview'], ...week }), ['overview', 'upcoming']);
   assert.deepEqual(focus({ scope: 'self', focus: ['overview'], ...week }, '2026-11-01'), ['overview', 'schedule']);
   assert.deepEqual(focus({ scope: 'self', focus: ['overdue'], dateTo: '2026-09-01' }), ['overdue', 'schedule']);
@@ -619,11 +623,14 @@ test('paragrafa yazılan D# sunucu ayrıntısını paragrafın ardına koyar; b�
   const sub = async (name, layout) => { let out = null; await t.test(name, async (t) => { out = await run(t, layout); }); return out; };
   const accepted = await sub('kabul', (view) => {
     assert.ok(ids(view, 'propositions', 1).length && ids(view, 'details', 1).length && ids(view, 'charts', 1).length, 'sınama sayfası bölüm 1 önerme, ayrıntı ve grafik taşır');
+    // Ekip iş yükünün tamlığı kanıtlanmadığı için sunucu çekincesi (required) sayfadadır ve kendi bölümünde söylenir.
+    const required = view.propositions.filter((item) => item.required);
+    assert.ok(required.length, 'ekip iş yükü çekincesi sayfada');
     return { blocks: [{ type: 'say', items: [...ids(view, 'propositions', 1), ids(view, 'details', 1)[0], ids(view, 'charts', 1)[0]] },
-      { type: 'chart', source: ids(view, 'charts', 1)[0], style: 'kpi' }] };
+      { type: 'chart', source: ids(view, 'charts', 1)[0], style: 'kpi' }, { type: 'say', items: required.map((item) => item.id) }] };
   });
   assert.equal(accepted.presentation.mode, 'composed');
-  assert.notEqual(accepted.presentation.server, true, 'modelin düzeni kabul edildi (sunucu yedeği değil)');
+  assert.notEqual(accepted.presentation.server, true, `modelin düzeni kabul edildi (sunucu yedeği değil): ${JSON.stringify(accepted.presentation)}`);
   const content = accepted.result.answer.content;
   const paragraph = content.indexOf('Açık **2** görevin');
   const detail = content.indexOf('Ekibinizde toplam **2** görev bulunuyor');
@@ -649,7 +656,7 @@ test('yanıt düzyazısı akıcıdır: aynı nüfusun önermeleri bağlanır, ay
       'analist cümlesinin söylediği açık/gecikmiş sayısı ayrıntıda yinelenmez; "Sorumlu: Ben" öznede');
     // Dengeli yanıtın bütçesi önce analist sonucuna ayrılır: öneri (en uzun gecikme) türetilmiş proje yoğunlaşmasından önce gelir.
     assert.match(paragraphs[2], /^Şu anda \*\*3\*\* gecikmiş göreviniz var ve ortalama gecikme \*\*11,3 gün\*\*\. En uzun süredir geciken görev .+, en kısa süredir geciken ise .+\. Bunların \*\*2\*\*'si bir haftadan uzun süredir gecikmiş\. En uzun süredir beklediği için ilk ele alınabilecek iş \*\*Haftalık durum toplantısı\*\* görünüyor\./);
-    assert.match(answer.content, /30 Eylül 2026.*4 Ekim 2026.*terminli yapılacak ya da devam eden göreviniz yok\./, 'yaklaşan pencere gecikmiş işi tekrar saymaz');
+    assert.match(answer.content, /30 Eylül 2026.*4 Ekim 2026.*terminli açık göreviniz yok\./, 'yaklaşan pencere gecikmiş işi tekrar saymaz');
     assert.doesNotMatch(answer.content, /Eşleşen \*\*1\*\* görev bulundu/);
     for (const paragraph of paragraphs) assert.ok(paragraph.split('(ölçüt:').length <= 2, `ölçüt paragrafta en çok bir kez: ${paragraph}`);
   });
@@ -925,7 +932,9 @@ test('analiz onarım önerisi temsil edemediği hiçbir süzgeci düşürmez', (
   for (const extra of [{ previousResult: { type: 'task', from: 1 } }, { entities: [null] }, { filters: 'invalid' }]) {
     assert.equal(analysisSuggestion({ ...request({}), ...extra }), null);
   }
-  for (const filters of [{ status: ['done'] }, { dateFrom: '2026-09-01', dateTo: '2026-09-30' }, { priority: ['high'] },
+  // Dönemli durum dağılımı artık özetle birebir temsil edilir (status yönü ufku taşır); öneri tarihleri korur.
+  assert.match(analysisSuggestion(request({ dateFrom: '2026-09-01', dateTo: '2026-09-30' })), /"focus":\["status"\],"dateFrom":"2026-09-01","dateTo":"2026-09-30"/);
+  for (const filters of [{ status: ['done'] }, { priority: ['high'] },
     { milestone: true }, { createdByMe: true }, { text: 'görev' }, { period: 'last_7_days' }, { assignee: 'unassigned' }]) {
     assert.equal(analysisSuggestion(request(filters)), null, JSON.stringify(filters));
   }
@@ -1259,7 +1268,8 @@ test('109 son: yedek grafik seçiminde analiz bölümü grafik türünden önce 
   const { preferredChart } = await import('../src/domain/ai/groundedComposition.js');
   for (const first of ['bar', 'timeline', 'kpi']) {
     const charts = new Map([['G1', { id: 'G1', part: 1, types: [first] }], ['G2', { id: 'G2', part: 2, types: ['stacked'] }]]);
-    assert.deepEqual(preferredChart({ charts }), { id: 'G1', style: first });
+    // Gösterge kartları (KPI) veri grafiği değildir: açık grafik isteğinde başka bölümde veri grafiği varsa o seçilir.
+    assert.deepEqual(preferredChart({ charts }), first === 'kpi' ? { id: 'G2', style: 'stacked' } : { id: 'G1', style: first });
     charts.set('G3', { id: 'G3', part: 1, types: ['donut'] });
     assert.deepEqual(preferredChart({ charts }), { id: 'G3', style: 'donut' });
   }

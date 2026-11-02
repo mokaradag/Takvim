@@ -1,0 +1,87 @@
+{
+ "profile": "A",
+ "port": 8101,
+ "appLog": "app-A.log",
+ "conversations": [
+  {
+   "name": "Z7-dogal-takip",
+   "detail": "balanced",
+   "turns": [
+    "Şu an iş durumumu genel olarak değerlendir.",
+    "Peki neden?",
+    "Biraz daha aç.",
+    "Bunun en önemli sonucu ne?",
+    "Grafikle göster."
+   ]
+  },
+  {
+   "name": "Z5-zaman",
+   "detail": "balanced",
+   "turns": [
+    "Geçmiş 30 gün ile önümüzdeki 30 günü karşılaştır.",
+    "Peki sadece benim açık işlerim açısından?",
+    "En önemli fark ne?",
+    "Bunu zaman çizelgesinde göster."
+   ]
+  },
+  {
+   "name": "Ekip-erisimi-yok",
+   "detail": "balanced",
+   "turns": [
+    "Ekibimin mevcut iş yükünü değerlendir."
+   ]
+  },
+  {
+   "name": "Gorsel",
+   "detail": "balanced",
+   "turns": [
+    "Görevlerimin durum dağılımını donut grafikle göster.",
+    "Önümüzdeki önemli teslimatları timeline olarak göster."
+   ]
+  },
+  {
+   "name": "S03",
+   "detail": "balanced",
+   "turns": [
+    "Önümüzdeki 14 gün içinde beni en çok zorlayabilecek görevleri ve projeleri belirle."
+   ]
+  },
+  {
+   "name": "S04",
+   "detail": "balanced",
+   "turns": [
+    "Son 30 gündeki performans ile önümüzdeki 30 günlük görünümü karşılaştır."
+   ]
+  },
+  {
+   "name": "S14",
+   "detail": "balanced",
+   "turns": [
+    "Önümüzdeki teslimatları timeline olarak göster ve kritik olanları ayrıca belirt."
+   ]
+  },
+  {
+   "name": "S16",
+   "detail": "balanced",
+   "turns": [
+    "Gecikmiş görevleri göster.",
+    "Ardından 2. satırdaki görevin bağlı olduğu projeyi değerlendir."
+   ]
+  },
+  {
+   "name": "S17",
+   "detail": "balanced",
+   "turns": [
+    "Geçen ayı analiz et.",
+    "Ardından aynı ölçütlerle bu ayın mevcut durumunu karşılaştır."
+   ]
+  },
+  {
+   "name": "S18",
+   "detail": "balanced",
+   "turns": [
+    "Verilere göre bugün hangi üç konuya öncelik vermeliyim? Her biri için kısa gerekçe ver."
+   ]
+  }
+ ]
+}

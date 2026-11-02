@@ -1,0 +1,176 @@
+{
+ "profile": "B",
+ "port": 8102,
+ "appLog": "app-B.log",
+ "conversations": [
+  {
+   "name": "Z1-proje-analizi",
+   "detail": "balanced",
+   "turns": [
+    "Projelerimde genel durum nasıl? Gecikme, iş yükü ve yaklaşan işleri birlikte değerlendir.",
+    "Hangisi en riskli görünüyor?",
+    "Neden?",
+    "Bunu tablo ve grafikle göster.",
+    "Peki yalnızca önümüzdeki 7 güne bakarsak?"
+   ]
+  },
+  {
+   "name": "Z2-ekip-is-yuku",
+   "detail": "balanced",
+   "turns": [
+    "Ekibimin mevcut iş yükünü değerlendir.",
+    "En çok dikkat gerektiren kişi kim?",
+    "Neden?",
+    "Onun açık işlerini göster.",
+    "Bunu grafikle de göster."
+   ]
+  },
+  {
+   "name": "Z6-aciklama",
+   "detail": "balanced",
+   "turns": [
+    "Mehmet'in iş yükünü değerlendir ve grafikle göster.",
+    "1"
+   ]
+  },
+  {
+   "name": "Z3-karsilastirma",
+   "detail": "balanced",
+   "turns": [
+    "Altyapı Yenileme ile Mobil Uygulama projelerini gecikme, iş yükü ve tamamlanma açısından karşılaştır.",
+    "Hangisinde sorun daha ciddi?",
+    "Biraz daha ayrıntılı açıkla.",
+    "Sadece gecikmeleri düşünürsek sonuç değişiyor mu?",
+    "Grafikle göster."
+   ]
+  },
+  {
+   "name": "Z4-satir",
+   "detail": "balanced",
+   "turns": [
+    "Projelerimi iş yüküne göre sırala.",
+    "İkinci sıradakine bakalım.",
+    "Geciken işleri neler?",
+    "Önümüzdeki iki haftada ne olacak?"
+   ]
+  },
+  {
+   "name": "Z1-ikinci-gecis",
+   "detail": "balanced",
+   "turns": [
+    "Projelerimde genel durum nasıl? Gecikme, iş yükü ve yaklaşan işleri birlikte değerlendir.",
+    "Hangisi en riskli görünüyor?",
+    "Neden?",
+    "Bunu tablo ve grafikle göster.",
+    "Peki yalnızca önümüzdeki 7 güne bakarsak?"
+   ]
+  },
+  {
+   "name": "Ayrintili-ekip",
+   "detail": "detailed",
+   "turns": [
+    "Ekibimin mevcut iş yükünü değerlendir."
+   ]
+  },
+  {
+   "name": "Ayrintili-projeler",
+   "detail": "detailed",
+   "turns": [
+    "Projelerimde genel durum nasıl? Gecikme, iş yükü ve yaklaşan işleri birlikte değerlendir."
+   ]
+  },
+  {
+   "name": "S01",
+   "detail": "balanced",
+   "turns": [
+    "Projelerimde gecikme, iş yükü, yaklaşan teslimatlar ve tamamlanma durumunu birlikte değerlendir."
+   ]
+  },
+  {
+   "name": "S02",
+   "detail": "balanced",
+   "turns": [
+    "Hangi projelerim şu anda en fazla yönetim dikkati gerektiriyor? Nedenlerini veriye dayanarak açıkla."
+   ]
+  },
+  {
+   "name": "S05",
+   "detail": "balanced",
+   "turns": [
+    "Ekibimin iş yükünü kişilere göre karşılaştır ve dengesizlik varsa açıkla."
+   ]
+  },
+  {
+   "name": "S06",
+   "detail": "balanced",
+   "turns": [
+    "Ekibimde gecikmiş görevler hangi kişilerde ve hangi projelerde yoğunlaşıyor?"
+   ]
+  },
+  {
+   "name": "S07",
+   "detail": "balanced",
+   "turns": [
+    "Bölümümdeki projeleri iş yükü, gecikme ve yaklaşan teslimatlar açısından karşılaştır."
+   ]
+  },
+  {
+   "name": "S08",
+   "detail": "balanced",
+   "turns": [
+    "Direktörlüğümdeki projelerin genel durumunu yönetici gözüyle değerlendir."
+   ]
+  },
+  {
+   "name": "S09",
+   "detail": "balanced",
+   "turns": [
+    "Mehmet Kaya ile benim iş yükümü, gecikmiş görevlerimizi ve önümüzdeki 7 günlük işlerimizi karşılaştır."
+   ]
+  },
+  {
+   "name": "S10",
+   "detail": "balanced",
+   "turns": [
+    "Altyapı Yenileme ve Siber Güvenlik Denetimi projelerini genel sağlık, gecikme, iş yükü ve teslimat riski açısından karşılaştır."
+   ]
+  },
+  {
+   "name": "S11",
+   "detail": "balanced",
+   "turns": [
+    "Altyapı Yenileme projesinde en fazla dikkat gerektiren üç konuyu belirle ve nedenlerini açıkla."
+   ]
+  },
+  {
+   "name": "S12",
+   "detail": "balanced",
+   "turns": [
+    "Projelerimi tablo ve uygun bir grafikle karşılaştır; grafiğin türünü veriye göre sen seç."
+   ]
+  },
+  {
+   "name": "S13",
+   "detail": "balanced",
+   "turns": [
+    "Projelerimin görev durumlarını stacked grafikle karşılaştır ve önemli farkları metinle açıkla."
+   ]
+  },
+  {
+   "name": "S15",
+   "detail": "balanced",
+   "turns": [
+    "Ekibimin iş yükünü göster.",
+    "Ardından ilk sıradaki kişiyi ayrıntılı incele."
+   ]
+  },
+  {
+   "name": "S20-S19",
+   "detail": "balanced",
+   "turns": [
+    "Tüm erişebildiğim projeleri değerlendir; önemli bulguları, riskleri ve fırsatları doğal bir yönetici özeti halinde anlat.",
+    "Hangi sonuçlardan emin olabiliyorsun, hangi sonuçlarda veri eksikliği nedeniyle temkinli olmak gerekiyor?"
+   ]
+  }
+ ]
+}

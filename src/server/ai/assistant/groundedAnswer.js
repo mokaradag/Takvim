@@ -29,11 +29,11 @@ import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
 import { createAiDeadline } from '../aiDeadline.js';
 import { concreteCollections, rankedRowIndexes, taskResultScope } from '../../../domain/ai/requestContract.js';
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
-import { PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderPartUnavailable, renderPlannerAbstention, renderChartUnavailable, renderPlannerClarification, renderScopeUnavailable, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
-import { buildComposition, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
-import { analysisDetails, analysisHints, analysisSchema, analysisSuggestion, effectiveFocus } from '../tools/analysisPlan.js';
-import { normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
-import { analysisContextSummary, normalizeAnalysisContext } from '../../../domain/ai/analysisContext.js';
+import { PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderPartUnavailable, renderPlannerAbstention, renderChartUnavailable, renderChartTypeUnavailable, renderPlannerClarification, renderScopeUnavailable, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
+import { buildComposition, chartTypeSupported, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
+import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisSchema, analysisSuggestion, effectiveFocus } from '../tools/analysisPlan.js';
+import { expandedAnswerDetail, normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
+import { analysisContextSummary, normalizeAnalysisContext, normalizePendingAnalysis, withPendingAnalysis } from '../../../domain/ai/analysisContext.js';
 import { composeGroundedAnswer, compositionWindowMs } from './answerComposition.js';
 import { plannerCandidateNote } from './groundedPrompt.js';
 
@@ -710,9 +710,28 @@ function pinAnalysisRepair(turn, plan, details) {
     if (path.startsWith('$.analysis.') && !['unsupported', 'requestBudget', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
   }
   const raw = Object.fromEntries(Object.entries(existing?.raw || plan.analysis).filter(([key]) => Object.hasOwn(analysisSchema().properties, key)));
-  turn.repairPins.set('analysis', { raw, paths, projection: stable(repairOmit(raw, paths)),
+  // Şemanın üst sınırını aşan yön listesi (modelin kendi fazladan yönleri) onarımda yalnızca KENDİ yönlerinin sıralı bir alt
+  // kümesine daraltılabilir: yeni yön eklenemez, kapsam/ad/ufuk değişmez. İstek bütçesi aşımı (karşılaştırma) daraltılamaz.
+  const narrow = existing ? existing.narrow : details.some((detail) => String(detail) === '$.analysis.focus:maxItems')
+    && Array.isArray(raw.focus) && raw.focus.length > ANALYSIS_LIMITS.maxFocus;
+  // Görsel istek ayrıca (`visual`) denetlenir; özetin içinde ya da plan düzeyinde yazılması anlam değişikliği değildir.
+  const pinnedPaths = new Set([...paths, 'visual', ...(narrow ? ['focus'] : [])]);
+  turn.repairPins.set('analysis', { raw, paths: pinnedPaths, narrow, projection: stable(repairOmit(raw, pinnedPaths)),
     visual: existing ? existing.visual : details.some((detail) => String(detail).startsWith('$.visual:') || String(detail).startsWith('$.analysis.visual:'))
       ? null : (plan.visual === true || plan.analysis.visual === true) });
+}
+
+/** Daraltılan yön listesi, pinlenen listenin sıralı ve boş olmayan alt kümesi mi? */
+function narrowedFocus(pin, focus) {
+  if (!pin.narrow) return true;
+  if (!Array.isArray(focus) || !focus.length || focus.length > ANALYSIS_LIMITS.maxFocus) return false;
+  let at = 0;
+  for (const item of focus) {
+    at = pin.raw.focus.indexOf(item, at);
+    if (at < 0) return false;
+    at += 1;
+  }
+  return true;
 }
 
 function analysisRepairMatches(turn, plan) {
@@ -725,7 +744,7 @@ function analysisRepairMatches(turn, plan) {
   if (analysis?.scope === 'previous' && pin.paths.has('names') && prior?.scope === pin.raw.scope && !prior.within
     && prior.subjects.length === pin.raw.names?.length) analysis = { ...analysis, scope: prior.scope, ...(prior.level ? { level: prior.level } : {}) };
   return plan.intent === PLANNER_INTENTS.ROTA && Boolean(plan.analysis)
-    && stable(repairOmit(analysis, pin.paths)) === pin.projection
+    && stable(repairOmit(analysis, pin.paths)) === pin.projection && narrowedFocus(pin, plan.analysis.focus)
     && (pin.visual == null || (plan.visual === true || plan.analysis.visual === true) === pin.visual);
 }
 
@@ -1068,19 +1087,25 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
   const userText = [clarification?.selected ? clarification.question : null, currentUser?.content].filter(Boolean).join('\n');
   const advice = planning || { state: 'unavailable', candidates: [], reason: 'UNAVAILABLE' };
   const prior = previousResult && taskResultScope(previousResult.scope) && previousResult.entries?.length ? previousResult : null;
-  const analysisPrior = normalizeAnalysisContext(previousAnalysis);
+  const storedAnalysis = normalizeAnalysisContext(previousAnalysis);
+  // Bekleyen niyet takip öznesi değildir; yalnızca numaralı aday seçiminde özgün analitik isteği yeniden yürütür.
+  const pendingIntent = clarification?.selected ? storedAnalysis?.pending || null : null;
+  const analysisPrior = storedAnalysis?.scope ? (({ pending: _pending, ...rest }) => Object.freeze(rest))(storedAnalysis) : null;
   const analysisReferents = analysisPrior ? [...analysisPrior.subjects, ...analysisPrior.rows, ...(analysisPrior.within ? [analysisPrior.within] : [])] : [];
   const turn = {
     catalog,
     // Doğal yanıt düzeninin soru bağlamı: kullanıcının kendi iletileri (önceki asistan metni değil).
     question: Object.freeze({ text: clarification?.selected && clarification.question ? clarification.question : String(currentUser?.content ?? ''),
-      previous: prior ? String(userMessages.at(-2)?.content ?? '') || null : null, userText }),
+      previous: prior || analysisPrior ? String(userMessages.at(-2)?.content ?? '') || null : null, userText }),
     // Anlamsal danışmanlık yalnızca planlayıcıya aday sırası notudur; araç kümesi ve sırası kayıt defterinindir.
     planning: Object.freeze({ state: advice.state, candidates: Object.freeze([...advice.candidates]), reason: advice.reason }),
     onPlanned,
     previousResult: prior,
     // Önceki doğrulanmış analizin kanonik bağlamı (takip göndergesi; yetki değildir).
     previousAnalysis: analysisPrior,
+    // Açıklama öncesinde kabul edilmiş analitik plan: seçimden sonra modelden yeniden kurması istenmez, aynı plan aynı
+    // doğrulamadan (bildirim, içerme, yetki, kanıt) geçer. Sunucu cümle yorumlamaz; yalnızca kendi kaydını yeniden yürütür.
+    serverPlan: pendingIntent ? replayPlan(pendingIntent) : null,
     decision: null,
     decisionCounted: false,
     readStarted: false,
@@ -1146,8 +1171,18 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     const note = { role: 'system', content: `Önceki doğrulanmış Rota sonuç kapsamı: ${JSON.stringify({ type: 'task', count: turn.previousResult.scope.taskIds.length })}. Bu yalnızca göndergedir, güncel kanıt değildir. Kullanıcının sorusu bu kümeye ilişkinse ("bunlar", "bunlardan", "onun") request.previousResult=true ile rota_task_search (görev özellikleri/süzgeç) ya da rota_task_analytics (sayı) bildir; kimlik/önceki süzgeç kopyalama. Soru kümenin TEK bir görevine sıra ile başvuruyorsa ("ilk görev", "2. görev"; tek görevli kümede "o görev") previousResult yazma; entities:[{"type":"task","previous":<1 tabanlı sıra>}] ile o görevin aracını (ör. öncül/ardıl için rota_dependency_inspect, alanları için rota_task_detail) bildir. Yeni veya adı verilmiş kayıt sorusunda (ör. başka bir kişi) kullanma; önceki sorunun koşullarını yeni kayda uygula. Önceki asistan metninden veri çıkarma.` };
     for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note.content);
   }
-  if (analysisPrior) {
-    const note = `Önceki doğrulanmış analiz bağlamı (yalnızca gönderge; güncel kanıt değil): ${JSON.stringify(analysisContextSummary(analysisPrior))}. Takip sorusu aynı özneyle sürüyorsa (zamirle de: "onun", "bunların"; ya da "sadece gecikmişler", "kimlerde yoğunlaşıyor", "grafik olarak göster", "peki gelecek hafta?") analysis.scope "previous" yaz; focus, dateFrom/dateTo ve visual yeni soruya göre yeniden yazılır (değişmeyeni önceki değerden kopyala). Önceki sonucun satırlarına sırayla ya da sıralamadaki yeriyle başvuruluyorsa ("ilk kişi", "ilk iki proje", "en riskli ikisi", "en yoğun olan"; satırlar önceki yanıttaki sırasıyladır) analysis.scope "row" ve analysis.rows ([1] ya da [1,2]) yaz. Kapsam adı verilen bir projeyle daraltılıyorsa analysis.within (proje adı). Önceki öznede birden çok kayıt varken (subjects 2) tek bir kayda zamirle başvuruluyorsa clarify missing_referent. Kullanıcı kapsamı açıkça değiştirdiyse (başka proje, ekibim, kendi işlerim, tüm projeler) yeni kapsamı yaz; önceki koşullar kendiliğinden taşınmaz.`;
+  if (analysisPrior && !analysisPrior.focus.length && analysisPrior.rows.length && turn.previousResult) {
+    // Ayrıntılı istekle listelenen görevler: satırların analiz öznesi görevin projesidir.
+    const note = `Önceki sonucun ${analysisPrior.rows.length} görev satırının her birinin bir projesi var (yalnızca gönderge). Kullanıcı bir satırdaki görevin PROJESİNİ incelemek istiyorsa analysis.scope "row" ve analysis.rows ([n], gösterilen sırayla) yaz; görevin kendisi ya da kümenin tamamı soruluyorsa görev kümesi notunu kullan (previous yazma).`;
+    for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note);
+  } else if (analysisPrior) {
+    const note = `Önceki doğrulanmış analiz bağlamı (yalnızca gönderge; güncel kanıt değil): ${JSON.stringify(analysisContextSummary(analysisPrior))}. `
+      + 'Bu bağlam VARKEN işaret zamiriyle ya da hiç ad vermeden sorulan takip (önceki yanıtın konusuna dönen soru) eksik gönderge DEĞİLDİR: clarify yazma. '
+      + 'Kısa takip sorusu aynı özneyle sürüyorsa (zamirle ya da hiç ad vermeden) analysis.scope "previous" yaz ve YALNIZCA değişeni yaz: yazmadığın focus, dateFrom/dateTo, visual, chart ve table önceki değerleriyle aynen sürer (görsel artık istenmiyorsa visual false). '
+      + 'Takibin konuşma eylemini analysis.act ile bildir: gerekçe/sebep soruyorsa explain; aynı konunun daha ayrıntılı anlatılmasını istiyorsa expand; tek bir ana sonucu ya da çıkarımı soruyorsa summarize; önce neyle ilgilenmesi gerektiğini soruyorsa prioritize; hangi sonuçtan emin olunabileceğini ya da veri eksikliğini soruyorsa certainty. '
+      + 'Yeni bir zaman ufku, durum ya da yön söylendiyse yalnızca onu yaz (örn. yalnızca dateFrom/dateTo; yalnızca focus). Grafik ya da tablo isteniyorsa visual true (türü söylendiyse chart) ya da table true yaz. '
+      + 'Önceki sonucun satırlarına sırayla ya da sıralamadaki yeriyle başvuruluyorsa (sıra numarası, ilk iki kayıt, listenin başındaki, en riskli/en yoğun olan; satırlar önceki yanıtta gösterilen sıradadır ve sıralamanın başı satır 1\'dir) analysis.scope "row" ve analysis.rows ([1] ya da [1,2]) yaz; o satırın kaydına zamirle devam ediliyorsa da row yaz. '
+      + 'Kapsam adı verilen bir projeyle daraltılıyorsa analysis.within (proje adı). Önceki öznede birden çok kayıt varken (subjects 2) tek bir kayda zamirle başvuruluyorsa clarify missing_referent. Kullanıcı kapsamı açıkça değiştirdiyse (başka proje, ekibi, kendi işleri, tüm projeler) yeni kapsamı ve yönlerini yaz; önceki koşullar kendiliğinden taşınmaz.';
     for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note);
   }
   const notes = [
@@ -1356,13 +1391,36 @@ function completedResultScope(turn, verdict) {
 }
 
 /**
+ * Analitik özet kullanılmadan (ayrıntılı istekle) yanıtlanan görev listesinin takip bağlamı: kapsam isteğin kendi süzgecinden
+ * (benim/ekibim/görünür bütün işler), satırlar görev satırlarının projeleridir (gösterilen sırayla). Yalnızca göndergedir;
+ * sonraki tur kimlikleri güncel yetkiyle yeniden okur. Adlı kayıt (kişi/proje) içeren istekler bağlam yazmaz.
+ */
+function requestAnalysisContext(turn, verdict) {
+  if (verdict.kind !== 'grounded' || turn.partCount !== 1 || turn.answers.length) return null;
+  const request = turn.request;
+  if (request?.population?.tool !== 'rota_task_search' || !['list', 'rank'].includes(request.operation) || request.entities?.length) return null;
+  const assignee = request.filters?.assignee;
+  const scope = assignee === 'me' ? 'self' : assignee === 'team' ? 'team' : assignee == null ? 'all' : null;
+  if (!scope) return null;
+  const entry = partEntries(turn).find((item) => item.tool === 'rota_task_search' && verdict.citedIds.includes(item.id));
+  const items = entry?.payload?.data?.tasks || [];
+  const order = request.operation === 'rank' ? (rankedRowIndexes(request, entry?.tool, entry?.payload, 'tasks', 'tasks') || []) : items.map((_, index) => index);
+  const rows = order.map((index) => items[index]?.project?.projectId).filter((id) => id && canonicalActualId(id)).slice(0, 10)
+    .map((id) => ({ type: 'project', id: String(id) }));
+  if (!rows.length) return null;
+  // Yalnızca satır göndergesi: isteğin süzgeçleri (ör. gecikmiş) özetle temsil edilmediğinden "previous" nüfusu genişletirdi.
+  return normalizeAnalysisContext({ v: 1, scope, ...(scope === 'team' && request.filters?.teamLevel ? { level: request.filters.teamLevel } : {}), subjects: [], focus: [],
+    rows, rowsOnly: true });
+}
+
+/**
  * Doğrulanmış yanıtın kanonik analiz bağlamı (Aşama 4E): sunucunun bağladığı özne kimlikleri, kapsam, analitik yönler, ufuk,
  * görselleştirme ve sıralı kişi/proje satırları. Kaynak yalnızca bu turun kabul edilen istekleri ve doğrulanmış kanıtıdır.
  */
 function completedAnalysisContext(turn, verdict) {
   // Takip bağlamını yalnızca KABUL EDİLMİŞ analitik özet kurar; olağan istek bağlam yazmaz (görev kümesi takibi ayrıdır).
   const intent = turn.presentationIntent?.analysis;
-  if (!intent) return null;
+  if (!intent) return requestAnalysisContext(turn, verdict);
   // An incomplete accepted analysis must never become a smaller subject set on the next turn.
   if (verdict.kind !== 'grounded' || turn.answers.some((answer) => answer.verdict.kind !== 'grounded')
     || turn.partNotes?.size) return null;
@@ -1396,14 +1454,17 @@ function completedAnalysisContext(turn, verdict) {
     const { request } = answer;
     const tool = request.population?.tool;
     const projectGroups = tool === 'rota_task_analytics' && request.population?.groupBy === 'project';
-    const collection = tool === 'rota_workload_summary' ? 'people' : tool === 'rota_portfolio_summary' ? 'projects' : projectGroups ? 'groups' : null;
+    // Görev satırlarının analiz öznesi kendi projesidir ("2. satırdaki görevin projesi"): satır sırası gösterilen sıradır.
+    const collection = tool === 'rota_workload_summary' ? 'people' : tool === 'rota_portfolio_summary' ? 'projects' : projectGroups ? 'groups'
+      : tool === 'rota_task_search' ? 'tasks' : null;
     if (!collection || !['list', 'rank'].includes(request.operation)) continue;
     for (const entry of answer.entries || []) {
       if (entry.tool !== tool || !answer.verdict.citedIds.includes(entry.id)) continue;
       const items = entry.payload?.data?.[collection] || [];
       const order = request.operation === 'rank' ? (rankedRowIndexes(request, tool, entry.payload, collection, collection) || []) : items.map((_, index) => index);
+      const projectOf = (row) => (collection === 'groups' ? row?.key : collection === 'tasks' ? row?.project?.projectId : row?.projectId);
       rows = order.map((index) => items[index]).map((row) => (collection === 'people' ? { type: 'person', id: row?.sicil == null ? null : String(row.sicil) }
-        : { type: 'project', id: (collection === 'groups' ? row?.key : row?.projectId) ? String(collection === 'groups' ? row.key : row.projectId) : null }))
+        : { type: 'project', id: projectOf(row) ? String(projectOf(row)) : null }))
         // Grup anahtarı yalnızca kanonik proje kimliğiyse satırdır ("Diğer n grup" ya da projesiz grup gönderge olamaz).
         .filter((row) => row.id && (row.type !== 'project' || canonicalActualId(row.id))).slice(0, 10);
       break;
@@ -1422,7 +1483,8 @@ function completedAnalysisContext(turn, verdict) {
     subjects: scope === 'person' ? persons.slice(0, 2) : scope === 'project' ? projects.slice(0, 2) : [], ...(within ? { within } : {}), focus: intent?.focus ? [...intent.focus] : [],
     ...(turn.presentationIntent?.window?.dateFrom ? { dateFrom: turn.presentationIntent.window.dateFrom } : {}),
     ...(turn.presentationIntent?.window?.dateTo ? { dateTo: turn.presentationIntent.window.dateTo } : {}),
-    ...(turn.presentationIntent?.visual ? { visual: true } : {}), rows, ...(rowPopulation ? { rowPopulation } : {}) });
+    ...(turn.presentationIntent?.visual ? { visual: true } : {}), ...(turn.presentationIntent?.chart ? { chart: turn.presentationIntent.chart } : {}),
+    ...(turn.presentationIntent?.table ? { table: true } : {}), rows, ...(rowPopulation ? { rowPopulation } : {}) });
 }
 
 /** Doğal yanıt düzeninin girdisi: doğrulanmış bölümler, tamamlanamayan bölümler ve sunucu notları. */
@@ -1450,8 +1512,13 @@ function compositionInput(turn, verdict) {
   const priorIds = new Set(turn.previousResult?.scope.taskIds || []);
   const continues = answers.some((answer) => answer.request?.previousResult
     || answer.request?.entities?.some((entity) => entity.type === 'task' && priorIds.has(entity.id)));
-  return { parts, missing, notes, locale: turn.locale, question: turn.question.text, previousQuestion: continues ? turn.question.previous : null,
-    today: turn.context.today, populations: populationSizes(turn, answers) };
+  // Analiz takibinde (önceki özneyle süren ya da eylem bildiren) önceki kullanıcı sorusu anlatımın bağlamıdır: "Neden?" neyin
+  // nedenini sorduğunu kullanıcının kendi önceki sorusundan bilir. Önceki asistan metni hiçbir zaman taşınmaz.
+  const intent = turn.presentationIntent?.analysis;
+  const analysisFollowUp = Boolean(intent && (['previous', 'row'].includes(intent.scope) || intent.act) && turn.previousAnalysis);
+  const previousQuestion = continues || analysisFollowUp ? turn.question.previous : null;
+  return { parts, missing, notes, locale: turn.locale, question: turn.question.text, previousQuestion,
+    today: turn.context.today, populations: populationSizes(turn, answers), followUp: intent?.act ? { act: intent.act } : null };
 }
 
 /**
@@ -1502,7 +1569,10 @@ export async function presentVerdict(turn, verdict, compose) {
   if (route === 'verdict' || !turn.session || turn.ledger.revoked() || turn.session.signal?.aborted) return verdict;
   const input = compositionInput(turn, verdict);
   if (!input) return visual ? withChartNote(turn, verdict) : verdict;
-  const composition = buildComposition({ ...input, visual, detail: turn.answerDetail, analyst: Boolean(turn.presentationIntent?.analysis) });
+  // "Biraz daha aç" takibi bu turun sunumunu bir düzey ayrıntılı yapar (kullanıcının ayarı değişmez).
+  const detail = turn.presentationIntent?.analysis?.act === 'expand' ? expandedAnswerDetail(turn.answerDetail) : turn.answerDetail;
+  const composition = buildComposition({ ...input, visual, detail, analyst: Boolean(turn.presentationIntent?.analysis),
+    chartType: turn.presentationIntent?.chart || null, table: turn.presentationIntent?.table === true, certainty: turn.presentationIntent?.analysis?.act === 'certainty' });
   if (!composition) {
     turn.trace.presentation = { mode: 'narrative', reason: 'SHEET_LIMIT' };
     return visual ? withChartNote(turn, verdict) : verdict;
@@ -1524,7 +1594,7 @@ export async function presentVerdict(turn, verdict, compose) {
     const issue = turn.trace.presentation?.issue ?? null;
     turn.trace.presentation = { mode: 'composed', server: true, reason, ...(issue ? { issue } : {}), blocks: rendered.blocks, chart: rendered.chart, charts: rendered.charts, said: rendered.said,
       tables: rendered.tables, notes: rendered.notes, titled: rendered.titled };
-    const laidOut = { ...verdict, normalized: [rendered.text, ...input.notes].join('\n\n') };
+    const laidOut = { ...verdict, normalized: [rendered.text, ...input.notes, ...chartTypeNote(turn, composition, rendered)].join('\n\n') };
     // Analitik düzen grafiksiz kurulduysa açık grafik isteği yine sessizce düşmez.
     return visual && !rendered.charts ? withChartNote(turn, laidOut) : laidOut;
   };
@@ -1561,8 +1631,16 @@ export async function presentVerdict(turn, verdict, compose) {
   turn.trace.presentation = { mode: 'composed', blocks: result.blocks, chart: result.chart, charts: result.charts, said: result.said, tables: result.tables, notes: result.notes,
     titled: result.titled, ms: composedMs, rejected, ...(result.chartInserted ? { chartInserted: true } : {}) };
   turn.renderedRowParts = result.rowParts;
-  const composed = { ...verdict, normalized: [result.text, ...input.notes].join('\n\n') };
+  const composed = { ...verdict, normalized: [result.text, ...input.notes, ...chartTypeNote(turn, composition, result)].join('\n\n') };
   return visual && !result.charts ? withChartNote(turn, composed) : composed;
+}
+
+/** İstenen grafik türü kanıtla çizilemediyse türe özgü not (çizilen başka grafik varsa söylenir). */
+function chartTypeNote(turn, composition, rendered) {
+  const type = composition.render.chartType;
+  if (!type || chartTypeSupported(composition.render) || !rendered.charts) return [];
+  turn.trace.presentation = { ...(turn.trace.presentation || {}), chartTypeUnavailable: type };
+  return [renderChartTypeUnavailable({ type, substituted: rendered.chart, locale: turn.locale })];
 }
 
 /** Açık görselleştirme isteği doğrulanmış veriden güvenle karşılanamadıysa kısa sunucu notu (sessizce yok sayılmaz). */
@@ -1622,7 +1700,11 @@ async function finish(turn, settled, onText, selectedBy = 'model', { compose = t
   const outcome = verdict.kind;
   const resultScope = completedResultScope(turn, verdict);
   // Numaralı seçim kanonik özneyi sürdürür; eski yetkiyi veya eski kanıtı yeniden kullanmaz.
-  const analysisContext = verdict.clarification && turn.presentationIntent?.analysis ? turn.previousAnalysis : completedAnalysisContext(turn, verdict);
+  // Açıklama turu özgün analitik niyeti (yön, ufuk, görselleştirme) bekleyen özet olarak saklar: seçimden sonra aynı niyet
+  // güncel yetkiyle yeniden yürür; seçim "yalnızca kişiyi göster"e dönüşmez.
+  const analysisContext = verdict.clarification && turn.presentationIntent?.analysis
+    ? withPendingAnalysis(turn.previousAnalysis, turn.presentationIntent.pending)
+    : completedAnalysisContext(turn, verdict);
   const evidenceRows = ledger.persistable(verdict.citedIds, { clarification: verdict.clarification || null, resultScope, analysisContext });
   const resultScopeOmitted = Boolean(resultScope) && !evidenceRows.some(row => JSON.parse(row.evidenceJson).resultScope);
   const completeDisclosure = (deliveredOutcome, code = null, { replaced = false } = {}) => {
@@ -1708,9 +1790,29 @@ async function serverSelection(turn) {
  */
 function presentationIntent(plan, today) {
   const analysis = plan?.analysis;
-  return Object.freeze({ visual: plan?.visual === true, analysis: analysis ? Object.freeze({ scope: analysis.scope, focus: Object.freeze(effectiveFocus(analysis, today)),
-    ...(analysis.level ? { level: analysis.level } : {}) }) : null,
-    window: analysis?.dateFrom || analysis?.dateTo ? Object.freeze({ ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) }) : null });
+  return Object.freeze({ visual: plan?.visual === true, ...(plan?.visual === true && plan?.chart ? { chart: plan.chart } : {}), ...(plan?.table === true ? { table: true } : {}),
+    analysis: analysis ? Object.freeze({ scope: analysis.scope, focus: Object.freeze(effectiveFocus(analysis, today)),
+      ...(analysis.level ? { level: analysis.level } : {}), ...(analysis.act ? { act: analysis.act } : {}) }) : null,
+    window: analysis?.dateFrom || analysis?.dateTo ? Object.freeze({ ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) }) : null,
+    // Açıklama sonrasında yeniden yürütülecek kabul edilmiş özet (kimlik taşımaz; adlar kullanıcının kendi iletisindendir).
+    pending: analysis ? pendingAnalysis(plan) : null });
+}
+
+/** Bekleyen niyetin plan biçimi: modelin daha önce bildirdiği ve sunucunun kabul ettiği analitik özetin aynısı. */
+function replayPlan(pending) {
+  const { language, visual, chart, table, ...analysis } = pending;
+  return { intent: 'rota', language, analysis: { ...analysis, focus: [...analysis.focus], ...(analysis.names ? { names: [...analysis.names] } : {}) },
+    ...(visual ? { visual: true } : {}), ...(chart ? { chart } : {}), ...(table ? { table: true } : {}) };
+}
+
+/** Kabul edilen analitik planın kalıcı, kimliksiz biçimi (açıklama turunun özgün niyeti). */
+function pendingAnalysis(plan) {
+  const analysis = plan.analysis;
+  if (['previous', 'row'].includes(analysis.scope)) return null;
+  return normalizePendingAnalysis({ language: plan.language, scope: analysis.scope, focus: [...analysis.focus],
+    ...(analysis.names ? { names: [...analysis.names] } : {}), ...(analysis.level ? { level: analysis.level } : {}), ...(analysis.within ? { within: analysis.within } : {}),
+    ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}),
+    ...(plan.visual === true ? { visual: true } : {}), ...(plan.chart ? { chart: plan.chart } : {}), ...(plan.table === true ? { table: true } : {}) });
 }
 
 /** Bu bölümün isteği bir ekip kapsamı mı (yetkisizlik ancak o zaman kapsam yokluğudur, kaydın yokluğu değil)? */
@@ -2109,7 +2211,14 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     turn.trace.pending = null;
     const startedAt = Date.now();
     let result;
-    try {
+    if (turn.serverPlan && !frozen() && !turn.decision && !turn.request && canCallTools) {
+      // Seçilen adayla özgün analitik plan: model turu açılmaz (zayıf modelin niyeti yeniden kurması gerekmez).
+      const replay = turn.serverPlan;
+      turn.serverPlan = null;
+      turn.modelRounds -= 1;
+      turn.trace.replayed = true;
+      result = { text: '', toolCalls: [{ id: 'server_replay', name: 'rota_plan', arguments: JSON.stringify(replay) }], finishReason: 'tool_calls', model: null, replayed: true };
+    } else try {
       result = await session.round({
         messages: turn.transcript,
         // Plan aracı salt okunur araçlarla birlikte sunulur: plan çağrıları kendi içinde ya da yanında taşıyabilir.
@@ -2144,9 +2253,11 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       throw error;
     }
     turn.work += 1;
-    traceRound(turn, { purpose, startedAt, result });
-    const reported = session.reportedModel?.(result.model) ?? session.model;
-    if (reported) turn.models.push(reported);
+    if (!result.replayed) {
+      traceRound(turn, { purpose, startedAt, result });
+      const reported = session.reportedModel?.(result.model) ?? session.model;
+      if (reported) turn.models.push(reported);
+    }
     if (result.finishReason === 'length') {
       if (turn.repairsLeft > 0) {
         turn.repairsLeft -= 1;
@@ -2165,7 +2276,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     repairMatched = false;
     if (!frozen() && result.toolCalls.some((call) => call.name === 'rota_plan')) {
       try {
-        plan = unpackTypedPlan(result, { onDecoded: decoded => { rejectedPlan = decoded; }, previousAnalysis: turn.previousAnalysis, today: turn.context.today });
+        plan = unpackTypedPlan(result, { onDecoded: decoded => { rejectedPlan = decoded; }, previousAnalysis: turn.previousAnalysis, today: turn.context.today, detail: turn.answerDetail });
         rejectedPlan = plan.plan;
         if (!analysisRepairMatches(turn, plan.plan) || !plan.plan.analysis && !repairMatches(turn, plan.plan, repairCalls(turn, plan.calls))) throw invalidArguments(['$.plan:repairScope']);
         repairMatched = true;

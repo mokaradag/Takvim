@@ -1,6 +1,7 @@
 import 'server-only';
 import { AI_ERROR_CODES } from '../../../domain/ai/aiErrorCatalog.js';
 import { AI_CAPABILITIES } from '../../../domain/ai/aiModelRegistry.js';
+import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
 import { COMPOSITION_LIMITS, defaultComposition, ensureChart, parseCompositionResponse, renderComposition, validateComposition } from '../../../domain/ai/groundedComposition.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import { AiError, isAiError } from '../aiErrors.js';
@@ -31,11 +32,16 @@ export const COMPOSITION_RUNTIME = Object.freeze({
 
 export const COMPOSITION_REASONS = Object.freeze(['BUDGET', 'TIMEOUT', 'PROVIDER', 'LENGTH', 'EMPTY', 'INVALID', 'INTERNAL']);
 
-function outputBudget(session) {
+/**
+ * Anlatım turunun çıktı sınırı: modelin kendi düzyazısı ayrıntı ayarıyla büyür (Kısa < Dengeli < Ayrıntılı). Sınır
+ * yalnızca anlatımın sığmasını sağlar; uzunluk kuralı değildir (dolgu, yuvasız cümle kuralıyla çizilmez).
+ */
+function outputBudget(session, detail = null) {
   const limit = Number.isSafeInteger(session.maxOutputTokens) && session.maxOutputTokens > 0 ? session.maxOutputTokens : COMPOSITION_RUNTIME.maxOutputTokens;
   // Düşünme yetenekli model çıktısının bir kısmını akıl yürütmeye harcayabilir: profil sınırı korunur.
   if (session.capabilities?.includes(AI_CAPABILITIES.REASONING)) return limit;
-  return Math.min(COMPOSITION_RUNTIME.maxOutputTokens, limit);
+  const wanted = detail ? ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(detail)].maxOutputTokens : COMPOSITION_RUNTIME.maxOutputTokens;
+  return Math.min(Math.max(COMPOSITION_RUNTIME.maxOutputTokens, wanted), limit);
 }
 
 /** Düzen turu açılmadan önce ayrılabilecek süre; yetki okuması gerektirmez. */
@@ -52,7 +58,7 @@ export function compositionWindowMs(session) {
 export async function composeGroundedAnswer({ session, composition, onStart = null, onProgress = null, onRound = null }) {
   const windowMs = compositionWindowMs(session);
   if (windowMs == null) return { ok: false, reason: 'BUDGET' };
-  const budget = outputBudget(session);
+  const budget = outputBudget(session, composition.render?.detail ?? null);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new AiError(AI_ERROR_CODES.AI_CANCELLED, { details: { reason: 'COMPOSITION_BUDGET' } })), windowMs);
   timer.unref?.();
@@ -84,7 +90,7 @@ export async function composeGroundedAnswer({ session, composition, onStart = nu
     // Açık görselleştirme isteğinde geçerli aday varsa grafik zorunludur: model atlarsa sunucu ekler.
     let validated = ensureChart(composition, checked);
     if (composition.render.visual && composition.render.charts.size && !validated.blocks.some((block) => block.type === 'chart')
-      && checked.blocks.length === COMPOSITION_LIMITS.maxBlocks) {
+      && checked.blocks.length >= (composition.render.limits || COMPOSITION_LIMITS).maxBlocks) {
       const fallback = defaultComposition(composition);
       if (fallback?.ok && fallback.blocks.some((block) => block.type === 'chart')) validated = { ...fallback, chartInserted: true };
     }

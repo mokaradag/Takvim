@@ -1,0 +1,23 @@
+{
+ "profile": "D",
+ "port": 8104,
+ "appLog": "app-D.log",
+ "conversations": [
+  {
+   "name": "Lider-yonetici-ekip",
+   "detail": "balanced",
+   "turns": [
+    "Ekibimde iş yükü dengeli mi? Emin olmadığın noktaları da belirt."
+   ]
+  },
+  {
+   "name": "Lider-yonetici-gorsel",
+   "detail": "balanced",
+   "turns": [
+    "Projelerimi tablo ve grafik birlikte kullanarak karşılaştır.",
+    "İş durumumu gösterge kartlarıyla özetle.",
+    "Görevlerimin aylara göre termin dağılımını çizgi grafikle göster."
+   ]
+  }
+ ]
+}

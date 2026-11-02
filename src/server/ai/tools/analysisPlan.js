@@ -28,7 +28,26 @@ import { TOOL_ERROR_CODES } from './toolErrors.js';
 export const ANALYSIS_SCOPES = Object.freeze(['self', 'person', 'team', 'project', 'projects', 'all', 'previous', 'row']);
 export const ANALYSIS_LEVELS = Object.freeze(['unit', 'department', 'directorate']);
 export const ANALYSIS_FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'overdue', 'upcoming', 'workload', 'projects', 'schedule', 'critical']);
-export const ANALYSIS_LIMITS = Object.freeze({ maxFocus: PLANNER_LIMITS.maxRequests, maxNames: 2, rankLimit: 8 });
+/**
+ * Takip sorusunun konuşma eylemi (modelin türlü kararı; sunucu cümleyi yorumlamaz): explain "neden?", expand "biraz daha
+ * aç", summarize "en önemli sonuç ne?", prioritize "neye önce odaklanmalıyım?". Eylem okuma kapsamını değil sunumu
+ * yönlendirir (expand bu turun ayrıntısını bir düzey artırır; certainty hangi sonucun kesin, hangisinin kanıt sınırıyla
+ * temkinli olduğunu öne çıkarır).
+ */
+export const ANALYSIS_ACTS = Object.freeze(['explain', 'expand', 'summarize', 'prioritize', 'certainty']);
+/**
+ * Modelin bildirdiği yön sayısı en çok `maxFocus`tur. Sunucunun zorunlu eklediği okumalar (portföyde projelere göre satırlar,
+ * ufku taşıyan yön) ve Ayrıntılı yanıtın bütünleyici okuması bu sınırın dışındadır; toplam okuma bölümü `maxParts`'ı aşamaz.
+ */
+export const ANALYSIS_LIMITS = Object.freeze({ maxFocus: PLANNER_LIMITS.maxRequests, maxNames: 2, rankLimit: 8, maxParts: PLANNER_LIMITS.maxRequests + 1,
+  maxDetailedParts: PLANNER_LIMITS.maxRequests + 1 });
+/** Takipte önceki yön yoksa (ya da yeni öznede anlamı yoksa) genel değerlendirmenin yönleri. */
+export const DEFAULT_FOLLOW_UP_FOCUS = Object.freeze(['overview', 'overdue', 'upcoming']);
+/** Ayrıntılı yanıtta kapsam başına bütünleyici yön adayları (sırayla; bildirilmemiş ilk uygun olan eklenir). */
+const COMPLEMENT = Object.freeze({
+  self: ['projects', 'status', 'priority'], team: ['workload', 'status', 'priority'], person: ['projects', 'status', 'priority'],
+  project: ['workload', 'status', 'priority'], projects: ['status', 'overdue', 'upcoming'], all: ['projects', 'status', 'priority']
+});
 
 // Takvimde gerçekten bulunan gün (şema doğrulayıcısının kanonik `date` biçimi): "2026-02-31" SQL'e ulaşmadan reddedilir.
 const DATE = { type: 'string', format: 'date' };
@@ -37,17 +56,19 @@ const OPEN = Object.freeze(['todo', 'in_progress']);
 /** Modelin gördüğü kapalı özet şeması; açıklamalar yalnızca sözleşmeyi anlatır, dili yorumlamaz. */
 export function analysisSchema() {
   return {
-    type: 'object', additionalProperties: false, required: ['scope', 'focus'],
-    description: 'Geniş/değerlendirme sorusunda request yerine; sunucu her yönü doğrulanmış okumalara açar.',
+    type: 'object', additionalProperties: false, required: ['scope'],
+    description: 'Geniş/değerlendirme sorusunda request yerine; sunucu yönleri okumalara açar.',
     properties: {
-      scope: { type: 'string', enum: [...ANALYSIS_SCOPES], description: 'self kendi görevleri; person adı verilen kişi; team yönettiği ekip/birim/bölüm; project adı verilen proje; projects bütün projeleri; all görebildiği bütün görevler; previous önceki analizin öznesi (takip); row önceki sonucun rows satırlarındaki kişi/proje.' },
-      rows: { type: 'array', minItems: 1, maxItems: 2, uniqueItems: true, items: { type: 'integer', minimum: 1, maximum: 10 }, description: 'Yalnızca scope row: önceki sonucun 1 tabanlı satır(lar)ı.' },
-      within: { type: 'string', minLength: 2, maxLength: 120, description: 'self/team/all/previous kapsamını adı verilen tek projeyle daraltır (kullanıcının yazdığı proje adı).' },
+      scope: { type: 'string', enum: [...ANALYSIS_SCOPES], description: 'self kendi; person adı verilen kişi; team yönettiği ekip/birim/bölüm; project adı verilen proje; projects bütün projeleri; all görebildiği her şey; previous önceki analizin öznesi; row önceki sonucun satırı.' },
+      rows: { type: 'array', minItems: 1, maxItems: 2, uniqueItems: true, items: { type: 'integer', minimum: 1, maximum: 10 }, description: 'scope row: 1 tabanlı satır(lar).' },
+      within: { type: 'string', minLength: 2, maxLength: 120, description: 'self/team/all/previous kapsamını adı verilen tek projeyle daraltır.' },
       level: { type: 'string', enum: [...ANALYSIS_LEVELS], description: 'Yalnızca team, düzey söylendiyse: unit birim; department bölüm/müdürlük; directorate direktörlük.' },
-      names: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxNames, items: { type: 'string', minLength: 2, maxLength: 120 }, description: 'person/project: kullanıcının yazdığı ad(lar), en çok 2.' },
+      names: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxNames, items: { type: 'string', minLength: 2, maxLength: 120 }, description: 'person/project: kullanıcının yazdığı ad(lar).' },
+      withSelf: { type: 'boolean', description: 'person: adı verilen kişiyi kullanıcının kendisiyle karşılaştır.' },
       focus: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxFocus, uniqueItems: true, items: { type: 'string', enum: [...ANALYSIS_FOCUS] },
-        description: '1-3 yön; açılım bütçesi aşılırsa reddedilir. overview sayılar; status durum; priority öncelik; deadlines termin kovaları; overdue gecikenler; upcoming yaklaşan; workload kişilere göre; projects projelere göre; schedule aylara göre; critical kritik/yüksek açık işler.' },
-      dateFrom: { ...DATE, description: 'Termin ufkunun başı (upcoming, critical, schedule).' },
+        description: '1-3 yön. overview sayılar; status durum; priority öncelik; deadlines termin kovaları; overdue gecikenler; upcoming yaklaşan; workload kişilere göre; projects projelere göre; schedule aylara göre; critical kritik/yüksek açık işler.' },
+      act: { type: 'string', enum: [...ANALYSIS_ACTS], description: 'Takip eylemi.' },
+      dateFrom: { ...DATE, description: 'Termin ufkunun başı.' },
       dateTo: { ...DATE, description: 'Ufkun sonu.' },
       visual: { type: 'boolean' }
     }
@@ -55,22 +76,68 @@ export function analysisSchema() {
 }
 
 /** Özetin biçim denetimi; sorun yolları `$.analysis…` biçimindedir (modelin değeri yansıtılmaz). */
+/**
+ * Yapısal yazım normalleştirmesi (dil yorumu değil): kapalı yön sözlüğündeki bir değerin tekil/çoğul yazımı ("deadline" →
+ * "deadlines") sözlükteki değere çevrilir; sözlük dışı konuşma eylemi yalnızca sunum ipucu olduğundan düşürülür (veri
+ * okumasını değiştirmez). Başka her değer olduğu gibi doğrulanır.
+ */
+function normalizedBrief(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const out = { ...raw };
+  if (Array.isArray(out.focus)) {
+    out.focus = out.focus.map((item) => (typeof item !== 'string' || ANALYSIS_FOCUS.includes(item) ? item
+      : ANALYSIS_FOCUS.find((known) => known === `${item}s` || `${known}s` === item) || item));
+    out.focus = out.focus.filter((item, index) => out.focus.indexOf(item) === index);
+  }
+  if (out.act != null && !ANALYSIS_ACTS.includes(out.act)) delete out.act;
+  return out;
+}
+
 export function parseAnalysis(raw) {
   let value;
+  raw = normalizedBrief(raw);
   try { value = parseToolArguments(analysisSchema(), JSON.stringify(raw ?? null)); } catch (error) {
     if (error?.code !== TOOL_ERROR_CODES.INVALID_ARGUMENTS) throw error;
     throw invalidArguments((error.details || ['$:invalid']).map((detail) => String(detail).replace(/^\$/, '$.analysis')));
   }
   const problems = [];
+  const follow = ['previous', 'row'].includes(value.scope);
+  if (!follow && !value.focus?.length) problems.push('$.analysis.focus:required');
   const named = ['person', 'project'].includes(value.scope);
   if (named && !value.names?.length) problems.push('$.analysis.names:required');
   if (!named && value.names?.length) problems.push('$.analysis.names:scope');
+  if (value.withSelf && value.scope !== 'person') problems.push('$.analysis.withSelf:scope');
+  if (value.withSelf && value.names?.length !== 1) problems.push('$.analysis.names:withSelf');
   if (value.level && value.scope !== 'team') problems.push('$.analysis.level:scope');
   if ((value.scope === 'row') !== (value.rows != null)) problems.push('$.analysis.rows:scope');
   if (value.within != null && !['self', 'team', 'all', 'previous'].includes(value.scope)) problems.push('$.analysis.within:scope');
   if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) problems.push('$.analysis.dateFrom:reversed');
   if (problems.length) throw invalidArguments(problems);
-  return Object.freeze({ ...value, focus: Object.freeze([...value.focus]), ...(value.names ? { names: Object.freeze([...value.names]) } : {}) });
+  return Object.freeze({ ...value, ...(value.focus ? { focus: Object.freeze([...value.focus]) } : {}), ...(value.names ? { names: Object.freeze([...value.names]) } : {}) });
+}
+
+/** Önceki yönlerden yeni öznede anlamı olanlar (ör. proje satırına "projelere göre" uygulanmaz). */
+function inheritableFocus(focus, scope) {
+  return (focus || []).filter((item) => !(item === 'projects' && scope === 'project'));
+}
+
+/**
+ * Takip özetinin KANONİK biçimi (Aşama 4E kalite yakınsaması). Zayıf model "Neden?", "Bunu grafikle göster" ya da
+ * "Peki önümüzdeki 7 gün?" gibi kısa takipte bütün durumu yeniden kurmak zorunda değildir: yalnızca değişeni yazar.
+ * Yazılmayan yön ve ufuk, sunucunun sakladığı önceki doğrulanmış analizden gelir (kimlik değil, türlü değer). Satır
+ * göndergesinde yön yazılmadıysa önceki yönler yeni öznede anlamlı olanlarıyla sürer; hiçbiri kalmazsa genel
+ * değerlendirme yönleri kullanılır. Yetki ve kimlik burada yoktur: açılan her okuma güncel yetkiyle yürür.
+ */
+export function resolveAnalysisBrief(analysis, { previous = null } = {}) {
+  const follow = ['previous', 'row'].includes(analysis.scope);
+  if (!follow) return analysis;
+  const rowType = analysis.scope === 'row' && previous ? previous.rows?.[(analysis.rows?.[0] ?? 1) - 1]?.type ?? null : null;
+  const target = analysis.scope === 'row' ? rowType : previous?.scope;
+  let focus = analysis.focus?.length ? [...analysis.focus] : inheritableFocus(previous?.focus, target);
+  if (!focus.length) focus = [...DEFAULT_FOLLOW_UP_FOCUS];
+  const window = analysis.dateFrom || analysis.dateTo || analysis.scope !== 'previous' || !previous ? {}
+    : { ...(previous.dateFrom ? { dateFrom: previous.dateFrom } : {}), ...(previous.dateTo ? { dateTo: previous.dateTo } : {}) };
+  return Object.freeze({ ...analysis, ...window, focus: Object.freeze(focus) });
 }
 
 /** Özetin kapsam ipuçları: yalnızca sözleşmeden. */
@@ -80,6 +147,7 @@ export function analysisHints(problems) {
   if (has('$.analysis.names')) hints.push('analysis.names: person/project kapsamında kullanıcının yazdığı ad (zorunlu); diğer kapsamlarda verilmez');
   if (has('$.analysis.level')) hints.push('analysis.level yalnızca scope team ile');
   if (has('$.analysis.focus')) hints.push(`analysis.focus: önem sırasıyla 1-${ANALYSIS_LIMITS.maxFocus} öğe, ${ANALYSIS_FOCUS.join('|')}`);
+  if (has('$.analysis.focus:maxItems')) hints.push(`analysis.focus en çok ${ANALYSIS_LIMITS.maxFocus} öğedir: yazdığın yönlerden sorunun açıkça istediklerini sırasıyla koru, kendi eklediğin fazlalığı çıkar (yeni yön ekleme)`);
   if (has('$.analysis.focus:requestBudget')) hints.push('Karşılaştırmanın bütün yönleri istek bütçesine sığmıyor; yönleri sessizce düşürme, kullanıcıdan hangi yönü önce istediğini açıklamasını iste.');
   if (has('$.analysis.scope')) hints.push(`analysis.scope: ${ANALYSIS_SCOPES.join('|')}`);
   if (has('$.analysis.date')) hints.push('analysis.dateFrom/dateTo: YYYY-MM-DD, dateFrom ≤ dateTo');
@@ -95,19 +163,22 @@ export function analysisHints(problems) {
 
 const peopleScopes = new Set(['team', 'all', 'project', 'projects']);
 /** Termin ufkunu (dateFrom/dateTo) okumasına uygulayan yönler. */
-const WINDOW_FOCUS = new Set(['upcoming', 'critical', 'schedule']);
+const WINDOW_FOCUS = new Set(['upcoming', 'critical', 'schedule', 'status']);
 
 /**
  * Önceki analizin öznesi (sunucunun bağladığı kanonik bağlam): kapsam ve kimlikler ondan gelir; model kimlik görmez ve yazmaz.
  * Bağlam yoksa ya da satır yoksa gönderge yoktur (veri okunmadan açıklama istenir).
  */
 function previousBase(analysis, previous) {
-  if (!previous) throw invalidArguments(['$.analysis.scope:unavailable']);
+  // Satır-yalnız bağlam (ayrıntılı istekle listelenen görevler) önceki özne değildir: süzgeçleri özetle temsil edilemez.
+  if (!previous || (analysis.scope === 'previous' && previous.rowsOnly)) throw invalidArguments(['$.analysis.scope:unavailable']);
   if (analysis.scope === 'row') {
     const rows = analysis.rows.map((row) => previous.rows[row - 1]);
     if (rows.some((row) => !row) || new Set(rows.map((row) => row.type)).size !== 1) throw invalidArguments(['$.analysis.rows:unavailable']);
     const entities = rows.map(({ type, id }) => ({ type, id }));
     if (rows[0].type === 'project') {
+      // Görev satırının projesi kendi başına incelenir (önceki görev süzgeci projeye taşınmaz).
+      if (previous.rowsOnly) return { scope: 'project', base: { filters: {}, entities: rows.map(({ type, id }) => ({ type, id })) } };
       const parent = previous.rowPopulation || (['self', 'team', 'person'].includes(previous.scope) ? previous : null);
       if (parent) {
         // Kişi/ekip/kendi kesişimindeki birden çok proje, karşılaştırma sözleşmesiyle anlamı korunarak temsil edilemez.
@@ -225,7 +296,8 @@ function focusRequest(focus, analysis, base, today = null) {
       }
       return request({ operation: 'value', metrics: ['tasks.total', 'tasks.open', 'tasks.done', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent'],
         population: { tool: 'rota_task_analytics' }, ...(base.entities.length ? { entities: base.entities } : {}), filters: { ...base.filters } });
-    case 'status': return groups(base, 'status', { open: false });
+    // Dönem verilmişse durum dağılımı o dönemde terminli işlerdir (ör. geçen ayın tamamlanma görünümü).
+    case 'status': return groups(base, 'status', { open: false, window });
     case 'priority': return groups(base, 'priority');
     case 'deadlines': return groups(base, 'deadline');
     case 'schedule': return groups(base, 'target_month', { window: window ? { ...window } : null });
@@ -271,7 +343,8 @@ function upcomingFrom(window, today) {
  * Özetin bölümleri: her yön en çok bir istek; eşdeğer istekler tekilleşir; çok bölümlü planın sınırı aşılmaz.
  * Sonuç modelin yazacağı ham istek nesneleridir (`request` + `additionalRequests`), doğrulama sonrasındadır.
  */
-export function expandAnalysis(analysis, { previous = null, today = null } = {}) {
+export function expandAnalysis(analysis, { previous = null, today = null, detail = null } = {}) {
+  analysis = resolveAnalysisBrief(analysis, { previous });
   // Takip: önceki öznenin kapsamı; yön, ufuk ve görselleştirme yeni sorunundur (model yeniden bildirir). `within` kapsamı
   // DARALTIR (kesişim): kapsam zaten bir projeyle sınırlıysa ikinci proje onun yerine geçmez, plan reddedilir.
   const narrowed = (base) => {
@@ -282,9 +355,15 @@ export function expandAnalysis(analysis, { previous = null, today = null } = {})
   if (['previous', 'row'].includes(analysis.scope)) {
     const resolved = previousBase(analysis, previous);
     analysis = { ...analysis, scope: resolved.scope };
-    return expandWith(analysis, narrowed(resolved.base), today);
+    return expandWith(analysis, narrowed(resolved.base), today, detail);
   }
-  return expandWith(analysis, narrowed(scopeBase(analysis)), today);
+  return expandWith(analysis, narrowed(scopeBase(analysis)), today, detail);
+}
+
+/** Ayrıntılı yanıtın bütünleyici yönü: bildirilmemiş, kapsamda anlamı olan ilk aday (yoksa `null`). */
+export function complementFocus(analysis, focus, detail) {
+  if (detail !== 'detailed') return null;
+  return (COMPLEMENT[analysis.scope] || []).find((item) => !focus.includes(item)) || null;
 }
 
 /**
@@ -292,7 +371,8 @@ export function expandAnalysis(analysis, { previous = null, today = null } = {})
  * istek bütçesi aşılırsa kısmi plan kabul edilmez. Geçmiş ufuk aylık termin dağılımıyla, diğer ufuk yaklaşan işle okunur.
  */
 export function effectiveFocus(analysis, today = null) {
-  const limit = PLANNER_LIMITS.maxRequests;
+  // Sunucunun zorunlu eklediği yön modelin yön bütçesinden düşmez (zayıf model "portföy + üç yön" için reddedilmez).
+  const limit = ANALYSIS_LIMITS.maxParts;
   let focus = [...analysis.focus];
   const window = (analysis.dateFrom || analysis.dateTo) && !focus.some((item) => WINDOW_FOCUS.has(item));
   const implicit = today && analysis.dateTo && analysis.dateTo < today ? 'schedule' : 'upcoming';
@@ -303,18 +383,43 @@ export function effectiveFocus(analysis, today = null) {
   return focus;
 }
 
-function expandWith(analysis, base, today = null) {
+/**
+ * Kişi ile kullanıcının kendisinin karşılaştırması (`withSelf`): iki özne için aynı ölçüler. Kendi özne güvenilir
+ * oturumdur (`assignee: me`); model kimlik yazmaz. Ortak proje daraltması iki okumaya da uygulanır.
+ */
+function selfComparison(base) {
+  const metrics = ['tasks.total', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.done'];
+  const projects = base.entities.filter((entity) => entity.type === 'project');
+  return [comparison(base, metrics, {}, 'person'),
+    request({ operation: 'value', metrics, population: { tool: 'rota_task_analytics' }, ...(projects.length ? { entities: projects } : {}), filters: { ...base.filters, assignee: 'me' } })];
+}
+
+function expandWith(analysis, base, today = null, detail = null) {
+  if (analysis.withSelf && analysis.scope === 'person') return selfComparison(base);
   const parts = [];
   const seen = new Set();
-  for (const focus of effectiveFocus(analysis, today)) {
+  const declared = effectiveFocus(analysis, today);
+  for (const focus of declared) {
     const produced = focusRequest(focus, analysis, base, today);
     if (!produced) throw invalidArguments(['$.analysis.focus:unsupported']);
     // Karşılaştırmanın kayıt başına bölümleri bütün olarak eklenir (yarım karşılaştırma okunmaz); bölüm bütçesi aşılmaz.
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
     if (!items.length) continue;
-    if (parts.length + items.length > PLANNER_LIMITS.maxRequests) throw invalidArguments(['$.analysis.focus:requestBudget']);
+    // Modelin bildirdiği yönlerin fiziksel okumaları planlayıcı bütçesindedir; sunucunun zorunlu eklediği okuma (portföy
+    // satırları, ufuk yönü) toplamı en çok `maxParts`'a çıkarabilir.
+    const limit = analysis.focus.includes(focus) ? PLANNER_LIMITS.maxRequests : ANALYSIS_LIMITS.maxParts;
+    if (parts.length + items.length > limit) throw invalidArguments(['$.analysis.focus:requestBudget']);
     for (const item of items) seen.add(JSON.stringify(item));
     parts.push(...items);
+  }
+  // Ayrıntılı yanıt: bildirilen yönlerin yanına sunucu bir bütünleyici okuma ekler (ör. kendi işlerinde projelere göre
+  // dağılım, ekipte kişilere göre iş yükü). Sığmayan ya da anlamı olmayan ek okuma sessizce eklenmez; bildirilen yön düşmez.
+  const extra = complementFocus(analysis, declared, detail);
+  if (extra) {
+    let produced = null;
+    try { produced = focusRequest(extra, analysis, base, today); } catch { produced = null; }
+    const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
+    if (items.length && parts.length + items.length <= ANALYSIS_LIMITS.maxDetailedParts) parts.push(...items);
   }
   return parts;
 }

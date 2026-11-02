@@ -1,0 +1,14 @@
+{
+ "profile": "F",
+ "port": 8106,
+ "appLog": "app-F.log",
+ "conversations": [
+  {
+   "name": "Kisitli-gorunum",
+   "detail": "balanced",
+   "turns": [
+    "Ekibimin iş yükü dengeli mi?"
+   ]
+  }
+ ]
+}

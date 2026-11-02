@@ -1638,6 +1638,11 @@ Gömülü yuvaların doğruluğu, keyfî cümlenin anlamsal doğruluğunu kanıt
 metnini tamamen kaldırdı ve model yalnızca `details`/`rows`/`chart` bloklarını seçer oldu: güvenliydi, ama anlatımın
 tamamı yine 4C cümleleriydi. PR #107 güvenlik düzeltmeleri bu durumun nedeni değildir.
 
+> **Güncelleme (Aşama 4E kalite yakınsaması, §15):** Aşağıdaki "model hiçbir zaman serbest kelime yazmaz" değişmezi
+> insan kalitesinde anlatımın mimari tavanıydı ve bilinçli olarak değiştirildi. Güvenlik sınırı artık **olgu
+> düzeyindedir**: model paragrafı yazar, her olgu sunucunun önerme yuvasıdır ve modelin sözcükleri yapısal olarak olgu
+> taşıyamaz. Kimlik paragrafı (`items`) sunucunun belirlenimci geri dönüşü olarak aynen geçerlidir.
+
 Güncel tasarım ikisini birleştirir: modelin anlatım gücü geri gelir, ama model HİÇBİR ZAMAN serbest kelime yazmaz.
 Kullanıcıya ulaşan her karakter ya sunucunun önerme cümlesi, ya sunucunun yönlendirme cümlesi, ya da sunucunun
 tablosu/grafiği/ayrıntısıdır. Modelin karakterlerini gösteren her kanal keyfî bir önerme taşıyabilir ve bunu dil
@@ -1992,7 +1997,7 @@ nedenlerinin incelenmesi (geri dönüşler tasarım gereği doğru yanıttır, a
 
 ### 13.13 Bilinen sınırlar
 
-- Model kelime yazmaz: anlatımın ifade gücü sunucunun önerme türleriyle sınırlıdır (sayım, en büyük/en küçük,
+- (Aşama 4E kalite yakınsamasıyla aşıldı, bkz. §15.) Model kelime yazmaz: anlatımın ifade gücü sunucunun önerme türleriyle sınırlıdır (sayım, en büyük/en küçük,
   çoğunluk/en büyük grup, toplam, döküm ve yönlendirme). Eğilim, iki dönem karşılaştırması ya da neden-sonuç gibi
   ilişkiler için önce sunucuda belirlenimci önerme türü eklenmelidir; serbest model metni sözcük kurallarıyla açılamaz.
 - Önerme türetimi görev araçlarına (`rota_task_search` satırları, `rota_task_analytics` grupları) odaklıdır; diğer
@@ -2168,3 +2173,99 @@ düz metin iletimi 4. Tier B, sonraki yönerge/şema değişikliklerinden önce 
   ayrı bir yönetişim kararıdır.
 - Planlayıcının anlam hatası (geçerli ama yanlış kapsam) yapısal olarak saptanamaz; zararı yetkiyle sınırlıdır (G#2
   yalnızca yetkili portföyü okudu).
+
+## 15. Aşama 4E kalite yakınsaması — insan kalitesinde anlatım, kanonik takip, güvenilir grafik (UYGULANDI)
+
+Aşama 4E birleştirildikten sonra gerçek kullanımda beş ürün kusuru görüldü: yanıtlar mekanik ve kısaydı, kısa takipler
+göndergesini kaybediyordu, grafik istekleri çoğu kez sonuçsuz kalıyordu, Dengeli ile Ayrıntılı aynı görünüyordu ve
+yalnızca tek bir hesap biçimi (ekip lideri + yönetici) sınanmıştı. Bu bölüm kök nedenleri ve yapısal düzeltmeleri anlatır.
+Güven sınırı değişmez: kimlik, yetki, SQL, hesap, kanıt seçimi ve açıklama sunucudadır; model kapsam vermez.
+
+### 15.1 Kök neden haritası
+
+| Belirti | Kök neden (katman) | Düzeltme |
+| --- | --- | --- |
+| Mekanik, önerme dizisi gibi düzyazı | Düzen mimarisi: model yalnızca önerme KİMLİĞİ seçiyor, her cümle sunucu kalıbı (`fluentParagraph` birleştirme kuralları); model metni hiç çizilmiyor — sentez, geçiş, sonuç cümlesi yazılamıyordu | Kanıta bağlı anlatım yüzeyi (§15.2) |
+| Dengeli ≈ Ayrıntılı | Ayrıntı sözleşmesi yalnızca bölüm başına önerme sayısıydı; okuma, sayfa sınırı, yapı ve çıktı bütçesi aynıydı | Ayrıntı sözleşmesi okuma genişliği + yapı (§15.4) |
+| "Neden?", "grafikle göster" göndergesini yitiriyor | Takip durumu yoksul: `previous` kapsamında model yönleri/ufku/görseli YENİDEN yazmak zorundaydı; konuşma eylemi yoktu; açıklama turu özgün niyeti saklamıyordu | Kanonik takip durumu (§15.3) |
+| Grafik isteği sonuçsuz | Görsel niyet yalnızca boolean; tür taşınmıyordu; yedek seçim yalnızca ilk bölüme ve çoğu kez gösterge kartına bakıyordu; takipte görsel istek sürmüyordu | Uçtan uca görsel niyet (§15.5) |
+| Zayıf model planı onarılamıyor | Haiku `focus` listesini 4–5 öğeyle dolduruyor; onarım pini yön değişikliğini yasakladığından geçerli düzeltilmiş plan da reddediliyordu | Şema sınırı aşımında modelin KENDİ yönlerinin sıralı alt kümesine daraltma (§15.3) |
+| Eksik nüfusta "dengeli/en yoğun" izlenimi | Tamlık bilgisi yalnızca mekanik ayrıntı satırıydı ("Atama dağılımı tam: Hayır") | Zorunlu sunucu çekincesi (§15.2) |
+
+### 15.2 Kanıta bağlı anlatım yüzeyi — `src/domain/ai/groundedProse.js`
+
+Model paragrafı kendisi yazar: `{"type":"say","text":"Yakın vadede baskı artıyor: {P4}. Sorun tek yerde toplanmış: {P3}."}`.
+`{P#}` sunucunun önerme cümlesiyle (değer, ilişki, nüfus, kapsam birlikte; vurgulu ve atıflı) değiştirilir. Modelin
+kendi sözcükleri yapısal olarak olgu taşıyamaz:
+
+- izin listesi karakterler (harf, birleşik işaret, boşluk, sınırlı noktalama) — rakam (her yazı sistemi), yüzde,
+  Markdown/HTML, bağlantı, görünmez karakter yoktur;
+- cümle başı ve iki nokta sonrası dışında büyük harfle başlayan sözcük (özel ad biçimi) yoktur; sayfadaki kayıt adları
+  (proje, kişi, görev) yuva dışında ancak aynı cümledeki yuvanın KENDİ metninde geçiyorsa yazılabilir (çapraz eşleme olmaz);
+- her cümle en az bir yuva taşır; yuvadan hemen sonra yalnızca noktalama gelir (yan cümle sürdürülemez); **cümle son
+  yuvasıyla biter** — son yuvadan sonraki model yorumu (tahmin, öneri, abartı) çizilmez;
+- tablo/grafik yönlendirmesi (`{T#}`, `{G#}`) yalnızca kendi başına bir cümledir ve sunucunun cümlesidir.
+
+İhlal taşıyan cümle düşürülür (yalnızca modelin içeriği azalır); düşürülen tutulandan çoksa paragraf reddedilir ve
+sunucunun belirlenimci düzeni gösterilir. Düzyazı düzeninde sunucu eksik kapsamı kendi içeriğiyle tamamlar: çizilmeyen
+tablo, söylenmeyen zorunlu çekince ve bölümün asgari anlatımı sunucu paragrafı olarak eklenir; grafik sayısı ayrıntı
+sözleşmesiyle sınırlıdır. Bu normalleştirmelerin hiçbiri model metni eklemez.
+
+**Zorunlu çekince** (`caveatPropositions`): iş yükü kanıtı bütün atamaları temsil ettiğini kanıtlamadıysa
+(`data.populationComplete` false) sayfaya `required: true` bir önerme girer ("…yalnızca görebildiğiniz ve kişilere
+bağlanabilen açık işleri kapsıyor; bu nedenle iş yükünün dengeli olup olmadığı ya da en çok yükün kimde olduğu kesin
+olarak söylenemez"). Neden ve sayı söylenmez (gizli atamanın varlığı açıklanmaz). Her düzende söylenir.
+
+Denetimler dil anlamaz: sözcük listesi, çekim eki, sayı sözcüğü ya da niyet kalıbı yoktur; karakter sınıfı, büyük harf
+konumu, sunucunun kendi kayıt adlarıyla dize eşleşmesi ve yuva yapısı denetlenir. Kalan risk açıkça kabul edilir:
+modelin yuva ÖNCESİ çerçeve sözcükleri nitel bir yorum içerebilir (ör. "baskı altında"); bu yorum her zaman aynı
+cümledeki doğrulanmış olguyla birlikte, kalın değerler ve atıfla görünür ve olgu (sayı, ad, tarih) taşıyamaz.
+
+### 15.3 Kanonik takip durumu — `analysisContext.js`, `analysisPlan.js`
+
+- **Kalıtım:** `analysis.scope` `previous`/`row` olduğunda yazılmayan `focus`, `dateFrom`/`dateTo`, `visual`, `chart`
+  ve `table` sunucunun sakladığı önceki doğrulanmış analizden sürer (`resolveAnalysisBrief`). Zayıf model yalnızca
+  değişeni yazar ("Neden?" → `{"scope":"previous","act":"explain"}`). Görsel istek `visual:false` ile kapatılabilir.
+  Satır göndergesinde yeni öznede anlamsız yön (proje satırında "projelere göre") düşer; hiçbiri kalmazsa genel
+  değerlendirme yönleri kullanılır.
+- **Konuşma eylemi** (`analysis.act`: `explain`, `expand`, `summarize`, `prioritize`): modelin türlü kararıdır; okumayı
+  değil sunumu yönlendirir. Anlatım sayfası eylemi ve kullanıcının önceki sorusunu (`previousQuestion`, yalnızca
+  kullanıcının kendi metni) taşır; `expand` bu turu bir düzey ayrıntılı sunar (ayar değişmez).
+- **Açıklama korunur:** analitik plan bir ad belirsizliğiyle açıklamaya düşerse kabul edilmiş özet kimliksiz biçimde
+  (`pending`: kapsam, yönler, ufuk, görsel, grafik türü, adlar) saklanır. Numaralı seçimde sunucu aynı planı **model
+  turu açmadan** aynı doğrulamadan (bildirim, içerme, yetki, kanıt) yeniden yürütür; seçim "yalnızca kişiyi göster"e
+  dönüşmez.
+- **Yeniden yetki:** bağlam yalnızca göndergedir. Her takip, kimlikleri güncel yetkiyle yeniden okur; yönetim kapsamı
+  kaldırılmış kullanıcının `previous` takibi veri okumadan "yönetim kapsamınız bulunmuyor" yanıtını alır.
+- **Onarım daraltması:** şema sınırını aşan yön listesi (`$.analysis.focus:maxItems`) onarımda yalnızca modelin KENDİ
+  yönlerinin sıralı, boş olmayan alt kümesine daraltılabilir; kapsam/ad/ufuk değişemez, yeni yön eklenemez. İstek
+  bütçesi aşımı (karşılaştırma) eskisi gibi daraltılamaz.
+
+### 15.4 Ayrıntı sözleşmesi — `answerDetail.js`
+
+| | Kısa | Dengeli | Ayrıntılı |
+| --- | --- | --- | --- |
+| Bütünleyici okuma (sunucu) | — | — | +1 bölüm (kendi: projelere göre; ekip/proje: kişilere göre iş yükü; …) |
+| Sayfadaki önerme sınırı | 12 | 16 | 24 |
+| Bölüm başına anlatım (en az/en çok) | 1 / 2 | 3 / 6 | 6 / 14 |
+| Yapı (yönerge) | tek paragraf | 2–3 paragraf: sonuç, destek, karşıtlık | 3–5 paragraf: sonuç, etkenler, dağılım/karşılaştırma, zaman, emin olunamayanlar |
+| Grafik sınırı | 1 | 1 (+1 açık istekte) | 2 (+1 açık istekte) |
+| Anlatım çıktı bütçesi | 1200 | 1800 | 3000 |
+
+Fark yararlı içerikten gelir (daha geniş doğrulanmış okuma ve daha çok önerme); sözcük sayısı kuralı yoktur.
+
+### 15.5 Görsel niyet — `executionSet.js`, `groundedComposition.js`
+
+Plan düzeyinde `chart` (bar, donut, line, stacked, kpi, timeline) ve `table` alanları; tür verildiyse görselleştirme de
+istenmiştir. Tür, takipte ve açıklama sonrasında sürer. İstenen tür bütün bölümlerin adaylarında aranır; model aynı
+adayı başka türle seçtiyse biçim istenen türe çevrilir; tür söylenmediyse veri grafiği gösterge kartından önce gelir.
+İstenen tür doğrulanmış kanıtla çizilemiyorsa sessizce başka tür çizilmez: türün gerektirdiği veri ve gösterilen grafik
+not olarak söylenir ("Zaman çizelgesi için tarihli görev satırları gerekir; …").
+
+### 15.6 Sınamalar
+
+`test/ai-phase4e-quality-convergence.test.mjs`: düzyazı denetimi (rakam, ad, özel ad biçimi, işaretleme, sahte yuva,
+yan cümle sürdürme, cümle içi yönlendirme, ad lisansı), çizim (yuva büyük/küçük harf, sözcük yinelemesi), uçtan uca
+model düzyazısı, zorunlu çekince, Dengeli/Ayrıntılı farkı (okuma, bölüm, önerme, bütçe), takip kalıtımı ve eylemleri,
+açıklama sonrası yeniden yürütme (model turu yok), takipte yetki kaybı, grafik türü (halka, zaman çizelgesi, açıklama),
+rol matrisi (yönetici ≠ ekip lideri; lider + yönetici; sıradan kullanıcı), seyrek veri ve onarım daraltması.

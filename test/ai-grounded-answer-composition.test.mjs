@@ -9,6 +9,7 @@
  * önerme sayfasıyla BİR kez devredilir (zayıf modelin çıktısı taşınmaz), düzeltme turu yoktur; iptal
  * hiçbir şey yazmaz; günlük içerik taşımaz.
  */
+import { ANSWER_DETAIL_CONTRACT } from '../src/domain/ai/answerDetail.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
@@ -67,7 +68,9 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD.model, STANDARD.model], 'düzen Standart modelde kalır');
   const compose = stack.provider.calls[1];
   assert.ok(isCompositionCall(compose));
-  assert.deepEqual([compose.tools ?? [], compose.toolChoice ?? 'none', compose.maxOutputTokens], [[], 'none', COMPOSITION_RUNTIME.maxOutputTokens]);
+  // Anlatım turunun çıktı sınırı ayrıntı sözleşmesindendir (varsayılan Dengeli); profil sınırını hiçbir zaman aşmaz.
+  const composeBudget = Math.min(STANDARD.maxOutputTokens, Math.max(COMPOSITION_RUNTIME.maxOutputTokens, ANSWER_DETAIL_CONTRACT.balanced.maxOutputTokens));
+  assert.deepEqual([compose.tools ?? [], compose.toolChoice ?? 'none', compose.maxOutputTokens], [[], 'none', composeBudget]);
   assert.equal(compose.messages[0].content, compositionSystemPrompt(), 'sabit önek');
   assert.equal(compose.messages.length, 2, 'düzen turu konuşma geçmişini ve araç sonuçlarını yeniden göndermez');
   assert.equal(sheet.question, QUESTION);
@@ -83,7 +86,7 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   const [line] = turnLines(logs);
   assert.equal(turnLines(logs).length, 1, 'tek tamamlanma kaydı');
   assert.deepEqual({ ...line.context.presentation, ms: null }, { mode: 'composed', server: false, reason: null, issue: null, blocks: 4, said: 3, tables: 1, notes: 0, titled: false, chart: 'bar', charts: 1, ms: null, rejected: null });
-  assert.deepEqual(line.context.rounds.map((round) => [round.purpose, round.budget, round.calls]), [['plan', STANDARD.maxOutputTokens, 1], ['compose', COMPOSITION_RUNTIME.maxOutputTokens, 0]]);
+  assert.deepEqual(line.context.rounds.map((round) => [round.purpose, round.budget, round.calls]), [['plan', STANDARD.maxOutputTokens, 1], ['compose', composeBudget, 0]]);
   assert.equal(line.context.escalated, false);
   for (const secret of [QUESTION, 'Haftalık durum toplantısı', 'Radar test planı', String(AYSE), 'gecikmiş göreviniz']) {
     assert.equal(logs.some((text) => text.includes(secret)), false, `günlük içerik taşımaz: ${secret}`);

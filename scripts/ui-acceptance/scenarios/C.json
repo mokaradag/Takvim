@@ -1,0 +1,21 @@
+{
+ "profile": "C",
+ "port": 8103,
+ "appLog": "app-C.log",
+ "conversations": [
+  {
+   "name": "Yonetici-ekip-yok",
+   "detail": "balanced",
+   "turns": [
+    "Ekibimin mevcut iş yükünü değerlendir."
+   ]
+  },
+  {
+   "name": "Yonetici-projeler",
+   "detail": "balanced",
+   "turns": [
+    "Projelerimde genel durum nasıl?"
+   ]
+  }
+ ]
+}
