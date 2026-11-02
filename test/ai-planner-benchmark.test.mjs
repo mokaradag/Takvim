@@ -2942,7 +2942,7 @@ test('Claude varsayılan evi POSIX UID ile ayırır; açık ayar aynen korunur',
   assert.ok(fs.existsSync(path.join(configured, 'work')), 'açık ev ayarı yeniden adlandırılmaz');
 });
 
-test('109 final: forced retry parent budget covers lock and both child attempts while default stays unchanged', async (t) => {
+test('109 son: zorunlu yeniden denemenin üst süre bütçesi kilidi ve iki alt denemeyi kapsar ve varsayılanı korur', async (t) => {
   const childProcess = (await import('node:child_process')).default;
   const { syncBuiltinESMExports } = await import('node:module');
   const { EventEmitter } = await import('node:events');
@@ -2973,7 +2973,7 @@ test('109 final: forced retry parent budget covers lock and both child attempts 
     pending.then(() => { terminal = true; }, () => { terminal = true; });
     t.mock.timers.tick(retry ? original + 1 : original - 1);
     await new Promise(setImmediate);
-    assert.equal(terminal, false, 'valid completion remains alive through its supported execution path');
+    assert.equal(terminal, false, 'geçerli tamamlama desteklenen yürütme yolunda sonlandırılmaz');
     child.stdout.emit('data', Buffer.from('{"text":"ok"}'));
     finishFixtureCommand(child);
     assert.deepEqual(await pending, { text: 'ok' });

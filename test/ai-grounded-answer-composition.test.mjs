@@ -652,7 +652,7 @@ test('sunum telemetrisi yalnız teslim edilen kendi yanıtını ve grafiklerini 
   }
 });
 
-test('109 final: an accepted twelve-block model layout falls back to a shorter verified chart layout', async (t) => {
+test('109 son: kabul edilen on iki bloklu model düzeni daha kısa doğrulanmış grafik düzenine döner', async (t) => {
   const { buildComposition, validateComposition } = await import('../src/domain/ai/groundedComposition.js');
   const { composeGroundedAnswer } = await import('../src/server/ai/assistant/answerComposition.js');
   const { callRotaTools, PROJECTS } = await import('./helpers/aiToolFixtures.mjs');
@@ -679,7 +679,7 @@ test('109 final: an accepted twelve-block model layout falls back to a shorter v
     blocks.push(part < 3 ? { type: 'note', items: ids.slice(-1) } : { type: 'say', items: ids.slice(-1) });
     blocks.push(...[...tables.values()].filter((item) => item.part === part).map((item) => ({ type: 'rows', source: item.id })));
   }
-  assert.equal(blocks.length, 12, 'three titles, four paragraphs, three tables and two notes');
+  assert.equal(blocks.length, 12, 'üç başlık, dört paragraf, üç tablo ve iki not');
   const checked = validateComposition(composition, { blocks });
   assert.equal(checked.ok, true, JSON.stringify(checked.issues));
   const result = await composeGroundedAnswer({ session: { remainingMs: () => 120000, signal: new AbortController().signal,

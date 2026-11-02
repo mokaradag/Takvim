@@ -110,7 +110,7 @@ function previousBase(analysis, previous) {
     if (rows[0].type === 'project') {
       const parent = previous.rowPopulation || (['self', 'team', 'person'].includes(previous.scope) ? previous : null);
       if (parent) {
-        // Multiple projects under a person/team/self intersection have no faithful comparison representation.
+        // Kişi/ekip/kendi kesişimindeki birden çok proje, karşılaştırma sözleşmesiyle anlamı korunarak temsil edilemez.
         if (rows.length !== 1 || parent.scope === 'person' && parent.subjects.length !== 1) throw invalidArguments(['$.analysis.rows:scope']);
         const base = parent.scope === 'person' ? { filters: {}, entities: parent.subjects } : scopeBase(parent);
         return { scope: parent.scope, base: { filters: base.filters, entities: [...base.entities, ...entities] } };
@@ -347,7 +347,7 @@ export function analysisSuggestion(request) {
   const filters = { ...(request.filters && typeof request.filters === 'object' ? request.filters : {}), ...(tool === 'rota_workload_summary' ? { status: [...OPEN] } : {}) };
   const entities = Array.isArray(request.entities) ? request.entities.filter((entity) => entity && typeof entity === 'object') : [];
   const groupBy = request.population?.groupBy;
-  // Workload's implicit open-only population must be explicit in an equivalent analytics request.
+  // İş yükünün örtük açık görev nüfusu, eşdeğer analiz isteğinde açıkça belirtilmelidir.
   if (tool === 'rota_task_analytics' && groupBy === 'assignee'
     && !(Array.isArray(filters.status) && filters.status.length === OPEN.length && OPEN.every((status) => filters.status.includes(status)))) return null;
   const focus = tool === 'rota_workload_summary' ? 'workload' : tool === 'rota_portfolio_summary' ? 'projects'

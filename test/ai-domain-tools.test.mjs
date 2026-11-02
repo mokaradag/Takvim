@@ -1368,7 +1368,7 @@ test('üretim ekip SQL sözleşmesi her seçimde göreve, yöneticiye ve düzeye
   assert.match(sql, /FROM #AiTasks visible\s+JOIN dbo\.MR_Tasks t ON t\.TaskId = visible\.TaskId/);
 });
 
-test('109 final: revoking department membership invalidates evidence even with the same unit-visible employee', async (t) => {
+test('109 son: aynı çalışan birimden görünse de bölüm üyeliğinin kaldırılması kanıtı geçersiz kılar', async (t) => {
   const stack = stackFor(t, { executiveScope: ['UNIT', 'DEPARTMENT'].map((ScopeType) => ({ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP, ScopeType })) });
   const { result, context, ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'team', teamLevel: 'department', projectId: PROJECTS.FULL });
   assert.equal(result.ok, true);
@@ -1381,10 +1381,10 @@ test('109 final: revoking department membership invalidates evidence even with t
   assert.deepEqual([...await context.revalidateEvidence(entries, signal)], []);
   assert.equal(context.isEvidenceAuthorized(entries[0]), false);
   const current = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'team', teamLevel: 'unit', projectId: PROJECTS.FULL });
-  assert.equal(current.result.ok, true, 'unit relationship and project visibility still exist');
+  assert.equal(current.result.ok, true, 'birim ilişkisi ve proje görünürlüğü sürüyor');
 });
 
-test('109 final: team grouping keeps an unresolved member distinct from a visible external co-assignee', async (t) => {
+test('109 son: ekip gruplaması çözülemeyen üyeyi görünür dış eş sorumludan ayırır', async (t) => {
   const seed = rotaToolSeed();
   seed.tasks = seed.tasks.filter((row) => row.TaskId === TASKS.DUE_SOON);
   seed.taskAssignees = [{ TaskId: TASKS.DUE_SOON, Sicil: ZEYNEP }, { TaskId: TASKS.DUE_SOON, Sicil: MEHMET }];
@@ -1401,7 +1401,7 @@ test('109 final: team grouping keeps an unresolved member distinct from a visibl
   assert.equal(resolved.result.data.groups[0].key, `sicil:${ZEYNEP}`);
 });
 
-test('109 follow-up: authorization limits count employees while retaining all organizational memberships', async (t) => {
+test('109 takip: yetki sınırı çalışan sayısına uygulanır ve bütün kurumsal üyelikler korunur', async (t) => {
   const seed = rotaToolSeed();
   seed.projects = seed.projects.filter((project) => project.ProjectId === PROJECTS.FULL);
   seed.tasks = [];
@@ -1415,12 +1415,12 @@ test('109 follow-up: authorization limits count employees while retaining all or
   const { auth } = await context.authorization(signal);
   assert.deepEqual([...auth.scopeIdentities].sort(), [ZEYNEP, MEHMET].sort());
   const expected = seed.executiveScope.map((row) => JSON.stringify([row.EmployeeSicil, row.ScopeType])).sort();
-  assert.deepEqual(auth.scopeMemberships.map((item) => JSON.stringify(item)).sort(), expected, 'TOP must not truncate later memberships');
+  assert.deepEqual(auth.scopeMemberships.map((item) => JSON.stringify(item)).sort(), expected, 'TOP sonraki üyelikleri kesmemelidir');
   stack.db.executiveScope = stack.db.executiveScope.filter((row) => !(row.EmployeeSicil === ZEYNEP && row.ScopeType === 'UNIT'));
   await context.revalidateAuthorization(signal);
-  assert.equal(context.isEvidenceAuthorized(ledger.authorizationEntries()[0]), false, 'membership loss still invalidates evidence');
+  assert.equal(context.isEvidenceAuthorized(ledger.authorizationEntries()[0]), false, 'üyelik kaybı kanıtı geçersiz kılmaya devam eder');
   stack.db.executiveScope.push({ ManagerSicil: AYSE, EmployeeSicil: LEAD, ScopeType: 'UNIT' });
   const overflow = await callRotaTool(stack, AYSE, 'rota_task_analytics', {}, { limits });
   assert.equal(overflow.result.ok, false);
-  assert.equal(overflow.result.error.code, 'RESULT_TOO_LARGE', 'a genuinely excessive employee population still fails closed');
+  assert.equal(overflow.result.error.code, 'RESULT_TOO_LARGE', 'çalışan sınırı gerçekten aşıldığında erişim kapalı biçimde reddedilir');
 });

@@ -1055,8 +1055,8 @@ test('yedi günlük aciliyetin bağımsız ve birleşik tüm biçimleri bugünü
   }
 });
 
-test('109 final: project row follow-ups keep self and department populations and reauthorize them', async (t) => {
-  for (const scope of ['self', 'team']) await t.test(scope, async (t) => {
+test('109 son: proje satırı takibi kendi ve bölüm nüfuslarını korur ve yeniden yetkilendirir', async (t) => {
+  for (const scope of ['self', 'team']) await t.test(scope === 'self' ? 'kendi nüfusu' : 'ekip nüfusu', async (t) => {
     const seed = rotaToolSeed();
     seed.executiveScope = [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP, ScopeType: 'DEPARTMENT' }];
     const { ask, stack } = phase4eConversation(t, { seed, composition: false });
@@ -1077,8 +1077,8 @@ test('109 final: project row follow-ups keep self and department populations and
   });
 });
 
-test('109 final: numbered clarification restores the canonical analysis subject and reauthorizes it', async (t) => {
-  for (const revoke of [false, true]) await t.test(String(revoke), async (t) => {
+test('109 son: numaralı açıklama seçimi kanonik analiz öznesini geri yükler ve yeniden yetkilendirir', async (t) => {
+  for (const revoke of [false, true]) await t.test(revoke ? 'yetki kaldırılmış' : 'yetki geçerli', async (t) => {
     const { ask, stack } = phase4eConversation(t, { composition: false });
     const first = await ask({ text: 'Zeynep Kaya durumunu değerlendir', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'person', names: ['Zeynep Kaya'], focus: ['overview'] } } });
     assert.equal(first.answer.finishReason, 'stop');
@@ -1104,8 +1104,8 @@ test('109 final: numbered clarification restores the canonical analysis subject 
   });
 });
 
-test('109 final: analysis repair cannot change unaffected scope focus names window or visual intent', async (t) => {
-  for (const changed of ['scope', 'focus', 'names', 'dateFrom', 'visual', 'level', 'within']) await t.test(changed, async (t) => {
+test('109 son: analiz onarımı etkilenmeyen kapsamı odağı adları ufku veya görsel isteğini değiştiremez', async (t) => {
+  for (const changed of ['scope', 'focus', 'names', 'dateFrom', 'visual', 'level', 'within']) await t.test(({ scope: 'kapsam', focus: 'odak', names: 'adlar', dateFrom: 'başlangıç tarihi', visual: 'görsel istek', level: 'ekip düzeyi', within: 'proje daraltması' })[changed], async (t) => {
     const analysis = changed === 'names' ? { scope: 'person', names: ['Zeynep Kaya'], focus: ['overview'] }
       : { scope: 'team', level: 'department', within: 'Radar', focus: ['workload'], dateFrom: '2026-10-01', dateTo: '2026-10-31', visual: true };
     const alternative = { ...analysis, [changed]: { scope: 'all', focus: ['overview'], names: ['Ayşe Yılmaz'], dateFrom: '2026-10-02', visual: false, level: 'unit', within: 'Okuma' }[changed] };
@@ -1114,10 +1114,10 @@ test('109 final: analysis repair cannot change unaffected scope focus names wind
     const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
     const answer = await ask({ text: 'Radar ve Okuma; Zeynep Kaya ve Ayşe Yılmaz durumları' });
     assert.equal(answer.answer.finishReason, 'clarification');
-    assert.equal(answer.log.length, 0, 'changed brief never reaches protected reads');
-    assert.ok(answer.inputs.length >= 3, 'semantic replacement requires another decision');
+    assert.equal(answer.log.length, 0, 'anlamı değiştirilen özet korumalı okumaya ulaşamaz');
+    assert.ok(answer.inputs.length >= 3, 'anlam değişikliği için yeni bir karar gerekir');
   });
-  await t.test('only missing language repaired', async (t) => {
+  await t.test('yalnızca eksik dil alanı onarılır', async (t) => {
     const analysis = { scope: 'self', focus: ['overview'] };
     const plans = [{ intent: 'rota', analysis }, { intent: 'rota', language: 'tr', analysis }];
     const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
@@ -1125,7 +1125,7 @@ test('109 final: analysis repair cannot change unaffected scope focus names wind
   });
 });
 
-test('109 final: unsupported project focus never becomes a successful overview', async (t) => {
+test('109 son: desteklenmeyen proje odağı başarılı genel görünüme dönüştürülmez', async (t) => {
   const plans = [{ intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['Radar'], focus: ['projects'] } },
     { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['Radar'], focus: ['overview'] } },
     { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
@@ -1135,14 +1135,14 @@ test('109 final: unsupported project focus never becomes a successful overview',
   assert.equal(result.log.length, 0);
 });
 
-test('109 final: self workload keeps both accepted date bounds', () => {
+test('109 son: kendi iş yükü kabul edilen iki tarih sınırını da korur', () => {
   const analysis = parseAnalysis({ scope: 'self', focus: ['workload'], dateFrom: '2026-10-01', dateTo: '2026-10-31' });
   const [workload] = expandAnalysis(analysis, { today: '2026-10-15' });
   assert.equal(workload.filters.dateFrom, '2026-10-01');
   assert.equal(workload.filters.dateTo, '2026-10-31');
 });
 
-test('109 final: upcoming excludes the past side without changing the canonical window', () => {
+test('109 son: yaklaşan işler kanonik ufku değiştirmeden geçmiş terminleri dışarıda bırakır', () => {
   const analysis = parseAnalysis({ scope: 'self', focus: ['overdue', 'upcoming'], dateFrom: '2026-10-01', dateTo: '2026-10-31' });
   const [overdue, upcoming] = expandAnalysis(analysis, { today: '2026-10-15' });
   assert.equal(overdue.filters.deadline, 'overdue');
@@ -1153,14 +1153,14 @@ test('109 final: upcoming excludes the past side without changing the canonical 
   assert.equal(expandAnalysis(parseAnalysis({ scope: 'self', focus: ['upcoming'], dateTo: '2026-10-31' }), { today: '2026-10-15' })[0].filters.dateFrom, '2026-10-15');
 });
 
-test('109 final: assignee analytics repairs require exactly the workload open population', () => {
+test('109 son: sorumlu analizi onarımı iş yükünün açık görev nüfusuyla tam eşleşmelidir', () => {
   const base = { operation: 'list', metrics: ['person.name', 'tasks.open'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'assignee' } };
   assert.equal(analysisSuggestion(base), null);
   for (const status of [[], ['todo'], ['todo', 'in_progress', 'done']]) assert.equal(analysisSuggestion({ ...base, filters: { status } }), null);
   assert.match(analysisSuggestion({ ...base, filters: { status: ['in_progress', 'todo'] } }), /workload/);
 });
 
-test('109 final: qualification requires the exact Turkish-normalized name set', async () => {
+test('109 son: nitelendirme Türkçe kurallarla normalleştirilmiş ad kümesini tam olarak ister', async () => {
   const { plannerScore } = await import('../scripts/phase4e-qualification.mjs');
   const score = (names) => plannerScore({ outcome: 'planned', decisions: [{ intent: 'rota' }], plan: { requests: names.map((query) => ({ entities: [{ type: 'project', query }], filters: {}, population: { tool: 'rota_task_search' } })) } }, { intent: 'rota', scope: 'project', names: ['PAYKDM'] });
   assert.deepEqual(score(['paykdm']), []);
@@ -1168,7 +1168,7 @@ test('109 final: qualification requires the exact Turkish-normalized name set', 
   assert.ok(score(['PAY']).length);
 });
 
-test('109 final: qualification rejects a wrong window hidden beside a correct bounded read', async () => {
+test('109 son: nitelendirme doğru aralıklı okumanın yanındaki yanlış tarih aralığını reddeder', async () => {
   const { plannerScore } = await import('../scripts/phase4e-qualification.mjs');
   const request = (filters) => ({ entities: [], filters: { assignee: 'me', ...filters }, population: { tool: 'rota_task_search' } });
   const score = (requests) => plannerScore({ outcome: 'planned', decisions: [{ intent: 'rota' }], plan: { requests } }, { intent: 'rota', scope: 'self', window: ['2026-10-01', '2026-10-31'] });
@@ -1177,7 +1177,7 @@ test('109 final: qualification rejects a wrong window hidden beside a correct bo
   assert.ok(score([correct, request({ dateFrom: '2026-11-01', dateTo: '2026-11-30' })]).length);
 });
 
-test('109 final: comparison fixtures reject a missing second person or an extra person', () => {
+test('109 son: karşılaştırma sınamaları eksik ikinci kişiyi ve ek kişiyi reddeder', () => {
   const reads = (people) => ({ answer: { finishReason: 'stop' }, log: people.map((personSicil) => ({ query: 'task-facts', params: { personSicil, assigneeMode: 'person' } })) });
   const comparison = followups.chains.find((chain) => chain.id === 'H').turns[0].expect;
   assert.deepEqual(comparison.people, [AYSE, ZEYNEP]);
@@ -1186,8 +1186,8 @@ test('109 final: comparison fixtures reject a missing second person or an extra 
   assert.ok(turnViolations(reads([AYSE, ZEYNEP, MEHMET]), comparison).length);
 });
 
-test('109 final: null planner or composer behavior uses the fake provider empty behavior contract', async (t) => {
-  for (const mode of ['planner', 'compose']) await t.test(mode, async (t) => {
+test('109 son: boş planlayıcı veya düzenleyici davranışı sahte sağlayıcının boş davranış sözleşmesine uyar', async (t) => {
+  for (const mode of ['planner', 'compose']) await t.test(mode === 'planner' ? 'planlayıcı' : 'düzenleyici', async (t) => {
     const { ask } = phase4eConversation(t, mode === 'planner' ? { planner: () => null } : { compose: () => null });
     const result = await ask({ text: 'durumumu değerlendir', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] } } });
     assert.notEqual(result.answer.finishReason, 'error', result.answer.content);
@@ -1195,7 +1195,7 @@ test('109 final: null planner or composer behavior uses the fake provider empty 
   });
 });
 
-test('109 final: fractional stacked rows fill their track without altering displayed values', async () => {
+test('109 son: kesirli yığılmış satırlar gösterilen değerleri değiştirmeden çubuğu doldurur', async () => {
   const { renderToStaticMarkup } = await import('react-dom/server');
   const { createElement } = await import('react');
   const spec = normalizeAnswerChart({ version: 1, type: 'stacked', title: 'Fractions', locale: 'en', evidence: ['R1'], unit: 'number', series: ['A', 'B'],
@@ -1208,7 +1208,7 @@ test('109 final: fractional stacked rows fill their track without altering displ
   assert.equal(answerChartText(spec).includes('0.2\t0.3'), true);
 });
 
-test('109 final: segmented settings expose a labelled group and exactly one pressed choice', async (t) => {
+test('109 son: bölümlü ayarlar etiketli grup ve tam bir basılı seçenek bildirir', async (t) => {
   const { SettingsView } = await import('../src/features/settings/SettingsView.jsx');
   const { TWEAK_DEFAULTS } = await import('../src/lib/tweaks-defaults.js');
   const previous = globalThis.__MERGEN_ROTA_FEATURES__;
@@ -1235,7 +1235,7 @@ test('109 final: segmented settings expose a labelled group and exactly one pres
   assert.deepEqual(edits, [['assistantDetail', 'short']]);
 });
 
-test('109 final: short mode preserves explicit table plus chart while simplifying model-selected tables', async (t) => {
+test('109 son: kısa kip açık tablo ve grafik isteğini korurken modelin seçtiği tabloları sadeleştirir', async (t) => {
   const { verifyRequested } = await import('./helpers/requestScenario.mjs');
   const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { groupBy: 'status' });
@@ -1255,7 +1255,7 @@ test('109 final: short mode preserves explicit table plus chart while simplifyin
   }
 });
 
-test('109 final: fallback chart ranks analytical part before chart style', async () => {
+test('109 son: yedek grafik seçiminde analiz bölümü grafik türünden önce gelir', async () => {
   const { preferredChart } = await import('../src/domain/ai/groundedComposition.js');
   for (const first of ['bar', 'timeline', 'kpi']) {
     const charts = new Map([['G1', { id: 'G1', part: 1, types: [first] }], ['G2', { id: 'G2', part: 2, types: ['stacked'] }]]);
@@ -1265,8 +1265,8 @@ test('109 final: fallback chart ranks analytical part before chart style', async
   }
 });
 
-test('109 final: partial cited unavailable answers explain an unfulfilled chart request but pure unavailable does not', async (t) => {
-  for (const noEvidence of [false, true]) await t.test(String(noEvidence), async (t) => {
+test('109 son: kanıtlı kısmi kullanılamaz yanıt karşılanamayan grafik isteğini açıklar ancak kanıtsız yanıt açıklamaz', async (t) => {
+  for (const noEvidence of [false, true]) await t.test(noEvidence ? 'kanıt yok' : 'kısmi kanıt var', async (t) => {
     const { stack, ask } = phase4eConversation(t, { composition: false });
     stack.db.aiToolFailure = { get 'task-facts'() {
       return noEvidence || !stack.db.aiToolLog.at(-1)?.params.priorityCsv ? new Error('fixture unavailable') : null;
@@ -1280,7 +1280,7 @@ test('109 final: partial cited unavailable answers explain an unfulfilled chart 
   });
 });
 
-test('109 follow-up: fully past upcoming windows are rejected for direct previous and comparison populations', () => {
+test('109 takip: bütünüyle geçmiş yaklaşan iş ufku doğrudan önceki ve karşılaştırmalı nüfuslarda reddedilir', () => {
   const window = { dateFrom: '2026-09-21', dateTo: '2026-09-27' };
   const previous = normalizeAnalysisContext({ v: 1, scope: 'self', subjects: [], focus: ['upcoming'] });
   for (const subject of [{ scope: 'self' }, { scope: 'previous' }, { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'] },
@@ -1291,13 +1291,13 @@ test('109 follow-up: fully past upcoming windows are rejected for direct previou
     assert.ok(expandAnalysis(analysis, { today: null, previous }).every((request) => request.filters.dateFrom === window.dateFrom && request.filters.dateTo === window.dateTo));
   }
   const [pastSchedule] = expandAnalysis(parseAnalysis({ scope: 'self', focus: ['schedule'], ...window }), { today: '2026-09-30' });
-  assert.equal(pastSchedule.filters.dateFrom, window.dateFrom, 'a deliberately requested historical schedule remains representable');
+  assert.equal(pastSchedule.filters.dateFrom, window.dateFrom, 'açıkça istenen geçmiş takvim gösterimi temsil edilebilir durumda kalır');
   assert.equal(pastSchedule.filters.dateTo, window.dateTo);
   const [current] = expandAnalysis(parseAnalysis({ scope: 'self', focus: ['upcoming'], dateFrom: window.dateFrom, dateTo: '2026-10-04' }), { today: '2026-09-30' });
   assert.deepEqual([current.filters.dateFrom, current.filters.dateTo], ['2026-09-30', '2026-10-04']);
 });
 
-test('109 follow-up: a past-week previous-upcoming declaration cannot perform protected reads', async (t) => {
+test('109 takip: geçmiş haftaya yönelik önceki yaklaşan iş bildirimi korumalı okuma yapamaz', async (t) => {
   const plans = [{ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'] } },
     { intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['upcoming'], dateFrom: '2026-09-21', dateTo: '2026-09-27' } },
     { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
@@ -1309,12 +1309,12 @@ test('109 follow-up: a past-week previous-upcoming declaration cannot perform pr
   assert.match(systemText(result.inputs[1].messages), /\$\.analysis\.dateTo:past/);
 });
 
-test('109 follow-up: conversation qualification rejects every mismatched bounded read', () => {
+test('109 takip: konuşma nitelendirmesi aralığı uyuşmayan her sınırlı okumayı reddeder', () => {
   const read = (params) => ({ query: 'task-facts', params });
   const result = (log) => ({ log, answer: { finishReason: 'stop', content: '' } });
   const expect = { window: ['2026-10-01', '2026-10-07'] };
   const good = read({ dateFrom: '2026-10-01', dateTo: '2026-10-07' });
-  assert.deepEqual(turnViolations(result([read({}), good, good]), expect), [], 'unbounded overview and repeated correct reads are valid');
+  assert.deepEqual(turnViolations(result([read({}), good, good]), expect), [], 'aralıksız genel görünüm ve yinelenen doğru okumalar geçerlidir');
   for (const wrong of [{ dateFrom: '2026-10-08', dateTo: '2026-10-14' }, { dateFrom: '2026-10-01' }, { dateTo: '2026-10-07' }]) {
     assert.deepEqual(turnViolations(result([good, read(wrong)]), expect), ['ufuk 2026-10-01..2026-10-07 okunmadı']);
   }

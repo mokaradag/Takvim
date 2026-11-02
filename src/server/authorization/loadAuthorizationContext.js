@@ -32,7 +32,7 @@ function personFromRow(row) {
 }
 
 const transactionAuthorization = new WeakMap();
-// MR_V_ExecutiveScope has at most UNIT, DEPARTMENT and DIRECTORATE for each employee.
+// MR_V_ExecutiveScope, çalışan başına en çok UNIT, DEPARTMENT ve DIRECTORATE üyeliklerini döndürür.
 const MAX_MEMBERSHIPS_PER_EMPLOYEE = 3;
 
 /**

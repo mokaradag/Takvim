@@ -702,7 +702,7 @@ function pinRepair(turn, plan, details, calls = [], executionCalls = [], matched
 function pinAnalysisRepair(turn, plan, details) {
   if (!plan.analysis || typeof plan.analysis !== 'object' || Array.isArray(plan.analysis)) return;
   const existing = turn.repairPins.get('analysis');
-  // A rejected semantic replacement cannot loosen the original repair boundary.
+  // Reddedilen anlam değişikliği, başlangıçtaki onarım sınırını gevşetemez.
   if (existing && !analysisRepairMatches(turn, plan)) return;
   const paths = new Set(existing?.paths || []);
   for (const detail of details) {
@@ -719,8 +719,8 @@ function analysisRepairMatches(turn, plan) {
   const pin = turn.repairPins.get('analysis');
   if (!pin || [PLANNER_INTENTS.CLARIFY, PLANNER_INTENTS.ABSTAIN].includes(plan.intent)) return true;
   let analysis = plan.analysis;
-  // An invalid name may be replaced by the already canonical subject of the same scope and cardinality.
-  // This alias cannot add a prior project intersection or change a valid named subject.
+  // Geçersiz ad, aynı kapsamda ve aynı sayıda özne taşıyan mevcut kanonik göndergeyle değiştirilebilir.
+  // Bu eşleme önceki proje kesişimini ekleyemez veya geçerli adlı özneyi değiştiremez.
   const prior = turn.previousAnalysis;
   if (analysis?.scope === 'previous' && pin.paths.has('names') && prior?.scope === pin.raw.scope && !prior.within
     && prior.subjects.length === pin.raw.names?.length) analysis = { ...analysis, scope: prior.scope, ...(prior.level ? { level: prior.level } : {}) };
@@ -1621,7 +1621,7 @@ async function finish(turn, settled, onText, selectedBy = 'model', { compose = t
   await onText(finalText);
   const outcome = verdict.kind;
   const resultScope = completedResultScope(turn, verdict);
-  // A numbered selection resumes this canonical subject, never the old authorization or old evidence.
+  // Numaralı seçim kanonik özneyi sürdürür; eski yetkiyi veya eski kanıtı yeniden kullanmaz.
   const analysisContext = verdict.clarification && turn.presentationIntent?.analysis ? turn.previousAnalysis : completedAnalysisContext(turn, verdict);
   const evidenceRows = ledger.persistable(verdict.citedIds, { clarification: verdict.clarification || null, resultScope, analysisContext });
   const resultScopeOmitted = Boolean(resultScope) && !evidenceRows.some(row => JSON.parse(row.evidenceJson).resultScope);
@@ -2027,7 +2027,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
   let rejectedPlan = null;
   let repairMatched = false;
   const rejectDeclaration = (calls, rawDetails, rawHints = [], problems = null, executionCalls = calls) => {
-    // Expansion errors refer to the brief; repair still preserves every unaffected semantic field.
+    // Açılım hataları özete bağlanır; onarım, etkilenmeyen bütün anlam alanlarını korur.
     const analysisPlan = Boolean(rejectedPlan?.analysis);
     const details = analysisPlan ? analysisDetails(rawDetails || []) : rawDetails || [];
     // Reddedilen ayrıntılı isteğin türlü alanlarından (araç, sorumlu koşulu, varlıklar) eşdeğer analitik özet önerisi.

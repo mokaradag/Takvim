@@ -31,8 +31,8 @@ export function appendPrivateDiagnostic(path, record) {
   try {
     // Sanitize before opening or persisting. Existing traces are tightened too; symlink destinations are rejected.
     const line = `${JSON.stringify(diagnosticMetadata(record))}\n`;
-    // Node exposes Windows junctions as symbolic links. This preflight covers platforms without O_NOFOLLOW;
-    // it does not eliminate replacement races. Keep O_NOFOLLOW wherever the platform supports it.
+    // Node, Windows birleşim noktalarını simgesel bağlantı olarak bildirir; ön denetim O_NOFOLLOW olmayan platformları da kapsar.
+    // Yolun arada değiştirilmesi yarışını ortadan kaldırmaz; desteklenen platformlarda O_NOFOLLOW korunur.
     try { if (lstatSync(path).isSymbolicLink()) throw new Error('DIAGNOSTIC_SYMLINK'); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     const fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NONBLOCK || 0) | (constants.O_NOFOLLOW || 0), 0o600);

@@ -385,8 +385,8 @@ test('109: structurally valid compositions outside verdict citation scope retain
   });
 });
 
-test('109 final: incomplete workload cannot claim overdue coverage of the whole population', async (t) => {
-  for (const incomplete of [false, true]) await t.test(String(incomplete), async (t) => {
+test('109 son: eksik iş yükü nüfusun tamamı için gecikme kapsaması iddia edemez', async (t) => {
+  for (const incomplete of [false, true]) await t.test(incomplete ? 'eksik nüfus' : 'tam nüfus', async (t) => {
     const seed = completeWorkloadSeed([12, 11, 10]);
     if (incomplete) {
       const task = { ...seed.tasks[0], TaskId: '20000000-0000-4000-8000-000000000999' };
@@ -405,7 +405,7 @@ test('109 final: incomplete workload cannot claim overdue coverage of the whole 
   });
 });
 
-test('109 final: employees with the same display name never acquire false narrative coreference', async (t) => {
+test('109 son: görünen adı aynı çalışanlar anlatımda yanlış biçimde aynı kişi sayılmaz', async (t) => {
   const seed = completeWorkloadSeed([8, 2, 2]);
   for (const person of seed.people) if ([AYSE, LEAD].includes(person.Sicil)) person.DisplayName = 'Ali Yılmaz';
   seed.projects = seed.projects.filter((row) => row.ProjectId === PROJECTS.FULL);
@@ -423,10 +423,10 @@ test('109 final: employees with the same display name never acquire false narrat
   assert.doesNotMatch(JSON.stringify(joined), /de onda|also on this person/);
   assert.notEqual(selected[0].fluent.host, selected[1].fluent.follow.key);
   const same = { ...selected[1], fluent: { follow: { ...selected[1].fluent.follow, key: selected[0].fluent.host } } };
-  assert.match(JSON.stringify(fluentParagraph([selected[0], same].map((proposition) => ({ proposition })), 'tr')), /de onda/, 'positive control for the real fluent joining path');
+  assert.match(JSON.stringify(fluentParagraph([selected[0], same].map((proposition) => ({ proposition })), 'tr')), /de onda/, 'gerçek akıcı birleştirme yolu için olumlu denetim');
 });
 
-test('109 final: bookkeeping stays available for composition but out of fallback prose', async (t) => {
+test('109 son: iç izleme olguları düzenlemeye açık kalır ancak yedek düzyazıya sızmaz', async (t) => {
   const { verdict } = await workloadSheet(t);
   const fields = ['data.populationComplete', 'data.unrepresentedOpenTasks', 'data.unassignedOpenTasks'];
   assert.ok(fields.every((field) => verdict.presentation.facts.some((item) => item.fact.field === field)));
@@ -435,7 +435,7 @@ test('109 final: bookkeeping stays available for composition but out of fallback
   assert.doesNotMatch(verdict.normalized, /Değer:|tamlığı:|temsil edilmeyen|sorumlusuz açık/i);
 });
 
-test('109 final: link preflight protects diagnostic files on platforms without nofollow', async (t) => {
+test('109 son: bağlantı ön denetimi nofollow olmayan platformlarda tanı dosyalarını korur', async (t) => {
   const fs = (await import('node:fs')).default;
   const { syncBuiltinESMExports } = await import('node:module');
   const { appendPrivateDiagnostic } = await import('../scripts/private-diagnostic-trace.mjs');
@@ -448,6 +448,6 @@ test('109 final: link preflight protects diagnostic files on platforms without n
   syncBuiltinESMExports();
   try {
     assert.equal(appendPrivateDiagnostic('private-destination', {}), false);
-    assert.equal(opens, 0, 'reject link/junction before following or chmodding it');
+    assert.equal(opens, 0, 'bağlantıyı izlemeden veya izinlerini değiştirmeden önce simgesel bağlantıyı/birleşim noktasını reddet');
   } finally { Object.defineProperty(process, 'platform', platform); t.mock.restoreAll(); syncBuiltinESMExports(); }
 });
