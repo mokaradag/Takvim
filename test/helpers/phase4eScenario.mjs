@@ -80,8 +80,9 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.portfolio && !result.log.some((row) => row.query === 'portfolio')) problems.push('portföy okunmadı');
   // Ufuk: beklenen aralıkla örtüşen bir termin penceresi okunmuş olmalı (uçlarda en çok bir günlük yorum farkı kabul edilir).
   const day = (value) => Date.parse(`${String(value).slice(0, 10)}T00:00:00Z`) / 86400000;
-  if (expect.window && !reads.some((row) => row.params.dateFrom && row.params.dateTo
-    && Math.abs(day(row.params.dateFrom) - day(expect.window[0])) <= 1 && Math.abs(day(row.params.dateTo) - day(expect.window[1])) <= 1)) {
+  const bounded = reads.filter((row) => row.params.dateFrom || row.params.dateTo);
+  if (expect.window && (!bounded.length || !bounded.every((row) => row.params.dateFrom && row.params.dateTo
+    && Math.abs(day(row.params.dateFrom) - day(expect.window[0])) <= 1 && Math.abs(day(row.params.dateTo) - day(expect.window[1])) <= 1))) {
     problems.push(`ufuk ${expect.window.join('..')} okunmadı`);
   }
   if (expect.chart && !content.includes('```rota-chart') && !(live && /güvenle grafik çizilemedi|could not be drawn safely/.test(content))) problems.push('grafik yok');

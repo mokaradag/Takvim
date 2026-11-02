@@ -260,10 +260,10 @@ function focusRequest(focus, analysis, base, today = null) {
 
 /** Yalnızca üst sınırı verilen yaklaşan iş ufku bugünden başlar; bugün bilinmiyorsa ya da ufuk geçmişteyse reddedilir. */
 function upcomingFrom(window, today) {
+  if (today && window.dateTo && window.dateTo < today) throw invalidArguments(['$.analysis.dateTo:past']);
   if (window.dateFrom) return today && window.dateFrom < today && (!window.dateTo || window.dateTo >= today)
     ? { ...window, dateFrom: today } : window;
   if (!today) throw invalidArguments(['$.analysis.dateFrom:required']);
-  if (window.dateTo < today) throw invalidArguments(['$.analysis.dateTo:past']);
   return { dateFrom: today, ...window };
 }
 

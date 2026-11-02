@@ -1400,3 +1400,27 @@ test('109 final: team grouping keeps an unresolved member distinct from a visibl
   const resolved = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'team', groupBy: 'assignee' });
   assert.equal(resolved.result.data.groups[0].key, `sicil:${ZEYNEP}`);
 });
+
+test('109 follow-up: authorization limits count employees while retaining all organizational memberships', async (t) => {
+  const seed = rotaToolSeed();
+  seed.projects = seed.projects.filter((project) => project.ProjectId === PROJECTS.FULL);
+  seed.tasks = [];
+  seed.taskAssignees = [];
+  seed.executiveScope = [ZEYNEP, MEHMET].flatMap((EmployeeSicil) => ['UNIT', 'DEPARTMENT', 'DIRECTORATE'].map((ScopeType) => ({ ManagerSicil: AYSE, EmployeeSicil, ScopeType })));
+  const stack = createAiStack(t, { sicil: AYSE, seed });
+  const limits = { ...TOOL_LIMITS, maxAuthorizationRows: 2 };
+  const { result, context, ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', {}, { limits });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const signal = new AbortController().signal;
+  const { auth } = await context.authorization(signal);
+  assert.deepEqual([...auth.scopeIdentities].sort(), [ZEYNEP, MEHMET].sort());
+  const expected = seed.executiveScope.map((row) => JSON.stringify([row.EmployeeSicil, row.ScopeType])).sort();
+  assert.deepEqual(auth.scopeMemberships.map((item) => JSON.stringify(item)).sort(), expected, 'TOP must not truncate later memberships');
+  stack.db.executiveScope = stack.db.executiveScope.filter((row) => !(row.EmployeeSicil === ZEYNEP && row.ScopeType === 'UNIT'));
+  await context.revalidateAuthorization(signal);
+  assert.equal(context.isEvidenceAuthorized(ledger.authorizationEntries()[0]), false, 'membership loss still invalidates evidence');
+  stack.db.executiveScope.push({ ManagerSicil: AYSE, EmployeeSicil: LEAD, ScopeType: 'UNIT' });
+  const overflow = await callRotaTool(stack, AYSE, 'rota_task_analytics', {}, { limits });
+  assert.equal(overflow.result.ok, false);
+  assert.equal(overflow.result.error.code, 'RESULT_TOO_LARGE', 'a genuinely excessive employee population still fails closed');
+});

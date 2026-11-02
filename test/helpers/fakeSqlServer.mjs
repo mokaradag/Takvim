@@ -1390,7 +1390,9 @@ function runQuery(db, statement, params, { database }) {
         .map(({ EmployeeSicil, ScopeType }) => ({ EmployeeSicil, ...(memberships ? { ScopeType: ScopeType || 'UNIT' } : {}) }));
       sets.push([...new Map(rows.map((row) => [JSON.stringify(row), row])).values()].sort((a, b) => a.EmployeeSicil - b.EmployeeSicil));
     }
-    if (params.authorizationMaxRows) for (const index of [3, 4, 5]) if (sets[index]) sets[index] = sets[index].slice(0, params.authorizationMaxRows);
+    if (params.authorizationMaxRows) for (const index of [3, 4]) if (sets[index]) sets[index] = sets[index].slice(0, params.authorizationMaxRows);
+    const membershipLimit = params.authorizationMaxMemberships || params.authorizationMaxRows;
+    if (membershipLimit && sets[5]) sets[5] = sets[5].slice(0, membershipLimit);
     return result(sets);
   }
   if (sqlText.includes('CREATE TABLE #VisibleProjects')) {

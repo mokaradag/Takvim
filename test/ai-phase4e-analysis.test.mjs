@@ -1279,3 +1279,44 @@ test('109 final: partial cited unavailable answers explain an unfulfilled chart 
     assert.equal(result.answer.content.includes('```rota-chart'), false);
   });
 });
+
+test('109 follow-up: fully past upcoming windows are rejected for direct previous and comparison populations', () => {
+  const window = { dateFrom: '2026-09-21', dateTo: '2026-09-27' };
+  const previous = normalizeAnalysisContext({ v: 1, scope: 'self', subjects: [], focus: ['upcoming'] });
+  for (const subject of [{ scope: 'self' }, { scope: 'previous' }, { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'] },
+    { scope: 'project', names: ['Radar', 'Okuma'] }]) {
+    const analysis = parseAnalysis({ ...subject, focus: ['upcoming'], ...window });
+    assert.throws(() => expandAnalysis(analysis, { today: '2026-09-30', previous }),
+      (error) => error.details?.includes('$.analysis.dateTo:past'), JSON.stringify(subject));
+    assert.ok(expandAnalysis(analysis, { today: null, previous }).every((request) => request.filters.dateFrom === window.dateFrom && request.filters.dateTo === window.dateTo));
+  }
+  const [pastSchedule] = expandAnalysis(parseAnalysis({ scope: 'self', focus: ['schedule'], ...window }), { today: '2026-09-30' });
+  assert.equal(pastSchedule.filters.dateFrom, window.dateFrom, 'a deliberately requested historical schedule remains representable');
+  assert.equal(pastSchedule.filters.dateTo, window.dateTo);
+  const [current] = expandAnalysis(parseAnalysis({ scope: 'self', focus: ['upcoming'], dateFrom: window.dateFrom, dateTo: '2026-10-04' }), { today: '2026-09-30' });
+  assert.deepEqual([current.filters.dateFrom, current.filters.dateTo], ['2026-09-30', '2026-10-04']);
+});
+
+test('109 follow-up: a past-week previous-upcoming declaration cannot perform protected reads', async (t) => {
+  const plans = [{ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'] } },
+    { intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['upcoming'], dateFrom: '2026-09-21', dateTo: '2026-09-27' } },
+    { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
+  const { ask } = phase4eConversation(t, { composition: false, planner: () => planCall(plans.shift()) });
+  assert.equal((await ask({ text: 'yaklaşan işlerim' })).answer.finishReason, 'stop');
+  const result = await ask({ text: 'peki geçen hafta?' });
+  assert.equal(result.answer.finishReason, 'clarification');
+  assert.deepEqual(result.log, []);
+  assert.match(systemText(result.inputs[1].messages), /\$\.analysis\.dateTo:past/);
+});
+
+test('109 follow-up: conversation qualification rejects every mismatched bounded read', () => {
+  const read = (params) => ({ query: 'task-facts', params });
+  const result = (log) => ({ log, answer: { finishReason: 'stop', content: '' } });
+  const expect = { window: ['2026-10-01', '2026-10-07'] };
+  const good = read({ dateFrom: '2026-10-01', dateTo: '2026-10-07' });
+  assert.deepEqual(turnViolations(result([read({}), good, good]), expect), [], 'unbounded overview and repeated correct reads are valid');
+  for (const wrong of [{ dateFrom: '2026-10-08', dateTo: '2026-10-14' }, { dateFrom: '2026-10-01' }, { dateTo: '2026-10-07' }]) {
+    assert.deepEqual(turnViolations(result([good, read(wrong)]), expect), ['ufuk 2026-10-01..2026-10-07 okunmadı']);
+  }
+  assert.deepEqual(turnViolations(result([read({})]), expect), ['ufuk 2026-10-01..2026-10-07 okunmadı']);
+});
