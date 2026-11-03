@@ -2201,15 +2201,21 @@ Güven sınırı değişmez: kimlik, yetki, SQL, hesap, kanıt seçimi ve açık
 ### 15.2 Kanıta bağlı anlatım yüzeyi — `src/domain/ai/groundedProse.js`
 
 Modelin metninde rakam bulunmaması olgusallık kanıtı değildir: yazıyla sayılar, tarihler, çoğunluk ve karşılaştırma
-iddiaları aynı güven sınırını aşabilir. Bu nedenle serbest sözcükler doğrulanmış yanıtın parçası sayılmaz.
-`{"type":"say","text":"Genel tabloya bakınca {P1}. Ayrıca {P2}."}` yalnızca yerleşim seçimidir. Her cümle tam bir
-sunucu önermesi (`P#`) ya da sunucu yönlendirmesidir (`T#`, `G#`). İsteğe bağlı geçiş, `PROSE_CONNECTORS` içindeki
-kapalı ve tarafsız sunucu dizgelerinden aynen seçilir; modelin gönderdiği sözcükler doğrudan çizilmez.
+iddiaları aynı güven sınırını aşabilir. Bağlaç da bir ilişki iddiasıdır ("öte yandan" karşıtlık söyler). Bu nedenle
+modelin yuva dışındaki HİÇBİR metni çizilmez. `{"type":"say","text":"{P2} {P3} {P5}"}` yalnızca önermelerin seçimi,
+sırası ve paragraf sınırıdır; model sözcük yazarsa (eski sözleşmenin bağlaçları dahil) sözcükler atılır ve gözlemde
+`prose.dropped` ile sayılır, olgusallıkları kestirilmez.
 
-Sözlük dışı paragraf reddedilir. Geçerli bölüm kalmadıysa sunucunun akıcı, belirlenimci anlatımı gösterilir.
-Bu bir anlamsal doğrulayıcı, sayı sözcüğü kara listesi veya dil sezgisi değildir. Kısa kayıt adları, noktalama,
-Markdown/atıf işaretleri ve tekrar eden `x` adları yeni bir metin maskeleme döngüsü açmaz. Bütün olgusal metin ve
-kayıt adları sunucudan gelir; önerme parçaları da kaçışlanır.
+Cümleleri sunucu kurar: paragrafın önermeleri `fluentParagraph` ile, yalnızca AYNI kanıtın önermeleri arasında
+doğrulanmış bağlarla birleşir (sayımın ardından ortalama ya da pay, aynı sütunun iki ucu, olumlu durumun ardından
+dikkat noktası, aynı öznenin yakın termini). "Bunların" göndergesi yalnızca hemen önceki aynı kanıtın cümlesine bağlanır.
+Öneri cümlesi en uzun gecikmeli görevi, gününü ve en uzun olduğunu söylediyse aynı kanıt, ad ve günü taşıyan uç cümlesi
+yanıtın sonraki paragraflarında yinelenmez. Özneli (kişi/proje) analist cümleleri başka öznenin cümlesine eklenmez.
+Model paragrafı iki bölümün önermelerini karıştırırsa paragraf bölüm sınırında bölünür (kimlik paragrafı önceki gibi
+`PART_MIXED` ile reddedilir); başlık yalnızca bölümler ardışıksa konur.
+
+Bilinmeyen ya da yinelenen yuva paragrafı reddeder. Geçerli bölüm kalmadıysa sunucunun akıcı, belirlenimci anlatımı
+gösterilir. Bütün olgusal metin ve kayıt adları sunucudan gelir.
 
 Bir paragrafın bütün önermeleri aynı bölüme aittir. Ayrıntılı bölüm başlığının altında başka bölümün olgusu
 bulunamaz. Bölümler arası sonuç ancak sunucunun ürettiği ve bölümünü açıkça belirttiği sentez önermesidir.

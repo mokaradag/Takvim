@@ -188,9 +188,26 @@ async function groupedPage(t, options = {}) {
 test('başlığın altına karışık bölüm önermeleri yerleştirilemez', async (t) => {
   const { page } = await groupedPage(t, { detail: 'detailed' });
   const ids = [1, 2].map((part) => page.view.propositions.find((item) => item.part === part).id);
-  const result = validateComposition(page, { blocks: [{ type: 'say', text: `{${ids[0]}}. Ayrıca {${ids[1]}}.` }, ...page.view.tables.map((table) => ({ type: 'rows', source: table.id }))] });
-  assert.equal(result.ok, false);
-  assert.deepEqual(result.issues, ['PART_MIXED']);
+  const rows = page.view.tables.map((table) => ({ type: 'rows', source: table.id }));
+  // Kimlik paragrafı karışık bölümü reddeder.
+  const listed = validateComposition(page, { blocks: [{ type: 'say', items: ids }, ...rows] });
+  assert.equal(listed.ok, false);
+  assert.deepEqual(listed.issues, ['PART_MIXED']);
+  // Modelin düzyazısı bölüm sınırında bölünür: her paragraf tek bölümdür ve her başlığın altındaki bloklar yalnızca o bölümündür.
+  const result = validateComposition(page, { blocks: [{ type: 'say', text: `{${ids[0]}}. Ayrıca {${ids[1]}}.` }, ...rows] });
+  assert.equal(result.ok, true, JSON.stringify(result.issues));
+  const { render } = page;
+  const partOf = (block) => (block.type === 'say' || block.type === 'note' ? render.propositions.get(block.items.find((id) => render.propositions.has(id)))?.part
+    : block.type === 'rows' ? render.tables.get(block.source).part : block.type === 'chart' ? render.charts.get(block.source).part : render.details.get(block.source)?.part);
+  const itemPart = (id) => render.propositions.get(id)?.part ?? render.tables.get(id)?.part ?? render.charts.get(id)?.part;
+  const says = result.blocks.filter((block) => block.type === 'say');
+  for (const block of says) assert.equal(new Set(block.items.map(itemPart)).size, 1, `karışık paragraf: ${JSON.stringify(block.items)}`);
+  assert.ok(says.some((block) => block.items.includes(ids[0])) && says.some((block) => block.items.includes(ids[1])));
+  let titled = null;
+  for (const block of result.blocks) {
+    if (block.type === 'title') titled = render.titles.get(block.source).part;
+    else if (titled != null) assert.equal(partOf(block), titled, `başlığın altında başka bölüm: ${JSON.stringify(block)}`);
+  }
 });
 
 test('istenen grafik eklenirken önceki grafikler bütçeyi doldursa da son çizimde istenen tür kalır', async (t) => {
@@ -376,8 +393,10 @@ test('kesinlikte kayıt adının harfleri cümle başında ve bağlaçtan sonra 
       const checked = validateComposition(page, { blocks: [{ type: 'say', text: `${connector}{${certainty.id}}.` }, ...page.view.tables.map((table) => ({ type: 'rows', source: table.id }))] });
       assert.equal(checked.ok, true, JSON.stringify(checked.issues));
       const content = renderComposition(page, checked).text;
+      // Modelin bağlacı çizilmez; kayıt adı cümle başında harfleri değişmeden kalır.
+      assert.doesNotMatch(content, /Ayrıca/u);
       if (name === '[Ad](bağ) 【R99】') assert.doesNotMatch(content, /\[Ad\]\(bağ\)|【R99】/u);
-      else assert.ok(content.includes(`${connector}${name} projesindeki`), content);
+      else assert.ok(content.includes(`${name} projesindeki`), content);
     }
   }
 });

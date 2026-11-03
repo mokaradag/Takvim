@@ -1,14 +1,16 @@
 /**
- * Kanıt yuvalarının kapalı anlatım sözleşmesi. Model önerme sırasını ve paragraf sınırlarını seçer.
- * Serbest sözcükler doğrulanmış olgu sayılmaz: yalnızca sunucunun aşağıdaki tarafsız geçişlerinden biri seçilebilir.
- * Bu bir olgusallık kestirimi değildir; sözlük dışı metin reddedilir ve çağıran belirlenimci kanıt anlatımını kullanır.
+ * Kanıt yuvalarının kapalı anlatım sözleşmesi.
+ *
+ * Model paragrafta yalnızca hangi sunucu önermelerinin (`{P#}`) ve yönlendirmelerinin (`{T#}`, `{G#}`) hangi sırayla
+ * söyleneceğini seçer. Yuva dışındaki HİÇBİR model metni çizilmez: ne serbest sözcük ne de bağlaç. Bağlaç da bir ilişki
+ * iddiasıdır ("öte yandan" karşıtlık söyler); ilişkiyi yalnızca sunucu, aynı kanıtın önermeleri arasında doğrulayarak
+ * kurar (groundedPropositions.js § fluentParagraph). Yuva dışı metin bu yüzden yorumlanmaz, ayıklanmaz ya da olgusallığı
+ * kestirilmez: yalnızca atılır ve sayılır. Kullanıcıya ulaşan her sözcük sunucunundur.
  */
 export const PROSE_LIMITS = Object.freeze({ maxChars: 2400, maxSentences: 8 });
-export const PROSE_CONNECTORS = Object.freeze({
-  tr: Object.freeze(['', 'Genel tabloya bakınca', 'Bunun yanında', 'Öte yandan', 'Ayrıca', 'Buna ek olarak', 'Son olarak']),
-  en: Object.freeze(['', 'Looking at the evidence', 'In addition', 'Also', 'Finally'])
-});
 const SLOT = /\{([PTG][1-9][0-9]?)\}/gu;
+/** Yuvaları ayıran boşluk ve noktalama atılan metin sayılmaz (gözlem sayacı yalnızca sözcük taşıyan parçaları sayar). */
+const SEPARATOR = /^[\s.,;:]*$/u;
 const fail = (issue) => ({ ok: false, issue });
 
 /** Yalnızca kapalı yuva söz dizimini ayrıştırır; doğal dil yorumlamaz. */
@@ -25,98 +27,34 @@ export function tokenizeProse(text) {
   return { ok: true, tokens };
 }
 
-/** Her cümle, sunucu geçişi ve tek bir tam önerme ya da yönlendirmedir. */
-export function checkProse(text, { known, locale = 'tr', used = new Set() }) {
+/**
+ * Paragrafın yuva dizisini çıkarır. Bilinmeyen ya da yinelenen yuva paragrafı reddeder; yuva dışı metin çizime hiç
+ * girmez ve `dropped` ile (çizilmeyen sözcüklü parça sayısı) raporlanır. Her yuva kendi tek öğeli cümlesidir; cümle
+ * kurulumu ve birleştirme sunucunundur.
+ * @returns {{ ok: true, ids: string[], sentences: { slot: string }[][], dropped: number, cut: 0, issues: [] } | { ok: false, issue: string }}
+ */
+export function checkProse(text, { known, used = new Set() }) {
   const parsed = tokenizeProse(text);
   if (!parsed.ok) return parsed;
-  const connectors = PROSE_CONNECTORS[locale === 'en' ? 'en' : 'tr'];
   const seen = new Set(used);
-  const sentences = [];
-  let lead = '';
+  const ids = [];
+  let dropped = 0;
   for (const token of parsed.tokens) {
-    if (token.text != null) { lead += token.text; continue; }
-    const connector = lead.trim().replace(/^[.;]\s*/u, '');
-    if (!connectors.includes(connector) || token.slot[0] !== 'P' && connector) return fail('PROSE_UNTRUSTED');
+    if (token.text != null) {
+      if (!SEPARATOR.test(token.text)) dropped += 1;
+      continue;
+    }
     if (!known(token.slot)) return fail('UNKNOWN_PROPOSITION');
     if (seen.has(token.slot)) return fail('DUPLICATE_PROPOSITION');
     seen.add(token.slot);
-    // Bağlaç sunucunun sabit dizgesinden alınır; modelin gönderdiği metin çizime taşınmaz.
-    sentences.push([...(connector ? [{ text: `${connectors[connectors.indexOf(connector)]} ` }] : []), { slot: token.slot }, { text: '.' }]);
-    lead = '';
+    ids.push(token.slot);
   }
-  if (lead.trim() && lead.trim() !== '.') return fail('PROSE_UNTRUSTED');
-  if (!sentences.length) return fail('PROSE_UNGROUNDED');
-  if (sentences.length > PROSE_LIMITS.maxSentences) return fail('PROSE_LENGTH');
-  return { ok: true, ids: sentences.flatMap((sentence) => sentence.filter((token) => token.slot).map((token) => token.slot)), sentences, dropped: 0, cut: 0, issues: [] };
+  if (!ids.length) return fail('PROSE_UNGROUNDED');
+  if (ids.length > PROSE_LIMITS.maxSentences) return fail('PROSE_LENGTH');
+  return { ok: true, ids, sentences: ids.map((slot) => [{ slot }]), dropped, cut: 0, issues: [] };
 }
 
-/** Sunucu metniyle başlayan yan cümlenin ilk harfi; veriyle (kayıt adı) başlayan yan cümle değiştirilmez. */
-function caseHead(text, upper, locale) {
-  const tag = locale === 'en' ? 'en-US' : 'tr-TR';
-  const first = text.charAt(0);
-  return `${upper ? first.toLocaleUpperCase(tag) : first.toLocaleLowerCase(tag)}${text.slice(1)}`;
-}
-
-/**
- * Önermenin yuva biçimi (son nokta düşer, değerler vurgulu ve kaçışlı). Cümle başındaki yuvanın sunucu metni büyük,
- * cümle içindeki küçük harfle başlar; kayıt adıyla başlayan önerme hiç değiştirilmez.
- */
-export function propositionClause(proposition, { initial, locale, escape }) {
-  const parts = Array.isArray(proposition.parts) ? proposition.parts : null;
-  if (!parts?.length) {
-    const markdown = String(proposition.markdown || '').trim();
-    return markdown.endsWith('.') ? markdown.slice(0, -1) : markdown;
-  }
-  const trimmed = [...parts];
-  const last = trimmed.at(-1);
-  if (typeof last === 'string' && last.endsWith('.')) trimmed[trimmed.length - 1] = last.slice(0, -1);
-  return trimmed.map((part, index) => {
-    if (typeof part !== 'string') return part.strong ? `**${escape(part.value)}**` : escape(part.value);
-    return escape(index === 0 ? caseHead(part, initial, locale) : part);
-  }).join('');
-}
-
-/**
- * Doğrulanmış cümleleri Markdown paragrafına çevirir. Modelin sözcükleri kaçışlı düz metindir (vurgu taşımaz);
- * vurgulu her değer sunucunun yuvasından gelir. Yönlendirme yuvası (`{T#}`, `{G#}`) sunucunun kendi cümlesidir.
- */
-export function renderProse(sentences, { proposition, pointer, locale, escape, escapeText = escapeProseText }) {
-  const out = [];
-  for (const sentence of sentences) {
-    let text = '';
-    let initial = true;
-    const pointers = [];
-    for (const token of sentence) {
-      if (token.slot) {
-        const item = proposition(token.slot);
-        if (item) {
-          const clause = propositionClause(item, { initial, locale, escape });
-          text += clause;
-        }
-        else pointers.push(token.slot);
-        initial = false;
-        continue;
-      }
-      const words = token.text;
-      text += escapeText(words);
-      if (words.trim()) initial = /[.!?…]\s*$/u.test(words.trim()) ? true : false;
-    }
-    const cleaned = text.replace(/\s+/gu, ' ').replace(/\s+([,;:.!?)])/gu, '$1').trim();
-    const bare = cleaned.replace(/[\s,;:–—-]+$/u, '');
-    if (bare && /[\p{L}\p{N}*]/u.test(bare)) out.push(/[.!?…)"”]$/u.test(bare) ? bare : `${bare}.`);
-    for (const id of pointers) { const sentenceText = pointer(id); if (sentenceText) out.push(sentenceText); }
-  }
-  return out.join(' ');
-}
-
-/**
- * Modelin metni Markdown taşıyamaz (izin listesi işaret karakterlerini dışlar); yine de kaçışlanır. Paragraf başındaki
- * tire liste açamaz.
- */
-export function escapeProseText(text) {
-  return String(text).replace(/([\\`*_{}[\]#+|<>~])/gu, '\\$1');
-}
-
-export function proseParagraph(markdown) {
-  return /^[-–—]/u.test(markdown) ? `\\${markdown}` : markdown;
+/** Yuva dizisinin kanonik metni: yeniden doğrulamada modelin atılan sözcükleri taşınmaz. */
+export function proseText(ids) {
+  return ids.map((id) => `{${id}}`).join(' ');
 }

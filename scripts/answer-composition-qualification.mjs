@@ -273,6 +273,8 @@ export async function runCase(t, item, { providerOptions = {}, report = summary 
       if (presentation?.mode !== 'composed') failures.push('CONTEXT_TURN_FAILED');
     } else if (item.requiresComposition) {
       if (composed.length !== 1 || presentation?.mode !== 'composed') failures.push('COMPOSITION_REQUIRED');
+      // Analitik yanıtın sunucu düzeni de "composed" kipinde raporlanır: model düzeni yerine geri dönüş başarı sayılmaz.
+      if (presentation?.server === true) failures.push('SERVER_FALLBACK');
       if (turn.say && !(presentation?.said > 0)) failures.push('NARRATION_REQUIRED');
       // Zengin kanıt zengin anlatım ister: sayfada önerme varsa en az üçü (azsa hepsi) söylenir; 4C görünümü geçmez.
       const available = composed[0]?.propositions ?? 0;

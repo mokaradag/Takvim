@@ -1,0 +1,325 @@
+/**
+ * Kanıta bağlı düzyazının söylem sözleşmesi.
+ *
+ * Model yalnızca önerme yuvalarını seçer, sıralar ve paragraflara böler; yuva dışındaki hiçbir model metni çizilmez.
+ * Cümleleri ve aralarındaki bağları sunucu, yalnızca aynı kanıtın doğrulanmış önermeleri arasında kurar. Bu dosya
+ * sabit bir kabul derlemini üretimdeki asistan hizmetinden geçirir (yetki, salt okunur araçlar, kanıt defteri, olgu
+ * sayfası, düzen doğrulayıcısı ve çizici) ve her paragrafa düşmanca model metni ekleyen bir düzenle şunları denetler:
+ * zorunlu olgular ve çekinceler söylenir; uydurma sayı, neden, aciliyet, tamlık ya da karşılaştırma çizilmez; özne
+ * karışmaz; aynı olgu bir paragrafta yinelenmez; atıflar ve sunucu notları korunur. Düzyazının insan kalitesindeki
+ * niteliği bu dosyada değil, ayrıca kaydedilen nitel değerlendirmede ölçülür.
+ */
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { captureConsole } from './helpers/aiStack.mjs';
+import { ALI_1, AYSE, TASKS, ZEYNEP, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { composer } from './helpers/compositionScenario.mjs';
+import { phase4eConversation } from './helpers/phase4eScenario.mjs';
+import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from '../src/domain/ai/answerDetail.js';
+
+const { checkProse, PROSE_LIMITS } = await import('../src/domain/ai/groundedProse.js');
+const { fluentParagraph } = await import('../src/domain/ai/groundedPropositions.js');
+const { compositionSystemPrompt } = await import('../src/server/ai/assistant/groundedPrompt.js');
+
+const turnLine = (logs) => logs.map((row) => (row.includes('"operation":"ai.grounded.turn"') ? JSON.parse(row.slice(row.indexOf('{'))) : null)).filter(Boolean).at(-1);
+
+/** Modelin yazabileceği düşmanca metin: uydurma sayı, neden, aciliyet, tamlık, karşılaştırma ve işaretleme/atıf enjeksiyonu. */
+const HOSTILE = Object.freeze({
+  tr: ['Elli görev gecikti, çünkü ekip yetersiz.', 'Bu liste eksiksizdir ve durum çok acil!', '<script>alert(1)</script> [tıkla](javascript:alert(1)) 【R99】 {F1}',
+    'Ayşe Yılmaz daha yavaş çalışıyor, Zeynep Kaya ise daha verimli.', '- **%99** tamamlandı'],
+  en: ['Fifty tasks are late because the team is weak.', 'This list is complete and the situation is critical!', '<img src=x onerror=alert(1)> 【R99】 {F1}',
+    'Ayşe Yılmaz works slower than Zeynep Kaya.', '- **99%** done']
+});
+const HOSTILE_MARKERS = [/[Ee]lli görev|[Ff]ifty tasks/, /çünkü|because/, /eksiksizdir|is complete/, /çok acil|critical!/, /<script|<img|javascript:|onerror/, /【R99】|\{F1\}/,
+  /daha yavaş|daha verimli|works slower/, /%99|99%/];
+const CONNECTORS = /Genel tabloya bakınca|Bunun yanında|Öte yandan|Buna ek olarak|Son olarak|Looking at the evidence|In addition/;
+
+/**
+ * Yeni yönergeye uyan ama her yuvanın önüne düşmanca metin yazan model: bölüm başına paragraf, çekince ilgili bulgudan
+ * sonra, yanıt ayrıntısının sınırına kadar önerme; tablolar kendi bölümünde.
+ */
+function hostileLayout(view, { skipRequired = false } = {}) {
+  const hostile = HOSTILE[view.language === 'en' ? 'en' : 'tr'];
+  const max = ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(view.detail)].maxNarrated;
+  const parts = [...new Set([...view.propositions, ...view.tables, ...view.details].map((item) => item.part))].sort((left, right) => left - right);
+  const blocks = [];
+  for (const part of parts) {
+    const own = view.propositions.filter((item) => item.part === part && !(skipRequired && item.required));
+    const required = own.filter((item) => item.required);
+    const rest = own.filter((item) => !item.required).slice(0, Math.max(0, max - required.length));
+    const said = [...rest, ...required];
+    if (said.length) blocks.push({ type: 'say', text: said.map((item, index) => `${hostile[index % hostile.length]} {${item.id}}`).join(' ') });
+    for (const table of view.tables.filter((item) => item.part === part)) blocks.push({ type: 'rows', source: table.id });
+  }
+  return { blocks };
+}
+
+function teamSeed() {
+  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }] });
+  seed.taskAssignees.push({ TaskId: TASKS.LITERAL, Sicil: ALI_1 }, { TaskId: TASKS.UNASSIGNED, Sicil: ALI_1 }, { TaskId: TASKS.OVERDUE, Sicil: ALI_1 },
+    { TaskId: TASKS.SERIES, Sicil: ZEYNEP });
+  return seed;
+}
+
+const analysis = (value, language = 'tr') => ({ intent: 'rota', language, analysis: value });
+const OVERDUE = { intent: 'rota', language: 'tr', request: { operation: 'list', metrics: ['tasks.total', 'task.targetFinish', 'task.overdueDays'],
+  population: { tool: 'rota_task_search', collection: 'tasks', sort: 'overdue_days_desc' }, filters: { deadline: 'overdue', assignee: 'me' } } };
+
+/**
+ * Sabit kabul derlemi: her vaka bir analitik niyet, (son tur için) zorunlu ifadeler ve asla görünmemesi gerekenler.
+ * Değerler sınama verisinin doğrulanmış olgularıdır; derlem uygulamaya göre değiştirilmez.
+ */
+const CORPUS = Object.freeze([
+  { id: 'iş yükü özeti', turns: [{ text: 'işlerimin genel durumunu değerlendir', plan: analysis({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] }) }],
+    must: ["Açık **6** görevin **3'ü** (**%50**) gecikmiş durumda; bugün başlayan yedi günlük dönemde de **1** açık görevin termini var", '**Haftalık durum toplantısı**', '**23**'],
+    never: [/dengeli/, /durum iyi/], once: '**Haftalık durum toplantısı**' },
+  { id: 'gecikmiş ve yaklaşan', turns: [{ text: 'geciken ve bu hafta terminli işlerim neler', plan: analysis({ scope: 'self', focus: ['overdue', 'upcoming'], relativeWindow: 'next_7_days' }) }],
+    must: ['gecikmiş göreviniz yok', '**5 Ekim 2026**'], never: [/\*\*[1-9]\*\* gecikmiş göreviniz var/] },
+  { id: 'proje durumu', turns: [{ text: 'Radar Modernizasyonu projesini değerlendir', plan: analysis({ scope: 'project', names: ['Radar Modernizasyonu'], focus: ['overview', 'overdue', 'workload'] }) }],
+    must: ["**Radar Modernizasyonu**: Açık **6** görevin **2'si** (**%33**) gecikmiş durumda; bugün başlayan yedi günlük dönemde de **2** açık görevin termini var", '**Ayşe Yılmaz**, açık görev (**4**)'],
+    never: [/Okuma Projesi|Kısmi Proje/], once: '**Haftalık durum toplantısı**' },
+  { id: 'ekipte yoğunlaşma (kadro eksik)', seed: teamSeed, skipRequired: true, turns: [{ text: 'ekibimde iş kimde yoğunlaşıyor', plan: analysis({ scope: 'team', focus: ['workload', 'overdue'] }) }],
+    must: ['kesin olarak söylenemez'], never: [/iş yükü bu kişide yoğunlaşıyor|dengeli dağılmış|sayısında en üstte/] },
+  { id: 'proje karşılaştırması', turns: [{ text: 'projelerimi karşılaştır', plan: analysis({ scope: 'projects', focus: ['projects'] }) }],
+    must: ['Listedeki **4** projenin hepsinde gecikmiş görev var', '**Radar Modernizasyonu**, açık görev (**6**)'], never: [/en kötü/] },
+  { id: 'birden çok ölçü', turns: [{ text: 'görevlerimin durum ve öncelik dağılımı nasıl', plan: analysis({ scope: 'self', focus: ['status', 'priority'] }) }],
+    must: ['Toplam **7** göreviniz var ve bunların büyük bölümü (**%86**) **Yapılacak** durumunda', 'Toplam **6** açık göreviniz var ve bunların büyük bölümü (**%83**) **Orta** öncelikte'] },
+  { id: 'neden takibi', turns: [{ text: 'işlerimin genel durumunu değerlendir', plan: analysis({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] }) },
+    { text: 'neden', plan: analysis({ scope: 'previous', act: 'explain' }) }],
+    must: ["Açık **6** görevin **3'ü** (**%50**) gecikmiş durumda", '**Haftalık durum toplantısı**'], once: '**Haftalık durum toplantısı**' },
+  { id: 'bağlam gerektiren takip', turns: [{ text: 'Geciken görevlerimi göster.', plan: OVERDUE },
+    { text: 'Bunların öncelikleri ne?', plan: { intent: 'rota', language: 'tr', request: { previousResult: true, operation: 'list', metrics: ['task.title', 'task.priority'],
+      population: { tool: 'rota_task_search', collection: 'tasks' } } } }],
+    must: ['Öncelik: **Kritik**', 'Öncelik: **Orta**'], never: [/Anten kalibrasyonu/] },
+  { id: 'eksik veri', seed: teamSeed, turns: [{ text: 'ekibimin iş yükü dengeli mi', plan: analysis({ scope: 'team', focus: ['workload'] }) }],
+    must: ['kesin olarak söylenemez'], never: [/dengeli dağılmış|yoğunlaşıyor/] },
+  { id: 'seyrek liste', turns: [{ text: 'Geciken görevlerimi göster.', plan: OVERDUE }],
+    must: ['Şu anda **3** gecikmiş göreviniz var ve ortalama gecikme **11,3 gün**'], once: '**Haftalık durum toplantısı**' },
+  { id: 'boş sonuç', composed: false, turns: [{ text: 'bugün terminli görevlerim', plan: { intent: 'rota', language: 'tr', request: { operation: 'list', metrics: ['tasks.total', 'task.title'],
+    population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { deadline: 'due_today', assignee: 'me' } } } }], must: ['**0**'] },
+  { id: 'kesinlik çekincesi', seed: teamSeed, turns: [{ text: 'ekibimin iş yükü dengeli mi', plan: analysis({ scope: 'team', focus: ['workload'] }) },
+    { text: 'bundan ne kadar eminsin', plan: analysis({ scope: 'previous', act: 'certainty' }) }],
+    must: ['kesin olarak söylenemez', 'yalnızca bir kısmını gösteriyor'], never: [/tamamına dayanıyor/] },
+  { id: 'güvenle yapılamayan karşılaştırma', turns: [{ text: 'Ayşe Yılmaz ile Zeynep Kaya karşılaştır', plan: analysis({ scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['overview'] }) }],
+    must: ["**Ayşe Yılmaz**: Açık **6** görevin **3'ü**", "**Zeynep Kaya**: Açık **2** görevin **1'i**"], never: [/ikisi de|ikisinde de|daha fazla/], subjects: ['Ayşe Yılmaz', 'Zeynep Kaya'] },
+  { id: 'İngilizce özet', turns: [{ text: 'assess my overall workload', plan: analysis({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] }, 'en') }],
+    must: ['**3** of the **6** open tasks are overdue (**50%**)', '**Haftalık durum toplantısı**'], once: '**Haftalık durum toplantısı**' }
+]);
+
+const plain = (text) => text.replace(/\*\*|\\/g, '');
+
+test('kabul derlemi: düşmanca model metni hiçbir vakada çizilmez; zorunlu olgular, çekinceler, atıflar ve özneler korunur', async (t) => {
+  for (const item of CORPUS) {
+    await t.test(`vaka: ${item.id}`, async (t) => {
+      const logs = captureConsole(t);
+      const pages = [];
+      const { ask } = phase4eConversation(t, { ...(item.seed ? { seed: item.seed() } : {}),
+        compose: () => composer((view) => { pages.push(view); return hostileLayout(view, { skipRequired: item.skipRequired }); }) });
+      let result = null;
+      for (const turn of item.turns) result = await ask(turn);
+      const content = result.answer.content;
+      const presentation = turnLine(logs).context.presentation;
+      assert.equal(result.answer.finishReason, 'stop');
+      if (item.composed !== false) {
+        assert.equal(presentation.mode, 'composed', JSON.stringify(presentation));
+        assert.notEqual(presentation.server, true, `modelin düzeni kullanılır, sunucu geri dönüşü gizlenmez: ${JSON.stringify(presentation)}`);
+        assert.ok(presentation.prose?.dropped >= 1, 'atılan model metni gözlemde sayılır');
+      }
+      for (const value of item.must) assert.ok(content.includes(value), `zorunlu ifade yok: ${value}\n${content}`);
+      for (const pattern of [...HOSTILE_MARKERS, CONNECTORS, ...(item.never || [])]) assert.doesNotMatch(content, pattern);
+      assert.doesNotMatch(content, /\{[PTG]\d+\}/, 'çözülmemiş yuva');
+      assert.doesNotMatch(content, /(【R\d+】)\1/, 'yinelenen atıf');
+      assert.match(content, /Bu yanıt yalnızca görüntüleme yetkiniz bulunan kayıtları kapsar|This answer covers only records|ölçüt:/, 'sunucu kapsam notu ya da ölçütü korunur');
+      const page = pages.at(-1);
+      if (!page) return;
+      const paragraphs = content.split('\n\n');
+      // Anlatım paragrafı: bir sunucu önermesinin başını taşıyan düz paragraf (tablo, liste, not, grafik ve sunucu ayrıntısı değil).
+      const prose = paragraphs.filter((paragraph) => !/^[|_>`-]/.test(paragraph)
+        && page.propositions.some((proposition) => plain(paragraph).includes(proposition.text.slice(0, 28))));
+      assert.ok(prose.length, 'modelin seçtiği önermeler çizilir');
+      const pageText = JSON.stringify(page);
+      for (const paragraph of prose) {
+        assert.match(paragraph, /【R\d+】$/, `her paragraf kendi kanıtına atıflıdır: ${paragraph}`);
+        // Kalın her sayı sunucunun sayfasındandır: modelin yazdığı sayı yanıta girmez.
+        for (const [, value] of paragraph.matchAll(/\*\*([^*]+)\*\*/g)) {
+          const number = value.replace(/\\/g, '').match(/\d+(?:[,.]\d+)?/)?.[0];
+          if (number) assert.ok(pageText.includes(number), `sayfada olmayan değer: ${value}`);
+        }
+        const sentences = paragraph.replace(/\s*【R\d+】+$/, '').split(/(?<=\.)\s+(?=[\p{Lu}*])/u);
+        assert.equal(new Set(sentences).size, sentences.length, `paragrafta yinelenen cümle: ${paragraph}`);
+        if (item.once) assert.ok(paragraph.split(item.once).length <= 2, `aynı olgu paragrafta iki kez söylenir: ${paragraph}`);
+      }
+      // Kişi karşılaştırmasında her cümle tek özneye aittir: bir kişinin ek cümlesi ötekinin cümlesine eklenmez.
+      for (const subject of item.subjects || []) {
+        const sentence = prose.join(' ').split(/(?<=\.)\s+/).find((text) => text.startsWith(`**${subject}**`));
+        assert.ok(sentence, `öznenin cümlesi yok: ${subject}`);
+        for (const other of item.subjects.filter((name) => name !== subject)) assert.ok(!sentence.includes(other), `özne karışması: ${sentence}`);
+      }
+    });
+  }
+});
+
+/**
+ * Gerçek Haiku 4.5 (düşünme kapalı) düzen çıktısı, değişiklikten önceki sözleşmede: model kendi yorum cümlelerini yazdı
+ * ("Bu durum öncelikle dikkat gerektiriyor", "bu da iş yüküne dair bir ipucu veriyor"), her paragraf reddedildi ve tur
+ * Derin devre ya da sunucu düzenine düştü. Kanıt sayfası sınama verisidir; içerik yalnızca kimlik ve modelin sözcükleridir.
+ */
+const HAIKU_LAYOUT = '```json\n{"blocks":[{"type":"say","text":"{P2} Bu durum öncelikle dikkat gerektiriyor. {P3} Ayrıca {P1} var."},'
+  + '{"type":"chart","source":"G1","style":"kpi"},{"type":"say","text":"Gecikmelere bakınca {P4}. {P8} ve {P7}. Buna ek olarak {P9}, bu da iş yüküne dair bir ipucu veriyor."},'
+  + '{"type":"rows","source":"T1"},{"type":"chart","source":"G2","style":"bar"},{"type":"note","items":["P5","P6"]}]}\n```';
+
+test('gerçek zayıf model düzeni: yorum sözcükleri atılır, karışık bölümlü paragraf bölüm sınırında bölünür, düzen modelin seçimiyle çizilir', async (t) => {
+  const logs = captureConsole(t);
+  const { ask } = phase4eConversation(t, { compose: () => composer(() => HAIKU_LAYOUT) });
+  const result = await ask({ text: 'işlerimin genel durumunu değerlendir', plan: analysis({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] }) });
+  const presentation = turnLine(logs).context.presentation;
+  assert.equal(presentation.mode, 'composed');
+  assert.notEqual(presentation.server, true, JSON.stringify(presentation));
+  assert.equal(turnLine(logs).context.escalation ?? null, null, 'Derin devir yok');
+  assert.ok(presentation.prose.dropped >= 4, JSON.stringify(presentation.prose));
+  const content = result.answer.content;
+  assert.doesNotMatch(content, /dikkat gerektiriyor|ipucu|Gecikmelere bakınca|Buna ek olarak|Ayrıca/);
+  const paragraphs = content.split('\n\n');
+  // P2, P3 (genel görünüm, R1) ile P1 (gecikmiş liste, R2) ayrı bölümlerdir: tek paragraf iki bölüme bölünür, her biri kendi atfıyla.
+  const first = paragraphs.findIndex((paragraph) => paragraph.startsWith("Açık **6** görevin **3'ü**"));
+  assert.ok(first >= 0, content);
+  assert.match(paragraphs[first], /de \*\*1\*\* açık görevin termini var\. 【R1】$/);
+  assert.equal(paragraphs[first + 1], 'Şu anda **3** gecikmiş göreviniz var. 【R2】');
+});
+
+/** Gerçek Haiku 4.5 düzeni, yeni sözleşmede: model yalnızca yuva yazdı ve aynı bölümü iki paragrafa böldü (öneri ile en uzun gecikme ayrı paragrafta). */
+const HAIKU_SPLIT_LAYOUT = '```json\n{"blocks":[{"type":"say","text":"{P2} {P3} {P1} {P4}"},{"type":"say","text":"{P5} {P7} {P8} {P9} {P6}"},'
+  + '{"type":"rows","source":"T1"},{"type":"chart","source":"G2","style":"bar"}]}\n```';
+
+test('gerçek zayıf model düzeni: önceki paragrafın söylediği en uzun gecikme sonraki paragrafta yinelenmez; diğer olgular kalır', async (t) => {
+  const logs = captureConsole(t);
+  const { ask } = phase4eConversation(t, { compose: () => composer(() => HAIKU_SPLIT_LAYOUT) });
+  const result = await ask({ text: 'işlerimin genel durumunu değerlendir', plan: analysis({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] }) });
+  const presentation = turnLine(logs).context.presentation;
+  assert.equal(presentation.server, false, JSON.stringify(presentation));
+  assert.equal(presentation.said, 9);
+  const content = result.answer.content;
+  const narrative = content.split('\n\n').filter((paragraph) => /【R2】$/.test(paragraph) && !paragraph.startsWith('_'));
+  assert.equal(narrative.join(' ').split('23').length - 1, 1, `en uzun gecikme bir kez söylenir: ${narrative.join(' | ')}`);
+  assert.match(content, /İlk ele alınabilecek iş \*\*Haftalık durum toplantısı\*\* görünüyor: \*\*23\*\* gündür gecikmiş ve en uzun gecikme onda/);
+  for (const value of ['ortalaması **11,3 gün**', '**Kısmi kendi görevim** (**1 gün**)', "**3** görevin **2**'si bir haftadan uzun"]) assert.ok(content.includes(value), value);
+});
+
+test('kimlik paragrafında karışık bölüm önceki gibi reddedilir; bölme yalnızca modelin düzyazısına uygulanır', async (t) => {
+  const logs = captureConsole(t);
+  const { ask } = phase4eConversation(t, { compose: () => composer((view) => {
+    const [a, b] = [view.propositions.find((item) => item.part === 1), view.propositions.find((item) => item.part === 2)];
+    return { blocks: [{ type: 'say', items: [a.id, b.id] }, ...view.tables.map((table) => ({ type: 'rows', source: table.id }))] };
+  }) });
+  await ask({ text: 'işlerimin genel durumunu değerlendir', plan: analysis({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] }) });
+  const presentation = turnLine(logs).context.presentation;
+  assert.equal(presentation.server, true);
+  assert.equal(presentation.rejected ?? presentation.issue, 'PART_MIXED');
+});
+
+test('bozuk, aşırı uzun ya da yalnızca yorum taşıyan model yanıtı sunucunun doğrulanmış düzenine düşer; yorum çizilmez', async (t) => {
+  const cases = [
+    ['geçersiz JSON', () => 'Durum çok kötü, elli görev gecikti.'],
+    ['yanıt sınırını aşan metin', () => JSON.stringify({ blocks: [{ type: 'say', text: `${'x'.repeat(17000)} {P1}` }] })],
+    ['paragraf sınırını aşan metin', () => ({ blocks: [{ type: 'say', text: `${'Elli görev gecikti. '.repeat(Math.ceil(PROSE_LIMITS.maxChars / 20))}{P1}` }] })],
+    ['yalnızca yorum', () => ({ blocks: [{ type: 'say', text: 'Elli görev gecikti, çünkü ekip yetersiz.' }] })],
+    ['bilinmeyen yuva', () => ({ blocks: [{ type: 'say', text: 'Elli görev gecikti {P99}' }] })]
+  ];
+  for (const [name, build] of cases) {
+    await t.test(name, async (t) => {
+      const logs = captureConsole(t);
+      const { ask } = phase4eConversation(t, { compose: () => composer(build) });
+      const result = await ask({ text: 'işlerimin genel durumunu değerlendir', plan: analysis({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] }) });
+      assert.equal(result.answer.finishReason, 'stop');
+      const presentation = turnLine(logs).context.presentation;
+      assert.equal(presentation.server, true, `geri dönüş açıkça raporlanır: ${JSON.stringify(presentation)}`);
+      assert.doesNotMatch(result.answer.content, /[Ee]lli görev|çok kötü|yetersiz|xxxx/);
+      assert.match(result.answer.content, /gecikmiş durumda; bugün başlayan yedi günlük dönemde de/, 'sunucu düzeni de doğrulanmış akıcı anlatımdır');
+    });
+  }
+});
+
+test('model nitelendirmesi analitik yanıtta "composed" kipindeki sunucu geri dönüşünü başarı saymaz', async (t) => {
+  const { runCase, finalizeCompositionQualification } = await import('../scripts/answer-composition-qualification.mjs');
+  const model = 'claude-haiku-4-5-20251001';
+  const usage = { input_tokens: 10, output_tokens: 2, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens_details: { thinking_tokens: 0 } };
+  const report = { cases: 0, passed: 0, calls: 0, composed: 0, narrative: 0, escalations: 0, charts: 0, reasons: {}, issues: {},
+    usage: { input: 0, output: 0, thinking: 0, cacheCreate: 0, cacheRead: 0 }, results: [] };
+  const item = { id: 'analitik-geri-dönüş', requiresComposition: true, stage: 'targeted',
+    turns: [{ question: 'işlerimin genel durumunu değerlendir', plan: analysis({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] }) }] };
+  await runCase(t, item, { report, providerOptions: { provider: 'claude', expectedModel: model,
+    completeRound: () => ({ text: 'Durum kötü.', toolCalls: [], models: [model], thinking: 'off', finishReason: 'end_turn', usage }) } });
+  assert.equal(report.results[0].mode, 'composed', 'üründe analitik geri dönüş sunucu düzenidir');
+  assert.ok(report.results[0].failures.includes('SERVER_FALLBACK'), JSON.stringify(report.results[0].failures));
+  assert.throws(() => finalizeCompositionQualification(report), /COMPOSITION_CHECKS_FAILED/);
+});
+
+/* ── Doğrulanmış söylem bağları (fluentParagraph) ───────────────────── */
+
+const longest = (evidenceId, title, days) => ({ kind: 'maximum', evidenceId, table: 'T1', column: 0, markdown: `En uzun süredir geciken görev **${title}** (**${days} gün**).`,
+  parts: ['en uzun süredir geciken görev ', { value: title, strong: true }, ' (', { value: `${days} gün`, strong: true }, ').'],
+  fluent: { pair: { role: 'maximum', tail: ['en uzun süredir geciken ise ', { value: title, strong: true }] }, names: title, days } });
+const attention = (evidenceId, title, days) => ({ kind: 'attention', evidenceId, markdown: `İlk ele alınabilecek iş **${title}** görünüyor: **${days}** gündür gecikmiş ve en uzun gecikme onda.`,
+  parts: ['ilk ele alınabilecek iş ', { value: title, strong: true }, ' görünüyor: ', { value: String(days), strong: true }, ' gündür gecikmiş ve en uzun gecikme onda.'],
+  fluent: { refers: { title, days, short: ['en uzun süredir beklediği için ilk ele alınabilecek iş ', { value: title, strong: true }, ' görünüyor'] } } });
+const paragraph = (...items) => fluentParagraph(items.map((proposition) => ({ proposition })), 'tr');
+
+test('öneri ile en uzun gecikme aynı görevi ve günü söylüyorsa uç cümlesi yinelenmez; eşleşme kanıt, ad ve günle birebirdir', () => {
+  assert.equal(paragraph(attention('R2', 'Haftalık', 23), longest('R2', 'Haftalık', 23)),
+    'İlk ele alınabilecek iş **Haftalık** görünüyor: **23** gündür gecikmiş ve en uzun gecikme onda.');
+  // Başka gün, başka görev ya da başka kanıt: iki olgu da söylenir (yalnızca birebir aynı olgu düşer).
+  for (const other of [longest('R2', 'Haftalık', 22), longest('R2', 'Başka', 23), longest('R3', 'Haftalık', 23)]) {
+    assert.match(paragraph(attention('R2', 'Haftalık', 23), other), /En uzun süredir geciken görev/);
+  }
+  // Ters sırada öneri kısa biçimdedir; kısa biçim de aynı kanıt ve aynı günle sınırlıdır.
+  assert.match(paragraph(longest('R2', 'Haftalık', 23), attention('R2', 'Haftalık', 23)), /En uzun süredir beklediği için ilk ele alınabilecek iş/);
+  assert.match(paragraph(longest('R3', 'Haftalık', 23), attention('R2', 'Haftalık', 23)), /İlk ele alınabilecek iş \*\*Haftalık\*\* görünüyor: \*\*23\*\* gündür/);
+});
+
+test('"bunların" göndergesi yalnızca hemen önceki aynı kanıtın cümlesine bağlanır; araya başka kanıt ya da not girerse tam biçim söylenir', () => {
+  const count = { kind: 'count', evidenceId: 'R1', markdown: 'Şu anda **3** gecikmiş göreviniz var.', parts: ['şu anda ', { value: '3', strong: true }, ' gecikmiş göreviniz var.'], fluent: { count: 3 } };
+  const share = { kind: 'threshold', evidenceId: 'R1', markdown: '**3** görevin **2**\'si bir haftadan uzun süredir gecikmiş.',
+    parts: [{ value: '3', strong: true }, ' görevin ', { value: '2', strong: true }, '\'si bir haftadan uzun süredir gecikmiş.'],
+    fluent: { share: { base: 3, full: [{ value: '3', strong: true }, ' görevin ', { value: '2', strong: true }, '\'si gecikmiş'], intro: ['bunların ', { value: '2', strong: true }, '\'si gecikmiş'], also: [] } } };
+  const other = { kind: 'count', evidenceId: 'R2', markdown: 'Ekibinizde **5** görev var.', parts: ['ekibinizde ', { value: '5', strong: true }, ' görev var.'] };
+  assert.match(paragraph(count, share), /Bunların \*\*2\*\*'si/);
+  assert.doesNotMatch(paragraph(count, other, share), /[Bb]unların/);
+  assert.doesNotMatch(fluentParagraph([{ proposition: count }, { text: 'Yalnızca ilk kayıtlar gösteriliyor.' }, { proposition: share }], 'tr'), /[Bb]unların/);
+});
+
+test('özneli analist cümlesi yalnızca aynı öznenin (aynı kanıtın) cümlesine eklenir; özneler arası birleşme olmaz', async () => {
+  const { analystPropositions } = await import('../src/domain/ai/groundedPropositions.js');
+  const totals = (evidenceId, person, open, overdue, soon) => ['open', 'overdue', 'dueNext7Days'].map((metric, index) => ({ evidenceId,
+    fact: { field: `data.totals.${metric}`, value: [open, overdue, soon][index], semantic: { metric: `tasks.${metric}`, complete: true, provenance: { tool: 'rota_task_analytics' },
+      filters: { personSicil: person === 'Ayşe' ? AYSE : ZEYNEP, person } } } }));
+  const propositions = analystPropositions([{ index: 0, presentation: { facts: [...totals('R1', 'Ayşe', 6, 3, 1), ...totals('R2', 'Zeynep', 2, 1, 1)] } }], 'tr')
+    .map((item) => item.proposition);
+  const find = (evidenceId, kind) => propositions.find((item) => item.evidenceId === evidenceId && item.kind === kind);
+  const same = paragraph(find('R1', 'pressure'), find('R1', 'urgency'), find('R2', 'pressure'), find('R2', 'urgency'));
+  assert.equal(same.split('**Ayşe**:').length - 1, 1, same);
+  assert.equal(same.split('**Zeynep**:').length - 1, 1, same);
+  assert.match(same, /\*\*Ayşe\*\*: Açık \*\*6\*\* görevin [^.]*; bugün başlayan yedi günlük dönemde de \*\*1\*\*/);
+  // Sıra özneleri karıştırırsa ek cümle başka öznenin cümlesine eklenmez; kendi öznesiyle tek başına söylenir.
+  const crossed = paragraph(find('R1', 'pressure'), find('R2', 'urgency'), find('R2', 'pressure'), find('R1', 'urgency'));
+  assert.equal(crossed.split(/(?<=\.)\s+/).length, 4, crossed);
+  for (const sentence of crossed.split(/(?<=\.)\s+/)) assert.match(sentence, /^\*\*(Ayşe|Zeynep)\*\*: /, `öznesiz cümle: ${sentence}`);
+});
+
+test('düzen yönergesi bayt bayt sabittir, veri taşımaz ve modelden bağlaç ya da yorum istemez', () => {
+  const prompt = compositionSystemPrompt();
+  assert.equal(prompt, compositionSystemPrompt());
+  assert.doesNotMatch(prompt, CONNECTORS);
+  assert.match(prompt, /YALNIZCA yuvalardır/);
+  assert.match(prompt, /yuva dışındaki metin kullanıcıya hiç gösterilmez/);
+  assert.doesNotMatch(prompt, /\d{4}-\d{2}-\d{2}/, 'tarih gibi değişken veri önek önbelleğini bozar');
+});
+
+test('yuva ayrıştırması sınırlıdır: aşırı uzun, boş ya da yuvasız metin reddedilir; sınırın üstünde yuva sayısı kabul edilmez', () => {
+  const known = () => true;
+  assert.equal(checkProse('x'.repeat(PROSE_LIMITS.maxChars + 1), { known }).issue, 'PROSE_INVALID');
+  assert.equal(checkProse('   ', { known }).issue, 'PROSE_INVALID');
+  assert.equal(checkProse(42, { known }).issue, 'PROSE_INVALID');
+  assert.equal(checkProse(Array.from({ length: PROSE_LIMITS.maxSentences + 1 }, (_, index) => `{P${index + 1}}`).join(' '), { known }).issue, 'PROSE_LENGTH');
+  assert.equal(checkProse('{P1} {P2}', { known, used: new Set(['P2']) }).issue, 'DUPLICATE_PROPOSITION');
+  assert.equal(checkProse('{P1}, {P2}; {P3}.', { known }).dropped, 0, 'yalnızca ayırıcı noktalama atılan metin sayılmaz');
+});

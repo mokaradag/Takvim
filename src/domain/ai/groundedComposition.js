@@ -13,7 +13,7 @@ import {
 import { escapedFactText } from './evidenceFacts.js';
 import { analystPropositions, caveatPropositions, countProposition, fluentParagraph, noteLabel, pointerSentence, populationProposition, rowPopulationComplete, tablePropositions, titleCandidate } from './groundedPropositions.js';
 import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from './answerDetail.js';
-import { PROSE_LIMITS, checkProse, escapeProseText, proseParagraph, renderProse } from './groundedProse.js';
+import { PROSE_LIMITS, checkProse, proseText } from './groundedProse.js';
 
 /** Anlatımın en az önerme sayısı: sayfada bu kadar önerme varsa düzen en az bu kadarını söyler (azsa hepsini). */
 export const MIN_NARRATED_PROPOSITIONS = 3;
@@ -496,8 +496,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     missing: missing.map((item) => ({ part: item.index + 1, ...(item.topic ? { topic: item.topic } : {}) }))
   };
   return Object.freeze({ view: Object.freeze(view), render: Object.freeze({ locale: view.language, tables, details, charts, propositions, titles, question: String(question || ''),
-    visual: Boolean(visual), chartType: visual ? requestedChart : null, table: Boolean(table), detail: answerDetail, limits,
-    names: Object.freeze(entityNames(parts)) }) });
+    visual: Boolean(visual), chartType: visual ? requestedChart : null, table: Boolean(table), detail: answerDetail, limits }) });
 }
 
 /**
@@ -601,54 +600,61 @@ export function validateComposition(composition, response) {
       continue;
     }
     if (type === 'say') {
-      // Paragraf ya sunucu önermelerinin kimlikleridir (`items`) ya da modelin yuvalı düzyazısıdır (`text`). Düzyazıda olgu
-      // yalnızca yuvadır; modelin sözcükleri yapısal olarak olgu taşıyamaz (groundedProse.js).
+      // Paragraf ya sunucu önermelerinin kimlikleridir (`items`) ya da modelin yuvalı düzyazısıdır (`text`). Düzyazıda
+      // modelden yalnızca yuva sırası alınır; yuva dışı metni çizilmez (groundedProse.js).
       const prose = Object.hasOwn(block, 'text');
       if (prose === Object.hasOwn(block, 'items')) return fail('BLOCK_INVALID');
       let items = block.items;
-      let sentences = null;
       if (prose) {
         const checked = checkProse(block.text, { known: (id) => Boolean(render.propositions?.has(id) || render.tables.has(id) || render.charts.has(id)),
-          names: render.names || [], locale: render.locale, slotText: (id) => render.propositions?.get(id)?.plain || '',
           used: new Set([...usedPropositions, ...pointers.map((pointer) => pointer.id)]) });
         // Kurala uymayan düzyazı paragrafı tümüyle düşer (yalnızca modelin içeriği azalır); kapsamı sunucu tamamlar.
         // Bütün düzyazı paragrafları düşerse düzen reddedilir.
         if (!checked.ok) { proseRejected.push(checked.issue); continue; }
         items = checked.ids;
-        sentences = checked.sentences;
         proseDropped += checked.dropped;
         proseCut += checked.cut || 0;
       }
       if (!Array.isArray(items) || items.length < 1 || items.length > COMPOSITION_LIMITS.maxSayItems) return fail('SAY_INVALID');
-      if (blocks.filter((item) => item.type === 'say').length >= limits.maxSayBlocks) return fail('SAY_INVALID');
-      const said = [];
-      const placed = [];
-      for (let position = 0; position < items.length; position += 1) {
-        if (!Object.hasOwn(items, position) || typeof items[position] !== 'string') return fail('SAY_INVALID');
-        const id = items[position];
-        if (render.propositions?.has(id)) {
-          if (usedPropositions.has(id)) return fail('DUPLICATE_PROPOSITION');
-          usedPropositions.add(id);
-          spoken.add(id);
-          if (prose) proseSpoken.add(id);
-          said.push(id);
-        } else if (render.tables.has(id) || render.charts.has(id)) {
-          if (pointers.some((pointer) => pointer.id === id)) return fail('DUPLICATE_POINTER');
-          pointers.push({ id, at: blocks.length });
-          said.push(id);
-        } else if (!prose && render.details?.has(id)) {
-          // Paragrafa yazılan D#, sunucunun doğrulanmış ayrıntısının yeridir: paragrafın hemen ardında kendi bloğu olarak
-          // çizilir (details bloğuyla aynı; model metin yazmaz, ayrıntı bir kez kullanılır).
-          if (usedSources.has(id)) return fail('DUPLICATE_SOURCE');
-          usedSources.add(id);
-          placed.push(id);
-        } else return fail('UNKNOWN_PROPOSITION');
+      // Düzyazı paragrafı bölüm sınırında ardışık parçalara bölünür: her parça kendi bölümünün paragrafıdır (yalnızca
+      // sınır eklenir; içerik, sıra ve kapsam değişmez). Kimlik paragrafında karışık bölüm önceki gibi reddedilir.
+      const runs = prose ? items.reduce((out, id) => {
+        if (out.length && partOfItem(out.at(-1).at(-1)) === partOfItem(id)) out.at(-1).push(id);
+        else out.push([id]);
+        return out;
+      }, []) : [items];
+      for (const run of runs) {
+        if (blocks.filter((item) => item.type === 'say').length >= limits.maxSayBlocks) return fail('SAY_INVALID');
+        const said = [];
+        const placed = [];
+        for (let position = 0; position < run.length; position += 1) {
+          if (!Object.hasOwn(run, position) || typeof run[position] !== 'string') return fail('SAY_INVALID');
+          const id = run[position];
+          if (render.propositions?.has(id)) {
+            if (usedPropositions.has(id)) return fail('DUPLICATE_PROPOSITION');
+            usedPropositions.add(id);
+            spoken.add(id);
+            if (prose) proseSpoken.add(id);
+            said.push(id);
+          } else if (render.tables.has(id) || render.charts.has(id)) {
+            if (pointers.some((pointer) => pointer.id === id)) return fail('DUPLICATE_POINTER');
+            pointers.push({ id, at: blocks.length });
+            said.push(id);
+          } else if (!prose && render.details?.has(id)) {
+            // Paragrafa yazılan D#, sunucunun doğrulanmış ayrıntısının yeridir: paragrafın hemen ardında kendi bloğu olarak
+            // çizilir (details bloğuyla aynı; model metin yazmaz, ayrıntı bir kez kullanılır).
+            if (usedSources.has(id)) return fail('DUPLICATE_SOURCE');
+            usedSources.add(id);
+            placed.push(id);
+          } else return fail('UNKNOWN_PROPOSITION');
+        }
+        // Başlık olsun ya da olmasın paragrafın tüm önermeleri aynı bölüme aittir.
+        const scope = owned(run.map(partOfItem));
+        if (scope) return fail(scope);
+        // Düzyazı bloğunun metni kanonik yuva dizisidir: yeniden doğrulamada modelin atılan sözcükleri yeniden okunmaz.
+        if (said.length) blocks.push({ type, items: said, ...(prose ? { prose: said.map((slot) => [{ slot }]), text: proseText(said) } : {}) });
+        for (const source of placed) blocks.push({ type: 'details', source });
       }
-      // Başlık olsun ya da olmasın paragrafın tüm önermeleri aynı bölüme aittir.
-      const scope = owned(items.map(partOfItem));
-      if (scope) return fail(scope);
-      if (said.length) blocks.push({ type, items: said, ...(sentences ? { prose: sentences, text: block.text } : {}) });
-      for (const source of placed) blocks.push({ type: 'details', source });
       continue;
     }
     const source = block.source;
@@ -1067,31 +1073,11 @@ export function renderComposition(composition, validated) {
   const rowStyles = new Map(validated.blocks.filter((block) => block.type === 'rows').map((block) => [block.source, block.style]));
   const chartStyles = new Map(validated.blocks.filter((block) => block.type === 'chart').map((block) => [block.source, block.style]));
   const partOf = (id) => render.propositions?.get(id)?.part ?? render.tables.get(id)?.part ?? render.charts.get(id)?.part ?? null;
+  const discourse = { named: new Map(), attended: new Map() };
   for (const block of validated.blocks) {
-    if (block.type === 'say' && block.prose) {
-      // Modelin yuvalı düzyazısı: modelin sözcükleri kaçışlı düz metin, her olgu sunucunun önerme yan cümlesi (vurgulu).
-      const sources = [];
-      const notices = [];
-      for (const id of block.items) {
-        const proposition = render.propositions?.get(id);
-        if (!proposition) continue;
-        sources.push(proposition.evidenceId);
-        notices.push(...(coveredBy.get(id)?.notices || []));
-        said += 1;
-      }
-      const text = renderProse(block.prose, {
-        proposition: (id) => render.propositions?.get(id) || null,
-        pointer: (id) => (render.tables.has(id) ? pointerSentence({ type: 'rows', style: rowStyles.get(id) }, locale)
-          : fences.has(id) ? pointerSentence({ type: 'chart', chartType: chartStyles.get(id), distribution: render.charts.get(id).types.includes('donut') }, locale) : null),
-        locale,
-        escape: escapedFactText,
-        escapeText: escapeProseText
-      });
-      if (!text) continue;
-      emit(`${proseParagraph([text, ...notices].join(' '))}${sources.length ? ` ${citation(sources)}` : ''}`, partOf(block.items.find((id) => render.propositions?.has(id)) || block.items[0]));
-      cited.push(...sources);
-    } else if (block.type === 'say') {
-      // Paragraf sunucunun akıcı düzyazısıdır: aynı nüfusun önermeleri bağlaçla birleşir (§ fluentParagraph).
+    if (block.type === 'say') {
+      // Paragraf (kimlik listesi ya da modelin yuvalı düzyazısı) sunucunun akıcı düzyazısıdır: model yalnızca sırayı seçmiştir;
+      // aynı nüfusun önermeleri sunucunun doğrulanmış bağlarıyla birleşir (§ fluentParagraph).
       const entries = [];
       const sources = [];
       for (const id of block.items) {
@@ -1106,8 +1092,10 @@ export function renderComposition(composition, validated) {
           entries.push({ text: pointerSentence({ type: 'chart', chartType: chartStyles.get(id), distribution: render.charts.get(id).types.includes('donut') }, locale) });
         }
       }
-      if (!entries.length) continue;
-      emit(`${fluentParagraph(entries, locale)}${sources.length ? ` ${citation(sources)}` : ''}`, partOf(block.items[0]));
+      // Yanıtın paragrafları adlandırma durumunu paylaşır: önceki paragrafın söylediği olgu yinelenmez; boşalan paragraf çizilmez.
+      const text = entries.length ? fluentParagraph(entries, locale, discourse) : '';
+      if (!text) continue;
+      emit(`${text}${sources.length ? ` ${citation(sources)}` : ''}`, partOf(block.items[0]));
       cited.push(...sources);
     } else if (block.type === 'title') {
       const title = render.titles.get(block.source);
