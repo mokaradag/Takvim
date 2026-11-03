@@ -2290,7 +2290,7 @@ dışarıda bırakamaz).
 
 `test/ai-phase4e-quality-convergence.test.mjs`: kapalı düzyazı, yuva çizimi, görünür çekince/kesinlik,
 Dengeli/Ayrıntılı farkı, rol matrisi, seyrek veri, grafik türleri ve kanonik takip sınamalarıdır.
-`test/ai-pr111-convergence.test.mjs` ortak pencere, kendiyle karşılaştırma, bağıl tarihin yeniden hesaplanması,
+`test/ai-analysis-intent-and-grounding.test.mjs` ortak pencere, kendiyle karşılaştırma, bağıl tarihin yeniden hesaplanması,
 konumsal satır, onarım, kapasite ve düşmanca metin değişmezlerini kapsar. `test/ai-ui-acceptance-convergence.test.mjs`
 canlı model kullanmadan kabul altyapısının hata çıkışını ve koşu yalıtımını sınar. Bunlar gerçek model kabulü değildir.
 
@@ -2347,6 +2347,6 @@ başlığı, ek grafik); modelin düzyazı uzunluğu iki ayarda benzer kalabilir
   önkoşulları baştan denetlenir. Her koşu ayrı dizin ve çağrı defteri açar; dolu bağlantı noktası reddedilir;
   uygulama ve köprü yalnızca `127.0.0.1` dinler. Sürücü/model/grafik uyuşmazlığı sıfırdan farklı çıkış verir.
   Önceki `UI_ONLY` konuşma satırları korunur, ancak farklı koşu kimlikleri güncel rapora sayılmaz.
-- Güncel regresyonlar: `test/ai-pr111-convergence.test.mjs`, `test/ai-ui-acceptance-convergence.test.mjs` ve
+- Güncel regresyonlar: `test/ai-analysis-intent-and-grounding.test.mjs`, `test/ai-ui-acceptance-convergence.test.mjs` ve
   güçlendirilmiş mevcut Aşama 4E sınamaları. Önceki §15.8 sayıları bu HEAD'in kabul sonucu olarak kullanılamaz.
   Gerçek Haiku 4.5 arayüz kabulü, düşünme kapalı ve devir kapalı ortamda ayrıca çalıştırılmalıdır.

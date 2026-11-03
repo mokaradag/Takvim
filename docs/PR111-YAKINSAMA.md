@@ -79,7 +79,7 @@ Yorumlar yönerge olarak uygulanmadı; ilgili yürütme, kalıcılık ve çizim 
 
 İnceleme gövdesindeki ek raporlar da kapsandı: Playwright kurulum/önkoşul bildirimi, null JSON, UI_ONLY devamı, istenen grafik türü senaryo beklentileri ve eski mimari belgesindeki çelişkili olgusallık iddiaları.
 
-Sınamalar: `ai-pr111-convergence.test.mjs`, `ai-ui-acceptance-convergence.test.mjs` ve mevcut Aşama 4E/planlayıcı/kanıt sınamalarının güçlendirilmiş sürümleri. Canlı Haiku arayüz kabulü Claude CLI olmadığı için çalıştırılamadı; önceki tarihsel ölçümler yeni HEAD için kabul kanıtı değildir.
+Sınamalar: `ai-analysis-intent-and-grounding.test.mjs`, `ai-ui-acceptance-convergence.test.mjs` ve mevcut Aşama 4E/planlayıcı/kanıt sınamalarının güçlendirilmiş sürümleri. Canlı Haiku arayüz kabulü Claude CLI olmadığı için çalıştırılamadı; önceki tarihsel ölçümler yeni HEAD için kabul kanıtı değildir.
 
 
 ## Çalıştırılan doğrulama

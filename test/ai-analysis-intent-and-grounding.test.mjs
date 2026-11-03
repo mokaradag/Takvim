@@ -1,4 +1,4 @@
-/** PR #111: ortak nüfus, kanonik niyet ve görünür kanıt sınırlarının gerileme sınamaları. */
+/** Ortak nüfus, kanonik niyet ve görünür kanıt sınırlarının gerileme sınamaları. */
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AYSE, ALI_1, ZEYNEP, NOW, PROJECTS, TASKS, rotaToolSeed, callRotaTool } from './helpers/aiToolFixtures.mjs';
