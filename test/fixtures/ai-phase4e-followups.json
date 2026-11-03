@@ -5,7 +5,7 @@
  "chains": [
   {
    "id": "A",
-   "title": "self → risk filter → chart → next week",
+   "title": "kendi kapsamı → risk süzgeci → grafik → gelecek hafta",
    "turns": [
     {
      "text": "bu hafta işlerim açısından durumumu değerlendir",
@@ -68,7 +68,7 @@
      "expect": {
       "assignee": "me",
       "finish": "stop",
-      "chart": true
+      "chartUnavailable": true
      }
     },
     {
@@ -600,7 +600,10 @@
      },
      "expect": {
       "person": true,
-      "people": [910001, 910003],
+      "people": [
+       910001,
+       910003
+      ],
       "finish": "stop"
      }
     },

@@ -17,6 +17,11 @@
     "Projelerimi tablo ve grafik birlikte kullanarak karşılaştır.",
     "İş durumumu gösterge kartlarıyla özetle.",
     "Görevlerimin aylara göre termin dağılımını çizgi grafikle göster."
+   ],
+   "expectedCharts": [
+    null,
+    "kpi",
+    "line"
    ]
   }
  ]

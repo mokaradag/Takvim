@@ -37,6 +37,10 @@
    "turns": [
     "Görevlerimin durum dağılımını donut grafikle göster.",
     "Önümüzdeki önemli teslimatları timeline olarak göster."
+   ],
+   "expectedCharts": [
+    "donut",
+    "timeline"
    ]
   },
   {
@@ -58,6 +62,9 @@
    "detail": "balanced",
    "turns": [
     "Önümüzdeki teslimatları timeline olarak göster ve kritik olanları ayrıca belirt."
+   ],
+   "expectedCharts": [
+    "timeline"
    ]
   },
   {

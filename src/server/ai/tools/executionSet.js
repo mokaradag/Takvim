@@ -182,22 +182,22 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   const present = (key) => plan[key] !== undefined && plan[key] !== null;
   const only = (...allowed) => !['request', 'additionalRequests', 'clarify', 'abstain', 'analysis'].some((key) => present(key) && !allowed.includes(key));
   // Grafik türü söylendiyse görselleştirme de istenmiştir; tür yalnızca sunumun tercihidir (veri yetkisi değildir).
-  const base = { intent: plan.intent, language: plan.language, ...(plan.visual === true || plan.chart != null ? { visual: true } : {}),
-    ...(plan.chart != null ? { chart: plan.chart } : {}), ...(plan.table === true ? { table: true } : {}) };
+  const declined = plan.visual === false || plan.analysis?.visual === false;
+  const base = { intent: plan.intent, language: plan.language, ...(!declined && (plan.visual === true || plan.chart != null) ? { visual: true } : declined ? { visual: false } : {}),
+    ...(!declined && plan.chart != null ? { chart: plan.chart } : {}), ...(plan.table != null ? { table: plan.table } : {}) };
   if (plan.intent === PLANNER_INTENTS.ROTA && present('analysis')) {
     // Analitik özet: sunucu her yönü kayıt defterinin sabit istek biçimine açar; okumaları yalnızca sunucu kurar.
     if (present('request') || present('additionalRequests') || planned.length || direct.length) throw invalidArguments(['$.analysis:request']);
     const parsed = parseAnalysis(plan.analysis);
     // Takipte yazılmayan yön/ufuk önceki doğrulanmış analizden; görselleştirme ve grafik türü de açıkça kapatılmadıkça sürer.
-    const analysis = resolveAnalysisBrief(parsed, { previous: previousAnalysis });
+    const analysis = resolveAnalysisBrief(parsed, { previous: previousAnalysis, today });
     const follow = ['previous', 'row'].includes(parsed.scope) && previousAnalysis;
-    const declined = plan.visual === false || parsed.visual === false;
-    const visual = base.visual === true || parsed.visual === true || Boolean(follow && !declined && previousAnalysis.visual);
+    const visual = !declined && (base.visual === true || parsed.visual === true || Boolean(follow && previousAnalysis.visual));
     const chart = base.chart || (follow && visual && !declined ? previousAnalysis.chart : null) || null;
     const table = base.table === true || Boolean(follow && previousAnalysis.table && plan.table !== false);
     const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
     const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null });
-    return { plan: { ...base, ...(visual ? { visual: true } : {}), ...(chart ? { chart } : {}), ...(table ? { table: true } : {}), analysis, request,
+    return { plan: { ...base, ...(visual ? { visual: true } : declined ? { visual: false } : {}), ...(chart ? { chart } : {}), ...(table ? { table: true } : {}), analysis, request,
       ...(additionalRequests.length ? { additionalRequests } : {}) }, calls: [] };
   }
   if (plan.intent === PLANNER_INTENTS.ROTA) {
@@ -246,6 +246,8 @@ export function planShapeHints(problems) {
     '$.plan:single': 'Yanıtta TEK bir rota_plan çağrısı olmalı: soruyu tek bir karar olarak bildir (birden çok okuma gerekiyorsa analysis.focus ya da additionalRequests)',
     '$.intent': `intent (zorunlu): ${Object.values(PLANNER_INTENTS).join('|')}`,
     '$.language': 'language (zorunlu): tr|en',
+    '$.chart': `chart: ${PLAN_CHART_TYPES.join('|')}`,
+    '$.table': 'table: true|false',
     '$.request:required': 'intent rota için request ya da (geniş/değerlendirme sorusunda) analysis zorunludur',
     '$.analysis': 'analysis: {"scope":"self|person|team|project|projects|all","focus":["overview","overdue","upcoming"],"names":["<ad>"] (yalnızca person/project)}; request/calls ile birlikte verilmez',
     '$.additionalRequests': 'additionalRequests: tek soru için alanı çıkar; bir ya da iki ek istek nesnesi ver; calls ile birlikte verme',

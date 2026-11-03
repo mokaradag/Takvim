@@ -1,3 +1,4 @@
+import { PROSE_CONNECTORS } from '../../../domain/ai/groundedProse.js';
 import 'server-only';
 import {
   ASSISTANT_GROUNDED_CONTEXT_POLICY,
@@ -85,7 +86,7 @@ export function groundedSystemPrompt(now = new Date()) {
     '',
     'KAPSAM VE ANALİTİK ÖZET',
     '- Her sorunun bir öznesi vardır; kullanıcının kendisini varsayma. self: kullanıcının kendi görevleri; team: kullanıcının yönettiği ekip, takım, birim, bölüm/müdürlük ya da direktörlük (yönetim kapsamı; kullanıcı birim dediyse level unit, bölüm ya da müdürlük dediyse department, direktörlük dediyse directorate; ekip/takım dediyse level yazma); person: adı verilen kişi(ler); project: adı verilen proje(ler); projects: kullanıcının projelerinin tamamı/karşılaştırması; all: görebildiği bütün görevler. Yetkiyi sunucu denetler; sen yalnızca istenen kapsamı bildirirsin.',
-    '- Değerlendirme, genel durum, risk, öncelik, iş yükü, denge, karşılaştırma, dağılım, "en çok/en fazla" sıralaması ya da "neye dikkat etmeliyim" gibi sorularda ve kapsam ekip, kişi, proje ya da portföy olduğunda request yazma; rota_plan içinde analysis ver (request yalnızca tek kaydın alanı, belirli bir sayım ya da tam liste gibi kesin sorular içindir): {"intent":"rota","language":"tr","analysis":{"scope":"self","focus":["overview","overdue","upcoming"],"dateFrom":"…","dateTo":"…"}}. Sunucu her yönü doğrulanmış okumalara açar. focus sorunun istediği EN ÇOK 3 yöndür (genel değerlendirmede overview, overdue, upcoming yeterlidir; Ayrıntılı ayarda bütünleyici okumayı sunucu kendisi ekler; iş yükünde workload; dağılımda status ya da priority; zaman içinde schedule; projeler karşılaştırmasında scope projects ve projects). Zaman ufku varsa (bu hafta, önümüzdeki iki hafta, bu ay) takvim çapasından dateFrom/dateTo yaz. Adı geçen kişi ya da proje names içinde, kullanıcının yazdığı biçimde.',
+    '- Değerlendirme, genel durum, risk, öncelik, iş yükü, denge, karşılaştırma, dağılım, "en çok/en fazla" sıralaması ya da "neye dikkat etmeliyim" gibi sorularda ve kapsam ekip, kişi, proje ya da portföy olduğunda request yazma; rota_plan içinde analysis ver (request yalnızca tek kaydın alanı, belirli bir sayım ya da tam liste gibi kesin sorular içindir): {"intent":"rota","language":"tr","analysis":{"scope":"self","focus":["overview","overdue","upcoming"],"dateFrom":"…","dateTo":"…"}}. Sunucu her yönü doğrulanmış okumalara açar. focus sorunun istediği EN ÇOK 3 yöndür (genel değerlendirmede overview, overdue, upcoming yeterlidir; Ayrıntılı ayarda bütünleyici okumayı sunucu kendisi ekler; iş yükünde workload; dağılımda status ya da priority; zaman içinde schedule; projeler karşılaştırmasında scope projects ve projects). Bugün için relativeWindow today, önümüzdeki 7 gün için relativeWindow next_7_days yaz; bu alan tarih çiftiyle birlikte verilmez ve açıklama seçildiğinde güncel güne göre yeniden hesaplanır. Diğer zaman ufuklarında (bu hafta, önümüzdeki iki hafta, bu ay) takvim çapasından dateFrom/dateTo yaz. Adı geçen kişi ya da proje names içinde, kullanıcının yazdığı biçimde.',
     '- Kullanıcı açıkça grafik, görselleştirme ya da çizim istiyorsa rota_plan içinde "visual":true yaz (analysis ya da request ile); grafik türünü adlandırdıysa ayrıca "chart" (bar, donut, line, stacked, kpi, timeline). Açıkça tablo istediyse "table":true.',
     '',
     'TÜRLÜ İSTEK (ZORUNLU)',
@@ -140,24 +141,16 @@ export function compositionSystemPrompt() {
     'Yalnızca tek JSON nesnesi döndür: {"blocks":[...]}.',
     '',
     'OLGU YUVALARI (EN ÖNEMLİ KURAL)',
-    '- Paragrafı sen yazarsın: {"type":"say","text":"..."}. Her olgu metne YALNIZCA yuvayla girer: {P3} yazdığın yere sunucu P3 önermesinin cümlesini (sondaki nokta olmadan, değerleri kalın) koyar. Yuva tam bir yan cümledir; fiiliyle biter. Çevresine bağlaç, geçiş ve yorum yaz: "Genel tabloya bakınca {P1}; asıl baskı ise gecikmelerde, çünkü {P3}."',
-    '- Kendi sözcüklerinde HİÇBİR rakam, sayı, yüzde, tarih, süre ve hiçbir kişi, proje ya da görev adı yazma; bunlar yalnızca yuvadan gelir. Cümle başı dışında büyük harfle başlayan sözcük yazma. Markdown, liste, başlık, bağlantı ya da HTML yazma.',
-    '- HER cümle en az bir {P#} taşır; yuvasız cümle (genel tavsiye, dolgu, olgusuz yargı) çizilmez. Sonuç cümlen de yuvasıyla birlikte yazılır: "Yakın vadede baskı artıyor: {P4}."',
-    '- Yuvadan hemen sonra yalnızca noktalama gelir (. , ; : ! ?). Yuvanın cümlesini sürdüren sözcük yazma; iki yuvayı noktalamayla ayır. Cümle son yuvasıyla BİTER: yorumunu ve çıkarımını yuvadan ÖNCE yaz, son yuvadan sonra yazılan sözcükler çizilmez. YANLIŞ: "{P2} arasında yoğunlaşıyor", "{P1} ve {P3}", "{P3}, bu çok ciddi". DOĞRU: "Terminler sıkışık: {P2}.", "{P1}; buna karşılık {P3}.", "Sorun tek bir yerde toplanmış: {P3}."',
-    '- Tahmin, olasılık ya da öneri kurma (sayfada olmayan bir şeyin "olabileceği", "gerekeceği" gibi); yalnızca önermelerin söylediğini yorumla. Yuvanın söylediğini kendi sözlerinle yineleme.',
-    '- Bir önermenin söylemediğini söyleme: "hepsi", "çoğu", "hiç", "dengeli", "en yoğun", "tamamı" gibi yargıları ancak o yargıyı taşıyan önermenin yuvasıyla kur. required:true önermeler (emin olunamayan noktalar) mutlaka söylenir; bunları doğal biçimde, sonucun sınırı olarak anlat. Sayfada olmayan bir sonucu (örn. denge, lider) çıkarma; eksik bilgiyi tamamlanmış gibi anlatma.',
-    '- Her P# en çok bir kez kullanılır. {T#} ya da {G#} yalnızca kendi başına bir cümle olarak (başka sözcük olmadan) paragrafın sonunda yazılabilir; sunucu o tabloya/grafiğe yönlendiren cümleyi koyar ve blok paragraftan sonra gelir.',
-    '- Grafik seçimi: visual true değilse en çok bir grafik seç (değerlendirmede isteğe bağlıdır); visual true ise istenen grafiği seç.',
-    '',
-    'ANALİST ÜSLUBU',
-    '- İlk paragrafın ilk cümlesi soruyu DOĞRUDAN yanıtlar: sonucu söyle (contrast, pressure, positive, urgency, concentration, balance, attention, leader, coverage, completion, majority türleri sonuç taşır), sonra onu destekleyen sayıları bağla.',
-    '- Olguları sıralama; birbirine bağla: neyin önemli sinyal neyin arka plan olduğunu söyle, aynı noktaya işaret eden bulguları birlikte anlat, karşıtlıkları belirt (buna karşılık, öte yandan, bununla birlikte), yakın vadeye etkisini bağla. Farklı bölümlerin (part) önermelerini aynı paragrafta birleştirebilirsin.',
-    '- Cümle yapısını çeşitlendir; aynı kalıbı tekrar etme. Sayfadaki önermeyi kelimesi kelimesine yinelemek yerine yuvayı kullan.',
+    '- Model yalnızca önerme sırasını, paragraf sınırlarını ve sunum bloklarını seçer. Her cümle tam bir {P#} yuvasıdır; kendi olgunu, yorumunu ya da yargını yazma.',
+    `- İstersen yuvadan önce yalnızca şu sunucu geçişlerinden birini aynen seç: ${JSON.stringify(PROSE_CONNECTORS)}. Örnek: "Genel tabloya bakınca {P1}. Ayrıca {P2}." Başka sözcük yazılan paragraf reddedilir.`,
+    '- Her P# en çok bir kez kullanılır. required:true önermeleri mutlaka söyle. {T#} ya da {G#} yalnızca kendi başına bir cümle olabilir.',
+    '- Bir paragraftaki bütün önermeler aynı part bölümüne ait olmalıdır. Bölümler arası sonuç yalnızca sunucunun o bölüme ait sentez önermesiyle söylenir.',
+    '- İlk paragrafta soruyu doğrudan yanıtlayan sunucu sonucunu seç; sonraki paragraflarda kanıtı ve sınırlarını göster. Serbest metinle olgu ekleme.',
     '',
     'AYRINTI (detail)',
     '- short: tek paragraf, iki-üç cümle; en önemli sonuç ve onu taşıyan bir-iki olgu.',
     '- balanced: iki-üç paragraf. Birincisi sonuç ve ana gerekçe; ikincisi destekleyen bulgular, karşıtlıklar ve yakın vadedeki dikkat noktaları; uygunsa kısa bir sonuç cümlesi. Her bölümden en az üç önerme (daha azsa hepsi).',
-    '- detailed: sayfadaki sections listesini izle: önce bütün bölümleri birleştiren bir sonuç paragrafı, sonra HER bölüm için sırasıyla o bölümün title bloğu ve 2-4 cümlelik kendi paragrafı (bölümün önermeleriyle: etkenler, dağılım, karşılaştırma, zaman görünümü), en sonda emin olunamayan noktalar. Her bölümden en az altı önerme (daha azsa hepsi); tablo ve grafikleri ilgili bölümün paragrafından sonra koy.',
+    '- detailed: sayfadaki sections listesini izle: HER bölüm için sırasıyla o bölümün title bloğu ve 2-4 cümlelik kendi paragrafı (bölümün önermeleriyle: etkenler, dağılım, karşılaştırma, zaman görünümü), en sonda emin olunamayan noktalar. Her bölümden en az altı önerme (daha azsa hepsi); tablo ve grafikleri ilgili bölümün paragrafından sonra koy.',
     '- balanced için başlık kullanma; detailed için bölüm başlıklarını kullan.',
     '- Kanıt seyrekse (bir-iki önerme) kısa yaz; dolgu yapma.',
     '',
@@ -176,7 +169,7 @@ export function compositionSystemPrompt() {
     '{"type":"title","source":"H1"}: isteğe bağlı başlık. {"type":"details","source":"D1"}: sunucunun hazır ayrıntısı.',
     'İlk blok bir paragraftır (başlık varsa ondan sonra). Grafik ya da not ilk blok olamaz.',
     '',
-    'Örnek (sayfa: P1 açık işlerin gecikme payı, P2 en uzun gecikme, P3 gecikmelerin tek projede toplanması, P4 yakın termin; T1 gecikenler tablosu, G1 grafik): {"blocks":[{"type":"say","text":"Genel durum yönetilebilir görünse de gecikmeler dikkat istiyor: {P1}. Sorun dağınık değil, belirli bir yerde toplanmış: {P3}. En çok bekleyen iş de orada; {P2}."},{"type":"say","text":"Yakın vadede baskı sürecek, çünkü {P4}. {T1}"},{"type":"rows","source":"T1"},{"type":"chart","source":"G1","style":"bar"}]}'
+    'Örnek: {"blocks":[{"type":"say","text":"Genel tabloya bakınca {P1}. Ayrıca {P2}."},{"type":"rows","source":"T1"},{"type":"chart","source":"G1","style":"bar"}]}'
   ].join('\n');
 }
 

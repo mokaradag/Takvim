@@ -45,84 +45,27 @@ function proseLayout(view, { skipRequired = false } = {}) {
 
 /* ── 1. Kanıta bağlı düzyazı ─────────────────────────────────────────── */
 
-test('düzyazı denetimi: modelin sözcükleri olgu taşıyamaz (rakam, kayıt adı, özel ad biçimi, işaretleme, sahte yuva)', () => {
-  const known = (id) => ['P1', 'P2', 'T1', 'G1'].includes(id);
-  const names = ['Radar Modernizasyonu', 'Zeynep Kaya'];
-  const ok = checkProse('Genel tabloya bakınca {P1}; asıl baskı ise gecikmelerde, çünkü {P2}. {T1}', { known, names });
-  assert.equal(ok.ok, true, JSON.stringify(ok));
-  assert.deepEqual(ok.ids, ['P1', 'P2', 'T1']);
-  const cases = [
-    ['rakam', 'Toplam 5 iş var: {P1}.', 'PROSE_CHARACTER'],
-    ['Arap-Hint rakamı', 'Toplam ٣ iş: {P1}.', 'PROSE_CHARACTER'],
-    ['yüzde', 'Yüzde elli civarı % oranında: {P1}.', 'PROSE_CHARACTER'],
-    ['kayıt adı (küçük harfle de)', 'radar modernizasyonu tarafında {P1}.', 'PROSE_NAME'],
-    ['cümle başında kayıt adı', 'Zeynep Kaya üzerinde {P1}.', 'PROSE_NAME'],
-    ['uydurma özel ad', 'Bu iş Ahmet üzerinde: {P1}, ve Mehmet de.', 'PROSE_NAME'],
-    ['işaretleme', 'Bu <<çok önemli>>: {P1}.', 'PROSE_CHARACTER'],
-    ['HTML', '<b>dikkat</b> {P1}.', 'PROSE_CHARACTER'],
-    ['bağlantı', 'Ayrıntı için https://ornek.test adresine bakın: {P1}.', 'PROSE_CHARACTER'],
-    ['sahte yuva', 'Toplam {F1} görev: {P1}.', 'PROSE_SLOT'],
-    ['bilinmeyen önerme', 'Durum şu: {P9}.', 'UNKNOWN_PROPOSITION'],
-    ['görünmez karakter', 'Durum‮ şu: {P1}.', 'PROSE_CHARACTER'],
-    ['yalnızca dayanaksız cümleler', 'Her şey yolunda. Ekip harika. Çok iyi gidiyor.', 'PROSE_UNGROUNDED'],
-    ['cümle içinde yönlendirme', 'Ayrıntılar için {T1} incelenebilir.', 'PROSE_POINTER']
-  ];
-  // Tek cümlelik paragrafta ihlal paragrafı düşürür (çizilecek cümle kalmaz) ve ihlalin koduyla reddedilir.
-  for (const [name, text, issue] of cases) assert.equal(checkProse(text, { known, names }).issue, issue, name);
-  // İhlal taşıyan cümle düşürülür (çizilmez); tutulan cümleler çoğunluktaysa paragraf kabul edilir. Düşürme olgu eklemez.
-  const dropped = checkProse('Kısaca durum şöyle. {P1}. Toplam 5 iş var: {P2}. {T1}', { known, names });
-  assert.equal(dropped.ok, true);
-  assert.equal(dropped.dropped, 2);
-  assert.deepEqual(dropped.ids, ['P1', 'T1'], 'rakamlı cümle yuvasıyla birlikte düşer');
-  // Yuvasız çerçeve cümleleri temiz düşer; kalan cümle kendi başına kanıta bağlıdır (paragraf reddedilmez).
-  const framing = checkProse('Her şey yolunda. Ekip harika. Çok iyi gidiyor. {P1}.', { known, names });
-  assert.deepEqual([framing.ok, framing.ids, framing.dropped], [true, ['P1'], 3]);
-  // Noktalamasız ardışık iki yuva iki ayrı önerme cümlesidir.
-  for (const text of ['{P1} {P2}.', '{P1}{P2}']) {
-    const adjacent = checkProse(text, { known, names });
-    assert.deepEqual([adjacent.ok, adjacent.sentences.length, adjacent.ids], [true, 2, ['P1', 'P2']], text);
+test('kapalı anlatım sözleşmesi serbest olguyu kabul etmez; yalnızca sunucunun tarafsız geçişi çizilir', () => {
+  const known = (id) => ['P1', 'P2', 'T1'].includes(id);
+  const valid = checkProse('Genel tabloya bakınca {P1}. Ayrıca {P2}. {T1}', { known });
+  assert.equal(valid.ok, true);
+  assert.deepEqual(valid.ids, ['P1', 'P2', 'T1']);
+  for (const text of ['There are fifty overdue tasks: {P1}.', 'Çoğu tamamlandı: {P1}.', 'Kasım ayının ilk günü {P1}.',
+    'Öncekinin iki katı: {P1}.', '大多数任务完成了 {P1}.', 'أغلب المهام اكتملت {P1}.', '{P1} ama bu doğru değil.',
+    'İK için {P1}.', 'xx üzerinde {P1}.', 'Radar **Modernizasyonu**: {P1}.', '{P1} ve bunların hepsi bir projede: {P2}.']) {
+    assert.equal(checkProse(text, { known }).ok, false, text);
   }
-  // Yinelenen yuvayı taşıyan cümle düşer (aynı olgu iki kez söylenmez).
-  const repeated = checkProse('Önce {P1}. Sonra yine {P1}.', { known, names });
-  assert.deepEqual([repeated.ok, repeated.ids, repeated.issues], [true, ['P1'], ['DUPLICATE_PROPOSITION']]);
-  // Önerme kendi noktasıyla biter: noktasız yuvadan sonra büyük harfle başlayan sözcük yeni cümledir.
-  const implicit = checkProse('{P1} Buna ek olarak {P2}.', { known, names });
-  assert.deepEqual([implicit.ok, implicit.sentences.length, implicit.ids], [true, 2, ['P1', 'P2']]);
-  // Son yuvadan sonraki model yorumu çizilmez (yalnızca bitiş noktalaması kalır).
-  const trailing = checkProse('Baskı artıyor: {P1}, bu da işlerin kontrolden çıktığını gösteriyor.', { known, names });
-  assert.equal(JSON.stringify(trailing.sentences).includes('kontrolden'), false);
-  // Vurgu işaretleri kaldırılır (modelin kendi vurgusu olmaz; kalın değer yalnızca sunucudan gelir).
-  const emphasis = checkProse('Bu **çok önemli**: {P1}.', { known, names });
-  assert.equal(emphasis.ok, true);
-  assert.equal(JSON.stringify(emphasis.sentences).includes('*'), false);
-  // Kayıt adı ancak aynı cümledeki yuvanın kendi önermesinde geçiyorsa yazılabilir (çapraz eşleme olamaz).
-  const slotText = (id) => (id === 'P1' ? 'Radar Modernizasyonu projesinde 3 gecikmiş görev var.' : 'Başka bir olgu.');
-  assert.equal(checkProse('Radar Modernizasyonu tarafında tablo ağır: {P1}.', { known, names, slotText }).ok, true);
-  assert.equal(checkProse('Radar Modernizasyonu tarafında tablo ağır: {P2}.', { known, names, slotText }).issue, 'PROSE_NAME', 'ad başka önermeye bağlanamaz');
+  assert.equal(checkProse('{P9}.', { known }).issue, 'UNKNOWN_PROPOSITION');
+  assert.equal(checkProse('{P1}. {P1}.', { known }).issue, 'DUPLICATE_PROPOSITION');
 });
 
-test('yuvayı ad öbeği gibi kullanan cümle düşmez, yuvada kısaltılır; sıralama bağlacı yeni yan cümle açar', () => {
-  const known = (id) => /^P\d+$/.test(id);
-  const names = ['Altyapı Yenileme', 'Yük testi'];
-  const plain = (result) => result.sentences.map((sentence) => sentence.map((token) => (token.slot ? `{${token.slot}}` : token.text)).join('')).join(' ').trim();
-  // Önceki yuva varsa cümle orada biter; gömülü yuvanın ardındaki model sözcükleri çizilmez.
-  const chained = checkProse('{P3}; ayrıca {P4}, bunu {P5} serisinde diğer görevler izliyor.', { known, names });
-  assert.deepEqual([chained.ok, chained.cut, chained.ids], [true, 1, ['P3', 'P4']]);
-  assert.equal(plain(chained), '{P3}; ayrıca {P4}.');
-  // Önceki yuva yoksa gömülü yuva tek başına kalır; çerçeve sözcükle bitiyorsa (yuvayı niteliyorsa) çerçeve de düşer —
-  // çerçevedeki rakam ve kayıt adı böylece hiç çizilmez.
-  const embedded = checkProse('Kasım ayının ilk otuz günü içinde {P2} görev terminlenecek. Bu görev aynı zamanda {P4} olduğundan, (Yük testi) iki katı.', { known, names });
-  assert.deepEqual([embedded.ok, embedded.ids, plain(embedded)], [true, ['P2', 'P4'], '{P2}. {P4}.']);
-  // Noktalamayla ayrılmış çerçeve yuvayı niteleyemez: korunur.
-  const framed = checkProse('Proje düzeyinde bakınca, {P9} şekilde yayılmış görünse de, {P10} olduğundan Altyapı Yenileme acil.', { known, names });
-  assert.equal(plain(framed), 'Proje düzeyinde bakınca, {P9}.');
-  // Sıralama bağlacı ("ve") yan cümleyi değiştirmez: ardındaki çerçeve bir sonraki yuvaya aittir.
-  const joined = checkProse('{P1} ve bunların hepsi tek bir projede yoğunlaşmış durumda: {P6}.', { known, names });
-  assert.deepEqual([joined.ok, joined.cut, joined.ids], [true, 0, ['P1', 'P6']]);
-  // Bağlaçtan sonra yuva gelmezse kuyruk çizilmez (olgu sonrası yorum ve olumsuzlama yazılamaz).
-  const tail = checkProse('{P1} ama bu doğru değil.', { known, names });
-  assert.equal(plain(tail), '{P1}.');
-  assert.equal(checkProse('{P1} değil.', { known, names }).sentences.flat().some((token) => /değil/u.test(token.text || '')), false, 'olumsuzlama çizilmez');
+test('adlı ya da gömülü yuva bağımsız model iddiasına izin vermez; desteklenmeyen paragraf güvenli geri dönüşe gider', () => {
+  const known = (id) => ['P1', 'P2'].includes(id);
+  for (const name of ['x', 'xx', 'xxxxxxxx', 'İK', '[Ad](https://ornek.test)', '【R99】', 'A_B']) {
+    const result = checkProse(`${name} için çoğu görev tamamlandı: {P1}.`, { known, names: [name], slotText: () => `${name} için dört görev var.` });
+    assert.equal(result.ok, false, name);
+  }
+  assert.deepEqual(checkProse('{P1}{P2}', { known }).ids, ['P1', 'P2']);
 });
 
 test('düzyazı çizimi: model sözcükleri düz metin, her değer sunucunun vurgulu yan cümlesi; cümle içi yuva küçük harfle başlar', () => {
@@ -266,7 +209,8 @@ test('açıklama seçimi özgün analitik niyeti (iş yükü + grafik) model tur
   assert.ok(reads.length, 'seçilen kişi için okuma yapılır');
   const people = new Set(reads.map(({ params }) => params.personSicil).filter(Boolean));
   assert.equal(people.size, 1, 'tek bir seçilmiş kişi');
-  assert.ok([ALI_1, ALI_2].includes([...people][0]));
+  assert.equal([...people][0], ALI_1, 'birinci adayın tam kimliği okunur');
+  assert.ok(reads.some(({ params }) => params.withAssignees === 1 && params.personSicil === ALI_1), 'kabul edilmiş iş yükü yönü seçilen kişi için yeniden okunur');
   assert.equal(pages.at(-1).visual, true, 'grafik isteği açıklamadan sonra korunur');
 });
 
@@ -360,8 +304,9 @@ test('seyrek veri: görevi olmayan kullanıcıda düzyazı kısa ve dayanaklıd�
   let page = null;
   const { ask } = phase4eConversation(t, { sicil: OUTSIDER, compose: () => composer((view) => { page = view; return proseLayout(view); }) });
   const result = await ask({ text: 'işlerimin durumunu değerlendir', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'overdue', 'upcoming'] } } });
-  assert.ok(['stop', 'not_found'].includes(result.answer.finishReason), result.answer.content);
-  if (page) assert.ok(page.propositions.length <= 4, 'seyrek kanıtta az önerme');
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.ok(page && page.propositions.length <= 4, 'seyrek kanıtta sayfa kurulur ve az önerme taşır');
+  assert.match(result.answer.content, /göreviniz yok|görev bulunmuyor|görev bulunamadı/u, 'boş nüfus görünür yanıtta açıkça söylenir');
   assert.doesNotMatch(result.answer.content, /Zeynep|Radar test planı|Anten/, 'başkasının verisi görünmez');
   assert.equal(ZEYNEP > 0, true);
 });
@@ -467,6 +412,7 @@ test('kesinlik takibi: tabloların tamlığı sunucu önermesidir; model kapsam 
   const certainty = page.propositions.filter((item) => item.kind === 'certainty');
   assert.ok(certainty.every((item) => /tablosu |^Bu tablo /u.test(item.text)), JSON.stringify(certainty));
   assert.equal(certainty.some((item) => /^Görev /u.test(item.text)), false);
+  for (const item of certainty) assert.ok(result.answer.content.replace(/\\/gu, '').toLocaleLowerCase('tr-TR').includes(item.text.toLocaleLowerCase('tr-TR')), 'kesinlik yalnızca sayfada değil görünür yanıtta söylenir');
 });
 
 test('tek günlük termin aralığı aynı tarihi iki kez söylemez (önerme ve başlık)', async (t) => {
@@ -513,12 +459,12 @@ test('Ayrıntılı bölümlüdür: sayfa ana hat taşır, her bölüm sunucu ba�
   assert.ok(results.detailed.page.propositions.length > results.balanced.page.propositions.length);
 });
 
-test('karşılaştırma takibi: yeniden yazılan özne adları önceki özneler sayılır; satır numaraları karşılaştırılan öznelerdir', async (t) => {
+test('karşılaştırma takibi kanonik önceki kapsamı kullanır; satır numaraları görünen öznelerdir', async (t) => {
   const { ask } = phase4eConversation(t, { compose: () => composer((view) => proseLayout(view)) });
   const first = await ask({ text: 'Radar Modernizasyonu ile Okuma Projesi projelerini karşılaştır',
     plan: { intent: 'rota', language: 'tr', analysis: { scope: 'projects', names: ['Radar Modernizasyonu', 'Okuma Projesi'], focus: ['overview', 'overdue'] } } });
   assert.equal(first.answer.finishReason, 'stop', first.answer.content);
-  const repeated = await ask({ text: 'sadece gecikmelere bakarsak', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['Radar Modernizasyonu', 'Okuma Projesi'], focus: ['overdue'] } } });
+  const repeated = await ask({ text: 'sadece gecikmelere bakarsak', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['overdue'] } } });
   assert.equal(repeated.answer.finishReason, 'stop', repeated.answer.content);
   assert.equal(repeated.inputs.length, 1, 'ek model turu açılmaz');
   const ranked = await ask({ text: 'hangisinde sorun daha ciddi', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'previous', rows: [1, 2], act: 'prioritize' } } });

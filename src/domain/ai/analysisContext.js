@@ -12,14 +12,16 @@ import { isIsoDay } from './isoDay.js';
  * kanıt, yeni turun kanıtı sayılmaz. Bozuk ya da tanınmayan bağlam hiç kullanılmaz (göndergesiz takip açıklama ister).
  */
 
+export const ANALYSIS_CONTEXT_VERSION = 2;
 export const ANALYSIS_CONTEXT_SCOPES = Object.freeze(['self', 'team', 'person', 'project', 'projects', 'all']);
-export const ANALYSIS_CONTEXT_LIMITS = Object.freeze({ maxSubjects: 2, maxRows: 10, maxFocus: 3 });
+export const ANALYSIS_CONTEXT_LIMITS = Object.freeze({ maxSubjects: 2, maxRows: 10, maxFocus: 4, maxPendingFocus: 3 });
 const LEVELS = Object.freeze(['unit', 'department', 'directorate']);
 const FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'overdue', 'upcoming', 'workload', 'projects', 'schedule', 'critical']);
-const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'chart', 'table', 'rows', 'rowPopulation', 'pending', 'rowsOnly']);
+const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'chart', 'table', 'rows', 'rowPopulation', 'pending', 'rowsOnly', 'withSelf', 'relativeWindow']);
+const VERSION_ONE_KEYS = new Set([...KEYS].filter((key) => !['withSelf', 'relativeWindow'].includes(key)));
 const CHARTS = Object.freeze(['bar', 'donut', 'line', 'stacked', 'kpi', 'timeline']);
-const PENDING_SCOPES = Object.freeze(['self', 'team', 'person', 'project', 'projects', 'all']);
-const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'visual', 'chart', 'table']);
+const PENDING_SCOPES = Object.freeze([...ANALYSIS_CONTEXT_SCOPES, 'previous', 'row']);
+const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'visual', 'chart', 'table', 'withSelf', 'relativeWindow', 'rows', 'act']);
 const shortText = (value) => typeof value === 'string' && value.trim().length >= 2 && value.length <= 120;
 
 /**
@@ -31,19 +33,25 @@ export function normalizePendingAnalysis(value) {
   try {
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some((key) => !PENDING_KEYS.has(key))) return null;
     if (!['tr', 'en'].includes(value.language) || !PENDING_SCOPES.includes(value.scope)) return null;
-    const focus = value.focus;
-    if (!Array.isArray(focus) || !focus.length || focus.length > ANALYSIS_CONTEXT_LIMITS.maxFocus || focus.some((item) => !FOCUS.includes(item)) || new Set(focus).size !== focus.length) return null;
+    const focus = value.focus || (['previous', 'row'].includes(value.scope) ? [] : null);
+    if (!Array.isArray(focus) || (!focus.length && !['previous', 'row'].includes(value.scope)) || focus.length > ANALYSIS_CONTEXT_LIMITS.maxPendingFocus || focus.some((item) => !FOCUS.includes(item)) || new Set(focus).size !== focus.length) return null;
     if (value.names != null && (!Array.isArray(value.names) || !value.names.length || value.names.length > 2 || !value.names.every(shortText))) return null;
     if (['person', 'project'].includes(value.scope) !== Boolean(value.names)) return null;
     if (value.level != null && (value.scope !== 'team' || !LEVELS.includes(value.level))) return null;
-    if (value.within != null && !shortText(value.within)) return null;
+    if (value.withSelf != null && (typeof value.withSelf !== 'boolean' || !['person', 'previous'].includes(value.scope) || (value.withSelf && value.scope === 'person' && value.names?.length !== 1))) return null;
+    if (value.within != null && (!shortText(value.within) || !['self', 'team', 'all', 'previous'].includes(value.scope) && !(value.scope === 'person' && value.withSelf))) return null;
+    if ((value.scope === 'row') !== (value.rows != null)) return null;
+    if (value.rows && (!Array.isArray(value.rows) || !value.rows.length || value.rows.length > 2 || new Set(value.rows).size !== value.rows.length || value.rows.some((row) => !Number.isInteger(row) || row < 1 || row > 10))) return null;
+    if (value.act != null && !['explain', 'expand', 'summarize', 'prioritize', 'certainty'].includes(value.act)) return null;
+    if (value.relativeWindow != null && (!['today', 'next_7_days'].includes(value.relativeWindow) || value.dateFrom || value.dateTo)) return null;
     for (const key of ['dateFrom', 'dateTo']) if (value[key] != null && !isIsoDay(value[key])) return null;
     if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) return null;
-    for (const key of ['visual', 'table']) if (value[key] != null && value[key] !== true) return null;
+    for (const key of ['visual', 'table']) if (value[key] != null && typeof value[key] !== 'boolean') return null;
     if (value.chart != null && (!CHARTS.includes(value.chart) || value.visual !== true)) return null;
     return Object.freeze({ language: value.language, scope: value.scope, focus: Object.freeze([...focus]), ...(value.names ? { names: Object.freeze([...value.names]) } : {}),
-      ...(value.level ? { level: value.level } : {}), ...(value.within ? { within: value.within } : {}), ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}),
-      ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual ? { visual: true } : {}), ...(value.chart ? { chart: value.chart } : {}), ...(value.table ? { table: true } : {}) });
+      ...(value.level ? { level: value.level } : {}), ...(value.withSelf != null ? { withSelf: value.withSelf } : {}), ...(value.within ? { within: value.within } : {}),
+      ...(value.rows ? { rows: Object.freeze([...value.rows]) } : {}), ...(value.act ? { act: value.act } : {}), ...(value.relativeWindow ? { relativeWindow: value.relativeWindow } : {}), ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}),
+      ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual != null ? { visual: value.visual } : {}), ...(value.chart ? { chart: value.chart } : {}), ...(value.table != null ? { table: value.table } : {}) });
   } catch {
     return null;
   }
@@ -55,7 +63,7 @@ export function withPendingAnalysis(previous, pending) {
   const prior = normalizeAnalysisContext(previous);
   if (!normalizedPending) return prior;
   const { pending: _stale, ...base } = prior || {};
-  return Object.freeze({ ...(prior ? base : { v: 1 }), pending: normalizedPending });
+  return Object.freeze({ ...(prior ? base : { v: ANALYSIS_CONTEXT_VERSION }), pending: normalizedPending });
 }
 
 function identity(item) {
@@ -71,38 +79,39 @@ function identity(item) {
   return null;
 }
 
-function identities(value, max, { unique = true } = {}) {
+function identities(value, max, { unique = true, positional = false } = {}) {
   if (value == null) return Object.freeze([]);
   if (!Array.isArray(value) || value.length > max) return null;
-  const items = value.map(identity);
-  if (items.some((item) => !item)) return null;
-  const keys = items.map((item) => `${item.type}:${item.id}`);
+  const items = value.map((item) => item === null && positional ? null : identity(item));
+  if (items.some((item, index) => !item && !(positional && value[index] === null))) return null;
+  const keys = items.map((item) => item ? `${item.type}:${item.id}` : null);
   return !unique || new Set(keys).size === keys.length ? Object.freeze(items) : null;
 }
 
 /** Kapalı biçimli bağlam; uymuyorsa `null`. Dönen değer donmuş kopyadır. */
 export function normalizeAnalysisContext(value) {
   try {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || value.v !== 1 || Object.keys(value).some((key) => !KEYS.has(key))) return null;
+    if (!value || typeof value !== 'object' || Array.isArray(value) || ![1, ANALYSIS_CONTEXT_VERSION].includes(value.v) || Object.keys(value).some((key) => !KEYS.has(key))) return null;
+    if (value.v === 1 && (Object.keys(value).some((key) => !VERSION_ONE_KEYS.has(key)) || value.focus?.length > 3)) return null;
     const pending = value.pending == null ? null : normalizePendingAnalysis(value.pending);
     if (value.pending != null && !pending) return null;
     // Yalnızca bekleyen niyet (önceki analiz yokken açıklama): takip öznesi değildir; `scope` boştur.
     const empty = (key) => value[key] == null || (Array.isArray(value[key]) && !value[key].length);
     if (value.scope == null && pending && Object.keys(value).every((key) => ['v', 'pending', 'scope'].includes(key) || (['subjects', 'focus', 'rows'].includes(key) && empty(key)))) {
-      return Object.freeze({ v: 1, scope: null, subjects: Object.freeze([]), focus: Object.freeze([]), rows: Object.freeze([]), pending });
+      return Object.freeze({ v: ANALYSIS_CONTEXT_VERSION, scope: null, subjects: Object.freeze([]), focus: Object.freeze([]), rows: Object.freeze([]), pending });
     }
     if (!ANALYSIS_CONTEXT_SCOPES.includes(value.scope)) return null;
     if (value.level != null && (value.scope !== 'team' || !LEVELS.includes(value.level))) return null;
     const subjects = identities(value.subjects, ANALYSIS_CONTEXT_LIMITS.maxSubjects);
     // Satırlar KONUMSALDIR: aynı projede iki görev satırı aynı proje kimliğini iki kez taşır ("2. satır" sırası korunur).
-    const rows = identities(value.rows, ANALYSIS_CONTEXT_LIMITS.maxRows, { unique: false });
+    const rows = identities(value.rows, ANALYSIS_CONTEXT_LIMITS.maxRows, { unique: false, positional: true });
     if (!subjects || !rows) return null;
     let rowPopulation = null;
     if (value.rowPopulation != null) {
       if (!value.rowPopulation || typeof value.rowPopulation !== 'object' || Array.isArray(value.rowPopulation)
         || Object.keys(value.rowPopulation).some((key) => !['scope', 'level', 'subjects'].includes(key))) return null;
       const normalized = normalizeAnalysisContext({ v: 1, ...value.rowPopulation });
-      if (!normalized || !['self', 'team', 'person'].includes(normalized.scope) || rows.some((row) => row.type !== 'project')) return null;
+      if (!normalized || !['self', 'team', 'person'].includes(normalized.scope) || rows.some((row) => row && row.type !== 'project')) return null;
       rowPopulation = { scope: normalized.scope, subjects: normalized.subjects, ...(normalized.level ? { level: normalized.level } : {}) };
     }
     if (['person', 'project'].includes(value.scope) && (!subjects.length || subjects.some((item) => item.type !== value.scope))) return null;
@@ -110,6 +119,8 @@ export function normalizeAnalysisContext(value) {
     // Daraltma: kendi/ekip/bütün görevler kapsamının sunucunun bağladığı tek proje kimliğiyle kesişimi.
     const within = value.within == null ? null : identity(value.within);
     if (value.within != null && (!within || within.type !== 'project' || !['self', 'team', 'all', 'person', 'projects'].includes(value.scope))) return null;
+    if (value.withSelf != null && (value.withSelf !== true || value.scope !== 'person' || subjects.length !== 1)) return null;
+    if (value.relativeWindow != null && (!['today', 'next_7_days'].includes(value.relativeWindow) || value.dateFrom || value.dateTo)) return null;
     const focus = value.focus == null ? [] : value.focus;
     if (!Array.isArray(focus) || focus.length > ANALYSIS_CONTEXT_LIMITS.maxFocus || focus.some((item) => !FOCUS.includes(item)) || new Set(focus).size !== focus.length) return null;
     for (const key of ['dateFrom', 'dateTo']) if (value[key] != null && !isIsoDay(value[key])) return null;
@@ -118,8 +129,8 @@ export function normalizeAnalysisContext(value) {
     if (value.chart != null && (!CHARTS.includes(value.chart) || value.visual !== true)) return null;
     if (value.table != null && typeof value.table !== 'boolean') return null;
     // Ayrıntılı istekle listelenen görevlerin bağlamı yalnızca satır göndergesidir (önceki özne olarak kullanılamaz).
-    if (value.rowsOnly != null && (value.rowsOnly !== true || !rows.length || rows.some((row) => row.type !== 'project'))) return null;
-    return Object.freeze({ v: 1, scope: value.scope, ...(value.level ? { level: value.level } : {}), subjects, ...(within ? { within } : {}), focus: Object.freeze([...focus]),
+    if (value.rowsOnly != null && (value.rowsOnly !== true || !rows.length || rows.some((row) => row && row.type !== 'project'))) return null;
+    return Object.freeze({ v: ANALYSIS_CONTEXT_VERSION, scope: value.scope, ...(value.level ? { level: value.level } : {}), subjects, ...(value.withSelf ? { withSelf: true } : {}), ...(value.relativeWindow ? { relativeWindow: value.relativeWindow } : {}), ...(within ? { within } : {}), focus: Object.freeze([...focus]),
       ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}), ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual ? { visual: true } : {}),
       ...(value.chart ? { chart: value.chart } : {}), ...(value.table ? { table: true } : {}), rows,
       ...(rowPopulation ? { rowPopulation: Object.freeze(rowPopulation) } : {}), ...(pending ? { pending } : {}), ...(value.rowsOnly ? { rowsOnly: true } : {}) });
@@ -133,8 +144,9 @@ export function normalizeAnalysisContext(value) {
  * sorusu zaten geçmiştedir; bu not yalnızca sunucunun bağladığı öznenin VARLIĞINI ve biçimini söyler.
  */
 export function analysisContextSummary(context) {
-  const rows = context.rows.length ? { type: context.rows[0].type, count: context.rows.length } : null;
-  return { scope: context.scope, ...(context.level ? { level: context.level } : {}), subjects: context.subjects.length, ...(context.within ? { withinProject: true } : {}),
+  const row = context.rows.find(Boolean);
+  const rows = row ? { type: row.type, count: context.rows.length } : null;
+  return { scope: context.scope, ...(context.level ? { level: context.level } : {}), subjects: context.subjects.length, ...(context.withSelf ? { withSelf: true } : {}), ...(context.relativeWindow ? { relativeWindow: context.relativeWindow } : {}), ...(context.within ? { withinProject: true } : {}),
     ...(context.focus.length ? { focus: context.focus } : {}),
     ...(context.dateFrom ? { dateFrom: context.dateFrom } : {}), ...(context.dateTo ? { dateTo: context.dateTo } : {}), ...(context.visual ? { visual: true } : {}),
     ...(context.chart ? { chart: context.chart } : {}), ...(context.table ? { table: true } : {}), ...(rows ? { rows } : {}) };

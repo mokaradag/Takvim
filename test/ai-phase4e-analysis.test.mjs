@@ -346,7 +346,8 @@ test('takip bağlamını yalnızca kabul edilmiş analiz yazar; kapsam kabul edi
     assert.equal(first.answer.finishReason, 'stop');
     const followup = await ask({ text: 'peki gelecek hafta?', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['upcoming'], dateFrom: '2026-10-05', dateTo: '2026-10-11' } } });
     assert.match(systemNotes(followup.inputs[0]), /"scope":"projects"/, 'saklanan kapsam kabul edilen özetin kapsamıdır (all değil)');
-    assert.ok(followup.log.some((row) => row.query === 'portfolio'), 'portföy kapsamı sürer');
+    assert.ok(populationReads(followup.log).every(({ params }) => params.dateFrom === '2026-10-05' && params.dateTo === '2026-10-11'), 'portföyün dönemli proje kırılımı aynı pencereyi korur');
+    assert.equal(followup.log.some((row) => row.query === 'portfolio'), false, 'dönemsiz portföy aracı kullanılmaz');
     assert.equal(followup.answer.finishReason, 'stop');
   });
   await t.test('projelere göre gruplar satır göndergesidir', async (t) => {
@@ -423,7 +424,7 @@ test('ekip kapsamı: düzey yalnızca ekip nüfusuyla bildirilir, sorumlu grupla
 test('analiz bağlamı kapalı biçimlidir; model kimlik görmez; önceki özne ve satırlar yalnızca sunucu açılımıyla okunur', () => {
   const context = normalizeAnalysisContext({ v: 1, scope: 'project', subjects: [{ type: 'project', id: PROJECTS.FULL }], focus: ['overview'], rows: [{ type: 'person', id: String(ZEYNEP) }] });
   assert.ok(context);
-  for (const invalid of [{ ...context, v: 2 }, { ...context, scope: 'everyone' }, { ...context, subjects: [] }, { ...context, subjects: [{ type: 'project', id: 'x' }] },
+  for (const invalid of [{ ...context, v: 3 }, { ...context, scope: 'everyone' }, { ...context, subjects: [] }, { ...context, subjects: [{ type: 'project', id: 'x' }] },
     { ...context, rows: [{ type: 'person', id: '-1' }] }, { ...context, focus: ['x'] }, { ...context, extra: true }, { v: 1, scope: 'self', subjects: [{ type: 'project', id: PROJECTS.FULL }] }]) {
     assert.equal(normalizeAnalysisContext(invalid), null, JSON.stringify(invalid));
   }
@@ -651,11 +652,11 @@ test('yanıt düzyazısı akıcıdır: aynı nüfusun önermeleri bağlanır, ay
       plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'overdue', 'upcoming'], dateFrom: '2026-09-28', dateTo: '2026-10-04' } } });
     const paragraphs = answer.content.split('\n\n');
     // Gecikme payından sonra yakın termin aynı cümlede; genel görünümün ayrıntısı hemen ardından (yanıtın sonunda değil).
-    assert.equal(paragraphs[0], "Açık **6** görevin **3'ü** (**%50**) gecikmiş durumda; bugün başlayan yedi günlük dönemde de **1** açık görevin termini var. 【R1】");
-    assert.equal(paragraphs[1], "Sorumlusu olduğunuz toplam **7** görev bulunuyor. Bunların **1**'i tamamlanmış; tamamlanma oranı **%14**. 【R1】",
+    assert.equal(paragraphs[0], "Açık **1** görevin **1'i** (**%100**) gecikmiş durumda. 【R1】");
+    assert.equal(paragraphs[1], "Sorumlusu olduğunuz toplam **1** görev bulunuyor (ölçüt: Tarih alanı: Termin; İlk tarih: 28 Eylül 2026; Son tarih: 4 Ekim 2026). Bunların **0**'ı tamamlanmış ve **0**'ı yedi gün içinde terminli; tamamlanma oranı **%0**. 【R1】",
       'analist cümlesinin söylediği açık/gecikmiş sayısı ayrıntıda yinelenmez; "Sorumlu: Ben" öznede');
-    // Dengeli yanıtın bütçesi önce analist sonucuna ayrılır: öneri (en uzun gecikme) türetilmiş proje yoğunlaşmasından önce gelir.
-    assert.match(paragraphs[2], /^Şu anda \*\*3\*\* gecikmiş göreviniz var ve ortalama gecikme \*\*11,3 gün\*\*\. En uzun süredir geciken görev .+, en kısa süredir geciken ise .+\. Bunların \*\*2\*\*'si bir haftadan uzun süredir gecikmiş\. En uzun süredir beklediği için ilk ele alınabilecek iş \*\*Haftalık durum toplantısı\*\* görünüyor\./);
+    // Gecikmiş bölüm yalnızca dönem içindeki görevi gösterir; eski toplamlar ve ortalamalar taşınmaz.
+    assert.equal(paragraphs[2], "Şu anda **28 Eylül 2026** ile **4 Ekim 2026** arasında terminli **1** gecikmiş göreviniz var. **Kısmi Proje** projesindeki **Kısmi kendi görevim** görevinin termini **29 Eylül 2026**. Görev **1** gündür gecikmiş. 【R2】");
     assert.match(answer.content, /30 Eylül 2026.*4 Ekim 2026.*terminli açık göreviniz yok\./, 'yaklaşan pencere gecikmiş işi tekrar saymaz');
     assert.doesNotMatch(answer.content, /Eşleşen \*\*1\*\* görev bulundu/);
     for (const paragraph of paragraphs) assert.ok(paragraph.split('(ölçüt:').length <= 2, `ölçüt paragrafta en çok bir kez: ${paragraph}`);
@@ -808,9 +809,9 @@ test('takipte bu iletide geçmeyen ad yeniden yazılırsa sunucu önceki özneye
   const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
   await ask({ text: 'Radar Modernizasyonu projesini özetle' });
   const result = await ask({ text: 'bunu grafikle göster' });
-  // Aynı türde ve sayıda önceki özneyi gösteren, bu iletide geçmeyen ad doğrudan kanonik göndergeye ("previous") çevrilir:
-  // onarım turu gerekmez, sonuç aynıdır (önceki proje, güncel yetkiyle, grafikli).
-  assert.equal(result.inputs.length, 1);
+  // Güvenilir ad-kimlik bağı olmadan önceki özneye çevrilmez; model mevcut onarım turunda kanonik göndergeyi seçer.
+  assert.equal(result.inputs.length, 2);
+  assert.match(systemText(result.inputs[1].messages), /untrusted/u, 'güvenilmeyen ad onarıma gider');
   assert.deepEqual(turnViolations(result, { project: true, finish: 'stop', chart: true }), []);
 });
 

@@ -98,6 +98,7 @@ const server = http.createServer((request, response) => {
   request.on('end', () => {
     let body;
     try { body = JSON.parse(raw); } catch { return send(400, { error: { message: 'bad json' } }); }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return send(400, { error: { message: 'bad json' } });
     if (body.model !== MODEL) {
       record({ purpose: 'escalation-attempt', ok: false, requestedModel: String(body.model).slice(0, 80) });
       return send(400, { error: { message: 'only the qualification model is served' } });
@@ -109,4 +110,4 @@ const server = http.createServer((request, response) => {
     }).catch(() => send(500, { error: { message: 'bridge error' } }));
   });
 });
-server.listen(PORT, '127.0.0.1', () => process.stdout.write(`bridge listening ${PORT}\n`));
+server.listen(PORT, '127.0.0.1', () => process.stdout.write(`bridge listening ${server.address().port}\n`));

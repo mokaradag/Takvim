@@ -82,7 +82,12 @@ async function ask(page, text) {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1500, height: 1000 } });
   const page = await context.newPage();
-  const results = [];
+  const resultFile = path.join(outDir, `${scenario.profile}.json`);
+  const runId = process.env.UI_RUN_ID || require('crypto').randomUUID();
+  const rerun = new Set(scenario.conversations.map((item) => item.name));
+  const results = process.env.UI_ONLY && fs.existsSync(resultFile)
+    ? JSON.parse(fs.readFileSync(resultFile, 'utf8')).filter((row) => !rerun.has(row.conversation)) : [];
+  try {
   await page.goto(`http://127.0.0.1:${scenario.port}/`, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: /Gerçek Sistemi aç/ }).click();
   await page.getByRole('button', { name: /Kapsamlı Kip/ }).click();
@@ -104,15 +109,22 @@ async function ask(page, text) {
       const trace = turnTraces().slice(tracesBefore).at(-1) || null;
       const shot = path.join(outDir, `${scenario.profile}-${conversationIndex + 1}-${turnIndex + 1}.png`);
       await page.locator('.rota-assistant-thread').screenshot({ path: shot }).catch(() => {});
-      const row = { profile: scenario.profile, conversation: conversation.name, detail: conversation.detail, turn: turnIndex + 1, question: text, ms, rendered,
+      const expectedChart = conversation.expectedCharts?.[turnIndex] || null;
+      const failures = [];
+      if (rendered.status === 'driver-error' || rendered.status === 'error') failures.push('tarayıcı turu tamamlanamadı');
+      if (expectedChart && !rendered.charts?.some((chart) => chart.type === expectedChart && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);
+      if (!trace) failures.push('bu tura ait sunucu kanıtı yok');
+      if (calls.some((call) => !call.ok || call.thinking !== 'off' || call.thinkingTokens !== 0 || !call.models?.length || call.models.some((model) => model !== 'claude-haiku-4-5-20251001'))) failures.push('model çağrısı kabul sözleşmesini sağlamadı');
+      const row = { runId, failures, profile: scenario.profile, conversation: conversation.name, detail: conversation.detail, turn: turnIndex + 1, question: text, ms, rendered,
         server: trace ? { outcome: trace.outcome, parts: trace.parts, escalated: trace.escalated, presentation: trace.presentation, models: [...new Set((trace.rounds || []).map((round) => round.model))],
           reasoning: trace.usage?.reasoning ?? null } : null,
         calls: calls.map((call) => ({ purpose: call.purpose, ok: call.ok, models: call.models, thinking: call.thinking, thinkingTokens: call.thinkingTokens, ms: call.ms,
           input: call.input, cacheRead: call.cacheRead, cacheWrite: call.cacheWrite, output: call.output, error: call.error })), screenshot: path.basename(shot) };
       results.push(row);
-      fs.writeFileSync(path.join(outDir, `${scenario.profile}.json`), JSON.stringify(results, null, 2));
+      fs.writeFileSync(resultFile, JSON.stringify(results, null, 2));
       process.stdout.write(`${scenario.profile} ${conversation.name} #${turnIndex + 1} ${rendered.status} ${ms}ms charts=${(rendered.charts || []).map((chart) => chart.type).join(',')} tables=${(rendered.tables || []).length} pres=${trace?.presentation?.mode || '-'}${trace?.presentation?.server ? '(server:' + trace.presentation.reason + '/' + trace.presentation.issue + ')' : ''}\n`);
+      if (failures.length) throw new Error(failures.join('; '));
     }
   }
-  await browser.close();
+  } finally { await browser.close(); }
 })().catch((error) => { console.error(error); process.exit(1); });

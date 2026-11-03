@@ -26,6 +26,8 @@ const plan = (args) => ({ text: '', toolCalls: [{ id: 'p1', name: 'rota_plan', a
 const prose = (text) => ({ text, toolCalls: [], finishReason: 'stop' });
 const stackFor = (t) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed({}) });
 
+const { decodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+
 test('4C posted convergence: predecision failures sample once without becoming invalid plans', async (t) => {
   for (const code of ['AI_PROVIDER_UNAVAILABLE', 'AI_TIMEOUT', 'AI_CANCELLED']) await t.test(code, async (t) => {
     const stack = stackFor(t);
@@ -77,7 +79,7 @@ test('4C final convergence: escalation retains planner ownership until terminal 
   assert.equal(stack.db.aiToolLog?.length || 0, 0);
 });
 
-test('4C posted convergence: storage-bound scope omission preserves data and reaches the existing terminal trace', async (t) => {
+test('kalıcılık sınırında satır göndergesi ve yetki nüfusu korunur; sonuç kapsamının eksikliği izde görünür', async (t) => {
   stackFor(t);
   const logs = captureConsole(t);
   const request = { operation: 'list', metrics: ['task.title', 'task.status'], population: { tool: 'rota_task_search', collection: 'tasks' } };
@@ -103,13 +105,14 @@ test('4C posted convergence: storage-bound scope omission preserves data and rea
   });
   assert.equal(result.outcome, 'grounded');
   const saved = JSON.parse(result.evidenceRows[0].evidenceJson);
-  assert.equal(saved.dataOmitted, undefined);
-  assert.ok(saved.data.tasks.some(row => row.taskId === TASKS.OVERDUE));
+  assert.equal(saved.dataOmitted, 'size');
+  assert.ok(saved.analysisContext.rowsOnly, 'satır göndergesi kalıcı kayıtta korunur');
+  assert.ok(decodeAuthorizationPopulation(saved.authorizationPopulation).some(row => row.taskId === TASKS.OVERDUE), 'tam yetki nüfusu korunur');
   assert.equal(saved.resultScope, undefined);
   const traces = logs.map(line => JSON.parse(line.slice(line.indexOf('{')))).filter(row => row.operation === 'ai.grounded.turn');
   assert.equal(traces.length, 1);
   assert.equal(traces[0].context.resultScopeOmitted, true);
-  assert.ok(!JSON.stringify(traces).includes(TASKS.OVERDUE), 'omission diagnostics contain no task identity or evidence');
+  assert.ok(!JSON.stringify(traces).includes(TASKS.OVERDUE), 'eksiklik tanısı görev kimliği ya da kanıt taşımaz');
 });
 
 async function turn(t, steps, { user = 'Rota verisini incele', planning = null, allowedTextFields = [], limits, setup = null, signal = null, previousResult = null } = {}) {

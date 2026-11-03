@@ -89,14 +89,15 @@ export async function composeGroundedAnswer({ session, composition, onStart = nu
     if (!checked.ok) return { ok: false, reason: 'INVALID', issue: checked.issues[0] };
     // Açık görselleştirme isteğinde geçerli aday varsa grafik zorunludur: model atlarsa sunucu ekler.
     let validated = ensureChart(composition, checked);
+    let serverFallback = false;
     if (composition.render.visual && composition.render.charts.size && !validated.blocks.some((block) => block.type === 'chart')
       && checked.blocks.length >= (composition.render.limits || COMPOSITION_LIMITS).maxBlocks) {
       const fallback = defaultComposition(composition);
-      if (fallback?.ok && fallback.blocks.some((block) => block.type === 'chart')) validated = { ...fallback, chartInserted: true };
+      if (fallback?.ok && fallback.blocks.some((block) => block.type === 'chart')) { validated = { ...fallback, chartInserted: true }; serverFallback = true; }
     }
     const rendered = renderComposition(composition, validated);
     // Düzyazı onarım sayıları (içeriksiz): düşen/kısaltılan cümle, düşen grafik bloğu, sunucu tamamlaması.
-    const prose = checked.prose ? { dropped: checked.prose.dropped, cut: checked.prose.cut, charts: checked.prose.charts, supplemented: checked.prose.supplemented } : null;
+    const prose = !serverFallback && checked.prose ? { dropped: checked.prose.dropped, cut: checked.prose.cut, charts: checked.prose.charts, supplemented: checked.prose.supplemented } : null;
     return rendered.text.trim() ? { ok: true, ...rendered, ...(validated.chartInserted ? { chartInserted: true } : {}), ...(prose ? { prose } : {}) }
       : { ok: false, reason: 'INVALID', issue: 'EMPTY_RENDER' };
   } catch {

@@ -131,7 +131,7 @@ const CHART_TYPE_NEEDS = Object.freeze({
   timeline: ['tarihli görev satırları', 'dated task rows']
 });
 const CHART_TYPE_NAMES = Object.freeze({ bar: ['çubuk grafik', 'bar chart'], donut: ['halka grafik', 'donut chart'], line: ['çizgi grafik', 'line chart'],
-  stacked: ['yığılmış çubuk grafik', 'stacked bar chart'], kpi: ['gösterge kartları', 'KPI cards'], timeline: ['zaman çizelgesi', 'timeline'] });
+  stacked: ['yığılmış çubuk grafik', 'stacked bar chart'], kpi: ['gösterge kartları', 'KPI card set'], timeline: ['zaman çizelgesi', 'timeline'] });
 
 /**
  * İstenen grafik TÜRÜ doğrulanmış kanıttan çizilemediğinde türün gerektirdiği veriyi söyleyen kısa not; başka uygun bir
