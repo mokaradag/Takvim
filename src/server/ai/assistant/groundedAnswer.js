@@ -32,7 +32,7 @@ import { concreteCollections, rankedRowIndexes, taskResultScope } from '../../..
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
 import { PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderPartUnavailable, renderPlannerAbstention, renderChartUnavailable, renderChartTypeUnavailable, renderPlannerClarification, renderScopeUnavailable, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
 import { buildComposition, chartTypeSupported, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
-import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisSchema, analysisSuggestion, effectiveFocus, normalizedBrief } from '../tools/analysisPlan.js';
+import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisSchema, analysisSuggestion, normalizedBrief } from '../tools/analysisPlan.js';
 import { caveatPropositions } from '../../../domain/ai/groundedPropositions.js';
 import { expandedAnswerDetail, normalizeAnswerDetail } from '../../../domain/ai/answerDetail.js';
 import { ANALYSIS_CONTEXT_VERSION, analysisContextSummary, normalizeAnalysisContext, normalizePendingAnalysis, withPendingAnalysis } from '../../../domain/ai/analysisContext.js';
@@ -1178,17 +1178,18 @@ function startTurn({ messages, catalog, context, limits, allowedTextFields, clar
     const note = { role: 'system', content: `Önceki doğrulanmış Rota sonuç kapsamı: ${JSON.stringify({ type: 'task', count: turn.previousResult.scope.taskIds.length })}. Bu yalnızca göndergedir, güncel kanıt değildir. Kullanıcının sorusu bu kümeye ilişkinse ("bunlar", "bunlardan", "onun") request.previousResult=true ile rota_task_search (görev özellikleri/süzgeç) ya da rota_task_analytics (sayı) bildir; kimlik/önceki süzgeç kopyalama. Soru kümenin TEK bir görevine sıra ile başvuruyorsa ("ilk görev", "2. görev"; tek görevli kümede "o görev") previousResult yazma; entities:[{"type":"task","previous":<1 tabanlı sıra>}] ile o görevin aracını (ör. öncül/ardıl için rota_dependency_inspect, alanları için rota_task_detail) bildir. Yeni veya adı verilmiş kayıt sorusunda (ör. başka bir kişi) kullanma; önceki sorunun koşullarını yeni kayda uygula. Önceki asistan metninden veri çıkarma.` };
     for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note.content);
   }
-  if (analysisPrior && !analysisPrior.focus.length && analysisPrior.rows.length && turn.previousResult) {
+  if (analysisPrior?.rowsOnly) {
     // Ayrıntılı istekle listelenen görevler: satırların analiz öznesi görevin projesidir.
-    const note = `Önceki sonucun ${analysisPrior.rows.length} görev satırının her birinin bir projesi var (yalnızca gönderge). Kullanıcı bir satırdaki görevin PROJESİNİ incelemek istiyorsa analysis.scope "row" ve analysis.rows ([n], gösterilen sırayla) yaz; görevin kendisi ya da kümenin tamamı soruluyorsa görev kümesi notunu kullan (previous yazma).`;
+    const note = `Önceki sonucun ${analysisPrior.rows.length} görev satırının kullanılabilir proje göndergeleri korunuyor. Kullanıcı bir satırdaki görevin PROJESİNİ incelemek istiyorsa analysis.scope "row" ve analysis.rows ([n], gösterilen sırayla) yaz. Bu yalnızca satır bağlamıdır; analysis.scope "previous" kullanma. `
+      + (turn.previousResult ? 'Görevin kendisi ya da kümenin tamamı soruluyorsa görev kümesi notunu kullan.' : 'Görevin kendisi ya da kümenin tamamı için gönderge yoktur; clarify missing_referent ile açıklama iste.');
     for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note);
   } else if (analysisPrior) {
     const note = `Önceki doğrulanmış analiz bağlamı (yalnızca gönderge; güncel kanıt değil): ${JSON.stringify(analysisContextSummary(analysisPrior))}. `
       + 'Bu bağlam VARKEN işaret zamiriyle ya da hiç ad vermeden sorulan takip (önceki yanıtın konusuna dönen soru) eksik gönderge DEĞİLDİR: clarify yazma. '
       + 'Kısa takip sorusu aynı özneyle sürüyorsa (zamirle ya da hiç ad vermeden) analysis.scope "previous" yaz ve YALNIZCA değişeni yaz: yazmadığın focus, dateFrom/dateTo, visual, chart ve table önceki değerleriyle aynen sürer (görsel artık istenmiyorsa visual false). '
       + 'Takibin konuşma eylemini analysis.act ile bildir: gerekçe/sebep soruyorsa explain; aynı konunun daha ayrıntılı anlatılmasını istiyorsa expand; tek bir ana sonucu ya da çıkarımı soruyorsa summarize; önce neyle ilgilenmesi gerektiğini soruyorsa prioritize; hangi sonuçtan emin olunabileceğini ya da veri eksikliğini soruyorsa certainty. '
-      + 'Yeni bir zaman ufku, durum ya da yön söylendiyse yalnızca onu yaz (örn. yalnızca dateFrom/dateTo; yalnızca focus). Grafik ya da tablo isteniyorsa visual true (türü söylendiyse chart) ya da table true yaz. '
-      + 'Önceki sonucun satırlarına sırayla ya da sıralamadaki yeriyle başvuruluyorsa (sıra numarası, ilk iki kayıt, listenin başındaki, en riskli/en yoğun olan; satırlar önceki yanıtta gösterilen sıradadır ve sıralamanın başı satır 1\'dir) analysis.scope "row" ve analysis.rows ([1] ya da [1,2]) yaz; o satırın kaydına zamirle devam ediliyorsa da row yaz. '
+      + 'Dönem açıkça kaldırılıyorsa relativeWindow all_time yaz; yazılmayan tarih alanları tek başına dönemi kaldırmaz. Yeni bir zaman ufku, durum ya da yön söylendiyse yalnızca onu yaz (örn. yalnızca dateFrom/dateTo; yalnızca focus). Grafik ya da tablo isteniyorsa visual true (türü söylendiyse chart) ya da table true yaz. '
+      + 'Önceki sonucun satırlarına sırayla ya da sıralamadaki yeriyle başvuruluyorsa (sıra numarası, ilk iki kayıt, listenin başındaki, en riskli/en yoğun olan; satırlar önceki yanıtta gösterilen sıradadır ve sıralamanın başı satır 1\'dir) analysis.scope "row" ve analysis.rows ([1] ya da [1,2]) yaz; o satırın kaydına zamirle devam ediliyorsa da row yaz. Kullanıcı tek kişi satırını kendisiyle karşılaştırmak istiyorsa withSelf true ekle; proje veya birden çok satırda ekleme. '
       + 'Kapsam adı verilen bir projeyle daraltılıyorsa analysis.within (proje adı). Önceki öznede birden çok kayıt varken (subjects 2) tek bir kayda zamirle başvuruluyorsa clarify missing_referent. Kullanıcı kapsamı açıkça değiştirdiyse (başka proje, ekibi, kendi işleri, tüm projeler) yeni kapsamı ve yönlerini yaz; önceki koşullar kendiliğinden taşınmaz.';
     for (const transcript of [turn.transcript, turn.baseline]) noteBeforeQuestion(transcript, note);
   }
@@ -1711,7 +1712,8 @@ async function finish(turn, settled, onText, selectedBy = 'model', { compose = t
     turn.trace.presentation = { mode: 'unavailable', reason: 'AUTHORIZATION' };
   }
   const { ledger, locale } = turn;
-  if (verdict.kind === 'grounded' && turn.presentationIntent?.table && !/\n\|[^\n]+\|\n\|[- :|]+\|/u.test(verdict.normalized)) {
+  const deliveredTable = turn.trace.presentation?.mode === 'composed' ? turn.trace.presentation.tables > 0 : /(?:^|\n)\|[^\n]+\|\n\|[- :|]+\|/u.test(verdict.normalized);
+  if (verdict.kind === 'grounded' && turn.presentationIntent?.table && !deliveredTable) {
     const hasRows = compositionInput(turn, verdict)?.parts.some((part) => part.presentation.facts.some((item) => verdict.citedIds.includes(item.evidenceId) && item.fact?.semantic?.row));
     const note = hasRows ? (locale === 'en' ? '_The requested table could not be rendered safely; the verified records are shown as text._' : '_İstenen tablo güvenle hazırlanamadı; doğrulanmış kayıtlar metin olarak gösterildi._')
       : locale === 'en' ? '_This verified result has no row collection to display as a table._' : '_Bu doğrulanmış sonuçta tablo olarak gösterilebilecek satır koleksiyonu yok._';
@@ -1828,7 +1830,8 @@ async function serverSelection(turn) {
 function presentationIntent(plan, today) {
   const analysis = plan?.analysis;
   return Object.freeze({ visual: plan?.visual === true, visualDeclined: plan?.visual === false || plan?.analysis?.visual === false, ...(plan?.visual === true && plan?.chart ? { chart: plan.chart } : {}), ...(plan?.table === true ? { table: true } : {}),
-    analysis: analysis ? Object.freeze({ scope: analysis.scope, focus: Object.freeze(effectiveFocus(analysis, today)),
+    // Türetilen ufuk okumaları yürütmeye aittir; takipte yalnızca bildirilmiş yönler devralınır.
+    analysis: analysis ? Object.freeze({ scope: analysis.scope, focus: Object.freeze([...analysis.focus]),
       ...(analysis.withSelf ? { withSelf: true } : {}), ...(analysis.level ? { level: analysis.level } : {}), ...(analysis.act ? { act: analysis.act } : {}) }) : null,
     ...(analysis?.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}),
     window: analysis?.dateFrom || analysis?.dateTo ? Object.freeze({ ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) }) : null,
@@ -1840,7 +1843,7 @@ function presentationIntent(plan, today) {
 function replayPlan(pending) {
   const { language, visual, chart, table, ...analysis } = pending;
   const { withSelf, focus, ...brief } = analysis;
-  return { intent: 'rota', language, analysis: { ...brief, ...(focus.length ? { focus: [...focus] } : {}), ...(withSelf === false || withSelf && analysis.scope === 'person' ? { withSelf } : {}), ...(analysis.names ? { names: [...analysis.names] } : {}) },
+  return { intent: 'rota', language, analysis: { ...brief, ...(focus.length ? { focus: [...focus] } : {}), ...(withSelf === false || withSelf && ['person', 'row'].includes(analysis.scope) ? { withSelf } : {}), ...(analysis.names ? { names: [...analysis.names] } : {}) },
     ...(visual != null ? { visual } : {}), ...(chart ? { chart } : {}), ...(table != null ? { table } : {}) };
 }
 

@@ -16,13 +16,13 @@ function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 }
 
-test('legacy Gantt duration export remains compatible with the scheduling metric', () => {
+test("eski Gantt süre dışa aktarımı çizelgeleme ölçüsüyle uyumludur", () => {
   const task = { plannedDurationDays: 7 };
   assert.equal(taskDurationDays(task), 7);
   assert.equal(taskDurationDays(task), taskPlannedDurationDays(task));
 });
 
-test('presentation polish never rewrites user data or changes responsive SVG aspect ratios', () => {
+test("sunum düzenlemesi kullanıcı verisini veya duyarlı SVG oranını değiştirmez", () => {
   const source = read('src/components/shell/PresentationPolish.jsx');
 
   assert.doesNotMatch(source, /TEXT_REPLACEMENTS/);
@@ -33,7 +33,7 @@ test('presentation polish never rewrites user data or changes responsive SVG asp
   assert.match(source, /shape-rendering:\s*geometricPrecision/);
 });
 
-test('WBS Gantt reattaches scroll and pan listeners when WBS availability changes', () => {
+test("WBS kullanılabilirliği değişince Gantt kaydırma ve sürükleme dinleyicisini yeniden bağlar", () => {
   const source = read('src/features/gantt/WbsGanttView.jsx');
 
   assert.match(source, /const hasWbs = wbs\.length > 0/);
@@ -42,7 +42,7 @@ test('WBS Gantt reattaches scroll and pan listeners when WBS availability change
   assert.match(source, /if \(!hasWbs\) \{\s*return <div className="card muted">/);
 });
 
-test('WBS Gantt gates critical-path data behind a valid project schedule', () => {
+test("WBS Gantt kritik yol verisini geçerli proje çizelgesiyle açar", () => {
   const source = read('src/features/gantt/WbsGanttView.jsx');
 
   assert.match(source, /const scheduleAvailable = projectSchedule\?\.status === 'valid'/);
@@ -54,7 +54,7 @@ test('WBS Gantt gates critical-path data behind a valid project schedule', () =>
   assert.match(source, /Görev tarihleri veya bağımlılık ilişkileri gözden geçirilmeli/);
 });
 
-test('portfolio Gantt does not render missing planned dates as today', () => {
+test("portföy Gantt eksik plan tarihini bugün çizmez", () => {
   const source = read('src/features/gantt/GanttView.jsx');
 
   assert.match(source, /function hasPlannedRange\(task\)/);
@@ -63,7 +63,7 @@ test('portfolio Gantt does not render missing planned dates as today', () => {
   assert.match(source, /if \(!hasPlannedRange\(t\)\) \{/);
 });
 
-test('cross-project dependencies produce an invalid project schedule for the UI unavailable state', () => {
+test("projeler arası bağımlılık arayüzde kullanılamayan geçersiz proje çizelgesi üretir", () => {
   const schedule = buildPortfolioSchedule({
     projects: [
       { id: 'p-a', name: 'A' },

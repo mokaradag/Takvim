@@ -8,7 +8,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const { semanticFailures } = require('./expectations.cjs');
+const { semanticFailures, completionFailures, modelFailures } = require('./expectations.cjs');
 
 const [scenarioFile, outDir] = process.argv.slice(2);
 const scenario = JSON.parse(fs.readFileSync(scenarioFile, 'utf8'));
@@ -69,7 +69,8 @@ async function ask(page, text) {
       items: [...figure.querySelectorAll('[aria-label]')].map((node) => node.getAttribute('aria-label')).filter((label) => label && label !== figure.getAttribute('aria-label')),
       visible: figure.getBoundingClientRect().width > 0 && figure.getBoundingClientRect().height > 0
     }));
-    const tables = [...answer.querySelectorAll('table')].map((table) => ({ rows: table.querySelectorAll('tbody tr').length, head: [...table.querySelectorAll('th')].map((th) => th.textContent.trim()) }));
+    const tables = [...answer.querySelectorAll('table')].map((table) => ({ rows: table.querySelectorAll('tbody tr').length, head: [...table.querySelectorAll('th')].map((th) => th.textContent.trim()),
+      visible: table.getBoundingClientRect().width > 0 && table.getBoundingClientRect().height > 0 }));
     const status = [...answer.classList].find((name) => name.startsWith('is-'))?.slice(3);
     // Görünen düzyazı: tablo/grafik/kaynak listesi dışındaki paragraflar.
     const body = answer.cloneNode(true);
@@ -111,15 +112,14 @@ async function ask(page, text) {
       const shot = path.join(outDir, `${scenario.profile}-${conversationIndex + 1}-${turnIndex + 1}.png`);
       await page.locator('.rota-assistant-thread').screenshot({ path: shot }).catch(() => {});
       const expectedChart = conversation.expectedCharts?.[turnIndex] || null;
-      const failures = semanticFailures(conversation.expectedTurns?.[turnIndex], rendered, trace);
-      if (rendered.status === 'driver-error' || rendered.status === 'error') failures.push('tarayıcı turu tamamlanamadı');
+      const expected = conversation.expectedTurns?.[turnIndex];
+      const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace), ...modelFailures(expected, trace, calls)];
       if (expectedChart && !rendered.charts?.some((chart) => chart.type === expectedChart && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);
       if (!trace) failures.push('bu tura ait sunucu kanıtı yok');
-      if (calls.some((call) => !call.ok || call.thinking !== 'off' || call.thinkingTokens !== 0 || !call.models?.length || call.models.some((model) => model !== 'claude-haiku-4-5-20251001'))) failures.push('model çağrısı kabul sözleşmesini sağlamadı');
-      const row = { runId, failures, profile: scenario.profile, conversation: conversation.name, detail: conversation.detail, turn: turnIndex + 1, question: text, ms, rendered,
+      const row = { runId, failures, expectedOutcome: expected?.outcome || 'grounded', serverReplay: expected?.serverReplay === true, profile: scenario.profile, conversation: conversation.name, detail: conversation.detail, turn: turnIndex + 1, question: text, ms, rendered,
         server: trace ? { outcome: trace.outcome, evidence: trace.evidence, parts: trace.parts, escalated: trace.escalated, presentation: trace.presentation, models: [...new Set((trace.rounds || []).map((round) => round.model))],
           reasoning: trace.usage?.reasoning ?? null } : null,
-        calls: calls.map((call) => ({ purpose: call.purpose, ok: call.ok, models: call.models, thinking: call.thinking, thinkingTokens: call.thinkingTokens, ms: call.ms,
+        calls: calls.map((call) => ({ purpose: call.purpose, toolCalls: call.toolCalls, ok: call.ok, models: call.models, thinking: call.thinking, thinkingTokens: call.thinkingTokens, ms: call.ms,
           input: call.input, cacheRead: call.cacheRead, cacheWrite: call.cacheWrite, output: call.output, error: call.error })), screenshot: path.basename(shot) };
       results.push(row);
       fs.writeFileSync(resultFile, JSON.stringify(results, null, 2));

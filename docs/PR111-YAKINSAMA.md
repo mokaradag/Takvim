@@ -149,3 +149,73 @@ Hazırlık ikizi artık yalnızca aynı UI_RUN_ID için köprü/uygulama başlan
 Uygulama ikizi özellikle 200 ms gecikmeli başlar; mevcut “tam bir uygulama başladı” iddiası değişmedi.
 Koşulsuz başarılı eski hazırlık ikiziyle aynı gecikmeli senaryo 0 != 1 hatasını yeniden üretir;
 düzeltilen dosyanın 11/11 sınaması geçer. Üretim kodu ve kabul koşucusu c97393c ile bire bir aynıdır.
+
+
+## 2026-11-03 güncel sözleşme yakınsaması
+
+Başlangıç: f88c0d36f992b03dd3232131dbff1a768e932cc5. İlk okumada 86 iş parçacığı; 16 açık. Dört yeni bildirimle son okumada 90 iş parçacığı; 20 açık. Hepsi VALID — FIX REQUIRED. Güncel inceleme gövdesinde ayrıca bir geçerli belge bulgusu vardır.
+
+| Yorum | Önem | Tetik / sonuç | Değişmez / kök neden | Dosya | Kalıcı gerileme |
+|---|---|---|---|---|---|
+|4452478574|P2|Gelecekten geçmişe takip reddediliyor|Bildirilen yön türetilenden ayrı kalır; etkin yön saklanıyor|analysisPlan, groundedAnswer|iki yönlü pencere değişimi ve açık yön|
+|4452792440|P2|Satırdaki kişinin iş yükü yerine genel analiz|Uyumlu yön devralınır; satır dalı varsayılana gidiyor|analysisPlan|kişi satırı, geçersiz proje yönü|
+|4452986417|P3|Tam kabul koşusu belirteç sınırında kesiliyor|Çağrı ve belirteç bütçesi seçilen yükü kapsar|run.sh|tam/kısmi yük, açık bütçe|
+|4452986431|P3|Ekip takiplerinde veri sızıntısı kabulden geçer|Güvenlik her turda denetlenir|B.json, beklenti sınaması|her ekip takip turunda yasak veri|
+|4452986482|P3|Proje takip sızıntısı kabulden geçer|Aynı güvenlik kökü; farklı profil|E.json, beklenti sınaması|proje takip turunda yasak veri|
+|4452986506|P3|2026 bile boş nüfus iddiasını karşılar|Boşluk belirgin sunucu olgusuyla kanıtlanır|G.json|yanlış sıfır ve gerçek boş nüfus|
+|4452986516|P3|The your biçimi görünür|Şablon iyelik başlığının önüne tanımlık eklemez|groundedComposition|İngilizce kendi/ekip kesinliği|
+|4452986544|P3|Uzun paragraf bütün düzeni düşürür|Düzyazı ve düzen tek paragraf kapasitesi kullanır|groundedProse, groundedComposition|büyük paragraf düşer, komşusu kalır|
+|4452986559|P3|Kalıcı satır bağlamına previous yönergesi|Not kanonik rowsOnly durumuna bağlıdır|groundedAnswer, analysisContext|önceki görev nesnesi olmadan satır notu|
+|4453445970|P2|Kişi iş yükünde ortak sorumlular özne olur|Dönem özne nüfusunu değiştirmez|analysisPlan|gerçek ortak görev, kişi kapsamı ve metin|
+|4453866185|P1|Tamamlanmamış yanıt başarılı sayılır|Yalnızca complete UI ve başarısız olmayan sunucu sonucu başarılı|drive, expectations|her başarısız statü, süreç çıkışı ve kanıt satırı|
+|4453866195|P3|Anlatı geri dönüşü model düzyazısı diye raporlanır|Rapor sunum kipini kullanır|report|anlatı/sunucu/model raporu|
+|4453866201|P3|A adı Açık başlığının harfini korur|Kayıt adı gerçek sınırda eşleşir|groundedComposition|kısa önek ve gerçek kayıt adı|
+|4453866216|P3|Başta çizilen tabloya yok denir|Yapısal tablo sayısı önceliklidir|groundedAnswer|ilk karakterde gerçek çizilmiş tablo|
+|4454508914|P3|Açık tablo isteği tablosuz geçer|Aynı tablo teslim kökü; DOM doğrulanır|D.json, expectations|gerçek görünen tablo yokken süreç başarısız|
+|4454508921|P3|Hiç okuma yapılmadan pencere testi geçer|İşlem ve iki sınır birlikte kanıtlanır|ai-phase4e-analysis|boş olmayan okuma kümesi|
+|4455261898|P3|Tek görev korununca eksik yetki nüfusu testi geçer|Her yetki çifti saklama öncesiyle birebir eşittir|ai-planner-contract|birden çok görevin tam kimlik/proje kümesi|
+|4455417788|P2|Sıfır model kaydıyla kabul başarılı olur|Olağan tur gerçek türlü planı; model düzeni kendi çağrısını kanıtlar|expectations, drive, report, B.json|eksik plan/düzen reddi ve açık sunucu yeniden yürütmesi|
+|4455655437|P2|Kişi satırı kendisiyle karşılaştırılamıyor|withSelf tek kişi satırı kimliği çözüldükten sonra doğrulanır|analysisPlan, analysisContext, groundedAnswer|iki yetkili özne/proje kesişimi ve geçersiz satır reddi|
+|4455673931|P2|Genel takip eski dönemde kalıyor|Açık dönem kaldırma bildirilmemiş tarihten ayrılır|analysisPlan, analysisContext, groundedPrompt, groundedAnswer|bağlı kişi/proje, bağıl ufuk, sonraki mutlak sınır ve açıklama yeniden yürütmesi|
+|inceleme §13.5|P3|Eski sözleşme text her zaman yasak diyor|Belge güncel düzyazı sözleşmesini açıkça devreder|YAPAY-ZEKA-ANLAMSAL-KATMAN|belge incelemesi|
+
+Bulgular başlangıçta ayrı tetik koşullarıyla geçerli sayılır. Ekip/proje beklentileri aynı güvenlik kökünü; tablo algılama ve kabul beklentisi aynı teslim kökünü paylaşır. Adlandırma ve Türkçe taraması ayrıca açık kullanıcı gereğidir. Yeni uç, dinleyici, izin, SQL kapsamı, bağımlılık ve dış ağ yeteneği planlanmamıştır.
+
+### Uygulama ve denetim
+
+- Kanonik `focus` yalnızca bildirilmiş niyeti saklar; ufuk ve portföy okumaları son kapsam/pencereden yeniden türetilir. Yeni kalıcı alan gerekmedi. Satır daraltması uyumlu yönleri sırasıyla korur. Satır-yalnız planlayıcı notu sonuç kapsamı olmadan da kanonik bayraktan kurulur.
+- Dönemli kişi iş yükü yalnızca bağlı kişinin skaler sayılarıdır; ortak görev diğer sorumluları özne yapmaz. Ekipte görev-atama kırılımının kadro tamlığı çekincesi korunur; yeni kadro okuması yoktur.
+- Düzyazı ve düzenin sekiz yuvalı paragraf sınırı tek kaynaktan türetilir. Kesinlik şablonu İngilizce iyeliği ve Unicode kayıt adı sınırını korur. Tablo teslimi yapısal çizim sayısını kullanır; metin dönüşü ilk karakterdeki tabloyu da tanır.
+- Kabulde yalnızca `complete` yanıt başarılıdır; sunucu `failed/error` sonucu, eksik türlü plan ve eksik model düzeni çağrısı başarısızdır. Numaralı aday seçimi açık sunucu yeniden yürütmesidir ve güncel kanıt ister. Sürücü ile rapor aynı denetimi kullanır; hata satırı korunur ve süreç başarısız çıkar.
+- Çağrı bütçesi seçilen tur yükünden, belirteç bütçesi etkin çağrı sınırından çağrı başına 64 bin sınırlı payla hesaplanır; iki açık ortam ayarı korunur. Ekip/proje takipleri her ilgili turda yasak içeriği; boş nüfus ayırt edici sunucu ifadesini; açık tablo isteği dolu/görünür DOM tablosunu doğrular.
+- Betikler kalıcı işlev adlarına taşındı: `planner-model-adapter.mjs`, `analysis-qualification.mjs`, `ui-acceptance/modelBridge.mjs`. Eski dosya/wrapper yoktur; bütün etkin başvurular taşındı. İlgili eski inceleme adlı sınama da `ai-rendering-contracts.test.mjs` oldu. Dış sağlayıcı ortam sözleşmeleri korunur.
+- Depo genelindeki İngilizce sınama başlıkları ve açıklamalar Türkçeleştirildi. İndirilen eski inceleme çalışma kopyası, üçüncü taraf ve üretilmiş dosyalar tarama dışında tutuldu. API kimliği, protokol, yerelleştirme ve standart tür açıklaması değiştirilmedi. 25 betik dosyasında yasak ad yoktur; 4.526 statik/şablon sınama başlığı taranmıştır.
+- Temizlik dışında davranış değişmediği 161 JavaScript dosyasının sözdizim ağacı ve CSS yapısı karşılaştırılarak denetlendi. Windows seçicisi eskiyle aynı test kümesini seçer; macOS kapısı tam üç hedefi zorunlu tutar ve 0/1/2 hedefte reddeder.
+- Yeni üretim ucu, dinleyici, izin, geniş SQL kapsamı, bağımlılık, kalıcı veri kategorisi veya dış ağ yeteneği yoktur. Kabul kayıtları mevcut yalıtılmış kanıt biçiminde açık yeniden yürütme ve araç çağrısı adlarını taşır.
+
+### Gerilemelerin eski davranışa karşı doğrulanması
+
+Yeni üretim gerilemelerinin on tanesi başlangıçtaki modüllerle başarısız oldu. İlk karakterde tek tablo senaryosu ayrıca başlangıç koduyla başarısız, düzeltmeyle başarılıdır. Pencere sınaması gerçek okuma ister; kalıcı yetki sınaması birden çok görevin bütün `(taskId, projectId)` çiftlerini eşitlikle karşılaştırır.
+
+### Gerçek model sınırı
+
+`scripts/ui-acceptance/run.sh A` bu ortamda model CLI bulunamadığı için çalıştırılamadı. Gerçek model, düşünmesizlik ve 117+19 kabul kapıları başarılı sayılmadı; eski koşular bu değişikliğin kanıtı değildir.
+
+### Ek kanonik takip koşulları
+
+`withSelf` tek kişi satırında kimlik çözüldükten sonra doğrulanır; proje, çoklu, boş veya olmayan satır kabul edilmez. Kabul edilmiş satır karşılaştırması önceki özne takibinde ve kalıcı açıklama biçiminde korunur. `relativeWindow: all_time` mevcut kapalı ufuk alanında açık dönem kaldırmadır; mutlak tarihle karıştırılamaz. Bağlı özne ve proje kesişimi aynı kalır, sonraki turda veya gece yarısında eski tarih geri gelmez. Bunlar mevcut yetkili okumaların iki dar niyet ifadesidir; yeni erişim yetkisi veya kalıcı kategori değildir.
+
+### Bu düzeltmenin son doğrulaması
+
+- `npm test -- --test-concurrency=1`: **5155/5155**, çıkış 0.
+- `npm test`: **5155/5155**, çıkış 0; son kabul sözleşmesiyle yeniden çalıştırma da aynı sonucu verdi.
+- Beş odaklı analiz/planlayıcı/düzyazı/kabul dosyası: **392/392**.
+- Kabul sürücüsü, rapor, model kanıtı ve koşucu: **23/23**; tahsis yorumlarının protokol işaretleri: **46/46**.
+- Windows/macOS kapı sözleşmesi: **2/2**; yerel özel ev seçicisi tam **3/3**, atlama 0. Windows seçicisinde önceki ve yeni aynı **52** üst sınama vardır.
+- Görsel sahiplik denetimi: **10/10**. JavaScript sözdizim ağacı ve gömülü SQL yorumlarıyla **161** temizlik dosyasında beklenmeyen davranış farkı yok; CSS ağacında davranış farkı yok.
+- `npx next lint`: ESLint uyarı/hata yok; çıkış 0.
+- `NEXT_TELEMETRY_DISABLED=1 npx next build`: başarılı; çıkış 0.
+- `git diff --check`: temiz. Eski betik yollarına etkin başvuru ve yasak geçici betik adı yok.
+- `scripts/ui-acceptance/run.sh A`: **çıkış 1 — Claude CLI bulunamadı**. Gerçek model kapısı başarılı sayılmadı.
+
+Kabulde açık farklı sonuç beklentisi yoksa varsayılan sonuç `grounded` olur; tamamlanmış açıklama veya kullanılamama yanıtı sırf beklenti eksik diye başarılı analiz sayılmaz. Açık yetkisizlik ve aday seçimi senaryoları kendi sonuçlarını belirtir; sürücü ve rapor aynı koşulu denetler.

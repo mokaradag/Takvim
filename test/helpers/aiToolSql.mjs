@@ -530,7 +530,7 @@ export function runAiToolQuery(db, sqlText, params) {
   db.aiToolLog.push({ query: marker[1], params: { ...params } });
   if (db.aiToolFailure?.[marker[1]]) throw db.aiToolFailure[marker[1]];
   if (marker[1] !== 'wbs-selector' && scopeOf(db, params).projects.size >= Number(params.analysisMaxRows)) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
-  // Independently enforce the SQL population budget before computing result sets.
+  // Sonuç kümesi hesaplanmadan SQL nüfus bütçesi bağımsız uygulanır.
   const boundedTaskQueries = new Set(['task-facts', 'task-detail', 'portfolio', 'project-detail', 'wbs', 'baseline']);
   if (boundedTaskQueries.has(marker[1]) || (marker[1] === 'dependencies' && !params.focusTaskId)) {
     const scope = scopeOf(db, params);

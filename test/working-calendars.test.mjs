@@ -30,7 +30,7 @@ const projects = [
   { id: 'p-operations', name: 'Operations', calendarId: operationsCalendar.id }
 ];
 
-test('holidays are explicit year-specific dates instead of recurring month/day entries', () => {
+test("tatil yinelenen ay gün yerine açık yıla özgü tarihtir", () => {
   assert.equal(holidayFor('2026-07-15', DEFAULT_CALENDAR)?.short, '15 Temmuz');
   // Sabit tarihli ulusal bayramlar 2028'e kadar YAZILIDIR; kapsam dışı bir yıl
   // kendiliğinden yinelenmez (kural değil, tarih listesi tutulur).
@@ -38,46 +38,46 @@ test('holidays are explicit year-specific dates instead of recurring month/day e
   assert.equal(holidayFor('2029-07-15', DEFAULT_CALENDAR), null);
 });
 
-test('movable religious holidays are not guessed for future years', () => {
+test("hareketli dinî tatiller gelecek yıl için tahmin edilmez", () => {
   // Ramazan/Kurban resmî ilanla kesinleşir: yalnızca 2026 için yazılıdır,
   // sonraki yıllar kurulumun kendi takvim tanımından gelir.
   assert.equal(holidayFor('2026-03-20', DEFAULT_CALENDAR)?.short, 'Ramazan B.');
   assert.equal(holidayFor('2027-03-09', DEFAULT_CALENDAR), null);
 });
 
-test('standard and project-specific calendars can define different working weekdays', () => {
+test("standart ve projeye özel takvim farklı iş günleri tanımlayabilir", () => {
   assert.equal(isWorkingDay('2026-07-18', DEFAULT_CALENDAR), false);
   assert.equal(isWorkingDay('2026-07-18', operationsCalendar), true);
   assert.equal(isWorkingDay('2026-07-15', operationsCalendar), false);
 });
 
-test('working-day addition skips weekends and explicit holidays in both directions', () => {
+test("iş günü ekleme iki yönde hafta sonunu ve açık tatili atlar", () => {
   assert.equal(fmtISO(addWorkingDays('2026-07-14', 1, DEFAULT_CALENDAR)), '2026-07-16');
   assert.equal(fmtISO(addWorkingDays('2026-07-17', 1, DEFAULT_CALENDAR)), '2026-07-20');
   assert.equal(fmtISO(addWorkingDays('2026-07-17', 1, operationsCalendar)), '2026-07-18');
   assert.equal(fmtISO(addWorkingDays('2026-07-20', -3, DEFAULT_CALENDAR)), '2026-07-14');
 });
 
-test('working-day difference is the inverse of working-day addition', () => {
+test("iş günü farkı iş günü eklemenin tersidir", () => {
   for (const amount of [-5, -2, -1, 0, 1, 2, 5]) {
     const shifted = addWorkingDays('2026-07-14', amount, DEFAULT_CALENDAR);
     assert.equal(diffWorkingDays(shifted, '2026-07-14', DEFAULT_CALENDAR), amount);
   }
 });
 
-test('inclusive working-day counts respect the selected calendar', () => {
+test("dahil iş günü sayımı seçili takvimi izler", () => {
   assert.equal(countWorkingDays('2026-07-13', '2026-07-17', DEFAULT_CALENDAR), 4);
   assert.equal(countWorkingDays('2026-07-13', '2026-07-18', operationsCalendar), 5);
   assert.equal(countWorkingDays('2026-07-17', '2026-07-13', DEFAULT_CALENDAR), -4);
 });
 
-test('non-working dates can be aligned to the nearest working date in either direction', () => {
+test("iş dışı tarih iki yönde en yakın iş gününe hizalanabilir", () => {
   assert.equal(fmtISO(moveToWorkingDay('2026-07-15', DEFAULT_CALENDAR, 1)), '2026-07-16');
   assert.equal(fmtISO(moveToWorkingDay('2026-07-15', DEFAULT_CALENDAR, -1)), '2026-07-14');
   assert.equal(fmtISO(moveToWorkingDay('2026-07-19', DEFAULT_CALENDAR, 1)), '2026-07-20');
 });
 
-test('task calendar resolution follows task override, project calendar, then fallback', () => {
+test("görev takvimi çözümü görev proje ve dönüş takvimi sırasını izler", () => {
   assert.equal(
     resolveTaskCalendar({ projectId: 'p-operations' }, projects, calendars).id,
     operationsCalendar.id
@@ -93,7 +93,7 @@ test('task calendar resolution follows task override, project calendar, then fal
   assert.equal(resolveProjectCalendar(projects[0], calendars).id, DEFAULT_CALENDAR.id);
 });
 
-test('dependency lag and lead are applied as working days', () => {
+test("bağımlılık gecikmesi ve öne alma iş günü olarak uygulanır", () => {
   assert.equal(
     fmtISO(applyDependencyLag('2026-07-14', { predecessorId: 'a', type: 'FS', lagDays: 1 }, DEFAULT_CALENDAR)),
     '2026-07-16'

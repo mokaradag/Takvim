@@ -19,7 +19,7 @@ const verify = (ledger, fields) => analyzeGroundedAnswer(JSON.stringify({ kind: 
 });
 const inProject = (metrics, projectId = PROJECTS.FULL, extra = {}) => ({ operation: 'value', metrics, entities: [{ type: 'project', id: projectId }], ...extra });
 
-test('first-round identities require current user intent, including numeric selector provenance', () => {
+test("ilk tur kimliği sayısal seçici kökeni dahil güncel kullanıcı niyeti ister", () => {
   const scope = createToolScope({ userText: 'Radar projesindeki 30 günlük işleri göster' });
   for (const [name, args] of [['rota_project_detail', { projectId: PROJECTS.FULL }], ['rota_task_detail', { taskId: TASKS.OVERDUE }], ['rota_workload_summary', { personSicil: 30 }]]) {
     assert.throws(() => scope.validate(name, args), { code: 'UNSUPPORTED_SCOPE' });
@@ -28,7 +28,7 @@ test('first-round identities require current user intent, including numeric sele
   assert.doesNotThrow(() => createToolScope({ userText: 'Sicil 2147483647 iş yükü' }).validate('rota_workload_summary', { personSicil: 2147483647 }));
 });
 
-test('returned task metadata and notification text cannot open another population', () => {
+test("dönen görev üstverisi ve bildirim metni başka nüfus açamaz", () => {
   const scope = createToolScope({ userText: `Görev ${TASKS.OVERDUE} durumu` });
   establish(scope, 'rota_task_detail', { taskId: TASKS.OVERDUE }, { task: { taskId: TASKS.OVERDUE, project: { projectId: PROJECTS.FULL }, assignees: [{ sicil: MEHMET }] } });
   assert.throws(() => scope.validate('rota_workload_summary', { personSicil: MEHMET }), { code: 'UNSUPPORTED_SCOPE' });
@@ -38,7 +38,7 @@ test('returned task metadata and notification text cannot open another populatio
   assert.throws(() => notifications.validate('rota_schedule_requests', {}), { code: 'UNSUPPORTED_SCOPE' });
 });
 
-test('follow-up text must be a complete user phrase and must narrow the frozen search', () => {
+test("takip metni tam kullanıcı sözü olmalı ve donmuş aramayı daraltmalıdır", () => {
   const scope = createToolScope({ userText: 'Kargo Radar test planı görevlerini göster' });
   assert.throws(() => scope.validate('rota_task_search', { text: 'argo' }), { code: 'UNSUPPORTED_SCOPE' });
   establish(scope, 'rota_task_search', { text: 'Radar' }, {});
@@ -46,13 +46,13 @@ test('follow-up text must be a complete user phrase and must narrow the frozen s
   assert.throws(() => scope.validate('rota_task_search', { text: 'Kargo' }), { code: 'UNSUPPORTED_SCOPE' });
 });
 
-test('a negated, ambiguous or worded clarification reply is never a selection', () => {
+test("olumsuz belirsiz veya sözcüklü açıklama yanıtı seçim sayılmaz", () => {
   for (const text of ['not the second one', 'ikinci değil', 'ikincisi olmasın', '2 değil', 'not #2', 'hayır ikinci', 'second except']) {
     assert.equal(selectedCandidateOrdinal(text, 3), null, text);
   }
 });
 
-test('saved evidence beyond 160000 tasks uses bounded batches and revocation affects only its own record', async () => {
+test("büyük kayıtlı kanıt sınırlı toplu okumalar kullanır; yetki kaldırma yalnızca kendi kaydını etkiler", async () => {
   const projectId = PROJECTS.FULL;
   const ids = Array.from({ length: 161001 }, (_, index) => `22000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`);
   const queries = [];
@@ -82,7 +82,7 @@ test('saved evidence beyond 160000 tasks uses bounded batches and revocation aff
   assert.equal(valid.has('saved-161'), true);
 });
 
-test('missing baseline produces no meaningful zero comparison facts', async (t) => {
+test("eksik baz plan anlamlı sıfır karşılaştırma olgusu üretmez", async (t) => {
   const stack = stackFor(t, { baselines: [], baselineTasks: [] });
   const { result } = await callRotaTool(stack, AYSE, 'rota_baseline_compare', { projectId: PROJECTS.FULL });
   assert.equal(result.ok, true);
@@ -100,7 +100,7 @@ for (const [tool, args, field] of [
   ['rota_recurrence_inspect', {}, 'totalCount'],
   ['rota_calendar_inspect', { dateFrom: '2026-09-30', dateTo: '2026-10-01' }, 'data.workingDayCount']
 ]) {
-  test(`${tool} keeps the selected project in all claimable metric semantics`, async (t) => {
+  test(`${tool} bütün iddia edilebilir ölçü anlamlarında seçili projeyi korur`, async (t) => {
     const { result } = await callRotaTool(stackFor(t), AYSE, tool, { ...args, projectId: PROJECTS.FULL });
     assert.equal(result.ok, true, JSON.stringify(result.error));
     assert.equal(result.data.filters.projectId, PROJECTS.FULL);
@@ -111,7 +111,7 @@ for (const [tool, args, field] of [
   });
 }
 
-test('true but unrelated metrics or entities cannot satisfy the declared request', async (t) => {
+test("doğru fakat ilgisiz ölçü veya varlık bildirilmiş isteği karşılayamaz", async (t) => {
   const { ledger } = await callRotaTool(stackFor(t), AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL });
   const issue = (fields, request) => verifyRequested(ledger, fields, request).issues[0]?.code ?? null;
   assert.equal(issue(['data.totals.done'], inProject(['tasks.total'])), 'UNDECLARED_METRIC');
@@ -127,7 +127,7 @@ test('true but unrelated metrics or entities cannot satisfy the declared request
   assert.equal(issue(['data.totals.total'], inProject(['tasks.total'], PROJECTS.FULL, { filters: { status: ['done'] } })), 'POPULATION_MISMATCH');
 });
 
-test('source-filtered portfolio evidence excludes other sources from saved authorization', async (t) => {
+test("kaynak süzgeçli portföy kanıtı diğer kaynakları kayıtlı yetkiden dışlar", async (t) => {
   const stack = stackFor(t);
   const { ledger, context } = await callRotaTool(stack, AYSE, 'rota_portfolio_summary', { source: 'corporate' });
   const [entry] = ledger.authorizationEntries();
@@ -138,7 +138,7 @@ test('source-filtered portfolio evidence excludes other sources from saved autho
   assert.equal((await context.revalidateEvidence([entry], signal())).size, 1);
 });
 
-test('an empty administrator project counted in a search is rechecked before disclosure', async (t) => {
+test("aramada sayılan boş yönetici projesi açıklamadan önce yeniden denetlenir", async (t) => {
   const stack = stackFor(t, { tasks: [], taskAssignees: [] }, ADMIN);
   const { ledger, context } = await callRotaTool(stack, ADMIN, 'rota_project_search', { text: 'Proje', limit: 1 });
   const [entry] = ledger.authorizationEntries();
@@ -150,7 +150,7 @@ test('an empty administrator project counted in a search is rechecked before dis
 
 for (const unavailable of ['deleted', 'archived']) {
   for (const tool of ['rota_schedule_requests', 'rota_assignment_requests']) {
-    test(`${tool} keeps participant history and exact counts after the task is ${unavailable}`, async (t) => {
+    test(`${tool} görev ${unavailable} olduğunda katılımcı geçmişini ve tam sayıları korur`, async (t) => {
       const record = { TaskId: TASKS.OVERDUE, RequesterSicil: AYSE, RequestedAssigneeSicil: MEHMET, DecisionOwnerSicil: AYSE,
         Mode: 'REQUEST', Status: 'REJECTED', TaskTitleSnapshot: 'Tarihi görev', ProjectIdSnapshot: PROJECTS.FULL, ProjectNameSnapshot: 'Tarihi proje', CreatedAt: '2026-09-29T10:00:00Z' };
       const stack = stackFor(t, { taskScheduleChangeRequests: [record], taskAssignmentCoordinations: [record] });
@@ -168,7 +168,7 @@ for (const unavailable of ['deleted', 'archived']) {
 }
 
 for (const tool of ['rota_schedule_requests', 'rota_assignment_requests']) {
-  test(`${tool} keeps unavailable selectors as provenance but revalidates a visible selector as a live record`, async (t) => {
+  test(`${tool} kullanılamayan seçiciyi köken olarak tutar; görünür seçiciyi canlı kayıt olarak doğrular`, async (t) => {
     const record = { TaskId: TASKS.OVERDUE, RequesterSicil: AYSE, RequestedAssigneeSicil: MEHMET, DecisionOwnerSicil: AYSE,
       Mode: 'REQUEST', Status: 'REJECTED', TaskTitleSnapshot: 'Tarihi görev', ProjectIdSnapshot: PROJECTS.FULL, ProjectNameSnapshot: 'Tarihi proje', CreatedAt: '2026-09-29T10:00:00Z' };
     const stack = stackFor(t, { taskScheduleChangeRequests: [record], taskAssignmentCoordinations: [record] });
@@ -190,7 +190,7 @@ for (const tool of ['rota_schedule_requests', 'rota_assignment_requests']) {
     assert.equal((await archived.context.revalidateEvidence([archivedEntry], signal())).size, 1);
   });
 
-  test(`${tool} revalidates a currently visible selected task even when no request matches`, async (t) => {
+  test(`${tool} eşleşen istek olmasa da görünür seçili görevi doğrular`, async (t) => {
     const stack = stackFor(t);
     const selected = await callRotaTool(stack, AYSE, tool, { tab: 'pending', taskId: TASKS.UNASSIGNED });
     assert.equal(selected.result.ok, true, JSON.stringify(selected.result.error));
@@ -203,7 +203,7 @@ for (const tool of ['rota_schedule_requests', 'rota_assignment_requests']) {
   });
 }
 
-test('saved project evidence revalidates by project identities alone', async (t) => {
+test("kayıtlı proje kanıtı yalnızca proje kimlikleriyle yeniden doğrulanır", async (t) => {
   const stack = stackFor(t);
   const { ledger, context } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { wbsId: WBS.FULL_DESIGN });
   const [entry] = ledger.authorizationEntries();
@@ -220,7 +220,7 @@ test('saved project evidence revalidates by project identities alone', async (t)
 const activity = (id, before, after) => ({ AuditId: id, OccurredAt: '2026-09-29T10:00:00Z', ActorSicil: AYSE, CorrelationId: '65000000-0000-4000-8000-000000000001', ActionCode: 'UPDATE',
   EntityType: 'TASK', EntityId: TASKS.OVERDUE, ProjectId: PROJECTS.FULL, BeforeJson: JSON.stringify(before), AfterJson: JSON.stringify(after) });
 
-test('a clipped JSON anywhere in an activity group removes all structured changes', async (t) => {
+test("etkinlik grubunun herhangi yerinde kesilmiş JSON bütün yapısal değişimleri kaldırır", async (t) => {
   const stack = stackFor(t, { auditLog: [activity(1, { Description: 'x'.repeat(10000), Progress: 10 }, { Progress: 20 }), activity(2, { Progress: 20 }, { Progress: 30 })] });
   const { result } = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'custom', dateFrom: '2026-09-29' });
   assert.equal(result.ok, true);
@@ -230,7 +230,7 @@ test('a clipped JSON anywhere in an activity group removes all structured change
   assert.equal(result.complete, false);
 });
 
-test('clipping unrequested activity prose does not change structured evidence completeness', async (t) => {
+test("istenmeyen etkinlik düzyazısını kesmek yapısal kanıt tamlığını değiştirmez", async (t) => {
   const before = { Title: 'Eski', Description: 'a'.repeat(1000), Keyword: 'Eski', Status: 'planned', Progress: 0, Priority: 'low', TargetFinish: '2026-09-01' };
   const after = { Title: 'Yeni', Description: 'b'.repeat(1000), Keyword: 'Yeni', Status: 'done', Progress: 100, Priority: 'high', TargetFinish: '2026-10-01' };
   const stack = stackFor(t, { auditLog: [activity(1, before, after)] });
@@ -242,7 +242,7 @@ test('clipping unrequested activity prose does not change structured evidence co
 });
 
 for (const sicil of [1, 1000000000, 2147483647]) {
-  test(`person identity resolution supports SQL int boundary ${sicil}`, async (t) => {
+  test(`kişi kimlik çözümü SQL int sınırını destekler ${sicil}`, async (t) => {
     const seed = rotaToolSeed();
     seed.people.push({ Sicil: sicil, DisplayName: 'Sınır kişisi' });
     const { result } = await callRotaTool(stackFor(t, seed), AYSE, 'rota_person_search', { text: String(sicil) });
@@ -252,7 +252,7 @@ for (const sicil of [1, 1000000000, 2147483647]) {
   });
 }
 
-test('date-shaped titles stay literal and overdue booleans retain the task subject', async (t) => {
+test("tarih biçimli başlık düz metin kalır; gecikme mantığı görev öznesini korur", async (t) => {
   const stack = stackFor(t);
   stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE).Title = '2026-10-01';
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.OVERDUE });
@@ -262,7 +262,7 @@ test('date-shaped titles stay literal and overdue booleans retain the task subje
   assert.match(text, /Gecikmiş/);
 });
 
-test('administrator authorization ignores row caps on project enumeration', async (t) => {
+test("yönetici yetkisi proje listesinin satır sınırını yok sayar", async (t) => {
   const stack = stackFor(t, {}, ADMIN);
   const { result, context } = await callRotaTool(stack, ADMIN, 'rota_task_detail', { taskId: TASKS.HIDDEN }, { limits: { ...TOOL_LIMITS, maxAuthorizationRows: 1 } });
   assert.equal(result.ok, true, JSON.stringify(result.error));
@@ -270,7 +270,7 @@ test('administrator authorization ignores row caps on project enumeration', asyn
 });
 
 for (const tool of ['rota_task_search', 'rota_task_analytics']) {
-  test(`${tool} resolves a WBS-only selector before computing or rendering metrics`, async (t) => {
+  test(`${tool} ölçü hesaplamadan ve çizmeden yalnızca WBS seçicisini çözer`, async (t) => {
     const stack = stackFor(t);
     const { result } = await callRotaTool(stack, AYSE, tool, { wbsId: WBS.FULL_DESIGN });
     assert.equal(result.ok, true, JSON.stringify(result.error));
@@ -283,7 +283,7 @@ for (const tool of ['rota_task_search', 'rota_task_analytics']) {
   });
 }
 
-test('terminal selection cannot replace a requested list, rank or named row with another true row', async (t) => {
+test("son seçim istenen liste sıralama veya adlı satırı başka doğru satırla değiştiremez", async (t) => {
   const { ledger } = await callRotaTool(stackFor(t), AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, sort: 'title_asc' });
   const rows = JSON.parse(ledger.payloads()[0].payload).data.tasks;
   const issue = (fields, request) => verifyRequested(ledger, fields, request).issues[0]?.code ?? null;
@@ -301,7 +301,7 @@ test('terminal selection cannot replace a requested list, rank or named row with
   assert.equal(issue(['data.tasks.*.title'], list), null);
 });
 
-test('exactly thirty days belongs to the thirty-or-more deadline group and internal keys are not claimable', async (t) => {
+test("tam otuz gün otuz ve üzeri kovasına girer; iç anahtar iddia edilemez", async (t) => {
   const stack = stackFor(t);
   stack.db.tasks.find((task) => task.TaskId === TASKS.LITERAL).TargetFinish = '2026-10-30';
   const { result } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'deadline' });
@@ -312,7 +312,7 @@ test('exactly thirty days belongs to the thirty-or-more deadline group and inter
   assert.equal(facts.some((fact) => /^data\.groups\.\d+\.key$/.test(fact.field)), false);
 });
 
-test('unresolvable assignees retain presence without rendering their Sicil as a name', async (t) => {
+test("çözümlenemeyen sorumlu varlığı korunur; sicili ad diye çizilmez", async (t) => {
   const stack = stackFor(t, { taskAssignees: [{ TaskId: TASKS.UNASSIGNED, Sicil: 2147483647 }] });
   const { result } = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.UNASSIGNED });
   assert.equal(result.data.task.assignees[0].name, 'Seçilen kişi');
@@ -320,7 +320,7 @@ test('unresolvable assignees retain presence without rendering their Sicil as a 
   assert.equal(facts.some((fact) => String(fact.value).includes('2147483647')), false);
 });
 
-test('administrator name search applies its selector before the project materialization cap', async (t) => {
+test("yönetici ad araması seçiciyi proje hazırlama sınırından önce uygular", async (t) => {
   const seed = rotaToolSeed();
   seed.projects.push(...Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({
     ProjectId: `33000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`,
@@ -338,7 +338,7 @@ test('administrator name search applies its selector before the project material
   assert.equal(wbs.result.data.totals.total, 1);
 });
 
-test('population totals cannot substitute a different counting unit, a search population or a capped preview', async (t) => {
+test("nüfus toplamı başka sayım birimi arama nüfusu veya kesilmiş önizleme yerine geçemez", async (t) => {
   const stack = stackFor(t);
   const projects = await callRotaTool(stack, AYSE, 'rota_project_search', { text: 'Radar' });
   const issue = (ledger, fields, request) => verifyRequested(ledger, fields, request).issues[0]?.code ?? null;

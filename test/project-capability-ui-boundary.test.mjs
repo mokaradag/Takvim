@@ -45,7 +45,7 @@ function projectContext(project = corporateProject) {
   };
 }
 
-test('corporate project identity edits cannot rename the root WBS or change source-controlled fields', () => {
+test("kurumsal proje kimlik düzenlemesi kök WBS veya kaynak denetimli alanı değiştiremez", () => {
   const prepared = prepareProjectUpdateChanges(corporateProject.id, {
     name: 'Client-Spoofed Name',
     code: 'CLIENT-CODE',
@@ -64,7 +64,7 @@ test('corporate project identity edits cannot rename the root WBS or change sour
   assert.deepEqual(prepared.changes.wbsUpserts, []);
 });
 
-test('partial project metadata updates are rejected before persistence', () => {
+test("kısmi proje üstveri güncellemesi kalıcılıktan önce reddedilir", () => {
   const partialProject = { ...corporateProject, accessLevel: 'PARTIAL' };
   const prepared = prepareProjectUpdateChanges(partialProject.id, {
     color: 'emerald'
@@ -74,7 +74,7 @@ test('partial project metadata updates are rejected before persistence', () => {
   assert.equal(prepared.error.code, 'PROJECT_WRITE_FORBIDDEN');
 });
 
-test('Simple Mode exposes only writable project destinations', () => {
+test("temel kip yalnızca yazılabilir proje hedefi sunar", () => {
   const projects = [
     { id: 'full', accessLevel: 'FULL' },
     { id: 'partial', accessLevel: 'PARTIAL' },
@@ -89,7 +89,7 @@ test('Simple Mode exposes only writable project destinations', () => {
   assert.deepEqual(writableSimpleModeProjects(projects).map((project) => project.id), ['full', 'demo']);
 });
 
-test('Simple Mode restores a valid choice after asynchronous project loading', () => {
+test("temel kip asenkron proje yüklemesi sonrası geçerli seçimi geri getirir", () => {
   const projects = [{ id: 'full', accessLevel: 'FULL' }];
   assert.equal(resolveSimpleProjectChoice('', projects, false), 'full');
   assert.equal(resolveSimpleProjectChoice('partial', projects, false), 'full');
@@ -104,7 +104,7 @@ test('Simple Mode restores a valid choice after asynchronous project loading', (
   );
 });
 
-test('Simple Mode task creation resolves the project root WBS', () => {
+test("temel kip görev oluşturma proje kök WBS kaydını çözer", () => {
   assert.equal(findProjectRootWbsId([corporateRoot], corporateProject.id), corporateRoot.id);
   assert.equal(findProjectRootWbsId([corporateRoot], 'missing-project'), null);
 

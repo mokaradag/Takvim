@@ -33,7 +33,7 @@ function projectLabel(project) {
   return project.code ? `${project.code} · ${project.name}` : project.name;
 }
 
-/* ── Veri (Data table) ─────────────────────────────────── */
+/* Veri tablosu.*/
 export function TasksView() {
   const tasks = useTasks();
   const projects = useProjects();

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icons } from '../icons';
 import { navigationItems, PAGE_META } from './navigation';
 
-/* ── Command palette (Cmd+K) ────────────────────────── */
+/* Komut paleti: Cmd+K.*/
 export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, onOpenAssistant = null, tasks, navItems = navigationItems(false, false) }) {
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
@@ -84,7 +84,7 @@ export function CommandPalette({ onClose, onNavigate, onOpenTask, onSetTheme, on
     if (it) it.action();
   };
 
-  // group display
+  // Grup görünümü.
   const grouped = useMemo(() => {
     const out = { Sayfa: [], Komut: [], Görev: [] };
     items.forEach((i) => out[i.kind === 'nav' ? 'Sayfa' : i.kind === 'cmd' ? 'Komut' : 'Görev'].push(i));

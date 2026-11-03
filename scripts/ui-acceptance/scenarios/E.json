@@ -18,6 +18,14 @@
       "Siber Güvenlik Denetimi",
       "Altyapı Yenileme"
      ]
+    },
+    {
+     "outcome": "grounded",
+     "forbids": [
+      "Gizli Ar-Ge",
+      "Siber Güvenlik Denetimi",
+      "Altyapı Yenileme"
+     ]
     }
    ]
   }

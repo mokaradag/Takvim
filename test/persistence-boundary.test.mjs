@@ -48,7 +48,7 @@ async function sourceFiles(root) {
   return files;
 }
 
-test('async repository load initializes canonical ready application state', async () => {
+test("asenkron depo yükleme kanonik hazır uygulama durumunu başlatır", async () => {
   const result = await loadApplicationData(createMockRepository({
     calendars: [],
     projects: [{ id: 'p1', name: 'One' }],
@@ -73,7 +73,7 @@ test('async repository load initializes canonical ready application state', asyn
   assert.equal(state.tasks[0].wbsId, 'w1');
 });
 
-test('load failure creates explicit error state and retry can succeed', async () => {
+test("yükleme hatası açık hata durumu oluşturur; yeniden deneme başarılı olabilir", async () => {
   let fail = true;
   const repository = createMockRepository(undefined, { failLoad: () => fail });
   let state = createLoadingState();
@@ -94,7 +94,7 @@ test('load failure creates explicit error state and retry can succeed', async ()
   assert.ok(state.projects.length > 0);
 });
 
-test('memory repository mutations survive reload within one instance', async () => {
+test("bellek deposu değişimi aynı örnekte yeniden yüklemede korunur", async () => {
   const repository = createMockRepository();
   const before = await repository.loadSnapshot();
   const task = { ...before.tasks[0], task: 'Persisted in memory' };
@@ -103,7 +103,7 @@ test('memory repository mutations survive reload within one instance', async () 
   assert.equal(after.tasks.find((item) => item.id === task.id).task, 'Persisted in memory');
 });
 
-test('fresh memory repository instances are isolated', async () => {
+test("yeni bellek deposu örnekleri yalıtılmıştır", async () => {
   const first = createMockRepository();
   const second = createMockRepository();
   const snapshot = await first.loadSnapshot();
@@ -111,7 +111,7 @@ test('fresh memory repository instances are isolated', async () => {
   assert.notEqual((await second.loadSnapshot()).tasks[0].task, 'Changed only here');
 });
 
-test('repository snapshots and mutation inputs are deep-clone safe', async () => {
+test("depo görüntüsü ve değişim girdisi derin kopyada güvenlidir", async () => {
   const repository = createMockRepository();
   const loaded = await repository.loadSnapshot();
   const originalName = loaded.tasks[0].task;
@@ -124,7 +124,7 @@ test('repository snapshots and mutation inputs are deep-clone safe', async () =>
   assert.equal((await repository.loadSnapshot()).tasks[0].task, 'Committed clone');
 });
 
-test('Task create, update and delete persist through async orchestration', async () => {
+test("görev oluşturma güncelleme ve silme asenkron düzenlemede saklanır", async () => {
   const harness = await createHarness();
   const task = createNewTask(harness.state, '2026-07-22', 'persisted-new-task');
 
@@ -141,7 +141,7 @@ test('Task create, update and delete persist through async orchestration', async
   assert.equal((await harness.repository.loadSnapshot()).tasks.some((item) => item.id === task.id), false);
 });
 
-test('failed Task persistence leaves state and repository unchanged and exposes persistence error', async () => {
+test("başarısız görev kaydı durum ve depoyu korur; kalıcılık hatasını gösterir", async () => {
   const repository = createMockRepository(undefined, { failNextMutation: true });
   const harness = await createHarness(repository);
   const beforeState = structuredClone(harness.state.tasks.find((task) => task.id === 't1'));
@@ -155,7 +155,7 @@ test('failed Task persistence leaves state and repository unchanged and exposes 
   assert.equal(harness.state.saveError.code, 'MUTATION_FAILED');
 });
 
-test('ordered mutation queue prevents older delayed updates from restoring stale Task data', async () => {
+test("sıralı değişim kuyruğu eski gecikmeli güncellemenin eski görevi geri getirmesini önler", async () => {
   const memory = createMockRepository();
   let call = 0;
   let active = 0;
@@ -183,7 +183,7 @@ test('ordered mutation queue prevents older delayed updates from restoring stale
   assert.equal((await repository.loadSnapshot()).tasks.find((task) => task.id === 't1').status, 'done');
 });
 
-test('rapid high-frequency Task patches coalesce into one persistence commit', async () => {
+test("hızlı sık görev yamaları tek kalıcı kayıtta birleşir", async () => {
   const memory = createMockRepository();
   let commits = 0;
   const repository = {
@@ -208,7 +208,7 @@ test('rapid high-frequency Task patches coalesce into one persistence commit', a
   assert.equal(persisted.description, 'Son not');
 });
 
-test('bulk Task WBS move persists atomically', async () => {
+test("toplu görev WBS taşıması atomik saklanır", async () => {
   const harness = await createHarness();
   const result = await harness.persistence.mutate('task/bulk-move-wbs', {
     type: 'task/bulk-move-wbs',
@@ -221,7 +221,7 @@ test('bulk Task WBS move persists atomically', async () => {
   assert.equal(persisted.tasks.find((task) => task.id === 't4').wbsId, 'wbs-p-web-design');
 });
 
-test('failed bulk Task WBS move does not partially update repository or state', async () => {
+test("başarısız toplu WBS taşıması depo veya durumu kısmen güncellemez", async () => {
   const repository = createMockRepository(undefined, { failNextMutation: true });
   const harness = await createHarness(repository);
   const before = await repository.loadSnapshot();
@@ -235,7 +235,7 @@ test('failed bulk Task WBS move does not partially update repository or state', 
   assert.equal(harness.state.tasks.find((task) => task.id === 't2').wbsId, before.tasks.find((task) => task.id === 't2').wbsId);
 });
 
-test('WBS create, rename and safe delete persist correctly', async () => {
+test("WBS oluşturma ad değiştirme ve güvenli silme doğru saklanır", async () => {
   const harness = await createHarness();
   const id = 'wbs-persist-test';
   assert.equal((await harness.persistence.mutate('wbs/create', {
@@ -252,7 +252,7 @@ test('WBS create, rename and safe delete persist correctly', async () => {
   assert.equal((await harness.repository.loadSnapshot()).wbs.some((node) => node.id === id), false);
 });
 
-test('WBS subtree reparent persists all rebased nodes atomically with stable IDs', async () => {
+test("WBS alt ağaç taşıması kodları kararlı kimliklerle atomik saklar", async () => {
   const harness = await createHarness();
   const result = await harness.persistence.mutate('wbs/reparent', {
     type: 'wbs/reparent',
@@ -267,7 +267,7 @@ test('WBS subtree reparent persists all rebased nodes atomically with stable IDs
   assert.equal(persisted.tasks.find((task) => task.id === 't1').wbsId, harness.state.tasks.find((task) => task.id === 't1').wbsId);
 });
 
-test('failed WBS reparent leaves the entire persisted subtree unchanged', async () => {
+test("başarısız WBS taşıma kalıcı alt ağacın tamamını korur", async () => {
   const repository = createMockRepository(undefined, { failNextMutation: true });
   const harness = await createHarness(repository);
   const before = (await repository.loadSnapshot()).wbs;
@@ -281,7 +281,7 @@ test('failed WBS reparent leaves the entire persisted subtree unchanged', async 
   assert.deepEqual(harness.state.wbs, before);
 });
 
-test('Task and WBS persistence mutations never modify baseline data', async () => {
+test("görev ve WBS kalıcılık değişimi baz plan verisini değiştirmez", async () => {
   const harness = await createHarness();
   const beforeBaselines = structuredClone((await harness.repository.loadSnapshot()).baselines);
   const beforeSnapshots = structuredClone((await harness.repository.loadSnapshot()).taskBaselineSnapshots);
@@ -296,7 +296,7 @@ test('Task and WBS persistence mutations never modify baseline data', async () =
   assert.deepEqual(after.taskBaselineSnapshots, beforeSnapshots);
 });
 
-test('reload reconciliation clears missing selected Task and invalid Project workspace', async () => {
+test("yeniden yükleme uzlaştırması eksik seçili görevi ve geçersiz proje alanını temizler", async () => {
   const repository = createMockRepository();
   const snapshot = await repository.loadSnapshot();
   let state = createInitialState(snapshot);
@@ -316,7 +316,7 @@ test('reload reconciliation clears missing selected Task and invalid Project wor
   assert.equal(state.selectedTaskId, null);
 });
 
-test('successful persisted scheduling mutation recomputes derived project CPM', async () => {
+test("başarılı kalıcı çizelge değişimi türetilmiş proje CPM hesabını yeniler", async () => {
   const harness = await createHarness();
   const before = buildPortfolioSchedule({
     tasks: harness.state.tasks,
@@ -338,7 +338,7 @@ test('successful persisted scheduling mutation recomputes derived project CPM', 
   assert.equal('earlyStart' in harness.state.tasks.find((item) => item.id === 't1'), false);
 });
 
-test('domain validation errors remain distinct from persistence failures', async () => {
+test("alan doğrulama hatası kalıcılık hatasından ayrı kalır", async () => {
   const harness = await createHarness();
   const domain = await harness.persistence.mutate('wbs/delete', {
     type: 'wbs/delete', id: 'wbs-p-web-root'
@@ -356,7 +356,7 @@ test('domain validation errors remain distinct from persistence failures', async
   assert.equal(failingHarness.state.wbsActionError, null);
 });
 
-test('workspace preference stays outside the business-data repository boundary', async () => {
+test("çalışma alanı tercihi iş verisi deposunun dışında kalır", async () => {
   const dataFiles = await sourceFiles(path.resolve('src/data'));
   for (const file of dataFiles) {
     assert.equal((await readFile(file, 'utf8')).includes('localStorage'), false, path.relative(process.cwd(), file));
@@ -365,7 +365,7 @@ test('workspace preference stays outside the business-data repository boundary',
   assert.ok(preferenceSource.includes('mergen-rota.workspace.v1'));
 });
 
-test('static architecture keeps features away from repository implementations and synchronous snapshots', async () => {
+test("sabit mimari özellikleri depo uygulamasından ve eşzamanlı görüntüden ayırır", async () => {
   const srcFiles = await sourceFiles(path.resolve('src'));
   const featureFiles = srcFiles.filter((file) => file.includes(`${path.sep}features${path.sep}`));
   const getSnapshotOffenders = [];

@@ -33,7 +33,7 @@ function projectContext() {
   };
 }
 
-test('project tag catalog trims, deduplicates case-insensitively, and sorts values', () => {
+test("proje etiket kataloğu kırpar harf duyarsız tekilleştirir ve sıralar", () => {
   // Etiket artık ad + renk + simge taşır; kırpma/tekilleştirme/sıralama kuralları aynıdır.
   assert.deepEqual(
     normalizeProjectTags([' Test ', 'test', 'Analiz', '', 'ANALİZ']).map((tag) => tag.name),
@@ -45,7 +45,7 @@ test('project tag catalog trims, deduplicates case-insensitively, and sorts valu
   }
 });
 
-test('project creation persists the controlled tag catalog', () => {
+test("proje oluşturma denetimli etiket kataloğunu saklar", () => {
   const context = projectContext();
   const result = prepareProjectCreation({
     name: 'Yeni Proje',
@@ -58,7 +58,7 @@ test('project creation persists the controlled tag catalog', () => {
   assert.deepEqual(result.project.tags.map((tag) => tag.name), ['Analiz', 'Test']);
 });
 
-test('partial project updates preserve an existing tag catalog', () => {
+test("kısmi proje güncellemesi mevcut etiket kataloğunu korur", () => {
   const context = projectContext();
   const result = prepareProjectUpdate('p1', {
     name: 'Proje Güncel',
@@ -70,7 +70,7 @@ test('partial project updates preserve an existing tag catalog', () => {
   assert.deepEqual(result.project.tags.map((tag) => tag.name), ['Analiz']);
 });
 
-test('lead and lag values support day, week, and month units', () => {
+test("öne alma ve gecikme gün hafta ve ay birimlerini destekler", () => {
   assert.equal(dependencyLagDays({ lagValue: 3, lagUnit: 'day' }), 3);
   assert.equal(dependencyLagDays({ lagValue: -2, lagUnit: 'week' }), -10);
   assert.equal(dependencyLagDays({ lagValue: 1, lagUnit: 'month' }), 20);
@@ -80,7 +80,7 @@ test('lead and lag values support day, week, and month units', () => {
   });
 });
 
-test('calendar warnings identify weekends and official holidays', () => {
+test("takvim uyarısı hafta sonu ve resmî tatili belirtir", () => {
   const calendars = [{
     id: 'cal',
     name: 'Takvim',
@@ -97,11 +97,11 @@ test('calendar warnings identify weekends and official holidays', () => {
   assert.deepEqual(warnings.map((warning) => warning.type).sort(), ['holiday', 'weekend']);
 });
 
-test('application display date helper uses dd/mm/yyyy', () => {
+test("uygulama tarih yardımcısı gün ay yıl biçimini kullanır", () => {
   assert.equal(fmtDisplayDate('2026-07-22'), '22/07/2026');
 });
 
-test('Gantt range override can select and reset a custom display window', () => {
+test("Gantt aralık değişimi özel pencereyi seçip sıfırlayabilir", () => {
   clearGanttDateRangeOverride();
   const automatic = calculateTaskDateRange([{ plannedStart: '2026-07-10', plannedFinish: '2026-07-20' }], { paddingDays: 0 });
   assert.equal(fmtDisplayDate(automatic.start), '10/07/2026');
@@ -112,7 +112,7 @@ test('Gantt range override can select and reset a custom display window', () => 
   clearGanttDateRangeOverride();
 });
 
-test('CSV and Excel exports include structured project data and formatted dates', () => {
+test("CSV ve Excel dışa aktarımı yapısal proje verisini ve biçimli tarihi içerir", () => {
   const input = {
     project: { id: 'p1', name: 'Proje', lead: 'Ayşe', dataDate: '2026-07-22' },
     projects: [{ id: 'p1', name: 'Proje' }],
@@ -153,7 +153,7 @@ test('CSV and Excel exports include structured project data and formatted dates'
   assert.match(tasksSheet, /state="frozen"/);
 });
 
-test('Sürüm 1.0 UI contracts place project creation and tag governance in Proje Yapısı', () => {
+test("proje oluşturma ve etiket yönetimi Proje Yapısı içinde yer alır", () => {
   const shell = fs.readFileSync(path.join(ROOT, 'src/components/shell/AppShell.jsx'), 'utf8');
   const sidebar = fs.readFileSync(path.join(ROOT, 'src/components/shell/SidebarUserPanel.jsx'), 'utf8');
   const projectView = fs.readFileSync(path.join(ROOT, 'src/features/project/ProjectWorkspaceView.jsx'), 'utf8');

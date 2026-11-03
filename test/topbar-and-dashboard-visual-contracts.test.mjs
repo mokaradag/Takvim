@@ -18,7 +18,7 @@ function readAppCss() {
     .map((name) => read(`src/app/styles/${name}`))].join('\n');
 }
 
-test('topbar and dashboard visual contracts have semantic owners instead of chronological patch layers', () => {
+test("üst çubuk ve pano görsel sözleşmesi kronolojik yamalar yerine anlamsal sahibe aittir", () => {
   const layout = read('src/app/layout.js');
 
   assert.match(layout, /import '\.\/styles\/shell\.css';/);
@@ -26,7 +26,7 @@ test('topbar and dashboard visual contracts have semantic owners instead of chro
   assert.doesNotMatch(layout, /enhancements\.css|fixes\.css|followup-fixes\.css|topbar-dashboard-polish\.css/);
 });
 
-test('topbar keeps popovers visible while only the decorative emblem layer clips the heptagon', () => {
+test("üst çubuk açılırı görünür tutar; yedigeni yalnız dekoratif katman kırpar", () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const css = read('src/app/styles/shell.css');
 
@@ -59,7 +59,7 @@ test('marka amblemi dönüşü filtreli SVG yerine tek transform katmanında ça
   assert.match(shellCss, /\.topbar-emblem-clip \.hept-topbar::before\s*\{[^}]*background:\s*radial-gradient\(/s);
 });
 
-test('marka amblemi preference hides the topbar emblem as well as the sidebar emblem', () => {
+test("marka amblemi tercihi üst çubuk ve kenar çubuk amblemini gizler", () => {
   const tweaks = read('src/hooks/useApplyTweaks.js');
   const css = read('src/app/styles/shell.css');
 
@@ -67,7 +67,7 @@ test('marka amblemi preference hides the topbar emblem as well as the sidebar em
   assert.match(css, /body\.no-emblem \.topbar-emblem-clip \.hept-topbar\s*\{[^}]*display:\s*none;[^}]*visibility:\s*hidden;/s);
 });
 
-test('selected project identity remains at the true horizontal center with distinct code and name styling', () => {
+test("seçili proje kimliği ayrı kod ve ad biçimiyle gerçek yatay merkezde kalır", () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const css = read('src/app/styles/shell.css');
 
@@ -82,7 +82,7 @@ test('selected project identity remains at the true horizontal center with disti
   assert.match(css, /\.theme-light \.topbar-project-context strong\.topbar-project-name\s*\{[^}]*color:\s*color-mix\(in oklab, var\(--accent\) 68%, var\(--text\)\);/s);
 });
 
-test('Durum dağılımı uses semantic dashboard structure with the exact accepted dimensions', () => {
+test("durum dağılımı kabul edilmiş tam boyutlarla anlamsal pano yapısını kullanır", () => {
   const css = read('src/app/styles/dashboard.css');
   const dashboard = read('src/features/dashboard/DashboardView.jsx');
   const ui = read('src/components/ui.jsx');
@@ -116,12 +116,12 @@ test('Durum dağılımı uses semantic dashboard structure with the exact accept
   // ne kırpılır ne de komşusunun üstüne biner.
   assert.match(ui, /const emphasisedInner = Math\.max\(2, inner - DONUT_EMPHASIS\);/);
 
-  // No rejected forced segment pinning or 214px SVG override may return.
+  // Reddedilmiş zorunlu bölüm sabitlemesi veya SVG genişlik değişimi geri gelemez.
   assert.doesNotMatch(allCss, /> svg > g\s*\{[^}]*transform:\s*none\s*!important;/s);
   assert.doesNotMatch(allCss, /> div:first-child > svg\s*\{[^}]*width:\s*214px\s*!important;/s);
 });
 
-test('compact dashboard preserves the accepted 1280px status-card breakpoint', () => {
+test("sıkı pano kabul edilmiş durum kartı eşik genişliğini korur", () => {
   const css = read('src/app/styles/dashboard.css');
 
   assert.match(

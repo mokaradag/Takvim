@@ -39,7 +39,7 @@ function completeProject(id = PROJECT_UUID) {
   };
 }
 
-test('Actual ID aliases survive repository recreation and restore a reloaded snapshot', () => {
+test("gerçek kimlik eşlemesi depo yeniden kurulunca ve görüntü yüklenince korunur", () => {
   const storage = memoryStorage();
   const firstSessionAliases = new Map([[PROJECT_UUID, PROJECT_CLIENT_ID]]);
 
@@ -66,7 +66,7 @@ test('çıplak sunucu UUIDsi önekli istemci görev kimliğiyle aynı kaydı gö
   assert.equal(sameActualReference('demo-task', 'other-task'), false);
 });
 
-test('Actual alias storage ignores malformed and mismatched entries', () => {
+test("gerçek eşleme deposu bozuk ve uyuşmayan girişi yok sayar", () => {
   const storage = memoryStorage({
     [ACTUAL_ID_ALIAS_STORAGE_KEY]: JSON.stringify([
       ['not-a-uuid', 'project-not-a-uuid'],
@@ -79,7 +79,7 @@ test('Actual alias storage ignores malformed and mismatched entries', () => {
   assert.deepEqual([...loadActualIdAliases(storage)], [[PROJECT_UUID, PROJECT_CLIENT_ID]]);
 });
 
-test('commit change validation rejects malformed collection shapes', () => {
+test("kayıt değişimi doğrulaması bozuk koleksiyon biçimini reddeder", () => {
   assert.deepEqual(findCommitChangeIssue({ taskUpserts: {} }), {
     code: 'CHANGE_COLLECTION_NOT_ARRAY',
     path: 'taskUpserts',
@@ -88,7 +88,7 @@ test('commit change validation rejects malformed collection shapes', () => {
   });
 });
 
-test('commit change validation rejects duplicate and conflicting identities', () => {
+test("kayıt değişimi doğrulaması yinelenen ve çelişen kimliği reddeder", () => {
   assert.equal(findCommitChangeIssue({
     wbsUpserts: [{ id: 'wbs-1' }, { id: 'wbs-1' }]
   })?.code, 'DUPLICATE_UPSERT');
@@ -99,7 +99,7 @@ test('commit change validation rejects duplicate and conflicting identities', ()
   })?.code, 'UPSERT_DELETE_CONFLICT');
 });
 
-test('commit UUID canonicalization keeps one logical Project identity across root planning', () => {
+test("kayıt UUID kanonikleştirmesi kök planlamada tek mantıksal proje kimliğini korur", () => {
   const changes = canonicalizeCommitChanges({
     projectUpserts: [completeProject(PROJECT_UUID.toUpperCase())],
     projectDeletes: [],
@@ -122,7 +122,7 @@ test('commit UUID canonicalization keeps one logical Project identity across roo
   assert.equal(findCommitChangeIssue(changes), null);
 });
 
-test('commit validation treats differently-cased UUIDs as duplicate logical identities', () => {
+test("kayıt doğrulaması farklı harfli UUID değerini yinelenen mantıksal kimlik sayar", () => {
   const issue = findCommitChangeIssue(canonicalizeCommitChanges({
     taskUpserts: [
       { id: TASK_UUID.toUpperCase(), projectId: PROJECT_UUID, deps: [] },
@@ -134,7 +134,7 @@ test('commit validation treats differently-cased UUIDs as duplicate logical iden
   assert.equal(issue?.details?.id, TASK_UUID);
 });
 
-test('commit validation rejects malformed entity and relationship UUIDs before SQL work', () => {
+test("kayıt doğrulaması bozuk varlık ve ilişki UUID değerini SQL öncesi reddeder", () => {
   const invalidEntity = findCommitChangeIssue(canonicalizeCommitChanges({
     taskUpserts: [{ id: 'not-a-uuid', projectId: PROJECT_UUID, deps: [] }]
   }));
@@ -148,7 +148,7 @@ test('commit validation rejects malformed entity and relationship UUIDs before S
   assert.equal(invalidReference?.path, 'taskUpserts[0].projectId');
 });
 
-test('commit change validation requires complete manual project creation fields', () => {
+test("kayıt değişim doğrulaması elle proje oluşturma alanlarını tam ister", () => {
   const incomplete = findCommitChangeIssue({
     projectUpserts: [{
       id: PROJECT_UUID,

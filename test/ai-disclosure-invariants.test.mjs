@@ -36,7 +36,7 @@ function failEvidenceReads(t, pool, code) {
 }
 
 for (const delivery of ['retained', 'recovered', 'unavailable', 'revoked', 'deleted', 'conversation-deleted']) {
-  test(`saved replay validates the original answer once at delivery (${delivery})`, async (t) => {
+  test(`kayıtlı oynatma özgün yanıtı teslimde bir kez doğrular (${delivery})`, async (t) => {
     const stack = stackFor(t);
     citeTask(stack, TASKS.OVERDUE);
     const input = { turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` };
@@ -106,7 +106,7 @@ for (const delivery of ['retained', 'recovered', 'unavailable', 'revoked', 'dele
 
 for (const failure of ['missing', 'AI_BUSY', 'DATABASE_UNAVAILABLE']) {
   for (const finishReason of ['stop', 'end_turn', 'eos', 'stop_sequence', 'length', 'content_filter']) {
-    test(`tool-free literal citations survive ${failure} on reopen, replay and history (${finishReason})`, async (t) => {
+    test(`araçsız düz atıflar yeniden açma oynatma ve geçmişte ${failure} sonrasında korunur (${finishReason})`, async (t) => {
       const stack = createAiStack(t, { env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'false' }, seed: { aiEvidenceSchemaMissing: failure === 'missing' } });
       const text = 'Etiket örneği: 【R1】 ve 【R12】.';
       stack.provider.enqueue({ type: 'stream', text, finishReason });
@@ -133,7 +133,7 @@ for (const failure of ['missing', 'AI_BUSY', 'DATABASE_UNAVAILABLE']) {
   }
 }
 
-test('disabling tools still hides recorded grounded answers on evidence-read failure and revoked access', async (t) => {
+test("araçlar kapalıyken de kanıt okuma hatası ve yetki kaldırma kayıtlı kanıtlı yanıtı gizler", async (t) => {
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);
   const input = { turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` };
@@ -156,7 +156,7 @@ test('disabling tools still hides recorded grounded answers on evidence-read fai
   assert.equal(revoked.content, NON_ENUMERATING_FAILURE_TEXT);
 });
 
-test('previously available evidence remains protected across repeated missing-schema reads with tools disabled', async (t) => {
+test("araçlar kapalıyken yinelenen eksik şema okumaları eski kanıtın korumasını kaldırmaz", async (t) => {
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);
   const input = { turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` };
@@ -176,7 +176,7 @@ test('previously available evidence remains protected across repeated missing-sc
 });
 
 for (const cause of ['cumulative', 'message', 'caller']) {
-  test(`saved-evidence ${cause} cancellation keeps disclosure closed and releases the SQL gate`, async (t) => {
+  test(`kayıtlı kanıt ${cause} iptali açıklamayı kapalı tutar ve SQL kapısını bırakır`, async (t) => {
     const stack = stackFor(t);
     citeTask(stack, TASKS.OVERDUE);
     const saved = done(await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` }));
@@ -229,7 +229,7 @@ for (const cause of ['cumulative', 'message', 'caller']) {
   });
 }
 
-test('authorization errors during saved-evidence validation still propagate', async (t) => {
+test("kayıtlı kanıt doğrulamasında yetki hatası iletilir", async (t) => {
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);
   const saved = done(await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` }));
@@ -241,7 +241,7 @@ test('authorization errors during saved-evidence validation still propagate', as
 });
 
 for (const change of ['project-revoked', 'creator-to-assignee', 'full-to-partial', 'management-revoked']) {
-  test(`saved answers, summaries and idempotent replay revalidate disclosure after ${change}`, async (t) => {
+  test(`kayıtlı yanıt özet ve eşgüçlü oynatma ${change} sonrasında açıklamayı yeniden doğrular`, async (t) => {
     const stack = stackFor(t);
     const taskId = change === 'creator-to-assignee' ? TASKS.PARTIAL_SHARED : change === 'management-revoked' ? TASKS.TEAM_VISIBLE : TASKS.OVERDUE;
     const task = stack.db.tasks.find((row) => row.TaskId === taskId);
@@ -277,7 +277,7 @@ for (const change of ['project-revoked', 'creator-to-assignee', 'full-to-partial
   });
 }
 
-test('legacy evidence without an authorization epoch is never disclosed', async (t) => {
+test("yetki dönemi olmayan eski kanıt açıklanmaz", async (t) => {
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);
   const response = await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` });
@@ -290,7 +290,7 @@ test('legacy evidence without an authorization epoch is never disclosed', async 
   assert.equal(reopened.body.messages.find((message) => message.role === 'assistant').content, NON_ENUMERATING_FAILURE_TEXT);
 });
 
-test('revoked grounded text never reaches general-chat history even with a ready evidence table', async (t) => {
+test("yetkisi kaldırılmış kanıtlı metin hazır kanıt tablosu olsa da genel sohbet geçmişine girmez", async (t) => {
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);
   const first = done(await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` }));
@@ -304,7 +304,7 @@ test('revoked grounded text never reaches general-chat history even with a ready
   assert.ok(history.every((message) => !message.content.includes(title) && !message.content.includes('【R1】')));
 });
 
-test('unrelated project grants do not hide a still-authorized saved task answer', async (t) => {
+test("ilgisiz proje yetkisi hâlâ yetkili kayıtlı görev yanıtını gizlemez", async (t) => {
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);
   const first = done(await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` }));
@@ -315,7 +315,7 @@ test('unrelated project grants do not hide a still-authorized saved task answer'
   assert.equal(answer.evidence.length, 1);
 });
 
-test('moving a cited task outside the current scope hides it on reopen and replay', async (t) => {
+test("atıflı görev kapsamdan çıkınca yeniden açmada ve oynatmada gizlenir", async (t) => {
   const stack = stackFor(t);
   stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
   citeTask(stack, TASKS.OVERDUE);
@@ -335,7 +335,7 @@ test('moving a cited task outside the current scope hides it on reopen and repla
 });
 
 for (const path of ['server', 'model']) {
-  test(`a task moved across the ACL boundary after reading cannot be rendered or persisted as evidence (${path} selection)`, async (t) => {
+  test(`okumadan sonra erişim sınırını geçen görev çizilemez ve kanıt olarak saklanamaz (${path} seçimi)`, async (t) => {
     const stack = stackFor(t);
     stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
     const task = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE);
@@ -366,7 +366,7 @@ for (const path of ['server', 'model']) {
   });
 }
 
-test('conversation deletion between grounded rounds prevents sending tool evidence to the provider', async (t) => {
+test("kanıt turları arasında konuşma silme araç kanıtının sağlayıcıya gönderilmesini önler", async (t) => {
   const stack = stackFor(t);
   const request = declared({ operation: 'value', metrics: ['task.title', 'task.project'], reasoning: 'synthesis',
     fields: [{ metric: 'task.project', tool: 'rota_task_detail', path: 'data.task.project.name' }],
@@ -396,7 +396,7 @@ test('conversation deletion between grounded rounds prevents sending tool eviden
   assert.equal(response.events.at(-1).event, 'error');
 });
 
-test('a transient post-persist check fails closed before streaming and can recover on reopen', async (t) => {
+test("kayıt sonrası geçici denetim akıştan önce erişimi kapatır; yeniden açmada düzelebilir", async (t) => {
   const stack = stackFor(t);
   citeTask(stack, TASKS.OVERDUE);
   stack.db.aiConversationHooks = { beforeAppend() {
@@ -419,7 +419,7 @@ test('a transient post-persist check fails closed before streaming and can recov
 });
 
 for (const revoke of [false, true]) {
-  test(`an optional saved-evidence reread failure after persistence ${revoke ? 'still hides an answer whose access was revoked' : 'keeps the answer this turn just verified'}`, async (t) => {
+  test(`kayıt sonrası isteğe bağlı kanıt okuma hatası ${revoke ? 'still hides an answer whose access was revoked' : 'keeps the answer this turn just verified'}`, async (t) => {
     const stack = stackFor(t);
     citeTask(stack, TASKS.OVERDUE);
     const pool = await getSqlPool();
@@ -447,7 +447,7 @@ for (const revoke of [false, true]) {
 }
 
 for (const source of ['rota', 'general']) {
-  test(`write reconciliation uses the same disclosure gate for the ${source} generation path`, async (t) => {
+  test(`yazma uzlaştırması ${source} üretim yolunda aynı açıklama kapısını kullanır`, async (t) => {
     const stack = stackFor(t);
     citeTask(stack, TASKS.OVERDUE);
     const first = done(await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` }));
@@ -473,7 +473,7 @@ for (const source of ['rota', 'general']) {
   });
 }
 
-test('clarification preserves only authorized structured candidates for the next turn', async (t) => {
+test("açıklama sonraki tur için yalnızca yetkili yapısal adayları korur", async (t) => {
   const stack = stackFor(t);
   stack.provider.enqueue({ type: 'tool-calls', preface: [declared({ operation: 'value', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary' },
     fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.openTaskCount' }], entities: [{ type: 'person', text: 'Ali' }] })],
@@ -496,7 +496,7 @@ test('clarification preserves only authorized structured candidates for the next
   assert.equal(done(await sendTurn({ conversationId: first.conversation.id, turnId: randomUUID(), message: '1' })).assistantMessage.finishReason, 'stop');
 });
 
-test('legacy clarification labels cannot inject instructions into the next turn', async () => {
+test("eski açıklama etiketleri sonraki tura talimat enjekte edemez", async () => {
   const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
   const context = buildGroundedContext({ userContent: 'İkincisi', history: [
     { role: 'user', content: 'Projeyi seç' },
@@ -511,7 +511,7 @@ test('legacy clarification labels cannot inject instructions into the next turn'
   assert.match(prior, /"personSicil":/);
 });
 
-test('notification and workflow populations exclude revoked tasks and hidden cardinality', async (t) => {
+test("bildirim ve iş akışı nüfusları yetkisi kaldırılan görevi ve gizli sayıları dışlar", async (t) => {
   const stack = stackFor(t, {
     taskNotifications: [{ RecipientSicil: AYSE, Kind: 'TASK_ASSIGNED', TaskId: TASKS.OVERDUE, ActorSicil: LEAD, TaskTitleSnapshot: 'Protected snapshot', ProjectNameSnapshot: 'Protected project', EventKey: 'event' }],
     taskScheduleChangeRequests: [{ TaskId: TASKS.OVERDUE, RequesterSicil: ZEYNEP, DecisionOwnerSicil: AYSE, Status: 'PENDING' }],
@@ -532,7 +532,7 @@ test('notification and workflow populations exclude revoked tasks and hidden car
   }
 });
 
-test('notification overflow makes counts unknown and never returns a capped count as exact', async (t) => {
+test("bildirim taşması sayıyı bilinmez yapar; kesilmiş sayıyı kesin toplam diye vermez", async (t) => {
   const notifications = Array.from({ length: TOOL_LIMITS.maxCursorOffset + 1 }, (_, index) => ({ RecipientSicil: AYSE, Kind: 'TASK_ASSIGNED', TaskId: TASKS.OVERDUE, EventKey: `event-${index}` }));
   const stack = stackFor(t, { taskNotifications: notifications });
   const read = await callRotaTool(stack, AYSE, 'rota_notifications');
@@ -543,7 +543,7 @@ test('notification overflow makes counts unknown and never returns a capped coun
   assert.doesNotMatch(read.ledger.summaries()[0].label, /null|1001/);
 });
 
-test('authorization row budgets fail closed without affecting ordinary authorization loading', async (t) => {
+test("yetki satırı bütçesi olağan yetki yüklemesini etkilemeden erişimi kapatır", async (t) => {
   const stack = stackFor(t);
   const context = createToolTurnContext({ sicil: AYSE, limits: { ...TOOL_LIMITS, maxAuthorizationRows: 2 } });
   await assert.rejects(context.revalidateAuthorization(new AbortController().signal), { code: 'RESULT_TOO_LARGE' });
@@ -559,7 +559,7 @@ test('authorization row budgets fail closed without affecting ordinary authoriza
 
 for (const kind of ['title', 'protected-text', 'aggregate', 'workload']) {
   for (const revoke of [false, true]) {
-    test(`final SSE capacity gate revalidates persisted ${kind} (${revoke ? 'revoked' : 'retained'})`, async (t) => {
+    test(`son SSE kapasite kapısı kalıcı ${kind} değerini yeniden doğrular (${revoke ? 'revoked' : 'retained'})`, async (t) => {
       const stack = stackFor(t);
       const { prepareAssistantTurn, generateAssistantAnswer } = await import('../src/server/ai/assistant/assistantService.js');
       const { assistantStreamResponse, QUEUE_HIGH_WATER_MARK } = await import('../src/server/ai/assistant/assistantStreamResponse.js');
@@ -618,7 +618,7 @@ for (const kind of ['title', 'protected-text', 'aggregate', 'workload']) {
 }
 
 for (const change of ['retained', 'deleted', 'moved-visible', 'moved-hidden', 'project-revoked', 'task-hidden']) {
-  test(`workload aggregate contributors are revalidated on final and reopened disclosure (${change})`, async (t) => {
+  test(`iş yükü toplamının katkıları son ve yeniden açılmış açıklamada doğrulanır (${change})`, async (t) => {
     const stack = stackFor(t);
     const contributors = [TASKS.OVERDUE, TASKS.UNASSIGNED, TASKS.PARTIAL_OWN];
     stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
@@ -660,7 +660,7 @@ for (const change of ['retained', 'deleted', 'moved-visible', 'moved-hidden', 'p
   });
 }
 
-test('the ledger rejects a protected aggregate without contributor provenance, including an explicit empty-population counterexample', async () => {
+test("defter katkı kökeni olmayan korumalı toplamı boş nüfusta da reddeder", async () => {
   const { createEvidenceLedger } = await import('../src/server/ai/tools/evidenceLedger.js');
   const { getRotaTool } = await import('../src/server/ai/tools/toolRegistry.js');
   const ledger = createEvidenceLedger();
@@ -675,7 +675,7 @@ test('the ledger rejects a protected aggregate without contributor provenance, i
   assert.equal(ledger.register({ ...metadata, populationReferences: [] }), 'R1');
 });
 
-test('conversation deletion between history and evidence reads cannot put protected text into model context', async (t) => {
+test("geçmiş ve kanıt okuması arasında silme korumalı metni model bağlamına sokamaz", async (t) => {
   const stack = stackFor(t); citeTask(stack, TASKS.OVERDUE);
   const saved = done(await sendTurn({ turnId: randomUUID(), message: `Görevi göster: ${TASKS.OVERDUE}` }));
   const { prepareAssistantTurn } = await import('../src/server/ai/assistant/assistantService.js');
@@ -697,7 +697,7 @@ test('conversation deletion between history and evidence reads cannot put protec
 });
 
 for (const deleted of [false, true]) {
-  test(`saved general text with literal citation markers requires current presence (deleted=${deleted})`, async (t) => {
+  test(`düz atıflı kayıtlı genel metin güncel varlık denetimi ister (silinmiş=${deleted})`, async (t) => {
     const stack = stackFor(t);
     const text = 'Genel sohbet etiketi: 【R1】.';
     const userText = `Etiketi açıkla. ${'Genel açıklama. '.repeat(20)}Silinen kullanıcı metni.`;
@@ -712,7 +712,7 @@ for (const deleted of [false, true]) {
         if (sql.includes('AS EvidenceReady')) {
           evidenceReads += 1;
           if (deleted) {
-            // A competing tab deletes after loadConversation read its snapshot.
+            // Rakip sekme loadConversation görüntüsünü okuduktan sonra siler.
             const response = await conversationRoute.DELETE(aiRequest(`/assistant/conversations/${saved.conversation.id}`, { method: 'DELETE' }),
               { params: { conversationId: saved.conversation.id } });
             assert.equal(response.status, 200);
@@ -743,7 +743,7 @@ for (const deleted of [false, true]) {
 }
 
 for (const evidenceMode of ['ready', 'missing', 'failed']) {
-  for (const boundary of ['evidence', 'presence']) test(`conversation reopen suppresses deleted messages and title (${evidenceMode}, delete at ${boundary})`, async (t) => {
+  for (const boundary of ['evidence', 'presence']) test(`konuşmayı yeniden açma silinmiş ileti ve başlığı gizler (${evidenceMode}, silme anı ${boundary})`, async (t) => {
     const stack = stackFor(t), secret = `Deleted user title ${randomUUID()}`, answer = `Deleted general answer ${randomUUID()}`;
     stack.provider.enqueue({ type: 'stream', text: answer });
     const saved = done(await sendTurn({ turnId: randomUUID(), source: 'general', message: secret }));
@@ -769,7 +769,7 @@ for (const evidenceMode of ['ready', 'missing', 'failed']) {
   });
 }
 
-for (const evidenceMode of ['ready', 'missing', 'failed']) test(`general replay checks saved answer presence at disclosure (${evidenceMode})`, async (t) => {
+for (const evidenceMode of ['ready', 'missing', 'failed']) test(`genel oynatma teslimde kayıtlı yanıt varlığını denetler (${evidenceMode})`, async (t) => {
   const stack = stackFor(t), text = `General replay secret ${randomUUID()}`;
   stack.provider.enqueue({ type: 'stream', text });
   const input = { turnId: randomUUID(), source: 'general', message: 'A general question' };
@@ -798,7 +798,7 @@ for (const evidenceMode of ['ready', 'missing', 'failed']) test(`general replay 
   assert.equal(deltas(replay), NON_ENUMERATING_FAILURE_TEXT);
 });
 
-test('unverifiable message presence fails closed even when evidence is unavailable', async (t) => {
+test("ileti varlığı doğrulanamıyorsa kanıt kullanılamasa da erişim kapalı kalır", async (t) => {
   const stack = stackFor(t), text = `Unavailable presence ${randomUUID()}`;
   stack.provider.enqueue({ type: 'stream', text });
   const saved = done(await sendTurn({ turnId: randomUUID(), source: 'general', message: 'A question' }));

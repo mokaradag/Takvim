@@ -431,7 +431,7 @@ test('sağlayıcı done olayından sonra iptal biten yanıtı kaybettirmez', asy
   assert.equal(admission.status().active, 0);
 });
 
-test('tool round measurements include failed connection attempts before the successful stream', async (t) => {
+test("araç turu ölçümü başarılı akıştan önceki başarısız bağlantıları içerir", async (t) => {
   let clock = 0;
   const fake = createFakeAiProvider();
   fake.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: {} }] });
@@ -450,7 +450,7 @@ test('tool round measurements include failed connection attempts before the succ
   assert.equal(aiTelemetrySnapshot().retries, 1);
 });
 
-test('a tool round that carries tool results is never resent by a connection retry without the caller access check', async (t) => {
+test("araç sonuçlu tur çağıranın erişim denetimi olmadan bağlantı denemesinde yeniden gönderilmez", async (t) => {
   const fake = createFakeAiProvider();
   fake.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'stream', text: 'yeniden gönderilmemeli' });
   const { gateway, admission } = gatewayFor(t, { provider: fake });
@@ -464,7 +464,7 @@ test('a tool round that carries tool results is never resent by a connection ret
   assert.equal(admission.status().active, 0);
 });
 
-test('tool sessions share absolute remaining lifetime and each capacity lease releases exactly once', async (t) => {
+test("araç oturumları mutlak kalan ömrü paylaşır; her kapasite kirası bir kez bırakılır", async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
   const { gateway, admission, provider } = gatewayFor(t, {
     env: { MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS: '1000', MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS: '100000' } });
@@ -501,7 +501,7 @@ test('tool sessions share absolute remaining lifetime and each capacity lease re
 });
 
 for (const tools of [false, true]) {
-  test(`provider inactivity excludes downstream delivery waits (${tools ? 'tool session' : 'chat'})`, async (t) => {
+  test(`sağlayıcı hareketsizliği sonraki teslim beklemesini dışlar (${tools ? 'tool session' : 'chat'})`, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
     const provider = createFakeAiProvider();
     provider.enqueue({ type: 'stream', chunks: ['A', 'B'] });
@@ -527,7 +527,7 @@ for (const tools of [false, true]) {
     assert.equal(admission.status().active, 0);
   });
 
-  test(`each permitted connection retry gets its own first-event budget (${tools ? 'tool session' : 'chat'})`, async (t) => {
+  test(`her izinli bağlantı denemesi kendi ilk olay bütçesini alır (${tools ? 'tool session' : 'chat'})`, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
     const fake = createFakeAiProvider();
     fake.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'stream', text: 'İkinci deneme' });
@@ -555,7 +555,7 @@ for (const tools of [false, true]) {
 }
 
 for (const tools of [false, true]) for (const code of ['NOT_FOUND', 'DATABASE_UNAVAILABLE', 'AI_BUSY']) {
-  test(`before-dispatch ${code} preserves the local error without recording a provider attempt (${tools ? 'tools' : 'chat'})`, async (t) => {
+  test(`gönderim öncesi ${code} sağlayıcı girişimi yazmadan yerel hatayı korur (${tools ? 'tools' : 'chat'})`, async (t) => {
     const { ServerPersistenceError } = await import('../src/server/errors.js');
     const { gateway, stream, provider, admission } = gatewayFor(t);
     const failure = new ServerPersistenceError(code, 'Local pre-dispatch failure');
@@ -569,7 +569,7 @@ for (const tools of [false, true]) for (const code of ['NOT_FOUND', 'DATABASE_UN
   });
 }
 
-for (const tools of [false, true]) test(`presence is rechecked before a connection retry without attributing its rejection to the provider (${tools ? 'tools' : 'chat'})`, async (t) => {
+for (const tools of [false, true]) test(`bağlantı denemesinden önce varlık yeniden denetlenir; ret sağlayıcıya yazılmaz (${tools ? 'tools' : 'chat'})`, async (t) => {
   const { ServerPersistenceError } = await import('../src/server/errors.js');
   const provider = createFakeAiProvider();
   provider.enqueue({ type: 'network', code: 'ECONNREFUSED' }, { type: 'stream', text: 'must not dispatch' });

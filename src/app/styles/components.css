@@ -1,4 +1,4 @@
-/* MERGEN Rota · shared visual component ownership */
+/* MERGEN Rota ortak görsel bileşen sahipliği */
 
 .card-head-wrap {
   position: relative;
@@ -164,7 +164,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
 .reduce-motion .bar-row > div:nth-child(2) > div { transform: scaleX(1) !important; }
 .reduce-motion .velocity-bars .vel-bar { transform: scaleY(1) !important; }
 
-/* ── Forms and DateInput ───────────────────────────────────── */
+/* Formlar ve DateInput. */
 .date-input-shell {
   position: relative;
   width: 100%;
@@ -284,7 +284,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
 .gantt-range-controls .date-input-shell { width: 145px; flex: 0 0 145px; }
 .date-column-filter-pop { width: min(300px, calc(var(--app-viewport-w, 100vw) - 16px)); }
 
-/* ── Tables and shared filter popovers ────────────────────── */
+/* Tablolar ve ortak süzgeç açılırları. */
 .tbl thead th {
   position: sticky;
   top: 0;

@@ -13,7 +13,7 @@ function read(path) {
   return fs.readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 }
 
-test('predecessor invalidation requires every surviving successor to be reconciled', () => {
+test("öncül geçersizleştirme kalan her ardılın uzlaştırılmasını ister", () => {
   const issue = findTaskDependencyReconciliationIssue({
     invalidatedPredecessorIds: new Set([PREDECESSOR_ID]),
     incomingTaskIdsByPredecessor: new Map([
@@ -28,7 +28,7 @@ test('predecessor invalidation requires every surviving successor to be reconcil
   assert.deepEqual(issue?.taskIds, [SUCCESSOR_B_ID]);
 });
 
-test('explicit successor replacement or deletion covers dependency reconciliation', () => {
+test("açık ardıl değiştirme veya silme bağımlılık uzlaştırmasını karşılar", () => {
   const issue = findTaskDependencyReconciliationIssue({
     invalidatedPredecessorIds: [PREDECESSOR_ID],
     incomingTaskIdsByPredecessor: {
@@ -41,7 +41,7 @@ test('explicit successor replacement or deletion covers dependency reconciliatio
   assert.equal(issue, null);
 });
 
-test('ordered SQL persistence locks and validates dependency reconciliation before writes', () => {
+test("sıralı SQL kalıcılığı bağımlılık uzlaştırmasını yazmadan önce kilitler ve doğrular", () => {
   const validation = read('src/server/repository/dependencyReconciliationValidation.js');
   const ordered = read('src/server/repository/orderedSqlAppRepository.js');
 
@@ -57,7 +57,7 @@ test('ordered SQL persistence locks and validates dependency reconciliation befo
   assert.match(ordered, /isolationLevel: sql\.ISOLATION_LEVEL\.SERIALIZABLE/);
 });
 
-test('known mutation rejections default to HTTP 400 while unknown failures remain server errors', () => {
+test("bilinen değişim reddi HTTP 400 olur; bilinmeyen hata sunucu hatası kalır", () => {
   assert.equal(new ServerPersistenceError('MUTATION_FAILED', 'invalid').status, 400);
   assert.equal(new ServerPersistenceError('CONFLICT', 'stale').status, 409);
   assert.equal(new ServerPersistenceError('INTERNAL_FAILURE', 'internal').status, 500);

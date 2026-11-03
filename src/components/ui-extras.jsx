@@ -1,8 +1,5 @@
 'use client';
-/* ============================================================
-   Extra UI primitives — Tooltip, InfoButton, AnimatedNumber,
-   ColumnFilter, AnimatedBar, ChartTooltip
-   ============================================================ */
+/* Ek arayüz öğeleri: Tooltip, InfoButton, AnimatedNumber, ColumnFilter, AnimatedBar, ChartTooltip.*/
 import React, { useCallback as useCb, useState as useSx, useEffect as useEx, useRef as useRx, useId as useIx } from 'react';
 import ReactDOM from 'react-dom';
 import { modalTrapDepth } from '../hooks/useModalFocusTrap.js';
@@ -16,7 +13,7 @@ import { OPTION_SEARCH_THRESHOLD, matchesOptionQuery } from './columnFilterSearc
 
 export { OPTION_SEARCH_THRESHOLD, matchesOptionQuery };
 
-// ── Rich tooltip (portal, cursor-following, always on top) ─────
+// Zengin ipucu: portal içinde imleci izler ve üstte kalır.
 /**
  * `focusable` bilgi taşıyan ipuçları içindir.
  *
@@ -53,12 +50,12 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
 
   const place = (x, y) => {
     const el = tipRef.current;
-    const OFF = 16; // distance from cursor
-    // The whole app is scaled with body { zoom } for the font-size control.
-    // zoom multiplies the coordinate frame of position:fixed children, so we
-    // convert the (physical) cursor + rect coords into the pre-zoom layout
-    // frame the fixed tooltip actually lives in. Without this the tip drifts
-    // away from the cursor as zoom grows.
+    const OFF = 16; // İmleçten uzaklık.
+    // Yazı boyutu denetimi bütün uygulamayı body zoom ile ölçekler.
+    // Yakınlaştırma sabit konumlu çocuğun koordinat çerçevesini de çarpar.
+    // Fiziksel imleç ve dikdörtgen koordinatları ölçek öncesi düzene çevrilir.
+    // Sabit ipucu bu düzende yaşar; dönüşüm yapılmazsa yakınlaştırmada
+    // ipucu imleçten uzaklaşır.
     const Z = appZoom();
     const vw = window.innerWidth / Z;
     const vh = window.innerHeight / Z;
@@ -68,11 +65,11 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
     const w = r.width / Z, h = r.height / Z;
     let nx = mx + OFF;
     let ny = my + OFF;
-    // flip horizontally if would overflow right
+    // Sağdan taşacaksa yatay çevrilir.
     if (nx + w > vw - 10) nx = mx - OFF - w;
-    // flip vertically if would overflow bottom
+    // Alttan taşacaksa dikey çevrilir.
     if (ny + h > vh - 10) ny = my - OFF - h;
-    // clamp
+    // Sınır içinde tutulur.
     if (nx < 8) nx = 8;
     if (ny < 8) ny = 8;
     if (nx + w > vw - 8) nx = vw - w - 8;
@@ -209,7 +206,7 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
   );
 
   if (asChild && React.isValidElement(children)) {
-    // attach handlers to the existing child element (no extra wrapper)
+    // Dinleyiciler ek sarmalayıcı olmadan mevcut çocuğa bağlanır.
     // Çocuğun kendi işleyicileri (ör. klavyeyle gezinme) de korunur: ikisi birlikte çalışır.
     const composed = Object.fromEntries(Object.entries(handlers).map(([name, handler]) => [name, (e) => {
       // Tıklama içindeki programatik odak da aynı pointer etkileşimine aittir.
@@ -241,7 +238,7 @@ export function Tooltip({ children, content, icon, title, delay = 90, asChild = 
   );
 }
 
-// ── Info button (i) — opens rich tooltip on hover/click ──
+// Bilgi düğmesi üstüne gelince veya tıklanınca zengin ipucu açar.
 export function InfoButton({ title, children, icon, size = 13, corner = false, accent }) {
   return (
     <Tooltip title={title} content={children} icon={icon || <Icons.Info size={12} />} accent={accent}>
@@ -252,7 +249,7 @@ export function InfoButton({ title, children, icon, size = 13, corner = false, a
   );
 }
 
-// ── CardHead — card title + corner info button (top-right) ─
+// CardHead: kart başlığı ve sağ üst bilgi düğmesi.
 export function CardHead({ icon, title, subtitle, info, infoTitle, infoAccent, infoIcon, right, children }) {
   return (
     <div className="card-head-wrap" style={{ marginBottom: 14 }}>
@@ -276,7 +273,7 @@ export function CardHead({ icon, title, subtitle, info, infoTitle, infoAccent, i
   );
 }
 
-// ── AnimatedNumber — counts up on mount/value change ─────
+// AnimatedNumber açılışta ve değer değişince sayarak ilerler.
 export function AnimatedNumber({ value, duration = 700, format, suffix = '' }) {
   const [v, setV] = useSx(0);
   const startRef = useRx(0);
@@ -304,17 +301,17 @@ export function AnimatedNumber({ value, duration = 700, format, suffix = '' }) {
   return <span className="tabular">{shown}{suffix}</span>;
 }
 
-// ── ColumnFilter — popover on column header ─────────────
+// ColumnFilter sütun başlığında açılır kutudur.
 export function ColumnFilter({ label, anchor, type = 'text', options = [], value, onChange, onClose, sort, onSort, numericMin, numericMax, numericUnit }) {
   const [q, setQ] = useSx(typeof value === 'string' ? value : '');
   const [sel, setSel] = useSx(Array.isArray(value) ? new Set(value) : new Set());
-  // For dates: { preset, from, to, mode } — mode = 'range' | 'preset' | 'before' | 'after'
+  // Tarih biçimi: { preset, from, to, mode }; mode değerleri range, preset, before veya after olur.
   const initialDate = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
   const [dateMode, setDateMode] = useSx(initialDate.mode || 'preset');
   const [datePreset, setDatePreset] = useSx(initialDate.preset || '');
   const [dateFrom, setDateFrom] = useSx(initialDate.from || '');
   const [dateTo, setDateTo] = useSx(initialDate.to || '');
-  // For numbers: { mode: 'between'|'before'|'after'|'equals', from, to, eq }
+  // Sayı biçimi: { mode, from, to, eq }; mode değerleri between, before, after veya equals olur.
   const initialNum = (value && typeof value === 'object' && !Array.isArray(value) && (value.mode === 'between' || value.mode === 'before' || value.mode === 'after' || value.mode === 'equals')) ? value : {};
   const [numMode, setNumMode] = useSx(initialNum.mode || 'between');
   const [numFrom, setNumFrom] = useSx(initialNum.from != null ? String(initialNum.from) : '');
@@ -413,7 +410,7 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
     closeAndRestoreFocus();
   };
 
-  // Sorted options for multi
+  // Çoklu seçim seçenekleri sıralıdır.
   const sortedOptions = type === 'multi'
     ? [...options].sort((a, b) => (a.label || '').localeCompare(b.label || '', 'tr'))
     : options;
@@ -661,18 +658,18 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
   );
 }
 
-// Helper for VeriView: check if a date matches a date-filter spec.
+// VeriView tarih süzgeciyle eşleşme yardımcısı.
 // Uygulama `./dateMatchesFilter.js` içindedir (düz Node'dan sınanabilmesi için);
 // burada yalnızca yeniden dışa aktarılır, çağıranların içe aktarımı değişmez.
 export { dateMatchesFilter } from './dateMatchesFilter.js';
 
-// Helper: numeric filter match
+// Sayısal süzgeç eşleşme yardımcısı.
 // Uygulama `./numericMatchesFilter.js` içindedir (düz Node'dan sınanabilmesi
 // için); burada yalnızca yeniden dışa aktarılır, çağıranların içe aktarımı
 // değişmez.
 export { numericMatchesFilter } from './numericMatchesFilter.js';
 
-// ── Sortable + filterable column header ──────────────────
+// Sıralanabilir ve süzülebilir sütun başlığı.
 export function FilterableTH({ label, sortKey, sortDir, onSort, filter, onFilter, filterType = 'text', filterOptions, style, numericMin, numericMax, numericUnit }) {
   const [open, setOpen] = useSx(false);
   const anchorRef = useRx(null);
@@ -714,7 +711,7 @@ export function FilterableTH({ label, sortKey, sortDir, onSort, filter, onFilter
   );
 }
 
-// ── Animated bar (for BarRows / progress) ────────────────
+// Çubuk satırları ve ilerleme için hareketli çubuk.
 export function useReveal() {
   const ref = useRx(null);
   const [visible, setVisible] = useSx(false);
@@ -730,9 +727,9 @@ export function useReveal() {
   return [ref, visible];
 }
 
-// ── HoverListCard — interactive, anchored hover card with a
-//    scrollable list. Unlike Tooltip it does NOT follow the cursor
-//    and accepts pointer events, so a long list can be scrolled. ──
+// HoverListCard imlece bağlı olmayan etkileşimli karttır;
+// Tooltip öğesinden farklı olarak imleci izlemez ve işaretçi olaylarını alır,
+// böylece içindeki uzun liste kaydırılabilir.
 export function HoverListCard({
   children, title, icon, accent, summary, items = [], renderItem,
   listLabel = 'Görevler', listHint, onViewAll, emptyText = 'Kayıt yok.',
@@ -759,7 +756,7 @@ export function HoverListCard({
     const GAP = 8;
     let x = rx;
     let y = ry + rh + GAP;
-    if (y + h > vh - 8) y = ry - h - GAP;       // flip above
+    if (y + h > vh - 8) y = ry - h - GAP;       // Yukarı çevrilir.
     if (y < 8) y = 8;
     if (x + w > vw - 8) x = vw - w - 8;
     if (x < 8) x = 8;

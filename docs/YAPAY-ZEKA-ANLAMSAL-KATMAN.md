@@ -1749,6 +1749,13 @@ kalıp yoktur (sınama doğrulayıcı kaynağında metin deseni olmadığını d
 (ör. sayfada olmayan "en kısa gecikme") iddia etmenin tek yolu sayfada olmayan bir kimlik yazmaktır ve bu yapısal
 olarak reddedilir.
 
+**Aşama 4E güncellemesi:** Bu bölümün `text` alanını koşulsuz reddeden ve doğrulayıcıda dil/kalıp bulunmadığını
+söyleyen eski hükümleri, §15.2'deki kapalı düzyazı sözleşmesiyle değiştirilmiştir. `say` bloğunun `text` alanı
+`checkProse` ile doğrulanır; yalnızca sunucunun izinli tarafsız geçişleri ve doğrulanmış önerme yuvaları kabul edilir.
+Diğer blokların alan ve kapsam denetimleri geçerliliğini korur. Paragraf başına en çok sekiz yuva kabul edilir;
+`COMPOSITION_LIMITS.maxSayItems`, `PROSE_LIMITS.maxSentences` değerinden türetilir. Sınırı aşan düzyazı
+paragrafı düşürülür; geçerli komşu paragraf korunur.
+
 Çizim: söylenen sayım önermesi kendi ayrıntısının yerine geçer (ayrıntı yinelenmez); söylenmeyen her ayrıntı
 sunucu tarafından eklenir. Paragraf, önermelerinin kanıt kimlikleriyle (`【R1】`) biter; atıflar yanıtın doğrulanmış
 kanıt kümesinin dışına çıkamaz (`CITATION_SCOPE`). Önerme ve tablo birlikteyse ya da birden çok önerme varsa anlatım
@@ -1939,7 +1946,7 @@ Vakalar üretimdeki asistan hizmetinden geçer (konuşma kaydı, salt okunur ara
 düzen doğrulayıcısı, çizici); planlama turları sabit `rota_plan` ile belirlenimcidir, yalnızca düzen turu modele
 gider. Kabul üretimin kendisidir (düzen doğrulanıp çizildi mi), ayrıca beklenen doğrulanmış değerler ve çözülmemiş
 yuva denetlenir. Rapor içerik taşımaz. Sağlayıcılar: `dry` (model yok; vakaların kuru sınaması), `claude`
-(`scripts/planner-claude-model.mjs`, düşünme kapalı, en düşük çaba, çağrı ve önbelleksiz girdi bütçesiyle) ve `live`
+(`scripts/planner-model-adapter.mjs`, düşünme kapalı, en düşük çaba, çağrı ve önbelleksiz girdi bütçesiyle) ve `live`
 (kurum içi uç). Aşamalar: `smoke` (2 vaka, 1 düzen turu), `targeted` (4 vaka, 5 düzen turu), `broad` (6 vaka, 6 düzen turu).
 Her vaka `requiresComposition` sözleşmesini taşır. Düzen gereken turun gerçekten çağrılıp `composed` olması
 zorunludur; geri dönüş model kabulü sayılmaz. Tek ayrıntılı `task-record`, `project-summary` ve `notifications`
@@ -2136,7 +2143,7 @@ edilemiyorsa okuma öncesinde reddedilir. Kısmi/başarısız analiz takip bağl
   Model düzeni reddedilirse sunucunun belirlenimci düzeni (`defaultComposition`) analist önermeleriyle yazar; ret kodu
   telemetride kalır.
 
-### 14.6 Nitelendirme — `scripts/phase4e-qualification.mjs` (Claude Haiku 4.5, düşünme kapalı, `effort: low`)
+### 14.6 Nitelendirme — `scripts/analysis-qualification.mjs` (Claude Haiku 4.5, düşünme kapalı, `effort: low`)
 
 `PLANNER_CLAUDE_TRACE` ve `PHASE4E_DEBUG` yalnızca yapısal tanı metadatası saklar: ham soru/yanıt, kimlikler,
 araç bağımsız değişkenleri ve sorgu değerleri kayda girmez. Ortak yazıcı veriyi kalıcılıktan önce süzer; yeni ve mevcut
@@ -2364,3 +2371,8 @@ verilirse bu sınıra uyulur. Onarım yoğunluğu bu payı aşarsa koşu başar�
 - Güncel regresyonlar: `test/ai-analysis-intent-and-grounding.test.mjs`, `test/ai-ui-acceptance-convergence.test.mjs` ve
   güçlendirilmiş mevcut Aşama 4E sınamaları. Önceki §15.8 sayıları bu HEAD'in kabul sonucu olarak kullanılamaz.
   Gerçek Haiku 4.5 arayüz kabulü, düşünme kapalı ve devir kapalı ortamda ayrıca çalıştırılmalıdır.
+
+
+### Kanonik takipte açık dönem kaldırma ve satır karşılaştırması
+
+Önceki bağlı öznenin dönemini açıkça kaldırmak için `analysis.scope: previous` ve `relativeWindow: all_time` kullanılır. Tarih alanlarıyla birlikte verilmez; sonraki takipler de tarihsiz kalır. `today` ve `next_7_days` güncel günden hesaplanmayı sürdürür. `scope: row, rows: [n], withSelf: true` yalnızca tek kişi satırında kabul edilir. Tür ve kimlik kanonik satırdan çözüldükten sonra doğrulanır; proje ve çoklu satır reddedilir. İki karşılaştırma tarafı da aynı proje kesişimi ve güncel yetkiyle okunur.

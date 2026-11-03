@@ -70,24 +70,24 @@ function state(overrides = {}) {
   };
 }
 
-test('compareWbsNodes prioritizes explicit sortOrder', () => {
+test("compareWbsNodes açık sortOrder değerini önce kullanır", () => {
   assert.equal(compareWbsNodes({ sortOrder: 1, code: '9' }, { sortOrder: 2, code: '1' }) < 0, true);
 });
 
-test('compareWbsNodes uses numeric code ordering when sortOrder is absent', () => {
+test("compareWbsNodes sortOrder yoksa sayısal kod sırasını kullanır", () => {
   assert.equal(compareWbsNodes({ code: '1.2' }, { code: '1.10' }) < 0, true);
 });
 
-test('compareWbsNodes uses name then ID as deterministic tie breakers', () => {
+test("compareWbsNodes eşitlikte önce ad sonra kimliği kullanır", () => {
   assert.equal(compareWbsNodes({ code: '1', name: 'Alpha', id: 'z' }, { code: '1', name: 'Beta', id: 'a' }) < 0, true);
   assert.equal(compareWbsNodes({ code: '1', name: 'Same', id: 'a' }, { code: '1', name: 'Same', id: 'b' }) < 0, true);
 });
 
-test('selectProjectWbs returns an empty list when projectId is missing', () => {
+test("selectProjectWbs proje kimliği yoksa boş liste döndürür", () => {
   assert.deepEqual(selectProjectWbs(wbs, null), []);
 });
 
-test('selectProjectWbs keeps parents before descendants and sibling order without mutating the source array', () => {
+test("selectProjectWbs kaynak diziyi değiştirmeden üstü önce ve kardeş sırasını korur", () => {
   const reversed = [...wbs].reverse();
   const before = reversed.map((node) => node.id);
   const result = selectProjectWbs(reversed, 'p1');
@@ -95,16 +95,16 @@ test('selectProjectWbs keeps parents before descendants and sibling order withou
   assert.deepEqual(reversed.map((node) => node.id), before);
 });
 
-test('selectWbsRoots treats null-parent nodes as roots', () => {
+test("selectWbsRoots boş üstlü düğümü kök sayar", () => {
   assert.deepEqual(selectWbsRoots(wbs).map((node) => node.id), ['p1-root', 'p2-root']);
 });
 
-test('selectWbsRoots exposes orphaned nodes instead of hiding them', () => {
+test("selectWbsRoots sahipsiz düğümü gizlemek yerine sunar", () => {
   const nodes = [{ id: 'orphan', projectId: 'p1', parentId: 'missing', code: '1.1', name: 'Orphan' }];
   assert.deepEqual(selectWbsRoots(nodes).map((node) => node.id), ['orphan']);
 });
 
-test('selectWbsRoots exposes cross-project parent links as roots', () => {
+test("selectWbsRoots başka projeli üst bağını kök olarak sunar", () => {
   const nodes = [
     { id: 'a', projectId: 'p1', parentId: null },
     { id: 'b', projectId: 'p2', parentId: 'a' }
@@ -112,29 +112,29 @@ test('selectWbsRoots exposes cross-project parent links as roots', () => {
   assert.deepEqual(selectWbsRoots(nodes).map((node) => node.id), ['a', 'b']);
 });
 
-test('selectWbsRoots treats self-parented nodes as roots', () => {
+test("selectWbsRoots kendini üst yapan düğümü kök sayar", () => {
   const nodes = [{ id: 'a', projectId: 'p1', parentId: 'a' }];
   assert.deepEqual(selectWbsRoots(nodes).map((node) => node.id), ['a']);
 });
 
-test('selectDefaultProjectWbs returns the only natural root', () => {
+test("selectDefaultProjectWbs tek doğal kökü döndürür", () => {
   assert.equal(selectDefaultProjectWbs(wbs, 'p1')?.id, 'p1-root');
 });
 
-test('selectDefaultProjectWbs returns null when there are multiple natural roots', () => {
+test("selectDefaultProjectWbs çok doğal kökte boş değer döndürür", () => {
   const nodes = [...wbs, { id: 'p1-root-2', projectId: 'p1', parentId: null, code: '9', name: 'Second' }];
   assert.equal(selectDefaultProjectWbs(nodes, 'p1'), null);
 });
 
-test('selectWbsChildren returns sorted direct children only', () => {
+test("selectWbsChildren yalnızca sıralı doğrudan çocukları döndürür", () => {
   assert.deepEqual(selectWbsChildren([...wbs].reverse(), 'p1-root').map((node) => node.id), ['p1-2', 'p1-10']);
 });
 
-test('selectWbsDescendantIds traverses depth-first in deterministic sibling order', () => {
+test("selectWbsDescendantIds belirlenimci kardeş sırasında derinlik önce gezer", () => {
   assert.deepEqual(selectWbsDescendantIds(wbs, 'p1-root'), ['p1-2', 'p1-2-a', 'p1-10']);
 });
 
-test('selectWbsDescendantIds is cycle-safe and never returns the starting node', () => {
+test("selectWbsDescendantIds döngüye dayanır ve başlangıç düğümünü döndürmez", () => {
   const cycle = [
     { id: 'a', projectId: 'p1', parentId: 'c', sortOrder: 1 },
     { id: 'b', projectId: 'p1', parentId: 'a', sortOrder: 1 },
@@ -143,15 +143,15 @@ test('selectWbsDescendantIds is cycle-safe and never returns the starting node',
   assert.deepEqual(selectWbsDescendantIds(cycle, 'a'), ['b', 'c']);
 });
 
-test('selectWbsDescendantIds returns empty for unknown nodes', () => {
+test("selectWbsDescendantIds bilinmeyen düğümde boş döner", () => {
   assert.deepEqual(selectWbsDescendantIds(wbs, 'missing'), []);
 });
 
-test('selectWbsAncestors returns root-to-parent order', () => {
+test("selectWbsAncestors kökten üste sırayı döndürür", () => {
   assert.deepEqual(selectWbsAncestors(wbs, 'p1-2-a').map((node) => node.id), ['p1-root', 'p1-2']);
 });
 
-test('selectWbsAncestors stops at cross-project parent boundaries', () => {
+test("selectWbsAncestors başka proje üst sınırında durur", () => {
   const nodes = [
     { id: 'foreign', projectId: 'p2', parentId: null },
     { id: 'child', projectId: 'p1', parentId: 'foreign' }
@@ -159,7 +159,7 @@ test('selectWbsAncestors stops at cross-project parent boundaries', () => {
   assert.deepEqual(selectWbsAncestors(nodes, 'child'), []);
 });
 
-test('selectWbsAncestors terminates cycles without duplicate ancestors', () => {
+test("selectWbsAncestors üstleri yinelemeden döngüyü bitirir", () => {
   const cycle = [
     { id: 'a', projectId: 'p1', parentId: 'c' },
     { id: 'b', projectId: 'p1', parentId: 'a' },
@@ -168,16 +168,16 @@ test('selectWbsAncestors terminates cycles without duplicate ancestors', () => {
   assert.deepEqual(selectWbsAncestors(cycle, 'a').map((node) => node.id), ['b', 'c']);
 });
 
-test('selectWbsPath includes ancestors and the requested node', () => {
+test("selectWbsPath üstleri ve istenen düğümü içerir", () => {
   assert.deepEqual(selectWbsPath(wbs, 'p1-2-a').map((node) => node.id), ['p1-root', 'p1-2', 'p1-2-a']);
 });
 
-test('selectWbsPath and formatWbsPath are empty for missing nodes', () => {
+test("selectWbsPath ve formatWbsPath eksik düğümde boştur", () => {
   assert.deepEqual(selectWbsPath(wbs, 'missing'), []);
   assert.equal(formatWbsPath(wbs, 'missing'), '');
 });
 
-test('formatWbsPath trims missing code or name parts safely', () => {
+test("formatWbsPath eksik kod veya ad parçasını güvenle kırpar", () => {
   const nodes = [
     { id: 'root', projectId: 'p1', parentId: null, code: '', name: 'Root' },
     { id: 'child', projectId: 'p1', parentId: 'root', code: '1', name: '' }
@@ -185,13 +185,13 @@ test('formatWbsPath trims missing code or name parts safely', () => {
   assert.equal(formatWbsPath(nodes, 'child'), 'Root / 1');
 });
 
-test('buildWbsTree preserves orphan nodes as top-level roots', () => {
+test("buildWbsTree sahipsiz düğümü üst düzey kök tutar", () => {
   const tree = buildWbsTree([{ id: 'orphan', projectId: 'p1', parentId: 'missing', code: '1' }]);
   assert.equal(tree.length, 1);
   assert.equal(tree[0].id, 'orphan');
 });
 
-test('buildWbsTree ignores duplicate IDs after the first canonical node', () => {
+test("buildWbsTree ilk kanonik düğümden sonraki yinelenen kimliği yok sayar", () => {
   const tree = buildWbsTree([
     { id: 'same', projectId: 'p1', parentId: null, code: '1', name: 'First', sortOrder: 1 },
     { id: 'same', projectId: 'p1', parentId: null, code: '2', name: 'Second', sortOrder: 2 }
@@ -200,7 +200,7 @@ test('buildWbsTree ignores duplicate IDs after the first canonical node', () => 
   assert.equal(flattenWbsTree(tree)[0].node.name, 'First');
 });
 
-test('buildWbsTree keeps cyclic components visible and finite', () => {
+test("buildWbsTree döngülü bileşeni görünür ve sonlu tutar", () => {
   const cycle = [
     { id: 'a', projectId: 'p1', parentId: 'b', code: '1' },
     { id: 'b', projectId: 'p1', parentId: 'a', code: '2' }
@@ -210,13 +210,13 @@ test('buildWbsTree keeps cyclic components visible and finite', () => {
   assert.deepEqual(new Set(flattened.map((row) => row.node.id)), new Set(['a', 'b']));
 });
 
-test('buildWbsTree does not mutate source nodes with children properties', () => {
+test("buildWbsTree kaynak düğüme çocuk özelliği ekleyerek değiştirmez", () => {
   const input = wbs.map((node) => ({ ...node }));
   buildWbsTree(input);
   assert.equal(input.some((node) => Object.hasOwn(node, 'children')), false);
 });
 
-test('flattenWbsTree visits duplicate references only once', () => {
+test("flattenWbsTree yinelenen başvuruyu bir kez gezer", () => {
   const shared = { id: 'shared', children: [] };
   const tree = [
     { id: 'a', children: [shared] },
@@ -225,21 +225,21 @@ test('flattenWbsTree visits duplicate references only once', () => {
   assert.deepEqual(flattenWbsTree(tree).map((row) => row.node.id), ['a', 'shared', 'b']);
 });
 
-test('flattenWbsTree records depth for nested nodes', () => {
+test("flattenWbsTree iç düğümün derinliğini kaydeder", () => {
   const rows = flattenWbsTree(buildWbsTree(wbs));
   const leaf = rows.find((row) => row.node.id === 'p1-2-a');
   assert.equal(leaf.depth, 2);
 });
 
-test('selectTasksForWbs returns only direct tasks by default', () => {
+test("selectTasksForWbs varsayılan yalnızca doğrudan görevleri döndürür", () => {
   assert.deepEqual(selectTasksForWbs(tasks, wbs, 'p1-2').map((task) => task.id), ['t1']);
 });
 
-test('selectTasksForWbs optionally includes descendant assignments', () => {
+test("selectTasksForWbs isteğe bağlı alt atamaları içerir", () => {
   assert.deepEqual(selectTasksForWbs(tasks, wbs, 'p1-2', { includeDescendants: true }).map((task) => task.id), ['t1', 't2']);
 });
 
-test('WBS rollup clamps progress to zero through one hundred before weighting', () => {
+test("WBS toplamı ağırlıktan önce ilerlemeyi sıfır ve yüz arasında sınırlar", () => {
   const rollup = selectWbsTaskRollup(wbs, [
     { id: 'low', wbsId: 'p1-2', plannedDurationDays: 1, progress: -20 },
     { id: 'high', wbsId: 'p1-2-a', plannedDurationDays: 1, progress: 140 }
@@ -247,7 +247,7 @@ test('WBS rollup clamps progress to zero through one hundred before weighting', 
   assert.equal(rollup.progress, 50);
 });
 
-test('WBS rollup uses done status as one hundred percent when progress is absent', () => {
+test("WBS toplamı ilerleme yoksa tamamlanmış durumu yüzde yüz sayar", () => {
   const rollup = selectWbsTaskRollup(wbs, [
     { id: 'done', wbsId: 'p1-2', plannedDurationDays: 1, status: 'done' },
     { id: 'todo', wbsId: 'p1-2-a', plannedDurationDays: 1, status: 'todo' }
@@ -255,7 +255,7 @@ test('WBS rollup uses done status as one hundred percent when progress is absent
   assert.equal(rollup.progress, 50);
 });
 
-test('WBS rollup gives missing and non-positive durations a minimum weight of one', () => {
+test("WBS toplamı eksik ve pozitif olmayan süreye en az bir ağırlık verir", () => {
   const rollup = selectWbsTaskRollup(wbs, [
     { id: 'a', wbsId: 'p1-2', progress: 100 },
     { id: 'b', wbsId: 'p1-2-a', plannedDurationDays: -10, progress: 0 }
@@ -263,7 +263,7 @@ test('WBS rollup gives missing and non-positive durations a minimum weight of on
   assert.equal(rollup.progress, 50);
 });
 
-test('WBS rollup ignores unscheduled tasks when deriving date bounds', () => {
+test("WBS toplamı tarih sınırı türetirken plansız görevi yok sayar", () => {
   const rollup = selectWbsTaskRollup(wbs, [
     { id: 'unscheduled', wbsId: 'p1-2', plannedDurationDays: 1, progress: 10 },
     { id: 'scheduled', wbsId: 'p1-2-a', plannedStart: '2026-05-01', plannedFinish: '2026-05-05', plannedDurationDays: 3 }
@@ -272,7 +272,7 @@ test('WBS rollup ignores unscheduled tasks when deriving date bounds', () => {
   assert.equal(rollup.plannedFinish, '2026-05-05');
 });
 
-test('WBS rollup counts only scheduled tasks marked critical in derived schedule data', () => {
+test("WBS toplamı yalnızca türetilmiş çizelgede kritik işaretli planlı görevi sayar", () => {
   const rollup = selectWbsTaskRollup(wbs, tasks, 'p1-2', {
     t1: { isCritical: false },
     t2: { isCritical: true },
@@ -281,47 +281,47 @@ test('WBS rollup counts only scheduled tasks marked critical in derived schedule
   assert.equal(rollup.criticalTaskCount, 1);
 });
 
-test('basic domain selectors return null for missing stable IDs', () => {
+test("temel alan seçicisi eksik kararlı kimlikte boş değer döndürür", () => {
   assert.equal(selectTaskById(tasks, 'missing'), null);
   assert.equal(selectProjectById(projects, 'missing'), null);
   assert.equal(selectPersonById(people, 'missing'), null);
 });
 
-test('task collection selectors preserve source order', () => {
+test("görev koleksiyon seçicisi kaynak sırasını korur", () => {
   assert.deepEqual(selectTasksByProject(tasks, 'p1').map((task) => task.id), ['t1', 't2']);
   assert.deepEqual(selectTasksByPerson(tasks, 'u1').map((task) => task.id), ['t1', 't2']);
 });
 
-test('selectTasksByPerson safely handles tasks without assigneeIds', () => {
+test("selectTasksByPerson sorumlu kimliği olmayan görevi güvenle işler", () => {
   assert.deepEqual(selectTasksByPerson([{ id: 't0' }, ...tasks], 'u1').map((task) => task.id), ['t1', 't2']);
 });
 
-test('workspace normalization infers project mode from a valid selectedProjectId', () => {
+test("alan normalleştirmesi geçerli seçili kimlikten proje kipini çıkarır", () => {
   assert.deepEqual(normalizeWorkspaceSelection({ selectedProjectId: 'p1' }, projects), {
     workspaceMode: WORKSPACE_MODE_PROJECT,
     selectedProjectId: 'p1'
   });
 });
 
-test('workspace normalization respects explicit portfolio mode even with a project ID', () => {
+test("çalışma alanı normalleştirmesi proje kimliği olsa da açık portföy kipini korur", () => {
   assert.deepEqual(normalizeWorkspaceSelection({ workspaceMode: 'portfolio', selectedProjectId: 'p1' }, projects), {
     workspaceMode: WORKSPACE_MODE_PORTFOLIO,
     selectedProjectId: null
   });
 });
 
-test('workspace normalization falls back for unknown modes', () => {
+test("çalışma alanı normalleştirmesi bilinmeyen kipte varsayılana döner", () => {
   assert.deepEqual(normalizeWorkspaceSelection({ workspaceMode: 'unknown', selectedProjectId: 'p1' }, projects), {
     workspaceMode: WORKSPACE_MODE_PORTFOLIO,
     selectedProjectId: null
   });
 });
 
-test('selectSelectedProject returns null outside project mode', () => {
+test("selectSelectedProject proje kipi dışında boş değer döndürür", () => {
   assert.equal(selectSelectedProject(state({ selectedProjectId: 'p1' })), null);
 });
 
-test('portfolio workspace selectors return copies of top-level arrays', () => {
+test("portföy alanı seçicisi üst düzey dizilerin kopyasını döndürür", () => {
   const value = state();
   assert.notStrictEqual(selectWorkspaceProjects(value), value.projects);
   assert.notStrictEqual(selectWorkspaceTasks(value), value.tasks);
@@ -329,19 +329,19 @@ test('portfolio workspace selectors return copies of top-level arrays', () => {
   assert.notStrictEqual(selectWorkspacePeople(value), value.people);
 });
 
-test('project workspace selectors scope projects, tasks, and WBS', () => {
+test("proje alanı seçicisi proje görev ve WBS kapsamını sınırlar", () => {
   const value = state({ workspaceMode: 'project', selectedProjectId: 'p1' });
   assert.deepEqual(selectWorkspaceProjects(value).map((item) => item.id), ['p1']);
   assert.deepEqual(selectWorkspaceTasks(value).map((item) => item.id), ['t1', 't2']);
   assert.equal(selectWorkspaceWbs(value).every((node) => node.projectId === 'p1'), true);
 });
 
-test('project workspace people include task participants and the project lead', () => {
+test("proje alanı kişileri görev katılımcısını ve proje liderini içerir", () => {
   const value = state({ workspaceMode: 'project', selectedProjectId: 'p1' });
   assert.deepEqual(selectWorkspacePeople(value).map((person) => person.id), ['u1', 'u2', 'u3']);
 });
 
-test('project workspace people include a lead even when the project has no tasks', () => {
+test("proje görevsiz olsa da alan kişileri lideri içerir", () => {
   const value = state({
     workspaceMode: 'project',
     selectedProjectId: 'p1',
@@ -350,7 +350,7 @@ test('project workspace people include a lead even when the project has no tasks
   assert.deepEqual(selectWorkspacePeople(value).map((person) => person.id), ['u3']);
 });
 
-test('workspace context normalizes an invalid selected project before deriving data', () => {
+test("alan bağlamı veriyi türetmeden geçersiz seçili projeyi normalleştirir", () => {
   const context = selectWorkspaceContext(state({ workspaceMode: 'project', selectedProjectId: 'missing' }));
   assert.equal(context.mode, 'portfolio');
   assert.equal(context.selectedProjectId, null);
@@ -359,7 +359,7 @@ test('workspace context normalizes an invalid selected project before deriving d
   assert.equal(context.tasks.length, tasks.length);
 });
 
-test('workspace context returns sorted project WBS data in project mode', () => {
+test("alan bağlamı proje kipinde sıralı WBS verisini döndürür", () => {
   const context = selectWorkspaceContext(state({
     workspaceMode: 'project',
     selectedProjectId: 'p1',

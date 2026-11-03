@@ -9,7 +9,7 @@ import { findDependencyCycle } from '../src/server/repository/dependencyGraphVal
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 
-test('dependency cycle detection accepts a directed acyclic project network', () => {
+test("bağımlılık döngü tespiti yönlü döngüsüz proje ağını kabul eder", () => {
   const cycle = findDependencyCycle([
     { predecessorId: 'a', taskId: 'b' },
     { predecessorId: 'a', taskId: 'c' },
@@ -19,7 +19,7 @@ test('dependency cycle detection accepts a directed acyclic project network', ()
   assert.deepEqual(cycle, []);
 });
 
-test('dependency cycle detection returns only the tasks in a persisted cycle', () => {
+test("bağımlılık döngüsü tespiti yalnızca kalıcı döngüdeki görevleri döndürür", () => {
   const cycle = findDependencyCycle([
     { PredecessorTaskId: 'a', TaskId: 'b' },
     { PredecessorTaskId: 'b', TaskId: 'c' },
@@ -30,7 +30,7 @@ test('dependency cycle detection returns only the tasks in a persisted cycle', (
   assert.equal(cycle.includes('downstream'), false);
 });
 
-test('nested SQL repository work reuses the outer transaction', () => {
+test("iç SQL depo işi dış işlemi yeniden kullanır", () => {
   const source = read('src/server/db/pool.js');
   assert.match(source, /const transactionContext = new AsyncLocalStorage\(\);/);
   assert.match(source, /const activeTransaction = transactionContext\.getStore\(\);/);
@@ -38,7 +38,7 @@ test('nested SQL repository work reuses the outer transaction', () => {
   assert.match(source, /return await transactionContext\.run\(transaction, async \(\) => \{/);
 });
 
-test('Actual commits lock and preserve the single-root WBS invariant', () => {
+test("gerçek kayıt tek kök WBS değişmezini kilitler ve korur", () => {
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
   assert.match(
     source,
@@ -48,7 +48,7 @@ test('Actual commits lock and preserve the single-root WBS invariant', () => {
   assert.match(source, /if \(existingRoots\.length === 1 && roots\[0\]\.id !== existingRoots\[0\]\)/);
 });
 
-test('Actual commits validate the final dependency graph under transaction locks', () => {
+test("gerçek kayıt son bağımlılık ağını işlem kilitlerinde doğrular", () => {
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
   assert.match(
     source,
@@ -67,7 +67,7 @@ test('Actual commits validate the final dependency graph under transaction locks
   assert.doesNotMatch(source, /baseRepository\.commitChanges\(\{ \.\.\.plannedChanges/);
 });
 
-test('recurrence occurrence creation locks the template in the same hardened transaction', () => {
+test("tekrar oluşumu oluşturma şablonu aynı güçlendirilmiş işlemde kilitler", () => {
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
   assert.match(source, /recurrenceParentId:\s*task\.recurrenceParentId\s*\?\s*uuid\(task\.recurrenceParentId, 'Tekrar şablonu kimliği'\)/);
   assert.match(source, /\.filter\(\(task\) => task\.recurrenceParentId\)\s*\.map\(\(task\) => task\.recurrenceParentId\)/);
@@ -75,7 +75,7 @@ test('recurrence occurrence creation locks the template in the same hardened tra
   assert.match(source, /FROM dbo\.\$\{safeTable\} WITH \(UPDLOCK, HOLDLOCK\)/);
 });
 
-test('Project writes require a calendar and all supplied calendar references must be active', () => {
+test("proje yazma takvim ister; verilen bütün takvimler etkin olmalıdır", () => {
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
   assert.match(
     source,
@@ -88,7 +88,7 @@ test('Project writes require a calendar and all supplied calendar references mus
   assert.match(source, /if \(task\.calendarId\) calendarIds\.add\(uuid\(task\.calendarId, 'Takvim kimliği'\)\);/);
 });
 
-test('the commit API preserves WBS ordering before the hardened SQL boundary', () => {
+test("kayıt API güçlendirilmiş SQL sınırından önce WBS sırasını korur", () => {
   const route = read('src/app/api/mergen-rota/commit/route.js');
   const wrapper = read('src/server/repository/orderedSqlAppRepository.js');
 

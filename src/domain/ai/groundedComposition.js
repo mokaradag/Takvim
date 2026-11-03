@@ -13,7 +13,7 @@ import {
 import { escapedFactText } from './evidenceFacts.js';
 import { analystPropositions, caveatPropositions, countProposition, fluentParagraph, noteLabel, pointerSentence, populationProposition, rowPopulationComplete, tablePropositions, titleCandidate } from './groundedPropositions.js';
 import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from './answerDetail.js';
-import { checkProse, escapeProseText, proseParagraph, renderProse } from './groundedProse.js';
+import { PROSE_LIMITS, checkProse, escapeProseText, proseParagraph, renderProse } from './groundedProse.js';
 
 /** Anlatımın en az önerme sayısı: sayfada bu kadar önerme varsa düzen en az bu kadarını söyler (azsa hepsini). */
 export const MIN_NARRATED_PROPOSITIONS = 3;
@@ -38,7 +38,7 @@ export const COMPOSITION_LIMITS = Object.freeze({
   maxTitles: 3,
   maxBlocks: 12,
   maxSayBlocks: 4,
-  maxSayItems: 8,
+  maxSayItems: PROSE_LIMITS.maxSentences,
   maxNotes: 2,
   maxNoteItems: 3,
   maxValueChars: 160,
@@ -222,10 +222,10 @@ function entityNames(parts) {
 function certaintyProposition(table, title, locale, names) {
   const en = locale === 'en';
   const name = String(title || '').replace(/\s+/g, ' ').trim();
-  const record = !en && names.find((item) => name.startsWith(item));
+  const record = !en && names.find((item) => name.startsWith(item) && (name.length === item.length || !/[\p{L}\p{N}\p{M}_]/u.test(name.charAt(item.length))));
   const lower = record ? name : name.charAt(0).toLocaleLowerCase(en ? 'en-US' : 'tr-TR') + name.slice(1);
   // Tablo, bölümünün adıyla anılır ("gecikmiş görevler tablosu"); ilk sütun adı ("Görev") nüfusu adlandırmaz.
-  const subject = name ? (en ? `the ${lower} table` : `${lower} tablosu`) : (en ? 'this table' : 'bu tablo');
+  const subject = name ? (en ? `${lower.startsWith('your ') ? '' : 'the '}${lower} table` : `${lower} tablosu`) : (en ? 'this table' : 'bu tablo');
   const text = table.complete
     ? (en ? `${subject} covers every record you can see.` : `${subject} görebildiğiniz kayıtların tamamına dayanıyor.`)
     : (en ? `${subject} shows only part of the records; conclusions from it are limited.` : `${subject} kayıtların yalnızca bir kısmını gösteriyor; buradan çıkan sonuçlar sınırlıdır.`);

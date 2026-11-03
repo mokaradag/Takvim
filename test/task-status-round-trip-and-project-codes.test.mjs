@@ -11,7 +11,7 @@ function read(path) {
   return fs.readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 }
 
-test('Actual-mode task statuses round-trip through the canonical UI state model', () => {
+test("gerçek kip görev durumları kanonik arayüz modelinde saklanıp okunur", () => {
   assert.equal(toPersistenceStatus('todo'), 'planned');
   assert.equal(toPersistenceStatus('in_progress'), 'in-progress');
   assert.equal(toPersistenceStatus('done'), 'done');
@@ -25,7 +25,7 @@ test('Actual-mode task statuses round-trip through the canonical UI state model'
   assert.equal(fromPersistenceStatus('cancelled'), 'done');
 });
 
-test('commit validation only accepts statuses the Actual-mode client can persist canonically', () => {
+test("kayıt doğrulaması yalnızca gerçek istemcinin kanonik saklayabildiği durumları kabul eder", () => {
   for (const status of ['planned', 'in-progress', 'done']) {
     assert.equal(findCommitScalarIssue({ taskUpserts: [{ task: 'Task', status }] }), null);
   }
@@ -38,7 +38,7 @@ test('commit validation only accepts statuses the Actual-mode client can persist
   }
 });
 
-test('manual project code collisions are normalized, locked and rejected before SQL writes', () => {
+test("elle proje kodu çakışması SQL yazmadan normalleştirilir kilitlenir ve reddedilir", () => {
   const source = read('src/server/repository/orderedSqlAppRepository.js');
   // Kod uygunluğu, proje satırlarının yetkisi kurulduktan SONRA bildirilir.
   const authorizationPosition = source.indexOf('await assertProjectUpsertsAuthorized(transaction, orderedChanges, actor)');

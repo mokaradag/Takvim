@@ -80,7 +80,7 @@ function postedActualChanges(changes) {
   return JSON.parse(JSON.stringify({ changes: normalizeActualChanges(changes) })).changes;
 }
 
-test('versioned project replacements reject omitted stored metadata instead of clearing it', () => {
+test("sürümlü proje değiştirme eksik kayıtlı üstveriyi temizlemek yerine reddeder", () => {
   const issue = findNestedCommitCollectionIssue({
     projectUpserts: [without(completeProjectUpdate(), 'leadId')]
   });
@@ -92,7 +92,7 @@ test('versioned project replacements reject omitted stored metadata instead of c
   });
 });
 
-test('versioned WBS replacements reject omitted hierarchy metadata', () => {
+test("sürümlü WBS değiştirme eksik hiyerarşi üstverisini reddeder", () => {
   const issue = findNestedCommitCollectionIssue({
     wbsUpserts: [without(completeWbsUpdate(), 'sortOrder')]
   });
@@ -104,7 +104,7 @@ test('versioned WBS replacements reject omitted hierarchy metadata', () => {
   });
 });
 
-test('versioned task replacements reject omitted scalar fields instead of applying SQL defaults', () => {
+test("sürümlü görev değiştirme SQL varsayılanı yerine eksik skaler alanı reddeder", () => {
   const issue = findNestedCommitCollectionIssue({
     taskUpserts: [without(completeTaskUpdate(), 'status')]
   });
@@ -116,7 +116,7 @@ test('versioned task replacements reject omitted scalar fields instead of applyi
   });
 });
 
-test('versioned task replacements require title and milestone intent explicitly', () => {
+test("sürümlü görev değiştirme açık başlık ve kilometre taşı niyeti ister", () => {
   assert.equal(findNestedCommitCollectionIssue({
     taskUpserts: [without(completeTaskUpdate(), 'task')]
   })?.path, 'taskUpserts[0].task');
@@ -126,7 +126,7 @@ test('versioned task replacements require title and milestone intent explicitly'
   })?.path, 'taskUpserts[0].isMilestone');
 });
 
-test('Actual normalization preserves omitted nullable references for API validation', () => {
+test("gerçek normalleştirme eksik boşlanabilir başvuruyu API doğrulaması için korur", () => {
   const changes = postedActualChanges({
     projectUpserts: [without(completeProjectUpdate(), 'calendarId')],
     wbsUpserts: [without(completeWbsUpdate(), 'parentId')],
@@ -139,7 +139,7 @@ test('Actual normalization preserves omitted nullable references for API validat
   assert.equal(findNestedCommitCollectionIssue(changes)?.path, 'projectUpserts[0].calendarId');
 });
 
-test('Actual normalization preserves explicit null replacement intent', () => {
+test("gerçek normalleştirme açık boş değerle değiştirme niyetini korur", () => {
   const changes = postedActualChanges({
     projectUpserts: [completeProjectUpdate()],
     wbsUpserts: [completeWbsUpdate()],
@@ -153,7 +153,7 @@ test('Actual normalization preserves explicit null replacement intent', () => {
   assert.equal(findNestedCommitCollectionIssue(changes), null);
 });
 
-test('complete versioned replacements accept explicit null values', () => {
+test("tam sürümlü değiştirme açık boş değeri kabul eder", () => {
   assert.equal(findNestedCommitCollectionIssue({
     projectUpserts: [completeProjectUpdate()],
     wbsUpserts: [completeWbsUpdate()],

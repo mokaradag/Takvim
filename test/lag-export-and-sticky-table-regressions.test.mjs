@@ -21,7 +21,7 @@ function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 }
 
-test('legacy day lag values are read as the declared unit without mutating the record', () => {
+test("eski gün gecikmesi kaydı değiştirmeden bildirilmiş birimle okunur", () => {
   const editedDependency = {
     id: 'pred',
     predecessorId: 'pred',
@@ -37,7 +37,7 @@ test('legacy day lag values are read as the declared unit without mutating the r
   assert.equal(editedDependency.lagUnit, 'week');
 });
 
-test('the editor write path materializes the legacy value into an explicit copy', () => {
+test("düzenleyici yazma yolu eski değeri açık kopyaya dönüştürür", () => {
   const stored = Object.freeze({
     id: 'pred',
     predecessorId: 'pred',
@@ -54,7 +54,7 @@ test('the editor write path materializes the legacy value into an explicit copy'
   assert.equal(stored.lagValue, undefined);
 });
 
-test('legacy lag calculations tolerate immutable dependency snapshots', () => {
+test("eski gecikme hesabı değişmez bağımlılık görüntüsünü destekler", () => {
   const frozenDependency = Object.freeze({
     id: 'pred',
     predecessorId: 'pred',
@@ -67,7 +67,7 @@ test('legacy lag calculations tolerate immutable dependency snapshots', () => {
   assert.equal(frozenDependency.lagValue, undefined);
 });
 
-test('normalizeDependency converts week lag with the supplied calendar', () => {
+test("normalizeDependency verilen takvimle hafta gecikmesini çevirir", () => {
   const sixDay = normalizeCalendar({ id: 'six', name: 'Six', workingDays: [1, 2, 3, 4, 5, 6], holidays: [] });
   // Varsayılan takvimle 5, altı günlük takvimle 6 iş günü: kaydedilen `lagDays`
   // artık zamanlamanın uyguladığı gecikmeyle aynıdır.
@@ -75,7 +75,7 @@ test('normalizeDependency converts week lag with the supplied calendar', () => {
   assert.equal(normalizeDependency({ predecessorId: 'a', lagValue: 1, lagUnit: 'week' }, sixDay).lagDays, 6);
 });
 
-test('week lags use the successor active calendar in both CPM passes', () => {
+test("hafta gecikmesi iki CPM geçişinde de ardılın etkin takvimini kullanır", () => {
   const sixDayCalendar = normalizeCalendar({
     id: 'cal-six-day',
     name: 'Six Day',
@@ -105,7 +105,7 @@ test('week lags use the successor active calendar in both CPM passes', () => {
   assert.deepEqual(result.criticalPaths, [['A', 'B']]);
 });
 
-test('CSV and Excel-compatible exports neutralize formula-like user values', () => {
+test("CSV ve Excel dışa aktarımı formüle benzeyen kullanıcı değerini etkisizleştirir", () => {
   const input = {
     tasks: [{
       id: 't1',
@@ -134,7 +134,7 @@ test('CSV and Excel-compatible exports neutralize formula-like user values', () 
   assert.match(workbook, /&apos;@cmd/);
 });
 
-test('project tag deduplication remaps legacy task variants to the retained tag', () => {
+test("proje etiketi tekilleştirme eski görev yazımlarını kalan etikete eşler", () => {
   const context = {
     projects: [{
       id: 'p1', name: 'Alpha', color: 'blue', leadId: 'u1', lead: 'Ayşe',
@@ -170,7 +170,7 @@ test('project tag deduplication remaps legacy task variants to the retained tag'
   );
 });
 
-test('topbar popovers can escape the header and every task-table header stays sticky', () => {
+test("üst çubuk açılırları başlık dışına çıkabilir; bütün görev tablo başlıkları sabit kalır", () => {
   const shellCss = read('src/app/styles/shell.css');
   const componentCss = read('src/app/styles/components.css');
 

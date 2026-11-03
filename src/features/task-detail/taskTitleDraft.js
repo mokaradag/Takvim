@@ -62,9 +62,9 @@ export function createTaskTitleDraftController({
     }
 
     const version = ++requestVersion;
-    // `persist` may throw before returning a promise, or return a promise that
-    // rejects. Normalize both paths so the request is always removed from the
-    // de-duplication map and the same title can be retried.
+    // persist söz döndürmeden hata verebilir veya reddedilen bir söz döndürebilir.
+    // İki yol da normalleştirilir; böylece istek tekilleştirme haritasından
+    // her durumda çıkarılır ve aynı başlık yeniden denenebilir.
     let persistenceResult;
     try {
       persistenceResult = persist?.(candidate);

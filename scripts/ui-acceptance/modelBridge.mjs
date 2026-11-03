@@ -1,6 +1,6 @@
 /**
  * UI kabulü için OpenAI uyumlu yerel uç (yalnızca 127.0.0.1). Uygulamanın üretim sağlayıcı bağdaştırıcısının gönderdiği
- * her /v1/chat/completions isteği deponun nitelendirilmiş Claude CLI bağdaştırıcısına (scripts/planner-claude-model.mjs)
+ * her /v1/chat/completions isteği deponun nitelendirilmiş Claude CLI bağdaştırıcısına (scripts/planner-model-adapter.mjs)
  * iletilir: model kimliği her çağrıda claude-haiku-4-5-20251001 olarak doğrulanır, düşünme kapalıdır (0 belirteç), tek API
  * çağrısıdır. Başka bir model istenirse istek reddedilir ve devir girişimi olarak sayılır. İçerik günlüğe yazılmaz.
  */
@@ -9,7 +9,7 @@ import { appendFileSync } from 'node:fs';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 
-const ADAPTER = fileURLToPath(new URL('../planner-claude-model.mjs', import.meta.url));
+const ADAPTER = fileURLToPath(new URL('../planner-model-adapter.mjs', import.meta.url));
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
 const PORT = Number(process.env.BRIDGE_PORT || 18731);

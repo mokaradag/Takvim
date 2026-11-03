@@ -62,7 +62,7 @@ function task(projectId, id, extra = {}) {
   };
 }
 
-test('normalizeTaskRecord migrates legacy dates and removes legacy field names', () => {
+test("normalizeTaskRecord eski tarihi taşır ve eski alan adını kaldırır", () => {
   const result = normalizeTaskRecord({
     id: 'legacy',
     proje: 'One',
@@ -82,7 +82,7 @@ test('normalizeTaskRecord migrates legacy dates and removes legacy field names',
   assert.equal('hedefTarih' in result, false);
 });
 
-test('normalizeTaskRecord gives canonical schedule fields precedence over legacy aliases', () => {
+test("normalizeTaskRecord kanonik çizelge alanını eski eşlemeden önce kullanır", () => {
   const result = normalizeTaskRecord({
     id: 'canonical',
     projectId: 'p1',
@@ -101,7 +101,7 @@ test('normalizeTaskRecord gives canonical schedule fields precedence over legacy
   assert.equal(result.plannedDurationDays, 2);
 });
 
-test('normalizeTaskRecord converts string dependencies into canonical relationship records', () => {
+test("normalizeTaskRecord metin bağımlılığı kanonik ilişki kaydına çevirir", () => {
   const result = normalizeTaskRecord({
     id: 't2',
     projectId: 'p1',
@@ -119,7 +119,7 @@ test('normalizeTaskRecord converts string dependencies into canonical relationsh
   }]);
 });
 
-test('normalizeTaskRecord resolves legacy project and assignee names to stable IDs', () => {
+test("normalizeTaskRecord eski proje ve sorumlu adını kararlı kimliğe çözer", () => {
   const result = normalizeTaskRecord({
     id: 'legacy-references',
     proje: 'Two',
@@ -137,7 +137,7 @@ test('normalizeTaskRecord resolves legacy project and assignee names to stable I
   assert.equal(result.plannedDurationDays, 2);
 });
 
-test('normalizeTaskRecord prefers a valid explicit project ID over a conflicting legacy project name', () => {
+test("normalizeTaskRecord geçerli açık proje kimliğini çelişen eski addan önce kullanır", () => {
   const result = normalizeTaskRecord({
     id: 'explicit-project',
     projectId: 'p1',
@@ -152,7 +152,7 @@ test('normalizeTaskRecord prefers a valid explicit project ID over a conflicting
   assert.equal(result.wbsId, 'p1-root');
 });
 
-test('normalizeTaskRecord falls back to the project root when a requested WBS belongs to another project', () => {
+test("normalizeTaskRecord istenen WBS başka projedeyse proje köküne döner", () => {
   const result = normalizeTaskRecord({
     id: 'wrong-wbs',
     projectId: 'p1',
@@ -165,7 +165,7 @@ test('normalizeTaskRecord falls back to the project root when a requested WBS be
   assert.equal(result.wbsId, 'p1-root');
 });
 
-test('normalizeTaskRecord preserves an unknown explicit project ID without inventing a project or WBS', () => {
+test("normalizeTaskRecord bilinmeyen açık proje kimliğini proje veya WBS uydurmadan korur", () => {
   const result = normalizeTaskRecord({
     id: 'unknown-project',
     projectId: 'missing',
@@ -179,7 +179,7 @@ test('normalizeTaskRecord preserves an unknown explicit project ID without inven
   assert.equal(result.wbsId, null);
 });
 
-test('normalizeTaskRecord removes unknown assignee IDs and names', () => {
+test("normalizeTaskRecord bilinmeyen sorumlu kimliğini ve adını kaldırır", () => {
   const result = normalizeTaskRecord({
     id: 'unknown-assignees',
     projectId: 'p1',
@@ -194,7 +194,7 @@ test('normalizeTaskRecord removes unknown assignee IDs and names', () => {
   assert.deepEqual(result.sorumlu, ['Ayşe']);
 });
 
-test('normalizeTaskRecord initializes omitted dependencies as an empty array', () => {
+test("normalizeTaskRecord eksik bağımlılığı boş dizi başlatır", () => {
   const result = normalizeTaskRecord({
     id: 'no-deps',
     projectId: 'p1',
@@ -206,7 +206,7 @@ test('normalizeTaskRecord initializes omitted dependencies as an empty array', (
   assert.deepEqual(result.deps, []);
 });
 
-test('normalizeTaskRecord forces milestones to zero planned duration', () => {
+test("normalizeTaskRecord kilometre taşını sıfır plan süresine zorlar", () => {
   const result = normalizeTaskRecord({
     id: 'milestone',
     projectId: 'p1',
@@ -220,7 +220,7 @@ test('normalizeTaskRecord forces milestones to zero planned duration', () => {
   assert.equal(result.plannedDurationDays, 0);
 });
 
-test('normalizeTaskRecord returns null duration for incomplete or invalid planned ranges', () => {
+test("normalizeTaskRecord eksik veya geçersiz plan aralığında boş süre döndürür", () => {
   assert.equal(normalizeTaskRecord({
     id: 'missing-finish',
     projectId: 'p1',
@@ -237,7 +237,7 @@ test('normalizeTaskRecord returns null duration for incomplete or invalid planne
   }, context).plannedDurationDays, null);
 });
 
-test('normalizeTaskRecord uses the project calendar when calculating planned duration', () => {
+test("normalizeTaskRecord plan süresini proje takvimiyle hesaplar", () => {
   const result = normalizeTaskRecord({
     id: 'six-day',
     projectId: 'p2',
@@ -249,7 +249,7 @@ test('normalizeTaskRecord uses the project calendar when calculating planned dur
   assert.equal(result.plannedDurationDays, 2);
 });
 
-test('normalizeTaskRecord lets an explicit task calendar override the project calendar', () => {
+test("normalizeTaskRecord açık görev takvimini proje takviminden önce kullanır", () => {
   const result = normalizeTaskRecord({
     id: 'task-calendar',
     projectId: 'p2',
@@ -262,7 +262,7 @@ test('normalizeTaskRecord lets an explicit task calendar override the project ca
   assert.equal(result.plannedDurationDays, 1);
 });
 
-test('buildPortfolioSchedule has a stable empty default result', () => {
+test("buildPortfolioSchedule kararlı boş varsayılan sonuç verir", () => {
   assert.deepEqual(buildPortfolioSchedule(), {
     projects: {},
     tasks: {},
@@ -272,7 +272,7 @@ test('buildPortfolioSchedule has a stable empty default result', () => {
   });
 });
 
-test('buildPortfolioSchedule warns about tasks whose project is missing and omits them from projections', () => {
+test("buildPortfolioSchedule projesi eksik görevde uyarır ve görevi izdüşümden çıkarır", () => {
   const schedule = buildPortfolioSchedule({
     tasks: [task('missing', 'orphan')],
     projects,
@@ -291,7 +291,7 @@ test('buildPortfolioSchedule warns about tasks whose project is missing and omit
   assert.equal(schedule.tasks.orphan, undefined);
 });
 
-test('buildPortfolioSchedule safely reports null task metadata for malformed task entries', () => {
+test("buildPortfolioSchedule bozuk görevde boş üstveri bildirir", () => {
   const schedule = buildPortfolioSchedule({
     tasks: [null],
     projects,
@@ -304,7 +304,7 @@ test('buildPortfolioSchedule safely reports null task metadata for malformed tas
   assert.equal(schedule.warnings[0].projectId, null);
 });
 
-test('an unknown-project warning does not prevent valid projects from being scheduled', () => {
+test("bilinmeyen proje uyarısı geçerli projelerin çizelgelenmesini önlemez", () => {
   const schedule = buildPortfolioSchedule({
     tasks: [task('p1', 'A'), task('missing', 'orphan')],
     projects,
@@ -316,7 +316,7 @@ test('an unknown-project warning does not prevent valid projects from being sche
   assert.equal(schedule.tasks.A.projectId, 'p1');
 });
 
-test('cross-project detection accepts legacy dependency IDs and normalizes relationship details', () => {
+test("projeler arası tespit eski bağımlılık kimliğini kabul eder ve ilişki ayrıntısını normalleştirir", () => {
   const schedule = buildPortfolioSchedule({
     tasks: [
       task('p1', 'A'),
@@ -336,7 +336,7 @@ test('cross-project detection accepts legacy dependency IDs and normalizes relat
   }]);
 });
 
-test('a missing predecessor invalidates only its project with a serialized CPM error', () => {
+test("eksik öncül yalnızca kendi projesini serileştirilmiş CPM hatasıyla geçersiz kılar", () => {
   const schedule = buildPortfolioSchedule({
     tasks: [
       task('p1', 'A'),
@@ -354,7 +354,7 @@ test('a missing predecessor invalidates only its project with a serialized CPM e
   assert.equal(schedule.tasks.B, undefined);
 });
 
-test('schedule lookup selectors return null for absent schedules and unknown IDs', () => {
+test("çizelge seçicisi eksik çizelge ve bilinmeyen kimlikte boş değer döndürür", () => {
   assert.equal(selectProjectSchedule(undefined, 'p1'), null);
   assert.equal(selectTaskSchedule(undefined, 't1'), null);
   assert.equal(selectProjectSchedule({ projects: {} }, 'missing'), null);

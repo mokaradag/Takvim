@@ -107,7 +107,7 @@ test('ortalama ve bir hafta eşiği sunucunun sabit hesabıdır; ton modelin de�
   assert.deepEqual(derived([9, 7], { total: 4 }), [], 'nüfusun bir kısmında eşik ya da ortalama iddiası yoktur');
 });
 
-test('equal-valued complete populations retain averages and overdue thresholds without extrema', async (t) => {
+test("eş değerli tam nüfus uç değer olmadan ortalama ve gecikme eşiklerini korur", async (t) => {
   const stack = stackFor(t);
   for (const [delay, targetFinish, tone] of [[9, '2026-09-21', 'warning'], [7, '2026-09-23', 'success']]) {
     for (const id of [TASKS.OVERDUE, TASKS.SERIES, TASKS.PARTIAL_OWN]) stack.db.tasks.find((row) => row.TaskId === id).TargetFinish = targetFinish;
@@ -135,7 +135,7 @@ test('equal-valued complete populations retain averages and overdue thresholds w
   assert.deepEqual(tablePropositions({ ...syntheticTable([9, 9, 9], { total: 4 }), distribution: false, locale: 'en' }), []);
 });
 
-test('verified deadline statistics survive unrelated progress narration and mixed overdue populations', async (t) => {
+test("doğrulanmış termin istatistiği ilgisiz ilerleme anlatımında ve karışık gecikmede korunur", async (t) => {
   const stack = stackFor(t);
   for (const task of stack.db.tasks) task.Progress = 40;
   for (const [id, progress] of [[TASKS.OVERDUE, 80], [TASKS.SERIES, 60], [TASKS.PARTIAL_OWN, 50]]) stack.db.tasks.find((row) => row.TaskId === id).Progress = progress;
@@ -620,7 +620,7 @@ test('küçük tamamlanma payı %1 olmaz; kesir Türkçe ve İngilizce korunur',
   assert.equal(completion(20000, 20000, 'en'), undefined);
 });
 
-test('deadline population narration keeps the open-only restriction in multipart answers', async (t) => {
+test("çok parçalı termin anlatımı yalnızca açık iş kısıtını korur", async (t) => {
   const stack = stackFor(t);
   const completed = stack.db.tasks.find((task) => task.TaskId === TASKS.READ_2);
   assert.equal(completed.Status, 'done');
@@ -648,7 +648,7 @@ test('deadline population narration keeps the open-only restriction in multipart
   }
 });
 
-test('multipart proposition overflow falls back without hiding later derived averages or increasing the cap', async (t) => {
+test("çok parçalı önerme taşması sonraki ortalamayı gizlemeden ve sınırı artırmadan geri döner", async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
   const stack = stackFor(t, { MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true' });
   const logs = captureConsole(t);
@@ -683,7 +683,7 @@ test('multipart proposition overflow falls back without hiding later derived ave
   assert.equal(turnLines(logs)[0].context.presentation.reason, 'SHEET_LIMIT');
 });
 
-test('numeric extrema and averages preserve typed percentage units in the rendered answer', async (t) => {
+test("sayısal uç değer ve ortalama çizimde yüzde birimini korur", async (t) => {
   const stack = stackFor(t);
   for (const [id, progress] of [[TASKS.OVERDUE, 80], [TASKS.SERIES, 60], [TASKS.PARTIAL_OWN, 50]]) stack.db.tasks.find((row) => row.TaskId === id).Progress = progress;
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { deadline: 'overdue', assignee: 'me' });
@@ -705,7 +705,7 @@ test('numeric extrema and averages preserve typed percentage units in the render
   assert.deepEqual(tablePropositions({ ...unsupported, distribution: false, locale: 'en' }), [], 'unsupported units cannot become unitless claims');
 });
 
-test('English distribution narration localizes canonical keys while preserving project names and Turkish output', async (t) => {
+test("İngilizce dağılım anlatımı kanonik anahtarı yerelleştirir; proje adı ve Türkçe çıktıyı korur", async (t) => {
   const english = await statusSheet(t, { locale: 'en' });
   const prose = english.view.propositions.map((item) => item.text).join(' ');
   assert.ok(prose.includes('To do'), prose);
@@ -732,7 +732,7 @@ test('English distribution narration localizes canonical keys while preserving p
   }
 });
 
-test('server callout authorization survives saved history and replay; general text receives none', async (t) => {
+test("sunucu bilgi kutusu yetkisi geçmiş ve oynatmada sürer; genel metne verilmez", async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
   const stack = stackFor(t, { MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true' });
   captureConsole(t);
@@ -760,7 +760,7 @@ test('server callout authorization survives saved history and replay; general te
   assert.ok(assistantMarkdownText(loaded.content, loaded).includes('[!success]'));
 });
 
-test('discarded weak-plan English locale cannot reach a clean Deep failure', async (t) => {
+test("atılmış zayıf planın İngilizce dili temiz Derin hatasına ulaşamaz", async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
   const stack = stackFor(t);
   const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);

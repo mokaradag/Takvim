@@ -36,7 +36,7 @@ function digest(auth, scope, { projects, tasks, rights }) {
   })).digest('hex');
 }
 
-/** A population-wide result keeps the full epoch; entity-focused results bind only their population. */
+/** Nüfus geneli sonuç tam dönemi korur; varlık odaklı sonuç yalnızca kendi nüfusunu bağlar. */
 export function authorizationFingerprint(auth, scope, { projectIds = null, taskIds = null } = {}) {
   const projects = projectIds ? new Set(projectIds) : null;
   const tasks = taskIds ? new Set(taskIds) : null;

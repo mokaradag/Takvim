@@ -36,6 +36,38 @@
       "Hakan Polat",
       "Gizem Er"
      ]
+    },
+    {
+     "outcome": "grounded",
+     "forbids": [
+      "Ece Tan",
+      "Hakan Polat",
+      "Gizem Er"
+     ]
+    },
+    {
+     "outcome": "grounded",
+     "forbids": [
+      "Ece Tan",
+      "Hakan Polat",
+      "Gizem Er"
+     ]
+    },
+    {
+     "outcome": "grounded",
+     "forbids": [
+      "Ece Tan",
+      "Hakan Polat",
+      "Gizem Er"
+     ]
+    },
+    {
+     "outcome": "grounded",
+     "forbids": [
+      "Ece Tan",
+      "Hakan Polat",
+      "Gizem Er"
+     ]
     }
    ]
   },
@@ -45,6 +77,20 @@
    "turns": [
     "Mehmet'in iş yükünü değerlendir ve grafikle göster.",
     "1"
+   ],
+   "expectedTurns": [
+    {
+     "outcome": "clarification"
+    },
+    {
+     "outcome": "grounded",
+     "serverReplay": true,
+     "forbids": [
+      "Ece Tan",
+      "Hakan Polat",
+      "Gizem Er"
+     ]
+    }
    ]
   },
   {

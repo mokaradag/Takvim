@@ -3,7 +3,7 @@
  * Serbest sözcükler doğrulanmış olgu sayılmaz: yalnızca sunucunun aşağıdaki tarafsız geçişlerinden biri seçilebilir.
  * Bu bir olgusallık kestirimi değildir; sözlük dışı metin reddedilir ve çağıran belirlenimci kanıt anlatımını kullanır.
  */
-export const PROSE_LIMITS = Object.freeze({ maxChars: 2400, maxSentences: 12 });
+export const PROSE_LIMITS = Object.freeze({ maxChars: 2400, maxSentences: 8 });
 export const PROSE_CONNECTORS = Object.freeze({
   tr: Object.freeze(['', 'Genel tabloya bakınca', 'Bunun yanında', 'Öte yandan', 'Ayrıca', 'Buna ek olarak', 'Son olarak']),
   en: Object.freeze(['', 'Looking at the evidence', 'In addition', 'Also', 'Finally'])

@@ -25,7 +25,7 @@ const { loadAuthorizationContext } = await import('../src/server/authorization/l
 const stackFor = (t, sicil = ADMIN) => createAiStack(t, { sicil, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed() });
 const ACTIVE = [PROJECTS.FULL, PROJECTS.READ, PROJECTS.PARTIAL, PROJECTS.HIDDEN, PROJECTS.TEAM];
 
-test('system administrator authorization uses a predicate without per-project access entries', () => {
+test("sistem yöneticisi yetkisi proje başına giriş yerine koşul kullanır", () => {
   const effective = deriveEffectiveAccess({ isSystemAdmin: true, fullProjectIds: ACTIVE.map((id) => id.toUpperCase()) });
   assert.equal(effective.access.size, 0);
   assert.deepEqual([...effective.fullProjectIds].sort(), [...ACTIVE].sort());
@@ -39,7 +39,7 @@ test('system administrator authorization uses a predicate without per-project ac
   }
 });
 
-test('administrator scope does not copy a large project enumeration into its access map', () => {
+test("yönetici kapsamı büyük proje listesini erişim haritasına kopyalamaz", () => {
   const auth = { sicil: ADMIN, isSystemAdmin: true, effective: { access: new Map(), fullProjectIds: new Set(ACTIVE), partialTaskIds: new Set() } };
   const scope = buildRotaScope(auth);
   assert.equal(scope.projects.size, 0);
@@ -62,14 +62,14 @@ const PROJECT_GATED_CALLS = [
 ];
 
 for (const [name, args] of PROJECT_GATED_CALLS) {
-  test(`an administrator passes the explicit project gate of ${name}`, async (t) => {
+  test(`yönetici ${name} açık proje kapısından geçer`, async (t) => {
     const stack = stackFor(t);
     const { result } = await callRotaTool(stack, ADMIN, name, args);
     assert.equal(result.ok, true, JSON.stringify(result.error));
   });
 }
 
-test('an archived or nonexistent project is indistinguishable from an unauthorized one, also for an administrator', async (t) => {
+test("arşiv veya olmayan proje yönetici için de yetkisizden ayırt edilemez", async (t) => {
   const stack = stackFor(t);
   const envelopes = [];
   for (const projectId of [PROJECTS.ARCHIVED, randomUUID()]) {
@@ -84,7 +84,7 @@ test('an archived or nonexistent project is indistinguishable from an unauthoriz
 });
 
 for (const path of ['server', 'model']) {
-  test(`administrator project evidence is dropped when the project is archived before final delivery (${path} selection)`, async (t) => {
+  test(`teslimden önce proje arşivlenirse yönetici kanıtı düşer (${path} seçimi)`, async (t) => {
     const stack = stackFor(t);
     const archive = () => { stack.db.projects.find((project) => project.ProjectId === PROJECTS.HIDDEN).IsActive = 0; };
     // Yorum istenen turda olguları model seçer; aksi hâlde sunucu seçer.
@@ -120,7 +120,7 @@ for (const path of ['server', 'model']) {
   });
 }
 
-test('an administrator sees every active task without per-task grants', async (t) => {
+test("yönetici görev başına yetki olmadan bütün etkin görevleri görür", async (t) => {
   const stack = stackFor(t);
   const { result } = await callRotaTool(stack, ADMIN, 'rota_task_detail', { taskId: TASKS.TEAM_HIDDEN });
   assert.equal(result.ok, true);

@@ -24,7 +24,7 @@ function selectorOwners(selector) {
     .map((file) => path.relative(ROOT, file).replaceAll('\\', '/'));
 }
 
-test('root layout loads responsibility-based styles and obsolete chronology layers stay deleted', () => {
+test("kök düzen sorumluluk temelli biçimleri yükler; eski kronolojik katman silinmiş kalır", () => {
   const layout = read('src/app/layout.js');
   const obsolete = [
     'src/app/enhancements.css',
@@ -43,20 +43,20 @@ test('root layout loads responsibility-based styles and obsolete chronology laye
   assert.match(layout, /styles\/features\.css/);
 });
 
-test('core application CSS does not infer layout from serialized inline style text', () => {
+test("çekirdek CSS serileştirilmiş satır içi biçimden düzen çıkarmaz", () => {
   for (const file of cssFiles()) {
     const css = fs.readFileSync(file, 'utf8');
     assert.doesNotMatch(css, /\[style\*=/, `${path.relative(ROOT, file)} must use semantic classes instead of style-string selectors`);
   }
 });
 
-test('major topbar selectors have one authoritative stylesheet owner', () => {
+test("ana üst çubuk seçicilerinin tek yetkili biçim sahibi vardır", () => {
   for (const selector of ['.topbar {', '.topbar-project-context {', '.topbar-emblem-clip {']) {
     assert.deepEqual(selectorOwners(selector), ['src/app/styles/shell.css'], `${selector} should have one shell owner`);
   }
 });
 
-test('dashboard structure uses semantic classes instead of card position or DOM inference', () => {
+test("pano yapısı kart konumu veya DOM çıkarımı yerine anlamsal sınıf kullanır", () => {
   const dashboardCss = read('src/app/styles/dashboard.css');
   const dashboard = read('src/features/dashboard/DashboardView.jsx');
 
@@ -76,7 +76,7 @@ test('dashboard structure uses semantic classes instead of card position or DOM 
   }
 });
 
-test('application layering avoids unexplained four-digit z-index escalation', () => {
+test("uygulama katmanlaması açıklamasız dört haneli z-index yükseltmesinden kaçınır", () => {
   const sourceFiles = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

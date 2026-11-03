@@ -23,7 +23,7 @@ function source(path) { return readFileSync(path, 'utf8'); }
 
 const clientAreas = ['src/features', 'src/components', 'src/state'];
 
-test('client and feature modules never import mssql or server database modules', () => {
+test("istemci ve özellik modülü mssql veya sunucu veritabanını içe aktarmaz", () => {
   for (const area of clientAreas) {
     for (const file of filesUnder(area)) {
       const text = source(file);
@@ -33,7 +33,7 @@ test('client and feature modules never import mssql or server database modules',
   }
 });
 
-test('SQL connection and repository implementation are server-only', () => {
+test("SQL bağlantısı ve depo uygulaması yalnız sunucudadır", () => {
   for (const file of [
     'src/server/db/config.js',
     'src/server/db/pool.js',
@@ -43,7 +43,7 @@ test('SQL connection and repository implementation are server-only', () => {
   }
 });
 
-test('Actual SQL pool uses Windows Integrated Authentication', () => {
+test("gerçek SQL havuzu Windows bütünleşik kimlik doğrulamasını kullanır", () => {
   const config = source(join(root, 'src/server/db/config.js'));
   // Sürücü yükleme sorumluluğu `driver.js` modülüne taşındı; havuz onu kullanır.
   const driver = source(join(root, 'src/server/db/driver.js'));
@@ -60,19 +60,19 @@ test('Actual SQL pool uses Windows Integrated Authentication', () => {
   assert.match(nextConfig, /serverComponentsExternalPackages:\s*\[[^\]]*['"]msnodesqlv8['"]/s);
 });
 
-test('Actual API repository talks only to HTTP API and never imports Demo seed or SQL', () => {
+test("gerçek API deposu yalnızca HTTP API ile konuşur; demo veya SQL içe aktarmaz", () => {
   const text = source(join(root, 'src/data/api/createApiRepository.js'));
   assert.match(text, /fetch\(/);
   assert.doesNotMatch(text, /mock\/seed|createMockRepository|mssql|server\/db/);
 });
 
-test('Demo repository never calls SQL or Actual API', () => {
+test("demo depo SQL veya gerçek API çağırmaz", () => {
   const text = source(join(root, 'src/data/mock/createMockRepository.js'));
   assert.doesNotMatch(text, /fetch\(|mssql|api\/mergen-rota|server\/db/);
   assert.match(text, /\.\/seed\.js/);
 });
 
-test('database configuration stays server-only and contains no SQL password', () => {
+test("veritabanı ayarı yalnız sunucudadır ve SQL parolası içermez", () => {
   const env = source(join(root, '.env.example'));
   assert.doesNotMatch(env, /NEXT_PUBLIC_MERGEN_ROTA_DB/);
   for (const name of ['SERVER', 'DATABASE', 'ODBC_DRIVER']) {
@@ -81,7 +81,7 @@ test('database configuration stays server-only and contains no SQL password', ()
   assert.doesNotMatch(env, /MERGEN_ROTA_DB_(?:USER|PASSWORD)=/);
 });
 
-test('trusted current Sicil comes only from server environment provider', () => {
+test("güvenilir güncel sicil yalnızca sunucu ortam sağlayıcısından gelir", () => {
   const identity = source(join(root, 'src/server/identity/currentUserProvider.js'));
   assert.match(identity, /process\.env\.MERGEN_ROTA_DEV_SICIL/);
   assert.doesNotMatch(identity, /request|headers|query|localStorage/);
@@ -89,7 +89,7 @@ test('trusted current Sicil comes only from server environment provider', () => 
   assert.doesNotMatch(routes, /sicil\s*=\s*(?:body|request|searchParams|headers)/i);
 });
 
-test('API routes force Node runtime and disable caching', () => {
+test("API yolları Node çalışma zamanını zorunlu tutar ve önbelleği kapatır", () => {
   for (const file of filesUnder('src/app/api/mergen-rota')) {
     const text = source(file);
     assert.match(text, /runtime\s*=\s*['"]nodejs['"]/);
@@ -98,14 +98,14 @@ test('API routes force Node runtime and disable caching', () => {
   }
 });
 
-test('Actual repository does not persist CPM output fields', () => {
+test("gerçek depo CPM çıktı alanlarını saklamaz", () => {
   const sql = source(join(root, 'database/MR_Create_Durable_Persistence.sql'));
   for (const forbidden of ['EarlyStart', 'LateStart', 'TotalFloat', 'FreeFloat', 'IsCritical', 'CriticalPath']) {
     assert.doesNotMatch(sql, new RegExp(`\\b${forbidden}\\b`, 'i'));
   }
 });
 
-test('one commit maps to one SQL transaction and one correlation id', () => {
+test("tek kayıt tek SQL işlemi ve tek ilişkilendirme kimliğidir", () => {
   const repository = source(join(root, 'src/server/repository/sqlAppRepository.js'));
   assert.match(repository, /commitChanges\(input\).*withSqlTransaction/s);
   assert.match(repository, /const\s+correlationId\s*=\s*randomUUID\(\)/);

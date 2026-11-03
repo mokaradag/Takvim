@@ -228,7 +228,7 @@ export function createSemanticRetrieval({
   }
 
   async function discover(query, signal, trace, beforeDispatch) {
-    // Presence failures must not become optional embedding/rerank failures.
+    // Varlık hatası isteğe bağlı gömme veya yeniden sıralama hatasına çevrilemez.
     let dispatchFailure = null;
     const guard = beforeDispatch && (async (dispatchSignal) => {
       try { await beforeDispatch(dispatchSignal); }

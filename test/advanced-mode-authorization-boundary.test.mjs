@@ -32,7 +32,7 @@ const state = {
   ]
 };
 
-test('portfolio task creation skips read-only projects and selects the first writable project', () => {
+test("portföyde görev oluşturma salt okunur projeyi atlayıp ilk yazılabilir projeyi seçer", () => {
   assert.equal(resolveTaskCreationProject({ ...state, workspaceMode: 'portfolio' })?.id, 'full');
   assert.equal(resolveTaskCreationProject({ ...state, workspaceMode: 'project', selectedProjectId: 'partial' }), null);
   assert.equal(resolveTaskCreationProject({ ...state, workspaceMode: 'project', selectedProjectId: 'full' })?.id, 'full');
@@ -40,7 +40,7 @@ test('portfolio task creation skips read-only projects and selects the first wri
   assert.equal(resolveTaskCreationProject(state, 'demo')?.id, 'demo');
 });
 
-test('write capability treats demo projects as writable but rejects PARTIAL and READ', () => {
+test("yazma yeteneği demo projeyi kabul ederken PARTIAL ve READ düzeylerini reddeder", () => {
   assert.equal(canWriteProject(projects[0]), false);
   assert.equal(canWriteProject(projects[1]), true);
   assert.equal(canWriteProject(projects[2]), false);
@@ -48,7 +48,7 @@ test('write capability treats demo projects as writable but rejects PARTIAL and 
   assert.deepEqual(writableProjects(projects).map((project) => project.id), ['full', 'demo']);
 });
 
-test('task mutations require writable source and destination projects', () => {
+test("görev değişiklikleri kaynak ve hedef projede yazma yetkisi ister", () => {
   assert.equal(resolveTaskMutationAccess(state, 'task-full', {}).ok, true);
   assert.equal(resolveTaskMutationAccess(state, 'task-partial', {}).code, 'PROJECT_WRITE_FORBIDDEN');
   assert.equal(resolveTaskMutationAccess(state, 'task-full', { projectId: 'partial' }).code, 'PROJECT_WRITE_FORBIDDEN');
@@ -58,7 +58,7 @@ test('task mutations require writable source and destination projects', () => {
   assert.equal(canDeleteTask(state, 'task-partial'), false);
 });
 
-test('WBS mutations and task moves require the same writable project', () => {
+test("WBS değişiklikleri ve görev taşıma aynı yazılabilir projeyi gerektirir", () => {
   assert.equal(resolveWbsMutationAccess(state, 'wbs-full').ok, true);
   assert.equal(resolveWbsMutationAccess(state, 'wbs-partial').code, 'PROJECT_WRITE_FORBIDDEN');
   assert.equal(resolveWbsMutationAccess(state, 'wbs-full', 'wbs-full-2').ok, true);
@@ -151,7 +151,7 @@ test('atama kapsamındaki kalıcı sorumlu tarih talebi eylemini korur', () => {
   assert.equal(access.canProposeSchedule, true);
 });
 
-test('forbidden writes return a stable domain error without entering persistence', () => {
+test("yasak yazma kalıcılığa girmeden kararlı alan hatası döndürür", () => {
   const failure = projectWriteFailure('task/update', {
     code: 'PROJECT_WRITE_FORBIDDEN',
     projectId: 'partial',
@@ -170,7 +170,7 @@ test('forbidden writes return a stable domain error without entering persistence
   });
 });
 
-test('Advanced Mode views use the shared capability boundary', () => {
+test("kapsamlı kip görünümleri ortak yetenek sınırını kullanır", () => {
   const tasksView = fs.readFileSync(new URL('../src/features/tasks/TasksView.jsx', import.meta.url), 'utf8');
   const detailOverlay = fs.readFileSync(new URL('../src/features/task-detail/TaskDetailOverlay.jsx', import.meta.url), 'utf8');
   const wbsView = fs.readFileSync(new URL('../src/features/wbs/WbsView.jsx', import.meta.url), 'utf8');
@@ -182,7 +182,7 @@ test('Advanced Mode views use the shared capability boundary', () => {
   assert.match(wbsView, /canEdit\s*&&/);
 });
 
-test('Advanced Mode task creation applies the restricted payload before persistence', async () => {
+test("kapsamlı kip görev oluşturma kısıtlı veriyi kalıcılıktan önce uygular", async () => {
   const currentUser = { id: '1001', name: 'Görevli Kullanıcı' };
   const project = { id: 'partial', code: 'P-1', name: 'Kısıtlı proje', accessLevel: 'PARTIAL' };
   const restrictedState = {

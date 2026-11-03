@@ -36,7 +36,7 @@ function createMockState() {
   return createInitialState(structuredClone(MOCK_SNAPSHOT));
 }
 
-test('legacy task dates migrate once to canonical schedule fields', () => {
+test("eski görev tarihleri kanonik çizelgeye bir kez taşınır", () => {
   const migrated = migrateLegacyTaskSchedule({
     id: 'legacy',
     baslangicTarihi: '2026-07-01',
@@ -52,7 +52,7 @@ test('legacy task dates migrate once to canonical schedule fields', () => {
   assert.equal('hedefTarih' in migrated, false);
 });
 
-test('task normalization produces canonical current-plan data and working-day planned duration', () => {
+test("görev normalleştirme kanonik güncel plan verisi ve iş günü süresi üretir", () => {
   const task = normalizeTaskRecord({
     id: 't1',
     projectId: 'p1',
@@ -73,7 +73,7 @@ test('task normalization produces canonical current-plan data and working-day pl
   assert.equal('durationDays' in task, false);
 });
 
-test('task schedule validation supports explicit actuals and reports invalid date relationships', () => {
+test("görev çizelgesi doğrulaması açık gerçekleşeni destekler ve bozuk tarih ilişkisini bildirir", () => {
   assert.deepEqual(validateTaskSchedule({
     plannedStart: '2026-07-01',
     plannedFinish: '2026-07-10',
@@ -100,7 +100,7 @@ test('task schedule validation supports explicit actuals and reports invalid dat
   }).some((issue) => issue.code === 'ACTUAL_FINISH_WITHOUT_START'));
 });
 
-test('baseline snapshot validation reports invalid historical date order', () => {
+test("baz plan görüntü doğrulaması bozuk tarihsel sırayı bildirir", () => {
   assert.ok(validateTaskBaselineSnapshot({
     baselineId: 'b1',
     taskId: 't1',
@@ -111,7 +111,7 @@ test('baseline snapshot validation reports invalid historical date order', () =>
   }).some((issue) => issue.code === 'BASELINE_FINISH_BEFORE_START'));
 });
 
-test('milestones normalize to zero planned duration', () => {
+test("kilometre taşı sıfır plan süresine normalleştirilir", () => {
   const task = normalizeTaskRecord({
     id: 'm1',
     projectId: 'p1',
@@ -125,7 +125,7 @@ test('milestones normalize to zero planned duration', () => {
   assert.equal(task.plannedDurationDays, 0);
 });
 
-test('target finish drives overdue status independently of planned finish', () => {
+test("hedef bitiş planlanan bitişten bağımsız gecikmeyi belirler", () => {
   const referenceDate = new Date(2026, 6, 21);
 
   assert.equal(getStatus({
@@ -141,7 +141,7 @@ test('target finish drives overdue status independently of planned finish', () =
   }, referenceDate).id, 'overdue');
 });
 
-test('current-plan edits and new tasks do not mutate historical baseline snapshots', () => {
+test("güncel plan düzenlemesi ve yeni görev tarihsel baz plan görüntüsünü değiştirmez", () => {
   const initial = createMockState();
   const originalSnapshots = structuredClone(initial.taskBaselineSnapshots);
   const task = initial.tasks[0];
@@ -161,7 +161,7 @@ test('current-plan edits and new tasks do not mutate historical baseline snapsho
   assert.equal(newTask.remainingDurationDays, null);
 });
 
-test('mock projects expose a primary baseline and initial task snapshots', () => {
+test("sahte projeler birincil baz plan ve ilk görev görüntülerini sunar", () => {
   const state = createMockState();
   assert.equal(state.baselines.length, state.projects.length);
   assert.equal(state.taskBaselineSnapshots.length, state.tasks.length);
@@ -170,7 +170,7 @@ test('mock projects expose a primary baseline and initial task snapshots', () =>
   }
 });
 
-test('primary baseline selectors return separate immutable snapshot data', () => {
+test("birincil baz plan seçicileri ayrı değişmez görüntü döndürür", () => {
   const state = createMockState();
   const task = state.tasks[0];
   const baseline = selectPrimaryBaselineForProject(state.baselines, task.projectId);
@@ -182,12 +182,12 @@ test('primary baseline selectors return separate immutable snapshot data', () =>
   assert.notStrictEqual(snapshot, task);
 });
 
-test('project dataDate survives repository and state normalization', () => {
+test("proje dataDate depo ve durum normalleştirmesinde korunur", () => {
   const state = createMockState();
   assert.ok(state.projects.every((project) => /^\d{4}-\d{2}-\d{2}$/.test(project.dataDate)));
 });
 
-test('CPM results remain derived and are not written back into canonical tasks', () => {
+test("CPM sonucu türetilmiş kalır ve kanonik göreve yazılmaz", () => {
   const state = createMockState();
   const schedule = buildPortfolioSchedule({
     tasks: state.tasks,
@@ -210,7 +210,7 @@ async function sourceFiles(root) {
   return files;
 }
 
-test('legacy schedule property names are isolated to the migration adapter in src', async () => {
+test("eski çizelge alan adları kaynakta taşıma bağdaştırıcısıyla sınırlıdır", async () => {
   const srcRoot = path.resolve('src');
   const files = await sourceFiles(srcRoot);
   const legacyNames = ['baslangicTarihi', 'bitisTarihi', 'hedefTarih'];

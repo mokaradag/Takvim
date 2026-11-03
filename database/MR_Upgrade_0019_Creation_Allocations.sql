@@ -3,8 +3,8 @@ SET XACT_ABORT ON;
 SET QUOTED_IDENTIFIER ON;
 SET ANSI_NULLS ON;
 
--- Apply before deploying the server-issued creation-ID protocol. No entity or
--- personnel foreign keys: allocations precede entity creation and grant no access.
+-- Sunucunun oluşturma kimliği protokolü dağıtılmadan uygulanır. Varlık veya
+-- personel dış anahtarı yoktur; tahsis oluşturmadan önce gelir ve erişim vermez.
 BEGIN TRY
     BEGIN TRANSACTION;
     IF NOT EXISTS (SELECT 1 FROM dbo.MR_SchemaMigrations WHERE MigrationId = N'0018_ai_message_evidence')

@@ -130,7 +130,7 @@ function sanitizeAttributes(raw) {
   const pattern = /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/y;
   let index = 0;
   while (index < raw.length) {
-    // Skip an entire malformed attribute token, never retry each suffix of it.
+    // Bozuk öznitelik parçası tümüyle atlanır; her son eki yeniden denenmez.
     while (index < raw.length && /\s/.test(raw[index])) index += 1;
     pattern.lastIndex = index;
     const match = pattern.exec(raw);
@@ -192,10 +192,10 @@ function findTagEnd(source, start) {
 }
 
 export const MAX_REMINDER_TEMPLATE_CHARS = 65536;
-// Delivery content has its own bound: HTML escaping can expand task text sixfold.
+// Teslim içeriğinin ayrı sınırı vardır; HTML kaçışı görev metnini altı kat büyütebilir.
 export const MAX_REMINDER_RENDER_CHARS = 16 * 1024 * 1024;
 
-/** Returns null for oversized input/output; never parses or returns a partial template. */
+/** Aşırı büyük girdi veya çıktıda boş değer döner; kısmi şablon ayrıştırılmaz veya döndürülmez. */
 export function sanitizeReminderHtml(input, { maxChars = MAX_REMINDER_TEMPLATE_CHARS } = {}) {
   const source = String(input ?? '');
   if (source.length > maxChars) return null;

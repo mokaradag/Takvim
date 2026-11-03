@@ -332,7 +332,7 @@ test('AI atama talepleri bildirim kapsamından bağımsız canlı karar yetkisin
   assert.equal(result.data.items[0].actionRequiredFromYou, true);
 });
 
-test('coordination counts disclose the task boundary without exposing decision-only tasks', async (t) => {
+test("koordinasyon sayıları yalnızca karar yetkili görevleri açmadan görev sınırını açıklar", async (t) => {
   const stack = stackFor(t, {
     executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP, ScopeType: 'UNIT' }],
     taskAssignmentCoordinations: [TASKS.TEAM_VISIBLE, TASKS.TEAM_HIDDEN].map((TaskId, index) => ({
@@ -689,7 +689,7 @@ test('bildirimler yalnızca okunur: okundu/temizlendi işareti değişmez', asyn
   assert.equal(outsider.result.totalCount, 0, 'katılımcı olmayan talebi göremez');
 });
 
-test('an unreadable notification source keeps composite counters unknown instead of counting it as zero', async (t) => {
+test("okunamayan bildirim kaynağı birleşik sayacı sıfır yerine bilinmez tutar", async (t) => {
   const stack = stackFor(t, {
     taskScheduleChangeRequests: [{ TaskId: TASKS.OVERDUE, RequesterSicil: ZEYNEP, DecisionOwnerSicil: AYSE, Status: 'PENDING', CreatedAt: '2026-09-28T08:00:00Z' }]
   });
@@ -707,7 +707,7 @@ test('an unreadable notification source keeps composite counters unknown instead
   assert.deepEqual(ledger.summaries()[0].highlights.map((item) => item.value), ['belirlenemedi', 'belirlenemedi']);
 });
 
-test('request count highlights name the selected tab when it narrows the counted population', async (t) => {
+test("istek sayısı vurgusu nüfusu daraltan seçili sekmeyi adlandırır", async (t) => {
   const stack = stackFor(t, {
     taskScheduleChangeRequests: [{ TaskId: TASKS.OVERDUE, RequesterSicil: ZEYNEP, DecisionOwnerSicil: AYSE, Status: 'PENDING', CreatedAt: '2026-09-28T08:00:00Z' }],
     taskAssignmentCoordinations: [{ TaskId: TASKS.LITERAL, RequesterSicil: AYSE, RequestedAssigneeSicil: MEHMET, Mode: 'REQUEST', Status: 'PENDING', CreatedAt: '2026-09-27T08:00:00Z' }]
@@ -725,7 +725,7 @@ test('request count highlights name the selected tab when it narrows the counted
   }
 });
 
-test('a one-character non-numeric person search is a correctable argument error before any SQL work', async (t) => {
+test("tek harfli sayısal olmayan kişi araması SQL öncesinde düzeltilebilir argüman hatasıdır", async (t) => {
   const stack = stackFor(t);
   const { aiTelemetrySnapshot } = await import('../src/server/ai/aiTelemetry.js');
   const outcomes = () => ({ ...aiTelemetrySnapshot().tools.byOutcome });
@@ -944,7 +944,7 @@ test('yetki bağlamı her araç kümesinde yeniden okunur ve kümedeki çağrıl
   assert.equal(context.stats().authorizationLoads, 3);
 });
 
-test('admins can use every explicit active-project gate while archived and unknown projects remain hidden', async (t) => {
+test("yönetici bütün açık etkin proje kapılarını kullanır; arşiv ve bilinmeyen projeler gizli kalır", async (t) => {
   const stack = stackFor(t);
   for (const name of ['rota_task_search', 'rota_task_analytics', 'rota_project_detail', 'rota_wbs_inspect', 'rota_baseline_compare', 'rota_dependency_inspect', 'rota_recurrence_inspect', 'rota_calendar_inspect']) {
     const { result } = await callRotaTool(stack, ADMIN, name, { projectId: PROJECTS.FULL });
@@ -954,7 +954,7 @@ test('admins can use every explicit active-project gate while archived and unkno
   }
 });
 
-test('all task-population analysis paths fail closed before processing an oversized project', async (t) => {
+test("bütün görev nüfusu analiz yolları büyük projeyi işlemeden erişimi kapatır", async (t) => {
   const extraTasks = Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({
     TaskId: `29000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`, ProjectId: PROJECTS.FULL,
     Title: 'Budget sentinel', Status: 'planned', Priority: 'medium', CreatedBySicil: AYSE
@@ -974,14 +974,14 @@ test('all task-population analysis paths fail closed before processing an oversi
   }
 });
 
-test('assignment fan-out has its own analyzed-row sentinel', async (t) => {
+test("atama çoğalmasının ayrı incelenen satır sınırı vardır", async (t) => {
   const taskAssignees = Array.from({ length: TOOL_LIMITS.maxAnalyzedAssignments + 1 }, (_, index) => ({ TaskId: TASKS.OVERDUE, Sicil: index + 50000 }));
   const stack = stackFor(t, { taskAssignees });
   const { result } = await callRotaTool(stack, ADMIN, 'rota_task_detail', { taskId: TASKS.OVERDUE });
   assert.equal(result.error?.code, 'RESULT_TOO_LARGE');
 });
 
-test('oversized baseline snapshots stop before the added-task anti-join', async (t) => {
+test("büyük baz plan görüntüsü eklenen görev dış birleşiminden önce durur", async (t) => {
   const taskBaselineSnapshots = Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({
     BaselineId: BASELINE_ID, TaskId: `28000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`
   }));
@@ -990,7 +990,7 @@ test('oversized baseline snapshots stop before the added-task anti-join', async 
   assert.equal(result.error?.code, 'RESULT_TOO_LARGE');
 });
 
-test('model generation between rounds does not consume the accumulated tool-execution budget', async () => {
+test("turlar arasındaki model üretimi birikimli araç yürütme bütçesini tüketmez", async () => {
   let time = 0;
   const tool = {
     name: 'rota_timing', topic: 'tasks', evidenceKind: 'task-list', timeoutMs: 8000,
@@ -1007,12 +1007,12 @@ test('model generation between rounds does not consume the accumulated tool-exec
   time += 60000;
   assert.equal((await invoke('second')).ok, true);
   time += 60000;
-  // Tool time continues accumulating even when the model uses no tool budget.
+  // Model araç bütçesi kullanmasa da araç süresi birikmeye devam eder.
   assert.equal((await invoke('third')).ok, true);
   assert.equal((await invoke('fourth')).error.code, 'LIMIT_EXCEEDED');
 });
 
-test('a cumulative-budget rejection cannot create an undisclosed ledger entry, including the exact boundary', async () => {
+test("birikimli bütçe reddi tam sınırda da açıklanmamış defter kaydı oluşturmaz", async () => {
   const tool = {
     name: 'rota_budget', topic: 'tasks', evidenceKind: 'task-list', timeoutMs: 8000,
     parameters: { type: 'object', properties: {}, additionalProperties: false },
@@ -1037,7 +1037,7 @@ test('a cumulative-budget rejection cannot create an undisclosed ledger entry, i
   assert.deepEqual(exact.ledger.ids(), ['R1']);
 });
 
-test('hidden assignments are indistinguishable from absent ones in every filter, group and quality count', async (t) => {
+test("gizli atama bütün süzgeç grup ve kalite sayılarında yok atamayla ayırt edilemez", async (t) => {
   const stack = stackFor(t);
   const context = createToolTurnContext({ sicil: AYSE, now: NOW, loadAuthorization: async () => ({
     sicil: AYSE, isExecutive: true,
@@ -1078,7 +1078,7 @@ test('hidden assignments are indistinguishable from absent ones in every filter,
   assert.match(toolQueries.AI_TOOL_TASK_FACTS_SQL, /@assigneeMode = 'unassigned' AND visible\.IdentityBase = 1/);
 });
 
-test('a disclosable assignment keeps its state while undisclosed and unassigned tasks share one neutral bucket', async (t) => {
+test("açıklanabilir atama durumunu korur; gizli ve atanmamış görevler tarafsız kovayı paylaşır", async (t) => {
   const stack = stackFor(t);
   const grouped = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'assignee', limit: 25 });
   assert.equal(grouped.result.ok, true);
@@ -1093,7 +1093,7 @@ test('a disclosable assignment keeps its state while undisclosed and unassigned 
   assert.equal(assigned.result.data.task.assignment, 'visible');
 });
 
-test('Outlook hidden membership never affects visible counts, completeness or evidence metadata', async (t) => {
+test("gizli Outlook üyeliği görünür sayı tamlık ve kanıt üstverisini etkilemez", async (t) => {
   const stack = stackFor(t);
   const first = await callRotaTool(stack, AYSE, 'rota_outlook_status');
   for (let index = 0; index < 7; index += 1) {
@@ -1111,7 +1111,7 @@ test('Outlook hidden membership never affects visible counts, completeness or ev
   assert.equal(hidden.result.error.code, 'NOT_FOUND');
 });
 
-test('no baseline returns deterministically without staging an oversized task population', async (t) => {
+test("baz plan yokluğu büyük görev nüfusunu hazırlamadan belirlenimci döner", async (t) => {
   const tasks = Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({
     TaskId: `2b000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`,
     ProjectId: PROJECTS.FULL, Title: 'Task', Status: 'planned'
@@ -1127,7 +1127,7 @@ test('no baseline returns deterministically without staging an oversized task po
   assert.match(toolQueries.AI_TOOL_PROJECT_SEARCH_SQL, /LEN\(@text\) = 0 AND \(@projectId IS NOT NULL OR LEN\(@projectIds\) > 0\)/);
 });
 
-test('project source and activity changes expose canonical types alongside display labels', async (t) => {
+test("proje kaynağı ve etkinlik değişimi görüntü etiketinin yanında kanonik türü sunar", async (t) => {
   const stack = stackFor(t, { auditLog: [{ AuditId: 99, OccurredAt: '2026-09-29T08:00:00Z',
     ActorSicil: AYSE, ActorDisplayName: 'Ayşe Yılmaz', ActionCode: 'UPDATE', EntityType: 'TASK',
     EntityId: TASKS.OVERDUE, ProjectId: PROJECTS.FULL, CorrelationId: 'typed-changes',
@@ -1144,7 +1144,7 @@ test('project source and activity changes expose canonical types alongside displ
   ]);
 });
 
-test('AI completion rates share product rounding and empty-set semantics', async (t) => {
+test("AI tamamlanma oranı ürünün yuvarlama ve boş küme anlamını kullanır", async (t) => {
   const { selectTaskStats } = await import('../src/scheduling/metrics/index.js');
   const tasks = [TASKS.OVERDUE, TASKS.DUE_SOON, TASKS.DONE].map((id) => ({ TaskId: id, ProjectId: PROJECTS.FULL,
     Title: 'Completion', Status: id === TASKS.DONE ? 'done' : 'planned' }));
@@ -1178,7 +1178,7 @@ for (const [tool, collection, metric, operation] of [
   ['rota_recurrence_inspect', 'series', 'recurrence.openOccurrences', 'list'],
   ['rota_recurrence_inspect', 'series.next', 'recurrence.occurrenceDate', 'list']
 ]) {
-  test(`${tool}.${collection} larger than its page is one bounded read and an exhaustive ${operation} fails closed`, async (t) => {
+  test(`${tool}.${collection} sayfadan büyükse tek sınırlı okumadır; eksiksiz ${operation} erişimi kapatır`, async (t) => {
     const stack = stackFor(t);
     const template = stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
     const ids = Array.from({ length: 31 }, (_, index) => `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`);
@@ -1239,7 +1239,7 @@ for (const [tool, collection, metric, operation] of [
   });
 }
 
-test('cursor snapshots keep their authorization epoch and never recover detached pages', async (t) => {
+test("imleç görüntüsü yetki dönemini korur; ayrılmış sayfayı geri getirmez", async (t) => {
   const stack = stackFor(t);
   let full = true;
   const context = createToolTurnContext({ sicil: AYSE, now: NOW, loadAuthorization: async () => ({ sicil: AYSE,
@@ -1261,7 +1261,7 @@ test('cursor snapshots keep their authorization epoch and never recover detached
 });
 
 
-test('a provenance refusal is a server contract failure, not a size error the model could repair; a full ledger is the limit', async () => {
+test("köken reddi sunucu sözleşme hatasıdır; modelin onaracağı boyut hatası değildir", async () => {
   // Korumalı aracın işleyicisi nüfusunu bildirmez (notePopulation yok): köken eksiktir.
   const tool = {
     name: 'rota_task_search', topic: 'tasks', evidenceKind: 'task-list', timeoutMs: 8000,
@@ -1284,8 +1284,8 @@ test('a provenance refusal is a server contract failure, not a size error the mo
   assert.equal(full.full(), true);
 });
 
-test('4C frozen 16: continuation scope uses a persisted verifiable carrier', async (t) => {
-  for (const mode of ['filtered', 'payloadless', 'oversize', 'no-carrier']) await t.test(mode, async (t) => {
+test("devam kapsamı kalıcı ve doğrulanabilir taşıyıcı kullanır", async (t) => {
+  for (const mode of ['filtered', 'payloadless', 'oversize', 'no-carrier']) await t.test(`kip: ${mode}`, async (t) => {
     const stack = stackFor(t);
     const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL });
     const executor = createToolExecutor({ context: first.context, ledger: first.ledger, signal: new AbortController().signal });
@@ -1314,8 +1314,8 @@ test('4C frozen 16: continuation scope uses a persisted verifiable carrier', asy
   });
 });
 
-test('4C final convergence: adding continuation scope never discards fitting evidence data', async (t) => {
-  for (const alreadyCompact of [false, true]) await t.test(String(alreadyCompact), async (t) => {
+test("devam kapsamı eklemek sığan kanıt verisini düşürmez", async (t) => {
+  for (const alreadyCompact of [false, true]) await t.test(`davranış durumu: ${String(alreadyCompact)}`, async (t) => {
     const stack = stackFor(t);
     const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL });
     const executor = createToolExecutor({ context: first.context, ledger: first.ledger, signal: new AbortController().signal });

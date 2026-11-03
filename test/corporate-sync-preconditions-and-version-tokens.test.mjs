@@ -10,7 +10,7 @@ import { decodeCanonicalRowVersion } from '../src/server/repository/rowVersionTo
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 
-test('corporate synchronization fails before inserts when the active default calendar is missing', () => {
+test("etkin varsayılan takvim yoksa kurumsal eşitleme eklemelerden önce durur", () => {
   const source = read('src/server/repository/corporateQueries.js');
   const guardPosition = source.indexOf("THROW 51003, 'An active default calendar is required");
   const insertPosition = source.indexOf('INSERT dbo.MR_Projects');
@@ -22,7 +22,7 @@ test('corporate synchronization fails before inserts when the active default cal
   assert.match(source, /WHERE IsDefault = 1 AND IsActive = 1/);
 });
 
-test('Actual UUID normalization is lowercase and stable for prefixed and bare IDs', () => {
+test("gerçek UUID normalleştirmesi önekli ve yalın kimlikte küçük harfli ve kararlıdır", () => {
   const uppercase = '550E8400-E29B-41D4-A716-446655440000';
   const lowercase = '550e8400-e29b-41d4-a716-446655440000';
 
@@ -31,7 +31,7 @@ test('Actual UUID normalization is lowercase and stable for prefixed and bare ID
   assert.equal(toActualUuid(`  task-${uppercase}  `), lowercase);
 });
 
-test('rowversion decoding accepts only canonical eight-byte Base64 tokens', () => {
+test("satır sürümü çözümü yalnızca kanonik sekiz bayt Base64 belirtecini kabul eder", () => {
   const valid = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7]).toString('base64');
   assert.deepEqual([...decodeCanonicalRowVersion(valid)], [0, 1, 2, 3, 4, 5, 6, 7]);
 

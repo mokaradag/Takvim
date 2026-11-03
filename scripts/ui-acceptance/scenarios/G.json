@@ -13,7 +13,7 @@
     {
      "outcome": "grounded",
      "requires": [
-      "0"
+      "göreviniz yok"
      ],
      "forbids": [
       "Mehmet Kaya",

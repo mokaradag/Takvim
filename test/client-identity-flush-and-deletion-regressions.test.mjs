@@ -55,7 +55,7 @@ function seed({ includeOutgoingDependency = false } = {}) {
   };
 }
 
-test('client entity ID fallback remains UUID-v4 compatible without crypto.randomUUID', () => {
+test("istemci kimlik dönüşü crypto.randomUUID olmadan UUID-v4 uyumludur", () => {
   const cryptoProvider = {
     getRandomValues(bytes) {
       for (let index = 0; index < bytes.length; index += 1) bytes[index] = index;
@@ -69,7 +69,7 @@ test('client entity ID fallback remains UUID-v4 compatible without crypto.random
   assert.equal(toActualUuid(value), '00010203-0405-4607-8809-0a0b0c0d0e0f');
 });
 
-test('project access reconciliation propagates an authoritative reload failure', async () => {
+test("proje erişim uzlaştırması yetkili yeniden yükleme hatasını iletir", async () => {
   const failure = { ok: false, error: { code: 'LOAD_FAILED', message: 'Yüklenemedi' } };
   let reloadCalls = 0;
   const result = await reconcileProjectMutationAccess(
@@ -86,7 +86,7 @@ test('project access reconciliation propagates an authoritative reload failure',
   assert.deepEqual(full, { ok: true, reloaded: false });
 });
 
-test('stable flush persists a coalesced edit scheduled while an earlier mutation is in flight', async () => {
+test("kararlı boşaltma önceki değişim sürerken sıraya giren birleşik düzenlemeyi saklar", async () => {
   let state = createInitialState(seed());
   let releaseFirst;
   let markFirstStarted;
@@ -131,7 +131,7 @@ test('stable flush persists a coalesced edit scheduled while an earlier mutation
   persistence.dispose();
 });
 
-test('task deletion removes incoming dependencies and persists successor reconciliation atomically', () => {
+test("görev silme gelen bağımlılığı kaldırıp ardıl uzlaştırmasını atomik saklar", () => {
   const before = createInitialState(seed());
   const after = appStateReducer(before, { type: 'task/delete', id: 'task-1' });
   const successor = after.tasks.find((item) => item.id === 'task-2');
@@ -143,7 +143,7 @@ test('task deletion removes incoming dependencies and persists successor reconci
   assert.deepEqual(changes.taskUpserts[0].deps, []);
 });
 
-test('project scrubbing clears a selected task that is no longer present', () => {
+test("proje temizleme artık olmayan seçili görevi temizler", () => {
   const selected = {
     ...createInitialState(seed()),
     selectedTaskId: 'task-1'
@@ -157,7 +157,7 @@ test('project scrubbing clears a selected task that is no longer present', () =>
   assert.equal(scrubbed.selectedTaskId, null);
 });
 
-test('moving a task across projects clears both outgoing and incoming dependencies', () => {
+test("projeler arası taşıma gelen ve giden bağımlılığı temizler", () => {
   const before = createInitialState(seed({ includeOutgoingDependency: true }));
   const after = appStateReducer(before, {
     type: 'task/update',
@@ -181,7 +181,7 @@ test('moving a task across projects clears both outgoing and incoming dependenci
   assert.deepEqual(new Set(changes.taskUpserts.map((item) => item.id)), new Set(['task-1', 'task-2']));
 });
 
-test('Demo repository returns and reloads dependency reconciliation after direct deletion', async () => {
+test("demo depo doğrudan silme sonrası bağımlılık uzlaştırmasını döndürür ve yeniden yükler", async () => {
   const repository = createMockRepository(seed());
   const committed = await repository.commitChanges({
     taskUpserts: [],
@@ -198,7 +198,7 @@ test('Demo repository returns and reloads dependency reconciliation after direct
   assert.deepEqual(reloaded.tasks.find((item) => item.id === 'task-2').deps, []);
 });
 
-test('Demo repository preserves FULL project access and never persists task mutation metadata', async () => {
+test("demo depo FULL proje erişimini korur; görev değişim üstverisini saklamaz", async () => {
   const data = seed();
   const repository = createMockRepository(data);
   const committed = await repository.commitChanges({

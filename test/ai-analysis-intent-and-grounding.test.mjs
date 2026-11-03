@@ -133,7 +133,7 @@ test('desteklenmeyen grafik türü grafiksiz yanıtta türe özgü tek açıklam
 });
 
 test('yazıyla sayı ve çoğunluk iddiası görünür yanıta giremez; sunucu olguları kalır', async (t) => {
-  for (const [label, unsafe] of [['yazıyla sayı', 'There are fifty overdue tasks'], ['çoğunluk', 'Çoğu görev tamamlandı'], ['tarih', 'Mayıs ayının ilk günü her iş biter']]) await t.test(label, async (t) => {
+  for (const [label, unsafe] of [['yazıyla sayı', 'There are fifty overdue tasks'], ['çoğunluk', 'Çoğu görev tamamlandı'], ['tarih', 'Mayıs ayının ilk günü her iş biter']]) await t.test(`davranış durumu: ${label}`, async (t) => {
     const { ask } = phase4eConversation(t, { compose: () => composer((view) => ({ blocks: [{ type: 'say', text: `${unsafe}: {${view.propositions[0].id}}.` }, ...view.tables.map((table) => ({ type: 'rows', source: table.id }))] })) });
     const result = await ask({ text: 'durumumu değerlendir', plan: plan({ scope: 'self', focus: ['status'] }) });
     assert.equal(result.answer.finishReason, 'stop');
@@ -415,7 +415,7 @@ for (const composition of [true, false]) test(`tarihli kişi kırılımı tam g�
   }
   assert.match(next.answer.content, /yalnızca bir kısmını/u);
   assert.ok(charts(first.answer.content).some((chart) => chart.type === 'bar'));
-  if (composition) assert.ok(pages.every((page) => page.tables[0].complete === false));
+  if (composition) { assert.ok(pages.length > 0); assert.ok(pages.every((page) => page.tables[0].complete === false)); }
 });
 
 for (const [label, change] of [['grafik türü', { chart: 'bar' }], ['tablo isteği', { table: false }], ['yanıt dili', { language: 'en' }]]) test(`analiz onarımı geçerli plan düzeyi anlamı değiştiremez: ${label}`, async (t) => {
@@ -477,4 +477,232 @@ test('desteklenen tür çizimde kalmadığında veri yokluğu iddiası yerine ge
     assert.doesNotMatch(notes[0], /bu veri yok|gerektir|gerekir/u);
     if (chart) assert.match(notes[0], /çubuk grafik olarak gösterildi/u);
   }
+});
+
+for (const [start, end] of [
+  [{ dateFrom: '2026-10-01', dateTo: '2026-10-31' }, { dateFrom: '2026-08-01', dateTo: '2026-08-31' }],
+  [{ dateFrom: '2026-08-01', dateTo: '2026-08-31' }, { dateFrom: '2026-10-01', dateTo: '2026-10-31' }]
+]) test(`tarih değişen takip örtük yönü son pencereden yeniden hesaplar: ${start.dateTo < '2026-09-30' ? 'geçmişten geleceğe' : 'gelecekten geçmişe'}`, async (t) => {
+  const { ask } = phase4eConversation(t);
+  const first = await ask({ text: 'işlerimin genel durumunu bu dönemde değerlendir', plan: plan({ scope: 'self', focus: ['overview'], ...start }) });
+  assert.equal(first.answer.finishReason, 'stop', first.answer.content);
+  const second = await ask({ text: 'peki bu diğer dönemde', plan: plan({ scope: 'previous', ...end }) });
+  assert.equal(second.answer.finishReason, 'stop', second.answer.content);
+  const reads = populationReads(second.log);
+  assert.ok(reads.length >= 2, 'genel görünüm ve son pencerenin zorunlu yönü gerçekten okunur');
+  assert.ok(reads.every(({ params }) => params.dateFrom === end.dateFrom && params.dateTo === end.dateTo));
+  assert.match(second.inputs[0].messages.map((item) => item.content).join('\n'), /"focus":\["overview"\]/u);
+  const expanded = expandAnalysis(parseAnalysis({ scope: 'self', focus: ['overview'], ...end }), { today: '2026-09-30' });
+  assert.equal(expanded[1].population.groupBy === 'target_month', end.dateTo < '2026-09-30');
+});
+
+test('satır daraltması uyumlu yön sırasını korur ve yalnızca hepsi geçersizse genel görünüme döner', () => {
+  const person = context({ scope: 'team', focus: ['workload', 'status'], rows: [{ type: 'person', id: String(ALI_1) }] });
+  assert.deepEqual(resolveAnalysisBrief(parseAnalysis({ scope: 'row', rows: [1] }), { previous: person }).focus, ['workload', 'status']);
+  const project = context({ focus: ['projects'], rows: [{ type: 'project', id: PROJECTS.FULL }] });
+  assert.deepEqual(resolveAnalysisBrief(parseAnalysis({ scope: 'row', rows: [1] }), { previous: project }).focus, ['overview', 'overdue', 'upcoming']);
+  const explicit = context({ focus: ['upcoming'] });
+  assert.throws(() => expandAnalysis(parseAnalysis({ scope: 'previous', dateFrom: '2026-08-01', dateTo: '2026-08-31' }), { previous: explicit, today: '2026-09-30' }), (error) => error.details.includes('$.analysis.dateTo:past'));
+});
+
+test('dönemli kişi iş yükü ortak görevde yalnızca seçilen kişiyi özne yapar', async (t) => {
+  const seed = rotaToolSeed();
+  seed.taskAssignees.push({ TaskId: TASKS.DUE_SOON, Sicil: ALI_1 });
+  const { ask } = phase4eConversation(t, { seed });
+  const interval = { dateFrom: '2026-09-30', dateTo: '2026-10-31' };
+  const result = await ask({ text: `${ALI_1} sicilli kişinin iş yükünü bu dönemde değerlendir`, plan: plan({ scope: 'person', names: [String(ALI_1)], focus: ['workload'], ...interval }) });
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  const reads = populationReads(result.log);
+  assert.ok(reads.length > 0);
+  assert.ok(reads.every(({ params }) => params.personSicil === ALI_1 && params.dateFrom === interval.dateFrom && params.dateTo === interval.dateTo), JSON.stringify(reads));
+  assert.doesNotMatch(result.answer.content, /Ayşe Yılmaz|Zeynep Kaya/u);
+  const requests = expandAnalysis(parseAnalysis({ scope: 'person', names: ['Ali Veli'], focus: ['workload'], ...interval }), { today: '2026-09-30' });
+  assert.equal(requests[0].operation, 'value');
+  assert.equal(requests.some((request) => request.population.groupBy === 'assignee'), false);
+});
+
+test('uzun düzyazı paragrafı düşerken geçerli komşu paragraf ve düzen korunur', async (t) => {
+  const { PROSE_LIMITS } = await import('../src/domain/ai/groundedProse.js');
+  const { COMPOSITION_LIMITS } = await import('../src/domain/ai/groundedComposition.js');
+  const { page } = await groupedPage(t);
+  assert.equal(PROSE_LIMITS.maxSentences, COMPOSITION_LIMITS.maxSayItems);
+  const first = page.view.propositions[0];
+  const extra = Array.from({ length: PROSE_LIMITS.maxSentences + 1 }, (_, index) => ({ ...page.render.propositions.get(first.id), id: `P${40 + index}`, required: false }));
+  for (const item of extra) page.render.propositions.set(item.id, item);
+  const checked = validateComposition(page, { blocks: [{ type: 'say', text: extra.map((item) => `{${item.id}}.`).join(' ') }, { type: 'say', text: `{${first.id}}.` }, ...page.view.tables.map((table) => ({ type: 'rows', source: table.id }))] });
+  assert.equal(checked.ok, true, JSON.stringify(checked.issues));
+  assert.equal(checked.prose.rejected, 1);
+  const rendered = renderComposition(page, checked);
+  assert.ok(rendered.text.includes(page.render.propositions.get(first.id).markdown));
+  assert.ok(checked.blocks.some((block) => block.type === 'say' && block.items.includes(first.id)));
+});
+
+for (const scope of ['self', 'team']) test(`İngilizce kesinlik iyelik başlığına fazladan tanımlık eklemez: ${scope === 'self' ? 'kendi işleri' : 'ekip işleri'}`, async (t) => {
+  const { ask } = phase4eConversation(t);
+  const result = await ask({ text: 'show overdue tasks certainty', plan: { intent: 'rota', language: 'en', analysis: { scope, focus: ['overdue'], act: 'certainty' }, table: true } });
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.doesNotMatch(result.answer.content, /the your/iu);
+  assert.match(result.answer.content, /Your (?:team's )?.*table (?:covers|shows)/u);
+});
+
+test('kısa kayıt adı ilgisiz başlık önekini kayıt başlığı saymaz', async (t) => {
+  const { parts } = await groupedPage(t);
+  const own = parts.slice(0, 1).map((part) => ({ ...part, presentation: { ...part.presentation, facts: part.presentation.facts.map((item) => ({ ...item, fact: { ...item.fact, semantic: { ...item.fact.semantic, filters: { ...item.fact.semantic.filters, statuses: ['todo', 'in_progress'] }, entity: { name: 'A' } } } })) } }));
+  const page = buildComposition({ parts: own, certainty: true });
+  const certainty = page.view.propositions.find((item) => item.kind === 'certainty');
+  assert.match(certainty.text, /^Açık görevlerinizin/u);
+  const checked = validateComposition(page, { blocks: [{ type: 'say', text: `Ayrıca {${certainty.id}}.` }, ...page.view.tables.map((table) => ({ type: 'rows', source: table.id }))] });
+  assert.equal(checked.ok, true, JSON.stringify(checked.issues));
+  assert.doesNotMatch(renderComposition(page, checked).text, /Ayrıca [A-ZÇĞİÖŞÜ]/u);
+});
+
+test('görevsiz kabul profili rastlantısal sıfır yerine sunucunun boş nüfus ifadesini üretir', async (t) => {
+  const { uiSeed, P } = await import('../scripts/ui-acceptance/uiSeed.mjs');
+  const { semanticFailures } = (await import('../scripts/ui-acceptance/expectations.cjs')).default;
+  const { readFileSync } = await import('node:fs');
+  const expected = JSON.parse(readFileSync('scripts/ui-acceptance/scenarios/G.json', 'utf8')).conversations[0].expectedTurns[0];
+  const { ask } = phase4eConversation(t, { seed: uiSeed(), sicil: P.G });
+  const result = await ask({ text: 'şu anda en çok neye dikkat etmeliyim', plan: plan({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] }) });
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.deepEqual(semanticFailures(expected, { text: result.answer.content }, { outcome: 'grounded' }), [], result.answer.content);
+  assert.ok(populationReads(result.log).length > 0);
+});
+
+test('açık tablo isteğinde ilk çıktı tablosu yanlış kullanılamama notu almaz', async (t) => {
+  const { ask } = phase4eConversation(t, { compose: () => composer((view) => {
+    const { blocks } = coveringBlocks(view);
+    return { blocks: [...blocks.filter((block) => block.type === 'rows'), ...blocks.filter((block) => !['rows', 'title'].includes(block.type))] };
+  }) });
+  const request = (status) => ({ operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, ...(status ? { filters: { status: [status] } } : {}), layout: 'table' });
+  const result = await ask({ text: 'görebildiğim bütün görevleri tek tabloda göster', plan: { intent: 'rota', language: 'tr', table: true, request: request(null) } });
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.match(result.answer.content, /^\|/u);
+  assert.equal((result.answer.content.match(/\| Görev \|/gu) || []).length, 1);
+  assert.doesNotMatch(result.answer.content, /tablo güvenle hazırlanamadı|satır koleksiyonu yok/u);
+});
+
+test('dönemli ekip satırına yön belirtmeden inmek seçilen kişinin iş yükünü korur', async (t) => {
+  const seed = rotaToolSeed();
+  seed.executiveScope = [ALI_1, ZEYNEP].map((EmployeeSicil) => ({ ManagerSicil: AYSE, EmployeeSicil }));
+  seed.taskAssignees.push({ TaskId: TASKS.DUE_SOON, Sicil: ALI_1 });
+  const { ask, stack } = phase4eConversation(t, { seed });
+  const interval = { dateFrom: '2026-09-30', dateTo: '2026-10-31' };
+  const first = await ask({ text: 'ekibimin dönemli iş yükünü tabloyla göster', plan: plan({ scope: 'team', focus: ['workload'], ...interval }, { table: true }) });
+  assert.equal(first.answer.finishReason, 'stop', first.answer.content);
+  const prior = stack.db.aiMessageEvidence.map((row) => JSON.parse(row.EvidenceJson)).findLast((row) => row.analysisContext)?.analysisContext;
+  assert.ok(prior?.rows.length > 0);
+  assert.equal(prior.rows[0].type, 'person');
+  const next = await ask({ text: 'sadece ilk kişiyi göster', plan: plan({ scope: 'row', rows: [1] }) });
+  assert.equal(next.answer.finishReason, 'stop', next.answer.content);
+  const reads = populationReads(next.log);
+  assert.ok(reads.length > 0);
+  assert.ok(reads.every(({ params }) => params.personSicil === Number(prior.rows[0].id) && params.dateFrom === interval.dateFrom && params.dateTo === interval.dateTo));
+  const saved = stack.db.aiMessageEvidence.map((row) => JSON.parse(row.EvidenceJson)).findLast((row) => row.analysisContext)?.analysisContext;
+  assert.deepEqual(saved.focus, ['workload']);
+});
+
+test('tek kişi satırı kendimle karşılaştırmayı güncel yetki ve proje kesişimiyle başlatır ve sürdürür', async (t) => {
+  const seed = rotaToolSeed();
+  seed.executiveScope = [ALI_1, ZEYNEP].map((EmployeeSicil) => ({ ManagerSicil: AYSE, EmployeeSicil }));
+  seed.taskAssignees.push({ TaskId: TASKS.OVERDUE, Sicil: ALI_1 });
+  const { ask, stack } = phase4eConversation(t, { seed });
+  const first = await ask({ text: 'Radar Modernizasyonu projesindeki ekip iş yükümü göster', plan: plan({ scope: 'team', focus: ['workload'], within: 'Radar Modernizasyonu' }, { table: true }) });
+  assert.equal(first.answer.finishReason, 'stop', first.answer.content);
+  const saved = () => stack.db.aiMessageEvidence.map((row) => JSON.parse(row.EvidenceJson)).findLast((row) => row.analysisContext)?.analysisContext;
+  const prior = saved();
+  assert.ok(prior.rows.length > 0);
+  assert.equal(prior.rows[0].type, 'person');
+  const selected = Number(prior.rows[0].id);
+  for (const [text, analysis] of [['ilk kişiyi benimle karşılaştır', { scope: 'row', rows: [1], withSelf: true }], ['aynı karşılaştırmayı sürdür', { scope: 'previous' }]]) {
+    const result = await ask({ text, plan: plan(analysis) });
+    assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+    const reads = populationReads(result.log);
+    assert.ok(reads.length >= 2);
+    assert.ok(reads.some(({ params }) => params.personSicil === selected));
+    assert.ok(reads.some(({ params }) => params.assigneeMode === 'me'));
+    assert.ok(reads.every(({ params }) => params.projectId === PROJECTS.FULL && params.sicil === AYSE && params.isAdmin === 0 && (params.personSicil === selected || params.assigneeMode === 'me')), JSON.stringify(reads));
+    assert.equal(saved().withSelf, true);
+    assert.deepEqual(saved().subjects, [{ type: 'person', id: String(selected) }]);
+    assert.equal(saved().within.id, PROJECTS.FULL);
+    assert.match(result.answer.content, /Siz · Radar Modernizasyonu/u);
+  }
+});
+
+test('kendimle karşılaştırmada proje çoklu boş ve olmayan satır veri okunmadan reddedilir', () => {
+  const person = { type: 'person', id: String(ALI_1) }, other = { type: 'person', id: String(ZEYNEP) }, project = { type: 'project', id: PROJECTS.FULL };
+  const cases = [
+    { rows: [project], selected: [1] },
+    { rows: [person, other], selected: [1, 2] },
+    { rows: [null, person], selected: [1] },
+    { rows: [person], selected: [2] },
+    { scope: 'person', subjects: [person], rows: [project], selected: [1], rowPopulation: { scope: 'person', subjects: [person] } }
+  ];
+  for (const item of cases) {
+    const prior = context({ scope: item.scope || 'team', subjects: item.subjects || [], focus: ['workload'], rows: item.rows, ...(item.rowPopulation ? { rowPopulation: item.rowPopulation } : {}) });
+    assert.ok(prior);
+    const brief = parseAnalysis({ scope: 'row', rows: item.selected, withSelf: true });
+    assert.throws(() => expandAnalysis(brief, { previous: prior, today: '2026-09-30' }), (error) => error.details.some((detail) => ['$.analysis.rows:unavailable', '$.analysis.withSelf:scope'].includes(detail)));
+  }
+  assert.equal(normalizePendingAnalysis({ language: 'tr', scope: 'row', rows: [1], withSelf: true }).withSelf, true);
+  assert.equal(normalizePendingAnalysis({ language: 'tr', scope: 'row', rows: [1, 2], withSelf: true }), null);
+});
+
+for (const [label, analysis, identity] of [
+  ['kişi', { scope: 'person', names: [String(ZEYNEP)], focus: ['status'] }, ({ personSicil }) => personSicil === ZEYNEP],
+  ['proje', { scope: 'project', names: ['Radar Modernizasyonu'], focus: ['status'] }, ({ projectId }) => projectId === PROJECTS.FULL]
+]) test(`tüm zamanlar takibi dönemi kaldırır ve sunucunun bağlı öznesini korur: ${label}`, async (t) => {
+  const { ask, stack } = phase4eConversation(t);
+  const first = await ask({ text: label === 'kişi' ? `${ZEYNEP} sicilli kişinin dönem durumunu göster` : 'Radar Modernizasyonu dönem durumunu göster', plan: plan({ ...analysis, ...window }) });
+  assert.equal(first.answer.finishReason, 'stop', first.answer.content);
+  const result = await ask({ text: 'peki genel olarak tüm zamanlarda', plan: plan({ scope: 'previous', relativeWindow: 'all_time' }) });
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  const reads = populationReads(result.log);
+  assert.ok(reads.length > 0);
+  assert.ok(reads.every(({ params }) => identity(params) && params.dateFrom == null && params.dateTo == null), JSON.stringify(reads));
+  const saved = stack.db.aiMessageEvidence.map((row) => JSON.parse(row.EvidenceJson)).findLast((row) => row.analysisContext)?.analysisContext;
+  assert.equal(saved.relativeWindow, 'all_time');
+  assert.equal(saved.dateFrom, undefined);
+  assert.equal(saved.dateTo, undefined);
+  t.mock.timers.tick(86400000);
+  const next = await ask({ text: 'aynı kapsamı biraz daha aç', plan: plan({ scope: 'previous' }) });
+  assert.equal(next.answer.finishReason, 'stop', next.answer.content);
+  const nextReads = populationReads(next.log);
+  assert.ok(nextReads.length > 0);
+  assert.ok(nextReads.every(({ params }) => identity(params) && params.dateFrom == null && params.dateTo == null));
+});
+
+test('tüm zamanlar seçimi bağıl dönemi kaldırır ve yeni mutlak sınıra eski sınır eklemez', () => {
+  for (const relativeWindow of ['today', 'next_7_days']) {
+    const prior = context({ dateFrom: undefined, dateTo: undefined, relativeWindow });
+    assert.ok(prior);
+    const resolved = resolveAnalysisBrief(parseAnalysis({ scope: 'previous', relativeWindow: 'all_time' }), { previous: prior, today: '2026-10-02' });
+    assert.equal(resolved.dateFrom, undefined);
+    assert.equal(resolved.dateTo, undefined);
+    const requests = expandAnalysis(resolved, { previous: prior, today: '2026-10-02' });
+    assert.ok(requests.length > 0);
+    assert.ok(requests.every((request) => !request.filters.dateFrom && !request.filters.dateTo));
+  }
+  const all = context({ dateFrom: undefined, dateTo: undefined, relativeWindow: 'all_time' });
+  assert.ok(all);
+  const next = resolveAnalysisBrief(parseAnalysis({ scope: 'previous', dateFrom: '2026-11-01' }), { previous: all, today: '2026-10-02' });
+  assert.equal(next.dateFrom, '2026-11-01');
+  assert.equal(next.dateTo, undefined);
+  assert.equal(next.relativeWindow, undefined);
+  assert.throws(() => parseAnalysis({ scope: 'previous', relativeWindow: 'all_time', dateTo: '2026-11-01' }));
+  assert.equal(normalizePendingAnalysis({ language: 'tr', scope: 'previous', relativeWindow: 'all_time', dateTo: '2026-11-01' }), null);
+  assert.equal(normalizeAnalysisContext({ ...all, dateTo: '2026-11-01' }), null);
+});
+
+test('dönemi kaldıran proje açıklaması seçilince eski tarihler geri gelmez', async (t) => {
+  const { ask } = phase4eConversation(t);
+  const first = await ask({ text: `${ZEYNEP} sicilli kişinin dönem durumunu göster`, plan: plan({ scope: 'person', names: [String(ZEYNEP)], focus: ['status'], ...window }) });
+  assert.equal(first.answer.finishReason, 'stop');
+  const clarification = await ask({ text: 'tüm zamanları Proje ile daralt', plan: plan({ scope: 'previous', relativeWindow: 'all_time', within: 'Proje' }) });
+  assert.equal(clarification.answer.finishReason, 'clarification', clarification.answer.content);
+  const result = await ask({ text: '1' });
+  assert.equal(result.inputs.length, 0);
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  const reads = populationReads(result.log);
+  assert.ok(reads.length > 0);
+  assert.ok(reads.every(({ params }) => params.personSicil === ZEYNEP && params.projectId && params.dateFrom == null && params.dateTo == null));
 });

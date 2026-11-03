@@ -1,5 +1,5 @@
-// Compatibility barrel for older imports. New feature code imports from the
-// explicit domain, scheduling, data and presentation modules instead.
+// Eski içe aktarmaların uyumluluk dışa aktarımı; yeni özellik kodu doğrudan
+// alan çizelgeleme veri ve sunum modüllerinden içe aktarır.
 export { PRIORITIES, TASK_STATUSES } from '../domain/constants';
 export * from '../scheduling/dates';
 export * from '../scheduling/calendars';

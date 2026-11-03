@@ -17,7 +17,7 @@ import { useSharedTaskOrganizationFilter } from '../tasks/TaskOrganizationFilter
 import { useTaskOrganizationFilter } from '../tasks/useTaskOrganizationFilter.js';
 import { createEmptyOrgFilter, hasOrgSelection } from '../../domain/organization/organizationHierarchy.js';
 
-/* ── Takvim (Calendar) ─────────────────────────────────── */
+/* Takvim görünümü.*/
 export function CalendarView({
   t,
   setTweak,
@@ -41,7 +41,7 @@ export function CalendarView({
     if (controlledMonth == null) setLocalMonth(next);
     onMonthChange?.(next);
   };
-  const [dayOpen, setDayOpen] = useState2(null); // ISO date string
+  const [dayOpen, setDayOpen] = useState2(null); // ISO tarih metni.
   const [jumpOpen, setJumpOpen] = useState2(false);
   const jumpAnchorRef = useRef2(null);
 

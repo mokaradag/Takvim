@@ -109,7 +109,7 @@ function scheduleFor(state) {
   });
 }
 
-test('repository snapshot boots into a ready application state', async () => {
+test("depo görüntüsü hazır uygulama durumu olarak açılır", async () => {
   const repository = createMockRepository(makeSeed());
   const snapshot = await repository.loadSnapshot();
   const state = createInitialState(snapshot);
@@ -122,7 +122,7 @@ test('repository snapshot boots into a ready application state', async () => {
   assert.equal(state.taskBaselineSnapshots.length, 1);
 });
 
-test('application boot migrates legacy task schedule fields into the canonical model', async () => {
+test("uygulama açılışı eski çizelge alanlarını kanonik modele taşır", async () => {
   const state = await loadState(createMockRepository(makeSeed()));
   const task = selectTaskById(state.tasks, 't1');
   assert.equal(task.plannedStart, '2026-07-20');
@@ -134,7 +134,7 @@ test('application boot migrates legacy task schedule fields into the canonical m
   assert.equal('hedefTarih' in task, false);
 });
 
-test('application boot resolves legacy project, assignee, and default WBS references', async () => {
+test("uygulama açılışı eski proje sorumlu ve varsayılan WBS başvurularını çözer", async () => {
   const state = await loadState(createMockRepository(makeSeed()));
   const task = selectTaskById(state.tasks, 't1');
   assert.equal(task.projectId, 'p1');
@@ -144,14 +144,14 @@ test('application boot resolves legacy project, assignee, and default WBS refere
   assert.equal(task.wbsId, 'p1-root');
 });
 
-test('application boot normalizes dependency records without losing relationship semantics', async () => {
+test("uygulama açılışı ilişki anlamını kaybetmeden bağımlılığı normalleştirir", async () => {
   const state = await loadState(createMockRepository(makeSeed()));
   assert.deepEqual(selectTaskById(state.tasks, 't2').deps, [
     { id: 't1', predecessorId: 't1', type: 'FS', lagDays: 0 }
   ]);
 });
 
-test('normalized application state is immediately schedulable across projects', async () => {
+test("normal uygulama durumu projeler arasında hemen çizelgelenebilir", async () => {
   const state = await loadState(createMockRepository(makeSeed()));
   const schedule = scheduleFor(state);
   assert.equal(schedule.status, 'valid');
@@ -160,7 +160,7 @@ test('normalized application state is immediately schedulable across projects', 
   assert.equal(selectProjectSchedule(schedule, 'p2').status, 'valid');
 });
 
-test('portfolio schedule projects every scheduled task back to its owning project', async () => {
+test("portföy çizelgesi her planlı görevi kendi projesine izdüşürür", async () => {
   const state = await loadState(createMockRepository(makeSeed()));
   const schedule = scheduleFor(state);
   for (const task of state.tasks) {
@@ -170,14 +170,14 @@ test('portfolio schedule projects every scheduled task back to its owning projec
   }
 });
 
-test('schedule derivation does not mutate normalized application tasks', async () => {
+test("çizelge türetme normalleştirilmiş görevleri değiştirmez", async () => {
   const state = await loadState(createMockRepository(makeSeed()));
   const before = structuredClone(state.tasks);
   scheduleFor(state);
   assert.deepEqual(state.tasks, before);
 });
 
-test('domain selectors operate correctly on normalized boot state', async () => {
+test("alan seçicileri normal açılış durumunda doğru çalışır", async () => {
   const state = await loadState(createMockRepository(makeSeed()));
   assert.equal(selectProjectById(state.projects, 'p2')?.name, 'Beta');
   assert.equal(selectPersonById(state.people, 'u1')?.name, 'Ayşe Kaya');
@@ -185,7 +185,7 @@ test('domain selectors operate correctly on normalized boot state', async () => 
   assert.deepEqual(selectTasksByPerson(state.tasks, 'u2').map((task) => task.id), ['t2', 't3']);
 });
 
-test('aggregate statistics can be calculated directly from booted application state', async () => {
+test("toplu istatistik açılmış uygulama durumundan doğrudan hesaplanabilir", async () => {
   const state = await loadState(createMockRepository(makeSeed()));
   const stats = selectTaskStats(state.tasks, new Date(2026, 6, 22));
   assert.deepEqual(stats, {
@@ -199,7 +199,7 @@ test('aggregate statistics can be calculated directly from booted application st
   });
 });
 
-test('task reducer updates canonical assignee IDs from legacy display-name edits', async () => {
+test("görev indirgeyicisi eski görünüm adı düzenlemesinden kanonik sorumlu kimliğini günceller", async () => {
   const state = await loadState(createMockRepository(makeSeed()));
   const next = appStateReducer(state, {
     type: 'task/update',
@@ -211,7 +211,7 @@ test('task reducer updates canonical assignee IDs from legacy display-name edits
   assert.deepEqual(task.assigneeIds, ['u2']);
 });
 
-test('task reducer changes project ownership and assigns the destination project default WBS', async () => {
+test("görev indirgeyicisi projeyi değiştirir ve hedefin varsayılan WBS kaydını atar", async () => {
   const state = await loadState(createMockRepository(makeSeed()));
   const next = appStateReducer(state, {
     type: 'task/update',
@@ -224,7 +224,7 @@ test('task reducer changes project ownership and assigns the destination project
   assert.equal(task.wbsId, 'p2-root');
 });
 
-test('reducer-normalized task updates round-trip through repository persistence', async () => {
+test("indirgeyici normal görev güncellemesi depoda saklanıp okunur", async () => {
   const repository = createMockRepository(makeSeed());
   const state = await loadState(repository);
   const next = appStateReducer(state, {
@@ -241,7 +241,7 @@ test('reducer-normalized task updates round-trip through repository persistence'
   assert.equal(persisted.targetFinish, '2026-07-27');
 });
 
-test('persisted task date changes are reflected by a newly derived portfolio schedule', async () => {
+test("kalıcı görev tarihi değişimi yeni türetilmiş portföy çizelgesine yansır", async () => {
   const repository = createMockRepository(makeSeed());
   const state = await loadState(repository);
   const before = scheduleFor(state);
@@ -255,7 +255,7 @@ test('persisted task date changes are reflected by a newly derived portfolio sch
   assert.equal(selectTaskSchedule(after, 't3').earlyStart, '2026-07-25');
 });
 
-test('task deletion persists through reload and disappears from schedule projection', async () => {
+test("görev silme yeniden yüklemede korunur ve çizelge izdüşümünden çıkar", async () => {
   const repository = createMockRepository(makeSeed());
   await repository.commitChanges({ taskDeletes: ['t3'] });
   const state = await loadState(repository);
@@ -265,7 +265,7 @@ test('task deletion persists through reload and disappears from schedule project
   assert.equal(selectProjectSchedule(schedule, 'p2').status, 'empty');
 });
 
-test('new WBS nodes and task assignments round-trip through the repository together', async () => {
+test("yeni WBS düğümü ve görev ataması depoda birlikte saklanıp okunur", async () => {
   const repository = createMockRepository(makeSeed());
   const state = await loadState(repository);
   const task = selectTaskById(state.tasks, 't1');
@@ -279,7 +279,7 @@ test('new WBS nodes and task assignments round-trip through the repository toget
   assert.equal(selectTaskById(reloaded.tasks, 't1').wbsId, node.id);
 });
 
-test('WBS deletion and task reassignment can be persisted atomically', async () => {
+test("WBS silme ve görev ataması atomik saklanabilir", async () => {
   const repository = createMockRepository(makeSeed());
   const state = await loadState(repository);
   const task = selectTaskById(state.tasks, 't2');
@@ -292,7 +292,7 @@ test('WBS deletion and task reassignment can be persisted atomically', async () 
   assert.equal(selectTaskById(reloaded.tasks, 't2').wbsId, 'p1-root');
 });
 
-test('a cross-project dependency introduced through persistence invalidates only the affected project', async () => {
+test("kalıcılıkla eklenen projeler arası bağımlılık yalnızca etkilenen projeyi geçersiz kılar", async () => {
   const repository = createMockRepository(makeSeed());
   const state = await loadState(repository);
   const task = selectTaskById(state.tasks, 't2');
@@ -307,7 +307,7 @@ test('a cross-project dependency introduced through persistence invalidates only
   assert.equal(schedule.status, 'warning');
 });
 
-test('an unknown-project task produces a warning without blocking valid project schedules', async () => {
+test("bilinmeyen projeli görev geçerli çizelgeyi engellemeden uyarır", async () => {
   const repository = createMockRepository(makeSeed());
   await repository.commitChanges({
     taskUpserts: [{
@@ -328,7 +328,7 @@ test('an unknown-project task produces a warning without blocking valid project 
   assert.equal(selectProjectSchedule(schedule, 'p2').status, 'valid');
 });
 
-test('normalizing a task record is idempotent inside the same application context', async () => {
+test("aynı uygulama bağlamında görev normalleştirme eşgüçlüdür", async () => {
   const state = await loadState(createMockRepository(makeSeed()));
   const context = {
     projects: state.projects,
@@ -340,7 +340,7 @@ test('normalizing a task record is idempotent inside the same application contex
   assert.deepEqual(normalizeTaskRecord(task, context), task);
 });
 
-test('repository reload creates an independent application state graph', async () => {
+test("depo yeniden yüklemesi bağımsız uygulama durum ağı kurar", async () => {
   const repository = createMockRepository(makeSeed());
   const first = await loadState(repository);
   first.tasks[0].task = 'Mutated locally';
@@ -350,14 +350,14 @@ test('repository reload creates an independent application state graph', async (
   assert.equal(selectProjectById(second.projects, 'p1').name, 'Alpha');
 });
 
-test('schedule projection remains deterministic across repeated reloads of unchanged repository data', async () => {
+test("değişmeyen depo verisi yeniden yüklenince çizelge izdüşümü belirlenimci kalır", async () => {
   const repository = createMockRepository(makeSeed());
   const first = scheduleFor(await loadState(repository));
   const second = scheduleFor(await loadState(repository));
   assert.deepEqual(second, first);
 });
 
-test('failed repository mutation leaves bootable persisted application data unchanged', async () => {
+test("başarısız depo değişimi açılabilir kalıcı uygulama verisini korur", async () => {
   const repository = createMockRepository(makeSeed(), { failNextMutation: true });
   const before = await repository.loadSnapshot();
   await assert.rejects(repository.commitChanges({ taskDeletes: ['t1'] }));

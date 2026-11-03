@@ -44,14 +44,14 @@ function taskIssue(overrides = {}) {
   return findCommitScalarIssue({ taskUpserts: [canonicalTask(overrides)] });
 }
 
-test('milestone flags must be booleans instead of truthy strings', () => {
+test("kilometre taşı bayrağı doğru sayılan metin yerine mantıksal değer ister", () => {
   const issue = taskIssue({ isMilestone: 'false', plannedDurationDays: 0 });
 
   assert.equal(issue?.code, 'TASK_MILESTONE_FLAG_INVALID');
   assert.equal(issue?.path, 'taskUpserts[0].isMilestone');
 });
 
-test('conflicting milestone aliases remain distinct and are rejected', () => {
+test("çelişen kilometre taşı eşlemeleri ayrı tutulur ve reddedilir", () => {
   const task = canonicalTask({ isMilestone: true, milestone: false, plannedDurationDays: 0 });
   const issue = findCommitScalarIssue({ taskUpserts: [task] });
 
@@ -61,14 +61,14 @@ test('conflicting milestone aliases remain distinct and are rejected', () => {
   assert.equal(issue?.path, 'taskUpserts[0].milestone');
 });
 
-test('a single milestone alias is mirrored for the SQL and UI models', () => {
+test("tek kilometre taşı eşlemesi SQL ve arayüz modeline yansıtılır", () => {
   const task = canonicalizeCommitScalars({ taskUpserts: [{ milestone: true }] }).taskUpserts[0];
 
   assert.equal(task.milestone, true);
   assert.equal(task.isMilestone, true);
 });
 
-test('numeric task fields reject booleans, collections, and whitespace-only strings', () => {
+test("sayısal görev alanı mantıksal değer koleksiyon ve yalnız boşluk metnini reddeder", () => {
   for (const progress of [true, false, [], {}, '   ']) {
     const issue = taskIssue({ progress });
     assert.equal(issue?.code, 'TASK_NUMBER_INVALID');
@@ -80,13 +80,13 @@ test('numeric task fields reject booleans, collections, and whitespace-only stri
   assert.equal(taskIssue({ progress: '' }), null);
 });
 
-test('task text fields reject objects before mssql binding', () => {
+test("görev metin alanı nesneyi mssql bağından önce reddeder", () => {
   assert.equal(taskIssue({ task: { text: 'Task' } })?.code, 'TASK_TITLE_INVALID');
   assert.equal(taskIssue({ description: ['unexpected'] })?.code, 'TASK_TEXT_INVALID');
   assert.equal(taskIssue({ keyword: { value: 'unexpected' } })?.code, 'TASK_TEXT_INVALID');
 });
 
-test('date and enum scalars reject non-string and explicit blank values deterministically', () => {
+test("tarih ve enum skalerleri metin olmayan ve açık boş değeri belirlenimci reddeder", () => {
   assert.equal(taskIssue({ plannedStart: 20260724 })?.code, 'TASK_TEXT_INVALID');
   assert.equal(taskIssue({ status: null })?.code, 'TASK_STATUS_INVALID');
   assert.equal(taskIssue({ status: '   ' })?.code, 'TASK_STATUS_INVALID');
@@ -94,7 +94,7 @@ test('date and enum scalars reject non-string and explicit blank values determin
   assert.equal(taskIssue({ priority: '' })?.code, 'TASK_PRIORITY_INVALID');
 });
 
-test('dependency lag scalars reject coercible malformed values', () => {
+test("bağımlılık gecikme skalerleri dönüştürülebilir bozuk değeri reddeder", () => {
   const dependency = {
     predecessorId: '33333333-3333-4333-8333-333333333333',
     type: 'FS'
@@ -105,7 +105,7 @@ test('dependency lag scalars reject coercible malformed values', () => {
   assert.equal(taskIssue({ deps: [{ ...dependency, lagDays: '-2.5', lagValue: '1.25', lagUnit: 'week' }] }), null);
 });
 
-test('WBS sort order rejects values that Number() would silently coerce', () => {
+test("WBS sırası Number işlevinin sessizce çevireceği değerleri reddeder", () => {
   for (const sortOrder of [true, false, [], {}, '   ', '1.5']) {
     const issue = findCommitProjectWbsIssue({
       wbsUpserts: [{ code: '1', name: 'Root', sortOrder }]

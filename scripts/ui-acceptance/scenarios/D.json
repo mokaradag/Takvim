@@ -36,6 +36,14 @@
     null,
     "kpi",
     "line"
+   ],
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "table": true
+    },
+    null,
+    null
    ]
   }
  ]

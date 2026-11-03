@@ -5,7 +5,7 @@ import { createMockRepository } from '../src/data/mock/createMockRepository.js';
 import { appStateReducer, createInitialState } from '../src/state/appState.js';
 import { createStateMutationOrchestrator } from '../src/state/persistence.js';
 
-test('single Task WBS move persists through the async boundary', async () => {
+test("tek görev WBS taşıması asenkron sınırda saklanır", async () => {
   const repository = createMockRepository();
   let state = createInitialState(await repository.loadSnapshot());
   const persistence = createStateMutationOrchestrator({

@@ -57,7 +57,7 @@ function taskIssue(overrides) {
   return apiIssue({ taskUpserts: [validTask(overrides)] });
 }
 
-test('nested validation rejects malformed assignee Sicils before SQL work', () => {
+test("iç doğrulama bozuk sorumlu sicilini SQL öncesi reddeder", () => {
   for (const value of [null, {}, 0, '900002abc', 2147483648]) {
     const issue = apiIssue({ taskUpserts: [validTask({ assigneeIds: [value] })] });
     assert.equal(issue?.code, 'TASK_ASSIGNEE_INVALID');
@@ -69,20 +69,20 @@ test('nested validation rejects malformed assignee Sicils before SQL work', () =
   }), null);
 });
 
-test('task scalar validation rejects SQL-constrained enum and title values', () => {
+test("görev skaler doğrulaması SQL kısıtlı değer ve başlığı reddeder", () => {
   assert.equal(taskIssue({ task: '   ' })?.code, 'TASK_TITLE_REQUIRED');
   assert.equal(taskIssue({ status: 'todo' })?.code, 'TASK_STATUS_INVALID');
   assert.equal(taskIssue({ priority: 'urgent' })?.code, 'TASK_PRIORITY_INVALID');
 });
 
-test('task scalar validation rejects invalid calendar dates and ranges', () => {
+test("görev skaler doğrulaması geçersiz takvim tarihini ve aralığı reddeder", () => {
   assert.equal(taskIssue({ plannedStart: '2026-02-30' })?.code, 'TASK_DATE_INVALID');
   assert.equal(taskIssue({ plannedStart: '2026-07-25', plannedFinish: '2026-07-24' })?.code, 'TASK_PLANNED_RANGE_INVALID');
   assert.equal(taskIssue({ actualStart: null, actualFinish: '2026-07-24' })?.code, undefined);
   assert.equal(taskIssue({ actualStart: '2026-07-25', actualFinish: '2026-07-24' })?.code, 'TASK_ACTUAL_RANGE_INVALID');
 });
 
-test('task scalar validation rejects invalid numeric values before SQL binding', () => {
+test("görev skaler doğrulaması geçersiz sayıyı SQL bağından önce reddeder", () => {
   assert.equal(taskIssue({ progress: 101 })?.code, 'TASK_PROGRESS_INVALID');
   assert.equal(taskIssue({ plannedDurationDays: -1 })?.code, 'TASK_NUMBER_OUT_OF_RANGE');
   assert.equal(taskIssue({ plannedHours: Number.POSITIVE_INFINITY })?.code, 'TASK_NUMBER_INVALID');
@@ -90,7 +90,7 @@ test('task scalar validation rejects invalid numeric values before SQL binding',
   assert.equal(taskIssue({ milestone: true, plannedDurationDays: 1 })?.code, 'TASK_MILESTONE_DURATION_INVALID');
 });
 
-test('dependency validation rejects duplicate, self, and malformed lag values', () => {
+test("bağımlılık doğrulaması yinelenen öz ve bozuk gecikme değerini reddeder", () => {
   const dependency = { predecessorId: PREDECESSOR_ID, type: 'FS', lagDays: 0 };
   assert.equal(taskIssue({ deps: [dependency, { ...dependency, type: 'SS' }] })?.code, 'DUPLICATE_DEPENDENCY');
   assert.equal(taskIssue({ deps: [{ predecessorId: TASK_ID, type: 'FS', lagDays: 0 }] })?.code, 'SELF_DEPENDENCY');
@@ -98,7 +98,7 @@ test('dependency validation rejects duplicate, self, and malformed lag values', 
   assert.equal(taskIssue({ deps: [{ ...dependency, lagUnit: 'hour' }] })?.code, 'DEPENDENCY_LAG_UNIT_INVALID');
 });
 
-test('strict project dates and valid task scalar values remain deterministic', () => {
+test("katı proje tarihleri ve geçerli görev skalerleri belirlenimci kalır", () => {
   assert.equal(apiIssue({
     projectUpserts: [{
       id: PROJECT_ID,
@@ -116,7 +116,7 @@ test('strict project dates and valid task scalar values remain deterministic', (
   }), null);
 });
 
-test('commit route invokes scalar validation before SQL persistence', () => {
+test("kayıt yolu SQL kalıcılığından önce skaler doğrular", () => {
   const route = read('src/app/api/mergen-rota/commit/route.js');
   const scalarPosition = route.indexOf('findCommitScalarIssue(changes)');
   const commitPosition = route.indexOf('repository.commitChanges({ ...changes, notifyAssignees })');

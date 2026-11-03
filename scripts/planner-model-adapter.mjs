@@ -2,7 +2,7 @@
  * Rota AI planlayıcı değerlendirmesi için Claude CLI model komutu (Aşama 4C) — geliştirme aracı; uygulama, CI ve
  * Rota sunucusu bu dosyayı çalıştırmaz.
  *
- *   node scripts/planner-evaluation.mjs run --model-command 'node scripts/planner-claude-model.mjs' --semantic kosu.json
+ *   node scripts/planner-evaluation.mjs run --model-command 'node scripts/planner-model-adapter.mjs' --semantic kosu.json
  *
  * stdin: üretim turunun girdisi `{ messages, tools, toolChoice, maxOutputTokens? }`; stdout: `{ text, toolCalls, finishReason, usage, models,
  * thinking }`. Araçlar modele yerel araç çağırma arayüzüyle (yalnızca bu araçları sunan, hiçbir aracı yürütmeyen yerel MCP
@@ -715,7 +715,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
       durationMs: Date.now() - startedAt, rateLimit: limit ? { status: limit.status, utilization: limit.utilization ?? null } : null, staticPromptHash, toolCatalogHash, toolOrderHash: hash(JSON.stringify(offered)), tailChars: conversationText(rest).length };
     if (timedOut) return fail(cleanupFailed ? 'MODEL_COMMAND_TIMEOUT MODEL_COMMAND_CLEANUP_ERROR' : 'MODEL_COMMAND_TIMEOUT', row);
     if (cleanupFailed) return fail('MODEL_COMMAND_CLEANUP_ERROR', row);
-    // --max-turns 1 ends a native tool handoff with this documented CLI status; it is not a failed completion.
+    // --max-turns 1 yerel araç devrini belgeli CLI durumuyla bitirir; bu başarısız tamamlama değildir.
     const toolHandoff = !forced && code === 1 && result?.is_error === true && result.subtype === 'error_max_turns'
       && blocks.some(block => block.type === 'tool_use' && block.name?.startsWith(PREFIX));
     // Zorunlu turda başka araç çağrısı: üretimde kısıtlı çözüm bunu engeller. İsteğe bağlı tek yeniden deneme (ayrı sayılır).

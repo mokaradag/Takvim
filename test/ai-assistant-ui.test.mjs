@@ -44,7 +44,7 @@ const READINESS = Object.freeze({
   limits: { maxMessageChars: 8000, maxConversationMessages: 100 }
 });
 
-test('controller keeps a selected Rota source when Rota data or the mode is unavailable', async () => {
+test("denetleyici Rota verisi veya kip kullanılamadığında seçili Rota kaynağını korur", async () => {
   for (const rotaData of [
     { enabled: true, available: false, reason: 'EVIDENCE_SCHEMA_MISSING', modes: [{ id: 'standard', available: true }] },
     { enabled: true, available: true, modes: [{ id: 'standard', available: false }] }
@@ -61,7 +61,7 @@ test('controller keeps a selected Rota source when Rota data or the mode is unav
   }
 });
 
-test('welcome suggestions preserve explicit general chat and draft the suggested text', async (t) => {
+test("karşılama önerisi açık genel sohbeti korur ve önerilen metni taslağa koyar", async (t) => {
   const previousFrame = globalThis.requestAnimationFrame;
   globalThis.requestAnimationFrame = (callback) => callback();
   t.after(() => { globalThis.requestAnimationFrame = previousFrame; });
@@ -107,7 +107,7 @@ test('welcome suggestions preserve explicit general chat and draft the suggested
   }
 });
 
-test('composer disables unavailable Rota data and displays the readiness explanation', () => {
+test("yazıcı kullanılamayan Rota verisini kapatır ve hazırlık açıklamasını gösterir", () => {
   const view = mountComponent(AssistantComposer, composerProps({ dataEnabled: true, dataAvailable: false,
     dataUnavailableMessage: 'Rota verisi hazırlığı tamamlanmamış. Genel sohbet kullanılabilir.', source: 'general' }).props);
   const sourceGroup = findElement(view.output, (node) => typeof node.type === 'function' && node.props?.label === 'Yanıt kaynağı');
@@ -826,7 +826,7 @@ test('yazma alanı: Enter gönderir, Shift+Enter ve IME göndermez; boş ileti g
   assert.equal(single, null, 'tek kip varsa seçim gösterilmez');
 });
 
-test('composer locks both modes during generation and unlocks them after completion or cancellation', () => {
+test("yazıcı üretimde iki kipi kilitler; tamamlama veya iptal sonrası açar", () => {
   for (const mode of ['standard', 'deep']) {
     const changes = [];
     const view = mountComponent(AssistantComposer, composerProps({ mode, generating: true, onModeChange: (value) => changes.push(value) }).props);
@@ -2695,7 +2695,7 @@ test('kayıt yapan kipli pencerenin Escape olayı masaüstü yardımcısını ka
   }
 });
 
-test('free-text opt-in belongs to one turn: sending consumes it, and context changes reset it', async () => {
+test("serbest metin izni tek tura aittir; gönderimde tüketilir ve bağlam değişince sıfırlanır", async () => {
   const rotaData = { enabled: true, available: true, modes: [{ id: 'standard', available: true }, { id: 'deep', available: true }] };
   const { controller, api, state } = await readyController({ api: fakeApi({ loadAssistantReadinessRequest: async () => ({ ok: true, assistant: { ...READINESS, rotaData } }) }) });
   controller.setIncludeText(true);

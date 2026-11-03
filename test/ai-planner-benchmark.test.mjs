@@ -20,7 +20,7 @@ const DOCUMENT = JSON.parse(readFileSync(PLANNER_BENCHMARK_FILE, 'utf8'));
 const catalog = toolCatalogForModel();
 const unavailable = () => semanticPlanningAdvice({ query: 'x', catalog, retrieve: async () => ({ status: 'unavailable', candidates: [], failure: { reason: 'PROFILE_DISABLED' } }) });
 
-test('4C artık değerlendirme: danışmanlık kimlik ve iç hatası model çağrısından önce koşuyu geçersiz kılar', async () => {
+test("planlayıcı artık değerlendirme: danışmanlık kimlik ve iç hatası model çağrısından önce koşuyu geçersiz kılar", async () => {
   const loaded = loadPlannerBenchmark();
   for (const error of [Object.assign(new Error('gizli tanı'), { code: 'AI_UNAUTHORIZED' }), new TypeError('gizli iç tanı')]) {
     let called = false;
@@ -68,7 +68,7 @@ function finishFixtureCommand(child, code = 0) {
   }
 }
 
-test('4C donmuş bulgular: Windows temizliği yalnızca yaşayan kök PID üzerinde çalışır', async (t) => {
+test("planlayıcı donmuş bulgular: Windows temizliği yalnızca yaşayan kök PID üzerinde çalışır", async (t) => {
   const childProcess = (await import('node:child_process')).default;
   const { syncBuiltinESMExports } = await import('node:module');
   const { EventEmitter } = await import('node:events');
@@ -105,7 +105,7 @@ test('4C donmuş bulgular: Windows temizliği yalnızca yaşayan kök PID üzeri
   assert.deepEqual(killed[0], ['/pid', '1234', '/T', '/F']);
 });
 
-test('4C CLI değer alan her bayrak eksik değeri yan etki olmadan reddeder', async () => {
+test("planlayıcı CLI değer alan her bayrak eksik değeri yan etki olmadan reddeder", async () => {
   const { parseArguments } = await import('../scripts/planner-evaluation.mjs');
   for (const flag of ['--model-command', '--model', '--semantic', '--passes', '--concurrency', '--cases', '--out', '--inputs', '--run', '--reference-date', '--expected-model', '--model-timeout-ms', '--model-output-bytes']) {
     for (const suffix of [['--json'], ['--out', 'run.json'], [], [''], ['   ']]) {
@@ -117,7 +117,7 @@ test('4C CLI değer alan her bayrak eksik değeri yan etki olmadan reddeder', as
   assert.equal(flags.json, true);
 });
 
-test('4C dış model kesintisi tüm etkin süreçleri ve geçici dizini temizler', { skip: process.platform !== 'linux' }, async (t) => {
+test("planlayıcı dış model kesintisi tüm etkin süreçleri ve geçici dizini temizler", { skip: process.platform !== 'linux' }, async (t) => {
   const { mkdtempSync, readdirSync, rmSync, writeFileSync, existsSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const path = await import('node:path');
@@ -467,7 +467,7 @@ test('anlamsal koşuda belgeler ve sayısal yeniden sıralama puanları kimlikle
   }
 });
 
-test('4C izin girdisi altından bağımsızdır; puanlı ve tanısal turlar aynı planlayıcı girdisini görür', async () => {
+test("planlayıcı izin girdisi altından bağımsızdır; puanlı ve tanısal turlar aynı planlayıcı girdisini görür", async () => {
   const loaded = loadPlannerBenchmark();
   const diagnostic = loadPlannerBenchmark({ goldRequired: false });
   assert.equal(diagnostic.cases.length, 136);
@@ -483,7 +483,7 @@ test('4C izin girdisi altından bağımsızdır; puanlı ve tanısal turlar ayn�
   }
 });
 
-test('4C §12.5 metin izni sözleşmesi açık vaka girdisidir; altın izin açmaz', async () => {
+test("planlayıcı §12.5 metin izni sözleşmesi açık vaka girdisidir; altın izin açmaz", async () => {
   const documentation = readFileSync(new URL('../docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md', import.meta.url), 'utf8');
   const section = documentation.split('### 12.5 ')[1].split('### 12.6 ')[0];
   assert.match(section, /input\.allowedTextFields/);
@@ -502,7 +502,7 @@ test('4C §12.5 metin izni sözleşmesi açık vaka girdisidir; altın izin açm
   assert.deepEqual(opened.plan.requests[0].population.textFields, ['description']);
 });
 
-test('4C zorunlu kimlikler kapalıdır; eksik ya da değiştirilmiş 19 ek vaka kabul edilmez', () => {
+test("planlayıcı zorunlu kimlikler kapalıdır; eksik ya da değiştirilmiş 19 ek vaka kabul edilmez", () => {
   for (const mutate of [(d) => d.supplementary.pop(), (d) => d.supplementary[0].id = 'pl-020',
     (d) => d.supplementary[1].id = d.supplementary[0].id]) {
     const document = clone(DOCUMENT); mutate(document);
@@ -510,7 +510,7 @@ test('4C zorunlu kimlikler kapalıdır; eksik ya da değiştirilmiş 19 ek vaka 
   }
 });
 
-test('4C gold düzeltmeleri İngilizce, bildirim listesi, sorumlu VE durum ve tüm açıklama konularını sınar', async () => {
+test("planlayıcı gold düzeltmeleri İngilizce, bildirim listesi, sorumlu VE durum ve tüm açıklama konularını sınar", async () => {
   const loaded = loadPlannerBenchmark();
   const { metricPaths } = await import('../src/domain/ai/claimableEvidence.js');
   const notification = loaded.cases.find(c => c.id === 'pl-005');
@@ -541,7 +541,7 @@ test('4C gold düzeltmeleri İngilizce, bildirim listesi, sorumlu VE durum ve t�
   assert.doesNotThrow(() => loadPlannerBenchmark({ plannerDocument: document, referenceDate: '2024-02-29' }));
 });
 
-test('4C bozuk kayıt raporu TypeError yerine PLANNER_RUN_INVALID verir; anlamsız koşu nitelendiremez', async (t) => {
+test("planlayıcı bozuk kayıt raporu TypeError yerine PLANNER_RUN_INVALID verir; anlamsız koşu nitelendiremez", async (t) => {
   const { PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, scorePlannerRun } = await import('../scripts/planner-scoring.mjs');
   const loaded = loadPlannerBenchmark();
   const records = [];
@@ -590,7 +590,7 @@ test('4C bozuk kayıt raporu TypeError yerine PLANNER_RUN_INVALID verir; anlams�
   assert.match(lostReport.stdout, new RegExp(`kapı KALDI[\\s\\S]*Anlamsal danışmanlık yok \\(kapıyı düşürür\\): 1 kayıt — 1:${run.records.at(-1).case}`));
 });
 
-test('4C canlı yol aynı sızıntı ve model denetimini uygular; eksik kullanım yalnızca kayıtlı düşünmesiz rotada sıfırdır', async () => {
+test("planlayıcı canlı yol aynı sızıntı ve model denetimini uygular; eksik kullanım yalnızca kayıtlı düşünmesiz rotada sıfırdır", async () => {
   const { liveTurn, leakGuard } = await import('../scripts/planner-evaluation.mjs');
   const loaded = loadPlannerBenchmark();
   const c = loaded.cases[0];
@@ -617,7 +617,7 @@ test('4C canlı yol aynı sızıntı ve model denetimini uygular; eksik kullanı
   assert.throws(() => guard('tr-001'), /sızıntı|vaka kimliği/);
 });
 
-test('4C dış altyapı kodları model kimliği hatasına dönüşmez; çelişen komut seçimi reddedilir', async () => {
+test("planlayıcı dış altyapı kodları model kimliği hatasına dönüşmez; çelişen komut seçimi reddedilir", async () => {
   const { parseArguments } = await import('../scripts/planner-evaluation.mjs');
   assert.throws(() => parseArguments(['live', '--model-command', 'node model.cjs']), /SELECTORS_CONFLICT/);
   assert.throws(() => parseArguments(['run', '--model', 'live', '--model-command', 'node model.cjs']), /SELECTORS_CONFLICT/);
@@ -631,7 +631,7 @@ test('4C dış altyapı kodları model kimliği hatasına dönüşmez; çelişen
   }
 });
 
-test('4C anlamsal artifakt tüm 136 soruyu ve tüm belge skorlarını kapsar; belgelenmiş çıkarım hatası ilk aşamadır', async (t) => {
+test("planlayıcı anlamsal artifakt tüm 136 soruyu ve tüm belge skorlarını kapsar; belgelenmiş çıkarım hatası ilk aşamadır", async (t) => {
   const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const path = await import('node:path');
@@ -707,7 +707,7 @@ test('4C anlamsal artifakt tüm 136 soruyu ve tüm belge skorlarını kapsar; be
   }
 });
 
-test('4C son geçiş: modelin kendi hatalı anahtarı sızıntı değildir; sunucu girdisi denetlenir', async () => {
+test("planlayıcı son geçiş: modelin kendi hatalı anahtarı sızıntı değildir; sunucu girdisi denetlenir", async () => {
   const { leakGuard } = await import('../scripts/planner-evaluation.mjs');
   const loaded = loadPlannerBenchmark(); const guard = leakGuard(loaded);
   const good = answerPlan(loaded.cases[0], loaded.referenceDate);
@@ -724,7 +724,7 @@ test('4C son geçiş: modelin kendi hatalı anahtarı sızıntı değildir; sunu
   assert.throws(() => guard({ messages: [{ role: 'assistant', content: 'tr-001' }] }), e => e.code === 'PLANNER_GOLD_LEAK');
 });
 
-test('4C son geçiş: bitiş nedenleri iki yolda doğrulanır ve bilinmeyen kullanım null kalır', async () => {
+test("planlayıcı son geçiş: bitiş nedenleri iki yolda doğrulanır ve bilinmeyen kullanım null kalır", async () => {
   const { liveTurn } = await import('../scripts/planner-evaluation.mjs');
   const { PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, scorePlannerRun } = await import('../scripts/planner-scoring.mjs');
   const loaded = loadPlannerBenchmark(); const c = loaded.cases[0]; const args = answerPlan(c, loaded.referenceDate);
@@ -749,7 +749,7 @@ test('4C son geçiş: bitiş nedenleri iki yolda doğrulanır ve bilinmeyen kull
   assert.equal(recordOf(c, 1, unknown).rounds[0].input, null);
 });
 
-test('4C son geçiş: canlı boş yanıt ölçümü doğrulanır, model ıskası olarak puanlanır', async () => {
+test("planlayıcı son geçiş: canlı boş yanıt ölçümü doğrulanır, model ıskası olarak puanlanır", async () => {
   const { liveTurn } = await import('../scripts/planner-evaluation.mjs');
   const { PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, scorePlannerRun } = await import('../scripts/planner-scoring.mjs');
   const loaded = loadPlannerBenchmark(); const c = loaded.cases[0]; let calls = 0;
@@ -773,7 +773,7 @@ test('4C son geçiş: canlı boş yanıt ölçümü doğrulanır, model ıskası
   assert.throws(() => scorePlannerRun(run, loaded), /MODEL_MISMATCH/);
 });
 
-test('4C son geçiş: gerçek ağ geçidindeki boş yanıt ve güvenlik hatası ayrı kalır', async (t) => {
+test("planlayıcı son geçiş: gerçek ağ geçidindeki boş yanıt ve güvenlik hatası ayrı kalır", async (t) => {
   const { createAiStack } = await import('./helpers/aiStack.mjs');
   const { getAiGateway } = await import('../src/server/ai/aiRuntime.js');
   const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
@@ -793,7 +793,7 @@ test('4C son geçiş: gerçek ağ geçidindeki boş yanıt ve güvenlik hatası 
   assert.equal((await execute()).outcome, 'error');
 });
 
-test('4C sahte sağlayıcı: metinsel plan düşünme olaylarını gerçek ağ geçidine taşır', async (t) => {
+test("planlayıcı sahte sağlayıcı: metinsel plan düşünme olaylarını gerçek ağ geçidine taşır", async (t) => {
   const { createAiStack } = await import('./helpers/aiStack.mjs');
   const { getAiGateway } = await import('../src/server/ai/aiRuntime.js');
   const { DEFAULT_AI_MODEL_REGISTRY } = await import('../src/server/ai/defaultModelRegistry.js');
@@ -814,7 +814,7 @@ test('4C sahte sağlayıcı: metinsel plan düşünme olaylarını gerçek ağ g
   }
 });
 
-test('4C dış komut çağıranın klasörüne göre çözülür ve geçici klasörü ayrıdır', async (t) => {
+test("planlayıcı dış komut çağıranın klasörüne göre çözülür ve geçici klasörü ayrıdır", async (t) => {
   const { existsSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
   const path = await import('node:path');
   const { externalModel } = await import('../scripts/planner-evaluation.mjs');
@@ -842,7 +842,7 @@ test('4C dış komut çağıranın klasörüne göre çözülür ve geçici klas
   assert.equal(existsSync(seen.tmp), false);
 });
 
-test('4C yakınsama: ham yapılandırılmış metindeki gold sızıntısı kararlı kodla durur', async () => {
+test("ham yapılandırılmış metindeki gold sızıntısı kararlı kodla durur", async () => {
   const { leakGuard, liveTurn } = await import('../scripts/planner-evaluation.mjs');
   const loaded = loadPlannerBenchmark(); const guard = leakGuard(loaded);
   for (const payload of [{ messages: [{ content: '{"gold":1}' }] }, { messages: [{ content: JSON.stringify({ payload: '{"gold":1}' }) }] }, { tools: [{ description: '{"needs":[]}' }] }, { messages: [{ content: [{ text: '{"expect":"answer"}' }] }] }]) {
@@ -856,7 +856,7 @@ test('4C yakınsama: ham yapılandırılmış metindeki gold sızıntısı karar
   assert.equal(result.error, 'PLANNER_GOLD_LEAK');
 });
 
-test('4C yakınsama: kesik dış model yanıtı başarısız vaka sayılır, bozuk kayıt kabul edilmez', async () => {
+test("kesik dış model yanıtı başarısız vaka sayılır, bozuk kayıt kabul edilmez", async () => {
   const { PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, scorePlannerRun } = await import('../scripts/planner-scoring.mjs');
   const loaded = loadPlannerBenchmark(); const c = loaded.cases[0]; const model = scriptedModel(answerPlan(c, loaded.referenceDate));
   const complete = model.complete.bind(model); model.complete = async p => ({ ...await complete(p), finishReason: 'length' });
@@ -873,7 +873,7 @@ test('4C yakınsama: kesik dış model yanıtı başarısız vaka sayılır, boz
   }
 });
 
-test('4C yakınsama: sayfa boyu aynı nüfusu ayrı okuma yapmaz', async () => {
+test("sayfa boyu aynı nüfusu ayrı okuma yapmaz", async () => {
   const loaded = loadPlannerBenchmark(); const c = loaded.cases.find(c => c.id === 'tr-008'); const args = answerPlan(c, loaded.referenceDate);
   const { record } = await decide(loaded, c, args);
   const call = record.plan.calls.find(c => c.name === 'rota_task_search'); assert.ok(call);
@@ -881,7 +881,7 @@ test('4C yakınsama: sayfa boyu aynı nüfusu ayrı okuma yapmaz', async () => {
   assert.ok(scoreDecision(c, record, { referenceDate: loaded.referenceDate }).reasons.includes('calls:duplicate'));
 });
 
-test('4C yakınsama: varsayılan alanın açık bağı eşdeğerdir; başka anlam geçmez', async () => {
+test("varsayılan alanın açık bağı eşdeğerdir; başka anlam geçmez", async () => {
   const loaded = loadPlannerBenchmark();
   for (const [id, fields] of [['tr-064', [{ metric: 'notifications.unread', tool: 'rota_notifications', path: 'data.unreadCount' }]],
     ['tr-008', [{ metric: 'task.title', tool: 'rota_task_search', path: 'data.tasks.*.title' }, { metric: 'task.overdueDays', tool: 'rota_task_search', path: 'data.tasks.*.overdueDays' }]]]) {
@@ -895,7 +895,7 @@ test('4C yakınsama: varsayılan alanın açık bağı eşdeğerdir; başka anla
   }
 });
 
-test('4C yakınsama: birleşik proje ve IDA seçicilerinin geçerli bağları puanlanır', async () => {
+test("birleşik proje ve IDA seçicilerinin geçerli bağları puanlanır", async () => {
   const loaded = loadPlannerBenchmark(); const c = loaded.cases.find(c => c.id === 'tr-041');
   const args = answerPlan(c, loaded.referenceDate);
   args.request.bindings = [{ metric: 'wbs.subtreeOpen', entity: 1 }];
@@ -906,7 +906,7 @@ test('4C yakınsama: birleşik proje ve IDA seçicilerinin geçerli bağları pu
   assert.equal(scoreDecision(c, record, loaded).correct, false);
 });
 
-test('4C yakınsama: kendi atama talebi yalnızca gönderilen kapsamıyla puanlanır', async () => {
+test("kendi atama talebi yalnızca gönderilen kapsamıyla puanlanır", async () => {
   const loaded = loadPlannerBenchmark(); const c = loaded.cases.find(c => c.id === 'tr-061');
   for (const filters of [{}, { tab: 'all' }, { tab: 'history' }, { workflowStatus: 'APPROVED' }, { tab: 'sent' }, { tab: 'sent', workflowStatus: 'APPROVED' }]) {
     const args = answerPlan(c, loaded.referenceDate); args.request.filters = filters;
@@ -916,7 +916,7 @@ test('4C yakınsama: kendi atama talebi yalnızca gönderilen kapsamıyla puanla
   }
 });
 
-test('4C yakınsama: başarılı model komutunun arka plan çocuğu da temizlenir', { skip: process.platform !== 'linux' }, async (t) => {
+test("başarılı model komutunun arka plan çocuğu da temizlenir", { skip: process.platform !== 'linux' }, async (t) => {
   const { externalModel } = await import('../scripts/planner-evaluation.mjs');
   const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
@@ -952,7 +952,7 @@ test('4C yakınsama: başarılı model komutunun arka plan çocuğu da temizleni
   assert.equal(readFileSync(heartbeat, 'utf8'), stopped, 'arka plan çocuğu artık çalışmıyor');
 });
 
-test('4C yakınsama: canlı değerlendirici ortak Sicil kabul sınırını aşmaz', async (t) => {
+test("canlı değerlendirici ortak Sicil kabul sınırını aşmaz", async (t) => {
   const { createAiStack } = await import('./helpers/aiStack.mjs');
   const { startFakeOpenAiCompatibleServer } = await import('./helpers/fakeOpenAiCompatibleServer.mjs');
   const { parseArguments, runEvaluation } = await import('../scripts/planner-evaluation.mjs');
@@ -992,7 +992,7 @@ async function windowsHomeCheckStandIn(dir) {
   return systemRoot;
 }
 
-test('Claude model komutu: geçersiz bütçe, kayıtsız bütçe ve tükenen çağrı hakkı modele gitmeden reddedilir', async () => {
+test("model bağdaştırıcısı: geçersiz bütçe, kayıtsız bütçe ve tükenen çağrı hakkı modele gitmeden reddedilir", async () => {
   const { spawnSync } = await import('node:child_process');
   const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
@@ -1001,7 +1001,7 @@ test('Claude model komutu: geçersiz bütçe, kayıtsız bütçe ve tükenen ça
   const log = path.join(dir, 'calls.jsonl');
   const input = JSON.stringify({ messages: [{ role: 'system', content: 'x' }, { role: 'user', content: 'y' }], tools: [], toolChoice: 'auto' });
   // PATH boş: denetim geçseydi CLI bulunamazdı; beklenen kod yalnızca ön denetimden gelir.
-  const run = (env) => JSON.parse(spawnSync(process.execPath, ['scripts/planner-claude-model.mjs'], { input, encoding: 'utf8', env: { ...commandPlatformEnv(), PATH: '', ...env } }).stdout).error;
+  const run = (env) => JSON.parse(spawnSync(process.execPath, ['scripts/planner-model-adapter.mjs'], { input, encoding: 'utf8', env: { ...commandPlatformEnv(), PATH: '', ...env } }).stdout).error;
   try {
     for (const value of ['abc', '-1', '1.5', '0']) assert.equal(run({ PLANNER_CLAUDE_MAX_CALLS: value, PLANNER_CLAUDE_LOG: log }), 'PLANNER_LIMIT_INVALID', value);
     assert.equal(run({ PLANNER_CLAUDE_MAX_CALLS: '2' }), 'PLANNER_LEDGER_REQUIRED');
@@ -1021,7 +1021,7 @@ test('Claude model komutu: geçersiz bütçe, kayıtsız bütçe ve tükenen ça
   }
 });
 
-test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP yapılandırması yazılmadan ve bütçe ayrılmadan reddedilir', async (t) => {
+test("model bağdaştırıcısı: başka kullanıcının değiştirebileceği ev MCP yapılandırması yazılmadan ve bütçe ayrılmadan reddedilir", async (t) => {
   const { spawnSync } = await import('node:child_process');
   const { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
@@ -1045,7 +1045,7 @@ test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP ya
     if (reason) assert.equal(outcome.reason, reason, `${label}: işletmeciye neden bildirilir`);
   };
 
-  const adapter = 'scripts/planner-claude-model.mjs';
+  const adapter = 'scripts/planner-model-adapter.mjs';
   if (process.platform === 'win32') {
     // Gerçek ACL: başka hesaba devredilen yazma hakkı evi, yalnızca bu klasörde verilen alt öğe silme hakkı atayı
     // güvenilmez kılar. Kullanıcının kendi geçici klasörü altındaki ev kabul edilir.
@@ -1248,7 +1248,7 @@ test('Claude model komutu: başka kullanıcının değiştirebileceği ev MCP ya
 });
 
 /** Gerçek komut sınırı; yerel CLI ikizi yalnızca açık dosya bariyerinde tamamlanır. */
-test('Claude diagnostic trace persists safe metadata without private model text', async (t) => {
+test("model bağdaştırıcısı: bağdaştırıcı tanı izi özel model metni olmadan güvenli üstveri saklar", async (t) => {
   const { statSync } = await import('node:fs');
   const privateText = 'PRIVATE_MODEL_RESPONSE_109';
   const cli = await claudeCommandFixture(t, { events: [
@@ -1267,9 +1267,9 @@ test('Claude diagnostic trace persists safe metadata without private model text'
   if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600);
 });
 
-test('Claude diagnostic trace failures preserve successful stdout and billed usage without disclosing paths', async (t) => {
+test("model bağdaştırıcısı: bağdaştırıcı tanı izi hatası yol açıklamadan başarılı çıktıyı ve faturalı kullanımı korur", async (t) => {
   const { mkdirSync, symlinkSync, writeFileSync } = await import('node:fs');
-  for (const target of ['missing-parent', 'directory', ...(process.platform !== 'win32' ? ['symlink'] : [])]) await t.test(target, async (t) => {
+  for (const target of ['missing-parent', 'directory', ...(process.platform !== 'win32' ? ['symlink'] : [])]) await t.test(`hedef: ${target}`, async (t) => {
     const cli = await claudeCommandFixture(t);
     const privatePath = `${cli.dir}/PRIVATE_TRACE_DESTINATION`;
     if (target === 'directory') mkdirSync(privatePath);
@@ -1286,9 +1286,9 @@ test('Claude diagnostic trace failures preserve successful stdout and billed usa
   });
 });
 
-test('Claude qualification concurrent calls share a ledger without sharing run usage', async (t) => {
+test("model bağdaştırıcısı: eşzamanlı model nitelendirmeleri defteri paylaşır; koşu kullanımını paylaşmaz", async (t) => {
   const { appendFileSync } = await import('node:fs');
-  const { usageTotals } = await import('../scripts/phase4e-qualification.mjs');
+  const { usageTotals } = await import('../scripts/analysis-qualification.mjs');
   const cli = await claudeCommandFixture(t);
   appendFileSync(cli.log, `${JSON.stringify({ runId: 'old-run', models: ['old-model'], usage: { output_tokens: 999, output_tokens_details: { thinking_tokens: 77 } } })}\n`);
   const first = cli.start({ PLANNER_CLAUDE_RUN_ID: 'run-one' });
@@ -1310,7 +1310,7 @@ test('Claude qualification concurrent calls share a ledger without sharing run u
 
 async function claudeCommandFixture(t, { reuse = false, events = null, newline = true, descendant = false, standalone = false, payload = null, executionDelayMs = 0, commandTimeoutMs = 8000, ...limits } = {}) {
   const { spawn, spawnSync } = await import('node:child_process');
-  const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
+  const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-model-adapter.mjs');
   const { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, watch, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const path = await import('node:path');
@@ -1337,7 +1337,7 @@ async function claudeCommandFixture(t, { reuse = false, events = null, newline =
   });
   const model = path.join(dir, 'claude.cjs');
   const adapter = path.join(dir, 'model.mjs');
-  writeFileSync(adapter, `import { runAdapter } from ${JSON.stringify(pathToFileURL(path.resolve('scripts/planner-claude-model.mjs')).href)};
+  writeFileSync(adapter, `import { runAdapter } from ${JSON.stringify(pathToFileURL(path.resolve('scripts/planner-model-adapter.mjs')).href)};
     await runAdapter({ command: process.argv[3] || process.execPath, prefixArgs: process.argv[3] ? [] : [process.argv[2]] });`);
   writeFileSync(model, `
     const fs = require('node:fs');
@@ -1404,7 +1404,7 @@ async function claudeCommandFixture(t, { reuse = false, events = null, newline =
     rows: () => readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) };
 }
 
-test('Claude son yakınsama: kilit ve yürütme ayrı sürelerle sınırlıdır', async (t) => {
+test("model bağdaştırıcısı: kilit ve yürütme ayrı sürelerle sınırlıdır", async (t) => {
   const cli = await claudeCommandFixture(t, { executionDelayMs: 5500, commandTimeoutMs: 20000 });
   const first = cli.start();
   await cli.waitFor(() => cli.count() === 1);
@@ -1421,7 +1421,7 @@ test('Claude son yakınsama: kilit ve yürütme ayrı sürelerle sınırlıdır'
   assert.equal(hung.rows().find(row => row.error).usage.input_tokens, null, 'bilinmeyen harcama sıfır sayılmaz');
 });
 
-test('4C takip nitelendirmesi: üst süre kilit ve yürütme bütçelerini kapsar', async (t) => {
+test("takip nitelendirmesi: üst süre kilit ve yürütme bütçelerini kapsar", async (t) => {
   const cp = (await import('node:child_process')).default;
   const { syncBuiltinESMExports } = await import('node:module');
   const { EventEmitter } = await import('node:events');
@@ -1444,7 +1444,7 @@ test('4C takip nitelendirmesi: üst süre kilit ve yürütme bütçelerini kapsa
   const provider = realModelProvider();
   const pending = provider.streamToolCompletion({ model: 'standard', messages: [], tools: [], toolChoice: 'none' });
   const observed = pending.then(value => ({ value }), error => ({ error }));
-  // 100 seconds waiting for the ledger, then 100 seconds executing: both below 120 seconds.
+  // Defter beklemesi ve yürütmenin her biri yüz saniyedir; ikisi de sınırın altındadır.
   t.mock.timers.tick(200000);
   assert.equal(kills, 0, 'üst süre ikinci evreyi erken kesmez');
   child.stdout.emit('data', Buffer.from(JSON.stringify({ text: 'ok', toolCalls: [], finishReason: 'end_turn', models: ['claude-haiku-4-5-20251001'], thinking: 'off' })));
@@ -1459,8 +1459,8 @@ test('4C takip nitelendirmesi: üst süre kilit ve yürütme bütçelerini kapsa
   assert.equal(kills, 2, 'başarı ve zaman aşımı grupları birer kez temizlenir');
 });
 
-test('Claude yakınsama: eşzamanlı aynı önek tamamlanan çağrıya göre önbellek denetler', async (t) => {
-  for (const reuse of [false, true]) await t.test(String(reuse), async (t) => {
+test("model bağdaştırıcısı: eşzamanlı aynı önek tamamlanan çağrıya göre önbellek denetler", async (t) => {
+  for (const reuse of [false, true]) await t.test(`davranış durumu: ${String(reuse)}`, async (t) => {
     const cli = await claudeCommandFixture(t, { reuse, PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
     const first = cli.start();
     await cli.waitFor(() => cli.count() === 1);
@@ -1477,7 +1477,7 @@ test('Claude yakınsama: eşzamanlı aynı önek tamamlanan çağrıya göre ön
   });
 });
 
-test('Claude son yakınsama: bayat önbellek ısınır, yakın çağrı ve kalıcı bütçe kapıları korunur', async (t) => {
+test("model bağdaştırıcısı: bayat önbellek ısınır, yakın çağrı ve kalıcı bütçe kapıları korunur", async (t) => {
   const { writeFileSync } = await import('node:fs');
   const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_REQUIRE_CACHE: '1', PLANNER_CLAUDE_MAX_CALLS: '3' });
   const first = cli.start();
@@ -1494,7 +1494,7 @@ test('Claude son yakınsama: bayat önbellek ısınır, yakın çağrı ve kalı
   assert.equal(cli.rows().filter(row => row.reserved).length, 3);
 });
 
-test('Claude yakınsama: eşzamanlı çağrı tükenen belirteç bütçesini aşarak modele gitmez', async (t) => {
+test("model bağdaştırıcısı: eşzamanlı çağrı tükenen belirteç bütçesini aşarak modele gitmez", async (t) => {
   const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_MAX_UNCACHED: '100' });
   const first = cli.start();
   await cli.waitFor(() => cli.count() === 1);
@@ -1510,7 +1510,7 @@ test('Claude yakınsama: eşzamanlı çağrı tükenen belirteç bütçesini aş
   assert.equal(cli.locked(), false);
 });
 
-test('Claude yakınsama: öldürülen kilit sahibi kurtarılır; bilinmeyen harcama kapalı kalır', async (t) => {
+test("model bağdaştırıcısı: öldürülen kilit sahibi kurtarılır; bilinmeyen harcama kapalı kalır", async (t) => {
   const cli = await claudeCommandFixture(t);
   const first = cli.start();
   await cli.waitFor(() => cli.count() === 1);
@@ -1528,7 +1528,7 @@ test('Claude yakınsama: öldürülen kilit sahibi kurtarılır; bilinmeyen harc
   assert.equal(cli.locked(), false);
 });
 
-test('Claude yakınsama: otuz saniyeden uzun geçerli çağrı bekleyen çağrıyı düşürmez', { timeout: 60000 }, async (t) => {
+test("model bağdaştırıcısı: otuz saniyeden uzun geçerli çağrı bekleyen çağrıyı düşürmez", { timeout: 60000 }, async (t) => {
   const cli = await claudeCommandFixture(t, { reuse: true, commandTimeoutMs: 45000, PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
   const first = cli.start();
   await cli.waitFor(() => cli.count() === 1);
@@ -1543,7 +1543,7 @@ test('Claude yakınsama: otuz saniyeden uzun geçerli çağrı bekleyen çağrı
   assert.equal(cli.locked(), false);
 });
 
-test('Claude yakınsama: canlı sahip korunur, bekleyen kendi komut bütçesinde sonlanır', async (t) => {
+test("model bağdaştırıcısı: canlı sahip korunur, bekleyen kendi komut bütçesinde sonlanır", async (t) => {
   const cli = await claudeCommandFixture(t);
   const first = cli.start();
   await cli.waitFor(() => cli.count() === 1);
@@ -1556,7 +1556,7 @@ test('Claude yakınsama: canlı sahip korunur, bekleyen kendi komut bütçesinde
   assert.equal(cli.locked(), false);
 });
 
-test('Claude yakınsama: yeniden kullanılan canlı PID eski süreç örneğinin kilidini tutamaz', async (t) => {
+test("model bağdaştırıcısı: yeniden kullanılan canlı PID eski süreç örneğinin kilidini tutamaz", async (t) => {
   const { randomUUID } = await import('node:crypto');
   const { mkdirSync, writeFileSync } = await import('node:fs');
   const path = await import('node:path');
@@ -1578,11 +1578,11 @@ test('Claude yakınsama: yeniden kullanılan canlı PID eski süreç örneğinin
   assert.doesNotThrow(() => process.kill(process.pid, 0), 'yeni PID sahibi sonlandırılmaz');
 });
 
-test('Claude Windows kilit temizliği: geçici dosya paylaşımı hatası sahipliği ve çağrı bütçesini korur', async (t) => {
+test("model bağdaştırıcısı: geçici dosya paylaşımı hatası sahipliği ve çağrı bütçesini korur", async (t) => {
   const fs = await import('node:fs');
   const path = await import('node:path');
   for (const [phase, method, code] of [['stale', 'unlinkSync', 'EPERM'], ['owner', 'unlinkSync', 'EBUSY'], ['directory', 'rmdirSync', 'EPERM']]) {
-    await t.test(phase, async (t) => {
+    await t.test(`aşama: ${phase}`, async (t) => {
       const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_MAX_CALLS: '1', PLANNER_MODEL_TIMEOUT_MS: '5000' });
       const lock = `${cli.log}.lock`;
       if (phase === 'stale') {
@@ -1620,10 +1620,10 @@ test('Claude Windows kilit temizliği: geçici dosya paylaşımı hatası sahipl
   }
 });
 
-test('Claude Windows kilit temizliği: kalıcı hata süre sınırında kapalı kalır', async (t) => {
+test("model bağdaştırıcısı: kalıcı hata süre sınırında kapalı kalır", async (t) => {
   const fs = await import('node:fs');
   const path = await import('node:path');
-  for (const code of ['EPERM', 'EACCES']) await t.test(code, async (t) => {
+  for (const code of ['EPERM', 'EACCES']) await t.test(`hata kodu: ${code}`, async (t) => {
     const cli = await claudeCommandFixture(t, { PLANNER_MODEL_TIMEOUT_MS: '2000' });
     const lock = `${cli.log}.lock`;
     const owner = path.join(lock, `${process.pid}-00000000-0000-4000-8000-000000000001`);
@@ -1650,7 +1650,7 @@ test('Claude Windows kilit temizliği: kalıcı hata süre sınırında kapalı 
   });
 });
 
-test('Claude Windows kilit temizliği: yineleme sırasında gelen yeni sahip silinmez', async (t) => {
+test("model bağdaştırıcısı: yineleme sırasında gelen yeni sahip silinmez", async (t) => {
   const fs = await import('node:fs');
   const path = await import('node:path');
   const cli = await claudeCommandFixture(t, { PLANNER_MODEL_TIMEOUT_MS: '2000' });
@@ -1681,7 +1681,7 @@ test('Claude Windows kilit temizliği: yineleme sırasında gelen yeni sahip sil
   assert.doesNotThrow(() => process.kill(process.pid, 0));
 });
 
-test('4C kayıtlı dış komut: kuyruk yürütme süresini tüketmez; kapanış bekleyenleri başlatmaz', async (t) => {
+test("dış komut: planlayıcı kayıtlı dış komut: kuyruk yürütme süresini tüketmez; kapanış bekleyenleri başlatmaz", async (t) => {
   const childProcess = (await import('node:child_process')).default;
   const { syncBuiltinESMExports } = await import('node:module');
   const { EventEmitter } = await import('node:events');
@@ -1763,7 +1763,7 @@ test('4C kayıtlı dış komut: kuyruk yürütme süresini tüketmez; kapanış 
   }
 });
 
-test('4C takip nitelendirmesi: açık bitiş nedeni korunur, bilinmeyen neden sağlayıcıya geçmez', async () => {
+test("takip nitelendirmesi: açık bitiş nedeni korunur, bilinmeyen neden sağlayıcıya geçmez", async () => {
   const { realModelProvider } = await import('../scripts/planner-followup-qualification.mjs');
   for (const reason of [undefined, null, '', 'unknown', 'error_max_turns', 'stop', 'end_turn', 'eos', 'stop_sequence', 'tool_calls', 'length', 'content_filter']) {
     for (const toolCalls of [[], [{ name: 'rota_task_search', arguments: {} }]]) {
@@ -1782,7 +1782,7 @@ test('4C takip nitelendirmesi: açık bitiş nedeni korunur, bilinmeyen neden sa
   }
 });
 
-test('4C takip nitelendirmesi: gerçek metin ve araç önsözü yerel plan çağrısına çevrilmez', async () => {
+test("takip nitelendirmesi: gerçek metin ve araç önsözü yerel plan çağrısına çevrilmez", async () => {
   const { realModelProvider } = await import('../scripts/planner-followup-qualification.mjs');
   const text = JSON.stringify({ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } });
   for (const toolCalls of [[], [{ id: 'real-call', name: 'rota_task_search', arguments: '{}' }], [{ id: 'native-plan', name: 'rota_plan', arguments: '{"intent":"general","language":"tr"}' }]]) {
@@ -1796,7 +1796,7 @@ test('4C takip nitelendirmesi: gerçek metin ve araç önsözü yerel plan çağ
   }
 });
 
-test('4C takip nitelendirmesi: metin planı üretim sınırında reddedilir ve yerel çağrıyla onarılır', async (t) => {
+test("takip nitelendirmesi: metin planı üretim sınırında reddedilir ve yerel çağrıyla onarılır", async (t) => {
   const { realModelProvider } = await import('../scripts/planner-followup-qualification.mjs');
   const { createAiStack, sendTurn } = await import('./helpers/aiStack.mjs');
   const { AYSE, NOW, rotaToolSeed } = await import('./helpers/aiToolFixtures.mjs');
@@ -1816,7 +1816,7 @@ test('4C takip nitelendirmesi: metin planı üretim sınırında reddedilir ve y
   assert.equal(stack.db.aiToolLog?.length || 0, 0);
 });
 
-test('4C takip nitelendirmesi: başarısız senaryo ve devir raporlandıktan sonra komut başarısız olur', async (t) => {
+test("takip nitelendirmesi: başarısız senaryo ve devir raporlandıktan sonra komut başarısız olur", async (t) => {
   const { spawnSync } = await import('node:child_process');
   const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
@@ -1844,7 +1844,7 @@ test('4C takip nitelendirmesi: başarısız senaryo ve devir raporlandıktan son
   }
 });
 
-test('Claude son yedi: kanıtlanmış başlatma hatası harcama bırakmaz; sonraki bütçeli çağrı çalışır', async (t) => {
+test("model bağdaştırıcısı: kanıtlanmış başlatma hatası harcama bırakmaz; sonraki bütçeli çağrı çalışır", async (t) => {
   const path = await import('node:path');
   const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_MAX_UNCACHED: '101' });
   const failed = await cli.start({}, path.join(path.dirname(cli.log), 'missing-cli')).done;
@@ -1857,8 +1857,8 @@ test('Claude son yedi: kanıtlanmış başlatma hatası harcama bırakmaz; sonra
   assert.equal(cli.count(), 1);
 });
 
-test('Claude son yedi: başlamış ama sonuçsuz oturum tamamlanma ve sıfır harcama kanıtı değildir', async (t) => {
-  for (const toolCall of [false, true]) await t.test(String(toolCall), async (t) => {
+test("model bağdaştırıcısı: başlamış ama sonuçsuz oturum tamamlanma ve sıfır harcama kanıtı değildir", async (t) => {
+  for (const toolCall of [false, true]) await t.test(`davranış durumu: ${String(toolCall)}`, async (t) => {
     const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_MAX_UNCACHED: '101', events: [
       { type: 'system', subtype: 'init', tools: [] },
       ...(toolCall ? [{ type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [
@@ -1876,7 +1876,7 @@ test('Claude son yedi: başlamış ama sonuçsuz oturum tamamlanma ve sıfır ha
   });
 });
 
-test('4C son yedi: istenen denetim girdisi normalleştirilmiş yanıtla aynı çağrıya bağlanır', async (t) => {
+test("istenen denetim girdisi normalleştirilmiş yanıtla aynı çağrıya bağlanır", async (t) => {
   const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const path = await import('node:path');
@@ -1898,7 +1898,7 @@ test('4C son yedi: istenen denetim girdisi normalleştirilmiş yanıtla aynı ç
   assert.equal(saved.usage.input_tokens, 12);
 });
 
-test('4C takip nitelendirmesi son yedi: süreç sahibi zaman aşımı, iptal ve geç kapanışı tek kez sonlandırır', { timeout: 5000 }, async (t) => {
+test("takip nitelendirmesi: süreç sahibi zaman aşımı, iptal ve geç kapanışı tek kez sonlandırır", { timeout: 5000 }, async (t) => {
   const childProcess = (await import('node:child_process')).default;
   const { syncBuiltinESMExports } = await import('node:module');
   const { EventEmitter } = await import('node:events');
@@ -1972,7 +1972,7 @@ test('4C takip nitelendirmesi son yedi: süreç sahibi zaman aşımı, iptal ve 
   }
 });
 
-test('4C takip nitelendirmesi: temizleme hatası tek sonucu ve sonraki çağrıyı korur', { timeout: 5000 }, async (t) => {
+test("takip nitelendirmesi: temizleme hatası tek sonucu ve sonraki çağrıyı korur", { timeout: 5000 }, async (t) => {
   const cp = (await import('node:child_process')).default;
   const { syncBuiltinESMExports } = await import('node:module');
   const { EventEmitter } = await import('node:events');
@@ -2057,7 +2057,7 @@ test('4C takip nitelendirmesi: temizleme hatası tek sonucu ve sonraki çağrıy
   }
 });
 
-test('4C son yedi: Windows kapısı sıfır eşleşmeyi ve başarısız testi reddeder', async (t) => {
+test("Windows kapısı sıfır eşleşmeyi ve başarısız testi reddeder", async (t) => {
   const { spawnSync } = await import('node:child_process');
   const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
@@ -2067,11 +2067,11 @@ test('4C son yedi: Windows kapısı sıfır eşleşmeyi ve başarısız testi re
   const guard = guardPattern.exec(workflow)?.[1];
   assert.ok(guard, 'Windows adımı test sayısını denetleyen komutu çalıştırır');
   assert.equal(guardPattern.exec(workflow.replace(/\r?\n/g, '\r\n'))?.[1].replaceAll('\r\n', '\n'), guard.replaceAll('\r\n', '\n'), 'Windows CRLF aynı kapı komutunu çıkarır');
-  assert.ok(guard.includes('Claude|4C kayıtlı dış komut|4C takip nitelendirmesi'));
+  assert.ok(guard.includes('model bağdaştırıcısı:|dış komut:|takip nitelendirmesi:'));
   const dir = mkdtempSync(path.join(tmpdir(), 'rota-windows-gate-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const fixture = path.join(dir, 'fixture.test.mjs');
-  for (const [name, throws, status] of [[t.name, false, 0], [t.name, true, 1], ['Claude fixture', false, 0], ['unrelated', false, 1], ['Claude fixture', true, 1]]) {
+  for (const [name, throws, status] of [[t.name, false, 0], [t.name, true, 1], ['model bağdaştırıcısı: deneme', false, 0], ['ilgisiz', false, 1], ['model bağdaştırıcısı: deneme', true, 1]]) {
     writeFileSync(fixture, `import test from 'node:test';test(${JSON.stringify(name)},()=>{${throws ? "throw new Error('failure');" : ''}});`);
     const command = guard.replace('test/ai-planner-benchmark.test.mjs', fixture.replaceAll('\\', '/'));
     const run = spawnSync(process.execPath, ['--input-type=module'], { input: command, encoding: 'utf8', env: commandPlatformEnv() });
@@ -2079,7 +2079,7 @@ test('4C son yedi: Windows kapısı sıfır eşleşmeyi ve başarısız testi re
   }
 });
 
-test('4C takip nitelendirmesi son yedi: ilk liste tam görünür atama nüfusunu gerektirir', async (t) => {
+test("takip nitelendirmesi: ilk liste tam görünür atama nüfusunu gerektirir", async (t) => {
   const { spawnSync } = await import('node:child_process');
   const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
@@ -2125,7 +2125,7 @@ test('4C takip nitelendirmesi son yedi: ilk liste tam görünür atama nüfusunu
   }
 });
 
-test('Claude frozen 16: cache age comes from request start, not completion', async (t) => {
+test("model bağdaştırıcısı: önbellek yaşı tamamlama yerine istek başlangıcından hesaplanır", async (t) => {
   const { writeFileSync } = await import('node:fs');
   const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
   const first = cli.start();
@@ -2139,7 +2139,7 @@ test('Claude frozen 16: cache age comes from request start, not completion', asy
   assert.equal((await cli.start().done).error, 'PLANNER_CACHE_NOT_REUSED', 'a genuinely recent request still requires reuse');
 });
 
-test('Claude frozen 16: corrupt ledger never authorizes a model reservation', async (t) => {
+test("model bağdaştırıcısı: bozuk defter model rezervasyonunu yetkilendirmez", async (t) => {
   const { writeFileSync } = await import('node:fs');
   const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_MAX_CALLS: '1' });
   cli.release();
@@ -2151,7 +2151,7 @@ test('Claude frozen 16: corrupt ledger never authorizes a model reservation', as
   }
 });
 
-test('Claude frozen 16: final stream event is consumed at EOF', async (t) => {
+test("model bağdaştırıcısı: son akış olayı dosya sonunda tüketilir", async (t) => {
   const cli = await claudeCommandFixture(t, { newline: false });
   const pending = cli.start();
   await cli.waitFor(() => cli.count() === 1);
@@ -2159,10 +2159,10 @@ test('Claude frozen 16: final stream event is consumed at EOF', async (t) => {
   assert.equal((await pending.done).text, 'ok');
 });
 
-test('Claude frozen 16: forced calls originate only from validated final output', async (t) => {
+test("model bağdaştırıcısı: zorunlu çağrılar yalnızca doğrulanmış son çıktıdan gelir", async (t) => {
   const attempted = { intent: 'general', language: 'tr' };
   const accepted = { intent: 'abstain', language: 'tr', abstain: { reason: 'security' } };
-  for (const structured of [null, accepted]) await t.test(structured ? 'accepted' : 'rejected', async (t) => {
+  for (const structured of [null, accepted]) await t.test(`davranış durumu: ${structured ? 'accepted' : 'rejected'}`, async (t) => {
     const cli = await claudeCommandFixture(t, { payload: {
       messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }],
       tools: [{ name: 'rota_plan', parameters: { type: 'object' } }], toolChoice: { name: 'rota_plan' }
@@ -2180,10 +2180,10 @@ test('Claude frozen 16: forced calls originate only from validated final output'
   });
 });
 
-test('Claude frozen 16: refusal and pause preserve model misses', async (t) => {
+test("model bağdaştırıcısı: ret ve duraklama modelin başarısız eşleşmelerini korur", async (t) => {
   const { verifyCompletion } = await import('../scripts/planner-evaluation.mjs');
   for (const [stop, expected] of [['refusal', 'content_filter'], ['pause_turn', 'stop'], ['unexpected', 'unexpected']]) {
-    await t.test(stop, async (t) => {
+    await t.test(`bitiş durumu: ${stop}`, async (t) => {
       const cli = await claudeCommandFixture(t, { events: [
         { type: 'system', subtype: 'init', tools: [] },
         { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [] } },
@@ -2207,7 +2207,7 @@ test('Claude frozen 16: refusal and pause preserve model misses', async (t) => {
   }
 });
 
-test('4C frozen 16: adapter diagnostics remain bounded and classified', async (t) => {
+test("bağdaştırıcı tanıları sınırlı ve sınıflandırılmış kalır", async (t) => {
   const { externalModel } = await import('../scripts/planner-evaluation.mjs');
   for (const code of ['PLANNER_BUDGET_TOKENS', 'PLANNER_BUDGET_CALLS', 'PLANNER_BUDGET_UNVERIFIED', 'PLANNER_MODEL_MISMATCH', 'PLANNER_THINKING_ON', 'PLANNER_CACHE_NOT_REUSED', 'PLANNER_LEDGER_LOCKED', 'PLANNER_PROVIDER_ERROR', 'MODEL_COMMAND_TIMEOUT MODEL_COMMAND_CLEANUP_ERROR', 'PRIVATE secret']) {
     const command = '"' + process.execPath + '" -e ' + JSON.stringify('process.stdout.write(JSON.stringify({error:' + JSON.stringify(code) + '}))');
@@ -2221,7 +2221,7 @@ test('4C frozen 16: adapter diagnostics remain bounded and classified', async (t
   }
 });
 
-test('4C takip nitelendirmesi frozen 16: malformed envelopes never reach the provider', async () => {
+test("takip nitelendirmesi: takip nitelendirmesinde bozuk zarf sağlayıcıya ulaşmaz", async () => {
   const { realModelProvider } = await import('../scripts/planner-followup-qualification.mjs');
   const valid = { text: '', toolCalls: [], finishReason: 'end_turn', models: ['claude-haiku-4-5-20251001'], thinking: 'off' };
   for (const reply of [null, [], { ...valid, toolCalls: undefined }, { ...valid, toolCalls: {} }, { ...valid, toolCalls: [null] }, { ...valid, text: 3 }, { ...valid, models: 'wrong' }, { ...valid, error: {} }]) {
@@ -2232,7 +2232,7 @@ test('4C takip nitelendirmesi frozen 16: malformed envelopes never reach the pro
   }
 });
 
-test('4C frozen 16: a planned artifact requires a request-bound first read', async () => {
+test("planlanan çıktı isteğe bağlı ilk okumayı gerektirir", async () => {
   const { validatePlannerRun } = await import('../scripts/planner-scoring.mjs');
   const loaded = loadPlannerBenchmark();
   const testCase = loaded.cases.find(c => c.expect === 'answer');
@@ -2250,7 +2250,7 @@ test('4C frozen 16: a planned artifact requires a request-bound first read', asy
 });
 
 
-test('Claude frozen 16: standalone timeout owns the model descendant group', async (t) => {
+test("model bağdaştırıcısı: bağımsız zaman aşımı modelin alt süreç grubuna sahiptir", async (t) => {
   const cli = await claudeCommandFixture(t, { descendant: true, standalone: true, PLANNER_MODEL_TIMEOUT_MS: '1000' });
   const pending = cli.start();
   await cli.waitFor(() => cli.count() === 1);
@@ -2266,8 +2266,8 @@ test('Claude frozen 16: standalone timeout owns the model descendant group', asy
   assert.equal(running, false, 'timeout cannot settle while a model descendant is running');
 });
 
-test('Claude frozen 16: completed commands cannot signal a reused process group', async (t) => {
-  const { terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
+test("model bağdaştırıcısı: tamamlanmış komut yeniden kullanılan süreç grubuna sinyal veremez", async (t) => {
+  const { terminateModelCommand } = await import('../scripts/planner-model-adapter.mjs');
   const kill = process.kill;
   const signals = [];
   process.kill = (pid, signal) => { signals.push([pid, signal]); };
@@ -2279,7 +2279,7 @@ test('Claude frozen 16: completed commands cannot signal a reused process group'
 });
 
 
-test('Claude frozen 16: outer disposal drains the adapter-owned descendant group', async (t) => {
+test("model bağdaştırıcısı: dış kapatma bağdaştırıcının alt süreç grubunu boşaltır", async (t) => {
   const { externalModel } = await import('../scripts/planner-evaluation.mjs');
   const cli = await claudeCommandFixture(t, { descendant: true });
   const model = externalModel({ command: cli.command, guard: () => {}, timeoutMs: 8000 });
@@ -2300,8 +2300,8 @@ test('Claude frozen 16: outer disposal drains the adapter-owned descendant group
   await model.dispose();
 });
 
-test('Claude frozen 16: the command owner remains alive until cleanup', async (t) => {
-  const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
+test("model bağdaştırıcısı: komut sahibi temizlik bitene kadar yaşar", async (t) => {
+  const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-model-adapter.mjs');
   const { once } = await import('node:events');
   const child = spawnModelCommand(process.execPath, ['-e', 'process.stdout.write("done")'], { env: commandPlatformEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
   t.after(() => terminateModelCommand(child));
@@ -2322,7 +2322,7 @@ test('Claude frozen 16: the command owner remains alive until cleanup', async (t
   await terminateModelCommand(child);
 });
 
-test('4C frozen 16: external finalization owns cleanup before reentrant completion', async (t) => {
+test("dış sonuçlandırma yeniden girişli tamamlamadan önce temizliğe sahip olur", async (t) => {
   const cp = (await import('node:child_process')).default;
   const { syncBuiltinESMExports } = await import('node:module');
   const { EventEmitter } = await import('node:events');
@@ -2357,8 +2357,8 @@ test('4C frozen 16: external finalization owns cleanup before reentrant completi
   assert.equal(signals, 1);
 });
 
-test('Claude frozen 16 blocker: recycled group between probe and signal is never killed', async (t) => {
-  const { terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
+test("model bağdaştırıcısı: yoklama ve sinyal arasında yeniden kullanılan süreç grubu öldürülmez", async (t) => {
+  const { terminateModelCommand } = await import('../scripts/planner-model-adapter.mjs');
   const platform = Object.getOwnPropertyDescriptor(process, 'platform');
   const kill = process.kill;
   let recycled = false;
@@ -2366,7 +2366,7 @@ test('Claude frozen 16 blocker: recycled group between probe and signal is never
   Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
   process.kill = (pid, signal) => {
     if (signal === 0) {
-      // The probe observed absence; the caller is then preempted while a new group gets this ID.
+      // Yoklama yokluğu gördükten sonra çağıran duraklatılır ve yeni grup aynı kimliği alır.
       recycled = true;
       throw Object.assign(new Error('previous owner is gone'), { code: 'ESRCH' });
     }
@@ -2377,7 +2377,7 @@ test('Claude frozen 16 blocker: recycled group between probe and signal is never
   assert.deepEqual(unauthorized, [], 'cleanup must retain ownership atomically through the signal');
 });
 
-test('Claude frozen 18: standard Windows npm launcher passes arguments without a shell', async (t) => {
+test("model bağdaştırıcısı: standart Windows npm başlatıcısı argümanları kabuksuz iletir", async (t) => {
   const { mkdirSync, writeFileSync, existsSync } = await import('node:fs');
   const path = await import('node:path');
   const cli = await claudeCommandFixture(t);
@@ -2404,7 +2404,7 @@ test('Claude frozen 18: standard Windows npm launcher passes arguments without a
   assert.equal(args[args.indexOf('--model') + 1], 'claude-haiku-4-5-20251001');
 });
 
-test('4C takip nitelendirmesi frozen 18: hash advice never reaches the real model', async (t) => {
+test("takip nitelendirmesi: takip nitelendirmesinde özet danışması gerçek modele ulaşmaz", async (t) => {
   const { realModelProvider } = await import('../scripts/planner-followup-qualification.mjs');
   const { createAiStack, sendTurn } = await import('./helpers/aiStack.mjs');
   const { AYSE, NOW, rotaToolSeed } = await import('./helpers/aiToolFixtures.mjs');
@@ -2426,8 +2426,8 @@ test('4C takip nitelendirmesi frozen 18: hash advice never reaches the real mode
   assert.equal(stack.db.aiToolLog?.length || 0, 0);
 });
 
-test('4C frozen 16 sibling: a crashed group owner drains its model job before failure', async (t) => {
-  const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
+test("çöken grup sahibi hatadan önce model işini boşaltır", async (t) => {
+  const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-model-adapter.mjs');
   const { once } = await import('node:events');
   const script = 'const child=require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});child.unref();process.stdout.write(JSON.stringify([process.pid,child.pid])+"\\n");setInterval(()=>{},1000);';
   const child = spawnModelCommand(process.execPath, ['-e', script], { env: commandPlatformEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
@@ -2454,8 +2454,8 @@ test('4C frozen 16 sibling: a crashed group owner drains its model job before fa
   }
 });
 
-test('4C frozen 16 sibling: exited owners wait for cleanup without signaling a recycled group', async (t) => {
-  const { terminateModelCommand } = await import('../scripts/planner-claude-model.mjs');
+test("çıkmış sahipler yeniden kullanılan gruba sinyal vermeden temizliği bekler", async (t) => {
+  const { terminateModelCommand } = await import('../scripts/planner-model-adapter.mjs');
   const { EventEmitter } = await import('node:events');
   const { PassThrough } = await import('node:stream');
   const platform = Object.getOwnPropertyDescriptor(process, 'platform');
@@ -2474,10 +2474,10 @@ test('4C frozen 16 sibling: exited owners wait for cleanup without signaling a r
   assert.equal(settled, true);
 });
 
-test('4C frozen 16 sibling: follow-up command cleanup preserves inherited stderr', async () => {
+test("takip komutu temizliği devralınmış hata çıktısını korur", async () => {
   const { spawn } = await import('node:child_process');
   const { once } = await import('node:events');
-  const moduleUrl = new URL('../scripts/planner-claude-model.mjs', import.meta.url).href;
+  const moduleUrl = new URL('../scripts/planner-model-adapter.mjs', import.meta.url).href;
   const script = `import {spawnModelCommand,terminateModelCommand} from ${JSON.stringify(moduleUrl)};
     import {once} from 'node:events';
     for(let i=0;i<2;i++) {
@@ -2495,7 +2495,7 @@ test('4C frozen 16 sibling: follow-up command cleanup preserves inherited stderr
   assert.equal(err, 'diagnostic-0\ndiagnostic-1\n');
 });
 
-test('Claude frozen 22: Windows CLI uses the isolated profile and required system environment', async (t) => {
+test("model bağdaştırıcısı: Windows CLI yalıtılmış profili ve gerekli sistem ortamını kullanır", async (t) => {
   const { writeFileSync } = await import('node:fs');
   const path = await import('node:path');
   const cli = await claudeCommandFixture(t);
@@ -2519,7 +2519,7 @@ test('Claude frozen 22: Windows CLI uses the isolated profile and required syste
   assert.equal(seen.CLAUDE_CONFIG_DIR, undefined);
 });
 
-test('4C final convergence: symlinked evaluator and Claude entrypoints execute', async (t) => {
+test("model bağdaştırıcısı: sembolik bağlı değerlendirici ve model giriş noktaları yürütülür", async (t) => {
   const { spawnSync } = await import('node:child_process');
   const { mkdtempSync, rmSync, symlinkSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
@@ -2533,7 +2533,7 @@ test('4C final convergence: symlinked evaluator and Claude entrypoints execute',
   const input = JSON.parse(evaluator.stdout);
   assert.equal(input.queries.length, 136);
   assert.equal(new Set(input.queries.map(row => row.case)).size, 136);
-  const adapter = spawnSync(process.execPath, [path.join(link, 'scripts/planner-claude-model.mjs')], {
+  const adapter = spawnSync(process.execPath, [path.join(link, 'scripts/planner-model-adapter.mjs')], {
     input: JSON.stringify({ messages: [], tools: [], toolChoice: 'none' }), encoding: 'utf8',
     env: { ...commandPlatformEnv(), PLANNER_CLAUDE_LOG: '' }
   });
@@ -2541,7 +2541,7 @@ test('4C final convergence: symlinked evaluator and Claude entrypoints execute',
   assert.equal(JSON.parse(adapter.stdout).error, 'PLANNER_SYSTEM_MISSING');
 });
 
-test('4C takip nitelendirmesi final convergence: symlinked follow-up qualification registers tests and finalizes', async (t) => {
+test("takip nitelendirmesi: sembolik bağlı takip nitelendirmesi sınamaları kaydeder ve sonuçlandırır", async (t) => {
   const { spawnSync } = await import('node:child_process');
   const { existsSync, mkdtempSync, rmSync, symlinkSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
@@ -2566,7 +2566,7 @@ test('4C takip nitelendirmesi final convergence: symlinked follow-up qualificati
   assert.equal(existsSync(ledger), false, 'invalid local budget never launches the adapter');
 });
 
-test('Claude final convergence: packaged Windows executable uses the fixed command without a shell', async (t) => {
+test("model bağdaştırıcısı: paketli Windows yürütülebiliri sabit komutu kabuksuz kullanır", async (t) => {
   const { mkdirSync, writeFileSync, existsSync } = await import('node:fs');
   const path = await import('node:path');
   const cli = await claudeCommandFixture(t);
@@ -2597,8 +2597,8 @@ test('Claude final convergence: packaged Windows executable uses the fixed comma
   assert.equal(existsSync(marker), false);
 });
 
-test('Claude final convergence: a valid result followed by a failed exit never qualifies', async (t) => {
-  for (const exit of ['process.exitCode = 7;', "process.stdout.write('', () => process.kill(process.pid, 'SIGTERM'));"]) await t.test(exit, async (t) => {
+test("model bağdaştırıcısı: geçerli sonuçtan sonraki başarısız çıkış nitelendirmeyi geçemez", async (t) => {
+  for (const exit of ['process.exitCode = 7;', "process.stdout.write('', () => process.kill(process.pid, 'SIGTERM'));"]) await t.test(`çıkış durumu: ${exit}`, async (t) => {
     const { writeFileSync } = await import('node:fs');
     const cli = await claudeCommandFixture(t);
     writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('}, 0);', exit + ' }, 0);'));
@@ -2613,13 +2613,13 @@ test('Claude final convergence: a valid result followed by a failed exit never q
   });
 });
 
-test('Claude posted convergence: only the documented one-turn tool handoff permits exit 1', async (t) => {
+test("model bağdaştırıcısı: yalnızca belgeli tek turlu araç devri bir çıkış koduna izin verir", async (t) => {
   for (const scenario of [
     { code: 1, subtype: 'error_max_turns', tool: true, error: false },
     { code: 1, subtype: 'success', tool: true, error: true },
     { code: 1, subtype: 'error_max_turns', tool: false, error: true },
     { code: 7, subtype: 'error_max_turns', tool: true, error: true }
-  ]) await t.test(JSON.stringify(scenario), async (t) => {
+  ]) await t.test(`davranış durumu: ${JSON.stringify(scenario)}`, async (t) => {
     const { writeFileSync } = await import('node:fs');
     const call = { name: 'rota_task_search', arguments: {} };
     const cli = await claudeCommandFixture(t, { payload: {
@@ -2648,7 +2648,7 @@ test('Claude posted convergence: only the documented one-turn tool handoff permi
   });
 });
 
-test('4C final convergence: distinct later-part reads score only against their owning request', async () => {
+test("sonraki bölümün ayrı okumaları yalnızca kendi isteğine göre puanlanır", async () => {
   const { derivedReads, requestBoundCall } = await import('../src/server/ai/tools/requestPopulation.js');
   const { bindRequestEntities } = await import('../src/server/ai/tools/requestDeclaration.js');
   const loaded = loadPlannerBenchmark();
@@ -2668,10 +2668,10 @@ test('4C final convergence: distinct later-part reads score only against their o
   assert.ok(scoreDecision(testCase, wrong, { referenceDate: loaded.referenceDate }).reasons.includes('calls:unrelated'));
 });
 
-test('Claude özel ev yürüyüşü: kaybolan alt öğeler geçilir; kök, erişim ve bağlantı hataları reddedilir', async (t) => {
+test("model bağdaştırıcısı: özel ev yürüyüşü: kaybolan alt öğeler geçilir; kök, erişim ve bağlantı hataları reddedilir", async (t) => {
   const fs = await import('node:fs');
   const { syncBuiltinESMExports } = await import('node:module');
-  const { assertPrivateTree, WINDOWS_HOME_CHECK } = await import('../scripts/planner-claude-model.mjs');
+  const { assertPrivateTree, WINDOWS_HOME_CHECK } = await import('../scripts/planner-model-adapter.mjs');
   const { tmpdir } = await import('node:os');
   const path = await import('node:path');
   const { spawnSync } = await import('node:child_process');
@@ -2791,10 +2791,10 @@ test('Claude özel ev yürüyüşü: kaybolan alt öğeler geçilir; kök, eriş
   } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
 });
 
-test('Claude POSIX ACL: özel mod genişletilmiş ya da miras alınan yazma hakkını gizleyemez', async (t) => {
+test("model bağdaştırıcısı: POSIX ACL: özel mod genişletilmiş ya da miras alınan yazma hakkını gizleyemez", async (t) => {
   if (process.platform === 'win32') {
     // Windows ACL kararı ana ev testinde gerçek icacls ile doğrulanır.
-    const { WINDOWS_HOME_CHECK } = await import('../scripts/planner-claude-model.mjs');
+    const { WINDOWS_HOME_CHECK } = await import('../scripts/planner-model-adapter.mjs');
     assert.ok(WINDOWS_HOME_CHECK.includes('GetAccessRules'));
     return;
   }
@@ -2802,7 +2802,7 @@ test('Claude POSIX ACL: özel mod genişletilmiş ya da miras alınan yazma hakk
   const { spawnSync } = await import('node:child_process');
   const { tmpdir } = await import('node:os');
   const path = await import('node:path');
-  const { assertPrivateTree } = await import('../scripts/planner-claude-model.mjs');
+  const { assertPrivateTree } = await import('../scripts/planner-model-adapter.mjs');
   const dir = fs.mkdtempSync(path.join(tmpdir(), 'claude-acl-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const home = path.join(dir, 'home');
@@ -2829,7 +2829,7 @@ os.setxattr(sys.argv[1],'system.posix_acl_default',acl)`, home], { encoding: 'ut
   assert.equal(fs.lstatSync(home).mode & 0o077, 0);
   assert.throws(() => assertPrivateTree(home, process.getuid()), error => error.detail?.reason === 'HOME_ACL_UNTRUSTED');
   const log = path.join(dir, 'budget.jsonl');
-  const attempt = spawnSync(process.execPath, ['scripts/planner-claude-model.mjs'], {
+  const attempt = spawnSync(process.execPath, ['scripts/planner-model-adapter.mjs'], {
     input: JSON.stringify({ messages: [{ role: 'system', content: 'x' }], tools: [], toolChoice: 'auto' }), encoding: 'utf8',
     env: { ...commandPlatformEnv(), PATH: '', PLANNER_CLAUDE_HOME: home, PLANNER_CLAUDE_LOG: log }
   });
@@ -2866,12 +2866,12 @@ os.setxattr(sys.argv[1],'system.posix_acl_access',struct.pack('<I',2)+b''.join(s
 });
 
 
-test('Claude macOS ACL ayrıştırması xattr göstergesinin gizlediği yazmayı ve doğrulanamayan metadatayı reddeder', async (t) => {
+test("model bağdaştırıcısı: macOS ACL ayrıştırması xattr göstergesinin gizlediği yazmayı ve doğrulanamayan metadatayı reddeder", async (t) => {
   if (process.platform === 'win32') return;
   const fs = await import('node:fs');
   const childProcess = await import('node:child_process');
   const { syncBuiltinESMExports } = await import('node:module');
-  const { assertPrivateTree } = await import('../scripts/planner-claude-model.mjs');
+  const { assertPrivateTree } = await import('../scripts/planner-model-adapter.mjs');
   const { tmpdir } = await import('node:os');
   const path = await import('node:path');
   const dir = fs.mkdtempSync(path.join(tmpdir(), 'claude-acl-parser-'));
@@ -2900,7 +2900,7 @@ test('Claude macOS ACL ayrıştırması xattr göstergesinin gizlediği yazmayı
   }
 });
 
-test('Claude macOS kapısı üç hedef testin tamamını zorunlu tutar', async () => {
+test("model bağdaştırıcısı: macOS kapısı üç hedef testin tamamını zorunlu tutar", async () => {
   const { spawnSync } = await import('node:child_process');
   const workflow = readFileSync('.github/workflows/quality.yml', 'utf8');
   const extract = source => source.replaceAll('\r\n', '\n').split("node --input-type=module <<'NODE'\n")[1]?.split('\n          NODE')[0];
@@ -2908,8 +2908,8 @@ test('Claude macOS kapısı üç hedef testin tamamını zorunlu tutar', async (
   assert.ok(script, 'macOS kapısının çalıştırılabilir gövdesi bulunur');
   assert.equal(extract(workflow.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n')), script, 'Windows CRLF gövdesi aynı betiğe çözülür');
   const body = script.split('\n').map(line => line.slice(10)).join('\n');
-  const selector = '--test-name-pattern=Claude.*(özel ev|POSIX ACL|başka kullanıcının)';
-  for (const [selection, count] of [['NO_SUCH_PLANNER_TEST', 0], ['Claude.*POSIX ACL', 1], ['Claude.*(POSIX ACL|özel ev)', 2], ['Claude.*(özel ev|POSIX ACL|başka kullanıcının)', 3]]) {
+  const selector = '--test-name-pattern=model bağdaştırıcısı: (özel ev|POSIX ACL|başka kullanıcının)';
+  for (const [selection, count] of [['NO_SUCH_PLANNER_TEST', 0], ['model bağdaştırıcısı: POSIX ACL', 1], ['model bağdaştırıcısı: (POSIX ACL|özel ev)', 2], ['model bağdaştırıcısı: (özel ev|POSIX ACL|başka kullanıcının)', 3]]) {
     const result = spawnSync(process.execPath, ['--input-type=module'], {
       input: body.replace(selector, `--test-name-pattern=${selection}`), env: commandPlatformEnv(), encoding: 'utf8', timeout: 120000
     });
@@ -2920,7 +2920,7 @@ test('Claude macOS kapısı üç hedef testin tamamını zorunlu tutar', async (
 });
 
 
-test('Claude varsayılan evi POSIX UID ile ayırır; açık ayar aynen korunur', async (t) => {
+test("model bağdaştırıcısı: model bağdaştırıcısının varsayılan evi POSIX UID ile ayırır; açık ayar aynen korunur", async (t) => {
   const fs = await import('node:fs');
   const { spawnSync } = await import('node:child_process');
   const { tmpdir } = await import('node:os');
@@ -2928,7 +2928,7 @@ test('Claude varsayılan evi POSIX UID ile ayırır; açık ayar aynen korunur',
   const dir = fs.mkdtempSync(path.join(tmpdir(), 'claude-default-home-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const expected = path.join(dir, process.platform === 'win32' ? 'rota-planner-claude-home' : `rota-planner-claude-home-${process.getuid()}`);
-  const run = (home) => spawnSync(process.execPath, ['scripts/planner-claude-model.mjs'], {
+  const run = (home) => spawnSync(process.execPath, ['scripts/planner-model-adapter.mjs'], {
     input: JSON.stringify({ messages: [{ role: 'system', content: 'x' }], tools: [], toolChoice: 'auto' }), encoding: 'utf8',
     env: { ...commandPlatformEnv(), PATH: '', TMPDIR: dir, TMP: dir, TEMP: dir, PLANNER_CLAUDE_HOME: home }
   });
@@ -2948,7 +2948,7 @@ test('109 son: zorunlu yeniden denemenin üst süre bütçesi kilidi ve iki alt 
   const { EventEmitter } = await import('node:events');
   const { PassThrough } = await import('node:stream');
   const { completeModelRound } = await import('../scripts/planner-followup-qualification.mjs');
-  const { modelCommandTimeoutMs, MODEL_CLEANUP_TIMEOUT_MS } = await import('../scripts/planner-claude-model.mjs');
+  const { modelCommandTimeoutMs, MODEL_CLEANUP_TIMEOUT_MS } = await import('../scripts/planner-model-adapter.mjs');
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const priorRetry = process.env.PLANNER_CLAUDE_FORCED_RETRY;
   const priorTimeout = process.env.PLANNER_MODEL_TIMEOUT_MS;

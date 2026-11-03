@@ -116,8 +116,8 @@ async function handleCommit(request) {
       }
       allocationOperation = body.operation;
       if (allocationOperation) {
-        // Older servers ignore operation fields. Keep their changes envelope
-        // empty so a rolling deployment cannot mistake reservation for commit.
+        // Eski sunucular işlem alanlarını yok sayar; değişim zarfı boş tutulur.
+        // Böylece karma dağıtım rezervasyonu kayıt işlemi sanamaz.
         if (Object.keys(body.changes).length || !body.allocationChanges || typeof body.allocationChanges !== 'object') {
           throw new ServerPersistenceError('MUTATION_FAILED', 'Geçersiz oluşturma kimliği isteği.', { status: 400 });
         }

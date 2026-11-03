@@ -15,6 +15,9 @@ for P in $PROFILES; do
 done
 # Her senaryo turuna plan, anlamsal yardım, bir onarım ve düzen için dört çağrı ayrılır; açık bütçe korunur.
 DEFAULT_MAX_CALLS=$(node -e 'const fs=require("fs"); console.log(process.argv.slice(2).reduce((sum,profile)=>sum+JSON.parse(fs.readFileSync(`${process.argv[1]}/${profile}.json`,"utf8")).conversations.reduce((n,c)=>n+c.turns.length,0),0)*4)' "$HERE/scenarios" $PROFILES)
+# Her çağrı için 64 bin önbelleksiz belirteçlik sınırlı pay ayrılır; açık çağrı ve belirteç sınırları korunur.
+BRIDGE_MAX_CALLS=${BRIDGE_MAX_CALLS:-$DEFAULT_MAX_CALLS}
+DEFAULT_MAX_UNCACHED=$(node -e 'const calls=Number(process.argv[1]); if(!Number.isSafeInteger(calls)||calls<1||!Number.isSafeInteger(calls*64000))process.exit(1); console.log(calls*64000)' "$BRIDGE_MAX_CALLS")
 node -e "require.resolve('playwright')" >/dev/null
 if ! command -v claude >/dev/null; then printf 'Claude CLI bulunamadı; model kabulü çalıştırılamaz.\n' >&2; exit 1; fi
 BASE=${UI_ACCEPTANCE_DIR:-${TMPDIR:-/tmp}/rota-ui-acceptance}
@@ -44,8 +47,8 @@ probe_port() {
 }
 export BRIDGE_PORT=${BRIDGE_PORT:-18731}
 probe_port "$BRIDGE_PORT"
-BRIDGE_LEDGER="$UI_ACCEPTANCE_DIR/ledger.jsonl" BRIDGE_CALLS="$UI_ACCEPTANCE_DIR/calls.jsonl" BRIDGE_MAX_CALLS=${BRIDGE_MAX_CALLS:-$DEFAULT_MAX_CALLS} \
-  node "$HERE/haikuBridge.mjs" > "$UI_ACCEPTANCE_DIR/bridge.log" 2>&1 &
+BRIDGE_LEDGER="$UI_ACCEPTANCE_DIR/ledger.jsonl" BRIDGE_CALLS="$UI_ACCEPTANCE_DIR/calls.jsonl" BRIDGE_MAX_CALLS=$BRIDGE_MAX_CALLS BRIDGE_MAX_UNCACHED=${BRIDGE_MAX_UNCACHED:-$DEFAULT_MAX_UNCACHED} \
+  node "$HERE/modelBridge.mjs" > "$UI_ACCEPTANCE_DIR/bridge.log" 2>&1 &
 BRIDGE=$!
 ready=0
 for _ in $(seq 1 30); do

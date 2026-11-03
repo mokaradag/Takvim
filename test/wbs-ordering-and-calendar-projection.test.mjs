@@ -11,7 +11,7 @@ import { createActualStack, DEFAULT_CALENDAR_ID } from './helpers/actualStack.mj
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 
-test('WBS upserts are planned parent-first without disturbing unrelated stable order', () => {
+test("WBS güncellemeleri ilgisiz kararlı sırayı bozmadan üst önce planlanır", () => {
   const grandchild = { id: 'grandchild', parentId: 'child' };
   const child = { id: 'child', parentId: 'parent' };
   const parent = { id: 'parent', parentId: 'existing-root' };
@@ -21,7 +21,7 @@ test('WBS upserts are planned parent-first without disturbing unrelated stable o
   assert.deepEqual(ordered.map((node) => node.id), ['parent', 'child', 'grandchild', 'unrelated']);
 });
 
-test('WBS planning preserves input when no in-batch parent dependency exists', () => {
+test("WBS planlama topluluk içi üst bağımlılığı yoksa girdiyi korur", () => {
   const input = [
     { id: 'second', parentId: 'existing-root' },
     { id: 'first', parentId: 'existing-root' }
@@ -29,7 +29,7 @@ test('WBS planning preserves input when no in-batch parent dependency exists', (
   assert.deepEqual(orderWbsUpsertsByParents(input), input);
 });
 
-test('default calendar projection marks and places the SQL default first', () => {
+test("varsayılan takvim izdüşümü SQL varsayılanını işaretleyip öne koyar", () => {
   const snapshot = {
     calendars: [
       { id: 'calendar-a', name: 'A Calendar' },
@@ -46,7 +46,7 @@ test('default calendar projection marks and places the SQL default first', () =>
   assert.deepEqual(projected.tasks, []);
 });
 
-test('commit route canonicalizes IDs and scalars before WBS ordering and hardened SQL planning', () => {
+test("kayıt yolu WBS sırası ve SQL planlamadan önce kimlik ve skaleri kanonikleştirir", () => {
   const route = read('src/app/api/mergen-rota/commit/route.js');
   const wrapper = read('src/server/repository/orderedSqlAppRepository.js');
 
@@ -65,7 +65,7 @@ test('commit route canonicalizes IDs and scalars before WBS ordering and hardene
   assert.ok(commitPosition > orderingPosition, 'hardened persistence must receive ordered changes');
 });
 
-test('Actual snapshots resolve the active SQL default calendar in the same transaction', async () => {
+test("gerçek görüntü etkin SQL varsayılan takvimini aynı işlemde çözer", async () => {
   const source = read('src/server/repository/projectedSqlAppRepository.js');
 
   assert.match(source, /WHERE IsDefault = 1 AND IsActive = 1/);

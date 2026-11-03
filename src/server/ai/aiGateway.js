@@ -695,8 +695,8 @@ export function createAiGateway({
    */
   async function connectStream({ deadline, watch, context, source, healthFailure, invoke, beforeDispatch = null, resend = true }) {
     for (let attempt = 1; ; attempt += 1) {
-      // Local presence/authorization checks are not provider attempts. Recheck
-      // before each transport retry, under the existing overall deadline.
+      // Yerel varlık ve yetki denetimi sağlayıcı girişimi değildir. Her taşıma denemesinden
+      // önce mevcut genel son süre içinde yeniden denetlenir.
       if (beforeDispatch) {
         watch.pause();
         await raceWithAbort(() => beforeDispatch(deadline.signal), deadline.signal);

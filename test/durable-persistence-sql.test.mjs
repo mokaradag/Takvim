@@ -27,12 +27,12 @@ const sourceTables = [
   'HR09_projeSorumlu'
 ];
 
-test('create and rollback scripts have exact MR table parity', () => {
+test("oluşturma ve geri alma betiğinin MR tablo kümeleri tam eşittir", () => {
   assert.deepEqual([...createdTables].sort(), [...droppedTables].sort());
   for (const table of requiredTables) assert.ok(createdTables.has(table), `missing ${table}`);
 });
 
-test('create and rollback scripts have exact MR view parity', () => {
+test("oluşturma ve geri alma betiğinin MR görünüm kümeleri tam eşittir", () => {
   assert.deepEqual([...createdViews].sort(), [...droppedViews].sort());
   assert.deepEqual([...createdViews].sort(), [
     'MR_V_CORPORATEPROJECTACCESS',
@@ -42,12 +42,12 @@ test('create and rollback scripts have exact MR view parity', () => {
   ]);
 });
 
-test('all application-owned SQL tables start with MR_', () => {
+test("uygulamanın bütün SQL tabloları MR_ ile başlar", () => {
   const allCreated = captures(createSql, /CREATE\s+TABLE\s+dbo\.([A-Za-z0-9_]+)/gi);
   assert.ok([...allCreated].every((name) => name.startsWith('MR_')));
 });
 
-test('corporate source tables are never mutated', () => {
+test("kurumsal kaynak tablosu değiştirilmez", () => {
   for (const source of sourceTables) {
     for (const verb of ['INSERT\\s+(?:INTO\\s+)?', 'UPDATE\\s+', 'DELETE\\s+(?:FROM\\s+)?', 'DROP\\s+TABLE\\s+', 'ALTER\\s+TABLE\\s+']) {
       const expression = new RegExp(`${verb}(?:dbo\\.)?${source}`, 'i');
@@ -56,7 +56,7 @@ test('corporate source tables are never mutated', () => {
   }
 });
 
-test('corporate Project view uses only approved A01 columns and GROUP BY', () => {
+test("kurumsal proje görünümü yalnız onaylı A01 sütunlarını ve GROUP BY kullanır", () => {
   const view = createSql.match(/CREATE VIEW dbo\.MR_V_CorporateProjects AS([\s\S]*?)GROUP BY([\s\S]*?);'\);/i)?.[0] || '';
   assert.match(view, /Tur/);
   assert.match(view, /Tur_Aciklama/);
@@ -75,7 +75,7 @@ test('corporate Project view uses only approved A01 columns and GROUP BY', () =>
   for (const forbidden of ['Masraf', 'Butce', 'Tarih', 'Aciklama2']) assert.equal(identifiers.includes(forbidden), false);
 });
 
-test('PPTS access uses exact STRING_SPLIT tokenization and never LIKE', () => {
+test("PPTS erişimi tam STRING_SPLIT ayrıştırması kullanır; LIKE kullanmaz", () => {
   const view = createSql.match(/CREATE VIEW dbo\.MR_V_CorporateProjectAccess AS([\s\S]*?);'\);/i)?.[0] || '';
   assert.match(view, /STRING_SPLIT\(pptsSicil,\s*'',''\)/i);
   assert.match(view, /''PPTS''/);
@@ -84,7 +84,7 @@ test('PPTS access uses exact STRING_SPLIT tokenization and never LIKE', () => {
   assert.doesNotMatch(view, /LIKE\s+['"]%/i);
 });
 
-test('admin bootstrap and UTC/concurrency requirements are present', () => {
+test("yönetici başlangıcı UTC ve eşzamanlılık gereklilikleri vardır", () => {
   // Gerçek Sicil değerleri kişisel veridir: betik parametreli tohumlama yapar
   // ve depoya hiçbir gerçek sicil işlenmez.
   assert.match(createSql, /DECLARE @SystemAdminSicils nvarchar\(400\) = N'';/);
@@ -95,7 +95,7 @@ test('admin bootstrap and UTC/concurrency requirements are present', () => {
   assert.match(createSql, /NEWSEQUENTIALID\(\)/i);
 });
 
-test('rollback is rerunnable and never names source tables as drop targets', () => {
+test("geri alma yeniden çalıştırılabilir ve kaynak tabloyu silme hedefi yapmaz", () => {
   assert.match(rollbackSql, /OBJECT_ID\(/i);
   for (const source of sourceTables) assert.doesNotMatch(rollbackSql, new RegExp(`DROP\\s+(?:TABLE|VIEW).*${source}`, 'i'));
 });

@@ -13,13 +13,13 @@ function partial(projectId, taskId, reason = ACCESS_REASONS.ASSIGNEE) {
   return { projectId, taskId, reason };
 }
 
-test('SYSTEM_ADMIN bypasses project write checks and may create manual Projects', () => {
+test("SYSTEM_ADMIN proje yazma denetimini aşar ve elle proje oluşturabilir", () => {
   const effective = deriveEffectiveAccess({ isSystemAdmin: true, fullProjectIds: ['p1', 'p2'] });
   assert.doesNotThrow(() => assertProjectWriteAccess(effective, 'unlisted'));
   assert.doesNotThrow(() => assertCanCreateManualProject({ isSystemAdmin: true, isExecutive: false }));
 });
 
-test('FULL project access wins over assignee and executive partial visibility', () => {
+test("FULL proje erişimi sorumlu ve yönetici kısmi görünürlüğünden önce gelir", () => {
   const effective = deriveEffectiveAccess({
     isSystemAdmin: false,
     fullProjectIds: ['p1'],
@@ -29,7 +29,7 @@ test('FULL project access wins over assignee and executive partial visibility', 
   assert.doesNotThrow(() => assertProjectWriteAccess(effective, 'p1'));
 });
 
-test('ordinary assignee and executive subordinate visibility remain read-only', () => {
+test("olağan sorumlu ve yönetici ast görünürlüğü salt okunur kalır", () => {
   for (const reason of [ACCESS_REASONS.ASSIGNEE, ACCESS_REASONS.EXECUTIVE_SCOPE]) {
     const effective = deriveEffectiveAccess({
       isSystemAdmin: false,
@@ -40,7 +40,7 @@ test('ordinary assignee and executive subordinate visibility remain read-only', 
   }
 });
 
-test('unknown users are denied by default', () => {
+test("bilinmeyen kullanıcı varsayılan reddedilir", () => {
   const effective = deriveEffectiveAccess({ isSystemAdmin: false });
   assert.equal(effective.access.size, 0);
   assert.throws(() => assertProjectWriteAccess(effective, 'p1'), (error) => error.code === 'FORBIDDEN');
@@ -50,7 +50,7 @@ test('unknown users are denied by default', () => {
   );
 });
 
-test('directors, managers and team leaders may create manual Projects without gaining blanket write rights', () => {
+test("direktör yönetici ve ekip lideri genel yazma hakkı kazanmadan elle proje oluşturabilir", () => {
   assert.doesNotThrow(() => assertCanCreateManualProject({ isSystemAdmin: false, isExecutive: true }));
   const effective = deriveEffectiveAccess({
     isSystemAdmin: false,
@@ -59,7 +59,7 @@ test('directors, managers and team leaders may create manual Projects without ga
   assert.throws(() => assertProjectWriteAccess(effective, 'subordinate-project'), (error) => error.code === 'FORBIDDEN');
 });
 
-test('partial access explicitly disables complete CPM and critical-path claims', () => {
+test("kısmi erişim tam CPM ve kritik yol iddiasını açıkça kapatır", () => {
   assert.deepEqual(projectSchedulingCapability('PARTIAL'), {
     canRunCompleteCpm: false,
     canShowCriticalPath: false

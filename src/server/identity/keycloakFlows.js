@@ -33,10 +33,10 @@ export const SUPPORTED_KEYCLOAK_FLOWS = Object.freeze([
 
 export const DEFAULT_KEYCLOAK_FLOW = KEYCLOAK_FLOWS.AUTHORIZATION_CODE;
 
-/** Browser-visible application root. */
+/* Tarayıcıya görünen uygulama kökü. */
 export const APP_ROOT_PATH = publicRotaPath('/');
 
-/** Authorization Code callback exposed to the browser. */
+/** Tarayıcıya sunulan Authorization Code geri çağrısı. */
 export const AUTHORIZATION_CALLBACK_PATH = publicRotaPath('/api/mergen-rota/auth/callback');
 
 /** Implicit köprünün tarayıcı tarafı geri dönüş yolu (uygulama içi). */

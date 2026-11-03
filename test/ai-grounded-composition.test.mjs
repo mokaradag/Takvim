@@ -215,7 +215,7 @@ test('kaydın adı ve proje bağlamı sunucu satırında kendi değeriyle kalır
 });
 
 test('Türkçe bir ve İngilizce one içeren doğal kayıt metni sözcük denetimine takılmaz', async (t) => {
-  for (const title of ['Bir görev için bir risk değerlendirmesi', 'One task needs a first review']) await t.test(title, async (inner) => {
+  for (const title of ['Bir görev için bir risk değerlendirmesi', 'One task needs a first review']) await t.test(`kayıt başlığı: ${title}`, async (inner) => {
     const stack = stackFor(inner);
     stack.db.tasks.find((row) => row.TaskId === TASKS.SERIES).Title = title;
     const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { deadline: 'overdue', assignee: 'me' });
@@ -385,7 +385,7 @@ test('grafik etiketleri temizleme ve kırpma sonrasında doğrulanmış proje ba
     ['kırpma çakışması', ['x'.repeat(90) + 'A', 'Farklı iş', 'x'.repeat(90) + 'B'], true],
     ['aynı ad aynı bağlam', ['Ortak iş', 'Ortak iş', 'Farklı iş'], false],
     ['yalnız denetim karakterleri', ['\u0001', '\u202e', '\u2066'], false]
-  ]) await t.test(name, async (inner) => {
+  ]) await t.test(`davranış: ${name}`, async (inner) => {
     const stack = stackFor(inner);
     [TASKS.SERIES, TASKS.OVERDUE, TASKS.PARTIAL_OWN].forEach((id, index) => { stack.db.tasks.find((row) => row.TaskId === id).Title = titles[index]; });
     const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { deadline: 'overdue', assignee: 'me' });
@@ -420,7 +420,7 @@ test('grafik etiketi ortak doğrulayıcıyla uyumludur: denetim/bidi temizliği,
 });
 
 test('miktar ve sıralama iddiaları dil veya çekimden bağımsız olarak model metninden kabul edilmez', async (t) => {
-  for (const locale of ['tr', 'en']) await t.test(locale, async (inner) => {
+  for (const locale of ['tr', 'en']) await t.test(`yerel dil: ${locale}`, async (inner) => {
     const { composition } = await overdueComposition(inner, { locale });
     for (const text of ['ikimizin görevi', 'üçer görev', 'bir görev gecikmiş', 'bir risk olabilir', 'one task', 'first', 'twice as many', 'shortest', 'en uzununki', '更少']) {
       assert.equal(issue(check(composition, { blocks: [{ type: 'paragraph', text: `{F1}; ${text}.` }, { type: 'rows', source: 'T1' }] })), 'BLOCK_INVALID', text);
@@ -442,7 +442,7 @@ test('süzülmüş dağılımın kapsamı sunucu satırlarında korunur', async 
 });
 
 test('sayımın kapsamı sunucu ayrıntısıyla zorunlu gösterilir', async (t) => {
-  for (const locale of ['tr', 'en']) await t.test(locale, async (inner) => {
+  for (const locale of ['tr', 'en']) await t.test(`yerel dil: ${locale}`, async (inner) => {
     const stack = stackFor(inner);
     const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { deadline: 'overdue', assignee: 'me' });
     const verdict = verifyRequested(ledger, ['totalCount'], { operation: 'value', metrics: ['tasks.total'], filters: { deadline: 'overdue', assignee: 'me' } }, { locale });
@@ -517,7 +517,7 @@ test('nitelendirme altyapı/model hatası güvenli üretim geri dönüşünde de
     ['live stream rejection', null, false, { provider: 'live', liveProvider: { async streamToolCompletion() { return { events: (async function* () { throw new Error('stream'); })() }; } } }],
     ['live thinking', null, false, { provider: 'live', liveProvider: { async streamToolCompletion() { return { events: (async function* () { yield { type: 'done', finishReason: 'stop', usage: { reasoningTokens: 1 } }; })() }; } } }]
   ];
-  for (const [name, completeRound, legitimate = false, overrides = {}] of variants) await t.test(name, async (inner) => {
+  for (const [name, completeRound, legitimate = false, overrides = {}] of variants) await t.test(`davranış: ${name}`, async (inner) => {
     const report = { cases: 0, passed: 0, calls: 0, composed: 0, narrative: 0, escalations: 0, charts: 0, reasons: {}, issues: {},
       usage: { input: 0, output: 0, thinking: 0, cacheCreate: 0, cacheRead: 0 }, results: [] };
     await runCase(inner, COMPOSITION_CASES[0], { report, providerOptions: { provider: 'claude', completeRound, expectedModel: model, ...overrides } });
@@ -601,7 +601,7 @@ test('ortak görevli kişi grupları görevlerin birbirini dışlayan payları d
 });
 
 test('bağımlılık gecikmesi yalnızca uyumlu doğrulanmış birimle çizilir', async (t) => {
-  for (const units of [['day', 'week'], ['day', 'month'], ['week', 'week'], ['day', 'day']]) await t.test(units.join('/'), async (inner) => {
+  for (const units of [['day', 'week'], ['day', 'month'], ['week', 'week'], ['day', 'day']]) await t.test(`davranış durumu: ${units.join('/')}`, async (inner) => {
     const stack = stackFor(inner);
     const relations = stack.db.taskDependencies.filter((row) => row.PredecessorTaskId === TASKS.OVERDUE);
     assert.equal(relations.length, 2);

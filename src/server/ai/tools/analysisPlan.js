@@ -65,13 +65,13 @@ export function analysisSchema() {
       within: { type: 'string', minLength: 2, maxLength: 120, description: 'Tek projeyle kesişim: self/team/all/previous veya person+withSelf.' },
       level: { type: 'string', enum: [...ANALYSIS_LEVELS], description: 'team düzeyi: unit birim, department bölüm, directorate direktörlük.' },
       names: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxNames, items: { type: 'string', minLength: 2, maxLength: 120 }, description: 'person/project: kullanıcının yazdığı ad(lar).' },
-      withSelf: { type: 'boolean', description: 'person: adı verilen kişiyi kullanıcının kendisiyle karşılaştır.' },
+      withSelf: { type: 'boolean', description: 'Kişi adı/tek kişi satırı ile kendini karşılaştır.' },
       focus: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxFocus, uniqueItems: true, items: { type: 'string', enum: [...ANALYSIS_FOCUS] },
         description: '1-3 yön: overview sayılar, status durum, priority öncelik, deadlines termin kovaları, overdue gecikme, upcoming yakın termin, workload iş yükü, projects projeler, schedule aylar, critical kritik açık işler.' },
       act: { type: 'string', enum: [...ANALYSIS_ACTS], description: 'Takip eylemi.' },
       dateFrom: { ...DATE, description: 'Termin ufkunun başı.' },
       dateTo: { ...DATE, description: 'Ufkun sonu.' },
-      relativeWindow: { type: 'string', enum: ['today', 'next_7_days'], description: 'Bağıl termin ufku; tarih alanlarıyla birlikte verilmez. Her tur bugüne göre hesaplanır.' },
+      relativeWindow: { type: 'string', enum: ['today', 'next_7_days', 'all_time'], description: 'today/next_7_days: bağıl gün; all_time: dönem yok. Tarihlerle birlikte verilmez.' },
       visual: { type: 'boolean' }
     }
   };
@@ -112,8 +112,8 @@ export function parseAnalysis(raw) {
   const named = ['person', 'project'].includes(value.scope);
   if (named && !value.names?.length) problems.push('$.analysis.names:required');
   if (!named && value.names?.length) problems.push('$.analysis.names:scope');
-  if (value.withSelf && value.scope !== 'person') problems.push('$.analysis.withSelf:scope');
-  if (value.withSelf && value.names?.length !== 1) problems.push('$.analysis.names:withSelf');
+  if (value.withSelf && !['person', 'row'].includes(value.scope)) problems.push('$.analysis.withSelf:scope');
+  if (value.withSelf && value.scope === 'person' && value.names?.length !== 1) problems.push('$.analysis.names:withSelf');
   if (value.level && value.scope !== 'team') problems.push('$.analysis.level:scope');
   if ((value.scope === 'row') !== (value.rows != null)) problems.push('$.analysis.rows:scope');
   if (value.within != null && !['self', 'team', 'all', 'previous'].includes(value.scope) && !(value.scope === 'person' && value.withSelf)) problems.push('$.analysis.within:scope');
@@ -140,11 +140,11 @@ export function resolveAnalysisBrief(analysis, { previous = null, today = null }
   if (!follow) return analysis;
   const rowType = analysis.scope === 'row' && previous ? previous.rows?.[(analysis.rows?.[0] ?? 1) - 1]?.type ?? null : null;
   const target = analysis.scope === 'row' ? rowType : previous?.scope;
-  // Satıra inme ("ikinci sıradaki", "ilk kişiyi incele") o kaydın genel görünümüdür; önceki sıralama ölçüsünü yinelemez.
-  let focus = analysis.focus?.length ? [...analysis.focus] : analysis.scope === 'row' ? [...DEFAULT_FOLLOW_UP_FOCUS] : inheritableFocus(previous?.focus, target);
+  // Satır daraltması, önceki analizde seçilen ve yeni özne için geçerli olan yönleri sırasıyla korur.
+  let focus = analysis.focus?.length ? [...analysis.focus] : inheritableFocus(previous?.focus, target);
   if (!focus.length) focus = [...DEFAULT_FOLLOW_UP_FOCUS];
   const relativeWindow = analysis.relativeWindow || (!analysis.dateFrom && !analysis.dateTo ? previous?.relativeWindow : null);
-  const inherited = previous?.relativeWindow && today ? { dateFrom: today, dateTo: previous.relativeWindow === 'today' ? today : addDays(today, 6) } : previous;
+  const inherited = previous?.relativeWindow && previous.relativeWindow !== 'all_time' && today ? { dateFrom: today, dateTo: previous.relativeWindow === 'today' ? today : addDays(today, 6) } : previous;
   const window = relativeWindow ? { relativeWindow } : {
     ...(inherited?.dateFrom ? { dateFrom: inherited.dateFrom } : {}), ...(inherited?.dateTo ? { dateTo: inherited.dateTo } : {}) };
   const withSelf = analysis.scope === 'previous' && previous?.withSelf ? { withSelf: true } : {};
@@ -190,6 +190,8 @@ function previousBase(analysis, previous) {
     const items = previous.rows;
     const rows = analysis.rows.map((row) => items[row - 1]);
     if (rows.some((row) => !row) || new Set(rows.map((row) => row.type)).size !== 1) throw invalidArguments(['$.analysis.rows:unavailable']);
+    // Karşılaştırma yalnızca tek gerçek kişi satırını kabul eder; proje satırının kişi kesişimi yeterli değildir.
+    if (analysis.withSelf && (rows.length !== 1 || rows[0].type !== 'person')) throw invalidArguments(['$.analysis.withSelf:scope']);
     const entities = rows.map(({ type, id }) => ({ type, id })).filter((item, index, all) => all.findIndex((other) => other.type === item.type && other.id === item.id) === index);
     if (rows[0].type === 'project') {
       // Görev satırının projesi kendi başına incelenir (önceki görev süzgeci projeye taşınmaz).
@@ -325,6 +327,9 @@ function focusRequest(focus, analysis, base, today = null) {
       return ranked(base, analysis, { metrics: ['tasks.total', 'task.title', 'task.priority', 'task.targetFinish'], rank: { metric: 'task.targetFinish', order: 'asc' },
         filters: { status: [...OPEN], priority: ['critical', 'high'], ...(window || {}) } });
     case 'workload':
+      // Kişinin dönemli görevleri ortak sorumluları yeni iş yükü öznelerine dönüştürmez.
+      if (window && analysis.scope === 'person') return request({ operation: 'value', metrics: ['tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'],
+        population: { tool: 'rota_task_analytics' }, entities: base.entities, filters: { ...base.filters, ...window } });
       if (window && analysis.scope !== 'self') return groups(base, 'assignee', { window });
       if (analysis.scope === 'self') return groups(base, 'project', { split: true, window });
       if (analysis.scope === 'person') {
@@ -361,7 +366,7 @@ function upcomingFrom(window, today) {
  */
 export function expandAnalysis(analysis, { previous = null, today = null, detail = null, chart = null } = {}) {
   analysis = resolveAnalysisBrief(analysis, { previous, today });
-  if (analysis.relativeWindow) {
+  if (analysis.relativeWindow && analysis.relativeWindow !== 'all_time') {
     if (!today) throw invalidArguments(['$.analysis.relativeWindow:required']);
     analysis = { ...analysis, dateFrom: today, dateTo: analysis.relativeWindow === 'today' ? today : addDays(today, 6) };
   }

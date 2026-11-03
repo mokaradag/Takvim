@@ -70,7 +70,7 @@ function validProjectInput(overrides = {}) {
   };
 }
 
-test('versioned project updates must carry the complete tag replacement', () => {
+test("sürümlü proje güncellemesi tam etiket değişimini taşımalıdır", () => {
   assert.deepEqual(findNestedCommitCollectionIssue({
     projectUpserts: [completeProjectUpdate()]
   }), {
@@ -84,7 +84,7 @@ test('versioned project updates must carry the complete tag replacement', () => 
   }), null);
 });
 
-test('versioned task updates must carry complete assignee and dependency replacements', () => {
+test("sürümlü görev güncellemesi tam sorumlu ve bağımlılık değişimini taşımalıdır", () => {
   assert.equal(findNestedCommitCollectionIssue({
     taskUpserts: [completeTaskUpdate({ deps: [] })]
   })?.code, 'TASK_ASSIGNEES_REQUIRED_FOR_UPDATE');
@@ -98,14 +98,14 @@ test('versioned task updates must carry complete assignee and dependency replace
   }), null);
 });
 
-test('create payloads remain backward-compatible when nested collections are omitted', () => {
+test("oluşturma verisi iç koleksiyon atlanınca geriye uyumlu kalır", () => {
   assert.equal(findNestedCommitCollectionIssue({
     projectUpserts: [{ id: 'project-new' }],
     taskUpserts: [{ id: 'task-new' }]
   }), null);
 });
 
-test('project creation stops at the state policy when the session lacks capability', () => {
+test("oturum yeteneği yoksa proje oluşturma durum politikasında durur", () => {
   const result = prepareProjectCreation(
     validProjectInput(),
     validProjectContext({ canCreateProjects: false }),
@@ -117,7 +117,7 @@ test('project creation stops at the state policy when the session lacks capabili
   assert.equal(result.error.field, 'project');
 });
 
-test('authorized project creation still produces the atomic project and root WBS change set', () => {
+test("yetkili proje oluşturma atomik proje ve kök WBS değişimini üretir", () => {
   const result = prepareProjectCreation(
     validProjectInput(),
     validProjectContext(),

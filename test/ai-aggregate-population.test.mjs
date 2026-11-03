@@ -85,7 +85,7 @@ const AGGREGATE_CASES = [
 ];
 
 for (const [name, args, expected] of AGGREGATE_CASES) {
-  test(`${name} records every counted task of its aggregate, not only the listed rows (${JSON.stringify(args)})`, async (t) => {
+  test(`${name} toplamdaki her görevi kaydeder; yalnızca görünen satırlarla sınırlanmaz (${JSON.stringify(args)})`, async (t) => {
     const stack = stackFor(t, WORKFLOW_SEED);
     const { result, ledger } = await callRotaTool(stack, AYSE, name, args);
     assert.equal(result.ok, true, JSON.stringify(result.error));
@@ -99,7 +99,7 @@ for (const [name, args, expected] of AGGREGATE_CASES) {
   });
 }
 
-test('moving a counted but unlisted task out of scope drops the aggregate at final revalidation, for every aggregate tool', async (t) => {
+test("listelenmeyen sayılmış görev kapsamdan çıkınca bütün toplama araçları son doğrulamada toplamı düşürür", async (t) => {
   for (const [name, args] of AGGREGATE_CASES) {
     const stack = stackFor(t, WORKFLOW_SEED);
     const { result, ledger, context } = await callRotaTool(stack, AYSE, name, args);
@@ -127,7 +127,7 @@ function citeProjectTotal(stack, projectId = PROJECTS.FULL) {
   stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_project_detail', arguments: { projectId } }] });
 }
 
-test('a saved aggregate answer is hidden on reopen and replay when a counted, unlisted task leaves scope', async (t) => {
+test("sayılmış fakat listelenmemiş görev kapsamdan çıkınca kayıtlı toplam yanıt yeniden açmada ve oynatmada gizlenir", async (t) => {
   const stack = stackFor(t);
   citeProjectTotal(stack);
   const turnId = randomUUID();
@@ -150,7 +150,7 @@ test('a saved aggregate answer is hidden on reopen and replay when a counted, un
   assert.equal(done(replay).assistantMessage.finishReason, 'not_found');
 });
 
-test('an aggregate whose population cannot fit the bounded record is shown in-turn but never re-disclosed unverified', async (t) => {
+test("sınırlı kayda sığmayan nüfus turda gösterilir; doğrulanmadan yeniden açıklanmaz", async (t) => {
   const extra = Array.from({ length: 1600 }, (_, index) => ({
     TaskId: `70000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, ProjectId: PROJECTS.FULL, Title: `Toplu görev ${index + 1}`, Status: 'planned', Priority: 'medium'
   }));
@@ -182,7 +182,7 @@ test('an aggregate whose population cannot fit the bounded record is shown in-tu
   assert.match(deltas(replay), /yeniden doğrulanamıyor/);
 });
 
-test('a population that fits only without the reproduction data is persisted compactly and stays verifiable', async (t) => {
+test("yeniden üretim verisi çıkarılınca sığan nüfus sıkıştırılarak doğrulanabilir saklanır", async (t) => {
   const extra = Array.from({ length: 900 }, (_, index) => ({
     TaskId: `71000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, ProjectId: PROJECTS.FULL, Title: `Toplu görev ${index + 1}`, Status: 'planned', Priority: 'medium'
   }));
@@ -199,7 +199,7 @@ test('a population that fits only without the reproduction data is persisted com
   assert.equal(hidden.finishReason, 'not_found');
 });
 
-test('legacy aggregate evidence without a recorded population is unverifiable, while payload-bound legacy evidence still verifies', async (t) => {
+test("nüfusu kayıtlı olmayan eski toplam doğrulanamaz; yükle bağlı eski kanıt doğrulanır", async (t) => {
   const stack = stackFor(t);
   citeProjectTotal(stack);
   const aggregate = done(await sendTurn({ turnId: randomUUID(), message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` }));
@@ -220,7 +220,7 @@ test('legacy aggregate evidence without a recorded population is unverifiable, w
   assert.equal(legacyDetail.evidence.length, 1);
 });
 
-test('a malformed persisted population fails closed', async (t) => {
+test("bozuk kalıcı nüfus erişimi kapalı tutar", async (t) => {
   const stack = stackFor(t);
   citeProjectTotal(stack);
   const saved = done(await sendTurn({ turnId: randomUUID(), message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` }));
@@ -233,7 +233,7 @@ test('a malformed persisted population fails closed', async (t) => {
   }
 });
 
-test('read notification history beyond the evidence bound never turns unread or pending counts unknown', async (t) => {
+test("kanıt sınırı dışındaki okunmuş bildirim geçmişi okunmamış ve bekleyen sayıları bilinmez yapmaz", async (t) => {
   const read = Array.from({ length: TOOL_LIMITS.maxCursorOffset + 50 }, (_, index) => ({
     RecipientSicil: AYSE, Kind: 'TASK_ASSIGNED', TaskId: TASKS.OVERDUE, EventKey: `read-${index}`, ReadAt: '2026-09-20T08:00:00Z', OccurredAt: '2026-09-20T08:00:00Z'
   }));

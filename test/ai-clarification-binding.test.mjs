@@ -27,7 +27,7 @@ function stackFor(t) {
   return createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed });
 }
 
-test('only a reply that is exactly one offered choice number selects a candidate; words are never interpreted', () => {
+test("yalnızca sunulan seçimin tam numarası adayı seçer; sözcükler yorumlanmaz", () => {
   const selections = { 2: 1, '2.': 1, '#2': 1, '(2)': 1, ' 3 ': 2, '1': 0 };
   for (const [reply, expected] of Object.entries(selections)) assert.equal(selectedCandidateOrdinal(reply, 3), expected, reply);
   for (const reply of ['4', '0', '12', 'ikincisi', 'ilki', 'sonuncusu', 'the second one', 'option 3', '2’yi', '2 görevim var mı?', '1 ve 2',
@@ -41,7 +41,7 @@ test('only a reply that is exactly one offered choice number selects a candidate
     [{ ordinal: 1, personSicil: 910005 }]);
 });
 
-test('exact identity resolution: Sicil and full name resolve a person, a partial or shared name never does', async (t) => {
+test("sicil ve tam ad kişiyi çözer; kısmi veya ortak ad kimliği çözmez", async (t) => {
   const stack = stackFor(t);
   const bySicil = await callRotaTool(stack, AYSE, 'rota_person_search', { text: String(ALI_2) });
   assert.equal(bySicil.result.data.resolution, 'unique');
@@ -79,7 +79,7 @@ async function askAboutAli(stack) {
 }
 
 for (const reply of ['2', '#2']) {
-  test(`the reply "${reply}" binds the stored second candidate's Sicil before any identity-dependent tool runs`, async (t) => {
+  test(`${reply} yanıtı kimliğe bağlı araçtan önce kayıtlı ikinci adayın sicilini bağlar`, async (t) => {
     const stack = stackFor(t);
     const first = await askAboutAli(stack);
     assert.match(first.assistantMessage.content, /^1\. \*\*Ali Veli\*\* — Uzman/m);
@@ -103,7 +103,7 @@ for (const reply of ['2', '#2']) {
   });
 }
 
-test('a non-numbered reply does not let the model translate a candidate into an identity', async (t) => {
+test("numarasız yanıt modelin adayı kimliğe çevirmesine izin vermez", async (t) => {
   const stack = stackFor(t);
   const first = await askAboutAli(stack);
   stack.provider.enqueue({ type: 'script', respond: (call) => {
@@ -121,7 +121,7 @@ test('a non-numbered reply does not let the model translate a candidate into an 
   assert.equal(second.assistantMessage.finishReason, 'clarification');
 });
 
-test('a single partial match asks for confirmation and the reply "1" binds that project', async (t) => {
+test("tek kısmi eşleşme onay ister; 1 yanıtı o projeyi bağlar", async (t) => {
   const stack = stackFor(t);
   const radar = declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', text: 'Radar' }] });
   stack.provider.enqueue({ type: 'tool-calls', preface: [radar], calls: [{ name: 'rota_project_search', arguments: { text: 'Radar' } }] }, { type: 'script', respond: (call) => {
@@ -141,7 +141,7 @@ test('a single partial match asks for confirmation and the reply "1" binds that 
   assert.equal(JSON.parse(stack.db.aiMessageEvidence.at(-1).EvidenceJson).tool, 'rota_project_detail');
 });
 
-test('a numbered task selection binds the task identity for detail and Outlook follow-ups', async (t) => {
+test("numaralı görev seçimi ayrıntı ve Outlook takibinde görev kimliğini bağlar", async (t) => {
   const stack = stackFor(t);
   const outlook = declared({ operation: 'value', metrics: ['subscriptions.active'], population: { tool: 'rota_outlook_status' }, fields: [{ metric: 'subscriptions.active', tool: 'rota_outlook_status', path: 'data.activeSubscriptions' }], entities: [{ type: 'task', text: 'Radar test' }] });
   stack.provider.enqueue({ type: 'tool-calls', preface: [outlook], calls: [{ name: 'rota_task_search', arguments: { text: 'Radar test', limit: 1 } }] },
@@ -163,7 +163,7 @@ test('a numbered task selection binds the task identity for detail and Outlook f
   assert.equal(JSON.parse(stack.db.aiMessageEvidence.at(-1).EvidenceJson).data.task.taskId, chosen);
 });
 
-test('task-name resolution reaches Outlook status in a later round', async (t) => {
+test("görev adı çözümü sonraki turda Outlook durumuna ulaşır", async (t) => {
   const stack = stackFor(t);
   const request = declared({ operation: 'value', metrics: ['subscription.state'], reasoning: 'synthesis', population: { tool: 'rota_outlook_status' }, entities: [{ type: 'task', text: 'Anten kalibrasyonu' }] });
   stack.provider.enqueue({ type: 'tool-calls', preface: [request], calls: [{ name: 'rota_task_search', arguments: { text: 'Anten kalibrasyonu' } }] }, { type: 'script', respond: (call) => {

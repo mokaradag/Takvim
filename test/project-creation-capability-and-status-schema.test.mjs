@@ -20,7 +20,7 @@ const validProjectInput = {
   tags: ['Plan']
 };
 
-test('AppStateProvider propagates the loaded project-creation capability to shared validation', () => {
+test("AppStateProvider yüklenmiş proje oluşturma yeteneğini ortak doğrulamaya taşır", () => {
   const source = read('src/state/AppStateProvider.jsx');
   const preparation = source.match(/prepareProjectCreation\(input,\s*\{([\s\S]*?)\},\s*\{/);
 
@@ -28,7 +28,7 @@ test('AppStateProvider propagates the loaded project-creation capability to shar
   assert.match(preparation[1], /canCreateProjects:\s*current\.canCreateProjects/);
 });
 
-test('shared project creation preparation rejects an explicitly unauthorized session', () => {
+test("ortak proje hazırlığı açık yetkisiz oturumu reddeder", () => {
   const result = prepareProjectCreation(validProjectInput, {
     projects: [],
     people: [lead],
@@ -44,7 +44,7 @@ test('shared project creation preparation rejects an explicitly unauthorized ses
   assert.equal(result.error.code, 'PROJECT_CREATE_FORBIDDEN');
 });
 
-test('SQL Server schema permits only the canonical persisted task statuses', () => {
+test("SQL Server şeması yalnızca kanonik kalıcı görev durumlarına izin verir", () => {
   const schema = read('database/MR_Create_Durable_Persistence.sql');
   const constraint = schema.match(/CONSTRAINT CK_MR_Tasks_Status CHECK \(Status IN \(([^)]*)\)\)/);
 

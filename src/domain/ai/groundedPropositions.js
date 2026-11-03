@@ -705,7 +705,7 @@ const ofCount = (value, locale) => (locale === 'en' ? number(value, locale) : `$
 export function analystPropositions(parts, locale = 'tr') {
   const en = locale === 'en';
   const out = [];
-  // Row indices, completeness, denominators and attention rankings belong to one canonical evidence population.
+  // Satır sırası tamlık payda ve dikkat sıralaması tek kanonik kanıt nüfusuna aittir.
   const evidenceParts = parts.flatMap((part) => {
     const evidencePopulations = new Map();
     for (const item of part.presentation?.facts || []) {
@@ -729,7 +729,7 @@ export function analystPropositions(parts, locale = 'tr') {
       if (filters?.personSicil != null && !subject) return;
       if (realized && subject) {
         realized = sentence([v(subject), ': ', ...realized.parts]);
-        // Qualified statements must not lose their subject when joined to another subject's prose.
+        // Koşullu açıklama başka öznenin anlatımına eklenirken kendi öznesini kaybetmemelidir.
         fluent = fluent?.states ? { states: fluent.states } : null;
       }
       if (realized) out.push({ part: ordinal, proposition: { kind, tone, evidenceId, ...realized, ...(fluent ? { fluent: Object.freeze(fluent) } : {}) } });

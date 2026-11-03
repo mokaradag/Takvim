@@ -1,4 +1,4 @@
-/* MERGEN Rota · application shell ownership */
+/* MERGEN Rota uygulama kabuğu sahipliği */
 
 .theme-dark {
   --bg: oklch(18% 0.008 270);
@@ -201,7 +201,7 @@
   .app, .sidebar, .sidebar-mode-toggle button { transition: none; }
 }
 
-/* Topbar: single authoritative visual contract. */
+/* Üst çubuğun tek yetkili görsel sözleşmesi */
 .topbar {
   height: 56px;
   padding: 0 28px;

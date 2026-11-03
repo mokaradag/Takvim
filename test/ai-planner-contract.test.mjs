@@ -28,8 +28,8 @@ const stackFor = (t) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TO
 
 const { decodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
 
-test('4C posted convergence: predecision failures sample once without becoming invalid plans', async (t) => {
-  for (const code of ['AI_PROVIDER_UNAVAILABLE', 'AI_TIMEOUT', 'AI_CANCELLED']) await t.test(code, async (t) => {
+test("karar öncesi hata geçersiz plan sayılmadan bir kez örneklenir", async (t) => {
+  for (const code of ['AI_PROVIDER_UNAVAILABLE', 'AI_TIMEOUT', 'AI_CANCELLED']) await t.test(`hata kodu: ${code}`, async (t) => {
     const stack = stackFor(t);
     const logs = captureConsole(t);
     const startedAt = Date.now() - 1500;
@@ -55,7 +55,7 @@ test('4C posted convergence: predecision failures sample once without becoming i
   });
 });
 
-test('4C final convergence: escalation retains planner ownership until terminal failure', async (t) => {
+test("devir son hataya kadar planlayıcı sahipliğini korur", async (t) => {
   const stack = stackFor(t);
   const empty = new AiError('AI_PROVIDER_RESPONSE_INVALID', { details: { reason: 'EMPTY_COMPLETION' } });
   const options = {
@@ -91,10 +91,13 @@ test('kalıcılık sınırında satır göndergesi ve yetki nüfusu korunur; son
   } }, options);
   assert.equal(first.outcome, 'escalate');
   const ledger = first.resume.ledger;
+  let expectedPopulation;
   const result = await runGroundedTurn({ signal, round: async () => plan({ intent: 'rota', language: 'tr', request }) }, {
     ...options, resume: first.resume, escalation: false, onText: async () => {
       const [entry] = ledger.authorizationEntries();
       assert.ok(entry);
+      expectedPopulation = entry.taskReferences.map(({ taskId, projectId }) => ({ taskId, projectId }));
+      assert.ok(expectedPopulation.length > 1, 'sınama nüfusu birden çok görünür görevi içerir');
       const payload = JSON.parse(entry.payload);
       payload.data.padding = '';
       entry.payload = JSON.stringify(payload);
@@ -107,7 +110,8 @@ test('kalıcılık sınırında satır göndergesi ve yetki nüfusu korunur; son
   const saved = JSON.parse(result.evidenceRows[0].evidenceJson);
   assert.equal(saved.dataOmitted, 'size');
   assert.ok(saved.analysisContext.rowsOnly, 'satır göndergesi kalıcı kayıtta korunur');
-  assert.ok(decodeAuthorizationPopulation(saved.authorizationPopulation).some(row => row.taskId === TASKS.OVERDUE), 'tam yetki nüfusu korunur');
+  const pairs = (rows) => rows.map(({ taskId, projectId }) => `${taskId}:${projectId}`).sort();
+  assert.deepEqual(pairs(decodeAuthorizationPopulation(saved.authorizationPopulation)), pairs(expectedPopulation), 'tam yetki nüfusu birebir korunur');
   assert.equal(saved.resultScope, undefined);
   const traces = logs.map(line => JSON.parse(line.slice(line.indexOf('{')))).filter(row => row.operation === 'ai.grounded.turn');
   assert.equal(traces.length, 1);
@@ -135,7 +139,7 @@ async function turn(t, steps, { user = 'Rota verisini incele', planning = null, 
 
 /* ── Anlamsal danışmanlık sınırı ───────────────────────────── */
 
-test('4C son yakınsama: bozuk görev kapsamı dönüştürülmez; takip açıklaması sonraki turu etkilemez', async (t) => {
+test("bozuk görev kapsamı dönüştürülmez; takip açıklaması sonraki turu etkilemez", async (t) => {
   const { taskResultScope } = await import('../src/domain/ai/requestContract.js');
   const { sendTurn } = await import('./helpers/aiStack.mjs');
   const { randomUUID } = await import('node:crypto');
@@ -281,7 +285,7 @@ test('genel sohbet kararı ek model yanıtı istemeden biter', async (t) => {
   assert.ok(inputs.every((input) => !JSON.stringify(input.messages).includes('plan:required')));
 });
 
-test('4C yakınsama: bildirim bütçesi bitince genel karar yine tek kez kabul edilir', async (t) => {
+test("bildirim bütçesi bitince genel karar yine tek kez kabul edilir", async (t) => {
   const { result, decisions } = await turn(t, [prose('Merhaba'), prose('Merhaba'),
     plan({ intent: 'general', language: 'tr' })]);
   assert.equal(result.outcome, 'general_redirect');
@@ -343,10 +347,10 @@ test('çelişkili termin penceresi SQL öncesinde reddedilir ve ipucu modelin g�
   assert.ok(rejection.error.hints.some((hint) => hint.includes('deadline')));
 });
 
-test('4C son yakınsama: iş akışı durum dizisinin ipucu atomik ve sınırlı onarıma ulaşır', async (t) => {
+test("iş akışı durum dizisinin ipucu atomik ve sınırlı onarıma ulaşır", async (t) => {
   const { metricIdHints } = await import('../src/server/ai/tools/requestDeclaration.js');
   const itemProblem = '$.filters.status[0]:enum';
-  for (const tool of ['rota_schedule_requests', 'rota_assignment_requests']) await t.test(tool, async (t) => {
+  for (const tool of ['rota_schedule_requests', 'rota_assignment_requests']) await t.test(`okuma aracı: ${tool}`, async (t) => {
     const request = { operation: 'value', metrics: ['requests.sent'], population: { tool }, filters: { tab: 'sent', workflowStatus: 'PENDING', status: ['pending'] } };
     assert.ok(metricIdHints([itemProblem], { ...request, filters: { status: ['pending'] } }).some(hint => hint.includes('filters.workflowStatus')));
     const sibling = { operation: 'value', metrics: ['notifications.unread'], population: { tool: 'rota_notifications' } };
@@ -434,11 +438,11 @@ test('ek bölüm düzeltilirken geçerli adlandırılmış bölüm değiştirile
 const notifications = { operation: 'value', metrics: ['notifications.unread'], population: { tool: 'rota_notifications' }, layout: 'auto' };
 const hiddenOutlook = { operation: 'value', metrics: ['subscriptions.active'], population: { tool: 'rota_outlook_status' }, entities: [{ type: 'task', id: TASKS.HIDDEN }], layout: 'auto' };
 
-test('4C çok bölüm: önceki sonuç bayrağı bütün bölümlerde okumadan önce reddedilir', async (t) => {
+test("planlayıcı çok bölüm: önceki sonuç bayrağı bütün bölümlerde okumadan önce reddedilir", async (t) => {
   const followup = { previousResult: true, operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' } };
   const unresolved = { operation: 'value', metrics: ['project.baselineCount'], population: { tool: 'rota_task_search' }, entities: [{ type: 'wbs', text: 'Radar' }] };
   for (const prior of [false, true]) for (const [request, additional] of [[followup, notifications], [notifications, followup], [unresolved, followup]]) {
-    await t.test(`${prior}:${request.population.tool}:${Boolean(request.previousResult)}`, async (t) => {
+    await t.test(`durum ${prior}:${request.population.tool}:${Boolean(request.previousResult)}`, async (t) => {
       let stack;
       const invalid = plan({ intent: 'rota', language: 'tr', request, additionalRequests: [additional] });
       const rounds = [invalid, input => {
@@ -599,7 +603,7 @@ test('sonraki bölümün geçici sağlayıcı hatası önceki doğrulanmış yan
 });
 
 /* Aynı değişmezleri farklı mutasyonlarla kırmayı deneyen yakınsama matrisi. */
-test('4C yerel plan kararı zorunludur; eski rota ve son JSON ilk kararı atlayamaz', async (t) => {
+test("planlayıcı yerel plan kararı zorunludur; eski rota ve son JSON ilk kararı atlayamaz", async (t) => {
   for (const text of [JSON.stringify({ kind: 'route', intent: 'rota', language: 'tr', request: notifications }),
     JSON.stringify({ kind: 'general', text: 'ok' }), JSON.stringify({ name: 'rota_plan', arguments: { intent: 'general', language: 'tr' } })]) {
     const { result, inputs, decisions } = await turn(t, [prose(text), plan({ intent: 'abstain', language: 'tr', abstain: { reason: 'security' } })]);
@@ -609,7 +613,7 @@ test('4C yerel plan kararı zorunludur; eski rota ve son JSON ilk kararı atlaya
   }
 });
 
-test('4C bir Rota okuması NOT_FOUND olsa da sonraki terminal plan geçmişi değiştiremez', async (t) => {
+test("planlayıcı bir Rota okuması NOT_FOUND olsa da sonraki terminal plan geçmişi değiştiremez", async (t) => {
   for (const decision of [{ intent: 'clarify', clarify: { reason: 'missing_referent' } }, { intent: 'abstain', abstain: { reason: 'write' } }, { intent: 'general' }]) {
     const { result, decisions } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: hiddenOutlook }),
       plan({ language: 'tr', ...decision }), prose('{"kind":"not_found"}')], { user: `Outlook ${TASKS.HIDDEN}` });
@@ -631,7 +635,7 @@ test('4C bir Rota okuması NOT_FOUND olsa da sonraki terminal plan geçmişi de�
   assert.equal(failures.at(-1), 'TIMEOUT');
 });
 
-test('4C semantik onarım: eşdeğer biçim ve bölüm sırası korunur; niyet ve soru sayısı sabittir', async (t) => {
+test("planlayıcı semantik onarım: eşdeğer biçim ve bölüm sırası korunur; niyet ve soru sayısı sabittir", async (t) => {
   const good = { ...notifications, filters: {} };
   const bad = { operation: 'value', metrics: ['tasks.invalid'], population: { tool: 'rota_task_analytics' }, layout: 'auto' };
   const fixed = { ...bad, metrics: ['tasks.total'] };
@@ -660,7 +664,7 @@ test('4C semantik onarım: eşdeğer biçim ve bölüm sırası korunur; niyet v
   }
 });
 
-test('4C çağrıdan türeyen nüfus onarımda korunur; taşıyıcı düzeltmesi ilgisiz kapsam açmaz', async (t) => {
+test("planlayıcı çağrıdan türeyen nüfus onarımda korunur; taşıyıcı düzeltmesi ilgisiz kapsam açmaz", async (t) => {
   const calls = [{ name: 'rota_task_analytics', arguments: { assignee: 'me' } }, { name: 'rota_notifications', arguments: {} }];
   const request = { operation: 'value', metrics: ['tasks.total'], layout: 'auto' };
   const original = plan({ intent: 'rota', language: 'tr', request, calls });
@@ -677,7 +681,7 @@ test('4C çağrıdan türeyen nüfus onarımda korunur; taşıyıcı düzeltmesi
   assert.equal(repaired.result.outcome, 'grounded');
 });
 
-test('4C karma hata korumalı metni düşürerek onarılamaz ve iç bölüm ipucu bölümü silmez', async (t) => {
+test("planlayıcı karma hata korumalı metni düşürerek onarılamaz ve iç bölüm ipucu bölümü silmez", async (t) => {
   const mixed = { operation: 'value', metrics: ['task.description', 'notifications.unread'], population: { tool: 'rota_task_detail' },
     entities: [{ type: 'task', text: 'Anten kalibrasyonu' }], layout: 'auto' };
   for (const request of [mixed, { ...mixed, fields: 'invalid' }, { ...mixed, metrics: ['task.description', 'notifications.typo'] }]) {
@@ -691,7 +695,7 @@ test('4C karma hata korumalı metni düşürerek onarılamaz ve iç bölüm ipuc
   assert.equal(unpackTypedPlan(plan({ intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent', topics: [] } })).plan.intent, 'clarify');
 });
 
-test('4C Deep devri önceki onarım kapsamını temizler; etkin karar gözlemciye gider ve tek sayılır', async (t) => {
+test("planlayıcı Deep devri önceki onarım kapsamını temizler; etkin karar gözlemciye gider ve tek sayılır", async (t) => {
   stackFor(t); resetAiTelemetryForTests();
   const decisions = [];
   const options = { messages: buildGroundedContext({ userContent: 'Bildirim ve görev sayım', now: NOW }).messages, catalog,
@@ -718,7 +722,7 @@ test('4C Deep devri önceki onarım kapsamını temizler; etkin karar gözlemciy
   assert.equal(Object.values(aiTelemetrySnapshot().planner.decisions).reduce((a, b) => a + b, 0), 1);
 });
 
-test('4C son okuma turundaki sentez kanıtı korunur ve başarısız kardeşten sonra bağımsız bölüm okunur', async (t) => {
+test("planlayıcı son okuma turundaki sentez kanıtı korunur ve başarısız kardeşten sonra bağımsız bölüm okunur", async (t) => {
   const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
   const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, layout: 'auto' };
   const last = { ...request, reasoning: 'synthesis', filters: { priority: ['critical'] } };
@@ -733,7 +737,7 @@ test('4C son okuma turundaki sentez kanıtı korunur ve başarısız kardeşten 
   assert.equal(continued.result.evidence.length, 2);
 });
 
-test('4C bağımlı kapsam yalnızca doğrulanmış sonuç satırlarına ve rank sınırına bağlanır', async (t) => {
+test("planlayıcı bağımlı kapsam yalnızca doğrulanmış sonuç satırlarına ve rank sınırına bağlanır", async (t) => {
   for (const [tool, collection, metric, type, text] of [['rota_project_search', 'matches', 'project.name', 'project', 'Radar'], ['rota_task_search', 'tasks', 'task.title', 'task', 'Radar']]) {
     const request = { operation: 'list', metrics: [metric], population: { tool, collection }, filters: { text }, layout: 'auto' };
     const detail = { operation: 'value', metrics: [type === 'task' ? 'task.status' : 'project.lead'], population: { tool: `rota_${type}_detail` }, entities: [{ type, from: 0 }], layout: 'auto' };
@@ -747,7 +751,7 @@ test('4C bağımlı kapsam yalnızca doğrulanmış sonuç satırlarına ve rank
   assert.equal(result.stats.attempted, 2, 'top-1 tek ayrıntı kimliği açar');
 });
 
-test('4C yakınsama: hatalı yaprağın onarımı etkilenmeyen anlamı değiştiremez', async (t) => {
+test("hatalı yaprağın onarımı etkilenmeyen anlamı değiştiremez", async (t) => {
   const base = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me', priority: ['critical'], period: 'last_7_days', deadline: 'overdue' }, layout: 'auto' };
   const { metricPaths } = await import('../src/domain/ai/claimableEvidence.js');
   for (const invalid of [
@@ -767,7 +771,7 @@ test('4C yakınsama: hatalı yaprağın onarımı etkilenmeyen anlamı değişti
   }
 });
 
-test('4C yakınsama: geçersiz çağrı düzeltilir, ölçü yuvaları ve izinli ek bölüm sınırı korunur', async (t) => {
+test("geçersiz çağrı düzeltilir, ölçü yuvaları ve izinli ek bölüm sınırı korunur", async (t) => {
   const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, layout: 'auto' };
   const calls = [{ name: 'rota_task_analytics', arguments: { assignee: 'me', limit: 'bad' } }];
   const fixed = [{ name: 'rota_task_analytics', arguments: { assignee: 'me' } }];
@@ -802,7 +806,7 @@ test('4C yakınsama: geçersiz çağrı düzeltilir, ölçü yuvaları ve izinli
   assert.equal((await turn(t, [original, arbitrary, arbitrary])).result.stats.attempted, 0);
 });
 
-test('4C yakınsama: bütün kesik niyetler reddedilir ve hiçbir okuma yapmaz', async (t) => {
+test("bütün kesik niyetler reddedilir ve hiçbir okuma yapmaz", async (t) => {
   for (const choice of [{ intent: 'clarify', clarify: { reason: 'missing_referent' } }, { intent: 'abstain', abstain: { reason: 'write' } },
     { intent: 'general' }, { intent: 'rota', request: notifications }]) {
     const truncated = { ...plan({ language: 'tr', ...choice }), finishReason: 'length' };
@@ -813,7 +817,7 @@ test('4C yakınsama: bütün kesik niyetler reddedilir ve hiçbir okuma yapmaz',
   }
 });
 
-test('4C yakınsama: kurtarılabilir sağlayıcı kaybı kısmi kanıtı korur; iptal yukarı taşınır', async (t) => {
+test("kurtarılabilir sağlayıcı kaybı kısmi kanıtı korur; iptal yukarı taşınır", async (t) => {
   const ambiguous = { operation: 'value', metrics: ['person.jobTitle'], population: { tool: 'rota_person_search' }, entities: [{ type: 'person', text: 'Ali Veli' }], layout: 'auto' };
   for (const code of ['AI_PROVIDER_UNAVAILABLE', 'AI_BUSY', 'AI_RATE_LIMITED', 'AI_TIMEOUT']) {
     const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: notifications, additionalRequests: [ambiguous] }),
@@ -830,7 +834,7 @@ test('4C yakınsama: kurtarılabilir sağlayıcı kaybı kısmi kanıtı korur; 
   assert.notEqual(found.result.outcome, 'unavailable');
 });
 
-test('4C yakınsama: kimlik, yetki, sağlayıcı anahtarı ve iç hata danışmanlık kaybıyla gizlenmez', async () => {
+test("kimlik, yetki, sağlayıcı anahtarı ve iç hata danışmanlık kaybıyla gizlenmez", async () => {
   for (const code of ['UNAUTHORIZED', 'FORBIDDEN', 'SESSION_REQUIRED', 'AI_UNAUTHORIZED', 'AI_KEY_INVALID', 'AI_KEY_MISSING', 'AI_CANCELLED']) {
     await assert.rejects(semanticPlanningAdvice({ query: 'x', catalog, retrieve: async () => { throw Object.assign(new Error('private'), { code }); } }), e => e.code === code);
   }
@@ -839,7 +843,7 @@ test('4C yakınsama: kimlik, yetki, sağlayıcı anahtarı ve iç hata danışma
   }
 });
 
-test('4C yakınsama: bildirim tükenmesi etkin Rota kararını ve bağımsız kardeş okumayı bozmaz', async (t) => {
+test("bildirim tükenmesi etkin Rota kararını ve bağımsız kardeş okumayı bozmaz", async (t) => {
   const unresolved = { operation: 'value', metrics: ['project.baselineCount'], population: { tool: 'rota_task_search' }, entities: [{ type: 'wbs', text: 'Radar' }], layout: 'auto' };
   const invalid = { text: '', finishReason: 'tool_calls', toolCalls: [{ name: 'rota_task_analytics', arguments: '{}' }] };
   const { result, decisions } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: unresolved, additionalRequests: [notifications] }), invalid, invalid], { user: 'Radar iş paketi baz plan sayısı ve bildirim sayım' });
@@ -848,7 +852,7 @@ test('4C yakınsama: bildirim tükenmesi etkin Rota kararını ve bağımsız ka
   assert.deepEqual(decisions.map(d => d.intent), ['rota']);
 });
 
-test('4C yakınsama: çoklu aday açıklamasının ortak yönergesi bir kez gösterilir', async (t) => {
+test("çoklu aday açıklamasının ortak yönergesi bir kez gösterilir", async (t) => {
   const ambiguous = { operation: 'value', metrics: ['person.jobTitle'], population: { tool: 'rota_person_search' }, entities: [{ type: 'person', text: 'Ali Veli' }], layout: 'auto' };
   const clarify = input => prose(JSON.stringify({ kind: 'clarification', evidence: JSON.parse(input.messages.filter(m => m.role === 'tool').at(-1).content).evidenceId }));
   const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: ambiguous, additionalRequests: [ambiguous] }), clarify, clarify], { user: 'Ali Veli unvanı ve işi' });
@@ -856,7 +860,7 @@ test('4C yakınsama: çoklu aday açıklamasının ortak yönergesi bir kez gös
   assert.equal(result.text.split(guidance).length - 1, 1);
 });
 
-test('4C son geçiş: bozuk onarım türü turu çökertmez; geçerli çağrı süzgeci ve bağlama korunur', async (t) => {
+test("planlayıcı son geçiş: bozuk onarım türü turu çökertmez; geçerli çağrı süzgeci ve bağlama korunur", async (t) => {
   const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
   const bad = { ...request, metrics: ['tasks.typo'] };
   for (const mutation of [{ metrics: { wrong: true } }, { entities: { wrong: true } }]) {
@@ -876,7 +880,7 @@ test('4C son geçiş: bozuk onarım türü turu çökertmez; geçerli çağrı s
   assert.equal((await turn(t, [plan({ intent: 'rota', language: 'tr', request: scoped }), changed, changed], { user: 'Radar Modernizasyonu ve Anten görevleri' })).result.stats.attempted, 0);
 });
 
-test('4C son geçiş: kaynak onarımı bağımlı pimi bozmaz; geçersiz ölçü öneki anlam değildir', async (t) => {
+test("planlayıcı son geçiş: kaynak onarımı bağımlı pimi bozmaz; geçersiz ölçü öneki anlam değildir", async (t) => {
   const source = { operation: 'list', metrics: ['task.typo'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me' } };
   const follow = { operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', from: 0 }] };
   const result = await turn(t, [plan({ intent: 'rota', language: 'tr', request: source, additionalRequests: [follow] }),
@@ -887,7 +891,7 @@ test('4C son geçiş: kaynak onarımı bağımlı pimi bozmaz; geçersiz ölçü
     plan({ intent: 'rota', language: 'tr', request: { ...bad, metrics: ['tasks.total'] } })])).result.outcome, 'grounded');
 });
 
-test('4C son geçiş: çağrı hatası geçerli istek koşulunu açmaz', async (t) => {
+test("planlayıcı son geçiş: çağrı hatası geçerli istek koşulunu açmaz", async (t) => {
   const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
   const original = plan({ intent: 'rota', language: 'tr', request, calls: [{ name: 'rota_task_analytics', arguments: { assignee: 'bad' } }] });
   for (const filters of [{}, { assignee: 'unassigned' }]) {
@@ -898,7 +902,7 @@ test('4C son geçiş: çağrı hatası geçerli istek koşulunu açmaz', async (
   }
 });
 
-test('4C son geçiş: yapısal ret geçerli niyeti korur; onarım niyeti değiştirmez', async (t) => {
+test("planlayıcı son geçiş: yapısal ret geçerli niyeti korur; onarım niyeti değiştirmez", async (t) => {
   for (const request of [undefined, { ...notifications, metrics: ['notifications.typo'] }]) {
     const first = plan({ intent: 'rota', language: 'tr', ...(request ? { request } : {}) });
     const refusal = plan({ intent: 'abstain', language: 'tr', abstain: { reason: 'write' } });
@@ -910,14 +914,14 @@ test('4C son geçiş: yapısal ret geçerli niyeti korur; onarım niyeti değiş
   assert.equal((await turn(t, [bad, plan({ intent: 'rota', language: 'tr', request: notifications })])).result.outcome, 'grounded');
 });
 
-test('4C son geçiş: ilgisiz çağrılar ek soru sayısını zorlamaz', async (t) => {
+test("planlayıcı son geçiş: ilgisiz çağrılar ek soru sayısını zorlamaz", async (t) => {
   const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' } };
   const original = plan({ intent: 'rota', language: 'tr', request, calls: [{ name: 'rota_task_analytics', arguments: {} },
     { name: 'rota_notifications', arguments: {} }, { name: 'rota_portfolio_summary', arguments: {} }] });
   assert.equal((await turn(t, [original, plan({ intent: 'rota', language: 'tr', request, additionalRequests: [notifications] })])).result.stats.attempted, 2);
 });
 
-test('4C son geçiş: ölçü bölme yalnızca tam ölçü kümesini ve geçerli kapsamı koruyarak yapılır', async (t) => {
+test("planlayıcı son geçiş: ölçü bölme yalnızca tam ölçü kümesini ve geçerli kapsamı koruyarak yapılır", async (t) => {
   const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' } };
   const mixed = { ...tasks, metrics: ['tasks.total', 'notifications.unread'] };
   assert.equal((await turn(t, [plan({ intent: 'rota', language: 'tr', request: mixed }),
@@ -935,7 +939,7 @@ test('4C son geçiş: ölçü bölme yalnızca tam ölçü kümesini ve geçerli
   assert.equal((await turn(t, [plan({ intent: 'rota', language: 'tr', request: oversized }), dropped, dropped])).result.stats.attempted, 0);
 });
 
-test('4C artık onarım: bozuk bölüm taşıyıcısı düzelir; geçerli kardeş kapsamı korunur', async (t) => {
+test("planlayıcı artık onarım: bozuk bölüm taşıyıcısı düzelir; geçerli kardeş kapsamı korunur", async (t) => {
   const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
   const corrected = plan({ intent: 'rota', language: 'tr', request: tasks, additionalRequests: [notifications] });
   for (const additionalRequests of [notifications, ["okunmamış bildirimlerim"], [[]]]) {
@@ -956,7 +960,7 @@ test('4C artık onarım: bozuk bölüm taşıyıcısı düzelir; geçerli karde�
   assert.match(JSON.stringify(rejected.inputs[2].messages), /repairScope/);
 });
 
-test('4C artık onarım: karma araç bölmesi kapsamı yalnızca taşıyan bölümlere yansıtır', async (t) => {
+test("planlayıcı artık onarım: karma araç bölmesi kapsamı yalnızca taşıyan bölümlere yansıtır", async (t) => {
   const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
   for (const scope of [{ filters: { assignee: 'me' } }, { entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] }]) {
     const scoped = { ...tasks, filters: {}, ...scope };
@@ -972,7 +976,7 @@ test('4C artık onarım: karma araç bölmesi kapsamı yalnızca taşıyan böl�
   }
 });
 
-test('4C bölme kapanışı: satır hatası ölçü düşürme izni değildir', async (t) => {
+test("planlayıcı bölme kapanışı: satır hatası ölçü düşürme izni değildir", async (t) => {
   const tasks = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' } };
   const original = plan({ intent: 'rota', language: 'tr', request: { ...tasks, population: { ...tasks.population, collection: 'groups' }, metrics: [...tasks.metrics, ...notifications.metrics] } });
   const dropped = plan({ intent: 'rota', language: 'tr', request: tasks });
@@ -981,7 +985,7 @@ test('4C bölme kapanışı: satır hatası ölçü düşürme izni değildir', 
   assert.match(JSON.stringify(result.inputs[2].messages), /repairScope/);
 });
 
-test('4C bölme kapanışı: bağlı proje kapsamları yalnızca kendi ölçülerine gider', async (t) => {
+test("planlayıcı bölme kapanışı: bağlı proje kapsamları yalnızca kendi ölçülerine gider", async (t) => {
   const a = { type: 'project', text: 'Radar Modernizasyonu' };
   const b = { type: 'project', text: 'Anten' };
   const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, entities: [a], bindings: [{ metric: 'tasks.total', entity: 0 }] };
@@ -992,11 +996,11 @@ test('4C bölme kapanışı: bağlı proje kapsamları yalnızca kendi ölçüle
   assert.ok(result.result.stats.attempted > 0);
 });
 
-test('4C bölme kapanışı: sıralama ve liste yalnızca kendi satır bölümünde kalır', async (t) => {
+test("planlayıcı bölme kapanışı: sıralama ve liste yalnızca kendi satır bölümünde kalır", async (t) => {
   const ranked = { operation: 'rank', metrics: ['project.name', 'tasks.overdue'], population: { tool: 'rota_portfolio_summary', collection: 'projects' }, rank: { metric: 'tasks.overdue', order: 'desc', limit: 1 } };
   const listed = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' } };
   for (const request of [ranked, listed]) {
-    await t.test(request.operation, async (t) => {
+    await t.test(`davranış durumu: ${request.operation}`, async (t) => {
       const original = plan({ intent: 'rota', language: 'tr', request: { ...request, metrics: [...request.metrics, ...notifications.metrics] } });
       const corrected = plan({ intent: 'rota', language: 'tr', request, additionalRequests: [notifications] });
       assert.ok((await turn(t, [original, corrected])).result.stats.attempted > 0);
@@ -1004,7 +1008,7 @@ test('4C bölme kapanışı: sıralama ve liste yalnızca kendi satır bölümü
   }
 });
 
-test('4C bölme kapanışı: hatalı alan veya bağlama geçerli kardeşleri serbest bırakmaz', async (t) => {
+test("planlayıcı bölme kapanışı: hatalı alan veya bağlama geçerli kardeşleri serbest bırakmaz", async (t) => {
   const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' } };
   const taskField = { metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' };
   const metrics = ['tasks.total', 'tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent', 'tasks.worstOverdueDays'];
@@ -1023,7 +1027,7 @@ test('4C bölme kapanışı: hatalı alan veya bağlama geçerli kardeşleri ser
   assert.equal(repaired.outcome, 'planned', 'hatalı yuva geçerli kardeşin eşleşmesini tüketmez');
 });
 
-test('4C bölme kapanışı: bozuk bağlama atılırken geçerli bağlama korunur ve tur çökmez', async () => {
+test("planlayıcı bölme kapanışı: bozuk bağlama atılırken geçerli bağlama korunur ve tur çökmez", async () => {
   const { planCase } = await import('../scripts/planner-evaluation.mjs');
   const metrics = ['tasks.total', 'tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent', 'tasks.worstOverdueDays'];
   const tasks = { operation: 'value', population: { tool: 'rota_task_analytics' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] };
@@ -1041,7 +1045,7 @@ test('4C bölme kapanışı: bozuk bağlama atılırken geçerli bağlama korunu
   }
 });
 
-test('4C sağlayıcı ikizi: metin planı kesintiyi gizlemez ve yerel çağrı önsözünü silmez', async (t) => {
+test("planlayıcı sağlayıcı ikizi: metin planı kesintiyi gizlemez ve yerel çağrı önsözünü silmez", async (t) => {
   const { createFakeAiProvider } = await import('./helpers/fakeAiProvider.mjs');
   const { declared } = await import('./helpers/evidenceScenario.mjs');
   const provider = createFakeAiProvider();
@@ -1060,14 +1064,14 @@ test('4C sağlayıcı ikizi: metin planı kesintiyi gizlemez ve yerel çağrı �
   });
 });
 
-test('4C yakınsama: sağlayıcı ikizi kesilme, açık parçalar ve model künyesini korur', async (t) => {
+test("sağlayıcı ikizi kesilme, açık parçalar ve model künyesini korur", async (t) => {
   const { createFakeAiProvider } = await import('./helpers/fakeAiProvider.mjs');
   const { declared } = await import('./helpers/evidenceScenario.mjs');
   const input = { model: 'configured', signal: new AbortController().signal, messages: [], tools: [] };
   const usage = { promptTokens: 11, completionTokens: 5, reasoningTokens: 0 };
   for (const type of ['reply', 'stream']) {
     for (const patch of [{ finishReason: 'length' }, { chunks: ['{broken'] }, { model: 'different', usage }]) {
-      await t.test(`${type} ${Object.keys(patch).join()}`, async () => {
+      await t.test(`durum ${type} ${Object.keys(patch).join()}`, async () => {
         const provider = createFakeAiProvider();
         provider.enqueue({ type, text: declared(notifications), ...patch });
         const opened = await provider.streamToolCompletion(input);
@@ -1081,7 +1085,7 @@ test('4C yakınsama: sağlayıcı ikizi kesilme, açık parçalar ve model küny
   }
 });
 
-test('4C yakınsama: aynı adın sonraki bölümü çözüm kanıtını korur', async (t) => {
+test("aynı adın sonraki bölümü çözüm kanıtını korur", async (t) => {
   const project = { operation: 'value', metrics: ['project.lead'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] };
   const tasks = { ...project, metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' } };
   const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: project, additionalRequests: [tasks] })], { user: 'Radar Modernizasyonu proje lideri ve görev sayısı' });
@@ -1101,7 +1105,7 @@ async function repairDecision(steps, text = 'Radar Modernizasyonu ve Anten göre
 }
 const rota = request => plan({ intent: 'rota', language: 'tr', request });
 
-test('4C yakınsama: yinelenen alan ve bağlamalar yalnızca tekilleştirilebilir', async () => {
+test("yinelenen alan ve bağlamalar yalnızca tekilleştirilebilir", async () => {
   const entities = [{ type: 'project', text: 'Radar Modernizasyonu' }, { type: 'project', text: 'Anten' }];
   const base = { operation: 'value', metrics: ['tasks.total', 'tasks.overdue'], population: { tool: 'rota_task_analytics' }, entities,
     bindings: [{ metric: 'tasks.total', entity: 0 }, { metric: 'tasks.overdue', entity: 1 }] };
@@ -1117,7 +1121,7 @@ test('4C yakınsama: yinelenen alan ve bağlamalar yalnızca tekilleştirilebili
   }
 });
 
-test('4C yakınsama: yinelenen fazla ölçü tekilleştirilip bölünebilir', async () => {
+test("yinelenen fazla ölçü tekilleştirilip bölünebilir", async () => {
   const metrics = ['tasks.total', 'tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent'];
   const base = { operation: 'value', metrics, population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
   const original = { ...base, metrics: [metrics[0], ...metrics] };
@@ -1127,7 +1131,7 @@ test('4C yakınsama: yinelenen fazla ölçü tekilleştirilip bölünebilir', as
   assert.equal(result.remaining, 0);
 });
 
-test('4C yakınsama: sonraki ret izin verince aynı ölçü kümesi bölünebilir', async () => {
+test("sonraki ret izin verince aynı ölçü kümesi bölünebilir", async () => {
   const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
   const mixed = { ...tasks, metrics: ['tasks.total', 'notifications.unread'] };
   const split = plan({ intent: 'rota', language: 'tr', request: tasks, additionalRequests: [notifications] });
@@ -1136,14 +1140,14 @@ test('4C yakınsama: sonraki ret izin verince aynı ölçü kümesi bölünebili
   assert.equal(result.remaining, 0);
 });
 
-test('4C yakınsama: açık öncül listesi bölmede liste olarak kalır', async () => {
+test("açık öncül listesi bölmede liste olarak kalır", async () => {
   const dependency = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_dependency_inspect', collection: 'predecessors' }, entities: [{ type: 'task', id: TASKS.OVERDUE }] };
   const split = plan({ intent: 'rota', language: 'tr', request: dependency, additionalRequests: [notifications] });
   const result = await repairDecision([rota({ ...dependency, metrics: [...dependency.metrics, ...notifications.metrics] }), split], `${TASKS.OVERDUE} görevinin öncülleri ve bildirimlerim`);
   assert.equal(result.outcome.outcome, 'planned');
 });
 
-test('4C yakınsama: fazla bağlama dizisi bölünürken yeni kayıt bağı eklenemez', async () => {
+test("fazla bağlama dizisi bölünürken yeni kayıt bağı eklenemez", async () => {
   const metrics = ['tasks.total', 'tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent'];
   const entities = ['Radar Modernizasyonu', 'Anten', 'Okuma Projesi'].map(text => ({ type: 'project', text }));
   const bindings = metrics.flatMap((metric, i) => entities.flatMap((_, entity) => i < 3 && entity === 2 ? [] : [{ metric, entity }]));
@@ -1159,7 +1163,7 @@ test('4C yakınsama: fazla bağlama dizisi bölünürken yeni kayıt bağı ekle
   assert.match(JSON.stringify(result.inputs[2]), /repairScope/);
 });
 
-test('4C yakınsama: çok bölümlü tek belirsizlik küresel aday seçimi kaydetmez', async (t) => {
+test("çok bölümlü tek belirsizlik küresel aday seçimi kaydetmez", async (t) => {
   const project = text => ({ operation: 'value', metrics: ['project.lead'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', text }] });
   const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: project('Radar Modernizasyonu'), additionalRequests: [project('Proje')] }),
     input => prose(JSON.stringify({ kind: 'clarification', evidence: JSON.parse(input.messages.filter(m => m.role === 'tool').at(-1).content).evidenceId }))],
@@ -1170,7 +1174,7 @@ test('4C yakınsama: çok bölümlü tek belirsizlik küresel aday seçimi kayde
   assert.ok(result.evidenceRows.every(row => !JSON.parse(row.evidenceJson).clarificationContext));
 });
 
-test('4C beş bulgu: bozuk dizi yuvası kaldırılırken geçerli alan ve bağlar korunur', async (t) => {
+test("planlayıcı beş bulgu: bozuk dizi yuvası kaldırılırken geçerli alan ve bağlar korunur", async (t) => {
   const entities = [{ type: 'project', text: 'Radar Modernizasyonu' }, { type: 'project', text: 'Anten' }];
   const bindings = [{ metric: 'tasks.total', entity: 0 }, { metric: 'tasks.overdue', entity: 1 }];
   const fields = [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' },
@@ -1179,7 +1183,7 @@ test('4C beş bulgu: bozuk dizi yuvası kaldırılırken geçerli alan ve bağla
   for (const key of ['fields', 'bindings']) {
     const [a, b] = valid[key];
     for (const items of [[a, a, null, b], [null, a, a, b], [a, null, a, b]]) {
-      await t.test(`${key} ${items.indexOf(null)}`, async () => {
+      await t.test(`durum ${key} ${items.indexOf(null)}`, async () => {
         const original = rota({ ...valid, [key]: items });
         const repaired = await repairDecision([original, rota(valid)]);
         assert.equal(repaired.outcome.outcome, 'planned');
@@ -1194,7 +1198,7 @@ test('4C beş bulgu: bozuk dizi yuvası kaldırılırken geçerli alan ve bağla
   }
 });
 
-test('4C beş bulgu: eski telemetri durumu planlayıcıyı başlatır ve mevcut sayımları korur', () => {
+test("planlayıcı beş bulgu: eski telemetri durumu planlayıcıyı başlatır ve mevcut sayımları korur", () => {
   const key = Symbol.for('mergen-rota.ai-telemetry');
   const previous = globalThis[key];
   try {
@@ -1224,14 +1228,14 @@ test('4C beş bulgu: eski telemetri durumu planlayıcıyı başlatır ve mevcut 
   } finally { globalThis[key] = previous; }
 });
 
-test('4C donmuş bulgular: araç ret kodları ayrı ve içeriksiz sayılır', () => {
+test("planlayıcı donmuş bulgular: araç ret kodları ayrı ve içeriksiz sayılır", () => {
   resetAiTelemetryForTests();
   for (const code of ['UNSUPPORTED_SCOPE', 'UNKNOWN_TOOL', 'LIMIT_EXCEEDED']) recordPlannerRejection(`$.calls:${code}`);
   recordPlannerRejection('$.fields[0].path:unknown');
   assert.deepEqual(aiTelemetrySnapshot().planner.rejections, { UNSUPPORTED_SCOPE: 1, UNKNOWN_TOOL: 1, LIMIT_EXCEEDED: 1, unknown: 1 });
 });
 
-test('4C donmuş bulgular: hatalı alan yolu atılabilir; geçerli kardeşler birebir korunur', async () => {
+test("planlayıcı donmuş bulgular: hatalı alan yolu atılabilir; geçerli kardeşler birebir korunur", async () => {
   const fields = [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' },
     { metric: 'tasks.overdue', tool: 'rota_task_analytics', path: 'data.totals.overdue' }];
   const base = { operation: 'value', metrics: ['tasks.total', 'tasks.overdue'], population: { tool: 'rota_task_analytics' }, fields };
@@ -1248,10 +1252,10 @@ test('4C donmuş bulgular: hatalı alan yolu atılabilir; geçerli kardeşler bi
   }
 });
 
-test('4C alan onarımı: kaldırılan yuvadan sonraki ret güncel alan dizisine bağlanır', async (t) => {
+test("planlayıcı alan onarımı: kaldırılan yuvadan sonraki ret güncel alan dizisine bağlanır", async (t) => {
   const total = { metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' };
   const overdue = { metric: 'tasks.overdue', tool: 'rota_task_analytics', path: 'data.totals.overdue' };
-  for (const sibling of [false, true]) await t.test(sibling ? 'geçerli kardeş korunur' : 'bildirilen iki adımlı onarım', async (t) => {
+  for (const sibling of [false, true]) await t.test(`davranış durumu: ${sibling ? 'geçerli kardeş korunur' : 'bildirilen iki adımlı onarım'}`, async (t) => {
     const base = { operation: 'value', metrics: sibling ? ['tasks.total', 'tasks.overdue'] : ['tasks.total'],
       population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' }, fields: [total, ...(sibling ? [overdue] : [])] };
     const shifted = { ...base, fields: [{ ...total, path: 'data.invalid' }, ...base.fields.slice(1)] };
@@ -1272,7 +1276,7 @@ test('4C alan onarımı: kaldırılan yuvadan sonraki ret güncel alan dizisine 
   });
 });
 
-test('4C alan onarımı: güncellenen yuvanın maskesi geçerli kardeşi ve kapsamı serbest bırakmaz', async (t) => {
+test("planlayıcı alan onarımı: güncellenen yuvanın maskesi geçerli kardeşi ve kapsamı serbest bırakmaz", async (t) => {
   const fields = [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' },
     { metric: 'tasks.overdue', tool: 'rota_task_analytics', path: 'data.totals.overdue' }];
   const base = { operation: 'value', metrics: ['tasks.total', 'tasks.overdue'], population: { tool: 'rota_task_analytics' },
@@ -1285,7 +1289,7 @@ test('4C alan onarımı: güncellenen yuvanın maskesi geçerli kardeşi ve kaps
     ['yeni yuva', { ...base, fields: [...fields, fields[0]] }],
     ['filtre silme', { ...base, filters: {} }],
     ['ölçü silme', { ...base, metrics: ['tasks.total'] }]
-  ]) await t.test(name, async (t) => {
+  ]) await t.test(`davranış: ${name}`, async (t) => {
     let stack;
     const { result, decisions } = await turn(t, [rota(original), rota(shifted), rota(changed)], { setup: value => { stack = value; } });
     assert.equal(result.outcome, 'failed');
@@ -1296,7 +1300,7 @@ test('4C alan onarımı: güncellenen yuvanın maskesi geçerli kardeşi ve kaps
   });
 });
 
-test('4C donmuş bulgular: bölmeden sonraki alan onarımı yalnızca reddedilen yolu açar', async () => {
+test("planlayıcı donmuş bulgular: bölmeden sonraki alan onarımı yalnızca reddedilen yolu açar", async () => {
   const metrics = ['tasks.total', 'tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent'];
   const fields = [{ metric: 'tasks.total', tool: 'rota_task_analytics', path: 'data.totals.total' },
     { metric: 'tasks.overdue', tool: 'rota_task_analytics', path: 'data.totals.overdue' }];
@@ -1314,7 +1318,7 @@ test('4C donmuş bulgular: bölmeden sonraki alan onarımı yalnızca reddedilen
   }
 });
 
-test('4C donmuş bulgular: yıldızla biten korumalı metin ölçüsü izin uyarısını korur', async (t) => {
+test("planlayıcı donmuş bulgular: yıldızla biten korumalı metin ölçüsü izin uyarısını korur", async (t) => {
   const request = { operation: 'list', metrics: ['activity.changes'], population: { tool: 'rota_activity_search', collection: 'items' }, filters: { period: 'today' } };
   for (const value of [request, { ...request, fields: 'invalid' }]) {
     const { result } = await turn(t, [rota(value)]);
@@ -1323,7 +1327,7 @@ test('4C donmuş bulgular: yıldızla biten korumalı metin ölçüsü izin uyar
   }
 });
 
-test('4C ek dört bulgu: bağımlı örneklerin eksik notu bölüm başına bir kez gösterilir', async (t) => {
+test("planlayıcı ek dört bulgu: bağımlı örneklerin eksik notu bölüm başına bir kez gösterilir", async (t) => {
   const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
   const { renderPartUnavailable } = await import('../src/domain/ai/plannerOutcome.js');
   const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me' } };
@@ -1340,7 +1344,7 @@ test('4C ek dört bulgu: bağımlı örneklerin eksik notu bölüm başına bir 
   }
 });
 
-test('4C ek dört bulgu: sonraki ret ek soruyu açar; ilk bölümün kapsamı sabit kalır', async () => {
+test("planlayıcı ek dört bulgu: sonraki ret ek soruyu açar; ilk bölümün kapsamı sabit kalır", async () => {
   const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
   const original = rota({ ...request, metrics: ['tasks.typo'] });
   const second = plan({ intent: 'rota', language: 'tr', request, calls: [{ name: 'rota_task_analytics', arguments: { assignee: 'me' } },
@@ -1365,7 +1369,7 @@ test('4C ek dört bulgu: sonraki ret ek soruyu açar; ilk bölümün kapsamı sa
   }
 });
 
-test('4C ek iki bulgu: tüm bölüm hataları aynı rette açılır; geçerli kardeş anlamı korunur', async () => {
+test("planlayıcı ek iki bulgu: tüm bölüm hataları aynı rette açılır; geçerli kardeş anlamı korunur", async () => {
   const tasks = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' } };
   const project = { operation: 'value', metrics: ['project.lead'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }] };
   const badTasks = { ...tasks, metrics: ['tasks.typo'] };
@@ -1393,7 +1397,7 @@ test('4C ek iki bulgu: tüm bölüm hataları aynı rette açılır; geçerli ka
   assert.match(JSON.stringify(three.inputs[1]), /additionalRequests\[1\]\.metrics/);
 });
 
-test('4C ek iki bulgu: geçersiz bağımlı kaynağın kontrolü ertelenir ve onarımda yeniden yapılır', async () => {
+test("planlayıcı ek iki bulgu: geçersiz bağımlı kaynağın kontrolü ertelenir ve onarımda yeniden yapılır", async () => {
   const source = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me' } };
   const follow = from => ({ operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', from }] });
   const multi = (request, additionalRequests) => plan({ intent: 'rota', language: 'tr', request, additionalRequests });
@@ -1414,7 +1418,7 @@ test('4C ek iki bulgu: geçersiz bağımlı kaynağın kontrolü ertelenir ve on
   assert.match(JSON.stringify(rejected.inputs[2]), /entities:from/);
 });
 
-test('4C ek iki bulgu: birden çok hatalı bölüm doğrulanmadan veri okunmaz', async (t) => {
+test("planlayıcı ek iki bulgu: birden çok hatalı bölüm doğrulanmadan veri okunmaz", async (t) => {
   const request = { operation: 'value', metrics: ['tasks.typo'], population: { tool: 'rota_task_analytics' } };
   const rejected = plan({ intent: 'rota', language: 'tr', request, additionalRequests: [{ ...notifications, metrics: ['notifications.typo'] }] });
   const { result } = await turn(t, [rejected, rejected, rejected]);
@@ -1422,7 +1426,7 @@ test('4C ek iki bulgu: birden çok hatalı bölüm doğrulanmadan veri okunmaz',
   assert.equal(result.outcome, 'failed');
 });
 
-test('4C tek bulgu: yapılandırılmış gateway timeout semantik telemetride TIMEOUT sayılır', async () => {
+test("planlayıcı tek bulgu: yapılandırılmış gateway timeout semantik telemetride TIMEOUT sayılır", async () => {
   resetAiTelemetryForTests();
   const advice = await semanticPlanningAdvice({ query: 'x', catalog, retrieve: async () => ({
     status: 'unavailable', candidates: [], failure: { reason: 'AI_TIMEOUT' }
@@ -1436,11 +1440,11 @@ test('4C tek bulgu: yapılandırılmış gateway timeout semantik telemetride TI
   });
 });
 
-test('4C son yedi: okuma kurulamayan plan kabul edilmez; onarım ve doğrudan çağrı da veri okumaz', async (t) => {
+test("okuma kurulamayan plan kabul edilmez; onarım ve doğrudan çağrı da veri okumaz", async (t) => {
   const request = { operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' },
     entities: [{ type: 'task', id: TASKS.OVERDUE }], filters: { status: ['todo'] } };
   const declare = value => plan({ intent: 'rota', language: 'tr', request: value });
-  for (const mode of ['original', 'repaired', 'direct']) await t.test(mode, async (t) => {
+  for (const mode of ['original', 'repaired', 'direct']) await t.test(`kip: ${mode}`, async (t) => {
     const noAcceptedState = input => {
       assert.equal(input.toolChoice.name, 'rota_plan');
       assert.ok(!input.messages.some(message => message.role === 'system' && message.content.includes('istek kabul edildi')));
@@ -1466,7 +1470,7 @@ test('4C son yedi: okuma kurulamayan plan kabul edilmez; onarım ve doğrudan ç
   });
 });
 
-test('4C son yedi: kabul edilen çoklu plan tekrar zorlanmaz; ilgisiz çağrı kardeş kanıtı kirletmez', async (t) => {
+test("kabul edilen çoklu plan tekrar zorlanmaz; ilgisiz çağrı kardeş kanıtı kirletmez", async (t) => {
   const unresolved = { operation: 'value', metrics: ['project.baselineCount'], population: { tool: 'rota_task_search' },
     entities: [{ type: 'wbs', text: 'Radar' }], layout: 'auto' };
   const invalid = input => {
@@ -1482,7 +1486,7 @@ test('4C son yedi: kabul edilen çoklu plan tekrar zorlanmaz; ilgisiz çağrı k
   assert.deepEqual(decisions.map(decision => decision.intent), ['rota']);
 });
 
-test('4C frozen 16: additional requests advertise the existing closed declaration contract', async () => {
+test("ek istekler mevcut kapalı bildirim sözleşmesini sunar", async () => {
   const { parseToolArguments } = await import('../src/server/ai/tools/toolArguments.js');
   const extra = typedPlanningTool(catalog).parameters.properties.additionalRequests.items;
   const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, layout: 'list' };
@@ -1494,7 +1498,7 @@ test('4C frozen 16: additional requests advertise the existing closed declaratio
   }
 });
 
-test('4C frozen 22: multipart generation repairs share one turn budget', async (t) => {
+test("çok parçalı üretim onarımları tek tur bütçesini paylaşır", async (t) => {
   const request = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, reasoning: 'synthesis' };
   const additionalRequests = ['critical', 'high'].map(priority => ({ ...request, filters: { priority: [priority] } }));
   const truncated = { text: '', toolCalls: [], finishReason: 'length' };
@@ -1507,7 +1511,7 @@ test('4C frozen 22: multipart generation repairs share one turn budget', async (
   assert.deepEqual(result.evidence, []);
 });
 
-test('4C frozen 22: dependent instances cannot replenish the turn repair budget', async (t) => {
+test("bağımlı örnekler turun onarım bütçesini yenileyemez", async (t) => {
   const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me' } };
   const dependent = { operation: 'value', metrics: ['task.status'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', from: 0 }], reasoning: 'synthesis' };
   const truncated = { text: '', toolCalls: [], finishReason: 'length' };
@@ -1519,8 +1523,8 @@ test('4C frozen 22: dependent instances cannot replenish the turn repair budget'
   assert.equal(result.evidence.length, 1, 'failed dependent generations cannot claim their evidence');
 });
 
-test('4C general kararı ek model turu ve SQL olmadan sunucu yönlendirmesiyle biter', async (t) => {
-  for (const language of ['tr', 'en']) await t.test(language, async (t) => {
+test("planlayıcı general kararı ek model turu ve SQL olmadan sunucu yönlendirmesiyle biter", async (t) => {
+  for (const language of ['tr', 'en']) await t.test(`yanıt dili: ${language}`, async (t) => {
     const stack = stackFor(t);
     const decisions = [];
     const texts = [];
@@ -1547,7 +1551,7 @@ test('4C general kararı ek model turu ve SQL olmadan sunucu yönlendirmesiyle b
   });
 });
 
-test('4C bağımlı sıralama sınırdaki eşitleri korur; üç kayıt sınırı ve açıklaması sonradan uygulanır', async (t) => {
+test("planlayıcı bağımlı sıralama sınırdaki eşitleri korur; üç kayıt sınırı ve açıklaması sonradan uygulanır", async (t) => {
   const request = { operation: 'rank', metrics: ['project.name', 'tasks.overdue'],
     population: { tool: 'rota_portfolio_summary', collection: 'projects' }, rank: { metric: 'tasks.overdue', order: 'desc', limit: 1 }, layout: 'auto' };
   const detail = { operation: 'value', metrics: ['project.lead'], population: { tool: 'rota_project_detail' }, entities: [{ type: 'project', from: 0 }], layout: 'auto' };
@@ -1584,4 +1588,25 @@ test('4C bağımlı sıralama sınırdaki eşitleri korur; üç kayıt sınırı
     } else assert.match(result.text, /Takip bölümü kaynaktaki ilk 3 kayıtla sınırlıdır/);
     assert.doesNotMatch(result.text, /Gizli Proje/);
   });
+});
+
+test('sonuç kapsamı düşmüş satır bağlamı planlayıcıya kullanılamayan önceki özneyi önermez', async (t) => {
+  const stack = stackFor(t);
+  let messages;
+  const result = await runGroundedTurn({ signal: new AbortController().signal, round: async (input) => {
+    messages = input.messages;
+    return plan({ intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } });
+  } }, {
+    messages: buildGroundedContext({ userContent: 'ikinci görevin projesini incele', now: NOW }).messages,
+    catalog, context: createToolTurnContext({ sicil: AYSE, now: NOW }), onText: async () => {}, previousResult: null,
+    previousAnalysis: { v: 2, scope: 'all', subjects: [], focus: [], rowsOnly: true, rows: [{ type: 'project', id: PROJECTS.FULL }] }
+  });
+  const note = messages.find((item) => item.content.startsWith('Önceki sonucun 1 görev satırının kullanılabilir proje göndergeleri'));
+  assert.ok(note);
+  assert.match(note.content, /analysis.scope "row"/u);
+  assert.match(note.content, /analysis.scope "previous" kullanma/u);
+  assert.match(note.content, /gönderge yoktur; clarify missing_referent/u);
+  assert.equal(messages.some((item) => item.content.startsWith('Önceki doğrulanmış analiz bağlamı')), false);
+  assert.equal(result.outcome, 'clarification');
+  assert.equal(stack.db.aiToolLog?.length || 0, 0);
 });

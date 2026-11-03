@@ -135,7 +135,7 @@ test('Ayrıntılı, Dengeli ile aynı soruda daha geniş okuma, daha çok önerm
   const pages = {};
   const reads = {};
   for (const detail of ['balanced', 'detailed']) {
-    await t.test(detail, async (t) => {
+    await t.test(`yanıt ayrıntısı: ${detail}`, async (t) => {
       const { ask, stack } = phase4eConversation(t, { compose: () => composer((view) => { pages[detail] = view; return proseLayout(view); }) });
       const result = await ask({ text: 'işlerimin genel durumunu değerlendir', plan }, { detail });
       assert.equal(result.answer.finishReason, 'stop');
@@ -163,7 +163,7 @@ test('takip özeti: yazılmayan yön ve ufuk önceki analizden sürer; satır g�
   const narrowed = resolveAnalysisBrief(parseAnalysis({ scope: 'previous', dateFrom: '2026-10-02', dateTo: '2026-10-03' }), { previous });
   assert.deepEqual([narrowed.dateFrom, narrowed.dateTo], ['2026-10-02', '2026-10-03'], 'yeni ufuk öncekinin yerine geçer');
   const portfolio = { ...previous, scope: 'projects', focus: ['projects', 'overdue'] };
-  assert.deepEqual([...resolveAnalysisBrief(parseAnalysis({ scope: 'row', rows: [1] }), { previous: portfolio }).focus], ['overview', 'overdue', 'upcoming'], 'satıra inme kaydın genel görünümüdür');
+  assert.deepEqual([...resolveAnalysisBrief(parseAnalysis({ scope: 'row', rows: [1] }), { previous: portfolio }).focus], ['overdue'], 'satırdaki projede anlamlı gecikme yönü korunur');
   assert.throws(() => parseAnalysis({ scope: 'self' }), (error) => error.details.includes('$.analysis.focus:required'), 'ilk analizde yön zorunludur');
   assert.equal(expandAnalysis(parseAnalysis({ scope: 'previous' }), { previous, today: '2026-09-30' }).length, 2, 'önceki iki yön yeniden okunur');
 });
@@ -284,7 +284,7 @@ test('rol matrisi: yönetici (admin) ekip lideri sayılmaz; ekip lideri + yönet
     ['proje lideri (yönetim kapsamı yok)', LEAD, rotaToolSeed(), false],
     ['ilgisiz sıradan kullanıcı', OUTSIDER, rotaToolSeed(), false]
   ];
-  for (const [name, sicil, seed, allowed] of cases) await t.test(name, async (t) => {
+  for (const [name, sicil, seed, allowed] of cases) await t.test(`davranış: ${name}`, async (t) => {
     const { ask } = phase4eConversation(t, { sicil, seed, compose: () => composer((view) => proseLayout(view)) });
     const result = await ask({ text: 'ekibimin iş yükünü değerlendir', plan });
     if (allowed) {
@@ -316,7 +316,7 @@ test('fazla yön (şema sınırı) onarımda yalnızca modelin kendi yönlerinin
     ['sıralı alt küme kabul edilir', ['overview', 'overdue', 'upcoming'], true],
     ['yeni yön eklenemez', ['overview', 'workload'], false],
     ['kapsam değişemez', null, false]
-  ]) await t.test(name, async (t) => {
+  ]) await t.test(`davranış: ${name}`, async (t) => {
     const first = { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming'] } };
     const second = repaired ? { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: repaired } } : { intent: 'rota', language: 'tr', analysis: { scope: 'all', focus: ['overview'] } };
     const plans = [first, second, { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
@@ -445,7 +445,7 @@ test('adı verilen grafik türü gerektirdiği okumayı ekler (yığılmış →
 test('Ayrıntılı bölümlüdür: sayfa ana hat taşır, her bölüm sunucu başlığıyla açılır; Dengeli bütünleşik ve başlıksızdır', async (t) => {
   const plan = { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'overdue', 'upcoming'] } };
   const results = {};
-  for (const detail of ['balanced', 'detailed']) await t.test(detail, async (t) => {
+  for (const detail of ['balanced', 'detailed']) await t.test(`yanıt ayrıntısı: ${detail}`, async (t) => {
     let page = null;
     const { ask } = phase4eConversation(t, { compose: () => composer((view) => { page = view; return proseLayout(view); }) });
     const result = await ask({ text: 'işlerimin genel durumunu değerlendir', plan }, { detail });

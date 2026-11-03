@@ -38,12 +38,13 @@ export function normalizePendingAnalysis(value) {
     if (value.names != null && (!Array.isArray(value.names) || !value.names.length || value.names.length > 2 || !value.names.every(shortText))) return null;
     if (['person', 'project'].includes(value.scope) !== Boolean(value.names)) return null;
     if (value.level != null && (value.scope !== 'team' || !LEVELS.includes(value.level))) return null;
-    if (value.withSelf != null && (typeof value.withSelf !== 'boolean' || !['person', 'previous'].includes(value.scope) || (value.withSelf && value.scope === 'person' && value.names?.length !== 1))) return null;
+    if (value.withSelf != null && (typeof value.withSelf !== 'boolean' || !['person', 'previous', 'row'].includes(value.scope)
+      || value.withSelf && (value.scope === 'person' && value.names?.length !== 1 || value.scope === 'row' && value.rows?.length !== 1))) return null;
     if (value.within != null && (!shortText(value.within) || !['self', 'team', 'all', 'previous'].includes(value.scope) && !(value.scope === 'person' && value.withSelf))) return null;
     if ((value.scope === 'row') !== (value.rows != null)) return null;
     if (value.rows && (!Array.isArray(value.rows) || !value.rows.length || value.rows.length > 2 || new Set(value.rows).size !== value.rows.length || value.rows.some((row) => !Number.isInteger(row) || row < 1 || row > 10))) return null;
     if (value.act != null && !['explain', 'expand', 'summarize', 'prioritize', 'certainty'].includes(value.act)) return null;
-    if (value.relativeWindow != null && (!['today', 'next_7_days'].includes(value.relativeWindow) || value.dateFrom || value.dateTo)) return null;
+    if (value.relativeWindow != null && (!['today', 'next_7_days', 'all_time'].includes(value.relativeWindow) || value.dateFrom || value.dateTo)) return null;
     for (const key of ['dateFrom', 'dateTo']) if (value[key] != null && !isIsoDay(value[key])) return null;
     if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) return null;
     for (const key of ['visual', 'table']) if (value[key] != null && typeof value[key] !== 'boolean') return null;
@@ -120,7 +121,7 @@ export function normalizeAnalysisContext(value) {
     const within = value.within == null ? null : identity(value.within);
     if (value.within != null && (!within || within.type !== 'project' || !['self', 'team', 'all', 'person', 'projects'].includes(value.scope))) return null;
     if (value.withSelf != null && (value.withSelf !== true || value.scope !== 'person' || subjects.length !== 1)) return null;
-    if (value.relativeWindow != null && (!['today', 'next_7_days'].includes(value.relativeWindow) || value.dateFrom || value.dateTo)) return null;
+    if (value.relativeWindow != null && (!['today', 'next_7_days', 'all_time'].includes(value.relativeWindow) || value.dateFrom || value.dateTo)) return null;
     const focus = value.focus == null ? [] : value.focus;
     if (!Array.isArray(focus) || focus.length > ANALYSIS_CONTEXT_LIMITS.maxFocus || focus.some((item) => !FOCUS.includes(item)) || new Set(focus).size !== focus.length) return null;
     for (const key of ['dateFrom', 'dateTo']) if (value[key] != null && !isIsoDay(value[key])) return null;
@@ -146,7 +147,7 @@ export function normalizeAnalysisContext(value) {
 export function analysisContextSummary(context) {
   const row = context.rows.find(Boolean);
   const rows = row ? { type: row.type, count: context.rows.length } : null;
-  return { scope: context.scope, ...(context.level ? { level: context.level } : {}), subjects: context.subjects.length, ...(context.withSelf ? { withSelf: true } : {}), ...(context.relativeWindow ? { relativeWindow: context.relativeWindow } : {}), ...(context.within ? { withinProject: true } : {}),
+  return { scope: context.scope, ...(context.rowsOnly ? { rowsOnly: true } : {}), ...(context.level ? { level: context.level } : {}), subjects: context.subjects.length, ...(context.withSelf ? { withSelf: true } : {}), ...(context.relativeWindow ? { relativeWindow: context.relativeWindow } : {}), ...(context.within ? { withinProject: true } : {}),
     ...(context.focus.length ? { focus: context.focus } : {}),
     ...(context.dateFrom ? { dateFrom: context.dateFrom } : {}), ...(context.dateTo ? { dateTo: context.dateTo } : {}), ...(context.visual ? { visual: true } : {}),
     ...(context.chart ? { chart: context.chart } : {}), ...(context.table ? { table: true } : {}), ...(rows ? { rows } : {}) };

@@ -357,7 +357,7 @@ export const AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL = `${KNOWN_SICIL}
     AND m.ConversationId = @conversationId AND c.OwnerSicil = @sicil AND @knownSicil = 1
   ORDER BY e.Ordinal;`;
 
-/** Presence is independent of optional evidence schema 0018 and contains no text. */
+/** Varlık isteğe bağlı kanıt şemasından bağımsızdır ve metin içermez. */
 export const AI_CONVERSATION_PRESENCE_SQL = `${KNOWN_SICIL}
   SELECT TOP (@maxMessages) m.MessageId
   FROM dbo.MR_AiConversationMessages m

@@ -192,8 +192,8 @@ export async function readTaskActivityReport(executor, actor, input = {}, now, {
     const names = executor.request();
     names.input('activityIdentityCandidates', sql.NVarChar(sql.MAX), JSON.stringify(candidates));
     names.input('sicil', sql.Int, actor.sicil);
-    // Display-name permission also includes direct co-assignees. It must never
-    // grant the stricter stable-ID/write permission (including numeric fallback).
+    // Görünüm adı izni doğrudan ortak sorumluyu da içerir. Bu izin daha katı
+    // kararlı kimlik ve yazma iznini sayısal dönüş dahil veremez.
     const identityVisible = taskIdentityVisibleSql();
     const found = await names.query(`SELECT DISTINCT candidate.TaskId, candidate.ProjectId, candidate.Sicil, pd.DisplayName,
         CASE WHEN ${identityVisible} THEN 1 ELSE 0 END AS StableIdentityVisible

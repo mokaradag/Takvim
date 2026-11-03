@@ -514,8 +514,8 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
     if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;
     evidence = { unavailable: true };
   }
-  // Check after evidence and authorization reads, including their failure paths.
-  // Presence errors propagate: unavailable evidence must not authorize stale text.
+  // Kanıt ve yetki okumalarının hata yolları dahil sonrasında denetlenir.
+  // Varlık hatası iletilir; kullanılamayan kanıt eski metni yetkilendiremez.
   return { ...evidence, ...await currentPresence(sicil, signal, target) };
 }
 
@@ -527,7 +527,7 @@ async function currentPresence(sicil, signal, target) {
   return presence;
 }
 
-/** Validate metadata/user content immediately before the stream's first event. */
+/** Üstveri ve kullanıcı içeriği akışın ilk olayından hemen önce doğrulanır. */
 export async function assertAssistantTurnPresent(turn, signal) {
   const presence = await currentPresence(turn.sicil, signal, { conversationId: turn.conversation.id, messageId: turn.userMessage.id });
   if (!presence.conversationPresent || !presence.presentMessages.has(turn.userMessage.id)) throw conversationNotFound();

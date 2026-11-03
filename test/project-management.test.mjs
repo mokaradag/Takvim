@@ -43,7 +43,7 @@ function validInput(overrides = {}) {
   };
 }
 
-test('project creation validation rejects empty and duplicate names', () => {
+test("proje oluşturma doğrulaması boş ve yinelenen adı reddeder", () => {
   const context = seed();
   const empty = validateProjectCreationInput(validInput({ name: '   ' }), context);
   assert.equal(empty[0].code, 'PROJECT_NAME_REQUIRED');
@@ -52,7 +52,7 @@ test('project creation validation rejects empty and duplicate names', () => {
   assert.equal(duplicate[0].code, 'PROJECT_NAME_DUPLICATE');
 });
 
-test('project creation uses the corporate calendar automatically', () => {
+test("proje oluşturma kurumsal takvimi otomatik kullanır", () => {
   const context = seed();
   const issues = validateProjectCreationInput(validInput(), context);
   assert.deepEqual(issues, []);
@@ -65,7 +65,7 @@ test('project creation uses the corporate calendar automatically', () => {
   assert.equal(prepared.project.calendarId, 'cal-1');
 });
 
-test('project creation validation checks lead, corporate calendar, date, and color', () => {
+test("proje doğrulaması lider kurumsal takvim tarih ve rengi denetler", () => {
   const context = seed();
   const issues = validateProjectCreationInput({
     name: 'Yeni Proje',
@@ -81,7 +81,7 @@ test('project creation validation checks lead, corporate calendar, date, and col
   ]);
 });
 
-test('prepareProjectCreation creates an atomic project and root work distribution tree change set', () => {
+test("prepareProjectCreation atomik proje ve kök iş dağılım ağacı değişimi kurar", () => {
   const context = seed();
   const prepared = prepareProjectCreation(validInput(), context, {
     projectId: 'p-new',
@@ -100,7 +100,7 @@ test('prepareProjectCreation creates an atomic project and root work distributio
   assert.equal(prepared.rootWbs.code, '1');
 });
 
-test('prepareProjectUpdate edits the selected project while preserving the corporate calendar', () => {
+test("prepareProjectUpdate kurumsal takvimi koruyarak seçili projeyi düzenler", () => {
   const context = seed();
   const prepared = prepareProjectUpdate('p-1', {
     name: 'Mevcut Proje Güncel',
@@ -133,7 +133,7 @@ test('prepareProjectUpdate edits the selected project while preserving the corpo
   assert.equal(duplicate.error.code, 'PROJECT_NAME_DUPLICATE');
 });
 
-test('project metadata updates avoid task persistence fan-out and preserve custom root names', () => {
+test("proje üstveri güncellemesi görev kayıt çoğalmasını önler ve özel kök adını korur", () => {
   const context = {
     ...seed(),
     tasks: [
@@ -192,7 +192,7 @@ test('project metadata updates avoid task persistence fan-out and preserve custo
   assert.equal(renamedWithDefaultRoot.changes.wbsUpserts[0].name, 'Mevcut Proje Güncel');
 });
 
-test('project color resolver follows persisted project color choices', () => {
+test("proje renk çözücüsü kalıcı renk seçimini izler", () => {
   try {
     setProjectColorOverrides([{ id: 'p-new', name: 'Serbest Proje', color: 'rose' }]);
     assert.equal(projectColorVar('Serbest Proje'), 'var(--c-rose)');
@@ -204,7 +204,7 @@ test('project color resolver follows persisted project color choices', () => {
   }
 });
 
-test('persistence diff includes project upserts without changing legacy empty change-set shape', () => {
+test("kalıcılık farkı eski boş değişim biçimini bozmadan proje güncellemesini içerir", () => {
   const before = seed();
   const newProject = { id: 'p-new', name: 'Yeni Proje' };
   const changes = createPersistenceChangeSet(before, {
@@ -219,7 +219,7 @@ test('persistence diff includes project upserts without changing legacy empty ch
   assert.equal('projectDeletes' in unchanged, false);
 });
 
-test('project and root work distribution tree persist atomically and survive repository reload', async () => {
+test("proje ve kök iş dağılım ağacı atomik saklanır ve yeniden yüklenir", async () => {
   const repository = createMockRepository(seed());
   const prepared = prepareProjectCreation(validInput(), seed(), {
     projectId: 'p-new',
@@ -235,7 +235,7 @@ test('project and root work distribution tree persist atomically and survive rep
   assert.equal(reloaded.wbs.some((node) => node.id === 'w-new' && node.projectId === 'p-new'), true);
 });
 
-test('project persistence failure does not partially add the project or root work distribution tree', async () => {
+test("proje kayıt hatası projeyi veya kök ağacı kısmen eklemez", async () => {
   const repository = createMockRepository(seed(), {
     failMutation: ({ changes }) => Boolean(changes.projectUpserts?.length)
   });
@@ -267,7 +267,7 @@ test('project persistence failure does not partially add the project or root wor
   persistence.dispose();
 });
 
-test('project creation and editing UI use one corporate calendar and the combined project structure page', () => {
+test("proje oluşturma ve düzenleme tek kurumsal takvim ve birleşik yapı sayfası kullanır", () => {
   const shell = fs.readFileSync(path.join(ROOT, 'src/components/shell/AppShell.jsx'), 'utf8');
   const dialog = fs.readFileSync(path.join(ROOT, 'src/components/shell/ProjectCreateDialog.jsx'), 'utf8');
   const projectView = fs.readFileSync(path.join(ROOT, 'src/features/project/ProjectWorkspaceView.jsx'), 'utf8');
@@ -292,7 +292,7 @@ test('project creation and editing UI use one corporate calendar and the combine
   assert.match(navigation, /Proje Yapısı/);
 });
 
-test('shared line chart stays crisp, connects every point, and keeps hover tooltips visible', () => {
+test("ortak çizgi grafik net kalır bütün noktaları bağlar ve ipucunu görünür tutar", () => {
   const ui = fs.readFileSync(path.join(ROOT, 'src/components/ui.jsx'), 'utf8');
   const areaChart = ui.slice(ui.indexOf('export function AreaChart'), ui.indexOf('// ── Heptagon emblem'));
 

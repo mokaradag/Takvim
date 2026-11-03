@@ -19,7 +19,7 @@ import {
   resolveDateRangeSelection
 } from '../shared/dateRangeFilter.js';
 
-/* ── Rapor (Reports) ──────────────────────────────────── */
+/* Rapor görünümü.*/
 const REPORT_TABS = [{ id: 'performance', label: 'Performans' }, { id: 'activities', label: 'Görev Hareketleri' }];
 
 export function ReportsView() {
@@ -106,7 +106,7 @@ export function PerformanceReportsView() {
   const unknownCompletions = useMemo2(() => countUnknownCompletionDates(tasks), [tasks]);
 
 
-  // Cumulative Flow Diagram — last 14 days
+  // Son on dört günün birikimli akış grafiği.
   const cfd = useMemo2(() => {
     const days = [];
     for (let i = 13; i >= 0; i--) {
@@ -122,7 +122,7 @@ export function PerformanceReportsView() {
         // döndürür, `s > d` karşılaştırması `false` olur ve görev CFD'nin HER
         // gününde "başlamış" sayılırdı.
         if (!Number.isFinite(s?.getTime?.())) return;
-        if (s > d) return; // hasn't started yet
+        if (s > d) return; // Henüz başlamadı.
         // Tamamlanma kronolojisi GERÇEKLEŞEN bitişten okunur. Planlanan bitişe
         // bakan eski hesap, 18 Ağustos'ta biten ama 10 Eylül'e planlanmış bir
         // görevi eğilim grafiğinde tamamlanmış, CFD'de ise Eylül'e kadar devam
@@ -138,7 +138,7 @@ export function PerformanceReportsView() {
     return days;
   }, [tasks, today_]);
 
-  // Weekly velocity — tasks completed each of last 6 weeks
+  // Son altı haftada tamamlanan görevlerin haftalık hızı.
   const velocity = useMemo2(() => {
     const out = [];
     for (let i = 5; i >= 0; i--) {
@@ -155,7 +155,7 @@ export function PerformanceReportsView() {
     return out;
   }, [tasks, today_]);
 
-  // Risk matrix — by priority × status (in-progress + todo)
+  // Öncelik ve açık durumlara göre risk matrisi.
   const risks = useMemo2(() => {
     const matrix = {};
     Object.keys(PRIORITIES).forEach(p => {
@@ -306,7 +306,7 @@ export function PerformanceReportsView() {
         <AreaChart data={trend.values} labels={trend.labels} width={1100} height={200} color="var(--status-done)" animated />
       </div>
 
-      {/* Cumulative Flow Diagram */}
+      {/* Birikimli akış grafiği.*/}
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16 }}>
         <div className="card">
           <CardHead
@@ -404,7 +404,7 @@ export function PerformanceReportsView() {
         )}
       </div>
 
-      {/* Risk matrix */}
+      {/* Risk matrisi.*/}
       <div className="card">
         <CardHead
           icon={<Icons.Alert size={14} />}
@@ -634,7 +634,7 @@ function CFDChart({ data, height = 200 }) {
   const x = (i) => pad.l + (i / (data.length - 1)) * innerW;
   const y = (v) => pad.t + innerH - (v / (max || 1)) * innerH;
 
-  // Build stacked paths
+  // Yığılmış yollar kurulur.
   const buildPath = (key, prevKeys) => {
     const top = data.map((d, i) => {
       let stack = 0;
@@ -676,7 +676,7 @@ function CFDChart({ data, height = 200 }) {
         onMouseMove={onMove}
         onMouseLeave={() => setHover(null)}
       >
-        {/* gridlines */}
+        {/* Izgara çizgileri.*/}
         {[0, 0.5, 1].map((g, i) => (
           <line key={i} x1={pad.l} x2={width - pad.r} y1={pad.t + g * innerH} y2={pad.t + g * innerH} stroke="var(--border)" strokeDasharray="3 3" />
         ))}

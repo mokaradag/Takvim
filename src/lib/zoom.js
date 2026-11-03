@@ -1,6 +1,6 @@
-// Effective app zoom (driven by the font-size control via body { zoom }).
-// Tooltip / popover positioning divides cursor + rect coords by this so
-// fixed-position overlays stay glued to the cursor when text is enlarged.
+// Yazı boyutu denetiminin body zoom ile belirlediği etkin uygulama yakınlaştırması.
+// İpucu ve açılır konumu imleç ve dikdörtgen koordinatını bu değere böler;
+// böylece metin büyürken sabit katman imlecin yanında kalır.
 export function appZoom() {
   if (typeof document === 'undefined') return 1;
   const rawZoom = document.body?.style?.zoom;

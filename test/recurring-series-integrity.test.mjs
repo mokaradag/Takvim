@@ -792,7 +792,7 @@ test('birden çok pahalı seri işlem tavanını paylaşır ve kısmi yazmaları
   } finally { await stack.dispose(); }
 });
 
-test('ordinary self-assigned creations share the transaction calendar meter and roll back on aggregate exhaustion', { timeout: 60000 }, async () => {
+test("olağan kendine atama işlem takvim sayacını paylaşır ve toplu tükenmede geri alınır", { timeout: 60000 }, async () => {
   const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
   const seed = corporateSeed({ systemAdminSicils: [], tasks: [{ TaskId: 'ab000000-0000-4000-8000-000000000001', ProjectId: CORPORATE_PROJECT_ID, WbsId: CORPORATE_ROOT_WBS_ID, Title: 'Scope anchor', CreatedBySicil: 900010 }], taskAssignees: [{ TaskId: 'ab000000-0000-4000-8000-000000000001', Sicil: 900001 }] });
   seed.calendars[0].WorkingDays = [1]; seed.calendars[0].Holidays = [];
@@ -806,7 +806,7 @@ test('ordinary self-assigned creations share the transaction calendar meter and 
   } finally { await stack.dispose(); }
 });
 
-test('recurrence parent absence and hidden existence return the same response before parent-specific checks', async () => {
+test("tekrar üstünün yokluğu ve gizli varlığı öze özgü denetimden önce aynı yanıtı verir", async () => {
   const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
   const hiddenProject = 'bd000000-0000-4000-8000-000000000001', hiddenParent = 'bd000000-0000-4000-8000-000000000002';
   const seed = corporateSeed({ systemAdminSicils: [], corporateProjectAccess: [{ ProjectCode: 'P4417041', Sicil: 900001, RoleCode: 'PROJECT_MANAGER' }] });
@@ -823,7 +823,7 @@ test('recurrence parent absence and hidden existence return the same response be
   } finally { await stack.dispose(); }
 });
 
-test('ordinary recurrence-child edits keep an unchanged invisible parent but cannot establish a hidden link', async () => {
+test("olağan tekrar çocuk düzenlemesi değişmemiş gizli üstü korur; yeni gizli bağ kuramaz", async () => {
   const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
   const parent = 'be000000-0000-4000-8000-000000000001', child = 'be000000-0000-4000-8000-000000000002';
   const stack = await createActualStack(corporateSeed({ systemAdminSicils: [],
@@ -838,8 +838,8 @@ test('ordinary recurrence-child edits keep an unchanged invisible parent but can
     assert.equal((await stack.persistence.flush()).ok, true);
     const saved = stack.db.tasks.find((task) => task.TaskId.toLowerCase() === child);
     assert.equal(saved.Description, 'ordinary edit'); assert.equal(saved.RecurrenceParentTaskId.toLowerCase(), parent);
-    // Give the actor full child-project write access, then target an EXISTING
-    // parent in a different, invisible project so only the visibility gate fails.
+    // Yapana çocuk projede tam yazma erişimi verilir; sonra başka görünmeyen projedeki
+    // mevcut üst hedeflenir; böylece yalnızca görünürlük kapısı başarısız olur.
     const hiddenProject = 'be000000-0000-4000-8000-000000000004';
     const hiddenParent = 'be000000-0000-4000-8000-000000000003';
     stack.db.corporateProjectAccess.push({ ProjectCode: 'P4417041', Sicil: 900001, RoleCode: 'PROJECT_MANAGER' });

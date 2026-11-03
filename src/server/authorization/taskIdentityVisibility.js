@@ -1,6 +1,6 @@
 import 'server-only';
 
-/** Canonical task-person identity policy; aliases are fixed application SQL. */
+/** Kanonik görev ve kişi kimliği politikası; eşlemeler sabit uygulama SQL değerleridir. */
 export function taskIdentityVisibleSql(person = 'candidate.Sicil') {
   return `(
     EXISTS (SELECT 1 FROM dbo.MR_UserRoles ur WHERE ur.Sicil = @sicil AND ur.RoleCode = 'SYSTEM_ADMIN' AND ur.IsActive = 1)

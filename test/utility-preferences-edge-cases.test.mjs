@@ -118,59 +118,59 @@ test('ilk boyama ve tercih yükleme bozuk alanlarda aynı varsayılanları kulla
   }
 });
 
-test('COLOR_MAP is frozen and exposes all supported design tokens', () => {
+test("COLOR_MAP donmuştur ve bütün tasarım belirteçlerini sunar", () => {
   assert.equal(Object.isFrozen(COLOR_MAP), true);
   assert.deepEqual(Object.keys(COLOR_MAP), ['blue', 'emerald', 'purple', 'amber', 'rose', 'cyan']);
 });
 
-test('known projects resolve to their configured color keys', () => {
+test("bilinen proje yapılandırılmış renk anahtarına çözülür", () => {
   assert.equal(projectColorKey('Web Sitesi Yenileme'), 'blue');
   assert.equal(projectColorKey('Mobil Uygulama'), 'purple');
   assert.equal(projectColorKey('Marka Kimliği'), 'emerald');
 });
 
-test('unknown project colors are deterministic across repeated calls', () => {
+test("bilinmeyen proje rengi yinelenen çağrıda belirlenimcidir", () => {
   const first = projectColorKey('Yeni Proje');
   const second = projectColorKey('Yeni Proje');
   assert.equal(first, second);
   assert.equal(Object.hasOwn(COLOR_MAP, first), true);
 });
 
-test('empty project names fall back deterministically to blue', () => {
+test("boş proje adı belirlenimci maviye döner", () => {
   assert.equal(projectColorKey(''), 'blue');
   assert.equal(projectColorKey(null), 'blue');
 });
 
-test('projectColorVar returns the CSS variable for configured and fallback keys', () => {
+test("projectColorVar yapılandırılmış ve dönüş anahtarı için CSS değişkeni döndürür", () => {
   assert.equal(projectColorVar('Altyapı'), 'var(--c-cyan)');
   assert.equal(Object.values(COLOR_MAP).includes(projectColorVar('Bilinmeyen Proje')), true);
 });
 
-test('personColorVar returns configured colors for known people', () => {
+test("personColorVar bilinen kişi için yapılandırılmış rengi döndürür", () => {
   assert.equal(personColorVar('Ayşe Kaya'), 'var(--c-emerald)');
   assert.equal(personColorVar('Mehmet Demir'), 'var(--c-purple)');
 });
 
-test('personColorVar is deterministic for unknown people', () => {
+test("personColorVar bilinmeyen kişide belirlenimcidir", () => {
   assert.equal(personColorVar('Yeni Kişi'), personColorVar('Yeni Kişi'));
   assert.equal(Object.values(COLOR_MAP).includes(personColorVar('Yeni Kişi')), true);
 });
 
-test('personInitials trims repeated spaces and returns at most two initials', () => {
+test("personInitials yinelenen boşluğu kırpar ve en çok iki baş harf döndürür", () => {
   assert.equal(personInitials('  Mehmet   Onur   Karadağ  '), 'MO');
 });
 
-test('personInitials uppercases Turkish characters and handles one-word names', () => {
+test("personInitials Türkçe harfi büyütür ve tek sözcüklü adı işler", () => {
   assert.equal(personInitials('özge'), 'Ö');
 });
 
-test('personInitials safely handles nullish and empty values', () => {
+test("personInitials boş değerleri güvenle işler", () => {
   assert.equal(personInitials(null), '');
   assert.equal(personInitials(undefined), '');
   assert.equal(personInitials(''), '');
 });
 
-test('appZoom returns 1 when document is unavailable', () => {
+test("appZoom belge yokken bir döndürür", () => {
   const previous = globalThis.document;
   try {
     delete globalThis.document;
@@ -180,7 +180,7 @@ test('appZoom returns 1 when document is unavailable', () => {
   }
 });
 
-test('appZoom parses numeric body zoom values', () => {
+test("appZoom sayısal gövde yakınlaştırmasını ayrıştırır", () => {
   const previous = globalThis.document;
   try {
     globalThis.document = { body: { style: { zoom: '1.25' } } };
@@ -191,7 +191,7 @@ test('appZoom parses numeric body zoom values', () => {
   }
 });
 
-test('appZoom converts CSS percentage zoom values to scale factors', () => {
+test("appZoom CSS yüzde yakınlaştırmasını ölçek katsayısına çevirir", () => {
   const previous = globalThis.document;
   try {
     globalThis.document = { body: { style: { zoom: '125%' } } };
@@ -202,7 +202,7 @@ test('appZoom converts CSS percentage zoom values to scale factors', () => {
   }
 });
 
-test('appZoom falls back to 1 for empty and invalid values', () => {
+test("appZoom boş veya bozuk değerde bire döner", () => {
   const previous = globalThis.document;
   try {
     globalThis.document = { body: { style: { zoom: '' } } };
@@ -215,19 +215,19 @@ test('appZoom falls back to 1 for empty and invalid values', () => {
   }
 });
 
-test('workspace preference uses a stable storage key', () => {
+test("çalışma alanı tercihi kararlı depo anahtarı kullanır", () => {
   assert.equal(WORKSPACE_STORAGE_KEY, 'mergen-rota.workspace.v1');
 });
 
-test('readWorkspacePreference returns null when storage is unavailable', () => {
+test("readWorkspacePreference depo yokken boş değer döndürür", () => {
   assert.equal(readWorkspacePreference(null), null);
 });
 
-test('readWorkspacePreference returns null when the key is absent', () => {
+test("readWorkspacePreference anahtar yokken boş değer döndürür", () => {
   assert.equal(readWorkspacePreference(createStorage()), null);
 });
 
-test('readWorkspacePreference parses stored workspace values', () => {
+test("readWorkspacePreference kayıtlı alan değerini ayrıştırır", () => {
   const storage = createStorage({
     [WORKSPACE_STORAGE_KEY]: JSON.stringify({ workspaceMode: 'project', selectedProjectId: 'p1' })
   });
@@ -237,7 +237,7 @@ test('readWorkspacePreference parses stored workspace values', () => {
   });
 });
 
-test('readWorkspacePreference normalizes missing stored fields to null', () => {
+test("readWorkspacePreference eksik kayıtlı alanı boş değere çevirir", () => {
   const storage = createStorage({ [WORKSPACE_STORAGE_KEY]: '{}' });
   assert.deepEqual(readWorkspacePreference(storage), {
     workspaceMode: null,
@@ -245,16 +245,16 @@ test('readWorkspacePreference normalizes missing stored fields to null', () => {
   });
 });
 
-test('readWorkspacePreference returns null for invalid JSON', () => {
+test("readWorkspacePreference bozuk JSON için boş değer döndürür", () => {
   const storage = createStorage({ [WORKSPACE_STORAGE_KEY]: '{bad-json' });
   assert.equal(readWorkspacePreference(storage), null);
 });
 
-test('readWorkspacePreference contains storage read failures', () => {
+test("readWorkspacePreference depo okuma hatasını kapsar", () => {
   assert.equal(readWorkspacePreference({ getItem() { throw new Error('boom'); } }), null);
 });
 
-test('writeWorkspacePreference persists an explicit project selection', () => {
+test("writeWorkspacePreference açık proje seçimini saklar", () => {
   const storage = createStorage();
   assert.equal(writeWorkspacePreference({ workspaceMode: 'project', selectedProjectId: 'p2' }, storage), true);
   assert.deepEqual(JSON.parse(storage.read(WORKSPACE_STORAGE_KEY)), {
@@ -263,7 +263,7 @@ test('writeWorkspacePreference persists an explicit project selection', () => {
   });
 });
 
-test('writeWorkspacePreference applies portfolio defaults for missing preference data', () => {
+test("writeWorkspacePreference eksik tercihte portföy varsayılanını uygular", () => {
   const storage = createStorage();
   assert.equal(writeWorkspacePreference(undefined, storage), true);
   assert.deepEqual(JSON.parse(storage.read(WORKSPACE_STORAGE_KEY)), {
@@ -272,15 +272,15 @@ test('writeWorkspacePreference applies portfolio defaults for missing preference
   });
 });
 
-test('writeWorkspacePreference returns false when storage is unavailable', () => {
+test("writeWorkspacePreference depo yokken yanlış döndürür", () => {
   assert.equal(writeWorkspacePreference({ workspaceMode: 'portfolio' }, null), false);
 });
 
-test('writeWorkspacePreference contains storage write failures', () => {
+test("writeWorkspacePreference depo yazma hatasını kapsar", () => {
   assert.equal(writeWorkspacePreference({}, { setItem() { throw new Error('boom'); } }), false);
 });
 
-test('legacy migration copies old values when canonical fields are absent', () => {
+test("eski taşıma kanonik alan yoksa eski değeri kopyalar", () => {
   assert.deepEqual(migrateLegacyTaskSchedule({
     baslangicTarihi: '2026-01-01',
     bitisTarihi: '2026-01-05',
@@ -292,7 +292,7 @@ test('legacy migration copies old values when canonical fields are absent', () =
   });
 });
 
-test('legacy migration preserves canonical values when both old and new fields exist', () => {
+test("eski ve yeni alan birlikteyse taşıma kanonik değeri korur", () => {
   const result = migrateLegacyTaskSchedule({
     plannedStart: '2026-02-01',
     baslangicTarihi: '2026-01-01',
@@ -308,7 +308,7 @@ test('legacy migration preserves canonical values when both old and new fields e
   });
 });
 
-test('legacy migration does not mutate its input object', () => {
+test("eski taşıma girdi nesnesini değiştirmez", () => {
   const input = { id: 't1', baslangicTarihi: '2026-01-01' };
   const before = structuredClone(input);
   const result = migrateLegacyTaskSchedule(input);
@@ -316,16 +316,16 @@ test('legacy migration does not mutate its input object', () => {
   assert.notStrictEqual(result, input);
 });
 
-test('legacy migration safely handles empty input and preserves unrelated fields', () => {
+test("eski taşıma boş girdiyi güvenle işler ve ilgisiz alanı korur", () => {
   assert.deepEqual(migrateLegacyTaskSchedule(), {});
   assert.deepEqual(migrateLegacyTaskSchedule({ id: 't1', title: 'Task' }), { id: 't1', title: 'Task' });
 });
 
-test('primary baseline selector requires a project ID', () => {
+test("birincil baz plan seçicisi proje kimliği ister", () => {
   assert.equal(selectPrimaryBaselineForProject([{ projectId: 'p1', isPrimary: true }], null), null);
 });
 
-test('primary baseline selector ignores non-primary baselines', () => {
+test("birincil baz plan seçicisi birincil olmayanı yok sayar", () => {
   const baselines = [
     { id: 'b1', projectId: 'p1', isPrimary: false },
     { id: 'b2', projectId: 'p1', isPrimary: true }
@@ -333,17 +333,17 @@ test('primary baseline selector ignores non-primary baselines', () => {
   assert.equal(selectPrimaryBaselineForProject(baselines, 'p1')?.id, 'b2');
 });
 
-test('primary baseline selector returns null when no matching primary baseline exists', () => {
+test("birincil baz plan seçicisi eşleşme yoksa boş değer döndürür", () => {
   assert.equal(selectPrimaryBaselineForProject([{ id: 'b1', projectId: 'p2', isPrimary: true }], 'p1'), null);
 });
 
-test('task baseline snapshot selector requires both task and baseline IDs', () => {
+test("görev baz plan seçicisi görev ve baz plan kimliğini birlikte ister", () => {
   const snapshots = [{ taskId: 't1', baselineId: 'b1' }];
   assert.equal(selectTaskBaselineSnapshot(snapshots, null, 'b1'), null);
   assert.equal(selectTaskBaselineSnapshot(snapshots, 't1', null), null);
 });
 
-test('task baseline snapshot selector matches the exact composite key', () => {
+test("görev baz plan seçicisi tam birleşik anahtarı eşleştirir", () => {
   const snapshots = [
     { id: 's1', taskId: 't1', baselineId: 'b1' },
     { id: 's2', taskId: 't1', baselineId: 'b2' }

@@ -55,7 +55,7 @@ function run(tasks, options = {}) {
   });
 }
 
-test('sequential FS activities produce a zero-float critical chain', () => {
+test("ardışık FS faaliyetleri sıfır bolluklu kritik zincir üretir", () => {
   const result = run([
     activity('A', 3),
     activity('B', 2, [dep('A')])
@@ -81,7 +81,7 @@ test('sequential FS activities produce a zero-float critical chain', () => {
   assert.equal(result.tasks.B.earlyFinish, '2026-06-05');
 });
 
-test('parallel paths calculate total/free float and identify the longer critical path', () => {
+test("paralel yollar toplam ve serbest bolluğu hesaplayıp uzun kritik yolu bulur", () => {
   const result = run([
     activity('A', 2),
     activity('B', 3, [dep('A')]),
@@ -99,7 +99,7 @@ test('parallel paths calculate total/free float and identify the longer critical
   assert.equal(result.tasks.C.isCritical, false);
 });
 
-test('equal parallel paths are both returned as critical paths', () => {
+test("eşit paralel yolların ikisi de kritik yol olarak döner", () => {
   const result = run([
     activity('A', 1),
     activity('B', 2, [dep('A')]),
@@ -114,7 +114,7 @@ test('equal parallel paths are both returned as critical paths', () => {
   ]);
 });
 
-test('forward pass supports SS, FF and SF relationships', () => {
+test("ileri geçiş SS FF ve SF ilişkisini destekler", () => {
   const result = run([
     activity('A', 3),
     activity('B', 2, [dep('A', 'SS', 1)]),
@@ -132,7 +132,7 @@ test('forward pass supports SS, FF and SF relationships', () => {
   assert.equal(result.tasks.D.earlyFinish, '2026-06-03');
 });
 
-test('FS lag and lead are measured in working days', () => {
+test("FS gecikme ve öne alma iş günüyle ölçülür", () => {
   const result = run([
     activity('A', 2),
     activity('Lagged', 1, [dep('A', 'FS', 1)]),
@@ -144,7 +144,7 @@ test('FS lag and lead are measured in working days', () => {
   assert.equal(result.tasks.Led.earlyStart, '2026-06-02');
 });
 
-test('project holidays are skipped by CPM date calculations', () => {
+test("CPM tarih hesabı proje tatilini atlar", () => {
   const result = calculateCpm([
     activity('A', 2, [], { calendarId: holidayCalendar.id }),
     activity('B', 1, [dep('A')], { calendarId: holidayCalendar.id })
@@ -158,7 +158,7 @@ test('project holidays are skipped by CPM date calculations', () => {
   assert.equal(result.tasks.B.earlyStart, '2026-06-04');
 });
 
-test('task-level calendar overrides affect successor scheduling', () => {
+test("görev takvimi değişimi ardıl çizelgesini etkiler", () => {
   const result = run([
     activity('A', 5),
     activity('B', 1, [dep('A')], { calendarId: sixDayCalendar.id })
@@ -170,7 +170,7 @@ test('task-level calendar overrides affect successor scheduling', () => {
   assert.equal(result.projectFinish, '2026-06-06');
 });
 
-test('duration can be derived from current-plan working dates and milestones stay zero-duration', () => {
+test("süre güncel plan iş gününden türetilir; kilometre taşı sıfır süre kalır", () => {
   const result = calculateCpm([
     {
       id: 'A', projectId: 'p1', task: 'A', deps: [],
@@ -192,7 +192,7 @@ test('duration can be derived from current-plan working dates and milestones sta
   assert.equal(result.tasks.M.earlyFinish, '2026-06-08');
 });
 
-test('graph validation rejects missing predecessors, self-dependencies, duplicate IDs and cycles', () => {
+test("ağ doğrulaması eksik öncül öz bağımlılık yinelenen kimlik ve döngüyü reddeder", () => {
   assert.throws(
     () => buildDependencyGraph([activity('A', 1, [dep('missing')])]),
     (error) => error.code === 'MISSING_PREDECESSOR'
@@ -214,7 +214,7 @@ test('graph validation rejects missing predecessors, self-dependencies, duplicat
   );
 });
 
-test('invalid current-plan dates are rejected when plannedDurationDays is not supplied', () => {
+test("plannedDurationDays yoksa geçersiz güncel plan tarihi reddedilir", () => {
   assert.throws(
     () => calculateCpm([{
       id: 'A', projectId: 'p1', task: 'A', deps: [],

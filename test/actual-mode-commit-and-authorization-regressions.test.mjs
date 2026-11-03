@@ -32,7 +32,7 @@ function allocationResponse(changes) {
   return { ok: true, status: 200, async json() { return { allocations }; } };
 }
 
-test('Actual commit responses map normalized SQL UUIDs back to pending client IDs', async () => {
+test("gerçek kayıt yanıtı normal SQL kimliğini bekleyen istemci kimliğine eşler", async () => {
   const projectClientId = `project-${PROJECT_ID}`;
   const wbsClientId = `wbs-${WBS_ID}`;
   const taskClientId = `task-${TASK_ID}`;
@@ -101,13 +101,13 @@ test('Actual commit responses map normalized SQL UUIDs back to pending client ID
   }
 });
 
-test('dependency persistence generates a fresh relationship row ID instead of reusing canonical predecessor IDs', () => {
+test("bağımlılık kaydı öncül kimliğini kullanmak yerine yeni ilişki kimliği üretir", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(source, /dep\.input\('dependencyId', sql\.UniqueIdentifier, randomUUID\(\)\)/);
   assert.doesNotMatch(source, /dependencyId[^\n]*dependency\.id/);
 });
 
-test('data mode switch lives on the settings page and never in the sidebar', () => {
+test("veri kipi anahtarı yalnızca ayarlar sayfasındadır", () => {
   // Anahtar kenar çubuğunu sade tutmak için Ayarlar sayfasına taşındı.
   const boundary = read('src/components/shell/AppDataBoundary.jsx');
   const shell = read('src/components/shell/AppShell.jsx');
@@ -127,7 +127,7 @@ test('data mode switch lives on the settings page and never in the sidebar', () 
   assert.doesNotMatch(root, /<DataModeIndicator/);
 });
 
-test('data mode switch no longer occupies the persistence toast corner', () => {
+test("veri kipi anahtarı kalıcılık bildiriminin köşesini kaplamaz", () => {
   const experience = read('src/app/styles/experience.css');
   const shellCss = read('src/app/styles/shell.css');
   const indicatorBlock = experience.slice(
@@ -140,12 +140,12 @@ test('data mode switch no longer occupies the persistence toast corner', () => {
   assert.match(shellCss, /\.persistence-status \{[^}]*position:\s*fixed/s);
 });
 
-test('persisted task updates include ProjectId so project reassignment is not silently lost', () => {
+test("görev güncellemesi proje değişikliğini ProjectId ile saklar", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(source, /UPDATE dbo\.MR_Tasks\s+SET ProjectId = @projectId, WbsId = @wbsId/s);
 });
 
-test('mode switching flushes pending coalesced edits and waits for the ordered mutation queue', async () => {
+test("kip değişimi bekleyen düzenlemeleri boşaltır ve sıralı değişiklik kuyruğunu bekler", async () => {
   let state = createInitialState({
     calendars: [],
     projects: [{ id: 'p1', name: 'Project One' }],
@@ -187,7 +187,7 @@ test('mode switching flushes pending coalesced edits and waits for the ordered m
   assert.ok(indicator.indexOf('await actions.flushPendingChanges()') < indicator.indexOf('await setDataMode(nextMode)'));
 });
 
-test('project creation does not append the committed root WBS a second time', () => {
+test("proje oluşturma kaydedilmiş kök WBS kaydını yeniden eklemez", () => {
   // Yetkili değişiklik kümesi indirgeyicide kimlik üzerinden uygulanır; aynı kök
   // düğüm iki kez işlense bile durumda tek kayıt kalır.
   const state = createInitialState({
@@ -216,7 +216,7 @@ test('project creation does not append the committed root WBS a second time', ()
   assert.doesNotMatch(source, /wbs: \[\.\.\.latest\.wbs, committedRoot\]/);
 });
 
-test('partial task visibility cannot add inactive projects to the visible project set', () => {
+test("kısmi görev görünürlüğü etkin olmayan projeyi görünür yapmaz", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   // Görev tabanlı KISMİ görünürlük TEK geçişte toplanan kişisel kapsamdan
   // türer; kendi kapsamı ile yönetim kapsamı ayrı bayraklarda kalır ve her
@@ -234,13 +234,13 @@ test('partial task visibility cannot add inactive projects to the visible projec
   assert.match(source, /IF @isAdmin = 1\s+INSERT #VisibleProjects\(ProjectId, AccessLevel\)\s+SELECT ProjectId, 'FULL'\s+FROM dbo\.MR_Projects\s+WHERE IsActive = 1;\s+ELSE\s+BEGIN/);
 });
 
-test('Actual UUID normalization still strips only local creation prefixes', () => {
+test("gerçek kip UUID normalleştirmesi yalnızca yerel oluşturma önekini kaldırır", () => {
   assert.equal(toActualUuid(`task-${TASK_ID}`), TASK_ID);
   assert.equal(toActualUuid(TASK_ID), TASK_ID);
 });
 
 
-test('existing WBS updates authorize the stored project and reject forged project reassignment', () => {
+test("WBS güncellemesi kayıtlı projeyi yetkilendirir ve sahte proje değişimini reddeder", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitWbs'), source.indexOf('async function commitTask'));
   const loadIndex = body.indexOf('const before = hasVersion(node.version) ? await wbsRowForUpdate(executor, wbsId) : null');
@@ -251,7 +251,7 @@ test('existing WBS updates authorize the stored project and reject forged projec
   assert.match(body, /if \(!sameActualId\(storedProjectId, projectId\)\)/);
 });
 
-test('existing task updates authorize both stored source and requested destination projects', () => {
+test("görev güncellemesi kaynak ve hedef projeyi yetkilendirir", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitTask'), source.indexOf('async function deleteTask'));
   const loadIndex = body.indexOf('const before = hasVersion(task.version) ? await taskRow(executor, taskId) : null');
@@ -298,7 +298,7 @@ test('görev atama kapsamı yalnızca etkin kurumsal projeleri ve kendi personel
   assert.match(assigneeCreateLock, /MR_Projects p WITH \(UPDLOCK, HOLDLOCK\)/);
 });
 
-test('cross-project task moves clear incoming and outgoing dependency rows before changing ProjectId', () => {
+test("projeler arası görev taşıma ProjectId değişmeden gelen ve giden bağımlılıkları siler", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitTask'), source.indexOf('async function deleteTask'));
   const cleanupIndex = body.indexOf('WHERE TaskId = @taskId OR PredecessorTaskId = @taskId;');
@@ -307,7 +307,7 @@ test('cross-project task moves clear incoming and outgoing dependency rows befor
   assert.ok(cleanupIndex >= 0 && cleanupIndex < updateIndex);
 });
 
-test('manual FULL grants are ignored when their project is inactive', () => {
+test("etkin olmayan projenin elle verilmiş FULL yetkisi kullanılmaz", () => {
   const source = read('src/server/authorization/loadAuthorizationContext.js');
   assert.match(
     source,
@@ -315,7 +315,7 @@ test('manual FULL grants are ignored when their project is inactive', () => {
   );
 });
 
-test('repositories without loadSessionContext still load with a conservative default session', async () => {
+test("loadSessionContext olmayan depo kısıtlı varsayılan oturumla yüklenir", async () => {
   const result = await loadApplicationData({
     kind: 'legacy-test',
     async loadSnapshot() {
@@ -334,7 +334,7 @@ test('repositories without loadSessionContext still load with a conservative def
   });
 });
 
-test('Actual repository keeps client ID aliases across later snapshot loads and delete-only responses', async () => {
+test("gerçek depo kimlik eşlemelerini sonraki görüntülerde ve yalnızca silme yanıtında korur", async () => {
   const projectClientId = `project-${PROJECT_ID}`;
   const wbsClientId = `wbs-${WBS_ID}`;
   const taskClientId = `task-${TASK_ID}`;
@@ -409,7 +409,7 @@ test('Actual repository keeps client ID aliases across later snapshot loads and 
 
 
 
-test('corporate project sync serializes concurrent first inserts by ProjectCode', () => {
+test("kurumsal proje eşitlemesi eşzamanlı ilk eklemeyi ProjectCode ile serileştirir", () => {
   const source = read('src/server/repository/corporateQueries.js');
   assert.match(
     source,
@@ -417,7 +417,7 @@ test('corporate project sync serializes concurrent first inserts by ProjectCode'
   );
 });
 
-test('task assignees persist only the Sicil list that passed normalization and directory validation', () => {
+test("görev sorumluları yalnızca doğrulanmış sicil listesiyle saklanır", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(source, /function normalizeSicils\(sicils\)/);
   assert.match(source, /: await ensurePeople\(executor, task\.assigneeIds \|\| \[\]\);/);
@@ -426,7 +426,7 @@ test('task assignees persist only the Sicil list that passed normalization and d
   assert.doesNotMatch(source, /\(sicils \|\| \[\]\)\.filter\(Boolean\)\.map\(Number\)/);
 });
 
-test('snapshot HR09 FULL visibility applies only to corporate projects', () => {
+test("görüntüde HR09 FULL görünürlüğü yalnızca kurumsal projelere uygulanır", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(
     source,
@@ -434,7 +434,7 @@ test('snapshot HR09 FULL visibility applies only to corporate projects', () => {
   );
 });
 
-test('partial snapshots expose the WBS catalog only for a creator or assigned user while retaining ancestor fallback', () => {
+test("kısmi görüntü WBS kataloğunu oluşturan veya atanan kişiye açarken üst öğe dönüşünü korur", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   // Katalog kümesi yalnızca KENDİ oluşturduğu/sorumlusu olduğu projelerden
   // türer; yönetim kapsamı (#ScopeAssignedProjects) bu kümeyi genişletmez.
@@ -449,7 +449,7 @@ test('partial snapshots expose the WBS catalog only for a creator or assigned us
   assert.match(source, /WHERE v\.AccessLevel = 'FULL'\s+OR v\.HasReadGrant = 1\s+OR v\.IsTaskScoped = 1\s+OR EXISTS \(SELECT 1 FROM #RequiredPartialWbs r WHERE r\.WbsId = w\.WbsId\)/s);
 });
 
-test('WBS reparent validation holds update and serializable locks across the ancestry walk', () => {
+test("WBS üst öğe doğrulaması soy ağacı boyunca güncelleme ve serileştirme kilitlerini tutar", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitWbs'), source.indexOf('async function commitTask'));
   assert.match(source, /FROM dbo\.MR_WBS WITH \(UPDLOCK, HOLDLOCK\) WHERE WbsId = @id/);
@@ -458,7 +458,7 @@ test('WBS reparent validation holds update and serializable locks across the anc
   assert.match(body, /await wbsRowForUpdate\(executor, parent\.ParentWbsId\)/);
 });
 
-test('project updates validate LeadSicil before binding and writing it', () => {
+test("proje güncellemesi LeadSicil değerini bağlamadan ve yazmadan doğrular", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   const body = source.slice(source.indexOf('async function commitProject'), source.indexOf('async function commitWbs'));
   const updateStart = body.lastIndexOf('assertProjectWriteAccess(actor.effective, projectId)');
@@ -468,7 +468,7 @@ test('project updates validate LeadSicil before binding and writing it', () => {
 });
 
 
-test('development identity rejects partial, decimal, non-positive, blank, and unsafe Sicil strings', () => {
+test("geliştirme kimliği kısmi ondalık boş güvensiz ve pozitif olmayan sicili reddeder", () => {
   assert.equal(parseDevelopmentSicil('900002'), 900002);
   assert.equal(parseDevelopmentSicil(' 900002 '), 900002);
   assert.equal(parseDevelopmentSicil('2147483647'), 2147483647);
@@ -481,7 +481,7 @@ test('development identity rejects partial, decimal, non-positive, blank, and un
   assert.match(providerSource, /parseDevelopmentSicil\(process\.env\.MERGEN_ROTA_DEV_SICIL\)/);
 });
 
-test('manual project codes cannot silently suppress or collide with corporate synchronization', () => {
+test("elle verilen proje kodu kurumsal eşitlemeyi bastıramaz veya çakıştıramaz", () => {
   const sync = read('src/server/repository/corporateQueries.js');
   assert.match(sync, /FROM dbo\.MR_Projects manual WITH \(UPDLOCK, HOLDLOCK\)[\s\S]*manual\.SourceType = 'MANUAL'/);
   assert.match(sync, /THROW 51002, 'A manual project code conflicts with the corporate project source\.'/);
@@ -491,7 +491,7 @@ test('manual project codes cannot silently suppress or collide with corporate sy
   assert.ok((repository.match(/await assertManualProjectCodeAvailable\(executor, projectCode\);/g) || []).length >= 2);
 });
 
-test('partial-only snapshots constrain the people directory to authorized project context', () => {
+test("yalnızca kısmi görüntü kişi dizinini yetkili proje bağlamıyla sınırlar", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(source, /DECLARE @HasFullScope bit = CASE[\s\S]*AccessLevel = 'FULL'/);
   // Rehber kümesi önceden toplanır; yayınlanan satırlar yine aynı iki kuralla
@@ -506,7 +506,7 @@ test('partial-only snapshots constrain the people directory to authorized projec
   assert.doesNotMatch(source, /visibilityGate\.TaskId = visibleTask\.TaskId/);
 });
 
-test('corporate project view always supplies a usable ProjectName', () => {
+test("kurumsal proje görünümü kullanılabilir ProjectName sağlar", () => {
   const source = read('database/MR_Create_Durable_Persistence.sql');
   const view = source.match(/CREATE VIEW dbo\.MR_V_CorporateProjects AS([\s\S]*?)GROUP BY/i)?.[0] || '';
   assert.match(
@@ -516,7 +516,7 @@ test('corporate project view always supplies a usable ProjectName', () => {
 });
 
 
-test('ProjectCode is canonicalized across manual writes, corporate sources, sync, and access joins', () => {
+test("ProjectCode yazma kaynak eşitleme ve erişim birleşimlerinde kanonikleşir", () => {
   const repository = read('src/server/repository/sqlAppRepository.js');
   assert.match(repository, /String\(project\.code\)\.trim\(\)\.toUpperCase\(\)/);
   assert.match(repository, /WHERE UPPER\(reserved\.ProjectCode\) = @projectCode/);
@@ -533,7 +533,7 @@ test('ProjectCode is canonicalized across manual writes, corporate sources, sync
   assert.match(accessView, /UPPER\(NULLIF\(LTRIM\(RTRIM\(projeKodu\)\)/i);
 });
 
-test('corporate sync updates the single default root WBS only while it tracks the prior project name or code', () => {
+test("kurumsal eşitleme kök WBS kaydını yalnızca eski proje adı veya kodunu izliyorsa günceller", () => {
   const sync = read('src/server/repository/corporateQueries.js');
   const rootUpdate = sync.slice(sync.indexOf('UPDATE root'), sync.indexOf('UPDATE target'));
   assert.match(rootUpdate, /root\.ParentWbsId IS NULL/);
@@ -542,7 +542,7 @@ test('corporate sync updates the single default root WBS only while it tracks th
   assert.match(rootUpdate, /SET Name = source\.ProjectName/);
 });
 
-test('project-level READ grants appear as PARTIAL session access while FULL access still wins', () => {
+test("proje READ yetkisi oturumda PARTIAL görünür; FULL önceliğini korur", () => {
   const effective = deriveEffectiveAccess({
     isSystemAdmin: false,
     fullProjectIds: ['full-project'],
@@ -561,7 +561,7 @@ test('project-level READ grants appear as PARTIAL session access while FULL acce
   assert.match(context, /row\.AccessLevel === 'READ'/);
 });
 
-test('HR02 people directory duplicate ranking has deterministic projected-field tie breakers', () => {
+test("HR02 kişi dizini yinelenme sıralaması belirlenimci alan eşitlik çözümü kullanır", () => {
   const source = read('database/MR_Create_Durable_Persistence.sql');
   const view = source.match(/CREATE VIEW dbo\.MR_V_PeopleDirectory AS([\s\S]*?);'\);/i)?.[0] || '';
   const order = view.match(/ROW_NUMBER\(\) OVER \([\s\S]*?\) AS rn/i)?.[0] || '';
@@ -571,7 +571,7 @@ test('HR02 people directory duplicate ranking has deterministic projected-field 
 });
 
 
-test('server-generated fallback project roots are included in commit WBS responses', () => {
+test("sunucu dönüş proje kökleri kayıt WBS yanıtına eklenir", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   const responseWbsScope = source.slice(source.indexOf('const wbsIds = new Set(['), source.indexOf('const taskIds = new Set('));
   assert.match(responseWbsScope, /changes\.wbsUpserts\.map\(\(value\) => id\(value\.id\)\)/);
@@ -580,7 +580,7 @@ test('server-generated fallback project roots are included in commit WBS respons
   assert.match(source, /return \{ created: true, consumedRootId: authoritativeRoot\.id, tagPlan \}/);
 });
 
-test('persisted Sicil validation rejects values above SQL Server int maximum before batch binding', async () => {
+test("sicil doğrulaması SQL Server int üst sınırını toplu bağlamadan önce reddeder", async () => {
   const { createActualStack, corporateSeed } = await import('./helpers/actualStack.mjs');
   const stack = await createActualStack(corporateSeed(), {
     sicil: 900001,
@@ -611,7 +611,7 @@ test('persisted Sicil validation rejects values above SQL Server int maximum bef
   }
 });
 
-test('project-level READ grants expose project tasks, WBS, assignees, and required people without enabling complete scheduling data', () => {
+test("proje READ yetkisi gerekli görev WBS ve kişileri açar; tam çizelgeleme verisi vermez", () => {
   const source = read('src/server/repository/sqlAppRepository.js');
   assert.match(source, /CREATE TABLE #ReadGrantedProjects\(ProjectId uniqueidentifier PRIMARY KEY\)/);
   assert.match(source, /pa\.AccessLevel = 'READ'/);
@@ -632,7 +632,7 @@ test('project-level READ grants expose project tasks, WBS, assignees, and requir
   assert.match(source, /JOIN #ProjectAuth pa ON pa\.ProjectId = d\.ProjectId\s+WHERE pa\.AccessLevel = 'FULL';/);
 });
 
-test('root WBS deletion is rejected in both domain state and SQL persistence', () => {
+test("kök WBS silme alan durumunda ve SQL kalıcılığında reddedilir", () => {
   const snapshot = {
     projects: [{ id: 'p1', name: 'Project' }], people: [], calendars: [],
     wbs: [{ id: 'root', projectId: 'p1', parentId: null, code: '1', name: 'Root', sortOrder: 1 }],
@@ -646,7 +646,7 @@ test('root WBS deletion is rejected in both domain state and SQL persistence', (
   assert.match(body, /if \(before\.ParentWbsId == null\)/);
 });
 
-test('loaded session capabilities survive state normalization and collection-only reloads', () => {
+test("oturum yetenekleri normalleştirme ve koleksiyon yenilemesinde korunur", () => {
   const session = {
     dataMode: 'actual', currentUser: { id: '900002', name: 'User' },
     isSystemAdmin: false, isExecutive: true, canCreateProjects: true,

@@ -20,7 +20,7 @@ function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 }
 
-test('database-shaped project and person rows normalize to canonical code/name and employee number fields', () => {
+test("veritabanı proje ve kişi satırı kanonik kod ad ve sicil alanına dönüşür", () => {
   const person = normalizePersonReferences({ SicilNo: '4711', AdSoyad: 'Ada Yılmaz' });
   assert.equal(person.id, '4711');
   assert.equal(person.employeeNo, '4711');
@@ -33,7 +33,7 @@ test('database-shaped project and person rows normalize to canonical code/name a
   assert.equal(project.source, 'corporate');
 });
 
-test('project creation stores optional project code and rejects duplicate non-empty codes', () => {
+test("proje oluşturma isteğe bağlı kodu saklar; yinelenen dolu kodu reddeder", () => {
   const people = [{ id: 'u1', name: 'Ada Yılmaz' }];
   const calendars = [{ id: 'cal1', name: 'Takvim' }];
   const projects = [{ id: 'p1', code: 'PRJ-42', name: 'Mevcut', color: 'blue' }];
@@ -65,7 +65,7 @@ test('project creation stores optional project code and rejects duplicate non-em
   assert.deepEqual(created.project.tags.map((tag) => tag.name), ['Teslim']);
 });
 
-test('simple mode uses the existing task/project infrastructure and exposes the requested quick-entry fields', () => {
+test("temel kip mevcut görev ve proje altyapısıyla hızlı giriş alanlarını sunar", () => {
   const defaults = read('src/lib/tweaks-defaults.js');
   const shell = read('src/components/shell/AppShell.jsx');
   const simple = read('src/features/simple/SimpleModePanel.jsx');
@@ -89,7 +89,7 @@ test('simple mode uses the existing task/project infrastructure and exposes the 
   assert.match(simple, /DateInput/);
 });
 
-test('user-facing dates use day/month/year and missing dates do not render as today', () => {
+test("görünür tarih gün ay yıl biçimindedir; eksik tarih bugün çizilmez", () => {
   assert.equal(fmtDisplayDate('2026-07-22'), '22/07/2026');
   assert.equal(fmt(null), '—');
 
@@ -111,7 +111,7 @@ test('user-facing dates use day/month/year and missing dates do not render as to
   assert.match(gantt, /<DateInput value=\{rangeStart\}/);
 });
 
-test('topbar project context is truly centered and the heptagon is clipped by its own header wrapper', () => {
+test("üst çubuk proje bağlamı ortalanır ve yedigen kendi başlık sarmalayıcısında kırpılır", () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const css = read('src/app/styles/shell.css');
 
@@ -123,7 +123,7 @@ test('topbar project context is truly centered and the heptagon is clipped by it
   assert.match(css, /\.topbar\s*\{[^}]*overflow:\s*visible;/s);
 });
 
-test('welcome and initial mode selection render without the underlying application shell', () => {
+test("karşılama ve ilk kip seçimi alttaki uygulama kabuğu olmadan çizilir", () => {
   const shell = read('src/components/shell/AppShell.jsx');
   const modeReturn = shell.indexOf('if (modePickerOpen) return <ModeChooser');
   const welcomeReturn = shell.indexOf('if (welcomeOpen && !simpleMode)');
@@ -136,7 +136,7 @@ test('welcome and initial mode selection render without the underlying applicati
   assert.doesNotMatch(shell.slice(appReturn), /<ModeChooser/);
 });
 
-test('owned layout styles reserve card info space and keep task/Gantt scrolling inside their content areas', () => {
+test("sahipli düzen kart bilgi alanını ayırır; görev ve Gantt kaydırması kendi içeriklerinde kalır", () => {
   const components = read('src/app/styles/components.css');
   const features = read('src/app/styles/features.css');
   const gantt = read('src/features/gantt/WorkspaceGanttView.jsx');

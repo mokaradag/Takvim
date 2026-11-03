@@ -56,7 +56,7 @@ const wbs = [
   { id: 'wbs-beta', projectId: 'project-2', parentId: null, code: '2', name: 'Beta' }
 ];
 
-test('domain selectors use stable IDs', () => {
+test("alan seçicileri kararlı kimlik kullanır", () => {
   const tasks = [
     { id: 'task-1', projectId: 'project-1', assigneeIds: ['person-1'] },
     { id: 'task-2', projectId: 'project-2', assigneeIds: ['person-1', 'person-2'] }
@@ -70,7 +70,7 @@ test('domain selectors use stable IDs', () => {
   assert.equal(selectPersonById(people, 'person-2')?.name, 'Mehmet Demir');
 });
 
-test('domain normalization derives canonical relationship IDs without dropping display fields', () => {
+test("alan normalleştirmesi görünüm alanını düşürmeden kanonik ilişki kimliğini türetir", () => {
   const project = normalizeProjectReferences(projects[0], people);
   assert.equal(project.leadId, 'person-1');
 
@@ -87,7 +87,7 @@ test('domain normalization derives canonical relationship IDs without dropping d
   assert.deepEqual(task.deps, []);
 });
 
-test('domain normalization can rebuild display names from canonical assignee IDs', () => {
+test("alan normalleştirmesi kanonik sorumlu kimliğinden adı yeniden kurar", () => {
   const task = normalizeTaskReferences({
     id: 'task-2',
     projectId: 'project-2',
@@ -100,7 +100,7 @@ test('domain normalization can rebuild display names from canonical assignee IDs
   assert.equal(task.wbsId, 'wbs-beta');
 });
 
-test('date helpers preserve local calendar dates and inclusive ranges', () => {
+test("tarih yardımcıları yerel takvim gününü ve dahil aralığı korur", () => {
   const date = parseDate('2026-07-21');
 
   assert.equal(fmtISO(date), '2026-07-21');
@@ -119,14 +119,14 @@ test('date helpers preserve local calendar dates and inclusive ranges', () => {
   );
 });
 
-test('calendar helpers distinguish holidays, weekends, and working days', () => {
+test("takvim yardımcıları tatili hafta sonunu ve iş gününü ayırır", () => {
   assert.equal(holidayFor('2026-10-29')?.short, '29 Ekim');
   assert.equal(isWorkingDay('2026-10-29'), false);
   assert.equal(isWorkingDay('2026-07-25'), false);
   assert.equal(isWorkingDay('2026-07-22'), true);
 });
 
-test('dependency helpers normalize legacy and canonical relationships', () => {
+test("bağımlılık yardımcıları eski ve kanonik ilişkiyi normalleştirir", () => {
   assert.equal(depId('task-1'), 'task-1');
   assert.equal(depId({ predecessorId: 'task-2', id: 'legacy-id' }), 'task-2');
   assert.equal(relTypeOf({ type: 'SS' }), 'SS');
@@ -145,7 +145,7 @@ test('dependency helpers normalize legacy and canonical relationships', () => {
   });
 });
 
-test('schedule metrics calculate inclusive duration and padded task ranges', () => {
+test("çizelge ölçüleri dahil süreyi ve paylı görev aralığını hesaplar", () => {
   const tasks = [
     { plannedStart: '2026-07-10', plannedFinish: '2026-07-12', plannedDurationDays: 3 },
     { plannedStart: '2026-07-05', plannedFinish: '2026-07-20', plannedDurationDays: 12 }
@@ -164,7 +164,7 @@ test('schedule metrics calculate inclusive duration and padded task ranges', () 
   assert.equal(fmtISO(fallback.end), '2026-01-11');
 });
 
-test('Gantt group summaries exclude milestones from weighted schedule progress', () => {
+test("Gantt grup özeti kilometre taşını ağırlıklı ilerlemeden dışlar", () => {
   const summaries = getGroupScheduleSummaries([
     ['Alpha', [
       {
@@ -211,7 +211,7 @@ test('Gantt group summaries exclude milestones from weighted schedule progress',
   assert.equal(summaries['Milestones only'], null);
 });
 
-test('status and aggregate task statistics are deterministic for a supplied reference date', () => {
+test("durum ve toplu görev istatistiği verilen tarihte belirlenimcidir", () => {
   const referenceDate = parseDate('2026-07-21');
   const tasks = [
     { id: 'done', status: 'done', targetFinish: '2026-07-01' },

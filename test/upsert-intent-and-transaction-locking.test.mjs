@@ -9,7 +9,7 @@ import { findUpsertIntentIssue } from '../src/server/repository/upsertIntentPoli
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 
-test('versioned upserts cannot recreate Project, WBS, or Task rows that no longer exist', () => {
+test("sürümlü güncelleme artık olmayan proje WBS veya görevi yeniden oluşturamaz", () => {
   for (const entityType of ['PROJECT', 'WBS', 'TASK']) {
     assert.deepEqual(findUpsertIntentIssue({
       exists: false,
@@ -25,7 +25,7 @@ test('versioned upserts cannot recreate Project, WBS, or Task rows that no longe
   }
 });
 
-test('create-intent upserts cannot overwrite an existing identity', () => {
+test("oluşturma niyetli güncelleme mevcut kimliğin üzerine yazamaz", () => {
   const issue = findUpsertIntentIssue({
     exists: true,
     version: null,
@@ -37,13 +37,13 @@ test('create-intent upserts cannot overwrite an existing identity', () => {
   assert.equal(issue?.entityType, 'TASK');
 });
 
-test('matching create and update intent remains valid', () => {
+test("eşleşen oluşturma ve güncelleme niyeti geçerli kalır", () => {
   assert.equal(findUpsertIntentIssue({ exists: false, version: null }), null);
   assert.equal(findUpsertIntentIssue({ exists: false, version: '   ' }), null);
   assert.equal(findUpsertIntentIssue({ exists: true, version: 'AAAAAAAAAAA=' }), null);
 });
 
-test('ordered SQL commits lock all mutable upsert targets before persistence', () => {
+test("sıralı SQL kaydı bütün değişebilir hedefleri kalıcılıktan önce kilitler", () => {
   const validation = read('src/server/repository/upsertIntentValidation.js');
 
   for (const value of ['projectUpserts', 'wbsUpserts', 'taskUpserts']) {
@@ -56,7 +56,7 @@ test('ordered SQL commits lock all mutable upsert targets before persistence', (
   assert.match(validation, /\.sort\(\(left, right\) => String\(left\.id\)\.localeCompare\(String\(right\.id\)\)\)/);
 });
 
-test('authorization, intent validation, integrity planning, and writes share one SERIALIZABLE transaction', () => {
+test("yetki niyet bütünlük planlama ve yazma tek SERIALIZABLE işlemi paylaşır", () => {
   const wrapper = read('src/server/repository/orderedSqlAppRepository.js');
   const intentPosition = wrapper.indexOf('await assertUpsertIntentMatchesPersistence');
   const commitPosition = wrapper.indexOf('return repository.commitChanges');

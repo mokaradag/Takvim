@@ -124,7 +124,7 @@ test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; ya
     ['kesik çıktı', { type: 'answer', native: true, text: '{"blocks":[{"type":"say","items":["P', finishReason: 'length' }, 'LENGTH', null],
     ['boş yanıt', { type: 'answer', native: true, text: '', chunks: [], finishReason: 'stop' }, 'EMPTY', null]
   ];
-  for (const [name, behavior, reason, issue] of failures) await t.test(name, async (inner) => {
+  for (const [name, behavior, reason, issue] of failures) await t.test(`davranış: ${name}`, async (inner) => {
     const stack = stackFor(inner);
     const logs = captureConsole(inner);
     // Derin anlatım da aynı biçimde başarısız olur: doğrulanmış anlatım değişmeden gösterilir, üçüncü düzen turu yoktur.
@@ -170,7 +170,7 @@ test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; ya
   });
 });
 
-test('narration admission queue expiry records timeout while delivering the verified fallback', async (t) => {
+test("anlatım kabul kuyruğu süresi dolunca doğrulanmış dönüş teslim edilirken zaman aşımı kaydedilir", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   const { getAiGateway } = await import('../src/server/ai/aiRuntime.js');
@@ -272,7 +272,7 @@ test('düzen sırasında kullanıcı durdurursa hiçbir yanıt ya da kanıt yaz�
 });
 
 test('işletim anahtarı kapalıyken model turu yoktur; geçersiz değer güvenle kapalı sayılır', async (t) => {
-  for (const value of ['false', 'tru']) await t.test(value, async (inner) => {
+  for (const value of ['false', 'tru']) await t.test(`değer: ${value}`, async (inner) => {
     const stack = stackFor(inner, { env: { MERGEN_ROTA_AI_ANSWER_COMPOSITION: value } });
     stack.provider.enqueue(plan());
     const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
@@ -333,7 +333,7 @@ test('etkin düzen akışı kısa dış gözcüye ilerleme bildirir; ham model m
 });
 
 test('düzen beklerken geri alınan yetki başarılı ve başarısız düzende kalıcı kanıta ulaşamaz', async (t) => {
-  for (const valid of [true, false]) for (const multipart of [false, true]) await t.test(`${valid ? 'geçerli düzen' : 'belirlenimci geri dönüş'} / ${multipart ? 'çok bölüm' : 'tek bölüm'}`, async (inner) => {
+  for (const valid of [true, false]) for (const multipart of [false, true]) await t.test(`durum ${valid ? 'geçerli düzen' : 'belirlenimci geri dönüş'} / ${multipart ? 'çok bölüm' : 'tek bölüm'}`, async (inner) => {
     const stack = stackFor(inner);
     const logs = captureConsole(inner);
     const request = { ...OVERDUE_LIST, filters: { deadline: 'overdue' } };
@@ -368,7 +368,7 @@ test('yetki iş sayacına göre yenilenir; güncel yollarda ek okuma yoktur ve t
   const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
   const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
   const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
-  for (const variant of ['composed', 'disabled', 'single', 'budget', 'revoked']) await t.test(variant, async (inner) => {
+  for (const variant of ['composed', 'disabled', 'single', 'budget', 'revoked']) await t.test(`çeşit: ${variant}`, async (inner) => {
     const stack = stackFor(inner);
     const logs = captureConsole(inner);
     const context = { ...createToolTurnContext({ sicil: AYSE, now: NOW }) };
@@ -459,7 +459,7 @@ test('çok bölümlü uzunluk geri dönüşü son model işinden sonra kalıcı 
   const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
   const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
   const { TASKS } = await import('./helpers/aiToolFixtures.mjs');
-  for (const revoked of [false, true]) await t.test(revoked ? 'yetki geri alındı' : 'yetki güncel', async (inner) => {
+  for (const revoked of [false, true]) await t.test(`davranış durumu: ${revoked ? 'yetki geri alındı' : 'yetki güncel'}`, async (inner) => {
     const stack = stackFor(inner, { composition: false });
     const context = createToolTurnContext({ sicil: AYSE, now: NOW });
     let rounds = 0;
@@ -552,7 +552,7 @@ test('çok bölümlü son teslim: kısmi yanıt kümesi korunur; LENGTH_UNAVAILA
   const { AiError } = await import('../src/server/ai/aiErrors.js');
   const { TASKS } = await import('./helpers/aiToolFixtures.mjs');
   const { ASSISTANT_LIMITS } = await import('../src/domain/ai/assistantContract.js');
-  for (const exhausted of [false, true]) await t.test(exhausted ? 'son metin sınırı' : 'gerçek kısmi yanıt', async (inner) => {
+  for (const exhausted of [false, true]) await t.test(`davranış durumu: ${exhausted ? 'son metin sınırı' : 'gerçek kısmi yanıt'}`, async (inner) => {
     stackFor(inner, { composition: false });
     const logs = captureConsole(inner);
     const signal = new AbortController().signal;
@@ -600,7 +600,7 @@ test('çok bölümlü son teslim: kısmi yanıt kümesi korunur; LENGTH_UNAVAILA
 
 test('sunum telemetrisi yalnız teslim edilen kendi yanıtını ve grafiklerini sayar', async (t) => {
   for (const delivery of ['retained', 'revoked', 'unavailable', 'stored-replacement', 'persistence-error', 'delivery-error']) {
-    await t.test(delivery, async (inner) => {
+    await t.test(`teslim yolu: ${delivery}`, async (inner) => {
       const stack = stackFor(inner);
       const logs = captureConsole(inner);
       stack.provider.enqueue(plan(), composer((view) => ({ blocks: [

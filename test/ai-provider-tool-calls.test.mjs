@@ -307,7 +307,7 @@ test('araç seçimi etkin özel kayıt profilini izler; aynı modelin Derin prof
   assert.equal(requests[2].tool_choice, 'none');
 });
 
-test('buffered protocol text does not mark provider errors or health as partial delivery', async (t) => {
+test("ara bellekteki protokol metni sağlayıcı hatasını kısmi teslim saydırmaz", async (t) => {
   const provider = createFakeAiProvider();
   provider.enqueue({ type: 'interrupt', text: '{"kind":"rota"}' });
   const { gateway } = gatewayFor(t, { provider });
@@ -318,7 +318,7 @@ test('buffered protocol text does not mark provider errors or health as partial 
   assert.equal(aiTelemetrySnapshot().streams.failed, 1);
 });
 
-test('explicitly delivered tool-session text still marks an interrupted response partial', async (t) => {
+test("açık teslim edilmiş araç metni kesilmiş yanıtı kısmi işaretler", async (t) => {
   const provider = createFakeAiProvider();
   provider.enqueue({ type: 'interrupt', text: 'Delivered text' });
   const { gateway } = gatewayFor(t, { provider });
@@ -394,7 +394,7 @@ test('metin de çağrı da taşımayan model turu geçersiz yanıttır', async (
   );
 });
 
-test('a round that stops empty at the token limit returns to the caller for the length repair path', async (t) => {
+test("belirteç sınırında boş duran tur uzunluk onarımı için çağırana döner", async (t) => {
   const provider = createFakeAiProvider();
   provider.enqueue({ type: 'answer', text: '', chunks: [], finishReason: 'length' });
   const { gateway } = gatewayFor(t, { provider });
@@ -404,7 +404,7 @@ test('a round that stops empty at the token limit returns to the caller for the 
   assert.deepEqual(result.toolCalls, []);
 });
 
-test('an async event observer rejection is contained and never becomes an unhandled rejection', async (t) => {
+test("asenkron olay gözlemcisi reddi yakalanır ve işlenmemiş redde dönüşmez", async (t) => {
   const unhandled = [];
   const listener = (reason) => unhandled.push(reason);
   process.on('unhandledRejection', listener);
@@ -430,7 +430,7 @@ test('araç oturumu açık bir SQL işlemi içinde başlatılamaz', async (t) =>
   assert.equal(provider.calls.length, 0);
 });
 
-test('4C frozen 18: supported templates retain non-leading system notes and the static prefix', async () => {
+test("desteklenen şablonlar sonraki sistem notlarını ve sabit öneki korur", async () => {
   const system = { role: 'system', content: 'STATIC_PREFIX' };
   const note = { role: 'system', content: 'SERVER_VALIDATION_NOTE' };
   const messages = [system, { role: 'user', content: 'question' }, note];

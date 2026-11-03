@@ -5,9 +5,9 @@
  * @property {string} color
  * @property {string|null} [leadId]
  * @property {string|null} [calendarId]
- * @property {string|null} dataDate Project status/cutoff date. Stored project-control data; not browser today or calculated finish.
- * @property {string[]} [tags] Controlled project-level tag catalog. Tasks explicitly select a value from this list.
- * @property {string} [lead] Legacy display field retained for the current UI.
+ * @property {string|null} dataDate Proje durum ve kesim tarihi; kayıtlı proje denetim verisidir, tarayıcı bugünü veya hesaplanan bitiş değildir.
+ * @property {string[]} [tags] Denetimli proje etiket kataloğu; görev bu listeden açıkça değer seçer.
+ * @property {string} [lead] Mevcut arayüz için korunan eski görünüm alanı.
  */
 
 /**
@@ -20,20 +20,20 @@
  */
 
 /**
- * Structural Work Breakdown Structure node. Schedule rollups are derived from descendant Tasks and are not stored here.
+ * İş dağılım ağacı düğümü; çizelge toplamı alt görevden türetilir ve burada saklanmaz.
  * @typedef {Object} WbsNode
- * @property {string} id Globally stable relationship key.
- * @property {string} projectId Owning Project ID.
- * @property {string|null} parentId Parent WBS ID in the same Project, or null for a root.
- * @property {string} code Deterministic project-local display code.
+ * @property {string} id Genel kararlı ilişki anahtarı.
+ * @property {string} projectId Sahip proje kimliği.
+ * @property {string|null} parentId Aynı projede üst WBS kimliği; kökte boş değer.
+ * @property {string} code Belirlenimci projeye özgü görünüm kodu.
  * @property {string} name
- * @property {number} [sortOrder] Deterministic sibling order before code/name fallback ordering.
+ * @property {number} [sortOrder] Kod ve ad sırasından önce kullanılan belirlenimci kardeş sırası.
  */
 
 /**
- * Project/task scheduling calendar. JavaScript weekday numbers are used:
- * Sunday=0 through Saturday=6. Holidays are explicit ISO dates so movable
- * holidays do not silently repeat in later years.
+ * Proje ve görev çizelgeleme takvimi. JavaScript gün numarası kullanılır:
+ * pazar sıfır, cumartesi altıdır. Tatiller açık ISO tarihleridir; hareketli
+ * tatiller sonraki yıllarda sessizce yinelenmez.
  * @typedef {Object} SchedulingCalendar
  * @property {string} id
  * @property {string} name
@@ -43,10 +43,10 @@
  */
 
 /**
- * Canonical dependency shape. The legacy id field is retained by the mock adapter
- * while the UI transition is in progress; predecessorId is the stable relationship key.
- * lagDays is the normalized working-day value consumed by the scheduling engine.
- * lagValue and lagUnit retain the user's selected lead/lag representation.
+ * Kanonik bağımlılık biçimi; eski id alanı sahte bağdaştırıcıda korunur.
+ * Arayüz geçişi sürerken predecessorId kararlı ilişki anahtarıdır.
+ * lagDays çizelgeleme motorunun kullandığı normal iş günü değeridir.
+ * lagValue ve lagUnit kullanıcının seçtiği öne alma ve gecikme gösterimini korur.
  * @typedef {Object} Dependency
  * @property {string} predecessorId
  * @property {'FS'|'SS'|'FF'|'SF'} type
@@ -57,30 +57,30 @@
  */
 
 /**
- * Canonical task/activity record. Current-plan, target, actual and remaining-work
- * values are stored data. CPM early/late dates, float and critical status are not Task fields.
+ * Kanonik görev ve faaliyet kaydı. Güncel plan, hedef, gerçekleşen ve kalan iş
+ * değerleri kayıtlı veridir. CPM erken ve geç tarihi, bolluk ve kritik durum görev alanı değildir.
  * @typedef {Object} Task
  * @property {string} id
  * @property {string|null} projectId
  * @property {string[]} assigneeIds
- * @property {string|null} wbsId Stable WBS relationship. When present it must reference a node owned by projectId.
- * @property {string|null} [calendarId] Optional task-level override of the project calendar.
+ * @property {string|null} wbsId Kararlı WBS ilişkisi; varsa projectId sahibi düğüme başvurmalıdır.
+ * @property {string|null} [calendarId] Proje takviminin isteğe bağlı görev düzeyi değişimi.
  * @property {Dependency[]} deps
  * @property {string} task
  * @property {string} status
- * @property {string|null} plannedStart Mutable current-plan start.
- * @property {string|null} plannedFinish Mutable current-plan finish.
- * @property {number|null} plannedDurationDays Working-day duration normalized from current-plan dates; milestones are zero.
- * @property {string|null} targetFinish Management target/deadline; not automatically a CPM constraint.
+ * @property {string|null} plannedStart Değişebilir güncel plan başlangıcı.
+ * @property {string|null} plannedFinish Değişebilir güncel plan bitişi.
+ * @property {number|null} plannedDurationDays Güncel plan tarihinden normalleştirilmiş iş günü süresi; kilometre taşı sıfırdır.
+ * @property {string|null} targetFinish Yönetim hedefi ve termin; kendiliğinden CPM kısıtı değildir.
  * @property {string|null} actualStart Gerçekleşen başlangıç; yaşam döngüsü kuralıyla tamamlanır, plandan türetilmez.
  * @property {string|null} actualFinish Gerçekleşen bitiş; tamamlanma niyetiyle doldurulur, ilerlemeden türetilmez.
  * @property {number|null} remainingDurationDays Gelecekteki kullanım için korunan nullable uyumluluk alanı.
- * @property {string} [proje] Legacy display field retained for the current UI.
- * @property {string[]} [sorumlu] Legacy display field retained for the current UI.
+ * @property {string} [proje] Mevcut arayüz için korunan eski görünüm alanı.
+ * @property {string[]} [sorumlu] Mevcut arayüz için korunan eski görünüm alanı.
  */
 
 /**
- * Immutable baseline header. Task snapshots are stored separately so mutable current-plan edits do not rewrite history.
+ * Değişmez baz plan başlığı; görev görüntüsü ayrı saklanır ve güncel plan düzenlemesi geçmişi değiştirmez.
  * @typedef {Object} Baseline
  * @property {string} id
  * @property {string} projectId
@@ -100,11 +100,11 @@
  */
 
 /**
- * Derived CPM result. These values are calculated projections and are never copied into canonical Task records.
+ * Türetilmiş CPM sonucu; hesaplanmış izdüşümler kanonik görev kaydına kopyalanmaz.
  * @typedef {Object} CpmTaskResult
  * @property {string} id
  * @property {string} calendarId
- * @property {number} durationDays Duration used by this CPM calculation, in working days.
+ * @property {number} durationDays Bu CPM hesabında kullanılan iş günü süresi.
  * @property {string} earlyStart
  * @property {string} earlyFinish
  * @property {string} lateStart

@@ -1,7 +1,5 @@
 'use client';
-/* ============================================================
-   UI primitives — Avatar, Badge, charts, hero header, heptagon
-   ============================================================ */
+/* Temel arayüz öğeleri: Avatar, Badge, grafikler, sayfa başlığı ve yedigen.*/
 import React from 'react';
 import { Icons } from './icons';
 import { COLOR_MAP, personColorVar, personInitials, projectColorVar } from '../lib/colors';
@@ -12,7 +10,7 @@ import { usePersonLookup } from './PeopleDirectoryContext.jsx';
 import { Tooltip } from './ui-extras';
 import { DONUT_EMPHASIS, donutSegments, donutSlicePath } from './charts/donutGeometry.js';
 
-// ── Avatar ─────────────────────────────────────────────────
+// Kişi simgesi.
 const AVATAR_SIZE_CLASS = { xl: 'avatar xl', lg: 'avatar lg', sm: 'avatar sm', md: 'avatar' };
 
 /**
@@ -97,13 +95,13 @@ export function AvatarStack({ names = [], personIds = null, people = null, max =
   );
 }
 
-// ── Keyword chip ───────────────────────────────────────────
+// Anahtar sözcük etiketi.
 export function Kw({ children, projectName, color }) {
   const c = color ? COLOR_MAP[color] : (projectName ? projectColorVar(projectName) : 'var(--c-blue)');
   return <span className="kw" style={{ '--kw-color': c }}>{children}</span>;
 }
 
-// ── Status pill — icon + color coded ─────────────────────
+// Durum rozeti simge ve renkle kodlanır.
 const STATUS_ICONS = {
   todo: (p) => <Icons.Circle {...p} />,
   in_progress: (p) => <Icons.Clock {...p} />,
@@ -134,7 +132,7 @@ export function statusColorVar(id) {
     : 'var(--status-todo)';
 }
 
-// ── Sorted Select — drop-in <select> that sorts options ─
+// Seçenekleri sıralayan select yerine geçer.
 export function SortedSelect({ options, value, onChange, placeholder, locale = 'tr', sortBy = 'label', ...rest }) {
   const sorted = React.useMemo(() => {
     return [...options].sort((a, b) => {
@@ -155,12 +153,12 @@ export function SortedSelect({ options, value, onChange, placeholder, locale = '
   );
 }
 
-// ── Empty state ────────────────────────────────────────────
+// Boş durum.
 export function Empty({ children = 'Henüz veri yok.' }) {
   return <div className="empty">{children}</div>;
 }
 
-// ── Sparkline (simple SVG) ─────────────────────────────────
+// Basit SVG küçük eğilim grafiği.
 export function Sparkline({ values, color = 'var(--accent)', width = 100, height = 28 }) {
   if (!values || values.length < 2) return null;
   const min = Math.min(...values);
@@ -187,7 +185,7 @@ export function Sparkline({ values, color = 'var(--accent)', width = 100, height
   );
 }
 
-// ── Donut chart (SVG) ─────────────────────────────────────
+// SVG halka grafiği.
 /**
  * Halka grafiği.
  *
@@ -262,7 +260,7 @@ export function Donut({ data, size = 180, thickness = 22, onSegmentClick, select
   );
 }
 
-// ── Horizontal bar chart ──────────────────────────────────
+// Yatay çubuk grafiği.
 export function BarRows({ data, maxLabel = 110, animated = false, tipFormat }) {
   const max = Math.max(...data.map(d => d.value), 1);
   return (
@@ -300,7 +298,7 @@ export function BarRows({ data, maxLabel = 110, animated = false, tipFormat }) {
   );
 }
 
-// ── Area / line chart (small) ──────────────────────────────
+// Küçük alan ve çizgi grafiği.
 export function AreaChart({ data, width = 600, height = 160, color = 'var(--accent)', labels = [], animated = false }) {
   const [hover, setHover] = React.useState(null);
   const svgRef = React.useRef(null);
@@ -419,10 +417,10 @@ export function AreaChart({ data, width = 600, height = 160, color = 'var(--acce
   );
 }
 
-// ── Heptagon emblem (MERGEN brand mark) ────────────────────
-// Nested rounded heptagons lifted from the MERGEN Bilge loading emblem.
-// Used as a sleek, partially-clipped decoration behind hero titles and the
-// sidebar. Decorative only (pointer-events disabled via CSS).
+// MERGEN marka işareti olan yedigen amblem.
+// İç içe yuvarlatılmış yedigenler MERGEN Bilge yükleme ambleminden gelir.
+// Başlık ve kenar çubuğu arkasında kısmen kırpılan süsleme olarak kullanılır.
+// Yalnızca dekoratiftir; işaretçi olayları CSS ile kapatılır.
 const HEPT_PATHS = [
   { tone: 'teal', d: 'M4.07617 68.3876C-6.36271 63.3152 -18.4952 63.0941 -29.1006 67.7626L-29.6045 67.9891L-57.3223 80.6552C-68.1177 85.5882 -76.1136 95.1087 -79.1162 106.571L-79.2559 107.119L-85.7109 133.281C-88.5535 144.801 -86.0648 156.979 -78.9541 166.453L-78.6123 166.902L-57.3623 194.391C-49.8822 204.067 -38.3416 209.732 -26.1113 209.732H-1.2832C10.7559 209.732 22.126 204.242 29.6133 194.841L29.9678 194.391L50.8477 167.38C58.3082 157.729 60.8848 145.183 57.8535 133.39L57.7051 132.828L50.3564 105.882C47.4521 95.233 40.2303 86.3015 30.4648 81.2264L29.5117 80.7479L4.07617 68.3876Z' },
   { tone: 'teal', d: 'M3.79175 89.1091C-6.6471 84.0367 -18.7796 83.8158 -29.385 88.4841L-29.8889 88.7107L-40.4153 93.5203C-51.2109 98.4533 -59.2067 107.975 -62.2092 119.437L-62.3479 119.984L-64.4778 128.613C-67.3204 140.133 -64.8314 152.311 -57.7209 161.785L-57.3782 162.234L-48.5383 173.67C-41.0582 183.346 -29.5175 189.011 -17.2874 189.011H-10.1067C1.93233 189.011 13.3025 183.521 20.7898 174.12L21.1433 173.67L29.614 162.713C37.0746 153.062 39.6513 140.515 36.6199 128.721L36.4714 128.161L33.905 118.748C31.0008 108.099 23.7782 99.1676 14.0125 94.0925L13.0603 93.613L3.79175 89.1091Z' },
@@ -442,7 +440,7 @@ export function Heptagon({ variant = '', style }) {
   );
 }
 
-// ── HeroHeader — gradient page title + decorative heptagon ──
+// HeroHeader: geçişli sayfa başlığı ve dekoratif yedigen.
 export function HeroHeader({ title, children }) {
   return (
     <div className="hero-head">

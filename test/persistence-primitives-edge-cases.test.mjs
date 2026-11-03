@@ -12,7 +12,7 @@ function emptyChanges() {
   return { taskUpserts: [], taskDeletes: [], wbsUpserts: [], wbsDeletes: [] };
 }
 
-test('createPersistenceChangeSet is empty when canonical entity references are unchanged', () => {
+test("kanonik varlık başvurusu değişmezse createPersistenceChangeSet boştur", () => {
   const task = { id: 't1', task: 'One' };
   const node = { id: 'w1', name: 'Root' };
   const before = { tasks: [task], wbs: [node] };
@@ -20,7 +20,7 @@ test('createPersistenceChangeSet is empty when canonical entity references are u
   assert.deepEqual(createPersistenceChangeSet(before, after), emptyChanges());
 });
 
-test('createPersistenceChangeSet treats a replaced task object as an upsert', () => {
+test("createPersistenceChangeSet değiştirilmiş görev nesnesini güncelleme sayar", () => {
   const before = { tasks: [{ id: 't1', task: 'One' }], wbs: [] };
   const updated = { id: 't1', task: 'Updated' };
   const after = { tasks: [updated], wbs: [] };
@@ -32,14 +32,14 @@ test('createPersistenceChangeSet treats a replaced task object as an upsert', ()
   });
 });
 
-test('createPersistenceChangeSet treats structurally equal cloned entities as changed identities', () => {
+test("createPersistenceChangeSet yapısal eşit kopyayı değişmiş kimlik sayar", () => {
   const before = { tasks: [{ id: 't1', task: 'One' }], wbs: [] };
   const cloned = { id: 't1', task: 'One' };
   const changes = createPersistenceChangeSet(before, { tasks: [cloned], wbs: [] });
   assert.deepEqual(changes.taskUpserts, [cloned]);
 });
 
-test('createPersistenceChangeSet detects added and deleted tasks in the same transition', () => {
+test("createPersistenceChangeSet aynı geçişte eklenen ve silinen görevi bulur", () => {
   const before = { tasks: [{ id: 'old' }, { id: 'keep' }], wbs: [] };
   const keep = before.tasks[1];
   const added = { id: 'new' };
@@ -48,7 +48,7 @@ test('createPersistenceChangeSet detects added and deleted tasks in the same tra
   assert.deepEqual(changes.taskDeletes, ['old']);
 });
 
-test('createPersistenceChangeSet detects WBS updates, additions, and deletions', () => {
+test("createPersistenceChangeSet WBS güncelleme ekleme ve silmesini bulur", () => {
   const root = { id: 'root', name: 'Root' };
   const removed = { id: 'removed', name: 'Removed' };
   const renamed = { id: 'root', name: 'Renamed' };
@@ -61,7 +61,7 @@ test('createPersistenceChangeSet detects WBS updates, additions, and deletions',
   assert.deepEqual(changes.wbsDeletes, ['removed']);
 });
 
-test('createPersistenceChangeSet safely defaults missing collections to empty arrays', () => {
+test("createPersistenceChangeSet eksik koleksiyonu güvenle boş dizi varsayar", () => {
   assert.deepEqual(createPersistenceChangeSet({}, {}), emptyChanges());
   assert.deepEqual(createPersistenceChangeSet({}, { tasks: [{ id: 't1' }] }), {
     taskUpserts: [{ id: 't1' }],
@@ -71,7 +71,7 @@ test('createPersistenceChangeSet safely defaults missing collections to empty ar
   });
 });
 
-test('isEmptyChangeSet returns true only when every canonical bucket is empty', () => {
+test("isEmptyChangeSet yalnızca bütün kanonik kovalar boşsa doğru döner", () => {
   assert.equal(isEmptyChangeSet(emptyChanges()), true);
   for (const field of ['taskUpserts', 'taskDeletes', 'wbsUpserts', 'wbsDeletes']) {
     const changes = emptyChanges();
@@ -80,7 +80,7 @@ test('isEmptyChangeSet returns true only when every canonical bucket is empty', 
   }
 });
 
-test('ordered mutation queue executes jobs strictly in enqueue order', async () => {
+test("sıralı değişim kuyruğu işi tam eklenme sırasıyla yürütür", async () => {
   const queue = createOrderedMutationQueue();
   const events = [];
   let releaseFirst;
@@ -104,7 +104,7 @@ test('ordered mutation queue executes jobs strictly in enqueue order', async () 
   assert.deepEqual(events, ['first:start', 'first:end', 'second:start', 'second:end']);
 });
 
-test('ordered mutation queue continues with later jobs after an earlier rejection', async () => {
+test("sıralı değişim kuyruğu eski ret sonrası sonraki işlerle sürer", async () => {
   const queue = createOrderedMutationQueue();
   const events = [];
   const failure = new Error('first failed');
@@ -123,7 +123,7 @@ test('ordered mutation queue continues with later jobs after an earlier rejectio
   assert.deepEqual(events, ['first', 'second']);
 });
 
-test('ordered mutation queue also continues after a synchronous throw', async () => {
+test("sıralı değişim kuyruğu eşzamanlı istisnadan sonra da sürer", async () => {
   const queue = createOrderedMutationQueue();
   const first = queue.enqueue(() => { throw new Error('sync failure'); });
   const second = queue.enqueue(() => 'recovered');
@@ -131,7 +131,7 @@ test('ordered mutation queue also continues after a synchronous throw', async ()
   assert.equal(await second, 'recovered');
 });
 
-test('ordered mutation queue whenIdle waits for currently queued work', async () => {
+test("sıralı kuyruğun whenIdle işlevi mevcut işleri bekler", async () => {
   const queue = createOrderedMutationQueue();
   let release;
   let settled = false;
@@ -145,14 +145,14 @@ test('ordered mutation queue whenIdle waits for currently queued work', async ()
   assert.equal(settled, true);
 });
 
-test('ordered mutation queue whenIdle resolves even when queued work rejects', async () => {
+test("sıralı kuyruğun whenIdle işlevi iş reddedilse de sonuçlanır", async () => {
   const queue = createOrderedMutationQueue();
   const failed = queue.enqueue(async () => { throw new Error('failure'); });
   await assert.rejects(failed, /failure/);
   await assert.doesNotReject(queue.whenIdle());
 });
 
-test('task patch coalescer merges pending patches for the same task', async () => {
+test("görev yama birleştiricisi aynı görevin bekleyen yamalarını birleştirir", async () => {
   const calls = [];
   const coalescer = createTaskPatchCoalescer(async (taskId, patch) => {
     calls.push({ taskId, patch });
@@ -172,7 +172,7 @@ test('task patch coalescer merges pending patches for the same task', async () =
   assert.deepEqual(await second, flushed);
 });
 
-test('task patch coalescer resolves all same-task waiters with the exact same flush result', async () => {
+test("görev yama birleştiricisi aynı görev bekleyicilerini tam aynı sonuçla tamamlar", async () => {
   const result = { ok: true, value: { saved: true } };
   const coalescer = createTaskPatchCoalescer(async () => result, { delayMs: 1000 });
   const first = coalescer.schedule('t1', { task: 'A' });
@@ -182,7 +182,7 @@ test('task patch coalescer resolves all same-task waiters with the exact same fl
   assert.strictEqual(await second, result);
 });
 
-test('task patch coalescer keeps different task IDs in independent pending buckets', async () => {
+test("görev yama birleştiricisi farklı kimlikleri bağımsız kovada tutar", async () => {
   const calls = [];
   const coalescer = createTaskPatchCoalescer(async (taskId, patch) => {
     calls.push({ taskId, patch });
@@ -205,19 +205,19 @@ test('task patch coalescer keeps different task IDs in independent pending bucke
   assert.deepEqual(await second, results[1]);
 });
 
-test('task patch coalescer flush returns a successful no-op for a task with no pending patch', async () => {
+test("görev yama boşaltması bekleyen yama yoksa başarılı değişimsiz sonuç verir", async () => {
   let calls = 0;
   const coalescer = createTaskPatchCoalescer(async () => { calls += 1; }, { delayMs: 1000 });
   assert.deepEqual(await coalescer.flush('missing'), { ok: true, value: null });
   assert.equal(calls, 0);
 });
 
-test('task patch coalescer flushAll returns an empty result when nothing is pending', async () => {
+test("bütün yamaları boşaltma bekleyen yoksa boş sonuç verir", async () => {
   const coalescer = createTaskPatchCoalescer(async () => ({ ok: true }), { delayMs: 1000 });
   assert.deepEqual(await coalescer.flushAll(), []);
 });
 
-test('task patch coalescer converts thrown persistence failures into a stable error result', async () => {
+test("görev yama birleştiricisi atılan kalıcılık hatasını kararlı hata sonucuna çevirir", async () => {
   const coalescer = createTaskPatchCoalescer(async () => {
     throw new Error('repository unavailable');
   }, { delayMs: 1000 });
@@ -238,7 +238,7 @@ test('task patch coalescer converts thrown persistence failures into a stable er
   assert.deepEqual(await scheduled, result);
 });
 
-test('task patch coalescer can accept a fresh patch after a previous manual flush', async () => {
+test("görev yama birleştiricisi elle boşaltmadan sonra yeni yama kabul eder", async () => {
   const calls = [];
   const coalescer = createTaskPatchCoalescer(async (taskId, patch) => {
     calls.push({ taskId, patch });

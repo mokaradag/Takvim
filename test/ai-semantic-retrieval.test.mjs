@@ -107,7 +107,7 @@ function assertCandidates(candidates, expected, { relevance }) {
 }
 
 for (const stage of ['embedding', 'rerank']) for (const retry of [false, true]) {
-  test(`semantic ${stage} presence failure stops disclosure without provider accounting or optional fallback (retry=${retry})`, async (t) => {
+  test(`anlamsal ${stage} varlık hatası sağlayıcı hesabı veya isteğe bağlı dönüş olmadan açıklamayı durdurur (deneme=${retry})`, async (t) => {
     let refuse = false;
     const ctx = setup(t, { respond: (call) => {
       if (refuse && (stage === 'embedding' ? isQueryCall(call) : call.kind === 'rerank')) {
@@ -798,7 +798,7 @@ test('çağıranın iptali her evrede iptal kalır; geç gelen model sonucu uygu
   assert.equal(aiTelemetrySnapshot().semantic.byStatus.cancelled, 3);
 });
 
-test('4C son geçiş: yeniden sıralama süre sınırı kendi evresinde ölçülür', async (t) => {
+test("planlayıcı son geçiş: yeniden sıralama süre sınırı kendi evresinde ölçülür", async (t) => {
   const { retrieve, provider, rerankCalls } = setup(t);
   const health = () => snapshotOperations().filter(row => row.operation === 'ai.semantic.retrieve')
     .reduce((sum, row) => ({ count: sum.count + row.count, errors: sum.errors + row.errorCount }), { count: 0, errors: 0 });

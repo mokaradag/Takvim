@@ -437,7 +437,7 @@ function calculateCpmWithinBudget(tasks, {
 
 export const CPM_CALENDAR_SCAN_BUDGET_DAYS = 5_000_000;
 
-/** All forward/backward/slack/path work shares one allowance, never one per edge. */
+/** İleri geri bolluk ve yol hesabı tek payı paylaşır; kenar başına pay verilmez. */
 export function calculateCpm(tasks, options = {}) {
   try {
     return meterCalendarScans({ remainingDays: CPM_CALENDAR_SCAN_BUDGET_DAYS, weeklyArithmetic: true }, () => calculateCpmWithinBudget(tasks, options));
