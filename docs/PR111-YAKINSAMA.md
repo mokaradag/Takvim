@@ -141,3 +141,11 @@ CI'nin seri tam koşusu `npm test -- --test-concurrency=1`: 5125/5125 başarıl�
 `NEXT_TELEMETRY_DISABLED=1 npx next build`: başarılı, çıkış 0.
 İki güncel regresyon dosyası 62/62; yedi odaklı dosya 463/463 başarılıdır.
 `scripts/ui-acceptance/run.sh A`: çıkış 1, Claude CLI bulunamadı; gerçek model başarısı kaydedilmedi.
+
+
+Quality #1009 Linux koşusu 5124/5125 ile, kabul koşucusunun süreç ikizinde bir hazırlık yarışı nedeniyle
+başarısız oldu: koşulsuz başarılı curl ikizi, uygulama ikizi başlamadan sürücüyü başlatabiliyordu.
+Hazırlık ikizi artık yalnızca aynı UI_RUN_ID için köprü/uygulama başlangıç kaydı varsa başarılıdır.
+Uygulama ikizi özellikle 200 ms gecikmeli başlar; mevcut “tam bir uygulama başladı” iddiası değişmedi.
+Koşulsuz başarılı eski hazırlık ikiziyle aynı gecikmeli senaryo 0 != 1 hatasını yeniden üretir;
+düzeltilen dosyanın 11/11 sınaması geçer. Üretim kodu ve kabul koşucusu c97393c ile bire bir aynıdır.

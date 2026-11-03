@@ -78,14 +78,19 @@ function runnerFixture(t) {
   const bin = join(dir, 'bin'); mkdirSync(bin);
   const log = join(dir, 'başlatmalar.jsonl');
   writeFileSync(join(bin, 'claude'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  writeFileSync(join(bin, 'curl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'curl'), `#!${process.execPath}
+const fs=require('fs'),url=process.argv.find((arg)=>arg.startsWith('http://'))||'';
+const kind=url.endsWith('/v1/models')?'köprü':'uygulama';
+let rows=[];try{rows=fs.readFileSync(process.env.KABUL_SINAMA_LOG,'utf8').trim().split('\\n').filter(Boolean).map(JSON.parse)}catch{}
+process.exit(rows.some((row)=>row.kind===kind&&row.runId===process.env.UI_RUN_ID)?0:1);
+`, { mode: 0o755 });
   writeFileSync(join(bin, 'node'), `#!${process.execPath}
 const fs=require('fs'),path=require('path'),cp=require('child_process'),args=process.argv.slice(2);
-const record=(kind)=>fs.appendFileSync(process.env.KABUL_SINAMA_LOG,JSON.stringify({kind,budget:process.env.BRIDGE_MAX_CALLS})+'\\n');
+const record=(kind)=>fs.appendFileSync(process.env.KABUL_SINAMA_LOG,JSON.stringify({kind,runId:process.env.UI_RUN_ID,budget:process.env.BRIDGE_MAX_CALLS})+'\\n');
 if(args[0]==='--input-type=module'&&args[2]?.includes('import net from'))process.exit(0);
 if(args[0]==='-e'&&args[1].includes("require.resolve('playwright')"))process.exit(0);
 if(args[0]?.endsWith('haikuBridge.mjs')){record('köprü');setInterval(()=>{},1000);}
-else if(args[0]==='node_modules/next/dist/bin/next'){record('uygulama');setInterval(()=>{},1000);}
+else if(args[0]==='node_modules/next/dist/bin/next'){setTimeout(()=>record('uygulama'),200);setInterval(()=>{},1000);}
 else if(args[0]?.endsWith('drive.cjs')){
  record('sürücü');
  const profile=path.basename(args[1],'.json');
