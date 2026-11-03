@@ -311,7 +311,7 @@ test('konuşmada aynı anda tek yanıt üretilir; ikinci tur süren üretim bite
 });
 
 for (const budget of [90000, 1000]) {
-  test(`same-turn claim waits at most ${Math.min(budget, 30000)}ms without aborting its owner`, async (t) => {
+  test(`aynı tur sahipliği sahibini iptal etmeden en çok ${Math.min(budget, 30000)} ms bekler`, async (t) => {
     const { db, provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS: String(budget) } });
     const turnId = randomUUID();
     provider.enqueue({ type: 'deferred-stream' });
@@ -516,7 +516,7 @@ test('uzun konuşmada bağlamın kısaldığı ilk olayda bildirilir', async (t)
 
 /* ── SQL ve model üretimi ─────────────────────────────────── */
 
-test('turn presence reads only its user message and rejects missing or other-owner targets', async (t) => {
+test("tur varlığı yalnızca kendi kullanıcı iletisini okur; eksik veya başka sahipli hedefi reddeder", async (t) => {
   const { db } = createAiStack(t);
   const { conversationId } = await startConversation();
   const { prepareAssistantTurn, assertAssistantTurnPresent } = await import('../src/server/ai/assistant/assistantService.js');

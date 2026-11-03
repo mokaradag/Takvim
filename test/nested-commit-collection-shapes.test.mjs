@@ -9,7 +9,7 @@ import { findNestedCommitCollectionIssue } from '../src/server/repository/commit
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 
-test('commit validation rejects project tags supplied as an iterable string', () => {
+test("kayıt doğrulaması metin olarak verilen proje etiketlerini reddeder", () => {
   const issue = findNestedCommitCollectionIssue({
     projectUpserts: [{ id: 'project-id', tags: 'alpha' }]
   });
@@ -21,7 +21,7 @@ test('commit validation rejects project tags supplied as an iterable string', ()
   });
 });
 
-test('commit validation rejects task assignees supplied as an iterable string', () => {
+test("kayıt doğrulaması metin olarak verilen görev sorumlularını reddeder", () => {
   const issue = findNestedCommitCollectionIssue({
     taskUpserts: [{ id: 'task-id', assigneeIds: '900002' }]
   });
@@ -33,7 +33,7 @@ test('commit validation rejects task assignees supplied as an iterable string', 
   });
 });
 
-test('commit validation rejects blank or non-text project tags', () => {
+test("kayıt doğrulaması boş veya metin olmayan etiketi reddeder", () => {
   assert.equal(findNestedCommitCollectionIssue({
     projectUpserts: [{ tags: ['valid', '   '] }]
   })?.code, 'PROJECT_TAG_INVALID');
@@ -42,7 +42,7 @@ test('commit validation rejects blank or non-text project tags', () => {
   })?.code, 'PROJECT_TAG_INVALID');
 });
 
-test('valid nested commit collections remain accepted', () => {
+test("geçerli iç kayıt koleksiyonları kabul edilir", () => {
   assert.equal(findNestedCommitCollectionIssue({
     projectUpserts: [{ tags: ['Alpha', 'Beta'] }],
     taskUpserts: [{ assigneeIds: ['900002', 900003] }]
@@ -53,7 +53,7 @@ test('valid nested commit collections remain accepted', () => {
   }), null);
 });
 
-test('commit route applies every validation layer before SQL persistence', () => {
+test("kayıt yolu SQL kalıcılığından önce bütün doğrulama katmanlarını uygular", () => {
   const route = read('src/app/api/mergen-rota/commit/route.js');
   const nestedPosition = route.indexOf('findNestedCommitCollectionIssue(changes)');
   const projectWbsPosition = route.indexOf('findCommitProjectWbsIssue(changes)');

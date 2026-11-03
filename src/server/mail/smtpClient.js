@@ -55,7 +55,7 @@ export function createSmtpDialogue(socket, timeoutMs) {
   };
   const onData = (chunk) => {
     if (failure) return;
-    // Only search the newly received chunk. A line is joined exactly once.
+    // Yalnızca yeni gelen parça aranır; bir satır tam bir kez birleştirilir.
     let offset = 0;
     while (offset < chunk.length) {
       const newline = chunk.indexOf('\n', offset);

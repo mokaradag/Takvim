@@ -39,7 +39,7 @@ async function allocate(changes) {
 }
 
 for (const [collection, hiddenId] of [['projectUpserts', HIDDEN_PROJECT], ['wbsUpserts', HIDDEN_WBS], ['taskUpserts', HIDDEN_TASK]]) {
-  test(`F-024: arbitrary hidden/unused ${collection} IDs reject identically before candidate lookup`, async () => {
+  test(`keyfî gizli veya kullanılmayan ${collection} kimliği aday aranmadan aynı biçimde reddedilir`, async () => {
     const stack = await createActualStack(seed(), { sicil: 900010 });
     try {
       const entry = collection === 'projectUpserts' ? { id: hiddenId, name: 'Proposed', calendarId: DEFAULT_CALENDAR_ID, leadId: '900010', color: 'blue' }
@@ -64,7 +64,7 @@ for (const [collection, hiddenId] of [['projectUpserts', HIDDEN_PROJECT], ['wbsU
   });
 }
 
-test('allocation uses fresh server IDs, binds owner/type/destination, and consumes once with commit', async () => {
+test("tahsis yeni sunucu kimliği kullanır; sahip tür ve hedefi bağlar ve kayıtla bir kez tüketilir", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   try {
     const { changes, allocations } = await allocate({ taskUpserts: [task(HIDDEN_TASK)] });
@@ -89,7 +89,7 @@ test('allocation uses fresh server IDs, binds owner/type/destination, and consum
   } finally { await stack.dispose(); }
 });
 
-test('failed validation rolls allocation consumption back; authorization still runs on every commit', async () => {
+test("başarısız doğrulama tahsis tüketimini geri alır; her kayıtta yetki yine denetlenir", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   try {
     const { changes } = await allocate({ taskUpserts: [task()] });
@@ -107,7 +107,7 @@ test('failed validation rolls allocation consumption back; authorization still r
   } finally { await stack.dispose(); }
 });
 
-test('expired proofs fail closed and missing allocation schema gives controlled deployment errors', async () => {
+test("süresi dolmuş kanıt erişimi kapatır; eksik tahsis şeması kontrollü dağıtım hatası verir", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   try {
     const { changes } = await allocate({ taskUpserts: [task()] });
@@ -125,7 +125,7 @@ test('expired proofs fail closed and missing allocation schema gives controlled 
   } finally { await stack.dispose(); }
 });
 
-test('client persists allocation proof before commit; lost responses replay the same proof after reload', async () => {
+test("istemci tahsis kanıtını kayıttan önce saklar; kayıp yanıt sonrası aynı kanıt oynatılır", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   const values = new Map();
   const storage = { getItem: (key) => values.get(key), setItem: (key, value) => values.set(key, value) };
@@ -170,7 +170,7 @@ test('client persists allocation proof before commit; lost responses replay the 
   } finally { globalThis.fetch = fetch; await stack.dispose(); }
 });
 
-test('project/root/task graph references use allocated IDs with original client IDs restored', async () => {
+test("proje kök ve görev başvuruları tahsisli kimliği kullanır; istemci kimliği geri yüklenir", async () => {
   const stack = await createActualStack(seed());
   try {
     const projectId = `project-${randomUUID()}`, wbsId = `wbs-${randomUUID()}`, firstId = `task-${randomUUID()}`, secondId = `task-${randomUUID()}`;
@@ -185,7 +185,7 @@ test('project/root/task graph references use allocated IDs with original client 
   } finally { await stack.dispose(); }
 });
 
-test('allocation SQL retains bounded owner ranges, one-use consumption and deployment schema parity', () => {
+test("tahsis SQL sınırlı sahip aralığını tek tüketimi ve dağıtım şeması eşliğini korur", () => {
   const source = fs.readFileSync(new URL('../src/server/repository/creationAllocations.js', import.meta.url), 'utf8');
   assert.match(source, /DELETE TOP \(4000\)/);
   assert.match(source, /@pending \+ \(SELECT COUNT\(\*\) FROM @issued\) > @pendingLimit/);
@@ -201,7 +201,7 @@ test('allocation SQL retains bounded owner ranges, one-use consumption and deplo
   assert.match(fs.readFileSync(new URL('../database/MR_Rollback_Durable_Persistence.sql', import.meta.url), 'utf8'), /DROP TABLE dbo.MR_CreationAllocations/);
 });
 
-test('concurrent use of one allocation waits for the transaction and has one winner', async () => {
+test("tek tahsisin eşzamanlı kullanımı işlemi bekler ve tek kazanan üretir", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   try {
     const { changes } = await allocate({ taskUpserts: [task()] });
@@ -226,7 +226,7 @@ test('concurrent use of one allocation waits for the transaction and has one win
   } finally { await stack.dispose(); }
 });
 
-test('pending allocation cap is caller-local and expired allocations release capacity', async () => {
+test("bekleyen tahsis sınırı çağırana aittir; süresi dolan tahsis kapasite bırakır", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   try {
     const { changes } = await allocate({ taskUpserts: [task()] });
@@ -241,7 +241,7 @@ test('pending allocation cap is caller-local and expired allocations release cap
   } finally { await stack.dispose(); }
 });
 
-test('mixed valid/invalid proof batches roll back all consumption; storage failures send no mutation', async () => {
+test("karışık kanıt topluluğu bütün tüketimi geri alır; depo hatası değişim göndermez", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   try {
     const { changes } = await allocate({ taskUpserts: [task(), task()] });
@@ -256,13 +256,13 @@ test('mixed valid/invalid proof batches roll back all consumption; storage failu
   } finally { await stack.dispose(); }
 });
 
-test('new client cannot accidentally commit an allocation request to an older server', async () => {
+test("yeni istemci tahsis isteğini yanlışlıkla eski sunucuya kaydedemez", async () => {
   const fetch = globalThis.fetch;
   const envelopes = [];
   globalThis.fetch = async (_url, init) => {
     if (init.method === 'GET') return Response.json({ authenticated: true, currentUser: { sicil: 900010 } });
     const body = JSON.parse(init.body); envelopes.push(body);
-    // The old commit handler ignores unknown operation/allocationChanges fields.
+    // Eski kayıt işleyicisi bilinmeyen operation ve allocationChanges alanlarını yok sayar.
     assert.deepEqual(body.changes, {});
     return Response.json({ projectUpserts: [], wbsUpserts: [], taskUpserts: [] });
   };
@@ -274,7 +274,7 @@ test('new client cannot accidentally commit an allocation request to an older se
   } finally { globalThis.fetch = fetch; }
 });
 
-test('typed aliases never rewrite other entity namespaces, including after client reload', async () => {
+test("türlü eşleme istemci yeniden yüklemede de başka varlık ad alanını değiştirmez", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   const values = new Map();
   const storage = { getItem: (key) => values.get(key), setItem: (key, value) => values.set(key, value) };
@@ -298,7 +298,7 @@ test('typed aliases never rewrite other entity namespaces, including after clien
   } finally { await stack.dispose(); }
 });
 
-test('failed proof persistence publishes no memory state; retry remains durable across a lost response and reload', async () => {
+test("kanıt kayıt hatası belleğe durum yayımlamaz; kayıp yanıt sonrası deneme kalıcı kalır", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   const values = new Map();
   let rejectProof = true;
@@ -336,7 +336,7 @@ test('failed proof persistence publishes no memory state; retry remains durable 
   } finally { globalThis.fetch = fetch; await stack.dispose(); }
 });
 
-test('proof durability requirements do not block versioned edits when browser storage is full', async () => {
+test("kanıt kalıcılığı tarayıcı deposu doluyken sürümlü düzenlemeyi engellemez", async () => {
   const stack = await createActualStack(seed());
   try {
     const current = stack.state.tasks.find((row) => row.id === HIDDEN_TASK);
@@ -356,7 +356,7 @@ function sharedCreationStorage() {
 }
 
 for (const entityType of ['TASK', 'WBS']) {
-  test(`moved ${entityType} draft replaces the project-bound proof and preserves its client ID`, async () => {
+  test(`taşınmış ${entityType} taslağı proje bağlı kanıtı değiştirir ve istemci kimliğini korur`, async () => {
     const base = seed();
     const projectB = randomUUID(), wbsB = randomUUID();
     const stack = await createActualStack({ ...base,
@@ -388,13 +388,13 @@ for (const entityType of ['TASK', 'WBS']) {
       assert.notEqual(submitted.creationProof, old.proof);
       assert.equal(shared.state().aliases.some(([id]) => id === old.id), false);
       assert.deepEqual(shared.state().pending, []);
-      // The same move to an unauthorized destination is still rejected server-side.
+      // Yetkisiz hedefe aynı taşıma sunucu tarafında yine reddedilir.
       await assert.rejects(repository.commitChanges({ [collection]: [{ ...entry, id: `${entityType.toLowerCase()}-${randomUUID()}`, projectId: HIDDEN_PROJECT }] }));
     } finally { globalThis.fetch = fetch; await stack.dispose(); }
   });
 }
 
-test('stale independent tabs merge interleaved proofs and completion never resurrects another pending record', async () => {
+test("eski bağımsız sekmeler aralıklı kanıtı birleştirir; tamamlama başka bekleyen kaydı diriltmez", async () => {
   const base = seed(), projectB = randomUUID(), rootB = randomUUID();
   const stack = await createActualStack({ ...base,
     projects: [...base.projects, { ProjectId: projectB, SourceType: 'MANUAL', ProjectName: 'B', LeadSicil: 900010, CalendarId: DEFAULT_CALENDAR_ID }],
@@ -419,8 +419,8 @@ test('stale independent tabs merge interleaved proofs and completion never resur
     return response;
   };
   try {
-    // Both clients started empty. B's allocation is in flight while A persists;
-    // B must subsequently read shared storage instead of overwriting from memory.
+    // İki istemci boş başladı. A kaydederken B tahsisi sürmektedir;
+    // B bellekten üzerine yazmak yerine sonrasında ortak depoyu okumalıdır.
     const pendingB = assert.rejects(b.commitChanges(changesB));
     await bAllocated;
     await assert.rejects(a.commitChanges(changesA));
@@ -432,7 +432,7 @@ test('stale independent tabs merge interleaved proofs and completion never resur
     assert.deepEqual(state.pending.find((record) => record.entityType === 'TASK'), proofA);
     assert.equal(state.aliases.find(([id]) => id === proofA.id)[2], 'TASK');
     assert.equal(state.aliases.find(([id]) => id === proofB.id)[2], 'WBS');
-    // Original stale clients and fresh clients all recover the durable proof.
+    // Eski ve yeni istemciler kalıcı kanıtı geri alır.
     for (const [repository, changes, proof] of [[a, changesA, proofA], [b, changesB, proofB],
       [createApiRepository({ aliasStorage: shared.client() }), changesA, proofA]]) {
       await assert.rejects(repository.commitChanges(changes));
@@ -452,7 +452,7 @@ test('stale independent tabs merge interleaved proofs and completion never resur
 });
 
 for (const committed of [false, true]) {
-  test(`expired uncertain creation reconciles before replacement (committed=${committed})`, async (t) => {
+  test(`süresi dolmuş belirsiz oluşturma değiştirmeden önce uzlaştırılır (kayıtlı=${committed})`, async (t) => {
     const stack = await createActualStack(seed(), { sicil: 900010 });
     const shared = sharedCreationStorage(), fetch = globalThis.fetch, sent = [];
     let lose = true;
@@ -493,7 +493,7 @@ for (const committed of [false, true]) {
   });
 }
 
-test('entity translation passes malformed/non-object string bodies through byte for byte', async () => {
+test("varlık çevirisi bozuk veya nesne olmayan metin gövdesini bayt bayt korur", async () => {
   const { activateActualIdAliases } = await import('../src/data/api/activeActualIdAliases.js');
   const { actualIdAliasType } = await import('../src/data/api/actualIdAliasStorage.js');
   const actual = randomUUID(), client = `task-${randomUUID()}`;
@@ -510,7 +510,7 @@ test('entity translation passes malformed/non-object string bodies through byte 
   } finally { activateActualIdAliases(new Map()); }
 });
 
-test('cross-context storage mutations read only after acquiring the shared browser lock', async (t) => {
+test("bağlamlar arası depo değişimi ortak tarayıcı kilidinden sonra okur", async (t) => {
   const { createCreationIdStorage } = await import('../src/data/api/creationIdStorage.js');
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   t.after(() => { if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; });
@@ -535,7 +535,7 @@ test('cross-context storage mutations read only after acquiring the shared brows
   assert.equal(aliasesB.get(allocations[0].id), allocations[0].clientId, 'the later lock holder publishes the merged state');
 });
 
-test('account-scoped creation state restores only after the authenticated owner is known', async () => {
+test("hesap kapsamlı oluşturma durumu yalnızca doğrulanmış sahip bilinince yüklenir", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   const shared = sharedCreationStorage(), fetch = globalThis.fetch;
   const completed = { taskUpserts: [task(`task-${randomUUID()}`)] };
@@ -568,7 +568,7 @@ test('account-scoped creation state restores only after the authenticated owner 
   } finally { globalThis.fetch = fetch; await stack.dispose(); }
 });
 
-test('unscoped legacy creation envelopes are never activated for an authenticated account', async () => {
+test("sahipsiz eski oluşturma zarfı doğrulanmış hesap için etkinleşmez", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   const shared = sharedCreationStorage(), old = randomUUID(), client = randomUUID(), proof = randomUUID();
   shared.values.set('mergen-rota.actual-id-aliases.v1', JSON.stringify([[old, client, 'TASK']]));
@@ -584,7 +584,7 @@ test('unscoped legacy creation envelopes are never activated for an authenticate
   } finally { await stack.dispose(); }
 });
 
-test('bounded completed-alias compaction preserves older live identities and rebases fresh snapshots to canonical IDs', async () => {
+test("tamamlanmış eşleme sıkıştırması eski canlı kimliği korur; yeni görüntüyü kanonik kimliğe bağlar", async () => {
   const stack = await createActualStack(seed());
   const shared = sharedCreationStorage();
   const client = randomUUID();
@@ -612,7 +612,7 @@ test('bounded completed-alias compaction preserves older live identities and reb
   } finally { await stack.dispose(); }
 });
 
-test('verified keepalive update/delete dispatches fetch in the same task without Web Locks or IndexedDB', async (t) => {
+test("doğrulanmış canlı tutma güncelleme ve silme aynı görevde Web Locks veya IndexedDB olmadan fetch çağırır", async (t) => {
   const stack = await createActualStack(seed());
   const shared = sharedCreationStorage(), fetch = globalThis.fetch;
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -640,7 +640,7 @@ test('verified keepalive update/delete dispatches fetch in the same task without
   } finally { globalThis.fetch = fetch; await stack.dispose(); }
 });
 
-test('a late session response cannot reactivate aliases after another account takes the browser', async () => {
+test("geç oturum yanıtı tarayıcı başka hesaba geçince eşlemeyi yeniden etkinleştiremez", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   const shared = sharedCreationStorage(), fetch = globalThis.fetch;
   const a = createApiRepository({ aliasStorage: shared.client() });
@@ -663,7 +663,7 @@ test('a late session response cannot reactivate aliases after another account ta
   } finally { release?.(); globalThis.fetch = fetch; await stack.dispose(); }
 });
 
-test('an older server ignoring release cannot authorize replacing an uncertain identity', async (t) => {
+test("bırakmayı yok sayan eski sunucu belirsiz kimliği değiştirmeyi yetkilendiremez", async (t) => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   const shared = sharedCreationStorage(), fetch = globalThis.fetch;
   let lose = true, issued = 0;
@@ -688,7 +688,7 @@ test('an older server ignoring release cannot authorize replacing an uncertain i
   } finally { globalThis.fetch = fetch; await stack.dispose(); }
 });
 
-test('expiry reconciliation retires consumed proofs without stranding a separate uncommitted draft in the same batch', async (t) => {
+test("süre uzlaştırma tüketilmiş kanıtı kaldırırken ayrı kaydedilmemiş taslağı korur", async (t) => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   const shared = sharedCreationStorage(), fetch = globalThis.fetch;
   const a = { taskUpserts: [{ ...task(randomUUID()), task: 'Committed once' }] };
@@ -721,7 +721,7 @@ test('expiry reconciliation retires consumed proofs without stranding a separate
   } finally { globalThis.fetch = fetch; await stack.dispose(); }
 });
 
-test('expired uncommitted project/WBS/task allocations recover as one correctly rebound creation graph', async (t) => {
+test("süresi dolmuş kaydedilmemiş proje WBS ve görev tek doğru bağlı oluşturma ağı olarak kurtarılır", async (t) => {
   const stack = await createActualStack(seed());
   const shared = sharedCreationStorage(), fetch = globalThis.fetch;
   let fail = true;
@@ -750,7 +750,7 @@ test('expired uncommitted project/WBS/task allocations recover as one correctly 
   } finally { globalThis.fetch = fetch; await stack.dispose(); }
 });
 
-test('snapshot inbox references open a server-allocated task using its live client identity across reloads', async () => {
+test("görüntü kutusu başvurusu tahsisli görevi yeniden yüklemede canlı istemci kimliğiyle açar", async () => {
   const { sameActualReference } = await import('../src/domain/identity/actualId.js');
   const stack = await createActualStack(seed());
   const shared = sharedCreationStorage(), fetch = globalThis.fetch;
@@ -792,7 +792,7 @@ test('snapshot inbox references open a server-allocated task using its live clie
   } finally { globalThis.fetch = fetch; await stack.dispose(); }
 });
 
-test('large alias-heavy commits inspect existing alias values once without changing deduplication', async () => {
+test("büyük eşlemeli kayıt mevcut eşleme değerini tekilleştirmeyi değiştirmeden bir kez inceler", async () => {
   const { restoreActualCommitIds } = await import('../src/data/api/createApiRepository.js');
   class CountedAliases extends Map {
     scans = 0;
@@ -812,7 +812,7 @@ test('large alias-heavy commits inspect existing alias values once without chang
   }
 });
 
-test('fake allocation owner lock is reentrant and preserves competing-transaction rollback snapshots', async () => {
+test("sahte tahsis sahip kilidi yeniden girişlidir ve rakip işlem geri alma görüntüsünü korur", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   const { getSqlPool } = await import('../src/server/db/pool.js');
   const { allocateCreationIds, consumeCreationAllocations } = await import('../src/server/repository/creationAllocations.js');
@@ -851,7 +851,7 @@ test('fake allocation owner lock is reentrant and preserves competing-transactio
 });
 
 for (const clientPath of ['../src/features/shared/jsonRequest.js', '../src/data/api/scheduleChangeClient.js']) {
-  test(`feature account transitions preserve the request/result boundary (${clientPath})`, async () => {
+  test(`özellik hesap geçişi istek ve sonuç sınırını korur (${clientPath})`, async () => {
     const { activateActualIdAliases } = await import('../src/data/api/activeActualIdAliases.js');
     const { actualIdAliasType } = await import('../src/data/api/actualIdAliasStorage.js');
     const { AppRepositoryError } = await import('../src/data/contracts/appRepository.js');
@@ -882,7 +882,7 @@ for (const clientPath of ['../src/features/shared/jsonRequest.js', '../src/data/
   });
 }
 
-test('creation storage preserves the unauthorized account error raised inside its lock', async () => {
+test("oluşturma deposu kilit içinde yükselen yetkisiz hesap hatasını korur", async () => {
   const { createCreationIdStorage } = await import('../src/data/api/creationIdStorage.js');
   const { AppRepositoryError } = await import('../src/data/contracts/appRepository.js');
   const error = new AppRepositoryError({ code: 'UNAUTHORIZED', message: 'Account changed' });
@@ -892,7 +892,7 @@ test('creation storage preserves the unauthorized account error raised inside it
   }
 });
 
-test('release response loss and expiry cleanup retain a bound retry receipt without replaying consumption', async (t) => {
+test("bırakma yanıtı kaybı ve süre temizliği bağlı deneme makbuzunu tüketimi yinelemeden korur", async (t) => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   const shared = sharedCreationStorage(), fetch = globalThis.fetch;
   const changes = { taskUpserts: [task(`task-${randomUUID()}`)] };
@@ -912,7 +912,7 @@ test('release response loss and expiry cleanup retain a bound retry receipt with
     const { CREATION_ALLOCATION_CLIENT_TTL_MS } = await import('../src/data/api/creationIdStorage.js');
     t.mock.method(Date, 'now', () => old.allocatedAt + CREATION_ALLOCATION_CLIENT_TTL_MS + 1);
     stack.db.creationAllocations[0].ExpiresAt = new Date(new Date().getTime() - 1000).toISOString();
-    // Another reservation runs normal expiry cleanup before the old draft resumes.
+    // Eski taslak sürmeden önce başka tahsis olağan süre temizliğini çalıştırır.
     await allocate({ taskUpserts: [task()] });
     assert.ok(stack.db.creationAllocations.some((row) => row.Proof.toLowerCase() === old.proof));
     phase = 'retry';
@@ -941,7 +941,7 @@ test('release response loss and expiry cleanup retain a bound retry receipt with
   } finally { globalThis.fetch = fetch; await stack.dispose(); }
 });
 
-test('expired abandoned local proofs free capacity while referenced drafts and typed aliases stay protected', async () => {
+test("süresi dolmuş terk edilmiş kanıt kapasite bırakır; başvurulan taslak ve türlü eşleme korunur", async () => {
   const { createCreationIdStorage, CREATION_ALLOCATION_SERVER_TTL_MS } = await import('../src/data/api/creationIdStorage.js');
   const { MAX_ACTUAL_ID_ALIASES } = await import('../src/data/api/actualIdAliasStorage.js');
   const shared = sharedCreationStorage(), now = Date.now();
@@ -951,7 +951,7 @@ test('expired abandoned local proofs free capacity while referenced drafts and t
     aliases: records.map((row) => [row.id, row.clientId, row.entityType]) }));
   const store = createCreationIdStorage(shared.client(), undefined, { accountId: '900001', now: () => now });
   const aliases = new Map(); store.restoreAliases(aliases);
-  // An existing expired draft must go through server reconciliation, never replacement.
+  // Mevcut süresi dolmuş taslak değiştirilmez; sunucuda uzlaştırılmalıdır.
   await assert.rejects(store.prepare({ taskUpserts: [task(records[0].clientId)] }, aliases));
   assert.equal(shared.state().pending.length, MAX_ACTUAL_ID_ALIASES);
   await store.prepare({ taskUpserts: [{ ...task(), deps: [{ predecessorId: records[0].clientId, type: 'FS' }] }] }, aliases);
@@ -965,7 +965,7 @@ test('expired abandoned local proofs free capacity while referenced drafts and t
 });
 
 for (const clientPath of ['../src/features/shared/jsonRequest.js', '../src/data/api/scheduleChangeClient.js']) {
-  test(`stale reads discard the previous account response (${clientPath})`, async () => {
+  test(`eski okuma önceki hesabın yanıtını atar (${clientPath})`, async () => {
     const { activateActualIdAliases } = await import('../src/data/api/activeActualIdAliases.js');
     const { requestJson } = await import(clientPath);
     const fetch = globalThis.fetch;
@@ -996,7 +996,7 @@ for (const clientPath of ['../src/features/shared/jsonRequest.js', '../src/data/
   });
 }
 
-test('missing durable storage rejects creation before allocation while canonical versioned edits still work', async () => {
+test("kalıcı depo yokluğu tahsisten önce oluşturmayı reddeder; sürümlü düzenleme çalışır", async () => {
   const stack = await createActualStack(seed());
   try {
     const repository = createApiRepository();
@@ -1011,7 +1011,7 @@ test('missing durable storage rejects creation before allocation while canonical
   } finally { await stack.dispose(); }
 });
 
-test('competing tabs release the unused reservation for the same draft without duplicating the task', async () => {
+test("rakip sekmeler aynı taslağın kullanılmayan tahsisini görevi çoğaltmadan bırakır", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   const shared = sharedCreationStorage(), fetch = globalThis.fetch;
   let allocated = 0, release;
@@ -1036,7 +1036,7 @@ test('competing tabs release the unused reservation for the same draft without d
   } finally { globalThis.fetch = fetch; await stack.dispose(); }
 });
 
-test('proof write failure releases untracked server reservations before retry', async () => {
+test("kanıt yazma hatası izlenmeyen sunucu tahsisini yeniden denemeden önce bırakır", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   const shared = sharedCreationStorage(), storage = shared.client();
   const setItem = storage.setItem;
@@ -1053,7 +1053,7 @@ test('proof write failure releases untracked server reservations before retry', 
   } finally { await stack.dispose(); }
 });
 
-test('retained release receipts share a bounded caller quota without reducing active capacity or crossing owners', async () => {
+test("bırakma makbuzu sahip aşmadan veya etkin kapasite azaltmadan sınırlı çağıran kotasını paylaşır", async () => {
   const stack = await createActualStack(seed(), { sicil: 900010 });
   try {
     const { allocateCreationIds } = await import('../src/server/repository/creationAllocations.js');
@@ -1079,7 +1079,7 @@ test('retained release receipts share a bounded caller quota without reducing ac
   } finally { await stack.dispose(); }
 });
 
-test('large creation batches traverse maps linearly inside the storage critical section', async (t) => {
+test("büyük oluşturma topluluğu kritik depo bölümünde haritaları doğrusal gezer", async (t) => {
   const { createCreationIdStorage } = await import('../src/data/api/creationIdStorage.js');
   const shared = sharedCreationStorage(), storage = shared.client(), aliases = new Map();
   const store = createCreationIdStorage(storage, undefined, { accountId: '900001' });

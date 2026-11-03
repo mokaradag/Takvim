@@ -1891,8 +1891,11 @@ Ayrıntılı belge: [YAPAY-ZEKA-ANLAMSAL-KATMAN.md](YAPAY-ZEKA-ANLAMSAL-KATMAN.m
   doğrulanmış önermelerin nasıl anlatılacağını seçer: kapalı düzende (`{"blocks":[...]}`: `title`, `say`, `note`,
   `rows`, `chart`, `details`) başlığı, analist paragrafında hangi önermelerin hangi sırayla söyleneceğini, tema renkli not
   kutusunu ve hangi tabloya/grafiğe yönlendirileceğini
-  (`src/domain/ai/groundedComposition.js`, `src/server/ai/assistant/answerComposition.js`). Serbest model metni hiçbir
-  zaman çizilmez; doğrulama yapısaldır (kimlik, tür, sıra, kapsam), sözcük ya da kalıp yoktur. Düzen turu aynı
+  (`src/domain/ai/groundedComposition.js`, `src/server/ai/assistant/answerComposition.js`). **Aşama 4E kalite
+  yakınsamasında** model önerme sırasını ve paragrafları seçer; olgular tam sunucu yuvalarıdır (`{P#}`).
+  Yalnızca kapalı sunucu geçişleri kabul edilir; serbest model sözcükleri doğrulanmış olgu sayılmaz ve güvenli
+  geri dönüşe gider — ayrıntı: [YAPAY-ZEKA-ANLAMSAL-KATMAN.md §15](YAPAY-ZEKA-ANLAMSAL-KATMAN.md).
+  Doğrulama kimlik, tür, sıra, bölüm sahipliği ve kapalı anlatım sözleşmesidir; dil sezgisi kullanılmaz. Düzen turu aynı
   oturumda, araçsız ve dar çıktı sınırıyla (Standart 1200 belirteç) bir kez yürür; yapısal olarak reddedilen, boş ya
   da kesik düzen süre yeterse BİR kez yalnızca önerme sayfasıyla Derin düşünmeye devredilir; o da olmazsa ya da hata,
   süre veya sağlayıcı sorunu varsa doğrulanmış belirlenimci anlatım gösterilir — düzeltme turu yoktur. Planlayıcı

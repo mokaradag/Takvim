@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "models": [
+    { "id": "claude-haiku-4-5-20251001", "provider": "onprem", "capabilities": ["chat", "tools"], "contextTokens": 200000, "maxConcurrency": null, "enabled": true }
+  ],
+  "profiles": {
+    "chat.fast": { "model": "claude-haiku-4-5-20251001", "maxOutputTokens": 512 },
+    "chat.general": { "model": "claude-haiku-4-5-20251001", "maxOutputTokens": 1024 },
+    "chat.tools": { "model": "claude-haiku-4-5-20251001", "maxOutputTokens": 4096 }
+  }
+}

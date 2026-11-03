@@ -42,7 +42,7 @@ function build(tasks, projectList = projects) {
   return buildPortfolioSchedule({ tasks, projects: projectList, calendars: [calendar] });
 }
 
-test('CPM is calculated independently for unrelated projects', () => {
+test("CPM ilgisiz projeler için bağımsız hesaplanır", () => {
   const schedule = build([
     task('p1', 'A', 2),
     task('p2', 'B', 10)
@@ -54,7 +54,7 @@ test('CPM is calculated independently for unrelated projects', () => {
   assert.equal(schedule.tasks.B.totalFloatDays, 0);
 });
 
-test('a valid project remains available when another project is invalid', () => {
+test("başka proje geçersizken geçerli proje kullanılabilir kalır", () => {
   const schedule = build([
     task('p1', 'A', 1),
     task('p1', 'B', 1, [dependency('A')]),
@@ -70,7 +70,7 @@ test('a valid project remains available when another project is invalid', () => 
   assert.ok(schedule.warnings.some((warning) => warning.projectId === 'p2' && warning.code === 'DEPENDENCY_CYCLE'));
 });
 
-test('task-level schedule lookup returns the projected CPM result', () => {
+test("görev düzeyi çizelge araması izdüşürülmüş CPM sonucunu döndürür", () => {
   const schedule = build([
     task('p1', 'A', 2),
     task('p1', 'B', 1, [dependency('A')])
@@ -83,7 +83,7 @@ test('task-level schedule lookup returns the projected CPM result', () => {
   assert.equal(selectTaskSchedule(schedule, 'missing'), null);
 });
 
-test('critical-task aggregation combines project-scoped results', () => {
+test("kritik görev toplaması proje kapsamlı sonuçları birleştirir", () => {
   const schedule = build([
     task('p1', 'A', 1),
     task('p1', 'B', 2, [dependency('A')]),
@@ -95,7 +95,7 @@ test('critical-task aggregation combines project-scoped results', () => {
   assert.deepEqual(schedule.projects.p2.criticalTaskIds, ['X']);
 });
 
-test('project calculated finish dates remain project-specific', () => {
+test("hesaplanmış proje bitişi projeye özgü kalır", () => {
   const schedule = build([
     task('p1', 'A', 1),
     task('p1', 'B', 1, [dependency('A')]),
@@ -106,7 +106,7 @@ test('project calculated finish dates remain project-specific', () => {
   assert.equal(selectProjectSchedule(schedule, 'p2').projectFinish, '2026-06-05');
 });
 
-test('cross-project dependencies are rejected deterministically without contaminating other projects', () => {
+test("projeler arası bağımlılık diğer projeleri etkilemeden belirlenimci reddedilir", () => {
   const schedule = build([
     task('p1', 'A', 2),
     task('p2', 'B', 1, [dependency('A')])
@@ -126,7 +126,7 @@ test('cross-project dependencies are rejected deterministically without contamin
   assert.equal(schedule.tasks.B, undefined);
 });
 
-test('projects without tasks are represented safely as empty schedules', () => {
+test("görevsiz proje güvenli boş çizelgeyle temsil edilir", () => {
   const schedule = build([task('p1', 'A', 1)]);
 
   assert.equal(schedule.projects.p3.status, 'empty');

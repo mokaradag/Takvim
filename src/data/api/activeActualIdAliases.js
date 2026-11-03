@@ -5,8 +5,8 @@ let activeAliases = new Map();
 let outgoingIds = new Map();
 let accountGuard = null;
 
-// Shared by the actual repository and its feature HTTP adapters, never by
-// server authorization. These aliases only translate IDs; they grant no access.
+// Gerçek depo ve özellik HTTP bağdaştırıcıları tarafından paylaşılır;
+// sunucu yetkisinde kullanılmaz. Eşlemeler yalnızca kimlik çevirir; erişim vermez.
 export function activateActualIdAliases(aliases, guard = null) {
   accountGuard = guard;
   activeAliases = new Map([...aliases].filter(([actual, client]) => extractActualId(client) !== actual));
@@ -15,7 +15,7 @@ export function activateActualIdAliases(aliases, guard = null) {
 
 export function clearActualAccount(storage) {
   activateActualIdAliases(new Map());
-  try { storage?.removeItem(`${ACTUAL_ID_ALIAS_STORAGE_KEY}.active-account`); } catch { /* Storage can be unavailable. */ }
+  try { storage?.removeItem(`${ACTUAL_ID_ALIAS_STORAGE_KEY}.active-account`); } catch { /* Depo kullanılamayabilir.*/ }
 }
 
 function outgoing(value, type) { return outgoingIds.get(`${type}:${extractActualId(value)}`) || value; }
@@ -36,7 +36,7 @@ export function translateEntityRequest(path, init) {
   let translated = init;
   if (typeof init?.body === 'string') {
     let body;
-    try { body = JSON.parse(init.body); } catch { /* Not an entity payload. */ }
+    try { body = JSON.parse(init.body); } catch { /** Varlık yükü değildir. */ }
     if (body && typeof body === 'object' && !Array.isArray(body)) {
       for (const [key, type] of ENTITY_KEYS) if (Object.hasOwn(body, key)) body[key] = outgoing(body[key], type);
       if (Array.isArray(body.taskIds)) body.taskIds = body.taskIds.map((value) => outgoing(value, 'TASK'));
@@ -48,8 +48,8 @@ export function translateEntityRequest(path, init) {
 
 export function restoreEntityResponse(value, context = {}) {
   const { method = 'GET', guard = accountGuard } = context;
-  // A successful server mutation stays successful if the account changed while
-  // awaiting its response. Never restore it with another account's aliases.
+  // Yanıt beklenirken hesap değişse de başarılı sunucu değişimi başarılı kalır.
+  // Başka hesabın eşlemeleriyle geri yükleme yapılmaz.
   try {
     const current = guard?.();
     if (guard !== accountGuard || (Object.hasOwn(context, 'account') && current !== context.account)) {

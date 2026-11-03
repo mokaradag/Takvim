@@ -8,10 +8,7 @@ function assertApplicationPath(value, label) {
   return raw;
 }
 
-/**
- * Browser-visible deployment prefix. The reverse proxy may expose Rota below
- * `/rota` while stripping that prefix before forwarding to Next.js.
- */
+/* Tarayıcıya görünen dağıtım öneki. Ters vekil Rota uygulamasını /rota altında sunarken Next.js öncesinde öneki kaldırabilir. */
 export function normalizePublicBasePath(value) {
   const raw = assertApplicationPath(value, 'NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH');
   if (!raw || raw === '/') return '';
@@ -25,7 +22,7 @@ export const PUBLIC_BASE_PATH = normalizePublicBasePath(
   process.env.NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH || ''
 );
 
-/** Prefix a browser-facing Rota path exactly once. */
+/* Tarayıcıya yönelik Rota yolu tam bir kez öneklenir. */
 export function publicRotaPath(value = '/', basePath = PUBLIC_BASE_PATH) {
   const prefix = normalizePublicBasePath(basePath);
   const raw = assertApplicationPath(value || '/', 'Rota path');

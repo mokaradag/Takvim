@@ -31,7 +31,7 @@ function jsonResponse(body) {
   };
 }
 
-test('SQL numeric configuration requires complete decimal values and a valid TCP port', () => {
+test("SQL sayısal ayarı tam ondalık değer ve geçerli TCP bağlantı noktası ister", () => {
   const source = read('src/server/db/config.js');
   assert.doesNotMatch(source, /Number\.parseInt/);
   assert.match(source, /const normalized = raw\.trim\(\);/);
@@ -40,7 +40,7 @@ test('SQL numeric configuration requires complete decimal values and a valid TCP
   assert.match(source, /port: integerValue\('MERGEN_ROTA_DB_PORT', 1433, \{ max: 65535 \}\)/);
 });
 
-test('application loading waits for snapshot synchronization before reading session capabilities', async () => {
+test("uygulama yükleme oturum yeteneğini okumadan görüntü eşitlemesini bekler", async () => {
   let synchronized = false;
   let sessionObservedSynchronized = null;
   const events = [];
@@ -75,7 +75,7 @@ test('application loading waits for snapshot synchronization before reading sess
   assert.deepEqual(result.snapshot.session, session);
 });
 
-test('disposing a task patch coalescer settles every pending caller with a failure', async () => {
+test("görev yama birleştiricisini kapatma bütün bekleyen çağıranları hatayla sonuçlandırır", async () => {
   const coalescer = createTaskPatchCoalescer(async () => {
     throw new Error('flush should not run after disposal');
   }, { delayMs: 60_000 });
@@ -93,7 +93,7 @@ test('disposing a task patch coalescer settles every pending caller with a failu
   }
 });
 
-test('a disposed task patch coalescer rejects stale updates immediately', async () => {
+test("kapatılmış görev yama birleştiricisi eski güncellemeyi hemen reddeder", async () => {
   const coalescer = createTaskPatchCoalescer(async () => ({ ok: true }), { delayMs: 60_000 });
   coalescer.dispose();
 
@@ -103,7 +103,7 @@ test('a disposed task patch coalescer rejects stale updates immediately', async 
   assert.equal(result.error.operation, 'task/update');
 });
 
-test('flushAll drains edits queued while an earlier coalesced edit is being persisted', async () => {
+test("flushAll önceki birleşik düzenleme kaydedilirken sıraya girenleri boşaltır", async () => {
   let releaseFirst;
   let markFirstStarted;
   const firstStarted = new Promise((resolve) => { markFirstStarted = resolve; });
@@ -133,7 +133,7 @@ test('flushAll drains edits queued while an earlier coalesced edit is being pers
   ]);
 });
 
-test('Actual repository restores persistent aliases in session and baseline references', async () => {
+test("gerçek depo oturum ve baz plan başvurusunda kalıcı eşlemeyi geri yükler", async () => {
   const projectUuid = '11111111-1111-4111-8111-111111111111';
   const taskUuid = '22222222-2222-4222-8222-222222222222';
   const projectId = `project-${projectUuid}`;
@@ -183,7 +183,7 @@ test('Actual repository restores persistent aliases in session and baseline refe
   }
 });
 
-test('project updates honor an explicitly selected calendar', () => {
+test("proje güncellemesi açık seçili takvimi izler", () => {
   const context = {
     projects: [{
       id: 'project-1',
@@ -206,7 +206,7 @@ test('project updates honor an explicitly selected calendar', () => {
   assert.equal(result.project.calendarId, 'calendar-new');
 });
 
-test('task-derived session access excludes inactive projects', () => {
+test("görevden türetilen oturum erişimi etkin olmayan projeyi dışlar", () => {
   const source = read('src/server/authorization/loadAuthorizationContext.js');
   assert.match(
     source,

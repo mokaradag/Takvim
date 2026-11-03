@@ -13,7 +13,7 @@
  *
  * Sağlayıcı (COMPOSITION_QUALIFICATION_PROVIDER):
  *   dry     model çağrılmaz; düzeni her olguyu temsil eden sabit betik yazar (vakaların ve ölçümün kuru sınaması).
- *   claude  `scripts/planner-claude-model.mjs` komutu (PLANNER_CLAUDE_MODEL, varsayılan claude-haiku-4-5-20251001;
+ *   claude  `scripts/planner-model-adapter.mjs` komutu (PLANNER_CLAUDE_MODEL, varsayılan claude-haiku-4-5-20251001;
  *           düşünme kapalı, en düşük çaba). Bütçe: PLANNER_CLAUDE_LOG zorunlu, PLANNER_CLAUDE_MAX_CALLS ve
  *           PLANNER_CLAUDE_MAX_UNCACHED ile sınırlanır.
  *   live    kurum içi OpenAI uyumlu uç: MERGEN_ROTA_AI_BASE_URL, MERGEN_ROTA_AI_DEFAULT_API_KEY ve isteğe bağlı
@@ -347,6 +347,6 @@ if (direct) {
   const cases = selectQualificationCases(STAGE, process.env.COMPOSITION_QUALIFICATION_CASE);
   summary.selected = cases.length;
   for (const item of cases) {
-    test(item.id, (t) => (summary.infrastructure ? t.skip('önceki altyapı hatası') : runCase(t, item)));
+    test(`davranış durumu: ${item.id}`, (t) => (summary.infrastructure ? t.skip('önceki altyapı hatası') : runCase(t, item)));
   }
 }

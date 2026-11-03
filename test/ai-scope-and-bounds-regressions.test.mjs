@@ -11,7 +11,7 @@ const { parseInline } = await import('../src/features/ai/assistant/assistantMark
 const { effectiveAssistantSource, rotaDataAvailability } = await import('../src/features/ai/assistant/assistantPresentation.js');
 const stackFor = (t) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed() });
 
-test('successful later tools freeze their own normalized population', () => {
+test("sonraki başarılı araç kendi normal nüfusunu dondurur", () => {
   const scope = createToolScope();
   scope.establish([{ name: 'rota_project_search', arguments: '{"text":"Radar"}' }], [{ content: JSON.stringify({ ok: true, data: { matches: [{ projectId: PROJECTS.FULL, exactMatch: true }], resolution: 'unique', resolvedProject: { projectId: PROJECTS.FULL } } }) }]);
   const args = { projectId: PROJECTS.FULL, deadline: 'overdue', status: ['todo'] };
@@ -23,7 +23,7 @@ test('successful later tools freeze their own normalized population', () => {
   }
 });
 
-test('workload preserves cents above the safe scaled-number range', async (t) => {
+test("iş yükü güvenli ölçekli sayı aralığının üstünde kuruşu korur", async (t) => {
   stackFor(t);
   const context = createToolTurnContext({ sicil: AYSE, now: NOW });
   const authorization = await context.authorization(new AbortController().signal);
@@ -36,7 +36,7 @@ test('workload preserves cents above the safe scaled-number range', async (t) =>
   assert.equal(result.data.people[0].tasksWithPlannedHours, 20000);
 });
 
-test('WBS recursion limits produce a bounded tool error, including wrapped SQL errors', async (t) => {
+test("WBS özyineleme sınırı sarılmış SQL dahil sınırlı araç hatası üretir", async (t) => {
   stackFor(t);
   const { scope } = await createToolTurnContext({ sicil: AYSE }).authorization(new AbortController().signal);
   for (const error of [{ number: 530 }, { originalError: { info: { number: 530 } } }]) {
@@ -45,7 +45,7 @@ test('WBS recursion limits produce a bounded tool error, including wrapped SQL e
   }
 });
 
-test('task paging ignores assignee projection changes but detects population drift', async (t) => {
+test("görev sayfalama sorumlu izdüşüm değişimini yok sayar; nüfus kaymasını bulur", async (t) => {
   const stack = stackFor(t);
   const first = await callRotaTool(stack, AYSE, 'rota_task_search', { limit: 1 });
   assert.ok(first.result.nextCursor);
@@ -58,14 +58,14 @@ test('task paging ignores assignee projection changes but detects population dri
   assert.equal(changed.result.error.code, 'INVALID_ARGUMENTS');
 });
 
-test('escaped citations remain literal and unescaped citations still tokenize', () => {
+test("kaçışlı atıf düz metin kalır; kaçışsız atıf ayrıştırılır", () => {
   assert.equal(parseInline('\\【R1】').some((token) => token.type === 'cite'), false);
   assert.equal(parseInline('\\【R1】').map((token) => token.value || '').join(''), '【R1】');
   assert.equal(parseInline('【R1】').some((token) => token.type === 'cite'), true);
   assert.equal(parseInline('\\\\【R1】').some((token) => token.type === 'cite'), true);
 });
 
-test('unavailable Rota modes keep the selected Rota source and expose a localized reason', () => {
+test("kullanılamayan Rota kipi seçili kaynağı korur ve yerelleştirilmiş nedeni sunar", () => {
   const ready = { rotaData: { enabled: true, available: true, modes: [{ id: 'standard', available: true }, { id: 'deep', available: false }] } };
   assert.equal(effectiveAssistantSource(ready, 'standard', 'rota'), 'rota');
   assert.equal(effectiveAssistantSource(ready, 'deep', 'rota'), 'rota', 'the server returns the fixed unavailable outcome instead of an ungrounded answer');
@@ -80,7 +80,7 @@ test('unavailable Rota modes keep the selected Rota source and expose a localize
   }
 });
 
-test('recent tool and turn failures remain visible when evidence schema observation is stale', async (t) => {
+test("kanıt şeması gözlemi eskise de son araç ve tur hataları görünür kalır", async (t) => {
   stackFor(t);
   await assistantReadiness();
   const { noteEvidenceSchema } = await import('../src/server/ai/assistant/conversationStore.js');
@@ -94,7 +94,7 @@ test('recent tool and turn failures remain visible when evidence schema observat
   assert.match(aiHealthComponent().message, /Bilgin turu tamamlanamadı/);
 });
 
-test('claims beyond the first 256 enumerated facts are already verified by selected paths', async (t) => {
+test("ilk olgu sınırı dışındaki iddialar seçili yollarla zaten doğrulanır", async (t) => {
   const stack = stackFor(t);
   const template = stack.db.projects.find((row) => row.ProjectId === PROJECTS.FULL);
   stack.db.projects = Array.from({ length: 25 }, (_, index) => ({ ...template, ProjectId: `a3000000-0000-4000-8000-${String(index).padStart(12, '0')}`, ProjectName: `Project ${String(index).padStart(2, '0')}`, ProjectCode: `P${index}` }));
@@ -111,7 +111,7 @@ test('claims beyond the first 256 enumerated facts are already verified by selec
   assert.equal(analyzeGroundedAnswer(JSON.stringify({ kind: 'rota', claims: [claim] }), { evidenceIds: ledger.ids(), evidencePayloads: ledger.payloads() }).ok, true);
 });
 
-test('Outlook fixture defaults are active and exercise visible subscriptions', async (t) => {
+test("Outlook sınama varsayılanı etkindir ve görünür aboneliği sınar", async (t) => {
   const stack = stackFor(t);
   assert.ok(stack.db.taskOutlookSubscriptions.every((row) => row.IsActive === 1));
   const { result } = await callRotaTool(stack, AYSE, 'rota_outlook_status');
@@ -119,7 +119,7 @@ test('Outlook fixture defaults are active and exercise visible subscriptions', a
   assert.deepEqual(result.data.items.map((row) => row.task.taskId).sort(), [TASKS.OVERDUE, TASKS.DUE_SOON].sort());
 });
 
-test('only emitted portfolio IDs are trusted and detail calls still revalidate current authorization', async (t) => {
+test("yalnızca yayımlanmış portföy kimliğine güvenilir; ayrıntı güncel yetkiyi doğrular", async (t) => {
   stackFor(t);
   const { createToolExecutor } = await import('../src/server/ai/tools/toolExecutor.js');
   const { createEvidenceLedger } = await import('../src/server/ai/tools/evidenceLedger.js');

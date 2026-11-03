@@ -22,7 +22,7 @@ function verify(tool, data, fields, request, options = {}) {
 const issue = (result) => result.issues[0]?.code ?? null;
 const rank = (metric, order = 'desc', limit = 1) => ({ operation: 'rank', metrics: [metric], rank: { metric, order, limit } });
 
-test('a singleton preview cannot replace the requested population total', () => {
+test("tek kayıt önizlemesi istenen nüfus toplamının yerini alamaz", () => {
   const tool = 'rota_portfolio_summary';
   const data = { projects: [{ projectId: 'one', name: 'Bir', tasks: { overdue: 2 } }], totals: { overdue: 7 } };
   const request = { operation: 'value', metrics: ['tasks.overdue'] };
@@ -38,7 +38,7 @@ test('a singleton preview cannot replace the requested population total', () => 
   assert.equal(issue(verify(tool, data, ['data.projects.0.tasks.overdue'], request, { source: { firstPage: false } })), 'ROW_SELECTION_UNBOUND');
 });
 
-test('nested recurrence occurrences are rows while nested primitive values remain indivisible', () => {
+test("iç tekrar oluşumu satırdır; iç ilkel değer bölünmez kalır", () => {
   const series = { templateTaskId: 'series', title: 'Toplantı', next: [
     { taskId: 'first', occurrenceDate: '2026-10-01', targetFinish: '2026-10-01', status: 'todo' },
     { taskId: 'second', occurrenceDate: '2026-10-08', targetFinish: '2026-10-08', status: 'todo' }
@@ -54,7 +54,7 @@ test('nested recurrence occurrences are rows while nested primitive values remai
     ['data.calendar.workingWeekdays.0'], { operation: 'value', metrics: ['calendar.workingWeekdays'] })), 'PARTIAL_VALUE_LIST');
 });
 
-test('hour ranks compare exact decimals, mixed representations and numeric ties', () => {
+test("saat sıralaması tam ondalığı karışık gösterimi ve sayısal eşitliği karşılaştırır", () => {
   const large = decimalFromScaled(10000000000000000n, 2);
   const smaller = decimalFromScaled(9999999999999999n, 2);
   assert.equal(typeof large, 'string');
@@ -79,7 +79,7 @@ test('hour ranks compare exact decimals, mixed representations and numeric ties'
   assert.equal(issue(verify('rota_workload_summary', { people: people.slice(0, 1) }, ['data.people.0.plannedHoursOnAssignedTasks'], rank('tasks.plannedHours'), preview)), 'RANK_MISMATCH');
 });
 
-test('dependency previews reject missing ties, undersized ranks, ascending ranks and complete lists', () => {
+test("bağımlılık önizlemesi eksik eşitlik küçük sıralama artan yön ve tam listeyi reddeder", () => {
   const mostConnected = Array.from({ length: 5 }, (_, index) => ({ taskId: String(index), title: `Görev ${index}`, relationCount: 2 }));
   const options = { source: { sortedBy: { metric: 'dependencies.relationCount', order: 'desc' } },
     envelope: { complete: false, truncated: true, rankingBoundary: { collection: 'mostConnected',
@@ -93,7 +93,7 @@ test('dependency previews reject missing ties, undersized ranks, ascending ranks
   assert.equal(issue(verify('rota_dependency_inspect', { mostConnected }, ['data.mostConnected.*.relationCount'], rank('dependencies.relationCount'), options)), null);
 });
 
-test('the shell and assistant share enablement policy for missing cookies and explicit disabled markers', () => {
+test("kabuk ve asistan eksik çerezde ve açık kapalı işaretinde aynı açılma politikasını kullanır", () => {
   assert.equal(assistantEnabledInDocument, interactionEnablement);
   const documentWith = (cookie, meta) => ({ cookie, querySelector(selector) {
     assert.equal(selector, `meta[name="${ASSISTANT_AVAILABILITY_META}"]`);
@@ -106,7 +106,7 @@ test('the shell and assistant share enablement policy for missing cookies and ex
   assert.equal(assistantEnabledInDocument(documentWith('', 'enabled'), { assistant: false }), false);
 });
 
-test('a population total cannot supply a missing per-row metric', () => {
+test("nüfus toplamı eksik satır ölçüsünü sağlayamaz", () => {
   const data = { openTaskCount: 7, people: [{ sicil: 1, name: 'Birinci', openTasks: 2 }, { sicil: 2, name: 'İkinci' }] };
   const fields = ['data.openTaskCount', 'data.people.*.name', 'data.people.0.openTasks'];
   for (const operation of ['list', 'rank']) {

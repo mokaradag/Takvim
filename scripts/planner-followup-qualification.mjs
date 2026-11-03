@@ -6,7 +6,7 @@
  *
  * Sohbetler ÜRETİMDEKİ asistan hizmetinden geçer (konuşma kaydı, önceki sonuç kapsamı, açıklama seçimi, sunucu
  * doğrulayıcıları, salt okunur araçlar, kalıcı kanıt) ve sınama veri kümesini okur; yalnızca model turları
- * `scripts/planner-claude-model.mjs` komutuyla gerçek modele gider. Her tur, kaydedilen doğrulanmış kanıttan
+ * `scripts/planner-model-adapter.mjs` komutuyla gerçek modele gider. Her tur, kaydedilen doğrulanmış kanıttan
  * denetlenir; Derin devri sayılır ve sıfır olmalıdır.
  */
 import assert from 'node:assert/strict';
@@ -19,12 +19,12 @@ import { createAiStack, sendTurn } from '../test/helpers/aiStack.mjs';
 import { createFakeAiProvider } from '../test/helpers/fakeAiProvider.mjs';
 import { ALI_2, AYSE, MEHMET, NOW, TASKS, ZEYNEP, rotaToolSeed } from '../test/helpers/aiToolFixtures.mjs';
 import { verifyCompletion } from './planner-evaluation.mjs';
-import { modelCommandTimeoutMs, spawnModelCommand, terminateModelCommand } from './planner-claude-model.mjs';
+import { modelCommandTimeoutMs, spawnModelCommand, terminateModelCommand } from './planner-model-adapter.mjs';
 import { AI_ERROR_CODES } from '../src/domain/ai/aiErrorCatalog.js';
 
 const { AiError } = await import('../src/server/ai/aiErrors.js');
 
-const ADAPTER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'planner-claude-model.mjs');
+const ADAPTER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'planner-model-adapter.mjs');
 const OUT = process.env.PLANNER_FOLLOWUP_OUT || null;
 const EXPECTED_MODEL = process.env.PLANNER_CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
 const summary = { chains: 0, turns: 0, passed: 0, failed: [], modelCalls: 0, escalations: 0, models: new Set() };

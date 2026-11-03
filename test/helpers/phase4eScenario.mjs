@@ -86,6 +86,7 @@ export function turnViolations(result, expect, { live = false } = {}) {
     problems.push(`ufuk ${expect.window.join('..')} okunmadı`);
   }
   if (expect.chart && !content.includes('```rota-chart') && !(live && /güvenle grafik çizilemedi|could not be drawn safely/.test(content))) problems.push('grafik yok');
+  if (expect.chartUnavailable && (content.includes('```rota-chart') || !/güvenle grafik çizilemedi|could not be drawn safely/.test(content))) problems.push('çizilemeyen grafik açıkça belirtilmedi');
   if (expect.scopeDenied && !/yönetim kapsamınız bulunmuyor|management scope/.test(content)) problems.push('kapsam reddi metni yok');
   // Veri okumayan tur hiçbir Rota sorgusu çalıştırmaz (görev kimliğiyle ya da portföy okuması dâhil; süzülmüş alt küme değil).
   if (expect.noData && result.log.length) problems.push(`veri okundu: ${[...new Set(result.log.map((row) => row.query))].join(',')}`);

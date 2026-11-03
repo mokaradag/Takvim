@@ -586,5 +586,7 @@ test('sekme simgesi pusula markasıdır ve açık/koyu bağlamda okunur kalır',
   assert.equal((APP_FAVICON_DATA_URI.match(/https?:\/\//g) || []).length, 1);
 
   // Ana logo ile aynı ürün kimliği: iki yüzey de pusula çizer.
-  assert.match(read('src/components/shell/AppLogo.jsx'), /Rota compass mark/);
+  const logo = read('src/components/shell/AppLogo.jsx');
+  assert.match(logo, /<circle cx="12" cy="12" r="8\.5"/u);
+  assert.match(logo, /className="logo-compass-needle"/u);
 });

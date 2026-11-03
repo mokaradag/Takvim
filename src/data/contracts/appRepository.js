@@ -26,8 +26,8 @@
  */
 
 /**
- * Opaque persistence versions are Base64 rowversion values in Actual mode.
- * Demo mode may use local opaque strings while preserving the same contract.
+ * Gerçek kipte kapalı kalıcılık sürümleri Base64 satır sürümü değerleridir.
+ * Demo kip aynı sözleşmeyle yerel kapalı metin kullanabilir.
  *
  * @typedef {Object} EntityDelete
  * @property {string} id
@@ -35,7 +35,7 @@
  */
 
 /**
- * Atomic canonical persistence change set.
+ * Atomik kanonik kalıcılık değişim kümesi.
  * @typedef {Object} AppChangeSet
  * @property {import('../../domain/models').Project[]} [projectUpserts]
  * @property {(string|EntityDelete)[]} [projectDeletes]
@@ -46,8 +46,8 @@
  */
 
 /**
- * `loadSessionContext` is optional for legacy/test repositories. The state loader
- * supplies a conservative default session when it is absent.
+ * Eski ve sınama depolarında loadSessionContext isteğe bağlıdır. Durum yükleyici
+ * alan yoksa kısıtlı varsayılan oturum sağlar.
  *
  * @typedef {Object} AppRepository
  * @property {() => Promise<AppDataSnapshot>} loadSnapshot

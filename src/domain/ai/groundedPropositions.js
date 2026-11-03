@@ -18,7 +18,7 @@ import { turkishPossessiveSuffix } from './evidenceNarrative.js';
  */
 
 export const PROPOSITION_KINDS = Object.freeze(['count', 'total', 'majority', 'largest', 'breakdown', 'completion', 'maximum', 'minimum', 'average', 'threshold',
-  'concentration', 'span', 'coverage', 'leader']);
+  'concentration', 'span', 'coverage', 'leader', 'completeness']);
 
 /**
  * Önermenin vurgu tonu SUNUCUNUNDUR (modelin seçimi değil): `warning` dikkat isteyen doğrulanmış durum (ör. gecikme),
@@ -30,6 +30,13 @@ export const PROPOSITION_TONES = Object.freeze(['info', 'warning', 'success']);
 const TASK_TOOLS = new Set(['rota_task_search', 'rota_task_analytics']);
 /** Dağılım önermesi yalnızca her görevi tek gruba koyan boyutlarda: kişi grupları birbirini dışlamaz. */
 export const EXCLUSIVE_GROUP_BY = Object.freeze(['status', 'priority', 'project', 'deadline', 'target_month']);
+const assignmentGroups = (fact) => fact?.semantic?.provenance?.tool === 'rota_task_analytics' && fact.semantic.groupBy === 'assignee';
+
+/** Görevlerin kişi kırılımı kadroyu kanıtlamaz; sayfa tamlığı kişi nüfusunun tamlığı değildir. */
+export function rowPopulationComplete(tool, facts) {
+  if (facts.some(assignmentGroups)) return false;
+  return tool !== 'rota_workload_summary' || facts.some((fact) => fact?.field === 'data.populationComplete' && fact.value === true);
+}
 const MAX_BREAKDOWN_GROUPS = 8;
 const MAX_PLAIN_NAME = 120;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -103,11 +110,14 @@ function taskPopulation(filters, locale) {
   const deadline = neutral(f.deadline) ? null : DEADLINE[f.deadline];
   if (!neutral(f.deadline) && !deadline) return null;
   const or = locale === 'en' ? ' or ' : ' ya da ';
+  // Yapılacak + devam eden tam olarak "açık" işlerdir: iki durum adını yinelemek yerine tek doğal sıfat (nüfus aynıdır).
+  const openStatuses = statuses.length === 2 && statuses.includes('todo') && statuses.includes('in_progress');
+  const open = (deadline && f.deadline !== 'overdue') || openStatuses;
   const adjectives = [
     ...(deadline?.tr && locale !== 'en' ? [deadline.tr] : deadline?.before ? [deadline.before] : []),
-    ...(deadline && f.deadline !== 'overdue' ? [locale === 'en' ? 'open' : 'açık'] : []),
+    ...(open ? [locale === 'en' ? 'open' : 'açık'] : []),
     ...(priorities.length ? [priorities.map((key) => PRIORITY[key][lang(locale)]).join(or)] : []),
-    ...(statuses.length ? [statuses.map((key) => STATUS[key][lang(locale)]).join(or)] : []),
+    ...(statuses.length && !openStatuses ? [statuses.map((key) => STATUS[key][lang(locale)]).join(or)] : []),
     ...(f.assignee === 'unassigned' ? [locale === 'en' ? 'unassigned' : 'sorumlusuz'] : [])
   ];
   return {
@@ -126,6 +136,8 @@ function taskPopulation(filters, locale) {
 function windowParts(population, locale) {
   const { from, to } = population;
   if (!from && !to) return [];
+  // Tek günlük aralık ("bugün terminli") iki kez aynı tarihle söylenmez.
+  if (from && to && from === to) return locale === 'en' ? [' due on ', v(day(from, locale))] : [v(day(from, locale)), ' tarihinde terminli '];
   if (locale === 'en') {
     if (from && to) return [' due between ', v(day(from, locale)), ' and ', v(day(to, locale))];
     return from ? [' due on or after ', v(day(from, locale))] : [' due on or before ', v(day(to, locale))];
@@ -260,7 +272,7 @@ export function titleCandidate({ tool, filters, groupBy = null, locale }) {
   }
   // Termin aralığı nüfusun parçasıdır: tek uçlu ve gruplanmış aralık da başlıkta yazılır (başlık nüfusu genişletemez).
   const { from, to } = population;
-  const window = from && to ? ` (${day(from, locale)} – ${day(to, locale)})`
+  const window = from && to && from === to ? ` (${day(from, locale)})` : from && to ? ` (${day(from, locale)} – ${day(to, locale)})`
     : from ? (locale === 'en' ? ` (due on or after ${day(from, locale)})` : ` (${day(from, locale)} ve sonrasında terminli)`)
       : to ? (locale === 'en' ? ` (due on or before ${day(to, locale)})` : ` (${day(to, locale)} ve öncesinde terminli)`) : '';
   // Kayıt adıyla başlayan başlıkta veri değiştirilmez; yalnızca sunucu metniyle başlayan başlığın ilk harfi büyür.
@@ -693,7 +705,7 @@ const ofCount = (value, locale) => (locale === 'en' ? number(value, locale) : `$
 export function analystPropositions(parts, locale = 'tr') {
   const en = locale === 'en';
   const out = [];
-  // Row indices, completeness, denominators and attention rankings belong to one canonical evidence population.
+  // Satır sırası tamlık payda ve dikkat sıralaması tek kanonik kanıt nüfusuna aittir.
   const evidenceParts = parts.flatMap((part) => {
     const evidencePopulations = new Map();
     for (const item of part.presentation?.facts || []) {
@@ -703,18 +715,21 @@ export function analystPropositions(parts, locale = 'tr') {
     }
     return [...evidencePopulations.values()].map((facts) => ({ index: part.index, presentation: { facts } }));
   });
+  // Kişi ile kendisinin karşılaştırmasında kullanıcının kendi bölümünün önermeleri de öznesini taşır ("Siz: …").
+  const comparingPeople = evidenceParts.some((part) => part.presentation.facts.some((item) => item.fact?.semantic?.filters?.personSicil != null || item.fact?.semantic?.filters?.person));
   for (const part of evidenceParts) {
     const ordinal = part.index + 1;
     const items = part.presentation.facts;
     const add = (evidenceId, kind, realized, tone = 'info', fluent = null) => {
       const sample = items.find((item) => item.evidenceId === evidenceId)?.fact.semantic;
       const filters = sample?.filters;
-      const subject = [filters?.person || (filters?.personSicil != null && sample?.entity?.type === 'person' ? sample.entity.name : null),
+      const self = comparingPeople && filters?.assignee === 'me' ? (en ? 'You' : 'Siz') : null;
+      const subject = [self, filters?.person || (filters?.personSicil != null && sample?.entity?.type === 'person' ? sample.entity.name : null),
         filters?.projectId ? filters.project || (sample?.entity?.type === 'project' ? sample.entity.name : null) : null].filter(Boolean).join(' · ');
       if (filters?.personSicil != null && !subject) return;
       if (realized && subject) {
         realized = sentence([v(subject), ': ', ...realized.parts]);
-        // Qualified statements must not lose their subject when joined to another subject's prose.
+        // Koşullu açıklama başka öznenin anlatımına eklenirken kendi öznesini kaybetmemelidir.
         fluent = fluent?.states ? { states: fluent.states } : null;
       }
       if (realized) out.push({ part: ordinal, proposition: { kind, tone, evidenceId, ...realized, ...(fluent ? { fluent: Object.freeze(fluent) } : {}) } });
@@ -821,6 +836,33 @@ export function analystPropositions(parts, locale = 'tr') {
           : sentence(['İlk ele alınabilecek iş ', v(title), ' görünüyor: ', v(number(head.fact.value, locale)), ' gündür gecikmiş ve en uzun gecikme onda.']), 'warning',
         { refers: { title, short: en ? ['as the longest-overdue task, ', v(title), ' is a sensible first focus'] : ['en uzun süredir beklediği için ilk ele alınabilecek iş ', v(title), ' görünüyor'] } });
       }
+    }
+  }
+  return out;
+}
+
+/**
+ * Tamlığı kanıtlanmamış nüfusun SUNUCU ÇEKİNCESİ (zorunlu önerme): iş yükü kanıtı bütün atamaları temsil ettiğini
+ * kanıtlamadıysa (`data.populationComplete` false: ekip kadrosu bilinmiyor, kişi sayfası kesik, çözümlenemeyen ya da
+ * temsil edilemeyen atama) denge, yoğunlaşma ya da "en yoğun kişi" sonucu çıkarılamaz. Çekince nedeni ve sayısı
+ * söylenmez (gizli atamanın varlığı ya da sayısı açıklanmaz); yalnızca ne söylenemeyeceği söylenir.
+ */
+export function caveatPropositions(parts, locale = 'tr') {
+  const en = locale === 'en';
+  const out = [];
+  const seen = new Set();
+  for (const part of parts) {
+    for (const item of part.presentation?.facts || []) {
+      const fact = item.fact;
+      const assignments = assignmentGroups(fact);
+      if (!assignments && (fact?.field !== 'data.populationComplete' || fact.value !== false)) continue;
+      if (seen.has(item.evidenceId)) continue;
+      seen.add(item.evidenceId);
+      out.push({ part: part.index + 1, proposition: { kind: 'completeness', tone: 'info', evidenceId: item.evidenceId, ...sentence(assignments ? (en
+        ? ['this task-assignment breakdown does not establish the full roster: members with no matching tasks are unknown, and any unresolved or hidden assignees cannot enter a person ranking. Team balance or an exhaustive workload ranking cannot be established.']
+        : ['bu görev-atama kırılımı kadronun tamamını kanıtlamaz: eşleşen işi olmayan üyelerin tamamı bilinmez; çözümlenemeyen veya gizli atamalar varsa kişi sıralamasına katılamaz. Ekip dengesi veya eksiksiz iş yükü sıralaması kesin olarak söylenemez.']) : en
+        ? ['this workload view covers only the open work you can see that is attributed to people, so whether the load is balanced or who carries the most cannot be stated with certainty.']
+        : ['bu iş yükü görünümü yalnızca görebildiğiniz ve kişilere bağlanabilen açık işleri kapsıyor; bu nedenle iş yükünün dengeli olup olmadığı ya da en çok yükün kimde olduğu kesin olarak söylenemez.']) } });
     }
   }
   return out;

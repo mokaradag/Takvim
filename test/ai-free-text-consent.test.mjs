@@ -24,7 +24,7 @@ const MESSAGES = Object.freeze({
 });
 
 for (const tool of ['rota_schedule_requests', 'rota_assignment_requests']) {
-  test(`${tool}: a term found only in a protected message changes no rows or counts without the per-turn opt-in`, async (t) => {
+  test(`${tool}: yalnızca korumalı iletideki terim tur izni olmadan satır ve sayıyı değiştirmez`, async (t) => {
     const stack = stackFor(t, MESSAGES);
     const closed = await callRotaTool(stack, AYSE, tool, { text: 'Kırmızı alarm' });
     assert.equal(closed.result.ok, true);
@@ -45,7 +45,7 @@ for (const tool of ['rota_schedule_requests', 'rota_assignment_requests']) {
   });
 }
 
-test('a turn without the opt-in cannot request protected text, and the next turn does not inherit an earlier opt-in', async (t) => {
+test("izinsiz tur korumalı metin isteyemez; sonraki tur eski izni devralmaz", async (t) => {
   const stack = stackFor(t);
   const request = declared({ operation: 'value', metrics: ['task.description'], population: { tool: 'rota_task_detail' }, entities: [{ type: 'task', id: TASKS.LITERAL }] });
   // Açıklama izni varsa bildirilen olguyu sunucu seçer; izin yoksa kanıt oluşmaz ve yanıtı model verir.
@@ -71,7 +71,7 @@ test('a turn without the opt-in cannot request protected text, and the next turn
   assert.equal(next.assistantMessage.evidence.length, 0);
 });
 
-test('change text in activity history needs the changes opt-in; structured non-text changes do not', async (t) => {
+test("etkinlik değişim metni açık izin ister; yapısal metinsiz değişim istemez", async (t) => {
   const stack = stackFor(t, { auditLog: [{ AuditId: 1, OccurredAt: '2026-09-29T08:00:00Z', ActorSicil: AYSE, ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: TASKS.OVERDUE,
     ProjectId: '10000000-0000-4000-8000-000000000001', BeforeJson: JSON.stringify({ Description: 'Eski gizli açıklama', Progress: 10 }), AfterJson: JSON.stringify({ Description: 'Yeni gizli açıklama', Progress: 30 }) }] });
   const closed = await callRotaTool(stack, AYSE, 'rota_activity_search', { period: 'last_7_days' });
@@ -87,7 +87,7 @@ test('change text in activity history needs the changes opt-in; structured non-t
   assert.match(JSON.stringify(opened.result.data.items[0].structuredChanges), /Yeni gizli açıklama/);
 });
 
-test('assignment-request search covers the returned person names without opening protected messages', async (t) => {
+test("atama isteği araması korumalı ileti açmadan dönen kişi adlarını kapsar", async (t) => {
   const stack = stackFor(t, { taskAssignmentCoordinations: [{ TaskId: TASKS.OVERDUE, RequesterSicil: AYSE, RequestedAssigneeSicil: ZEYNEP, SuggestedAssigneeSicil: MEHMET,
     DecisionBySicil: LEAD, Mode: 'REQUEST', Status: 'REJECTED', DecisionMessage: 'Turuncu gerekçe', DecidedAt: '2026-09-28T08:00:00Z' }] });
   for (const name of ['Mehmet Demir', 'Proje Lideri']) {

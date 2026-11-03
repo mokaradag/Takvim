@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { registerServerOnlyShim } from '../test/helpers/serverOnlyShim.mjs';
 import { readModelRun } from './semantic-evaluation.mjs';
 import { loadPlannerBenchmark, PLANNER_RUN_FORMAT, PLANNER_RUN_VERSION, WEAK_PLANNER_MODEL, validCalendarDate, scorePlannerRun } from './planner-scoring.mjs';
-import { MODEL_CLEANUP_TIMEOUT_MS, spawnModelCommand, terminateModelCommand } from './planner-claude-model.mjs';
+import { MODEL_CLEANUP_TIMEOUT_MS, spawnModelCommand, terminateModelCommand } from './planner-model-adapter.mjs';
 
 registerServerOnlyShim();
 

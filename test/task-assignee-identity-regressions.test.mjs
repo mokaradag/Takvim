@@ -22,7 +22,7 @@ const context = {
   wbs: []
 };
 
-test('task assignee patches convert unambiguous display names to stable Sicil identities', () => {
+test("görev sorumlu yaması belirsiz olmayan adı kararlı sicile çevirir", () => {
   const result = normalizeTaskAssigneePatch({ sorumlu: ['Tekil Ad'] }, people);
 
   assert.equal(result.ok, true);
@@ -31,7 +31,7 @@ test('task assignee patches convert unambiguous display names to stable Sicil id
   assert.equal(Object.prototype.hasOwnProperty.call(result.patch, 'sorumlu'), false);
 });
 
-test('duplicate display names fail closed instead of assigning an arbitrary Sicil', () => {
+test("yinelenen görünüm adı keyfî sicil atamak yerine erişimi kapatır", () => {
   const result = normalizeTaskAssigneePatch({ sorumlu: ['Aynı Ad'] }, people);
 
   assert.equal(result.ok, false);
@@ -39,7 +39,7 @@ test('duplicate display names fail closed instead of assigning an arbitrary Sici
   assert.match(result.error.message, /Sicil/);
 });
 
-test('authoritative assignee patches override stale display names and allow clearing all assignees', () => {
+test("yetkili sorumlu yaması eski görünüm adını geçersiz kılar ve tümünü temizlemeye izin verir", () => {
   const reassigned = normalizeTaskReferences({
     id: 'task-1',
     projectId: 'project-1',
@@ -62,7 +62,7 @@ test('authoritative assignee patches override stale display names and allow clea
   assert.deepEqual(cleared.sorumlu, []);
 });
 
-test('legacy duplicate-name references are not mapped to an arbitrary employee', () => {
+test("eski yinelenen ad başvurusu keyfî çalışana eşlenmez", () => {
   const normalized = normalizeTaskReferences({
     id: 'task-legacy',
     projectId: 'project-1',
@@ -73,7 +73,7 @@ test('legacy duplicate-name references are not mapped to an arbitrary employee',
   assert.deepEqual(normalized.sorumlu, []);
 });
 
-test('task drawer boundary stages normalized patches until explicit saving', () => {
+test("görev çekmecesi açık kayda kadar normal yamayı hazırlıkta tutar", () => {
   const source = read('src/features/task-detail/TaskDetailOverlay.jsx');
 
   assert.match(source, /normalizeTaskAssigneePatch\(patch, people\)/);

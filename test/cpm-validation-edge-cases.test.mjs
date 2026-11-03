@@ -28,7 +28,7 @@ function expectCpmError(fn, code, details = {}) {
   });
 }
 
-test('CpmValidationError preserves code, message, details, and Error semantics', () => {
+test("CpmValidationError kod ileti ayrıntı ve Error anlamını korur", () => {
   const error = new CpmValidationError('TEST', 'Message', { taskId: 't1' });
   assert.equal(error instanceof Error, true);
   assert.equal(error.name, 'CpmValidationError');
@@ -37,7 +37,7 @@ test('CpmValidationError preserves code, message, details, and Error semantics',
   assert.deepEqual(error.details, { taskId: 't1' });
 });
 
-test('buildDependencyGraph returns empty canonical graph structures for no tasks', () => {
+test("buildDependencyGraph görevsiz durumda boş kanonik ağ döndürür", () => {
   const graph = buildDependencyGraph();
   assert.equal(graph.tasksById.size, 0);
   assert.equal(graph.incoming.size, 0);
@@ -46,11 +46,11 @@ test('buildDependencyGraph returns empty canonical graph structures for no tasks
   assert.deepEqual(graph.topologicalOrder, []);
 });
 
-test('buildDependencyGraph rejects activities without stable IDs', () => {
+test("buildDependencyGraph kararlı kimliği olmayan faaliyeti reddeder", () => {
   expectCpmError(() => buildDependencyGraph([{ task: 'Missing ID' }]), 'MISSING_TASK_ID');
 });
 
-test('buildDependencyGraph rejects duplicate activity IDs with details', () => {
+test("buildDependencyGraph yinelenen faaliyet kimliğini ayrıntısıyla reddeder", () => {
   expectCpmError(
     () => buildDependencyGraph([activity('A'), activity('A')]),
     'DUPLICATE_TASK_ID',
@@ -58,7 +58,7 @@ test('buildDependencyGraph rejects duplicate activity IDs with details', () => {
   );
 });
 
-test('buildDependencyGraph rejects references to missing predecessors', () => {
+test("buildDependencyGraph eksik öncüle başvuruyu reddeder", () => {
   expectCpmError(
     () => buildDependencyGraph([activity('A', { deps: ['missing'] })]),
     'MISSING_PREDECESSOR',
@@ -66,7 +66,7 @@ test('buildDependencyGraph rejects references to missing predecessors', () => {
   );
 });
 
-test('buildDependencyGraph reports empty predecessor references explicitly', () => {
+test("buildDependencyGraph boş öncül başvurusunu açıkça bildirir", () => {
   expectCpmError(
     () => buildDependencyGraph([activity('A', { deps: [{}] })]),
     'MISSING_PREDECESSOR',
@@ -74,7 +74,7 @@ test('buildDependencyGraph reports empty predecessor references explicitly', () 
   );
 });
 
-test('buildDependencyGraph rejects self dependencies', () => {
+test("buildDependencyGraph öz bağımlılığı reddeder", () => {
   expectCpmError(
     () => buildDependencyGraph([activity('A', { deps: ['A'] })]),
     'SELF_DEPENDENCY',
@@ -82,7 +82,7 @@ test('buildDependencyGraph rejects self dependencies', () => {
   );
 });
 
-test('buildDependencyGraph reports all tasks blocked by a dependency cycle', () => {
+test("buildDependencyGraph bağımlılık döngüsünün engellediği bütün görevleri bildirir", () => {
   expectCpmError(
     () => buildDependencyGraph([
       activity('A', { deps: ['C'] }),
@@ -94,12 +94,12 @@ test('buildDependencyGraph reports all tasks blocked by a dependency cycle', () 
   );
 });
 
-test('buildDependencyGraph keeps disconnected zero-indegree activities in input order', () => {
+test("buildDependencyGraph bağlantısız girişsiz faaliyetleri giriş sırasında tutar", () => {
   const graph = buildDependencyGraph([activity('B'), activity('A'), activity('C')]);
   assert.deepEqual(graph.topologicalOrder, ['B', 'A', 'C']);
 });
 
-test('buildDependencyGraph produces stable topological order for a dependency chain', () => {
+test("buildDependencyGraph zincirde kararlı topolojik sıra üretir", () => {
   const graph = buildDependencyGraph([
     activity('A'),
     activity('B', { deps: ['A'] }),
@@ -108,7 +108,7 @@ test('buildDependencyGraph produces stable topological order for a dependency ch
   assert.deepEqual(graph.topologicalOrder, ['A', 'B', 'C']);
 });
 
-test('buildDependencyGraph normalizes legacy dependency fields without mutating the source', () => {
+test("buildDependencyGraph eski alanı kaynağı değiştirmeden normalleştirir", () => {
   const raw = { id: 'A', type: 'UNKNOWN', lagDays: 2 };
   const graph = buildDependencyGraph([activity('A'), activity('B', { deps: [raw] })]);
   assert.deepEqual(graph.edges[0].dependency, {
@@ -120,7 +120,7 @@ test('buildDependencyGraph normalizes legacy dependency fields without mutating 
   assert.deepEqual(raw, { id: 'A', type: 'UNKNOWN', lagDays: 2 });
 });
 
-test('buildDependencyGraph shares each edge consistently between incoming and outgoing indexes', () => {
+test("buildDependencyGraph her kenarı gelen ve giden dizinde tutarlı paylaşır", () => {
   const graph = buildDependencyGraph([activity('A'), activity('B', { deps: ['A'] })]);
   assert.equal(graph.edges.length, 1);
   assert.strictEqual(graph.incoming.get('B')[0], graph.edges[0]);
@@ -129,7 +129,7 @@ test('buildDependencyGraph shares each edge consistently between incoming and ou
   assert.equal(graph.outgoing.get('B').length, 0);
 });
 
-test('buildDependencyGraph handles repeated dependency edges deterministically', () => {
+test("buildDependencyGraph yinelenen kenarı belirlenimci işler", () => {
   const graph = buildDependencyGraph([
     activity('A'),
     activity('B', { deps: ['A', { predecessorId: 'A', type: 'SS' }] })
@@ -140,7 +140,7 @@ test('buildDependencyGraph handles repeated dependency edges deterministically',
   assert.deepEqual(graph.topologicalOrder, ['A', 'B']);
 });
 
-test('calculateCpm returns a canonical empty result for an empty portfolio', () => {
+test("calculateCpm boş portföyde kanonik boş sonuç döndürür", () => {
   assert.deepEqual(calculateCpm([]), {
     projectStart: null,
     projectFinish: null,
@@ -153,14 +153,14 @@ test('calculateCpm returns a canonical empty result for an empty portfolio', () 
   });
 });
 
-test('calculateCpm requires either an explicit project start or a task planned start', () => {
+test("calculateCpm açık proje veya görev plan başlangıcı ister", () => {
   expectCpmError(
     () => calculateCpm([activity('A', { plannedStart: null, plannedFinish: null, plannedDurationDays: 1 })]),
     'MISSING_PROJECT_START'
   );
 });
 
-test('calculateCpm accepts an explicit project start for duration-only activities', () => {
+test("calculateCpm yalnız süreli faaliyet için açık proje başlangıcını kabul eder", () => {
   const result = calculateCpm([
     activity('A', { plannedStart: null, plannedFinish: null, plannedDurationDays: 2 })
   ], { projectStart: '2026-06-01' });
@@ -169,7 +169,7 @@ test('calculateCpm accepts an explicit project start for duration-only activitie
   assert.equal(result.tasks.A.durationDays, 2);
 });
 
-test('calculateCpm rejects invalid explicit project start values', () => {
+test("calculateCpm geçersiz açık proje başlangıcını reddeder", () => {
   expectCpmError(
     () => calculateCpm([activity('A')], { projectStart: 'not-a-date' }),
     'INVALID_PROJECT_START',
@@ -177,7 +177,7 @@ test('calculateCpm rejects invalid explicit project start values', () => {
   );
 });
 
-test('calculateCpm reports missing finish dates when duration cannot be inferred', () => {
+test("calculateCpm süre çıkarılamadığında eksik bitiş tarihini bildirir", () => {
   expectCpmError(
     () => calculateCpm([activity('A', { plannedDurationDays: null, plannedFinish: null })]),
     'MISSING_TASK_DATE',
@@ -185,7 +185,7 @@ test('calculateCpm reports missing finish dates when duration cannot be inferred
   );
 });
 
-test('calculateCpm reports invalid task date values', () => {
+test("calculateCpm geçersiz görev tarihini bildirir", () => {
   expectCpmError(
     () => calculateCpm([activity('A', { plannedDurationDays: null, plannedFinish: 'not-a-date' })]),
     'INVALID_TASK_DATE',
@@ -193,7 +193,7 @@ test('calculateCpm reports invalid task date values', () => {
   );
 });
 
-test('calculateCpm rejects inferred activity ranges that finish before they start', () => {
+test("calculateCpm başlangıçtan önce biten türetilmiş aralığı reddeder", () => {
   expectCpmError(
     () => calculateCpm([activity('A', {
       plannedStart: '2026-06-10',
@@ -205,19 +205,19 @@ test('calculateCpm rejects inferred activity ranges that finish before they star
   );
 });
 
-test('calculateCpm clamps negative numeric durations to zero', () => {
+test("calculateCpm negatif sayısal süreyi sıfırla sınırlar", () => {
   const result = calculateCpm([activity('A', { plannedDurationDays: -4 })]);
   assert.equal(result.tasks.A.durationDays, 0);
   assert.equal(result.tasks.A.earlyStart, result.tasks.A.earlyFinish);
 });
 
-test('calculateCpm truncates fractional numeric durations', () => {
+test("calculateCpm kesirli sayısal süreyi keser", () => {
   const result = calculateCpm([activity('A', { plannedDurationDays: 2.9 })]);
   assert.equal(result.tasks.A.durationDays, 2);
   assert.equal(result.projectFinish, '2026-06-02');
 });
 
-test('calculateCpm aligns an explicit weekend start to the next working day', () => {
+test("calculateCpm açık hafta sonu başlangıcını sonraki iş gününe taşır", () => {
   const result = calculateCpm([
     activity('A', { plannedStart: null, plannedFinish: null, plannedDurationDays: 1 })
   ], { projectStart: '2026-06-07' });

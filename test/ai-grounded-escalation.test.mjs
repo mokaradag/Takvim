@@ -73,7 +73,7 @@ async function until(predicate, rounds = 2000) {
   assert.ok(predicate(), 'beklenen durum oluşmadı');
 }
 
-test('a declared synthesis request is finalized once by Deep thinking with the same evidence and one visible answer', async (t) => {
+test("bildirilmiş sentez aynı kanıtla Derin düşünmede bir kez sonuçlanır ve tek yanıt gösterir", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   let queriesBeforeDeep = null;
@@ -114,7 +114,7 @@ test('a declared synthesis request is finalized once by Deep thinking with the s
   }
 });
 
-test('a verified Standard answer keeps the whole turn in Standard and spends no repair', async (t) => {
+test("doğrulanmış Standart yanıt turu Standart kipte tutar ve onarım harcamaz", async (t) => {
   const stack = stackFor(t);
   // İstek kanıttaki olguyu belirliyorsa sunucu seçer: ikinci model turu yoktur.
   stack.provider.enqueue(searchFull);
@@ -133,7 +133,7 @@ test('a verified Standard answer keeps the whole turn in Standard and spends no 
   assert.equal(grounding.serverSelected, 2);
 });
 
-test('a Deep escalation that times out ends as a bounded timeout, not as a verification failure', async (t) => {
+test("Derin devir zaman aşımı doğrulama hatası yerine sınırlı zaman aşımıyla biter", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   stack.provider.enqueue(synthesizeNamed, { type: 'status', status: 504 });
@@ -154,7 +154,7 @@ test('a Deep escalation that times out ends as a bounded timeout, not as a verif
 });
 
 for (const cancelled of [false, true]) {
-  test(`late Standard escalation keeps the original generation deadline (${cancelled ? 'cancel' : 'timeout'})`, async (t) => {
+  test(`geç Standart devir özgün üretim son süresini korur (${cancelled ? 'cancel' : 'timeout'})`, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: NOW });
     fixedClocks.add(t);
     const stack = stackFor(t, { env: { MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS: '1000',
@@ -189,7 +189,7 @@ for (const cancelled of [false, true]) {
 }
 
 for (const mode of ['standard', 'deep']) {
-  test(`${mode === 'standard' ? 'early escalation retains useful Deep time' : 'direct Deep retains its normal budget'} and generation expiry does not time post-generation delivery`, async (t) => {
+  test(`${mode === 'standard' ? 'early escalation retains useful Deep time' : 'direct Deep retains its normal budget'} ve üretim süresinin dolması üretim sonrası teslimi zamanlamaz`, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: NOW });
     fixedClocks.add(t);
     const stack = stackFor(t, { env: { MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS: '1000',
@@ -226,7 +226,7 @@ for (const mode of ['standard', 'deep']) {
   });
 }
 
-test('a completed grounded generation can persist and revalidate disclosure after its generation deadline', async (t) => {
+test("tamamlanmış kanıtlı üretim son süreden sonra kaydedilip açıklamayı doğrulayabilir", async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: NOW });
   fixedClocks.add(t);
   const stack = stackFor(t, { env: { MERGEN_ROTA_AI_REQUEST_TIMEOUT_MS: '1000',
@@ -256,7 +256,7 @@ test('a completed grounded generation can persist and revalidate disclosure afte
   assert.match(result.answer.content, /\*\*8\*\*/);
 });
 
-test('an empty Standard completion is diagnosed without content and retried in-session without Deep escalation', async (t) => {
+test("boş Standart tamamlama içeriksiz tanılanır; Derin devri olmadan oturumda yeniden denenir", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   stack.provider.enqueue(
@@ -287,7 +287,7 @@ test('an empty Standard completion is diagnosed without content and retried in-s
   assert.equal(JSON.stringify(diagnosis).includes(NAMED_QUESTION), false);
 });
 
-test('Deep thinking retries one empty completion inside its own session and never loops', async (t) => {
+test("Derin düşünme boş tamamlamayı kendi oturumunda bir kez dener ve döngüye girmez", async (t) => {
   const recovered = stackFor(t);
   recovered.provider.enqueue(searchNamed, { type: 'answer', text: '', chunks: [] }, statusAnswer());
   const response = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION, mode: 'deep' });
@@ -308,7 +308,7 @@ test('Deep thinking retries one empty completion inside its own session and neve
   assert.equal(aiTelemetrySnapshot().emptyCompletions, 2);
 });
 
-test('a turn that ends without evidence because of NOT_FOUND, scope or SQL failure is not escalated', async (t) => {
+test("NOT_FOUND kapsam veya SQL hatasıyla kanıtsız biten tur devredilmez", async (t) => {
   const reject = { type: 'answer', text: '{"kind":"rota","facts":["R9:totalCount"]}' };
   const cases = [
     { name: 'not found', calls: [{ name: 'rota_outlook_status', arguments: { taskId: TASKS.HIDDEN } }], message: `Gizli görevin Outlook durumu nedir? ${TASKS.HIDDEN}`, code: 'NOT_FOUND',
@@ -334,7 +334,7 @@ const tooLarge = () => Object.assign(new Error('AI_TOOL_RESULT_TOO_LARGE'), { nu
 const countPlan = { type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr', request: { ...countFull, layout: 'auto' },
   calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] } }] };
 
-test('a failed Rota read does not reopen planning for Deep merely because the ledger is empty', async (t) => {
+test("başarısız Rota okuması defter boş diye Derin planlamayı yeniden açmaz", async (t) => {
   const stack = stackFor(t);
   stack.db.aiToolFailure = { 'task-facts': tooLarge() };
   stack.provider.enqueue(countPlan, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID });
@@ -344,7 +344,7 @@ test('a failed Rota read does not reopen planning for Deep merely because the le
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
 });
 
-test('without evidence and with the shared tool budget spent, the turn is not escalated to a Deep round that could not read data', async (t) => {
+test("kanıt yokken ve araç bütçesi bitmişken veri okuyamayacak Derin tur açılmaz", async (t) => {
   const stack = stackFor(t);
   stack.db.aiToolFailure = { 'task-facts': tooLarge() };
   stack.provider.enqueue(countPlan, countPlan, countPlan, countPlan, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID });
@@ -354,7 +354,7 @@ test('without evidence and with the shared tool budget spent, the turn is not es
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
 });
 
-test('a missing declaration exhausts the single Standard repair without SQL, then restarts once on Deep, which has its own single repair', async (t) => {
+test("eksik bildirim tek Standart onarımı SQL olmadan tüketir; Derin kendi onarımıyla bir kez başlar", async (t) => {
   const stack = stackFor(t);
   const undeclared = { type: 'tool-calls', calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL } }] };
   stack.provider.enqueue(undeclared, undeclared, undeclared, undeclared);
@@ -367,7 +367,7 @@ test('a missing declaration exhausts the single Standard repair without SQL, the
   assert.equal(stack.provider.pendingCount, 0);
 });
 
-test('Deep mode and installations without a Deep tool profile keep the single bounded repair', async (t) => {
+test("Derin kip ve Derin araç profili olmayan kurulum tek sınırlı onarımı korur", async (t) => {
   const deep = stackFor(t);
   deep.provider.enqueue(searchNamed, { type: 'answer', text: INVALID }, { type: 'answer', text: INVALID });
   const deepResponse = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION, mode: 'deep' });
@@ -389,7 +389,7 @@ test('Deep mode and installations without a Deep tool profile keep the single bo
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
 });
 
-test('a Deep session that cannot run falls back to the Standard result instead of a second answer', async (t) => {
+test("çalışamayan Derin oturum ikinci yanıt yerine Standart sonuca döner", async (t) => {
   const stack = stackFor(t);
   stack.provider.enqueue(synthesizeNamed, { type: 'answer', text: INVALID }, { type: 'status', status: 503 });
   const response = await sendTurn({ turnId: randomUUID(), message: NAMED_QUESTION });
@@ -399,7 +399,7 @@ test('a Deep session that cannot run falls back to the Standard result instead o
   assert.deepEqual(aiTelemetrySnapshot().grounding.escalations, { total: 1, byReason: { SYNTHESIS_REQUIRED: 1 }, byOutcome: { error: 1 } });
 });
 
-test('an identity change before the Deep finalization ends the turn instead of falling back', async (t) => {
+test("Derin sonuçlanmadan kimlik değişirse tur dönüş yapmadan biter", async (t) => {
   const stack = stackFor(t);
   stack.provider.enqueue(synthesizeNamed, { type: 'script', respond: () => {
     stack.useSicil(MEHMET);
@@ -413,7 +413,7 @@ test('an identity change before the Deep finalization ends the turn instead of f
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 1);
 });
 
-test('cancelling during the Deep finalization writes nothing and does not fall back', async (t) => {
+test("Derin sonuçlandırmada iptal hiçbir şey yazmaz ve geri dönmez", async (t) => {
   const stack = stackFor(t);
   stack.provider.enqueue(synthesizeNamed, { type: 'stall' });
   const controller = new AbortController();
@@ -428,7 +428,7 @@ test('cancelling during the Deep finalization writes nothing and does not fall b
   assert.equal(stack.provider.calls.length, 2);
 });
 
-test('provider usage keeps reasoning token counts only when reported, and empty completions are retryable for the user', () => {
+test("sağlayıcı yalnızca bildirdiği düşünme sayısını tutar; boş tamamlama kullanıcıca yeniden denenebilir", () => {
   assert.equal(reportedReasoningTokens({ completion_tokens_details: { reasoning_tokens: 40 } }), 40);
   assert.equal(reportedReasoningTokens({ reasoning_tokens: 7 }), 7);
   for (const usage of [{}, { completion_tokens_details: { reasoning_tokens: -1 } }, { reasoning_tokens: '7' }, null, []]) {
@@ -445,7 +445,7 @@ test('provider usage keeps reasoning token counts only when reported, and empty 
   assert.equal(assistantStreamErrorPayload(new AiError('AI_PROVIDER_RESPONSE_INVALID', { details: { reason: 'MISSING_CHOICE' } })).retryable, false);
 });
 
-test('a declared population the plan did not read is read by the server before any repair or escalation', async (t) => {
+test("planın okumadığı bildirilmiş nüfusu sunucu onarım ve devirden önce okur", async (t) => {
   const stack = stackFor(t);
   const request = { ...countFull, metrics: ['tasks.total', 'tasks.open'], population: { tool: 'rota_task_analytics' },
     fields: ['total', 'open'].map((metric) => ({ metric: `tasks.${metric}`, tool: 'rota_task_analytics', path: `data.totals.${metric}` })) };
@@ -458,7 +458,7 @@ test('a declared population the plan did not read is read by the server before a
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 0);
 });
 
-test('a synthesis request whose population the server completed is finalized once by Deep with tools closed', async (t) => {
+test("sunucunun tamamladığı nüfuslu sentez araçları kapalı Derin kipte bir kez sonuçlanır", async (t) => {
   const stack = stackFor(t);
   // Yanıt iki kanıtın olgularını birlikte ister: seçimi model yapar.
   const request = { ...countFull, reasoning: 'synthesis', metrics: ['project.code', 'tasks.open'], population: { tool: 'rota_task_analytics' },
@@ -476,7 +476,7 @@ test('a synthesis request whose population the server completed is finalized onc
   assert.equal(aiTelemetrySnapshot().grounding.escalations.total, 1);
 });
 
-test('an unauthorized or unavailable population read fails closed without escalation', async (t) => {
+test("yetkisiz veya kullanılamayan nüfus okuması devirsiz erişimi kapatır", async (t) => {
   for (const scenario of ['scope', 'sql']) {
     const stack = stackFor(t);
     // Kullanıcının yazdığı ama göremediği proje; ya da nüfus okuması sırasında SQL kesintisi.
@@ -495,7 +495,7 @@ test('an unauthorized or unavailable population read fails closed without escala
   }
 });
 
-test('each provider session, including the Deep hand-off, is a generation progress point before its first round', async (t) => {
+test("Derin devir dahil her sağlayıcı oturumu ilk turdan önce üretim ilerleme noktasıdır", async (t) => {
   stackFor(t);
   const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
   const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');

@@ -7,7 +7,7 @@ import { ServerPersistenceError } from '../errors.js';
 import { MAX_COMMIT_TOTAL_ENTRIES } from './commitChangeValidation.js';
 
 const MAX_PENDING_ALLOCATIONS = MAX_COMMIT_TOTAL_ENTRIES * 2;
-// Expired/revoked rows are bound non-consumption receipts for release retries.
+// Süresi dolmuş veya kaldırılmış satır bırakma denemesi için bağlı tüketmeme makbuzudur.
 const RELEASE_RECEIPT_DAYS = 7;
 
 function invalidAllocation() {
@@ -26,14 +26,14 @@ async function allocationQuery(request, query) {
   }
 }
 
-/** Reserve fresh server IDs; caller-supplied IDs are reference labels only. */
+/** Yeni sunucu kimliği ayrılır; çağıranın kimliği yalnızca başvuru etiketidir. */
 export async function allocateCreationIds(transaction, actor, changes, authorize) {
   const requested = creationEntries(changes).filter(({ entry }) => !entry.creationProof);
   if (!requested.length) return { allocations: [] };
   const mappings = new Map(requested.map(({ entry, entityType }) => [`${entityType}:${entry.id}`, randomUUID()]));
   const proposed = remapCommitIds(changes, mappings);
-  // The same creation-scope policy runs again during commit. An allocation is
-  // never mutation authority, nor proof that any caller-selected ID exists.
+  // Aynı oluşturma kapsam politikası kayıtta yeniden çalışır. Tahsis değişim yetkisi
+  // veya çağıranın seçtiği kimliğin varlık kanıtı değildir.
   await authorize(proposed);
   const allocations = requested.map(({ entry, entityType }) => ({
     clientId: entry.id, entityType, id: mappings.get(`${entityType}:${entry.id}`),
@@ -47,7 +47,7 @@ export async function allocateCreationIds(transaction, actor, changes, authorize
   request.input('pendingLimit', sql.Int, MAX_PENDING_ALLOCATIONS);
   request.input('receiptDays', sql.Int, RELEASE_RECEIPT_DAYS);
   const result = await allocationQuery(request, `
-    -- creation-allocation: reserve; the owner range serializes concurrent issuers.
+    -- creation-allocation: reserve; sahip aralığı eşzamanlı tahsisleri serileştirir.
     DECLARE @pending int;
     SELECT @pending = COUNT(*) FROM dbo.MR_CreationAllocations WITH (UPDLOCK, HOLDLOCK)
     WHERE Sicil = @sicil AND ExpiresAt > SYSUTCDATETIME();
@@ -62,7 +62,7 @@ export async function allocateCreationIds(transaction, actor, changes, authorize
       OR @retained + (SELECT COUNT(*) FROM @issued) > @pendingLimit * 4
       SELECT 0 AS Reserved;
     ELSE BEGIN
-      -- Only unpredictable SERVER candidates reach these global collision checks.
+      -- Bu genel çakışma denetimlerine yalnızca öngörülemez sunucu adayları ulaşır.
       IF EXISTS (SELECT 1 FROM @issued i WHERE
           EXISTS (SELECT 1 FROM dbo.MR_Projects WITH (UPDLOCK, HOLDLOCK) WHERE ProjectId = i.EntityId)
           OR EXISTS (SELECT 1 FROM dbo.MR_WBS WITH (UPDLOCK, HOLDLOCK) WHERE WbsId = i.EntityId)
@@ -79,7 +79,7 @@ export async function allocateCreationIds(transaction, actor, changes, authorize
   return { allocations };
 }
 
-/** Must precede every candidate-object read, inside the SAME commit transaction. */
+/** Aynı kayıt işlemi içinde her aday nesne okumasından önce çalışmalıdır. */
 export async function consumeCreationAllocations(transaction, actor, changes) {
   const entries = creationEntries(changes);
   if (!entries.length) return;
@@ -91,8 +91,8 @@ export async function consumeCreationAllocations(transaction, actor, changes) {
   request.input('sicil', sql.Int, actor.sicil);
   request.input('allocations', sql.NVarChar(sql.MAX), JSON.stringify(allocations));
   const result = await allocationQuery(request, `
-    -- creation-allocation: consume. Deletion is durable one-use consumption;
-    -- rollback restores it. Absent/foreign/expired/replayed proofs are identical.
+    -- creation-allocation: consume. Silme kalıcı tek kullanımlık tüketimdir;
+    -- geri alma bunu yükler. Eksik yabancı süresi dolmuş ve yinelenen kanıt ayırt edilmez.
     DELETE a OUTPUT deleted.Proof
     FROM dbo.MR_CreationAllocations a WITH (UPDLOCK, HOLDLOCK)
     JOIN OPENJSON(@allocations) WITH (id uniqueidentifier, entityType varchar(7), projectId uniqueidentifier, proof uniqueidentifier) i
@@ -102,12 +102,7 @@ export async function consumeCreationAllocations(transaction, actor, changes) {
   if (result.recordset?.length !== allocations.length) throw invalidAllocation();
 }
 
-/** Reconcile by revoking a still-unconsumed capability, even after expiry.
- * ExpiresAt also marks revocation; retained bound rows make retries idempotent.
- * Missing/consumed/foreign capabilities remain indistinguishable and fail closed.
- * No entity lookup is authorized by this operation. The same transaction lock
- * orders it against an in-flight commit: exactly one can consume the proof.
- */
+/** Süre dolsa da tüketilmemiş yetenek kaldırılarak uzlaştırılır. ExpiresAt kaldırmayı da gösterir; bağlı satır denemeyi eşgüçlü yapar. Eksik tüketilmiş veya yabancı yetenek ayırt edilmeden reddedilir. Varlık araması yetkilendirilmez; aynı işlem kilidi kayıtla sıralar ve kanıtı yalnızca biri tüketebilir. */
 export async function releaseCreationIds(transaction, actor, changes) {
   const allocations = creationEntries(changes).map(({ entry, entityType }) => ({ id: entry.id, entityType,
     projectId: entityType === 'PROJECT' ? entry.id : entry.projectId, proof: canonicalActualId(entry.creationProof) }));
@@ -116,7 +111,7 @@ export async function releaseCreationIds(transaction, actor, changes) {
   request.input('sicil', sql.Int, actor.sicil);
   request.input('allocations', sql.NVarChar(sql.MAX), JSON.stringify(allocations));
   const result = await allocationQuery(request, `
-    -- creation-allocation: release; retain a bound non-consumption receipt.
+    -- creation-allocation: release; bağlı tüketmeme makbuzu korunur.
     UPDATE a SET ExpiresAt = CASE WHEN a.ExpiresAt > DATEADD(second, -1, SYSUTCDATETIME())
       THEN DATEADD(second, -1, SYSUTCDATETIME()) ELSE a.ExpiresAt END
     OUTPUT inserted.Proof

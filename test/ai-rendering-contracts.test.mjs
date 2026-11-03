@@ -17,7 +17,7 @@ const { renderVerifiedNarrative } = await import('../src/domain/ai/evidenceNarra
 const plan = (analysis) => ({ intent: 'rota', language: 'tr', analysis });
 const call = (arguments_) => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: arguments_ }] });
 
-test('109: comparison analyst figures retain both subject names and their own values', async (t) => {
+test("karşılaştırma grafiği iki özne adını ve kendi değerlerini korur", async (t) => {
   const { ask } = phase4eConversation(t, { composition: false });
   const result = await ask({ text: 'Ayşe Yılmaz ve Zeynep Kaya durumlarını karşılaştır', plan: plan({ scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['overview'] }) });
   assert.equal(result.answer.finishReason, 'stop');
@@ -25,7 +25,7 @@ test('109: comparison analyst figures retain both subject names and their own va
   assert.match(result.answer.content, /\*\*Zeynep Kaya\*\*:[^\n]*\*\*2\*\*/);
 });
 
-test('109: mixed analysis and additional requests reject the entire declaration before any read', async (t) => {
+test("analiz ve ek istek birleşimi okumadan önce bildirimin tamamını reddeder", async (t) => {
   const plans = [{ ...plan({ scope: 'self', focus: ['overview'] }), additionalRequests: [{ operation: 'value', metrics: ['tasks.total'] }] },
     { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
   const { ask } = phase4eConversation(t, { planner: () => call(plans.shift()) });
@@ -35,7 +35,7 @@ test('109: mixed analysis and additional requests reject the entire declaration 
   assert.ok(result.inputs[1].messages.some((message) => String(message.content).includes('$.analysis:request')));
 });
 
-test('109: row follow-up retains the project intersection in every actual population read', async (t) => {
+test("satır takibi her gerçek nüfus okumasında proje kesişimini korur", async (t) => {
   const { ask } = phase4eConversation(t, { composition: false });
   const first = await ask({ text: 'Radar Modernizasyonu projesinde ekibimin iş yükü', plan: plan({ scope: 'team', within: 'Radar Modernizasyonu', focus: ['workload'] }) });
   assert.equal(first.answer.finishReason, 'stop', first.answer.content);
@@ -46,7 +46,7 @@ test('109: row follow-up retains the project intersection in every actual popula
   assert.ok(reads.every(({ params }) => params.assigneeMode === 'person' && params.personSicil === ZEYNEP && params.projectId.toLowerCase() === PROJECTS.FULL));
 });
 
-test('109: partial grouped comparison cannot persist a one-subject previous scope', async (t) => {
+test("kısmi gruplu karşılaştırma tek özneli önceki kapsamı saklayamaz", async (t) => {
   const { stack, ask } = phase4eConversation(t, { composition: false });
   stack.db.aiToolFailure = { get 'task-facts'() {
     return stack.db.aiToolLog.at(-1)?.params.personSicil === ZEYNEP ? new Error('fixture unavailable') : null;
@@ -61,8 +61,8 @@ test('109: partial grouped comparison cannot persist a one-subject previous scop
   assert.deepEqual(next.log, []);
 });
 
-test('109: workload completeness never signals whether hidden assignments exist', async (t) => {
-  for (const hidden of ['unnamed', 'named', 'sql-omitted', 'none']) await t.test(hidden, async (t) => {
+test("iş yükü tamlığı gizli atama varlığını işaret etmez", async (t) => {
+  for (const hidden of ['unnamed', 'named', 'sql-omitted', 'none']) await t.test(`gizli durum: ${hidden}`, async (t) => {
     const seed = rotaToolSeed();
     const own = hidden !== 'sql-omitted';
     seed.tasks = seed.tasks.filter((task) => task.TaskId === (own ? TASKS.PARTIAL_SHARED : TASKS.TEAM_VISIBLE));
@@ -101,7 +101,7 @@ async function workloadSheet(t, { loads, limit = 25 } = {}) {
   return { result, verdict, ledger, sheet: buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }], analyst: true }) };
 }
 
-test('109: canonical verified workload context supports complete balance and grounds unrepresented counts', async (t) => {
+test("kanonik doğrulanmış iş yükü bağlamı tam dengeyi destekler ve temsil edilmeyen sayıyı temellendirir", async (t) => {
   const { result, verdict, sheet } = await workloadSheet(t);
   assert.equal(result.data.populationComplete, true);
   assert.ok(verdict.presentation.facts.some(({ fact }) => fact.field === 'data.populationComplete' && fact.value === true));
@@ -110,8 +110,8 @@ test('109: canonical verified workload context supports complete balance and gro
   assert.match(renderComposition(sheet, defaultComposition(sheet)).text, /görece dengeli/);
 });
 
-test('109: complete workload permits concentration; incomplete assignment coverage suppresses it through verified evidence', async (t) => {
-  for (const incomplete of [false, true]) await t.test(String(incomplete), async (t) => {
+test("tam iş yükü yoğunlaşmayı destekler; eksik atama kapsamı doğrulanmış kanıtla bunu engeller", async (t) => {
+  for (const incomplete of [false, true]) await t.test(`davranış durumu: ${String(incomplete)}`, async (t) => {
     const seed = completeWorkloadSeed([8, 2, 2]);
     if (incomplete) seed.people = seed.people.filter((person) => person.Sicil !== LEAD);
     const stack = createAiStack(t, { sicil: AYSE, seed });
@@ -128,7 +128,7 @@ test('109: complete workload permits concentration; incomplete assignment covera
   });
 });
 
-test('109: truncated workload cannot name a leader when the real overdue leader is outside returned rows', async (t) => {
+test("gerçek gecikme lideri dönen satır dışındaysa kesilmiş iş yükü lider adlandıramaz", async (t) => {
   const { result, sheet } = await workloadSheet(t, { loads: [12, 11, 10], limit: 2 });
   assert.equal(result.truncated, true);
   assert.equal(result.data.populationComplete, false);
@@ -137,12 +137,12 @@ test('109: truncated workload cannot name a leader when the real overdue leader 
   assert.doesNotMatch(renderComposition(sheet, defaultComposition(sheet)).text, /en üstte|görece dengeli|bu kişide yoğunlaşıyor/);
 });
 
-test('109: focus schema and parser expose the same shared maximum', () => {
+test("yön şeması ve ayrıştırıcı aynı ortak üst sınırı sunar", () => {
   assert.equal(analysisSchema().properties.focus.maxItems, ANALYSIS_LIMITS.maxFocus);
   assert.throws(() => parseAnalysis({ scope: 'self', focus: ['overview', 'status', 'priority', 'workload'] }));
 });
 
-test('109: repair suggestions neither add nor drop population filters, including comparison expansions', () => {
+test("onarım önerisi karşılaştırma açılımında da nüfus süzgeci ekleyemez veya düşüremez", () => {
   for (const entities of [[], [{ type: 'person', text: 'Ayşe Yılmaz' }, { type: 'person', text: 'Zeynep Kaya' }]]) {
     for (const groupBy of ['priority', 'deadline', 'target_month']) {
       const request = { population: { tool: 'rota_task_analytics', groupBy }, entities };
@@ -153,7 +153,7 @@ test('109: repair suggestions neither add nor drop population filters, including
   }
 });
 
-test('109: short dependency rendering preserves predecessor and successor evidence with at most one table/chart', async (t) => {
+test("kısa bağımlılık çizimi en çok bir tablo veya grafikle öncül ve ardıl kanıtını korur", async (t) => {
   const seed = rotaToolSeed();
   const ids = [TASKS.OVERDUE, TASKS.DUE_SOON, TASKS.DONE, TASKS.LITERAL];
   seed.taskDependencies = ids.map((id, index) => ({ ProjectId: PROJECTS.FULL, PredecessorTaskId: index < 2 ? id : TASKS.UNASSIGNED,
@@ -174,7 +174,7 @@ test('109: short dependency rendering preserves predecessor and successor eviden
   assert.equal(ANSWER_DETAIL_CONTRACT.short.maxNarrated, 2);
 });
 
-test('109: English project-filtered open partition explicitly retains the open task noun', async (t) => {
+test("İngilizce proje süzgeçli açık dağılım açık görev adını korur", async (t) => {
   const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'priority' });
   const verdict = verifyRequested(ledger, ['data.groups.*.label', 'data.groups.*.open', 'data.groups.*.done'], {
@@ -187,7 +187,7 @@ test('109: English project-filtered open partition explicitly retains the open t
   assert.match(partition.text, /open tasks in the Radar Modernizasyonu project/);
 });
 
-test('109: optional analyst propositions cannot invalidate a layout near its hard limit', async (t) => {
+test("isteğe bağlı analist önermesi sınırdaki düzeni geçersiz kılamaz", async (t) => {
   const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { assignee: 'me', deadline: 'overdue' });
   const verdict = verifyRequested(ledger, ['totalCount', 'data.tasks.*.title', 'data.tasks.*.overdueDays', 'data.tasks.*.targetFinish'], {
@@ -204,7 +204,7 @@ test('109: optional analyst propositions cannot invalidate a layout near its har
   assert.ok(validateComposition(enriched, { blocks: defaultComposition(enriched).blocks }).ok);
 });
 
-test('109: trace persistence strips sensitive values and restricts new and existing files', async () => {
+test("tanı kalıcılığı hassas değeri çıkarır; yeni ve mevcut dosyayı kısıtlar", async () => {
   const { appendPrivateDiagnostic } = await import('../scripts/private-diagnostic-trace.mjs');
   const directory = mkdtempSync(join(tmpdir(), 'pr109-trace-'));
   try {
@@ -226,9 +226,9 @@ test('109: trace persistence strips sensitive values and restricts new and exist
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('109: zero totals never refer to completion subsets; positive totals retain natural none-completed prose', async (t) => {
+test("sıfır toplam tamamlanma alt kümesine atıf yapmaz; pozitif toplam doğal boş tamamlanma anlatır", async (t) => {
   for (const total of [0, 1]) for (const locale of ['tr', 'en']) for (const generic of [false, true]) {
-    await t.test(`${total}/${locale}/${generic}`, async (t) => {
+    await t.test(`durum ${total}/${locale}/${generic}`, async (t) => {
       const seed = completeWorkloadSeed([total, 0, 0]);
       const stack = createAiStack(t, { sicil: AYSE, seed });
       const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', {});
@@ -244,8 +244,8 @@ test('109: zero totals never refer to completion subsets; positive totals retain
   }
 });
 
-test('109: every English overdue narrative path realizes 0/1/2 days correctly', async (t) => {
-  for (const days of [0, 1, 2]) for (const project of [false, true]) await t.test(`${days}/${project}`, async (t) => {
+test("her İngilizce gecikme anlatımı sıfır bir ve iki günü doğru söyler", async (t) => {
+  for (const days of [0, 1, 2]) for (const project of [false, true]) await t.test(`durum ${days}/${project}`, async (t) => {
     const seed = rotaToolSeed();
     seed.tasks.find((task) => task.TaskId === TASKS.OVERDUE).TargetFinish = `2026-09-${30 - Math.max(1, days)}`;
     const stack = createAiStack(t, { sicil: AYSE, seed });
@@ -254,7 +254,7 @@ test('109: every English overdue narrative path realizes 0/1/2 days correctly', 
       operation: 'value', metrics: ['task.title', 'task.overdueDays'], entities: [{ type: 'task', id: TASKS.OVERDUE }]
     }, { locale: 'en' });
     assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
-    // The tool omits overdueDays for an on-time task; zero exercises the renderer's numeric boundary directly.
+    // Araç zamanında görev için overdueDays vermez; sıfır çizicinin sayısal sınırını doğrudan sınar.
     const text = renderVerifiedNarrative(verdict.facts.map((item) => item.fact.field === 'data.task.overdueDays'
       ? { ...item, fact: { ...item.fact, value: days } } : item), { locale: 'en' });
     assert.ok(text.includes(`**${days}** ${days === 1 ? 'day' : 'days'} overdue.`), text);
@@ -284,7 +284,7 @@ async function twoWorkloads(t) {
   return facts;
 }
 
-test('109: overlapping workload row indices produce independent conclusions with their own evidence', async (t) => {
+test("çakışan iş yükü satır sıraları kendi kanıtlarıyla bağımsız sonuç üretir", async (t) => {
   const facts = await twoWorkloads(t);
   assert.deepEqual(facts.filter(({ fact }) => fact.field === 'data.people.0.openTasks').map(({ evidenceId, fact }) => [evidenceId, fact.value]), [['R1', 8], ['R2', 2]]);
   const conclude = (items) => analystPropositions([{ index: 0, presentation: { facts: items } }]).map(({ proposition }) => ({
@@ -298,7 +298,7 @@ test('109: overlapping workload row indices produce independent conclusions with
   assert.ok(!conclude(incomplete).some((item) => item.evidenceId === 'R2'));
 });
 
-test('109: overdue attention selects within each evidence population and never borrows another population row', async (t) => {
+test("gecikme odağı kendi kanıt nüfusundan seçer; başka nüfusun satırını ödünç almaz", async (t) => {
   const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
   const { ledger } = await callRotaTools(stack, AYSE, [
     ['rota_task_search', { assignee: 'me', deadline: 'overdue' }], ['rota_task_search', { projectId: PROJECTS.FULL, deadline: 'overdue' }]
@@ -319,7 +319,7 @@ test('109: overdue attention selects within each evidence population and never b
   assert.deepEqual(conclude([...row0(first), ...row0(second)]), [], 'one row in each population is not two rows in either population');
 });
 
-test('109: diagnostic persistence failures at file validation, chmod and write remain nonfatal and privacy-safe', async (t) => {
+test("dosya doğrulama izin ve yazma tanı hatası işlemi kesmez ve gizliliği korur", async (t) => {
   const fs = (await import('node:fs')).default;
   const { syncBuiltinESMExports } = await import('node:module');
   const { appendPrivateDiagnostic } = await import('../scripts/private-diagnostic-trace.mjs');
@@ -339,7 +339,7 @@ test('109: diagnostic persistence failures at file validation, chmod and write r
   } finally { t.mock.restoreAll(); syncBuiltinESMExports(); rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('109: chain F requires a real chart and its expectation rejects an answer without one', () => {
+test("takip zinciri gerçek grafik ister; grafiksiz yanıt beklentiyi karşılamaz", () => {
   const followups = JSON.parse(readFileSync(new URL('./fixtures/ai-phase4e-followups.json', import.meta.url), 'utf8'));
   const turn = followups.chains.find((chain) => chain.id === 'F').turns.at(-1);
   assert.equal(turn.plan.visual, true);
@@ -348,17 +348,17 @@ test('109: chain F requires a real chart and its expectation rejects an answer w
   assert.deepEqual(turnViolations(withoutChart, turn.expect), ['grafik yok']);
 });
 
-test('109: structurally valid compositions outside verdict citation scope retain the safe visual fallback', async (t) => {
+test("karar atıf kapsamı dışındaki yapısal geçerli düzen güvenli görsel dönüşü korur", async (t) => {
   const { presentVerdict } = await import('../src/server/ai/assistant/groundedAnswer.js');
   const { composeGroundedAnswer } = await import('../src/server/ai/assistant/answerComposition.js');
-  for (const foreign of [false, true]) await t.test(String(foreign), async (t) => {
+  for (const foreign of [false, true]) await t.test(`davranış durumu: ${String(foreign)}`, async (t) => {
     const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
     const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { assignee: 'me' });
     const verified = verifyRequested(ledger, ['total', 'open', 'done', 'overdue'].map((key) => `data.totals.${key}`), {
       operation: 'value', metrics: ['tasks.total', 'tasks.open', 'tasks.done', 'tasks.overdue'], filters: { assignee: 'me' }
     });
     assert.equal(verified.ok, true, JSON.stringify(verified.issues));
-    // Defensive boundary fixture: a composition sheet contains extra, otherwise valid evidence, outside the final verdict.
+    // Savunma sınırı: düzen sayfası son karar dışında kalan geçerli ek kanıt içerir.
     const facts = [...verified.presentation.facts, ...(foreign ? verified.presentation.facts.map((item) => ({ ...item, evidenceId: 'R2' })) : [])];
     const verdict = { ...verified, kind: 'grounded', presentation: { ...verified.presentation, facts } };
     const session = { signal: new AbortController().signal, remainingMs: () => 120000, model: 'fixture', maxOutputTokens: 4096,
@@ -386,7 +386,7 @@ test('109: structurally valid compositions outside verdict citation scope retain
 });
 
 test('109 son: eksik iş yükü nüfusun tamamı için gecikme kapsaması iddia edemez', async (t) => {
-  for (const incomplete of [false, true]) await t.test(incomplete ? 'eksik nüfus' : 'tam nüfus', async (t) => {
+  for (const incomplete of [false, true]) await t.test(`davranış durumu: ${incomplete ? 'eksik nüfus' : 'tam nüfus'}`, async (t) => {
     const seed = completeWorkloadSeed([12, 11, 10]);
     if (incomplete) {
       const task = { ...seed.tasks[0], TaskId: '20000000-0000-4000-8000-000000000999' };

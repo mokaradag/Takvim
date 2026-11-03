@@ -49,12 +49,12 @@ const runtimeModuleFiles = [
   .sort();
 
 for (const file of runtimeModuleFiles) {
-  test(`runtime-safe module imports without top-level failure: ${relative(file)}`, async () => {
+  test(`modül üst düzey hata vermeden güvenle yüklenir: ${relative(file)}`, async () => {
     await assert.doesNotReject(import(pathToFileURL(file).href));
   });
 }
 
-test('runtime smoke set covers all pure application layers', () => {
+test("çalışma zamanı duman kümesi bütün saf uygulama katmanlarını kapsar", () => {
   const paths = runtimeModuleFiles.map(relative);
   for (const prefix of ['src/domain/', 'src/scheduling/', 'src/data/', 'src/state/selectors/']) {
     assert.equal(paths.some((item) => item.startsWith(prefix)), true, prefix);
@@ -72,7 +72,7 @@ test('runtime smoke set covers all pure application layers', () => {
   }
 });
 
-test('task status constants are frozen, unique, and canonical', () => {
+test("görev durum sabitleri donmuş tekil ve kanoniktir", () => {
   assert.equal(Object.isFrozen(TASK_STATUSES), true);
   assert.deepEqual(TASK_STATUSES, {
     TODO: 'todo',
@@ -82,14 +82,14 @@ test('task status constants are frozen, unique, and canonical', () => {
   assert.equal(new Set(Object.values(TASK_STATUSES)).size, Object.keys(TASK_STATUSES).length);
 });
 
-test('priority definitions are frozen and have deterministic contiguous order', () => {
+test("öncelik tanımları donmuştur ve belirlenimci ardışık sıradadır", () => {
   assert.equal(Object.isFrozen(PRIORITIES), true);
   const entries = Object.entries(PRIORITIES);
   assert.deepEqual(entries.map(([, priority]) => priority.order), [0, 1, 2, 3]);
   assert.deepEqual(entries.map(([key, priority]) => priority.id), entries.map(([key]) => key));
 });
 
-test('every priority has a usable label and color token', () => {
+test("her önceliğin kullanılabilir etiketi ve renk belirteci vardır", () => {
   for (const priority of Object.values(PRIORITIES)) {
     assert.equal(typeof priority.label, 'string');
     assert.ok(priority.label.trim().length > 0);
@@ -98,18 +98,18 @@ test('every priority has a usable label and color token', () => {
   }
 });
 
-test('priority identifiers and labels are unique', () => {
+test("öncelik kimlikleri ve etiketleri tekildir", () => {
   const priorities = Object.values(PRIORITIES);
   assert.equal(new Set(priorities.map((priority) => priority.id)).size, priorities.length);
   assert.equal(new Set(priorities.map((priority) => priority.label)).size, priorities.length);
 });
 
-test('domain model version is a positive integer contract', () => {
+test("alan modeli sürümü pozitif tam sayı sözleşmesidir", () => {
   assert.equal(Number.isInteger(DOMAIN_MODEL_VERSION), true);
   assert.ok(DOMAIN_MODEL_VERSION > 0);
 });
 
-test('application repository satisfies the public repository contract', () => {
+test("uygulama deposu açık depo sözleşmesini karşılar", () => {
   const appRepository = getAppRepository();
   assert.strictEqual(assertAppRepository(appRepository), appRepository);
   assert.equal(appRepository.kind, 'async-memory');
@@ -117,14 +117,14 @@ test('application repository satisfies the public repository contract', () => {
   assert.strictEqual(getAppRepository(), appRepository);
 });
 
-test('application repository loads all canonical snapshot collections', async () => {
+test("uygulama deposu bütün kanonik görüntü koleksiyonlarını yükler", async () => {
   const snapshot = await getAppRepository().loadSnapshot();
   for (const key of ['calendars', 'projects', 'people', 'wbs', 'tasks', 'baselines', 'taskBaselineSnapshots']) {
     assert.equal(Array.isArray(snapshot[key]), true, key);
   }
 });
 
-test('application repository returns isolated snapshots across repeated loads', async () => {
+test("uygulama deposu yinelenen yüklemede yalıtılmış görüntü döndürür", async () => {
   const first = await getAppRepository().loadSnapshot();
   const second = await getAppRepository().loadSnapshot();
   assert.notStrictEqual(first, second);
@@ -133,14 +133,14 @@ test('application repository returns isolated snapshots across repeated loads', 
   }
 });
 
-test('mock calendar identifiers are unique and non-empty', () => {
+test("sahte takvim kimlikleri tekil ve doludur", () => {
   assert.ok(CALENDARS.length > 0);
   const ids = CALENDARS.map((calendar) => calendar.id);
   assert.equal(new Set(ids).size, ids.length);
   assert.equal(ids.every((id) => typeof id === 'string' && id.trim().length > 0), true);
 });
 
-test('mock calendars use valid unique JavaScript weekday numbers', () => {
+test("sahte takvimler geçerli tekil JavaScript gün numarası kullanır", () => {
   for (const calendar of CALENDARS) {
     assert.ok(Array.isArray(calendar.workingDays));
     assert.ok(calendar.workingDays.length > 0);
@@ -149,7 +149,7 @@ test('mock calendars use valid unique JavaScript weekday numbers', () => {
   }
 });
 
-test('mock calendars expose explicit timezone and holiday arrays', () => {
+test("sahte takvimler açık saat dilimi ve tatil dizisi sunar", () => {
   for (const calendar of CALENDARS) {
     assert.equal(typeof calendar.timezone, 'string');
     assert.ok(calendar.timezone.trim().length > 0);
@@ -157,7 +157,7 @@ test('mock calendars expose explicit timezone and holiday arrays', () => {
   }
 });
 
-test('mock calendar holidays use unique ISO date keys per calendar', () => {
+test("sahte takvim tatilleri takvim başına tekil ISO gün anahtarı kullanır", () => {
   for (const calendar of CALENDARS) {
     const dates = calendar.holidays.map((holiday) => holiday.date);
     assert.equal(new Set(dates).size, dates.length, calendar.id);
@@ -165,7 +165,7 @@ test('mock calendar holidays use unique ISO date keys per calendar', () => {
   }
 });
 
-test('mock calendars clone default calendar collections instead of aliasing them', () => {
+test("sahte takvim varsayılan koleksiyonları eşlemek yerine kopyalar", () => {
   assert.notStrictEqual(CALENDARS[0].workingDays, DEFAULT_CALENDAR.workingDays);
   assert.notStrictEqual(CALENDARS[0].holidays, DEFAULT_CALENDAR.holidays);
   if (CALENDARS[0].holidays.length && DEFAULT_CALENDAR.holidays.length) {
@@ -176,7 +176,7 @@ test('mock calendars clone default calendar collections instead of aliasing them
   }
 });
 
-test('tweak defaults expose exactly the settings consumed by the application', () => {
+test("ince ayar varsayılanı uygulamanın tükettiği ayarları tam sunar", () => {
   assert.deepEqual(Object.keys(TWEAK_DEFAULTS).sort(), [
     'accent',
     'appMode',
@@ -194,24 +194,24 @@ test('tweak defaults expose exactly the settings consumed by the application', (
   ]);
 });
 
-test('tweak defaults contain serializable primitive values only', () => {
+test("ince ayar varsayılanları yalnızca serileştirilebilir ilkel değer içerir", () => {
   for (const value of Object.values(TWEAK_DEFAULTS)) {
     assert.ok(['string', 'number', 'boolean'].includes(typeof value));
   }
   assert.doesNotThrow(() => JSON.stringify(TWEAK_DEFAULTS));
 });
 
-test('default landing view remains a valid navigation destination', () => {
+test("varsayılan açılış görünümü geçerli gezinme hedefi kalır", () => {
   assert.equal(NAV_ITEMS.some((item) => item.id === TWEAK_DEFAULTS.landingView), true);
   assert.ok(PAGE_META[TWEAK_DEFAULTS.landingView]);
 });
 
-test('navigation definitions contain no duplicate labels or icons', () => {
+test("gezinme tanımı yinelenen etiket veya simge içermez", () => {
   assert.equal(new Set(NAV_ITEMS.map((item) => item.label)).size, NAV_ITEMS.length);
   assert.equal(new Set(NAV_ITEMS.map((item) => item.icon)).size, NAV_ITEMS.length);
 });
 
-test('application root composes provider, data boundary, shell, and persistence status', () => {
+test("uygulama kökü sağlayıcı veri sınırı kabuk ve kayıt durumunu birleştirir", () => {
   const source = read('src/components/shell/ApplicationRoot.jsx');
   assert.match(source, /^['"]use client['"];?/m);
   assert.match(source, /<AppStateProvider\b/);
@@ -229,7 +229,7 @@ test('application root composes provider, data boundary, shell, and persistence 
  * Alan memo bağımlılıklarında da sayılmalıdır: kimliği değişmeyen bir değer
  * tüketicileri tazelemez.
  */
-test('provider context carries every field the state hooks read', () => {
+test("sağlayıcı bağlamı durum kancalarının okuduğu her alanı taşır", () => {
   const provider = read('src/state/AppStateProvider.jsx');
   const hooks = read('src/state/hooks/index.js');
 
@@ -259,7 +259,7 @@ test('provider context carries every field the state hooks read', () => {
   }
 });
 
-test('data boundary has explicit loading, error, retry, and ready branches', () => {
+test("veri sınırında açık yükleme hata yeniden deneme ve hazır dalları vardır", () => {
   const source = read('src/components/shell/AppDataBoundary.jsx');
   assert.match(source, /dataStatus\s*===\s*['"]loading['"]/);
   assert.match(source, /dataStatus\s*===\s*['"]error['"]/);
@@ -267,7 +267,7 @@ test('data boundary has explicit loading, error, retry, and ready branches', () 
   assert.match(source, /return children;/);
 });
 
-test('data boundary presents user-facing Turkish status messages', () => {
+test("veri sınırı kullanıcıya Türkçe durum iletisi sunar", () => {
   const source = read('src/components/shell/AppDataBoundary.jsx');
   for (const message of ['Veriler yükleniyor', 'Veriler yüklenemedi', 'Yeniden Dene']) {
     assert.ok(source.includes(message), message);
@@ -290,7 +290,7 @@ test('ilk yükleme perdesi zoom-düzeltilmiş görünüm alanında ortalanır ve
   assert.match(root, /<div className="app-boot-stars"[^>]*\/>[\s\S]*<div className="app-boot-nebula"[^>]*\/>[\s\S]*<div className="app-boot-orbit"[^>]*\/>/);
 });
 
-test('persistence status distinguishes saving, failure, and successful save states', () => {
+test("kalıcılık durumu kayıt hata ve başarılı kaydı ayırır", () => {
   const source = read('src/components/shell/PersistenceStatus.jsx');
   for (const message of ['Kaydediliyor…', 'Kaydetme hatası', 'Kaydedildi']) {
     assert.ok(source.includes(message), message);
@@ -298,20 +298,20 @@ test('persistence status distinguishes saving, failure, and successful save stat
   assert.match(source, /onClick=\{clearPersistenceError\}/);
 });
 
-test('persistence success notification is temporary and cleans up its timer', () => {
+test("başarılı kayıt bildirimi geçicidir ve zamanlayıcısını temizler", () => {
   const source = read('src/components/shell/PersistenceStatus.jsx');
   assert.match(source, /setTimeout\(\(\)\s*=>\s*setShowSaved\(false\),\s*1800\)/);
   assert.match(source, /clearTimeout\(timer\)/);
 });
 
-test('tweak hook is SSR-safe and falls back when stored preferences are invalid', () => {
+test("ince ayar kancası sunucu çiziminde güvenlidir; bozuk tercihte varsayılana döner", () => {
   const source = read('src/hooks/useTweaks.js');
   assert.match(source, /typeof window\s*===\s*['"]undefined['"]/);
   assert.match(source, /JSON\.parse\(raw\)/);
   assert.match(source, /catch\s*\{\s*return defaults;\s*\}/s);
 });
 
-test('tweak hook persists merged values under a versioned storage key', () => {
+test("ince ayar kancası birleşik değeri sürümlü depo anahtarında saklar", () => {
   const source = read('src/hooks/useTweaks.js');
   assert.match(source, /mergen_rota_tweaks_v1/);
   // Birleştirme durum güncelleyicisinde, KALICILAŞTIRMA ise çizimden sonraki
@@ -337,7 +337,7 @@ test('tweak hook persists merged values under a versioned storage key', () => {
   );
 });
 
-test('tweak application hook applies every persisted visual preference', () => {
+test("ince ayar uygulama kancası her kalıcı görsel tercihi uygular", () => {
   const source = read('src/hooks/useApplyTweaks.js');
   for (const token of [
     'tweaks.theme',
@@ -351,19 +351,19 @@ test('tweak application hook applies every persisted visual preference', () => {
   }
 });
 
-test('tweak application hook maps all supported density modes', () => {
+test("ince ayar uygulama kancası bütün desteklenen yoğunluk kiplerini eşler", () => {
   const source = read('src/hooks/useApplyTweaks.js');
   assert.match(source, /tweaks\.density\s*===\s*['"]compact['"]\s*\?\s*0\.85/);
   assert.match(source, /tweaks\.density\s*===\s*['"]spacious['"]\s*\?\s*1\.15/);
   assert.match(source, /--density/);
 });
 
-test('tweak application hook supports the configured default accent', () => {
+test("ince ayar uygulama kancası yapılandırılmış varsayılan vurguyu destekler", () => {
   const source = read('src/hooks/useApplyTweaks.js');
   assert.ok(source.includes(`'${TWEAK_DEFAULTS.accent}'`) || source.includes(`"${TWEAK_DEFAULTS.accent}"`));
 });
 
-test('all client shell modules that directly use React hooks declare a client boundary', () => {
+test("React kancası kullanan bütün istemci kabukları istemci sınırı bildirir", () => {
   const shellFiles = walk(path.join(ROOT, 'src/components/shell')).filter((file) => /\.jsx?$/.test(file));
   const violations = [];
   for (const file of shellFiles) {
@@ -376,7 +376,7 @@ test('all client shell modules that directly use React hooks declare a client bo
   assert.deepEqual(violations, []);
 });
 
-test('feature view files never import the compatibility data barrel', () => {
+test("özellik görünümü dosyası uyumluluk veri dışa aktarımını içe aktarmaz", () => {
   const files = walk(path.join(ROOT, 'src/features')).filter((file) => /\.(?:js|jsx)$/.test(file));
   const violations = files.filter((file) => {
     const source = fs.readFileSync(file, 'utf8');
@@ -385,7 +385,7 @@ test('feature view files never import the compatibility data barrel', () => {
   assert.deepEqual(violations, []);
 });
 
-test('source files contain no focused or skipped Node test declarations', () => {
+test("kaynak dosyası odaklanmış veya atlanmış Node sınama bildirimi içermez", () => {
   const tests = walk(path.join(ROOT, 'test')).filter((file) => /\.test\.mjs$/.test(file));
   const violations = [];
   for (const file of tests) {
@@ -395,13 +395,13 @@ test('source files contain no focused or skipped Node test declarations', () => 
   assert.deepEqual(violations, []);
 });
 
-test('all test files use strict assertions', () => {
+test("bütün sınama dosyaları katı iddia kullanır", () => {
   const tests = walk(path.join(ROOT, 'test')).filter((file) => /\.test\.mjs$/.test(file));
   const violations = tests.filter((file) => !fs.readFileSync(file, 'utf8').includes("node:assert/strict")).map(relative);
   assert.deepEqual(violations, []);
 });
 
-test('all test files are discoverable by the configured Node test runner naming convention', () => {
+test("bütün sınama dosyaları Node koşucusunun adlandırma kuralıyla keşfedilir", () => {
   // `test/helpers/` yalnızca paylaşılan test altyapısını barındırır (uçtan uca
   // yığın kurulumu, bellek içi SQL Server ikizi). Bu dosyalar test tanımlamaz;
   // aşağıdaki ikinci kontrol bunu güvence altına alır.

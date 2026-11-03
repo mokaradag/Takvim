@@ -1,6 +1,4 @@
-/* ============================================================
-   Icons — inline SVG, lucide-style, hand-picked
-   ============================================================ */
+/* Seçilmiş satır içi SVG simgeleri.*/
 
 // Kalan özellikler SVG'ye AKTARILIR: çağıranların dekoratif simgelere geçirdiği
 // `aria-hidden`, `role` ve `focusable` gibi erişilebilirlik nitelikleri yolda

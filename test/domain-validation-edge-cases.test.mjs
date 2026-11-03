@@ -35,32 +35,32 @@ function codes(issues) {
   return issues.map((item) => item.code);
 }
 
-test('domain model version stays at the current canonical schema version', () => {
+test("alan modeli sürümü güncel kanonik şema sürümünde kalır", () => {
   assert.equal(DOMAIN_MODEL_VERSION, 5);
 });
 
-test('project normalization preserves an explicit leadId over a legacy display lead', () => {
+test("proje normalleştirmesi açık leadId değerini eski görünüm liderinden önce korur", () => {
   const result = normalizeProjectReferences({ id: 'p1', leadId: 'u2', lead: 'Ayşe' }, people);
   assert.equal(result.leadId, 'u2');
 });
 
-test('project normalization resolves a legacy lead name to a stable ID', () => {
+test("proje normalleştirmesi eski lider adını kararlı kimliğe çözer", () => {
   assert.equal(normalizeProjectReferences({ id: 'p1', lead: 'Ayşe' }, people).leadId, 'u1');
 });
 
-test('project normalization uses null for an unknown lead', () => {
+test("proje normalleştirmesi bilinmeyen lideri boş değer yapar", () => {
   assert.equal(normalizeProjectReferences({ id: 'p1', lead: 'Unknown' }, people).leadId, null);
 });
 
-test('project normalization preserves an explicit data date', () => {
+test("proje normalleştirmesi açık veri tarihini korur", () => {
   assert.equal(normalizeProjectReferences({ id: 'p1', dataDate: '2026-07-22' }, people).dataDate, '2026-07-22');
 });
 
-test('project normalization fills a missing data date with null', () => {
+test("proje normalleştirmesi eksik veri tarihini boş değerle doldurur", () => {
   assert.equal(normalizeProjectReferences({ id: 'p1' }, people).dataDate, null);
 });
 
-test('task schedule normalization converts empty date strings to null', () => {
+test("görev çizelgesi normalleştirmesi boş tarih metnini boş değere çevirir", () => {
   const result = normalizeTaskScheduleFields({
     plannedStart: '', plannedFinish: '', targetFinish: '', actualStart: '', actualFinish: ''
   });
@@ -71,7 +71,7 @@ test('task schedule normalization converts empty date strings to null', () => {
   assert.equal(result.actualFinish, null);
 });
 
-test('task schedule normalization preserves valid schedule values', () => {
+test("görev çizelgesi normalleştirmesi geçerli değerleri korur", () => {
   const result = normalizeTaskScheduleFields({
     plannedStart: '2026-07-20',
     plannedFinish: '2026-07-24',
@@ -90,47 +90,47 @@ test('task schedule normalization preserves valid schedule values', () => {
   assert.equal(result.remainingDurationDays, 2);
 });
 
-test('task schedule normalization forces milestones to zero duration', () => {
+test("görev çizelgesi normalleştirmesi kilometre taşını sıfır süreye zorlar", () => {
   assert.equal(normalizeTaskScheduleFields({ milestone: true, plannedDurationDays: 99 }).plannedDurationDays, 0);
 });
 
-test('task schedule normalization preserves zero duration for non-milestones', () => {
+test("görev çizelgesi normalleştirmesi kilometre taşı olmayanın sıfır süresini korur", () => {
   assert.equal(normalizeTaskScheduleFields({ milestone: false, plannedDurationDays: 0 }).plannedDurationDays, 0);
 });
 
-test('task schedule normalization fills absent durations with null', () => {
+test("görev çizelgesi normalleştirmesi eksik süreyi boş değerle doldurur", () => {
   const result = normalizeTaskScheduleFields({});
   assert.equal(result.plannedDurationDays, null);
   assert.equal(result.remainingDurationDays, null);
 });
 
-test('task reference normalization resolves project identity by canonical projectId', () => {
+test("görev başvurusu proje kimliğini kanonik projectId ile çözer", () => {
   const result = normalizeTaskReferences({ id: 't1', projectId: 'p2', proje: 'One' }, { projects, people, wbs });
   assert.equal(result.projectId, 'p2');
   assert.equal(result.proje, 'Two');
   assert.equal(result.wbsId, 'p2-root');
 });
 
-test('task reference normalization falls back to the legacy project display name', () => {
+test("görev başvurusu eski proje görünüm adına döner", () => {
   const result = normalizeTaskReferences({ id: 't1', proje: 'One' }, { projects, people, wbs });
   assert.equal(result.projectId, 'p1');
   assert.equal(result.proje, 'One');
 });
 
-test('task reference normalization preserves an unknown canonical projectId when no project resolves', () => {
+test("proje çözülemezse bilinmeyen kanonik projectId korunur", () => {
   const result = normalizeTaskReferences({ id: 't1', projectId: 'missing', proje: 'Legacy' }, { projects, people, wbs });
   assert.equal(result.projectId, 'missing');
   assert.equal(result.proje, 'Legacy');
   assert.equal(result.wbsId, null);
 });
 
-test('task reference normalization filters unknown canonical assignee IDs', () => {
+test("görev başvurusu bilinmeyen kanonik sorumlu kimliğini süzer", () => {
   const result = normalizeTaskReferences({ id: 't1', projectId: 'p1', assigneeIds: ['u1', 'missing'] }, { projects, people, wbs });
   assert.deepEqual(result.assigneeIds, ['u1']);
   assert.deepEqual(result.sorumlu, ['Ayşe']);
 });
 
-test('task reference normalization preserves scoped display names when a canonical ID is absent from the directory', () => {
+test("kanonik kimlik dizinde yoksa kapsamlı görünüm adları korunur", () => {
   const result = normalizeTaskReferences({
     id: 't1',
     projectId: 'p1',
@@ -143,13 +143,13 @@ test('task reference normalization preserves scoped display names when a canonic
   assert.deepEqual(result.sorumlu, ['Ayşe', 'Rehber Dışı Görevli']);
 });
 
-test('task reference normalization derives canonical assignee IDs from legacy names', () => {
+test("görev başvurusu eski addan kanonik sorumlu kimliği türetir", () => {
   const result = normalizeTaskReferences({ id: 't1', projectId: 'p1', sorumlu: ['Bora', 'Unknown', 'Ayşe'] }, { projects, people, wbs });
   assert.deepEqual(result.assigneeIds, ['u2', 'u1']);
   assert.deepEqual(result.sorumlu, ['Bora', 'Ayşe']);
 });
 
-test('task reference normalization resolves display names by canonical IDs when a stale name is also supplied', () => {
+test("eski ad da verilse görünüm adı kanonik kimlikten çözülür", () => {
   const result = normalizeTaskReferences({
     id: 't1', projectId: 'p1', assigneeIds: ['u1'], sorumlu: ['Bora']
   }, { projects, people, wbs });
@@ -157,17 +157,17 @@ test('task reference normalization resolves display names by canonical IDs when 
   assert.deepEqual(result.sorumlu, ['Ayşe']);
 });
 
-test('task reference normalization preserves a valid same-project WBS assignment', () => {
+test("görev başvurusu geçerli aynı projeli WBS atamasını korur", () => {
   const result = normalizeTaskReferences({ id: 't1', projectId: 'p1', wbsId: 'p1-a' }, { projects, people, wbs });
   assert.equal(result.wbsId, 'p1-a');
 });
 
-test('task reference normalization replaces a cross-project WBS with the project default', () => {
+test("görev başvurusu başka projeli WBS yerine proje varsayılanını atar", () => {
   const result = normalizeTaskReferences({ id: 't1', projectId: 'p1', wbsId: 'p2-root' }, { projects, people, wbs });
   assert.equal(result.wbsId, 'p1-root');
 });
 
-test('task reference normalization defaults missing dependencies to an empty array', () => {
+test("görev başvurusu eksik bağımlılığı boş dizi varsayar", () => {
   assert.deepEqual(normalizeTaskReferences({ id: 't1', projectId: 'p1' }, { projects, people, wbs }).deps, []);
 });
 
@@ -184,14 +184,14 @@ for (const [name, task, expectedCode, expectedField] of [
   ['negative remaining duration', { remainingDurationDays: -0.5 }, 'NEGATIVE_OR_INVALID_DURATION', 'remainingDurationDays'],
   ['non-zero milestone duration', { milestone: true, plannedDurationDays: 1 }, 'MILESTONE_NON_ZERO_DURATION', 'plannedDurationDays']
 ]) {
-  test(`task schedule validation reports ${name}`, () => {
+  test(`görev çizelgesi doğrulaması ${name} durumunu bildirir`, () => {
     const issue = validateTaskSchedule(task).find((item) => item.code === expectedCode);
     assert.ok(issue);
     assert.equal(issue.field, expectedField);
   });
 }
 
-test('task schedule validation accepts leap-day schedule dates', () => {
+test("görev çizelgesi doğrulaması artık gün tarihini kabul eder", () => {
   assert.deepEqual(validateTaskSchedule({
     plannedStart: '2028-02-29',
     plannedFinish: '2028-02-29',
@@ -199,23 +199,23 @@ test('task schedule validation accepts leap-day schedule dates', () => {
   }), []);
 });
 
-test('task schedule validation reports planned finish before planned start', () => {
+test("görev çizelgesi doğrulaması planlanan bitişin başlangıçtan önce olduğunu bildirir", () => {
   assert.deepEqual(codes(validateTaskSchedule({
     plannedStart: '2026-07-23', plannedFinish: '2026-07-22'
   })), ['PLANNED_FINISH_BEFORE_START']);
 });
 
-test('task schedule validation reports actual finish without actual start', () => {
+test("görev çizelgesi doğrulaması gerçek başlangıç olmadan bitişi bildirir", () => {
   assert.ok(codes(validateTaskSchedule({ actualFinish: '2026-07-22' })).includes('ACTUAL_FINISH_WITHOUT_START'));
 });
 
-test('task schedule validation reports actual finish before actual start', () => {
+test("görev çizelgesi doğrulaması gerçek bitişin başlangıçtan önce olduğunu bildirir", () => {
   assert.ok(codes(validateTaskSchedule({
     actualStart: '2026-07-23', actualFinish: '2026-07-22'
   })).includes('ACTUAL_FINISH_BEFORE_START'));
 });
 
-test('task schedule validation can report multiple independent issues together', () => {
+test("görev çizelgesi doğrulaması bağımsız sorunları birlikte bildirebilir", () => {
   const result = validateTaskSchedule({
     plannedStart: 'bad',
     plannedFinish: 'also-bad',
@@ -232,37 +232,37 @@ test('task schedule validation can report multiple independent issues together',
   ]);
 });
 
-test('task schedule validation accepts an empty schedule record', () => {
+test("görev çizelgesi doğrulaması boş çizelge kaydını kabul eder", () => {
   assert.deepEqual(validateTaskSchedule({}), []);
 });
 
-test('task schedule validation accepts a zero-duration milestone', () => {
+test("görev çizelgesi doğrulaması sıfır süreli kilometre taşını kabul eder", () => {
   assert.deepEqual(validateTaskSchedule({ milestone: true, plannedDurationDays: 0 }), []);
 });
 
-test('baseline validation reports finish before start', () => {
+test("baz plan doğrulaması başlangıçtan önce bitişi bildirir", () => {
   assert.deepEqual(codes(validateTaskBaselineSnapshot({
     plannedStart: '2026-07-23', plannedFinish: '2026-07-22'
   })), ['BASELINE_FINISH_BEFORE_START']);
 });
 
 for (const value of [-1, Number.NaN, Infinity]) {
-  test(`baseline validation rejects invalid duration ${String(value)}`, () => {
+  test(`baz plan doğrulaması geçersiz ${String(value)} süreyi reddeder`, () => {
     assert.deepEqual(codes(validateTaskBaselineSnapshot({ plannedDurationDays: value })), [
       'NEGATIVE_OR_INVALID_BASELINE_DURATION'
     ]);
   });
 }
 
-test('baseline validation accepts zero duration', () => {
+test("baz plan doğrulaması sıfır süreyi kabul eder", () => {
   assert.deepEqual(validateTaskBaselineSnapshot({ plannedDurationDays: 0 }), []);
 });
 
-test('WBS structure validation ignores records without IDs', () => {
+test("WBS yapı doğrulaması kimliksiz kaydı yok sayar", () => {
   assert.deepEqual(validateWbsStructure([null, {}, { name: 'No ID' }]), []);
 });
 
-test('WBS structure validation reports duplicate IDs deterministically', () => {
+test("WBS yapı doğrulaması yinelenen kimliği belirlenimci bildirir", () => {
   const result = validateWbsStructure([
     { id: 'x', projectId: 'p1', parentId: null },
     { id: 'x', projectId: 'p1', parentId: null }
@@ -271,19 +271,19 @@ test('WBS structure validation reports duplicate IDs deterministically', () => {
   assert.equal(result[0].nodeId, 'x');
 });
 
-test('WBS structure validation reports self-parenting', () => {
+test("WBS yapı doğrulaması kendini üst yapmayı bildirir", () => {
   const result = validateWbsStructure([{ id: 'x', projectId: 'p1', parentId: 'x' }]);
   assert.equal(result[0].code, 'WBS_SELF_PARENT');
   assert.equal(result[0].details.parentId, 'x');
 });
 
-test('WBS structure validation reports a missing parent', () => {
+test("WBS yapı doğrulaması eksik üstü bildirir", () => {
   const result = validateWbsStructure([{ id: 'x', projectId: 'p1', parentId: 'missing' }]);
   assert.equal(result[0].code, 'MISSING_WBS_PARENT');
   assert.equal(result[0].details.parentId, 'missing');
 });
 
-test('WBS structure validation reports cross-project parent details', () => {
+test("WBS yapı doğrulaması başka projeli üst ayrıntısını bildirir", () => {
   const result = validateWbsStructure([
     { id: 'a', projectId: 'p1', parentId: null },
     { id: 'b', projectId: 'p2', parentId: 'a' }
@@ -292,7 +292,7 @@ test('WBS structure validation reports cross-project parent details', () => {
   assert.deepEqual(issue.details, { parentId: 'a', projectId: 'p2', parentProjectId: 'p1' });
 });
 
-test('WBS structure validation emits one canonical issue per disconnected cycle', () => {
+test("WBS yapı doğrulaması ayrık döngü başına tek kanonik sorun üretir", () => {
   const result = validateWbsStructure([
     { id: 'b', projectId: 'p1', parentId: 'a' },
     { id: 'a', projectId: 'p1', parentId: 'b' },
@@ -304,49 +304,49 @@ test('WBS structure validation emits one canonical issue per disconnected cycle'
   assert.deepEqual(result.map((item) => item.details.nodeIds), [['a', 'b'], ['c', 'd']]);
 });
 
-test('task WBS assignment accepts tasks without a WBS', () => {
+test("görev WBS ataması WBS kaydı olmayan görevi kabul eder", () => {
   assert.deepEqual(validateTaskWbsAssignment({ id: 't1', projectId: 'p1', wbsId: null }, wbs), []);
 });
 
-test('task WBS assignment rejects an unknown WBS', () => {
+test("görev WBS ataması bilinmeyen WBS kaydını reddeder", () => {
   const result = validateTaskWbsAssignment({ id: 't1', projectId: 'p1', wbsId: 'missing' }, wbs);
   assert.equal(result[0].code, 'UNKNOWN_TASK_WBS');
   assert.equal(result[0].nodeId, 't1');
 });
 
-test('task WBS assignment rejects a WBS from another project', () => {
+test("görev WBS ataması başka projenin WBS kaydını reddeder", () => {
   const result = validateTaskWbsAssignment({ id: 't1', projectId: 'p1', wbsId: 'p2-root' }, wbs);
   assert.equal(result[0].code, 'CROSS_PROJECT_TASK_WBS');
   assert.equal(result[0].details.wbsProjectId, 'p2');
 });
 
-test('task WBS assignment accepts a same-project WBS', () => {
+test("görev WBS ataması aynı projeli WBS kaydını kabul eder", () => {
   assert.deepEqual(validateTaskWbsAssignment({ id: 't1', projectId: 'p1', wbsId: 'p1-a' }, wbs), []);
 });
 
-test('task WBS move rejects an empty selection', () => {
+test("görev WBS taşıması boş seçimi reddeder", () => {
   assert.equal(validateTaskWbsMove([], wbs, [], 'p1-root')[0].code, 'TASK_MOVE_SELECTION_EMPTY');
 });
 
-test('task WBS move rejects a missing target', () => {
+test("görev WBS taşıması eksik hedefi reddeder", () => {
   assert.equal(validateTaskWbsMove([], wbs, ['t1'], 'missing')[0].code, 'WBS_TARGET_NOT_FOUND');
 });
 
-test('task WBS move reports missing selected tasks', () => {
+test("görev WBS taşıması eksik seçili görevleri bildirir", () => {
   assert.equal(validateTaskWbsMove([], wbs, ['missing'], 'p1-root')[0].code, 'TASK_NOT_FOUND');
 });
 
-test('task WBS move rejects cross-project target assignment', () => {
+test("görev WBS taşıması başka projeli hedef atamasını reddeder", () => {
   const result = validateTaskWbsMove([{ id: 't1', projectId: 'p1' }], wbs, ['t1'], 'p2-root');
   assert.equal(result[0].code, 'CROSS_PROJECT_TASK_WBS_MOVE');
 });
 
-test('task WBS move deduplicates selected task IDs', () => {
+test("görev WBS taşıması seçili görev kimliklerini tekilleştirir", () => {
   const result = validateTaskWbsMove([{ id: 't1', projectId: 'p2' }], wbs, ['t1', 't1'], 'p1-root');
   assert.equal(result.length, 1);
 });
 
-test('task WBS move accepts multiple same-project tasks', () => {
+test("görev WBS taşıması çok sayıda aynı projeli görevi kabul eder", () => {
   const tasks = [{ id: 't1', projectId: 'p1' }, { id: 't2', projectId: 'p1' }];
   assert.deepEqual(validateTaskWbsMove(tasks, wbs, ['t1', 't2'], 'p1-b'), []);
 });
@@ -359,38 +359,38 @@ for (const [name, args, expected] of [
   ['cross-project movement', ['p1-a', 'p2-root'], 'CROSS_PROJECT_WBS_PARENT'],
   ['movement below a descendant', ['p1-a', 'p1-a1'], 'WBS_REPARENT_TO_DESCENDANT']
 ]) {
-  test(`WBS reparent validation rejects ${name}`, () => {
+  test(`WBS üst öğe doğrulaması ${name} durumunu reddeder`, () => {
     assert.equal(validateWbsReparent(wbs, ...args)[0].code, expected);
   });
 }
 
-test('WBS reparent validation accepts movement to a same-project sibling branch', () => {
+test("WBS üst doğrulaması aynı projeli kardeş dala taşımayı kabul eder", () => {
   assert.deepEqual(validateWbsReparent(wbs, 'p1-a1', 'p1-b'), []);
 });
 
-test('WBS deletion validation accepts an unused leaf node', () => {
+test("WBS silme doğrulaması kullanılmayan yaprağı kabul eder", () => {
   assert.deepEqual(validateWbsDeletion(wbs, [], 'p1-a1'), []);
 });
 
-test('WBS deletion validation reports direct children', () => {
+test("WBS silme doğrulaması doğrudan çocukları bildirir", () => {
   const result = validateWbsDeletion(wbs, [], 'p1-a');
   assert.equal(result[0].code, 'WBS_HAS_CHILDREN');
   assert.deepEqual(result[0].details.childIds, ['p1-a1']);
 });
 
-test('WBS deletion validation reports directly assigned tasks', () => {
+test("WBS silme doğrulaması doğrudan atanmış görevleri bildirir", () => {
   const result = validateWbsDeletion(wbs, [{ id: 't1', wbsId: 'p1-a1' }], 'p1-a1');
   assert.equal(result[0].code, 'WBS_HAS_TASKS');
   assert.deepEqual(result[0].details.taskIds, ['t1']);
 });
 
-test('WBS deletion validation reports children before tasks when both block deletion', () => {
+test("WBS silme doğrulaması iki engel varsa çocuğu görevden önce bildirir", () => {
   const result = validateWbsDeletion(wbs, [{ id: 't1', wbsId: 'p1-a' }], 'p1-a');
   assert.deepEqual(codes(result), ['WBS_HAS_CHILDREN', 'WBS_HAS_TASKS']);
 });
 
 
-test('WBS deletion validation rejects a project root even when it is empty', () => {
+test("WBS silme doğrulaması boş olsa da proje kökünü reddeder", () => {
   const result = validateWbsDeletion(wbs, [], 'p2-root');
   assert.equal(result[0].code, 'WBS_ROOT_DELETE_FORBIDDEN');
 });

@@ -121,7 +121,7 @@ function rememberDeleteId(map, entry, values) {
 }
 
 function collectClientIds(changes = {}, map = new Map()) {
-  // Counts preserve overwrite/deduplication semantics when values are shared.
+  // Değerler ortak olsa da sayaçlar üzerine yazma ve tekilleştirme anlamını korur.
   const values = new Map();
   for (const value of map.values()) values.set(value, (values.get(value) || 0) + 1);
   for (const project of changes.projectUpserts || []) {
@@ -439,7 +439,7 @@ export function createApiRepository({
     guardAccount();
     if (!scopeAvailable) throw new Error('creation storage unavailable');
   } });
-  // Legacy unscoped typed aliases have no authenticated owner.
+  // Kapsamsız eski türlü eşlemenin doğrulanmış sahibi yoktur.
   for (const id of clientIdAliases.keys()) if (actualIdAliasType(clientIdAliases, id)) {
     actualIdAliasType(clientIdAliases, id, null);
     clientIdAliases.delete(id);
@@ -490,7 +490,7 @@ export function createApiRepository({
     try {
       if (aliasStorage?.getItem(accountKey) !== account) aliasStorage?.setItem(accountKey, account);
       scopeAvailable = Boolean(aliasStorage && aliasStorage.getItem(accountKey) === account);
-    } catch { /* Versioned canonical-ID edits still work without durable storage. */ }
+    } catch { /** Sürümlü kanonik kimlik düzenlemesi kalıcı depo olmadan da çalışır. */ }
     if (account && scopeAvailable) creationIds.restoreAliases(clientIdAliases);
     else for (const id of clientIdAliases.keys()) if (actualIdAliasType(clientIdAliases, id)) {
       actualIdAliasType(clientIdAliases, id, null);
@@ -522,8 +522,8 @@ export function createApiRepository({
             (allocationChanges[collection] ||= []).push({ ...original, id: record.id, projectId: record.projectId,
               creationProof: record.proof });
           }
-          // Only the server can prove a pending identity was never committed.
-          // A consumed/pruned proof fails closed, retaining its identity mapping.
+          // Bekleyen kimliğin hiç kaydedilmediğini yalnızca sunucu kanıtlayabilir.
+          // Tüketilmiş veya budanmış kanıt erişimi kapatırken kimlik eşlemesini korur.
           const result = await requestJson(`${basePath}/commit`, { method: 'POST', body: JSON.stringify({
             operation: 'release-creation-ids', changes: {}, allocationChanges }) }, 'commitChanges');
           if (!Array.isArray(result?.released) || result.released.some((entry) => !records.some((record) =>
@@ -562,9 +562,9 @@ export function createApiRepository({
         let unused;
         try { unused = await creationIds.remember(allocations, clientIdAliases, changes, allocatedAt); }
         catch (error) {
-          // These allocations never reached commit. Release untracked capacity
-          // without replacing the original storage/account failure.
-          try { await releaseUnused(allocations); } catch { /* Server expiry remains the bound if recovery is unavailable. */ }
+          // Bu tahsisler kayıt aşamasına ulaşmadı; izlenmeyen kapasite bırakılır.
+          // Özgün depo veya hesap hatasının yerini başka hata alamaz.
+          try { await releaseUnused(allocations); } catch { /** Kurtarma yoksa sunucudaki süre sonu sınır olmayı sürdürür. */ }
           throw error;
         }
         await releaseUnused(unused);

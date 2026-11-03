@@ -122,12 +122,12 @@ export function GanttView() {
   const today_ = today();
   const [groupBy, setGroupBy] = useState2('proje');
   const [criticalOnly, setCriticalOnly] = useState2(false);
-  const [zoom, setZoom] = useState2(28); // px per day
+  const [zoom, setZoom] = useState2(28); // Gün başına piksel.
   const [hotTaskId, setHotTaskId] = useState2(null);
   const [cols, setCols] = useState2(GANTT_DEFAULT_COLS);
   const [colsOpen, setColsOpen] = useState2(false);
   const [globalSearch, setGlobalSearch] = useState2('');
-  const [collapsed, setCollapsed] = useState2(() => new Set()); // group names that are collapsed
+  const [collapsed, setCollapsed] = useState2(() => new Set()); // Daraltılmış grupların adları.
   const [colFilters, setColFilters] = useState2({
     task: '',
     proje: [],
@@ -175,26 +175,26 @@ export function GanttView() {
     setColFilters({ task: '', proje: [], sorumlu: [], priority: [], status: [], progress: null, plannedStart: null, plannedFinish: null, targetFinish: null });
   };
 
-  // Setters for per-column filters
+  // Sütun başına süzgeçlerin ayarlayıcıları.
   const setCF = (k, v) => setColFilters(f => ({ ...f, [k]: v }));
   const sortFor = (key) => (dir) => setSort({ key, dir });
   const sortDirFor = (key) => sort.key === key ? sort.dir : null;
 
-  // Visible columns
+  // Görünür sütunlar.
   const visibleCols = useMemo2(() => GANTT_COL_DEFS.filter(c => cols[c.key]), [cols]);
   const totalLeftW = useMemo2(() => 220 + visibleCols.reduce((s, c) => s + c.width + 6, 0) + 40, [visibleCols]);
-  // Grid template for left rows
+  // Sol satırların ızgara şablonu.
   const gridTemplate = useMemo2(() => {
     return `minmax(180px, 1fr) ${visibleCols.map(c => `${c.width}px`).join(' ')}`;
   }, [visibleCols]);
 
-  // Set CSS vars
+  // CSS değişkenleri atanır.
   const wrapStyle = {
     '--gantt-left-w': `${totalLeftW}px`,
     '--gantt-left-cols': gridTemplate
   };
 
-  // Stable task range calculation lives in the scheduling layer. Stored task dates remain the visible bar dates.
+  // Kararlı görev aralığı hesabı çizelgeleme katmanındadır; kayıtlı tarihler görünür çubuk tarihi kalır.
   const range = useMemo2(() => getTaskDateRange(tasks, { paddingDays: 3, fallbackStart: today_ }), [tasks]);
   const days = useMemo2(() => eachDay(range.start, range.end), [range]);
   const totalWidth = days.length * zoom;
@@ -214,7 +214,7 @@ export function GanttView() {
       map[key].push(t);
     });
     Object.values(map).forEach(arr => {
-      // Apply column sort if any, else default by start
+      // Varsa sütun sırası uygulanır; yoksa başlangıçla sıralanır.
       arr.sort((a, b) => {
         if (sort.key) {
           let va = taskSortValue(a, sort.key), vb = taskSortValue(b, sort.key);
@@ -255,7 +255,7 @@ export function GanttView() {
     return { x, w: end - x, clipped: rawX < 0 || rawEnd > axisWidth };
   };
 
-  // Schedule rollups are pure and independently testable.
+  // Çizelge toplamları saftır ve bağımsız sınanabilir.
   const groupSummaries = useMemo2(() => getGroupScheduleSummaries(groups), [groups]);
 
   // Satır listesi MEMOLANIR. Her çizimde yeniden kurulduğunda kimliği de
@@ -300,7 +300,7 @@ export function GanttView() {
   const GROUP_H = 32;
   const HEAD_H = 56;
 
-  // Compute Y position of each row (group headers smaller)
+  // Her satırın dikey konumu hesaplanır; grup başlığı daha küçüktür.
   const rowTops = useMemo2(() => {
     const tops = [];
     let y = 0;
@@ -312,10 +312,10 @@ export function GanttView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
 
-  // Today X position (center of today's column)
+  // Bugünün yatay konumu gün sütununun merkezidir.
   const todayX = xForDate(today_) + zoom / 2;
 
-  // Auto-scroll to today on mount and when zoom changes
+  // Açılışta ve yakınlaştırma değişince bugüne otomatik kaydırılır.
   useEffect2(() => {
     if (!rightRef.current) return;
     const el = rightRef.current;
@@ -324,7 +324,7 @@ export function GanttView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Sync vertical scroll between left & right ───
+  // Sol ve sağ dikey kaydırma eşitlenir.
   useEffect2(() => {
     const l = leftRef.current;
     const r = rightRef.current;
@@ -346,7 +346,7 @@ export function GanttView() {
     };
   }, []);
 
-  // ── Drag-to-pan (horizontal only) ──────────────
+  // Sürükleyerek yalnızca yatay kaydırma.
   useEffect2(() => {
     const el = rightRef.current;
     if (!el) return;
@@ -381,7 +381,7 @@ export function GanttView() {
     };
   }, []);
 
-  // ── Dep arrows: handle FS/SS/FF/SF with proper routing ──
+  // Bağımlılık okları FS SS FF ve SF için uygun yolu izler.
   const depArrows = useMemo2(() => {
     const arrows = [];
     const taskRowIdx = {};
@@ -461,7 +461,7 @@ export function GanttView() {
 
   return (
     <div className="col" style={{ gap: 12 }}>
-      {/* Controls — header row with global search */}
+      {/** Genel arama içeren başlık denetimleri. */}
       <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
         <div className="topbar-search" style={{ flex: 1, minWidth: 240, maxWidth: 380 }}>
           <Icons.Search size={14} />
@@ -532,7 +532,7 @@ export function GanttView() {
         </div>
       )}
 
-      {/* Legend */}
+      {/* Gösterge açıklaması.*/}
       <div className="row" style={{ gap: 14, fontSize: 11.5, color: 'var(--text-dim)', flexWrap: 'wrap' }}>
         <span className="row" style={{ gap: 6 }}>
           <span style={{ width: 12, height: 10, borderRadius: 2, background: 'color-mix(in oklab, var(--text-dim) 8%, transparent)' }} /> Hafta sonu
@@ -561,7 +561,7 @@ export function GanttView() {
       </div>
 
       <div className="gantt-wrap" style={wrapStyle}>
-        {/* Left rail */}
+        {/* Sol bölüm.*/}
         <div className="gantt-left" ref={leftRef}>
           <div className="gantt-left-head">
             <div className="row" style={{ gap: 6 }}>
@@ -576,7 +576,7 @@ export function GanttView() {
               <span style={{ flex: 1 }} />
             </div>
             {visibleCols.map(c => {
-              // Determine filter type per column
+              // Sütun başına süzgeç türü belirlenir.
               let filterType = null;
               let filterOptions = null;
               let filterValue = null;
@@ -711,10 +711,10 @@ export function GanttView() {
           })}
         </div>
 
-        {/* Right canvas */}
+        {/* Sağ çizim alanı.*/}
         <div className="gantt-right" ref={rightRef}>
           <div className="gantt-right-inner" style={{ width: totalWidth, position: 'relative', height: HEAD_H + rowTops.total }}>
-            {/* Day strip */}
+            {/* Gün şeridi.*/}
             <div className="gantt-day-strip" style={{ gridTemplateColumns: `repeat(${days.length}, ${zoom}px)` }}>
               {days.map((d, i) => {
                 const isToday_ = isSameDay(d, today_);
@@ -731,13 +731,13 @@ export function GanttView() {
               })}
             </div>
 
-            {/* Weekend stripes */}
+            {/* Hafta sonu şeritleri.*/}
             {days.map((d, i) => {
               if (!isWeekend(d) || holidayFor(d)) return null;
               return <div key={`w-${i}`} className="gantt-weekend-stripe" style={{ left: i * zoom, width: zoom }} />;
             })}
 
-            {/* Holiday stripes */}
+            {/* Tatil şeritleri.*/}
             {holidayRanges.map((h, i) => (
               <Tooltip
                 key={`h-${i}`}
@@ -752,7 +752,7 @@ export function GanttView() {
               </Tooltip>
             ))}
 
-            {/* Rows: backgrounds + bars/summary/milestones */}
+            {/* Satır arka planı çubuk özet ve kilometre taşı.*/}
             {rows.map((r, i) => {
               const top = HEAD_H + rowTops.tops[i];
               if (r.type === 'group') {
@@ -906,7 +906,7 @@ export function GanttView() {
               );
             })}
 
-            {/* Dependency arrows */}
+            {/* Bağımlılık okları.*/}
             <svg
               style={{ position: 'absolute', top: HEAD_H, left: 0, width: totalWidth, height: rowTops.total, pointerEvents: 'none', zIndex: 4 }}
               width={totalWidth} height={rowTops.total}
@@ -943,7 +943,7 @@ export function GanttView() {
               })}
             </svg>
 
-            {/* Today marker */}
+            {/* Bugün işareti.*/}
             {todayX >= 0 && todayX <= totalWidth && (
               <div className="gantt-today-marker" style={{ left: todayX, height: HEAD_H + rowTops.total }} />
             )}

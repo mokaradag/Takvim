@@ -1638,6 +1638,10 @@ Gömülü yuvaların doğruluğu, keyfî cümlenin anlamsal doğruluğunu kanıt
 metnini tamamen kaldırdı ve model yalnızca `details`/`rows`/`chart` bloklarını seçer oldu: güvenliydi, ama anlatımın
 tamamı yine 4C cümleleriydi. PR #107 güvenlik düzeltmeleri bu durumun nedeni değildir.
 
+> **Güncelleme (PR #111 son yakınsaması, §15):** Modelin serbest sözcüklerinin olgu taşımadığını karakter
+> denetimiyle kanıtlamak mümkün değildir. Güncel sınır, tam sunucu önermesi ve kapalı sunucu geçişidir; model
+> önerme sırasını, paragrafı ve tablo/grafik yerleşimini seçer. Sözlük dışı düzyazı güvenli geri dönüşe gider.
+
 Güncel tasarım ikisini birleştirir: modelin anlatım gücü geri gelir, ama model HİÇBİR ZAMAN serbest kelime yazmaz.
 Kullanıcıya ulaşan her karakter ya sunucunun önerme cümlesi, ya sunucunun yönlendirme cümlesi, ya da sunucunun
 tablosu/grafiği/ayrıntısıdır. Modelin karakterlerini gösteren her kanal keyfî bir önerme taşıyabilir ve bunu dil
@@ -1744,6 +1748,13 @@ reddedilir. Paragraf, başlık ve not metin ya da ton taşımaz; metin/ton taş�
 kalıp yoktur (sınama doğrulayıcı kaynağında metin deseni olmadığını da denetler). Türetilmemiş bir ilişkiyi
 (ör. sayfada olmayan "en kısa gecikme") iddia etmenin tek yolu sayfada olmayan bir kimlik yazmaktır ve bu yapısal
 olarak reddedilir.
+
+**Aşama 4E güncellemesi:** Bu bölümün `text` alanını koşulsuz reddeden ve doğrulayıcıda dil/kalıp bulunmadığını
+söyleyen eski hükümleri, §15.2'deki kapalı düzyazı sözleşmesiyle değiştirilmiştir. `say` bloğunun `text` alanı
+`checkProse` ile doğrulanır; yalnızca sunucunun izinli tarafsız geçişleri ve doğrulanmış önerme yuvaları kabul edilir.
+Diğer blokların alan ve kapsam denetimleri geçerliliğini korur. Paragraf başına en çok sekiz yuva kabul edilir;
+`COMPOSITION_LIMITS.maxSayItems`, `PROSE_LIMITS.maxSentences` değerinden türetilir. Sınırı aşan düzyazı
+paragrafı düşürülür; geçerli komşu paragraf korunur.
 
 Çizim: söylenen sayım önermesi kendi ayrıntısının yerine geçer (ayrıntı yinelenmez); söylenmeyen her ayrıntı
 sunucu tarafından eklenir. Paragraf, önermelerinin kanıt kimlikleriyle (`【R1】`) biter; atıflar yanıtın doğrulanmış
@@ -1935,7 +1946,7 @@ Vakalar üretimdeki asistan hizmetinden geçer (konuşma kaydı, salt okunur ara
 düzen doğrulayıcısı, çizici); planlama turları sabit `rota_plan` ile belirlenimcidir, yalnızca düzen turu modele
 gider. Kabul üretimin kendisidir (düzen doğrulanıp çizildi mi), ayrıca beklenen doğrulanmış değerler ve çözülmemiş
 yuva denetlenir. Rapor içerik taşımaz. Sağlayıcılar: `dry` (model yok; vakaların kuru sınaması), `claude`
-(`scripts/planner-claude-model.mjs`, düşünme kapalı, en düşük çaba, çağrı ve önbelleksiz girdi bütçesiyle) ve `live`
+(`scripts/planner-model-adapter.mjs`, düşünme kapalı, en düşük çaba, çağrı ve önbelleksiz girdi bütçesiyle) ve `live`
 (kurum içi uç). Aşamalar: `smoke` (2 vaka, 1 düzen turu), `targeted` (4 vaka, 5 düzen turu), `broad` (6 vaka, 6 düzen turu).
 Her vaka `requiresComposition` sözleşmesini taşır. Düzen gereken turun gerçekten çağrılıp `composed` olması
 zorunludur; geri dönüş model kabulü sayılmaz. Tek ayrıntılı `task-record`, `project-summary` ve `notifications`
@@ -1992,7 +2003,7 @@ nedenlerinin incelenmesi (geri dönüşler tasarım gereği doğru yanıttır, a
 
 ### 13.13 Bilinen sınırlar
 
-- Model kelime yazmaz: anlatımın ifade gücü sunucunun önerme türleriyle sınırlıdır (sayım, en büyük/en küçük,
+- (Aşama 4E kalite yakınsamasıyla aşıldı, bkz. §15.) Model kelime yazmaz: anlatımın ifade gücü sunucunun önerme türleriyle sınırlıdır (sayım, en büyük/en küçük,
   çoğunluk/en büyük grup, toplam, döküm ve yönlendirme). Eğilim, iki dönem karşılaştırması ya da neden-sonuç gibi
   ilişkiler için önce sunucuda belirlenimci önerme türü eklenmelidir; serbest model metni sözcük kurallarıyla açılamaz.
 - Önerme türetimi görev araçlarına (`rota_task_search` satırları, `rota_task_analytics` grupları) odaklıdır; diğer
@@ -2132,7 +2143,7 @@ edilemiyorsa okuma öncesinde reddedilir. Kısmi/başarısız analiz takip bağl
   Model düzeni reddedilirse sunucunun belirlenimci düzeni (`defaultComposition`) analist önermeleriyle yazar; ret kodu
   telemetride kalır.
 
-### 14.6 Nitelendirme — `scripts/phase4e-qualification.mjs` (Claude Haiku 4.5, düşünme kapalı, `effort: low`)
+### 14.6 Nitelendirme — `scripts/analysis-qualification.mjs` (Claude Haiku 4.5, düşünme kapalı, `effort: low`)
 
 `PLANNER_CLAUDE_TRACE` ve `PHASE4E_DEBUG` yalnızca yapısal tanı metadatası saklar: ham soru/yanıt, kimlikler,
 araç bağımsız değişkenleri ve sorgu değerleri kayda girmez. Ortak yazıcı veriyi kalıcılıktan önce süzer; yeni ve mevcut
@@ -2168,3 +2179,200 @@ düz metin iletimi 4. Tier B, sonraki yönerge/şema değişikliklerinden önce 
   ayrı bir yönetişim kararıdır.
 - Planlayıcının anlam hatası (geçerli ama yanlış kapsam) yapısal olarak saptanamaz; zararı yetkiyle sınırlıdır (G#2
   yalnızca yetkili portföyü okudu).
+
+## 15. Aşama 4E kalite yakınsaması — insan kalitesinde anlatım, kanonik takip, güvenilir grafik (UYGULANDI)
+
+Aşama 4E birleştirildikten sonra gerçek kullanımda beş ürün kusuru görüldü: yanıtlar mekanik ve kısaydı, kısa takipler
+göndergesini kaybediyordu, grafik istekleri çoğu kez sonuçsuz kalıyordu, Dengeli ile Ayrıntılı aynı görünüyordu ve
+yalnızca tek bir hesap biçimi (ekip lideri + yönetici) sınanmıştı. Bu bölüm kök nedenleri ve yapısal düzeltmeleri anlatır.
+Güven sınırı değişmez: kimlik, yetki, SQL, hesap, kanıt seçimi ve açıklama sunucudadır; model kapsam vermez.
+
+### 15.1 Kök neden haritası
+
+| Belirti | Kök neden (katman) | Düzeltme |
+| --- | --- | --- |
+| Dayanaksız yorumun kanıta karışması | İlk uygulama modelin serbest sözcüklerini karakter denetimiyle olgusuz sayıyordu; yazıyla sayı ve çoğunluk iddiaları geçebiliyordu | Tam sunucu önermesi, kapalı geçiş, modelin düzen seçimi ve güvenli akıcı geri dönüş (§15.2) |
+| Dengeli ≈ Ayrıntılı | Ayrıntı sözleşmesi yalnızca bölüm başına önerme sayısıydı; okuma, sayfa sınırı, yapı ve çıktı bütçesi aynıydı | Ayrıntı sözleşmesi okuma genişliği + yapı (§15.4) |
+| "Neden?", "grafikle göster" göndergesini yitiriyor | Takip durumu yoksul: `previous` kapsamında model yönleri/ufku/görseli YENİDEN yazmak zorundaydı; konuşma eylemi yoktu; açıklama turu özgün niyeti saklamıyordu | Kanonik takip durumu (§15.3) |
+| Grafik isteği sonuçsuz | Görsel niyet yalnızca boolean; tür taşınmıyordu; yedek seçim yalnızca ilk bölüme ve çoğu kez gösterge kartına bakıyordu; takipte görsel istek sürmüyordu | Uçtan uca görsel niyet (§15.5) |
+| Zayıf model planı onarılamıyor | Haiku `focus` listesini 4–5 öğeyle dolduruyor; onarım pini yön değişikliğini yasakladığından geçerli düzeltilmiş plan da reddediliyordu | Şema sınırı aşımında modelin KENDİ yönlerinin sıralı alt kümesine daraltma (§15.3) |
+| Eksik nüfusta "dengeli/en yoğun" izlenimi | Tamlık bilgisi yalnızca mekanik ayrıntı satırıydı ("Atama dağılımı tam: Hayır") | Zorunlu sunucu çekincesi (§15.2) |
+
+### 15.2 Kanıta bağlı anlatım yüzeyi — `src/domain/ai/groundedProse.js`
+
+Modelin metninde rakam bulunmaması olgusallık kanıtı değildir: yazıyla sayılar, tarihler, çoğunluk ve karşılaştırma
+iddiaları aynı güven sınırını aşabilir. Bu nedenle serbest sözcükler doğrulanmış yanıtın parçası sayılmaz.
+`{"type":"say","text":"Genel tabloya bakınca {P1}. Ayrıca {P2}."}` yalnızca yerleşim seçimidir. Her cümle tam bir
+sunucu önermesi (`P#`) ya da sunucu yönlendirmesidir (`T#`, `G#`). İsteğe bağlı geçiş, `PROSE_CONNECTORS` içindeki
+kapalı ve tarafsız sunucu dizgelerinden aynen seçilir; modelin gönderdiği sözcükler doğrudan çizilmez.
+
+Sözlük dışı paragraf reddedilir. Geçerli bölüm kalmadıysa sunucunun akıcı, belirlenimci anlatımı gösterilir.
+Bu bir anlamsal doğrulayıcı, sayı sözcüğü kara listesi veya dil sezgisi değildir. Kısa kayıt adları, noktalama,
+Markdown/atıf işaretleri ve tekrar eden `x` adları yeni bir metin maskeleme döngüsü açmaz. Bütün olgusal metin ve
+kayıt adları sunucudan gelir; önerme parçaları da kaçışlanır.
+
+Bir paragrafın bütün önermeleri aynı bölüme aittir. Ayrıntılı bölüm başlığının altında başka bölümün olgusu
+bulunamaz. Bölümler arası sonuç ancak sunucunun ürettiği ve bölümünü açıkça belirttiği sentez önermesidir.
+Modelin sıralama, paragraf, vurgu, tablo ve grafik seçimleri korunur; güvenli geri dönüş özelliği bütünüyle kaldırmaz.
+
+**Zorunlu çekinceler:** eksik iş yükü nüfusu (`populationComplete:false`) ile kesinlik açıklamaları isteğe bağlı
+önermelerden önce bütçe ayırır. Zorunlu içerik sığmıyorsa isteğe bağlı içerik azalır veya güvenli anlatım kullanılır.
+İş yükünde sayfanın tamamlanması, sıfır yüklü/çözümlenmemiş üyelerin bilindiği anlamına gelmez. Eksik nüfusta
+bütün ekip için denge, yoğunlaşma veya en yoğun kişi sonucu çıkarılmaz. Kesinlik açıklaması kullanıcıya gösterilir.
+
+### 15.3 Kanonik takip durumu — `analysisContext.js`, `analysisPlan.js`
+
+- **Kalıtım:** `analysis.scope` `previous`/`row` olduğunda yazılmayan `focus`, `dateFrom`/`dateTo`, `visual`, `chart`
+  ve `table` sunucunun sakladığı önceki doğrulanmış analizden sürer (`resolveAnalysisBrief`). Zayıf model yalnızca
+  değişeni yazar ("Neden?" → `{"scope":"previous","act":"explain"}`). Görsel istek `visual:false` ile kapatılabilir.
+  Satır göndergesinde yeni öznede anlamsız yön (proje satırında "projelere göre") düşer; hiçbiri kalmazsa genel
+  değerlendirme yönleri kullanılır.
+- **Konuşma eylemi** (`analysis.act`: `explain`, `expand`, `summarize`, `prioritize`): modelin türlü kararıdır; okumayı
+  değil sunumu yönlendirir. Anlatım sayfası eylemi ve kullanıcının önceki sorusunu (`previousQuestion`, yalnızca
+  kullanıcının kendi metni) taşır; `expand` bu turu bir düzey ayrıntılı sunar (ayar değişmez).
+- **Açıklama korunur:** analitik plan bir ad belirsizliğiyle açıklamaya düşerse kabul edilmiş özet kimliksiz biçimde
+  (`pending`: kapsam, yönler, ufuk, `withSelf`, daraltma, satırlar, eylem, görsel, grafik türü, adlar) saklanır. Numaralı seçimde sunucu aynı planı **model
+  turu açmadan** aynı doğrulamadan (bildirim, içerme, yetki, kanıt) yeniden yürütür; seçim "yalnızca kişiyi göster"e
+  dönüşmez.
+- **Yeniden yetki:** bağlam yalnızca göndergedir. Her takip, kimlikleri güncel yetkiyle yeniden okur; yönetim kapsamı
+  kaldırılmış kullanıcının `previous` takibi veri okumadan "yönetim kapsamınız bulunmuyor" yanıtını alır.
+- **Onarım daraltması:** şema sınırını aşan yön listesi (`$.analysis.focus:maxItems`) onarımda yalnızca modelin KENDİ
+  yönlerinin sıralı, boş olmayan alt kümesine daraltılabilir; kapsam/ad/ufuk değişemez, yeni yön eklenemez. İstek
+  bütçesi aşımı (karşılaştırma) eskisi gibi daraltılamaz.
+
+### 15.4 Ayrıntı sözleşmesi — `answerDetail.js`
+
+| | Kısa | Dengeli | Ayrıntılı |
+| --- | --- | --- | --- |
+| Bütünleyici okuma (sunucu) | — | — | +1 bölüm (kendi: projelere göre; ekip/proje: kişilere göre iş yükü; …) |
+| Sayfadaki önerme sınırı | 12 | 16 | 24 |
+| Bölüm başına anlatım (en az/en çok) | 1 / 2 | 3 / 6 | 6 / 14 |
+| Yapı (yönerge) | tek paragraf | 2–3 paragraf: sonuç, destek, karşıtlık | 3–5 paragraf: sonuç, etkenler, dağılım/karşılaştırma, zaman, emin olunamayanlar |
+| Grafik sınırı | 1 | 1 (+1 açık istekte) | 2 (+1 açık istekte) |
+| Anlatım çıktı bütçesi | 800 | 1800 | 3000 |
+| Bölüm başlıkları | — | yok (bütünleşik metin) | her bölüm sunucu başlığıyla açılır |
+
+Fark yararlı içerikten gelir (daha geniş doğrulanmış okuma ve daha çok önerme); sözcük sayısı kuralı yoktur.
+
+### 15.5 Görsel niyet — `executionSet.js`, `groundedComposition.js`
+
+Plan düzeyinde `chart` (bar, donut, line, stacked, kpi, timeline) ve `table` alanları; tür verildiyse görselleştirme de
+istenmiştir. Tür, takipte ve açıklama sonrasında sürer. İstenen tür bütün bölümlerin adaylarında aranır; model aynı
+adayı başka türle seçtiyse biçim istenen türe çevrilir; tür söylenmediyse veri grafiği gösterge kartından önce gelir.
+İstenen tür doğrulanmış kanıtla çizilemiyorsa sessizce başka tür çizilmez: türün gerektirdiği veri ve gösterilen grafik
+not olarak söylenir ("Zaman çizelgesi için tarihli görev satırları gerekir; …"). Aday sınırı (6) tek sütunlu çubuk
+adaylarıyla dolsa da istenen türden aday yoksa onun için bir yer ayrılır (çok sütunlu portföy tablosu yığılmış adayı
+dışarıda bırakamaz).
+
+### 15.6 Ek soru sınıfları ve zayıf model biçim normalleştirmesi
+
+- **Kişi ile kendini karşılaştırma** (`analysis.withSelf`, yalnızca `person` + tek ad): iki özne aynı ölçülerle okunur;
+  kendi özne güvenilir oturumdur (`assignee: me`), model kimlik yazmaz. Analist önermeleri "Siz: …" öznesini taşır.
+- **Kesinlik takibi** (`act: certainty`): sayfaya her tablonun tamlığını söyleyen sunucu önermeleri (`certainty`) eklenir;
+  model kapsam iddiası kurmaz, yalnızca bu önermeleri ve zorunlu çekinceleri anlatır. Tablo bölümünün adıyla anılır
+  ("gecikmiş görevler tablosu …"), ilk sütun adıyla değil. Tek günlük termin aralığı tarihi bir kez söyler
+  ("**30 Eylül 2026** tarihinde terminli …").
+- **Dönemli durum dağılımı**: `status` yönü ufku taşır (geçmiş dönemin tamamlanma görünümü o dönemde terminli işlerdir).
+- **Grafik türünün okuması**: adı verilen tür, gerektirdiği okumayı sunucunun zorunlu bölümü olarak ekler (yığılmış →
+  proje başına açık/tamamlanan, zaman çizelgesi → tarihli görev satırları, çizgi → aylık termin dizisi, gösterge →
+  genel sayılar, halka → dağılım); toplam okuma bölümü en çok 4'tür.
+- **Satır göndergeleri**: görev listesinin satırı kendi projesidir (`row` → proje). Ayrıntılı istekle (özetsiz) listelenen
+  görevler yalnızca **satır-yalnız** bağlam yazar: `previous` kullanılamaz (isteğin süzgeçleri özetle temsil edilemediği
+  için önceki özne genişlerdi), satırın projesi incelenebilir; bu küçük bağlam sığmazsa tam yetki nüfusu korunarak kanıtın zaten var olan sınırlı sıkıştırma yolu kullanılır.
+  Satırlar konumsaldır (aynı projede iki görev aynı proje kimliğini iki kez taşır). Karşılaştırma yanıtında satır
+  numaraları gerçekten gösterilen özne sırasıdır. Kimliği olmayan satırın konumu `null` olarak korunur; sonraki satır öne kaymaz. Görünen kişi/proje koleksiyonu görevlerden türetilen proje satırından önce gelir. Satıra inme, kaydın genel görünümüdür (önceki sıralama ölçüsü yinelenmez).
+- **Önceki özne adları**: güvenilir ad-kimlik bağı olmadan özne sayısı eşitliği eşdeğerlik değildir. Güvenilmeyen ad mevcut ret/onarım/açıklama yolunda kalır; sunucu onu sessizce `previous` ile değiştirmez.
+- **Yapısal normalleştirme** (dil yorumu değil): sözlük değerinin tekil/çoğul yazımı (`deadline` → `deadlines`); sözlük dışı
+  eylem düşer; ad listeli `projects` → `project`; satır listeli `previous` → `row`; özetin içine yazılan `chart`/`table`
+  plan düzeyine taşınır; görselin yeri (özet/plan) onarımda anlam değişikliği sayılmaz; şema sınırını aşan yön listesi
+  modelin kendi yönlerinin sıralı alt kümesine daraltılabilir; sunucunun zorunlu eklediği okuma modelin 3 yönlük
+  bütçesinden düşmez.
+- **Ayrıntılı bölümlüdür**: sayfa `sections` ana hattını taşır; her bölüm sunucunun başlığıyla açılır (doğal başlığı
+  olmayan bölüm kanıtının konu adını alır), model her bölüm için ayrı paragraf yazar. Aynı araç iki bölümde farklı
+  biçimde döndüğünde (portföy başlık ölçüleri ve proje karşılaştırma tablosu) başlıklar ayrışır ("Portföy özeti",
+  "Proje karşılaştırması"); bir bölüm başlıksız kalırsa olguların yanlış başlık altına düşmemesi için hiç başlık sunulmaz.
+  Dengeli başlıksız ve bütünleşiktir.
+
+### 15.7 Sınamalar
+
+`test/ai-phase4e-quality-convergence.test.mjs`: kapalı düzyazı, yuva çizimi, görünür çekince/kesinlik,
+Dengeli/Ayrıntılı farkı, rol matrisi, seyrek veri, grafik türleri ve kanonik takip sınamalarıdır.
+`test/ai-analysis-intent-and-grounding.test.mjs` ortak pencere, kendiyle karşılaştırma, bağıl tarihin yeniden hesaplanması,
+konumsal satır, onarım, kapasite ve düşmanca metin değişmezlerini kapsar. `test/ai-ui-acceptance-convergence.test.mjs`
+canlı model kullanmadan kabul altyapısının hata çıkışını ve koşu yalıtımını sınar. Bunlar gerçek model kabulü değildir.
+
+### 15.8 Önceki arayüz tanı koşuları — güncel kabul kanıtı değildir
+
+Kabul, üretim derlemesinin (`next build` + `next start`) tarayıcıda gerçek Bilgin paneliyle kullanılmasıyla yapıldı
+(`scripts/ui-acceptance/`): geliştirme kimliği, deponun bellek içi SQL Server ikizi (yalnızca sentetik kayıtlar), yerel
+OpenAI uyumlu köprü üzerinden `claude-haiku-4-5-20251001`. Köprü başka model istemini reddeder (devir girişimi sayılır);
+kayıt defterinde akıl yürütme profili yoktur (Derin devir yolu kapalı). Önceki koşuların kaydında model kimliği Haiku 4.5,
+düşünme `off`, düşünme belirteci 0, devir girişimi 0. Soru, yanıt ve kanıt metni günlüğe yazılmaz.
+
+Profiller (sentetik): A sıradan çalışan, B ekip lideri (dört kişi, bir proje lideri), C yönetim kapsamı olmayan yönetici
+(admin), D ekip lideri + yönetici, E proje odaklı kullanıcı, F kısıtlı görünürlük, G seyrek veri (görev yok).
+
+| Geçiş | Tur | Model düzeni | Sunucu düzeni | Güvenli ret / açıklama | Başarısız |
+| --- | --- | --- | --- | --- | --- |
+| Ana geçiş A–G (+B2: 20 soru listesi) | 73 | 52 | 8 | 6 | 7 |
+| Düzeltme sonrası yeniden sınama (RB, FB) | 22 | 8 | 9 | 1 | 4 |
+| Son düzeltmeler (FC, FD, FE) | 14 | 9 | 4 | 0 | 1 |
+
+Son düzeltmelerden sonra (düzyazı yuva onarımı, sunucu başlığı, istenen tür için aday yeri): Dengeli ve Ayrıntılı
+proje değerlendirmesi, yığılmış grafik (S13), tablo + model seçimli grafik (S12: çubuk + yığılmış), zaman çizelgesi
+(S14), bugünün üç önceliği (S18), yönetici özeti ve kesinlik takibi (S20 → S19) model düzeniyle çizildi; Ayrıntılı
+yanıt sunucu bölüm başlıklarıyla açıldı. Bölüm/direktörlük soruları (S07, S08) sentetik veride düzey hiyerarşisi
+olmadığı için güvenli biçimde reddedildi; yönetici (C) ekip sorusunda ekip lideri sayılmadı.
+
+Bilinen sınırlar: dört yönlü soru (gecikme + iş yükü + yaklaşan + genel) şema sınırı (3) nedeniyle bir onarım turu
+açar; onarım yeni yön eklerse (anlam değişikliği) tur açıkça başarısız olur (FE #2), yön sessizce düşmez. Haiku zaman
+zaman takip sorusunu önceki soru gibi planlar. Dengeli ile Ayrıntılı arasındaki fark yapısaldır (ek okuma, bölüm
+başlığı, ek grafik); modelin düzyazı uzunluğu iki ayarda benzer kalabilir. Güncel sürüm serbest model çerçevesini kabul etmez; kapalı geçiş dışındaki metin güvenli sunucu anlatımına döner.
+
+
+Kabul koşucusu bütün profil adlarını süreç açmadan doğrular. Varsayılan çağrı bütçesi seçilen senaryo turlarının
+sayısının dört katıdır (plan, isteğe bağlı anlamsal yardım, bir onarım ve düzen payı); `BRIDGE_MAX_CALLS` açıkça
+verilirse bu sınıra uyulur. Onarım yoğunluğu bu payı aşarsa koşu başarısız olur; model/sağlayıcı hatası gizlenmez.
+Çıkış temizliği başarısız profilde de raporu üretir, kanıt dizinini bildirir ve başarısız çıkışı korur.
+
+### 15.9 PR #111 son yakınsama sözleşmesi
+
+- Tarih aralığı ortak görev nüfusuna uygulanır: genel görünüm, karşılaştırma, grafik ve Ayrıntılı bütünleyici
+  okumalar aralık dışına çıkmaz. Yaklaşan işler aralık ile bugünden sonraki açık işlerin kesişimidir ve gerçek
+  alt sınır yanıtta söylenir. Dönem desteklemeyen portföy/iş yükü araçları yerine mevcut tarihli görev
+  analitiği kullanılır; SQL yetki kapsamı genişlemez.
+- Takipte her eksik tarih sınırı ayrı devralınır. `relativeWindow:today|next_7_days` mutlak tarihle birlikte
+  kabul edilmez; açıklama seçimi ve sonraki tur güncel takvim gününe göre hesaplanır. Diğer açık tarih çiftleri
+  mutlak tarihtir; sunucu kullanıcının sözcüklerinden bağıl anlam tahmin etmez.
+- `withSelf` aynı kanonik niyette, tek adlı kişi ve isteğe bağlı proje kesişimiyle saklanır; seçim yalnızca
+  belirsiz kimliği değiştirir. Önceki/satır planları, eylem ve sunum tercihleri aynı doğrulayıcıdan yeniden geçer.
+  Model üç yön bildirebilir; sunucunun dördüncü etkin yönü kalıcı bağlamda ve yeniden yürütmede korunur.
+- Açık `visual:false` grafik türünden ve modelin isteğe bağlı grafik seçiminden önce gelir. İstenen aday için
+  aday ve son çizim bütçesi ayrılır. Desteklenmeyen tür, başka grafik çizilsin veya çizilmesin türüne özgü
+  açıklanır. Skaler kanıtta `table:true` için satır tablosu yoksa belirlenimci açıklama verilir.
+- Dönemli iş yükü için görev analitiğinin kişi kırılımı tam ekip kadrosu sayılmaz: görev sayfası tam olsa da
+  eşleşen işi olmayan üyeler ve çözümlenemeyen/gizli atamalar nedeniyle zorunlu eksik nüfus çekincesi gösterilir.
+  Görev tablosunun tamlığı ile kişi nüfusunun tamlığı ayrı değerlendirilir; yeni kadro okuması eklenmez.
+- Onarım, analiz alanları yanında geçerli yanıt dili, grafik türü ve tablo isteğini de korur. Yalnızca hata
+  bildirilen alan değişebilir. Görev analitiğindeki kişi satırları `sicil:` anahtarından katı doğrulamayla
+  çözülür; özel gruplar satır konumunu koruyan boş göndergelerdir.
+- Kalıcı analiz bağlamı sürüm 2'dir. Yeni okuyucu bilinen sürüm 1 biçimini kapalı şemayla yükseltir;
+  bilinmeyen sürüm/anahtar reddedilir. Eski uygulama örnekleri yeni biçimi okuyamaz: **eski ve yeni sunucuların
+  aynı konuşma deposuna eşzamanlı hizmet verdiği karma sürüm dağıtımı desteklenmez**. Dağıtım, eski süreçleri
+  durdurup devam eden turları bitirdikten sonra yeni süreçleri başlatmalıdır. Bu PR üretime dağıtım yapmaz;
+  eski ikilinin okuyucusunu gevşeterek yeni anlamı düşürmek güvenli uyumluluk değildir.
+- Kabul koşucusu Bash 3.2 ile Linux/macOS üzerinde çalışacak komutları kullanır. Tarayıcı ve Claude CLI
+  önkoşulları baştan denetlenir. Her koşu ayrı dizin ve çağrı defteri açar; dolu bağlantı noktası reddedilir;
+  uygulama ve köprü yalnızca `127.0.0.1` dinler. Sürücü/model/grafik uyuşmazlığı sıfırdan farklı çıkış verir.
+  Önceki `UI_ONLY` konuşma satırları korunur, ancak farklı koşu kimlikleri güncel rapora sayılmaz.
+  Rol senaryoları beklenen sunucu sonucunu, yetkisiz turda sıfır kanıtı ve görünür zorunlu/yasak metinleri
+  denetler. Windows'ta yalnızca Linux/macOS kabuk sınamaları atlanır; JavaScript sınamaları gerçek Windows
+  CI işinde de çalışır. Geçici sürücü kopyası gerçek Playwright kurulumundan etkilenmez.
+- Güncel regresyonlar: `test/ai-analysis-intent-and-grounding.test.mjs`, `test/ai-ui-acceptance-convergence.test.mjs` ve
+  güçlendirilmiş mevcut Aşama 4E sınamaları. Önceki §15.8 sayıları bu HEAD'in kabul sonucu olarak kullanılamaz.
+  Gerçek Haiku 4.5 arayüz kabulü, düşünme kapalı ve devir kapalı ortamda ayrıca çalıştırılmalıdır.
+
+
+### Kanonik takipte açık dönem kaldırma ve satır karşılaştırması
+
+Önceki bağlı öznenin dönemini açıkça kaldırmak için `analysis.scope: previous` ve `relativeWindow: all_time` kullanılır. Tarih alanlarıyla birlikte verilmez; sonraki takipler de tarihsiz kalır. `today` ve `next_7_days` güncel günden hesaplanmayı sürdürür. `scope: row, rows: [n], withSelf: true` yalnızca tek kişi satırında kabul edilir. Tür ve kimlik kanonik satırdan çözüldükten sonra doğrulanır; proje ve çoklu satır reddedilir. İki karşılaştırma tarafı da aynı proje kesişimi ve güncel yetkiyle okunur.

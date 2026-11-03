@@ -95,11 +95,13 @@ jobs:
         run: |
           @'
           import { spawnSync } from 'node:child_process';
-          const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', '--test-name-pattern=Claude|4C kayıtlı dış komut|4C takip nitelendirmesi|Windows kapısı', 'test/ai-planner-benchmark.test.mjs'], { encoding: 'utf8' });
+          const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', '--test-name-pattern=model bağdaştırıcısı:|dış komut:|takip nitelendirmesi:|Windows kapısı', 'test/ai-planner-benchmark.test.mjs'], { encoding: 'utf8' });
           process.stdout.write(result.stdout || '');
           process.stderr.write(result.stderr || '');
           if (result.error || result.status !== 0 || /^1\.\.0$/m.test(result.stdout) || !/^# pass [1-9][0-9]*$/m.test(result.stdout)) process.exit(1);
           '@ | node --input-type=module
+      - name: Arayüz kabul altyapısının taşınabilir sınamaları
+        run: node --test --test-reporter=tap test/ai-ui-acceptance-convergence.test.mjs
 
   planner-home-macos:
     runs-on: macos-latest
@@ -115,9 +117,11 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { spawnSync } from 'node:child_process';
-          const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', '--test-name-pattern=Claude.*(özel ev|POSIX ACL|başka kullanıcının)', 'test/ai-planner-benchmark.test.mjs'], { encoding: 'utf8' });
+          const result = spawnSync(process.execPath, ['--test', '--test-reporter=tap', '--test-name-pattern=model bağdaştırıcısı: (özel ev|POSIX ACL|başka kullanıcının)', 'test/ai-planner-benchmark.test.mjs'], { encoding: 'utf8' });
           process.stdout.write(result.stdout || '');
           process.stderr.write(result.stderr || '');
           const summary = (result.stdout || '').split('\n').map(line => line.trim());
           if (result.error || result.status !== 0 || !['# tests 3', '# pass 3', '# fail 0', '# skipped 0'].every(line => summary.includes(line))) process.exit(1);
           NODE
+      - name: Arayüz kabul altyapısının yerel kabuk sınamaları
+        run: node --test --test-reporter=tap test/ai-ui-acceptance-convergence.test.mjs

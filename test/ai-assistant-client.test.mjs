@@ -217,7 +217,7 @@ test('canlı tutma bağlantıyı canlı tutar ama ilerleme değildir: olay gelme
   assert.equal(progressing.result.ok, true, 'ilerleme olayı alan tur kesilmez');
 });
 
-test('the completed multi-run stream test restores the original fetch', () => {
+test("tamamlanan çok koşulu akış sınaması özgün fetch işlevini geri yükler", () => {
   assert.equal(globalThis.fetch, originalFetch);
 });
 

@@ -3,12 +3,12 @@ import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync, write
 const oneOf = (value, allowed) => allowed.includes(value) ? value : null;
 const length = (value) => typeof value === 'string' || Array.isArray(value) ? value.length : 0;
 
-/** Diagnostics keep structure and bounded enums, never conversation text, identities, queries or argument values. */
+/** Tanı kaydı yapı ve sınırlı değerleri tutar; konuşma metni kimlik sorgu ve argüman değerlerini tutmaz. */
 export function diagnosticMetadata(record) {
   return {
     at: new Date().toISOString(),
     toolCalls: (record.toolCalls || []).map((call) => ({
-      // Only protocol tool names; unknown names can themselves contain private text.
+      // Yalnızca protokol araç adları alınır; bilinmeyen adlar özel metin içerebilir.
       kind: oneOf(call.name, ['rota_plan', 'rota_answer_compose']) || 'other',
       argumentCount: call.arguments && typeof call.arguments === 'object' ? Object.keys(call.arguments).length : 0
     })),
@@ -27,9 +27,9 @@ export function diagnosticMetadata(record) {
 }
 
 export function appendPrivateDiagnostic(path, record) {
-  // Optional persistence cannot fail the completed operation. Never report the path, error text or private record.
+  // İsteğe bağlı kayıt tamamlanmış işlemi başarısız yapamaz; yol hata metni ve özel kayıt açıklanmaz.
   try {
-    // Sanitize before opening or persisting. Existing traces are tightened too; symlink destinations are rejected.
+    // Açmadan ve saklamadan önce arındırılır; eski izlerin izinleri de daraltılır ve sembolik bağ reddedilir.
     const line = `${JSON.stringify(diagnosticMetadata(record))}\n`;
     // Node, Windows birleşim noktalarını simgesel bağlantı olarak bildirir; ön denetim O_NOFOLLOW olmayan platformları da kapsar.
     // Yolun arada değiştirilmesi yarışını ortadan kaldırmaz; desteklenen platformlarda O_NOFOLLOW korunur.

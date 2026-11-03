@@ -1,4 +1,4 @@
-/* MERGEN Rota · feature layout ownership for Gantt, WBS and Task Detail */
+/* MERGEN Rota Gantt WBS ve görev ayrıntısı düzen sahipliği. */
 
 /* ── Gantt ─────────────────────────────────────────────────── */
 .gantt-mode-switch .seg { box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 10%, transparent); }
@@ -425,7 +425,7 @@
   white-space: nowrap;
 }
 
-/* ── Task Detail drawer ────────────────────────────────────── */
+/* Görev ayrıntısı çekmecesi */
 .drawer-title-warning {
   display: inline-flex;
   align-items: center;

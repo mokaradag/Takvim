@@ -37,7 +37,7 @@ function validChanges() {
   };
 }
 
-test('delete intent rejects missing targets and unversioned deletes', () => {
+test("silme niyeti eksik hedefi ve sürümsüz silmeyi reddeder", () => {
   assert.deepEqual(findDeleteIntentIssue({
     exists: false,
     version: 'AAAAAAAAAAA=',
@@ -65,7 +65,7 @@ test('delete intent rejects missing targets and unversioned deletes', () => {
   }), null);
 });
 
-test('project metadata validation rejects malformed leads and duplicate or oversized tags', () => {
+test("proje üstveri doğrulaması bozuk lideri yinelenen veya uzun etiketi reddeder", () => {
   const malformedLead = validChanges();
   malformedLead.projectUpserts[0].leadId = '900002abc';
   assert.equal(findCommitProjectWbsIssue(malformedLead)?.code, 'PROJECT_LEAD_INVALID');
@@ -83,7 +83,7 @@ test('project metadata validation rejects malformed leads and duplicate or overs
   assert.equal(findCommitProjectWbsIssue(oversizedTag)?.code, 'COMMIT_TEXT_TOO_LONG');
 });
 
-test('project and WBS SQL scalar limits are enforced before repository execution', () => {
+test("proje ve WBS SQL skaler sınırı depo yürütmesinden önce uygulanır", () => {
   const blankProject = validChanges();
   blankProject.projectUpserts[0].name = '   ';
   assert.equal(findCommitProjectWbsIssue(blankProject)?.path, 'projectUpserts[0].name');
@@ -107,7 +107,7 @@ test('project and WBS SQL scalar limits are enforced before repository execution
   assert.equal(findCommitProjectWbsIssue(validChanges()), null);
 });
 
-test('commit scalar canonicalization trims values before validation and SQL binding', () => {
+test("kayıt kanonikleştirmesi değeri doğrulama ve SQL bağından önce kırpar", () => {
   const canonical = canonicalizeCommitScalars({
     projectUpserts: [{
       name: '  Proje  ',
@@ -141,7 +141,7 @@ test('commit scalar canonicalization trims values before validation and SQL bind
   assert.equal(canonical.taskUpserts[0].deps[0].lagUnit, 'day');
 });
 
-test('commit route and ordered repository enforce all new boundaries', () => {
+test("kayıt yolu ve sıralı depo bütün yeni sınırları uygular", () => {
   const route = read('src/app/api/mergen-rota/commit/route.js');
   const ordered = read('src/server/repository/orderedSqlAppRepository.js');
   const intent = read('src/server/repository/upsertIntentValidation.js');
@@ -199,7 +199,7 @@ async function disclosureStack(sicil) {
   }, { sicil });
 }
 
-/** Raw probes cover the proof gate; normal requests follow the allocation protocol. */
+/** Ham yoklama kanıt kapısını sınar; olağan istek tahsis protokolünü izler. */
 async function sendCommit(changes, { raw = false } = {}) {
   changes = canonicalizeCommitChanges(changes);
   const post = (body) => fetch('http://localhost/api/mergen-rota/commit', { method: 'POST', body: JSON.stringify(body) });
@@ -638,7 +638,7 @@ test('gizli ve olmayan hedef projeler aynı tam yanıtı verir; görünür ve ku
       assert.equal(hidden.status, 400);
       assert.notEqual(JSON.parse(hidden.body).error.details?.code, 'CREATION_ALLOCATION_INVALID');
       assert.equal(stack.db.creationAllocations.length, 1, 'destination rejection rolls proof consumption back');
-      // Reuse the SAME valid proof after the authorized destination disappears.
+      // Yetkili hedef kaybolduktan sonra aynı geçerli kanıt yeniden kullanılır.
       const row = stack.db.projects.findIndex((item) => String(item.ProjectId).toLowerCase() === MANUAL_PROJECT_ID);
       const [removed] = stack.db.projects.splice(row, 1);
       const missing = await attempt();
@@ -658,7 +658,7 @@ test('gizli ve olmayan hedef projeler aynı tam yanıtı verir; görünür ve ku
   }
 });
 
-test('assignment-only creation ignores client labels and rejects invalid personnel scope', async () => {
+test("yalnız atamayla oluşturma istemci etiketini yok sayar ve geçersiz personel kapsamını reddeder", async () => {
   const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
   const stack = await disclosureStack(MANAGER_SICIL);
   try {
@@ -672,7 +672,7 @@ test('assignment-only creation ignores client labels and rejects invalid personn
   } finally { await stack.dispose(); }
 });
 
-test('unauthorized allocation rejection is independent of hidden task/WBS client labels', async () => {
+test("yetkisiz tahsis reddi gizli görev ve WBS istemci etiketinden bağımsızdır", async () => {
   const { CORPORATE_PROJECT_ID } = await import('./helpers/actualStack.mjs');
   const stack = await disclosureStack(PLAIN_SICIL);
   try {
@@ -686,12 +686,12 @@ test('unauthorized allocation rejection is independent of hidden task/WBS client
 });
 
 for (const scenario of ['corporate-wbs', 'narrow-assignees', 'narrow-fields', 'assignment-wbs', 'missing-dependency', 'hidden-dependency', 'missing-parent']) {
-  test(`invalid allocation ignores hidden/unused client labels (${scenario})`, async () => {
+  test(`geçersiz tahsis gizli ve kullanılmayan istemci etiketini yok sayar (${scenario})`, async () => {
     const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
     const narrow = scenario.startsWith('narrow');
     const stack = await disclosureStack(narrow ? PLAIN_SICIL : MANAGER_SICIL);
     try {
-      // These labels name hidden rows, but allocation must replace them before any entity mutation.
+      // Bu etiketler gizli satırı adlandırır; tahsis varlık değişiminden önce yerlerini değiştirmelidir.
       const hidden = stack.db.tasks.find((row) => row.TaskId.toLowerCase() === HIDDEN_TASK_ID);
       hidden.ProjectId = MANUAL_PROJECT_ID; hidden.WbsId = MANUAL_ROOT_WBS_ID;
       if (narrow) stack.db.taskAssignees.find((row) => row.TaskId.toLowerCase() === LONE_TASK_ID).Sicil = PLAIN_SICIL;
@@ -727,7 +727,7 @@ for (const scenario of ['corporate-wbs', 'narrow-assignees', 'narrow-fields', 'a
   });
 }
 
-test('otherwise authorized creation now closes F-024 without overwrite or replacement on collision', async () => {
+test("yetkili oluşturma kimlik çakışmasında üzerine yazmayı ve değiştirmeyi engeller", async () => {
   const { CORPORATE_PROJECT_ID, CORPORATE_ROOT_WBS_ID } = await import('./helpers/actualStack.mjs');
   const stack = await disclosureStack(PLAIN_SICIL);
   try {
@@ -744,7 +744,7 @@ test('otherwise authorized creation now closes F-024 without overwrite or replac
   } finally { await stack.dispose(); }
 });
 
-test('rejected project allocations validate codes independently of client labels', async () => {
+test("reddedilmiş proje tahsisi kodu istemci etiketinden bağımsız doğrular", async () => {
   const { CORPORATE_PROJECT_ID } = await import('./helpers/actualStack.mjs');
   const stack = await disclosureStack(MANAGER_SICIL);
   try {
@@ -769,7 +769,7 @@ test('rejected project allocations validate codes independently of client labels
   } finally { await stack.dispose(); }
 });
 
-test('project-create intent stays independent of candidate rows until calendar and root validation finish', async () => {
+test("proje oluşturma niyeti takvim ve kök doğrulaması bitene kadar aday satırından bağımsızdır", async () => {
   const stack = await disclosureStack(MANAGER_SICIL);
   try {
     const attempt = async (candidate, invalid) => {
@@ -785,7 +785,7 @@ test('project-create intent stays independent of candidate rows until calendar a
   } finally { await stack.dispose(); }
 });
 
-test('unallocated project/root candidates reject before collision; allocated creation succeeds', async () => {
+test("tahsissiz proje ve kök adayı çakışmadan önce reddedilir; tahsisli oluşturma başarılıdır", async () => {
   const stack = await disclosureStack(MANAGER_SICIL);
   try {
     const before = JSON.stringify([stack.db.projects, stack.db.wbs]);

@@ -6,14 +6,14 @@ import {
   toPersistenceStatus
 } from '../src/data/api/createApiRepository.js';
 
-test('Actual mode strips local creation prefixes and keeps valid UUIDs', () => {
+test("gerçek kip yerel oluşturma öneklerini kaldırır ve geçerli UUID değerlerini korur", () => {
   const value = 'task-2d9f0b82-bf72-4b9d-b44e-21506f486697';
   assert.equal(toActualUuid(value), '2d9f0b82-bf72-4b9d-b44e-21506f486697');
   assert.equal(toActualUuid('2d9f0b82-bf72-4b9d-b44e-21506f486697'), '2d9f0b82-bf72-4b9d-b44e-21506f486697');
   assert.equal(toActualUuid(null), null);
 });
 
-test('current Task status vocabulary round-trips through SQL boundary', () => {
+test("güncel görev durum sözlüğü SQL sınırında saklanıp okunur", () => {
   assert.equal(toPersistenceStatus('todo'), 'planned');
   assert.equal(toPersistenceStatus('in_progress'), 'in-progress');
   assert.equal(toPersistenceStatus('done'), 'done');

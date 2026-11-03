@@ -228,8 +228,8 @@ export function isWorkingDay(value, calendar = DEFAULT_CALENDAR) {
   return workingDaysOf(calendar).includes(date.getDay()) && !holidayFor(date, calendar);
 }
 
-// Only plain, holiday-free calendars use arithmetic. Accessor-backed or malformed
-// calendars retain the metered search and its existing per-operation limits.
+// Yalnızca düz ve tatilsiz takvim aritmetik kullanır. Erişimci içeren veya bozuk
+// takvim sayaçlı aramayı ve mevcut işlem başına sınırı korur.
 function weeklyPattern(calendar) {
   const days = Object.getOwnPropertyDescriptor(calendar || DEFAULT_CALENDAR, 'workingDays');
   const holidays = Object.getOwnPropertyDescriptor(calendar || DEFAULT_CALENDAR, 'holidays');
@@ -285,7 +285,7 @@ export function addWorkingDays(value, amount, calendar = DEFAULT_CALENDAR) {
 
   const pattern = activeScanMeter?.weeklyArithmetic ? weeklyPattern(calendar) : null;
   if (pattern?.size) {
-    // Leave the final partial week to the normal scan (including its meter).
+    // Son kısmi hafta sayaç dahil olağan taramaya bırakılır.
     const weeks = Math.floor((remaining - 1) / pattern.size);
     current = addDays(current, direction * weeks * 7);
     remaining -= weeks * pattern.size;
@@ -338,9 +338,9 @@ export function diffWorkingDays(a, b, calendar = DEFAULT_CALENDAR) {
 }
 
 function countWorkingDaysByWeeks(first, last, calendar, maxCount) {
-  // Count whole weeks instead of scanning every date. Fresh snapshots cannot
-  // reuse prior task objects; their individually valid spans must not exhaust
-  // a transient aggregate day-scan meter. Work is O(7 + holiday input size).
+  // Her günü taramak yerine tam haftalar sayılır. Yeni görüntüler önceki
+  // önceki görev nesnesini kullanabilir; tekil geçerli aralıklar geçici toplam
+  // gün tarama sayacını tüketmemelidir. İş maliyeti O(7 + tatil girdisi boyutu) olur.
   const dayNumber = (date) => {
     const utc = new Date(0);
     utc.setUTCFullYear(date.getFullYear(), date.getMonth(), date.getDate());

@@ -157,7 +157,7 @@ export function resolveEvidenceSelection(answer, { evidenceIds = [], evidencePay
  */
 function renderableFacts(request, items, evidence, answer, emptyProperties = []) {
   const rendered = [...items];
-  // Completeness-dependent prose uses canonical facts from the same verified, population-matching source.
+  // Tamlığa bağlı anlatım aynı doğrulanmış ve nüfusu eşleşen kaynağın kanonik olgularını kullanır.
   for (const evidenceId of new Set(items.map((item) => item.evidenceId))) {
     const source = evidence.get(evidenceId);
     if (source?.tool !== 'rota_workload_summary' || !source.populationMatch || !source.dimensionsMatch) continue;

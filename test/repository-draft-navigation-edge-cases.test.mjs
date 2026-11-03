@@ -33,7 +33,7 @@ function seed() {
   };
 }
 
-test('repository error codes are frozen and stable', () => {
+test("depo hata kodları donmuş ve kararlıdır", () => {
   assert.equal(Object.isFrozen(REPOSITORY_ERROR_CODES), true);
   assert.deepEqual(REPOSITORY_ERROR_CODES, {
     LOAD_FAILED: 'LOAD_FAILED',
@@ -46,7 +46,7 @@ test('repository error codes are frozen and stable', () => {
   });
 });
 
-test('AppRepositoryError exposes repository metadata and Error semantics', () => {
+test("AppRepositoryError depo üstverisini ve Error anlamını sunar", () => {
   const cause = new Error('root cause');
   const error = new AppRepositoryError({
     code: 'X', message: 'Boom', operation: 'save', details: { id: 1 }, cause
@@ -60,13 +60,13 @@ test('AppRepositoryError exposes repository metadata and Error semantics', () =>
   assert.strictEqual(error.cause, cause);
 });
 
-test('AppRepositoryError defaults details to null and omits an absent cause', () => {
+test("AppRepositoryError ayrıntıyı boş varsayar ve eksik nedeni eklemez", () => {
   const error = new AppRepositoryError({ code: 'X', message: 'Boom', operation: 'save' });
   assert.equal(error.details, null);
   assert.equal('cause' in error, false);
 });
 
-test('normalizeRepositoryError preserves structured repository errors', () => {
+test("normalizeRepositoryError yapısal depo hatasını korur", () => {
   const error = new AppRepositoryError({
     code: 'LOAD_FAILED', message: 'Load', operation: 'loadSnapshot', details: { retry: true }
   });
@@ -75,7 +75,7 @@ test('normalizeRepositoryError preserves structured repository errors', () => {
   });
 });
 
-test('normalizeRepositoryError applies explicit fallback fields to generic errors', () => {
+test("normalizeRepositoryError genel hataya açık dönüş alanlarını uygular", () => {
   assert.deepEqual(normalizeRepositoryError(new Error('raw'), {
     code: 'CUSTOM', message: 'Friendly', operation: 'custom', details: { source: 'x' }
   }), {
@@ -83,7 +83,7 @@ test('normalizeRepositoryError applies explicit fallback fields to generic error
   });
 });
 
-test('normalizeRepositoryError supplies mutation defaults for generic errors', () => {
+test("normalizeRepositoryError genel hataya değişim varsayılanını sağlar", () => {
   assert.deepEqual(normalizeRepositoryError(new Error('raw')), {
     code: 'MUTATION_FAILED',
     message: 'Değişiklik kaydedilemedi.',
@@ -92,7 +92,7 @@ test('normalizeRepositoryError supplies mutation defaults for generic errors', (
   });
 });
 
-test('assertAppRepository returns a valid repository unchanged', () => {
+test("assertAppRepository geçerli depoyu değiştirmeden döndürür", () => {
   const repository = { loadSnapshot() {}, commitChanges() {} };
   assert.strictEqual(assertAppRepository(repository), repository);
 });
@@ -104,16 +104,16 @@ for (const [name, repository] of [
   ['non-function loadSnapshot', { loadSnapshot: true, commitChanges() {} }],
   ['non-function commitChanges', { loadSnapshot() {}, commitChanges: true }]
 ]) {
-  test(`assertAppRepository rejects ${name}`, () => {
+  test(`assertAppRepository ${name} değerini reddeder`, () => {
     assert.throws(() => assertAppRepository(repository), /loadSnapshot\(\).*commitChanges\(\)/);
   });
 }
 
-test('mock repository identifies itself as async memory storage', () => {
+test("sahte depo kendini asenkron bellek deposu diye tanımlar", () => {
   assert.equal(createMockRepository(seed()).kind, 'async-memory');
 });
 
-test('mock repository loadSnapshot returns a deep clone', async () => {
+test("sahte depo loadSnapshot derin kopya döndürür", async () => {
   const repository = createMockRepository(seed());
   const first = await repository.loadSnapshot();
   first.tasks[0].task = 'Mutated outside';
@@ -123,14 +123,14 @@ test('mock repository loadSnapshot returns a deep clone', async () => {
   assert.equal(second.wbs.some((node) => node.id === 'outside'), false);
 });
 
-test('mock repository custom seed is cloned at construction time', async () => {
+test("sahte depo özel başlangıç verisini kurulurken kopyalar", async () => {
   const original = seed();
   const repository = createMockRepository(original);
   original.tasks[0].task = 'Changed after construction';
   assert.equal((await repository.loadSnapshot()).tasks[0].task, 'One');
 });
 
-test('mock repository updates existing tasks in place', async () => {
+test("sahte depo mevcut görevi yerinde günceller", async () => {
   const repository = createMockRepository(seed());
   const result = await repository.commitChanges({ taskUpserts: [{ ...seed().tasks[0], task: 'Updated' }] });
   const loaded = await repository.loadSnapshot();
@@ -139,25 +139,25 @@ test('mock repository updates existing tasks in place', async () => {
   assert.equal(result.taskUpserts[0].task, 'Updated');
 });
 
-test('mock repository prepends newly inserted tasks', async () => {
+test("sahte depo yeni görevi başa ekler", async () => {
   const repository = createMockRepository(seed());
   await repository.commitChanges({ taskUpserts: [{ id: 't3', task: 'Three' }] });
   assert.deepEqual((await repository.loadSnapshot()).tasks.map((task) => task.id), ['t3', 't1', 't2']);
 });
 
-test('mock repository deletes tasks', async () => {
+test("sahte depo görev siler", async () => {
   const repository = createMockRepository(seed());
   await repository.commitChanges({ taskDeletes: ['t1'] });
   assert.deepEqual((await repository.loadSnapshot()).tasks.map((task) => task.id), ['t2']);
 });
 
-test('mock repository deduplicates deletion IDs in commit results', async () => {
+test("sahte depo sonuçtaki silme kimliklerini tekilleştirir", async () => {
   const repository = createMockRepository(seed());
   const result = await repository.commitChanges({ taskDeletes: ['t1', 't1', 't2'] });
   assert.deepEqual(result.taskDeletes, ['t1', 't2']);
 });
 
-test('mock repository rejects a change set that both upserts and deletes one task', async () => {
+test("sahte depo aynı görevi güncelleyip silen değişimi reddeder", async () => {
   // Eskiden silme kazanıyor, ekleme sessizce düşüyor ve çağrı yine de başarıyla
   // çözülüyordu: istemci durumu ile depo anlık görüntüsü ayrışıyordu.
   const repository = createMockRepository(seed());
@@ -172,7 +172,7 @@ test('mock repository rejects a change set that both upserts and deletes one tas
   assert.equal((await repository.loadSnapshot()).tasks.some((task) => task.id === 't1'), true);
 });
 
-test('mock repository rejects a change set that inserts and deletes the same new task id', async () => {
+test("sahte depo aynı yeni görevi ekleyip silen değişimi reddeder", async () => {
   const repository = createMockRepository(seed());
   await assert.rejects(
     () => repository.commitChanges({ taskUpserts: [{ id: 't3', task: 'Three' }], taskDeletes: ['t3'] }),
@@ -181,7 +181,7 @@ test('mock repository rejects a change set that inserts and deletes the same new
   assert.equal((await repository.loadSnapshot()).tasks.some((task) => task.id === 't3'), false);
 });
 
-test('mock repository updates existing WBS nodes without changing collection order', async () => {
+test("sahte depo mevcut WBS düğümünü koleksiyon sırasını bozmadan günceller", async () => {
   const repository = createMockRepository(seed());
   await repository.commitChanges({ wbsUpserts: [{ ...seed().wbs[1], name: 'Renamed' }] });
   const loaded = await repository.loadSnapshot();
@@ -189,7 +189,7 @@ test('mock repository updates existing WBS nodes without changing collection ord
   assert.equal(loaded.wbs[1].name, 'Renamed');
 });
 
-test('mock repository appends new WBS nodes', async () => {
+test("sahte depo yeni WBS düğümünü sona ekler", async () => {
   const repository = createMockRepository(seed());
   await repository.commitChanges({
     wbsUpserts: [{ id: 'new', projectId: 'p1', parentId: 'root', code: '1.2', name: 'New' }]
@@ -197,27 +197,27 @@ test('mock repository appends new WBS nodes', async () => {
   assert.deepEqual((await repository.loadSnapshot()).wbs.map((node) => node.id), ['root', 'leaf', 'new']);
 });
 
-test('mock repository deletes WBS nodes', async () => {
+test("sahte depo WBS düğümünü siler", async () => {
   const repository = createMockRepository(seed());
   await repository.commitChanges({ wbsDeletes: ['leaf'] });
   assert.deepEqual((await repository.loadSnapshot()).wbs.map((node) => node.id), ['root']);
 });
 
-test('mock repository normalizes omitted change collections to empty arrays', async () => {
+test("sahte depo atlanan değişim koleksiyonunu boş diziye çevirir", async () => {
   const repository = createMockRepository(seed());
   assert.deepEqual(await repository.commitChanges(), {
     taskUpserts: [], taskDeletes: [], wbsUpserts: [], wbsDeletes: []
   });
 });
 
-test('mock repository commit results are deep clones', async () => {
+test("sahte depo kayıt sonuçları derin kopyadır", async () => {
   const repository = createMockRepository(seed());
   const result = await repository.commitChanges({ taskUpserts: [{ ...seed().tasks[0], task: 'Updated' }] });
   result.taskUpserts[0].task = 'Mutated result';
   assert.equal((await repository.loadSnapshot()).tasks[0].task, 'Updated');
 });
 
-test('mock repository instances do not share mutation state', async () => {
+test("sahte depo örnekleri değişim durumunu paylaşmaz", async () => {
   const first = createMockRepository(seed());
   const second = createMockRepository(seed());
   await first.commitChanges({ taskDeletes: ['t1'] });
@@ -225,7 +225,7 @@ test('mock repository instances do not share mutation state', async () => {
   assert.equal((await second.loadSnapshot()).tasks.length, 2);
 });
 
-test('mock repository failNextMutation fails exactly one commit', async () => {
+test("sahte depo failNextMutation tam bir kaydı başarısız yapar", async () => {
   const repository = createMockRepository(seed(), { failNextMutation: true });
   await assert.rejects(repository.commitChanges({ taskDeletes: ['t1'] }), (error) => {
     assert.equal(error instanceof AppRepositoryError, true);
@@ -237,13 +237,13 @@ test('mock repository failNextMutation fails exactly one commit', async () => {
   assert.equal((await repository.loadSnapshot()).tasks.some((task) => task.id === 't1'), false);
 });
 
-test('mock repository failed mutations do not change stored data', async () => {
+test("sahte depoda başarısız değişim kayıtlı veriyi değiştirmez", async () => {
   const repository = createMockRepository(seed(), { failNextMutation: true });
   await assert.rejects(repository.commitChanges({ taskDeletes: ['t1'] }));
   assert.deepEqual((await repository.loadSnapshot()).tasks.map((task) => task.id), ['t1', 't2']);
 });
 
-test('mock repository failMutation callback receives sequential attempt numbers', async () => {
+test("sahte depo failMutation sıralı deneme numarası alır", async () => {
   const attempts = [];
   const repository = createMockRepository(seed(), {
     failMutation(context) {
@@ -257,7 +257,7 @@ test('mock repository failMutation callback receives sequential attempt numbers'
   assert.deepEqual(attempts, [1, 2, 3]);
 });
 
-test('mock repository failMutation callback receives cloned changes', async () => {
+test("sahte depo failMutation kopyalanmış değişim alır", async () => {
   let seen;
   const changes = { taskUpserts: [{ id: 't3', task: 'Three' }] };
   const repository = createMockRepository(seed(), {
@@ -272,7 +272,7 @@ test('mock repository failMutation callback receives cloned changes', async () =
   assert.notStrictEqual(seen, changes);
 });
 
-test('mock repository failLoad callback receives sequential attempt numbers', async () => {
+test("sahte depo failLoad sıralı deneme numarası alır", async () => {
   const attempts = [];
   const repository = createMockRepository(seed(), {
     failLoad(context) {
@@ -289,53 +289,53 @@ test('mock repository failLoad callback receives sequential attempt numbers', as
   assert.deepEqual(attempts, [1, 2]);
 });
 
-test('task draft equality uses Object.is for primitive values', () => {
+test("görev taslak eşitliği ilkel değer için Object.is kullanır", () => {
   assert.equal(taskDraftValuesEqual(Number.NaN, Number.NaN), true);
   assert.equal(taskDraftValuesEqual(0, -0), false);
   assert.equal(taskDraftValuesEqual('x', 'x'), true);
   assert.equal(taskDraftValuesEqual('x', 'y'), false);
 });
 
-test('task draft equality compares nested arrays recursively', () => {
+test("görev taslak eşitliği iç diziyi özyinelemeli karşılaştırır", () => {
   assert.equal(taskDraftValuesEqual([1, ['x', { a: 2 }]], [1, ['x', { a: 2 }]]), true);
   assert.equal(taskDraftValuesEqual([1, ['x', { a: 2 }]], [1, ['x', { a: 3 }]]), false);
 });
 
-test('task draft equality rejects array and non-array mismatches', () => {
+test("görev taslak eşitliği dizi ve dizi olmayan uyuşmazlığını reddeder", () => {
   assert.equal(taskDraftValuesEqual([], {}), false);
   assert.equal(taskDraftValuesEqual([], null), false);
 });
 
-test('task draft equality rejects arrays with different lengths', () => {
+test("görev taslak eşitliği farklı uzunluklu diziyi reddeder", () => {
   assert.equal(taskDraftValuesEqual([1], [1, 2]), false);
 });
 
-test('task draft equality ignores object key insertion order', () => {
+test("görev taslak eşitliği nesne anahtarı eklenme sırasını yok sayar", () => {
   assert.equal(taskDraftValuesEqual({ a: 1, b: 2 }, { b: 2, a: 1 }), true);
 });
 
-test('task draft equality rejects objects with different key sets', () => {
+test("görev taslak eşitliği farklı anahtar kümeli nesneyi reddeder", () => {
   assert.equal(taskDraftValuesEqual({ a: 1 }, { a: 1, b: undefined }), false);
 });
 
-test('task draft equality rejects record and primitive mismatches', () => {
+test("görev taslak eşitliği kayıt ve ilkel değer uyuşmazlığını reddeder", () => {
   assert.equal(taskDraftValuesEqual({ a: 1 }, 1), false);
 });
 
-test('reconcileTaskDraft defaults a missing local draft to canonical data', () => {
+test("reconcileTaskDraft eksik yerel taslağı kanonik veriye döndürür", () => {
   const canonical = { id: 't1', task: 'Canonical' };
   const result = reconcileTaskDraft(canonical, null, new Set(['task']));
   assert.deepEqual(result.task, canonical);
   assert.equal(result.dirtyFields.size, 0);
 });
 
-test('reconcileTaskDraft defaults a missing canonical task to an empty record', () => {
+test("reconcileTaskDraft eksik kanonik görevi boş kayda döndürür", () => {
   const result = reconcileTaskDraft(null, { task: 'Local' }, new Set(['task']));
   assert.equal(result.task.task, 'Local');
   assert.deepEqual([...result.dirtyFields], ['task']);
 });
 
-test('reconcileTaskDraft preserves only fields marked dirty from the local draft', () => {
+test("reconcileTaskDraft yalnızca değişmiş işaretli yerel alanı korur", () => {
   const result = reconcileTaskDraft(
     { task: 'Server', status: 'done', description: 'Server note' },
     { task: 'Local', status: 'todo', description: 'Local note' },
@@ -344,38 +344,38 @@ test('reconcileTaskDraft preserves only fields marked dirty from the local draft
   assert.deepEqual(result.task, { task: 'Local', status: 'done', description: 'Local note' });
 });
 
-test('reconcileTaskDraft clears dirty fields that match canonical values', () => {
+test("reconcileTaskDraft kanonik değerle eşleşen değişmiş alanı temizler", () => {
   const result = reconcileTaskDraft({ task: 'Same' }, { task: 'Same' }, new Set(['task']));
   assert.equal(result.dirtyFields.size, 0);
 });
 
-test('reconcileTaskDraft does not mutate the supplied dirty field set', () => {
+test("reconcileTaskDraft verilen değişmiş alan kümesini değiştirmez", () => {
   const dirty = new Set(['task']);
   reconcileTaskDraft({ task: 'Same' }, { task: 'Same' }, dirty);
   assert.deepEqual([...dirty], ['task']);
 });
 
-test('reconcileTaskDraft leaves a missing local dirty field marked dirty without inventing a value', () => {
+test("reconcileTaskDraft eksik yerel alanı değer uydurmadan değişmiş tutar", () => {
   const result = reconcileTaskDraft({ task: 'Server' }, {}, new Set(['task']));
   assert.equal(result.task.task, 'Server');
   assert.deepEqual([...result.dirtyFields], ['task']);
 });
 
-test('task update tracker starts idle and successful', async () => {
+test("görev güncelleme izleyicisi boş ve başarılı başlar", async () => {
   const tracker = createTaskUpdateTracker();
   assert.equal(tracker.getPendingCount(), 0);
   assert.equal(tracker.getFailure(), null);
   assert.deepEqual(await tracker.waitForIdle(), { ok: true, value: null });
 });
 
-test('task update tracker accepts non-Promise results', async () => {
+test("görev güncelleme izleyicisi Promise olmayan sonucu kabul eder", async () => {
   const tracker = createTaskUpdateTracker();
   const result = await tracker.track({ ok: true, value: 42 });
   assert.deepEqual(result, { ok: true, value: 42 });
   assert.equal(tracker.getPendingCount(), 0);
 });
 
-test('task update tracker converts rejected promises into structured failed results', async () => {
+test("görev güncelleme izleyicisi reddedilen sözü yapısal hata sonucuna çevirir", async () => {
   const tracker = createTaskUpdateTracker();
   const error = new Error('save failed');
   const result = await tracker.track(Promise.reject(error));
@@ -384,7 +384,7 @@ test('task update tracker converts rejected promises into structured failed resu
   assert.deepEqual(tracker.getFailure(), result);
 });
 
-test('task update tracker keeps the first failure when multiple operations fail', async () => {
+test("görev güncelleme izleyicisi çok hatada ilkini korur", async () => {
   const tracker = createTaskUpdateTracker();
   const first = { ok: false, error: { code: 'FIRST' } };
   const second = { ok: false, error: { code: 'SECOND' } };
@@ -393,7 +393,7 @@ test('task update tracker keeps the first failure when multiple operations fail'
   assert.equal(tracker.getFailure().error.code, 'FIRST');
 });
 
-test('task update tracker clearFailure restores a successful idle result', async () => {
+test("görev izleyicisi clearFailure başarılı boş sonucu geri getirir", async () => {
   const tracker = createTaskUpdateTracker();
   await tracker.track({ ok: false, error: { code: 'X' } });
   tracker.clearFailure();
@@ -401,16 +401,16 @@ test('task update tracker clearFailure restores a successful idle result', async
   assert.deepEqual(await tracker.waitForIdle(), { ok: true, value: null });
 });
 
-test('navigation item IDs are unique', () => {
+test("gezinme öğesi kimlikleri tekildir", () => {
   const ids = NAV_ITEMS.map((item) => item.id);
   assert.equal(new Set(ids).size, ids.length);
 });
 
-test('navigation metadata covers every navigation item exactly once', () => {
+test("gezinme üstverisi her öğeyi tam bir kez kapsar", () => {
   assert.deepEqual(Object.keys(PAGE_META).sort(), NAV_ITEMS.map((item) => item.id).sort());
 });
 
-test('every navigation item has a non-empty label and icon', () => {
+test("her gezinme öğesinin dolu etiketi ve simgesi vardır", () => {
   for (const item of NAV_ITEMS) {
     assert.equal(typeof item.label, 'string');
     assert.equal(item.label.trim().length > 0, true);
@@ -419,19 +419,19 @@ test('every navigation item has a non-empty label and icon', () => {
   }
 });
 
-test('every page metadata entry has a non-empty title and subtitle', () => {
+test("her sayfa üstverisinde dolu başlık ve alt başlık vardır", () => {
   for (const meta of Object.values(PAGE_META)) {
     assert.equal(meta.title.trim().length > 0, true);
     assert.equal(meta.sub.trim().length > 0, true);
   }
 });
 
-test('navigation labels and page titles stay aligned', () => {
+test("gezinme etiketi ve sayfa başlığı uyumlu kalır", () => {
   for (const item of NAV_ITEMS) {
     assert.equal(PAGE_META[item.id].title, item.label);
   }
 });
 
-test('team page retains its explicit team tab identifier', () => {
+test("ekip sayfası açık ekip sekme kimliğini korur", () => {
   assert.equal(PAGE_META.kisi.tab, 'kisi');
 });

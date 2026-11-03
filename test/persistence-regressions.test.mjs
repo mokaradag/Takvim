@@ -33,7 +33,7 @@ async function createHarness(repository = createMockRepository(), options = {}) 
   };
 }
 
-test('Task Detail draft equality handles nested arrays and dependency objects', () => {
+test("görev ayrıntısı taslak eşitliği iç dizi ve bağımlılık nesnesini işler", () => {
   const left = [{ id: 't2', type: 'FS', lag: 2 }, { id: 't3', type: 'SS' }];
   const same = [{ id: 't2', type: 'FS', lag: 2 }, { id: 't3', type: 'SS' }];
   const changed = [{ id: 't2', type: 'FS', lag: 3 }, { id: 't3', type: 'SS' }];
@@ -42,7 +42,7 @@ test('Task Detail draft equality handles nested arrays and dependency objects', 
   assert.equal(taskDraftValuesEqual(left, changed), false);
 });
 
-test('newer dirty Task Detail fields survive an older canonical acknowledgement', () => {
+test("yeni değişmiş görev ayrıntı alanı eski kanonik onayda korunur", () => {
   const canonical = { id: 't1', task: 'A', status: 'done', description: 'Sunucudan' };
   const local = { id: 't1', task: 'AB', status: 'todo', description: 'Yerel' };
   const result = reconcileTaskDraft(canonical, local, new Set(['task']));
@@ -53,7 +53,7 @@ test('newer dirty Task Detail fields survive an older canonical acknowledgement'
   assert.deepEqual([...result.dirtyFields], ['task']);
 });
 
-test('dirty Task Detail fields clear only after canonical data catches up', () => {
+test("değişmiş görev alanı yalnızca kanonik veri yetişince temizlenir", () => {
   const local = {
     id: 't1',
     task: 'Yeni başlık',
@@ -74,7 +74,7 @@ test('dirty Task Detail fields clear only after canonical data catches up', () =
   assert.deepEqual(result.task.deps, [{ id: 't2', type: 'FS' }]);
 });
 
-test('Task Detail update tracker waits for an in-flight save before allowing close', async () => {
+test("görev ayrıntısı izleyicisi kapatmadan önce süren kaydı bekler", async () => {
   const tracker = createTaskUpdateTracker();
   let release;
   const save = new Promise((resolve) => { release = resolve; });
@@ -96,7 +96,7 @@ test('Task Detail update tracker waits for an in-flight save before allowing clo
   assert.equal(tracker.getPendingCount(), 0);
 });
 
-test('Task Detail close starts immediately and still reports a failed pending save', async () => {
+test("görev ayrıntısı kapatma hemen başlar ve bekleyen başarısız kaydı bildirir", async () => {
   const tracker = createTaskUpdateTracker();
   let releaseSave;
   const save = new Promise((resolve) => { releaseSave = resolve; });
@@ -114,12 +114,12 @@ test('Task Detail close starts immediately and still reports a failed pending sa
   assert.deepEqual(await closing, failure);
 });
 
-test('an older Task Detail close cannot clear the saving state of a newer task', () => {
+test("eski ayrıntı kapatması yeni görevin kayıt durumunu temizleyemez", () => {
   assert.equal(clearCompletedClosingTaskId('task-2', 'task-1'), 'task-2');
   assert.equal(clearCompletedClosingTaskId('task-2', 'task-2'), null);
 });
 
-test('Task Detail update tracker remembers a failure even after the failed save settles', async () => {
+test("görev güncelleme izleyicisi başarısız kayıt sonuçlansa da hatayı hatırlar", async () => {
   const tracker = createTaskUpdateTracker();
   const failed = {
     ok: false,
@@ -135,7 +135,7 @@ test('Task Detail update tracker remembers a failure even after the failed save 
   assert.equal((await tracker.waitForIdle()).ok, true);
 });
 
-test('Task Detail update tracker keeps an earlier failure sticky across a later successful save', async () => {
+test("görev güncelleme izleyicisi sonraki başarılı kayıtta eski hatayı korur", async () => {
   const tracker = createTaskUpdateTracker();
   const failed = {
     ok: false,
@@ -150,7 +150,7 @@ test('Task Detail update tracker keeps an earlier failure sticky across a later 
   assert.equal(result.error.code, 'MUTATION_FAILED');
 });
 
-test('Task Detail update tracker also waits for work added while a close wait is already running', async () => {
+test("görev güncelleme izleyicisi kapatma beklerken eklenen işi de bekler", async () => {
   const tracker = createTaskUpdateTracker();
   let releaseFirst;
   let releaseSecond;
@@ -166,7 +166,7 @@ test('Task Detail update tracker also waits for work added while a close wait is
   assert.equal((await waiting).ok, true);
 });
 
-test('persistence reducer keeps an earlier save error through later start and success actions', async () => {
+test("kalıcılık indirgeyicisi sonraki başlangıç ve başarıda eski kayıt hatasını korur", async () => {
   const repository = createMockRepository();
   let state = createInitialState(await repository.loadSnapshot());
   const error = {
@@ -196,7 +196,7 @@ test('persistence reducer keeps an earlier save error through later start and su
   assert.equal(state.saveError, null);
 });
 
-test('a failed coalesced Task edit is retained and retried with the following edit', async () => {
+test("başarısız birleştirilmiş görev düzenlemesi tutulur ve sonraki düzenlemeyle denenir", async () => {
   const memory = createMockRepository();
   let commitCount = 0;
   const repository = {
@@ -232,7 +232,7 @@ test('a failed coalesced Task edit is retained and retried with the following ed
   assert.equal(harness.state.saveError.code, 'MUTATION_FAILED');
 });
 
-test('an in-flight failed Task patch is merged under a newer pending patch', async () => {
+test("süren başarısız görev yaması yeni bekleyen yamanın altına birleştirilir", async () => {
   const memory = createMockRepository();
   let commitCount = 0;
   const committedChanges = [];
@@ -278,7 +278,7 @@ test('an in-flight failed Task patch is merged under a newer pending patch', asy
   harness.persistence.dispose();
 });
 
-test('a failed coalesced Task save keeps the newer local draft available for retry', async () => {
+test("başarısız birleştirilmiş kayıt yeni yerel taslağı yeniden denemeye hazır tutar", async () => {
   const canonicalAfterOlderSave = {
     id: 't1',
     task: 'Older saved value',

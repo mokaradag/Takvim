@@ -178,7 +178,7 @@ async function drain() {
   for (let round = 0; round < 6; round += 1) await immediate();
 }
 
-test('callouts require explicit grounded authorization for display, incremental parsing and copy', () => {
+test("bilgi kutusu gösterim artımlı ayrıştırma ve kopyalama için açık kanıt yetkisi ister", () => {
   const text = '> [!warning]\n> Verified text';
   for (const rotaData of [undefined, false, 'true', true]) {
     const trusted = rotaData === true;
@@ -203,7 +203,7 @@ test('callouts require explicit grounded authorization for display, incremental 
   view.unmount();
 });
 
-test('grounded authorization survives streaming, completion, history reload, reconciliation and an empty retry', async () => {
+test("kanıt yetkisi akış tamamlama geçmiş uzlaştırma ve boş yeniden denemede korunur", async () => {
   const text = '> [!warning]\n> Verified text';
   for (const rotaData of [false, true]) {
     const { controller, api, state } = await readyController();
@@ -264,7 +264,7 @@ test('grounded authorization survives streaming, completion, history reload, rec
   }
 });
 
-test('queued revise after stop clears invalidated text through cancellation', async () => {
+test("durdurma sonrası sıradaki düzenleme iptalle geçersiz metni temizler", async () => {
   const { controller, api, state } = await readyController();
   controller.send('Soru');
   const [turn] = api.turns;

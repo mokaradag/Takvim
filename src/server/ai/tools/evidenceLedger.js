@@ -213,6 +213,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       // Küçük takip bağlamı, büyük kanıtın kendi kalıcı biçimi uğruna sessizce düşmez: hiçbir kanıta biçimi değişmeden
       // sığmadıysa yetki nüfusu korunarak ilk yetkili kanıtın sıkıştırılmış biçimine yazılır (yeniden açılışta veri
       // gösterilmeyen kanıt; yetki ve takip yine güncel yetkiyle doğrulanır).
+      // Satır göndergesi de aynı sınırlı kalıcı bağlamdır; yetki nüfusu sığmazsa yine saklanmaz.
       if (analysisContext && !analysisStored) {
         for (const { entry, payload, clarificationContext, row } of prepared) {
           if (!entry.authorizationEpoch) continue;

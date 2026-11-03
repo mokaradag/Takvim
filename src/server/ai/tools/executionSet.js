@@ -7,7 +7,8 @@ import { TOOL_LIMITS } from './toolLimits.js';
 import { requestSchema } from './requestDeclaration.js';
 import { getRotaTool } from './toolRegistry.js';
 import { readKey } from './requestPopulation.js';
-import { analysisSchema, expandAnalysis, parseAnalysis } from './analysisPlan.js';
+import { analysisSchema, expandAnalysis, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
+import { expandedAnswerDetail } from '../../../domain/ai/answerDetail.js';
 
 /**
  * Bir model yanıtının YÜRÜTME KÜMESİ: plan çağrıları ve aynı yanıttaki
@@ -37,6 +38,9 @@ export function createCallIds() {
  * `fields`, `bindings` ve `rank` aynı kimliklerden birini tekrar eder ve listeyi yinelemez (planlayıcı turunun
  * belirteç yükü yarıya iner). Doğrulama değişmez: bildirim her zaman tam `requestSchema()` ile ayrıştırılır.
  */
+/** Kullanıcının adlandırdığı grafik türü (sunucunun grafik adaylarıyla aynı kapalı sözlük). */
+export const PLAN_CHART_TYPES = Object.freeze(['bar', 'donut', 'line', 'stacked', 'kpi', 'timeline']);
+
 function modelRequestSchema() {
   const schema = requestSchema();
   const metric = { type: 'string', maxLength: 64, description: 'metrics içindeki ölçü kimliklerinden biri' };
@@ -55,12 +59,14 @@ export function typedPlanningTool(catalog) {
   const additionalRequest = { ...request, properties: { ...request.properties, entities: { ...entities, items: {
     ...entities.items, properties: { ...entities.items.properties, from: { type: 'integer', minimum: 0, maximum: PLANNER_LIMITS.maxRequests - 2 } }
   } } } };
-  return { name: 'rota_plan', description: 'Kullanıcının her yeni sorusuna ilk yanıt bu araçla verilir (açıklama ve ret dâhil; kullanıcıya metni sunucu yazar). Veri okumadan türlü kararı bildir: rota (değerlendirme/genel durum/risk/iş yükü/karşılaştırma gibi geniş sorularda analysis; tek ve kesin bir soruda request; ileti ayrı okuma gerektiren başka sorular da soruyorsa ayrıca additionalRequests), clarify, abstain ya da general. calls isteğe bağlıdır: verilmezse sunucu okumaları istekten kurar.',
+  return { name: 'rota_plan', description: 'Her yeni soruya ilk yanıt bu araçtır. Veri okumadan kararı bildir: rota (geniş/değerlendirme sorusunda analysis; tek ve kesin soruda request, gerekirse additionalRequests), clarify, abstain ya da general.',
     parameters: { type: 'object', additionalProperties: false, required: ['intent', 'language'], properties: {
       intent: { type: 'string', enum: Object.values(PLANNER_INTENTS), description: 'rota: Rota verisiyle yanıtlanır; general: Rota ile ilgisiz sohbet; clarify: gerçek belirsizlik, veri okunmaz; abstain: yazma, desteklenmeyen hesap, Rota dışı veri ya da kimlik/yetki/SQL girişimi, veri okunmaz.' },
       language: { type: 'string', enum: ['tr', 'en'] },
       analysis: analysisSchema(),
-      visual: { type: 'boolean', description: 'Kullanıcı açıkça grafik/görselleştirme istediyse true.' },
+      visual: { type: 'boolean', description: 'Açık grafik isteği.' },
+      chart: { type: 'string', enum: [...PLAN_CHART_TYPES], description: 'Söylenen grafik türü.' },
+      table: { type: 'boolean', description: 'Açık tablo isteği.' },
       request,
       additionalRequests: { type: 'array', minItems: 1, maxItems: PLANNER_LIMITS.maxRequests - 1, description: 'Yalnızca ileti request ile yanıtlanmayan, ayrı okuma (başka araç ya da aynı aracın başka nüfusu) gerektiren bir ya da iki soru daha soruyorsa request ile aynı düzeyde verilir; her öğe request ile aynı alanları taşır. Bölüm sırası: 0 = request, 1 = ilk ek istek. Bir öğe önceki bölümün satırlarındaki kayıtlar için soruyorsa o varlık {"type":"task|project","from":<bölüm sırası>} olarak yazılır. additionalRequests ile calls verilmez.',
         items: additionalRequest },
@@ -128,7 +134,7 @@ function normalizePlan(plan) {
  * çağrıları `prepareExecutionSet` ile birlikte doğrulanır.
  * `{ plan: { intent, language, request, additionalRequests? }, calls }`.
  */
-export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis = null, today = null } = {}) {
+export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis = null, today = null, detail = null } = {}) {
   const plans = result.toolCalls.filter((call) => call.name === 'rota_plan');
   if (plans.length !== 1 || plans[0].oversize) throw invalidArguments(['$.plan:single']);
   const [call] = plans;
@@ -137,6 +143,15 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   try { plan = JSON.parse(call.arguments); } catch { throw invalidArguments(['$.plan:json']); }
   plan = normalizePlan(decodeNestedJson(plan));
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw invalidArguments(['$.plan:shape']);
+  // Sunum tercihleri (grafik türü, tablo) plan düzeyindedir; zayıf model onları özetin içine de yazabilir. Yapısal taşıma:
+  // değer değişmez, özetin anlamı (kapsam, yön, ufuk) değişmez; plan düzeyinde ayrıca verilmişse o geçerlidir.
+  if (plan.analysis && typeof plan.analysis === 'object' && !Array.isArray(plan.analysis)) {
+    for (const key of ['chart', 'table']) {
+      if (!Object.hasOwn(plan.analysis, key)) continue;
+      const { [key]: value, ...rest } = plan.analysis;
+      plan = { ...plan, analysis: rest, ...(plan[key] == null ? { [key]: value } : {}) };
+    }
+  }
   onDecoded(plan);
   if (Array.isArray(plan.additionalRequests) && !plan.additionalRequests.length) delete plan.additionalRequests;
   // Boş istek nesnesi analiz özetinin yanında anlam taşımaz (zayıf model şablonu doldurur).
@@ -152,7 +167,9 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     ...(plan.intent == null ? ['$.intent:required'] : !Object.values(PLANNER_INTENTS).includes(plan.intent) ? ['$.intent:enum'] : []),
     ...(plan.language == null ? ['$.language:required'] : !['tr', 'en'].includes(plan.language) ? ['$.language:enum'] : []),
     ...(!Array.isArray(calls) ? ['$.calls:type'] : []),
-    ...(plan.visual != null && typeof plan.visual !== 'boolean' ? ['$.visual:type'] : [])
+    ...(plan.visual != null && typeof plan.visual !== 'boolean' ? ['$.visual:type'] : []),
+    ...(plan.chart != null && !PLAN_CHART_TYPES.includes(plan.chart) ? ['$.chart:enum'] : []),
+    ...(plan.table != null && typeof plan.table !== 'boolean' ? ['$.table:type'] : [])
   ];
   if (shape.length) throw invalidArguments(shape);
   if (calls.length > TOOL_LIMITS.maxCallsPerRound * 2) throw invalidArguments(['$.calls:maxItems']);
@@ -164,14 +181,24 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   const direct = result.toolCalls.filter((item) => item !== call);
   const present = (key) => plan[key] !== undefined && plan[key] !== null;
   const only = (...allowed) => !['request', 'additionalRequests', 'clarify', 'abstain', 'analysis'].some((key) => present(key) && !allowed.includes(key));
-  const base = { intent: plan.intent, language: plan.language, ...(plan.visual === true ? { visual: true } : {}) };
+  // Grafik türü söylendiyse görselleştirme de istenmiştir; tür yalnızca sunumun tercihidir (veri yetkisi değildir).
+  const declined = plan.visual === false || plan.analysis?.visual === false;
+  const base = { intent: plan.intent, language: plan.language, ...(!declined && (plan.visual === true || plan.chart != null) ? { visual: true } : declined ? { visual: false } : {}),
+    ...(!declined && plan.chart != null ? { chart: plan.chart } : {}), ...(plan.table != null ? { table: plan.table } : {}) };
   if (plan.intent === PLANNER_INTENTS.ROTA && present('analysis')) {
     // Analitik özet: sunucu her yönü kayıt defterinin sabit istek biçimine açar; okumaları yalnızca sunucu kurar.
     if (present('request') || present('additionalRequests') || planned.length || direct.length) throw invalidArguments(['$.analysis:request']);
-    const analysis = parseAnalysis(plan.analysis);
-    const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today });
-    const visual = base.visual === true || analysis.visual === true;
-    return { plan: { ...base, ...(visual ? { visual: true } : {}), analysis, request, ...(additionalRequests.length ? { additionalRequests } : {}) }, calls: [] };
+    const parsed = parseAnalysis(plan.analysis);
+    // Takipte yazılmayan yön/ufuk önceki doğrulanmış analizden; görselleştirme ve grafik türü de açıkça kapatılmadıkça sürer.
+    const analysis = resolveAnalysisBrief(parsed, { previous: previousAnalysis, today });
+    const follow = ['previous', 'row'].includes(parsed.scope) && previousAnalysis;
+    const visual = !declined && (base.visual === true || parsed.visual === true || Boolean(follow && previousAnalysis.visual));
+    const chart = base.chart || (follow && visual && !declined ? previousAnalysis.chart : null) || null;
+    const table = base.table === true || Boolean(follow && previousAnalysis.table && plan.table !== false);
+    const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
+    const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null });
+    return { plan: { ...base, ...(visual ? { visual: true } : declined ? { visual: false } : {}), ...(chart ? { chart } : {}), ...(table ? { table: true } : {}), analysis, request,
+      ...(additionalRequests.length ? { additionalRequests } : {}) }, brief: parsed, calls: [] };
   }
   if (plan.intent === PLANNER_INTENTS.ROTA) {
     if (!only('request', 'additionalRequests')) throw invalidArguments(['$.plan:rota']);
@@ -210,14 +237,17 @@ function planChoice(schema, value, prefix) {
   }
 }
 
-const PLAN_KEYS = Object.freeze(['intent', 'language', 'analysis', 'visual', 'request', 'additionalRequests', 'calls', 'clarify', 'abstain']);
+const PLAN_KEYS = Object.freeze(['intent', 'language', 'analysis', 'visual', 'chart', 'table', 'request', 'additionalRequests', 'calls', 'clarify', 'abstain']);
 
 /** Plan düzeyindeki sorunların beklenen biçimi (yalnızca sözleşmeden; modelin değeri yansıtılmaz). */
 export function planShapeHints(problems) {
   const hints = {
     '$.plan:unknownField': `rota_plan alanları: ${PLAN_KEYS.join('|')}`,
+    '$.plan:single': 'Yanıtta TEK bir rota_plan çağrısı olmalı: soruyu tek bir karar olarak bildir (birden çok okuma gerekiyorsa analysis.focus ya da additionalRequests)',
     '$.intent': `intent (zorunlu): ${Object.values(PLANNER_INTENTS).join('|')}`,
     '$.language': 'language (zorunlu): tr|en',
+    '$.chart': `chart: ${PLAN_CHART_TYPES.join('|')}`,
+    '$.table': 'table: true|false',
     '$.request:required': 'intent rota için request ya da (geniş/değerlendirme sorusunda) analysis zorunludur',
     '$.analysis': 'analysis: {"scope":"self|person|team|project|projects|all","focus":["overview","overdue","upcoming"],"names":["<ad>"] (yalnızca person/project)}; request/calls ile birlikte verilmez',
     '$.additionalRequests': 'additionalRequests: tek soru için alanı çıkar; bir ya da iki ek istek nesnesi ver; calls ile birlikte verme',

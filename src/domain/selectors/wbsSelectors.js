@@ -191,7 +191,7 @@ export function buildWbsTree(wbs) {
     if (root) tree.push(root);
   }
 
-  // Cyclic components can have no natural root. Keep them visible without recursing forever.
+  // Döngülü bileşenin doğal kökü olmayabilir; sonsuz özyineleme olmadan görünür tutulur.
   for (const node of nodes) {
     if (built.has(node.id)) continue;
     const root = buildNode(node.id);

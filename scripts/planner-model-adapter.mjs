@@ -2,7 +2,7 @@
  * Rota AI planlayıcı değerlendirmesi için Claude CLI model komutu (Aşama 4C) — geliştirme aracı; uygulama, CI ve
  * Rota sunucusu bu dosyayı çalıştırmaz.
  *
- *   node scripts/planner-evaluation.mjs run --model-command 'node scripts/planner-claude-model.mjs' --semantic kosu.json
+ *   node scripts/planner-evaluation.mjs run --model-command 'node scripts/planner-model-adapter.mjs' --semantic kosu.json
  *
  * stdin: üretim turunun girdisi `{ messages, tools, toolChoice, maxOutputTokens? }`; stdout: `{ text, toolCalls, finishReason, usage, models,
  * thinking }`. Araçlar modele yerel araç çağırma arayüzüyle (yalnızca bu araçları sunan, hiçbir aracı yürütmeyen yerel MCP
@@ -186,10 +186,49 @@ export function modelCommandTimeoutMs(timeoutMs, forcedRetry = process.env.PLANN
   return (1 + attempts) * timeoutMs + attempts * 2 * MODEL_CLEANUP_TIMEOUT_MS + 1000;
 }
 
+const POSIX_MODEL_GROUP_CLEANUP = String.raw`
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const group = Number(process.argv[1]);
+if (!Number.isSafeInteger(group) || group < 1) process.exit(1);
+function linuxHasLiveMember() {
+  for (const name of fs.readdirSync('/proc')) {
+    if (!/^\d+$/.test(name)) continue;
+    try {
+      const stat = fs.readFileSync('/proc/' + name + '/stat', 'utf8');
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+      if (Number(fields[2]) === group && fields[0] !== 'Z' && fields[0] !== 'X') return true;
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  return false;
+}
+function posixHasLiveMember() {
+  const result = spawnSync('/bin/ps', ['-axo', 'pgid=,stat='], { encoding: 'utf8' });
+  if (result.status !== 0) throw new Error('MODEL_COMMAND_GROUP_PROBE_ERROR');
+  return result.stdout.split('\n').some((line) => {
+    const fields = line.trim().split(/\s+/);
+    return Number(fields[0]) === group && fields[1] && fields[1][0] !== 'Z' && fields[1][0] !== 'X';
+  });
+}
+try { process.kill(-group, 'SIGKILL'); }
+catch (error) { if (error.code === 'ESRCH') process.exit(0); throw error; }
+(function probe() {
+  if (!(process.platform === 'linux' ? linuxHasLiveMember() : posixHasLiveMember())) process.exit(0);
+  setTimeout(probe, 5);
+})();
+`;
+
 /** Grup üyesi, lider düşse de grup kimliğini tutarak kalan komutu sonlandırır. */
 function monitorModelCommand() {
   let group = null;
-  process.once('disconnect', () => { if (group) process.kill(-group, 'SIGKILL'); else process.exit(1); });
+  process.once('disconnect', () => {
+    if (!group) return process.exit(1);
+    const cleanup = spawn(process.execPath, ['-e', POSIX_MODEL_GROUP_CLEANUP, String(group)], {
+      detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ignore', 4]
+    });
+    cleanup.once('error', () => { try { process.kill(-group, 'SIGKILL'); } catch { process.exit(1); } });
+    cleanup.unref();
+  });
   process.once('message', ({ command, args, shell, groupId }) => {
     group = groupId;
     process.env.ROTA_MODEL_COMMAND_OWNER = String(group);
@@ -715,7 +754,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
       durationMs: Date.now() - startedAt, rateLimit: limit ? { status: limit.status, utilization: limit.utilization ?? null } : null, staticPromptHash, toolCatalogHash, toolOrderHash: hash(JSON.stringify(offered)), tailChars: conversationText(rest).length };
     if (timedOut) return fail(cleanupFailed ? 'MODEL_COMMAND_TIMEOUT MODEL_COMMAND_CLEANUP_ERROR' : 'MODEL_COMMAND_TIMEOUT', row);
     if (cleanupFailed) return fail('MODEL_COMMAND_CLEANUP_ERROR', row);
-    // --max-turns 1 ends a native tool handoff with this documented CLI status; it is not a failed completion.
+    // --max-turns 1 yerel araç devrini belgeli CLI durumuyla bitirir; bu başarısız tamamlama değildir.
     const toolHandoff = !forced && code === 1 && result?.is_error === true && result.subtype === 'error_max_turns'
       && blocks.some(block => block.type === 'tool_use' && block.name?.startsWith(PREFIX));
     // Zorunlu turda başka araç çağrısı: üretimde kısıtlı çözüm bunu engeller. İsteğe bağlı tek yeniden deneme (ayrı sayılır).

@@ -77,7 +77,7 @@ const projects = [
 ];
 const calendars = [weekdayCalendar, sixDayCalendar];
 
-test('date label constants expose complete Turkish month and weekday sets', () => {
+test("tarih etiket sabitleri tam Türkçe ay ve gün kümesini sunar", () => {
   assert.equal(TR_MONTHS.length, 12);
   assert.equal(TR_MONTHS_LONG.length, 12);
   assert.equal(TR_DAYS.length, 7);
@@ -86,12 +86,12 @@ test('date label constants expose complete Turkish month and weekday sets', () =
   assert.equal(TR_DAYS[6], 'Paz');
 });
 
-test('parseDate returns an existing Date instance unchanged', () => {
+test("parseDate mevcut Date örneğini değiştirmeden döndürür", () => {
   const date = new Date(2026, 6, 22);
   assert.strictEqual(parseDate(date), date);
 });
 
-test('parseDate without a value returns a valid current Date', () => {
+test("parseDate değer verilmezse geçerli güncel Date döndürür", () => {
   const before = Date.now();
   const result = parseDate();
   const after = Date.now();
@@ -99,11 +99,11 @@ test('parseDate without a value returns a valid current Date', () => {
   assert.equal(result.getTime() >= before && result.getTime() <= after, true);
 });
 
-test('fmtISO pads single-digit month and day values', () => {
+test("fmtISO tek haneli ay ve günü sıfırla tamamlar", () => {
   assert.equal(fmtISO(new Date(2026, 0, 5)), '2026-01-05');
 });
 
-test('fmt supports every explicit project date pattern', () => {
+test("fmt her açık proje tarih biçimini destekler", () => {
   assert.equal(fmt('2026-08-03'), '03 Ağu');
   assert.equal(fmt('2026-08-03', 'dd MMM yyyy'), '03 Ağu 2026');
   assert.equal(fmt('2026-08-03', 'MMM yyyy'), 'Ağustos 2026');
@@ -111,41 +111,41 @@ test('fmt supports every explicit project date pattern', () => {
   assert.equal(fmt('2026-08-03', 'EEE d'), 'Pzt 3');
 });
 
-test('addDays crosses month, year, and leap-day boundaries', () => {
+test("addDays ay yıl ve artık gün sınırını geçer", () => {
   assert.equal(fmtISO(addDays('2026-12-31', 1)), '2027-01-01');
   assert.equal(fmtISO(addDays('2028-02-28', 1)), '2028-02-29');
   assert.equal(fmtISO(addDays('2028-03-01', -1)), '2028-02-29');
 });
 
-test('diffDays preserves direction', () => {
+test("diffDays yönü korur", () => {
   assert.equal(diffDays('2026-07-20', '2026-07-22'), -2);
   assert.equal(diffDays('2026-07-22', '2026-07-20'), 2);
   assert.equal(diffDays('2026-07-22', '2026-07-22'), 0);
 });
 
-test('month boundaries handle February correctly', () => {
+test("ay sınırları şubat ayını doğru işler", () => {
   assert.equal(fmtISO(startOfMonth('2028-02-15')), '2028-02-01');
   assert.equal(fmtISO(endOfMonth('2028-02-15')), '2028-02-29');
   assert.equal(fmtISO(endOfMonth('2026-02-15')), '2026-02-28');
 });
 
-test('week boundaries use Monday through Sunday', () => {
+test("hafta sınırları pazartesi ve pazardır", () => {
   assert.equal(fmtISO(startOfWeek('2026-07-26')), '2026-07-20');
   assert.equal(fmtISO(endOfWeek('2026-07-20')), '2026-07-26');
 });
 
-test('isSameDay compares calendar fields across string and Date values', () => {
+test("isSameDay metin ve Date değerlerinde takvim alanını karşılaştırır", () => {
   assert.equal(isSameDay('2026-07-22', new Date(2026, 6, 22)), true);
   assert.equal(isSameDay('2026-07-22', '2026-07-23'), false);
 });
 
-test('isWeekend distinguishes Friday, Saturday, and Sunday', () => {
+test("isWeekend cuma cumartesi ve pazarı ayırır", () => {
   assert.equal(isWeekend('2026-07-24'), false);
   assert.equal(isWeekend('2026-07-25'), true);
   assert.equal(isWeekend('2026-07-26'), true);
 });
 
-test('today returns local midnight', () => {
+test("today yerel gece yarısını döndürür", () => {
   const result = today();
   assert.equal(result.getHours(), 0);
   assert.equal(result.getMinutes(), 0);
@@ -153,7 +153,7 @@ test('today returns local midnight', () => {
   assert.equal(result.getMilliseconds(), 0);
 });
 
-test('eachDay includes both endpoints and crosses month boundaries', () => {
+test("eachDay iki ucu dahil eder ve ay sınırını geçer", () => {
   assert.deepEqual(eachDay('2026-07-31', '2026-08-02').map(fmtISO), [
     '2026-07-31',
     '2026-08-01',
@@ -161,18 +161,18 @@ test('eachDay includes both endpoints and crosses month boundaries', () => {
   ]);
 });
 
-test('eachDay returns an empty range when start follows end', () => {
+test("eachDay başlangıç sondan sonraysa boş aralık döndürür", () => {
   assert.deepEqual(eachDay('2026-08-02', '2026-07-31'), []);
 });
 
-test('default calendar constants are frozen and expose five working weekdays', () => {
+test("varsayılan takvim sabitleri donmuştur ve beş iş günü sunar", () => {
   assert.equal(Object.isFrozen(DEFAULT_WORKING_DAYS), true);
   assert.equal(Object.isFrozen(TURKEY_HOLIDAYS_2026), true);
   assert.equal(Object.isFrozen(DEFAULT_CALENDAR), true);
   assert.deepEqual(DEFAULT_WORKING_DAYS, [1, 2, 3, 4, 5]);
 });
 
-test('normalizeCalendar fills defaults for missing identity fields', () => {
+test("normalizeCalendar eksik kimlik alanına varsayılanı doldurur", () => {
   const result = normalizeCalendar({ workingDays: [1], holidays: [] });
   assert.equal(result.id, DEFAULT_CALENDAR.id);
   assert.equal(result.name, DEFAULT_CALENDAR.name);
@@ -180,7 +180,7 @@ test('normalizeCalendar fills defaults for missing identity fields', () => {
   assert.deepEqual(result.workingDays, [1]);
 });
 
-test('normalizeCalendar clones mutable arrays and holiday objects', () => {
+test("normalizeCalendar değişebilir dizileri ve tatil nesnelerini kopyalar", () => {
   const input = {
     id: 'clone-test',
     workingDays: [1, 2],
@@ -196,31 +196,31 @@ test('normalizeCalendar clones mutable arrays and holiday objects', () => {
   assert.equal(input.holidays[0].name, 'Holiday');
 });
 
-test('calendarById safely handles missing collections and IDs', () => {
+test("calendarById eksik koleksiyon ve kimliği güvenle işler", () => {
   assert.equal(calendarById(undefined, 'missing'), null);
   assert.equal(calendarById(calendars, 'missing'), null);
   assert.strictEqual(calendarById(calendars, 'six-day'), sixDayCalendar);
 });
 
-test('resolveProjectCalendar uses a supplied fallback for unknown calendars', () => {
+test("resolveProjectCalendar bilinmeyen takvimde verilen dönüşü kullanır", () => {
   const fallback = { id: 'fallback' };
   assert.strictEqual(resolveProjectCalendar({ calendarId: 'missing' }, calendars, fallback), fallback);
 });
 
-test('resolveTaskCalendar matches projects by legacy display name when projectId is absent', () => {
+test("resolveTaskCalendar proje kimliği yoksa eski görünüm adıyla eşleştirir", () => {
   assert.equal(resolveTaskCalendar({ proje: 'Project Two' }, projects, calendars).id, 'six-day');
 });
 
-test('resolveTaskCalendar prefers a task-level calendar over project selection', () => {
+test("resolveTaskCalendar görev takvimini proje seçiminden önce kullanır", () => {
   assert.equal(resolveTaskCalendar({ projectId: 'p1', calendarId: 'six-day' }, projects, calendars).id, 'six-day');
 });
 
-test('holidayFor accepts Date instances and returns null for normal days', () => {
+test("holidayFor Date örneğini kabul eder; olağan günde boş değer döndürür", () => {
   assert.equal(holidayFor(new Date(2026, 6, 15))?.short, '15 Temmuz');
   assert.equal(holidayFor('2026-07-16'), null);
 });
 
-test('an empty working-day list falls back to the default working week', () => {
+test("boş iş günü listesi varsayılan iş haftasına döner", () => {
   // Boş liste GEÇERLİ bir yapılandırma değildir: sunucu, çalışma günü satırı
   // olmayan takvimi `workingDays: []` olarak yansıtıyor ve her arama
   // karşılıksız kalıyordu. Varsayılan haftaya düşmek tek tutarlı davranıştır.
@@ -230,93 +230,93 @@ test('an empty working-day list falls back to the default working week', () => {
   assert.equal(isWorkingDay('2026-07-25', { id: 'raw', workingDays: [] }), false);
 });
 
-test('moveToWorkingDay treats zero direction as forward', () => {
+test("moveToWorkingDay sıfır yönü ileri sayar", () => {
   assert.equal(fmtISO(moveToWorkingDay('2026-07-25', weekdayCalendar, 0)), '2026-07-27');
 });
 
-test('moveToWorkingDay leaves an existing working date unchanged', () => {
+test("moveToWorkingDay mevcut iş gününü değiştirmez", () => {
   assert.equal(fmtISO(moveToWorkingDay('2026-07-22', weekdayCalendar, -1)), '2026-07-22');
 });
 
-test('addWorkingDays truncates fractional amounts before moving', () => {
+test("addWorkingDays ilerlemeden önce kesirli miktarı keser", () => {
   assert.equal(fmtISO(addWorkingDays('2026-07-20', 2.9, weekdayCalendar)), '2026-07-22');
   assert.equal(fmtISO(addWorkingDays('2026-07-20', -2.9, weekdayCalendar)), '2026-07-16');
 });
 
-test('addWorkingDays treats non-finite amounts as zero and does not auto-align', () => {
+test("addWorkingDays sonlu olmayanı sıfır sayar ve otomatik hizalamaz", () => {
   assert.equal(fmtISO(addWorkingDays('2026-07-25', Number.NaN, weekdayCalendar)), '2026-07-25');
   assert.equal(fmtISO(addWorkingDays('2026-07-25', Infinity, weekdayCalendar)), '2026-07-25');
 });
 
-test('diffWorkingDays counts only working dates reached after the origin', () => {
+test("diffWorkingDays yalnızca başlangıçtan sonra ulaşılan iş gününü sayar", () => {
   assert.equal(diffWorkingDays('2026-07-27', '2026-07-24', weekdayCalendar), 1);
   assert.equal(diffWorkingDays('2026-07-24', '2026-07-27', weekdayCalendar), -1);
 });
 
-test('countWorkingDays counts a same-day working date inclusively', () => {
+test("countWorkingDays aynı iş gününü dahil sayar", () => {
   assert.equal(countWorkingDays('2026-07-22', '2026-07-22', weekdayCalendar), 1);
   assert.equal(countWorkingDays('2026-07-25', '2026-07-25', weekdayCalendar), 0);
 });
 
-test('countWorkingDays returns signed inclusive counts for reversed ranges', () => {
+test("countWorkingDays ters aralıkta işaretli dahil sayı döndürür", () => {
   assert.equal(countWorkingDays('2026-07-20', '2026-07-24', weekdayCalendar), 5);
   assert.equal(countWorkingDays('2026-07-24', '2026-07-20', weekdayCalendar), -5);
 });
 
-test('dependency relationship metadata contains all four supported types', () => {
+test("bağımlılık ilişki üstverisi dört desteklenen türü içerir", () => {
   assert.deepEqual(Object.keys(REL_TYPES), ['FS', 'SS', 'FF', 'SF']);
   assert.equal(REL_TYPES.SF.code, 'SF');
 });
 
-test('depId handles nullish and legacy dependency records', () => {
+test("depId boş ve eski bağımlılık kaydını işler", () => {
   assert.equal(depId(null), null);
   assert.equal(depId(undefined), null);
   assert.equal(depId({ id: 'legacy' }), 'legacy');
   assert.equal(depId({ predecessorId: 'canonical', id: 'legacy' }), 'canonical');
 });
 
-test('relTypeOf defaults strings, nullish records, and unknown types to FS', () => {
+test("relTypeOf metin boş kayıt ve bilinmeyen türü FS varsayar", () => {
   assert.equal(relTypeOf('task-1'), 'FS');
   assert.equal(relTypeOf(null), 'FS');
   assert.equal(relTypeOf({ type: 'XX' }), 'FS');
   assert.equal(relTypeOf({ type: 'SS' }), 'SS');
 });
 
-test('normalizeDependency preserves finite fractional and negative lag values', () => {
+test("normalizeDependency sonlu kesirli ve negatif gecikmeyi korur", () => {
   assert.deepEqual(normalizeDependency({ predecessorId: 'a', type: 'FF', lagDays: -1.5 }), {
     id: 'a', predecessorId: 'a', type: 'FF', lagDays: -1.5
   });
 });
 
-test('normalizeDependency replaces non-finite lag values with zero', () => {
+test("normalizeDependency sonlu olmayan gecikmeyi sıfır yapar", () => {
   assert.equal(normalizeDependency({ id: 'a', lagDays: Infinity }).lagDays, 0);
   assert.equal(normalizeDependency({ id: 'a', lagDays: Number.NaN }).lagDays, 0);
 });
 
-test('applyDependencyLag uses normalized zero lag without aligning a non-working day', () => {
+test("applyDependencyLag normal sıfır gecikmede iş dışı günü hizalamaz", () => {
   assert.equal(fmtISO(applyDependencyLag('2026-07-25', { predecessorId: 'a' }, weekdayCalendar)), '2026-07-25');
 });
 
-test('taskPlannedDurationDays clamps negatives and rejects non-finite values', () => {
+test("taskPlannedDurationDays negatifi sınırlar ve sonlu olmayanı reddeder", () => {
   assert.equal(taskPlannedDurationDays({ plannedDurationDays: -3 }), 0);
   assert.equal(taskPlannedDurationDays({ plannedDurationDays: Infinity }), 0);
   assert.equal(taskPlannedDurationDays({}), 0);
 });
 
-test('getTaskDateRange supports zero padding', () => {
+test("getTaskDateRange sıfır payı destekler", () => {
   const range = getTaskDateRange([{ plannedStart: '2026-07-10', plannedFinish: '2026-07-12' }], { paddingDays: 0 });
   assert.equal(fmtISO(range.start), '2026-07-10');
   assert.equal(fmtISO(range.end), '2026-07-12');
 });
 
-test('getTaskDateRange returns the supplied fallback Date object as start for empty data', () => {
+test("getTaskDateRange boş veride verilen Date dönüş nesnesini başlangıç yapar", () => {
   const fallbackStart = new Date(2026, 0, 10);
   const range = getTaskDateRange([], { fallbackStart, fallbackDays: 2 });
   assert.strictEqual(range.start, fallbackStart);
   assert.equal(fmtISO(range.end), '2026-01-12');
 });
 
-test('group summaries use explicit progress even when status is done', () => {
+test("grup özeti tamamlanmış durumda bile açık ilerlemeyi kullanır", () => {
   const summary = getGroupScheduleSummaries([['g', [{
     plannedStart: '2026-07-01', plannedFinish: '2026-07-02', plannedDurationDays: 2, progress: 25, status: 'done'
   }]]]).g;
@@ -324,7 +324,7 @@ test('group summaries use explicit progress even when status is done', () => {
   assert.equal(summary.done, 1);
 });
 
-test('group summaries fall back to an unweighted average when every duration is zero', () => {
+test("grup özeti bütün süreler sıfırsa ağırlıksız ortalamaya döner", () => {
   // Ağırlıklı ortalamanın paydası 0 olduğunda sabit 0 yazmak, hepsi
   // tamamlanmış bir grubu %0 gösteriyordu.
   const summary = getGroupScheduleSummaries([['g', [{
@@ -339,25 +339,25 @@ test('group summaries fall back to an unweighted average when every duration is 
   assert.equal(mixed.progress, 50);
 });
 
-test('done status takes precedence over overdue target dates', () => {
+test("tamamlanmış durum gecikmiş hedeften önce gelir", () => {
   assert.equal(getStatus({ status: 'done', targetFinish: '2026-01-01' }, parseDate('2026-07-22')).id, 'done');
 });
 
-test('a target finish equal to the reference date is not overdue', () => {
+test("referans tarihine eşit hedef bitiş gecikmiş değildir", () => {
   assert.equal(getStatus({ status: 'todo', targetFinish: '2026-07-22' }, parseDate('2026-07-22')).id, 'todo');
 });
 
-test('unknown task status falls back to todo display state', () => {
+test("bilinmeyen görev durumu yapılacak görünümüne döner", () => {
   assert.equal(getStatus({ status: 'blocked' }, parseDate('2026-07-22')).id, 'todo');
 });
 
-test('selectTaskStats returns zero-safe aggregates for an empty task list', () => {
+test("selectTaskStats boş listede sıfır güvenli toplam döndürür", () => {
   assert.deepEqual(selectTaskStats([], parseDate('2026-07-22')), {
     total: 0, active: 0, inProgress: 0, todo: 0, done: 0, overdue: 0, compRate: 0
   });
 });
 
-test('selectTaskStats rounds completion rate to the nearest integer', () => {
+test("selectTaskStats tamamlanma oranını en yakın tam sayıya yuvarlar", () => {
   const stats = selectTaskStats([
     { status: 'done' },
     { status: 'done' },
@@ -366,7 +366,7 @@ test('selectTaskStats rounds completion rate to the nearest integer', () => {
   assert.equal(stats.compRate, 67);
 });
 
-test('selectTaskStats counts missing status as todo and excludes completed overdue tasks', () => {
+test("selectTaskStats eksik durumu yapılacak sayar ve bitmiş gecikmeyi dışlar", () => {
   const stats = selectTaskStats([
     { targetFinish: '2026-07-20' },
     { status: 'done', targetFinish: '2026-07-01' }
@@ -376,17 +376,17 @@ test('selectTaskStats counts missing status as todo and excludes completed overd
   assert.equal(stats.active, 1);
 });
 
-test('calculatePlannedDurationDays returns zero for milestones before validating dates', () => {
+test("calculatePlannedDurationDays kilometre taşında tarih doğrulamadan sıfır döndürür", () => {
   assert.equal(calculatePlannedDurationDays({ milestone: true, plannedStart: 'bad', plannedFinish: 'bad' }), 0);
 });
 
-test('calculatePlannedDurationDays rejects malformed and impossible dates', () => {
+test("calculatePlannedDurationDays bozuk ve olanaksız tarihi reddeder", () => {
   assert.equal(calculatePlannedDurationDays({ plannedStart: '2026/07/20', plannedFinish: '2026-07-21' }), null);
   assert.equal(calculatePlannedDurationDays({ plannedStart: '2026-02-30', plannedFinish: '2026-03-01' }), null);
   assert.equal(calculatePlannedDurationDays({ plannedStart: '2026-07-22', plannedFinish: '2026-07-21' }), null);
 });
 
-test('calculatePlannedDurationDays never reports zero for a valid non-milestone span', () => {
+test("calculatePlannedDurationDays geçerli normal aralıkta sıfır raporlamaz", () => {
   // Hafta sonuna denk gelen tek günlük görev, 0 süreyle Gantt özetlerinde
   // kilometre taşı gibi çiziliyor ve ilerleme ağırlığını kaybediyordu.
   assert.equal(calculatePlannedDurationDays({ plannedStart: '2026-07-25', plannedFinish: '2026-07-26' }, {
@@ -398,24 +398,24 @@ test('calculatePlannedDurationDays never reports zero for a valid non-milestone 
   }), 0);
 });
 
-test('calculatePlannedDurationDays resolves project calendars', () => {
+test("calculatePlannedDurationDays proje takvimini çözer", () => {
   assert.equal(calculatePlannedDurationDays({ projectId: 'p2', plannedStart: '2026-07-18', plannedFinish: '2026-07-18' }, {
     projects, calendars
   }), 1);
 });
 
-test('calculatePlannedDurationDays resolves task calendar overrides before project calendars', () => {
+test("calculatePlannedDurationDays görev takvimini proje takviminden önce çözer", () => {
   assert.equal(calculatePlannedDurationDays({
     projectId: 'p1', calendarId: 'six-day', plannedStart: '2026-07-18', plannedFinish: '2026-07-18'
   }, { projects, calendars }), 1);
 });
 
-test('calculatePlannedDurationDays returns null when schedule dates are missing', () => {
+test("calculatePlannedDurationDays çizelge tarihi eksikse boş değer döndürür", () => {
   assert.equal(calculatePlannedDurationDays({ plannedStart: '2026-07-20' }), null);
   assert.equal(calculatePlannedDurationDays({ plannedFinish: '2026-07-20' }), null);
 });
 
-test('normalizeTaskPlan preserves task fields while replacing duration with a calculated value', () => {
+test("normalizeTaskPlan görev alanını koruyup süreyi hesaplanmış değerle değiştirir", () => {
   const original = { id: 't1', custom: 'value', plannedStart: '2026-07-20', plannedFinish: '2026-07-24' };
   const normalized = normalizeTaskPlan(original, { projects, calendars });
   assert.equal(normalized.id, 't1');

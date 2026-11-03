@@ -96,7 +96,7 @@ test('SMTP kabul edilen iletiyi başarı olarak bildirir', async () => {
     assert.deepEqual(result.accepted, message.to);
   });
 });
-test('SMTP replies reject oversized unterminated and multiline input before unbounded buffering', async () => {
+test("SMTP yanıtı aşırı sonlandırılmamış ve çok satırlı girdiyi sınırsız biriktirmeden reddeder", async () => {
   const { EventEmitter } = await import('node:events');
   const { createSmtpDialogue, SMTP_REPLY_LIMITS } = await import('../src/server/mail/smtpClient.js');
   for (const multiline of [false, true]) {
@@ -108,7 +108,7 @@ test('SMTP replies reject oversized unterminated and multiline input before unbo
   }
 });
 
-test('SMTP multiline replies survive every TCP split, including CRLF and UTF-8 fragments', async () => {
+test("SMTP çok satırlı yanıt CRLF ve UTF-8 parçaları dahil her TCP bölünmesinde korunur", async () => {
   const { EventEmitter } = await import('node:events');
   const { createSmtpDialogue } = await import('../src/server/mail/smtpClient.js');
   const reply = '250-test\r\n250-AUTH PLAIN LOGIN\r\n250 sıra\r\n';

@@ -24,7 +24,7 @@ import {
   toggleKanbanSort
 } from './kanbanBoardPolicy.js';
 
-/* ── Kanban (drag-and-drop, animated) ──────────────── */
+/* Sürükle bırak hareketli Kanban görünümü.*/
 export function KanbanView() {
   const tasks = useTasks();
   const people = usePeople();

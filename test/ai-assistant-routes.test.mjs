@@ -45,7 +45,7 @@ const { parseAiConfig } = await import('../src/server/ai/aiConfig.js');
 const REGISTRY = validateModelRegistry(DEFAULT_AI_MODEL_REGISTRY).registry;
 const MODEL_NAMES = [...REGISTRY.models.keys()];
 
-test('server stall timing follows provider configuration and client progress timing covers every supported terminal deadline', () => {
+test("sunucu duraklama süresi sağlayıcı ayarını izler; istemci ilerlemesi bütün son süreleri kapsar", () => {
   for (const [queue, first, idle] of [[20000, 60000, 45000], [120000, 600000, 1000], [100, 1000, 600000], [100, 1000, 1000]]) {
     const config = parseAiConfig({ MERGEN_ROTA_AI_ENABLED: 'true', MERGEN_ROTA_AI_BASE_URL: 'https://fixture.invalid/v1', MERGEN_ROTA_AI_DEFAULT_API_KEY: DEFAULT_KEY,
       MERGEN_ROTA_AI_QUEUE_TIMEOUT_MS: String(queue), MERGEN_ROTA_AI_PROVIDER_FIRST_EVENT_TIMEOUT_MS: String(first), MERGEN_ROTA_AI_PROVIDER_IDLE_TIMEOUT_MS: String(idle) });
@@ -830,7 +830,7 @@ test('ağ geçidinin kaydettiği tur hatası ikinci bir işletim olayı üretmez
   assert.equal(aiTelemetrySnapshot().assistantTurns.failed, 1);
 });
 
-test('the delivery bound starts with each backpressure wait, not with the stream', async (t) => {
+test("teslim sınırı akışla değil her geri basınç bekleyişiyle başlar", async (t) => {
   holdLoop(t);
   const { turn, released } = fakeTurn();
   const response = assistantStreamResponse(turn, { keepaliveMs: 1000, stallMs: 1000, graceMs: 50, deliveryTimeoutMs: 150,
@@ -851,7 +851,7 @@ test('the delivery bound starts with each backpressure wait, not with the stream
   assert.equal(released(), 1);
 });
 
-test('delivery backpressure has its own bounded clock even when generation stall is shorter', async (t) => {
+test("üretim duraklaması kısa olsa da teslim geri basıncının ayrı sınırlı saati vardır", async (t) => {
   holdLoop(t);
   const { turn, released } = fakeTurn();
   let failure;
@@ -866,7 +866,7 @@ test('delivery backpressure has its own bounded clock even when generation stall
   await response.body.cancel();
 });
 
-test('hidden progress keeps generation alive without queuing frames for a backed-up reader', async (t) => {
+test("gizli ilerleme yavaş okuyucuya çerçeve yığmadan üretimi canlı tutar", async (t) => {
   holdLoop(t);
   const { turn, released } = fakeTurn();
   const { QUEUE_HIGH_WATER_MARK } = await import('../src/server/ai/assistant/assistantStreamResponse.js');
@@ -888,7 +888,7 @@ test('hidden progress keeps generation alive without queuing frames for a backed
   assert.equal(released(), 1);
 });
 
-test('a generation that resolves after its stall verdict never emits DONE', async (t) => {
+test("duraklama kararından sonra biten üretim DONE yayımlamaz", async (t) => {
   holdLoop(t);
   const { turn, released } = fakeTurn();
   const response = assistantStreamResponse(turn, { stallMs: 10, graceMs: 100, keepaliveMs: 5,
@@ -903,7 +903,7 @@ test('a generation that resolves after its stall verdict never emits DONE', asyn
   assert.equal(released(), 1);
 });
 
-for (const source of ['general', 'rota']) test(`deletion after ACCEPTED is revalidated before dispatching the prepared prompt to the model (${source})`, async (t) => {
+for (const source of ['general', 'rota']) test(`ACCEPTED sonrası silme hazır istem modele gönderilmeden yeniden doğrulanır (${source})`, async (t) => {
   const { provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
   const { deleteConversation } = await import('../src/server/ai/assistant/conversationStore.js');
   const { getSqlPool } = await import('../src/server/db/pool.js');
@@ -911,7 +911,7 @@ for (const source of ['general', 'rota']) test(`deletion after ACCEPTED is reval
   const turn = await prepareAssistantTurn({ readBody: async () => ({ turnId: randomUUID(), message: 'private pending prompt', mode: 'standard', source }) });
   assert.equal(turn.grounded, source === 'rota');
   const response = assistantStreamResponse(turn, { generate: async (prepared, options) => {
-    // A different server instance commits deletion without this process's claim notification.
+    // Başka sunucu örneği bu sürecin sahiplik bildirimi olmadan silmeyi kaydeder.
     assert.equal((await deleteConversation(await getSqlPool(), prepared.sicil, { conversationId: prepared.conversation.id })).deleted, true);
     return generateAssistantAnswer(prepared, options);
   } });
@@ -922,7 +922,7 @@ for (const source of ['general', 'rota']) test(`deletion after ACCEPTED is reval
   assert.equal(activeAssistantGenerationCountForTests(), 0);
 });
 
-test('deletion during generation aborts transport before the next delta can disclose deleted content', async (t) => {
+test("üretim sırasında silme sonraki parça silinmiş içeriği açıklamadan taşımayı keser", async (t) => {
   const { db, provider } = createAiStack(t);
   const { deleteConversation } = await import('../src/server/ai/assistant/conversationStore.js');
   const { getSqlPool } = await import('../src/server/db/pool.js');
@@ -931,7 +931,7 @@ test('deletion during generation aborts transport before the next delta can disc
   const body = response.text();
   await provider.waitForActive(1);
   const conversationId = db.aiConversations[0].ConversationId;
-  // Shared durable deletion can originate in another process.
+  // Ortak kalıcı silme başka süreçten gelebilir.
   assert.equal((await deleteConversation(await getSqlPool(), 900001, { conversationId })).deleted, true);
   provider.calls[0].emit('secret derived from deleted prompt');
   provider.calls[0].complete();
@@ -944,7 +944,7 @@ test('deletion during generation aborts transport before the next delta can disc
   assert.deepEqual(db.aiConversationMessages, []);
 });
 
-for (const source of ['general', 'rota']) test(`a prompt deleted while queued never reaches transport after admission is granted (${source})`, async (t) => {
+for (const source of ['general', 'rota']) test(`kuyrukta silinen istem kabul verilince de taşımaya ulaşmaz (${source})`, async (t) => {
   const { db, provider } = createAiStack(t, { env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', MERGEN_ROTA_AI_MAX_ACTIVE_REQUESTS: '1', MERGEN_ROTA_AI_MAX_ACTIVE_PER_USER: '1' } });
   const { deleteConversation } = await import('../src/server/ai/assistant/conversationStore.js');
   const { getSqlPool } = await import('../src/server/db/pool.js');

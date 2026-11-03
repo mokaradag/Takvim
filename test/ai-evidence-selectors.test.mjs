@@ -17,7 +17,7 @@ const stackFor = (t, seed = {}) => createAiStack(t, { sicil: AYSE, env: { MERGEN
 const render = (ledger, facts, locale = 'tr') => analyzeGroundedAnswer(JSON.stringify({ kind: 'rota', facts }), { evidenceIds: ledger.ids(), evidencePayloads: ledger.payloads(), locale });
 const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
-test('workload counts keep their project and person selectors, so two selections stay distinguishable', async (t) => {
+test("iş yükü sayısı proje ve kişi seçicilerini koruyarak seçimleri ayırır", async (t) => {
   const stack = stackFor(t);
   const { ledger } = await callRotaTools(stack, AYSE, [['rota_workload_summary', { projectId: PROJECTS.FULL }], ['rota_workload_summary', { projectId: PROJECTS.READ }],
     ['rota_workload_summary', { personSicil: ZEYNEP }]]);
@@ -30,7 +30,7 @@ test('workload counts keep their project and person selectors, so two selections
   assert.doesNotMatch(verdict.normalized, GUID);
 });
 
-test('working-day counts always carry their date window', async (t) => {
+test("iş günü sayımı tarih penceresini taşır", async (t) => {
   const stack = stackFor(t);
   const { ledger } = await callRotaTools(stack, AYSE, [['rota_calendar_inspect', { dateFrom: '2026-10-01', dateTo: '2026-10-31' }],
     ['rota_calendar_inspect', { dateFrom: '2026-11-01', dateTo: '2026-11-30' }]]);
@@ -41,7 +41,7 @@ test('working-day counts always carry their date window', async (t) => {
   assert.match(english.normalized, /Between \*\*1 October 2026\*\* and \*\*31 October 2026\*\* there are \*\*21\*\* working days/);
 });
 
-test('data-quality metrics keep the inspected project', async (t) => {
+test("veri kalitesi ölçüsü incelenen projeyi korur", async (t) => {
   const stack = stackFor(t);
   const { ledger } = await callRotaTools(stack, AYSE, [['rota_data_quality', { projectId: PROJECTS.FULL }], ['rota_data_quality', { projectId: PROJECTS.READ }]]);
   const verdict = render(ledger, ['R1:data.openTaskCount', 'R2:data.openTaskCount']);
@@ -50,7 +50,7 @@ test('data-quality metrics keep the inspected project', async (t) => {
   assert.match(second, /Proje: Okuma Projesi/);
 });
 
-test('a task-scoped Outlook zero stays tied to its task', async (t) => {
+test("görev kapsamlı Outlook sıfırı kendi görevine bağlı kalır", async (t) => {
   const stack = stackFor(t);
   const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_outlook_status', { taskId: TASKS.LITERAL });
   assert.equal(result.data.activeSubscriptions, 0);
@@ -59,7 +59,7 @@ test('a task-scoped Outlook zero stays tied to its task', async (t) => {
   assert.match(verdict.normalized, /Görev: Rapor %50 \\\[özel\\\] \\_alt/);
 });
 
-test('workflow selectors render names instead of record identifiers', async (t) => {
+test("iş akışı seçicisi kimlik yerine ad çizer", async (t) => {
   const stack = stackFor(t, { taskScheduleChangeRequests: [{ TaskId: TASKS.OVERDUE, RequesterSicil: ZEYNEP, DecisionOwnerSicil: AYSE, Status: 'PENDING' }] });
   const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_schedule_requests', { projectId: PROJECTS.FULL, taskId: TASKS.OVERDUE });
   assert.equal(result.data.filters.project, 'Radar Modernizasyonu');
@@ -73,7 +73,7 @@ test('workflow selectors render names instead of record identifiers', async (t) 
   assert.doesNotMatch(summary.normalized, GUID);
 });
 
-test('a person\'s organization unit renders the stored unit name, not a lag-unit enum', async (t) => {
+test("kişinin birimi süre birimi yerine kayıtlı kuruluş adıyla çizilir", async (t) => {
   const stack = stackFor(t);
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_person_search', { text: String(ALI_1) });
   const verdict = render(ledger, ['R1:data.people.0.organization.unit']);
@@ -81,7 +81,7 @@ test('a person\'s organization unit renders the stored unit name, not a lag-unit
   assert.doesNotMatch(verdict.normalized, /Bilinmeyen değer/);
 });
 
-test('a completed occurrence without an actual finish is incomplete evidence, not a truncated result', async (t) => {
+test("gerçek bitişi olmayan tamamlanmış oluşum kesilmiş sonuç değil eksik kanıttır", async (t) => {
   const stack = stackFor(t);
   stack.db.tasks.find((task) => task.TaskId === TASKS.OCCURRENCE_DONE).ActualFinish = null;
   const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_recurrence_inspect', { taskId: TASKS.SERIES });
@@ -91,7 +91,7 @@ test('a completed occurrence without an actual finish is incomplete evidence, no
   assert.ok(ledger.summaries()[0].highlights.length > 0, 'highlights survive when no row was removed');
 });
 
-test('highlights are cleared only when the size limit removed rows', async (t) => {
+test("vurgular yalnızca boyut sınırı satır çıkardıysa temizlenir", async (t) => {
   const stack = stackFor(t);
   const paged = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, status: ['todo'], limit: 1 });
   assert.ok(paged.result.nextCursor);

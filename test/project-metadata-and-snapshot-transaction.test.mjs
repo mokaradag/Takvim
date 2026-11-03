@@ -57,7 +57,7 @@ function context() {
   };
 }
 
-test('new project root WBS codes are project-local and always start at 1', () => {
+test("yeni kök WBS kodu projeye aittir ve birden başlar", () => {
   const base = context();
   base.wbs.push({
     id: 'another-root',
@@ -86,7 +86,7 @@ test('new project root WBS codes are project-local and always start at 1', () =>
   assert.equal(result.changes.wbsUpserts[0].code, '1');
 });
 
-test('project display metadata changes do not rewrite every persisted task', () => {
+test("proje görünüm üstverisi her kalıcı görevi yeniden yazmaz", () => {
   const base = context();
   const result = prepareProjectUpdateChanges('project-1', {
     name: 'Renamed Project',
@@ -109,7 +109,7 @@ test('project display metadata changes do not rewrite every persisted task', () 
   assert.equal(normalizedTask.color, 'emerald');
 });
 
-test('project tag canonicalization still persists only the affected task keyword', () => {
+test("proje etiket kanonikleştirmesi yalnızca etkilenen görev anahtarını saklar", () => {
   const base = context();
   base.tasks = [
     { ...base.tasks[0], keyword: 'risk' },
@@ -128,7 +128,7 @@ test('project tag canonicalization still persists only the affected task keyword
   assert.deepEqual(propagated.map((task) => [task.id, task.keyword]), [['task-1', 'Risk'], ['task-2', 'Other']]);
 });
 
-test('persisted data mode is read in the state initializer, not after the first render', () => {
+test("kalıcı veri kipi ilk çizimden sonra değil durum başlatıcısında okunur", () => {
   const source = read('src/components/shell/ApplicationRoot.jsx');
   const page = read('src/app/page.js');
 
@@ -141,7 +141,7 @@ test('persisted data mode is read in the state initializer, not after the first 
   assert.doesNotMatch(source, /setDataModeState\(readInitialDataMode\(\)\)/);
 });
 
-test('snapshot and co-assignee projection reuse one serializable SQL transaction', () => {
+test("görüntü ve ortak sorumlu izdüşümü tek serileştirilebilir SQL işlemini kullanır", () => {
   const poolSource = read('src/server/db/pool.js');
   const projectionSource = read('src/server/repository/projectedSqlAppRepository.js');
 

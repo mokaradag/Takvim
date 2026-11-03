@@ -23,13 +23,13 @@ const ok = (data = {}) => ({ content: JSON.stringify({ ok: true, data }) });
 const established = (scope, name, args, data) => scope.establish([{ name, arguments: JSON.stringify(args) }], [ok(data)]);
 const results = (input) => input.messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).filter((body) => body.tool !== 'rota_plan');
 
-test('containment text ignores case, diacritics, dotless i and punctuation', () => {
+test("kapsam metni harf biçimi aksan noktasız i ve noktalama farkını yok sayar", () => {
   assert.equal(containmentText('Ayşe YILMAZ’ın'), containmentText('ayse yilmaz in'));
   assert.equal(containmentText('Radar-Modernizasyonu'), 'radar modernizasyonu');
   assert.equal(containmentText('  İŞ  YÜKÜ '), 'is yuku');
 });
 
-test('the first round may search only text from the current user message', () => {
+test("ilk tur yalnızca güncel kullanıcı iletisindeki metni arayabilir", () => {
   const scope = createToolScope({ today: '2026-09-30', userText: 'Ayşe Yılmaz’ın Radar-Modernizasyonu görevleri' });
   for (const text of ['Ayşe Yılmaz', 'ayse yilmaz', 'Radar Modernizasyonu', 'RADAR']) {
     assert.doesNotThrow(() => scope.validate('rota_person_search', { text }), text);
@@ -40,7 +40,7 @@ test('the first round may search only text from the current user message', () =>
   assert.doesNotThrow(() => scope.validate('rota_task_analytics', { deadline: 'overdue' }), 'searches without text are unaffected');
 });
 
-test('an invented first-round search is refused end to end and the model must stay within the question', async (t) => {
+test("uydurulmuş ilk tur araması uçtan uca reddedilir; model soruda kalır", async (t) => {
   createAiStack(t, { sicil: AYSE, seed: rotaToolSeed() });
   const steps = [
     nativeDeclaration({ text: declared({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_search' }, filters: { text: 'radar test planı' } }),
@@ -59,7 +59,7 @@ test('an invented first-round search is refused end to end and the model must st
   assert.equal(steps.length, 0);
 });
 
-test('same-tool follow-ups compare normalized arguments: casing, ids and defaults do not count as widening', () => {
+test("aynı araç takibi normal argümanı karşılaştırır; harf kimlik ve varsayılan farkı genişleme sayılmaz", () => {
   const scope = createToolScope({ today: '2026-09-30', userText: 'radar görevleri' });
   established(scope, 'rota_task_search', { projectId: PROJECTS.FULL.toUpperCase(), text: 'Radar', status: ['todo', 'in_progress'] }, { tasks: [] });
   assert.doesNotThrow(() => scope.validate('rota_task_search', { projectId: PROJECTS.FULL, text: 'RADAR', status: ['in_progress', 'todo'], limit: 5 }));
@@ -75,14 +75,14 @@ test('same-tool follow-ups compare normalized arguments: casing, ids and default
   assert.doesNotThrow(() => portfolio.validate('rota_portfolio_summary', {}));
 });
 
-test('a user-typed narrower search may replace the root text, but data-derived text may not', () => {
+test("kullanıcının dar araması kök metni değiştirebilir; veriden türetilen metin değiştiremez", () => {
   const scope = createToolScope({ today: '2026-09-30', userText: 'Ali Veli’nin iş yükü' });
   established(scope, 'rota_person_search', { text: 'Ali' }, { people: [], resolution: 'none' });
   assert.doesNotThrow(() => scope.validate('rota_person_search', { text: 'Ali Veli' }));
   assert.throws(() => scope.validate('rota_person_search', { text: 'Uzman' }), { code: 'UNSUPPORTED_SCOPE' });
 });
 
-test('legitimate drill-downs are open while unrelated expansion stays closed', () => {
+test("meşru ayrıntı incelemesi açıkken ilgisiz genişleme kapalı kalır", () => {
   const scope = createToolScope({ today: '2026-09-30', userText: 'Radar test planı' });
   established(scope, 'rota_task_search', { text: 'Radar test planı' }, { titleResolution: 'unique', resolvedTask: { taskId: TASKS.OVERDUE },
     tasks: [{ taskId: TASKS.OVERDUE, project: { projectId: PROJECTS.FULL } }] });
@@ -96,7 +96,7 @@ test('legitimate drill-downs are open while unrelated expansion stays closed', (
   }
 });
 
-test('a project the portfolio itself returned is a trusted identity for the next detail call', () => {
+test("portföyün döndürdüğü proje sonraki ayrıntı çağrısı için güvenilir kimliktir", () => {
   const scope = createToolScope({ today: '2026-09-30', userText: 'Hangi projede en çok gecikme var, ayrıntısını göster' });
   established(scope, 'rota_portfolio_summary', {}, { projects: [{ projectId: PROJECTS.FULL, tasks: { overdue: 3 } }, { projectId: PROJECTS.READ, tasks: { overdue: 1 } }] });
   for (const [name, args] of [['rota_project_detail', { projectId: PROJECTS.FULL }], ['rota_task_analytics', { projectId: PROJECTS.READ }]]) {
@@ -106,7 +106,7 @@ test('a project the portfolio itself returned is a trusted identity for the next
   assert.throws(() => scope.validate('rota_project_detail', { projectId: PROJECTS.HIDDEN }), { code: 'UNSUPPORTED_SCOPE' });
 });
 
-test('scope text permits whole tokens and conservative Turkish suffixes, never arbitrary leading letters', () => {
+test("kapsam metni tam parça ve sınırlı Türkçe eke izin verir; keyfî ilk harfe vermez", () => {
   const scope = createToolScope({ userText: 'Radar Modernizasyonu ve Haftalık durum toplantısının görevleri' });
   for (const text of ['R', 'Ra', 'Rad', 'Modern', 'Haft', 'top']) {
     assert.throws(() => scope.validate('rota_task_search', { text }), { code: 'UNSUPPORTED_SCOPE' }, text);
@@ -119,7 +119,7 @@ test('scope text permits whole tokens and conservative Turkish suffixes, never a
   assert.doesNotThrow(() => exact.validate('rota_task_search', { text: 'Ra' }));
 });
 
-test('an ambiguous entity search cannot borrow another entity name from the same utterance', async () => {
+test("belirsiz varlık araması aynı sözdeki başka varlığın adını ödünç alamaz", async () => {
   const { bindRequestEntities } = await import('../src/server/ai/tools/requestDeclaration.js');
   const scope = createToolScope({ userText: 'Radar projesi ile Radar Modernizasyonu projesinin görevlerini karşılaştır' });
   const data = { resolution: 'ambiguous', candidates: [{ projectId: PROJECTS.FULL, name: 'Radar Modernizasyonu' }] };

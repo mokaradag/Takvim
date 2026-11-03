@@ -2512,8 +2512,8 @@ export function createFakeSqlServerDriver(db) {
       const database = this.pool.config?.database || 'MERGEN_Rota';
       db.statements.push({ sql: String(statement), database, params: { ...this.params } });
       if (String(statement).includes('-- creation-allocation:') && this.pool.began) {
-        // Model the allocation owner/proof update locks until commit/rollback.
-        // Waiting transactions take their rollback snapshot after the winner.
+        // Tahsis sahibi ve kanıt güncelleme kilitleri kayıt veya geri almaya kadar modellenir.
+        // Bekleyen işlemler geri alma görüntüsünü kazanan işlemden sonra alır.
         const key = this.params.sicil;
         if (this.pool.allocationKey !== key) {
           const previous = allocationLocks.get(key);

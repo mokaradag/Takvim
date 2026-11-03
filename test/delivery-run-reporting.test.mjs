@@ -202,7 +202,7 @@ test('yönetici görünümü başarısız turda ayrı özetleri ve güvenli nede
   assert.match(JSON.stringify(view.output), /Otomatik Outlook işleme: açık/);
 });
 
-test('reminder history distinguishes idle continuations from active and terminal deliveries', async (t) => {
+test("hatırlatma geçmişi boş devamı etkin ve son teslimden ayırır", async (t) => {
   const oldFetch = globalThis.fetch, oldContext = DataModeContext._currentValue;
   t.after(() => { globalThis.fetch = oldFetch; DataModeContext._currentValue = oldContext; });
   DataModeContext._currentValue = { dataMode: 'actual' };
@@ -263,7 +263,7 @@ test('kuyruk sorgusu hatası hatırlatma ayarlarını düşürmeden güvenli tan
   assert.doesNotMatch(JSON.stringify(body), /SELECT|secret|password/);
 });
 
-test('mixed reminder failures preserve uncertainty and existing operator failure counts', async () => {
+test("karışık hatırlatma hatası belirsizliği ve mevcut işletmen hata sayısını korur", async () => {
   const { reminderRunOutcome } = await import('../src/domain/reminders/reminderRunOutcome.js');
   const summary = { enabled: true, failureCodes: { SMTP_SEND_FAILED: 4, NO_RECIPIENTS: 2 }, results: [
     { status: 'FAILED', reason: 'SMTP_SEND_FAILED' },

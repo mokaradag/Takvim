@@ -8,7 +8,7 @@ import { normalizePublicBasePath, publicRotaPath } from '../src/lib/publicPath.j
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => readFileSync(path.join(ROOT, relativePath), 'utf8');
 
-test('public prefix is normalized and applied exactly once', () => {
+test("açık önek normalleştirilir ve tam bir kez uygulanır", () => {
   assert.equal(normalizePublicBasePath(''), '');
   assert.equal(normalizePublicBasePath('/'), '');
   assert.equal(normalizePublicBasePath('rota'), '/rota');
@@ -19,14 +19,14 @@ test('public prefix is normalized and applied exactly once', () => {
   assert.equal(publicRotaPath('/api/mergen-rota', ''), '/api/mergen-rota');
 });
 
-test('unsafe public paths are rejected', () => {
+test("güvensiz açık yollar reddedilir", () => {
   assert.throws(() => normalizePublicBasePath('https://example.invalid/rota'));
   assert.throws(() => normalizePublicBasePath('//example.invalid/rota'));
   assert.throws(() => normalizePublicBasePath('/rota/../other'));
   assert.throws(() => publicRotaPath('https://example.invalid/api', '/rota'));
 });
 
-test('Next config uses asset prefix plus prefix-stripping compatibility rewrites', async () => {
+test("Next ayarı varlık öneki ve önek çıkaran uyumluluk yeniden yazması kullanır", async () => {
   // Yapılandırma ÇALIŞTIRILIR: kaynak metni aramak, `rewrites()` bozulduğunda
   // ya da yönlendirme geri geldiğinde testi yeşil bırakabiliyordu.
   process.env.NEXT_PUBLIC_MERGEN_ROTA_PUBLIC_BASE_PATH = '/rota';
@@ -53,7 +53,7 @@ test('Next config uses asset prefix plus prefix-stripping compatibility rewrites
   );
 });
 
-test('browser-facing API, login and logout paths use the public prefix helper', () => {
+test("tarayıcı API giriş ve çıkış yolları açık önek yardımcısını kullanır", () => {
   const boundary = read('src/components/shell/AppDataBoundary.jsx');
   const sidebar = read('src/components/shell/useSignOut.js');
   const dataMode = read('src/data/dataMode.js');

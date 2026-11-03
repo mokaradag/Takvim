@@ -38,7 +38,7 @@ function projectContext(overrides = {}) {
   return { ...base, ...overrides };
 }
 
-test('project codes use locale-insensitive identifier casing and duplicate detection', () => {
+test("proje kodu yerelden bağımsız harf ve yinelenme denetimi kullanır", () => {
   const context = projectContext();
   const issues = validateProjectCreationInput({
     code: 'prj-infra',
@@ -63,7 +63,7 @@ test('project codes use locale-insensitive identifier casing and duplicate detec
   assert.equal(created.project.code.includes('İ'), false);
 });
 
-test('tag-only project updates preserve a missing data date instead of inventing today', () => {
+test("yalnız etiket güncellemesi bugünü uydurmak yerine eksik veri tarihini korur", () => {
   const context = projectContext();
   const updated = prepareProjectUpdate('p-1', { tags: ['Analiz', 'Teslim'] }, context);
 
@@ -74,7 +74,7 @@ test('tag-only project updates preserve a missing data date instead of inventing
   assert.deepEqual(updated.project.tags.map((tag) => tag.name), ['Analiz', 'Teslim']);
 });
 
-test('a failed one-step task creation does not leave a placeholder task behind', async () => {
+test("başarısız tek adımlı görev oluşturma yer tutucu görev bırakmaz", async () => {
   const context = projectContext();
   const repository = createMockRepository(context, {
     failMutation: ({ changes }) => Boolean(changes.taskUpserts?.length)
@@ -107,7 +107,7 @@ test('a failed one-step task creation does not leave a placeholder task behind',
   persistence.dispose();
 });
 
-test('simple-mode task input preserves selected IDs and the selected project color', () => {
+test("temel kip görev girdisi seçili kimlikleri ve proje rengini korur", () => {
   const context = projectContext({
     projects: [
       ...projectContext().projects,
@@ -134,7 +134,7 @@ test('simple-mode task input preserves selected IDs and the selected project col
   assert.equal(normalized.wbsId, 'w-2');
 });
 
-test('simple mode creates the final task in one guarded mutation and keeps project metadata intact', async () => {
+test("temel kip son görevi tek korumalı değişimle oluşturur ve proje üstverisini korur", async () => {
   const simple = read('src/features/simple/SimpleModePanel.jsx');
 
   assert.doesNotMatch(simple, /updateTask/);
@@ -191,7 +191,7 @@ test('simple mode creates the final task in one guarded mutation and keeps proje
   assert.equal(calls[0].task.plannedStart, '2026-08-28');
 });
 
-test('clearing a date propagates an empty value that task normalization stores as null', () => {
+test("tarih temizleme normalleştirmenin boş değer saklayacağı boş girdiyi iletir", () => {
   const dateInput = read('src/components/DateInput.jsx');
   assert.match(dateInput, /else onChange\?\.\(''\)/);
 
@@ -205,7 +205,7 @@ test('clearing a date propagates an empty value that task normalization stores a
   assert.equal(normalized.targetFinish, null);
 });
 
-test('required date inputs restore their previous value instead of clearing form state', () => {
+test("zorunlu tarih girdisi formu temizlemek yerine önceki değeri getirir", () => {
   const dateInput = read('src/components/DateInput.jsx');
   // Tarih biçimi tercihi düzenlenebilir alanlara da uygulandığından biçimlendirici
   // `fmtDisplayDate` yerine tercihe duyarlı `formatEditableDate` oldu. Sınanan

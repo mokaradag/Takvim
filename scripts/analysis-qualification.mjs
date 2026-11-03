@@ -2,7 +2,7 @@
  * Rota AI · Aşama 4E — zayıf model nitelendirmesi (Haiku 4.5, düşünme kapalı). Geliştirme aracıdır; `npm test` bu
  * dosyayı çalıştırmaz.
  *
- *   PLANNER_CLAUDE_LOG=cagri.jsonl PHASE4E_TIER=B PHASE4E_OUT=rapor.jsonl node --test scripts/phase4e-qualification.mjs
+ *   PLANNER_CLAUDE_LOG=cagri.jsonl PHASE4E_TIER=B PHASE4E_OUT=rapor.jsonl node --test scripts/analysis-qualification.mjs
  *
  * Katmanlar (PHASE4E_TIER):
  *   B  Yalnızca planlayıcı: kıyas kümesinin `tierB` soruları ÜRETİMDEKİ planlama sınırından geçer (sistem yönergesi, plan
@@ -41,7 +41,7 @@ const summary = { tier: TIER, model: EXPECTED_MODEL, cases: 0, passed: 0, failed
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
 const { analysisSuggestion } = await import('../src/server/ai/tools/analysisPlan.js');
 const { containmentText } = await import('../src/server/ai/tools/toolScope.js');
-// Each invocation owns its rows even when earlier or concurrent runs share the append-only ledger.
+// Her çağrı kendi satırlarına sahiptir; önceki ve eşzamanlı koşular yalnızca eklenen defteri paylaşabilir.
 const RUN_ID = randomUUID();
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
 
@@ -250,7 +250,7 @@ if (direct) {
   const pick = (items) => pickCases(items);
   if (TIER === 'B') {
     for (const item of pick(corpus.cases.filter((entry) => entry.tierB))) {
-      test(item.id, async () => {
+      test(`davranış durumu: ${item.id}`, async () => {
         const entry = await plannerCase(item);
         if (entry.firstPass) summary.firstPass += 1;
         summary.repairs += Math.max(0, entry.rounds - 1);
@@ -260,14 +260,14 @@ if (direct) {
     }
   } else if (TIER === 'C') {
     for (const chain of pick(followups.chains)) {
-      test(`chain ${chain.id}`, async (t) => {
+      test(`takip zinciri ${chain.id}`, async (t) => {
         const results = await conversationCase(t, chain.turns.map(({ text, expect }) => ({ text, expect })), { plannerModel: true, composeModel: false });
         record({ id: chain.id, turns: results, failures: results.flatMap((row, index) => row.failures.map((failure) => `#${index + 1} ${failure}`)) });
       });
     }
   } else if (TIER === 'D') {
     for (const [id, text, analysis, visual] of pick(COMPOSITION_CASES)) {
-      test(id, async (t) => {
+      test(`senaryo: ${id}`, async (t) => {
         const plan = { intent: 'rota', language: 'tr', analysis, ...(visual ? { visual: true } : {}) };
         const results = await conversationCase(t, [{ text, plan, requireComposed: true, expect: { finish: 'stop', ...(visual ? { chart: true } : {}) } }], { plannerModel: false, composeModel: true });
         record({ id, turns: results, failures: results.flatMap((row) => row.failures) });
@@ -275,7 +275,7 @@ if (direct) {
     }
   } else if (TIER === 'E') {
     for (const [id, turns] of pick(E2E_CASES)) {
-      test(id, async (t) => {
+      test(`senaryo: ${id}`, async (t) => {
         const results = await conversationCase(t, turns, { plannerModel: true, composeModel: true });
         record({ id, turns: results, failures: results.flatMap((row, index) => row.failures.map((failure) => `#${index + 1} ${failure}`)) });
       });

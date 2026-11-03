@@ -104,8 +104,8 @@ test('sınama yardımcıları boş geçmez: genişleyen tek bölüm, süzülmü�
 });
 
 test('nitelendirme boş geçmez: ufuk, etkin yön, her istek kapsamı, sunucu yedeği, vaka seçimi, kayıt ve kullanım bu koşunundur', async (t) => {
-  const { plannerScore, pickCases, record, composedProblem, usageTotals } = await import('../scripts/phase4e-qualification.mjs');
-  const { responseProblem } = await import('../scripts/planner-claude-model.mjs');
+  const { plannerScore, pickCases, record, composedProblem, usageTotals } = await import('../scripts/analysis-qualification.mjs');
+  const { responseProblem } = await import('../scripts/planner-model-adapter.mjs');
   const self = (filters = {}) => ({ filters: { assignee: 'me', ...filters }, entities: [], population: { tool: 'rota_task_search' } });
   const planned = (requests, analysis = null) => ({ outcome: 'planned', decisions: [{ intent: 'rota' }], plan: { requests, ...(analysis ? { analysis } : {}) } });
   const expect = { intent: 'rota', scope: 'self', focusAny: ['upcoming'], window: ['2026-10-26', '2026-11-01'] };
@@ -261,9 +261,13 @@ test('bütçe aşılırsa hiçbir yön sessizce düşmez; geçmiş ufuk yaklaşa
   const focus = (raw, today = '2026-09-30') => effectiveFocus(parseAnalysis(raw), today);
   for (const raw of [
     { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming'], ...week },
-    { scope: 'projects', focus: ['overview', 'overdue', 'upcoming'] },
-    { scope: 'team', focus: ['overview', 'workload', 'overdue'], ...week }
+    // Kayıt başına dağılım yönleri (2 proje × 3 yön) okuma bölümü sınırını aşar: yön sessizce düşmez, plan reddedilir.
+    { scope: 'project', names: ['Radar', 'Okuma'], focus: ['priority', 'deadlines', 'schedule'] }
   ]) assert.throws(() => expandAnalysis(parseAnalysis(raw), { today: '2026-09-30' }), (error) => error.details.includes(raw.focus.length > 3 ? '$.analysis.focus:maxItems' : '$.analysis.focus:requestBudget'));
+  // Sunucunun zorunlu eklediği okuma (portföyde projelere göre satırlar, ufuk yönü) modelin üç yönlük bütçesinden düşmez.
+  for (const raw of [{ scope: 'projects', focus: ['overview', 'overdue', 'upcoming'] }, { scope: 'team', focus: ['overview', 'workload', 'overdue'], ...week }]) {
+    assert.equal(expandAnalysis(parseAnalysis(raw), { today: '2026-09-30' }).length, 4, JSON.stringify(raw));
+  }
   assert.deepEqual(focus({ scope: 'self', focus: ['overview'], ...week }), ['overview', 'upcoming']);
   assert.deepEqual(focus({ scope: 'self', focus: ['overview'], ...week }, '2026-11-01'), ['overview', 'schedule']);
   assert.deepEqual(focus({ scope: 'self', focus: ['overdue'], dateTo: '2026-09-01' }), ['overdue', 'schedule']);
@@ -342,7 +346,10 @@ test('takip bağlamını yalnızca kabul edilmiş analiz yazar; kapsam kabul edi
     assert.equal(first.answer.finishReason, 'stop');
     const followup = await ask({ text: 'peki gelecek hafta?', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['upcoming'], dateFrom: '2026-10-05', dateTo: '2026-10-11' } } });
     assert.match(systemNotes(followup.inputs[0]), /"scope":"projects"/, 'saklanan kapsam kabul edilen özetin kapsamıdır (all değil)');
-    assert.ok(followup.log.some((row) => row.query === 'portfolio'), 'portföy kapsamı sürer');
+    const reads = populationReads(followup.log);
+    assert.ok(reads.length > 0, 'takip en az bir görev nüfusu okur');
+    assert.ok(reads.every(({ params }) => params.dateFrom === '2026-10-05' && params.dateTo === '2026-10-11'), 'portföyün dönemli proje kırılımı aynı pencereyi korur');
+    assert.equal(followup.log.some((row) => row.query === 'portfolio'), false, 'dönemsiz portföy aracı kullanılmaz');
     assert.equal(followup.answer.finishReason, 'stop');
   });
   await t.test('projelere göre gruplar satır göndergesidir', async (t) => {
@@ -383,7 +390,7 @@ test('ekip kapsamı: düzey yalnızca ekip nüfusuyla bildirilir, sorumlu grupla
       { operation: 'list', metrics: ['person.name', 'tasks.open'], population: { tool: 'rota_workload_summary', collection: 'people' }, filters: { teamLevel: 'unit' } },
       { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { teamLevel: 'department' } }
     ]) {
-      await t.test(request.population.tool, async (t) => {
+      await t.test(`davranış durumu: ${request.population.tool}`, async (t) => {
         const plans = [{ intent: 'rota', language: 'tr', request }, { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_scope' } }];
         const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
         const result = await ask({ text: 'birimimin iş yükü' });
@@ -419,7 +426,7 @@ test('ekip kapsamı: düzey yalnızca ekip nüfusuyla bildirilir, sorumlu grupla
 test('analiz bağlamı kapalı biçimlidir; model kimlik görmez; önceki özne ve satırlar yalnızca sunucu açılımıyla okunur', () => {
   const context = normalizeAnalysisContext({ v: 1, scope: 'project', subjects: [{ type: 'project', id: PROJECTS.FULL }], focus: ['overview'], rows: [{ type: 'person', id: String(ZEYNEP) }] });
   assert.ok(context);
-  for (const invalid of [{ ...context, v: 2 }, { ...context, scope: 'everyone' }, { ...context, subjects: [] }, { ...context, subjects: [{ type: 'project', id: 'x' }] },
+  for (const invalid of [{ ...context, v: 3 }, { ...context, scope: 'everyone' }, { ...context, subjects: [] }, { ...context, subjects: [{ type: 'project', id: 'x' }] },
     { ...context, rows: [{ type: 'person', id: '-1' }] }, { ...context, focus: ['x'] }, { ...context, extra: true }, { v: 1, scope: 'self', subjects: [{ type: 'project', id: PROJECTS.FULL }] }]) {
     assert.equal(normalizeAnalysisContext(invalid), null, JSON.stringify(invalid));
   }
@@ -616,14 +623,17 @@ test('paragrafa yazılan D# sunucu ayrıntısını paragrafın ardına koyar; b�
   };
   const ids = (view, kind, part) => view[kind].filter((item) => item.part === part).map((item) => item.id);
   // Zayıf modelin gerçek düzeni (Haiku): bölümün önermeleri ve ayrıntısı aynı paragrafta, ardından gösterge grafiği.
-  const sub = async (name, layout) => { let out = null; await t.test(name, async (t) => { out = await run(t, layout); }); return out; };
+  const sub = async (name, layout) => { let out = null; await t.test(`davranış: ${name}`, async (t) => { out = await run(t, layout); }); return out; };
   const accepted = await sub('kabul', (view) => {
     assert.ok(ids(view, 'propositions', 1).length && ids(view, 'details', 1).length && ids(view, 'charts', 1).length, 'sınama sayfası bölüm 1 önerme, ayrıntı ve grafik taşır');
+    // Ekip iş yükünün tamlığı kanıtlanmadığı için sunucu çekincesi (required) sayfadadır ve kendi bölümünde söylenir.
+    const required = view.propositions.filter((item) => item.required);
+    assert.ok(required.length, 'ekip iş yükü çekincesi sayfada');
     return { blocks: [{ type: 'say', items: [...ids(view, 'propositions', 1), ids(view, 'details', 1)[0], ids(view, 'charts', 1)[0]] },
-      { type: 'chart', source: ids(view, 'charts', 1)[0], style: 'kpi' }] };
+      { type: 'chart', source: ids(view, 'charts', 1)[0], style: 'kpi' }, { type: 'say', items: required.map((item) => item.id) }] };
   });
   assert.equal(accepted.presentation.mode, 'composed');
-  assert.notEqual(accepted.presentation.server, true, 'modelin düzeni kabul edildi (sunucu yedeği değil)');
+  assert.notEqual(accepted.presentation.server, true, `modelin düzeni kabul edildi (sunucu yedeği değil): ${JSON.stringify(accepted.presentation)}`);
   const content = accepted.result.answer.content;
   const paragraph = content.indexOf('Açık **2** görevin');
   const detail = content.indexOf('Ekibinizde toplam **2** görev bulunuyor');
@@ -644,12 +654,12 @@ test('yanıt düzyazısı akıcıdır: aynı nüfusun önermeleri bağlanır, ay
       plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'overdue', 'upcoming'], dateFrom: '2026-09-28', dateTo: '2026-10-04' } } });
     const paragraphs = answer.content.split('\n\n');
     // Gecikme payından sonra yakın termin aynı cümlede; genel görünümün ayrıntısı hemen ardından (yanıtın sonunda değil).
-    assert.equal(paragraphs[0], "Açık **6** görevin **3'ü** (**%50**) gecikmiş durumda; bugün başlayan yedi günlük dönemde de **1** açık görevin termini var. 【R1】");
-    assert.equal(paragraphs[1], "Sorumlusu olduğunuz toplam **7** görev bulunuyor. Bunların **1**'i tamamlanmış; tamamlanma oranı **%14**. 【R1】",
+    assert.equal(paragraphs[0], "Açık **1** görevin **1'i** (**%100**) gecikmiş durumda. 【R1】");
+    assert.equal(paragraphs[1], "Sorumlusu olduğunuz toplam **1** görev bulunuyor (ölçüt: Tarih alanı: Termin; İlk tarih: 28 Eylül 2026; Son tarih: 4 Ekim 2026). Bunların **0**'ı tamamlanmış ve **0**'ı yedi gün içinde terminli; tamamlanma oranı **%0**. 【R1】",
       'analist cümlesinin söylediği açık/gecikmiş sayısı ayrıntıda yinelenmez; "Sorumlu: Ben" öznede');
-    // Dengeli yanıtın bütçesi önce analist sonucuna ayrılır: öneri (en uzun gecikme) türetilmiş proje yoğunlaşmasından önce gelir.
-    assert.match(paragraphs[2], /^Şu anda \*\*3\*\* gecikmiş göreviniz var ve ortalama gecikme \*\*11,3 gün\*\*\. En uzun süredir geciken görev .+, en kısa süredir geciken ise .+\. Bunların \*\*2\*\*'si bir haftadan uzun süredir gecikmiş\. En uzun süredir beklediği için ilk ele alınabilecek iş \*\*Haftalık durum toplantısı\*\* görünüyor\./);
-    assert.match(answer.content, /30 Eylül 2026.*4 Ekim 2026.*terminli yapılacak ya da devam eden göreviniz yok\./, 'yaklaşan pencere gecikmiş işi tekrar saymaz');
+    // Gecikmiş bölüm yalnızca dönem içindeki görevi gösterir; eski toplamlar ve ortalamalar taşınmaz.
+    assert.equal(paragraphs[2], "Şu anda **28 Eylül 2026** ile **4 Ekim 2026** arasında terminli **1** gecikmiş göreviniz var. **Kısmi Proje** projesindeki **Kısmi kendi görevim** görevinin termini **29 Eylül 2026**. Görev **1** gündür gecikmiş. 【R2】");
+    assert.match(answer.content, /30 Eylül 2026.*4 Ekim 2026.*terminli açık göreviniz yok\./, 'yaklaşan pencere gecikmiş işi tekrar saymaz');
     assert.doesNotMatch(answer.content, /Eşleşen \*\*1\*\* görev bulundu/);
     for (const paragraph of paragraphs) assert.ok(paragraph.split('(ölçüt:').length <= 2, `ölçüt paragrafta en çok bir kez: ${paragraph}`);
   });
@@ -792,20 +802,22 @@ test('olmayan satır göndergesi onarımla silinmez: önceki analizde satır yok
   assert.equal(result.log.length, 0);
 });
 
-test('takipte bu iletide geçmeyen ad yeniden yazılırsa sunucu önceki özneye kanonik göndergeyi önerir', async (t) => {
+test('güvenilmeyen ad onarımı önceki özneye çevrilmez ve kaydı açıklatır', async (t) => {
   const plans = [
     { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['Radar Modernizasyonu'], focus: ['overview'] } },
     { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['Radar Modernizasyonu'], focus: ['workload'] }, visual: true },
-    { intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['workload'] }, visual: true }
+    { intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['workload'] }, visual: true },
+    { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } }
   ];
   const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
   await ask({ text: 'Radar Modernizasyonu projesini özetle' });
   const result = await ask({ text: 'bunu grafikle göster' });
-  assert.equal(result.inputs.length, 2);
-  const repair = systemText(result.inputs[1].messages);
-  assert.match(repair, /\$\.analysis\.names:untrusted/);
-  assert.match(repair, /önceki analizin öznesi kastediliyorsa analysis\.scope "previous"/);
-  assert.deepEqual(turnViolations(result, { project: true, finish: 'stop', chart: true }), []);
+  // Öncekiyle aynı yazılan ad bile güvenilir kimlik eşlemesi olmadan özne değişimine izin vermez.
+  assert.equal(result.inputs.length, 3);
+  assert.match(systemText(result.inputs[1].messages), /untrusted/u, 'güvenilmeyen ad onarıma gider');
+  assert.equal(result.answer.finishReason, 'clarification');
+  assert.equal(result.log.length, 0);
+  assert.match(result.answer.content, /adını veya kodunu/u);
 });
 
 test('analitik özette açık grafik isteği aday yoksa sessizce düşmez: sunucu düzeni kısa not ekler', async (t) => {
@@ -903,7 +915,7 @@ test('karşılaştırma bütçesi tüm fiziksel okumaları kabul eder veya SQL �
 });
 
 test('önceki kişi karşılaştırması within ile daralınca her üretim okuması kişi ∩ proje olur', async (t) => {
-  for (const focus of ['overview', 'priority', 'schedule']) await t.test(focus, async (t) => {
+  for (const focus of ['overview', 'priority', 'schedule']) await t.test(`analiz yönü: ${focus}`, async (t) => {
     const { ask } = phase4eConversation(t);
     const first = await ask({ text: 'Ayşe Yılmaz ve Zeynep Kaya durumlarını karşılaştır',
       plan: { intent: 'rota', language: 'tr', analysis: { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['overview'] } } });
@@ -925,7 +937,9 @@ test('analiz onarım önerisi temsil edemediği hiçbir süzgeci düşürmez', (
   for (const extra of [{ previousResult: { type: 'task', from: 1 } }, { entities: [null] }, { filters: 'invalid' }]) {
     assert.equal(analysisSuggestion({ ...request({}), ...extra }), null);
   }
-  for (const filters of [{ status: ['done'] }, { dateFrom: '2026-09-01', dateTo: '2026-09-30' }, { priority: ['high'] },
+  // Dönemli durum dağılımı artık özetle birebir temsil edilir (status yönü ufku taşır); öneri tarihleri korur.
+  assert.match(analysisSuggestion(request({ dateFrom: '2026-09-01', dateTo: '2026-09-30' })), /"focus":\["status"\],"dateFrom":"2026-09-01","dateTo":"2026-09-30"/);
+  for (const filters of [{ status: ['done'] }, { priority: ['high'] },
     { milestone: true }, { createdByMe: true }, { text: 'görev' }, { period: 'last_7_days' }, { assignee: 'unassigned' }]) {
     assert.equal(analysisSuggestion(request(filters)), null, JSON.stringify(filters));
   }
@@ -942,7 +956,7 @@ test('analiz onarım önerisi temsil edemediği hiçbir süzgeci düşürmez', (
 });
 
 test('geçmiş ufuklu analiz üretim akışında yaklaşan iş okumaz ve kalıcı bağlamı aynı yönü taşır', async (t) => {
-  for (const focus of ['overview', 'overdue']) await t.test(focus, async (t) => {
+  for (const focus of ['overview', 'overdue']) await t.test(`analiz yönü: ${focus}`, async (t) => {
     const { ask } = phase4eConversation(t);
     const result = await ask({ text: 'geçen hafta durumumu değerlendir',
       plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: [focus], dateTo: '2026-09-28' } } });
@@ -952,12 +966,12 @@ test('geçmiş ufuklu analiz üretim akışında yaklaşan iş okumaz ve kalıc�
     assert.ok(reads.some(({ params }) => params.dateTo === '2026-09-28'));
     assert.ok(reads.every(({ params }) => !params.dateFrom || params.dateFrom <= '2026-09-28'));
     const next = await ask({ text: 'aynı kapsamın genel durumu', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['overview'] } } });
-    assert.match(systemText(next.inputs[0].messages), /"focus":\["(?:overview|overdue)","schedule"\]/);
+    assert.match(systemText(next.inputs[0].messages), /"focus":\["(?:overview|overdue)"\]/);
   });
 });
 
 test('ekip iş yükü sıfır yüklü kadroyu veya çözümlenmeyen atamayı tam saymaz', async (t) => {
-  for (const unresolved of [false, true]) await t.test(unresolved ? 'çözümlenmeyen üye' : 'sıfır yüklü üye', async (t) => {
+  for (const unresolved of [false, true]) await t.test(`davranış durumu: ${unresolved ? 'çözümlenmeyen üye' : 'sıfır yüklü üye'}`, async (t) => {
     const seed = rotaToolSeed();
     const members = [MEHMET, ZEYNEP, LEAD];
     seed.executiveScope = [...members, 910004].map((EmployeeSicil) => ({ ManagerSicil: AYSE, EmployeeSicil, ScopeType: 'UNIT' }));
@@ -1056,7 +1070,7 @@ test('yedi günlük aciliyetin bağımsız ve birleşik tüm biçimleri bugünü
 });
 
 test('109 son: proje satırı takibi kendi ve bölüm nüfuslarını korur ve yeniden yetkilendirir', async (t) => {
-  for (const scope of ['self', 'team']) await t.test(scope === 'self' ? 'kendi nüfusu' : 'ekip nüfusu', async (t) => {
+  for (const scope of ['self', 'team']) await t.test(`davranış durumu: ${scope === 'self' ? 'kendi nüfusu' : 'ekip nüfusu'}`, async (t) => {
     const seed = rotaToolSeed();
     seed.executiveScope = [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP, ScopeType: 'DEPARTMENT' }];
     const { ask, stack } = phase4eConversation(t, { seed, composition: false });
@@ -1078,7 +1092,7 @@ test('109 son: proje satırı takibi kendi ve bölüm nüfuslarını korur ve ye
 });
 
 test('109 son: numaralı açıklama seçimi kanonik analiz öznesini geri yükler ve yeniden yetkilendirir', async (t) => {
-  for (const revoke of [false, true]) await t.test(revoke ? 'yetki kaldırılmış' : 'yetki geçerli', async (t) => {
+  for (const revoke of [false, true]) await t.test(`davranış durumu: ${revoke ? 'yetki kaldırılmış' : 'yetki geçerli'}`, async (t) => {
     const { ask, stack } = phase4eConversation(t, { composition: false });
     const first = await ask({ text: 'Zeynep Kaya durumunu değerlendir', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'person', names: ['Zeynep Kaya'], focus: ['overview'] } } });
     assert.equal(first.answer.finishReason, 'stop');
@@ -1105,7 +1119,7 @@ test('109 son: numaralı açıklama seçimi kanonik analiz öznesini geri yükle
 });
 
 test('109 son: analiz onarımı etkilenmeyen kapsamı odağı adları ufku veya görsel isteğini değiştiremez', async (t) => {
-  for (const changed of ['scope', 'focus', 'names', 'dateFrom', 'visual', 'level', 'within']) await t.test(({ scope: 'kapsam', focus: 'odak', names: 'adlar', dateFrom: 'başlangıç tarihi', visual: 'görsel istek', level: 'ekip düzeyi', within: 'proje daraltması' })[changed], async (t) => {
+  for (const changed of ['scope', 'focus', 'names', 'dateFrom', 'visual', 'level', 'within']) await t.test(`davranış durumu: ${({ scope: 'kapsam', focus: 'odak', names: 'adlar', dateFrom: 'başlangıç tarihi', visual: 'görsel istek', level: 'ekip düzeyi', within: 'proje daraltması' })[changed]}`, async (t) => {
     const analysis = changed === 'names' ? { scope: 'person', names: ['Zeynep Kaya'], focus: ['overview'] }
       : { scope: 'team', level: 'department', within: 'Radar', focus: ['workload'], dateFrom: '2026-10-01', dateTo: '2026-10-31', visual: true };
     const alternative = { ...analysis, [changed]: { scope: 'all', focus: ['overview'], names: ['Ayşe Yılmaz'], dateFrom: '2026-10-02', visual: false, level: 'unit', within: 'Okuma' }[changed] };
@@ -1161,7 +1175,7 @@ test('109 son: sorumlu analizi onarımı iş yükünün açık görev nüfusuyla
 });
 
 test('109 son: nitelendirme Türkçe kurallarla normalleştirilmiş ad kümesini tam olarak ister', async () => {
-  const { plannerScore } = await import('../scripts/phase4e-qualification.mjs');
+  const { plannerScore } = await import('../scripts/analysis-qualification.mjs');
   const score = (names) => plannerScore({ outcome: 'planned', decisions: [{ intent: 'rota' }], plan: { requests: names.map((query) => ({ entities: [{ type: 'project', query }], filters: {}, population: { tool: 'rota_task_search' } })) } }, { intent: 'rota', scope: 'project', names: ['PAYKDM'] });
   assert.deepEqual(score(['paykdm']), []);
   assert.ok(score(['PAYKDM', 'PAY']).length);
@@ -1169,7 +1183,7 @@ test('109 son: nitelendirme Türkçe kurallarla normalleştirilmiş ad kümesini
 });
 
 test('109 son: nitelendirme doğru aralıklı okumanın yanındaki yanlış tarih aralığını reddeder', async () => {
-  const { plannerScore } = await import('../scripts/phase4e-qualification.mjs');
+  const { plannerScore } = await import('../scripts/analysis-qualification.mjs');
   const request = (filters) => ({ entities: [], filters: { assignee: 'me', ...filters }, population: { tool: 'rota_task_search' } });
   const score = (requests) => plannerScore({ outcome: 'planned', decisions: [{ intent: 'rota' }], plan: { requests } }, { intent: 'rota', scope: 'self', window: ['2026-10-01', '2026-10-31'] });
   const correct = request({ dateFrom: '2026-10-01', dateTo: '2026-10-31' });
@@ -1187,7 +1201,7 @@ test('109 son: karşılaştırma sınamaları eksik ikinci kişiyi ve ek kişiyi
 });
 
 test('109 son: boş planlayıcı veya düzenleyici davranışı sahte sağlayıcının boş davranış sözleşmesine uyar', async (t) => {
-  for (const mode of ['planner', 'compose']) await t.test(mode === 'planner' ? 'planlayıcı' : 'düzenleyici', async (t) => {
+  for (const mode of ['planner', 'compose']) await t.test(`davranış durumu: ${mode === 'planner' ? 'planlayıcı' : 'düzenleyici'}`, async (t) => {
     const { ask } = phase4eConversation(t, mode === 'planner' ? { planner: () => null } : { compose: () => null });
     const result = await ask({ text: 'durumumu değerlendir', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] } } });
     assert.notEqual(result.answer.finishReason, 'error', result.answer.content);
@@ -1259,14 +1273,15 @@ test('109 son: yedek grafik seçiminde analiz bölümü grafik türünden önce 
   const { preferredChart } = await import('../src/domain/ai/groundedComposition.js');
   for (const first of ['bar', 'timeline', 'kpi']) {
     const charts = new Map([['G1', { id: 'G1', part: 1, types: [first] }], ['G2', { id: 'G2', part: 2, types: ['stacked'] }]]);
-    assert.deepEqual(preferredChart({ charts }), { id: 'G1', style: first });
+    // Gösterge kartları (KPI) veri grafiği değildir: açık grafik isteğinde başka bölümde veri grafiği varsa o seçilir.
+    assert.deepEqual(preferredChart({ charts }), first === 'kpi' ? { id: 'G2', style: 'stacked' } : { id: 'G1', style: first });
     charts.set('G3', { id: 'G3', part: 1, types: ['donut'] });
     assert.deepEqual(preferredChart({ charts }), { id: 'G3', style: 'donut' });
   }
 });
 
 test('109 son: kanıtlı kısmi kullanılamaz yanıt karşılanamayan grafik isteğini açıklar ancak kanıtsız yanıt açıklamaz', async (t) => {
-  for (const noEvidence of [false, true]) await t.test(noEvidence ? 'kanıt yok' : 'kısmi kanıt var', async (t) => {
+  for (const noEvidence of [false, true]) await t.test(`davranış durumu: ${noEvidence ? 'kanıt yok' : 'kısmi kanıt var'}`, async (t) => {
     const { stack, ask } = phase4eConversation(t, { composition: false });
     stack.db.aiToolFailure = { get 'task-facts'() {
       return noEvidence || !stack.db.aiToolLog.at(-1)?.params.priorityCsv ? new Error('fixture unavailable') : null;

@@ -18,7 +18,7 @@ const TASK_A = '11111111-1111-4111-8111-111111111111';
 const TASK_B = '22222222-2222-4222-8222-222222222222';
 const TASK_C = '33333333-3333-4333-8333-333333333333';
 
-test('task upserts are ordered predecessor-first regardless of client order', () => {
+test("görev güncellemeleri istemci sırasından bağımsız öncül önce sıralanır", () => {
   const ordered = orderTaskUpsertsByDependencies([
     { id: TASK_B, projectId: PROJECT_B, deps: [{ predecessorId: TASK_A }] },
     { id: TASK_C, projectId: PROJECT_B, deps: [{ predecessorId: TASK_B }] },
@@ -28,7 +28,7 @@ test('task upserts are ordered predecessor-first regardless of client order', ()
   assert.deepEqual(ordered.map((task) => task.id), [TASK_A, TASK_B, TASK_C]);
 });
 
-test('final-state dependency validation accepts tasks moved together', () => {
+test("son durum bağımlılık doğrulaması birlikte taşınmış görevleri kabul eder", () => {
   const issue = findFinalTaskReferenceIssue({
     existingTaskProjects: new Map([[TASK_A, PROJECT_A], [TASK_B, PROJECT_A]]),
     taskUpserts: [
@@ -40,7 +40,7 @@ test('final-state dependency validation accepts tasks moved together', () => {
   assert.equal(issue, null);
 });
 
-test('final-state dependency validation rejects deleted or cross-project predecessors', () => {
+test("son durum bağımlılık doğrulaması silinmiş ve başka projeli öncülü reddeder", () => {
   const deletedIssue = findFinalTaskReferenceIssue({
     existingTaskProjects: new Map([[TASK_A, PROJECT_A], [TASK_B, PROJECT_A]]),
     taskUpserts: [{ id: TASK_B, projectId: PROJECT_A, deps: [{ predecessorId: TASK_A }] }],
@@ -58,7 +58,7 @@ test('final-state dependency validation rejects deleted or cross-project predece
   assert.equal(movedIssue?.code, 'CROSS_PROJECT_DEPENDENCY');
 });
 
-test('final-state dependency validation rejects duplicate relationships before SQL', () => {
+test("son durum bağımlılık doğrulaması yinelenen ilişkiyi SQL öncesi reddeder", () => {
   const issue = findFinalTaskReferenceIssue({
     existingTaskProjects: new Map([[TASK_A, PROJECT_A], [TASK_B, PROJECT_A]]),
     taskUpserts: [{
@@ -71,7 +71,7 @@ test('final-state dependency validation rejects duplicate relationships before S
   assert.equal(issue?.code, 'DUPLICATE_DEPENDENCY');
 });
 
-test('hardened commits require active stored and destination projects', () => {
+test("güçlendirilmiş kayıt kaynak ve hedef projenin etkinliğini ister", () => {
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
   assert.match(source, /async function assertActiveProjectMutationTargets/);
   assert.match(source, /if \(!row \|\| !Boolean\(row\.IsActive\)\)/);
@@ -81,7 +81,7 @@ test('hardened commits require active stored and destination projects', () => {
   assert.match(source, /await assertActiveProjectMutationTargets\(executor, changes\);/);
 });
 
-test('dependency graph removals finish before final requested edges are added', () => {
+test("bağımlılık kaldırma yeni son kenarlar eklenmeden biter", () => {
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
   const deleteLoop = source.indexOf('for (const entry of changes.taskDeletes)');
   const additionLoop = source.indexOf("const nextEdges = projectEdges.get(projectId) || [];");

@@ -149,8 +149,8 @@ export async function assertUpsertIntentMatchesPersistence(executor, changes = {
           await assertAssigneeScope(executor, actor, destination, entry.assigneeIds || [], scope);
           if (scope === TASK_PROJECT_SCOPES.ASSIGNEE_CREATE && !entry.recurrenceParentId) assertAssigneeTaskCreateFieldsOnly(entry);
         }
-        // Canonical persistence validation must finish before testing a proposed
-        // ID. Otherwise any later rejection becomes a hidden-ID collision oracle.
+        // Kanonik kalıcılık doğrulaması önerilen kimliği denemeden bitmelidir.
+        // Aksi durumda sonraki ret gizli kimlik çakışmasını yoklama aracına dönüşür.
       }
       if (!updateIntent && deferCreateCollisions) continue;
       const projectId = await targetProjectForUpdate(executor, target, id);

@@ -99,8 +99,8 @@ export async function deliverTaskReminder(executor, {
     };
   }
 
-  // Direct task assignees may see co-assignee display names in the canonical
-  // snapshot projection. Usernames and directory identities are not a fallback.
+  // Doğrudan görev sorumlusu kanonik görüntüde ortak sorumlu adını görebilir.
+  // Kullanıcı adı ve dizin kimliği dönüş seçeneği değildir.
   const assigneeNames = [], seenSicils = new Set();
   for (const row of rows) {
     const sicil = String(row?.sicil ?? '').trim();
@@ -118,9 +118,9 @@ export async function deliverTaskReminder(executor, {
     await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: rendered.code, preserveRecipients: reclaimed });
     return { ok: false, code: rendered.code, message: rendered.message, problems, warnings };
   }
-  // The bounded progress envelope contains no addresses. Bind positions to the
-  // complete recipient set so a directory/assignment change cannot replay them
-  // against different people. 0=unattempted, 1=uncertain, 2=sent, 3=definite failure.
+  // Sınırlı ilerleme zarfı adres içermez. Konumlar tam alıcı kümesine bağlanır;
+  // böylece dizin veya atama değişimi konumları yeniden oynatamaz.
+  // başka kişilere oynatılamaz. 0 denenmemiş, 1 belirsiz, 2 gönderilmiş, 3 kesin hatadır.
   recipients.sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0);
   const fingerprint = createHash('sha256').update(JSON.stringify(recipients.map((email) => email.toLowerCase()))).digest('hex');
   const prefix = `delivery1:${fingerprint}:`;
@@ -148,25 +148,25 @@ export async function deliverTaskReminder(executor, {
   let uncertain = states.includes('1'), uncertainThisRun = false, attempted = states.filter((state) => state !== '0').length;
   const checkpoint = () => completeReminderLog(executor, logId, { status: 'PENDING', recipients: delivered,
     failureCode: 'DELIVERY_IN_PROGRESS', progress: progress(), active: true });
-  // Bound admission separately from an in-flight session. One isolated message
-  // has at most 14 timed stages: connect, greeting, EHLO, STARTTLS, TLS, EHLO,
-  // three LOGIN exchanges, MAIL, RCPT, DATA, acceptance and QUIT. Preserve those
-  // command timeouts instead of aborting a healthy message after just one.
+  // Kabul süresi devam eden oturumdan ayrı sınırlanır. Yalıtılmış ileti
+  // en çok on dört süreli aşama taşır: bağlantı, karşılama, EHLO, STARTTLS, TLS, EHLO,
+  // üç LOGIN değişimi, MAIL, RCPT, DATA, kabul ve QUIT. Bu aşamalar korunur.
+  // tek süre sonunda sağlıklı iletiyi kesmek yerine komut zaman aşımlarını kullanır.
   const controller = new AbortController();
   const timeoutMs = isSmtpConfigured() ? getSmtpConfig().timeoutMs : 20000;
   const budgetMs = Math.min(120000, timeoutMs * Math.min(recipients.length, 6));
   const deadline = Date.now() + budgetMs;
-  // A final hard deadline also bounds trickling TLS or a stalled transport.
-  // Leave half the existing abandoned-claim window for reads/finalization;
-  // a long configured timeout must not outlive automatic claim ownership.
+  // Son katı süre parça parça TLS veya duraklayan taşımayı da sınırlar.
+  // Mevcut terk edilmiş sahiplik penceresinin yarısı okuma ve sonuçlandırmaya ayrılır;
+  // uzun ayarlı zaman aşımı otomatik sahiplik ömrünü aşmamalıdır.
   const hardBudgetMs = Math.min(budgetMs + 14 * timeoutMs, ABANDONED_CLAIM_MINUTES * 30000);
   const timer = setTimeout(() => controller.abort(), hardBudgetMs);
   try {
     for (const [index, email] of recipients.entries()) {
       if (states[index] !== '0') continue;
       if (controller.signal.aborted || Date.now() >= deadline) break;
-      // Persist terminal uncertainty BEFORE transport. A process loss can never
-      // turn a possibly accepted message into an automatic resend.
+      // Son belirsizlik taşımadan önce saklanır; süreç kaybı kabul edilmiş olabilecek iletiyi
+      // otomatik yeniden gönderime dönüştüremez.
       states[index] = '1';
       try { await checkpoint(); } catch {
         states[index] = '0';
@@ -211,8 +211,8 @@ export async function deliverTaskReminder(executor, {
   if (uncertain) {
     const code = 'MAIL_DELIVERY_UNCERTAIN';
     const message = 'Bazı teslimatların sonucu belirsiz; yinelenen posta riskine karşı otomatik yeniden gönderilmeyecek.';
-    // PENDING + CompletedAt + a distinct code is terminal uncertainty, not SENT
-    // or definite failure. Stale-claim recovery must not retry this delivery.
+    // PENDING ile CompletedAt ve ayrı kod son belirsizliktir; SENT veya
+    // kesin hata değildir. Eski sahiplik kurtarması bu teslimi yeniden deneyemez.
     const outcome = { status: 'PENDING', recipients: delivered, failureCode: code, progress: progress() };
     const recorded = await finalizeLog(executor, logId, outcome) || await finalizeLog(executor, logId, outcome);
     if (!recorded) warnings.push('Gönderim geçmişi kaydının tamamlandığı doğrulanamadı.');
@@ -344,8 +344,8 @@ export async function sendManualReminder(executor, {
   try {
     return await deliverTaskReminder(executor, { task, settings, kind: 'MANUAL', logId, actorSicil, reclaimed: resumedLogId != null, now, send });
   } catch (error) {
-    // Keep the most recent durable recipient checkpoint, including any sends
-    // confirmed since resume. Never restore a stale copy over that checkpoint.
+    // Devamdan beri onaylanan gönderimler dahil son kalıcı alıcı kontrol noktası korunur.
+    // Bu kontrol noktasının üzerine eski kopya geri yüklenmez.
     if (resumedLogId != null) await deferReminderLog(executor, logId);
     else await finalizeLog(executor, logId, { status: 'FAILED', recipients: [], failureCode: 'UNEXPECTED_ERROR' });
     throw error;
@@ -519,7 +519,7 @@ export async function runAutomaticReminders(executor, {
       // (bağlantı dizesi, parola vb.) günlüğe yazılmaz.
       if (reclaimed) {
         try { await deferReminderLog(executor, claimedLogId); }
-        catch { /* Keep the active checkpoint for stale-claim recovery if deferral is also unavailable. */ }
+        catch { /** Erteleme de kullanılamıyorsa eski sahiplik kurtarması için etkin kontrol noktası korunur. */ }
       } else await finalizeLog(executor, claimedLogId, {
         status: 'FAILED',
         recipients: [],

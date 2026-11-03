@@ -322,7 +322,7 @@ test('genel durum dikkat gerektirenleri, bileşenleri ve göstergeleri çizer', 
   assert.match(serialized, /Son başarı: .{0,4}bilinmiyor/);
 });
 
-test('Rota data drawer translates request-declaration, timeout and fallback telemetry values', async (t) => {
+test("Rota veri çekmecesi bildirim zaman aşımı ve dönüş ölçümünü çevirir", async (t) => {
   const { recordGroundedEscalation, aiTelemetrySnapshot, resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
   resetAiTelemetryForTests();
   t.after(() => resetAiTelemetryForTests());
@@ -338,7 +338,7 @@ test('Rota data drawer translates request-declaration, timeout and fallback tele
   view.unmount();
 });
 
-test('Rota posted convergence: predecision failures stay separate from invalid plans after sample saturation', async (t) => {
+test("örneklem dolduktan sonra karar öncesi hatalar geçersiz plandan ayrı kalır", async (t) => {
   const { recordPlannerDecision, aiTelemetrySnapshot, resetAiTelemetryForTests } = await import('../src/server/ai/aiTelemetry.js');
   resetAiTelemetryForTests();
   t.after(() => resetAiTelemetryForTests());

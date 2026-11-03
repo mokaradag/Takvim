@@ -4,8 +4,8 @@ import { ACTUAL_ID_ALIAS_STORAGE_KEY, MAX_ACTUAL_ID_ALIASES, actualIdAliasType,
   decodeActualIdAliases, encodeActualIdAliases } from './actualIdAliasStorage.js';
 import { AppRepositoryError } from '../contracts/appRepository.js';
 
-// Server creationAllocations.js expires proofs after 24 hours. Stop reusing
-// them five minutes earlier, including time spent receiving/persisting them.
+// Sunucu creationAllocations.js kanıtları 24 saatte bitirir; bu yüzden yeniden kullanım
+// alım ve kayıt süresi dahil beş dakika daha erken bırakılır.
 export const CREATION_ALLOCATION_SERVER_TTL_MS = 24 * 60 * 60 * 1000;
 export const CREATION_ALLOCATION_SAFETY_MARGIN_MS = 5 * 60 * 1000;
 export const CREATION_ALLOCATION_CLIENT_TTL_MS = CREATION_ALLOCATION_SERVER_TTL_MS - CREATION_ALLOCATION_SAFETY_MARGIN_MS;
@@ -24,9 +24,9 @@ function storageError() {
 let lockDatabase;
 function serializeStorage(key, mutation) {
   if (typeof window !== 'undefined' && window.navigator?.locks) return window.navigator.locks.request(key, mutation);
-  // Web Locks requires HTTPS. The existing on-prem HTTP deployment can use an
-  // IndexedDB readwrite transaction to serialize the synchronous injected-storage
-  // critical section across tabs instead. Never hold it over a network await.
+  // Web Locks HTTPS ister; mevcut kurum içi HTTP dağıtımı bunun yerine
+  // IndexedDB yazma işlemiyle eşzamanlı depo kritik bölümünü
+  // sekmeler arasında serileştirir. Kilit ağ bekleyişi boyunca tutulmaz.
   if (globalThis.indexedDB) {
     lockDatabase ||= new Promise((resolve, reject) => {
       const open = globalThis.indexedDB.open('mergen-rota-creation-locks', 1);
@@ -44,8 +44,8 @@ function serializeStorage(key, mutation) {
       transaction.onabort = transaction.onerror = () => reject(failure || storageError());
     }));
   }
-  // Non-browser test/server clients have synchronous storage and no competing
-  // browser contexts. Browsers lacking both lock mechanisms fail closed.
+  // Tarayıcı dışı sınama ve sunucu istemcisi eşzamanlı depoya sahiptir;
+  // rakip tarayıcı bağlamı yoktur. İki kilidi de olmayan tarayıcı erişimi kapatır.
   if (typeof window === 'undefined' || !window.navigator) return Promise.resolve().then(mutation);
   return Promise.reject(storageError());
 }
@@ -62,7 +62,7 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
     if (!storage) return { records: new Map(memory.records), aliases: decodeActualIdAliases(encodeActualIdAliases(memory.aliases)) };
     const saved = JSON.parse(storage.getItem(storageKey()) || 'null');
     if (saved == null) return { records: new Map(), aliases: new Map() };
-    // Unscoped legacy envelopes have no verifiable owner and are never restored.
+    // Kapsamsız eski zarfın doğrulanabilir sahibi yoktur ve geri yüklenmez.
     if (saved?.version !== 2 || !Array.isArray(saved.pending) || !Array.isArray(saved.aliases)
       || saved.pending.length > MAX_ACTUAL_ID_ALIASES || saved.aliases.length > MAX_ACTUAL_ID_ALIASES * 2) throw storageError();
     const state = { records: new Map(), aliases: decodeActualIdAliases(saved.aliases) };
@@ -112,10 +112,10 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
   }
 
   function publish(state, aliases) {
-    // Durable compaction may retire completed aliases, but an existing live
-    // client can still hold those IDs. Keep its verified immutable mappings in
-    // the SAME alias map until that client state is discarded. Fresh clients
-    // load retired rows under their canonical server IDs from the snapshot.
+    // Kalıcı sıkıştırma tamamlanmış eşlemeyi kaldırabilir; mevcut canlı istemci
+    // bu kimlikleri hâlâ taşıyabilir. Doğrulanmış değişmez eşlemeleri
+    // istemci durumu atılana kadar aynı haritada kalır. Yeni istemci
+    // kaldırılmış satırı görüntüden kanonik sunucu kimliğiyle yükler.
     const currentMappings = mappingsFor(state);
     const live = [...aliases].filter(([actual, client]) => {
       const type = actualIdAliasType(aliases, actual);
@@ -141,14 +141,14 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
       validateAccount();
       if (owner !== account) throw storageError();
       const state = read();
-      // Formatting aliases collected for this request are safe to merge. Typed
-      // creation aliases come only from the fresh durable lifecycle snapshot.
+      // Bu istek için toplanan biçim eşlemeleri güvenle birleştirilebilir.
+      // Türlü oluşturma eşlemeleri yalnızca güncel kalıcı yaşam döngüsü görüntüsünden gelir.
       for (const [actual, client] of aliases) if (!actualIdAliasType(aliases, actual)
         && extractActualId(client) === actual && !state.aliases.has(actual)) state.aliases.set(actual, client);
       const result = mutation(state);
       if (state.records.size > MAX_ACTUAL_ID_ALIASES) throw capacityError();
-      // One atomic write contains both proofs and aliases, including removals.
-      // No locally reusable state is published before this write succeeds.
+      // Tek atomik yazma kaldırmalar dahil kanıt ve eşlemeleri içerir.
+      // Bu yazma başarılı olmadan yeniden kullanılabilir yerel durum yayımlanmaz.
       storage?.setItem(storageKey(), JSON.stringify({ version: 2, pending: [...state.records.values()],
         aliases: encodeActualIdAliases(state.aliases, { pendingIds: new Set([...state.records.values()].map((record) => record.id)) }) }));
       publish(state, aliases);
@@ -162,7 +162,7 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
     const byId = new Map([...state.records.values()].map((record) => [`${record.entityType}:${record.id}`, record]));
     const prepared = remapCommitIds(changes, mappings);
     for (const { entry, entityType } of creationEntries(prepared)) {
-      // Proofs are attached only from a current, fully bound pending record.
+      // Kanıt yalnızca güncel ve tam bağlı bekleyen kayıttan eklenir.
       delete entry.creationProof;
       const record = byId.get(`${entityType}:${entry.id}`);
       if (record) entry.creationProof = record.proof;
@@ -181,7 +181,7 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
       publish(memory, aliases);
     },
     restoreAliases(aliases) {
-      try { const state = read(); publish(state, aliases); } catch { /* Creation-dependent commits will fail closed. */ }
+      try { const state = read(); publish(state, aliases); } catch { /* Oluşturmaya bağlı kayıtlar erişimi kapatır.*/ }
     },
     prepareExisting(changes, aliases) {
       return remapCommitIds(changes, mappingsFor({ aliases }));
@@ -210,8 +210,8 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
         return await mutate(aliases, (state) => {
           if (reconciliationRecords(state, changes).length) throw storageError();
           const mappings = new Map([...mappingsFor({ aliases }), ...mappingsFor(state)]);
-          // Retire only expired proofs unrelated to this operation. Keep typed
-          // aliases: an uncertain old draft must never acquire a second identity.
+          // Yalnızca bu işlemle ilgisiz süresi dolmuş kanıt kaldırılır. Türlü eşleme
+          // korunur; belirsiz eski taslak hiçbir zaman ikinci kimlik alamaz.
           const referenced = new Set();
           const reference = (type, id) => { if (id) referenced.add(`${type}:${extractActualId(id)}`); };
           const translated = remapCommitIds(changes, mappings);
@@ -235,7 +235,7 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
         });
       } catch (error) {
         if (error?.code === 'UNAUTHORIZED' || creationEntries(changes).length) throw error;
-        // Storage availability must not block versioned edits/deletions.
+        // Depo kullanılamaması sürümlü düzenleme veya silmeyi engellememelidir.
         return remapCommitIds(changes, mappingsFor({ aliases }));
       }
     },
@@ -249,8 +249,8 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
             || !['PROJECT', 'WBS', 'TASK'].includes(value.entityType)) throw storageError();
           const record = { ...value, clientId: extractActualId(value.clientId), id: extractActualId(value.id), proof: extractActualId(value.proof), allocatedAt };
           const recordKey = `${record.entityType}:${record.clientId}`;
-          // A competing tab may already have remembered or completed this draft.
-          // Keep its pending proof; never replace a durable completed identity.
+          // Rakip sekme bu taslağı zaten hatırlamış veya tamamlamış olabilir.
+          // Bekleyen kanıtı korunur; kalıcı tamamlanmış kimlik değiştirilmez.
           if (state.records.has(recordKey)) {
             if (state.records.get(recordKey).proof !== record.proof) unused.push(record);
             continue;
@@ -273,7 +273,7 @@ export function createCreationIdStorage(storage, aliasKey = ACTUAL_ID_ALIAS_STOR
               && record.proof === entry.creationProof) state.records.delete(recordKey);
           }
         });
-      } catch { /* Keep the acknowledged commit; a consumed proof cannot create twice. */ }
+      } catch { /** Onaylı kayıt korunur; tüketilmiş kanıt iki kez oluşturamaz. */ }
     }
   };
 }

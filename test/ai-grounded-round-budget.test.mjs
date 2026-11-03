@@ -47,7 +47,7 @@ function stackFor(t, sicil = AYSE) {
 }
 
 for (const mode of ['standard', 'deep']) {
-  test(`"${QUESTION}" ends in one ${mode} model round: the server selects the declared facts and keeps every check`, async (t) => {
+  test(`${QUESTION} tek ${mode} model turunda biter; sunucu bildirilen olguları seçip denetimleri korur`, async (t) => {
     const stack = stackFor(t);
     const logs = captureConsole(t);
     const profile = DEFAULT_AI_MODEL_REGISTRY.profiles[MODE_PROFILES[mode]];
@@ -94,7 +94,7 @@ for (const mode of ['standard', 'deep']) {
   });
 }
 
-test('a declaration without calls is read by the server; a missing declaration costs one extra model round, never a selection round', async (t) => {
+test("çağrısız bildirim sunucuca okunur; eksik bildirim seçim turu değil tek ek model turu harcar", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   // Ayrı (çağrısız) bildirim: nüfus okumasını sunucu bildirimden kurar; ek model turu yoktur.
@@ -111,7 +111,7 @@ test('a declaration without calls is read by the server; a missing declaration c
   drained(stack.provider);
 });
 
-test('an empty overdue population is answered from its complete first page in one model round', async (t) => {
+test("boş gecikmiş nüfus tam ilk sayfadan tek model turunda yanıtlanır", async (t) => {
   const stack = stackFor(t, LEAD);
   stack.provider.enqueue(searchOverdue());
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
@@ -122,7 +122,7 @@ test('an empty overdue population is answered from its complete first page in on
   drained(stack.provider);
 });
 
-test('an empty population satisfies the listed row field only through its declared, complete count', async (t) => {
+test("boş nüfus satır alanını yalnızca bildirilmiş tam sayımla karşılar", async (t) => {
   const stack = stackFor(t, LEAD);
   const { ledger, result } = await callRotaTool(stack, LEAD, 'rota_task_search', OVERDUE_MINE);
   assert.deepEqual([result.totalCount, result.data.tasks.length, result.complete, result.truncated], [0, 0, true, false]);
@@ -139,7 +139,7 @@ test('an empty population satisfies the listed row field only through its declar
   assert.equal(issue(verifyRequested(filled.ledger, ['R1:totalCount', 'R1:data.tasks.*.title', 'R1:data.tasks.*.targetFinish'], { ...OVERDUE_LIST, filters: overdue })), null);
 });
 
-test('a newer complete snapshot supersedes duplicate older rows without another model round', async (t) => {
+test("yeni tam görüntü ek model turu olmadan eski yinelenen satırın yerini alır", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   stack.provider.enqueue({ type: 'tool-calls', preface: [declared(OVERDUE_LIST)], calls: [{ name: 'rota_task_search', arguments: OVERDUE_MINE },
@@ -155,7 +155,7 @@ test('a newer complete snapshot supersedes duplicate older rows without another 
 });
 
 for (const mode of ['standard', 'deep']) {
-  test(`a simple ongoing count is planned once by the ${mode} tool profile and answered by the server`, async (t) => {
+  test(`basit devam eden görev sayımı ${mode} araç profilince bir kez planlanıp sunucuca yanıtlanır`, async (t) => {
     const stack = stackFor(t);
     const logs = captureConsole(t);
     stack.db.tasks.find((task) => task.TaskId === TASKS.OVERDUE).Status = 'in-progress';
@@ -175,7 +175,7 @@ for (const mode of ['standard', 'deep']) {
   });
 }
 
-test('repeated native data calls without a request never execute SQL; one Deep fallback recovers with a valid plan', async (t) => {
+test("isteksiz yinelenen yerel veri çağrısı SQL yürütmez; tek Derin dönüşü geçerli planla toparlar", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   let sqlBeforeDeep = null;
@@ -198,7 +198,7 @@ test('repeated native data calls without a request never execute SQL; one Deep f
 const emptyRound = { type: 'answer', text: '', chunks: [], reasoning: 1, finishReason: 'stop',
   usage: { promptTokens: 100, completionTokens: 200, reasoningTokens: 200, totalTokens: 300 } };
 
-test('an empty completion keeps timing and usage, retries once cheaply, then uses the typed plan', async (t) => {
+test("boş tamamlama süre ve kullanımı korur; bir ucuz denemeden sonra türlü planı kullanır", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   stack.provider.enqueue(emptyRound, nativePlan());
@@ -215,7 +215,7 @@ test('an empty completion keeps timing and usage, retries once cheaply, then use
   drained(stack.provider);
 });
 
-test('an empty completion preserves the allowed reported model mismatch in its trace', async (t) => {
+test("boş tamamlama izinli model uyuşmazlığını izde korur", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   const reported = DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model;
@@ -230,7 +230,7 @@ test('an empty completion preserves the allowed reported model mismatch in its t
   drained(stack.provider);
 });
 
-test('two empty completions get exactly one Deep fallback and then fail without an escalation storm', async (t) => {
+test("iki boş tamamlama tek Derin dönüşünden sonra devir fırtınası olmadan başarısız olur", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   stack.provider.enqueue(emptyRound, emptyRound, emptyRound);
@@ -246,7 +246,7 @@ test('two empty completions get exactly one Deep fallback and then fail without 
   drained(stack.provider);
 });
 
-test('a carrier ambiguity is repaired before SQL and explicit field binding stays in Standard', async (t) => {
+test("taşıyıcı belirsizliği SQL öncesi onarılır; açık alan bağı Standartta kalır", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   const request = { operation: 'value', metrics: ['task.title', 'task.project'], entities: [{ type: 'task', id: TASKS.OVERDUE }],
@@ -266,7 +266,7 @@ test('a carrier ambiguity is repaired before SQL and explicit field binding stay
   drained(stack.provider);
 });
 
-test('revoked ambiguous evidence cannot reach the provider fallback', async (t) => {
+test("yetkisi kaldırılmış belirsiz kanıt sağlayıcı dönüşüne ulaşamaz", async (t) => {
   const stack = stackFor(t);
   stack.db.taskAssignees = stack.db.taskAssignees.filter((row) => row.TaskId !== TASKS.OVERDUE);
   const task = stack.db.tasks.find((row) => row.TaskId === TASKS.OVERDUE);
@@ -286,7 +286,7 @@ test('revoked ambiguous evidence cannot reach the provider fallback', async (t) 
   drained(stack.provider);
 });
 
-test('a post-persist ACL change prevents every visible data delta and corrects terminal telemetry', async (t) => {
+test("kayıt sonrası erişim değişimi görünür veri parçalarını önler ve son ölçümü düzeltir", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   stack.provider.enqueue(nativePlan());
@@ -305,7 +305,7 @@ test('a post-persist ACL change prevents every visible data delta and corrects t
   drained(stack.provider);
 });
 
-test('provider-controlled model and finish metadata never enter content-free turn telemetry', async (t) => {
+test("sağlayıcı denetimindeki model ve bitiş üstverisi içeriksiz tur ölçümüne girmez", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   const marker = 'sk-provider-controlled-secret';
@@ -323,7 +323,7 @@ test('provider-controlled model and finish metadata never enter content-free tur
   drained(stack.provider);
 });
 
-test('an allowed reported model remains distinct from the configured route model', async (t) => {
+test("izinli bildirilen model yapılandırılmış yönlendirme modelinden ayrı kalır", async (t) => {
   const stack = stackFor(t);
   const logs = captureConsole(t);
   const request = { operation: 'value', metrics: ['task.title'], reasoning: 'synthesis', entities: [{ type: 'task', id: TASKS.OVERDUE }], population: { tool: 'rota_task_detail' } };
@@ -339,7 +339,7 @@ test('an allowed reported model remains distinct from the configured route model
   drained(stack.provider);
 });
 
-test('the fullest grounded turn line stays inside the log sanitizer key limit and keeps every round', async (t) => {
+test("en dolu kanıtlı tur satırı günlük anahtar sınırına sığar ve her turu korur", async (t) => {
   const { recordGroundedTurn } = await import('../src/server/ai/aiTelemetry.js');
   const logs = captureConsole(t);
   const round = (purpose) => ({ purpose, profile: PLANNING_PROFILE, model: DEFAULT_AI_MODEL_REGISTRY.profiles[PLANNING_PROFILE].model, durationMs: 5, budget: 1600, finishReason: 'stop', input: 10, completion: 5 });

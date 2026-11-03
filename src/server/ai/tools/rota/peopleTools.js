@@ -44,8 +44,8 @@ const workloadSummary = {
     let unrepresented = 0;
     let incompleteAssignments = false;
     for (const fact of facts) {
-      // A restricted identity view cannot prove that SQL returned all co-assignees. This is deliberately
-      // independent of whether a hidden assignment exists: no hidden-assignment count or existence oracle.
+      // Kısıtlı kimlik görünümü SQL sonucunun bütün ortak sorumluları içerdiğini kanıtlayamaz.
+      // Bu durum gizli atama varlığından bağımsızdır; gizli atama sayısı veya varlığı açıklanmaz.
       if (!fact.identityBase) incompleteAssignments = true;
       if (assignmentState(fact) === 'unassigned') {
         unassigned += 1;

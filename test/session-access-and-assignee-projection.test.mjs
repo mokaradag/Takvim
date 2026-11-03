@@ -13,7 +13,7 @@ const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'u
 const TASK_A = '11111111-1111-4111-8111-111111111111';
 const TASK_B = '22222222-2222-4222-8222-222222222222';
 
-test('visible task projection restores every co-assignee without duplicates', () => {
+test("görünür görev izdüşümü her ortak sorumluyu yinelemeden geri getirir", () => {
   const snapshot = {
     projects: [],
     tasks: [
@@ -40,7 +40,7 @@ test('visible task projection restores every co-assignee without duplicates', ()
   assert.notEqual(projected.tasks[0], snapshot.tasks[0]);
 });
 
-test('snapshot API completes assignees only for already-authorized visible task IDs', async () => {
+test("görüntü API sorumluları yalnızca yetkili görünür görev kimlikleri için tamamlar", async () => {
   const repositorySource = read('src/server/repository/projectedSqlAppRepository.js');
   const routeSource = read('src/app/api/mergen-rota/snapshot/route.js');
 
@@ -95,7 +95,7 @@ test('0007 şemasıyla açılışta 0008 alanları eksikse talep önizlemesi gü
   assert.match(repositorySource, /return \{ items: \[\], unreadCount: 0, pendingCount: 0 \};/);
 });
 
-test('SYSTEM_ADMIN sessions enumerate every active project with an explicit reason', () => {
+test("SYSTEM_ADMIN oturumu her etkin projeyi açık nedenle listeler", () => {
   const source = read('src/server/authorization/loadAuthorizationContext.js');
 
   assert.match(source, /CAST\('SYSTEM_ADMIN' AS varchar\(30\)\) AS Reason/);
@@ -103,7 +103,7 @@ test('SYSTEM_ADMIN sessions enumerate every active project with an explicit reas
   assert.match(source, /ur\.Sicil = @sicil AND ur\.RoleCode = 'SYSTEM_ADMIN' AND ur\.IsActive = 1/);
 });
 
-test('FULL access reasons are aggregated and sorted before session projection', () => {
+test("FULL erişim nedenleri oturum izdüşümünden önce toplanır ve sıralanır", () => {
   const source = read('src/server/authorization/loadAuthorizationContext.js');
 
   assert.match(source, /const fullReasonsByProject = new Map\(\);/);

@@ -90,7 +90,7 @@ function assertLayerDoesNotReach(layer, forbiddenLayers) {
   assert.deepEqual(violations, []);
 }
 
-test('all relative imports and re-exports resolve to repository files', () => {
+test("bütün göreli içe aktarma ve yeniden dışa aktarma depo dosyasına çözülür", () => {
   const unresolved = [];
   for (const file of sourceFiles()) {
     const source = fs.readFileSync(file, 'utf8');
@@ -101,37 +101,37 @@ test('all relative imports and re-exports resolve to repository files', () => {
   assert.deepEqual(unresolved, []);
 });
 
-test('feature modules never import the mock seed directly', () => {
+test("özellik modülü sahte başlangıç verisini doğrudan içe aktarmaz", () => {
   const violations = sourceFiles(path.join(SRC, 'features')).filter((file) =>
     importSpecifiers(fs.readFileSync(file, 'utf8')).some((specifier) => specifier.includes('/data/mock'))
   ).map(toRelative);
   assert.deepEqual(violations, []);
 });
 
-test('feature modules never depend on the legacy compatibility data barrel', () => {
+test("özellik modülü eski uyumluluk veri dışa aktarımına bağlanmaz", () => {
   const violations = sourceFiles(path.join(SRC, 'features')).filter((file) =>
     importSpecifiers(fs.readFileSync(file, 'utf8')).some((specifier) => specifier.includes('/lib/data'))
   ).map(toRelative);
   assert.deepEqual(violations, []);
 });
 
-test('domain layer stays independent from application and infrastructure layers', () => {
+test("alan katmanı uygulama ve altyapıdan bağımsız kalır", () => {
   assertLayerDoesNotReach('domain', ['data', 'state', 'features', 'components', 'app', 'hooks']);
 });
 
-test('scheduling layer stays independent from data, state, and UI layers', () => {
+test("çizelgeleme katmanı veri durum ve arayüzden bağımsız kalır", () => {
   assertLayerDoesNotReach('scheduling', ['data', 'state', 'features', 'components', 'app', 'hooks']);
 });
 
-test('data layer does not depend on state or UI layers', () => {
+test("veri katmanı durum veya arayüze bağlanmaz", () => {
   assertLayerDoesNotReach('data', ['state', 'features', 'components', 'app']);
 });
 
-test('state layer does not depend on feature or shell UI modules', () => {
+test("durum katmanı özellik veya kabuk arayüzüne bağlanmaz", () => {
   assertLayerDoesNotReach('state', ['features', 'components', 'app']);
 });
 
-test('domain, scheduling, and data layers do not import React', () => {
+test("alan çizelgeleme ve veri katmanları React içe aktarmaz", () => {
   const violations = [];
   for (const layer of ['domain', 'scheduling', 'data']) {
     for (const file of sourceFiles(path.join(SRC, layer))) {
@@ -144,7 +144,7 @@ test('domain, scheduling, and data layers do not import React', () => {
   assert.deepEqual(violations, []);
 });
 
-test('shared visual primitives do not import application state or mock data', () => {
+test("ortak görsel öğeler uygulama durumu veya sahte veri içe aktarmaz", () => {
   const files = ['src/components/icons.jsx', 'src/components/ui.jsx', 'src/components/ui-extras.jsx'];
   for (const relativePath of files) {
     const imports = importSpecifiers(read(relativePath));
@@ -153,7 +153,7 @@ test('shared visual primitives do not import application state or mock data', ()
   }
 });
 
-test('source code contains no forbidden runtime CDN or remote-font dependencies', () => {
+test("kaynak kodda yasak çalışma zamanı CDN veya uzak yazı tipi bağımlılığı bulunmaz", () => {
   const forbiddenHosts = ['fonts.googleapis.com', 'fonts.gstatic.com', 'cdn.jsdelivr.net', 'unpkg.com', 'cdnjs.cloudflare.com', 'esm.sh', 'skypack.dev'];
   const violations = [];
   for (const file of walk(SRC)) {
@@ -166,7 +166,7 @@ test('source code contains no forbidden runtime CDN or remote-font dependencies'
   assert.deepEqual(violations, []);
 });
 
-test('JavaScript modules do not import executable code from remote URLs', () => {
+test("JavaScript modülü uzak URL üzerinden yürütülebilir kod içe aktarmaz", () => {
   const violations = [];
   for (const file of sourceFiles()) {
     for (const specifier of importSpecifiers(fs.readFileSync(file, 'utf8'))) {
@@ -176,7 +176,7 @@ test('JavaScript modules do not import executable code from remote URLs', () => 
   assert.deepEqual(violations, []);
 });
 
-test('source and tests contain no unresolved merge-conflict markers', () => {
+test("kaynak ve sınamada çözülmemiş birleştirme işareti bulunmaz", () => {
   const violations = [];
   for (const file of textFiles()) {
     const source = fs.readFileSync(file, 'utf8');
@@ -185,7 +185,7 @@ test('source and tests contain no unresolved merge-conflict markers', () => {
   assert.deepEqual(violations, []);
 });
 
-test('obsolete pre-refactor mixed modules remain removed', () => {
+test("eski karma modüller kaldırılmış kalır", () => {
   for (const relativePath of [
     'src/components/AppShell.jsx',
     'src/components/views-a.jsx',
@@ -196,7 +196,7 @@ test('obsolete pre-refactor mixed modules remain removed', () => {
   }
 });
 
-test('all primary feature entry modules exist', () => {
+test("bütün ana özellik giriş modülleri vardır", () => {
   for (const relativePath of [
     'src/features/dashboard/DashboardView.jsx',
     'src/features/tasks/TasksView.jsx',
@@ -214,18 +214,18 @@ test('all primary feature entry modules exist', () => {
   }
 });
 
-test('Next.js page keeps the browser-only application shell behind a non-SSR dynamic import', () => {
+test("Next.js sayfası tarayıcı kabuğunu sunucu çizimsiz dinamik aktarmada tutar", () => {
   const source = read('src/app/page.js');
   assert.match(source, /dynamic\(\(\)\s*=>\s*import\(['"]\.\.\/components\/shell\/ApplicationRoot['"]\)/);
   assert.match(source, /ssr\s*:\s*false/);
 });
 
-test('Next.js strict mode remains enabled', () => {
+test("Next.js katı kipi açık kalır", () => {
   const source = read('next.config.mjs');
   assert.match(source, /reactStrictMode\s*:\s*true/);
 });
 
-test('package scripts keep test and production build commands available', () => {
+test("paket betikleri sınama ve üretim derlemesi komutlarını korur", () => {
   const pkg = JSON.parse(read('package.json'));
   assert.equal(pkg.scripts?.test, 'node --test');
   assert.equal(pkg.scripts?.build, 'next build');
@@ -235,7 +235,7 @@ test('package scripts keep test and production build commands available', () => 
   assert.equal(pkg.scripts?.['start:prod'], 'next start -H 0.0.0.0 -p 8008');
 });
 
-test('quality workflow continuously runs install, tests, and production build', () => {
+test("kalite iş akışı kurulum sınama ve üretim derlemesini sürekli çalıştırır", () => {
   const source = read('.github/workflows/quality.yml');
   assert.match(source, /run:\s*npm ci/);
   assert.match(source, /run:\s*npm test/);
@@ -246,7 +246,7 @@ test('quality workflow continuously runs install, tests, and production build', 
   assert.match(source, /branches:\s*\n\s*- main/);
 });
 
-test('navigation IDs are unique and every navigation item has page metadata', () => {
+test("gezinme kimlikleri tekildir; her öğenin sayfa üstverisi vardır", () => {
   const ids = NAV_ITEMS.map((item) => item.id);
   assert.equal(new Set(ids).size, ids.length);
   assert.deepEqual(Object.keys(PAGE_META).sort(), [...ids].sort());
@@ -258,14 +258,14 @@ test('navigation IDs are unique and every navigation item has page metadata', ()
   }
 });
 
-test('every navigation icon name is implemented by the shared icon catalog', () => {
+test("her gezinme simgesi ortak simge kataloğunda uygulanır", () => {
   const iconSource = read('src/components/icons.jsx');
   const iconNames = new Set([...iconSource.matchAll(/^\s{2}([A-Z][A-Za-z0-9]*):/gm)].map((match) => match[1]));
   const missing = NAV_ITEMS.map((item) => item.icon).filter((name) => !iconNames.has(name));
   assert.deepEqual(missing, []);
 });
 
-test('all direct Icons references resolve to implemented icon names', () => {
+test("bütün doğrudan Icons başvuruları uygulanmış simge adına çözülür", () => {
   const iconSource = read('src/components/icons.jsx');
   const iconNames = new Set([...iconSource.matchAll(/^\s{2}([A-Z][A-Za-z0-9]*):/gm)].map((match) => match[1]));
   const missing = new Set();
@@ -278,7 +278,7 @@ test('all direct Icons references resolve to implemented icon names', () => {
   assert.deepEqual([...missing], []);
 });
 
-test('all configured project color variables are defined in global CSS', () => {
+test("bütün yapılandırılmış proje renk değişkenleri genel CSS içinde tanımlıdır", () => {
   const css = read('src/app/globals.css');
   for (const value of Object.values(COLOR_MAP)) {
     const variable = value.match(/var\((--[^)]+)\)/)?.[1];
@@ -287,7 +287,7 @@ test('all configured project color variables are defined in global CSS', () => {
   }
 });
 
-test('global CSS defines complete dark and light theme token blocks', () => {
+test("genel CSS koyu ve açık temanın tam belirteç bloklarını tanımlar", () => {
   const css = read('src/app/globals.css');
   for (const theme of ['dark', 'light']) {
     assert.match(css, new RegExp(`\\.theme-${theme}\\s*\\{`));
@@ -298,7 +298,7 @@ test('global CSS defines complete dark and light theme token blocks', () => {
   }
 });
 
-test('tweak defaults point to supported navigation and theme values', () => {
+test("ince ayar varsayılanları desteklenen gezinme ve temaya işaret eder", () => {
   assert.ok(['dark', 'light'].includes(TWEAK_DEFAULTS.theme));
   assert.ok(['compact', 'balanced', 'spacious'].includes(TWEAK_DEFAULTS.density));
   assert.equal(NAV_ITEMS.some((item) => item.id === TWEAK_DEFAULTS.landingView), true);
@@ -310,13 +310,13 @@ test('tweak defaults point to supported navigation and theme values', () => {
   assert.equal(TWEAK_DEFAULTS.showEmblem, true);
 });
 
-test('application shell has a renderer branch for every navigation destination', () => {
+test("uygulama kabuğunda her gezinme hedefinin çizim dalı vardır", () => {
   const source = read('src/components/shell/AppShell.jsx');
   const renderedIds = new Set([...source.matchAll(/case\s+['\"]([^'\"]+)['\"]\s*:/g)].map((match) => match[1]));
   assert.deepEqual([...renderedIds].sort(), NAV_ITEMS.map((item) => item.id).sort());
 });
 
-test('root layout keeps Turkish document metadata and the default dark theme', () => {
+test("kök düzen Türkçe belge üstverisini ve varsayılan koyu temayı korur", () => {
   const source = read('src/app/layout.js');
   assert.match(source, /title:\s*['\"]MERGEN Rota — Görev Yönetimi['\"]/);
   assert.match(source, /<html lang=['\"]tr['\"]>/);
@@ -324,7 +324,7 @@ test('root layout keeps Turkish document metadata and the default dark theme', (
   assert.match(source, /href=\{FAVICON\}/);
 });
 
-test('package lock root manifest stays synchronized with package dependencies', () => {
+test("paket kilidinin kök bildirimi paket bağımlılıklarıyla eş kalır", () => {
   const pkg = JSON.parse(read('package.json'));
   const lock = JSON.parse(read('package-lock.json'));
   const root = lock.packages?.[''];
@@ -333,12 +333,12 @@ test('package lock root manifest stays synchronized with package dependencies', 
   assert.deepEqual(root.devDependencies || {}, pkg.devDependencies || {});
 });
 
-test('default tweak accent is supported by the DOM tweak application hook', () => {
+test("varsayılan vurgu DOM ince ayar kancasınca desteklenir", () => {
   const source = read('src/hooks/useApplyTweaks.js');
   assert.match(source, new RegExp(`['\"]${TWEAK_DEFAULTS.accent.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}['\"]\\s*:`));
 });
 
-test('repository source tree has no empty JavaScript modules', () => {
+test("depo kaynak ağacında boş JavaScript modülü yoktur", () => {
   const empty = sourceFiles().filter((file) => fs.readFileSync(file, 'utf8').trim().length === 0).map(toRelative);
   assert.deepEqual(empty, []);
 });

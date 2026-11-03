@@ -69,7 +69,7 @@ const documentWith = (content) => ({
 
 const runtime = await import('../src/app/runtime.js/route.js');
 
-test('runtime availability changes without a global probe, dynamic page rendering or AI initialization', async (t) => {
+test("çalışma zamanı kullanılabilirliği genel yoklama dinamik sayfa veya AI başlatma istemez", async (t) => {
   assert.equal(layout.dynamic, undefined);
   assert.doesNotMatch(read('src/app/layout.js'), /readAiConfig|server\/ai|assistant\.css/);
   const html = renderToStaticMarkup(layout.default({ children: 'Rota' }));
@@ -92,7 +92,7 @@ test('runtime availability changes without a global probe, dynamic page renderin
   for (const secret of ['sk-test-0123456789abcdef', 'ai.example.test']) assert.equal(body.includes(secret), false);
 });
 
-test('the document response supplies the public flag without requests and excludes APIs and assets', (t) => {
+test("belge yanıtı açık bayrağı ek istek olmadan sağlar; API ve varlıkları dışlar", (t) => {
   withEnv(t, 'MERGEN_ROTA_AI_ENABLED', 'true');
   const flag = middleware(new NextRequest('http://rota.example.test/'));
   const cookie = flag.cookies.get(RUNTIME_FEATURES_COOKIE);
@@ -112,7 +112,7 @@ test('the document response supplies the public flag without requests and exclud
   }
 });
 
-test('a disabled response flag prevents assistant activation without legacy metadata or a runtime request', async (t) => {
+test("kapalı yanıt bayrağı eski üstveri veya çalışma zamanı isteği olmadan asistanı engeller", async (t) => {
   withDocument(t, { cookie: `${RUNTIME_FEATURES_COOKIE}=disabled` });
   const previous = globalThis.fetch;
   const calls = [];
@@ -128,7 +128,7 @@ test('a disabled response flag prevents assistant activation without legacy meta
   probe.unmount();
 });
 
-test('the flag works through proxy-stripped and direct prefixed roots without sharing another deployment cookie', () => {
+test("bayrak vekilden arındırılmış ve doğrudan önekli kökte başka dağıtım çerezini paylaşmaz", () => {
   for (const prefix of ['/rota', '/bilge', '/apps/rota']) {
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
       import assert from 'node:assert/strict';
@@ -149,19 +149,19 @@ test('the flag works through proxy-stripped and direct prefixed roots without sh
   }
 });
 
-test('the document flag hides the assistant only when the server says disabled', () => {
+test("belge bayrağı asistanı yalnızca sunucu kapalı diyorsa gizler", () => {
   assert.equal(assistantEnabledInDocument(documentWith('disabled')), false);
   assert.equal(assistantEnabledInDocument(documentWith('enabled')), true);
   assert.equal(assistantEnabledInDocument(documentWith(null)), true);
   assert.equal(assistantEnabledInDocument({}), true);
 });
 
-test('runtime availability controls the lazily loaded assistant independently of legacy metadata', () => {
+test("çalışma zamanı kullanılabilirliği geç yüklenen asistanı eski üstveriden bağımsız denetler", () => {
   assert.equal(assistantEnabledInDocument(documentWith('disabled'), { assistant: true }), true);
   assert.equal(assistantEnabledInDocument(documentWith('enabled'), { assistant: false }), false);
 });
 
-test('with Rota AI disabled the launcher and panel render nothing, cannot be opened and send no request', async (t) => {
+test("Rota AI kapalıyken başlatıcı ve panel çizilmez açılmaz ve istek göndermez", async (t) => {
   withDocument(t, documentWith('disabled'));
   const previousMode = DataModeContext._currentValue;
   DataModeContext._currentValue = { dataMode: 'actual', async setDataMode() {} };
@@ -186,7 +186,7 @@ test('with Rota AI disabled the launcher and panel render nothing, cannot be ope
   assert.equal(mountComponent(RotaAssistantPanel, { assistant, onOpenSettings() {} }).output, null);
 });
 
-test('with Rota AI enabled the launcher stays in the top bar', (t) => {
+test("Rota AI açıkken başlatıcı üst çubukta kalır", (t) => {
   withDocument(t, documentWith('enabled'));
   const previousMode = DataModeContext._currentValue;
   DataModeContext._currentValue = { dataMode: 'demo', async setDataMode() {} };
@@ -201,7 +201,7 @@ test('with Rota AI enabled the launcher stays in the top bar', (t) => {
   assert.equal(probe.output.assistant.open, true);
 });
 
-test('the command palette offers the assistant only when it is enabled', () => {
+test("komut paleti asistanı yalnızca açıkken sunar", () => {
   const shell = read('src/components/shell/AppShell.jsx');
   assert.match(shell, /onOpenAssistant=\{assistantActions\.enabled \? openAssistantPanel : null\}/);
   // Geç yüklenen asistan bağlandığında komut listesi yeniden kurulmalıdır: geri çağrı

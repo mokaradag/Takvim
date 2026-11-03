@@ -47,7 +47,7 @@ function versionedTask(overrides = {}) {
   };
 }
 
-test('Actual normalization preserves omitted dependencies so versioned partial updates are rejected', () => {
+test("gerçek kip eksik bağımlılıkları koruyarak sürümlü kısmi güncellemeyi reddeder", () => {
   const changes = normalizeActualChanges({ taskUpserts: [versionedTask()] });
   const task = changes.taskUpserts[0];
 
@@ -59,7 +59,7 @@ test('Actual normalization preserves omitted dependencies so versioned partial u
   assert.equal(issue?.path, 'taskUpserts[0].deps');
 });
 
-test('Actual normalization preserves malformed dependency collections for deterministic API validation', () => {
+test("gerçek kip bozuk bağımlılık koleksiyonunu API doğrulamasına taşır", () => {
   const changes = normalizeActualChanges({ taskUpserts: [versionedTask({ deps: null })] });
 
   assert.equal(changes.taskUpserts[0].deps, null);
@@ -67,7 +67,7 @@ test('Actual normalization preserves malformed dependency collections for determ
   assert.equal(issue?.code, 'TASK_DEPENDENCIES_NOT_ARRAY');
 });
 
-test('Actual repository forwards malformed dependency shapes to the server boundary instead of failing locally', async () => {
+test("gerçek depo bozuk bağımlılık biçimini sunucu sınırına iletir", async () => {
   const originalFetch = globalThis.fetch;
   let postedBody = null;
   globalThis.fetch = async (_url, init) => {
@@ -103,7 +103,7 @@ test('Actual repository forwards malformed dependency shapes to the server bound
   }
 });
 
-test('Actual normalization still canonicalizes valid dependency references', () => {
+test("gerçek normalleştirme geçerli bağımlılık başvurusunu kanonikleştirir", () => {
   const changes = normalizeActualChanges({
     taskUpserts: [versionedTask({
       deps: [{
@@ -123,7 +123,7 @@ test('Actual normalization still canonicalizes valid dependency references', () 
   assert.equal(findNestedCommitCollectionIssue(changes), null);
 });
 
-test('Actual session route reads all capabilities inside a serializable transaction', () => {
+test("gerçek oturum yolu bütün yetenekleri serileştirilebilir işlemde okur", () => {
   const route = read('src/app/api/mergen-rota/session/route.js');
 
   assert.match(route, /import \{ sql, withSqlTransaction \} from '\.\.\/\.\.\/\.\.\/\.\.\/server\/db\/pool\.js';/);

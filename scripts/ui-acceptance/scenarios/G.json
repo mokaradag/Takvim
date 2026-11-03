@@ -1,0 +1,27 @@
+{
+ "profile": "G",
+ "port": 8107,
+ "appLog": "app-G.log",
+ "conversations": [
+  {
+   "name": "Seyrek-veri",
+   "detail": "balanced",
+   "turns": [
+    "Şu anda en çok neye dikkat etmeliyim?"
+   ],
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "göreviniz yok"
+     ],
+     "forbids": [
+      "Mehmet Kaya",
+      "Cem Bulut",
+      "Ece Tan"
+     ]
+    }
+   ]
+  }
+ ]
+}

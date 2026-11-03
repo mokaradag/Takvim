@@ -7,7 +7,7 @@ import { addDays, fmtISO } from '../src/scheduling/dates/index.js';
 import { createInitialState, appStateReducer } from '../src/state/appState.js';
 import { countWorkingDays } from '../src/scheduling/calendars/index.js';
 
-test('fresh persisted long-span snapshots recalculate within bounded work and react to calendar changes', () => {
+test("yeni kalıcı uzun aralık görüntüsü sınırlı işte hesaplanır ve takvim değişimine tepki verir", () => {
   const calendar = { id: 'calendar', workingDays: [1], holidays: [] };
   const start = '2026-08-17', finish = fmtISO(addDays(start, (MAX_WORKING_DAY_SPAN - 1) * 7));
   const tasks = Array.from({ length: 40 }, (_, index) => ({ id: `long-${index}`, calendarId: calendar.id,
@@ -22,7 +22,7 @@ test('fresh persisted long-span snapshots recalculate within bounded work and re
   assert.equal(meterCalendarScans({ remainingDays: 0 }, () => countWorkingDays(start, finish, calendar, { byWeeks: true })), MAX_WORKING_DAY_SPAN);
 });
 
-test('bounded week counting matches day scans including malformed weekdays, duplicate holidays and reverse spans', () => {
+test("sınırlı hafta sayımı bozuk gün yinelenen tatil ve ters aralık dahil gün taramasıyla eşleşir", () => {
   for (const workingDays of [[1], [0, 2, 6], [], '1,2,3', [1, 1, 9, '2']]) {
     const calendar = { id: 'calendar', workingDays, holidays: [{ date: '2026-08-17' }, { date: '2026-08-17' }, { date: '2026-08-22' }] };
     for (const [start, end] of [['2026-08-17', '2026-10-04'], ['2026-10-04', '2026-08-17'], ['2026-08-22', '2026-08-22']]) {
@@ -33,7 +33,7 @@ test('bounded week counting matches day scans including malformed weekdays, dupl
   assert.equal(calculatePlannedDurationDays({ plannedStart: '2026-01-01', plannedFinish: '2080-12-31', calendarId: calendar.id }, { calendars: [calendar] }), 14349);
 });
 
-test('excessive ordinary duration is rejected before any calendar-day scan', () => {
+test("aşırı olağan süre takvim günü taramasından önce reddedilir", () => {
   const calendar = { id: 'calendar', workingDays: [1, 2, 3, 4, 5], holidays: [] };
   const task = { plannedStart: '2026-01-01', plannedFinish: '2300-01-01', calendarId: calendar.id };
   assert.equal(meterCalendarScans({ remainingDays: 0 }, () => calculatePlannedDurationDays(task, { calendars: [calendar] })), null);
@@ -41,7 +41,7 @@ test('excessive ordinary duration is rejected before any calendar-day scan', () 
   assert.equal(calculatePlannedDurationDays({ ...task, plannedStart: start, plannedFinish: fmtISO(addDays(start, (MAX_WORKING_DAY_SPAN - 1) * 7)) }, { calendars: [sparse] }), MAX_WORKING_DAY_SPAN);
 });
 
-test('unchanged snapshot plans reuse duration only while the resolved calendar is unchanged', () => {
+test("değişmeyen görüntü planı yalnızca çözülen takvim değişmediyse süreyi kullanır", () => {
   const calendar = { id: 'calendar', workingDays: [1, 2, 3, 4, 5], holidays: [] };
   const task = { plannedStart: '2026-08-17', plannedFinish: '2026-08-21', calendarId: calendar.id, milestone: false };
   const previousTask = normalizeTaskPlan(task, { calendars: [calendar] }), context = { calendars: [calendar], previousTask, previousCalendar: calendar };
@@ -50,7 +50,7 @@ test('unchanged snapshot plans reuse duration only while the resolved calendar i
   assert.equal(normalizeTaskPlan(task, { ...context, calendars: [{ ...calendar, holidays: [{ date: '2026-08-18' }] }] }).plannedDurationDays, 4);
 });
 
-test('all CPM lag passes consume one fixed aggregate calendar allowance', () => {
+test("bütün CPM gecikme geçişleri tek sabit toplam takvim payını tüketir", () => {
   let reads = 0;
   const calendar = { id: 'calendar', get workingDays() { reads += 1; return [1, 2, 3, 4, 5]; }, holidays: [] };
   const root = { id: 'root', milestone: true, plannedDurationDays: 0, plannedStart: '2026-08-17', calendarId: calendar.id };
@@ -60,7 +60,7 @@ test('all CPM lag passes consume one fixed aggregate calendar allowance', () => 
   assert.equal(calculateCpm([root, successors[0]], { calendars: [calendar] }).orderedTaskIds.length, 2);
 });
 
-test('1192 supported independent 1000-day tasks do not pay repeatedly for whole-week scans', () => {
+test("çok sayıda desteklenen bağımsız uzun görev tam hafta taramasını yinelemez", () => {
   const calendar = { id: 'standard', workingDays: [1, 2, 3, 4, 5], holidays: [] };
   const tasks = Array.from({ length: 1192 }, (_, index) => ({ id: `task-${index}`, calendarId: calendar.id,
     plannedStart: '2026-08-17', plannedDurationDays: 1000, deps: [] }));
@@ -70,7 +70,7 @@ test('1192 supported independent 1000-day tasks do not pay repeatedly for whole-
   assert.ok(Object.values(result.tasks).every((task) => task.totalFloatDays === 0));
 });
 
-test('malformed snapshot task collections keep the existing empty-array fallback on load and refresh', () => {
+test("bozuk görüntü görev koleksiyonu yükleme ve yenilemede eski boş dizi dönüşünü korur", () => {
   const initial = createInitialState({ tasks: [{ id: 'prior', task: 'Prior task' }] });
   for (const tasks of ['invalid', { id: 'object' }, true, 42]) {
     assert.deepEqual(createInitialState({ tasks }).tasks, []);
@@ -79,7 +79,7 @@ test('malformed snapshot task collections keep the existing empty-array fallback
   }
 });
 
-test('bounded weekly duration ignores null and malformed holiday entries', () => {
+test("sınırlı haftalık süre boş ve bozuk tatil girişini yok sayar", () => {
   const calendar = { id: 'malformed', workingDays: [1, 2, 3, 4, 5],
     holidays: [null, undefined, {}, false, { date: 'bad' }, { date: '2026-08-18' }] };
   assert.equal(meterCalendarScans({ remainingDays: 0 }, () => countWorkingDays('2026-08-17', '2026-08-21', calendar, { byWeeks: true })), 4);

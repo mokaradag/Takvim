@@ -2002,7 +2002,7 @@ test('0011 alanları eksikse Outlook şema tanısı verir ve görev kancası kay
   assert.equal(outlookSchemaProblem(new Error("Invalid column name 'UnrelatedColumn'.")), null);
 });
 
-test('Outlook state checks current task visibility before exposing later completion metadata', async () => {
+test("Outlook durumu sonraki tamamlama üstverisini açmadan güncel görev görünürlüğünü denetler", async () => {
   await withOutlookStack(outlookSeed(), async ({ pool, db }) => {
     const { addTaskToOutlook, loadOutlookCalendarState } = await service();
     await addTaskToOutlook(pool, { taskId: TASK_ID, sicil: OWNER, queueOnly: true });

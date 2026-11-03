@@ -20,7 +20,7 @@ const { SCOPE_DISCLOSURE_TEXT } = await import('../src/domain/ai/evidenceContrac
 const done = (response) => response.events.find((event) => event.event === 'done')?.data;
 const stackFor = (t, seed = {}) => createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, seed: rotaToolSeed(seed) });
 
-test('nested proposed schedule dates retain their field and direction in prose and tables', async (t) => {
+test("iç önerilen çizelge tarihleri düzyazı ve tabloda alanını ve yönünü korur", async (t) => {
   const stack = stackFor(t, { taskScheduleChangeRequests: [{ TaskId: TASKS.OVERDUE,
     RequesterSicil: AYSE, DecisionOwnerSicil: AYSE, Status: 'PENDING',
     OriginalPlannedStart: '2026-09-01', ProposedPlannedStart: '2026-09-10',
@@ -51,14 +51,14 @@ async function verify(stack, name, args, facts, options = {}) {
   return { result, verdict: analyzeGroundedAnswer(select(...facts.map((fact) => `R1:${fact}`)), { evidenceIds: ledger.ids(), evidencePayloads: ledger.payloads(), ...options }) };
 }
 
-test('Turkish possessive suffixes follow the spoken last word of the number', () => {
+test("Türkçe iyelik eki sayının söylenen son sözcüğünü izler", () => {
   const expected = { 0: "'ı", 1: "'i", 2: "'si", 3: "'ü", 4: "'ü", 5: "'i", 6: "'sı", 7: "'si", 8: "'i", 9: "'u", 10: "'u", 20: "'si", 30: "'u", 40: "'ı",
     50: "'si", 60: "'ı", 70: "'i", 80: "'i", 90: "'ı", 100: "'ü", 431: "'i", 486: "'sı", 36: "'sı", 917: "'si", 1000: "'i", 1608: "'i", 2000000: "'u" };
   for (const [value, suffix] of Object.entries(expected)) assert.equal(turkishPossessiveSuffix(Number(value)), suffix, value);
   assert.equal(turkishPossessiveSuffix(1.5), '');
 });
 
-test('a project summary becomes prose with verified values, not a field checklist', async (t) => {
+test("proje özeti alan listesi yerine doğrulanmış değerli düzyazı olur", async (t) => {
   const stack = stackFor(t);
   const { result, verdict } = await verify(stack, 'rota_project_detail', { projectId: PROJECTS.FULL }, ['data.project.name', 'data.visibleTasks.total',
     'data.visibleTasks.open', 'data.visibleTasks.done', 'data.visibleTasks.overdue', 'data.visibleTasks.completionRatePercent', 'data.project.wbsNodeCount', 'data.project.dependencyCount', 'data.project.tagCount']);
@@ -71,7 +71,7 @@ test('a project summary becomes prose with verified values, not a field checklis
   assert.equal(english.verdict.normalized, `The **Radar Modernizasyonu** project has **${totals.total}** tasks in total. Of these, **${totals.overdue}** are overdue. 【R1】`);
 });
 
-test('every number and name in the narrative comes from the selected verified facts', async (t) => {
+test("anlatımdaki her sayı ve ad seçilmiş doğrulanmış olgudan gelir", async (t) => {
   const stack = stackFor(t);
   const { verdict } = await verify(stack, 'rota_portfolio_summary', {}, ['data.totals.projects', 'data.totals.open', 'data.totals.overdue',
     'data.projects.*.name', 'data.projects.*.tasks.total', 'data.projects.*.tasks.overdue']);
@@ -84,7 +84,7 @@ test('every number and name in the narrative comes from the selected verified fa
   assert.match(shown, /^\| --- \| ---: \| ---: \|$/m, 'count columns are right-aligned');
 });
 
-test('list requests render lists, a table layout renders a table, and value requests stay prose', async (t) => {
+test("liste isteği liste tablo düzeni tablo çizer; değer isteği düzyazı kalır", async (t) => {
   const stack = stackFor(t);
   const facts = ['totalCount', 'data.tasks.*.title', 'data.tasks.*.targetFinish', 'data.tasks.*.overdueDays'];
   const overdueMine = { filters: { deadline: 'overdue', assignee: 'me' } };
@@ -113,7 +113,7 @@ test('list requests render lists, a table layout renders a table, and value requ
   assert.match(summary.normalized, /^Sorumlusu olduğunuz toplam \*\*3\*\* görev bulunuyor \(ölçüt: Termin: Gecikmiş\)\. 【R1】$/);
 });
 
-test('a criterion shared by every row is stated once, never repeated on each row', async (t) => {
+test("bütün satırların ortak ölçütü bir kez söylenir", async (t) => {
   const stack = stackFor(t);
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { deadline: 'overdue', assignee: 'me' });
   const rows = ['data.tasks.*.title', 'data.tasks.*.targetFinish', 'data.tasks.*.overdueDays'];
@@ -131,7 +131,7 @@ test('a criterion shared by every row is stated once, never repeated on each row
   }
 });
 
-test('an empty list population says that nothing matched, not only that the result is complete', async (t) => {
+test("boş liste yalnızca tamlık değil eşleşme bulunmadığını söyler", async (t) => {
   const stack = stackFor(t);
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_schedule_requests', { tab: 'pending' });
   const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_schedule_requests', collection: 'items' }, filters: { tab: 'pending' } };
@@ -141,7 +141,7 @@ test('an empty list population says that nothing matched, not only that the resu
   assert.doesNotMatch(verdict.normalized, /Sonuç tamdır/);
 });
 
-test('dependency rows say which direction they are; a lag reads as a lag', async (t) => {
+test("bağımlılık satırı yönünü söyler; gecikme gecikme olarak okunur", async (t) => {
   const stack = stackFor(t);
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_dependency_inspect', { taskId: TASKS.DUE_SOON });
   const raw = { operation: 'list', metrics: ['task.title', 'dependency.type', 'dependency.lag'], population: { tool: 'rota_dependency_inspect' }, entities: [{ type: 'task', id: TASKS.DUE_SOON }] };
@@ -151,7 +151,7 @@ test('dependency rows say which direction they are; a lag reads as a lag', async
   assert.match(verdict.normalized, /^Öncül: \*\*Radar test planı\*\* görevinin türü \*\*FS\*\*\. Gecikme: \*\*2 gün\*\*\. Ardıl: \*\*Dokümantasyon\*\*/);
 });
 
-test('null, incomplete and unit semantics stay visible in the narrative', async (t) => {
+test("boş değer eksiklik ve birim anlamı anlatımda görünür kalır", async (t) => {
   const stack = stackFor(t);
   const { verdict } = await verify(stack, 'rota_task_detail', { taskId: TASKS.UNASSIGNED }, ['data.task.title', 'data.task.dates.targetFinish', 'data.task.hours.planned']);
   assert.equal(verdict.ok, true);
@@ -162,7 +162,7 @@ test('null, incomplete and unit semantics stay visible in the narrative', async 
   assert.match(hours.verdict.normalized, /para birimi belirtilmemiş/);
 });
 
-test('stored text stays inert Markdown data in the narrative', async (t) => {
+test("kayıtlı metin anlatımda etkisiz Markdown verisi kalır", async (t) => {
   const stack = stackFor(t);
   const { verdict } = await verify(stack, 'rota_task_detail', { taskId: TASKS.LITERAL }, ['data.task.title', 'data.task.status']);
   assert.match(verdict.normalized, /\*\*Rapor %50 \\\[özel\\\] \\_alt\*\*/);
@@ -173,7 +173,7 @@ test('stored text stays inert Markdown data in the narrative', async (t) => {
   assert.match(rendered, /\\# heading/);
 });
 
-test('forged, unclaimable or out-of-turn fact references are rejected', async (t) => {
+test("sahte iddia edilemeyen veya başka turlu olgu başvurusu reddedilir", async (t) => {
   const stack = stackFor(t, { taskScheduleChangeRequests: [{ TaskId: TASKS.OVERDUE, RequesterSicil: AYSE, DecisionOwnerSicil: AYSE, Status: 'PENDING', RequesterMessage: 'gizli ileti' }] });
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.LITERAL });
   const check = (answer) => analyzeGroundedAnswer(typeof answer === 'string' ? answer : JSON.stringify(answer), { evidenceIds: ledger.ids(), evidencePayloads: ledger.payloads() });
@@ -198,7 +198,7 @@ test('forged, unclaimable or out-of-turn fact references are rejected', async (t
   assert.equal(hidden.ok, false, 'protected text is not selectable without the per-turn opt-in');
 });
 
-test('legacy structured claims remain verifiable and render through the same narrative', async (t) => {
+test("eski yapısal iddia aynı anlatım yolunda doğrulanır ve çizilir", async (t) => {
   const stack = stackFor(t);
   const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_project_detail', { projectId: PROJECTS.FULL });
   const verdict = analyzeGroundedAnswer(evidenceReply(claimFor(result, 'data.visibleTasks.total')), { evidenceIds: ledger.ids(), evidencePayloads: ledger.payloads() });
@@ -229,7 +229,7 @@ const COMMON_QUESTIONS = [
 ];
 
 for (const [question, request, [tool, args], facts, expected] of COMMON_QUESTIONS) {
-  test(`"${question}" is answered from the declared request in one model round, and a model selecting facts only verifies the same`, async (t) => {
+  test(`${question} bildirilmiş istekten tek model turunda yanıtlanır; model seçimi de aynı olguyu doğrular`, async (t) => {
     const stack = stackFor(t);
     stack.provider.enqueue({ type: 'tool-calls', preface: [declared(request)], calls: [{ name: tool, arguments: args }] });
     const response = await sendTurn({ turnId: randomUUID(), message: question });
@@ -245,7 +245,7 @@ for (const [question, request, [tool, args], facts, expected] of COMMON_QUESTION
   });
 }
 
-test('English clarification lines render canonical candidate values in English, Turkish keeps its labels', async (t) => {
+test("İngilizce açıklama kanonik adayı İngilizce çizer; Türkçe etiketini korur", async (t) => {
   const { result } = await callRotaTool(stackFor(t), AYSE, 'rota_project_search', { text: 'Proje' });
   const candidates = result.data.candidates;
   assert.ok(candidates.length >= 2, 'fikstürde birden çok aday vardır');

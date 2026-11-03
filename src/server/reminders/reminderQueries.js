@@ -298,7 +298,7 @@ export const REMINDER_RESUME_MANUAL_SQL = `
     AND Status = 'PENDING' AND FailureCode = 'RECIPIENTS_PENDING' AND CompletedAt IS NOT NULL
     AND CompletedAt >= DATEADD(minute, -@resumeWindowMinutes, SYSUTCDATETIME());`;
 
-// Release a claimed continuation without overwriting its latest durable states.
+// Alınmış devam sahipliği en güncel kalıcı durumun üzerine yazmadan bırakılır.
 export const REMINDER_DEFER_SQL = `
   UPDATE dbo.MR_TaskReminderLog
   SET CompletedAt = SYSUTCDATETIME(), FailureCode = 'RECIPIENTS_PENDING'

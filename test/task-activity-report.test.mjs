@@ -203,7 +203,7 @@ test('kaydedilen görev denetimi kalıcı değerleri ve atamaları taşır; dar 
 });
 
 for (const permission of ['PARTIAL', 'FULL', 'READ']) {
-  test(`historical assignment identities use canonical personnel scope (${permission})`, async () => {
+  test(`geçmiş atama kimlikleri kanonik personel kapsamını kullanır (${permission})`, async () => {
     const history = event(1, { BeforeJson: JSON.stringify({ assigneeIds: [employee, outsider, 950099] }), AfterJson: JSON.stringify({ assigneeIds: [employee] }) });
     const stack = await createActualStack(seed({ auditLog: [history], ...(permission !== 'PARTIAL' ? { projectAccess: [{ ProjectId: PROJECT, Sicil: manager, AccessLevel: permission }] } : {}) }), { sicil: manager, corporateWbsSource: false });
     try {
@@ -216,7 +216,7 @@ for (const permission of ['PARTIAL', 'FULL', 'READ']) {
 }
 
 for (const scenario of ['inactive-admin', 'deleted-creator', 'direct-assignee', 'deleted-assignee']) {
-  test(`historical display-name policy preserves ${scenario} without granting stable IDs`, async () => {
+  test(`geçmiş görünüm adı politikası kararlı kimlik vermeden ${scenario} değerini korur`, async () => {
     const history = event(1, { BeforeJson: JSON.stringify({ assigneeIds: [employee, outsider, 950099] }), AfterJson: JSON.stringify({ assigneeIds: [employee] }) });
     const data = seed({ executiveScope: [], auditLog: [history] });
     let sicil = employee;
@@ -262,7 +262,7 @@ for (const scenario of ['inactive-admin', 'deleted-creator', 'direct-assignee', 
   });
 }
 
-test('hidden historical identities do not consume the authorized evidence-person cap', async () => {
+test("gizli geçmiş kimliği yetkili kanıt kişi sınırını tüketmez", async () => {
   const hidden = Array.from({ length: 2001 }, (_, index) => 960000 + index);
   const stack = await createActualStack(seed({ auditLog: [event(1, {
     BeforeJson: JSON.stringify({ assigneeIds: [employee, ...hidden] }), AfterJson: JSON.stringify({ assigneeIds: [employee] })

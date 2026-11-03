@@ -121,7 +121,7 @@ function at(year, month, day, hour = 9) {
   return new Date(year, month - 1, day, hour, 0, 0);
 }
 
-test('sanitized expansion cannot persist an unloadable template and old oversized settings load safely', async () => {
+test("arındırılmış genişleme yüklenemeyen şablonu saklayamaz; eski büyük ayar güvenle yüklenir", async () => {
   await withReminderStack(reminderSeed(), async ({ db, pool }) => {
     const { loadReminderSettings, saveReminderSettings } = await import('../src/server/reminders/reminderStore.js');
     const before = JSON.stringify(db.reminderSettings);
@@ -138,7 +138,7 @@ test('sanitized expansion cannot persist an unloadable template and old oversize
   });
 });
 
-test('mixed accepted and uncertain recipients stay terminally uncertain and are never reclaimed', async () => {
+test("karışık kabul ve belirsiz alıcılar son belirsizlikte kalır ve geri alınmaz", async () => {
   await withReminderStack(reminderSeed({ taskAssignees: [{ TaskId: TASK_ID, Sicil: 900001 }, { TaskId: TASK_ID, Sicil: 900002 }] }), async ({ db, pool }) => {
     const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
     const messages = [];
@@ -158,7 +158,7 @@ test('mixed accepted and uncertain recipients stay terminally uncertain and are 
   });
 });
 
-test('a stalled real SMTP server has a bounded serial admission window for 200 isolated recipients', async () => {
+test("duraklayan gerçek SMTP sunucusu çok sayıda yalıtılmış alıcı için sınırlı sıralı kabul kullanır", async () => {
   const sockets = new Set(); let connections = 0;
   const server = net.createServer((socket) => { connections += 1; sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -566,7 +566,7 @@ test('en küçük aralık kullanıcı başınadır', async () => {
 
 /* ── Terk edilmiş aralığın kurtarılması ─────────────────────────── */
 
-test('legacy PENDING claim recovery stays uncertain instead of resending without protocol progress', async () => {
+test("eski PENDING kurtarma protokol ilerlemesi olmadan göndermek yerine belirsiz kalır", async () => {
   await withReminderStack(reminderSeed(), async ({ db, pool }) => {
     const { claimAutomaticReminder, ABANDONED_CLAIM_MINUTES } = await import('../src/server/reminders/reminderStore.js');
     const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
@@ -711,7 +711,7 @@ test('başarısız elle gönderim beş dakikalık aralığı TUTMAZ', async () =
   });
 });
 
-test('reminder headers isolate addresses and preserve authorized task-scoped names without username fallback', async () => {
+test("hatırlatma başlığı adresi yalıtır; kullanıcı adına dönmeden yetkili görev adlarını korur", async () => {
   const seed = reminderSeed({ executiveScope: [{ ManagerSicil: 900001, EmployeeSicil: 900002 }],
     taskAssignees: [900001, 900002, 900003].map(Sicil => ({ TaskId: TASK_ID, Sicil })),
     corporateUsers: [{ Name: 'ayilmaz', EmailAddress: 'manager@example.internal' }, { Name: 'mdemir', EmailAddress: 'member@example.internal' }, { Name: 'adressiz', EmailAddress: 'outsider@example.internal' }] });
@@ -734,7 +734,7 @@ test('reminder headers isolate addresses and preserve authorized task-scoped nam
   });
 });
 
-test('overlapping manual reminders atomically reserve only one actor/task window', async () => {
+test("çakışan elle hatırlatma tek yapan ve görev penceresini atomik ayırır", async () => {
   await withReminderStack(reminderSeed(), async ({ pool, db }) => {
     const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
     let release; const entered = new Promise(resolve => { release = resolve; });
@@ -751,7 +751,7 @@ test('overlapping manual reminders atomically reserve only one actor/task window
   });
 });
 
-test('two requests that both read an empty cooldown cannot both claim delivery', async (t) => {
+test("boş bekleme süresini okuyan iki istek birlikte teslim sahipliği alamaz", async (t) => {
   await withReminderStack(reminderSeed(), async ({ pool, db }) => {
     const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
     const { REMINDER_LAST_MANUAL_SQL } = await import('../src/server/reminders/reminderQueries.js');
@@ -775,7 +775,7 @@ test('two requests that both read an empty cooldown cannot both claim delivery',
   });
 });
 
-test('healthy slow loopback SMTP continues three recipients exactly once across bounded automatic runs', async () => {
+test("sağlıklı yavaş yerel SMTP sınırlı otomatik koşularda üç alıcıyı tam bir kez sürdürür", async () => {
   const sockets = new Set(), messages = [];
   const server = net.createServer((socket) => {
     sockets.add(socket); socket.setEncoding('utf8'); socket.on('error', () => {});
@@ -837,7 +837,7 @@ test('healthy slow loopback SMTP continues three recipients exactly once across 
   }
 });
 
-for (const timeoutMs of [80, 300000]) test(`the final delivery deadline bounds a stalled session within claim ownership (${timeoutMs})`, async (t) => {
+for (const timeoutMs of [80, 300000]) test(`son teslim süresi duraklayan oturumu sahiplik içinde sınırlar (${timeoutMs})`, async (t) => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: new Date('2026-08-17T09:00:00Z') });
   const env = { SMTP_HOST: 'relay.example.internal', SMTP_FROM: 'rota@example.internal', SMTP_TIMEOUT_MS: String(timeoutMs) };
   const prior = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]])); Object.assign(process.env, env);
@@ -867,7 +867,7 @@ for (const timeoutMs of [80, 300000]) test(`the final delivery deadline bounds a
 });
 
 for (const failures of [1, 2]) {
-  test(`uncertain delivery retries history finalization once without resending (${failures} failures)`, async (t) => {
+  test(`belirsiz teslim yeniden göndermeden geçmiş sonuçlandırmayı bir kez dener (${failures} hata)`, async (t) => {
     await withReminderStack(reminderSeed(), async ({ pool, db }) => {
       const { deliverTaskReminder } = await import('../src/server/reminders/reminderService.js');
       const { claimAutomaticReminder, loadReminderTask, loadReminderSettings } = await import('../src/server/reminders/reminderStore.js');
@@ -898,7 +898,7 @@ for (const failures of [1, 2]) {
       if (failures === 1) {
         assert.equal(db.taskReminderLog[0].FailureCode, 'MAIL_DELIVERY_UNCERTAIN');
         assert.ok(db.taskReminderLog[0].CompletedAt);
-        // A terminal uncertain row is not reclaimable, even after its lease.
+        // Son belirsiz satır kira süresi dolsa da geri alınamaz.
         db.taskReminderLog[0].CreatedAt = '2000-01-01T00:00:00.000Z';
         assert.equal(await claimAutomaticReminder(pool, { taskId: TASK_ID, projectId: PROJECT_ID, slotKey: 'uncertain-retry', actorSicil: 900001 }), null);
       } else assert.equal(db.taskReminderLog[0].CompletedAt, null);
@@ -907,7 +907,7 @@ for (const failures of [1, 2]) {
 }
 
 for (const uncertainFirst of [false, true]) {
-  test(`200ms healthy multi-command recipient sessions resume without duplicate or uncertain retries (${uncertainFirst})`, async (t) => {
+  test(`sağlıklı çok komutlu alıcı oturumu yinelenen veya belirsiz deneme olmadan sürer (${uncertainFirst})`, async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-17T09:00:00Z') });
     const env = { SMTP_HOST: 'relay.example.internal', SMTP_FROM: 'rota@example.internal', SMTP_TIMEOUT_MS: '200' };
     const prior = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]])); Object.assign(process.env, env);
@@ -932,7 +932,7 @@ for (const uncertainFirst of [false, true]) {
         db.taskReminderLog[0].CreatedAt = '2000-01-01T00:00:00Z';
         assert.equal((await runAutomaticReminders(pool, options)).results[0].reason, 'ALREADY_SENT');
         assert.equal(sent.length, 3);
-        // Manual continuation shares the same durable recipient state and claim.
+        // Elle devam aynı kalıcı alıcı durumunu ve sahipliği paylaşır.
         sent.length = 0;
         const manual = { ...options, taskId: TASK_ID, actorSicil: 900001 };
         await sendManualReminder(pool, manual);
@@ -947,7 +947,7 @@ for (const uncertainFirst of [false, true]) {
   });
 }
 
-for (const attempted of [false, true]) test(`recipient changes rebind only all-unattempted durable progress (attempted=${attempted})`, async (t) => {
+for (const attempted of [false, true]) test(`alıcı değişimi yalnızca hiç denenmemiş kalıcı ilerlemeyi yeniden bağlar (denenmiş=${attempted})`, async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-17T09:00:00Z') });
   await withReminderStack(reminderSeed({ taskAssignees: [{ TaskId: TASK_ID, Sicil: 900001 }, { TaskId: TASK_ID, Sicil: 900002 }] }), async ({ db, pool }) => {
     const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
@@ -983,7 +983,7 @@ for (const attempted of [false, true]) test(`recipient changes rebind only all-u
   });
 });
 
-for (const failingRead of ['recipients', 'progress']) test(`manual resume releases a claim after a ${failingRead} read throws without losing confirmed sends`, async (t) => {
+for (const failingRead of ['recipients', 'progress']) test(`elle devam ${failingRead} okuması hata verince onaylı gönderimi kaybetmeden sahipliği bırakır`, async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-17T09:00:00Z') });
   await withReminderStack(reminderSeed({ taskAssignees: [{ TaskId: TASK_ID, Sicil: 900001 }, { TaskId: TASK_ID, Sicil: 900002 }] }), async ({ db, pool }) => {
     const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
@@ -1012,7 +1012,7 @@ for (const failingRead of ['recipients', 'progress']) test(`manual resume releas
   });
 });
 
-for (const checkpoint of ['pre', 'post']) test(`a ${checkpoint}-send checkpoint error retains persistence attribution`, async (t) => {
+for (const checkpoint of ['pre', 'post']) test(`${checkpoint} gönderimli kontrol noktası hatası kalıcılık atfını korur`, async (t) => {
   await withReminderStack(reminderSeed({ taskAssignees: [{ TaskId: TASK_ID, Sicil: 900001 }, { TaskId: TASK_ID, Sicil: 900002 }] }), async ({ db, pool }) => {
     const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
     const { REMINDER_COMPLETE_SQL } = await import('../src/server/reminders/reminderQueries.js');
@@ -1033,7 +1033,7 @@ for (const checkpoint of ['pre', 'post']) test(`a ${checkpoint}-send checkpoint 
   });
 });
 
-test('manual continuation SQL enforces its bound resume window without claiming stale progress', async () => {
+test("elle devam SQL eski ilerlemeye sahip olmadan bağlı devam penceresini uygular", async () => {
   await withReminderStack(reminderSeed(), async ({ db, pool }) => {
     const { resumeManualReminder, ABANDONED_CLAIM_MINUTES } = await import('../src/server/reminders/reminderStore.js');
     const { REMINDER_RESUME_MANUAL_SQL } = await import('../src/server/reminders/reminderQueries.js');
@@ -1047,7 +1047,7 @@ test('manual continuation SQL enforces its bound resume window without claiming 
   });
 });
 
-test('assignee display names share sicil deduplication while preserving unnamed-identity rows', async (t) => {
+test("sorumlu adları sicil tekilleştirmesini paylaşır ve adsız kimlik satırını korur", async (t) => {
   await withReminderStack(reminderSeed(), async ({ pool }) => {
     const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
     const request = pool.request.bind(pool);
@@ -1070,7 +1070,7 @@ test('assignee display names share sicil deduplication while preserving unnamed-
   });
 });
 
-for (const failingRead of ['task', 'recipients', 'progress']) test(`automatic continuation preserves its checkpoint after a ${failingRead} read failure`, async (t) => {
+for (const failingRead of ['task', 'recipients', 'progress']) test(`otomatik devam ${failingRead} okuma hatasından sonra kontrol noktasını korur`, async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-17T09:00:00Z') });
   await withReminderStack(reminderSeed({ taskAssignees: [{ TaskId: TASK_ID, Sicil: 900001 }, { TaskId: TASK_ID, Sicil: 900002 }] }), async ({ db, pool }) => {
     const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
@@ -1102,7 +1102,7 @@ for (const failingRead of ['task', 'recipients', 'progress']) test(`automatic co
   });
 });
 
-test('a definite failure is counted only in its run while subsequent bounded continuations remain pending', async (t) => {
+test("kesin hata yalnızca kendi koşusunda sayılır; sonraki sınırlı devam beklemede kalır", async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-17T09:00:00Z') });
   await withReminderStack(reminderSeed({ taskAssignees: [900001, 900002, 900003].map((Sicil) => ({ TaskId: TASK_ID, Sicil })) }), async ({ db, pool }) => {
     const { runAutomaticReminders, sendManualReminder } = await import('../src/server/reminders/reminderService.js');
@@ -1123,7 +1123,7 @@ test('a definite failure is counted only in its run while subsequent bounded con
   });
 });
 
-test('oversized recipient progress finalizes the claim without SMTP or endless pending recovery', async (t) => {
+test("büyük alıcı ilerlemesi SMTP veya sonsuz bekleyen kurtarma olmadan sahipliği sonuçlandırır", async (t) => {
   await withReminderStack(reminderSeed(), async ({ db, pool }) => {
     const { runAutomaticReminders } = await import('../src/server/reminders/reminderService.js');
     const request = pool.request.bind(pool);
@@ -1144,7 +1144,7 @@ test('oversized recipient progress finalizes the claim without SMTP or endless p
 });
 
 for (const kind of ['automatic', 'manual']) {
-  test(`prior uncertainty does not count as a new ${kind} failure during intermediate continuations`, async (t) => {
+  test(`eski belirsizlik ara devamda yeni ${kind} hatası sayılmaz`, async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-17T09:00:00Z') });
     await withReminderStack(reminderSeed({ taskAssignees: [900001, 900002, 900003].map((Sicil) => ({ TaskId: TASK_ID, Sicil })) }), async ({ db, pool }) => {
       const { runAutomaticReminders, sendManualReminder } = await import('../src/server/reminders/reminderService.js');
@@ -1178,7 +1178,7 @@ for (const kind of ['automatic', 'manual']) {
 }
 
 for (const failingRead of ['recipients', 'progress']) {
-  test(`a fresh manual ${failingRead} read failure permits retry instead of becoming a legacy uncertain continuation`, async (t) => {
+  test(`yeni elle ${failingRead} okuma hatası eski belirsiz devam yerine yeniden denemeye izin verir`, async (t) => {
     await withReminderStack(reminderSeed(), async ({ db, pool }) => {
       const { sendManualReminder } = await import('../src/server/reminders/reminderService.js');
       const { REMINDER_PROGRESS_SQL } = await import('../src/server/reminders/reminderQueries.js');

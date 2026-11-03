@@ -8,8 +8,8 @@ export function creationEntries(changes) {
       .map((entry) => ({ entry, entityType })));
 }
 
-// Only entity references are remapped. Calendars, people and dependency-row IDs
-// belong to separate namespaces and must never be rewritten by an allocation.
+// Yalnızca varlık başvurusu yeniden eşlenir. Takvim kişi ve bağımlılık satırı kimlikleri
+// ayrı ad alanına aittir; tahsis tarafından yeniden yazılamaz.
 export function remapCommitIds(changes, mappings) {
   const id = (type, value) => mappings.get(`${type}:${value}`) || value;
   const deletes = (type, values) => values?.map((entry) => typeof entry === 'string'

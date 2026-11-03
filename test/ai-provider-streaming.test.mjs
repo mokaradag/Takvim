@@ -603,7 +603,7 @@ test('yinelenen rol ve bitiş parçaları ilerleme değildir: yalnızca durumu i
   assert.equal(types.filter((type) => type === 'tool_call_started').length, 1);
 });
 
-test('discarded oversized tool argument fragments cannot renew meaningful progress', async () => {
+test("atılan büyük araç argüman parçaları anlamlı ilerlemeyi yenileyemez", async () => {
   const fragment = (argumentsText) => sse({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0,
     function: { arguments: argumentsText } }] } }] });
   const events = await collect(readChatCompletionStream(bodyFrom([fragment('{'), fragment('12345'), fragment('discarded'),

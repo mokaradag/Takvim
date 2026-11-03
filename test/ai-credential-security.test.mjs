@@ -1126,7 +1126,7 @@ test('şifreli kaydı bozulmuş anahtar okunabilir ve doğrulanmış gösterilme
   assert.equal(provider.calls.length, 0);
 });
 
-test('runtime key reads of admitted AI requests share the bounded preflight SQL gate', async (t) => {
+test("kabul edilmiş AI isteklerinin anahtar okumaları sınırlı ön SQL kapısını paylaşır", async (t) => {
   const { db } = createAiStack(t);
   const { readAiConfig } = await import('../src/server/ai/aiConfig.js');
   const config = readAiConfig();

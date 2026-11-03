@@ -45,7 +45,7 @@ function taskState(overrides = {}) {
   };
 }
 
-test('Actual-mode new tasks default to the trusted current user, not the first directory person', () => {
+test("gerçek kip yeni görevde ilk dizin kişisi yerine güvenilir kullanıcıyı atar", () => {
   const state = taskState({
     session: { dataMode: 'actual' },
     currentUser: { id: '200', employeeNo: '200', name: 'Trusted Current User' }
@@ -57,7 +57,7 @@ test('Actual-mode new tasks default to the trusted current user, not the first d
   assert.deepEqual(task.sorumlu, ['Trusted Current User']);
 });
 
-test('Actual-mode new tasks remain unassigned when trusted identity is unavailable', () => {
+test("güvenilir kimlik yokken gerçek kip yeni görevi atanmamış bırakır", () => {
   const state = taskState({ session: { dataMode: 'actual' }, currentUser: null });
 
   const task = createNewTask(state, '2026-07-24', 'task-unassigned');
@@ -66,14 +66,14 @@ test('Actual-mode new tasks remain unassigned when trusted identity is unavailab
   assert.deepEqual(task.sorumlu, []);
 });
 
-test('Demo-mode new tasks preserve the existing sample-person default', () => {
+test("demo kip yeni görevde örnek kişi varsayılanını korur", () => {
   const task = createNewTask(taskState(), '2026-07-24', 'task-demo');
 
   assert.deepEqual(task.assigneeIds, ['100']);
   assert.deepEqual(task.sorumlu, ['Alphabetical First']);
 });
 
-test('hardened Project writes require a calendar while Task overrides remain optional', () => {
+test("güçlendirilmiş proje yazımı takvim ister; görev değişimi isteğe bağlı kalır", () => {
   const source = read('src/server/repository/hardenedSqlAppRepository.js');
 
   assert.match(source, /for \(const project of changes\.projectUpserts\) \{\s+if \(!project\.calendarId\) \{\s+throw new ServerPersistenceError\('MUTATION_FAILED', 'Proje için etkin bir çalışma takvimi seçilmelidir\.'\);/);

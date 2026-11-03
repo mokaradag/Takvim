@@ -261,7 +261,7 @@ test('genel personel sorgusu eş sorumluyu görev görünürlüğünden rehbere 
   assert.doesNotMatch(projectionSource, /STRING_SPLIT/);
 });
 
-test('SQL test doubles do not project assignees from inactive projects', () => {
+test("SQL ikizi etkin olmayan projenin sorumlularını izdüşürmez", () => {
   const fakeSql = read('test/helpers/fakeSqlServer.mjs');
   assert.match(fakeSql, /if \(!task \|\| !project\?\.IsActive\) return \[\];/);
   assert.match(fakeSql, /sqlText\.includes\('LEFT JOIN #DirectoryNames pd'\)/);

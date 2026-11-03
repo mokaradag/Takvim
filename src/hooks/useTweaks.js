@@ -18,8 +18,8 @@ function loadStored(defaults) {
   }
 }
 
-// Single source of truth for tweak values (theme, density, accent, font
-// scale, ...). Persists to localStorage so preferences survive reloads.
+// Tema yoğunluk vurgu ve yazı ayarları için tek doğruluk kaynağı.
+// Ölçek ve diğer değerler localStorage içinde saklanarak yeniden yüklemede korunur.
 export function useTweaks(defaults) {
   const [values, setValues] = useState(() => loadStored(defaults));
   const hydrated = useRef(false);
@@ -37,7 +37,7 @@ export function useTweaks(defaults) {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(values)); } catch { /* depolama kapalı olabilir */ }
   }, [values]);
 
-  // Accepts either setTweak('key', value) or setTweak({ key: value, ... }).
+  // setTweak anahtar ve değer çifti veya değer nesnesi kabul eder.
   const setTweak = useCallback((keyOrEdits, val) => {
     const edits = typeof keyOrEdits === 'object' && keyOrEdits !== null
       ? keyOrEdits : { [keyOrEdits]: val };
