@@ -9,6 +9,12 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 cd "$ROOT"
+PROFILES=${*:-G F C E D A B}
+for P in $PROFILES; do
+  case "$P" in A|B|C|D|E|F|G) ;; *) printf 'Geçersiz profil: %s\n' "$P" >&2; exit 1;; esac
+done
+# Her senaryo turuna plan, anlamsal yardım, bir onarım ve düzen için dört çağrı ayrılır; açık bütçe korunur.
+DEFAULT_MAX_CALLS=$(node -e 'const fs=require("fs"); console.log(process.argv.slice(2).reduce((sum,profile)=>sum+JSON.parse(fs.readFileSync(`${process.argv[1]}/${profile}.json`,"utf8")).conversations.reduce((n,c)=>n+c.turns.length,0),0)*4)' "$HERE/scenarios" $PROFILES)
 node -e "require.resolve('playwright')" >/dev/null
 if ! command -v claude >/dev/null; then printf 'Claude CLI bulunamadı; model kabulü çalıştırılamaz.\n' >&2; exit 1; fi
 BASE=${UI_ACCEPTANCE_DIR:-${TMPDIR:-/tmp}/rota-ui-acceptance}
@@ -22,8 +28,12 @@ node -e "require('fs').writeFileSync(process.argv[1], JSON.stringify({runId:proc
 BRIDGE=''
 APP=''
 cleanup() {
+  RESULT=$?
   if [ -n "$APP" ]; then kill "$APP" 2>/dev/null || true; wait "$APP" 2>/dev/null || true; APP=''; fi
   if [ -n "$BRIDGE" ]; then kill "$BRIDGE" 2>/dev/null || true; wait "$BRIDGE" 2>/dev/null || true; BRIDGE=''; fi
+  node "$HERE/report.cjs" "$UI_ACCEPTANCE_DIR/out" | tee "$UI_ACCEPTANCE_DIR/report.md" || RESULT=1
+  printf 'Kabul kanıtı: %s\n' "$UI_ACCEPTANCE_DIR"
+  exit "$RESULT"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -34,7 +44,7 @@ probe_port() {
 }
 export BRIDGE_PORT=${BRIDGE_PORT:-18731}
 probe_port "$BRIDGE_PORT"
-BRIDGE_LEDGER="$UI_ACCEPTANCE_DIR/ledger.jsonl" BRIDGE_CALLS="$UI_ACCEPTANCE_DIR/calls.jsonl" BRIDGE_MAX_CALLS=${BRIDGE_MAX_CALLS:-140} \
+BRIDGE_LEDGER="$UI_ACCEPTANCE_DIR/ledger.jsonl" BRIDGE_CALLS="$UI_ACCEPTANCE_DIR/calls.jsonl" BRIDGE_MAX_CALLS=${BRIDGE_MAX_CALLS:-$DEFAULT_MAX_CALLS} \
   node "$HERE/haikuBridge.mjs" > "$UI_ACCEPTANCE_DIR/bridge.log" 2>&1 &
 BRIDGE=$!
 ready=0
@@ -46,7 +56,6 @@ done
 [ "$ready" = 1 ]
 MASTER=$(node -e "console.log(require('crypto').createHash('sha256').update('ui-acceptance').digest('base64url'))")
 LOADER=$(node --input-type=module -e 'import {pathToFileURL} from "node:url"; console.log(pathToFileURL(process.argv[1]).href)' "$HERE/loader.mjs")
-PROFILES=${*:-G F C E D A B}
 for P in $PROFILES; do
   case "$P" in
     A) SICIL=920001; PORT=8101;; B) SICIL=920002; PORT=8102;; C) SICIL=920003; PORT=8103;;
@@ -72,5 +81,3 @@ for P in $PROFILES; do
   node "$HERE/drive.cjs" "$HERE/scenarios/$P.json" "$UI_ACCEPTANCE_DIR/out" | tee -a "$UI_ACCEPTANCE_DIR/run.log"
   kill "$APP"; wait "$APP" 2>/dev/null || true; APP=''
 done
-node "$HERE/report.cjs" "$UI_ACCEPTANCE_DIR/out" | tee "$UI_ACCEPTANCE_DIR/report.md"
-printf 'Kabul kanıtı: %s\n' "$UI_ACCEPTANCE_DIR"

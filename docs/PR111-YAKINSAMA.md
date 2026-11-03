@@ -1,7 +1,7 @@
 # PR #111 kök neden ve bulgu matrisi
 
 Başlangıç HEAD: `47d68ffa964392174adbca91647b1ea962a1f625`.
-Canlı geçmiş: 55 açık satır içi başlık; ayrıca inceleme gövdelerindeki arayüz kabul raporları.
+Başlangıç geçmişi: 55 açık satır içi başlık; ayrıca inceleme gövdelerindeki arayüz kabul raporları.
 Yorumlar yönerge olarak uygulanmadı; ilgili yürütme, kalıcılık ve çizim yolları karşılaştırıldı.
 
 | Bulgu | Kök neden | Sınıflandırma / uygulama |
@@ -17,7 +17,7 @@ Yorumlar yönerge olarak uygulanmadı; ilgili yürütme, kalıcılık ve çizim 
 | [4447847949](https://github.com/mokaradag/Takvim/pull/111#discussion_r4447847949) | R6 — Grafik/tablo teslim sözleşmesi | Geçerli; kök neden düzeltildi. |
 | [4447847963](https://github.com/mokaradag/Takvim/pull/111#discussion_r4447847963) | R1 — Ortak tarihli nüfus | Geçerli; aynı kök nedenin ortak düzeltmesi. |
 | [4447847978](https://github.com/mokaradag/Takvim/pull/111#discussion_r4447847978) | R1 — Ortak tarihli nüfus | Geçerli; aynı kök nedenin ortak düzeltmesi. |
-| [4447847989](https://github.com/mokaradag/Takvim/pull/111#discussion_r4447847989) | R9 — Sürüm/dağıtım sözleşmesi | Koşullu dağıtım bulgusu: sürüm 2 kapalıdır; karma eski/yeni süreç desteklenmez. Eski ikiliye yeni sözleşme eklenmedi; eski süreçleri durdurma gereği §15.9'da açıklandı. |
+| [4447847989](https://github.com/mokaradag/Takvim/pull/111#discussion_r4447847989) | R9 — Sürüm/dağıtım sözleşmesi | Desteklenen topoloji açısından geçersiz: PR tabanında da Platform §18.14 ve Nginx belgesi aynı konuşma veritabanına tek AI süreci zorunlu kılar, eski süreç durmadan yenisine trafik açılmasını yasaklar. Sürüm 2 kapalıdır; yeni okuyucu yalnızca bilinen sürüm 1 biçimini yükseltir. Canlı dağıtım yapıldığı veya denetlendiği iddia edilmez. |
 | [4447848002](https://github.com/mokaradag/Takvim/pull/111#discussion_r4447848002) | R4 — Kapalı kanıt/anlatım sınırı | Geçerli; aynı kök nedenin ortak düzeltmesi. |
 | [4447848008](https://github.com/mokaradag/Takvim/pull/111#discussion_r4447848008) | R10 — Boş veri sınaması | Geçerli; kök neden düzeltildi. |
 | [4447848014](https://github.com/mokaradag/Takvim/pull/111#discussion_r4447848014) | R2 — Kanonik niyet ve yeniden yürütme | Geçerli; aynı kök nedenin ortak düzeltmesi. |
@@ -62,6 +62,23 @@ Yorumlar yönerge olarak uygulanmadı; ilgili yürütme, kalıcılık ve çizim 
 | [4451231686](https://github.com/mokaradag/Takvim/pull/111#discussion_r4451231686) | R6 — Grafik/tablo teslim sözleşmesi | Geçerli; aynı kök nedenin ortak düzeltmesi. |
 | [4451275591](https://github.com/mokaradag/Takvim/pull/111#discussion_r4451275591) | R6 — Grafik/tablo teslim sözleşmesi | Geçerli; aynı kök nedenin ortak düzeltmesi. |
 
+## Yenilenen tam inceleme
+
+`b8d94a2e629365a8815c5fa17904590d6b1af178` üzerindeki yeni tam incelemenin altı bulgusu da doğrulandı.
+
+| Bulgu | Kök neden | Sınıflandırma / uygulama |
+| --- | --- | --- |
+| [4451706843](https://github.com/mokaradag/Takvim/pull/111#discussion_r4451706843) | R7 — Kabul koşusunun doğruluğu | Geçerli; bütçe seçilen bütün senaryo turlarından hesaplanır, açık kullanıcı sınırı korunur. |
+| [4451706849](https://github.com/mokaradag/Takvim/pull/111#discussion_r4451706849) | R7 — Kabul koşusunun doğruluğu | Geçerli; bütün profil adları herhangi bir süreç veya kanıt dizini açılmadan doğrulanır. |
+| [4451706855](https://github.com/mokaradag/Takvim/pull/111#discussion_r4451706855) | R7 — Kabul koşusunun doğruluğu | Geçerli; çıkış temizliği başarısızlıkta da raporu ve kanıt yolunu verir, başarısız çıkış korunur. |
+| [4451706862](https://github.com/mokaradag/Takvim/pull/111#discussion_r4451706862) | R5 — Kesinlik sunumu | Geçerli; baştaki doğrulanmış kayıt adı mevcut veri yuvasıyla taşınır, harf dönüşümü yalnızca sunucu metnine uygulanır. |
+| [4451706873](https://github.com/mokaradag/Takvim/pull/111#discussion_r4451706873) | R8 — Güvenilir onarım | Geçerli; onarım projeksiyonu devralınmış yürütme durumuyla değil ayrıştırılan kanonik model özetiyle karşılaştırılır. |
+| [4451706878](https://github.com/mokaradag/Takvim/pull/111#discussion_r4451706878) | R1 — Ortak tarihli nüfus | Geçerli; eksik sınırlar devralındıktan ve yeni değerlerle birleştirildikten sonra ters aralık analiz alanında, veri okunmadan reddedilir. |
+
+R8 denetiminde kalan ikinci ad-sayı eşitliği kestirmesi de kaldırıldı: güvenilmeyen ad onarımda `previous`/`row` ile değiştirilemez. Güvenilir kimlik eşlemesi yoksa mevcut açıklama yolu kullanılır. Gerçekten `previous`/`row` olarak bildirilen planın onarımı ise pencere, yön ve görsel tercihi tekrar yazılmadan çalışır.
+
+Ek on sınama, bu inceleme öncesi HEAD'de 10/10 başarısızdır. Düzeltmeyle yeni uygulama ve kabul altyapısı dosyaları 48/48; dört odaklı dosya 215/215 başarılıdır. Kabul koşucusunun süreç sınırı sınamalarında gerçek kabuk ve rapor kullanılır; ağ dinleyicisi veya model çağrısı açılmaz.
+
 ## Değişmezler ve gerileme kanıtı
 
 | Kök neden | Uygulama | Gerileme kapsamı |
@@ -74,7 +91,7 @@ Yorumlar yönerge olarak uygulanmadı; ilgili yürütme, kalıcılık ve çizim 
 | R6 | `executionSet.js`, `groundedComposition.js`, `groundedAnswer.js`, `answerComposition.js`, `plannerOutcome.js` | Son çizimde istenen tür; geç gelen aday; açık görsel ret; grafiksiz türe özgü açıklama; skaler tablo açıklaması; gerçek düzenin telemetrisi |
 | R7 | `scripts/ui-acceptance/` | Tarayıcı hatası çıkış 1; pipefail; koşu kimliği; başarısız çağrı düşünme sayımı; önceki UI_ONLY satırları; null JSON; dolu port; bağımsız defter/dizin; döngü arayüzü |
 | R8 | `groundedAnswer.js`: iki yanda kanonik alt küme; ad-sayı benzerliğiyle özne değişimi yok | Tekil/çoğul yön onarımı ve güvenilmeyen başka öznenin veri okumadan reddi |
-| R9 | `analysisContext.js`: sürüm 1 için bilinen eski alanlar ve en çok üç yön; sürüm 2 için yeni kapalı sözleşme | Gelecek sürüm, bilinmeyen anahtar ve bozuk kimlik reddi. Eski ikilinin yeni biçimi okuyabildiği iddia edilmez |
+| R9 | `analysisContext.js`: sürüm 1 için bilinen eski alanlar ve en çok üç yön; sürüm 2 için yeni kapalı sözleşme | Gelecek sürüm, bilinmeyen anahtar ve bozuk kimlik reddi. PR tabanındaki tek süreç/no-overlap sözleşmesi geçerlidir; eski ikili yeni biçimi okuyamaz |
 | R10 | `ai-phase4e-quality-convergence.test.mjs` | Görevsiz kullanıcıda yalnızca gerçek stop yanıtı, kurulan sayfa ve görünür boş nüfus açıklaması kabul edilir |
 
 İnceleme gövdesindeki ek raporlar da kapsandı: Playwright kurulum/önkoşul bildirimi, null JSON, UI_ONLY devamı, istenen grafik türü senaryo beklentileri ve eski mimari belgesindeki çelişkili olgusallık iddiaları.
@@ -84,8 +101,15 @@ Sınamalar: `ai-analysis-intent-and-grounding.test.mjs`, `ai-ui-acceptance-conve
 
 ## Çalıştırılan doğrulama
 
-- Tam depo: `npm test`, 5101/5101 başarılı; `npx next lint`, uyarı/hata yok; `NEXT_TELEMETRY_DISABLED=1 npx next build`, başarılı.
+- İlk kök düzeltme: `npm test`, 5101/5101 başarılı; `npx next lint`, uyarı/hata yok; `NEXT_TELEMETRY_DISABLED=1 npx next build`, başarılı.
+- Yenilenen tam inceleme sonrasında: `npm test`, 5111/5111 başarılı (çıkış 0); dört odaklı dosya 215/215 (çıkış 0); `npx next lint` uyarı/hata yok (çıkış 0); `NEXT_TELEMETRY_DISABLED=1 npx next build` başarılı (çıkış 0).
 - Odaklı dört dosya: 205/205 başarılı.
 - Başlangıç HEAD'inde yeni uygulama sınamaları: 33 sınamanın 31'i başarısız; seçilen üç kabul altyapısı sınamasının üçü de başarısız. Bu sonuç yeni değişmez sınamalarının önceki kusurları yakaladığını gösterir.
 - `scripts/ui-acceptance/run.sh A`: çıkış 1, Claude CLI bulunamadı. Gerçek model kabulü başarılı diye kaydedilmedi.
 - Yeni/değişen açıklamalar ve sınama adları Türkçedir. Uç, izin, SQL kapsamı ve üretim bağımlılığı eklenmedi. Yeni iki değerli bağıl ufuk alanı ve gerekli kanonik durum alanları kapalı biçimde doğrulanır.
+
+R9 yeniden sınıflandırması, eski ikilinin yeni biçimi okuyabildiği iddiasına dayanmaz. PR tabanı
+`107b930461c5f75809bbd9b6e56ba766b3c2917e` içindeki `docs/YAPAY-ZEKA-PLATFORMU.md` §18.14 ve
+`docs/NGINX-ROTA-ON-EKI.md` zaten aynı konuşma deposunda ikinci AI sürecini ve rolling overlap'i yasaklar.
+Bu nedenle desteklenmeyen karma süreç varsayımı PR'ın yeni bir üretim kusuru değildir. Bu operasyon sözleşmesinin
+canlı ortamda uygulanması işletim sorumluluğudur; bu çalışma uygulamayı dağıtmadı ve canlı topoloji kanıtı üretmedi.

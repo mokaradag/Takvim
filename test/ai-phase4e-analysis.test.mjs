@@ -800,19 +800,22 @@ test('olmayan satır göndergesi onarımla silinmez: önceki analizde satır yok
   assert.equal(result.log.length, 0);
 });
 
-test('takipte bu iletide geçmeyen ad yeniden yazılırsa sunucu önceki özneye kanonik göndergeyi önerir', async (t) => {
+test('güvenilmeyen ad onarımı önceki özneye çevrilmez ve kaydı açıklatır', async (t) => {
   const plans = [
     { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['Radar Modernizasyonu'], focus: ['overview'] } },
     { intent: 'rota', language: 'tr', analysis: { scope: 'project', names: ['Radar Modernizasyonu'], focus: ['workload'] }, visual: true },
-    { intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['workload'] }, visual: true }
+    { intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['workload'] }, visual: true },
+    { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } }
   ];
   const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
   await ask({ text: 'Radar Modernizasyonu projesini özetle' });
   const result = await ask({ text: 'bunu grafikle göster' });
-  // Güvenilir ad-kimlik bağı olmadan önceki özneye çevrilmez; model mevcut onarım turunda kanonik göndergeyi seçer.
-  assert.equal(result.inputs.length, 2);
+  // Öncekiyle aynı yazılan ad bile güvenilir kimlik eşlemesi olmadan özne değişimine izin vermez.
+  assert.equal(result.inputs.length, 3);
   assert.match(systemText(result.inputs[1].messages), /untrusted/u, 'güvenilmeyen ad onarıma gider');
-  assert.deepEqual(turnViolations(result, { project: true, finish: 'stop', chart: true }), []);
+  assert.equal(result.answer.finishReason, 'clarification');
+  assert.equal(result.log.length, 0);
+  assert.match(result.answer.content, /adını veya kodunu/u);
 });
 
 test('analitik özette açık grafik isteği aday yoksa sessizce düşmez: sunucu düzeni kısa not ekler', async (t) => {

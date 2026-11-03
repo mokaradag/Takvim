@@ -198,7 +198,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
     const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null });
     return { plan: { ...base, ...(visual ? { visual: true } : declined ? { visual: false } : {}), ...(chart ? { chart } : {}), ...(table ? { table: true } : {}), analysis, request,
-      ...(additionalRequests.length ? { additionalRequests } : {}) }, calls: [] };
+      ...(additionalRequests.length ? { additionalRequests } : {}) }, brief: parsed, calls: [] };
   }
   if (plan.intent === PLANNER_INTENTS.ROTA) {
     if (!only('request', 'additionalRequests')) throw invalidArguments(['$.plan:rota']);

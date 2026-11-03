@@ -148,7 +148,9 @@ export function resolveAnalysisBrief(analysis, { previous = null, today = null }
   const window = relativeWindow ? { relativeWindow } : {
     ...(inherited?.dateFrom ? { dateFrom: inherited.dateFrom } : {}), ...(inherited?.dateTo ? { dateTo: inherited.dateTo } : {}) };
   const withSelf = analysis.scope === 'previous' && previous?.withSelf ? { withSelf: true } : {};
-  return Object.freeze({ ...window, ...withSelf, ...analysis, focus: Object.freeze(focus) });
+  const merged = { ...window, ...withSelf, ...analysis, focus: Object.freeze(focus) };
+  if (merged.dateFrom && merged.dateTo && merged.dateFrom > merged.dateTo) throw invalidArguments(['$.analysis.dateFrom:reversed']);
+  return Object.freeze(merged);
 }
 
 /** Özetin kapsam ipuçları: yalnızca sözleşmeden. */

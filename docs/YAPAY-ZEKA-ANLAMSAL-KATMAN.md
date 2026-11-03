@@ -2323,6 +2323,11 @@ zaman takip sorusunu önceki soru gibi planlar. Dengeli ile Ayrıntılı arasın
 başlığı, ek grafik); modelin düzyazı uzunluğu iki ayarda benzer kalabilir. Güncel sürüm serbest model çerçevesini kabul etmez; kapalı geçiş dışındaki metin güvenli sunucu anlatımına döner.
 
 
+Kabul koşucusu bütün profil adlarını süreç açmadan doğrular. Varsayılan çağrı bütçesi seçilen senaryo turlarının
+sayısının dört katıdır (plan, isteğe bağlı anlamsal yardım, bir onarım ve düzen payı); `BRIDGE_MAX_CALLS` açıkça
+verilirse bu sınıra uyulur. Onarım yoğunluğu bu payı aşarsa koşu başarısız olur; model/sağlayıcı hatası gizlenmez.
+Çıkış temizliği başarısız profilde de raporu üretir, kanıt dizinini bildirir ve başarısız çıkışı korur.
+
 ### 15.9 PR #111 son yakınsama sözleşmesi
 
 - Tarih aralığı ortak görev nüfusuna uygulanır: genel görünüm, karşılaştırma, grafik ve Ayrıntılı bütünleyici

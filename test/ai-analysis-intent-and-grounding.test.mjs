@@ -323,3 +323,74 @@ test('açıkça kapatılan kendiyle karşılaştırma açıklama yeniden yürüt
   assert.ok(populationReads(selected.log).length && populationReads(selected.log).every(({ params }) => params.personSicil === ZEYNEP), JSON.stringify(populationReads(selected.log).map(({ params }) => ({person:params.personSicil,assignee:params.assigneeMode}))) );
   assert.equal(populationReads(selected.log).some(({ params }) => params.assigneeMode === 'me'), false);
 });
+
+for (const scope of ['previous', 'row']) test(`onarım devralınan pencere ve görsel tercihini yeniden bildirmeden uygulanır: ${scope === 'previous' ? 'önceki özne' : 'görünen satır'}`, async (t) => {
+  const queue = [];
+  const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
+  const acceptedWindow = { dateFrom: '2026-09-01', dateTo: '2026-10-31' };
+  queue.push(plan({ scope: 'projects', focus: ['projects'], ...acceptedWindow }, { visual: true, chart: 'bar' }));
+  assert.equal((await ask({ text: 'projeleri bu aralıkta grafikle göster' })).answer.finishReason, 'stop');
+  const follow = { scope, ...(scope === 'row' ? { rows: [1] } : {}), focus: ['status'] };
+  queue.push(plan({ ...follow, act: 'certainty' }, { chart: 'geçersiz' }), plan({ ...follow, act: 'certainty' }, { chart: 'donut' }));
+  const result = await ask({ text: 'aynı aralığı halka grafikle göster, ne kadar kesin?' });
+  assert.equal(result.inputs.length, 2);
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  const reads = populationReads(result.log);
+  assert.ok(reads.length && reads.every(({ params }) => params.dateFrom === acceptedWindow.dateFrom && params.dateTo === acceptedWindow.dateTo));
+  if (scope === 'row') assert.ok(reads.every(({ params }) => params.projectId === PROJECTS.FULL));
+  assert.ok(charts(result.answer.content).some((chart) => chart.type === 'donut'), result.answer.content);
+  assert.match(result.answer.content, /görebildiğiniz kayıtların tamamına|yalnızca bir kısmını/u);
+});
+
+for (const scope of ['previous', 'row']) test(`devralınan sınırla ters dönen pencere okumadan önce reddedilip aynı niyetle onarılır: ${scope === 'previous' ? 'önceki özne' : 'görünen satır'}`, async (t) => {
+  const queue = [];
+  const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
+  queue.push(plan({ scope: 'projects', focus: ['projects'], dateFrom: '2026-10-01', dateTo: '2026-10-07' }));
+  assert.equal((await ask({ text: 'projeleri bir ve yedi ekim arasında incele' })).answer.finishReason, 'stop');
+  const follow = { scope, ...(scope === 'row' ? { rows: [1] } : {}), focus: ['status'] };
+  queue.push(plan({ ...follow, dateFrom: '2026-10-10' }), plan({ ...follow, dateFrom: '2026-10-03' }));
+  const result = await ask({ text: 'aralığın başlangıcını değiştir' });
+  assert.equal(result.inputs.length, 2);
+  const notes = result.inputs[1].messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n');
+  assert.match(notes, /analysis\.dateFrom:reversed/u);
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  const reads = populationReads(result.log);
+  assert.ok(reads.length && reads.every(({ params }) => params.dateFrom === '2026-10-03' && params.dateTo === '2026-10-07'));
+  assert.match(result.answer.content, /3 Ekim 2026/u);
+});
+
+test('bir sınırın değiştirilmesiyle ters dönen her pencere analiz alanında reddedilir', () => {
+  for (const scope of ['previous', 'row']) for (const bound of [{ dateFrom: '2026-11-01' }, { dateTo: '2026-09-30' }]) {
+    assert.throws(() => resolveAnalysisBrief(parseAnalysis({ scope, ...(scope === 'row' ? { rows: [1] } : {}), ...bound }), { previous: context() }),
+      (error) => error.details.includes('$.analysis.dateFrom:reversed'));
+  }
+});
+
+test('kesinlikte kayıt adının harfleri cümle başında ve bağlaçtan sonra aynen kalır', async (t) => {
+  const { parts } = await groupedPage(t);
+  for (const name of ['IBM', 'iOS', 'İK', 'xx', '[Ad](bağ) 【R99】']) {
+    const modified = parts.slice(0, 1).map((part) => ({ ...part, presentation: { ...part.presentation, facts: part.presentation.facts.map((item) => ({ ...item, fact: { ...item.fact, semantic: { ...item.fact.semantic, filters: { ...item.fact.semantic.filters, projectId: PROJECTS.FULL, project: name } } } })) } }));
+    const page = buildComposition({ parts: modified, certainty: true });
+    const certainty = page.view.propositions.find((item) => item.kind === 'certainty');
+    for (const connector of ['', 'Ayrıca ']) {
+      const checked = validateComposition(page, { blocks: [{ type: 'say', text: `${connector}{${certainty.id}}.` }, ...page.view.tables.map((table) => ({ type: 'rows', source: table.id }))] });
+      assert.equal(checked.ok, true, JSON.stringify(checked.issues));
+      const content = renderComposition(page, checked).text;
+      if (name === '[Ad](bağ) 【R99】') assert.doesNotMatch(content, /\[Ad\]\(bağ\)|【R99】/u);
+      else assert.ok(content.includes(`${connector}${name} projesindeki`), content);
+    }
+  }
+});
+
+test('farklı güvenilmeyen adın önceki özneye onarılması veri okunmadan reddedilir', async (t) => {
+  const queue = [plan({ scope: 'project', names: ['Radar Modernizasyonu'], focus: ['overview'] }),
+    plan({ scope: 'project', names: ['Okuma Projesi'], focus: ['status'] }), plan({ scope: 'previous', focus: ['status'] }),
+    { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } }];
+  const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
+  await ask({ text: 'Radar Modernizasyonu projesini incele' });
+  const result = await ask({ text: 'sadece durumunu göster' });
+  assert.equal(result.inputs.length, 3);
+  assert.equal(result.log.length, 0);
+  assert.equal(result.answer.finishReason, 'clarification');
+  assert.match(result.answer.content, /adını veya kodunu/u);
+});

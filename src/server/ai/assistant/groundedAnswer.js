@@ -701,6 +701,10 @@ function pinRepair(turn, plan, details, calls = [], executionCalls = [], matched
   else turn.repairPins.set('snapshot', next);
 }
 
+function submittedVisual(plan) {
+  return plan.visual !== false && plan.analysis?.visual !== false && (plan.visual === true || plan.analysis?.visual === true || plan.chart != null);
+}
+
 function pinAnalysisRepair(turn, plan, details) {
   if (!plan.analysis || typeof plan.analysis !== 'object' || Array.isArray(plan.analysis)) return;
   const existing = turn.repairPins.get('analysis');
@@ -720,7 +724,7 @@ function pinAnalysisRepair(turn, plan, details) {
   const pinnedPaths = new Set([...paths, 'visual', ...(narrow ? ['focus'] : [])]);
   turn.repairPins.set('analysis', { raw, paths: pinnedPaths, narrow, projection: stable(repairOmit(raw, pinnedPaths)),
     visual: existing ? existing.visual : details.some((detail) => String(detail).startsWith('$.visual:') || String(detail).startsWith('$.analysis.visual:'))
-      ? null : (plan.visual === true || plan.analysis.visual === true) });
+      ? null : submittedVisual(plan) });
 }
 
 /** Daraltılan yön listesi, pinlenen listenin sıralı ve boş olmayan alt kümesi mi? */
@@ -739,15 +743,10 @@ function narrowedFocus(pin, focus) {
 function analysisRepairMatches(turn, plan) {
   const pin = turn.repairPins.get('analysis');
   if (!pin || [PLANNER_INTENTS.CLARIFY, PLANNER_INTENTS.ABSTAIN].includes(plan.intent)) return true;
-  let analysis = plan.analysis;
-  // Geçersiz ad, aynı kapsamda ve aynı sayıda özne taşıyan mevcut kanonik göndergeyle değiştirilebilir.
-  // Bu eşleme önceki proje kesişimini ekleyemez veya geçerli adlı özneyi değiştiremez.
-  const prior = turn.previousAnalysis;
-  if (analysis?.scope === 'previous' && pin.paths.has('names') && prior?.scope === pin.raw.scope && !prior.within
-    && prior.subjects.length === pin.raw.names?.length) analysis = { ...analysis, scope: prior.scope, ...(prior.level ? { level: prior.level } : {}) };
+  const analysis = normalizedBrief(plan.analysis);
   return plan.intent === PLANNER_INTENTS.ROTA && Boolean(plan.analysis)
-    && stable(repairOmit(analysis, pin.paths)) === pin.projection && narrowedFocus(pin, plan.analysis.focus)
-    && (pin.visual == null || (plan.visual === true || plan.analysis.visual === true) === pin.visual);
+    && stable(repairOmit(analysis, pin.paths)) === pin.projection && narrowedFocus(pin, analysis.focus)
+    && (pin.visual == null || submittedVisual(plan) === pin.visual);
 }
 
 function repairMatches(turn, plan, calls = []) {
@@ -2164,9 +2163,9 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     const details = analysisPlan ? analysisDetails(rawDetails || []) : rawDetails || [];
     // Reddedilen ayrıntılı isteğin türlü alanlarından (araç, sorumlu koşulu, varlıklar) eşdeğer analitik özet önerisi.
     const suggestion = !analysisPlan ? analysisSuggestion(rejectedPlan?.request) : null;
-    // Takipte bu iletide geçmeyen ad: önceki analizin öznesine sunucunun kanonik göndergesiyle başvurulur (ad yeniden yazılmaz).
+    // Güvenilmeyen adın önceki kimlikle eşitliği bilinmez; onarım özneyi değiştiremez, açıklama isteyebilir.
     const followup = analysisPlan && turn.previousAnalysis && details.includes('$.analysis.names:untrusted')
-      ? ['Ad bu iletide geçmiyor: önceki analizin öznesi kastediliyorsa analysis.scope "previous" yaz (names verme); önceki sonucun bir satırı kastediliyorsa analysis.scope "row" ve analysis.rows (önceki yanıttaki 1 tabanlı satır sırası: [1] ya da [1,2]) yaz'] : [];
+      ? ['Ad bu iletide geçmiyor ve önceki özneyle eşitliği doğrulanmış değil: özneyi previous/row ile değiştirme; clarify ile kaydın adını veya kodunu yeniden iste.'] : [];
     const hints = [...(analysisPlan ? [] : rawHints), ...followup, ...analysisHints(details), ...(suggestion ? [suggestion] : [])];
     recordPlannerRejection(details[0]);
     if (analysisPlan && !details.includes('$.plan:repairScope')) pinAnalysisRepair(turn, rejectedPlan, details);
@@ -2307,8 +2306,9 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     if (!frozen() && result.toolCalls.some((call) => call.name === 'rota_plan')) {
       try {
         plan = unpackTypedPlan(result, { onDecoded: decoded => { rejectedPlan = decoded; }, previousAnalysis: turn.previousAnalysis, today: turn.context.today, detail: turn.answerDetail });
-        rejectedPlan = plan.plan;
-        if (!analysisRepairMatches(turn, plan.plan) || !plan.plan.analysis && !repairMatches(turn, plan.plan, repairCalls(turn, plan.calls))) throw invalidArguments(['$.plan:repairScope']);
+        rejectedPlan = plan.brief ? { ...rejectedPlan, analysis: plan.brief } : plan.plan;
+        // Onarım sınırı modelin kabul edilen özetine aittir; önceki turdan devralınan alanlar bu karşılaştırmaya girmez.
+        if (!analysisRepairMatches(turn, rejectedPlan) || !plan.plan.analysis && !repairMatches(turn, plan.plan, repairCalls(turn, plan.calls))) throw invalidArguments(['$.plan:repairScope']);
         repairMatched = true;
       }
       catch (error) {

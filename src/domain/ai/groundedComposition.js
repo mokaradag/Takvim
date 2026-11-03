@@ -219,18 +219,19 @@ function entityNames(parts) {
 }
 
 /** Tablonun kesinlik önermesi: satırlar doğrulanmış nüfusun tamamı mı, yoksa gösterilen kısmı mı? */
-function certaintyProposition(table, title, locale) {
+function certaintyProposition(table, title, locale, names) {
   const en = locale === 'en';
   const name = String(title || '').replace(/\s+/g, ' ').trim();
-  const lower = name.charAt(0).toLocaleLowerCase(en ? 'en-US' : 'tr-TR') + name.slice(1);
+  const record = !en && names.find((item) => name.startsWith(item));
+  const lower = record ? name : name.charAt(0).toLocaleLowerCase(en ? 'en-US' : 'tr-TR') + name.slice(1);
   // Tablo, bölümünün adıyla anılır ("gecikmiş görevler tablosu"); ilk sütun adı ("Görev") nüfusu adlandırmaz.
   const subject = name ? (en ? `the ${lower} table` : `${lower} tablosu`) : (en ? 'this table' : 'bu tablo');
   const text = table.complete
     ? (en ? `${subject} covers every record you can see.` : `${subject} görebildiğiniz kayıtların tamamına dayanıyor.`)
     : (en ? `${subject} shows only part of the records; conclusions from it are limited.` : `${subject} kayıtların yalnızca bir kısmını gösteriyor; buradan çıkan sonuçlar sınırlıdır.`);
-  const markdown = `${text.charAt(0).toLocaleUpperCase(en ? 'en-US' : 'tr-TR')}${text.slice(1)}`;
+  const markdown = record ? text : `${text.charAt(0).toLocaleUpperCase(en ? 'en-US' : 'tr-TR')}${text.slice(1)}`;
   return { kind: 'certainty', tone: table.complete ? 'success' : 'info', evidenceId: table.evidenceId, markdown: escapedFactText(markdown).replace(/\\\./g, '.'),
-    plain: markdown, parts: Object.freeze([text]) };
+    plain: markdown, parts: Object.freeze(record ? [{ value: record, strong: false }, text.slice(record.length)] : [text]) };
 }
 
 /**
@@ -443,7 +444,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   if (certainty) {
     for (const table of tables.values()) {
       const name = [...titles.values()].find((item) => item.part === table.part)?.text || viewTables.find((item) => item.id === table.id)?.title;
-      propose(table.part, certaintyProposition(table, name, locale), { table: table.id, required: true });
+      propose(table.part, certaintyProposition(table, name, locale, entityNames(parts)), { table: table.id, required: true });
     }
   }
   const availableRoom = limits.maxPropositions - propositions.size - derived.length;

@@ -69,3 +69,62 @@ test('boş JSON köprüyü çökertmez; geçersiz istekten sonra model listesi �
   assert.equal(response.status, 400);
   assert.equal((await fetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
 });
+
+/** Süreç sınırını taklit eder; ağ dinleyicisi açmadan gerçek kabuk koşucusu ve rapor çalışır. */
+function runnerFixture(t) {
+  const dir = directory(t);
+  const bin = join(dir, 'bin'); mkdirSync(bin);
+  const log = join(dir, 'başlatmalar.jsonl');
+  writeFileSync(join(bin, 'claude'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'curl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'node'), `#!${process.execPath}
+const fs=require('fs'),path=require('path'),cp=require('child_process'),args=process.argv.slice(2);
+const record=(kind)=>fs.appendFileSync(process.env.KABUL_SINAMA_LOG,JSON.stringify({kind,budget:process.env.BRIDGE_MAX_CALLS})+'\\n');
+if(args[0]==='--input-type=module'&&args[2]?.includes('import net from'))process.exit(0);
+if(args[0]==='-e'&&args[1].includes("require.resolve('playwright')"))process.exit(0);
+if(args[0]?.endsWith('haikuBridge.mjs')){record('köprü');setInterval(()=>{},1000);}
+else if(args[0]==='node_modules/next/dist/bin/next'){record('uygulama');setInterval(()=>{},1000);}
+else if(args[0]?.endsWith('drive.cjs')){
+ record('sürücü');
+ const profile=path.basename(args[1],'.json');
+ fs.writeFileSync(path.join(args[2],profile+'.json'),JSON.stringify([{runId:process.env.UI_RUN_ID,profile,conversation:'başarısız sınama',detail:'balanced',turn:1,question:'durum',ms:1,rendered:{status:'driver-error',charts:[],tables:[]},server:null,calls:[],failures:['sınama hatası']}]));
+ process.exit(1);
+}else{const result=cp.spawnSync(${JSON.stringify(process.execPath)},args,{stdio:'inherit'});process.exit(result.status??1);}
+`, { mode: 0o755 });
+  const invoke = (profiles, env = {}) => spawnSync('bash', ['scripts/ui-acceptance/run.sh', ...profiles], { cwd: root, env: { ...process.env, UI_ACCEPTANCE_DIR: dir, PATH: `${bin}:${process.env.PATH}`, KABUL_SINAMA_LOG: log, BRIDGE_MAX_CALLS: '', ...env }, encoding: 'utf8', timeout: 10000 });
+  const starts = () => readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  return { dir, invoke, starts };
+}
+
+test('sonraki geçersiz profil bütün süreçler ve kanıt dizini açılmadan reddedilir', (t) => {
+  const fixture = runnerFixture(t);
+  const result = fixture.invoke(['A', 'X']);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /Geçersiz profil: X/u);
+  assert.deepEqual(readdirSync(fixture.dir), ['bin']);
+});
+
+test('koşucu başarısız profilin raporunu ve kanıt yolunu verir, sonraki profili başlatmaz', (t) => {
+  const fixture = runnerFixture(t);
+  const result = fixture.invoke(['A', 'B']);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /driver-error/u);
+  const evidence = /Kabul kanıtı: (.+)/u.exec(result.stdout)?.[1];
+  assert.ok(evidence, result.stdout);
+  assert.match(readFileSync(join(evidence, 'report.md'), 'utf8'), /driver-error/u);
+  assert.equal(JSON.parse(readFileSync(join(evidence, 'out', 'A.json'), 'utf8'))[0].failures[0], 'sınama hatası');
+  assert.equal(fixture.starts().filter((item) => item.kind === 'uygulama').length, 1);
+  assert.equal(fixture.starts().filter((item) => item.kind === 'sürücü').length, 1);
+});
+
+test('varsayılan çağrı bütçesi seçilen bütün senaryo turlarını kapsar ve açık sınır korunur', (t) => {
+  const fixture = runnerFixture(t);
+  const result = fixture.invoke([]);
+  assert.equal(result.status, 1, result.stderr);
+  const turns = readdirSync('scripts/ui-acceptance/scenarios').filter((name) => /^[A-G]\.json$/u.test(name)).reduce((total, name) => total + JSON.parse(readFileSync(join('scripts/ui-acceptance/scenarios', name), 'utf8')).conversations.reduce((count, item) => count + item.turns.length, 0), 0);
+  assert.ok(turns * 2 > 140, 'eski sabit bütçe normal iki çağrılı yolu bile karşılamaz');
+  assert.equal(Number(fixture.starts().find((item) => item.kind === 'köprü').budget), turns * 4);
+  const explicit = fixture.invoke(['A'], { BRIDGE_MAX_CALLS: '7' });
+  assert.equal(explicit.status, 1, explicit.stderr);
+  assert.equal(fixture.starts().filter((item) => item.kind === 'köprü').at(-1).budget, '7');
+});
