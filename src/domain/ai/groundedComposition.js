@@ -11,7 +11,7 @@ import {
   renderGroupRows
 } from './evidenceNarrative.js';
 import { escapedFactText } from './evidenceFacts.js';
-import { analystPropositions, caveatPropositions, countProposition, fluentParagraph, noteLabel, pointerSentence, populationProposition, tablePropositions, titleCandidate } from './groundedPropositions.js';
+import { analystPropositions, caveatPropositions, countProposition, fluentParagraph, noteLabel, pointerSentence, populationProposition, rowPopulationComplete, tablePropositions, titleCandidate } from './groundedPropositions.js';
 import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from './answerDetail.js';
 import { checkProse, escapeProseText, proseParagraph, renderProse } from './groundedProse.js';
 
@@ -303,7 +303,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   };
 
   for (const part of parts) {
-    const presentation = part.presentation;
+    const presentation = table && part.presentation ? { ...part.presentation, layout: 'table' } : part.presentation;
     if (!presentation || !Array.isArray(presentation.facts)) continue;
     const ordinal = part.index + 1;
     // İş yükü kanıtının bağlam olguları (atama dağılımının tamlığı, sıfır sayılar) ayrıntı satırı olarak yazılmaz: tamlık
@@ -329,7 +329,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         const described = describeRowCollection(group, collection, locale);
         const columns = described.columns.map((column, index) => ({ id: `C${index + 1}`, label: column.label, numeric: column.numeric }));
         const pageComplete = described.rows.every((row) => row.entries.every(({ fact }) => fact.semantic?.complete === true));
-        const populationComplete = group.tool !== 'rota_workload_summary' || presentation.facts.some((item) => item.evidenceId === group.evidenceId && item.fact?.field === 'data.populationComplete' && item.fact.value === true);
+        const populationComplete = rowPopulationComplete(group.tool, presentation.facts.filter((item) => item.evidenceId === group.evidenceId).map((item) => item.fact));
         const complete = pageComplete && populationComplete;
         const rowCriteria = [...new Set(described.rows.map((row) => narrativeLabel(row.entries[0].fact, locale).criteria))];
         const criteria = rowCriteria.length === 1 ? rowCriteria[0] : group.envelope.map((fact) => narrativeLabel(fact, locale).criteria).find(Boolean) || '';

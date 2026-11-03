@@ -1,7 +1,7 @@
 /** Arayüz kabulünün kendi başarısızlıkları sürecin çıkış koduna yansır; gerçek modele ihtiyaç duymaz. */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -34,7 +34,9 @@ exports.chromium={launch:async()=>({newContext:async()=>({newPage:async()=>page}
   writeFileSync(join(dir, 'out', 'A.json'), JSON.stringify([{ runId: 'eski', conversation: 'önceki', calls: [] }]));
   const scenario = { profile: 'A', port: 8101, appLog: 'app-A.log', conversations: [{ name: 'seçilen', detail: 'balanced', turns: ['durum'] }] };
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
-  const result = run('scripts/ui-acceptance/drive.cjs', [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_ONLY: 'seçilen', UI_RUN_ID: 'güncel', NODE_PATH: modules });
+  copyFileSync(resolve('scripts/ui-acceptance/drive.cjs'), join(dir, 'drive.cjs'));
+  copyFileSync(resolve('scripts/ui-acceptance/expectations.cjs'), join(dir, 'expectations.cjs'));
+  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_ONLY: 'seçilen', UI_RUN_ID: 'güncel' });
   assert.equal(result.status, 1, result.stderr);
   const rows = JSON.parse(readFileSync(join(dir, 'out', 'A.json'), 'utf8'));
   assert.equal(rows[0].conversation, 'önceki');
@@ -43,7 +45,7 @@ exports.chromium={launch:async()=>({newContext:async()=>({newPage:async()=>page}
   assert.ok(rows[1].failures.includes('tarayıcı turu tamamlanamadı'));
 });
 
-test('koşucu dolu köprü bağlantı noktasını kullanmaz ve önceki koşuyu silmez', async (t) => {
+test('koşucu dolu köprü bağlantı noktasını kullanmaz ve önceki koşuyu silmez', { skip: process.platform === 'win32' }, async (t) => {
   const dir = directory(t); const modules = join(dir, 'node_modules'); mkdirSync(join(modules, 'playwright'), { recursive: true });
   writeFileSync(join(modules, 'playwright', 'index.js'), 'module.exports = {};');
   mkdirSync(join(dir, 'bin')); writeFileSync(join(dir, 'bin', 'claude'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
@@ -96,7 +98,7 @@ else if(args[0]?.endsWith('drive.cjs')){
   return { dir, invoke, starts };
 }
 
-test('sonraki geçersiz profil bütün süreçler ve kanıt dizini açılmadan reddedilir', (t) => {
+test('sonraki geçersiz profil bütün süreçler ve kanıt dizini açılmadan reddedilir', { skip: process.platform === 'win32' }, (t) => {
   const fixture = runnerFixture(t);
   const result = fixture.invoke(['A', 'X']);
   assert.equal(result.status, 1, result.stderr);
@@ -104,7 +106,7 @@ test('sonraki geçersiz profil bütün süreçler ve kanıt dizini açılmadan r
   assert.deepEqual(readdirSync(fixture.dir), ['bin']);
 });
 
-test('koşucu başarısız profilin raporunu ve kanıt yolunu verir, sonraki profili başlatmaz', (t) => {
+test('koşucu başarısız profilin raporunu ve kanıt yolunu verir, sonraki profili başlatmaz', { skip: process.platform === 'win32' }, (t) => {
   const fixture = runnerFixture(t);
   const result = fixture.invoke(['A', 'B']);
   assert.equal(result.status, 1, result.stderr);
@@ -117,7 +119,7 @@ test('koşucu başarısız profilin raporunu ve kanıt yolunu verir, sonraki pro
   assert.equal(fixture.starts().filter((item) => item.kind === 'sürücü').length, 1);
 });
 
-test('varsayılan çağrı bütçesi seçilen bütün senaryo turlarını kapsar ve açık sınır korunur', (t) => {
+test('varsayılan çağrı bütçesi seçilen bütün senaryo turlarını kapsar ve açık sınır korunur', { skip: process.platform === 'win32' }, (t) => {
   const fixture = runnerFixture(t);
   const result = fixture.invoke([]);
   assert.equal(result.status, 1, result.stderr);
@@ -127,4 +129,62 @@ test('varsayılan çağrı bütçesi seçilen bütün senaryo turlarını kapsar
   const explicit = fixture.invoke(['A'], { BRIDGE_MAX_CALLS: '7' });
   assert.equal(explicit.status, 1, explicit.stderr);
   assert.equal(fixture.starts().filter((item) => item.kind === 'köprü').at(-1).budget, '7');
+});
+
+test('köprü büyük girdiyi okumadan kapanan bağdaştırıcıyı başarısız kaydeder ve yaşamaya devam eder', async (t) => {
+  const dir = directory(t);
+  const child = spawn(process.execPath, ['scripts/ui-acceptance/haikuBridge.mjs'], { cwd: root, env: { ...process.env, BRIDGE_PORT: '0', BRIDGE_CALLS: join(dir, 'calls.jsonl'), PLANNER_MODEL_TIMEOUT_MS: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => child.kill());
+  const port = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('köprü açılmadı')), 5000);
+    child.stdout.on('data', (chunk) => { const match = /bridge listening (\d+)/u.exec(String(chunk)); if (match) { clearTimeout(timer); resolve(Number(match[1])); } });
+    child.once('error', reject);
+  });
+  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', messages: [{ role: 'system', content: 'x'.repeat(2_000_000) }] }) });
+  assert.equal(response.status, 503);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'calls.jsonl'), 'utf8').trim()).ok, false);
+});
+
+test('rol beklentileri sonuç, kanıt sınırı ve görünür metnin tamamında sağlanır', async () => {
+  const { semanticFailures } = (await import('../scripts/ui-acceptance/expectations.cjs')).default;
+  const expected = { outcome: 'unavailable', maxEvidence: 0, requires: ['yönetim kapsamınız bulunmuyor'], forbids: ['Gizli kişi'] };
+  assert.deepEqual(semanticFailures(expected, { text: 'yönetim kapsamınız bulunmuyor' }, { outcome: 'unavailable', evidence: 0 }), []);
+  for (const [rendered, trace, message] of [
+    [{ text: 'yönetim kapsamınız bulunmuyor' }, { outcome: 'grounded', evidence: 0 }, 'beklenen sonuç alınmadı: unavailable'],
+    [{ text: 'yönetim kapsamınız bulunmuyor' }, { outcome: 'unavailable', evidence: 1 }, 'beklenen kanıt sınırı aşıldı'],
+    [{ text: 'yönetim kapsamınız bulunmuyor' }, { outcome: 'unavailable' }, 'beklenen kanıt sınırı aşıldı'],
+    [{ text: 'başarılı' }, { outcome: 'unavailable', evidence: 0 }, 'zorunlu görünür metin yok: yönetim kapsamınız bulunmuyor'],
+    [{ text: 'yönetim kapsamınız bulunmuyor; Gizli kişi' }, { outcome: 'unavailable', evidence: 0 }, 'yasak görünür metin var: Gizli kişi']
+  ]) assert.ok(semanticFailures(expected, rendered, trace).includes(message));
+});
+
+test('yetki ihlali görünen başarılı tarayıcı turu kanıt yazıp başarısız çıkar', (t) => {
+  const dir = directory(t); mkdirSync(join(dir, 'node_modules', 'playwright'), { recursive: true });
+  copyFileSync(resolve('scripts/ui-acceptance/drive.cjs'), join(dir, 'drive.cjs'));
+  copyFileSync(resolve('scripts/ui-acceptance/expectations.cjs'), join(dir, 'expectations.cjs'));
+  writeFileSync(join(dir, 'node_modules', 'playwright', 'index.js'), `
+const fs=require('fs'),path=require('path');
+const locator={first(){return this},getByRole(){return this},isVisible:async()=>false,click:async()=>{},getAttribute:async()=> 'true',waitFor:async()=>{},count:async()=>0,fill:async()=>{},press:async()=>{},screenshot:async()=>{}};
+const page={goto:async()=>{},getByRole:()=>locator,locator:()=>locator,waitForTimeout:async()=>{},waitForFunction:async()=>{},evaluate:async()=>{
+ fs.appendFileSync(path.join(process.env.UI_ACCEPTANCE_DIR,'app-A.log'),JSON.stringify({operation:'ai.grounded.turn',context:{outcome:'grounded',evidence:1}})+'\\n');
+ return {status:'ready',text:'Korunan ekip verisi',charts:[],tables:[]};
+}};
+exports.chromium={launch:async()=>({newContext:async()=>({newPage:async()=>page}),close:async()=>{}})};`);
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify({ profile: 'A', port: 8101, appLog: 'app-A.log', conversations: [{ name: 'yetkisiz ekip', detail: 'balanced', turns: ['ekibimi göster'], expectedTurns: [{ outcome: 'unavailable', maxEvidence: 0, forbids: ['Korunan ekip verisi'] }] }] }));
+  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'güncel' });
+  assert.equal(result.status, 1, result.stderr);
+  const row = JSON.parse(readFileSync(join(dir, 'out', 'A.json'), 'utf8'))[0];
+  assert.equal(row.rendered.status, 'ready');
+  assert.equal(row.server.outcome, 'grounded');
+  assert.ok(row.failures.includes('beklenen sonuç alınmadı: unavailable'));
+  assert.ok(row.failures.includes('beklenen kanıt sınırı aşıldı'));
+  assert.ok(row.failures.includes('yasak görünür metin var: Korunan ekip verisi'));
+});
+
+test('bütün rol profillerinin yetkiyi kanıtlayan açık senaryo beklentisi vardır', () => {
+  for (const name of ['A','B','C','D','E','F','G']) {
+    const scenario = JSON.parse(readFileSync(`scripts/ui-acceptance/scenarios/${name}.json`, 'utf8'));
+    assert.ok(scenario.conversations.some((conversation) => conversation.expectedTurns?.some((expected) => expected.outcome && (expected.requires?.length || expected.forbids?.length))), `rol beklentisi eksik: ${name}`);
+  }
 });

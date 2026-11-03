@@ -518,7 +518,7 @@ export function analysisDetails(details = []) {
     if (/filters\.(?:dateFrom|dateTo|period)/.test(text)) return '$.analysis.dateFrom:invalid';
     if (/filters\.(?:assignee|teamLevel)/.test(text)) return '$.analysis.scope:unsupported';
     // Özetin kendi alanları ve plan düzeyi sorunlar (dil, niyet, görsel bayrağı, bilinmeyen alan, özet + istek) adıyla kalır.
-    if (/^\$\.analysis[.:]/.test(text) || /^\$\.(?:language|intent|visual|plan|calls|clarify|abstain)(?:[.:[]|$)/.test(text)) return text;
+    if (/^\$\.analysis[.:]/.test(text) || /^\$\.(?:language|intent|visual|chart|table|plan|calls|clarify|abstain)(?:[.:[]|$)/.test(text)) return text;
     return '$.analysis:invalid';
   }))];
 }

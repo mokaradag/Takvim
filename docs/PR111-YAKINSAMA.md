@@ -79,6 +79,23 @@ R8 denetiminde kalan ikinci ad-sayı eşitliği kestirmesi de kaldırıldı: gü
 
 Ek on sınama, bu inceleme öncesi HEAD'de 10/10 başarısızdır. Düzeltmeyle yeni uygulama ve kabul altyapısı dosyaları 48/48; dört odaklı dosya 215/215 başarılıdır. Kabul koşucusunun süreç sınırı sınamalarında gerçek kabuk ve rapor kullanılır; ağ dinleyicisi veya model çağrısı açılmaz.
 
+
+## Sonraki canlı bulgular
+
+| Bulgu | Kök neden | Sınıflandırma / uygulama |
+| --- | --- | --- |
+| [4451721818](https://github.com/mokaradag/Takvim/pull/111#discussion_r4451721818) | R5 — Kişi nüfusu tamlığı | Geçerli; görev analitiğinin kişi kırılımı, tam görev sayfası olsa da tam kadro değildir. Mevcut doğrulanmış gruplama metadatasından zorunlu çekince türetilir; kişi tablosunun kesinliği eksik nüfusu söyler. Yeni kadro okuması yapılmaz. |
+| [4451870459](https://github.com/mokaradag/Takvim/pull/111#discussion_r4451870459) | R8 — Onarım niyeti | Geçerli; geçerli dil, grafik türü ve tablo tercihi de pinlenir. Yalnızca hata bildirilen sunum alanı değiştirilebilir. Grafik/tablo hata yolları analiz hatasına dönüştürülmez. |
+| [4452062350](https://github.com/mokaradag/Takvim/pull/111#discussion_r4452062350) | R7 — Kabul kanıtı | Geçerli; bütün rol profillerinde açık sonuç ve görünür zorunlu/yasak metin beklentileri vardır. Yetkisiz çalışan ve yönetici için sonuç unavailable, kanıt sayısı sıfır olmalıdır. Uyuşmazlık sonuç satırına ve çıkış koduna yansır. |
+| [4452186401](https://github.com/mokaradag/Takvim/pull/111#discussion_r4452186401) | R7 — Süreç hatası | Geçerli; bağdaştırıcı girdi borusu veya süreç hatası başarısız çağrı kaydı olur, yerel köprü yaşamaya devam eder. |
+| [4452186424](https://github.com/mokaradag/Takvim/pull/111#discussion_r4452186424) | R6 — Doğru teslim açıklaması | Geçerli; desteklenen fakat çizimde kalmayan tür için veri eksikliği iddia edilmez. Tarafsız çizim hatası ve varsa çizilen alternatif söylenir. |
+| [4452186441](https://github.com/mokaradag/Takvim/pull/111#discussion_r4452186441) | R6 — Tablo teslimi | Geçerli; açık tablo, model düzeni kapalı veya bozukken de sunucu düzeniyle tek satır dahil çizilir. Son çare açıklaması atfedilen olgularda satır olup olmadığına göre kurulur. |
+| [4452186448](https://github.com/mokaradag/Takvim/pull/111#discussion_r4452186448) | R7 — Sınama yalıtımı | Geçerli; tarayıcı sürücüsünün geçici kopyası geçici modülleri ilk sırada çözer; geliştiricinin gerçek Playwright kurulumu sınamayı değiştirmez. |
+| [4452186454](https://github.com/mokaradag/Takvim/pull/111#discussion_r4452186454) | R7 — Platform sözleşmesi | Geçerli; Linux/macOS kabuk koşucusunun dört sınaması Windows'ta çalıştırılmaz; taşınabilir JavaScript sınamaları çalışır. Mevcut Windows/macOS CI işlerine kabul altyapısı dosyası eklendi. |
+| [4452194152](https://github.com/mokaradag/Takvim/pull/111#discussion_r4452194152) | R3 — Kanonik kişi satırı | Geçerli; yalnızca sicil: önekli kanonik grup anahtarı katı sicil doğrulamasıyla çözülür. Sorumlusuz/çözümlenemeyen/diğer gruplar konumsal null kalır. |
+
+Son ek kapsam: dönemli kişi kırılımında görünür zorunlu çekince ve kesinlik; model/sunucu düzeni; tam tarihli yetkili kişi takibi; hatalı alan onarımına karşı geçerli dil/tür/tablo koruması; bozuk modelden tek satırlı tablo dönüşü; doğru grafik açıklaması; boru hatası sonrası köprü sağlığı; yetki ihlalinin gerçek sürücü çıkışını bozması. Yedi odaklı dosya 463/463 başarılıdır. Bu kapsam gerçek Haiku kabulünün yerine geçmez.
+
 ## Değişmezler ve gerileme kanıtı
 
 | Kök neden | Uygulama | Gerileme kapsamı |
@@ -113,3 +130,14 @@ R9 yeniden sınıflandırması, eski ikilinin yeni biçimi okuyabildiği iddias�
 `docs/NGINX-ROTA-ON-EKI.md` zaten aynı konuşma deposunda ikinci AI sürecini ve rolling overlap'i yasaklar.
 Bu nedenle desteklenmeyen karma süreç varsayımı PR'ın yeni bir üretim kusuru değildir. Bu operasyon sözleşmesinin
 canlı ortamda uygulanması işletim sorumluluğudur; bu çalışma uygulamayı dağıtmadı ve canlı topoloji kanıtı üretmedi.
+
+
+Son ek düzeltmelerin paralel tam koşusu: `npm test`, 5124/5125, çıkış 1. Değişmeyen
+`ai-semantic-qualification.test.mjs` içindeki alt CLI raporunun çıktısı eksik JSON geldi; dosyanın
+tek başına `node --test test/ai-semantic-qualification.test.mjs` koşusu 11/11, çıkış 0 ile geçti.
+Bu hata veya önceki canlı-tutma/SMTP zaman sınırı hataları gizlenmedi; sınamalar ve eşikleri değiştirilmedi.
+CI'nin seri tam koşusu `npm test -- --test-concurrency=1`: 5125/5125 başarılı, çıkış 0.
+`npx next lint`: ESLint uyarısı/hatası yok, çıkış 0.
+`NEXT_TELEMETRY_DISABLED=1 npx next build`: başarılı, çıkış 0.
+İki güncel regresyon dosyası 62/62; yedi odaklı dosya 463/463 başarılıdır.
+`scripts/ui-acceptance/run.sh A`: çıkış 1, Claude CLI bulunamadı; gerçek model başarısı kaydedilmedi.

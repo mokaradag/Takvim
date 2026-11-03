@@ -9,6 +9,16 @@
    "turns": [
     "Hangi projem daha fazla dikkat istiyor?",
     "Bu işlerde asıl problem nerede?"
+   ],
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "forbids": [
+      "Gizli Ar-Ge",
+      "Siber Güvenlik Denetimi",
+      "Altyapı Yenileme"
+     ]
+    }
    ]
   }
  ]

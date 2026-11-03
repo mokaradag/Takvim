@@ -30,6 +30,13 @@ export const PROPOSITION_TONES = Object.freeze(['info', 'warning', 'success']);
 const TASK_TOOLS = new Set(['rota_task_search', 'rota_task_analytics']);
 /** Dağılım önermesi yalnızca her görevi tek gruba koyan boyutlarda: kişi grupları birbirini dışlamaz. */
 export const EXCLUSIVE_GROUP_BY = Object.freeze(['status', 'priority', 'project', 'deadline', 'target_month']);
+const assignmentGroups = (fact) => fact?.semantic?.provenance?.tool === 'rota_task_analytics' && fact.semantic.groupBy === 'assignee';
+
+/** Görevlerin kişi kırılımı kadroyu kanıtlamaz; sayfa tamlığı kişi nüfusunun tamlığı değildir. */
+export function rowPopulationComplete(tool, facts) {
+  if (facts.some(assignmentGroups)) return false;
+  return tool !== 'rota_workload_summary' || facts.some((fact) => fact?.field === 'data.populationComplete' && fact.value === true);
+}
 const MAX_BREAKDOWN_GROUPS = 8;
 const MAX_PLAIN_NAME = 120;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -847,10 +854,13 @@ export function caveatPropositions(parts, locale = 'tr') {
   for (const part of parts) {
     for (const item of part.presentation?.facts || []) {
       const fact = item.fact;
-      if (fact?.field !== 'data.populationComplete' || fact.value !== false) continue;
+      const assignments = assignmentGroups(fact);
+      if (!assignments && (fact?.field !== 'data.populationComplete' || fact.value !== false)) continue;
       if (seen.has(item.evidenceId)) continue;
       seen.add(item.evidenceId);
-      out.push({ part: part.index + 1, proposition: { kind: 'completeness', tone: 'info', evidenceId: item.evidenceId, ...sentence(en
+      out.push({ part: part.index + 1, proposition: { kind: 'completeness', tone: 'info', evidenceId: item.evidenceId, ...sentence(assignments ? (en
+        ? ['this task-assignment breakdown does not establish the full roster: members with no matching tasks are unknown, and any unresolved or hidden assignees cannot enter a person ranking. Team balance or an exhaustive workload ranking cannot be established.']
+        : ['bu görev-atama kırılımı kadronun tamamını kanıtlamaz: eşleşen işi olmayan üyelerin tamamı bilinmez; çözümlenemeyen veya gizli atamalar varsa kişi sıralamasına katılamaz. Ekip dengesi veya eksiksiz iş yükü sıralaması kesin olarak söylenemez.']) : en
         ? ['this workload view covers only the open work you can see that is attributed to people, so whether the load is balanced or who carries the most cannot be stated with certainty.']
         : ['bu iş yükü görünümü yalnızca görebildiğiniz ve kişilere bağlanabilen açık işleri kapsıyor; bu nedenle iş yükünün dengeli olup olmadığı ya da en çok yükün kimde olduğu kesin olarak söylenemez.']) } });
     }

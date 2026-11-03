@@ -8,6 +8,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
+const { semanticFailures } = require('./expectations.cjs');
 
 const [scenarioFile, outDir] = process.argv.slice(2);
 const scenario = JSON.parse(fs.readFileSync(scenarioFile, 'utf8'));
@@ -110,13 +111,13 @@ async function ask(page, text) {
       const shot = path.join(outDir, `${scenario.profile}-${conversationIndex + 1}-${turnIndex + 1}.png`);
       await page.locator('.rota-assistant-thread').screenshot({ path: shot }).catch(() => {});
       const expectedChart = conversation.expectedCharts?.[turnIndex] || null;
-      const failures = [];
+      const failures = semanticFailures(conversation.expectedTurns?.[turnIndex], rendered, trace);
       if (rendered.status === 'driver-error' || rendered.status === 'error') failures.push('tarayıcı turu tamamlanamadı');
       if (expectedChart && !rendered.charts?.some((chart) => chart.type === expectedChart && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);
       if (!trace) failures.push('bu tura ait sunucu kanıtı yok');
       if (calls.some((call) => !call.ok || call.thinking !== 'off' || call.thinkingTokens !== 0 || !call.models?.length || call.models.some((model) => model !== 'claude-haiku-4-5-20251001'))) failures.push('model çağrısı kabul sözleşmesini sağlamadı');
       const row = { runId, failures, profile: scenario.profile, conversation: conversation.name, detail: conversation.detail, turn: turnIndex + 1, question: text, ms, rendered,
-        server: trace ? { outcome: trace.outcome, parts: trace.parts, escalated: trace.escalated, presentation: trace.presentation, models: [...new Set((trace.rounds || []).map((round) => round.model))],
+        server: trace ? { outcome: trace.outcome, evidence: trace.evidence, parts: trace.parts, escalated: trace.escalated, presentation: trace.presentation, models: [...new Set((trace.rounds || []).map((round) => round.model))],
           reasoning: trace.usage?.reasoning ?? null } : null,
         calls: calls.map((call) => ({ purpose: call.purpose, ok: call.ok, models: call.models, thinking: call.thinking, thinkingTokens: call.thinkingTokens, ms: call.ms,
           input: call.input, cacheRead: call.cacheRead, cacheWrite: call.cacheWrite, output: call.output, error: call.error })), screenshot: path.basename(shot) };

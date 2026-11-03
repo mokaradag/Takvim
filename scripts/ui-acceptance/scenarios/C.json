@@ -8,6 +8,19 @@
    "detail": "balanced",
    "turns": [
     "Ekibimin mevcut iş yükünü değerlendir."
+   ],
+   "expectedTurns": [
+    {
+     "outcome": "unavailable",
+     "maxEvidence": 0,
+     "requires": [
+      "yönetim kapsamınız bulunmuyor"
+     ],
+     "forbids": [
+      "Mehmet Kaya",
+      "Cem Bulut"
+     ]
+    }
    ]
   },
   {
@@ -15,6 +28,14 @@
    "detail": "balanced",
    "turns": [
     "Projelerimde genel durum nasıl?"
+   ],
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "forbids": [
+      "yönetim kapsamınız bulunmuyor"
+     ]
+    }
    ]
   }
  ]

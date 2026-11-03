@@ -2343,6 +2343,12 @@ verilirse bu sınıra uyulur. Onarım yoğunluğu bu payı aşarsa koşu başar�
 - Açık `visual:false` grafik türünden ve modelin isteğe bağlı grafik seçiminden önce gelir. İstenen aday için
   aday ve son çizim bütçesi ayrılır. Desteklenmeyen tür, başka grafik çizilsin veya çizilmesin türüne özgü
   açıklanır. Skaler kanıtta `table:true` için satır tablosu yoksa belirlenimci açıklama verilir.
+- Dönemli iş yükü için görev analitiğinin kişi kırılımı tam ekip kadrosu sayılmaz: görev sayfası tam olsa da
+  eşleşen işi olmayan üyeler ve çözümlenemeyen/gizli atamalar nedeniyle zorunlu eksik nüfus çekincesi gösterilir.
+  Görev tablosunun tamlığı ile kişi nüfusunun tamlığı ayrı değerlendirilir; yeni kadro okuması eklenmez.
+- Onarım, analiz alanları yanında geçerli yanıt dili, grafik türü ve tablo isteğini de korur. Yalnızca hata
+  bildirilen alan değişebilir. Görev analitiğindeki kişi satırları `sicil:` anahtarından katı doğrulamayla
+  çözülür; özel gruplar satır konumunu koruyan boş göndergelerdir.
 - Kalıcı analiz bağlamı sürüm 2'dir. Yeni okuyucu bilinen sürüm 1 biçimini kapalı şemayla yükseltir;
   bilinmeyen sürüm/anahtar reddedilir. Eski uygulama örnekleri yeni biçimi okuyamaz: **eski ve yeni sunucuların
   aynı konuşma deposuna eşzamanlı hizmet verdiği karma sürüm dağıtımı desteklenmez**. Dağıtım, eski süreçleri
@@ -2352,6 +2358,9 @@ verilirse bu sınıra uyulur. Onarım yoğunluğu bu payı aşarsa koşu başar�
   önkoşulları baştan denetlenir. Her koşu ayrı dizin ve çağrı defteri açar; dolu bağlantı noktası reddedilir;
   uygulama ve köprü yalnızca `127.0.0.1` dinler. Sürücü/model/grafik uyuşmazlığı sıfırdan farklı çıkış verir.
   Önceki `UI_ONLY` konuşma satırları korunur, ancak farklı koşu kimlikleri güncel rapora sayılmaz.
+  Rol senaryoları beklenen sunucu sonucunu, yetkisiz turda sıfır kanıtı ve görünür zorunlu/yasak metinleri
+  denetler. Windows'ta yalnızca Linux/macOS kabuk sınamaları atlanır; JavaScript sınamaları gerçek Windows
+  CI işinde de çalışır. Geçici sürücü kopyası gerçek Playwright kurulumundan etkilenmez.
 - Güncel regresyonlar: `test/ai-analysis-intent-and-grounding.test.mjs`, `test/ai-ui-acceptance-convergence.test.mjs` ve
   güçlendirilmiş mevcut Aşama 4E sınamaları. Önceki §15.8 sayıları bu HEAD'in kabul sonucu olarak kullanılamaz.
   Gerçek Haiku 4.5 arayüz kabulü, düşünme kapalı ve devir kapalı ortamda ayrıca çalıştırılmalıdır.

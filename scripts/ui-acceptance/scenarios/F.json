@@ -8,6 +8,20 @@
    "detail": "balanced",
    "turns": [
     "Ekibimin iş yükü dengeli mi?"
+   ],
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "Cem Bulut"
+     ],
+     "forbids": [
+      "Hakan Polat",
+      "Gizem Er",
+      "Mehmet Kaya",
+      "Ece Tan"
+     ]
+    }
    ]
   }
  ]

@@ -705,14 +705,18 @@ function submittedVisual(plan) {
   return plan.visual !== false && plan.analysis?.visual !== false && (plan.visual === true || plan.analysis?.visual === true || plan.chart != null);
 }
 
+const submittedPresentation = (plan) => Object.fromEntries(['language', 'chart', 'table'].filter((key) => Object.hasOwn(plan, key)).map((key) => [key, plan[key]]));
+
 function pinAnalysisRepair(turn, plan, details) {
   if (!plan.analysis || typeof plan.analysis !== 'object' || Array.isArray(plan.analysis)) return;
   const existing = turn.repairPins.get('analysis');
   // Reddedilen anlam değişikliği, başlangıçtaki onarım sınırını gevşetemez.
   if (existing && !analysisRepairMatches(turn, plan)) return;
   const paths = new Set(existing?.paths || []);
+  const presentationPaths = new Set(existing?.presentationPaths || []);
   for (const detail of details) {
     const [path, reason] = String(detail).split(':');
+    if (['$.language', '$.chart', '$.table'].includes(path)) presentationPaths.add(path.slice(2));
     if (path.startsWith('$.analysis.') && !['unsupported', 'requestBudget', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
   }
   const raw = Object.fromEntries(Object.entries(normalizedBrief(existing?.raw || plan.analysis)).filter(([key]) => Object.hasOwn(analysisSchema().properties, key)));
@@ -722,7 +726,8 @@ function pinAnalysisRepair(turn, plan, details) {
     && Array.isArray(raw.focus) && raw.focus.length > ANALYSIS_LIMITS.maxFocus;
   // Görsel istek ayrıca (`visual`) denetlenir; özetin içinde ya da plan düzeyinde yazılması anlam değişikliği değildir.
   const pinnedPaths = new Set([...paths, 'visual', ...(narrow ? ['focus'] : [])]);
-  turn.repairPins.set('analysis', { raw, paths: pinnedPaths, narrow, projection: stable(repairOmit(raw, pinnedPaths)),
+  const presentation = existing?.presentation || submittedPresentation(plan);
+  turn.repairPins.set('analysis', { raw, paths: pinnedPaths, narrow, projection: stable(repairOmit(raw, pinnedPaths)), presentation, presentationPaths,
     visual: existing ? existing.visual : details.some((detail) => String(detail).startsWith('$.visual:') || String(detail).startsWith('$.analysis.visual:'))
       ? null : submittedVisual(plan) });
 }
@@ -746,6 +751,7 @@ function analysisRepairMatches(turn, plan) {
   const analysis = normalizedBrief(plan.analysis);
   return plan.intent === PLANNER_INTENTS.ROTA && Boolean(plan.analysis)
     && stable(repairOmit(analysis, pin.paths)) === pin.projection && narrowedFocus(pin, analysis.focus)
+    && stable(repairOmit(submittedPresentation(plan), pin.presentationPaths)) === stable(repairOmit(pin.presentation, pin.presentationPaths))
     && (pin.visual == null || submittedVisual(plan) === pin.visual);
 }
 
@@ -1467,9 +1473,10 @@ function completedAnalysisContext(turn, verdict) {
       const items = entry.payload?.data?.[collection] || [];
       const order = request.operation === 'rank' ? (rankedRowIndexes(request, tool, entry.payload, collection, collection) || []) : items.map((_, index) => index);
       const projectOf = (row) => (collection === 'groups' ? row?.key : collection === 'tasks' ? row?.project?.projectId : row?.projectId);
-      rows = order.map((index) => items[index]).map((row) => (collection === 'people' || peopleGroups ? { type: 'person', id: (peopleGroups ? row?.key : row?.sicil) == null ? null : String(peopleGroups ? row.key : row.sicil) }
+      const personOf = (row) => peopleGroups ? (typeof row?.key === 'string' && row.key.startsWith('sicil:') ? parseSicil(row.key.slice(6)) : null) : row?.sicil;
+      rows = order.map((index) => items[index]).map((row) => (collection === 'people' || peopleGroups ? { type: 'person', id: personOf(row) == null ? null : String(personOf(row)) }
         : { type: 'project', id: projectOf(row) ? String(projectOf(row)) : null }))
-        // Grup anahtarı yalnızca kanonik proje kimliğiyse satırdır ("Diğer n grup" ya da projesiz grup gönderge olamaz).
+        // Yalnızca kanonik kişi/proje kimliği gönderge olur; özel ve toplu gruplar konumsal boşluk olarak kalır.
         .slice(0, 10).map((row) => row.id && (row.type === 'person' ? parseSicil(row.id) != null : canonicalActualId(row.id)) ? row : null);
       break;
     }
@@ -1562,9 +1569,9 @@ function populationSizes(turn, answers) {
  * `verdict` (doğrulanmış anlatım değişmeden). Yeni model turu açılamasa da (`compose: false`: sağlayıcı kesildi, Derin
  * anlatım düştü) açık grafik isteği sunucu düzeniyle karşılanır ya da kısa notla açıklanır; sessizce düşmez.
  */
-export function presentationRoute({ compose, composeAnswers, visual, analytical }) {
-  if (!compose) return visual ? 'server' : 'verdict';
-  if (!composeAnswers) return visual || analytical ? 'server' : 'verdict';
+export function presentationRoute({ compose, composeAnswers, visual, analytical, table = false }) {
+  if (!compose) return visual || table ? 'server' : 'verdict';
+  if (!composeAnswers) return visual || analytical || table ? 'server' : 'verdict';
   return 'model';
 }
 
@@ -1574,11 +1581,12 @@ export function presentationRoute({ compose, composeAnswers, visual, analytical 
  * belirlenimci anlatım değişmeden kalır; kaynaklar, kapsam ve kalıcı kanıt aynıdır.
  */
 export async function presentVerdict(turn, verdict, compose) {
-  // Açık görselleştirme isteği model düzeni kapalıyken de sunucunun belirlenimci düzeniyle grafik çizer (model çağrılmaz).
+  // Açık grafik ve tablo istekleri model düzeni kapalıyken de sunucunun belirlenimci düzeniyle karşılanır.
   const visual = turn.presentationIntent?.visual === true;
   // Analitik özet de sunucunun belirlenimci düzeniyle analist önermelerini anlatır (model düzeni kapalıyken de).
   const analytical = Boolean(turn.presentationIntent?.analysis);
-  const route = presentationRoute({ compose, composeAnswers: turn.composeAnswers, visual, analytical });
+  const table = turn.presentationIntent?.table === true;
+  const route = presentationRoute({ compose, composeAnswers: turn.composeAnswers, visual, analytical, table });
   if (route === 'verdict' || !turn.session || turn.ledger.revoked() || turn.session.signal?.aborted) return verdict;
   const input = compositionInput(turn, verdict);
   if (!input) return visual ? withChartNote(turn, verdict) : verdict;
@@ -1590,9 +1598,9 @@ export async function presentVerdict(turn, verdict, compose) {
     turn.trace.presentation = { mode: 'narrative', reason: 'SHEET_LIMIT' };
     return visual ? withChartNote(turn, verdict) : verdict;
   }
-  // Sunucunun düzeni: model düzeni yoksa ya da kurulamadıysa açık grafik isteği yine karşılanır.
+  // Sunucunun düzeni: model düzeni yoksa ya da kurulamadıysa açık grafik/tablo isteği yine karşılanır.
   const serverLayout = (reason) => {
-    const validated = (visual && composition.render.charts.size) || analytical ? defaultComposition(composition) : null;
+    const validated = (visual && composition.render.charts.size) || analytical || table ? defaultComposition(composition) : null;
     if (!validated) {
       turn.trace.presentation = { ...(turn.trace.presentation || {}), mode: 'narrative', reason };
       return visual ? withChartNote(turn, verdict) : verdict;
@@ -1651,11 +1659,12 @@ export async function presentVerdict(turn, verdict, compose) {
 }
 
 /** İstenen grafik türü kanıtla çizilemediyse türe özgü not (çizilen başka grafik varsa söylenir). */
-function chartTypeNote(turn, composition, rendered) {
+export function chartTypeNote(turn, composition, rendered) {
   const type = composition.render.chartType;
-  if (!type || !composition.render.visual || chartTypeSupported(composition.render) && rendered.chartTypes?.includes(type)) return [];
+  if (!type || !composition.render.visual || rendered.chartTypes?.includes(type)) return [];
   turn.trace.presentation = { ...(turn.trace.presentation || {}), chartTypeUnavailable: type };
-  return [renderChartTypeUnavailable({ type, substituted: rendered.chart, locale: turn.locale })];
+  return [chartTypeSupported(composition.render) ? renderChartUnavailable({ substituted: rendered.chart, locale: turn.locale })
+    : renderChartTypeUnavailable({ type, substituted: rendered.chart, locale: turn.locale })];
 }
 
 /** Açık görselleştirme isteği doğrulanmış veriden güvenle karşılanamadıysa kısa sunucu notu (sessizce yok sayılmaz). */
@@ -1703,7 +1712,9 @@ async function finish(turn, settled, onText, selectedBy = 'model', { compose = t
   }
   const { ledger, locale } = turn;
   if (verdict.kind === 'grounded' && turn.presentationIntent?.table && !/\n\|[^\n]+\|\n\|[- :|]+\|/u.test(verdict.normalized)) {
-    const note = locale === 'en' ? '_This verified result has no row collection to display as a table._' : '_Bu doğrulanmış sonuçta tablo olarak gösterilebilecek satır koleksiyonu yok._';
+    const hasRows = compositionInput(turn, verdict)?.parts.some((part) => part.presentation.facts.some((item) => verdict.citedIds.includes(item.evidenceId) && item.fact?.semantic?.row));
+    const note = hasRows ? (locale === 'en' ? '_The requested table could not be rendered safely; the verified records are shown as text._' : '_İstenen tablo güvenle hazırlanamadı; doğrulanmış kayıtlar metin olarak gösterildi._')
+      : locale === 'en' ? '_This verified result has no row collection to display as a table._' : '_Bu doğrulanmış sonuçta tablo olarak gösterilebilecek satır koleksiyonu yok._';
     verdict = { ...verdict, normalized: `${verdict.normalized}\n\n${note}` };
   }
   const safety = (value, force = false) => {

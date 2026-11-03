@@ -8,6 +8,19 @@
    "detail": "balanced",
    "turns": [
     "Şu anda en çok neye dikkat etmeliyim?"
+   ],
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "0"
+     ],
+     "forbids": [
+      "Mehmet Kaya",
+      "Cem Bulut",
+      "Ece Tan"
+     ]
+    }
    ]
   }
  ]

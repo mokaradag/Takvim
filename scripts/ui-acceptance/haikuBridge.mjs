@@ -46,12 +46,15 @@ function runAdapter(input) {
     });
     let out = '';
     let err = '';
+    let inputFailed = false;
+    child.on('error', (error) => resolve({ code: null, parsed: null, err: String(error.message).slice(0, 300) }));
+    child.stdin.on('error', (error) => { inputFailed = true; err = String(error.message).slice(0, 300); });
     child.stdout.on('data', (chunk) => { out += chunk; });
     child.stderr.on('data', (chunk) => { err += chunk; });
     child.on('close', (code) => {
       const line = out.trim().split('\n').filter(Boolean).at(-1);
       let parsed = null;
-      try { parsed = line ? JSON.parse(line) : null; } catch { parsed = null; }
+      try { parsed = line && !inputFailed ? JSON.parse(line) : null; } catch { parsed = null; }
       resolve({ code, parsed, err: err.slice(0, 300) });
     });
     child.stdin.end(JSON.stringify(input));

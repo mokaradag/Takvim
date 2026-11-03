@@ -394,3 +394,87 @@ test('farklı güvenilmeyen adın önceki özneye onarılması veri okunmadan re
   assert.equal(result.answer.finishReason, 'clarification');
   assert.match(result.answer.content, /adını veya kodunu/u);
 });
+
+for (const composition of [true, false]) test(`tarihli kişi kırılımı tam görev sayfasını tam ekip kadrosu saymaz: ${composition ? 'model düzeni' : 'sunucu düzeni'}`, async (t) => {
+  const pages = [];
+  const seed = rotaToolSeed();
+  seed.executiveScope = [ALI_1, ZEYNEP, 910098].map((EmployeeSicil) => ({ ManagerSicil: AYSE, EmployeeSicil }));
+  seed.taskAssignees.push({ TaskId: TASKS.DUE_SOON, Sicil: ALI_1 });
+  const { ask } = phase4eConversation(t, { seed, composition, compose: () => composer((view) => { pages.push(view); return coveringBlocks(view); }) });
+  const interval = { dateFrom: '2026-09-30', dateTo: '2026-10-31' };
+  const first = await ask({ text: 'bu dönemde ekibimin iş yükü dengeli mi, tablo ve grafikle göster', plan: plan({ scope: 'team', focus: ['workload'], ...interval }, { table: true, chart: 'bar' }) });
+  const next = await ask({ text: 'ne kadar eminsin', plan: plan({ scope: 'previous', act: 'certainty' }) });
+  for (const result of [first, next]) {
+    assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+    const reads = populationReads(result.log);
+    assert.ok(reads.length && reads.every(({ params }) => params.assigneeMode === 'team' && params.dateFrom === interval.dateFrom && params.dateTo === interval.dateTo), JSON.stringify(reads));
+    assert.match(result.answer.content, /kadronun tamamını kanıtlamaz/u);
+    assert.match(result.answer.content, /eşleşen işi olmayan/u);
+    assert.match(result.answer.content, /kesin olarak söylenemez/u);
+    assert.doesNotMatch(result.answer.content, /Grup tablosu görebildiğiniz kayıtların tamamına dayanıyor|görece dengeli/u);
+  }
+  assert.match(next.answer.content, /yalnızca bir kısmını/u);
+  assert.ok(charts(first.answer.content).some((chart) => chart.type === 'bar'));
+  if (composition) assert.ok(pages.every((page) => page.tables[0].complete === false));
+});
+
+for (const [label, change] of [['grafik türü', { chart: 'bar' }], ['tablo isteği', { table: false }], ['yanıt dili', { language: 'en' }]]) test(`analiz onarımı geçerli plan düzeyi anlamı değiştiremez: ${label}`, async (t) => {
+  const presentation = { chart: 'donut', table: true };
+  const queue = [plan({ scope: 'self', focus: ['status', 'priority', 'projects', 'overview'] }, presentation),
+    { ...plan({ scope: 'self', focus: ['status', 'priority'] }, presentation), ...change }, { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
+  const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
+  const result = await ask({ text: 'görevlerimi halka grafik ve tablo ile Türkçe değerlendir' });
+  assert.equal(result.inputs.length, 3);
+  assert.equal(result.log.length, 0);
+  assert.equal(result.answer.finishReason, 'clarification');
+});
+
+test('analiz onarımı yalnızca hatalı sunum alanını düzeltir ve geçerli tür ile tabloyu çizer', async (t) => {
+  const queue = [plan({ scope: 'self', focus: ['status'] }, { chart: 'donut', table: 'bozuk' }), plan({ scope: 'self', focus: ['status'] }, { chart: 'donut', table: true })];
+  const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
+  const result = await ask({ text: 'durumumu halka grafik ve tabloyla göster' });
+  assert.equal(result.inputs.length, 2);
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.ok(charts(result.answer.content).some((chart) => chart.type === 'donut'));
+  assert.match(result.answer.content, /\n\|[^\n]+\|\n\|[- :|]+\|/u);
+});
+
+test('tarihli kişi satırı sicil grup anahtarından çözülür ve aynı pencereyle yetkili nüfusta okunur', async (t) => {
+  const seed = rotaToolSeed();
+  seed.executiveScope = [ALI_1, ZEYNEP].map((EmployeeSicil) => ({ ManagerSicil: AYSE, EmployeeSicil }));
+  seed.taskAssignees.push({ TaskId: TASKS.OVERDUE, Sicil: ALI_1 }, { TaskId: TASKS.LITERAL, Sicil: ALI_1 });
+  const { ask, stack } = phase4eConversation(t, { seed });
+  const interval = { dateFrom: '2026-09-01', dateTo: '2026-10-31' };
+  const first = await ask({ text: 'ekibimin dönemli iş yükünü tabloyla göster', plan: plan({ scope: 'team', focus: ['workload'], ...interval }, { table: true }) });
+  assert.equal(first.answer.finishReason, 'stop', first.answer.content);
+  const saved = stack.db.aiMessageEvidence.map((row) => JSON.parse(row.EvidenceJson)).findLast((row) => row.analysisContext)?.analysisContext;
+  assert.equal(saved.rows[0].type, 'person');
+  assert.equal(saved.rows[0].id, String(ALI_1));
+  const next = await ask({ text: 'ilk kişiyi incele', plan: plan({ scope: 'row', rows: [1], focus: ['status'] }) });
+  assert.equal(next.answer.finishReason, 'stop', next.answer.content);
+  const reads = populationReads(next.log);
+  assert.ok(reads.length && reads.every(({ params }) => params.personSicil === ALI_1 && params.dateFrom === interval.dateFrom && params.dateTo === interval.dateTo));
+  assert.ok(reads.every(({ params }) => params.isAdmin === 0 && params.sicil === AYSE));
+});
+
+for (const composition of [false, true]) test(`açık tablo isteği liste ve tek satırda da tablo olur: ${composition ? 'bozuk model düzeninden dönüş' : 'model düzeni kapalı'}`, async (t) => {
+  const { ask } = phase4eConversation(t, { composition, compose: () => ({ type: 'text', text: 'geçersiz düzen' }) });
+  const result = await ask({ text: 'görevlerimi tablo halinde göster', plan: { intent: 'rota', language: 'tr', table: true, request: {
+    operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me', status: ['done'] }, layout: 'list'
+  } } });
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.match(result.answer.content, /\n\|[^\n]+\|\n\|[- :|]+\|/u);
+  assert.doesNotMatch(result.answer.content, /satır koleksiyonu yok/u);
+});
+
+test('desteklenen tür çizimde kalmadığında veri yokluğu iddiası yerine gerçek sunum sonucu söylenir', async (t) => {
+  const { chartTypeNote } = await import('../src/server/ai/assistant/groundedAnswer.js');
+  const { page } = await groupedPage(t, { visual: true, chartType: 'donut' });
+  for (const chart of [null, 'bar']) {
+    const notes = chartTypeNote({ locale: 'tr', trace: {} }, page, { chart, chartTypes: chart ? [chart] : [] });
+    assert.equal(notes.length, 1);
+    assert.match(notes[0], /güvenle çizilemedi|güvenle grafik çizilemedi/u);
+    assert.doesNotMatch(notes[0], /bu veri yok|gerektir|gerekir/u);
+    if (chart) assert.match(notes[0], /çubuk grafik olarak gösterildi/u);
+  }
+});

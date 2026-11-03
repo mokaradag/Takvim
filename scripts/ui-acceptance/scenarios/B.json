@@ -23,6 +23,20 @@
     "Neden?",
     "Onun açık işlerini göster.",
     "Bunu grafikle de göster."
+   ],
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "Mehmet Kaya",
+      "Selin Çelik"
+     ],
+     "forbids": [
+      "Ece Tan",
+      "Hakan Polat",
+      "Gizem Er"
+     ]
+    }
    ]
   },
   {
@@ -70,6 +84,20 @@
    "detail": "detailed",
    "turns": [
     "Ekibimin mevcut iş yükünü değerlendir."
+   ],
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "Mehmet Kaya",
+      "Selin Çelik"
+     ],
+     "forbids": [
+      "Ece Tan",
+      "Hakan Polat",
+      "Gizem Er"
+     ]
+    }
    ]
   },
   {

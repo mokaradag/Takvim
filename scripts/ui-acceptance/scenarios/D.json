@@ -8,6 +8,20 @@
    "detail": "balanced",
    "turns": [
     "Ekibimde iş yükü dengeli mi? Emin olmadığın noktaları da belirt."
+   ],
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "Ece Tan",
+      "Onur Aksoy"
+     ],
+     "forbids": [
+      "Hakan Polat",
+      "Gizem Er",
+      "Cem Bulut"
+     ]
+    }
    ]
   },
   {
