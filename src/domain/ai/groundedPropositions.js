@@ -351,7 +351,7 @@ function extremeSentence({ kind, metric, type, label, value, owner, locale, sema
       return { ...sentence(en ? [`The ${high ? 'longest' : 'shortest'}-overdue task is `, v(owner), ' (', v(amount), ').']
         : [`En ${high ? 'uzun' : 'kısa'} süredir geciken görev `, v(owner), ' (', v(amount), ').']),
       fluent: pair(en ? [`and the ${high ? 'longest' : 'shortest'}-overdue is `, v(owner), ' (', v(amount), ')'] : [`en ${high ? 'uzun' : 'kısa'} süredir geciken ise `, v(owner), ' (', v(amount), ')'],
-        high ? { names: owner } : {}) };
+        high ? { names: owner, days: value } : {}) };
     }
     return { ...sentence(en ? [`The ${high ? 'longest' : 'shortest'} delay is `, v(amount), '.'] : [`En ${high ? 'uzun' : 'kısa'} gecikme `, v(amount), '.']),
       fluent: pair(en ? [`and the ${high ? 'longest' : 'shortest'} is `, v(amount)] : [`en ${high ? 'uzun' : 'kısa'} gecikme ise `, v(amount)]) };
@@ -729,8 +729,9 @@ export function analystPropositions(parts, locale = 'tr') {
       if (filters?.personSicil != null && !subject) return;
       if (realized && subject) {
         realized = sentence([v(subject), ': ', ...realized.parts]);
-        // Koşullu açıklama başka öznenin anlatımına eklenirken kendi öznesini kaybetmemelidir.
-        fluent = fluent?.states ? { states: fluent.states } : null;
+        // Koşullu açıklama başka öznenin anlatımına eklenmez: akıcı bağlar yalnızca AYNI kanıtın (tek özneli nüfus) önermeleri
+        // arasında kurulur (§ fluentParagraph). Ek, özneyi taşıyan aynı kanıtın cümlesine eklenir; kısa öneri özneyi taşır.
+        if (fluent?.refers) fluent = { ...fluent, refers: { ...fluent.refers, short: [v(subject), ': ', ...fluent.refers.short] } };
       }
       if (realized) out.push({ part: ordinal, proposition: { kind, tone, evidenceId, ...realized, ...(fluent ? { fluent: Object.freeze(fluent) } : {}) } });
     };
@@ -834,7 +835,7 @@ export function analystPropositions(parts, locale = 'tr') {
         add(head.evidenceId, 'attention', en
           ? sentence(['A sensible first focus is ', v(title), ': it has been overdue for ', v(number(head.fact.value, locale)), ' days, the longest delay.'])
           : sentence(['İlk ele alınabilecek iş ', v(title), ' görünüyor: ', v(number(head.fact.value, locale)), ' gündür gecikmiş ve en uzun gecikme onda.']), 'warning',
-        { refers: { title, short: en ? ['as the longest-overdue task, ', v(title), ' is a sensible first focus'] : ['en uzun süredir beklediği için ilk ele alınabilecek iş ', v(title), ' görünüyor'] } });
+        { refers: { title, days: head.fact.value, short: en ? ['as the longest-overdue task, ', v(title), ' is a sensible first focus'] : ['en uzun süredir beklediği için ilk ele alınabilecek iş ', v(title), ' görünüyor'] } });
       }
     }
   }
@@ -899,13 +900,22 @@ const FOLLOW_HOSTS = new Set(['pressure', 'positive', 'concentration']);
  * ("… var ve ortalama gecikme …"); aynı satır kümesinin payları tek cümle ("Bunların 2'si …, 2'si de …"); toplamdan
  * sonra dağılım ("… var ve bunların büyük bölümü …"); gecikme payından sonra yakın termin ("…; önümüzdeki yedi gün
  * içinde de …"); bir kişinin açık iş yoğunlaşmasından sonra gecikme yoğunlaşması; adı geçen en uzun gecikmeli görev
- * için öneri kısa biçimde.
+ * için öneri kısa biçimde. Öneri (dikkat) cümlesi aynı kanıtın en uzun gecikmeli görevini, gün sayısını ve en uzun
+ * olduğunu zaten söylediyse aynı değeri taşıyan uç cümlesi yinelenmez (ad ve gün sunucu değeriyle birebir eşleşir).
+ * Göndergeli biçim ("bunların …") yalnızca göndergesi hemen önceki aynı kanıtın cümlesiyse kullanılır: araya başka
+ * kanıtın cümlesi ya da sunucu notu girerse önerme tam biçimiyle söylenir.
  * @param {({ proposition: object } | { text: string })[]} entries Paragrafın sırası (yönlendirme ve not cümleleri `text`).
+ * @param {string} locale
+ * @param {{ named: Map, attended: Map } | null} memory Aynı yanıtın paragrafları arasında paylaşılan adlandırma durumu:
+ *   önceki paragrafta söylenen olgu sonrakinde yinelenmez. Yalnızca bir yanıt boyunca yaşar.
+ * @param {object[] | null} emitted Görünür olguya katkıda bulunan önermeler; birleşenler dahil, bastırılanlar hariç.
  */
-export function fluentParagraph(entries, locale = 'tr') {
+export function fluentParagraph(entries, locale = 'tr', memory = null, emitted = null) {
   const units = [];
-  const introduced = new Map();
-  const named = new Set();
+  // Adı ve gün sayısı söylenen en uzun gecikmeli görev (uç cümlesi) ve tam öneri cümlesi: anahtar kanıt + görev adıdır.
+  const named = memory?.named ?? new Map();
+  const attended = memory?.attended ?? new Map();
+  const taskKey = (subject, title) => `${subject}\u0000${title}`;
   const latest = () => { const last = units.at(-1); return last && last.text == null ? last : null; };
   const start = (proposition, parts = null) => {
     units.push({ subject: proposition.evidenceId, kinds: [proposition.kind], last: proposition, proposition, parts: parts ? [...parts] : clauseOf(proposition.parts), merged: Boolean(parts) });
@@ -921,38 +931,47 @@ export function fluentParagraph(entries, locale = 'tr') {
     const proposition = entry.proposition;
     const fluent = proposition.fluent || {};
     const subject = proposition.evidenceId;
+    if (fluent.names && attended.has(taskKey(subject, fluent.names)) && attended.get(taskKey(subject, fluent.names)) === fluent.days) {
+      // Yinelenen en uzun gecikme, minimumla eşleştirilmeden önce elenir; minimumun kendi bilgisi korunur.
+      continue;
+    }
     const prev = latest();
+    const samePopulation = prev?.subject === subject && (prev.last.table == null || proposition.table == null || prev.last.table === proposition.table);
     // Birleştirilebilir önceki cümle: aynı kanıt, yan cümle biçimi var, pay dizisi değil.
     const open = prev && prev.subject === subject && prev.parts && !prev.shares ? prev : null;
     const pairKey = proposition.table != null && Number.isInteger(proposition.column) ? `${proposition.table}:${proposition.column}` : null;
     const prevPair = open?.kinds.length === 1 && open.last.fluent?.pair && open.last.table != null ? `${open.last.table}:${open.last.column}` : null;
-    const host = fluent.stat ? units.find((unit) => unit.text == null && unit.subject === subject && unit.parts && !unit.shares && unit.kinds.length === 1
-      && unit.last.kind === 'count') : null;
+    const countHost = samePopulation && open?.proposition.kind === 'count'
+      && (open.last.kind === 'count' || open.last.fluent?.stat) ? open : null;
+    // Göndergeyi hemen önce çizilen sayım tanıtır; yalnızca aynı nüfusun istatistiğiyle birleşmesi bu bağı korur.
+    // Döküm, başka bir yan cümle ya da not eski sayımı sürdüremez.
+    const antecedent = samePopulation && ['count', 'total'].includes(prev.last.kind) ? prev.last.fluent?.count : countHost?.proposition.fluent?.count;
     if (fluent.pair && PAIR_ROLES.has(fluent.pair.role) && pairKey && prevPair === pairKey && open.last.fluent.pair.role !== fluent.pair.role) {
       extend(open, proposition, [', ', ...fluent.pair.tail]);
-    } else if (host) {
-      extend(host, proposition, fluent.stat);
-    } else if (fluent.share && prev?.shares && prev.subject === subject && prev.shares.base === fluent.share.base && prev.shares.clauses.length < 3) {
+    } else if (fluent.stat && countHost) {
+      extend(countHost, proposition, fluent.stat);
+    } else if (fluent.share && prev?.shares && samePopulation && prev.shares.base === fluent.share.base && prev.shares.clauses.length < 3) {
       prev.shares.clauses.push(fluent.share.also);
       prev.kinds.push(proposition.kind);
       prev.last = proposition;
     } else if (fluent.share) {
       units.push({ subject, kinds: [proposition.kind], last: proposition, proposition, merged: true,
-        shares: { base: fluent.share.base, clauses: [introduced.get(subject) === fluent.share.base ? fluent.share.intro : fluent.share.full] } });
-    } else if (fluent.anaphor && introduced.get(subject) === fluent.anaphor.count) {
+        shares: { base: fluent.share.base, clauses: [antecedent === fluent.share.base ? fluent.share.intro : fluent.share.full] } });
+    } else if (fluent.anaphor && antecedent === fluent.anaphor.count) {
       if (open && open.kinds.length === 1 && ['count', 'total'].includes(open.last.kind)) extend(open, proposition, fluent.anaphor.join);
       else start(proposition, fluent.anaphor.lead);
     } else if (fluent.follow && open && open.kinds.length === 1 && FOLLOW_HOSTS.has(open.last.kind) && open.last.fluent?.host === fluent.follow.key) {
       const form = open.last.tone === 'success' ? (proposition.tone === 'warning' ? fluent.follow.contrast : fluent.follow.plain) : fluent.follow.also;
       if (form) extend(open, proposition, form);
       else start(proposition);
-    } else if (fluent.refers && named.has(fluent.refers.title)) {
+    } else if (fluent.refers && named.has(taskKey(subject, fluent.refers.title)) && named.get(taskKey(subject, fluent.refers.title)) === fluent.refers.days) {
       start(proposition, fluent.refers.short);
     } else {
+      if (fluent.refers) attended.set(taskKey(subject, fluent.refers.title), fluent.refers.days);
       start(proposition);
     }
-    if (Number.isSafeInteger(fluent.count)) introduced.set(subject, fluent.count);
-    if (fluent.pair && fluent.names) named.add(fluent.names);
+    emitted?.push(proposition);
+    if (fluent.pair && fluent.names) named.set(taskKey(subject, fluent.names), fluent.days);
   }
   return units.map((unit) => {
     if (unit.text != null) return unit.text;

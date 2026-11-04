@@ -273,15 +273,19 @@ export async function runCase(t, item, { providerOptions = {}, report = summary 
       if (presentation?.mode !== 'composed') failures.push('CONTEXT_TURN_FAILED');
     } else if (item.requiresComposition) {
       if (composed.length !== 1 || presentation?.mode !== 'composed') failures.push('COMPOSITION_REQUIRED');
+      // Analitik yanıtın sunucu düzeni de "composed" kipinde raporlanır: model düzeni yerine geri dönüş başarı sayılmaz.
+      if (presentation?.server === true) failures.push('SERVER_FALLBACK');
       if (turn.say && !(presentation?.said > 0)) failures.push('NARRATION_REQUIRED');
-      // Zengin kanıt zengin anlatım ister: sayfada önerme varsa en az üçü (azsa hepsi) söylenir; 4C görünümü geçmez.
+      // Doğrulanmış yinelenen olgu da temsil edilir; görünür önerme sayısı ayrı kalır, 4C görünümü geçmez.
       const available = composed[0]?.propositions ?? 0;
-      if (presentation?.mode === 'composed' && available && !(presentation.said >= Math.min(3, available))) failures.push('NARRATION_TOO_THIN');
+      const narrated = (presentation?.said ?? 0) + (presentation?.suppressed ?? 0);
+      if (presentation?.mode === 'composed' && available && !(narrated >= Math.min(3, available))) failures.push('NARRATION_TOO_THIN');
       if (turn.chart && !(presentation?.charts > 0)) failures.push('CHART_REQUIRED');
     } else if (composed.length || presentation?.mode !== 'narrative' || presentation?.reason !== 'NO_CHOICE') failures.push('COMPOSITION_NO_CHOICE_REQUIRED');
     if (routing.escalations > escalationsBefore) failures.push('DEEP_ESCALATION');
     result = { id: item.id, requiresComposition: item.requiresComposition, stage: item.stage, turn: index + 1, mode: presentation?.mode ?? null, reason: presentation?.reason ?? null, issue: presentation?.issue ?? null,
       blocks: presentation?.blocks ?? null, said: presentation?.said ?? null, titled: presentation?.titled ?? null, notes: presentation?.notes ?? null, chart: presentation?.chart ?? null, turnMs: line?.durationMs ?? null,
+      ...(presentation?.suppressed ? { suppressed: presentation.suppressed } : {}),
       modelRounds: line?.context?.modelRounds ?? null, declarations: line?.context?.declarations ?? null, failures,
       rounds: measured.map(({ purpose, language, propositions, details, tables, charts, budget, finish, latencyMs, usage, infrastructure }) => ({ purpose: purpose ?? 'compose', language, propositions, details, tables, charts, budget,
         finish: finish ?? null, latencyMs: latencyMs ?? null, usage: usage ?? null, infrastructure: infrastructure ?? null })) };

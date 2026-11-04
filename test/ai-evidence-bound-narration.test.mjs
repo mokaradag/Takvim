@@ -281,7 +281,7 @@ test('başlık ve not kutusu yalnızca sunucu kimlikleridir; ton sunucunundur, m
     { type: 'note', items: ['P5'] }] });
   assert.equal(validated.ok, true);
   const rendered = renderComposition(composition, validated);
-  assert.ok(rendered.text.startsWith("#### Gecikmiş görevleriniz\n\nŞu anda **3** gecikmiş göreviniz var ve ortalama gecikme **11,3 gün**. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**). Bunların **2**'si **RDR · Radar Modernizasyonu** projesinde."), rendered.text);
+  assert.ok(rendered.text.startsWith("#### Gecikmiş görevleriniz\n\nŞu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**). Gecikmelerin ortalaması **11,3 gün**. **3** görevin **2**'si **RDR · Radar Modernizasyonu** projesinde."), rendered.text);
   assert.ok(rendered.text.endsWith("> [!warning]\n> **Dikkat:** **3** görevin **2**'si bir haftadan uzun süredir gecikmiş. 【R1】"), rendered.text);
   assert.equal(rendered.said, 5);
   // Zayıf modelin gözlenen düzeni: vurgulanan önerme paragrafta da söylenmiş. Önerme yalnızca kutuda kalır, cümle yinelenmez.

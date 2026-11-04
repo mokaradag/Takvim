@@ -1701,7 +1701,9 @@ biçimleri (`**…**`, kaçış) sunucunundur; model metni hiçbir zaman okunmaz
 Model yalnızca tek JSON nesnesi döndürür: `{"blocks":[...]}` (en çok 12 blok).
 
 - `{"type":"title","source":"H1"}` — isteğe bağlı başlık (`#### …`); son blok olamaz, her aday bir kez.
-- `{"type":"say","items":["P1","P2","P3","T1"]}` — paragraf (en çok 4 paragraf, paragrafta en çok 8 kimlik). `P#`
+- `{"type":"say","items":["P1","P2","P3","T1"]}` veya `{"type":"say","text":"{P1} {P3}"}` — paragraf
+  (temel sınır: en çok 4 paragraf, paragrafta en çok 8 kimlik). `items` ile `text` birbirini dışlar; tam biri bulunmalıdır.
+  `text` yalnızca doğrulanmış yuvaların seçimini ve sırasını taşır (§15.2); yuva dışı model metni çizilmez. `P#`
   önermedir; `T#`/`G#` ise paragrafın **hemen ardından** çizilen tabloya/grafiğe yönlendiren sunucu cümlesidir
   ("Ayrıntıları aşağıdaki tabloda görebilirsiniz.", "Dağılımı aşağıdaki grafikte görebilirsiniz."). Sayfada her önerme
   kaynak bağını kimlikle taşır (`table: "T1"`, sütuna dayanıyorsa `column: "C2"`); grafik `G#` yalnızca paragraftaki
@@ -1743,15 +1745,18 @@ sayfada başlık hiç sunulmaz), anlatım (`NARRATION_REQUIRED`), paragraf ve
 not sınırları (`SAY_INVALID`, `NOTE_INVALID`), ilk bloğun grafik ya da not, son bloğun başlık olmaması (`LEAD_REQUIRED`) ve bütün tabloların kapsamı
 (`COVERAGE_INCOMPLETE`). Tek normalleştirme: paragrafta söylenen önerme sonraki not kutusunda da seçildiyse paragraftan
 çıkarılır (yalnızca kutuda kalır; boşalan paragraf düşer); kutudan sonra yeniden söyleme ya da iki kutuda kullanma
-reddedilir. Paragraf, başlık ve not metin ya da ton taşımaz; metin/ton taşıyan her alan (`text`, `tone`, eski `paragraph`,
-`points`, `heading`, `assessment`) `BLOCK_INVALID`'dir. Doğrulayıcıda dil, sözcük listesi, sayı sözcüğü, çekim eki ya da
+reddedilir. Başlık ve not metin ya da ton taşımaz; yalnızca `say` bloğunda kapalı yuvalı `text` biçimine izin verilir.
+Diğer metin/ton alanları (`tone`, eski `paragraph`, `points`, `heading`, `assessment`) `BLOCK_INVALID`'dir.
+Doğrulayıcıda dil, sözcük listesi, sayı sözcüğü, çekim eki ya da
 kalıp yoktur (sınama doğrulayıcı kaynağında metin deseni olmadığını da denetler). Türetilmemiş bir ilişkiyi
 (ör. sayfada olmayan "en kısa gecikme") iddia etmenin tek yolu sayfada olmayan bir kimlik yazmaktır ve bu yapısal
 olarak reddedilir.
 
-**Aşama 4E güncellemesi:** Bu bölümün `text` alanını koşulsuz reddeden ve doğrulayıcıda dil/kalıp bulunmadığını
-söyleyen eski hükümleri, §15.2'deki kapalı düzyazı sözleşmesiyle değiştirilmiştir. `say` bloğunun `text` alanı
-`checkProse` ile doğrulanır; yalnızca sunucunun izinli tarafsız geçişleri ve doğrulanmış önerme yuvaları kabul edilir.
+**Aşama 4E güncellemesi:** `say` bloğunun `text` alanı, §15.2'deki kapalı düzyazı sözleşmesine göre
+`checkProse` ile doğrulanır; yalnızca doğrulanmış önerme ve yönlendirme yuvaları yorumlanır. Bağlaçlar dahil yuva
+dışındaki bütün model metni atılır. `prose.dropped`, yalnızca `checkProse` denetimini geçen paragraflarda atılan
+sözcüklü parçaları sayar; tüm düzen reddedildiğinde ya da sunucu düzenine dönüldüğünde bu ölçüm raporlanmaz (§15.2). Çizilen bütün
+olgusal ifadeleri ve söylem bağlarını sunucu kurar; kanıt ve kapsam doğrulaması belirleyici olmaya devam eder.
 Diğer blokların alan ve kapsam denetimleri geçerliliğini korur. Paragraf başına en çok sekiz yuva kabul edilir;
 `COMPOSITION_LIMITS.maxSayItems`, `PROSE_LIMITS.maxSentences` değerinden türetilir. Sınırı aşan düzyazı
 paragrafı düşürülür; geçerli komşu paragraf korunur.
@@ -2201,15 +2206,24 @@ Güven sınırı değişmez: kimlik, yetki, SQL, hesap, kanıt seçimi ve açık
 ### 15.2 Kanıta bağlı anlatım yüzeyi — `src/domain/ai/groundedProse.js`
 
 Modelin metninde rakam bulunmaması olgusallık kanıtı değildir: yazıyla sayılar, tarihler, çoğunluk ve karşılaştırma
-iddiaları aynı güven sınırını aşabilir. Bu nedenle serbest sözcükler doğrulanmış yanıtın parçası sayılmaz.
-`{"type":"say","text":"Genel tabloya bakınca {P1}. Ayrıca {P2}."}` yalnızca yerleşim seçimidir. Her cümle tam bir
-sunucu önermesi (`P#`) ya da sunucu yönlendirmesidir (`T#`, `G#`). İsteğe bağlı geçiş, `PROSE_CONNECTORS` içindeki
-kapalı ve tarafsız sunucu dizgelerinden aynen seçilir; modelin gönderdiği sözcükler doğrudan çizilmez.
+iddiaları aynı güven sınırını aşabilir. Bağlaç da bir ilişki iddiasıdır ("öte yandan" karşıtlık söyler). Bu nedenle
+modelin yuva dışındaki HİÇBİR metni çizilmez. `{"type":"say","text":"{P2} {P3} {P5}"}` yalnızca önermelerin seçimi,
+sırası ve paragraf sınırıdır; model sözcük yazarsa (eski sözleşmenin bağlaçları dahil) sözcükler atılır, olgusallıkları
+kestirilmez. `prose.dropped` yalnızca `checkProse` denetimini geçen paragrafların atılmış sözcüklü parçalarını sayar;
+tüm düzen reddedilirse veya sunucu düzeni kullanılırsa bu ölçüm raporlanmaz.
 
-Sözlük dışı paragraf reddedilir. Geçerli bölüm kalmadıysa sunucunun akıcı, belirlenimci anlatımı gösterilir.
-Bu bir anlamsal doğrulayıcı, sayı sözcüğü kara listesi veya dil sezgisi değildir. Kısa kayıt adları, noktalama,
-Markdown/atıf işaretleri ve tekrar eden `x` adları yeni bir metin maskeleme döngüsü açmaz. Bütün olgusal metin ve
-kayıt adları sunucudan gelir; önerme parçaları da kaçışlanır.
+Cümleleri sunucu kurar: paragrafın önermeleri `fluentParagraph` ile, yalnızca AYNI kanıtın önermeleri arasında
+doğrulanmış bağlarla birleşir (sayımın ardından ortalama ya da pay, aynı sütunun iki ucu, olumlu durumun ardından
+dikkat noktası, aynı öznenin yakın termini). "Bunların" göndergesi yalnızca hemen önceki aynı kanıtın cümlesine bağlanır.
+Öneri cümlesi en uzun gecikmeli görevi, gününü ve en uzun olduğunu söylediyse aynı kanıt, ad ve günü taşıyan uç cümlesi
+yanıtın sonraki paragraflarında yinelenmez. Özneli (kişi/proje) analist cümleleri başka öznenin cümlesine eklenmez.
+`presentation.said` görünür önermeleri, isteğe bağlı `presentation.suppressed` ise doğrulanmış yineleme nedeniyle
+çizilmeyen önermeleri sayar. Nitelendirme anlatım alt sınırında bu iki sayının toplamını kullanır; görünür sayım değişmez.
+Model paragrafı iki bölümün önermelerini karıştırırsa paragraf bölüm sınırında bölünür (kimlik paragrafı önceki gibi
+`PART_MIXED` ile reddedilir); başlık yalnızca bölümler ardışıksa konur.
+
+Bilinmeyen ya da yinelenen yuva paragrafı reddeder. Geçerli bölüm kalmadıysa sunucunun akıcı, belirlenimci anlatımı
+gösterilir. Bütün olgusal metin ve kayıt adları sunucudan gelir.
 
 Bir paragrafın bütün önermeleri aynı bölüme aittir. Ayrıntılı bölüm başlığının altında başka bölümün olgusu
 bulunamaz. Bölümler arası sonuç ancak sunucunun ürettiği ve bölümünü açıkça belirttiği sentez önermesidir.

@@ -1,7 +1,8 @@
 /**
  * Aşama 4E kalite yakınsaması — kök neden sınamaları.
  *
- * 1) Anlatım: model paragrafı kendisi yazar, olgular yalnızca sunucu önermesinin yuvasıyla girer (groundedProse.js).
+ * 1) Anlatım: model yalnızca önerme yuvalarının sırasını ve paragraflarını seçer; yuva dışı metni çizilmez, cümleleri
+ *    sunucu doğrulanmış bağlarla kurar (groundedProse.js, groundedPropositions.js § fluentParagraph).
  * 2) Ayrıntı: Ayrıntılı, Dengeli ile aynı soruda daha geniş okuma ve daha zengin sayfa üretir (yalnızca sayı sınırı değil).
  * 3) Takip: kısa takip önceki yönleri, ufku, görsel isteği ve grafik türünü korur; konuşma eylemi sunuma taşınır;
  *    açıklama seçimi özgün analitik niyeti model turu olmadan yeniden yürütür; her tur güncel yetkiyle okunur.
@@ -16,14 +17,18 @@ import { composer } from './helpers/compositionScenario.mjs';
 import { phase4eConversation, populationReads } from './helpers/phase4eScenario.mjs';
 import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from '../src/domain/ai/answerDetail.js';
 
-const { checkProse, renderProse, propositionClause } = await import('../src/domain/ai/groundedProse.js');
+const { checkProse } = await import('../src/domain/ai/groundedProse.js');
+const { fluentParagraph } = await import('../src/domain/ai/groundedPropositions.js');
 const { preferredChart } = await import('../src/domain/ai/groundedComposition.js');
 const { expandAnalysis, parseAnalysis, resolveAnalysisBrief } = await import('../src/server/ai/tools/analysisPlan.js');
 
 const turnLine = (logs) => logs.map((row) => (row.includes('"operation":"ai.grounded.turn"') ? JSON.parse(row.slice(row.indexOf('{'))) : null)).filter(Boolean).at(-1);
 const OPENERS = ['Genel tabloya bakınca', 'Bunun yanında', 'Öte yandan', 'Ayrıca', 'Buna ek olarak', 'Son olarak'];
 
-/** Modelin yapacağı gibi yuvalı düzyazı: her bölüm bir paragraf, her cümle bir önerme; çekinceler her zaman söylenir. */
+/**
+ * Eski sözleşmeye göre yazan modelin yuvalı düzyazısı: her bölüm bir paragraf, her önermenin önünde bir bağlaç; çekinceler
+ * her zaman söylenir. Bağlaçlar artık çizilmez (yalnızca yuva sırası kullanılır).
+ */
 function proseLayout(view, { skipRequired = false } = {}) {
   const props = view.propositions;
   const parts = [...new Set([...props, ...view.tables, ...view.details].map((item) => item.part))].sort((left, right) => left - right);
@@ -45,42 +50,47 @@ function proseLayout(view, { skipRequired = false } = {}) {
 
 /* ── 1. Kanıta bağlı düzyazı ─────────────────────────────────────────── */
 
-test('kapalı anlatım sözleşmesi serbest olguyu kabul etmez; yalnızca sunucunun tarafsız geçişi çizilir', () => {
+test('kapalı anlatım sözleşmesi: yuva dışı model metni (bağlaç dahil) çizim yapısına hiç girmez; bilinmeyen ve yinelenen yuva reddedilir', () => {
   const known = (id) => ['P1', 'P2', 'T1'].includes(id);
   const valid = checkProse('Genel tabloya bakınca {P1}. Ayrıca {P2}. {T1}', { known });
   assert.equal(valid.ok, true);
   assert.deepEqual(valid.ids, ['P1', 'P2', 'T1']);
+  assert.deepEqual(valid.sentences, [[{ slot: 'P1' }], [{ slot: 'P2' }], [{ slot: 'T1' }]], 'eski bağlaç da çizilmez');
   for (const text of ['There are fifty overdue tasks: {P1}.', 'Çoğu tamamlandı: {P1}.', 'Kasım ayının ilk günü {P1}.',
     'Öncekinin iki katı: {P1}.', '大多数任务完成了 {P1}.', 'أغلب المهام اكتملت {P1}.', '{P1} ama bu doğru değil.',
     'İK için {P1}.', 'xx üzerinde {P1}.', 'Radar **Modernizasyonu**: {P1}.', '{P1} ve bunların hepsi bir projede: {P2}.']) {
-    assert.equal(checkProse(text, { known }).ok, false, text);
+    const checked = checkProse(text, { known });
+    // Serbest olgu kabul edilmez: modelin hiçbir sözcüğü çizilecek cümlelere taşınmaz; yalnızca yuva sırası kalır.
+    assert.equal(checked.ok, true, text);
+    assert.ok(checked.sentences.flat().every((token) => Object.keys(token).join() === 'slot'), text);
+    assert.ok(checked.dropped >= 1, `atılan model metni sayılır: ${text}`);
   }
   assert.equal(checkProse('{P9}.', { known }).issue, 'UNKNOWN_PROPOSITION');
   assert.equal(checkProse('{P1}. {P1}.', { known }).issue, 'DUPLICATE_PROPOSITION');
+  assert.equal(checkProse('Yalnızca yorum, olgu yok.', { known }).issue, 'PROSE_UNGROUNDED');
 });
 
-test('adlı ya da gömülü yuva bağımsız model iddiasına izin vermez; desteklenmeyen paragraf güvenli geri dönüşe gider', () => {
+test('adlı ya da gömülü yuva bağımsız model iddiası taşıyamaz: adlar ve işaretler yuva dışında kalır ve çizilmez', () => {
   const known = (id) => ['P1', 'P2'].includes(id);
   for (const name of ['x', 'xx', 'xxxxxxxx', 'İK', '[Ad](https://ornek.test)', '【R99】', 'A_B']) {
-    const result = checkProse(`${name} için çoğu görev tamamlandı: {P1}.`, { known, names: [name], slotText: () => `${name} için dört görev var.` });
-    assert.equal(result.ok, false, name);
+    const result = checkProse(`${name} için çoğu görev tamamlandı: {P1}.`, { known });
+    assert.deepEqual(result.ids, ['P1'], name);
+    assert.deepEqual(result.sentences, [[{ slot: 'P1' }]], `çizim yapısında ad ya da işaret yok: ${name}`);
   }
   assert.deepEqual(checkProse('{P1}{P2}', { known }).ids, ['P1', 'P2']);
 });
 
-test('düzyazı çizimi: model sözcükleri düz metin, her değer sunucunun vurgulu yan cümlesi; cümle içi yuva küçük harfle başlar', () => {
-  const proposition = { id: 'P1', parts: ['şu anda ', { value: '4', strong: true }, ' gecikmiş göreviniz var.'], markdown: 'Şu anda **4** gecikmiş göreviniz var.' };
-  const named = { id: 'P2', parts: [{ value: 'Radar Modernizasyonu', strong: true }, ', açık görev sayısında en üstte.'] };
-  const escape = (value) => String(value);
-  assert.equal(propositionClause(proposition, { initial: true, locale: 'tr', escape }), 'Şu anda **4** gecikmiş göreviniz var');
-  assert.equal(propositionClause(proposition, { initial: false, locale: 'tr', escape }), 'şu anda **4** gecikmiş göreviniz var');
-  assert.equal(propositionClause(named, { initial: false, locale: 'tr', escape }), '**Radar Modernizasyonu**, açık görev sayısında en üstte', 'kayıt adı değişmez');
-  const { sentences } = checkProse('Genel tabloya bakınca {P1}. {P2}.', { known: () => true });
-  const text = renderProse(sentences, { proposition: (id) => ({ P1: proposition, P2: named })[id], pointer: () => null, locale: 'tr', escape });
-  assert.equal(text, 'Genel tabloya bakınca şu anda **4** gecikmiş göreviniz var. **Radar Modernizasyonu**, açık görev sayısında en üstte.');
+test('düzyazı çizimi: cümleleri sunucu kurar; modelin sırası korunur, kayıt adıyla başlayan önerme değişmez', () => {
+  const proposition = { id: 'P1', kind: 'count', evidenceId: 'R1', parts: ['şu anda ', { value: '4', strong: true }, ' gecikmiş göreviniz var.'], markdown: 'Şu anda **4** gecikmiş göreviniz var.' };
+  const named = { id: 'P2', kind: 'leader', evidenceId: 'R2', parts: [{ value: 'Radar Modernizasyonu', strong: true }, ', açık görev sayısında en üstte.'],
+    markdown: '**Radar Modernizasyonu**, açık görev sayısında en üstte.' };
+  const { sentences } = checkProse('Genel tabloya bakınca {P2}. Ayrıca {P1}.', { known: () => true });
+  const byId = { P1: proposition, P2: named };
+  const text = fluentParagraph(sentences.flat().map((token) => ({ proposition: byId[token.slot] })), 'tr');
+  assert.equal(text, '**Radar Modernizasyonu**, açık görev sayısında en üstte. Şu anda **4** gecikmiş göreviniz var.');
 });
 
-test('doğal analist yanıtı: modelin bağlaçlı düzyazısı uçtan uca çizilir, olgular kanıta bağlı ve atıflıdır', async (t) => {
+test('doğal analist yanıtı: eski bağlaçlı model düzeni de çizilir; bağlaç atılır, olgular sunucu bağlarıyla birleşir ve atıflıdır', async (t) => {
   const logs = captureConsole(t);
   let page = null;
   const { ask } = phase4eConversation(t, { compose: () => composer((view) => { page = view; return proseLayout(view); }) });
@@ -89,15 +99,17 @@ test('doğal analist yanıtı: modelin bağlaçlı düzyazısı uçtan uca çizi
   const presentation = turnLine(logs).context.presentation;
   assert.equal(presentation.mode, 'composed');
   assert.notEqual(presentation.server, true, JSON.stringify(presentation));
+  assert.ok(presentation.prose.dropped >= 1, 'atılan bağlaç gözlemde sayılır');
   const content = result.answer.content;
-  assert.match(content, /Genel tabloya bakınca /, 'modelin bağlacı çizilir');
-  assert.match(content, /Bunun yanında /);
+  for (const opener of OPENERS) assert.doesNotMatch(content, new RegExp(opener), `model bağlacı çizilmez: ${opener}`);
+  assert.match(content, /gecikmiş durumda; bugün başlayan yedi günlük dönemde de \*\*1\*\* açık görevin termini var/, 'aynı kanıtın önermeleri sunucu bağıyla birleşir');
   assert.doesNotMatch(content, /\{P\d+\}/, 'yuva kalmaz');
   assert.match(content, /【R\d+】/, 'paragraf kanıta atıflıdır');
   assert.ok(page.propositions.length >= 4, 'sayfa birden çok önerme taşır');
   // Her kalın değer sunucunun sayfasındandır (önerme, ayrıntı ya da tablo): sayfada olmayan bir sayı yanıtta görünmez.
   const pageText = JSON.stringify(page);
-  const prose = content.split('\n\n').filter((paragraph) => OPENERS.some((opener) => paragraph.startsWith(opener))).join('\n');
+  const plain = (text) => text.replace(/\*\*|\\/g, '');
+  const prose = content.split('\n\n').filter((paragraph) => page.propositions.some((item) => plain(paragraph).includes(item.text.slice(0, 18)))).join('\n');
   assert.ok(prose, 'modelin paragrafları yanıtta');
   const strong = [...prose.matchAll(/\*\*([^*]+)\*\*/g)].map((match) => match[1]).filter((value) => /^\d/.test(value));
   for (const value of strong) assert.ok(pageText.includes(value.replace(/\\/g, '').match(/\d+(?:,\d+)?/)[0]), `sayfada olmayan değer: ${value}`);
@@ -115,7 +127,8 @@ test('zorunlu çekince: tamlığı kanıtlanmamış ekip iş yükünde çekince 
     assert.equal(result.answer.finishReason, 'stop');
     const presentation = turnLine(logs).context.presentation;
     assert.notEqual(presentation.server, true, `modelin düzyazısı korunur: ${JSON.stringify(presentation)}`);
-    assert.match(result.answer.content, /Genel tabloya bakınca/, 'modelin paragrafı çizilir');
+    assert.match(result.answer.content, /Ekibinizde şu anda \*\*3\*\* gecikmiş görev var/, 'modelin paragrafı çizilir');
+    assert.ok(presentation.prose.supplemented >= 1, 'eksik çekinceyi sunucu tamamlar');
     assert.match(result.answer.content, /kesin olarak söylenemez/, 'sunucu çekinceyi ekler');
   });
   await t.test('çekinceli düzen kabul edilir; denge ya da lider önermesi yoktur', async (t) => {
@@ -346,8 +359,8 @@ test('kurala uymayan düzyazı paragrafı tek başına düşer; geçerli paragra
   assert.ok(page);
   const presentation = turnLine(logs).context.presentation;
   assert.notEqual(presentation.server, true, JSON.stringify(presentation));
-  assert.match(result.answer.content, /Genel tabloya bakınca/);
-  assert.doesNotMatch(result.answer.content, /Toplam 5 iş/);
+  assert.match(result.answer.content, /gecikmiş durumda; bugün başlayan yedi günlük dönemde de/, 'geçerli model paragrafı çizilir');
+  assert.doesNotMatch(result.answer.content, /Toplam 5 iş|3 tane daha/);
 });
 
 test('özetin içine yazılan grafik türü ve tablo plan düzeyine taşınır; görselin yeri onarımda anlam değişikliği sayılmaz', async (t) => {

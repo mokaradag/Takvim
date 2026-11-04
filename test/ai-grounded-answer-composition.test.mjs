@@ -222,7 +222,7 @@ test('Derin kipte düzen Derin oturumunda yürür ve düşünmeye yer bırakan p
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION, mode: 'deep' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.deepEqual(stack.provider.calls.map((call) => [call.model, call.maxOutputTokens]), [[DEEP.model, DEEP.maxOutputTokens], [DEEP.model, DEEP.maxOutputTokens]]);
-  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var ve ortalama gecikme \*\*11,3 gün\*\*\./);
+  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\. En uzun süredir geciken görev \*\*Haftalık durum toplantısı\*\* \(\*\*23 gün\*\*\), en kısa süredir geciken ise \*\*Kısmi kendi görevim\*\* \(\*\*1 gün\*\*\)\. Gecikmelerin ortalaması \*\*11,3 gün\*\*\./);
 });
 
 test('kalan süre düzen penceresine yetmiyorsa düzen istenmez; doğrulanmış anlatım gösterilir', async (t) => {
@@ -289,8 +289,8 @@ test('İngilizce plan İngilizce olgu sayfası ve yanıt üretir', async (t) => 
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Show my overdue tasks.' })).assistantMessage;
   assert.equal(sheet.language, 'en');
   assert.equal(Object.hasOwn(sheet, 'facts'), false);
-  assert.match(answer.content, /^You currently have \*\*3\*\* overdue tasks, with an average delay of \*\*11\\\.3 days\*\*\./);
-  assert.match(answer.content, /, and the shortest-overdue is \*\*Kısmi kendi görevim\*\* \(\*\*1 day\*\*\)\. Of these, \*\*2\*\* are more than a week overdue/);
+  assert.match(answer.content, /^You currently have \*\*3\*\* overdue tasks\. The longest-overdue task is \*\*Haftalık durum toplantısı\*\* \(\*\*23 days\*\*\), and the shortest-overdue is \*\*Kısmi kendi görevim\*\* \(\*\*1 day\*\*\)\. The average delay is \*\*11\\\.3 days\*\*\./);
+  assert.match(answer.content, /The average delay is \*\*11\\\.3 days\*\*\. \*\*2\*\* of the \*\*3\*\* tasks are more than a week overdue/);
   assert.match(answer.content, /\| Task \| Deadline \| Overdue days \|/);
 });
 
@@ -656,6 +656,7 @@ test('sunum telemetrisi yalnız teslim edilen kendi yanıtını ve grafiklerini 
 });
 
 test('109 son: kabul edilen on iki bloklu model düzeni daha kısa doğrulanmış grafik düzenine döner', async (t) => {
+  const logs = captureConsole(t);
   const { buildComposition, validateComposition } = await import('../src/domain/ai/groundedComposition.js');
   const { composeGroundedAnswer } = await import('../src/server/ai/assistant/answerComposition.js');
   const { callRotaTools, PROJECTS } = await import('./helpers/aiToolFixtures.mjs');
@@ -691,4 +692,28 @@ test('109 son: kabul edilen on iki bloklu model düzeni daha kısa doğrulanmı�
   assert.equal(result.charts, 1);
   assert.ok(result.blocks <= 12);
   assert.deepEqual(new Set(result.citedIds), new Set(['R1', 'R2', 'R3']));
+  assert.equal(result.serverFallback, true, 'model düzeninin bütünü sunucu düzeniyle değiştirildi');
+  const { defaultComposition, responseBlock } = await import('../src/domain/ai/groundedComposition.js');
+  const modelBlocks = defaultComposition(composition).blocks.map(responseBlock);
+  const genuine = await composeGroundedAnswer({ session: { remainingMs: () => 120000,
+    round: async () => ({ text: JSON.stringify({ blocks: modelBlocks }), finishReason: 'stop' }) }, composition });
+  assert.equal(genuine.ok, true);
+  assert.equal(genuine.charts, 1);
+  assert.notEqual(genuine.serverFallback, true, 'grafiği seçen geçerli model düzeni geri dönüş değildir');
+  const { presentVerdict } = await import('../src/server/ai/assistant/groundedAnswer.js');
+  const { recordGroundedTurn } = await import('../src/server/ai/aiTelemetry.js');
+  for (const [layout, server] of [[blocks, true], [modelBlocks, false]]) {
+    const turn = { partCount: 3, answers: parts.map(part => ({ index: part.index, entries: [], verdict: { kind: 'grounded', presentation: part.presentation } })),
+      presentationIntent: { visual: true }, composeAnswers: true, answerDetail: null, locale: 'tr', question: { text: 'Dağılımları grafikle göster.' },
+      context: {}, ledger: { revoked: () => false, ids: () => [] }, trace: { rounds: [] }, work: 0, modelRounds: 0, models: [], status() {}, progress() {},
+      session: { remainingMs: () => 120000, round: async () => ({ text: JSON.stringify({ blocks: layout }), finishReason: 'stop' }) } };
+    const presented = await presentVerdict(turn, { kind: 'grounded', citedIds: ['R1', 'R2', 'R3'] }, true);
+    assert.match(presented.normalized, /```rota-chart/);
+    assert.equal(turn.trace.presentation.mode, 'composed');
+    assert.equal(turn.trace.presentation.server === true, server, 'nihai iz gerçek model düzenini sunucu değişiminden ayırır');
+    assert.equal(turn.trace.presentation.reason ?? null, server ? 'MODEL_LAYOUT_REPLACED' : null, 'sunucu değişiminin raporlanabilir bir nedeni vardır');
+    recordGroundedTurn({ outcome: 'grounded', presentation: turn.trace.presentation });
+    assert.equal(turnLines(logs).at(-1).context.presentation.reason, server ? 'MODEL_LAYOUT_REPLACED' : null, 'güvenli telemetri nedeni korur');
+  }
+  assert.equal(aiTelemetrySnapshot().grounding.presentation.byReason.MODEL_LAYOUT_REPLACED, 1);
 });
