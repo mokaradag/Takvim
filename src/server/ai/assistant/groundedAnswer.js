@@ -1651,7 +1651,7 @@ export async function presentVerdict(turn, verdict, compose) {
     }
     return serverLayout(result.ok ? 'CITATION_SCOPE' : result.reason);
   }
-  turn.trace.presentation = { mode: 'composed', blocks: result.blocks, chart: result.chart, charts: result.charts, said: result.said, tables: result.tables, notes: result.notes,
+  turn.trace.presentation = { mode: 'composed', ...(result.serverFallback ? { server: true } : {}), blocks: result.blocks, chart: result.chart, charts: result.charts, said: result.said, tables: result.tables, notes: result.notes,
     titled: result.titled, ms: composedMs, rejected, ...(result.chartInserted ? { chartInserted: true } : {}), ...(result.prose ? { prose: result.prose } : {}) };
   turn.renderedRowParts = result.rowParts;
   turn.renderedEvidence = result.citedIds;

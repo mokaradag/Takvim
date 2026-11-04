@@ -687,7 +687,7 @@ export function validateComposition(composition, response) {
   const proseMode = blocks.some((block) => block.type === 'say' && block.prose);
   let supplemented = 0;
   if (proseMode) {
-    const partOfBlock = (block) => (block.type === 'say' || block.type === 'note' ? render.propositions?.get(block.items.find((id) => render.propositions?.has(id)))?.part
+    const partOfBlock = (block) => (block.type === 'say' || block.type === 'note' ? render.propositions?.get(block.items.find((id) => render.propositions?.has(id)))?.part ?? partOfItem(block.items[0])
       : partOfSource(block.type, block.source));
     const insertForPart = (part, block, beforeRows = false) => {
       const indexes = blocks.map((item, index) => (partOfBlock(item) === part ? index : -1)).filter((index) => index >= 0);
@@ -1079,13 +1079,11 @@ export function renderComposition(composition, validated) {
       // Paragraf (kimlik listesi ya da modelin yuvalı düzyazısı) sunucunun akıcı düzyazısıdır: model yalnızca sırayı seçmiştir;
       // aynı nüfusun önermeleri sunucunun doğrulanmış bağlarıyla birleşir (§ fluentParagraph).
       const entries = [];
-      const sources = [];
+      const emitted = [];
       for (const id of block.items) {
         const proposition = render.propositions?.get(id);
         if (proposition) {
           entries.push({ proposition }, ...(coveredBy.get(id)?.notices || []).map((text) => ({ text })));
-          sources.push(proposition.evidenceId);
-          said += 1;
         } else if (render.tables.has(id)) {
           entries.push({ text: pointerSentence({ type: 'rows', style: rowStyles.get(id) }, locale) });
         } else if (fences.has(id)) {
@@ -1093,8 +1091,10 @@ export function renderComposition(composition, validated) {
         }
       }
       // Yanıtın paragrafları adlandırma durumunu paylaşır: önceki paragrafın söylediği olgu yinelenmez; boşalan paragraf çizilmez.
-      const text = entries.length ? fluentParagraph(entries, locale, discourse) : '';
+      const text = entries.length ? fluentParagraph(entries, locale, discourse, emitted) : '';
       if (!text) continue;
+      const sources = emitted.map((proposition) => proposition.evidenceId);
+      said += emitted.length;
       emit(`${text}${sources.length ? ` ${citation(sources)}` : ''}`, partOf(block.items[0]));
       cited.push(...sources);
     } else if (block.type === 'title') {
@@ -1105,9 +1105,11 @@ export function renderComposition(composition, validated) {
       const items = block.items.map((id) => render.propositions.get(id));
       const tones = new Set(items.map((item) => item.tone || 'info'));
       const tone = tones.size === 1 ? [...tones][0] : 'info';
-      const sentence = fluentParagraph(items.flatMap((item) => [{ proposition: item }, ...(coveredBy.get(item.id)?.notices || []).map((text) => ({ text }))]), locale);
-      const sources = items.map((item) => item.evidenceId);
-      said += items.length;
+      const emitted = [];
+      const sentence = fluentParagraph(items.flatMap((item) => [{ proposition: item }, ...(coveredBy.get(item.id)?.notices || []).map((text) => ({ text }))]), locale, null, emitted);
+      if (!sentence) continue;
+      const sources = emitted.map((item) => item.evidenceId);
+      said += emitted.length;
       notes += 1;
       // Sunucunun not kutusu: tonu önermelerin sunucu tonudur; etiket ve cümleler sunucunundur.
       emit(`> [!${tone}]\n> **${noteLabel(tone, locale)}:** ${sentence} ${citation(sources)}`, items[0].part);

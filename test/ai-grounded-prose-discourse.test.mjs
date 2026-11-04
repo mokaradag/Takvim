@@ -94,7 +94,7 @@ const CORPUS = Object.freeze([
   { id: 'eksik veri', seed: teamSeed, turns: [{ text: 'ekibimin iş yükü dengeli mi', plan: analysis({ scope: 'team', focus: ['workload'] }) }],
     must: ['kesin olarak söylenemez'], never: [/dengeli dağılmış|yoğunlaşıyor/] },
   { id: 'seyrek liste', turns: [{ text: 'Geciken görevlerimi göster.', plan: OVERDUE }],
-    must: ['Şu anda **3** gecikmiş göreviniz var ve ortalama gecikme **11,3 gün**'], once: '**Haftalık durum toplantısı**' },
+    must: ['Şu anda **3** gecikmiş göreviniz var.', 'Gecikmelerin ortalaması **11,3 gün**.'], once: '**Haftalık durum toplantısı**' },
   { id: 'boş sonuç', composed: false, turns: [{ text: 'bugün terminli görevlerim', plan: { intent: 'rota', language: 'tr', request: { operation: 'list', metrics: ['tasks.total', 'task.title'],
     population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { deadline: 'due_today', assignee: 'me' } } } }], must: ['**0**'] },
   { id: 'kesinlik çekincesi', seed: teamSeed, turns: [{ text: 'ekibimin iş yükü dengeli mi', plan: analysis({ scope: 'team', focus: ['workload'] }) },
@@ -197,7 +197,7 @@ test('gerçek zayıf model düzeni: önceki paragrafın söylediği en uzun geci
   const result = await ask({ text: 'işlerimin genel durumunu değerlendir', plan: analysis({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] }) });
   const presentation = turnLine(logs).context.presentation;
   assert.equal(presentation.server, false, JSON.stringify(presentation));
-  assert.equal(presentation.said, 9);
+  assert.equal(presentation.said, 8, 'seçilen dokuz önermeden yinelenen uç çizilmez; sekiz önerme görünür');
   const content = result.answer.content;
   const narrative = content.split('\n\n').filter((paragraph) => /【R2】$/.test(paragraph) && !paragraph.startsWith('_'));
   assert.equal(narrative.join(' ').split('23').length - 1, 1, `en uzun gecikme bir kez söylenir: ${narrative.join(' | ')}`);
@@ -322,4 +322,121 @@ test('yuva ayrıştırması sınırlıdır: aşırı uzun, boş ya da yuvasız m
   assert.equal(checkProse(Array.from({ length: PROSE_LIMITS.maxSentences + 1 }, (_, index) => `{P${index + 1}}`).join(' '), { known }).issue, 'PROSE_LENGTH');
   assert.equal(checkProse('{P1} {P2}', { known, used: new Set(['P2']) }).issue, 'DUPLICATE_PROPOSITION');
   assert.equal(checkProse('{P1}, {P2}; {P3}.', { known }).dropped, 0, 'yalnızca ayırıcı noktalama atılan metin sayılmaz');
+});
+
+const counted = (evidenceId = 'R1', table = null) => ({ kind: 'count', evidenceId, table, markdown: 'Şu anda **3** gecikmiş göreviniz var.',
+  parts: ['şu anda ', { value: '3', strong: true }, ' gecikmiş göreviniz var.'], fluent: { count: 3 } });
+const average = (evidenceId = 'R1', value = '11,3') => ({ kind: 'average', evidenceId, markdown: `Gecikmelerin ortalaması **${value} gün**.`,
+  parts: ['gecikmelerin ortalaması ', { value: `${value} gün`, strong: true }, '.'], fluent: { stat: [' ve ortalama gecikme ', { value: `${value} gün`, strong: true }] } });
+const minimum = () => ({ kind: 'minimum', evidenceId: 'R1', table: 'T1', column: 0, markdown: 'En kısa süredir geciken görev **Kısa** (**1 gün**).',
+  parts: ['en kısa süredir geciken görev ', { value: 'Kısa', strong: true }, ' (', { value: '1 gün', strong: true }, ').'],
+  fluent: { pair: { role: 'minimum', tail: ['en kısa süredir geciken ise ', { value: 'Kısa', strong: true }, ' (', { value: '1 gün', strong: true }, ')'] } } });
+
+test('gönderge sayımı önceki görünür birime ait olmalıdır; aynı kanıtın araya giren dökümü eski sayımı sürdüremez', () => {
+  const total = { ...counted(), kind: 'total', table: 'T1' };
+  const breakdown = { kind: 'breakdown', evidenceId: 'R1', markdown: 'Durumlara göre: Yapılacak **2**, Tamamlandı **1**.' };
+  const majority = { kind: 'majority', evidenceId: 'R1', table: 'T1', markdown: 'Görevlerinizin büyük bölümü yapılacak durumunda.',
+    fluent: { anaphor: { count: 3, join: [' ve bunların büyük bölümü yapılacak durumunda'], lead: ['bunların büyük bölümü yapılacak durumunda'] } } };
+  const share = { kind: 'threshold', evidenceId: 'R1', table: 'T1', markdown: '**3** görevin **2**\'si bir haftadan uzun süredir gecikmiş.',
+    fluent: { share: { base: 3, full: [{ value: '3', strong: true }, ' görevin ', { value: '2', strong: true }, "'si bir haftadan uzun süredir gecikmiş"],
+      intro: ['bunların ', { value: '2', strong: true }, "'si bir haftadan uzun süredir gecikmiş"], also: ['ikisi de gecikmiş'] } } };
+  for (const proposition of [majority, share]) {
+    assert.match(paragraph(total, proposition), /bunların/i);
+    for (const entry of [{ proposition: breakdown }, { proposition: counted('R2') }, { text: 'Yalnızca görünür kayıtlar gösteriliyor.' }]) {
+      const output = fluentParagraph([{ proposition: total }, entry, { proposition }]);
+      assert.doesNotMatch(output, /bunların/i, output);
+      assert.ok(output.endsWith(proposition.markdown), output);
+    }
+    assert.doesNotMatch(paragraph({ ...total, table: 'T2' }, proposition), /bunların/i, 'aynı sayı başka tablo nüfusunu tanıtamaz');
+    assert.doesNotMatch(paragraph(total, majority, proposition === majority ? share : majority), /\. Bunların/i, 'birleşmiş önceki cümle eski sayımı gönderge yapamaz');
+  }
+  const memory = { named: new Map(), attended: new Map() };
+  fluentParagraph([{ proposition: attention('R1', 'Uzun', 23) }], 'tr', memory);
+  const suppressed = fluentParagraph([{ proposition: total }, { proposition: breakdown }, { proposition: longest('R1', 'Uzun', 23) }, { proposition: majority }], 'tr', memory);
+  assert.doesNotMatch(suppressed, /bunların/i, 'bastırılan önceki önerme dökümün öncesindeki sayımı canlandıramaz');
+});
+
+test('ortalama yalnızca hemen önceki uyumlu sayıma eklenir; uç, not ve başka özne seçilen sırayı korur', () => {
+  const count = counted();
+  const avg = average();
+  assert.equal(paragraph(count, avg), 'Şu anda **3** gecikmiş göreviniz var ve ortalama gecikme **11,3 gün**.');
+  const max = longest('R1', 'Uzun', 23);
+  assert.equal(paragraph(count, max, avg), `${count.markdown} ${max.markdown} ${avg.markdown}`);
+  assert.equal(fluentParagraph([{ proposition: count }, { text: 'Sunucunun kapsam notu.' }, { proposition: avg }]), `${count.markdown} Sunucunun kapsam notu. ${avg.markdown}`);
+  assert.equal(paragraph(count, average('R2')), `${count.markdown} ${avg.markdown}`);
+  assert.equal(paragraph(count, avg, average('R1', '12')), 'Şu anda **3** gecikmiş göreviniz var ve ortalama gecikme **11,3 gün** ve ortalama gecikme **12 gün**.');
+});
+
+test('yinelenen en uzun gecikme uç eşleştirmesinden önce elenir; minimum ve farklı olgular korunur', () => {
+  const alert = attention('R1', 'Uzun', 23);
+  const min = minimum();
+  const max = longest('R1', 'Uzun', 23);
+  for (const sequence of [[alert, min, max], [min, alert, max], [alert, max, min]]) {
+    const emitted = [];
+    const output = fluentParagraph(sequence.map(proposition => ({ proposition })), 'tr', null, emitted);
+    assert.equal(output.split('**Uzun**').length - 1, 1, output);
+    assert.ok(output.includes(min.markdown), output);
+    assert.deepEqual(emitted, sequence.filter(item => item !== max));
+  }
+  assert.match(paragraph(min, max), /en uzun süredir geciken ise/, 'öneri yoksa iki uç birlikte çizilir');
+  for (const other of [longest('R1', 'Başka', 23), longest('R1', 'Uzun', 22), longest('R2', 'Uzun', 23)]) {
+    assert.ok(paragraph(alert, min, other).includes(other.fluent.pair.tail[0]) || paragraph(alert, min, other).includes(other.markdown));
+  }
+  const memory = { named: new Map(), attended: new Map() };
+  fluentParagraph([{ proposition: alert }], 'tr', memory);
+  assert.equal(fluentParagraph([{ proposition: min }, { proposition: max }], 'tr', memory), min.markdown);
+});
+
+test('görünür önerme sayısı ve atıflar yalnızca çizilen olguları izler; boşalan paragraf sayılmaz', async () => {
+  const { renderComposition } = await import('../src/domain/ai/groundedComposition.js');
+  const props = [attention('R1', 'Uzun', 23), longest('R1', 'Uzun', 23), counted('R2'), average('R2')]
+    .map((item, index) => ({ ...item, id: `P${index + 1}`, part: 1 }));
+  const composition = { render: { locale: 'tr', propositions: new Map(props.map(item => [item.id, item])),
+    tables: new Map(), charts: new Map(), details: new Map(), titles: new Map() } };
+  const blocks = items => ({ type: 'say', items });
+  const empty = renderComposition(composition, { blocks: [blocks(['P1']), blocks(['P2'])] });
+  assert.equal(empty.said, 1);
+  assert.equal(empty.text, `${props[0].markdown} 【R1】`);
+  assert.deepEqual(empty.citedIds, ['R1']);
+  const mixed = renderComposition(composition, { blocks: [blocks(['P1']), blocks(['P2', 'P3', 'P4'])] });
+  assert.equal(mixed.said, 3, 'bastırılan uç sayılmaz, birleşen iki önerme ayrı ayrı temsil edilir');
+  assert.equal(mixed.text, `${props[0].markdown} 【R1】\n\nŞu anda **3** gecikmiş göreviniz var ve ortalama gecikme **11,3 gün**. 【R2】`);
+  assert.deepEqual(mixed.citedIds, ['R1', 'R2']);
+  const noted = renderComposition(composition, { blocks: [{ type: 'note', items: ['P1', 'P2'] }] });
+  assert.equal(noted.said, 1);
+  assert.equal(noted.notes, 1);
+  assert.deepEqual(noted.citedIds, ['R1']);
+  assert.equal(noted.text.split('**Uzun**').length - 1, 1);
+  const emitted = [];
+  assert.equal(fluentParagraph([{ proposition: props[2] }, { proposition: props[3] }], 'tr', null, emitted), mixed.text.split('\n\n')[1].replace(' 【R2】', ''));
+  assert.deepEqual(emitted, [props[2], props[3]]);
+});
+
+test('noktalama ve boşluk atılan sözcük sayılmaz; normal sözcükler sayılır ve yuva sınırları korunur', () => {
+  for (const separator of ['!', '?', '   ', '…', '—', '“”', '、。！？', '\n\t']) {
+    assert.equal(checkProse(`{P1}${separator}`, { known: () => true }).dropped, 0, separator);
+  }
+  for (const wording of ['ayrıca', 'yanlış 42', '説明']) assert.equal(checkProse(`{P1} ${wording}!`, { known: () => true }).dropped, 1, wording);
+  assert.equal(checkProse('{P1}! {P9}', { known: id => id === 'P1' }).issue, 'UNKNOWN_PROPOSITION');
+  assert.equal(checkProse('{P1}…{P1}', { known: () => true }).issue, 'DUPLICATE_PROPOSITION');
+});
+
+test('Ayrıntılı yanıtta yalnız tablo ya da grafik yönlendiren paragraf kendi bölüm başlığının altında kalır', async (t) => {
+  const logs = captureConsole(t);
+  let page;
+  const { ask } = phase4eConversation(t, { compose: () => composer(view => {
+    page = view;
+    return { blocks: [{ type: 'say', text: view.propositions.filter(item => item.part === 1).map(item => `{${item.id}}`).join(' ') },
+      { type: 'rows', source: 'T1' }, { type: 'say', text: '{T2}' }, { type: 'rows', source: 'T2', style: 'table' },
+      { type: 'say', text: view.propositions.filter(item => item.part === 2).map(item => `{${item.id}}`).join(' ') },
+      { type: 'say', text: '{G2}' }, { type: 'chart', source: 'G2', style: 'bar' }] };
+  }) });
+  const result = await ask({ text: 'görevlerimin durum ve öncelik dağılımını değerlendir', plan: analysis({ scope: 'self', focus: ['status', 'priority'] }) }, { detail: 'detailed' });
+  assert.equal(turnLine(logs).context.presentation.server, false);
+  const content = result.answer.content;
+  const title = `#### ${page.titles.find(item => item.part === 2).text}`;
+  const pointer = 'Ayrıntıları aşağıdaki tabloda görebilirsiniz.';
+  assert.ok(content.indexOf(title) >= 0 && content.indexOf(title) < content.indexOf(pointer), content);
+  assert.ok(content.indexOf(pointer) < content.indexOf('**Orta**'), content);
+  assert.ok(content.indexOf('Dağılımı aşağıdaki grafikte görebilirsiniz.') < content.indexOf('```rota-chart'), content);
 });

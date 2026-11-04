@@ -98,7 +98,7 @@ export async function composeGroundedAnswer({ session, composition, onStart = nu
     const rendered = renderComposition(composition, validated);
     // Düzyazı onarım sayıları (içeriksiz): düşen/kısaltılan cümle, düşen grafik bloğu, sunucu tamamlaması.
     const prose = !serverFallback && checked.prose ? { dropped: checked.prose.dropped, cut: checked.prose.cut, charts: checked.prose.charts, supplemented: checked.prose.supplemented } : null;
-    return rendered.text.trim() ? { ok: true, ...rendered, ...(validated.chartInserted ? { chartInserted: true } : {}), ...(prose ? { prose } : {}) }
+    return rendered.text.trim() ? { ok: true, ...rendered, ...(serverFallback ? { serverFallback: true } : {}), ...(validated.chartInserted ? { chartInserted: true } : {}), ...(prose ? { prose } : {}) }
       : { ok: false, reason: 'INVALID', issue: 'EMPTY_RENDER' };
   } catch {
     // Doğrulayıcının beklenmeyen hatası doğrulanmış yanıtı düşürmez; belirlenimci anlatım gösterilir.

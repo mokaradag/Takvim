@@ -10,7 +10,7 @@
 export const PROSE_LIMITS = Object.freeze({ maxChars: 2400, maxSentences: 8 });
 const SLOT = /\{([PTG][1-9][0-9]?)\}/gu;
 /** Yuvaları ayıran boşluk ve noktalama atılan metin sayılmaz (gözlem sayacı yalnızca sözcük taşıyan parçaları sayar). */
-const SEPARATOR = /^[\s.,;:]*$/u;
+const SEPARATOR = /^[\s\p{P}]*$/u;
 const fail = (issue) => ({ ok: false, issue });
 
 /** Yalnızca kapalı yuva söz dizimini ayrıştırır; doğal dil yorumlamaz. */
