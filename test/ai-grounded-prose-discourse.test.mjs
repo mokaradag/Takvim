@@ -470,3 +470,97 @@ test('bölüm bölme ve sunucu tamamlama sonrasında toplam blok sınırı korun
     assert.equal(rejected.issues[0], 'BLOCK_COUNT');
   }
 });
+
+test('bölümlere ayrılan paragraf kapasiteyi aşarsa bütünü düşer; önceki düzen, kimlikler ve sonraki yönlendirmeler korunur', async () => {
+  const { validateComposition } = await import('../src/domain/ai/groundedComposition.js');
+  const propositions = new Map(Array.from({ length: 8 }, (_, index) => {
+    const id = `P${index + 1}`;
+    const part = index < 4 ? 1 : 2;
+    return [id, { ...counted(`R${part}`), id, part, ...([3, 6].includes(index) ? { required: true } : {}) }];
+  }));
+  const tables = new Map([1, 2].map(part => [`T${part}`, { id: `T${part}`, part, rows: 2, columns: [{ id: 'C1' }] }]));
+  const composition = { view: { language: 'tr' }, render: { locale: 'tr', propositions, tables, charts: new Map(), details: new Map(), titles: new Map() } };
+  const lead = { type: 'say', text: '{P1} {P2} {P3}' };
+  const oversized = { type: 'say', text: '{P4} {T2} {T1} {P5} {P8}' };
+  const tail = [{ type: 'say', text: '{P4} {T1}' }, { type: 'rows', source: 'T1' },
+    { type: 'say', text: '{P5} {P6} {P7} {T2}' }, { type: 'rows', source: 'T2' }];
+  const baseline = validateComposition(composition, { blocks: [lead, ...tail] });
+  assert.equal(baseline.ok, true, JSON.stringify(baseline.issues));
+  const checked = validateComposition(composition, { blocks: [lead, oversized, ...tail] });
+  assert.equal(checked.ok, true, JSON.stringify(checked.issues));
+  assert.deepEqual(checked.blocks, baseline.blocks, 'reddedilen paragrafın hiçbir parçası ya da durum etkisi kalmaz');
+  assert.equal(checked.prose.rejected, 1);
+  assert.equal(checked.prose.supplemented, 0, 'sonraki paragraflar önerme ve yönlendirme kimliklerini yeniden kullanır');
+  assert.ok(!checked.blocks.some(block => block.items?.includes('P8')), 'reddedilen isteğe bağlı önerme tüketilmez');
+
+  const split = validateComposition(composition, { blocks: [{ type: 'say', text: '{P1} {P2}' }, { type: 'say', text: '{P3} {P5} {P6} {P7} {P4}' },
+    { type: 'rows', source: 'T1' }, { type: 'rows', source: 'T2' }] });
+  assert.equal(split.ok, true, JSON.stringify(split.issues));
+  assert.deepEqual(split.blocks.filter(block => block.type === 'say').map(block => block.items),
+    [['P1', 'P2'], ['P3'], ['P5', 'P6', 'P7'], ['P4']], 'sınıra sığan dönüşümlü bölümler seçilen sırada ve kendi kapsamlarında kalır');
+
+  const supplemented = validateComposition(composition, { blocks: [lead, oversized] });
+  assert.equal(supplemented.ok, true, JSON.stringify(supplemented.issues));
+  const supplementedIds = supplemented.blocks.flatMap(block => block.items || []);
+  for (const id of ['P4', 'P7']) assert.ok(supplementedIds.includes(id), `zorunlu çekince sunucu tarafından tamamlanır: ${id}`);
+  assert.deepEqual(supplemented.blocks.filter(block => block.type === 'rows').map(block => block.source), ['T1', 'T2']);
+  const bounded = validateComposition({ ...composition, render: { ...composition.render, limits: { maxBlocks: 3, maxSayBlocks: 4 } } }, { blocks: [lead, oversized] });
+  assert.deepEqual(bounded, { ok: false, issues: ['BLOCK_COUNT'] }, 'sunucu tamamlama son blok sınırını aşamaz');
+  const allRejected = validateComposition(composition, { blocks: [{ type: 'say', text: '{P1} {P5} {P2} {P6} {P3}' }] });
+  assert.deepEqual(allRejected, { ok: false, issues: ['SAY_INVALID'] }, 'bütün düzyazı düşerse model düzeni başarılı sayılmaz');
+  const malformed = validateComposition(composition, { blocks: [lead, oversized, { type: 'rows', source: 'T1', text: 'İzinsiz alan.' }] });
+  assert.deepEqual(malformed, { ok: false, issues: ['BLOCK_INVALID'] }, 'bozuk diğer bloklar tüm düzeni reddetmeye devam eder');
+  const identity = validateComposition(composition, { blocks: Array.from({ length: 5 }, (_, index) => ({ type: 'say', items: [`P${index + 1}`] })) });
+  assert.deepEqual(identity, { ok: false, issues: ['SAY_INVALID'] }, 'kimlik paragraflarının katı kapasite reddi korunur');
+});
+
+test('notlar önceki görünür olguları paylaşır; yinelenen uç düşer, farklı olguların tonu, sayımı ve atıfları kalır', async () => {
+  const { renderComposition } = await import('../src/domain/ai/groundedComposition.js');
+  const props = [attention('R1', 'Uzun', 23), longest('R1', 'Uzun', 23), counted('R2'), average('R2')]
+    .map((item, index) => ({ ...item, id: `P${index + 1}`, part: 1 }));
+  const composition = { render: { locale: 'tr', propositions: new Map(props.map(item => [item.id, item])),
+    tables: new Map(), charts: new Map(), details: new Map(), titles: new Map() } };
+  const say = items => ({ type: 'say', items });
+  const note = items => ({ type: 'note', items });
+  const empty = renderComposition(composition, { blocks: [say(['P1']), note(['P2'])] });
+  assert.equal(empty.text, `${props[0].markdown} 【R1】`);
+  assert.deepEqual([empty.said, empty.notes, empty.citedIds], [1, 0, ['R1']], 'boşalan not işaretleme, sayaç ya da atıf eklemez');
+  const mixed = renderComposition(composition, { blocks: [say(['P1']), note(['P2', 'P3', 'P4'])] });
+  assert.equal(mixed.text, `${props[0].markdown} 【R1】\n\n> [!info]\n> **Öne çıkan:** Şu anda **3** gecikmiş göreviniz var ve ortalama gecikme **11,3 gün**. 【R2】`);
+  assert.deepEqual([mixed.said, mixed.notes, mixed.citedIds], [3, 1, ['R1', 'R2']]);
+  const before = renderComposition(composition, { blocks: [say(['P3']), note(['P2']), say(['P1'])] });
+  assert.ok(before.text.indexOf(props[1].markdown) < before.text.indexOf('En uzun süredir beklediği için'), before.text);
+  assert.match(before.text, /> \*\*Öne çıkan:\*\* En uzun süredir geciken görev \*\*Uzun\*\* \(\*\*23 gün\*\*\)\. 【R1】/);
+  assert.deepEqual([before.said, before.notes], [3, 1], 'sonraki öneri önceki notu bastıramaz; kendi kısa biçimini kullanır');
+  const earlierNote = renderComposition(composition, { blocks: [say(['P3']), note(['P1']), say(['P2'])] });
+  assert.deepEqual([earlierNote.said, earlierNote.notes], [2, 1], 'önceki notun söylediği olgu sonraki paragrafta yinelenmez');
+  assert.equal(earlierNote.text.split('**Uzun**').length - 1, 1);
+  for (const other of [longest('R2', 'Uzun', 23), longest('R1', 'Başka', 23), longest('R1', 'Uzun', 22)]) {
+    const changed = { ...composition, render: { ...composition.render, propositions: new Map([...composition.render.propositions, ['P2', { ...other, id: 'P2', part: 1, tone: 'warning' }]]) } };
+    const distinct = renderComposition(changed, { blocks: [say(['P1']), note(['P2'])] });
+    assert.ok(distinct.text.includes(other.markdown), distinct.text);
+    assert.match(distinct.text, /> \[!warning\]\n> \*\*Dikkat:\*\*/);
+    assert.deepEqual([distinct.said, distinct.notes], [2, 1], 'farklı kanıt, görev ya da değer bastırılmaz');
+  }
+});
+
+test('üretim düzeninde sonraki notun yinelediği en uzun gecikme bir kez anlatılır; model düzeni ve sunucu kapsamı korunur', async (t) => {
+  const logs = captureConsole(t);
+  const { ask } = phase4eConversation(t, { compose: () => composer(view => {
+    const max = view.propositions.find(item => item.kind === 'maximum' && item.text.includes('23'));
+    assert.ok(max, 'gecikme ucunun sunucu önermesi vardır');
+    const layout = hostileLayout(view);
+    for (const block of layout.blocks) if (block.text) block.text = block.text.replace(`{${max.id}}`, '');
+    layout.blocks.push({ type: 'note', items: [max.id] });
+    return layout;
+  }) });
+  const result = await ask({ text: 'işlerimin genel durumunu değerlendir', plan: analysis({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] }) });
+  const presentation = turnLine(logs).context.presentation;
+  assert.equal(presentation.server, false, JSON.stringify(presentation));
+  assert.equal(presentation.mode, 'composed');
+  assert.equal(presentation.notes, 0, result.answer.content);
+  const narrative = result.answer.content.split('\n\n').filter(paragraph => !/^[|_`-]/.test(paragraph)).join('\n\n');
+  assert.equal(narrative.split('23').length - 1, 1, 'görev tablosu dışında gecikme anlatımda bir kez yer alır');
+  assert.doesNotMatch(result.answer.content, /> \[!/);
+  assert.match(result.answer.content, /Bu yanıt yalnızca görüntüleme yetkiniz bulunan kayıtları kapsar/);
+});

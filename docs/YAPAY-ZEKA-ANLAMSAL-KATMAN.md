@@ -1751,7 +1751,9 @@ olarak reddedilir.
 
 **Aşama 4E güncellemesi:** Bu bölümün `text` alanını koşulsuz reddeden ve doğrulayıcıda dil/kalıp bulunmadığını
 söyleyen eski hükümleri, §15.2'deki kapalı düzyazı sözleşmesiyle değiştirilmiştir. `say` bloğunun `text` alanı
-`checkProse` ile doğrulanır; yalnızca sunucunun izinli tarafsız geçişleri ve doğrulanmış önerme yuvaları kabul edilir.
+`checkProse` ile doğrulanır; yalnızca doğrulanmış önerme ve yönlendirme yuvaları yorumlanır. Bağlaçlar dahil yuva
+dışındaki bütün model metni atılır; sözcük taşıyan atılmış parçalar `prose.dropped` ile sayılır (§15.2). Çizilen bütün
+olgusal ifadeleri ve söylem bağlarını sunucu kurar; kanıt ve kapsam doğrulaması belirleyici olmaya devam eder.
 Diğer blokların alan ve kapsam denetimleri geçerliliğini korur. Paragraf başına en çok sekiz yuva kabul edilir;
 `COMPOSITION_LIMITS.maxSayItems`, `PROSE_LIMITS.maxSentences` değerinden türetilir. Sınırı aşan düzyazı
 paragrafı düşürülür; geçerli komşu paragraf korunur.

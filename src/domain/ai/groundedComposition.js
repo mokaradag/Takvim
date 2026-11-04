@@ -623,6 +623,10 @@ export function validateComposition(composition, response) {
         else out.push([id]);
         return out;
       }, []) : [items];
+      if (prose && blocks.filter((item) => item.type === 'say').length + runs.length > limits.maxSayBlocks) {
+        proseRejected.push('SAY_INVALID');
+        continue;
+      }
       for (const run of runs) {
         if (blocks.filter((item) => item.type === 'say').length >= limits.maxSayBlocks) return fail('SAY_INVALID');
         const said = [];
@@ -1107,7 +1111,7 @@ export function renderComposition(composition, validated) {
       const tones = new Set(items.map((item) => item.tone || 'info'));
       const tone = tones.size === 1 ? [...tones][0] : 'info';
       const emitted = [];
-      const sentence = fluentParagraph(items.flatMap((item) => [{ proposition: item }, ...(coveredBy.get(item.id)?.notices || []).map((text) => ({ text }))]), locale, null, emitted);
+      const sentence = fluentParagraph(items.flatMap((item) => [{ proposition: item }, ...(coveredBy.get(item.id)?.notices || []).map((text) => ({ text }))]), locale, discourse, emitted);
       if (!sentence) continue;
       const sources = emitted.map((item) => item.evidenceId);
       said += emitted.length;
