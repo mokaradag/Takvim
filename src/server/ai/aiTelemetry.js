@@ -762,7 +762,7 @@ const TURN_OUTCOMES = new Set(['grounded', 'clarification', 'abstained', 'not_fo
 const ROUND_PURPOSES = new Set(['plan', 'tools', 'follow-up', 'select', 'repair', 'declaration', 'retry', 'compose']);
 const PRESENTATION_MODES = new Set(['composed', 'narrative', 'unavailable']);
 const PRESENTATION_REASONS = new Set(['NO_CHOICE', 'LENGTH_UNAVAILABLE', 'SHEET_LIMIT', 'AUTHORIZATION', 'CITATION_SCOPE', 'BUDGET', 'TIMEOUT', 'PROVIDER', 'LENGTH', 'EMPTY', 'INVALID', 'INTERNAL',
-  'DISABLED', 'NO_MODEL']);
+  'DISABLED', 'NO_MODEL', 'MODEL_LAYOUT_REPLACED']);
 const CHART_TYPES = new Set(ANSWER_CHART_TYPES);
 const SAFE_ISSUE = /^[A-Z][A-Z0-9_]{0,40}$/;
 

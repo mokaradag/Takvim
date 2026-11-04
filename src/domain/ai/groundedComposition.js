@@ -845,6 +845,7 @@ export function validateComposition(composition, response) {
   if (normalized.filter((block) => block.type === 'note').length > ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)].maxNotes) return fail('NOTE_INVALID');
   // Sunucu çekincesi (eksik nüfus) her düzende söylenir: akıcı anlatım onu atlayıp eksik nüfusu tam gösteremez.
   if (propositions.some((item) => item.required && !usedPropositions.has(item.id))) return fail('CAVEAT_REQUIRED');
+  if (normalized.length > limits.maxBlocks) return fail('BLOCK_COUNT');
   return { ok: true, blocks: normalized, ...(proseMode ? { prose: { dropped: proseDropped, cut: proseCut, rejected: proseRejected.length, supplemented, charts: chartsDropped } } : {}) };
 }
 

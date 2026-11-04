@@ -440,3 +440,33 @@ test('Ayrıntılı yanıtta yalnız tablo ya da grafik yönlendiren paragraf ken
   assert.ok(content.indexOf(pointer) < content.indexOf('**Orta**'), content);
   assert.ok(content.indexOf('Dağılımı aşağıdaki grafikte görebilirsiniz.') < content.indexOf('```rota-chart'), content);
 });
+
+test('bölüm bölme ve sunucu tamamlama sonrasında toplam blok sınırı korunur; sınırdaki geçerli düzen kabul edilir', async () => {
+  const { compositionLimits, validateComposition } = await import('../src/domain/ai/groundedComposition.js');
+  const propositions = new Map(Array.from({ length: 6 }, (_, index) => {
+    const id = `P${index + 1}`;
+    return [id, { ...counted(`R${index % 3 + 1}`), id, part: index % 3 + 1 }];
+  }));
+  const tables = new Map(Array.from({ length: 6 }, (_, index) => {
+    const id = `T${index + 1}`;
+    return [id, { id, part: index % 3 + 1, rows: 2, columns: [{ id: 'C1' }] }];
+  }));
+  const details = new Map(Array.from({ length: 6 }, (_, index) => {
+    const id = `D${index + 1}`;
+    return [id, { id, part: index % 3 + 1, text: 'Sunucu ayrıntısı.' }];
+  }));
+  const render = { locale: 'tr', detail: 'balanced', limits: compositionLimits('balanced'), propositions, tables, details, charts: new Map(), titles: new Map() };
+  for (const ids of [['P1', 'P2', 'P3', 'P4', 'P5', 'P6'], ['P1', 'P2', 'P3', 'P4']]) {
+    const blocks = [{ type: 'say', text: ids.map(id => `{${id}}`).join(' ') },
+      ...[...tables.keys()].map(source => ({ type: 'rows', source })), ...[...details.keys()].map(source => ({ type: 'details', source }))];
+    assert.ok(blocks.length < render.limits.maxBlocks);
+    const boundary = { view: { language: 'tr' }, render: { ...render, limits: { ...render.limits, maxBlocks: 18 } } };
+    const accepted = validateComposition(boundary, { blocks });
+    assert.equal(accepted.ok, true, JSON.stringify(accepted.issues));
+    assert.equal(accepted.blocks.length, 18);
+    assert.equal(accepted.prose.supplemented, 6 - ids.length);
+    const rejected = validateComposition({ view: boundary.view, render }, { blocks });
+    assert.equal(rejected.ok, false, 'ham girdi sınıra sığsa da genişleyen düzen sığmaz');
+    assert.equal(rejected.issues[0], 'BLOCK_COUNT');
+  }
+});

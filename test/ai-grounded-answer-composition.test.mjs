@@ -656,6 +656,7 @@ test('sunum telemetrisi yalnız teslim edilen kendi yanıtını ve grafiklerini 
 });
 
 test('109 son: kabul edilen on iki bloklu model düzeni daha kısa doğrulanmış grafik düzenine döner', async (t) => {
+  const logs = captureConsole(t);
   const { buildComposition, validateComposition } = await import('../src/domain/ai/groundedComposition.js');
   const { composeGroundedAnswer } = await import('../src/server/ai/assistant/answerComposition.js');
   const { callRotaTools, PROJECTS } = await import('./helpers/aiToolFixtures.mjs');
@@ -700,6 +701,7 @@ test('109 son: kabul edilen on iki bloklu model düzeni daha kısa doğrulanmı�
   assert.equal(genuine.charts, 1);
   assert.notEqual(genuine.serverFallback, true, 'grafiği seçen geçerli model düzeni geri dönüş değildir');
   const { presentVerdict } = await import('../src/server/ai/assistant/groundedAnswer.js');
+  const { recordGroundedTurn } = await import('../src/server/ai/aiTelemetry.js');
   for (const [layout, server] of [[blocks, true], [modelBlocks, false]]) {
     const turn = { partCount: 3, answers: parts.map(part => ({ index: part.index, entries: [], verdict: { kind: 'grounded', presentation: part.presentation } })),
       presentationIntent: { visual: true }, composeAnswers: true, answerDetail: null, locale: 'tr', question: { text: 'Dağılımları grafikle göster.' },
@@ -709,5 +711,9 @@ test('109 son: kabul edilen on iki bloklu model düzeni daha kısa doğrulanmı�
     assert.match(presented.normalized, /```rota-chart/);
     assert.equal(turn.trace.presentation.mode, 'composed');
     assert.equal(turn.trace.presentation.server === true, server, 'nihai iz gerçek model düzenini sunucu değişiminden ayırır');
+    assert.equal(turn.trace.presentation.reason ?? null, server ? 'MODEL_LAYOUT_REPLACED' : null, 'sunucu değişiminin raporlanabilir bir nedeni vardır');
+    recordGroundedTurn({ outcome: 'grounded', presentation: turn.trace.presentation });
+    assert.equal(turnLines(logs).at(-1).context.presentation.reason, server ? 'MODEL_LAYOUT_REPLACED' : null, 'güvenli telemetri nedeni korur');
   }
+  assert.equal(aiTelemetrySnapshot().grounding.presentation.byReason.MODEL_LAYOUT_REPLACED, 1);
 });
