@@ -780,6 +780,7 @@ function presentationSummary(value) {
     issue: SAFE_ISSUE.test(String(value.issue ?? '')) ? value.issue : null,
     blocks: safeCount(value.blocks),
     said: value.mode === 'composed' ? safeCount(value.said) ?? 0 : 0,
+    ...(value.mode === 'composed' && safeCount(value.suppressed) > 0 ? { suppressed: value.suppressed } : {}),
     tables: value.mode === 'composed' ? safeCount(value.tables) ?? 0 : 0,
     notes: value.mode === 'composed' ? safeCount(value.notes) ?? 0 : 0,
     titled: value.mode === 'composed' && value.titled === true,

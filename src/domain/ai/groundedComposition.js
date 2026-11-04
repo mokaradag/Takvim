@@ -1018,7 +1018,7 @@ const citation = (ids) => [...new Set(ids)].map((id) => `【${id}】`).join('');
  * yönlendirmeler ve kaynak işaretleri sunucunundur; model metni çizime alınmaz. Söylenen sayım önermesi
  * ayrıntısının yerine geçer (zorunlu zarf notları önermeyle birlikte yazılır); söylenmeyen her ayrıntı
  * sunucu tarafından eklenir.
- * @returns {{ text: string, citedIds: string[], chart: string|null, charts: number, blocks: number, said: number, tables: number, notes: number, titled: boolean }}
+ * @returns {{ text: string, citedIds: string[], chart: string|null, charts: number, blocks: number, said: number, suppressed?: number, tables: number, notes: number, titled: boolean }}
  */
 export function renderComposition(composition, validated) {
   const { render } = composition;
@@ -1151,6 +1151,8 @@ export function renderComposition(composition, validated) {
   }
   // Son sıraya eklenen ayrıntılar ve tek satırlı düzyazı da görünürdür; takip sırası nihai çizimin sırasıdır.
   const rowParts = [...new Set(out.filter((chunk) => chunk.rowBearing).map((chunk) => chunk.part))];
+  // Doğrulanmış yinelenen olgular nitelendirmede temsil edilir; görünür önerme sayısı ve atıflar değişmez.
   return { text: out.map((chunk) => chunk.text).join('\n\n'), citedIds: [...new Set(cited)], chart, charts, blocks: validated.blocks.length, said, tables, notes, titled, rowParts,
+    ...(saidIds.size > said ? { suppressed: saidIds.size - said } : {}),
     chartTypes: [...fences.keys()].map((source) => chartStyles.get(source)) };
 }

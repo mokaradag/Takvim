@@ -254,6 +254,31 @@ test('model nitelendirmesi analitik yanıtta "composed" kipindeki sunucu geri d�
   assert.throws(() => finalizeCompositionQualification(report), /COMPOSITION_CHECKS_FAILED/);
 });
 
+test('nitelendirme doğrulanmış yinelenen ucu eksik anlatım saymaz; görünür önerme sayısı değişmez', async (t) => {
+  const { runCase, finalizeCompositionQualification } = await import('../scripts/answer-composition-qualification.mjs');
+  const { compositionView } = await import('./helpers/compositionScenario.mjs');
+  for (const noted of [false, true]) await t.test(noted ? 'yinelenen uç notta' : 'yinelenen uç paragrafta', async (t) => {
+    const report = { cases: 0, passed: 0, calls: 0, composed: 0, narrative: 0, escalations: 0, charts: 0, reasons: {}, issues: {},
+      usage: { input: 0, output: 0, thinking: 0, cacheCreate: 0, cacheRead: 0 }, results: [] };
+    const model = 'claude-haiku-4-5-20251001';
+    const item = { id: noted ? 'notta-yinelenen-uç' : 'paragrafta-yinelenen-uç', requiresComposition: true, stage: 'targeted',
+      turns: [{ question: 'Gecikmelerimi değerlendir.', plan: analysis({ scope: 'self', focus: ['overdue'] }), say: true, expect: ['Haftalık durum toplantısı', '1 gün'] }] };
+    await runCase(t, item, { report, providerOptions: { provider: 'claude', expectedModel: model, completeRound: input => {
+      const view = compositionView(input);
+      const ids = ['attention', 'minimum', 'maximum'].map(kind => view.propositions.find(proposition => proposition.kind === kind)?.id);
+      assert.ok(ids.every(Boolean), 'üç doğrulanmış önerme sayfada bulunur');
+      const blocks = [{ type: 'say', text: (noted ? ids.slice(0, 2) : ids).map(id => `{${id}}`).join(' ') },
+        ...(noted ? [{ type: 'note', items: ids.slice(2) }] : []), ...view.tables.map(table => ({ type: 'rows', source: table.id }))];
+      return { text: JSON.stringify({ blocks }), toolCalls: [], models: [model], thinking: 'off', finishReason: 'end_turn',
+        usage: { input_tokens: 10, output_tokens: 2, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens_details: { thinking_tokens: 0 } } };
+    } } });
+    assert.deepEqual(report.results[0].failures, [], 'doğrulanmış üç önerme nitelendirme alt sınırını karşılar');
+    assert.deepEqual([report.results[0].said, report.results[0].suppressed, report.results[0].notes], [2, 1, 0], 'iki görünür önerme ve bir yinelenen olgu ayrı sayılır');
+    assert.equal(report.calls, 1, 'yalnızca belirlenimci sağlayıcı çağrılır');
+    assert.doesNotThrow(() => finalizeCompositionQualification(report));
+  });
+});
+
 /* ── Doğrulanmış söylem bağları (fluentParagraph) ───────────────────── */
 
 const longest = (evidenceId, title, days) => ({ kind: 'maximum', evidenceId, table: 'T1', column: 0, markdown: `En uzun süredir geciken görev **${title}** (**${days} gün**).`,
@@ -396,10 +421,12 @@ test('görünür önerme sayısı ve atıflar yalnızca çizilen olguları izler
   const blocks = items => ({ type: 'say', items });
   const empty = renderComposition(composition, { blocks: [blocks(['P1']), blocks(['P2'])] });
   assert.equal(empty.said, 1);
+  assert.equal(empty.suppressed, 1, 'yinelenen önerme görünür anlatımdan ayrı sayılır');
   assert.equal(empty.text, `${props[0].markdown} 【R1】`);
   assert.deepEqual(empty.citedIds, ['R1']);
   const mixed = renderComposition(composition, { blocks: [blocks(['P1']), blocks(['P2', 'P3', 'P4'])] });
   assert.equal(mixed.said, 3, 'bastırılan uç sayılmaz, birleşen iki önerme ayrı ayrı temsil edilir');
+  assert.equal(mixed.suppressed, 1);
   assert.equal(mixed.text, `${props[0].markdown} 【R1】\n\nŞu anda **3** gecikmiş göreviniz var ve ortalama gecikme **11,3 gün**. 【R2】`);
   assert.deepEqual(mixed.citedIds, ['R1', 'R2']);
   const noted = renderComposition(composition, { blocks: [{ type: 'note', items: ['P1', 'P2'] }] });
@@ -524,6 +551,7 @@ test('notlar önceki görünür olguları paylaşır; yinelenen uç düşer, far
   const note = items => ({ type: 'note', items });
   const empty = renderComposition(composition, { blocks: [say(['P1']), note(['P2'])] });
   assert.equal(empty.text, `${props[0].markdown} 【R1】`);
+  assert.equal(empty.suppressed, 1, 'boşalan notun doğrulanmış yinelenen önermesi ayrı sayılır');
   assert.deepEqual([empty.said, empty.notes, empty.citedIds], [1, 0, ['R1']], 'boşalan not işaretleme, sayaç ya da atıf eklemez');
   const mixed = renderComposition(composition, { blocks: [say(['P1']), note(['P2', 'P3', 'P4'])] });
   assert.equal(mixed.text, `${props[0].markdown} 【R1】\n\n> [!info]\n> **Öne çıkan:** Şu anda **3** gecikmiş göreviniz var ve ortalama gecikme **11,3 gün**. 【R2】`);

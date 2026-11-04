@@ -1616,7 +1616,7 @@ export async function presentVerdict(turn, verdict, compose) {
     // Model düzeninin ret kodu (varsa) telemetride kalır: sunucu düzeni onun yerine geçti.
     const issue = turn.trace.presentation?.issue ?? null;
     turn.trace.presentation = { mode: 'composed', server: true, reason, ...(issue ? { issue } : {}), blocks: rendered.blocks, chart: rendered.chart, charts: rendered.charts, said: rendered.said,
-      tables: rendered.tables, notes: rendered.notes, titled: rendered.titled };
+      ...(rendered.suppressed ? { suppressed: rendered.suppressed } : {}), tables: rendered.tables, notes: rendered.notes, titled: rendered.titled };
     const laidOut = { ...verdict, normalized: [rendered.text, ...input.notes, ...chartTypeNote(turn, composition, rendered)].join('\n\n') };
     // Analitik düzen grafiksiz kurulduysa açık grafik isteği yine sessizce düşmez.
     return visual && !rendered.charts && !turn.trace.presentation?.chartTypeUnavailable ? withChartNote(turn, laidOut) : laidOut;
@@ -1652,7 +1652,8 @@ export async function presentVerdict(turn, verdict, compose) {
     return serverLayout(result.ok ? 'CITATION_SCOPE' : result.reason);
   }
   turn.trace.presentation = { mode: 'composed', ...(result.serverFallback ? { server: true, reason: 'MODEL_LAYOUT_REPLACED' } : {}), blocks: result.blocks, chart: result.chart, charts: result.charts, said: result.said, tables: result.tables, notes: result.notes,
-    titled: result.titled, ms: composedMs, rejected, ...(result.chartInserted ? { chartInserted: true } : {}), ...(result.prose ? { prose: result.prose } : {}) };
+    ...(result.suppressed ? { suppressed: result.suppressed } : {}), titled: result.titled, ms: composedMs, rejected,
+    ...(result.chartInserted ? { chartInserted: true } : {}), ...(result.prose ? { prose: result.prose } : {}) };
   turn.renderedRowParts = result.rowParts;
   turn.renderedEvidence = result.citedIds;
   const composed = { ...verdict, normalized: [result.text, ...input.notes, ...chartTypeNote(turn, composition, result)].join('\n\n') };
