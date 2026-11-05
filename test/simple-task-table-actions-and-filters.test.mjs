@@ -40,7 +40,7 @@ test('Basit Görevler yalnızca sade sütunlarda ortak filtre bileşenlerini kul
   assert.match(view, /<DateFilterableTH label="Termin"/);
   assert.match(view, /filterType="text"/);
   assert.match(view, /filterType="multi"/);
-  assert.match(view, /simpleTaskMatches\(task, \{ search, filters \}\)/);
+  assert.match(view, /simpleTaskMatches\(task, \{ search, filters \}, null, referenceDay\)/);
 });
 
 test('Basit Görevler filtre sıfırlama ve klavye ile görev açma davranışını korur', () => {

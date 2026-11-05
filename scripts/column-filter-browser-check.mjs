@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { waitForServerReady, stopServer } from './browser-check-server.mjs';
 
 const { chromium } = createRequire(import.meta.url)('playwright');
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -17,12 +18,9 @@ const server = spawn(
 );
 let browser;
 try {
-  await new Promise((resolve, reject) => {
-    server.stdout.on('data', (c) => {
-      if (String(c).includes('Ready in')) resolve();
-    });
-    server.on('exit', (code) => reject(new Error(`Sunucu: ${code}`)));
-  });
+  await waitForServerReady(server);
+  server.stdout.resume();
+  server.stderr.resume();
   browser = await chromium.launch({
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
     headless: true
@@ -33,15 +31,9 @@ try {
   });
   const errors = [];
   page.on('pageerror', (err) => errors.push(err.message));
-  const from = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Istanbul',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).format(new Date());
-  const end = new Date(`${from}T12:00:00Z`);
-  end.setUTCDate(end.getUTCDate() + 15);
-  const to = end.toISOString().slice(0, 10);
+  await page.clock.install({ time: new Date('2026-11-05T09:00:00Z') });
+  const from = '2026-11-05';
+  const to = '2026-11-20';
   await page.addInitScript(() => {
     localStorage.setItem('mergen_rota_data_mode_v1', 'demo');
     localStorage.setItem('mergen_rota_mode_selected_v1', '1');
@@ -108,6 +100,36 @@ try {
     return y ? `${y}-${m}-${d}` : null;
   };
   let checks = 0;
+  const verifyPresets = async (label, scope, readRows) => {
+    const original = await readRows();
+    for (const [text, start, end] of [
+      ['Geçen hafta', '2026-10-26', '2026-11-01'],
+      ['Geçen ay', '2026-10-01', '2026-10-31']
+    ]) {
+      await open(label, scope, 'Hızlı');
+      await popup.getByRole('button', { name: text, exact: true }).click();
+      assert.deepEqual(await readRows(), original, 'Hızlı seçim Uygula öncesinde görev kümesini değiştirmemelidir.');
+      await apply();
+      const expected = original.filter((row) => {
+        const day = isoDate(row.date);
+        return day && day >= start && day <= end;
+      });
+      assert.deepEqual(await readRows(), expected, `${label} ${text}`);
+      await open(label, scope);
+      assert.ok((await popup.getByRole('button', { name: text, exact: true }).getAttribute('class')).includes('active'));
+      await popup.getByRole('button', { name: 'Temizle', exact: true }).click();
+      assert.deepEqual(await readRows(), original, 'Temizle görev kümesini geri getirmelidir.');
+      checks++;
+    }
+  };
+  const verifyTablePresets = async (table, label) => {
+    const header = table.locator('thead');
+    const index = await header.getByRole('button', { name: label, exact: true }).evaluate((node) => node.closest('th').cellIndex);
+    await verifyPresets(label, header, () => table.locator('tbody tr').evaluateAll((rows, index) => rows.map((row) => ({
+      name: row.textContent.trim(), date: row.children[index].textContent.trim()
+    })), index));
+  };
+
   await page.getByRole('button', { name: 'Görevler', exact: true }).click();
   const headers = page.locator('thead');
   for (const [label, index] of [
@@ -149,6 +171,7 @@ try {
       checks++;
     }
   }
+  for (const label of ['Başlangıç', 'Bitiş', 'Hedef']) await verifyTablePresets(page.locator('table.tbl'), label);
   await page.getByRole('button', { name: 'Gantt', exact: true }).click();
   await page.locator('.gantt-task-row').first().waitFor();
   await page.getByRole('button', { name: 'Sütunları yönet', exact: true }).click();
@@ -187,6 +210,7 @@ try {
       await open(label, ganttHead, mode);
       await pick(from);
       if (mode === 'Arası') await pick(to, 1);
+      assert.deepEqual(await page.locator('.gantt-task-row .tr-name').allTextContents(), allNames, 'Uygula öncesinde Gantt görev kümesi değişmemelidir.');
       await apply();
       const expected = original
         .filter((row) => {
@@ -211,6 +235,13 @@ try {
       assert.equal(await page.locator('.gantt-task-row').count(), allNames.length);
       checks++;
     }
+  }
+  for (const label of ['Başlangıç', 'Bitiş', 'Hedef', 'Erken Başlangıç', 'Erken Bitiş', 'Geç Başlangıç', 'Geç Bitiş']) {
+    const labels = await ganttHead.locator('.col-th-btn > span:first-child').allTextContents();
+    const index = labels.indexOf(label) - 1;
+    await verifyPresets(label, ganttHead, () => page.locator('.gantt-task-row').evaluateAll((rows, index) => rows.map((row) => ({
+      name: row.querySelector('.tr-name').textContent, date: row.querySelectorAll('.tr-date')[index].textContent
+    })), index));
   }
   for (const label of ['Toplam Bolluk', 'Serbest Bolluk', 'Süre']) {
     const labels = await ganttHead.locator('.col-th-btn > span:first-child').allTextContents();
@@ -275,7 +306,11 @@ try {
   assert.equal(await page.locator('.date-picker-panel').count(), 0);
   checks++;
   for (const simple of [false, true]) {
-    if (simple) await page.getByRole('button', { name: 'Temel Kip', exact: true }).click();
+    if (simple) {
+      await page.getByRole('button', { name: 'Temel Kip', exact: true }).click();
+      await page.getByRole('button', { name: 'Görevler', exact: true }).click();
+      await verifyTablePresets(page.locator('table.tbl'), 'Termin');
+    }
     await page.getByRole('button', { name: 'Özet', exact: true }).click();
     for (const category of ['Toplam görev', 'Tamamlanan', 'Devam eden', 'Yapılacak', 'Geciken']) {
       await page
@@ -304,6 +339,8 @@ try {
       await open(label, modal.locator('thead'));
       await popup.getByRole('button', { name: 'Temizle', exact: true }).click();
       assert.equal(await modal.locator('tbody tr').count(), original.length);
+      for (const dateLabel of simple ? ['Termin'] : ['Başlangıç', 'Bitiş', 'Hedef'])
+        await verifyTablePresets(modal.locator('table'), dateLabel);
       await page.keyboard.press('Escape');
       assert.equal(await modal.count(), 0);
       checks++;
@@ -312,6 +349,9 @@ try {
   assert.deepEqual(errors, [], 'Tarayıcı çalışma zamanı hatası olmamalıdır.');
   console.log(`Üretim Chromium doğrulaması: ${checks} süzgeç senaryosu başarılı.`);
 } finally {
-  await browser?.close();
-  server.kill('SIGTERM');
+  try {
+    await browser?.close();
+  } finally {
+    await stopServer(server);
+  }
 }

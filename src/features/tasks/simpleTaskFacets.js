@@ -1,36 +1,10 @@
 import { taskStatusFilterValues } from './taskTableFacets.js';
 import { normalizePriorityId } from '../../domain/constants/index.js';
-import { addDays, diffDays, endOfWeek, parseDate, startOfWeek, today } from '../../scheduling/dates/index.js';
+import { today } from '../../scheduling/dates/index.js';
+
+import { dateMatchesFilter } from '../../components/dateMatchesFilter.js';
 
 export const SIMPLE_TASK_FACET_KEYS = Object.freeze(['proje', 'keyword', 'sorumlu', 'priority', 'status']);
-
-function matchesDateFilter(iso, spec, referenceDay) {
-  if (!spec) return true;
-  const value = parseDate(iso);
-  if (spec.mode === 'range') {
-    return (!spec.from || value >= parseDate(spec.from)) && (!spec.to || value <= parseDate(spec.to));
-  }
-  if (spec.mode === 'before') return !spec.to || value <= parseDate(spec.to);
-  if (spec.mode === 'after') return !spec.from || value >= parseDate(spec.from);
-  if (spec.mode !== 'preset') return true;
-
-  const days = diffDays(value, referenceDay);
-  if (spec.preset === 'overdue') return days < 0;
-  if (spec.preset === 'today') return days === 0;
-  if (spec.preset === 'tomorrow') return days === 1;
-  if (spec.preset === 'thisWeek') return value >= startOfWeek(referenceDay) && value <= endOfWeek(referenceDay);
-  if (spec.preset === 'nextWeek') return value >= addDays(startOfWeek(referenceDay), 7) && value <= addDays(endOfWeek(referenceDay), 7);
-  if (spec.preset === 'thisMonth') return value.getMonth() === referenceDay.getMonth() && value.getFullYear() === referenceDay.getFullYear();
-  if (spec.preset === 'nextMonth') {
-    const nextMonth = new Date(referenceDay.getFullYear(), referenceDay.getMonth() + 1, 1);
-    return value.getMonth() === nextMonth.getMonth() && value.getFullYear() === nextMonth.getFullYear();
-  }
-  if (spec.preset === 'last7') return days >= -7 && days <= 0;
-  if (spec.preset === 'last30') return days >= -30 && days <= 0;
-  if (spec.preset === 'next30') return days >= 0 && days <= 30;
-  return true;
-}
-
 
 export function simpleTaskMatches(task, { search = '', filters = {} } = {}, ignoredKey = null, referenceDay = today()) {
   const query = String(search).trim().toLocaleLowerCase('tr-TR');
@@ -45,7 +19,7 @@ export function simpleTaskMatches(task, { search = '', filters = {} } = {}, igno
   if (ignoredKey !== 'sorumlu' && filters.sorumlu?.length && !(task.assigneeIds || []).some((id) => filters.sorumlu.includes(String(id)))) return false;
   if (ignoredKey !== 'priority' && filters.priority?.length && !filters.priority.includes(normalizePriorityId(task.priority))) return false;
   if (ignoredKey !== 'status' && filters.status?.length && !taskStatusFilterValues(task, referenceDay).some((value) => filters.status.includes(value))) return false;
-  if (ignoredKey !== 'targetFinish' && filters.targetFinish && (!task.targetFinish || !matchesDateFilter(task.targetFinish, filters.targetFinish, referenceDay))) return false;
+  if (ignoredKey !== 'targetFinish' && filters.targetFinish && (!task.targetFinish || !dateMatchesFilter(task.targetFinish, filters.targetFinish, referenceDay))) return false;
   return true;
 }
 

@@ -28,7 +28,11 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 // JSDOM yerleşim hesaplamaz; odak tuzağının görünür öge denetimi için yeterlidir.
 Object.defineProperty(dom.window.HTMLElement.prototype, 'offsetParent', {
   get() {
-    return this.isConnected && !this.hidden ? this.parentElement : null;
+    if (!this.isConnected) return null;
+    for (let element = this; element; element = element.parentElement) {
+      if (element.hidden || getComputedStyle(element).display === 'none') return null;
+    }
+    return this.parentElement;
   }
 });
 const { createRoot } = await import('react-dom/client');

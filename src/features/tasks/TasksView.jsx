@@ -1,6 +1,7 @@
 'use client';
 import { TaskDate } from './TaskDate.jsx';
 import { useState as useState1, useMemo as useMemo1, useCallback as useCallback1, useEffect as useEffect1 } from 'react';
+import { useTodayKey } from '../../hooks/useTodayKey.js';
 import { DateFilterableTH } from '../../components/DateFilterableTH';
 import { Icons } from '../../components/icons';
 import {
@@ -8,7 +9,7 @@ import {
   TASK_STATUS_FILTER_OPTIONS,
   resolvePriority
 } from '../../domain/constants';
-import { fmt, diffDays, today } from '../../scheduling/dates';
+import { fmt, diffDays, parseDate, today } from '../../scheduling/dates';
 import { describeRecurrenceRule } from '../../scheduling/recurrence';
 import { projectColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, PriorityIcon, StatusPill, StatusIcon } from '../../components/ui';
@@ -36,6 +37,7 @@ function projectLabel(project) {
 /* Veri tablosu.*/
 export function TasksView() {
   const tasks = useTasks();
+  const todayKey = useTodayKey();
   const projects = useProjects();
   const people = usePeople();
   const { openTask: onOpenTask, beginTaskDraft, deleteTask: onDeleteTask } = useTaskActions();
@@ -88,8 +90,8 @@ export function TasksView() {
   // (bkz. features/tasks/taskTableFacets.js).
   const facetValues = useMemo1(() => Object.fromEntries(TASK_TABLE_FACET_KEYS.map((key) => [
     key,
-    taskTableFacetValues(organization.filteredTasks, { search, filters: colFilter, dateMode: 'effective' }, key)
-  ])), [organization.filteredTasks, search, colFilter]);
+    taskTableFacetValues(organization.filteredTasks, { search, filters: colFilter, dateMode: 'effective' }, key, parseDate(todayKey))
+  ])), [organization.filteredTasks, search, colFilter, todayKey]);
 
   // Seçenek listesi GÖRÜNÜR değerlerle HÂLEN SEÇİLİ değerlerin BİRLEŞİMİDİR.
   //
@@ -163,7 +165,7 @@ export function TasksView() {
     })), [priorityOptionValues]);
 
   const filtered = useMemo1(() => {
-    const today_ = today();
+    const today_ = parseDate(todayKey);
     // `filteredTasks`, yetkili çalışma alanı kümesinin kurumsal kapsamla
     // daraltılmış hâlidir; arama ve tablo süzgeçleri bundan sonra gelir. Satır
     // süzmesi ile faset hesabı AYNI yüklemi kullanır: iki ayrı kopya, birinde
@@ -185,7 +187,7 @@ export function TasksView() {
       return 0;
     });
     return out;
-  }, [organization.filteredTasks, search, sort, colFilter]);
+  }, [organization.filteredTasks, search, sort, colFilter, todayKey]);
   const paginationKey = `${JSON.stringify(organization.selection)}\u001f${search}\u001f${JSON.stringify(colFilter)}\u001f${sort.key}\u001f${sort.dir}`;
   const paged = useTaskTablePagination(filtered, paginationKey);
 

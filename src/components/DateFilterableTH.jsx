@@ -6,20 +6,9 @@ import { clampOverlayToViewport } from './overlayPlacement.js';
 import { measureNaturalRect } from './overlayMeasurement.js';
 import { DateInput } from './DateInput';
 import { isOwnedDatePickerEvent } from './datePickerOwnership.js';
+import { DATE_FILTER_PRESETS } from './dateMatchesFilter.js';
 import { Icons } from './icons';
 
-const PRESETS = [
-  ['overdue', 'Geciken'],
-  ['today', 'Bugün'],
-  ['tomorrow', 'Yarın'],
-  ['thisWeek', 'Bu hafta'],
-  ['nextWeek', 'Gelecek hafta'],
-  ['thisMonth', 'Bu ay'],
-  ['nextMonth', 'Gelecek ay'],
-  ['last7', 'Son 7 gün'],
-  ['last30', 'Son 30 gün'],
-  ['next30', 'Sonraki 30 gün']
-];
 
 export function DateFilterableTH({ label, sortKey, onSort, filter, onFilter, style }) {
   const [open, setOpen] = useState(false);
@@ -126,6 +115,12 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
   };
 
   const apply = () => {
+    const invalid = ref.current?.querySelector('input:invalid');
+    if (invalid) {
+      invalid.reportValidity();
+      invalid.focus();
+      return;
+    }
     if (mode === 'preset' && preset) onChange({ mode: 'preset', preset });
     else if (mode === 'range' && (from || to)) onChange({ mode: 'range', from, to });
     else if (mode === 'before' && to) onChange({ mode: 'before', to });
@@ -172,7 +167,7 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
 
           {mode === 'preset' && (
             <div className="date-filter-preset">
-              {PRESETS.map(([key, text]) => (
+              {DATE_FILTER_PRESETS.map(([key, text]) => (
                 <button key={key} className={preset === key ? 'active' : ''} onClick={() => setPreset(preset === key ? '' : key)}>{text}</button>
               ))}
             </div>

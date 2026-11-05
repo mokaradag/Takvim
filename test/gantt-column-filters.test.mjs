@@ -386,3 +386,121 @@ test('Gantt çizelge güncellenince türetilmiş süzgeci yeniler ve çalışma 
     view.unmount();
   }
 });
+
+for (const [label, field] of [
+  ['Toplam Bolluk', 'totalFloatDays'],
+  ['Serbest Bolluk', 'freeFloatDays'],
+  ['Süre', 'plannedDurationDays']
+])
+  test(`Gantt ${label} sıralaması eksikleri iki yönde sona koyar, sıfırı ve eşitlerin sırasını korur`, () => {
+    const data = [tasks[4], tasks[0], tasks[3], tasks[1], tasks[2]].map((task) => ({ ...task, proje: 'Proje A', projectId: 'p1' }));
+    const state = filterState(data);
+    const values = { a: field === 'plannedDurationDays' ? 2 : -3, b: 0, c: 10, d: 0 };
+    for (const task of data) {
+      if (field === 'plannedDurationDays') task[field] = values[task.id];
+      else if (task.id === 'e') delete state.schedule.tasks.e;
+      else state.schedule.tasks[task.id] = { ...state.schedule.tasks[task.id], [field]: values[task.id] };
+    }
+    const view = mountDom(GanttScreen, {}, state);
+    try {
+      openColumn(label);
+      click(button('Küçükten büyüğe'));
+      assertRows(field === 'plannedDurationDays' ? ['d', 'b', 'a', 'c', 'e'] : ['a', 'd', 'b', 'c', 'e']);
+      openColumn(label);
+      click(button('Büyükten küçüğe'));
+      assertRows(field === 'plannedDurationDays' ? ['c', 'a', 'd', 'b', 'e'] : ['c', 'd', 'b', 'a', 'e']);
+    } finally {
+      view.unmount();
+    }
+  });
+
+test('Gantt Bugün süzgeci gece yarısında satırları, çubukları, sayacı ve fasetleri birlikte yeniler', (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: new Date(2026, 10, 5, 23, 59, 59) });
+  const state = filterState();
+  state.schedule.tasks.a = { ...state.schedule.tasks.a, earlyStart: '2026-11-05' };
+  state.schedule.tasks.b = { ...state.schedule.tasks.b, earlyStart: '2026-11-06' };
+  const view = mountDom(GanttScreen, {}, state);
+  try {
+    openColumn('Erken Başlangıç', 'Hızlı');
+    click(button('Bugün'));
+    click(button('Uygula'));
+    assertRows(['a']);
+    React.act(() => t.mock.timers.tick(2000));
+    assertRows(['b']);
+    openColumn('Sorumlu');
+    const options = [...document.querySelectorAll('.col-filter-opt')].map((node) => node.textContent.trim());
+    assert.equal(options.length, 1);
+    assert.ok(options[0].includes('Bora Bir'));
+  } finally {
+    view.unmount();
+  }
+});
+
+const { calendarTasks } = await import('./helpers/columnFilterFixtures.mjs');
+for (const [label, field] of [
+  ['Başlangıç', 'plannedStart'], ['Bitiş', 'plannedFinish'], ['Hedef', 'targetFinish'],
+  ['Erken Başlangıç', 'earlyStart'], ['Erken Bitiş', 'earlyFinish'],
+  ['Geç Başlangıç', 'lateStart'], ['Geç Bitiş', 'lateFinish']
+])
+  test(`Gantt ${label} geçen hafta ve geçen ay seçimlerini satır, çubuk ve sayaçla birlikte uygular`, (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 10, 5, 12) });
+    const state = filterState(calendarTasks);
+    for (const task of calendarTasks) if (state.schedule.tasks[task.id]) {
+      state.schedule.tasks[task.id] = { ...state.schedule.tasks[task.id], ...Object.fromEntries(GANTT_CPM_DATE_KEYS.map((key) => [key, task.plannedStart])) };
+    }
+    const snapshot = JSON.stringify(state.schedule);
+    const view = mountDom(GanttScreen, {}, state);
+    try {
+      for (const [text, from, to] of [
+        ['Geçen hafta', '2026-10-26', '2026-11-01'],
+        ['Geçen ay', '2026-10-01', '2026-10-31']
+      ]) {
+        openColumn(label, 'Hızlı');
+        click(button(text));
+        assert.equal(rowNames().length, calendarTasks.length);
+        click(button('Uygula'));
+        const expected = calendarTasks.filter((task) => {
+          const day = GANTT_CPM_DATE_KEYS.includes(field) ? state.schedule.tasks[task.id]?.[field] : task[field];
+          return day && day >= from && day <= to;
+        }).map((task) => task.id);
+        assertRows(expected);
+        assert.equal(JSON.stringify(state.schedule), snapshot, 'Süzme CPM verisini değiştirmemelidir');
+        openColumn(label);
+        assert.ok(button(text).classList.contains('active'));
+        click(button('Temizle'));
+        assertRows(['a', 'b', 'c', 'd', 'e']);
+      }
+    } finally {
+      view.unmount();
+    }
+  });
+
+for (const [now, preset, first, second, beforeIds, afterIds] of [
+  ['2026-11-05', 'Yarın', '2026-11-06', '2026-11-07', ['a'], ['b']],
+  ['2026-11-05', 'Geciken', '2026-11-04', '2026-11-05', ['a'], ['a', 'b']],
+  ['2026-11-08', 'Bu hafta', '2026-11-02', '2026-11-09', ['a'], ['b']],
+  ['2026-11-08', 'Gelecek hafta', '2026-11-09', '2026-11-16', ['a'], ['b']],
+  ['2026-11-08', 'Geçen hafta', '2026-10-26', '2026-11-02', ['a'], ['b']],
+  ['2026-11-30', 'Bu ay', '2026-11-01', '2026-12-01', ['a'], ['b']],
+  ['2026-12-31', 'Gelecek ay', '2027-01-01', '2027-02-01', ['a'], ['b']],
+  ['2026-12-31', 'Geçen ay', '2026-11-01', '2026-12-01', ['a'], ['b']],
+  ['2026-11-05', 'Son 7 gün', '2026-10-29', '2026-11-05', ['a', 'b'], ['b']],
+  ['2026-11-05', 'Son 30 gün', '2026-10-06', '2026-11-05', ['a', 'b'], ['b']],
+  ['2026-11-05', 'Sonraki 30 gün', '2026-11-05', '2026-11-06', ['a', 'b'], ['b']]
+])
+  test(`Gantt ${preset} dönemi ${now} gece yarısında yeniden hesaplanır`, (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: new Date(`${now}T23:59:59`) });
+    const state = filterState();
+    for (const id of ['a', 'b', 'c', 'd']) state.schedule.tasks[id] = { ...state.schedule.tasks[id], earlyStart: id === 'a' ? first : id === 'b' ? second : null };
+    const view = mountDom(GanttScreen, {}, state);
+    try {
+      openColumn('Erken Başlangıç', 'Hızlı');
+      click(button(preset));
+      click(button('Uygula'));
+      assertRows(beforeIds);
+      React.act(() => t.mock.timers.tick(2000));
+      assertRows(afterIds);
+    } finally {
+      view.unmount();
+    }
+  });

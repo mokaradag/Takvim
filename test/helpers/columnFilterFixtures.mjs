@@ -104,3 +104,10 @@ export function filterState(data = tasks) {
     schedule: buildPortfolioSchedule({ tasks: data, projects })
   };
 }
+
+export const calendarTasks = tasks.map((task, index) => ({
+  ...task,
+  plannedStart: ['2026-10-01', '2026-10-26', '2026-10-31', '2026-11-01', '2026-11-05'][index],
+  plannedFinish: ['2026-10-01', '2026-10-31', '2026-10-31', '2026-11-01', '2026-11-05'][index],
+  targetFinish: ['2026-11-05', '2026-11-06', '2026-10-31', '2026-11-01', '2026-11-05'][index]
+}));

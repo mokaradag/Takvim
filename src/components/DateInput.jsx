@@ -51,6 +51,14 @@ export function DateInput({
   const [placement, setPlacement] = useState(null);
   const [month, setMonth] = useState(() => resolveCalendarMonth(value, { minDate, maxDate }));
   const hint = dateInputHint(dateFormat);
+  const draftIso = parseDisplayDate(draft);
+  const draftError = draft.trim()
+    ? (draftIso ? dateLimitMessage(draftIso, { minDate, maxDate, formatDate: formatEditableDate }) : `Tarihi ${hint} biçiminde girin.`)
+    : '';
+  // Üst süzgeç, reddedilmiş taslak yerine eski değeri uygulamamalıdır.
+  useLayoutEffect(() => {
+    inputRef.current?.setCustomValidity(draftError);
+  }, [draftError]);
   const calendarDays = useMemo(() => buildCalendarMonth(month), [month]);
   const previousMonth = shiftCalendarMonth(month, -1);
   const nextMonth = shiftCalendarMonth(month, 1);
@@ -284,6 +292,10 @@ export function DateInput({
         aria-label={ariaLabel}
         aria-invalid={validationMessage ? true : undefined}
         title={validationMessage || title}
+        onInvalid={(event) => {
+          event.preventDefault();
+          setValidationMessage(event.currentTarget.validationMessage);
+        }}
         onChange={(event) => {
           setValidationMessage('');
           setDraft(maskDateDraft(event.target.value));

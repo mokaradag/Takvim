@@ -3,7 +3,8 @@ import React, { useState as useState2, useMemo as useMemo2, useEffect as useEffe
 import { GanttAssignees } from './GanttAssignees.jsx';
 import { Icons } from '../../components/icons';
 import { PRIORITIES, normalizePriorityId, resolvePriority } from '../../domain/constants';
-import { TR_MONTHS_LONG, TR_DAYS, parseDate, fmtISO, fmt, diffDays, isSameDay, isWeekend, today, eachDay } from '../../scheduling/dates';
+import { TR_MONTHS_LONG, TR_DAYS, parseDate, fmtISO, fmt, diffDays, isSameDay, isWeekend, eachDay } from '../../scheduling/dates';
+import { useTodayKey } from '../../hooks/useTodayKey.js';
 import { holidayFor } from '../../scheduling/calendars';
 import { depId, relTypeOf } from '../../scheduling/dependencies';
 import { getTaskDateRange, getGroupScheduleSummaries, getStatus } from '../../scheduling/metrics';
@@ -120,7 +121,8 @@ export function GanttView() {
     Object.entries(schedule.projects).map(([id, project]) => [id, new Set(project.criticalDependencyKeys || [])])
   ), [schedule.projects]);
   const { openTask: onOpenTask } = useTaskActions();
-  const today_ = today();
+  const todayKey = useTodayKey();
+  const today_ = useMemo2(() => parseDate(todayKey), [todayKey]);
   const [groupBy, setGroupBy] = useState2('proje');
   const [criticalOnly, setCriticalOnly] = useState2(false);
   const [zoom, setZoom] = useState2(28); // Gün başına piksel.
@@ -146,7 +148,7 @@ export function GanttView() {
 
   const derivedScopedTasks = useMemo2(
     () => criticalScopedTasks.filter((task) => ganttMatchesDerivedFilters(task, colFilters, schedule.tasks[task.id])),
-    [criticalScopedTasks, colFilters, schedule.tasks]
+    [criticalScopedTasks, colFilters, schedule.tasks, todayKey]
   );
 
   // Arama ve sütun süzgeçleri Görevler tablosuyla AYNI yüklemi kullanır
@@ -218,6 +220,7 @@ export function GanttView() {
           if (GANTT_CPM_DATE_KEYS.includes(sort.key) || GANTT_NUMERIC_KEYS.includes(sort.key)) {
             va = ganttColumnValue(a, sort.key, schedule.tasks[a.id]);
             vb = ganttColumnValue(b, sort.key, schedule.tasks[b.id]);
+            if (va == null || vb == null) return va == null ? (vb == null ? 0 : 1) : -1;
           }
           if (sort.key === 'sorumlu') { va = ganttAssigneeGroup(a, personLookup).name; vb = ganttAssigneeGroup(b, personLookup).name; }
           if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
