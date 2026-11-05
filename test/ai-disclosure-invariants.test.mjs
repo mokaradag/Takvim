@@ -868,11 +868,13 @@ for (const change of ['proje-yetkisi', 'görev-silme', 'gizli-projeye-taşıma',
     const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [
       ['rota_task_analytics', { groupBy: 'status', limit: 1 }], ['rota_task_analytics', { groupBy: 'priority', limit: 1 }]
     ] });
-    stack.db.projectAccess = [];
+    stack.db.projectAccess.push({ ProjectId: PROJECTS.HIDDEN, Sicil: AYSE, AccessLevel: 'READ', IsActive: 1 });
+    const authorized = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.equal(authorized.content, saved.message.content);
     if (change === 'proje-yetkisi') stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
     if (change === 'görev-silme') stack.db.tasks = stack.db.tasks.filter(row => row.TaskId !== TASKS.DONE);
     if (change === 'gizli-projeye-taşıma') stack.db.tasks.find(row => row.TaskId === TASKS.DONE).ProjectId = PROJECTS.HIDDEN;
-    if (change === 'görünür-projeye-taşıma') stack.db.tasks.find(row => row.TaskId === TASKS.DONE).ProjectId = PROJECTS.PARTIAL;
+    if (change === 'görünür-projeye-taşıma') stack.db.tasks.find(row => row.TaskId === TASKS.DONE).ProjectId = PROJECTS.READ;
     if (change === 'arşivleme') stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).IsActive = 0;
     if (change === 'tek-katkı-yetkisi') stack.db.taskAssignees = stack.db.taskAssignees.filter(row => row.TaskId !== TASKS.PARTIAL_OWN);
     const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');

@@ -298,6 +298,7 @@ test("sınıra yakın nüfus kayıpsız açılır; çok büyük nüfus saklama v
   references.push(...Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 - references.length }, (_, index) => ({
     taskId: `74000000-0000-4000-8000-${String(index).padStart(12, '0')}`, projectId: PROJECTS.FULL
   })));
+  assert.equal(decodeAuthorizationPopulation(encodeAuthorizationPopulation(references)), null);
   assert.equal(decodeAuthorizationPopulation(compressAuthorizationPopulation(encodeAuthorizationPopulation(references))), null);
   assert.ok(performance.now() - started < 5000, 'nüfus işlemesi sınırlı sürede bitmeli');
 });
