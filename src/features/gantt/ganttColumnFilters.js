@@ -37,11 +37,11 @@ export function ganttColumnValue(task, key, schedule) {
 }
 
 /** CPM yalnızca Gantt'a aittir; ortak görev fasetleri bu hesaplara bağlanmaz. */
-export function ganttMatchesDerivedFilters(task, filters, schedule) {
+export function ganttMatchesDerivedFilters(task, filters, schedule, referenceDay) {
   return (
     GANTT_CPM_DATE_KEYS.every(
       (key) =>
-        !filters[key] || dateMatchesFilter(ganttColumnValue(task, key, schedule), filters[key])
+        !filters[key] || dateMatchesFilter(ganttColumnValue(task, key, schedule), filters[key], referenceDay)
     ) &&
     GANTT_NUMERIC_KEYS.every(
       (key) =>

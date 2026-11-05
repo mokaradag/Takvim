@@ -65,7 +65,7 @@ export function taskTableMatches(task, { search = '', filters = {}, dateMode = '
   for (const key of DATE_KEYS) {
     if (ignoredKey === key || !filters[key]) continue;
     const value = dateMode === 'effective' ? effectiveTaskDate(task, key) : task?.[key];
-    if (!value || !dateMatchesFilter(value, filters[key])) return false;
+    if (!value || !dateMatchesFilter(value, filters[key], referenceDay)) return false;
   }
   if (ignoredKey !== 'progress' && filters.progress
     && !numericMatchesFilter(taskProgressValue(task), filters.progress)) return false;

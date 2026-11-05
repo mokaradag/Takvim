@@ -521,3 +521,70 @@ test('Gantt tarihsiz görevlerde yedek gün aralığını gece yarısında ileri
     view.unmount();
   }
 });
+
+const { taskTableMatches, taskTableFacetValues } = await import('../src/features/tasks/taskTableFacets.js');
+for (const [preset, reference, clock, included, excluded] of [
+  ['today', '2026-11-05', '2026-11-06', '2026-11-05', '2026-11-06'],
+  ['overdue', '2026-11-05', '2026-11-06', '2026-11-04', '2026-11-05'],
+  ['lastWeek', '2026-11-08', '2026-11-09', '2026-10-26', '2026-11-02'],
+  ['lastMonth', '2026-11-30', '2026-12-01', '2026-10-01', '2026-11-01']
+])
+  test(`Gantt ve görev tarih süzgeçleri ${{ today: 'Bugün', overdue: 'Geciken', lastWeek: 'Geçen hafta', lastMonth: 'Geçen ay' }[preset]} için duvar saati yerine verilen günü kullanır`, (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: new Date(`${clock}T12:00:00`) });
+    const day = new Date(`${reference}T00:00:00`);
+    const spec = { mode: 'preset', preset };
+    for (const key of GANTT_CPM_DATE_KEYS) {
+      assert.equal(ganttMatchesDerivedFilters({}, { [key]: spec }, { [key]: included }, day), true, key);
+      assert.equal(ganttMatchesDerivedFilters({}, { [key]: spec }, { [key]: excluded }, day), false, key);
+    }
+    for (const key of ['plannedStart', 'plannedFinish', 'targetFinish']) {
+      assert.equal(taskTableMatches({ [key]: included }, { filters: { [key]: spec } }, null, day), true, key);
+      assert.equal(taskTableMatches({ [key]: excluded }, { filters: { [key]: spec } }, null, day), false, key);
+    }
+    assert.deepEqual([...taskTableFacetValues([
+      { plannedStart: included, priority: 'high' },
+      { plannedStart: excluded, priority: 'low' }
+    ], { filters: { plannedStart: spec } }, 'priority', day)], ['high']);
+  });
+
+for (const delayed of ['derived', 'planned', 'both'])
+  test(`Gantt geciken gün yenilemesinde ${delayed === 'derived' ? 'CPM' : delayed === 'planned' ? 'planlanan' : 'birleşik'} tarih süzgecini aynı gün anahtarında tutar`, (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: new Date(2026, 10, 5, 23, 59, 59) });
+    const data = tasks.map((task) => {
+      const date = task.id === 'a' ? '2026-11-05' : '2026-11-06';
+      return { ...task, plannedStart: date, plannedFinish: date, targetFinish: date };
+    });
+    const state = filterState(data);
+    for (const id of ['a', 'b', 'c', 'd']) state.schedule.tasks[id] = {
+      ...state.schedule.tasks[id], earlyStart: id === 'a' ? '2026-11-05' : id === 'b' ? '2026-11-06' : null
+    };
+    const view = mountDom(GanttScreen, {}, state);
+    try {
+      if (delayed !== 'planned') {
+        openColumn('Erken Başlangıç', 'Hızlı');
+        click(button('Bugün'));
+        click(button('Uygula'));
+      }
+      if (delayed !== 'derived') {
+        openColumn('Başlangıç', 'Hızlı');
+        click(button('Bugün'));
+        click(button('Uygula'));
+      }
+      assertRows(['a']);
+      // Duvar saati ilerler; uyuyan sekmenin gece yarısı zamanlayıcısı henüz çalışmaz.
+      t.mock.timers.setTime(new Date(2026, 10, 6, 0, 0, 1).getTime());
+      openColumn('Süre', 'Çok');
+      enter(document.querySelector('input[type="number"]'), '1');
+      click(button('Uygula'));
+      assertRows(['a']);
+      openColumn('Sorumlu');
+      const options = [...document.querySelectorAll('.col-filter-opt')].map((node) => node.textContent);
+      assert.equal(options.length, 1);
+      assert.ok(options[0].includes('Ayşe Ak'));
+      key('Escape');
+      React.act(() => document.dispatchEvent(new Event('visibilitychange')));
+      assertRows(delayed === 'planned' ? ['b', 'c'] : ['b']);
+    } finally {
+      view.unmount();
+    }
+  });

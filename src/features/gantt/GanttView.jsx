@@ -147,8 +147,8 @@ export function GanttView() {
   );
 
   const derivedScopedTasks = useMemo2(
-    () => criticalScopedTasks.filter((task) => ganttMatchesDerivedFilters(task, colFilters, schedule.tasks[task.id])),
-    [criticalScopedTasks, colFilters, schedule.tasks, todayKey]
+    () => criticalScopedTasks.filter((task) => ganttMatchesDerivedFilters(task, colFilters, schedule.tasks[task.id], today_)),
+    [criticalScopedTasks, colFilters, schedule.tasks, today_]
   );
 
   // Arama ve sütun süzgeçleri Görevler tablosuyla AYNI yüklemi kullanır
