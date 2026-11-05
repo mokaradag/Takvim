@@ -4,6 +4,7 @@ import React, { useCallback as useCb, useState as useSx, useEffect as useEx, use
 import ReactDOM from 'react-dom';
 import { modalTrapDepth } from '../hooks/useModalFocusTrap.js';
 import { DateInput } from './DateInput';
+import { isOwnedDatePickerEvent } from './datePickerOwnership.js';
 import { Icons } from './icons';
 import { appZoom } from '../lib/zoom';
 import { clampOverlayToViewport } from './overlayPlacement.js';
@@ -333,10 +334,11 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
 
   useEx(() => {
     const onDown = (e) => {
-      if (ref.current && !ref.current.contains(e.target) && !anchor?.contains(e.target)) closeAndRestoreFocus();
+      if (ref.current && !ref.current.contains(e.target) && !anchor?.contains(e.target) && !isOwnedDatePickerEvent(ref.current, e.target)) closeAndRestoreFocus();
     };
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
+      if (isOwnedDatePickerEvent(ref.current, e.target)) return;
       e.preventDefault();
       e.stopPropagation();
       closeAndRestoreFocus();

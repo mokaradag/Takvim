@@ -5,6 +5,7 @@ import { appZoom } from '../lib/zoom';
 import { clampOverlayToViewport } from './overlayPlacement.js';
 import { measureNaturalRect } from './overlayMeasurement.js';
 import { DateInput } from './DateInput';
+import { isOwnedDatePickerEvent } from './datePickerOwnership.js';
 import { Icons } from './icons';
 
 const PRESETS = [
@@ -98,11 +99,12 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
 
   useEffect(() => {
     const onPointerDown = (event) => {
-      if (ref.current?.contains(event.target) || anchor?.contains(event.target)) return;
+      if (ref.current?.contains(event.target) || anchor?.contains(event.target) || isOwnedDatePickerEvent(ref.current, event.target)) return;
       closeAndRestoreFocus();
     };
     const onKey = (event) => {
       if (event.key !== 'Escape') return;
+      if (isOwnedDatePickerEvent(ref.current, event.target)) return;
       event.preventDefault();
       event.stopPropagation();
       closeAndRestoreFocus();
@@ -196,11 +198,11 @@ function DateColumnFilter({ label, anchor, value, onChange, onClose, sort, onSor
             <div className="col" style={{ gap: 6 }}>
               <div className="col" style={{ gap: 4 }}>
                 <span className="dff-label">Başlangıç (dahil)</span>
-                <DateInput value={from} onChange={setFrom} />
+                <DateInput value={from} onChange={setFrom} maxDate={to} />
               </div>
               <div className="col" style={{ gap: 4 }}>
                 <span className="dff-label">Bitiş (dahil)</span>
-                <DateInput value={to} onChange={setTo} />
+                <DateInput value={to} onChange={setTo} minDate={from} />
               </div>
             </div>
           )}
