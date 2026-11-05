@@ -7,11 +7,26 @@
  * sınanabiliyordu; öyle bir sınama kuralın kendisini değil, yazılışını
  * sabitler ve ilk yeniden düzenlemede yanlış yerde kırılır.
  */
-import { addDays, diffDays, endOfWeek, parseDate, startOfWeek, today } from '../scheduling/dates/index.js';
+import { addDays, diffDays, endOfWeek, fmtISO, parseDate, startOfWeek, today } from '../scheduling/dates/index.js';
 
-export function dateMatchesFilter(iso, spec) {
+export const DATE_FILTER_PRESETS = [
+  ['overdue', 'Geciken'],
+  ['today', 'Bugün'],
+  ['tomorrow', 'Yarın'],
+  ['lastWeek', 'Geçen hafta'],
+  ['thisWeek', 'Bu hafta'],
+  ['nextWeek', 'Gelecek hafta'],
+  ['lastMonth', 'Geçen ay'],
+  ['thisMonth', 'Bu ay'],
+  ['nextMonth', 'Gelecek ay'],
+  ['last7', 'Son 7 gün'],
+  ['last30', 'Son 30 gün'],
+  ['next30', 'Sonraki 30 gün']
+];
+
+export function dateMatchesFilter(iso, spec, referenceDay = today()) {
   if (!spec) return true;
-  const t = today();
+  const t = referenceDay;
   // EKSİK ya da çözülemeyen tarih hiçbir aralıkla eşleşmez.
   //
   // Ölçüt `parseDate`in SESSİZ YEDEĞİdir: `parseDate(value)` yalancı (falsy)
@@ -34,6 +49,9 @@ export function dateMatchesFilter(iso, spec) {
   ) return false;
   const d = parseDate(iso);
   if (Number.isNaN(d?.getTime?.())) return false;
+  // Takvim dışı ISO günleri sonraki aya taşınarak eşleşmemelidir.
+  const datePart = typeof iso === 'string' ? iso.trim().split(/[T\s]/)[0] : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(datePart) && fmtISO(d) !== datePart) return false;
   if (spec.mode === 'range') {
     if (spec.from && d < parseDate(spec.from)) return false;
     if (spec.to && d > parseDate(spec.to)) return false;
@@ -53,6 +71,11 @@ export function dateMatchesFilter(iso, spec) {
       case 'overdue': return days < 0;
       case 'today': return days === 0;
       case 'tomorrow': return days === 1;
+      case 'lastWeek': {
+        const previous = addDays(t, -7);
+        const day = addDays(d, 0);
+        return day >= startOfWeek(previous) && day <= endOfWeek(previous);
+      }
       case 'thisWeek': {
         const ws = startOfWeek(t);
         const we = endOfWeek(t);
@@ -65,6 +88,10 @@ export function dateMatchesFilter(iso, spec) {
       }
       case 'thisMonth': {
         return d.getMonth() === t.getMonth() && d.getFullYear() === t.getFullYear();
+      }
+      case 'lastMonth': {
+        const previous = new Date(t.getFullYear(), t.getMonth() - 1, 1);
+        return d.getMonth() === previous.getMonth() && d.getFullYear() === previous.getFullYear();
       }
       case 'nextMonth': {
         const next = new Date(t.getFullYear(), t.getMonth() + 1, 1);

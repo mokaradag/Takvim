@@ -1,5 +1,6 @@
 'use client';
 import { useMemo, useState } from 'react';
+import { useTodayKey } from '../../hooks/useTodayKey.js';
 import { DateFilterableTH } from '../../components/DateFilterableTH';
 import { Icons } from '../../components/icons';
 import { Avatar, AvatarStack, PriorityIcon, StatusIcon, StatusPill } from '../../components/ui';
@@ -12,7 +13,7 @@ import {
   resolvePriority
 } from '../../domain/constants';
 import { projectColorVar } from '../../lib/colors';
-import { diffDays, fmt, today } from '../../scheduling/dates';
+import { diffDays, fmt, parseDate, today } from '../../scheduling/dates';
 import { useAppState } from '../../state/AppStateProvider';
 import { canResolveTaskAssignee } from '../../state/appState';
 import { resolveTaskDeleteAccess } from '../../state/projectWritePolicy.js';
@@ -43,6 +44,8 @@ function projectLabel(project) {
 
 export function SimpleTasksView({ onNewTask }) {
   const tasks = useTasks();
+  const todayKey = useTodayKey();
+  const referenceDay = useMemo(() => parseDate(todayKey), [todayKey]);
   const projects = useProjects();
   const people = usePeople();
   const assignableProjects = useTaskAssignableProjects();
@@ -69,8 +72,8 @@ export function SimpleTasksView({ onNewTask }) {
   const peopleById = useMemo(() => new Map(people.map((person) => [String(person.id), person])), [people]);
   const facetValues = useMemo(() => Object.fromEntries(SIMPLE_TASK_FACET_KEYS.map((key) => [
     key,
-    simpleTaskFacetValues(organization.filteredTasks, { search, filters }, key)
-  ])), [organization.filteredTasks, search, filters]);
+    simpleTaskFacetValues(organization.filteredTasks, { search, filters }, key, referenceDay)
+  ])), [organization.filteredTasks, search, filters, referenceDay]);
   const projectOptions = useMemo(() => projects
     .filter((project) => facetValues.proje.has(project.id))
     .slice()
@@ -106,7 +109,7 @@ export function SimpleTasksView({ onNewTask }) {
   const visible = useMemo(() => {
     // Kurumsal kapsam yetkili çalışma alanı görevlerini önce daraltır; Temel Kip
     // araması, fasetleri ve sıralaması bu kümenin üzerinde çalışır.
-    const filtered = organization.filteredTasks.filter((task) => simpleTaskMatches(task, { search, filters }));
+    const filtered = organization.filteredTasks.filter((task) => simpleTaskMatches(task, { search, filters }, null, referenceDay));
 
     return filtered.sort((left, right) => {
       let a = left[sort.key];
@@ -119,7 +122,7 @@ export function SimpleTasksView({ onNewTask }) {
       const delta = typeof a === 'number' ? a - b : String(a).localeCompare(String(b), 'tr');
       return sort.dir === 'asc' ? delta : -delta;
     });
-  }, [organization.filteredTasks, search, filters, sort, projectById]);
+  }, [organization.filteredTasks, search, filters, sort, projectById, referenceDay]);
   const paginationKey = `${JSON.stringify(organization.selection)}\u001f${search}\u001f${JSON.stringify(filters)}\u001f${sort.key}\u001f${sort.dir}`;
   const paged = useTaskTablePagination(visible, paginationKey);
 

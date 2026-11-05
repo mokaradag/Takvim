@@ -3,10 +3,11 @@ import React, { useState as useState2, useMemo as useMemo2, useEffect as useEffe
 import { GanttAssignees } from './GanttAssignees.jsx';
 import { Icons } from '../../components/icons';
 import { PRIORITIES, normalizePriorityId, resolvePriority } from '../../domain/constants';
-import { TR_MONTHS_LONG, TR_DAYS, parseDate, fmtISO, fmt, diffDays, isSameDay, isWeekend, today, eachDay } from '../../scheduling/dates';
+import { TR_MONTHS_LONG, TR_DAYS, parseDate, fmtISO, fmt, diffDays, isSameDay, isWeekend, eachDay } from '../../scheduling/dates';
+import { useTodayKey } from '../../hooks/useTodayKey.js';
 import { holidayFor } from '../../scheduling/calendars';
 import { depId, relTypeOf } from '../../scheduling/dependencies';
-import { getTaskDateRange, getGroupScheduleSummaries, taskDurationDays, getStatus } from '../../scheduling/metrics';
+import { getTaskDateRange, getGroupScheduleSummaries, getStatus } from '../../scheduling/metrics';
 import { projectColorVar, personColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, StatusPill, StatusIcon } from '../../components/ui';
 import { Tooltip, InfoButton, ColumnFilter } from '../../components/ui-extras';
@@ -16,6 +17,7 @@ import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from '.
 import { GanttOutlineControls } from './GanttOutlineControls.jsx';
 import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
 import { ganttAssigneeGroup } from './ganttAssignees.js';
+import { GANTT_CPM_DATE_KEYS, GANTT_NUMERIC_KEYS, createGanttColumnFilters, ganttColumnValue, ganttMatchesDerivedFilters } from './ganttColumnFilters.js';
 
 /* ── Gantt ──────────────────────────────────────────────── */
 const GANTT_DEFAULT_COLS = {
@@ -42,8 +44,8 @@ const GANTT_COL_DEFS = [
   } },
   { key: 'hedef', label: 'Hedef', width: 78, align: 'right', render: (t) => t.targetFinish ? fmt(t.targetFinish, 'dd MMM') : '—' },
   { key: 'duration', label: 'Süre', width: 56, align: 'right', render: (t) => {
-      const d = taskDurationDays(t);
-      return <span className="tabular">{d}g</span>;
+      const d = ganttColumnValue(t, 'duration');
+      return d == null ? <span className="muted">—</span> : <span className="tabular">{d}g</span>;
   } },
   { key: 'earlyStart', label: 'Erken Başlangıç', width: 96, align: 'right', render: (t, today_, schedule) => schedule ? fmt(schedule.earlyStart, 'dd MMM') : <span className="muted">—</span> },
   { key: 'earlyFinish', label: 'Erken Bitiş', width: 86, align: 'right', render: (t, today_, schedule) => schedule ? fmt(schedule.earlyFinish, 'dd MMM') : <span className="muted">—</span> },
@@ -119,7 +121,8 @@ export function GanttView() {
     Object.entries(schedule.projects).map(([id, project]) => [id, new Set(project.criticalDependencyKeys || [])])
   ), [schedule.projects]);
   const { openTask: onOpenTask } = useTaskActions();
-  const today_ = today();
+  const todayKey = useTodayKey();
+  const today_ = useMemo2(() => parseDate(todayKey), [todayKey]);
   const [groupBy, setGroupBy] = useState2('proje');
   const [criticalOnly, setCriticalOnly] = useState2(false);
   const [zoom, setZoom] = useState2(28); // Gün başına piksel.
@@ -128,17 +131,7 @@ export function GanttView() {
   const [colsOpen, setColsOpen] = useState2(false);
   const [globalSearch, setGlobalSearch] = useState2('');
   const [collapsed, setCollapsed] = useState2(() => new Set()); // Daraltılmış grupların adları.
-  const [colFilters, setColFilters] = useState2({
-    task: '',
-    proje: [],
-    sorumlu: [],
-    priority: [],
-    status: [],
-    progress: null,
-    plannedStart: null,
-    plannedFinish: null,
-    targetFinish: null
-  });
+  const [colFilters, setColFilters] = useState2(createGanttColumnFilters);
   const [sort, setSort] = useState2({ key: null, dir: 'asc' });
   const rightRef = useRef2(null);
   const leftRef = useRef2(null);
@@ -153,26 +146,32 @@ export function GanttView() {
     [tasks, criticalOnly, schedule]
   );
 
+  const derivedScopedTasks = useMemo2(
+    () => criticalScopedTasks.filter((task) => ganttMatchesDerivedFilters(task, colFilters, schedule.tasks[task.id], today_)),
+    [criticalScopedTasks, colFilters, schedule.tasks, today_]
+  );
+
   // Arama ve sütun süzgeçleri Görevler tablosuyla AYNI yüklemi kullanır
   // (bkz. features/tasks/taskTableFacets.js): iki ekranda iki ayrı kopya,
   // birinde düzeltilen bir kuralı ötekinde bırakıyordu.
   const filteredTasks = useMemo2(
-    () => criticalScopedTasks.filter((task) => taskTableMatches(task, { search: globalSearch, filters: colFilters }, null, today_)),
-    [criticalScopedTasks, globalSearch, colFilters, today_]
+    () => derivedScopedTasks.filter((task) => taskTableMatches(task, { search: globalSearch, filters: colFilters }, null, today_)),
+    [derivedScopedTasks, globalSearch, colFilters, today_]
   );
 
   // Sütun seçenekleri ÇAPRAZ süzülür: bir sütuna süzgeç uygulandığında öteki
   // sütunlarda yalnızca hâlâ görünen değerler listelenir.
   const facets = useMemo2(() => Object.fromEntries(TASK_TABLE_FACET_KEYS.map((key) => [
     key,
-    taskTableFacetValues(criticalScopedTasks, { search: globalSearch, filters: colFilters }, key, today_)
-  ])), [criticalScopedTasks, globalSearch, colFilters, today_]);
+    taskTableFacetValues(derivedScopedTasks, { search: globalSearch, filters: colFilters }, key, today_)
+  ])), [derivedScopedTasks, globalSearch, colFilters, today_]);
 
-  const hasFilters = !!(criticalOnly || globalSearch || colFilters.task || colFilters.proje.length || colFilters.sorumlu.length || colFilters.priority.length || colFilters.status.length || colFilters.progress || colFilters.plannedStart || colFilters.plannedFinish || colFilters.targetFinish);
+  const hasFilters = !!(criticalOnly || globalSearch || colFilters.task || colFilters.proje.length || colFilters.sorumlu.length || colFilters.priority.length || colFilters.status.length || colFilters.progress || colFilters.plannedStart || colFilters.plannedFinish || colFilters.targetFinish
+    || [...GANTT_CPM_DATE_KEYS, ...GANTT_NUMERIC_KEYS].some((key) => colFilters[key]));
   const clearAllFilters = () => {
     setCriticalOnly(false);
     setGlobalSearch('');
-    setColFilters({ task: '', proje: [], sorumlu: [], priority: [], status: [], progress: null, plannedStart: null, plannedFinish: null, targetFinish: null });
+    setColFilters(createGanttColumnFilters());
   };
 
   // Sütun başına süzgeçlerin ayarlayıcıları.
@@ -195,7 +194,7 @@ export function GanttView() {
   };
 
   // Kararlı görev aralığı hesabı çizelgeleme katmanındadır; kayıtlı tarihler görünür çubuk tarihi kalır.
-  const range = useMemo2(() => getTaskDateRange(tasks, { paddingDays: 3, fallbackStart: today_ }), [tasks]);
+  const range = useMemo2(() => getTaskDateRange(tasks, { paddingDays: 3, fallbackStart: today_ }), [tasks, today_]);
   const days = useMemo2(() => eachDay(range.start, range.end), [range]);
   const totalWidth = days.length * zoom;
 
@@ -218,6 +217,11 @@ export function GanttView() {
       arr.sort((a, b) => {
         if (sort.key) {
           let va = taskSortValue(a, sort.key), vb = taskSortValue(b, sort.key);
+          if (GANTT_CPM_DATE_KEYS.includes(sort.key) || GANTT_NUMERIC_KEYS.includes(sort.key)) {
+            va = ganttColumnValue(a, sort.key, schedule.tasks[a.id]);
+            vb = ganttColumnValue(b, sort.key, schedule.tasks[b.id]);
+            if (va == null || vb == null) return va == null ? (vb == null ? 0 : 1) : -1;
+          }
           if (sort.key === 'sorumlu') { va = ganttAssigneeGroup(a, personLookup).name; vb = ganttAssigneeGroup(b, personLookup).name; }
           if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
           if (va == null) va = '';
@@ -234,7 +238,7 @@ export function GanttView() {
       const bName = groupBy === 'proje' ? b[0] : assigneeGroups.get(b[0]).name;
       return aName.localeCompare(bName, 'tr') || a[0].localeCompare(b[0], 'tr');
     });
-  }, [filteredTasks, groupBy, sort, personLookup, assigneeGroups]);
+  }, [filteredTasks, groupBy, sort, personLookup, assigneeGroups, schedule.tasks]);
 
   const xForDate = (d) => diffDays(d, range.start) * zoom;
 
@@ -587,6 +591,8 @@ export function GanttView() {
               if (c.key === 'start') { filterType = 'date'; filterValue = colFilters.plannedStart; onFilter = (v) => setCF('plannedStart', v); }
               else if (c.key === 'end') { filterType = 'date'; filterValue = colFilters.plannedFinish; onFilter = (v) => setCF('plannedFinish', v); }
               else if (c.key === 'hedef') { filterType = 'date'; filterValue = colFilters.targetFinish; onFilter = (v) => setCF('targetFinish', v); }
+              else if (GANTT_CPM_DATE_KEYS.includes(c.key)) { filterType = 'date'; filterValue = colFilters[c.key]; onFilter = (v) => setCF(c.key, v); }
+              else if (GANTT_NUMERIC_KEYS.includes(c.key)) { filterType = 'number'; filterValue = colFilters[c.key]; onFilter = (v) => setCF(c.key, v); numUnit = 'g'; }
               else if (c.key === 'progress') { filterType = 'number'; filterValue = colFilters.progress; onFilter = (v) => setCF('progress', v); numMin = 0; numMax = 100; numUnit = '%'; }
               else if (c.key === 'status') {
                 filterType = 'multi';

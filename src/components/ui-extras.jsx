@@ -3,7 +3,9 @@
 import React, { useCallback as useCb, useState as useSx, useEffect as useEx, useRef as useRx, useId as useIx } from 'react';
 import ReactDOM from 'react-dom';
 import { modalTrapDepth } from '../hooks/useModalFocusTrap.js';
+import { DATE_FILTER_PRESETS } from './dateMatchesFilter.js';
 import { DateInput } from './DateInput';
+import { isOwnedDatePickerEvent } from './datePickerOwnership.js';
 import { Icons } from './icons';
 import { appZoom } from '../lib/zoom';
 import { clampOverlayToViewport } from './overlayPlacement.js';
@@ -333,10 +335,11 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
 
   useEx(() => {
     const onDown = (e) => {
-      if (ref.current && !ref.current.contains(e.target) && !anchor?.contains(e.target)) closeAndRestoreFocus();
+      if (ref.current && !ref.current.contains(e.target) && !anchor?.contains(e.target) && !isOwnedDatePickerEvent(ref.current, e.target)) closeAndRestoreFocus();
     };
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
+      if (isOwnedDatePickerEvent(ref.current, e.target)) return;
       e.preventDefault();
       e.stopPropagation();
       closeAndRestoreFocus();
@@ -378,6 +381,12 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
     if (type === 'text' || type === 'single') onChange(q);
     else if (type === 'multi') onChange([...sel]);
     else if (type === 'date') {
+      const invalid = ref.current?.querySelector('input:invalid');
+      if (invalid) {
+        invalid.reportValidity();
+        invalid.focus();
+        return;
+      }
       if (dateMode === 'preset' && datePreset) onChange({ mode: 'preset', preset: datePreset });
       else if (dateMode === 'range' && (dateFrom || dateTo)) onChange({ mode: 'range', from: dateFrom, to: dateTo });
       else if (dateMode === 'before' && dateTo) onChange({ mode: 'before', to: dateTo });
@@ -561,18 +570,7 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
             </div>
             {dateMode === 'preset' && (
               <div className="date-filter-preset">
-                {[
-                  ['overdue', 'Geciken'],
-                  ['today', 'Bugün'],
-                  ['tomorrow', 'Yarın'],
-                  ['thisWeek', 'Bu hafta'],
-                  ['nextWeek', 'Gelecek hafta'],
-                  ['thisMonth', 'Bu ay'],
-                  ['nextMonth', 'Gelecek ay'],
-                  ['last7', 'Son 7 gün'],
-                  ['last30', 'Son 30 gün'],
-                  ['next30', 'Sonraki 30 gün']
-                ].map(([k, l]) => (
+                {DATE_FILTER_PRESETS.map(([k, l]) => (
                   <button key={k} className={datePreset === k ? 'active' : ''} onClick={() => setDatePreset(datePreset === k ? '' : k)}>{l}</button>
                 ))}
               </div>

@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getAppDateDisplayFormat } from '../scheduling/dates';
 import { appZoom } from '../lib/zoom';
@@ -41,6 +41,7 @@ export function DateInput({
   maxDate = ''
 }) {
   const dateFormat = getAppDateDisplayFormat();
+  const ownerId = useId();
   const rootRef = useRef(null);
   const inputRef = useRef(null);
   const panelRef = useRef(null);
@@ -50,6 +51,14 @@ export function DateInput({
   const [placement, setPlacement] = useState(null);
   const [month, setMonth] = useState(() => resolveCalendarMonth(value, { minDate, maxDate }));
   const hint = dateInputHint(dateFormat);
+  const iso = parseDisplayDate(draft);
+  const draftError = draft.trim()
+    ? (iso ? dateLimitMessage(iso, { minDate, maxDate, formatDate: formatEditableDate }) : `Tarihi ${hint} biçiminde girin.`)
+    : '';
+  // Üst süzgeç, reddedilmiş taslak yerine eski değeri uygulamamalıdır.
+  useLayoutEffect(() => {
+    inputRef.current?.setCustomValidity(draftError);
+  }, [draftError]);
   const calendarDays = useMemo(() => buildCalendarMonth(month), [month]);
   const previousMonth = shiftCalendarMonth(month, -1);
   const nextMonth = shiftCalendarMonth(month, 1);
@@ -69,7 +78,7 @@ export function DateInput({
   // Odak panel açıldığında YAZILIMLA içeri taşınır.
   //
   // `tabIndex={-1}` paneli sekme sırasına ALMAZ; yalnızca yazılımla
-  // odaklanabilir kılar. Odak girdide kaldığı sürece panelin `onKeyDown`
+  // odaklanabilir kılar. Odak girdide kaldığı sürece takvimin Escape
   // işleyicisi hiç çalışmıyor, panel içindeki Escape ulaşılamıyor ve gün
   // düğmeleri — panel `document.body`'ye taşındığı için — belge sekme sırasının
   // en sonunda kalıyordu.
@@ -135,19 +144,14 @@ export function DateInput({
       return;
     }
 
-    const iso = parseDisplayDate(draft);
-    if (!iso) {
-      setValidationMessage(`Tarihi ${hint} biçiminde girin.`);
-      return;
-    }
-    const limitMessage = dateLimitMessage(iso, { minDate, maxDate, formatDate: formatEditableDate });
-    if (limitMessage) {
-      setValidationMessage(limitMessage);
+    if (draftError) {
+      setValidationMessage(draftError);
       return;
     }
 
     setValidationMessage('');
     setDraft(formatEditableDate(iso));
+    setMonth(resolveCalendarMonth(iso, { minDate, maxDate }));
     onChange?.(iso);
   };
 
@@ -175,16 +179,18 @@ export function DateInput({
     inputRef.current?.focus();
   };
 
+  const modalOwner = rootRef.current?.closest('[data-focus-scope], [data-modal-owner]');
   const picker = open && placement && typeof document !== 'undefined' ? createPortal(
     <div
       ref={panelRef}
-      data-modal-owner={rootRef.current?.closest('[data-focus-scope]')?.getAttribute('data-focus-scope')}
+      data-date-input-owner={ownerId}
+      data-modal-owner={modalOwner?.getAttribute('data-focus-scope') || modalOwner?.getAttribute('data-modal-owner')}
       className="date-picker-panel"
       role="dialog"
       aria-label="Tarih seçici"
       // Panel ODAK ALABİLİR: portala taşındığı için DOM sekme sırasında girdiden
       // sonra değil, sayfanın en sonunda yer alır; odak hiç içeri girmediğinde
-      // aşağıdaki `onKeyDown` işleyicisi çalışmıyor ve gün düğmelerine klavyeyle
+      // kapsayıcıdaki Escape işleyicisi çalışmıyor ve gün düğmelerine klavyeyle
       // erişilemiyordu.
       tabIndex={-1}
       // `preventDefault` yalnızca panelin BOŞ alanı için gerekir (girdinin odağı
@@ -192,13 +198,6 @@ export function DateInput({
       // engelliyordu.
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) event.preventDefault();
-      }}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          setOpen(false);
-          inputRef.current?.focus();
-        }
       }}
       style={{
         position: 'fixed',
@@ -262,7 +261,20 @@ export function DateInput({
   ) : null;
 
   return (
-    <div ref={rootRef} className={`date-input-shell${validationMessage ? ' invalid' : ''}`} style={style}>
+    <div
+      ref={rootRef}
+      id={ownerId}
+      data-date-picker-open={open ? '' : undefined}
+      className={`date-input-shell${validationMessage ? ' invalid' : ''}`}
+      style={style}
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape' || !open) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        inputRef.current?.focus();
+      }}
+    >
       <input
         ref={inputRef}
         type="text"
@@ -275,6 +287,10 @@ export function DateInput({
         aria-label={ariaLabel}
         aria-invalid={validationMessage ? true : undefined}
         title={validationMessage || title}
+        onInvalid={(event) => {
+          event.preventDefault();
+          setValidationMessage(event.currentTarget.validationMessage);
+        }}
         onChange={(event) => {
           setValidationMessage('');
           setDraft(maskDateDraft(event.target.value));
@@ -295,9 +311,6 @@ export function DateInput({
           } else if (event.key === 'ArrowDown' && event.altKey) {
             event.preventDefault();
             togglePicker();
-          } else if (event.key === 'Escape' && open) {
-            event.preventDefault();
-            setOpen(false);
           }
         }}
       />

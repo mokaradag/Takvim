@@ -1,6 +1,7 @@
 'use client';
 import { useState as useState2, useMemo as useMemo2, useEffect as useEffect2, useRef as useRef2 } from 'react';
 import { DateInput } from '../../components/DateInput';
+import { isOwnedDatePickerEvent } from '../../components/datePickerOwnership.js';
 import { Icons } from '../../components/icons';
 import { TR_MONTHS_LONG, TR_DAYS, parseDate, fmtISO, fmt, addDays, startOfMonth, endOfMonth, startOfWeek, endOfWeek, isSameDay, isWeekend, today, eachDay } from '../../scheduling/dates';
 import { DEFAULT_CALENDAR, holidayFor } from '../../scheduling/calendars';
@@ -336,7 +337,7 @@ function DateJumpPopover({ anchor, onClose, onJump }) {
 
   useEffect2(() => {
     const onDown = (e) => {
-      if (ref.current && !ref.current.contains(e.target) && !anchor?.contains(e.target)) onClose();
+      if (ref.current && !ref.current.contains(e.target) && !anchor?.contains(e.target) && !isOwnedDatePickerEvent(ref.current, e.target)) onClose();
     };
     // Sonradan üstte açılan kipli pencere (ör. komut paleti) Esc'in sahibidir.
     const depth = modalTrapDepth();
@@ -362,7 +363,15 @@ function DateJumpPopover({ anchor, onClose, onJump }) {
         <div className="row" style={{ gap: 6 }}>
           <button className="btn ghost sm" onClick={onClose}>İptal</button>
           <div style={{ flex: 1 }} />
-          <button className="btn primary sm" onClick={() => { onJump(parseDate(val)); }}>
+          <button className="btn primary sm" onClick={() => {
+            const invalid = ref.current?.querySelector('input:invalid');
+            if (invalid) {
+              invalid.reportValidity();
+              invalid.focus();
+              return;
+            }
+            onJump(parseDate(val));
+          }}>
             <Icons.ArrowRight size={12} /> Git
           </button>
         </div>
