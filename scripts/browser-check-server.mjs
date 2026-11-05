@@ -1,5 +1,7 @@
 /** Sunucu çıktısı parçalı gelse de hazırlığı süre ve bellek sınırıyla bekler. */
 export function waitForServerReady(server, timeoutMs = 30000) {
+  server.stdout.setEncoding('utf8');
+  server.stderr.setEncoding('utf8');
   return new Promise((resolve, reject) => {
     let output = '';
     let errors = '';
@@ -13,10 +15,11 @@ export function waitForServerReady(server, timeoutMs = 30000) {
       else resolve();
     };
     const onOutput = (chunk) => {
-      output = (output + String(chunk)).slice(-8192);
-      if (output.includes('Ready in')) finish();
+      const text = output + chunk;
+      output = text.slice(-8192);
+      if (text.includes('Ready in')) finish();
     };
-    const onErrorOutput = (chunk) => { errors = (errors + String(chunk)).slice(-8192); };
+    const onErrorOutput = (chunk) => { errors = (errors + chunk).slice(-8192); };
     const onError = (error) => finish(error);
     const onExit = (code, signal) => finish(new Error(`Sunucu hazır olmadan kapandı (${code ?? signal}): ${errors || output}`));
     const timer = setTimeout(() => finish(new Error(`Sunucu ${timeoutMs} ms içinde hazır olmadı: ${errors || output}`)), timeoutMs);

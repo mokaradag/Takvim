@@ -71,3 +71,23 @@ test('Hazırlık zaman aşımı sonrasında gerçek çocuk süreç açık kalmaz
   }
   assert.ok(server.exitCode != null || server.signalCode != null);
 });
+
+test('Hazırlık işareti büyük çıktı parçasının başında da kaybolmaz', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const server = child();
+  const ready = waitForServerReady(server, 20);
+  server.stdout.write('Ready in 10ms\n' + 'x'.repeat(9000));
+  t.mock.timers.tick(20);
+  await ready;
+  assertClean(server);
+});
+
+test('Sunucu tanısı parçalara bölünen Türkçe UTF-8 harflerini korur', async () => {
+  const server = child();
+  const rejected = assert.rejects(waitForServerReady(server), /Ölçüm başlatılamadı/);
+  const bytes = Buffer.from('Ölçüm başlatılamadı');
+  for (const byte of bytes) server.stderr.write(Buffer.from([byte]));
+  server.emit('exit', 1);
+  await rejected;
+  assertClean(server);
+});

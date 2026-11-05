@@ -105,9 +105,17 @@ export function filterState(data = tasks) {
   };
 }
 
-export const calendarTasks = tasks.map((task, index) => ({
-  ...task,
-  plannedStart: ['2026-10-01', '2026-10-26', '2026-10-31', '2026-11-01', '2026-11-05'][index],
-  plannedFinish: ['2026-10-01', '2026-10-31', '2026-10-31', '2026-11-01', '2026-11-05'][index],
-  targetFinish: ['2026-11-05', '2026-11-06', '2026-10-31', '2026-11-01', '2026-11-05'][index]
-}));
+const calendarDates = {
+  a: ['2026-10-01', '2026-10-01', '2026-11-05'],
+  b: ['2026-10-26', '2026-10-31', '2026-11-06'],
+  c: ['2026-10-31', '2026-10-31', '2026-10-31'],
+  d: ['2026-11-01', '2026-11-01', '2026-11-01'],
+  e: ['2026-11-05', '2026-11-05', '2026-11-05']
+};
+export const calendarTasks = tasks.map((task) => {
+  const [plannedStart, plannedFinish, targetFinish] = calendarDates[task.id];
+  const result = { ...task, plannedStart, plannedFinish, targetFinish };
+  // Bu veri kümesi yalnızca takvim dönemlerini sınar; eski süreyi taşımaz.
+  delete result.plannedDurationDays;
+  return result;
+});

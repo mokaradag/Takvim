@@ -194,7 +194,7 @@ export function GanttView() {
   };
 
   // Kararlı görev aralığı hesabı çizelgeleme katmanındadır; kayıtlı tarihler görünür çubuk tarihi kalır.
-  const range = useMemo2(() => getTaskDateRange(tasks, { paddingDays: 3, fallbackStart: today_ }), [tasks]);
+  const range = useMemo2(() => getTaskDateRange(tasks, { paddingDays: 3, fallbackStart: today_ }), [tasks, today_]);
   const days = useMemo2(() => eachDay(range.start, range.end), [range]);
   const totalWidth = days.length * zoom;
 

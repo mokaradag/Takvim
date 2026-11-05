@@ -504,3 +504,20 @@ for (const [now, preset, first, second, beforeIds, afterIds] of [
       view.unmount();
     }
   });
+
+test('Gantt tarihsiz görevlerde yedek gün aralığını gece yarısında ileri taşır', (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: new Date(2026, 10, 30, 23, 59, 59) });
+  const data = [{ ...tasks[4], plannedStart: null, plannedFinish: null }];
+  const view = mountDom(GanttScreen, {}, filterState(data));
+  try {
+    assert.equal(document.querySelector('.gantt-day-cell .dnum').textContent, '30');
+    assert.equal(document.querySelector('.gantt-day-cell .dmon').textContent, 'Kasım 2026');
+    React.act(() => t.mock.timers.tick(2000));
+    assert.equal(document.querySelector('.gantt-day-cell .dnum').textContent, '1');
+    assert.equal(document.querySelector('.gantt-day-cell .dmon').textContent, 'Aralık 2026');
+    assert.ok(document.querySelector('.gantt-today-marker'));
+    assert.equal(document.querySelector('.gantt-today-marker').style.left, '14px');
+  } finally {
+    view.unmount();
+  }
+});

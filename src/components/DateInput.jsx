@@ -51,9 +51,9 @@ export function DateInput({
   const [placement, setPlacement] = useState(null);
   const [month, setMonth] = useState(() => resolveCalendarMonth(value, { minDate, maxDate }));
   const hint = dateInputHint(dateFormat);
-  const draftIso = parseDisplayDate(draft);
+  const iso = parseDisplayDate(draft);
   const draftError = draft.trim()
-    ? (draftIso ? dateLimitMessage(draftIso, { minDate, maxDate, formatDate: formatEditableDate }) : `Tarihi ${hint} biçiminde girin.`)
+    ? (iso ? dateLimitMessage(iso, { minDate, maxDate, formatDate: formatEditableDate }) : `Tarihi ${hint} biçiminde girin.`)
     : '';
   // Üst süzgeç, reddedilmiş taslak yerine eski değeri uygulamamalıdır.
   useLayoutEffect(() => {
@@ -144,14 +144,8 @@ export function DateInput({
       return;
     }
 
-    const iso = parseDisplayDate(draft);
-    if (!iso) {
-      setValidationMessage(`Tarihi ${hint} biçiminde girin.`);
-      return;
-    }
-    const limitMessage = dateLimitMessage(iso, { minDate, maxDate, formatDate: formatEditableDate });
-    if (limitMessage) {
-      setValidationMessage(limitMessage);
+    if (draftError) {
+      setValidationMessage(draftError);
       return;
     }
 
