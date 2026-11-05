@@ -491,9 +491,10 @@ test('konuşma tablolarına yalnızca konuşma deposu, sabit ve Sicil sahipliği
   assert.deepEqual(evidenceUsers, ['src/server/ai/assistant/conversationQueries.js', 'src/server/ai/assistant/conversationStore.js']);
   assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /OBJECT_ID\(N'dbo\.MR_AiMessageEvidence', N'U'\) IS NOT NULL/);
   assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /IF @knownSicil = 1 AND @evidenceReady = 1\s+SELECT TOP \(@maxEvidence\)/);
-  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /JSON_VALUE\(e\.EvidenceJson, '\$\.authorizationEpoch'\)/);
-  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /JSON_QUERY\(e\.EvidenceJson, '\$\.clarificationContext'\)/);
-  assert.doesNotMatch(queries.AI_CONVERSATION_EVIDENCE_SQL, /SELECT[^;]*,\s*e\.EvidenceJson\s*(?:,|FROM)/, 'ham kanıt yükü açıklanmaz');
+  // Ham yük yalnızca sunucudaki yeniden doğrulamaya gider; API özet sınırı hizmet regresyonlarında korunur.
+  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /e\.SummaryJson,\s+e\.EvidenceJson\s+FROM/);
+  assert.equal((queries.AI_CONVERSATION_EVIDENCE_SQL.match(/e\.EvidenceJson/g) || []).length, 1, 'kanıt yükü tek kez taşınır');
+  assert.doesNotMatch(queries.AI_CONVERSATION_EVIDENCE_SQL, /JSON_VALUE|JSON_QUERY/);
   assert.doesNotMatch(queries.AI_CONVERSATION_PRESENCE_SQL, /MR_AiMessageEvidence|m\.Content|c\.Title/);
   assert.match(queries.AI_CONVERSATION_PRESENCE_SQL, /SELECT TOP \(@maxMessages\) m\.MessageId/);
   const grounded = queries.AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL;

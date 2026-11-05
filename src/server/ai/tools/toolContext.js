@@ -109,8 +109,8 @@ export function createToolTurnContext({
     for (const saved of eligible) {
       if (signal.aborted) throw signal.reason;
       const references = saved.authorizationPopulation ? decodeAuthorizationPopulation(saved.authorizationPopulation)
-        : saved.taskReferences || evidenceTaskReferences(JSON.parse(saved.payload || '{}'));
-      if (references == null) continue;
+        : saved.taskReferences ?? evidenceTaskReferences(JSON.parse(saved.payload || '{}'));
+      if (!Array.isArray(references)) continue;
       const entry = { ...saved, taskReferences: references };
       const exact = isEvidenceAuthorized(entry);
       const requirements = exact ? null : savedEvidenceRequirements(entry, state.current.auth);

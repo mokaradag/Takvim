@@ -1312,6 +1312,7 @@ test("devam kapsamı kalıcı ve doğrulanabilir taşıyıcı kullanır", async 
     for (const row of carriers) {
       assert.deepEqual(row.resultScope, scope);
       assert.ok(decodeAuthorizationPopulation(row.authorizationPopulation), 'doğrulanamayan kanıt devam kapsamı taşıyamaz');
+      if (mode === 'compressed') assert.deepEqual(decodeAuthorizationPopulation(row.authorizationPopulation), entries[0].taskReferences);
     }
     if (mode !== 'no-carrier') assert.ok(JSON.parse(rows[mode === 'compressed' ? 0 : rows.length - 1].evidenceJson).resultScope);
   });

@@ -852,6 +852,7 @@ for (const change of ['proje-ekleme', 'proje-kaldırma', 'görev-ataması', 'kur
     for (let count = 0; count < 2; count += 1) {
       const response = await loadAssistantConversation(conversationId);
       assert.equal(response.status, 200);
+      assert.doesNotMatch(JSON.stringify(response.body), /authorizationEpoch|authorizationPopulation|scopedAuthorization|EvidenceJson/);
       const answer = response.body.messages.find((message) => message.role === 'assistant');
       assert.equal(answer.content, saved.message.content);
       assert.equal(answer.finishReason, 'stop');
@@ -1061,3 +1062,19 @@ test("eski proje araması tam eşleşme nüfusunu güncel proje erişimiyle doğ
   assert.equal(hidden.finishReason, 'not_found');
   assert.deepEqual(hidden.evidence, []);
 });
+
+for (const references of [{}, true, false, 0, '', 'bozuk']) {
+  test(`eski dizi olmayan görev başvurusu eşleşen dönemde bile yetki kanıtı olamaz (${JSON.stringify(references)})`, async (t) => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+    const row = stack.db.aiMessageEvidence[0];
+    const value = JSON.parse(row.EvidenceJson);
+    delete value.authorizationPopulation;
+    value.authorizationReferences = references;
+    row.EvidenceJson = JSON.stringify(value);
+    const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.equal(answer.finishReason, 'not_found');
+    assert.notEqual(answer.content, saved.message.content);
+    assert.deepEqual(answer.evidence, []);
+  });
+}
