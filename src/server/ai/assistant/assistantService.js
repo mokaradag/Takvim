@@ -494,6 +494,7 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
       evidence.unavailableMessages = new Set();
       try {
         await context.revalidateAuthorization(deadline.signal);
+        const epoch = context.authorizationEpoch();
         for (const [id, summaries] of [...evidence.byMessage].reverse()) {
           if (deadline.signal.aborted) { evidence.unavailableMessages.add(id); continue; }
           const entries = evidence.authorizationByMessage.get(id);
@@ -507,12 +508,20 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
             evidence.unavailableMessages.add(id);
           } finally { messageDeadline.dispose(); }
         }
+        // Parçalı okumalar sırasında yetki değişirse eski bağlamla hiçbir yanıt açılmaz.
+        if (visible.size) {
+          await context.revalidateAuthorization(deadline.signal);
+          if (context.authorizationEpoch() !== epoch) {
+            for (const id of visible.keys()) evidence.unavailableMessages.add(id);
+            visible.clear();
+          }
+        }
         evidence.byMessage = visible;
       } finally { deadline.dispose(); }
     }
   } catch (error) {
     if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;
-    evidence = { unavailable: true };
+    evidence = { ...evidence, byMessage: new Map(), unavailable: true };
   }
   // Kanıt ve yetki okumalarının hata yolları dahil sonrasında denetlenir.
   // Varlık hatası iletilir; kullanılamayan kanıt eski metni yetkilendiremez.

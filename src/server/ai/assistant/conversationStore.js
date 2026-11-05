@@ -287,36 +287,41 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     if (row.Ordinal == null) continue;
     const id = idOrNull(row.MessageId);
     if (!epochsByMessage.has(id)) epochsByMessage.set(id, []);
-    epochsByMessage.get(id).push(row.AuthorizationEpoch ?? null);
     if (!authorizationByMessage.has(id)) authorizationByMessage.set(id, []);
-    let authorizationEpoch = row.AuthorizationEpoch ?? null;
+    let stored = {};
+    let authorizationEpoch = null;
     let scopedAuthorization = null;
     let taskReferences = null;
     let unverifiable = false;
+    let savedPopulation = false;
     try {
-      scopedAuthorization = JSON.parse(row.ScopedAuthorization || 'null');
-      const population = JSON.parse(row.AuthorizationPopulation || 'null');
+      stored = JSON.parse(row.EvidenceJson || '{}');
+      authorizationEpoch = stored.authorizationEpoch ?? null;
+      scopedAuthorization = stored.scopedAuthorization ?? null;
+      const population = stored.authorizationPopulation;
       if (population) {
         taskReferences = decodeAuthorizationPopulation(population);
         unverifiable = taskReferences == null;
+        savedPopulation = !unverifiable;
       } else {
-        taskReferences = JSON.parse(row.AuthorizationReferences || 'null');
+        taskReferences = stored.authorizationReferences ?? null;
         // Nüfus işaretinden önceki kayıt yalnızca yükündeki görevleri taşır.
         unverifiable = !PAYLOAD_POPULATION_TOOLS.has(String(row.ToolName || ''));
       }
     } catch { authorizationEpoch = null; }
-    authorizationByMessage.get(id).push({ id: `${id}:${row.Ordinal}`, payload: row.LegacyEvidenceJson || '{}',
-      authorizationEpoch, scopedAuthorization, taskReferences, unverifiable });
+    epochsByMessage.get(id).push(authorizationEpoch);
+    authorizationByMessage.get(id).push({ id: `${id}:${row.Ordinal}`, payload: row.EvidenceJson || '{}',
+      authorizationEpoch, scopedAuthorization, taskReferences, unverifiable, savedPopulation, tool: row.ToolName });
     try {
-      const scope = taskResultScope(JSON.parse(row.ResultScope || 'null'));
+      const scope = taskResultScope(stored.resultScope);
       if (scope && authorizationEpoch && !unverifiable) resultScopeByMessage.set(id, scope);
     } catch { /* Bozuk sonuç kapsamı kullanılmaz. */ }
     try {
-      const context = normalizeAnalysisContext(JSON.parse(row.AnalysisContext || 'null'));
+      const context = normalizeAnalysisContext(stored.analysisContext);
       if (context && authorizationEpoch && !unverifiable) analysisByMessage.set(id, context);
     } catch { /* Bozuk analiz bağlamı kullanılmaz (takip göndergesizdir). */ }
     try {
-      const candidates = JSON.parse(row.ClarificationContext || 'null');
+      const candidates = stored.clarificationContext;
       if (Array.isArray(candidates)) clarificationByMessage.set(id, [...(clarificationByMessage.get(id) || []), ...candidates].sort((a, b) => a.ordinal - b.ordinal).slice(0, 10));
     } catch { /* Geçersiz açıklama durumu kullanılmaz. */ }
   }

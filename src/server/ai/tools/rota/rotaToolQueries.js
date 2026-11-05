@@ -355,7 +355,7 @@ ${ASSIGNEE_ROWS}
 export const AI_TOOL_TASK_VISIBILITY_SQL = `/* rota-ai-tool:task-visibility */
 ${SCOPE_PROJECTS}
 ${visibleTasks()}
-  SELECT visible.TaskId, visible.ProjectId FROM #AiTasks visible;
+  SELECT visible.TaskId, visible.ProjectId, visible.AccessLevel, visible.IdentityBase FROM #AiTasks visible;
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**

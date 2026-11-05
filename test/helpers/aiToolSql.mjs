@@ -247,7 +247,7 @@ function taskFacts(db, params) {
 
 function taskVisibility(db, params) {
   const scope = scopeOf(db, params);
-  return [[...scope.visible.values()].map(({ task }) => ({ TaskId: upper(task.TaskId), ProjectId: upper(task.ProjectId) }))];
+  return [[...scope.visible.values()].map(({ task, AccessLevel, IdentityBase }) => ({ TaskId: upper(task.TaskId), ProjectId: upper(task.ProjectId), AccessLevel, IdentityBase }))];
 }
 
 function taskDetail(db, params) {

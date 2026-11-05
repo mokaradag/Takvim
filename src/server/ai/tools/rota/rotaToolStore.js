@@ -101,10 +101,11 @@ export async function readTaskFacts(executor, scope, {
 }
 
 /** Verilen görevlerden şu an görünenler ve güncel projeleri (`taskId → projectId`). */
-export async function readVisibleTasks(executor, scope, taskIds) {
+export async function readVisibleTasks(executor, scope, taskIds, { includeAccess = false } = {}) {
   const request = scoped(executor, scope, { taskIds });
   const [rows = []] = recordsets(await request.query(AI_TOOL_TASK_VISIBILITY_SQL));
-  return new Map(rows.map((row) => [canonicalActualId(row.TaskId), canonicalActualId(row.ProjectId)]));
+  return new Map(rows.map((row) => [canonicalActualId(row.TaskId), includeAccess ? { projectId: canonicalActualId(row.ProjectId),
+    identityBase: Boolean(row.IdentityBase), accessLevel: row.AccessLevel } : canonicalActualId(row.ProjectId)]));
 }
 
 export async function readTaskDetail(executor, scope, taskId) {

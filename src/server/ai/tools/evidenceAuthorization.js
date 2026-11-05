@@ -1,5 +1,7 @@
 import 'server-only';
 import { createHash } from 'node:crypto';
+import { deflateRawSync, inflateRawSync } from 'node:zlib';
+import { TOOL_LIMITS } from './toolLimits.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 
 /**
@@ -56,6 +58,7 @@ export function authorizationFingerprint(auth, scope, { projectIds = null, taskI
  * döner ve kanıt doğrulanamaz sayılır.
  */
 const POPULATION_VERSION = 1;
+const MAX_POPULATION_BYTES = 1500000;
 const NO_PROJECT_KEY = '-';
 
 function packIds(ids) {
@@ -92,6 +95,16 @@ export function encodeAuthorizationPopulation(references = []) {
 
 /** Kalıcı nüfus → `{ taskId, projectId }` dizisi; nüfus eksik ya da bozuksa `null`. */
 export function decodeAuthorizationPopulation(value) {
+  if (value?.v === 2 && value.complete === true) {
+    if (typeof value.deflated !== 'string' || value.deflated.length > 32000 || !/^[A-Za-z0-9_-]+$/.test(value.deflated)) return null;
+    try {
+      const bytes = Buffer.from(value.deflated, 'base64url');
+      if (bytes.toString('base64url') !== value.deflated) return null;
+      const decoded = JSON.parse(inflateRawSync(bytes, { maxOutputLength: MAX_POPULATION_BYTES }).toString('utf8'));
+      if (decoded?.v !== POPULATION_VERSION) return null;
+      value = decoded;
+    } catch { return null; }
+  }
   if (!value || typeof value !== 'object' || value.v !== POPULATION_VERSION || value.complete !== true
     || !value.tasks || typeof value.tasks !== 'object' || Array.isArray(value.tasks)) return null;
   const references = [];
@@ -100,9 +113,55 @@ export function decodeAuthorizationPopulation(value) {
     if (key !== NO_PROJECT_KEY && !projectId) return null;
     const ids = unpackIds(packed);
     if (!ids) return null;
+    if (references.length + ids.length > TOOL_LIMITS.maxAnalyzedTasks) return null;
     for (const taskId of ids) references.push({ taskId, projectId });
   }
   return references;
+}
+
+
+/** Aynı tam nüfusun kayıpsız biçimi; açılmış boyut ve görev sayısı ayrıca sınırlıdır. */
+export function compressAuthorizationPopulation(population) {
+  const text = JSON.stringify(population);
+  if (Buffer.byteLength(text) > MAX_POPULATION_BYTES) return unverifiableAuthorizationPopulation();
+  return { v: 2, complete: true, deflated: deflateRawSync(text).toString('base64url') };
+}
+
+/**
+ * Eski dönemi yeniden üretmeyiz. Yalnızca görev araçlarının tam nüfusu ve
+ * kayıtlı alanları, güncel kayıt/kimlik görünürlüğüyle bağımsız doğrulanabilir.
+ * Diğer araçların ek yetki kuralları mevcut dönem denetiminde kalır.
+ */
+export function savedEvidenceRequirements(entry, auth) {
+  if (!entry.savedPopulation || !/^[a-f0-9]{64}$/.test(entry.authorizationEpoch || '')
+    || !['rota_task_analytics', 'rota_workload_summary', 'rota_task_search', 'rota_task_detail'].includes(entry.tool)) return null;
+  const proof = entry.scopedAuthorization;
+  if (proof != null && (proof.version !== 1 || !/^[a-f0-9]{64}$/.test(proof.epoch || '')
+    || !Array.isArray(proof.projectIds) || proof.projectIds.some(id => !canonicalActualId(id))
+    || proof.taskIds != null && (!Array.isArray(proof.taskIds) || proof.taskIds.some(id => !canonicalActualId(id))))) return null;
+  const payload = JSON.parse(entry.payload || '{}');
+  if (payload.tool !== entry.tool || !Array.isArray(entry.taskReferences)
+    || entry.taskReferences.some(({ taskId, projectId }) => !canonicalActualId(taskId) || !canonicalActualId(projectId))) return null;
+  const projectIds = [...new Set([...entry.taskReferences.map(row => row.projectId),
+    payload.entity?.type === 'project' ? canonicalActualId(payload.entity.id) : null].filter(Boolean))];
+  if (!projectIds.length) return null;
+  const data = payload.data;
+  if (data?.filters?.assignee === 'team' && !auth.isExecutive) return null;
+  if (!data) return payload.dataOmitted === 'size' ? { projectIds, fullProjects: true, identities: true } : null;
+  if (entry.tool === 'rota_task_analytics' && (!data.totals || !data.filters)) return null;
+  if (entry.tool === 'rota_workload_summary' && (!Array.isArray(data.people) || !Number.isSafeInteger(data.openTaskCount))) return null;
+  if (entry.tool === 'rota_task_search' && !Array.isArray(data.tasks)) return null;
+  if (entry.tool === 'rota_task_detail' && !data.task) return null;
+  if (entry.tool === 'rota_task_analytics' && data.groupBy !== 'assignee') return { projectIds, identities: false };
+  if (entry.tool === 'rota_task_search') return { projectIds, identities: true };
+  if (entry.tool === 'rota_task_detail') return { projectIds, identities: true, fullProjects: Boolean(data.task?.dependencies) };
+  // Kişi toplamı da korunur: kesilmiş kişi/grup önizlemesi bütün kimlikleri kanıtlamaz.
+  const people = entry.tool === 'rota_workload_summary' ? data.people?.map(row => row.sicil)
+    : data.groups?.map(row => /^sicil:(\d+)$/.exec(row.key)?.[1]).filter(Boolean);
+  const permitted = new Set([Number(auth.sicil), ...(auth.scopeIdentities || [])]);
+  const identities = !(payload.complete === true && payload.truncated !== true && Array.isArray(people)
+    && people.every(sicil => Number.isSafeInteger(Number(sicil)) && permitted.has(Number(sicil))));
+  return { projectIds, identities };
 }
 
 /**
