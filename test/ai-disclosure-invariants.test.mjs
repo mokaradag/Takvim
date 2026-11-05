@@ -1019,3 +1019,33 @@ test("eski tam nüfuslu iş yükü salt okuma proje hibesiyle de yetkili kalır"
   const hidden = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
   assert.equal(hidden.finishReason, 'not_found');
 });
+
+for (const tool of ['rota_project_detail', 'rota_wbs_inspect', 'rota_baseline_compare', 'rota_dependency_inspect', 'rota_recurrence_inspect', 'rota_data_quality']) {
+  test(`eski proje kanıtı ilgisiz yetki değişiminde tam proje hakkıyla yeniden doğrulanır (${tool})`, async (t) => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, { projectId: PROJECTS.FULL }]] });
+    stack.db.executiveScope = [];
+    const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.equal(answer.content, saved.message.content);
+    stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+    const hidden = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.equal(hidden.finishReason, 'not_found');
+    assert.deepEqual(hidden.evidence, []);
+  });
+}
+
+test("eski proje karşılaştırması görev içermeyen gizlenmiş projeyi de doğrular", async (t) => {
+  const stack = stackFor(t);
+  stack.db.tasks = stack.db.tasks.filter(row => [PROJECTS.FULL, PROJECTS.READ].includes(row.ProjectId));
+  stack.db.projects = stack.db.projects.filter(row => [PROJECTS.FULL, PROJECTS.READ].includes(row.ProjectId));
+  stack.db.projects.find(row => row.ProjectId === PROJECTS.READ).LeadSicil = AYSE;
+  stack.db.tasks = stack.db.tasks.filter(row => row.ProjectId !== PROJECTS.READ);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_portfolio_summary', { limit: 25 }]] });
+  stack.db.executiveScope = [];
+  const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(answer.content, saved.message.content);
+  stack.db.projects.find(row => row.ProjectId === PROJECTS.READ).IsActive = 0;
+  const hidden = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(hidden.finishReason, 'not_found');
+  assert.deepEqual(hidden.evidence, []);
+});

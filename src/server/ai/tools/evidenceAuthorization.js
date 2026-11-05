@@ -137,7 +137,9 @@ export function compressAuthorizationPopulation(population) {
  */
 export function savedEvidenceRequirements(entry, auth) {
   if (!entry.savedPopulation || !/^[a-f0-9]{64}$/.test(entry.authorizationEpoch || '')
-    || !['rota_task_analytics', 'rota_workload_summary', 'rota_task_search', 'rota_task_detail'].includes(entry.tool)) return null;
+    || !['rota_task_analytics', 'rota_workload_summary', 'rota_task_search', 'rota_task_detail',
+      'rota_project_detail', 'rota_project_search', 'rota_portfolio_summary', 'rota_wbs_inspect',
+      'rota_baseline_compare', 'rota_dependency_inspect', 'rota_recurrence_inspect', 'rota_data_quality'].includes(entry.tool)) return null;
   const proof = entry.scopedAuthorization;
   if (proof != null && (proof.version !== 1 || !/^[a-f0-9]{64}$/.test(proof.epoch || '')
     || !Array.isArray(proof.projectIds) || proof.projectIds.some(id => !canonicalActualId(id))
@@ -145,10 +147,19 @@ export function savedEvidenceRequirements(entry, auth) {
   const payload = JSON.parse(entry.payload || '{}');
   if (payload.tool !== entry.tool || !Array.isArray(entry.taskReferences)
     || entry.taskReferences.some(({ taskId, projectId }) => !canonicalActualId(taskId) || !canonicalActualId(projectId))) return null;
-  const projectIds = [...new Set([...entry.taskReferences.map(row => row.projectId),
+  const projectIds = [...new Set([...(proof?.projectIds || []), ...entry.taskReferences.map(row => row.projectId),
     payload.entity?.type === 'project' ? canonicalActualId(payload.entity.id) : null].filter(Boolean))];
-  if (!projectIds.length) return null;
   const data = payload.data;
+  if (['rota_project_search', 'rota_portfolio_summary'].includes(entry.tool) && !proof) {
+    // Görev nüfusu boş projeleri içermez; eski proje toplamı bütün proje kimliklerini de taşımalıdır.
+    if (payload.complete !== true || payload.truncated === true || !Array.isArray(data?.projects)
+      || data.projects.length !== payload.totalCount || data.projects.some(row => !canonicalActualId(row.projectId))) return null;
+    projectIds.push(...data.projects.map(row => row.projectId).filter(id => !projectIds.includes(id)));
+  }
+  if (!projectIds.length) return null;
+  if (!['rota_task_analytics', 'rota_workload_summary', 'rota_task_search', 'rota_task_detail'].includes(entry.tool)) {
+    return { projectIds, fullProjects: true, identities: true };
+  }
   if (data?.filters?.assignee === 'team' && !auth.isExecutive) return null;
   if (!data) return payload.dataOmitted === 'size' ? { projectIds, fullProjects: true, identities: true } : null;
   if (entry.tool === 'rota_task_analytics' && (!data.totals || !data.filters)) return null;
