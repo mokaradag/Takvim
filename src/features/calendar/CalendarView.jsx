@@ -363,7 +363,15 @@ function DateJumpPopover({ anchor, onClose, onJump }) {
         <div className="row" style={{ gap: 6 }}>
           <button className="btn ghost sm" onClick={onClose}>İptal</button>
           <div style={{ flex: 1 }} />
-          <button className="btn primary sm" onClick={() => { onJump(parseDate(val)); }}>
+          <button className="btn primary sm" onClick={() => {
+            const invalid = ref.current?.querySelector('input:invalid');
+            if (invalid) {
+              invalid.reportValidity();
+              invalid.focus();
+              return;
+            }
+            onJump(parseDate(val));
+          }}>
             <Icons.ArrowRight size={12} /> Git
           </button>
         </div>

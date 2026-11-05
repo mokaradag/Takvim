@@ -689,3 +689,84 @@ test('Tarihe git penceresi kendi takvim seçimini ve Escape sırasını korur', 
     view.unmount();
   }
 });
+
+for (const draft of ['31/02/2026', '10/12'])
+  test(`Tarihe git geçersiz ${draft} taslağını önceki değerle uygulamaz ve düzeltmeye izin verir`, (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 10, 5, 12) });
+    const view = mountDom(CalendarScreen, {}, filterState());
+    try {
+      click(button('Tarihe git'));
+      const input = document.querySelector('.col-filter-pop .date-input-shell input');
+      enter(input, draft);
+      click(button('Git'));
+      assert.ok(document.querySelector('.col-filter-pop'), 'Geçersiz taslakta atlama penceresi açık kalmalıdır');
+      assert.equal(input.getAttribute('aria-invalid'), 'true');
+      assert.equal(document.activeElement, input);
+      assert.equal(document.querySelector('[aria-label="Ay"]').value, '10');
+      enter(input, '10/12/2026');
+      click(button('Git'));
+      assert.equal(document.querySelector('.col-filter-pop'), null);
+      assert.equal(document.querySelector('[aria-label="Ay"]').value, '11');
+    } finally {
+      view.unmount();
+    }
+  });
+
+function TypedCalendar({ onCommit }) {
+  const [value, setValue] = useState('2026-09-10');
+  return React.createElement(React.Fragment, null,
+    React.createElement(DateInput, {
+      value, minDate: '2026-09-01', maxDate: '2026-10-31', ariaLabel: 'Yazılan tarih',
+      onChange(next) { onCommit(next); setValue(next); }
+    }),
+    React.createElement('button', null, 'Sonraki alan')
+  );
+}
+
+for (const method of ['enter', 'blur'])
+  test(`Açık tarih seçici ${method === 'enter' ? 'Enter' : 'odak değişimi'} ile işlenen tarihin ayını ve seçimini gösterir`, () => {
+    const changes = [];
+    const view = mountDom(TypedCalendar, { onCommit: (date) => changes.push(date) });
+    try {
+      click(button('Takvimden tarih seç'));
+      const panel = document.querySelector('.date-picker-panel');
+      assert.equal(panel.querySelector('strong').textContent, 'Eylül 2026');
+      const input = document.querySelector('[aria-label="Yazılan tarih"]');
+      click(input);
+      enter(input, '15/10/2026');
+      if (method === 'enter') key('Enter', input);
+      else React.act(() => button('Sonraki alan').focus());
+      assert.ok(panel.isConnected, 'Elle tarih işlenirken açık seçici korunmalıdır');
+      assert.equal(panel.querySelector('strong').textContent, 'Ekim 2026');
+      assert.equal(button('15 Ekim 2026', panel).getAttribute('aria-pressed'), 'true');
+      assert.equal(button('Sonraki ay', panel).disabled, true);
+      assert.deepEqual(changes, ['2026-10-15']);
+    } finally {
+      view.unmount();
+    }
+  });
+
+test('Açık seçici geçersiz veya sınır dışı taslakla ay değiştirmez; geçerli düzeltmeyi gösterir', () => {
+  const changes = [];
+  const view = mountDom(TypedCalendar, { onCommit: (date) => changes.push(date) });
+  try {
+    click(button('Takvimden tarih seç'));
+    const panel = document.querySelector('.date-picker-panel');
+    const input = document.querySelector('[aria-label="Yazılan tarih"]');
+    for (const draft of ['31/02/2026', '01/11/2026']) {
+      click(input);
+      enter(input, draft);
+      key('Enter', input);
+      assert.equal(input.getAttribute('aria-invalid'), 'true');
+      assert.equal(panel.querySelector('strong').textContent, 'Eylül 2026');
+      assert.deepEqual(changes, []);
+    }
+    enter(input, '31/10/2026');
+    key('Enter', input);
+    assert.equal(panel.querySelector('strong').textContent, 'Ekim 2026');
+    assert.equal(button('31 Ekim 2026', panel).getAttribute('aria-pressed'), 'true');
+    assert.deepEqual(changes, ['2026-10-31']);
+  } finally {
+    view.unmount();
+  }
+});

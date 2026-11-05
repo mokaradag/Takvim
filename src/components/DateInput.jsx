@@ -151,6 +151,7 @@ export function DateInput({
 
     setValidationMessage('');
     setDraft(formatEditableDate(iso));
+    setMonth(resolveCalendarMonth(iso, { minDate, maxDate }));
     onChange?.(iso);
   };
 
