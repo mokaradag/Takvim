@@ -7,13 +7,13 @@
  * kayda sığmazsa kayıtlı yanıt yeniden açılışta doğrulanamaz sayılır.
  */
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack, loadAssistantConversation, sendTurn } from './helpers/aiStack.mjs';
 import { AYSE, LEAD, MEHMET, PARTIAL_OTHERS, PROJECTS, TASKS, WBS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { declared } from './helpers/evidenceScenario.mjs';
 
-const { decodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+const { decodeAuthorizationPopulation, encodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
 const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
 
 const done = (response) => response.events.find((event) => event.event === 'done')?.data;
@@ -151,8 +151,8 @@ test("sayılmış fakat listelenmemiş görev kapsamdan çıkınca kayıtlı top
 });
 
 test("sınırlı kayda sığmayan nüfus turda gösterilir; doğrulanmadan yeniden açıklanmaz", async (t) => {
-  const extra = Array.from({ length: 2000 }, (_, index) => ({
-    TaskId: createHash('sha256').update(`büyük-nüfus-${index}`).digest('hex').slice(0, 32).replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5'), ProjectId: PROJECTS.FULL, Title: `Toplu görev ${index + 1}`, Status: 'planned', Priority: 'medium'
+  const extra = Array.from({ length: 1600 }, (_, index) => ({
+    TaskId: `70000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, ProjectId: PROJECTS.FULL, Title: `Toplu görev ${index + 1}`, Status: 'planned', Priority: 'medium'
   }));
   const stack = stackFor(t);
   stack.db.tasks.push(...extra);
@@ -249,58 +249,26 @@ test("kanıt sınırı dışındaki okunmuş bildirim geçmişi okunmamış ve b
   assertPopulation(populationOf(ledger), { includes: [TASKS.OVERDUE, TASKS.DUE_SOON] }, 'rota_notifications');
 });
 
-
-test("sıkıştırılan büyük nüfus bütün görevleri korur ve eski eksik nüfusu güvenilir saymaz", async (t) => {
-  const extra = Array.from({ length: 1600 }, (_, index) => ({
-    TaskId: `72000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, ProjectId: PROJECTS.FULL, Title: `Toplu görev ${index + 1}`, Status: 'planned', Priority: 'medium'
-  }));
-  const stack = stackFor(t);
-  stack.db.tasks.push(...extra);
-  citeProjectTotal(stack);
-  const saved = done(await sendTurn({ turnId: randomUUID(), message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` }));
-  assert.equal(saved.assistantMessage.finishReason, 'stop');
-  const row = stack.db.aiMessageEvidence[0];
-  const stored = JSON.parse(row.EvidenceJson);
-  assert.equal(stored.authorizationPopulation.v, 2);
-  assert.ok(row.EvidenceJson.length <= 32000);
-  assert.equal(decodeAuthorizationPopulation(stored.authorizationPopulation).length, FULL_TASKS.length + extra.length);
-  const reopened = (await loadAssistantConversation(saved.conversation.id)).body.messages.find(message => message.role === 'assistant');
-  assert.equal(reopened.content, saved.assistantMessage.content);
-  stack.db.tasks.find(task => task.TaskId === extra[1500].TaskId).ProjectId = PROJECTS.HIDDEN;
-  const hidden = (await loadAssistantConversation(saved.conversation.id)).body.messages.find(message => message.role === 'assistant');
-  assert.equal(hidden.finishReason, 'not_found');
-  assert.deepEqual(hidden.evidence, []);
-  row.EvidenceJson = JSON.stringify({ ...stored, authorizationPopulation: { v: 1, complete: false } });
-  const legacy = (await loadAssistantConversation(saved.conversation.id)).body.messages.find(message => message.role === 'assistant');
-  assert.equal(legacy.finishReason, 'unavailable');
-  assert.match(legacy.content, /yeniden doğrulanamıyor/);
-});
-
-test("sıkıştırılmış nüfus bozuk akışı iç içe sürümü ve açılmış boyut aşımını reddeder", async () => {
+test("tanınmayan nüfus sürümü, geçerli sıkıştırılmış akış taşısa da doğrulanamaz sayılır", async () => {
   const { deflateRawSync } = await import('node:zlib');
-  for (const text of ['bozuk', JSON.stringify({ v: 2, complete: true, deflated: 'abc' }), 'x'.repeat(1500001)]) {
+  const valid = JSON.stringify(encodeAuthorizationPopulation([{ taskId: TASKS.OVERDUE, projectId: PROJECTS.FULL }]));
+  for (const text of [valid, 'bozuk']) {
     assert.equal(decodeAuthorizationPopulation({ v: 2, complete: true, deflated: deflateRawSync(text).toString('base64url') }), null);
-  }
-  for (const deflated of ['', 'abc=', '!!', 'a'.repeat(32001)]) {
-    assert.equal(decodeAuthorizationPopulation({ v: 2, complete: true, deflated }), null);
+    assert.equal(decodeAuthorizationPopulation({ v: 2, complete: true, deflated: deflateRawSync(text).toString('base64url') }, { countOnly: true }), null);
   }
 });
 
-test("sınıra yakın nüfus kayıpsız açılır; çok büyük nüfus saklama ve görev sınırlarını aşamaz", async (t) => {
-  const { encodeAuthorizationPopulation, compressAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+test("büyük nüfus kayıpsız açılır; görev sayısı sınırını aşan nüfus çözülmez", async () => {
   const references = Array.from({ length: 8000 }, (_, index) => ({
     taskId: `73000000-0000-4000-8000-${String(index).padStart(12, '0')}`, projectId: PROJECTS.FULL
   }));
   const started = performance.now();
-  const packed = compressAuthorizationPopulation(encodeAuthorizationPopulation(references));
-  assert.ok(JSON.stringify(packed).length <= 32000);
-  assert.deepEqual(decodeAuthorizationPopulation(packed), references);
-  assert.equal(decodeAuthorizationPopulation(packed, { countOnly: true }), references.length);
+  assert.deepEqual(decodeAuthorizationPopulation(encodeAuthorizationPopulation(references)), references);
+  assert.equal(decodeAuthorizationPopulation(encodeAuthorizationPopulation(references), { countOnly: true }), references.length);
   references.push(...Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 - references.length }, (_, index) => ({
     taskId: `74000000-0000-4000-8000-${String(index).padStart(12, '0')}`, projectId: PROJECTS.FULL
   })));
   assert.equal(decodeAuthorizationPopulation(encodeAuthorizationPopulation(references)), null);
   assert.equal(decodeAuthorizationPopulation(encodeAuthorizationPopulation(references), { countOnly: true }), null);
-  assert.equal(decodeAuthorizationPopulation(compressAuthorizationPopulation(encodeAuthorizationPopulation(references))), null);
   assert.ok(performance.now() - started < 5000, 'nüfus işlemesi sınırlı sürede bitmeli');
 });

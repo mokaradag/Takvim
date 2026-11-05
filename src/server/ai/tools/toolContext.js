@@ -11,6 +11,7 @@ import { TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { toolSqlGate } from './toolSqlGate.js';
 import { authorizationFingerprint, decodeAuthorizationPopulation, evidenceTaskReferences, savedEvidenceRequirements, scopedEvidenceAuthorization } from './evidenceAuthorization.js';
 import { readProjectSearch, readVisibleTasks } from './rota/rotaToolStore.js';
+import { canonicalActualId } from '../../../domain/identity/actualId.js';
 
 /**
  * Bir Rota AI turunun araç bağlamı.
@@ -102,6 +103,8 @@ export function createToolTurnContext({
       : entry.authorizationEpoch === state.epoch;
   }
 
+  const projectRank = (row) => (row.AccessLevel === 'FULL' ? 3 : row.HasReadGrant ? 2 : 1);
+
   async function revalidateEvidence(entries, signal) {
     // Nüfusu kalıcı kayda sığmayan kanıt güncel yetkiyle doğrulanamaz.
     const eligible = entries.filter((entry) => !entry.unverifiable && state.current && entry.authorizationEpoch);
@@ -118,18 +121,22 @@ export function createToolTurnContext({
       const payload = JSON.parse(entry.payload || '{}');
       const projectIds = [...new Set([...(entry.scopedAuthorization?.projectIds || []), ...(requirements?.projectIds || []),
         payload.entity?.type === 'project' ? payload.entity.id : null].filter(Boolean))];
+      // Kayıtlı erişim düzeyi bilinen proje, güncel düzeyi ondan düşük değilse açılır; düzeyi bilinmeyen proje tam erişim ister.
+      const required = (row) => (requirements?.fullProjects ? 3
+        : requirements?.projectLevels ? requirements.projectLevels.get(canonicalActualId(row.ProjectId)) ?? 3 : 0);
       let valid = true;
       for (let start = 0; start < projectIds.length; start += limits.maxAnalyzedTasks) {
         const projectChunk = projectIds.slice(start, start + limits.maxAnalyzedTasks);
         const projects = await withSql(signal, (executor) => readProjectSearch(executor, state.current.scope,
           { projectIds: projectChunk, text: '', limit: projectChunk.length }), { authorizationOnly: true });
-        if (projects.rows.length !== projectChunk.length || requirements?.fullProjects && projects.rows.some(row => row.AccessLevel !== 'FULL')) { valid = false; break; }
+        if (projects.rows.length !== projectChunk.length || projects.rows.some(row => projectRank(row) < required(row))) { valid = false; break; }
       }
       if (!valid) continue;
       for (let start = 0; start < references.length; start += limits.maxAnalyzedTasks) {
         const chunk = references.slice(start, start + limits.maxAnalyzedTasks);
         const current = await withSql(signal, (executor) => readVisibleTasks(executor, state.current.scope, chunk.map((row) => row.taskId), { includeAccess: Boolean(requirements) }), { authorizationOnly: true });
-        if (requirements?.identities && chunk.some(({ taskId }) => !current.get(taskId)?.identityBase)) { valid = false; break; }
+        if (requirements && chunk.some(({ taskId }) => (requirements.identities || requirements.identityTaskIds?.has(taskId))
+          && !current.get(taskId)?.identityBase)) { valid = false; break; }
         if (!chunk.every(({ taskId, projectId }) => current.has(taskId) && (!projectId || (requirements ? current.get(taskId).projectId : current.get(taskId)) === projectId))) {
           valid = false;
           break;

@@ -100,7 +100,10 @@ export async function readTaskFacts(executor, scope, {
   };
 }
 
-/** Verilen görevlerden şu an görünenler ve güncel projeleri (`taskId → projectId`). */
+/**
+ * Verilen görevlerden şu an görünenler: `taskId → projectId`; `includeAccess`
+ * ile `taskId → { projectId, identityBase, accessLevel }`.
+ */
 export async function readVisibleTasks(executor, scope, taskIds, { includeAccess = false } = {}) {
   const request = scoped(executor, scope, { taskIds });
   const [rows = []] = recordsets(await request.query(AI_TOOL_TASK_VISIBILITY_SQL));

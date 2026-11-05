@@ -509,8 +509,10 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
           } finally { messageDeadline.dispose(); }
         }
         // Parçalı okumalar sırasında yetki değişirse eski bağlamla hiçbir yanıt açılmaz.
+        // Son okuma kendi çağrı bütçesiyle yapılır: döngü bütçesinin dolması doğrulanmış yanıtları gizlemez.
         if (visible.size) {
-          await context.revalidateAuthorization(deadline.signal);
+          const finalDeadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: signal });
+          try { await context.revalidateAuthorization(finalDeadline.signal); } finally { finalDeadline.dispose(); }
           if (context.authorizationEpoch() !== epoch) {
             for (const id of visible.keys()) evidence.unavailableMessages.add(id);
             visible.clear();

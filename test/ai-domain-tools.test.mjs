@@ -6,7 +6,6 @@
  * modelin göndereceği biçimde (JSON metni) verilir.
  */
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import {
@@ -1286,7 +1285,7 @@ test("köken reddi sunucu sözleşme hatasıdır; modelin onaracağı boyut hata
 });
 
 test("devam kapsamı kalıcı ve doğrulanabilir taşıyıcı kullanır", async (t) => {
-  for (const mode of ['filtered', 'payloadless', 'compressed', 'oversize', 'no-carrier']) await t.test(`kip: ${mode}`, async (t) => {
+  for (const mode of ['filtered', 'payloadless', 'oversize', 'no-carrier']) await t.test(`kip: ${mode}`, async (t) => {
     const stack = stackFor(t);
     const first = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL });
     const executor = createToolExecutor({ context: first.context, ledger: first.ledger, signal: new AbortController().signal });
@@ -1297,10 +1296,8 @@ test("devam kapsamı kalıcı ve doğrulanabilir taşıyıcı kullanır", async 
     else if (mode === 'payloadless') entries[0].payload = null;
     else {
       const oversized = Array.from({ length: 1800 }, (_, index) => ({
-        taskId: mode === 'compressed' ? '80000000-0000-4000-8000-' + String(index + 1).padStart(12, '0')
-          : createHash('sha256').update(`görev-${index}`).digest('hex').slice(0, 32).replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5'),
-        projectId: mode === 'compressed' ? PROJECTS.FULL
-          : createHash('sha256').update(`proje-${index}`).digest('hex').slice(0, 32).replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5')
+        taskId: '80000000-0000-4000-8000-' + String(index + 1).padStart(12, '0'),
+        projectId: '90000000-0000-4000-8000-' + String(index + 1).padStart(12, '0')
       }));
       entries[0].taskReferences = oversized;
       if (mode === 'no-carrier') entries[1].taskReferences = oversized;
@@ -1312,9 +1309,8 @@ test("devam kapsamı kalıcı ve doğrulanabilir taşıyıcı kullanır", async 
     for (const row of carriers) {
       assert.deepEqual(row.resultScope, scope);
       assert.ok(decodeAuthorizationPopulation(row.authorizationPopulation), 'doğrulanamayan kanıt devam kapsamı taşıyamaz');
-      if (mode === 'compressed') assert.deepEqual(decodeAuthorizationPopulation(row.authorizationPopulation), entries[0].taskReferences);
     }
-    if (mode !== 'no-carrier') assert.ok(JSON.parse(rows[mode === 'compressed' ? 0 : rows.length - 1].evidenceJson).resultScope);
+    if (mode !== 'no-carrier') assert.ok(JSON.parse(rows.at(-1).evidenceJson).resultScope);
   });
 });
 

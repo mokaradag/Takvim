@@ -1,6 +1,5 @@
 import 'server-only';
 import { createHash } from 'node:crypto';
-import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { TOOL_LIMITS } from './toolLimits.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 
@@ -58,7 +57,6 @@ export function authorizationFingerprint(auth, scope, { projectIds = null, taskI
  * döner ve kanıt doğrulanamaz sayılır.
  */
 const POPULATION_VERSION = 1;
-const MAX_POPULATION_BYTES = 1500000;
 const NO_PROJECT_KEY = '-';
 
 function packIds(ids) {
@@ -96,16 +94,6 @@ export function encodeAuthorizationPopulation(references = []) {
 
 /** Kalıcı nüfus → `{ taskId, projectId }` dizisi; nüfus eksik ya da bozuksa `null`. */
 export function decodeAuthorizationPopulation(value, { countOnly = false } = {}) {
-  if (value?.v === 2 && value.complete === true) {
-    if (typeof value.deflated !== 'string' || value.deflated.length > 32000 || !/^[A-Za-z0-9_-]+$/.test(value.deflated)) return null;
-    try {
-      const bytes = Buffer.from(value.deflated, 'base64url');
-      if (bytes.toString('base64url') !== value.deflated) return null;
-      const decoded = JSON.parse(inflateRawSync(bytes, { maxOutputLength: MAX_POPULATION_BYTES }).toString('utf8'));
-      if (decoded?.v !== POPULATION_VERSION) return null;
-      value = decoded;
-    } catch { return null; }
-  }
   if (!value || typeof value !== 'object' || value.v !== POPULATION_VERSION || value.complete !== true
     || !value.tasks || typeof value.tasks !== 'object' || Array.isArray(value.tasks)) return null;
   const references = [];
@@ -122,12 +110,31 @@ export function decodeAuthorizationPopulation(value, { countOnly = false } = {})
   return countOnly ? count : references;
 }
 
+const PROJECT_ACCESS_RANK = Object.freeze({ PARTIAL: 1, READ: 2, FULL: 3 });
 
-/** Aynı tam nüfusun kayıpsız biçimi; açılmış boyut ve görev sayısı ayrıca sınırlıdır. */
-export function compressAuthorizationPopulation(population) {
-  const text = JSON.stringify(population);
-  if (Buffer.byteLength(text) > MAX_POPULATION_BYTES) return unverifiableAuthorizationPopulation();
-  return { v: 2, complete: true, deflated: deflateRawSync(text).toString('base64url') };
+/**
+ * Kayıtlı görev satırlarında açıklanan kimlikler. Güncel öz/yönetim hakkıyla
+ * açıklanamayan kimlik, görevin güncel kimlik tabanını ister; yalnızca kendi
+ * sorumluluğuyla açılan alanlar (gizli eş sorumlu adı, oluşturan) güncel
+ * sorumlulukla da açılabilir. Biçimi bozuk satır `null` döner (kapalı ret).
+ */
+function savedIdentityTasks(items, auth, permitted) {
+  if (!Array.isArray(items)) return null;
+  const self = Number(auth.sicil);
+  const own = new Set((auth.scopeTaskRights || []).filter((row) => row.reason === 'ASSIGNEE').map((row) => row.taskId));
+  const required = new Set();
+  for (const item of items) {
+    const taskId = canonicalActualId(item?.taskId);
+    const assignees = item?.assignees ?? [];
+    if (!taskId || !Array.isArray(assignees)) return null;
+    // Sorumlusuz bilgisi ve güncel olarak açık olmayan kişi yalnızca kimlik tabanıyla açılır.
+    const disclosed = item.assignment === 'unassigned'
+      || assignees.some((person) => person?.identityHidden !== true && !permitted.has(Number(person?.sicil)));
+    const ownOnly = assignees.some((person) => person?.identityHidden === true)
+      || (item.createdBy != null && Number(item.createdBy.sicil) !== self);
+    if (disclosed || (ownOnly && !own.has(taskId))) required.add(taskId);
+  }
+  return required;
 }
 
 /**
@@ -150,31 +157,48 @@ export function savedEvidenceRequirements(entry, auth) {
   const projectIds = [...new Set([...(proof?.projectIds || []), ...entry.taskReferences.map(row => row.projectId),
     payload.entity?.type === 'project' ? canonicalActualId(payload.entity.id) : null].filter(Boolean))];
   const data = payload.data;
+  const isProjectRow = (row) => row != null && typeof row === 'object' && Boolean(canonicalActualId(row.projectId));
   if (['rota_project_search', 'rota_portfolio_summary'].includes(entry.tool) && !proof) {
     // Görev nüfusu boş projeleri içermez; eski proje toplamı bütün proje kimliklerini de taşımalıdır.
     const projects = entry.tool === 'rota_project_search' ? data?.matches : data?.projects;
     if (payload.complete !== true || payload.truncated === true || !Array.isArray(projects)
-      || projects.length !== payload.totalCount || projects.some(row => !canonicalActualId(row.projectId))) return null;
-    projectIds.push(...projects.map(row => row.projectId).filter(id => !projectIds.includes(id)));
+      || projects.length !== payload.totalCount || !projects.every(isProjectRow)) return null;
+    projectIds.push(...projects.map(row => canonicalActualId(row.projectId)).filter(id => !projectIds.includes(id)));
   }
   if (!projectIds.length) return null;
+  if (entry.tool === 'rota_project_search') {
+    // Canlı arama kısmi projeleri de döndürür: her eşleşme kayıtlı erişim düzeyinden düşük olmayan güncel erişim ister.
+    const matches = Array.isArray(data?.matches) ? data.matches : [];
+    if (!matches.every((row) => isProjectRow(row) && PROJECT_ACCESS_RANK[row.access?.level])) return null;
+    const projectLevels = new Map(matches.map((row) => [canonicalActualId(row.projectId), PROJECT_ACCESS_RANK[row.access.level]]));
+    projectIds.push(...[...projectLevels.keys()].filter((id) => !projectIds.includes(id)));
+    return { projectIds, projectLevels, identities: true };
+  }
   if (!['rota_task_analytics', 'rota_workload_summary', 'rota_task_search', 'rota_task_detail'].includes(entry.tool)) {
     return { projectIds, fullProjects: true, identities: true };
   }
-  if (data?.filters?.assignee === 'team' && !auth.isExecutive) return null;
-  if (!data) return payload.dataOmitted === 'size' ? { projectIds, fullProjects: true, identities: true } : null;
+  // Ekip süzgecinin güncel yönetim düzeyi ve üyeleri kayıttan yeniden kurulamaz; yalnızca birebir dönem eşleşmesi açar.
+  // Boyut nedeniyle verisi çıkarılmış kanıt süzgeçlerini (ekip kapsamı dahil) taşımadığından eşdeğer erişim kanıtlanamaz.
+  if (!data || data.filters?.assignee === 'team') return null;
   if (entry.tool === 'rota_task_analytics' && (!data.totals || !data.filters)) return null;
   if (entry.tool === 'rota_workload_summary' && (!Array.isArray(data.people) || !Number.isSafeInteger(data.openTaskCount))) return null;
   if (entry.tool === 'rota_task_search' && !Array.isArray(data.tasks)) return null;
   if (entry.tool === 'rota_task_detail' && !data.task) return null;
-  if (entry.tool === 'rota_task_analytics' && data.groupBy !== 'assignee') return { projectIds, identities: false };
-  if (entry.tool === 'rota_task_search') return { projectIds, identities: true };
-  if (entry.tool === 'rota_task_detail') return { projectIds, identities: true, fullProjects: Boolean(data.task?.dependencies) };
-  // Kişi toplamı da korunur: kesilmiş kişi/grup önizlemesi bütün kimlikleri kanıtlamaz.
-  const people = entry.tool === 'rota_workload_summary' ? data.people?.map(row => row.sicil)
-    : data.groups?.map(row => /^sicil:(\d+)$/.exec(row.key)?.[1]).filter(Boolean);
   const permitted = new Set([Number(auth.sicil), ...(auth.scopeIdentities || [])]);
-  const identities = !(payload.complete === true && payload.truncated !== true && Array.isArray(people)
+  // Kişi süzgecinin nüfusu kişinin kimliğine dayanır; kimlik güncel olarak açık değilse her görev kimlik tabanı ister.
+  const personSicil = data.filters?.personSicil;
+  const personHidden = personSicil != null && !permitted.has(Number(personSicil));
+  if (entry.tool === 'rota_task_analytics' && data.groupBy !== 'assignee') return { projectIds, identities: personHidden };
+  if (entry.tool === 'rota_task_search' || entry.tool === 'rota_task_detail') {
+    const identityTaskIds = savedIdentityTasks(entry.tool === 'rota_task_search' ? data.tasks : [data.task], auth, permitted);
+    if (!identityTaskIds) return null;
+    return { projectIds, identities: personHidden || data.filters?.assignee === 'unassigned', identityTaskIds,
+      fullProjects: entry.tool === 'rota_task_detail' && Boolean(data.task.dependencies) };
+  }
+  // Kişi toplamı da korunur: kesilmiş kişi/grup önizlemesi bütün kimlikleri kanıtlamaz.
+  const people = entry.tool === 'rota_workload_summary' ? data.people?.map(row => row?.sicil)
+    : data.groups?.map(row => /^sicil:(\d+)$/.exec(row?.key)?.[1]).filter(Boolean);
+  const identities = personHidden || !(payload.complete === true && payload.truncated !== true && Array.isArray(people)
     && people.every(sicil => Number.isSafeInteger(Number(sicil)) && permitted.has(Number(sicil))));
   return { projectIds, identities };
 }

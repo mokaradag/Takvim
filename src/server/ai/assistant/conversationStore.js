@@ -300,7 +300,8 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
       authorizationEpoch = stored.authorizationEpoch ?? null;
       scopedAuthorization = stored.scopedAuthorization ?? null;
       const population = stored.authorizationPopulation;
-      if (population) {
+      // Alanı bulunan fakat bozuk/boş nüfus eski kayıt sayılmaz; doğrulanamaz olarak kapalı kalır.
+      if (Object.hasOwn(stored, 'authorizationPopulation')) {
         // Geçmişin tamamı görev dizilerine açılmaz; tam çözümleme yalnızca doğrulanan kanıtta yapılır.
         unverifiable = decodeAuthorizationPopulation(population, { countOnly: true }) == null;
         savedPopulation = !unverifiable;
