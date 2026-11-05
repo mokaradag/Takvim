@@ -294,15 +294,17 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     let taskReferences = null;
     let unverifiable = false;
     let savedPopulation = false;
+    let authorizationPopulation = null;
     try {
       stored = JSON.parse(row.EvidenceJson || '{}');
       authorizationEpoch = stored.authorizationEpoch ?? null;
       scopedAuthorization = stored.scopedAuthorization ?? null;
       const population = stored.authorizationPopulation;
       if (population) {
-        taskReferences = decodeAuthorizationPopulation(population);
-        unverifiable = taskReferences == null;
+        // Geçmişin tamamı görev dizilerine açılmaz; tam çözümleme yalnızca doğrulanan kanıtta yapılır.
+        unverifiable = decodeAuthorizationPopulation(population, { countOnly: true }) == null;
         savedPopulation = !unverifiable;
+        authorizationPopulation = population;
       } else {
         taskReferences = stored.authorizationReferences ?? null;
         // Nüfus işaretinden önceki kayıt yalnızca yükündeki görevleri taşır.
@@ -311,7 +313,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     } catch { authorizationEpoch = null; }
     epochsByMessage.get(id).push(authorizationEpoch);
     authorizationByMessage.get(id).push({ id: `${id}:${row.Ordinal}`, payload: row.EvidenceJson || '{}',
-      authorizationEpoch, scopedAuthorization, taskReferences, unverifiable, savedPopulation, tool: row.ToolName });
+      authorizationEpoch, scopedAuthorization, taskReferences, unverifiable, savedPopulation, authorizationPopulation, tool: row.ToolName });
     try {
       const scope = taskResultScope(stored.resultScope);
       if (scope && authorizationEpoch && !unverifiable) resultScopeByMessage.set(id, scope);

@@ -65,10 +65,11 @@ function packIds(ids) {
   return Buffer.from(ids.map((id) => id.replace(/-/g, '')).join(''), 'hex').toString('base64url');
 }
 
-function unpackIds(packed) {
+function unpackIds(packed, countOnly = false) {
   if (typeof packed !== 'string' || !/^[A-Za-z0-9_-]*$/.test(packed)) return null;
   const bytes = Buffer.from(packed, 'base64url');
   if (bytes.length % 16 !== 0 || bytes.toString('base64url') !== packed) return null;
+  if (countOnly) return bytes.length / 16;
   const ids = [];
   for (let offset = 0; offset < bytes.length; offset += 16) {
     const hex = bytes.subarray(offset, offset + 16).toString('hex');
@@ -94,7 +95,7 @@ export function encodeAuthorizationPopulation(references = []) {
 }
 
 /** Kalıcı nüfus → `{ taskId, projectId }` dizisi; nüfus eksik ya da bozuksa `null`. */
-export function decodeAuthorizationPopulation(value) {
+export function decodeAuthorizationPopulation(value, { countOnly = false } = {}) {
   if (value?.v === 2 && value.complete === true) {
     if (typeof value.deflated !== 'string' || value.deflated.length > 32000 || !/^[A-Za-z0-9_-]+$/.test(value.deflated)) return null;
     try {
@@ -108,15 +109,17 @@ export function decodeAuthorizationPopulation(value) {
   if (!value || typeof value !== 'object' || value.v !== POPULATION_VERSION || value.complete !== true
     || !value.tasks || typeof value.tasks !== 'object' || Array.isArray(value.tasks)) return null;
   const references = [];
+  let count = 0;
   for (const [key, packed] of Object.entries(value.tasks)) {
     const projectId = key === NO_PROJECT_KEY ? null : canonicalActualId(key);
     if (key !== NO_PROJECT_KEY && !projectId) return null;
-    const ids = unpackIds(packed);
-    if (!ids) return null;
-    if (references.length + ids.length > TOOL_LIMITS.maxAnalyzedTasks) return null;
-    for (const taskId of ids) references.push({ taskId, projectId });
+    const ids = unpackIds(packed, countOnly);
+    if (ids == null) return null;
+    count += countOnly ? ids : ids.length;
+    if (count > TOOL_LIMITS.maxAnalyzedTasks) return null;
+    if (!countOnly) for (const taskId of ids) references.push({ taskId, projectId });
   }
-  return references;
+  return countOnly ? count : references;
 }
 
 

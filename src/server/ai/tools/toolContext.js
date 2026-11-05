@@ -9,7 +9,7 @@ import { buildRotaScope } from './rota/rotaScope.js';
 import { TOOL_LIMITS } from './toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { toolSqlGate } from './toolSqlGate.js';
-import { authorizationFingerprint, evidenceTaskReferences, savedEvidenceRequirements, scopedEvidenceAuthorization } from './evidenceAuthorization.js';
+import { authorizationFingerprint, decodeAuthorizationPopulation, evidenceTaskReferences, savedEvidenceRequirements, scopedEvidenceAuthorization } from './evidenceAuthorization.js';
 import { readProjectSearch, readVisibleTasks } from './rota/rotaToolStore.js';
 
 /**
@@ -106,13 +106,16 @@ export function createToolTurnContext({
     // Nüfusu kalıcı kayda sığmayan kanıt güncel yetkiyle doğrulanamaz.
     const eligible = entries.filter((entry) => !entry.unverifiable && state.current && entry.authorizationEpoch);
     const authorized = new Set();
-    for (const entry of eligible) {
+    for (const saved of eligible) {
       if (signal.aborted) throw signal.reason;
+      const references = saved.authorizationPopulation ? decodeAuthorizationPopulation(saved.authorizationPopulation)
+        : saved.taskReferences || evidenceTaskReferences(JSON.parse(saved.payload || '{}'));
+      if (references == null) continue;
+      const entry = { ...saved, taskReferences: references };
       const exact = isEvidenceAuthorized(entry);
       const requirements = exact ? null : savedEvidenceRequirements(entry, state.current.auth);
       if (!exact && !requirements) continue;
       const payload = JSON.parse(entry.payload || '{}');
-      const references = entry.taskReferences || evidenceTaskReferences(payload);
       const projectIds = [...new Set([...(entry.scopedAuthorization?.projectIds || []), ...(requirements?.projectIds || []),
         payload.entity?.type === 'project' ? payload.entity.id : null].filter(Boolean))];
       let valid = true;
