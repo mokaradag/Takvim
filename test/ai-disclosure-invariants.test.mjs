@@ -1049,3 +1049,15 @@ test("eski proje karşılaştırması görev içermeyen gizlenmiş projeyi de do
   assert.equal(hidden.finishReason, 'not_found');
   assert.deepEqual(hidden.evidence, []);
 });
+
+test("eski proje araması tam eşleşme nüfusunu güncel proje erişimiyle doğrular", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_project_search', { text: 'Radar' }]] });
+  stack.db.executiveScope = [];
+  const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(answer.content, saved.message.content);
+  stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).IsActive = 0;
+  const hidden = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(hidden.finishReason, 'not_found');
+  assert.deepEqual(hidden.evidence, []);
+});

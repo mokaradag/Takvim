@@ -152,9 +152,10 @@ export function savedEvidenceRequirements(entry, auth) {
   const data = payload.data;
   if (['rota_project_search', 'rota_portfolio_summary'].includes(entry.tool) && !proof) {
     // Görev nüfusu boş projeleri içermez; eski proje toplamı bütün proje kimliklerini de taşımalıdır.
-    if (payload.complete !== true || payload.truncated === true || !Array.isArray(data?.projects)
-      || data.projects.length !== payload.totalCount || data.projects.some(row => !canonicalActualId(row.projectId))) return null;
-    projectIds.push(...data.projects.map(row => row.projectId).filter(id => !projectIds.includes(id)));
+    const projects = entry.tool === 'rota_project_search' ? data?.matches : data?.projects;
+    if (payload.complete !== true || payload.truncated === true || !Array.isArray(projects)
+      || projects.length !== payload.totalCount || projects.some(row => !canonicalActualId(row.projectId))) return null;
+    projectIds.push(...projects.map(row => row.projectId).filter(id => !projectIds.includes(id)));
   }
   if (!projectIds.length) return null;
   if (!['rota_task_analytics', 'rota_workload_summary', 'rota_task_search', 'rota_task_detail'].includes(entry.tool)) {
