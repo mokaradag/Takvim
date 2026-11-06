@@ -1514,12 +1514,18 @@ test("kayıtlı tekrarda tam proje kapsamı kısmi görev görünürlüğüne d�
   assertHidden(await savedAnswer(conversationId), saved);
 });
 
-test("okuma düzeyindeki WBS tam katalog beyanı kısmi kataloğa düşürülemez", async (t) => {
+test("okuma WBS kanıtı görev kaynaklı katalog yetkisiyle eski okuma beyanını açıklamaz", async (t) => {
   const stack = stackFor(t);
   const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.READ }]] });
   assert.equal(storedData(stack).catalogVisibility, 'full-catalog');
-  stack.db.taskAssignees.push({ TaskId: TASKS.READ_1, Sicil: AYSE });
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  for (const taskId of [TASKS.READ_1, TASKS.READ_2]) {
+    stack.db.taskAssignees.push({ TaskId: taskId, Sicil: AYSE });
+  }
   stack.db.projectAccess = stack.db.projectAccess.filter(row => row.ProjectId !== PROJECTS.READ);
+  const current = await callRotaTool(stack, AYSE, 'rota_wbs_inspect', { projectId: PROJECTS.READ });
+  assert.equal(current.result.ok, true, JSON.stringify(current.result));
+  assert.equal(current.result.data.catalogVisibility, 'full-catalog', 'güncel görev kapsamı katalog hakkını korumalı');
   assertHidden(await savedAnswer(conversationId), saved);
 });
 

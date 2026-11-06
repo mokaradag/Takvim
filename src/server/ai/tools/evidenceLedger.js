@@ -171,6 +171,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
     persistable(ids, { clarification = null, resultScope = null, analysisContext = null } = {}) {
       const wanted = new Set(ids);
       let scopeStored = false;
+      let deferredScope = null;
       let analysisStored = false;
       const prepared = [];
       const rows = entries
@@ -185,8 +186,14 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
             const candidate = persistedEvidenceJson(entry, payload, clarificationContext, resultScope);
             const stored = JSON.parse(candidate);
             if (stored.resultScope != null && decodeAuthorizationPopulation(stored.authorizationPopulation) !== null) {
-              evidenceJson = candidate;
-              scopeStored = true;
+              if (stored.dataOmitted === JSON.parse(evidenceJson).dataOmitted) {
+                evidenceJson = candidate;
+                scopeStored = true;
+              } else if (!analysisContext && !deferredScope && stored.dataOmitted === 'size'
+                && stored.authorizationPopulation.v === 2) {
+                // Başka kanıtta veri kaybetmeden saklanabilecek kapsam için bu aday bekletilir.
+                deferredScope = { index: prepared.length, evidenceJson: candidate };
+              }
             }
           }
           // Takip analiz bağlamı (Aşama 4E) tek kanıtta, kanıtın kendi kalıcı biçimini değiştirmeden saklanır.
@@ -217,6 +224,11 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
           prepared.push({ entry, payload, clarificationContext, row });
           return row;
         });
+      // Veri kaybı gerektirmeyen bütün kanıtlar denendikten sonra sıkıştırılmış aday kullanılır.
+      if (!scopeStored && deferredScope) {
+        prepared[deferredScope.index].row.evidenceJson = deferredScope.evidenceJson;
+        scopeStored = true;
+      }
       // Küçük takip bağlamı, büyük kanıtın kendi kalıcı biçimi uğruna sessizce düşmez: hiçbir kanıta biçimi değişmeden
       // sığmadıysa yetki nüfusu korunarak ilk yetkili kanıtın sıkıştırılmış biçimine yazılır (yeniden açılışta veri
       // gösterilmeyen kanıt; yetki ve takip yine güncel yetkiyle doğrulanır).

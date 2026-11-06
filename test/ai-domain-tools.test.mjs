@@ -20,7 +20,7 @@ const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
 const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
 const { createToolExecutor } = await import('../src/server/ai/tools/toolExecutor.js');
 const { createEvidenceLedger } = await import('../src/server/ai/tools/evidenceLedger.js');
-const { decodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+const { decodeAuthorizationPopulation, PROJECT_ACCESS_RANK, savedEvidenceRequirements } = await import('../src/server/ai/tools/evidenceAuthorization.js');
 
 function stackFor(t, overrides = {}, sicil = AYSE) {
   return createAiStack(t, { sicil, seed: rotaToolSeed(overrides) });
@@ -1422,4 +1422,21 @@ test('109 takip: yetki sınırı çalışan sayısına uygulanır ve bütün kur
   const overflow = await callRotaTool(stack, AYSE, 'rota_task_analytics', {}, { limits });
   assert.equal(overflow.result.ok, false);
   assert.equal(overflow.result.error.code, 'RESULT_TOO_LARGE', 'çalışan sınırı gerçekten aşıldığında erişim kapalı biçimde reddedilir');
+});
+
+test("sistem yöneticisinin boş sayımlı tam kapsamı yalnız güncel yönetici yetkisiyle doğrulanır", async (t) => {
+  const stack = stackFor(t, {}, ADMIN);
+  for (const tool of ['rota_recurrence_inspect', 'rota_data_quality']) {
+    const { result, ledger } = await callRotaTool(stack, ADMIN, tool, {});
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(result.scope.projects, { full: 0, read: 0, partial: 0 });
+    const [saved] = ledger.authorizationEntries();
+    assert.ok(saved, 'araç kanıtı kaydedilmeli');
+    const entry = { ...saved, savedPopulation: true };
+    const current = savedEvidenceRequirements(entry, { sicil: ADMIN, isSystemAdmin: true });
+    assert.ok(current, 'güncel yönetici kapsamı yeniden doğrulanmalı');
+    assert.equal(current.projectLevels.get(PROJECTS.FULL), PROJECT_ACCESS_RANK.FULL);
+    assert.equal(savedEvidenceRequirements(entry, { sicil: ADMIN, isSystemAdmin: false }), null,
+      'yönetici yetkisi kaldırılınca boş kapsam tam erişim kanıtı olamaz');
+  }
 });

@@ -208,12 +208,16 @@ function disclosedProjectLevels(projectIds, rows, levelOf) {
  * tek kaydedilmediğinde en yüksek düzey her ilgili projeden istenir; güvenli
  * biçimde kanıtlanamayan eski veya bozuk kapsam yeniden açıklanmaz.
  */
-function savedTaskScopeRank(scope) {
+function savedTaskScopeRank(scope, auth) {
   const levels = scope?.projects;
   if (!levels || !['full', 'read', 'partial'].every(key => Number.isSafeInteger(levels[key]) && levels[key] >= 0)) return null;
   const complete = levels.partial === 0;
-  if (levels.full + levels.read + levels.partial === 0 || scope.completeProjectView !== complete
-    || scope.kind !== (complete ? 'complete-projects' : 'authorized-task-subset')) return null;
+  if (levels.full + levels.read + levels.partial === 0) {
+    // Sistem yöneticisinin filtresiz kapsamı proje sayısı tutmaz; tam yetkisi güncel olmalıdır.
+    return auth?.isSystemAdmin === true && complete && scope.completeProjectView === true
+      && scope.kind === 'complete-projects' ? PROJECT_ACCESS_RANK.FULL : null;
+  }
+  if (scope.completeProjectView !== complete || scope.kind !== (complete ? 'complete-projects' : 'authorized-task-subset')) return null;
   return levels.full > 0 ? PROJECT_ACCESS_RANK.FULL
     : levels.read > 0 ? PROJECT_ACCESS_RANK.READ : PROJECT_ACCESS_RANK.PARTIAL;
 }
@@ -345,7 +349,7 @@ export function savedEvidenceRequirements(entry, auth) {
     return { projectIds, projectLevels, identities: false };
   }
   const savedScopeRank = ['rota_recurrence_inspect', 'rota_wbs_inspect', 'rota_data_quality'].includes(entry.tool)
-    ? savedTaskScopeRank(payload.scope) : null;
+    ? savedTaskScopeRank(payload.scope, auth) : null;
   if (['rota_recurrence_inspect', 'rota_wbs_inspect', 'rota_data_quality'].includes(entry.tool) && savedScopeRank == null) return null;
   if (entry.tool === 'rota_recurrence_inspect') {
     const listing = Array.isArray(data?.series) && data?.filters && typeof data.filters === 'object';
