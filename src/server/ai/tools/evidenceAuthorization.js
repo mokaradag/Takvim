@@ -203,6 +203,21 @@ function disclosedProjectLevels(projectIds, rows, levelOf) {
   return levels;
 }
 
+/**
+ * Kayıtlı görev kapsamının açıkladığı düzey. Farklı projelerin düzeyleri tek
+ * tek kaydedilmediğinde en yüksek düzey her ilgili projeden istenir; güvenli
+ * biçimde kanıtlanamayan eski veya bozuk kapsam yeniden açıklanmaz.
+ */
+function savedTaskScopeRank(scope) {
+  const levels = scope?.projects;
+  if (!levels || !['full', 'read', 'partial'].every(key => Number.isSafeInteger(levels[key]) && levels[key] >= 0)) return null;
+  const complete = levels.partial === 0;
+  if (levels.full + levels.read + levels.partial === 0 || scope.completeProjectView !== complete
+    || scope.kind !== (complete ? 'complete-projects' : 'authorized-task-subset')) return null;
+  return levels.full > 0 ? PROJECT_ACCESS_RANK.FULL
+    : levels.read > 0 ? PROJECT_ACCESS_RANK.READ : PROJECT_ACCESS_RANK.PARTIAL;
+}
+
 /** Proje künyesinin açıkladığı alanların canlı araçtaki en düşük erişimi; belirlenemezse tam erişim. */
 function projectDetailRank(data, projectId) {
   const project = data?.project;
@@ -329,6 +344,9 @@ export function savedEvidenceRequirements(entry, auth) {
     projectLevels.set(projectId, projectDetailRank(data, projectId));
     return { projectIds, projectLevels, identities: false };
   }
+  const savedScopeRank = ['rota_recurrence_inspect', 'rota_wbs_inspect', 'rota_data_quality'].includes(entry.tool)
+    ? savedTaskScopeRank(payload.scope) : null;
+  if (['rota_recurrence_inspect', 'rota_wbs_inspect', 'rota_data_quality'].includes(entry.tool) && savedScopeRank == null) return null;
   if (entry.tool === 'rota_recurrence_inspect') {
     const listing = Array.isArray(data?.series) && data?.filters && typeof data.filters === 'object';
     const single = data?.series && !Array.isArray(data.series) && typeof data.series === 'object';
@@ -337,7 +355,7 @@ export function savedEvidenceRequirements(entry, auth) {
     if (single || nonRecurring) {
       if (payload.entity?.type !== 'task' || !entry.taskReferences.some(row => row.taskId === canonicalActualId(payload.entity.id))) return null;
     }
-    return { projectIds, projectLevels: new Map(projectIds.map(id => [id, PROJECT_ACCESS_RANK.PARTIAL])), identities: false };
+    return { projectIds, projectLevels: new Map(projectIds.map(id => [id, savedScopeRank])), identities: false };
   }
   if (entry.tool === 'rota_wbs_inspect') {
     const projectId = canonicalActualId(payload.entity?.id);
@@ -354,17 +372,17 @@ export function savedEvidenceRequirements(entry, auth) {
         wbsAncestorNodes.push({ id, parentId });
       }
     }
-    return { projectIds, projectLevels: new Map([[projectId, catalog ? PROJECT_ACCESS_RANK.CATALOG : PROJECT_ACCESS_RANK.PARTIAL]]),
+    return { projectIds, projectLevels: new Map([[projectId, Math.max(savedScopeRank, catalog ? PROJECT_ACCESS_RANK.CATALOG : PROJECT_ACCESS_RANK.PARTIAL)]]),
       identities: false, ...(!catalog ? { wbsAncestorNodes, wbsProjectId: projectId } : {}) };
   }
   if (entry.tool === 'rota_data_quality') {
     if (!data || !Array.isArray(data.checks) || !data.filters || typeof data.filters !== 'object'
       || !Number.isSafeInteger(payload.totalCount) || payload.totalCount !== entry.taskReferences.length
-      || !Number.isSafeInteger(data.openTaskCount)
+      || !Number.isSafeInteger(data.openTaskCount) || data.openTaskCount < 0 || data.openTaskCount > payload.totalCount
       || !['assignee', 'unresolvedAssignee'].every(id => data.checks.some(row => row?.id === id && Number.isSafeInteger(row.count) && row.count >= 0))
       || data.filters.projectId != null && !projectIds.includes(canonicalActualId(data.filters.projectId))) return null;
     // Sorumlusuz ve çözülemeyen kişi sayılarının sıfır olması da kimlik sınıflandırmasını açıklar.
-    return { projectIds, projectLevels: new Map(projectIds.map(id => [id, PROJECT_ACCESS_RANK.PARTIAL])), identities: true };
+    return { projectIds, projectLevels: new Map(projectIds.map(id => [id, savedScopeRank])), identities: true };
   }
   if (!['rota_task_analytics', 'rota_workload_summary', 'rota_task_search', 'rota_task_detail'].includes(entry.tool)) {
     return { projectIds, fullProjects: true, identities: true };

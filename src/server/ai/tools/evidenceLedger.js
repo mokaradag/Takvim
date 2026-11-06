@@ -184,8 +184,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
           if (resultScope && !scopeStored && entry.authorizationEpoch) {
             const candidate = persistedEvidenceJson(entry, payload, clarificationContext, resultScope);
             const stored = JSON.parse(candidate);
-            if (stored.dataOmitted === JSON.parse(evidenceJson).dataOmitted
-              && decodeAuthorizationPopulation(stored.authorizationPopulation) !== null) {
+            if (stored.resultScope != null && decodeAuthorizationPopulation(stored.authorizationPopulation) !== null) {
               evidenceJson = candidate;
               scopeStored = true;
             }

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack, loadAssistantConversation, sendTurn } from './helpers/aiStack.mjs';
-import { AYSE, LEAD, MEHMET, PARTIAL_OTHERS, PROJECTS, TASKS, WBS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { ALI_1, AYSE, LEAD, MEHMET, PARTIAL_OTHERS, PROJECTS, TASKS, WBS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { declared } from './helpers/evidenceScenario.mjs';
 
 const { compressAuthorizationPopulation, decodeAuthorizationPopulation, encodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
@@ -296,7 +296,8 @@ test("v1 sınırını aşan 1600 sıralı görevli nüfus sıkıştırılmış b
   const reopened = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
   assert.equal(reopened.content, saved.assistantMessage.content);
   assert.deepEqual(reopened.evidence, saved.assistantMessage.evidence);
-  stack.db.executiveScope.push({ ManagerSicil: AYSE, EmployeeSicil: MEHMET });
+  assert.ok(stack.db.taskAssignees.every(row => row.Sicil !== ALI_1), 'yönetim kapsamına giren kişinin kayıtlı görevlerde katkısı olmamalı');
+  stack.db.executiveScope.push({ ManagerSicil: AYSE, EmployeeSicil: ALI_1 });
   const changed = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
   assert.equal(changed.content, saved.assistantMessage.content, 'ilgisiz yetki değişikliğinde tam yük doğrulanabilmeli');
   stack.db.tasks.find((task) => task.TaskId === extra[1200].TaskId).ProjectId = PROJECTS.HIDDEN;
@@ -359,4 +360,30 @@ test("bozuk sıkıştırılmış nüfus doğrulanamaz sayılır", async () => {
     assert.equal(decodeAuthorizationPopulation(value), null, name);
     assert.equal(decodeAuthorizationPopulation(value, { countOnly: true }), null, name);
   }
+});
+
+test("sıkıştırılmış kanıt sınırda veri çıkarılsa bile takip kapsamını saklar", async (t) => {
+  const extra = Array.from({ length: 1600 }, (_, index) => ({
+    TaskId: `72000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    ProjectId: PROJECTS.FULL, Title: `Toplu görev ${index + 1}`, Status: 'planned', Priority: 'medium'
+  }));
+  const stack = stackFor(t);
+  stack.db.tasks.push(...extra);
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL });
+  const [original] = ledger.payloads();
+  assert.ok(original, 'kanıt yükü hazırlanmalı');
+  const payload = JSON.parse(original.payload);
+  const initial = JSON.parse(ledger.persistable(ledger.ids())[0].evidenceJson);
+  assert.equal(initial.authorizationPopulation.v, 2);
+  const initialSize = ledger.persistable(ledger.ids())[0].evidenceJson.length;
+  const padding = Math.max(0, 31970 - initialSize);
+  ledger.attachPayload(original.id, JSON.stringify({ ...payload, data: { ...payload.data, padding: 'x'.repeat(padding) } }));
+  const base = JSON.parse(ledger.persistable(ledger.ids())[0].evidenceJson);
+  assert.notEqual(base.data, null, 'başlangıç yükü kayıpsız sığmalı');
+  const resultScope = { selected: 'görevler', explanation: 'x'.repeat(200) };
+  const scoped = JSON.parse(ledger.persistable(ledger.ids(), { resultScope })[0].evidenceJson);
+  assert.equal(scoped.authorizationPopulation.v, 2);
+  assert.deepEqual(scoped.resultScope, resultScope, 'sığan bağlam veri çıkarılarak saklanmalı');
+  assert.equal(scoped.dataOmitted, 'size', 'bağlam için gereken veri çıkarma açıkça kaydedilmeli');
+  assert.deepEqual(decodeAuthorizationPopulation(scoped.authorizationPopulation), decodeAuthorizationPopulation(base.authorizationPopulation));
 });

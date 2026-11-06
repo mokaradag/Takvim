@@ -136,6 +136,7 @@ export function createToolTurnContext({
   async function revalidateEvidence(entries, signal) {
     // Nüfusu kalıcı kayda sığmayan kanıt güncel yetkiyle doğrulanamaz.
     const authorized = new Set();
+    const wbsByProject = new Map();
     for (const saved of entries) {
       if (signal.aborted) throw signal.reason;
       const prepared = preparedEvidence(saved);
@@ -162,12 +163,16 @@ export function createToolTurnContext({
       }
       if (valid && requirements?.wbsAncestorNodes) {
         // Yönetim kapsamındaki WBS ata düğümleri yalnızca güncel ağaçta görünürlerse yeniden açılır.
-        const result = await withSql(signal, (executor) => readWbs(executor, state.current.scope, {
-          projectId: requirements.wbsProjectId, today, maxRows: limits.maxAnalyzedTasks
-        }), { authorizationOnly: true });
-        const nodes = new Map(result.nodes.map(row => [canonicalActualId(row.WbsId), row]));
-        valid = !result.truncated && requirements.wbsAncestorNodes.every(({ id, parentId }) => {
-          const row = nodes.get(id);
+        let nodes = wbsByProject.get(requirements.wbsProjectId);
+        if (!nodes) {
+          const result = await withSql(signal, (executor) => readWbs(executor, state.current.scope, {
+            projectId: requirements.wbsProjectId, today, maxRows: limits.maxAnalyzedTasks
+          }), { authorizationOnly: true });
+          nodes = { truncated: result.truncated, byId: new Map(result.nodes.map(row => [canonicalActualId(row.WbsId), row])) };
+          wbsByProject.set(requirements.wbsProjectId, nodes);
+        }
+        valid = !nodes.truncated && requirements.wbsAncestorNodes.every(({ id, parentId }) => {
+          const row = nodes.byId.get(id);
           return row && (row.ParentWbsId == null ? null : canonicalActualId(row.ParentWbsId)) === parentId;
         });
       }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { aiRequest, conversationRoute, createAiStack, loadAssistantConversation, readJson, sendTurn } from './helpers/aiStack.mjs';
-import { ALI_1, AYSE, LEAD, MEHMET, PROJECTS, TASKS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { ALI_1, AYSE, LEAD, MEHMET, PROJECTS, TASKS, WBS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
 
 const { NON_ENUMERATING_FAILURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
@@ -1393,19 +1393,19 @@ test("doğrulamadan sonra gizli projeye taşınan görev aynı yetki dönemiyle 
   const stack = stackFor(t);
   const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'status' }]] });
   assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
-  let visibilityRead = false;
+  let visibilityReads = 0;
   let moved = false;
   stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
-    if (sql.startsWith('/* rota-ai-tool:task-visibility */')) visibilityRead = true;
-    // İlk görünürlük okumasından sonra, son yetki okumasında: kullanıcının hiçbir yetki satırı değişmez.
-    else if (visibilityRead && !moved && sql.includes('AS IsExecutive;')) {
+    // İlk görünürlük doğrulaması geçildikten sonra, açıklama öncesi son görev okumasında taşınır.
+    if (sql.startsWith('/* rota-ai-tool:task-visibility */') && ++visibilityReads === 2) {
       moved = true;
       stack.db.tasks.find(row => row.TaskId === TASKS.DONE).ProjectId = PROJECTS.HIDDEN;
     }
     return false;
   } };
   const answer = await savedAnswer(conversationId);
-  assert.equal(moved, true, 'taşıma ilk görünürlük okumasından sonra ve son denetimden önce yapılmalı');
+  assert.equal(visibilityReads, 2, 'son görev denetimi çalışmalı');
+  assert.equal(moved, true, 'görev, son görev okuması başlarken taşınmalı');
   assertHidden(answer, saved);
 });
 
@@ -1505,4 +1505,51 @@ test("kısmi veri kalitesi kimlik tabanı kaybolunca açıklanmaz", async (t) =>
   assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
   stack.db.tasks.find(row => row.TaskId === TASKS.PARTIAL_OWN).CreatedBySicil = null;
   assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("kayıtlı tekrarda tam proje kapsamı kısmi görev görünürlüğüne düşürülemez", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_recurrence_inspect', { projectId: PROJECTS.FULL }]] });
+  narrowFullProjectToAssignments(stack, fullTaskIds(stack));
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("okuma düzeyindeki WBS tam katalog beyanı kısmi kataloğa düşürülemez", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.READ }]] });
+  assert.equal(storedData(stack).catalogVisibility, 'full-catalog');
+  stack.db.taskAssignees.push({ TaskId: TASKS.READ_1, Sicil: AYSE });
+  stack.db.projectAccess = stack.db.projectAccess.filter(row => row.ProjectId !== PROJECTS.READ);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+for (const value of [-1, 99999]) {
+  test(`eski veri kalitesinde geçersiz açık görev sayısı erişim kanıtı olamaz (${value})`, async (t) => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_data_quality', { projectId: PROJECTS.READ }]] });
+    const row = stack.db.aiMessageEvidence[0];
+    const stored = JSON.parse(row.EvidenceJson);
+    stored.data.openTaskCount = value;
+    row.EvidenceJson = JSON.stringify(stored);
+    unrelatedManagementChange(stack);
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+test("aynı projenin iki ata zinciri kanıtı tek sınırlı WBS okuması paylaşır", async (t) => {
+  const stack = stackFor(t);
+  const first = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.TEAM, depth: 4 }]],
+    content: 'İlk ağaç sonucu. 【R1】' });
+  const second = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.TEAM, depth: 4 }]],
+    content: 'İkinci ağaç sonucu. 【R1】', conversationId: first.conversationId });
+  unrelatedManagementChange(stack);
+  let reads = 0;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (sql.startsWith('/* rota-ai-tool:wbs */')) reads += 1;
+    return false;
+  } };
+  const messages = (await loadAssistantConversation(first.conversationId)).body.messages.filter(message => message.role === 'assistant');
+  assert.equal(reads, 1, 'aynı proje iki kez okunmamalı');
+  assert.equal(messages.find(message => message.id === first.saved.message.id).content, first.saved.message.content);
+  assert.equal(messages.find(message => message.id === second.saved.message.id).content, second.saved.message.content);
 });
