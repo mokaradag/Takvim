@@ -512,6 +512,8 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
         // Son görev denetimi ileti başına sınırlıdır; tek iletinin süre aşımı diğerlerini gizlemez.
         if (visible.size) {
           const recheckDeadline = createAiDeadline({ timeoutMs: context.limits.maxCumulativeSqlMs, parentSignal: signal });
+          // Son açıklama sınırındaki başarılı okumalar yalnızca bu istek içinde paylaşılır.
+          const recheckReuse = { tasks: new Map(), wbs: new Map() };
           try {
             for (const id of [...visible.keys()]) {
               if (signal?.aborted) throw signal.reason;
@@ -524,7 +526,7 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
               try {
                 // Değişmeyen dönem görev→proje ilişkisini kanıtlamaz; katkı görevleri yeniden okunur.
                 const entries = evidence.authorizationByMessage.get(id);
-                const still = await context.recheckEvidenceTasks(entries, messageDeadline.signal);
+                const still = await context.recheckEvidenceTasks(entries, messageDeadline.signal, recheckReuse);
                 if (!entries.every((entry) => still.has(entry))) visible.delete(id);
               } catch (error) {
                 if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;

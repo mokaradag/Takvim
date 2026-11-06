@@ -10,7 +10,7 @@ import { TOOL_LIMITS } from './toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { toolSqlGate } from './toolSqlGate.js';
 import { authorizationFingerprint, currentProjectRank, decodeAuthorizationPopulation, evidenceTaskReferences, PROJECT_ACCESS_RANK, savedEvidenceRequirements, scopedEvidenceAuthorization } from './evidenceAuthorization.js';
-import { readProjectSearch, readVisibleTasks, readWbs, readWbsSelector } from './rota/rotaToolStore.js';
+import { readProjectSearch, readVisibleTasks, readWbs } from './rota/rotaToolStore.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 
 /**
@@ -196,7 +196,7 @@ export function createToolTurnContext({
    * parçalarla bir kez okunur (görev başına sorgu yoktur); tutarsız ya da
    * doğrulanamayan kanıt düşer. Okuma hatası çağırana iletilir (kapalı ret).
    */
-  async function recheckEvidenceTasks(entries, signal) {
+  async function recheckEvidenceTasks(entries, signal, reuse = null) {
     const expected = new Map();
     const wbsChecks = new Map();
     const wbsSelectors = new Map();
@@ -233,31 +233,55 @@ export function createToolTurnContext({
         }
       }
     }
-    const tasks = [...expected.values()];
-    for (let start = 0; start < tasks.length; start += limits.maxAnalyzedTasks) {
-      const chunk = tasks.slice(start, start + limits.maxAnalyzedTasks);
-      const current = await withSql(signal, (executor) => readVisibleTasks(executor, state.current.scope, chunk.map((row) => row.taskId)), { authorizationOnly: true });
-      for (const task of chunk) {
-        for (const obligation of task.obligations) {
-          if (!taskStillValid(current, { taskId: task.taskId, projectId: obligation.projectId }, obligation.identity)) failed.add(obligation.entry);
-        }
+    // Aynı son doğrulama aşamasında ortak görevleri tekrar okumadan denetle.
+    const observed = new Map();
+    const missing = [];
+    for (const task of expected.values()) {
+      if (reuse?.tasks?.has(task.taskId)) observed.set(task.taskId, reuse.tasks.get(task.taskId));
+      else missing.push(task.taskId);
+    }
+    for (let start = 0; start < missing.length; start += limits.maxAnalyzedTasks) {
+      const chunk = missing.slice(start, start + limits.maxAnalyzedTasks);
+      const current = await withSql(signal, (executor) => readVisibleTasks(executor, state.current.scope, chunk), { authorizationOnly: true });
+      for (const taskId of chunk) {
+        const row = current.get(taskId) ?? null;
+        observed.set(taskId, row);
+        if (reuse?.tasks && reuse.tasks.size < limits.maxAnalyzedTasks) reuse.tasks.set(taskId, row);
       }
     }
-    // Görev aynı projede başka WBS düğümüne taşınmışsa yetki dönemi değişmeyebilir.
-    // Son ata denetimi ilk doğrulamadaki önbelleği kullanmaz; proje başına tek sorgudur.
-    for (const [projectId, checks] of wbsChecks) {
-      if (checks.every(({ entry }) => failed.has(entry))) continue;
-      const result = await withSql(signal, (executor) => readWbs(executor, state.current.scope, {
-        projectId, today, maxRows: limits.maxAnalyzedTasks
-      }), { authorizationOnly: true });
-      const current = wbsNodes(result);
-      for (const { entry, requirements } of checks) if (!wbsStillValid(current, requirements)) failed.add(entry);
+    for (const task of expected.values()) {
+      for (const obligation of task.obligations) {
+        if (!taskStillValid(observed, { taskId: task.taskId, projectId: obligation.projectId }, obligation.identity)) failed.add(obligation.entry);
+      }
     }
-    for (const { projectId, wbsId, entries: owners } of wbsSelectors.values()) {
+    // Ata zinciri ve WBS seçicileri aynı projenin güncel yetkili ağacını paylaşır.
+    // Kesilmiş ağaç bir düğümün yokluğunu kanıtlayamayacağından kapalı kalır.
+    const selectorsByProject = new Map();
+    for (const selector of wbsSelectors.values()) {
+      if (!selectorsByProject.has(selector.projectId)) selectorsByProject.set(selector.projectId, []);
+      selectorsByProject.get(selector.projectId).push(selector);
+    }
+    const projects = new Set([...wbsChecks.keys(), ...selectorsByProject.keys()]);
+    for (const projectId of projects) {
+      const checks = wbsChecks.get(projectId) || [];
+      const selectors = selectorsByProject.get(projectId) || [];
+      const owners = [...checks.map(({ entry }) => entry), ...selectors.flatMap(({ entries }) => entries)];
       if (owners.every((entry) => failed.has(entry))) continue;
-      const node = await withSql(signal, (executor) => readWbsSelector(executor, state.current.scope, { projectId, wbsId }), { authorizationOnly: true });
-      if (canonicalActualId(node?.WbsId) !== wbsId || canonicalActualId(node?.ProjectId) !== projectId) {
-        for (const entry of owners) failed.add(entry);
+      let current = reuse?.wbs?.get(projectId);
+      if (!current) {
+        const result = await withSql(signal, (executor) => readWbs(executor, state.current.scope, {
+          projectId, today, maxRows: limits.maxAnalyzedTasks
+        }), { authorizationOnly: true });
+        current = wbsNodes(result);
+        if (reuse?.wbs && reuse.wbs.size < limits.maxToolRounds * 2) reuse.wbs.set(projectId, current);
+      }
+      for (const { entry, requirements } of checks) {
+        if (!failed.has(entry) && !wbsStillValid(current, requirements)) failed.add(entry);
+      }
+      for (const { wbsId, entries: selectorOwners } of selectors) {
+        if (current.truncated || !current.byId.has(wbsId)) {
+          for (const entry of selectorOwners) failed.add(entry);
+        }
       }
     }
     return new Set(entries.filter((entry) => !failed.has(entry)));

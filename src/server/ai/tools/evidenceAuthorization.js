@@ -420,9 +420,12 @@ export function savedEvidenceRequirements(entry, auth) {
   }
   // İş yükünün sorumlusuz sayısı, boş kişi listesinde de kimlik tabanına dayanır.
   if (!data.people.every((row) => row && typeof row === 'object' && Number.isSafeInteger(Number(row.sicil)))
-    || !Number.isSafeInteger(data.unassignedOpenTasks) || data.unassignedOpenTasks < 0) return null;
+    || !Number.isSafeInteger(data.unassignedOpenTasks) || data.unassignedOpenTasks < 0
+    || !Number.isSafeInteger(data.unrepresentedOpenTasks) || data.unrepresentedOpenTasks < 0
+    || typeof data.populationComplete !== 'boolean') return null;
   const peopleHidden = data.people.some((row) => !permitted.has(Number(row.sicil)));
-  return { projectIds, identities: personHidden || truncated || peopleHidden || data.unassignedOpenTasks > 0 };
+  // Tam kişi kapsaması, sıfır sorumlusuz görevde de bütün katkı görevlerinin güncel kimlik tabanını ister.
+  return { projectIds, identities: personHidden || truncated || peopleHidden || data.unassignedOpenTasks > 0 || data.populationComplete };
 }
 
 /**

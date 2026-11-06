@@ -1603,6 +1603,61 @@ test("aynı projenin iki ata zinciri kanıtı tek sınırlı WBS okuması payla�
   assert.equal(messages.find(message => message.id === second.saved.message.id).content, second.saved.message.content);
 });
 
+test("son görev denetimi ayrı iletilerdeki ortak görevi tek kez okur", async (t) => {
+  const stack = stackFor(t);
+  const first = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]],
+    content: 'İlk ortak görev. 【R1】' });
+  const second = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]],
+    content: 'İkinci ortak görev. 【R1】', conversationId: first.conversationId });
+  unrelatedProjectGrant(stack);
+  let reads = 0;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (sql.startsWith('/* rota-ai-tool:task-visibility */')) reads += 1;
+    return false;
+  } };
+  const messages = (await loadAssistantConversation(first.conversationId)).body.messages.filter(row => row.role === 'assistant');
+  assert.equal(reads, 3, 'iki ilk doğrulama ve ortak görev için tek son okuma yapılmalı');
+  assert.equal(messages.find(row => row.id === first.saved.message.id).content, first.saved.message.content);
+  assert.equal(messages.find(row => row.id === second.saved.message.id).content, second.saved.message.content);
+});
+
+test("aynı projedeki farklı WBS seçicileri son sınırda bir ağaç okuması paylaşır", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [
+    ['rota_task_search', { wbsId: WBS.FULL_DESIGN }],
+    ['rota_task_search', { wbsId: WBS.FULL_DETAIL }]
+  ] });
+  unrelatedProjectGrant(stack);
+  let reads = 0;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (sql.startsWith('/* rota-ai-tool:wbs */')) reads += 1;
+    return false;
+  } };
+  const answer = await savedAnswer(conversationId);
+  assert.equal(answer.content, saved.message.content);
+  assert.equal(reads, 1, 'iki WBS seçicisi tek yetkili proje ağacından doğrulanmalı');
+});
+
+test("tam iş yükü kapsamı kimlik tabanı kalkınca sıfır sorumlusuz sayısıyla açıklanmaz", async (t) => {
+  const stack = stackFor(t);
+  const ids = fullTaskIds(stack);
+  stack.db.taskAssignees = stack.db.taskAssignees.filter(row => !ids.includes(row.TaskId));
+  for (const taskId of ids) {
+    stack.db.taskAssignees.push({ TaskId: taskId, Sicil: AYSE });
+    stack.db.tasks.find(row => row.TaskId === taskId).CreatedBySicil = MEHMET;
+  }
+  const { conversationId, saved } = await saveLegacyEvidence(stack, {
+    calls: [['rota_workload_summary', { projectId: PROJECTS.FULL }]]
+  });
+  assert.equal(storedData(stack).populationComplete, true);
+  assert.equal(storedData(stack).unassignedOpenTasks, 0);
+  assert.equal(storedData(stack).unrepresentedOpenTasks, 0);
+  unrelatedProjectGrant(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  narrowFullProjectToAssignments(stack, ids);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
 test("son denetimde aynı proje içi WBS taşıması gizli ata düğümünü açıklamaz", async (t) => {
   const stack = stackFor(t);
   const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.TEAM, depth: 4 }]] });
