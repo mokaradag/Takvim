@@ -2,7 +2,7 @@ import 'server-only';
 import { randomBytes } from 'node:crypto';
 import { claimableContract } from '../../../domain/ai/claimableEvidence.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
-import { decodeAuthorizationPopulation, encodeAuthorizationPopulation, evidenceTaskReferences, PAYLOAD_POPULATION_TOOLS, unverifiableAuthorizationPopulation } from './evidenceAuthorization.js';
+import { compressAuthorizationPopulation, decodeAuthorizationPopulation, encodeAuthorizationPopulation, evidenceTaskReferences, PAYLOAD_POPULATION_TOOLS, unverifiableAuthorizationPopulation } from './evidenceAuthorization.js';
 import {
   EVIDENCE_LIMITS,
   evidenceIdFor,
@@ -53,6 +53,12 @@ function persistedEvidenceJson(entry, payload, clarificationContext, resultScope
   const { data: _omitted, ...envelope } = payload;
   const compact = JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', ...authorization, authorizationPopulation: population, ...clarification });
   if (compact.length <= MAX_EVIDENCE_JSON_CHARS) return compact;
+  // Yalnızca v1 sığmadığında: sıralı (NEWSEQUENTIALID) görev kimlikleri kayıpsız ve sınırlı biçimde sıkışır.
+  const packed = compressAuthorizationPopulation(population);
+  if (packed.complete === true) {
+    const compressed = JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', ...authorization, authorizationPopulation: packed, ...clarification });
+    if (compressed.length <= MAX_EVIDENCE_JSON_CHARS) return compressed;
+  }
   return JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', authorizationEpoch: entry.authorizationEpoch,
     authorizationPopulation: unverifiableAuthorizationPopulation(), ...clarification });
 }

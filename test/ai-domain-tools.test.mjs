@@ -6,6 +6,7 @@
  * modelin göndereceği biçimde (JSON metni) verilir.
  */
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import {
@@ -1295,10 +1296,8 @@ test("devam kapsamı kalıcı ve doğrulanabilir taşıyıcı kullanır", async 
     if (mode === 'filtered') first.ledger.retainAuthorized(new Set(['R2']));
     else if (mode === 'payloadless') entries[0].payload = null;
     else {
-      const oversized = Array.from({ length: 1800 }, (_, index) => ({
-        taskId: '80000000-0000-4000-8000-' + String(index + 1).padStart(12, '0'),
-        projectId: '90000000-0000-4000-8000-' + String(index + 1).padStart(12, '0')
-      }));
+      // Rastgele kimlikler sıkıştırılamaz: nüfus hiçbir kalıcı biçime sığmaz.
+      const oversized = Array.from({ length: 1800 }, () => ({ taskId: randomUUID(), projectId: randomUUID() }));
       entries[0].taskReferences = oversized;
       if (mode === 'no-carrier') entries[1].taskReferences = oversized;
     }

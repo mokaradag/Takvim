@@ -9,7 +9,7 @@ import { buildRotaScope } from './rota/rotaScope.js';
 import { TOOL_LIMITS } from './toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { toolSqlGate } from './toolSqlGate.js';
-import { authorizationFingerprint, decodeAuthorizationPopulation, evidenceTaskReferences, savedEvidenceRequirements, scopedEvidenceAuthorization } from './evidenceAuthorization.js';
+import { authorizationFingerprint, currentProjectRank, decodeAuthorizationPopulation, evidenceTaskReferences, PROJECT_ACCESS_RANK, savedEvidenceRequirements, scopedEvidenceAuthorization } from './evidenceAuthorization.js';
 import { readProjectSearch, readVisibleTasks } from './rota/rotaToolStore.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 
@@ -103,48 +103,101 @@ export function createToolTurnContext({
       : entry.authorizationEpoch === state.epoch;
   }
 
-  const projectRank = (row) => (row.AccessLevel === 'FULL' ? 3 : row.HasReadGrant ? 2 : 1);
+  /**
+   * Kayıtlı kanıtın doğrulanacak nüfusu ve güncel gereksinimi. Birebir dönem
+   * eşleşmesi ek gereksinim istemez; aksi halde yalnızca kayıttan kanıtlanabilen
+   * eşdeğer erişim aranır. Doğrulanamayan kayıt `null` döner.
+   */
+  function preparedEvidence(saved) {
+    if (saved.unverifiable || !state.current || !saved.authorizationEpoch) return null;
+    const references = saved.authorizationPopulation ? decodeAuthorizationPopulation(saved.authorizationPopulation)
+      : saved.taskReferences ?? evidenceTaskReferences(JSON.parse(saved.payload || '{}'));
+    if (!Array.isArray(references)) return null;
+    const entry = { ...saved, taskReferences: references };
+    const exact = isEvidenceAuthorized(entry);
+    const requirements = exact ? null : savedEvidenceRequirements(entry, state.current.auth);
+    if (!exact && !requirements) return null;
+    return { entry, references, requirements };
+  }
 
+  /** Görev başına beklenen güncel proje ve kimlik tabanı gereksinimi. */
+  const needsIdentity = (requirements, taskId) => Boolean(requirements && (requirements.identities || requirements.identityTaskIds?.has(taskId)));
+  /** Görev hâlâ görünür, kayıtlı projesinde ve (gerekiyorsa) kimlik tabanlı mı? */
+  const taskStillValid = (current, { taskId, projectId }, identity) => {
+    const row = current.get(taskId);
+    return Boolean(row) && (!projectId || row.projectId === projectId) && (!identity || row.identityBase);
+  };
+
+  /**
+   * Kayıtlı kanıtları güncel yetkiyle doğrular: her proje güncel erişim
+   * düzeyiyle, her katkı görevi sınırlı toplu okumayla denetlenir. Doğrulanan
+   * kanıt kimlikleri döner.
+   */
   async function revalidateEvidence(entries, signal) {
     // Nüfusu kalıcı kayda sığmayan kanıt güncel yetkiyle doğrulanamaz.
-    const eligible = entries.filter((entry) => !entry.unverifiable && state.current && entry.authorizationEpoch);
     const authorized = new Set();
-    for (const saved of eligible) {
+    for (const saved of entries) {
       if (signal.aborted) throw signal.reason;
-      const references = saved.authorizationPopulation ? decodeAuthorizationPopulation(saved.authorizationPopulation)
-        : saved.taskReferences ?? evidenceTaskReferences(JSON.parse(saved.payload || '{}'));
-      if (!Array.isArray(references)) continue;
-      const entry = { ...saved, taskReferences: references };
-      const exact = isEvidenceAuthorized(entry);
-      const requirements = exact ? null : savedEvidenceRequirements(entry, state.current.auth);
-      if (!exact && !requirements) continue;
+      const prepared = preparedEvidence(saved);
+      if (!prepared) continue;
+      const { entry, references, requirements } = prepared;
       const payload = JSON.parse(entry.payload || '{}');
       const projectIds = [...new Set([...(entry.scopedAuthorization?.projectIds || []), ...(requirements?.projectIds || []),
         payload.entity?.type === 'project' ? payload.entity.id : null].filter(Boolean))];
       // Kayıtlı erişim düzeyi bilinen proje, güncel düzeyi ondan düşük değilse açılır; düzeyi bilinmeyen proje tam erişim ister.
-      const required = (row) => (requirements?.fullProjects ? 3
-        : requirements?.projectLevels ? requirements.projectLevels.get(canonicalActualId(row.ProjectId)) ?? 3 : 0);
+      const required = (row) => (requirements?.fullProjects ? PROJECT_ACCESS_RANK.FULL
+        : requirements?.projectLevels ? requirements.projectLevels.get(canonicalActualId(row.ProjectId)) ?? PROJECT_ACCESS_RANK.FULL : 0);
       let valid = true;
       for (let start = 0; start < projectIds.length; start += limits.maxAnalyzedTasks) {
         const projectChunk = projectIds.slice(start, start + limits.maxAnalyzedTasks);
         const projects = await withSql(signal, (executor) => readProjectSearch(executor, state.current.scope,
           { projectIds: projectChunk, text: '', limit: projectChunk.length }), { authorizationOnly: true });
-        if (projects.rows.length !== projectChunk.length || projects.rows.some(row => projectRank(row) < required(row))) { valid = false; break; }
+        if (projects.rows.length !== projectChunk.length || projects.rows.some(row => currentProjectRank(row) < required(row))) { valid = false; break; }
       }
       if (!valid) continue;
       for (let start = 0; start < references.length; start += limits.maxAnalyzedTasks) {
         const chunk = references.slice(start, start + limits.maxAnalyzedTasks);
-        const current = await withSql(signal, (executor) => readVisibleTasks(executor, state.current.scope, chunk.map((row) => row.taskId), { includeAccess: Boolean(requirements) }), { authorizationOnly: true });
-        if (requirements && chunk.some(({ taskId }) => (requirements.identities || requirements.identityTaskIds?.has(taskId))
-          && !current.get(taskId)?.identityBase)) { valid = false; break; }
-        if (!chunk.every(({ taskId, projectId }) => current.has(taskId) && (!projectId || (requirements ? current.get(taskId).projectId : current.get(taskId)) === projectId))) {
-          valid = false;
-          break;
-        }
+        const current = await withSql(signal, (executor) => readVisibleTasks(executor, state.current.scope, chunk.map((row) => row.taskId)), { authorizationOnly: true });
+        if (!chunk.every((reference) => taskStillValid(current, reference, needsIdentity(requirements, reference.taskId)))) { valid = false; break; }
       }
       if (valid) authorized.add(entry.id);
     }
     return authorized;
+  }
+
+  /**
+   * Açıklamadan hemen önceki son görev denetimi. Yetki dönemi görev→proje
+   * ilişkisini kapsamaz: aynı dönemde gizli projeye taşınan görev ancak bu
+   * okumayla yakalanır. Bütün kanıtların görevleri tekilleştirilip sınırlı
+   * parçalarla bir kez okunur (görev başına sorgu yoktur); tutarsız ya da
+   * doğrulanamayan kanıt düşer. Okuma hatası çağırana iletilir (kapalı ret).
+   */
+  async function recheckEvidenceTasks(entries, signal) {
+    const expected = new Map();
+    const failed = new Set();
+    for (const saved of entries) {
+      if (signal.aborted) throw signal.reason;
+      const prepared = preparedEvidence(saved);
+      if (!prepared) { failed.add(saved.id); continue; }
+      for (const reference of prepared.references) {
+        const identity = needsIdentity(prepared.requirements, reference.taskId);
+        const known = expected.get(reference.taskId);
+        if (!known) expected.set(reference.taskId, { ...reference, identity, entries: new Set([saved.id]) });
+        else if (known.projectId !== reference.projectId && known.projectId && reference.projectId) failed.add(saved.id);
+        else {
+          known.projectId ||= reference.projectId;
+          known.identity ||= identity;
+          known.entries.add(saved.id);
+        }
+      }
+    }
+    const tasks = [...expected.values()];
+    for (let start = 0; start < tasks.length; start += limits.maxAnalyzedTasks) {
+      const chunk = tasks.slice(start, start + limits.maxAnalyzedTasks);
+      const current = await withSql(signal, (executor) => readVisibleTasks(executor, state.current.scope, chunk.map((row) => row.taskId)), { authorizationOnly: true });
+      for (const task of chunk) if (!taskStillValid(current, task, task.identity)) for (const id of task.entries) failed.add(id);
+    }
+    return new Set(entries.map((entry) => entry.id).filter((id) => !failed.has(id)));
   }
 
   return Object.freeze({
@@ -184,6 +237,7 @@ export function createToolTurnContext({
     evidenceAuthorization(args, envelope, projectIds) { return scopedEvidenceAuthorization(state.current.auth, state.current.scope, args, envelope, projectIds); },
     isEvidenceAuthorized,
     revalidateEvidence,
+    recheckEvidenceTasks,
     revalidateAuthorization(signal) { return loadScope(signal, true); },
     timeoutCode(signal) { return waiting.has(signal) ? TOOL_ERROR_CODES.BUSY : TOOL_ERROR_CODES.TIMEOUT; },
     stats() {

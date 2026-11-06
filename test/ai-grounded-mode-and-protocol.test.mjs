@@ -543,8 +543,9 @@ test("yetki araç ve model turu arasında bir kez; model turundan sonra yeniden 
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `Görevin proje adı: ${TASKS.OVERDUE}` })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.deepEqual(reads, [2], 'sunucu seçimi denemesinden sonra aynı yetki ikinci kez okunmaz');
-  // Model turundan sonra son doğrulama ve kayıttan sonraki açıklama yetkiyi yeniden okur.
-  assert.equal(visibilityReads(stack), 4);
+  // Model turundan sonra son doğrulama ve kayıttan sonraki açıklama yetkiyi yeniden okur;
+  // açıklama ayrıca görev→proje ilişkisini açıklamadan hemen önce bir kez daha denetler.
+  assert.equal(visibilityReads(stack), 5);
   drained(stack);
 });
 

@@ -512,11 +512,20 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
         // Son okuma kendi çağrı bütçesiyle yapılır: döngü bütçesinin dolması doğrulanmış yanıtları gizlemez.
         if (visible.size) {
           const finalDeadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: signal });
-          try { await context.revalidateAuthorization(finalDeadline.signal); } finally { finalDeadline.dispose(); }
-          if (context.authorizationEpoch() !== epoch) {
-            for (const id of visible.keys()) evidence.unavailableMessages.add(id);
-            visible.clear();
-          }
+          try {
+            await context.revalidateAuthorization(finalDeadline.signal);
+            if (context.authorizationEpoch() !== epoch) {
+              for (const id of visible.keys()) evidence.unavailableMessages.add(id);
+              visible.clear();
+            } else {
+              // Değişmeyen dönem görev→proje ilişkisini kanıtlamaz: katkı görevleri açıklamadan hemen önce yeniden okunur.
+              const entries = [...visible.keys()].flatMap((id) => evidence.authorizationByMessage.get(id));
+              const still = await context.recheckEvidenceTasks(entries, finalDeadline.signal);
+              for (const id of [...visible.keys()]) {
+                if (!evidence.authorizationByMessage.get(id).every((entry) => still.has(entry.id))) visible.delete(id);
+              }
+            }
+          } finally { finalDeadline.dispose(); }
         }
         evidence.byMessage = visible;
       } finally { deadline.dispose(); }

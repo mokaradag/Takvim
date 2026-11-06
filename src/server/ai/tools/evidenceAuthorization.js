@@ -1,5 +1,6 @@
 import 'server-only';
 import { createHash } from 'node:crypto';
+import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { TOOL_LIMITS } from './toolLimits.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 
@@ -63,6 +64,7 @@ function packIds(ids) {
   return Buffer.from(ids.map((id) => id.replace(/-/g, '')).join(''), 'hex').toString('base64url');
 }
 
+/** Paketlenmiş kimlikleri kanonik UUID dizisine (ya da `countOnly` ile sayıya) çevirir; bozuk değer `null`. */
 function unpackIds(packed, countOnly = false) {
   if (typeof packed !== 'string' || !/^[A-Za-z0-9_-]*$/.test(packed)) return null;
   const bytes = Buffer.from(packed, 'base64url');
@@ -92,25 +94,167 @@ export function encodeAuthorizationPopulation(references = []) {
   };
 }
 
-/** Kalıcı nüfus → `{ taskId, projectId }` dizisi; nüfus eksik ya da bozuksa `null`. */
-export function decodeAuthorizationPopulation(value, { countOnly = false } = {}) {
+/**
+ * v1 nüfusunu doğrular ve çözer: kanonik proje anahtarı, geçerli paket, görev
+ * sayısı sınırı ve (tam çözümde) yinelenmeyen görev zorunludur; aksi `null`.
+ */
+function decodePackedPopulation(value, countOnly) {
   if (!value || typeof value !== 'object' || value.v !== POPULATION_VERSION || value.complete !== true
     || !value.tasks || typeof value.tasks !== 'object' || Array.isArray(value.tasks)) return null;
   const references = [];
+  const seen = new Set();
   let count = 0;
   for (const [key, packed] of Object.entries(value.tasks)) {
     const projectId = key === NO_PROJECT_KEY ? null : canonicalActualId(key);
-    if (key !== NO_PROJECT_KEY && !projectId) return null;
+    // Kodlayıcı yalnızca kanonik proje anahtarı yazar; farklı yazım bozuk kayıttır.
+    if (key !== NO_PROJECT_KEY && projectId !== key) return null;
     const ids = unpackIds(packed, countOnly);
     if (ids == null) return null;
     count += countOnly ? ids : ids.length;
     if (count > TOOL_LIMITS.maxAnalyzedTasks) return null;
-    if (!countOnly) for (const taskId of ids) references.push({ taskId, projectId });
+    if (countOnly) continue;
+    for (const taskId of ids) {
+      // Aynı görevin iki kez (ya da iki projede) görünmesi tutarsız nüfustur.
+      if (seen.has(taskId)) return null;
+      seen.add(taskId);
+      references.push({ taskId, projectId });
+    }
   }
   return countOnly ? count : references;
 }
 
-const PROJECT_ACCESS_RANK = Object.freeze({ PARTIAL: 1, READ: 2, FULL: 3 });
+/**
+ * Sıkıştırılmış tam nüfus (v2): aynı v1 nüfusunun deflate + base64url biçimi.
+ * Yalnızca v1 biçimi sınırlı kayda sığmadığında yazılır. Okumada girdi
+ * uzunluğu, açılmış bayt sayısı ve görev sayısı ayrı ayrı sınırlıdır; kesik,
+ * artık bayt taşıyan, iç içe sürümlü ya da sayısı tutmayan akış reddedilir.
+ */
+const COMPRESSED_POPULATION_VERSION = 2;
+const MAX_COMPRESSED_POPULATION_CHARS = 32000;
+/** Görev başına en kötü durumda bir proje anahtarı ve paketlenmiş kimlik (~64 karakter) ile sarmalayıcı. */
+const MAX_INFLATED_POPULATION_BYTES = TOOL_LIMITS.maxAnalyzedTasks * 72 + 64;
+const COMPRESSED_POPULATION_KEYS = 'complete,count,deflated,v';
+
+/** v2 taşıyıcısının biçimini ve sınırlarını denetleyip iç JSON'u açar; herhangi bir ihlalde `null`. */
+function inflatePopulation(value) {
+  if (Object.keys(value).sort().join(',') !== COMPRESSED_POPULATION_KEYS || value.complete !== true
+    || !Number.isSafeInteger(value.count) || value.count < 0 || value.count > TOOL_LIMITS.maxAnalyzedTasks
+    || typeof value.deflated !== 'string' || !value.deflated.length || value.deflated.length > MAX_COMPRESSED_POPULATION_CHARS
+    || !/^[A-Za-z0-9_-]+$/.test(value.deflated)) return null;
+  const bytes = Buffer.from(value.deflated, 'base64url');
+  if (bytes.toString('base64url') !== value.deflated) return null;
+  try {
+    const { buffer, engine } = inflateRawSync(bytes, { maxOutputLength: MAX_INFLATED_POPULATION_BYTES, info: true });
+    // Akış sonundan sonra kalan bayt kanonik olmayan kayıttır.
+    if (engine.bytesWritten !== bytes.length) return null;
+    return JSON.parse(buffer.toString('utf8'));
+  } catch { return null; }
+}
+
+/** Kalıcı nüfus → `{ taskId, projectId }` dizisi; nüfus eksik ya da bozuksa `null`. */
+export function decodeAuthorizationPopulation(value, { countOnly = false } = {}) {
+  if (value?.v !== COMPRESSED_POPULATION_VERSION) return decodePackedPopulation(value, countOnly);
+  // Sıkıştırılmış kayıt sayım için de bütünüyle açılır ve doğrulanır; iç kayıt yalnızca v1 olabilir.
+  const inner = inflatePopulation(value);
+  const decoded = decodePackedPopulation(inner, false);
+  if (!decoded || decoded.length !== value.count) return null;
+  return countOnly ? decoded.length : decoded;
+}
+
+/**
+ * v1 nüfusunun kayıpsız sıkıştırılmış biçimi. Geçersiz ya da açılmış sınırı
+ * aşan nüfus doğrulanamaz işaretine döner (kısmi nüfus asla tam sayılmaz).
+ */
+export function compressAuthorizationPopulation(population) {
+  const count = decodePackedPopulation(population, true);
+  const text = JSON.stringify(population);
+  if (count == null || Buffer.byteLength(text) > MAX_INFLATED_POPULATION_BYTES) return unverifiableAuthorizationPopulation();
+  return { v: COMPRESSED_POPULATION_VERSION, complete: true, count, deflated: deflateRawSync(text).toString('base64url') };
+}
+
+/**
+ * Güncel proje erişiminin sırası: kısmi < görev kapsamlı kısmi (WBS kataloğu)
+ * < okuma < tam. Kayıtlı yanıtın açıkladığı düzey bu sıralamayla karşılaştırılır.
+ */
+export const PROJECT_ACCESS_RANK = Object.freeze({ PARTIAL: 1, CATALOG: 2, READ: 3, FULL: 4 });
+
+/** Güncel proje satırının (`readProjectSearch`) erişim sırası. */
+export function currentProjectRank(row) {
+  if (row.AccessLevel === 'FULL') return PROJECT_ACCESS_RANK.FULL;
+  if (row.HasReadGrant) return PROJECT_ACCESS_RANK.READ;
+  return row.IsTaskScoped ? PROJECT_ACCESS_RANK.CATALOG : PROJECT_ACCESS_RANK.PARTIAL;
+}
+
+const disclosedRank = (level) => (['PARTIAL', 'READ', 'FULL'].includes(level) ? PROJECT_ACCESS_RANK[level] : null);
+
+/**
+ * Proje sonucunun açıkladığı erişim düzeyleri: her kayıtlı proje en az
+ * görünür olmalıdır; düzeyi gösterilen proje güncel olarak o düzeyden düşük
+ * olamaz. Bozuk satır `null` döner (kapalı ret).
+ */
+function disclosedProjectLevels(projectIds, rows, levelOf) {
+  const levels = new Map(projectIds.map((id) => [id, PROJECT_ACCESS_RANK.PARTIAL]));
+  for (const row of rows) {
+    const id = row != null && typeof row === 'object' ? canonicalActualId(row.projectId) : null;
+    const rank = id ? disclosedRank(levelOf(row)) : null;
+    if (!rank || !levels.has(id)) return null;
+    levels.set(id, Math.max(levels.get(id), rank));
+  }
+  return levels;
+}
+
+/** Proje künyesinin açıkladığı alanların canlı araçtaki en düşük erişimi; belirlenemezse tam erişim. */
+function projectDetailRank(data, projectId) {
+  const project = data?.project;
+  const rank = disclosedRank(data?.access?.level);
+  if (!project || typeof project !== 'object' || canonicalActualId(project.projectId) !== projectId || !rank) return PROJECT_ACCESS_RANK.FULL;
+  const over = Array.isArray(project.countsOverLimit) ? project.countsOverLimit : [];
+  // Bağımlılık/baz plan sayısı yalnızca tam erişimde, WBS sayısı tam/okuma/görev kapsamlı erişimde üretilir.
+  if (project.dependencyCount != null || project.baselineCount != null || over.includes('dependencyCount') || over.includes('baselineCount')) return PROJECT_ACCESS_RANK.FULL;
+  if (project.wbsNodeCount != null || over.includes('wbsNodeCount')) return Math.max(rank, PROJECT_ACCESS_RANK.CATALOG);
+  return rank;
+}
+
+/**
+ * Kimliğe bağlı görev sınıfları canlı sorguda yalnızca kimlik tabanıyla
+ * üretilir (`assignmentState`): sorumlusuz/çözülemeyen sorumlu kovaları,
+ * kişisi kayıttan kanıtlanamayan kova ve kesilmiş grup listesi her katkı
+ * görevinin güncel kimlik tabanını ister. Biçimi bozuk grup `null` döner.
+ */
+function assigneeGroupsNeedIdentity(groups, permitted) {
+  if (!Array.isArray(groups)) return null;
+  let needed = false;
+  for (const group of groups) {
+    if (!group || typeof group !== 'object' || typeof group.key !== 'string') return null;
+    const sicil = /^sicil:(\d+)$/.exec(group.key)?.[1];
+    if (sicil != null) needed ||= !(Number.isSafeInteger(Number(sicil)) && permitted.has(Number(sicil)));
+    else needed ||= group.key !== 'undisclosed';
+  }
+  return needed;
+}
+
+const EMPTY_RESULT_DATA = Object.freeze({
+  rota_project_search: (data) => Array.isArray(data.matches) && data.matches.length === 0,
+  rota_task_search: (data) => Array.isArray(data.tasks) && data.tasks.length === 0,
+  rota_task_analytics: (data) => data.totals?.total === 0 && (data.groups == null || (Array.isArray(data.groups) && data.groups.length === 0))
+});
+
+/**
+ * Kanıtlanmış boş ve kapsamsız sonuç: tam, kesilmemiş, sıfır sayılı, boş
+ * nüfuslu ve proje/kişi/ekip/WBS seçicisi taşımayan kayıt. Doğrulanacak katkı
+ * kaydı yoktur; eksik ya da bozuk nüfus bu duruma hiçbir zaman girmez.
+ */
+function provenEmptyResult(entry, payload, proof) {
+  const data = payload.data;
+  if (proof || entry.taskReferences.length !== 0 || !EMPTY_RESULT_DATA[entry.tool] || !data || typeof data !== 'object'
+    || payload.complete !== true || payload.truncated === true || payload.totalCount !== 0 || payload.returnedCount !== 0
+    || payload.entity != null) return false;
+  const filters = data.filters;
+  if (!filters || typeof filters !== 'object') return false;
+  if (entry.tool !== 'rota_project_search' && (filters.projectId != null || filters.wbsId != null || filters.personSicil != null
+    || filters.teamLevel != null || !['any', 'me'].includes(filters.assignee))) return false;
+  return EMPTY_RESULT_DATA[entry.tool](data);
+}
 
 /**
  * Kayıtlı görev satırlarında açıklanan kimlikler. Güncel öz/yönetim hakkıyla
@@ -158,21 +302,32 @@ export function savedEvidenceRequirements(entry, auth) {
     payload.entity?.type === 'project' ? canonicalActualId(payload.entity.id) : null].filter(Boolean))];
   const data = payload.data;
   const isProjectRow = (row) => row != null && typeof row === 'object' && Boolean(canonicalActualId(row.projectId));
-  if (['rota_project_search', 'rota_portfolio_summary'].includes(entry.tool) && !proof) {
-    // Görev nüfusu boş projeleri içermez; eski proje toplamı bütün proje kimliklerini de taşımalıdır.
-    const projects = entry.tool === 'rota_project_search' ? data?.matches : data?.projects;
-    if (payload.complete !== true || payload.truncated === true || !Array.isArray(projects)
-      || projects.length !== payload.totalCount || !projects.every(isProjectRow)) return null;
-    projectIds.push(...projects.map(row => canonicalActualId(row.projectId)).filter(id => !projectIds.includes(id)));
+  const projectList = entry.tool === 'rota_project_search' ? data?.matches : entry.tool === 'rota_portfolio_summary' ? data?.projects : null;
+  if (projectList !== null) {
+    // Görev nüfusu boş projeleri içermez; proje sonucu bütün eşleşen projelerin nüfusunu taşımalıdır.
+    if (!proof) {
+      if (payload.complete !== true || payload.truncated === true || !Array.isArray(projectList)
+        || projectList.length !== payload.totalCount || !projectList.every(isProjectRow)) return null;
+      projectIds.push(...projectList.map(row => canonicalActualId(row.projectId)).filter(id => !projectIds.includes(id)));
+    } else if (!Number.isSafeInteger(payload.totalCount) || proof.projectIds.length !== payload.totalCount) return null;
   }
-  if (!projectIds.length) return null;
-  if (entry.tool === 'rota_project_search') {
-    // Canlı arama kısmi projeleri de döndürür: her eşleşme kayıtlı erişim düzeyinden düşük olmayan güncel erişim ister.
-    const matches = Array.isArray(data?.matches) ? data.matches : [];
-    if (!matches.every((row) => isProjectRow(row) && PROJECT_ACCESS_RANK[row.access?.level])) return null;
-    const projectLevels = new Map(matches.map((row) => [canonicalActualId(row.projectId), PROJECT_ACCESS_RANK[row.access.level]]));
-    projectIds.push(...[...projectLevels.keys()].filter((id) => !projectIds.includes(id)));
-    return { projectIds, projectLevels, identities: true };
+  if (!projectIds.length) return provenEmptyResult(entry, payload, proof) ? { projectIds: [], identities: false } : null;
+  if (projectList !== null) {
+    // Canlı arama/portföy kısmi projeleri de döndürür: gösterilmeyen proje yalnızca görünürlük, düzeyi
+    // gösterilen proje (eşleşme, aday ya da portföy satırı) o düzeyden düşük olmayan güncel erişim ister.
+    // Verisi çıkarılmış kayıt gösterilen düzeyleri taşımaz: önceki gibi tam erişim istenir.
+    if (!Array.isArray(projectList)) return { projectIds, fullProjects: true, identities: true };
+    const rows = entry.tool === 'rota_project_search' ? [...projectList, ...(Array.isArray(data.candidates) ? data.candidates : [])] : projectList;
+    if (data.candidates != null && !Array.isArray(data.candidates)) return null;
+    const projectLevels = disclosedProjectLevels(projectIds, rows, (row) => (entry.tool === 'rota_project_search' ? row.access?.level : row.access));
+    return projectLevels ? { projectIds, projectLevels, identities: false } : null;
+  }
+  if (entry.tool === 'rota_project_detail') {
+    const projectId = canonicalActualId(payload.entity?.id);
+    if (payload.entity?.type !== 'project' || !projectId) return null;
+    const projectLevels = new Map(projectIds.map((id) => [id, PROJECT_ACCESS_RANK.FULL]));
+    projectLevels.set(projectId, projectDetailRank(data, projectId));
+    return { projectIds, projectLevels, identities: false };
   }
   if (!['rota_task_analytics', 'rota_workload_summary', 'rota_task_search', 'rota_task_detail'].includes(entry.tool)) {
     return { projectIds, fullProjects: true, identities: true };
@@ -188,19 +343,27 @@ export function savedEvidenceRequirements(entry, auth) {
   // Kişi süzgecinin nüfusu kişinin kimliğine dayanır; kimlik güncel olarak açık değilse her görev kimlik tabanı ister.
   const personSicil = data.filters?.personSicil;
   const personHidden = personSicil != null && !permitted.has(Number(personSicil));
-  if (entry.tool === 'rota_task_analytics' && data.groupBy !== 'assignee') return { projectIds, identities: personHidden };
+  // Sorumlusuz süzgeci canlı sorguda her görev için kimlik tabanı ister (gruplamadan bağımsız).
+  const unassignedFilter = data.filters?.assignee === 'unassigned';
   if (entry.tool === 'rota_task_search' || entry.tool === 'rota_task_detail') {
     const identityTaskIds = savedIdentityTasks(entry.tool === 'rota_task_search' ? data.tasks : [data.task], auth, permitted);
     if (!identityTaskIds) return null;
-    return { projectIds, identities: personHidden || data.filters?.assignee === 'unassigned', identityTaskIds,
+    return { projectIds, identities: personHidden || unassignedFilter, identityTaskIds,
       fullProjects: entry.tool === 'rota_task_detail' && Boolean(data.task.dependencies) };
   }
-  // Kişi toplamı da korunur: kesilmiş kişi/grup önizlemesi bütün kimlikleri kanıtlamaz.
-  const people = entry.tool === 'rota_workload_summary' ? data.people?.map(row => row?.sicil)
-    : data.groups?.map(row => /^sicil:(\d+)$/.exec(row?.key)?.[1]).filter(Boolean);
-  const identities = personHidden || !(payload.complete === true && payload.truncated !== true && Array.isArray(people)
-    && people.every(sicil => Number.isSafeInteger(Number(sicil)) && permitted.has(Number(sicil))));
-  return { projectIds, identities };
+  // Kesilmiş kişi/grup önizlemesi bütün kimlikleri kanıtlamaz.
+  const truncated = payload.complete !== true || payload.truncated === true;
+  if (entry.tool === 'rota_task_analytics') {
+    if (data.groupBy !== 'assignee') return { projectIds, identities: personHidden || unassignedFilter };
+    const groups = assigneeGroupsNeedIdentity(data.groups, permitted);
+    if (groups == null) return null;
+    return { projectIds, identities: personHidden || unassignedFilter || truncated || groups };
+  }
+  // İş yükünün sorumlusuz sayısı, boş kişi listesinde de kimlik tabanına dayanır.
+  if (!data.people.every((row) => row && typeof row === 'object' && Number.isSafeInteger(Number(row.sicil)))
+    || !Number.isSafeInteger(data.unassignedOpenTasks) || data.unassignedOpenTasks < 0) return null;
+  const peopleHidden = data.people.some((row) => !permitted.has(Number(row.sicil)));
+  return { projectIds, identities: personHidden || truncated || peopleHidden || data.unassignedOpenTasks > 0 };
 }
 
 /**
