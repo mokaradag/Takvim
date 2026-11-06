@@ -10,7 +10,7 @@ import { TOOL_LIMITS } from './toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { toolSqlGate } from './toolSqlGate.js';
 import { authorizationFingerprint, currentProjectRank, decodeAuthorizationPopulation, evidenceTaskReferences, PROJECT_ACCESS_RANK, savedEvidenceRequirements, scopedEvidenceAuthorization } from './evidenceAuthorization.js';
-import { readProjectSearch, readVisibleTasks } from './rota/rotaToolStore.js';
+import { readProjectSearch, readVisibleTasks, readWbs } from './rota/rotaToolStore.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 
 /**
@@ -160,6 +160,17 @@ export function createToolTurnContext({
         const current = await withSql(signal, (executor) => readVisibleTasks(executor, state.current.scope, chunk.map((row) => row.taskId)), { authorizationOnly: true });
         if (!chunk.every((reference) => taskStillValid(current, reference, needsIdentity(requirements, reference.taskId)))) { valid = false; break; }
       }
+      if (valid && requirements?.wbsAncestorNodes) {
+        // Yönetim kapsamındaki WBS ata düğümleri yalnızca güncel ağaçta görünürlerse yeniden açılır.
+        const result = await withSql(signal, (executor) => readWbs(executor, state.current.scope, {
+          projectId: requirements.wbsProjectId, today, maxRows: limits.maxAnalyzedTasks
+        }), { authorizationOnly: true });
+        const nodes = new Map(result.nodes.map(row => [canonicalActualId(row.WbsId), row]));
+        valid = !result.truncated && requirements.wbsAncestorNodes.every(({ id, parentId }) => {
+          const row = nodes.get(id);
+          return row && (row.ParentWbsId == null ? null : canonicalActualId(row.ParentWbsId)) === parentId;
+        });
+      }
       if (valid) authorized.add(entry.id);
     }
     return authorized;
@@ -182,20 +193,20 @@ export function createToolTurnContext({
       for (const reference of prepared.references) {
         const identity = needsIdentity(prepared.requirements, reference.taskId);
         const known = expected.get(reference.taskId);
-        if (!known) expected.set(reference.taskId, { ...reference, identity, entries: new Set([saved.id]) });
-        else if (known.projectId !== reference.projectId && known.projectId && reference.projectId) failed.add(saved.id);
-        else {
-          known.projectId ||= reference.projectId;
-          known.identity ||= identity;
-          known.entries.add(saved.id);
-        }
+        const obligation = { id: saved.id, projectId: reference.projectId, identity };
+        if (!known) expected.set(reference.taskId, { taskId: reference.taskId, obligations: [obligation] });
+        else known.obligations.push(obligation);
       }
     }
     const tasks = [...expected.values()];
     for (let start = 0; start < tasks.length; start += limits.maxAnalyzedTasks) {
       const chunk = tasks.slice(start, start + limits.maxAnalyzedTasks);
       const current = await withSql(signal, (executor) => readVisibleTasks(executor, state.current.scope, chunk.map((row) => row.taskId)), { authorizationOnly: true });
-      for (const task of chunk) if (!taskStillValid(current, task, task.identity)) for (const id of task.entries) failed.add(id);
+      for (const task of chunk) {
+        for (const obligation of task.obligations) {
+          if (!taskStillValid(current, { taskId: task.taskId, projectId: obligation.projectId }, obligation.identity)) failed.add(obligation.id);
+        }
+      }
     }
     return new Set(entries.map((entry) => entry.id).filter((id) => !failed.has(id)));
   }

@@ -287,6 +287,8 @@ test("v1 sınırını aşan 1600 sıralı görevli nüfus sıkıştırılmış b
   assert.ok(row.EvidenceJson.length <= 32000, 'kalıcı kanıt mevcut sınıra sığmalı');
   const stored = JSON.parse(row.EvidenceJson);
   assert.equal(stored.authorizationPopulation.v, 2);
+  assert.ok(stored.data?.project, 'sıkıştırılmış tam yükte proje verisi korunmalı');
+  assert.equal(stored.dataOmitted, undefined, 'veri sığdığı sürece çıkarılmamalı');
   assert.equal(stored.authorizationPopulation.count, FULL_TASKS.length + extra.length);
   const expected = [...FULL_TASKS, ...extra.map((task) => task.TaskId)].map((taskId) => ({ taskId, projectId: PROJECTS.FULL }))
     .sort((a, b) => a.taskId.localeCompare(b.taskId));
@@ -294,6 +296,9 @@ test("v1 sınırını aşan 1600 sıralı görevli nüfus sıkıştırılmış b
   const reopened = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
   assert.equal(reopened.content, saved.assistantMessage.content);
   assert.deepEqual(reopened.evidence, saved.assistantMessage.evidence);
+  stack.db.executiveScope.push({ ManagerSicil: AYSE, EmployeeSicil: MEHMET });
+  const changed = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
+  assert.equal(changed.content, saved.assistantMessage.content, 'ilgisiz yetki değişikliğinde tam yük doğrulanabilmeli');
   stack.db.tasks.find((task) => task.TaskId === extra[1200].TaskId).ProjectId = PROJECTS.HIDDEN;
   const hidden = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
   assert.equal(hidden.finishReason, 'not_found');

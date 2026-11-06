@@ -329,6 +329,43 @@ export function savedEvidenceRequirements(entry, auth) {
     projectLevels.set(projectId, projectDetailRank(data, projectId));
     return { projectIds, projectLevels, identities: false };
   }
+  if (entry.tool === 'rota_recurrence_inspect') {
+    const listing = Array.isArray(data?.series) && data?.filters && typeof data.filters === 'object';
+    const single = data?.series && !Array.isArray(data.series) && typeof data.series === 'object';
+    const nonRecurring = data?.recurring === false && canonicalActualId(data.task?.taskId);
+    if (!listing && !single && !nonRecurring) return null;
+    if (single || nonRecurring) {
+      if (payload.entity?.type !== 'task' || !entry.taskReferences.some(row => row.taskId === canonicalActualId(payload.entity.id))) return null;
+    }
+    return { projectIds, projectLevels: new Map(projectIds.map(id => [id, PROJECT_ACCESS_RANK.PARTIAL])), identities: false };
+  }
+  if (entry.tool === 'rota_wbs_inspect') {
+    const projectId = canonicalActualId(payload.entity?.id);
+    if (payload.entity?.type !== 'project' || projectIds.length !== 1 || projectIds[0] !== projectId
+      || canonicalActualId(data?.project?.projectId) !== projectId || !Array.isArray(data.nodes)) return null;
+    const catalog = data.catalogVisibility === 'full-catalog';
+    if (!catalog && data.catalogVisibility !== 'ancestor-chain-of-visible-tasks') return null;
+    const wbsAncestorNodes = [];
+    if (!catalog) {
+      for (const node of data.nodes) {
+        const id = canonicalActualId(node?.wbsId);
+        const parentId = node?.parentWbsId == null ? null : canonicalActualId(node.parentWbsId);
+        if (!id || node.parentWbsId != null && !parentId || wbsAncestorNodes.some(row => row.id === id)) return null;
+        wbsAncestorNodes.push({ id, parentId });
+      }
+    }
+    return { projectIds, projectLevels: new Map([[projectId, catalog ? PROJECT_ACCESS_RANK.CATALOG : PROJECT_ACCESS_RANK.PARTIAL]]),
+      identities: false, ...(!catalog ? { wbsAncestorNodes, wbsProjectId: projectId } : {}) };
+  }
+  if (entry.tool === 'rota_data_quality') {
+    if (!data || !Array.isArray(data.checks) || !data.filters || typeof data.filters !== 'object'
+      || !Number.isSafeInteger(payload.totalCount) || payload.totalCount !== entry.taskReferences.length
+      || !Number.isSafeInteger(data.openTaskCount)
+      || !['assignee', 'unresolvedAssignee'].every(id => data.checks.some(row => row?.id === id && Number.isSafeInteger(row.count) && row.count >= 0))
+      || data.filters.projectId != null && !projectIds.includes(canonicalActualId(data.filters.projectId))) return null;
+    // Sorumlusuz ve çözülemeyen kişi sayılarının sıfır olması da kimlik sınıflandırmasını açıklar.
+    return { projectIds, projectLevels: new Map(projectIds.map(id => [id, PROJECT_ACCESS_RANK.PARTIAL])), identities: true };
+  }
   if (!['rota_task_analytics', 'rota_workload_summary', 'rota_task_search', 'rota_task_detail'].includes(entry.tool)) {
     return { projectIds, fullProjects: true, identities: true };
   }

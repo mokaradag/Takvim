@@ -56,6 +56,8 @@ function persistedEvidenceJson(entry, payload, clarificationContext, resultScope
   // Yalnızca v1 sığmadığında: sıralı (NEWSEQUENTIALID) görev kimlikleri kayıpsız ve sınırlı biçimde sıkışır.
   const packed = compressAuthorizationPopulation(population);
   if (packed.complete === true) {
+    const fullCompressed = JSON.stringify({ ...payload, ...authorization, authorizationPopulation: packed, ...clarification });
+    if (fullCompressed.length <= MAX_EVIDENCE_JSON_CHARS) return fullCompressed;
     const compressed = JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', ...authorization, authorizationPopulation: packed, ...clarification });
     if (compressed.length <= MAX_EVIDENCE_JSON_CHARS) return compressed;
   }

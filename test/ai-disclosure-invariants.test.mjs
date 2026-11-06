@@ -1417,3 +1417,92 @@ test("yetki satırı değişmeden gizli projeye taşınan görev geçmiş yanıt
   stack.db.tasks.find(row => row.TaskId === TASKS.DONE).ProjectId = PROJECTS.FULL;
   assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
 });
+
+test("son görev denetimi sırasında değişen yetki dönemi geçmiş yanıtı açıklamaz", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'status' }]] });
+  let reads = 0;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (sql.startsWith('/* rota-ai-tool:task-visibility */') && ++reads === 2) unrelatedManagementChange(stack);
+    return false;
+  } };
+  const answer = await savedAnswer(conversationId);
+  assert.equal(reads, 2, 'değişiklik son görev okumasında gerçekleşmeli');
+  assert.notEqual(answer.content, saved.message.content);
+  assert.deepEqual(answer.evidence, []);
+  assert.equal(answer.finishReason, 'unavailable');
+});
+
+test("aynı görevde farklı kimlik gereksinimleri bağımsız kanıtları düşürmez", async (t) => {
+  const stack = stackFor(t);
+  const first = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'status' }]],
+    content: 'Durum dağılımı. 【R1】' });
+  const second = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'assignee' }]],
+    content: 'Sorumlu dağılımı. 【R1】', conversationId: first.conversationId });
+  unrelatedManagementChange(stack);
+  narrowFullProjectToAssignments(stack, fullTaskIds(stack));
+  const messages = (await loadAssistantConversation(first.conversationId)).body.messages.filter(message => message.role === 'assistant');
+  assert.equal(messages.find(message => message.id === first.saved.message.id).content, first.saved.message.content);
+  assertHidden(messages.find(message => message.id === second.saved.message.id), second.saved);
+});
+
+test("kısmi projedeki görünür görevin tekrar bilgisi ilgisiz değişiklikte korunur", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_recurrence_inspect', { taskId: TASKS.PARTIAL_OWN }]] });
+  assert.equal(storedData(stack).recurring, false);
+  unrelatedManagementChange(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  stack.db.taskAssignees = stack.db.taskAssignees.filter(row => row.TaskId !== TASKS.PARTIAL_OWN);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("okuma hibeli tekrar listesi tam erişim gerektirmez", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_recurrence_inspect', { projectId: PROJECTS.READ }]] });
+  unrelatedManagementChange(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  stack.db.projectAccess = stack.db.projectAccess.filter(row => row.ProjectId !== PROJECTS.READ);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("katalog görünür kısmi WBS sonucu tam proje erişimi istemez", async (t) => {
+  const stack = stackFor(t);
+  const nodeId = '30000000-0000-4000-8000-000000000099';
+  stack.db.wbs.push({ WbsId: nodeId, ProjectId: PROJECTS.PARTIAL, Code: 'PRT.1', Name: 'Kısmi katalog', SortOrder: 0 });
+  stack.db.tasks.find(row => row.TaskId === TASKS.PARTIAL_OWN).WbsId = nodeId;
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.PARTIAL }]] });
+  assert.equal(storedData(stack).catalogVisibility, 'full-catalog');
+  unrelatedManagementChange(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  stack.db.taskAssignees = stack.db.taskAssignees.filter(row => ![TASKS.PARTIAL_OWN, TASKS.PARTIAL_SHARED].includes(row.TaskId) || row.Sicil !== AYSE);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("yalnız ata zinciri görünen WBS düğümleri yeniden yetkilendirilir", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.TEAM, depth: 4 }]] });
+  assert.equal(storedData(stack).catalogVisibility, 'ancestor-chain-of-visible-tasks');
+  unrelatedProjectGrant(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  stack.db.tasks.find(row => row.TaskId === TASKS.TEAM_VISIBLE).WbsId = WBS.TEAM_OTHER;
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("okuma hibeli veri kalitesi ilgili hibe kaldırılana dek açılır", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_data_quality', { projectId: PROJECTS.READ }]] });
+  unrelatedManagementChange(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  stack.db.projectAccess = stack.db.projectAccess.filter(row => row.ProjectId !== PROJECTS.READ);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("kısmi veri kalitesi kimlik tabanı kaybolunca açıklanmaz", async (t) => {
+  const stack = stackFor(t);
+  for (const id of [TASKS.PARTIAL_OWN, TASKS.PARTIAL_SHARED]) stack.db.tasks.find(row => row.TaskId === id).CreatedBySicil = AYSE;
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_data_quality', { projectId: PROJECTS.PARTIAL }]] });
+  unrelatedManagementChange(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  stack.db.tasks.find(row => row.TaskId === TASKS.PARTIAL_OWN).CreatedBySicil = null;
+  assertHidden(await savedAnswer(conversationId), saved);
+});

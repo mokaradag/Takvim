@@ -513,16 +513,18 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
         if (visible.size) {
           const finalDeadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: signal });
           try {
-            await context.revalidateAuthorization(finalDeadline.signal);
-            if (context.authorizationEpoch() !== epoch) {
-              for (const id of visible.keys()) evidence.unavailableMessages.add(id);
-              visible.clear();
-            } else {
-              // Değişmeyen dönem görev→proje ilişkisini kanıtlamaz: katkı görevleri açıklamadan hemen önce yeniden okunur.
-              const entries = [...visible.keys()].flatMap((id) => evidence.authorizationByMessage.get(id));
-              const still = await context.recheckEvidenceTasks(entries, finalDeadline.signal);
-              for (const id of [...visible.keys()]) {
-                if (!evidence.authorizationByMessage.get(id).every((entry) => still.has(entry.id))) visible.delete(id);
+            // Değişmeyen dönem görev→proje ilişkisini kanıtlamaz; önce katkı görevleri yeniden okunur.
+            const entries = [...visible.keys()].flatMap((id) => evidence.authorizationByMessage.get(id));
+            const still = await context.recheckEvidenceTasks(entries, finalDeadline.signal);
+            for (const id of [...visible.keys()]) {
+              if (!evidence.authorizationByMessage.get(id).every((entry) => still.has(entry.id))) visible.delete(id);
+            }
+            // Son yetki dönemi kontrolü, görev okumaları sırasında gerçekleşen değişikliği de kapsar.
+            if (visible.size) {
+              await context.revalidateAuthorization(finalDeadline.signal);
+              if (context.authorizationEpoch() !== epoch) {
+                for (const id of visible.keys()) evidence.unavailableMessages.add(id);
+                visible.clear();
               }
             }
           } finally { finalDeadline.dispose(); }
