@@ -515,7 +515,7 @@ const HANDLERS = Object.freeze({
     const selected = db.wbs.find(node => ids.has(upper(node.WbsId)) && (!params.projectId || same(node.ProjectId, params.projectId)));
     if (!selected) return [[]];
     const project = projectRow(db, selected.ProjectId);
-    const token = String(params.scopeProjects || '').split(',').find(value => same(value.slice(0, 36), selected.ProjectId));
+    const token = String(params.scopeProjects || '').split(',').find(value => value.length === 40 && same(value.slice(0, 36), selected.ProjectId));
     if (!project?.IsActive || !params.isAdmin && !token) return [[]];
     const catalog = params.isAdmin || token[37] === 'F' || token[38] === '1' || token[39] === '1';
     const allowed = new Set();

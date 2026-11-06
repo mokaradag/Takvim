@@ -664,6 +664,21 @@ test('Outlook durumu yalnızca kullanıcının kendi aboneliklerinin Rota teslim
   assert.equal(result.data.items.some((item) => item.task.taskId === TASKS.UNASSIGNED), false, 'başka kullanıcının aboneliği görünmez');
 });
 
+test('WBS seçici ikizi bozuk proje kapsamı belirtecini yetki saymaz', async t => {
+  const stack = stackFor(t);
+  const { result } = await callRotaTool(stack, AYSE, 'rota_task_search', { wbsId: WBS.FULL_DESIGN });
+  assert.equal(result.ok, true);
+  const params = stack.db.aiToolLog.find(row => row.query === 'wbs-selector').params;
+  const { runAiToolQuery } = await import('./helpers/aiToolSql.mjs');
+  const { AI_TOOL_WBS_SELECTOR_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
+  assert.ok(runAiToolQuery(stack.db, AI_TOOL_WBS_SELECTOR_SQL, params)[0].length > 0);
+  const otherGrants = params.scopeProjects.split(',').filter(value => !value.startsWith(PROJECTS.FULL)).join(',');
+  for (const scopeProjects of [`${PROJECTS.FULL}:F`, `${PROJECTS.FULL}:F000`, `${otherGrants},${PROJECTS.FULL}:F`]) {
+    const [nodes] = runAiToolQuery(stack.db, AI_TOOL_WBS_SELECTOR_SQL, { ...params, scopeProjects });
+    assert.deepEqual(nodes, [], 'eksik uzunluktaki belirteç katalog yetkisi veremez');
+  }
+});
+
 test('bildirimler yalnızca okunur: okundu/temizlendi işareti değişmez', async (t) => {
   const stack = stackFor(t, {
     taskNotifications: [{ RecipientSicil: AYSE, Kind: 'TASK_ASSIGNED', TaskId: TASKS.OVERDUE, ActorSicil: LEAD, TaskTitleSnapshot: 'Radar test planı', ProjectNameSnapshot: 'Radar Modernizasyonu', EventKey: 'e1' }],
