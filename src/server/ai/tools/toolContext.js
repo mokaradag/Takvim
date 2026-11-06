@@ -10,7 +10,7 @@ import { TOOL_LIMITS } from './toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { toolSqlGate } from './toolSqlGate.js';
 import { authorizationFingerprint, currentProjectRank, decodeAuthorizationPopulation, evidenceTaskReferences, PROJECT_ACCESS_RANK, savedEvidenceRequirements, scopedEvidenceAuthorization } from './evidenceAuthorization.js';
-import { readProjectSearch, readVisibleTasks, readWbs } from './rota/rotaToolStore.js';
+import { readProjectSearch, readVisibleTasks, readWbs, readWbsSelector } from './rota/rotaToolStore.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
 
 /**
@@ -199,6 +199,7 @@ export function createToolTurnContext({
   async function recheckEvidenceTasks(entries, signal) {
     const expected = new Map();
     const wbsChecks = new Map();
+    const wbsSelectors = new Map();
     const failed = new Set();
     for (const saved of entries) {
       if (signal.aborted) throw signal.reason;
@@ -215,6 +216,21 @@ export function createToolTurnContext({
         const projectId = prepared.requirements.wbsProjectId;
         if (!wbsChecks.has(projectId)) wbsChecks.set(projectId, []);
         wbsChecks.get(projectId).push({ entry: saved, requirements: prepared.requirements });
+      }
+      // Saklanan WBS süzgeci, görev başka dala taşınsa da güncel düğüm yetkisiyle doğrulanır.
+      if (['rota_task_search', 'rota_task_analytics'].includes(saved.tool)) {
+        const filters = JSON.parse(saved.payload || '{}')?.data?.filters;
+        if (filters?.wbsId != null || filters?.wbs != null) {
+          const wbsId = canonicalActualId(filters.wbsId);
+          const projectId = canonicalActualId(filters.projectId);
+          if (!wbsId || !projectId || prepared.references.some((row) => row.projectId !== projectId)) {
+            failed.add(saved);
+            continue;
+          }
+          const key = `${projectId}:${wbsId}`;
+          if (!wbsSelectors.has(key)) wbsSelectors.set(key, { projectId, wbsId, entries: [] });
+          wbsSelectors.get(key).entries.push(saved);
+        }
       }
     }
     const tasks = [...expected.values()];
@@ -236,6 +252,13 @@ export function createToolTurnContext({
       }), { authorizationOnly: true });
       const current = wbsNodes(result);
       for (const { entry, requirements } of checks) if (!wbsStillValid(current, requirements)) failed.add(entry);
+    }
+    for (const { projectId, wbsId, entries: owners } of wbsSelectors.values()) {
+      if (owners.every((entry) => failed.has(entry))) continue;
+      const node = await withSql(signal, (executor) => readWbsSelector(executor, state.current.scope, { projectId, wbsId }), { authorizationOnly: true });
+      if (canonicalActualId(node?.WbsId) !== wbsId || canonicalActualId(node?.ProjectId) !== projectId) {
+        for (const entry of owners) failed.add(entry);
+      }
     }
     return new Set(entries.filter((entry) => !failed.has(entry)));
   }

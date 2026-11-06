@@ -1182,6 +1182,49 @@ for (const population of [null, 0, false, '']) {
   });
 }
 
+test("son görev denetiminde bir iletinin SQL hatası başka doğrulanmış yanıtı gizlemez", async (t) => {
+  const stack = stackFor(t);
+  const first = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]], content: 'İlk güvenli yanıt. 【R1】' });
+  const second = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.DUE_SOON }]], content: 'İkinci güvenli yanıt. 【R1】', conversationId: first.conversationId });
+  const pool = await getSqlPool();
+  const request = pool.request.bind(pool);
+  let reads = 0;
+  t.mock.method(pool, 'request', () => {
+    const value = request(), query = value.query.bind(value);
+    value.query = async (sql) => {
+      if (sql.startsWith('/* rota-ai-tool:task-visibility */') && ++reads === 3) {
+        throw Object.assign(new Error('Geçici görev okuma hatası'), { code: 'DATABASE_UNAVAILABLE' });
+      }
+      return query(sql);
+    };
+    return value;
+  });
+  const messages = (await loadAssistantConversation(first.conversationId)).body.messages.filter((message) => message.role === 'assistant');
+  assert.equal(reads, 4, 'iki ilk denetim ve iki bağımsız son görev okuması yapılmalı');
+  assert.equal(messages.find((message) => message.id === first.saved.message.id).content, first.saved.message.content);
+  const hidden = messages.find((message) => message.id === second.saved.message.id);
+  assert.equal(hidden.finishReason, 'unavailable');
+  assert.deepEqual(hidden.evidence, []);
+});
+
+for (const tool of ['rota_task_search', 'rota_task_analytics']) {
+  test(`WBS süzgeci görev başka dala taşınınca aynı veya değişen yetki döneminde eski düğümü açıklamaz (${tool})`, async (t) => {
+    const stack = stackFor(t);
+    const args = { wbsId: WBS.TEAM_LEAF, ...(tool === 'rota_task_analytics' ? { groupBy: 'status' } : {}) };
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, args]] });
+    const filters = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson).data.filters;
+    assert.equal(filters.wbsId, WBS.TEAM_LEAF);
+    assert.match(filters.wbs, /Kurulum/);
+    assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+    stack.db.tasks.find((row) => row.TaskId === TASKS.TEAM_VISIBLE).WbsId = WBS.TEAM_OTHER;
+    assertHidden(await savedAnswer(conversationId), saved);
+    unrelatedProjectGrant(stack);
+    assertHidden(await savedAnswer(conversationId), saved);
+    stack.db.tasks.find((row) => row.TaskId === TASKS.TEAM_VISIBLE).WbsId = WBS.TEAM_LEAF;
+    assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  });
+}
+
 test("ileti döngüsünün süre bütçesi dolsa da son yetki okuması doğrulanmış yanıtı gizlemez", async (t) => {
   const stack = stackFor(t);
   const first = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]], content: 'İlk kayıtlı yanıt. 【R1】' });
