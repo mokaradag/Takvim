@@ -130,6 +130,15 @@ export function createToolTurnContext({
     const row = current.get(taskId);
     return Boolean(row) && (!projectId || row.projectId === projectId) && (!identity || row.identityBase);
   };
+  /** WBS ata yolunun bütün düğümleri hâlâ güncel kapsamda görünür olmalıdır. */
+  const wbsNodes = (result) => ({
+    truncated: result.truncated,
+    byId: new Map(result.nodes.map(row => [canonicalActualId(row.WbsId), row]))
+  });
+  const wbsStillValid = (nodes, requirements) => !nodes.truncated && requirements.wbsAncestorNodes.every(({ id, parentId }) => {
+    const row = nodes.byId.get(id);
+    return row && (row.ParentWbsId == null ? null : canonicalActualId(row.ParentWbsId)) === parentId;
+  });
 
   /**
    * Kayıtlı kanıtları güncel yetkiyle doğrular: her proje güncel erişim
@@ -170,13 +179,10 @@ export function createToolTurnContext({
           const result = await withSql(signal, (executor) => readWbs(executor, state.current.scope, {
             projectId: requirements.wbsProjectId, today, maxRows: limits.maxAnalyzedTasks
           }), { authorizationOnly: true });
-          nodes = { truncated: result.truncated, byId: new Map(result.nodes.map(row => [canonicalActualId(row.WbsId), row])) };
+          nodes = wbsNodes(result);
           wbsByProject.set(requirements.wbsProjectId, nodes);
         }
-        valid = !nodes.truncated && requirements.wbsAncestorNodes.every(({ id, parentId }) => {
-          const row = nodes.byId.get(id);
-          return row && (row.ParentWbsId == null ? null : canonicalActualId(row.ParentWbsId)) === parentId;
-        });
+        valid = wbsStillValid(nodes, requirements);
       }
       if (valid) authorized.add(entry.id);
     }
@@ -192,17 +198,23 @@ export function createToolTurnContext({
    */
   async function recheckEvidenceTasks(entries, signal) {
     const expected = new Map();
+    const wbsChecks = new Map();
     const failed = new Set();
     for (const saved of entries) {
       if (signal.aborted) throw signal.reason;
       const prepared = preparedEvidence(saved);
-      if (!prepared) { failed.add(saved.id); continue; }
+      if (!prepared) { failed.add(saved); continue; }
       for (const reference of prepared.references) {
         const identity = needsIdentity(prepared.requirements, reference.taskId);
         const known = expected.get(reference.taskId);
-        const obligation = { id: saved.id, projectId: reference.projectId, identity };
+        const obligation = { entry: saved, projectId: reference.projectId, identity };
         if (!known) expected.set(reference.taskId, { taskId: reference.taskId, obligations: [obligation] });
         else known.obligations.push(obligation);
+      }
+      if (prepared.requirements?.wbsAncestorNodes) {
+        const projectId = prepared.requirements.wbsProjectId;
+        if (!wbsChecks.has(projectId)) wbsChecks.set(projectId, []);
+        wbsChecks.get(projectId).push({ entry: saved, requirements: prepared.requirements });
       }
     }
     const tasks = [...expected.values()];
@@ -211,11 +223,21 @@ export function createToolTurnContext({
       const current = await withSql(signal, (executor) => readVisibleTasks(executor, state.current.scope, chunk.map((row) => row.taskId)), { authorizationOnly: true });
       for (const task of chunk) {
         for (const obligation of task.obligations) {
-          if (!taskStillValid(current, { taskId: task.taskId, projectId: obligation.projectId }, obligation.identity)) failed.add(obligation.id);
+          if (!taskStillValid(current, { taskId: task.taskId, projectId: obligation.projectId }, obligation.identity)) failed.add(obligation.entry);
         }
       }
     }
-    return new Set(entries.map((entry) => entry.id).filter((id) => !failed.has(id)));
+    // Görev aynı projede başka WBS düğümüne taşınmışsa yetki dönemi değişmeyebilir.
+    // Son ata denetimi ilk doğrulamadaki önbelleği kullanmaz; proje başına tek sorgudur.
+    for (const [projectId, checks] of wbsChecks) {
+      if (checks.every(({ entry }) => failed.has(entry))) continue;
+      const result = await withSql(signal, (executor) => readWbs(executor, state.current.scope, {
+        projectId, today, maxRows: limits.maxAnalyzedTasks
+      }), { authorizationOnly: true });
+      const current = wbsNodes(result);
+      for (const { entry, requirements } of checks) if (!wbsStillValid(current, requirements)) failed.add(entry);
+    }
+    return new Set(entries.filter((entry) => !failed.has(entry)));
   }
 
   return Object.freeze({

@@ -517,7 +517,7 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
             const entries = [...visible.keys()].flatMap((id) => evidence.authorizationByMessage.get(id));
             const still = await context.recheckEvidenceTasks(entries, finalDeadline.signal);
             for (const id of [...visible.keys()]) {
-              if (!evidence.authorizationByMessage.get(id).every((entry) => still.has(entry.id))) visible.delete(id);
+              if (!evidence.authorizationByMessage.get(id).every((entry) => still.has(entry))) visible.delete(id);
             }
             // Son yetki dönemi kontrolü, görev okumaları sırasında gerçekleşen değişikliği de kapsar.
             if (visible.size) {

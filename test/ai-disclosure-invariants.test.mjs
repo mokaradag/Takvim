@@ -1549,7 +1549,25 @@ test("aynı projenin iki ata zinciri kanıtı tek sınırlı WBS okuması payla�
     return false;
   } };
   const messages = (await loadAssistantConversation(first.conversationId)).body.messages.filter(message => message.role === 'assistant');
-  assert.equal(reads, 1, 'aynı proje iki kez okunmamalı');
+  assert.equal(reads, 2, 'ilk doğrulama ve son açıklama sınırında proje başına birer WBS okuması olmalı');
   assert.equal(messages.find(message => message.id === first.saved.message.id).content, first.saved.message.content);
   assert.equal(messages.find(message => message.id === second.saved.message.id).content, second.saved.message.content);
+});
+
+test("son denetimde aynı proje içi WBS taşıması gizli ata düğümünü açıklamaz", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.TEAM, depth: 4 }]] });
+  unrelatedProjectGrant(stack);
+  let taskReads = 0;
+  let moved = false;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (sql.startsWith('/* rota-ai-tool:task-visibility */') && ++taskReads === 2) {
+      moved = true;
+      stack.db.tasks.find(row => row.TaskId === TASKS.TEAM_VISIBLE).WbsId = WBS.TEAM_OTHER;
+    }
+    return false;
+  } };
+  assertHidden(await savedAnswer(conversationId), saved);
+  assert.equal(taskReads, 2, 'görev okuması son açıklama sınırında yinelenmeli');
+  assert.equal(moved, true, 'taşıma son görev denetimi sırasında gerçekleşmeli');
 });
