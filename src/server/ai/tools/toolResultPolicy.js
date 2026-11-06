@@ -40,6 +40,9 @@ export function fitToolResult(envelope, maxBytes, factScope, explicitPolicy = nu
     const largest = candidates[0];
     if (!largest) return null;
     largest.splice(Math.floor(largest.length / 2));
+    // İş dağılım adları ile düğüm kökeni aynı öneki korur.
+    if (current.tool === 'rota_task_detail' && largest === current.data?.task?.wbsPath
+      && Array.isArray(current.data.task.wbsNodes)) current.data.task.wbsNodes.splice(largest.length);
     current.complete = false;
     current.truncated = true;
     current.nextCursor = null;

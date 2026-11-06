@@ -1930,6 +1930,44 @@ test('yetkili WBS düğümlerinin tarihsel yolu güncel ebeveyn değişince kayb
   assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
 });
 
+test('boyut nedeniyle kısaltılan uzun WBS ayrıntısı yetkili geçmişte açılır ve düğüm hakkı kalkınca gizlenir', async t => {
+  const stack = stackFor(t);
+  const nodes = Array.from({ length: 40 }, (_, index) => ({
+    WbsId: `77000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    ProjectId: PROJECTS.TEAM,
+    ParentWbsId: index ? `77000000-0000-4000-8000-${String(index).padStart(12, '0')}` : null,
+    Name: `${index + 1} ${'Ş'.repeat(110)}`, Code: `EKP.${index + 1}`, SortOrder: index
+  }));
+  stack.db.wbs.push(...nodes);
+  const task = stack.db.tasks.find(row => row.TaskId === TASKS.TEAM_VISIBLE);
+  task.WbsId = nodes.at(-1).WbsId;
+  task.Description = 'Ğ'.repeat(1600);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [
+    ['rota_task_detail', { taskId: task.TaskId, textFields: ['description'] }]
+  ], content: `KORUNAN_${randomUUID()} ${nodes[0].Name} 【R1】` });
+  const stored = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+  const detail = stored.data.task;
+  const count = detail.wbsPath.length;
+  assert.ok(count > 0 && count < nodes.length, 'gerçek 16 KiB araç sınırı WBS yolunu küçültmeli');
+  assert.equal(detail.description.length, 1600, 'açıkça istenen açıklama daraltma koşuluna katılmalı');
+  assert.deepEqual(detail.wbsNodes, nodes.slice(0, count).map(node => ({ id: node.WbsId, parentId: node.ParentWbsId })));
+  assert.deepEqual(detail.wbsPath, nodes.slice(0, count).map(node => node.Name));
+  assert.equal(stored.complete, false);
+  assert.equal(stored.truncated, true);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  const context = createToolTurnContext({ sicil: AYSE });
+  const signal = new AbortController().signal;
+  await context.revalidateAuthorization(signal);
+  const epoch = context.authorizationEpoch();
+  task.WbsId = WBS.TEAM_OTHER;
+  await context.revalidateAuthorization(signal);
+  assert.equal(context.authorizationEpoch(), epoch, 'yalnız WBS görünürlüğü değişmeli');
+  const visible = await context.revalidateEvidence([{ ...stored, id: 'current', tool: 'rota_task_detail',
+    payload: JSON.stringify(stored), savedPopulation: true, authorizationPopulation: stored.authorizationPopulation }], signal);
+  assert.equal(visible.size, 0);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
 
 for (const tool of ['rota_task_detail', 'rota_wbs_inspect']) {
   test(`canlı defter de aynı dönemde kaybolan WBS görünürlüğünü yeniden doğrular (${tool})`, async t => {
