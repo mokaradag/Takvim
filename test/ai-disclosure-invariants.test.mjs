@@ -2186,3 +2186,36 @@ test('yüz iletili geçmişte sonraki yanıtların boyutu eski yetkili metni kap
   const revoked = (await loadAssistantConversation(items[0].conversationId)).body.messages;
   for (const item of items) assert.equal(JSON.stringify(revoked).includes(item.saved.message.content), false);
 });
+
+test('sayfası doğrulanmadan ertelenmiş geçmişin analiz bağlamı takip turuna alınmaz', async t => {
+  const stack = stackFor(t);
+  const { conversationId } = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+  const { compressAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+  const { normalizeAnalysisContext } = await import('../src/domain/ai/analysisContext.js');
+  const { loadConversationEvidence } = await import('../src/server/ai/assistant/conversationStore.js');
+  const { prepareAssistantTurn } = await import('../src/server/ai/assistant/assistantService.js');
+  const row = stack.db.aiMessageEvidence[0];
+  const payload = JSON.parse(row.EvidenceJson);
+  const inner = { ...payload.authorizationPopulation, padding: 'x'.repeat(1200000) };
+  assert.ok(Buffer.byteLength(JSON.stringify(inner)) * 8 > TOOL_LIMITS.maxHistoryInflatedBytes);
+  const population = compressAuthorizationPopulation(inner);
+  assert.equal(population.complete, true);
+  const analysisContext = normalizeAnalysisContext({ v: 1, scope: 'self', subjects: [], focus: ['overview'] });
+  assert.ok(analysisContext);
+  row.EvidenceJson = JSON.stringify({ ...payload, authorizationPopulation: population });
+  for (let ordinal = 2; ordinal <= 8; ordinal += 1) stack.db.aiMessageEvidence.push({ ...row, Ordinal: ordinal,
+    EvidenceJson: JSON.stringify({ ...payload, authorizationPopulation: population, ...(ordinal === 8 ? { analysisContext } : {}) }) });
+  assert.ok(stack.db.aiMessageEvidence.every(row => row.EvidenceJson.length < 32000));
+  const pool = await getSqlPool();
+  const stored = await loadConversationEvidence(pool, AYSE, { conversationId, maxEvidence: 1600 });
+  const messageId = row.MessageId.toLowerCase();
+  assert.ok(stored.deferredMessages.has(messageId), 'gerçek açılım bütçesi ertelenmiş dalı çalıştırmalı');
+  assert.ok(stored.analysisByMessage.has(messageId), 'bağlam taşıyan ilk kayıt sığmalı, başka kayıt ertelenmeli');
+  assert.ok(stored.authorizationByMessage.get(messageId).some(entry => entry.unverifiable));
+  const turn = await prepareAssistantTurn({ readBody: async () => ({ conversationId, turnId: randomUUID(),
+    source: 'rota', message: 'Önceki özeti sürdür', mode: 'standard' }) });
+  try {
+    assert.equal(turn.previousAnalysis, null);
+    assert.equal(turn.previousResult, null);
+  } finally { turn.claim.release(); }
+});

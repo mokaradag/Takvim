@@ -488,7 +488,7 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
     // Nüfusu kalıcı kayda sığmayan yanıt güncel yetkiyle doğrulanamaz; bu durum
     // yalnızca kayıtlı künyeden türetilir, güncel yetki hakkında bilgi vermez.
     evidence.unverifiable = new Set([...(evidence.authorizationByMessage || new Map())]
-      .filter(([id, entries]) => !evidence.deferredMessages?.has(id) && entries.some((entry) => entry.unverifiable)).map(([id]) => id));
+      .filter(([id, entries]) => (!revalidate || !evidence.deferredMessages?.has(id)) && entries.some((entry) => entry.unverifiable)).map(([id]) => id));
     if (revalidate && evidence.byMessage.size) {
       const context = createToolTurnContext({ sicil });
       const deadline = createAiDeadline({ timeoutMs: context.limits.maxCumulativeSqlMs, parentSignal: signal });
