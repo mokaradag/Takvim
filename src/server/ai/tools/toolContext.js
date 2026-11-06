@@ -43,6 +43,7 @@ export function createToolTurnContext({
   const state = { sqlMs: 0, queries: 0, authorization: null, authorizationLoads: 0, epoch: null, current: null };
   const waiting = new WeakSet();
   const snapshots = new Map();
+  const wbsByProject = new Map();
   const today = businessDate(now);
 
   async function withSql(signal, work, { authorizationOnly = false } = {}) {
@@ -88,6 +89,8 @@ export function createToolTurnContext({
       throw new ServerPersistenceError('UNAUTHORIZED', 'Oturum kimliği tur sırasında değişti.');
     }
     const scope = buildRotaScope(auth);
+    // Yeni yetki yüklemesi, önceki WBS ata ağacı görüntüsünü geçersiz kılar.
+    wbsByProject.clear();
     const previousEpoch = state.epoch;
     state.epoch = authorizationFingerprint(auth, scope);
     state.current = Object.freeze({ auth, scope });
@@ -136,7 +139,6 @@ export function createToolTurnContext({
   async function revalidateEvidence(entries, signal) {
     // Nüfusu kalıcı kayda sığmayan kanıt güncel yetkiyle doğrulanamaz.
     const authorized = new Set();
-    const wbsByProject = new Map();
     for (const saved of entries) {
       if (signal.aborted) throw signal.reason;
       const prepared = preparedEvidence(saved);
