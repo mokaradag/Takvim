@@ -314,7 +314,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     } catch { authorizationEpoch = null; }
     epochsByMessage.get(id).push(authorizationEpoch);
     authorizationByMessage.get(id).push({ id: `${id}:${row.Ordinal}`, payload: row.EvidenceJson || '{}',
-      authorizationEpoch, scopedAuthorization, taskReferences, unverifiable, savedPopulation, authorizationPopulation, tool: row.ToolName });
+      parsedPayload: stored, authorizationEpoch, scopedAuthorization, taskReferences, unverifiable, savedPopulation, authorizationPopulation, tool: row.ToolName });
     try {
       const scope = taskResultScope(stored.resultScope);
       if (scope && authorizationEpoch && !unverifiable) resultScopeByMessage.set(id, scope);

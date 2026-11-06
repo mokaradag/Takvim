@@ -64,18 +64,11 @@ function packIds(ids) {
   return Buffer.from(ids.map((id) => id.replace(/-/g, '')).join(''), 'hex').toString('base64url');
 }
 
-/** Paketlenmiş kimlikleri kanonik UUID dizisine (ya da `countOnly` ile sayıya) çevirir; bozuk değer `null`. */
-function unpackIds(packed, countOnly = false) {
+/** Paketlenmiş kimliklerin kanonik ikili gösterimi; bozuk değer `null`. */
+function unpackIds(packed) {
   if (typeof packed !== 'string' || !/^[A-Za-z0-9_-]*$/.test(packed)) return null;
   const bytes = Buffer.from(packed, 'base64url');
-  if (bytes.length % 16 !== 0 || bytes.toString('base64url') !== packed) return null;
-  if (countOnly) return bytes.length / 16;
-  const ids = [];
-  for (let offset = 0; offset < bytes.length; offset += 16) {
-    const hex = bytes.subarray(offset, offset + 16).toString('hex');
-    ids.push(`${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`);
-  }
-  return ids;
+  return bytes.length % 16 === 0 && bytes.toString('base64url') === packed ? bytes : null;
 }
 
 export function encodeAuthorizationPopulation(references = []) {
@@ -96,7 +89,7 @@ export function encodeAuthorizationPopulation(references = []) {
 
 /**
  * v1 nüfusunu doğrular ve çözer: kanonik proje anahtarı, geçerli paket, görev
- * sayısı sınırı ve (tam çözümde) yinelenmeyen görev zorunludur; aksi `null`.
+ * sayısı sınırı ve yinelenmeyen görev zorunludur; aksi `null`.
  */
 function decodePackedPopulation(value, countOnly) {
   if (!value || typeof value !== 'object' || value.v !== POPULATION_VERSION || value.complete !== true
@@ -108,16 +101,18 @@ function decodePackedPopulation(value, countOnly) {
     const projectId = key === NO_PROJECT_KEY ? null : canonicalActualId(key);
     // Kodlayıcı yalnızca kanonik proje anahtarı yazar; farklı yazım bozuk kayıttır.
     if (key !== NO_PROJECT_KEY && projectId !== key) return null;
-    const ids = unpackIds(packed, countOnly);
-    if (ids == null) return null;
-    count += countOnly ? ids : ids.length;
+    const bytes = unpackIds(packed);
+    if (!bytes) return null;
+    count += bytes.length / 16;
     if (count > TOOL_LIMITS.maxAnalyzedTasks) return null;
-    if (countOnly) continue;
-    for (const taskId of ids) {
-      // Aynı görevin iki kez (ya da iki projede) görünmesi tutarsız nüfustur.
-      if (seen.has(taskId)) return null;
-      seen.add(taskId);
-      references.push({ taskId, projectId });
+    for (let offset = 0; offset < bytes.length; offset += 16) {
+      const hex = bytes.subarray(offset, offset + 16).toString('hex');
+      if (seen.has(hex)) return null;
+      seen.add(hex);
+      if (!countOnly) {
+        const taskId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+        references.push({ taskId, projectId });
+      }
     }
   }
   return countOnly ? count : references;
@@ -156,9 +151,9 @@ export function decodeAuthorizationPopulation(value, { countOnly = false } = {})
   if (value?.v !== COMPRESSED_POPULATION_VERSION) return decodePackedPopulation(value, countOnly);
   // Sıkıştırılmış kayıt sayım için de bütünüyle açılır ve doğrulanır; iç kayıt yalnızca v1 olabilir.
   const inner = inflatePopulation(value);
-  const decoded = decodePackedPopulation(inner, false);
-  if (!decoded || decoded.length !== value.count) return null;
-  return countOnly ? decoded.length : decoded;
+  const decoded = decodePackedPopulation(inner, countOnly);
+  if (decoded == null || (countOnly ? decoded : decoded.length) !== value.count) return null;
+  return decoded;
 }
 
 /**
@@ -205,7 +200,7 @@ function disclosedProjectLevels(projectIds, rows, levelOf) {
 
 /**
  * Kayıtlı görev kapsamının açıkladığı düzey. Farklı projelerin düzeyleri tek
- * tek kaydedilmediğinde en yüksek düzey her ilgili projeden istenir; güvenli
+ * tek kaydedilmediğinde yalnızca tek düzeyli nüfus doğrulanır; güvenli
  * biçimde kanıtlanamayan eski veya bozuk kapsam yeniden açıklanmaz.
  */
 function savedTaskScopeRank(scope, auth) {
@@ -218,6 +213,7 @@ function savedTaskScopeRank(scope, auth) {
       && scope.kind === 'complete-projects' ? PROJECT_ACCESS_RANK.FULL : null;
   }
   if (scope.completeProjectView !== complete || scope.kind !== (complete ? 'complete-projects' : 'authorized-task-subset')) return null;
+  if (Object.values(levels).filter(count => count > 0).length > 1) return null;
   return levels.full > 0 ? PROJECT_ACCESS_RANK.FULL
     : levels.read > 0 ? PROJECT_ACCESS_RANK.READ : PROJECT_ACCESS_RANK.PARTIAL;
 }
@@ -255,6 +251,8 @@ function assigneeGroupsNeedIdentity(groups, permitted) {
 const EMPTY_RESULT_DATA = Object.freeze({
   rota_project_search: (data) => Array.isArray(data.matches) && data.matches.length === 0,
   rota_task_search: (data) => Array.isArray(data.tasks) && data.tasks.length === 0,
+  rota_workload_summary: (data) => Array.isArray(data.people) && data.people.length === 0 && data.openTaskCount === 0
+    && data.unassignedOpenTasks === 0 && data.unrepresentedOpenTasks === 0,
   rota_task_analytics: (data) => data.totals?.total === 0 && (data.groups == null || (Array.isArray(data.groups) && data.groups.length === 0))
 });
 
@@ -263,14 +261,14 @@ const EMPTY_RESULT_DATA = Object.freeze({
  * nüfuslu ve proje/kişi/ekip/WBS seçicisi taşımayan kayıt. Doğrulanacak katkı
  * kaydı yoktur; eksik ya da bozuk nüfus bu duruma hiçbir zaman girmez.
  */
-function provenEmptyResult(entry, payload, proof) {
+function provenEmptyResult(entry, payload, proof, exact) {
   const data = payload.data;
-  if (proof || entry.taskReferences.length !== 0 || !EMPTY_RESULT_DATA[entry.tool] || !data || typeof data !== 'object'
+  if ((!exact && (proof || entry.tool === 'rota_workload_summary')) || entry.taskReferences.length !== 0 || !EMPTY_RESULT_DATA[entry.tool] || !data || typeof data !== 'object'
     || payload.complete !== true || payload.truncated === true || payload.totalCount !== 0 || payload.returnedCount !== 0
     || payload.entity != null) return false;
   const filters = data.filters;
   if (!filters || typeof filters !== 'object') return false;
-  if (entry.tool !== 'rota_project_search' && (filters.projectId != null || filters.wbsId != null || filters.personSicil != null
+  if (!exact && entry.tool !== 'rota_project_search' && (filters.projectId != null || filters.wbsId != null || filters.personSicil != null
     || filters.teamLevel != null || !['any', 'me'].includes(filters.assignee))) return false;
   return EMPTY_RESULT_DATA[entry.tool](data);
 }
@@ -288,7 +286,7 @@ function savedIdentityTasks(items, auth, permitted) {
   const required = new Set();
   for (const item of items) {
     const taskId = canonicalActualId(item?.taskId);
-    const assignees = item?.assignees ?? [];
+    const assignees = item?.assignees;
     if (!taskId || !Array.isArray(assignees)) return null;
     // Sorumlusuz bilgisi ve güncel olarak açık olmayan kişi yalnızca kimlik tabanıyla açılır.
     const disclosed = item.assignment === 'unassigned'
@@ -300,29 +298,53 @@ function savedIdentityTasks(items, auth, permitted) {
   return required;
 }
 
+/** Tam nüfustaki özgün kimlik tabanları ve kısmi açıklanan kişiler; eksik köken `null`, eski biçim `undefined`. */
+function savedIdentityPopulation(payload, population, permitted, personHidden = false) {
+  if (!Object.hasOwn(payload, 'authorizationIdentityPopulation')) return undefined;
+  const carrier = payload.authorizationIdentityPopulation;
+  const inner = carrier?.v === COMPRESSED_POPULATION_VERSION ? inflatePopulation(carrier) : carrier;
+  const identityReferences = decodePackedPopulation(inner, false);
+  if (carrier?.v === COMPRESSED_POPULATION_VERSION && identityReferences?.length !== carrier.count) return null;
+  if (!identityReferences || identityReferences.some(row => population.get(row.taskId) !== row.projectId)) return null;
+  const identityTaskIds = new Set(identityReferences.map(row => row.taskId));
+  const partial = inner?.partial;
+  if (!Array.isArray(partial) || partial.some(row => !population.has(row?.taskId) || identityTaskIds.has(row.taskId)
+    || !Array.isArray(row.sicils) || row.sicils.some(sicil => !Number.isSafeInteger(sicil) || sicil <= 0))
+    || new Set(partial.map(row => row.taskId)).size !== partial.length
+    || identityTaskIds.size + partial.length !== population.size) return null;
+  for (const row of partial) if (personHidden || row.sicils.some(sicil => !permitted.has(sicil))) identityTaskIds.add(row.taskId);
+  return identityTaskIds;
+}
+
 /**
  * Eski dönemi yeniden üretmeyiz. Yalnızca görev araçlarının tam nüfusu ve
  * kayıtlı alanları, güncel kayıt/kimlik görünürlüğüyle bağımsız doğrulanabilir.
  * Diğer araçların ek yetki kuralları mevcut dönem denetiminde kalır.
  */
-export function savedEvidenceRequirements(entry, auth) {
-  if (!entry.savedPopulation || !/^[a-f0-9]{64}$/.test(entry.authorizationEpoch || '')
+export function savedEvidenceRequirements(entry, auth, { exact = false } = {}) {
+  if ((!entry.savedPopulation && !exact) || !/^[a-f0-9]{64}$/.test(entry.authorizationEpoch || '')
     || !['rota_task_analytics', 'rota_workload_summary', 'rota_task_search', 'rota_task_detail',
       'rota_project_detail', 'rota_project_search', 'rota_portfolio_summary', 'rota_wbs_inspect',
       'rota_baseline_compare', 'rota_dependency_inspect', 'rota_recurrence_inspect', 'rota_data_quality'].includes(entry.tool)) return null;
   const proof = entry.scopedAuthorization;
   if (proof != null && (proof.version !== 1 || !/^[a-f0-9]{64}$/.test(proof.epoch || '')
-    || !Array.isArray(proof.projectIds) || proof.projectIds.some(id => !canonicalActualId(id))
+    || !Array.isArray(proof.projectIds) || proof.projectIds.some(id => canonicalActualId(id) !== id)
+    || new Set(proof.projectIds).size !== proof.projectIds.length
     || proof.taskIds != null && (!Array.isArray(proof.taskIds) || proof.taskIds.some(id => !canonicalActualId(id))))) return null;
-  const payload = JSON.parse(entry.payload || '{}');
+  const payload = entry.parsedPayload || JSON.parse(entry.payload || '{}');
   if (payload.tool !== entry.tool || !Array.isArray(entry.taskReferences)
     || entry.taskReferences.some(({ taskId, projectId }) => !canonicalActualId(taskId) || !canonicalActualId(projectId))) return null;
+  const population = new Map(entry.taskReferences.map(row => [row.taskId, row.projectId]));
+  if (population.size !== entry.taskReferences.length || evidenceTaskReferences(payload).some(row =>
+    !population.has(row.taskId) || row.projectId != null && population.get(row.taskId) !== row.projectId)) return null;
   const projectIds = [...new Set([...(proof?.projectIds || []), ...entry.taskReferences.map(row => row.projectId),
     payload.entity?.type === 'project' ? canonicalActualId(payload.entity.id) : null].filter(Boolean))];
   const data = payload.data;
+  const permitted = new Set([Number(auth.sicil), ...(auth.scopeIdentities || [])]);
   const isProjectRow = (row) => row != null && typeof row === 'object' && Boolean(canonicalActualId(row.projectId));
-  const projectList = entry.tool === 'rota_project_search' ? data?.matches : entry.tool === 'rota_portfolio_summary' ? data?.projects : null;
-  if (projectList !== null) {
+  const projectTool = ['rota_project_search', 'rota_portfolio_summary'].includes(entry.tool);
+  const projectList = entry.tool === 'rota_project_search' ? data?.matches : data?.projects;
+  if (projectTool) {
     // Görev nüfusu boş projeleri içermez; proje sonucu bütün eşleşen projelerin nüfusunu taşımalıdır.
     if (!proof) {
       if (payload.complete !== true || payload.truncated === true || !Array.isArray(projectList)
@@ -330,12 +352,17 @@ export function savedEvidenceRequirements(entry, auth) {
       projectIds.push(...projectList.map(row => canonicalActualId(row.projectId)).filter(id => !projectIds.includes(id)));
     } else if (!Number.isSafeInteger(payload.totalCount) || proof.projectIds.length !== payload.totalCount) return null;
   }
-  if (!projectIds.length) return provenEmptyResult(entry, payload, proof) ? { projectIds: [], identities: false } : null;
-  if (projectList !== null) {
+  if (!projectIds.length) return provenEmptyResult(entry, payload, proof, exact) ? { projectIds: [], identities: false } : null;
+  if (projectTool) {
     // Canlı arama/portföy kısmi projeleri de döndürür: gösterilmeyen proje yalnızca görünürlük, düzeyi
     // gösterilen proje (eşleşme, aday ya da portföy satırı) o düzeyden düşük olmayan güncel erişim ister.
     // Verisi çıkarılmış kayıt gösterilen düzeyleri taşımaz: önceki gibi tam erişim istenir.
-    if (!Array.isArray(projectList)) return { projectIds, fullProjects: true, identities: true };
+    if (!Array.isArray(projectList)) return data === null && payload.dataOmitted === 'size'
+      ? { projectIds, fullProjects: true, identities: true } : null;
+    if (payload.returnedCount !== projectList.length || payload.complete === true && payload.truncated !== true
+      && projectList.length !== payload.totalCount) return null;
+    const listedIds = projectList.map(row => canonicalActualId(row?.projectId));
+    if (listedIds.some(id => !id || !projectIds.includes(id)) || new Set(listedIds).size !== listedIds.length) return null;
     const rows = entry.tool === 'rota_project_search' ? [...projectList, ...(Array.isArray(data.candidates) ? data.candidates : [])] : projectList;
     if (data.candidates != null && !Array.isArray(data.candidates)) return null;
     const projectLevels = disclosedProjectLevels(projectIds, rows, (row) => (entry.tool === 'rota_project_search' ? row.access?.level : row.access));
@@ -348,9 +375,20 @@ export function savedEvidenceRequirements(entry, auth) {
     projectLevels.set(projectId, projectDetailRank(data, projectId));
     return { projectIds, projectLevels, identities: false };
   }
+  const recordedLevels = payload.authorizationProjectLevels;
+  let taskProjectLevels = null;
+  if (recordedLevels != null) {
+    if (!Array.isArray(recordedLevels) || recordedLevels.some(row => !row || canonicalActualId(row.projectId) !== row.projectId
+      || !disclosedRank(row.level)) || new Set(recordedLevels.map(row => row.projectId)).size !== recordedLevels.length) return null;
+    taskProjectLevels = new Map(recordedLevels.map(row => [row.projectId, disclosedRank(row.level)]));
+    if (projectIds.some(id => !taskProjectLevels.has(id))) {
+      if (recordedLevels.length || entry.taskReferences.length) return null;
+      taskProjectLevels = null;
+    }
+  }
   const savedScopeRank = ['rota_recurrence_inspect', 'rota_wbs_inspect', 'rota_data_quality'].includes(entry.tool)
     ? savedTaskScopeRank(payload.scope, auth) : null;
-  if (['rota_recurrence_inspect', 'rota_wbs_inspect', 'rota_data_quality'].includes(entry.tool) && savedScopeRank == null) return null;
+  if (['rota_recurrence_inspect', 'rota_wbs_inspect', 'rota_data_quality'].includes(entry.tool) && savedScopeRank == null && !taskProjectLevels) return null;
   if (entry.tool === 'rota_recurrence_inspect') {
     const listing = Array.isArray(data?.series) && data?.filters && typeof data.filters === 'object';
     const single = data?.series && !Array.isArray(data.series) && typeof data.series === 'object';
@@ -359,7 +397,7 @@ export function savedEvidenceRequirements(entry, auth) {
     if (single || nonRecurring) {
       if (payload.entity?.type !== 'task' || !entry.taskReferences.some(row => row.taskId === canonicalActualId(payload.entity.id))) return null;
     }
-    return { projectIds, projectLevels: new Map(projectIds.map(id => [id, savedScopeRank])), identities: false };
+    return { projectIds, projectLevels: taskProjectLevels || new Map(projectIds.map(id => [id, savedScopeRank])), identities: false };
   }
   if (entry.tool === 'rota_wbs_inspect') {
     const projectId = canonicalActualId(payload.entity?.id);
@@ -385,20 +423,26 @@ export function savedEvidenceRequirements(entry, auth) {
       || !Number.isSafeInteger(data.openTaskCount) || data.openTaskCount < 0 || data.openTaskCount > payload.totalCount
       || !['assignee', 'unresolvedAssignee'].every(id => data.checks.some(row => row?.id === id && Number.isSafeInteger(row.count) && row.count >= 0))
       || data.filters.projectId != null && !projectIds.includes(canonicalActualId(data.filters.projectId))) return null;
-    // Sorumlusuz ve çözülemeyen kişi sayılarının sıfır olması da kimlik sınıflandırmasını açıklar.
-    return { projectIds, projectLevels: new Map(projectIds.map(id => [id, savedScopeRank])), identities: true };
+    // Sıfır kişi sayıları da sınıflandırmadır; özgün alan kökeni yoksa bütün katkılarda kimlik tabanı aranır.
+    const identityTaskIds = savedIdentityPopulation(payload, population, permitted);
+    if (identityTaskIds === null) return null;
+    return { projectIds, projectLevels: taskProjectLevels || new Map(projectIds.map(id => [id, savedScopeRank])),
+      identityTaskIds, identities: !identityTaskIds };
   }
   if (!['rota_task_analytics', 'rota_workload_summary', 'rota_task_search', 'rota_task_detail'].includes(entry.tool)) {
     return { projectIds, fullProjects: true, identities: true };
   }
   // Ekip süzgecinin güncel yönetim düzeyi ve üyeleri kayıttan yeniden kurulamaz; yalnızca birebir dönem eşleşmesi açar.
   // Boyut nedeniyle verisi çıkarılmış kanıt süzgeçlerini (ekip kapsamı dahil) taşımadığından eşdeğer erişim kanıtlanamaz.
-  if (!data || data.filters?.assignee === 'team') return null;
-  if (entry.tool === 'rota_task_analytics' && (!data.totals || !data.filters)) return null;
-  if (entry.tool === 'rota_workload_summary' && (!Array.isArray(data.people) || !Number.isSafeInteger(data.openTaskCount))) return null;
-  if (entry.tool === 'rota_task_search' && !Array.isArray(data.tasks)) return null;
+  if (!data) return exact && payload.dataOmitted === 'size'
+    ? { projectIds, fullProjects: true, identities: true } : null;
+  if (data.filters?.assignee === 'team' && !exact) return null;
+  if (!entry.taskReferences.length && !exact) return null;
+  if (entry.tool === 'rota_task_analytics' && (!data.totals || !data.filters
+    || data.totals.total !== entry.taskReferences.length || payload.totalCount !== entry.taskReferences.length)) return null;
+  if (entry.tool === 'rota_workload_summary' && (!Array.isArray(data.people) || data.openTaskCount !== entry.taskReferences.length)) return null;
+  if (entry.tool === 'rota_task_search' && (!Array.isArray(data.tasks) || payload.totalCount !== entry.taskReferences.length)) return null;
   if (entry.tool === 'rota_task_detail' && !data.task) return null;
-  const permitted = new Set([Number(auth.sicil), ...(auth.scopeIdentities || [])]);
   // Kişi süzgecinin nüfusu kişinin kimliğine dayanır; kimlik güncel olarak açık değilse her görev kimlik tabanı ister.
   const personSicil = data.filters?.personSicil;
   const personHidden = personSicil != null && !permitted.has(Number(personSicil));
@@ -407,7 +451,16 @@ export function savedEvidenceRequirements(entry, auth) {
   if (entry.tool === 'rota_task_search' || entry.tool === 'rota_task_detail') {
     const identityTaskIds = savedIdentityTasks(entry.tool === 'rota_task_search' ? data.tasks : [data.task], auth, permitted);
     if (!identityTaskIds) return null;
-    return { projectIds, identities: personHidden || unassignedFilter, identityTaskIds,
+    let wbs = {};
+    if (entry.tool === 'rota_task_detail' && data.task.wbsPath?.length) {
+      const nodes = data.task.wbsNodes;
+      if (!Array.isArray(nodes) || nodes.length !== data.task.wbsPath.length
+        || nodes.some(node => !canonicalActualId(node?.id) || node.parentId != null && !canonicalActualId(node.parentId))
+        || new Set(nodes.map(node => node.id)).size !== nodes.length) return null;
+      wbs = { wbsAncestorNodes: nodes, wbsProjectId: canonicalActualId(data.task.project?.projectId) };
+      if (!wbs.wbsProjectId) return null;
+    }
+    return { ...wbs, projectIds, identities: personHidden || unassignedFilter, identityTaskIds,
       fullProjects: entry.tool === 'rota_task_detail' && Boolean(data.task.dependencies) };
   }
   // Kesilmiş kişi/grup önizlemesi bütün kimlikleri kanıtlamaz.
@@ -425,7 +478,11 @@ export function savedEvidenceRequirements(entry, auth) {
     || typeof data.populationComplete !== 'boolean') return null;
   const peopleHidden = data.people.some((row) => !permitted.has(Number(row.sicil)));
   // Tam kişi kapsaması, sıfır sorumlusuz görevde de bütün katkı görevlerinin güncel kimlik tabanını ister.
-  return { projectIds, identities: personHidden || truncated || peopleHidden || data.unassignedOpenTasks > 0 || data.populationComplete };
+  const identityTaskIds = savedIdentityPopulation(payload, population, permitted, personHidden);
+  if (identityTaskIds === null) return null;
+  // Kısıtlı özgün görünümde gizli atama varlığı açıklanmaz. Bilinen kimlik tabanları ise her dönemde korunur.
+  return { projectIds, identityTaskIds, identities: !identityTaskIds && (personHidden || truncated || peopleHidden || data.populationComplete
+    || data.unassignedOpenTasks > 0 || data.unrepresentedOpenTasks > 0) };
 }
 
 /**

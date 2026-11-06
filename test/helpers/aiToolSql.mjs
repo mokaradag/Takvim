@@ -511,11 +511,11 @@ const HANDLERS = Object.freeze({
   'project-detail': projectDetail,
   wbs,
   'wbs-selector': (db, params) => {
-    const selected = db.wbs.find((node) => same(node.WbsId, params.wbsId) && (!params.projectId || same(node.ProjectId, params.projectId)));
+    const ids = new Set(String(params.wbsIds || params.wbsId || '').split(',').map(upper));
+    const selected = db.wbs.find(node => ids.has(upper(node.WbsId)) && (!params.projectId || same(node.ProjectId, params.projectId)));
     if (!selected) return [[]];
-    const [nodes] = wbs(db, { ...params, projectId: selected.ProjectId, maxRows: Number.MAX_SAFE_INTEGER });
-    const node = nodes.find((row) => same(row.WbsId, params.wbsId));
-    return [node ? [{ ...node, ProjectName: projectRow(db, selected.ProjectId).ProjectName }] : []];
+    const [nodes] = wbs(db, { ...params, wbsId: null, projectId: selected.ProjectId, maxRows: Number.MAX_SAFE_INTEGER });
+    return [nodes.filter(row => ids.has(upper(row.WbsId))).map(row => ({ ...row, ProjectName: projectRow(db, selected.ProjectId).ProjectName }))];
   },
   dependencies,
   baseline,

@@ -495,57 +495,33 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
       try {
         await context.revalidateAuthorization(deadline.signal);
         const epoch = context.authorizationEpoch();
-        for (const [id, summaries] of [...evidence.byMessage].reverse()) {
-          if (deadline.signal.aborted) { evidence.unavailableMessages.add(id); continue; }
-          const entries = evidence.authorizationByMessage.get(id);
-          if (!entries?.length) continue;
-          const messageDeadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: deadline.signal });
-          try {
-            const authorized = await context.revalidateEvidence(entries, messageDeadline.signal);
-            if (entries.every((entry) => authorized.has(entry.id))) visible.set(id, summaries);
-          } catch (error) {
-            if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;
-            evidence.unavailableMessages.add(id);
-          } finally { messageDeadline.dispose(); }
+        deadline.dispose();
+        // Kaynak denetimi yalnızca son tutarlı işlemde yapılır; bütün geçmiş iki kez açılmaz.
+        for (const [id, summaries] of evidence.byMessage) {
+          const owned = evidence.authorizationByMessage.get(id);
+          if (owned?.length) visible.set(id, summaries);
         }
-        // Parçalı okumalar sırasında yetki değişirse eski bağlamla hiçbir yanıt açılmaz.
-        // Son görev denetimi ileti başına sınırlıdır; tek iletinin süre aşımı diğerlerini gizlemez.
         if (visible.size) {
-          const recheckDeadline = createAiDeadline({ timeoutMs: context.limits.maxCumulativeSqlMs, parentSignal: signal });
-          // Son açıklama sınırındaki başarılı okumalar yalnızca bu istek içinde paylaşılır.
-          const recheckReuse = { tasks: new Map(), wbs: new Map() };
+          const finalDeadline = createAiDeadline({ timeoutMs: context.limits.maxCumulativeSqlMs, parentSignal: signal });
           try {
-            for (const id of [...visible.keys()]) {
+            for (const id of [...visible.keys()].reverse()) {
               if (signal?.aborted) throw signal.reason;
-              if (recheckDeadline.signal.aborted) {
-                evidence.unavailableMessages.add(id);
-                visible.delete(id);
-                continue;
-              }
-              const messageDeadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: recheckDeadline.signal });
+              const messageDeadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: finalDeadline.signal });
               try {
-                // Değişmeyen dönem görev→proje ilişkisini kanıtlamaz; katkı görevleri yeniden okunur.
-                const entries = evidence.authorizationByMessage.get(id);
-                const still = await context.recheckEvidenceTasks(entries, messageDeadline.signal, recheckReuse);
-                if (!entries.every((entry) => still.has(entry))) visible.delete(id);
+                const owned = evidence.authorizationByMessage.get(id);
+                const still = await context.recheckEvidenceTasks(owned, messageDeadline.signal);
+                if (!owned.every(entry => still.has(entry))) visible.delete(id);
               } catch (error) {
                 if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;
                 evidence.unavailableMessages.add(id);
                 visible.delete(id);
               } finally { messageDeadline.dispose(); }
             }
-          } finally { recheckDeadline.dispose(); }
-          // Son yetki dönemi kontrolü görünür iletilerden bağımsız süre sınırıyla yürütülür.
-          if (visible.size) {
-            const finalDeadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: signal });
-            try {
-              await context.revalidateAuthorization(finalDeadline.signal);
-              if (context.authorizationEpoch() !== epoch) {
-                for (const id of visible.keys()) evidence.unavailableMessages.add(id);
-                visible.clear();
-              }
-            } finally { finalDeadline.dispose(); }
-          }
+            if (context.authorizationEpoch() !== epoch) {
+              for (const id of visible.keys()) evidence.unavailableMessages.add(id);
+              visible.clear();
+            }
+          } finally { finalDeadline.dispose(); }
         }
         evidence.byMessage = visible;
       } finally { deadline.dispose(); }

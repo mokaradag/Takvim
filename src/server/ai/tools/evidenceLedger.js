@@ -44,23 +44,32 @@ function highlightPairs(highlights = []) {
 function persistedEvidenceJson(entry, payload, clarificationContext, resultScope, analysisContext = null) {
   const authorization = {
     authorizationEpoch: entry.authorizationEpoch,
-    ...(entry.scopedAuthorization ? { scopedAuthorization: entry.scopedAuthorization } : {})
+    ...(entry.scopedAuthorization ? { scopedAuthorization: entry.scopedAuthorization } : {}),
+    ...(entry.authorizationProjectLevels ? { authorizationProjectLevels: entry.authorizationProjectLevels } : {})
   };
   const clarification = { ...(clarificationContext ? { clarificationContext } : {}), ...(resultScope ? { resultScope } : {}), ...(analysisContext ? { analysisContext } : {}) };
   const population = encodeAuthorizationPopulation(entry.taskReferences || evidenceTaskReferences(payload));
+  if (['rota_workload_summary', 'rota_data_quality'].includes(entry.tool) && entry.taskReferences?.some(row => row.identityBase === false)
+    && entry.taskReferences.every(row => typeof row.identityBase === 'boolean')) {
+    authorization.authorizationIdentityPopulation = compressAuthorizationPopulation({
+      ...encodeAuthorizationPopulation(entry.taskReferences.filter(row => row.identityBase)),
+      partial: entry.taskReferences.filter(row => !row.identityBase).map(row => ({ taskId: row.taskId, sicils: row.identitySicils }))
+    });
+  }
   const full = JSON.stringify({ ...payload, ...authorization, authorizationPopulation: population, ...clarification });
   if (full.length <= MAX_EVIDENCE_JSON_CHARS) return full;
   const { data: _omitted, ...envelope } = payload;
   const compact = JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', ...authorization, authorizationPopulation: population, ...clarification });
-  if (compact.length <= MAX_EVIDENCE_JSON_CHARS) return compact;
   // Yalnızca v1 sığmadığında: sıralı (NEWSEQUENTIALID) görev kimlikleri kayıpsız ve sınırlı biçimde sıkışır.
   const packed = compressAuthorizationPopulation(population);
   if (packed.complete === true) {
     const fullCompressed = JSON.stringify({ ...payload, ...authorization, authorizationPopulation: packed, ...clarification });
     if (fullCompressed.length <= MAX_EVIDENCE_JSON_CHARS) return fullCompressed;
+    if (compact.length <= MAX_EVIDENCE_JSON_CHARS) return compact;
     const compressed = JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', ...authorization, authorizationPopulation: packed, ...clarification });
     if (compressed.length <= MAX_EVIDENCE_JSON_CHARS) return compressed;
   }
+  if (compact.length <= MAX_EVIDENCE_JSON_CHARS) return compact;
   return JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', authorizationEpoch: entry.authorizationEpoch,
     authorizationPopulation: unverifiableAuthorizationPopulation(), ...clarification });
 }
@@ -82,7 +91,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
     /** Defter yeni kanıt alamaz (yanıt başına kanıt sınırı). */
     full,
     /** Başarılı araç sonucunu kaydeder; kimlik (R<n>) döner. Defter doluysa ya da köken eksik/tutarsızsa `null`. */
-    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, populationReferences = null, args = null, round = null }) {
+    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, authorizationProjectLevels = null, populationReferences = null, args = null, round = null }) {
       // Boş nüfus da açıkça kaydedilir; eksik köken başarılı kanıt olamaz.
       const protectedPopulation = claimableContract(tool).paths.length && !PAYLOAD_POPULATION_TOOLS.has(tool);
       if (protectedPopulation && !Array.isArray(populationReferences)) return null;
@@ -101,7 +110,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       });
       if (!summary) return null;
       // Yürütülen bağımsız değişkenler yalnızca sunucuda kalır: kanıtın nüfusu bunlardan hesaplanır.
-      entries.push({ id, tool, kind, summary, payload: null, authorizationEpoch, scopedAuthorization, valid: true,
+      entries.push({ id, tool, kind, summary, payload: null, authorizationEpoch, scopedAuthorization, authorizationProjectLevels, valid: true,
         args: Object.freeze({ ...(args || {}) }), round,
         population: populationReferences });
       return id;
@@ -120,7 +129,10 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       // Son yetki denetimi ve kalıcı kayıt, toplamın dayandığı bütün görevleri
       // (yalnızca yükte görünenleri değil) taşır.
       const references = new Map(evidenceTaskReferences(JSON.parse(payload)).map((row) => [row.taskId, row]));
-      for (const row of entry.population || []) if (!references.has(row.taskId) || !references.get(row.taskId).projectId) references.set(row.taskId, row);
+      for (const row of entry.population || []) {
+        if (!references.has(row.taskId) || !references.get(row.taskId).projectId) references.set(row.taskId, row);
+        else if (typeof row.identityBase === 'boolean') references.set(row.taskId, { ...references.get(row.taskId), identityBase: row.identityBase, identitySicils: row.identitySicils });
+      }
       entry.taskReferences = [...references.values()];
     },
     invalidateAuthorization(epoch, validate = null) {

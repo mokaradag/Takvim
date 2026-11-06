@@ -1,4 +1,5 @@
 import 'server-only';
+import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { searchCorporateDirectory } from '../../../directory/directorySearch.js';
 import { CLARIFICATION_LIMITS } from '../../../../domain/ai/clarification.js';
 import { METRIC_DEFINITIONS } from '../../../../domain/ai/metricDefinitions.js';
@@ -151,7 +152,8 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false }
   }));
   // Toplamlar sonuçta listelenmeyen görevlere de dayanır: sayılan nüfus son yetki
   // denetiminde yeniden doğrulanmak üzere (modele gitmeden) kaydedilir.
-  call.notePopulation?.(facts.map((fact) => ({ taskId: fact.id, projectId: fact.projectId })));
+  call.notePopulation?.(facts.map((fact) => ({ taskId: fact.id, projectId: fact.projectId, identityBase: fact.identityBase,
+    identitySicils: (result.assignees.get(fact.id) || []).filter(person => person.identityVisible && person.sicil != null).map(person => person.sicil) })));
   const projects = projectIndex(result.projects);
   if (filters.projectId) filters.project = projects.get(filters.projectId)?.name || filters.project || 'Seçilen proje';
   if (filters.personSicil != null) {
@@ -348,6 +350,7 @@ const taskDetail = {
       ...(descriptionClipped ? { descriptionClipped: true } : {}),
       project: projectRef({ projectId: fact.projectId, name: dataText(row.ProjectName, 160), code: row.ProjectCode ? dataText(row.ProjectCode, 60) : null }),
       wbsPath: detail.wbsChain.map((node) => dataText(node.Name, 120)),
+      wbsNodes: detail.wbsChain.map((node) => ({ id: canonicalActualId(node.WbsId), parentId: canonicalActualId(node.ParentWbsId) })),
       ...(wbsPathTruncated ? { wbsPathTruncated: true, wbsPathIssue } : {}),
       status: fact.status,
       statusLabel: statusLabelOf(fact.status),

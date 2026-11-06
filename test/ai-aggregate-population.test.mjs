@@ -353,7 +353,7 @@ test("bozuk sıkıştırılmış nüfus doğrulanamaz sayılır", async () => {
     'bozuk JSON': { ...valid, deflated: deflated('{bozuk') },
     'büyük harf proje anahtarı': { ...valid, deflated: deflated({ ...population, tasks: { 'ABCDEF00-0000-4000-8000-00000000000A': population.tasks[PROJECTS.FULL] } }) },
     'yinelenen görev': { ...valid, count: 2 * references.length, deflated: deflated({ ...population, tasks: { ...population.tasks, [PROJECTS.READ]: population.tasks[PROJECTS.FULL] } }) },
-    'açılım sınırı': { ...valid, count: 0, deflated: deflateRawSync(Buffer.alloc(TOOL_LIMITS.maxAnalyzedTasks * 72 + 1024, 0x20)).toString('base64url') },
+    'açılım sınırı': { ...valid, count: 0, deflated: deflated({ v: 1, complete: true, tasks: {}, padding: 'x'.repeat(TOOL_LIMITS.maxAnalyzedTasks * 72 + 1024) }) },
     'sınır üstü metin': { ...valid, deflated: 'A'.repeat(32004) }
   };
   for (const [name, value] of Object.entries(cases)) {
@@ -386,4 +386,45 @@ test("sıkıştırılmış kanıt sınırda veri çıkarılsa bile takip kapsam�
   assert.deepEqual(scoped.resultScope, resultScope, 'sığan bağlam veri çıkarılarak saklanmalı');
   assert.equal(scoped.dataOmitted, 'size', 'bağlam için gereken veri çıkarma açıkça kaydedilmeli');
   assert.deepEqual(decodeAuthorizationPopulation(scoped.authorizationPopulation), decodeAuthorizationPopulation(base.authorizationPopulation));
+});
+
+
+test('kayıpsız sıkıştırılmış yük sığarken küçük kayıplı v1 yük seçilmez', async t => {
+  const stack = stackFor(t);
+  stack.db.tasks.push(...sequentialIds(1100).map(TaskId => ({ TaskId, ProjectId: PROJECTS.FULL,
+    Title: 'Sıralı görevin korunacak başlığı', Status: 'planned', Priority: 'medium' })));
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, limit: 40 });
+  assert.equal(result.ok, true);
+  const [row] = ledger.persistable(ledger.ids());
+  const stored = JSON.parse(row.evidenceJson);
+  const v1 = JSON.stringify({ ...stored, authorizationPopulation: encodeAuthorizationPopulation(decodeAuthorizationPopulation(stored.authorizationPopulation)) });
+  const compactV1 = JSON.stringify({ ...JSON.parse(v1), data: null, dataOmitted: 'size' });
+  assert.ok(v1.length > 32000, 'tam v1 sınırı aşmalı');
+  assert.ok(compactV1.length <= 32000, 'kayıplı v1 kolay yolunun önkoşulu çalışmalı');
+  assert.equal(stored.authorizationPopulation.v, 2);
+  assert.deepEqual(stored.data, result.data);
+  assert.equal(stored.dataOmitted, undefined);
+  assert.ok(row.evidenceJson.length <= 32000);
+});
+
+
+test('büyük kısmi iş yükünün kimlik kökeni mevcut sınıra kayıpsız sığar', async t => {
+  const stack = stackFor(t);
+  const ids = sequentialIds(1100);
+  stack.db.tasks.push(...ids.map(TaskId => ({ TaskId, ProjectId: PROJECTS.PARTIAL,
+    Title: 'Kısmi görev', Status: 'planned', Priority: 'medium', CreatedBySicil: MEHMET })));
+  stack.db.taskAssignees.push(...ids.map(TaskId => ({ TaskId, Sicil: AYSE })));
+  const { result, ledger, context } = await callRotaTool(stack, AYSE, 'rota_workload_summary', { projectId: PROJECTS.PARTIAL });
+  assert.equal(result.ok, true);
+  const [row] = ledger.persistable(ledger.ids());
+  const stored = JSON.parse(row.evidenceJson);
+  assert.equal(stored.authorizationPopulation.complete, true);
+  assert.ok(stored.authorizationIdentityPopulation);
+  assert.deepEqual(stored.data, result.data);
+  assert.ok(row.evidenceJson.length <= 32000);
+  const entry = { id: 'stored', tool: 'rota_workload_summary', savedPopulation: true,
+    authorizationEpoch: stored.authorizationEpoch, scopedAuthorization: stored.scopedAuthorization,
+    authorizationPopulation: stored.authorizationPopulation, payload: row.evidenceJson };
+  await context.revalidateAuthorization(signal());
+  assert.ok((await context.recheckEvidenceTasks([entry], signal())).has(entry));
 });

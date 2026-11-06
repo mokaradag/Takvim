@@ -242,6 +242,8 @@ export function createToolExecutor({
             highlights: shrunk.data?.sizeNote ? [] : (result.outcome.evidence?.highlights || []),
             authorizationEpoch: context.authorizationEpoch?.() ?? null,
             scopedAuthorization: context.evidenceAuthorization?.(result.args, shrunk, result.projectPopulation) ?? null,
+            authorizationProjectLevels: ['rota_recurrence_inspect', 'rota_data_quality'].includes(name)
+              ? context.evidenceProjectLevels?.(result.population || []) : null,
             populationReferences: result.population,
             args: result.args,
             round: state.rounds

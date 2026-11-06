@@ -164,8 +164,18 @@ export async function readProjectDetail(executor, scope, { projectId, today, soo
 export async function readWbsSelector(executor, scope, { projectId = null, wbsId }) {
   const request = scoped(executor, scope, { projectId });
   request.input('wbsId', sql.UniqueIdentifier, wbsId);
+  request.input('wbsIds', sql.NVarChar(sql.MAX), wbsId);
   const [[node] = []] = recordsets(await request.query(AI_TOOL_WBS_SELECTOR_SQL));
   return node || null;
+}
+
+/** Yalnızca istenen düğümlerin güncel görünürlüğü; görev sayıları veya bütün proje ağacı okunmaz. */
+export async function readWbsVisibility(executor, scope, { projectId, wbsIds }) {
+  const request = scoped(executor, scope, { projectId });
+  request.input('wbsId', sql.UniqueIdentifier, null);
+  request.input('wbsIds', sql.NVarChar(sql.MAX), wbsIds.join(','));
+  const [nodes = []] = recordsets(await request.query(AI_TOOL_WBS_SELECTOR_SQL));
+  return nodes;
 }
 
 export async function readWbs(executor, scope, { projectId, wbsId = null, today, maxRows }) {

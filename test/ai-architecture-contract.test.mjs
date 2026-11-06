@@ -215,7 +215,7 @@ test('sunucu yapay zekâ modülleri yalnızca izinli altyapıya bağlanır ve ge
   // "işlem içinde miyim" sorusunu sorar.
   // Konuşma geçmişi hizmeti kısa işlemleri açar; deposu yalnızca parametre türlerini kullanır.
   // Araç bağlamı havuzu yalnızca kendi sınırlı kapısından geçirir; araç deposu
-  // yalnızca parametre türlerini kullanır. Araç katmanı SQL işlemi açmaz.
+  // yalnızca parametre türlerini kullanır. Araç bağlamı geçmişin son açıklamasında kısa salt okunur işlem açar.
   assert.deepEqual(poolImports, {
     'src/server/ai/aiCredentialService.js': ['getSqlPool', 'withSqlTransaction'],
     'src/server/ai/aiCredentialStore.js': ['sql'],
@@ -223,7 +223,7 @@ test('sunucu yapay zekâ modülleri yalnızca izinli altyapıya bağlanır ve ge
     'src/server/ai/assistant/assistantService.js': ['getSqlPool', 'withSqlTransaction'],
     'src/server/ai/assistant/conversationStore.js': ['sql'],
     'src/server/ai/tools/rota/rotaToolStore.js': ['sql'],
-    'src/server/ai/tools/toolContext.js': ['getSqlPool']
+    'src/server/ai/tools/toolContext.js': ['getSqlPool', 'sql', 'withSqlTransaction']
   });
 });
 
@@ -766,7 +766,13 @@ test('araç SQL metinleri sabit, parametreli, salt okunur ve yetki kapsamına ba
   for (const [name, body] of toolSources) {
     if (name === 'src/server/ai/tools/rota/rotaToolQueries.js') continue;
     assert.doesNotMatch(body, /\bdbo\.MR_/, `${name}: SQL metni yalnızca sorgu modülündedir`);
-    assert.doesNotMatch(body, /withSqlTransaction|updateTaskNotifications|updateScheduleNotifications|updateCoordinationNotifications|markNotifications/, name);
+    assert.doesNotMatch(body, /updateTaskNotifications|updateScheduleNotifications|updateCoordinationNotifications|markNotifications/, name);
+    if (name === 'src/server/ai/tools/toolContext.js') {
+      assert.equal((body.match(/withSqlTransaction\(/g) || []).length, 1, 'tek işlem yalnızca son açıklama denetimine aittir');
+      assert.match(body, /withSqlTransaction\(async transaction =>/);
+      assert.match(body, /isolationLevel: sql\.ISOLATION_LEVEL\.SERIALIZABLE/);
+      assert.doesNotMatch(body, /\.query\(|\.batch\(|\.execute\(/, 'bağlam SQL metni veya yordam çalıştıramaz');
+    } else assert.doesNotMatch(body, /withSqlTransaction/, name);
   }
 });
 

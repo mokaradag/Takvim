@@ -62,7 +62,9 @@ for (const mode of ['standard', 'deep']) {
     assert.ok(answer.content.endsWith(`\n\n${SCOPE_DISCLOSURE_TEXT}`), 'kısmi kapsam notu sunucu seçiminde de eklenir');
     assert.deepEqual(answer.evidence.map((item) => item.id), ['R1']);
     assert.equal(stack.db.aiMessageEvidence.length, 1);
-    assert.equal(visibilityReads(stack), 3, 'güncel görünürlük çizimden önce, kayıttan sonra ve açıklamadan hemen önce yeniden okunur');
+    assert.equal(visibilityReads(stack), 2, 'güncel görünürlük çizimden önce ve kayıtlı yanıtın son tutarlı işleminde okunur');
+    const { sql } = await import('../src/server/db/pool.js');
+    assert.equal(stack.db.transactions.at(-1).isolationLevel, sql.ISOLATION_LEVEL.SERIALIZABLE);
 
     const [trace] = turnTraces(logs);
     const { rounds, ...counters } = trace.context;
