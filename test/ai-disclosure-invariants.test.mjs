@@ -1254,6 +1254,7 @@ function narrowFullProjectToAssignments(stack, taskIds) {
 const storedData = (stack, index = 0) => JSON.parse(stack.db.aiMessageEvidence[index].EvidenceJson).data;
 const assertHidden = (answer, saved) => {
   assert.equal(answer.finishReason, 'not_found');
+  assert.equal(answer.content, NON_ENUMERATING_FAILURE_TEXT);
   const protectedText = saved.message.content.split('【')[0].trim();
   assert.ok(protectedText.length > 0);
   assert.equal(JSON.stringify(answer).includes(protectedText), false, 'korunan metnin hiçbir parçası yanıta eklenemez');
