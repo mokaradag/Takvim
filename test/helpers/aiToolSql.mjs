@@ -514,8 +514,26 @@ const HANDLERS = Object.freeze({
     const ids = new Set(String(params.wbsIds || params.wbsId || '').split(',').map(upper));
     const selected = db.wbs.find(node => ids.has(upper(node.WbsId)) && (!params.projectId || same(node.ProjectId, params.projectId)));
     if (!selected) return [[]];
-    const [nodes] = wbs(db, { ...params, wbsId: null, projectId: selected.ProjectId, maxRows: Number.MAX_SAFE_INTEGER });
-    return [nodes.filter(row => ids.has(upper(row.WbsId))).map(row => ({ ...row, ProjectName: projectRow(db, selected.ProjectId).ProjectName }))];
+    const project = projectRow(db, selected.ProjectId);
+    const token = String(params.scopeProjects || '').split(',').find(value => same(value.slice(0, 36), selected.ProjectId));
+    if (!project?.IsActive || !params.isAdmin && !token) return [[]];
+    const catalog = params.isAdmin || token[37] === 'F' || token[38] === '1' || token[39] === '1';
+    const allowed = new Set();
+    const examinedTaskIds = [];
+    if (!catalog) for (const taskId of String(params.scopeTasks || '').split(',').filter(isGuid)) {
+      examinedTaskIds.push(upper(taskId));
+      const task = db.tasks.find(row => same(row.TaskId, taskId));
+      if (!task || !same(task.ProjectId, selected.ProjectId)) continue;
+      let node = db.wbs.find(row => same(row.WbsId, task.WbsId));
+      const visited = new Set();
+      while (node && same(node.ProjectId, selected.ProjectId) && !visited.has(upper(node.WbsId))) {
+        visited.add(upper(node.WbsId)); allowed.add(upper(node.WbsId));
+        node = db.wbs.find(row => same(row.WbsId, node.ParentWbsId));
+      }
+    }
+    db.aiToolLog.at(-1).examinedTaskIds = examinedTaskIds;
+    return [db.wbs.filter(row => same(row.ProjectId, selected.ProjectId) && ids.has(upper(row.WbsId)) && (catalog || allowed.has(upper(row.WbsId))))
+      .map(row => ({ ...row, ProjectName: project.ProjectName }))];
   },
   dependencies,
   baseline,

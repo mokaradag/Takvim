@@ -1,4 +1,6 @@
 import 'server-only';
+import { canonicalActualId } from '../../../../domain/identity/actualId.js';
+import { readVisibleTasks } from './rotaToolStore.js';
 import { changeEntryVisible } from '../../../../domain/ai/claimableEvidence.js';
 import { COORDINATION_MODES, COORDINATION_STATUS_LABELS, COORDINATION_STATUSES } from '../../../../domain/assignment/assignmentCoordination.js';
 import { TASK_NOTIFICATION_KINDS } from '../../../../domain/notifications/notificationInbox.js';
@@ -420,7 +422,7 @@ const notifications = {
   description: 'Kullanıcının kendi bildirimlerini okur: okunmamış sayıları, kararını bekleyen kayıtlar ve son bildirimler. Bildirimleri okundu olarak İŞARETLEMEZ.',
   parameters: { type: 'object', additionalProperties: false, properties: {} },
   async handler(args, call) {
-    const { auth } = await call.authorization();
+    const { auth, scope } = await call.authorization();
     const [schedule, inbox] = await call.sql(async (executor) => {
       const scheduleInbox = await readScheduleInbox(executor, auth, { evidenceSnapshotLimit: TOOL_LIMITS.maxCursorOffset });
       let combined = null;
@@ -432,8 +434,16 @@ const notifications = {
       return [scheduleInbox, combined];
     });
     // Sayaçlar önizlemede listelenmeyen kayıtlara da dayanır: sayılan bütün görevler kaydedilir.
-    call.notePopulation?.([...(schedule.population || []), ...(inbox?.coordination.population || []), ...(inbox?.taskEvents.population || [])]
-      .map(({ taskId, projectId }) => ({ taskId, projectId })));
+    const population = [...(schedule.population || []), ...(inbox?.coordination.population || []), ...(inbox?.taskEvents.population || [])];
+    const countedIds = new Set(population.map(row => row.taskId));
+    const previewIds = [...new Set([...schedule.items, ...(inbox?.coordination.items || []), ...(inbox?.taskEvents.items || [])]
+      .filter(row => row.taskAvailable).map(row => canonicalActualId(row.taskId)).filter(id => id && !countedIds.has(id)))];
+    // Okunmuş önizlemeler sayaç nüfusunda bulunmayabilir; kökenleri güncel görünürlükle tek toplu okumada tamamlanır.
+    if (previewIds.length) {
+      const visible = await call.sql(executor => readVisibleTasks(executor, scope, previewIds));
+      population.push(...[...visible].map(([taskId, row]) => ({ taskId, projectId: row.projectId })));
+    }
+    call.notePopulation?.(population.map(({ taskId, projectId }) => ({ taskId, projectId })));
     const scheduleItems = schedule.items.map((request) => ({
       source: 'schedule-request',
       ...(request.taskAvailable ? { taskId: request.taskId } : {}),

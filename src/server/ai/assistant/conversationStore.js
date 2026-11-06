@@ -1,9 +1,11 @@
 import 'server-only';
+import { setImmediate } from 'node:timers/promises';
 import { taskResultScope } from '../../../domain/ai/requestContract.js';
 import { normalizeAnalysisContext } from '../../../domain/ai/analysisContext.js';
 import { sql } from '../../db/pool.js';
 import { normalizeEvidenceSummary } from '../../../domain/ai/evidenceContract.js';
 import { decodeAuthorizationPopulation, PAYLOAD_POPULATION_TOOLS } from '../tools/evidenceAuthorization.js';
+import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import {
   AI_CONVERSATION_APPEND_ANSWER_SQL,
   AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL,
@@ -264,11 +266,12 @@ export async function appendConversationAnswer(executor, sicil, {
  * eşleme döner. Kanıt yükü yalnızca sunucuda güncel varlık yetkisini
  * doğrulamak için okunur; tarayıcıya yalnızca güvenli özet gider.
  */
-export async function loadConversationEvidence(executor, sicil, { conversationId, messageId = null, maxEvidence }) {
+export async function loadConversationEvidence(executor, sicil, { conversationId, messageId = null, maxEvidence, signal = null }) {
   const request = sicilRequest(executor, sicil);
   request.input('conversationId', sql.UniqueIdentifier, conversationId);
   request.input('messageId', sql.UniqueIdentifier, messageId);
   request.input('maxEvidence', sql.Int, maxEvidence);
+  request.input('maxEvidenceBytes', sql.Int, TOOL_LIMITS.maxHistoryEvidenceBytes);
   let result;
   try {
     result = await request.query(AI_CONVERSATION_EVIDENCE_SQL);
@@ -283,8 +286,12 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
   const resultScopeByMessage = new Map();
   const analysisByMessage = new Map();
   const authorizationByMessage = new Map();
-  for (const row of rows) {
+  const budget = { remainingBytes: TOOL_LIMITS.maxHistoryInflatedBytes };
+  // Yeni yanıtlar önce doğrulanır; bir SQL partisi ya da açılım olay döngüsünü tekelinde tutmaz.
+  for (const row of [...rows].reverse()) {
     if (row.Ordinal == null) continue;
+    await setImmediate();
+    signal?.throwIfAborted();
     const id = idOrNull(row.MessageId);
     if (!epochsByMessage.has(id)) epochsByMessage.set(id, []);
     if (!authorizationByMessage.has(id)) authorizationByMessage.set(id, []);
@@ -292,7 +299,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     let authorizationEpoch = null;
     let scopedAuthorization = null;
     let taskReferences = null;
-    let unverifiable = false;
+    let unverifiable = Boolean(row.EvidenceOmitted);
     let savedPopulation = false;
     let authorizationPopulation = null;
     try {
@@ -303,15 +310,18 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
       // Alanı bulunan fakat bozuk/boş nüfus eski kayıt sayılmaz; doğrulanamaz olarak kapalı kalır.
       if (Object.hasOwn(stored, 'authorizationPopulation')) {
         // Geçmişin tamamı görev dizilerine açılmaz; tam çözümleme yalnızca doğrulanan kanıtta yapılır.
-        unverifiable = decodeAuthorizationPopulation(population, { countOnly: true }) == null;
+        unverifiable ||= decodeAuthorizationPopulation(population, { countOnly: true, budget }) == null;
+        if (Object.hasOwn(stored, 'authorizationIdentityPopulation')) {
+          unverifiable ||= decodeAuthorizationPopulation(stored.authorizationIdentityPopulation, { countOnly: true, budget }) == null;
+        }
         savedPopulation = !unverifiable;
         authorizationPopulation = population;
       } else {
         taskReferences = stored.authorizationReferences ?? null;
         // Nüfus işaretinden önceki kayıt yalnızca yükündeki görevleri taşır.
-        unverifiable = !PAYLOAD_POPULATION_TOOLS.has(String(row.ToolName || ''));
+        unverifiable ||= !PAYLOAD_POPULATION_TOOLS.has(String(row.ToolName || ''));
       }
-    } catch { authorizationEpoch = null; }
+    } catch { authorizationEpoch = null; unverifiable = true; }
     epochsByMessage.get(id).push(authorizationEpoch);
     authorizationByMessage.get(id).push({ id: `${id}:${row.Ordinal}`, payload: row.EvidenceJson || '{}',
       parsedPayload: stored, authorizationEpoch, scopedAuthorization, taskReferences, unverifiable, savedPopulation, authorizationPopulation, tool: row.ToolName });

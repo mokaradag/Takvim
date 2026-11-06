@@ -261,14 +261,23 @@ const EVIDENCE_READY = `
 export const AI_CONVERSATION_EVIDENCE_SQL = `${KNOWN_SICIL}${EVIDENCE_READY}
   SELECT @knownSicil AS KnownSicil, @evidenceReady AS EvidenceReady;
   IF @knownSicil = 1 AND @evidenceReady = 1
-    SELECT TOP (@maxEvidence) m.MessageId, e.Ordinal, e.ToolName, e.SummaryJson,
-      e.EvidenceJson
-    FROM dbo.MR_AiConversationMessages m WITH (HOLDLOCK)
-    JOIN dbo.MR_AiConversations c WITH (HOLDLOCK) ON c.ConversationId = m.ConversationId
-    LEFT JOIN dbo.MR_AiMessageEvidence e ON e.MessageId = m.MessageId
-    WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil
-      AND (@messageId IS NULL OR m.MessageId = @messageId)
-    ORDER BY m.Sequence, e.Ordinal;`;
+  BEGIN
+    ;WITH EvidenceWindow AS (
+      SELECT TOP (@maxEvidence) m.MessageId, m.Sequence, e.Ordinal, e.ToolName, e.SummaryJson, e.EvidenceJson,
+        SUM(CONVERT(bigint, COALESCE(DATALENGTH(e.EvidenceJson), 0))) OVER (
+          ORDER BY m.Sequence DESC, e.Ordinal ROWS UNBOUNDED PRECEDING) AS EvidenceBytes
+      FROM dbo.MR_AiConversationMessages m WITH (HOLDLOCK)
+      JOIN dbo.MR_AiConversations c WITH (HOLDLOCK) ON c.ConversationId = m.ConversationId
+      LEFT JOIN dbo.MR_AiMessageEvidence e ON e.MessageId = m.MessageId
+      WHERE c.ConversationId = @conversationId AND c.OwnerSicil = @sicil
+        AND (@messageId IS NULL OR m.MessageId = @messageId)
+      ORDER BY m.Sequence DESC, e.Ordinal
+    )
+    SELECT MessageId, Ordinal, ToolName, SummaryJson,
+      CASE WHEN EvidenceBytes <= @maxEvidenceBytes THEN EvidenceJson END AS EvidenceJson,
+      CAST(CASE WHEN EvidenceBytes > @maxEvidenceBytes THEN 1 ELSE 0 END AS bit) AS EvidenceOmitted
+    FROM EvidenceWindow ORDER BY Sequence, Ordinal;
+  END;`;
 
 /**
  * Kanıta dayalı yanıtı ve atıf yaptığı kanıtları AYNI kısa işlemde yazar

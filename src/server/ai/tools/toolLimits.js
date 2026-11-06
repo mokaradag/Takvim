@@ -37,6 +37,10 @@ export const TOOL_LIMITS = Object.freeze({
   maxAuthorizationRows: 200000,
   maxAnalyzedActivities: 20000,
   maxActivityAssignees: 2000,
+  /** Geçmiş isteğinde SQL'den taşınan toplam kanıt yükü (UTF-16 bayt). */
+  maxHistoryEvidenceBytes: 2 * 1024 * 1024,
+  /** Geçmişin sıkıştırılmış nüfuslarını ilk doğrulamada açma bütçesi (bayt). */
+  maxHistoryInflatedBytes: 8 * 1024 * 1024,
   /** Liste araçlarının en fazla sayfa ötelemesi (imleç). */
   maxCursorOffset: 1000
 });

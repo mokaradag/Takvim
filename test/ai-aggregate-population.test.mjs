@@ -428,3 +428,84 @@ test('büyük kısmi iş yükünün kimlik kökeni mevcut sınıra kayıpsız s�
   await context.revalidateAuthorization(signal());
   assert.ok((await context.recheckEvidenceTasks([entry], signal())).has(entry));
 });
+
+test('açılım sınırını aşan kimlik kökeni ana nüfusu doğrulanabilir göstermez', async t => {
+  const stack = stackFor(t);
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_workload_summary', { projectId: PROJECTS.PARTIAL });
+  assert.equal(result.ok, true);
+  const entry = ledger.authorizationEntries()[0];
+  assert.ok(entry.taskReferences.length > 0);
+  entry.taskReferences.forEach(row => { row.identityBase = false; row.identitySicils = []; });
+  entry.taskReferences[0].identitySicils = Array.from({ length: 150000 }, (_, index) => 1000000000 + index);
+  const inner = { ...encodeAuthorizationPopulation([]), partial: entry.taskReferences.map(row => ({ taskId: row.taskId, sicils: row.identitySicils })) };
+  assert.ok(Buffer.byteLength(JSON.stringify(inner)) > TOOL_LIMITS.maxAnalyzedTasks * 72 + 64, 'gerçek açılım sınırı aşılmalı');
+  assert.equal(compressAuthorizationPopulation(inner).complete, false);
+  const [row] = ledger.persistable(ledger.ids(), { resultScope: { selected: 'görevler' } });
+  assert.ok(row.evidenceJson.length <= 32000);
+  const stored = JSON.parse(row.evidenceJson);
+  assert.equal(stored.authorizationPopulation.complete, false);
+  assert.equal(stored.authorizationIdentityPopulation, undefined);
+  assert.equal(stored.resultScope, undefined);
+  assert.equal(decodeAuthorizationPopulation(stored.authorizationPopulation), null);
+});
+
+test('uzun geçmişin toplam açılım bütçesi kimlik taşıyıcısında da uygulanır', async t => {
+  const stack = stackFor(t);
+  const { prepareConversationTurn, appendGroundedConversationAnswer, loadConversationEvidence } = await import('../src/server/ai/assistant/conversationStore.js');
+  const { getSqlPool } = await import('../src/server/db/pool.js');
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_workload_summary', { projectId: PROJECTS.FULL });
+  const [template] = ledger.persistable(ledger.ids());
+  const refs = sequentialIds(6000).map(taskId => ({ taskId, projectId: PROJECTS.FULL }));
+  const inner = encodeAuthorizationPopulation(refs);
+  const expandedBytes = Buffer.byteLength(JSON.stringify(inner));
+  const compressed = compressAuthorizationPopulation(inner);
+  assert.equal(compressed.complete, true);
+  assert.ok(expandedBytes * 72 > TOOL_LIMITS.maxHistoryInflatedBytes, 'bütçenin gerçekten aşılması gerekir');
+  const payload = { ...JSON.parse(template.evidenceJson), authorizationIdentityPopulation: compressed };
+  const json = JSON.stringify(payload);
+  assert.ok(json.length <= 32000);
+  const pool = await getSqlPool();
+  let conversationId;
+  for (let index = 0; index < 6; index += 1) {
+    const prepared = await prepareConversationTurn(pool, AYSE, { conversationId, newConversationId: randomUUID(), userMessageId: randomUUID(),
+      turnId: randomUUID(), content: 'Nüfus', title: 'Nüfus', maxMessages: 100, historyLimit: 20 });
+    conversationId = prepared.conversation.id;
+    await appendGroundedConversationAnswer(pool, AYSE, { conversationId, messageId: randomUUID(), replyToMessageId: prepared.turn.message.id,
+      content: 'Korunan geçmiş', mode: 'standard', finishReason: 'stop',
+      evidence: Array.from({ length: 12 }, (_, ordinal) => ({ ...template, ordinal: ordinal + 1, evidenceJson: json })) });
+  }
+  let yielded = false;
+  setTimeout(() => { yielded = true; }, 0);
+  const loaded = await loadConversationEvidence(pool, AYSE, { conversationId, maxEvidence: 1600 });
+  const entries = [...loaded.authorizationByMessage.values()].flat();
+  assert.equal(entries.length, 72);
+  assert.ok(entries.some(entry => entry.unverifiable));
+  assert.ok(entries.filter(entry => !entry.unverifiable).length <= Math.floor(TOOL_LIMITS.maxHistoryInflatedBytes / expandedBytes));
+  assert.equal(yielded, true, 'açılımlar arasında olay döngüsü çalışmalı');
+  assert.doesNotMatch(JSON.stringify([...loaded.byMessage.values()]), /EvidenceJson|authorizationIdentityPopulation|deflated|parsedPayload/);
+});
+
+test('bozuk JSON açılım bütçesini iki kez tüketmez', async () => {
+  const { deflateRawSync } = await import('node:zlib');
+  const text = '{bozuk';
+  const budget = { remainingBytes: 100 };
+  assert.equal(decodeAuthorizationPopulation({ v: 2, complete: true, count: 0,
+    deflated: deflateRawSync(text).toString('base64url') }, { countOnly: true, budget }), null);
+  assert.equal(budget.remainingBytes, 100 - Buffer.byteLength(text));
+});
+
+test('geçmiş açılımı SQL sonucundan sonra gelen iptalde durur', async t => {
+  const stack = stackFor(t);
+  const { prepareConversationTurn, appendGroundedConversationAnswer, loadConversationEvidence } = await import('../src/server/ai/assistant/conversationStore.js');
+  const { getSqlPool } = await import('../src/server/db/pool.js');
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.OVERDUE });
+  const pool = await getSqlPool();
+  const prepared = await prepareConversationTurn(pool, AYSE, { newConversationId: randomUUID(), userMessageId: randomUUID(),
+    turnId: randomUUID(), content: 'Görev', title: 'Görev', maxMessages: 100, historyLimit: 20 });
+  await appendGroundedConversationAnswer(pool, AYSE, { conversationId: prepared.conversation.id, messageId: randomUUID(),
+    replyToMessageId: prepared.turn.message.id, content: 'Korunan görev', mode: 'standard', finishReason: 'stop', evidence: ledger.persistable(ledger.ids()) });
+  const controller = new AbortController();
+  const reason = new Error('İptal');
+  controller.abort(reason);
+  await assert.rejects(loadConversationEvidence(pool, AYSE, { conversationId: prepared.conversation.id, maxEvidence: 1600, signal: controller.signal }), error => error === reason);
+});

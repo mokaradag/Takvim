@@ -55,6 +55,11 @@ function persistedEvidenceJson(entry, payload, clarificationContext, resultScope
       ...encodeAuthorizationPopulation(entry.taskReferences.filter(row => row.identityBase)),
       partial: entry.taskReferences.filter(row => !row.identityBase).map(row => ({ taskId: row.taskId, sicils: row.identitySicils }))
     });
+    // Kimlik kökeni sığmıyorsa ana nüfus da doğrulanabilir görünemez; daraltıcı kapsamlar saklanmaz.
+    if (authorization.authorizationIdentityPopulation.complete !== true) {
+      return JSON.stringify({ ...payload, data: null, dataOmitted: 'size', authorizationEpoch: entry.authorizationEpoch,
+        authorizationPopulation: unverifiableAuthorizationPopulation() });
+    }
   }
   const full = JSON.stringify({ ...payload, ...authorization, authorizationPopulation: population, ...clarification });
   if (full.length <= MAX_EVIDENCE_JSON_CHARS) return full;

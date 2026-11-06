@@ -1469,6 +1469,10 @@ güncel yetki bellekteki kanıt defteriyle yeniden doğrulanır; yetki
 doğrulanamazsa ya da erişim kalktıysa yanıt gösterilmez. Başka bir yazıcıyla
 uzlaştırılmış eski yanıt bu istisnayı kullanamaz.
 Geçmişin yinelenen ilk kaynak taraması kaldırılmıştır; aynı iletinin proje/görev/düğüm okumaları son işlemde tekilleştirilir.
+Araç SQL bütçesinin tükenmesi, başarılı kanıtı kendiliğinden doğrulama hatasına çevirmez; son yetki denetimi ayrı süre sınırında çalışır.
+Geçmiş isteğinde en yeni kanıtlardan başlayarak en fazla 2 MiB ham yük SQL'den taşınır; sınırı aşan iletiler kapalı kalır.
+İlk nüfus doğrulamasının toplam sıkıştırma açılımı 8 MiB ile sınırlıdır; kayıtlar arasında olay döngüsüne sıra verilir.
+Boş sonuçta katkı nüfusu aranan kapsamı kanıtlamıyorsa özgün yetki dönemi gerekir; iş verisinin sonradan değişmesi tek başına revokasyon değildir.
 Son açıklama denetimi her ileti için ayrı, en fazla 8 saniyelik SERIALIZABLE
 okuma işlemidir; bütün son denetimlerin toplamı 25 saniyeyle sınırlıdır. Yetki,
 etkin proje, görevin kayıtlı projesi ve kimlik tabanı, gereken WBS düğümleri ve

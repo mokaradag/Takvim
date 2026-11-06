@@ -219,7 +219,6 @@ export function createToolTurnContext({
    * yoktur. Önceki denetimlerin gözlemleri bu işleme taşınmaz.
    */
   async function recheckEvidenceTasks(entries, signal) {
-    const epoch = state.epoch;
     return withSql(signal, async (_executor, track, transactionSignal) => {
       const pending = withSqlTransaction(async transaction => {
         const run = (activeSignal, work) => {
@@ -228,7 +227,8 @@ export function createToolTurnContext({
           return work(boundedExecutor(transaction, activeSignal, { track }));
         };
         await loadScope(transactionSignal, true, run);
-        if (state.epoch !== epoch) throw new ToolError(TOOL_ERROR_CODES.TIMEOUT);
+        // Önceki iletinin dönemi bu işlemin yetki kaynağı değildir.
+        const epoch = state.epoch;
         const authorized = await revalidateEvidence(entries, transactionSignal, run);
         await loadScope(transactionSignal, true, run);
         if (state.epoch !== epoch) throw new ToolError(TOOL_ERROR_CODES.TIMEOUT);

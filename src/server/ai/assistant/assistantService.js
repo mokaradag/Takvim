@@ -16,6 +16,7 @@ import { getSqlPool, withSqlTransaction } from '../../db/pool.js';
 import { ServerPersistenceError } from '../../errors.js';
 import { getTrustedCurrentSicil } from '../../identity/currentUserProvider.js';
 import { boundedExecutor } from '../../observability/boundedExecution.js';
+import { logEvent } from '../../observability/structuredLogger.js';
 import { readAiConfig, requireAiAvailable } from '../aiConfig.js';
 import { assertAiDirectoryMember, loadAiCredentialStatus } from '../aiCredentialService.js';
 import { abortableDelay, AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS, createAiDeadline, raceWithAbort } from '../aiDeadline.js';
@@ -288,7 +289,7 @@ function isTransientEvidenceProbeFailure(error) {
 
 async function loadEvidenceFor(sicil, signal, { conversationId, messageId = null }) {
   const result = await withConversationSql(sicil, signal, (scope) => loadConversationEvidence(directExecutor(scope), sicil, {
-    conversationId, messageId, maxEvidence: MAX_CONVERSATION_EVIDENCE
+    conversationId, messageId, maxEvidence: MAX_CONVERSATION_EVIDENCE, signal: scope.signal
   }));
   if (!result.knownSicil) throw unknownSicil();
   noteEvidenceSchema(result.ready);
@@ -494,7 +495,6 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
       evidence.unavailableMessages = new Set();
       try {
         await context.revalidateAuthorization(deadline.signal);
-        const epoch = context.authorizationEpoch();
         deadline.dispose();
         // Kaynak denetimi yalnızca son tutarlı işlemde yapılır; bütün geçmiş iki kez açılmaz.
         for (const [id, summaries] of evidence.byMessage) {
@@ -513,13 +513,12 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
                 if (!owned.every(entry => still.has(entry))) visible.delete(id);
               } catch (error) {
                 if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;
+                // İçerik, kanıt, kimlik ve ham hata metni günlüğe taşınmaz.
+                logEvent({ severity: 'WARNING', component: 'AI', operation: 'ai.history.disclosure',
+                  code: 'AI_HISTORY_CHECK_FAILED', message: 'Geçmiş yanıtın son yetki denetimi tamamlanamadı.' });
                 evidence.unavailableMessages.add(id);
                 visible.delete(id);
               } finally { messageDeadline.dispose(); }
-            }
-            if (context.authorizationEpoch() !== epoch) {
-              for (const id of visible.keys()) evidence.unavailableMessages.add(id);
-              visible.clear();
             }
           } finally { finalDeadline.dispose(); }
         }

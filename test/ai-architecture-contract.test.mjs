@@ -490,10 +490,11 @@ test('konuşma tablolarına yalnızca konuşma deposu, sabit ve Sicil sahipliği
   const evidenceUsers = sourceFiles('src').filter((file) => /MR_AiMessageEvidence/.test(fs.readFileSync(file, 'utf8'))).map(toRelative).sort();
   assert.deepEqual(evidenceUsers, ['src/server/ai/assistant/conversationQueries.js', 'src/server/ai/assistant/conversationStore.js']);
   assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /OBJECT_ID\(N'dbo\.MR_AiMessageEvidence', N'U'\) IS NOT NULL/);
-  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /IF @knownSicil = 1 AND @evidenceReady = 1\s+SELECT TOP \(@maxEvidence\)/);
+  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /IF @knownSicil = 1 AND @evidenceReady = 1\s+BEGIN\s+;WITH EvidenceWindow AS \(\s+SELECT TOP \(@maxEvidence\)/);
   // Ham yük yalnızca sunucudaki yeniden doğrulamaya gider; API özet sınırı hizmet regresyonlarında korunur.
-  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /e\.SummaryJson,\s+e\.EvidenceJson\s+FROM/);
-  assert.equal((queries.AI_CONVERSATION_EVIDENCE_SQL.match(/e\.EvidenceJson/g) || []).length, 1, 'kanıt yükü tek kez taşınır');
+  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /CASE WHEN EvidenceBytes <= @maxEvidenceBytes THEN EvidenceJson END AS EvidenceJson/);
+  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /SUM\(CONVERT\(bigint, COALESCE\(DATALENGTH\(e\.EvidenceJson\), 0\)\)\) OVER/);
+  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /ORDER BY m\.Sequence DESC, e\.Ordinal ROWS UNBOUNDED PRECEDING/);
   assert.doesNotMatch(queries.AI_CONVERSATION_EVIDENCE_SQL, /JSON_VALUE|JSON_QUERY/);
   assert.doesNotMatch(queries.AI_CONVERSATION_PRESENCE_SQL, /MR_AiMessageEvidence|m\.Content|c\.Title/);
   assert.match(queries.AI_CONVERSATION_PRESENCE_SQL, /SELECT TOP \(@maxMessages\) m\.MessageId/);
