@@ -286,6 +286,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
   const resultScopeByMessage = new Map();
   const analysisByMessage = new Map();
   const authorizationByMessage = new Map();
+  const deferredMessages = new Set();
   const budget = { remainingBytes: TOOL_LIMITS.maxHistoryInflatedBytes };
   // Yeni yanıtlar önce doğrulanır; bir SQL partisi ya da açılım olay döngüsünü tekelinde tutmaz.
   for (const row of [...rows].reverse()) {
@@ -322,6 +323,8 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
         unverifiable ||= !PAYLOAD_POPULATION_TOOLS.has(String(row.ToolName || ''));
       }
     } catch { authorizationEpoch = null; unverifiable = true; }
+    // Toplam sayfa bütçesi kökeni bozmaz; bu ileti kendi sınırlı sayfasında yeniden okunabilir.
+    if (row.EvidenceOmitted || unverifiable && budget.remainingBytes === 0) deferredMessages.add(id);
     epochsByMessage.get(id).push(authorizationEpoch);
     authorizationByMessage.get(id).push({ id: `${id}:${row.Ordinal}`, payload: row.EvidenceJson || '{}',
       parsedPayload: stored, authorizationEpoch, scopedAuthorization, taskReferences, unverifiable, savedPopulation, authorizationPopulation, tool: row.ToolName });
@@ -344,6 +347,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     presentMessages,
     epochsByMessage,
     authorizationByMessage,
+    deferredMessages,
     clarificationByMessage,
     resultScopeByMessage,
     analysisByMessage,

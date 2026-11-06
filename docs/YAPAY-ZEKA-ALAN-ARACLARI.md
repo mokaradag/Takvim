@@ -1470,8 +1470,10 @@ doğrulanamazsa ya da erişim kalktıysa yanıt gösterilmez. Başka bir yazıc�
 uzlaştırılmış eski yanıt bu istisnayı kullanamaz.
 Geçmişin yinelenen ilk kaynak taraması kaldırılmıştır; aynı iletinin proje/görev/düğüm okumaları son işlemde tekilleştirilir.
 Araç SQL bütçesinin tükenmesi, başarılı kanıtı kendiliğinden doğrulama hatasına çevirmez; son yetki denetimi ayrı süre sınırında çalışır.
-Geçmiş isteğinde en yeni kanıtlardan başlayarak en fazla 2 MiB ham yük SQL'den taşınır; sınırı aşan iletiler kapalı kalır.
-İlk nüfus doğrulamasının toplam sıkıştırma açılımı 8 MiB ile sınırlıdır; kayıtlar arasında olay döngüsüne sıra verilir.
+Geçmişin ilk sayfası en yeni kanıtlardan başlayarak en fazla 2 MiB ham yük taşır. Sayfaya sığmayan iletiler son denetimde
+yalnız kendi kanıtlarını taşıyan sınırlı sayfalarda okunur; sonraki yanıtların boyutu eski yetkili yanıtı kapatmaz. Ek sayfaların
+ham yükü biriktirilmez. Her sayfanın ilk nüfus açılımı 8 MiB ile sınırlıdır; kayıtlar arasında olay döngüsüne sıra verilir.
+Sayfa okumaları da ileti başına 8 saniye ve bütün son denetimlerin 25 saniyelik ortak süresine tabidir; tek iletinin okunamaması diğerini düşürmez.
 Boş sonuçta katkı nüfusu aranan kapsamı kanıtlamıyorsa özgün yetki dönemi gerekir; iş verisinin sonradan değişmesi tek başına revokasyon değildir.
 Son açıklama denetimi her ileti için ayrı, en fazla 8 saniyelik SERIALIZABLE
 okuma işlemidir; bütün son denetimlerin toplamı 25 saniyeyle sınırlıdır. Yetki,

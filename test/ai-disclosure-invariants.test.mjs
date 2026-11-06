@@ -2093,7 +2093,7 @@ test('son denetim SQL hatası içeriksiz yapılandırılmış kayıt üretir', a
   assert.doesNotMatch(logs[0], /KORUNAN_HAM_HATA|KORUNAN_|EvidenceJson|sicil|projectId/);
 });
 
-test('uzun geçmiş SQL yükü toplam bayt sınırını aşmaz ve yeni küçük yanıtı yalıtır', async t => {
+test('uzun geçmiş sınırlı kanıt sayfalarıyla eski ve yeni yetkili yanıtları korur', async t => {
   const stack = stackFor(t);
   const items = [];
   for (let i = 0; i < 4; i += 1) items.push(await saveLegacyEvidence(stack, { conversationId: items[0]?.conversationId,
@@ -2109,14 +2109,16 @@ test('uzun geçmiş SQL yükü toplam bayt sınırını aşmaz ve yeni küçük 
   }
   assert.ok(old.reduce((sum, row) => sum + row.EvidenceJson.length * 2 * 16, 0) > TOOL_LIMITS.maxHistoryEvidenceBytes);
   const pool = await getSqlPool(), request = pool.request.bind(pool);
-  let bytes = 0, omitted = 0;
+  const pageBytes = [];
+  let omitted = 0;
   t.mock.method(pool, 'request', () => {
     const value = request(), query = value.query.bind(value);
     value.query = async sql => {
       const result = await query(sql);
-      if (sql.includes('AS EvidenceReady')) for (const row of result.recordsets[1] || []) {
-        bytes += Buffer.byteLength(row.EvidenceJson || '', 'utf16le');
-        if (row.EvidenceOmitted) omitted += 1;
+      if (sql.includes('AS EvidenceReady')) {
+        const rows = result.recordsets[1] || [];
+        pageBytes.push(rows.reduce((sum, row) => sum + Buffer.byteLength(row.EvidenceJson || '', 'utf16le'), 0));
+        omitted += rows.filter(row => row.EvidenceOmitted).length;
       }
       return result;
     };
@@ -2124,11 +2126,12 @@ test('uzun geçmiş SQL yükü toplam bayt sınırını aşmaz ve yeni küçük 
   });
   const opened = await loadAssistantConversation(items[0].conversationId);
   assert.equal(opened.status, 200);
-  assert.ok(bytes > 0 && bytes <= TOOL_LIMITS.maxHistoryEvidenceBytes);
+  assert.ok(pageBytes.length > 1);
+  assert.ok(pageBytes.every(bytes => bytes <= TOOL_LIMITS.maxHistoryEvidenceBytes));
+  assert.ok(pageBytes.reduce((sum, bytes) => sum + bytes, 0) > TOOL_LIMITS.maxHistoryEvidenceBytes);
   assert.ok(omitted > 0);
   assert.equal(opened.body.messages.find(row => row.id === items[3].saved.message.id).content, items[3].saved.message.content);
-  const hidden = opened.body.messages.find(row => row.id === items[0].saved.message.id);
-  assert.equal(hidden.finishReason, 'unavailable');
+  for (const item of items) assert.equal(opened.body.messages.find(row => row.id === item.saved.message.id).content, item.saved.message.content);
   assert.doesNotMatch(JSON.stringify(opened.body), /EvidenceJson|authorizationPopulation|authorizationIdentityPopulation|parsedPayload|deflated/);
 });
 
@@ -2143,4 +2146,43 @@ test('karma iş yükünde sıfır görünür Sicil kimlik tabanlı sınıfları 
   assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
   narrowFullProjectToAssignments(stack, [...full]);
   assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test('yüz iletili geçmişte sonraki yanıtların boyutu eski yetkili metni kapatmaz ve sayfa hatası yalıtılır', async t => {
+  const stack = stackFor(t);
+  const items = [];
+  for (let index = 0; index < 50; index += 1) items.push(await saveLegacyEvidence(stack, {
+    conversationId: items[0]?.conversationId,
+    calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }], ['rota_task_detail', { taskId: TASKS.DUE_SOON }]]
+  }));
+  assert.equal(stack.db.aiConversationMessages.length, 100);
+  for (const row of stack.db.aiMessageEvidence) {
+    const payload = JSON.parse(row.EvidenceJson);
+    row.EvidenceJson = JSON.stringify({ ...payload, padding: 'x'.repeat(11980 - row.EvidenceJson.length) });
+    assert.ok(row.EvidenceJson.length <= 12000);
+  }
+  assert.equal(stack.db.aiMessageEvidence.length, 100);
+  assert.ok(stack.db.aiMessageEvidence.reduce((sum, row) => sum + row.EvidenceJson.length * 2, 0) > TOOL_LIMITS.maxHistoryEvidenceBytes);
+  const opened = await loadAssistantConversation(items[0].conversationId);
+  assert.equal(opened.status, 200);
+  const answers = opened.body.messages.filter(row => row.role === 'assistant');
+  assert.equal(answers.length, 50);
+  for (const item of items) assert.equal(answers.find(row => row.id === item.saved.message.id).content, item.saved.message.content);
+  const pool = await getSqlPool(), request = pool.request.bind(pool);
+  t.mock.method(pool, 'request', () => {
+    const value = request(), input = value.input.bind(value), query = value.query.bind(value);
+    let messageId;
+    value.input = (...args) => { if (args[0] === 'messageId') messageId = args[2]; return input(...args); };
+    value.query = async sql => {
+      if (sql.includes('AS EvidenceReady') && messageId === items[0].saved.message.id) throw Object.assign(new Error('Sayfa okunamadı'), { code: 'DATABASE_UNAVAILABLE' });
+      return query(sql);
+    };
+    return value;
+  });
+  const isolated = (await loadAssistantConversation(items[0].conversationId)).body.messages;
+  assert.equal(isolated.find(row => row.id === items[0].saved.message.id).finishReason, 'unavailable');
+  for (const item of items.slice(1)) assert.equal(isolated.find(row => row.id === item.saved.message.id).content, item.saved.message.content);
+  stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+  const revoked = (await loadAssistantConversation(items[0].conversationId)).body.messages;
+  for (const item of items) assert.equal(JSON.stringify(revoked).includes(item.saved.message.content), false);
 });

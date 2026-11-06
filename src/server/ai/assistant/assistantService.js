@@ -294,7 +294,8 @@ async function loadEvidenceFor(sicil, signal, { conversationId, messageId = null
   if (!result.knownSicil) throw unknownSicil();
   noteEvidenceSchema(result.ready);
   return { ready: result.ready, presentMessages: result.presentMessages, byMessage: result.byMessage, epochsByMessage: result.epochsByMessage,
-    authorizationByMessage: result.authorizationByMessage, clarificationByMessage: result.clarificationByMessage, resultScopeByMessage: result.resultScopeByMessage,
+    authorizationByMessage: result.authorizationByMessage, deferredMessages: result.deferredMessages,
+    clarificationByMessage: result.clarificationByMessage, resultScopeByMessage: result.resultScopeByMessage,
     analysisByMessage: result.analysisByMessage };
 }
 
@@ -487,7 +488,7 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
     // Nüfusu kalıcı kayda sığmayan yanıt güncel yetkiyle doğrulanamaz; bu durum
     // yalnızca kayıtlı künyeden türetilir, güncel yetki hakkında bilgi vermez.
     evidence.unverifiable = new Set([...(evidence.authorizationByMessage || new Map())]
-      .filter(([, entries]) => entries.some((entry) => entry.unverifiable)).map(([id]) => id));
+      .filter(([id, entries]) => !evidence.deferredMessages?.has(id) && entries.some((entry) => entry.unverifiable)).map(([id]) => id));
     if (revalidate && evidence.byMessage.size) {
       const context = createToolTurnContext({ sicil });
       const deadline = createAiDeadline({ timeoutMs: context.limits.maxCumulativeSqlMs, parentSignal: signal });
@@ -508,9 +509,25 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
               if (signal?.aborted) throw signal.reason;
               const messageDeadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: finalDeadline.signal });
               try {
-                const owned = evidence.authorizationByMessage.get(id);
+                // Büyük konuşmanın sonraki yanıtları eski yetkili yanıtı kapatmaz. Ek sayfa yalnız bu iletiyi
+                // taşır; ham yük son denetimden sonra tutulmaz ve bütün sayfalar ortak süreye tabidir.
+                const page = evidence.deferredMessages?.has(id)
+                  ? await loadEvidenceFor(sicil, messageDeadline.signal, { ...target, messageId: id }) : null;
+                if (page && (!page.ready || page.deferredMessages?.has(id) || !page.authorizationByMessage?.get(id)?.length)) {
+                  throw new ServerPersistenceError('DATABASE_UNAVAILABLE', 'Geçmiş yanıtın kanıt sayfası okunamadı.');
+                }
+                const owned = page?.authorizationByMessage.get(id) || evidence.authorizationByMessage.get(id);
+                if (page && owned.some(entry => entry.unverifiable)) evidence.unverifiable.add(id);
                 const still = await context.recheckEvidenceTasks(owned, messageDeadline.signal);
                 if (!owned.every(entry => still.has(entry))) visible.delete(id);
+                else if (page) {
+                  visible.set(id, page.byMessage.get(id));
+                  evidence.epochsByMessage.set(id, page.epochsByMessage.get(id));
+                  for (const key of ['clarificationByMessage', 'resultScopeByMessage', 'analysisByMessage']) {
+                    if (page[key]?.has(id)) evidence[key].set(id, page[key].get(id));
+                    else evidence[key]?.delete(id);
+                  }
+                }
               } catch (error) {
                 if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;
                 // İçerik, kanıt, kimlik ve ham hata metni günlüğe taşınmaz.
