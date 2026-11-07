@@ -1107,8 +1107,13 @@ test('109 son: numaralı açıklama seçimi kanonik analiz öznesini geri yükle
     }
     const selected = await ask({ text: '1', plan: narrow });
     if (revoke) {
-      assert.notEqual(selected.answer.finishReason, 'stop');
+      // Adaylar eşdeğer güncel erişimle doğrulanabilir; seçilen özne yine yalnızca güncel (kaldırılmış) kapsamla okunur.
       assert.doesNotMatch(selected.answer.content, /Anten kalibrasyonu/);
+      // Seçilen özne yeniden okunmalıdır: okuma yoksa boş küme üzerinde `every` hiçbir şey kanıtlamaz.
+      const reads = populationReads(selected.log);
+      assert.ok(reads.length > 0, 'seçilen özne güncel kapsamla yeniden okunmalı');
+      assert.ok(reads.every(({ params }) => params.assigneeMode === 'person' && params.personSicil === ZEYNEP
+        && !String(params.scopeTasks).toLowerCase().includes(TASKS.TEAM_VISIBLE)));
     } else {
       assert.equal(selected.answer.finishReason, 'stop', selected.answer.content);
       const reads = populationReads(selected.log);

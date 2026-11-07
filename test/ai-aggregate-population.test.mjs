@@ -10,10 +10,10 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack, loadAssistantConversation, sendTurn } from './helpers/aiStack.mjs';
-import { AYSE, LEAD, MEHMET, PARTIAL_OTHERS, PROJECTS, TASKS, WBS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { ALI_1, AYSE, LEAD, MEHMET, PARTIAL_OTHERS, PROJECTS, TASKS, WBS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { declared } from './helpers/evidenceScenario.mjs';
 
-const { decodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+const { compressAuthorizationPopulation, decodeAuthorizationPopulation, encodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
 const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
 
 const done = (response) => response.events.find((event) => event.event === 'done')?.data;
@@ -151,8 +151,9 @@ test("sayılmış fakat listelenmemiş görev kapsamdan çıkınca kayıtlı top
 });
 
 test("sınırlı kayda sığmayan nüfus turda gösterilir; doğrulanmadan yeniden açıklanmaz", async (t) => {
+  // Rastgele kimlikler sıkıştırmayla da sınırın altına inmez (sıralı kimlikler ayrı testte kayıpsız saklanır).
   const extra = Array.from({ length: 1600 }, (_, index) => ({
-    TaskId: `70000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, ProjectId: PROJECTS.FULL, Title: `Toplu görev ${index + 1}`, Status: 'planned', Priority: 'medium'
+    TaskId: randomUUID(), ProjectId: PROJECTS.FULL, Title: `Toplu görev ${index + 1}`, Status: 'planned', Priority: 'medium'
   }));
   const stack = stackFor(t);
   stack.db.tasks.push(...extra);
@@ -247,4 +248,264 @@ test("kanıt sınırı dışındaki okunmuş bildirim geçmişi okunmamış ve b
   assert.equal(typeof result.data.unreadCount, 'number');
   assert.equal(result.data.actionRequiredCount, 1);
   assertPopulation(populationOf(ledger), { includes: [TASKS.OVERDUE, TASKS.DUE_SOON] }, 'rota_notifications');
+});
+
+test("sayı alanı eksik sıkıştırılmış nüfus, geçerli akış taşısa da doğrulanamaz sayılır", async () => {
+  const { deflateRawSync } = await import('node:zlib');
+  const valid = JSON.stringify(encodeAuthorizationPopulation([{ taskId: TASKS.OVERDUE, projectId: PROJECTS.FULL }]));
+  for (const text of [valid, 'bozuk']) {
+    assert.equal(decodeAuthorizationPopulation({ v: 2, complete: true, deflated: deflateRawSync(text).toString('base64url') }), null);
+    assert.equal(decodeAuthorizationPopulation({ v: 2, complete: true, deflated: deflateRawSync(text).toString('base64url') }, { countOnly: true }), null);
+  }
+});
+
+test("büyük nüfus kayıpsız açılır; görev sayısı sınırını aşan nüfus çözülmez", async () => {
+  const references = Array.from({ length: 8000 }, (_, index) => ({
+    taskId: `73000000-0000-4000-8000-${String(index).padStart(12, '0')}`, projectId: PROJECTS.FULL
+  }));
+  const started = performance.now();
+  assert.deepEqual(decodeAuthorizationPopulation(encodeAuthorizationPopulation(references)), references);
+  assert.equal(decodeAuthorizationPopulation(encodeAuthorizationPopulation(references), { countOnly: true }), references.length);
+  references.push(...Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 - references.length }, (_, index) => ({
+    taskId: `74000000-0000-4000-8000-${String(index).padStart(12, '0')}`, projectId: PROJECTS.FULL
+  })));
+  assert.equal(decodeAuthorizationPopulation(encodeAuthorizationPopulation(references)), null);
+  assert.equal(decodeAuthorizationPopulation(encodeAuthorizationPopulation(references), { countOnly: true }), null);
+  assert.ok(performance.now() - started < 5000, 'nüfus işlemesi sınırlı sürede bitmeli');
+});
+
+test("v1 sınırını aşan 1600 sıralı görevli nüfus sıkıştırılmış biçimde kayıpsız saklanır ve yeniden doğrulanır", async (t) => {
+  const extra = Array.from({ length: 1600 }, (_, index) => ({
+    TaskId: `70000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, ProjectId: PROJECTS.FULL, Title: `Toplu görev ${index + 1}`, Status: 'planned', Priority: 'medium'
+  }));
+  const stack = stackFor(t);
+  stack.db.tasks.push(...extra);
+  citeProjectTotal(stack);
+  const saved = done(await sendTurn({ turnId: randomUUID(), message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` }));
+  assert.equal(saved.assistantMessage.finishReason, 'stop');
+  const row = stack.db.aiMessageEvidence[0];
+  assert.ok(row.EvidenceJson.length <= 32000, 'kalıcı kanıt mevcut sınıra sığmalı');
+  const stored = JSON.parse(row.EvidenceJson);
+  assert.equal(stored.authorizationPopulation.v, 2);
+  assert.ok(stored.data?.project, 'sıkıştırılmış tam yükte proje verisi korunmalı');
+  assert.equal(stored.dataOmitted, undefined, 'veri sığdığı sürece çıkarılmamalı');
+  assert.equal(stored.authorizationPopulation.count, FULL_TASKS.length + extra.length);
+  const expected = [...FULL_TASKS, ...extra.map((task) => task.TaskId)].map((taskId) => ({ taskId, projectId: PROJECTS.FULL }))
+    .sort((a, b) => a.taskId.localeCompare(b.taskId));
+  assert.deepEqual(decodeAuthorizationPopulation(stored.authorizationPopulation), expected);
+  const reopened = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
+  assert.equal(reopened.content, saved.assistantMessage.content);
+  assert.deepEqual(reopened.evidence, saved.assistantMessage.evidence);
+  assert.ok(stack.db.taskAssignees.every(row => row.Sicil !== ALI_1), 'yönetim kapsamına giren kişinin kayıtlı görevlerde katkısı olmamalı');
+  stack.db.executiveScope.push({ ManagerSicil: AYSE, EmployeeSicil: ALI_1 });
+  const changed = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
+  assert.equal(changed.content, saved.assistantMessage.content, 'ilgisiz yetki değişikliğinde tam yük doğrulanabilmeli');
+  stack.db.tasks.find((task) => task.TaskId === extra[1200].TaskId).ProjectId = PROJECTS.HIDDEN;
+  const hidden = (await loadAssistantConversation(saved.conversation.id)).body.messages.find((message) => message.role === 'assistant');
+  assert.equal(hidden.finishReason, 'not_found');
+  assert.deepEqual(hidden.evidence, []);
+});
+
+/** NEWSEQUENTIALID biçimine benzeyen kimlikler: ilk bölüm artar, düğüm bölümü sabittir. */
+const sequentialIds = (count, start = 0x1a2b0000) => Array.from({ length: count }, (_, index) => `${(start + index).toString(16).padStart(8, '0')}-5c3d-11f1-9136-00505699bacd`);
+
+test("sıkıştırılmış nüfus çok projeli ve projesiz başvuruları birebir geri verir", async () => {
+  const projects = [PROJECTS.FULL, PROJECTS.READ, PROJECTS.PARTIAL, null];
+  const references = sequentialIds(6000).map((taskId, index) => ({ taskId, projectId: projects[index % projects.length] }));
+  const population = encodeAuthorizationPopulation(references);
+  assert.ok(JSON.stringify(population).length > 32000, 'senaryo v1 sınırını aşmalı');
+  const compressed = compressAuthorizationPopulation(population);
+  assert.ok(JSON.stringify(compressed).length <= 32000);
+  const canonical = (rows) => rows.map(({ taskId, projectId }) => `${taskId}|${projectId}`).sort();
+  assert.deepEqual(canonical(decodeAuthorizationPopulation(compressed)), canonical(references));
+  assert.deepEqual(decodeAuthorizationPopulation(compressed), decodeAuthorizationPopulation(population));
+  assert.equal(decodeAuthorizationPopulation(compressed, { countOnly: true }), references.length);
+});
+
+test("sıkıştırılamayan büyük nüfus sınıra sığmaz; doğrulanamaz işaretine düşer", async () => {
+  const references = Array.from({ length: 2000 }, () => ({ taskId: randomUUID(), projectId: PROJECTS.FULL }));
+  const compressed = compressAuthorizationPopulation(encodeAuthorizationPopulation(references));
+  assert.ok(JSON.stringify(compressed).length > 32000, 'rastgele kimlikler sıkışmaz');
+  assert.equal(decodeAuthorizationPopulation(compressed), null, 'sınırı aşan sıkıştırılmış metin okunmaz');
+  const overLimit = encodeAuthorizationPopulation(sequentialIds(TOOL_LIMITS.maxAnalyzedTasks + 1).map((taskId) => ({ taskId, projectId: PROJECTS.FULL })));
+  assert.equal(decodeAuthorizationPopulation(compressAuthorizationPopulation(overLimit)), null, 'görev sayısı sınırı korunur');
+});
+
+test("bozuk sıkıştırılmış nüfus doğrulanamaz sayılır", async () => {
+  const { deflateRawSync } = await import('node:zlib');
+  const references = sequentialIds(40).map((taskId) => ({ taskId, projectId: PROJECTS.FULL }));
+  const population = encodeAuthorizationPopulation(references);
+  const valid = compressAuthorizationPopulation(population);
+  assert.equal(decodeAuthorizationPopulation(valid).length, references.length);
+  const deflated = (value) => deflateRawSync(typeof value === 'string' ? value : JSON.stringify(value)).toString('base64url');
+  const bytes = Buffer.from(valid.deflated, 'base64url');
+  const cases = {
+    'kesik akış': { ...valid, deflated: bytes.subarray(0, bytes.length - 4).toString('base64url') },
+    'artık bayt': { ...valid, deflated: Buffer.concat([bytes, Buffer.from('ek')]).toString('base64url') },
+    'eksik sayı': { ...valid, count: valid.count - 1 },
+    'fazla sayı': { ...valid, count: valid.count + 1 },
+    'sayı metni': { ...valid, count: String(valid.count) },
+    'ek alan': { ...valid, tasks: population.tasks },
+    'tam değil': { ...valid, complete: false },
+    'boş akış': { ...valid, deflated: '' },
+    'kanonik olmayan base64': { ...valid, deflated: `${valid.deflated}=` },
+    'iç içe sürüm': { ...valid, deflated: deflated(valid) },
+    'bozuk JSON': { ...valid, deflated: deflated('{bozuk') },
+    'büyük harf proje anahtarı': { ...valid, deflated: deflated({ ...population, tasks: { 'ABCDEF00-0000-4000-8000-00000000000A': population.tasks[PROJECTS.FULL] } }) },
+    'yinelenen görev': { ...valid, count: 2 * references.length, deflated: deflated({ ...population, tasks: { ...population.tasks, [PROJECTS.READ]: population.tasks[PROJECTS.FULL] } }) },
+    'açılım sınırı': { ...valid, count: 0, deflated: deflated({ v: 1, complete: true, tasks: {}, padding: 'x'.repeat(TOOL_LIMITS.maxAnalyzedTasks * 72 + 1024) }) },
+    'sınır üstü metin': { ...valid, deflated: 'A'.repeat(32004) }
+  };
+  for (const [name, value] of Object.entries(cases)) {
+    assert.equal(decodeAuthorizationPopulation(value), null, name);
+    assert.equal(decodeAuthorizationPopulation(value, { countOnly: true }), null, name);
+  }
+});
+
+test("sıkıştırılmış kanıt sınırda veri çıkarılsa bile takip kapsamını saklar", async (t) => {
+  const extra = Array.from({ length: 1600 }, (_, index) => ({
+    TaskId: `72000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    ProjectId: PROJECTS.FULL, Title: `Toplu görev ${index + 1}`, Status: 'planned', Priority: 'medium'
+  }));
+  const stack = stackFor(t);
+  stack.db.tasks.push(...extra);
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL });
+  const [original] = ledger.payloads();
+  assert.ok(original, 'kanıt yükü hazırlanmalı');
+  const payload = JSON.parse(original.payload);
+  const initial = JSON.parse(ledger.persistable(ledger.ids())[0].evidenceJson);
+  assert.equal(initial.authorizationPopulation.v, 2);
+  const initialSize = ledger.persistable(ledger.ids())[0].evidenceJson.length;
+  const padding = Math.max(0, 31970 - initialSize);
+  ledger.attachPayload(original.id, JSON.stringify({ ...payload, data: { ...payload.data, padding: 'x'.repeat(padding) } }));
+  const base = JSON.parse(ledger.persistable(ledger.ids())[0].evidenceJson);
+  assert.notEqual(base.data, null, 'başlangıç yükü kayıpsız sığmalı');
+  const resultScope = { selected: 'görevler', explanation: 'x'.repeat(200) };
+  const scoped = JSON.parse(ledger.persistable(ledger.ids(), { resultScope })[0].evidenceJson);
+  assert.equal(scoped.authorizationPopulation.v, 2);
+  assert.deepEqual(scoped.resultScope, resultScope, 'sığan bağlam veri çıkarılarak saklanmalı');
+  assert.equal(scoped.dataOmitted, 'size', 'bağlam için gereken veri çıkarma açıkça kaydedilmeli');
+  assert.deepEqual(decodeAuthorizationPopulation(scoped.authorizationPopulation), decodeAuthorizationPopulation(base.authorizationPopulation));
+});
+
+
+test('kayıpsız sıkıştırılmış yük sığarken küçük kayıplı v1 yük seçilmez', async t => {
+  const stack = stackFor(t);
+  stack.db.tasks.push(...sequentialIds(1100).map(TaskId => ({ TaskId, ProjectId: PROJECTS.FULL,
+    Title: 'Sıralı görevin korunacak başlığı', Status: 'planned', Priority: 'medium' })));
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, limit: 40 });
+  assert.equal(result.ok, true);
+  const [row] = ledger.persistable(ledger.ids());
+  const stored = JSON.parse(row.evidenceJson);
+  const v1 = JSON.stringify({ ...stored, authorizationPopulation: encodeAuthorizationPopulation(decodeAuthorizationPopulation(stored.authorizationPopulation)) });
+  const compactV1 = JSON.stringify({ ...JSON.parse(v1), data: null, dataOmitted: 'size' });
+  assert.ok(v1.length > 32000, 'tam v1 sınırı aşmalı');
+  assert.ok(compactV1.length <= 32000, 'kayıplı v1 kolay yolunun önkoşulu çalışmalı');
+  assert.equal(stored.authorizationPopulation.v, 2);
+  assert.deepEqual(stored.data, result.data);
+  assert.equal(stored.dataOmitted, undefined);
+  assert.ok(row.evidenceJson.length <= 32000);
+});
+
+
+test('büyük kısmi iş yükünün kimlik kökeni mevcut sınıra kayıpsız sığar', async t => {
+  const stack = stackFor(t);
+  const ids = sequentialIds(1100);
+  stack.db.tasks.push(...ids.map(TaskId => ({ TaskId, ProjectId: PROJECTS.PARTIAL,
+    Title: 'Kısmi görev', Status: 'planned', Priority: 'medium', CreatedBySicil: MEHMET })));
+  stack.db.taskAssignees.push(...ids.map(TaskId => ({ TaskId, Sicil: AYSE })));
+  const { result, ledger, context } = await callRotaTool(stack, AYSE, 'rota_workload_summary', { projectId: PROJECTS.PARTIAL });
+  assert.equal(result.ok, true);
+  const [row] = ledger.persistable(ledger.ids());
+  const stored = JSON.parse(row.evidenceJson);
+  assert.equal(stored.authorizationPopulation.complete, true);
+  assert.ok(stored.authorizationIdentityPopulation);
+  assert.deepEqual(stored.data, result.data);
+  assert.ok(row.evidenceJson.length <= 32000);
+  const entry = { id: 'stored', tool: 'rota_workload_summary', savedPopulation: true,
+    authorizationEpoch: stored.authorizationEpoch, scopedAuthorization: stored.scopedAuthorization,
+    authorizationPopulation: stored.authorizationPopulation, payload: row.evidenceJson };
+  await context.revalidateAuthorization(signal());
+  assert.ok((await context.recheckEvidenceTasks([entry], signal())).has(entry));
+});
+
+test('açılım sınırını aşan kimlik kökeni ana nüfusu doğrulanabilir göstermez', async t => {
+  const stack = stackFor(t);
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_workload_summary', { projectId: PROJECTS.PARTIAL });
+  assert.equal(result.ok, true);
+  const entry = ledger.authorizationEntries()[0];
+  assert.ok(entry.taskReferences.length > 0);
+  entry.taskReferences.forEach(row => { row.identityBase = false; row.identitySicils = []; });
+  entry.taskReferences[0].identitySicils = Array.from({ length: 150000 }, (_, index) => 1000000000 + index);
+  const inner = { ...encodeAuthorizationPopulation([]), partial: entry.taskReferences.map(row => ({ taskId: row.taskId, sicils: row.identitySicils })) };
+  assert.ok(Buffer.byteLength(JSON.stringify(inner)) > TOOL_LIMITS.maxAnalyzedTasks * 72 + 64, 'gerçek açılım sınırı aşılmalı');
+  assert.equal(compressAuthorizationPopulation(inner).complete, false);
+  const [row] = ledger.persistable(ledger.ids(), { resultScope: { selected: 'görevler' } });
+  assert.ok(row.evidenceJson.length <= 32000);
+  const stored = JSON.parse(row.evidenceJson);
+  assert.equal(stored.authorizationPopulation.complete, false);
+  assert.equal(stored.authorizationIdentityPopulation, undefined);
+  assert.equal(stored.resultScope, undefined);
+  assert.equal(decodeAuthorizationPopulation(stored.authorizationPopulation), null);
+});
+
+test('uzun geçmişin toplam açılım bütçesi kimlik taşıyıcısında da uygulanır', async t => {
+  const stack = stackFor(t);
+  const { prepareConversationTurn, appendGroundedConversationAnswer, loadConversationEvidence } = await import('../src/server/ai/assistant/conversationStore.js');
+  const { getSqlPool } = await import('../src/server/db/pool.js');
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_workload_summary', { projectId: PROJECTS.FULL });
+  const [template] = ledger.persistable(ledger.ids());
+  const refs = sequentialIds(6000).map(taskId => ({ taskId, projectId: PROJECTS.FULL }));
+  const inner = encodeAuthorizationPopulation(refs);
+  const expandedBytes = Buffer.byteLength(JSON.stringify(inner));
+  const compressed = compressAuthorizationPopulation(inner);
+  assert.equal(compressed.complete, true);
+  assert.ok(expandedBytes * 72 > TOOL_LIMITS.maxHistoryInflatedBytes, 'bütçenin gerçekten aşılması gerekir');
+  const payload = { ...JSON.parse(template.evidenceJson), authorizationIdentityPopulation: compressed };
+  const json = JSON.stringify(payload);
+  assert.ok(json.length <= 32000);
+  const pool = await getSqlPool();
+  let conversationId;
+  for (let index = 0; index < 6; index += 1) {
+    const prepared = await prepareConversationTurn(pool, AYSE, { conversationId, newConversationId: randomUUID(), userMessageId: randomUUID(),
+      turnId: randomUUID(), content: 'Nüfus', title: 'Nüfus', maxMessages: 100, historyLimit: 20 });
+    conversationId = prepared.conversation.id;
+    await appendGroundedConversationAnswer(pool, AYSE, { conversationId, messageId: randomUUID(), replyToMessageId: prepared.turn.message.id,
+      content: 'Korunan geçmiş', mode: 'standard', finishReason: 'stop',
+      evidence: Array.from({ length: 12 }, (_, ordinal) => ({ ...template, ordinal: ordinal + 1, evidenceJson: json })) });
+  }
+  let yielded = false;
+  setTimeout(() => { yielded = true; }, 0);
+  const loaded = await loadConversationEvidence(pool, AYSE, { conversationId, maxEvidence: 1600 });
+  const entries = [...loaded.authorizationByMessage.values()].flat();
+  assert.equal(entries.length, 72);
+  assert.ok(entries.some(entry => entry.unverifiable));
+  assert.ok(entries.filter(entry => !entry.unverifiable).length <= Math.floor(TOOL_LIMITS.maxHistoryInflatedBytes / expandedBytes));
+  assert.equal(yielded, true, 'açılımlar arasında olay döngüsü çalışmalı');
+  assert.doesNotMatch(JSON.stringify([...loaded.byMessage.values()]), /EvidenceJson|authorizationIdentityPopulation|deflated|parsedPayload/);
+});
+
+test('bozuk JSON açılım bütçesini iki kez tüketmez', async () => {
+  const { deflateRawSync } = await import('node:zlib');
+  const text = '{bozuk';
+  const budget = { remainingBytes: 100 };
+  assert.equal(decodeAuthorizationPopulation({ v: 2, complete: true, count: 0,
+    deflated: deflateRawSync(text).toString('base64url') }, { countOnly: true, budget }), null);
+  assert.equal(budget.remainingBytes, 100 - Buffer.byteLength(text));
+});
+
+test('geçmiş açılımı SQL sonucundan sonra gelen iptalde durur', async t => {
+  const stack = stackFor(t);
+  const { prepareConversationTurn, appendGroundedConversationAnswer, loadConversationEvidence } = await import('../src/server/ai/assistant/conversationStore.js');
+  const { getSqlPool } = await import('../src/server/db/pool.js');
+  const { ledger } = await callRotaTool(stack, AYSE, 'rota_task_detail', { taskId: TASKS.OVERDUE });
+  const pool = await getSqlPool();
+  const prepared = await prepareConversationTurn(pool, AYSE, { newConversationId: randomUUID(), userMessageId: randomUUID(),
+    turnId: randomUUID(), content: 'Görev', title: 'Görev', maxMessages: 100, historyLimit: 20 });
+  await appendGroundedConversationAnswer(pool, AYSE, { conversationId: prepared.conversation.id, messageId: randomUUID(),
+    replyToMessageId: prepared.turn.message.id, content: 'Korunan görev', mode: 'standard', finishReason: 'stop', evidence: ledger.persistable(ledger.ids()) });
+  const controller = new AbortController();
+  const reason = new Error('İptal');
+  controller.abort(reason);
+  await assert.rejects(loadConversationEvidence(pool, AYSE, { conversationId: prepared.conversation.id, maxEvidence: 1600, signal: controller.signal }), error => error === reason);
 });

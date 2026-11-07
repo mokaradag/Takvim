@@ -323,18 +323,8 @@ function evidenceRowsFor(db, messageIds) {
   const wanted = new Set(messageIds.map(guid));
   return (db.aiMessageEvidence || [])
     .filter((row) => wanted.has(guid(row.MessageId)))
-    .map((row) => {
-      const evidence = JSON.parse(row.EvidenceJson || '{}');
-      return { MessageId: row.MessageId, Ordinal: row.Ordinal, ToolName: row.ToolName, SummaryJson: row.SummaryJson,
-        AuthorizationEpoch: evidence.authorizationEpoch ?? null,
-        ScopedAuthorization: JSON.stringify(evidence.scopedAuthorization ?? null),
-        AuthorizationPopulation: JSON.stringify(evidence.authorizationPopulation ?? null),
-        AuthorizationReferences: JSON.stringify(evidence.authorizationReferences ?? null),
-        LegacyEvidenceJson: evidence.authorizationReferences || evidence.authorizationPopulation ? null : row.EvidenceJson,
-        ResultScope: JSON.stringify(evidence.resultScope ?? null),
-        AnalysisContext: JSON.stringify(evidence.analysisContext ?? null),
-        ClarificationContext: JSON.stringify(evidence.clarificationContext ?? null) };
-    });
+    .map((row) => ({ MessageId: row.MessageId, Ordinal: row.Ordinal, ToolName: row.ToolName,
+      SummaryJson: row.SummaryJson, EvidenceJson: row.EvidenceJson }));
 }
 
 function appendGrounded(db, params, sicil) {
@@ -395,8 +385,15 @@ function evidence(db, params, sicil, known) {
   const ids = messages.filter((row) => !params.messageId || sameGuid(row.MessageId, params.messageId)).map((row) => row.MessageId);
   const order = new Map(messages.map((row) => [guid(row.MessageId), row.Sequence]));
   const rows = [...evidenceRowsFor(db, ids), ...ids.filter((id) => !db.aiMessageEvidence.some((row) => sameGuid(row.MessageId, id))).map((MessageId) => ({ MessageId, Ordinal: null }))]
-    .sort((left, right) => order.get(guid(left.MessageId)) - order.get(guid(right.MessageId)) || left.Ordinal - right.Ordinal)
+    .sort((left, right) => order.get(guid(right.MessageId)) - order.get(guid(left.MessageId)) || left.Ordinal - right.Ordinal)
     .slice(0, Number(params.maxEvidence));
+  let bytes = 0;
+  for (const row of rows) {
+    bytes += Buffer.byteLength(row.EvidenceJson || '', 'utf16le');
+    row.EvidenceOmitted = bytes > params.maxEvidenceBytes;
+    if (row.EvidenceOmitted) row.EvidenceJson = null;
+  }
+  rows.sort((left, right) => order.get(guid(left.MessageId)) - order.get(guid(right.MessageId)) || left.Ordinal - right.Ordinal);
   return [[{ KnownSicil: 1, EvidenceReady: 1 }], rows];
 }
 

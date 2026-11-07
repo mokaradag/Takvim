@@ -29,6 +29,17 @@ function collections(value, path) {
   return value && typeof value === 'object' ? collections(value[key], rest) : [];
 }
 
+/**
+ * Sonuç zarfının kopyasını en fazla 128 daraltmayla UTF-8 bayt sınırına sığdırır.
+ * Görev ayrıntısında WBS adları ve düğüm kökeni aynı önekte tutulur; daraltılan
+ * sonuç kesik işaretlenir ve sayfalama bilgisi kaldırılır. Özgün zarf değişmez.
+ *
+ * @param {object} envelope - Serileştirilebilir araç sonuç zarfı.
+ * @param {number} maxBytes - Çıktının en büyük UTF-8 bayt uzunluğu.
+ * @param {string} factScope - Çıktıya eklenecek olgu kapsamı belirteci.
+ * @param {object|null} explicitPolicy - Varsayılanı değiştiren koleksiyon politikası.
+ * @returns {string|null} Sınırı sağlayan JSON; daraltma yetersizse null.
+ */
 export function fitToolResult(envelope, maxBytes, factScope, explicitPolicy = null) {
   const current = structuredClone(envelope);
   const policy = explicitPolicy || POLICIES[current.tool];
@@ -40,6 +51,9 @@ export function fitToolResult(envelope, maxBytes, factScope, explicitPolicy = nu
     const largest = candidates[0];
     if (!largest) return null;
     largest.splice(Math.floor(largest.length / 2));
+    // İş dağılım adları ile düğüm kökeni aynı öneki korur.
+    if (current.tool === 'rota_task_detail' && largest === current.data?.task?.wbsPath
+      && Array.isArray(current.data.task.wbsNodes)) current.data.task.wbsNodes.splice(largest.length);
     current.complete = false;
     current.truncated = true;
     current.nextCursor = null;

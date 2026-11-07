@@ -236,7 +236,13 @@ test("tamamlanmış kanıtlı üretim son süreden sonra kaydedilip açıklamay�
   t.after(() => turn.claim.release());
   let release;
   let persisting = false;
-  stack.db.commitHook = async () => { persisting = true; await new Promise((resolve) => { release = resolve; }); };
+  stack.db.commitHook = async transaction => {
+    // Engel yalnızca yanıtın yazma işlemini tutar; sonraki salt okunur açıklama işlemini tutmaz.
+    const statements = stack.db.statements.slice(transaction.transactionRecord.statementIndex);
+    if (!statements.some(row => row.sql.includes('INSERT dbo.MR_AiConversationMessages'))) return;
+    persisting = true;
+    await new Promise(resolve => { release = resolve; });
+  };
   t.after(() => release?.());
   const visible = [];
   const pending = generateAssistantAnswer(turn, { onText: async (text) => { visible.push(text); } });

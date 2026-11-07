@@ -543,8 +543,10 @@ test("yetki araç ve model turu arasında bir kez; model turundan sonra yeniden 
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: `Görevin proje adı: ${TASKS.OVERDUE}` })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.deepEqual(reads, [2], 'sunucu seçimi denemesinden sonra aynı yetki ikinci kez okunmaz');
-  // Model turundan sonra son doğrulama ve kayıttan sonraki açıklama yetkiyi yeniden okur.
+  // Model turundan sonraki denetim korunur; kayıtlı yanıtın kaynakları son tutarlı işlemde bir kez okunur.
   assert.equal(visibilityReads(stack), 4);
+  const { sql } = await import('../src/server/db/pool.js');
+  assert.equal(stack.db.transactions.at(-1).isolationLevel, sql.ISOLATION_LEVEL.SERIALIZABLE);
   drained(stack);
 });
 

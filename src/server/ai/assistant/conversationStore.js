@@ -1,9 +1,11 @@
 import 'server-only';
+import { setImmediate } from 'node:timers/promises';
 import { taskResultScope } from '../../../domain/ai/requestContract.js';
 import { normalizeAnalysisContext } from '../../../domain/ai/analysisContext.js';
 import { sql } from '../../db/pool.js';
 import { normalizeEvidenceSummary } from '../../../domain/ai/evidenceContract.js';
-import { decodeAuthorizationPopulation, PAYLOAD_POPULATION_TOOLS } from '../tools/evidenceAuthorization.js';
+import { decodeAuthorizationPopulation, legacyWbsPathEvidence, MAX_ANSWER_INFLATED_POPULATION_BYTES, PAYLOAD_POPULATION_TOOLS } from '../tools/evidenceAuthorization.js';
+import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import {
   AI_CONVERSATION_APPEND_ANSWER_SQL,
   AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL,
@@ -264,11 +266,12 @@ export async function appendConversationAnswer(executor, sicil, {
  * eşleme döner. Kanıt yükü yalnızca sunucuda güncel varlık yetkisini
  * doğrulamak için okunur; tarayıcıya yalnızca güvenli özet gider.
  */
-export async function loadConversationEvidence(executor, sicil, { conversationId, messageId = null, maxEvidence }) {
+export async function loadConversationEvidence(executor, sicil, { conversationId, messageId = null, maxEvidence, signal = null }) {
   const request = sicilRequest(executor, sicil);
   request.input('conversationId', sql.UniqueIdentifier, conversationId);
   request.input('messageId', sql.UniqueIdentifier, messageId);
   request.input('maxEvidence', sql.Int, maxEvidence);
+  request.input('maxEvidenceBytes', sql.Int, TOOL_LIMITS.maxHistoryEvidenceBytes);
   let result;
   try {
     result = await request.query(AI_CONVERSATION_EVIDENCE_SQL);
@@ -283,40 +286,64 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
   const resultScopeByMessage = new Map();
   const analysisByMessage = new Map();
   const authorizationByMessage = new Map();
-  for (const row of rows) {
+  const deferredMessages = new Set();
+  // Çok iletili sayfa ortak bütçeyle sınırlıdır; tek ileti sayfası yalnız o yanıtın yazıcı sözleşmesindeki
+  // en büyük açılımını karşılar. Böylece kendi sınırları içinde yazılmış yanıt kalıcı olarak ertelenmez.
+  const budget = { remainingBytes: messageId ? MAX_ANSWER_INFLATED_POPULATION_BYTES : TOOL_LIMITS.maxHistoryInflatedBytes };
+  // Yeni yanıtlar önce doğrulanır; bir SQL partisi ya da açılım olay döngüsünü tekelinde tutmaz.
+  for (const row of [...rows].reverse()) {
     if (row.Ordinal == null) continue;
+    await setImmediate();
+    signal?.throwIfAborted();
     const id = idOrNull(row.MessageId);
     if (!epochsByMessage.has(id)) epochsByMessage.set(id, []);
-    epochsByMessage.get(id).push(row.AuthorizationEpoch ?? null);
     if (!authorizationByMessage.has(id)) authorizationByMessage.set(id, []);
-    let authorizationEpoch = row.AuthorizationEpoch ?? null;
+    let stored = {};
+    let authorizationEpoch = null;
     let scopedAuthorization = null;
     let taskReferences = null;
-    let unverifiable = false;
+    let unverifiable = Boolean(row.EvidenceOmitted);
+    let savedPopulation = false;
+    let authorizationPopulation = null;
+    let legacyFormat = false;
     try {
-      scopedAuthorization = JSON.parse(row.ScopedAuthorization || 'null');
-      const population = JSON.parse(row.AuthorizationPopulation || 'null');
-      if (population) {
-        taskReferences = decodeAuthorizationPopulation(population);
-        unverifiable = taskReferences == null;
+      stored = JSON.parse(row.EvidenceJson || '{}');
+      authorizationEpoch = stored.authorizationEpoch ?? null;
+      scopedAuthorization = stored.scopedAuthorization ?? null;
+      const population = stored.authorizationPopulation;
+      // Alanı bulunan fakat bozuk/boş nüfus eski kayıt sayılmaz; doğrulanamaz olarak kapalı kalır.
+      if (Object.hasOwn(stored, 'authorizationPopulation')) {
+        // Geçmişin tamamı görev dizilerine açılmaz; tam çözümleme yalnızca doğrulanan kanıtta yapılır.
+        unverifiable ||= decodeAuthorizationPopulation(population, { countOnly: true, budget }) == null;
+        if (Object.hasOwn(stored, 'authorizationIdentityPopulation')) {
+          unverifiable ||= decodeAuthorizationPopulation(stored.authorizationIdentityPopulation, { countOnly: true, budget }) == null;
+        }
+        savedPopulation = !unverifiable;
+        authorizationPopulation = population;
       } else {
-        taskReferences = JSON.parse(row.AuthorizationReferences || 'null');
+        taskReferences = stored.authorizationReferences ?? null;
         // Nüfus işaretinden önceki kayıt yalnızca yükündeki görevleri taşır.
-        unverifiable = !PAYLOAD_POPULATION_TOOLS.has(String(row.ToolName || ''));
+        unverifiable ||= !PAYLOAD_POPULATION_TOOLS.has(String(row.ToolName || ''));
       }
-    } catch { authorizationEpoch = null; }
-    authorizationByMessage.get(id).push({ id: `${id}:${row.Ordinal}`, payload: row.LegacyEvidenceJson || '{}',
-      authorizationEpoch, scopedAuthorization, taskReferences, unverifiable });
+      // Düğüm kökeni olmayan eski WBS yolu kesin doğrulanamaz; ayrım güncel yetkiden bağımsızdır.
+      legacyFormat = legacyWbsPathEvidence(String(row.ToolName || ''), stored);
+      unverifiable ||= legacyFormat;
+    } catch { authorizationEpoch = null; unverifiable = true; }
+    // Toplam sayfa bütçesi kökeni bozmaz; bu ileti kendi sınırlı sayfasında yeniden okunabilir.
+    if (row.EvidenceOmitted || unverifiable && budget.remainingBytes === 0) deferredMessages.add(id);
+    epochsByMessage.get(id).push(authorizationEpoch);
+    authorizationByMessage.get(id).push({ id: `${id}:${row.Ordinal}`, payload: row.EvidenceJson || '{}',
+      parsedPayload: stored, authorizationEpoch, scopedAuthorization, taskReferences, unverifiable, legacyFormat, savedPopulation, authorizationPopulation, tool: row.ToolName });
     try {
-      const scope = taskResultScope(JSON.parse(row.ResultScope || 'null'));
+      const scope = taskResultScope(stored.resultScope);
       if (scope && authorizationEpoch && !unverifiable) resultScopeByMessage.set(id, scope);
     } catch { /* Bozuk sonuç kapsamı kullanılmaz. */ }
     try {
-      const context = normalizeAnalysisContext(JSON.parse(row.AnalysisContext || 'null'));
+      const context = normalizeAnalysisContext(stored.analysisContext);
       if (context && authorizationEpoch && !unverifiable) analysisByMessage.set(id, context);
     } catch { /* Bozuk analiz bağlamı kullanılmaz (takip göndergesizdir). */ }
     try {
-      const candidates = JSON.parse(row.ClarificationContext || 'null');
+      const candidates = stored.clarificationContext;
       if (Array.isArray(candidates)) clarificationByMessage.set(id, [...(clarificationByMessage.get(id) || []), ...candidates].sort((a, b) => a.ordinal - b.ordinal).slice(0, 10));
     } catch { /* Geçersiz açıklama durumu kullanılmaz. */ }
   }
@@ -326,6 +353,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     presentMessages,
     epochsByMessage,
     authorizationByMessage,
+    deferredMessages,
     clarificationByMessage,
     resultScopeByMessage,
     analysisByMessage,

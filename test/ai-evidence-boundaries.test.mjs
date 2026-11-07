@@ -312,6 +312,31 @@ test("bağımlılık daraltma çoklu liste sayısını yeniden hesaplar; ayrınt
   assert.equal(detail.truncated, true);
 });
 
+test('görev ayrıntısı küçültülürken WBS adları ve düğüm kökeni aynı önekte kalır', () => {
+  const nodes = Array.from({ length: 40 }, (_, index) => ({
+    id: `76000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    parentId: index ? `76000000-0000-4000-8000-${String(index).padStart(12, '0')}` : null
+  }));
+  const original = { ok: true, tool: 'rota_task_detail', complete: true, truncated: false, returnedCount: 1, totalCount: 1,
+    nextCursor: null, data: { task: { description: 'Ş'.repeat(1600), assignees: [],
+      wbsPath: nodes.map((_, index) => `${index + 1} ${'Ş'.repeat(110)}`), wbsNodes: nodes } } };
+  const before = structuredClone(original);
+  for (const maxBytes of [10000, 6500, 4500]) {
+    const text = fitToolResult(original, maxBytes, '1234567890abcdef_R1');
+    assert.ok(text, 'eşlenik listeler birlikte küçültülerek bütçeye sığmalı');
+    assert.ok(Buffer.byteLength(text, 'utf8') <= maxBytes);
+    const reduced = JSON.parse(text);
+    const count = reduced.data.task.wbsPath.length;
+    assert.ok(count > 0 && count < nodes.length);
+    assert.deepEqual(reduced.data.task.wbsPath, original.data.task.wbsPath.slice(0, count));
+    assert.deepEqual(reduced.data.task.wbsNodes, nodes.slice(0, count));
+    assert.equal(reduced.returnedCount, 1);
+    assert.equal(reduced.complete, false);
+    assert.equal(reduced.truncated, true);
+  }
+  assert.deepEqual(original, before, 'özgün araç sonucu değiştirilmemeli');
+});
+
 const activityEvent = (id, taskId = TASKS.OVERDUE, projectId = PROJECTS.FULL, before = { Status: 'planned' }, after = { Status: 'in-progress' }) => ({
   AuditId: id, OccurredAt: new Date(Date.parse('2026-09-29T08:00:00.000Z') + id * 1000).toISOString(), ActorSicil: AYSE, ActorDisplayName: 'Ayşe',
   ActionCode: 'UPDATE', EntityType: 'TASK', EntityId: taskId, ProjectId: projectId, CorrelationId: `event-${id}`,

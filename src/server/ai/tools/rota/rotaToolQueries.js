@@ -355,7 +355,7 @@ ${ASSIGNEE_ROWS}
 export const AI_TOOL_TASK_VISIBILITY_SQL = `/* rota-ai-tool:task-visibility */
 ${SCOPE_PROJECTS}
 ${visibleTasks()}
-  SELECT visible.TaskId, visible.ProjectId FROM #AiTasks visible;
+  SELECT visible.TaskId, visible.ProjectId, visible.AccessLevel, visible.IdentityBase FROM #AiTasks visible;
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**
@@ -541,7 +541,7 @@ ${visibleTasks()}
 export const AI_TOOL_WBS_SELECTOR_SQL = `/* rota-ai-tool:wbs-selector */
   DECLARE @selectedProjectId uniqueidentifier = (SELECT ProjectId FROM dbo.MR_WBS WHERE WbsId = @wbsId);
   IF @projectId IS NOT NULL AND @projectId <> @selectedProjectId SET @selectedProjectId = NULL;
-  SET @projectId = COALESCE(@selectedProjectId, '00000000-0000-0000-0000-000000000000');
+  IF @wbsId IS NOT NULL SET @projectId = COALESCE(@selectedProjectId, '00000000-0000-0000-0000-000000000000');
 ${SCOPE_PROJECTS}
 ${SCOPE_TASK_IDS}
   ;WITH AllowedWbs AS (
@@ -549,16 +549,18 @@ ${SCOPE_TASK_IDS}
     FROM #AiScopeTaskIds permitted
     JOIN dbo.MR_Tasks t ON t.TaskId = permitted.TaskId AND t.ProjectId = @projectId
     JOIN dbo.MR_WBS w ON w.WbsId = t.WbsId AND w.ProjectId = t.ProjectId
+    WHERE EXISTS (SELECT 1 FROM #AiScopeProjects v WHERE v.ProjectId = @projectId
+      AND v.AccessLevel = 'PARTIAL' AND v.HasReadGrant = 0 AND v.IsTaskScoped = 0)
     UNION ALL
     SELECT parent.WbsId, parent.ParentWbsId, CAST(CONCAT(child.VisitedWbs, CONVERT(varchar(36), parent.WbsId), '|') AS varchar(max))
     FROM AllowedWbs child JOIN dbo.MR_WBS parent ON parent.WbsId = child.ParentWbsId AND parent.ProjectId = @projectId
     WHERE CHARINDEX(CONCAT('|', CONVERT(varchar(36), parent.WbsId), '|'), child.VisitedWbs) = 0
   )
-  SELECT w.WbsId, w.ProjectId, w.Code, w.Name, p.ProjectName
+  SELECT w.WbsId, w.ParentWbsId, w.ProjectId, w.Code, w.Name, p.ProjectName
   FROM dbo.MR_WBS w
   JOIN #AiScopeProjects v ON v.ProjectId = w.ProjectId
   JOIN dbo.MR_Projects p ON p.ProjectId = w.ProjectId
-  WHERE w.WbsId = @wbsId AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR v.IsTaskScoped = 1
+  WHERE w.WbsId IN (SELECT TRY_CONVERT(uniqueidentifier, value) FROM STRING_SPLIT(@wbsIds, ',')) AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR v.IsTaskScoped = 1
     OR EXISTS (SELECT 1 FROM AllowedWbs permitted WHERE permitted.WbsId = w.WbsId))
   OPTION (MAXRECURSION 201);
   DROP TABLE #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;

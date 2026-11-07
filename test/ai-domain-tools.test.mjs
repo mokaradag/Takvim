@@ -6,6 +6,7 @@
  * modelin göndereceği biçimde (JSON metni) verilir.
  */
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createAiStack } from './helpers/aiStack.mjs';
 import {
@@ -19,7 +20,7 @@ const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
 const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
 const { createToolExecutor } = await import('../src/server/ai/tools/toolExecutor.js');
 const { createEvidenceLedger } = await import('../src/server/ai/tools/evidenceLedger.js');
-const { decodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+const { decodeAuthorizationPopulation, PROJECT_ACCESS_RANK, savedEvidenceRequirements } = await import('../src/server/ai/tools/evidenceAuthorization.js');
 
 function stackFor(t, overrides = {}, sicil = AYSE) {
   return createAiStack(t, { sicil, seed: rotaToolSeed(overrides) });
@@ -663,6 +664,21 @@ test('Outlook durumu yalnızca kullanıcının kendi aboneliklerinin Rota teslim
   assert.equal(result.data.items.some((item) => item.task.taskId === TASKS.UNASSIGNED), false, 'başka kullanıcının aboneliği görünmez');
 });
 
+test('WBS seçici ikizi bozuk proje kapsamı belirtecini yetki saymaz', async t => {
+  const stack = stackFor(t);
+  const { result } = await callRotaTool(stack, AYSE, 'rota_task_search', { wbsId: WBS.FULL_DESIGN });
+  assert.equal(result.ok, true);
+  const params = stack.db.aiToolLog.find(row => row.query === 'wbs-selector').params;
+  const { runAiToolQuery } = await import('./helpers/aiToolSql.mjs');
+  const { AI_TOOL_WBS_SELECTOR_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
+  assert.ok(runAiToolQuery(stack.db, AI_TOOL_WBS_SELECTOR_SQL, params)[0].length > 0);
+  const otherGrants = params.scopeProjects.split(',').filter(value => !value.startsWith(PROJECTS.FULL)).join(',');
+  for (const scopeProjects of [`${PROJECTS.FULL}:F`, `${PROJECTS.FULL}:F000`, `${otherGrants},${PROJECTS.FULL}:F`]) {
+    const [nodes] = runAiToolQuery(stack.db, AI_TOOL_WBS_SELECTOR_SQL, { ...params, scopeProjects });
+    assert.deepEqual(nodes, [], 'eksik uzunluktaki belirteç katalog yetkisi veremez');
+  }
+});
+
 test('bildirimler yalnızca okunur: okundu/temizlendi işareti değişmez', async (t) => {
   const stack = stackFor(t, {
     taskNotifications: [{ RecipientSicil: AYSE, Kind: 'TASK_ASSIGNED', TaskId: TASKS.OVERDUE, ActorSicil: LEAD, TaskTitleSnapshot: 'Radar test planı', ProjectNameSnapshot: 'Radar Modernizasyonu', EventKey: 'e1' }],
@@ -1295,10 +1311,8 @@ test("devam kapsamı kalıcı ve doğrulanabilir taşıyıcı kullanır", async 
     if (mode === 'filtered') first.ledger.retainAuthorized(new Set(['R2']));
     else if (mode === 'payloadless') entries[0].payload = null;
     else {
-      const oversized = Array.from({ length: 1800 }, (_, index) => ({
-        taskId: '80000000-0000-4000-8000-' + String(index + 1).padStart(12, '0'),
-        projectId: '90000000-0000-4000-8000-' + String(index + 1).padStart(12, '0')
-      }));
+      // Rastgele kimlikler sıkıştırılamaz: nüfus hiçbir kalıcı biçime sığmaz.
+      const oversized = Array.from({ length: 1800 }, () => ({ taskId: randomUUID(), projectId: randomUUID() }));
       entries[0].taskReferences = oversized;
       if (mode === 'no-carrier') entries[1].taskReferences = oversized;
     }
@@ -1308,7 +1322,7 @@ test("devam kapsamı kalıcı ve doğrulanabilir taşıyıcı kullanır", async 
     assert.equal(carriers.length, mode === 'no-carrier' ? 0 : 1);
     for (const row of carriers) {
       assert.deepEqual(row.resultScope, scope);
-      assert.ok(decodeAuthorizationPopulation(row.authorizationPopulation), 'unverifiable evidence never carries scope');
+      assert.ok(decodeAuthorizationPopulation(row.authorizationPopulation), 'doğrulanamayan kanıt devam kapsamı taşıyamaz');
     }
     if (mode !== 'no-carrier') assert.ok(JSON.parse(rows.at(-1).evidenceJson).resultScope);
   });
@@ -1423,4 +1437,21 @@ test('109 takip: yetki sınırı çalışan sayısına uygulanır ve bütün kur
   const overflow = await callRotaTool(stack, AYSE, 'rota_task_analytics', {}, { limits });
   assert.equal(overflow.result.ok, false);
   assert.equal(overflow.result.error.code, 'RESULT_TOO_LARGE', 'çalışan sınırı gerçekten aşıldığında erişim kapalı biçimde reddedilir');
+});
+
+test("sistem yöneticisinin boş sayımlı tam kapsamı yalnız güncel yönetici yetkisiyle doğrulanır", async (t) => {
+  const stack = stackFor(t, {}, ADMIN);
+  for (const tool of ['rota_recurrence_inspect', 'rota_data_quality']) {
+    const { result, ledger } = await callRotaTool(stack, ADMIN, tool, {});
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(result.scope.projects, { full: 0, read: 0, partial: 0 });
+    const [saved] = ledger.authorizationEntries();
+    assert.ok(saved, 'araç kanıtı kaydedilmeli');
+    const entry = { ...saved, savedPopulation: true };
+    const current = savedEvidenceRequirements(entry, { sicil: ADMIN, isSystemAdmin: true });
+    assert.ok(current, 'güncel yönetici kapsamı yeniden doğrulanmalı');
+    assert.equal(current.projectLevels.get(PROJECTS.FULL), PROJECT_ACCESS_RANK.FULL);
+    assert.equal(savedEvidenceRequirements(entry, { sicil: ADMIN, isSystemAdmin: false }), null,
+      'yönetici yetkisi kaldırılınca boş kapsam tam erişim kanıtı olamaz');
+  }
 });

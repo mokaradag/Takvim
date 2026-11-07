@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { aiRequest, conversationRoute, createAiStack, loadAssistantConversation, readJson, sendTurn } from './helpers/aiStack.mjs';
-import { AYSE, LEAD, MEHMET, PROJECTS, TASKS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
+import { ALI_1, AYSE, LEAD, MEHMET, PROJECTS, TASKS, WBS, ZEYNEP, callRotaTool, rotaToolSeed } from './helpers/aiToolFixtures.mjs';
 import { claimFor, declared, evidenceReply } from './helpers/evidenceScenario.mjs';
 
 const { NON_ENUMERATING_FAILURE_TEXT } = await import('../src/domain/ai/evidenceContract.js');
 const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
+const { decodeAuthorizationPopulation, encodeAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
 const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
 const { getSqlPool } = await import('../src/server/db/pool.js');
 const { resetConversationSchemaForTests } = await import('../src/server/ai/assistant/conversationStore.js');
@@ -205,7 +206,7 @@ for (const cause of ['cumulative', 'message', 'caller']) {
     for (let i = 0; i < 400 && barrier.entered === 0; i += 1) await new Promise((resolve) => setImmediate(resolve));
     assert.equal(barrier.entered, 1);
     if (cause === 'caller') caller.abort();
-    else if (cause === 'cumulative') timers.find((timer) => timer.ms === TOOL_LIMITS.maxCumulativeSqlMs).expire();
+    else if (cause === 'cumulative') timers.find((timer) => timer.active && timer.ms === TOOL_LIMITS.maxCumulativeSqlMs).expire();
     else timers.find((timer) => timer.active && timer.ms === TOOL_LIMITS.callTimeoutMs).expire();
     const result = await opened;
     if (cause === 'caller') {
@@ -813,3 +814,1746 @@ test("ileti varlığı doğrulanamıyorsa kanıt kullanılamasa da erişim kapal
   const opened = await loadAssistantConversation(saved.conversation.id);
   assert.ok(opened.status >= 500); assert.equal(JSON.stringify(opened.body).includes(text), false);
 });
+
+
+/** Gerçek araç, defter ve SQL depo yoluyla eski biçimde başarılı yanıt kaydeder. */
+async function saveLegacyEvidence(stack, { calls = [
+  ['rota_workload_summary', { projectId: PROJECTS.FULL }],
+  ['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'status' }]
+], scoped = false, content = `KORUNAN_${randomUUID()} Kayıtlı iş yükü ve durum dağılımı. 【R1】【R2】`, conversationId = null } = {}) {
+  const { callRotaTools } = await import('./helpers/aiToolFixtures.mjs');
+  const { prepareConversationTurn, appendGroundedConversationAnswer } = await import('../src/server/ai/assistant/conversationStore.js');
+  const { ledger } = await callRotaTools(stack, AYSE, calls);
+  const pool = await getSqlPool();
+  const prepared = await prepareConversationTurn(pool, AYSE, { conversationId, newConversationId: randomUUID(),
+    userMessageId: randomUUID(), turnId: randomUUID(), content: 'Görevlerin durumunu ve iş yükünü göster.', title: 'Eski konuşma', maxMessages: 100, historyLimit: 20 });
+  const rows = ledger.persistable(ledger.ids()).map((row) => {
+    const value = JSON.parse(row.evidenceJson);
+    if (!scoped) delete value.scopedAuthorization;
+    assert.equal(value.authorizationPopulation.complete, true);
+    return { ...row, evidenceJson: JSON.stringify(value) };
+  });
+  const saved = await appendGroundedConversationAnswer(pool, AYSE, { conversationId: prepared.conversation.id, messageId: randomUUID(),
+    replyToMessageId: prepared.turn.message.id, content, mode: 'standard', finishReason: 'stop', evidence: rows });
+  return { saved, conversationId: prepared.conversation.id };
+}
+
+for (const change of ['proje-ekleme', 'proje-kaldırma', 'görev-ataması', 'kurumsal-kapsam']) {
+  test(`eski tam nüfuslu iki kanıt ilgisiz yetki değişikliğinde özgün yanıtı korur (${change})`, async (t) => {
+    const stack = stackFor(t);
+    const { saved, conversationId } = await saveLegacyEvidence(stack);
+    assert.equal(saved.message.finishReason, 'stop');
+    assert.equal(stack.db.aiMessageEvidence.length, 2);
+    if (change === 'proje-ekleme') stack.db.projectAccess.push({ ProjectId: PROJECTS.HIDDEN, Sicil: AYSE, AccessLevel: 'READ', IsActive: 1 });
+    if (change === 'proje-kaldırma') stack.db.projectAccess = [];
+    if (change === 'görev-ataması') stack.db.taskAssignees.push({ TaskId: TASKS.HIDDEN, Sicil: AYSE });
+    if (change === 'kurumsal-kapsam') stack.db.executiveScope = [];
+    const before = JSON.stringify([stack.db.aiConversations, stack.db.aiConversationMessages, stack.db.aiMessageEvidence]);
+    const calls = stack.provider.calls.length;
+    for (let count = 0; count < 2; count += 1) {
+      const response = await loadAssistantConversation(conversationId);
+      assert.equal(response.status, 200);
+      assert.doesNotMatch(JSON.stringify(response.body), /authorizationEpoch|authorizationPopulation|scopedAuthorization|EvidenceJson/);
+      const answer = response.body.messages.find((message) => message.role === 'assistant');
+      assert.equal(answer.content, saved.message.content);
+      assert.equal(answer.finishReason, 'stop');
+      assert.deepEqual(answer.evidence, saved.evidence);
+    }
+    assert.equal(stack.provider.calls.length, calls);
+    assert.equal(JSON.stringify([stack.db.aiConversations, stack.db.aiConversationMessages, stack.db.aiMessageEvidence]), before);
+  });
+}
+
+for (const change of ['proje-yetkisi', 'görev-silme', 'gizli-projeye-taşıma', 'görünür-projeye-taşıma', 'arşivleme', 'tek-katkı-yetkisi']) {
+  test(`eski çok projeli toplam her katkıyı yeniden denetler (${change})`, async (t) => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [
+      ['rota_task_analytics', { groupBy: 'status', limit: 1 }], ['rota_task_analytics', { groupBy: 'priority', limit: 1 }]
+    ] });
+    stack.db.projectAccess.push({ ProjectId: PROJECTS.HIDDEN, Sicil: AYSE, AccessLevel: 'READ', IsActive: 1 });
+    const authorized = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.equal(authorized.content, saved.message.content);
+    if (change === 'proje-yetkisi') stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+    if (change === 'görev-silme') stack.db.tasks = stack.db.tasks.filter(row => row.TaskId !== TASKS.DONE);
+    if (change === 'gizli-projeye-taşıma') stack.db.tasks.find(row => row.TaskId === TASKS.DONE).ProjectId = PROJECTS.HIDDEN;
+    if (change === 'görünür-projeye-taşıma') stack.db.tasks.find(row => row.TaskId === TASKS.DONE).ProjectId = PROJECTS.READ;
+    if (change === 'arşivleme') stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).IsActive = 0;
+    if (change === 'tek-katkı-yetkisi') stack.db.taskAssignees = stack.db.taskAssignees.filter(row => row.TaskId !== TASKS.PARTIAL_OWN);
+    const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.equal(answer.finishReason, 'not_found');
+    assert.deepEqual(answer.evidence, []);
+    assert.notEqual(answer.content, saved.message.content);
+  });
+}
+
+for (const scoped of [false, true]) {
+  test(`kayıtlı kimlikler ilgisiz yönetim değişikliğinde yalnızca güncel alan yetkisiyle açılır (${scoped})`, async (t) => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { scoped });
+    stack.db.executiveScope = [];
+    const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.equal(answer.content, saved.message.content);
+    assert.deepEqual(answer.evidence, saved.evidence);
+    stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+    const hidden = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.equal(hidden.finishReason, 'not_found');
+    assert.deepEqual(hidden.evidence, []);
+  });
+}
+
+test("eski kısmi görev toplamı ilgisiz yetki değişikliğinde önizlemede olmayan katkıları da denetler", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { projectId: PROJECTS.PARTIAL, groupBy: 'status', limit: 1 }]] });
+  stack.db.projectAccess = [];
+  const before = stack.db.aiToolLog.length;
+  const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(answer.content, saved.message.content);
+  const queries = stack.db.aiToolLog.slice(before);
+  // Son tutarlı işlem önizlemede olmayan katkı dahil tam nüfusu tek kez okur.
+  const reads = queries.filter(row => row.query === 'task-visibility');
+  assert.equal(reads.length, 1);
+  for (const read of reads) assert.deepEqual(read.params.taskIds.split(',').sort(), [TASKS.PARTIAL_OWN, TASKS.PARTIAL_SHARED].sort());
+  stack.db.taskAssignees = stack.db.taskAssignees.filter(row => row.TaskId !== TASKS.PARTIAL_SHARED || row.Sicil !== AYSE);
+  const hidden = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(hidden.finishReason, 'not_found');
+});
+
+test("eski kanıt başka Sicil için var olmayan konuşmayla aynı sonucu verir", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId } = await saveLegacyEvidence(stack);
+  stack.useSicil(MEHMET);
+  const foreign = await loadAssistantConversation(conversationId);
+  const missing = await loadAssistantConversation(randomUUID());
+  assert.equal(foreign.status, 404);
+  assert.deepEqual(foreign.body, missing.body);
+});
+
+for (const corruption of ['dönem-yok', 'dönem-bozuk', 'kapsam-bozuk', 'nüfus-eksik', 'yük-bozuk']) {
+  test(`eski kanıt bozuk üstveriyi güncel yetki yerine kabul etmez (${corruption})`, async (t) => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack);
+    stack.db.projectAccess = [];
+    const row = stack.db.aiMessageEvidence[0];
+    const value = JSON.parse(row.EvidenceJson);
+    if (corruption === 'dönem-yok') delete value.authorizationEpoch;
+    if (corruption === 'dönem-bozuk') value.authorizationEpoch = 'bozuk';
+    if (corruption === 'kapsam-bozuk') value.scopedAuthorization = { version: 99 };
+    if (corruption === 'nüfus-eksik') value.authorizationPopulation.complete = false;
+    if (corruption === 'yük-bozuk') value.data = {};
+    row.EvidenceJson = JSON.stringify(value);
+    const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.notEqual(answer.content, saved.message.content);
+    assert.deepEqual(answer.evidence, []);
+  });
+}
+
+test("ilk yetki okumasının geçici hatası atıfsız korunan metni açmaz ve yetki kaybı diye sunulmaz", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId } = await saveLegacyEvidence(stack, { content: 'Özgün korunan yanıt.' });
+  const pool = await getSqlPool();
+  const request = pool.request.bind(pool);
+  t.mock.method(pool, 'request', () => {
+    const value = request();
+    const query = value.query.bind(value);
+    value.query = async sql => {
+      if (sql.includes('AS IsExecutive;')) throw Object.assign(new Error('Geçici SQL hatası'), { code: 'ETIMEOUT' });
+      return query(sql);
+    };
+    return value;
+  });
+  const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(answer.finishReason, 'unavailable');
+  assert.equal(answer.content, 'Rota verisine şu anda ulaşılamıyor. Daha sonra yeniden deneyin.');
+  assert.deepEqual(answer.evidence, []);
+});
+
+test("kanıt parçaları okunurken değişen yetki eski bağlamla yanıt açamaz", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId } = await saveLegacyEvidence(stack);
+  let changed = false;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (!changed && sql.startsWith('/* rota-ai-tool:task-visibility */')) {
+      changed = true;
+      stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+      return true;
+    }
+    return false;
+  } };
+  const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(changed, true);
+  assert.equal(answer.finishReason, 'unavailable');
+  assert.deepEqual(answer.evidence, []);
+});
+
+for (const tool of ['rota_task_search', 'rota_task_detail']) {
+  test(`eski görev kanıtı ilgisiz yetki değişikliğinde güncel alan erişimiyle açılır (${tool})`, async (t) => {
+    const stack = stackFor(t);
+    const args = tool === 'rota_task_search' ? { projectId: PROJECTS.FULL, limit: 1 } : { taskId: TASKS.OVERDUE };
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, args]] });
+    stack.db.executiveScope = [];
+    const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.equal(answer.content, saved.message.content);
+    stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+    const hidden = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.equal(hidden.finishReason, 'not_found');
+    assert.deepEqual(hidden.evidence, []);
+  });
+}
+
+test("eski kısmi iş yükünde görünür kişi ilişkisi kaybolursa görev görünürlüğü tek başına yetmez", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_workload_summary', { projectId: PROJECTS.TEAM }]] });
+  stack.db.projectAccess = [];
+  const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(answer.content, saved.message.content);
+  stack.db.taskAssignees.push({ TaskId: TASKS.TEAM_VISIBLE, Sicil: AYSE });
+  stack.db.executiveScope = [];
+  const hidden = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(hidden.finishReason, 'not_found');
+  assert.deepEqual(hidden.evidence, []);
+});
+
+test("eski tam nüfuslu iş yükü salt okuma proje hibesiyle de yetkili kalır", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_workload_summary', { projectId: PROJECTS.READ }]] });
+  stack.db.executiveScope = [];
+  const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(answer.content, saved.message.content);
+  stack.db.projectAccess = [];
+  const hidden = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(hidden.finishReason, 'not_found');
+});
+
+for (const tool of ['rota_project_detail', 'rota_wbs_inspect', 'rota_baseline_compare', 'rota_dependency_inspect', 'rota_recurrence_inspect', 'rota_data_quality']) {
+  test(`eski proje kanıtı ilgisiz yetki değişiminde tam proje hakkıyla yeniden doğrulanır (${tool})`, async (t) => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, { projectId: PROJECTS.FULL }]] });
+    stack.db.executiveScope = [];
+    const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.equal(answer.content, saved.message.content);
+    stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+    const hidden = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.equal(hidden.finishReason, 'not_found');
+    assert.deepEqual(hidden.evidence, []);
+  });
+}
+
+test("eski proje karşılaştırması görev içermeyen gizlenmiş projeyi de doğrular", async (t) => {
+  const stack = stackFor(t);
+  stack.db.tasks = stack.db.tasks.filter(row => [PROJECTS.FULL, PROJECTS.READ].includes(row.ProjectId));
+  stack.db.projects = stack.db.projects.filter(row => [PROJECTS.FULL, PROJECTS.READ].includes(row.ProjectId));
+  stack.db.projects.find(row => row.ProjectId === PROJECTS.READ).LeadSicil = AYSE;
+  stack.db.tasks = stack.db.tasks.filter(row => row.ProjectId !== PROJECTS.READ);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_portfolio_summary', { limit: 25 }]] });
+  stack.db.executiveScope = [];
+  const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(answer.content, saved.message.content);
+  stack.db.projects.find(row => row.ProjectId === PROJECTS.READ).IsActive = 0;
+  const hidden = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(hidden.finishReason, 'not_found');
+  assert.deepEqual(hidden.evidence, []);
+});
+
+test("eski proje araması tam eşleşme nüfusunu güncel proje erişimiyle doğrular", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_project_search', { text: 'Radar' }]] });
+  stack.db.executiveScope = [];
+  const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(answer.content, saved.message.content);
+  stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).IsActive = 0;
+  const hidden = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+  assert.equal(hidden.finishReason, 'not_found');
+  assert.deepEqual(hidden.evidence, []);
+});
+
+for (const references of [{}, true, false, 0, '', 'bozuk']) {
+  test(`eski dizi olmayan görev başvurusu eşleşen dönemde bile yetki kanıtı olamaz (${JSON.stringify(references)})`, async (t) => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+    const row = stack.db.aiMessageEvidence[0];
+    const value = JSON.parse(row.EvidenceJson);
+    delete value.authorizationPopulation;
+    value.authorizationReferences = references;
+    row.EvidenceJson = JSON.stringify(value);
+    const answer = (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+    assert.equal(answer.finishReason, 'not_found');
+    assert.notEqual(answer.content, saved.message.content);
+    assert.deepEqual(answer.evidence, []);
+  });
+}
+
+const savedAnswer = async (conversationId) => (await loadAssistantConversation(conversationId)).body.messages.find(message => message.role === 'assistant');
+const unrelatedProjectGrant = (stack) => stack.db.projectAccess.push({ ProjectId: PROJECTS.HIDDEN, Sicil: AYSE, AccessLevel: 'READ', IsActive: 1 });
+
+for (const tool of ['rota_task_search', 'rota_task_detail']) {
+  test(`kendi sorumluluğuyla açılan gizli eş sorumlu adı kimlik tabanı olmadan da geçmişte korunur (${tool})`, async (t) => {
+    const stack = stackFor(t);
+    const args = tool === 'rota_task_search' ? { projectId: PROJECTS.PARTIAL } : { taskId: TASKS.PARTIAL_SHARED };
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, args]] });
+    const stored = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson).data;
+    const shared = tool === 'rota_task_search' ? stored.tasks.find(row => row.taskId === TASKS.PARTIAL_SHARED) : stored.task;
+    assert.ok(shared.assignees.some(person => person.identityHidden === true), 'senaryo gizli eş sorumlu adını içermeli');
+    stack.db.executiveScope = [];
+    const answer = await savedAnswer(conversationId);
+    assert.equal(answer.content, saved.message.content);
+    assert.deepEqual(answer.evidence, saved.evidence);
+    // Görev yönetim kapsamıyla görünür kalsa da kendi sorumluluk kalkınca gizli ad yeniden açılamaz.
+    stack.db.taskAssignees = stack.db.taskAssignees.filter(row => row.TaskId !== TASKS.PARTIAL_SHARED || row.Sicil !== AYSE);
+    stack.db.taskAssignees.push({ TaskId: TASKS.PARTIAL_SHARED, Sicil: ZEYNEP });
+    stack.db.executiveScope = [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }];
+    const hidden = await savedAnswer(conversationId);
+    assert.equal(hidden.finishReason, 'not_found');
+    assert.deepEqual(hidden.evidence, []);
+  });
+}
+
+test("kişi süzgeçli eski görev özeti kişi yönetim kapsamından çıkınca kimlik tabanı olmayan görevle açılmaz", async (t) => {
+  const stack = stackFor(t);
+  stack.db.taskAssignees.push({ TaskId: TASKS.TEAM_VISIBLE, Sicil: AYSE });
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { personSicil: ZEYNEP, groupBy: 'status' }]] });
+  assert.equal(JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson).data.filters.personSicil, ZEYNEP);
+  unrelatedProjectGrant(stack);
+  const answer = await savedAnswer(conversationId);
+  assert.equal(answer.content, saved.message.content);
+  stack.db.executiveScope = [];
+  const hidden = await savedAnswer(conversationId);
+  assert.equal(hidden.finishReason, 'not_found');
+  assert.deepEqual(hidden.evidence, []);
+});
+
+for (const omitted of [false, true]) {
+  test(`ekip süzgeçli eski görev özeti ekip kapsamı değişince güncel görünürlükle yeniden açılmaz (veri çıkarılmış: ${omitted})`, async (t) => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { assignee: 'team', projectId: PROJECTS.FULL, groupBy: 'status' }]] });
+    if (omitted) {
+      const row = stack.db.aiMessageEvidence[0];
+      row.EvidenceJson = JSON.stringify({ ...JSON.parse(row.EvidenceJson), data: null, dataOmitted: 'size' });
+    }
+    assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+    // Kullanıcı yönetici kalır, görev de görünür kalır; fakat kayıtlı ekip üyesi artık ekipte değildir.
+    stack.db.executiveScope = [{ ManagerSicil: AYSE, EmployeeSicil: ALI_1 }];
+    const hidden = await savedAnswer(conversationId);
+    assert.equal(hidden.finishReason, 'not_found');
+    assert.deepEqual(hidden.evidence, []);
+  });
+}
+
+test("eski proje araması kısmi eşleşmeyi korur; güncel erişim kayıtlı düzeyin altına düşerse açılmaz", async (t) => {
+  const stack = stackFor(t);
+  stack.db.taskAssignees.push({ TaskId: TASKS.READ_1, Sicil: AYSE });
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_project_search', { text: 'Proje' }]] });
+  const levels = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson).data.matches.map(row => row.access.level);
+  assert.ok(levels.includes('PARTIAL') && levels.includes('READ'), 'senaryo kısmi ve okuma eşleşmesi içermeli');
+  unrelatedProjectGrant(stack);
+  const answer = await savedAnswer(conversationId);
+  assert.equal(answer.content, saved.message.content);
+  assert.deepEqual(answer.evidence, saved.evidence);
+  // Okuma hibesi kalkar; proje görev ataması nedeniyle yalnızca kısmi erişimle görünür kalır.
+  stack.db.projectAccess = stack.db.projectAccess.filter(row => row.ProjectId !== PROJECTS.READ);
+  const hidden = await savedAnswer(conversationId);
+  assert.equal(hidden.finishReason, 'not_found');
+  assert.deepEqual(hidden.evidence, []);
+});
+
+test("eski proje listesinin bozuk satırı istisnaya düşmeden doğrulanamaz sayılır", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_project_search', { text: 'Proje' }]] });
+  const row = stack.db.aiMessageEvidence[0];
+  const value = JSON.parse(row.EvidenceJson);
+  value.data.matches[1] = null;
+  row.EvidenceJson = JSON.stringify(value);
+  unrelatedProjectGrant(stack);
+  const answer = await savedAnswer(conversationId);
+  assert.equal(answer.finishReason, 'not_found');
+  assert.notEqual(answer.content, saved.message.content);
+  assert.deepEqual(answer.evidence, []);
+});
+
+for (const population of [null, 0, false, '']) {
+  test(`alanı bulunan bozuk nüfus eski yük başvurularına düşmez (${JSON.stringify(population)})`, async (t) => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+    const row = stack.db.aiMessageEvidence[0];
+    row.EvidenceJson = JSON.stringify({ ...JSON.parse(row.EvidenceJson), authorizationPopulation: population });
+    const answer = await savedAnswer(conversationId);
+    assert.equal(answer.finishReason, 'unavailable');
+    assert.notEqual(answer.content, saved.message.content);
+    assert.deepEqual(answer.evidence, []);
+  });
+}
+
+test("son görev denetiminde bir iletinin SQL hatası başka doğrulanmış yanıtı gizlemez", async (t) => {
+  const stack = stackFor(t);
+  const first = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]], content: 'İlk güvenli yanıt. 【R1】' });
+  const second = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.DUE_SOON }]], content: 'İkinci güvenli yanıt. 【R1】', conversationId: first.conversationId });
+  let reads = 0;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (sql.startsWith('/* rota-ai-tool:task-visibility */') && ++reads === 1) {
+      throw Object.assign(new Error('Geçici görev okuma hatası'), { code: 'DATABASE_UNAVAILABLE' });
+    }
+    return false;
+  } };
+  const messages = (await loadAssistantConversation(first.conversationId)).body.messages.filter((message) => message.role === 'assistant');
+  assert.equal(reads, 2, 'iki bağımsız son işlem çalışmalı');
+  const hidden = messages.filter(message => message.finishReason === 'unavailable');
+  const visible = messages.filter(message => message.finishReason === 'stop');
+  assert.equal(hidden.length, 1);
+  assert.equal(visible.length, 1);
+  const original = [first.saved.message, second.saved.message].find(message => message.id === visible[0].id);
+  assert.equal(visible[0].content, original.content);
+  assert.deepEqual(hidden[0].evidence, []);
+});
+
+for (const tool of ['rota_task_search', 'rota_task_analytics']) {
+  test(`WBS süzgeci görev başka dala taşınınca aynı veya değişen yetki döneminde eski düğümü açıklamaz (${tool})`, async (t) => {
+    const stack = stackFor(t);
+    const args = { wbsId: WBS.TEAM_LEAF, ...(tool === 'rota_task_analytics' ? { groupBy: 'status' } : {}) };
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, args]] });
+    const filters = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson).data.filters;
+    assert.equal(filters.wbsId, WBS.TEAM_LEAF);
+    assert.match(filters.wbs, /Kurulum/);
+    assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+    stack.db.tasks.find((row) => row.TaskId === TASKS.TEAM_VISIBLE).WbsId = WBS.TEAM_OTHER;
+    assertHidden(await savedAnswer(conversationId), saved);
+    unrelatedProjectGrant(stack);
+    assertHidden(await savedAnswer(conversationId), saved);
+    stack.db.tasks.find((row) => row.TaskId === TASKS.TEAM_VISIBLE).WbsId = WBS.TEAM_LEAF;
+    assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  });
+}
+
+test("bir iletinin son denetim süresi dolsa da diğer iletinin bağımsız denetimi çalışır", async (t) => {
+  const stack = stackFor(t);
+  const first = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]], content: 'İlk kayıtlı yanıt. 【R1】' });
+  const second = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.DUE_SOON }]], content: 'İkinci kayıtlı yanıt. 【R1】', conversationId: first.conversationId });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let visibilityReads = 0;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    // Yeni iletinin süresi son görev okumasında dolar; eski iletinin bütçesi bağımsızdır.
+    if (sql.startsWith('/* rota-ai-tool:task-visibility */') && ++visibilityReads === 1) t.mock.timers.tick(TOOL_LIMITS.callTimeoutMs + 1);
+    return false;
+  } };
+  const messages = (await loadAssistantConversation(first.conversationId)).body.messages.filter(message => message.role === 'assistant');
+  t.mock.timers.reset();
+  // İki bağımsız son görev denetimi.
+  assert.equal(visibilityReads, 2);
+  assert.equal(messages.find(message => message.id === first.saved.message.id).content, first.saved.message.content);
+  assert.equal(messages.find(message => message.id === second.saved.message.id).finishReason, 'unavailable');
+});
+
+/* ── Kimliğe bağlı geçmiş sınıflar, proje erişim düzeyleri, boş sonuç ve son görev denetimi ── */
+
+const fullTaskIds = (stack) => stack.db.tasks.filter(row => row.ProjectId === PROJECTS.FULL).map(row => row.TaskId);
+/** Tam erişim kalkar; kullanıcı görevlere atanarak yalnızca kısmi (kimlik tabanı olmayan) erişimle görmeye devam eder. */
+function narrowFullProjectToAssignments(stack, taskIds) {
+  stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+  for (const taskId of taskIds) {
+    if (!stack.db.taskAssignees.some(row => row.TaskId === taskId && row.Sicil === AYSE)) stack.db.taskAssignees.push({ TaskId: taskId, Sicil: AYSE });
+  }
+}
+const storedData = (stack, index = 0) => JSON.parse(stack.db.aiMessageEvidence[index].EvidenceJson).data;
+const assertHidden = (answer, saved) => {
+  assert.equal(answer.finishReason, 'not_found');
+  assert.equal(answer.content, NON_ENUMERATING_FAILURE_TEXT);
+  const protectedText = saved.message.content.split('【')[0].trim();
+  assert.ok(protectedText.length > 0);
+  assert.equal(JSON.stringify(answer).includes(protectedText), false, 'korunan metnin hiçbir parçası yanıta eklenemez');
+  const marker = /KORUNAN_[a-f0-9-]+/.exec(saved.message.content)?.[0];
+  if (marker) assert.equal(JSON.stringify(answer).includes(marker), false);
+  assert.deepEqual(answer.evidence, []);
+};
+
+test("sorumlusuz süzgeçli eski görev özeti kimlik tabanı kalkınca yalnızca görev görünürlüğüyle açılmaz", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { projectId: PROJECTS.FULL, assignee: 'unassigned', groupBy: 'status' }]] });
+  assert.equal(storedData(stack).filters.assignee, 'unassigned');
+  assert.ok(storedData(stack).totals.total > 0, 'senaryo sorumlusuz görev saymalı');
+  unrelatedProjectGrant(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  narrowFullProjectToAssignments(stack, fullTaskIds(stack));
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("sorumluya göre gruplanan eski özetin sorumlusuz kovası güncel kimlik tabanı ister", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'assignee', status: ['todo'] }]] });
+  const keys = storedData(stack).groups.map(row => row.key);
+  assert.ok(keys.includes('unassigned'), 'senaryo sorumlusuz kovası içermeli');
+  assert.deepEqual(keys.filter(key => key.startsWith('sicil:')), [`sicil:${AYSE}`], 'kişi kovaları güncel olarak açık olmalı');
+  unrelatedProjectGrant(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  narrowFullProjectToAssignments(stack, fullTaskIds(stack));
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("kişi listesi boş eski iş yükünün sorumlusuz sayısı güncel kimlik tabanı ister", async (t) => {
+  const stack = stackFor(t);
+  const fullTasks = new Set(fullTaskIds(stack));
+  stack.db.taskAssignees = stack.db.taskAssignees.filter(row => !fullTasks.has(row.TaskId));
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_workload_summary', { projectId: PROJECTS.FULL }]] });
+  assert.deepEqual(storedData(stack).people, []);
+  assert.ok(storedData(stack).unassignedOpenTasks > 0);
+  unrelatedProjectGrant(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  narrowFullProjectToAssignments(stack, [...fullTasks]);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+for (const corruption of ['grup-satırı', 'grup-anahtarı', 'sorumlusuz-sayısı', 'kişi-satırı']) {
+  test(`kimliğe bağlı eski toplamın bozuk üstverisi kimlik yetkisi kanıtı sayılmaz (${corruption})`, async (t) => {
+    const stack = stackFor(t);
+    const workload = ['sorumlusuz-sayısı', 'kişi-satırı'].includes(corruption);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [workload
+      ? ['rota_workload_summary', { projectId: PROJECTS.FULL }] : ['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'assignee', status: ['todo'] }]] });
+    const row = stack.db.aiMessageEvidence[0];
+    const value = JSON.parse(row.EvidenceJson);
+    if (corruption === 'grup-satırı') value.data.groups[0] = null;
+    if (corruption === 'grup-anahtarı') value.data.groups[0].key = 7;
+    if (corruption === 'sorumlusuz-sayısı') value.data.unassignedOpenTasks = '1';
+    if (corruption === 'kişi-satırı') value.data.people = [null];
+    row.EvidenceJson = JSON.stringify(value);
+    unrelatedProjectGrant(stack);
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+/** Yalnızca görev atamasıyla kısmi görünen, aramada gösterilmeyen ek proje. */
+const SCHOOL = { ProjectId: '10000000-0000-4000-8000-000000000007', TaskId: '20000000-0000-4000-8000-000000000071' };
+function addPartialSchoolProject(seed = {}) {
+  const base = rotaToolSeed(seed);
+  return {
+    projects: [...base.projects, { ProjectId: SCHOOL.ProjectId, SourceType: 'MANUAL', ProjectCode: 'OKL', ProjectName: 'Okul Projesi', LeadSicil: LEAD }],
+    tasks: [...base.tasks, { TaskId: SCHOOL.TaskId, ProjectId: SCHOOL.ProjectId, Title: 'Okul görevi', Status: 'planned', Priority: 'medium', CreatedBySicil: null }],
+    taskAssignees: [...base.taskAssignees, { TaskId: SCHOOL.TaskId, Sicil: AYSE }]
+  };
+}
+const unrelatedManagementChange = (stack) => stack.db.executiveScope.push({ ManagerSicil: AYSE, EmployeeSicil: ALI_1 });
+
+test("eski proje aramasında gösterilmeyen kısmi eşleşme tam erişime yükseltilmeden doğrulanır", async (t) => {
+  const stack = stackFor(t, addPartialSchoolProject());
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_project_search', { text: 'OKU', limit: 1 }]], scoped: true });
+  const stored = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+  assert.equal(stored.totalCount, 2);
+  assert.deepEqual(stored.data.matches.map(row => row.projectId), [PROJECTS.READ]);
+  assert.equal(stored.data.candidates, undefined, 'gösterilmeyen eşleşmenin erişim düzeyi kayıtta yok');
+  assert.deepEqual([...stored.scopedAuthorization.projectIds].sort(), [PROJECTS.READ, SCHOOL.ProjectId].sort());
+  unrelatedManagementChange(stack);
+  const answer = await savedAnswer(conversationId);
+  assert.equal(answer.content, saved.message.content);
+  assert.deepEqual(answer.evidence, saved.evidence);
+  // Tam nüfustaki gösterilmeyen proje gerçekten görünmez olursa yanıt açılmaz.
+  stack.db.taskAssignees = stack.db.taskAssignees.filter(row => row.TaskId !== SCHOOL.TaskId);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("eski proje aramasının aday düzeyleri korunur; kayıtlı nüfus toplamla tutmazsa açılmaz", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_project_search', { text: 'Proje', limit: 1 }]], scoped: true });
+  const stored = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+  assert.equal(stored.data.matches.length, 1);
+  assert.ok(stored.data.candidates.some(row => row.access.level === 'PARTIAL'), 'senaryo kısmi aday içermeli');
+  unrelatedManagementChange(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  const row = stack.db.aiMessageEvidence[0];
+  const value = JSON.parse(row.EvidenceJson);
+  value.totalCount += 1;
+  row.EvidenceJson = JSON.stringify(value);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("okuma hibeli eski proje künyesi ilgisiz yönetim değişikliğinde açılır; düzey düşerse açılmaz", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_project_detail', { projectId: PROJECTS.READ }]] });
+  assert.equal(storedData(stack).access.level, 'READ');
+  stack.db.executiveScope = [];
+  const answer = await savedAnswer(conversationId);
+  assert.equal(answer.content, saved.message.content);
+  assert.deepEqual(answer.evidence, saved.evidence);
+  // Okuma hibesi kalkar; proje yalnızca görev atamasıyla kısmi görünür kalır.
+  stack.db.taskAssignees.push({ TaskId: TASKS.READ_1, Sicil: AYSE });
+  stack.db.projectAccess = stack.db.projectAccess.filter(row => row.ProjectId !== PROJECTS.READ);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("tam erişime özgü sayıları taşıyan eski proje künyesi okuma erişimiyle açılmaz", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_project_detail', { projectId: PROJECTS.FULL }]] });
+  assert.notEqual(storedData(stack).project.dependencyCount, null);
+  stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+  stack.db.projectAccess.push({ ProjectId: PROJECTS.FULL, Sicil: AYSE, AccessLevel: 'READ', IsActive: 1 });
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+for (const page of ['tam-sayfa', 'tek-satır']) {
+  test(`kısmi ve okuma projeli eski portföy özeti ilgisiz yönetim değişikliğinde açılır (${page})`, async (t) => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_portfolio_summary', { limit: page === 'tam-sayfa' ? 25 : 1 }]], scoped: page === 'tek-satır' });
+    const payload = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+    if (page === 'tam-sayfa') {
+      const levels = payload.data.projects.map(row => row.access);
+      assert.ok(levels.includes('READ') && levels.includes('PARTIAL'), 'senaryo okuma ve kısmi proje içermeli');
+    } else {
+      assert.equal(payload.data.projects.length, 1);
+      assert.equal(payload.scopedAuthorization.projectIds.length, payload.totalCount);
+      assert.ok(payload.scopedAuthorization.projectIds.includes(PROJECTS.READ));
+      assert.ok(payload.scopedAuthorization.projectIds.includes(PROJECTS.PARTIAL));
+    }
+    unrelatedManagementChange(stack);
+    const answer = await savedAnswer(conversationId);
+    assert.equal(answer.content, saved.message.content);
+    assert.deepEqual(answer.evidence, saved.evidence);
+    stack.db.projectAccess = stack.db.projectAccess.filter(row => row.ProjectId !== PROJECTS.READ);
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+for (const [tool, args] of [['rota_project_search', { text: 'Yokyok' }], ['rota_task_search', { text: 'Yokyok' }], ['rota_task_analytics', { text: 'Yokyok', groupBy: 'status' }]]) {
+  test(`boş süzgeçli sonuç kapsam kökeni yoksa yalnızca özgün dönemde açılır (${tool})`, async (t) => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, args]] });
+    const stored = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+    assert.equal(stored.totalCount, 0);
+    assert.deepEqual(decodeAuthorizationPopulation(stored.authorizationPopulation), []);
+    assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+    unrelatedProjectGrant(stack);
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+for (const variant of ['kişi-süzgeçli', 'sayı-tutarsız', 'kesik', 'boşaltılmış-nüfus']) {
+  test(`boş görünen fakat kapsamlı ya da eksik eski sonuç boş sonuç sayılmaz (${variant})`, async (t) => {
+    const stack = stackFor(t);
+    const calls = variant === 'kişi-süzgeçli' ? [['rota_task_search', { personSicil: ZEYNEP, text: 'Yokyok' }]]
+      : variant === 'boşaltılmış-nüfus' ? [['rota_task_search', { text: 'Radar' }]] : [['rota_project_search', { text: 'Yokyok' }]];
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls });
+    const row = stack.db.aiMessageEvidence[0];
+    const value = JSON.parse(row.EvidenceJson);
+    if (variant === 'sayı-tutarsız') value.totalCount = 1;
+    if (variant === 'kesik') value.truncated = true;
+    if (variant === 'boşaltılmış-nüfus') {
+      assert.ok(value.totalCount > 0);
+      value.authorizationPopulation = encodeAuthorizationPopulation([]);
+    }
+    row.EvidenceJson = JSON.stringify(value);
+    if (variant === 'kişi-süzgeçli') stack.db.executiveScope = [];
+    else unrelatedProjectGrant(stack);
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+test("doğrulamadan sonra gizli projeye taşınan görev aynı yetki dönemiyle açıklanmaz", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'status' }]] });
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  let visibilityReads = 0;
+  let moved = false;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    // Son işlem yetkiyi okuduktan sonra görev okuması başlarken taşınır.
+    if (sql.startsWith('/* rota-ai-tool:task-visibility */') && ++visibilityReads === 1) {
+      moved = true;
+      stack.db.tasks.find(row => row.TaskId === TASKS.DONE).ProjectId = PROJECTS.HIDDEN;
+    }
+    return false;
+  } };
+  const answer = await savedAnswer(conversationId);
+  assert.equal(visibilityReads, 1, 'kaynak yalnızca tutarlı son işlemde okunmalı');
+  assert.equal(moved, true, 'görev, son görev okuması başlarken taşınmalı');
+  assertHidden(answer, saved);
+});
+
+test("yetki satırı değişmeden gizli projeye taşınan görev geçmiş yanıtı kapatır, geri taşınınca açar", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'status' }]] });
+  stack.db.tasks.find(row => row.TaskId === TASKS.DONE).ProjectId = PROJECTS.HIDDEN;
+  assertHidden(await savedAnswer(conversationId), saved);
+  stack.db.tasks.find(row => row.TaskId === TASKS.DONE).ProjectId = PROJECTS.FULL;
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+});
+
+test("son görev denetimi sırasında değişen yetki dönemi geçmiş yanıtı açıklamaz", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'status' }]] });
+  let reads = 0;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (sql.startsWith('/* rota-ai-tool:task-visibility */') && ++reads === 1) unrelatedManagementChange(stack);
+    return false;
+  } };
+  const answer = await savedAnswer(conversationId);
+  assert.equal(reads, 1, 'değişiklik tutarlı son görev okumasında gerçekleşmeli');
+  assert.notEqual(answer.content, saved.message.content);
+  assert.deepEqual(answer.evidence, []);
+  assert.equal(answer.finishReason, 'unavailable');
+});
+
+test("aynı görevde farklı kimlik gereksinimleri bağımsız kanıtları düşürmez", async (t) => {
+  const stack = stackFor(t);
+  const first = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'status' }]],
+    content: 'Durum dağılımı. 【R1】' });
+  const second = await saveLegacyEvidence(stack, { calls: [['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'assignee' }]],
+    content: 'Sorumlu dağılımı. 【R1】', conversationId: first.conversationId });
+  unrelatedManagementChange(stack);
+  narrowFullProjectToAssignments(stack, fullTaskIds(stack));
+  const messages = (await loadAssistantConversation(first.conversationId)).body.messages.filter(message => message.role === 'assistant');
+  assert.equal(messages.find(message => message.id === first.saved.message.id).content, first.saved.message.content);
+  assertHidden(messages.find(message => message.id === second.saved.message.id), second.saved);
+});
+
+test("kısmi projedeki görünür görevin tekrar bilgisi ilgisiz değişiklikte korunur", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_recurrence_inspect', { taskId: TASKS.PARTIAL_OWN }]] });
+  assert.equal(storedData(stack).recurring, false);
+  unrelatedManagementChange(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  stack.db.taskAssignees = stack.db.taskAssignees.filter(row => row.TaskId !== TASKS.PARTIAL_OWN);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("okuma hibeli tekrar listesi tam erişim gerektirmez", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_recurrence_inspect', { projectId: PROJECTS.READ }]] });
+  unrelatedManagementChange(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  stack.db.projectAccess = stack.db.projectAccess.filter(row => row.ProjectId !== PROJECTS.READ);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("katalog görünür kısmi WBS sonucu tam proje erişimi istemez", async (t) => {
+  const stack = stackFor(t);
+  const nodeId = '30000000-0000-4000-8000-000000000099';
+  stack.db.wbs.push({ WbsId: nodeId, ProjectId: PROJECTS.PARTIAL, Code: 'PRT.1', Name: 'Kısmi katalog', SortOrder: 0 });
+  stack.db.tasks.find(row => row.TaskId === TASKS.PARTIAL_OWN).WbsId = nodeId;
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.PARTIAL }]] });
+  assert.equal(storedData(stack).catalogVisibility, 'full-catalog');
+  unrelatedManagementChange(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  stack.db.taskAssignees = stack.db.taskAssignees.filter(row => ![TASKS.PARTIAL_OWN, TASKS.PARTIAL_SHARED].includes(row.TaskId) || row.Sicil !== AYSE);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("yalnız ata zinciri görünen WBS düğümleri yeniden yetkilendirilir", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.TEAM, depth: 4 }]] });
+  assert.equal(storedData(stack).catalogVisibility, 'ancestor-chain-of-visible-tasks');
+  unrelatedProjectGrant(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  stack.db.tasks.find(row => row.TaskId === TASKS.TEAM_VISIBLE).WbsId = WBS.TEAM_OTHER;
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("okuma hibeli veri kalitesi ilgili hibe kaldırılana dek açılır", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_data_quality', { projectId: PROJECTS.READ }]] });
+  unrelatedManagementChange(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  stack.db.projectAccess = stack.db.projectAccess.filter(row => row.ProjectId !== PROJECTS.READ);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("kısmi veri kalitesi kimlik tabanı kaybolunca açıklanmaz", async (t) => {
+  const stack = stackFor(t);
+  for (const id of [TASKS.PARTIAL_OWN, TASKS.PARTIAL_SHARED]) stack.db.tasks.find(row => row.TaskId === id).CreatedBySicil = AYSE;
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_data_quality', { projectId: PROJECTS.PARTIAL }]] });
+  unrelatedManagementChange(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  stack.db.tasks.find(row => row.TaskId === TASKS.PARTIAL_OWN).CreatedBySicil = null;
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("kayıtlı tekrarda tam proje kapsamı kısmi görev görünürlüğüne düşürülemez", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_recurrence_inspect', { projectId: PROJECTS.FULL }]] });
+  narrowFullProjectToAssignments(stack, fullTaskIds(stack));
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("okuma WBS kanıtı görev kaynaklı katalog yetkisiyle eski okuma beyanını açıklamaz", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.READ }]] });
+  assert.equal(storedData(stack).catalogVisibility, 'full-catalog');
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  for (const taskId of [TASKS.READ_1, TASKS.READ_2]) {
+    stack.db.taskAssignees.push({ TaskId: taskId, Sicil: AYSE });
+  }
+  stack.db.projectAccess = stack.db.projectAccess.filter(row => row.ProjectId !== PROJECTS.READ);
+  const current = await callRotaTool(stack, AYSE, 'rota_wbs_inspect', { projectId: PROJECTS.READ });
+  assert.equal(current.result.ok, true, JSON.stringify(current.result));
+  assert.equal(current.result.data.catalogVisibility, 'full-catalog', 'güncel görev kapsamı katalog hakkını korumalı');
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+for (const value of [-1, 99999]) {
+  test(`eski veri kalitesinde geçersiz açık görev sayısı erişim kanıtı olamaz (${value})`, async (t) => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_data_quality', { projectId: PROJECTS.READ }]] });
+    const row = stack.db.aiMessageEvidence[0];
+    const stored = JSON.parse(row.EvidenceJson);
+    stored.data.openTaskCount = value;
+    row.EvidenceJson = JSON.stringify(stored);
+    unrelatedManagementChange(stack);
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+test("aynı projenin ata zincirleri her son işlemde dar ve taze doğrulanır", async (t) => {
+  const stack = stackFor(t);
+  const first = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.TEAM, depth: 4 }]],
+    content: 'İlk ağaç sonucu. 【R1】' });
+  const second = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.TEAM, depth: 4 }]],
+    content: 'İkinci ağaç sonucu. 【R1】', conversationId: first.conversationId });
+  unrelatedManagementChange(stack);
+  let reads = 0;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (sql.startsWith('/* rota-ai-tool:wbs-selector */')) reads += 1;
+    return false;
+  } };
+  const messages = (await loadAssistantConversation(first.conversationId)).body.messages.filter(message => message.role === 'assistant');
+  assert.equal(reads, 2, 'iki bağımsız son düğüm okuması olmalı');
+  assert.equal(messages.find(message => message.id === first.saved.message.id).content, first.saved.message.content);
+  assert.equal(messages.find(message => message.id === second.saved.message.id).content, second.saved.message.content);
+});
+
+test("ortak görev ayrı son işlemlerde taze okunur", async (t) => {
+  const stack = stackFor(t);
+  const first = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]],
+    content: 'İlk ortak görev. 【R1】' });
+  const second = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]],
+    content: 'İkinci ortak görev. 【R1】', conversationId: first.conversationId });
+  unrelatedProjectGrant(stack);
+  let reads = 0;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (sql.startsWith('/* rota-ai-tool:task-visibility */')) reads += 1;
+    return false;
+  } };
+  const messages = (await loadAssistantConversation(first.conversationId)).body.messages.filter(row => row.role === 'assistant');
+  assert.equal(reads, 2, 'iki taze son okuma yapılmalı');
+  assert.equal(messages.find(row => row.id === first.saved.message.id).content, first.saved.message.content);
+  assert.equal(messages.find(row => row.id === second.saved.message.id).content, second.saved.message.content);
+});
+
+test("aynı iletinin WBS seçicileri son sınırda tek dar toplu okumayı paylaşır", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [
+    ['rota_task_search', { wbsId: WBS.FULL_DESIGN }],
+    ['rota_task_search', { wbsId: WBS.FULL_DETAIL }]
+  ] });
+  unrelatedProjectGrant(stack);
+  let reads = 0;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (sql.startsWith('/* rota-ai-tool:wbs-selector */')) reads += 1;
+    return false;
+  } };
+  const answer = await savedAnswer(conversationId);
+  assert.equal(answer.content, saved.message.content);
+  assert.equal(reads, 1, 'iki seçici aynı son işlemde tek dar toplu okumayla doğrulanmalı');
+});
+
+test("tam iş yükü kapsamı kimlik tabanı kalkınca sıfır sorumlusuz sayısıyla açıklanmaz", async (t) => {
+  const stack = stackFor(t);
+  const ids = fullTaskIds(stack);
+  stack.db.taskAssignees = stack.db.taskAssignees.filter(row => !ids.includes(row.TaskId));
+  for (const taskId of ids) {
+    stack.db.taskAssignees.push({ TaskId: taskId, Sicil: AYSE });
+    stack.db.tasks.find(row => row.TaskId === taskId).CreatedBySicil = MEHMET;
+  }
+  const { conversationId, saved } = await saveLegacyEvidence(stack, {
+    calls: [['rota_workload_summary', { projectId: PROJECTS.FULL }]]
+  });
+  assert.equal(storedData(stack).populationComplete, true);
+  assert.equal(storedData(stack).unassignedOpenTasks, 0);
+  assert.equal(storedData(stack).unrepresentedOpenTasks, 0);
+  unrelatedProjectGrant(stack);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  narrowFullProjectToAssignments(stack, ids);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test("son denetimde aynı proje içi WBS taşıması gizli ata düğümünü açıklamaz", async (t) => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_wbs_inspect', { projectId: PROJECTS.TEAM, depth: 4 }]] });
+  unrelatedProjectGrant(stack);
+  let taskReads = 0;
+  let moved = false;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (sql.startsWith('/* rota-ai-tool:task-visibility */') && ++taskReads === 1) {
+      moved = true;
+      stack.db.tasks.find(row => row.TaskId === TASKS.TEAM_VISIBLE).WbsId = WBS.TEAM_OTHER;
+    }
+    return false;
+  } };
+  assertHidden(await savedAnswer(conversationId), saved);
+  assert.equal(taskReads, 1, 'görev okuması son açıklama sınırında çalışmalı');
+  assert.equal(moved, true, 'taşıma son görev denetimi sırasında gerçekleşmeli');
+});
+
+
+for (const tool of ['rota_task_search', 'rota_task_detail']) {
+  for (const corruption of ['eksik-sorumlu', 'boş-sorumlu', 'eksik-katkı', 'projesiz-katkı']) {
+    test(`bozuk görev kanıtı eşleşen dönemde de kapalı kalır (${tool}, ${corruption})`, async t => {
+      const stack = stackFor(t);
+      const args = tool === 'rota_task_detail' ? { taskId: TASKS.OVERDUE } : { projectId: PROJECTS.FULL };
+      const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, args]] });
+      const row = stack.db.aiMessageEvidence[0];
+      const payload = JSON.parse(row.EvidenceJson);
+      const task = tool === 'rota_task_detail' ? payload.data.task : payload.data.tasks[0];
+      if (corruption === 'eksik-sorumlu') delete task.assignees;
+      if (corruption === 'boş-sorumlu') task.assignees = null;
+      if (corruption === 'eksik-katkı') payload.authorizationPopulation = encodeAuthorizationPopulation([]);
+      if (corruption === 'projesiz-katkı') payload.authorizationPopulation = encodeAuthorizationPopulation([{ taskId: task.taskId, projectId: null }]);
+      row.EvidenceJson = JSON.stringify(payload);
+      assertHidden(await savedAnswer(conversationId), saved);
+      unrelatedManagementChange(stack);
+      assertHidden(await savedAnswer(conversationId), saved);
+    });
+  }
+}
+
+for (const corruption of ['yinelenen-proje', 'eksik-liste', 'nesne-liste', 'boş-veri']) {
+  test(`proje araması bozuk nüfus veya listeyi boyut kısaltması saymaz (${corruption})`, async t => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_project_search', { text: 'Proje', limit: 1 }]], scoped: true });
+    const row = stack.db.aiMessageEvidence[0];
+    const payload = JSON.parse(row.EvidenceJson);
+    assert.ok(payload.scopedAuthorization.projectIds.length > 1);
+    if (corruption === 'yinelenen-proje') payload.scopedAuthorization.projectIds[1] = payload.scopedAuthorization.projectIds[0];
+    if (corruption === 'eksik-liste') delete payload.data.matches;
+    if (corruption === 'nesne-liste') payload.data.matches = {};
+    if (corruption === 'boş-veri') payload.data = null;
+    row.EvidenceJson = JSON.stringify(payload);
+    assertHidden(await savedAnswer(conversationId), saved);
+    unrelatedManagementChange(stack);
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+for (const tool of ['rota_task_search', 'rota_task_analytics']) {
+  test(`proje süzgeçli boş sonuç tam proje hakkı kalkınca açılmaz (${tool})`, async t => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, { projectId: PROJECTS.FULL, text: 'Yokyok' }]], scoped: true });
+    assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+    assert.equal(storedData(stack).tasks?.length ?? storedData(stack).totals.total, 0);
+    narrowFullProjectToAssignments(stack, fullTaskIds(stack));
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+test('birebir dönem eşleşmesi güncel kimlik tabanı gereksinimini atlatmaz', async t => {
+  const stack = stackFor(t);
+  const task = stack.db.tasks.find(row => row.TaskId === TASKS.PARTIAL_OWN);
+  task.CreatedBySicil = AYSE;
+  stack.db.taskAssignees.push({ TaskId: task.TaskId, Sicil: MEHMET });
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: task.TaskId }]] });
+  const payload = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+  assert.ok(payload.data.task.assignees.some(person => person.sicil === MEHMET && person.identityHidden !== true));
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  task.CreatedBySicil = MEHMET;
+  const context = createToolTurnContext({ sicil: AYSE });
+  await context.revalidateAuthorization(new AbortController().signal);
+  // Birebir dönem dalı kaynak denetiminden bağımsız sınanır; yükün gerçekten açıklanan kişi alanları korunur.
+  payload.authorizationEpoch = context.authorizationEpoch();
+  stack.db.aiMessageEvidence[0].EvidenceJson = JSON.stringify(payload);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test('pozitif temsil edilmeyen iş yükü kimlik tabanı kaybında gizlenir', async t => {
+  const stack = stackFor(t);
+  const ids = fullTaskIds(stack);
+  stack.db.taskAssignees = stack.db.taskAssignees.filter(row => !ids.includes(row.TaskId));
+  for (const taskId of ids) stack.db.taskAssignees.push({ TaskId: taskId, Sicil: 1999999 });
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_workload_summary', { projectId: PROJECTS.FULL }]] });
+  assert.ok(storedData(stack).unrepresentedOpenTasks > 0);
+  assert.equal(storedData(stack).unassignedOpenTasks, 0);
+  assert.equal(storedData(stack).populationComplete, false);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  narrowFullProjectToAssignments(stack, ids);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+for (const tool of ['rota_recurrence_inspect', 'rota_data_quality']) {
+  test(`karma proje düzeyleri ilgisiz değişiklikte kendi haklarıyla doğrulanır (${tool})`, async t => {
+    const stack = stackFor(t);
+    if (tool === 'rota_recurrence_inspect') {
+      stack.db.tasks.find(row => row.TaskId === TASKS.READ_1).RecurrenceRule = stack.db.tasks.find(row => row.TaskId === TASKS.SERIES).RecurrenceRule;
+      stack.db.tasks.find(row => row.TaskId === TASKS.READ_2).RecurrenceParentTaskId = TASKS.READ_1;
+    }
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, {}]] });
+    const payload = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+    assert.ok(payload.authorizationProjectLevels.some(row => row.level === 'FULL'));
+    assert.ok(payload.authorizationProjectLevels.some(row => row.level !== 'FULL'));
+    unrelatedManagementChange(stack);
+    assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+    delete payload.authorizationProjectLevels;
+    stack.db.aiMessageEvidence[0].EvidenceJson = JSON.stringify(payload);
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+for (const tool of ['rota_task_detail', 'rota_wbs_inspect']) {
+  test(`yönetim WBS adları aynı dönemde dal görünürlüğü kalkınca gizlenir (${tool})`, async t => {
+    const stack = stackFor(t);
+    const args = tool === 'rota_task_detail' ? { taskId: TASKS.TEAM_VISIBLE } : { projectId: PROJECTS.TEAM, depth: 4 };
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, args]] });
+    assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+    stack.db.tasks.find(row => row.TaskId === TASKS.TEAM_VISIBLE).WbsId = WBS.TEAM_OTHER;
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+test('WBS süzgeçli tarihsel görev görünür dal içinde taşınınca özgün sonuç korunur', async t => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_search', { wbsId: WBS.FULL_DESIGN }]] });
+  const taskId = storedData(stack).tasks[0].taskId;
+  stack.db.tasks.find(row => row.TaskId === taskId).WbsId = WBS.FULL_DETAIL;
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+});
+
+test('dar WBS denetimi yirmi bin ilgisiz proje görevini okumaz', async t => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_search', { wbsId: WBS.FULL_DESIGN }]] });
+  stack.db.tasks.push(...Array.from({ length: TOOL_LIMITS.maxAnalyzedTasks + 1 }, (_, index) => ({
+    TaskId: `75000000-0000-4000-8000-${String(index).padStart(12, '0')}`, ProjectId: PROJECTS.FULL, WbsId: WBS.FULL_DETAIL, Title: 'İlgisiz görev'
+  })));
+  const start = stack.db.aiToolLog.length;
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  const reads = stack.db.aiToolLog.slice(start);
+  assert.equal(reads.filter(row => row.query === 'wbs').length, 0);
+  assert.equal(reads.filter(row => row.query === 'wbs-selector').length, 1);
+  const taskReads = reads.filter(row => row.query === 'task-visibility');
+  assert.ok(taskReads.length > 0, 'son görev denetimi gerçekten çalışmalı');
+  assert.ok(taskReads.every(row => row.params.taskIds.split(',').length < 20));
+  const selectors = reads.filter(row => row.query === 'wbs-selector');
+  assert.deepEqual(selectors[0].params.wbsIds.split(','), [WBS.FULL_DESIGN]);
+  assert.deepEqual(selectors[0].examinedTaskIds, [], 'katalog yetkisinde proje görevleri okunmaz');
+  const { AI_TOOL_WBS_SELECTOR_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
+  assert.match(AI_TOOL_WBS_SELECTOR_SQL, /FROM #AiScopeTaskIds permitted\s+JOIN dbo\.MR_Tasks t ON t\.TaskId = permitted\.TaskId/);
+  assert.match(AI_TOOL_WBS_SELECTOR_SQL, /v\.AccessLevel = 'PARTIAL' AND v\.HasReadGrant = 0 AND v\.IsTaskScoped = 0/);
+  assert.match(AI_TOOL_WBS_SELECTOR_SQL, /w\.WbsId IN \(SELECT TRY_CONVERT\(uniqueidentifier, value\) FROM STRING_SPLIT\(@wbsIds, ','\)\)/);
+  assert.doesNotMatch(AI_TOOL_WBS_SELECTOR_SQL, /JOIN dbo\.MR_Tasks t ON t\.ProjectId|FROM #AiTasks/);
+});
+
+test('uzun konuşma yinelenen ilk tarama yapmaz; son denetimler kısa serileştirilebilir işlemlerdir', async t => {
+  const stack = stackFor(t);
+  let conversationId;
+  const saved = [];
+  for (let index = 0; index < 25; index += 1) {
+    const item = await saveLegacyEvidence(stack, { conversationId, calls: [
+      ['rota_task_detail', { taskId: TASKS.OVERDUE }], ['rota_task_search', { projectId: PROJECTS.FULL }],
+      ['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'status' }],
+      ['rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'priority' }],
+      ['rota_workload_summary', { projectId: PROJECTS.FULL }]
+    ] });
+    assert.equal(stack.db.aiMessageEvidence.filter(row => String(row.MessageId).toLowerCase() === item.saved.message.id).length, 5);
+    conversationId = item.conversationId;
+    saved.push(item.saved.message);
+  }
+  unrelatedManagementChange(stack);
+  const start = stack.db.aiToolLog.length;
+  const txStart = stack.db.transactions.length;
+  const messages = (await loadAssistantConversation(conversationId)).body.messages.filter(row => row.role === 'assistant');
+  assert.deepEqual(messages.map(row => row.content), saved.map(row => row.content));
+  const reads = stack.db.aiToolLog.slice(start);
+  assert.equal(reads.filter(row => row.query === 'project-search').length, 25);
+  assert.equal(reads.filter(row => row.query === 'task-visibility').length, 25);
+  const { sql } = await import('../src/server/db/pool.js');
+  const transactions = stack.db.transactions.slice(txStart);
+  assert.equal(transactions.length, 25);
+  assert.ok(transactions.every(row => row.isolationLevel === sql.ISOLATION_LEVEL.SERIALIZABLE && row.commitStatementIndex > row.statementIndex));
+  for (const tx of transactions) {
+    const statements = stack.db.statements.slice(tx.statementIndex, tx.commitStatementIndex).map(row => row.sql);
+    assert.ok(statements.some(sql => sql.startsWith('/* rota-ai-tool:project-search */')));
+    assert.ok(statements.some(sql => sql.startsWith('/* rota-ai-tool:task-visibility */')));
+    assert.equal(statements.filter(sql => sql.includes('AS IsExecutive;')).length, 2);
+  }
+});
+
+
+test('ayrı son işlemler arasında taşınan ortak görev ikinci işlemde eski gözlemle açılmaz', async t => {
+  const stack = stackFor(t);
+  const first = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.DONE }]] });
+  const second = await saveLegacyEvidence(stack, { conversationId: first.conversationId,
+    calls: [['rota_task_detail', { taskId: TASKS.DONE }]] });
+  let reads = 0;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (sql.startsWith('/* rota-ai-tool:task-visibility */') && ++reads === 2) {
+      stack.db.tasks.find(row => row.TaskId === TASKS.DONE).ProjectId = PROJECTS.HIDDEN;
+    }
+    return false;
+  } };
+  const messages = (await loadAssistantConversation(first.conversationId)).body.messages;
+  assert.equal(reads, 2);
+  assert.equal(messages.find(row => row.id === second.saved.message.id).content, second.saved.message.content);
+  assertHidden(messages.find(row => row.id === first.saved.message.id), first.saved);
+});
+
+test('görevsiz proje kanıtı son işlemde etkinliğini kaybederse açıklanmaz', async t => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_project_search', { text: 'OKU' }]], scoped: true });
+  assert.deepEqual(decodeAuthorizationPopulation(JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson).authorizationPopulation), []);
+  let reads = 0;
+  stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+    if (sql.startsWith('/* rota-ai-tool:project-search */') && ++reads === 1) stack.db.projects.find(row => row.ProjectId === PROJECTS.READ).IsActive = 0;
+    return false;
+  } };
+  const answer = await savedAnswer(conversationId);
+  assert.equal(answer.finishReason, 'unavailable', 'etkinliğin kalkması son yetki dönemini de değiştirir');
+  assert.notEqual(answer.content, saved.message.content);
+  assert.deepEqual(answer.evidence, []);
+  assert.equal(reads, 1);
+});
+
+for (const tool of ['rota_task_search', 'rota_task_analytics', 'rota_workload_summary']) {
+  test(`listelenmeyen katkısı eksiltilmiş nüfus sayı alanlarıyla da reddedilir (${tool})`, async t => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, { projectId: PROJECTS.FULL, limit: 1 }]] });
+    const row = stack.db.aiMessageEvidence[0];
+    const payload = JSON.parse(row.EvidenceJson);
+    const population = decodeAuthorizationPopulation(payload.authorizationPopulation);
+    const listed = new Set((payload.data.tasks || []).map(row => row.taskId));
+    const omitted = population.find(ref => !listed.has(ref.taskId));
+    assert.ok(omitted);
+    payload.authorizationPopulation = encodeAuthorizationPopulation(population.filter(ref => ref.taskId !== omitted.taskId));
+    row.EvidenceJson = JSON.stringify(payload);
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+
+test('yetkili WBS düğümlerinin tarihsel yolu güncel ebeveyn değişince kaybolmaz', async t => {
+  const stack = stackFor(t);
+  const task = stack.db.tasks.find(row => row.WbsId === WBS.FULL_DETAIL);
+  assert.ok(task);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: task.TaskId }]] });
+  const path = storedData(stack).task.wbsNodes;
+  assert.ok(path.some(row => row.id === WBS.FULL_DESIGN));
+  const node = stack.db.wbs.find(row => row.WbsId === WBS.FULL_DETAIL);
+  assert.equal(node.ParentWbsId, WBS.FULL_DESIGN);
+  node.ParentWbsId = WBS.FULL_ROOT;
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+});
+
+test('boyut nedeniyle kısaltılan uzun WBS ayrıntısı yetkili geçmişte açılır ve düğüm hakkı kalkınca gizlenir', async t => {
+  const stack = stackFor(t);
+  const nodes = Array.from({ length: 40 }, (_, index) => ({
+    WbsId: `77000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    ProjectId: PROJECTS.TEAM,
+    ParentWbsId: index ? `77000000-0000-4000-8000-${String(index).padStart(12, '0')}` : null,
+    Name: `${index + 1} ${'Ş'.repeat(110)}`, Code: `EKP.${index + 1}`, SortOrder: index
+  }));
+  stack.db.wbs.push(...nodes);
+  const task = stack.db.tasks.find(row => row.TaskId === TASKS.TEAM_VISIBLE);
+  task.WbsId = nodes.at(-1).WbsId;
+  task.Description = 'Ğ'.repeat(1600);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [
+    ['rota_task_detail', { taskId: task.TaskId, textFields: ['description'] }]
+  ], content: `KORUNAN_${randomUUID()} ${nodes[0].Name} 【R1】` });
+  const stored = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+  const detail = stored.data.task;
+  const count = detail.wbsPath.length;
+  assert.ok(count > 0 && count < nodes.length, 'gerçek 16 KiB araç sınırı WBS yolunu küçültmeli');
+  assert.equal(detail.description.length, 1600, 'açıkça istenen açıklama daraltma koşuluna katılmalı');
+  assert.deepEqual(detail.wbsNodes, nodes.slice(0, count).map(node => ({ id: node.WbsId, parentId: node.ParentWbsId })));
+  assert.deepEqual(detail.wbsPath, nodes.slice(0, count).map(node => node.Name));
+  assert.equal(stored.complete, false);
+  assert.equal(stored.truncated, true);
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  const context = createToolTurnContext({ sicil: AYSE });
+  const signal = new AbortController().signal;
+  await context.revalidateAuthorization(signal);
+  const epoch = context.authorizationEpoch();
+  task.WbsId = WBS.TEAM_OTHER;
+  await context.revalidateAuthorization(signal);
+  assert.equal(context.authorizationEpoch(), epoch, 'yalnız WBS görünürlüğü değişmeli');
+  const visible = await context.revalidateEvidence([{ ...stored, id: 'current', tool: 'rota_task_detail',
+    payload: JSON.stringify(stored), savedPopulation: true, authorizationPopulation: stored.authorizationPopulation }], signal);
+  assert.equal(visible.size, 0);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+
+for (const tool of ['rota_task_detail', 'rota_wbs_inspect']) {
+  test(`canlı defter de aynı dönemde kaybolan WBS görünürlüğünü yeniden doğrular (${tool})`, async t => {
+    const stack = stackFor(t);
+    const args = tool === 'rota_task_detail' ? { taskId: TASKS.TEAM_VISIBLE } : { projectId: PROJECTS.TEAM, depth: 4 };
+    const { result, ledger, context } = await callRotaTool(stack, AYSE, tool, args);
+    assert.equal(result.ok, true);
+    const entries = ledger.authorizationEntries();
+    await context.revalidateAuthorization(new AbortController().signal);
+    assert.equal((await context.revalidateEvidence(entries, new AbortController().signal)).size, 1);
+    const epoch = context.authorizationEpoch();
+    stack.db.tasks.find(row => row.TaskId === TASKS.TEAM_VISIBLE).WbsId = WBS.TEAM_OTHER;
+    await context.revalidateAuthorization(new AbortController().signal);
+    assert.equal(context.authorizationEpoch(), epoch, 'yalnız WBS yerleşimi değişir');
+    assert.equal((await context.revalidateEvidence(entries, new AbortController().signal)).size, 0);
+  });
+}
+
+for (const change of ['ilgisiz-hibe', 'ilgili-revokasyon']) {
+  test(`ayrı son işlemler arasında yetki değişince her ileti kendi güncel haklarıyla değerlendirilir (${change})`, async t => {
+    const stack = stackFor(t);
+    const first = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+    const second = await saveLegacyEvidence(stack, { conversationId: first.conversationId, calls: [['rota_task_detail', { taskId: TASKS.DUE_SOON }]] });
+    let reads = 0;
+    stack.db.queryBarrier = { released: Promise.resolve(), entered: 0, match(sql) {
+      // İkinci işlemin ilk yetki okuması: ilk işlem commit edilmiştir.
+      if (sql.includes('AS IsExecutive;') && ++reads === 4) {
+        if (change === 'ilgisiz-hibe') unrelatedProjectGrant(stack);
+        else stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+      }
+      return false;
+    } };
+    const messages = (await loadAssistantConversation(first.conversationId)).body.messages;
+    assert.equal(reads, 5);
+    assert.equal(messages.find(row => row.id === second.saved.message.id).content, second.saved.message.content);
+    const older = messages.find(row => row.id === first.saved.message.id);
+    if (change === 'ilgisiz-hibe') assert.equal(older.content, first.saved.message.content);
+    else assertHidden(older, first.saved);
+  });
+}
+
+for (const tool of ['rota_recurrence_inspect', 'rota_data_quality']) {
+  test(`görevsiz genel sonuç aynı dönemde açılır; kapsamı değişince kökensiz açılmaz (${tool})`, async t => {
+    const stack = stackFor(t);
+    stack.db.tasks = [];
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, {}]] });
+    assert.deepEqual(decodeAuthorizationPopulation(JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson).authorizationPopulation), []);
+    assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+    unrelatedProjectGrant(stack);
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+for (const corruption of ['gizli-sicil', 'eksik-atama', 'bozuk-atama', 'boş-atanmış', 'geçersiz-sicil']) {
+  test(`bozuk kayıtlı görev kimlik sözleşmesini atlayamaz (${corruption})`, async t => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.PARTIAL_OWN }]] });
+    const row = stack.db.aiMessageEvidence[0];
+    const payload = JSON.parse(row.EvidenceJson);
+    if (corruption === 'gizli-sicil') payload.data.task.assignees.push({ name: 'KORUNAN_KİŞİ', identityHidden: true, sicil: ZEYNEP });
+    if (corruption === 'eksik-atama') delete payload.data.task.assignment;
+    if (corruption === 'bozuk-atama') payload.data.task.assignment = 'hatalı';
+    if (corruption === 'boş-atanmış') payload.data.task.assignees = [];
+    if (corruption === 'geçersiz-sicil') payload.data.task.assignees[0].sicil = 'hatalı';
+    row.EvidenceJson = JSON.stringify(payload);
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+for (const corruption of ['aşırı-sayı', 'yinelenen-denetim']) {
+  test(`bozuk veri kalitesi denetimi yeniden kullanılamaz (${corruption})`, async t => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_data_quality', { projectId: PROJECTS.FULL }]] });
+    const row = stack.db.aiMessageEvidence[0];
+    const payload = JSON.parse(row.EvidenceJson);
+    if (corruption === 'aşırı-sayı') payload.data.checks.find(row => row.id === 'assignee').count = payload.data.openTaskCount + 1;
+    else payload.data.checks.push(payload.data.checks.find(row => row.id === 'assignee'));
+    row.EvidenceJson = JSON.stringify(payload);
+    assertHidden(await savedAnswer(conversationId), saved);
+  });
+}
+
+for (const tool of ['rota_workload_summary', 'rota_data_quality']) {
+  for (const visible of [false, true]) {
+    test(`gizli atamalar kısmi tarihsel kişi sınıflarına katkı yapmaz (${tool}, görünür kişi: ${visible})`, async t => {
+      const stack = stackFor(t);
+      const task = stack.db.tasks.find(row => row.TaskId === TASKS.TEAM_VISIBLE);
+      // Yönetim hakkı görevi görünür tutar; diğer kişi hiçbir zaman kimlik tabanıyla açılmamıştır.
+      task.CreatedBySicil = MEHMET;
+      stack.db.taskAssignees = stack.db.taskAssignees.filter(row => row.TaskId !== task.TaskId);
+      stack.db.taskAssignees.push({ TaskId: task.TaskId, Sicil: ALI_1 });
+      if (visible) stack.db.taskAssignees.push({ TaskId: task.TaskId, Sicil: AYSE });
+      stack.db.executiveScope.push({ ManagerSicil: AYSE, EmployeeSicil: ALI_1 });
+      const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [[tool, { projectId: PROJECTS.TEAM }]] });
+      const payload = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+      const before = await callRotaTool(stack, AYSE, tool, { projectId: PROJECTS.TEAM });
+      stack.db.taskAssignees.push({ TaskId: task.TaskId, Sicil: LEAD });
+      const after = await callRotaTool(stack, AYSE, tool, { projectId: PROJECTS.TEAM });
+      assert.deepEqual(after.result.data, before.result.data, 'gizli kişi sınıfları ve sayıları değiştiremez');
+      assert.ok(payload.authorizationIdentityPopulation);
+      assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+      // Açıklanan kişinin yönetim hakkı kalkar; görev kendi atamasıyla görünür kalır.
+      stack.db.taskAssignees.push({ TaskId: task.TaskId, Sicil: AYSE });
+      stack.db.executiveScope = [];
+      assertHidden(await savedAnswer(conversationId), saved);
+    });
+  }
+}
+
+test('iş yükü tamamlanan görevleri nüfusuna katmaz ve geçmiş açık görev sayısı değişince korunur', async t => {
+  const stack = stackFor(t);
+  assert.ok(stack.db.tasks.some(row => row.ProjectId === PROJECTS.FULL && row.Status === 'done'));
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_workload_summary', { projectId: PROJECTS.FULL }]] });
+  const payload = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+  const population = decodeAuthorizationPopulation(payload.authorizationPopulation);
+  assert.equal(population.length, payload.data.openTaskCount);
+  assert.ok(population.length > 0);
+  assert.equal(population.some(row => row.taskId === TASKS.DONE), false);
+  stack.db.tasks.find(row => row.TaskId === population[0].taskId).Status = 'done';
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+});
+
+test('veri kalitesi mevcut bağımsız atama SQL sınırını korur', async t => {
+  const stack = stackFor(t);
+  const { result } = await callRotaTool(stack, AYSE, 'rota_data_quality', { projectId: PROJECTS.FULL });
+  assert.equal(result.ok, true);
+  const reads = stack.db.aiToolLog.filter(row => row.query === 'task-facts');
+  assert.ok(reads.length > 0);
+  assert.ok(reads.every(row => row.params.analysisAssignmentRows === TOOL_LIMITS.maxAnalyzedAssignments + 1));
+  const { AI_TOOL_TASK_FACTS_SQL } = await import('../src/server/ai/tools/rota/rotaToolQueries.js');
+  assert.match(AI_TOOL_TASK_FACTS_SQL, /SELECT TOP \(@analysisAssignmentRows\) ta\.TaskId, ta\.Sicil/);
+  assert.match(AI_TOOL_TASK_FACTS_SQL, /IF \(SELECT COUNT\(\*\) FROM #AiAssignments\) >= @analysisAssignmentRows/);
+});
+
+test('bildirim önizlemesindeki okunmuş görev sayaç dışında da güncel proje kökeni taşır', async t => {
+  const stack = stackFor(t, { taskNotifications: [{ RecipientSicil: AYSE, Kind: 'TASK_ASSIGNED', TaskId: TASKS.OVERDUE,
+    ActorSicil: LEAD, TaskTitleSnapshot: 'KORUNAN_BİLDİRİM', ProjectNameSnapshot: 'Proje', EventKey: 'read-preview', ReadAt: new Date().toISOString() }] });
+  const { result, ledger, context } = await callRotaTool(stack, AYSE, 'rota_notifications', {});
+  assert.equal(result.ok, true);
+  assert.equal(result.data.taskEvents.unread, 0);
+  const entries = ledger.authorizationEntries();
+  assert.equal(entries.length, 1);
+  assert.ok(entries[0].taskReferences.some(row => row.taskId === TASKS.OVERDUE && row.projectId === PROJECTS.FULL));
+  const signal = new AbortController().signal;
+  await context.revalidateAuthorization(signal);
+  assert.equal((await context.recheckEvidenceTasks(entries, signal)).size, 1);
+  stack.db.tasks.find(row => row.TaskId === TASKS.OVERDUE).ProjectId = PROJECTS.HIDDEN;
+  assert.equal((await context.recheckEvidenceTasks(entries, signal)).size, 0);
+});
+
+test('son denetim SQL hatası içeriksiz yapılandırılmış kayıt üretir', async t => {
+  const stack = stackFor(t);
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+  const logs = [];
+  t.mock.method(console, 'warn', text => logs.push(text));
+  stack.db.aiToolFailure = { 'task-visibility': Object.assign(new Error('KORUNAN_HAM_HATA'), { code: 'DATABASE_UNAVAILABLE' }) };
+  const answer = await savedAnswer(conversationId);
+  assert.equal(answer.finishReason, 'unavailable');
+  assert.equal(JSON.stringify(answer).includes(saved.message.content), false);
+  assert.equal(logs.length, 1);
+  assert.equal(JSON.parse(logs[0]).code, 'AI_HISTORY_CHECK_FAILED');
+  assert.doesNotMatch(logs[0], /KORUNAN_HAM_HATA|KORUNAN_|EvidenceJson|sicil|projectId/);
+});
+
+test('uzun geçmiş sınırlı kanıt sayfalarıyla eski ve yeni yetkili yanıtları korur', async t => {
+  const stack = stackFor(t);
+  const items = [];
+  for (let i = 0; i < 4; i += 1) items.push(await saveLegacyEvidence(stack, { conversationId: items[0]?.conversationId,
+    calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] }));
+  const old = stack.db.aiMessageEvidence.slice(0, 3);
+  for (const row of old) {
+    const stored = JSON.parse(row.EvidenceJson);
+    const padding = 'x'.repeat(31000 - row.EvidenceJson.length);
+    const json = JSON.stringify({ ...stored, padding });
+    assert.ok(json.length <= 32000);
+    row.EvidenceJson = json;
+    for (let ordinal = 2; ordinal <= 16; ordinal += 1) stack.db.aiMessageEvidence.push({ ...row, Ordinal: ordinal });
+  }
+  assert.ok(old.reduce((sum, row) => sum + row.EvidenceJson.length * 2 * 16, 0) > TOOL_LIMITS.maxHistoryEvidenceBytes);
+  const pool = await getSqlPool(), request = pool.request.bind(pool);
+  const pageBytes = [];
+  let omitted = 0;
+  t.mock.method(pool, 'request', () => {
+    const value = request(), query = value.query.bind(value);
+    value.query = async sql => {
+      const result = await query(sql);
+      if (sql.includes('AS EvidenceReady')) {
+        const rows = result.recordsets[1] || [];
+        pageBytes.push(rows.reduce((sum, row) => sum + Buffer.byteLength(row.EvidenceJson || '', 'utf16le'), 0));
+        omitted += rows.filter(row => row.EvidenceOmitted).length;
+      }
+      return result;
+    };
+    return value;
+  });
+  const opened = await loadAssistantConversation(items[0].conversationId);
+  assert.equal(opened.status, 200);
+  assert.ok(pageBytes.length > 1);
+  assert.ok(pageBytes.every(bytes => bytes <= TOOL_LIMITS.maxHistoryEvidenceBytes));
+  assert.ok(pageBytes.reduce((sum, bytes) => sum + bytes, 0) > TOOL_LIMITS.maxHistoryEvidenceBytes);
+  assert.ok(omitted > 0);
+  assert.equal(opened.body.messages.find(row => row.id === items[3].saved.message.id).content, items[3].saved.message.content);
+  for (const item of items) assert.equal(opened.body.messages.find(row => row.id === item.saved.message.id).content, item.saved.message.content);
+  assert.doesNotMatch(JSON.stringify(opened.body), /EvidenceJson|authorizationPopulation|authorizationIdentityPopulation|parsedPayload|deflated/);
+});
+
+test('karma iş yükünde sıfır görünür Sicil kimlik tabanlı sınıfları yetkisiz açamaz', async t => {
+  const stack = stackFor(t);
+  const full = new Set(fullTaskIds(stack));
+  stack.db.taskAssignees = stack.db.taskAssignees.filter(row => !full.has(row.TaskId));
+  const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_workload_summary', {}]] });
+  const payload = JSON.parse(stack.db.aiMessageEvidence[0].EvidenceJson);
+  assert.ok(payload.authorizationIdentityPopulation, 'kısmi ve tam kökenler birlikte taşınmalı');
+  assert.ok(payload.data.unassignedOpenTasks > 0, 'kimlik listesi olmayan tam görevler sorumlusuz sayılmalı');
+  assert.equal((await savedAnswer(conversationId)).content, saved.message.content);
+  narrowFullProjectToAssignments(stack, [...full]);
+  assertHidden(await savedAnswer(conversationId), saved);
+});
+
+test('yüz iletili geçmişte sonraki yanıtların boyutu eski yetkili metni kapatmaz ve sayfa hatası yalıtılır', async t => {
+  const stack = stackFor(t);
+  const items = [];
+  for (let index = 0; index < 50; index += 1) items.push(await saveLegacyEvidence(stack, {
+    conversationId: items[0]?.conversationId,
+    calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }], ['rota_task_detail', { taskId: TASKS.DUE_SOON }]]
+  }));
+  assert.equal(stack.db.aiConversationMessages.length, 100);
+  for (const row of stack.db.aiMessageEvidence) {
+    const payload = JSON.parse(row.EvidenceJson);
+    row.EvidenceJson = JSON.stringify({ ...payload, padding: 'x'.repeat(11980 - row.EvidenceJson.length) });
+    assert.ok(row.EvidenceJson.length <= 12000);
+  }
+  assert.equal(stack.db.aiMessageEvidence.length, 100);
+  assert.ok(stack.db.aiMessageEvidence.reduce((sum, row) => sum + row.EvidenceJson.length * 2, 0) > TOOL_LIMITS.maxHistoryEvidenceBytes);
+  const opened = await loadAssistantConversation(items[0].conversationId);
+  assert.equal(opened.status, 200);
+  const answers = opened.body.messages.filter(row => row.role === 'assistant');
+  assert.equal(answers.length, 50);
+  for (const item of items) assert.equal(answers.find(row => row.id === item.saved.message.id).content, item.saved.message.content);
+  const pool = await getSqlPool(), request = pool.request.bind(pool);
+  t.mock.method(pool, 'request', () => {
+    const value = request(), input = value.input.bind(value), query = value.query.bind(value);
+    let messageId;
+    value.input = (...args) => { if (args[0] === 'messageId') messageId = args[2]; return input(...args); };
+    value.query = async sql => {
+      if (sql.includes('AS EvidenceReady') && messageId === items[0].saved.message.id) throw Object.assign(new Error('Sayfa okunamadı'), { code: 'DATABASE_UNAVAILABLE' });
+      return query(sql);
+    };
+    return value;
+  });
+  const isolated = (await loadAssistantConversation(items[0].conversationId)).body.messages;
+  assert.equal(isolated.find(row => row.id === items[0].saved.message.id).finishReason, 'unavailable');
+  for (const item of items.slice(1)) assert.equal(isolated.find(row => row.id === item.saved.message.id).content, item.saved.message.content);
+  stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+  const revoked = (await loadAssistantConversation(items[0].conversationId)).body.messages;
+  for (const item of items) assert.equal(JSON.stringify(revoked).includes(item.saved.message.content), false);
+});
+
+for (const variant of ['tam', 'ertelenmiş', 'bozuk-kimlik', 'sayfa-hatası', 'eksik-dönem', 'bozuk-dönem', 'dizi-dönem']) {
+  test(`çok kanıtlı geçmişte analiz ve sonuç kapsamı yalnız tam kayıttan sürer (${variant})`, async t => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+    const { compressAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+    const { normalizeAnalysisContext } = await import('../src/domain/ai/analysisContext.js');
+    const { loadConversationEvidence } = await import('../src/server/ai/assistant/conversationStore.js');
+    const { prepareAssistantTurn } = await import('../src/server/ai/assistant/assistantService.js');
+    const row = stack.db.aiMessageEvidence[0];
+    const payload = JSON.parse(row.EvidenceJson);
+    const inner = { ...payload.authorizationPopulation, padding: 'x'.repeat(1200000) };
+    assert.ok(Buffer.byteLength(JSON.stringify(inner)) * 8 > TOOL_LIMITS.maxHistoryInflatedBytes);
+    const population = compressAuthorizationPopulation(inner);
+    assert.equal(population.complete, true);
+    const analysisContext = normalizeAnalysisContext({ v: 1, scope: 'self', subjects: [], focus: ['overview'] });
+    const resultScope = { type: 'task', taskIds: [TASKS.OVERDUE.toLowerCase()] };
+    assert.ok(analysisContext);
+    const deferred = ['ertelenmiş', 'bozuk-kimlik', 'sayfa-hatası'].includes(variant);
+    const count = deferred ? 8 : 2;
+    row.EvidenceJson = JSON.stringify({ ...payload, authorizationPopulation: population,
+      ...(variant === 'bozuk-kimlik' ? { authorizationIdentityPopulation: { v: 1, complete: false } } : {}),
+      ...(['eksik-dönem', 'bozuk-dönem', 'dizi-dönem'].includes(variant)
+        ? { authorizationEpoch: variant === 'eksik-dönem' ? null : variant === 'dizi-dönem' ? [payload.authorizationEpoch] : 'bozuk' } : {}) });
+    for (let ordinal = 2; ordinal <= count; ordinal += 1) stack.db.aiMessageEvidence.push({ ...row, Ordinal: ordinal,
+      EvidenceJson: JSON.stringify({ ...payload, authorizationPopulation: population,
+        ...(ordinal === count ? { analysisContext, resultScope } : {}) }) });
+    assert.ok(stack.db.aiMessageEvidence.every(entry => entry.EvidenceJson.length < 32000));
+    const pool = await getSqlPool();
+    const stored = await loadConversationEvidence(pool, AYSE, { conversationId, maxEvidence: 1600 });
+    const messageId = row.MessageId.toLowerCase();
+    assert.equal(stored.deferredMessages.has(messageId), deferred);
+    assert.deepEqual(stored.analysisByMessage.get(messageId), analysisContext, 'ilk çözülen kayıt analiz bağlamını taşımalı');
+    assert.deepEqual(stored.resultScopeByMessage.get(messageId), resultScope, 'ilk çözülen kayıt sonuç kapsamını taşımalı');
+    const entries = stored.authorizationByMessage.get(messageId);
+    assert.ok(entries.some(entry => !entry.unverifiable), 'aynı iletide geçerli kayıt bulunmalı');
+    if (deferred || variant === 'tam') assert.equal(entries.some(entry => entry.unverifiable), deferred);
+    // Devam yolu yeniden doğrulamaz; kısmen açılan iletinin iki göndergesi de kapalı kalır.
+    const turn = await prepareAssistantTurn({ readBody: async () => ({ conversationId, turnId: randomUUID(),
+      source: 'rota', message: 'Önceki özeti sürdür', mode: 'standard' }) });
+    try {
+      assert.deepEqual({ analysis: turn.previousAnalysis, result: turn.previousResult?.scope || null },
+        variant === 'tam' ? { analysis: analysisContext, result: resultScope } : { analysis: null, result: null });
+      assert.equal(JSON.stringify(turn.modelMessages).includes(saved.message.content), false, 'korunan eski metin modele taşınmamalı');
+    } finally { turn.claim.release(); }
+    let pageReads = 0;
+    const request = pool.request.bind(pool);
+    const mocked = t.mock.method(pool, 'request', () => {
+      const value = request();
+      const input = value.input.bind(value);
+      const query = value.query.bind(value);
+      let targetMessage = null;
+      value.input = (name, ...args) => {
+        if (name === 'messageId') targetMessage = args.at(-1);
+        return input(name, ...args);
+      };
+      value.query = async sql => {
+        if (sql.includes('AS EvidenceReady') && targetMessage) {
+          pageReads += 1;
+          if (variant === 'sayfa-hatası') throw Object.assign(new Error('Kanıt sayfası okunamadı.'), { code: 'DATABASE_UNAVAILABLE' });
+        }
+        return query(sql);
+      };
+      return value;
+    });
+    // Açıklama yolu ertelenmiş iletiyi kendi sayfasından tam doğrular; hata ve eksik kimlik kapalı kalır.
+    const opened = await loadAssistantConversation(conversationId);
+    const answer = opened.body.messages.find(message => message.id === messageId);
+    const visible = ['tam', 'ertelenmiş'].includes(variant);
+    assert.equal(answer.content === saved.message.content, visible);
+    if (!visible) {
+      assert.equal(answer.finishReason, variant.endsWith('dönem') ? 'not_found' : 'unavailable');
+      assert.deepEqual(answer.evidence, []);
+      assert.equal(JSON.stringify(opened.body).includes(saved.message.content), false);
+    }
+    assert.equal(pageReads, deferred ? 1 : 0, 'yeniden okuma yalnız ertelenmiş iletiye ait olmalı');
+    mocked.mock.restore();
+    stack.db.projects.find(project => project.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+    stack.db.taskAssignees = stack.db.taskAssignees.filter(assignment => assignment.TaskId !== TASKS.OVERDUE);
+    const revoked = await loadAssistantConversation(conversationId);
+    assert.equal(JSON.stringify(revoked.body).includes(saved.message.content), false, 'güncel yetki kaybı tam açılmış yanıtı da gizlemeli');
+  });
+}
+
+/* ── Ortak süre, yanıt başına açılım, eski WBS biçimi, kesin doğrulanamayan yanıt ve kilitlenme ── */
+
+const LEGACY_FORMAT_TEXT = 'Bu kayıtlı yanıt önceki bir kayıt biçiminde saklandığı için güncel yetkinizle yeniden doğrulanamıyor. Güncel bilgi için soruyu yeniden sorun.';
+const UNVERIFIABLE_TEXT = 'Bu kayıtlı yanıt çok sayıda kayda dayandığı için güncel yetkinizle yeniden doğrulanamıyor. Güncel bilgi için soruyu yeniden sorun.';
+const evidenceRowsOf = (stack, messageId) => stack.db.aiMessageEvidence.filter(row => String(row.MessageId).toLowerCase() === messageId);
+const protectedMarker = (saved) => /KORUNAN_[a-f0-9-]+/.exec(saved.message.content)[0];
+const revokeFullProjectTask = (stack, taskId) => {
+  stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+  stack.db.taskAssignees = stack.db.taskAssignees.filter(row => row.TaskId !== taskId);
+  stack.db.tasks.find(row => row.TaskId === taskId).CreatedBySicil = null;
+};
+
+test('ilk yetki okuması ve son işlemler tek ortak süreyi paylaşır; süre dolunca yalnız doğrulanmamış eski yanıt kapanır', async t => {
+  const stack = stackFor(t);
+  const older = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+  const newer = await saveLegacyEvidence(stack, { conversationId: older.conversationId, calls: [['rota_task_detail', { taskId: TASKS.DUE_SOON }]] });
+  let release;
+  let visibility = 0;
+  // Son işlemler yeniden eskiye çalışır: ikinci görünürlük okuması eski yanıtındır.
+  const barrier = { entered: 0, released: new Promise(resolve => { release = resolve; }),
+    match: sql => sql.startsWith('/* rota-ai-tool:task-visibility */') && ++visibility === 2 };
+  stack.db.queryBarrier = barrier;
+  t.after(() => release());
+  const timers = [];
+  const schedule = globalThis.setTimeout;
+  const clear = globalThis.clearTimeout;
+  t.mock.method(globalThis, 'clearTimeout', timer => {
+    const saved = timers.find(entry => entry.timer === timer);
+    if (saved) saved.active = false;
+    return clear(timer);
+  });
+  t.mock.method(globalThis, 'setTimeout', (callback, ms, ...args) => {
+    const timer = schedule(callback, ms, ...args);
+    timers.push({ timer, ms, active: true, expire() { clear(timer); callback(...args); } });
+    return timer;
+  });
+  const opened = loadAssistantConversation(older.conversationId);
+  for (let i = 0; i < 400 && barrier.entered === 0; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(barrier.entered, 1, 'eski yanıtın son işlemi bekletilmeli');
+  const cumulative = timers.filter(timer => timer.ms === TOOL_LIMITS.maxCumulativeSqlMs);
+  assert.equal(cumulative.length, 1, 'ilk yetki okumasından sonra yeni bir ortak süre başlatılamaz');
+  assert.equal(cumulative[0].active, true, 'ilk yetki okumasıyla başlayan ortak süre son işlemleri de sınırlamalı');
+  // İlk yetki okumasıyla başlayan ortak bütçe son işlemler sürerken dolar.
+  cumulative[0].expire();
+  const result = await opened;
+  assert.equal(result.status, 200);
+  const answers = result.body.messages.filter(row => row.role === 'assistant');
+  assert.equal(answers.find(row => row.id === newer.saved.message.id).content, newer.saved.message.content, 'doğrulanmış yeni yanıt korunur');
+  const closed = answers.find(row => row.id === older.saved.message.id);
+  assert.equal(closed.finishReason, 'unavailable');
+  assert.deepEqual(closed.evidence, []);
+  assert.equal(JSON.stringify(closed).includes(protectedMarker(older.saved)), false);
+  release();
+  const { toolSqlGateStatus } = await import('../src/server/ai/tools/toolSqlGate.js');
+  for (let i = 0; i < 400 && toolSqlGateStatus().active; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(toolSqlGateStatus().active, 0);
+});
+
+test('tek ileti sayfasının açılım bütçesi yazıcının yanıt başına sınırını tam karşılar, aşanı ve bombayı sınırlar', async () => {
+  const { loadConversationEvidence } = await import('../src/server/ai/assistant/conversationStore.js');
+  const { compressAuthorizationPopulation, MAX_ANSWER_INFLATED_POPULATION_BYTES } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+  const { EVIDENCE_LIMITS } = await import('../src/domain/ai/evidenceContract.js');
+  const { deflateRawSync } = await import('node:zlib');
+  const carriers = EVIDENCE_LIMITS.maxEvidencePerAnswer * 2;
+  const cap = MAX_ANSWER_INFLATED_POPULATION_BYTES / carriers;
+  assert.ok(Number.isSafeInteger(cap) && cap === TOOL_LIMITS.maxAnalyzedTasks * 72 + 64);
+  const empty = { v: 1, complete: true, tasks: {} };
+  const padded = { ...empty, padding: 'x'.repeat(cap - Buffer.byteLength(JSON.stringify({ ...empty, padding: '' }))) };
+  assert.equal(Buffer.byteLength(JSON.stringify(padded)), cap, 'her taşıyıcı tam sınırda açılmalı');
+  const carrier = compressAuthorizationPopulation(padded);
+  assert.equal(carrier.complete, true);
+  const bomb = { v: 2, complete: true, count: 0, deflated: deflateRawSync(JSON.stringify({ ...empty, padding: 'x'.repeat(cap * 2) })).toString('base64url') };
+  assert.ok(bomb.deflated.length < 32000, 'bomba kalıcı kayıt sınırına sığar');
+  const messageId = randomUUID();
+  const rowFor = (ordinal, population = carrier) => ({ MessageId: messageId, Ordinal: ordinal, ToolName: 'rota_workload_summary', SummaryJson: null,
+    EvidenceOmitted: false, EvidenceJson: JSON.stringify({ tool: 'rota_workload_summary', authorizationEpoch: 'a'.repeat(64),
+      authorizationPopulation: population, authorizationIdentityPopulation: carrier }) });
+  const executorFor = (rows, onQuery = () => {}) => ({ request() {
+    return { input() { return this; }, async query() { onQuery(); return { recordsets: [[{ KnownSicil: 1, EvidenceReady: 1 }], rows] }; } };
+  } });
+  const load = (rows, options = {}) => loadConversationEvidence(executorFor(rows, options.onQuery), AYSE, { conversationId: randomUUID(), maxEvidence: 1600, ...options });
+  const answer = Array.from({ length: EVIDENCE_LIMITS.maxEvidencePerAnswer }, (_, index) => rowFor(index + 1));
+  assert.ok(carriers * cap > TOOL_LIMITS.maxHistoryInflatedBytes, 'senaryo çok iletili sayfa bütçesini aşmalı');
+  const single = await load(answer, { messageId });
+  assert.equal(single.deferredMessages.size, 0, 'yazıcı sınırındaki yanıt kendi sayfasında ertelenmez');
+  assert.ok(single.authorizationByMessage.get(messageId).every(entry => !entry.unverifiable));
+  const multi = await load(answer);
+  assert.ok(multi.deferredMessages.has(messageId), 'çok iletili sayfa ortak bütçesini korur');
+  // Yazıcı sözleşmesini aşan ek kayıt aynı tek ileti bütçesiyle sınırlı kalır.
+  const excess = await load([...answer, rowFor(EVIDENCE_LIMITS.maxEvidencePerAnswer + 1)], { messageId });
+  assert.ok(excess.deferredMessages.has(messageId));
+  assert.equal(excess.authorizationByMessage.get(messageId).filter(entry => entry.unverifiable).length, 1, 'yalnız bütçeyi aşan kayıt doğrulanamaz');
+  // Açılım sınırını aşan bomba yalnız kendi kaydını doğrulanamaz yapar ve bütçeden düşülür.
+  const bombed = await load([rowFor(1, bomb), rowFor(2)], { messageId });
+  const entryOf = ordinal => bombed.authorizationByMessage.get(messageId).find(entry => entry.id === `${messageId}:${ordinal}`);
+  const [bombEntry, validEntry] = [entryOf(1), entryOf(2)];
+  assert.equal(bombEntry.unverifiable, true);
+  assert.equal(validEntry.unverifiable, false);
+  assert.equal(bombed.deferredMessages.size, 0);
+  // İptal, kalan kayıtların açılımını başlatmadan sayfayı durdurur.
+  const controller = new AbortController();
+  await assert.rejects(load(answer, { messageId, signal: controller.signal, onQuery: () => controller.abort(new Error('İPTAL')) }), /İPTAL/);
+});
+
+test('tek yanıtın çok iletili bütçeyi aşan geçerli nüfusları kendi sayfasında doğrulanır; bomba nüfus yalıtılır ve yetki kalkınca gizlenir', async t => {
+  const stack = stackFor(t);
+  const { compressAuthorizationPopulation, MAX_ANSWER_INFLATED_POPULATION_BYTES } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+  const { EVIDENCE_LIMITS } = await import('../src/domain/ai/evidenceContract.js');
+  const { deflateRawSync } = await import('node:zlib');
+  const cap = MAX_ANSWER_INFLATED_POPULATION_BYTES / (EVIDENCE_LIMITS.maxEvidencePerAnswer * 2);
+  const valid = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+  const bombed = await saveLegacyEvidence(stack, { conversationId: valid.conversationId, calls: [['rota_task_detail', { taskId: TASKS.DUE_SOON }]] });
+  const [row] = evidenceRowsOf(stack, valid.saved.message.id);
+  const payload = JSON.parse(row.EvidenceJson);
+  const inner = { ...payload.authorizationPopulation, padding: '' };
+  inner.padding = 'x'.repeat(cap - Buffer.byteLength(JSON.stringify(inner)));
+  const population = compressAuthorizationPopulation(inner);
+  assert.equal(population.complete, true, 'gerçek nüfus taşıyıcı sınırında geçerli kalmalı');
+  row.EvidenceJson = JSON.stringify({ ...payload, authorizationPopulation: population });
+  for (let ordinal = 2; ordinal <= EVIDENCE_LIMITS.maxEvidencePerAnswer; ordinal += 1) stack.db.aiMessageEvidence.push({ ...row, Ordinal: ordinal });
+  assert.ok(EVIDENCE_LIMITS.maxEvidencePerAnswer * cap > TOOL_LIMITS.maxHistoryInflatedBytes, 'tek yanıt çok iletili sayfa bütçesini aşmalı');
+  const [bombRow] = evidenceRowsOf(stack, bombed.saved.message.id);
+  const bombPayload = JSON.parse(bombRow.EvidenceJson);
+  const bombCount = decodeAuthorizationPopulation(bombPayload.authorizationPopulation).length;
+  bombRow.EvidenceJson = JSON.stringify({ ...bombPayload, authorizationPopulation: { v: 2, complete: true, count: bombCount,
+    deflated: deflateRawSync(JSON.stringify({ ...bombPayload.authorizationPopulation, padding: 'x'.repeat(cap * 2) })).toString('base64url') } });
+  assert.ok(stack.db.aiMessageEvidence.every(item => item.EvidenceJson.length <= 32000));
+  const start = stack.db.aiToolLog.length;
+  const answers = (await loadAssistantConversation(valid.conversationId)).body.messages.filter(item => item.role === 'assistant');
+  const opened = answers.find(item => item.id === valid.saved.message.id);
+  assert.equal(opened.content, valid.saved.message.content);
+  assert.ok(opened.evidence.length > 0);
+  const isolated = answers.find(item => item.id === bombed.saved.message.id);
+  assert.equal(isolated.finishReason, 'unavailable');
+  assert.equal(isolated.content, UNVERIFIABLE_TEXT);
+  assert.deepEqual(isolated.evidence, []);
+  assert.equal(JSON.stringify(answers).includes(protectedMarker(bombed.saved)), false);
+  assert.equal(stack.db.aiToolLog.slice(start).filter(item => item.query === 'task-visibility').length, 1, 'bomba yanıt son işleme girmez');
+  revokeFullProjectTask(stack, TASKS.OVERDUE);
+  assertHidden(await (async () => (await loadAssistantConversation(valid.conversationId)).body.messages.find(item => item.id === valid.saved.message.id))(), valid.saved);
+});
+
+test('düğüm kökeni olmayan eski görev ayrıntısının WBS yolu adlardan doğrulanmaz ve ayrı biçim metniyle kapalı kalır', async t => {
+  const stack = stackFor(t);
+  const task = stack.db.tasks.find(row => row.WbsId === WBS.FULL_DETAIL);
+  const current = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: task.TaskId }]] });
+  const legacy = await saveLegacyEvidence(stack, { conversationId: current.conversationId, calls: [['rota_task_detail', { taskId: task.TaskId }]] });
+  const [row] = evidenceRowsOf(stack, legacy.saved.message.id);
+  const payload = JSON.parse(row.EvidenceJson);
+  assert.ok(payload.data.task.wbsPath.length > 0 && Array.isArray(payload.data.task.wbsNodes));
+  // Düğüm kökeni eklenmeden önceki kayıt biçimi: yalnız adlar ve özgün yetki dönemi.
+  delete payload.data.task.wbsNodes;
+  row.EvidenceJson = JSON.stringify(payload);
+  const answersOf = async () => (await loadAssistantConversation(current.conversationId)).body.messages.filter(item => item.role === 'assistant');
+  const assertLegacyClosed = (answers) => {
+    const answer = answers.find(item => item.id === legacy.saved.message.id);
+    assert.equal(answer.finishReason, 'unavailable');
+    assert.equal(answer.content, LEGACY_FORMAT_TEXT);
+    assert.deepEqual(answer.evidence, []);
+    assert.equal(JSON.stringify(answer).includes(protectedMarker(legacy.saved)), false, 'korunan metnin parçası açılamaz');
+  };
+  const start = stack.db.aiToolLog.length;
+  const unchanged = await answersOf();
+  assert.equal(unchanged.find(item => item.id === current.saved.message.id).content, current.saved.message.content, 'güncel biçim aynı yetkiyle açılır');
+  assertLegacyClosed(unchanged);
+  assert.equal(stack.db.aiToolLog.slice(start).filter(item => item.query === 'task-visibility').length, 1, 'eski biçim son işleme girmez');
+  // Aynı adlı ikinci düğüm adlardan kimlik çıkarımını belirsizleştirir; sonuç değişmez.
+  const node = stack.db.wbs.find(item => item.WbsId === WBS.FULL_DETAIL);
+  stack.db.wbs.push({ ...node, WbsId: randomUUID() });
+  assertLegacyClosed(await answersOf());
+  // Erişim kalkınca güncel yanıt gizlenir; eski biçim metni yetki durumundan bağımsızdır.
+  revokeFullProjectTask(stack, task.TaskId);
+  const revoked = await answersOf();
+  assertHidden(revoked.find(item => item.id === current.saved.message.id), current.saved);
+  assertLegacyClosed(revoked);
+});
+
+test('kesin doğrulanamayan yeni yanıtlar son işlem harcamaz; ertelenmiş eski geçerli yanıt doğrulanır', async t => {
+  const stack = stackFor(t);
+  const { unverifiableAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+  const valid = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+  const invalid = [];
+  for (let index = 0; index < 3; index += 1) {
+    const item = await saveLegacyEvidence(stack, { conversationId: valid.conversationId, calls: [['rota_task_detail', { taskId: TASKS.DUE_SOON }]] });
+    const [row] = evidenceRowsOf(stack, item.saved.message.id);
+    const payload = JSON.parse(row.EvidenceJson);
+    const json = JSON.stringify({ ...payload, authorizationPopulation: unverifiableAuthorizationPopulation() });
+    row.EvidenceJson = JSON.stringify({ ...JSON.parse(json), padding: 'x'.repeat(31000 - json.length) });
+    for (let ordinal = 2; ordinal <= 16; ordinal += 1) stack.db.aiMessageEvidence.push({ ...row, Ordinal: ordinal });
+    invalid.push(item);
+  }
+  assert.ok(invalid.length * 16 * 31000 * 2 > TOOL_LIMITS.maxHistoryEvidenceBytes, 'eski geçerli yanıt ilk sayfadan ertelenmeli');
+  const { loadConversationEvidence } = await import('../src/server/ai/assistant/conversationStore.js');
+  const first = await loadConversationEvidence(await getSqlPool(), AYSE, { conversationId: valid.conversationId, maxEvidence: 1600 });
+  assert.ok(first.deferredMessages.has(valid.saved.message.id));
+  assert.ok(invalid.some(item => first.deferredMessages.has(item.saved.message.id)), 'ertelenmiş doğrulanamaz yanıt da sınanmalı');
+  const start = stack.db.aiToolLog.length;
+  const txStart = stack.db.transactions.length;
+  const answers = (await loadAssistantConversation(valid.conversationId)).body.messages.filter(item => item.role === 'assistant');
+  assert.equal(answers.find(item => item.id === valid.saved.message.id).content, valid.saved.message.content);
+  for (const item of invalid) {
+    const answer = answers.find(row => row.id === item.saved.message.id);
+    assert.equal(answer.content, UNVERIFIABLE_TEXT);
+    assert.deepEqual(answer.evidence, []);
+    assert.equal(JSON.stringify(answer).includes(protectedMarker(item.saved)), false);
+  }
+  assert.equal(stack.db.transactions.length - txStart, 1, 'yalnız doğrulanabilir yanıt SERIALIZABLE işlem açar');
+  assert.equal(stack.db.aiToolLog.slice(start).filter(item => item.query === 'task-visibility').length, 1);
+  revokeFullProjectTask(stack, TASKS.OVERDUE);
+  const revoked = (await loadAssistantConversation(valid.conversationId)).body.messages;
+  for (const item of [valid, ...invalid]) assert.equal(JSON.stringify(revoked).includes(protectedMarker(item.saved)), false);
+});
+
+for (const failure of ['tek-kilitlenme', 'sürekli-kilitlenme', 'kilitlenme-dışı']) {
+  test(`son SERIALIZABLE işlem yalnız kilitlenmede ve en fazla bir kez yinelenir (${failure})`, async t => {
+    const stack = stackFor(t);
+    const { sql } = await import('../src/server/db/pool.js');
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+    let attempts = 0;
+    stack.db.queryBarrier = { entered: 0, released: Promise.resolve(), match(text) {
+      if (!text.startsWith('/* rota-ai-tool:task-visibility */')) return false;
+      attempts += 1;
+      if (failure === 'kilitlenme-dışı') throw Object.assign(new Error('KORUNAN_HAM_HATA'), { code: 'DATABASE_UNAVAILABLE' });
+      if (failure === 'sürekli-kilitlenme' || attempts === 1) throw Object.assign(new Error('KORUNAN_KİLİTLENME'), { number: 1205 });
+      return false;
+    } };
+    const logs = [];
+    t.mock.method(console, 'warn', text => logs.push(text));
+    const txStart = stack.db.transactions.length;
+    const answer = await savedAnswer(conversationId);
+    const transactions = stack.db.transactions.slice(txStart);
+    assert.ok(transactions.every(row => row.isolationLevel === sql.ISOLATION_LEVEL.SERIALIZABLE), 'yalıtım düzeyi gevşetilemez');
+    assert.equal(attempts, failure === 'kilitlenme-dışı' ? 1 : 2);
+    assert.equal(transactions.length, attempts);
+    if (failure === 'tek-kilitlenme') {
+      assert.ok(transactions[0].rollbackStatementIndex != null && transactions[1].commitStatementIndex != null);
+      assert.equal(answer.content, saved.message.content);
+      assert.equal(logs.length, 0);
+      return;
+    }
+    assert.equal(answer.finishReason, 'unavailable');
+    assert.deepEqual(answer.evidence, []);
+    assert.equal(JSON.stringify(answer).includes(protectedMarker(saved)), false);
+    assert.equal(logs.length, 1);
+    assert.equal(JSON.parse(logs[0]).code, 'AI_HISTORY_CHECK_FAILED');
+    assert.doesNotMatch(logs[0], /KORUNAN_/);
+  });
+}

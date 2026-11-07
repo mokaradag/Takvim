@@ -215,7 +215,7 @@ test('sunucu yapay zekâ modülleri yalnızca izinli altyapıya bağlanır ve ge
   // "işlem içinde miyim" sorusunu sorar.
   // Konuşma geçmişi hizmeti kısa işlemleri açar; deposu yalnızca parametre türlerini kullanır.
   // Araç bağlamı havuzu yalnızca kendi sınırlı kapısından geçirir; araç deposu
-  // yalnızca parametre türlerini kullanır. Araç katmanı SQL işlemi açmaz.
+  // yalnızca parametre türlerini kullanır. Araç bağlamı geçmişin son açıklamasında kısa salt okunur işlem açar.
   assert.deepEqual(poolImports, {
     'src/server/ai/aiCredentialService.js': ['getSqlPool', 'withSqlTransaction'],
     'src/server/ai/aiCredentialStore.js': ['sql'],
@@ -223,7 +223,7 @@ test('sunucu yapay zekâ modülleri yalnızca izinli altyapıya bağlanır ve ge
     'src/server/ai/assistant/assistantService.js': ['getSqlPool', 'withSqlTransaction'],
     'src/server/ai/assistant/conversationStore.js': ['sql'],
     'src/server/ai/tools/rota/rotaToolStore.js': ['sql'],
-    'src/server/ai/tools/toolContext.js': ['getSqlPool']
+    'src/server/ai/tools/toolContext.js': ['getSqlPool', 'sql', 'withSqlTransaction']
   });
 });
 
@@ -490,10 +490,12 @@ test('konuşma tablolarına yalnızca konuşma deposu, sabit ve Sicil sahipliği
   const evidenceUsers = sourceFiles('src').filter((file) => /MR_AiMessageEvidence/.test(fs.readFileSync(file, 'utf8'))).map(toRelative).sort();
   assert.deepEqual(evidenceUsers, ['src/server/ai/assistant/conversationQueries.js', 'src/server/ai/assistant/conversationStore.js']);
   assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /OBJECT_ID\(N'dbo\.MR_AiMessageEvidence', N'U'\) IS NOT NULL/);
-  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /IF @knownSicil = 1 AND @evidenceReady = 1\s+SELECT TOP \(@maxEvidence\)/);
-  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /JSON_VALUE\(e\.EvidenceJson, '\$\.authorizationEpoch'\)/);
-  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /JSON_QUERY\(e\.EvidenceJson, '\$\.clarificationContext'\)/);
-  assert.doesNotMatch(queries.AI_CONVERSATION_EVIDENCE_SQL, /SELECT[^;]*,\s*e\.EvidenceJson\s*(?:,|FROM)/, 'ham kanıt yükü açıklanmaz');
+  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /IF @knownSicil = 1 AND @evidenceReady = 1\s+BEGIN\s+;WITH EvidenceWindow AS \(\s+SELECT TOP \(@maxEvidence\)/);
+  // Ham yük yalnızca sunucudaki yeniden doğrulamaya gider; API özet sınırı hizmet regresyonlarında korunur.
+  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /CASE WHEN EvidenceBytes <= @maxEvidenceBytes THEN EvidenceJson END AS EvidenceJson/);
+  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /SUM\(CONVERT\(bigint, COALESCE\(DATALENGTH\(e\.EvidenceJson\), 0\)\)\) OVER/);
+  assert.match(queries.AI_CONVERSATION_EVIDENCE_SQL, /ORDER BY m\.Sequence DESC, e\.Ordinal ROWS UNBOUNDED PRECEDING/);
+  assert.doesNotMatch(queries.AI_CONVERSATION_EVIDENCE_SQL, /JSON_VALUE|JSON_QUERY/);
   assert.doesNotMatch(queries.AI_CONVERSATION_PRESENCE_SQL, /MR_AiMessageEvidence|m\.Content|c\.Title/);
   assert.match(queries.AI_CONVERSATION_PRESENCE_SQL, /SELECT TOP \(@maxMessages\) m\.MessageId/);
   const grounded = queries.AI_CONVERSATION_APPEND_GROUNDED_ANSWER_SQL;
@@ -765,7 +767,13 @@ test('araç SQL metinleri sabit, parametreli, salt okunur ve yetki kapsamına ba
   for (const [name, body] of toolSources) {
     if (name === 'src/server/ai/tools/rota/rotaToolQueries.js') continue;
     assert.doesNotMatch(body, /\bdbo\.MR_/, `${name}: SQL metni yalnızca sorgu modülündedir`);
-    assert.doesNotMatch(body, /withSqlTransaction|updateTaskNotifications|updateScheduleNotifications|updateCoordinationNotifications|markNotifications/, name);
+    assert.doesNotMatch(body, /updateTaskNotifications|updateScheduleNotifications|updateCoordinationNotifications|markNotifications/, name);
+    if (name === 'src/server/ai/tools/toolContext.js') {
+      assert.equal((body.match(/withSqlTransaction\(/g) || []).length, 1, 'tek işlem yalnızca son açıklama denetimine aittir');
+      assert.match(body, /withSqlTransaction\(async transaction =>/);
+      assert.match(body, /isolationLevel: sql\.ISOLATION_LEVEL\.SERIALIZABLE/);
+      assert.doesNotMatch(body, /\.query\(|\.batch\(|\.execute\(/, 'bağlam SQL metni veya yordam çalıştıramaz');
+    } else assert.doesNotMatch(body, /withSqlTransaction/, name);
   }
 });
 

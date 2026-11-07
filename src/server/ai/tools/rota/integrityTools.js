@@ -147,7 +147,7 @@ const dataQuality = {
     const examplesPerCheck = args.limit ?? 3;
     const filters = normalizeTaskFilters({ projectId: args.projectId });
     const { scope } = await call.authorization();
-    const { facts, projects } = await loadFilteredFacts(call, scope, filters);
+    const { facts, projects } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
     const open = facts.filter((fact) => fact.status !== 'done');
     const flagged = new Set();
     const example = (fact) => ({ taskId: fact.id, title: dataText(fact.title, 160), project: projects.get(fact.projectId)?.name || null });

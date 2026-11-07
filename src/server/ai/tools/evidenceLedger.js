@@ -2,7 +2,7 @@ import 'server-only';
 import { randomBytes } from 'node:crypto';
 import { claimableContract } from '../../../domain/ai/claimableEvidence.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
-import { decodeAuthorizationPopulation, encodeAuthorizationPopulation, evidenceTaskReferences, PAYLOAD_POPULATION_TOOLS, unverifiableAuthorizationPopulation } from './evidenceAuthorization.js';
+import { compressAuthorizationPopulation, decodeAuthorizationPopulation, encodeAuthorizationPopulation, evidenceTaskReferences, PAYLOAD_POPULATION_TOOLS, unverifiableAuthorizationPopulation } from './evidenceAuthorization.js';
 import {
   EVIDENCE_LIMITS,
   evidenceIdFor,
@@ -44,14 +44,36 @@ function highlightPairs(highlights = []) {
 function persistedEvidenceJson(entry, payload, clarificationContext, resultScope, analysisContext = null) {
   const authorization = {
     authorizationEpoch: entry.authorizationEpoch,
-    ...(entry.scopedAuthorization ? { scopedAuthorization: entry.scopedAuthorization } : {})
+    ...(entry.scopedAuthorization ? { scopedAuthorization: entry.scopedAuthorization } : {}),
+    ...(entry.authorizationProjectLevels ? { authorizationProjectLevels: entry.authorizationProjectLevels } : {})
   };
   const clarification = { ...(clarificationContext ? { clarificationContext } : {}), ...(resultScope ? { resultScope } : {}), ...(analysisContext ? { analysisContext } : {}) };
   const population = encodeAuthorizationPopulation(entry.taskReferences || evidenceTaskReferences(payload));
+  if (['rota_workload_summary', 'rota_data_quality'].includes(entry.tool) && entry.taskReferences?.some(row => row.identityBase === false)
+    && entry.taskReferences.every(row => typeof row.identityBase === 'boolean')) {
+    authorization.authorizationIdentityPopulation = compressAuthorizationPopulation({
+      ...encodeAuthorizationPopulation(entry.taskReferences.filter(row => row.identityBase)),
+      partial: entry.taskReferences.filter(row => !row.identityBase).map(row => ({ taskId: row.taskId, sicils: row.identitySicils }))
+    });
+    // Kimlik kökeni sığmıyorsa ana nüfus da doğrulanabilir görünemez; daraltıcı kapsamlar saklanmaz.
+    if (authorization.authorizationIdentityPopulation.complete !== true) {
+      return JSON.stringify({ ...payload, data: null, dataOmitted: 'size', authorizationEpoch: entry.authorizationEpoch,
+        authorizationPopulation: unverifiableAuthorizationPopulation() });
+    }
+  }
   const full = JSON.stringify({ ...payload, ...authorization, authorizationPopulation: population, ...clarification });
   if (full.length <= MAX_EVIDENCE_JSON_CHARS) return full;
   const { data: _omitted, ...envelope } = payload;
   const compact = JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', ...authorization, authorizationPopulation: population, ...clarification });
+  // Yalnızca v1 sığmadığında: sıralı (NEWSEQUENTIALID) görev kimlikleri kayıpsız ve sınırlı biçimde sıkışır.
+  const packed = compressAuthorizationPopulation(population);
+  if (packed.complete === true) {
+    const fullCompressed = JSON.stringify({ ...payload, ...authorization, authorizationPopulation: packed, ...clarification });
+    if (fullCompressed.length <= MAX_EVIDENCE_JSON_CHARS) return fullCompressed;
+    if (compact.length <= MAX_EVIDENCE_JSON_CHARS) return compact;
+    const compressed = JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', ...authorization, authorizationPopulation: packed, ...clarification });
+    if (compressed.length <= MAX_EVIDENCE_JSON_CHARS) return compressed;
+  }
   if (compact.length <= MAX_EVIDENCE_JSON_CHARS) return compact;
   return JSON.stringify({ ...envelope, data: null, dataOmitted: 'size', authorizationEpoch: entry.authorizationEpoch,
     authorizationPopulation: unverifiableAuthorizationPopulation(), ...clarification });
@@ -74,7 +96,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
     /** Defter yeni kanıt alamaz (yanıt başına kanıt sınırı). */
     full,
     /** Başarılı araç sonucunu kaydeder; kimlik (R<n>) döner. Defter doluysa ya da köken eksik/tutarsızsa `null`. */
-    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, populationReferences = null, args = null, round = null }) {
+    register({ tool, kind, label, entity = null, generatedAt, complete, truncated, partial, counts, highlights = [], authorizationEpoch = null, scopedAuthorization = null, authorizationProjectLevels = null, populationReferences = null, args = null, round = null }) {
       // Boş nüfus da açıkça kaydedilir; eksik köken başarılı kanıt olamaz.
       const protectedPopulation = claimableContract(tool).paths.length && !PAYLOAD_POPULATION_TOOLS.has(tool);
       if (protectedPopulation && !Array.isArray(populationReferences)) return null;
@@ -93,7 +115,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       });
       if (!summary) return null;
       // Yürütülen bağımsız değişkenler yalnızca sunucuda kalır: kanıtın nüfusu bunlardan hesaplanır.
-      entries.push({ id, tool, kind, summary, payload: null, authorizationEpoch, scopedAuthorization, valid: true,
+      entries.push({ id, tool, kind, summary, payload: null, authorizationEpoch, scopedAuthorization, authorizationProjectLevels, valid: true,
         args: Object.freeze({ ...(args || {}) }), round,
         population: populationReferences });
       return id;
@@ -112,7 +134,10 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
       // Son yetki denetimi ve kalıcı kayıt, toplamın dayandığı bütün görevleri
       // (yalnızca yükte görünenleri değil) taşır.
       const references = new Map(evidenceTaskReferences(JSON.parse(payload)).map((row) => [row.taskId, row]));
-      for (const row of entry.population || []) if (!references.has(row.taskId) || !references.get(row.taskId).projectId) references.set(row.taskId, row);
+      for (const row of entry.population || []) {
+        if (!references.has(row.taskId) || !references.get(row.taskId).projectId) references.set(row.taskId, row);
+        else if (typeof row.identityBase === 'boolean') references.set(row.taskId, { ...references.get(row.taskId), identityBase: row.identityBase, identitySicils: row.identitySicils });
+      }
       entry.taskReferences = [...references.values()];
     },
     invalidateAuthorization(epoch, validate = null) {
@@ -163,6 +188,7 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
     persistable(ids, { clarification = null, resultScope = null, analysisContext = null } = {}) {
       const wanted = new Set(ids);
       let scopeStored = false;
+      let deferredScope = null;
       let analysisStored = false;
       const prepared = [];
       const rows = entries
@@ -176,10 +202,15 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
           if (resultScope && !scopeStored && entry.authorizationEpoch) {
             const candidate = persistedEvidenceJson(entry, payload, clarificationContext, resultScope);
             const stored = JSON.parse(candidate);
-            if (stored.dataOmitted === JSON.parse(evidenceJson).dataOmitted
-              && decodeAuthorizationPopulation(stored.authorizationPopulation) !== null) {
-              evidenceJson = candidate;
-              scopeStored = true;
+            if (stored.resultScope != null && decodeAuthorizationPopulation(stored.authorizationPopulation) !== null) {
+              if (stored.dataOmitted === JSON.parse(evidenceJson).dataOmitted) {
+                evidenceJson = candidate;
+                scopeStored = true;
+              } else if (!analysisContext && !deferredScope && stored.dataOmitted === 'size'
+                && stored.authorizationPopulation.v === 2) {
+                // Başka kanıtta veri kaybetmeden saklanabilecek kapsam için bu aday bekletilir.
+                deferredScope = { index: prepared.length, evidenceJson: candidate };
+              }
             }
           }
           // Takip analiz bağlamı (Aşama 4E) tek kanıtta, kanıtın kendi kalıcı biçimini değiştirmeden saklanır.
@@ -210,6 +241,11 @@ export function createEvidenceLedger({ maxEntries = EVIDENCE_LIMITS.maxEvidenceO
           prepared.push({ entry, payload, clarificationContext, row });
           return row;
         });
+      // Veri kaybı gerektirmeyen bütün kanıtlar denendikten sonra sıkıştırılmış aday kullanılır.
+      if (!scopeStored && deferredScope) {
+        prepared[deferredScope.index].row.evidenceJson = deferredScope.evidenceJson;
+        scopeStored = true;
+      }
       // Küçük takip bağlamı, büyük kanıtın kendi kalıcı biçimi uğruna sessizce düşmez: hiçbir kanıta biçimi değişmeden
       // sığmadıysa yetki nüfusu korunarak ilk yetkili kanıtın sıkıştırılmış biçimine yazılır (yeniden açılışta veri
       // gösterilmeyen kanıt; yetki ve takip yine güncel yetkiyle doğrulanır).

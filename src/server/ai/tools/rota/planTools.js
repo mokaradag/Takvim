@@ -208,7 +208,8 @@ const dependencyInspect = {
       projectId, focusTaskId: focus?.id ?? null, maxRows: TOOL_LIMITS.maxAnalyzedTasks
     }));
     if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
-    call.notePopulation?.(result.population);
+    call.notePopulation?.([...result.population, ...(focus
+      ? [...result.tasks.map(row => ({ taskId: canonicalActualId(row.TaskId), projectId })), { taskId: focus.id, projectId }] : [])]);
     const tasks = new Map(result.tasks.map((row) => [canonicalActualId(row.TaskId), row]));
     const relation = (row, otherId) => {
       const other = tasks.get(otherId);

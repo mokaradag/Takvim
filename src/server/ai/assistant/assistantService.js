@@ -16,6 +16,7 @@ import { getSqlPool, withSqlTransaction } from '../../db/pool.js';
 import { ServerPersistenceError } from '../../errors.js';
 import { getTrustedCurrentSicil } from '../../identity/currentUserProvider.js';
 import { boundedExecutor } from '../../observability/boundedExecution.js';
+import { logEvent } from '../../observability/structuredLogger.js';
 import { readAiConfig, requireAiAvailable } from '../aiConfig.js';
 import { assertAiDirectoryMember, loadAiCredentialStatus } from '../aiCredentialService.js';
 import { abortableDelay, AI_DIRECTORY_PREFLIGHT_TIMEOUT_MS, createAiDeadline, raceWithAbort } from '../aiDeadline.js';
@@ -286,14 +287,24 @@ function isTransientEvidenceProbeFailure(error) {
   return error?.code === AI_ERROR_CODES.AI_BUSY || error?.code === 'DATABASE_UNAVAILABLE';
 }
 
+/**
+ * Güvenilir Sicil'in konuşma kanıtını sınırlı SQL yürütücüsüyle yükler.
+ * Sonuç yetki onayı değildir; bilinmeyen Sicil, okuma hatası ve iptal iletilir.
+ *
+ * @param {number} sicil - Oturumdan doğrulanmış kullanıcı kimliği.
+ * @param {AbortSignal} signal - Okuma süresini ve iptalini sınırlayan sinyal.
+ * @param {object} target - Konuşma ve isteğe bağlı tek ileti kimliği.
+ * @returns {Promise<object>} Sunucu içi kanıt eşlemeleri ve şema durumu.
+ */
 async function loadEvidenceFor(sicil, signal, { conversationId, messageId = null }) {
   const result = await withConversationSql(sicil, signal, (scope) => loadConversationEvidence(directExecutor(scope), sicil, {
-    conversationId, messageId, maxEvidence: MAX_CONVERSATION_EVIDENCE
+    conversationId, messageId, maxEvidence: MAX_CONVERSATION_EVIDENCE, signal: scope.signal
   }));
   if (!result.knownSicil) throw unknownSicil();
   noteEvidenceSchema(result.ready);
   return { ready: result.ready, presentMessages: result.presentMessages, byMessage: result.byMessage, epochsByMessage: result.epochsByMessage,
-    authorizationByMessage: result.authorizationByMessage, clarificationByMessage: result.clarificationByMessage, resultScopeByMessage: result.resultScopeByMessage,
+    authorizationByMessage: result.authorizationByMessage, deferredMessages: result.deferredMessages,
+    clarificationByMessage: result.clarificationByMessage, resultScopeByMessage: result.resultScopeByMessage,
     analysisByMessage: result.analysisByMessage };
 }
 
@@ -485,26 +496,66 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
     // konuşmanın bütün yanıtları tek bir sınır aşımıyla gizlenmez.
     // Nüfusu kalıcı kayda sığmayan yanıt güncel yetkiyle doğrulanamaz; bu durum
     // yalnızca kayıtlı künyeden türetilir, güncel yetki hakkında bilgi vermez.
-    evidence.unverifiable = new Set([...(evidence.authorizationByMessage || new Map())]
-      .filter(([, entries]) => entries.some((entry) => entry.unverifiable)).map(([id]) => id));
+    /** Yeniden doğrulanmayan devam yolunda ertelenmiş iletiler de ret kümesine girer. */
+    const unverifiableIds = (unverifiable) => new Set([...(evidence.authorizationByMessage || new Map())]
+      .filter(([id, entries]) => (!revalidate || !evidence.deferredMessages?.has(id)) && entries.some(unverifiable)).map(([id]) => id));
+    // Devam yolu son yetki işlemine girmez; bozuk dönem başka kayıttaki göndergeleri yetkilendiremez.
+    evidence.unverifiable = unverifiableIds((entry) => entry.unverifiable || !revalidate
+      && (typeof entry.authorizationEpoch !== 'string' || !/^[a-f0-9]{64}$/.test(entry.authorizationEpoch)));
+    // Düğüm kökeni olmayan eski kayıt biçimi ayrı açıklanır; ayrım yalnızca kayıtlı biçimden türetilir.
+    evidence.legacyFormat = unverifiableIds((entry) => entry.legacyFormat);
     if (revalidate && evidence.byMessage.size) {
       const context = createToolTurnContext({ sicil });
+      // İlk yetki okuması, ertelenmiş sayfalar ve ileti başına son işlemler aynı ortak süreyi paylaşır;
+      // harcanmış süre yeni bir zamanlayıcıyla sıfırlanmaz.
       const deadline = createAiDeadline({ timeoutMs: context.limits.maxCumulativeSqlMs, parentSignal: signal });
       const visible = new Map();
       evidence.unavailableMessages = new Set();
       try {
         await context.revalidateAuthorization(deadline.signal);
-        for (const [id, summaries] of [...evidence.byMessage].reverse()) {
-          if (deadline.signal.aborted) { evidence.unavailableMessages.add(id); continue; }
-          const entries = evidence.authorizationByMessage.get(id);
-          if (!entries?.length) continue;
+        // Kaynak denetimi yalnızca son tutarlı işlemde yapılır; bütün geçmiş iki kez açılmaz.
+        for (const [id, summaries] of evidence.byMessage) {
+          const owned = evidence.authorizationByMessage.get(id);
+          if (owned?.length) visible.set(id, summaries);
+        }
+        for (const id of [...visible.keys()].reverse()) {
+          if (signal?.aborted) throw signal.reason;
+          // Kayıtlı künyesinden kesin doğrulanamayan yanıt SQL kapısı, SERIALIZABLE işlem ve ortak süre harcamaz.
+          if (evidence.unverifiable.has(id)) { visible.delete(id); continue; }
           const messageDeadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: deadline.signal });
           try {
-            const authorized = await context.revalidateEvidence(entries, messageDeadline.signal);
-            if (entries.every((entry) => authorized.has(entry.id))) visible.set(id, summaries);
+            // Büyük konuşmanın sonraki yanıtları eski yetkili yanıtı kapatmaz. Ek sayfa yalnız bu iletiyi
+            // taşır; ham yük son denetimden sonra tutulmaz ve bütün sayfalar ortak süreye tabidir.
+            const page = evidence.deferredMessages?.has(id)
+              ? await loadEvidenceFor(sicil, messageDeadline.signal, { ...target, messageId: id }) : null;
+            if (page && (!page.ready || page.deferredMessages?.has(id) || !page.authorizationByMessage?.get(id)?.length)) {
+              throw new ServerPersistenceError('DATABASE_UNAVAILABLE', 'Geçmiş yanıtın kanıt sayfası okunamadı.');
+            }
+            const owned = page?.authorizationByMessage.get(id) || evidence.authorizationByMessage.get(id);
+            if (page && owned.some(entry => entry.unverifiable)) {
+              // Sayfası okunan ertelenmiş yanıt da kesin doğrulanamazsa son işleme girmez.
+              evidence.unverifiable.add(id);
+              if (owned.some(entry => entry.legacyFormat)) evidence.legacyFormat.add(id);
+              visible.delete(id);
+              continue;
+            }
+            const still = await context.recheckEvidenceTasks(owned, messageDeadline.signal);
+            if (!owned.every(entry => still.has(entry))) visible.delete(id);
+            else if (page) {
+              visible.set(id, page.byMessage.get(id));
+              evidence.epochsByMessage.set(id, page.epochsByMessage.get(id));
+              for (const key of ['clarificationByMessage', 'resultScopeByMessage', 'analysisByMessage']) {
+                if (page[key]?.has(id)) evidence[key].set(id, page[key].get(id));
+                else evidence[key]?.delete(id);
+              }
+            }
           } catch (error) {
             if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;
+            // İçerik, kanıt, kimlik ve ham hata metni günlüğe taşınmaz.
+            logEvent({ severity: 'WARNING', component: 'AI', operation: 'ai.history.disclosure',
+              code: 'AI_HISTORY_CHECK_FAILED', message: 'Geçmiş yanıtın son yetki denetimi tamamlanamadı.' });
             evidence.unavailableMessages.add(id);
+            visible.delete(id);
           } finally { messageDeadline.dispose(); }
         }
         evidence.byMessage = visible;
@@ -512,7 +563,7 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
     }
   } catch (error) {
     if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;
-    evidence = { unavailable: true };
+    evidence = { ...evidence, byMessage: new Map(), unavailable: true };
   }
   // Kanıt ve yetki okumalarının hata yolları dahil sonrasında denetlenir.
   // Varlık hatası iletilir; kullanılamayan kanıt eski metni yetkilendiremez.
@@ -550,14 +601,26 @@ function savedMessageMissing(message, evidence) {
 }
 
 const UNVERIFIABLE_SAVED_ANSWER_TEXT = 'Bu kayıtlı yanıt çok sayıda kayda dayandığı için güncel yetkinizle yeniden doğrulanamıyor. Güncel bilgi için soruyu yeniden sorun.';
+/** Metin yalnızca kayıtlı biçimden türetilir; güncel yetki ya da kaydın varlığı hakkında bilgi vermez. */
+const LEGACY_FORMAT_SAVED_ANSWER_TEXT = 'Bu kayıtlı yanıt önceki bir kayıt biçiminde saklandığı için güncel yetkinizle yeniden doğrulanamıyor. Güncel bilgi için soruyu yeniden sorun.';
 
+/**
+ * Son doğrulamanın sonucuna göre kayıtlı iletilerin güvenli kopyalarını döndürür.
+ * Eksik veya doğrulanamayan kanıtta korunan metni ve özetleri birlikte gizler;
+ * güncel yetkiyi kendisi sorgulamaz ve ham kanıtı yanıt içine eklemez.
+ *
+ * @param {Array<object>} messages - Depodan okunan konuşma iletileri.
+ * @param {object} evidence - Varlık ve güncel yetki denetimlerinin sonucu.
+ * @returns {Array<object>} Yalnızca açıklanmasına izin verilen ileti görünümleri.
+ */
 function discloseSavedMessages(messages, evidence) {
   return messages.filter((message) => message.role === 'assistant' || !savedMessageMissing(message, evidence)).map((message) => {
     if (message.role !== 'assistant') return message;
     message = { ...message, rotaData: false };
     if (savedMessageMissing(message, evidence)) return { ...message, content: 'Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.', evidence: [], finishReason: 'not_found' };
     if (evidence?.unverifiable?.has(message.id)) {
-      return { ...message, content: UNVERIFIABLE_SAVED_ANSWER_TEXT, evidence: [], finishReason: 'unavailable' };
+      const content = evidence.legacyFormat?.has(message.id) ? LEGACY_FORMAT_SAVED_ANSWER_TEXT : UNVERIFIABLE_SAVED_ANSWER_TEXT;
+      return { ...message, content, evidence: [], finishReason: 'unavailable' };
     }
     const saved = evidence?.byMessage?.get(message.id);
     if (saved?.length) return { ...message, evidence: saved, rotaData: message.source !== 'general' && message.finishReason !== 'general' };
