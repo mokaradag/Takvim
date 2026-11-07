@@ -78,8 +78,12 @@ const DEADLINE = Object.freeze({
   due_next_30_days: { tr: 'bugün dahil otuz gün içinde terminli', after: 'due within thirty days including today', relative: true },
   no_target_finish: { tr: 'terminsiz', after: 'without a deadline', relative: false }
 });
+/** Bugüne göre ileri termin pencereleri (sayım cümlesinde sayıdan önce yazılır). */
+const TERM_WINDOWS = new Set(['due_today', 'due_next_7_days', 'due_next_30_days']);
 const FILTER_KEYS = new Set(['text', 'projectId', 'project', 'wbsId', 'statuses', 'priorities', 'deadline', 'dateField', 'dateFrom', 'dateTo', 'assignee',
-  'personSicil', 'createdByMe', 'milestone', 'teamLevel']);
+  'personSicil', 'person', 'createdByMe', 'milestone', 'teamLevel']);
+/** Sunucunun kişi adını çözemediğinde yazdığı genel etiket: doğal özne olarak kullanılmaz. */
+const UNRESOLVED_PERSON = 'Seçilen kişi';
 /** Ekip kapsamının adı (Türkçe yer/iyelik biçimleri, İngilizce iyelik). Düzey yoksa bütün yönetim kapsamı "ekibiniz"dir. */
 const TEAM = Object.freeze({
   null: { at: 'ekibinizde', of: 'ekibinizin', en: 'your team' },
@@ -96,11 +100,16 @@ function taskPopulation(filters, locale) {
   const f = filters || {};
   // Bilinmeyen süzgecin `false` değeri de bir kısıt olabilir: yalnızca boş değer nötrdür.
   for (const [key, value] of Object.entries(f)) if (!FILTER_KEYS.has(key) && !(value == null || value === '' || (Array.isArray(value) && !value.length))) return null;
-  for (const key of ['text', 'wbsId', 'personSicil', 'createdByMe']) if (!neutral(f[key])) return null;
+  for (const key of ['text', 'wbsId', 'createdByMe']) if (!neutral(f[key])) return null;
+  // Aşama F: sunucunun kimlikle çözdüğü TEK kişi (sorumlu koşulu `person`) doğal öznedir ("**X** sorumluluğunda …"); adı
+  // çözülemeyen kişi genel ölçütlü cümlede kalır.
+  const person = neutral(f.personSicil) ? null
+    : f.assignee === 'person' && typeof f.person === 'string' && f.person.trim() && f.person !== UNRESOLVED_PERSON ? f.person.trim() : null;
+  if (!neutral(f.personSicil) && !person) return null;
   // Kilometre taşı süzgecinin iki değeri de nüfusu daraltır (`false` kilometre taşlarını dışlar; taskFacts.matchesTaskFilters).
   if (typeof f.milestone === 'boolean') return null;
   if (!neutral(f.projectId) && (typeof f.project !== 'string' || !f.project.trim())) return null;
-  if (!neutral(f.assignee) && !['me', 'unassigned', 'team'].includes(f.assignee)) return null;
+  if (!neutral(f.assignee) && !['me', 'unassigned', 'team', ...(person ? ['person'] : [])].includes(f.assignee)) return null;
   if (!neutral(f.teamLevel) && (f.assignee !== 'team' || !TEAM[f.teamLevel])) return null;
   if (!neutral(f.dateField) && f.dateField !== 'targetFinish') return null;
   if ([f.dateFrom, f.dateTo].some((value) => !neutral(value) && !DAY.test(String(value)))) return null;
@@ -123,6 +132,7 @@ function taskPopulation(filters, locale) {
   return {
     me: f.assignee === 'me',
     team: f.assignee === 'team' ? TEAM[neutral(f.teamLevel) ? 'null' : f.teamLevel] : null,
+    person,
     adjectives,
     after: locale === 'en' && deadline?.after ? deadline.after : null,
     project: neutral(f.projectId) ? null : f.project.trim(),
@@ -160,12 +170,20 @@ function taskCountSentence(filters, count, locale, { total = false } = {}) {
       ...(total ? [' in total'] : [])];
     const described = `${adjectives.length ? `${adjectives.join(', ')} ` : ''}${noun}`;
     const now = relative ? 'currently ' : '';
+    if (population.person) {
+      return sentence([v(population.person), count === 0 ? ` ${now}has no ${described}` : ` ${now}has `, ...(count === 0 ? [] : [v(number(count, locale)), ` ${described}`]), ...tail, '.']);
+    }
     const owner = team ? `${team.en.charAt(0).toUpperCase()}${team.en.slice(1)} ${now}has` : `You ${now}have`;
     if (count === 0) return sentence([me || team ? `${owner} no ${described}` : `There are ${now}no ${described}`, ...tail, '.']);
     return sentence([me || team ? `${owner} ` : `There ${count === 1 ? 'is' : 'are'} ${now}`, v(number(count, locale)), ` ${described}`, ...tail, '.']);
   }
-  const lead = [...(team ? [`${team.at} `] : []), ...(relative && !total ? ['şu anda '] : []), ...(project ? [v(project), ' projesinde '] : []), ...windowParts(population, locale), ...(total ? ['toplam '] : [])];
-  const noun = `${adjectives.length ? `${adjectives.join(', ')} ` : ''}${me ? 'göreviniz' : 'görev'}`;
+  // Aşama F: termin penceresi ("bugün dahil yedi gün içinde terminli") sayıdan önce gelir; uzun sıfat sayı ile ad arasına
+  // girmez ve pencere zaten bugüne göre olduğundan "şu anda" eklenmez ("Bugün dahil yedi gün içinde terminli **17** açık görev var.").
+  const windowed = TERM_WINDOWS.has(filters?.deadline);
+  const named = windowed ? adjectives.slice(1) : adjectives;
+  const lead = [...(population.person ? [v(population.person), ' sorumluluğunda '] : []), ...(team ? [`${team.at} `] : []), ...(relative && !total && !windowed ? ['şu anda '] : []),
+    ...(project ? [v(project), ' projesinde '] : []), ...windowParts(population, locale), ...(windowed ? [`${adjectives[0]} `] : []), ...(total ? ['toplam '] : [])];
+  const noun = `${named.length ? `${named.join(', ')} ` : ''}${me ? 'göreviniz' : 'görev'}`;
   if (count === 0) return sentence([...lead, `${noun} yok.`]);
   return sentence([...lead, v(number(count, locale)), ` ${noun} var.`]);
 }
@@ -178,8 +196,10 @@ function ownerParts(filters, locale, { open = false } = {}) {
   const adjectives = open && !baseAdjectives.includes(locale === 'en' ? 'open' : 'açık') ? [...baseAdjectives, locale === 'en' ? 'open' : 'açık'] : baseAdjectives;
   if (locale === 'en') {
     const described = `${adjectives.length ? `${adjectives.join(', ')} ` : ''}tasks${population.after ? ` ${population.after}` : ''}`;
+    if (population.person) return [`the ${described} assigned to `, v(population.person), ...(project ? [' in the ', v(project), ' project'] : [])];
     return [me ? `your ${described}` : team ? `${team.en}'s ${described}` : `the visible ${described}`, ...(project ? [' in the ', v(project), ' project'] : [])];
   }
+  if (population.person) return [...(project ? [v(project), ' projesinde '] : []), v(population.person), ' sorumluluğundaki ', `${adjectives.length ? `${adjectives.join(', ')} ` : ''}görevlerin`];
   const described = `${adjectives.length ? `${adjectives.join(', ')} ` : ''}${me ? 'görevlerinizin' : team ? 'görevlerinin' : 'görevlerin'}`;
   return [...(team ? [`${team.of} `] : []), ...(project ? [v(project), ' projesindeki '] : me || team ? [] : ['görebildiğiniz ']), described];
 }
@@ -461,7 +481,13 @@ export function tablePropositions({ group, described, distribution, locale, popu
   // Proje ve kişi satırları (portföy, iş yükü): sütun sütun istatistik yerine analist özeti (kapsama ve öndeki satır).
   const leaf = String(collection ?? '').split('.').at(-1);
   if ((group.tool === 'rota_portfolio_summary' && leaf === 'projects') || (group.tool === 'rota_workload_summary' && leaf === 'people')) {
-    entityLead(described, leaf === 'projects' ? 'project' : 'person', locale, (kind, realized, tone, at) => { column = at; add(kind, realized, tone); }, group.tool !== 'rota_workload_summary' || group.main.entries.some(({ fact }) => fact.field === 'data.populationComplete' && fact.value === true));
+    // Aşama F: proje kapsama cümlesi ("9 projenin 8'inde") hangi değerleri söylediğini bildirir. Düzen, aynı kanıtın
+    // "gecikmiş görevi olan proje" toplamını yalnızca bu değerler ayrıntıdaki toplamlarla BİREBİR eşitse yinelemez.
+    entityLead(described, leaf === 'projects' ? 'project' : 'person', locale, (kind, realized, tone, at, late) => {
+      column = at;
+      add(kind, realized, tone, kind === 'coverage' && leaf === 'projects' && Number.isSafeInteger(late)
+        ? { claims: [{ metric: 'projects.withOverdue', values: { 'projects.withOverdue': late, 'projects.total': described.rows.length } }] } : null);
+    }, group.tool !== 'rota_workload_summary' || group.main.entries.some(({ fact }) => fact.field === 'data.populationComplete' && fact.value === true));
     column = null;
     return out;
   }
@@ -562,7 +588,7 @@ function entityLead(described, noun, locale, add, allowLead = true) {
         ? sentence(en ? [`None of the ${nouns[1]} has overdue tasks.`] : [`${nouns === 'proje' ? 'Projelerin' : 'Kişilerin'} hiçbirinde gecikmiş görev yok.`])
         : sentence(en ? [v(number(late, locale)), ' of the ', v(number(total, locale)), ` ${nouns[1]} have overdue tasks.`]
           : [v(number(total, locale)), ` ${nouns}nin `, v(number(late, locale)), `${locativeOf(late)} gecikmiş görev var.`]);
-    add('coverage', realized, late ? 'warning' : 'success', overdue.index);
+    add('coverage', realized, late ? 'warning' : 'success', overdue.index, late);
   }
   if (!allowLead) return;
   const leads = counts.map((item) => {
@@ -574,7 +600,15 @@ function entityLead(described, noun, locale, add, allowLead = true) {
   const ranked = [...owners.entries()].sort((left, right) => right[1].length - left[1].length);
   if (!ranked.length || (ranked[1] && ranked[1][1].length === ranked[0][1].length)) return;
   const [owner, columns] = ranked[0];
-  const listed = series(columns.map((item) => [lowerLabel(item.header.label, locale), ' (', v(number(item.max, locale)), ')']), locale);
+  const labels = columns.map((item) => lowerLabel(item.header.label, locale));
+  // Aşama F: "**X**, açık görev (**12**) … sayısında en üstte" yerine sayılar sıfat gibi okunur: "**X**, **12** açık ve **5** gecikmiş
+  // görevle projeler arasında ilk sırada." Etiket "görev" adıyla bitmiyorsa eski (etiketli) biçim kalır.
+  if (!en && labels.every((label) => label.endsWith(' görev'))) {
+    const listed = series(columns.map((item, index) => [v(number(item.max, locale)), ` ${labels[index].slice(0, -' görev'.length)}`]), locale);
+    add('leader', sentence([v(owner), ', ', ...listed, ` görevle ${noun === 'project' ? 'projeler' : 'listelenen kişiler'} arasında ilk sırada.`]), 'info', columns[0].index);
+    return;
+  }
+  const listed = series(columns.map((item, index) => [labels[index], ' (', v(number(item.max, locale)), ')']), locale);
   add('leader', sentence(en ? [v(owner), ' leads in ', ...listed, '.'] : [v(owner), ', ', ...listed, ' sayısında en üstte.']), 'info', columns[0].index);
 }
 
@@ -695,6 +729,32 @@ function unassignedSmall(items, rows, assigned) {
 const countOf = (entry) => (entry && Number.isSafeInteger(entry.fact.value) && entry.fact.value >= 0 ? entry.fact.value : null);
 const ofCount = (value, locale) => (locale === 'en' ? number(value, locale) : `${number(value, locale)}${turkishPossessiveSuffix(value)}`);
 
+/** Analist cümlesinin öznesi (kişi, proje ya da kişi karşılaştırmasında "Siz"); öznesiz kanıtta boş metin. */
+function analysisSubject(sample, comparingPeople, locale) {
+  const filters = sample?.filters;
+  const self = comparingPeople && filters?.assignee === 'me' ? (locale === 'en' ? 'You' : 'Siz') : null;
+  return [self, filters?.person || (filters?.personSicil != null && sample?.entity?.type === 'person' ? sample.entity.name : null),
+    filters?.projectId ? filters.project || (sample?.entity?.type === 'project' ? sample.entity.name : null) : null].filter(Boolean).join(' · ');
+}
+
+/**
+ * Aşama F: yanıtın BÜTÜN kanıtı tek özneye (ör. tek proje ya da tek kişi) aitse analist cümlelerinin her birinin başına aynı
+ * "**X**:" etiketi yazılmaz; özne ayrıntı cümlelerinde zaten adlandırılır. Öznesiz kanıt ya da ikinci özne varsa etiket kalır.
+ * Bölüm başına önermeler bağımsız kalır; karar sayfa düzeyindedir.
+ */
+export function singleSubjectPropositions(conclusions, parts, locale = 'tr') {
+  const facts = parts.flatMap((part) => part.presentation?.facts || []);
+  const comparingPeople = facts.some((item) => item.fact?.semantic?.filters?.personSicil != null || item.fact?.semantic?.filters?.person);
+  const subjects = new Set(facts.map((item) => analysisSubject(item.fact?.semantic, comparingPeople, locale)));
+  if (subjects.size !== 1 || !subjects.values().next().value) return conclusions;
+  return conclusions.map((item) => {
+    if (!item.bare) return item;
+    const { refers, ...realized } = item.bare;
+    const fluent = item.proposition.fluent ? Object.freeze({ ...item.proposition.fluent, ...(refers ? { refers } : {}) }) : undefined;
+    return { part: item.part, proposition: { ...item.proposition, ...realized, ...(fluent ? { fluent } : {}) } };
+  });
+}
+
 /**
  * Bölümün doğrulanmış olgularından ANALİST önermeleri: karşıtlık (olumlu tamamlanma + gecikme riski), zamanlama baskısı
  * (açık işlerin gecikmiş payı), yakın termin yoğunluğu, kişiler arasında iş yükü yoğunlaşması ya da dengesi, gecikmelerin
@@ -723,17 +783,18 @@ export function analystPropositions(parts, locale = 'tr') {
     const add = (evidenceId, kind, realized, tone = 'info', fluent = null) => {
       const sample = items.find((item) => item.evidenceId === evidenceId)?.fact.semantic;
       const filters = sample?.filters;
-      const self = comparingPeople && filters?.assignee === 'me' ? (en ? 'You' : 'Siz') : null;
-      const subject = [self, filters?.person || (filters?.personSicil != null && sample?.entity?.type === 'person' ? sample.entity.name : null),
-        filters?.projectId ? filters.project || (sample?.entity?.type === 'project' ? sample.entity.name : null) : null].filter(Boolean).join(' · ');
+      const subject = analysisSubject(sample, comparingPeople, locale);
       if (filters?.personSicil != null && !subject) return;
+      let bare = null;
       if (realized && subject) {
+        // Etiketsiz biçim de saklanır: yanıtın bütün kanıtı tek özneye aitse sayfa etiketi düşürür (singleSubjectPropositions).
+        bare = { markdown: realized.markdown, plain: realized.plain, parts: realized.parts, ...(fluent?.refers ? { refers: fluent.refers } : {}) };
         realized = sentence([v(subject), ': ', ...realized.parts]);
         // Koşullu açıklama başka öznenin anlatımına eklenmez: akıcı bağlar yalnızca AYNI kanıtın (tek özneli nüfus) önermeleri
         // arasında kurulur (§ fluentParagraph). Ek, özneyi taşıyan aynı kanıtın cümlesine eklenir; kısa öneri özneyi taşır.
         if (fluent?.refers) fluent = { ...fluent, refers: { ...fluent.refers, short: [v(subject), ': ', ...fluent.refers.short] } };
       }
-      if (realized) out.push({ part: ordinal, proposition: { kind, tone, evidenceId, ...realized, ...(fluent ? { fluent: Object.freeze(fluent) } : {}) } });
+      if (realized) out.push({ part: ordinal, proposition: { kind, tone, evidenceId, ...realized, ...(fluent ? { fluent: Object.freeze(fluent) } : {}) }, ...(bare ? { subject, bare } : {}) });
     };
     // Genel görünüm: görev analizinin toplamları (aynı kanıt).
     const populations = new Map();
@@ -860,8 +921,8 @@ export function caveatPropositions(parts, locale = 'tr') {
       if (seen.has(item.evidenceId)) continue;
       seen.add(item.evidenceId);
       out.push({ part: part.index + 1, proposition: { kind: 'completeness', tone: 'info', evidenceId: item.evidenceId, ...sentence(assignments ? (en
-        ? ['this task-assignment breakdown does not establish the full roster: members with no matching tasks are unknown, and any unresolved or hidden assignees cannot enter a person ranking. Team balance or an exhaustive workload ranking cannot be established.']
-        : ['bu görev-atama kırılımı kadronun tamamını kanıtlamaz: eşleşen işi olmayan üyelerin tamamı bilinmez; çözümlenemeyen veya gizli atamalar varsa kişi sıralamasına katılamaz. Ekip dengesi veya eksiksiz iş yükü sıralaması kesin olarak söylenemez.']) : en
+        ? ['this breakdown shows only the people you can see who have tasks assigned: members with no tasks are not listed, and hidden or unresolved assignments do not enter the ranking. So team balance or a complete workload ranking cannot be established.']
+        : ['bu kırılım yalnızca görebildiğiniz ve iş atanmış kişileri gösteriyor: işi olmayan üyeler listede yer almaz, görünmeyen ya da çözümlenemeyen atamalar da sıralamaya girmez. Bu yüzden ekip dengesi ya da eksiksiz bir iş yükü sıralaması kesin olarak söylenemez.']) : en
         ? ['this workload view covers only the open work you can see that is attributed to people, so whether the load is balanced or who carries the most cannot be stated with certainty.']
         : ['bu iş yükü görünümü yalnızca görebildiğiniz ve kişilere bağlanabilen açık işleri kapsıyor; bu nedenle iş yükünün dengeli olup olmadığı ya da en çok yükün kimde olduğu kesin olarak söylenemez.']) } });
     }
@@ -979,3 +1040,9 @@ export function fluentParagraph(entries, locale = 'tr', memory = null, emitted =
     return unit.merged && unit.parts ? sentence([...unit.parts, '.']).markdown : unit.proposition.markdown;
   }).join(' ');
 }
+
+/**
+ * Aşama F bulgu motorunun (`analyticalFindings.js`) kullandığı ortak biçim yardımcıları: cümle kurulumu, vurgulu/vurgusuz veri,
+ * sayı, gün ve yüzde biçimi ile Türkçe iyelik eki. Yeni bir biçim kuralı eklenmez; önermelerle aynı yazım kullanılır.
+ */
+export { sentence as factSentence, v as strongFact, t as plainFact, number as formatCount, day as formatFactDay, percent as formatPercent, ofCount as possessiveCount, locativeOf as locativeCountSuffix };

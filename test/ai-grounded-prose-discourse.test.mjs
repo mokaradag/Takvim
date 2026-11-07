@@ -74,14 +74,18 @@ const CORPUS = Object.freeze([
     must: ["Açık **6** görevin **3'ü** (**%50**) gecikmiş durumda; bugün başlayan yedi günlük dönemde de **1** açık görevin termini var", '**Haftalık durum toplantısı**', '**23**'],
     never: [/dengeli/, /durum iyi/], once: '**Haftalık durum toplantısı**' },
   { id: 'gecikmiş ve yaklaşan', turns: [{ text: 'geciken ve bu hafta terminli işlerim neler', plan: analysis({ scope: 'self', focus: ['overdue', 'upcoming'], relativeWindow: 'next_7_days' }) }],
-    must: ['gecikmiş göreviniz yok', '**5 Ekim 2026**'], never: [/\*\*[1-9]\*\* gecikmiş göreviniz var/] },
+    // Aşama F: gecikme bugüne göre ölçülür; "bu hafta" ufku gecikmiş iş okumasını boşaltmaz (eski yanıt 3 gecikmiş iş varken "yok" diyordu).
+    must: ['Şu anda **3** gecikmiş göreviniz var', '**5 Ekim 2026**'], never: [/gecikmiş göreviniz yok/] },
   { id: 'proje durumu', turns: [{ text: 'Radar Modernizasyonu projesini değerlendir', plan: analysis({ scope: 'project', names: ['Radar Modernizasyonu'], focus: ['overview', 'overdue', 'workload'] }) }],
-    must: ["**Radar Modernizasyonu**: Açık **6** görevin **2'si** (**%33**) gecikmiş durumda; bugün başlayan yedi günlük dönemde de **2** açık görevin termini var", '**Ayşe Yılmaz**, açık görev (**4**)'],
-    never: [/Okuma Projesi|Kısmi Proje/], once: '**Haftalık durum toplantısı**' },
+    // Aşama F: tek projeli yanıtta her analist cümlesinin başına aynı "**Radar Modernizasyonu**:" etiketi yazılmaz; proje
+    // ayrıntı cümlelerinde adlandırılır.
+    must: ["Açık **6** görevin **2'si** (**%33**) gecikmiş durumda; bugün başlayan yedi günlük dönemde de **2** açık görevin termini var", '**Ayşe Yılmaz**, **4** açık',
+      '**Radar Modernizasyonu** projesinde'],
+    never: [/Okuma Projesi|Kısmi Proje/, /\*\*Radar Modernizasyonu\*\*: /], once: '**Haftalık durum toplantısı**' },
   { id: 'ekipte yoğunlaşma (kadro eksik)', seed: teamSeed, skipRequired: true, turns: [{ text: 'ekibimde iş kimde yoğunlaşıyor', plan: analysis({ scope: 'team', focus: ['workload', 'overdue'] }) }],
     must: ['kesin olarak söylenemez'], never: [/iş yükü bu kişide yoğunlaşıyor|dengeli dağılmış|sayısında en üstte/] },
   { id: 'proje karşılaştırması', turns: [{ text: 'projelerimi karşılaştır', plan: analysis({ scope: 'projects', focus: ['projects'] }) }],
-    must: ['Listedeki **4** projenin hepsinde gecikmiş görev var', '**Radar Modernizasyonu**, açık görev (**6**)'], never: [/en kötü/] },
+    must: ['Listedeki **4** projenin hepsinde gecikmiş görev var', '**Radar Modernizasyonu**, **6** açık'], never: [/en kötü/] },
   { id: 'birden çok ölçü', turns: [{ text: 'görevlerimin durum ve öncelik dağılımı nasıl', plan: analysis({ scope: 'self', focus: ['status', 'priority'] }) }],
     must: ['Toplam **7** göreviniz var ve bunların büyük bölümü (**%86**) **Yapılacak** durumunda', 'Toplam **6** açık göreviniz var ve bunların büyük bölümü (**%83**) **Orta** öncelikte'] },
   { id: 'neden takibi', turns: [{ text: 'işlerimin genel durumunu değerlendir', plan: analysis({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] }) },
@@ -96,7 +100,7 @@ const CORPUS = Object.freeze([
   { id: 'seyrek liste', turns: [{ text: 'Geciken görevlerimi göster.', plan: OVERDUE }],
     must: ['Şu anda **3** gecikmiş göreviniz var.', 'Gecikmelerin ortalaması **11,3 gün**.'], once: '**Haftalık durum toplantısı**' },
   { id: 'boş sonuç', composed: false, turns: [{ text: 'bugün terminli görevlerim', plan: { intent: 'rota', language: 'tr', request: { operation: 'list', metrics: ['tasks.total', 'task.title'],
-    population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { deadline: 'due_today', assignee: 'me' } } } }], must: ['**0**'] },
+    population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { deadline: 'due_today', assignee: 'me' } } } }], must: ['Bugün terminli açık göreviniz yok'] },
   { id: 'kesinlik çekincesi', seed: teamSeed, turns: [{ text: 'ekibimin iş yükü dengeli mi', plan: analysis({ scope: 'team', focus: ['workload'] }) },
     { text: 'bundan ne kadar eminsin', plan: analysis({ scope: 'previous', act: 'certainty' }) }],
     must: ['kesin olarak söylenemez', 'yalnızca bir kısmını gösteriyor'], never: [/tamamına dayanıyor/] },
@@ -184,7 +188,12 @@ test('gerçek zayıf model düzeni: yorum sözcükleri atılır, karışık böl
   const first = paragraphs.findIndex((paragraph) => paragraph.startsWith("Açık **6** görevin **3'ü**"));
   assert.ok(first >= 0, content);
   assert.match(paragraphs[first], /de \*\*1\*\* açık görevin termini var\. 【R1】$/);
-  assert.equal(paragraphs[first + 1], 'Şu anda **3** gecikmiş göreviniz var. 【R2】');
+  // Aşama F: karışık paragraf bölüm sınırında ayrılır ve bloklar bölümlerine toplanır: genel görünümün göstergesi kendi bölümünde
+  // kalır, gecikmiş liste kendi başlığıyla açılır.
+  const overdue = paragraphs.indexOf('Şu anda **3** gecikmiş göreviniz var. 【R2】');
+  assert.ok(overdue > first, content);
+  assert.match(paragraphs[overdue - 1], /^#### /, content);
+  assert.ok(paragraphs.slice(first + 1, overdue - 1).every((paragraph) => !paragraph.includes('【R2】')), 'R2 bölümü kendi başlığından önce başlamaz');
 });
 
 /** Gerçek Haiku 4.5 düzeni, yeni sözleşmede: model yalnızca yuva yazdı ve aynı bölümü iki paragrafa böldü (öneri ile en uzun gecikme ayrı paragrafta). */

@@ -137,9 +137,13 @@ test("gerçek gecikme lideri dönen satır dışındaysa kesilmiş iş yükü li
   assert.doesNotMatch(renderComposition(sheet, defaultComposition(sheet)).text, /en üstte|görece dengeli|bu kişide yoğunlaşıyor/);
 });
 
-test("yön şeması ve ayrıştırıcı aynı ortak üst sınırı sunar", () => {
+test("yön şeması modele 1-3 yön önerir; ayrıştırıcı fiziksel okuma sınırına sığan dördüncü yönü kabul eder, fazlasını reddeder", () => {
+  // Aşama F: model görünür şema (önek önbelleği ve kanonik planlayıcı kapısı) değişmez; kabul sınırı fiziksel bölüm sınırıdır.
   assert.equal(analysisSchema().properties.focus.maxItems, ANALYSIS_LIMITS.maxFocus);
-  assert.throws(() => parseAnalysis({ scope: 'self', focus: ['overview', 'status', 'priority', 'workload'] }));
+  assert.equal(analysisSchema({ accepted: true }).properties.focus.maxItems, ANALYSIS_LIMITS.maxAcceptedFocus);
+  assert.equal(ANALYSIS_LIMITS.maxAcceptedFocus, ANALYSIS_LIMITS.maxParts);
+  assert.doesNotThrow(() => parseAnalysis({ scope: 'self', focus: ['overview', 'status', 'priority', 'workload'] }));
+  assert.throws(() => parseAnalysis({ scope: 'self', focus: ['overview', 'status', 'priority', 'workload', 'overdue'] }));
 });
 
 test("onarım önerisi karşılaştırma açılımında da nüfus süzgeci ekleyemez veya düşüremez", () => {

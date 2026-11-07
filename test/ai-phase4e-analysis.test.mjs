@@ -199,7 +199,9 @@ test('açılım kabul edilen özetin nüfusunu hiçbir zaman genişletmez: karş
   const priority = expand({ ...people, focus: ['priority'] });
   assert.deepEqual(priority.map((item) => [item.population.groupBy, item.entities.map((entity) => entity.text)]), [['priority', ['Ayşe Yılmaz']], ['priority', ['Zeynep Kaya']]],
     'dağılım yönü her kayıt için aynı gruplamadır');
-  assert.deepEqual(reject({ ...people, focus: ['overview', 'priority', 'critical'] }), ['$.analysis.focus:requestBudget'], 'fazla fiziksel istek kısmi başarı değildir');
+  // Aşama F: fiziksel okuma üst sınırı (4) bildirilen yönlere de açıktır; sığan karşılaştırma bütünüyle okunur, aşan reddedilir.
+  assert.equal(expand({ ...people, focus: ['overview', 'priority', 'critical'] }).length, 4, 'dört okumalı karşılaştırma bütünüyle kabul edilir');
+  assert.deepEqual(reject({ ...people, focus: ['priority', 'deadlines', 'critical'] }), ['$.analysis.focus:requestBudget', '$.analysis.focus:narrowable'], 'fazla fiziksel istek kısmi başarı değildir');
   // Daraltılmış kapsamda portföy özeti okunmaz (aracın proje seçicisi yoktur): yön daraltılmış görev nüfusundan okunur.
   const within = expand({ scope: 'all', within: 'Radar Modernizasyonu', focus: ['projects', 'overview'] });
   assert.ok(within.every((item) => item.population.tool !== 'rota_portfolio_summary' && item.entities?.some((entity) => entity.text === 'Radar Modernizasyonu')), JSON.stringify(within));
@@ -260,10 +262,13 @@ test('bütçe aşılırsa hiçbir yön sessizce düşmez; geçmiş ufuk yaklaşa
   const week = { dateFrom: '2026-10-05', dateTo: '2026-10-11' };
   const focus = (raw, today = '2026-09-30') => effectiveFocus(parseAnalysis(raw), today);
   for (const raw of [
-    { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming'], ...week },
+    // Aşama F: fiziksel sınıra (4) sığan dört yön kabul edilir; beşinci yön şema sınırını aşar.
+    { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming', 'priority'], ...week },
     // Kayıt başına dağılım yönleri (2 proje × 3 yön) okuma bölümü sınırını aşar: yön sessizce düşmez, plan reddedilir.
     { scope: 'project', names: ['Radar', 'Okuma'], focus: ['priority', 'deadlines', 'schedule'] }
-  ]) assert.throws(() => expandAnalysis(parseAnalysis(raw), { today: '2026-09-30' }), (error) => error.details.includes(raw.focus.length > 3 ? '$.analysis.focus:maxItems' : '$.analysis.focus:requestBudget'));
+  ]) assert.throws(() => expandAnalysis(parseAnalysis(raw), { today: '2026-09-30' }), (error) => error.details.includes(raw.focus.length > 4 ? '$.analysis.focus:maxItems' : '$.analysis.focus:requestBudget'));
+  assert.equal(expandAnalysis(parseAnalysis({ scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming'], ...week }), { today: '2026-09-30' }).length, 4,
+    'dört yönün her biri okunur; hiçbiri sessizce düşmez');
   // Sunucunun zorunlu eklediği okuma (portföyde projelere göre satırlar, ufuk yönü) modelin üç yönlük bütçesinden düşmez.
   for (const raw of [{ scope: 'projects', focus: ['overview', 'overdue', 'upcoming'] }, { scope: 'team', focus: ['overview', 'workload', 'overdue'], ...week }]) {
     assert.equal(expandAnalysis(parseAnalysis(raw), { today: '2026-09-30' }).length, 4, JSON.stringify(raw));
@@ -637,7 +642,8 @@ test('paragrafa yazılan D# sunucu ayrıntısını paragrafın ardına koyar; b�
   const content = accepted.result.answer.content;
   const paragraph = content.indexOf('Açık **2** görevin');
   const detail = content.indexOf('Ekibinizde toplam **2** görev bulunuyor');
-  assert.ok(paragraph === 0 && detail > paragraph && detail < content.indexOf('```rota-chart'), `ayrıntı paragrafın ardında, grafikten önce:\n${content}`);
+  // Aşama F: bölümlü özette ilk paragraftan önce yalnızca sunucunun bölüm başlığı gelebilir.
+  assert.ok(paragraph >= 0 && /^(Aşağıda [^\n]+\n\n)?(#### [^\n]+\n\n)?$/.test(content.slice(0, paragraph)) && detail > paragraph && detail < content.indexOf('```rota-chart'), `ayrıntı paragrafın ardında, grafikten önce:\n${content}`);
   assert.equal(content.split('Ekibinizde toplam').length - 1, 1, 'ayrıntı bir kez');
   // Başka bölümün ayrıntısı paragrafa karışamaz; aynı ayrıntı iki kez kullanılamaz.
   const mixed = await sub('bölüm karışımı', (view) => ({ blocks: [{ type: 'say', items: [...ids(view, 'propositions', 1), ids(view, 'details', 2)[0]] }] }));
@@ -652,10 +658,14 @@ test('yanıt düzyazısı akıcıdır: aynı nüfusun önermeleri bağlanır, ay
     const { ask } = phase4eConversation(t, { composition: false });
     const { answer } = await ask({ text: 'bu hafta işlerim açısından durumumu değerlendir',
       plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'overdue', 'upcoming'], dateFrom: '2026-09-28', dateTo: '2026-10-04' } } });
-    const paragraphs = answer.content.split('\n\n');
+    // Aşama F: üç bölümlü analitik özet bölüm başlıklıdır; anlatım sırası başlıklar dışında denetlenir.
+    assert.ok((answer.content.match(/^#### /gm) || []).length >= 2, answer.content);
+    // Bulgu girişi kurulamayan özet çerçeve cümlesiyle açılır ve bir sonraki adım önerisiyle kapanır (olgu taşımazlar).
+    assert.match(answer.content, /^Aşağıda kendi işleriniz genel durum, gecikmeler ve yaklaşan teslimatlar açısından özetleniyor\./);
+    const paragraphs = answer.content.split('\n\n').filter((paragraph) => !paragraph.startsWith('#### ') && !paragraph.startsWith('Aşağıda '));
     // Gecikme payından sonra yakın termin aynı cümlede; genel görünümün ayrıntısı hemen ardından (yanıtın sonunda değil).
     assert.equal(paragraphs[0], "Açık **1** görevin **1'i** (**%100**) gecikmiş durumda. 【R1】");
-    assert.equal(paragraphs[1], "Sorumlusu olduğunuz toplam **1** görev bulunuyor (ölçüt: Tarih alanı: Termin; İlk tarih: 28 Eylül 2026; Son tarih: 4 Ekim 2026). Bunların **0**'ı tamamlanmış ve **0**'ı yedi gün içinde terminli; tamamlanma oranı **%0**. 【R1】",
+    assert.equal(paragraphs[1], "Sorumlusu olduğunuz toplam **1** görev bulunuyor (ölçüt: Termin: 28 Eylül 2026 – 4 Ekim 2026). Bunların hiçbiri tamamlanmış ya da yedi gün içinde terminli değil. 【R1】",
       'analist cümlesinin söylediği açık/gecikmiş sayısı ayrıntıda yinelenmez; "Sorumlu: Ben" öznede');
     // Gecikmiş bölüm yalnızca dönem içindeki görevi gösterir; eski toplamlar ve ortalamalar taşınmaz.
     assert.equal(paragraphs[2], "Şu anda **28 Eylül 2026** ile **4 Ekim 2026** arasında terminli **1** gecikmiş göreviniz var. **Kısmi Proje** projesindeki **Kısmi kendi görevim** görevinin termini **29 Eylül 2026**. Görev **1** gündür gecikmiş. 【R2】");
@@ -666,8 +676,12 @@ test('yanıt düzyazısı akıcıdır: aynı nüfusun önermeleri bağlanır, ay
   await t.test('portföy karşılaştırması', async (t) => {
     const { ask } = phase4eConversation(t, { composition: false });
     const { answer } = await ask({ text: 'projelerimi karşılaştır', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'projects', focus: ['projects'] } } });
+    // Aşama F: yanıt, sunucunun bölümler arası yönetim sonucuyla açılır; sayıları yinelemez (gövde ve tablo taşır).
+    const [lead, body] = answer.content.split('\n\n');
+    assert.match(lead, /^Mevcut göstergelere göre yönetim dikkatini en çok \*\*Radar Modernizasyonu\*\* projesi gerektiriyor: gecikmiş, önümüzdeki yedi günde terminli ve açık iş sayılarının üçünde de projeler arasında ilk sırada\. 【R1】$/);
+    assert.doesNotMatch(lead, /\*\*\d/, 'giriş gövdenin sayılarını yinelemez');
     // Tablo tek başına kalmaz: kapsama ve öndeki proje (sütun sütun istatistik listesi değil).
-    assert.match(answer.content, /^Listedeki \*\*4\*\* projenin hepsinde gecikmiş görev var\. \*\*Radar Modernizasyonu\*\*, açık görev \(\*\*6\*\*\), gecikmiş görev \(\*\*2\*\*\) ve yedi gün içinde terminli görev \(\*\*2\*\*\) sayısında en üstte\./);
+    assert.match(body, /^Listedeki \*\*4\*\* projenin hepsinde gecikmiş görev var\. \*\*Radar Modernizasyonu\*\*, \*\*6\*\* açık, \*\*2\*\* gecikmiş ve \*\*2\*\* yedi gün içinde terminli görevle projeler arasında ilk sırada\. 【R1】/);
     assert.doesNotMatch(answer.content, /ortalaması|sütununda en/);
   });
   // Bağlaç yalnızca aynı kanıtın önermeleri arasındadır; başka kanıtın önermesi kendi cümlesiyle kalır.
@@ -890,12 +904,14 @@ test('analitik özet açılımı ve analist önermeleri kullanıcı metnini yoru
 test('karşılaştırma bütçesi tüm fiziksel okumaları kabul eder veya SQL öncesinde tüm planı reddeder', async (t) => {
   const people = { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'] };
   const window = { dateFrom: '2026-10-01', dateTo: '2026-10-31' };
-  for (const focus of [['priority', 'schedule'], ['schedule', 'priority']]) {
+  // Aşama F: iki kişi × iki dağılım yönü (4 okuma) fiziksel sınıra sığar; üçüncü dağılım yönü (6 okuma) sığmaz.
+  for (const focus of [['priority', 'schedule', 'deadlines'], ['schedule', 'deadlines', 'priority']]) {
     const rejected = { ...people, focus, ...window };
     assert.throws(() => expandAnalysis(parseAnalysis(rejected), { today: '2026-09-30' }), (error) => error.details.includes('$.analysis.focus:requestBudget'));
   }
+  assert.equal(expandAnalysis(parseAnalysis({ ...people, focus: ['priority', 'schedule'], ...window }), { today: '2026-09-30' }).length, 4);
   await t.test('reddedilen plan kısmi okuma yapmaz', async (t) => {
-    const plans = [{ intent: 'rota', language: 'tr', analysis: { ...people, focus: ['priority', 'schedule'], ...window } },
+    const plans = [{ intent: 'rota', language: 'tr', analysis: { ...people, focus: ['priority', 'schedule', 'deadlines'], ...window } },
       { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
     const { ask } = phase4eConversation(t, { planner: () => planCall(plans.shift()) });
     const result = await ask({ text: 'Ayşe Yılmaz ve Zeynep Kaya için ekim önceliklerini ve aylık terminlerini karşılaştır' });

@@ -23,6 +23,7 @@ yazamaz. Olağan görev ve anlık görüntü akışı AI sağlayıcısını bekl
 | [§18](#18-rota-ai-akışlı-sohbet-aşama-2) | Akış, konuşma kalıcılığı, iptal/yeniden deneme, sunum ve tek süreçli dağıtım (Aşama 2) |
 | [AI Alan Araçları](YAPAY-ZEKA-ALAN-ARACLARI.md) | Yetkili veri, 19 araç, korunan metin seçimi, kanıt ve atıf; bu belgedeki [§19](#19-rota-ai-kanıta-dayalı-alan-araçları-aşama-3) özet niteliğindedir |
 | [AI Anlamsal Katmanı](YAPAY-ZEKA-ANLAMSAL-KATMAN.md) | Gömme/yeniden sıralama, doğrulanmış planlama, açıklama ve takip, onarım, değerlendirme ve gerçek model nitelendirme kapıları; [§20](#20-rota-ai-anlamsal-katman-aşama-4) özettir |
+| [Bilgin Yönetim Analizi Yol Haritası](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md) | Aşama 5'ten önce yürütülen harfli analitik ve raporlama programı (Aşama F–K): kapsam, kabul kapıları, oturum devri; 40 soruluk kabul matrisi [ayrı belgededir](BILGIN-ANALIZ-KABUL-MATRISI.md) |
 
 Aşağıdaki aşama etiketleri teknik sözleşmelerin gelişimini ve tarihli kabul
 kayıtlarını ayırır. Uygulanmış kod veya belirlenimci test başarısı, gerçek

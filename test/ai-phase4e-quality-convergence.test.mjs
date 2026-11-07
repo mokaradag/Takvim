@@ -330,7 +330,8 @@ test('fazla yön (şema sınırı) onarımda yalnızca modelin kendi yönlerinin
     ['yeni yön eklenemez', ['overview', 'workload'], false],
     ['kapsam değişemez', null, false]
   ]) await t.test(`davranış: ${name}`, async (t) => {
-    const first = { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming'] } };
+    // Aşama F: dört yön doğrudan kabul edilir; şema sınırını aşan beş yön daraltma onarımına gider.
+    const first = { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming', 'priority'] } };
     const second = repaired ? { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: repaired } } : { intent: 'rota', language: 'tr', analysis: { scope: 'all', focus: ['overview'] } };
     const plans = [first, second, { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
     const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plans.shift() }] }),
@@ -455,7 +456,9 @@ test('adı verilen grafik türü gerektirdiği okumayı ekler (yığılmış →
   assert.ok(parts.some((part) => part.population.groupBy === 'project' && part.metrics.includes('tasks.open') && part.metrics.includes('tasks.done')));
 });
 
-test('Ayrıntılı bölümlüdür: sayfa ana hat taşır, her bölüm sunucu başlığıyla açılır; Dengeli bütünleşik ve başlıksızdır', async (t) => {
+// Aşama F: Dengeli ayrıntıda yalnızca üç ya da daha çok bölümlü ANALİTİK özet başlıklıdır (kullanıcı isteği: yapılandırılmış
+// insan dili); iki bölümlü ve analitik olmayan Dengeli yanıt bütünleşik kalır. Ana hat (sections) yalnızca Ayrıntılı sayfadadır.
+test('Ayrıntılı bölümlüdür: sayfa ana hat taşır, her bölüm sunucu başlığıyla açılır; Dengeli üç bölümlü özet de başlıklıdır', async (t) => {
   const plan = { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'overdue', 'upcoming'] } };
   const results = {};
   for (const detail of ['balanced', 'detailed']) await t.test(`yanıt ayrıntısı: ${detail}`, async (t) => {
@@ -467,7 +470,7 @@ test('Ayrıntılı bölümlüdür: sayfa ana hat taşır, her bölüm sunucu ba�
   assert.equal(results.balanced.page.sections, undefined);
   assert.ok(results.detailed.page.sections.length >= 3, 'ana hat her bölümü sıralar');
   const headings = (text) => (text.match(/^#### /gm) || []).length;
-  assert.equal(headings(results.balanced.content), 0, 'Dengeli başlıksız');
+  assert.ok(headings(results.balanced.content) >= 3, `Dengeli üç bölümlü özet başlıklı:\n${results.balanced.content}`);
   assert.ok(headings(results.detailed.content) >= 3, `Ayrıntılı bölüm başlıklı:\n${results.detailed.content}`);
   assert.ok(results.detailed.page.propositions.length > results.balanced.page.propositions.length);
 });
@@ -519,7 +522,7 @@ test('yığılmış grafik isteği: aday sınırı tek sütunlu çubuklarla dols
   assert.match(result.answer.content, /```rota-chart/u);
 });
 
-test('Ayrıntılı düzyazıda başlığı sunucu koyar: modelin yanlış başlık kimliği yanıtı düşürmez; iç içe bölümlerde başlık konmaz', async (t) => {
+test('Ayrıntılı düzyazıda başlığı sunucu koyar: modelin yanlış başlık kimliği yanıtı düşürmez; iç içe bölümler bölümlerine toplanır', async (t) => {
   const plan = { intent: 'rota', language: 'tr', analysis: { scope: 'projects', focus: ['overview', 'overdue'] } };
   const headingsOf = (content) => (content.match(/^#### .+$/gm) || []);
   // Zayıf modelin gerçek hatası: her bölümün önüne bir SONRAKİ bölümün başlık kimliği yazılmış.
@@ -548,7 +551,8 @@ test('Ayrıntılı düzyazıda başlığı sunucu koyar: modelin yanlış başl�
     assert.ok(headings.length >= 2, result.answer.content);
     // Başlıklar ana hattın bölüm sırasıyladır (modelin yazdığı kayık kimlik sırasıyla değil).
     const expected = page.sections.filter((section) => section.title).map((section) => `#### ${page.titles.find((title) => title.id === section.title).text}`);
-    assert.deepEqual(headings, expected, 'başlıklar bölüm sırasıyla ve kendi bölümünün önünde');
+    // Aşama F: bölümlerden sonra sunucunun öncelik listesi kendi başlığıyla gelir.
+    assert.deepEqual(headings.filter((heading) => heading !== '#### Öncelikli konular'), expected, 'başlıklar bölüm sırasıyla ve kendi bölümünün önünde');
   });
   // Bölümler iç içe yazılırsa (bir bölümün tablosu başka bölümün paragrafından sonra) başlık hiç konmaz.
   await t.test('iç içe bölümler', async (t) => {
@@ -556,9 +560,20 @@ test('Ayrıntılı düzyazıda başlığı sunucu koyar: modelin yanlış başl�
       const layout = proseLayout(view);
       return { blocks: [...layout.blocks.filter((block) => block.type === 'say'), ...layout.blocks.filter((block) => block.type === 'rows')] };
     };
-    const { ask } = phase4eConversation(t, { compose: () => composer(interleaved) });
+    let page = null;
+    const { ask } = phase4eConversation(t, { compose: () => composer((view) => { page = view; return interleaved(view); }) });
     const mixed = await ask({ text: 'projelerimi değerlendir', plan }, { detail: 'detailed' });
     assert.equal(mixed.answer.finishReason, 'stop');
-    assert.equal(headingsOf(mixed.answer.content).length, 0, mixed.answer.content);
+    // Aşama F: iç içe dizilen bölümler sunucuda bölümlerine toplanır (bölüm sırası ilk görünüş, bölüm içi sıra modelin) ve
+    // her bölüm kendi başlığıyla açılır; tablo artık başka bölümün başlığı altına düşmez.
+    const content = mixed.answer.content;
+    const headings = headingsOf(content).filter((heading) => heading !== '#### Öncelikli konular');
+    const expected = page.sections.filter((section) => section.title).map((section) => `#### ${page.titles.find((title) => title.id === section.title).text}`);
+    assert.deepEqual(headings, expected, content);
+    for (const [index, heading] of headings.entries()) {
+      const start = content.indexOf(heading);
+      const end = index + 1 < headings.length ? content.indexOf(headings[index + 1]) : content.length;
+      assert.ok(content.slice(start + heading.length, end).trim().length > 0, `boş bölüm: ${heading}`);
+    }
   });
 });

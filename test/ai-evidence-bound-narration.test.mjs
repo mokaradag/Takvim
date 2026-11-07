@@ -319,12 +319,14 @@ test('Örnek A çizimi: model yalnızca seçer; cümle, değer, yönlendirme, ö
   const validated = validateComposition(composition, { blocks: [{ type: 'say', items: ['P1', 'P2', 'P3', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }] });
   assert.equal(validated.ok, true);
   const rendered = renderComposition(composition, validated);
-  assert.ok(rendered.text.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz. 【R1】\n\n_Ölçüt: Termin: Gecikmiş; Sorumlu: Ben_\n\n| Görev |'), rendered.text);
+  assert.ok(rendered.text.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz. 【R1】\n\n| Görev |'), rendered.text);
+  // Doğal sayım cümlesi süzgeçleri söylediği için tablonun ölçüt satırı yinelenmez.
+  assert.equal(rendered.text.includes('_Ölçüt:'), false, rendered.text);
   assert.equal(rendered.text.includes('Eşleşen'), false, 'söylenen sayım önermesi ayrıntısının yerine geçer');
   assert.deepEqual([rendered.said, rendered.tables, rendered.citedIds], [3, 1, ['R1']]);
   // Önerme söylenmezse sunucunun ayrıntısı eksiksiz eklenir.
   const plain = renderComposition(composition, validateComposition(composition, { blocks: [{ type: 'say', items: ['P2', 'P3', 'P4'] }, { type: 'rows', source: 'T1', style: 'list' }] }));
-  assert.equal((plain.text.match(/Eşleşen \*\*3\*\* görev bulundu/g) || []).length, 1);
+  assert.equal((plain.text.match(/Şu anda \*\*3\*\* gecikmiş göreviniz var/g) || []).length, 1);
 });
 
 test('sıralamanın başı nüfusun tamamı değildir: sayım kalır, en büyük/en küçük önerilmez', async (t) => {
@@ -351,8 +353,11 @@ test('Örnek C çizimi: dağılım önermeleri, grafik yönlendirmesi ve halka g
     { type: 'rows', source: 'T1', style: 'table' }] });
   assert.equal(validated.ok, true);
   const rendered = renderComposition(composition, validated);
-  assert.ok(rendered.text.startsWith("#### Görevlerinizin durum dağılımı\n\nGörevlerinizin büyük bölümü (**%86**) **Yapılacak** durumunda. Görevlerinizin **%14**'ü tamamlandı; **6** görev hâlâ açık. Durumlara göre: Yapılacak **6**, Tamamlandı **1**. Dağılımı aşağıdaki grafikte görebilirsiniz. 【R1】\n\n```rota-chart"), rendered.text);
-  assert.deepEqual([rendered.chart, rendered.charts, rendered.said], ['donut', 1, 3]);
+  assert.ok(rendered.text.startsWith("#### Görevlerinizin durum dağılımı\n\nGörevlerinizin büyük bölümü (**%86**) **Yapılacak** durumunda. Görevlerinizin **%14**'ü tamamlandı; **6** görev hâlâ açık. Dağılımı aşağıdaki grafikte görebilirsiniz. 【R1】\n\n```rota-chart"), rendered.text);
+  // Aşama F: tablosu çizilen dağılımın döküm cümlesi ("Durumlara göre: …") aynı sayıları yinelediği için söylenmez.
+  assert.equal(rendered.text.includes('Durumlara göre:'), false, rendered.text);
+  // Döküm önermesi tablo çizildiği için söylenmez (2 önerme).
+  assert.deepEqual([rendered.chart, rendered.charts, rendered.said], ['donut', 1, 2]);
 });
 
 /* ── Uçtan uca: zayıf model, anlatım devri ve temiz yeniden planlama ───── */
@@ -495,12 +500,12 @@ test('anlatım devri bütçe ve kip kapısından geçer; Derin kipte ya da süre
   // Derin oturumu açılamazsa doğrulanmış belirlenimci anlatım teslim edilir.
   const fallback = await allowed.result.fallback(async () => {});
   assert.equal(fallback.outcome, 'grounded');
-  assert.match(fallback.text, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.match(fallback.text, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
   for (const options of [{ remainingMs: NARRATION_ESCALATION.minRemainingMs - 1000, escalation: true }, { remainingMs: 120000, escalation: false }]) {
     const { result, rounds } = await run(options);
     assert.equal(result.outcome, 'grounded', JSON.stringify(options));
     assert.equal(rounds.length, 2);
-    assert.match(result.text, /^Eşleşen \*\*3\*\* görev bulundu/);
+    assert.match(result.text, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
   }
   assert.ok(stack);
 });
@@ -1027,7 +1032,7 @@ test('Derin anlatımın ortak süresi dolsa da doğrulanmış belirlenimci yanı
   const before = authorizations;
   const delivered = await escalated.fallback(async () => {}, new AbortController().signal);
   assert.equal(delivered.outcome, 'grounded');
-  assert.match(delivered.text, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.match(delivered.text, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
   assert.ok(authorizations > before, 'teslimden önce güncel yetki yeniden doğrulanır');
   // İsteğin kendi iptali yine geçerlidir: süre uzatılmaz, iptal teslimi durdurur.
   const cancelled = new AbortController();

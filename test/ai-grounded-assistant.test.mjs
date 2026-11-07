@@ -211,7 +211,7 @@ test('atıflı yanıt: araç sonucu kanıt olur, yanıt doğrulanıp tek parça 
   const turnId = randomUUID();
   const response = await sendTurn({ turnId, message: `Radar projesinde kaç görev var? ${PROJECTS.FULL}` });
   assert.equal(response.status, 200);
-  const expected = '**Radar Modernizasyonu** projesinde eşleşen **8** görev bulundu. 【R1】';
+  const expected = '**Radar Modernizasyonu** projesinde **8** görev var. 【R1】';
 
   // Sağlayıcı: araç kataloğu, kipin araç profili, sunucuya ait yönerge. Bildirilen
   // sayıyı sunucu kanıttan seçer: ayrı bir model seçim turu yoktur.
@@ -361,7 +361,7 @@ test('kısmi kapsam: sunucu kapsam notunu model metninden bağımsız olarak her
   stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.PARTIAL }));
   const response = await sendTurn({ turnId: randomUUID(), message: `Kısmi projede kaç görev var? ${PROJECTS.PARTIAL}` });
   const done = doneOf(response);
-  assert.equal(done.assistantMessage.content, `**Kısmi Proje** projesinde eşleşen **2** görev bulundu. 【R1】\n\n${SCOPE_DISCLOSURE_TEXT}`);
+  assert.equal(done.assistantMessage.content, `**Kısmi Proje** projesinde **2** görev var. 【R1】\n\n${SCOPE_DISCLOSURE_TEXT}`);
   // `complete` sayfalama bütünlüğüdür (yetkili kapsamda başka sayfa yok); kısmilik `partial` ile taşınır.
   assert.equal(done.assistantMessage.evidence[0].partial, true);
   assert.equal(done.assistantMessage.evidence[0].complete, true);
@@ -375,7 +375,7 @@ test('kısmi kapsam: sunucu kapsam notunu model metninden bağımsız olarak her
 
   stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.PARTIAL }));
   const explicit = await sendTurn({ turnId: randomUUID(), message: `Kısmi projede kaç görev var? ${PROJECTS.PARTIAL}` });
-  assert.equal(doneOf(explicit).assistantMessage.content, `**Kısmi Proje** projesinde eşleşen **2** görev bulundu. 【R1】\n\n${SCOPE_DISCLOSURE_TEXT}`);
+  assert.equal(doneOf(explicit).assistantMessage.content, `**Kısmi Proje** projesinde **2** görev var. 【R1】\n\n${SCOPE_DISCLOSURE_TEXT}`);
 });
 
 test('genel sohbeti yalnızca kullanıcı seçebilir; veri kipinde kanıt uydurulamaz', async (t) => {
@@ -424,7 +424,7 @@ test('genel sohbete düşüş önceki kanıta dayalı Rota yanıtını model ba�
 
   const fallback = stack.provider.calls.at(-1);
   assert.equal(fallback.kind, 'stream');
-  assert.equal(fallback.messages.some((message) => String(message.content).includes('eşleşen **8** görev')), false);
+  assert.equal(fallback.messages.some((message) => String(message.content).includes('projesinde **8** görev var')), false);
   assert.equal(fallback.messages.some((message) => String(message.content).includes('Önceki Rota verisi yanıtı güncel kanıt olmadığı için')), true);
 });
 
@@ -549,7 +549,7 @@ test('yalnızca atfedilen kanıtlar kaydedilir; kanıt kimlikleri çağrı sıra
   );
   const response = await sendTurn({ turnId: randomUUID(), message: `Radar Modernizasyonu görevleri ${PROJECTS.FULL}` });
   const done = doneOf(response);
-  assert.equal(done.assistantMessage.content, '**Radar Modernizasyonu** projesinde eşleşen **8** görev bulundu. 【R2】');
+  assert.equal(done.assistantMessage.content, '**Radar Modernizasyonu** projesinde **8** görev var. 【R2】');
   assert.deepEqual(done.assistantMessage.evidence.map((item) => item.id), ['R2']);
   assert.deepEqual(stack.db.aiMessageEvidence.map((row) => [row.Ordinal, row.ToolName]), [[2, 'rota_task_search']]);
 });
@@ -778,7 +778,7 @@ test("İngilizce kanıtlı tur İngilizce kapsam ve hata açıklaması alır", a
   stack.provider.enqueue(...searchThenCite({ projectId: PROJECTS.PARTIAL }, { language: 'en' }));
   const response = await sendTurn({ turnId: randomUUID(), message: `How many tasks are in my partial project? ${PROJECTS.PARTIAL}` });
   const answer = doneOf(response).assistantMessage.content;
-  assert.match(answer, /\*\*2\*\* matching tasks were found in the \*\*Kısmi Proje\*\* project/);
+  assert.match(answer, /There are \*\*2\*\* tasks in the \*\*Kısmi Proje\*\* project/);
   assert.match(answer, /Note: This answer covers only records/);
   assert.doesNotMatch(answer, /yalnızca|doğrulanamadı/);
   // Dil, sunucunun sözcük listesiyle değil modelin bildirimiyle seçilir.

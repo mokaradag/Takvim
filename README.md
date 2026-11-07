@@ -223,6 +223,7 @@ Türkçe ASCII düzenini, teknik tanımlayıcılar özgün yazımını korur.
 | AI platformu, anahtarlar ve konuşmalar | [Yapay Zekâ Platformu](docs/YAPAY-ZEKA-PLATFORMU.md) |
 | AI veri araçları ve kanıt | [AI Alan Araçları](docs/YAPAY-ZEKA-ALAN-ARACLARI.md) |
 | AI planlama, anlamsal erişim ve nitelendirme | [AI Anlamsal Katmanı](docs/YAPAY-ZEKA-ANLAMSAL-KATMAN.md) |
+| Bilgin yönetim analizi yol haritası (Aşama F–K) | [Yol Haritası](docs/BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md) · [Kabul Matrisi](docs/BILGIN-ANALIZ-KABUL-MATRISI.md) |
 | Kullanım kipleri ve arayüz | [Temel Kip ve Arayüz](docs/TEMEL-KIP-VE-ARAYUZ.md) · [Biçimlendirme Mimarisi](docs/ARAYUZ-BICIMLENDIRME-MIMARISI.md) |
 | SSO ve oturum açılışı | [Keycloak SSO](docs/KEYCLOAK-SSO.md) · [Otomatik Oturum Önyüklemesi](docs/OTOMATIK-KURUMSAL-OTURUM-ONYUKLEMESI.md) |
 | Ters vekil ve üretim yolu | [NGINX Dağıtımı](docs/NGINX-ROTA-ON-EKI.md) |

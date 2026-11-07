@@ -588,8 +588,10 @@ export function recordEmptyCompletion({ profile, model = null, diagnostics = {} 
     code: 'AI_EMPTY_COMPLETION',
     message: 'Model görünür bir yanıt üretmeden durdu.',
     durationMs: millis(diagnostics.providerMs),
+    // Aşama F: sağlayıcının bildirdiği çıktı belirteci sayısı (içeriksiz). "out 0 tok" modelin hemen durduğunu, "out N tok" ise
+    // modelin belirteç üretip ağ geçidinin görünür metin ya da araç çağrısı teslim etmediğini (ör. araç ayrıştırıcısı kaybı) ayırır.
     summary: `AI WARN empty completion | ${isKnownAiProfile(profile) ? profile : '-'} ${safeModel(model) || '-'} | finish ${safeFinishReason(diagnostics.finishReason) || '-'}`
-      + ` | ${seconds(millis(diagnostics.providerMs))}${diagnostics.reasoningReceived === true ? ' | reasoning only' : ''}`,
+      + ` | out ${safeCount(diagnostics.usage?.completion) ?? '?'} tok | ${seconds(millis(diagnostics.providerMs))}${diagnostics.reasoningReceived === true ? ' | reasoning only' : ''}`,
     context: {
       profile: isKnownAiProfile(profile) ? profile : null,
       model: safeModel(model),
@@ -784,6 +786,8 @@ function presentationSummary(value) {
     tables: value.mode === 'composed' ? safeCount(value.tables) ?? 0 : 0,
     notes: value.mode === 'composed' ? safeCount(value.notes) ?? 0 : 0,
     titled: value.mode === 'composed' && value.titled === true,
+    // Aşama F: sunucunun bölümler arası bulgu sayısı (giriş/sonuç anlatımı; içerik değil yalnızca sayı).
+    ...(value.mode === 'composed' && safeCount(value.findings) > 0 ? { findings: value.findings } : {}),
     chart: CHART_TYPES.has(value.chart) ? value.chart : null,
     charts: value.mode === 'composed' ? safeCount(value.charts) ?? 0 : 0,
     ms: millis(value.ms),
@@ -823,7 +827,7 @@ export function groundedTurnSummary(context, durationMs) {
   const presentation = context.presentation;
   const narration = !presentation ? '4D -'
     : presentation.mode === 'composed'
-      ? `4D composed${presentation.rejected ? ` after ${presentation.rejected}` : ''} (${presentation.titled ? 'title, ' : ''}say ${presentation.said}, table ${presentation.tables}${presentation.notes ? `, note ${presentation.notes}` : ''}`
+      ? `4D composed${presentation.rejected ? ` after ${presentation.rejected}` : ''} (${presentation.titled ? 'title, ' : ''}say ${presentation.said}, table ${presentation.tables}${presentation.notes ? `, note ${presentation.notes}` : ''}${presentation.findings ? `, findings ${presentation.findings}` : ''}`
         + `${presentation.chart ? `, chart ${presentation.chart}` : ''}${presentation.ms != null ? `, ${seconds(presentation.ms)}` : ''})`
       : presentation.mode === 'narrative' && presentation.reason === 'NO_CHOICE' ? '4D narrative (no choice)'
         : `4D ${presentation.mode === 'narrative' ? 'fallback narrative' : presentation.mode} (${[presentation.reason, presentation.issue].filter(Boolean).join(': ') || '-'})`;

@@ -717,13 +717,16 @@ function pinAnalysisRepair(turn, plan, details) {
   for (const detail of details) {
     const [path, reason] = String(detail).split(':');
     if (['$.language', '$.chart', '$.table'].includes(path)) presentationPaths.add(path.slice(2));
-    if (path.startsWith('$.analysis.') && !['unsupported', 'requestBudget', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
+    if (path.startsWith('$.analysis.') && !['unsupported', 'requestBudget', 'narrowable', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
+    // Aşama F: göreli pencere ile tarihlerin çakışması ancak ikisinden biri kaldırılarak düzeltilir: üç alan da onarımda değişebilir.
+    if (path === '$.analysis.relativeWindow' && reason === 'conflict') for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) paths.add(key);
   }
   const raw = Object.fromEntries(Object.entries(normalizedBrief(existing?.raw || plan.analysis)).filter(([key]) => Object.hasOwn(analysisSchema().properties, key)));
   // Şemanın üst sınırını aşan yön listesi (modelin kendi fazladan yönleri) onarımda yalnızca KENDİ yönlerinin sıralı bir alt
-  // kümesine daraltılabilir: yeni yön eklenemez, kapsam/ad/ufuk değişmez. İstek bütçesi aşımı (karşılaştırma) daraltılamaz.
-  const narrow = existing ? existing.narrow : details.some((detail) => String(detail) === '$.analysis.focus:maxItems')
-    && Array.isArray(raw.focus) && raw.focus.length > ANALYSIS_LIMITS.maxFocus;
+  // kümesine daraltılabilir: yeni yön eklenemez, kapsam/ad/ufuk değişmez. Aşama F: okuma bütçesi aşımı (`narrowable`) da aynı
+  // daraltmayla onarılır; karşılaştırmada her özne aynı yönlerle okunur (özne düşmez, yarım karşılaştırma okunmaz).
+  const narrow = existing ? existing.narrow : Array.isArray(raw.focus) && (details.some((detail) => String(detail) === '$.analysis.focus:maxItems')
+    && raw.focus.length > ANALYSIS_LIMITS.maxAcceptedFocus || details.some((detail) => String(detail) === '$.analysis.focus:narrowable') && raw.focus.length > 1);
   // Görsel istek ayrıca (`visual`) denetlenir; özetin içinde ya da plan düzeyinde yazılması anlam değişikliği değildir.
   const pinnedPaths = new Set([...paths, 'visual', ...(narrow ? ['focus'] : [])]);
   const presentation = existing?.presentation || submittedPresentation(plan);
@@ -735,7 +738,7 @@ function pinAnalysisRepair(turn, plan, details) {
 /** Daraltılan yön listesi, pinlenen listenin sıralı ve boş olmayan alt kümesi mi? */
 function narrowedFocus(pin, focus) {
   if (!pin.narrow) return true;
-  if (!Array.isArray(focus) || !focus.length || focus.length > ANALYSIS_LIMITS.maxFocus) return false;
+  if (!Array.isArray(focus) || !focus.length || focus.length > ANALYSIS_LIMITS.maxAcceptedFocus) return false;
   let at = 0;
   for (const item of focus) {
     at = normalizedBrief(pin.raw).focus.indexOf(item, at);
@@ -1064,6 +1067,19 @@ function acceptRequest(turn, request, language = null, position = null) {
   clearAcceptedNote(turn);
   turn.acceptedNote = note;
   instruct(turn, note);
+}
+
+/**
+ * Turun araç turu sınırı. Aşama F: sunucunun analitik özetten açtığı çok bölümlü planda (en çok `ANALYSIS_LIMITS.maxParts`
+ * bölüm) her ek bölüm kendi okuma turunu gerektirir; adla çözülen kişi/proje okumaları da tur harcar. Sabit dört tur, ör. iki
+ * kişinin proje dağılımı ve gecikme karşılaştırmasında (ad çözümü A, okuma A, ad çözümü B, okuma B) üçüncü doğrulanmış bölüme
+ * hiç tur bırakmıyor ve plan yapısı gereği kısmi yanıt üretiyordu. Yalnızca özetten açılan planda ek bölüm başına bir tur
+ * eklenir (modelin yazdığı çok bölümlü istek planının sözleşmesi değişmez); toplam çağrı, SQL süresi ve araç evresi süresi
+ * sınırları DEĞİŞMEZ (toplam iş yine sınırlıdır).
+ */
+function roundLimit(turn) {
+  const expanded = Boolean(turn.presentationIntent?.analysis);
+  return turn.limits.maxToolRounds + (expanded ? Math.max(0, Math.min(turn.partCount || 1, ANALYSIS_LIMITS.maxParts) - 1) : 0);
 }
 
 /** Planın kabulü: ilk bölüm turun isteğidir; bütün bölümlerin dönemi ve korumalı metin alanları veri okunmadan bildirilir. */
@@ -1513,8 +1529,10 @@ function compositionInput(turn, verdict) {
   if (!['grounded', 'unavailable'].includes(verdict.kind)) return null;
   const answers = turn.partCount === 1 && !turn.answers.length ? [{ index: 0, verdict, request: turn.request }] : turn.answers;
   if (answers.some((answer) => answer.verdict.clarification || answer.verdict.kind === 'clarification')) return null;
+  // Aşama F: bölümün sunucuda doğrulanmış sıralaması (ölçü ve yön) bulgu motorunun "listenin başı" önkoşuludur.
   const parts = answers.filter((answer) => answer.verdict.kind === 'grounded' && answer.verdict.presentation)
-    .map((answer) => ({ index: answer.index, presentation: answer.verdict.presentation }));
+    .map((answer) => ({ index: answer.index, presentation: answer.verdict.presentation,
+      ...(answer.request?.rank?.metric ? { ranking: Object.freeze({ metric: answer.request.rank.metric, order: answer.request.rank.order }) } : {}) }));
   if (!parts.length) return null;
   const missing = [];
   const notes = [];
@@ -1539,7 +1557,12 @@ function compositionInput(turn, verdict) {
   const analysisFollowUp = Boolean(intent && (['previous', 'row'].includes(intent.scope) || intent.act) && turn.previousAnalysis);
   const previousQuestion = continues || analysisFollowUp ? turn.question.previous : null;
   return { parts, missing, notes, locale: turn.locale, question: turn.question.text, previousQuestion,
-    today: turn.context.today, populations: populationSizes(turn, answers), followUp: intent?.act ? { act: intent.act } : null };
+    today: turn.context.today, populations: populationSizes(turn, answers), followUp: intent?.act ? { act: intent.act } : null,
+    // Çerçeve cümlesi için özetin kapsamı ve yönleri (olgu değil; adlar kanıttan alınır).
+    outline: intent && (!intent.act || intent.act === 'prioritize') ? { scope: intent.scope, level: intent.level || null, focus: [...intent.focus] } : null,
+    // Analitik özet olmayan çok bölümlü yanıtın açılışı için bölüm konuları (araç konusunun adı; olgu değil).
+    topics: intent ? null : new Map(answers.filter((answer) => answer.verdict.kind === 'grounded')
+      .map((answer) => [answer.index + 1, plannerTopicLabel(getRotaTool(answer.request?.population?.tool)?.topic, turn.locale)]).filter(([, label]) => label)) };
 }
 
 /**
@@ -1594,7 +1617,8 @@ export async function presentVerdict(turn, verdict, compose) {
   // "Biraz daha aç" takibi bu turun sunumunu bir düzey ayrıntılı yapar (kullanıcının ayarı değişmez).
   const detail = turn.presentationIntent?.analysis?.act === 'expand' ? expandedAnswerDetail(turn.answerDetail) : turn.answerDetail;
   const composition = buildComposition({ ...input, visual, allowCharts: !turn.presentationIntent?.visualDeclined, detail, analyst: Boolean(turn.presentationIntent?.analysis),
-    chartType: turn.presentationIntent?.chart || null, table: turn.presentationIntent?.table === true, certainty: turn.presentationIntent?.analysis?.act === 'certainty' });
+    chartType: turn.presentationIntent?.chart || null, chartTypes: turn.presentationIntent?.charts || null, table: turn.presentationIntent?.table === true,
+    certainty: turn.presentationIntent?.analysis?.act === 'certainty' });
   if (!composition) {
     turn.trace.presentation = { mode: 'narrative', reason: 'SHEET_LIMIT' };
     return visual ? withChartNote(turn, verdict) : verdict;
@@ -1616,7 +1640,7 @@ export async function presentVerdict(turn, verdict, compose) {
     // Model düzeninin ret kodu (varsa) telemetride kalır: sunucu düzeni onun yerine geçti.
     const issue = turn.trace.presentation?.issue ?? null;
     turn.trace.presentation = { mode: 'composed', server: true, reason, ...(issue ? { issue } : {}), blocks: rendered.blocks, chart: rendered.chart, charts: rendered.charts, said: rendered.said,
-      ...(rendered.suppressed ? { suppressed: rendered.suppressed } : {}), tables: rendered.tables, notes: rendered.notes, titled: rendered.titled };
+      ...(rendered.suppressed ? { suppressed: rendered.suppressed } : {}), tables: rendered.tables, notes: rendered.notes, titled: rendered.titled, ...(rendered.findings ? { findings: rendered.findings } : {}) };
     const laidOut = { ...verdict, normalized: [rendered.text, ...input.notes, ...chartTypeNote(turn, composition, rendered)].join('\n\n') };
     // Analitik düzen grafiksiz kurulduysa açık grafik isteği yine sessizce düşmez.
     return visual && !rendered.charts && !turn.trace.presentation?.chartTypeUnavailable ? withChartNote(turn, laidOut) : laidOut;
@@ -1652,7 +1676,7 @@ export async function presentVerdict(turn, verdict, compose) {
     return serverLayout(result.ok ? 'CITATION_SCOPE' : result.reason);
   }
   turn.trace.presentation = { mode: 'composed', ...(result.serverFallback ? { server: true, reason: 'MODEL_LAYOUT_REPLACED' } : {}), blocks: result.blocks, chart: result.chart, charts: result.charts, said: result.said, tables: result.tables, notes: result.notes,
-    ...(result.suppressed ? { suppressed: result.suppressed } : {}), titled: result.titled, ms: composedMs, rejected,
+    ...(result.suppressed ? { suppressed: result.suppressed } : {}), titled: result.titled, ms: composedMs, rejected, ...(result.findings ? { findings: result.findings } : {}),
     ...(result.chartInserted ? { chartInserted: true } : {}), ...(result.prose ? { prose: result.prose } : {}) };
   turn.renderedRowParts = result.rowParts;
   turn.renderedEvidence = result.citedIds;
@@ -1662,11 +1686,17 @@ export async function presentVerdict(turn, verdict, compose) {
 
 /** İstenen grafik türü kanıtla çizilemediyse türe özgü not (çizilen başka grafik varsa söylenir). */
 export function chartTypeNote(turn, composition, rendered) {
-  const type = composition.render.chartType;
-  if (!type || !composition.render.visual || rendered.chartTypes?.includes(type)) return [];
-  turn.trace.presentation = { ...(turn.trace.presentation || {}), chartTypeUnavailable: type };
-  return [chartTypeSupported(composition.render) ? renderChartUnavailable({ substituted: rendered.chart, locale: turn.locale })
-    : renderChartTypeUnavailable({ type, substituted: rendered.chart, locale: turn.locale })];
+  // Aşama F: iki tür istendiyse her tür ayrı denetlenir; çizilemeyen tür için türe özgü not verilir.
+  const types = [composition.render.chartType, ...(composition.render.chartTypes || [])].filter((type, index, all) => type && all.indexOf(type) === index);
+  if (!types.length || !composition.render.visual) return [];
+  const notes = [];
+  for (const type of types) {
+    if (rendered.chartTypes?.includes(type)) continue;
+    turn.trace.presentation = { ...(turn.trace.presentation || {}), chartTypeUnavailable: type };
+    notes.push(chartTypeSupported({ ...composition.render, chartType: type }) ? renderChartUnavailable({ substituted: rendered.chart, locale: turn.locale })
+      : renderChartTypeUnavailable({ type, substituted: rendered.chart, locale: turn.locale }));
+  }
+  return [...new Set(notes)];
 }
 
 /** Açık görselleştirme isteği doğrulanmış veriden güvenle karşılanamadıysa kısa sunucu notu (sessizce yok sayılmaz). */
@@ -1830,7 +1860,8 @@ async function serverSelection(turn) {
  */
 function presentationIntent(plan, today) {
   const analysis = plan?.analysis;
-  return Object.freeze({ visual: plan?.visual === true, visualDeclined: plan?.visual === false || plan?.analysis?.visual === false, ...(plan?.visual === true && plan?.chart ? { chart: plan.chart } : {}), ...(plan?.table === true ? { table: true } : {}),
+  return Object.freeze({ visual: plan?.visual === true, visualDeclined: plan?.visual === false || plan?.analysis?.visual === false, ...(plan?.visual === true && plan?.chart ? { chart: plan.chart } : {}),
+    ...(plan?.visual === true && plan?.chart && Array.isArray(plan.charts) && plan.charts.length > 1 ? { charts: Object.freeze([...plan.charts]) } : {}), ...(plan?.table === true ? { table: true } : {}),
     // Türetilen ufuk okumaları yürütmeye aittir; takipte yalnızca bildirilmiş yönler devralınır.
     analysis: analysis ? Object.freeze({ scope: analysis.scope, focus: Object.freeze([...analysis.focus]),
       ...(analysis.withSelf ? { withSelf: true } : {}), ...(analysis.level ? { level: analysis.level } : {}), ...(analysis.act ? { act: analysis.act } : {}) }) : null,
@@ -1852,7 +1883,7 @@ function replayPlan(pending) {
 function pendingAnalysis(plan) {
   const analysis = plan.analysis;
   // Önceki/satır göndergesi aynı kayıtlı bağlamla yeniden yürür; kimlikler modele açılmaz.
-  return normalizePendingAnalysis({ language: plan.language, scope: analysis.scope, ...(analysis.focus.length <= ANALYSIS_LIMITS.maxFocus ? { focus: [...analysis.focus] } : {}),
+  return normalizePendingAnalysis({ language: plan.language, scope: analysis.scope, ...(analysis.focus.length <= ANALYSIS_LIMITS.maxAcceptedFocus ? { focus: [...analysis.focus] } : {}),
     ...(analysis.withSelf != null ? { withSelf: analysis.withSelf } : {}), ...(analysis.rows ? { rows: [...analysis.rows] } : {}), ...(analysis.act ? { act: analysis.act } : {}), ...(analysis.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}),
     ...(analysis.names ? { names: [...analysis.names] } : {}), ...(analysis.level ? { level: analysis.level } : {}), ...(analysis.within ? { within: analysis.within } : {}),
     ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}),
@@ -2086,7 +2117,7 @@ async function executeRound(turn, executed) {
     turn.permittedTools = new Set([...(turn.permittedTools || []), ...next, ...declared]);
   }
   record(turn, { role: 'assistant', content: '', toolCalls: safeToolCallsForTranscript(executed, toolMessages) }, ...toolMessages);
-  if (turn.toolRounds >= limits.maxToolRounds) instruct(turn, roundLimitNote());
+  if (turn.toolRounds >= roundLimit(turn)) instruct(turn, roundLimitNote());
 }
 
 /** `resume` aynı defter, kapsam ve tur bütçesiyle muhakeme devrini sürdürür. */
@@ -2142,7 +2173,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
   // İlk okuma girişimi niyeti dondurur; boş kanıt defteri yürütmeyi geri almaz.
   const frozen = () => Boolean(turn.decision && turn.decision !== PLANNER_INTENTS.ROTA) || turn.readStarted;
   const canEscalate = () => escalationAvailable && escalationPermitted(turn);
-  const toolsAvailable = () => !['general', 'clarify', 'abstain', 'invalid', 'text_fields'].includes(turn.decision) && turn.toolRounds < limits.maxToolRounds && executor.stats().attempted < limits.maxTotalCalls;
+  const toolsAvailable = () => !['general', 'clarify', 'abstain', 'invalid', 'text_fields'].includes(turn.decision) && turn.toolRounds < roundLimit(turn) && executor.stats().attempted < limits.maxTotalCalls;
   // Ucuz kurtarma tükendiğinde Standart tur Derin'e bir kez devredilir. Veri okunduysa Derin araç
   // çağıramaz: devir yalnızca kanıt bildirilen isteği belirlenimci olarak karşılayabiliyorsa yapılır.
   // Veri okunmadıysa Derin yeniden planlar; ortak araç turu bütçesi tükendiyse planı yürütemez.
@@ -2150,7 +2181,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
   // Veri okunmuş ama kanıt bildirilen isteği karşılamıyorsa planın kendisi hatalıdır: atılır ve Derin temiz
   // planlar. Okuma hatası (veri/altyapı), doğrulanmış bölüm ya da tükenen çağrı bütçesi yeniden planlamayı açmaz.
   const restartable = () => turn.readStarted && ledger.ids().length > 0 && !turn.answers.length && !turn.toolFailureCodes.size
-    && limits.maxTotalCalls - executor.stats().attempted >= RESTART_MIN_CALLS && turn.toolRounds < limits.maxToolRounds
+    && limits.maxTotalCalls - executor.stats().attempted >= RESTART_MIN_CALLS && turn.toolRounds < roundLimit(turn)
     && executor.phaseSpentMs() < limits.maxToolPhaseMs && !evidenceReady();
   const deepCanHelp = () => canEscalate() && (frozen() ? evidenceReady() || restartable() : toolsAvailable());
   let missingPreviousResult = null;
@@ -2435,7 +2466,7 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
           turn.toolRounds += 1;
           turn.work += 1;
           recordRejectedRound(turn, calls, prepared.problems);
-          if (turn.toolRounds >= limits.maxToolRounds) instruct(turn, roundLimitNote());
+          if (turn.toolRounds >= roundLimit(turn)) instruct(turn, roundLimitNote());
           continue;
         }
       }
