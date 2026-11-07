@@ -1472,8 +1472,17 @@ Geçmişin yinelenen ilk kaynak taraması kaldırılmıştır; aynı iletinin pr
 Araç SQL bütçesinin tükenmesi, başarılı kanıtı kendiliğinden doğrulama hatasına çevirmez; son yetki denetimi ayrı süre sınırında çalışır.
 Geçmişin ilk sayfası en yeni kanıtlardan başlayarak en fazla 2 MiB ham yük taşır. Sayfaya sığmayan iletiler son denetimde
 yalnız kendi kanıtlarını taşıyan sınırlı sayfalarda okunur; sonraki yanıtların boyutu eski yetkili yanıtı kapatmaz. Ek sayfaların
-ham yükü biriktirilmez. Her sayfanın ilk nüfus açılımı 8 MiB ile sınırlıdır; kayıtlar arasında olay döngüsüne sıra verilir.
-Sayfa okumaları da ileti başına 8 saniye ve bütün son denetimlerin 25 saniyelik ortak süresine tabidir; tek iletinin okunamaması diğerini düşürmez.
+ham yükü biriktirilmez. Çok iletili sayfanın ilk nüfus açılımı 8 MiB ile sınırlıdır. Tek ileti sayfası yalnız yazıcının yanıt başına
+sınırını karşılar: en fazla 12 kanıt × 2 taşıyıcı × taşıyıcı başına 1.440.064 bayt (~33 MiB işlenen toplam). Açılmış tampon tutulmaz,
+her taşıyıcı ayrıca sınırlıdır ve kayıtlar arasında olay döngüsüne sıra verilir. Böylece kendi sınırında yazılmış yanıt kalıcı olarak
+reddedilmez; sınırı aşan ya da bozuk taşıyıcı yalnız kendi iletisini kapatır.
+İlk yetki okuması, sayfa okumaları ve ileti başına son işlemler tek 25 saniyelik ortak süreyi paylaşır; ileti başına üst süre
+8 saniyedir. Ortak süre dolunca doğrulanmış iletiler korunur, kalanlar kullanılamaz olarak kapanır; tek iletinin okunamaması diğerini düşürmez.
+Kayıtlı künyesinden kesin doğrulanamayan yanıt (sınırlı kayda sığmayan nüfus, düğüm kökeni olmayan eski WBS yolu) son işleme
+alınmaz; SQL kapısı, SERIALIZABLE işlem ve ortak süre harcamaz.
+Düğüm kökeni (`wbsNodes`) eklenmeden önce kaydedilmiş görev ayrıntısının WBS yolu yalnız adlardan oluşur. Adlar düğüm kimliğini
+kanıtlamadığından yol güncel düğüm görünürlüğüyle doğrulanamaz; dönem eşleşmesi de yetmez. Yanıt kapalı kalır ve yetki kaybı
+yerine "önceki kayıt biçimi" metniyle gösterilir; bu ayrım yalnız kayıtlı biçimden türetilir, güncel yetki hakkında bilgi vermez.
 Boş sonuçta katkı nüfusu aranan kapsamı kanıtlamıyorsa özgün yetki dönemi gerekir; iş verisinin sonradan değişmesi tek başına revokasyon değildir.
 Son açıklama denetimi her ileti için ayrı, en fazla 8 saniyelik SERIALIZABLE
 okuma işlemidir; bütün son denetimlerin toplamı 25 saniyeyle sınırlıdır. Yetki,
@@ -1481,8 +1490,10 @@ etkin proje, görevin kayıtlı projesi ve kimlik tabanı, gereken WBS düğüml
 son epoch kontrolü aynı işlemde okunur. Ayrı son işlemler gözlem paylaşmaz; bir
 iletinin hatası diğerinin başarılı denetimini iptal etmez. Commit bu okumanın
 tutarlılık sınırıdır; sonraki değişiklikler veya ağ teslimiyle atomiklik iddia
-edilmez. Model üretimi ve yanıt teslimi de atomik değildir; saklanmış geçmiş
-kanıtı gereken güncel kontroller olmadan yeni araç kanıtı yerine kullanılamaz.
+edilmez. Salt okuma olan bu işlem SQL Server kilitlenme kurbanı seçilirse yalıtım
+düzeyi korunarak, yeni işlemde ve aynı SQL kapısı/süre sınırı içinde yalnız bir kez
+yinelenir; yetki, bozuk kanıt, süre aşımı ve diğer veritabanı hataları yinelenmez.
+Model üretimi ve yanıt teslimi de atomik değildir; saklanmış geçmiş kanıtı gereken güncel kontroller olmadan yeni araç kanıtı yerine kullanılamaz.
 
 Hareket, tarih talebi ve atama koordinasyonu sayfaları tek tur içinde en fazla
 1000 kayıtlık sunucu anlık görüntüsünü paylaşır. Yeni turda eski iş akışı

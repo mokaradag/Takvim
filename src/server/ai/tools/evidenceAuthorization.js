@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { TOOL_LIMITS } from './toolLimits.js';
 import { canonicalActualId } from '../../../domain/identity/actualId.js';
+import { EVIDENCE_LIMITS } from '../../../domain/ai/evidenceContract.js';
 
 /**
  * Yüklenen yetki bağlamı başına bir kez hesaplanan kanonik parçalar: yönetim
@@ -129,6 +130,13 @@ const MAX_COMPRESSED_POPULATION_CHARS = 32000;
 /** Görev başına en kötü durumda bir proje anahtarı ve paketlenmiş kimlik (~64 karakter) ile sarmalayıcı. */
 const MAX_INFLATED_POPULATION_BYTES = TOOL_LIMITS.maxAnalyzedTasks * 72 + 64;
 const COMPRESSED_POPULATION_KEYS = 'complete,count,deflated,v';
+/**
+ * Tek yanıtın yazıcı sözleşmesindeki en büyük açılım toplamı: yanıt en fazla
+ * `maxEvidencePerAnswer` kanıt, kanıt da en fazla iki taşıyıcı (görev ve kimlik
+ * nüfusu) yazar; her taşıyıcının açılımı ayrıca MAX_INFLATED_POPULATION_BYTES ile
+ * sınırlıdır. Bütçe sıralı işlenen toplam baytı sayar; açılmış tampon tutulmaz.
+ */
+export const MAX_ANSWER_INFLATED_POPULATION_BYTES = EVIDENCE_LIMITS.maxEvidencePerAnswer * 2 * MAX_INFLATED_POPULATION_BYTES;
 
 /** v2 taşıyıcısının biçimini ve sınırlarını denetleyip iç JSON'u açar; herhangi bir ihlalde `null`. */
 function inflatePopulation(value, budget = null) {
@@ -516,6 +524,17 @@ export function savedEvidenceRequirements(entry, auth, { exact = false } = {}) {
  * araçların eski kanıtı sayılan nüfusu taşımadığından doğrulanamaz.
  */
 export const PAYLOAD_POPULATION_TOOLS = Object.freeze(new Set(['rota_task_detail', 'rota_project_search', 'rota_person_search', 'rota_calendar_inspect']));
+
+/**
+ * Düğüm kökeni (`wbsNodes`) eklenmeden önce yazılmış görev ayrıntısı: WBS yolu
+ * yalnızca adlardan oluşur. Adlar düğüm kimliğini kanıtlamadığından yol güncel
+ * düğüm görünürlüğüyle doğrulanamaz; dönem eşleşmesi de bunun yerine geçmez.
+ */
+export function legacyWbsPathEvidence(tool, stored) {
+  const task = stored?.data?.task;
+  return tool === 'rota_task_detail' && Boolean(task) && typeof task === 'object'
+    && Array.isArray(task.wbsPath) && task.wbsPath.length > 0 && !Object.hasOwn(task, 'wbsNodes');
+}
 
 /** Nüfusu sınırlı kayda sığmayan kanıtın işareti: yeniden açılışta doğrulanamaz. */
 export function unverifiableAuthorizationPopulation() {

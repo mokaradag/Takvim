@@ -220,6 +220,8 @@ export function createToolTurnContext({
    */
   async function recheckEvidenceTasks(entries, signal) {
     return withSql(signal, async (_executor, track, transactionSignal) => {
+      // Gövde salt okumadır ve her denemede yetkiyi baştan okur: kilitlenme kurbanı işlem yalnız bir kez,
+      // yeni işlemde ve aynı SQL kapısı/süre sınırı içinde yinelenir. Diğer hatalar yinelenmez.
       const pending = withSqlTransaction(async transaction => {
         const run = (activeSignal, work) => {
           activeSignal.throwIfAborted();
@@ -234,7 +236,7 @@ export function createToolTurnContext({
         if (state.epoch !== epoch) throw new ToolError(TOOL_ERROR_CODES.TIMEOUT);
         transactionSignal.throwIfAborted();
         return new Set(entries.filter(entry => authorized.has(entry.id)));
-      }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE });
+      }, { isolationLevel: sql.ISOLATION_LEVEL.SERIALIZABLE, deadlockRetries: 1 });
       track(pending);
       return raceWithAbort(() => pending, transactionSignal);
     }, { authorizationOnly: true });

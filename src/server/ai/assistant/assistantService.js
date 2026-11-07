@@ -487,57 +487,64 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
     // konuşmanın bütün yanıtları tek bir sınır aşımıyla gizlenmez.
     // Nüfusu kalıcı kayda sığmayan yanıt güncel yetkiyle doğrulanamaz; bu durum
     // yalnızca kayıtlı künyeden türetilir, güncel yetki hakkında bilgi vermez.
-    evidence.unverifiable = new Set([...(evidence.authorizationByMessage || new Map())]
-      .filter(([id, entries]) => (!revalidate || !evidence.deferredMessages?.has(id)) && entries.some((entry) => entry.unverifiable)).map(([id]) => id));
+    const unverifiableIds = (unverifiable) => new Set([...(evidence.authorizationByMessage || new Map())]
+      .filter(([id, entries]) => (!revalidate || !evidence.deferredMessages?.has(id)) && entries.some(unverifiable)).map(([id]) => id));
+    evidence.unverifiable = unverifiableIds((entry) => entry.unverifiable);
+    // Düğüm kökeni olmayan eski kayıt biçimi ayrı açıklanır; ayrım yalnızca kayıtlı biçimden türetilir.
+    evidence.legacyFormat = unverifiableIds((entry) => entry.legacyFormat);
     if (revalidate && evidence.byMessage.size) {
       const context = createToolTurnContext({ sicil });
+      // İlk yetki okuması, ertelenmiş sayfalar ve ileti başına son işlemler aynı ortak süreyi paylaşır;
+      // harcanmış süre yeni bir zamanlayıcıyla sıfırlanmaz.
       const deadline = createAiDeadline({ timeoutMs: context.limits.maxCumulativeSqlMs, parentSignal: signal });
       const visible = new Map();
       evidence.unavailableMessages = new Set();
       try {
         await context.revalidateAuthorization(deadline.signal);
-        deadline.dispose();
         // Kaynak denetimi yalnızca son tutarlı işlemde yapılır; bütün geçmiş iki kez açılmaz.
         for (const [id, summaries] of evidence.byMessage) {
           const owned = evidence.authorizationByMessage.get(id);
           if (owned?.length) visible.set(id, summaries);
         }
-        if (visible.size) {
-          const finalDeadline = createAiDeadline({ timeoutMs: context.limits.maxCumulativeSqlMs, parentSignal: signal });
+        for (const id of [...visible.keys()].reverse()) {
+          if (signal?.aborted) throw signal.reason;
+          // Kayıtlı künyesinden kesin doğrulanamayan yanıt SQL kapısı, SERIALIZABLE işlem ve ortak süre harcamaz.
+          if (evidence.unverifiable.has(id)) { visible.delete(id); continue; }
+          const messageDeadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: deadline.signal });
           try {
-            for (const id of [...visible.keys()].reverse()) {
-              if (signal?.aborted) throw signal.reason;
-              const messageDeadline = createAiDeadline({ timeoutMs: context.limits.callTimeoutMs, parentSignal: finalDeadline.signal });
-              try {
-                // Büyük konuşmanın sonraki yanıtları eski yetkili yanıtı kapatmaz. Ek sayfa yalnız bu iletiyi
-                // taşır; ham yük son denetimden sonra tutulmaz ve bütün sayfalar ortak süreye tabidir.
-                const page = evidence.deferredMessages?.has(id)
-                  ? await loadEvidenceFor(sicil, messageDeadline.signal, { ...target, messageId: id }) : null;
-                if (page && (!page.ready || page.deferredMessages?.has(id) || !page.authorizationByMessage?.get(id)?.length)) {
-                  throw new ServerPersistenceError('DATABASE_UNAVAILABLE', 'Geçmiş yanıtın kanıt sayfası okunamadı.');
-                }
-                const owned = page?.authorizationByMessage.get(id) || evidence.authorizationByMessage.get(id);
-                if (page && owned.some(entry => entry.unverifiable)) evidence.unverifiable.add(id);
-                const still = await context.recheckEvidenceTasks(owned, messageDeadline.signal);
-                if (!owned.every(entry => still.has(entry))) visible.delete(id);
-                else if (page) {
-                  visible.set(id, page.byMessage.get(id));
-                  evidence.epochsByMessage.set(id, page.epochsByMessage.get(id));
-                  for (const key of ['clarificationByMessage', 'resultScopeByMessage', 'analysisByMessage']) {
-                    if (page[key]?.has(id)) evidence[key].set(id, page[key].get(id));
-                    else evidence[key]?.delete(id);
-                  }
-                }
-              } catch (error) {
-                if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;
-                // İçerik, kanıt, kimlik ve ham hata metni günlüğe taşınmaz.
-                logEvent({ severity: 'WARNING', component: 'AI', operation: 'ai.history.disclosure',
-                  code: 'AI_HISTORY_CHECK_FAILED', message: 'Geçmiş yanıtın son yetki denetimi tamamlanamadı.' });
-                evidence.unavailableMessages.add(id);
-                visible.delete(id);
-              } finally { messageDeadline.dispose(); }
+            // Büyük konuşmanın sonraki yanıtları eski yetkili yanıtı kapatmaz. Ek sayfa yalnız bu iletiyi
+            // taşır; ham yük son denetimden sonra tutulmaz ve bütün sayfalar ortak süreye tabidir.
+            const page = evidence.deferredMessages?.has(id)
+              ? await loadEvidenceFor(sicil, messageDeadline.signal, { ...target, messageId: id }) : null;
+            if (page && (!page.ready || page.deferredMessages?.has(id) || !page.authorizationByMessage?.get(id)?.length)) {
+              throw new ServerPersistenceError('DATABASE_UNAVAILABLE', 'Geçmiş yanıtın kanıt sayfası okunamadı.');
             }
-          } finally { finalDeadline.dispose(); }
+            const owned = page?.authorizationByMessage.get(id) || evidence.authorizationByMessage.get(id);
+            if (page && owned.some(entry => entry.unverifiable)) {
+              // Sayfası okunan ertelenmiş yanıt da kesin doğrulanamazsa son işleme girmez.
+              evidence.unverifiable.add(id);
+              if (owned.some(entry => entry.legacyFormat)) evidence.legacyFormat.add(id);
+              visible.delete(id);
+              continue;
+            }
+            const still = await context.recheckEvidenceTasks(owned, messageDeadline.signal);
+            if (!owned.every(entry => still.has(entry))) visible.delete(id);
+            else if (page) {
+              visible.set(id, page.byMessage.get(id));
+              evidence.epochsByMessage.set(id, page.epochsByMessage.get(id));
+              for (const key of ['clarificationByMessage', 'resultScopeByMessage', 'analysisByMessage']) {
+                if (page[key]?.has(id)) evidence[key].set(id, page[key].get(id));
+                else evidence[key]?.delete(id);
+              }
+            }
+          } catch (error) {
+            if (error?.code === 'UNAUTHORIZED' || signal?.aborted) throw error;
+            // İçerik, kanıt, kimlik ve ham hata metni günlüğe taşınmaz.
+            logEvent({ severity: 'WARNING', component: 'AI', operation: 'ai.history.disclosure',
+              code: 'AI_HISTORY_CHECK_FAILED', message: 'Geçmiş yanıtın son yetki denetimi tamamlanamadı.' });
+            evidence.unavailableMessages.add(id);
+            visible.delete(id);
+          } finally { messageDeadline.dispose(); }
         }
         evidence.byMessage = visible;
       } finally { deadline.dispose(); }
@@ -582,6 +589,8 @@ function savedMessageMissing(message, evidence) {
 }
 
 const UNVERIFIABLE_SAVED_ANSWER_TEXT = 'Bu kayıtlı yanıt çok sayıda kayda dayandığı için güncel yetkinizle yeniden doğrulanamıyor. Güncel bilgi için soruyu yeniden sorun.';
+/** Metin yalnızca kayıtlı biçimden türetilir; güncel yetki ya da kaydın varlığı hakkında bilgi vermez. */
+const LEGACY_FORMAT_SAVED_ANSWER_TEXT = 'Bu kayıtlı yanıt önceki bir kayıt biçiminde saklandığı için güncel yetkinizle yeniden doğrulanamıyor. Güncel bilgi için soruyu yeniden sorun.';
 
 function discloseSavedMessages(messages, evidence) {
   return messages.filter((message) => message.role === 'assistant' || !savedMessageMissing(message, evidence)).map((message) => {
@@ -589,7 +598,8 @@ function discloseSavedMessages(messages, evidence) {
     message = { ...message, rotaData: false };
     if (savedMessageMissing(message, evidence)) return { ...message, content: 'Kayıt bulunamadı ya da bu kaydı görüntüleme yetkiniz yok.', evidence: [], finishReason: 'not_found' };
     if (evidence?.unverifiable?.has(message.id)) {
-      return { ...message, content: UNVERIFIABLE_SAVED_ANSWER_TEXT, evidence: [], finishReason: 'unavailable' };
+      const content = evidence.legacyFormat?.has(message.id) ? LEGACY_FORMAT_SAVED_ANSWER_TEXT : UNVERIFIABLE_SAVED_ANSWER_TEXT;
+      return { ...message, content, evidence: [], finishReason: 'unavailable' };
     }
     const saved = evidence?.byMessage?.get(message.id);
     if (saved?.length) return { ...message, evidence: saved, rotaData: message.source !== 'general' && message.finishReason !== 'general' };

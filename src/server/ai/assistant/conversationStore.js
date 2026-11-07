@@ -4,7 +4,7 @@ import { taskResultScope } from '../../../domain/ai/requestContract.js';
 import { normalizeAnalysisContext } from '../../../domain/ai/analysisContext.js';
 import { sql } from '../../db/pool.js';
 import { normalizeEvidenceSummary } from '../../../domain/ai/evidenceContract.js';
-import { decodeAuthorizationPopulation, PAYLOAD_POPULATION_TOOLS } from '../tools/evidenceAuthorization.js';
+import { decodeAuthorizationPopulation, legacyWbsPathEvidence, MAX_ANSWER_INFLATED_POPULATION_BYTES, PAYLOAD_POPULATION_TOOLS } from '../tools/evidenceAuthorization.js';
 import { TOOL_LIMITS } from '../tools/toolLimits.js';
 import {
   AI_CONVERSATION_APPEND_ANSWER_SQL,
@@ -287,7 +287,9 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
   const analysisByMessage = new Map();
   const authorizationByMessage = new Map();
   const deferredMessages = new Set();
-  const budget = { remainingBytes: TOOL_LIMITS.maxHistoryInflatedBytes };
+  // Çok iletili sayfa ortak bütçeyle sınırlıdır; tek ileti sayfası yalnız o yanıtın yazıcı sözleşmesindeki
+  // en büyük açılımını karşılar. Böylece kendi sınırları içinde yazılmış yanıt kalıcı olarak ertelenmez.
+  const budget = { remainingBytes: messageId ? MAX_ANSWER_INFLATED_POPULATION_BYTES : TOOL_LIMITS.maxHistoryInflatedBytes };
   // Yeni yanıtlar önce doğrulanır; bir SQL partisi ya da açılım olay döngüsünü tekelinde tutmaz.
   for (const row of [...rows].reverse()) {
     if (row.Ordinal == null) continue;
@@ -303,6 +305,7 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
     let unverifiable = Boolean(row.EvidenceOmitted);
     let savedPopulation = false;
     let authorizationPopulation = null;
+    let legacyFormat = false;
     try {
       stored = JSON.parse(row.EvidenceJson || '{}');
       authorizationEpoch = stored.authorizationEpoch ?? null;
@@ -322,12 +325,15 @@ export async function loadConversationEvidence(executor, sicil, { conversationId
         // Nüfus işaretinden önceki kayıt yalnızca yükündeki görevleri taşır.
         unverifiable ||= !PAYLOAD_POPULATION_TOOLS.has(String(row.ToolName || ''));
       }
+      // Düğüm kökeni olmayan eski WBS yolu kesin doğrulanamaz; ayrım güncel yetkiden bağımsızdır.
+      legacyFormat = legacyWbsPathEvidence(String(row.ToolName || ''), stored);
+      unverifiable ||= legacyFormat;
     } catch { authorizationEpoch = null; unverifiable = true; }
     // Toplam sayfa bütçesi kökeni bozmaz; bu ileti kendi sınırlı sayfasında yeniden okunabilir.
     if (row.EvidenceOmitted || unverifiable && budget.remainingBytes === 0) deferredMessages.add(id);
     epochsByMessage.get(id).push(authorizationEpoch);
     authorizationByMessage.get(id).push({ id: `${id}:${row.Ordinal}`, payload: row.EvidenceJson || '{}',
-      parsedPayload: stored, authorizationEpoch, scopedAuthorization, taskReferences, unverifiable, savedPopulation, authorizationPopulation, tool: row.ToolName });
+      parsedPayload: stored, authorizationEpoch, scopedAuthorization, taskReferences, unverifiable, legacyFormat, savedPopulation, authorizationPopulation, tool: row.ToolName });
     try {
       const scope = taskResultScope(stored.resultScope);
       if (scope && authorizationEpoch && !unverifiable) resultScopeByMessage.set(id, scope);

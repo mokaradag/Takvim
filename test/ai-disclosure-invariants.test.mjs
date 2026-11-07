@@ -2258,3 +2258,252 @@ test('sayfası doğrulanmadan ertelenmiş geçmişin analiz bağlamı takip turu
     assert.equal(turn.previousResult, null);
   } finally { turn.claim.release(); }
 });
+
+/* ── Ortak süre, yanıt başına açılım, eski WBS biçimi, kesin doğrulanamayan yanıt ve kilitlenme ── */
+
+const LEGACY_FORMAT_TEXT = 'Bu kayıtlı yanıt önceki bir kayıt biçiminde saklandığı için güncel yetkinizle yeniden doğrulanamıyor. Güncel bilgi için soruyu yeniden sorun.';
+const UNVERIFIABLE_TEXT = 'Bu kayıtlı yanıt çok sayıda kayda dayandığı için güncel yetkinizle yeniden doğrulanamıyor. Güncel bilgi için soruyu yeniden sorun.';
+const evidenceRowsOf = (stack, messageId) => stack.db.aiMessageEvidence.filter(row => String(row.MessageId).toLowerCase() === messageId);
+const protectedMarker = (saved) => /KORUNAN_[a-f0-9-]+/.exec(saved.message.content)[0];
+const revokeFullProjectTask = (stack, taskId) => {
+  stack.db.projects.find(row => row.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+  stack.db.taskAssignees = stack.db.taskAssignees.filter(row => row.TaskId !== taskId);
+  stack.db.tasks.find(row => row.TaskId === taskId).CreatedBySicil = null;
+};
+
+test('ilk yetki okuması ve son işlemler tek ortak süreyi paylaşır; süre dolunca yalnız doğrulanmamış eski yanıt kapanır', async t => {
+  const stack = stackFor(t);
+  const older = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+  const newer = await saveLegacyEvidence(stack, { conversationId: older.conversationId, calls: [['rota_task_detail', { taskId: TASKS.DUE_SOON }]] });
+  let release;
+  let visibility = 0;
+  // Son işlemler yeniden eskiye çalışır: ikinci görünürlük okuması eski yanıtındır.
+  const barrier = { entered: 0, released: new Promise(resolve => { release = resolve; }),
+    match: sql => sql.startsWith('/* rota-ai-tool:task-visibility */') && ++visibility === 2 };
+  stack.db.queryBarrier = barrier;
+  t.after(() => release());
+  const timers = [];
+  const schedule = globalThis.setTimeout;
+  const clear = globalThis.clearTimeout;
+  t.mock.method(globalThis, 'clearTimeout', timer => {
+    const saved = timers.find(entry => entry.timer === timer);
+    if (saved) saved.active = false;
+    return clear(timer);
+  });
+  t.mock.method(globalThis, 'setTimeout', (callback, ms, ...args) => {
+    const timer = schedule(callback, ms, ...args);
+    timers.push({ timer, ms, active: true, expire() { clear(timer); callback(...args); } });
+    return timer;
+  });
+  const opened = loadAssistantConversation(older.conversationId);
+  for (let i = 0; i < 400 && barrier.entered === 0; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(barrier.entered, 1, 'eski yanıtın son işlemi bekletilmeli');
+  const cumulative = timers.filter(timer => timer.ms === TOOL_LIMITS.maxCumulativeSqlMs);
+  assert.equal(cumulative.length, 1, 'ilk yetki okumasından sonra yeni bir ortak süre başlatılamaz');
+  assert.equal(cumulative[0].active, true, 'ilk yetki okumasıyla başlayan ortak süre son işlemleri de sınırlamalı');
+  // İlk yetki okumasıyla başlayan ortak bütçe son işlemler sürerken dolar.
+  cumulative[0].expire();
+  const result = await opened;
+  assert.equal(result.status, 200);
+  const answers = result.body.messages.filter(row => row.role === 'assistant');
+  assert.equal(answers.find(row => row.id === newer.saved.message.id).content, newer.saved.message.content, 'doğrulanmış yeni yanıt korunur');
+  const closed = answers.find(row => row.id === older.saved.message.id);
+  assert.equal(closed.finishReason, 'unavailable');
+  assert.deepEqual(closed.evidence, []);
+  assert.equal(JSON.stringify(closed).includes(protectedMarker(older.saved)), false);
+  release();
+  const { toolSqlGateStatus } = await import('../src/server/ai/tools/toolSqlGate.js');
+  for (let i = 0; i < 400 && toolSqlGateStatus().active; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(toolSqlGateStatus().active, 0);
+});
+
+test('tek ileti sayfasının açılım bütçesi yazıcının yanıt başına sınırını tam karşılar, aşanı ve bombayı sınırlar', async () => {
+  const { loadConversationEvidence } = await import('../src/server/ai/assistant/conversationStore.js');
+  const { compressAuthorizationPopulation, MAX_ANSWER_INFLATED_POPULATION_BYTES } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+  const { EVIDENCE_LIMITS } = await import('../src/domain/ai/evidenceContract.js');
+  const { deflateRawSync } = await import('node:zlib');
+  const carriers = EVIDENCE_LIMITS.maxEvidencePerAnswer * 2;
+  const cap = MAX_ANSWER_INFLATED_POPULATION_BYTES / carriers;
+  assert.ok(Number.isSafeInteger(cap) && cap === TOOL_LIMITS.maxAnalyzedTasks * 72 + 64);
+  const empty = { v: 1, complete: true, tasks: {} };
+  const padded = { ...empty, padding: 'x'.repeat(cap - Buffer.byteLength(JSON.stringify({ ...empty, padding: '' }))) };
+  assert.equal(Buffer.byteLength(JSON.stringify(padded)), cap, 'her taşıyıcı tam sınırda açılmalı');
+  const carrier = compressAuthorizationPopulation(padded);
+  assert.equal(carrier.complete, true);
+  const bomb = { v: 2, complete: true, count: 0, deflated: deflateRawSync(JSON.stringify({ ...empty, padding: 'x'.repeat(cap * 2) })).toString('base64url') };
+  assert.ok(bomb.deflated.length < 32000, 'bomba kalıcı kayıt sınırına sığar');
+  const messageId = randomUUID();
+  const rowFor = (ordinal, population = carrier) => ({ MessageId: messageId, Ordinal: ordinal, ToolName: 'rota_workload_summary', SummaryJson: null,
+    EvidenceOmitted: false, EvidenceJson: JSON.stringify({ tool: 'rota_workload_summary', authorizationEpoch: 'a'.repeat(64),
+      authorizationPopulation: population, authorizationIdentityPopulation: carrier }) });
+  const executorFor = (rows, onQuery = () => {}) => ({ request() {
+    return { input() { return this; }, async query() { onQuery(); return { recordsets: [[{ KnownSicil: 1, EvidenceReady: 1 }], rows] }; } };
+  } });
+  const load = (rows, options = {}) => loadConversationEvidence(executorFor(rows, options.onQuery), AYSE, { conversationId: randomUUID(), maxEvidence: 1600, ...options });
+  const answer = Array.from({ length: EVIDENCE_LIMITS.maxEvidencePerAnswer }, (_, index) => rowFor(index + 1));
+  assert.ok(carriers * cap > TOOL_LIMITS.maxHistoryInflatedBytes, 'senaryo çok iletili sayfa bütçesini aşmalı');
+  const single = await load(answer, { messageId });
+  assert.equal(single.deferredMessages.size, 0, 'yazıcı sınırındaki yanıt kendi sayfasında ertelenmez');
+  assert.ok(single.authorizationByMessage.get(messageId).every(entry => !entry.unverifiable));
+  const multi = await load(answer);
+  assert.ok(multi.deferredMessages.has(messageId), 'çok iletili sayfa ortak bütçesini korur');
+  // Yazıcı sözleşmesini aşan ek kayıt aynı tek ileti bütçesiyle sınırlı kalır.
+  const excess = await load([...answer, rowFor(EVIDENCE_LIMITS.maxEvidencePerAnswer + 1)], { messageId });
+  assert.ok(excess.deferredMessages.has(messageId));
+  assert.equal(excess.authorizationByMessage.get(messageId).filter(entry => entry.unverifiable).length, 1, 'yalnız bütçeyi aşan kayıt doğrulanamaz');
+  // Açılım sınırını aşan bomba yalnız kendi kaydını doğrulanamaz yapar ve bütçeden düşülür.
+  const bombed = await load([rowFor(1, bomb), rowFor(2)], { messageId });
+  const entryOf = ordinal => bombed.authorizationByMessage.get(messageId).find(entry => entry.id === `${messageId}:${ordinal}`);
+  const [bombEntry, validEntry] = [entryOf(1), entryOf(2)];
+  assert.equal(bombEntry.unverifiable, true);
+  assert.equal(validEntry.unverifiable, false);
+  assert.equal(bombed.deferredMessages.size, 0);
+  // İptal, kalan kayıtların açılımını başlatmadan sayfayı durdurur.
+  const controller = new AbortController();
+  await assert.rejects(load(answer, { messageId, signal: controller.signal, onQuery: () => controller.abort(new Error('İPTAL')) }), /İPTAL/);
+});
+
+test('tek yanıtın çok iletili bütçeyi aşan geçerli nüfusları kendi sayfasında doğrulanır; bomba nüfus yalıtılır ve yetki kalkınca gizlenir', async t => {
+  const stack = stackFor(t);
+  const { compressAuthorizationPopulation, MAX_ANSWER_INFLATED_POPULATION_BYTES } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+  const { EVIDENCE_LIMITS } = await import('../src/domain/ai/evidenceContract.js');
+  const { deflateRawSync } = await import('node:zlib');
+  const cap = MAX_ANSWER_INFLATED_POPULATION_BYTES / (EVIDENCE_LIMITS.maxEvidencePerAnswer * 2);
+  const valid = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+  const bombed = await saveLegacyEvidence(stack, { conversationId: valid.conversationId, calls: [['rota_task_detail', { taskId: TASKS.DUE_SOON }]] });
+  const [row] = evidenceRowsOf(stack, valid.saved.message.id);
+  const payload = JSON.parse(row.EvidenceJson);
+  const inner = { ...payload.authorizationPopulation, padding: '' };
+  inner.padding = 'x'.repeat(cap - Buffer.byteLength(JSON.stringify(inner)));
+  const population = compressAuthorizationPopulation(inner);
+  assert.equal(population.complete, true, 'gerçek nüfus taşıyıcı sınırında geçerli kalmalı');
+  row.EvidenceJson = JSON.stringify({ ...payload, authorizationPopulation: population });
+  for (let ordinal = 2; ordinal <= EVIDENCE_LIMITS.maxEvidencePerAnswer; ordinal += 1) stack.db.aiMessageEvidence.push({ ...row, Ordinal: ordinal });
+  assert.ok(EVIDENCE_LIMITS.maxEvidencePerAnswer * cap > TOOL_LIMITS.maxHistoryInflatedBytes, 'tek yanıt çok iletili sayfa bütçesini aşmalı');
+  const [bombRow] = evidenceRowsOf(stack, bombed.saved.message.id);
+  const bombPayload = JSON.parse(bombRow.EvidenceJson);
+  const bombCount = decodeAuthorizationPopulation(bombPayload.authorizationPopulation).length;
+  bombRow.EvidenceJson = JSON.stringify({ ...bombPayload, authorizationPopulation: { v: 2, complete: true, count: bombCount,
+    deflated: deflateRawSync(JSON.stringify({ ...bombPayload.authorizationPopulation, padding: 'x'.repeat(cap * 2) })).toString('base64url') } });
+  assert.ok(stack.db.aiMessageEvidence.every(item => item.EvidenceJson.length <= 32000));
+  const start = stack.db.aiToolLog.length;
+  const answers = (await loadAssistantConversation(valid.conversationId)).body.messages.filter(item => item.role === 'assistant');
+  const opened = answers.find(item => item.id === valid.saved.message.id);
+  assert.equal(opened.content, valid.saved.message.content);
+  assert.ok(opened.evidence.length > 0);
+  const isolated = answers.find(item => item.id === bombed.saved.message.id);
+  assert.equal(isolated.finishReason, 'unavailable');
+  assert.equal(isolated.content, UNVERIFIABLE_TEXT);
+  assert.deepEqual(isolated.evidence, []);
+  assert.equal(JSON.stringify(answers).includes(protectedMarker(bombed.saved)), false);
+  assert.equal(stack.db.aiToolLog.slice(start).filter(item => item.query === 'task-visibility').length, 1, 'bomba yanıt son işleme girmez');
+  revokeFullProjectTask(stack, TASKS.OVERDUE);
+  assertHidden(await (async () => (await loadAssistantConversation(valid.conversationId)).body.messages.find(item => item.id === valid.saved.message.id))(), valid.saved);
+});
+
+test('düğüm kökeni olmayan eski görev ayrıntısının WBS yolu adlardan doğrulanmaz ve ayrı biçim metniyle kapalı kalır', async t => {
+  const stack = stackFor(t);
+  const task = stack.db.tasks.find(row => row.WbsId === WBS.FULL_DETAIL);
+  const current = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: task.TaskId }]] });
+  const legacy = await saveLegacyEvidence(stack, { conversationId: current.conversationId, calls: [['rota_task_detail', { taskId: task.TaskId }]] });
+  const [row] = evidenceRowsOf(stack, legacy.saved.message.id);
+  const payload = JSON.parse(row.EvidenceJson);
+  assert.ok(payload.data.task.wbsPath.length > 0 && Array.isArray(payload.data.task.wbsNodes));
+  // Düğüm kökeni eklenmeden önceki kayıt biçimi: yalnız adlar ve özgün yetki dönemi.
+  delete payload.data.task.wbsNodes;
+  row.EvidenceJson = JSON.stringify(payload);
+  const answersOf = async () => (await loadAssistantConversation(current.conversationId)).body.messages.filter(item => item.role === 'assistant');
+  const assertLegacyClosed = (answers) => {
+    const answer = answers.find(item => item.id === legacy.saved.message.id);
+    assert.equal(answer.finishReason, 'unavailable');
+    assert.equal(answer.content, LEGACY_FORMAT_TEXT);
+    assert.deepEqual(answer.evidence, []);
+    assert.equal(JSON.stringify(answer).includes(protectedMarker(legacy.saved)), false, 'korunan metnin parçası açılamaz');
+  };
+  const start = stack.db.aiToolLog.length;
+  const unchanged = await answersOf();
+  assert.equal(unchanged.find(item => item.id === current.saved.message.id).content, current.saved.message.content, 'güncel biçim aynı yetkiyle açılır');
+  assertLegacyClosed(unchanged);
+  assert.equal(stack.db.aiToolLog.slice(start).filter(item => item.query === 'task-visibility').length, 1, 'eski biçim son işleme girmez');
+  // Aynı adlı ikinci düğüm adlardan kimlik çıkarımını belirsizleştirir; sonuç değişmez.
+  const node = stack.db.wbs.find(item => item.WbsId === WBS.FULL_DETAIL);
+  stack.db.wbs.push({ ...node, WbsId: randomUUID() });
+  assertLegacyClosed(await answersOf());
+  // Erişim kalkınca güncel yanıt gizlenir; eski biçim metni yetki durumundan bağımsızdır.
+  revokeFullProjectTask(stack, task.TaskId);
+  const revoked = await answersOf();
+  assertHidden(revoked.find(item => item.id === current.saved.message.id), current.saved);
+  assertLegacyClosed(revoked);
+});
+
+test('kesin doğrulanamayan yeni yanıtlar son işlem harcamaz; ertelenmiş eski geçerli yanıt doğrulanır', async t => {
+  const stack = stackFor(t);
+  const { unverifiableAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+  const valid = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+  const invalid = [];
+  for (let index = 0; index < 3; index += 1) {
+    const item = await saveLegacyEvidence(stack, { conversationId: valid.conversationId, calls: [['rota_task_detail', { taskId: TASKS.DUE_SOON }]] });
+    const [row] = evidenceRowsOf(stack, item.saved.message.id);
+    const payload = JSON.parse(row.EvidenceJson);
+    const json = JSON.stringify({ ...payload, authorizationPopulation: unverifiableAuthorizationPopulation() });
+    row.EvidenceJson = JSON.stringify({ ...JSON.parse(json), padding: 'x'.repeat(31000 - json.length) });
+    for (let ordinal = 2; ordinal <= 16; ordinal += 1) stack.db.aiMessageEvidence.push({ ...row, Ordinal: ordinal });
+    invalid.push(item);
+  }
+  assert.ok(invalid.length * 16 * 31000 * 2 > TOOL_LIMITS.maxHistoryEvidenceBytes, 'eski geçerli yanıt ilk sayfadan ertelenmeli');
+  const { loadConversationEvidence } = await import('../src/server/ai/assistant/conversationStore.js');
+  const first = await loadConversationEvidence(await getSqlPool(), AYSE, { conversationId: valid.conversationId, maxEvidence: 1600 });
+  assert.ok(first.deferredMessages.has(valid.saved.message.id));
+  assert.ok(invalid.some(item => first.deferredMessages.has(item.saved.message.id)), 'ertelenmiş doğrulanamaz yanıt da sınanmalı');
+  const start = stack.db.aiToolLog.length;
+  const txStart = stack.db.transactions.length;
+  const answers = (await loadAssistantConversation(valid.conversationId)).body.messages.filter(item => item.role === 'assistant');
+  assert.equal(answers.find(item => item.id === valid.saved.message.id).content, valid.saved.message.content);
+  for (const item of invalid) {
+    const answer = answers.find(row => row.id === item.saved.message.id);
+    assert.equal(answer.content, UNVERIFIABLE_TEXT);
+    assert.deepEqual(answer.evidence, []);
+    assert.equal(JSON.stringify(answer).includes(protectedMarker(item.saved)), false);
+  }
+  assert.equal(stack.db.transactions.length - txStart, 1, 'yalnız doğrulanabilir yanıt SERIALIZABLE işlem açar');
+  assert.equal(stack.db.aiToolLog.slice(start).filter(item => item.query === 'task-visibility').length, 1);
+  revokeFullProjectTask(stack, TASKS.OVERDUE);
+  const revoked = (await loadAssistantConversation(valid.conversationId)).body.messages;
+  for (const item of [valid, ...invalid]) assert.equal(JSON.stringify(revoked).includes(protectedMarker(item.saved)), false);
+});
+
+for (const failure of ['tek-kilitlenme', 'sürekli-kilitlenme', 'kilitlenme-dışı']) {
+  test(`son SERIALIZABLE işlem yalnız kilitlenmede ve en fazla bir kez yinelenir (${failure})`, async t => {
+    const stack = stackFor(t);
+    const { sql } = await import('../src/server/db/pool.js');
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+    let attempts = 0;
+    stack.db.queryBarrier = { entered: 0, released: Promise.resolve(), match(text) {
+      if (!text.startsWith('/* rota-ai-tool:task-visibility */')) return false;
+      attempts += 1;
+      if (failure === 'kilitlenme-dışı') throw Object.assign(new Error('KORUNAN_HAM_HATA'), { code: 'DATABASE_UNAVAILABLE' });
+      if (failure === 'sürekli-kilitlenme' || attempts === 1) throw Object.assign(new Error('KORUNAN_KİLİTLENME'), { number: 1205 });
+      return false;
+    } };
+    const logs = [];
+    t.mock.method(console, 'warn', text => logs.push(text));
+    const txStart = stack.db.transactions.length;
+    const answer = await savedAnswer(conversationId);
+    const transactions = stack.db.transactions.slice(txStart);
+    assert.ok(transactions.every(row => row.isolationLevel === sql.ISOLATION_LEVEL.SERIALIZABLE), 'yalıtım düzeyi gevşetilemez');
+    assert.equal(attempts, failure === 'kilitlenme-dışı' ? 1 : 2);
+    assert.equal(transactions.length, attempts);
+    if (failure === 'tek-kilitlenme') {
+      assert.ok(transactions[0].rollbackStatementIndex != null && transactions[1].commitStatementIndex != null);
+      assert.equal(answer.content, saved.message.content);
+      assert.equal(logs.length, 0);
+      return;
+    }
+    assert.equal(answer.finishReason, 'unavailable');
+    assert.deepEqual(answer.evidence, []);
+    assert.equal(JSON.stringify(answer).includes(protectedMarker(saved)), false);
+    assert.equal(logs.length, 1);
+    assert.equal(JSON.parse(logs[0]).code, 'AI_HISTORY_CHECK_FAILED');
+    assert.doesNotMatch(logs[0], /KORUNAN_/);
+  });
+}
