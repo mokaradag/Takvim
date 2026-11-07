@@ -152,6 +152,19 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
       plan = { ...plan, analysis: rest, ...(plan[key] == null ? { [key]: value } : {}) };
     }
   }
+  // Aşama F: "hem halka hem yığılmış" gibi iki grafik türü isteği. Model görünür şema tek tür önerir; en çok iki farklı,
+  // bilinen türün dizisi kabul edilir (ilk tür birincil istektir). Geçersiz dizi eskisi gibi `$.chart:enum` ile reddedilir.
+  // Zayıf model diziyi JSON metni olarak da yazar (`"[\"donut\", \"stacked\"]"`): iç içe alanlardaki gibi yalnızca geçerli
+  // JSON dizisi çözülür; anlam yorumlanmaz, tür denetimi aynen uygulanır.
+  let charts = null;
+  const chartList = decodedJson(plan.chart);
+  if (Array.isArray(chartList)) {
+    const list = chartList;
+    if (list.length >= 1 && list.length <= 2 && new Set(list).size === list.length && list.every((type) => PLAN_CHART_TYPES.includes(type))) {
+      charts = list.length > 1 ? Object.freeze([...list]) : null;
+      plan = { ...plan, chart: list[0] };
+    }
+  }
   onDecoded(plan);
   if (Array.isArray(plan.additionalRequests) && !plan.additionalRequests.length) delete plan.additionalRequests;
   // Boş istek nesnesi analiz özetinin yanında anlam taşımaz (zayıf model şablonu doldurur).
@@ -184,10 +197,14 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   // Grafik türü söylendiyse görselleştirme de istenmiştir; tür yalnızca sunumun tercihidir (veri yetkisi değildir).
   const declined = plan.visual === false || plan.analysis?.visual === false;
   const base = { intent: plan.intent, language: plan.language, ...(!declined && (plan.visual === true || plan.chart != null) ? { visual: true } : declined ? { visual: false } : {}),
-    ...(!declined && plan.chart != null ? { chart: plan.chart } : {}), ...(plan.table != null ? { table: plan.table } : {}) };
+    ...(!declined && plan.chart != null ? { chart: plan.chart, ...(charts ? { charts } : {}) } : {}), ...(plan.table != null ? { table: plan.table } : {}) };
   if (plan.intent === PLANNER_INTENTS.ROTA && present('analysis')) {
+    // Aşama F: özetin yanına yalnızca ad çözümü çağrıları (kişi/proje arama) yazılmışsa bunlar gereksizdir: adları sunucu
+    // özetten kendisi çözer. Çağrılar YÜRÜTÜLMEDEN atılır (yapısal normalleştirme; düzeltme turu açılmaz). Başka araç çağrısı ya da
+    // istek ile birlikte özet eskisi gibi reddedilir.
+    const lookups = planned.length && planned.every((call) => NAME_LOOKUP_TOOLS.includes(call.name));
     // Analitik özet: sunucu her yönü kayıt defterinin sabit istek biçimine açar; okumaları yalnızca sunucu kurar.
-    if (present('request') || present('additionalRequests') || planned.length || direct.length) throw invalidArguments(['$.analysis:request']);
+    if (present('request') || present('additionalRequests') || (planned.length && !lookups) || direct.length) throw invalidArguments(['$.analysis:request']);
     const parsed = parseAnalysis(plan.analysis);
     // Takipte yazılmayan yön/ufuk önceki doğrulanmış analizden; görselleştirme ve grafik türü de açıkça kapatılmadıkça sürer.
     const analysis = resolveAnalysisBrief(parsed, { previous: previousAnalysis, today });
@@ -196,8 +213,10 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const chart = base.chart || (follow && visual && !declined ? previousAnalysis.chart : null) || null;
     const table = base.table === true || Boolean(follow && previousAnalysis.table && plan.table !== false);
     const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
-    const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null });
-    return { plan: { ...base, ...(visual ? { visual: true } : declined ? { visual: false } : {}), ...(chart ? { chart } : {}), ...(table ? { table: true } : {}), analysis, request,
+    const requested = visual && base.charts && chart === base.chart ? base.charts : null;
+    const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested });
+    return { plan: { ...base, ...(visual ? { visual: true } : declined ? { visual: false } : {}), ...(chart ? { chart } : {}), ...(requested ? { charts: requested } : {}),
+      ...(table ? { table: true } : {}), analysis, request,
       ...(additionalRequests.length ? { additionalRequests } : {}) }, brief: parsed, calls: [] };
   }
   if (plan.intent === PLANNER_INTENTS.ROTA) {
@@ -238,6 +257,8 @@ function planChoice(schema, value, prefix) {
 }
 
 const PLAN_KEYS = Object.freeze(['intent', 'language', 'analysis', 'visual', 'chart', 'table', 'request', 'additionalRequests', 'calls', 'clarify', 'abstain']);
+/** Özetin adlarını sunucu zaten çözer: bu araçların özet yanındaki çağrıları yürütülmeden atılabilir. */
+const NAME_LOOKUP_TOOLS = Object.freeze(['rota_person_search', 'rota_project_search']);
 
 /** Plan düzeyindeki sorunların beklenen biçimi (yalnızca sözleşmeden; modelin değeri yansıtılmaz). */
 export function planShapeHints(problems) {

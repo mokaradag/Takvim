@@ -75,7 +75,7 @@ test('kanıtlı yanıt aynı oturumda tek, araçsız ve dar sınırlı düzen tu
   assert.equal(compose.messages.length, 2, 'düzen turu konuşma geçmişini ve araç sonuçlarını yeniden göndermez');
   assert.equal(sheet.question, QUESTION);
   assert.ok(response.events.some((event) => event.event === 'status' && event.data.phase === 'composing'));
-  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
   const blocks = parseAssistantMarkdown(answer.content);
   const chart = parseAnswerChart(blocks.find((block) => block.type === 'code').text);
   assert.deepEqual(chart.items.map((item) => [item.label, item.value]), [['Haftalık durum toplantısı', 23], ['Radar test planı', 10], ['Kısmi kendi görevim', 1]]);
@@ -189,7 +189,7 @@ test("anlatım kabul kuyruğu süresi dolunca doğrulanmış dönüş teslim edi
   stack.provider.enqueue(plan(), composer(() => ({ blocks: [{ type: 'say', items: ['P99'] }, { type: 'rows', source: 'T1' }] })));
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
-  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
   assert.equal(deepAdmissions, 1);
   assert.equal(stack.provider.calls.length, 2, 'queue expiry makes no Deep provider call or retry');
   assert.deepEqual(aiTelemetrySnapshot().grounding.escalations.byOutcome, { timeout: 1 });
@@ -233,7 +233,7 @@ test('kalan süre düzen penceresine yetmiyorsa düzen istenmez; doğrulanmış 
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.equal(stack.provider.calls.length, 1, 'düzen turu açılmadı');
-  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
   assert.equal(turnLines(logs)[0].context.presentation.reason, 'BUDGET');
 });
 
@@ -249,7 +249,7 @@ test('düzen turu takılırsa kendi penceresinde kesilir, oturum düşmez ve do�
   t.mock.timers.tick(COMPOSITION_RUNTIME.timeoutMs + 1);
   const answer = doneOf(await pending).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
-  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
   assert.equal(stack.provider.calls[1].aborted, true, 'takılan istek kesildi');
   assert.equal(turnLines(logs)[0].context.presentation.reason, 'TIMEOUT');
   assert.equal(activeAssistantGenerationCountForTests(), 0);
@@ -277,7 +277,7 @@ test('işletim anahtarı kapalıyken model turu yoktur; geçersiz değer güvenl
     stack.provider.enqueue(plan());
     const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
     assert.equal(stack.provider.calls.length, 1);
-    assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+    assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
     assert.equal(/Doğal yanıt düzeni ayarı/.test(aiHealthComponent().message), value === 'tru', 'geçersiz değer yöneticiye bildirilir');
   });
 });

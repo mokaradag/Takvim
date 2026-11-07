@@ -57,7 +57,7 @@ for (const mode of ['standard', 'deep']) {
       'tek model turu; seçim, düzeltme ya da devir turu yok');
     assert.equal(answer.finishReason, 'stop');
     assert.equal(answer.mode, mode);
-    assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu \(ölçüt: Termin: Gecikmiş; Sorumlu: Ben\)\. 【R1】/);
+    assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
     assert.equal(answer.content.split('\n').filter((line) => /^- \*\*.+\*\* — Termin: \*\*.+\*\* 【R1】$/.test(line)).length, 3);
     assert.ok(answer.content.endsWith(`\n\n${SCOPE_DISCLOSURE_TEXT}`), 'kısmi kapsam notu sunucu seçiminde de eklenir');
     assert.deepEqual(answer.evidence.map((item) => item.id), ['R1']);
@@ -119,7 +119,7 @@ test("boş gecikmiş nüfus tam ilk sayfadan tek model turunda yanıtlanır", as
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
   assert.equal(stack.provider.calls.length, 1);
   assert.equal(answer.finishReason, 'stop');
-  assert.match(answer.content, /^Eşleşen \*\*0\*\* görev bulundu/);
+  assert.match(answer.content, /^Şu anda gecikmiş göreviniz yok\./);
   assert.equal(answer.content.includes('\n- '), false, 'boş nüfusta satır yazılmaz');
   drained(stack.provider);
 });
@@ -185,7 +185,7 @@ test("isteksiz yinelenen yerel veri çağrısı SQL yürütmez; tek Derin dönü
     { type: 'script', respond: () => { sqlBeforeDeep = (stack.db.aiToolLog || []).length; return nativePlan(); } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
-  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
   assert.equal(sqlBeforeDeep, 0, 'bildirimsiz çağrılar SQL çalıştırmaz');
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [...Array(2).fill(DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools'].model),
     DEFAULT_AI_MODEL_REGISTRY.profiles['chat.tools.reasoning'].model]);

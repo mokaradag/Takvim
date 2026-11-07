@@ -2077,6 +2077,10 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
   `schedule`, `critical`. Sunucu en çok `PLANNER_LIMITS.maxRequests` (3) bölüm okur: yönlerin bütün fiziksel açılımı
   (karşılaştırmada kayıt başına bölümler dâhil), ufuk bölümü ve portföy satırları bütçeye sığmalıdır. Sığmayan plan
   veri okunmadan `$.analysis.focus:requestBudget` ile reddedilir; istenen yön sessizce düşürülmez.
+  **Aşama F güncellemesi:** bildirilen yönlerin okumaları mevcut fiziksel üst sınıra (`maxParts` = 4) kadar kabul edilir;
+  model şeması 1-3 yön önermeyi sürdürür, sığan dördüncü yön düzeltme turu açmaz. Bütçe aşımında model kendi yönlerinin
+  sıralı alt kümesine daraltır (`narrowable`; karşılaştırmada da yön daralır, özne düşmez). Ayrıntı:
+  [Yol Haritası](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md) §5, [Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) §2.
 - Açılım (`expandAnalysis`) yalnızca türlü değerlerle çalışır, kullanıcı metnini okumaz; çıktı modelin yazacağı ham
   isteklerdir ve 4C bildirim doğrulamasından, yetkiden ve kanıt seçiminden aynen geçer. Adlar 4C içerme kuralına
   tabidir (kullanıcının bu iletisinde geçmeli).
@@ -2352,7 +2356,8 @@ verilirse bu sınıra uyulur. Onarım yoğunluğu bu payı aşarsa koşu başar�
 ### 15.9 PR #111 son yakınsama sözleşmesi
 
 - Tarih aralığı ortak görev nüfusuna uygulanır: genel görünüm, karşılaştırma, grafik ve Ayrıntılı bütünleyici
-  okumalar aralık dışına çıkmaz. Yaklaşan işler aralık ile bugünden sonraki açık işlerin kesişimidir ve gerçek
+  okumalar aralık dışına çıkmaz. **Aşama F istisnası:** gecikme her zaman bugüne göre ölçülür; başlangıcı bugün ya da
+  sonrası olan dönem gecikmiş iş okumasını daraltmaz (aksi hâlde okuma tanımı gereği boştur ve yanlış güvence verir). Yaklaşan işler aralık ile bugünden sonraki açık işlerin kesişimidir ve gerçek
   alt sınır yanıtta söylenir. Dönem desteklemeyen portföy/iş yükü araçları yerine mevcut tarihli görev
   analitiği kullanılır; SQL yetki kapsamı genişlemez.
 - Takipte her eksik tarih sınırı ayrı devralınır. `relativeWindow:today|next_7_days` mutlak tarihle birlikte

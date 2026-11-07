@@ -537,7 +537,7 @@ test('kardeş koleksiyonlu kaynak bağımlı kimlikleriyle kabul edilir; açıkl
     (input) => { const evidence = JSON.parse(input.messages.filter((message) => message.role === 'tool').at(-1).content); return prose(JSON.stringify({ kind: 'clarification', evidence: evidence.evidenceId })); }], { user: 'Bildirim sayım ve Ali Veli unvanı' });
   assert.equal(clarified.result.outcome, 'clarification');
   assert.ok(clarified.result.evidenceRows.every((row) => !JSON.parse(row.evidenceJson).clarificationContext));
-  assert.match(clarified.result.text, /okunmamış/);
+  assert.match(clarified.result.text, /okunmamış/i);
   assert.ok(clarified.result.text.includes(renderPlannerClarification({ reason: 'missing_referent', locale: 'tr' })));
 });
 
@@ -588,7 +588,7 @@ test('ad çözümü kanıtı başarısız ayrıntı okumasını temellendirilmi�
     user: 'Bildirimlerim ve Radar test planı gerçekleşen saati', setup: ({ db }) => { db.aiToolFailure = { 'task-detail': Object.assign(new Error('özel'), { code: 'ESOCKET' }) }; }
   });
   assert.equal(result.outcome, 'unavailable');
-  assert.match(result.text, /okunmamış/);
+  assert.match(result.text, /okunmamış/i);
   assert.match(result.text, /ulaşılamıyor|tamamlanamadı/);
   assert.doesNotMatch(result.text, /gerçekleşen.*\*\*12\*\*/);
 });
@@ -598,7 +598,7 @@ test('sonraki bölümün geçici sağlayıcı hatası önceki doğrulanmış yan
   const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: notifications, additionalRequests: [ambiguous] }),
     () => { throw new AiError(AI_ERROR_CODES.AI_PROVIDER_UNAVAILABLE); }], { user: 'Bildirim sayım ve Ali Veli unvanı' });
   assert.equal(result.outcome, 'unavailable');
-  assert.match(result.text, /okunmamış/);
+  assert.match(result.text, /okunmamış/i);
   assert.match(result.text, /tamamlanamadı/);
 });
 
@@ -822,7 +822,7 @@ test("kurtarılabilir sağlayıcı kaybı kısmi kanıtı korur; iptal yukarı t
   for (const code of ['AI_PROVIDER_UNAVAILABLE', 'AI_BUSY', 'AI_RATE_LIMITED', 'AI_TIMEOUT']) {
     const { result } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: notifications, additionalRequests: [ambiguous] }),
       () => { throw new AiError(code, { details: { reason: 'PROVIDER_STALLED' } }); }], { user: 'Bildirim sayım ve Ali Veli unvanı' });
-    assert.equal(result.outcome, 'unavailable'); assert.match(result.text, /okunmamış/); assert.equal(result.evidence.length, 1);
+    assert.equal(result.outcome, 'unavailable'); assert.match(result.text, /okunmamış/i); assert.equal(result.evidence.length, 1);
   }
   await assert.rejects(turn(t, [plan({ intent: 'rota', language: 'tr', request: notifications, additionalRequests: [ambiguous] }),
     () => { throw new AiError('AI_CANCELLED'); }], { user: 'Bildirim sayım ve Ali Veli unvanı' }), e => e.code === 'AI_CANCELLED');
@@ -848,7 +848,7 @@ test("bildirim tükenmesi etkin Rota kararını ve bağımsız kardeş okumayı 
   const invalid = { text: '', finishReason: 'tool_calls', toolCalls: [{ name: 'rota_task_analytics', arguments: '{}' }] };
   const { result, decisions } = await turn(t, [plan({ intent: 'rota', language: 'tr', request: unresolved, additionalRequests: [notifications] }), invalid, invalid], { user: 'Radar iş paketi baz plan sayısı ve bildirim sayım' });
   assert.equal(result.stats.attempted, 1);
-  assert.match(result.text, /okunmamış/);
+  assert.match(result.text, /okunmamış/i);
   assert.deepEqual(decisions.map(d => d.intent), ['rota']);
 });
 
@@ -1482,7 +1482,7 @@ test("kabul edilen çoklu plan tekrar zorlanmaz; ilgisiz çağrı kardeş kanıt
   assert.equal(result.stats.attempted, 1);
   assert.equal(result.evidence.length, 1);
   assert.equal(result.evidenceRows[0].toolName, 'rota_notifications');
-  assert.match(result.text, /okunmamış/);
+  assert.match(result.text, /okunmamış/i);
   assert.deepEqual(decisions.map(decision => decision.intent), ['rota']);
 });
 

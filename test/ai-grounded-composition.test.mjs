@@ -130,7 +130,7 @@ test('kapalı düzen değerleri, tabloyu, grafiği ve kaynakları yalnızca sunu
   assert.deepEqual(spec.evidence, ['R1']);
   assert.equal(spec.unit, 'days');
   assert.equal(spec.locale, 'tr');
-  assert.equal(rendered.text.match(/Eşleşen \*\*3\*\*/g).length, 1, 'ayrıntı yinelenmez');
+  assert.equal(rendered.text.match(/\*\*3\*\* gecikmiş göreviniz var/g).length, 1, 'ayrıntı yinelenmez');
 });
 
 test('geçerli yuvalarla yanlış sıralama, çapraz kayıt ve ters karşılaştırma serbest metinle yetki kazanamaz', async (t) => {
@@ -194,10 +194,10 @@ test('eşleşmesiz bölümün notu düzende atlanırsa sunucu ekler; bölüm yan
   const validated = check(composition, narrated(validLead(composition), narrate(composition), { type: 'rows', source: 'T1' }));
   assert.equal(validated.ok, true, JSON.stringify(validated.issues));
   const rendered = renderComposition(composition, validated);
-  assert.match(rendered.text, /Eşleşen görev bulunmadı[^\n]*【R1】$/);
-  assert.equal(rendered.text.match(/bulunmadı/g).length, 1, 'model eklediyse sunucu yinelemez');
+  assert.match(rendered.text, /Gösterilecek görev yok[^\n]*【R1】$/);
+  assert.equal(rendered.text.match(/Gösterilecek görev yok/g).length, 1, 'model eklediyse sunucu yinelemez');
   const shown = renderComposition(composition, check(composition, narrated(validLead(composition), narrate(composition), { type: 'rows', source: 'T1' }, { type: 'details', source: emptyDetail.id })));
-  assert.equal(shown.text.match(/bulunmadı/g).length, 1);
+  assert.equal(shown.text.match(/Gösterilecek görev yok/g).length, 1);
 });
 
 test('kaydın adı ve proje bağlamı sunucu satırında kendi değeriyle kalır', async (t) => {
@@ -234,7 +234,7 @@ test('İngilizce sayfa İngilizce değerler ve etiketler taşır', async (t) => 
   const response = { ...narrated(validLead(), narrate(composition), { type: 'rows', source: 'T1', style: 'list' }), language: 'en' };
   const validated = check(composition, response, { userText: 'Show my overdue tasks.' });
   assert.equal(validated.ok, true, JSON.stringify(validated.issues));
-  assert.match(renderComposition(composition, validated).text, /\*\*3\*\* matching tasks were found/);
+  assert.match(renderComposition(composition, validated).text, /You currently have \*\*3\*\* overdue tasks/);
   assert.equal(issue(check(composition, { ...response, language: 'tr' })), 'LANGUAGE_MISMATCH');
 });
 
@@ -547,7 +547,8 @@ test('ayrıntı tablo ve grafik öncesinde bir kez çizilir; ortak ölçüt yine
     const detail = composition.render.details.get('D1').text;
     assert.ok(text.startsWith(detail));
     assert.equal(text.split(detail).length, 2);
-    assert.equal(text.split('Sorumlu: Ben').length, 2, text);
+    // Ölçüt en çok bir kez (doğal sayım cümlesi onu söylediyse hiç) yazılır.
+    assert.ok(text.split('Sorumlu: Ben').length <= 2, text);
   }
 });
 
