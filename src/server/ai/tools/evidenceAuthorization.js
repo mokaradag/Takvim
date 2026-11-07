@@ -265,6 +265,13 @@ function assigneeGroupsNeedIdentity(groups, permitted) {
   return needed;
 }
 
+/**
+ * Kalite sayımlarının açık görev sayısı sınırında, denetim kimliklerinin
+ * benzersiz ve gerekli sorumlu denetimlerinin kayıtlı olup olmadığını değerlendirir.
+ *
+ * @param {object} data - Kayıtlı veri kalitesi sonucu.
+ * @returns {boolean} Denetim listesi bu biçim koşullarını sağlıyorsa true.
+ */
 function validQualityChecks(data) {
   return Array.isArray(data.checks)
     && data.checks.every(row => row && typeof row.id === 'string' && Number.isSafeInteger(row.count) && row.count >= 0 && row.count <= data.openTaskCount)
@@ -354,7 +361,7 @@ function savedIdentityPopulation(payload, population, permitted, personHidden = 
  * Diğer araçların ek yetki kuralları mevcut dönem denetiminde kalır.
  */
 export function savedEvidenceRequirements(entry, auth, { exact = false } = {}) {
-  if ((!entry.savedPopulation && !exact) || !/^[a-f0-9]{64}$/.test(entry.authorizationEpoch || '')
+  if ((!entry.savedPopulation && !exact) || typeof entry.authorizationEpoch !== 'string' || !/^[a-f0-9]{64}$/.test(entry.authorizationEpoch)
     || !['rota_task_analytics', 'rota_workload_summary', 'rota_task_search', 'rota_task_detail',
       'rota_project_detail', 'rota_project_search', 'rota_portfolio_summary', 'rota_wbs_inspect',
       'rota_baseline_compare', 'rota_dependency_inspect', 'rota_recurrence_inspect', 'rota_data_quality'].includes(entry.tool)) return null;

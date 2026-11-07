@@ -134,7 +134,17 @@ export function createToolTurnContext({
     return { ...decoded, requirements };
   }
 
+  /** Kaydın alan gereksinimleri bu görev için güncel kimlik tabanı istiyor mu? */
   const needsIdentity = (requirements, taskId) => Boolean(requirements && (requirements.identities || requirements.identityTaskIds?.has(taskId)));
+  /**
+   * Güncel görünür görev eşlemesinde proje kökenini ve gerekiyorsa kimlik tabanını
+   * denetler; eksik görev/proje kapalı reddedilir. Yeni sorgu çalıştırmaz.
+   *
+   * @param {Map} current - Aynı denetimde okunan görünür görevler.
+   * @param {object} reference - Kayıtlı görev ve proje kimliği.
+   * @param {boolean} identity - Kimlik tabanının zorunlu olup olmadığı.
+   * @returns {boolean} Kayıt güncel görünürlük gereksinimini sağlıyorsa true.
+   */
   const taskStillValid = (current, { taskId, projectId }, identity) => {
     const row = current.get(taskId);
     return Boolean(projectId && row && row.projectId === projectId && (!identity || row.identityBase));
@@ -277,6 +287,13 @@ export function createToolTurnContext({
     },
     authorizationEpoch() { return state.epoch; },
     evidenceAuthorization(args, envelope, projectIds) { return scopedEvidenceAuthorization(state.current.auth, state.current.scope, args, envelope, projectIds); },
+    /**
+     * Yüklenmiş tur kapsamında kanıtın projeleri için açıklanan erişim düzeyini
+     * kayda hazırlar; güncel yetki denetiminin yerine geçmez ve SQL çalıştırmaz.
+     *
+     * @param {Array<object>} references - Doğrulanmış proje kimliği taşıyan görevler.
+     * @returns {Array<object>} Her proje için tek kimlik ve erişim düzeyi.
+     */
     evidenceProjectLevels(references) {
       return [...new Set(references.map(row => row.projectId))].map(projectId => {
         const access = state.current.scope.projects.get(projectId);

@@ -2226,38 +2226,88 @@ test('yüz iletili geçmişte sonraki yanıtların boyutu eski yetkili metni kap
   for (const item of items) assert.equal(JSON.stringify(revoked).includes(item.saved.message.content), false);
 });
 
-test('sayfası doğrulanmadan ertelenmiş geçmişin analiz bağlamı takip turuna alınmaz', async t => {
-  const stack = stackFor(t);
-  const { conversationId } = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
-  const { compressAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
-  const { normalizeAnalysisContext } = await import('../src/domain/ai/analysisContext.js');
-  const { loadConversationEvidence } = await import('../src/server/ai/assistant/conversationStore.js');
-  const { prepareAssistantTurn } = await import('../src/server/ai/assistant/assistantService.js');
-  const row = stack.db.aiMessageEvidence[0];
-  const payload = JSON.parse(row.EvidenceJson);
-  const inner = { ...payload.authorizationPopulation, padding: 'x'.repeat(1200000) };
-  assert.ok(Buffer.byteLength(JSON.stringify(inner)) * 8 > TOOL_LIMITS.maxHistoryInflatedBytes);
-  const population = compressAuthorizationPopulation(inner);
-  assert.equal(population.complete, true);
-  const analysisContext = normalizeAnalysisContext({ v: 1, scope: 'self', subjects: [], focus: ['overview'] });
-  assert.ok(analysisContext);
-  row.EvidenceJson = JSON.stringify({ ...payload, authorizationPopulation: population });
-  for (let ordinal = 2; ordinal <= 8; ordinal += 1) stack.db.aiMessageEvidence.push({ ...row, Ordinal: ordinal,
-    EvidenceJson: JSON.stringify({ ...payload, authorizationPopulation: population, ...(ordinal === 8 ? { analysisContext } : {}) }) });
-  assert.ok(stack.db.aiMessageEvidence.every(row => row.EvidenceJson.length < 32000));
-  const pool = await getSqlPool();
-  const stored = await loadConversationEvidence(pool, AYSE, { conversationId, maxEvidence: 1600 });
-  const messageId = row.MessageId.toLowerCase();
-  assert.ok(stored.deferredMessages.has(messageId), 'gerçek açılım bütçesi ertelenmiş dalı çalıştırmalı');
-  assert.ok(stored.analysisByMessage.has(messageId), 'bağlam taşıyan ilk kayıt sığmalı, başka kayıt ertelenmeli');
-  assert.ok(stored.authorizationByMessage.get(messageId).some(entry => entry.unverifiable));
-  const turn = await prepareAssistantTurn({ readBody: async () => ({ conversationId, turnId: randomUUID(),
-    source: 'rota', message: 'Önceki özeti sürdür', mode: 'standard' }) });
-  try {
-    assert.equal(turn.previousAnalysis, null);
-    assert.equal(turn.previousResult, null);
-  } finally { turn.claim.release(); }
-});
+for (const variant of ['tam', 'ertelenmiş', 'bozuk-kimlik', 'sayfa-hatası', 'eksik-dönem', 'bozuk-dönem', 'dizi-dönem']) {
+  test(`çok kanıtlı geçmişte analiz ve sonuç kapsamı yalnız tam kayıttan sürer (${variant})`, async t => {
+    const stack = stackFor(t);
+    const { conversationId, saved } = await saveLegacyEvidence(stack, { calls: [['rota_task_detail', { taskId: TASKS.OVERDUE }]] });
+    const { compressAuthorizationPopulation } = await import('../src/server/ai/tools/evidenceAuthorization.js');
+    const { normalizeAnalysisContext } = await import('../src/domain/ai/analysisContext.js');
+    const { loadConversationEvidence } = await import('../src/server/ai/assistant/conversationStore.js');
+    const { prepareAssistantTurn } = await import('../src/server/ai/assistant/assistantService.js');
+    const row = stack.db.aiMessageEvidence[0];
+    const payload = JSON.parse(row.EvidenceJson);
+    const inner = { ...payload.authorizationPopulation, padding: 'x'.repeat(1200000) };
+    assert.ok(Buffer.byteLength(JSON.stringify(inner)) * 8 > TOOL_LIMITS.maxHistoryInflatedBytes);
+    const population = compressAuthorizationPopulation(inner);
+    assert.equal(population.complete, true);
+    const analysisContext = normalizeAnalysisContext({ v: 1, scope: 'self', subjects: [], focus: ['overview'] });
+    const resultScope = { type: 'task', taskIds: [TASKS.OVERDUE.toLowerCase()] };
+    assert.ok(analysisContext);
+    const deferred = ['ertelenmiş', 'bozuk-kimlik', 'sayfa-hatası'].includes(variant);
+    const count = deferred ? 8 : 2;
+    row.EvidenceJson = JSON.stringify({ ...payload, authorizationPopulation: population,
+      ...(variant === 'bozuk-kimlik' ? { authorizationIdentityPopulation: { v: 1, complete: false } } : {}),
+      ...(['eksik-dönem', 'bozuk-dönem', 'dizi-dönem'].includes(variant)
+        ? { authorizationEpoch: variant === 'eksik-dönem' ? null : variant === 'dizi-dönem' ? [payload.authorizationEpoch] : 'bozuk' } : {}) });
+    for (let ordinal = 2; ordinal <= count; ordinal += 1) stack.db.aiMessageEvidence.push({ ...row, Ordinal: ordinal,
+      EvidenceJson: JSON.stringify({ ...payload, authorizationPopulation: population,
+        ...(ordinal === count ? { analysisContext, resultScope } : {}) }) });
+    assert.ok(stack.db.aiMessageEvidence.every(entry => entry.EvidenceJson.length < 32000));
+    const pool = await getSqlPool();
+    const stored = await loadConversationEvidence(pool, AYSE, { conversationId, maxEvidence: 1600 });
+    const messageId = row.MessageId.toLowerCase();
+    assert.equal(stored.deferredMessages.has(messageId), deferred);
+    assert.deepEqual(stored.analysisByMessage.get(messageId), analysisContext, 'ilk çözülen kayıt analiz bağlamını taşımalı');
+    assert.deepEqual(stored.resultScopeByMessage.get(messageId), resultScope, 'ilk çözülen kayıt sonuç kapsamını taşımalı');
+    const entries = stored.authorizationByMessage.get(messageId);
+    assert.ok(entries.some(entry => !entry.unverifiable), 'aynı iletide geçerli kayıt bulunmalı');
+    if (deferred || variant === 'tam') assert.equal(entries.some(entry => entry.unverifiable), deferred);
+    // Devam yolu yeniden doğrulamaz; kısmen açılan iletinin iki göndergesi de kapalı kalır.
+    const turn = await prepareAssistantTurn({ readBody: async () => ({ conversationId, turnId: randomUUID(),
+      source: 'rota', message: 'Önceki özeti sürdür', mode: 'standard' }) });
+    try {
+      assert.deepEqual({ analysis: turn.previousAnalysis, result: turn.previousResult?.scope || null },
+        variant === 'tam' ? { analysis: analysisContext, result: resultScope } : { analysis: null, result: null });
+      assert.equal(JSON.stringify(turn.modelMessages).includes(saved.message.content), false, 'korunan eski metin modele taşınmamalı');
+    } finally { turn.claim.release(); }
+    let pageReads = 0;
+    const request = pool.request.bind(pool);
+    const mocked = t.mock.method(pool, 'request', () => {
+      const value = request();
+      const input = value.input.bind(value);
+      const query = value.query.bind(value);
+      let targetMessage = null;
+      value.input = (name, ...args) => {
+        if (name === 'messageId') targetMessage = args.at(-1);
+        return input(name, ...args);
+      };
+      value.query = async sql => {
+        if (sql.includes('AS EvidenceReady') && targetMessage) {
+          pageReads += 1;
+          if (variant === 'sayfa-hatası') throw Object.assign(new Error('Kanıt sayfası okunamadı.'), { code: 'DATABASE_UNAVAILABLE' });
+        }
+        return query(sql);
+      };
+      return value;
+    });
+    // Açıklama yolu ertelenmiş iletiyi kendi sayfasından tam doğrular; hata ve eksik kimlik kapalı kalır.
+    const opened = await loadAssistantConversation(conversationId);
+    const answer = opened.body.messages.find(message => message.id === messageId);
+    const visible = ['tam', 'ertelenmiş'].includes(variant);
+    assert.equal(answer.content === saved.message.content, visible);
+    if (!visible) {
+      assert.equal(answer.finishReason, variant.endsWith('dönem') ? 'not_found' : 'unavailable');
+      assert.deepEqual(answer.evidence, []);
+      assert.equal(JSON.stringify(opened.body).includes(saved.message.content), false);
+    }
+    assert.equal(pageReads, deferred ? 1 : 0, 'yeniden okuma yalnız ertelenmiş iletiye ait olmalı');
+    mocked.mock.restore();
+    stack.db.projects.find(project => project.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+    stack.db.taskAssignees = stack.db.taskAssignees.filter(assignment => assignment.TaskId !== TASKS.OVERDUE);
+    const revoked = await loadAssistantConversation(conversationId);
+    assert.equal(JSON.stringify(revoked.body).includes(saved.message.content), false, 'güncel yetki kaybı tam açılmış yanıtı da gizlemeli');
+  });
+}
 
 /* ── Ortak süre, yanıt başına açılım, eski WBS biçimi, kesin doğrulanamayan yanıt ve kilitlenme ── */
 

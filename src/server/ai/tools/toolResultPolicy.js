@@ -29,6 +29,17 @@ function collections(value, path) {
   return value && typeof value === 'object' ? collections(value[key], rest) : [];
 }
 
+/**
+ * Sonuç zarfının kopyasını en fazla 128 daraltmayla UTF-8 bayt sınırına sığdırır.
+ * Görev ayrıntısında WBS adları ve düğüm kökeni aynı önekte tutulur; daraltılan
+ * sonuç kesik işaretlenir ve sayfalama bilgisi kaldırılır. Özgün zarf değişmez.
+ *
+ * @param {object} envelope - Serileştirilebilir araç sonuç zarfı.
+ * @param {number} maxBytes - Çıktının en büyük UTF-8 bayt uzunluğu.
+ * @param {string} factScope - Çıktıya eklenecek olgu kapsamı belirteci.
+ * @param {object|null} explicitPolicy - Varsayılanı değiştiren koleksiyon politikası.
+ * @returns {string|null} Sınırı sağlayan JSON; daraltma yetersizse null.
+ */
 export function fitToolResult(envelope, maxBytes, factScope, explicitPolicy = null) {
   const current = structuredClone(envelope);
   const policy = explicitPolicy || POLICIES[current.tool];

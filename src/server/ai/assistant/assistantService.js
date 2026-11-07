@@ -287,6 +287,15 @@ function isTransientEvidenceProbeFailure(error) {
   return error?.code === AI_ERROR_CODES.AI_BUSY || error?.code === 'DATABASE_UNAVAILABLE';
 }
 
+/**
+ * Güvenilir Sicil'in konuşma kanıtını sınırlı SQL yürütücüsüyle yükler.
+ * Sonuç yetki onayı değildir; bilinmeyen Sicil, okuma hatası ve iptal iletilir.
+ *
+ * @param {number} sicil - Oturumdan doğrulanmış kullanıcı kimliği.
+ * @param {AbortSignal} signal - Okuma süresini ve iptalini sınırlayan sinyal.
+ * @param {object} target - Konuşma ve isteğe bağlı tek ileti kimliği.
+ * @returns {Promise<object>} Sunucu içi kanıt eşlemeleri ve şema durumu.
+ */
 async function loadEvidenceFor(sicil, signal, { conversationId, messageId = null }) {
   const result = await withConversationSql(sicil, signal, (scope) => loadConversationEvidence(directExecutor(scope), sicil, {
     conversationId, messageId, maxEvidence: MAX_CONVERSATION_EVIDENCE, signal: scope.signal
@@ -487,9 +496,12 @@ async function optionalEvidence(sicil, signal, target, { revalidate = true } = {
     // konuşmanın bütün yanıtları tek bir sınır aşımıyla gizlenmez.
     // Nüfusu kalıcı kayda sığmayan yanıt güncel yetkiyle doğrulanamaz; bu durum
     // yalnızca kayıtlı künyeden türetilir, güncel yetki hakkında bilgi vermez.
+    /** Yeniden doğrulanmayan devam yolunda ertelenmiş iletiler de ret kümesine girer. */
     const unverifiableIds = (unverifiable) => new Set([...(evidence.authorizationByMessage || new Map())]
       .filter(([id, entries]) => (!revalidate || !evidence.deferredMessages?.has(id)) && entries.some(unverifiable)).map(([id]) => id));
-    evidence.unverifiable = unverifiableIds((entry) => entry.unverifiable);
+    // Devam yolu son yetki işlemine girmez; bozuk dönem başka kayıttaki göndergeleri yetkilendiremez.
+    evidence.unverifiable = unverifiableIds((entry) => entry.unverifiable || !revalidate
+      && (typeof entry.authorizationEpoch !== 'string' || !/^[a-f0-9]{64}$/.test(entry.authorizationEpoch)));
     // Düğüm kökeni olmayan eski kayıt biçimi ayrı açıklanır; ayrım yalnızca kayıtlı biçimden türetilir.
     evidence.legacyFormat = unverifiableIds((entry) => entry.legacyFormat);
     if (revalidate && evidence.byMessage.size) {
@@ -592,6 +604,15 @@ const UNVERIFIABLE_SAVED_ANSWER_TEXT = 'Bu kayıtlı yanıt çok sayıda kayda d
 /** Metin yalnızca kayıtlı biçimden türetilir; güncel yetki ya da kaydın varlığı hakkında bilgi vermez. */
 const LEGACY_FORMAT_SAVED_ANSWER_TEXT = 'Bu kayıtlı yanıt önceki bir kayıt biçiminde saklandığı için güncel yetkinizle yeniden doğrulanamıyor. Güncel bilgi için soruyu yeniden sorun.';
 
+/**
+ * Son doğrulamanın sonucuna göre kayıtlı iletilerin güvenli kopyalarını döndürür.
+ * Eksik veya doğrulanamayan kanıtta korunan metni ve özetleri birlikte gizler;
+ * güncel yetkiyi kendisi sorgulamaz ve ham kanıtı yanıt içine eklemez.
+ *
+ * @param {Array<object>} messages - Depodan okunan konuşma iletileri.
+ * @param {object} evidence - Varlık ve güncel yetki denetimlerinin sonucu.
+ * @returns {Array<object>} Yalnızca açıklanmasına izin verilen ileti görünümleri.
+ */
 function discloseSavedMessages(messages, evidence) {
   return messages.filter((message) => message.role === 'assistant' || !savedMessageMissing(message, evidence)).map((message) => {
     if (message.role !== 'assistant') return message;
