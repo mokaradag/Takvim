@@ -277,6 +277,7 @@ export function planShapeHints(problems) {
     '$.plan:single': 'Yanıtta TEK bir rota_plan çağrısı olmalı: soruyu tek bir karar olarak bildir (birden çok okuma gerekiyorsa analysis.focus ya da additionalRequests)',
     '$.intent': `intent (zorunlu): ${Object.values(PLANNER_INTENTS).join('|')}`,
     '$.language': 'language (zorunlu): tr|en',
+    '$.charts': `charts: 1-2 farklı tür içeren dizi; ilk öğe birincildir (${PLAN_CHART_TYPES.join('|')})`,
     '$.chart': `chart: ${PLAN_CHART_TYPES.join('|')}`,
     '$.table': 'table: true|false',
     '$.request:required': 'intent rota için request ya da (geniş/değerlendirme sorusunda) analysis zorunludur',

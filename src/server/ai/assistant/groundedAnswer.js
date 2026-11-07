@@ -716,7 +716,7 @@ function pinAnalysisRepair(turn, plan, details) {
   const presentationPaths = new Set(existing?.presentationPaths || []);
   for (const detail of details) {
     const [path, reason] = String(detail).split(':');
-    if (['$.language', '$.chart', '$.table'].includes(path)) presentationPaths.add(path.slice(2));
+    if (['$.language', '$.chart', '$.charts', '$.table'].includes(path)) presentationPaths.add(path.slice(2));
     if (path.startsWith('$.analysis.') && !['unsupported', 'requestBudget', 'narrowable', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
     // Aşama F: göreli pencere ile tarihlerin çakışması ancak ikisinden biri kaldırılarak düzeltilir: üç alan da onarımda değişebilir.
     if (path === '$.analysis.relativeWindow' && reason === 'conflict') for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) paths.add(key);
@@ -1079,7 +1079,11 @@ function acceptRequest(turn, request, language = null, position = null) {
 function roundLimit(turn) {
   const expanded = Boolean(turn.presentationIntent?.analysis);
   // İlk kabul edilen analitik planın bölüm başına ad çözümü ve okuması için en çok iki tur; yeniden başlangıç bu hakkı yenilemez.
-  if (expanded && turn.toolRoundBudget == null) turn.toolRoundBudget = Math.max(turn.limits.maxToolRounds, 2 * Math.min(turn.partCount || 1, ANALYSIS_LIMITS.maxParts));
+  if (expanded && !turn.analyticalRoundsGranted) {
+    turn.toolRoundBudget = Math.max(turn.toolRoundBudget ?? turn.limits.maxToolRounds + (turn.priorToolRounds || 0),
+      2 * Math.min(turn.partCount || 1, ANALYSIS_LIMITS.maxParts));
+    turn.analyticalRoundsGranted = true;
+  }
   return Math.max(0, (turn.toolRoundBudget ?? turn.limits.maxToolRounds) - (turn.priorToolRounds || 0));
 }
 

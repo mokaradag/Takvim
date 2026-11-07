@@ -7,7 +7,7 @@ import { answerQuality } from './helpers/answerQuality.mjs';
 
 registerServerOnlyShim();
 const { parseAnalysis } = await import('../src/server/ai/tools/analysisPlan.js');
-const { unpackTypedPlan, typedPlanningTool } = await import('../src/server/ai/tools/executionSet.js');
+const { unpackTypedPlan, typedPlanningTool, planShapeHints } = await import('../src/server/ai/tools/executionSet.js');
 const TODAY = '2026-09-30';
 const unpack = (plan, previousAnalysis = null) => unpackTypedPlan({ toolCalls: [{ name: 'rota_plan', arguments: JSON.stringify(plan) }] }, { today: TODAY, previousAnalysis }).plan;
 
@@ -21,6 +21,14 @@ test('iki grafik türü şemada, takipte ve kapalı bağlamda korunur', () => {
   assert.deepEqual(unpack({ intent: 'rota', language: 'tr', analysis: { scope: 'previous' } }, context).charts, ['bar', 'donut']);
   assert.equal(unpack({ intent: 'rota', language: 'tr', visual: false, analysis: { scope: 'previous' } }, context).charts, undefined);
   assert.equal(normalizeAnalysisContext({ ...context, charts: ['bar', 'bar'] }), null);
+  assert.equal(normalizeAnalysisContext({ ...context, v: 1 }), null, 'ikinci sürüm alanı eski sürüme sızamaz');
+});
+
+test('çoğul grafik alanının onarım ipucu dizi sözleşmesini tekil türden ayırır', async () => {
+  const { analysisDetails } = await import('../src/server/ai/tools/analysisPlan.js');
+  assert.match(planShapeHints(['$.charts:enum'])[0], /^charts:.*1.*2.*farklı/);
+  assert.match(planShapeHints(['$.chart:enum'])[0], /^chart:/);
+  assert.deepEqual(analysisDetails(['$.charts:enum']), ['$.charts:enum']);
 });
 
 test('all_time açık tarihlerle çelişirse doğrulama dönemi sessizce daraltmaz', () => {
@@ -201,7 +209,7 @@ test('kişi ile kendini karşılaştırmada ikincil zaman çizelgesi her iki öz
   assert.ok(lists.some((part) => part.filters.assignee === 'me'));
 });
 
-test('temiz yeniden planlama dört bölümlü analizle harcanmış araç turunu geri kazanamaz', async (t) => {
+test('yeniden başlangıçtaki ilk analitik plan yalnızca bir kez ek hak alır; önceki turlar toplamdan düşer', async (t) => {
   const { createAiStack } = await import('./helpers/aiStack.mjs');
   const { AYSE, NOW, PROJECTS, TASKS, rotaToolSeed } = await import('./helpers/aiToolFixtures.mjs');
   const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
@@ -226,7 +234,11 @@ test('temiz yeniden planlama dört bölümlü analizle harcanmış araç turunu 
   assert.equal(initial.kind, 'plan');
   const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => toolPlan({ intent: 'rota', language: 'tr',
     analysis: { scope: 'all', focus: ['status', 'overdue', 'workload', 'upcoming'] } }) }, { ...options, resume: initial.resume });
-  assert.ok(result.stats.toolRounds <= TOOL_LIMITS.maxToolRounds, `yeniden başlangıç toplam ${result.stats.toolRounds} tur tüketti`);
+  assert.ok(result.stats.toolRounds > TOOL_LIMITS.maxToolRounds, 'dört bölümün okuması önceki temel sınırda kesilemez');
+  assert.equal(initial.resume.toolRoundBudget, 8);
+  assert.equal(initial.resume.analyticalRoundsGranted, true);
+  assert.ok(result.stats.toolRounds <= 8, `yeniden başlangıç toplam ${result.stats.toolRounds} tur tüketti`);
+  assert.ok(initial.resume.toolRounds <= 8 - initial.resume.priorToolRounds, 'önceki harcama yeni planın kalan hakkından düşer');
   assert.ok(result.stats.attempted <= TOOL_LIMITS.maxTotalCalls);
 });
 

@@ -18,7 +18,7 @@ export const ANALYSIS_CONTEXT_LIMITS = Object.freeze({ maxSubjects: 2, maxRows: 
 const LEVELS = Object.freeze(['unit', 'department', 'directorate']);
 const FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'overdue', 'upcoming', 'workload', 'projects', 'schedule', 'critical']);
 const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'rows', 'rowPopulation', 'pending', 'rowsOnly', 'withSelf', 'relativeWindow']);
-const VERSION_ONE_KEYS = new Set([...KEYS].filter((key) => !['withSelf', 'relativeWindow'].includes(key)));
+const VERSION_ONE_KEYS = new Set([...KEYS].filter((key) => !['withSelf', 'relativeWindow', 'charts'].includes(key)));
 const CHARTS = Object.freeze(['bar', 'donut', 'line', 'stacked', 'kpi', 'timeline']);
 const PENDING_SCOPES = Object.freeze([...ANALYSIS_CONTEXT_SCOPES, 'previous', 'row']);
 const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'withSelf', 'relativeWindow', 'rows', 'act']);

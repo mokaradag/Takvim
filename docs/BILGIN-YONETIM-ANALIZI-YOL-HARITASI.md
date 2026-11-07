@@ -608,9 +608,9 @@ Bu bölüm her oturumun sonunda güncellenir. Güncel durum ve sonraki giriş no
   Fiziksel bütçeye sığmayan istek yön kaybıyla onarılmaz. Aynı nüfusun skaler okumaları, bağlamalarıyla birlikte birleştirilir.
 - İki grafik türü plan şeması, onarım, açıklama seçimi, kalıcı bağlam ve takip boyunca korunur. Aynı doğrulanmış aday
   iki uygun biçimde çizilebilir; Kısa ayrıntı açıkça istenen ikinci türü düşürmez. Veri eksikliği ile çizim başarısızlığı ayrıdır.
-- Analitik tur hakkı ilk kabul edilen planda sabitlenir: en çok dört bölüm için ad çözümü + okuma; yeniden başlangıç
+- Analitik tur hakkı ilk kabul edilen analitik planda bir kez belirlenir: en çok dört bölüm için ad çözümü + okuma; yeniden başlangıç
   harcanan turları geri vermez. Toplam çağrı, SQL, sonuç boyutu ve süre sınırları değişmez.
 - Tek bölümlü analitik yanıt da çerçeveyle kapanır; kişi/proje süzgeçleri başlık ve ölçütlerde korunur. Nitelendirme;
   kapsam, kimlik, yön, ufuk, grafik türü, son bloktaki sonuç ve model düzenini ayrı ayrı denetler.
 - Önceki Haiku ve görsel ölçümler tarihsel kayıttır; bu düzeltmelere yeniden koşulmuş sayılmaz. Güncel doğrulama
-  sonucu (5785/5785 sınama, temiz lint, başarılı derleme) ve ortam sınırları kabul matrisinin §6 kaydındadır. Windows VM ve anlamsal danışmanlıklı kanonik kabul bekliyor.
+  sonucu (5786/5786 sınama, temiz lint, başarılı derleme) ve ortam sınırları kabul matrisinin §6 kaydındadır. Windows VM ve anlamsal danışmanlıklı kanonik kabul bekliyor.
