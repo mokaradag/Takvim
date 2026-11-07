@@ -17,12 +17,14 @@ export const ANALYSIS_CONTEXT_SCOPES = Object.freeze(['self', 'team', 'person', 
 export const ANALYSIS_CONTEXT_LIMITS = Object.freeze({ maxSubjects: 2, maxRows: 10, maxFocus: 4, maxPendingFocus: 4 });
 const LEVELS = Object.freeze(['unit', 'department', 'directorate']);
 const FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'overdue', 'upcoming', 'workload', 'projects', 'schedule', 'critical']);
-const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'chart', 'table', 'rows', 'rowPopulation', 'pending', 'rowsOnly', 'withSelf', 'relativeWindow']);
+const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'rows', 'rowPopulation', 'pending', 'rowsOnly', 'withSelf', 'relativeWindow']);
 const VERSION_ONE_KEYS = new Set([...KEYS].filter((key) => !['withSelf', 'relativeWindow'].includes(key)));
 const CHARTS = Object.freeze(['bar', 'donut', 'line', 'stacked', 'kpi', 'timeline']);
 const PENDING_SCOPES = Object.freeze([...ANALYSIS_CONTEXT_SCOPES, 'previous', 'row']);
-const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'visual', 'chart', 'table', 'withSelf', 'relativeWindow', 'rows', 'act']);
+const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'withSelf', 'relativeWindow', 'rows', 'act']);
 const shortText = (value) => typeof value === 'string' && value.trim().length >= 2 && value.length <= 120;
+const validCharts = (value) => value.charts == null || value.visual === true && Array.isArray(value.charts) && value.charts.length >= 1 && value.charts.length <= 2
+  && new Set(value.charts).size === value.charts.length && value.charts.every((type) => CHARTS.includes(type)) && value.chart === value.charts[0];
 
 /**
  * Açıklama (aday seçimi) bekleyen analitik niyet: kabul edilmiş özetin kimliksiz biçimi. Seçimden sonra sunucu bu özeti
@@ -49,10 +51,12 @@ export function normalizePendingAnalysis(value) {
     if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) return null;
     for (const key of ['visual', 'table']) if (value[key] != null && typeof value[key] !== 'boolean') return null;
     if (value.chart != null && (!CHARTS.includes(value.chart) || value.visual !== true)) return null;
+    if (!validCharts(value)) return null;
     return Object.freeze({ language: value.language, scope: value.scope, focus: Object.freeze([...focus]), ...(value.names ? { names: Object.freeze([...value.names]) } : {}),
       ...(value.level ? { level: value.level } : {}), ...(value.withSelf != null ? { withSelf: value.withSelf } : {}), ...(value.within ? { within: value.within } : {}),
       ...(value.rows ? { rows: Object.freeze([...value.rows]) } : {}), ...(value.act ? { act: value.act } : {}), ...(value.relativeWindow ? { relativeWindow: value.relativeWindow } : {}), ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}),
-      ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual != null ? { visual: value.visual } : {}), ...(value.chart ? { chart: value.chart } : {}), ...(value.table != null ? { table: value.table } : {}) });
+      ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual != null ? { visual: value.visual } : {}), ...(value.chart ? { chart: value.chart } : {}),
+      ...(value.charts ? { charts: Object.freeze([...value.charts]) } : {}), ...(value.table != null ? { table: value.table } : {}) });
   } catch {
     return null;
   }
@@ -128,12 +132,13 @@ export function normalizeAnalysisContext(value) {
     if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) return null;
     if (value.visual != null && typeof value.visual !== 'boolean') return null;
     if (value.chart != null && (!CHARTS.includes(value.chart) || value.visual !== true)) return null;
+    if (!validCharts(value)) return null;
     if (value.table != null && typeof value.table !== 'boolean') return null;
     // Ayrıntılı istekle listelenen görevlerin bağlamı yalnızca satır göndergesidir (önceki özne olarak kullanılamaz).
     if (value.rowsOnly != null && (value.rowsOnly !== true || !rows.length || rows.some((row) => row && row.type !== 'project'))) return null;
     return Object.freeze({ v: ANALYSIS_CONTEXT_VERSION, scope: value.scope, ...(value.level ? { level: value.level } : {}), subjects, ...(value.withSelf ? { withSelf: true } : {}), ...(value.relativeWindow ? { relativeWindow: value.relativeWindow } : {}), ...(within ? { within } : {}), focus: Object.freeze([...focus]),
       ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}), ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual ? { visual: true } : {}),
-      ...(value.chart ? { chart: value.chart } : {}), ...(value.table ? { table: true } : {}), rows,
+      ...(value.chart ? { chart: value.chart } : {}), ...(value.charts ? { charts: Object.freeze([...value.charts]) } : {}), ...(value.table ? { table: true } : {}), rows,
       ...(rowPopulation ? { rowPopulation: Object.freeze(rowPopulation) } : {}), ...(pending ? { pending } : {}), ...(value.rowsOnly ? { rowsOnly: true } : {}) });
   } catch {
     return null;
@@ -150,5 +155,5 @@ export function analysisContextSummary(context) {
   return { scope: context.scope, ...(context.rowsOnly ? { rowsOnly: true } : {}), ...(context.level ? { level: context.level } : {}), subjects: context.subjects.length, ...(context.withSelf ? { withSelf: true } : {}), ...(context.relativeWindow ? { relativeWindow: context.relativeWindow } : {}), ...(context.within ? { withinProject: true } : {}),
     ...(context.focus.length ? { focus: context.focus } : {}),
     ...(context.dateFrom ? { dateFrom: context.dateFrom } : {}), ...(context.dateTo ? { dateTo: context.dateTo } : {}), ...(context.visual ? { visual: true } : {}),
-    ...(context.chart ? { chart: context.chart } : {}), ...(context.table ? { table: true } : {}), ...(rows ? { rows } : {}) };
+    ...(context.chart ? { chart: context.chart } : {}), ...(context.charts ? { charts: context.charts } : {}), ...(context.table ? { table: true } : {}), ...(rows ? { rows } : {}) };
 }

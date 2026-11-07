@@ -68,7 +68,7 @@ export function analysisBenchmarkSeed() {
   const unit = [BENCH_PEOPLE.KARAAGACLI, BENCH_PEOPLE.SURMELIOGLU];
   const department = [P.MEHMET_KAYA, P.MEHMET_YILDIZ, P.SELIN, P.BURAK, ...unit, P.A];
   const directorate = [...department, P.E, P.GIZEM, P.HAKAN];
-  seed.executiveScope.push(...unit.map((EmployeeSicil) => ({ ManagerSicil: P.B, EmployeeSicil })),
+  seed.executiveScope.push(...unit.map((EmployeeSicil) => ({ ManagerSicil: P.B, EmployeeSicil, ScopeType: 'UNIT' })),
     ...department.map((EmployeeSicil) => ({ ManagerSicil: P.B, EmployeeSicil, ScopeType: 'DEPARTMENT' })),
     ...directorate.map((EmployeeSicil) => ({ ManagerSicil: P.B, EmployeeSicil, ScopeType: 'DIRECTORATE' })));
   return seed;

@@ -212,7 +212,7 @@ test('açıklama seçimi özgün analitik niyeti (iş yükü + grafik) model tur
   const pages = [];
   const { ask } = phase4eConversation(t, { seed, compose: () => composer((view) => { pages.push(view); return proseLayout(view); }) });
   const first = await ask({ text: 'Ali Veli iş yükünü değerlendir ve grafikle göster',
-    plan: { intent: 'rota', language: 'tr', visual: true, analysis: { scope: 'person', names: ['Ali Veli'], focus: ['workload', 'overdue'] } } });
+    plan: { intent: 'rota', language: 'tr', visual: true, chart: ['bar', 'donut'], analysis: { scope: 'person', names: ['Ali Veli'], focus: ['workload', 'status'] } } });
   assert.equal(first.answer.finishReason, 'clarification', first.answer.content);
   assert.equal(populationReads(first.log).length, 0, 'belirsiz adla görev verisi okunmaz');
   const selected = await ask({ text: '1' });
@@ -225,6 +225,8 @@ test('açıklama seçimi özgün analitik niyeti (iş yükü + grafik) model tur
   assert.equal([...people][0], ALI_1, 'birinci adayın tam kimliği okunur');
   assert.ok(reads.some(({ params }) => params.withAssignees === 1 && params.personSicil === ALI_1), 'kabul edilmiş iş yükü yönü seçilen kişi için yeniden okunur');
   assert.equal(pages.at(-1).visual, true, 'grafik isteği açıklamadan sonra korunur');
+  assert.deepEqual(pages.at(-1).chartTypes, ['bar', 'donut']);
+  for (const type of ['bar', 'donut']) assert.ok(selected.answer.content.includes(`"type":"${type}"`), selected.answer.content);
 });
 
 test('takipte yetki kaybı eski kapsamı korumaz: ekip bağlamı güncel yönetim kapsamıyla yeniden okunur', async (t) => {
@@ -547,6 +549,7 @@ test('Ayrıntılı düzyazıda başlığı sunucu koyar: modelin yanlış başl�
     const { ask } = phase4eConversation(t, { compose: () => composer((view) => { page = view; return shifted(view); }) });
     const result = await ask({ text: 'projelerimi değerlendir', plan }, { detail: 'detailed' });
     assert.equal(turnLine(logs).context.presentation.server, false, JSON.stringify(turnLine(logs).context.presentation));
+    assert.match(result.answer.content, /#### Öncelikli konular\n\n1\. [^\n]+(?:\n[2-9]\. [^\n]+)+(?:\n\n_Not:[^\n]+)?$/);
     const headings = headingsOf(result.answer.content);
     assert.ok(headings.length >= 2, result.answer.content);
     // Başlıklar ana hattın bölüm sırasıyladır (modelin yazdığı kayık kimlik sırasıyla değil).
@@ -567,6 +570,7 @@ test('Ayrıntılı düzyazıda başlığı sunucu koyar: modelin yanlış başl�
     // Aşama F: iç içe dizilen bölümler sunucuda bölümlerine toplanır (bölüm sırası ilk görünüş, bölüm içi sıra modelin) ve
     // her bölüm kendi başlığıyla açılır; tablo artık başka bölümün başlığı altına düşmez.
     const content = mixed.answer.content;
+    assert.match(content, /#### Öncelikli konular\n\n1\. [^\n]+(?:\n[2-9]\. [^\n]+)+(?:\n\n_Not:[^\n]+)?$/);
     const headings = headingsOf(content).filter((heading) => heading !== '#### Öncelikli konular');
     const expected = page.sections.filter((section) => section.title).map((section) => `#### ${page.titles.find((title) => title.id === section.title).text}`);
     assert.deepEqual(headings, expected, content);

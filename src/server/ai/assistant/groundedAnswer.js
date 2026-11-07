@@ -295,7 +295,7 @@ const ESCALATING_DECLARATION_ROUNDS = 1;
 const schemaNames = (schema) => Object.entries(schema.properties || {}).flatMap(([name, child]) => [name, ...schemaNames(child)])
   .concat(schema.items ? schemaNames(schema.items) : []);
 const structuralNames = new Set(['plan', 'calls', 'request', 'additionalRequests', 'clarify', 'abstain', 'reason', 'topics', 'from', 'intent', 'language', 'name', 'arguments', 'metric', 'entity', 'field',
-  'analysis', 'visual', 'chart', 'table', ...schemaNames(analysisSchema()), ...schemaNames(requestSchema()), ...toolCatalogForModel().flatMap((tool) => [tool.name, ...schemaNames(tool.parameters)])]);
+  'analysis', 'visual', 'chart', 'charts', 'table', ...schemaNames(analysisSchema()), ...schemaNames(requestSchema()), ...toolCatalogForModel().flatMap((tool) => [tool.name, ...schemaNames(tool.parameters)])]);
 const problemPaths = (details = []) => details.map((detail) => {
   const match = /^(\$[^:]*):([A-Za-z][A-Za-z-]*)$/.exec(String(detail));
   if (!match) return '$:invalid';
@@ -705,7 +705,7 @@ function submittedVisual(plan) {
   return plan.visual !== false && plan.analysis?.visual !== false && (plan.visual === true || plan.analysis?.visual === true || plan.chart != null);
 }
 
-const submittedPresentation = (plan) => Object.fromEntries(['language', 'chart', 'table'].filter((key) => Object.hasOwn(plan, key)).map((key) => [key, plan[key]]));
+const submittedPresentation = (plan) => Object.fromEntries(['language', 'chart', 'charts', 'table'].filter((key) => Object.hasOwn(plan, key)).map((key) => [key, plan[key]]));
 
 function pinAnalysisRepair(turn, plan, details) {
   if (!plan.analysis || typeof plan.analysis !== 'object' || Array.isArray(plan.analysis)) return;
@@ -723,10 +723,9 @@ function pinAnalysisRepair(turn, plan, details) {
   }
   const raw = Object.fromEntries(Object.entries(normalizedBrief(existing?.raw || plan.analysis)).filter(([key]) => Object.hasOwn(analysisSchema().properties, key)));
   // Şemanın üst sınırını aşan yön listesi (modelin kendi fazladan yönleri) onarımda yalnızca KENDİ yönlerinin sıralı bir alt
-  // kümesine daraltılabilir: yeni yön eklenemez, kapsam/ad/ufuk değişmez. Aşama F: okuma bütçesi aşımı (`narrowable`) da aynı
-  // daraltmayla onarılır; karşılaştırmada her özne aynı yönlerle okunur (özne düşmez, yarım karşılaştırma okunmaz).
-  const narrow = existing ? existing.narrow : Array.isArray(raw.focus) && (details.some((detail) => String(detail) === '$.analysis.focus:maxItems')
-    && raw.focus.length > ANALYSIS_LIMITS.maxAcceptedFocus || details.some((detail) => String(detail) === '$.analysis.focus:narrowable') && raw.focus.length > 1);
+  // kümesine daraltılabilir: yeni yön eklenemez, kapsam/ad/ufuk değişmez. Fiziksel bütçe aşımı yön düşürme hakkı vermez.
+  const narrow = existing ? existing.narrow : Array.isArray(raw.focus) && details.some((detail) => String(detail) === '$.analysis.focus:maxItems')
+    && raw.focus.length > ANALYSIS_LIMITS.maxAcceptedFocus;
   // Görsel istek ayrıca (`visual`) denetlenir; özetin içinde ya da plan düzeyinde yazılması anlam değişikliği değildir.
   const pinnedPaths = new Set([...paths, 'visual', ...(narrow ? ['focus'] : [])]);
   const presentation = existing?.presentation || submittedPresentation(plan);
@@ -752,8 +751,12 @@ function analysisRepairMatches(turn, plan) {
   const pin = turn.repairPins.get('analysis');
   if (!pin || [PLANNER_INTENTS.CLARIFY, PLANNER_INTENTS.ABSTAIN].includes(plan.intent)) return true;
   const analysis = normalizedBrief(plan.analysis);
+  // Çakışma onarımı bir gösterimi kaldırabilir; kalan gösterimin tek bir sınırını bile değiştiremez.
+  const dateConflict = pin.raw.relativeWindow && (pin.raw.dateFrom || pin.raw.dateTo);
+  const sameWindow = !dateConflict || analysis && ((analysis.relativeWindow === pin.raw.relativeWindow || pin.raw.relativeWindow === 'all_time' && !analysis.relativeWindow) && !analysis.dateFrom && !analysis.dateTo
+    || !analysis.relativeWindow && analysis.dateFrom === pin.raw.dateFrom && analysis.dateTo === pin.raw.dateTo);
   return plan.intent === PLANNER_INTENTS.ROTA && Boolean(plan.analysis)
-    && stable(repairOmit(analysis, pin.paths)) === pin.projection && narrowedFocus(pin, analysis.focus)
+    && sameWindow && stable(repairOmit(analysis, pin.paths)) === pin.projection && narrowedFocus(pin, analysis.focus)
     && stable(repairOmit(submittedPresentation(plan), pin.presentationPaths)) === stable(repairOmit(pin.presentation, pin.presentationPaths))
     && (pin.visual == null || submittedVisual(plan) === pin.visual);
 }
@@ -1070,16 +1073,14 @@ function acceptRequest(turn, request, language = null, position = null) {
 }
 
 /**
- * Turun araç turu sınırı. Aşama F: sunucunun analitik özetten açtığı çok bölümlü planda (en çok `ANALYSIS_LIMITS.maxParts`
- * bölüm) her ek bölüm kendi okuma turunu gerektirir; adla çözülen kişi/proje okumaları da tur harcar. Sabit dört tur, ör. iki
- * kişinin proje dağılımı ve gecikme karşılaştırmasında (ad çözümü A, okuma A, ad çözümü B, okuma B) üçüncü doğrulanmış bölüme
- * hiç tur bırakmıyor ve plan yapısı gereği kısmi yanıt üretiyordu. Yalnızca özetten açılan planda ek bölüm başına bir tur
- * eklenir (modelin yazdığı çok bölümlü istek planının sözleşmesi değişmez); toplam çağrı, SQL süresi ve araç evresi süresi
- * sınırları DEĞİŞMEZ (toplam iş yine sınırlıdır).
+ * İlk kabul edilen analitik planın en çok dört bölümü için bölüm başına ad çözümü ve okuma hakkı.
+ * Harcanan turlar yeniden planlamada da sayılır; toplam çağrı, SQL, sonuç boyutu ve süre sınırları değişmez.
  */
 function roundLimit(turn) {
   const expanded = Boolean(turn.presentationIntent?.analysis);
-  return turn.limits.maxToolRounds + (expanded ? Math.max(0, Math.min(turn.partCount || 1, ANALYSIS_LIMITS.maxParts) - 1) : 0);
+  // İlk kabul edilen analitik planın bölüm başına ad çözümü ve okuması için en çok iki tur; yeniden başlangıç bu hakkı yenilemez.
+  if (expanded && turn.toolRoundBudget == null) turn.toolRoundBudget = Math.max(turn.limits.maxToolRounds, 2 * Math.min(turn.partCount || 1, ANALYSIS_LIMITS.maxParts));
+  return Math.max(0, (turn.toolRoundBudget ?? turn.limits.maxToolRounds) - (turn.priorToolRounds || 0));
 }
 
 /** Planın kabulü: ilk bölüm turun isteğidir; bütün bölümlerin dönemi ve korumalı metin alanları veri okunmadan bildirilir. */
@@ -1521,6 +1522,7 @@ function completedAnalysisContext(turn, verdict) {
     ...(turn.presentationIntent?.window?.dateFrom ? { dateFrom: turn.presentationIntent.window.dateFrom } : {}),
     ...(turn.presentationIntent?.window?.dateTo ? { dateTo: turn.presentationIntent.window.dateTo } : {}),
     ...(turn.presentationIntent?.visual ? { visual: true } : {}), ...(turn.presentationIntent?.chart ? { chart: turn.presentationIntent.chart } : {}),
+    ...(turn.presentationIntent?.charts ? { charts: turn.presentationIntent.charts } : {}),
     ...(turn.presentationIntent?.table ? { table: true } : {}), rows, ...(rowPopulation ? { rowPopulation } : {}) });
 }
 
@@ -1693,7 +1695,7 @@ export function chartTypeNote(turn, composition, rendered) {
   for (const type of types) {
     if (rendered.chartTypes?.includes(type)) continue;
     turn.trace.presentation = { ...(turn.trace.presentation || {}), chartTypeUnavailable: type };
-    notes.push(chartTypeSupported({ ...composition.render, chartType: type }) ? renderChartUnavailable({ substituted: rendered.chart, locale: turn.locale })
+    notes.push(chartTypeSupported({ ...composition.render, chartType: type }) ? renderChartUnavailable({ type, substituted: rendered.chart, locale: turn.locale })
       : renderChartTypeUnavailable({ type, substituted: rendered.chart, locale: turn.locale }));
   }
   return [...new Set(notes)];
@@ -1873,10 +1875,10 @@ function presentationIntent(plan, today) {
 
 /** Bekleyen niyetin plan biçimi: modelin daha önce bildirdiği ve sunucunun kabul ettiği analitik özetin aynısı. */
 function replayPlan(pending) {
-  const { language, visual, chart, table, ...analysis } = pending;
+  const { language, visual, chart, charts, table, ...analysis } = pending;
   const { withSelf, focus, ...brief } = analysis;
   return { intent: 'rota', language, analysis: { ...brief, ...(focus.length ? { focus: [...focus] } : {}), ...(withSelf === false || withSelf && ['person', 'row'].includes(analysis.scope) ? { withSelf } : {}), ...(analysis.names ? { names: [...analysis.names] } : {}) },
-    ...(visual != null ? { visual } : {}), ...(chart ? { chart } : {}), ...(table != null ? { table } : {}) };
+    ...(visual != null ? { visual } : {}), ...(chart ? { chart } : {}), ...(charts ? { charts: [...charts] } : {}), ...(table != null ? { table } : {}) };
 }
 
 /** Kabul edilen analitik planın kalıcı, kimliksiz biçimi (açıklama turunun özgün niyeti). */
@@ -1887,7 +1889,7 @@ function pendingAnalysis(plan) {
     ...(analysis.withSelf != null ? { withSelf: analysis.withSelf } : {}), ...(analysis.rows ? { rows: [...analysis.rows] } : {}), ...(analysis.act ? { act: analysis.act } : {}), ...(analysis.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}),
     ...(analysis.names ? { names: [...analysis.names] } : {}), ...(analysis.level ? { level: analysis.level } : {}), ...(analysis.within ? { within: analysis.within } : {}),
     ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}),
-    ...(plan.visual != null ? { visual: plan.visual } : {}), ...(plan.chart ? { chart: plan.chart } : {}), ...(plan.table != null ? { table: plan.table } : {}) });
+    ...(plan.visual != null ? { visual: plan.visual } : {}), ...(plan.chart ? { chart: plan.chart } : {}), ...(plan.charts ? { charts: [...plan.charts] } : {}), ...(plan.table != null ? { table: plan.table } : {}) });
 }
 
 /** Bu bölümün isteği bir ekip kapsamı mı (yetkisizlik ancak o zaman kapsam yokluğudur, kaydın yokluğu değil)? */
@@ -1940,6 +1942,7 @@ export function restartNote(reason) {
  * çağrı, sonuç boyutu, SQL süresi, mutlak süre) atılan denemenin harcamasıyla birlikte sürer.
  */
 function restartPlanning(turn, reason) {
+  turn.toolRoundBudget ??= roundLimit(turn) + (turn.priorToolRounds || 0);
   const spent = turn.executor.stats();
   turn.priorExecutorStats = Object.fromEntries(Object.entries(spent).map(([key, value]) => [key, value + (turn.priorExecutorStats?.[key] || 0)]));
   turn.priorToolRounds = (turn.priorToolRounds || 0) + turn.toolRounds;

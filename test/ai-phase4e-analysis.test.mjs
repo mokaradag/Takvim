@@ -201,7 +201,7 @@ test('açılım kabul edilen özetin nüfusunu hiçbir zaman genişletmez: karş
     'dağılım yönü her kayıt için aynı gruplamadır');
   // Aşama F: fiziksel okuma üst sınırı (4) bildirilen yönlere de açıktır; sığan karşılaştırma bütünüyle okunur, aşan reddedilir.
   assert.equal(expand({ ...people, focus: ['overview', 'priority', 'critical'] }).length, 4, 'dört okumalı karşılaştırma bütünüyle kabul edilir');
-  assert.deepEqual(reject({ ...people, focus: ['priority', 'deadlines', 'critical'] }), ['$.analysis.focus:requestBudget', '$.analysis.focus:narrowable'], 'fazla fiziksel istek kısmi başarı değildir');
+  assert.deepEqual(reject({ ...people, focus: ['priority', 'deadlines', 'critical'] }), ['$.analysis.focus:requestBudget'], 'fazla fiziksel istek kısmi başarı değildir');
   // Daraltılmış kapsamda portföy özeti okunmaz (aracın proje seçicisi yoktur): yön daraltılmış görev nüfusundan okunur.
   const within = expand({ scope: 'all', within: 'Radar Modernizasyonu', focus: ['projects', 'overview'] });
   assert.ok(within.every((item) => item.population.tool !== 'rota_portfolio_summary' && item.entities?.some((entity) => entity.text === 'Radar Modernizasyonu')), JSON.stringify(within));
@@ -643,7 +643,7 @@ test('paragrafa yazılan D# sunucu ayrıntısını paragrafın ardına koyar; b�
   const paragraph = content.indexOf('Açık **2** görevin');
   const detail = content.indexOf('Ekibinizde toplam **2** görev bulunuyor');
   // Aşama F: bölümlü özette ilk paragraftan önce yalnızca sunucunun bölüm başlığı gelebilir.
-  assert.ok(paragraph >= 0 && /^(Aşağıda [^\n]+\n\n)?(#### [^\n]+\n\n)?$/.test(content.slice(0, paragraph)) && detail > paragraph && detail < content.indexOf('```rota-chart'), `ayrıntı paragrafın ardında, grafikten önce:\n${content}`);
+  assert.ok(paragraph >= 0 && /^(Aşağıda [^\n]+\n\n)?(#### [^\n]+\n\n)$/.test(content.slice(0, paragraph)) && detail > paragraph && detail < content.indexOf('```rota-chart'), `ayrıntı paragrafın ardında, grafikten önce:\n${content}`);
   assert.equal(content.split('Ekibinizde toplam').length - 1, 1, 'ayrıntı bir kez');
   // Başka bölümün ayrıntısı paragrafa karışamaz; aynı ayrıntı iki kez kullanılamaz.
   const mixed = await sub('bölüm karışımı', (view) => ({ blocks: [{ type: 'say', items: [...ids(view, 'propositions', 1), ids(view, 'details', 2)[0]] }] }));

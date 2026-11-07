@@ -158,8 +158,10 @@ function totalsSentences(entries, { scope, locale, qualifiers, singular = false 
   const sentences = [];
   const has = locale === 'en' && (singular || /^(the |your (team|unit|department|directorate)$)/.test(scope)) ? 'has' : 'have';
   if (total) {
-    sentences.push(locale === 'en' ? `${capitalize(scope)} ${has} ${strong(narrativeValue(total, locale))} ${englishTasks(total)} in total${qualifiers}.`
-      : `${capitalize(scope)} toplam ${strong(narrativeValue(total, locale))} görev bulunuyor${qualifiers}.`);
+    sentences.push(total.value === 0
+      ? (locale === 'en' ? `${capitalize(scope)} ${has} no tasks${qualifiers}.` : `${capitalize(scope)} görev yok${qualifiers}.`)
+      : locale === 'en' ? `${capitalize(scope)} ${has} ${strong(narrativeValue(total, locale))} ${englishTasks(total)} in total${qualifiers}.`
+        : `${capitalize(scope)} toplam ${strong(narrativeValue(total, locale))} görev bulunuyor${qualifiers}.`);
     // Tek bölüm "tamamlanmış" ve sıfırsa "0'ı tamamlanmış; tamamlanma oranı %0" yerine doğal olumsuz cümle.
     if (total.value > 0 && parts.length === 1 && parts[0] === 'done' && byKey.get('done').value === 0 && (!rate || !isCount(rate) || rate.value === 0)) {
       sentences.push(locale === 'en' ? 'None of them is completed yet.' : 'Bunların hiçbiri henüz tamamlanmamış.');
@@ -181,7 +183,7 @@ function totalsSentences(entries, { scope, locale, qualifiers, singular = false 
     // Tek ölçü sıfırsa "**0** … görev bulunuyor" yerine doğal olumsuz cümle (değer aynı olgudur).
     sentences.push(locale === 'en' ? `${capitalize(scope)} ${has} no ${TOTAL_ADJECTIVES[parts[0]][lang]} tasks${qualifiers}.`
       : `${capitalize(scope)} ${TOTAL_ADJECTIVES[parts[0]][lang]} görev yok${qualifiers}.`);
-    if (rateText) sentences.push(locale === 'en' ? `The completion rate is ${rateText}.` : `Tamamlanma oranı ${rateText}.`);
+    if (rateText && !(parts[0] === 'done' && rate.value === 0)) sentences.push(locale === 'en' ? `The completion rate is ${rateText}.` : `Tamamlanma oranı ${rateText}.`);
   } else if (parts.length) {
     // Aşama F: sıfır bölümler "**0** tamamlanmış" diye sayılmaz; ayrı olumsuz yan cümlede söylenir ("… görev yok").
     const counted = parts.filter((key) => byKey.get(key).value !== 0);
@@ -189,8 +191,11 @@ function totalsSentences(entries, { scope, locale, qualifiers, singular = false 
     const phrases = counted.map((key) => `${strong(narrativeValue(byKey.get(key), locale))} ${TOTAL_ADJECTIVES[key][lang]}`);
     const negative = none.length ? (locale === 'en' ? `; there are no ${none.map((key) => TOTAL_ADJECTIVES[key][lang]).join(' or ')} tasks`
       : `; ${none.map((key) => TOTAL_ADJECTIVES[key][lang]).join(' ya da ')} görev yok`) : '';
-    sentences.push(locale === 'en' ? `${capitalize(scope)} ${has} ${joinList(phrases, locale)} tasks${qualifiers}${negative}.`
-      : `${capitalize(scope)} ${joinList(phrases, locale)} görev bulunuyor${qualifiers}${negative}.`);
+    sentences.push(!counted.length
+      ? (locale === 'en' ? `${capitalize(scope)} ${has} no ${none.map((key) => TOTAL_ADJECTIVES[key][lang]).join(' or ')} tasks${qualifiers}.`
+        : `${capitalize(scope)} ${none.map((key) => TOTAL_ADJECTIVES[key][lang]).join(' ya da ')} görev yok${qualifiers}.`)
+      : locale === 'en' ? `${capitalize(scope)} ${has} ${joinList(phrases, locale)} tasks${qualifiers}${negative}.`
+        : `${capitalize(scope)} ${joinList(phrases, locale)} görev bulunuyor${qualifiers}${negative}.`);
     if (rateText) sentences.push(locale === 'en' ? `The completion rate is ${rateText}.` : `Tamamlanma oranı ${rateText}.`);
   } else if (rateText) {
     sentences.push(locale === 'en' ? `The completion rate is ${rateText}${qualifiers}.` : `Tamamlanma oranı ${rateText}${qualifiers}.`);
@@ -552,7 +557,7 @@ function renderRows(collection, rows, { evidenceId, locale, layout }) {
   // Aşama F: tek sayı sütunu görev grubunun kayıt sayısıysa liste satırı "Kayıt sayısı: **9**" değil "**9** görev" diye okunur.
   const countOnly = columns.length === 1 && /(^|\.)count$/.test(columns[0]) && rows.every((row) => valuesOf(row, columns[0]).every((fact) => /(^|\.)groups\./.test(fact.field)));
   return { body: rows.map((row) => {
-    const pairs = countOnly ? [`${cell(valuesOf(row, columns[0]), false)} ${locale === 'en' ? 'tasks' : 'görev'}`]
+    const pairs = countOnly ? [`${cell(valuesOf(row, columns[0]), false)} ${locale === 'en' ? englishTasks(valuesOf(row, columns[0])[0]) : 'görev'}`]
       : columns.map((key) => { const facts = valuesOf(row, key); return facts.length ? `${columnLabel(key)}: ${cell(facts, false)}` : null; }).filter(Boolean);
     return `- ${strong(titleOf(row))}${pairs.length ? ` — ${pairs.join(' · ')}` : ''} ${citation([evidenceId])}`;
   }).join('\n'), criteria: criteria || '' };
@@ -736,7 +741,8 @@ const NATURAL_CAPTION_KEYS = new Set(['assignee', 'teamLevel', 'status', 'status
  * kapalı kümeden geliyorsa kurulur; aksi hâlde etiketli ölçüt satırı kalır (bilgi düşmez).
  */
 function naturalCaption(rows, locale) {
-  const filters = rows.flatMap((row) => row.entries).map(({ fact }) => fact.semantic?.filters).find(Boolean);
+  const filterSets = rows.flatMap((row) => row.entries).map(({ fact }) => fact.semantic?.filters);
+  const filters = filterSets.length && filterSets.every((value) => value && JSON.stringify(value) === JSON.stringify(filterSets[0])) ? filterSets[0] : null;
   if (!filters) return null;
   const active = Object.entries(filters).filter(([, value]) => !(value == null || value === '' || (Array.isArray(value) && !value.length)));
   if (!active.length || active.some(([key]) => !NATURAL_CAPTION_KEYS.has(key))) return null;
@@ -748,14 +754,14 @@ function naturalCaption(rows, locale) {
   const assignee = get('assignee');
   const en = locale === 'en';
   const lang = en ? 1 : 0;
-  const person = assignee === 'person' && typeof get('person') === 'string' ? strong(escapedFactText(get('person'))) : null;
+  const person = assignee === 'person' && get('personSicil') != null && typeof get('person') === 'string' && get('person').trim() && get('person').trim() !== 'Seçilen kişi' ? strong(escapedFactText(get('person').trim())) : null;
   if (assignee && !['me', 'team'].includes(assignee) && !person) return null;
   const owner = assignee === 'me' ? (en ? 'assigned to you' : 'Size atanmış') : assignee === 'team' ? (en ? `assigned to ${(TEAM_OWNERS[get('teamLevel') || 'null'] || TEAM_OWNERS.null)[lang]}`
     : `${(TEAM_OWNERS[get('teamLevel') || 'null'] || TEAM_OWNERS.null)[lang]} atanmış`) : person ? (en ? `assigned to ${person}` : `${person} sorumluluğundaki`) : '';
   const from = get('dateFrom');
   const to = get('dateTo');
   const range = from && to ? (from === to ? formatDay(from, locale) : `${formatDay(from, locale)} – ${formatDay(to, locale)}`) : from ? formatDay(from, locale) : to ? formatDay(to, locale) : null;
-  const window = range ? (en ? `due ${from && to ? 'between' : from ? 'from' : 'until'} ${range}` : `termini ${range}${from && to && from !== to ? ' arasında' : from && !to ? ' ve sonrasında' : to && !from ? ' ve öncesinde' : ''} olan`) : '';
+  const window = range ? (en ? `due ${from && to && from !== to ? 'between' : from && to ? 'on' : from ? 'from' : 'until'} ${range}` : `termini ${range}${from && to && from !== to ? ' arasında' : from && !to ? ' ve sonrasında' : to && !from ? ' ve öncesinde' : ''} olan`) : '';
   if (en) return `${open ? 'Open work' : 'Work'}${owner ? ` ${owner}` : ''}${window ? ` ${window}` : ''}`;
   const head = [owner, window].filter(Boolean).join(', ');
   const text = `${head ? `${head} ` : ''}${open ? 'açık ' : ''}işler`;
@@ -803,7 +809,8 @@ function withoutCriteria(text, locale, lead = '') {
   const bare = text.replace(pattern, '');
   return text.replace(pattern, (_, items) => {
     const project = items.split('; ').find((item) => item.startsWith(key))?.slice(key.length);
-    if (!project || String(lead || '').includes(project) || bare.includes(project)) return '';
+    const association = locale === 'en' ? `in the **${project}** project` : `**${project}** projesi`;
+    if (!project || String(lead || '').includes(association) || bare.includes(association)) return '';
     return locale === 'en' ? ` (in the ${strong(project)} project)` : ` (${strong(project)} projesi)`;
   });
 }

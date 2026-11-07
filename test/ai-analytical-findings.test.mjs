@@ -7,6 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { unsupportedNumbers } from './helpers/numericGrounding.mjs';
 import { analyticalFindings, analyticalSynthesis, FINDING_INTERPRETATIONS, FINDING_KINDS, synthesisNarrative } from '../src/domain/ai/analyticalFindings.js';
 
 const TODAY = '2026-09-30';
@@ -82,7 +83,7 @@ test('sıralı listenin başı yalnızca tam liste ya da sunucunun doğruladığ
   assert.deepEqual([longest.entity.name, longest.metrics.days, longest.project, longest.completeness], ['Yük testi', 21, 'Altyapı', 'ranking-head']);
   // Tam listede proje payı proje KİMLİĞİYLE hesaplanır (aynı adlı projeler karışmaz).
   const share = analyticalFindings([part(0, taskList('overdue', [...rows, ['Rapor', 2, 'Altyapı', 'p3']]))]).find((item) => item.kind === 'overdueProjectShare');
-  assert.deepEqual(share.metrics, { overdue: 2, total: 4, share: 50 }, 'aynı adlı iki ayrı proje (p1, p3) birleştirilmez');
+  assert.equal(share, undefined, 'aynı adlı ayrı projelerin adıyla pay bulgusu belirsizleşmez');
 });
 
 test('yaklaşan listenin en yakın teslimatı: tekil değilse "dahil" biçimiyle, aynı gün tekilse adıyla', () => {
@@ -123,7 +124,7 @@ test('gelecek dönem baskısı: dönemle okunan proje grupları ile tam gecikmi�
   assert.match(synthesisNarrative([future], { locale: 'tr' }).intro.markdown, / ile \*\*13 Ekim 2026\*\* arasında teslimatı olan \*\*3\*\* projenin \*\*2'sinde\*\* bugün gecikmiş iş de var/);
 });
 
-test('anlatım: giriş gövdenin sayılarını yinelemez, sonuç en az iki öncelik ister, kısa yanıtta sonuç yoktur, söylenen değer yinelenmez', () => {
+test('anlatım: giriş gövdenin sayılarını yinelemez, tek kanıtlı öncelik de sonuçtur, kısa yanıtta en önemli öncelik korunur, söylenen değer yinelenmez', () => {
   const parts = [part(0, portfolio(PROJECTS)), part(1, taskList('overdue', [['Yük testi', 21, 'Altyapı', 'p1'], ['Arayüz', 4, 'Mobil', 'p2']], { total: 8 }), { metric: 'task.overdueDays', order: 'desc' }),
     part(2, taskList('upcoming', [['Ağ', '2026-10-01', 'Portal', 'p5'], ['Test', '2026-10-03', 'Portal', 'p5']], { evidenceId: 'R3', total: 11 }), { metric: 'task.targetFinish', order: 'asc' })];
   const { findings, intro, conclusion } = analyticalSynthesis(parts, { locale: 'tr' });
@@ -134,25 +135,38 @@ test('anlatım: giriş gövdenin sayılarını yinelemez, sonuç en az iki önce
   assert.deepEqual(conclusion.items.map((item) => item.evidenceIds), [['R2'], ['R1'], ['R3']]);
   assert.deepEqual(conclusion.evidenceIds, ['R1', 'R2', 'R3'], 'kaynaklar sıralı ve yalnızca kullanılan kanıtlar');
   // Kısa yanıt yalnızca en önemli tek öncelikle kapanır.
-  assert.equal(synthesisNarrative(findings, { locale: 'tr', detail: 'short' }).conclusion.items.length, 1);
+  assert.deepEqual(synthesisNarrative(findings, { locale: 'tr', detail: 'short' }).conclusion.items.map((item) => [item.markdown, item.evidenceIds]),
+    [['**Yük testi** — en uzun süredir geciken görev (**21** gün, **Altyapı**)', ['R2']]]);
   const recalled = synthesisNarrative(findings, { locale: 'tr', said: (item) => item.kind === 'longestOverdue' }).conclusion.markdown;
   assert.match(recalled, /1\. \*\*Yük testi\*\* — en uzun süredir geciken görev\n/);
   assert.equal(recalled.includes('**21**'), false, 'gövdede söylenen gecikme günü sonuçta yinelenmez');
-  // Tek öncelik sonuç paragrafı kurmaz (dolgu yok).
   // Aşama F: tek kanıtlı öncelik de sonuçtur; liste değil "Öne çıkan konu" satırıdır.
   const single = synthesisNarrative(findings.filter((item) => item.kind === 'nearestDelivery'), { locale: 'tr' }).conclusion;
   assert.equal(single.heading, 'Öne çıkan konu');
-  assert.equal(single.items.length, 1);
+  assert.deepEqual(single.items.map((item) => [item.markdown, item.evidenceIds]), [['**Ağ** — en yakın teslim (**1 Ekim 2026**)', ['R3']]]);
   assert.ok(synthesisNarrative(findings, { locale: 'en' }).intro.markdown.startsWith('On the current indicators, **Altyapı** needs management attention first'));
 });
 
 test('anlatımdaki her sayı doğrulanmış olgudan ya da o olgulardan hesaplanan toplam/paydan gelir', () => {
-  const parts = [part(0, portfolio(PROJECTS)), part(1, taskList('overdue', [['Yük testi', 21, 'Altyapı', 'p1'], ['Arayüz', 4, 'Mobil', 'p2']], { total: 8 }), { metric: 'task.overdueDays', order: 'desc' })];
+  const parts = [part(0, portfolio(PROJECTS)), part(1, taskList('overdue', [['Yük testi', 21, 'Altyapı', 'p1'], ['Arayüz', 4, 'Mobil', 'p2']], { total: 8 }), { metric: 'task.overdueDays', order: 'desc' }),
+    part(2, taskList('upcoming', [['Ağ', '2026-10-01', 'Portal', 'p5']], { evidenceId: 'R3' }))];
   const { findings, intro, conclusion } = analyticalSynthesis(parts, { locale: 'tr' });
-  const facts = parts.flatMap((item) => item.presentation.facts.map((entry) => entry.fact.value)).filter((value) => typeof value === 'number');
+  const facts = parts.flatMap((item) => item.presentation.facts.map((entry) => entry.fact.value));
   const derived = findings.flatMap((item) => Object.values(item.metrics).flat()).filter((value) => typeof value === 'number');
-  const allowed = new Set([...facts, ...derived].map(String));
+  const allowed = [...facts, ...derived];
   for (const text of [intro.markdown, conclusion.markdown]) {
-    for (const [, number] of text.matchAll(/\*\*%?(\d+)\*\*/g)) assert.ok(allowed.has(number), `kaynaksız sayı: ${number}`);
+    assert.deepEqual(unsupportedNumbers(text, allowed), []);
   }
+});
+
+test('sayısal kanıt denetimi vurgusuz sayıyı ve biçimlenmiş tarihin uydurma yılını yakalar', () => {
+  assert.deepEqual(unsupportedNumbers('999 görev; **1 Ekim 2088**. 【R3】', [3, '2026-10-01']), ['999', '2088']);
+  assert.deepEqual(unsupportedNumbers('**1 Ekim 2026**; 3 görev. 【R3】', [3, '2026-10-01']), []);
+});
+
+test('İngilizce bulgu listesinin kalan tek projesi tekil söylenir', () => {
+  const finding = { kind: 'simultaneousPressure', entityType: 'project', names: ['A', 'B', 'C', 'D'], metrics: { entities: 5, population: 6 }, evidenceIds: ['R1'] };
+  const text = synthesisNarrative([finding], { locale: 'en' }).intro.markdown;
+  assert.match(text, /and \*\*1\*\* more project\./);
+  assert.doesNotMatch(text, /1\*\* more projects/);
 });

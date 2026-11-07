@@ -10,6 +10,7 @@ import { createAiStack, sendTurn } from './aiStack.mjs';
 import { AYSE, NOW, rotaToolSeed } from './aiToolFixtures.mjs';
 import { createFakeAiProvider } from './fakeAiProvider.mjs';
 import { composer, coveringBlocks, isCompositionCall } from './compositionScenario.mjs';
+import { answerQuality } from './answerQuality.mjs';
 
 const planCall = (plan) => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plan }] });
 
@@ -40,6 +41,7 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
   async function ask(turn, { detail = null } = {}) {
     current = turn;
     const before = (stack.db.aiToolLog || []).length;
+    const evidenceBefore = (stack.db.aiMessageEvidence || []).length;
     const inputBefore = inputs.length;
     if (!external && !planner && turn.plan) stack.provider.enqueue(planCall(turn.plan));
     if (external && turn.scripted && turn.plan) stack.provider.enqueue(planCall(turn.plan));
@@ -50,7 +52,8 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
     state.id = done.conversation.id;
     state.turns += 1;
     const log = (stack.db.aiToolLog || []).slice(before);
-    return { done, answer: done.assistantMessage, log, inputs: inputs.slice(inputBefore) };
+    const evidence = (stack.db.aiMessageEvidence || []).slice(evidenceBefore).map((row) => JSON.parse(row.EvidenceJson));
+    return { done, answer: done.assistantMessage, log, inputs: inputs.slice(inputBefore), analysisContext: evidence.find((row) => row.analysisContext)?.analysisContext || null };
   }
   return { stack, ask };
 }
@@ -88,6 +91,17 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.chart && !content.includes('```rota-chart') && !(live && /güvenle grafik çizilemedi|could not be drawn safely/.test(content))) problems.push('grafik yok');
   if (expect.chartUnavailable && (content.includes('```rota-chart') || !/güvenle grafik çizilemedi|could not be drawn safely/.test(content))) problems.push('çizilemeyen grafik açıkça belirtilmedi');
   if (expect.scopeDenied && !/yönetim kapsamınız bulunmuyor|management scope/.test(content)) problems.push('kapsam reddi metni yok');
+  if (expect.level && !every((row) => row.params.teamLevel === expect.level.toUpperCase())) problems.push('örgütsel düzey her okumada korunmadı');
+  if (expect.scope && result.analysisContext?.scope !== expect.scope) problems.push('analiz kapsamı beklenenle aynı değil');
+  if (expect.projectIds && JSON.stringify([...new Set(reads.map((row) => row.params.projectId).filter(Boolean))].sort()) !== JSON.stringify([...expect.projectIds].sort())) problems.push('proje kimliği kümesi beklenenle aynı değil');
+  if (expect.focus && (!result.analysisContext || expect.focus.some((focus) => !result.analysisContext.focus.includes(focus)))) problems.push('analitik yönler eksik');
+  for (const type of expect.chartTypes || []) if (!content.includes(`"type":"${type}"`)) problems.push(`${type} grafiği yok`);
+  const findings = { attentionLeader: /yönetim dikkatini en çok/, windowPressure: /arasında teslimatı olan/, subjectComparison: /arasındaki en belirgin fark|sayıları birbirine yakın/,
+    overdueConcentration: /gecikmiş[\s\S]+toplanıyor/i };
+  for (const kind of expect.findings || []) if (!findings[kind]?.test(content)) problems.push(`${kind} bulgusu yok`);
+  if (expect.caveat && !/kesin olarak söylenemez/.test(content)) problems.push('zorunlu tamlık çekincesi yok');
+  if (expect.conclusion && !answerQuality(content).ending) problems.push('son blokta sonuç yok');
+  if (expect.overdueUnwindowed && !reads.some((row) => row.params.deadline === 'overdue' && !row.params.dateFrom && !row.params.dateTo)) problems.push('mevcut gecikme ayrı okunmadı');
   // Veri okumayan tur hiçbir Rota sorgusu çalıştırmaz (görev kimliğiyle ya da portföy okuması dâhil; süzülmüş alt küme değil).
   if (expect.noData && result.log.length) problems.push(`veri okundu: ${[...new Set(result.log.map((row) => row.query))].join(',')}`);
   if (expect.finish === 'stop' && (!reads.length && !result.log.some((row) => row.query === 'portfolio'))) problems.push('araç okuması yok');

@@ -3,7 +3,7 @@ import { FACT_LIMITS, createEvidenceFacts, factLabel, fieldPatternCovers } from 
 import { canonicalField } from './evidencePopulation.js';
 import { emptyFieldCurrent, factRow, metricAllowedForRow, rowFieldState, rowMetricFields, verifyRequestedFacts } from './requestContract.js';
 import { renderVerifiedNarrative } from './evidenceNarrative.js';
-import { countProposition } from './groundedPropositions.js';
+import { taskCountLead } from './groundedPropositions.js';
 
 /**
  * Kanıta dayalı son yanıtın BELİRLENİMCİ doğrulaması.
@@ -252,10 +252,7 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
   const contextOnly = new Set(['data.populationComplete', 'data.unrepresentedOpenTasks', 'data.unassignedOpenTasks']);
   const narrated = rendered.filter((item) => !contextOnly.has(item.fact.field) || selection.facts.includes(item));
   // Görev listesinin kesin sayısı, süzgeçleri doğal cümleyle söylenebiliyorsa insan diliyle yazılır (sayı aynı olgudur).
-  const countLead = (group) => {
-    const total = group.tool === 'rota_task_search' ? group.envelope.find((fact) => fact.field === 'totalCount') : null;
-    return total ? countProposition(group, total, locale, null)?.markdown ?? null : null;
-  };
+  const countLead = (group) => taskCountLead(group, locale);
   const normalized = renderVerifiedNarrative(narrated, { locale, layout, operation: request?.operation || null, empty: emptyProofs, countLead });
   if (normalized.length > FACT_LIMITS.maxAnswerChars) return { ok: false, citedIds: [], issues: [{ code: 'ANSWER_TOO_LARGE' }] };
   // Anlatımın girdisi, kanıta dayalı yanıt düzeni için de aynı doğrulanmış olgulardır (yeni olgu eklenmez).

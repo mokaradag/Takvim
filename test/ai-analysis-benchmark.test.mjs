@@ -10,7 +10,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { phase4eConversation } from './helpers/phase4eScenario.mjs';
+import { benchmarkExpectation } from '../scripts/analysis-qualification.mjs';
+import { answerQuality } from './helpers/answerQuality.mjs';
+import { phase4eConversation, turnViolations } from './helpers/phase4eScenario.mjs';
 import { analysisBenchmarkSeed, BENCH_PROFILES } from './helpers/analysisBenchmarkSeed.mjs';
 import { NOW } from './helpers/aiToolFixtures.mjs';
 
@@ -60,7 +62,12 @@ test('kıyas verisi tamamen sentetiktir: sorulardaki bütün kişi ve proje adla
   t.mock.timers.reset();
   const known = new Set([...seed.people.map((person) => person.DisplayName), ...seed.projects.map((project) => project.ProjectName)]);
   for (const item of [...fixture.original, ...fixture.holdout]) {
-    for (const name of [...(item.plan?.analysis?.names || []), ...(item.expect?.names || [])]) assert.ok(known.has(name), `${item.id}: ${name}`);
+    assert.ok(Array.isArray(item.textEntities), `${item.id}: soru varlıkları bildirilmemiş`);
+    assert.deepEqual(item.textEntities, [...known].filter((name) => item.text.includes(name)), `${item.id}: soru metnindeki varlıklar`);
+    for (const name of [...item.textEntities, ...(item.plan?.analysis?.names || []), ...(item.expect?.names || [])]) {
+      assert.ok(known.has(name), `${item.id}: ${name}`);
+      assert.ok(item.text.includes(name), `${item.id}: varlık soru metninde yok: ${name}`);
+    }
   }
 });
 
@@ -70,8 +77,13 @@ for (const item of fixture.original.filter((entry) => entry.plan)) {
     const result = await ask({ text: item.text, plan: resolvePlan(item.plan) }, { detail: item.expect.detail || null });
     const content = String(result.answer.content || '');
     const finish = result.answer.finishReason;
-    if (item.handling === 'full') assert.equal(finish, 'stop', content);
-    else assert.ok(['stop', 'unavailable'].includes(finish), `${finish}: ${content}`);
+    assert.equal(finish, 'stop', content);
+    assert.ok(content.trim() && /【R\d+】/.test(content), 'kısmi yanıt da kanıtlı ve dolu olmalı');
+    assert.deepEqual(turnViolations(result, benchmarkExpectation({ ...item, plan: resolvePlan(item.plan) })), [], content);
+    if (answerQuality(content).multi) {
+      assert.ok(answerQuality(content).opening, content);
+      assert.ok(answerQuality(content).ending, content);
+    }
     assert.doesNotMatch(content, /yanıt doğrulanamadı/);
     for (const type of item.expect.chartTypes || []) assert.ok(content.includes(`"type":"${type}"`), `${type} grafiği yok:\n${content}`);
     if (item.expect.chart) assert.ok(content.includes('```rota-chart'), `grafik yok:\n${content}`);

@@ -51,6 +51,16 @@ const narrated = (...blocks) => ({ blocks: blocks.filter(Boolean) });
 const check = (composition, response, options = {}) => validateComposition(composition, response, { userText: QUESTION, ...options });
 const issue = (result) => (result.ok ? null : result.issues[0]);
 
+test('bölümleri karıştıran kimlik paragrafı çizime ulaşmadan reddedilir', async (t) => {
+  const { verdict } = await overdueComposition(t);
+  const second = { ...verdict.presentation, facts: verdict.presentation.facts.map((item) => ({ ...item, evidenceId: 'R2' })) };
+  const composition = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }, { index: 1, presentation: second }], detail: 'detailed' });
+  const layout = coveringBlocks(composition.view);
+  const mixed = layout.blocks.filter((block) => block.type === 'say').map((block) => block.items[0]);
+  assert.ok(new Set(mixed.map((id) => composition.render.propositions.get(id).part)).size > 1);
+  assert.equal(issue(check(composition, { blocks: [{ type: 'say', items: mixed }, ...layout.blocks.filter((block) => block.type !== 'say')] })), 'PART_MIXED');
+});
+
 /* ── Olgu sayfası ─────────────────────────────────────────────── */
 
 test('olgu sayfası doğrulanmış olgulardan kurulur; kimlik, kanıt kimliği ya da ham alan yolu taşımaz', async (t) => {

@@ -612,7 +612,8 @@ test("yanlış koleksiyonlu zayıf model planı SQL öncesi kayıt defteri ipucu
   assert.equal(sqlAtRepair, 0);
   assert.equal(answer.finishReason, 'stop');
   // Sıfır sayım "**0** … bulunuyor" yerine doğal olumsuz cümledir (Aşama F).
-  assert.match(answer.content, expected ? new RegExp(`\\*\\*${expected}\\*\\* devam eden görev`) : /devam eden görev yok/);
+  if (expected) assert.match(answer.content, new RegExp(`\\*\\*${expected}\\*\\* devam eden görev`));
+  else assert.equal(answer.content.split('\n\n')[0], 'Sorumlusu olduğunuz devam eden görev yok (ölçüt: Durum: Devam ediyor). 【R1】');
   const [trace] = turnTraces(logs);
   // Değer isteğinde grup satırı toplamı belirsizleştirmez: düzeltilen planın toplamını sunucu seçer.
   assert.deepEqual([trace.selectedBy, ...trace.rounds.map((round) => round.purpose)], ['server', 'plan', 'declaration']);

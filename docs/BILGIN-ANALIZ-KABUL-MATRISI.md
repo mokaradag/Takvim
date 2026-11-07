@@ -28,14 +28,14 @@ grafik, bulgu, sonuç paragrafı, çağrı sayısı) ölçer; yazım kalitesi te
 | --- | --- | --- | --- |
 | K1 | Bildirilen yönlerin fiziksel okuması 3 ile sınırlıydı; dört yönlü yönetici soruları ve iki özne × üç yön karşılaştırması altın planla bile reddediliyordu | 2, 5, 11, 17, 20, 40 | Kabul sınırı mevcut fiziksel üst sınır (4); model şeması değişmedi |
 | K2 | Gelecekteki dönem gecikmiş iş okumasına da uygulanıyordu (tanımı gereği boş: "gecikmiş görev yok" yanlış güvencesi; mevcut bir sınama bu yanlışı zorunlu ifade olarak kilitlemişti) | 3, 10, 16, 24, 38 | Gecikme bugüne göre ölçülür; gelecek dönem yalnızca gecikme okumasından çıkarılır |
-| K3 | Özetten açılan çok bölümlü planın tur bütçesi sabit 4'tü; ad çözümü + okuma bölüm başına iki tur harcadığından üçüncü bölüme tur kalmıyordu (iki kişi karşılaştırması kısmi kalıyordu; `main` üzerinde de yeniden üretildi) | 11, 34 | Yalnızca özetten açılan planda ek bölüm başına bir tur; toplam çağrı/SQL/süre sınırları değişmedi |
+| K3 | Özetten açılan çok bölümlü planın tur bütçesi sabit 4'tü; ad çözümü + okuma bölüm başına iki tur harcadığından üçüncü bölüme tur kalmıyordu (iki kişi karşılaştırması kısmi kalıyordu; `main` üzerinde de yeniden üretildi) | 11, 34 | İlk kabul edilen analitik planda bölüm başına ad çözümü ve okuma hakkı (en çok 8 tur), yeniden başlangıçta kümülatif sayım; toplam çağrı/SQL/süre sınırları değişmedi |
 | K4 | Tek grafik türü temsil ediliyordu | 39 | En çok iki tür (dizi) kabul edilir, her türün okuması ve aday yeri ayrılır |
 | K5 | Bölümler arası sentez yoktu (giriş, karşılaştırmalı bulgu, öncelik, sonuç) | 24 mekanik yanıtın tamamı | Bulgu motoru + sunucu yazımı giriş/sonuç |
 | K6 | Kişi öznesi doğal betimlenemiyordu ("Görebildiğiniz görevler arasında … (ölçüt: Sorumlu: Seçilen kişi; Kişi: X)") | 11, 34 ve kişi soruları | "**X** sorumluluğunda …" doğal öznesi |
 | K7 | İki öznenin karşılaştırma grafiği yoktu (her öznenin değeri ayrı kanıttaydı) | 34 | İki öznenin doğrulanmış değerlerinden ölçü başına çubuk grafik |
 | K8 | Proje portföy sıralaması 8 satırla kesiliyordu; 9+ projeli portföyde hiçbir pay/sıra bulgusu kurulamıyordu | 1, 4, 8, 17, 20 | Portföy sıralaması mevcut kayıt defteri üst sınırı (10) |
 | K9 | Kesik "en yakın teslimat" listesinde zaman çizelgesi çizilmiyordu | 24, 38 | Termine göre artan doğrulanmış sıralamanın başı "En yakın N teslimat" başlığıyla çizilir |
-| K10 | Onarım sözleşmesi kusurları (Haiku ile bulundu): `all_time` eşdeğer yazımı düşünce onarım "kapsam değişikliği" sayılıyordu; göreli pencere çakışmasında düzeltilecek alan dondurulmuştu; karşılaştırma bütçe aşımı daraltılamıyordu; özetin yanındaki ad arama çağrıları onarım turu açıyordu | 1, 3, 11 ve geniş sorular | Eşdeğerlik normalleştirmesi; çakışan alanlar onarımda serbest; yön daraltma; ad arama çağrıları yürütülmeden atılır |
+| K10 | Onarım sözleşmesi kusurları (Haiku ile bulundu): `all_time` eşdeğer yazımı düşünce onarım "kapsam değişikliği" sayılıyordu; göreli pencere çakışmasında düzeltilecek alan dondurulmuştu; karşılaştırma bütçe aşımı daraltılamıyordu; özetin yanındaki ad arama çağrıları onarım turu açıyordu | 1, 3, 11 ve geniş sorular | Dönemsizlik eşdeğerliği; kalan tarih gösterimi sabit; bütçede yön korunur; yalnızca bildirilmiş seçicilere eşit ad aramaları atılır |
 | K11 | `EMPTY_COMPLETION`: Qwen plan/düzeltme turunda <1 sn boş yanıt; özdeş yeniden deneme de boş | VM'de çok sayıda | Burada yeniden üretilemez; çıktı belirteci sayısı günlüğe eklendi, VM yordamı (yol haritası §11) |
 
 ## 3. 40 soruluk matris
@@ -46,9 +46,9 @@ Sütunlar: **No** · **VM** (B başarısız, M mekanik) · **Sınıf** (tam/kıs
 
 | No | VM | Sınıf | Gerekli yetenek | Kök neden | Belirlenimci | Haiku | Kalan sınır |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | M | tam | Çok ölçülü proje karşılaştırması, dikkat önceliği (A→C) | K5, K8 | ✓ | ✓ (onarım düzeltmesi sonrası) | Bileşik puan bilinçli olarak yok |
+| 1 | M | tam | Çok ölçülü proje karşılaştırması, dikkat önceliği (A→C) | K5, K8, K10 | ✓ | ✓ (onarım düzeltmesi sonrası) | Bileşik puan bilinçli olarak yok |
 | 2 | B | kısmi → G | Ekip iş yükü + proje + gecikme + yaklaşan (B) | K1, K5 | ✓ | ✓ | Kadro tamlığı: denge/yoğunlaşma yalnızca tam nüfusta |
-| 3 | B | tam | Gelecek dönem + mevcut gecikme (B) | K2 | ✓ | ✓ (onarım düzeltmesi sonrası) | Gecikmiş listesi kesikse "en az" alt sınırı |
+| 3 | B | tam | Gelecek dönem + mevcut gecikme (B) | K2, K10 | ✓ | ✓ (onarım düzeltmesi sonrası) | Gecikmiş listesi kesikse "en az" alt sınırı |
 | 4 | M | kısmi → G | Gecikme yoğunlaşması (C) | K5, K8 | ✓ | ✓ | Kişi yoğunlaşması kadro tamlığı ister |
 | 5 | B | tam | İki proje karşılaştırması (B) | K1, K5 | ✓ | ✓ | — |
 | 6 | M | kısmi → G | Ekip dengesi (C) | K5 | ✓ | ✓ | Kadro tamlığı çekincesi zorunlu |
@@ -99,12 +99,15 @@ düzen modeli) ve `PHASE4E_SET=holdout` (ayrık 24, yalnızca planlayıcı). Mod
 
 | Koşu | Vaka | Geçen | Çağrı | Girdi | Önbellek yazma | Önbellek okuma | Çıktı |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Özgün 40, ilk tam koşu (düzeltmelerden önce) | 39 | 28 | 81 | 95 223 | 67 692 | 1 881 080 | 20 638 |
+| Özgün küme, ilk kayıtlı koşu (düzeltmelerden önce; 39/40) | 39 | 28 | 81 | 95 223 | 67 692 | 1 881 080 | 20 638 |
 | Başarısızların yeniden koşusu (düzeltmelerden sonra) | 11 | 5 | 26 | 21 831 | 15 333 | 728 220 | 7 777 |
 | Hedefli tanı koşuları (o33, o38, o39, o20) | 9 | 2 | 19 | 18 166 | 21 483 | 486 367 | 5 449 |
 | Ayrık küme (yalnızca planlayıcı) | 24 | 16* | 35 | 105 | 92 256 | 1 277 414 | 9 618 |
 | Görsel kabul (gerçek arayüz, 3 koşu, 16 tur) | — | — | 34 | 39 255 | 24 899 | 834 932 | 8 108 |
 | Kanonik planlayıcı kapısı, `--semantic none` (aşağıya bkz.) | 136 | 35 | 217 | 651 | 376 465 | 8 070 771 | 50 996 |
+
+İlk kayıtlı koşu 40 vakanın 39'unu içeriyor; eksik vakanın kimliği ve dışlanma nedeni mevcut kayıtta yoktur.
+Bu satır tam 40 soruluk koşu ya da 40/40 kabul kanıtı olarak yorumlanamaz.
 
 \* Ayrık kümenin ham sonucu 11/24'tür; 5 vaka yalnızca puanlayıcının, beklentide bilinçli olarak serbest bırakılan
 kapsamı yine de karşılaştırmasından düşüyordu (`kapsam X ≠ undefined`). Puanlayıcı düzeltildi (Tier B vakalarının hepsi
@@ -115,11 +118,11 @@ sorusunda açıklama isteği, h23 karışık kişi/kendi kapsamı) açık kalır
 **Kanonik planlayıcı kapısı (117/117 + 19/19):** bu ortamda tanımlı biçimiyle koşulamaz. Kapı anlamsal danışmanlık
 (`--semantic run|live`, şirket içi gömme/yeniden sıralama modeli) ister; burada yalnızca `--semantic none` mümkündü ve
 rapor bunu "kapıyı düşürür" diye işaretler. Bu koşulda Haiku 136 vakanın 35'ini (kanonik 27/117) doğru planladı; sonuç
-anlamsal danışmanlıksız koşulun ölçüsüdür, gerileme ölçüsü değildir. Gerileme olmadığı ayrıca belirlenimci olarak
-doğrulandı: sahte model komutuyla 136 vakanın planlayıcıya giden girdileri bu dalda ve `main`'de karşılaştırıldı;
-sistem yönergesi, araç kataloğu ve ilk tur mesajları **bayt bayt aynıdır** (fark yalnızca rastgele çağrı kimlikleri).
-Dalın tek davranış farkı, dört yönlü özetin 4 okumaya açılmasıdır; puanlayıcının bütünlük denetimi 3 yerine
-`ANALYSIS_LIMITS.maxParts` (4) sınırını izleyecek biçimde güncellendi (önce koşu geçersiz sayılıyordu: tr-035, tr-038).
+anlamsal danışmanlıksız koşulun ölçüsüdür, gerileme ölçüsü değildir. İlk tur girdisinin eşdeğerliği ayrıca belirlenimci olarak
+karşılaştırıldı: sahte model komutuyla 136 vakanın sistem yönergesi, araç kataloğu ve ilk tur mesajları o tarihte
+bu dal ile `main` arasında bayt bayt aynıydı (rastgele çağrı kimlikleri dışında). Bu karşılaştırma sonraki onarım,
+puanlama ve yürütme davranışlarını doğrulamaz; kanonik davranış kapısının yerine geçmez. Bu inceleme düzeltmeleri
+`charts` şema alanını da eklediğinden eski girdi eşdeğerliği güncel sürüm için ileri sürülmez.
 
 **Açık kalan model davranışları:** o38 (özet + ek liste aynı planda; G'de birleşik plan), o33/o39 (Haiku'nun düzen
 modeli karşılaştırma/halka sayfasında reddediliyor ve Derin anlatım istiyor; yanıt sunucu düzeniyle doğru teslim
@@ -134,7 +137,7 @@ ediliyor), o20 kararsız, o11'deki tek seferlik iç hata yeniden üretilemedi (4
 | Ayrıntılı | 37 | 24 → 37 | 17 → 37 (30 öncelik + 7 sonraki adım) | 33 |
 
 "Önce" sütunu bu dilimin ilk hâlidir (bulgu motoru yalnızca bölümler arası bulgu kurabildiğinde giriş ve sonuç yazıyordu).
-Mekanik kalıpların ("Eşleşen", "Kayıt sayısı:", eğik çizgili karşılaştırma, "**0**'ı tamamlanmış", tekrarlanan toplam cümlesi)
+Mekanik kalıpların ("Eşleşen", "Kayıt sayısı:", eğik çizgili karşılaştırma, "**0**'ı tamamlanmış")
 sayısı bütün yanıtlarda sıfırdır; kalan tek etiket satırı, doğal cümleyle söylenemeyen nüfusların tablo üstü "_Ölçüt: …_"
 notudur (yanıt başına ortalama: Kısa 0,46; Dengeli 0,25; Ayrıntılı 0,16). Bu güvence eşikleriyle birlikte
 `test/ai-answer-quality-gate.test.mjs` içinde kalıcı sınamadır; çok istekli türlü yanıtlar da açılışla başlar.
@@ -142,7 +145,7 @@ notudur (yanıt başına ortalama: Kısa 0,46; Dengeli 0,25; Ayrıntılı 0,16).
 ## 5. Temsilî yanıtlar (aynı sentetik kanıt, önce / sonra)
 
 Bütün sayılar doğrulanmış olgudur ya da tam nüfustan sunucuda hesaplanmış toplam/paydır. "Sonra" metinleri gerçek
-arayüzden (zayıf planlayıcı ve düzen modeli, sentetik veri) alınmıştır.
+arayüzden (Haiku 4.5 planlayıcı ve düzen modeli, sentetik veri) alınmıştır.
 
 **Kısa olgusal soru**: "Kaç gecikmiş görevim var?"
 - Önce: "Eşleşen 1 görev bulundu (ölçüt: Termin: Gecikmiş; Sorumlu: Ben)."
@@ -167,7 +170,9 @@ arayüzden (zayıf planlayıcı ve düzen modeli, sentetik veri) alınmıştır.
   > #### Öncelikli konular
   > 1. **Yük testi** — en uzun süredir geciken görev (**21** gün, **Altyapı Yenileme**)
   > 2. **Altyapı Yenileme** projesindeki açık işler — göstergelerin birlikte en yüksek olduğu proje
-  > 3. **8 Kasım 2026** — en yakın teslim tarihi (**Ağ yapılandırması** dahil)
+  > 3. **8 Kasım 2026** — en yakın teslim tarihi (**Kapasite planı** dahil)
+
+Yönetici örneğinin son maddesindeki görev adı, tohumun +1 günlük terminine göre düzeltildi; bu bir yeni canlı koşu değildir.
 
 **İki proje karşılaştırması**
 - Önce: girişsiz sekiz cümle, sayılar iki kez; "Gecikmiş görev (**2** / **3**) … sayıları birbirine yakın."
@@ -192,3 +197,26 @@ arayüzden (zayıf planlayıcı ve düzen modeli, sentetik veri) alınmıştır.
 **Eksik kanıt** (ekip iş yükü, kadro tamlığı kanıtlanmamış)
 - "Bu iş yükü görünümü yalnızca görebildiğiniz ve kişilere bağlanabilen açık işleri kapsıyor; bu nedenle iş yükünün dengeli
   olup olmadığı ya da en çok yükün kimde olduğu kesin olarak söylenemez." (zorunlu çekince; sıralama yargısı yok).
+
+## 6. İnceleme düzeltmelerinin güncel doğrulaması (7 Kasım 2026)
+
+Bu bölümdeki güncel sınamalar, §4 ve §4b'deki tarihsel ölçümlerden ayrıdır. Eski Haiku başarı sayıları yeni
+beklentilerle yeniden puanlanmış ya da yeniden koşulmuş sayılmaz. Tam vakalarda model düzeni zorunludur;
+kanıtlı sunucu yedeği kullanıcıya yanıt verebilir ama model düzeni kabulünü geçirmez. Kısmi vakalarda genel
+`unavailable` yanıtı geçiş sayılmaz; altın planlı örnekler kanıtlı `stop` yanıtı vermelidir.
+
+Metin kapısı göreli tarihleri çözer ve seçilen her çok istekli örneğin bitişini denetler. Bağımlı baz plan
+örneği, mevcut dört tur sınırında iki satırın ikisini de okuyan sentetik veriyle ölçülür; daha büyük bağımlı
+nüfuslar için bir kabul iddiası değildir. Kısa tekrarlar, vurgusuz sayılar, yanlış tarihler, erken sonuç başlığı,
+eksik grafik türü ve yanlış örgütsel düzey için olumsuz kontroller vardır.
+
+Güncel sonuçlar: `npm test -- --test-concurrency=4` **5785/5785**, başarısız/atlanmış sınama **0**;
+`npm run lint` ESLint uyarısı/hatası olmadan, `npm run build` başarıyla tamamlandı. Tam küme güvenlik,
+yetki, kanıt ve belirlenimci planlayıcı kapılarını da içerir. Yeni değişmez sınamalarının ilk 19'u özgün
+`21035f8` üzerinde başarısız, düzeltilmiş kodda başarılıdır; karışık kimlik paragrafının doğrulamada reddi
+özgün kodda da geçtiği için bu inceleme iddiası uygulanabilir sayılmadı.
+
+Kurum içi Windows VM ve 117/117 + 19/19 anlamsal danışmanlıklı kapılar bu ortamda çalıştırılmadı.
+Tek vakalık sınırlı Haiku denemesi (`PHASE4E_TIER=F`, `PHASE4E_CASES=o39`) altyapıda durdu:
+`PLANNER_PROVIDER_ERROR`, `exitCode: -1`, `apiCalls: 0`, doğrulanmış model kimliği yok. Bu ortamda
+`claude` yürütülebiliri yoktur. Bu sonuç bir model kalite başarısızlığı ya da canlı kabul geçişi değildir.

@@ -14,17 +14,19 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { phase4eConversation } from './helpers/phase4eScenario.mjs';
 import { analysisBenchmarkSeed, BENCH_PROFILES } from './helpers/analysisBenchmarkSeed.mjs';
-import { NOW } from './helpers/aiToolFixtures.mjs';
+import { NOW, rotaToolSeed, TASKS, PROJECTS, AYSE } from './helpers/aiToolFixtures.mjs';
+import { loadPlannerBenchmark, resolveExample } from '../scripts/planner-scoring.mjs';
 import { answerQuality } from './helpers/answerQuality.mjs';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/bilgin-analysis-benchmark.json', import.meta.url), 'utf8'));
-const planner = JSON.parse(readFileSync(new URL('./fixtures/ai-planner-benchmark.json', import.meta.url), 'utf8'));
 const TODAY = '2026-09-30';
+const planner = loadPlannerBenchmark({ referenceDate: TODAY });
 const resolvePlan = (plan) => JSON.parse(JSON.stringify(plan).replace(/"T\+(-?\d+)"/g, (_, offset) => `"${new Date(Date.parse(`${TODAY}T00:00:00Z`) + Number(offset) * 86400000).toISOString().slice(0, 10)}"`));
 const CAPTION_LIMITS = Object.freeze({ short: 0.5, balanced: 0.3, detailed: 0.3 });
 const measured = [];
 
 function check(kind, detail, id, content) {
+  assert.ok(String(content || '').trim(), 'boş yanıt kalite ölçümü olamaz');
   const quality = answerQuality(content);
   measured.push({ kind, detail, id, quality });
   assert.deepEqual(quality.mechanical, [], `mekanik kalıp:\n${content}`);
@@ -51,12 +53,25 @@ for (const detail of ['short', 'balanced', 'detailed']) {
   }
 }
 
-for (const item of [...planner.cases, ...(planner.supplementary || [])].filter((entry) => entry.example?.additionalRequests)) {
-  test(`kalite kapısı: türlü çok istekli ${item.case}`, async (t) => {
-    const { ask } = phase4eConversation(t);
-    const { answer } = await ask({ text: 'soru', plan: { intent: 'rota', language: item.language || 'tr', ...item.example } }, { detail: 'balanced' });
-    // Örnek planın verisi sınama kümesinde yoksa doğrulanamaz; dil kapısı yalnızca teslim edilen yanıtı ölçer.
-    if (answer.finishReason === 'stop') check('typed', 'balanced', item.case, answer.content);
+for (const item of planner.cases.filter((entry) => entry.example?.additionalRequests)) {
+  test(`kalite kapısı: türlü çok istekli ${item.id}`, async (t) => {
+    const seed = rotaToolSeed();
+    if (item.id === 'tr-091') {
+      seed.tasks.find((task) => task.TaskId === TASKS.DUE_SOON).TargetFinish = '2026-10-01';
+      seed.taskAssignees.push({ TaskId: TASKS.DUE_SOON, Sicil: AYSE });
+    }
+    if (item.id === 'tr-092') {
+      seed.projects.find((project) => project.ProjectId === PROJECTS.FULL).ProjectName = 'Anten';
+      // Bu dil örneği iki baz plan satırı ve ikisinin de bağımlı ayrıntısını mevcut dört turda okur.
+      seed.taskBaselineSnapshots = seed.taskBaselineSnapshots.filter((row) => row.TaskId !== TASKS.DONE);
+      for (const task of seed.tasks.filter((task) => task.ProjectId === PROJECTS.FULL && !seed.taskAssignees.some((row) => row.TaskId === task.TaskId))) {
+        seed.taskAssignees.push({ TaskId: task.TaskId, Sicil: AYSE });
+      }
+    }
+    const { ask } = phase4eConversation(t, { seed });
+    const { answer } = await ask({ text: item.text, plan: { intent: 'rota', language: item.language || 'tr', ...resolveExample(item.example, TODAY) } }, { detail: 'balanced' });
+    assert.equal(answer.finishReason, 'stop', `${item.id}: ${answer.content}`);
+    check('typed', 'balanced', item.id, answer.content);
   });
 }
 
@@ -64,7 +79,7 @@ test('kalite kapısı eşikleri: açılış ve kapanış oranı, ölçüt satır
   const analytical = measured.filter((row) => row.kind === 'analytical' && row.quality.multi);
   assert.ok(analytical.length >= 80, `ölçülen çok bölümlü analitik yanıt sayısı: ${analytical.length}`);
   assert.equal(analytical.filter((row) => row.quality.opening && row.quality.ending).length, analytical.length);
-  assert.ok(measured.filter((row) => row.kind === 'typed' && row.quality.multi).length >= 3, 'türlü çok bölümlü yanıt ölçülmeli');
+  assert.ok(measured.filter((row) => row.kind === 'typed' && row.id && planner.cases.some((item) => item.id === row.id && item.example?.additionalRequests)).length === planner.cases.filter((item) => item.example?.additionalRequests).length, 'seçilen her türlü yanıt ölçülmeli');
   for (const [detail, limit] of Object.entries(CAPTION_LIMITS)) {
     const rows = measured.filter((row) => row.detail === detail);
     const average = rows.reduce((sum, row) => sum + row.quality.captions, 0) / rows.length;

@@ -66,9 +66,10 @@ export function typedPlanningTool(catalog) {
       analysis: analysisSchema(),
       visual: { type: 'boolean', description: 'Açık grafik isteği.' },
       chart: { type: 'string', enum: [...PLAN_CHART_TYPES], description: 'Söylenen grafik türü.' },
+      charts: { type: 'array', minItems: 1, maxItems: 2, uniqueItems: true, items: { type: 'string', enum: [...PLAN_CHART_TYPES] }, description: 'İstenen grafik türleri; ilk öğe birincildir.' },
       table: { type: 'boolean', description: 'Açık tablo isteği.' },
       request,
-      additionalRequests: { type: 'array', minItems: 1, maxItems: PLANNER_LIMITS.maxRequests - 1, description: 'Yalnızca ileti request ile yanıtlanmayan, ayrı okuma (başka araç ya da aynı aracın başka nüfusu) gerektiren bir ya da iki soru daha soruyorsa request ile aynı düzeyde verilir; her öğe request ile aynı alanları taşır. Bölüm sırası: 0 = request, 1 = ilk ek istek. Bir öğe önceki bölümün satırlarındaki kayıtlar için soruyorsa o varlık {"type":"task|project","from":<bölüm sırası>} olarak yazılır. additionalRequests ile calls verilmez.',
+      additionalRequests: { type: 'array', minItems: 1, maxItems: PLANNER_LIMITS.maxRequests - 1, description: 'Ayrı okuma gerektiren ek sorular; öğeler request ile aynı alanları taşır. Bölüm sırası: 0=request, 1=ilk ek istek. Önceki bölümün satırlarına gönderme: {"type":"task|project","from":<bölüm sırası>}. additionalRequests ile calls verilmez',
         items: additionalRequest },
       clarify: { type: 'object', additionalProperties: false, required: ['reason'], description: 'intent clarify için.', properties: {
         reason: { type: 'string', enum: [...CLARIFY_REASONS], description: 'missing_referent: soru adı verilmemiş bir kayda gönderme yapıyor; ambiguous: istek birden çok Rota yeteneğine eşit uyuyor.' },
@@ -146,24 +147,25 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   // Sunum tercihleri (grafik türü, tablo) plan düzeyindedir; zayıf model onları özetin içine de yazabilir. Yapısal taşıma:
   // değer değişmez, özetin anlamı (kapsam, yön, ufuk) değişmez; plan düzeyinde ayrıca verilmişse o geçerlidir.
   if (plan.analysis && typeof plan.analysis === 'object' && !Array.isArray(plan.analysis)) {
-    for (const key of ['chart', 'table']) {
+    for (const key of ['chart', 'charts', 'table']) {
       if (!Object.hasOwn(plan.analysis, key)) continue;
       const { [key]: value, ...rest } = plan.analysis;
       plan = { ...plan, analysis: rest, ...(plan[key] == null ? { [key]: value } : {}) };
     }
   }
-  // Aşama F: "hem halka hem yığılmış" gibi iki grafik türü isteği. Model görünür şema tek tür önerir; en çok iki farklı,
-  // bilinen türün dizisi kabul edilir (ilk tür birincil istektir). Geçersiz dizi eskisi gibi `$.chart:enum` ile reddedilir.
+  // En çok iki farklı tür; eski chart dizisi de aynı kapalı doğrulamadan geçer.
   // Zayıf model diziyi JSON metni olarak da yazar (`"[\"donut\", \"stacked\"]"`): iç içe alanlardaki gibi yalnızca geçerli
   // JSON dizisi çözülür; anlam yorumlanmaz, tür denetimi aynen uygulanır.
   let charts = null;
-  const chartList = decodedJson(plan.chart);
+  const chartList = decodedJson(plan.charts ?? plan.chart);
+  if (plan.charts != null && (!Array.isArray(chartList) || plan.chart != null && plan.chart !== chartList[0])) throw invalidArguments(['$.charts:enum']);
   if (Array.isArray(chartList)) {
     const list = chartList;
     if (list.length >= 1 && list.length <= 2 && new Set(list).size === list.length && list.every((type) => PLAN_CHART_TYPES.includes(type))) {
       charts = list.length > 1 ? Object.freeze([...list]) : null;
-      plan = { ...plan, chart: list[0] };
-    }
+      plan = { ...plan, chart: list[0], ...(charts ? { charts } : {}) };
+      if (!charts) delete plan.charts;
+    } else throw invalidArguments([plan.charts != null ? '$.charts:enum' : '$.chart:enum']);
   }
   onDecoded(plan);
   if (Array.isArray(plan.additionalRequests) && !plan.additionalRequests.length) delete plan.additionalRequests;
@@ -202,7 +204,15 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // Aşama F: özetin yanına yalnızca ad çözümü çağrıları (kişi/proje arama) yazılmışsa bunlar gereksizdir: adları sunucu
     // özetten kendisi çözer. Çağrılar YÜRÜTÜLMEDEN atılır (yapısal normalleştirme; düzeltme turu açılmaz). Başka araç çağrısı ya da
     // istek ile birlikte özet eskisi gibi reddedilir.
-    const lookups = planned.length && planned.every((call) => NAME_LOOKUP_TOOLS.includes(call.name));
+    const selectors = [
+      ...(['person', 'project'].includes(plan.analysis?.scope) ? (Array.isArray(plan.analysis.names) ? plan.analysis.names : []).map((text) => ({ name: `rota_${plan.analysis.scope}_search`, text })) : []),
+      ...(plan.analysis?.within ? [{ name: 'rota_project_search', text: plan.analysis.within }] : [])
+    ];
+    const lookups = planned.length && planned.every((call) => {
+      if (!NAME_LOOKUP_TOOLS.includes(call.name)) return false;
+      const args = parseToolArguments(getRotaTool(call.name).parameters, call.arguments);
+      return selectors.some((selector) => selector.name === call.name && selector.text === args.text);
+    });
     // Analitik özet: sunucu her yönü kayıt defterinin sabit istek biçimine açar; okumaları yalnızca sunucu kurar.
     if (present('request') || present('additionalRequests') || (planned.length && !lookups) || direct.length) throw invalidArguments(['$.analysis:request']);
     const parsed = parseAnalysis(plan.analysis);
@@ -213,7 +223,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const chart = base.chart || (follow && visual && !declined ? previousAnalysis.chart : null) || null;
     const table = base.table === true || Boolean(follow && previousAnalysis.table && plan.table !== false);
     const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
-    const requested = visual && base.charts && chart === base.chart ? base.charts : null;
+    const requested = visual ? base.charts || (follow && !base.chart ? previousAnalysis.charts : null) : null;
     const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested });
     return { plan: { ...base, ...(visual ? { visual: true } : declined ? { visual: false } : {}), ...(chart ? { chart } : {}), ...(requested ? { charts: requested } : {}),
       ...(table ? { table: true } : {}), analysis, request,
@@ -256,7 +266,7 @@ function planChoice(schema, value, prefix) {
   }
 }
 
-const PLAN_KEYS = Object.freeze(['intent', 'language', 'analysis', 'visual', 'chart', 'table', 'request', 'additionalRequests', 'calls', 'clarify', 'abstain']);
+const PLAN_KEYS = Object.freeze(['intent', 'language', 'analysis', 'visual', 'chart', 'charts', 'table', 'request', 'additionalRequests', 'calls', 'clarify', 'abstain']);
 /** Özetin adlarını sunucu zaten çözer: bu araçların özet yanındaki çağrıları yürütülmeden atılabilir. */
 const NAME_LOOKUP_TOOLS = Object.freeze(['rota_person_search', 'rota_project_search']);
 

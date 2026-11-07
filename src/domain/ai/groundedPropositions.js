@@ -278,15 +278,15 @@ export function titleCandidate({ tool, filters, groupBy = null, locale }) {
   if (!TASK_TOOLS.has(tool) || (groupBy && !EXCLUSIVE_GROUP_BY.includes(groupBy))) return null;
   const population = taskPopulation(filters, locale);
   if (!population) return null;
-  const { me, team, adjectives, project } = population;
+  const { me, team, adjectives, project, person } = population;
   const adjective = adjectives.length ? `${adjectives.join(', ')} ` : '';
   let text;
   if (locale === 'en') {
-    const tasks = `${me ? 'your ' : team ? `${team.en}'s ` : ''}${adjective}tasks${population.after ? ` ${population.after}` : ''}${project ? ` in the ${project} project` : ''}`;
+    const tasks = `${me ? 'your ' : team ? `${team.en}'s ` : person ? `${person}'s ` : ''}${adjective}tasks${population.after ? ` ${population.after}` : ''}${project ? ` in the ${project} project` : ''}`;
     const dimension = groupBy ? GROUP_TITLES[groupBy][1] : null;
     text = dimension ? `${dimension} distribution of ${tasks}` : tasks;
   } else {
-    const place = `${team ? `${team.of} ` : ''}${project ? `${project} projesindeki ` : ''}`;
+    const place = `${team ? `${team.of} ` : ''}${project ? `${project} projesindeki ` : ''}${person ? `${person} sorumluluğundaki ` : ''}`;
     text = groupBy ? `${place}${adjective}${me ? 'görevlerinizin' : team ? 'görevlerinin' : 'görevlerin'} ${GROUP_TITLES[groupBy][0]} dağılımı`
       : `${place}${adjective}${me ? 'görevleriniz' : team ? 'görevleri' : 'görevler'}`;
   }
@@ -296,7 +296,7 @@ export function titleCandidate({ tool, filters, groupBy = null, locale }) {
     : from ? (locale === 'en' ? ` (due on or after ${day(from, locale)})` : ` (${day(from, locale)} ve sonrasında terminli)`)
       : to ? (locale === 'en' ? ` (due on or before ${day(to, locale)})` : ` (${day(to, locale)} ve öncesinde terminli)`) : '';
   // Kayıt adıyla başlayan başlıkta veri değiştirilmez; yalnızca sunucu metniyle başlayan başlığın ilk harfi büyür.
-  const lead = locale !== 'en' && project ? text : `${text.charAt(0).toLocaleUpperCase(locale === 'en' ? 'en-US' : 'tr-TR')}${text.slice(1)}`;
+  const lead = locale !== 'en' && (project || person) ? text : `${text.charAt(0).toLocaleUpperCase(locale === 'en' ? 'en-US' : 'tr-TR')}${text.slice(1)}`;
   return `${lead}${window}`;
 }
 
@@ -921,8 +921,8 @@ export function caveatPropositions(parts, locale = 'tr') {
       if (seen.has(item.evidenceId)) continue;
       seen.add(item.evidenceId);
       out.push({ part: part.index + 1, proposition: { kind: 'completeness', tone: 'info', evidenceId: item.evidenceId, ...sentence(assignments ? (en
-        ? ['this breakdown shows only the people you can see who have tasks assigned: members with no tasks are not listed, and hidden or unresolved assignments do not enter the ranking. So team balance or a complete workload ranking cannot be established.']
-        : ['bu kırılım yalnızca görebildiğiniz ve iş atanmış kişileri gösteriyor: işi olmayan üyeler listede yer almaz, görünmeyen ya da çözümlenemeyen atamalar da sıralamaya girmez. Bu yüzden ekip dengesi ya da eksiksiz bir iş yükü sıralaması kesin olarak söylenemez.']) : en
+        ? ['this breakdown shows only the people you can see who have tasks assigned: members with no matching tasks are not listed. So team balance or a complete workload ranking cannot be established.']
+        : ['bu kırılım yalnızca görebildiğiniz ve iş atanmış kişileri gösteriyor: eşleşen işi olmayan üyeler listede yer almaz. Bu yüzden ekip dengesi ya da eksiksiz bir iş yükü sıralaması kesin olarak söylenemez.']) : en
         ? ['this workload view covers only the open work you can see that is attributed to people, so whether the load is balanced or who carries the most cannot be stated with certainty.']
         : ['bu iş yükü görünümü yalnızca görebildiğiniz ve kişilere bağlanabilen açık işleri kapsıyor; bu nedenle iş yükünün dengeli olup olmadığı ya da en çok yükün kimde olduğu kesin olarak söylenemez.']) } });
     }
@@ -1046,3 +1046,9 @@ export function fluentParagraph(entries, locale = 'tr', memory = null, emitted =
  * sayı, gün ve yüzde biçimi ile Türkçe iyelik eki. Yeni bir biçim kuralı eklenmez; önermelerle aynı yazım kullanılır.
  */
 export { sentence as factSentence, v as strongFact, t as plainFact, number as formatCount, day as formatFactDay, percent as formatPercent, ofCount as possessiveCount, locativeOf as locativeCountSuffix };
+
+/** Görev listesinin kesin sayım cümlesi; doğrulanmış anlatım ve düzen aynı nüfusu adlandırır. */
+export function taskCountLead(group, locale = 'tr') {
+  const total = group.tool === 'rota_task_search' ? group.envelope.find((fact) => fact.field === 'totalCount') : null;
+  return total ? countProposition(group, total, locale, null)?.markdown ?? null : null;
+}

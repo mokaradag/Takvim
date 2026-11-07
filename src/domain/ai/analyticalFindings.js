@@ -103,8 +103,11 @@ function taskLists(groups) {
     if (!sample) continue;
     const filters = sample.semantic.filters || {};
     const statuses = Array.isArray(filters.statuses) ? filters.statuses : [];
+    const today = sample.semantic.provenance?.today;
+    const future = !filters.dateField || filters.dateField === 'targetFinish';
+    const upcoming = future && (String(filters.deadline || '').startsWith('due_') || today && filters.dateFrom >= today);
     const kind = filters.deadline === 'overdue' ? 'overdue'
-      : statuses.length && statuses.every((status) => OPEN_STATUSES.has(status)) && (String(filters.deadline || '').startsWith('due_') || filters.dateFrom || filters.dateTo) ? 'upcoming' : null;
+      : statuses.length && statuses.every((status) => OPEN_STATUSES.has(status)) && upcoming ? 'upcoming' : null;
     if (!kind) continue;
     const rows = new Map();
     let complete = true;
@@ -121,7 +124,7 @@ function taskLists(groups) {
     if (!list.length) continue;
     const total = count(facts.find((fact) => fact.field === 'totalCount')?.value);
     const whole = complete && total != null && total === list.length && rows.size === list.length;
-    lists.push({ part, evidenceId, kind, rows: list, total, complete: whole, ranking, self: filters.assignee === 'me' });
+    lists.push({ part, evidenceId, kind, rows: list, total, complete: whole, ranking, filters, today, self: filters.assignee === 'me' });
   }
   return lists;
 }
@@ -193,14 +196,15 @@ function listFindings(list) {
     const projects = new Map();
     for (const row of list.rows) projects.set(row.projectId, { name: row.project, count: (projects.get(row.projectId)?.count || 0) + 1 });
     const sorted = [...projects.values()].sort((left, right) => right.count - left.count);
-    if (projects.size >= 2 && sorted[0].count >= 2 && sorted[0].count > sorted[1].count && sorted[0].count * 2 >= list.rows.length) {
+    if (projects.size >= 2 && sorted.filter((row) => row.name === sorted[0].name).length === 1
+      && sorted[0].count >= 2 && sorted[0].count > sorted[1].count && sorted[0].count * 2 >= list.rows.length) {
       findings.push({ kind: 'overdueProjectShare', interpretation: 'concentration', entity: { type: 'project', name: sorted[0].name },
         metrics: { overdue: sorted[0].count, total: list.rows.length, share: sharePercent(sorted[0].count, list.rows.length) },
         comparison: { population: list.rows.length, basis: 'complete-list' }, evidenceIds: [list.evidenceId], completeness: 'complete' });
     }
   }
   if (list.kind === 'upcoming' && rankedBy(list, 'task.targetFinish', 'asc')) {
-    const dated = list.rows.filter((row) => typeof row.due === 'string');
+    const dated = list.rows.filter((row) => typeof row.due === 'string' && list.today && row.due >= list.today);
     if (dated.length === list.rows.length) {
       const first = [...dated].sort((left, right) => left.due.localeCompare(right.due) || left.index - right.index)[0];
       const same = dated.filter((row) => row.due === first.due);
@@ -221,7 +225,9 @@ const SUBJECT_KEYS = new Set(['person', 'personSicil', 'project', 'projectId', '
 
 /** Değer okumasının öznesi: kişi (sunucunun çözdüğü ad), oturum sahibinin kendisi ya da proje. Özne yoksa `null`. */
 function subjectOf(filters) {
-  if (filters.personSicil != null && typeof filters.person === 'string') return { type: 'person', key: `person:${filters.personSicil}`, name: filters.person, own: ['person', 'personSicil', 'assignee'] };
+  if (filters.assignee === 'person' && filters.personSicil != null && typeof filters.person === 'string' && filters.person.trim() && filters.person.trim() !== 'Seçilen kişi') {
+    return { type: 'person', key: `person:${filters.personSicil}`, name: filters.person.trim(), own: ['person', 'personSicil', 'assignee'] };
+  }
   if (filters.assignee === 'me') return { type: 'self', key: 'self', name: null, own: ['assignee'] };
   if (filters.projectId && typeof filters.project === 'string') return { type: 'project', key: `project:${String(filters.projectId).toLowerCase()}`, name: filters.project, own: ['project', 'projectId'] };
   return null;
@@ -272,23 +278,21 @@ function comparisonFindings(groups) {
 function windowPressureFindings(tables, lists) {
   // Kesik gecikmiş listesi (sıralamanın başı) alt sınır verir: listede görünen projede gecikmiş iş KESİNLİKLE vardır; görünmeyende
   // olup olmadığı bilinmez. Bu yüzden kesik listede sayı "en az" olarak söylenir; tam listede kesindir.
-  const overdue = lists.find((list) => list.kind === 'overdue' && list.rows.every((row) => row.projectId));
-  if (!overdue) return [];
-  const late = new Map();
-  const names = new Map();
-  for (const row of overdue.rows) {
-    const key = String(row.projectId).toLowerCase();
-    late.set(key, (late.get(key) || 0) + 1);
-    // Aynı proje kimliğinin görev satırındaki adı (kod öneki taşımaz) grup etiketinden önce gelir.
-    if (typeof row.project === 'string' && !names.has(key)) names.set(key, row.project);
-  }
+  // Yalnızca termin koşulları farklı olabilir; diğer bütün nüfus koşulları birebir aynı kalır.
+  const population = (filters) => JSON.stringify(Object.entries(filters).filter(([key, value]) =>
+    !['dateFrom', 'dateTo', 'dateField', 'deadline'].includes(key) && !neutral(value)).sort(([a], [b]) => a.localeCompare(b)));
   const findings = [];
   for (const table of tables) {
     const { dateFrom, dateTo, dateField, statuses } = table.filters;
     if (table.tool !== 'rota_task_analytics' || table.entity !== 'project' || !table.complete || !table.today || !dateFrom || !dateTo || dateFrom < table.today
       || (dateField && dateField !== 'targetFinish') || (Array.isArray(statuses) && statuses.length) || !table.rows.every((row) => count(row.open) != null)) continue;
+    const overdue = lists.find((list) => list.kind === 'overdue' && list.today === table.today && !list.filters.dateFrom && !list.filters.dateTo
+      && population(list.filters) === population(table.filters) && list.rows.every((row) => row.projectId));
+    if (!overdue) continue;
+    const late = new Set(overdue.rows.map((row) => String(row.projectId).toLowerCase()));
+    const names = new Map(overdue.rows.filter((row) => typeof row.project === 'string').map((row) => [String(row.projectId).toLowerCase(), row.project]));
     const due = table.rows.filter((row) => row.open > 0);
-    const both = due.filter((row) => late.get(String(row.key).toLowerCase()) > 0);
+    const both = due.filter((row) => late.has(String(row.key).toLowerCase()));
     if (!both.length || due.length < 2) continue;
     findings.push({ kind: 'windowPressure', interpretation: 'simultaneous', entity: null, entityType: 'project',
       names: both.slice(0, FINDING_LIMITS.maxNamed).map((row) => names.get(String(row.key).toLowerCase()) || row.name),
@@ -299,7 +303,6 @@ function windowPressureFindings(tables, lists) {
   return findings.slice(0, 1);
 }
 
-/** Turun doğrulanmış bölümlerinden yapılandırılmış bulgular (sıra: karşılaştırma, tablo, dönem baskısı, liste bulguları). */
 /**
  * Tek nüfusun açık işlerinde gecikmiş payı: aynı kanıtın kesin açık ve gecikmiş toplamları (iki öznenin karşılaştırmasında
  * kullanılmaz; o durumda karşılaştırma bulgusu konuşur). Pay yalnızca bu iki doğrulanmış sayıdan hesaplanır.
@@ -316,6 +319,7 @@ function overdueShareFindings(groups) {
   return [];
 }
 
+/** Turun doğrulanmış bölümlerinden yapılandırılmış bulgular (sıra: karşılaştırma, tablo, dönem baskısı, liste bulguları). */
 export function analyticalFindings(parts) {
   const groups = byEvidence(Array.isArray(parts) ? parts : []);
   const tables = entityTables(groups);
@@ -342,7 +346,8 @@ const ALL_OF = Object.freeze({ 2: 'ikisinde', 3: 'üçünde' });
 
 /** Ad listesi; adı yazılmayan kalan varlıklar "ve N proje/kişi daha" ile söylenir. */
 function namesList(names, locale, rest = 0, noun = ['proje', 'projects']) {
-  const items = [...names.map((name) => [s(name)]), ...(rest > 0 ? [en(locale) ? [s(formatCount(rest, locale)), ` more ${noun[1]}`] : [s(formatCount(rest, locale)), ` ${noun[0]} daha`]] : [])];
+  const remainder = rest === 1 ? (noun[1] === 'people' ? 'person' : 'project') : noun[1];
+  const items = [...names.map((name) => [s(name)]), ...(rest > 0 ? [en(locale) ? [s(formatCount(rest, locale)), ` more ${remainder}`] : [s(formatCount(rest, locale)), ` ${noun[0]} daha`]] : [])];
   return items.flatMap((item, index) => [...(index ? [index === items.length - 1 ? (en(locale) ? ' and ' : ' ve ') : ', '] : []), ...item]);
 }
 
@@ -510,8 +515,8 @@ const evidenceOrder = (left, right) => Number(String(left).replace(/\D/g, '')) -
 const evidenceOf = (entries) => [...new Set(entries.flatMap((entry) => entry.finding.evidenceIds))].sort(evidenceOrder);
 
 /**
- * Bulguların anlatımı: giriş (soruyu doğrudan yanıtlayan en güçlü bölümler arası bulgular) ve sonuç (en az iki kanıtlı öncelik).
- * Kısa yanıtta yalnızca girişin ilk cümlesi; sonuç yoktur. Bulgu yoksa ikisi de `null`dır.
+ * Bulguların anlatımı: giriş ve sonuç (en az bir kanıtlı öncelik).
+ * Kısa yanıtta yalnızca girişin ilk cümlesi ve en önemli tek öncelik kalır. Bulgu yoksa ikisi de `null`dır.
  */
 export function synthesisNarrative(findings, { locale = 'tr', detail = 'balanced', said = () => false } = {}) {
   const sentences = introSentences(findings, locale);

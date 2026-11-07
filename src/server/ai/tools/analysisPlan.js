@@ -109,7 +109,7 @@ export function normalizedBrief(raw) {
   if (out.act != null && !ANALYSIS_ACTS.includes(out.act)) delete out.act;
   // Aşama F: takip dışındaki özette `all_time` "dönem yok" demektir (yalnızca takipte devralınan dönemi kaldırır): alanın yokluğuyla
   // eşdeğerdir. Eşdeğer yazımın düşmesi onarımda kapsam değişikliği sayılmaz.
-  if (out.relativeWindow === 'all_time' && !['previous', 'row'].includes(out.scope)) delete out.relativeWindow;
+  if (out.relativeWindow === 'all_time' && !out.dateFrom && !out.dateTo && !['previous', 'row'].includes(out.scope)) delete out.relativeWindow;
   // Kapsam/alan tutarlılığı: adı verilen projeler portföy değil adlı proje kapsamıdır; satır sırası satır göndergesidir.
   if (out.scope === 'projects' && Array.isArray(out.names) && out.names.length) out.scope = 'project';
   if (out.scope === 'previous' && Array.isArray(out.rows) && out.rows.length) out.scope = 'row';
@@ -178,9 +178,7 @@ export function analysisHints(problems) {
   if (has('$.analysis.level')) hints.push('analysis.level yalnızca scope team ile');
   if (has('$.analysis.focus')) hints.push(`analysis.focus: önem sırasıyla 1-${ANALYSIS_LIMITS.maxFocus} öğe, ${ANALYSIS_FOCUS.join('|')}`);
   if (has('$.analysis.focus:maxItems')) hints.push(`analysis.focus en çok ${ANALYSIS_LIMITS.maxFocus} öğedir: yazdığın yönlerden sorunun açıkça istediklerini sırasıyla koru, kendi eklediğin fazlalığı çıkar (yeni yön ekleme)`);
-  if (has('$.analysis.focus:requestBudget') && has('$.analysis.focus:narrowable')) {
-    hints.push(`Yönlerin okumaları bütçeye sığmıyor: yazdığın yönlerden sorunun en önemli olanlarını sırasıyla koru (en çok ${ANALYSIS_LIMITS.maxFocus}), fazlalığı çıkar; yeni yön ekleme.`);
-  } else if (has('$.analysis.focus:requestBudget')) hints.push('Karşılaştırmanın bütün yönleri istek bütçesine sığmıyor; yönleri sessizce düşürme, kullanıcıdan hangi yönü önce istediğini açıklamasını iste.');
+  if (has('$.analysis.focus:requestBudget')) hints.push('Karşılaştırmanın bütün yönleri istek bütçesine sığmıyor; yönleri sessizce düşürme, kullanıcıdan hangi yönü önce istediğini açıklamasını iste.');
   if (has('$.analysis.scope')) hints.push(`analysis.scope: ${ANALYSIS_SCOPES.join('|')}`);
   if (has('$.analysis.date')) hints.push('analysis.dateFrom/dateTo: YYYY-MM-DD, dateFrom ≤ dateTo');
   if (has('$.analysis.rows')) hints.push('analysis.rows yalnızca scope "row" ile: önceki yanıtın satır sırası ([1] ya da [1,2]); kapsam satırdaki kişi/projedir');
@@ -311,7 +309,7 @@ function comparisonFor(focus, analysis, base, window, today = null) {
       // Projeler arası karşılaştırmada "projelere göre" her proje için tek gruptur: bilgi taşımaz.
       if (focus === 'projects' && analysis.scope === 'project') return null;
       const groupBy = { priority: 'priority', deadlines: 'deadline', schedule: 'target_month', projects: 'project' }[focus];
-      return subjects.map((entity) => groups({ ...base, entities: [entity, ...common] }, groupBy, { open: focus !== 'projects', split: focus === 'projects', window: focus === 'schedule' ? window : null }));
+      return subjects.map((entity) => groups({ ...base, entities: [entity, ...common] }, groupBy, { open: focus !== 'projects', split: focus === 'projects', window: focus === 'schedule' ? window : null, future: futureWindow(analysis, today) }));
     }
     default: return null;
   }
@@ -478,34 +476,35 @@ function selfComparison(focus, analysis, base, today, chart) {
   // İki özne de aynı yönün aynı nüfus sözleşmesiyle okunur; kimlik yalnızca sunucunun çözümünden gelir.
   return [base, self].flatMap((side) => {
     const read = focus === 'overdue' ? overdueBase(side, analysis, today) : side;
-    return metrics && !(focus === 'overdue' && chart === 'timeline')
+    return metrics && !(chart === 'timeline' && ['overdue', 'upcoming', 'critical'].includes(focus))
       ? request({ operation: 'value', metrics, population: { tool: 'rota_task_analytics' }, ...(read.entities.length ? { entities: read.entities } : {}), filters: read.filters })
       : focusRequest(focus, { ...analysis, scope: 'self', withSelf: false }, side, today) || [];
   });
 }
 
 /** Aynı öznenin aynı nüfus üzerindeki skaler ölçüleri tek okumada birleşir; hiçbir ölçü ya da koşul düşmez. */
-function mergeSelfValues(parts) {
+function mergeValueReads(parts) {
   const merged = [];
   for (const part of parts) {
-    const { metrics, ...shape } = part;
+    const { metrics, bindings, ...shape } = part;
     const peer = part.operation === 'value' && merged.find((item) => {
-      const { metrics: _metrics, ...other } = item;
-      return JSON.stringify(shape) === JSON.stringify(other) && new Set([...item.metrics, ...metrics]).size <= 8;
+      const { metrics: _metrics, bindings: otherBindings, ...other } = item;
+      return Boolean(bindings) === Boolean(otherBindings) && JSON.stringify(shape) === JSON.stringify(other) && new Set([...item.metrics, ...metrics]).size <= 8;
     });
-    if (peer) peer.metrics = [...new Set([...peer.metrics, ...metrics])];
+    if (peer) {
+      peer.metrics = [...new Set([...peer.metrics, ...metrics])];
+      if (bindings) peer.bindings = [...new Map([...peer.bindings, ...bindings].map((item) => [JSON.stringify(item), item])).values()];
+    }
     else merged.push({ ...part, metrics: [...metrics] });
   }
   return merged;
 }
 
 /**
- * Bütçe reddinin ayrıntıları: birden çok yön bildirildiyse modelin KENDİ yönlerinin sıralı alt kümesine daraltma onarımı geçerlidir
- * (`narrowable`). Karşılaştırmada da yön daraltılır, özne değil: her özne aynı yönlerle okunur (yarım karşılaştırma okunmaz).
- * Tek yönlü plan daraltılamaz; kullanıcıya sorulur.
+ * Bütçe reddi hiçbir bildirilmiş yönü değiştirmez; sığmayan istek için kullanıcıdan öncelik istenir.
  */
 function budgetDetails(analysis) {
-  return analysis.focus.length < 2 ? ['$.analysis.focus:requestBudget'] : ['$.analysis.focus:requestBudget', '$.analysis.focus:narrowable'];
+  return ['$.analysis.focus:requestBudget'];
 }
 
 function expandWith(analysis, base, today = null, detail = null, chart = null, charts = null) {
@@ -522,8 +521,8 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
     if (!items.length) continue;
     // Aşama F: bildirilen yönlerin ve sunucunun zorunlu eklediği okumaların (portföy satırları, ufuk yönü) toplamı mevcut
-    // fiziksel üst sınırdır (`maxParts`). Sığmayan plan kısmen okunmaz; model kendi yönlerini daraltabilir (`narrowable`).
-    const next = analysis.withSelf ? mergeSelfValues([...parts, ...items]) : [...parts, ...items];
+    // fiziksel üst sınırdır (`maxParts`). Sığmayan plan kısmen okunmaz; kullanıcıdan öncelik istenir.
+    const next = mergeValueReads([...parts, ...items]);
     if (next.length > ANALYSIS_LIMITS.maxParts) throw invalidArguments(budgetDetails(analysis));
     for (const item of items) seen.add(JSON.stringify(item));
     parts.splice(0, parts.length, ...next);
@@ -553,16 +552,25 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
       const common = base.entities.filter((entity) => entity.type !== 'person');
       const bases = people.length > 1 ? people.map((person) => ({ ...base, entities: [person, ...common] }))
         : analysis.withSelf ? [base, { filters: { ...base.filters, assignee: 'me' }, entities: common }] : [base];
-      const splits = bases.map((side) => groups(side, 'project', { split: true })).filter((split) => !seen.has(JSON.stringify(split)));
+      const splits = bases.map((side) => groups(side, 'project', { split: true, future: futureWindow(analysis, today) })).filter((split) => !seen.has(JSON.stringify(split)));
       if (parts.length + splits.length <= ANALYSIS_LIMITS.maxParts) {
         for (const split of splits) { seen.add(JSON.stringify(split)); parts.push(split); }
       }
     }
-    const needed = chart === 'stacked' ? null : chart === 'donut' && analysis.scope === 'project' && base.entities.length > 1 ? 'status' : chartFocus(analysis, declared, chart);
+    const missingShape = chart === 'donut' && !parts.some((part) => ['status', 'priority', 'deadline', 'project'].includes(part.population?.groupBy)) ? 'status'
+      : chart === 'timeline' && !parts.some((part) => part.population?.tool === 'rota_task_search' && part.metrics?.includes('task.targetFinish')) ? 'upcoming' : null;
+    const needed = chart === 'stacked' ? null : missingShape || chartFocus(analysis, declared, chart);
     if (needed) {
       let produced = null;
-      try { produced = needed === 'status' && chart === 'donut' && analysis.scope === 'project'
-        ? base.entities.map((entity) => groups({ ...base, entities: [entity] }, 'status', { open: false })) : produce(needed); } catch { produced = null; }
+      try {
+        if (chart === 'donut' && needed === 'status') {
+          const subjects = base.entities.filter((entity) => entity.type === analysis.scope);
+          const common = base.entities.filter((entity) => entity.type !== analysis.scope);
+          const bases = analysis.withSelf ? [base, { filters: { ...base.filters, assignee: 'me' }, entities: common }]
+            : subjects.length > 1 ? subjects.map((entity) => ({ ...base, entities: [entity, ...common] })) : [base];
+          produced = bases.map((side) => groups(side, 'status', { open: false }));
+        } else produced = analysis.withSelf ? selfComparison(needed, analysis, base, today, chart) : produce(needed);
+      } catch { produced = null; }
       const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
       if (items.length && parts.length + items.length <= ANALYSIS_LIMITS.maxParts) {
         for (const item of items) seen.add(JSON.stringify(item));

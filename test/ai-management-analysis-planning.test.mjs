@@ -46,14 +46,20 @@ test('dört yön fiziksel sınıra sığarsa doğrudan kabul edilir; model gör�
   assert.equal(analysisSchema().properties.focus.maxItems, 3);
   const parts = expand({ scope: 'all', focus: ['status', 'overdue', 'workload', 'upcoming'] });
   assert.equal(parts.length, ANALYSIS_LIMITS.maxParts);
+  assert.deepEqual(parts.map((item) => [item.population.tool, item.population.groupBy || item.filters?.deadline]),
+    [['rota_task_analytics', 'status'], ['rota_task_search', 'overdue'], ['rota_workload_summary', undefined], ['rota_task_search', 'due_next_7_days']]);
   // Portföy kapsamı zorunlu proje okumasını ekler: dört yön + zorunlu okuma sınırı aşar, daraltma onarımı önerilir.
-  assert.deepEqual(reject({ scope: 'projects', focus: ['status', 'overdue', 'workload', 'upcoming'] }), ['$.analysis.focus:requestBudget', '$.analysis.focus:narrowable']);
-  assert.ok(analysisHints(['$.analysis.focus:requestBudget', '$.analysis.focus:narrowable']).some((hint) => hint.includes('sırasıyla koru')));
+  assert.deepEqual(reject({ scope: 'projects', focus: ['status', 'overdue', 'workload', 'upcoming'] }), ['$.analysis.focus:requestBudget']);
+  assert.ok(analysisHints(['$.analysis.focus:requestBudget']).some((hint) => hint.includes('açıklamasını iste')));
   // Karşılaştırmada da yön daraltılır (özne değil); tek yönlü sığmayan plan kullanıcıya sorulur.
-  assert.deepEqual(reject({ scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['priority', 'deadlines', 'critical'] }), ['$.analysis.focus:requestBudget', '$.analysis.focus:narrowable']);
+  assert.deepEqual(reject({ scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['priority', 'deadlines', 'critical'] }), ['$.analysis.focus:requestBudget']);
   assert.ok(analysisHints(['$.analysis.focus:requestBudget']).some((hint) => hint.includes('açıklamasını iste')));
   // İki kişinin proje dağılımı, gecikmesi ve yaklaşanı (4 okuma) bütünüyle okunur.
-  assert.equal(expand({ scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['projects', 'overdue', 'upcoming'] }).length, 4);
+  const comparison = expand({ scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['projects', 'overdue', 'upcoming'] });
+  assert.deepEqual(comparison.filter((item) => item.population.groupBy === 'project').map((item) => item.entities[0].text), ['Ayşe Yılmaz', 'Zeynep Kaya']);
+  const values = comparison.find((item) => item.operation === 'value');
+  assert.deepEqual(values.metrics, ['tasks.overdue', 'tasks.dueNext7Days']);
+  assert.deepEqual(values.entities.map((item) => item.text), ['Ayşe Yılmaz', 'Zeynep Kaya']);
 });
 
 test('iki grafik türü dizisi kabul edilir ve her türün okuması eklenir; geçersiz dizi reddedilir', () => {
@@ -94,7 +100,7 @@ test('boş tamamlama satırı çıktı belirteci sayısını içeriksiz olarak y
 
 test('özetin yanındaki yalnızca ad çözümü çağrıları yürütülmeden atılır; başka araç çağrısı reddedilir', () => {
   const brief = { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['overview'] };
-  const lookups = [{ name: 'rota_person_search', arguments: { text: 'Ayşe Yılmaz' } }, { name: 'rota_project_search', arguments: { text: 'Radar' } }];
+  const lookups = [{ name: 'rota_person_search', arguments: { text: 'Ayşe Yılmaz' } }, { name: 'rota_person_search', arguments: { text: 'Zeynep Kaya' } }];
   const accepted = unpack({ intent: 'rota', language: 'tr', analysis: brief, calls: lookups });
   assert.deepEqual(accepted.calls, [], 'çağrılar yürütülmez; adları sunucu özetten çözer');
   assert.equal(accepted.plan.analysis.scope, 'person');
@@ -113,8 +119,8 @@ test('zayıf modelin geçerli onarımları kabul edilir: kendi yönlerini daralt
   const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
   const plan = (analysis) => ({ intent: 'rota', language: 'tr', analysis });
   for (const [name, queue] of [
-    ['bütçe aşımında kendi yönlerinin sıralı alt kümesi (all_time eşdeğer yazımı düşse de)',
-      [plan({ scope: 'projects', focus: ['overview', 'overdue', 'upcoming', 'workload'], relativeWindow: 'all_time' }), plan({ scope: 'projects', focus: ['overview', 'overdue', 'upcoming'] })]],
+    ['şema sınırını aşan model yönlerinin sıralı alt kümesi (all_time eşdeğer yazımı düşse de)',
+      [plan({ scope: 'self', focus: ['overview', 'overdue', 'upcoming', 'workload', 'status'], relativeWindow: 'all_time' }), plan({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] })]],
     ['göreli pencere ile tarih çakışmasında birinin kaldırılması',
       [plan({ scope: 'self', focus: ['overview', 'upcoming'], relativeWindow: 'next_7_days', dateFrom: '2026-09-30', dateTo: '2026-10-29' }),
         plan({ scope: 'self', focus: ['overview', 'upcoming'], dateFrom: '2026-09-30', dateTo: '2026-10-29' })]]
@@ -128,15 +134,20 @@ test('zayıf modelin geçerli onarımları kabul edilir: kendi yönlerini daralt
   }
 });
 
-test('karşılaştırmanın bütçe aşımında model yönlerini daraltır; her özne aynı yönlerle okunur', async (t) => {
-  const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
-  const people = { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'] };
-  const queue = [{ intent: 'rota', language: 'tr', analysis: { ...people, focus: ['workload', 'projects', 'overdue', 'upcoming'] } },
-    { intent: 'rota', language: 'tr', analysis: { ...people, focus: ['projects', 'overdue', 'upcoming'] } }];
-  const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
-  const result = await ask({ text: 'Ayşe Yılmaz ile Zeynep Kaya adlı kişileri iş yükü, projeler, gecikme ve yaklaşan işler açısından karşılaştır' });
-  assert.equal(result.inputs.length, 2, 'tek düzeltme turu');
+test('karşılaştırmanın eşdeğer skaler okumaları birleşir; istenen hiçbir yön ve özne düşmez', async (t) => {
+  const { phase4eConversation, populationReads } = await import('./helpers/phase4eScenario.mjs');
+  const analysis = { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['workload', 'projects', 'overdue', 'upcoming'] };
+  const { ask } = phase4eConversation(t);
+  const result = await ask({ text: 'Ayşe Yılmaz ile Zeynep Kaya adlı kişileri iş yükü, projeler, gecikme ve yaklaşan işler açısından karşılaştır',
+    plan: { intent: 'rota', language: 'tr', analysis } });
+  assert.equal(result.inputs.length, 1, 'yön düşürmek için model turu açılmaz');
   assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.deepEqual(result.analysisContext.focus, analysis.focus);
+  const { AYSE, ZEYNEP } = await import('./helpers/aiToolFixtures.mjs');
+  assert.deepEqual([...new Set(populationReads(result.log).map((row) => row.params.personSicil))].sort(), [AYSE, ZEYNEP].sort());
+  const parts = expand(analysis);
+  for (const name of analysis.names) assert.ok(parts.some((item) => item.population.groupBy === 'project' && item.entities.some((entity) => entity.text === name)));
+  assert.ok(parts.some((item) => ['tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'].every((metric) => item.metrics.includes(metric))));
 });
 
 test('dört bölümlü iki proje karşılaştırması sunucu düzenine sığar; aynı kanıtın sayısı bölümlerde yinelenmez', async (t) => {
@@ -206,8 +217,16 @@ test('karşılaştırma paragrafı özneler arasında gidip gelmez; tek öznenin
     return { blocks: [{ type: 'say', items }] };
   };
   const { ask } = phase4eConversation(t, { sicil: BENCH_PROFILES.B, seed, compose: () => composer(interleaved) });
+  for (const name of ['BGS Şube Çalışmaları', 'KAP TOOL']) {
+    const eligible = await ask({ text: `${name} projesinin açık, gecikmiş ve yedi gün içinde terminli iş sayılarını göster`, plan: {
+      intent: 'rota', language: 'tr', chart: 'kpi', request: { operation: 'value', metrics: ['tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'],
+        population: { tool: 'rota_task_analytics' }, entities: [{ type: 'project', text: name }] }
+    } });
+    assert.equal(eligible.answer.finishReason, 'stop', eligible.answer.content);
+    assert.ok(charts.some((chart) => chart.types.includes('kpi')), `${name}: tek başına üç ayrı gösterge eşiğini karşılamalı`);
+  }
   const result = await ask({ text: 'BGS Şube Çalışmaları ile KAP TOOL projelerini gecikme ve yaklaşan teslimatlar açısından karşılaştır.',
-    plan: { intent: 'rota', language: 'tr', analysis: { scope: 'projects', names: ['BGS Şube Çalışmaları', 'KAP TOOL'], focus: ['overdue', 'upcoming'] } } }, { detail: 'balanced' });
+    plan: { intent: 'rota', language: 'tr', analysis: { scope: 'projects', names: ['BGS Şube Çalışmaları', 'KAP TOOL'], focus: ['workload', 'overdue'] } } }, { detail: 'balanced' });
   const content = String(result.answer.content);
   assert.equal(result.answer.finishReason, 'stop', content);
   assert.ok(charts.every((chart) => !chart.types.includes('kpi')), JSON.stringify(charts));

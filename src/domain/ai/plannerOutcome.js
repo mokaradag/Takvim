@@ -117,8 +117,11 @@ export function renderScopeUnavailable({ locale = 'tr' } = {}) {
 }
 
 /** Açık görselleştirme isteği doğrulanmış veriden güvenle karşılanamadığında kısa sunucu notu. */
-export function renderChartUnavailable({ locale = 'tr', substituted = null } = {}) {
+export function renderChartUnavailable({ locale = 'tr', substituted = null, type = null } = {}) {
+  const requested = CHART_TYPE_NAMES[type]?.[locale === 'en' ? 1 : 0];
   const other = CHART_TYPE_NAMES[substituted]?.[locale === 'en' ? 1 : 0];
+  if (requested) return locale === 'en' ? `_The requested ${requested} could not be drawn safely; ${other ? `the data is shown as a ${other} instead` : 'the results are shown as text and tables'}._`
+    : `_İstenen ${requested} güvenle çizilemedi; ${other ? `veri ${other} olarak gösterildi` : 'sonuçlar metin ve tablo olarak gösterildi'}._`;
   if (other) return locale === 'en' ? `_The requested chart could not be drawn safely; the data is shown as a ${other} instead._`
     : `_İstenen grafik güvenle çizilemedi; veri ${other} olarak gösterildi._`;
   return locale === 'en' ? '_A chart could not be drawn safely from this verified data; the results are shown as text and tables._'

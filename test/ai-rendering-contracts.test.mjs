@@ -240,7 +240,8 @@ test("sıfır toplam tamamlanma alt kümesine atıf yapmaz; pozitif toplam doğa
         operation: 'value', metrics: ['tasks.total', 'tasks.done', ...(generic ? ['tasks.open'] : [])]
       }, { locale });
       assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
-      assert.match(verdict.normalized, new RegExp(`\\*\\*${total}\\*\\*`));
+      if (total) assert.match(verdict.normalized, new RegExp(`\\*\\*${total}\\*\\*`));
+      else assert.match(verdict.normalized, locale === 'en' ? /no tasks/ : /görev yok/);
       if (!total) assert.doesNotMatch(verdict.normalized, /None of them|Of these|Bunların/);
       else if (!generic) assert.match(verdict.normalized, locale === 'en' ? /None of them is completed yet/ : /Bunların hiçbiri henüz tamamlanmamış/);
       else assert.match(verdict.normalized, locale === 'en' ? /Of these/ : /Bunların/);

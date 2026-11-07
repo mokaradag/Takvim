@@ -264,9 +264,9 @@ yazma işlemi (Aşama 5).
    görünür kılar ("Şu anda N gecikmiş görev var").
 4. **Okuma bütçesi toleransı**: Modelin bildirdiği dört yön, fiziksel okuma sayısı mevcut üst sınıra
    (`ANALYSIS_LIMITS.maxParts` = 4) sığıyorsa düzeltme turu açılmadan kabul edilir. Model görünür şema
-   ("1-3 yön") değişmez: önek önbelleği ve kanonik kapı istikrarı korunur. Beş yön ya da sığmayan
-   karşılaştırma eskisi gibi reddedilir/daraltılır.
-5. **İki grafik türü toleransı**: `chart` alanında en çok iki farklı bilinen tür (dizi) kabul edilir; her
+   ("1-3 yön") değişmez: önek önbelleği ve kanonik kapı istikrarı korunur. Şema sınırını aşan fazladan yönler onarılabilir; fiziksel bütçeye sığmayan
+   karşılaştırmada bildirilen yönler düşürülmez, kullanıcıdan öncelik istenir.
+5. **İki grafik türü toleransı**: `charts` alanında en çok iki farklı bilinen tür şemada bildirilir (`chart` dizisi eski yazım olarak korunur); her
    türün gerektirdiği okuma bütçeye sığıyorsa eklenir; çizilemeyen tür için türe özgü not verilir.
 6. **Boş tamamlama tanısı**: `AI WARN empty completion` satırı sağlayıcının bildirdiği çıktı belirteci sayısını
    da yazar (içeriksiz). "Model belirteç üretti ama ağ geçidi metin/araç çağrısı teslim etmedi" (ayrıştırıcı
@@ -541,11 +541,13 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
    ve her soruyu **yeni konuşmada** sorun; yanıt gelmeden sonrakini göndermeyin.
 3. Her soru için konsoldaki `ai.grounded.turn` satırının ilişki kimliğini (son 8 karakter) soru numarasıyla bir
    tabloya yazın. Böylece soru ↔ günlük eşlemesi görsel sıradan değil kimlikten kurulur.
-4. `AI WARN empty completion` satırlarında bu sürümle gelen `out N tok` alanını kaydedin:
-   - `out 0 tok` → model hemen durdu (şablon/istem sorunu; sistem iletisinin sondaki konumu, adlı araç seçimi
-     uyumluluğu incelenir);
-   - `out N>0 tok` ve görünür metin/araç çağrısı yok → ağ geçidinin araç ayrıştırıcısı çıktıyı teslim etmedi
-     (vLLM araç ayrıştırıcısı ve akış ayarları incelenir).
+4. JSON kaydında `code: AI_EMPTY_COMPLETION` arayın; `context.usage.completion` çıktı belirteci sayısıdır.
+   `null` sayının bildirilmediğini gösterir, sıfır sayılmaz. `MERGEN_ROTA_LOG_FORMAT=both` kullanılırsa ayrıca
+   `AI WARN empty completion` ve `out N tok` özet satırı görülebilir.
+   - `completion: 0`: sağlayıcının bildirdiği çıktı belirteci yoktur; şablon, istem ve araç seçimi uyumluluğu incelenir.
+   - Pozitif sayı: tek başına ayrıştırıcı kaybını kanıtlamaz. Aynı kaydın gerekçe/metin/araç göstergeleri ve
+     bitiş nedeni incelenir; yalnızca boşluk ya da gerekçe çıktısı da bu durumu açıklayabilir. Araç ayrıştırıcısı
+     ve akış ayarları olası nedenlerden biridir. Gerekçe içeriği günlüğe alınmaz.
 5. Her yanıtı kabul matrisindeki dört sınıftan birine koyun; mekanik/doğal düzyazıyı ayrı puanlayın.
 6. Sonuçları bu belgenin §13 bölümüne ve kabul matrisine tarihli kayıt olarak ekleyin. VM kabulü **bekliyor** olarak
    kalır; Haiku sonucu onun yerine geçmez.
@@ -570,7 +572,7 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
 ## 13. Oturum devri
 
 Bu bölüm her oturumun sonunda güncellenir. Güncel durum ve sonraki giriş noktası:
-**bkz. [Bilgin Analiz Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) §Sonuçlar ve aşağıdaki kayıt.**
+**bkz. [Bilgin Analiz Kabul Matrisi §4](BILGIN-ANALIZ-KABUL-MATRISI.md#4-gerçek-model-nitelendirmesi-haiku-45), §4b ve aşağıdaki kayıt.**
 
 ### 2026-11-07 — Aşama F ilk dikey dilim
 
@@ -578,7 +580,7 @@ Bu bölüm her oturumun sonunda güncellenir. Güncel durum ve sonraki giriş no
   gecikme yoğunlaşması, eşzamanlı baskı, dönem baskısı, en uzun gecikme, en yakın teslim); sunucu yazımı giriş ve
   "Sonuç" paragrafı; gelecek dönemin gecikmiş işi daraltmaması; dört yön toleransı ve dört bölüm × iki özne sayfası;
   iki grafik türü (dizi ve JSON metni dizisi); onarım düzeltmeleri (`all_time` eşdeğerliği, göreli pencere çakışması,
-  karşılaştırma daraltması, özetin yanındaki ad çözümü çağrıları); boş tamamlamada çıktı belirteci tanısı; insan dilinde
+  karşılaştırma bütçesi, özetin yanındaki ad çözümü çağrıları); boş tamamlamada çıktı belirteci tanısı; insan dilinde
   sayım cümlesi (doğrulanmış anlatımda ve düzende), termin penceresinin sayıdan önce yazılması, tek özneli yanıtta etiket
   tekrarının kalkması, paragrafta öznelere göre kararlı sıra, aynı kanıtın ölçüsünün ve eşit değerli kapsama toplamının
   bir kez yazılması, karşılaştırmada tek öznenin gösterge kartının sunulmaması, gelecek dönemde sıfır gecikmiş sütununun
@@ -597,3 +599,18 @@ Bu bölüm her oturumun sonunda güncellenir. Güncel durum ve sonraki giriş no
   ("**21** gecikmiş") iki kez söylenmesi (nüfus eşitliği kanıtlanmadan birleştirilmez).
 - **Sonraki giriş noktası:** §11 yordamıyla VM yeniden oynatması; ardından Aşama G (F.14'teki bağımlılıklar hazır):
   birleşik plan (özet + ek liste), düzey kırılımı ve kadro tamlığı okuması.
+
+### 2026-11-07 — Aşama F inceleme düzeltmeleri
+
+- Kanıtların özne, proje, nüfus ve gün eşleşmesi korunur; geçmiş terminler yaklaşan teslimat sayılmaz.
+  Çözülemeyen kişi etiketleri ve gizli atama varlığı hakkında çıkarım yapılmaz.
+- Tarih çakışması onarımında kalan gösterim değişemez; açık tarihlerle birlikte gelen `all_time` çakışması reddedilir.
+  Fiziksel bütçeye sığmayan istek yön kaybıyla onarılmaz. Aynı nüfusun skaler okumaları, bağlamalarıyla birlikte birleştirilir.
+- İki grafik türü plan şeması, onarım, açıklama seçimi, kalıcı bağlam ve takip boyunca korunur. Aynı doğrulanmış aday
+  iki uygun biçimde çizilebilir; Kısa ayrıntı açıkça istenen ikinci türü düşürmez. Veri eksikliği ile çizim başarısızlığı ayrıdır.
+- Analitik tur hakkı ilk kabul edilen planda sabitlenir: en çok dört bölüm için ad çözümü + okuma; yeniden başlangıç
+  harcanan turları geri vermez. Toplam çağrı, SQL, sonuç boyutu ve süre sınırları değişmez.
+- Tek bölümlü analitik yanıt da çerçeveyle kapanır; kişi/proje süzgeçleri başlık ve ölçütlerde korunur. Nitelendirme;
+  kapsam, kimlik, yön, ufuk, grafik türü, son bloktaki sonuç ve model düzenini ayrı ayrı denetler.
+- Önceki Haiku ve görsel ölçümler tarihsel kayıttır; bu düzeltmelere yeniden koşulmuş sayılmaz. Güncel doğrulama
+  sonucu (5785/5785 sınama, temiz lint, başarılı derleme) ve ortam sınırları kabul matrisinin §6 kaydındadır. Windows VM ve anlamsal danışmanlıklı kanonik kabul bekliyor.
