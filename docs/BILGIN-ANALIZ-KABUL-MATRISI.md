@@ -210,7 +210,7 @@ Metin kapısı göreli tarihleri çözer ve seçilen her çok istekli örneğin 
 nüfuslar için bir kabul iddiası değildir. Kısa tekrarlar, vurgusuz sayılar, yanlış tarihler, erken sonuç başlığı,
 eksik grafik türü ve yanlış örgütsel düzey için olumsuz kontroller vardır.
 
-Güncel sonuçlar: `npm test -- --test-concurrency=4` **5786/5786**, başarısız/atlanmış sınama **0**;
+Güncel sonuçlar: `npm test -- --test-concurrency=4` **5787/5787**, başarısız/atlanmış sınama **0**;
 `npm run lint` ESLint uyarısı/hatası olmadan, `npm run build` başarıyla tamamlandı. Tam küme güvenlik,
 yetki, kanıt ve belirlenimci planlayıcı kapılarını da içerir. Yeni değişmez sınamalarının ilk 19'u özgün
 `21035f8` üzerinde başarısız, düzeltilmiş kodda başarılıdır; karışık kimlik paragrafının doğrulamada reddi
@@ -220,8 +220,3 @@ Kurum içi Windows VM ve 117/117 + 19/19 anlamsal danışmanlıklı kapılar bu 
 Tek vakalık sınırlı Haiku denemesi (`PHASE4E_TIER=F`, `PHASE4E_CASES=o39`) altyapıda durdu:
 `PLANNER_PROVIDER_ERROR`, `exitCode: -1`, `apiCalls: 0`, doğrulanmış model kimliği yok. Bu ortamda
 `claude` yürütülebiliri yoktur. Bu sonuç bir model kalite başarısızlığı ya da canlı kabul geçişi değildir.
-
-Son uzlaştırmada üç ek inceleme bulgusu yeniden üretildi ve düzeltildi: çoğul `charts` onarım ipucu,
-analitik olmayan yeniden başlangıçtan sonraki ilk analitik bütçe hakkı ve v1 bağlamında v2 `charts` alanının
-reddi. Bütçe hakkı ilk analitik planda yalnızca bir kez verilir; önceki harcama bu toplamdan düşmeye devam eder.
-Üç olumsuz yeniden üretim önceki düzeltme üzerinde başarısız, hedefli 208 sınama düzeltmeden sonra başarılıdır.

@@ -116,7 +116,8 @@ function taskLists(groups) {
       if (fact.semantic.complete !== true) complete = false;
       const match = /^data\.tasks\.(\d+)\.(title|overdueDays|targetFinish|project\.name)$/.exec(fact.field);
       if (!match) continue;
-      const row = rows.get(match[1]) || { index: Number(match[1]), projectId: fact.semantic.row?.projectId ?? null };
+      const row = rows.get(match[1]) || { index: Number(match[1]), projectId: fact.semantic.row?.projectId ?? null,
+        projectCode: typeof fact.semantic.row?.projectCode === 'string' ? fact.semantic.row.projectCode.trim() : null };
       rows.set(match[1], row);
       row[{ title: 'title', overdueDays: 'days', targetFinish: 'due', 'project.name': 'project' }[match[2]]] = fact.value;
     }
@@ -191,14 +192,14 @@ function listFindings(list) {
         evidenceIds: [list.evidenceId], completeness: list.complete ? 'complete' : 'ranking-head' });
     }
   }
-  // Tam gecikmiş listeden proje payı (proje kimliğiyle; aynı adlı projeler karışmaz).
+  // Pay kimlikle hesaplanır; gecikmesiz adaş proje listede bulunmayabileceğinden anlatım doğrulanmış kodu da gerektirir.
   if (list.kind === 'overdue' && list.complete && list.rows.length >= FINDING_LIMITS.minListRows && list.rows.every((row) => row.projectId && typeof row.project === 'string')) {
     const projects = new Map();
-    for (const row of list.rows) projects.set(row.projectId, { name: row.project, count: (projects.get(row.projectId)?.count || 0) + 1 });
+    for (const row of list.rows) projects.set(row.projectId, { name: row.project, code: row.projectCode, count: (projects.get(row.projectId)?.count || 0) + 1 });
     const sorted = [...projects.values()].sort((left, right) => right.count - left.count);
-    if (projects.size >= 2 && sorted.filter((row) => row.name === sorted[0].name).length === 1
+    if (projects.size >= 2 && sorted[0].code && sorted.filter((row) => row.name === sorted[0].name && row.code === sorted[0].code).length === 1
       && sorted[0].count >= 2 && sorted[0].count > sorted[1].count && sorted[0].count * 2 >= list.rows.length) {
-      findings.push({ kind: 'overdueProjectShare', interpretation: 'concentration', entity: { type: 'project', name: sorted[0].name },
+      findings.push({ kind: 'overdueProjectShare', interpretation: 'concentration', entity: { type: 'project', name: `${sorted[0].code} · ${sorted[0].name}` },
         metrics: { overdue: sorted[0].count, total: list.rows.length, share: sharePercent(sorted[0].count, list.rows.length) },
         comparison: { population: list.rows.length, basis: 'complete-list' }, evidenceIds: [list.evidenceId], completeness: 'complete' });
     }

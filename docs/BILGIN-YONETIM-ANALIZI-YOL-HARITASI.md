@@ -613,4 +613,4 @@ Bu bölüm her oturumun sonunda güncellenir. Güncel durum ve sonraki giriş no
 - Tek bölümlü analitik yanıt da çerçeveyle kapanır; kişi/proje süzgeçleri başlık ve ölçütlerde korunur. Nitelendirme;
   kapsam, kimlik, yön, ufuk, grafik türü, son bloktaki sonuç ve model düzenini ayrı ayrı denetler.
 - Önceki Haiku ve görsel ölçümler tarihsel kayıttır; bu düzeltmelere yeniden koşulmuş sayılmaz. Güncel doğrulama
-  sonucu (5786/5786 sınama, temiz lint, başarılı derleme) ve ortam sınırları kabul matrisinin §6 kaydındadır. Windows VM ve anlamsal danışmanlıklı kanonik kabul bekliyor.
+  sonucu (5787/5787 sınama, temiz lint, başarılı derleme) ve ortam sınırları kabul matrisinin §6 kaydındadır. Windows VM ve anlamsal danışmanlıklı kanonik kabul bekliyor.

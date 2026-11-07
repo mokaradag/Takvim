@@ -95,6 +95,19 @@ test('yaklaşan listenin en yakın teslimatı: tekil değilse "dahil" biçimiyle
   assert.equal(sole.find((item) => item.kind === 'nearestDelivery').metrics.sole, true);
 });
 
+test('gecikme payı listede görünmeyen adaş projeden doğrulanmış kodla ayrılır; kod yoksa yorumlanmaz', () => {
+  const facts = taskList('overdue', [['Birinci iş', 8, 'Ortak', 'p1'], ['İkinci iş', 4, 'Ortak', 'p1'], ['Diğer iş', 2, 'Başka', 'p2']]);
+  const shareOf = (items) => analyticalFindings([part(0, items)]).find((item) => item.kind === 'overdueProjectShare');
+  // Gecikmesi olmayan adaş proje bu listede bulunamaz; adın tekilliği buradan kanıtlanamaz.
+  assert.equal(shareOf(facts), undefined);
+  const coded = facts.map((item) => item.fact.semantic.row ? { ...item, fact: { ...item.fact,
+    semantic: { ...item.fact.semantic, row: { ...item.fact.semantic.row, projectCode: item.fact.semantic.row.projectId === 'p1' ? 'ORT-A' : 'BAS' } } } } : item);
+  const share = shareOf(coded);
+  assert.equal(share.entity.name, 'ORT-A · Ortak');
+  assert.deepEqual(share.metrics, { overdue: 2, total: 3, share: 67 });
+  assert.ok(synthesisNarrative([share], { locale: 'tr' }).intro.plain.includes('ORT-A · Ortak'));
+});
+
 test('iki öznenin karşılaştırması yalnızca aynı nüfus tanımında; dönemli toplam karşılaştırılmaz', () => {
   const totals = (evidenceId, person, sicil, values, extra = {}) => Object.entries(values).map(([key, value]) => fact(evidenceId, `data.totals.${key}`, value,
     { tool: 'rota_task_analytics', filters: { assignee: 'person', personSicil: sicil, person, statuses: [], priorities: [], deadline: null, ...extra } }));
