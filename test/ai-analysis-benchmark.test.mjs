@@ -112,6 +112,9 @@ test('proje durum kıyası her projenin teslim edilen sayılarını ve doğru at
   assert.deepEqual(turnViolations(result, expect), [], result.answer.content);
   const status = result.evidence.filter((row) => row.data?.groupBy === 'status');
   assert.equal(status.length, 2);
+  const [first, second] = status.map((row) => row.data.filters.project);
+  const swappedNames = result.answer.content.replaceAll(first, '__proje__').replaceAll(second, first).replaceAll('__proje__', second);
+  assert.ok(turnViolations({ ...result, answer: { ...result.answer, content: swappedNames } }, expect).includes('durum dağılımında proje atfı uyuşmuyor'));
   for (const row of status) {
     const content = result.answer.content.replaceAll(`【${row.evidenceId}】`, '【R999】').replaceAll(`"${row.evidenceId}"`, '"R999"');
     assert.ok(turnViolations({ ...result, answer: { ...result.answer, content } }, expect).includes('durum dağılımı yanıtta eksik'));
@@ -121,4 +124,54 @@ test('proje durum kıyası her projenin teslim edilen sayılarını ve doğru at
   assert.ok(turnViolations({ ...result, answer: { ...result.answer, content } }, expect).includes('durum dağılımı yanıtta eksik'));
   const missing = { ...result, evidence: result.evidence.filter((row) => row !== status[1]) };
   assert.ok(turnViolations(missing, expect).includes('projenin durum grubu kanıtı yok'));
+});
+
+for (const format of ['liste', 'tablo', 'grafik']) test(`eşit durum sayıları proje adı ile kanıtın yer değiştirmesini gizleyemez: ${format}`, () => {
+  const names = ['Radar', 'Radar Genişletme'];
+  const projectIds = ['p1', 'p2'];
+  const groups = [{ label: 'Yapılacak', count: 3 }, { label: 'Tamamlandı', count: 2 }];
+  const evidence = names.map((project, index) => ({ tool: 'rota_task_analytics', evidenceId: `R${index + 1}`,
+    data: { groupBy: 'status', filters: { projectId: projectIds[index], project }, groups } }));
+  const section = (project, id) => {
+    const body = format === 'liste' ? groups.map((group) => `- ${group.label} — ${group.count} görev 【${id}】`).join('\n')
+      : format === 'tablo' ? `| Grup | Kayıt sayısı |\n| --- | ---: |\n| Yapılacak | 3 |\n| Tamamlandı | 2 |\n\n_Kaynak:_ 【${id}】`
+        : `\`\`\`rota-chart\n${JSON.stringify({ version: 1, type: 'donut', locale: 'tr', title: 'Durum dağılımı', unit: 'count', evidence: [id], items: groups.map((group) => ({ label: group.label, value: group.count })) })}\n\`\`\``;
+    return `#### ${project}\n\n${body}`;
+  };
+  const content = names.map((name, index) => section(name, `R${index + 1}`)).join('\n\n');
+  const result = { locale: 'tr', answer: { content }, evidence, analysisContext: { scope: 'project', focus: ['status'] },
+    log: projectIds.map((projectId) => ({ query: 'task-facts', params: { projectId } })) };
+  const expect = { scope: 'project', focus: ['status'], projectIds };
+  assert.deepEqual(turnViolations(result, expect), [], content);
+  const swappedIds = content.replaceAll('R1', '__kanıt__').replaceAll('R2', 'R1').replaceAll('__kanıt__', 'R2');
+  assert.ok(turnViolations({ ...result, answer: { content: swappedIds } }, expect).includes('durum dağılımında proje atfı uyuşmuyor'));
+  const swappedNames = names.map((_, index) => section(names[1 - index], `R${index + 1}`)).join('\n\n');
+  assert.ok(turnViolations({ ...result, answer: { content: swappedNames } }, expect).includes('durum dağılımında proje atfı uyuşmuyor'));
+  if (format === 'liste') {
+    const wrongHeading = content.replace('#### Radar\n', '#### Radar Genişletme\n').replace('- Yapılacak', '- Radar: Yapılacak');
+    assert.ok(turnViolations({ ...result, answer: { content: wrongHeading } }, expect).includes('durum dağılımında proje atfı uyuşmuyor'));
+  }
+  if (format === 'grafik') {
+    const wrongTitle = content.replace('"title":"Durum dağılımı"', `"title":"${names[1]}"`);
+    assert.ok(turnViolations({ ...result, answer: { content: wrongTitle } }, expect).includes('durum dağılımında proje atfı uyuşmuyor'));
+    const repeated = `${section(names[1], 'R1')}\n\n${content}`;
+    assert.ok(turnViolations({ ...result, answer: { content: repeated } }, expect).includes('durum dağılımında proje atfı uyuşmuyor'));
+    const explicitTitle = content.replace('"title":"Durum dağılımı"', '"title":"Radar"');
+    assert.deepEqual(turnViolations({ ...result, answer: { content: explicitTitle } }, expect), []);
+    const wrongHeading = explicitTitle.replace('#### Radar\n', '#### Radar Genişletme\n');
+    assert.ok(turnViolations({ ...result, answer: { content: wrongHeading } }, expect).includes('durum dağılımında proje atfı uyuşmuyor'));
+  }
+});
+
+for (const composition of [true, false]) for (const locale of ['tr', 'en']) test(`çoklu ufuk vakası dağılımı birikimli dönem kıyası sanmaz: ${composition ? 'model' : 'sunucu'}, ${locale === 'tr' ? 'Türkçe' : 'İngilizce'}`, async (t) => {
+  const item = fixture.original.find((row) => row.id === 'o30');
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const seed = analysisBenchmarkSeed();
+  t.mock.timers.reset();
+  const { ask } = phase4eConversation(t, { seed, sicil: BENCH_PROFILES[item.profile], composition });
+  const result = await ask({ text: item.text, plan: { ...item.plan, language: locale } });
+  const expect = { ...benchmarkExpectation(item), horizonLimitation: true };
+  assert.deepEqual(turnViolations(result, expect), [], result.answer.content);
+  const content = result.answer.content.split('\n').filter((line) => !/birikimli teslimat|cumulative delivery/.test(line)).join('\n');
+  assert.ok(turnViolations({ ...result, answer: { ...result.answer, content } }, expect).includes('çoklu ufuk sınırlılığı açıklanmadı'));
 });

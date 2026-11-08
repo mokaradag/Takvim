@@ -22,6 +22,7 @@ const VERSION_ONE_KEYS = new Set([...KEYS].filter((key) => !['withSelf', 'relati
 const CHARTS = Object.freeze(['bar', 'donut', 'line', 'stacked', 'kpi', 'timeline']);
 const PENDING_SCOPES = Object.freeze([...ANALYSIS_CONTEXT_SCOPES, 'previous', 'row']);
 const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'withSelf', 'relativeWindow', 'rows', 'act']);
+const VERSION_ONE_PENDING_KEYS = Object.freeze([...PENDING_KEYS].filter((key) => !['charts', 'withSelf', 'relativeWindow', 'rows', 'act'].includes(key)));
 const shortText = (value) => typeof value === 'string' && value.trim().length >= 2 && value.length <= 120;
 const validCharts = (value) => value.charts == null || value.visual === true && Array.isArray(value.charts) && value.charts.length >= 1 && value.charts.length <= 2
   && new Set(value.charts).size === value.charts.length && value.charts.every((type) => CHARTS.includes(type)) && value.chart === value.charts[0];
@@ -98,6 +99,8 @@ export function normalizeAnalysisContext(value) {
   try {
     if (!value || typeof value !== 'object' || Array.isArray(value) || ![1, ANALYSIS_CONTEXT_VERSION].includes(value.v) || Object.keys(value).some((key) => !KEYS.has(key))) return null;
     if (value.v === 1 && (Object.keys(value).some((key) => !VERSION_ONE_KEYS.has(key)) || value.focus?.length > 3)) return null;
+    if (value.v === 1 && value.pending && (Object.keys(value.pending).some((key) => !VERSION_ONE_PENDING_KEYS.includes(key))
+      || !ANALYSIS_CONTEXT_SCOPES.includes(value.pending.scope) || value.pending.focus?.length > 3)) return null;
     const pending = value.pending == null ? null : normalizePendingAnalysis(value.pending);
     if (value.pending != null && !pending) return null;
     // Yalnızca bekleyen niyet (önceki analiz yokken açıklama): takip öznesi değildir; `scope` boştur.

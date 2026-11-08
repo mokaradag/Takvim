@@ -920,7 +920,8 @@ export function analystPropositions(parts, locale = 'tr') {
  * Tamlığı kanıtlanmamış nüfusun SUNUCU ÇEKİNCESİ (zorunlu önerme): iş yükü kanıtı bütün atamaları temsil ettiğini
  * kanıtlamadıysa (`data.populationComplete` false: ekip kadrosu bilinmiyor, kişi sayfası kesik, çözümlenemeyen ya da
  * temsil edilemeyen atama) denge, yoğunlaşma ya da "en yoğun kişi" sonucu çıkarılamaz. Çekince nedeni ve sayısı
- * söylenmez (gizli atamanın varlığı ya da sayısı açıklanmaz); yalnızca ne söylenemeyeceği söylenir.
+ * söylenmez (gizli atamanın varlığı ya da sayısı açıklanmaz); yalnızca ne söylenemeyeceği söylenir. Termin aralıkları da
+ * birikimli dönem karşılaştırması değildir; bu ölçü sınırı yanıt genelinde bir kez açıklanır.
  */
 export function caveatPropositions(parts, locale = 'tr') {
   const en = locale === 'en';
@@ -929,6 +930,16 @@ export function caveatPropositions(parts, locale = 'tr') {
   for (const part of parts) {
     for (const item of part.presentation?.facts || []) {
       const fact = item.fact;
+      if (fact?.semantic?.provenance?.tool === 'rota_task_analytics' && fact.semantic.groupBy === 'deadline') {
+        const key = 'horizon';
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push({ part: part.index + 1, proposition: { kind: 'completeness', tone: 'info', evidenceId: item.evidenceId, ...sentence(en
+            ? ['this distribution shows mutually exclusive deadline ranges; it does not compare cumulative delivery counts across periods of different lengths.']
+            : ['bu dağılım, birbirini dışlayan termin aralıklarını gösterir; farklı uzunluktaki dönemlerin birikimli teslimat sayıları burada karşılaştırılmıyor.']) } });
+        }
+        continue;
+      }
       const assignments = assignmentGroups(fact);
       if (!assignments && (fact?.field !== 'data.populationComplete' || fact.value !== false)) continue;
       if (seen.has(item.evidenceId)) continue;

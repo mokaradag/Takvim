@@ -864,7 +864,8 @@
    "expect": {
     "chartTypes": [
      "bar"
-    ]
+    ],
+    "horizonLimitation": true
    },
    "textEntities": []
   },
@@ -1258,7 +1259,8 @@
    "text": "Bu hafta hangi somut gelişmeler oldu ve hangileri sadece mevcut durum bilgisidir?",
    "profile": "B",
    "expect": {
-    "intent": "rota"
+    "intent": "abstain",
+    "reason": "outside_data"
    },
    "handling": "limitation",
    "textEntities": []
@@ -1292,7 +1294,8 @@
    "text": "Geçen ay ile bu ayı karşılaştır; geçmiş verinin yetersiz olduğu noktaları belirt.",
    "profile": "B",
    "expect": {
-    "intent": "rota"
+    "intent": "abstain",
+    "reason": "outside_data"
    },
    "handling": "limitation",
    "textEntities": []
@@ -1479,7 +1482,8 @@
    "text": "Geçen haftaya göre durum daha iyi mi?",
    "profile": "B",
    "expect": {
-    "intent": "rota"
+    "intent": "abstain",
+    "reason": "outside_data"
    },
    "handling": "limitation",
    "textEntities": []

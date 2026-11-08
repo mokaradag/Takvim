@@ -11,6 +11,66 @@ const { unpackTypedPlan, typedPlanningTool, planShapeHints } = await import('../
 const TODAY = '2026-09-30';
 const unpack = (plan, previousAnalysis = null) => unpackTypedPlan({ toolCalls: [{ name: 'rota_plan', arguments: JSON.stringify(plan) }] }, { today: TODAY, previousAnalysis }).plan;
 
+test('eski bekleyen niyet yükseltilmeden önce kendi sürümünün kapalı sözleşmesiyle doğrulanır', () => {
+  const pending = { language: 'tr', scope: 'self', focus: ['status'], visual: true, chart: 'bar' };
+  assert.deepEqual(normalizeAnalysisContext({ v: 1, pending }).pending, normalizePendingAnalysis(pending));
+  for (const change of [{ charts: ['bar', 'donut'] }, { focus: ['status', 'overdue', 'upcoming', 'priority'] },
+    { scope: 'person', names: ['Ayşe'], withSelf: false }, { relativeWindow: 'today' }, { act: 'explain' }, { scope: 'previous' }]) {
+    assert.equal(normalizeAnalysisContext({ v: 1, pending: { ...pending, ...change } }), null);
+    assert.ok(normalizeAnalysisContext({ v: 2, pending: { ...pending, ...change } }));
+  }
+});
+
+test('geçmiş görünüm gerektiren sınırlılık vakası sıradan güncel durum planıyla geçmez', async () => {
+  const { plannerScore } = await import('../scripts/analysis-qualification.mjs');
+  const { readFileSync } = await import('node:fs');
+  const fixture = JSON.parse(readFileSync(new URL('./fixtures/bilgin-analysis-benchmark.json', import.meta.url), 'utf8'));
+  const cases = fixture.holdout.filter((row) => row.handling === 'limitation' && row.expect.reason === 'outside_data');
+  assert.ok(cases.some((row) => row.id === 'h08'));
+  for (const item of cases) {
+    const current = { outcome: 'planned', decisions: [], plan: { analysis: { scope: 'self', focus: ['overview'] },
+      requests: [{ population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me' }, entities: [], metrics: ['tasks.total'] }] } };
+    assert.ok(plannerScore(current, item.expect).length, item.id);
+    assert.deepEqual(plannerScore({ outcome: 'abstained', decisions: [{ intent: 'abstain', reason: 'outside_data' }] }, item.expect), [], item.id);
+    assert.ok(plannerScore({ outcome: 'abstained', decisions: [{ intent: 'abstain', reason: 'write' }] }, item.expect).length, item.id);
+  }
+});
+
+test('nitelendirme düzen çağrısındaki altyapı hatasını sonuçta saklar ve sonraki tura geçmez', async (t) => {
+  const { conversationCase } = await import('../scripts/analysis-qualification.mjs');
+  let calls = 0;
+  const turn = { text: 'Görevlerimin durumunu göster', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'] } }, expect: { finish: 'stop' } };
+  const results = await conversationCase(t, [turn, turn], { plannerModel: false, composeModel: true,
+    completeRound: async () => { calls += 1; throw new Error('Sınama altyapı hatası'); } });
+  assert.equal(calls, 1);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].infrastructure, 'ADAPTER_INVOCATION_FAILED');
+  assert.ok(results[0].failures.some((failure) => failure.startsWith('altyapı ')));
+});
+
+for (const shape of ['plan', 'düzen']) test(`nitelendirme ilk altyapı hatasında sonraki vakayı başlatmaz: ${shape}`, async () => {
+  const { spawnSync } = await import('node:child_process');
+  const url = new URL('../scripts/analysis-qualification.mjs', import.meta.url).href;
+  for (const infrastructure of [true, false]) {
+    const source = `import {runQualificationCases} from ${JSON.stringify(url)};
+      const calls = [];
+      await runQualificationCases([{id:'bir'},{id:'iki'}], async (_t,item) => {
+        calls.push(item.id);
+        const failed = item.id === 'bir';
+        const marker = failed && ${infrastructure} ? 'MODEL_STREAM_FAILED' : null;
+        return {id:item.id, failures: failed ? ['beklenen sınama hatası'] : [], ${shape === 'plan' ? 'infrastructure:marker' : 'turns:[{infrastructure:marker}]'}};
+      });
+      console.log('SONUC '+JSON.stringify(calls));`;
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], { encoding: 'utf8', env, timeout: 10000 });
+    assert.equal(result.status, 1, result.stderr);
+    const calls = JSON.parse(result.stdout.match(/SONUC (\[[^\n]+\])/)?.[1] || 'null');
+    assert.deepEqual(calls, infrastructure ? ['bir'] : ['bir', 'iki']);
+    assert.match(result.stderr, /\[bir\] FAIL/);
+  }
+});
+
 test('iki grafik türü şemada, takipte ve kapalı bağlamda korunur', () => {
   assert.equal(typedPlanningTool([]).parameters.properties.charts.maxItems, 2);
   const plan = unpack({ intent: 'rota', language: 'tr', charts: ['bar', 'donut'], analysis: { scope: 'self', focus: ['status'] } });

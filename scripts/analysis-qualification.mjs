@@ -82,14 +82,21 @@ function liveTurn(rounds) {
     sicil: 900001, profile: 'chat.tools', model: 'planner-under-test', reportedModel: () => null, maxOutputTokens: 4096,
     signal: new AbortController().signal, remainingMs: () => 600000,
     async round(input) {
-      const reply = await completeModelRound({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice });
-      if (reply?.error) throw Object.assign(new Error(`MODEL_INFRASTRUCTURE ${reply.error}`), { code: 'MODEL_INFRASTRUCTURE' });
-      if (!reply.models?.length || reply.models.some((model) => model !== EXPECTED_MODEL)) throw Object.assign(new Error('PLANNER_MODEL_UNVERIFIED'), { code: 'MODEL_INFRASTRUCTURE' });
-      if (reply.thinking !== 'off' || reply.usage?.output_tokens_details?.thinking_tokens) throw Object.assign(new Error('PLANNER_THINKING_ON'), { code: 'MODEL_INFRASTRUCTURE' });
-      rounds.push({ finish: reply.finishReason });
-      return { text: reply.text || '', toolCalls: (reply.toolCalls || []).map((call, index) => ({ id: `c${rounds.length}_${index}`, name: call.name,
-        arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments ?? {}), oversize: false })),
-        finishReason: reply.finishReason || 'stop', model: null, configuredModel: 'planner-under-test', modelMismatch: false, usage: null, durationMs: 0, firstEventMs: null };
+      const measured = {};
+      rounds.push(measured);
+      try {
+        const reply = await completeModelRound({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice });
+        if (reply?.error) throw Object.assign(new Error(`MODEL_INFRASTRUCTURE ${reply.error}`), { code: 'MODEL_INFRASTRUCTURE' });
+        if (!reply.models?.length || reply.models.some((model) => model !== EXPECTED_MODEL)) throw Object.assign(new Error('PLANNER_MODEL_UNVERIFIED'), { code: 'MODEL_INFRASTRUCTURE' });
+        if (reply.thinking !== 'off' || reply.usage?.output_tokens_details?.thinking_tokens) throw Object.assign(new Error('PLANNER_THINKING_ON'), { code: 'MODEL_INFRASTRUCTURE' });
+        measured.finish = reply.finishReason;
+        return { text: reply.text || '', toolCalls: (reply.toolCalls || []).map((call, index) => ({ id: `c${rounds.length}_${index}`, name: call.name,
+          arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments ?? {}), oversize: false })),
+          finishReason: reply.finishReason || 'stop', model: null, configuredModel: 'planner-under-test', modelMismatch: false, usage: null, durationMs: 0, firstEventMs: null };
+      } catch (error) {
+        measured.infrastructure = 'MODEL_INVOCATION_FAILED';
+        throw error;
+      }
     }
   }), options);
 }
@@ -145,24 +152,33 @@ async function plannerCase(item) {
     now: new Date(`${corpus.today}T09:00:00.000Z`), catalog: toolCatalogForModel() });
   const failures = plannerScore(result, item.expect);
   const firstPass = rounds.length === 1 && !failures.length;
-  return { id: item.id, rounds: rounds.length, firstPass, analysis: Boolean(result.plan?.analysis), failures };
+  return { id: item.id, rounds: rounds.length, firstPass, analysis: Boolean(result.plan?.analysis),
+    infrastructure: rounds.find((round) => round.infrastructure)?.infrastructure || null, failures };
 }
 
 /* ── Tier C/D/E: konuşma ──────────────────────────────────────────── */
 
 const plannerRouting = (planner, dry) => ({ planner, dry, escalations: 0 });
 
-async function conversationCase(t, turns, { plannerModel, composeModel, seed = rotaToolSeed(), sicil = AYSE }) {
+export async function conversationCase(t, turns, { plannerModel, composeModel, seed = rotaToolSeed(), sicil = AYSE, completeRound } = {}) {
   const rounds = [];
   const routing = plannerRouting(plannerModel, !composeModel);
-  const provider = qualificationProvider(rounds, { provider: 'claude', routing });
+  const provider = qualificationProvider(rounds, { provider: 'claude', routing, ...(completeRound ? { completeRound } : {}) });
   const logs = captureConsole(t);
   const { ask } = phase4eConversation(t, { sicil, seed, provider });
   const results = [];
   for (const turn of turns) {
     const before = rounds.length;
     const escalationsBefore = routing.escalations;
-    const result = await ask({ ...turn, scripted: !plannerModel }, { detail: turn.expect?.detail || null });
+    let result;
+    try { result = await ask({ ...turn, scripted: !plannerModel }, { detail: turn.expect?.detail || null }); }
+    catch (error) {
+      const infrastructure = rounds.slice(before).find((round) => round.infrastructure)?.infrastructure;
+      if (!infrastructure) throw error;
+      results.push({ text: turn.id || null, finish: 'error', infrastructure, failures: [`altyapı ${infrastructure}`] });
+      summary.turns += 1;
+      break;
+    }
     const line = logs.map((row) => (row.includes('"operation":"ai.grounded.turn"') ? JSON.parse(row.slice(row.indexOf('{'))) : null)).filter(Boolean).at(-1);
     const presentation = line?.context?.presentation || null;
     const failures = turnViolations(result, turn.expect || {}, { live: Boolean(plannerModel) });
@@ -188,9 +204,10 @@ async function conversationCase(t, turns, { plannerModel, composeModel, seed = r
     results.push({ text: turn.id || null, finish: result.answer?.finishReason ?? null, plannerRounds: measured.filter((round) => round.purpose === 'plan').length, declarations: line?.context?.declarations ?? null,
       findings: presentation?.findings ?? 0, charts: renderedCharts(content).map((chart) => chart.type), concluded: answerQuality(content).ending,
       mode: presentation?.mode ?? null, server: presentation?.server === true, chartInserted: presentation?.chartInserted === true, reason: presentation?.reason ?? null, issue: presentation?.issue ?? null,
-      rejected: presentation?.rejected ?? null, failures });
+      rejected: presentation?.rejected ?? null, infrastructure: measured.find((round) => round.infrastructure)?.infrastructure || null, failures });
     summary.turns += 1;
     if (routing.escalations > escalationsBefore) summary.escalations += 1;
+    if (measured.some((round) => round.infrastructure)) break;
   }
   return results;
 }
@@ -282,6 +299,19 @@ export function record(entry) {
   assert.deepEqual(entry.failures, [], `${entry.id}: ${entry.failures.join('; ')}`);
 }
 
+/** Vakalar sırayla kaydedilir; altyapı hatası korunur ve sonraki vaka başlatılmaz. */
+export async function runQualificationCases(items, execute) {
+  for (const item of items) {
+    let infrastructure = false;
+    await test(`nitelendirme vakası: ${item.id}`, async (t) => {
+      const entry = await execute(t, item);
+      infrastructure = Boolean(entry.infrastructure || entry.turns?.some((turn) => turn.infrastructure));
+      record(entry);
+    });
+    if (infrastructure) break;
+  }
+}
+
 const direct = (() => {
   try { return Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
 })();
@@ -324,28 +354,24 @@ if (direct) {
       });
     }
   } else if (TIER === 'F' && process.env.PHASE4E_SET === 'holdout') {
-    for (const item of pick(benchmark.holdout)) {
-      test(`ayrık vaka: ${item.id}`, async () => {
-        const entry = await plannerCase(item);
-        if (entry.firstPass) summary.firstPass += 1;
-        summary.repairs += Math.max(0, entry.rounds - 1);
-        summary.turns += 1;
-        record({ ...entry, id: item.id, handling: item.handling });
-      });
-    }
+    await runQualificationCases(pick(benchmark.holdout), async (_t, item) => {
+      const entry = await plannerCase(item);
+      if (entry.firstPass) summary.firstPass += 1;
+      summary.repairs += Math.max(0, entry.rounds - 1);
+      summary.turns += 1;
+      return { ...entry, id: item.id, handling: item.handling };
+    });
   } else if (TIER === 'F') {
-    for (const item of pick(benchmark.original)) {
-      test(`kıyas vakası: ${item.id}`, async (t) => {
-        t.mock.timers.enable({ apis: ['Date'], now: NOW });
-        const seed = analysisBenchmarkSeed();
-        t.mock.timers.reset();
-        const turn = { text: item.text, requireComposed: item.handling === 'full', expect: benchmarkExpectation(item) };
-        const [result] = await conversationCase(t, [turn], { plannerModel: true, composeModel: true, seed, sicil: BENCH_PROFILES[item.profile] });
-        const failures = [...result.failures];
-        if (item.handling === 'partial' && result.finish !== 'stop') failures.push(`kısmi vaka bitişi ${result.finish}`);
-        record({ id: item.id, order: item.order, observed: item.observed, handling: item.handling, turns: [result], failures });
-      });
-    }
+    await runQualificationCases(pick(benchmark.original), async (t, item) => {
+      t.mock.timers.enable({ apis: ['Date'], now: NOW });
+      const seed = analysisBenchmarkSeed();
+      t.mock.timers.reset();
+      const turn = { text: item.text, requireComposed: item.handling === 'full', expect: benchmarkExpectation(item) };
+      const [result] = await conversationCase(t, [turn], { plannerModel: true, composeModel: true, seed, sicil: BENCH_PROFILES[item.profile] });
+      const failures = [...result.failures];
+      if (item.handling === 'partial' && result.finish !== 'stop') failures.push(`kısmi vaka bitişi ${result.finish}`);
+      return { id: item.id, order: item.order, observed: item.observed, handling: item.handling, turns: [result], failures };
+    });
   } else if (TIER === 'E') {
     for (const [id, turns] of pick(E2E_CASES)) {
       test(`senaryo: ${id}`, async (t) => {

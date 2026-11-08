@@ -75,7 +75,7 @@ Sütunlar: **No** · **VM** (B başarısız, M mekanik) · **Sınıf** (tam/kıs
 | 27 | B | sınırlı → H | 90 gün tamamlanma eğilimi (D, F) | Eğilim işleci yok | — | sınırlı → H | Gerçekleşen bitişe göre dizi + tamlık (H) |
 | 28 | M | kısmi → G | Örtüşen serilerin yığılması (C) | Gecikmiş ⊂ açık; yığılamaz | ✓ | ✓ | Doğru grafik biçimi seçimi (G) |
 | 29 | M | tam | Tablo + çubuk (A) | — | ✓ | ✓ | — |
-| 30 | B | kısmi → H | 7/14/30 gün yoğunluğu (D) | Çoklu ufuk yok | ✓ (7/30 kovaları) | ✗ → H | 14 günlük ufuk (H) |
+| 30 | B | kısmi → H | 7/14/30 gün yoğunluğu (D) | Çoklu ufuk yok | ✓ (termin aralıkları; birikimli kıyas değil) | ✗ → H | Birikimli dönem kıyası yapılmadığı zorunlu çekinceyle açıklanır; çoklu ufuk H aşamasındadır |
 | 31 | M | tam | Bölüm iş yükü proje grafiği (A) | — | ✓ | ✓ | — |
 | 32 | M | tam | Direktörlük durum karşılaştırması (A) | — | ✓ | ✓ | — |
 | 33 | M | tam | İki proje durum grafiği (A) | — | ✓ | kararsız (doğru yanıt, Haiku düzeni reddedilip Derin anlatım istendi) | — |

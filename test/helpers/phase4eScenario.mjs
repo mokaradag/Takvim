@@ -1,4 +1,4 @@
-import { parseAssistantMarkdown } from '../../src/features/ai/assistant/assistantMarkdown.js';
+import { inlineText, parseAssistantMarkdown, parseInline } from '../../src/features/ai/assistant/assistantMarkdown.js';
 import { parseAnswerChart } from '../../src/domain/ai/answerChart.js';
 /**
  * Aşama 4E senaryo koşucusu: konuşmayı ÜRETİMDEKİ asistan hizmetinden geçirir (konuşma kaydı, takip bağlamı, yetki,
@@ -122,7 +122,49 @@ export function turnViolations(result, expect, { live = false } = {}) {
     const lines = content.replaceAll('**', '').split('\n');
     const blocks = parseAssistantMarkdown(content, { rotaData: true });
     const labels = { todo: ['Yapılacak', 'To do'], in_progress: ['Devam ediyor', 'In progress'], done: ['Tamamlandı', 'Done'] };
+    const projectNames = new Map(status.filter((row) => row.data.filters?.projectId && row.data.filters.project)
+      .map((row) => [row.data.filters.projectId, row.data.filters.project]));
+    const projectIn = (source, markdown = true) => {
+      const text = markdown ? inlineText(parseInline(source)) : source;
+      const named = [...projectNames].filter(([, name]) => text.includes(name));
+      // Biri diğerinin öneki olan adlar aynı proje değildir; tam uzun adın içindeki kısa eşleşme elenir.
+      const distinct = named.filter(([, name]) => !named.some(([, other]) => other !== name && other.includes(name)));
+      return distinct.length === 1 ? distinct[0][0] : null;
+    };
+    let project = null;
+    let section = null;
+    const lineProjects = lines.map((line) => {
+      const named = projectIn(line);
+      if (/^#{1,6}\s/.test(line)) section = named;
+      if (/^#{1,6}\s/.test(line) || named) project = named;
+      return { project, section };
+    });
+    const chartProjects = [];
+    const scopedCharts = (items, inherited = null, inheritedSection = null) => {
+      let owner = inherited;
+      let section = inheritedSection;
+      for (const block of items) {
+        const named = projectIn(block.source || '');
+        if (block.type === 'heading') section = named;
+        if (block.type === 'heading' || block.type === 'paragraph' && named) owner = named;
+        if (block.type === 'code' && block.language === 'rota-chart') {
+          const chart = parseAnswerChart(block.text);
+          // Genel veya kısaltılmış grafik başlığı bölümün projesini devralır; açıkça farklı proje adı bunu örtemez.
+          if (chart) chartProjects.push({ chart, project: projectIn(chart.title, false) || owner, section });
+        } else if (block.type === 'quote') scopedCharts(block.children, owner, section);
+        else if (block.type === 'list') for (const item of block.items) scopedCharts(item, owner, section);
+      }
+    };
+    scopedCharts(blocks);
     for (const row of status) {
+      if (expect.scope === 'project' && expect.projectIds?.length) {
+        const projectId = row.data.filters?.projectId;
+        const wrongText = lines.some((line, index) => line.includes(`【${row.evidenceId}】`)
+          && (lineProjects[index].project !== projectId || lineProjects[index].section != null && lineProjects[index].section !== projectId));
+        const wrongChart = chartProjects.some(({ chart, project, section }) => chart.evidence.includes(row.evidenceId)
+          && (project !== projectId || section != null && section !== projectId));
+        if (!expect.projectIds.includes(projectId) || wrongText || wrongChart) problems.push('durum dağılımında proje atfı uyuşmuyor');
+      }
       const groups = (row.data.groups || []).map((group) => ({ ...group, label: labels[group.key]?.[result.locale === 'en' ? 1 : 0] || group.label }));
       const delivered = groups.length === 0 ? lines.some((line) => line.includes(`【${row.evidenceId}】`) && /görev(?:iniz)? yok|no (?:matching )?tasks/i.test(line))
         : groups.every((group) => lines.some((line) => {
@@ -138,6 +180,7 @@ export function turnViolations(result, expect, { live = false } = {}) {
     }
   }
   for (const type of expect.chartTypes || []) if (!charts.some((chart) => chart.type === type)) problems.push(`${type} grafiği yok`);
+  if (expect.horizonLimitation && !/birikimli teslimat sayıları burada karşılaştırılmıyor|does not compare cumulative delivery counts/.test(content)) problems.push('çoklu ufuk sınırlılığı açıklanmadı');
   const findings = { attentionLeader: /yönetim dikkatini en çok/, windowPressure: /arasında teslimatı olan/, subjectComparison: /arasındaki en belirgin fark|sayıları birbirine yakın|görev sayıları iki (?:kişide|projede) aynı/,
     overdueConcentration: /gecikmiş[\s\S]+toplanıyor/i };
   for (const kind of expect.findings || []) if (!findings[kind]?.test(content)) problems.push(`${kind} bulgusu yok`);
