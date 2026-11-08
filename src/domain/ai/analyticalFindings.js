@@ -88,7 +88,7 @@ function entityTables(groups) {
       const list = [...rows.values()];
       // Adaş varlık adı tek başına özne olamaz; doğrulanmış kod yoksa adlandırılmış bulgu kurulmaz.
       const ambiguous = list.filter((row) => list.some((other) => other !== row && other.name === row.name));
-      for (const row of ambiguous) row.name = row.code && ambiguous.every((other) => other === row || other.code !== row.code) ? `${row.code} · ${row.name}` : null;
+      for (const row of ambiguous) row.name = row.name && row.code && ambiguous.every((other) => other === row || other.code !== row.code) ? `${row.code} · ${row.name}` : null;
       const population = source.tool !== 'rota_workload_summary' || facts.some((fact) => fact.field === 'data.populationComplete' && fact.value === true);
       const complete = population && list.length >= 2 && list.every((row) => row.complete && row.name && row.key != null && !NON_ENTITY_KEYS.has(String(row.key))
         && row.size === list.length) && new Set(list.map((row) => String(row.key))).size === list.length;
@@ -256,6 +256,7 @@ function comparisonFindings(groups) {
       if (!subject) continue;
       const common = Object.entries(filters).filter(([key, value]) => !subject.own.includes(key) && !neutral(value) && key !== 'project');
       const windowed = match[1] === 'total' && (filters.dateFrom || filters.dateTo)
+        && (!filters.dateField || filters.dateField === 'targetFinish')
         && filters.statuses?.length === 2 && filters.statuses.every((status) => OPEN_STATUSES.has(status));
       const allowed = ['projectId', 'assignee', 'teamLevel', ...(windowed ? ['dateFrom', 'dateTo', 'dateField', 'statuses'] : [])];
       if (match[1] === 'total' && !windowed || common.some(([key]) => !allowed.includes(key))) continue;
@@ -271,6 +272,7 @@ function comparisonFindings(groups) {
   for (const entry of [...metrics.values()].filter((item) => item.subjects.size === 2)) {
     const subjects = [...entry.subjects.values()];
     if (subjects.some((subject) => subject.type === 'project') && subjects.some((subject) => subject.type !== 'project')) continue;
+    if (subjects.every((subject) => subject.type === 'project') && subjects[0].name === subjects[1].name) continue;
     const key = `${entry.base}|${subjects.map((subject) => subject.key).sort().join('|')}`;
     if (!findings.has(key)) findings.set(key, { kind: 'subjectComparison', interpretation: 'comparison', entity: null,
       subjects: subjects.map(({ type, name, key }) => ({ type, name, key })), metrics: {},
@@ -309,7 +311,11 @@ function windowPressureFindings(tables, lists) {
     const both = due.filter((row) => late.has(String(row.key).toLowerCase()));
     if (!both.length || due.length < 2) continue;
     findings.push({ kind: 'windowPressure', interpretation: 'simultaneous', entity: null, entityType: 'project',
-      names: both.slice(0, FINDING_LIMITS.maxNamed).map((row) => names.get(String(row.key).toLowerCase()) || row.name),
+      names: both.slice(0, FINDING_LIMITS.maxNamed).map((row) => {
+        const name = names.get(String(row.key).toLowerCase());
+        return name && table.rows.filter((other) => other.name === name || other.name.endsWith(` · ${name}`)).length === 1 ? name : row.name;
+      }),
+      filters: table.filters, today: table.today,
       metrics: { entities: both.length, population: due.length, dateFrom, dateTo, atLeast: !overdue.complete, shown: overdue.rows.length },
       comparison: { population: due.length, basis: overdue.complete ? 'complete-table+complete-list' : 'complete-table+ranking-head' },
       evidenceIds: [table.evidenceId, overdue.evidenceId], completeness: overdue.complete ? 'complete' : 'lower-bound' });
@@ -428,9 +434,10 @@ function comparisonSentences(finding, locale) {
 export function findingScope(finding, locale = 'tr') {
   const filters = finding.filters || {};
   const parts = [filters.assignee === 'me' ? (en(locale) ? 'your work' : 'kendi işleriniz')
+    : filters.assignee === 'team' ? (TEAM_WORK[filters.teamLevel] || ['ekibinizin işleri', "your team's work"])[en(locale) ? 1 : 0]
     : filters.person && filters.person !== 'Seçilen kişi' ? filters.person : null,
     filters.projectId && (finding.kind === 'subjectComparison' || filters.personSicil != null || filters.assignee === 'me' || filters.dateFrom || filters.dateTo) ? filters.project : null,
-    filters.dateFrom || filters.dateTo ? [filters.dateFrom ? formatFactDay(filters.dateFrom, locale) : '…', filters.dateTo ? formatFactDay(filters.dateTo, locale) : '…'].join(' – ') : null].filter(Boolean);
+    finding.kind !== 'windowPressure' && (filters.dateFrom || filters.dateTo) ? [filters.dateFrom ? formatFactDay(filters.dateFrom, locale) : '…', filters.dateTo ? formatFactDay(filters.dateTo, locale) : '…'].join(' – ') : null].filter(Boolean);
   return parts.join(' · ');
 }
 

@@ -44,13 +44,20 @@ test('gelecek dönem zaman çizelgesi dönem dışı gecikme listesiyle karşıl
 });
 
 test('zaman çizelgesi için iki adlı öznenin tarihli görevleri birlikte okunur', () => {
-  const parts = expand({ scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['upcoming'] }, { chart: 'timeline' });
+  const parts = expand({ scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['upcoming'], dateFrom: TODAY, dateTo: '2026-10-13' }, { chart: 'timeline' });
   const dated = parts.filter((p) => p.population.tool === 'rota_task_search');
   assert.deepEqual(dated.map((p) => p.entities[0].text), ['Ayşe Yılmaz', 'Zeynep Kaya']);
+  for (const request of dated) {
+    assert.deepEqual([request.filters.dateFrom, request.filters.dateTo], [TODAY, '2026-10-13']);
+    assert.deepEqual([request.rank.metric, request.rank.order], ['task.targetFinish', 'asc']);
+    assert.ok(request.metrics.includes('task.targetFinish'));
+  }
 });
 
 test('birleşebilen beş etkin yön dört fiziksel okuma bütçesinde kalır', () => {
   const parts = expand({ scope: 'person', names: ['Ayşe Yılmaz'], focus: ['overview', 'workload', 'overdue', 'priority'], dateFrom: TODAY, dateTo: '2026-10-13' });
+  const totals = parts.find((p) => p.operation === 'value');
+  assert.ok(['tasks.total', 'tasks.open', 'tasks.done', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.completionRatePercent'].every((metric) => totals.metrics.includes(metric)));
   assert.equal(parts.length, 4);
   assert.ok(parts.some((p) => p.filters.deadline === 'overdue'));
   assert.ok(parts.some((p) => p.population.groupBy === 'priority'));
@@ -320,4 +327,134 @@ test('kesik ama doğrulanmış gecikme sıralaması zaman çizelgesi olarak çiz
   assert.ok(timeline, result.answer.content);
   assert.equal(timeline.items.length, 8);
   assert.match(timeline.title, /En erken 8 termin/);
+});
+
+test('eksik varlık adı kodla gerçek ada dönüşmez; bitiş penceresi termin karşılaştırması sayılmaz', () => {
+  assert.deepEqual(analyticalFindings([part(tableFacts([[null, 8, 4, 2, 'A'], [null, 3, 1, 1, 'B']]))]), []);
+  const filters = { dateFrom: TODAY, dateTo: '2026-10-13', dateField: 'actualFinish', statuses: ['todo', 'in_progress'] };
+  assert.deepEqual(analyticalFindings([part([total('R1', 1, 'total', 4, filters), total('R2', 2, 'total', 2, filters)])]), []);
+});
+
+test('grafik kapısı istemcinin uzun ve tildeli çitlerini, JSON içindeki ters tırnağı kabul eder', async () => {
+  const { renderedCharts } = await import('./helpers/phase4eScenario.mjs');
+  const { answerChartFence } = await import('../src/domain/ai/answerChart.js');
+  const fence = answerChartFence({ version: 1, type: 'bar', locale: 'tr', title: 'Kıyas `A`', unit: 'count', evidence: ['R1'], items: [{ label: 'A', value: 1 }, { label: 'B', value: 2 }] });
+  assert.ok(fence);
+  for (const content of [fence, fence.replaceAll('```', '````'), fence.replaceAll('```', '~~~')]) assert.equal(renderedCharts(content)[0]?.title, 'Kıyas `A`');
+});
+
+test('eşdeğer tekil ve çoğul grafik yazımı analiz onarımını engellemez', async (t) => {
+  const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
+  const fixed = { scope: 'self', focus: ['status'], dateFrom: TODAY, dateTo: '2026-10-13' };
+  const queue = [{ intent: 'rota', language: 'tr', chart: ['bar', 'donut'], analysis: { ...fixed, relativeWindow: 'next_7_days' } },
+    { intent: 'rota', language: 'tr', charts: ['bar', 'donut'], analysis: fixed }];
+  const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
+  const result = await ask({ text: 'İşlerimin durumunu çubuk ve halka grafikle göster' });
+  assert.equal(result.inputs.length, 2);
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+});
+
+test('yeni ekip analizi önceki bölüm düzeyini devralmaz', async (t) => {
+  const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
+  const { analysisBenchmarkSeed, BENCH_PROFILES } = await import('./helpers/analysisBenchmarkSeed.mjs');
+  const { NOW } = await import('./helpers/aiToolFixtures.mjs');
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const seed = analysisBenchmarkSeed();
+  t.mock.timers.reset();
+  const { ask } = phase4eConversation(t, { seed, sicil: BENCH_PROFILES.B });
+  const first = await ask({ text: 'Bölümümün durum dağılımı', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'team', level: 'department', focus: ['status'] } } });
+  assert.equal(first.analysisContext.level, 'department');
+  const next = await ask({ text: 'Ekibimin durum dağılımı', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'team', focus: ['status'] } } });
+  assert.equal(next.answer.finishReason, 'stop', next.answer.content);
+  assert.match(next.answer.content.split('\n\n')[0], /ekibinizin işleri/);
+  assert.doesNotMatch(next.answer.content.split('\n\n')[0], /bölümünüzün/);
+});
+
+test('proje satırı takibi üst nüfusu ve tek proje sınırlamasını korur', async (t) => {
+  const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
+  const { ask } = phase4eConversation(t);
+  const first = await ask({ text: 'İşlerimin projelere dağılımı', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['projects'] } } });
+  assert.ok(first.analysisContext.rows.length);
+  const next = await ask({ text: 'İlk projenin durum dağılımı', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'row', rows: [1], focus: ['status'] } } });
+  assert.equal(next.answer.finishReason, 'stop', next.answer.content);
+  const opening = next.answer.content.split('\n\n')[0];
+  assert.match(opening, /kendi işleriniz/);
+  assert.equal(opening.match(/· proje:/g)?.length, 1);
+  const reads = next.log.filter((row) => row.query === 'task-facts');
+  assert.ok(reads.length && reads.every((row) => row.params.assigneeMode === 'me' && row.params.projectId));
+});
+
+test('türü belirtilmeyen çizilemez grafik notu da kapanıştan önce gelir', async (t) => {
+  const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
+  const { rotaToolSeed, TASKS } = await import('./helpers/aiToolFixtures.mjs');
+  const seed = rotaToolSeed();
+  seed.tasks = seed.tasks.filter((task) => task.TaskId === TASKS.OVERDUE);
+  const { ask } = phase4eConversation(t, { seed });
+  const result = await ask({ text: 'İşlerimin durumunu grafikle göster', plan: { intent: 'rota', language: 'tr', visual: true, analysis: { scope: 'self', focus: ['status'] } } });
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.match(result.answer.content, /güvenle grafik çizilemedi/);
+  assert.equal(answerQuality(result.answer.content).ending, true, result.answer.content);
+});
+
+
+test('açık tek öğeli grafik listesi önceki ikinci türü devralmaz', () => {
+  const previous = { v: 2, scope: 'self', subjects: [], rows: [], focus: ['status'], visual: true, chart: 'bar', charts: ['bar', 'donut'] };
+  const plan = unpack({ intent: 'rota', language: 'tr', charts: ['bar'], analysis: { scope: 'previous' } }, previous);
+  assert.equal(plan.chart, 'bar');
+  assert.equal(plan.charts, undefined);
+});
+
+test('kodsuz adaş proje toplamlarından belirsiz karşılaştırma kurulmaz ve iki proje tek sayılmaz', async () => {
+  const { buildComposition } = await import('../src/domain/ai/groundedComposition.js');
+  const facts = [1, 2].map((id) => total(`R${id}`, null, 'open', id * 3, { assignee: 'any', person: null, projectId: `p${id}`, project: 'Ortak' }));
+  assert.equal(analyticalFindings([part(facts)]).some((finding) => finding.kind === 'subjectComparison'), false);
+  const composition = buildComposition({ parts: [part(facts)], analyst: true, outline: { scope: 'project', focus: ['workload'] } });
+  assert.match(composition.render.framing.plain, /iki projedeki işler/);
+});
+
+test('durum yönü yalnızca bağlamda yazılıysa ya da kanıtı gövdeden eksikse kıyas geçmez', async () => {
+  const { turnViolations } = await import('./helpers/phase4eScenario.mjs');
+  const result = { answer: { content: 'Genel görünüm.' }, log: [], analysisContext: { focus: ['status'] }, evidence: [] };
+  assert.ok(turnViolations(result, { focus: ['status'] }).includes('durum grubu kanıtı yok'));
+  result.evidence = [{ evidenceId: 'R1', tool: 'rota_task_analytics', data: { groupBy: 'status', groups: [{ label: 'Yapılacak', count: 38 }] } }];
+  assert.ok(turnViolations(result, { focus: ['status'] }).includes('durum dağılımı yanıtta eksik'));
+  result.answer.content = '- **Yapılacak** — **38** görev 【R1】';
+  assert.deepEqual(turnViolations(result, { focus: ['status'] }), []);
+});
+
+test('iki öznenin gecikme zaman çizelgesi yaklaşan işleri okumaz', () => {
+  for (const scope of ['person', 'project']) {
+    const parts = expand({ scope, names: ['Birinci', 'İkinci'], focus: ['overdue'] }, { chart: 'timeline' });
+    const tasks = parts.filter((request) => request.population.tool === 'rota_task_search');
+    assert.equal(tasks.length, 2);
+    assert.deepEqual(tasks.map((request) => request.entities[0].text), ['Birinci', 'İkinci']);
+    for (const request of tasks) {
+      assert.equal(request.filters.deadline, 'overdue');
+      assert.deepEqual([request.rank.metric, request.rank.order], ['task.overdueDays', 'desc']);
+      assert.ok(request.metrics.includes('task.targetFinish'));
+    }
+  }
+});
+
+test('bağıl gelecek dönemin zaman çizelgesi mevcut gecikmeleri çizmez ve bağlam bağıl kalır', async (t) => {
+  const { phase4eConversation, renderedCharts } = await import('./helpers/phase4eScenario.mjs');
+  const { rotaToolSeed, TASKS, AYSE, PROJECTS } = await import('./helpers/aiToolFixtures.mjs');
+  const seed = rotaToolSeed();
+  const template = seed.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+  for (const [index, TargetFinish] of ['2026-10-02', '2026-10-03'].entries()) {
+    const TaskId = `20000000-0000-4000-8000-00000000090${index}`;
+    seed.tasks.push({ ...template, TaskId, TargetFinish, ProjectId: PROJECTS.FULL, Title: `Bağıl gelecek iş ${index}` });
+    seed.taskAssignees.push({ TaskId, Sicil: AYSE });
+  }
+  const { ask } = phase4eConversation(t, { seed });
+  const result = await ask({ text: 'Önümüzdeki yedi günün durumu ve mevcut gecikmeler; gelecek işleri zaman çizelgesinde göster', plan: {
+    intent: 'rota', language: 'tr', chart: 'timeline', analysis: { scope: 'self', focus: ['status', 'overdue'], relativeWindow: 'next_7_days' }
+  } });
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  const timeline = renderedCharts(result.answer.content).find((chart) => chart.type === 'timeline');
+  assert.ok(timeline, result.answer.content);
+  assert.ok(timeline.items.every((item) => item.date >= TODAY && item.date <= '2026-10-06'), JSON.stringify(timeline));
+  assert.equal(result.analysisContext.relativeWindow, 'next_7_days');
+  assert.equal(result.analysisContext.dateFrom, undefined);
+  assert.equal(result.analysisContext.dateTo, undefined);
 });

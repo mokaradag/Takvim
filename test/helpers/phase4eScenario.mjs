@@ -1,3 +1,4 @@
+import { parseAssistantMarkdown } from '../../src/features/ai/assistant/assistantMarkdown.js';
 import { parseAnswerChart } from '../../src/domain/ai/answerChart.js';
 /**
  * Aşama 4E senaryo koşucusu: konuşmayı ÜRETİMDEKİ asistan hizmetinden geçirir (konuşma kaydı, takip bağlamı, yetki,
@@ -68,7 +69,9 @@ export const populationReads = (log) => log.filter((row) => row.query === 'task-
 
 /** Yalnızca istemcinin kabul ettiği çitli grafik tanımları teslim edilmiş grafik sayılır. */
 export function renderedCharts(content) {
-  return [...String(content || '').matchAll(/```rota-chart\s*\n([^`]+)\n```/g)].map((match) => parseAnswerChart(match[1])).filter(Boolean);
+  const extract = (blocks) => blocks.flatMap((block) => block.type === 'code' && block.language === 'rota-chart'
+    ? [parseAnswerChart(block.text)].filter(Boolean) : block.type === 'quote' ? extract(block.children) : block.type === 'list' ? block.items.flatMap(extract) : []);
+  return extract(parseAssistantMarkdown(content, { rotaData: true }));
 }
 
 /**
@@ -106,6 +109,22 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.scope && result.analysisContext?.scope !== expect.scope) problems.push('analiz kapsamı beklenenle aynı değil');
   if (expect.projectIds && JSON.stringify([...new Set(reads.map((row) => row.params.projectId).filter(Boolean))].sort()) !== JSON.stringify([...expect.projectIds].sort())) problems.push('proje kimliği kümesi beklenenle aynı değil');
   if (expect.focus && (!result.analysisContext || expect.focus.some((focus) => !result.analysisContext.focus.includes(focus)))) problems.push('analitik yönler eksik');
+  if (expect.focus?.includes('status') && !['person', 'project'].includes(expect.scope)) {
+    const status = result.evidence?.filter((row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'status') || [];
+    if (!status.length) problems.push('durum grubu kanıtı yok');
+    const lines = content.replaceAll('**', '').split('\n');
+    const blocks = parseAssistantMarkdown(content, { rotaData: true });
+    for (const row of status) {
+      const groups = row.data.groups || [];
+      const delivered = groups.length > 0 && groups.every((group) => lines.some((line) => line.includes(group.label)
+        && line.includes(`【${row.evidenceId}】`) && new RegExp(`(^|[^\\d])${group.count}([^\\d]|$)`).test(line))
+        || blocks.some((block, index) => block.type === 'table' && blocks[index + 1]?.source.includes(`【${row.evidenceId}】`)
+          && block.source.split('\n').some((line) => line.split('|').map((cell) => cell.trim()).some((cell) => cell === group.label)
+            && line.split('|').map((cell) => cell.trim()).includes(String(group.count))))
+        || charts.some((chart) => chart.evidence.includes(row.evidenceId) && chart.items?.some((item) => item.label === group.label && item.value === group.count)));
+      if (!delivered) problems.push('durum dağılımı yanıtta eksik');
+    }
+  }
   for (const type of expect.chartTypes || []) if (!charts.some((chart) => chart.type === type)) problems.push(`${type} grafiği yok`);
   const findings = { attentionLeader: /yönetim dikkatini en çok/, windowPressure: /arasında teslimatı olan/, subjectComparison: /arasındaki en belirgin fark|sayıları birbirine yakın|görev sayıları iki (?:kişide|projede) aynı/,
     overdueConcentration: /gecikmiş[\s\S]+toplanıyor/i };

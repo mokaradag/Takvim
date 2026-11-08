@@ -2078,7 +2078,7 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
   (karşılaştırmada kayıt başına bölümler dâhil), ufuk bölümü ve portföy satırları bütçeye sığmalıdır. Sığmayan plan
   veri okunmadan `$.analysis.focus:requestBudget` ile reddedilir; istenen yön sessizce düşürülmez.
   **Aşama F güncellemesi:** bildirilen yönlerin okumaları mevcut fiziksel üst sınıra (`maxParts` = 4) kadar kabul edilir;
-  model şeması ve doğrulayıcı 1-4 yön kullanır. Şemanın `maxItems` sınırını aşan fazladan yönler yalnızca sıralı alt kümeyle onarılabilir; fiziksel okuma bütçesi aşımında yön düşürülmez, kullanıcıdan öncelik istenir (`repairScope`). Ayrıntı:
+  model şeması ve doğrulayıcı 1-4 yön kullanır. Şemanın `maxItems` sınırını aşan fazladan yönler yalnızca sıralı alt kümeyle onarılabilir; fiziksel okuma bütçesi aşımında yön düşürülmez, kullanıcıdan öncelik istenir (`$.analysis.focus:requestBudget`); yön düşüren onarım `$.plan:repairScope` ile reddedilir. Ayrıntı:
   [Yol Haritası](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md) §5, [Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) §2.
 - Açılım (`expandAnalysis`) yalnızca türlü değerlerle çalışır, kullanıcı metnini okumaz; çıktı modelin yazacağı ham
   isteklerdir ve 4C bildirim doğrulamasından, yetkiden ve kanıt seçiminden aynen geçer. Adlar 4C içerme kuralına
@@ -2356,7 +2356,7 @@ verilirse bu sınıra uyulur. Onarım yoğunluğu bu payı aşarsa koşu başar�
 
 - Tarih aralığı ortak görev nüfusuna uygulanır: genel görünüm, karşılaştırma, grafik ve Ayrıntılı bütünleyici
   okumalar aralık dışına çıkmaz. **Aşama F istisnası:** gecikme her zaman bugüne göre ölçülür; başlangıcı bugün ya da
-  sonrası olan dönem gecikmiş iş okumasını daraltmaz (aksi hâlde okuma tanımı gereği boştur ve yanlış güvence verir). Yaklaşan işler aralık ile bugünden sonraki açık işlerin kesişimidir ve gerçek
+  sonrası olan dönem gecikmiş iş okumasını daraltmaz (aksi hâlde okuma tanımı gereği boştur ve yanlış güvence verir). Yaklaşan işler aralık ile bugün ve sonrasında terminli açık işlerin kesişimidir ve gerçek
   alt sınır yanıtta söylenir. Dönem desteklemeyen portföy/iş yükü araçları yerine mevcut tarihli görev
   analitiği kullanılır; SQL yetki kapsamı genişlemez.
 - Takipte her eksik tarih sınırı ayrı devralınır. `relativeWindow:today|next_7_days` mutlak tarihle birlikte

@@ -156,9 +156,11 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   // En çok iki farklı tür; eski chart dizisi de aynı kapalı doğrulamadan geçer.
   // Zayıf model diziyi JSON metni olarak da yazar (`"[\"donut\", \"stacked\"]"`): iç içe alanlardaki gibi yalnızca geçerli
   // JSON dizisi çözülür; anlam yorumlanmaz, tür denetimi aynen uygulanır.
+  // İlk yakalama hatalı grafiklerde niyeti, sonraki yakalama geçerli grafiklerin kanonik yazımını korur.
   onDecoded(plan);
   let charts = null;
   const chartList = decodedJson(plan.charts ?? plan.chart);
+  const explicitCharts = plan.charts != null || Array.isArray(chartList);
   if (plan.charts != null && (!Array.isArray(chartList) || plan.chart != null && plan.chart !== chartList[0])) throw invalidArguments(['$.charts:enum']);
   if (Array.isArray(chartList)) {
     const list = chartList;
@@ -168,6 +170,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
       if (!charts) delete plan.charts;
     } else throw invalidArguments([plan.charts != null ? '$.charts:enum' : '$.chart:enum']);
   }
+  onDecoded(plan);
   if (Array.isArray(plan.additionalRequests) && !plan.additionalRequests.length) delete plan.additionalRequests;
   // Boş istek nesnesi analiz özetinin yanında anlam taşımaz (zayıf model şablonu doldurur).
   if (plan.analysis && plan.request && typeof plan.request === 'object' && !Array.isArray(plan.request) && !Object.keys(plan.request).length) delete plan.request;
@@ -223,7 +226,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const chart = base.chart || (follow && visual && !declined ? previousAnalysis.chart : null) || null;
     const table = base.table === true || Boolean(follow && previousAnalysis.table && plan.table !== false);
     const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
-    const requested = visual ? base.charts || (follow && (!base.chart || base.chart === previousAnalysis.chart) ? previousAnalysis.charts : null) : null;
+    const requested = visual ? base.charts || (!explicitCharts && follow && (!base.chart || base.chart === previousAnalysis.chart) ? previousAnalysis.charts : null) : null;
     const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested });
     return { plan: { ...base, ...(visual ? { visual: true } : declined ? { visual: false } : {}), ...(chart ? { chart } : {}), ...(requested ? { charts: requested } : {}),
       ...(table ? { table: true } : {}), analysis, request,

@@ -542,9 +542,9 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   }
   // Aşama F: bölümler arası bulgu girişi yoksa çok bölümlü analitik özet bir çerçeve cümlesiyle açılır (olgu taşımaz; Kısa
   // yanıtta yoktur). Adlar sunucunun çözdüğü öznelerdir (kullanıcının yazımı değil).
-  const subjectNames = (key) => [...new Set(parts.flatMap((part) => (part.presentation?.facts || []).map((item) => item.fact?.semantic?.filters)
+  const subjectNames = (key) => [...new Map(parts.flatMap((part) => (part.presentation?.facts || []).map((item) => item.fact?.semantic?.filters)
     .filter((filters) => filters && (key === 'project' ? filters.projectId && typeof filters.project === 'string' : filters.assignee === 'person' && filters.personSicil != null && typeof filters.person === 'string' && filters.person.trim() && filters.person.trim() !== 'Seçilen kişi'))
-    .map((filters) => filters[key])))].slice(0, 2);
+    .map((filters) => [key === 'project' ? String(filters.projectId).toLowerCase() : String(filters.personSicil), filters[key]]))).values()].slice(0, 2);
   const framing = analyst && outline && !synthesis?.intro && contentParts.size >= 1 && !['previous', 'row'].includes(outline.scope)
     ? framingSentence({ scope: outline.scope, level: outline.level || null, focus: outline.focus || [], projects: subjectNames('project'), people: subjectNames('person'), withSelf: outline.withSelf === true, within: outline.within === true, locale })
     : null;

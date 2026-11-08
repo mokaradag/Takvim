@@ -26,7 +26,7 @@ grafik, bulgu, sonuç paragrafı, çağrı sayısı) ölçer; yazım kalitesi te
 
 | Kod | Kök neden | Etkilenen sorular | Düzeltme |
 | --- | --- | --- | --- |
-| K1 | Bildirilen yönlerin fiziksel okuması 3 ile sınırlıydı; dört yönlü yönetici soruları ve iki özne × üç yön karşılaştırması altın planla bile reddediliyordu | 2, 5, 11, 17, 20, 40 | Kabul sınırı mevcut fiziksel üst sınır (4); model şeması değişmedi |
+| K1 | Bildirilen yönlerin fiziksel okuması 3 ile sınırlıydı; dört yönlü yönetici soruları ve iki özne × üç yön karşılaştırması altın planla bile reddediliyordu | 2, 5, 11, 17, 20, 40 | Model görünür `focus.maxItems` ve sunucu kabul sınırı 3'ten 4'e çıkarıldı; mevcut fiziksel okuma üst sınırı (4) korundu |
 | K2 | Gelecekteki dönem gecikmiş iş okumasına da uygulanıyordu (tanımı gereği boş: "gecikmiş görev yok" yanlış güvencesi; mevcut bir sınama bu yanlışı zorunlu ifade olarak kilitlemişti) | 3, 10, 16, 24, 38 | Gecikme bugüne göre ölçülür; gelecek dönem yalnızca gecikme okumasından çıkarılır |
 | K3 | Özetten açılan çok bölümlü planın tur bütçesi sabit 4'tü; ad çözümü + okuma bölüm başına iki tur harcadığından üçüncü bölüme tur kalmıyordu (iki kişi karşılaştırması kısmi kalıyordu; `main` üzerinde de yeniden üretildi) | 11, 34 | İlk kabul edilen analitik planda bölüm başına ad çözümü ve okuma hakkı (en çok 8 tur), yeniden başlangıçta kümülatif sayım; toplam çağrı/SQL/süre sınırları değişmedi |
 | K4 | Tek grafik türü temsil ediliyordu | 39 | En çok iki tür (dizi) kabul edilir, her türün okuması ve aday yeri ayrılır |

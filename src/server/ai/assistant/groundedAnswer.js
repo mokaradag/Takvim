@@ -38,6 +38,7 @@ import { expandedAnswerDetail, normalizeAnswerDetail } from '../../../domain/ai/
 import { ANALYSIS_CONTEXT_VERSION, analysisContextSummary, normalizeAnalysisContext, normalizePendingAnalysis, withPendingAnalysis } from '../../../domain/ai/analysisContext.js';
 import { composeGroundedAnswer, compositionWindowMs } from './answerComposition.js';
 import { plannerCandidateNote } from './groundedPrompt.js';
+import { addDays } from '../tools/rota/taskFacts.js';
 
 /**
  * Rota verisine dayanan yanıtın SINIRLI döngüsü.
@@ -1560,17 +1561,25 @@ function compositionInput(turn, verdict) {
   // Analiz takibinde (önceki özneyle süren ya da eylem bildiren) önceki kullanıcı sorusu anlatımın bağlamıdır: "Neden?" neyin
   // nedenini sorduğunu kullanıcının kendi önceki sorusundan bilir. Önceki asistan metni hiçbir zaman taşınmaz.
   const intent = turn.presentationIntent?.analysis;
+  const followScope = Boolean(intent && ['previous', 'row'].includes(intent.scope));
+  const rowRequest = intent?.scope === 'row' ? answers.find((answer) => answer.request)?.request : null;
+  const rowScope = rowRequest?.entities?.some((entity) => entity.type === 'person') ? 'person'
+    : rowRequest?.filters?.assignee === 'me' ? 'self' : rowRequest?.filters?.assignee === 'team' ? 'team'
+      : turn.previousAnalysis?.rows?.[(intent?.rows?.[0] || 1) - 1]?.type;
+  const outlineScope = !followScope ? intent?.scope : intent.scope === 'previous' ? turn.previousAnalysis?.scope : rowScope;
+  const relativeWindow = turn.presentationIntent?.relativeWindow;
+  const outlineWindow = relativeWindow && relativeWindow !== 'all_time'
+    ? { dateFrom: turn.context.today, dateTo: relativeWindow === 'today' ? turn.context.today : addDays(turn.context.today, 6) }
+    : turn.presentationIntent?.window || {};
   const analysisFollowUp = Boolean(intent && (['previous', 'row'].includes(intent.scope) || intent.act) && turn.previousAnalysis);
   const previousQuestion = continues || analysisFollowUp ? turn.question.previous : null;
   return { parts, missing, notes, locale: turn.locale, question: turn.question.text, previousQuestion,
     today: turn.context.today, populations: populationSizes(turn, answers), followUp: intent?.act ? { act: intent.act } : null,
     // Çerçeve cümlesi için özetin kapsamı ve yönleri (olgu değil; adlar kanıttan alınır).
-    outline: intent ? { scope: ['previous', 'row'].includes(intent.scope)
-      ? intent.scope === 'previous' ? turn.previousAnalysis?.scope : turn.previousAnalysis?.rows?.[(intent.rows?.[0] || 1) - 1]?.type
-      : intent.scope, level: intent.level || turn.previousAnalysis?.level || null, focus: [...intent.focus], withSelf: intent.withSelf === true,
-      ...(turn.presentationIntent?.window || {}),
+    outline: intent ? { scope: outlineScope, level: intent.level || (rowRequest ? rowRequest.filters?.teamLevel : followScope ? turn.previousAnalysis?.level : null) || null,
+      focus: [...intent.focus], withSelf: intent.withSelf === true, ...outlineWindow,
       within: answers.some((answer) => answer.request?.entities?.some((entity) => entity.type === 'project'))
-        && !['project', 'projects'].includes(intent.scope === 'previous' ? turn.previousAnalysis?.scope : intent.scope) } : null,
+        && !['project', 'projects'].includes(outlineScope) } : null,
     // Analitik özet olmayan çok bölümlü yanıtın açılışı için bölüm konuları (araç konusunun adı; olgu değil).
     topics: intent ? null : new Map(answers.filter((answer) => answer.verdict.kind === 'grounded')
       .map((answer) => [answer.index + 1, plannerTopicLabel(getRotaTool(answer.request?.population?.tool)?.topic, turn.locale)]).filter(([, label]) => label)) };
@@ -1654,7 +1663,7 @@ export async function presentVerdict(turn, verdict, compose) {
       ...(rendered.suppressed ? { suppressed: rendered.suppressed } : {}), tables: rendered.tables, notes: rendered.notes, titled: rendered.titled, ...(rendered.findings ? { findings: rendered.findings } : {}) };
     const laidOut = { ...verdict, normalized: presentationNotes(rendered, [...input.notes, ...chartTypeNote(turn, composition, rendered)]) };
     // Analitik düzen grafiksiz kurulduysa açık grafik isteği yine sessizce düşmez.
-    return visual && !rendered.charts && !turn.trace.presentation?.chartTypeUnavailable ? withChartNote(turn, laidOut) : laidOut;
+    return visual && !rendered.charts && !turn.trace.presentation?.chartTypeUnavailable ? withChartNote(turn, laidOut, rendered.closing) : laidOut;
   };
   if (route === 'server') return serverLayout(compose ? 'DISABLED' : 'NO_MODEL');
   if (!hasCompositionChoice(composition)) {
@@ -1692,7 +1701,7 @@ export async function presentVerdict(turn, verdict, compose) {
   turn.renderedRowParts = result.rowParts;
   turn.renderedEvidence = result.citedIds;
   const composed = { ...verdict, normalized: presentationNotes(result, [...input.notes, ...chartTypeNote(turn, composition, result)]) };
-  return visual && !result.charts && !turn.trace.presentation?.chartTypeUnavailable ? withChartNote(turn, composed) : composed;
+  return visual && !result.charts && !turn.trace.presentation?.chartTypeUnavailable ? withChartNote(turn, composed, result.closing) : composed;
 }
 
 /** Sunucu notları kanıtlı sonuç veya sonraki adım bloğundan önce yerleşir. */
@@ -1718,12 +1727,12 @@ export function chartTypeNote(turn, composition, rendered) {
 }
 
 /** Açık görselleştirme isteği doğrulanmış veriden güvenle karşılanamadıysa kısa sunucu notu (sessizce yok sayılmaz). */
-function withChartNote(turn, verdict) {
+function withChartNote(turn, verdict, closing = null) {
   if (verdict.kind !== 'grounded' && !(verdict.kind === 'unavailable' && verdict.citedIds?.length)) return verdict;
   turn.trace.presentation = { ...(turn.trace.presentation || { mode: 'narrative' }), chartUnavailable: true };
   const types = turn.presentationIntent?.charts || (turn.presentationIntent?.chart ? [turn.presentationIntent.chart] : []);
   const notes = types.length ? types.map((type) => renderChartUnavailable({ type, locale: turn.locale })) : [renderChartUnavailable({ locale: turn.locale })];
-  return { ...verdict, normalized: [verdict.normalized, ...notes].join('\n\n') };
+  return { ...verdict, normalized: presentationNotes({ text: verdict.normalized, closing }, notes) };
 }
 
 /** Zayıf anlatımın yapısal hatası Derin'e ancak devir kurulmuşsa, tur henüz devretmediyse ve süre yetiyorsa gider. */

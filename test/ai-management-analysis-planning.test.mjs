@@ -154,6 +154,12 @@ test('karşılaştırmanın eşdeğer skaler okumaları birleşir; istenen hiçb
     assert.ok(evidence.some((row) => !row.data.groupBy && ['open', 'overdue', 'dueNext7Days'].every((key) => Number.isInteger(row.data.totals?.[key]))),
       'aynı öznenin iş yükü, gecikme ve yaklaşan toplamları kanıtta bulunmalı');
   }
+  const view = result.compositionViews.at(-1);
+  for (const [name, open, overdue, soon] of [['Ayşe Yılmaz', 6, 3, 1], ['Zeynep Kaya', 2, 1, 1]]) {
+    assert.ok(view.details.some((detail) => detail.text === `**${name}** sorumluluğunda **${open}** açık, **${overdue}** gecikmiş ve **${soon}** yedi gün içinde terminli görev bulunuyor.`),
+      'koşulsuz ham toplamlar değil, istekten seçilip düzen sayfasına aktarılan ölçüler doğrulanır');
+    assert.ok(view.tables.some((table) => table.criteria.includes(name) && ['Açık görev', 'Gecikmiş görev', 'Tamamlanan görev'].every((label) => table.columns.some((column) => column.label === label))));
+  }
   const parts = expand(analysis);
   for (const name of analysis.names) assert.ok(parts.some((item) => item.population.groupBy === 'project' && item.entities.some((entity) => entity.text === name)));
   assert.ok(parts.some((item) => ['tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'].every((metric) => item.metrics.includes(metric))));

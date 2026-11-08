@@ -137,6 +137,27 @@ test('gelecek dönem baskısı: dönemle okunan proje grupları ile tam gecikmi�
   assert.match(synthesisNarrative([future], { locale: 'tr' }).intro.markdown, / ile \*\*13 Ekim 2026\*\* arasında teslimatı olan \*\*3\*\* projenin \*\*2'sinde\*\* bugün gecikmiş iş de var/);
 });
 
+test('gelecek dönem baskısı kişi nüfusunu ve adaş projelerin doğrulanmış kodlarını korur', () => {
+  for (const population of [{ assignee: 'me' }, { assignee: 'person', personSicil: 1, person: 'Ayşe' }, { assignee: 'team', teamLevel: 'department' }]) {
+    const groups = ['ORT-A · Ortak', 'ORT-B · Ortak'].flatMap((label, index) => {
+      const key = `p${index + 1}`;
+      const semantic = { tool: 'rota_task_analytics', groupBy: 'project', group: { key, label }, row: { identity: key, collectionSize: 2 },
+        filters: { ...population, dateFrom: TODAY, dateTo: '2026-10-06', statuses: [] } };
+      return [fact('R1', `data.groups.${index}.label`, label, semantic), fact('R1', `data.groups.${index}.open`, 2, semantic)];
+    });
+    const overdue = taskList('overdue', [['A işi', 3, 'Ortak', 'p1'], ['B işi', 2, 'Ortak', 'p2']]).map((item) => ({ ...item,
+      fact: { ...item.fact, semantic: { ...item.fact.semantic, filters: { ...item.fact.semantic.filters, ...population } } } }));
+    const finding = analyticalFindings([part(0, groups), part(1, overdue)]).find((item) => item.kind === 'windowPressure');
+    assert.ok(finding);
+    assert.deepEqual(finding.names, ['ORT-A · Ortak', 'ORT-B · Ortak']);
+    assert.equal(finding.filters.assignee, population.assignee);
+    const text = synthesisNarrative([finding]).intro.plain;
+    assert.match(text, population.assignee === 'me' ? /kendi işleriniz/ : population.assignee === 'person' ? /Ayşe/ : /bölümünüzün işleri/);
+    assert.match(text, /ORT-A · Ortak/);
+    assert.match(text, /ORT-B · Ortak/);
+  }
+});
+
 test('anlatım: giriş gövdenin sayılarını yinelemez, tek kanıtlı öncelik de sonuçtur, kısa yanıtta en önemli öncelik korunur, söylenen değer yinelenmez', () => {
   const parts = [part(0, portfolio(PROJECTS)), part(1, taskList('overdue', [['Yük testi', 21, 'Altyapı', 'p1'], ['Arayüz', 4, 'Mobil', 'p2']], { total: 8 }), { metric: 'task.overdueDays', order: 'desc' }),
     part(2, taskList('upcoming', [['Ağ', '2026-10-01', 'Portal', 'p5'], ['Test', '2026-10-03', 'Portal', 'p5']], { evidenceId: 'R3', total: 11 }), { metric: 'task.targetFinish', order: 'asc' })];

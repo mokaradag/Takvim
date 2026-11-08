@@ -557,7 +557,7 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
     const timelineReady = (part) => part.population?.tool === 'rota_task_search' && part.metrics?.includes('task.targetFinish')
       && (!futureWindow(analysis, today) || part.filters?.dateFrom === analysis.dateFrom && part.filters?.dateTo === analysis.dateTo);
     const missingShape = chart === 'donut' && !parts.some((part) => ['status', 'priority', 'deadline', 'project'].includes(part.population?.groupBy)) ? 'status'
-      : chart === 'timeline' && !parts.some(timelineReady) ? 'upcoming' : null;
+      : chart === 'timeline' && !parts.some(timelineReady) ? (!futureWindow(analysis, today) && declared.includes('overdue') ? 'overdue' : 'upcoming') : null;
     const needed = chart === 'stacked' ? null : missingShape || chartFocus(analysis, declared, chart);
     if (needed) {
       let produced = null;

@@ -264,7 +264,9 @@ yazma işlemi (Aşama 5).
    görünür kılar ("Şu anda N gecikmiş görev var").
 4. **Okuma bütçesi toleransı**: Modelin bildirdiği dört yön, fiziksel okuma sayısı mevcut üst sınıra
    (`ANALYSIS_LIMITS.maxParts` = 4) sığıyorsa düzeltme turu açılmadan kabul edilir. Model görünür şema ve sunucu doğrulayıcısı
-   aynı dört yön sınırını sunar; fiziksel okuma ve toplam tur bütçesi büyümez. Şema sınırını aşan fazladan yönler onarılabilir; fiziksel bütçeye sığmayan
+   aynı dört yön sınırını sunar; fiziksel okuma üst sınırı değişmez. Analitik planın bölüm başına ad çözümü ve okuma payı,
+   varsayılan dört tur yerine üç bölümde altı, dört bölümde en çok sekiz turdur; yeniden başlangıçlarda tüketim kümülatif sayılır.
+   Toplam araç çağrısı, SQL ve süre sınırları korunur. Şema sınırını aşan fazladan yönler onarılabilir; fiziksel bütçeye sığmayan
    karşılaştırmada bildirilen yönler düşürülmez, kullanıcıdan öncelik istenir.
 5. **İki grafik türü toleransı**: `charts` alanında en çok iki farklı bilinen tür şemada bildirilir (model sözleşmesindeki `chart` tek türdür; çoklu türler `charts` ile bildirilir); her
    türün gerektirdiği okuma bütçeye sığıyorsa eklenir; çizilemeyen tür için türe özgü not verilir.
@@ -540,8 +542,9 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
    açık olsun.
 2. Kabul matrisindeki 40 sorunun **özel** (gerçek adlı) yazımını, sürüm denetimi dışındaki listeden **aynı sırayla**
    ve her soruyu **yeni konuşmada** sorun; yanıt gelmeden sonrakini göndermeyin.
-3. Her soru için konsoldaki `ai.grounded.turn` satırının ilişki kimliğini (son 8 karakter) soru numarasıyla bir
-   tabloya yazın. Böylece soru ↔ günlük eşlemesi görsel sıradan değil kimlikten kurulur.
+3. Her sorunun ağ yanıtındaki `x-mergen-rota-correlation-id` başlığını alın ve JSON günlüğünde aynı ilişki kimliğine
+   sahip `ai.grounded.turn` kaydını bulun. Konsoldaki son 8 karakterli kimliği bu kayıttan doğrulayıp soru numarasıyla
+   tabloya yazın; eşzamanlı başka kullanıcıların kayıtları görsel sıraya göre seçilmez.
 4. JSON kaydında `code: AI_EMPTY_COMPLETION` arayın; `context.usage.completion` çıktı belirteci sayısıdır.
    `null` sayının bildirilmediğini gösterir, sıfır sayılmaz. `MERGEN_ROTA_LOG_FORMAT=both` kullanılırsa ayrıca
    `AI WARN empty completion` ve `out N tok` özet satırı görülebilir.
@@ -565,6 +568,7 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
 | 2026-11-07 | Bileşik risk puanı yok | Opak ağırlıklar yerine adı verilen göstergeler |
 | 2026-11-07 | Gelecek pencere gecikmiş işi daraltmaz | Tanımı gereği boş okuma kullanıcıya yanlış güvence verir |
 | 2026-11-07 | Dört yön toleransı, model şeması değişmeden | Fiziksel sınır (4) korunur; önek önbelleği ve kanonik kapı istikrarı |
+| 2026-11-08 | Model şeması ve sunucu aynı dört yönü sunar | Fiziksel okuma sınırı (4) ve toplam bütçeler korunur; önceki şema eşitliği ölçümü tarihseldir |
 | 2026-11-07 | Çoklu ufuk, dönem karşılaştırması, tamamlanma eğilimi → H; üç düzeyli soru → G | Tarihsel tamlık ve çok kapsamlı yetki ayrı tasarım gerektirir |
 
 ---
