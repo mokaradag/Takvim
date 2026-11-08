@@ -1125,8 +1125,8 @@ export function defaultComposition(composition) {
   if (!blocks.length || blocks.length > limits.maxBlocks) return null;
   const checked = validateComposition(composition, { blocks });
   if (!checked.ok) return null;
-  // Aşama F: ikinci istenen grafik türü sunucu düzeninde de aynı kuralla eklenir.
-  return render.visual && (render.chartTypes || []).length > 1 ? ensureChart(composition, checked) : checked;
+  // Sunucu düzeni de bütün istenen türleri ve aynı türdeki özne zaman çizelgelerini tamamlar.
+  return render.visual ? ensureChart(composition, checked) : checked;
 }
 
 /**

@@ -535,7 +535,7 @@ test('dağılımlar aday bütçesini doldursa da karşılaştırma ve ölçü ad
   assert.ok(composition.render.charts.size <= COMPOSITION_LIMITS.maxCharts);
 });
 
-test('iki kişinin gecikme zaman çizelgesi her iki yetkili nüfusu da gösterir', async (t) => {
+for (const composition of [true, false]) for (const detail of ['short', 'balanced', 'detailed']) test(`iki kişinin gecikme zaman çizelgesi her iki yetkili nüfusu da gösterir: ${composition ? 'model' : 'sunucu'}, ${{ short: 'kısa', balanced: 'dengeli', detailed: 'ayrıntılı' }[detail]}`, async (t) => {
   const { phase4eConversation, renderedCharts } = await import('./helpers/phase4eScenario.mjs');
   const { rotaToolSeed, TASKS, AYSE, ZEYNEP } = await import('./helpers/aiToolFixtures.mjs');
   const seed = rotaToolSeed();
@@ -543,11 +543,90 @@ test('iki kişinin gecikme zaman çizelgesi her iki yetkili nüfusu da gösterir
   seed.tasks = Array.from({ length: 4 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 700).padStart(12, '0')}`,
     Title: `Kıyas görevi ${index}`, TargetFinish: `2026-09-${String(20 + index).padStart(2, '0')}` }));
   seed.taskAssignees = seed.tasks.map((task, index) => ({ TaskId: task.TaskId, Sicil: index < 2 ? AYSE : ZEYNEP }));
-  const { ask } = phase4eConversation(t, { seed });
-  const result = await ask({ text: 'Ayşe Yılmaz ile Zeynep Kaya gecikmelerini zaman çizelgesiyle karşılaştır', plan: { intent: 'rota', language: 'tr', chart: 'timeline', analysis: { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['overdue'] } } });
+  const { ask } = phase4eConversation(t, { seed, composition });
+  const result = await ask({ text: 'Ayşe Yılmaz ile Zeynep Kaya gecikmelerini zaman çizelgesiyle karşılaştır', plan: { intent: 'rota', language: 'tr', chart: 'timeline', analysis: { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['overdue'] } } }, { detail });
   const charts = renderedCharts(result.answer.content).filter((chart) => chart.type === 'timeline');
   assert.equal(charts.length, 2, result.answer.content);
   assert.deepEqual(new Set(charts.flatMap((chart) => chart.items.map((item) => item.label))), new Set(seed.tasks.map((task) => task.Title)));
+  assert.ok(charts.every((chart) => chart.evidence.length && chart.items.length === 2));
+  for (const chart of charts) {
+    const evidence = result.evidence.find((row) => chart.evidence.includes(row.evidenceId) && row.tool === 'rota_task_search');
+    const sicil = evidence?.data.filters.personSicil;
+    assert.ok([AYSE, ZEYNEP].includes(sicil));
+    const expected = seed.tasks.filter((task) => seed.taskAssignees.some((assignment) => assignment.TaskId === task.TaskId && assignment.Sicil === sicil));
+    assert.deepEqual(chart.items.map((item) => item.label).sort(), expected.map((task) => task.Title).sort());
+  }
+  assert.doesNotMatch(result.answer.content, /zaman çizelgesi gösterilmedi/);
+});
+
+test('tarih biçimli kanıt etiketleri birebir kabul edilir; yeni tarih ve sayılar reddedilir', () => {
+  for (const [locale, label, other] of [['tr', '1 Ekim 2026', '1 Kasım 2026'], ['en', '1 October 2026', '1 November 2026'], ['tr', '2026-10-01', '2026-11-01']]) {
+    assert.deepEqual(unsupportedNumbers(`**${label}** 【R1】`, [label], locale), []);
+    assert.ok(unsupportedNumbers(other, [label], locale).length);
+    assert.deepEqual(unsupportedNumbers(`${label}: 999 görev`, [label], locale), ['999']);
+  }
+});
+
+test('kilometre taşı dışlaması farklı nüfusları karşılaştırılabilir yapmaz', () => {
+  for (const milestone of [false, true]) {
+    const facts = [total('R1', 1, 'open', 8, { milestone }), total('R2', 2, 'open', 2)];
+    assert.equal(analyticalFindings([part(facts)]).some((item) => item.kind === 'subjectComparison'), false);
+  }
+  const facts = [total('R1', 1, 'open', 8, { createdByMe: false }), total('R2', 2, 'open', 2, { milestone: null })];
+  assert.ok(analyticalFindings([part(facts)]).some((item) => item.kind === 'subjectComparison'));
+});
+
+for (const locale of ['tr', 'en']) test(`durum nitelendirmesi büyük sayıları yanıtın diliyle doğrular: ${locale}`, async () => {
+  const { turnViolations } = await import('./helpers/phase4eScenario.mjs');
+  const label = locale === 'en' ? 'To do' : 'Yapılacak';
+  const formatted = locale === 'en' ? '1,234,567' : '1.234.567';
+  const wrong = locale === 'en' ? '1.234.567' : '1,234,567';
+  const result = { locale, log: [], analysisContext: { focus: ['status'] }, evidence: [{ evidenceId: 'R1', tool: 'rota_task_analytics', data: { groupBy: 'status', groups: [{ label, count: 1234567 }] } }], answer: {} };
+  for (const table of [false, true]) {
+    const render = (count) => table ? `| Grup | Kayıt sayısı |\n| --- | ---: |\n| ${label} | ${count} |\n\n_Kaynak:_ 【R1】` : `- ${label} — ${count} ${locale === 'en' ? 'tasks' : 'görev'} 【R1】`;
+    result.answer.content = render(formatted);
+    assert.deepEqual(turnViolations(result, { focus: ['status'] }), []);
+    result.answer.content = render(wrong);
+    assert.ok(turnViolations(result, { focus: ['status'] }).includes('durum dağılımı yanıtta eksik'));
+  }
+});
+
+for (const composition of [true, false]) test(`İngilizce durum yanıtının dili nitelendirmeye taşınır: ${composition ? 'model' : 'sunucu'}`, async (t) => {
+  const { phase4eConversation, turnViolations } = await import('./helpers/phase4eScenario.mjs');
+  const { rotaToolSeed, TASKS, AYSE } = await import('./helpers/aiToolFixtures.mjs');
+  const seed = rotaToolSeed();
+  const template = seed.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+  seed.tasks = Array.from({ length: 1201 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 2000).padStart(12, '0')}`,
+    Title: `Durum görevi ${index}`, Status: index === 1200 ? 'done' : 'todo' }));
+  seed.taskAssignees = seed.tasks.map((task) => ({ TaskId: task.TaskId, Sicil: AYSE }));
+  const { ask } = phase4eConversation(t, { seed, composition });
+  const result = await ask({ text: 'Show the status of my tasks', plan: { intent: 'rota', language: 'en', analysis: { scope: 'self', focus: ['status'] } } });
+  assert.equal(result.locale, 'en');
+  assert.match(result.answer.content, /1,200/);
+  assert.deepEqual(turnViolations(result, { focus: ['status'], finish: 'stop' }), [], result.answer.content);
+});
+
+for (const charts of [['bar', 'pie'], JSON.stringify(['bar', 'pie'])]) test(`birincil alanı olmayan grafik listesinin onarımı geçerli ilk türü korur: ${Array.isArray(charts) ? 'dizi' : 'JSON metni'}`, async (t) => {
+  const { phase4eConversation, renderedCharts } = await import('./helpers/phase4eScenario.mjs');
+  const analysis = { scope: 'self', focus: ['status'] };
+  const queue = [{ intent: 'rota', language: 'tr', charts, analysis }, { intent: 'rota', language: 'tr', charts: ['bar', 'donut'], analysis }];
+  const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
+  const result = await ask({ text: 'görev durumumu çubuk ve halka grafikle göster' });
+  assert.equal(result.inputs.length, 2);
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.deepEqual(new Set(renderedCharts(result.answer.content).map((chart) => chart.type)), new Set(['bar', 'donut']));
+  assert.deepEqual(result.analysisContext.charts, ['bar', 'donut']);
+});
+
+for (const change of [{ chart: 'line', charts: ['line', 'donut'] }, { analysis: { scope: 'all', focus: ['status'] } }]) test(`grafik listesi onarımı geçerli türü veya kapsamı değiştiremez: ${change.chart ? 'tür' : 'kapsam'}`, async (t) => {
+  const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
+  const analysis = { scope: 'self', focus: ['status'] };
+  const queue = [{ intent: 'rota', language: 'tr', charts: ['bar', 'pie'], analysis }, { intent: 'rota', language: 'tr', charts: ['bar', 'donut'], analysis, ...change }, { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
+  const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
+  const result = await ask({ text: 'görev durumumu çubuk ve halka grafikle göster' });
+  assert.equal(result.inputs.length, 3);
+  assert.equal(result.answer.finishReason, 'clarification');
+  assert.deepEqual(result.log, []);
 });
 
 test('durum tablosundan türetilebilir olması söylenmemiş tamamlanma oranını düşürmez', async (t) => {

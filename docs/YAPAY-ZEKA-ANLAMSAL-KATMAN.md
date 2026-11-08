@@ -2203,7 +2203,7 @@ Güven sınırı değişmez: kimlik, yetki, SQL, hesap, kanıt seçimi ve açık
 | Dengeli ≈ Ayrıntılı | Ayrıntı sözleşmesi yalnızca bölüm başına önerme sayısıydı; okuma, sayfa sınırı, yapı ve çıktı bütçesi aynıydı | Ayrıntı sözleşmesi okuma genişliği + yapı (§15.4) |
 | "Neden?", "grafikle göster" göndergesini yitiriyor | Takip durumu yoksul: `previous` kapsamında model yönleri/ufku/görseli YENİDEN yazmak zorundaydı; konuşma eylemi yoktu; açıklama turu özgün niyeti saklamıyordu | Kanonik takip durumu (§15.3) |
 | Grafik isteği sonuçsuz | Görsel niyet yalnızca boolean; tür taşınmıyordu; yedek seçim yalnızca ilk bölüme ve çoğu kez gösterge kartına bakıyordu; takipte görsel istek sürmüyordu | Uçtan uca görsel niyet (§15.5) |
-| Zayıf model planı onarılamıyor | Haiku `focus` listesini 4–5 öğeyle dolduruyor; onarım pini yön değişikliğini yasakladığından geçerli düzeltilmiş plan da reddediliyordu | Şema sınırı aşımında modelin KENDİ yönlerinin sıralı alt kümesine daraltma (§15.3) |
+| Zayıf model planı onarılamıyor | Haiku `focus` listesini 4–5 öğeyle dolduruyor | Dört yön fiziksel bütçeye sığarsa kabul; şema veya okuma sınırı aşılırsa veri okumadan kullanıcıdan öncelik isteme (§15.3) |
 | Eksik nüfusta "dengeli/en yoğun" izlenimi | Tamlık bilgisi yalnızca mekanik ayrıntı satırıydı ("Atama dağılımı tam: Hayır") | Zorunlu sunucu çekincesi (§15.2) |
 
 ### 15.2 Kanıta bağlı anlatım yüzeyi — `src/domain/ai/groundedProse.js`
@@ -2253,9 +2253,10 @@ bütün ekip için denge, yoğunlaşma veya en yoğun kişi sonucu çıkarılmaz
   dönüşmez.
 - **Yeniden yetki:** bağlam yalnızca göndergedir. Her takip, kimlikleri güncel yetkiyle yeniden okur; yönetim kapsamı
   kaldırılmış kullanıcının `previous` takibi veri okumadan "yönetim kapsamınız bulunmuyor" yanıtını alır.
-- **Onarım daraltması:** şema sınırını aşan yön listesi (`$.analysis.focus:maxItems`) onarımda yalnızca modelin KENDİ
-  yönlerinin sıralı, boş olmayan alt kümesine daraltılabilir; kapsam/ad/ufuk değişemez, yeni yön eklenemez. İstek
-  bütçesi aşımı (karşılaştırma) eskisi gibi daraltılamaz.
+- **Bütçe açıklaması:** beş farklı yön gibi şema sınırını aşan listelerde (`$.analysis.focus:maxItems`) veya fiziksel
+  okuma bütçesi aşımında (`$.analysis.focus:requestBudget`) yönler sessizce daraltılmaz. Veri okunmadan
+  `analysis_budget` açıklamasıyla kullanıcıdan öncelik istenir; kapsam, adlar ve ufuk korunur. Kabul edilen planın
+  asgari çağrı ve tur maliyeti kalan bütçeye sığmalıdır.
 
 ### 15.4 Ayrıntı sözleşmesi — `answerDetail.js`
 
@@ -2301,9 +2302,9 @@ dışarıda bırakamaz).
 - **Önceki özne adları**: güvenilir ad-kimlik bağı olmadan özne sayısı eşitliği eşdeğerlik değildir. Güvenilmeyen ad mevcut ret/onarım/açıklama yolunda kalır; sunucu onu sessizce `previous` ile değiştirmez.
 - **Yapısal normalleştirme** (dil yorumu değil): sözlük değerinin tekil/çoğul yazımı (`deadline` → `deadlines`); sözlük dışı
   eylem düşer; ad listeli `projects` → `project`; satır listeli `previous` → `row`; özetin içine yazılan `chart`/`table`
-  plan düzeyine taşınır; görselin yeri (özet/plan) onarımda anlam değişikliği sayılmaz; şema sınırını aşan yön listesi
-  modelin kendi yönlerinin sıralı alt kümesine daraltılabilir; sunucunun zorunlu eklediği okuma modelin 3 yönlük
-  bütçesinden düşmez.
+  plan düzeyine taşınır; görselin yeri (özet/plan) onarımda anlam değişikliği sayılmaz. Şema veya fiziksel okuma
+  sınırı aşılırsa yön düşürülmeden kullanıcıdan öncelik istenir. Sunucunun zorunlu eklediği okumalar da fiziksel
+  bütçeye dâhildir; kabul edilen planın asgari çağrı ve tur maliyeti kalan bütçeye sığmalıdır.
 - **Ayrıntılı bölümlüdür**: sayfa `sections` ana hattını taşır; her bölüm sunucunun başlığıyla açılır (doğal başlığı
   olmayan bölüm kanıtının konu adını alır), model her bölüm için ayrı paragraf yazar. Aynı araç iki bölümde farklı
   biçimde döndüğünde (portföy başlık ölçüleri ve proje karşılaştırma tablosu) başlıklar ayrışır ("Portföy özeti",

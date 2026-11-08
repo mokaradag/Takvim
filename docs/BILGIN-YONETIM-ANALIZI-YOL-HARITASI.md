@@ -266,8 +266,9 @@ yazma işlemi (Aşama 5).
    (`ANALYSIS_LIMITS.maxParts` = 4) sığıyorsa düzeltme turu açılmadan kabul edilir. Model görünür şema ve sunucu doğrulayıcısı
    aynı dört yön sınırını sunar; fiziksel okuma üst sınırı değişmez. Analitik planın bölüm başına ad çözümü ve okuma payı,
    varsayılan dört tur yerine üç bölümde altı, dört bölümde en çok sekiz turdur; yeniden başlangıçlarda tüketim kümülatif sayılır.
-   Toplam araç çağrısı, SQL ve süre sınırları korunur. Şema sınırını aşan fazladan yönler onarılabilir; fiziksel bütçeye sığmayan
-   karşılaştırmada bildirilen yönler düşürülmez, kullanıcıdan öncelik istenir.
+   Toplam araç çağrısı, SQL ve süre sınırları korunur. Beş farklı yön gibi şema sınırını aşan veya fiziksel okuma bütçesine
+   sığmayan planlarda bildirilen yönler daraltılmaz; veri okunmadan `analysis_budget` açıklamasıyla kullanıcıdan öncelik
+   istenir. Kabul edilen planın asgari çağrı ve tur maliyeti kalan bütçeye sığmalıdır.
 5. **İki grafik türü toleransı**: `charts` alanında en çok iki farklı bilinen tür şemada bildirilir (model sözleşmesindeki `chart` tek türdür; çoklu türler `charts` ile bildirilir); her
    türün gerektirdiği okuma bütçeye sığıyorsa eklenir; çizilemeyen tür için türe özgü not verilir.
 6. **Boş tamamlama tanısı**: `AI WARN empty completion` satırı sağlayıcının bildirdiği çıktı belirteci sayısını

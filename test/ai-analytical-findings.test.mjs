@@ -37,6 +37,18 @@ const part = (index, facts, ranking = null) => ({ index, presentation: { facts }
 const kinds = (findings) => findings.map((item) => item.kind);
 const PROJECTS = [['Altyapı', 12, 5, 6], ['Mobil', 3, 1, 1], ['Siber', 3, 1, 1], ['Ambar', 3, 1, 0], ['Portal', 6, 0, 3]];
 
+test('adaş gecikmiş görev sonuçta gün ve proje ile ayırt edilir; benzersiz başlıkta yineleme önlenir', () => {
+  for (const locale of ['tr', 'en']) for (const duplicate of [true, false]) {
+    const facts = taskList('overdue', [['Ortak görev', 21, 'Altyapı', 'p1'], [duplicate ? 'Ortak görev' : 'Diğer görev', 4, 'Mobil', 'p2']]);
+    const findings = analyticalFindings([part(0, facts)]);
+    const conclusion = synthesisNarrative(findings, { locale, said: () => true }).conclusion;
+    assert.deepEqual(conclusion.items[0].evidenceIds, ['R2']);
+    assert.equal(conclusion.plain.includes('21'), duplicate);
+    assert.equal(conclusion.plain.includes('Altyapı'), duplicate);
+    assert.deepEqual(unsupportedNumbers(conclusion.plain, facts.map(({ fact }) => fact.value), locale), []);
+  }
+});
+
 test('tam portföy tablosu: dikkat önceliği, gecikme yoğunlaşması (sunucu payı) ve eşzamanlı baskı', () => {
   const findings = analyticalFindings([part(0, portfolio(PROJECTS))]);
   assert.deepEqual(kinds(findings), ['attentionLeader', 'overdueConcentration', 'simultaneousPressure']);

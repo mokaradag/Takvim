@@ -14,7 +14,7 @@ export function unsupportedNumbers(text, values, locale = 'tr') {
   const allowedDates = new Set(dates.flatMap((date) => [date, formatFactDay(date, locale)]));
   const months = Array.from({ length: 12 }, (_, index) => formatFactDay(`2026-${String(index + 1).padStart(2, '0')}-01`, locale).split(' ')[1]).join('|');
   for (const [date] of plain.matchAll(new RegExp(`\\b(?:\\d{4}-\\d{2}-\\d{2}|\\d{1,2} (?:${months}) \\d{4})\\b`, 'g'))) {
-    if (!allowedDates.has(date) && tokens(date).every((number) => allowed.has(number))) invalid.push(date);
+    if (!allowedDates.has(date) && !values.includes(date) && tokens(date).every((number) => allowed.has(number))) invalid.push(date);
   }
   return invalid;
 }

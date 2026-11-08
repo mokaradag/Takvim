@@ -157,9 +157,11 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   // Zayıf model diziyi JSON metni olarak da yazar (`"[\"donut\", \"stacked\"]"`): iç içe alanlardaki gibi yalnızca geçerli
   // JSON dizisi çözülür; anlam yorumlanmaz, tür denetimi aynen uygulanır.
   // İlk yakalama hatalı grafiklerde niyeti, sonraki yakalama geçerli grafiklerin kanonik yazımını korur.
-  onDecoded(plan);
   let charts = null;
   const chartList = decodedJson(plan.charts ?? plan.chart);
+  // Geçerli ilk tür örtük birincildir; sonraki öğe hatalı olsa da onarım bu tercihi ve görsel niyeti korur.
+  if (plan.charts != null && plan.chart == null && Array.isArray(chartList) && PLAN_CHART_TYPES.includes(chartList[0])) plan = { ...plan, chart: chartList[0] };
+  onDecoded(plan);
   const explicitCharts = plan.charts != null || Array.isArray(chartList);
   if (plan.charts != null && (!Array.isArray(chartList) || plan.chart != null && plan.chart !== chartList[0])) throw invalidArguments(['$.charts:enum']);
   if (Array.isArray(chartList)) {

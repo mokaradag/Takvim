@@ -197,6 +197,7 @@ function listFindings(list) {
     // Tek satırlı kesik sayfada başın tekilliği bilinmez.
     if (head && head.days >= 1 && !tied && (list.complete || valued.length >= 2)) {
       findings.push({ kind: 'longestOverdue', interpretation: 'priority', entity: { type: 'task', name: head.title }, project: typeof head.project === 'string' ? head.project : null,
+        duplicateTitle: list.rows.some((row) => row !== head && row.title === head.title),
         metrics: { days: head.days }, comparison: { population: list.total, basis: list.complete ? 'complete-list' : 'ranking-head' },
         evidenceIds: [list.evidenceId], completeness: list.complete ? 'complete' : 'ranking-head' });
     }
@@ -229,7 +230,7 @@ function listFindings(list) {
 }
 
 /** Değeri olmayan (koşul koymayan) süzgeç alanı. */
-const neutral = (value) => value == null || value === '' || value === 'any' || value === false || (Array.isArray(value) && !value.length);
+const neutral = (value, key) => value == null || value === '' || value === 'any' || (value === false && key !== 'milestone') || (Array.isArray(value) && !value.length);
 const COMPARED_TOTALS = Object.freeze(['overdue', 'open', 'dueNext7Days', 'done', 'total', 'critical']);
 const SUBJECT_KEYS = new Set(['person', 'personSicil', 'project', 'projectId', 'assignee']);
 
@@ -259,7 +260,7 @@ function comparisonFindings(groups) {
       const filters = fact.semantic.filters || {};
       const subject = subjectOf(filters);
       if (!subject) continue;
-      const common = Object.entries(filters).filter(([key, value]) => !subject.own.includes(key) && !neutral(value) && key !== 'project');
+      const common = Object.entries(filters).filter(([key, value]) => !subject.own.includes(key) && !neutral(value, key) && key !== 'project');
       const windowed = match[1] === 'total' && (filters.dateFrom || filters.dateTo)
         && (!filters.dateField || filters.dateField === 'targetFinish')
         && filters.statuses?.length === 2 && filters.statuses.every((status) => OPEN_STATUSES.has(status));
@@ -306,7 +307,7 @@ function windowPressureFindings(tables, lists) {
   // olup olmadığı bilinmez. Bu yüzden kesik listede sayı "en az" olarak söylenir; tam listede kesindir.
   // Yalnızca termin koşulları farklı olabilir; diğer bütün nüfus koşulları birebir aynı kalır.
   const population = (filters) => JSON.stringify(Object.entries(filters).filter(([key, value]) =>
-    !['dateFrom', 'dateTo', 'dateField', 'deadline'].includes(key) && !neutral(value)).sort(([a], [b]) => a.localeCompare(b)));
+    !['dateFrom', 'dateTo', 'dateField', 'deadline'].includes(key) && !neutral(value, key)).sort(([a], [b]) => a.localeCompare(b)));
   const findings = [];
   for (const table of tables) {
     const { dateFrom, dateTo, dateField, statuses } = table.filters;
@@ -359,7 +360,7 @@ export function analyticalFindings(parts) {
     ...(compared.length ? [] : overdueShareFindings(groups))];
   // Aynı varlığın aynı gecikme payı tablo ve listeden iki kez söylenmez.
   const tablePlaces = findings.filter((item) => item.kind === 'overdueConcentration');
-  const population = (filters) => JSON.stringify(Object.entries(filters || {}).filter(([key, value]) => key !== 'deadline' && !neutral(value))
+  const population = (filters) => JSON.stringify(Object.entries(filters || {}).filter(([key, value]) => key !== 'deadline' && !neutral(value, key))
     .map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value]).sort(([a], [b]) => a.localeCompare(b)));
   return Object.freeze(findings.filter((item) => !(item.kind === 'overdueProjectShare' && tablePlaces.some((place) => place.entity.key === item.entity.key
     && place.today === item.today && population(place.filters) === population(item.filters)))).map((item) => Object.freeze(item)));
@@ -520,8 +521,8 @@ function priorityItems(findings, locale, said) {
   const longestItems = findings.filter((item) => item.kind === 'longestOverdue').sort((a, b) => b.metrics.days - a.metrics.days);
   const longest = longestItems[0];
   for (const longest of longestItems) {
-    // Gövde en uzun gecikmeli görevi gün sayısıyla zaten söylediyse öncelik yalnızca adıyla anılır (değer yinelenmez).
-    const detail = said(longest) ? [] : [' (', s(formatCount(longest.metrics.days, locale)), en(locale) ? ' days' : ' gün', ...(longest.project ? [', ', s(longest.project)] : []), ')'];
+    // Adaş görevlerde gün ve proje ayırt edicidir; gövdede söylenmiş olsalar da sonuçta korunurlar.
+    const detail = said(longest) && !longest.duplicateTitle ? [] : [' (', s(formatCount(longest.metrics.days, locale)), en(locale) ? ' days' : ' gün', ...(longest.project ? [', ', s(longest.project)] : []), ')'];
     items.push({ finding: longest, parts: [s(longest.entity.name), en(locale) ? ' — the longest-overdue task' : ' — en uzun süredir geciken görev', ...detail] });
   }
   const focus = findings.find((item) => item.kind === 'attentionLeader') || findings.find((item) => item.kind === 'overdueConcentration' || item.kind === 'overdueProjectShare')

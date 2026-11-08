@@ -60,7 +60,8 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
     state.turns += 1;
     const log = (stack.db.aiToolLog || []).slice(before);
     const evidence = (stack.db.aiMessageEvidence || []).slice(evidenceBefore).map((row) => JSON.parse(row.EvidenceJson));
-    return { done, answer: done.assistantMessage, log, evidence, compositionViews: compositionViews.slice(viewBefore), inputs: inputs.slice(inputBefore), analysisContext: evidence.find((row) => row.analysisContext)?.analysisContext || null };
+    const views = compositionViews.slice(viewBefore);
+    return { done, answer: done.assistantMessage, log, evidence, locale: views.at(-1)?.language || turn.plan?.language || 'tr', compositionViews: views, inputs: inputs.slice(inputBefore), analysisContext: evidence.find((row) => row.analysisContext)?.analysisContext || null };
   }
   return { stack, ask };
 }
@@ -113,22 +114,25 @@ export function turnViolations(result, expect, { live = false } = {}) {
     : !result.log.some((row) => row.query === 'portfolio'))) problems.push('tüm kapsam okumada daraltıldı');
   if (expect.projectIds && JSON.stringify([...new Set(reads.map((row) => row.params.projectId).filter(Boolean))].sort()) !== JSON.stringify([...expect.projectIds].sort())) problems.push('proje kimliği kümesi beklenenle aynı değil');
   if (expect.focus && (!result.analysisContext || expect.focus.some((focus) => !result.analysisContext.focus.includes(focus)))) problems.push('analitik yönler eksik');
-  if (expect.focus?.includes('status') && !['person', 'project'].includes(expect.scope)) {
-    const status = result.evidence?.filter((row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'status') || [];
+  const status = result.evidence?.filter((row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'status') || [];
+  // Dağılım istenmişse kişi/proje kıyası da teslim edilen sayıları kanıtlamalıdır; bağlam ve araç okuması yetmez.
+  if (expect.focus?.includes('status') && (!['person', 'project'].includes(expect.scope) || status.length || expect.chartTypes?.includes('donut'))) {
     if (!status.length) problems.push('durum grubu kanıtı yok');
+    for (const projectId of expect.projectIds || []) if (!status.some((row) => row.data.filters?.projectId === projectId)) problems.push('projenin durum grubu kanıtı yok');
     const lines = content.replaceAll('**', '').split('\n');
     const blocks = parseAssistantMarkdown(content, { rotaData: true });
+    const labels = { todo: ['Yapılacak', 'To do'], in_progress: ['Devam ediyor', 'In progress'], done: ['Tamamlandı', 'Done'] };
     for (const row of status) {
-      const groups = row.data.groups || [];
+      const groups = (row.data.groups || []).map((group) => ({ ...group, label: labels[group.key]?.[result.locale === 'en' ? 1 : 0] || group.label }));
       const delivered = groups.length === 0 ? lines.some((line) => line.includes(`【${row.evidenceId}】`) && /görev(?:iniz)? yok|no (?:matching )?tasks/i.test(line))
         : groups.every((group) => lines.some((line) => {
           const after = line.slice(line.indexOf(group.label) + group.label.length);
           const count = after.match(/^[^\d%]*([\d.,]+)\s+(?:görev|tasks?)\b/)?.[1];
-          return line.includes(group.label) && line.includes(`【${row.evidenceId}】`) && count === formatCount(group.count);
+          return line.includes(group.label) && line.includes(`【${row.evidenceId}】`) && count === formatCount(group.count, result.locale);
         })
         || blocks.some((block, index) => block.type === 'table' && blocks[index + 1]?.source.includes(`【${row.evidenceId}】`)
           && block.source.split('\n').some((line) => line.split('|').map((cell) => cell.trim()).some((cell) => cell === group.label)
-            && line.split('|').map((cell) => cell.trim()).includes(formatCount(group.count))))
+            && line.split('|').map((cell) => cell.trim()).includes(formatCount(group.count, result.locale))))
         || charts.some((chart) => chart.evidence.includes(row.evidenceId) && chart.items?.some((item) => item.label === group.label && item.value === group.count)));
       if (!delivered) problems.push('durum dağılımı yanıtta eksik');
     }

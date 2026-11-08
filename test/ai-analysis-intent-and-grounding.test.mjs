@@ -446,12 +446,26 @@ for (const [label, change] of [['grafik türü', { chart: 'bar' }], ['tablo iste
   const presentation = { chart: 'donut', table: true };
   // Tarih çakışması yalnızca ufuk alanlarında onarım hakkı açar; sunum tercihleri sabit kalır.
   const queue = [plan({ scope: 'self', focus: ['status', 'priority'], relativeWindow: 'today', dateFrom: '2026-09-30' }, presentation),
-    { ...plan({ scope: 'self', focus: ['status', 'priority'] }, presentation), ...change }, { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
+    { ...plan({ scope: 'self', focus: ['status', 'priority'], relativeWindow: 'today' }, presentation), ...change }, { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
   const result = await ask({ text: 'görevlerimi halka grafik ve tablo ile Türkçe değerlendir' });
   assert.equal(result.inputs.length, 3);
   assert.equal(result.log.length, 0);
   assert.equal(result.answer.finishReason, 'clarification');
+});
+
+test('tarih çakışması onarımı geçerli pencereyi ve bütün sunum tercihlerini korursa yürütülür', async (t) => {
+  const seed = rotaToolSeed();
+  for (const task of seed.tasks) task.TargetFinish = '2026-09-30';
+  const presentation = { chart: 'donut', table: true };
+  const analysis = { scope: 'self', focus: ['status', 'priority'], relativeWindow: 'today' };
+  const queue = [plan({ ...analysis, dateFrom: '2026-09-30' }, presentation), plan(analysis, presentation)];
+  const { ask } = phase4eConversation(t, { seed, planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
+  const result = await ask({ text: 'bugünkü görevlerimi halka grafik ve tablo ile Türkçe değerlendir' });
+  assert.equal(result.inputs.length, 2);
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.ok(populationReads(result.log).every(({ params }) => params.dateFrom === '2026-09-30' && params.dateTo === '2026-09-30'));
+  assert.ok(charts(result.answer.content).some((chart) => chart.type === 'donut'));
 });
 
 test('analiz onarımı yalnızca hatalı sunum alanını düzeltir ve geçerli tür ile tabloyu çizer', async (t) => {

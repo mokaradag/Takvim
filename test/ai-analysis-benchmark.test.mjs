@@ -103,3 +103,22 @@ test('sonraki aşamaya bağlı vakalar açık bağımlılıkla kayıtlıdır (s�
   const limited = fixture.original.filter((item) => item.handling === 'limitation');
   assert.deepEqual(limited.map((item) => [item.order, item.dependsOn]), [[7, 'H'], [19, 'G'], [27, 'H']]);
 });
+
+test('proje durum kıyası her projenin teslim edilen sayılarını ve doğru atfını gerektirir', async (t) => {
+  const item = fixture.original.find((entry) => entry.id === 'o33');
+  const { ask } = conversation(t, item.profile);
+  const result = await ask({ text: item.text, plan: resolvePlan(item.plan) });
+  const expect = benchmarkExpectation(item);
+  assert.deepEqual(turnViolations(result, expect), [], result.answer.content);
+  const status = result.evidence.filter((row) => row.data?.groupBy === 'status');
+  assert.equal(status.length, 2);
+  for (const row of status) {
+    const content = result.answer.content.replaceAll(`【${row.evidenceId}】`, '【R999】').replaceAll(`"${row.evidenceId}"`, '"R999"');
+    assert.ok(turnViolations({ ...result, answer: { ...result.answer, content } }, expect).includes('durum dağılımı yanıtta eksik'));
+  }
+  const chart = { ...renderedCharts(result.answer.content)[0], items: [{ label: 'Yüksek', value: 3 }, { label: 'Düşük', value: 2 }] };
+  const content = `Öncelik dağılımı.\n\n\`\`\`rota-chart\n${JSON.stringify(chart)}\n\`\`\``;
+  assert.ok(turnViolations({ ...result, answer: { ...result.answer, content } }, expect).includes('durum dağılımı yanıtta eksik'));
+  const missing = { ...result, evidence: result.evidence.filter((row) => row !== status[1]) };
+  assert.ok(turnViolations(missing, expect).includes('projenin durum grubu kanıtı yok'));
+});
