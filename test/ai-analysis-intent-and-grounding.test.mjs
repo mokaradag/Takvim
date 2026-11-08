@@ -302,13 +302,14 @@ test('istenen çizgi adayı tek sütunlu aday sınırının arkasında kaybolmaz
   assert.ok(page.view.charts.some((chart) => chart.part === 3 && chart.types.includes('line')));
 });
 
-test('onarım sıralı alt kümeyi iki tarafta kanonik yönlerle karşılaştırır', async (t) => {
-  // Aşama F: dört yön fiziksel sınıra sığdığı için kabul edilir; şema sınırını aşan beş yön daraltma onarımına gider.
+test('şema sınırını aşan yönler alt kümeye onarılmadan kullanıcıya sorulur', async (t) => {
   const queue = [plan({ scope: 'self', focus: ['overview', 'deadline', 'priority', 'status', 'critical'] }), plan({ scope: 'self', focus: ['deadlines', 'status'] })];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
-  const result = await ask({ text: 'işlerimin termin ve durum dağılımı' });
-  assert.equal(result.inputs.length, 2);
-  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  const result = await ask({ text: 'işlerimin beş yönünü değerlendir' });
+  assert.equal(result.inputs.length, 1);
+  assert.equal(result.log.length, 0);
+  assert.equal(result.answer.finishReason, 'clarification', result.answer.content);
+  assert.match(result.answer.content, /Hangi analiz yönlerine öncelik/);
 });
 
 test('güvenilmeyen başka ad özne sayısı eşit diye önceki özneyle değiştirilmez', async (t) => {
@@ -443,8 +444,8 @@ for (const composition of [true, false]) test(`tarihli kişi kırılımı tam g�
 
 for (const [label, change] of [['grafik türü', { chart: 'bar' }], ['tablo isteği', { table: false }], ['yanıt dili', { language: 'en' }]]) test(`analiz onarımı geçerli plan düzeyi anlamı değiştiremez: ${label}`, async (t) => {
   const presentation = { chart: 'donut', table: true };
-  // Aşama F: onarım yolunu açmak için şema sınırını aşan beş yön (dört yön artık doğrudan kabul edilir).
-  const queue = [plan({ scope: 'self', focus: ['status', 'priority', 'projects', 'overview', 'deadlines'] }, presentation),
+  // Tarih çakışması yalnızca ufuk alanlarında onarım hakkı açar; sunum tercihleri sabit kalır.
+  const queue = [plan({ scope: 'self', focus: ['status', 'priority'], relativeWindow: 'today', dateFrom: '2026-09-30' }, presentation),
     { ...plan({ scope: 'self', focus: ['status', 'priority'] }, presentation), ...change }, { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
   const result = await ask({ text: 'görevlerimi halka grafik ve tablo ile Türkçe değerlendir' });

@@ -3,7 +3,7 @@
  *
  *   - Gecikme bugüne göre ölçülür: tamamen gelecekteki dönem gecikmiş iş okumasını boşaltmaz (VM soru 3 ve 16 sınıfı).
  *   - Fiziksel okuma sınırına (4) sığan dört yön düzeltme turu açmadan kabul edilir; model görünür şema da dört yön sunar.
- *   - Tek özneli planın bütçe aşımı daraltılabilir (`narrowable`); karşılaştırmanınki daraltılamaz.
+ *   - Bütçe aşımında yön düşürülmez; kullanıcıdan öncelik istenir.
  *   - İki grafik türü (dizi) kabul edilir ve her türün okuması bütçeye sığdığı ölçüde eklenir; geçersiz dizi reddedilir.
  *   - Boş tamamlamanın günlük satırı sağlayıcının bildirdiği çıktı belirteci sayısını taşır (içeriksiz tanı).
  */
@@ -115,7 +115,7 @@ test('takip dışındaki özette "all_time" dönemsizliktir: alanın düşmesi o
   assert.equal(parseAnalysis({ scope: 'previous', relativeWindow: 'all_time' }).relativeWindow, 'all_time');
 });
 
-test('zayıf modelin geçerli onarımları kabul edilir: kendi yönlerini daraltma ve göreli pencere çakışmasını giderme', async (t) => {
+test('şema sınırı kullanıcıya sorulur; göreli pencere çakışması anlamı korunarak onarılır', async (t) => {
   const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
   const plan = (analysis) => ({ intent: 'rota', language: 'tr', analysis });
   for (const [name, queue] of [
@@ -128,8 +128,13 @@ test('zayıf modelin geçerli onarımları kabul edilir: kendi yönlerini daralt
     await t.test(name, async (t) => {
       const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
       const result = await ask({ text: 'projelerimi ve işlerimi değerlendir' });
-      assert.equal(result.inputs.length, 2, 'tek düzeltme turu');
-      assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+      const limited = name.startsWith('şema');
+      assert.equal(result.inputs.length, limited ? 1 : 2);
+      assert.equal(result.answer.finishReason, limited ? 'clarification' : 'stop', result.answer.content);
+      if (limited) {
+        assert.equal(result.log.length, 0);
+        assert.match(result.answer.content, /Hangi analiz yönlerine öncelik/);
+      }
     });
   }
 });

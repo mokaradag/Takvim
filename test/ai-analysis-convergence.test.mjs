@@ -89,8 +89,9 @@ test('karşılaştırmanın öncelikleri ilk bölüm yerine her öznenin kendi k
   const findings = [2, 45].map((days, index) => ({ kind: 'longestOverdue', entity: { name: `İş ${index}` }, metrics: { days },
     filters: { assignee: index ? 'me' : 'person', person: index ? undefined : 'Ayşe Yılmaz', personSicil: index ? undefined : 1 }, evidenceIds: [`R${index + 1}`] }));
   const text = synthesisNarrative(findings).conclusion.markdown;
-  assert.match(text, /İş 1/);
-  assert.match(text, /45/);
+  const lines = text.split('\n').filter((line) => /^\d+\. /.test(line));
+  assert.match(lines[0], /^1\. \*\*kendi işleriniz\*\*: \*\*İş 1\*\*/);
+  assert.match(lines[1], /^2\. \*\*Ayşe Yılmaz\*\*: \*\*İş 0\*\*/);
 });
 
 test('kalite ve sayısal dayanak kapıları ilgisiz kapanış ve birleşik sayıları kabul etmez', () => {
@@ -261,6 +262,12 @@ test('aynı kaynağın çubuk ve çizgi rehberi ilk çizilen türü anlatır; k�
       ...[...c.render.tables.keys()].map((id) => ({ type: 'rows', source: id, style: 'table' })),
       { type: 'chart', source: source.id, style: 'bar' },
       { type: 'chart', source: source.id, style: groupBy === 'target_month' ? 'line' : 'donut' }];
+    if (groupBy === 'status') {
+      const defaultStyle = validateComposition(c, { blocks: [...blocks.slice(0, -2),
+        { type: 'chart', source: source.id, style: 'donut' }, { type: 'chart', source: source.id }] });
+      assert.equal(defaultStyle.ok, true, JSON.stringify(defaultStyle.issues));
+      assert.deepEqual(defaultStyle.blocks.filter((block) => block.type === 'chart').map((block) => block.style), ['donut', 'bar']);
+    }
     const validated = validateComposition(c, { blocks });
     assert.equal(validated.ok, true, JSON.stringify(validated.issues));
     const result = renderComposition(c, validated);
@@ -355,7 +362,7 @@ test('eşdeğer tekil ve çoğul grafik yazımı analiz onarımını engellemez'
 });
 
 test('yeni ekip analizi önceki bölüm düzeyini devralmaz', async (t) => {
-  const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
+  const { phase4eConversation, populationReads } = await import('./helpers/phase4eScenario.mjs');
   const { analysisBenchmarkSeed, BENCH_PROFILES } = await import('./helpers/analysisBenchmarkSeed.mjs');
   const { NOW } = await import('./helpers/aiToolFixtures.mjs');
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
@@ -368,6 +375,9 @@ test('yeni ekip analizi önceki bölüm düzeyini devralmaz', async (t) => {
   assert.equal(next.answer.finishReason, 'stop', next.answer.content);
   assert.match(next.answer.content.split('\n\n')[0], /ekibinizin işleri/);
   assert.doesNotMatch(next.answer.content.split('\n\n')[0], /bölümünüzün/);
+  const reads = populationReads(next.log);
+  assert.ok(reads.length);
+  assert.ok(reads.every(({ params }) => params.assigneeMode === 'team' && params.teamLevel === ''));
 });
 
 test('proje satırı takibi üst nüfusu ve tek proje sınırlamasını korur', async (t) => {
@@ -457,4 +467,143 @@ test('bağıl gelecek dönemin zaman çizelgesi mevcut gecikmeleri çizmez ve ba
   assert.equal(result.analysisContext.relativeWindow, 'next_7_days');
   assert.equal(result.analysisContext.dateFrom, undefined);
   assert.equal(result.analysisContext.dateTo, undefined);
+});
+
+test('kişi ve kendi yaklaşan iş kıyası zaman çizelgesi eklenince kesin toplamlarını korur', () => {
+  const parts = expand({ scope: 'person', names: ['Ayşe Yılmaz'], withSelf: true, focus: ['upcoming'] }, { chart: 'timeline' });
+  const totals = parts.filter((request) => request.operation === 'value');
+  assert.equal(totals.length, 2);
+  assert.ok(totals.every((request) => request.metrics.includes('tasks.dueNext7Days')));
+  assert.equal(parts.filter((request) => request.population.tool === 'rota_task_search').length, 2);
+  assert.equal(parts.length, 4);
+});
+
+test('kritik iş karşılaştırmasının ek zaman çizelgesi aynı öncelik ve açık durum nüfusunu okur', () => {
+  for (const scope of ['person', 'project']) {
+    const parts = expand({ scope, names: ['Birinci', 'İkinci'], focus: ['critical'] }, { chart: 'timeline' });
+    const tasks = parts.filter((request) => request.population.tool === 'rota_task_search');
+    assert.equal(tasks.length, 2);
+    for (const request of tasks) {
+      assert.deepEqual(request.filters.priority, ['critical', 'high']);
+      assert.deepEqual(request.filters.status, ['todo', 'in_progress']);
+      assert.equal(request.filters.deadline, undefined);
+    }
+  }
+});
+
+test('kritik açık toplamlar yalnızca eşit öncelik ve durum nüfusuyla karşılaştırılır', () => {
+  const filters = { statuses: ['todo', 'in_progress'], priorities: ['critical', 'high'] };
+  const compare = (other) => analyticalFindings([part([total('R1', 1, 'total', 2, filters), total('R2', 2, 'total', 15, other)])]).filter((finding) => finding.kind === 'subjectComparison');
+  const [finding] = compare({ statuses: [...filters.statuses].reverse(), priorities: [...filters.priorities].reverse() });
+  assert.deepEqual(finding?.metrics.critical, [2, 15]);
+  assert.match(synthesisNarrative([finding]).intro.plain, /kritik veya yüksek öncelikli açık görev/);
+  assert.deepEqual(compare({ ...filters, priorities: ['high'] }), []);
+  assert.deepEqual(compare({ ...filters, statuses: ['done'] }), []);
+  assert.deepEqual(compare({ ...filters, priorities: ['critical', 'high'], createdByMe: true }), []);
+});
+
+test('aynı adlı farklı siciller belirsiz karşılaştırma ve grafik üretmez', async () => {
+  const { buildComposition } = await import('../src/domain/ai/groundedComposition.js');
+  const facts = [1, 2].map((sicil) => total(`R${sicil}`, sicil, 'overdue', sicil * 7, { person: 'Ali Yılmaz' }));
+  assert.equal(analyticalFindings([part(facts)]).some((finding) => finding.kind === 'subjectComparison'), false);
+  const composition = buildComposition({ parts: [part(facts)], analyst: true, visual: true, chartType: 'bar' });
+  assert.ok(![...composition.render.charts.values()].some((chart) => chart.comparison));
+});
+
+test('gecikme payı ve görev önceliği kişi proje tarih ve öncelik kısıtını sonuçta korur', async () => {
+  const { findingScope } = await import('../src/domain/ai/analyticalFindings.js');
+  const filters = { projectId: 'p1', project: 'Alfa', dateFrom: '2026-09-01', dateTo: '2026-09-29' };
+  const [share] = analyticalFindings([part([total('R1', 1, 'open', 10, filters), total('R1', 1, 'overdue', 4, filters)])]);
+  assert.deepEqual(share.filters, { assignee: 'person', personSicil: 1, person: 'Kişi 1', ...filters });
+  assert.equal(share.today, TODAY);
+  assert.match(synthesisNarrative([share]).conclusion.plain, /Kişi 1 · Alfa · 1 Eylül 2026 – 29 Eylül 2026/);
+  assert.equal(findingScope({ kind: 'longestOverdue', filters: { projectId: 'p1', project: 'Alfa' } }), 'Alfa');
+  assert.match(findingScope({ kind: 'nearestDelivery', filters: { priorities: ['critical', 'high'] } }), /kritik, yüksek/);
+});
+
+test('dağılımlar aday bütçesini doldursa da karşılaştırma ve ölçü adı korunur', async () => {
+  const { buildComposition, preferredChart, COMPOSITION_LIMITS } = await import('../src/domain/ai/groundedComposition.js');
+  const rows = [['Alfa', 9, 4, 3], ['Beta', 3, 1, 1]];
+  const groups = [1, 2].map((sicil, index) => part(tableFacts(rows, { assignee: 'person', personSicil: sicil, person: `Kişi ${sicil}` }, `R${sicil}`), index));
+  const project = 'Uzun proje '.repeat(10);
+  const totals = part([total('R3', 1, 'open', 8, { projectId: 'p3', project }), total('R4', 2, 'open', 2, { projectId: 'p3', project })], 2);
+  const composition = buildComposition({ parts: [...groups, totals], analyst: true, visual: true });
+  const selected = composition.render.charts.get(preferredChart(composition.render).id);
+  assert.equal(selected.comparison, true);
+  assert.ok(selected.title.startsWith('Açık görev · '), selected.title);
+  assert.ok(selected.title.includes('Uzun proje'));
+  assert.ok(composition.render.charts.size <= COMPOSITION_LIMITS.maxCharts);
+});
+
+test('iki kişinin gecikme zaman çizelgesi her iki yetkili nüfusu da gösterir', async (t) => {
+  const { phase4eConversation, renderedCharts } = await import('./helpers/phase4eScenario.mjs');
+  const { rotaToolSeed, TASKS, AYSE, ZEYNEP } = await import('./helpers/aiToolFixtures.mjs');
+  const seed = rotaToolSeed();
+  const template = seed.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+  seed.tasks = Array.from({ length: 4 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 700).padStart(12, '0')}`,
+    Title: `Kıyas görevi ${index}`, TargetFinish: `2026-09-${String(20 + index).padStart(2, '0')}` }));
+  seed.taskAssignees = seed.tasks.map((task, index) => ({ TaskId: task.TaskId, Sicil: index < 2 ? AYSE : ZEYNEP }));
+  const { ask } = phase4eConversation(t, { seed });
+  const result = await ask({ text: 'Ayşe Yılmaz ile Zeynep Kaya gecikmelerini zaman çizelgesiyle karşılaştır', plan: { intent: 'rota', language: 'tr', chart: 'timeline', analysis: { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['overdue'] } } });
+  const charts = renderedCharts(result.answer.content).filter((chart) => chart.type === 'timeline');
+  assert.equal(charts.length, 2, result.answer.content);
+  assert.deepEqual(new Set(charts.flatMap((chart) => chart.items.map((item) => item.label))), new Set(seed.tasks.map((task) => task.Title)));
+});
+
+test('durum tablosundan türetilebilir olması söylenmemiş tamamlanma oranını düşürmez', async (t) => {
+  const { phase4eConversation } = await import('./helpers/phase4eScenario.mjs');
+  const { rotaToolSeed, TASKS, AYSE } = await import('./helpers/aiToolFixtures.mjs');
+  const seed = rotaToolSeed();
+  const template = seed.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+  seed.tasks = Array.from({ length: 10 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 800).padStart(12, '0')}`,
+    Title: `Durum görevi ${index}`, Status: index < 5 ? 'todo' : index < 8 ? 'in_progress' : 'done' }));
+  seed.taskAssignees = seed.tasks.map((task) => ({ TaskId: task.TaskId, Sicil: AYSE }));
+  const { ask } = phase4eConversation(t, { seed });
+  const result = await ask({ text: 'Tamamlanma oranımı ve durum tablosunu göster', plan: { intent: 'rota', language: 'tr', table: true, analysis: { scope: 'self', focus: ['overview', 'status'] } } }, { detail: 'short' });
+  assert.match(result.answer.content, /%20/, result.answer.content);
+});
+
+test('nitelendirme boş ve biçimlenmiş durumu kabul eder; yüzdeyi görev sayısı yerine geçirmez', async () => {
+  const { turnViolations } = await import('./helpers/phase4eScenario.mjs');
+  const result = { answer: { content: '- Yapılacak — 99 görev (%5) 【R1】' }, log: [], analysisContext: { focus: ['status'] }, evidence: [{ evidenceId: 'R1', tool: 'rota_task_analytics', data: { groupBy: 'status', groups: [{ label: 'Yapılacak', count: 5 }] } }] };
+  assert.ok(turnViolations(result, { focus: ['status'] }).includes('durum dağılımı yanıtta eksik'));
+  result.evidence[0].data.groups[0].count = 1200;
+  result.answer.content = '- Yapılacak — 1.200 görev 【R1】';
+  assert.deepEqual(turnViolations(result, { focus: ['status'] }), []);
+  result.answer.content = '| Grup | Kayıt sayısı |\n| --- | ---: |\n| Yapılacak | 1.200 |\n\n_Kaynak:_ 【R1】';
+  assert.deepEqual(turnViolations(result, { focus: ['status'] }), []);
+  result.evidence[0].data.groups = [];
+  result.answer.content = 'Göreviniz yok. 【R1】';
+  assert.deepEqual(turnViolations(result, { focus: ['status'] }), []);
+  result.answer.content = 'Genel görünüm. 【R1】';
+  assert.ok(turnViolations(result, { focus: ['status'] }).includes('durum dağılımı yanıtta eksik'));
+});
+
+test('nitelendirme tüm kapsamı daraltan okumayı ve eksik kanıtlı önceliği reddeder', async () => {
+  const { turnViolations } = await import('./helpers/phase4eScenario.mjs');
+  const result = { answer: { content: 'Açılış.\n\nBelirli bir kişinin işlerini ayrıntılı görmek isterseniz adını yazmanız yeterli.' }, log: [{ query: 'task-facts', params: { assigneeMode: 'me' } }], analysisContext: { scope: 'all' } };
+  const problems = turnViolations(result, { scope: 'all', priorities: 3 });
+  assert.ok(problems.includes('tüm kapsam okumada daraltıldı'));
+  assert.ok(problems.includes('istenen kanıtlı öncelik sayısı eksik'));
+  result.log[0].params = { assigneeMode: 'any' };
+  assert.deepEqual(turnViolations(result, { scope: 'all' }), []);
+});
+
+test('kalite kapısı numaralı yinelemeyi ve yanlış ayı doğru sayılardan ayırt eder', () => {
+  assert.equal(answerQuality('Açılış.\n\n**Öncelikli konular**\n\n1. Aynı gerekçe. 【R1】\n2. Aynı gerekçe. 【R2】').duplicates, 1);
+  assert.deepEqual(unsupportedNumbers('1 Kasım 2026', ['2026-10-01']), ['1 Kasım 2026']);
+  assert.deepEqual(unsupportedNumbers('1 October 2026', ['2026-10-01'], 'en'), []);
+  assert.deepEqual(unsupportedNumbers('1 November 2026', ['2026-10-01'], 'en'), ['1 November 2026']);
+});
+
+test('iki haftalık ayrık vaka gecikme ve yaklaşan teslimat okumalarını ayrı gerektirir', async () => {
+  const { plannerScore } = await import('../scripts/analysis-qualification.mjs');
+  const expect = { intent: 'rota', overdueUnwindowed: true, upcomingWindow: ['2026-09-30', '2026-10-13'] };
+  const overdue = { population: { tool: 'rota_task_search' }, filters: { deadline: 'overdue' }, entities: [] };
+  const upcoming = { population: { tool: 'rota_task_search' }, filters: { status: ['todo', 'in_progress'], dateFrom: TODAY, dateTo: '2026-10-13' }, entities: [] };
+  const score = (requests) => plannerScore({ outcome: 'planned', decisions: [], plan: { requests } }, expect);
+  assert.ok(score([overdue]).includes('yaklaşan teslimat ufku okunmadı'));
+  assert.ok(score([upcoming]).includes('mevcut gecikme ayrı okunmadı'));
+  assert.deepEqual(score([overdue, upcoming]), []);
+  assert.ok(score([overdue, { ...upcoming, filters: { ...upcoming.filters, dateTo: '2026-10-06' } }]).length);
 });

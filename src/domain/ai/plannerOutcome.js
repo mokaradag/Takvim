@@ -12,7 +12,7 @@
 export const PLANNER_INTENTS = Object.freeze({ ROTA: 'rota', GENERAL: 'general', CLARIFY: 'clarify', ABSTAIN: 'abstain' });
 
 /** Açıklama nedenleri: soruda göndergesi belirsiz kayıt ya da birden çok Rota yeteneğine eşit uyan istek. */
-export const CLARIFY_REASONS = Object.freeze(['missing_referent', 'ambiguous']);
+export const CLARIFY_REASONS = Object.freeze(['missing_referent', 'ambiguous', 'analysis_budget']);
 
 /** Çekimserlik nedenleri: yazma, desteklenmeyen hesap, Rota dışı veri, kimlik/yetki/ham sorgu girişimi, genel bilgi. */
 export const ABSTAIN_REASONS = Object.freeze(['write', 'calculation', 'outside_data', 'security', 'general']);
@@ -83,6 +83,9 @@ function joined(labels, locale) {
 /** Açıklama metni; konular kayıt defterindeki araçların sunucuya ait konularıdır (yinelenen etiket bir kez yazılır). */
 export function renderPlannerClarification({ reason, topics = [], locale = 'tr' }) {
   const index = localeIndex(locale);
+  if (reason === 'analysis_budget') return index
+    ? 'The requested analysis cannot be completed in one response within the read budget. Which analysis directions should I prioritize? Please ask again with the scope and the directions you want first.'
+    : 'İstenen analiz tek yanıtta okuma bütçesine sığmıyor. Hangi analiz yönlerine öncelik vermemi istersiniz? Kapsamı ve önce görmek istediğiniz yönleri belirterek yeniden sorabilirsiniz.';
   if (reason === 'missing_referent') {
     return index ? 'It is not clear which record your question refers to. Could you ask again with the name or code of the task, project or person?'
       : 'Sorunuzda hangi kaydı kastettiğiniz belli değil. Görevin, projenin ya da kişinin adını veya kodunu yazarak sorunuzu yeniden sorar mısınız?';

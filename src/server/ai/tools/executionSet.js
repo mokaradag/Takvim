@@ -66,13 +66,13 @@ export function typedPlanningTool(catalog) {
       analysis: analysisSchema(),
       visual: { type: 'boolean', description: 'Açık grafik isteği.' },
       chart: { type: 'string', enum: [...PLAN_CHART_TYPES], description: 'Söylenen grafik türü.' },
-      charts: { type: 'array', minItems: 1, maxItems: 2, uniqueItems: true, items: { type: 'string', enum: [...PLAN_CHART_TYPES] }, description: 'İstenen grafik türleri; ilk öğe birincildir.' },
+      charts: { type: 'array', minItems: 1, maxItems: 2, uniqueItems: true, items: { type: 'string', enum: [...PLAN_CHART_TYPES] }, description: 'İlk tür birincil. Yalnız tek tür: tek öğeli dizi önceki listeyi değiştirir.' },
       table: { type: 'boolean', description: 'Açık tablo isteği.' },
       request,
       additionalRequests: { type: 'array', minItems: 1, maxItems: PLANNER_LIMITS.maxRequests - 1, description: 'Ayrı okuma gerektiren ek sorular; öğeler request ile aynı alanları taşır. Bölüm sırası: 0=request, 1=ilk ek istek. Önceki bölümün satırlarına gönderme: {"type":"task|project","from":<bölüm sırası>}. additionalRequests ile calls verilmez',
         items: additionalRequest },
       clarify: { type: 'object', additionalProperties: false, required: ['reason'], description: 'intent clarify için.', properties: {
-        reason: { type: 'string', enum: [...CLARIFY_REASONS], description: 'missing_referent: soru adı verilmemiş bir kayda gönderme yapıyor; ambiguous: istek birden çok Rota yeteneğine eşit uyuyor.' },
+        reason: { type: 'string', enum: [...CLARIFY_REASONS], description: 'missing_referent: kaydın adı yok; ambiguous: birden çok Rota konusu; analysis_budget: bütçeye sığmıyor, öncelik iste.' },
         topics: { type: 'array', minItems: 2, maxItems: PLANNER_LIMITS.maxClarifyTopics, uniqueItems: true, items: { type: 'string', enum: names }, description: 'ambiguous: soruya uyan yetenekler.' }
       } },
       abstain: { type: 'object', additionalProperties: false, required: ['reason'], description: 'intent abstain için.', properties: {

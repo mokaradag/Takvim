@@ -13,6 +13,7 @@ import { AYSE, NOW, rotaToolSeed } from './aiToolFixtures.mjs';
 import { createFakeAiProvider } from './fakeAiProvider.mjs';
 import { composer, coveringBlocks, isCompositionCall, compositionView } from './compositionScenario.mjs';
 import { answerQuality } from './answerQuality.mjs';
+import { formatCount } from '../../src/domain/ai/groundedPropositions.js';
 
 const planCall = (plan) => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plan }] });
 
@@ -107,6 +108,9 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.scopeDenied && !/yönetim kapsamınız bulunmuyor|management scope/.test(content)) problems.push('kapsam reddi metni yok');
   if (expect.level && !every((row) => row.params.teamLevel === expect.level.toUpperCase())) problems.push('örgütsel düzey her okumada korunmadı');
   if (expect.scope && result.analysisContext?.scope !== expect.scope) problems.push('analiz kapsamı beklenenle aynı değil');
+  if (expect.scope === 'all' && !expect.project && !expect.projectIds?.length && (reads.length ? !every((row) =>
+    !row.params.projectId && (!row.params.assigneeMode || row.params.assigneeMode === 'any') && !row.params.personSicil && !row.params.teamLevel)
+    : !result.log.some((row) => row.query === 'portfolio'))) problems.push('tüm kapsam okumada daraltıldı');
   if (expect.projectIds && JSON.stringify([...new Set(reads.map((row) => row.params.projectId).filter(Boolean))].sort()) !== JSON.stringify([...expect.projectIds].sort())) problems.push('proje kimliği kümesi beklenenle aynı değil');
   if (expect.focus && (!result.analysisContext || expect.focus.some((focus) => !result.analysisContext.focus.includes(focus)))) problems.push('analitik yönler eksik');
   if (expect.focus?.includes('status') && !['person', 'project'].includes(expect.scope)) {
@@ -116,11 +120,15 @@ export function turnViolations(result, expect, { live = false } = {}) {
     const blocks = parseAssistantMarkdown(content, { rotaData: true });
     for (const row of status) {
       const groups = row.data.groups || [];
-      const delivered = groups.length > 0 && groups.every((group) => lines.some((line) => line.includes(group.label)
-        && line.includes(`【${row.evidenceId}】`) && new RegExp(`(^|[^\\d])${group.count}([^\\d]|$)`).test(line))
+      const delivered = groups.length === 0 ? lines.some((line) => line.includes(`【${row.evidenceId}】`) && /görev(?:iniz)? yok|no (?:matching )?tasks/i.test(line))
+        : groups.every((group) => lines.some((line) => {
+          const after = line.slice(line.indexOf(group.label) + group.label.length);
+          const count = after.match(/^[^\d%]*([\d.,]+)\s+(?:görev|tasks?)\b/)?.[1];
+          return line.includes(group.label) && line.includes(`【${row.evidenceId}】`) && count === formatCount(group.count);
+        })
         || blocks.some((block, index) => block.type === 'table' && blocks[index + 1]?.source.includes(`【${row.evidenceId}】`)
           && block.source.split('\n').some((line) => line.split('|').map((cell) => cell.trim()).some((cell) => cell === group.label)
-            && line.split('|').map((cell) => cell.trim()).includes(String(group.count))))
+            && line.split('|').map((cell) => cell.trim()).includes(formatCount(group.count))))
         || charts.some((chart) => chart.evidence.includes(row.evidenceId) && chart.items?.some((item) => item.label === group.label && item.value === group.count)));
       if (!delivered) problems.push('durum dağılımı yanıtta eksik');
     }
@@ -131,6 +139,11 @@ export function turnViolations(result, expect, { live = false } = {}) {
   for (const kind of expect.findings || []) if (!findings[kind]?.test(content)) problems.push(`${kind} bulgusu yok`);
   if (expect.caveat && !/kesin olarak söylenemez/.test(content)) problems.push('zorunlu tamlık çekincesi yok');
   if (expect.conclusion && !answerQuality(content).ending) problems.push('son blokta sonuç yok');
+  if (expect.priorities) {
+    const ending = content.split('\n\n').filter((block) => block.trim() && !/^_Not:/.test(block)).at(-1) || '';
+    const priorities = ending.split('\n').filter((line) => /^\d+\. .+【R\d+】/.test(line));
+    if (priorities.length !== expect.priorities) problems.push('istenen kanıtlı öncelik sayısı eksik');
+  }
   if (expect.overdueUnwindowed && !reads.some((row) => row.params.deadline === 'overdue' && !row.params.dateFrom && !row.params.dateTo)) problems.push('mevcut gecikme ayrı okunmadı');
   // Veri okumayan tur hiçbir Rota sorgusu çalıştırmaz (görev kimliğiyle ya da portföy okuması dâhil; süzülmüş alt küme değil).
   if (expect.noData && result.log.length) problems.push(`veri okundu: ${[...new Set(result.log.map((row) => row.query))].join(',')}`);

@@ -176,7 +176,7 @@ export function analysisHints(problems) {
   if (has('$.analysis.names')) hints.push('analysis.names: person/project kapsamında kullanıcının yazdığı ad (zorunlu); diğer kapsamlarda verilmez');
   if (has('$.analysis.level')) hints.push('analysis.level yalnızca scope team ile');
   if (has('$.analysis.focus')) hints.push(`analysis.focus: önem sırasıyla 1-${ANALYSIS_LIMITS.maxFocus} öğe, ${ANALYSIS_FOCUS.join('|')}`);
-  if (has('$.analysis.focus:maxItems')) hints.push(`analysis.focus en çok ${ANALYSIS_LIMITS.maxFocus} öğedir: yazdığın yönlerden sorunun açıkça istediklerini sırasıyla koru, kendi eklediğin fazlalığı çıkar (yeni yön ekleme)`);
+  if (has('$.analysis.focus:maxItems')) hints.push(`analysis.focus en çok ${ANALYSIS_LIMITS.maxFocus} öğedir; yön düşürme, clarify analysis_budget ile kullanıcıdan öncelik iste`);
   if (has('$.analysis.focus:requestBudget')) hints.push('Karşılaştırmanın bütün yönleri istek bütçesine sığmıyor; yönleri sessizce düşürme, kullanıcıdan hangi yönü önce istediğini açıklamasını iste.');
   if (has('$.analysis.scope')) hints.push(`analysis.scope: ${ANALYSIS_SCOPES.join('|')}`);
   if (has('$.analysis.date')) hints.push('analysis.dateFrom/dateTo: YYYY-MM-DD, dateFrom ≤ dateTo');
@@ -473,7 +473,7 @@ function selfComparison(focus, analysis, base, today, chart) {
   // İki özne de aynı yönün aynı nüfus sözleşmesiyle okunur; kimlik yalnızca sunucunun çözümünden gelir.
   return [base, self].flatMap((side) => {
     const read = focus === 'overdue' ? overdueBase(side, analysis, today) : side;
-    return metrics && !(chart === 'timeline' && ['overdue', 'upcoming', 'critical'].includes(focus))
+    return metrics && !(chart === 'timeline' && focus === 'overdue')
       ? request({ operation: 'value', metrics, population: { tool: 'rota_task_analytics' }, ...(read.entities.length ? { entities: read.entities } : {}), filters: read.filters })
       : focusRequest(focus, { ...analysis, scope: 'self', withSelf: false }, side, today) || [];
   });
@@ -557,7 +557,7 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
     const timelineReady = (part) => part.population?.tool === 'rota_task_search' && part.metrics?.includes('task.targetFinish')
       && (!futureWindow(analysis, today) || part.filters?.dateFrom === analysis.dateFrom && part.filters?.dateTo === analysis.dateTo);
     const missingShape = chart === 'donut' && !parts.some((part) => ['status', 'priority', 'deadline', 'project'].includes(part.population?.groupBy)) ? 'status'
-      : chart === 'timeline' && !parts.some(timelineReady) ? (!futureWindow(analysis, today) && declared.includes('overdue') ? 'overdue' : 'upcoming') : null;
+      : chart === 'timeline' && !parts.some(timelineReady) ? (!futureWindow(analysis, today) && declared.includes('overdue') ? 'overdue' : declared.includes('critical') ? 'critical' : 'upcoming') : null;
     const needed = chart === 'stacked' ? null : missingShape || chartFocus(analysis, declared, chart);
     if (needed) {
       let produced = null;

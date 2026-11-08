@@ -723,29 +723,12 @@ function pinAnalysisRepair(turn, plan, details) {
     if (path === '$.analysis.relativeWindow' && reason === 'conflict') for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) paths.add(key);
   }
   const raw = Object.fromEntries(Object.entries(normalizedBrief(existing?.raw || plan.analysis)).filter(([key]) => Object.hasOwn(analysisSchema().properties, key)));
-  // Şemanın üst sınırını aşan yön listesi (modelin kendi fazladan yönleri) onarımda yalnızca KENDİ yönlerinin sıralı bir alt
-  // kümesine daraltılabilir: yeni yön eklenemez, kapsam/ad/ufuk değişmez. Fiziksel bütçe aşımı yön düşürme hakkı vermez.
-  const narrow = existing ? existing.narrow : Array.isArray(raw.focus) && details.some((detail) => String(detail) === '$.analysis.focus:maxItems')
-    && raw.focus.length > ANALYSIS_LIMITS.maxAcceptedFocus;
   // Görsel istek ayrıca (`visual`) denetlenir; özetin içinde ya da plan düzeyinde yazılması anlam değişikliği değildir.
-  const pinnedPaths = new Set([...paths, 'visual', ...(narrow ? ['focus'] : [])]);
+  const pinnedPaths = new Set([...paths, 'visual']);
   const presentation = existing?.presentation || submittedPresentation(plan);
-  turn.repairPins.set('analysis', { raw, paths: pinnedPaths, narrow, projection: stable(repairOmit(raw, pinnedPaths)), presentation, presentationPaths,
+  turn.repairPins.set('analysis', { raw, paths: pinnedPaths, projection: stable(repairOmit(raw, pinnedPaths)), presentation, presentationPaths,
     visual: existing ? existing.visual : details.some((detail) => String(detail).startsWith('$.visual:') || String(detail).startsWith('$.analysis.visual:'))
       ? null : submittedVisual(plan) });
-}
-
-/** Daraltılan yön listesi, pinlenen listenin sıralı ve boş olmayan alt kümesi mi? */
-function narrowedFocus(pin, focus) {
-  if (!pin.narrow) return true;
-  if (!Array.isArray(focus) || !focus.length || focus.length > ANALYSIS_LIMITS.maxAcceptedFocus) return false;
-  let at = 0;
-  for (const item of focus) {
-    at = normalizedBrief(pin.raw).focus.indexOf(item, at);
-    if (at < 0) return false;
-    at += 1;
-  }
-  return true;
 }
 
 function analysisRepairMatches(turn, plan) {
@@ -757,7 +740,7 @@ function analysisRepairMatches(turn, plan) {
   const sameWindow = !dateConflict || analysis && ((analysis.relativeWindow === pin.raw.relativeWindow || pin.raw.relativeWindow === 'all_time' && !analysis.relativeWindow) && !analysis.dateFrom && !analysis.dateTo
     || !analysis.relativeWindow && analysis.dateFrom === pin.raw.dateFrom && analysis.dateTo === pin.raw.dateTo);
   return plan.intent === PLANNER_INTENTS.ROTA && Boolean(plan.analysis)
-    && sameWindow && stable(repairOmit(analysis, pin.paths)) === pin.projection && narrowedFocus(pin, analysis.focus)
+    && sameWindow && stable(repairOmit(analysis, pin.paths)) === pin.projection
     && stable(repairOmit(submittedPresentation(plan), pin.presentationPaths)) === stable(repairOmit(pin.presentation, pin.presentationPaths))
     && (pin.visual == null || submittedVisual(plan) === pin.visual);
 }
@@ -1101,6 +1084,25 @@ function acceptPlan(turn, request, language, parts) {
   }
   acceptRequest(turn, request, language, { part: 0, count: turn.partCount });
   beginPart(turn);
+}
+
+/** Kesinlikle gereken okumalar ve ad çözümleri kalan bütçeye sığmadan hiçbir analiz bölümü başlamaz. */
+function analysisFitsBudget(turn, requests) {
+  const lookups = new Set();
+  let calls = 0;
+  let rounds = requests.length;
+  for (const request of requests) {
+    const bound = bindRequestEntities(request, turn.ledger.requestEntries(), turn.containment.boundSelection());
+    if (bound.some((entity) => !entity.bound && entity.text)) {
+      const fresh = derivedReads(request, bound, { today: turn.context.today }).filter((call) => !lookups.has(readKey(call.name, call.args, turn.context.today)));
+      for (const call of fresh) lookups.add(readKey(call.name, call.args, turn.context.today));
+      if (fresh.length) rounds += 1;
+    }
+    calls += Math.max(1, ...['person', 'project'].map((type) => request.entities.filter((entity) => entity.type === type).length));
+  }
+  const budget = turn.analyticalRoundsGranted ? turn.toolRoundBudget : Math.max(turn.toolRoundBudget ?? turn.limits.maxToolRounds + (turn.priorToolRounds || 0), 2 * requests.length);
+  return calls + lookups.size <= turn.limits.maxTotalCalls - turn.executor.stats().attempted
+    && rounds <= budget - (turn.priorToolRounds || 0) - turn.toolRounds;
 }
 
 function isEmptyCompletion(error) {
@@ -2237,6 +2239,10 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
     // Açılım hataları özete bağlanır; onarım, etkilenmeyen bütün anlam alanlarını korur.
     const analysisPlan = Boolean(rejectedPlan?.analysis);
     const details = analysisPlan ? analysisDetails(rawDetails || []) : rawDetails || [];
+    if (analysisPlan && details.some((detail) => ['$.analysis.focus:requestBudget', '$.analysis.focus:maxItems'].includes(detail))) {
+      missingPreviousResult = { intent: PLANNER_INTENTS.CLARIFY, language: rejectedPlan?.language, clarify: { reason: 'analysis_budget' } };
+      return false;
+    }
     // Reddedilen ayrıntılı isteğin türlü alanlarından (araç, sorumlu koşulu, varlıklar) eşdeğer analitik özet önerisi.
     const suggestion = !analysisPlan ? analysisSuggestion(rejectedPlan?.request) : null;
     // Güvenilmeyen adın önceki kimlikle eşitliği bilinmez; onarım özneyi değiştiremez, açıklama isteyebilir.
@@ -2430,6 +2436,12 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
         return fallback('REQUEST_DECLARATION');
       }
       parts = checked.parts;
+    }
+    if (plan?.plan.analysis && declared?.ok) {
+      const primary = preparePlan(turn, [], declared);
+      if (primary.ok && !analysisFitsBudget(turn, [primary.request, ...parts.map((part) => part.request)])) {
+        return plannerChoice(turn, { intent: PLANNER_INTENTS.CLARIFY, language: plan.plan.language, clarify: { reason: 'analysis_budget' } }, onText);
+      }
     }
     // Çağrısız istek: okumalar bildirimden kurulabiliyorsa sunucu kurar; kurulamıyorsa plan çağrı ister.
     if (declared?.ok && declared.request && !calls.length && canCallTools) {

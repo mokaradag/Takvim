@@ -121,8 +121,9 @@ test('bütçe onarımı bildirilen yönü sessizce düşüremez', async (t) => {
     { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous', topics: ['rota_task_search', 'rota_task_analytics'] } }];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
   const result = await ask({ text: 'Ayşe Yılmaz ile Zeynep Kaya kişilerini öncelik, termin ve kritik işler bakımından karşılaştır' });
-  assert.equal(result.inputs.length, 3);
+  assert.equal(result.inputs.length, 1);
   assert.equal(result.answer.finishReason, 'clarification');
+  assert.match(result.answer.content, /Hangi analiz yönlerine öncelik/);
   assert.equal(populationReads(result.log).length, 0);
 });
 
@@ -210,41 +211,52 @@ test('kişi ile kendini karşılaştırmada ikincil zaman çizelgesi her iki öz
 });
 
 test('yeniden başlangıçtaki ilk analitik plan yalnızca bir kez ek hak alır; önceki turlar toplamdan düşer', async (t) => {
-  const { createAiStack } = await import('./helpers/aiStack.mjs');
-  const { AYSE, NOW, PROJECTS, TASKS, rotaToolSeed } = await import('./helpers/aiToolFixtures.mjs');
-  const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
-  const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
-  const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
-  const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
-  const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
-  t.mock.timers.enable({ apis: ['Date'], now: NOW });
-  const seed = rotaToolSeed();
-  const template = seed.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
-  // Tekil gecikmeler sıralama başını doğrulanabilir kılar; bütçe sınaması eşitlik çözümü nedeniyle durmamalı.
-  seed.tasks = Array.from({ length: 180 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`,
-    TargetFinish: new Date(Date.parse(`${TODAY}T00:00:00Z`) - (index + 1) * 86400000).toISOString().slice(0, 10) }));
-  createAiStack(t, { sicil: AYSE, seed });
-  const toolPlan = (plan) => ({ text: '', toolCalls: [{ id: 'p1', name: 'rota_plan', arguments: JSON.stringify(plan) }], finishReason: 'tool_calls' });
-  const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, entities: [{ type: 'project', id: PROJECTS.FULL }] };
-  let rounds = 0;
-  const options = { messages: buildGroundedContext({ userContent: `Bütün görevler ${PROJECTS.FULL}`, now: NOW }).messages,
-    catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE, now: NOW }), limits: { ...TOOL_LIMITS, maxRepairRounds: 0 }, onText: async () => {} };
-  const initial = await runGroundedTurn({ signal: new AbortController().signal, round: async () => ++rounds === 1
-    ? toolPlan({ intent: 'rota', language: 'tr', request, calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL, limit: 1 } }] })
-    : { text: JSON.stringify({ kind: 'rota', facts: ['R1:data.tasks.*.title'] }), toolCalls: [], finishReason: 'stop' } }, { ...options, escalation: true });
-  assert.equal(initial.outcome, 'escalate');
-  assert.equal(initial.kind, 'plan');
-  const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => toolPlan({ intent: 'rota', language: 'tr',
-    analysis: { scope: 'all', focus: ['status', 'overdue', 'workload', 'upcoming'] } }) }, { ...options, resume: initial.resume });
-  assert.ok(result.stats.toolRounds > TOOL_LIMITS.maxToolRounds, 'dört bölümün okuması önceki temel sınırda kesilemez');
-  assert.equal(initial.resume.toolRoundBudget, 8);
-  assert.equal(initial.resume.analyticalRoundsGranted, true);
-  assert.ok(result.stats.toolRounds <= 8, `yeniden başlangıç toplam ${result.stats.toolRounds} tur tüketti`);
-  assert.ok(initial.resume.toolRounds <= 8 - initial.resume.priorToolRounds, 'önceki harcama yeni planın kalan hakkından düşer');
-  assert.ok(result.stats.attempted <= TOOL_LIMITS.maxTotalCalls);
-  assert.equal(result.finishReason, 'stop', result.text);
-  assert.equal(result.evidenceRows.length, 4);
-  assert.deepEqual(result.evidenceRows.map((row) => row.toolName), ['rota_task_analytics', 'rota_task_search', 'rota_workload_summary', 'rota_task_search']);
+  for (const limitedBudget of [true, false]) await t.test(limitedBudget ? 'kalan çağrılar bütün plana yetmez' : 'önceki harcama toplam bütçeden düşer', async (t) => {
+    const { createAiStack } = await import('./helpers/aiStack.mjs');
+    const { AYSE, NOW, PROJECTS, TASKS, rotaToolSeed } = await import('./helpers/aiToolFixtures.mjs');
+    const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
+    const { buildGroundedContext } = await import('../src/server/ai/assistant/groundedPrompt.js');
+    const { createToolTurnContext } = await import('../src/server/ai/tools/toolContext.js');
+    const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
+    const { TOOL_LIMITS } = await import('../src/server/ai/tools/toolLimits.js');
+    t.mock.timers.enable({ apis: ['Date'], now: NOW });
+    const seed = rotaToolSeed();
+    const template = seed.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
+    // Tekil gecikmeler sıralama başını doğrulanabilir kılar; bütçe sınaması eşitlik çözümü nedeniyle durmamalı.
+    seed.tasks = Array.from({ length: 180 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`,
+      TargetFinish: new Date(Date.parse(`${TODAY}T00:00:00Z`) - (index + 1) * 86400000).toISOString().slice(0, 10) }));
+    createAiStack(t, { sicil: AYSE, seed });
+    const toolPlan = (plan) => ({ text: '', toolCalls: [{ id: 'p1', name: 'rota_plan', arguments: JSON.stringify(plan) }], finishReason: 'tool_calls' });
+    const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, entities: [{ type: 'project', id: PROJECTS.FULL }] };
+    let rounds = 0;
+    const options = { messages: buildGroundedContext({ userContent: `Bütün görevler ${PROJECTS.FULL}`, now: NOW }).messages,
+      catalog: toolCatalogForModel(), context: createToolTurnContext({ sicil: AYSE, now: NOW }), limits: { ...TOOL_LIMITS, maxRepairRounds: 0 }, onText: async () => {} };
+    const initial = await runGroundedTurn({ signal: new AbortController().signal, round: async () => ++rounds === 1
+      ? toolPlan({ intent: 'rota', language: 'tr', request, calls: [{ name: 'rota_task_search', arguments: { projectId: PROJECTS.FULL, limit: 1 } }] })
+      : { text: JSON.stringify({ kind: 'rota', facts: ['R1:data.tasks.*.title'] }), toolCalls: [], finishReason: 'stop' } }, { ...options, escalation: true });
+    assert.equal(initial.outcome, 'escalate');
+    assert.equal(initial.kind, 'plan');
+    if (limitedBudget) {
+      initial.resume.limits = { ...initial.resume.limits, maxTotalCalls: 3 };
+      const limited = await runGroundedTurn({ signal: new AbortController().signal, round: async () => toolPlan({ intent: 'rota', language: 'tr',
+        analysis: { scope: 'all', focus: ['status', 'overdue', 'workload', 'upcoming'] } }) }, { ...options, resume: initial.resume });
+      assert.equal(limited.finishReason, 'clarification', limited.text);
+      assert.match(limited.text, /Hangi analiz yönlerine öncelik/);
+      assert.equal(initial.resume.executor.stats().attempted, 0, 'üç çağrı kalmışken dört bölümlü planın ilk okuması bile başlamaz');
+      return;
+    }
+    const result = await runGroundedTurn({ signal: new AbortController().signal, round: async () => toolPlan({ intent: 'rota', language: 'tr',
+      analysis: { scope: 'all', focus: ['status', 'overdue', 'workload', 'upcoming'] } }) }, { ...options, resume: initial.resume });
+    assert.ok(result.stats.toolRounds > TOOL_LIMITS.maxToolRounds, 'dört bölümün okuması önceki temel sınırda kesilemez');
+    assert.equal(initial.resume.toolRoundBudget, 8);
+    assert.equal(initial.resume.analyticalRoundsGranted, true);
+    assert.ok(result.stats.toolRounds <= 8, `yeniden başlangıç toplam ${result.stats.toolRounds} tur tüketti`);
+    assert.ok(initial.resume.toolRounds <= 8 - initial.resume.priorToolRounds, 'önceki harcama yeni planın kalan hakkından düşer');
+    assert.ok(result.stats.attempted <= TOOL_LIMITS.maxTotalCalls);
+    assert.equal(result.finishReason, 'stop', result.text);
+    assert.equal(result.evidenceRows.length, 4);
+    assert.deepEqual(result.evidenceRows.map((row) => row.toolName), ['rota_task_analytics', 'rota_task_search', 'rota_workload_summary', 'rota_task_search']);
+  });
 });
 
 test('aynı adlı iki projenin ayrı tabloları aynı ölçüt metnini kaybetmez', async () => {

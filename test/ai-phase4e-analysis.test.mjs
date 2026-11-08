@@ -917,7 +917,8 @@ test('karşılaştırma bütçesi tüm fiziksel okumaları kabul eder veya SQL �
     const result = await ask({ text: 'Ayşe Yılmaz ve Zeynep Kaya için ekim önceliklerini ve aylık terminlerini karşılaştır' });
     assert.equal(result.answer.finishReason, 'clarification');
     assert.equal(result.log.length, 0);
-    assert.match(systemText(result.inputs[1].messages), /analysis\.focus:requestBudget/);
+    assert.equal(result.inputs.length, 1);
+    assert.match(result.answer.content, /Hangi analiz yönlerine öncelik/);
   });
   await t.test('sığan karşılaştırmanın ufku gerçekten okunur', async (t) => {
     const { ask } = phase4eConversation(t);

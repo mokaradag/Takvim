@@ -47,8 +47,8 @@ export function answerQuality(content) {
     else if (block.startsWith('|')) { if (!spoken) bareTables += 1; }
     else if (!NON_PROSE.test(block)) spoken = true;
   }
-  const sentences = blocks.filter((block) => !NON_PROSE.test(block))
-    .flatMap((block) => block.replace(/【R\d+】/g, '').split(/(?<=[.!?])\s+/)).map((sentence) => sentence.trim()).filter(Boolean);
+  const sentences = blocks.filter((block) => !NON_PROSE.test(block) || /^\d+\. /.test(block))
+    .flatMap((block) => block.replace(/^\d+\. /gm, '').replace(/【R\d+】/g, '').split(/(?<=[.!?])\s+|\n/)).map((sentence) => sentence.trim()).filter(Boolean);
   const duplicates = sentences.length - new Set(sentences).size;
   return {
     multi: evidence.size >= 2 || blocks.filter((block) => /^#### /.test(block) && !PRIORITY_HEADING.test(block)).length >= 2,

@@ -557,7 +557,9 @@ test("planlayıcı bozuk kayıt raporu TypeError yerine PLANNER_RUN_INVALID veri
   assert.equal(none.byPass[0].correct, 136);
   assert.equal(none.gatePassed, false);
   for (const mutate of [(r) => r.records[0] = null, (r) => r.records[0].plan = {}, (r) => r.records[0].plan.requests = [null],
-    (r) => r.records[0].plan.calls = null, (r) => r.records[0].rounds = [null], (r) => r.records[0].plan.requests[0].metrics = null]) {
+    (r) => r.records[0].plan.calls = null, (r) => r.records[0].rounds = [null], (r) => r.records[0].plan.requests[0].metrics = null,
+    (r) => { r.records[0].plan.requests = Array.from({ length: 4 }, () => clone(r.records[0].plan.requests[0])); },
+    (r) => { r.records[0].plan.analysis = { scope: 'all', focus: ['bilinmeyen'] }; }]) {
     const broken = clone(run); mutate(broken);
     assert.throws(() => scorePlannerRun(broken, loaded), /PLANNER_RUN_INVALID/);
   }

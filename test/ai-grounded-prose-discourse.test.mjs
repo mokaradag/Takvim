@@ -81,7 +81,7 @@ const CORPUS = Object.freeze([
     // ayrıntı cümlelerinde adlandırılır.
     must: ["Açık **6** görevin **2'si** (**%33**) gecikmiş durumda; bugün başlayan yedi günlük dönemde de **2** açık görevin termini var", '**Ayşe Yılmaz**, **4** açık',
       '**Radar Modernizasyonu** projesinde'],
-    never: [/Okuma Projesi|Kısmi Proje/, /\*\*Radar Modernizasyonu\*\*: /], once: '**Haftalık durum toplantısı**' },
+    never: [/Okuma Projesi|Kısmi Proje/, /\*\*Radar Modernizasyonu\*\*: Açık/], once: '**Haftalık durum toplantısı**' },
   { id: 'ekipte yoğunlaşma (kadro eksik)', seed: teamSeed, skipRequired: true, turns: [{ text: 'ekibimde iş kimde yoğunlaşıyor', plan: analysis({ scope: 'team', focus: ['workload', 'overdue'] }) }],
     must: ['kesin olarak söylenemez'], never: [/iş yükü bu kişide yoğunlaşıyor|dengeli dağılmış|sayısında en üstte/] },
   { id: 'proje karşılaştırması', turns: [{ text: 'projelerimi karşılaştır', plan: analysis({ scope: 'projects', focus: ['projects'] }) }],

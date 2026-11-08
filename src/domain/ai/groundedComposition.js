@@ -135,7 +135,7 @@ const unitOf = (fact) => (/Percent$/.test(leafOf(fact.field)) ? 'percent' : fact
 /** Karşılaştırma grafiğinin başlığı: karşılaştırılan ölçünün adı. */
 function comparisonChartTitle(metric, locale) {
   const titles = { overdue: ['Gecikmiş görev', 'Overdue tasks'], open: ['Açık görev', 'Open tasks'], dueNext7Days: ['Yedi gün içinde terminli görev', 'Due within seven days'],
-    done: ['Tamamlanan görev', 'Completed tasks'], total: ['Dönemde terminli açık görev', 'Open tasks due in period'] };
+    done: ['Tamamlanan görev', 'Completed tasks'], total: ['Dönemde terminli açık görev', 'Open tasks due in period'], critical: ['Kritik/yüksek öncelikli açık görev', 'Critical/high-priority open tasks'] };
   return titles[metric]?.[locale === 'en' ? 1 : 0] || metric;
 }
 
@@ -302,6 +302,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   let overflow = false;
   // Aşama F: bölümler arası bulgular (giriş ve sonuç). Yalnızca analitik özet yanıtında; sunucu yazar, model seçmez.
   const synthesis = analyst ? analyticalSynthesis(parts, { locale, detail: answerDetail }) : null;
+  const comparisonSlots = Math.min(2, (synthesis?.findings || []).filter((finding) => finding.kind === 'subjectComparison').reduce((sum, finding) => sum + Object.keys(finding.metrics).length, 0));
   // İki öznenin karşılaştırmasında tek öznenin gösterge kartı yanıltıcıdır (öteki özne kartta yoktur): karşılaştırma çubukları yeter.
   const scopedSubjects = new Set(parts.flatMap((part) => (part.presentation?.facts || []).map(({ fact }) => {
     const f = fact?.semantic?.filters || {};
@@ -396,8 +397,8 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
           if (!allowCharts) return;
           // İstenen tür, tek sütunlu çubuk adaylarının doldurduğu sınırın arkasında kalamaz: o türden aday yoksa bir yer ayrılır.
           const reserved = requestedCharts.some((type) => candidate.types.includes(type) && ![...charts.values()].some((item) => item.types.includes(type)))
-            && charts.size < COMPOSITION_LIMITS.maxCharts + requestedCharts.length;
-          if (charts.size >= COMPOSITION_LIMITS.maxCharts && !reserved) return;
+            && charts.size < COMPOSITION_LIMITS.maxCharts + requestedCharts.length - comparisonSlots;
+          if (charts.size >= COMPOSITION_LIMITS.maxCharts - comparisonSlots && !reserved) return;
           const chartId = `G${charts.size + 1}`;
           if (!candidate.types.every((type) => answerChartFence(chartSpec(candidate, type, locale)))) return;
           charts.set(chartId, Object.freeze({ id: chartId, part: ordinal, ...candidate }));
@@ -490,7 +491,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     for (const [metric, values] of ordered) {
       if (!owner || charts.size >= COMPOSITION_LIMITS.maxCharts + requestedCharts.length) break;
       const items = compared.subjects.map((subject, index) => ({ label: answerChartLabel(subject.type === 'self' ? (locale === 'en' ? 'You' : 'Siz') : subject.name), value: values[index] }));
-      const candidate = { table: null, column: null, title: answerChartLabel([findingScope(compared, locale), comparisonChartTitle(metric, locale)].filter(Boolean).join(' · '), ANSWER_CHART_LIMITS.maxTitleChars), unit: 'count',
+      const candidate = { table: null, column: null, title: answerChartLabel([comparisonChartTitle(metric, locale), findingScope(compared, locale)].filter(Boolean).join(' · '), ANSWER_CHART_LIMITS.maxTitleChars), unit: 'count',
         evidenceId: compared.evidenceIds[0], evidenceIds: [...compared.evidenceIds], items, types: ['bar'], comparison: true };
       if (!answerChartFence(chartSpec(candidate, 'bar', locale))) continue;
       const chartId = `G${charts.size + 1}`;
@@ -764,10 +765,11 @@ export function validateComposition(composition, response) {
     if (typeof source !== 'string') return fail('SOURCE_INVALID');
     const known = type === 'rows' ? render.tables.get(source) : type === 'details' ? render.details.get(source) : render.charts.get(source);
     if (!known) return fail('UNKNOWN_SOURCE');
-    const sourceKey = type === 'chart' ? `${source}:${block.style ?? known.types[0]}` : source;
+    const chartStyle = type === 'chart' ? block.style ?? known.types[0] : null;
+    const sourceKey = type === 'chart' ? `${source}:${chartStyle}` : source;
     if (usedSources.has(sourceKey)) return fail('DUPLICATE_SOURCE');
     if (type === 'chart' && blocks.some((item) => item.type === 'chart' && item.source === source)
-      && !(render.visual && (render.chartTypes || []).includes(block.style))) return fail('DUPLICATE_SOURCE');
+      && !(render.visual && (render.chartTypes || []).includes(chartStyle))) return fail('DUPLICATE_SOURCE');
     usedSources.add(sourceKey);
     const scope = owned([partOfSource(type, source)]);
     if (scope) return fail(scope);
@@ -783,7 +785,7 @@ export function validateComposition(composition, response) {
         chartsDropped += 1;
         continue;
       }
-      blocks.push({ type, source, style: block.style ?? known.types[0] });
+      blocks.push({ type, source, style: chartStyle });
     } else blocks.push({ type, source });
   }
   // Düzyazı düzeninin sunucu tamamlaması: eksik tablo, söylenmemiş zorunlu çekince ve bölümün asgari anlatımı sunucu
@@ -1011,25 +1013,34 @@ export function ensureChart(composition, validated) {
   const primary = ensureChartType(composition, validated, render.chartType);
   // Aşama F: ikinci istenen tür; birincil türün grafiği korunur (biçimi çevrilmez, yerine geçilmez).
   const second = (render.chartTypes || []).find((type) => type !== render.chartType);
-  if (!second || !primary?.ok) return primary;
+  if (!primary?.ok) return primary;
   const kept = primary.blocks.filter((block) => block.type === 'chart' && block.style === render.chartType).map((block) => block.source);
-  const result = ensureChartType({ ...composition, render: { ...render, chartType: second } }, primary, second, { secondary: true, protect: kept });
+  let result = second ? ensureChartType({ ...composition, render: { ...render, chartType: second } }, primary, second, { secondary: true, protect: kept }) : primary;
+  if ((render.chartTypes || []).includes('timeline')) {
+    for (const candidate of render.charts.values()) {
+      if (!candidate.types.includes('timeline') || result.blocks.some((block) => block.type === 'chart' && block.style === 'timeline'
+        && render.charts.get(block.source)?.evidenceId === candidate.evidenceId)) continue;
+      if (result.blocks.filter((block) => block.type === 'chart').length >= ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)].visuals + 1) break;
+      result = ensureChartType(composition, result, 'timeline', { secondary: true, candidateId: candidate.id,
+        protect: result.blocks.filter((block) => block.type === 'chart').map((block) => block.source) });
+    }
+  }
   return result.chartInserted || primary.chartInserted ? { ...result, chartInserted: true } : result;
 }
 
-function ensureChartType(composition, validated, chartType, { secondary = false, protect = [] } = {}) {
+function ensureChartType(composition, validated, chartType, { secondary = false, protect = [], candidateId = null } = {}) {
   const render = { ...composition.render, chartType };
   const chartBlocks = validated.blocks.filter((block) => block.type === 'chart');
   // İstenen tür çizilebiliyorsa modelin başka türü seçmesi isteği karşılamaz: istenen tür eklenir.
   const satisfied = render.chartType && chartTypeSupported(render) ? chartBlocks.some((block) => block.style === render.chartType) : chartBlocks.length > 0;
-  if (satisfied) return validated;
+  if (satisfied && !candidateId) return validated;
   // Modelin seçtiği aday istenen türü de çizebiliyorsa yalnızca biçimi istenen türe çevrilir (aynı doğrulanmış kanıt).
   const convertible = render.chartType && !secondary ? chartBlocks.find((block) => render.charts.get(block.source)?.types.includes(render.chartType)) : null;
   if (convertible) {
     const converted = validateComposition(composition, { blocks: validated.blocks.map((block) => (block === convertible ? { ...responseBlock(block), style: render.chartType } : responseBlock(block))) });
     return converted.ok ? { ...converted, chartInserted: true } : validated;
   }
-  const choice = preferredChart(render, { exclude: secondary ? [] : chartBlocks.map((block) => block.source) });
+  const choice = candidateId ? { id: candidateId, style: chartType } : preferredChart(render, { exclude: secondary ? [] : chartBlocks.map((block) => block.source) });
   // İkinci tür yalnızca o türü gerçekten çizebilen adayla eklenir (başka türe kaçılmaz; çizilemezse türe özgü not verilir).
   if (!choice || (secondary && choice.style !== chartType)) return validated;
   const candidate = render.charts.get(choice.id);
@@ -1207,6 +1218,7 @@ export function renderComposition(composition, validated) {
     const peer = [...render.tables.values()].find((table) => drawnTables.has(table.id) && table.complete && table.evidenceId !== detail.evidenceId && signature(table.group) === sig && statusTotals(table.group));
     if (!peer) return [];
     const totals = statusTotals(peer.group);
+    if (!stated.get(peer.evidenceId)?.has('tasks.completionRatePercent')) delete totals['tasks.completionRatePercent'];
     return (detail.source.group.main?.entries || []).filter(({ fact }) => Object.hasOwn(totals, fact.semantic?.metric) && totals[fact.semantic.metric] === fact.value)
       .map(({ fact }) => fact.semantic.metric);
   };
@@ -1396,6 +1408,18 @@ export function renderComposition(composition, validated) {
     const later = out.findIndex((chunk) => chunk.part != null && item.part != null && chunk.part > item.part);
     const at = last >= 0 ? last + 1 : later >= 0 ? later : out.length;
     out.splice(at, 0, item);
+  }
+  if (render.visual && (render.chartTypes || []).includes('timeline')) {
+    const plotted = new Set(validated.blocks.filter((block) => block.type === 'chart' && block.style === 'timeline').map((block) => render.charts.get(block.source)?.evidenceId));
+    for (const candidate of render.charts.values()) {
+      if (!candidate.types.includes('timeline') || plotted.has(candidate.evidenceId)) continue;
+      const group = render.tables.get(candidate.table)?.group;
+      const filters = [...(group?.collections?.values() || [])].flatMap((rows) => [...rows.values()].flatMap((row) => row.entries)).find(({ fact }) => fact.semantic?.filters)?.fact.semantic.filters;
+      const scope = escapedFactText(findingScope({ filters }, locale) || candidate.title);
+      out.push({ text: locale === 'en' ? `_${scope}: the timeline is not shown; the task rows remain in the table._`
+        : `_${scope}: zaman çizelgesi gösterilmedi; görev satırları tabloda yer alıyor._`, part: candidate.part, rowBearing: false });
+      plotted.add(candidate.evidenceId);
+    }
   }
   // Aşama F: sunucunun bölümler arası girişi yanıtın başına, öncelik sonucu sonuna yazılır (model düzeni ve gövde değişmez).
   // Bulgu cümlelerinin kaynakları yalnızca aynı sayfanın doğrulanmış kanıtlarıdır.

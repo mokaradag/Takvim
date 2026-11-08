@@ -2078,7 +2078,7 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
   (karşılaştırmada kayıt başına bölümler dâhil), ufuk bölümü ve portföy satırları bütçeye sığmalıdır. Sığmayan plan
   veri okunmadan `$.analysis.focus:requestBudget` ile reddedilir; istenen yön sessizce düşürülmez.
   **Aşama F güncellemesi:** bildirilen yönlerin okumaları mevcut fiziksel üst sınıra (`maxParts` = 4) kadar kabul edilir;
-  model şeması ve doğrulayıcı 1-4 yön kullanır. Şemanın `maxItems` sınırını aşan fazladan yönler yalnızca sıralı alt kümeyle onarılabilir; fiziksel okuma bütçesi aşımında yön düşürülmez, kullanıcıdan öncelik istenir (`$.analysis.focus:requestBudget`); yön düşüren onarım `$.plan:repairScope` ile reddedilir. Ayrıntı:
+  model şeması ve doğrulayıcı 1-4 yön kullanır. Şemanın `maxItems` sınırı ya da fiziksel okuma bütçesi aşıldığında yön düşürülmez; veri okunmadan `analysis_budget` açıklamasıyla kullanıcıdan öncelik istenir. Kabul edilen planın asgari çağrı ve tur maliyeti kalan bütçeye de sığmalıdır. Ayrıntı:
   [Yol Haritası](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md) §5, [Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) §2.
 - Açılım (`expandAnalysis`) yalnızca türlü değerlerle çalışır, kullanıcı metnini okumaz; çıktı modelin yazacağı ham
   isteklerdir ve 4C bildirim doğrulamasından, yetkiden ve kanıt seçiminden aynen geçer. Adlar 4C içerme kuralına
@@ -2139,7 +2139,7 @@ edilemiyorsa okuma öncesinde reddedilir. Kısmi/başarısız analiz takip bağl
   açıkken görünür ve görünüm tercihine (`assistantDetail`) yazılır; istek gövdesine yalnızca varsayılan değilse gider.
   Sözleşme bölüm başına asgari/azami anlatılan önerme ve not sayısıdır (`ANSWER_DETAIL_CONTRACT`), çıktı belirteci
   sınırı değildir. Bölüm başına Kısa 1–2, Dengeli 3–6, Ayrıntılı 5–8 önerme söyler (mevcut önerme sayısıyla sınırlı).
-  Kısa en çok bir tablo veya grafik gösterir; diğer zorunlu satır koleksiyonları listeyle korunur. İsteğe bağlı analist
+  Kısa bölüm başına en çok bir tablo veya grafik gösterir; açıkça iki grafik türü istendiğinde iki tür de korunur; diğer zorunlu satır koleksiyonları listeyle korunur. İsteğe bağlı analist
   önermeleri çok bölümlü sayfanın kalan bütçesine sığdırılır; geçerli temel düzeni ortadan kaldıramaz.
 - **Grafik dilbilgisi** (`answerChart.js`): `bar`, `donut`, `line` (≤ 24 nokta), `stacked` (≤ 10 öğe, ≤ 3 dizi), `kpi`
   (≤ 6 kart), `timeline` (≤ 10 öğe). Hepsi sunucunun doğrulanmış tam kanıtından kurulur, istemcide yeniden doğrulanır,

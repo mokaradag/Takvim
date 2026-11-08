@@ -54,7 +54,7 @@ Numaralı yol haritası **olduğu gibi korunur**:
 | Aşama | Kapsam | Bu girişimdeki yeri |
 | --- | --- | --- |
 | 1–4 (4A–4E dâhil) | Altyapı, akış, kanıta dayalı araçlar, anlamsal katman, kanıta bağlı anlatım, analitik özet | Temel; yeniden kullanılır, genişletilir, yeniden yazılmaz |
-| **5** | Yapay zekâ eliyle görev oluşturma, düzenleme, atama ve diğer yetkili **yazma** işlemleri | **Dokunulmaz.** F–K hiçbir yazma işlemi eklemez; Aşama 5'in amacı ve kapsamı değişmez |
+| **5** | Yapay zekâ eliyle görev oluşturma, düzenleme, atama ve diğer yetkili **yazma** işlemleri | **Dokunulmaz.** F–K görev, proje ve iş akışı verisini değiştiren iş araçları eklemez; J'nin rapor iş durumu kaydı bu iş verisi yazımlarından ayrıdır; Aşama 5'in amacı ve kapsamı değişmez |
 | **6** | Çok kipli yetenekler (ses ve görsel) | **Dokunulmaz** |
 
 Bu girişim **harfli** aşamalar kullanır: **F, G, H, I, J, K**. Aşama F, "Aşama 4F" değildir; Aşama 5 yeniden
@@ -364,8 +364,7 @@ Aşama 4E (analitik özet, önermeler, düzen) ve PR #114 (geçmiş konuşma kan
 
 ### F.15 Riskler ve geri alma
 
-- *Risk*: giriş ve sonuç cümlelerinin gövdeyi yinelemesi. *Önlem*: giriş sayı vermez, yalnızca bölümler arası ilişkiyi
-  söyler; sonuç, söylem belleğiyle daha önce söylenen sayıyı kısaltır; aynı kanıtın aynı toplu ölçüsü ayrıntılarda bir kez yazılır.
+- *Risk*: giriş ve sonuç cümlelerinin gövdeyi yinelemesi. *Önlem*: giriş yalnızca doğrulanmış karşılaştırma sayılarını içerebilir; bu ölçüler aynı kanıtın ayrıntılarında yinelenmez; sonuç, söylem belleğiyle daha önce söylenen sayıyı kısaltır; aynı kanıtın aynı toplu ölçüsü ayrıntılarda bir kez yazılır.
 - *Risk*: dört bölümlü özetin okuma süresini ve sayfa boyunu büyütmesi. *Önlem*: fiziksel bölüm sınırı 4, sayfa ayrıntı
   sınırı 8 (4 bölüm × 2 özne); tur bütçesi yalnızca analitik özette bölüm sayısıyla genişler.
 - *Risk*: doğal sayım cümlesinin süzgeci eksik söylemesi. *Önlem*: doğal cümle yalnızca nüfusun BÜTÜN süzgeçlerini
@@ -568,8 +567,8 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
 | 2026-11-07 | Bileşik risk puanı yok | Opak ağırlıklar yerine adı verilen göstergeler |
 | 2026-11-07 | Gelecek pencere gecikmiş işi daraltmaz | Tanımı gereği boş okuma kullanıcıya yanlış güvence verir |
 | 2026-11-07 | Dört yön toleransı, model şeması değişmeden | Fiziksel sınır (4) korunur; önek önbelleği ve kanonik kapı istikrarı |
-| 2026-11-08 | Model şeması ve sunucu aynı dört yönü sunar | Fiziksel okuma sınırı (4) ve toplam bütçeler korunur; önceki şema eşitliği ölçümü tarihseldir |
 | 2026-11-07 | Çoklu ufuk, dönem karşılaştırması, tamamlanma eğilimi → H; üç düzeyli soru → G | Tarihsel tamlık ve çok kapsamlı yetki ayrı tasarım gerektirir |
+| 2026-11-08 | Model şeması ve sunucu aynı dört yönü sunar | Fiziksel okuma sınırı (4) ve toplam bütçeler korunur; önceki şema eşitliği ölçümü tarihseldir |
 
 ---
 

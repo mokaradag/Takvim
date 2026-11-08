@@ -22,7 +22,7 @@ import { factSentence, formatCount, formatFactDay, formatPercent, locativeCountS
  * ya da bulgu yoksa `null`dır: basit sorulara dolgu paragrafı eklenmez.
  */
 
-export const FINDING_KINDS = Object.freeze(['subjectComparison', 'attentionLeader', 'overdueConcentration', 'simultaneousPressure', 'windowPressure', 'overdueProjectShare', 'longestOverdue',
+export const FINDING_KINDS = Object.freeze(['subjectComparison', 'attentionLeader', 'openWorkLeader', 'overdueConcentration', 'simultaneousPressure', 'windowPressure', 'overdueProjectShare', 'longestOverdue',
   'nearestDelivery', 'overdueShare']);
 /** İzin verilen yorumlar (kapalı küme): bulgunun anlatımı bu yorumun dışına çıkamaz. */
 export const FINDING_INTERPRETATIONS = Object.freeze(['comparison', 'attention', 'concentration', 'simultaneous', 'priority']);
@@ -177,6 +177,11 @@ function tableFindings(table) {
         comparison: { population: rows.length, basis: 'complete-table' }, evidenceIds: [table.evidenceId], completeness: 'complete' });
     }
   }
+  const openLeader = uniqueTop(rows, 'open');
+  if (openLeader && !findings.some((item) => item.kind === 'attentionLeader')) {
+    findings.push({ kind: 'openWorkLeader', interpretation: 'priority', entity: { type: table.entity, name: openLeader.name, key: String(openLeader.key) },
+      metrics: { open: openLeader.open }, comparison: { population: rows.length, basis: 'complete-table' }, evidenceIds: [table.evidenceId], completeness: 'complete' });
+  }
   return findings.map((item) => ({ ...item, filters: table.filters, today: table.today }));
 }
 
@@ -225,7 +230,7 @@ function listFindings(list) {
 
 /** Değeri olmayan (koşul koymayan) süzgeç alanı. */
 const neutral = (value) => value == null || value === '' || value === 'any' || value === false || (Array.isArray(value) && !value.length);
-const COMPARED_TOTALS = Object.freeze(['overdue', 'open', 'dueNext7Days', 'done', 'total']);
+const COMPARED_TOTALS = Object.freeze(['overdue', 'open', 'dueNext7Days', 'done', 'total', 'critical']);
 const SUBJECT_KEYS = new Set(['person', 'personSicil', 'project', 'projectId', 'assignee']);
 
 /** Değer okumasının öznesi: kişi (sunucunun çözdüğü ad), oturum sahibinin kendisi ya da proje. Özne yoksa `null`. */
@@ -258,12 +263,17 @@ function comparisonFindings(groups) {
       const windowed = match[1] === 'total' && (filters.dateFrom || filters.dateTo)
         && (!filters.dateField || filters.dateField === 'targetFinish')
         && filters.statuses?.length === 2 && filters.statuses.every((status) => OPEN_STATUSES.has(status));
-      const allowed = ['projectId', 'assignee', 'teamLevel', ...(windowed ? ['dateFrom', 'dateTo', 'dateField', 'statuses'] : [])];
-      if (match[1] === 'total' && !windowed || common.some(([key]) => !allowed.includes(key))) continue;
+      const critical = match[1] === 'total' && filters.statuses?.length === 2 && new Set(filters.statuses).size === 2
+        && filters.statuses.every((status) => OPEN_STATUSES.has(status)) && filters.priorities?.length === 2
+        && new Set(filters.priorities).size === 2 && filters.priorities.every((priority) => ['critical', 'high'].includes(priority))
+        && (!filters.dateField || filters.dateField === 'targetFinish');
+      const allowed = ['projectId', 'assignee', 'teamLevel', ...(windowed || critical ? ['dateFrom', 'dateTo', 'dateField', 'statuses'] : []), ...(critical ? ['priorities'] : [])];
+      if (match[1] === 'total' && !windowed && !critical || common.some(([key]) => !allowed.includes(key))) continue;
       const base = JSON.stringify([fact.semantic.provenance.today, common.map(([key, value]) => [key, Array.isArray(value) ? [...value].sort() : value])
         .sort(([left], [right]) => left.localeCompare(right))]);
-      const key = `${match[1]}|${base}`;
-      if (!metrics.has(key)) metrics.set(key, { metric: match[1], base, filters: Object.fromEntries(common), project: filters.project, subjects: new Map() });
+      const metric = critical ? 'critical' : match[1];
+      const key = `${metric}|${base}`;
+      if (!metrics.has(key)) metrics.set(key, { metric, base, filters: Object.fromEntries(common), project: filters.project, subjects: new Map() });
       const entry = metrics.get(key);
       if (!entry.subjects.has(subject.key)) entry.subjects.set(subject.key, { ...subject, value: fact.value, evidenceId });
     }
@@ -272,7 +282,7 @@ function comparisonFindings(groups) {
   for (const entry of [...metrics.values()].filter((item) => item.subjects.size === 2)) {
     const subjects = [...entry.subjects.values()];
     if (subjects.some((subject) => subject.type === 'project') && subjects.some((subject) => subject.type !== 'project')) continue;
-    if (subjects.every((subject) => subject.type === 'project') && subjects[0].name === subjects[1].name) continue;
+    if (subjects[0].name && subjects[0].name === subjects[1].name) continue;
     const key = `${entry.base}|${subjects.map((subject) => subject.key).sort().join('|')}`;
     if (!findings.has(key)) findings.set(key, { kind: 'subjectComparison', interpretation: 'comparison', entity: null,
       subjects: subjects.map(({ type, name, key }) => ({ type, name, key })), metrics: {},
@@ -334,7 +344,7 @@ function overdueShareFindings(groups) {
     const overdue = total('overdue');
     if (!open || !overdue || overdue.value === 0 || open.value === 0 || overdue.value > open.value) continue;
     return [{ kind: 'overdueShare', interpretation: 'priority', entity: null, metrics: { overdue: overdue.value, open: open.value, share: sharePercent(overdue.value, open.value) },
-      evidenceIds: [evidenceId], completeness: 'complete' }];
+      filters: open.semantic.filters || {}, today: open.semantic.provenance?.today || null, evidenceIds: [evidenceId], completeness: 'complete' }];
   }
   return [];
 }
@@ -375,6 +385,8 @@ function namesList(names, locale, rest = 0, noun = ['proje', 'projects']) {
 }
 
 const COMPARED_LABELS = Object.freeze({
+  critical: { tr: ['kritik veya yüksek öncelikli açık görevlerde', 'kritik veya yüksek öncelikli açık görev', 'kritik veya yüksek öncelikli açık'],
+    en: ['critical or high-priority open tasks', 'critical or high-priority open tasks', 'critical or high-priority open'] },
   total: { tr: ['dönemde terminli açık görevlerde', 'dönemde terminli açık görev', 'dönemde terminli açık'], en: ['open tasks due in the period', 'open tasks due in the period', 'open due in the period'] },
   overdue: { tr: ['gecikmiş görevlerde', 'gecikmiş görev', 'gecikmiş'], en: ['overdue tasks', 'overdue tasks', 'overdue'] },
   open: { tr: ['açık görevlerde', 'açık görev', 'açık'], en: ['open tasks', 'open tasks', 'open'] },
@@ -436,7 +448,9 @@ export function findingScope(finding, locale = 'tr') {
   const parts = [filters.assignee === 'me' ? (en(locale) ? 'your work' : 'kendi işleriniz')
     : filters.assignee === 'team' ? (TEAM_WORK[filters.teamLevel] || ['ekibinizin işleri', "your team's work"])[en(locale) ? 1 : 0]
     : filters.person && filters.person !== 'Seçilen kişi' ? filters.person : null,
-    filters.projectId && (finding.kind === 'subjectComparison' || filters.personSicil != null || filters.assignee === 'me' || filters.dateFrom || filters.dateTo) ? filters.project : null,
+    filters.projectId ? filters.project : null,
+    filters.priorities?.length ? (en(locale) ? 'priority: ' : 'öncelik: ') + filters.priorities.map((priority) =>
+      ({ critical: ['kritik', 'critical'], high: ['yüksek', 'high'], medium: ['orta', 'medium'], low: ['düşük', 'low'] })[priority]?.[en(locale) ? 1 : 0] || priority).join(', ') : null,
     finding.kind !== 'windowPressure' && (filters.dateFrom || filters.dateTo) ? [filters.dateFrom ? formatFactDay(filters.dateFrom, locale) : '…', filters.dateTo ? formatFactDay(filters.dateTo, locale) : '…'].join(' – ') : null].filter(Boolean);
   return parts.join(' · ');
 }
@@ -510,13 +524,15 @@ function priorityItems(findings, locale, said) {
     const detail = said(longest) ? [] : [' (', s(formatCount(longest.metrics.days, locale)), en(locale) ? ' days' : ' gün', ...(longest.project ? [', ', s(longest.project)] : []), ')'];
     items.push({ finding: longest, parts: [s(longest.entity.name), en(locale) ? ' — the longest-overdue task' : ' — en uzun süredir geciken görev', ...detail] });
   }
-  const focus = findings.find((item) => item.kind === 'attentionLeader') || findings.find((item) => item.kind === 'overdueConcentration' || item.kind === 'overdueProjectShare');
+  const focus = findings.find((item) => item.kind === 'attentionLeader') || findings.find((item) => item.kind === 'overdueConcentration' || item.kind === 'overdueProjectShare')
+    || findings.find((item) => item.kind === 'openWorkLeader');
   if (focus) {
     const project = focus.entity.type === 'project';
     const leader = focus.kind === 'attentionLeader';
+    const open = focus.kind === 'openWorkLeader';
     items.push({ finding: focus, parts: en(locale)
-      ? [project ? 'Open work in ' : 'Open work assigned to ', s(focus.entity.name), leader ? ' — where the indicators are highest together' : ' — where the overdue work is concentrated']
-      : [s(focus.entity.name), project ? ' projesindeki ' : ' üzerindeki ', leader ? 'açık işler — göstergelerin birlikte en yüksek olduğu ' : 'gecikmeler — gecikmiş işlerin toplandığı ',
+      ? [project ? 'Open work in ' : 'Open work assigned to ', s(focus.entity.name), leader ? ' — where the indicators are highest together' : open ? ' — with the most open tasks in this population' : ' — where the overdue work is concentrated']
+      : [s(focus.entity.name), project ? ' projesindeki ' : ' üzerindeki ', leader ? 'açık işler — göstergelerin birlikte en yüksek olduğu ' : open ? 'açık işler — bu nüfusta en çok açık işi olan ' : 'gecikmeler — gecikmiş işlerin toplandığı ',
         project ? 'proje' : 'kişi'] });
   }
   // Gecikmiş işin payı (en uzun gecikme yoksa): açık işlerin ne kadarının geciktiği.

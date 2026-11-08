@@ -125,6 +125,16 @@ export function plannerScore(result, expect) {
       && Math.abs(day(request.filters.dateFrom) - day(expect.window[0])) <= 1 && Math.abs(day(request.filters.dateTo) - day(expect.window[1])) <= 1))) {
       failures.push(`ufuk ${expect.window.join('..')} okunmuyor`);
     }
+    if (expect.overdueUnwindowed && !requests.some((request) => !request.filters?.dateFrom && !request.filters?.dateTo
+      && (request.filters?.deadline === 'overdue' || request.metrics?.includes('tasks.overdue')))) failures.push('mevcut gecikme ayrı okunmadı');
+    if (expect.upcomingWindow) {
+      const resolve = (value) => /^T\+-?\d+$/.test(value) ? day(corpus.today) + Number(value.slice(2)) : day(value);
+      const [from, to] = expect.upcomingWindow.map(resolve);
+      if (!requests.some(({ population, filters = {} }) => ['rota_task_search', 'rota_task_analytics'].includes(population?.tool)
+        && !population.groupBy && filters.deadline !== 'overdue' && (!filters.dateField || filters.dateField === 'targetFinish')
+        && Array.isArray(filters.status) && filters.status.length === 2 && ['todo', 'in_progress'].every((status) => filters.status.includes(status))
+        && Math.abs(day(filters.dateFrom) - from) <= 1 && Math.abs(day(filters.dateTo) - to) <= 1)) failures.push('yaklaşan teslimat ufku okunmadı');
+    }
   }
   return failures;
 }

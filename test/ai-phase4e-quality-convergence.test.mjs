@@ -326,27 +326,19 @@ test('seyrek veri: görevi olmayan kullanıcıda düzyazı kısa ve dayanaklıd�
   assert.equal(ZEYNEP > 0, true);
 });
 
-test('fazla yön (şema sınırı) onarımda yalnızca modelin kendi yönlerinin sıralı alt kümesine daraltılabilir', async (t) => {
-  for (const [name, repaired, accepted] of [
-    ['sıralı alt küme kabul edilir', ['overview', 'overdue', 'upcoming'], true],
-    ['yeni yön eklenemez', ['overview', 'workload'], false],
-    ['kapsam değişemez', null, false]
-  ]) await t.test(`davranış: ${name}`, async (t) => {
-    // Aşama F: dört yön doğrudan kabul edilir; şema sınırını aşan beş yön daraltma onarımına gider.
-    const first = { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming', 'priority'] } };
-    const second = repaired ? { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: repaired } } : { intent: 'rota', language: 'tr', analysis: { scope: 'all', focus: ['overview'] } };
-    const plans = [first, second, { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
-    const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plans.shift() }] }),
-      compose: () => composer((view) => proseLayout(view)) });
-    const result = await ask({ text: 'iş durumumu genel olarak değerlendir' });
-    if (accepted) {
-      assert.equal(result.answer.finishReason, 'stop', result.answer.content);
-      assert.ok(populationReads(result.log).every(({ params }) => params.assigneeMode === 'me'));
-    } else {
-      assert.notEqual(result.answer.finishReason, 'stop');
-      assert.equal(populationReads(result.log).length, 0, 'anlamı değişen onarım veri okuyamaz');
-    }
-  });
+test('fazla yön kullanıcı öncelik vermeden alt kümeye daraltılmaz ve veri okunmaz', async (t) => {
+  const plans = [
+    { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming', 'priority'] } },
+    { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'overdue', 'upcoming'] } }
+  ];
+  const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plans.shift() }] }),
+    compose: () => composer((view) => proseLayout(view)) });
+  const result = await ask({ text: 'iş durumumu bütün yönleriyle değerlendir' });
+  assert.equal(result.answer.finishReason, 'clarification', result.answer.content);
+  assert.match(result.answer.content, /Hangi analiz yönlerine öncelik/);
+  assert.equal(result.inputs.length, 1);
+  assert.equal(plans.length, 1, 'modelden kapsamı daraltan bir onarım istenmez');
+  assert.equal(result.log.length, 0);
 });
 
 test('kurala uymayan düzyazı paragrafı tek başına düşer; geçerli paragraflar ve sunucu tamamlaması kalır', async (t) => {
@@ -576,8 +568,11 @@ test('Ayrıntılı düzyazıda başlığı sunucu koyar: modelin yanlış başl�
     assert.deepEqual(headings, expected, content);
     for (const [index, heading] of headings.entries()) {
       const start = content.indexOf(heading);
-      const end = index + 1 < headings.length ? content.indexOf(headings[index + 1]) : content.length;
-      assert.ok(content.slice(start + heading.length, end).trim().length > 0, `boş bölüm: ${heading}`);
+      const end = index + 1 < headings.length ? content.indexOf(headings[index + 1]) : content.lastIndexOf('#### Öncelikli konular');
+      assert.match(content.slice(start + heading.length, end), /【R\d+】/, `kanıtsız bölüm: ${heading}`);
+      const section = page.sections.find((item) => page.titles.find((title) => title.id === item.title)?.text === heading.slice(5));
+      const body = content.slice(start + heading.length, end).replaceAll('**', '').replaceAll('\\', '');
+      assert.ok(section && section.propositions.some((id) => body.includes(page.propositions.find((item) => item.id === id).text.slice(0, 28))), `bölümün kendi olgusu yok: ${heading}`);
     }
   });
 });

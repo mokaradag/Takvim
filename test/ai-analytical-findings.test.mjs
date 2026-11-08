@@ -139,9 +139,10 @@ test('gelecek dönem baskısı: dönemle okunan proje grupları ile tam gecikmi�
 
 test('gelecek dönem baskısı kişi nüfusunu ve adaş projelerin doğrulanmış kodlarını korur', () => {
   for (const population of [{ assignee: 'me' }, { assignee: 'person', personSicil: 1, person: 'Ayşe' }, { assignee: 'team', teamLevel: 'department' }]) {
-    const groups = ['ORT-A · Ortak', 'ORT-B · Ortak'].flatMap((label, index) => {
+    const groups = ['ORT-A', 'ORT-B'].flatMap((projectCode, index) => {
+      const label = 'Ortak';
       const key = `p${index + 1}`;
-      const semantic = { tool: 'rota_task_analytics', groupBy: 'project', group: { key, label }, row: { identity: key, collectionSize: 2 },
+      const semantic = { tool: 'rota_task_analytics', groupBy: 'project', group: { key, label }, row: { identity: key, collectionSize: 2, projectCode },
         filters: { ...population, dateFrom: TODAY, dateTo: '2026-10-06', statuses: [] } };
       return [fact('R1', `data.groups.${index}.label`, label, semantic), fact('R1', `data.groups.${index}.open`, 2, semantic)];
     });
@@ -150,7 +151,7 @@ test('gelecek dönem baskısı kişi nüfusunu ve adaş projelerin doğrulanmı�
     const finding = analyticalFindings([part(0, groups), part(1, overdue)]).find((item) => item.kind === 'windowPressure');
     assert.ok(finding);
     assert.deepEqual(finding.names, ['ORT-A · Ortak', 'ORT-B · Ortak']);
-    assert.equal(finding.filters.assignee, population.assignee);
+    assert.deepEqual(finding.filters, { ...population, dateFrom: TODAY, dateTo: '2026-10-06', statuses: [] });
     const text = synthesisNarrative([finding]).intro.plain;
     assert.match(text, population.assignee === 'me' ? /kendi işleriniz/ : population.assignee === 'person' ? /Ayşe/ : /bölümünüzün işleri/);
     assert.match(text, /ORT-A · Ortak/);
