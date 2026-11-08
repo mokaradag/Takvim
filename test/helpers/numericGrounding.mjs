@@ -2,7 +2,7 @@ import { formatCount, formatFactDay } from '../../src/domain/ai/groundedProposit
 
 /** Numaralı liste işaretleri ve atıf kimlikleri sayı iddiası değildir; diğer bütün sayısal parçalar denetlenir. */
 export function unsupportedNumbers(text, values, locale = 'tr') {
-  const tokens = (value) => String(value).match(/\d+/g) || [];
+  const tokens = (value) => String(value).replace(/(\d{4})-(\d{2})-(\d{2})/g, '$1 $2 $3').match(/[+-]?\d+(?:[.,]\d+)*/g) || [];
   const allowed = new Set(values.flatMap((value) => {
     const formatted = typeof value === 'number' ? formatCount(value, locale)
       : typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? formatFactDay(value, locale) : value;

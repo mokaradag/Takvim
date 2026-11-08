@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { benchmarkExpectation } from '../scripts/analysis-qualification.mjs';
 import { answerQuality } from './helpers/answerQuality.mjs';
-import { phase4eConversation, turnViolations } from './helpers/phase4eScenario.mjs';
+import { phase4eConversation, turnViolations, renderedCharts } from './helpers/phase4eScenario.mjs';
 import { analysisBenchmarkSeed, BENCH_PROFILES } from './helpers/analysisBenchmarkSeed.mjs';
 import { NOW } from './helpers/aiToolFixtures.mjs';
 
@@ -38,7 +38,7 @@ const FINDING_TEXT = Object.freeze({
   attentionLeader: /yönetim dikkatini en çok/,
   overdueConcentration: /\(\*\*%\d+\*\*\) (?:bu projede|.+ projesinde) toplanıyor/,
   windowPressure: /arasında teslimatı olan \*\*\d+\*\* projenin/,
-  subjectComparison: /arasındaki en belirgin fark|sayıları birbirine yakın/
+  subjectComparison: /arasındaki en belirgin fark|sayıları birbirine yakın|görev sayıları iki (?:kişide|projede) aynı/
 });
 
 test('kıyas kümesi özgün 40 sorunun sırasını, gözlenen sonucunu ve sınıflarını korur; ayrık küme en az 20 vakadır', () => {
@@ -85,7 +85,7 @@ for (const item of fixture.original.filter((entry) => entry.plan)) {
       assert.ok(answerQuality(content).ending, content);
     }
     assert.doesNotMatch(content, /yanıt doğrulanamadı/);
-    for (const type of item.expect.chartTypes || []) assert.ok(content.includes(`"type":"${type}"`), `${type} grafiği yok:\n${content}`);
+    for (const type of item.expect.chartTypes || []) assert.ok(renderedCharts(content).some((chart) => chart.type === type), `${type} grafiği yok:\n${content}`);
     if (item.expect.chart) assert.ok(content.includes('```rota-chart'), `grafik yok:\n${content}`);
     for (const kind of item.expect.findings || []) assert.match(content, FINDING_TEXT[kind], `${kind} bulgusu yok:\n${content}`);
     if (item.expect.caveat) assert.match(content, /kesin olarak söylenemez/, 'eksik kadronun zorunlu çekincesi');

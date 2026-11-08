@@ -1565,7 +1565,12 @@ function compositionInput(turn, verdict) {
   return { parts, missing, notes, locale: turn.locale, question: turn.question.text, previousQuestion,
     today: turn.context.today, populations: populationSizes(turn, answers), followUp: intent?.act ? { act: intent.act } : null,
     // Çerçeve cümlesi için özetin kapsamı ve yönleri (olgu değil; adlar kanıttan alınır).
-    outline: intent && (!intent.act || intent.act === 'prioritize') ? { scope: intent.scope, level: intent.level || null, focus: [...intent.focus] } : null,
+    outline: intent ? { scope: ['previous', 'row'].includes(intent.scope)
+      ? intent.scope === 'previous' ? turn.previousAnalysis?.scope : turn.previousAnalysis?.rows?.[(intent.rows?.[0] || 1) - 1]?.type
+      : intent.scope, level: intent.level || turn.previousAnalysis?.level || null, focus: [...intent.focus], withSelf: intent.withSelf === true,
+      ...(turn.presentationIntent?.window || {}),
+      within: answers.some((answer) => answer.request?.entities?.some((entity) => entity.type === 'project'))
+        && !['project', 'projects'].includes(intent.scope === 'previous' ? turn.previousAnalysis?.scope : intent.scope) } : null,
     // Analitik özet olmayan çok bölümlü yanıtın açılışı için bölüm konuları (araç konusunun adı; olgu değil).
     topics: intent ? null : new Map(answers.filter((answer) => answer.verdict.kind === 'grounded')
       .map((answer) => [answer.index + 1, plannerTopicLabel(getRotaTool(answer.request?.population?.tool)?.topic, turn.locale)]).filter(([, label]) => label)) };
@@ -1647,7 +1652,7 @@ export async function presentVerdict(turn, verdict, compose) {
     const issue = turn.trace.presentation?.issue ?? null;
     turn.trace.presentation = { mode: 'composed', server: true, reason, ...(issue ? { issue } : {}), blocks: rendered.blocks, chart: rendered.chart, charts: rendered.charts, said: rendered.said,
       ...(rendered.suppressed ? { suppressed: rendered.suppressed } : {}), tables: rendered.tables, notes: rendered.notes, titled: rendered.titled, ...(rendered.findings ? { findings: rendered.findings } : {}) };
-    const laidOut = { ...verdict, normalized: [rendered.text, ...input.notes, ...chartTypeNote(turn, composition, rendered)].join('\n\n') };
+    const laidOut = { ...verdict, normalized: presentationNotes(rendered, [...input.notes, ...chartTypeNote(turn, composition, rendered)]) };
     // Analitik düzen grafiksiz kurulduysa açık grafik isteği yine sessizce düşmez.
     return visual && !rendered.charts && !turn.trace.presentation?.chartTypeUnavailable ? withChartNote(turn, laidOut) : laidOut;
   };
@@ -1686,8 +1691,15 @@ export async function presentVerdict(turn, verdict, compose) {
     ...(result.chartInserted ? { chartInserted: true } : {}), ...(result.prose ? { prose: result.prose } : {}) };
   turn.renderedRowParts = result.rowParts;
   turn.renderedEvidence = result.citedIds;
-  const composed = { ...verdict, normalized: [result.text, ...input.notes, ...chartTypeNote(turn, composition, result)].join('\n\n') };
+  const composed = { ...verdict, normalized: presentationNotes(result, [...input.notes, ...chartTypeNote(turn, composition, result)]) };
   return visual && !result.charts && !turn.trace.presentation?.chartTypeUnavailable ? withChartNote(turn, composed) : composed;
+}
+
+/** Sunucu notları kanıtlı sonuç veya sonraki adım bloğundan önce yerleşir. */
+function presentationNotes(rendered, notes) {
+  const closing = rendered.closing;
+  const body = closing && rendered.text.endsWith(closing) ? rendered.text.slice(0, -closing.length).trimEnd() : rendered.text;
+  return [body, ...notes, ...(closing ? [closing] : [])].filter(Boolean).join('\n\n');
 }
 
 /** İstenen grafik türü kanıtla çizilemediyse türe özgü not (çizilen başka grafik varsa söylenir). */
@@ -1709,7 +1721,9 @@ export function chartTypeNote(turn, composition, rendered) {
 function withChartNote(turn, verdict) {
   if (verdict.kind !== 'grounded' && !(verdict.kind === 'unavailable' && verdict.citedIds?.length)) return verdict;
   turn.trace.presentation = { ...(turn.trace.presentation || { mode: 'narrative' }), chartUnavailable: true };
-  return { ...verdict, normalized: `${verdict.normalized}\n\n${renderChartUnavailable({ locale: turn.locale })}` };
+  const types = turn.presentationIntent?.charts || (turn.presentationIntent?.chart ? [turn.presentationIntent.chart] : []);
+  const notes = types.length ? types.map((type) => renderChartUnavailable({ type, locale: turn.locale })) : [renderChartUnavailable({ locale: turn.locale })];
+  return { ...verdict, normalized: [verdict.normalized, ...notes].join('\n\n') };
 }
 
 /** Zayıf anlatımın yapısal hatası Derin'e ancak devir kurulmuşsa, tur henüz devretmediyse ve süre yetiyorsa gider. */
@@ -1870,7 +1884,7 @@ function presentationIntent(plan, today) {
     ...(plan?.visual === true && plan?.chart && Array.isArray(plan.charts) && plan.charts.length > 1 ? { charts: Object.freeze([...plan.charts]) } : {}), ...(plan?.table === true ? { table: true } : {}),
     // Türetilen ufuk okumaları yürütmeye aittir; takipte yalnızca bildirilmiş yönler devralınır.
     analysis: analysis ? Object.freeze({ scope: analysis.scope, focus: Object.freeze([...analysis.focus]),
-      ...(analysis.withSelf ? { withSelf: true } : {}), ...(analysis.level ? { level: analysis.level } : {}), ...(analysis.act ? { act: analysis.act } : {}) }) : null,
+      ...(analysis.withSelf ? { withSelf: true } : {}), ...(analysis.level ? { level: analysis.level } : {}), ...(analysis.rows ? { rows: analysis.rows } : {}), ...(analysis.act ? { act: analysis.act } : {}) }) : null,
     ...(analysis?.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}),
     window: analysis?.dateFrom || analysis?.dateTo ? Object.freeze({ ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) }) : null,
     // Açıklama sonrasında yeniden yürütülecek kabul edilmiş özet (kimlik taşımaz; adlar kullanıcının kendi iletisindendir).

@@ -4,7 +4,7 @@
  * Kıyas kümesinin altın planlı her sorusu Kısa, Dengeli ve Ayrıntılı ayrıntıda, planlayıcı kıyasının çok istekli türlü
  * örnekleri Dengeli ayrıntıda üretim yolundan geçer; yalnızca METİN ölçülür (`test/helpers/answerQuality.mjs`).
  * Eşikler:
- *   - çok bölümlü analitik özet: açılış %100, kapanış %100, cümlesiz tablo 0;
+ *   - her analitik özet: açılış %100, kapanış %100, cümlesiz tablo 0;
  *   - çok bölümlü türlü yanıt: açılış %100 (kapanış zorunlu değil: olgu listesi dolguyla kapatılmaz);
  *   - bütün yanıtlar: mekanik kalıp 0, yinelenen cümle 0;
  *   - etiketli ölçüt satırı ("_Ölçüt: …_") yanıt başına ortalama Kısa ≤ 0,5; Dengeli ve Ayrıntılı ≤ 0,3.
@@ -31,7 +31,7 @@ function check(kind, detail, id, content) {
   measured.push({ kind, detail, id, quality });
   assert.deepEqual(quality.mechanical, [], `mekanik kalıp:\n${content}`);
   assert.equal(quality.duplicates, 0, `yinelenen cümle:\n${content}`);
-  if (!quality.multi) return;
+  if (kind !== 'analytical' && !quality.multi) return;
   assert.ok(quality.opening, `açılış cümle değil:\n${content}`);
   if (kind === 'analytical') {
     assert.ok(quality.ending, `kapanış yok:\n${content}`);
@@ -76,7 +76,7 @@ for (const item of planner.cases.filter((entry) => entry.example?.additionalRequ
 }
 
 test('kalite kapısı eşikleri: açılış ve kapanış oranı, ölçüt satırı ortalaması', () => {
-  const analytical = measured.filter((row) => row.kind === 'analytical' && row.quality.multi);
+  const analytical = measured.filter((row) => row.kind === 'analytical');
   assert.ok(analytical.length >= 80, `ölçülen çok bölümlü analitik yanıt sayısı: ${analytical.length}`);
   assert.equal(analytical.filter((row) => row.quality.opening && row.quality.ending).length, analytical.length);
   assert.ok(measured.filter((row) => row.kind === 'typed' && row.id && planner.cases.some((item) => item.id === row.id && item.example?.additionalRequests)).length === planner.cases.filter((item) => item.example?.additionalRequests).length, 'seçilen her türlü yanıt ölçülmeli');

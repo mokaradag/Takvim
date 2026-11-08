@@ -357,7 +357,7 @@ function rowContext(envelope, parts) {
     identity: row.taskId || row.projectId || row.wbsId || row.requestId || row.coordinationId || row.sicil || row.key || null,
     name: row.title || row.name || row.task?.title || row.person?.name || row.label || null,
     project: typeof row.project === 'string' ? row.project : row.project?.name || null,
-    projectCode: row.project?.code || null,
+    projectCode: row.project?.code || (envelope.tool === 'rota_portfolio_summary' ? row.code : null) || null,
     // Proje kimliği yalnızca gruplama içindir (aynı adlı projeler ayrıdır); anlatımda ad gösterilir.
     projectId: row.project?.projectId || null,
     organization: row.organization ? [row.organization.unit, row.organization.department, row.organization.directorate].filter(Boolean).join(' / ') : null };

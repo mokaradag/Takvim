@@ -220,7 +220,9 @@ test('yeniden başlangıçtaki ilk analitik plan yalnızca bir kez ek hak alır;
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
   const seed = rotaToolSeed();
   const template = seed.tasks.find((task) => task.TaskId === TASKS.OVERDUE);
-  seed.tasks = Array.from({ length: 180 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}` }));
+  // Tekil gecikmeler sıralama başını doğrulanabilir kılar; bütçe sınaması eşitlik çözümü nedeniyle durmamalı.
+  seed.tasks = Array.from({ length: 180 }, (_, index) => ({ ...template, TaskId: `20000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`,
+    TargetFinish: new Date(Date.parse(`${TODAY}T00:00:00Z`) - (index + 1) * 86400000).toISOString().slice(0, 10) }));
   createAiStack(t, { sicil: AYSE, seed });
   const toolPlan = (plan) => ({ text: '', toolCalls: [{ id: 'p1', name: 'rota_plan', arguments: JSON.stringify(plan) }], finishReason: 'tool_calls' });
   const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, entities: [{ type: 'project', id: PROJECTS.FULL }] };
@@ -240,6 +242,9 @@ test('yeniden başlangıçtaki ilk analitik plan yalnızca bir kez ek hak alır;
   assert.ok(result.stats.toolRounds <= 8, `yeniden başlangıç toplam ${result.stats.toolRounds} tur tüketti`);
   assert.ok(initial.resume.toolRounds <= 8 - initial.resume.priorToolRounds, 'önceki harcama yeni planın kalan hakkından düşer');
   assert.ok(result.stats.attempted <= TOOL_LIMITS.maxTotalCalls);
+  assert.equal(result.finishReason, 'stop', result.text);
+  assert.equal(result.evidenceRows.length, 4);
+  assert.deepEqual(result.evidenceRows.map((row) => row.toolName), ['rota_task_analytics', 'rota_task_search', 'rota_workload_summary', 'rota_task_search']);
 });
 
 test('aynı adlı iki projenin ayrı tabloları aynı ölçüt metnini kaybetmez', async () => {

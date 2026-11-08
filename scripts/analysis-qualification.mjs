@@ -31,7 +31,7 @@ import { captureConsole } from '../test/helpers/aiStack.mjs';
 import { AYSE, NOW, rotaToolSeed } from '../test/helpers/aiToolFixtures.mjs';
 import { analysisBenchmarkSeed, BENCH_PROFILES } from '../test/helpers/analysisBenchmarkSeed.mjs';
 import { answerQuality } from '../test/helpers/answerQuality.mjs';
-import { phase4eConversation, turnViolations } from '../test/helpers/phase4eScenario.mjs';
+import { phase4eConversation, turnViolations, renderedCharts } from '../test/helpers/phase4eScenario.mjs';
 import { planCase } from './planner-evaluation.mjs';
 import { completeModelRound } from './planner-followup-qualification.mjs';
 import { qualificationProvider } from './answer-composition-qualification.mjs';
@@ -106,7 +106,10 @@ export function plannerScore(result, expect) {
   if (expect.intent === 'rota' && result.outcome === 'planned') {
     const scope = scopeOf(requests);
     // Beklentide kapsam yoksa (ayrık kümede bilinçli olarak serbest) kapsam puanlanmaz; Tier B vakalarının hepsi kapsam taşır.
-    if (expect.scope !== undefined && scope !== expect.scope) failures.push(`kapsam ${scope} ≠ ${expect.scope}`);
+    const pairedSelf = expect.withSelf === true && result.plan?.analysis?.withSelf === true && expect.scope === 'person' && new Set(requests.map((request) => scopeOf([request]))).size === 2
+      && requests.every((request) => ['person', 'self'].includes(scopeOf([request])));
+    if (expect.withSelf === true && !pairedSelf) failures.push('kendiyle karşılaştırma eksik');
+    if (expect.scope !== undefined && scope !== expect.scope && !pairedSelf) failures.push(`kapsam ${scope} ≠ ${expect.scope}`);
     const teamRequests = requests.filter((request) => request.filters?.assignee === 'team');
     if (expect.level && (!teamRequests.length || !teamRequests.every((request) => request.filters?.teamLevel === expect.level))) failures.push(`düzey ${expect.level} her ekip isteğinde değil`);
     const names = (values) => JSON.stringify([...new Set(values.map((value) => containmentText(String(value))))].sort());
@@ -149,7 +152,7 @@ async function conversationCase(t, turns, { plannerModel, composeModel, seed = r
   for (const turn of turns) {
     const before = rounds.length;
     const escalationsBefore = routing.escalations;
-    const result = await ask({ ...turn, scripted: !plannerModel });
+    const result = await ask({ ...turn, scripted: !plannerModel }, { detail: turn.expect?.detail || null });
     const line = logs.map((row) => (row.includes('"operation":"ai.grounded.turn"') ? JSON.parse(row.slice(row.indexOf('{'))) : null)).filter(Boolean).at(-1);
     const presentation = line?.context?.presentation || null;
     const failures = turnViolations(result, turn.expect || {}, { live: Boolean(plannerModel) });
@@ -173,7 +176,7 @@ async function conversationCase(t, turns, { plannerModel, composeModel, seed = r
     }
     const content = String(result.answer?.content || '');
     results.push({ text: turn.id || null, finish: result.answer?.finishReason ?? null, plannerRounds: measured.filter((round) => round.purpose === 'plan').length, declarations: line?.context?.declarations ?? null,
-      findings: presentation?.findings ?? 0, charts: [...content.matchAll(/"type":"([a-z]+)","locale"/g)].map((match) => match[1]), concluded: answerQuality(content).ending,
+      findings: presentation?.findings ?? 0, charts: renderedCharts(content).map((chart) => chart.type), concluded: answerQuality(content).ending,
       mode: presentation?.mode ?? null, server: presentation?.server === true, chartInserted: presentation?.chartInserted === true, reason: presentation?.reason ?? null, issue: presentation?.issue ?? null,
       rejected: presentation?.rejected ?? null, failures });
     summary.turns += 1;
@@ -209,8 +212,8 @@ const E2E_CASES = Object.freeze([
 
 /**
  * Kıyas vakasının canlı beklentisi: altın planın kapsamı (her nüfus okumasında), açık grafik isteği ve vaka sınıfı. Tam vakada
- * doğrulanmış yanıt (stop) zorunludur; kısmi vakada gerekçeli kısmi yanıt (stop/unavailable) kabul edilir; sınırlı vakada
- * yalnızca altyapı hatası başarısızlıktır (sonuç sınıfı raporlanır). Sunucu planı modelin yerine koymaz.
+ * doğrulanmış yanıt (stop) zorunludur; kısmi vakada kapsamı doğrulanmış, dolu ve kanıtlı stop yanıtı gerekir; sınırlı vakada
+ * verisiz ve desteklenmiyor bitişi gerekir; olgusal yanıt sınırlılık başarısı sayılamaz. Sunucu planı modelin yerine koymaz.
  */
 export function benchmarkExpectation(item) {
   const analysis = item.plan?.analysis;
@@ -223,13 +226,14 @@ export function benchmarkExpectation(item) {
   };
   const from = resolveDay(analysis?.dateFrom);
   const to = resolveDay(analysis?.dateTo);
-  return { ...item.expect, ...(item.handling !== 'limitation' ? { finish: 'stop' } : {}),
+  return { ...item.expect, ...(item.handling !== 'limitation' ? { finish: 'stop' } : { finish: 'unsupported', noData: true }),
     ...(scope ? { scope } : {}),
     ...(scope === 'team' ? { assignee: 'team' } : scope === 'self' ? { assignee: 'me' } : {}),
     ...(analysis?.level ? { level: analysis.level } : {}), ...(analysis?.focus ? { focus: [...analysis.focus] } : {}),
     ...(scope === 'project' ? { project: true, projectIds: names.map((name) => seed.projects.find((row) => row.ProjectName === name)?.ProjectId || `bilinmeyen:${name}`) } : {}),
     ...(scope === 'person' ? { person: true, people: names.map((name) => seed.people.find((row) => row.DisplayName === name)?.Sicil || -1) } : {}),
     ...(from && to ? { window: [from, to] } : {}),
+    ...(item.plan?.table ? { table: true } : {}),
     ...(item.expect?.chart || item.expect?.chartTypes?.length ? { chart: true } : {}) };
 }
 
@@ -329,7 +333,6 @@ if (direct) {
         const [result] = await conversationCase(t, [turn], { plannerModel: true, composeModel: true, seed, sicil: BENCH_PROFILES[item.profile] });
         const failures = [...result.failures];
         if (item.handling === 'partial' && result.finish !== 'stop') failures.push(`kısmi vaka bitişi ${result.finish}`);
-        if (item.handling === 'limitation' && result.finish === 'error') failures.push('altyapı/hata bitişi');
         record({ id: item.id, order: item.order, observed: item.observed, handling: item.handling, turns: [result], failures });
       });
     }

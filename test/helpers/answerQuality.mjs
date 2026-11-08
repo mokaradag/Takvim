@@ -1,3 +1,4 @@
+import { nextStepSentence } from '../../src/domain/ai/analyticalFindings.js';
 /**
  * Yanıt metninin yapı ve dil kalitesi ölçüleri (Aşama F kalite kapısı). Yalnızca metne bakar; model çağrısı yoktur.
  * Ölçüler: çok bölümlülük (iki ya da daha çok kanıt), açılışın cümle olması, kapanış, cümlesiz tablo, mekanik kalıplar,
@@ -7,19 +8,21 @@ export const MECHANICAL_PATTERNS = Object.freeze([/Eşleşen/, /Kayıt sayısı:
   /\*\*0\*\*[^.\n]*bulunuyor/, /Etiket metni:/, /\*\*Sonuç:\*\*/]);
 const PRIORITY_HEADING = /^(?:\*\*|#### )(?:Öncelikli konular|Priorities)(?:\*\*)?$/;
 
+const NEXT_STEPS = new Set(['tr', 'en'].flatMap((locale) => [[], ...['workload', 'projects', 'status', 'deadlines', 'priority', 'critical', 'schedule'].map((focus) => [focus])]
+  .map((focus) => nextStepSentence(focus, locale).markdown)));
+
 /** Yalnızca son içerik bloğu kapanış olabilir; erken sonuç başlığı daha sonraki tabloyu gizleyemez. */
 function hasEnding(blocks) {
   const last = blocks.at(-1) || '';
   return /^\*\*(?:Öne çıkan konu|Key point):\*\* .+/.test(last) && !last.includes('\n')
     || PRIORITY_HEADING.test(blocks.at(-2) || '') && /^1\. [^\n]+(?:\n[2-9]\. [^\n]+)*$/.test(last)
-    || /(?:yeterli|listeleyebilirim)\.$/.test(last) && !NON_PROSE.test(last)
-    || /^(?:If you want .+\.|I can list .+ if you want\.)$/.test(last);
+    || NEXT_STEPS.has(last);
 }
 const NON_PROSE = /^(#### |\||_|```|- |\d+\. |> )/;
 
 export function answerQuality(content) {
   const text = String(content || '');
-  const blocks = text.split('\n\n').map((block) => block.trim()).filter((block) => block && !block.startsWith('_Not:'));
+  const blocks = text.split('\n\n').map((block) => block.trim()).filter((block) => block && !/^_(?:Not:|Note:)/.test(block));
   const evidence = new Set(text.match(/【R\d+】/g) || []);
   let spoken = false;
   let bareTables = 0;

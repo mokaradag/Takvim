@@ -14,7 +14,7 @@ import { addDays } from './rota/taskFacts.js';
  * bildirim reddedilir (REQUEST_DECLARATION). Özet, aynı anlamsal kararı KÜÇÜK ve KAPALI bir sözlükle taşır:
  *
  *   - `scope`  : analizin öznesi (self, person, team, project, projects, all) ve gerekiyorsa `level`/`names`;
- *   - `focus`  : 1–3 analitik yön (overview, status, priority, deadlines, overdue, upcoming, workload, projects,
+ *   - `focus`  : 1–4 analitik yön (overview, status, priority, deadlines, overdue, upcoming, workload, projects,
  *                schedule, critical);
  *   - `dateFrom`/`dateTo`: yaklaşan termin ufku;
  *   - `visual` : kullanıcı açıkça grafik/görselleştirme istiyor mu (plan düzeyinde de verilebilir).
@@ -40,7 +40,7 @@ export const ANALYSIS_ACTS = Object.freeze(['explain', 'expand', 'summarize', 'p
  * Modelin bildirdiği yön sayısı en çok `maxFocus`tur. Sunucunun zorunlu eklediği okumalar (portföyde projelere göre satırlar,
  * ufku taşıyan yön) ve Ayrıntılı yanıtın bütünleyici okuması bu sınırın dışındadır; toplam okuma bölümü `maxParts`'ı aşamaz.
  *
- * Aşama F: model görünür şema 1-3 yön önerir (`maxFocus`; önek önbelleği ve kanonik planlayıcı kapısı değişmez). Geniş
+ * Aşama F: model ve sunucu aynı dört yön sınırını kullanır (`maxFocus`). Geniş
  * yönetici soruları (ör. "durum, gecikme, iş yükü ve yaklaşan teslimatlar için gösterge paneli") gerçekten dört yön ister;
  * fiziksel okumaları mevcut üst sınıra (`maxParts`) sığan dört yön düzeltme turu açılmadan kabul edilir
  * (`maxAcceptedFocus`). Okuma üst sınırı büyümez: bildirilen yönlerin okumaları ile sunucunun zorunlu okumaları birlikte
@@ -51,7 +51,7 @@ export const ANALYSIS_ACTS = Object.freeze(['explain', 'expand', 'summarize', 'p
  * "ilk sırada" söylenemez. Tipik birim portföyünün tamamını kapsayabilmesi için portföy sıralaması kayıt defterinin mevcut üst
  * sınırını (10) kullanır; görev ve kişi listeleri 8 satırda kalır. Hiçbir sınır kayıt defterinin sınırını aşmaz.
  */
-export const ANALYSIS_LIMITS = Object.freeze({ maxFocus: PLANNER_LIMITS.maxRequests, maxAcceptedFocus: PLANNER_LIMITS.maxRequests + 1, maxNames: 2, rankLimit: 8,
+export const ANALYSIS_LIMITS = Object.freeze({ maxFocus: PLANNER_LIMITS.maxRequests + 1, maxAcceptedFocus: PLANNER_LIMITS.maxRequests + 1, maxNames: 2, rankLimit: 8,
   entityRankLimit: 10, maxParts: PLANNER_LIMITS.maxRequests + 1, maxDetailedParts: PLANNER_LIMITS.maxRequests + 1 });
 /** Takipte önceki yön yoksa (ya da yeni öznede anlamı yoksa) genel değerlendirmenin yönleri. */
 export const DEFAULT_FOLLOW_UP_FOCUS = Object.freeze(['overview', 'overdue', 'upcoming']);
@@ -66,10 +66,9 @@ const DATE = { type: 'string', format: 'date' };
 const OPEN = Object.freeze(['todo', 'in_progress']);
 
 /**
- * Modelin gördüğü kapalı özet şeması; açıklamalar yalnızca sözleşmeyi anlatır, dili yorumlamaz. `accepted` doğrulamanın
- * şemasıdır: tek fark, fiziksel okuma sınırına sığan dördüncü yönün kabulüdür (model görünür şema değişmez).
+ * Model ve sunucu için aynı kapalı özet şeması; fiziksel okuma bütçesi açılımdan sonra denetlenir.
  */
-export function analysisSchema({ accepted = false } = {}) {
+export function analysisSchema() {
   return {
     type: 'object', additionalProperties: false, required: ['scope'],
     description: 'Geniş/değerlendirme sorusunda request yerine; sunucu yönleri okumalara açar.',
@@ -80,8 +79,8 @@ export function analysisSchema({ accepted = false } = {}) {
       level: { type: 'string', enum: [...ANALYSIS_LEVELS], description: 'team düzeyi: unit birim, department bölüm, directorate direktörlük.' },
       names: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxNames, items: { type: 'string', minLength: 2, maxLength: 120 }, description: 'person/project: kullanıcının yazdığı ad(lar).' },
       withSelf: { type: 'boolean', description: 'Kişi adı/tek kişi satırı ile kendini karşılaştır.' },
-      focus: { type: 'array', minItems: 1, maxItems: accepted ? ANALYSIS_LIMITS.maxAcceptedFocus : ANALYSIS_LIMITS.maxFocus, uniqueItems: true, items: { type: 'string', enum: [...ANALYSIS_FOCUS] },
-        description: '1-3 yön: overview sayılar, status durum, priority öncelik, deadlines termin kovaları, overdue gecikme, upcoming yakın termin, workload iş yükü, projects projeler, schedule aylar, critical kritik açık işler.' },
+      focus: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxFocus, uniqueItems: true, items: { type: 'string', enum: [...ANALYSIS_FOCUS] },
+        description: '1-4 yön: overview sayılar, status durum, priority öncelik, deadlines termin kovaları, overdue gecikme, upcoming yakın termin, workload iş yükü, projects projeler, schedule aylar, critical kritik açık işler.' },
       act: { type: 'string', enum: [...ANALYSIS_ACTS], description: 'Takip eylemi.' },
       dateFrom: { ...DATE, description: 'Termin ufkunun başı.' },
       dateTo: { ...DATE, description: 'Ufkun sonu.' },
@@ -370,7 +369,7 @@ function focusRequest(focus, analysis, base, today = null) {
       if (window && analysis.scope === 'person') return request({ operation: 'value', metrics: ['tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'],
         population: { tool: 'rota_task_analytics' }, entities: base.entities, filters: { ...base.filters, ...window } });
       if (window && analysis.scope !== 'self') return groups(base, 'assignee', { window });
-      if (analysis.scope === 'self') return groups(base, 'project', { split: true, window });
+      if (analysis.scope === 'self') return groups(base, 'project', { split: true, window, future: futureWindow(analysis, today) });
       if (analysis.scope === 'person') {
         return request({ operation: 'list', metrics: ['person.name', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'], population: { tool: 'rota_workload_summary', collection: 'people' },
           entities: base.entities });
@@ -452,14 +451,12 @@ export function complementFocus(analysis, focus, detail) {
  */
 export function effectiveFocus(analysis, today = null) {
   // Sunucunun zorunlu eklediği yön modelin yön bütçesinden düşmez (zayıf model "portföy + üç yön" için reddedilmez).
-  const limit = ANALYSIS_LIMITS.maxParts;
   let focus = [...analysis.focus];
   const window = (analysis.dateFrom || analysis.dateTo) && !focus.some((item) => WINDOW_FOCUS.has(item));
   const implicit = today && analysis.dateTo && analysis.dateTo < today ? 'schedule' : 'upcoming';
   const required = [...(window ? [analysis.focus.find((item) => WINDOW_FOCUS.has(item)) || implicit] : []),
     ...(analysis.scope === 'projects' && !focus.includes('projects') ? ['projects'] : [])];
   focus = [...new Set([...focus, ...required])];
-  if (focus.length > limit) throw invalidArguments(budgetDetails(analysis));
   return focus;
 }
 
@@ -557,8 +554,10 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
         for (const split of splits) { seen.add(JSON.stringify(split)); parts.push(split); }
       }
     }
+    const timelineReady = (part) => part.population?.tool === 'rota_task_search' && part.metrics?.includes('task.targetFinish')
+      && (!futureWindow(analysis, today) || part.filters?.dateFrom === analysis.dateFrom && part.filters?.dateTo === analysis.dateTo);
     const missingShape = chart === 'donut' && !parts.some((part) => ['status', 'priority', 'deadline', 'project'].includes(part.population?.groupBy)) ? 'status'
-      : chart === 'timeline' && !parts.some((part) => part.population?.tool === 'rota_task_search' && part.metrics?.includes('task.targetFinish')) ? 'upcoming' : null;
+      : chart === 'timeline' && !parts.some(timelineReady) ? 'upcoming' : null;
     const needed = chart === 'stacked' ? null : missingShape || chartFocus(analysis, declared, chart);
     if (needed) {
       let produced = null;
@@ -569,6 +568,12 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
           const bases = analysis.withSelf ? [base, { filters: { ...base.filters, assignee: 'me' }, entities: common }]
             : subjects.length > 1 ? subjects.map((entity) => ({ ...base, entities: [entity, ...common] })) : [base];
           produced = bases.map((side) => groups(side, 'status', { open: false }));
+        } else if (chart === 'timeline') {
+          const subjects = base.entities.filter((entity) => entity.type === analysis.scope);
+          const common = base.entities.filter((entity) => entity.type !== analysis.scope);
+          const bases = analysis.withSelf ? [base, { filters: { ...base.filters, assignee: 'me' }, entities: common }]
+            : subjects.length > 1 ? subjects.map((entity) => ({ ...base, entities: [entity, ...common] })) : [base];
+          produced = bases.map((side) => focusRequest(needed, { ...analysis, scope: 'self', withSelf: false }, side, today));
         } else produced = analysis.withSelf ? selfComparison(needed, analysis, base, today, chart) : produce(needed);
       } catch { produced = null; }
       const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));

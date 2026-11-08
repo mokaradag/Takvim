@@ -1485,6 +1485,7 @@
    "expect": {
     "intent": "rota",
     "scope": "person",
+    "withSelf": true,
     "names": [
      "Nehir SÜRMELİOĞLU"
     ],

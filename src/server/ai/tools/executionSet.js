@@ -156,6 +156,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   // En çok iki farklı tür; eski chart dizisi de aynı kapalı doğrulamadan geçer.
   // Zayıf model diziyi JSON metni olarak da yazar (`"[\"donut\", \"stacked\"]"`): iç içe alanlardaki gibi yalnızca geçerli
   // JSON dizisi çözülür; anlam yorumlanmaz, tür denetimi aynen uygulanır.
+  onDecoded(plan);
   let charts = null;
   const chartList = decodedJson(plan.charts ?? plan.chart);
   if (plan.charts != null && (!Array.isArray(chartList) || plan.chart != null && plan.chart !== chartList[0])) throw invalidArguments(['$.charts:enum']);
@@ -167,7 +168,6 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
       if (!charts) delete plan.charts;
     } else throw invalidArguments([plan.charts != null ? '$.charts:enum' : '$.chart:enum']);
   }
-  onDecoded(plan);
   if (Array.isArray(plan.additionalRequests) && !plan.additionalRequests.length) delete plan.additionalRequests;
   // Boş istek nesnesi analiz özetinin yanında anlam taşımaz (zayıf model şablonu doldurur).
   if (plan.analysis && plan.request && typeof plan.request === 'object' && !Array.isArray(plan.request) && !Object.keys(plan.request).length) delete plan.request;
@@ -204,8 +204,9 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // Aşama F: özetin yanına yalnızca ad çözümü çağrıları (kişi/proje arama) yazılmışsa bunlar gereksizdir: adları sunucu
     // özetten kendisi çözer. Çağrılar YÜRÜTÜLMEDEN atılır (yapısal normalleştirme; düzeltme turu açılmaz). Başka araç çağrısı ya da
     // istek ile birlikte özet eskisi gibi reddedilir.
+    const parsed = parseAnalysis(plan.analysis);
     const selectors = [
-      ...(['person', 'project'].includes(plan.analysis?.scope) ? (Array.isArray(plan.analysis.names) ? plan.analysis.names : []).map((text) => ({ name: `rota_${plan.analysis.scope}_search`, text })) : []),
+      ...(['person', 'project'].includes(parsed.scope) ? (Array.isArray(plan.analysis.names) ? plan.analysis.names : []).map((text) => ({ name: `rota_${parsed.scope}_search`, text })) : []),
       ...(plan.analysis?.within ? [{ name: 'rota_project_search', text: plan.analysis.within }] : [])
     ];
     const lookups = planned.length && planned.every((call) => {
@@ -215,7 +216,6 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     });
     // Analitik özet: sunucu her yönü kayıt defterinin sabit istek biçimine açar; okumaları yalnızca sunucu kurar.
     if (present('request') || present('additionalRequests') || (planned.length && !lookups) || direct.length) throw invalidArguments(['$.analysis:request']);
-    const parsed = parseAnalysis(plan.analysis);
     // Takipte yazılmayan yön/ufuk önceki doğrulanmış analizden; görselleştirme ve grafik türü de açıkça kapatılmadıkça sürer.
     const analysis = resolveAnalysisBrief(parsed, { previous: previousAnalysis, today });
     const follow = ['previous', 'row'].includes(parsed.scope) && previousAnalysis;
@@ -223,7 +223,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const chart = base.chart || (follow && visual && !declined ? previousAnalysis.chart : null) || null;
     const table = base.table === true || Boolean(follow && previousAnalysis.table && plan.table !== false);
     const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
-    const requested = visual ? base.charts || (follow && !base.chart ? previousAnalysis.charts : null) : null;
+    const requested = visual ? base.charts || (follow && (!base.chart || base.chart === previousAnalysis.chart) ? previousAnalysis.charts : null) : null;
     const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested });
     return { plan: { ...base, ...(visual ? { visual: true } : declined ? { visual: false } : {}), ...(chart ? { chart } : {}), ...(requested ? { charts: requested } : {}),
       ...(table ? { table: true } : {}), analysis, request,

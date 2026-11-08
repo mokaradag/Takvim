@@ -2074,12 +2074,11 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
   (+`names`), `projects` (portföy), `all`, `previous` (önceki analizin öznesi), `row` (+`rows`: önceki sonucun 1–2 satırı).
   `within`: `self|team|all|previous` kapsamını adı verilen tek projeyle daraltır.
 - `focus` (önem sırasıyla): `overview`, `status`, `priority`, `deadlines`, `overdue`, `upcoming`, `workload`, `projects`,
-  `schedule`, `critical`. Sunucu en çok `PLANNER_LIMITS.maxRequests` (3) bölüm okur: yönlerin bütün fiziksel açılımı
+  `schedule`, `critical`. Sunucu analitik özette en çok `ANALYSIS_LIMITS.maxParts` (4) bölüm okur: yönlerin bütün fiziksel açılımı
   (karşılaştırmada kayıt başına bölümler dâhil), ufuk bölümü ve portföy satırları bütçeye sığmalıdır. Sığmayan plan
   veri okunmadan `$.analysis.focus:requestBudget` ile reddedilir; istenen yön sessizce düşürülmez.
   **Aşama F güncellemesi:** bildirilen yönlerin okumaları mevcut fiziksel üst sınıra (`maxParts` = 4) kadar kabul edilir;
-  model şeması 1-3 yön önermeyi sürdürür, sığan dördüncü yön düzeltme turu açmaz. Bütçe aşımında model kendi yönlerinin
-  sıralı alt kümesine daraltır (`narrowable`; karşılaştırmada da yön daralır, özne düşmez). Ayrıntı:
+  model şeması ve doğrulayıcı 1-4 yön kullanır. Şemanın `maxItems` sınırını aşan fazladan yönler yalnızca sıralı alt kümeyle onarılabilir; fiziksel okuma bütçesi aşımında yön düşürülmez, kullanıcıdan öncelik istenir (`repairScope`). Ayrıntı:
   [Yol Haritası](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md) §5, [Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) §2.
 - Açılım (`expandAnalysis`) yalnızca türlü değerlerle çalışır, kullanıcı metnini okumaz; çıktı modelin yazacağı ham
   isteklerdir ve 4C bildirim doğrulamasından, yetkiden ve kanıt seçiminden aynen geçer. Adlar 4C içerme kuralına
@@ -2365,7 +2364,7 @@ verilirse bu sınıra uyulur. Onarım yoğunluğu bu payı aşarsa koşu başar�
   mutlak tarihtir; sunucu kullanıcının sözcüklerinden bağıl anlam tahmin etmez.
 - `withSelf` aynı kanonik niyette, tek adlı kişi ve isteğe bağlı proje kesişimiyle saklanır; seçim yalnızca
   belirsiz kimliği değiştirir. Önceki/satır planları, eylem ve sunum tercihleri aynı doğrulayıcıdan yeniden geçer.
-  Model üç yön bildirebilir; sunucunun dördüncü etkin yönü kalıcı bağlamda ve yeniden yürütmede korunur.
+  Model dört yön bildirebilir; sunucunun etkin yönleri kalıcı bağlamda ve yeniden yürütmede korunur.
 - Açık `visual:false` grafik türünden ve modelin isteğe bağlı grafik seçiminden önce gelir. İstenen aday için
   aday ve son çizim bütçesi ayrılır. Desteklenmeyen tür, başka grafik çizilsin veya çizilmesin türüne özgü
   açıklanır. Skaler kanıtta `table:true` için satır tablosu yoksa belirlenimci açıklama verilir.

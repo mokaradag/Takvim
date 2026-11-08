@@ -263,10 +263,10 @@ yazma işlemi (Aşama 5).
    da sonrası) bir dönem gecikmiş iş okumasını daraltmaz; diğer yönler dönemi kullanır. Kanıtın ölçütü bunu
    görünür kılar ("Şu anda N gecikmiş görev var").
 4. **Okuma bütçesi toleransı**: Modelin bildirdiği dört yön, fiziksel okuma sayısı mevcut üst sınıra
-   (`ANALYSIS_LIMITS.maxParts` = 4) sığıyorsa düzeltme turu açılmadan kabul edilir. Model görünür şema
-   ("1-3 yön") değişmez: önek önbelleği ve kanonik kapı istikrarı korunur. Şema sınırını aşan fazladan yönler onarılabilir; fiziksel bütçeye sığmayan
+   (`ANALYSIS_LIMITS.maxParts` = 4) sığıyorsa düzeltme turu açılmadan kabul edilir. Model görünür şema ve sunucu doğrulayıcısı
+   aynı dört yön sınırını sunar; fiziksel okuma ve toplam tur bütçesi büyümez. Şema sınırını aşan fazladan yönler onarılabilir; fiziksel bütçeye sığmayan
    karşılaştırmada bildirilen yönler düşürülmez, kullanıcıdan öncelik istenir.
-5. **İki grafik türü toleransı**: `charts` alanında en çok iki farklı bilinen tür şemada bildirilir (`chart` dizisi eski yazım olarak korunur); her
+5. **İki grafik türü toleransı**: `charts` alanında en çok iki farklı bilinen tür şemada bildirilir (model sözleşmesindeki `chart` tek türdür; çoklu türler `charts` ile bildirilir); her
    türün gerektirdiği okuma bütçeye sığıyorsa eklenir; çizilemeyen tür için türe özgü not verilir.
 6. **Boş tamamlama tanısı**: `AI WARN empty completion` satırı sağlayıcının bildirdiği çıktı belirteci sayısını
    da yazar (içeriksiz). "Model belirteç üretti ama ağ geçidi metin/araç çağrısı teslim etmedi" (ayrıştırıcı
@@ -369,7 +369,8 @@ Aşama 4E (analitik özet, önermeler, düzen) ve PR #114 (geçmiş konuşma kan
 - *Risk*: doğal sayım cümlesinin süzgeci eksik söylemesi. *Önlem*: doğal cümle yalnızca nüfusun BÜTÜN süzgeçlerini
   ifade edebildiğinde kurulur; edemezse ölçütlü cümle kalır.
 - *Geri alma*: veri, şema, SQL ve yetki değişikliği yoktur; değişiklikler sunum ve plan genişletme katmanındadır. Sorun
-  durumunda tek commit geri alınır (`git revert`); ayrı bir işletim anahtarı gerekmez.
+  durumunda dağıtılan geçmişe göre PR bütünü geri alınır: squash dağıtımında squash commit, merge dağıtımında merge commit (`git revert -m 1 <merge>`), doğrusal geçmişte PR commitlerinin tamamı en yeniden eskiye geri alınır. Sonra yeniden derlenip dağıtılır; ayrı bir işletim anahtarı gerekmez.
+- *Sürüm geçişi*: yeni `charts` alanını tanımayan eski sunucularla aynı konuşmayı dönüşümlü işleyen karma sürüm dağıtımı desteklenmez. Trafik durdurulup bütün örnekler birlikte güncellenir. Eski katı okuyucu bu commit ile geriye dönük değiştirilemez; geri almada yeni çoklu grafik bağlamı eski okuyucu tarafından kullanılmayabilir. Yeni sürüm önceki tek grafik bağlamlarını okumayı sürdürür; kapalı doğrulama gevşetilmez.
 
 ### F.16 Çıktılar
 
@@ -549,8 +550,7 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
      bitiş nedeni incelenir; yalnızca boşluk ya da gerekçe çıktısı da bu durumu açıklayabilir. Araç ayrıştırıcısı
      ve akış ayarları olası nedenlerden biridir. Gerekçe içeriği günlüğe alınmaz.
 5. Her yanıtı kabul matrisindeki dört sınıftan birine koyun; mekanik/doğal düzyazıyı ayrı puanlayın.
-6. Sonuçları bu belgenin §13 bölümüne ve kabul matrisine tarihli kayıt olarak ekleyin. VM kabulü **bekliyor** olarak
-   kalır; Haiku sonucu onun yerine geçmez.
+6. Sonuçları bu belgenin §13 bölümüne ve kabul matrisine tarihli kayıt olarak ekleyin. VM kabul durumu gerçek yeniden oynatma sonucuna göre güncellenir; koşulmadıysa **bekliyor** kalır. Haiku sonucu VM kabulünün yerine geçmez.
 
 ---
 
@@ -588,7 +588,7 @@ Bu bölüm her oturumun sonunda güncellenir. Güncel durum ve sonraki giriş no
   ile hizalanması; ayrık küme puanlayıcısında serbest kapsamın puanlanmaması.
 - **Doğrulandı:** `npm test` (bütün sınamalar geçti), `npm run lint` (uyarısız), `npm run build`; belirlenimci kıyas 40/40;
   Haiku sonuçları ve belirteç/önbellek kayıtları [Kabul Matrisi §4](BILGIN-ANALIZ-KABUL-MATRISI.md); planlayıcıya giden
-  girdinin `main` ile bayt bayt aynı olduğu (136 vaka, sahte model komutuyla); gerçek arayüzde masaüstü/mobil ve
+  girdinin `main` ile bayt bayt aynı olduğu tarihsel ölçüm (136 vaka, sahte model komutuyla; `charts` ve dört yön şema değişikliklerinden önceki sürüme aittir, güncel kabul kanıtı değildir); gerçek arayüzde masaüstü/mobil ve
   açık/koyu temada kısa olgusal, yönetici özeti, proje karşılaştırması, proje yöneticisi, çoklu grafik, eksik veri,
   uzun adlar, tablo ağırlıklı ve güvenli ret senaryoları (sayfa yatay kaymıyor; tablolar kendi kabında kayıyor).
 - **Açık:** Windows VM yeniden oynatması (§11; Qwen/Gemma kabulü yalnızca orada yapılabilir); anlamsal danışmanlıklı

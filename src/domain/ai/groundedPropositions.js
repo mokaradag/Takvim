@@ -732,8 +732,10 @@ const ofCount = (value, locale) => (locale === 'en' ? number(value, locale) : `$
 /** Analist cümlesinin öznesi (kişi, proje ya da kişi karşılaştırmasında "Siz"); öznesiz kanıtta boş metin. */
 function analysisSubject(sample, comparingPeople, locale) {
   const filters = sample?.filters;
+  const person = filters?.person || (filters?.personSicil != null && sample?.entity?.type === 'person' ? sample.entity.name : null);
+  if (filters?.personSicil != null && (!person?.trim() || person.trim() === UNRESOLVED_PERSON)) return '';
   const self = comparingPeople && filters?.assignee === 'me' ? (locale === 'en' ? 'You' : 'Siz') : null;
-  return [self, filters?.person || (filters?.personSicil != null && sample?.entity?.type === 'person' ? sample.entity.name : null),
+  return [self, person,
     filters?.projectId ? filters.project || (sample?.entity?.type === 'project' ? sample.entity.name : null) : null].filter(Boolean).join(' · ');
 }
 
@@ -745,7 +747,10 @@ function analysisSubject(sample, comparingPeople, locale) {
 export function singleSubjectPropositions(conclusions, parts, locale = 'tr') {
   const facts = parts.flatMap((part) => part.presentation?.facts || []);
   const comparingPeople = facts.some((item) => item.fact?.semantic?.filters?.personSicil != null || item.fact?.semantic?.filters?.person);
-  const subjects = new Set(facts.map((item) => analysisSubject(item.fact?.semantic, comparingPeople, locale)));
+  const subjects = new Set(facts.map((item) => {
+    const f = item.fact?.semantic?.filters || {};
+    return JSON.stringify([analysisSubject(item.fact?.semantic, comparingPeople, locale), f.personSicil ?? null, f.projectId ? String(f.projectId).toLowerCase() : null, ['me', 'team', 'person', 'unassigned'].includes(f.assignee) ? f.assignee : null]);
+  }));
   if (subjects.size !== 1 || !subjects.values().next().value) return conclusions;
   return conclusions.map((item) => {
     if (!item.bare) return item;
@@ -777,6 +782,14 @@ export function analystPropositions(parts, locale = 'tr') {
   });
   // Kişi ile kendisinin karşılaştırmasında kullanıcının kendi bölümünün önermeleri de öznesini taşır ("Siz: …").
   const comparingPeople = evidenceParts.some((part) => part.presentation.facts.some((item) => item.fact?.semantic?.filters?.personSicil != null || item.fact?.semantic?.filters?.person));
+  const projectIds = new Map();
+  for (const part of evidenceParts) for (const { fact } of part.presentation.facts) {
+    const f = fact.semantic?.filters;
+    if (f?.projectId && f.project) {
+      if (!projectIds.has(f.project)) projectIds.set(f.project, new Set());
+      projectIds.get(f.project).add(String(f.projectId).toLowerCase());
+    }
+  }
   for (const part of evidenceParts) {
     const ordinal = part.index + 1;
     const items = part.presentation.facts;
@@ -784,7 +797,7 @@ export function analystPropositions(parts, locale = 'tr') {
       const sample = items.find((item) => item.evidenceId === evidenceId)?.fact.semantic;
       const filters = sample?.filters;
       const subject = analysisSubject(sample, comparingPeople, locale);
-      if (filters?.personSicil != null && !subject) return;
+      if (filters?.personSicil != null && !subject || projectIds.get(filters?.project)?.size > 1) return;
       let bare = null;
       if (realized && subject) {
         // Etiketsiz biçim de saklanır: yanıtın bütün kanıtı tek özneye aitse sayfa etiketi düşürür (singleSubjectPropositions).

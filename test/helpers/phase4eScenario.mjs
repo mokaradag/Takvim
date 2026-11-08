@@ -1,3 +1,4 @@
+import { parseAnswerChart } from '../../src/domain/ai/answerChart.js';
 /**
  * Aşama 4E senaryo koşucusu: konuşmayı ÜRETİMDEKİ asistan hizmetinden geçirir (konuşma kaydı, takip bağlamı, yetki,
  * salt okunur araçlar, kalıcı kanıt) ve her turun araç düzeyindeki kapsamını sınama veri kümesinin SQL günlüğünden
@@ -9,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { createAiStack, sendTurn } from './aiStack.mjs';
 import { AYSE, NOW, rotaToolSeed } from './aiToolFixtures.mjs';
 import { createFakeAiProvider } from './fakeAiProvider.mjs';
-import { composer, coveringBlocks, isCompositionCall } from './compositionScenario.mjs';
+import { composer, coveringBlocks, isCompositionCall, compositionView } from './compositionScenario.mjs';
 import { answerQuality } from './answerQuality.mjs';
 
 const planCall = (plan) => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plan }] });
@@ -23,9 +24,11 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
   const fake = createFakeAiProvider({ semanticQueue: false });
   let current = null;
   const inputs = [];
+  const compositionViews = [];
   // Dış sağlayıcı (canlı nitelendirme): planlayıcı ve düzen turlarını kendisi yanıtlar; altın plan kuyruğa konmaz.
   const recorded = external ? { ...external, get pendingCount() { return external.pendingCount; }, streamToolCompletion(input) {
     if (!isCompositionCall(input)) inputs.push(input);
+    else compositionViews.push(compositionView(input));
     return external.streamToolCompletion(input);
   } } : null;
   const provider = recorded || { ...fake, get pendingCount() { return fake.pendingCount; }, streamToolCompletion(input) {
@@ -34,6 +37,7 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
       if (behavior != null) fake.enqueue(behavior);
     }
     if (!isCompositionCall(input)) inputs.push(input);
+    else compositionViews.push(compositionView(input));
     return fake.streamToolCompletion(input);
   } };
   const stack = createAiStack(t, { provider, sicil, seed, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', ...(composition ? { MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true' } : {}), ...env } });
@@ -43,6 +47,7 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
     const before = (stack.db.aiToolLog || []).length;
     const evidenceBefore = (stack.db.aiMessageEvidence || []).length;
     const inputBefore = inputs.length;
+    const viewBefore = compositionViews.length;
     if (!external && !planner && turn.plan) stack.provider.enqueue(planCall(turn.plan));
     if (external && turn.scripted && turn.plan) stack.provider.enqueue(planCall(turn.plan));
     const response = await sendTurn({ turnId: randomUUID(), message: turn.text, mode: 'standard', ...(detail ? { detail } : {}),
@@ -53,13 +58,18 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
     state.turns += 1;
     const log = (stack.db.aiToolLog || []).slice(before);
     const evidence = (stack.db.aiMessageEvidence || []).slice(evidenceBefore).map((row) => JSON.parse(row.EvidenceJson));
-    return { done, answer: done.assistantMessage, log, inputs: inputs.slice(inputBefore), analysisContext: evidence.find((row) => row.analysisContext)?.analysisContext || null };
+    return { done, answer: done.assistantMessage, log, evidence, compositionViews: compositionViews.slice(viewBefore), inputs: inputs.slice(inputBefore), analysisContext: evidence.find((row) => row.analysisContext)?.analysisContext || null };
   }
   return { stack, ask };
 }
 
 /** Görev nüfusu okumaları (sayfa sorumlu okumaları değil). */
 export const populationReads = (log) => log.filter((row) => row.query === 'task-facts' && !String(row.params.taskIds || ''));
+
+/** Yalnızca istemcinin kabul ettiği çitli grafik tanımları teslim edilmiş grafik sayılır. */
+export function renderedCharts(content) {
+  return [...String(content || '').matchAll(/```rota-chart\s*\n([^`]+)\n```/g)].map((match) => parseAnswerChart(match[1])).filter(Boolean);
+}
 
 /**
  * Turun araç düzeyindeki beklentileri; ihlal listesi döner (boş: geçti). `live`: canlı modelin seçtiği yön tek satırlık
@@ -88,15 +98,16 @@ export function turnViolations(result, expect, { live = false } = {}) {
     && Math.abs(day(row.params.dateFrom) - day(expect.window[0])) <= 1 && Math.abs(day(row.params.dateTo) - day(expect.window[1])) <= 1))) {
     problems.push(`ufuk ${expect.window.join('..')} okunmadı`);
   }
-  if (expect.chart && !content.includes('```rota-chart') && !(live && /güvenle grafik çizilemedi|could not be drawn safely/.test(content))) problems.push('grafik yok');
+  const charts = renderedCharts(content);
+  if (expect.chart && !charts.length && !(live && /güvenle grafik çizilemedi|could not be drawn safely/.test(content))) problems.push('grafik yok');
   if (expect.chartUnavailable && (content.includes('```rota-chart') || !/güvenle grafik çizilemedi|could not be drawn safely/.test(content))) problems.push('çizilemeyen grafik açıkça belirtilmedi');
   if (expect.scopeDenied && !/yönetim kapsamınız bulunmuyor|management scope/.test(content)) problems.push('kapsam reddi metni yok');
   if (expect.level && !every((row) => row.params.teamLevel === expect.level.toUpperCase())) problems.push('örgütsel düzey her okumada korunmadı');
   if (expect.scope && result.analysisContext?.scope !== expect.scope) problems.push('analiz kapsamı beklenenle aynı değil');
   if (expect.projectIds && JSON.stringify([...new Set(reads.map((row) => row.params.projectId).filter(Boolean))].sort()) !== JSON.stringify([...expect.projectIds].sort())) problems.push('proje kimliği kümesi beklenenle aynı değil');
   if (expect.focus && (!result.analysisContext || expect.focus.some((focus) => !result.analysisContext.focus.includes(focus)))) problems.push('analitik yönler eksik');
-  for (const type of expect.chartTypes || []) if (!content.includes(`"type":"${type}"`)) problems.push(`${type} grafiği yok`);
-  const findings = { attentionLeader: /yönetim dikkatini en çok/, windowPressure: /arasında teslimatı olan/, subjectComparison: /arasındaki en belirgin fark|sayıları birbirine yakın/,
+  for (const type of expect.chartTypes || []) if (!charts.some((chart) => chart.type === type)) problems.push(`${type} grafiği yok`);
+  const findings = { attentionLeader: /yönetim dikkatini en çok/, windowPressure: /arasında teslimatı olan/, subjectComparison: /arasındaki en belirgin fark|sayıları birbirine yakın|görev sayıları iki (?:kişide|projede) aynı/,
     overdueConcentration: /gecikmiş[\s\S]+toplanıyor/i };
   for (const kind of expect.findings || []) if (!findings[kind]?.test(content)) problems.push(`${kind} bulgusu yok`);
   if (expect.caveat && !/kesin olarak söylenemez/.test(content)) problems.push('zorunlu tamlık çekincesi yok');
@@ -104,6 +115,8 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.overdueUnwindowed && !reads.some((row) => row.params.deadline === 'overdue' && !row.params.dateFrom && !row.params.dateTo)) problems.push('mevcut gecikme ayrı okunmadı');
   // Veri okumayan tur hiçbir Rota sorgusu çalıştırmaz (görev kimliğiyle ya da portföy okuması dâhil; süzülmüş alt küme değil).
   if (expect.noData && result.log.length) problems.push(`veri okundu: ${[...new Set(result.log.map((row) => row.query))].join(',')}`);
+  if (expect.table && !/^\|.+\|\n\|[- :|]+\|/m.test(content)) problems.push('istenen tablo yok');
+  if (expect.detail && (!result.compositionViews?.length || !result.compositionViews.every((view) => view.detail === expect.detail))) problems.push('yanıt ayrıntısı beklenenle aynı değil');
   if (expect.finish === 'stop' && (!reads.length && !result.log.some((row) => row.query === 'portfolio'))) problems.push('araç okuması yok');
   return problems;
 }

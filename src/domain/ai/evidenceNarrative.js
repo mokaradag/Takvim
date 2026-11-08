@@ -172,7 +172,7 @@ function totalsSentences(entries, { scope, locale, qualifiers, singular = false 
       const clauses = counted.map((key) => (locale === 'en' ? `${strong(narrativeValue(byKey.get(key), locale))} ${TOTAL_PREDICATES[key][1]}`
         : `${strong(narrativeValue(byKey.get(key), locale))}${turkishPossessiveSuffix(byKey.get(key).value)} ${TOTAL_PREDICATES[key][0]}`));
       const negative = none.length ? (locale === 'en'
-        ? `none ${none.map((key) => TOTAL_PREDICATES[key][1].replace(/^(are|were) /, '')).join(' or ')}`
+        ? `none ${none.map((key) => TOTAL_PREDICATES[key][1]).join(' or ')}`
         : `hiçbiri ${none.map((key) => TOTAL_PREDICATES[key][0]).join(' ya da ')} değil`) : '';
       // Hiçbiri tamamlanmamışsa "%0" oranı aynı olguyu yineler.
       const rateClause = rateText && !(none.includes('done') && rate.value === 0) ? (locale === 'en' ? `; the completion rate is ${rateText}` : `; tamamlanma oranı ${rateText}`) : '';
@@ -792,7 +792,7 @@ export function renderGroupDetails(group, { locale = 'tr', empty = [], layout = 
   const sentences = groupSentences(shown, { locale, layout, empty, lead });
   if (!sentences.length) return '';
   // Doğal sayım cümlesi nüfusun bütün süzgeçlerini söyler (yalnızca bunu yapabildiğinde kurulur): satırın ölçütü yinelenmez.
-  const { text, criteria } = lead ? { text: withoutCriteria(sentences.join(' '), locale, lead), criteria: null } : sharedCriteria(sentences.join(' '), locale);
+  const { text, criteria } = lead ? { text: withoutCriteria(sentences.join(' '), locale, lead, group), criteria: null } : sharedCriteria(sentences.join(' '), locale);
   // Ortak ölçüt satırı da süzgeçleri doğal söylenebiliyorsa doğal biçimdedir.
   const natural = criteria ? naturalCaption([{ entries: group.main.entries }, ...[...group.collections.values()].flatMap((rows) => [...rows.values()])], locale) : null;
   return `${text}${cite ? ` ${citation([group.evidenceId])}` : ''}${criteria ? `\n\n_${natural || criteria}_` : ''}`;
@@ -802,13 +802,16 @@ export function renderGroupDetails(group, { locale = 'tr', empty = [], layout = 
  * Aynı paragrafta birden çok "(ölçüt: …)" varsa cümle içinden çıkarılır ve öğeleri birleşik tek satır olur
  * ("_Ölçüt: …_"); hiçbir öğe düşmez. Tek ölçüt yerinde kalır.
  */
-function withoutCriteria(text, locale, lead = '') {
+function withoutCriteria(text, locale, lead = '', group = null) {
   // Aşama F: ölçütün içindeki satır projesi bilgi taşır (doğal sayım cümlesi onu söylemiyorsa): "(**X** projesi)" olarak kalır.
   const key = locale === 'en' ? 'Project: ' : 'Proje: ';
   const pattern = new RegExp(` \\(${locale === 'en' ? 'criteria' : 'ölçüt'}: ([^()]*)\\)`, 'g');
   const bare = text.replace(pattern, '');
-  return text.replace(pattern, (_, items) => {
-    const project = items.split('; ').find((item) => item.startsWith(key))?.slice(key.length);
+  const entries = [...(group?.main?.entries || []), ...[...(group?.collections?.values() || [])].flatMap((rows) => [...rows.values()].flatMap((row) => row.entries))];
+  const projects = [...new Set(entries.flatMap(({ fact }) => factPresentation(fact, locale).qualifierParts.filter((part) => part.key === 'project').map((part) => escapedFactText(part.value))))].sort((a, b) => b.length - a.length);
+  return text.replace(pattern, (original, items) => {
+    const project = projects.find((name) => items.includes(`${key}${name}`));
+    if (!project && items.includes(key)) return original;
     const association = locale === 'en' ? `in the **${project}** project` : `**${project}** projesi`;
     if (!project || String(lead || '').includes(association) || bare.includes(association)) return '';
     return locale === 'en' ? ` (in the ${strong(project)} project)` : ` (${strong(project)} projesi)`;
@@ -842,7 +845,7 @@ export function renderVerifiedNarrative(items, { locale = 'tr', layout = 'auto',
     const lead = countLead?.(group) || null;
     const sentences = groupSentences(group, { locale, layout, empty, lead });
     // Doğal sayım cümlesi süzgeçleri söyler: satır cümlelerindeki ölçüt parantezi yinelenmez (satır projesi korunur).
-    const stated = lead ? withoutCriteria(sentences.join(' '), locale, lead) : sentences.join(' ');
+    const stated = lead ? withoutCriteria(sentences.join(' '), locale, lead, group) : sentences.join(' ');
     const listBlocks = narrativeRowCollections(group, layout)
       .map((collection) => groupRowsBlock(group, collection, { locale, layout: chosenLayout === 'prose' ? 'list' : chosenLayout, stated, criteriaStated: Boolean(lead) }));
     if (sentences.length) blocks.push(`${stated} ${citation([group.evidenceId])}`);

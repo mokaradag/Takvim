@@ -2,7 +2,7 @@
  * Aşama F — planlama sözleşmesinin kök neden düzeltmeleri (belirlenimci, model çağrısı yok).
  *
  *   - Gecikme bugüne göre ölçülür: tamamen gelecekteki dönem gecikmiş iş okumasını boşaltmaz (VM soru 3 ve 16 sınıfı).
- *   - Fiziksel okuma sınırına (4) sığan dört yön düzeltme turu açmadan kabul edilir; model görünür şema 1-3 yön önerir.
+ *   - Fiziksel okuma sınırına (4) sığan dört yön düzeltme turu açmadan kabul edilir; model görünür şema da dört yön sunar.
  *   - Tek özneli planın bütçe aşımı daraltılabilir (`narrowable`); karşılaştırmanınki daraltılamaz.
  *   - İki grafik türü (dizi) kabul edilir ve her türün okuması bütçeye sığdığı ölçüde eklenir; geçersiz dizi reddedilir.
  *   - Boş tamamlamanın günlük satırı sağlayıcının bildirdiği çıktı belirteci sayısını taşır (içeriksiz tanı).
@@ -42,8 +42,8 @@ test('gelecekteki dönem gecikmiş iş okumasını daraltmaz; geçmişi kapsayan
   assert.equal(futureWindow({ dateFrom: '2026-09-30' }, null), false, 'bugün bilinmiyorsa kural uygulanmaz');
 });
 
-test('dört yön fiziksel sınıra sığarsa doğrudan kabul edilir; model görünür şema değişmez', () => {
-  assert.equal(analysisSchema().properties.focus.maxItems, 3);
+test('dört yön model şemasından fiziksel okuma sınırına kadar korunur', () => {
+  assert.equal(analysisSchema().properties.focus.maxItems, 4);
   const parts = expand({ scope: 'all', focus: ['status', 'overdue', 'workload', 'upcoming'] });
   assert.equal(parts.length, ANALYSIS_LIMITS.maxParts);
   assert.deepEqual(parts.map((item) => [item.population.tool, item.population.groupBy || item.filters?.deadline]),
@@ -145,6 +145,15 @@ test('karşılaştırmanın eşdeğer skaler okumaları birleşir; istenen hiçb
   assert.deepEqual(result.analysisContext.focus, analysis.focus);
   const { AYSE, ZEYNEP } = await import('./helpers/aiToolFixtures.mjs');
   assert.deepEqual([...new Set(populationReads(result.log).map((row) => row.params.personSicil))].sort(), [AYSE, ZEYNEP].sort());
+  const reads = populationReads(result.log);
+  for (const sicil of [AYSE, ZEYNEP]) {
+    const subject = reads.filter((row) => row.params.personSicil === sicil);
+    assert.ok(subject.length >= 2, 'her öznenin proje ve birleşik toplam okumaları yürütülmeli');
+    const evidence = result.evidence.filter((row) => row.data?.filters?.personSicil === sicil);
+    assert.ok(evidence.some((row) => row.data.groupBy === 'project'), 'yürütülen sonuçta proje dağılımı olmalı');
+    assert.ok(evidence.some((row) => !row.data.groupBy && ['open', 'overdue', 'dueNext7Days'].every((key) => Number.isInteger(row.data.totals?.[key]))),
+      'aynı öznenin iş yükü, gecikme ve yaklaşan toplamları kanıtta bulunmalı');
+  }
   const parts = expand(analysis);
   for (const name of analysis.names) assert.ok(parts.some((item) => item.population.groupBy === 'project' && item.entities.some((entity) => entity.text === name)));
   assert.ok(parts.some((item) => ['tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'].every((metric) => item.metrics.includes(metric))));
