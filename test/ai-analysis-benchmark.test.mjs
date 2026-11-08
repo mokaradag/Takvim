@@ -143,6 +143,12 @@ for (const format of ['liste', 'tablo', 'grafik']) test(`eşit durum sayıları 
     log: projectIds.map((projectId) => ({ query: 'task-facts', params: { projectId } })) };
   const expect = { scope: 'project', focus: ['status'], projectIds };
   assert.deepEqual(turnViolations(result, expect), [], content);
+  const nested = content.replaceAll(/^(#### [^\n]+)$/gm, '$1\n\n##### Durum dağılımı');
+  assert.deepEqual(turnViolations({ ...result, answer: { content: nested } }, expect), [], nested);
+  const outside = nested.replace('##### Durum dağılımı', '### Genel sonuç');
+  assert.ok(turnViolations({ ...result, answer: { content: outside } }, expect).includes('durum dağılımında proje atfı uyuşmuyor'));
+  const nestedSwapped = nested.replaceAll('R1', '__kanıt__').replaceAll('R2', 'R1').replaceAll('__kanıt__', 'R2');
+  assert.ok(turnViolations({ ...result, answer: { content: nestedSwapped } }, expect).includes('durum dağılımında proje atfı uyuşmuyor'));
   const swappedIds = content.replaceAll('R1', '__kanıt__').replaceAll('R2', 'R1').replaceAll('__kanıt__', 'R2');
   assert.ok(turnViolations({ ...result, answer: { content: swappedIds } }, expect).includes('durum dağılımında proje atfı uyuşmuyor'));
   const swappedNames = names.map((_, index) => section(names[1 - index], `R${index + 1}`)).join('\n\n');

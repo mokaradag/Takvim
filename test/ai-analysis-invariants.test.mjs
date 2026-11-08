@@ -11,6 +11,32 @@ const { unpackTypedPlan, typedPlanningTool, planShapeHints } = await import('../
 const TODAY = '2026-09-30';
 const unpack = (plan, previousAnalysis = null) => unpackTypedPlan({ toolCalls: [{ name: 'rota_plan', arguments: JSON.stringify(plan) }] }, { today: TODAY, previousAnalysis }).plan;
 
+test('planlayıcı nitelendirmesi özgül altyapı nedenini korur ve bilinmeyen hata metnini rapora taşımaz', async () => {
+  const { plannerCase } = await import('../scripts/analysis-qualification.mjs');
+  const reply = { text: '', toolCalls: [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['status'] } } }],
+    models: [process.env.PLANNER_CLAUDE_MODEL || 'claude-haiku-4-5-20251001'], thinking: 'off', finishReason: 'tool_calls' };
+  const item = { id: 'sınama', text: 'Görevlerimin durumunu göster', expect: { intent: 'rota', scope: 'self', focus: ['status'] } };
+  const valid = await plannerCase(item, { completeRound: async () => reply });
+  assert.equal(valid.infrastructure, null);
+  assert.deepEqual(valid.failures, []);
+  for (const [change, reason] of [[{ error: 'PLANNER_BUDGET_CALLS' }, 'PLANNER_BUDGET_CALLS'], [{ error: 'PLANNER_BUDGET_TOKENS' }, 'PLANNER_BUDGET_TOKENS'],
+    [{ models: ['başka model'] }, 'PLANNER_MODEL_UNVERIFIED'], [{ thinking: 'on' }, 'PLANNER_THINKING_ON'], [{ error: 'Gizli ayrıntı' }, 'ADAPTER_ERROR']]) {
+    const result = await plannerCase(item, { completeRound: async () => ({ ...reply, ...change }) });
+    assert.equal(result.infrastructure, reason);
+    assert.ok(result.failures.length);
+    assert.equal(JSON.stringify(result).includes('Gizli ayrıntı'), false);
+  }
+  const failed = await plannerCase(item, { completeRound: async () => { throw new Error('Gizli ayrıntı'); } });
+  assert.equal(failed.infrastructure, 'MODEL_INVOCATION_FAILED');
+  assert.ok(failed.failures.length);
+  assert.equal(JSON.stringify(failed).includes('Gizli ayrıntı'), false);
+  for (const reason of ['PLANNER_LIMIT_INVALID', 'MODEL_COMMAND_ERROR', 'MODEL_COMMAND_CLEANUP_ERROR', 'MODEL_COMMAND_TIMEOUT', 'ADAPTER_OUTPUT_INVALID']) {
+    const result = await plannerCase(item, { completeRound: async () => { throw new Error(`MODEL_INFRASTRUCTURE ${reason}`); } });
+    assert.equal(result.infrastructure, reason);
+    assert.ok(result.failures.length);
+  }
+});
+
 test('eski bekleyen niyet yükseltilmeden önce kendi sürümünün kapalı sözleşmesiyle doğrulanır', () => {
   const pending = { language: 'tr', scope: 'self', focus: ['status'], visual: true, chart: 'bar' };
   assert.deepEqual(normalizeAnalysisContext({ v: 1, pending }).pending, normalizePendingAnalysis(pending));

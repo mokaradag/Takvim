@@ -920,7 +920,7 @@ export function analystPropositions(parts, locale = 'tr') {
  * Tamlığı kanıtlanmamış nüfusun SUNUCU ÇEKİNCESİ (zorunlu önerme): iş yükü kanıtı bütün atamaları temsil ettiğini
  * kanıtlamadıysa (`data.populationComplete` false: ekip kadrosu bilinmiyor, kişi sayfası kesik, çözümlenemeyen ya da
  * temsil edilemeyen atama) denge, yoğunlaşma ya da "en yoğun kişi" sonucu çıkarılamaz. Çekince nedeni ve sayısı
- * söylenmez (gizli atamanın varlığı ya da sayısı açıklanmaz); yalnızca ne söylenemeyeceği söylenir. Termin aralıkları da
+ * söylenmez (gizli atamanın varlığı ya da sayısı açıklanmaz); yalnızca ne söylenemeyeceği söylenir. Termin kategorileri de
  * birikimli dönem karşılaştırması değildir; bu ölçü sınırı yanıt genelinde bir kez açıklanır.
  */
 export function caveatPropositions(parts, locale = 'tr') {
@@ -935,8 +935,8 @@ export function caveatPropositions(parts, locale = 'tr') {
         if (!seen.has(key)) {
           seen.add(key);
           out.push({ part: part.index + 1, proposition: { kind: 'completeness', tone: 'info', evidenceId: item.evidenceId, ...sentence(en
-            ? ['this distribution shows mutually exclusive deadline ranges; it does not compare cumulative delivery counts across periods of different lengths.']
-            : ['bu dağılım, birbirini dışlayan termin aralıklarını gösterir; farklı uzunluktaki dönemlerin birikimli teslimat sayıları burada karşılaştırılmıyor.']) } });
+            ? ['this distribution shows mutually exclusive deadline-related categories; it does not compare cumulative delivery counts across periods of different lengths.']
+            : ['bu dağılım, terminle ilişkili ve birbirini dışlayan kategorileri gösterir; farklı uzunluktaki dönemlerin birikimli teslimat sayıları burada karşılaştırılmıyor.']) } });
         }
         continue;
       }

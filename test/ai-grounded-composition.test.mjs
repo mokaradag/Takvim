@@ -51,6 +51,25 @@ const narrated = (...blocks) => ({ blocks: blocks.filter(Boolean) });
 const check = (composition, response, options = {}) => validateComposition(composition, response, { userText: QUESTION, ...options });
 const issue = (result) => (result.ok ? null : result.issues[0]);
 
+for (const locale of ['tr', 'en']) test(`termin çekincesi tamamlanan ve tarihsiz işleri tarih aralığı diye sunmaz: ${locale === 'tr' ? 'Türkçe' : 'İngilizce'}`, async (t) => {
+  const stack = stackFor(t);
+  const { ledger, result } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { groupBy: 'deadline' });
+  const verdict = verifyRequested(ledger, ['data.groups.*.label', 'data.groups.*.count'], {
+    operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'deadline' }
+  }, { locale });
+  assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+  const keys = result.data.groups.map((group) => group.key);
+  assert.ok(keys.includes('done') && keys.includes('no_target_finish'));
+  const composition = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }], locale });
+  const validated = validateComposition(composition, coveringBlocks(composition.view));
+  assert.equal(validated.ok, true, JSON.stringify(validated.issues));
+  const rendered = renderComposition(composition, validated);
+  assert.match(rendered.text, /terminle ilişkili ve birbirini dışlayan kategoriler|mutually exclusive deadline-related categories/);
+  assert.doesNotMatch(rendered.text, /termin aralıklarını|deadline ranges/);
+  assert.match(rendered.text, /birikimli teslimat sayıları burada karşılaştırılmıyor|does not compare cumulative delivery counts/);
+  assert.ok(rendered.citedIds.includes(verdict.citedIds[0]));
+});
+
 test('bölümleri karıştıran kimlik paragrafı çizime ulaşmadan reddedilir', async (t) => {
   const { verdict } = await overdueComposition(t);
   const second = { ...verdict.presentation, facts: verdict.presentation.facts.map((item) => ({ ...item, evidenceId: 'R2' })) };

@@ -77,24 +77,30 @@ const requestFocus = (request) => {
 };
 const day = (value) => Date.parse(`${String(value).slice(0, 10)}T00:00:00Z`) / 86400000;
 
-function liveTurn(rounds) {
+function liveTurn(rounds, completeRound) {
   return (options) => runGroundedTurn(Object.freeze({
     sicil: 900001, profile: 'chat.tools', model: 'planner-under-test', reportedModel: () => null, maxOutputTokens: 4096,
     signal: new AbortController().signal, remainingMs: () => 600000,
     async round(input) {
       const measured = {};
       rounds.push(measured);
+      const infrastructure = (reason) => {
+        measured.infrastructure = reason;
+        return Object.assign(new Error(`MODEL_INFRASTRUCTURE ${reason}`), { code: 'MODEL_INFRASTRUCTURE' });
+      };
       try {
-        const reply = await completeModelRound({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice });
-        if (reply?.error) throw Object.assign(new Error(`MODEL_INFRASTRUCTURE ${reply.error}`), { code: 'MODEL_INFRASTRUCTURE' });
-        if (!reply.models?.length || reply.models.some((model) => model !== EXPECTED_MODEL)) throw Object.assign(new Error('PLANNER_MODEL_UNVERIFIED'), { code: 'MODEL_INFRASTRUCTURE' });
-        if (reply.thinking !== 'off' || reply.usage?.output_tokens_details?.thinking_tokens) throw Object.assign(new Error('PLANNER_THINKING_ON'), { code: 'MODEL_INFRASTRUCTURE' });
+        const reply = await completeRound({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice });
+        if (reply?.error) throw infrastructure(['PLANNER_BUDGET_CALLS', 'PLANNER_BUDGET_TOKENS'].includes(reply.error) ? reply.error : 'ADAPTER_ERROR');
+        if (!reply.models?.length || reply.models.some((model) => model !== EXPECTED_MODEL)) throw infrastructure('PLANNER_MODEL_UNVERIFIED');
+        if (reply.thinking !== 'off' || reply.usage?.output_tokens_details?.thinking_tokens) throw infrastructure('PLANNER_THINKING_ON');
         measured.finish = reply.finishReason;
         return { text: reply.text || '', toolCalls: (reply.toolCalls || []).map((call, index) => ({ id: `c${rounds.length}_${index}`, name: call.name,
           arguments: typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments ?? {}), oversize: false })),
           finishReason: reply.finishReason || 'stop', model: null, configuredModel: 'planner-under-test', modelMismatch: false, usage: null, durationMs: 0, firstEventMs: null };
       } catch (error) {
-        measured.infrastructure = 'MODEL_INVOCATION_FAILED';
+        const reason = String(error?.message || '').replace(/^MODEL_INFRASTRUCTURE /, '');
+        measured.infrastructure ||= ['PLANNER_LIMIT_INVALID', 'MODEL_COMMAND_ERROR', 'MODEL_COMMAND_CLEANUP_ERROR', 'MODEL_COMMAND_TIMEOUT', 'ADAPTER_OUTPUT_INVALID'].includes(reason)
+          ? reason : 'MODEL_INVOCATION_FAILED';
         throw error;
       }
     }
@@ -146,9 +152,9 @@ export function plannerScore(result, expect) {
   return failures;
 }
 
-async function plannerCase(item) {
+export async function plannerCase(item, { completeRound = completeModelRound } = {}) {
   const rounds = [];
-  const result = await planCase({ testCase: { id: 'q', text: item.text }, runTurn: liveTurn(rounds), adviceFor: async () => ({ state: 'unavailable', candidates: [] }),
+  const result = await planCase({ testCase: { id: 'q', text: item.text }, runTurn: liveTurn(rounds, completeRound), adviceFor: async () => ({ state: 'unavailable', candidates: [] }),
     now: new Date(`${corpus.today}T09:00:00.000Z`), catalog: toolCatalogForModel() });
   const failures = plannerScore(result, item.expect);
   const firstPass = rounds.length === 1 && !failures.length;

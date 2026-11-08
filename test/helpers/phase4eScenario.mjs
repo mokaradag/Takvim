@@ -131,22 +131,33 @@ export function turnViolations(result, expect, { live = false } = {}) {
       const distinct = named.filter(([, name]) => !named.some(([, other]) => other !== name && other.includes(name)));
       return distinct.length === 1 ? distinct[0][0] : null;
     };
+    const headingScope = (inherited = null) => {
+      const parents = [];
+      return (level, named) => {
+        while (parents.length && parents.at(-1).level >= level) parents.pop();
+        if (named) parents.push({ level, project: named });
+        return parents.at(-1)?.project || inherited;
+      };
+    };
     let project = null;
     let section = null;
+    const sectionAt = headingScope();
     const lineProjects = lines.map((line) => {
       const named = projectIn(line);
-      if (/^#{1,6}\s/.test(line)) section = named;
-      if (/^#{1,6}\s/.test(line) || named) project = named;
+      const heading = /^(#{1,6})\s/.exec(line);
+      if (heading) { section = sectionAt(heading[1].length, named); project = section; }
+      else if (named) project = named;
       return { project, section };
     });
     const chartProjects = [];
     const scopedCharts = (items, inherited = null, inheritedSection = null) => {
       let owner = inherited;
       let section = inheritedSection;
+      const sectionAt = headingScope(inheritedSection);
       for (const block of items) {
         const named = projectIn(block.source || '');
-        if (block.type === 'heading') section = named;
-        if (block.type === 'heading' || block.type === 'paragraph' && named) owner = named;
+        if (block.type === 'heading') { section = sectionAt(block.level, named); owner = section; }
+        else if (block.type === 'paragraph' && named) owner = named;
         if (block.type === 'code' && block.language === 'rota-chart') {
           const chart = parseAnswerChart(block.text);
           // Genel veya kısaltılmış grafik başlığı bölümün projesini devralır; açıkça farklı proje adı bunu örtemez.
