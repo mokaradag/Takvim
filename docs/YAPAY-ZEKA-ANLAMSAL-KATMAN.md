@@ -2074,9 +2074,12 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
   (+`names`), `projects` (portföy), `all`, `previous` (önceki analizin öznesi), `row` (+`rows`: önceki sonucun 1–2 satırı).
   `within`: `self|team|all|previous` kapsamını adı verilen tek projeyle daraltır.
 - `focus` (önem sırasıyla): `overview`, `status`, `priority`, `deadlines`, `overdue`, `upcoming`, `workload`, `projects`,
-  `schedule`, `critical`. Sunucu en çok `PLANNER_LIMITS.maxRequests` (3) bölüm okur: yönlerin bütün fiziksel açılımı
+  `schedule`, `critical`. Sunucu analitik özette en çok `ANALYSIS_LIMITS.maxParts` (4) bölüm okur: yönlerin bütün fiziksel açılımı
   (karşılaştırmada kayıt başına bölümler dâhil), ufuk bölümü ve portföy satırları bütçeye sığmalıdır. Sığmayan plan
   veri okunmadan `$.analysis.focus:requestBudget` ile reddedilir; istenen yön sessizce düşürülmez.
+  **Aşama F güncellemesi:** bildirilen yönlerin okumaları mevcut fiziksel üst sınıra (`maxParts` = 4) kadar kabul edilir;
+  model şeması ve doğrulayıcı 1-4 yön kullanır. Şemanın `maxItems` sınırı ya da fiziksel okuma bütçesi aşıldığında yön düşürülmez; veri okunmadan `analysis_budget` açıklamasıyla kullanıcıdan öncelik istenir. Kabul edilen planın asgari çağrı ve tur maliyeti kalan bütçeye de sığmalıdır. Ayrıntı:
+  [Yol Haritası](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md) §5, [Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) §2.
 - Açılım (`expandAnalysis`) yalnızca türlü değerlerle çalışır, kullanıcı metnini okumaz; çıktı modelin yazacağı ham
   isteklerdir ve 4C bildirim doğrulamasından, yetkiden ve kanıt seçiminden aynen geçer. Adlar 4C içerme kuralına
   tabidir (kullanıcının bu iletisinde geçmeli).
@@ -2136,7 +2139,7 @@ edilemiyorsa okuma öncesinde reddedilir. Kısmi/başarısız analiz takip bağl
   açıkken görünür ve görünüm tercihine (`assistantDetail`) yazılır; istek gövdesine yalnızca varsayılan değilse gider.
   Sözleşme bölüm başına asgari/azami anlatılan önerme ve not sayısıdır (`ANSWER_DETAIL_CONTRACT`), çıktı belirteci
   sınırı değildir. Bölüm başına Kısa 1–2, Dengeli 3–6, Ayrıntılı 5–8 önerme söyler (mevcut önerme sayısıyla sınırlı).
-  Kısa en çok bir tablo veya grafik gösterir; diğer zorunlu satır koleksiyonları listeyle korunur. İsteğe bağlı analist
+  Kısa bölüm başına en çok bir tablo veya grafik gösterir; açıkça iki grafik türü istendiğinde iki tür de korunur; diğer zorunlu satır koleksiyonları listeyle korunur. İsteğe bağlı analist
   önermeleri çok bölümlü sayfanın kalan bütçesine sığdırılır; geçerli temel düzeni ortadan kaldıramaz.
 - **Grafik dilbilgisi** (`answerChart.js`): `bar`, `donut`, `line` (≤ 24 nokta), `stacked` (≤ 10 öğe, ≤ 3 dizi), `kpi`
   (≤ 6 kart), `timeline` (≤ 10 öğe). Hepsi sunucunun doğrulanmış tam kanıtından kurulur, istemcide yeniden doğrulanır,
@@ -2200,7 +2203,7 @@ Güven sınırı değişmez: kimlik, yetki, SQL, hesap, kanıt seçimi ve açık
 | Dengeli ≈ Ayrıntılı | Ayrıntı sözleşmesi yalnızca bölüm başına önerme sayısıydı; okuma, sayfa sınırı, yapı ve çıktı bütçesi aynıydı | Ayrıntı sözleşmesi okuma genişliği + yapı (§15.4) |
 | "Neden?", "grafikle göster" göndergesini yitiriyor | Takip durumu yoksul: `previous` kapsamında model yönleri/ufku/görseli YENİDEN yazmak zorundaydı; konuşma eylemi yoktu; açıklama turu özgün niyeti saklamıyordu | Kanonik takip durumu (§15.3) |
 | Grafik isteği sonuçsuz | Görsel niyet yalnızca boolean; tür taşınmıyordu; yedek seçim yalnızca ilk bölüme ve çoğu kez gösterge kartına bakıyordu; takipte görsel istek sürmüyordu | Uçtan uca görsel niyet (§15.5) |
-| Zayıf model planı onarılamıyor | Haiku `focus` listesini 4–5 öğeyle dolduruyor; onarım pini yön değişikliğini yasakladığından geçerli düzeltilmiş plan da reddediliyordu | Şema sınırı aşımında modelin KENDİ yönlerinin sıralı alt kümesine daraltma (§15.3) |
+| Zayıf model planı onarılamıyor | Haiku `focus` listesini 4–5 öğeyle dolduruyor | Dört yön fiziksel bütçeye sığarsa kabul; şema veya okuma sınırı aşılırsa veri okumadan kullanıcıdan öncelik isteme (§15.3) |
 | Eksik nüfusta "dengeli/en yoğun" izlenimi | Tamlık bilgisi yalnızca mekanik ayrıntı satırıydı ("Atama dağılımı tam: Hayır") | Zorunlu sunucu çekincesi (§15.2) |
 
 ### 15.2 Kanıta bağlı anlatım yüzeyi — `src/domain/ai/groundedProse.js`
@@ -2250,9 +2253,10 @@ bütün ekip için denge, yoğunlaşma veya en yoğun kişi sonucu çıkarılmaz
   dönüşmez.
 - **Yeniden yetki:** bağlam yalnızca göndergedir. Her takip, kimlikleri güncel yetkiyle yeniden okur; yönetim kapsamı
   kaldırılmış kullanıcının `previous` takibi veri okumadan "yönetim kapsamınız bulunmuyor" yanıtını alır.
-- **Onarım daraltması:** şema sınırını aşan yön listesi (`$.analysis.focus:maxItems`) onarımda yalnızca modelin KENDİ
-  yönlerinin sıralı, boş olmayan alt kümesine daraltılabilir; kapsam/ad/ufuk değişemez, yeni yön eklenemez. İstek
-  bütçesi aşımı (karşılaştırma) eskisi gibi daraltılamaz.
+- **Bütçe açıklaması:** beş farklı yön gibi şema sınırını aşan listelerde (`$.analysis.focus:maxItems`) veya fiziksel
+  okuma bütçesi aşımında (`$.analysis.focus:requestBudget`) yönler sessizce daraltılmaz. Veri okunmadan
+  `analysis_budget` açıklamasıyla kullanıcıdan öncelik istenir; kapsam, adlar ve ufuk korunur. Kabul edilen planın
+  asgari çağrı ve tur maliyeti kalan bütçeye sığmalıdır.
 
 ### 15.4 Ayrıntı sözleşmesi — `answerDetail.js`
 
@@ -2298,9 +2302,9 @@ dışarıda bırakamaz).
 - **Önceki özne adları**: güvenilir ad-kimlik bağı olmadan özne sayısı eşitliği eşdeğerlik değildir. Güvenilmeyen ad mevcut ret/onarım/açıklama yolunda kalır; sunucu onu sessizce `previous` ile değiştirmez.
 - **Yapısal normalleştirme** (dil yorumu değil): sözlük değerinin tekil/çoğul yazımı (`deadline` → `deadlines`); sözlük dışı
   eylem düşer; ad listeli `projects` → `project`; satır listeli `previous` → `row`; özetin içine yazılan `chart`/`table`
-  plan düzeyine taşınır; görselin yeri (özet/plan) onarımda anlam değişikliği sayılmaz; şema sınırını aşan yön listesi
-  modelin kendi yönlerinin sıralı alt kümesine daraltılabilir; sunucunun zorunlu eklediği okuma modelin 3 yönlük
-  bütçesinden düşmez.
+  plan düzeyine taşınır; görselin yeri (özet/plan) onarımda anlam değişikliği sayılmaz. Şema veya fiziksel okuma
+  sınırı aşılırsa yön düşürülmeden kullanıcıdan öncelik istenir. Sunucunun zorunlu eklediği okumalar da fiziksel
+  bütçeye dâhildir; kabul edilen planın asgari çağrı ve tur maliyeti kalan bütçeye sığmalıdır.
 - **Ayrıntılı bölümlüdür**: sayfa `sections` ana hattını taşır; her bölüm sunucunun başlığıyla açılır (doğal başlığı
   olmayan bölüm kanıtının konu adını alır), model her bölüm için ayrı paragraf yazar. Aynı araç iki bölümde farklı
   biçimde döndüğünde (portföy başlık ölçüleri ve proje karşılaştırma tablosu) başlıklar ayrışır ("Portföy özeti",
@@ -2352,7 +2356,8 @@ verilirse bu sınıra uyulur. Onarım yoğunluğu bu payı aşarsa koşu başar�
 ### 15.9 PR #111 son yakınsama sözleşmesi
 
 - Tarih aralığı ortak görev nüfusuna uygulanır: genel görünüm, karşılaştırma, grafik ve Ayrıntılı bütünleyici
-  okumalar aralık dışına çıkmaz. Yaklaşan işler aralık ile bugünden sonraki açık işlerin kesişimidir ve gerçek
+  okumalar aralık dışına çıkmaz. **Aşama F istisnası:** gecikme her zaman bugüne göre ölçülür; başlangıcı bugün ya da
+  sonrası olan dönem gecikmiş iş okumasını daraltmaz (aksi hâlde okuma tanımı gereği boştur ve yanlış güvence verir). Yaklaşan işler aralık ile bugün ve sonrasında terminli açık işlerin kesişimidir ve gerçek
   alt sınır yanıtta söylenir. Dönem desteklemeyen portföy/iş yükü araçları yerine mevcut tarihli görev
   analitiği kullanılır; SQL yetki kapsamı genişlemez.
 - Takipte her eksik tarih sınırı ayrı devralınır. `relativeWindow:today|next_7_days` mutlak tarihle birlikte
@@ -2360,7 +2365,7 @@ verilirse bu sınıra uyulur. Onarım yoğunluğu bu payı aşarsa koşu başar�
   mutlak tarihtir; sunucu kullanıcının sözcüklerinden bağıl anlam tahmin etmez.
 - `withSelf` aynı kanonik niyette, tek adlı kişi ve isteğe bağlı proje kesişimiyle saklanır; seçim yalnızca
   belirsiz kimliği değiştirir. Önceki/satır planları, eylem ve sunum tercihleri aynı doğrulayıcıdan yeniden geçer.
-  Model üç yön bildirebilir; sunucunun dördüncü etkin yönü kalıcı bağlamda ve yeniden yürütmede korunur.
+  Model dört yön bildirebilir; sunucunun etkin yönleri kalıcı bağlamda ve yeniden yürütmede korunur.
 - Açık `visual:false` grafik türünden ve modelin isteğe bağlı grafik seçiminden önce gelir. İstenen aday için
   aday ve son çizim bütçesi ayrılır. Desteklenmeyen tür, başka grafik çizilsin veya çizilmesin türüne özgü
   açıklanır. Skaler kanıtta `table:true` için satır tablosu yoksa belirlenimci açıklama verilir.

@@ -141,7 +141,7 @@ for (const [name, text] of Object.entries(textPlans)) {
     stack.provider.enqueue({ type: 'answer', text }, { type: 'script', respond: () => { assert.equal(sqlCalls(stack), 0); return nativePlan(); } });
     const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: OVERDUE_QUESTION })).assistantMessage;
     assert.equal(answer.finishReason, 'stop');
-    assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+    assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
     assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD]);
     const [trace] = turnTraces(logs);
     assert.deepEqual([trace.outcome, trace.selectedBy, trace.modelRounds, trace.toolCalls, trace.declarations, trace.repairs, trace.escalated],
@@ -155,7 +155,7 @@ test("yalnızca türlü istek içeren plan aynı yanıtta yerel okuma çağrıs�
   stack.provider.enqueue({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr', request: OVERDUE_LIST } },
     { name: 'rota_task_search', arguments: OVERDUE_MINE }] });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: OVERDUE_QUESTION })).assistantMessage;
-  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
   assert.equal(stack.provider.calls.length, 1);
   assert.equal(stack.provider.calls[0].tools[0].name, 'rota_plan', 'plan aracı salt okunur araçlarla birlikte sunulur');
   assert.ok(stack.provider.calls[0].tools.some((tool) => tool.name === 'rota_task_search'));
@@ -196,7 +196,7 @@ test("yürütme kümesinin tek bozuk üyesi SQL öncesi bütünü reddettirir; s
       const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: OVERDUE_QUESTION })).assistantMessage;
       assert.equal(sqlAtRepair, 0, 'geçersiz kümenin geçerli çağrısı da çalışmaz');
       assert.ok(refusal.length > 0 && refusal.every((result) => result.ok === false), 'kümenin her çağrısı reddedilmiş görünür');
-      assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+      assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
       drained(stack);
     });
   }
@@ -325,7 +325,7 @@ test("yalnızca araç adını söyleyen metin yürümez; tek Derin dönüşünde
     { type: 'script', respond: () => { sqlBeforeDeep = sqlCalls(stack); return nativePlan(); } }
   );
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: OVERDUE_QUESTION })).assistantMessage;
-  assert.match(answer.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
   assert.equal(sqlBeforeDeep, 0);
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD, STANDARD, DEEP, DEEP]);
   const [trace] = turnTraces(logs);
@@ -349,8 +349,9 @@ for (const sicil of [AYSE, LEAD]) {
     const list = doneOf(await sendTurn({ turnId: randomUUID(), message: OVERDUE_QUESTION })).assistantMessage;
     const rank = doneOf(await sendTurn({ turnId: randomUUID(), message: 'En gecikmiş 3 görevim hangileri?' })).assistantMessage;
     for (const answer of [count, list, rank]) assert.equal(answer.finishReason, 'stop', answer.content);
-    assert.match(count.content, new RegExp(`\\*\\*${ongoing}\\*\\*`));
-    assert.match(list.content, new RegExp(`^Eşleşen \\*\\*${overdue.totalCount}\\*\\* görev bulundu`));
+    // Sıfır sayım doğal cümleyle "yok" diye söylenir (Aşama F); sıfır olmayan sayı kalın yazılır.
+    assert.match(count.content, ongoing ? new RegExp(`\\*\\*${ongoing}\\*\\*`) : /^Devam eden göreviniz yok\./);
+    assert.match(list.content, overdue.totalCount ? new RegExp(`^Şu anda \\*\\*${overdue.totalCount}\\*\\* gecikmiş göreviniz var`) : /^Şu anda gecikmiş göreviniz yok\./);
     assert.equal(list.content.split('\n').filter((line) => line.startsWith('- ')).length, overdue.totalCount);
     const ranked = overdue.data.tasks.slice(0, 3).map((row) => row.title);
     for (const title of ranked) assert.ok(rank.content.includes(title), `sıralamada ${title}`);
@@ -434,7 +435,7 @@ test("donmuş Rota turu sağlayıcı ilerleme sınırında her kaynağı bırak�
   // 4) Sağlayıcı düzelince aynı tur yeniden denenir; ardından aynı konuşmada yeni soru ve yeni konuşma yanıt alır.
   server.setScenario({ stream: { chunks: (body) => planStream(body?.model) } });
   const retry = doneOf(await sendTurn({ turnId: frozenTurnId, conversationId: accepted.conversation.id, message: FROZEN_QUESTION })).assistantMessage;
-  assert.match(retry.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.match(retry.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
   const next = doneOf(await sendTurn({ turnId: randomUUID(), conversationId: accepted.conversation.id, message: OVERDUE_QUESTION })).assistantMessage;
   assert.equal(next.finishReason, 'stop');
   const fresh = await sendTurn({ turnId: randomUUID(), message: OVERDUE_QUESTION });
@@ -610,7 +611,9 @@ test("yanlış koleksiyonlu zayıf model planı SQL öncesi kayıt defteri ipucu
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Kaç devam eden görevim var?' })).assistantMessage;
   assert.equal(sqlAtRepair, 0);
   assert.equal(answer.finishReason, 'stop');
-  assert.match(answer.content, new RegExp(`\\*\\*${expected}\\*\\* devam eden görev`));
+  // Sıfır sayım "**0** … bulunuyor" yerine doğal olumsuz cümledir (Aşama F).
+  if (expected) assert.match(answer.content, new RegExp(`\\*\\*${expected}\\*\\* devam eden görev`));
+  else assert.equal(answer.content.split('\n\n')[0], 'Sorumlusu olduğunuz devam eden görev yok (ölçüt: Durum: Devam ediyor). 【R1】');
   const [trace] = turnTraces(logs);
   // Değer isteğinde grup satırı toplamı belirsizleştirmez: düzeltilen planın toplamını sunucu seçer.
   assert.deepEqual([trace.selectedBy, ...trace.rounds.map((round) => round.purpose)], ['server', 'plan', 'declaration']);
@@ -647,7 +650,7 @@ test("nüfus aracının taşıyamadığı toplam SQL öncesi reddedilir; model k
   assert.equal(sqlAtRepair, 0, 'doğrulanamayacak istek için SQL çalışmaz');
   assert.equal(answer.finishReason, 'stop');
   // Kendi görevlerinde sorumlu koşulu öznededir ("Sorumlusu olduğunuz"), ölçütte yinelenmez.
-  const expectedOutput = `Sorumlusu olduğunuz **${expected}** devam eden görev bulunuyor. 【R1】\n\n_Not: Bu yanıt yalnızca görüntüleme yetkiniz bulunan kayıtları kapsar; ilgili projelerin tamamını yansıtmayabilir._`;
+  const expectedOutput = `${expected ? `Sorumlusu olduğunuz **${expected}** devam eden görev bulunuyor.` : 'Sorumlusu olduğunuz devam eden görev yok.'} 【R1】\n\n_Not: Bu yanıt yalnızca görüntüleme yetkiniz bulunan kayıtları kapsar; ilgili projelerin tamamını yansıtmayabilir._`;
   const protocol = new RegExp(`^${expectedOutput.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`);
   assert.match(answer.content, protocol);
   assert.equal(protocol.test(`${answer.content}\nTRAILING JUNK`), false);
@@ -685,7 +688,7 @@ test("reddedilen İngilizce plan dil bildirimi olmadan geçerli onarımın dilin
     } });
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Kaç devam eden görevim var?' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
-  assert.match(answer.content, /Eşleşen/);
+  assert.match(answer.content, /^Devam eden göreviniz yok\./);
   assert.equal(stack.provider.calls.length, 2);
   drained(stack);
 });
@@ -929,9 +932,9 @@ test("sayfalı arama sayımı tam toplamdan yanıtlanır; liste tek sunucu nüfu
   stack.provider.enqueue(nativePlan(ONGOING_COUNT, [{ name: 'rota_task_search', arguments: { ...ONGOING_MINE, limit: 1 } }]),
     nativePlan(OVERDUE_LIST, [{ name: 'rota_task_search', arguments: { ...OVERDUE_MINE, limit: 1 } }]));
   const count = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Kaç devam eden görevim var?' })).assistantMessage;
-  assert.match(count.content, new RegExp(`\\*\\*${expected}\\*\\*`));
+  assert.match(count.content, expected ? new RegExp(`\\*\\*${expected}\\*\\*`) : /^Devam eden göreviniz yok\./);
   const list = doneOf(await sendTurn({ turnId: randomUUID(), message: OVERDUE_QUESTION })).assistantMessage;
-  assert.match(list.content, /^Eşleşen \*\*3\*\* görev bulundu/);
+  assert.match(list.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
   const [countTrace, listTrace] = turnTraces(logs);
   assert.deepEqual([countTrace.selectedBy, countTrace.modelRounds, countTrace.toolCalls], ['server', 1, 1]);
   // Tek sayfalık satırlar bütün listeyi kanıtlamaz: sunucu bildirilen nüfusu bir kez tam okur ve satırları kendisi seçer.

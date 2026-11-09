@@ -37,6 +37,10 @@ const { searchText } = await import('../src/server/ai/tools/rota/taskFacts.js');
 const { containmentText } = await import('../src/server/ai/tools/toolScope.js');
 const { EVIDENCE_TEXT_FIELDS, METRICS, equivalentCarriers, metricPaths, rowCollections } = await import('../src/domain/ai/claimableEvidence.js');
 const { conjunctiveEntities, REQUEST_ENTITY_TYPES, REQUEST_OPERATIONS } = await import('../src/domain/ai/requestContract.js');
+// Aşama F: analitik özet en çok dört bölüme açılır; bütünlük denetimi sunucunun gerçek sınırını izler (altın etiket değişmez).
+const { ANALYSIS_LIMITS, analysisSchema } = await import('../src/server/ai/tools/analysisPlan.js');
+const { PLANNER_LIMITS } = await import('../src/domain/ai/plannerOutcome.js');
+const { parseToolArguments } = await import('../src/server/ai/tools/toolArguments.js');
 
 /** Adla bildirilen varlık türünün sunucu tarafı çözüm aracı (planlayıcı önkoşulu; ihtiyaç değildir). */
 const RESOLVERS = Object.freeze({ project: 'rota_project_search', person: 'rota_person_search', task: 'rota_task_search', wbs: 'rota_wbs_inspect', baseline: 'rota_baseline_compare' });
@@ -556,13 +560,17 @@ export function validatePlannerRun(run, loaded) {
     seen.add(key);
     if (!Array.isArray(record.rounds) || !record.rounds.length || record.rounds.some((round) => !isRecord(round) || round.error)) invalid();
     if (record.outcome === 'planned' && (!isRecord(record.plan) || !Array.isArray(record.plan.requests) || !record.plan.requests.length
-      || record.plan.requests.length > 3 || !Array.isArray(record.plan.calls) || !record.plan.calls.length || record.plan.calls.some((call) => !isRecord(call) || !rotaToolNames().includes(call.name) || !isRecord(call.args))
+      || record.plan.requests.length > (record.plan.analysis ? ANALYSIS_LIMITS.maxParts : PLANNER_LIMITS.maxRequests) || !Array.isArray(record.plan.calls) || !record.plan.calls.length || record.plan.calls.some((call) => !isRecord(call) || !rotaToolNames().includes(call.name) || !isRecord(call.args))
       || record.plan.requests.some((part) => !isRecord(part) || !['value', 'list', 'rank'].includes(part.operation)
         || !Array.isArray(part.metrics) || !part.metrics.length || part.metrics.some((metric) => !Object.hasOwn(METRICS, metric))
         || !isRecord(part.population) || !rotaToolNames().includes(part.population.tool)
         || !Array.isArray(part.entities) || part.entities.some((entity) => !isRecord(entity))
         || !isRecord(part.filters) || !Array.isArray(part.fields) || part.fields.some((field) => !isRecord(field))
         || !Array.isArray(part.bindings) || part.bindings.some((binding) => !isRecord(binding))))) invalid();
+    if (record.outcome === 'planned' && record.plan.analysis != null) {
+      try { parseToolArguments(analysisSchema(), JSON.stringify(record.plan.analysis)); } catch { invalid(); }
+      if (!record.plan.analysis.focus?.length) invalid();
+    }
     if (record.outcome === 'planned' && !record.plan.calls.some(call => requestBoundCall(record.plan.requests[0], call.name, call.args, { today: run.referenceDate }))) invalid();
     if (record.choice != null && (!isRecord(record.choice) || !['clarify', 'abstain'].includes(record.choice.intent) || typeof record.choice.reason !== 'string'
       || record.choice.topics != null && (!Array.isArray(record.choice.topics) || record.choice.topics.some((topic) => typeof topic !== 'string')))) invalid();

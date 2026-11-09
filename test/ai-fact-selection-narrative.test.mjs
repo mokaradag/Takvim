@@ -93,7 +93,7 @@ test("liste isteği liste tablo düzeni tablo çizer; değer isteği düzyazı k
   // Düzen kullanıcı cümlesinden çıkarılmaz: bildirilen işlem ya da modelin düzen seçimi belirler.
   const list = verifyRequested(ledger, facts, listRequest);
   assert.equal(list.ok, true, JSON.stringify(list.issues));
-  assert.match(list.normalized, /^Eşleşen \*\*3\*\* görev bulundu \(ölçüt: /);
+  assert.match(list.normalized, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\./);
   assert.match(list.normalized, /^- \*\*Radar test planı · RDR · Radar Modernizasyonu[^\n]*\*\* — Termin: \*\*20 Eylül 2026\*\* · Gecikme \(gün\): \*\*10\*\* 【R1】$/m);
   const table = verifyRequested(ledger, facts, listRequest, { layout: 'table' });
   assert.match(table.normalized, /^\| Görev \| Termin \| Gecikme \(gün\) \|$/m);
@@ -122,7 +122,9 @@ test("bütün satırların ortak ölçütü bir kez söylenir", async (t) => {
     // Sayım cümlesi ölçütü zaten söyler: satırlar ve liste başı yinelemez.
     const counted = verifyRequested(ledger, ['totalCount', ...rows], { ...request, metrics: ['tasks.total', ...request.metrics] }, { layout });
     assert.equal(counted.ok, true, JSON.stringify(counted.issues));
-    assert.equal(counted.normalized.match(/ölçüt/g).length, 1, counted.normalized);
+    // Doğal sayım cümlesi süzgeçleri kendisi söyler: ölçüt hiçbir yerde yinelenmez.
+    assert.match(counted.normalized, /^Şu anda \*\*\d+\*\* gecikmiş göreviniz var\./, counted.normalized);
+    assert.ok((counted.normalized.match(/ölçüt/gi) || []).length <= 1, counted.normalized);
     // Sayım yoksa ortak ölçüt listenin başında bir kez yazılır.
     const listed = verifyRequested(ledger, rows, request, { layout });
     assert.equal(listed.ok, true, JSON.stringify(listed.issues));
@@ -137,7 +139,7 @@ test("boş liste yalnızca tamlık değil eşleşme bulunmadığını söyler", 
   const request = { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_schedule_requests', collection: 'items' }, filters: { tab: 'pending' } };
   const verdict = verifyRequested(ledger, ['R1:complete'], request);
   assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
-  assert.match(verdict.normalized, /^Eşleşen talep bulunmadı/);
+  assert.match(verdict.normalized, /^Gösterilecek talep yok/);
   assert.doesNotMatch(verdict.normalized, /Sonuç tamdır/);
 });
 

@@ -271,7 +271,7 @@ test("süzgeç anlamı belirlenimci çizimde eşit sayıları ayırır", async (
   const { result } = await callRotaTool(stack, AYSE, 'rota_task_search', { projectId: PROJECTS.FULL, deadline: 'overdue' });
   const verdict = analyzeGroundedAnswer(evidenceReply(claimFor(result, 'totalCount')), {
     evidenceIds: [result.evidenceId], evidencePayloads: [{ id: result.evidenceId, payload: JSON.stringify(result) }] });
-  assert.match(verdict.normalized, /Gecikmiş/);
+  assert.match(verdict.normalized, /gecikmiş görev var/);
   assert.doesNotMatch(verdict.normalized, /deadline|overdue/);
   assert.equal(result.data.filters.deadline, 'overdue');
 });

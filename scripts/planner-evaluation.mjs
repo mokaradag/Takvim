@@ -465,6 +465,7 @@ async function liveRuntime() {
 /** Puanlama için içeriksiz, kararlı karar kaydı (istek nesneleri JSON'a güvenle çevrilir). */
 function recordOf(testCase, pass, outcome) {
   const plan = outcome.plan ? {
+    ...(outcome.plan.analysis ? { analysis: JSON.parse(JSON.stringify(outcome.plan.analysis)) } : {}),
     requests: outcome.plan.requests.map((request) => JSON.parse(JSON.stringify(request))),
     calls: outcome.plan.calls.map((call) => ({ name: call.name, args: call.args }))
   } : null;

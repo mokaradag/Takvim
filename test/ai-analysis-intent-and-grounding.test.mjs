@@ -29,8 +29,10 @@ for (const [name, analysis, chart, detail] of [
   const parts = expandAnalysis(parseAnalysis({ ...analysis, ...window }), { today: '2026-09-30', chart, detail });
   assert.ok(parts.length && parts.length <= 4);
   for (const part of parts) {
-    assert.equal(part.filters.dateFrom, window.dateFrom);
-    assert.equal(part.filters.dateTo, window.dateTo);
+    // Aşama F: dönem tamamen gelecekte (1 Ekim > 30 Eylül); gecikme bugüne göre ölçüldüğünden yalnızca gecikme okuması dönemsizdir.
+    const overdue = part.filters.deadline === 'overdue' || (part.metrics.length === 1 && part.metrics[0] === 'tasks.overdue');
+    assert.equal(part.filters.dateFrom, overdue ? undefined : window.dateFrom);
+    assert.equal(part.filters.dateTo, overdue ? undefined : window.dateTo);
     assert.notEqual(part.population.tool, 'rota_portfolio_summary', 'dönemsiz portföy okuması eklenmez');
     assert.notEqual(part.population.tool, 'rota_workload_summary', 'dönem desteklemeyen iş yükü aracı eklenmez');
   }
@@ -300,12 +302,14 @@ test('istenen çizgi adayı tek sütunlu aday sınırının arkasında kaybolmaz
   assert.ok(page.view.charts.some((chart) => chart.part === 3 && chart.types.includes('line')));
 });
 
-test('onarım sıralı alt kümeyi iki tarafta kanonik yönlerle karşılaştırır', async (t) => {
-  const queue = [plan({ scope: 'self', focus: ['overview', 'deadline', 'priority', 'status'] }), plan({ scope: 'self', focus: ['deadlines', 'status'] })];
+test('şema sınırını aşan yönler alt kümeye onarılmadan kullanıcıya sorulur', async (t) => {
+  const queue = [plan({ scope: 'self', focus: ['overview', 'deadline', 'priority', 'status', 'critical'] }), plan({ scope: 'self', focus: ['deadlines', 'status'] })];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
-  const result = await ask({ text: 'işlerimin termin ve durum dağılımı' });
-  assert.equal(result.inputs.length, 2);
-  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  const result = await ask({ text: 'işlerimin beş yönünü değerlendir' });
+  assert.equal(result.inputs.length, 1);
+  assert.equal(result.log.length, 0);
+  assert.equal(result.answer.finishReason, 'clarification', result.answer.content);
+  assert.match(result.answer.content, /Hangi analiz yönlerine öncelik/);
 });
 
 test('güvenilmeyen başka ad özne sayısı eşit diye önceki özneyle değiştirilmez', async (t) => {
@@ -427,8 +431,9 @@ for (const composition of [true, false]) test(`tarihli kişi kırılımı tam g�
     assert.equal(result.answer.finishReason, 'stop', result.answer.content);
     const reads = populationReads(result.log);
     assert.ok(reads.length && reads.every(({ params }) => params.assigneeMode === 'team' && params.dateFrom === interval.dateFrom && params.dateTo === interval.dateTo), JSON.stringify(reads));
-    assert.match(result.answer.content, /kadronun tamamını kanıtlamaz/u);
-    assert.match(result.answer.content, /eşleşen işi olmayan/u);
+    // Kadro tamlığı çekincesi gündelik dille aynı sınırı söyler (Aşama F).
+    assert.match(result.answer.content, /yalnızca görebildiğiniz ve iş atanmış kişileri gösteriyor/u);
+    assert.match(result.answer.content, /işi olmayan üyeler listede yer almaz/u);
     assert.match(result.answer.content, /kesin olarak söylenemez/u);
     assert.doesNotMatch(result.answer.content, /Grup tablosu görebildiğiniz kayıtların tamamına dayanıyor|görece dengeli/u);
   }
@@ -439,13 +444,28 @@ for (const composition of [true, false]) test(`tarihli kişi kırılımı tam g�
 
 for (const [label, change] of [['grafik türü', { chart: 'bar' }], ['tablo isteği', { table: false }], ['yanıt dili', { language: 'en' }]]) test(`analiz onarımı geçerli plan düzeyi anlamı değiştiremez: ${label}`, async (t) => {
   const presentation = { chart: 'donut', table: true };
-  const queue = [plan({ scope: 'self', focus: ['status', 'priority', 'projects', 'overview'] }, presentation),
-    { ...plan({ scope: 'self', focus: ['status', 'priority'] }, presentation), ...change }, { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
+  // Tarih çakışması yalnızca ufuk alanlarında onarım hakkı açar; sunum tercihleri sabit kalır.
+  const queue = [plan({ scope: 'self', focus: ['status', 'priority'], relativeWindow: 'today', dateFrom: '2026-09-30' }, presentation),
+    { ...plan({ scope: 'self', focus: ['status', 'priority'], relativeWindow: 'today' }, presentation), ...change }, { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
   const result = await ask({ text: 'görevlerimi halka grafik ve tablo ile Türkçe değerlendir' });
   assert.equal(result.inputs.length, 3);
   assert.equal(result.log.length, 0);
   assert.equal(result.answer.finishReason, 'clarification');
+});
+
+test('tarih çakışması onarımı geçerli pencereyi ve bütün sunum tercihlerini korursa yürütülür', async (t) => {
+  const seed = rotaToolSeed();
+  for (const task of seed.tasks) task.TargetFinish = '2026-09-30';
+  const presentation = { chart: 'donut', table: true };
+  const analysis = { scope: 'self', focus: ['status', 'priority'], relativeWindow: 'today' };
+  const queue = [plan({ ...analysis, dateFrom: '2026-09-30' }, presentation), plan(analysis, presentation)];
+  const { ask } = phase4eConversation(t, { seed, planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
+  const result = await ask({ text: 'bugünkü görevlerimi halka grafik ve tablo ile Türkçe değerlendir' });
+  assert.equal(result.inputs.length, 2);
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.ok(populationReads(result.log).every(({ params }) => params.dateFrom === '2026-09-30' && params.dateTo === '2026-09-30'));
+  assert.ok(charts(result.answer.content).some((chart) => chart.type === 'donut'));
 });
 
 test('analiz onarımı yalnızca hatalı sunum alanını düzeltir ve geçerli tür ile tabloyu çizer', async (t) => {

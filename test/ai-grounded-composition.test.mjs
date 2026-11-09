@@ -51,6 +51,35 @@ const narrated = (...blocks) => ({ blocks: blocks.filter(Boolean) });
 const check = (composition, response, options = {}) => validateComposition(composition, response, { userText: QUESTION, ...options });
 const issue = (result) => (result.ok ? null : result.issues[0]);
 
+for (const locale of ['tr', 'en']) test(`termin çekincesi tamamlanan ve tarihsiz işleri tarih aralığı diye sunmaz: ${locale === 'tr' ? 'Türkçe' : 'İngilizce'}`, async (t) => {
+  const stack = stackFor(t);
+  const { ledger, result } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { groupBy: 'deadline' });
+  const verdict = verifyRequested(ledger, ['data.groups.*.label', 'data.groups.*.count'], {
+    operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'deadline' }
+  }, { locale });
+  assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
+  const keys = result.data.groups.map((group) => group.key);
+  assert.ok(keys.includes('done') && keys.includes('no_target_finish'));
+  const composition = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }], locale });
+  const validated = validateComposition(composition, coveringBlocks(composition.view));
+  assert.equal(validated.ok, true, JSON.stringify(validated.issues));
+  const rendered = renderComposition(composition, validated);
+  assert.match(rendered.text, /terminle ilişkili ve birbirini dışlayan kategoriler|mutually exclusive deadline-related categories/);
+  assert.doesNotMatch(rendered.text, /termin aralıklarını|deadline ranges/);
+  assert.match(rendered.text, /birikimli teslimat sayıları burada karşılaştırılmıyor|does not compare cumulative delivery counts/);
+  assert.ok(rendered.citedIds.includes(verdict.citedIds[0]));
+});
+
+test('bölümleri karıştıran kimlik paragrafı çizime ulaşmadan reddedilir', async (t) => {
+  const { verdict } = await overdueComposition(t);
+  const second = { ...verdict.presentation, facts: verdict.presentation.facts.map((item) => ({ ...item, evidenceId: 'R2' })) };
+  const composition = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }, { index: 1, presentation: second }], detail: 'detailed' });
+  const layout = coveringBlocks(composition.view);
+  const mixed = layout.blocks.filter((block) => block.type === 'say').map((block) => block.items[0]);
+  assert.ok(new Set(mixed.map((id) => composition.render.propositions.get(id).part)).size > 1);
+  assert.equal(issue(check(composition, { blocks: [{ type: 'say', items: mixed }, ...layout.blocks.filter((block) => block.type !== 'say')] })), 'PART_MIXED');
+});
+
 /* ── Olgu sayfası ─────────────────────────────────────────────── */
 
 test('olgu sayfası doğrulanmış olgulardan kurulur; kimlik, kanıt kimliği ya da ham alan yolu taşımaz', async (t) => {
@@ -130,7 +159,7 @@ test('kapalı düzen değerleri, tabloyu, grafiği ve kaynakları yalnızca sunu
   assert.deepEqual(spec.evidence, ['R1']);
   assert.equal(spec.unit, 'days');
   assert.equal(spec.locale, 'tr');
-  assert.equal(rendered.text.match(/Eşleşen \*\*3\*\*/g).length, 1, 'ayrıntı yinelenmez');
+  assert.equal(rendered.text.match(/\*\*3\*\* gecikmiş göreviniz var/g).length, 1, 'ayrıntı yinelenmez');
 });
 
 test('geçerli yuvalarla yanlış sıralama, çapraz kayıt ve ters karşılaştırma serbest metinle yetki kazanamaz', async (t) => {
@@ -194,10 +223,10 @@ test('eşleşmesiz bölümün notu düzende atlanırsa sunucu ekler; bölüm yan
   const validated = check(composition, narrated(validLead(composition), narrate(composition), { type: 'rows', source: 'T1' }));
   assert.equal(validated.ok, true, JSON.stringify(validated.issues));
   const rendered = renderComposition(composition, validated);
-  assert.match(rendered.text, /Eşleşen görev bulunmadı[^\n]*【R1】$/);
-  assert.equal(rendered.text.match(/bulunmadı/g).length, 1, 'model eklediyse sunucu yinelemez');
+  assert.match(rendered.text, /Gösterilecek görev yok[^\n]*【R1】$/);
+  assert.equal(rendered.text.match(/Gösterilecek görev yok/g).length, 1, 'model eklediyse sunucu yinelemez');
   const shown = renderComposition(composition, check(composition, narrated(validLead(composition), narrate(composition), { type: 'rows', source: 'T1' }, { type: 'details', source: emptyDetail.id })));
-  assert.equal(shown.text.match(/bulunmadı/g).length, 1);
+  assert.equal(shown.text.match(/Gösterilecek görev yok/g).length, 1);
 });
 
 test('kaydın adı ve proje bağlamı sunucu satırında kendi değeriyle kalır', async (t) => {
@@ -234,7 +263,7 @@ test('İngilizce sayfa İngilizce değerler ve etiketler taşır', async (t) => 
   const response = { ...narrated(validLead(), narrate(composition), { type: 'rows', source: 'T1', style: 'list' }), language: 'en' };
   const validated = check(composition, response, { userText: 'Show my overdue tasks.' });
   assert.equal(validated.ok, true, JSON.stringify(validated.issues));
-  assert.match(renderComposition(composition, validated).text, /\*\*3\*\* matching tasks were found/);
+  assert.match(renderComposition(composition, validated).text, /You currently have \*\*3\*\* overdue tasks/);
   assert.equal(issue(check(composition, { ...response, language: 'tr' })), 'LANGUAGE_MISMATCH');
 });
 
@@ -547,7 +576,8 @@ test('ayrıntı tablo ve grafik öncesinde bir kez çizilir; ortak ölçüt yine
     const detail = composition.render.details.get('D1').text;
     assert.ok(text.startsWith(detail));
     assert.equal(text.split(detail).length, 2);
-    assert.equal(text.split('Sorumlu: Ben').length, 2, text);
+    // Ölçüt en çok bir kez (doğal sayım cümlesi onu söylediyse hiç) yazılır.
+    assert.ok(text.split('Sorumlu: Ben').length <= 2, text);
   }
 });
 

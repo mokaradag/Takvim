@@ -609,10 +609,10 @@ for (const kind of ['title', 'protected-text', 'aggregate', 'workload']) {
       if (revoke) {
         assert.equal(visible[0], NON_ENUMERATING_FAILURE_TEXT);
         assert.deepEqual(terminal[0].data.assistantMessage.evidence, []);
-        assert.doesNotMatch(wire, /Radar test planı|KAPASİTEDE BEKLEYEN|eşleşen \*\*8\*\*/);
+        assert.doesNotMatch(wire, /Radar test planı|KAPASİTEDE BEKLEYEN|projesinde \*\*8\*\* görev var/);
       } else {
         assert.equal(terminal[0].data.assistantMessage.finishReason, 'stop');
-        assert.match(visible[0], kind === 'title' ? /Radar test planı/ : kind === 'protected-text' ? /KAPASİTEDE BEKLEYEN/ : kind === 'workload' ? /\*\*6\*\*/ : /eşleşen \*\*8\*\*/);
+        assert.match(visible[0], kind === 'title' ? /Radar test planı/ : kind === 'protected-text' ? /KAPASİTEDE BEKLEYEN/ : kind === 'workload' ? /\*\*6\*\*/ : /projesinde \*\*8\*\* görev var/);
       }
     });
   }

@@ -723,7 +723,7 @@ test("görev seçili seri kendi oluşumlarını sayar; boş yaklaşan liste seri
   assert.deepEqual(ruledFacts, ['R1:data.series.rule', 'R1:data.series.ruleDescription', 'R1:complete']);
   const ruledVerdict = verifyRequested(ledger, ruledFacts, ruled, { today: '2026-10-11' });
   assert.equal(ruledVerdict.ok, true, JSON.stringify(ruledVerdict.issues));
-  assert.match(ruledVerdict.normalized, /Her hafta[\s\S]*bulunmadı/);
+  assert.match(ruledVerdict.normalized, /Her hafta[\s\S]*Gösterilecek kayıt yok/);
   assert.equal(ruledVerdict.normalized.match(/Her hafta/g).length, 2, 'kural ve açıklama ayrı alanlardır; eşit değerler onları birleştirmez');
   // Seri sayımları (açık yineleme) üst kaydın özelliği değildir: satırlarla birlikte sayı olamaz.
   assert.ok(complete({ ...raw, metrics: ['recurrence.occurrenceDate', 'recurrence.openOccurrences'] }, []).problems.includes('$.metrics[1]:not-row-total'));
