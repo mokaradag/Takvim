@@ -394,7 +394,7 @@ Bu oturumun PR'ı ve commit'i §13'te kaydedilir.
 
 **Durum: SÜRÜYOR** (uygulandı; belirlenimci ve betikli görsel kabul geçti; Haiku nitelendirmesi kısmi geçişle kaydedildi;
 Windows VM yeniden oynatması bekliyor). Kanıt ve sayılar: [Kabul Matrisi §7](BILGIN-ANALIZ-KABUL-MATRISI.md). Aşağıdaki
-plan maddeleri tarihsel kapsamdır; uygulanan biçim §7.1'dedir.
+plan maddeleri tarihsel kapsamdır; uygulanan biçim [Kabul Matrisi §7.1](BILGIN-ANALIZ-KABUL-MATRISI.md)'dedir.
 
 1. **Amaç:** Yetkili kurumsal düzeylerde (birim, bölüm, direktörlük; doğrulanmış yetkiyle daha geniş) yönetici
    özeti; istisna ve dikkat analizi; proje sağlığı ve kilometre taşı değerlendirmesi; projeler arası çok ölçülü

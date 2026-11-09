@@ -25,7 +25,7 @@ const PRIORITY_SQL = `CASE LOWER(LTRIM(RTRIM(COALESCE(t.Priority, ''))) COLLATE 
 const RESULT_TOO_LARGE = `BEGIN
     DROP TABLE IF EXISTS #AiScopeProjects, #AiScopeTaskIds, #AiScopeTasks, #AiTaskFilter, #AiProjectFilter, #AiTasks,
       #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts,
-      #AiProjectMatches, #AiWbsFocus, #AiRequiredWbs, #AiDependencies;
+      #AiProjectMatches, #AiWbsFocus, #AiRequiredWbs, #AiDependencies, #AiRosterStart;
     THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
   END`;
 
@@ -204,11 +204,12 @@ const ASSIGNEE_ROWS = `
   DELETE a FROM #AiAssignees a
   WHERE a.IdentityVisible = 0
     AND NOT EXISTS (SELECT 1 FROM #AiFacts f WHERE f.TaskId = a.TaskId AND f.IsOwnAssignee = 1);
-  SELECT pd.Sicil, pd.DisplayName, pd.Unit, pd.Department
+  SELECT pd.Sicil, pd.DisplayName, pd.Unit, pd.Department, pd.Directorate
   INTO #AiDirectory
   FROM dbo.MR_V_PeopleDirectory pd
   WHERE EXISTS (SELECT 1 FROM #AiAssignees a WHERE a.Sicil = pd.Sicil);
-  -- Aşama G: örgütsel birim (birim/bölüm) yalnızca kimliği açık sorumluda döner; gizli eş sorumlunun birimi açıklanmaz.
+  -- Aşama G: örgütsel birim (birim/bölüm/direktörlük) yalnızca kimliği açık sorumluda döner; gizli eş sorumlunun birimi açıklanmaz.
+  -- Dizin görünümü kişi başına tek kayıttır: birim, bölüm ve direktörlük aynı kayıttan gelir (hiyerarşik yol tutarlıdır).
   SELECT a.TaskId,
     CASE WHEN a.IdentityVisible = 1 THEN a.Sicil ELSE NULL END AS Sicil,
     NULLIF(LTRIM(RTRIM(d.DirectoryName)), N'') AS DisplayName,
@@ -218,9 +219,10 @@ const ASSIGNEE_ROWS = `
       SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.Sicil
         AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)) THEN 1 ELSE 0 END AS bit) AS TeamMember,
     CASE WHEN a.IdentityVisible = 1 THEN NULLIF(LTRIM(RTRIM(d.DirectoryUnit)), N'') ELSE NULL END AS Unit,
-    CASE WHEN a.IdentityVisible = 1 THEN NULLIF(LTRIM(RTRIM(d.DirectoryDepartment)), N'') ELSE NULL END AS Department
+    CASE WHEN a.IdentityVisible = 1 THEN NULLIF(LTRIM(RTRIM(d.DirectoryDepartment)), N'') ELSE NULL END AS Department,
+    CASE WHEN a.IdentityVisible = 1 THEN NULLIF(LTRIM(RTRIM(d.DirectoryDirectorate)), N'') ELSE NULL END AS Directorate
   FROM #AiAssignees a
-  LEFT JOIN (SELECT Sicil, MIN(DisplayName) AS DirectoryName, MIN(Unit) AS DirectoryUnit, MIN(Department) AS DirectoryDepartment
+  LEFT JOIN (SELECT Sicil, MIN(DisplayName) AS DirectoryName, MIN(Unit) AS DirectoryUnit, MIN(Department) AS DirectoryDepartment, MIN(Directorate) AS DirectoryDirectorate
     FROM #AiDirectory GROUP BY Sicil) d ON d.Sicil = a.Sicil
   ORDER BY a.TaskId;
 `;
@@ -241,15 +243,38 @@ const TEAM_TASK = `EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees member
  * okuması sıfır açık işli üyeleri göstermez: iş yükü dağılımının bütün ekibi kapsadığı ancak kadro bilinirse söylenebilir.
  * Kadro, kullanıcının kendi yetki ilişkisidir (başka yöneticinin kapsamı okunmaz); satır sayısı sınırlıdır (`@rosterRows`
  * dolarsa kadro kesik sayılır). Aynı toplu işin ek sonuç kümesidir: ayrı SQL gidiş-dönüşü yoktur.
+ *
+ * Tutarlılık: toplu işin deyimleri ayrı ayrı (READ COMMITTED) okunur; görev olguları okunurken ekip üyeliği değişirse kadro ile
+ * görev sayıları farklı anları gösterebilir (ör. yeni üye görevleri olmadan sıfır satırla eklenir). Bu yüzden kadro, görev
+ * olgularından ÖNCE bir kez anlık görüntü olarak alınır (#AiRosterStart) ve sonda güncel üyelikle karşılaştırılır; fark varsa
+ * `MembershipChanged = 1` döner ve kadro kesik sayılır (tamlık iddiası kurulmaz). Kilit ya da yalıtım düzeyi değişmez.
  */
+const TEAM_ROSTER_START = `
+  DROP TABLE IF EXISTS #AiRosterStart;
+  SELECT es.EmployeeSicil INTO #AiRosterStart
+  FROM dbo.MR_V_ExecutiveScope es
+  WHERE @withRoster = 1 AND @assigneeMode = 'team' AND es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)
+  GROUP BY es.EmployeeSicil;
+`;
+
 const TEAM_ROSTER = `
   IF @withRoster = 1 AND @assigneeMode = 'team'
-    SELECT TOP (@rosterRows) es.EmployeeSicil AS Sicil, MIN(NULLIF(LTRIM(RTRIM(pd.DisplayName)), N'')) AS DisplayName
-    FROM dbo.MR_V_ExecutiveScope es
-    LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = es.EmployeeSicil
-    WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)
-    GROUP BY es.EmployeeSicil
-    ORDER BY es.EmployeeSicil;
+  BEGIN
+    DECLARE @rosterChanged bit = CASE WHEN EXISTS (
+        SELECT es.EmployeeSicil FROM dbo.MR_V_ExecutiveScope es
+        WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)
+        EXCEPT SELECT EmployeeSicil FROM #AiRosterStart)
+      OR EXISTS (
+        SELECT EmployeeSicil FROM #AiRosterStart
+        EXCEPT SELECT es.EmployeeSicil FROM dbo.MR_V_ExecutiveScope es
+        WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel))
+      THEN 1 ELSE 0 END;
+    SELECT TOP (@rosterRows) r.EmployeeSicil AS Sicil, MIN(NULLIF(LTRIM(RTRIM(pd.DisplayName)), N'')) AS DisplayName, @rosterChanged AS MembershipChanged
+    FROM #AiRosterStart r
+    LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = r.EmployeeSicil
+    GROUP BY r.EmployeeSicil
+    ORDER BY r.EmployeeSicil;
+  END
 `;
 
 const TASK_FACT_COLUMNS = `
@@ -336,6 +361,7 @@ export const AI_TOOL_TASK_FACTS_SQL = `/* rota-ai-tool:task-facts */
   IF @assigneeMode = 'team' AND NOT EXISTS (SELECT 1 FROM dbo.MR_V_ExecutiveScope es
     WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel))
     THROW 51002, 'AI_TOOL_SCOPE_UNAVAILABLE', 1;
+${TEAM_ROSTER_START}
 ${SCOPE_PROJECTS}
 ${visibleTasks(TASK_ROW_FILTER)}
 ${ASSIGNMENT_FACTS}
@@ -367,7 +393,7 @@ ${ASSIGNMENT_FACTS}
   WHERE @projectId IS NOT NULL OR EXISTS (SELECT 1 FROM #AiFacts f WHERE f.ProjectId = v.ProjectId);
 ${ASSIGNEE_ROWS}
 ${TEAM_ROSTER}
-  DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
+  DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects, #AiRosterStart;`;
 
 /**
  * Kanıt nüfusunun güncel görünürlüğü: verilen görevlerden kullanıcının ŞU AN

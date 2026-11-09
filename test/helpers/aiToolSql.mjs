@@ -73,7 +73,9 @@ function teamRoster(db, params) {
   const level = params.teamLevel || '';
   const members = [...new Set(db.executiveScope.filter((entry) => entry.ManagerSicil === sicil && Number(entry.EmployeeSicil) !== sicil
     && (!level || (entry.ScopeType || 'UNIT') === level)).map((entry) => Number(entry.EmployeeSicil)))].sort((a, b) => a - b);
-  return members.slice(0, Number(params.rosterRows)).map((employee) => ({ Sicil: employee, DisplayName: personName(db, employee) }));
+  // Sınama kancası: görev olguları okunurken üyeliğin değiştiğini (toplu işin başı ile sonu arasında) taklit eder.
+  const changed = db.rosterMembershipChanged ? 1 : 0;
+  return members.slice(0, Number(params.rosterRows)).map((employee) => ({ Sicil: employee, DisplayName: personName(db, employee), MembershipChanged: changed }));
 }
 
 function projectRow(db, projectId) {
@@ -183,7 +185,8 @@ function assigneeRows(db, scope, facts, params = {}) {
         TeamMember: params.assigneeMode === 'team' && teamMemberOf(db, scope.sicil, assignment.Sicil, params.teamLevel) ? 1 : 0,
         // Aşama G: dizindeki birim/bölüm yalnızca kimliği açık sorumluda döner.
         Unit: identityVisible ? personOrg(db, assignment.Sicil, 'Unit') : null,
-        Department: identityVisible ? personOrg(db, assignment.Sicil, 'Department') : null
+        Department: identityVisible ? personOrg(db, assignment.Sicil, 'Department') : null,
+        Directorate: identityVisible ? personOrg(db, assignment.Sicil, 'Directorate') : null
       });
     }
   }

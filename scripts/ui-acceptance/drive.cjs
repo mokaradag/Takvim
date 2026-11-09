@@ -102,6 +102,11 @@ async function ask(page, text) {
   if (toggle && await page.getByTitle(toggle).first().isVisible().catch(() => false)) { await page.getByTitle(toggle).first().click(); await page.waitForTimeout(400); }
   let currentDetail = null;
   for (const [conversationIndex, conversation] of scenario.conversations.entries()) {
+    // Senaryonun gerektirdiği sentetik veri (ör. Aşama G: UI_SEED=executive) bu koşuda yoksa konuşma açıkça atlanır (yanlış veriyle sınanmaz).
+    if (conversation.seed && conversation.seed !== (process.env.UI_SEED || null)) {
+      process.stdout.write(`atlandı: ${scenario.profile}/${conversation.name} (UI_SEED=${conversation.seed} gerekir)\n`);
+      continue;
+    }
     if (conversation.detail !== currentDetail) {
       if (narrow) await page.setViewportSize({ width: 1500, height: 1000 });
       await setDetail(page, conversation.detail);
@@ -127,7 +132,8 @@ async function ask(page, text) {
       // UI_SCRIPTED=1 (scriptedBridge.mjs): planlar betiklidir, model kabulü yapılmaz; çizici ve sunucu sözleşmesi denetlenir.
       const scripted = process.env.UI_SCRIPTED === '1';
       const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace), ...(scripted ? [] : modelFailures(expected, trace, calls))];
-      if (expectedChart && !rendered.charts?.some((chart) => chart.type === expectedChart && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);
+      // "any": türü belirtilmemiş grafik isteği; görünür herhangi bir grafik yeterlidir.
+      if (expectedChart && !rendered.charts?.some((chart) => (expectedChart === 'any' || chart.type === expectedChart) && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);
       if (!trace) failures.push('bu tura ait sunucu kanıtı yok');
       const row = { runId, ...(scripted ? { scripted: true } : {}), failures, expectedOutcome: expected?.outcome || 'grounded', serverReplay: expected?.serverReplay === true, profile: scenario.profile, conversation: conversation.name, detail: conversation.detail, turn: turnIndex + 1, question: text, ms, rendered,
         server: trace ? { outcome: trace.outcome, evidence: trace.evidence, parts: trace.parts, escalated: trace.escalated, presentation: trace.presentation, models: [...new Set((trace.rounds || []).map((round) => round.model))],

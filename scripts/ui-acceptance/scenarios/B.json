@@ -253,35 +253,85 @@
    "name": "G1-cok-kapsam",
    "detail": "balanced",
    "turns": [
-    "Kendi işlerimi, birimimi ve bölümümü gecikme ve tamamlanma açısından karşılaştır."
+    "Benim, ekibimin ve bölümümün durumunu üç ayrı düzeyde değerlendir ve karşılaştırılabilir olanları karşılaştır."
+   ],
+   "seed": "executive",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "iç içe olabildiğinden",
+      "Açık işlerde gecikme oranı"
+     ]
+    }
    ]
   },
   {
    "name": "G2-orgut-kirilimi",
    "detail": "balanced",
    "turns": [
-    "Bölümümdeki işler birimlere göre nasıl dağılıyor, gecikme hangi birimde yoğunlaşıyor?"
+    "Bölümümün işlerini birimlere göre karşılaştır."
+   ],
+   "seed": "executive",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "table": true,
+     "requires": [
+      "birime dağılıyor",
+      "birim sayıları toplanmaz"
+     ]
+    }
    ]
   },
   {
    "name": "G3-kilometre-taslari",
    "detail": "balanced",
    "turns": [
-    "BGS Şube Çalışmaları projesinin sağlığını kilometre taşlarıyla birlikte değerlendir."
+    "KAP TOOL projesinde hangi kilometre taşları gecikmiş ve sıradaki hangisi?"
+   ],
+   "seed": "executive",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "sıradaki ise",
+      "kritik yolu hesaplamaz"
+     ]
+    }
    ]
   },
   {
    "name": "G4-birim-is-yuku",
    "detail": "balanced",
    "turns": [
-    "Birimimin iş yükü dengeli mi? Grafikle göster."
+    "Alt birimlerimin iş dağılımını karşılaştırmalı grafikle göster."
+   ],
+   "seed": "executive",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "birime dağılıyor"
+     ]
+    }
+   ],
+   "expectedCharts": [
+    "any"
    ]
   },
   {
    "name": "G5-ozet-ve-liste",
    "detail": "balanced",
    "turns": [
-    "Portföyümün durumunu özetle, ardından kritik açık işleri ayrıca listele."
+    "Birimimin durumunu özetle ve ayrıca kritik öncelikli açık işlerin tam listesini ver."
+   ],
+   "seed": "executive",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "table": true
+    }
    ]
   }
  ]

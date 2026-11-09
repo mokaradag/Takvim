@@ -424,8 +424,11 @@ const ASSIGNMENT_GROUPS = Object.freeze({
   undisclosed: ['undisclosed', 'Sorumlu bilgisi gösterilemiyor']
 });
 
-/** Birimi dizinde kayıtlı olmayan ya da kimliği çözülemeyen görünür sorumluların grubu (varlık değildir). */
-const ORGANIZATION_UNKNOWN = Object.freeze(['unresolved', 'Birimi belirtilmemiş']);
+/**
+ * Birimi dizinde kayıtlı olmayan, birden çok farklı birimde görünen ya da kaydı çözülemeyen görünür sorumluların grubu (varlık
+ * değildir). Anahtarı atama gruplarının anahtarlarından ayrıdır (`unresolved` "Sorumlu kaydı çözülemiyor" grubuyla birleşmez).
+ */
+const ORGANIZATION_UNKNOWN = Object.freeze(['no_unit', 'Birimi belirtilmemiş']);
 
 function deadlineBucket(fact, today) {
   if (fact.status === 'done') return ['done', 'Tamamlandı'];
@@ -463,13 +466,17 @@ function groupKeys(fact, groupBy, { projects, assignees, today, teamOnly = false
       const people = state === 'visible'
         ? (assignees.get(fact.id) || []).filter((person) => person.identityVisible && person.sicil != null && (!teamOnly || person.teamMember === true)) : [];
       if (!people.length) return [ASSIGNMENT_GROUPS[state === 'visible' ? 'undisclosed' : state] || ASSIGNMENT_GROUPS.undisclosed];
+      // Birimin kimliği dizindeki hiyerarşik yoludur (direktörlük › bölüm › birim): farklı üst birimlerdeki aynı adlı birimler
+      // birleşmez. Üst birimi bilinmeyen birim, üst birimi bilinen aynı adlı birimle de birleşmez (ad tek başına kimlik değildir).
       const labels = new Map();
       for (const person of people) {
         const label = person.resolved ? person[groupBy] : null;
-        if (label) labels.set(`org:${foldText(label)}`, label);
-        else labels.set(ORGANIZATION_UNKNOWN[0], ORGANIZATION_UNKNOWN[1]);
+        if (!label) { labels.set(ORGANIZATION_UNKNOWN[0], ORGANIZATION_UNKNOWN[1]); continue; }
+        const parents = groupBy === 'unit' ? [person.directorate, person.department] : [person.directorate];
+        const path = [...parents.map((name) => (name ? foldText(name) : '')), foldText(label)];
+        labels.set(`org:${path.join('›')}`, [label, (groupBy === 'unit' ? person.department : person.directorate) || null]);
       }
-      return [...labels.entries()];
+      return [...labels.entries()].map(([key, value]) => (Array.isArray(value) ? [key, ...value] : [key, value]));
     }
     default: return [];
   }
@@ -506,9 +513,11 @@ const taskAnalytics = {
     let groupCount = 0;
     if (groupBy) {
       const byKey = new Map();
+      const parents = new Map();
       for (const fact of facts) {
-        for (const [key, label] of groupKeys(fact, groupBy, context)) {
+        for (const [key, label, parent = null] of groupKeys(fact, groupBy, context)) {
           if (!byKey.has(key)) byKey.set(key, { key, label: dataText(label, 160), count: 0, open: 0, overdue: 0, done: 0 });
+          if (parent) parents.set(key, parent);
           const group = byKey.get(key);
           group.count += 1;
           if (fact.status === 'done') group.done += 1;
@@ -516,13 +525,23 @@ const taskAnalytics = {
           if (isOverdue(fact, call.today)) group.overdue += 1;
         }
       }
+      // Aynı adlı farklı birimler görünen adlarıyla da ayrışır: üst birimleriyle yazılır ("Test · Bölüm A").
+      const labelCounts = new Map();
+      for (const group of byKey.values()) labelCounts.set(group.label, (labelCounts.get(group.label) || 0) + 1);
+      for (const group of byKey.values()) {
+        if (!ORGANIZATION_GROUP_BY.includes(groupBy) || labelCounts.get(group.label) < 2 || !group.key.startsWith('org:')) continue;
+        group.label = dataText(`${group.label} · ${parents.get(group.key) || (groupBy === 'unit' ? 'Bölümü belirtilmemiş' : 'Direktörlüğü belirtilmemiş')}`, 160);
+      }
       const ordered = [...byKey.values()].sort((left, right) => (groupBy === 'target_month'
         ? left.key.localeCompare(right.key)
         : right.count - left.count || left.label.localeCompare(right.label, 'tr')));
       groupCount = ordered.length;
-      const visibleGroupLimit = ordered.length > limit ? Math.max(0, limit - 1) : limit;
+      // Aşama G: örgütsel gruplar örtüşebilir (bir görev farklı birimlerde ayrı sayılır): sınırı aşan gruplar toplanmış bir "diğer"
+      // satırına katılmaz (örtüşen sayıların toplamı yanlıştır). Kesiklik `groupCount`, `complete` ve `truncated` ile bildirilir.
+      const overlapping = ORGANIZATION_GROUP_BY.includes(groupBy);
+      const visibleGroupLimit = ordered.length > limit && !overlapping ? Math.max(0, limit - 1) : limit;
       groups = ordered.slice(0, visibleGroupLimit);
-      if (ordered.length > visibleGroupLimit) {
+      if (ordered.length > visibleGroupLimit && !overlapping) {
         const rest = ordered.slice(visibleGroupLimit).reduce((sum, group) => ({
           count: sum.count + group.count, open: sum.open + group.open, overdue: sum.overdue + group.overdue, done: sum.done + group.done
         }), { count: 0, open: 0, overdue: 0, done: 0 });

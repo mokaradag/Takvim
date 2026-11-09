@@ -398,6 +398,8 @@ export function evidenceSemantic(envelope, path, value, label, changeField = nul
     nullMeaning: envelope.data?.nodes?.[Number(parts[2])]?.malformedCycle && parts.at(-1)?.startsWith('subtree') ? 'undefined-cycle'
       : parts[1] === 'project' && envelope.data?.project?.countsOverLimit?.includes(parts.at(-1)) ? 'over-limit'
         // Aşama G: gecikme günü yalnızca gecikmiş görevde vardır; açık ama gecikmemiş satırın boşluğu "belirtilmemiş" değildir.
-        : parts.at(-1) === 'overdueDays' && parts[1] === 'tasks' && envelope.data?.tasks?.[Number(parts[2])]?.overdue === false ? 'not-overdue' : 'unknown'
+        // Tamamlanmış görevde gecikme günü uygulanamaz ("gecikmemiş" denmez); yalnızca açık ve gecikmemiş satır "gecikmemiş"tir.
+        : parts.at(-1) === 'overdueDays' && parts[1] === 'tasks' && envelope.data?.tasks?.[Number(parts[2])]?.overdue === false
+          && ['todo', 'in_progress'].includes(envelope.data.tasks[Number(parts[2])].status) ? 'not-overdue' : 'unknown'
   };
 }

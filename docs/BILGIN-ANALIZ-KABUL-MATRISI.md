@@ -262,7 +262,8 @@ Aşama 5/6 ve üretim model yönlendirmesi (Qwen3-Next-80B-A3B-Instruct → gemm
 genişletir: örgütsel birimler, kilometre taşları, görünür görevi olmayan kadro üyesi, adaş iki proje, termini olmayan kilometre
 taşı, görev başlığında istem enjeksiyonu). Gerçek kişi ya da kurum kaydı yoktur.
 
-- **49 hedefli vaka** (g01–g52; g39, g40, g46 ayrı sınamalarla — tur içinde yetki kaybı, yeniden açılış, yeniden oynatma):
+- **49 hedefli vaka** (g01–g52 aralığında; g39, g40 ve g46 kimlikleri kıyas kümesinde kullanılmaz — tur içinde yetki kaybı, yeniden
+  açılış ve yeniden oynatma `test/ai-executive-intelligence.test.mjs` içinde adlı sınamalarla doğrulanır):
   yönetici 8, yönetici (birim) 8, proje yöneticisi 7, çalışan 5, karmaşık 7, birleşik 2, sistem yöneticisi 1, saldırgan 11.
   Sınıf: tam 40, kısmi 5, yetkisiz 2, açıklama 1, sınırlı 1 (g23 → H).
 - **22 bağımsız ayrık vaka** (x01–x22, yalnızca planlayıcı). Üretim kodu bu cümlelere göre ayarlanmadı; ayrık kümenin

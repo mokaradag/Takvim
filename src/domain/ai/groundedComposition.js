@@ -13,7 +13,7 @@ import {
 import { escapedFactText } from './evidenceFacts.js';
 import { analystPropositions, singleSubjectPropositions, caveatPropositions, countProposition, taskCountLead, fluentParagraph, noteLabel, pointerSentence, populationProposition, rowPopulationComplete, tableLeadSentence, tablePropositions, titleCandidate } from './groundedPropositions.js';
 import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from './answerDetail.js';
-import { analyticalSynthesis, framingSentence, nextStepSentence, synthesisNarrative, findingScope } from './analyticalFindings.js';
+import { analyticalSynthesis, aspectTitle, framingSentence, nextStepSentence, synthesisNarrative, findingScope } from './analyticalFindings.js';
 import { PROSE_LIMITS, checkProse, proseText } from './groundedProse.js';
 
 /** Anlatımın en az önerme sayısı: sayfada bu kadar önerme varsa düzen en az bu kadarını söyler (azsa hepsini). */
@@ -265,15 +265,6 @@ const GROUP_SECTIONS = Object.freeze({ project: ['Proje dağılımı', 'By proje
 
 const LAYER_TITLES = Object.freeze({ self: ['Kendi işleriniz', 'Your work'], team: ['Ekibiniz', 'Your team'], unit: ['Biriminiz', 'Your unit'], department: ['Bölümünüz', 'Your department'],
   directorate: ['Direktörlüğünüz', 'Your directorate'], all: ['Görebildiğiniz bütün işler', 'All the work you can see'] });
-
-/** Çok kapsamlı özetin kapsamı bir bölümün kanıt süzgeçleriyle eşleşiyor mu (yalnızca kapsam alanları; ad metni değil, tür). */
-function layerMatches(layer, filters) {
-  if (layer.scope === 'self') return filters.assignee === 'me';
-  if (layer.scope === 'team') return filters.assignee === 'team' && (filters.teamLevel || null) === (layer.level || null);
-  if (layer.scope === 'person') return filters.assignee === 'person' && filters.personSicil != null;
-  if (layer.scope === 'project') return !filters.assignee && Boolean(filters.projectId);
-  return !filters.assignee && filters.personSicil == null && !filters.projectId;
-}
 
 function filtersOfPart(parts, ordinal) {
   return (parts.find((item) => item.index + 1 === ordinal)?.presentation?.facts || []).map((item) => item.fact?.semantic?.filters).find(Boolean) || {};
@@ -569,28 +560,36 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     }
   }
   // Aşama G — çok kapsamlı özet: her bölüm kendi kapsamının sunucu başlığını alır ("Kendi işleriniz", "Ekibiniz · Kişilere göre
-  // dağılım"); kapsamlar bildirim sırasıyla okunur. Başlık olgu taşımaz; nüfusu kanıttaki süzgeçlerden adlandırır. Bir bölümün
-  // kapsamı belirlenemezse çok kapsamlı başlıklar kurulmaz (aşağıdaki kural bütün başlıkları kaldırır).
-  if (outline?.layers?.length > 1 && limits !== COMPOSITION_LIMITS && answerDetail !== 'short') {
+  // dağılım"); kapsamlar bildirim sırasıyla okunur. Bölümün kapsamı ve yönü planlayıcının açılımından gelir (`outline.sections`):
+  // kanıt süzgecinden tahmin edilmez, adaş ya da aynı türden iki kapsam birbirine karışmaz. Özetin yanındaki açık istek bölümü
+  // kendi konu adını alır. Başlık olgu taşımaz; adlı kapsamın adı kanıttaki çözülmüş addır. Bir bölüm adlandırılamazsa çok kapsamlı
+  // başlıklar kurulmaz (aşağıdaki kural bütün başlıkları kaldırır).
+  if (outline?.layers?.length > 1 && Array.isArray(outline.sections) && limits !== COMPOSITION_LIMITS && answerDetail !== 'short') {
     const layered = [...contentParts].sort((a, b) => a - b).map((part) => {
       const facts = parts.find((item) => item.index + 1 === part)?.presentation?.facts || [];
-      const filters = facts.map((item) => item.fact?.semantic?.filters).find(Boolean) || {};
-      const layer = outline.layers.findIndex((item) => layerMatches(item, filters));
+      const section = outline.sections[part - 1] || null;
       const groupBy = facts.map((item) => item.fact?.semantic?.groupBy).find(Boolean) || null;
       const tool = facts.map((item) => item.fact?.semantic?.provenance?.tool).find(Boolean) || null;
-      return { part, layer, groupBy, tool, evidenceId: facts[0]?.evidenceId || null, rows: facts.some((item) => item.fact?.semantic?.row) };
+      return { part, layer: section ? section.layer : null, focus: section?.focus || null, groupBy, tool, evidenceId: facts[0]?.evidenceId || null,
+        rows: facts.some((item) => item.fact?.semantic?.row) };
     });
-    if (layered.every((item) => item.layer >= 0)) {
+    if (layered.every((item) => item.layer == null || outline.layers[item.layer])) {
       titles.clear();
       viewTitles.length = 0;
       const seenLayers = new Set();
       for (const item of layered) {
-        const owner = layerTitle(outline.layers[item.layer], filtersOfPart(parts, item.part), locale);
-        const first = !seenLayers.has(item.layer);
-        seenLayers.add(item.layer);
-        const topic = sectionTitle(item.tool, locale, { rows: item.rows, groupBy: item.groupBy });
-        const text = first && !item.rows ? owner : `${owner} · ${topic || owner}`;
-        if ([...titles.values()].some((title) => title.text === text) || titles.size >= limits.maxTitles) continue;
+        // Görev listesi bölümünün konusu yönün adıdır ("Kilometre taşları", "Kritik işler"): aynı kapsamın iki listesi ayrışır.
+        const topic = (item.tool === 'rota_task_search' && aspectTitle(item.focus, locale)) || sectionTitle(item.tool, locale, { rows: item.rows, groupBy: item.groupBy });
+        let text = topic;
+        if (item.layer != null) {
+          const owner = layerTitle(outline.layers[item.layer], filtersOfPart(parts, item.part), locale);
+          const first = !seenLayers.has(item.layer);
+          seenLayers.add(item.layer);
+          text = first && !item.rows ? owner : `${owner} · ${topic || owner}`;
+          const aspect = aspectTitle(item.focus, locale);
+          if ([...titles.values()].some((title) => title.text === text) && aspect) text = `${owner} · ${aspect}`;
+        }
+        if (!text || [...titles.values()].some((title) => title.text === text) || titles.size >= limits.maxTitles) continue;
         const id = `H${titles.size + 1}`;
         titles.set(id, Object.freeze({ id, part: item.part, text, markdown: `#### ${escapedFactText(text)}`, ...(item.evidenceId ? { evidenceId: item.evidenceId } : {}) }));
         viewTitles.push({ id, part: item.part, text });
@@ -1403,7 +1402,10 @@ export function renderComposition(composition, validated) {
       // Paragraf bir önerme söylüyorsa tablo yuvası ayrı bir "aşağıdaki tabloda görebilirsiniz" cümlesi üretmez: tablo hemen ardından
       // gelir ve kısa yönlendirme cümlesi paragrafı kesik kesik yapar. Yalnızca tablo yuvasından oluşan paragraf tabloyu adlandırır.
       // Grafik yuvası grafiği tanıtır ve kalır (grafiğin yeri bu cümleye bağlıdır).
+      // Bastırma yalnızca tablo bu paragraftan HEMEN SONRA çiziliyorsa geçerlidir: arada bir grafik varsa tablo kendi girişini taşır.
       const speaks = ordered.some((id) => render.propositions?.has(id));
+      const after = sequence.slice(sequence.indexOf(block) + 1).find((other) => !['say', 'title'].includes(other.type));
+      const adjacent = (id) => after?.type === 'rows' && after.source === id;
       for (const id of ordered) {
         const proposition = render.propositions?.get(id);
         if (proposition?.kind === 'breakdown' && proposition.table && drawnTables.has(proposition.table)
@@ -1411,7 +1413,7 @@ export function renderComposition(composition, validated) {
         if (proposition) {
           entries.push({ proposition }, ...(coveredBy.get(id)?.notices || []).map((text) => ({ text })));
         } else if (render.tables.has(id)) {
-          if (!speaks) entries.push({ text: tableLead(render.tables.get(id), rowStyles.get(id)) });
+          if (!speaks || !adjacent(id)) entries.push({ text: tableLead(render.tables.get(id), rowStyles.get(id)) });
         } else if (fences.has(id)) {
           entries.push({ text: pointerSentence({ type: 'chart', chartType: chartStyles.get(id), distribution: render.charts.get(id).types.includes('donut') }, locale) });
         }

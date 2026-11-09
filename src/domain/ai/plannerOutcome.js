@@ -181,7 +181,7 @@ export function layerOwner(layer, locale = 'tr') {
  * Aşama G — çok kapsamlı özetin okuma tavanına sığmayan dağılım yönleri: hangi kapsamın hangi yönünün bu yanıtta ayrıca
  * okunmadığını adıyla söyleyen sunucu notu (sessiz düşürme yok). Kapsamların özet ölçüleri okunmuştur; not olgu taşımaz.
  */
-export function renderLayerOmissions({ omitted = [], layers = [], locale = 'tr' } = {}) {
+export function renderLayerOmissions({ omitted = [], layers = [], complete = true, locale = 'tr' } = {}) {
   const en = locale === 'en';
   const join = (list) => (list.length === 1 ? list[0] : `${list.slice(0, -1).join(', ')}${en ? ' and ' : ' ve '}${list.at(-1)}`);
   const kept = omitted.filter((item) => layers[item.layer] && LAYER_ASPECTS[item.focus]);
@@ -192,8 +192,12 @@ export function renderLayerOmissions({ omitted = [], layers = [], locale = 'tr' 
     return en ? `${aspects} for ${layerOwner(layers[layer], locale)}` : `${layerOwner(layers[layer], locale)} için ${aspects}`;
   });
   const many = kept.length > 1;
-  return en ? `_Note: every scope's headline figures were read; ${join(byLayer)} did not fit within one answer's read limit and ${many ? 'are' : 'is'} not shown separately. You can ask for ${many ? 'them' : 'it'} in a follow-up question._`
-    : `_Not: Her kapsamın temel göstergeleri okundu; ${join(byLayer)} tek yanıtın okuma sınırına sığmadığı için ayrıca gösterilmedi. İsterseniz ${many ? 'bunları' : 'bunu'} ayrı bir soruda inceleyebilirim._`;
+  // "Her kapsamın göstergeleri okundu" yalnızca bütün kapsamlar gerçekten okunduysa söylenir (kısmi yanıtta söylenmez).
+  const lead = complete ? (en ? "every scope's headline figures were read; " : 'Her kapsamın temel göstergeleri okundu; ') : '';
+  const body = en ? `${join(byLayer)} did not fit within one answer's read limit and ${many ? 'are' : 'is'} not shown separately`
+    : `${join(byLayer)} tek yanıtın okuma sınırına sığmadığı için ayrıca gösterilmedi`;
+  return en ? `_Note: ${lead}${body}. You can ask for ${many ? 'them' : 'it'} in a follow-up question._`
+    : `_Not: ${lead}${lead ? body : `${body.charAt(0).toLocaleUpperCase('tr-TR')}${body.slice(1)}`}. İsterseniz ${many ? 'bunları' : 'bunu'} ayrı bir soruda inceleyebilirim._`;
 }
 
 /**

@@ -249,13 +249,15 @@ test('özet biçim hataları özetin kendi alanlarıyla bildirilir; ek liste ist
   assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'], names: ['XY'] } }), ['$.analysis.names:scope']);
   assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'], level: 'unit' } }), ['$.analysis.level:scope']);
   assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['nope'] } }), ['$.analysis.focus[0]:enum']);
-  // Aşama G: özetin yanındaki açık istek ayrı bir bölüm olarak eklenir (özet + ek liste); önceki bölüme gönderme, takip göndergesi
-  // ve çok kapsamlı özetle birleşim reddedilir.
+  // Aşama G: özetin yanındaki açık istek ayrı bir bölüm olarak eklenir (özet + ek liste; çok kapsamlı özetle de); önceki bölüme
+  // gönderme, önceki sonuca gönderme ve takip göndergesiyle birleşim reddedilir.
   assert.equal(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] }, request: { operation: 'value', metrics: ['tasks.total'] } }), null);
   assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] },
     request: { operation: 'list', metrics: ['task.title'], entities: [{ type: 'task', from: 0 }] } }), ['$.analysis:request']);
-  assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'], also: [{ scope: 'team' }] },
-    request: { operation: 'value', metrics: ['tasks.total'] } }), ['$.analysis:request']);
+  assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] },
+    request: { previousResult: true, operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' } } }), ['$.analysis:request']);
+  assert.equal(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'], also: [{ scope: 'team' }] },
+    request: { operation: 'value', metrics: ['tasks.total'] } }), null);
   assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['overview'] } }), ['$.analysis.scope:unavailable']);
   // Açılımın istek sorunları modelin yazdığı özet alanlarına çevrilir.
   assert.deepEqual(analysisDetails(['$.entities[0].text:untrusted', '$.filters.dateFrom:date', '$.metrics[0]:population']),

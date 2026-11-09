@@ -105,7 +105,8 @@ export async function readTaskFacts(executor, scope, {
     ...(roster ? { roster: {
       members: roster.rows.map((row) => ({ sicil: Number(row.Sicil), name: row.DisplayName && String(row.DisplayName).trim() !== String(row.Sicil) ? String(row.DisplayName).trim() : null }))
         .filter((member) => Number.isSafeInteger(member.sicil) && member.sicil > 0),
-      truncated: roster.truncated
+      // Görev olguları okunurken üyelik değiştiyse kadro görev sayılarıyla aynı anı göstermez: tamlık için kesik sayılır.
+      truncated: roster.truncated || roster.rows.some((row) => Number(row.MembershipChanged) === 1)
     } } : {})
   };
 }

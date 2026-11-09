@@ -63,8 +63,12 @@ test('G kıyas verisi tamamen sentetiktir: sorulardaki proje ve kişi adları se
   const seed = executiveBenchmarkSeed();
   t.mock.timers.reset();
   const known = new Set([...seed.people.map((person) => person.DisplayName), ...seed.projects.map((project) => project.ProjectName)]);
+  // Birincil kapsam, ek kapsamlar ve açık isteklerin adlı varlıkları da sentetik olmalıdır (her turda).
+  const named = (plan) => [...(plan?.analysis?.names || []), ...(plan?.analysis?.also || []).flatMap((layer) => layer.names || []),
+    ...[plan?.request, ...(plan?.additionalRequests || [])].flatMap((request) => (request?.entities || []).map((entity) => entity.text).filter(Boolean))];
   for (const item of [...fixture.scenarios, ...fixture.holdout]) {
-    for (const name of [...(item.plan?.analysis?.names || []), ...(item.expect?.names || [])]) assert.ok(known.has(name), `${item.id}: ${name}`);
+    const plans = (item.turns || [{ plan: item.plan }]).map((turn) => turn.plan);
+    for (const name of [...plans.flatMap(named), ...(item.expect?.names || [])]) assert.ok(known.has(name), `${item.id}: ${name}`);
   }
 });
 
@@ -75,7 +79,11 @@ for (const item of fixture.scenarios.filter((entry) => entry.plan || entry.turns
     const { ask } = conversation(t, item.profile);
     const turns = item.turns || [{ text: item.text, plan: item.plan }];
     let result = null;
-    for (const turn of turns) result = await ask({ text: turn.text, plan: resolve(turn.plan) });
+    for (const [index, turn] of turns.entries()) {
+      result = await ask({ text: turn.text, plan: resolve(turn.plan) });
+      // Son turdan önceki turlar (ör. yetki reddinden önceki birim okuması) kendi başına başarılı olmalıdır.
+      if (index < turns.length - 1) assert.equal(result.answer.finishReason, turn.expectFinish || 'stop', `${item.id} tur ${index + 1}: ${result.answer.content}`);
+    }
     const content = String(result.answer.content || '');
     // Canlı nitelendirmenin beklentisinin aynısı: altın davranış onu karşılamalıdır (beklenti ulaşılamaz değildir).
     const expect = executiveExpectation(item);
@@ -96,14 +104,21 @@ for (const item of fixture.scenarios.filter((entry) => entry.plan || entry.turns
 }
 
 test('ayrık küme puanı: çok kapsamlı beklentide her kapsam bildirilmelidir; birden çok doğru karar kabul edilir', () => {
-  const planned = (analysis) => ({ outcome: 'planned', decisions: [{ intent: 'rota' }], plan: { analysis, requests: [] } });
+  const read = (filters) => ({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters });
+  const self = read({ assignee: 'me' });
+  const unit = read({ assignee: 'team', teamLevel: 'unit' });
+  const planned = (analysis, requests = [self, unit]) => ({ outcome: 'planned', decisions: [{ intent: 'rota' }], plan: { analysis, requests } });
   const expect = { intent: 'rota', layers: [{ scope: 'self' }, { scope: 'team', level: 'unit' }] };
   assert.deepEqual(plannerScore(planned({ scope: 'self', focus: ['overview'], also: [{ scope: 'team', level: 'unit', focus: ['overview'] }] }), expect), []);
-  assert.deepEqual(plannerScore(planned({ scope: 'self', focus: ['overview'] }), expect), ['kapsam team/unit bildirilmedi']);
+  assert.deepEqual(plannerScore(planned({ scope: 'self', focus: ['overview'] }, [self]), expect), ['kapsam team/unit bildirilmedi', 'kapsam team/unit okunmadı']);
   // Kabul edilen kararın özeti kapsamları `layers` olarak taşır.
   assert.deepEqual(plannerScore(planned({ scope: 'self', focus: ['overview'], layers: [{ scope: 'self', focus: ['overview'] }, { scope: 'team', level: 'unit', focus: ['overview'] }] }), expect), []);
-  assert.deepEqual(plannerScore(planned({ scope: 'team', level: 'department', focus: ['overview'], also: [{ scope: 'self', focus: ['overview'] }] }), expect), ['kapsam team/unit bildirilmedi'],
-    'düzey farklıysa kapsam aynı değildir');
+  assert.deepEqual(plannerScore(planned({ scope: 'team', level: 'department', focus: ['overview'], also: [{ scope: 'self', focus: ['overview'] }] }, [self, read({ assignee: 'team', teamLevel: 'department' })]), expect),
+    ['kapsam team/unit bildirilmedi', 'kapsam team/unit okunmadı'], 'düzey farklıysa kapsam aynı değildir');
+  // Kapsam listede bildirilmiş ama açılımı o kapsamın nüfusunu okumuyorsa geçmez.
+  assert.deepEqual(plannerScore(planned({ scope: 'self', focus: ['overview'], also: [{ scope: 'team', level: 'unit', focus: ['overview'] }] }, [self]), expect), ['kapsam team/unit okunmadı']);
+  // Birden çok doğru kararlı vakada planlanmış sonuç da kapsamıyla puanlanır.
+  assert.deepEqual(plannerScore(planned({ scope: 'team', level: 'unit', focus: ['overview'] }, [unit]), { intentAny: ['rota', 'abstain'], scope: 'self' }), ['kapsam team ≠ self']);
   const abstained = { outcome: 'abstained', decisions: [{ intent: 'abstain', reason: 'outside_data' }], plan: null };
   assert.deepEqual(plannerScore(abstained, { intentAny: ['abstain', 'rota'] }), []);
   assert.deepEqual(plannerScore(abstained, { intentAny: ['rota', 'clarify'] }), ['karar abstain ≠ rota|clarify']);
@@ -220,6 +235,122 @@ test('özetin yanındaki seçicisiz okuma çağrıları atılır; bildirilmemiş
   assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis, calls: [{ name: 'rota_person_search', arguments: { text: 'Elif Arslan' } }] }), ['$.analysis:request']);
 });
 
+test('özetin yanındaki çağrı yalnızca özetin bir kapsamından başka koşul taşımıyorsa atılır; süzgeç, gruplama ya da iç içe seçici planı reddeder', () => {
+  const self = { scope: 'self', focus: ['overview'] };
+  const call = (name, args) => ({ intent: 'rota', language: 'tr', analysis: self, calls: [{ name, arguments: args }] });
+  // Özetin kapsamının aynısı (kendi işleri) özetin okumasıdır: yürütülmeden atılır.
+  assert.deepEqual(unpack(call('rota_task_analytics', { assignee: 'me', limit: 5 })).calls, []);
+  // Özetin ifade etmediği koşul (gecikmiş liste, gruplama, iç içe süzgeç, başka kapsam) ayrı bir istektir: sessizce düşmez.
+  for (const args of [{ assignee: 'me', deadline: 'overdue' }, { assignee: 'me', groupBy: 'status' }, { filters: { assignee: 'me', priority: ['high'] } },
+    { entities: [{ type: 'project', text: 'BGS Şube Çalışmaları' }] }, { assignee: 'team' }]) {
+    assert.deepEqual(reject(call('rota_task_search', args)), ['$.analysis:request'], JSON.stringify(args));
+  }
+  // Ek kapsamın adı da özetin adıdır: onun ad araması gereksizdir ve atılır.
+  const layered = unpack({ intent: 'rota', language: 'tr', analysis: { ...self, also: [{ scope: 'project', names: ['BGS Şube Çalışmaları'] }] },
+    calls: [{ name: 'rota_project_search', arguments: { text: 'BGS Şube Çalışmaları' } }] });
+  assert.deepEqual(layered.calls, []);
+});
+
+test('çok kapsamlı özet: aynı kapsamın farklı yönleri birleşir, devralınan yön ve düzey yalnızca kendi kapsamına uygulanır', () => {
+  // Birincille aynı kapsamın yönleri birincile katılır; yönü yazılmamış öbür kapsam özgün birincil yönleri korur.
+  const merged = parseAnalysis({ scope: 'team', level: 'unit', focus: ['overview'], also: [{ scope: 'team', level: 'unit', focus: ['milestones'] }, { scope: 'self' }] });
+  assert.deepEqual([...merged.focus], ['overview', 'milestones']);
+  assert.deepEqual(merged.also.map((layer) => [layer.scope, [...(layer.focus || [])]]), [['self', ['overview']]]);
+  // Ek kapsamlar arasında yinelenen kapsamın yönleri de birleşir (hiçbir yön düşmez).
+  const twice = parseAnalysis({ scope: 'self', focus: ['overview'], also: [{ scope: 'team', level: 'unit', focus: ['org'] }, { scope: 'team', level: 'unit', focus: ['milestones'] }] });
+  assert.deepEqual(twice.also.map((layer) => [...layer.focus]), [['org', 'milestones']]);
+  // Ek kapsam birincilin düzeyini devralmaz: düzeysiz ekip kapsamının alt birim kırılımı bölümlerdir (birincil birimse kişiler değil).
+  const sections = expandAnalysis(parseAnalysis({ scope: 'team', level: 'unit', focus: ['org'], also: [{ scope: 'team' }] }), { today: TODAY });
+  const orgReads = sections.filter((part, index) => sections.sections[index].focus === 'org');
+  assert.deepEqual(orgReads.map((part) => part.population.groupBy || part.population.tool), ['rota_workload_summary', 'department']);
+  assert.equal(orgReads[1].filters.teamLevel, undefined);
+  // Devralınan yön kapsamda anlamsızsa (kendi işlerinde alt birim kırılımı) yalnızca o kapsam için okunmaz; açıkça yazılmışsa reddedilir.
+  const inherited = expandAnalysis(parseAnalysis({ scope: 'team', level: 'department', focus: ['org'], also: [{ scope: 'self' }] }), { today: TODAY });
+  assert.deepEqual(inherited.sections.map((item) => [item.layer, item.focus]), [[0, null], [0, 'org'], [1, null]]);
+  assert.throws(() => expandAnalysis(parseAnalysis({ scope: 'team', level: 'department', focus: ['org'], also: [{ scope: 'self', focus: ['org'] }] }), { today: TODAY }),
+    (error) => error.details.includes('$.analysis.focus:unsupported'));
+});
+
+test('çok kapsamlı özet: dönemli durum ve gecikme her kapsam için o dönemle okunur; tamamen gelecekteki dönemde gecikme özettedir', () => {
+  const window = { dateFrom: shift(-30), dateTo: shift(-1) };
+  const reads = expandAnalysis(parseAnalysis({ scope: 'team', level: 'department', focus: ['status', 'overdue'], ...window, also: [{ scope: 'team', level: 'directorate' }] }), { today: TODAY });
+  for (const level of ['department', 'directorate']) {
+    const status = reads.find((part) => part.population.groupBy === 'status' && part.filters.teamLevel === level);
+    assert.deepEqual([status?.filters.dateFrom, status?.filters.dateTo], [window.dateFrom, window.dateTo], `${level}: dönemli durum okunur`);
+    assert.ok(reads.some((part) => part.filters?.deadline === 'overdue' && part.filters.teamLevel === level && part.filters.dateFrom === window.dateFrom), `${level}: dönemli gecikme okunur`);
+  }
+  // Dönemsiz özette durum ve gecikme kapsamın özet okumasıyla karşılanır (ek okuma yok).
+  assert.equal(expandAnalysis(parseAnalysis({ scope: 'self', focus: ['status', 'overdue'], also: [{ scope: 'team', level: 'unit' }] }), { today: TODAY }).length, 2);
+  const future = expandAnalysis(parseAnalysis({ scope: 'self', focus: ['overdue'], dateFrom: shift(0), dateTo: shift(13), also: [{ scope: 'team', level: 'unit' }] }), { today: TODAY });
+  assert.equal(future.some((part) => part.filters?.deadline === 'overdue'), false, 'gelecek dönem gecikme okumasından çıkar; özet sayısı yeter');
+});
+
+test('çok kapsamlı özet: istenen grafiğin okuması birincil kapsamdan, bütçe kaldıysa eklenir; ek liste için yer ayrılır ve sığmayan yön adıyla bildirilir', () => {
+  const donut = unpack({ intent: 'rota', language: 'tr', visual: true, chart: 'donut', analysis: { scope: 'self', focus: ['overview'], also: [{ scope: 'team', level: 'unit' }] } });
+  const parts = [donut.plan.request, ...(donut.plan.additionalRequests || [])];
+  const status = parts.findIndex((part) => part.population.groupBy === 'status');
+  assert.ok(status >= 0, 'halka grafiği için durum dağılımı okunur');
+  assert.equal(parts[status].filters.assignee, 'me', 'grafik birincil kapsamın tek nüfusundandır');
+  assert.equal(donut.plan.analysis.sections[status].layer, 0);
+  // Çok kapsamlı özet + açık liste: liste düşmez; sığmayan dağılım yönü `omitted` ile adıyla döner.
+  const list = { operation: 'rank', metrics: ['task.title', 'task.targetFinish'], population: { tool: 'rota_task_search', collection: 'tasks' }, layout: 'list',
+    filters: { assignee: 'me', priority: ['critical'] }, rank: { metric: 'task.targetFinish', order: 'asc', limit: 5 } };
+  const combined = unpack({ intent: 'rota', language: 'tr', request: list, analysis: { scope: 'self', focus: ['overview', 'workload', 'milestones'],
+    also: [{ scope: 'team', level: 'unit', focus: ['workload', 'projects'] }, { scope: 'team', level: 'department', focus: ['org'] }] } });
+  const sectionsOf = [combined.plan.request, ...(combined.plan.additionalRequests || [])];
+  assert.ok(sectionsOf.length <= ANALYSIS_LIMITS.maxParts);
+  assert.ok(sectionsOf.some((part) => part.filters?.priority?.includes('critical')), 'açık liste okunur');
+  assert.ok(combined.plan.analysis.omitted.length >= 1, 'sığmayan yön bildirilir');
+  assert.equal(combined.plan.analysis.analysisParts, sectionsOf.length - 1, 'açık liste özetin bölümü değildir');
+});
+
+test('açık istek, özetin aynı okumasıysa ikinci kez okunmaz; satır sınırı ve biçim o okumaya taşınır, farklı sıralama ya da önceki sonuç ayrı tutulur', () => {
+  const analysis = { scope: 'projects', focus: ['overview', 'projects'] };
+  const portfolio = { operation: 'list', metrics: ['project.name', 'tasks.overdue'], population: { tool: 'rota_portfolio_summary', collection: 'projects' } };
+  const base = unpack({ intent: 'rota', language: 'tr', analysis });
+  const count = (plan) => [plan.request, ...(plan.additionalRequests || [])].filter((part) => part.population.tool === 'rota_portfolio_summary' && part.operation === 'list').length;
+  assert.equal(count(base.plan), 1);
+  // Aynı okuma + tablo biçimi: okunmaz, tercih taşınır.
+  const table = unpack({ intent: 'rota', language: 'tr', analysis, request: { ...portfolio, layout: 'table' } }).plan;
+  assert.equal(count(table), 1);
+  assert.equal([table.request, ...(table.additionalRequests || [])].find((part) => part.population.tool === 'rota_portfolio_summary' && part.operation === 'list').layout, 'table');
+  // Farklı sıralama düzeni ayrı okumadır (özetin gecikme sırası açık isteğin ad sırasının yerine geçmez).
+  const sorted = unpack({ intent: 'rota', language: 'tr', analysis, request: { ...portfolio, population: { ...portfolio.population, sort: 'name_asc' } } }).plan;
+  assert.equal(count(sorted), 2);
+  // Görev sıralamasında açık satır sınırı korunur: beş satır istendiyse beş satır okunur (sekiz değil), ek okuma da yapılmaz.
+  const upcoming = unpack(resolve(fixture.scenarios.find((entry) => entry.id === 'g51').plan)).plan;
+  const lists = [upcoming.request, ...(upcoming.additionalRequests || [])].filter((part) => part.population.tool === 'rota_task_search');
+  assert.deepEqual(lists.map((part) => [part.rank.limit, part.layout]), [[5, 'list']]);
+  assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis, request: { ...portfolio, previousResult: true } }), ['$.analysis:request']);
+});
+
+test('dizi biçimli çok kapsamlı özet: ek öğenin taşıyamadığı alan ya da birincildeki ek kapsam sessizce düşmez, plan reddedilir', () => {
+  const plan = (analysis) => ({ intent: 'rota', language: 'tr', analysis });
+  assert.deepEqual(reject(plan([{ scope: 'self', focus: ['overview'] }, { scope: 'team', level: 'unit', within: 'BGS Şube Çalışmaları' }])), ['$.analysis.also:scope']);
+  assert.deepEqual(reject(plan([{ scope: 'self', focus: ['overview'] }, { scope: 'person', names: ['Nehir SÜRMELİOĞLU'], withSelf: true }])), ['$.analysis.also:scope']);
+  assert.deepEqual(reject(plan([{ scope: 'self', focus: ['overview'], also: [{ scope: 'all' }] }, { scope: 'team', level: 'unit' }])), ['$.analysis.also:scope']);
+  // Kendi + kişi yazımı, birincil daraltma (within) ya da ek kapsamda ayrı dönem taşıyorsa kişiyle karşılaştırmaya çevrilmez.
+  assert.ok(reject(plan({ scope: 'self', within: 'BGS Şube Çalışmaları', focus: ['overview'], also: [{ scope: 'person', names: ['Nehir SÜRMELİOĞLU'] }] })).includes('$.analysis.also:scope'));
+  assert.ok(reject(plan({ scope: 'self', focus: ['overview'], also: [{ scope: 'person', names: ['Nehir SÜRMELİOĞLU'], dateFrom: shift(0) }] })).some((detail) => detail.startsWith('$.analysis.also[0]')));
+  assert.equal(unpack(plan([{ scope: 'self', focus: ['overview'] }, { scope: 'team', level: 'unit', focus: ['workload'] }])).plan.analysis.also.length, 1);
+});
+
+test('özet onarımı açık isteği koruyamazsa kabul edilmez: reddedilen yol dışındaki açık istek alanları ve istek sayısı aynı kalır', async (t) => {
+  const request = { operation: 'rank', metrics: ['task.title', 'task.overdueDays'], population: { tool: 'rota_task_search' }, filters: { assignee: 'me', deadline: 'overdue' }, layout: 'list' };
+  const analysis = { scope: 'self', focus: ['schedule'], dateFrom: shift(1), dateTo: shift(30) };
+  const fixed = { ...request, rank: { metric: 'task.overdueDays', order: 'desc', limit: 8 } };
+  // İlk plan geçersiz (sıralama alanı yok); onarım açık listeyi düşürür (kabul edilmez); sonraki onarım yalnızca reddedilen yolu düzeltir.
+  const plans = [{ intent: 'rota', language: 'tr', analysis, request }, { intent: 'rota', language: 'tr', analysis }, { intent: 'rota', language: 'tr', analysis, request: fixed }];
+  const planCall = (plan) => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plan }] });
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const seed = executiveBenchmarkSeed();
+  t.mock.timers.reset();
+  const { ask } = phase4eConversation(t, { sicil: P.B, seed, planner: () => planCall(plans.shift() || plans.at(-1)) });
+  const result = await ask({ text: 'Bu ayın terminlerini göster, sonra gecikmiş işlerimi sırala.' });
+  assert.ok(result.inputs.length >= 3, 'açık listeyi düşüren onarım kabul edilmedi');
+  assert.ok(populationReads(result.log).some((row) => row.params.deadline === 'overdue' || /overdue/i.test(JSON.stringify(row.params))), 'açık liste okundu');
+});
+
 /* ── Kadro tamlığı ve iş yükü ──────────────────────────────────── */
 
 test('ekip iş yükü kadroyu okur: görünür açık görevi olmayan üye sıfır satırla eklenir; kesik ya da çözülemeyen kadro tamlık iddiası kurmaz', async (t) => {
@@ -240,6 +371,34 @@ test('ekip iş yükü kadroyu okur: görünür açık görevi olmayan üye sıf�
   assert.equal(JSON.stringify(unresolved.result.data).includes(String(EXEC_PEOPLE.ILGAZ)), false, 'çözülemeyen kimlik açılmaz');
 });
 
+test('kadro tamlığı: sayfa sınırla kesilince "bütün üyeler" denmez; toplu iş sırasında üyelik değiştiyse tamlık iddiası kurulmaz; kişi süzgecinde kadro okunmaz', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const stack = createAiStack(t, { sicil: P.B, seed: executiveBenchmarkSeed(), env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
+  const page = await callRotaTool(stack, P.B, 'rota_workload_summary', { assignee: 'team', teamLevel: 'unit', limit: 2 });
+  assert.equal(page.result.data.notes.some((note) => /bütün ekip üyelerini içerir/.test(note)), false, 'kesik sayfa bütün üyeleri içermez');
+  assert.ok(page.result.data.notes.some((note) => /ilk 2 üyeyle sınırlı/.test(note)));
+  // Görev olguları ile kadro arasında üyelik değişti: kadro görev sayılarıyla aynı anı göstermez.
+  stack.db.rosterMembershipChanged = true;
+  const drift = await callRotaTool(stack, P.B, 'rota_workload_summary', { assignee: 'team', teamLevel: 'unit', limit: 25 });
+  assert.equal(drift.result.data.populationComplete, false);
+  assert.equal(drift.result.data.people.some((person) => person.sicil === EXEC_PEOPLE.ILGAZ), false, 'sıfır satır eklenmez');
+  stack.db.rosterMembershipChanged = false;
+  // Kişi süzgeci (ekip süzgeci yok): kadro okunmaz, yalnızca seçilen kişi döner.
+  const person = await callRotaTool(stack, P.B, 'rota_workload_summary', { personSicil: EXEC_PEOPLE.SURMELIOGLU });
+  assert.deepEqual(person.result.data.people.map((row) => row.sicil), [EXEC_PEOPLE.SURMELIOGLU]);
+  assert.equal((stack.db.aiToolLog || []).some((row) => row.query === 'task-facts' && Number(row.params.withRoster) === 1 && Number(row.params.personSicil) === EXEC_PEOPLE.SURMELIOGLU), false);
+});
+
+test('kadrodan çıkan görevsiz üyenin adı kayıtlı ekip yanıtı yeniden açılınca gösterilmez (ekip kanıtı yalnızca aynı yetki döneminde açılır)', async (t) => {
+  const { ask, stack } = conversation(t, 'B');
+  const result = await ask({ text: 'Birimimin iş yükü dengeli mi?', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'team', level: 'unit', focus: ['workload'] } } });
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.ok(String(result.answer.content).includes('Ilgaz TAN'), 'görevsiz üye kadrodan eklenir');
+  stack.db.executiveScope = stack.db.executiveScope.filter((entry) => Number(entry.EmployeeSicil) !== EXEC_PEOPLE.ILGAZ);
+  const reopened = (await loadAssistantConversation(result.done.conversation.id)).body.messages.find((message) => message.role === 'assistant');
+  assert.equal(String(reopened.content).includes('Ilgaz TAN'), false);
+});
+
 test('yalnızca birim kapsamlı yönetici bölüm kadrosunu ve bölüm iş yükünü göremez', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: NOW });
   const stack = createAiStack(t, { sicil: P.F, seed: executiveBenchmarkSeed(), env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
@@ -256,6 +415,9 @@ test('örgütsel kırılım yalnızca kimliği açık sorumluların birimini kul
   const stack = createAiStack(t, { sicil: P.B, seed, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
   const { result } = await callRotaTool(stack, P.B, 'rota_task_analytics', { assignee: 'team', teamLevel: 'department', groupBy: 'unit' });
   assert.equal(result.ok, true);
+  // Birimler ve sayıları tam olarak beklenendir (her görev her birimde sayılsaydı ya da birim düşseydi bu eşitlik bozulurdu).
+  assert.deepEqual(result.data.groups.map((group) => [group.label, group.count]), [['Uygulama Geliştirme', 28], ['Dijital Kanallar', 20], ['Altyapı Operasyon', 17]]);
+  assert.equal(result.data.totals.total, 63);
   const sum = result.data.groups.reduce((total, group) => total + group.count, 0);
   assert.ok(sum > result.data.totals.total, 'ortak sorumlu iki birimde sayılır (örtüşme)');
   assert.ok(result.data.definitions.organization.includes('toplanmaz'));
@@ -263,8 +425,27 @@ test('örgütsel kırılım yalnızca kimliği açık sorumluların birimini kul
   const employee = createAiStack(t, { sicil: P.A, seed: executiveBenchmarkSeed(), env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
   const own = await callRotaTool(employee, P.A, 'rota_task_analytics', { assignee: 'me', groupBy: 'department' });
   assert.equal(own.result.ok, true);
-  assert.deepEqual(own.result.data.groups.map((group) => group.label).filter((label) => !['Yazılım', 'Birimi belirtilmemiş', 'Sorumlu bilgisi gösterilemiyor'].includes(label)), [],
+  assert.deepEqual(own.result.data.groups.map((group) => [group.label, group.count]), [['Yazılım', 12]],
     'çalışanın kendi görevlerinde yalnızca kendi ve kimliği açık eş sorumluların birimleri');
+});
+
+test('örgütsel kimlik hiyerarşik yoldur: farklı bölümlerdeki aynı adlı birimler birleşmez; birimi belirsiz sorumlu çözülemeyen sorumluyla karışmaz; sınırı aşan gruplar toplanmaz', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const seed = executiveBenchmarkSeed();
+  // Teknoloji Altyapısı bölümündeki bir kişinin birimi Yazılım bölümündeki birimle aynı adı taşır.
+  Object.assign(seed.people.find((person) => person.Sicil === P.MEHMET_KAYA), { Unit: 'Uygulama Geliştirme' });
+  // Birimi dizinde yazılmamış görünür sorumlu.
+  Object.assign(seed.people.find((person) => person.Sicil === P.SELIN), { Unit: null });
+  const stack = createAiStack(t, { sicil: P.B, seed, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
+  const { result } = await callRotaTool(stack, P.B, 'rota_task_analytics', { assignee: 'team', teamLevel: 'directorate', groupBy: 'unit', limit: 25 });
+  const labels = result.data.groups.map((group) => group.label);
+  assert.ok(labels.includes('Uygulama Geliştirme · Yazılım') && labels.includes('Uygulama Geliştirme · Teknoloji Altyapısı'), labels.join(' | '));
+  assert.equal(new Set(result.data.groups.map((group) => group.key)).size, result.data.groups.length);
+  const unknown = result.data.groups.find((group) => group.label === 'Birimi belirtilmemiş');
+  assert.equal(unknown?.key, 'no_unit', 'birimi belirsiz grup çözülemeyen sorumlu grubundan ayrı anahtardır');
+  // Sınırı aşan örgütsel gruplar toplanmış bir "diğer" satırına katılmaz (örtüşen sayıların toplamı yanlıştır); kesiklik bildirilir.
+  const limited = await callRotaTool(stack, P.B, 'rota_task_analytics', { assignee: 'team', teamLevel: 'directorate', groupBy: 'unit', limit: 2 });
+  assert.deepEqual([limited.result.data.groups.length, limited.result.data.groups.some((group) => group.key === 'other'), limited.result.truncated], [2, false, true]);
 });
 
 test('örgütsel gruplar kalıcı kanıtta kimlik kökenini taşır; yeniden açılışta yönetim kapsamı kaybı birim etiketini gizler', async (t) => {
@@ -385,8 +566,10 @@ test('proje grubunun adı doğrulanmış koduyla anılır (listede görünmeyen 
   const unique = analyticalFindings([part(0, projectGroups([['KAP · KAP TOOL', 8, 4, 1], ['MPO · Müşteri Portalı', 5, 0, 2], ['ALT · Altyapı Yenileme', 5, 3, 1], ['BGS · BGS Şube Çalışmaları', 6, 3, 7]]))]);
   const text = [synthesisNarrative(unique).intro.plain, synthesisNarrative(unique).intro.insights?.plain].join(' ');
   assert.match(text, /KAP · KAP TOOL projesi/, 'grup listesi adın tekilliğini kanıtlamaz: kod korunur');
-  const twins = analyticalFindings([part(0, projectGroups([['OPA · Ortak Platform', 2, 1, 0], ['OPB · Ortak Platform', 1, 0, 0], ['KAP · KAP TOOL', 8, 4, 1]]))]);
+  // Adaş projelerden biri bulguda adlandırılır (gecikmede ilk sırada): adı doğrulanmış koduyla yazılır, kodsuz yazılmaz.
+  const twins = analyticalFindings([part(0, projectGroups([['OPA · Ortak Platform', 9, 6, 0], ['OPB · Ortak Platform', 1, 0, 0], ['KAP · KAP TOOL', 4, 1, 1]]))]);
   const names = twins.flatMap((item) => [item.entity?.name, ...(item.names || []), ...(item.pair || []).map((row) => row.name)]).filter(Boolean);
+  assert.ok(names.length > 0 && names.some((name) => /^OP[AB] · Ortak Platform$/.test(name)), `adaş proje bulguda kodla anılır: ${names.join(', ')}`);
   assert.ok(names.every((name) => name !== 'Ortak Platform'), 'adaş proje kodsuz anılmaz');
   // Uzun analiz paragrafı bulgu sınırında bölünür; hiçbir paragraf dört cümleyi aşmaz.
   const many = analyticalFindings([part(0, portfolio([['Alfa', 12, 5, 4, 2], ['Beta', 3, 2, 0, 7], ['Gama', 7, 0, 3, 3], ['Delta', 4, 3, 1, 1]])),
@@ -397,11 +580,11 @@ test('proje grubunun adı doğrulanmış koduyla anılır (listede görünmeyen 
   assert.ok((insights.paragraphs || [insights]).some((paragraph) => /kilometre taşından[\s\S]*sıradaki ise[\s\S]*kritik yolu hesaplamaz/.test(paragraph.plain)));
 });
 
-function milestones(rows, { total = rows.length, complete = true } = {}) {
+function milestones(rows, { total = rows.length, complete = true, size = rows.length } = {}) {
   const filters = { statuses: ['todo', 'in_progress'], milestone: true, projectId: 'p1', project: 'Alfa' };
   return [fact('R3', 'totalCount', total, { tool: 'rota_task_search', filters, complete }),
     ...rows.flatMap(([title, due, days], index) => {
-      const semantic = { tool: 'rota_task_search', filters, complete, row: { identity: `t${index}`, collectionSize: rows.length, projectId: 'p1' } };
+      const semantic = { tool: 'rota_task_search', filters, complete, row: { identity: `t${index}`, collectionSize: size, projectId: 'p1' } };
       return [fact('R3', `data.tasks.${index}.title`, title, semantic), ...(due ? [fact('R3', `data.tasks.${index}.targetFinish`, due, semantic)] : []),
         ...(days != null ? [fact('R3', `data.tasks.${index}.overdueDays`, days, semantic)] : [])];
     })];
@@ -415,12 +598,30 @@ test('kilometre taşı durumu: gecikmiş sayısı, en uzun gecikme ve sıradaki 
   const narrative = synthesisNarrative(findings);
   assert.match(narrative.intro.plain, /tek başına kanıtlamaz, çünkü Rota kritik yolu hesaplamaz/);
   assert.match(narrative.conclusion.plain, /Faz 1 — gecikmiş kilometre taşı/);
-  // Termini olmayan açık kilometre taşı varsa "hiçbiri gecikmiş değil" ya da sayım yargısı kurulmaz.
+  // Termini olmayan açık kilometre taşı durumu gizlemez: durum termini olanlardan kurulur; termini olmayan için gecikme yargısı
+  // kurulmaz ve "hiçbiri gecikmiş değil" yalnızca termini olanlar için söylenir.
   const undated = analyticalFindings([part(0, milestones([['Faz 1', shift(3), null], ['İmza', null, null]]), ranking)]);
-  assert.equal(undated.some((item) => item.kind === 'milestoneStatus'), false);
-  // Kesik listede (başı) gecikmiş sayısı ancak sıradaki tarih görünürse kesindir.
+  const mixed = undated.find((item) => item.kind === 'milestoneStatus');
+  assert.deepEqual([mixed.metrics.open, mixed.metrics.dated, mixed.metrics.overdue, mixed.metrics.undated, mixed.metrics.next.title], [2, 1, 0, 1, 'Faz 1']);
+  const mixedText = synthesisNarrative(undated).intro.plain;
+  assert.match(mixedText, /[Tt]ermini olan açık 1 kilometre taşının hiçbiri gecikmiş değil; sıradaki Faz 1/);
+  assert.match(mixedText, /Termini olmayan 1 açık kilometre taşı termin sırasında yer almıyor; bu kilometre taşı için gecikme yargısı kurulamaz/);
+  assert.doesNotMatch(mixedText, /Açık 2 kilometre taşının hiçbiri/);
+  // Termini olmayanların hepsiyse "hiçbiri gecikmiş değil" denmez; yalnızca yargı kurulamadığı söylenir.
+  const allUndated = synthesisNarrative(analyticalFindings([part(0, milestones([['İmza', null, null], ['Kabul', null, null]]), ranking)])).intro.plain;
+  assert.doesNotMatch(allUndated, /hiçbiri gecikmiş değil/);
+  assert.match(allUndated, /[Tt]ermini olmayan 2 açık kilometre taşı/);
+  // Sıralamanın bıraktığı termini olmayan satır (sayfa = kesin toplam, sınır dolmadı) sayıyla açıklanır.
+  const ranked = analyticalFindings([part(0, milestones([['Faz 1', shift(4), null]], { total: 2, size: 2, complete: false }), { ...ranking, limit: 8 })]);
+  assert.deepEqual([ranked.find((item) => item.kind === 'milestoneStatus').metrics.undated, ranked.find((item) => item.kind === 'milestoneStatus').metrics.open], [1, 2]);
+  // Tam listede sıradaki kilometre taşı, satır sırasından bağımsız olarak en erken gelecek terminli olandır.
+  const reversed = analyticalFindings([part(0, milestones([['Son', shift(30), null], ['İlk', shift(5), null], ['Geç', shift(-2), 2]]), { metric: 'task.targetFinish', order: 'desc' })]);
+  assert.equal(reversed.find((item) => item.kind === 'milestoneStatus').metrics.next.title, 'İlk');
+  // Kesik listede (başı) gecikmiş sayısı ancak sıradaki tarih ya da termini olmayan bir satır görünürse kesindir.
   const head = analyticalFindings([part(0, milestones([['A', shift(-5), 5], ['B', shift(-3), 3]], { total: 6, complete: false }), ranking)]);
   assert.equal(head.find((item) => item.kind === 'milestoneStatus').metrics.overdueExact, false);
+  const tail = analyticalFindings([part(0, milestones([['A', shift(-5), 5], ['B', null, null]], { total: 6, complete: false }), ranking)]);
+  assert.equal(tail.find((item) => item.kind === 'milestoneStatus').metrics.overdueExact, true);
 });
 
 test('kapsamlar arası karşılaştırma yalnızca aynı tanımlı oranları yan yana koyar ve iç içe kapsamı açıkça söyler', () => {
@@ -469,6 +670,169 @@ test('örgütsel kırılım kapsamın bir alt düzeyidir; birim düzeyinin altı
 });
 
 test('G bulgularının ayırt edici cümleleri kıyas denetleyicisiyle uyumludur', () => {
-  for (const [kind, pattern] of Object.entries(G_FINDING_TEXT)) assert.ok(pattern instanceof RegExp, kind);
+  // Denetleyici kalıpları gerçek bulgu anlatımına uygulanır: her bulgu türü kendi kalıbıyla yakalanır.
+  const findings = analyticalFindings([part(0, portfolio([['Alfa', 12, 5, 4, 2], ['Beta', 3, 2, 0, 7], ['Gama', 7, 0, 3, 3], ['Delta', 4, 3, 1, 1]])),
+    part(1, milestones([['Faz 1', shift(-9), 9], ['Pilot', shift(12), null]]), { metric: 'task.targetFinish', order: 'asc', limit: 8 })]);
+  const narrative = synthesisNarrative(findings);
+  const markdown = [narrative.intro.markdown, ...((narrative.intro.insights?.paragraphs || [narrative.intro.insights]).filter(Boolean).map((item) => item.markdown))].join('\n\n');
+  const produced = new Set(findings.map((item) => item.kind));
+  for (const kind of ['milestoneStatus', 'completionDespiteOverdue', 'volumeVsDelay'].filter((item) => produced.has(item))) assert.match(markdown, G_FINDING_TEXT[kind], kind);
+  assert.ok(produced.has('milestoneStatus'), 'temsilî veriden kilometre taşı bulgusu üretilir');
+  // Genel bir kilometre taşı başlığı ya da liste metni durum bulgusu sayılmaz.
+  assert.doesNotMatch('#### Kilometre taşları\n\nKAP TOOL projesindeki kilometre taşları aşağıda listeleniyor.', G_FINDING_TEXT.milestoneStatus);
   assert.ok(renderedCharts('').length === 0);
+});
+
+test('aracın sayfasından büyük ekipte iş yükü bölümü düşmez: aynı kanıttan sınırlı sıralama başı olarak gösterilir, tamlık ve yayılım iddiası kurulmaz', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
+  const seed = executiveBenchmarkSeed();
+  t.mock.timers.reset();
+  // B'nin birim kadrosuna 1–3 açık görevli 30 sentetik üye eklenir (kişi sayfası en çok 25 satırdır).
+  const template = seed.tasks.find((task) => task.ProjectId === EXEC_PROJECTS.BGS && task.Status !== 'done');
+  let next = 0;
+  for (let index = 0; index < 30; index += 1) {
+    const sicil = 930000 + index;
+    seed.people.push({ Sicil: sicil, DisplayName: `Sentetik Üye ${index + 1}`, Username: `su${index}`, Unit: 'Uygulama Geliştirme', Department: 'Yazılım', Directorate: 'Bilgi Sistemleri' });
+    seed.executiveScope.push({ ManagerSicil: P.B, EmployeeSicil: sicil, ScopeType: 'UNIT' });
+    for (let copy = 0; copy <= index % 3; copy += 1) {
+      next += 1;
+      const taskId = `24000000-0000-4000-8000-${String(next).padStart(12, '0')}`;
+      seed.tasks.push({ ...template, TaskId: taskId, Title: `Sentetik iş ${next}` });
+      seed.taskAssignees.push({ TaskId: taskId, Sicil: sicil });
+    }
+  }
+  const { ask } = phase4eConversation(t, { sicil: P.B, seed });
+  const result = await ask({ text: 'Birimimin iş yükü nasıl?', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'team', level: 'unit', focus: ['workload'] } } });
+  const content = String(result.answer.content);
+  assert.equal(result.answer.finishReason, 'stop', content);
+  const rows = content.split('\n').filter((line) => /^\| (?!Kişi|---)/.test(line));
+  // Sıralama başı (ilk 10 ve sınırdaki eşitler) gösterilir; 37 kişilik ekibin tamamı değil.
+  assert.ok(rows.length >= 10 && rows.length < 25, `sıralama başı: ${rows.length}`);
+  assert.match(rows[0], /Mehmet Kaya/);
+  assert.doesNotMatch(content, /bütün kişileri \(görünür açık görevi olmayanlar dahil\)/, 'kesik sayfada tam kadro denmez');
+  assert.doesNotMatch(content, G_FINDING_TEXT.workloadSpread, 'kesik nüfusta yayılım bulgusu kurulmaz');
+});
+
+/* ── Kök neden regresyonları: bulgu ve sunum ayrıntıları ──────── */
+
+const { caveatPropositions, tableLeadSentence, titleCandidate } = await import('../src/domain/ai/groundedPropositions.js');
+const { evidenceSemantic } = await import('../src/domain/ai/claimableEvidence.js');
+
+test('oran karşılaştırması küçük paydalı varlığı açıkça dışlar; en çok gecikmiş varlık eşiğin altındaysa oran ayrışması kurulmaz', () => {
+  // 1/1 (%100) eşiğin altında: anlatım "en az 3 açık görevi olanlar arasında" der; %75 en yüksek oran olarak sunulur.
+  const eligible = analyticalFindings([part(0, projectGroups([['Küçük', 1, 1, 0], ['Orta', 4, 3, 1], ['Büyük', 12, 5, 2]]))]);
+  const rate = eligible.find((item) => item.kind === 'overdueRateLeader');
+  assert.equal(rate.metrics.excluded, 1);
+  assert.match(synthesisNarrative(eligible).intro.insights?.plain || synthesisNarrative(eligible).intro.plain, /en az 3 açık görevi olanlar arasında/);
+  // En çok gecikmiş varlık eşiğin altındaysa (2/2) onun oranı karşılaştırmaya girmez: bulgu yok.
+  const tiny = analyticalFindings([part(0, projectGroups([['Mini', 2, 2, 0], ['Orta', 4, 1, 1], ['Büyük', 12, 1, 2]]))]);
+  assert.equal(tiny.some((item) => item.kind === 'overdueRateLeader'), false);
+});
+
+test('görevi olmayan kapsamın tamamlanma oranı karşılaştırmada söylenmez; kısa yanıtta açan bulgunun çekincesi bulguyla kalır', () => {
+  const layer = (evidenceId, filters, total, open, overdue, completion) => [['total', total], ['open', open], ['overdue', overdue], ['completionRatePercent', completion]]
+    .map(([key, value]) => fact(evidenceId, `data.totals.${key}`, value, { tool: 'rota_task_analytics', filters }));
+  const findings = analyticalFindings([part(0, layer('R1', { assignee: 'me' }, 0, 0, 0, 0)), part(1, layer('R2', { assignee: 'team', teamLevel: 'unit' }, 20, 10, 2, 50)),
+    part(2, layer('R3', { assignee: 'team', teamLevel: 'department' }, 40, 20, 5, 50))]);
+  const text = synthesisNarrative(findings).intro.plain;
+  assert.doesNotMatch(text, /kendi işlerinizde %0/, 'boş kapsamda oran uydurulmaz');
+  // Kısa yanıt: iş yükü yayılımı açıyorsa kapasite çekincesi düşmez.
+  const spread = analyticalFindings([part(0, people([['Ali', 3, 1, 0], ['Can', 0, 0, 0], ['Ece', 5, 2, 1]]))]);
+  const short = synthesisNarrative(spread, { detail: 'short', focus: ['workload'] }).intro.plain;
+  assert.match(short, /açık görev sayısı 0 ile 5 arasında/);
+  assert.match(short, /boş kapasiteyi göstermez/);
+});
+
+test('örgütsel kırılım sorusunda giriş örgütsel yayılımla açılır; aynı adlı başka görev kilometre taşıyla karıştırılıp öncelikten düşmez', () => {
+  const org = (rows) => rows.flatMap(([label, open, overdue, done], index) => {
+    const semantic = { tool: 'rota_task_analytics', filters: { assignee: 'team', teamLevel: 'department' }, groupBy: 'unit', group: { key: `org:u${index}`, label }, row: { identity: `u${index}`, collectionSize: rows.length } };
+    return [fact('R1', `data.groups.${index}.label`, label, semantic), fact('R1', `data.groups.${index}.open`, open, semantic), fact('R1', `data.groups.${index}.overdue`, overdue, semantic),
+      fact('R1', `data.groups.${index}.done`, done, semantic)];
+  });
+  const findings = analyticalFindings([part(0, org([['Birim A', 9, 6, 1], ['Birim B', 5, 1, 2], ['Birim C', 4, 2, 1]]))]);
+  assert.match(synthesisNarrative(findings, { focus: ['org'] }).intro.plain, /^Bölümünüzün işlerine bakıldığında, işler 3 birime dağılıyor/);
+  // Kilometre taşı "Kabul" (p1) ile başka projedeki aynı adlı gecikmiş görev "Kabul" (p2) ayrı işlerdir.
+  const overdueList = (() => {
+    const filters = { deadline: 'overdue', statuses: ['todo', 'in_progress'] };
+    return [fact('R5', 'totalCount', 2, { tool: 'rota_task_search', filters }), ...[['Kabul', 'p2', 30, 't9'], ['Rapor', 'p3', 4, 't8']].flatMap(([title, projectId, days, identity], index) => {
+      const semantic = { tool: 'rota_task_search', filters, row: { identity, collectionSize: 2, projectId } };
+      return [fact('R5', `data.tasks.${index}.title`, title, semantic), fact('R5', `data.tasks.${index}.overdueDays`, days, semantic)];
+    })];
+  })();
+  const both = analyticalFindings([part(0, milestones([['Kabul', shift(-9), 9]])), part(1, overdueList, { metric: 'task.overdueDays', order: 'desc' })]);
+  const conclusion = synthesisNarrative(both).conclusion.plain;
+  assert.match(conclusion, /Kabul — gecikmiş kilometre taşı/);
+  assert.match(conclusion, /Kabul — en uzun süredir geciken görev/, 'farklı görev öncelikten düşmez');
+});
+
+test('sunum: tamamlanmış görevde gecikme günü "gecikmemiş" sayılmaz; termin kovası tablosu "termin durumları"dır; gruplu kilometre taşı görevler diye adlandırılmaz', () => {
+  const envelope = { data: { tasks: [{ overdue: false, status: 'done' }, { overdue: false, status: 'todo' }] } };
+  assert.equal(evidenceSemantic(envelope, 'data.tasks.0.overdueDays', null, null)?.nullMeaning, 'unknown');
+  assert.equal(evidenceSemantic(envelope, 'data.tasks.1.overdueDays', null, null)?.nullMeaning, 'not-overdue');
+  assert.match(tableLeadSentence({ collection: 'data.groups', groupBy: 'deadline', columns: [] }, 'tr'), /termin durumlarına göre/);
+  const milestone = { statuses: ['todo', 'in_progress'], milestone: true, projectId: 'p1', project: 'Alfa' };
+  assert.equal(titleCandidate({ tool: 'rota_task_analytics', filters: milestone, groupBy: 'status', locale: 'tr' }), null);
+  assert.match(titleCandidate({ tool: 'rota_task_search', filters: milestone, locale: 'tr' }) || '', /kilometre taşları/);
+});
+
+test('örgütsel kırılım tam değilse (birimi belirsiz grup) örtüşme kuralı bulgudan bağımsız söylenir; tam tabloda bulgu söyler, çekince yinelenmez', () => {
+  const groupsOf = (rows) => rows.flatMap(([key, label, open, overdue], index) => {
+    const semantic = { tool: 'rota_task_analytics', filters: { assignee: 'team', teamLevel: 'department' }, groupBy: 'unit', group: { key, label }, row: { identity: key, collectionSize: rows.length } };
+    return [fact('R1', `data.groups.${index}.label`, label, semantic), fact('R1', `data.groups.${index}.open`, open, semantic), fact('R1', `data.groups.${index}.overdue`, overdue, semantic)];
+  });
+  const partial = caveatPropositions([part(0, groupsOf([['org:a', 'Birim A', 5, 2], ['no_unit', 'Birimi belirtilmemiş', 2, 1]]))]);
+  assert.ok(partial.some((item) => /birimde ayrı sayılabildiğinden bu sayılar toplanmaz/.test(item.proposition.plain)));
+  const whole = caveatPropositions([part(0, groupsOf([['org:a', 'Birim A', 5, 2], ['org:b', 'Birim B', 3, 1]]))]);
+  assert.equal(whole.some((item) => /bu sayılar toplanmaz/.test(item.proposition.plain)), false);
+});
+
+test('çok kapsamlı yanıt: adlı birincil kapsamın takip bağlamı saklanır (ek kapsamın kimliği girmez); aynı türden iki adlı kapsam kendi başlığını alır', async (t) => {
+  const { ask } = conversation(t, 'B');
+  const result = await ask({ text: 'KAP TOOL projesini birimimle karşılaştır.', plan: { intent: 'rota', language: 'tr', visual: true, chart: 'bar',
+    analysis: { scope: 'project', names: ['KAP TOOL'], focus: ['overview'], also: [{ scope: 'team', level: 'unit' }] } } });
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.equal(result.analysisContext?.scope, 'project');
+  assert.deepEqual(result.analysisContext.subjects.map((subject) => subject.id.toLowerCase()), [EXEC_PROJECTS.KAP.toLowerCase()]);
+  assert.equal(result.analysisContext.visual, true, 'sunum tercihi takipte sürer');
+  // Takip birincil kapsamı güncel yetkiyle yeniden okur; ek kapsam (birim) okunmaz.
+  const follow = await ask({ text: 'Peki gecikmeler?', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['overdue'] } } });
+  assert.equal(follow.answer.finishReason, 'stop', follow.answer.content);
+  assert.ok(populationReads(follow.log).every((row) => String(row.params.projectId || '').toLowerCase() === EXEC_PROJECTS.KAP.toLowerCase() && row.params.assigneeMode !== 'team'));
+  // İki adlı proje kapsamı: her bölüm kendi projesinin başlığını alır (ilk kapsama yığılmaz).
+  const pair = await ask({ text: 'KAP TOOL ile BGS Şube Çalışmaları projelerini ayrı ayrı özetle.', plan: { intent: 'rota', language: 'tr',
+    analysis: { scope: 'project', names: ['KAP TOOL'], focus: ['overview'], also: [{ scope: 'project', names: ['BGS Şube Çalışmaları'] }] } } });
+  assert.match(pair.answer.content, /#### KAP TOOL/);
+  assert.match(pair.answer.content, /#### BGS Şube Çalışmaları/);
+});
+
+test('özetin yanındaki adlı proje listesi özetin daraltması (within) olarak saklanmaz', async (t) => {
+  const { ask } = conversation(t, 'B');
+  const list = { operation: 'list', metrics: ['task.title', 'task.targetFinish'], population: { tool: 'rota_task_search', collection: 'tasks' }, layout: 'list',
+    entities: [{ type: 'project', text: 'Mevzuat Uyum' }], filters: { assignee: 'me', status: ['todo', 'in_progress'] } };
+  const result = await ask({ text: 'Durumumu özetle, ayrıca Mevzuat Uyum projesindeki açık işlerimi listele.', plan: { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] }, request: list } });
+  assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+  assert.equal(result.analysisContext?.scope, 'self');
+  assert.equal(result.analysisContext.within, undefined, 'açık listenin projesi özetin öznesini daraltmaz');
+});
+
+test('kapsamlardan biri yetkisizse okunmayan yön notu kalır ama "her kapsamın göstergeleri okundu" denmez', async (t) => {
+  const { ask } = conversation(t, 'F');
+  const result = await ask({ text: 'Kendimi, birimimi ve bölümümü ayrıntılı analiz et.', plan: { intent: 'rota', language: 'tr',
+    analysis: { scope: 'self', focus: ['overview', 'workload', 'milestones', 'projects'], also: [{ scope: 'team', level: 'unit', focus: ['workload', 'projects', 'milestones'] }, { scope: 'team', level: 'department' }] } } });
+  const content = String(result.answer.content);
+  assert.match(content, /okuma sınırına sığmadığı için ayrıca gösterilmedi/, content);
+  assert.doesNotMatch(content, /Her kapsamın temel göstergeleri okundu/);
+});
+
+test('üç adlı kişinin (ya da projenin) çok kapsamlı karşılaştırması sessizce düşmez: aynı tanımlı oranlarla kapsam karşılaştırması kurulur', () => {
+  const person = (evidenceId, sicil, name, open, overdue) => [['open', open], ['overdue', overdue]].map(([key, value]) => fact(evidenceId, `data.totals.${key}`, value,
+    { tool: 'rota_task_analytics', filters: { assignee: 'person', personSicil: sicil, person: name } }));
+  const findings = analyticalFindings([part(0, person('R1', 1, 'Ayşe', 10, 5)), part(1, person('R2', 2, 'Can', 8, 2)), part(2, person('R3', 3, 'Ece', 4, 1))]);
+  const level = findings.find((item) => item.kind === 'levelComparison');
+  assert.equal(level?.layers.length, 3);
+  const text = synthesisNarrative(findings).intro.plain;
+  assert.match(text, /Açık işlerde gecikme oranı en yüksek Ayşe sorumluluğundaki işlerde \(%50\)/);
+  assert.match(text, /her kişide ayrı sayılabildiğinden sayılar toplanmaz/);
+  // İki adlı kişi kapsam karşılaştırması değildir (iki öznenin karşılaştırma yolu kalır).
+  assert.equal(analyticalFindings([part(0, person('R1', 1, 'Ayşe', 10, 5)), part(1, person('R2', 2, 'Can', 8, 2))]).some((item) => item.kind === 'levelComparison'), false);
 });

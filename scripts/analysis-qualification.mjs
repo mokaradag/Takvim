@@ -128,8 +128,16 @@ export function plannerScore(result, expect) {
     // Kabul edilen kararın özeti kapsamları `layers` olarak taşır (birincil + ek); ham plan biçimi `also`.
     const declared = analysis ? (analysis.layers || [analysis, ...(analysis.also || [])]).map((layer) => `${layer.scope}|${layer.level || ''}`) : [];
     for (const layer of expect.layers) if (!declared.includes(`${layer.scope}|${layer.level || ''}`)) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} bildirilmedi`);
+    // Bildirilen kapsamın açılımı da o kapsamın nüfusunu okumalıdır (kapsam + düzey; adlı kapsamda adlı varlık): yalnızca özetin
+    // kapsam listesinde görünmesi yetmez.
+    const reads = (layer) => requests.some((request) => (layer.scope === 'self' ? request.filters?.assignee === 'me'
+      : layer.scope === 'team' ? request.filters?.assignee === 'team' && (request.filters?.teamLevel || '') === (layer.level || '')
+        : ['person', 'project'].includes(layer.scope) ? request.entities?.some((entity) => entity.type === layer.scope) && !request.filters?.assignee
+          : !request.filters?.assignee && !request.entities?.length));
+    for (const layer of expect.layers.filter((layer) => !layer.optional)) if (!reads(layer)) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} okunmadı`);
   }
-  if (expect.intent === 'rota' && result.outcome === 'planned') {
+  // Birden çok doğru kararı olan vakada (`intentAny`) planlanmış sonuç da planın kendisiyle puanlanır (karar tek başına yetmez).
+  if ((expect.intent === 'rota' || expect.intentAny?.includes('rota')) && result.outcome === 'planned') {
     const scope = scopeOf(requests);
     // Beklentide kapsam yoksa (ayrık kümede bilinçli olarak serbest) kapsam puanlanmaz; Tier B vakalarının hepsi kapsam taşır.
     const pairedSelf = expect.withSelf === true && result.plan?.analysis?.withSelf === true && expect.scope === 'person' && new Set(requests.map((request) => scopeOf([request]))).size === 2
@@ -297,16 +305,22 @@ export function executiveExpectation(item) {
     : turns.map((turn) => turn.plan?.analysis).filter((entry) => entry && entry.scope !== 'previous').at(-1) || null;
   const scope = analysis?.scope;
   const denied = (layer) => (item.expect?.deniedLayers || []).some((entry) => entry.scope === layer.scope && (entry.level || null) === (layer.level || null));
-  const layers = analysis?.also?.length ? [analysis, ...analysis.also].map(({ scope: layer, level }) => ({ scope: layer, ...(level ? { level } : {}) }))
+  const seed = executiveBenchmarkSeed();
+  // Adlı kapsam kendi kimliğiyle beklenir (sentetik verideki Sicil/proje kimliği): başka kişinin ya da projenin okuması karşılamaz.
+  const identity = (layer, name) => (layer === 'person' ? { sicil: seed.people.find((row) => row.DisplayName === name)?.Sicil ?? -1 }
+    : layer === 'project' ? { projectId: seed.projects.find((row) => row.ProjectName === name)?.ProjectId ?? `bilinmeyen:${name}` } : {});
+  const layers = analysis?.also?.length ? [analysis, ...analysis.also].map(({ scope: layer, level, names: layerNames }) => ({ scope: layer, ...(level ? { level } : {}),
+    ...(['person', 'project'].includes(layer) && layerNames?.length === 1 ? identity(layer, layerNames[0]) : {}) }))
     .map((layer) => (denied(layer) ? { ...layer, optional: true } : layer)) : null;
   const finish = item.expect?.finish || { denied: 'unavailable', clarify: 'clarification', limitation: 'unsupported' }[item.handling] || 'stop';
-  const seed = executiveBenchmarkSeed();
   const names = analysis?.names || [];
   return { ...item.expect, finish, ...(item.handling === 'limitation' ? { noData: true } : {}),
     ...(scope && !item.expect?.scopeDenied ? { scope } : {}), ...(layers ? { layers } : {}),
     ...(layers || item.expect?.scopeDenied ? {} : scope === 'team' ? { assignee: 'team', ...(analysis.level ? { level: analysis.level } : {}) } : scope === 'self' ? { assignee: 'me' } : {}),
     ...(scope === 'project' && !item.expect?.scopeDenied ? { project: true, projectIds: names.map((name) => seed.projects.find((row) => row.ProjectName === name)?.ProjectId || `bilinmeyen:${name}`) } : {}),
     ...(scope === 'person' && !item.expect?.scopeDenied ? { person: true, people: names.map((name) => seed.people.find((row) => row.DisplayName === name)?.Sicil || -1) } : {}),
+    // Portföy kapsamı (birincil) portföy okumasını gerektirir: görev okumalarıyla geçemez.
+    ...(scope === 'projects' && !item.expect?.scopeDenied && !denied(analysis) ? { portfolio: true } : {}),
     ...(turns.at(-1).plan?.visual ? { chart: true } : {}) };
 }
 

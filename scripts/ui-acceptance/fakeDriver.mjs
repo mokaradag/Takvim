@@ -6,7 +6,8 @@ import { executiveBenchmarkSeed } from '../../test/helpers/executiveBenchmarkSee
 // UI_SEED=analysis: Bilgin yönetim analizi kıyas kümesinin sentetik verisi (arayüz kabul verisinin genişletilmiş hâli).
 // UI_SEED=executive: Aşama G yönetici kıyas verisi (örgütsel birimler, kilometre taşları, görünür görevi olmayan kadro üyesi).
 const SEEDS = { analysis: analysisBenchmarkSeed, executive: executiveBenchmarkSeed };
-const db = createFakeDatabase((SEEDS[process.env.UI_SEED] || uiSeed)());
+// Yalnızca tanımlı tohumlar seçilir (ör. "__proto__", "constructor" gibi değerler varsayılan tohuma düşer).
+const db = createFakeDatabase((Object.hasOwn(SEEDS, process.env.UI_SEED || '') ? SEEDS[process.env.UI_SEED] : uiSeed)());
 const statements = db.statements;
 setInterval(() => { if (statements.length > 2000) statements.splice(0, statements.length - 200); }, 5000).unref();
 globalThis.__rotaUiDb = db;

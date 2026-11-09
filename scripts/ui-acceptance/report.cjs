@@ -20,4 +20,4 @@ out += `\nToplam tur: ${rows.length}; model çağrısı: ${calls.length} (başar
 out += `Girdi (önbelleksiz): ${calls.reduce((s, c) => s + (c.input || 0), 0)}; önbellek yazma: ${calls.reduce((s, c) => s + (c.cacheWrite || 0), 0)}; önbellek okuma: ${calls.reduce((s, c) => s + (c.cacheRead || 0), 0)}; çıktı: ${calls.reduce((s, c) => s + (c.output || 0), 0)}\n`;
 process.stdout.write(out);
 if (!rows.length || rows.some((row) => row.failures?.length || completionFailures(row.rendered, row.server).length || !row.server
-  || semanticFailures({ outcome: row.expectedOutcome || 'grounded' }, row.rendered, row.server).length || modelFailures({ serverReplay: row.serverReplay === true }, row.server, row.calls).length)) process.exitCode = 1;
+  || semanticFailures({ outcome: row.expectedOutcome || 'grounded' }, row.rendered, row.server).length || (!row.scripted && modelFailures({ serverReplay: row.serverReplay === true }, row.server, row.calls).length))) process.exitCode = 1;

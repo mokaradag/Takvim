@@ -131,7 +131,9 @@ const workloadSummary = {
         notes: [
           WORKLOAD_NOTE,
           ...(team && !rosterComplete ? ['Kişi satırları yalnızca çözümlenmiş, görünür atamaları kapsar; sıfır açık işi olan ekip üyelerinin tamamı bilinmediğinden ekip dengesi veya yoğunlaşması çıkarılamaz.'] : []),
-          ...(team && rosterComplete ? [`Kişi satırları yönetim kapsamınızdaki bütün ekip üyelerini içerir; ${withoutOpen} üyenin görünür açık görevi yok. Görünür açık görevi olmaması kişinin boşta olduğunu göstermez.`] : []),
+          // Kadronun tam okunması ile dönen sayfanın tam olması ayrıdır: sayfa sınırla kesildiyse "bütün üyeler" denmez.
+          ...(team && rosterComplete && page.length === ordered.length ? [`Kişi satırları yönetim kapsamınızdaki bütün ekip üyelerini içerir; ${withoutOpen} üyenin görünür açık görevi yok. Görünür açık görevi olmaması kişinin boşta olduğunu göstermez.`] : []),
+          ...(team && rosterComplete && page.length < ordered.length ? [`Ekip kadrosu tam okundu (${ordered.length} üye) ancak kişi satırları sayfa sınırı nedeniyle ilk ${page.length} üyeyle sınırlı; listede olmayan üyeler var. Görünür açık görevi olmaması kişinin boşta olduğunu göstermez.`] : []),
           ...(unrepresented ? [`${unrepresented} açık görev kişi satırlarında temsil edilemiyor; kimliği çözümlenmeyen sorumlular açıklanmaz.`] : []),
           'Birden çok sorumlusu olan görev her sorumluda ayrı sayılır.',
           'plannedHoursOnAssignedTasks, kişinin atandığı görevlerin task düzeyindeki planlanan saat toplamıdır; kişi-saat tahsisi değildir. Yalnızca değeri girilmiş görevler (tasksWithPlannedHours) toplanır; boş değer sıfır sayılmaz.'

@@ -74,7 +74,8 @@ export const G_FINDING_TEXT = Object.freeze({
   completionDespiteOverdue: /tamamlanmış olsa da \*\*\d+\*\* gecikmiş görev bulunuyor/,
   volumeVsDelay: /Görev sayısı tek başına baskıyı göstermiyor/,
   levelComparison: /Açık işlerde gecikme oranı|Karşılaştırılan kapsamların hiçbirinde gecikmiş açık iş yok/,
-  milestoneStatus: /kilometre taşı/i,
+  // Kilometre taşı DURUM bulgusunun kendisi (gecikmiş sayısı, "hiçbiri gecikmiş değil" ya da sıradaki): başlık ya da liste metni yetmez.
+  milestoneStatus: /kilometre taşından \*\*\d+[^*]*\*\* gecikmiş|\*\*\d+\*\* kilometre taşı gecikmiş|kilometre taşının hiçbiri gecikmiş değil|Sıradaki kilometre taşı \*\*/,
   orgSpread: /[İi]şler \*\*\d+\*\* (?:bölüme|birime) dağılıyor[\s\S]+sayıları toplanmaz/
 });
 
@@ -111,6 +112,10 @@ export function turnViolations(result, expect, { live = false } = {}) {
   // Ufuk: beklenen aralıkla örtüşen bir termin penceresi okunmuş olmalı (uçlarda en çok bir günlük yorum farkı kabul edilir).
   const day = (value) => Date.parse(`${String(value).slice(0, 10)}T00:00:00Z`) / 86400000;
   const bounded = reads.filter((row) => row.params.dateFrom || row.params.dateTo);
+  // Gelecek dönemin (ör. önümüzdeki 14 gün) kendi okuması zorunludur: yalnızca dönemsiz gecikme okuması bunu karşılamaz.
+  if (expect.windowDays && !bounded.some((row) => row.params.dateFrom && row.params.dateTo && day(row.params.dateTo) - day(row.params.dateFrom) + 1 === expect.windowDays)) {
+    problems.push(`${expect.windowDays} günlük dönem okunmadı`);
+  }
   if (expect.window && (!bounded.length || !bounded.every((row) => row.params.dateFrom && row.params.dateTo
     && Math.abs(day(row.params.dateFrom) - day(expect.window[0])) <= 1 && Math.abs(day(row.params.dateTo) - day(expect.window[1])) <= 1))) {
     problems.push(`ufuk ${expect.window.join('..')} okunmadı`);
@@ -122,13 +127,37 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.level && !every((row) => row.params.teamLevel === expect.level.toUpperCase())) problems.push('örgütsel düzey her okumada korunmadı');
   // Aşama G: çok kapsamlı planda her kapsamın KENDİ nüfusu okunur; beklenmeyen kapsam okunmaz. Yetkisi olmadığı sunucuca
   // okumadan önce bilinen kapsam (`optional`) okunmak zorunda değildir; okunursa da yetki reddiyle sonuçlanır.
+  // Her kapsam türü kendi okuma imzasıyla eşlenir: kendi (me), ekip (team + düzey), adlı kişi (person + Sicil), adlı proje (proje
+  // kimliği, sorumlu koşulu yok), görünür bütün işler/projeler (koşulsuz görev okuması ya da portföy). Yetkisiz kapsam (`optional`)
+  // okunmak zorunda değildir; okunduysa kanıt üretmemelidir (yetki reddi).
   if (expect.layers) {
-    const mode = (layer) => (layer.scope === 'self' ? 'me' : layer.scope === 'team' ? 'team' : null);
-    for (const layer of expect.layers.filter((layer) => mode(layer) && !layer.optional)) {
-      if (!reads.some((row) => row.params.assigneeMode === mode(layer) && (row.params.teamLevel || null) === (layer.level ? layer.level.toUpperCase() : null))) problems.push(`kapsam okunmadı: ${layer.scope}${layer.level ? `/${layer.level}` : ''}`);
+    const level = (layer) => (layer.level ? layer.level.toUpperCase() : '');
+    const signature = (row) => {
+      const mode = row.params.assigneeMode || 'any';
+      if (mode === 'me' || mode === 'team') return `${mode}|${row.params.teamLevel || ''}`;
+      if (mode === 'person') return `person|${row.params.personSicil ?? ''}`;
+      return row.params.projectId ? `project|${String(row.params.projectId).toLowerCase()}` : 'all|';
+    };
+    const matches = (layer, key) => {
+      if (layer.scope === 'self') return key === 'me|';
+      if (layer.scope === 'team') return key === `team|${level(layer)}`;
+      if (layer.scope === 'person') return layer.sicil != null ? key === `person|${layer.sicil}` : key.startsWith('person|');
+      if (layer.scope === 'project') return layer.projectId != null ? key === `project|${String(layer.projectId).toLowerCase()}` : key.startsWith('project|');
+      return key === 'all|';
+    };
+    const keys = reads.map(signature);
+    for (const layer of expect.layers.filter((layer) => !layer.optional)) {
+      const portfolio = ['projects', 'all'].includes(layer.scope) && result.log.some((row) => row.query === 'portfolio');
+      if (!keys.some((key) => matches(layer, key)) && !portfolio) problems.push(`kapsam okunmadı: ${layer.scope}${layer.level ? `/${layer.level}` : ''}`);
     }
-    const allowed = new Set(expect.layers.map((layer) => `${mode(layer) || 'any'}|${layer.level ? layer.level.toUpperCase() : ''}`));
-    if (reads.some((row) => !allowed.has(`${row.params.assigneeMode || 'any'}|${row.params.teamLevel || ''}`))) problems.push('bildirilmeyen kapsam okundu');
+    if (keys.some((key) => !expect.layers.some((layer) => matches(layer, key)))) problems.push('bildirilmeyen kapsam okundu');
+    const evidenceKey = (row) => {
+      const filters = row.data?.filters || {};
+      return filters.assignee === 'team' ? `team|${String(filters.teamLevel || '').toUpperCase()}` : filters.assignee === 'me' ? 'me|' : null;
+    };
+    for (const layer of expect.layers.filter((layer) => layer.optional)) {
+      if ((result.evidence || []).some((row) => evidenceKey(row) && matches(layer, evidenceKey(row)))) problems.push(`yetkisiz kapsamın kanıtı var: ${layer.scope}${layer.level ? `/${layer.level}` : ''}`);
+    }
   }
   if (expect.scope && result.analysisContext?.scope !== expect.scope) problems.push('analiz kapsamı beklenenle aynı değil');
   if (expect.scope === 'all' && !expect.project && !expect.projectIds?.length && (reads.length ? !every((row) =>

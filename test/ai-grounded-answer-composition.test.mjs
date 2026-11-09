@@ -165,6 +165,8 @@ test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; ya
     const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
     // Aşama G: sayım ve iki uç tek cümledir; söyleyen paragraf tablo için ayrıca yönlendirme cümlesi kurmaz.
     assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var; en uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**).'), answer.content);
+    // Paragraf kendi kanıt atfını taşır (atıf kaybı bu senaryoda da yakalanır).
+    assert.match(answer.content, /^[^\n]*\(\*\*1 gün\*\*\)\. 【R1】/);
     const [line] = turnLines(logs);
     assert.deepEqual([line.context.presentation.mode, line.context.presentation.rejected, line.context.presentation.said], ['composed', 'UNKNOWN_PROPOSITION', 3]);
     assert.equal(line.context.escalation.kind, 'narrate');

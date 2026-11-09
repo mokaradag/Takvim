@@ -222,8 +222,10 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // özetten kendisi çözer. Çağrılar YÜRÜTÜLMEDEN atılır (yapısal normalleştirme; düzeltme turu açılmaz). Başka araç çağrısı ya da
     // istek ile birlikte özet eskisi gibi reddedilir.
     const parsed = parseAnalysis(plan.analysis);
+    // Ek kapsamların adları da özetin adlarıdır: onların ad araması da sunucunun kendi çözümüyle aynıdır.
+    const named = [{ scope: parsed.scope, names: parsed.names }, ...(parsed.also || [])].filter((layer) => ['person', 'project'].includes(layer.scope));
     const selectors = [
-      ...(['person', 'project'].includes(parsed.scope) ? (Array.isArray(plan.analysis.names) ? plan.analysis.names : []).map((text) => ({ name: `rota_${parsed.scope}_search`, text })) : []),
+      ...named.flatMap((layer) => (layer.names || []).map((text) => ({ name: `rota_${layer.scope}_search`, text }))),
       ...(plan.analysis?.within ? [{ name: 'rota_project_search', text: plan.analysis.within }] : [])
     ];
     const matchingLookup = (call) => {
@@ -232,15 +234,20 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
       return selectors.some((selector) => selector.name === call.name && selector.text === args.text);
     };
     const lookups = planned.length && planned.every(matchingLookup);
-    // Aşama G: özetin okumalarıyla aynı nüfus araçlarına (iş yükü, görev toplamları/listesi, portföy) SEÇİCİSİZ yazılmış çağrılar
-    // özetin yerine geçemez ve yürütülmez; okumaları sunucu özetten kurar (planlama mekaniğidir; düzeltme turu açmaz). Bildirilmemiş
-    // bir ada arama ya da seçici (proje, kişi, iş paketi, metin) taşıyan çağrı özetin ifade etmediği bir daraltma olabilir: sessizce
-    // atılmaz, plan reddedilir. Başka araç (ayrıntı, bağımlılık, baz plan, hareket) da özetle birlikte reddedilir.
+    // Aşama G: özetin okumalarıyla aynı nüfus araçlarına (iş yükü, görev toplamları/listesi, portföy) yazılmış ve özetin bir
+    // kapsamından BAŞKA hiçbir koşul taşımayan çağrılar özetin yerine geçemez ve yürütülmez; okumaları sunucu özetten kurar
+    // (planlama mekaniğidir; düzeltme turu açmaz). Özetin ifade etmediği herhangi bir koşul (durum, termin, öncelik, gruplama,
+    // dönem, seçici, iç içe süzgeç/varlık ya da başka kapsam) ayrı bir istek olabilir: sessizce atılmaz, plan reddedilir.
+    // Başka araç (ayrıntı, bağımlılık, baz plan, hareket) da özetle birlikte reddedilir.
+    const scopes = [parsed, ...(parsed.also || [])].map((layer) => (layer.scope === 'self' ? { assignee: 'me' }
+      : layer.scope === 'team' ? { assignee: 'team', ...(layer.level ? { teamLevel: layer.level } : {}) } : {}));
     const unselected = (call) => {
       if (!ANALYSIS_READ_TOOLS.includes(call.name) || NAME_LOOKUP_TOOLS.includes(call.name)) return false;
       let args;
       try { args = JSON.parse(call.arguments); } catch { return false; }
-      return Boolean(args) && typeof args === 'object' && !['projectId', 'personSicil', 'wbsId', 'text', 'taskIds', 'seriesId'].some((key) => args[key] != null);
+      if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
+      const narrowing = Object.fromEntries(Object.entries(args).filter(([key, value]) => key !== 'limit' && value != null));
+      return scopes.some((scope) => stableJson(scope) === stableJson(narrowing));
     };
     const redundant = planned.length && planned.every((call) => matchingLookup(call) || unselected(call));
     // Analitik özet: sunucu her yönü kayıt defterinin sabit istek biçimine açar; okumaları yalnızca sunucu kurar.
@@ -248,10 +255,12 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // Aşama G — özet + ek liste (ör. "grafikle göster, ardından en yakın teslimatları listele"): özetin yanındaki açık istek(ler)
     // özetin okumalarından SONRA ayrı bölüm olarak okunur; aynı doğrulamadan geçer ve fiziksel okuma tavanına sığmalıdır. Önceki
     // bölüme gönderme (from) özetin bölüm sırası belirsiz olduğundan kabul edilmez.
+    // Önceki sonuca gönderme (`previousResult`) özetin bölümleriyle temsil edilemez: kapsayan bir özet okuması onu daha geniş
+    // nüfusla değiştirirdi; birleşim reddedilir. Çok kapsamlı özetle açık liste birlikte verilebilir (her biri kendi nüfusuyla).
     const explicit = [...(present('request') ? [plan.request] : []), ...(present('additionalRequests') ? [].concat(plan.additionalRequests) : [])];
-    if (explicit.some((item) => !item || typeof item !== 'object' || Array.isArray(item)
+    if (explicit.some((item) => !item || typeof item !== 'object' || Array.isArray(item) || item.previousResult === true
       || (Array.isArray(item.entities) && item.entities.some((entity) => entity && typeof entity === 'object' && Object.hasOwn(entity, 'from'))))) throw invalidArguments(['$.analysis:request']);
-    if (explicit.length && (['previous', 'row'].includes(parsed.scope) || parsed.also?.length)) throw invalidArguments(['$.analysis:request']);
+    if (explicit.length && (['previous', 'row'].includes(parsed.scope) || explicit.length > PLANNER_LIMITS.maxRequests)) throw invalidArguments(['$.analysis:request']);
     // Takipte yazılmayan yön/ufuk önceki doğrulanmış analizden; görselleştirme ve grafik türü de açıkça kapatılmadıkça sürer.
     const analysis = resolveAnalysisBrief(parsed, { previous: previousAnalysis, today });
     const follow = ['previous', 'row'].includes(parsed.scope) && previousAnalysis;
@@ -260,21 +269,44 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const table = base.table === true || Boolean(follow && previousAnalysis.table && plan.table !== false);
     const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
     const requested = visual ? base.charts || (!explicitCharts && follow && (!base.chart || base.chart === previousAnalysis.chart) ? previousAnalysis.charts : null) : null;
-    const expanded = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested });
-    const kept = explicit.filter((item) => !expanded.some((part) => sameRequest(part, item) || coveredRequest(part, item)));
-    const sections = [...expanded, ...kept];
+    const expand = (reserve) => expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested, reserve });
+    // Açık istek, özetin aynı okumasıysa ikinci kez okunmaz; açık satır sınırı ve sunum tercihi (liste/tablo) o okumaya geçer.
+    const merge = (expanded) => {
+      const parts = [...expanded];
+      const kept = [];
+      for (const item of explicit) {
+        const index = parts.findIndex((part) => coveredRequest(part, item));
+        if (index < 0) { kept.push(item); continue; }
+        const layout = item.layout && item.layout !== 'auto' ? item.layout : null;
+        const limit = Number.isInteger(item.rank?.limit) ? item.rank.limit : null;
+        if (layout && parts[index].layout !== 'auto' && parts[index].layout !== layout) { kept.push(item); continue; }
+        parts[index] = { ...parts[index], ...(layout ? { layout } : {}), ...(limit ? { rank: { ...parts[index].rank, limit } } : {}) };
+      }
+      return { parts, kept };
+    };
+    let expanded = expand(0);
+    let { parts: analysisParts, kept } = merge(expanded);
+    // Çok kapsamlı özette dağılım yönleri kalan bütçeyle okunur: açık istekler için yer ayrılır ve sığmayan dağılım yönü adıyla
+    // bildirilir (açık istek ya da kapsam düşmez).
+    if (kept.length && analysis.also?.length && analysisParts.length + kept.length > ANALYSIS_LIMITS.maxParts) {
+      expanded = expand(kept.length);
+      ({ parts: analysisParts, kept } = merge(expanded));
+    }
+    const sections = [...analysisParts, ...kept];
     if (sections.length > ANALYSIS_LIMITS.maxParts) throw invalidArguments(['$.analysis.focus:requestBudget']);
     const [request, ...additionalRequests] = sections;
+    // Bölümlerin özet sahipliği (kapsam ve yön): sunum başlıkları ve takip bağlamı bunu kullanır; açık istek bölümü özetin değildir.
+    const owned = { analysisParts: analysisParts.length, ...(expanded.sections ? { sections: expanded.sections } : {}) };
     const omitted = expanded.omitted?.length ? { omitted: expanded.omitted } : {};
     // Açık isteğin birleşik plandaki yolu → modelin kendi yazdığı yol: o istekteki sorun özete değil isteğin kendisine bağlanır
     // (model hangi alanı düzelteceğini görür; özetin genel "geçersiz" ayrıntısına dönüşmez).
     const own = (item) => (item === plan.request ? '$.request' : `$.additionalRequests[${[].concat(plan.additionalRequests).indexOf(item)}]`);
     const explicitPaths = Object.freeze(Object.fromEntries(kept.map((item, offset) => {
-      const merged = expanded.length + offset;
+      const merged = analysisParts.length + offset;
       return [merged === 0 ? '$.request' : `$.additionalRequests[${merged - 1}]`, own(item)];
     })));
     return { plan: { ...base, ...(visual ? { visual: true } : declined ? { visual: false } : {}), ...(chart ? { chart } : {}), ...(requested ? { charts: requested } : {}),
-      ...(table ? { table: true } : {}), analysis: Object.freeze({ ...analysis, ...omitted }), request,
+      ...(table ? { table: true } : {}), analysis: Object.freeze({ ...analysis, ...omitted, ...owned }), request,
       ...(additionalRequests.length ? { additionalRequests } : {}) }, brief: parsed, calls: [], ...(kept.length ? { explicitPaths } : {}) };
   }
   if (plan.intent === PLANNER_INTENTS.ROTA) {
@@ -320,30 +352,32 @@ const NAME_LOOKUP_TOOLS = Object.freeze(['rota_person_search', 'rota_project_sea
 /** Aşama G: özetin kendi okumalarını kurduğu nüfus araçları; özet yanındaki seçicisiz çağrıları yürütülmeden atılır. */
 const ANALYSIS_READ_TOOLS = Object.freeze([...NAME_LOOKUP_TOOLS, 'rota_workload_summary', 'rota_task_analytics', 'rota_task_search', 'rota_portfolio_summary']);
 
-/** İki ham istek aynı okuma mı (alan sırasından bağımsız)? Özetin zaten okuduğu açık istek ikinci kez okunmaz. */
-function sameRequest(left, right) {
-  const canonical = (value) => (Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
-    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value);
-  const { layout: _left, ...a } = left || {};
-  const { layout: _right, ...b } = right || {};
-  return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+/** Alan sırasından bağımsız kanonik JSON (dizi sırası anlamlıdır). */
+function stableJson(value) {
+  const canonical = (item) => (Array.isArray(item) ? item.map(canonical) : item && typeof item === 'object'
+    ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, canonical(item[key])])) : item);
+  return JSON.stringify(canonical(value ?? null));
 }
 
 /**
- * Özetin bir okuması açık isteği kapsıyor mu: aynı işlem, araç, koleksiyon, gruplama, varlıklar, süzgeçler ve sıralama; açık
- * isteğin her ölçüsü okumada da var. Kapsanan istek ikinci kez okunmaz (aynı satırlar zaten yanıttadır); kapsanmayan istek
- * ayrı bölüm olarak okunur.
+ * Özetin bir okuması açık isteğin AYNI okuması mı: aynı işlem, nüfus (araç, koleksiyon, gruplama, sıralama düzeni), varlıklar,
+ * süzgeçler ve sıralama ölçüsü/yönü; açık isteğin her ölçüsü okumada da var; alan ve bağlama yazdıysa okumanınkiyle aynı. Farklı
+ * sıralama düzeni, süzgeç, gruplama ya da kimlik ayrı bir okumadır: açık istek ayrı bölüm olarak okunur. Satır sınırı ve sunum
+ * tercihi (layout) okumanın nüfusunu değiştirmez: çağıran açık isteğin sınırını ve tercihini o okumaya taşır (kullanıcı istediği
+ * kadar satırı istediği biçimde görür). Önceki sonuca gönderme hiçbir özet okumasıyla karşılanmaz.
  */
+const rankShape = (rank) => { const { limit: _limit, ...shape } = rank || {}; return rank ? shape : null; };
+
 function coveredRequest(part, item) {
-  const canonical = (value) => (Array.isArray(value) ? [...value].map(canonical).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
-    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value);
-  const same = (key) => JSON.stringify(canonical(part?.[key] ?? null)) === JSON.stringify(canonical(item?.[key] ?? null));
-  const { limit: _partLimit, ...partRank } = part?.rank || {};
-  const { limit: _itemLimit, ...itemRank } = item?.rank || {};
-  const population = (value) => { const { sort: _sort, ...rest } = value?.population || {}; return rest; };
-  return Array.isArray(item?.metrics) && item.metrics.every((metric) => part.metrics?.includes(metric)) && part.operation === item.operation
-    && JSON.stringify(canonical(population(part))) === JSON.stringify(canonical(population(item))) && same('entities') && same('filters')
-    && JSON.stringify(canonical(partRank)) === JSON.stringify(canonical(itemRank)) && !item.fields?.length && !item.bindings?.length;
+  if (!part || !item || item.previousResult === true) return false;
+  // Süzgeç değerlerinin ve varlıkların sırası anlam taşımaz (ör. durum listesi); sıralama ve satır sınırı taşır.
+  const loose = (value) => (Array.isArray(value) ? value.map(loose).sort((a, b) => stableJson(a).localeCompare(stableJson(b)))
+    : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, loose(item)])) : value);
+  const same = (key) => stableJson(part[key] ?? null) === stableJson(item[key] ?? null);
+  const alike = (key) => stableJson(loose(part[key] ?? null)) === stableJson(loose(item[key] ?? null));
+  return Array.isArray(item.metrics) && item.metrics.every((metric) => part.metrics?.includes(metric)) && part.operation === item.operation
+    && same('population') && alike('entities') && alike('filters') && stableJson(rankShape(part.rank)) === stableJson(rankShape(item.rank))
+    && (!item.fields?.length || same('fields')) && (!item.bindings?.length || same('bindings'));
 }
 
 /**
@@ -360,6 +394,13 @@ function layeredAnalysis(plan) {
   const [primary, ...rest] = items;
   const window = (item) => JSON.stringify([item.dateFrom ?? null, item.dateTo ?? null, item.relativeWindow === 'all_time' ? null : item.relativeWindow ?? null]);
   if (rest.some((item) => window(item) !== window(primary))) throw invalidArguments(['$.analysis.also:window']);
+  // Ek öğede ek kapsamın taşıyamadığı bir alan (daraltma, kendiyle karşılaştırma, satır, takip eylemi, iç içe ek kapsam) ya da
+  // birincilde kendi `also` alanı varsa çeviri o koşulu sessizce düşürür: plan reddedilir (model düzeltir). Dönem yukarıda
+  // birincille aynı olduğu doğrulandı; sunum alanları birincilinkiyle aynıysa anlam taşımaz.
+  const presentation = ['visual', 'chart', 'charts', 'table'];
+  const carried = new Set(['scope', 'level', 'names', 'focus', 'dateFrom', 'dateTo', 'relativeWindow', 'language', ...presentation]);
+  if (Object.hasOwn(primary, 'also') || rest.some((item) => Object.keys(item).some((key) => !carried.has(key))
+    || presentation.some((key) => Object.hasOwn(item, key) && JSON.stringify(item[key]) !== JSON.stringify(primary[key])))) throw invalidArguments(['$.analysis.also:scope']);
   const layer = ({ scope, level, names, focus }) => ({ scope, ...(level != null ? { level } : {}), ...(names != null ? { names } : {}), ...(focus != null ? { focus } : {}) });
   return { ...plan, analysis: { ...primary, also: rest.map(layer) } };
 }

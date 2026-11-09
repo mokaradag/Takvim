@@ -12,7 +12,7 @@ export const METRIC_DEFINITIONS = Object.freeze({
   }),
   assigneeGrouping: 'Yalnızca kimliği görünür sorumlular gruplanır; birden çok görünür sorumlusu olan görev her sorumluda ayrı sayılır. Sorumlu bilgisi açıklanamayan görevler, atama olsun ya da olmasın, tek bir grupta sayılır.',
   completeTaskView: 'Tam görev görünümü yoksa projede yalnızca yetkili olduğunuz görevler sayılmıştır.',
-  organizationGrouping: 'Görevler kimliği görünür sorumlularının dizindeki birimine göre gruplanır; sorumluları farklı birimlerde olan görev her birimde ayrı sayılır, bu nedenle birimlerin sayıları toplanmaz.',
+  organizationGrouping: 'Görevler kimliği görünür sorumlularının dizindeki birimine göre gruplanır; sorumluları farklı birimlerde olan görev her birimde ayrı sayılır, bu nedenle birimlerin sayıları toplanmaz. Sorumlusuz, sorumlu bilgisi gösterilemeyen, sorumlu kaydı çözülemeyen ve birimi dizinde belirtilmemiş görevler örgütsel birim değildir; ayrı gruplarda sayılır.',
   baseline: Object.freeze({
     varianceDays: 'Güncel planlanan bitiş ile baz plandaki planlanan bitiş arasındaki takvim günü farkı; pozitif değer kaymadır.',
     removedSinceBaseline: 'Baz planda kaydı olup artık projede bulunmayan (silinmiş ya da taşınmış) görev.',

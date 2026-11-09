@@ -31,6 +31,8 @@ const TASK_TOOLS = new Set(['rota_task_search', 'rota_task_analytics']);
 /** Dağılım önermesi yalnızca her görevi tek gruba koyan boyutlarda: kişi grupları birbirini dışlamaz. */
 export const EXCLUSIVE_GROUP_BY = Object.freeze(['status', 'priority', 'project', 'deadline', 'target_month']);
 const assignmentGroups = (fact) => fact?.semantic?.provenance?.tool === 'rota_task_analytics' && fact.semantic.groupBy === 'assignee';
+/** Örgütsel kırılımda varlık olmayan gruplar (atamasız, açıklanamayan, çözülemeyen, birimi belirsiz, kesik listenin "diğer"i). */
+const ORG_NON_ENTITY = new Set(['other', 'unassigned', 'unresolved', 'undisclosed', 'none', 'no_unit']);
 
 /** Görevlerin kişi kırılımı kadroyu kanıtlamaz; sayfa tamlığı kişi nüfusunun tamlığı değildir. */
 export function rowPopulationComplete(tool, facts) {
@@ -193,7 +195,9 @@ function taskCountSentence(filters, count, locale, { total = false } = {}) {
 /** Dağılımın sahibi (tamlayan): "Görevlerinizin", "**X** projesindeki görevlerin"; ifade edilemiyorsa `null`. */
 function ownerParts(filters, locale, { open = false } = {}) {
   const population = taskPopulation(filters, locale);
-  if (!population || population.from || population.to) return null;
+  // Kilometre taşı nüfusunun dağılım sahibi "görevler" diye adlandırılmaz (çoğunluk/en büyük grup cümlesi bütün görevleri anlatırdı):
+  // doğal ad yoksa ölçütlü anlatım kalır.
+  if (!population || population.from || population.to || population.milestone) return null;
   const { me, team, adjectives: baseAdjectives, project } = population;
   const adjectives = open && !baseAdjectives.includes(locale === 'en' ? 'open' : 'açık') ? [...baseAdjectives, locale === 'en' ? 'open' : 'açık'] : baseAdjectives;
   if (locale === 'en') {
@@ -280,7 +284,8 @@ const GROUP_TITLES = Object.freeze({ status: ['durum', 'status'], priority: ['ö
 export function titleCandidate({ tool, filters, groupBy = null, locale }) {
   if (!TASK_TOOLS.has(tool) || (groupBy && !EXCLUSIVE_GROUP_BY.includes(groupBy))) return null;
   const population = taskPopulation(filters, locale);
-  if (!population) return null;
+  // Gruplu kilometre taşı dağılımının başlığı görevlerin dağılımı değildir: doğal başlık kurulmaz.
+  if (!population || (groupBy && population.milestone)) return null;
   const { me, team, adjectives, project, person } = population;
   const adjective = adjectives.length ? `${adjectives.join(', ')} ` : '';
   let text;
@@ -732,7 +737,8 @@ export function pointerSentence({ type, style, distribution = false, chartType =
 const TABLE_ROWS = Object.freeze({ projects: ['Projelerin', 'each project'], people: ['Kişilerin', 'each person'], project: ['Projelerin', 'each project'],
   assignee: ['Kişilerin', 'each person'], department: ['Bölümlerin', 'each department'], unit: ['Birimlerin', 'each unit'] });
 /** Tek boyutlu görev dağılımları: "Görevlerin durumlara göre dağılımı …". */
-const TABLE_DIMENSIONS = Object.freeze({ status: ['durumlara', 'status'], priority: ['önceliklere', 'priority'], deadline: ['termin aralıklarına', 'deadline range'],
+// Termin kovaları tamamlanan ve termini olmayan işleri de içerir: tablo "termin aralıkları" değil terminle ilişkili durumlardır.
+const TABLE_DIMENSIONS = Object.freeze({ status: ['durumlara', 'status'], priority: ['önceliklere', 'priority'], deadline: ['termin durumlarına', 'deadline status'],
   target_month: ['termin aylarına', 'deadline month'] });
 
 /**
@@ -981,6 +987,24 @@ export function caveatPropositions(parts, locale = 'tr') {
           out.push({ part: part.index + 1, proposition: { kind: 'completeness', tone: 'info', evidenceId: item.evidenceId, ...sentence(en
             ? ['this distribution shows mutually exclusive deadline-related categories; it does not compare cumulative delivery counts across periods of different lengths.']
             : ['bu dağılım, terminle ilişkili ve birbirini dışlayan kategorileri gösterir; farklı uzunluktaki dönemlerin birikimli teslimat sayıları burada karşılaştırılmıyor.']) } });
+        }
+        continue;
+      }
+      if (fact?.semantic?.provenance?.tool === 'rota_task_analytics' && ['department', 'unit'].includes(fact.semantic.groupBy)) {
+        // Aşama G: örgütsel kırılımda bir görev farklı birimlerdeki sorumlularında ayrı sayılabilir; birim sayıları toplanmaz. Tam
+        // tabloda bu kural bölümler arası bulguyla (örgütsel yayılım) söylenir; tablo tam değilse (atamasız, açıklanamayan ya da
+        // birimi belirsiz grup, kesik liste) ya da gecikme sütunu yoksa o bulgu kurulmaz: kural burada, bulgudan bağımsız söylenir.
+        const key = `org:${item.evidenceId}`;
+        if (seen.has(key)) continue;
+        const facts = (part.presentation?.facts || []).filter((other) => other.evidenceId === item.evidenceId).map((other) => other.fact);
+        const partial = facts.some((other) => other?.semantic?.complete !== true || ORG_NON_ENTITY.has(String(other?.semantic?.group?.key ?? '')))
+          || !facts.some((other) => /^data\.groups\.\d+\.overdue$/.test(other?.field || ''));
+        seen.add(key);
+        if (partial) {
+          const unit = fact.semantic.groupBy === 'unit';
+          out.push({ part: part.index + 1, proposition: { kind: 'completeness', tone: 'info', evidenceId: item.evidenceId, ...sentence(en
+            ? [`a task with assignees in different ${unit ? 'units' : 'departments'} is counted in each of them, so these counts are not added together.`]
+            : [`sorumluları farklı ${unit ? 'birimlerde' : 'bölümlerde'} olan bir görev her ${unit ? 'birimde' : 'bölümde'} ayrı sayılabildiğinden bu sayılar toplanmaz.`]) } });
         }
         continue;
       }
