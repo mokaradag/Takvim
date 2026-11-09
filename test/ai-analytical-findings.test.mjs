@@ -178,7 +178,7 @@ test('anlatım: giriş gövdenin sayılarını yinelemez, tek kanıtlı öncelik
   const parts = [part(0, portfolio(PROJECTS)), part(1, taskList('overdue', [['Yük testi', 21, 'Altyapı', 'p1'], ['Arayüz', 4, 'Mobil', 'p2']], { total: 8 }), { metric: 'task.overdueDays', order: 'desc' }),
     part(2, taskList('upcoming', [['Ağ', '2026-10-01', 'Portal', 'p5'], ['Test', '2026-10-03', 'Portal', 'p5']], { evidenceId: 'R3', total: 11 }), { metric: 'task.targetFinish', order: 'asc' })];
   const { findings, intro, conclusion } = analyticalSynthesis(parts, { locale: 'tr' });
-  assert.match(intro.markdown, /^Mevcut göstergelere göre yönetim dikkatini en çok \*\*Altyapı\*\* projesi gerektiriyor: gecikmiş, önümüzdeki yedi günde terminli ve açık iş sayılarının üçünde de projeler arasında ilk sırada\./);
+  assert.match(intro.markdown, /^Mevcut göstergelere göre yönetim dikkatini en çok \*\*Altyapı\*\* projesi gerektiriyor: gecikmiş, önümüzdeki yedi günde terminli ve açık iş sayılarının üçünde de projeler arasında ilk sırada; gecikmiş \*\*8\*\* görevin \*\*5'i\*\* \(\*\*%63\*\*\) de bu projede toplanıyor\./);
   assert.equal(/\*\*12\*\*|\*\*6\*\*/.test(intro.markdown), false, 'liderin değerleri girişte yinelenmez');
   // Sonuç taranabilir bir öncelik listesidir: "konu — gerekçe"; her madde kendi kaynağını taşır.
   assert.match(conclusion.markdown, /^\*\*Öncelikli konular\*\*\n\n1\. \*\*Yük testi\*\* — en uzun süredir geciken görev \(\*\*21\*\* gün, \*\*Altyapı\*\*\)\n2\. /);

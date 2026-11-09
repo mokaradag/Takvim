@@ -11,7 +11,7 @@ import {
   renderGroupRows
 } from './evidenceNarrative.js';
 import { escapedFactText } from './evidenceFacts.js';
-import { analystPropositions, singleSubjectPropositions, caveatPropositions, countProposition, taskCountLead, fluentParagraph, noteLabel, pointerSentence, populationProposition, rowPopulationComplete, tablePropositions, titleCandidate } from './groundedPropositions.js';
+import { analystPropositions, singleSubjectPropositions, caveatPropositions, countProposition, taskCountLead, fluentParagraph, noteLabel, pointerSentence, populationProposition, rowPopulationComplete, tableLeadSentence, tablePropositions, titleCandidate } from './groundedPropositions.js';
 import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from './answerDetail.js';
 import { analyticalSynthesis, framingSentence, nextStepSentence, synthesisNarrative, findingScope } from './analyticalFindings.js';
 import { PROSE_LIMITS, checkProse, proseText } from './groundedProse.js';
@@ -1326,6 +1326,13 @@ export function renderComposition(composition, validated) {
     if (fence) { fences.set(`${block.source}:${block.style}`, fence); if (!fences.has(block.source)) fences.set(block.source, fence); }
   }
   const rowStyles = new Map(validated.blocks.filter((block) => block.type === 'rows').map((block) => [block.source, block.style]));
+  // Aşama G: bölümün tek girişi olan tablo içeriğini adlandıran cümleyle açılır; liste biçiminde genel yönlendirme kalır.
+  const tableLead = (table, style) => {
+    if (!table || style === 'list') return pointerSentence({ type: 'rows', style }, locale);
+    const rows = [...(table.group.collections.get(table.collection)?.values() || [])].flatMap((row) => row.entries);
+    const groupBy = rows.find(({ fact }) => fact.semantic?.groupBy)?.fact.semantic.groupBy || null;
+    return tableLeadSentence({ collection: table.collection, groupBy, columns: table.columns }, locale);
+  };
   // Türsüz G# göndergesi aynı kaynağın ilk çizilen grafiğini gösterir.
   const chartStyles = new Map();
   for (const block of validated.blocks.filter((block) => block.type === 'chart')) if (!chartStyles.has(block.source)) chartStyles.set(block.source, block.style);
@@ -1393,6 +1400,10 @@ export function renderComposition(composition, validated) {
       }
       const ordered = block.items.every((id) => render.propositions?.has(id))
         ? populations.flatMap((source) => block.items.filter((id) => render.propositions.get(id).evidenceId === source)) : block.items;
+      // Paragraf bir önerme söylüyorsa tablo yuvası ayrı bir "aşağıdaki tabloda görebilirsiniz" cümlesi üretmez: tablo hemen ardından
+      // gelir ve kısa yönlendirme cümlesi paragrafı kesik kesik yapar. Yalnızca tablo yuvasından oluşan paragraf tabloyu adlandırır.
+      // Grafik yuvası grafiği tanıtır ve kalır (grafiğin yeri bu cümleye bağlıdır).
+      const speaks = ordered.some((id) => render.propositions?.has(id));
       for (const id of ordered) {
         const proposition = render.propositions?.get(id);
         if (proposition?.kind === 'breakdown' && proposition.table && drawnTables.has(proposition.table)
@@ -1400,7 +1411,7 @@ export function renderComposition(composition, validated) {
         if (proposition) {
           entries.push({ proposition }, ...(coveredBy.get(id)?.notices || []).map((text) => ({ text })));
         } else if (render.tables.has(id)) {
-          entries.push({ text: pointerSentence({ type: 'rows', style: rowStyles.get(id) }, locale) });
+          if (!speaks) entries.push({ text: tableLead(render.tables.get(id), rowStyles.get(id)) });
         } else if (fences.has(id)) {
           entries.push({ text: pointerSentence({ type: 'chart', chartType: chartStyles.get(id), distribution: render.charts.get(id).types.includes('donut') }, locale) });
         }
@@ -1438,7 +1449,7 @@ export function renderComposition(composition, validated) {
       // Aşama F: bölümünde hiçbir cümle söylenmemiş tablo, ölçüt satırı yerine bir yönlendirme cümlesiyle açılır.
       if (render.report && !spoken.has(table.part) && !tableLeads.has(table.part)) {
         tableLeads.add(table.part);
-        emit(pointerSentence({ type: 'rows', style: block.style }, locale), table.part);
+        emit(tableLead(table, block.style), table.part);
       }
       let rowsText = renderGroupRows(table.group, table.collection, { locale, layout: block.style, stated: statedText,
         criteriaStated: Boolean(detail?.source?.lead) || namedPopulations.has(table.evidenceId) });

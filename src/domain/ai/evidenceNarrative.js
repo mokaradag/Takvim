@@ -158,13 +158,17 @@ function totalsSentences(entries, { scope, locale, qualifiers, singular = false 
   const sentences = [];
   const has = locale === 'en' && (singular || /^(the |your (team|unit|department|directorate)$)/.test(scope)) ? 'has' : 'have';
   if (total) {
-    sentences.push(total.value === 0
-      ? (locale === 'en' ? `${capitalize(scope)} ${has} no tasks${qualifiers}.` : `${capitalize(scope)} görev yok${qualifiers}.`)
-      : locale === 'en' ? `${capitalize(scope)} ${has} ${strong(narrativeValue(total, locale))} ${englishTasks(total)} in total${qualifiers}.`
-        : `${capitalize(scope)} toplam ${strong(narrativeValue(total, locale))} görev bulunuyor${qualifiers}.`);
+    // Aşama G: toplam ve dökümü tek cümledir ("Biriminizde toplam **51** görev bulunuyor; bunların **14**'ü tamamlanmış, …").
+    // Toplam cümlesi yan cümleyle sürecekse noktası sonda konur; kısa cümle tek başına bırakılmaz.
+    const head = total.value === 0
+      ? (locale === 'en' ? `${capitalize(scope)} ${has} no tasks${qualifiers}` : `${capitalize(scope)} görev yok${qualifiers}`)
+      : locale === 'en' ? `${capitalize(scope)} ${has} ${strong(narrativeValue(total, locale))} ${englishTasks(total)} in total${qualifiers}`
+        : `${capitalize(scope)} toplam ${strong(narrativeValue(total, locale))} görev bulunuyor${qualifiers}`;
+    sentences.push(`${head}.`);
+    const extend = (clause) => { sentences[sentences.length - 1] = `${head}; ${clause}.`; };
     // Tek bölüm "tamamlanmış" ve sıfırsa "0'ı tamamlanmış; tamamlanma oranı %0" yerine doğal olumsuz cümle.
     if (total.value > 0 && parts.length === 1 && parts[0] === 'done' && byKey.get('done').value === 0 && (!rate || !isCount(rate) || rate.value === 0)) {
-      sentences.push(locale === 'en' ? 'None of them is completed yet.' : 'Bunların hiçbiri henüz tamamlanmamış.');
+      extend(locale === 'en' ? 'none of them is completed yet' : 'bunların hiçbiri henüz tamamlanmamış');
     } else if (total.value > 0 && parts.length) {
       // Aşama F: sıfır bölümler "**0**'ı tamamlanmış" diye sayılmaz; tek olumsuz yan cümlede toplanır ("hiçbiri … değil").
       const counted = parts.filter((key) => byKey.get(key).value !== 0);
@@ -175,19 +179,20 @@ function totalsSentences(entries, { scope, locale, qualifiers, singular = false 
         ? `none ${none.map((key) => TOTAL_PREDICATES[key][1]).join(' or ')}`
         : `hiçbiri ${none.map((key) => TOTAL_PREDICATES[key][0]).join(' ya da ')} değil`) : '';
       // Hiçbiri tamamlanmamışsa "%0" oranı aynı olguyu yineler.
-      const rateClause = rateText && !(none.includes('done') && rate.value === 0) ? (locale === 'en' ? `; the completion rate is ${rateText}` : `; tamamlanma oranı ${rateText}`) : '';
-      const body = [clauses.length ? joinList(clauses, locale) : '', negative].filter(Boolean).join('; ');
-      sentences.push(`${locale === 'en' ? 'Of these, ' : 'Bunların '}${body}${rateClause}.`);
-    } else if (rateText && total.value !== 0) sentences.push(locale === 'en' ? `The completion rate is ${rateText}.` : `Tamamlanma oranı ${rateText}.`);
+      // Oran, dökümün açıklayıcı ekidir: aynı cümlede ikinci noktalı virgül yerine parantez içinde.
+      const rateClause = rateText && !(none.includes('done') && rate.value === 0) ? (locale === 'en' ? ` (completion rate ${rateText})` : ` (tamamlanma oranı ${rateText})`) : '';
+      const body = [clauses.length ? joinList(clauses, locale) : '', negative].filter(Boolean).join(', ');
+      extend(`${locale === 'en' ? 'of these, ' : 'bunların '}${body}${rateClause}`);
+    } else if (rateText && total.value !== 0) extend(locale === 'en' ? `the completion rate is ${rateText}` : `tamamlanma oranı ${rateText}`);
     // Aşama G: görevi olmayan nüfusta tamamlanma oranı tanımsızdır ("%0" uydurulmaz); kişide görünür görevin olmaması boşta
     // olduğunu göstermez (Rota kapasite ya da Rota dışındaki işi tutmaz).
     const assignee = total.semantic?.filters?.assignee;
     if (total.value === 0 && (assignee === 'me' || assignee === 'person')) {
-      sentences.push(assignee === 'me'
-        ? (locale === 'en' ? 'Having no visible tasks in Rota does not mean you are idle; Rota records assigned tasks, not capacity or work outside Rota.'
-          : 'Rota\'da görünür bir göreviniz olmaması boşta olduğunuz anlamına gelmez; Rota kapasiteyi ya da Rota dışındaki işleri değil, atanmış görevleri tutar.')
-        : (locale === 'en' ? 'Having no visible tasks in Rota does not mean this person is idle; Rota records assigned tasks, not capacity or work outside Rota.'
-          : 'Rota\'da görünür görevinin olmaması kişinin boşta olduğu anlamına gelmez; Rota kapasiteyi ya da Rota dışındaki işleri değil, atanmış görevleri tutar.'));
+      extend(assignee === 'me'
+        ? (locale === 'en' ? 'but this does not mean you are idle, because Rota records assigned tasks, not capacity or work done outside Rota'
+          : 'ancak bu, boşta olduğunuz anlamına gelmez, çünkü Rota kapasiteyi ya da Rota dışındaki işleri değil, yalnızca atanmış görevleri tutar')
+        : (locale === 'en' ? 'but this does not mean the person is idle, because Rota records assigned tasks, not capacity or work done outside Rota'
+          : 'ancak bu, kişinin boşta olduğu anlamına gelmez, çünkü Rota kapasiteyi ya da Rota dışındaki işleri değil, yalnızca atanmış görevleri tutar'));
     }
   } else if (parts.length === 1 && byKey.get(parts[0]).value === 0) {
     // Tek ölçü sıfırsa "**0** … görev bulunuyor" yerine doğal olumsuz cümle (değer aynı olgudur).

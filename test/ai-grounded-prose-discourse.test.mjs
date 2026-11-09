@@ -80,13 +80,13 @@ const CORPUS = Object.freeze([
   { id: 'proje durumu', turns: [{ text: 'Radar Modernizasyonu projesini değerlendir', plan: analysis({ scope: 'project', names: ['Radar Modernizasyonu'], focus: ['overview', 'overdue', 'workload'] }) }],
     // Aşama F: tek projeli yanıtta her analist cümlesinin başına aynı "**Radar Modernizasyonu**:" etiketi yazılmaz; proje
     // ayrıntı cümlelerinde adlandırılır.
-    must: ["Açık **6** görevin **2'si** (**%33**) gecikmiş durumda; bugün başlayan yedi günlük dönemde de **2** açık görevin termini var", '**Ayşe Yılmaz**, **4** açık',
+    must: ["Açık **6** görevin **2'si** (**%33**) gecikmiş durumda; bugün başlayan yedi günlük dönemde de **2** açık görevin termini var", '**Ayşe Yılmaz** ise **4** açık',
       '**Radar Modernizasyonu** projesinde'],
     never: [/Okuma Projesi|Kısmi Proje/, /\*\*Radar Modernizasyonu\*\*: Açık/], once: '**Haftalık durum toplantısı**' },
   { id: 'ekipte yoğunlaşma (kadro eksik)', seed: teamSeed, skipRequired: true, turns: [{ text: 'ekibimde iş kimde yoğunlaşıyor', plan: analysis({ scope: 'team', focus: ['workload', 'overdue'] }) }],
     must: ['kesin olarak söylenemez'], never: [/iş yükü bu kişide yoğunlaşıyor|dengeli dağılmış|sayısında en üstte/] },
   { id: 'proje karşılaştırması', turns: [{ text: 'projelerimi karşılaştır', plan: analysis({ scope: 'projects', focus: ['projects'] }) }],
-    must: ['Listedeki **4** projenin hepsinde gecikmiş görev var', '**Radar Modernizasyonu**, **6** açık'], never: [/en kötü/] },
+    must: ['Listedeki **4** projenin hepsinde gecikmiş görev var', '**Radar Modernizasyonu** ise **6** açık'], never: [/en kötü/] },
   { id: 'birden çok ölçü', turns: [{ text: 'görevlerimin durum ve öncelik dağılımı nasıl', plan: analysis({ scope: 'self', focus: ['status', 'priority'] }) }],
     must: ['Toplam **7** göreviniz var ve bunların büyük bölümü (**%86**) **Yapılacak** durumunda', 'Toplam **6** açık göreviniz var ve bunların büyük bölümü (**%83**) **Orta** öncelikte'] },
   { id: 'neden takibi', turns: [{ text: 'işlerimin genel durumunu değerlendir', plan: analysis({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] }) },
@@ -99,7 +99,7 @@ const CORPUS = Object.freeze([
   { id: 'eksik veri', seed: teamSeed, turns: [{ text: 'ekibimin iş yükü dengeli mi', plan: analysis({ scope: 'team', focus: ['workload'] }) }],
     must: ['kesin olarak söylenemez'], never: [/dengeli dağılmış|yoğunlaşıyor/] },
   { id: 'seyrek liste', turns: [{ text: 'Geciken görevlerimi göster.', plan: OVERDUE }],
-    must: ['Şu anda **3** gecikmiş göreviniz var.', 'Gecikmelerin ortalaması **11,3 gün**.'], once: '**Haftalık durum toplantısı**' },
+    must: ['Şu anda **3** gecikmiş göreviniz var; en uzun süredir geciken görev', 've ortalama gecikme **11,3 gün**.'], once: '**Haftalık durum toplantısı**' },
   { id: 'boş sonuç', composed: false, turns: [{ text: 'bugün terminli görevlerim', plan: { intent: 'rota', language: 'tr', request: { operation: 'list', metrics: ['tasks.total', 'task.title'],
     population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { deadline: 'due_today', assignee: 'me' } } } }], must: ['Bugün terminli açık göreviniz yok'] },
   { id: 'kesinlik çekincesi', seed: teamSeed, turns: [{ text: 'ekibimin iş yükü dengeli mi', plan: analysis({ scope: 'team', focus: ['workload'] }) },
@@ -211,7 +211,8 @@ test('gerçek zayıf model düzeni: önceki paragrafın söylediği en uzun geci
   const content = result.answer.content;
   const narrative = content.split('\n\n').filter((paragraph) => /【R2】$/.test(paragraph) && !paragraph.startsWith('_'));
   assert.equal(narrative.join(' ').split('23').length - 1, 1, `en uzun gecikme bir kez söylenir: ${narrative.join(' | ')}`);
-  assert.match(content, /İlk ele alınabilecek iş \*\*Haftalık durum toplantısı\*\* görünüyor: \*\*23\*\* gündür gecikmiş ve en uzun gecikme onda/);
+  // Aşama G: öneri, sayım cümlesinin yan cümlesidir.
+  assert.ok(content.includes('göreviniz var; ilk ele alınabilecek iş **Haftalık durum toplantısı** görünüyor: **23** gündür gecikmiş ve en uzun gecikme onda'), content);
   for (const value of ['ortalaması **11,3 gün**', '**Kısmi kendi görevim** (**1 gün**)', "**3** görevin **2**'si bir haftadan uzun"]) assert.ok(content.includes(value), value);
 });
 
@@ -472,7 +473,8 @@ test('Ayrıntılı yanıtta yalnız tablo ya da grafik yönlendiren paragraf ken
   assert.equal(turnLine(logs).context.presentation.server, false);
   const content = result.answer.content;
   const title = `#### ${page.titles.find(item => item.part === 2).text}`;
-  const pointer = 'Ayrıntıları aşağıdaki tabloda görebilirsiniz.';
+  // Aşama G: yalnız tablo yuvasından oluşan paragraf tablonun içeriğini adlandırır.
+  const pointer = 'Görevlerin önceliklere göre dağılımı aşağıdaki tabloda veriliyor.';
   assert.ok(content.indexOf(title) >= 0 && content.indexOf(title) < content.indexOf(pointer), content);
   assert.ok(content.indexOf(pointer) < content.indexOf('**Orta**'), content);
   assert.ok(content.indexOf('Dağılımı aşağıdaki grafikte görebilirsiniz.') < content.indexOf('```rota-chart'), content);

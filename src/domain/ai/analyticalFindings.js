@@ -694,21 +694,29 @@ function introOrder(findings, locale, focus = []) {
     for (const built of levelSentences(level, locale)) out.push({ finding: level, ...built });
   }
   const leader = findings.find((item) => item.kind === 'attentionLeader');
+  // Aşama G: dikkat önceliğindeki projede gecikme yoğunlaşması da varsa aynı cümlenin devamıdır ("…ilk sırada; gecikmiş **10**
+  // görevin **5'i** (**%50**) de bu projede toplanıyor."); "bu projede" ayrı kısa cümleye düşmez.
+  const sameAsLeader = (concentration) => leader && leader.entity.type === 'project' && leader.entity.key === concentration.entity.key && leader.evidenceIds[0] === concentration.evidenceIds[0];
+  const joined = leader && findings.find((item) => item.kind === 'overdueConcentration' && sameAsLeader(item));
   if (leader) {
     const project = leader.entity.type === 'project';
     const org = ORG_WORDS[leader.entity.type];
     const all = ALL_OF[Object.keys(leader.metrics).length] || 'hepsinde';
     const many = Object.keys(leader.metrics).length > 1;
+    const tail = joined ? (en(locale)
+      ? [', and ', s(formatCount(joined.metrics.overdue, locale)), ' of the ', s(formatCount(joined.metrics.total, locale)), ' overdue tasks (', s(formatPercent(joined.metrics.share, locale)), ') are concentrated there']
+      : ['; gecikmiş ', s(formatCount(joined.metrics.total, locale)), ' görevin ', s(possessiveCount(joined.metrics.overdue, locale)), ' (', s(formatPercent(joined.metrics.share, locale)), ') de bu projede toplanıyor']) : [];
     out.push({ finding: leader, ...factSentence(en(locale)
       ? ['On the current indicators, ', ...(project ? [s(leader.entity.name), ' needs management attention first: it ranks first among the projects on ']
         : org ? [s(leader.entity.name), ` (${org.en}) needs management attention first: it ranks first among the ${org.enPlural} on `] : ['the work assigned to ', s(leader.entity.name),
-          ' needs attention first: it ranks first among the listed people on ']), ...indicatorList(leader.metrics, locale), ' task counts', project || org ? '.' : ' (an assignment distribution, not a performance judgement).']
+          ' needs attention first: it ranks first among the listed people on ']), ...indicatorList(leader.metrics, locale), ' task counts', ...tail, project || org ? '.' : ' (an assignment distribution, not a performance judgement).']
       : ['mevcut göstergelere göre yönetim dikkatini en çok ', s(leader.entity.name), project ? ' projesi gerektiriyor: ' : org ? ` ${org.one} gerektiriyor: ` : ' üzerindeki işler gerektiriyor: ',
         ...indicatorList(leader.metrics, locale), many ? ` iş sayılarının ${all} de ` : ' iş sayısında ',
-        project ? 'projeler arasında ilk sırada.' : org ? `${org.among} arasında ilk sırada.` : 'listelenen kişiler arasında ilk sırada (bu bir atama dağılımıdır; performans yargısı değildir).']) });
+        project ? 'projeler arasında ilk sırada' : org ? `${org.among} arasında ilk sırada` : 'listelenen kişiler arasında ilk sırada (bu bir atama dağılımıdır; performans yargısı değildir)', ...tail, '.']) });
   }
   for (const concentration of findings.filter((item) => item.kind === 'overdueConcentration' || item.kind === 'overdueProjectShare')) {
-    const same = leader && leader.entity.type === 'project' && leader.entity.key === concentration.entity.key && leader.evidenceIds[0] === concentration.evidenceIds[0];
+    if (concentration === joined) continue;
+    const same = sameAsLeader(concentration);
     const { overdue, total, share } = concentration.metrics;
     out.push({ finding: concentration, ...factSentence(en(locale)
       ? [s(formatCount(overdue, locale)), ' of the ', s(formatCount(total, locale)), ' overdue tasks (', s(formatPercent(share, locale)), ') are concentrated in ', ...(same ? ['this project'] : [s(concentration.entity.name)]), '.']
@@ -971,10 +979,10 @@ function gIntroSentences(findings, locale) {
     add(despite, en(locale)
       ? [s(first.name), ' has completed ', s(formatPercent(first.share, locale)), ' of its tasks yet still has ', s(formatCount(first.overdue, locale)), ' overdue',
         ...(second ? ['; ', s(second.name), ' is similar (', s(formatPercent(second.share, locale)), ' completed, ', s(formatCount(second.overdue, locale)), ' overdue)'] : []),
-        ...(extra > 0 ? [' and ', s(formatCount(extra, locale)), ' more project', extra === 1 ? '' : 's', ' show the same pattern'] : []), '. A high completion rate does not mean delivery pressure has ended.']
+        ...(extra > 0 ? [' and ', s(formatCount(extra, locale)), ' more project', extra === 1 ? '' : 's', ' show the same pattern'] : []), '; a high completion rate does not mean delivery pressure has ended.']
       : [s(first.name), ' projesinde görevlerin ', s(percentOf(first.share, locale)), ' tamamlanmış olsa da ', s(formatCount(first.overdue, locale)), ' gecikmiş görev bulunuyor',
         ...(second ? ['; ', s(second.name), ' projesinde de durum benzer (', s(formatPercent(second.share, locale)), ' tamamlanmış, ', s(formatCount(second.overdue, locale)), ' gecikmiş)'] : []),
-        ...(extra > 0 ? ['; aynı örüntü ', s(formatCount(extra, locale)), ' projede daha var'] : []), '. Yüksek tamamlanma oranı teslimat baskısının bittiği anlamına gelmiyor.']);
+        ...(extra > 0 ? ['; aynı örüntü ', s(formatCount(extra, locale)), ' projede daha var'] : []), '; yani yüksek tamamlanma oranı teslimat baskısının bittiği anlamına gelmiyor.']);
   }
   for (const contrast of findings.filter((item) => item.kind === 'volumeVsDelay')) {
     const [many, few] = contrast.pair;
@@ -989,23 +997,28 @@ function gIntroSentences(findings, locale) {
   let pathCaveat = false;
   for (const status of findings.filter((item) => item.kind === 'milestoneStatus')) {
     const { open, overdue, overdueExact, worst, next } = status.metrics;
+    // Aşama G: durum, en uzun gecikme ve sıradaki kilometre taşı tek cümledir ("Açık **2** kilometre taşından **1'i** gecikmiş: en uzun
+    // süredir geciken **X** (**9** gün), sıradaki ise **Y** (**21 Kasım 2026**)."); sıradaki ayrı bir kısa cümle olarak kalmaz.
+    const nextDay = next ? s(formatFactDay(next.due, locale)) : null;
     if (overdue > 0) {
       add(status, en(locale)
         ? [...(open != null ? [s(formatCount(overdue, locale)), ' of the ', s(formatCount(open, locale)), ' open milestones ', overdue === 1 ? 'is' : 'are'] : [overdueExact ? '' : 'At least ', s(formatCount(overdue, locale)), overdue === 1 ? ' milestone is' : ' milestones are']),
-          ' overdue', ...(worst ? ['; the longest-overdue is ', s(worst.title), ' (', s(formatCount(worst.days, locale)), worst.days === 1 ? ' day' : ' days', ')'] : []), '.']
+          ' overdue', ...(worst ? ['; the longest-overdue is ', s(worst.title), ' (', s(formatCount(worst.days, locale)), worst.days === 1 ? ' day' : ' days', ')'] : []),
+          ...(next ? [worst ? ', and the next is ' : '; the next is ', s(next.title), ' (', nextDay, ')'] : []), '.']
         : [...(open != null ? ['Açık ', s(formatCount(open, locale)), ' kilometre taşından ', s(possessiveCount(overdue, locale)), ' gecikmiş'] : [overdueExact ? '' : 'En az ', s(formatCount(overdue, locale)), ' kilometre taşı gecikmiş']),
-          ...(worst ? ['; en uzun süredir geciken ', s(worst.title), ' (', s(formatCount(worst.days, locale)), ' gün)'] : []), '.']);
+          ...(worst ? [': en uzun süredir geciken ', s(worst.title), ' (', s(formatCount(worst.days, locale)), ' gün)'] : []),
+          ...(next ? [worst ? ', sıradaki ise ' : '; sıradaki kilometre taşı ', s(next.title), ' (', nextDay, ')'] : []), '.']);
       if (!pathCaveat) {
-        add(status, en(locale) ? ['An overdue milestone does not by itself prove that the project end date will slip; Rota does not compute the critical path.']
-          : ['Gecikmiş bir kilometre taşı projenin bitişinin kayacağını tek başına kanıtlamaz; Rota kritik yolu hesaplamaz.']);
+        add(status, en(locale) ? ['An overdue milestone does not by itself prove that the project end date will slip, because Rota does not compute the critical path.']
+          : ['Gecikmiş bir kilometre taşı projenin bitişinin kayacağını tek başına kanıtlamaz, çünkü Rota kritik yolu hesaplamaz.']);
         pathCaveat = true;
       }
     } else if (open != null) {
-      add(status, en(locale) ? ['None of the ', s(formatCount(open, locale)), ' open milestones is overdue.'] : ['Açık ', s(formatCount(open, locale)), ' kilometre taşının hiçbiri gecikmiş değil.']);
-    }
-    if (next) {
-      add(status, en(locale) ? [next.sole ? 'The next milestone is ' : 'The next milestone date is ', s(next.title), ' (', s(formatFactDay(next.due, locale)), ').']
-        : ['Sıradaki kilometre taşı ', s(next.title), ' (', s(formatFactDay(next.due, locale)), ').']);
+      add(status, en(locale) ? ['None of the ', s(formatCount(open, locale)), ' open milestones is overdue', ...(next ? ['; the next is ', s(next.title), ' (', nextDay, ')'] : []), '.']
+        : ['Açık ', s(formatCount(open, locale)), ' kilometre taşının hiçbiri gecikmiş değil', ...(next ? ['; sıradaki ', s(next.title), ' (', nextDay, ')'] : []), '.']);
+    } else if (next) {
+      add(status, en(locale) ? [next.sole ? 'The next milestone is ' : 'The next milestone date is ', s(next.title), ' (', nextDay, ').']
+        : ['Sıradaki kilometre taşı ', s(next.title), ' (', nextDay, ').']);
     }
     if (status.metrics.undated > 0) {
       const { undated } = status.metrics;
@@ -1132,24 +1145,20 @@ export function synthesisNarrative(findings, { locale = 'tr', detail = 'balanced
   const restBlock = block(rest);
   // Karışık kapsamda her kapsamın bulguları kendi paragrafıdır; tek kapsamda analiz tek paragraftır.
   // Okunabilirlik: bir paragraf en çok dört cümledir; uzun grup yalnızca bulgu sınırında bölünür (bir bulgunun cümleleri ayrılmaz).
+  // Her anlatım öğesi yapısı gereği tek cümledir (bulgu cümleleri tek tek kurulur): paragraf uzunluğu öğe sayısıdır.
   const groups = [];
-  // Bir öğe birden çok cümle taşıyabilir (bulgu + çekincesi); kısaltma noktası ("ör.") ve ondalık cümle sonu sayılmaz.
-  const sentenceCount = (item) => (String(item.plain).replace(/\b(?:ör|e\.g)\./gu, '').match(/[.!?](?=\s|$)/gu) || []).length || 1;
-  // Bulgunun bütün cümleleri birlikte değerlendirilir: sığmayan bulgu yeni paragrafta başlar (bulgu iki paragrafa bölünmez).
+  // Bulgunun bütün cümleleri birlikte değerlendirilir: sığmayan bulgu yeni paragrafta başlar.
   const findingSize = (index) => {
     let total = 0;
-    for (let at = index; at < rest.length && rest[at].finding === rest[index].finding && (rest[at].group ?? null) === (rest[index].group ?? null); at += 1) total += sentenceCount(rest[at]);
+    while (index + total < rest.length && rest[index + total].finding === rest[index].finding && (rest[index + total].group ?? null) === (rest[index].group ?? null)) total += 1;
     return total;
   };
   rest.forEach((item, index) => {
     const last = groups.at(-1);
     const sameGroup = last && last.group === (item.group ?? null);
     const starts = !last || last.items.at(-1).finding !== item.finding;
-    const full = sameGroup && starts && last.sentences + findingSize(index) > FINDING_LIMITS.maxParagraphSentences;
-    if (sameGroup && !full) {
-      last.items.push(item);
-      last.sentences += sentenceCount(item);
-    } else groups.push({ group: item.group ?? null, items: [item], sentences: sentenceCount(item) });
+    if (sameGroup && !(starts && last.items.length + findingSize(index) > FINDING_LIMITS.maxParagraphSentences)) last.items.push(item);
+    else groups.push({ group: item.group ?? null, items: [item] });
   });
   const paragraphs = groups.length > 1 ? Object.freeze(groups.map((group) => block(group.items))) : null;
   const intro = leadBlock ? Object.freeze({ ...leadBlock, ...(restBlock ? { insights: paragraphs ? Object.freeze({ ...restBlock, paragraphs }) : restBlock } : {}),

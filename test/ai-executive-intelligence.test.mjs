@@ -394,7 +394,7 @@ test('proje grubunun adı doğrulanmış koduyla anılır (listede görünmeyen 
   const insights = synthesisNarrative(many).intro.insights;
   for (const paragraph of insights.paragraphs || [insights]) assert.ok(paragraph.plain.split(/(?<=\.)\s+(?=[A-ZÇĞİÖŞÜ*0-9])/u).length <= 4, paragraph.plain);
   // Bir bulgunun cümleleri (kilometre taşı durumu, çekincesi ve sıradaki) aynı paragraftadır.
-  assert.ok((insights.paragraphs || [insights]).some((paragraph) => /kilometre taşından[\s\S]*kritik yolu hesaplamaz[\s\S]*Sıradaki kilometre taşı/.test(paragraph.plain)));
+  assert.ok((insights.paragraphs || [insights]).some((paragraph) => /kilometre taşından[\s\S]*sıradaki ise[\s\S]*kritik yolu hesaplamaz/.test(paragraph.plain)));
 });
 
 function milestones(rows, { total = rows.length, complete = true } = {}) {
@@ -413,7 +413,7 @@ test('kilometre taşı durumu: gecikmiş sayısı, en uzun gecikme ve sıradaki 
   const status = findings.find((item) => item.kind === 'milestoneStatus');
   assert.deepEqual([status.metrics.open, status.metrics.overdue, status.metrics.worst.title, status.metrics.next.title], [2, 1, 'Faz 1', 'Pilot']);
   const narrative = synthesisNarrative(findings);
-  assert.match(narrative.intro.plain, /tek başına kanıtlamaz; Rota kritik yolu hesaplamaz/);
+  assert.match(narrative.intro.plain, /tek başına kanıtlamaz, çünkü Rota kritik yolu hesaplamaz/);
   assert.match(narrative.conclusion.plain, /Faz 1 — gecikmiş kilometre taşı/);
   // Termini olmayan açık kilometre taşı varsa "hiçbiri gecikmiş değil" ya da sayım yargısı kurulmaz.
   const undated = analyticalFindings([part(0, milestones([['Faz 1', shift(3), null], ['İmza', null, null]]), ranking)]);

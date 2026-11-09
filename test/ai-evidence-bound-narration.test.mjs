@@ -281,7 +281,8 @@ test('başlık ve not kutusu yalnızca sunucu kimlikleridir; ton sunucunundur, m
     { type: 'note', items: ['P5'] }] });
   assert.equal(validated.ok, true);
   const rendered = renderComposition(composition, validated);
-  assert.ok(rendered.text.startsWith("#### Gecikmiş görevleriniz\n\nŞu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**). Gecikmelerin ortalaması **11,3 gün**. **3** görevin **2**'si **RDR · Radar Modernizasyonu** projesinde."), rendered.text);
+  // Aşama G: sayım, en uzun gecikme ve ortalama tek cümledir; pay cümlesi sayımı "bunların" ile sürdürür.
+  assert.ok(rendered.text.startsWith("#### Gecikmiş görevleriniz\n\nŞu anda **3** gecikmiş göreviniz var; en uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**) ve ortalama gecikme **11,3 gün**. Bunların **2**'si **RDR · Radar Modernizasyonu** projesinde."), rendered.text);
   assert.ok(rendered.text.endsWith("> [!warning]\n> **Dikkat:** **3** görevin **2**'si bir haftadan uzun süredir gecikmiş. 【R1】"), rendered.text);
   assert.equal(rendered.said, 5);
   // Zayıf modelin gözlenen düzeni: vurgulanan önerme paragrafta da söylenmiş. Önerme yalnızca kutuda kalır, cümle yinelenmez.
@@ -319,7 +320,8 @@ test('Örnek A çizimi: model yalnızca seçer; cümle, değer, yönlendirme, ö
   const validated = validateComposition(composition, { blocks: [{ type: 'say', items: ['P1', 'P2', 'P3', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }] });
   assert.equal(validated.ok, true);
   const rendered = renderComposition(composition, validated);
-  assert.ok(rendered.text.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz. 【R1】\n\n| Görev |'), rendered.text);
+  // Aşama G: sayım ve iki uç tek cümledir; söyleyen paragraf tablo için ayrıca "aşağıda görebilirsiniz" demez.
+  assert.ok(rendered.text.startsWith('Şu anda **3** gecikmiş göreviniz var; en uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**). 【R1】\n\n| Görev |'), rendered.text);
   // Doğal sayım cümlesi süzgeçleri söylediği için tablonun ölçüt satırı yinelenmez.
   assert.equal(rendered.text.includes('_Ölçüt:'), false, rendered.text);
   assert.equal(rendered.text.includes('Eşleşen'), false, 'söylenen sayım önermesi ayrıntısının yerine geçer');
@@ -338,7 +340,7 @@ test('sıralamanın başı nüfusun tamamı değildir: sayım kalır, en büyük
   const composition = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }], question: 'En çok geciken iki görevim?' });
   assert.deepEqual(composition.view.propositions.map((item) => item.kind), ['count']);
   const rendered = renderComposition(composition, validateComposition(composition, { blocks: [{ type: 'say', items: ['P1', 'T1'] }, { type: 'rows', source: 'T1' }] }));
-  assert.match(rendered.text, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\. Ayrıntılar aşağıda listeleniyor\. 【R1】/);
+  assert.match(rendered.text, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\. 【R1】/);
 });
 
 test('Örnek C çizimi: dağılım önermeleri, grafik yönlendirmesi ve halka grafik doğrulanmış kanıttan', async (t) => {
@@ -372,7 +374,7 @@ test('Örnek A uçtan uca: tek araçsız düzen turu, insan anlatımı ve deği�
   stack.provider.enqueue(planCall(OVERDUE_REQUEST), composer(() => ({ blocks: [{ type: 'say', items: ['P1', 'P2', 'P3', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }] }), (view) => { sheet = view; }));
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION_A })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
-  assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz.'));
+  assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var; en uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**).'), answer.content);
   assert.deepEqual(stack.provider.calls.map((call) => call.model), [STANDARD.model, STANDARD.model]);
   const compose = stack.provider.calls[1];
   assert.deepEqual(compose.messages.map((message) => message.role), ['system', 'user']);
@@ -405,7 +407,7 @@ test('sayım ölçüsü bildirilmemiş listede (zayıf modelin gözlenen planı)
     ['maximum', 'En uzun süredir geciken görev Haftalık durum toplantısı (23 gün).'],
     ['minimum', 'En kısa süredir geciken görev Kısmi kendi görevim (1 gün).']
   ]);
-  assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var. En uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**). Ayrıntıları aşağıdaki tabloda görebilirsiniz. 【R1】'));
+  assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var; en uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**). 【R1】'), answer.content);
   assert.deepEqual(answer.evidence.map((item) => item.id), ['R1']);
   // Sayfanın bir kısmı: kanıtın kesin toplamı satır sayısından büyükse sayım ve uç önerilmez.
   const partial = createAiStack(t, { sicil: AYSE, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true' }, seed: rotaToolSeed() });

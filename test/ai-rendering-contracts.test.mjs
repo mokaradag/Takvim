@@ -246,9 +246,10 @@ test("sıfır toplam tamamlanma alt kümesine atıf yapmaz; pozitif toplam doğa
       assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
       if (total) assert.match(verdict.normalized, new RegExp(`\\*\\*${total}\\*\\*`));
       else assert.match(verdict.normalized, locale === 'en' ? /no tasks/ : /görev yok/);
-      if (!total) assert.doesNotMatch(verdict.normalized, /None of them|Of these|Bunların/);
-      else if (!generic) assert.match(verdict.normalized, locale === 'en' ? /None of them is completed yet/ : /Bunların hiçbiri henüz tamamlanmamış/);
-      else assert.match(verdict.normalized, locale === 'en' ? /Of these/ : /Bunların/);
+      if (!total) assert.doesNotMatch(verdict.normalized, /[Nn]one of them|[Oo]f these|[Bb]unların/);
+      // Aşama G: döküm toplam cümlesinin yan cümlesidir ("…; bunların …").
+      else if (!generic) assert.match(verdict.normalized, locale === 'en' ? /; none of them is completed yet/ : /; bunların hiçbiri henüz tamamlanmamış/);
+      else assert.match(verdict.normalized, locale === 'en' ? /; of these/ : /; bunların/);
     });
   }
 });

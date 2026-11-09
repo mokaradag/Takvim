@@ -675,7 +675,7 @@ test('yanıt düzyazısı akıcıdır: aynı nüfusun önermeleri bağlanır, ay
     const paragraphs = answer.content.split('\n\n').filter((paragraph) => !paragraph.startsWith('#### ') && !paragraph.startsWith('Aşağıda '));
     // Gecikme payından sonra yakın termin aynı cümlede; genel görünümün ayrıntısı hemen ardından (yanıtın sonunda değil).
     assert.equal(paragraphs[0], "Açık **1** görevin **1'i** (**%100**) gecikmiş durumda. 【R1】");
-    assert.equal(paragraphs[1], "Sorumlusu olduğunuz toplam **1** görev bulunuyor (ölçüt: Termin: 28 Eylül 2026 – 4 Ekim 2026). Bunların hiçbiri tamamlanmış ya da yedi gün içinde terminli değil. 【R1】",
+    assert.equal(paragraphs[1], "Sorumlusu olduğunuz toplam **1** görev bulunuyor (ölçüt: Termin: 28 Eylül 2026 – 4 Ekim 2026); bunların hiçbiri tamamlanmış ya da yedi gün içinde terminli değil. 【R1】",
       'analist cümlesinin söylediği açık/gecikmiş sayısı ayrıntıda yinelenmez; "Sorumlu: Ben" öznede');
     // Gecikmiş bölüm yalnızca dönem içindeki görevi gösterir; eski toplamlar ve ortalamalar taşınmaz.
     assert.equal(paragraphs[2], "Şu anda **28 Eylül 2026** ile **4 Ekim 2026** arasında terminli **1** gecikmiş göreviniz var. **Kısmi Proje** projesindeki **Kısmi kendi görevim** görevinin termini **29 Eylül 2026**. Görev **1** gündür gecikmiş. 【R2】");
@@ -691,7 +691,8 @@ test('yanıt düzyazısı akıcıdır: aynı nüfusun önermeleri bağlanır, ay
     assert.match(lead, /^Mevcut göstergelere göre yönetim dikkatini en çok \*\*Radar Modernizasyonu\*\* projesi gerektiriyor: gecikmiş, önümüzdeki yedi günde terminli ve açık iş sayılarının üçünde de projeler arasında ilk sırada\. 【R1】$/);
     assert.doesNotMatch(lead, /\*\*\d/, 'giriş gövdenin sayılarını yinelemez');
     // Tablo tek başına kalmaz: kapsama ve öndeki proje (sütun sütun istatistik listesi değil).
-    assert.match(body, /^Listedeki \*\*4\*\* projenin hepsinde gecikmiş görev var\. \*\*Radar Modernizasyonu\*\*, \*\*6\*\* açık, \*\*2\*\* gecikmiş ve \*\*2\*\* yedi gün içinde terminli görevle projeler arasında ilk sırada\. 【R1】/);
+    // Aşama G: kapsama ve öndeki proje tek cümledir.
+    assert.ok(body.startsWith('Listedeki **4** projenin hepsinde gecikmiş görev var; **Radar Modernizasyonu** ise **6** açık, **2** gecikmiş ve **2** yedi gün içinde terminli görevle ilk sırada. 【R1】'), body);
     assert.doesNotMatch(answer.content, /ortalaması|sütununda en/);
   });
   // Bağlaç yalnızca aynı kanıtın önermeleri arasındadır; başka kanıtın önermesi kendi cümlesiyle kalır.

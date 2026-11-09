@@ -9,6 +9,8 @@
  * (ve açıklamada en çok dört yetenek konusu) seçer.
  */
 
+import { escapedFactText } from './evidenceFacts.js';
+
 export const PLANNER_INTENTS = Object.freeze({ ROTA: 'rota', GENERAL: 'general', CLARIFY: 'clarify', ABSTAIN: 'abstain' });
 
 /** Açıklama nedenleri: soruda göndergesi belirsiz kayıt ya da birden çok Rota yeteneğine eşit uyan istek. */
@@ -167,7 +169,8 @@ const LAYER_ASPECTS = Object.freeze({ workload: ['kişilere göre iş yükü', '
 /** Çok kapsamlı özette kapsamın sunucu adı ("biriminizin işleri", "**X** projesindeki işler"); adlar kullanıcının iletisindendir. */
 export function layerOwner(layer, locale = 'tr') {
   const lang = locale === 'en' ? 1 : 0;
-  const name = layer.names?.[0] ? String(layer.names[0]).replace(/[*_`\\[\]]/g, '') : null;
+  // Ad kullanıcının iletisindendir: kanıt adlarıyla aynı yardımcıyla kaçışlanır (Markdown biçimine dönüşmez).
+  const name = layer.names?.[0] ? escapedFactText(layer.names[0]) : null;
   if (layer.scope === 'person' && name) return lang ? `**${name}**'s work` : `**${name}** sorumluluğundaki işler`;
   if (layer.scope === 'project' && name) return lang ? `the work in **${name}**` : `**${name}** projesindeki işler`;
   const key = layer.scope === 'team' && layer.level ? layer.level : layer.scope;
