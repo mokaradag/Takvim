@@ -95,9 +95,19 @@ async function ask(page, text) {
   await page.getByRole('button', { name: /Kapsamlı Kip/ }).click();
   await page.getByRole('button', { name: /Başlayalım/ }).click().catch(() => {});
   await page.waitForTimeout(1500);
+  // İsteğe bağlı görünüm (Aşama G görsel kabulü): UI_THEME=light|dark tema (kenar çubuğundaki tema düğmesi; tema zaten istenense
+  // dokunulmaz), UI_VIEWPORT=mobile dar görünüm (390×844). Ayarlar geniş görünümde değiştirilir; turlar ve ekran görüntüsü istenen görünümdedir.
+  const narrow = process.env.UI_VIEWPORT === 'mobile' ? { width: 390, height: 844 } : null;
+  const toggle = { dark: 'Koyu temaya geç', light: 'Açık temaya geç' }[process.env.UI_THEME];
+  if (toggle && await page.getByTitle(toggle).first().isVisible().catch(() => false)) { await page.getByTitle(toggle).first().click(); await page.waitForTimeout(400); }
   let currentDetail = null;
   for (const [conversationIndex, conversation] of scenario.conversations.entries()) {
-    if (conversation.detail !== currentDetail) { await setDetail(page, conversation.detail); currentDetail = conversation.detail; }
+    if (conversation.detail !== currentDetail) {
+      if (narrow) await page.setViewportSize({ width: 1500, height: 1000 });
+      await setDetail(page, conversation.detail);
+      currentDetail = conversation.detail;
+    }
+    if (narrow) await page.setViewportSize(narrow);
     await openBilgin(page);
     await newConversation(page);
     for (const [turnIndex, text] of conversation.turns.entries()) {
@@ -109,14 +119,17 @@ async function ask(page, text) {
       const ms = Date.now() - started;
       const calls = lines(CALLS).slice(callsBefore).map((line) => JSON.parse(line));
       const trace = turnTraces().slice(tracesBefore).at(-1) || null;
-      const shot = path.join(outDir, `${scenario.profile}-${conversationIndex + 1}-${turnIndex + 1}.png`);
+      const variant = [process.env.UI_VIEWPORT, process.env.UI_THEME].filter(Boolean).join('-');
+      const shot = path.join(outDir, `${scenario.profile}-${conversationIndex + 1}-${turnIndex + 1}${variant ? `-${variant}` : ''}.png`);
       await page.locator('.rota-assistant-thread').screenshot({ path: shot }).catch(() => {});
       const expectedChart = conversation.expectedCharts?.[turnIndex] || null;
       const expected = conversation.expectedTurns?.[turnIndex];
-      const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace), ...modelFailures(expected, trace, calls)];
+      // UI_SCRIPTED=1 (scriptedBridge.mjs): planlar betiklidir, model kabulü yapılmaz; çizici ve sunucu sözleşmesi denetlenir.
+      const scripted = process.env.UI_SCRIPTED === '1';
+      const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace), ...(scripted ? [] : modelFailures(expected, trace, calls))];
       if (expectedChart && !rendered.charts?.some((chart) => chart.type === expectedChart && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);
       if (!trace) failures.push('bu tura ait sunucu kanıtı yok');
-      const row = { runId, failures, expectedOutcome: expected?.outcome || 'grounded', serverReplay: expected?.serverReplay === true, profile: scenario.profile, conversation: conversation.name, detail: conversation.detail, turn: turnIndex + 1, question: text, ms, rendered,
+      const row = { runId, ...(scripted ? { scripted: true } : {}), failures, expectedOutcome: expected?.outcome || 'grounded', serverReplay: expected?.serverReplay === true, profile: scenario.profile, conversation: conversation.name, detail: conversation.detail, turn: turnIndex + 1, question: text, ms, rendered,
         server: trace ? { outcome: trace.outcome, evidence: trace.evidence, parts: trace.parts, escalated: trace.escalated, presentation: trace.presentation, models: [...new Set((trace.rounds || []).map((round) => round.model))],
           reasoning: trace.usage?.reasoning ?? null } : null,
         calls: calls.map((call) => ({ purpose: call.purpose, toolCalls: call.toolCalls, ok: call.ok, models: call.models, thinking: call.thinking, thinkingTokens: call.thinkingTokens, ms: call.ms,

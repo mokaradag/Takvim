@@ -467,7 +467,8 @@ test('süzülmüş dağılımın kapsamı sunucu satırlarında korunur', async 
   const sheet = buildComposition({ parts: [{ index: 0, presentation: verdict.presentation }] });
   const valid = check(sheet, narrated(narrate(sheet), { type: 'rows', source: 'T1' }));
   assert.equal(valid.ok, true, JSON.stringify(valid.issues));
-  assert.match(renderComposition(sheet, valid).text, /Ölçüt: Sorumlu: Ben/);
+  // Aşama G: kapsam doğal başlıkla ("Size atanmış işler") ya da ölçüt satırıyla korunur; hiçbir durumda düşmez.
+  assert.match(renderComposition(sheet, valid).text, /_Size atanmış işler_|Ölçüt: Sorumlu: Ben/);
 });
 
 test('sayımın kapsamı sunucu ayrıntısıyla zorunlu gösterilir', async (t) => {

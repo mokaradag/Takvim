@@ -7,7 +7,7 @@ import { TOOL_LIMITS } from './toolLimits.js';
 import { requestSchema } from './requestDeclaration.js';
 import { getRotaTool } from './toolRegistry.js';
 import { readKey } from './requestPopulation.js';
-import { analysisSchema, expandAnalysis, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
+import { analysisSchema, ANALYSIS_LIMITS, expandAnalysis, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
 import { expandedAnswerDetail } from '../../../domain/ai/answerDetail.js';
 
 /**
@@ -51,14 +51,25 @@ function modelRequestSchema() {
     rank: withMetric(schema.properties.rank) } };
 }
 
+/**
+ * Aşama G: ek istek öğeleri `request` ile AYNI alanları taşır; alan açıklamaları `request` şemasında bir kez yer alır. Öğelerde
+ * birebir yinelenen açıklama metinleri çıkarılır (yapı, tür, sözlük ve sınırlar değişmez; doğrulama tam şemayladır).
+ */
+function withoutDescriptions(schema) {
+  if (Array.isArray(schema)) return schema.map(withoutDescriptions);
+  if (!schema || typeof schema !== 'object') return schema;
+  return Object.fromEntries(Object.entries(schema).filter(([key, value]) => !(key === 'description' && typeof value === 'string'))
+    .map(([key, value]) => [key, key === 'enum' ? value : withoutDescriptions(value)]));
+}
+
 export function typedPlanningTool(catalog) {
   const names = catalog.map((tool) => tool.name);
   const base = modelRequestSchema();
   const request = { ...base, required: [...base.required, 'population', 'layout'] };
   const entities = request.properties.entities;
-  const additionalRequest = { ...request, properties: { ...request.properties, entities: { ...entities, items: {
+  const additionalRequest = withoutDescriptions({ ...request, properties: { ...request.properties, entities: { ...entities, items: {
     ...entities.items, properties: { ...entities.items.properties, from: { type: 'integer', minimum: 0, maximum: PLANNER_LIMITS.maxRequests - 2 } }
-  } } } };
+  } } } });
   return { name: 'rota_plan', description: 'Her yeni soruya ilk yanıt bu araçtır. Veri okumadan kararı bildir: rota (geniş/değerlendirme sorusunda analysis; tek ve kesin soruda request, gerekirse additionalRequests), clarify, abstain ya da general.',
     parameters: { type: 'object', additionalProperties: false, required: ['intent', 'language'], properties: {
       intent: { type: 'string', enum: Object.values(PLANNER_INTENTS), description: 'rota: Rota verisiyle yanıtlanır; general: Rota ile ilgisiz sohbet; clarify: gerçek belirsizlik, veri okunmaz; abstain: yazma, desteklenmeyen hesap, Rota dışı veri ya da kimlik/yetki/SQL girişimi, veri okunmaz.' },
@@ -144,6 +155,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   try { plan = JSON.parse(call.arguments); } catch { throw invalidArguments(['$.plan:json']); }
   plan = normalizePlan(decodeNestedJson(plan));
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw invalidArguments(['$.plan:shape']);
+  plan = layeredAnalysis(plan);
   // Sunum tercihleri (grafik türü, tablo) plan düzeyindedir; zayıf model onları özetin içine de yazabilir. Yapısal taşıma:
   // değer değişmez, özetin anlamı (kapsam, yön, ufuk) değişmez; plan düzeyinde ayrıca verilmişse o geçerlidir.
   if (plan.analysis && typeof plan.analysis === 'object' && !Array.isArray(plan.analysis)) {
@@ -214,13 +226,32 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
       ...(['person', 'project'].includes(parsed.scope) ? (Array.isArray(plan.analysis.names) ? plan.analysis.names : []).map((text) => ({ name: `rota_${parsed.scope}_search`, text })) : []),
       ...(plan.analysis?.within ? [{ name: 'rota_project_search', text: plan.analysis.within }] : [])
     ];
-    const lookups = planned.length && planned.every((call) => {
+    const matchingLookup = (call) => {
       if (!NAME_LOOKUP_TOOLS.includes(call.name)) return false;
       const args = parseToolArguments(getRotaTool(call.name).parameters, call.arguments);
       return selectors.some((selector) => selector.name === call.name && selector.text === args.text);
-    });
+    };
+    const lookups = planned.length && planned.every(matchingLookup);
+    // Aşama G: özetin okumalarıyla aynı nüfus araçlarına (iş yükü, görev toplamları/listesi, portföy) SEÇİCİSİZ yazılmış çağrılar
+    // özetin yerine geçemez ve yürütülmez; okumaları sunucu özetten kurar (planlama mekaniğidir; düzeltme turu açmaz). Bildirilmemiş
+    // bir ada arama ya da seçici (proje, kişi, iş paketi, metin) taşıyan çağrı özetin ifade etmediği bir daraltma olabilir: sessizce
+    // atılmaz, plan reddedilir. Başka araç (ayrıntı, bağımlılık, baz plan, hareket) da özetle birlikte reddedilir.
+    const unselected = (call) => {
+      if (!ANALYSIS_READ_TOOLS.includes(call.name) || NAME_LOOKUP_TOOLS.includes(call.name)) return false;
+      let args;
+      try { args = JSON.parse(call.arguments); } catch { return false; }
+      return Boolean(args) && typeof args === 'object' && !['projectId', 'personSicil', 'wbsId', 'text', 'taskIds', 'seriesId'].some((key) => args[key] != null);
+    };
+    const redundant = planned.length && planned.every((call) => matchingLookup(call) || unselected(call));
     // Analitik özet: sunucu her yönü kayıt defterinin sabit istek biçimine açar; okumaları yalnızca sunucu kurar.
-    if (present('request') || present('additionalRequests') || (planned.length && !lookups) || direct.length) throw invalidArguments(['$.analysis:request']);
+    if ((planned.length && !lookups && !redundant) || direct.length) throw invalidArguments(['$.analysis:request']);
+    // Aşama G — özet + ek liste (ör. "grafikle göster, ardından en yakın teslimatları listele"): özetin yanındaki açık istek(ler)
+    // özetin okumalarından SONRA ayrı bölüm olarak okunur; aynı doğrulamadan geçer ve fiziksel okuma tavanına sığmalıdır. Önceki
+    // bölüme gönderme (from) özetin bölüm sırası belirsiz olduğundan kabul edilmez.
+    const explicit = [...(present('request') ? [plan.request] : []), ...(present('additionalRequests') ? [].concat(plan.additionalRequests) : [])];
+    if (explicit.some((item) => !item || typeof item !== 'object' || Array.isArray(item)
+      || (Array.isArray(item.entities) && item.entities.some((entity) => entity && typeof entity === 'object' && Object.hasOwn(entity, 'from'))))) throw invalidArguments(['$.analysis:request']);
+    if (explicit.length && (['previous', 'row'].includes(parsed.scope) || parsed.also?.length)) throw invalidArguments(['$.analysis:request']);
     // Takipte yazılmayan yön/ufuk önceki doğrulanmış analizden; görselleştirme ve grafik türü de açıkça kapatılmadıkça sürer.
     const analysis = resolveAnalysisBrief(parsed, { previous: previousAnalysis, today });
     const follow = ['previous', 'row'].includes(parsed.scope) && previousAnalysis;
@@ -229,10 +260,22 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const table = base.table === true || Boolean(follow && previousAnalysis.table && plan.table !== false);
     const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
     const requested = visual ? base.charts || (!explicitCharts && follow && (!base.chart || base.chart === previousAnalysis.chart) ? previousAnalysis.charts : null) : null;
-    const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested });
+    const expanded = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested });
+    const kept = explicit.filter((item) => !expanded.some((part) => sameRequest(part, item) || coveredRequest(part, item)));
+    const sections = [...expanded, ...kept];
+    if (sections.length > ANALYSIS_LIMITS.maxParts) throw invalidArguments(['$.analysis.focus:requestBudget']);
+    const [request, ...additionalRequests] = sections;
+    const omitted = expanded.omitted?.length ? { omitted: expanded.omitted } : {};
+    // Açık isteğin birleşik plandaki yolu → modelin kendi yazdığı yol: o istekteki sorun özete değil isteğin kendisine bağlanır
+    // (model hangi alanı düzelteceğini görür; özetin genel "geçersiz" ayrıntısına dönüşmez).
+    const own = (item) => (item === plan.request ? '$.request' : `$.additionalRequests[${[].concat(plan.additionalRequests).indexOf(item)}]`);
+    const explicitPaths = Object.freeze(Object.fromEntries(kept.map((item, offset) => {
+      const merged = expanded.length + offset;
+      return [merged === 0 ? '$.request' : `$.additionalRequests[${merged - 1}]`, own(item)];
+    })));
     return { plan: { ...base, ...(visual ? { visual: true } : declined ? { visual: false } : {}), ...(chart ? { chart } : {}), ...(requested ? { charts: requested } : {}),
-      ...(table ? { table: true } : {}), analysis, request,
-      ...(additionalRequests.length ? { additionalRequests } : {}) }, brief: parsed, calls: [] };
+      ...(table ? { table: true } : {}), analysis: Object.freeze({ ...analysis, ...omitted }), request,
+      ...(additionalRequests.length ? { additionalRequests } : {}) }, brief: parsed, calls: [], ...(kept.length ? { explicitPaths } : {}) };
   }
   if (plan.intent === PLANNER_INTENTS.ROTA) {
     if (!only('request', 'additionalRequests')) throw invalidArguments(['$.plan:rota']);
@@ -274,6 +317,52 @@ function planChoice(schema, value, prefix) {
 const PLAN_KEYS = Object.freeze(['intent', 'language', 'analysis', 'visual', 'chart', 'charts', 'table', 'request', 'additionalRequests', 'calls', 'clarify', 'abstain']);
 /** Özetin adlarını sunucu zaten çözer: bu araçların özet yanındaki çağrıları yürütülmeden atılabilir. */
 const NAME_LOOKUP_TOOLS = Object.freeze(['rota_person_search', 'rota_project_search']);
+/** Aşama G: özetin kendi okumalarını kurduğu nüfus araçları; özet yanındaki seçicisiz çağrıları yürütülmeden atılır. */
+const ANALYSIS_READ_TOOLS = Object.freeze([...NAME_LOOKUP_TOOLS, 'rota_workload_summary', 'rota_task_analytics', 'rota_task_search', 'rota_portfolio_summary']);
+
+/** İki ham istek aynı okuma mı (alan sırasından bağımsız)? Özetin zaten okuduğu açık istek ikinci kez okunmaz. */
+function sameRequest(left, right) {
+  const canonical = (value) => (Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value);
+  const { layout: _left, ...a } = left || {};
+  const { layout: _right, ...b } = right || {};
+  return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+}
+
+/**
+ * Özetin bir okuması açık isteği kapsıyor mu: aynı işlem, araç, koleksiyon, gruplama, varlıklar, süzgeçler ve sıralama; açık
+ * isteğin her ölçüsü okumada da var. Kapsanan istek ikinci kez okunmaz (aynı satırlar zaten yanıttadır); kapsanmayan istek
+ * ayrı bölüm olarak okunur.
+ */
+function coveredRequest(part, item) {
+  const canonical = (value) => (Array.isArray(value) ? [...value].map(canonical).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value);
+  const same = (key) => JSON.stringify(canonical(part?.[key] ?? null)) === JSON.stringify(canonical(item?.[key] ?? null));
+  const { limit: _partLimit, ...partRank } = part?.rank || {};
+  const { limit: _itemLimit, ...itemRank } = item?.rank || {};
+  const population = (value) => { const { sort: _sort, ...rest } = value?.population || {}; return rest; };
+  return Array.isArray(item?.metrics) && item.metrics.every((metric) => part.metrics?.includes(metric)) && part.operation === item.operation
+    && JSON.stringify(canonical(population(part))) === JSON.stringify(canonical(population(item))) && same('entities') && same('filters')
+    && JSON.stringify(canonical(partRank)) === JSON.stringify(canonical(itemRank)) && !item.fields?.length && !item.bindings?.length;
+}
+
+/**
+ * Aşama G — çok kapsamlı özetin dizi yazımı: zayıf model birden çok kapsamı ayrı özetlerin dizisi olarak yazar
+ * (`"analysis":[{"scope":"self",…},{"scope":"team",…}]`). İlk öğe birincil özettir; diğerleri `also` kapsamlarıdır
+ * (kapsam, düzey, adlar ve yön AYNEN taşınır; dönem ve görselleştirme birincil özetten). Yapısal çeviridir; dil yorumu yoktur.
+ * Ek kapsamın birincilden farklı dönemi tek pencerede temsil edilemez: plan reddedilir (sessizce dönem düşmez).
+ */
+function layeredAnalysis(plan) {
+  if (!Array.isArray(plan.analysis)) return plan;
+  const items = plan.analysis;
+  if (!items.length || items.length > ANALYSIS_LIMITS.maxLayers || items.some((item) => !item || typeof item !== 'object' || Array.isArray(item))) throw invalidArguments(['$.analysis:type']);
+  if (items.length === 1) return { ...plan, analysis: items[0] };
+  const [primary, ...rest] = items;
+  const window = (item) => JSON.stringify([item.dateFrom ?? null, item.dateTo ?? null, item.relativeWindow === 'all_time' ? null : item.relativeWindow ?? null]);
+  if (rest.some((item) => window(item) !== window(primary))) throw invalidArguments(['$.analysis.also:window']);
+  const layer = ({ scope, level, names, focus }) => ({ scope, ...(level != null ? { level } : {}), ...(names != null ? { names } : {}), ...(focus != null ? { focus } : {}) });
+  return { ...plan, analysis: { ...primary, also: rest.map(layer) } };
+}
 
 /** Plan düzeyindeki sorunların beklenen biçimi (yalnızca sözleşmeden; modelin değeri yansıtılmaz). */
 export function planShapeHints(problems) {
@@ -286,7 +375,7 @@ export function planShapeHints(problems) {
     '$.chart': `chart: ${PLAN_CHART_TYPES.join('|')}`,
     '$.table': 'table: true|false',
     '$.request:required': 'intent rota için request ya da (geniş/değerlendirme sorusunda) analysis zorunludur',
-    '$.analysis': 'analysis: {"scope":"self|person|team|project|projects|all","focus":["overview","overdue","upcoming"],"names":["<ad>"] (yalnızca person/project)}; request/calls ile birlikte verilmez',
+    '$.analysis': 'analysis: {"scope":"self|person|team|project|projects|all","focus":["overview","overdue","upcoming"],"names":["<ad>"] (yalnızca person/project),"also":[{"scope":"team","level":"department"}] (ek kapsam)}; calls ile birlikte verilmez',
     '$.additionalRequests': 'additionalRequests: tek soru için alanı çıkar; bir ya da iki ek istek nesnesi ver; calls ile birlikte verme',
     '$.plan:repairScope': 'Yalnızca reddedilen yolları düzelt; önceki sorunsuz bölümleri, varlıkları ve koşulları aynen koru',
     '$.clarify': `clarify.reason: ${CLARIFY_REASONS.join('|')}`,

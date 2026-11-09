@@ -56,7 +56,7 @@ test('genişletilmiş yönler ve sürümlü bağlam kapalı biçimde saklanır; 
   const value = context({ scope: 'projects', focus: ['overview', 'overdue', 'upcoming', 'projects'] });
   assert.equal(value.v, 2);
   assert.equal(value.focus.length, 4);
-  for (const bad of [{ ...value, v: 3 }, { ...value, futureScope: true }, { ...value, withSelf: true }, { ...value, focus: [...value.focus, 'status'] }, { ...value, rows: [{ type: 'project', id: 'bozuk' }] }]) assert.equal(normalizeAnalysisContext(bad), null);
+  for (const bad of [{ ...value, v: 3 }, { ...value, futureScope: true }, { ...value, withSelf: true }, { ...value, focus: [...value.focus, 'status', 'priority', 'schedule'] }, { ...value, rows: [{ type: 'project', id: 'bozuk' }] }]) assert.equal(normalizeAnalysisContext(bad), null);
   assert.equal(normalizePendingAnalysis({ language: 'tr', scope: 'person', names: ['Ali'], focus: ['status'], withSelf: true, unknown: true }), null);
 });
 
@@ -146,7 +146,8 @@ test('yazıyla sayı ve çoğunluk iddiası görünür yanıta giremez; sunucu o
 
 test('iş yükü kesinliği sayfa tam olsa da eksik nüfusu tam göstermez', async (t) => {
   const pages = [];
-  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }] });
+  // Aşama G: kadro okunur; eksik nüfus için yönetim kapsamında dizin kaydı çözülemeyen bir üye vardır.
+  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }, { ManagerSicil: AYSE, EmployeeSicil: 919999 }] });
   seed.taskAssignees.push({ TaskId: TASKS.OVERDUE, Sicil: ALI_1 }, { TaskId: TASKS.LITERAL, Sicil: ALI_1 });
   const { ask } = phase4eConversation(t, { seed, compose: () => composer((view) => { pages.push(view); return coveringBlocks(view); }) });
   await ask({ text: 'ekibimin iş yükü', plan: plan({ scope: 'team', focus: ['workload'] }) });
@@ -230,7 +231,8 @@ test('istenen grafik eklenirken önceki grafikler bütçeyi doldursa da son çiz
 });
 
 test('zorunlu çekinceler ve kesinlik ifadeleri sayfa bütçesi dolsa da görünür yanıtta kalır', async (t) => {
-  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }] });
+  // Aşama G: kadro okunur; eksik nüfus için yönetim kapsamında dizin kaydı çözülemeyen bir üye vardır.
+  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }, { ManagerSicil: AYSE, EmployeeSicil: 919999 }] });
   seed.taskAssignees.push({ TaskId: TASKS.OVERDUE, Sicil: ALI_1 });
   const stack = createAiStack(t, { sicil: AYSE, seed, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_workload_summary', { assignee: 'team' });
@@ -303,9 +305,10 @@ test('istenen çizgi adayı tek sütunlu aday sınırının arkasında kaybolmaz
 });
 
 test('şema sınırını aşan yönler alt kümeye onarılmadan kullanıcıya sorulur', async (t) => {
-  const queue = [plan({ scope: 'self', focus: ['overview', 'deadline', 'priority', 'status', 'critical'] }), plan({ scope: 'self', focus: ['deadlines', 'status'] })];
+  // Aşama G: şema yedi yönü kabul etmez (en çok 6).
+  const queue = [plan({ scope: 'self', focus: ['overview', 'deadline', 'priority', 'status', 'critical', 'schedule', 'milestones'] }), plan({ scope: 'self', focus: ['deadlines', 'status'] })];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
-  const result = await ask({ text: 'işlerimin beş yönünü değerlendir' });
+  const result = await ask({ text: 'işlerimin yedi yönünü değerlendir' });
   assert.equal(result.inputs.length, 1);
   assert.equal(result.log.length, 0);
   assert.equal(result.answer.finishReason, 'clarification', result.answer.content);

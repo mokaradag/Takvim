@@ -25,14 +25,18 @@ test("karşılaştırma grafiği iki özne adını ve kendi değerlerini korur",
   assert.match(result.answer.content, /\*\*Zeynep Kaya\*\*:[^\n]*\*\*2\*\*/);
 });
 
-test("analiz ve ek istek birleşimi okumadan önce bildirimin tamamını reddeder", async (t) => {
+test("analiz ve geçersiz ek istek birleşimi okumadan önce bildirimin tamamını reddeder", async (t) => {
+  // Aşama G: özetin yanındaki ek istek ayrı bölüm olarak kabul edilir; ancak geçersiz ek istek bütün planı veri okunmadan reddeder.
   const plans = [{ ...plan({ scope: 'self', focus: ['overview'] }), additionalRequests: [{ operation: 'value', metrics: ['tasks.total'] }] },
     { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } }];
   const { ask } = phase4eConversation(t, { planner: () => call(plans.shift()) });
   const result = await ask({ text: 'durumumu ve proje toplamını göster' });
   assert.equal(result.answer.finishReason, 'clarification');
   assert.deepEqual(result.log, []);
-  assert.ok(result.inputs[1].messages.some((message) => String(message.content).includes('$.analysis:request')));
+  // Sorun modelin yazdığı ek isteğin kendi yolundadır (özetin genel "geçersiz" ayrıntısı değil).
+  const notes = result.inputs[1].messages.filter((message) => message.role !== 'user').map((message) => String(message.content)).join('\n');
+  assert.match(notes, /\$\.additionalRequests\[0\]/);
+  assert.doesNotMatch(notes, /\$\.analysis:invalid/);
 });
 
 test("satır takibi her gerçek nüfus okumasında proje kesişimini korur", async (t) => {
@@ -137,13 +141,13 @@ test("gerçek gecikme lideri dönen satır dışındaysa kesilmiş iş yükü li
   assert.doesNotMatch(renderComposition(sheet, defaultComposition(sheet)).text, /en üstte|görece dengeli|bu kişide yoğunlaşıyor/);
 });
 
-test("yön şeması modele 1-3 yön önerir; ayrıştırıcı fiziksel okuma sınırına sığan dördüncü yönü kabul eder, fazlasını reddeder", () => {
-  // Aşama F: model görünür şema (önek önbelleği ve kanonik planlayıcı kapısı) değişmez; kabul sınırı fiziksel bölüm sınırıdır.
+test("yön şeması modele 1-3 yön önerir; ayrıştırıcı fiziksel okuma tavanına sığan altıncı yöne kadar kabul eder, fazlasını reddeder", () => {
+  // Aşama G (kullanıcı yönergesi): kabul sınırı fiziksel bölüm tavanıdır (6); model görünür şema aynı sınırı sunar.
   assert.equal(analysisSchema().properties.focus.maxItems, ANALYSIS_LIMITS.maxFocus);
   assert.equal(analysisSchema({ accepted: true }).properties.focus.maxItems, ANALYSIS_LIMITS.maxAcceptedFocus);
   assert.equal(ANALYSIS_LIMITS.maxAcceptedFocus, ANALYSIS_LIMITS.maxParts);
-  assert.doesNotThrow(() => parseAnalysis({ scope: 'self', focus: ['overview', 'status', 'priority', 'workload'] }));
-  assert.throws(() => parseAnalysis({ scope: 'self', focus: ['overview', 'status', 'priority', 'workload', 'overdue'] }));
+  assert.doesNotThrow(() => parseAnalysis({ scope: 'self', focus: ['overview', 'status', 'priority', 'workload', 'overdue', 'upcoming'] }));
+  assert.throws(() => parseAnalysis({ scope: 'self', focus: ['overview', 'status', 'priority', 'workload', 'overdue', 'upcoming', 'schedule'] }));
 });
 
 test("onarım önerisi karşılaştırma açılımında da nüfus süzgeci ekleyemez veya düşüremez", () => {

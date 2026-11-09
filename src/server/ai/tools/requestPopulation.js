@@ -801,8 +801,9 @@ export function derivedReads(request, bound, { today, attempted = new Set() } = 
   if (population.groupBy && properties.groupBy) base.groupBy = population.groupBy;
   if (population.depth && properties.depth) base.depth = population.depth;
   if (population.textFields?.length && properties.textFields) base.textFields = population.textFields;
-  // Liste nüfusun bütün satırlarıdır: aracın en büyük sayfasıyla bir kez okunur; sayfalar birleştirilmez.
-  if (request.operation === 'list' && properties.limit?.maximum) base.limit = properties.limit.maximum;
+  // Liste nüfusun bütün satırlarıdır: aracın en büyük sayfasıyla bir kez okunur; sayfalar birleştirilmez. Aşama G: portföy
+  // toplamları sayfadan bağımsızdır; portföy değer okuması da en büyük sayfayla okunur ve aynı turdaki proje listesiyle TEK okumadır.
+  if ((request.operation === 'list' || (request.operation === 'value' && tool.name === 'rota_portfolio_summary')) && properties.limit?.maximum) base.limit = properties.limit.maximum;
   const selectors = new Map();
   for (const entity of bound) {
     const param = SELECTOR_PARAMS[entity.type];

@@ -66,6 +66,18 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
   return { stack, ask };
 }
 
+/** Aşama G bulgularının sunucu cümlelerinin ayırt edici kalıpları (yalnızca varlığı denetlenir; sayılar kanıttandır). */
+export const G_FINDING_TEXT = Object.freeze({
+  workloadSpread: /kişinin açık görev sayısı \*\*\d+\*\* ile \*\*\d+\*\* arasında değişiyor/,
+  overdueLeader: /Gecikmiş görevler en çok .+ üzerinde|En çok gecikmiş görev .+ projeleri?nde/,
+  overdueRateLeader: /Açık işe oranla bakıldığında tablo değişiyor/,
+  completionDespiteOverdue: /tamamlanmış olsa da \*\*\d+\*\* gecikmiş görev bulunuyor/,
+  volumeVsDelay: /Görev sayısı tek başına baskıyı göstermiyor/,
+  levelComparison: /Açık işlerde gecikme oranı|Karşılaştırılan kapsamların hiçbirinde gecikmiş açık iş yok/,
+  milestoneStatus: /kilometre taşı/i,
+  orgSpread: /[İi]şler \*\*\d+\*\* (?:bölüme|birime) dağılıyor[\s\S]+sayıları toplanmaz/
+});
+
 /** Görev nüfusu okumaları (sayfa sorumlu okumaları değil). */
 export const populationReads = (log) => log.filter((row) => row.query === 'task-facts' && !String(row.params.taskIds || ''));
 
@@ -108,6 +120,16 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.chartUnavailable && (content.includes('```rota-chart') || !/güvenle grafik çizilemedi|could not be drawn safely/.test(content))) problems.push('çizilemeyen grafik açıkça belirtilmedi');
   if (expect.scopeDenied && !/yönetim kapsamınız bulunmuyor|management scope/.test(content)) problems.push('kapsam reddi metni yok');
   if (expect.level && !every((row) => row.params.teamLevel === expect.level.toUpperCase())) problems.push('örgütsel düzey her okumada korunmadı');
+  // Aşama G: çok kapsamlı planda her kapsamın KENDİ nüfusu okunur; beklenmeyen kapsam okunmaz. Yetkisi olmadığı sunucuca
+  // okumadan önce bilinen kapsam (`optional`) okunmak zorunda değildir; okunursa da yetki reddiyle sonuçlanır.
+  if (expect.layers) {
+    const mode = (layer) => (layer.scope === 'self' ? 'me' : layer.scope === 'team' ? 'team' : null);
+    for (const layer of expect.layers.filter((layer) => mode(layer) && !layer.optional)) {
+      if (!reads.some((row) => row.params.assigneeMode === mode(layer) && (row.params.teamLevel || null) === (layer.level ? layer.level.toUpperCase() : null))) problems.push(`kapsam okunmadı: ${layer.scope}${layer.level ? `/${layer.level}` : ''}`);
+    }
+    const allowed = new Set(expect.layers.map((layer) => `${mode(layer) || 'any'}|${layer.level ? layer.level.toUpperCase() : ''}`));
+    if (reads.some((row) => !allowed.has(`${row.params.assigneeMode || 'any'}|${row.params.teamLevel || ''}`))) problems.push('bildirilmeyen kapsam okundu');
+  }
   if (expect.scope && result.analysisContext?.scope !== expect.scope) problems.push('analiz kapsamı beklenenle aynı değil');
   if (expect.scope === 'all' && !expect.project && !expect.projectIds?.length && (reads.length ? !every((row) =>
     !row.params.projectId && (!row.params.assigneeMode || row.params.assigneeMode === 'any') && !row.params.personSicil && !row.params.teamLevel)
@@ -193,9 +215,20 @@ export function turnViolations(result, expect, { live = false } = {}) {
   for (const type of expect.chartTypes || []) if (!charts.some((chart) => chart.type === type)) problems.push(`${type} grafiği yok`);
   if (expect.horizonLimitation && !/birikimli teslimat sayıları burada karşılaştırılmıyor|does not compare cumulative delivery counts/.test(content)) problems.push('çoklu ufuk sınırlılığı açıklanmadı');
   const findings = { attentionLeader: /yönetim dikkatini en çok/, windowPressure: /arasında teslimatı olan/, subjectComparison: /arasındaki en belirgin fark|sayıları birbirine yakın|görev sayıları iki (?:kişide|projede) aynı/,
-    overdueConcentration: /gecikmiş[\s\S]+toplanıyor/i };
+    overdueConcentration: /gecikmiş[\s\S]+toplanıyor/i, ...G_FINDING_TEXT };
   for (const kind of expect.findings || []) if (!findings[kind]?.test(content)) problems.push(`${kind} bulgusu yok`);
   if (expect.caveat && !/kesin olarak söylenemez/.test(content)) problems.push('zorunlu tamlık çekincesi yok');
+  // Aşama G: tam kadroda kişi sayıları için kapasite çekincesi zorunludur; tamlık çekincesi (eksik kadro) o zaman yazılmaz.
+  if (expect.capacityCaveat && !/görev adedidir; işin büyüklüğünü, harcanan emeği ya da boş kapasiteyi göstermez/.test(content)) problems.push('kapasite çekincesi yok');
+  if (expect.capacityCaveat && /kesin olarak söylenemez/.test(content)) problems.push('tam kadroda eksik kadro çekincesi');
+  if (expect.overlapNote && !/birbirini kapsar[\s\S]*yığıldığında toplam yanlış/.test(content)) problems.push('örtüşen seri notu yok');
+  // Yalnızca birbirini kapsayan seriler (açık ile onun parçası gecikmiş/yakın terminli) yığılırsa ihlaldir; açık + tamamlanan gibi
+  // ayrık durum bölümlerinin yığılması doğrudur.
+  const overlapping = (series = []) => series.includes('Açık görev') && series.some((name) => ['Gecikmiş görev', 'Yedi gün içinde terminli görev'].includes(name));
+  if (expect.overlapNote && renderedCharts(content).some((chart) => chart.type === 'stacked' && overlapping(chart.series))) problems.push('örtüşen seriler yığıldı');
+  if (expect.omissionNote && !/tek yanıtın okuma sınırına sığmadığı için ayrıca gösterilmedi/.test(content)) problems.push('okunmayan yön notu yok');
+  for (const pattern of expect.mustNot || []) if (new RegExp(pattern).test(content)) problems.push(`yasak ifade: ${pattern}`);
+  for (const pattern of expect.must || []) if (!new RegExp(pattern).test(content)) problems.push(`zorunlu ifade yok: ${pattern}`);
   if (expect.conclusion && !answerQuality(content).ending) problems.push('son blokta sonuç yok');
   if (expect.priorities) {
     const ending = content.split('\n\n').filter((block) => block.trim() && !/^_Not:/.test(block)).at(-1) || '';

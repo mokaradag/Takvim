@@ -61,6 +61,21 @@ function personName(db, sicil) {
   return name || null;
 }
 
+function personOrg(db, sicil, field) {
+  const person = db.people.find((entry) => Number(entry.Sicil) === Number(sicil));
+  const value = person?.[field] == null ? '' : String(person[field]).trim();
+  return value || null;
+}
+
+/** Görev olgusu toplu işinin ekip kadrosu sonuç kümesi: kullanıcının yönetim kapsamındaki çalışanlar (kendisi hariç), Sicil sırasıyla. */
+function teamRoster(db, params) {
+  const sicil = Number(params.sicil);
+  const level = params.teamLevel || '';
+  const members = [...new Set(db.executiveScope.filter((entry) => entry.ManagerSicil === sicil && Number(entry.EmployeeSicil) !== sicil
+    && (!level || (entry.ScopeType || 'UNIT') === level)).map((entry) => Number(entry.EmployeeSicil)))].sort((a, b) => a - b);
+  return members.slice(0, Number(params.rosterRows)).map((employee) => ({ Sicil: employee, DisplayName: personName(db, employee) }));
+}
+
 function projectRow(db, projectId) {
   return db.projects.find((project) => same(project.ProjectId, projectId)) || null;
 }
@@ -165,7 +180,10 @@ function assigneeRows(db, scope, facts, params = {}) {
         DisplayName: personName(db, assignment.Sicil) ?? (identityVisible ? String(assignment.Sicil) : null),
         IdentityVisible: identityVisible ? 1 : 0,
         Resolved: personName(db, assignment.Sicil) != null ? 1 : 0,
-        TeamMember: params.assigneeMode === 'team' && teamMemberOf(db, scope.sicil, assignment.Sicil, params.teamLevel) ? 1 : 0
+        TeamMember: params.assigneeMode === 'team' && teamMemberOf(db, scope.sicil, assignment.Sicil, params.teamLevel) ? 1 : 0,
+        // Aşama G: dizindeki birim/bölüm yalnızca kimliği açık sorumluda döner.
+        Unit: identityVisible ? personOrg(db, assignment.Sicil, 'Unit') : null,
+        Department: identityVisible ? personOrg(db, assignment.Sicil, 'Department') : null
       });
     }
   }
@@ -242,7 +260,8 @@ function taskFacts(db, params) {
       const project = projectRow(db, id);
       return { ProjectId: project.ProjectId, ProjectName: project.ProjectName, ProjectCode: project.ProjectCode, SourceType: project.SourceType, ...access };
     });
-  return [facts, projects, params.withAssignees ? assigneeRows(db, scope, facts, params) : []];
+  return [facts, projects, params.withAssignees ? assigneeRows(db, scope, facts, params) : [],
+    ...(Number(params.withRoster) === 1 && params.assigneeMode === 'team' ? [teamRoster(db, params)] : [])];
 }
 
 function taskVisibility(db, params) {

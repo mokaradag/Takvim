@@ -248,6 +248,41 @@
     "Tüm erişebildiğim projeleri değerlendir; önemli bulguları, riskleri ve fırsatları doğal bir yönetici özeti halinde anlat.",
     "Hangi sonuçlardan emin olabiliyorsun, hangi sonuçlarda veri eksikliği nedeniyle temkinli olmak gerekiyor?"
    ]
+  },
+  {
+   "name": "G1-cok-kapsam",
+   "detail": "balanced",
+   "turns": [
+    "Kendi işlerimi, birimimi ve bölümümü gecikme ve tamamlanma açısından karşılaştır."
+   ]
+  },
+  {
+   "name": "G2-orgut-kirilimi",
+   "detail": "balanced",
+   "turns": [
+    "Bölümümdeki işler birimlere göre nasıl dağılıyor, gecikme hangi birimde yoğunlaşıyor?"
+   ]
+  },
+  {
+   "name": "G3-kilometre-taslari",
+   "detail": "balanced",
+   "turns": [
+    "BGS Şube Çalışmaları projesinin sağlığını kilometre taşlarıyla birlikte değerlendir."
+   ]
+  },
+  {
+   "name": "G4-birim-is-yuku",
+   "detail": "balanced",
+   "turns": [
+    "Birimimin iş yükü dengeli mi? Grafikle göster."
+   ]
+  },
+  {
+   "name": "G5-ozet-ve-liste",
+   "detail": "balanced",
+   "turns": [
+    "Portföyümün durumunu özetle, ardından kritik açık işleri ayrıca listele."
+   ]
   }
  ]
 }

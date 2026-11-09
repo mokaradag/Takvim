@@ -109,7 +109,7 @@ export async function requireTeamScope(call, filters) {
   if (!auth?.isExecutive) throw denied();
 }
 
-async function loadFilteredFacts(call, scope, filters, { withAssignees = false } = {}) {
+async function loadFilteredFacts(call, scope, filters, { withAssignees = false, rosterRows = 0 } = {}) {
   await requireTeamScope(call, filters);
   if (filters.wbsId) {
     const node = await call.sql((executor) => readWbsSelector(executor, scope, { projectId: filters.projectId, wbsId: filters.wbsId }));
@@ -144,7 +144,8 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false }
     personSicil: filters.personSicil,
     teamLevel: filters.assignee === 'team' && filters.teamLevel ? TEAM_LEVELS[filters.teamLevel] : null,
     withAssignees: withAssignees || filters.assignee === 'person',
-    maxRows: TOOL_LIMITS.maxAnalyzedTasks
+    maxRows: TOOL_LIMITS.maxAnalyzedTasks,
+    rosterRows
   }));
   if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
   const facts = result.facts.filter((fact) => matchesTaskFilters(fact, filters, {
@@ -162,7 +163,7 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false }
       .items.find((person) => person.sicil === filters.personSicil)?.name;
     filters.person = resolved && resolved !== String(filters.personSicil) ? dataText(resolved, 120) : 'Seçilen kişi';
   }
-  return { facts, projects, assignees: result.assignees };
+  return { facts, projects, assignees: result.assignees, roster: result.roster || null };
 }
 
 function filterHighlights(filters) {
@@ -413,13 +414,18 @@ const taskDetail = {
 
 /* ── rota_task_analytics ──────────────────────────────────── */
 
-const GROUP_BY = Object.freeze(['status', 'priority', 'project', 'assignee', 'deadline', 'target_month']);
+const GROUP_BY = Object.freeze(['status', 'priority', 'project', 'assignee', 'deadline', 'target_month', 'department', 'unit']);
+/** Aşama G: sorumlunun dizindeki örgütsel birimine göre gruplama (bir görev farklı birimlerdeki sorumlularında ayrı sayılır). */
+const ORGANIZATION_GROUP_BY = Object.freeze(['department', 'unit']);
 /** Görünür kişiye bağlanamayan görevlerin grupları; gizli ve olmayan atama aynı gruptadır. */
 const ASSIGNMENT_GROUPS = Object.freeze({
   unassigned: ['unassigned', 'Sorumlusuz'],
   unresolved: ['unresolved', 'Sorumlu kaydı çözülemiyor'],
   undisclosed: ['undisclosed', 'Sorumlu bilgisi gösterilemiyor']
 });
+
+/** Birimi dizinde kayıtlı olmayan ya da kimliği çözülemeyen görünür sorumluların grubu (varlık değildir). */
+const ORGANIZATION_UNKNOWN = Object.freeze(['unresolved', 'Birimi belirtilmemiş']);
 
 function deadlineBucket(fact, today) {
   if (fact.status === 'done') return ['done', 'Tamamlandı'];
@@ -449,6 +455,22 @@ function groupKeys(fact, groupBy, { projects, assignees, today, teamOnly = false
       if (teamOnly && (assignees.get(fact.id) || []).some((person) => person.teamMember === true && person.identityVisible && !person.resolved)) return [ASSIGNMENT_GROUPS.unresolved];
       return [ASSIGNMENT_GROUPS[state] || ASSIGNMENT_GROUPS.undisclosed];
     }
+    case 'department':
+    case 'unit': {
+      // Görev, görünür (ekip kapsamında yalnızca ekip üyesi) sorumlularının FARKLI birimlerinde birer kez sayılır; birimi
+      // dizinde olmayan ya da kimliği çözülemeyen sorumlu ayrı gruptadır. Gizli sorumlunun birimi açıklanmaz.
+      const state = assignmentState(fact);
+      const people = state === 'visible'
+        ? (assignees.get(fact.id) || []).filter((person) => person.identityVisible && person.sicil != null && (!teamOnly || person.teamMember === true)) : [];
+      if (!people.length) return [ASSIGNMENT_GROUPS[state === 'visible' ? 'undisclosed' : state] || ASSIGNMENT_GROUPS.undisclosed];
+      const labels = new Map();
+      for (const person of people) {
+        const label = person.resolved ? person[groupBy] : null;
+        if (label) labels.set(`org:${foldText(label)}`, label);
+        else labels.set(ORGANIZATION_UNKNOWN[0], ORGANIZATION_UNKNOWN[1]);
+      }
+      return [...labels.entries()];
+    }
     default: return [];
   }
 }
@@ -467,7 +489,7 @@ const taskAnalytics = {
       ...FILTER_PROPERTIES,
       groupBy: {
         type: 'string', enum: [...GROUP_BY],
-        description: 'Gruplama boyutu: status, priority, project, assignee (bir görev birden çok sorumluda sayılabilir), deadline (termin kovası), target_month (termin ayı).'
+        description: 'Gruplama boyutu: status, priority, project, assignee (bir görev birden çok sorumluda sayılabilir), deadline (termin kovası), target_month (termin ayı), department/unit (sorumlunun bölümü/birimi; bir görev birden çok birimde sayılabilir).'
       },
       limit: LIMIT_PROPERTY(25, 10)
     }
@@ -477,7 +499,7 @@ const taskAnalytics = {
     const groupBy = args.groupBy || null;
     const limit = args.limit ?? 10;
     const { scope } = await call.authorization();
-    const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' });
+    const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' || ORGANIZATION_GROUP_BY.includes(groupBy) });
     // Ekip kapsamında sorumlu gruplaması yalnızca yönetim kapsamındaki kişilerdir (görevin kapsam dışı eş sorumlusu sayılmaz).
     const context = { projects, assignees, today: call.today, teamOnly: filters.assignee === 'team' };
     let groups = null;
@@ -520,7 +542,8 @@ const taskAnalytics = {
         definitions: {
           ...METRIC_DEFINITIONS.taskTotals,
           today: call.today,
-          ...(groupBy === 'assignee' ? { assignee: METRIC_DEFINITIONS.assigneeGrouping } : {})
+          ...(groupBy === 'assignee' ? { assignee: METRIC_DEFINITIONS.assigneeGrouping } : {}),
+          ...(ORGANIZATION_GROUP_BY.includes(groupBy) ? { organization: METRIC_DEFINITIONS.organizationGrouping } : {})
         }
       },
       scope: descriptor,

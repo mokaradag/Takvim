@@ -701,6 +701,8 @@
 .assistant-md-table td.is-right,
 .assistant-md-table th.is-right { font-variant-numeric: tabular-nums; }
 .assistant-md-table td:first-child { min-width: 12ch; }
+/* Tablo kendi kabında yatay kayar: hücre sözcük ortasından bölünmez (dar ekranda ad ve başlıklar okunur kalır). */
+.assistant-md-table td { overflow-wrap: break-word; }
 .assistant-md-table .is-center { text-align: center; }
 .assistant-md-table .is-right { text-align: right; }
 

@@ -32,10 +32,11 @@ export const MIN_NARRATED_PROPOSITIONS = 3;
  */
 
 export const COMPOSITION_LIMITS = Object.freeze({
+  // Aşama G: analitik özetin okuma tavanı altı bölümdür (kullanıcı yönergesi); her bölümün tablosu sayfaya sığar.
   maxTables: 6,
-  // Aşama F: analitik özetin en çok dört bölümü iki özneyi karşılaştırabilir (4 × 2 ayrıntı); sayfa bundan küçük olursa
-  // karşılaştırma sunucu düzenine hiç giremez ve bölüm bölüm tekrarlanan anlatıma düşer.
-  maxDetails: 8,
+  // Aşama F: analitik özetin bölümleri iki özneyi karşılaştırabilir (bölüm × 2 ayrıntı); sayfa bundan küçük olursa
+  // karşılaştırma sunucu düzenine hiç giremez ve bölüm bölüm tekrarlanan anlatıma düşer. Aşama G: 6 × 2.
+  maxDetails: 12,
   maxCharts: 6,
   maxPropositions: 12,
   maxTitles: 3,
@@ -60,8 +61,9 @@ export function compositionLimits(detail = null) {
   const normalized = normalizeAnswerDetail(detail);
   const contract = ANSWER_DETAIL_CONTRACT[normalized];
   const wide = normalized === 'detailed';
-  return Object.freeze({ ...COMPOSITION_LIMITS, maxPropositions: contract.maxPropositions, maxBlocks: wide ? 26 : 16, maxSayBlocks: wide ? 8 : 6, maxNotes: contract.maxNotes,
-    maxTitles: wide ? 6 : normalized === 'balanced' ? 4 : COMPOSITION_LIMITS.maxTitles });
+  // Aşama G: altı bölümlü (çok kapsamlı) özet her bölümün başlığını, anlatımını ve tablosunu taşıyabilir.
+  return Object.freeze({ ...COMPOSITION_LIMITS, maxPropositions: contract.maxPropositions, maxBlocks: wide ? 32 : 24, maxSayBlocks: wide ? 10 : 8, maxNotes: contract.maxNotes,
+    maxTitles: wide ? 8 : normalized === 'balanced' ? 6 : COMPOSITION_LIMITS.maxTitles });
 }
 
 /** Grafik türleri (istenen görselleştirme biçimi); sunucunun aday türleriyle aynı kapalı sözlük. */
@@ -99,6 +101,9 @@ function chartLabels(rows) {
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const KPI_MIN_ITEMS = 3;
 const DAY_VALUE = /^\d{4}-\d{2}-\d{2}$/;
+/** Yığılmış durum grafiğinin başlığı, satırların gruplandığı boyuta göre. */
+const STACKED_TITLES = Object.freeze({ project: ['Projelere göre durum', 'Status by project'], assignee: ['Kişilere göre durum', 'Status by person'],
+  department: ['Bölümlere göre durum', 'Status by department'], unit: ['Birimlere göre durum', 'Status by unit'] });
 /** Durum bölümleri: birbirini dışlar ve birlikte bir bütün verir (açık + tamamlanan = toplam); yığılmış çubuk ancak bunlarla. */
 const PARTITIONS = Object.freeze([['tasks.todo', 'tasks.inProgress', 'tasks.done'], ['tasks.open', 'tasks.done'], ['tasks.todo', 'tasks.inProgress']]);
 /** Yapılacak + devam eden ancak nüfus yalnızca açık işlerse tam durum kırılımıdır (tamamlananlar sessizce düşmez). */
@@ -157,7 +162,10 @@ function tableCharts({ group, described, collection, complete, labels, locale, t
     const valid = indexes.every((index) => rows.every((row) => Number.isSafeInteger(row.cells[index][0].value) && row.cells[index][0].value >= 0
       && row.cells[index][0].semantic?.metric === metricOf(index)));
     if (valid) {
-      out.push({ table, column: indexes[0], columns: indexes, title: answerChartLabel(locale === 'en' ? 'Status breakdown' : 'Durum kırılımı', ANSWER_CHART_LIMITS.maxTitleChars),
+      // Aşama G: başlık satırların neye göre gruplandığını söyler ("Projelere göre durum"); grup bilinmiyorsa genel başlık.
+      const groupBy = rows.flatMap((row) => row.cells.flat()).find((fact) => fact?.semantic?.groupBy)?.semantic.groupBy;
+      const titled = STACKED_TITLES[groupBy] || ['Durum kırılımı', 'Status breakdown'];
+      out.push({ table, column: indexes[0], columns: indexes, title: answerChartLabel(titled[locale === 'en' ? 1 : 0], ANSWER_CHART_LIMITS.maxTitleChars),
         unit: 'count', evidenceId: group.evidenceId, types: ['stacked'],
         series: indexes.map((index) => answerChartLabel(described.columns[index].label)),
         stacked: rows.map((row, position) => ({ label: labels[position], values: indexes.map((index) => row.cells[index][0].value) })) });
@@ -252,7 +260,33 @@ function certaintyProposition(table, title, locale, names) {
  * tablosu döndürebilir (ör. portföy özeti ve proje karşılaştırması): başlık, bölümün tablo taşıyıp taşımadığına göre ayrışır.
  */
 const GROUP_SECTIONS = Object.freeze({ project: ['Proje dağılımı', 'By project'], status: ['Durum dağılımı', 'By status'], assignee: ['Kişilere göre dağılım', 'By person'],
-  priority: ['Öncelik dağılımı', 'By priority'], deadline: ['Termin dağılımı', 'By deadline'], target_month: ['Aylara göre terminler', 'Deadlines by month'] });
+  priority: ['Öncelik dağılımı', 'By priority'], deadline: ['Termin dağılımı', 'By deadline'], target_month: ['Aylara göre terminler', 'Deadlines by month'],
+  department: ['Bölümlere göre dağılım', 'By department'], unit: ['Birimlere göre dağılım', 'By unit'] });
+
+const LAYER_TITLES = Object.freeze({ self: ['Kendi işleriniz', 'Your work'], team: ['Ekibiniz', 'Your team'], unit: ['Biriminiz', 'Your unit'], department: ['Bölümünüz', 'Your department'],
+  directorate: ['Direktörlüğünüz', 'Your directorate'], all: ['Görebildiğiniz bütün işler', 'All the work you can see'] });
+
+/** Çok kapsamlı özetin kapsamı bir bölümün kanıt süzgeçleriyle eşleşiyor mu (yalnızca kapsam alanları; ad metni değil, tür). */
+function layerMatches(layer, filters) {
+  if (layer.scope === 'self') return filters.assignee === 'me';
+  if (layer.scope === 'team') return filters.assignee === 'team' && (filters.teamLevel || null) === (layer.level || null);
+  if (layer.scope === 'person') return filters.assignee === 'person' && filters.personSicil != null;
+  if (layer.scope === 'project') return !filters.assignee && Boolean(filters.projectId);
+  return !filters.assignee && filters.personSicil == null && !filters.projectId;
+}
+
+function filtersOfPart(parts, ordinal) {
+  return (parts.find((item) => item.index + 1 === ordinal)?.presentation?.facts || []).map((item) => item.fact?.semantic?.filters).find(Boolean) || {};
+}
+
+/** Kapsamın sunucu başlığı; adlı kişi/proje kapsamında sunucunun çözdüğü ad (kullanıcının yazımı değil). */
+function layerTitle(layer, filters, locale) {
+  const lang = locale === 'en' ? 1 : 0;
+  if (layer.scope === 'person' && typeof filters.person === 'string' && filters.person.trim() && filters.person !== 'Seçilen kişi') return filters.person.trim();
+  if (layer.scope === 'project' && typeof filters.project === 'string' && filters.project.trim()) return filters.project.trim();
+  const key = layer.scope === 'team' && layer.level ? layer.level : ['projects', 'all'].includes(layer.scope) ? 'all' : layer.scope;
+  return (LAYER_TITLES[key] || LAYER_TITLES.all)[lang];
+}
 
 function sectionTitle(tool, locale, { rows = false, groupBy = null } = {}) {
   const en = locale === 'en';
@@ -301,7 +335,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   const derived = [];
   let overflow = false;
   // Aşama F: bölümler arası bulgular (giriş ve sonuç). Yalnızca analitik özet yanıtında; sunucu yazar, model seçmez.
-  const synthesis = analyst ? analyticalSynthesis(parts, { locale, detail: answerDetail }) : null;
+  const synthesis = analyst ? analyticalSynthesis(parts, { locale, detail: answerDetail, focus: outline?.focus || [] }) : null;
   const comparisonSlots = Math.min(2, (synthesis?.findings || []).filter((finding) => finding.kind === 'subjectComparison').reduce((sum, finding) => sum + Object.keys(finding.metrics).length, 0));
   // İki öznenin karşılaştırmasında tek öznenin gösterge kartı yanıltıcıdır (öteki özne kartta yoktur): karşılaştırma çubukları yeter.
   const scopedSubjects = new Set(parts.flatMap((part) => (part.presentation?.facts || []).map(({ fact }) => {
@@ -464,7 +498,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       }
       // Görev sonucunda sayım, ölçüt listesi yerine doğal cümledir ("Ekibinizde şu anda **1** gecikmiş görev var."). Aşama F:
       // çok satırlı listede de (doğrulanmış anlatımla aynı biçimde); doğal cümle süzgeçleri söyleyemezse ölçütlü cümle kalır.
-      const lead = taskCountLead(group, locale);
+      const lead = taskCountLead(group, locale, { empty: (presentation.empty || []).includes(group.evidenceId) });
       const detailText = renderGroupDetails(group, { locale, empty: presentation.empty || [], layout: presentation.layout, lead });
       if (detailText) {
         if (details.size >= COMPOSITION_LIMITS.maxDetails) { overflow = true; continue; }
@@ -519,7 +553,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   // Ayrıntılı yanıt bölümlere ayrılır: doğal başlığı olmayan bölüm, kanıtının sunucu konu adını başlık alır (olgu taşımaz).
   // Aşama F: üç ya da daha çok bölümlü analitik özet Dengeli ayrıntıda da bölüm başlıklarıyla yapılandırılır (giriş → bölümler →
   // öncelikler); başlık olgu taşımaz. Bir bölüm başlıksız kalırsa aşağıdaki kural bütün başlıkları kaldırır.
-  const sectioned = answerDetail === 'detailed' || (analyst && answerDetail === 'balanced' && contentParts.size >= 3);
+  const sectioned = answerDetail === 'detailed' || (analyst && answerDetail === 'balanced' && (contentParts.size >= 3 || outline?.layers?.length > 1));
   if (limits !== COMPOSITION_LIMITS && sectioned) {
     for (const part of [...contentParts].sort((a, b) => a - b)) {
       if ([...titles.values()].some((item) => item.part === part) || titles.size >= limits.maxTitles) continue;
@@ -532,6 +566,35 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       const id = `H${titles.size + 1}`;
       titles.set(id, Object.freeze({ id, part, text, markdown: `#### ${escapedFactText(text)}` }));
       viewTitles.push({ id, part, text });
+    }
+  }
+  // Aşama G — çok kapsamlı özet: her bölüm kendi kapsamının sunucu başlığını alır ("Kendi işleriniz", "Ekibiniz · Kişilere göre
+  // dağılım"); kapsamlar bildirim sırasıyla okunur. Başlık olgu taşımaz; nüfusu kanıttaki süzgeçlerden adlandırır. Bir bölümün
+  // kapsamı belirlenemezse çok kapsamlı başlıklar kurulmaz (aşağıdaki kural bütün başlıkları kaldırır).
+  if (outline?.layers?.length > 1 && limits !== COMPOSITION_LIMITS && answerDetail !== 'short') {
+    const layered = [...contentParts].sort((a, b) => a - b).map((part) => {
+      const facts = parts.find((item) => item.index + 1 === part)?.presentation?.facts || [];
+      const filters = facts.map((item) => item.fact?.semantic?.filters).find(Boolean) || {};
+      const layer = outline.layers.findIndex((item) => layerMatches(item, filters));
+      const groupBy = facts.map((item) => item.fact?.semantic?.groupBy).find(Boolean) || null;
+      const tool = facts.map((item) => item.fact?.semantic?.provenance?.tool).find(Boolean) || null;
+      return { part, layer, groupBy, tool, evidenceId: facts[0]?.evidenceId || null, rows: facts.some((item) => item.fact?.semantic?.row) };
+    });
+    if (layered.every((item) => item.layer >= 0)) {
+      titles.clear();
+      viewTitles.length = 0;
+      const seenLayers = new Set();
+      for (const item of layered) {
+        const owner = layerTitle(outline.layers[item.layer], filtersOfPart(parts, item.part), locale);
+        const first = !seenLayers.has(item.layer);
+        seenLayers.add(item.layer);
+        const topic = sectionTitle(item.tool, locale, { rows: item.rows, groupBy: item.groupBy });
+        const text = first && !item.rows ? owner : `${owner} · ${topic || owner}`;
+        if ([...titles.values()].some((title) => title.text === text) || titles.size >= limits.maxTitles) continue;
+        const id = `H${titles.size + 1}`;
+        titles.set(id, Object.freeze({ id, part: item.part, text, markdown: `#### ${escapedFactText(text)}`, ...(item.evidenceId ? { evidenceId: item.evidenceId } : {}) }));
+        viewTitles.push({ id, part: item.part, text });
+      }
     }
   }
   // Bölümlerin doğal nüfus adları (başlıklar aşağıda kaldırılsa da açılış cümlesi için saklanır).
@@ -1425,6 +1488,15 @@ export function renderComposition(composition, validated) {
   // Bulgu cümlelerinin kaynakları yalnızca aynı sayfanın doğrulanmış kanıtlarıdır.
   const synthesis = render.synthesis || null;
   if (synthesis?.intro) {
+    // Aşama G: giriş (asıl yanıt) ve bölümler arası analiz paragrafı ayrı paragraflardır; her biri kendi kaynaklarını taşır.
+    const insights = synthesis.intro.insights;
+    if (insights) {
+      // Karışık kapsamda her kapsamın analizi ayrı paragraftır (kendi kaynaklarıyla); tek kapsamda tek paragraf.
+      for (const paragraph of [...(insights.paragraphs || [insights])].reverse()) {
+        out.unshift({ text: `${paragraph.markdown} ${citation(paragraph.evidenceIds)}`, part: null, rowBearing: false });
+      }
+      cited.push(...insights.evidenceIds);
+    }
     out.unshift({ text: `${synthesis.intro.markdown} ${citation(synthesis.intro.evidenceIds)}`, part: null, rowBearing: false });
     cited.push(...synthesis.intro.evidenceIds);
   } else if (render.framing) out.unshift({ text: render.framing.markdown, part: null, rowBearing: false });

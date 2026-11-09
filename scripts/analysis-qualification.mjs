@@ -16,6 +16,9 @@
  *      karşılıkları uçtan uca (planlayıcı + düzen model; sentetik veri ve vakanın profili), ayrık küme (PHASE4E_SET=holdout)
  *      yalnızca planlayıcı. Vaka sınıfı (tam / kısmi / sınırlı) beklentiyi belirler; rapor içerik taşımaz, yalnızca bitiş,
  *      kapsam ihlalleri, sunum biçimi, bulgu ve grafik sayıları.
+ *   G  Aşama G yönetici ve proje zekâsı kıyas kümesi (`test/fixtures/bilgin-executive-benchmark.json`, sentetik): hedefli vakalar
+ *      uçtan uca (planlayıcı + düzen model; yönetici sentetik verisi ve vakanın profili; çok turlu vakalar sırayla), bağımsız ayrık
+ *      küme (PHASE4E_SET=holdout) yalnızca planlayıcı. Çok kapsamlı vakada her kapsamın kendi nüfusu okunmalıdır.
  * Derin modele giden her çağrı modele GİTMEZ; sayılır ve başarısızlıktır (zayıf model kabulü güçlü modelle gizlenmez).
  * PHASE4E_CASES=id,… yalnızca o vakaları (başarısızların yeniden koşusu) çalıştırır. Rapor içerik taşımaz.
  * PLANNER_CLAUDE_FORCED_RETRY=1: CLI zorunlu aracı kısıtlı çözümle uygulayamadığı için model zorunlu turda başka bir araç
@@ -30,6 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { captureConsole } from '../test/helpers/aiStack.mjs';
 import { AYSE, NOW, rotaToolSeed } from '../test/helpers/aiToolFixtures.mjs';
 import { analysisBenchmarkSeed, BENCH_PROFILES } from '../test/helpers/analysisBenchmarkSeed.mjs';
+import { executiveBenchmarkSeed, EXEC_PROFILES } from '../test/helpers/executiveBenchmarkSeed.mjs';
 import { answerQuality } from '../test/helpers/answerQuality.mjs';
 import { phase4eConversation, turnViolations, renderedCharts } from '../test/helpers/phase4eScenario.mjs';
 import { planCase } from './planner-evaluation.mjs';
@@ -43,6 +47,7 @@ const EXPECTED_MODEL = process.env.PLANNER_CLAUDE_MODEL || 'claude-haiku-4-5-202
 const corpus = JSON.parse(readFileSync(new URL('../test/fixtures/ai-phase4e-corpus.json', import.meta.url), 'utf8'));
 const followups = JSON.parse(readFileSync(new URL('../test/fixtures/ai-phase4e-followups.json', import.meta.url), 'utf8'));
 const benchmark = JSON.parse(readFileSync(new URL('../test/fixtures/bilgin-analysis-benchmark.json', import.meta.url), 'utf8'));
+const executive = JSON.parse(readFileSync(new URL('../test/fixtures/bilgin-executive-benchmark.json', import.meta.url), 'utf8'));
 const summary = { tier: TIER, model: EXPECTED_MODEL, cases: 0, passed: 0, failed: [], firstPass: 0, repairs: 0, escalations: 0, turns: 0, results: [] };
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
@@ -113,9 +118,17 @@ export function plannerScore(result, expect) {
   const decision = result.decisions.at(-1) || null;
   const intent = result.outcome === 'planned' ? 'rota' : decision?.intent || result.outcome;
   if (result.outcome === 'error') failures.push(`hata ${result.error}`);
-  if (intent !== expect.intent) failures.push(`karar ${intent} ≠ ${expect.intent}`);
+  // Aşama G: birden çok doğru kararı olan ayrık vaka (ör. yetkisiz kapsamda ret ya da kısmi yanıt) `intentAny` taşır.
+  if (expect.intentAny ? !expect.intentAny.includes(intent) : intent !== expect.intent) failures.push(`karar ${intent} ≠ ${expect.intentAny ? expect.intentAny.join('|') : expect.intent}`);
   if (expect.reason && decision?.reason !== expect.reason) failures.push(`neden ${decision?.reason} ≠ ${expect.reason}`);
   const requests = result.plan?.requests || [];
+  // Aşama G: çok kapsamlı beklentide her kapsam (kapsam + düzey) kabul edilen planın birincil ya da ek kapsamıdır; tek kapsam puanı uygulanmaz.
+  if (expect.layers && result.outcome === 'planned') {
+    const analysis = result.plan?.analysis;
+    // Kabul edilen kararın özeti kapsamları `layers` olarak taşır (birincil + ek); ham plan biçimi `also`.
+    const declared = analysis ? (analysis.layers || [analysis, ...(analysis.also || [])]).map((layer) => `${layer.scope}|${layer.level || ''}`) : [];
+    for (const layer of expect.layers) if (!declared.includes(`${layer.scope}|${layer.level || ''}`)) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} bildirilmedi`);
+  }
   if (expect.intent === 'rota' && result.outcome === 'planned') {
     const scope = scopeOf(requests);
     // Beklentide kapsam yoksa (ayrık kümede bilinçli olarak serbest) kapsam puanlanmaz; Tier B vakalarının hepsi kapsam taşır.
@@ -259,15 +272,42 @@ export function benchmarkExpectation(item) {
   };
   const from = resolveDay(analysis?.dateFrom);
   const to = resolveDay(analysis?.dateTo);
+  // Aşama G: çok kapsamlı planda her kapsamın kendi nüfusu okunur; tek kapsam beklentisi yerine kapsam başına okuma beklenir.
+  const layers = analysis?.also?.length ? [analysis, ...analysis.also].map(({ scope: layer, level }) => ({ scope: layer, ...(level ? { level } : {}) })) : null;
   return { ...item.expect, ...(item.handling !== 'limitation' ? { finish: 'stop' } : { finish: 'unsupported', noData: true }),
-    ...(scope ? { scope } : {}),
-    ...(scope === 'team' ? { assignee: 'team' } : scope === 'self' ? { assignee: 'me' } : {}),
-    ...(analysis?.level ? { level: analysis.level } : {}), ...(analysis?.focus ? { focus: [...analysis.focus] } : {}),
+    ...(scope ? { scope } : {}), ...(layers ? { layers } : {}),
+    ...(layers ? {} : scope === 'team' ? { assignee: 'team' } : scope === 'self' ? { assignee: 'me' } : {}),
+    ...(analysis?.level && !layers ? { level: analysis.level } : {}), ...(analysis?.focus ? { focus: [...analysis.focus] } : {}),
     ...(scope === 'project' ? { project: true, projectIds: names.map((name) => seed.projects.find((row) => row.ProjectName === name)?.ProjectId || `bilinmeyen:${name}`) } : {}),
     ...(scope === 'person' ? { person: true, people: names.map((name) => seed.people.find((row) => row.DisplayName === name)?.Sicil || -1) } : {}),
     ...(from && to ? { window: [from, to] } : {}),
     ...(item.plan?.table ? { table: true } : {}),
     ...(item.expect?.chart || item.expect?.chartTypes?.length ? { chart: true } : {}) };
+}
+
+/**
+ * Aşama G vakasının canlı beklentisi: altın planın kapsamı ve düzeyi (tek kapsamda her nüfus okumasında; çok kapsamlıda kapsam başına),
+ * vaka sınıfının bitişi ve vakanın kendi beklentileri (bulgu, çekince, zorunlu/yasak ifade). Yetkisiz kapsam `deniedLayers` ile
+ * okunmak zorunda değildir. Sunucu planı modelin yerine koymaz.
+ */
+export function executiveExpectation(item) {
+  const turns = item.turns || [{ text: item.text, plan: item.plan }];
+  // Takip turu ("previous") önceki turun kapsamını sürdürür; açıklama ya da ret bekleyen vakada kapsam okunmaz.
+  const analysis = item.handling === 'clarify' ? null
+    : turns.map((turn) => turn.plan?.analysis).filter((entry) => entry && entry.scope !== 'previous').at(-1) || null;
+  const scope = analysis?.scope;
+  const denied = (layer) => (item.expect?.deniedLayers || []).some((entry) => entry.scope === layer.scope && (entry.level || null) === (layer.level || null));
+  const layers = analysis?.also?.length ? [analysis, ...analysis.also].map(({ scope: layer, level }) => ({ scope: layer, ...(level ? { level } : {}) }))
+    .map((layer) => (denied(layer) ? { ...layer, optional: true } : layer)) : null;
+  const finish = item.expect?.finish || { denied: 'unavailable', clarify: 'clarification', limitation: 'unsupported' }[item.handling] || 'stop';
+  const seed = executiveBenchmarkSeed();
+  const names = analysis?.names || [];
+  return { ...item.expect, finish, ...(item.handling === 'limitation' ? { noData: true } : {}),
+    ...(scope && !item.expect?.scopeDenied ? { scope } : {}), ...(layers ? { layers } : {}),
+    ...(layers || item.expect?.scopeDenied ? {} : scope === 'team' ? { assignee: 'team', ...(analysis.level ? { level: analysis.level } : {}) } : scope === 'self' ? { assignee: 'me' } : {}),
+    ...(scope === 'project' && !item.expect?.scopeDenied ? { project: true, projectIds: names.map((name) => seed.projects.find((row) => row.ProjectName === name)?.ProjectId || `bilinmeyen:${name}`) } : {}),
+    ...(scope === 'person' && !item.expect?.scopeDenied ? { person: true, people: names.map((name) => seed.people.find((row) => row.DisplayName === name)?.Sicil || -1) } : {}),
+    ...(turns.at(-1).plan?.visual ? { chart: true } : {}) };
 }
 
 /** Düzen katmanı MODELİN düzenini sınar: sunucunun belirlenimci yedeği (model düzeni reddedildi) geçer sayılmaz. */
@@ -305,17 +345,23 @@ export function record(entry) {
   assert.deepEqual(entry.failures, [], `${entry.id}: ${entry.failures.join('; ')}`);
 }
 
-/** Vakalar sırayla kaydedilir; altyapı hatası korunur ve sonraki vaka başlatılmaz. */
+/**
+ * Vakalar sırayla kaydedilir; altyapı hatası korunur ve sonraki vaka başlatılmaz. Bütün vakalar TEK üst sınamanın alt
+ * sınamalarıdır: üst düzeyde ardışık beklenen sınamalarda kök sınama ilk vakadan sonra kapanıp özeti (test.after) erken
+ * yazıyordu; rapor yalnızca ilk vakayı içeriyordu.
+ */
 export async function runQualificationCases(items, execute) {
-  for (const item of items) {
-    let infrastructure = false;
-    await test(`nitelendirme vakası: ${item.id}`, async (t) => {
-      const entry = await execute(t, item);
-      infrastructure = Boolean(entry.infrastructure || entry.turns?.some((turn) => turn.infrastructure));
-      record(entry);
-    });
-    if (infrastructure) break;
-  }
+  await test('nitelendirme vakaları', async (parent) => {
+    for (const item of items) {
+      let infrastructure = false;
+      await parent.test(`nitelendirme vakası: ${item.id}`, async (t) => {
+        const entry = await execute(t, item);
+        infrastructure = Boolean(entry.infrastructure || entry.turns?.some((turn) => turn.infrastructure));
+        record(entry);
+      });
+      if (infrastructure) break;
+    }
+  });
 }
 
 const direct = (() => {
@@ -378,6 +424,27 @@ if (direct) {
       if (item.handling === 'partial' && result.finish !== 'stop') failures.push(`kısmi vaka bitişi ${result.finish}`);
       return { id: item.id, order: item.order, observed: item.observed, handling: item.handling, turns: [result], failures };
     });
+  } else if (TIER === 'G' && process.env.PHASE4E_SET === 'holdout') {
+    await runQualificationCases(pick(executive.holdout), async (_t, item) => {
+      const entry = await plannerCase(item);
+      if (entry.firstPass) summary.firstPass += 1;
+      summary.repairs += Math.max(0, entry.rounds - 1);
+      summary.turns += 1;
+      return { ...entry, id: item.id };
+    });
+  } else if (TIER === 'G') {
+    await runQualificationCases(pick(executive.scenarios), async (t, item) => {
+      t.mock.timers.enable({ apis: ['Date'], now: NOW });
+      const seed = executiveBenchmarkSeed();
+      t.mock.timers.reset();
+      // Çok turlu vakada önceki turlar yalnızca doğrulanmış yanıtla biter; puan son turun beklentisidir.
+      const turns = (item.turns || [{ text: item.text }]).map((turn, index, all) => ({ text: turn.text,
+        requireComposed: index === all.length - 1 && item.handling === 'full', expect: index === all.length - 1 ? executiveExpectation(item) : { finish: 'stop' } }));
+      const results = await conversationCase(t, turns, { plannerModel: true, composeModel: true, seed, sicil: EXEC_PROFILES[item.profile] });
+      const failures = results.flatMap((row, index) => row.failures.map((failure) => (results.length > 1 ? `#${index + 1} ${failure}` : failure)));
+      if (item.handling === 'partial' && results.at(-1)?.finish !== 'stop' && !item.expect?.finish) failures.push(`kısmi vaka bitişi ${results.at(-1)?.finish}`);
+      return { id: item.id, persona: item.persona, handling: item.handling, turns: results, failures };
+    });
   } else if (TIER === 'E') {
     for (const [id, turns] of pick(E2E_CASES)) {
       test(`senaryo: ${id}`, async (t) => {
@@ -385,5 +452,5 @@ if (direct) {
         record({ id, turns: results, failures: results.flatMap((row, index) => row.failures.map((failure) => `#${index + 1} ${failure}`)) });
       });
     }
-  } else throw new Error('PHASE4E_TIER: B | C | D | E | F');
+  } else throw new Error('PHASE4E_TIER: B | C | D | E | F | G');
 }

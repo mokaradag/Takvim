@@ -15,9 +15,9 @@ const total = (id, personSicil, metric, value, extra = {}) => ({ evidenceId: id,
   complete: true, provenance: { tool: 'rota_task_analytics', today: TODAY }, filters: { assignee: 'person', personSicil, person: `Kişi ${personSicil}`, ...extra }
 } } });
 
-test('planlayıcı sözleşmesindeki dört yön kabulden yürütme isteklerine eksiksiz ulaşır', () => {
+test('planlayıcı sözleşmesindeki yönler (Aşama G: en çok 6) kabulden yürütme isteklerine eksiksiz ulaşır', () => {
   const schema = typedPlanningTool([]).parameters.properties.analysis;
-  assert.equal(schema.properties.focus.maxItems, 4);
+  assert.equal(schema.properties.focus.maxItems, 6);
   const analysis = { scope: 'all', focus: ['status', 'overdue', 'workload', 'upcoming'] };
   const plan = unpack({ intent: 'rota', language: 'tr', analysis });
   assert.equal([plan.request, ...plan.additionalRequests].length, 4);
@@ -90,7 +90,8 @@ test('karşılaştırmanın öncelikleri ilk bölüm yerine her öznenin kendi k
     filters: { assignee: index ? 'me' : 'person', person: index ? undefined : 'Ayşe Yılmaz', personSicil: index ? undefined : 1 }, evidenceIds: [`R${index + 1}`] }));
   const text = synthesisNarrative(findings).conclusion.markdown;
   const lines = text.split('\n').filter((line) => /^\d+\. /.test(line));
-  assert.match(lines[0], /^1\. \*\*kendi işleriniz\*\*: \*\*İş 1\*\*/);
+  // Aşama G: sahip kapsamı doğal yer adıyla ("Kendi işlerinizde:"), adlı kişi kendi adıyla söylenir.
+  assert.match(lines[0], /^1\. Kendi işlerinizde: \*\*İş 1\*\*/);
   assert.match(lines[1], /^2\. \*\*Ayşe Yılmaz\*\*: \*\*İş 0\*\*/);
 });
 
@@ -124,9 +125,11 @@ test('farklı öznenin tablo yoğunlaşması bağımsız liste yoğunlaşmasın�
   const findings = analyticalFindings([part(tableFacts([['Alfa', 9, 4, 3], ['Beta', 3, 1, 1]], { assignee: 'person', personSicil: 1, person: 'Ayşe' })), part(facts, 1)]);
   const list = findings.find((f) => f.kind === 'overdueProjectShare');
   assert.deepEqual(list.metrics, { overdue: 2, total: 4, share: 50 });
-  const intro = synthesisNarrative(findings).intro.plain;
+  // Aşama G: giriş asıl yanıt, diğer bölümler arası bulgular analiz paragrafıdır; ikisi birlikte bütün bulguları taşır.
+  const narrative = synthesisNarrative(findings).intro;
+  const intro = [narrative.plain, narrative.insights?.plain].filter(Boolean).join(' ');
   assert.match(intro, /ORT-A · Ortak/);
-  assert.match(intro, /kendi işleriniz/);
+  assert.match(intro, /Kendi işlerinize bakıldığında/);
 });
 
 test('çözülemeyen kişi analist öznesi olmaz ve adaş projeler tek özne sayılmaz', async () => {

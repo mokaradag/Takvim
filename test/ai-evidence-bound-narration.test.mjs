@@ -784,13 +784,13 @@ test("atılmış zayıf planın İngilizce dili temiz Derin hatasına ulaşamaz"
   assert.equal(answer.content, 'Rota verilerine ilişkin yanıt doğrulanamadı. Soruyu daha dar kapsamda yeniden deneyin.');
 });
 
-test('sayım kapsamı korunur: kilometre taşı süzgeci (false dahil) doğal cümlede düşmez, ölçütlü belirlenimci cümleye döner', async (t) => {
+test('sayım kapsamı korunur: kilometre taşı süzgeci doğal cümlede düşmez; dışlama (false) ölçütlü belirlenimci cümleye döner', async (t) => {
   const group = { tool: 'rota_task_search', evidenceId: 'R1' };
   const fallback = { markdown: 'ÖLÇÜTLÜ', plain: 'ÖLÇÜTLÜ' };
-  for (const milestone of [false, true]) {
-    const fact = { value: 2, semantic: { filters: { assignee: 'me', milestone } } };
-    assert.equal(countProposition(group, fact, 'tr', fallback).plain, 'ÖLÇÜTLÜ', String(milestone));
-  }
+  assert.equal(countProposition(group, { value: 2, semantic: { filters: { assignee: 'me', milestone: false } } }, 'tr', fallback).plain, 'ÖLÇÜTLÜ', 'false');
+  // Aşama G: yalnızca kilometre taşları süzgeci doğal addır; süzgeç cümlede kilometre taşı olarak korunur.
+  assert.equal(countProposition(group, { value: 2, semantic: { filters: { assignee: 'me', milestone: true } } }, 'tr', fallback).plain, '2 kilometre taşınız var.');
+  assert.equal(titleCandidate({ tool: 'rota_task_search', filters: { assignee: 'me', milestone: true }, locale: 'tr' }), 'Kilometre taşlarınız');
   assert.equal(countProposition(group, { value: 2, semantic: { filters: { assignee: 'me', milestone: null } } }, 'tr', fallback).plain, '2 göreviniz var.');
   assert.equal(titleCandidate({ tool: 'rota_task_search', filters: { assignee: 'me', milestone: false }, locale: 'tr' }), null, 'başlık nüfusu genişletemez');
   // Gerçek yol: sayım ölçüsü bildirilmemiş tam liste; nüfus sayımı aynı süzgeçlerin ölçütlü cümlesidir.

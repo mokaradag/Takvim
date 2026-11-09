@@ -6,6 +6,9 @@ import { invalidArguments } from '../toolErrors.js';
 import { dataText, ID_PROPERTY, LIMIT_PROPERTY, PERSON_SICIL_PROPERTY, searchedScope } from './rotaToolSupport.js';
 import { loadFilteredFacts } from './taskTools.js';
 import { assignmentState, foldText, isDueWithin, isOverdue, normalizeTaskFilters, DUE_SOON_DAYS, TEAM_LEVELS } from './taskFacts.js';
+
+/** Aşama G: tek okumada eklenebilecek en büyük ekip kadrosu (aşılırsa kadro kesik sayılır, tamlık iddiası kurulmaz). */
+const TEAM_ROSTER_LIMIT = 50;
 import { decimalFromScaled, scaledDecimal } from '../../../../domain/numbers/fixedDecimal.js';
 
 /* ── rota_workload_summary ────────────────────────────────── */
@@ -37,7 +40,7 @@ const workloadSummary = {
     const filters = normalizeTaskFilters({ projectId: args.projectId, status: ['todo', 'in_progress'], personSicil: args.personSicil,
       ...(team ? { assignee: 'team', ...(args.teamLevel ? { teamLevel: args.teamLevel } : {}) } : args.teamLevel ? { teamLevel: args.teamLevel } : {}) });
     const { scope } = await call.authorization();
-    const { facts, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: true });
+    const { facts, assignees, roster } = await loadFilteredFacts(call, scope, filters, { withAssignees: true, rosterRows: team && args.personSicil == null ? TEAM_ROSTER_LIMIT : 0 });
     const people = new Map();
     const hoursByPerson = new Map();
     let unassigned = 0;
@@ -46,7 +49,9 @@ const workloadSummary = {
     for (const fact of facts) {
       // Kısıtlı kimlik görünümü SQL sonucunun bütün ortak sorumluları içerdiğini kanıtlayamaz.
       // Bu durum gizli atama varlığından bağımsızdır; gizli atama sayısı veya varlığı açıklanmaz.
-      if (!fact.identityBase) incompleteAssignments = true;
+      // Aşama G: ekip kapsamında yalnızca ekip üyeleri sayılır ve ekip üyesinin ataması yöneticisine her erişim düzeyinde açıktır
+      // (yönetim kapsamı kimlik görünürlüğü); kapsam dışı gizli eş sorumlu ekip dağılımına zaten girmez.
+      if (!fact.identityBase && !team) incompleteAssignments = true;
       if (assignmentState(fact) === 'unassigned') {
         unassigned += 1;
         continue;
@@ -82,9 +87,25 @@ const workloadSummary = {
       }
     }
     for (const [sicil, hours] of hoursByPerson) people.get(sicil).plannedHoursOnAssignedTasks = decimalFromScaled(hours, 2);
+    // Aşama G — ekip kadrosu: yönetim kapsamındaki ve görünür açık işi olmayan üyeler sıfır satırla eklenir. Dağılım ancak
+    // kadro kesik değilse, her üyenin adı dizinde çözülüyorsa ve her görünür kişi kadrodaysa bütün ekibi temsil eder.
+    // Kişi ya da proje süzgeci kadroyu değiştirmez; kişi süzgecinde kadro okunmaz.
+    let rosterComplete = false;
+    if (roster) {
+      const members = new Map(roster.members.map((member) => [member.sicil, member]));
+      rosterComplete = !roster.truncated && roster.members.every((member) => member.name) && [...people.keys()].every((sicil) => members.has(sicil));
+      if (rosterComplete) {
+        for (const member of roster.members) {
+          if (people.has(member.sicil)) continue;
+          people.set(member.sicil, { sicil: member.sicil, name: dataText(member.name, 120), openTasks: 0, inProgress: 0, overdue: 0, dueNext7Days: 0,
+            plannedHoursOnAssignedTasks: null, tasksWithPlannedHours: 0 });
+        }
+      }
+    }
     const ordered = [...people.values()].sort((left, right) => right.openTasks - left.openTasks
       || right.overdue - left.overdue || left.name.localeCompare(right.name, 'tr') || left.sicil - right.sicil);
     const page = ordered.slice(0, limit);
+    const withoutOpen = ordered.filter((person) => person.openTasks === 0).length;
     const descriptor = searchedScope(scope, filters.projectId);
     // Sayıların nüfusunu belirleyen seçiciler olgunun niteleyicisidir (proje ve kişi adıyla).
     const projectName = filters.project || null;
@@ -104,11 +125,13 @@ const workloadSummary = {
         unassignedOpenTasks: unassigned,
         representedOpenTasks: facts.length - unassigned - unrepresented,
         unrepresentedOpenTasks: unrepresented,
-        // Görev okuması sıfır yüklü ekip üyelerinin kadrosunu kanıtlamaz. Kimlik çözülmeyen atamalar da tam dağılım değildir.
-        populationComplete: page.length === ordered.length && !team && !incompleteAssignments && unrepresented === 0,
+        // Görev okuması sıfır yüklü ekip üyelerinin kadrosunu kanıtlamaz; ekipte kadro (yönetim kapsamı) okunup eksiksiz
+        // eklendiyse kanıtlar. Kimlik çözülmeyen atamalar da tam dağılım değildir.
+        populationComplete: page.length === ordered.length && (!team || rosterComplete) && !incompleteAssignments && unrepresented === 0,
         notes: [
           WORKLOAD_NOTE,
-          ...(team ? ['Kişi satırları yalnızca çözümlenmiş, görünür atamaları kapsar; sıfır açık işi olan ekip üyelerinin tamamı bilinmediğinden ekip dengesi veya yoğunlaşması çıkarılamaz.'] : []),
+          ...(team && !rosterComplete ? ['Kişi satırları yalnızca çözümlenmiş, görünür atamaları kapsar; sıfır açık işi olan ekip üyelerinin tamamı bilinmediğinden ekip dengesi veya yoğunlaşması çıkarılamaz.'] : []),
+          ...(team && rosterComplete ? [`Kişi satırları yönetim kapsamınızdaki bütün ekip üyelerini içerir; ${withoutOpen} üyenin görünür açık görevi yok. Görünür açık görevi olmaması kişinin boşta olduğunu göstermez.`] : []),
           ...(unrepresented ? [`${unrepresented} açık görev kişi satırlarında temsil edilemiyor; kimliği çözümlenmeyen sorumlular açıklanmaz.`] : []),
           'Birden çok sorumlusu olan görev her sorumluda ayrı sayılır.',
           'plannedHoursOnAssignedTasks, kişinin atandığı görevlerin task düzeyindeki planlanan saat toplamıdır; kişi-saat tahsisi değildir. Yalnızca değeri girilmiş görevler (tasksWithPlannedHours) toplanır; boş değer sıfır sayılmaz.'

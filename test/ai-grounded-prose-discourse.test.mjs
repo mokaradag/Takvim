@@ -55,7 +55,8 @@ function hostileLayout(view, { skipRequired = false } = {}) {
 }
 
 function teamSeed() {
-  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }] });
+  // Aşama G: kadro okunur; "kadro eksik" vakaları için yönetim kapsamında dizin kaydı çözülemeyen bir üye vardır (kadro tamlığı kanıtlanamaz).
+  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }, { ManagerSicil: AYSE, EmployeeSicil: 919999 }] });
   seed.taskAssignees.push({ TaskId: TASKS.LITERAL, Sicil: ALI_1 }, { TaskId: TASKS.UNASSIGNED, Sicil: ALI_1 }, { TaskId: TASKS.OVERDUE, Sicil: ALI_1 },
     { TaskId: TASKS.SERIES, Sicil: ZEYNEP });
   return seed;
@@ -501,7 +502,8 @@ test('bölüm bölme ve sunucu tamamlama sonrasında toplam blok sınırı korun
     assert.equal(accepted.ok, true, JSON.stringify(accepted.issues));
     assert.equal(accepted.blocks.length, 18);
     assert.equal(accepted.prose.supplemented, 6 - ids.length);
-    const rejected = validateComposition({ view: boundary.view, render }, { blocks });
+    // Aşama G: Dengeli sayfa altı bölümü taşıyabilir (24 blok); sınır davranışı açık bir sınırla (17) sınanır.
+    const rejected = validateComposition({ view: boundary.view, render: { ...render, limits: { ...render.limits, maxBlocks: 17 } } }, { blocks });
     assert.equal(rejected.ok, false, 'ham girdi sınıra sığsa da genişleyen düzen sığmaz');
     assert.equal(rejected.issues[0], 'BLOCK_COUNT');
   }

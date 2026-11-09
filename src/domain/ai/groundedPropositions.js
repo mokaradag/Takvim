@@ -107,7 +107,8 @@ function taskPopulation(filters, locale) {
     : f.assignee === 'person' && typeof f.person === 'string' && f.person.trim() && f.person !== UNRESOLVED_PERSON ? f.person.trim() : null;
   if (!neutral(f.personSicil) && !person) return null;
   // Kilometre taşı süzgecinin iki değeri de nüfusu daraltır (`false` kilometre taşlarını dışlar; taskFacts.matchesTaskFilters).
-  if (typeof f.milestone === 'boolean') return null;
+  // Aşama G: yalnızca kilometre taşları (`true`) doğal addır ("kilometre taşı"); dışlama doğal söylenmez.
+  if (f.milestone === false) return null;
   if (!neutral(f.projectId) && (typeof f.project !== 'string' || !f.project.trim())) return null;
   if (!neutral(f.assignee) && !['me', 'unassigned', 'team', ...(person ? ['person'] : [])].includes(f.assignee)) return null;
   if (!neutral(f.teamLevel) && (f.assignee !== 'team' || !TEAM[f.teamLevel])) return null;
@@ -138,7 +139,8 @@ function taskPopulation(filters, locale) {
     project: neutral(f.projectId) ? null : f.project.trim(),
     from: neutral(f.dateFrom) ? null : f.dateFrom,
     to: neutral(f.dateTo) ? null : f.dateTo,
-    relative: Boolean(deadline?.relative)
+    relative: Boolean(deadline?.relative),
+    milestone: f.milestone === true
   };
 }
 
@@ -165,7 +167,7 @@ function taskCountSentence(filters, count, locale, { total = false } = {}) {
   if (!population) return null;
   const { me, team, adjectives, project, relative } = population;
   if (locale === 'en') {
-    const noun = count === 1 ? 'task' : 'tasks';
+    const noun = population.milestone ? (count === 1 ? 'milestone' : 'milestones') : count === 1 ? 'task' : 'tasks';
     const tail = [...(population.after ? [` ${population.after}`] : []), ...(project ? [' in the ', v(project), ' project'] : []), ...windowParts(population, locale),
       ...(total ? [' in total'] : [])];
     const described = `${adjectives.length ? `${adjectives.join(', ')} ` : ''}${noun}`;
@@ -183,7 +185,7 @@ function taskCountSentence(filters, count, locale, { total = false } = {}) {
   const named = windowed ? adjectives.slice(1) : adjectives;
   const lead = [...(population.person ? [v(population.person), ' sorumluluğunda '] : []), ...(team ? [`${team.at} `] : []), ...(relative && !total && !windowed ? ['şu anda '] : []),
     ...(project ? [v(project), ' projesinde '] : []), ...windowParts(population, locale), ...(windowed ? [`${adjectives[0]} `] : []), ...(total ? ['toplam '] : [])];
-  const noun = `${named.length ? `${named.join(', ')} ` : ''}${me ? 'göreviniz' : 'görev'}`;
+  const noun = `${named.length ? `${named.join(', ')} ` : ''}${population.milestone ? (me ? 'kilometre taşınız' : 'kilometre taşı') : me ? 'göreviniz' : 'görev'}`;
   if (count === 0) return sentence([...lead, `${noun} yok.`]);
   return sentence([...lead, v(number(count, locale)), ` ${noun} var.`]);
 }
@@ -220,9 +222,10 @@ function numericValue(value, semantic, locale) {
 function groupPlace(groupBy, label, locale) {
   if (locale === 'en') {
     return { status: ['are in the ', v(label), ' status'], priority: ['have ', v(label), ' priority'], project: ['are in the ', v(label), ' project'],
-      target_month: ['are due in ', v(label)] }[groupBy] || ['are in the ', v(label), ' group'];
+      target_month: ['are due in ', v(label)], department: ['are assigned in ', v(label)], unit: ['are assigned in ', v(label)] }[groupBy] || ['are in the ', v(label), ' group'];
   }
-  return { status: [v(label), ' durumunda'], priority: [v(label), ' öncelikte'], project: [v(label), ' projesinde'], target_month: [v(label), ' termin ayında'] }[groupBy]
+  return { status: [v(label), ' durumunda'], priority: [v(label), ' öncelikte'], project: [v(label), ' projesinde'], target_month: [v(label), ' termin ayında'],
+    department: [v(label), ' bölümündeki sorumlularda'], unit: [v(label), ' birimindeki sorumlularda'] }[groupBy]
     || [v(label), ' grubunda'];
 }
 
@@ -282,13 +285,14 @@ export function titleCandidate({ tool, filters, groupBy = null, locale }) {
   const adjective = adjectives.length ? `${adjectives.join(', ')} ` : '';
   let text;
   if (locale === 'en') {
-    const tasks = `${me ? 'your ' : team ? `${team.en}'s ` : person ? `${person}'s ` : ''}${adjective}tasks${population.after ? ` ${population.after}` : ''}${project ? ` in the ${project} project` : ''}`;
+    const tasks = `${me ? 'your ' : team ? `${team.en}'s ` : person ? `${person}'s ` : ''}${adjective}${population.milestone ? 'milestones' : 'tasks'}${population.after ? ` ${population.after}` : ''}${project ? ` in the ${project} project` : ''}`;
     const dimension = groupBy ? GROUP_TITLES[groupBy][1] : null;
     text = dimension ? `${dimension} distribution of ${tasks}` : tasks;
   } else {
     const place = `${team ? `${team.of} ` : ''}${project ? `${project} projesindeki ` : ''}${person ? `${person} sorumluluğundaki ` : ''}`;
     text = groupBy ? `${place}${adjective}${me ? 'görevlerinizin' : team ? 'görevlerinin' : 'görevlerin'} ${GROUP_TITLES[groupBy][0]} dağılımı`
-      : `${place}${adjective}${me ? 'görevleriniz' : team ? 'görevleri' : 'görevler'}`;
+      : population.milestone ? `${place}${adjective}${me ? 'kilometre taşlarınız' : team ? 'kilometre taşları' : 'kilometre taşları'}`
+        : `${place}${adjective}${me ? 'görevleriniz' : team ? 'görevleri' : 'görevler'}`;
   }
   // Termin aralığı nüfusun parçasıdır: tek uçlu ve gruplanmış aralık da başlıkta yazılır (başlık nüfusu genişletemez).
   const { from, to } = population;
@@ -575,7 +579,9 @@ const lowerLabel = (label, locale) => String(label).toLocaleLowerCase(locale ===
 function entityLead(described, noun, locale, add, allowLead = true) {
   const en = locale === 'en';
   const counts = described.columns.map((header, index) => ({ header, index, facts: header.numeric ? columnValues(described, index, 'number') : null }))
-    .filter(({ facts }) => facts && facts.every((fact) => Number.isSafeInteger(fact.value) && fact.value >= 0 && String(fact.semantic?.metric || '').startsWith('tasks.')));
+    // Aşama G: tamamlanan iş bir baskı göstergesi değildir; "ilk sırada" yargısına girmez (tablo sütunu olarak kalır).
+    .filter(({ facts }) => facts && facts.every((fact) => Number.isSafeInteger(fact.value) && fact.value >= 0 && String(fact.semantic?.metric || '').startsWith('tasks.')
+      && fact.semantic?.metric !== 'tasks.done'));
   const total = described.rows.length;
   const overdue = counts.find(({ facts }) => facts.every((fact) => fact.semantic?.metric === 'tasks.overdue'));
   if (overdue && (noun === 'project' || allowLead)) {
@@ -1072,7 +1078,11 @@ export function fluentParagraph(entries, locale = 'tr', memory = null, emitted =
 export { sentence as factSentence, v as strongFact, t as plainFact, number as formatCount, day as formatFactDay, percent as formatPercent, ofCount as possessiveCount, locativeOf as locativeCountSuffix };
 
 /** Görev listesinin kesin sayım cümlesi; doğrulanmış anlatım ve düzen aynı nüfusu adlandırır. */
-export function taskCountLead(group, locale = 'tr') {
+export function taskCountLead(group, locale = 'tr', { empty = false } = {}) {
   const total = group.tool === 'rota_task_search' ? group.envelope.find((fact) => fact.field === 'totalCount') : null;
-  return total ? countProposition(group, total, locale, null)?.markdown ?? null : null;
+  if (total) return countProposition(group, total, locale, null)?.markdown ?? null;
+  // Aşama G: boş ve TAM görev listesi sıfır sayımın kanıtıdır; "Gösterilecek görev yok (ölçüt: …)" yerine nüfusu söyleyen doğal
+  // cümle ("Bugün terminli açık göreviniz yok."). Süzgeçler doğal söylenemiyorsa ölçütlü cümle kalır.
+  const complete = empty && group.tool === 'rota_task_search' ? group.envelope.find((fact) => fact.field === 'complete' && fact.value === true) : null;
+  return complete ? taskCountSentence(complete.semantic?.filters, 0, locale)?.markdown ?? null : null;
 }

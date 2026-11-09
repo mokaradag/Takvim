@@ -2,8 +2,11 @@
 import { createFakeDatabase, createFakeSqlServerDriver } from '../../test/helpers/fakeSqlServer.mjs';
 import { uiSeed } from './uiSeed.mjs';
 import { analysisBenchmarkSeed } from '../../test/helpers/analysisBenchmarkSeed.mjs';
+import { executiveBenchmarkSeed } from '../../test/helpers/executiveBenchmarkSeed.mjs';
 // UI_SEED=analysis: Bilgin yönetim analizi kıyas kümesinin sentetik verisi (arayüz kabul verisinin genişletilmiş hâli).
-const db = createFakeDatabase(process.env.UI_SEED === 'analysis' ? analysisBenchmarkSeed() : uiSeed());
+// UI_SEED=executive: Aşama G yönetici kıyas verisi (örgütsel birimler, kilometre taşları, görünür görevi olmayan kadro üyesi).
+const SEEDS = { analysis: analysisBenchmarkSeed, executive: executiveBenchmarkSeed };
+const db = createFakeDatabase((SEEDS[process.env.UI_SEED] || uiSeed)());
 const statements = db.statements;
 setInterval(() => { if (statements.length > 2000) statements.splice(0, statements.length - 200); }, 5000).unref();
 globalThis.__rotaUiDb = db;

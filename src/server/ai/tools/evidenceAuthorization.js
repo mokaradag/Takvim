@@ -506,6 +506,13 @@ export function savedEvidenceRequirements(entry, auth, { exact = false } = {}) {
   // Kesilmiş kişi/grup önizlemesi bütün kimlikleri kanıtlamaz.
   const truncated = payload.complete !== true || payload.truncated === true;
   if (entry.tool === 'rota_task_analytics') {
+    // Aşama G: birim/bölüm grupları görünür sorumluların kimliğinden türer. Kısmi görevlerde kayıtlı sorumlular hâlâ güncel
+    // yönetim kapsamındaysa kimlik tabanı aranmaz; değilse (ya da köken saklanmadıysa) güncel kimlik tabanı zorunludur.
+    if (['department', 'unit'].includes(data.groupBy)) {
+      const identityTaskIds = savedIdentityPopulation(payload, population, permitted, personHidden);
+      if (identityTaskIds === null) return null;
+      return { projectIds, identityTaskIds, identities: !identityTaskIds };
+    }
     if (data.groupBy !== 'assignee') return { projectIds, identities: personHidden || unassignedFilter };
     const groups = assigneeGroupsNeedIdentity(data.groups, permitted);
     if (groups == null) return null;

@@ -204,10 +204,11 @@ const ASSIGNEE_ROWS = `
   DELETE a FROM #AiAssignees a
   WHERE a.IdentityVisible = 0
     AND NOT EXISTS (SELECT 1 FROM #AiFacts f WHERE f.TaskId = a.TaskId AND f.IsOwnAssignee = 1);
-  SELECT pd.Sicil, pd.DisplayName
+  SELECT pd.Sicil, pd.DisplayName, pd.Unit, pd.Department
   INTO #AiDirectory
   FROM dbo.MR_V_PeopleDirectory pd
   WHERE EXISTS (SELECT 1 FROM #AiAssignees a WHERE a.Sicil = pd.Sicil);
+  -- Aşama G: örgütsel birim (birim/bölüm) yalnızca kimliği açık sorumluda döner; gizli eş sorumlunun birimi açıklanmaz.
   SELECT a.TaskId,
     CASE WHEN a.IdentityVisible = 1 THEN a.Sicil ELSE NULL END AS Sicil,
     NULLIF(LTRIM(RTRIM(d.DirectoryName)), N'') AS DisplayName,
@@ -215,9 +216,12 @@ const ASSIGNEE_ROWS = `
     CAST(CASE WHEN d.Sicil IS NULL THEN 0 ELSE 1 END AS bit) AS Resolved,
     CAST(CASE WHEN @assigneeMode = 'team' AND a.Sicil <> @sicil AND EXISTS (
       SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.Sicil
-        AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)) THEN 1 ELSE 0 END AS bit) AS TeamMember
+        AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)) THEN 1 ELSE 0 END AS bit) AS TeamMember,
+    CASE WHEN a.IdentityVisible = 1 THEN NULLIF(LTRIM(RTRIM(d.DirectoryUnit)), N'') ELSE NULL END AS Unit,
+    CASE WHEN a.IdentityVisible = 1 THEN NULLIF(LTRIM(RTRIM(d.DirectoryDepartment)), N'') ELSE NULL END AS Department
   FROM #AiAssignees a
-  LEFT JOIN (SELECT Sicil, MIN(DisplayName) AS DirectoryName FROM #AiDirectory GROUP BY Sicil) d ON d.Sicil = a.Sicil
+  LEFT JOIN (SELECT Sicil, MIN(DisplayName) AS DirectoryName, MIN(Unit) AS DirectoryUnit, MIN(Department) AS DirectoryDepartment
+    FROM #AiDirectory GROUP BY Sicil) d ON d.Sicil = a.Sicil
   ORDER BY a.TaskId;
 `;
 
@@ -230,6 +234,23 @@ const TEAM_TASK = `EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees member
         JOIN dbo.MR_V_ExecutiveScope es ON es.EmployeeSicil = member.Sicil
         WHERE member.TaskId = t.TaskId AND es.ManagerSicil = @sicil AND member.Sicil <> @sicil
           AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel))`;
+
+/**
+ * Aşama G — ekip kadrosu (yalnızca `@withRoster = 1`, ekip süzgeciyle): yönetim kapsamındaki (MR_V_ExecutiveScope, yönetici =
+ * kullanıcı, kullanıcının kendisi hariç) çalışanların Sicil ve dizin adı; düzey verilirse yalnızca o kurumsal düzey. Görev
+ * okuması sıfır açık işli üyeleri göstermez: iş yükü dağılımının bütün ekibi kapsadığı ancak kadro bilinirse söylenebilir.
+ * Kadro, kullanıcının kendi yetki ilişkisidir (başka yöneticinin kapsamı okunmaz); satır sayısı sınırlıdır (`@rosterRows`
+ * dolarsa kadro kesik sayılır). Aynı toplu işin ek sonuç kümesidir: ayrı SQL gidiş-dönüşü yoktur.
+ */
+const TEAM_ROSTER = `
+  IF @withRoster = 1 AND @assigneeMode = 'team'
+    SELECT TOP (@rosterRows) es.EmployeeSicil AS Sicil, MIN(NULLIF(LTRIM(RTRIM(pd.DisplayName)), N'')) AS DisplayName
+    FROM dbo.MR_V_ExecutiveScope es
+    LEFT JOIN dbo.MR_V_PeopleDirectory pd ON pd.Sicil = es.EmployeeSicil
+    WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)
+    GROUP BY es.EmployeeSicil
+    ORDER BY es.EmployeeSicil;
+`;
 
 const TASK_FACT_COLUMNS = `
     t.TaskId, t.ProjectId, t.WbsId, t.Title, t.Keyword, t.Status, t.Priority, t.IsMilestone,
@@ -345,6 +366,7 @@ ${ASSIGNMENT_FACTS}
   JOIN dbo.MR_Projects p ON p.ProjectId = v.ProjectId
   WHERE @projectId IS NOT NULL OR EXISTS (SELECT 1 FROM #AiFacts f WHERE f.ProjectId = v.ProjectId);
 ${ASSIGNEE_ROWS}
+${TEAM_ROSTER}
   DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects;`;
 
 /**

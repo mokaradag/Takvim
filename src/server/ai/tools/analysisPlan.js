@@ -28,7 +28,9 @@ import { addDays } from './rota/taskFacts.js';
 
 export const ANALYSIS_SCOPES = Object.freeze(['self', 'person', 'team', 'project', 'projects', 'all', 'previous', 'row']);
 export const ANALYSIS_LEVELS = Object.freeze(['unit', 'department', 'directorate']);
-export const ANALYSIS_FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'overdue', 'upcoming', 'workload', 'projects', 'schedule', 'critical']);
+export const ANALYSIS_FOCUS = Object.freeze(['overview', 'status', 'priority', 'deadlines', 'overdue', 'upcoming', 'workload', 'projects', 'schedule', 'critical', 'org', 'milestones']);
+/** Aşama G: çok kapsamlı özetin ek kapsamlarında izin verilen özneler (takip göndergeleri ek kapsam olamaz). */
+export const LAYER_SCOPES = Object.freeze(['self', 'person', 'team', 'project', 'projects', 'all']);
 /**
  * Takip sorusunun konuşma eylemi (modelin türlü kararı; sunucu cümleyi yorumlamaz): explain "neden?", expand "biraz daha
  * aç", summarize "en önemli sonuç ne?", prioritize "neye önce odaklanmalıyım?". Eylem okuma kapsamını değil sunumu
@@ -51,8 +53,15 @@ export const ANALYSIS_ACTS = Object.freeze(['explain', 'expand', 'summarize', 'p
  * "ilk sırada" söylenemez. Tipik birim portföyünün tamamını kapsayabilmesi için portföy sıralaması kayıt defterinin mevcut üst
  * sınırını (10) kullanır; görev ve kişi listeleri 8 satırda kalır. Hiçbir sınır kayıt defterinin sınırını aşmaz.
  */
-export const ANALYSIS_LIMITS = Object.freeze({ maxFocus: PLANNER_LIMITS.maxRequests + 1, maxAcceptedFocus: PLANNER_LIMITS.maxRequests + 1, maxNames: 2, rankLimit: 8,
-  entityRankLimit: 10, maxParts: PLANNER_LIMITS.maxRequests + 1, maxDetailedParts: PLANNER_LIMITS.maxRequests + 1 });
+/*
+ * Aşama G (kullanıcı yönergesi, 9 Kasım 2026): analitik özetin fiziksel okuma tavanı 4'ten 6'ya, kabul edilen yön sayısı 4'ten 6'ya
+ * çıkarıldı. Gerekçe: iki öznenin üç yönlü karşılaştırması, portföy + dört yön ve çok kapsamlı (kendi/ekip/bölüm) sorular dört
+ * okumaya sığmıyor ve kullanıcıya "okuma bütçesine sığmıyor" açıklaması dönüyordu. Toplam araç çağrısı (12), birikimli SQL
+ * süresi, araç evresi süresi ve sonuç boyutu sınırları DEĞİŞMEZ; kabul edilen planın çağrı ve tur maliyeti yine kalan bütçeye
+ * sığmalıdır. Planlayıcının açık istek sayısı (`PLANNER_LIMITS.maxRequests`) ayrıdır ve değişmez.
+ */
+export const ANALYSIS_LIMITS = Object.freeze({ maxFocus: 6, maxAcceptedFocus: 6, maxNames: 2, rankLimit: 8,
+  maxParts: 6, maxDetailedParts: 6, maxLayers: 3 });
 /** Takipte önceki yön yoksa (ya da yeni öznede anlamı yoksa) genel değerlendirmenin yönleri. */
 export const DEFAULT_FOLLOW_UP_FOCUS = Object.freeze(['overview', 'overdue', 'upcoming']);
 /** Ayrıntılı yanıtta kapsam başına bütünleyici yön adayları (sırayla; bildirilmemiş ilk uygun olan eklenir). */
@@ -80,7 +89,11 @@ export function analysisSchema() {
       names: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxNames, items: { type: 'string', minLength: 2, maxLength: 120 }, description: 'person/project: kullanıcının yazdığı ad(lar).' },
       withSelf: { type: 'boolean', description: 'Kişi adı/tek kişi satırı ile kendini karşılaştır.' },
       focus: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxFocus, uniqueItems: true, items: { type: 'string', enum: [...ANALYSIS_FOCUS] },
-        description: '1-4 yön: overview sayılar, status durum, priority öncelik, deadlines termin kovaları, overdue gecikme, upcoming yakın termin, workload iş yükü, projects projeler, schedule aylar, critical kritik açık işler.' },
+        description: 'Yönler: overview sayılar, status durum, priority öncelik, deadlines termin kovaları, overdue gecikme, upcoming yakın termin, workload iş yükü, projects projeler, schedule aylar, critical kritik işler, org alt birimler, milestones kilometre taşları.' },
+      also: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxLayers - 1, description: 'Aynı soruda ayrı kapsam(lar) (ör. kendi + ekip + bölüm); her biri ayrı okunur.',
+        items: { type: 'object', additionalProperties: false, required: ['scope'], properties: { scope: { type: 'string', enum: [...LAYER_SCOPES] },
+          level: { type: 'string', enum: [...ANALYSIS_LEVELS] }, names: { type: 'array', minItems: 1, maxItems: 1, items: { type: 'string', minLength: 2, maxLength: 120 } },
+          focus: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxFocus, uniqueItems: true, items: { type: 'string', enum: [...ANALYSIS_FOCUS] } } } } },
       act: { type: 'string', enum: [...ANALYSIS_ACTS], description: 'Takip eylemi.' },
       dateFrom: { ...DATE, description: 'Termin ufkunun başı.' },
       dateTo: { ...DATE, description: 'Ufkun sonu.' },
@@ -106,12 +119,47 @@ export function normalizedBrief(raw) {
     out.focus = out.focus.filter((item, index) => out.focus.indexOf(item) === index);
   }
   if (out.act != null && !ANALYSIS_ACTS.includes(out.act)) delete out.act;
+  // Aşama G: "kendimi X ile karşılaştır" kendi kapsamı + tek kişi adı + withSelf olarak da yazılır; tek anlamı kişi ile kendinin
+  // karşılaştırmasıdır (alanların kendisi kapsamı belirler, cümle yorumlanmaz).
+  if (out.scope === 'self' && out.withSelf === true && Array.isArray(out.names) && out.names.length === 1) out.scope = 'person';
+  if (Array.isArray(out.also)) {
+    out.also = out.also.map((item) => (item && typeof item === 'object' && !Array.isArray(item) ? normalizedLayer(item) : item));
+    // Birincil kapsamın birebir yinelenen ek kapsamı anlam taşımaz (yapısal tekilleştirme; kapsam düşmez).
+    const key = (item) => JSON.stringify([item?.scope, item?.level || null, item?.names || null]);
+    out.also = out.also.filter((item, index, all) => key(item) !== key(out) && all.findIndex((other) => key(other) === key(item)) === index);
+    if (!out.also.length) delete out.also;
+  }
+  // Aşama G: kendi kapsamı + tek ek kapsam olarak tek adlı kişi (ya da tersi) "kendimi X ile karşılaştır"ın çok kapsamlı
+  // yazımıdır; anlamı kişinin kendisiyle karşılaştırmasıdır (aynı tanımlı ölçüler, iki özne). Kişi kapsamı + withSelf'e çevrilir;
+  // yönler birleşir. Düzey ya da dönem farkı varsa çevrilmez (çok kapsamlı doğrulama karar verir).
+  const single = (item) => item && typeof item === 'object' && !Array.isArray(item);
+  const pair = Array.isArray(out.also) && out.also.length === 1 && single(out.also[0]) ? out.also[0] : null;
+  const personOf = (item) => item?.scope === 'person' && Array.isArray(item.names) && item.names.length === 1 && !item.level;
+  const selfOf = (item) => item?.scope === 'self' && !item.level && !item.names?.length;
+  if (pair && ((selfOf(out) && personOf(pair)) || (personOf(out) && selfOf(pair))) && !out.withSelf) {
+    const person = personOf(out) ? out : pair;
+    const focus = [...new Set([...(Array.isArray(out.focus) ? out.focus : []), ...(Array.isArray(pair.focus) ? pair.focus : [])])];
+    delete out.also;
+    Object.assign(out, { scope: 'person', names: [...person.names], withSelf: true, ...(focus.length ? { focus } : {}) });
+  }
   // Aşama F: takip dışındaki özette `all_time` "dönem yok" demektir (yalnızca takipte devralınan dönemi kaldırır): alanın yokluğuyla
   // eşdeğerdir. Eşdeğer yazımın düşmesi onarımda kapsam değişikliği sayılmaz.
   if (out.relativeWindow === 'all_time' && !out.dateFrom && !out.dateTo && !['previous', 'row'].includes(out.scope)) delete out.relativeWindow;
   // Kapsam/alan tutarlılığı: adı verilen projeler portföy değil adlı proje kapsamıdır; satır sırası satır göndergesidir.
   if (out.scope === 'projects' && Array.isArray(out.names) && out.names.length) out.scope = 'project';
   if (out.scope === 'previous' && Array.isArray(out.rows) && out.rows.length) out.scope = 'row';
+  return out;
+}
+
+/** Ek kapsamın yazım normalleştirmesi: birincil özetle aynı yapısal kurallar (yön yazımı, adlı proje kapsamı). */
+function normalizedLayer(raw) {
+  const out = { ...raw };
+  if (Array.isArray(out.focus)) {
+    out.focus = out.focus.map((item) => (typeof item !== 'string' || ANALYSIS_FOCUS.includes(item) ? item
+      : ANALYSIS_FOCUS.find((known) => known === `${item}s` || `${known}s` === item) || item));
+    out.focus = out.focus.filter((item, index) => out.focus.indexOf(item) === index);
+  }
+  if (out.scope === 'projects' && Array.isArray(out.names) && out.names.length) out.scope = 'project';
   return out;
 }
 
@@ -135,8 +183,26 @@ export function parseAnalysis(raw) {
   if (value.within != null && !['self', 'team', 'all', 'previous'].includes(value.scope) && !(value.scope === 'person' && value.withSelf)) problems.push('$.analysis.within:scope');
   if (value.relativeWindow && (value.dateFrom || value.dateTo)) problems.push('$.analysis.relativeWindow:conflict');
   if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) problems.push('$.analysis.dateFrom:reversed');
+  // Aşama G — çok kapsamlı özet: her ek kapsam kendi öznesiyle ayrı okunur. Takip göndergesi, kişiyle kendini karşılaştırma,
+  // proje daraltması ve iki adlı karşılaştırma ek kapsamla birleşmez (her kapsam tek ve açık bir nüfustur).
+  if (value.also) {
+    if (follow || value.withSelf || value.within != null || value.rows != null || (value.names?.length || 0) > 1) problems.push('$.analysis.also:scope');
+    value.also.forEach((layer, index) => {
+      const at = `$.analysis.also[${index}]`;
+      const layerNamed = ['person', 'project'].includes(layer.scope);
+      if (layerNamed && !layer.names?.length) problems.push(`${at}.names:required`);
+      if (!layerNamed && layer.names?.length) problems.push(`${at}.names:scope`);
+      if (layer.level && layer.scope !== 'team') problems.push(`${at}.level:scope`);
+    });
+    // Aynı nüfusu iki kez okuyan kapsamlar (ör. "projects" ve "all": ikisi de görünür bütün işler) tek kapsamdır.
+    const population = (layer) => JSON.stringify([['projects', 'all'].includes(layer.scope) ? 'all' : layer.scope, layer.level || null, layer.names || null]);
+    const layers = [value, ...value.also];
+    if (new Set(layers.map(population)).size !== layers.length) problems.push('$.analysis.also:duplicate');
+  }
   if (problems.length) throw invalidArguments(problems);
-  return Object.freeze({ ...value, ...(value.focus ? { focus: Object.freeze([...value.focus]) } : {}), ...(value.names ? { names: Object.freeze([...value.names]) } : {}) });
+  return Object.freeze({ ...value, ...(value.focus ? { focus: Object.freeze([...value.focus]) } : {}), ...(value.names ? { names: Object.freeze([...value.names]) } : {}),
+    ...(value.also ? { also: Object.freeze(value.also.map((layer) => Object.freeze({ ...layer, ...(layer.focus ? { focus: Object.freeze([...layer.focus]) } : {}),
+      ...(layer.names ? { names: Object.freeze([...layer.names]) } : {}) }))) } : {}) });
 }
 
 /** Önceki yönlerden yeni öznede anlamı olanlar (ör. proje satırına "projelere göre" uygulanmaz). */
@@ -184,7 +250,8 @@ export function analysisHints(problems) {
   if (has('$.analysis.within:conflict')) hints.push('Önceki kapsam zaten bir projeyle sınırlı: analysis.within verilmez (aynı projeyse within yazma; başka bir projeyse scope project ve names ile yeni analiz)');
   else if (has('$.analysis.within')) hints.push('analysis.within (tek proje adıyla daraltma) yalnızca scope self|team|all|previous ile');
   if (has('$.analysis.dateTo:past')) hints.push('upcoming için dateTo bugünden önce olamaz; geçmiş terminler overdue yönüdür');
-  if (has('$.analysis:request')) hints.push('analysis ile request/additionalRequests/calls birlikte verilmez');
+  if (has('$.analysis:request')) hints.push('analysis ile calls ya da başka araç çağrısı verilmez; ek liste gerekiyorsa analysis yanında request yaz');
+  if (has('$.analysis.also')) hints.push('analysis.also: her öğe ayrı bir kapsam {"scope":"team","level":"department"}; aynı kapsam iki kez yazılmaz; also, withSelf/within/rows ve iki adlı karşılaştırmayla birlikte verilmez');
   return hints;
 }
 
@@ -301,6 +368,11 @@ function comparisonFor(focus, analysis, base, window, today = null) {
     case 'upcoming': return window ? values(['tasks.total'], { status: [...OPEN], ...window }) : values(['tasks.dueNext7Days']);
     case 'critical': return values(['tasks.total'], { status: [...OPEN], priority: ['critical', 'high'], ...(window || {}) });
     case 'status': return values(['tasks.todo', 'tasks.inProgress', 'tasks.done'], window || {});
+    case 'milestones': return subjects.map((entity) => milestoneRead({ ...base, entities: [entity, ...common] }, analysis));
+    case 'org':
+      // Kişilerin karşılaştırmasında birim kırılımı kişinin kendi birimidir (bilgi taşımaz); projelerde sorumluların bölümleri.
+      if (analysis.scope !== 'project') return null;
+      return subjects.map((entity) => groups({ ...base, entities: [entity, ...common] }, 'department', { split: true, future: futureWindow(analysis, today) }));
     case 'projects':
     case 'priority':
     case 'deadlines':
@@ -323,6 +395,26 @@ function groups(base, groupBy, { open = true, window = null, split = false, futu
   return request({ operation: 'list', metrics, population: { tool: 'rota_task_analytics', collection: 'groups', groupBy },
     ...(base.entities.length ? { entities: base.entities } : {}),
     filters: { ...base.filters, ...(open && !split ? { status: [...OPEN] } : {}), ...(window || {}) } });
+}
+
+/**
+ * Aşama G — örgütsel kırılımın düzeyi: kapsamın bir alt düzeyi (direktörlük → bölüm, bölüm → birim). Birim düzeyinin altı
+ * kişilerdir (iş yükü okuması). Kapsamsız (görünür bütün işler, projeler) kırılım sorumluların bölümüdür. Kendi işleri ve adlı
+ * kişi için örgütsel kırılım anlamsızdır (`null`).
+ */
+export function organizationGroupBy(analysis) {
+  if (analysis.scope === 'team') return analysis.level === 'directorate' ? 'department' : analysis.level === 'department' ? 'unit' : analysis.level === 'unit' ? null : 'department';
+  return ['projects', 'all', 'project'].includes(analysis.scope) ? 'department' : null;
+}
+
+/**
+ * Aşama G — kilometre taşları: açık kilometre taşı görevleri termine göre artan (gecikmişler önce, ardından yaklaşanlar). Durum
+ * bugüne göredir; dönem uygulanmaz (gecikmiş kilometre taşı gelecek bir dönemle gizlenmez).
+ */
+function milestoneRead(base, analysis) {
+  const { dateFrom: _from, dateTo: _to, ...filters } = base.filters;
+  return ranked({ ...base, filters }, analysis, { metrics: ['tasks.total', 'task.title', 'task.targetFinish', 'task.status', 'task.overdueDays'],
+    rank: { metric: 'task.targetFinish', order: 'asc' }, filters: { status: [...OPEN], milestone: true } });
 }
 
 function ranked(base, analysis, { metrics, rank, filters }) {
@@ -374,13 +466,30 @@ function focusRequest(focus, analysis, base, today = null) {
         return request({ operation: 'list', metrics: ['person.name', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'], population: { tool: 'rota_workload_summary', collection: 'people' },
           entities: base.entities });
       }
+      // Aşama G: ekip tablosu bölümler arası bulguların nüfusudur (kadro tamlığı): sıralı ilk N değil ekibin TAM listesidir (aracın
+      // kendi sınırıyla; kesilirse tamlık iddiası kurulmaz). İlk N, sıfır yüklü üyelerin eşitliğinde sıralama başını belirsiz bırakır.
+      if (analysis.scope === 'team') {
+        return request({ operation: 'list', metrics: ['person.name', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'], population: { tool: 'rota_workload_summary', collection: 'people' },
+          ...(base.entities.length ? { entities: base.entities } : {}), filters: { ...base.filters } });
+      }
       return request({ operation: 'rank', metrics: ['person.name', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'], rank: { metric: 'tasks.open', order: 'desc', limit: ANALYSIS_LIMITS.rankLimit },
         population: { tool: 'rota_workload_summary', collection: 'people' }, ...(base.entities.length ? { entities: base.entities } : {}),
         ...(analysis.scope === 'team' ? { filters: { ...base.filters } } : {}) });
+    case 'milestones': return milestoneRead(base, analysis);
+    case 'org': {
+      const groupBy = organizationGroupBy(analysis);
+      // Birim düzeyinin altı kişilerdir: kırılım iş yükü okumasıdır.
+      if (!groupBy) return analysis.scope === 'team' ? focusRequest('workload', analysis, base, today) : null;
+      return groups(base, groupBy, { split: true, future: futureWindow(analysis, today) });
+    }
     case 'projects':
       if (analysis.scope === 'project') return null;
       if ((analysis.scope === 'projects' || analysis.scope === 'all') && portfolioWide(base)) {
-        return request({ operation: 'rank', metrics: ['project.name', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'], rank: { metric: 'tasks.overdue', order: 'desc', limit: ANALYSIS_LIMITS.entityRankLimit },
+        // Aşama G: tamamlanan görev sayısı da okunur (aynı satır, ek okuma yok): proje başına tamamlanma ile gecikmenin birlikte
+        // değerlendirilmesi ("tamamlanma yüksek ama gecikme sürüyor") yalnızca tam satırla kurulabilir. Portföy tablosu projeler
+        // arası bulguların nüfusudur: ilk N değil, aracın kendi sınırıyla (aracın varsayılan sırası: gecikme) TAM listedir; kesilirse
+        // bulgu kurulmaz. İlk 10 satır, on projeden büyük portföyde dikkat ve eşzamanlı baskı bulgusunu her zaman engelliyordu.
+        return request({ operation: 'list', metrics: ['project.name', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'tasks.done'],
           population: { tool: 'rota_portfolio_summary', collection: 'projects' } });
       }
       return groups(base, 'project', { split: true, future: futureWindow(analysis, today) });
@@ -420,7 +529,58 @@ export function expandAnalysis(analysis, { previous = null, today = null, detail
     analysis = { ...analysis, scope: resolved.scope };
     return expandWith(analysis, narrowed(resolved.base), today, detail, chart, charts);
   }
+  if (analysis.also?.length) return expandLayers(analysis, today);
   return expandWith(analysis, narrowed(scopeBase(analysis)), today, detail, chart, charts);
+}
+
+/** Aşama G: her kapsamın karşılaştırılabilir özet ölçüleri (aynı tanım, aynı araç; kapsamlar arası toplam ya da pay yoktur). */
+export const LAYER_METRICS = Object.freeze(['tasks.total', 'tasks.open', 'tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.overdue', 'tasks.dueNext7Days',
+  'tasks.completionRatePercent']);
+/** Özet okumasının zaten karşıladığı yönler (kapsam başına ayrı okuma gerekmez). */
+const LAYER_COVERED = new Set(['overview', 'overdue', 'status']);
+
+/** Çok kapsamlı özetin kapsamları: birincil özet ve ek kapsamlar; yönü yazılmayan kapsam birincil yönleri kullanır. */
+export function analysisLayers(analysis) {
+  const own = ({ scope, level, names, focus }) => ({ scope, ...(level ? { level } : {}), ...(names ? { names: [...names] } : {}), focus: [...(focus || analysis.focus)] });
+  return [own(analysis), ...(analysis.also || []).map(own)];
+}
+
+/**
+ * Aşama G — çok kapsamlı plan (ör. "benim, ekibimin ve bölümümün durumu"). Her kapsam KENDİ nüfusuyla ve yetkisiyle okunur:
+ * önce her kapsam için aynı tanımlı özet ölçüleri (karşılaştırma bunların üzerindedir), ardından kalan okuma bütçesiyle kapsamların
+ * dağılım yönleri bildirim sırasıyla. Kapsamlar birbirini kapsayabilir (birim ⊂ bölüm), bu yüzden sayıları toplanmaz. Bütçeye
+ * sığmayan dağılım yönü SESSİZCE düşmez: `omitted` olarak döner ve yanıtta adıyla belirtilir; kapsamların hiçbiri düşmez. Dönem
+ * yalnızca dönemli yönlerin okumalarına uygulanır; özet bugünkü durumdur.
+ */
+function expandLayers(analysis, today) {
+  const layers = analysisLayers(analysis);
+  const window = { ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) };
+  const windowed = Object.keys(window).length > 0;
+  const parts = layers.map((layer) => {
+    const base = scopeBase(layer);
+    return request({ operation: 'value', metrics: [...LAYER_METRICS], population: { tool: 'rota_task_analytics' },
+      ...(base.entities.length ? { entities: base.entities } : {}), filters: { ...base.filters } });
+  });
+  const seen = new Set(parts.map((part) => JSON.stringify(part)));
+  const owners = new Map(parts.map((part, index) => [part, index]));
+  const omitted = [];
+  layers.forEach((layer, index) => {
+    const layerAnalysis = { ...analysis, ...layer, withSelf: false, also: undefined, within: undefined };
+    const base = scopeBase(layer);
+    const based = { ...base, filters: { ...base.filters, ...window } };
+    for (const focus of effectiveFocus(layerAnalysis, today)) {
+      if (LAYER_COVERED.has(focus) || (focus === 'upcoming' && !windowed)) continue;
+      const produced = focusRequest(focus, layerAnalysis, based, today);
+      if (!produced) throw invalidArguments(['$.analysis.focus:unsupported']);
+      const items = (Array.isArray(produced) ? produced : [produced]).filter((item) => !seen.has(JSON.stringify(item)));
+      if (!items.length) continue;
+      if (parts.length + items.length > ANALYSIS_LIMITS.maxParts) { omitted.push(Object.freeze({ layer: index, focus })); continue; }
+      for (const item of items) { seen.add(JSON.stringify(item)); parts.push(item); owners.set(item, index); }
+    }
+  });
+  // Bütçe önce bütün kapsamların özetine ayrılır; yanıt sırası ise kapsam kapsamdır (özet ve o kapsamın dağılımları ardışık).
+  const ordered = parts.map((part, position) => ({ part, position, layer: owners.get(part) ?? position })).sort((a, b) => a.layer - b.layer || a.position - b.position).map((item) => item.part);
+  return Object.assign(ordered, { omitted: Object.freeze(omitted) });
 }
 
 /**
@@ -542,7 +702,10 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
   function addChartReads(chart) {
     // Portföy kapsamında "projelere göre" okuması portföy sıralamasıdır (bölüntü değil): yığılmış çubuk için proje başına
     // açık/tamamlanan bölüntüsü ayrıca okunur.
-    const splitMissing = chart === 'stacked' && !parts.some((part) => part.population?.groupBy === 'project' && part.metrics?.includes('tasks.done'))
+    // Aşama G: kişilere göre iş yükü istendiyse (projeler değil) yığılmış grafik başka bir varlıktan (projeler) çizilmez: kişi
+    // sayıları örtüşür; sunum notu nedenini söyler.
+    const peopleOnly = declared.includes('workload') && !declared.includes('projects') && ['team', 'all', 'projects', 'project'].includes(analysis.scope);
+    const splitMissing = chart === 'stacked' && !peopleOnly && !parts.some((part) => part.population?.groupBy === 'project' && part.metrics?.includes('tasks.done'))
       && analysis.scope !== 'project';
     if (splitMissing) {
       const people = base.entities.filter((entity) => entity.type === 'person');

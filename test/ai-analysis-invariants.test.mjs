@@ -202,7 +202,8 @@ test('çakışan tarih onarımı kalan gösterimi değiştiremez; yön ve grafik
 
 test('bütçe onarımı bildirilen yönü sessizce düşüremez', async (t) => {
   const { phase4eConversation, populationReads } = await import('./helpers/phase4eScenario.mjs');
-  const analysis = { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['priority', 'deadlines', 'critical'] };
+  // Aşama G: okuma tavanı 6; iki kişinin dört dağılım yönü (8 okuma) tavanı aşar.
+  const analysis = { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['priority', 'deadlines', 'schedule', 'projects'] };
   const queue = [{ intent: 'rota', language: 'tr', analysis }, { intent: 'rota', language: 'tr', analysis: { ...analysis, focus: ['priority'] } },
     { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous', topics: ['rota_task_search', 'rota_task_analytics'] } }];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });

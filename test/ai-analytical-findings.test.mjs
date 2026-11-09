@@ -51,8 +51,10 @@ test('adaş gecikmiş görev sonuçta gün ve proje ile ayırt edilir; benzersiz
 
 test('tam portföy tablosu: dikkat önceliği, gecikme yoğunlaşması (sunucu payı) ve eşzamanlı baskı', () => {
   const findings = analyticalFindings([part(0, portfolio(PROJECTS))]);
-  assert.deepEqual(kinds(findings), ['attentionLeader', 'overdueConcentration', 'simultaneousPressure']);
-  const [leader, concentration, both] = findings;
+  // Aşama G: tam tabloda "görev sayısı ≠ baskı" karşıtlığı da kurulur (daha çok açık işi olup daha az gecikmesi olan proje).
+  assert.deepEqual(kinds(findings), ['attentionLeader', 'overdueConcentration', 'simultaneousPressure', 'volumeVsDelay']);
+  const [leader, concentration, both, contrast] = findings;
+  assert.deepEqual(contrast.pair, [{ name: 'Portal', open: 6, overdue: 0 }, { name: 'Ambar', open: 3, overdue: 1 }], 'en belirgin çift: gecikme farkı, sonra açık iş farkı, eşitlikte ad sırası');
   assert.equal(leader.entity.name, 'Altyapı');
   assert.deepEqual(leader.metrics, { overdue: 5, soon: 6, open: 12 }, 'yalnızca liderin tekil en büyük olduğu göstergeler');
   assert.deepEqual(concentration.metrics, { overdue: 5, total: 8, share: 63 }, 'toplam ve pay tam satırlardan sunucuda hesaplanır');
@@ -165,7 +167,8 @@ test('gelecek dönem baskısı kişi nüfusunu ve adaş projelerin doğrulanmı�
     assert.deepEqual(finding.names, ['ORT-A · Ortak', 'ORT-B · Ortak']);
     assert.deepEqual(finding.filters, { ...population, dateFrom: TODAY, dateTo: '2026-10-06', statuses: [] });
     const text = synthesisNarrative([finding]).intro.plain;
-    assert.match(text, population.assignee === 'me' ? /kendi işleriniz/ : population.assignee === 'person' ? /Ayşe/ : /bölümünüzün işleri/);
+    // Aşama G: tek kapsamlı bulgularda kapsam ilk cümlenin doğal girişidir ("… bakıldığında").
+    assert.match(text, population.assignee === 'me' ? /^Kendi işlerinize bakıldığında, / : population.assignee === 'person' ? /^Ayşe sorumluluğundaki işlere bakıldığında, / : /^Bölümünüzün işlerine bakıldığında, /);
     assert.match(text, /ORT-A · Ortak/);
     assert.match(text, /ORT-B · Ortak/);
   }

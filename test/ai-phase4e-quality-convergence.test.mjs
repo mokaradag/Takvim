@@ -117,7 +117,8 @@ test('doğal analist yanıtı: eski bağlaçlı model düzeni de çizilir; bağl
 
 test('zorunlu çekince: tamlığı kanıtlanmamış ekip iş yükünde çekince her yanıtta söylenir', async (t) => {
   const plan = { intent: 'rota', language: 'tr', analysis: { scope: 'team', focus: ['workload', 'overdue'] } };
-  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }] });
+  // Aşama G: kadro okunur; tamlığı kanıtlanamayan ekip için yönetim kapsamında dizin kaydı çözülemeyen bir üye vardır.
+  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }, { ManagerSicil: AYSE, EmployeeSicil: 919999 }] });
   seed.taskAssignees.push({ TaskId: TASKS.LITERAL, Sicil: ALI_1 }, { TaskId: TASKS.UNASSIGNED, Sicil: ALI_1 }, { TaskId: TASKS.OVERDUE, Sicil: ALI_1 },
     { TaskId: TASKS.SERIES, Sicil: ZEYNEP });
   await t.test('çekinceyi atlayan düzyazıya sunucu çekinceyi ekler', async (t) => {
@@ -328,7 +329,7 @@ test('seyrek veri: görevi olmayan kullanıcıda düzyazı kısa ve dayanaklıd�
 
 test('fazla yön kullanıcı öncelik vermeden alt kümeye daraltılmaz ve veri okunmaz', async (t) => {
   const plans = [
-    { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming', 'priority'] } },
+    { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming', 'priority', 'schedule', 'critical'] } },
     { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'overdue', 'upcoming'] } }
   ];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plans.shift() }] }),
