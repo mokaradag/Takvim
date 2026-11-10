@@ -12,7 +12,7 @@ import { projectColorVar, personColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, StatusPill, StatusIcon } from '../../components/ui';
 import { Tooltip, InfoButton, ColumnFilter } from '../../components/ui-extras';
 import { useTasks, useProjects, usePeople, usePortfolioSchedule, useTaskActions } from '../../state/hooks';
-import { taskProgressValue, taskSortValue } from '../tasks/taskDisplayValues.js';
+import { compareAssigneesBySicil, taskProgressValue, taskSortValue } from '../tasks/taskDisplayValues.js';
 import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from '../tasks/taskTableFacets.js';
 import { GanttOutlineControls } from './GanttOutlineControls.jsx';
 import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
@@ -222,7 +222,7 @@ export function GanttView() {
             vb = ganttColumnValue(b, sort.key, schedule.tasks[b.id]);
             if (va == null || vb == null) return va == null ? (vb == null ? 0 : 1) : -1;
           }
-          if (sort.key === 'sorumlu') { va = ganttAssigneeGroup(a, personLookup).name; vb = ganttAssigneeGroup(b, personLookup).name; }
+          if (sort.key === 'sorumlu') return compareAssigneesBySicil(ganttAssigneeGroup(a, personLookup), ganttAssigneeGroup(b, personLookup), sort.dir);
           if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
           if (va == null) va = '';
           if (vb == null) vb = '';
@@ -234,9 +234,10 @@ export function GanttView() {
       });
     });
     return Object.entries(map).sort((a, b) => {
-      const aName = groupBy === 'proje' ? a[0] : assigneeGroups.get(a[0]).name;
-      const bName = groupBy === 'proje' ? b[0] : assigneeGroups.get(b[0]).name;
-      return aName.localeCompare(bName, 'tr') || a[0].localeCompare(b[0], 'tr');
+      if (groupBy === 'sorumlu') {
+        return compareAssigneesBySicil(assigneeGroups.get(a[0]), assigneeGroups.get(b[0]), sort.key === 'sorumlu' ? sort.dir : 'asc');
+      }
+      return a[0].localeCompare(b[0], 'tr');
     });
   }, [filteredTasks, groupBy, sort, personLookup, assigneeGroups, schedule.tasks]);
 
@@ -616,7 +617,7 @@ export function GanttView() {
                 filterOptions = people
                   .filter((p) => facets.sorumlu.has(String(p.id)) || colFilters.sorumlu.includes(String(p.id)))
                   .slice()
-                  .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
+                  .sort((a, b) => compareAssigneesBySicil(a, b))
                   .map(p => ({
                     value: String(p.id),
                     label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name,
@@ -987,6 +988,7 @@ function GanttColHead({ label, filter, onFilter, onSort, sortKey, filterType, fi
           anchor={anchorRef.current}
           type={filterType}
           options={filterOptions || []}
+          preserveOptionOrder={label === 'Sorumlu'}
           value={filter}
           onChange={onFilter}
           onClose={() => setOpen(false)}

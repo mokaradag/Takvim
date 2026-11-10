@@ -21,7 +21,9 @@ import { useAppState } from '../../state/AppStateProvider';
 import { canResolveTaskAssignee } from '../../state/appState';
 import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
 import { resolveTaskDeleteAccess } from '../../state/projectWritePolicy.js';
-import { taskProgressValue, taskSortValue } from './taskDisplayValues.js';
+import { compareAssigneesBySicil, taskProgressValue, taskSortValue } from './taskDisplayValues.js';
+import { ganttAssigneeGroup } from '../gantt/ganttAssignees.js';
+import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
 import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from './taskTableFacets.js';
 import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
 import { createEmptyOrgFilter, hasOrgSelection } from '../../domain/organization/organizationHierarchy.js';
@@ -40,6 +42,7 @@ export function TasksView() {
   const todayKey = useTodayKey();
   const projects = useProjects();
   const people = usePeople();
+  const personLookup = usePersonLookup();
   const { openTask: onOpenTask, beginTaskDraft, deleteTask: onDeleteTask } = useTaskActions();
   const { selection: organizationFilter, setSelection: onOrganizationFilterChange } = useSharedTaskOrganizationFilter();
   const [search, setSearch] = useState1('');
@@ -141,7 +144,7 @@ export function TasksView() {
     .map(k => ({ value: k, label: k })), [facetValues, colFilter.keyword, withSelected]);
   const sorumluOpts = useMemo1(() => people
     .filter(p => assigneeOptionIds.has(String(p.id)))
-    .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
+    .sort((a, b) => compareAssigneesBySicil(a, b))
     // Sicil, unvan ve birim de aranabilir: binlerce kişilik dizinde ad tek
     // başına yeterli bir arama anahtarı değildir.
     .map(p => ({
@@ -175,7 +178,7 @@ export function TasksView() {
 
     out.sort((a, b) => {
       let va = taskSortValue(a, sort.key, 'effective'), vb = taskSortValue(b, sort.key, 'effective');
-      if (sort.key === 'sorumlu') { va = (a.sorumlu?.[0] || ''); vb = (b.sorumlu?.[0] || ''); }
+      if (sort.key === 'sorumlu') return compareAssigneesBySicil(ganttAssigneeGroup(a, personLookup), ganttAssigneeGroup(b, personLookup), sort.dir);
       if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
       const aMissing = va == null || va === '';
       const bMissing = vb == null || vb === '';
@@ -187,7 +190,7 @@ export function TasksView() {
       return 0;
     });
     return out;
-  }, [organization.filteredTasks, search, sort, colFilter, todayKey]);
+  }, [organization.filteredTasks, search, sort, colFilter, todayKey, personLookup]);
   const paginationKey = `${JSON.stringify(organization.selection)}\u001f${search}\u001f${JSON.stringify(colFilter)}\u001f${sort.key}\u001f${sort.dir}`;
   const paged = useTaskTablePagination(filtered, paginationKey);
 
@@ -317,7 +320,7 @@ export function TasksView() {
                 <FilterableTH label="Sorumlu" style={{ minWidth: 96 }}
                   sortKey={sortDirFor('sorumlu')} onSort={setSortFor('sorumlu')}
                   filter={colFilter.sorumlu} onFilter={v => setCF('sorumlu', v)}
-                  filterType="multi" filterOptions={sorumluOpts}
+                  filterType="multi" filterOptions={sorumluOpts} preserveOptionOrder
                 />
                 <FilterableTH label="Durum" style={{ minWidth: 118 }}
                   sortKey={sortDirFor('status')} onSort={setSortFor('status')}

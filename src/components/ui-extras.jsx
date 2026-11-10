@@ -304,7 +304,7 @@ export function AnimatedNumber({ value, duration = 700, format, suffix = '' }) {
 }
 
 // ColumnFilter sütun başlığında açılır kutudur.
-export function ColumnFilter({ label, anchor, type = 'text', options = [], value, onChange, onClose, sort, onSort, numericMin, numericMax, numericUnit }) {
+export function ColumnFilter({ label, anchor, type = 'text', options = [], preserveOptionOrder = false, value, onChange, onClose, sort, onSort, numericMin, numericMax, numericUnit }) {
   const [q, setQ] = useSx(typeof value === 'string' ? value : '');
   const [sel, setSel] = useSx(Array.isArray(value) ? new Set(value) : new Set());
   // Tarih biçimi: { preset, from, to, mode }; mode değerleri range, preset, before veya after olur.
@@ -420,7 +420,7 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
   };
 
   // Çoklu seçim seçenekleri sıralıdır.
-  const sortedOptions = type === 'multi'
+  const sortedOptions = type === 'multi' && !preserveOptionOrder
     ? [...options].sort((a, b) => (a.label || '').localeCompare(b.label || '', 'tr'))
     : options;
 
@@ -668,7 +668,7 @@ export { dateMatchesFilter } from './dateMatchesFilter.js';
 export { numericMatchesFilter } from './numericMatchesFilter.js';
 
 // Sıralanabilir ve süzülebilir sütun başlığı.
-export function FilterableTH({ label, sortKey, sortDir, onSort, filter, onFilter, filterType = 'text', filterOptions, style, numericMin, numericMax, numericUnit }) {
+export function FilterableTH({ label, sortKey, sortDir, onSort, filter, onFilter, filterType = 'text', filterOptions, preserveOptionOrder = false, style, numericMin, numericMax, numericUnit }) {
   const [open, setOpen] = useSx(false);
   const anchorRef = useRx(null);
   const active = (filterType === 'text' || filterType === 'single')
@@ -695,6 +695,7 @@ export function FilterableTH({ label, sortKey, sortDir, onSort, filter, onFilter
           anchor={anchorRef.current}
           type={filterType}
           options={filterOptions || []}
+          preserveOptionOrder={preserveOptionOrder}
           value={filter}
           onChange={onFilter}
           onClose={() => setOpen(false)}

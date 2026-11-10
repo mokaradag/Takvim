@@ -22,3 +22,25 @@ export function effectiveTaskDate(task, key) {
   if (key === 'plannedFinish') return task?.actualFinish || task?.plannedFinish;
   return task?.[key];
 }
+
+/**
+ * Sicil numarası sayısal karşılaştırılır; iç kişi kimliği kullanılmaz.
+ * Eksik veya geçersiz Siciller sonda, eşit Siciller kararlı sırada kalır.
+ */
+function sortableSicil(entry) {
+  const person = entry?.person ?? entry;
+  const value = String(person?.employeeNo ?? person?.sicil ?? '').trim();
+  return /^\d+$/.test(value) ? value.replace(/^0+(?=\d)/, '') : null;
+}
+
+export function compareAssigneesBySicil(a, b, direction = 'asc') {
+  const left = sortableSicil(a);
+  const right = sortableSicil(b);
+  if (left !== null && right !== null) {
+    const order = left.length - right.length || (left < right ? -1 : left > right ? 1 : 0);
+    return direction === 'desc' ? -order : order;
+  }
+  if (left !== null) return -1;
+  if (right !== null) return 1;
+  return String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'tr') * (direction === 'desc' ? -1 : 1);
+}
