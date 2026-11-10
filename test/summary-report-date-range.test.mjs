@@ -173,7 +173,8 @@ test('Görevler sütun süzgeci ETKİN seçimi menüde tutar', async () => {
   assert.match(source, /taskTableFacetValues\(organization\.filteredTasks, \{ search, filters: colFilter, dateMode: 'effective' \}, key, parseDate\(todayKey\)\)/);
   // Seçenek listeleri artık HAM görünür kümeyi değil, birleşimi süzer.
   assert.match(source, /\.filter\(p => projectOptionIds\.has\(String\(p\.id\)\)\)/);
-  assert.match(source, /\.filter\(p => assigneeOptionIds\.has\(String\(p\.id\)\)\)/);
+  assert.match(source, /taskAssigneeFilterEntries\(assigneeOptionIds, personLookup\)/);
+  assert.match(source, /value: id,/);
   assert.match(source, /statusOptionValues\.has\(String\(status\.value\)\)/);
   assert.match(source, /priorityOptionValues\.has\(String\(priority\.id\)\)/);
 });

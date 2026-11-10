@@ -289,7 +289,8 @@ test('süzgeç değerleri kararlı kimliktir', () => {
   // ada değil kararlı Sicil'e dayanır.
   const gantt = read('src/features/gantt/GanttView.jsx');
   assert.match(gantt, /taskTableMatches\(task, \{ search: globalSearch, filters: colFilters \}, null, today_\)/);
-  assert.match(gantt, /facets\.sorumlu\.has\(String\(p\.id\)\)/);
+  assert.match(gantt, /taskAssigneeFilterEntries\(new Set\(\[\.\.\.facets\.sorumlu, \.\.\.colFilters\.sorumlu\]\), personLookup\)/);
+  assert.match(gantt, /value: id,/);
 });
 
 test('tek seçimli süzgeçte Enter aranan seçeneği uygular', () => {
