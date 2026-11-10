@@ -143,3 +143,21 @@ test('Temel Kip sorumlu süzgeci ve iki sıralama yönü sayısal Sicili kullan�
     view.unmount();
   }
 });
+
+test('Atanmamış görevler geçersiz Sicilli atanmış görevlerden her iki yönde sonra gelir', () => {
+  const lookup = createPersonLookup([]);
+  const unassigned = ganttAssigneeGroup({ sorumlu: [], assigneeIds: [] }, lookup);
+  const invalid = ganttAssigneeGroup({
+    sorumlu: ['Bora'], assigneeIds: ['bilinmeyen'],
+    assigneeAvatarIdentities: [{ name: 'Bora', employeeNo: 'geçersiz' }]
+  }, lookup);
+  const noSicil = ganttAssigneeGroup({ sorumlu: ['Cem'], assigneeIds: ['başka-kimlik'] }, lookup);
+  assert.equal(unassigned.key, 'unassigned:');
+  for (const direction of ['asc', 'desc']) {
+    assert.ok(compareAssigneesBySicil(invalid, unassigned, direction) < 0);
+    assert.ok(compareAssigneesBySicil(unassigned, noSicil, direction) > 0);
+    assert.ok(compareAssigneesBySicil(unassigned, people[0], direction) > 0);
+  }
+  assert.ok(compareAssigneesBySicil(invalid, noSicil) < 0);
+  assert.ok(compareAssigneesBySicil(invalid, noSicil, 'desc') > 0);
+});

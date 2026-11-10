@@ -37,6 +37,10 @@ function sortableSicil(entry) {
 }
 
 export function compareAssigneesBySicil(a, b, direction = 'asc') {
+  // Atanmamış görevler, sayısal Sicili bulunmayan atanmış görevlerden de sonra gelir.
+  const leftUnassigned = a?.key === 'unassigned:';
+  const rightUnassigned = b?.key === 'unassigned:';
+  if (leftUnassigned !== rightUnassigned) return leftUnassigned ? 1 : -1;
   const left = sortableSicil(a);
   const right = sortableSicil(b);
   if (left !== null && right !== null) {

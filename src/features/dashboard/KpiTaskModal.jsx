@@ -57,16 +57,16 @@ export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRe
   const projects = useMemo(() => [...new Map(tasks.map((task) => [String(task.projectId), task.proje || task.projectCode])).entries()], [tasks]);
   const people = useMemo(() => {
     const found = new Map();
-    const byId = new Map(directory.map((person) => [String(person.id), person]));
     for (const task of tasks) for (const id of task.assigneeIds || []) {
-      const person = byId.get(String(id));
+      // Görev kimliği iç ID veya Sicil olabilir; ortak kişi dizini ikisini de çözer.
+      const person = personLookup.byId(id);
       const identity = task.assigneeAvatarIdentities?.find((candidate) => String(candidate.employeeNo) === String(id));
       const name = person?.name || identity?.name || String(id);
       found.set(String(id), { name, person: person || identity || { name } });
     }
     // Görünür seçenek kimliği değişmez; sıra yalnızca Sicil'e göre hesaplanır.
     return [...found.entries()].sort(([, a], [, b]) => compareAssigneesBySicil(a.person, b.person));
-  }, [tasks, directory]);
+  }, [tasks, personLookup]);
   const candidates = useMemo(
     () => filterKpiTasks(organization.filteredTasks, { ...filters, dateMode: profile.kpiDateMode }, referenceDay),
     [organization.filteredTasks, filters, profile.kpiDateMode, referenceDay]

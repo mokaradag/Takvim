@@ -140,3 +140,24 @@ test('KPI sorumlu sıralaması ve süzgeci Sicil sırasını iki kipte de korur'
     }, { tasks: numericTasks, people: numericPeople });
   }
 });
+
+test('KPI sorumlu seçenekleri iç kimlikten farklı Sicil anahtarlarıyla doğru sıralanır', () => {
+  const sicilPeople = [
+    { id: 'ic-10000', employeeNo: '10000', name: 'Ali' },
+    { id: 'ic-9000', employeeNo: '9000', name: 'Zeynep' }
+  ];
+  const sicilTasks = [
+    { ...tasks[0], id: 'sicil-buyuk', sorumlu: ['Ali'], assigneeIds: ['10000'] },
+    { ...tasks[1], id: 'sicil-kucuk', sorumlu: ['Zeynep'], assigneeIds: ['9000'] }
+  ];
+  for (const variant of ['advanced', 'simple']) {
+    withModal(variant, (view) => {
+      const header = () => column(view, variant === 'simple' ? 'Sorumlular' : 'Sorumlu');
+      assert.deepEqual(header().props.filterOptions.map((item) => item.value), ['9000', '10000']);
+      header().props.onSort('asc'); view.render();
+      assert.deepEqual(rows(view).map((row) => row.key), ['sicil-kucuk', 'sicil-buyuk']);
+      header().props.onFilter(['9000']); view.render();
+      assert.deepEqual(rows(view).map((row) => row.key), ['sicil-kucuk']);
+    }, { tasks: sicilTasks, people: sicilPeople });
+  }
+});
