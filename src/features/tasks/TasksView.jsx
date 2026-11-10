@@ -22,7 +22,7 @@ import { canResolveTaskAssignee } from '../../state/appState';
 import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
 import { resolveTaskDeleteAccess } from '../../state/projectWritePolicy.js';
 import { taskProgressValue, taskSortValue, compareAssigneesBySicil } from './taskDisplayValues.js';
-import { createPersonLookup } from '../../components/avatarIdentity.js';
+import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
 import { ganttAssigneeGroup } from '../gantt/ganttAssignees.js';
 import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from './taskTableFacets.js';
 import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
@@ -141,7 +141,7 @@ export function TasksView() {
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b, 'tr'))
     .map(k => ({ value: k, label: k })), [facetValues, colFilter.keyword, withSelected]);
-  const personLookup = useMemo1(() => createPersonLookup(people), [people]);
+  const personLookup = usePersonLookup();
   const sorumluOpts = useMemo1(() => people
     .filter(p => assigneeOptionIds.has(String(p.id)))
     .sort(compareAssigneesBySicil)

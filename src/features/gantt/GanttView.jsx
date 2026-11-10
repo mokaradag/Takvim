@@ -235,7 +235,8 @@ export function GanttView() {
     });
     return Object.entries(map).sort((a, b) => groupBy === 'proje'
       ? a[0].localeCompare(b[0], 'tr')
-      : compareAssigneesBySicil(assigneeGroups.get(a[0]), assigneeGroups.get(b[0]))
+      : compareAssigneesBySicil(assigneeGroups.get(a[0]), assigneeGroups.get(b[0]),
+          sort.key === 'sorumlu' ? sort.dir : 'asc')
         || a[0].localeCompare(b[0], 'tr'));
   }, [filteredTasks, groupBy, sort, assigneeByTask, assigneeGroups, schedule.tasks]);
 

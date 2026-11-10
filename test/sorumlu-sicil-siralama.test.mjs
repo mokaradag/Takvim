@@ -21,13 +21,18 @@ test('Görev sorumluları ad yerine sayısal Sicil ile sıralanır', () => {
     .map((group) => group.person.employeeNo), ['10000', '9000']);
 });
 
-test('Geçersiz Siciller en sonda kalır ve büyük Siciller taşmaz', () => {
+test('Sicil değerleri her iki yönde sıralanır ve atanamayanlar sonda kalır', () => {
   const valid = { employeeNo: '9000' };
   const invalid = { employeeNo: '9X00', name: 'Bilinmeyen' };
   const unassigned = { key: 'unassigned:', name: 'Atanmamış' };
   assert.ok(compareAssigneesBySicil(valid, invalid) < 0);
   assert.ok(compareAssigneesBySicil(valid, invalid, 'desc') < 0);
   assert.ok(compareAssigneesBySicil(invalid, unassigned) < 0);
+  const smaller = { employeeNo: '8000' };
+  const mixed = [unassigned, invalid, valid, smaller];
+  assert.deepEqual([...mixed].sort(compareAssigneesBySicil), [smaller, valid, invalid, unassigned]);
+  assert.deepEqual([...mixed].sort((a, b) => compareAssigneesBySicil(a, b, 'desc')),
+    [valid, smaller, invalid, unassigned]);
   assert.ok(compareAssigneesBySicil({ employeeNo: '100000000000000000000' },
     { employeeNo: '99999999999999999999' }) > 0);
   assert.ok(compareAssigneesBySicil({ employeeNo: '', sicil: '9000' },

@@ -26,7 +26,7 @@ import { TaskOrganizationFilterControls } from './TaskOrganizationFilterControls
 import { useSharedTaskOrganizationFilter } from './TaskOrganizationFilterContext.jsx';
 import { useTaskOrganizationFilter } from './useTaskOrganizationFilter.js';
 import { compareAssigneesBySicil } from './taskDisplayValues.js';
-import { createPersonLookup } from '../../components/avatarIdentity.js';
+import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
 import { ganttAssigneeGroup } from '../gantt/ganttAssignees.js';
 
 /**
@@ -73,7 +73,7 @@ export function SimpleTasksView({ onNewTask }) {
   );
   const canAddTask = assignableProjects.some((project) => canResolveTaskAssignee(appState, project));
   const peopleById = useMemo(() => new Map(people.map((person) => [String(person.id), person])), [people]);
-  const personLookup = useMemo(() => createPersonLookup(people), [people]);
+  const personLookup = usePersonLookup();
   const facetValues = useMemo(() => Object.fromEntries(SIMPLE_TASK_FACET_KEYS.map((key) => [
     key,
     simpleTaskFacetValues(organization.filteredTasks, { search, filters }, key, referenceDay)
