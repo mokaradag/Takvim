@@ -421,7 +421,8 @@ export function ColumnFilter({ label, anchor, type = 'text', options = [], value
 
   // Çoklu seçim seçenekleri sıralıdır.
   const sortedOptions = type === 'multi'
-    ? [...options].sort((a, b) => (a.label || '').localeCompare(b.label || '', 'tr'))
+    // Siciller sayısal sıralanır; diğer sütunların metin sırası korunur.
+    ? [...options].sort((a, b) => (a.label || '').localeCompare(b.label || '', 'tr', label === 'Sorumlu' ? { numeric: true } : undefined))
     : options;
 
   // Seçili değerler aramada elense bile GÖRÜNÜR kalır: aksi hâlde kullanıcı
