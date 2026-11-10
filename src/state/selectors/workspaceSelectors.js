@@ -44,18 +44,12 @@ export function selectWorkspacePeople(state) {
   if (!selectedProject) return [...(state?.people || [])];
 
   const projectTasks = selectTasksByProject(state.tasks || [], selectedProject.id);
-  // Görev kimliği iç ID, çalışan numarası veya Sicil olabilir; proje lideri
-  // yalnızca kendi iç kimliğiyle alınır. Belirsiz takma adlar dizinde çözülmez.
-  const participantIds = new Set(projectTasks.flatMap((task) =>
-    (task.assigneeIds || []).map((id) => String(id ?? '').trim()).filter(Boolean)));
-  const leadId = String(selectedProject.leadId ?? '').trim();
-  return (state?.people || []).filter((person) => (
-    (leadId && String(person.id) === leadId)
-    || [person.id, person.employeeNo, person.sicil].some((candidate) => {
-      const id = String(candidate ?? '').trim();
-      return id && participantIds.has(id);
-    })
-  ));
+  // Kimlikler METİN olarak karşılaştırılır: sayısal bir `person.id` ile metin
+  // biçimli bir sorumlu kimliği `Set.has` katı eşitliğinde eşleşmiyor ve proje
+  // ekibi boş dönüyordu (bkz. defaultTaskAssignee, aynı kural).
+  const participantIds = new Set(projectTasks.flatMap((task) => (task.assigneeIds || []).map(String)));
+  if (selectedProject.leadId != null) participantIds.add(String(selectedProject.leadId));
+  return (state?.people || []).filter((person) => participantIds.has(String(person.id)));
 }
 
 export function selectWorkspaceContext(state) {

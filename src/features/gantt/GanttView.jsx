@@ -12,11 +12,11 @@ import { projectColorVar, personColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, StatusPill, StatusIcon } from '../../components/ui';
 import { Tooltip, InfoButton, ColumnFilter } from '../../components/ui-extras';
 import { useTasks, useProjects, usePeople, usePortfolioSchedule, useTaskActions } from '../../state/hooks';
-import { compareAssigneesBySicil, taskProgressValue, taskSortValue } from '../tasks/taskDisplayValues.js';
+import { taskProgressValue, taskSortValue, compareAssigneesBySicil } from '../tasks/taskDisplayValues.js';
 import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from '../tasks/taskTableFacets.js';
 import { GanttOutlineControls } from './GanttOutlineControls.jsx';
 import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
-import { taskAssigneeFilterEntries, taskAssigneeGroup } from '../tasks/taskAssigneeIdentity.js';
+import { ganttAssigneeGroup } from './ganttAssignees.js';
 import { GANTT_CPM_DATE_KEYS, GANTT_NUMERIC_KEYS, createGanttColumnFilters, ganttColumnValue, ganttMatchesDerivedFilters } from './ganttColumnFilters.js';
 
 /* ── Gantt ──────────────────────────────────────────────── */
@@ -199,19 +199,16 @@ export function GanttView() {
   const totalWidth = days.length * zoom;
 
   const personLookup = usePersonLookup();
-  // Görev kapsamlı sorumlu kimliği gruplama ve sıralama boyunca bir kez çözülür.
-  const taskAssigneeGroups = useMemo2(() => new Map(filteredTasks.map((task) => [
-    task, taskAssigneeGroup(task, personLookup)
-  ])), [filteredTasks, personLookup]);
-  const assigneeGroups = useMemo2(() => new Map(
-    [...taskAssigneeGroups.values()].map((group) => [group.key, group])
-  ), [taskAssigneeGroups]);
+  const assigneeByTask = useMemo2(() => new Map(filteredTasks.map((task) =>
+    [task.id, ganttAssigneeGroup(task, personLookup)])), [filteredTasks, personLookup]);
+  const assigneeGroups = useMemo2(() => new Map([...assigneeByTask.values()].map((group) =>
+    [group.key, group])), [assigneeByTask]);
 
   // Sorumlu grupları aynı adlı kişileri Sicil üzerinden ayırır.
   const groups = useMemo2(() => {
     const map = Object.create(null);
     filteredTasks.forEach(t => {
-      const key = groupBy === 'proje' ? t.proje : taskAssigneeGroups.get(t).key;
+      const key = groupBy === 'proje' ? t.proje : assigneeByTask.get(t.id).key;
       map[key] = map[key] || [];
       map[key].push(t);
     });
@@ -219,13 +216,13 @@ export function GanttView() {
       // Varsa sütun sırası uygulanır; yoksa başlangıçla sıralanır.
       arr.sort((a, b) => {
         if (sort.key) {
+          if (sort.key === 'sorumlu') return compareAssigneesBySicil(assigneeByTask.get(a.id), assigneeByTask.get(b.id), sort.dir);
           let va = taskSortValue(a, sort.key), vb = taskSortValue(b, sort.key);
           if (GANTT_CPM_DATE_KEYS.includes(sort.key) || GANTT_NUMERIC_KEYS.includes(sort.key)) {
             va = ganttColumnValue(a, sort.key, schedule.tasks[a.id]);
             vb = ganttColumnValue(b, sort.key, schedule.tasks[b.id]);
             if (va == null || vb == null) return va == null ? (vb == null ? 0 : 1) : -1;
           }
-          if (sort.key === 'sorumlu') return compareAssigneesBySicil(taskAssigneeGroups.get(a), taskAssigneeGroups.get(b), sort.dir);
           if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
           if (va == null) va = '';
           if (vb == null) vb = '';
@@ -236,13 +233,11 @@ export function GanttView() {
         return parseDate(a.plannedStart) - parseDate(b.plannedStart);
       });
     });
-    return Object.entries(map).sort((a, b) => {
-      if (groupBy === 'sorumlu') {
-        return compareAssigneesBySicil(assigneeGroups.get(a[0]), assigneeGroups.get(b[0]), sort.key === 'sorumlu' ? sort.dir : 'asc');
-      }
-      return a[0].localeCompare(b[0], 'tr');
-    });
-  }, [filteredTasks, groupBy, sort, taskAssigneeGroups, assigneeGroups, schedule.tasks]);
+    return Object.entries(map).sort((a, b) => groupBy === 'proje'
+      ? a[0].localeCompare(b[0], 'tr')
+      : compareAssigneesBySicil(assigneeGroups.get(a[0]), assigneeGroups.get(b[0]))
+        || a[0].localeCompare(b[0], 'tr'));
+  }, [filteredTasks, groupBy, sort, assigneeByTask, assigneeGroups, schedule.tasks]);
 
   const xForDate = (d) => diffDays(d, range.start) * zoom;
 
@@ -617,9 +612,12 @@ export function GanttView() {
                 // değeri KARARLI Sicil kimliğidir: ada göre süzülseydi aynı adlı
                 // iki çalışan tek seçenekte birleşir ve biri seçildiğinde diğerinin
                 // görevleri de listelenirdi.
-                filterOptions = taskAssigneeFilterEntries(new Set([...facets.sorumlu, ...colFilters.sorumlu]), personLookup)
-                   .map(([id, p]) => ({
-                     value: id,
+                filterOptions = people
+                  .filter((p) => facets.sorumlu.has(String(p.id)) || colFilters.sorumlu.includes(String(p.id)))
+                  .slice()
+                  .sort(compareAssigneesBySicil)
+                  .map(p => ({
+                    value: String(p.id),
                     label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name,
                     keywords: [p.name, p.employeeNo, p.username, p.role, p.team, p.organization?.department, p.organization?.unit],
                     icon: <Avatar name={p.name} person={p} size="sm" />

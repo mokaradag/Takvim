@@ -95,22 +95,15 @@ export function TaskOrganizationFilterControls({
     </div>
   );
 
-  const warning = organization.hasIdentityConflicts
-    ? <p role="status" className="muted task-org-identity-warning">
-        Bazı görevlerde sorumlu kimlikleri çakışıyor; kurumsal süzgeç bu kişileri eşleştiremez. Kişi dizinindeki Sicil ve iç kimlikleri kontrol edin.
-      </p>
-    : null;
-
   if (compactLayout) {
-    return (<>
+    return (
       <details className={`task-org-overflow${active ? ' is-active' : ''}`}>
         <summary className="btn ghost sm" aria-label="Kurumsal görev filtrelerini aç">
           <Icons.Filter size={12} /> Kurumsal filtre{activeCount ? ` (${activeCount})` : ''}
         </summary>
         <div className="task-org-overflow-panel">{controls('compact')}</div>
       </details>
-      {warning}
-    </>);
+    );
   }
-  return <>{controls('direct')}{warning}</>;
+  return controls('direct');
 }

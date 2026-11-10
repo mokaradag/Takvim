@@ -21,9 +21,9 @@ import { useAppState } from '../../state/AppStateProvider';
 import { canResolveTaskAssignee } from '../../state/appState';
 import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
 import { resolveTaskDeleteAccess } from '../../state/projectWritePolicy.js';
-import { compareAssigneesBySicil, taskProgressValue, taskSortValue } from './taskDisplayValues.js';
-import { taskAssigneeFilterEntries, taskAssigneeGroup } from './taskAssigneeIdentity.js';
-import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
+import { taskProgressValue, taskSortValue, compareAssigneesBySicil } from './taskDisplayValues.js';
+import { createPersonLookup } from '../../components/avatarIdentity.js';
+import { ganttAssigneeGroup } from '../gantt/ganttAssignees.js';
 import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from './taskTableFacets.js';
 import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
 import { createEmptyOrgFilter, hasOrgSelection } from '../../domain/organization/organizationHierarchy.js';
@@ -42,7 +42,6 @@ export function TasksView() {
   const todayKey = useTodayKey();
   const projects = useProjects();
   const people = usePeople();
-  const personLookup = usePersonLookup();
   const { openTask: onOpenTask, beginTaskDraft, deleteTask: onDeleteTask } = useTaskActions();
   const { selection: organizationFilter, setSelection: onOrganizationFilterChange } = useSharedTaskOrganizationFilter();
   const [search, setSearch] = useState1('');
@@ -142,15 +141,18 @@ export function TasksView() {
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b, 'tr'))
     .map(k => ({ value: k, label: k })), [facetValues, colFilter.keyword, withSelected]);
-  const sorumluOpts = useMemo1(() => taskAssigneeFilterEntries(assigneeOptionIds, personLookup)
+  const personLookup = useMemo1(() => createPersonLookup(people), [people]);
+  const sorumluOpts = useMemo1(() => people
+    .filter(p => assigneeOptionIds.has(String(p.id)))
+    .sort(compareAssigneesBySicil)
     // Sicil, unvan ve birim de aranabilir: binlerce kişilik dizinde ad tek
     // başına yeterli bir arama anahtarı değildir.
-    .map(([id, p]) => ({
-      value: id,
+    .map(p => ({
+      value: String(p.id),
       label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name,
       keywords: [p.name, p.employeeNo, p.username, p.role, p.team, p.organization?.department, p.organization?.unit],
       icon: <Avatar name={p.name} person={p} size="sm" />
-    })), [assigneeOptionIds, personLookup]);
+    })), [people, assigneeOptionIds]);
   const statusOpts = useMemo1(() => TASK_STATUS_FILTER_OPTIONS
     .filter((status) => statusOptionValues.has(String(status.value)))
     .map((status) => ({
@@ -173,14 +175,13 @@ export function TasksView() {
     // düzeltilen bir kural ötekinde kalıyordu.
     const out = organization.filteredTasks
       .filter((task) => taskTableMatches(task, { search, filters: colFilter, dateMode: 'effective' }, null, today_));
-    // Kimlik çözümlemesi sıralama karşılaştırmalarında yeniden yapılmaz.
-    const assigneeSortValues = sort.key === 'sorumlu'
-      ? new Map(out.map((task) => [task, taskAssigneeGroup(task, personLookup)]))
-      : null;
 
+    // Sorumlu kimliği görev başına bir kez çözülür; sıralama Sicil ile yapılır.
+    const byAssignee = sort.key === 'sorumlu'
+      ? new Map(out.map((task) => [task.id, ganttAssigneeGroup(task, personLookup)])) : null;
     out.sort((a, b) => {
+      if (byAssignee) return compareAssigneesBySicil(byAssignee.get(a.id), byAssignee.get(b.id), sort.dir);
       let va = taskSortValue(a, sort.key, 'effective'), vb = taskSortValue(b, sort.key, 'effective');
-      if (sort.key === 'sorumlu') return compareAssigneesBySicil(assigneeSortValues.get(a), assigneeSortValues.get(b), sort.dir);
       if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
       const aMissing = va == null || va === '';
       const bMissing = vb == null || vb === '';

@@ -16,12 +16,6 @@ import {
 /** Görev görünümlerinin ortak kurumsal süzgeci. */
 export function useTaskOrganizationFilter(tasks, people, selection, onSelectionChange) {
   const peopleIndex = useMemo(() => createTaskAssigneeOrganizationIndex(people), [people]);
-  // Görev kapsamındaki çakışmaları bir kez saptar; süzgeç yine güvenli biçimde eşleşmez.
-  const hasIdentityConflicts = useMemo(
-    () => (tasks || []).some((task) => (Array.isArray(task.assigneeIds) ? task.assigneeIds : [])
-      .some((id) => peopleIndex.ambiguousIds.has(String(id ?? '').trim()))),
-    [tasks, peopleIndex]
-  );
   const organizationPeople = useMemo(
     () => organizationPeopleForTasks(tasks, peopleIndex),
     [tasks, peopleIndex]
@@ -58,7 +52,6 @@ export function useTaskOrganizationFilter(tasks, people, selection, onSelectionC
 
   return {
     selection: safeSelection,
-    hasIdentityConflicts,
     selectLevel,
     filteredTasks,
     directorateOptions,

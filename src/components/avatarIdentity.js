@@ -21,43 +21,25 @@ function text(value) {
 export function createPersonLookup(people = []) {
   const byId = new Map();
   const byName = new Map();
-  const ambiguousIds = new Set();
-  const addIdentity = (rawId, person) => {
-    const id = text(rawId);
-    if (!id || ambiguousIds.has(id)) return;
-    const previous = byId.get(id);
-    // İç kimlik ile Sicil farklı kişilere işaret ediyorsa tahmin yapılmaz.
-    if (previous && previous !== person) {
-      byId.delete(id);
-      ambiguousIds.add(id);
-    } else if (!previous) {
-      byId.set(id, person);
-    }
-  };
 
-  // Önce iç kimlikler, sonra iki Sicil alanı kaydedilir; çakışmalar belirsizdir.
   for (const person of people) {
     if (!person) continue;
-    addIdentity(person.id, person);
+    const id = text(person.id);
+    const employeeNo = text(person.employeeNo);
+    if (id) byId.set(id, person);
+    // Sicil de kimlik anahtarı olarak kabul edilir: Gerçek Sistem'de
+    // `assigneeIds` Sicil değerlerini taşır.
+    if (employeeNo && !byId.has(employeeNo)) byId.set(employeeNo, person);
+
     const name = text(person.name);
     if (!name) continue;
     byName.set(name, byName.has(name) ? null : person);
-  }
-  for (const person of people) {
-    if (!person) continue;
-    addIdentity(person.employeeNo, person);
-    addIdentity(person.sicil, person);
   }
 
   return {
     byId(value) {
       const key = text(value);
       return key ? (byId.get(key) || null) : null;
-    },
-    // Çakışan anahtar, görev kapsamında bile başka bir kişiye tahminle bağlanamaz.
-    isAmbiguousId(value) {
-      const key = text(value);
-      return key ? ambiguousIds.has(key) : false;
     },
     byName(value) {
       const key = text(value);

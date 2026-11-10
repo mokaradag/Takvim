@@ -1,11 +1,11 @@
 'use client';
 import { Avatar } from '../../components/ui';
 import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
-import { taskAssigneeEntries } from '../tasks/taskAssigneeIdentity.js';
+import { ganttAssigneeEntries } from './ganttAssignees.js';
 
 export function GanttAssignees({ task }) {
   const lookup = usePersonLookup();
-  const entries = taskAssigneeEntries(task, lookup);
+  const entries = ganttAssigneeEntries(task, lookup);
   return (
     <div className="rt-row gantt-assignee-row">
       <span className="rt-label">Sorumlu</span>

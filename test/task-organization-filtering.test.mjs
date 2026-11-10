@@ -394,7 +394,7 @@ test('masaüstü araç çubuğu tek satırdır, dar genişlikte kurumsal açıl�
   );
   assert.match(
     controls,
-    /if \(compactLayout\) \{[\s\S]*?\{controls\('compact'\)\}[\s\S]*?\{warning\}[\s\S]*?\);\s*\}\s*return <>\{controls\('direct'\)\}\{warning\}<\/>;/
+    /if \(compactLayout\) \{[\s\S]*?\{controls\('compact'\)\}[\s\S]*?\);\s*\}\s*return controls\('direct'\);/
   );
 
   const toolbarBlock = declarationBlock(styles, '.tasks-toolbar,');
