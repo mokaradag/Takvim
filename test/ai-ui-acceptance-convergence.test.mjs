@@ -290,3 +290,62 @@ test('rapor sıfır model çağrılı olağan koşuyu başarısız sayar ve ayr�
   row.serverReplay = true; writeFileSync(file, JSON.stringify([row]));
   assert.equal(run('scripts/ui-acceptance/report.cjs', [join(dir, 'out')], { UI_RUN_ID: '' }).status, 0);
 });
+
+/** Tarayıcı sınırını taklit eden sürücü dizini: her tur başarılı bir yanıt ve bu tura ait sunucu kaydı üretir. */
+function fakeDriverDir(t) {
+  const dir = directory(t); mkdirSync(join(dir, 'node_modules', 'playwright'), { recursive: true });
+  copyFileSync(resolve('scripts/ui-acceptance/drive.cjs'), join(dir, 'drive.cjs'));
+  copyFileSync(resolve('scripts/ui-acceptance/expectations.cjs'), join(dir, 'expectations.cjs'));
+  writeFileSync(join(dir, 'node_modules', 'playwright', 'index.js'), `
+const fs=require('fs'),path=require('path');
+const locator={first(){return this},getByRole(){return this},getByTitle(){return this},isVisible:async()=>false,click:async()=>{},getAttribute:async()=> 'true',waitFor:async()=>{},count:async()=>0,fill:async()=>{},press:async()=>{},screenshot:async()=>{}};
+const page={goto:async()=>{},getByRole:()=>locator,getByTitle:()=>locator,locator:()=>locator,waitForTimeout:async()=>{},waitForFunction:async()=>{},setViewportSize:async()=>{},evaluate:async()=>{
+ fs.appendFileSync(path.join(process.env.UI_ACCEPTANCE_DIR,'app-B.log'),JSON.stringify({operation:'ai.grounded.turn',context:{outcome:'grounded',evidence:1}})+'\\n');
+ return {status:'complete',text:'Yanıt',charts:[],tables:[]};
+}};
+exports.chromium={launch:async()=>({newContext:async()=>({newPage:async()=>page}),close:async()=>{}})};`);
+  mkdirSync(join(dir, 'out'));
+  return dir;
+}
+
+test('veri tohumu uyuşmayan konuşma atlanır ama önceki satırı silinmez; atlanan konuşma eksik kapsamdır ve rapor başarı saymaz', (t) => {
+  const dir = fakeDriverDir(t);
+  writeFileSync(join(dir, 'out', 'B.json'), JSON.stringify([{ runId: 'eski', conversation: 'G1', calls: [] }]));
+  const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [{ name: 'G1', detail: 'balanced', turns: ['yönetici sorusu'], seed: 'executive' }] };
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
+  writeFileSync(join(dir, 'run.json'), JSON.stringify({ runId: 'güncel' }));
+  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_ONLY: 'G1', UI_RUN_ID: 'güncel', UI_SEED: '' });
+  assert.equal(result.status, 0, result.stderr);
+  const rows = JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
+  assert.deepEqual(rows.map((row) => [row.runId, row.conversation, Boolean(row.skipped)]), [['eski', 'G1', false], ['güncel', 'G1', true]], 'önceki geçerli satır korunur');
+  const report = run('scripts/ui-acceptance/report.cjs', [join(dir, 'out')], { UI_RUN_ID: 'güncel' });
+  assert.equal(report.status, 1, report.stdout);
+  assert.match(report.stdout, /Kapsam eksik \(sınanmadı\): B\/G1/u);
+});
+
+test('UI_SCRIPTED=1 tek başına model kabulünü kapatmaz: betikli uç kaydı yoksa model çağrısı denetimi uygulanır', (t) => {
+  const dir = fakeDriverDir(t);
+  const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [{ name: 'durum', detail: 'balanced', turns: ['durumum'] }] };
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
+  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1' });
+  assert.equal(result.status, 1, result.stderr);
+  const [row] = JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
+  assert.equal(row.scripted, undefined);
+  assert.ok(row.failures.includes('planlayıcı model çağrısı kanıtı yok'), row.failures.join('; '));
+  // Betikli uç kaydı varsa (scripted: true) model kabulü uygulanmaz.
+  const scriptedDir = fakeDriverDir(t);
+  const bridgeLog = join(scriptedDir, 'node_modules', 'playwright', 'index.js');
+  writeFileSync(bridgeLog, readFileSync(bridgeLog, 'utf8').replace("return {status:'complete'",
+    "fs.appendFileSync(path.join(process.env.UI_ACCEPTANCE_DIR,'calls.jsonl'),JSON.stringify({purpose:'plan',ok:true,scripted:true,toolCalls:['rota_plan']})+'\\n');\n return {status:'complete'"));
+  writeFileSync(join(scriptedDir, 'scenario.json'), JSON.stringify(scenario));
+  const scripted = run(join(scriptedDir, 'drive.cjs'), [join(scriptedDir, 'scenario.json'), join(scriptedDir, 'out')], { UI_ACCEPTANCE_DIR: scriptedDir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1' });
+  assert.equal(scripted.status, 0, scripted.stderr);
+  assert.equal(JSON.parse(readFileSync(join(scriptedDir, 'out', 'B.json'), 'utf8'))[0].scripted, true);
+});
+
+test('belirli tablo beklentisi istenen sütunlu, satırlı ve görünür tabloyu ister; başka tablo yetmez', async () => {
+  const { semanticFailures } = (await import('../scripts/ui-acceptance/expectations.cjs')).default;
+  const expected = { tableHead: ['Görev', 'Termin'] };
+  assert.ok(semanticFailures(expected, { tables: [{ rows: 7, visible: true, head: ['Kişi', 'Açık görev'] }] }, { outcome: 'grounded' }).length > 0, 'özetin kişi tablosu yetmez');
+  assert.deepEqual(semanticFailures(expected, { tables: [{ rows: 7, visible: true, head: ['Kişi'] }, { rows: 5, visible: true, head: ['Görev', 'Termin'] }] }, { outcome: 'grounded' }), []);
+});

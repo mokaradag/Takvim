@@ -19,7 +19,9 @@ DEFAULT_MAX_CALLS=$(node -e 'const fs=require("fs"); console.log(process.argv.sl
 BRIDGE_MAX_CALLS=${BRIDGE_MAX_CALLS:-$DEFAULT_MAX_CALLS}
 DEFAULT_MAX_UNCACHED=$(node -e 'const calls=Number(process.argv[1]); if(!Number.isSafeInteger(calls)||calls<1||!Number.isSafeInteger(calls*64000))process.exit(1); console.log(calls*64000)' "$BRIDGE_MAX_CALLS")
 node -e "require.resolve('playwright')" >/dev/null
-if ! command -v claude >/dev/null; then printf 'Claude CLI bulunamadı; model kabulü çalıştırılamaz.\n' >&2; exit 1; fi
+# UI_SCRIPTED=1: betikli uç (scriptedBridge.mjs, model çağrısı yok) başlatılır; Claude CLI gerekmez. Sürücü kipi çağrı kayıtlarından doğrular.
+SCRIPTED=${UI_SCRIPTED:-}
+if [ "$SCRIPTED" != 1 ] && ! command -v claude >/dev/null; then printf 'Claude CLI bulunamadı; model kabulü çalıştırılamaz.\n' >&2; exit 1; fi
 BASE=${UI_ACCEPTANCE_DIR:-${TMPDIR:-/tmp}/rota-ui-acceptance}
 mkdir -p "$BASE/runs"
 export UI_ACCEPTANCE_DIR
@@ -47,8 +49,16 @@ probe_port() {
 }
 export BRIDGE_PORT=${BRIDGE_PORT:-18731}
 probe_port "$BRIDGE_PORT"
-BRIDGE_LEDGER="$UI_ACCEPTANCE_DIR/ledger.jsonl" BRIDGE_CALLS="$UI_ACCEPTANCE_DIR/calls.jsonl" BRIDGE_MAX_CALLS=$BRIDGE_MAX_CALLS BRIDGE_MAX_UNCACHED=${BRIDGE_MAX_UNCACHED:-$DEFAULT_MAX_UNCACHED} \
-  node "$HERE/modelBridge.mjs" > "$UI_ACCEPTANCE_DIR/bridge.log" 2>&1 &
+if [ "$SCRIPTED" = 1 ]; then
+  # Tek profilli koşuda altın planlar o profille eşlenir (aynı soru metni farklı profillerde farklı plan taşıyabilir).
+  SCRIPTED_PROFILE=''
+  set -- $PROFILES
+  if [ "$#" = 1 ]; then SCRIPTED_PROFILE=$1; fi
+  BRIDGE_CALLS="$UI_ACCEPTANCE_DIR/calls.jsonl" UI_PROFILE=$SCRIPTED_PROFILE node "$HERE/scriptedBridge.mjs" > "$UI_ACCEPTANCE_DIR/bridge.log" 2>&1 &
+else
+  BRIDGE_LEDGER="$UI_ACCEPTANCE_DIR/ledger.jsonl" BRIDGE_CALLS="$UI_ACCEPTANCE_DIR/calls.jsonl" BRIDGE_MAX_CALLS=$BRIDGE_MAX_CALLS BRIDGE_MAX_UNCACHED=${BRIDGE_MAX_UNCACHED:-$DEFAULT_MAX_UNCACHED} \
+    node "$HERE/modelBridge.mjs" > "$UI_ACCEPTANCE_DIR/bridge.log" 2>&1 &
+fi
 BRIDGE=$!
 ready=0
 for _ in $(seq 1 30); do

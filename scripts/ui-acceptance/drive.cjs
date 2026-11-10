@@ -86,9 +86,12 @@ async function ask(page, text) {
   const page = await context.newPage();
   const resultFile = path.join(outDir, `${scenario.profile}.json`);
   const runId = process.env.UI_RUN_ID || require('crypto').randomUUID();
-  const rerun = new Set(scenario.conversations.map((item) => item.name));
+  // Senaryonun gerektirdiği sentetik veri (ör. Aşama G: UI_SEED=executive) bu koşuda yoksa konuşma sınanmaz. Atlanan konuşma yeniden
+  // koşulmuş sayılmaz (önceki satırları silinmez) ve sonuçta eksik kapsam olarak kaydedilir: rapor tam kabul iddia etmez.
+  const seedMismatch = (conversation) => Boolean(conversation.seed) && conversation.seed !== (process.env.UI_SEED || null);
+  const rerun = new Set(scenario.conversations.filter((item) => !seedMismatch(item)).map((item) => item.name));
   const results = process.env.UI_ONLY && fs.existsSync(resultFile)
-    ? JSON.parse(fs.readFileSync(resultFile, 'utf8')).filter((row) => !rerun.has(row.conversation)) : [];
+    ? JSON.parse(fs.readFileSync(resultFile, 'utf8')).filter((row) => !rerun.has(row.conversation) && !(row.skipped && row.runId === runId)) : [];
   try {
   await page.goto(`http://127.0.0.1:${scenario.port}/`, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: /Gerçek Sistemi aç/ }).click();
@@ -102,9 +105,12 @@ async function ask(page, text) {
   if (toggle && await page.getByTitle(toggle).first().isVisible().catch(() => false)) { await page.getByTitle(toggle).first().click(); await page.waitForTimeout(400); }
   let currentDetail = null;
   for (const [conversationIndex, conversation] of scenario.conversations.entries()) {
-    // Senaryonun gerektirdiği sentetik veri (ör. Aşama G: UI_SEED=executive) bu koşuda yoksa konuşma açıkça atlanır (yanlış veriyle sınanmaz).
-    if (conversation.seed && conversation.seed !== (process.env.UI_SEED || null)) {
+    // Yanlış veriyle sınanmaz: atlanır ve bu koşunun eksik kapsamı olarak kaydedilir (rapor başarı saymaz).
+    if (seedMismatch(conversation)) {
       process.stdout.write(`atlandı: ${scenario.profile}/${conversation.name} (UI_SEED=${conversation.seed} gerekir)\n`);
+      results.push({ runId, skipped: `UI_SEED=${conversation.seed} gerekir`, failures: [`kapsam eksik: UI_SEED=${conversation.seed} gerekir`], profile: scenario.profile,
+        conversation: conversation.name, detail: conversation.detail, turn: 0, question: conversation.turns[0] || '', ms: 0, rendered: { status: 'skipped', tables: [], charts: [] }, server: null, calls: [] });
+      fs.writeFileSync(resultFile, JSON.stringify(results, null, 2));
       continue;
     }
     if (conversation.detail !== currentDetail) {
@@ -129,8 +135,10 @@ async function ask(page, text) {
       await page.locator('.rota-assistant-thread').screenshot({ path: shot }).catch(() => {});
       const expectedChart = conversation.expectedCharts?.[turnIndex] || null;
       const expected = conversation.expectedTurns?.[turnIndex];
-      // UI_SCRIPTED=1 (scriptedBridge.mjs): planlar betiklidir, model kabulü yapılmaz; çizici ve sunucu sözleşmesi denetlenir.
-      const scripted = process.env.UI_SCRIPTED === '1';
+      // UI_SCRIPTED=1 (scriptedBridge.mjs): planlar betiklidir, model kabulü yapılmaz; çizici ve sunucu sözleşmesi denetlenir. Kip ortam
+      // değişkeninden değil, bu turun çağrı kayıtlarından doğrulanır: canlı köprü kullanıldıysa (kayıtlarda `scripted` yoksa) model
+      // kabulü uygulanır; değişken tek başına model denetimini kapatmaz.
+      const scripted = process.env.UI_SCRIPTED === '1' && calls.length > 0 && calls.every((call) => call.scripted === true);
       const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace), ...(scripted ? [] : modelFailures(expected, trace, calls))];
       // "any": türü belirtilmemiş grafik isteği; görünür herhangi bir grafik yeterlidir.
       if (expectedChart && !rendered.charts?.some((chart) => (expectedChart === 'any' || chart.type === expectedChart) && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);

@@ -330,7 +330,16 @@
    "expectedTurns": [
     {
      "outcome": "grounded",
-     "table": true
+     "table": true,
+     "tableHead": [
+      "Görev",
+      "Termin"
+     ],
+     "requires": [
+      "kritik öncelikli",
+      "Faz 1 kabulü",
+      "Denetim teslimi"
+     ]
     }
    ]
   }

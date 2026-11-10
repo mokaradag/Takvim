@@ -184,7 +184,17 @@ const ASSIGNMENT_FACTS = `
  * kapalı eş sorumlu yalnızca kullanıcının KENDİSİNİN de sorumlu olduğu görevde
  * ADIYLA döner (Sicil'i dönmez); aksi hâlde hiç dönmez ve toplamları etkilemez.
  */
-const ASSIGNEE_ROWS = `
+const LIVE_TEAM_MEMBER = `EXISTS (
+      SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.Sicil
+        AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel))`;
+/**
+ * Aşama G: kadroyla okunan toplu işte (`@withRoster = 1`) ekip üyeliği kadronun anlık görüntüsüdür (#AiRosterStart); kadro ile
+ * kişiye atfedilen görevler aynı üyelik kümesini kullanır. Kimlik görünürlüğü (IdentityVisible) yine canlı yönetim kapsamıdır.
+ */
+const ROSTER_TEAM_MEMBER = `((@withRoster = 1 AND EXISTS (SELECT 1 FROM #AiRosterStart r WHERE r.EmployeeSicil = a.Sicil))
+      OR (@withRoster = 0 AND ${LIVE_TEAM_MEMBER}))`;
+
+const assigneeRows = (teamMember) => `
   DROP TABLE IF EXISTS #AiAssignees, #AiDirectory;
   CREATE TABLE #AiAssignees(
     TaskId uniqueidentifier NOT NULL,
@@ -215,9 +225,7 @@ const ASSIGNEE_ROWS = `
     NULLIF(LTRIM(RTRIM(d.DirectoryName)), N'') AS DisplayName,
     a.IdentityVisible,
     CAST(CASE WHEN d.Sicil IS NULL THEN 0 ELSE 1 END AS bit) AS Resolved,
-    CAST(CASE WHEN @assigneeMode = 'team' AND a.Sicil <> @sicil AND EXISTS (
-      SELECT 1 FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = a.Sicil
-        AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)) THEN 1 ELSE 0 END AS bit) AS TeamMember,
+    CAST(CASE WHEN @assigneeMode = 'team' AND a.Sicil <> @sicil AND ${teamMember} THEN 1 ELSE 0 END AS bit) AS TeamMember,
     CASE WHEN a.IdentityVisible = 1 THEN NULLIF(LTRIM(RTRIM(d.DirectoryUnit)), N'') ELSE NULL END AS Unit,
     CASE WHEN a.IdentityVisible = 1 THEN NULLIF(LTRIM(RTRIM(d.DirectoryDepartment)), N'') ELSE NULL END AS Department,
     CASE WHEN a.IdentityVisible = 1 THEN NULLIF(LTRIM(RTRIM(d.DirectoryDirectorate)), N'') ELSE NULL END AS Directorate
@@ -226,6 +234,7 @@ const ASSIGNEE_ROWS = `
     FROM #AiDirectory GROUP BY Sicil) d ON d.Sicil = a.Sicil
   ORDER BY a.TaskId;
 `;
+const ASSIGNEE_ROWS = assigneeRows(LIVE_TEAM_MEMBER);
 
 /**
  * Ekip görevi: yönetim kapsamındaki (MR_V_ExecutiveScope, yönetici = kullanıcı) bir çalışana atanmış görev. Kapsam İK
@@ -236,6 +245,14 @@ const TEAM_TASK = `EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees member
         JOIN dbo.MR_V_ExecutiveScope es ON es.EmployeeSicil = member.Sicil
         WHERE member.TaskId = t.TaskId AND es.ManagerSicil = @sicil AND member.Sicil <> @sicil
           AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel))`;
+/**
+ * Aşama G: kadroyla okunan toplu işte ekip görevi, kadronun anlık görüntüsündeki (#AiRosterStart) bir üyeye atanmış görevdir.
+ * Böylece görev olguları ile kadro AYNI üyelik kümesini kullanır: üye toplu iş sırasında kapsamdan çıkıp dönse de görevleri
+ * kadrodaki satırından düşmez. Kadro istenmeyen okumalar canlı ilişkiyi (TEAM_TASK) kullanır.
+ */
+const ROSTER_TEAM_TASK = `((@withRoster = 1 AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees member
+        JOIN #AiRosterStart r ON r.EmployeeSicil = member.Sicil WHERE member.TaskId = t.TaskId))
+      OR (@withRoster = 0 AND ${TEAM_TASK}))`;
 
 /**
  * Aşama G — ekip kadrosu (yalnızca `@withRoster = 1`, ekip süzgeciyle): yönetim kapsamındaki (MR_V_ExecutiveScope, yönetici =
@@ -244,10 +261,13 @@ const TEAM_TASK = `EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees member
  * Kadro, kullanıcının kendi yetki ilişkisidir (başka yöneticinin kapsamı okunmaz); satır sayısı sınırlıdır (`@rosterRows`
  * dolarsa kadro kesik sayılır). Aynı toplu işin ek sonuç kümesidir: ayrı SQL gidiş-dönüşü yoktur.
  *
- * Tutarlılık: toplu işin deyimleri ayrı ayrı (READ COMMITTED) okunur; görev olguları okunurken ekip üyeliği değişirse kadro ile
- * görev sayıları farklı anları gösterebilir (ör. yeni üye görevleri olmadan sıfır satırla eklenir). Bu yüzden kadro, görev
- * olgularından ÖNCE bir kez anlık görüntü olarak alınır (#AiRosterStart) ve sonda güncel üyelikle karşılaştırılır; fark varsa
- * `MembershipChanged = 1` döner ve kadro kesik sayılır (tamlık iddiası kurulmaz). Kilit ya da yalıtım düzeyi değişmez.
+ * Tutarlılık: toplu işin deyimleri ayrı ayrı (READ COMMITTED) okunur. Kadro, görev olgularından ÖNCE bir kez anlık görüntü
+ * olarak alınır (#AiRosterStart); kadroyla okunan toplu işte görevin ekibe dahil edilmesi (ROSTER_TEAM_TASK) ve sorumlunun ekip
+ * üyesi sayılması (ROSTER_TEAM_MEMBER) da bu anlık görüntüyle yapılır. Böylece üyelik toplu iş sırasında değişip eski hâline
+ * dönse bile kadro ile görev sayıları aynı üyelik kümesini gösterir. Anlık görüntü sonda güncel üyelikle karşılaştırılır; fark
+ * varsa `MembershipChanged = 1` döner ve kadro kesik sayılır. Sorumlunun kimlik görünürlüğü canlı kalır: üye o anda kapsam
+ * dışındaysa ataması çözülemez ve dağılım eksik işaretlenir (kapalı ret). Kilit ya da yalıtım düzeyi değişmez; bu bir anlık
+ * görüntü yalıtımı (SNAPSHOT) güvencesi değildir.
  */
 const TEAM_ROSTER_START = `
   DROP TABLE IF EXISTS #AiRosterStart;
@@ -277,7 +297,7 @@ const TEAM_ROSTER = `
   END
 `;
 
-const TASK_FACT_COLUMNS = `
+const taskFactColumns = (teamTask) => `
     t.TaskId, t.ProjectId, t.WbsId, t.Title, t.Keyword, t.Status, t.Priority, t.IsMilestone,
     t.PlannedStart, t.PlannedFinish, t.PlannedDurationDays, t.TargetFinish, t.ActualStart, t.ActualFinish,
     t.Progress, t.PlannedHours, t.ActualHours, CONVERT(varchar(40), t.Budget) AS Budget, CONVERT(varchar(40), t.Spent) AS Spent,
@@ -287,7 +307,8 @@ const TASK_FACT_COLUMNS = `
     CAST(COALESCE(assignment.IsOwnAssignee, 0) AS bit) AS IsOwnAssignee,
     COALESCE(assignment.DisclosedAssigneeCount, 0) AS DisclosedAssigneeCount,
     COALESCE(assignment.ResolvedAssigneeCount, 0) AS ResolvedAssigneeCount,
-    CAST(CASE WHEN @assigneeMode = 'team' AND ${TEAM_TASK} THEN 1 ELSE 0 END AS bit) AS IsTeamTask`;
+    CAST(CASE WHEN @assigneeMode = 'team' AND ${teamTask} THEN 1 ELSE 0 END AS bit) AS IsTeamTask`;
+const TASK_FACT_COLUMNS = taskFactColumns(TEAM_TASK);
 
 /**
  * Görev olguları: yetkili görev kümesi, yalnızca DARALTAN kaba süzgeçlerle
@@ -354,7 +375,7 @@ const TASK_ROW_FILTER = `(@wbsId IS NULL OR t.WbsId = @wbsId)
             WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = person.Sicil))))
       OR (@assigneeMode = 'unassigned' AND (v.AccessLevel = 'FULL' OR v.HasReadGrant = 1 OR t.CreatedBySicil = @sicil)
         AND NOT EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees person WHERE person.TaskId = t.TaskId))
-      OR (@assigneeMode = 'team' AND ${TEAM_TASK}))`;
+      OR (@assigneeMode = 'team' AND ${ROSTER_TEAM_TASK}))`;
 
 export const AI_TOOL_TASK_FACTS_SQL = `/* rota-ai-tool:task-facts */
   -- Ekip kapsamı İK ilişkisinden gelir: istenen düzeyde yönetilen çalışan yoksa nüfus yoktur; "0 görev" yerine kapalı ret.
@@ -366,7 +387,7 @@ ${SCOPE_PROJECTS}
 ${visibleTasks(TASK_ROW_FILTER)}
 ${ASSIGNMENT_FACTS}
   DROP TABLE IF EXISTS #AiFacts;
-  SELECT TOP (@maxRows) ${TASK_FACT_COLUMNS}
+  SELECT TOP (@maxRows) ${taskFactColumns(ROSTER_TEAM_TASK)}
   INTO #AiFacts
   FROM #AiTasks visible
   JOIN dbo.MR_Tasks t ON t.TaskId = visible.TaskId
@@ -382,7 +403,7 @@ ${ASSIGNMENT_FACTS}
           AND (visible.IdentityBase = 1 OR person.Sicil = @sicil OR EXISTS (
             SELECT 1 FROM dbo.MR_V_ExecutiveScope es
             WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil = person.Sicil))))
-      OR (@assigneeMode = 'team' AND ${TEAM_TASK}))
+      OR (@assigneeMode = 'team' AND ${ROSTER_TEAM_TASK}))
   ORDER BY t.TaskId;
 
   SELECT * FROM #AiFacts;
@@ -391,7 +412,7 @@ ${ASSIGNMENT_FACTS}
   FROM #AiScopeProjects v
   JOIN dbo.MR_Projects p ON p.ProjectId = v.ProjectId
   WHERE @projectId IS NOT NULL OR EXISTS (SELECT 1 FROM #AiFacts f WHERE f.ProjectId = v.ProjectId);
-${ASSIGNEE_ROWS}
+${assigneeRows(ROSTER_TEAM_MEMBER)}
 ${TEAM_ROSTER}
   DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects, #AiRosterStart;`;
 

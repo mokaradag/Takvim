@@ -239,8 +239,11 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // (planlama mekaniğidir; düzeltme turu açmaz). Özetin ifade etmediği herhangi bir koşul (durum, termin, öncelik, gruplama,
     // dönem, seçici, iç içe süzgeç/varlık ya da başka kapsam) ayrı bir istek olabilir: sessizce atılmaz, plan reddedilir.
     // Başka araç (ayrıntı, bağımlılık, baz plan, hareket) da özetle birlikte reddedilir.
-    const scopes = [parsed, ...(parsed.also || [])].map((layer) => (layer.scope === 'self' ? { assignee: 'me' }
-      : layer.scope === 'team' ? { assignee: 'team', ...(layer.level ? { teamLevel: layer.level } : {}) } : {}));
+    // Adlı kişi/proje kapsamının çağrı karşılığı çözülmüş kimliktir (personSicil/projectId); boş seçici o kapsamın nüfusu değil
+    // görünür bütün işlerdir. Bu yüzden adlı kapsam boş seçiciyle eşleşmez: böyle bir çağrı yürütülmeden atılmaz, plan reddedilir.
+    const scopes = [parsed, ...(parsed.also || [])].filter((layer) => !['person', 'project'].includes(layer.scope))
+      .map((layer) => (layer.scope === 'self' ? { assignee: 'me' }
+        : layer.scope === 'team' ? { assignee: 'team', ...(layer.level ? { teamLevel: layer.level } : {}) } : {}));
     const unselected = (call) => {
       if (!ANALYSIS_READ_TOOLS.includes(call.name) || NAME_LOOKUP_TOOLS.includes(call.name)) return false;
       let args;
@@ -402,7 +405,12 @@ function layeredAnalysis(plan) {
   if (Object.hasOwn(primary, 'also') || rest.some((item) => Object.keys(item).some((key) => !carried.has(key))
     || presentation.some((key) => Object.hasOwn(item, key) && JSON.stringify(item[key]) !== JSON.stringify(primary[key])))) throw invalidArguments(['$.analysis.also:scope']);
   const layer = ({ scope, level, names, focus }) => ({ scope, ...(level != null ? { level } : {}), ...(names != null ? { names } : {}), ...(focus != null ? { focus } : {}) });
-  return { ...plan, analysis: { ...primary, also: rest.map(layer) } };
+  // Dil plan düzeyindedir (özet şeması dil taşımaz): öğelerdeki dil yapısal olarak plan düzeyine taşınır; öğeler arasında ya da
+  // plan düzeyiyle çelişen dil sessizce seçilmez, plan reddedilir.
+  const languages = [...new Set(items.filter((item) => Object.hasOwn(item, 'language')).map((item) => item.language))];
+  if (languages.length > 1 || (languages.length && plan.language != null && plan.language !== languages[0])) throw invalidArguments(['$.analysis.also:scope']);
+  const { language: _language, ...head } = primary;
+  return { ...plan, ...(languages.length && plan.language == null ? { language: languages[0] } : {}), analysis: { ...head, also: rest.map(layer) } };
 }
 
 /** Plan düzeyindeki sorunların beklenen biçimi (yalnızca sözleşmeden; modelin değeri yansıtılmaz). */

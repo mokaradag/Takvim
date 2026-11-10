@@ -44,7 +44,8 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
   } };
   const stack = createAiStack(t, { provider, sicil, seed, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true', ...(composition ? { MERGEN_ROTA_AI_ANSWER_COMPOSITION: 'true' } : {}), ...env } });
   const state = { id: null, turns: 0 };
-  async function ask(turn, { detail = null } = {}) {
+  // `mode`: asistan kipi (varsayılan standart; derin kipte Derin devri yoktur ve planlama onarım hakları o kipte kullanılır).
+  async function ask(turn, { detail = null, mode = 'standard' } = {}) {
     current = turn;
     const before = (stack.db.aiToolLog || []).length;
     const evidenceBefore = (stack.db.aiMessageEvidence || []).length;
@@ -52,7 +53,7 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
     const viewBefore = compositionViews.length;
     if (!external && !planner && turn.plan) stack.provider.enqueue(planCall(turn.plan));
     if (external && turn.scripted && turn.plan) stack.provider.enqueue(planCall(turn.plan));
-    const response = await sendTurn({ turnId: randomUUID(), message: turn.text, mode: 'standard', ...(detail ? { detail } : {}),
+    const response = await sendTurn({ turnId: randomUUID(), message: turn.text, mode, ...(detail ? { detail } : {}),
       ...(state.id ? { conversationId: state.id, expectedSequence: state.turns * 2 } : {}) });
     const done = response.events.find((event) => event.event === 'done')?.data;
     assert.ok(done, `done olayı yok: ${response.text}`);
@@ -113,7 +114,11 @@ export function turnViolations(result, expect, { live = false } = {}) {
   const day = (value) => Date.parse(`${String(value).slice(0, 10)}T00:00:00Z`) / 86400000;
   const bounded = reads.filter((row) => row.params.dateFrom || row.params.dateTo);
   // Gelecek dönemin (ör. önümüzdeki 14 gün) kendi okuması zorunludur: yalnızca dönemsiz gecikme okuması bunu karşılamaz.
-  if (expect.windowDays && !bounded.some((row) => row.params.dateFrom && row.params.dateTo && day(row.params.dateTo) - day(row.params.dateFrom) + 1 === expect.windowDays)) {
+  // Dönem, beklenen kapsamın (sorumlu koşulu ve düzey) okumasında olmalıdır: başka kapsamın dönemli okuması karşılamaz.
+  if (expect.windowDays && !bounded.some((row) => row.params.dateFrom && row.params.dateTo
+    && (!expect.assignee || row.params.assigneeMode === expect.assignee)
+    && (!expect.level || row.params.teamLevel === expect.level.toUpperCase())
+    && day(row.params.dateTo) - day(row.params.dateFrom) + 1 === expect.windowDays)) {
     problems.push(`${expect.windowDays} günlük dönem okunmadı`);
   }
   if (expect.window && (!bounded.length || !bounded.every((row) => row.params.dateFrom && row.params.dateTo
@@ -151,14 +156,25 @@ export function turnViolations(result, expect, { live = false } = {}) {
       if (!keys.some((key) => matches(layer, key)) && !portfolio) problems.push(`kapsam okunmadı: ${layer.scope}${layer.level ? `/${layer.level}` : ''}`);
     }
     if (keys.some((key) => !expect.layers.some((layer) => matches(layer, key)))) problems.push('bildirilmeyen kapsam okundu');
+    // Kanıtın kapsam imzası okumanınkiyle aynıdır (adlı kişi ve proje dahil): yetkisiz adlı kapsamın kanıtı da yakalanır.
     const evidenceKey = (row) => {
       const filters = row.data?.filters || {};
-      return filters.assignee === 'team' ? `team|${String(filters.teamLevel || '').toUpperCase()}` : filters.assignee === 'me' ? 'me|' : null;
+      if (filters.assignee === 'team') return `team|${String(filters.teamLevel || '').toUpperCase()}`;
+      if (filters.assignee === 'me') return 'me|';
+      if (filters.assignee === 'person' && filters.personSicil != null) return `person|${filters.personSicil}`;
+      if (filters.projectId != null) return `project|${String(filters.projectId).toLowerCase()}`;
+      return null;
     };
     for (const layer of expect.layers.filter((layer) => layer.optional)) {
       if ((result.evidence || []).some((row) => evidenceKey(row) && matches(layer, evidenceKey(row)))) problems.push(`yetkisiz kapsamın kanıtı var: ${layer.scope}${layer.level ? `/${layer.level}` : ''}`);
     }
   }
+  // Yetkisiz kapsam (ekip ya da bölüm) hiçbir koşulda kanıt olarak kaydedilmez ve onun nüfus okuması başarılı olmaz. Okuma kayda
+  // yetki denetiminden önce düşebilir: yalnızca başarıyla tamamlanan (`ok`) okuma ihlaldir. Canlı ve belirlenimci puan aynıdır.
+  const teamEvidence = (level) => (result.evidence || []).some((row) => row.data?.filters?.assignee === 'team' && (!level || String(row.data.filters.teamLevel || '').toUpperCase() === level));
+  const teamRead = (level) => reads.some((row) => row.ok === true && row.params.assigneeMode === 'team' && (!level || String(row.params.teamLevel || '') === level));
+  if (expect.noTeamRead && (teamEvidence() || teamRead())) problems.push('yetkisiz ekip kapsamı okundu ya da kanıtlandı');
+  if (expect.noDepartmentRead && (teamEvidence('DEPARTMENT') || teamRead('DEPARTMENT'))) problems.push('yetkisiz bölüm kapsamı okundu ya da kanıtlandı');
   if (expect.scope && result.analysisContext?.scope !== expect.scope) problems.push('analiz kapsamı beklenenle aynı değil');
   if (expect.scope === 'all' && !expect.project && !expect.projectIds?.length && (reads.length ? !every((row) =>
     !row.params.projectId && (!row.params.assigneeMode || row.params.assigneeMode === 'any') && !row.params.personSicil && !row.params.teamLevel)

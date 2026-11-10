@@ -164,7 +164,9 @@ const LAYER_OWNERS = Object.freeze({ self: ['kendi işleriniz', 'your own work']
   all: ['görebildiğiniz bütün işler', 'all the work you can see'] });
 const LAYER_ASPECTS = Object.freeze({ workload: ['kişilere göre iş yükü', 'workload by person'], projects: ['proje dağılımı', 'project breakdown'], org: ['alt birimlere göre dağılım', 'breakdown by sub-unit'],
   milestones: ['kilometre taşları', 'milestones'], priority: ['öncelik dağılımı', 'priority breakdown'], deadlines: ['termin dağılımı', 'deadline spread'], schedule: ['aylara göre terminler', 'deadlines by month'],
-  critical: ['kritik işler', 'critical work'], upcoming: ['dönemdeki teslimatlar', 'deliveries in the period'] });
+  critical: ['kritik işler', 'critical work'], upcoming: ['yaklaşan teslimatların listesi', 'the list of upcoming deliveries'],
+  // Aşama G: okunmayan her yön adıyla söylenir. Durum dağılımı yalnızca dönem istendiğinde ayrı okunur (dönemsiz durum özettedir).
+  status: ['dönemdeki durum dağılımı', 'status breakdown in the period'], overdue: ['gecikmiş işlerin listesi', 'the list of overdue work'] });
 
 /** Çok kapsamlı özette kapsamın sunucu adı ("biriminizin işleri", "**X** projesindeki işler"); adlar kullanıcının iletisindendir. */
 export function layerOwner(layer, locale = 'tr') {

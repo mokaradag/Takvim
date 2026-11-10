@@ -126,14 +126,22 @@ export function plannerScore(result, expect) {
   if (expect.layers && result.outcome === 'planned') {
     const analysis = result.plan?.analysis;
     // Kabul edilen kararın özeti kapsamları `layers` olarak taşır (birincil + ek); ham plan biçimi `also`.
-    const declared = analysis ? (analysis.layers || [analysis, ...(analysis.also || [])]).map((layer) => `${layer.scope}|${layer.level || ''}`) : [];
-    for (const layer of expect.layers) if (!declared.includes(`${layer.scope}|${layer.level || ''}`)) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} bildirilmedi`);
+    const declaredLayers = analysis ? (analysis.layers || [analysis, ...(analysis.also || [])]) : [];
+    const sameNames = (layer, other) => !layer.names?.length || JSON.stringify(layer.names.map((name) => containmentText(String(name))).sort())
+      === JSON.stringify((other.names || []).map((name) => containmentText(String(name))).sort());
+    for (const layer of expect.layers) {
+      if (!declaredLayers.some((other) => other.scope === layer.scope && (other.level || '') === (layer.level || '') && sameNames(layer, other))) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} bildirilmedi`);
+    }
     // Bildirilen kapsamın açılımı da o kapsamın nüfusunu okumalıdır (kapsam + düzey; adlı kapsamda adlı varlık): yalnızca özetin
     // kapsam listesinde görünmesi yetmez.
+    // Adlı kapsam yalnızca türüyle değil kimliğiyle eşleşir: beklenti adı verdiyse okumanın varlığı o addır (başka kişi/proje
+    // karşılamaz). Portföy kapsamı portföy aracının okumasıdır; koşulsuz görev okuması "görünür bütün işler" kapsamıdır.
+    const sameName = (layer, entity) => !layer.names?.length || layer.names.some((name) => containmentText(String(name)) === containmentText(String(entity.query ?? entity.text ?? '')));
     const reads = (layer) => requests.some((request) => (layer.scope === 'self' ? request.filters?.assignee === 'me'
       : layer.scope === 'team' ? request.filters?.assignee === 'team' && (request.filters?.teamLevel || '') === (layer.level || '')
-        : ['person', 'project'].includes(layer.scope) ? request.entities?.some((entity) => entity.type === layer.scope) && !request.filters?.assignee
-          : !request.filters?.assignee && !request.entities?.length));
+        : ['person', 'project'].includes(layer.scope) ? request.entities?.some((entity) => entity.type === layer.scope && sameName(layer, entity)) && !request.filters?.assignee
+          : layer.scope === 'projects' ? request.population?.tool === 'rota_portfolio_summary'
+            : !request.filters?.assignee && !request.entities?.length && request.population?.tool !== 'rota_portfolio_summary'));
     for (const layer of expect.layers.filter((layer) => !layer.optional)) if (!reads(layer)) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} okunmadı`);
   }
   // Birden çok doğru kararı olan vakada (`intentAny`) planlanmış sonuç da planın kendisiyle puanlanır (karar tek başına yetmez).

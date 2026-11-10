@@ -746,7 +746,11 @@ function pinAnalysisRepair(turn, plan, details) {
   // Görsel istek ayrıca (`visual`) denetlenir; özetin içinde ya da plan düzeyinde yazılması anlam değişikliği değildir.
   const pinnedPaths = new Set([...paths, 'visual']);
   const presentation = existing?.presentation || submittedPresentation(plan);
-  const explicitPaths = existing ? existing.explicitPaths : explicitRepairPaths(plan, details);
+  // Sonraki reddin açık istek yolları da onarılabilir yollara katılır (birikir); herhangi bir turda istekler serbest
+  // bırakıldıysa (`null`, birleşimin kendisi reddedildi) serbest kalır.
+  const rejectedPaths = explicitRepairPaths(plan, details);
+  const explicitPaths = !existing ? rejectedPaths : existing.explicitPaths == null || rejectedPaths == null ? null
+    : existing.explicitPaths.map((paths, index) => new Set([...paths, ...(rejectedPaths[index] || [])]));
   const explicit = existing ? existing.explicit : submittedExplicit(plan);
   turn.repairPins.set('analysis', { raw, paths: pinnedPaths, projection: stable(repairOmit(raw, pinnedPaths)), presentation, presentationPaths, explicit, explicitPaths,
     visual: existing ? existing.visual : details.some((detail) => String(detail).startsWith('$.visual:') || String(detail).startsWith('$.analysis.visual:'))

@@ -202,7 +202,8 @@ test('çakışan tarih onarımı kalan gösterimi değiştiremez; yön ve grafik
 
 test('bütçe onarımı bildirilen yönü sessizce düşüremez', async (t) => {
   const { phase4eConversation, populationReads } = await import('./helpers/phase4eScenario.mjs');
-  // Aşama G: okuma tavanı 6; iki kişinin dört dağılım yönü (8 okuma) tavanı aşar. Kritik işler yönü de sınanır (sorudaki yön).
+  // Aşama G: okuma tavanı 6; öncelik, termin ve projeler kişi başına ikişer (6), kritik işler iki kişinin ortak karşılaştırma okuması
+  // (1) olmak üzere toplam 7 okuma tavanı aşar. Kritik işler yönü de sınanır (sorudaki yön).
   const analysis = { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['priority', 'deadlines', 'critical', 'projects'] };
   const queue = [{ intent: 'rota', language: 'tr', analysis }, { intent: 'rota', language: 'tr', analysis: { ...analysis, focus: ['priority'] } },
     { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous', topics: ['rota_task_search', 'rota_task_analytics'] } }];

@@ -111,10 +111,17 @@ test('özetin yanındaki ad çözümü ve aynı nüfus okuma çağrıları yür�
   assert.deepEqual(accepted.calls, [], 'çağrılar yürütülmez; adları sunucu özetten çözer');
   assert.equal(accepted.plan.analysis.scope, 'person');
   // Aşama G: özetin kendi okumalarıyla aynı nüfus araçlarına yazılmış çağrılar da yürütülmez (okumaları özet kurar; kapsam genişlemez).
-  const reads = unpack({ intent: 'rota', language: 'tr', analysis: brief, calls: [...lookups, { name: 'rota_task_search', arguments: {} }, { name: 'rota_workload_summary', arguments: {} }] });
+  // Adlı kişi kapsamının çağrı karşılığı çözülmüş kimliktir; boş seçicili okuma görünür bütün işlerdir: özetle eşdeğer sayılıp
+  // sessizce atılmaz, plan reddedilir. Özetin kendi kapsamıyla birebir aynı seçici (kendi işleri) atılır.
+  for (const name of ['rota_task_search', 'rota_workload_summary']) {
+    assert.throws(() => unpack({ intent: 'rota', language: 'tr', analysis: brief, calls: [...lookups, { name, arguments: {} }] }),
+      (error) => error.details.includes('$.analysis:request'), name);
+  }
+  const self = { scope: 'self', focus: ['overview'] };
+  const reads = unpack({ intent: 'rota', language: 'tr', analysis: self, calls: [{ name: 'rota_task_analytics', arguments: { assignee: 'me' } }] });
   assert.deepEqual(reads.calls, []);
-  assert.deepEqual(JSON.stringify([reads.plan.request, ...(reads.plan.additionalRequests || [])]), JSON.stringify([accepted.plan.request, ...(accepted.plan.additionalRequests || [])]),
-    'atılan çağrılar okunan nüfusu değiştirmez');
+  assert.deepEqual(JSON.stringify([reads.plan.request, ...(reads.plan.additionalRequests || [])]),
+    JSON.stringify((({ plan }) => [plan.request, ...(plan.additionalRequests || [])])(unpack({ intent: 'rota', language: 'tr', analysis: self }))), 'atılan çağrılar okunan nüfusu değiştirmez');
   // Başka yeteneğin aracı (ayrıntı, bağımlılık, baz plan, hareket) özetle birlikte yürütülemez ve reddedilir.
   for (const name of ['rota_task_detail', 'rota_dependency_inspect', 'rota_baseline_compare', 'rota_activity_search']) {
     assert.throws(() => unpack({ intent: 'rota', language: 'tr', analysis: brief, calls: [...lookups, { name, arguments: {} }] }),

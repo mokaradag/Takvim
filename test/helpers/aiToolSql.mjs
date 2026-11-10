@@ -75,6 +75,8 @@ function teamRoster(db, params) {
     && (!level || (entry.ScopeType || 'UNIT') === level)).map((entry) => Number(entry.EmployeeSicil)))].sort((a, b) => a - b);
   // Sınama kancası: görev olguları okunurken üyeliğin değiştiğini (toplu işin başı ile sonu arasında) taklit eder.
   const changed = db.rosterMembershipChanged ? 1 : 0;
+  // Sınama kancası: kapsam denetiminden sonra anlık görüntünün boş kalması (üyelik toplu iş sırasında boşaldı); üretim SQL'i satırsız döner.
+  if (db.rosterSnapshotEmpty) return [];
   return members.slice(0, Number(params.rosterRows)).map((employee) => ({ Sicil: employee, DisplayName: personName(db, employee), MembershipChanged: changed }));
 }
 
@@ -567,7 +569,20 @@ export function runAiToolQuery(db, sqlText, params) {
   const marker = MARKER.exec(sqlText);
   if (!marker) return null;
   db.aiToolLog ||= [];
-  db.aiToolLog.push({ query: marker[1], params: { ...params } });
+  const entry = { query: marker[1], params: { ...params } };
+  db.aiToolLog.push(entry);
+  // Kayıt okumanın sonucunu da taşır (`ok`): yetki reddiyle kapanan okuma kayda düşse de başarılı veri okuması sayılmaz.
+  try {
+    const rows = runLoggedAiToolQuery(db, marker, params);
+    entry.ok = true;
+    return rows;
+  } catch (error) {
+    entry.ok = false;
+    throw error;
+  }
+}
+
+function runLoggedAiToolQuery(db, marker, params) {
   if (db.aiToolFailure?.[marker[1]]) throw db.aiToolFailure[marker[1]];
   if (marker[1] !== 'wbs-selector' && scopeOf(db, params).projects.size >= Number(params.analysisMaxRows)) { const error = new Error('AI_TOOL_RESULT_TOO_LARGE'); error.number = 51001; throw error; }
   // Sonuç kümesi hesaplanmadan SQL nüfus bütçesi bağımsız uygulanır.

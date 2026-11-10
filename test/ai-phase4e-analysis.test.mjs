@@ -251,13 +251,19 @@ test('özet biçim hataları özetin kendi alanlarıyla bildirilir; ek liste ist
   assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['nope'] } }), ['$.analysis.focus[0]:enum']);
   // Aşama G: özetin yanındaki açık istek ayrı bir bölüm olarak eklenir (özet + ek liste; çok kapsamlı özetle de); önceki bölüme
   // gönderme, önceki sonuca gönderme ve takip göndergesiyle birleşim reddedilir.
-  assert.equal(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] }, request: { operation: 'value', metrics: ['tasks.total'] } }), null);
+  // Açık istek üretim yolunun kabul edeceği tam bildirimdir (nüfus ve kapsam süzgeci); bölümleri bildirim ve nüfus tamamlamasından
+  // sorunsuz geçer. Nüfusu olmayan istek birleşik planda da üretimin reddettiği istektir.
+  const explicit = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me', priority: ['critical'] } };
+  const accepted = acceptPlan('Durumumu özetle ve kritik işlerimin sayısını ver.', { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] }, request: explicit });
+  assert.ok(accepted.requests.some((request) => request.filters?.priority?.includes('critical')), 'açık istek ayrı bölümdür');
+  const incomplete = parseRequestDeclaration({ operation: 'value', metrics: ['tasks.total'], layout: 'auto' }, { textTrusted: () => true, identityTrusted: () => true, today: corpus.today });
+  assert.ok(completeRequest(incomplete, [], { today: corpus.today }).problems.includes('$.population:required'), 'nüfussuz istek üretimde reddedilir');
   assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] },
     request: { operation: 'list', metrics: ['task.title'], entities: [{ type: 'task', from: 0 }] } }), ['$.analysis:request']);
   assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] },
     request: { previousResult: true, operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' } } }), ['$.analysis:request']);
-  assert.equal(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'], also: [{ scope: 'team' }] },
-    request: { operation: 'value', metrics: ['tasks.total'] } }), null);
+  assert.equal(acceptPlan('Durumumu ve ekibimin durumunu özetle, kritik işlerimin sayısını da ver.', { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'], also: [{ scope: 'team' }] },
+    request: explicit }).requests.filter((request) => request.filters?.priority?.includes('critical')).length, 1);
   assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'previous', focus: ['overview'] } }), ['$.analysis.scope:unavailable']);
   // Açılımın istek sorunları modelin yazdığı özet alanlarına çevrilir.
   assert.deepEqual(analysisDetails(['$.entities[0].text:untrusted', '$.filters.dateFrom:date', '$.metrics[0]:population']),

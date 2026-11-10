@@ -18,6 +18,9 @@ for (const r of rows) {
 const models = [...new Set(calls.flatMap((c) => c.models || []))];
 out += `\nToplam tur: ${rows.length}; model çağrısı: ${calls.length} (başarısız: ${calls.filter((c) => !c.ok).length}); modeller: ${models.join(', ')}; düşünme belirteci toplamı: ${calls.reduce((s, c) => s + (c.thinkingTokens || 0), 0)}; düşünme açık çağrı: ${calls.filter((c) => c.ok && c.thinking !== 'off').length}\n`;
 out += `Girdi (önbelleksiz): ${calls.reduce((s, c) => s + (c.input || 0), 0)}; önbellek yazma: ${calls.reduce((s, c) => s + (c.cacheWrite || 0), 0)}; önbellek okuma: ${calls.reduce((s, c) => s + (c.cacheRead || 0), 0)}; çıktı: ${calls.reduce((s, c) => s + (c.output || 0), 0)}\n`;
+// Atlanan konuşma (gerekli sentetik veri yok) sınanmamıştır: tam kabul raporlanmaz, eksik kapsam adıyla yazılır ve koşu başarısızdır.
+const skipped = rows.filter((row) => row.skipped);
+if (skipped.length) out += `Kapsam eksik (sınanmadı): ${skipped.map((row) => `${row.profile}/${row.conversation} (${row.skipped})`).join(', ')}\n`;
 process.stdout.write(out);
-if (!rows.length || rows.some((row) => row.failures?.length || completionFailures(row.rendered, row.server).length || !row.server
+if (!rows.length || skipped.length || rows.some((row) => row.failures?.length || completionFailures(row.rendered, row.server).length || !row.server
   || semanticFailures({ outcome: row.expectedOutcome || 'grounded' }, row.rendered, row.server).length || (!row.scripted && modelFailures({ serverReplay: row.serverReplay === true }, row.server, row.calls).length))) process.exitCode = 1;

@@ -425,10 +425,12 @@ const ASSIGNMENT_GROUPS = Object.freeze({
 });
 
 /**
- * Birimi dizinde kayıtlı olmayan, birden çok farklı birimde görünen ya da kaydı çözülemeyen görünür sorumluların grubu (varlık
- * değildir). Anahtarı atama gruplarının anahtarlarından ayrıdır (`unresolved` "Sorumlu kaydı çözülemiyor" grubuyla birleşmez).
+ * Dizin kaydı çözülen ama bölümü/birimi kayıtlı olmayan görünür sorumluların grubu (varlık değildir; etiketi gruplama düzeyini
+ * söyler). Dizin kaydı çözülemeyen sorumlu bu gruba değil, atama gruplarının `unresolved` grubuna girer (iki ayrı neden).
  */
-const ORGANIZATION_UNKNOWN = Object.freeze(['no_unit', 'Birimi belirtilmemiş']);
+const ORGANIZATION_UNKNOWN = Object.freeze({ department: ['no_unit', 'Bölümü belirtilmemiş'], unit: ['no_unit', 'Birimi belirtilmemiş'] });
+/** Örgütsel kimlik anahtarının parçası: dizindeki ad aynen (yalnızca Unicode NFC); büyük/küçük harf ve aksan ayrımı korunur. */
+const organizationKeyPart = (name) => (name ? String(name).normalize('NFC') : '');
 
 function deadlineBucket(fact, today) {
   if (fact.status === 'done') return ['done', 'Tamamlandı'];
@@ -468,13 +470,15 @@ function groupKeys(fact, groupBy, { projects, assignees, today, teamOnly = false
       if (!people.length) return [ASSIGNMENT_GROUPS[state === 'visible' ? 'undisclosed' : state] || ASSIGNMENT_GROUPS.undisclosed];
       // Birimin kimliği dizindeki hiyerarşik yoludur (direktörlük › bölüm › birim): farklı üst birimlerdeki aynı adlı birimler
       // birleşmez. Üst birimi bilinmeyen birim, üst birimi bilinen aynı adlı birimle de birleşmez (ad tek başına kimlik değildir).
+      // Anahtar dizindeki adları katlamadan kullanır: yalnızca aksanı farklı iki ayrı birim tek grupta birleşmez.
       const labels = new Map();
       for (const person of people) {
-        const label = person.resolved ? person[groupBy] : null;
-        if (!label) { labels.set(ORGANIZATION_UNKNOWN[0], ORGANIZATION_UNKNOWN[1]); continue; }
+        if (!person.resolved) { labels.set(ASSIGNMENT_GROUPS.unresolved[0], ASSIGNMENT_GROUPS.unresolved[1]); continue; }
+        const label = person[groupBy];
+        if (!label) { labels.set(ORGANIZATION_UNKNOWN[groupBy][0], ORGANIZATION_UNKNOWN[groupBy][1]); continue; }
         const parents = groupBy === 'unit' ? [person.directorate, person.department] : [person.directorate];
-        const path = [...parents.map((name) => (name ? foldText(name) : '')), foldText(label)];
-        labels.set(`org:${path.join('›')}`, [label, (groupBy === 'unit' ? person.department : person.directorate) || null]);
+        const path = [...parents.map(organizationKeyPart), organizationKeyPart(label)];
+        labels.set(`org:${JSON.stringify(path)}`, [label, parents]);
       }
       return [...labels.entries()].map(([key, value]) => (Array.isArray(value) ? [key, ...value] : [key, value]));
     }
@@ -525,12 +529,23 @@ const taskAnalytics = {
           if (isOverdue(fact, call.today)) group.overdue += 1;
         }
       }
-      // Aynı adlı farklı birimler görünen adlarıyla da ayrışır: üst birimleriyle yazılır ("Test · Bölüm A").
-      const labelCounts = new Map();
-      for (const group of byKey.values()) labelCounts.set(group.label, (labelCounts.get(group.label) || 0) + 1);
-      for (const group of byKey.values()) {
-        if (!ORGANIZATION_GROUP_BY.includes(groupBy) || labelCounts.get(group.label) < 2 || !group.key.startsWith('org:')) continue;
-        group.label = dataText(`${group.label} · ${parents.get(group.key) || (groupBy === 'unit' ? 'Bölümü belirtilmemiş' : 'Direktörlüğü belirtilmemiş')}`, 160);
+      // Aynı adlı farklı birimler görünen adlarıyla da ayrışır: önce en yakın üst birimle ("Test · Bölüm A"); bu da yetmezse
+      // (aynı adlı bölümler farklı direktörlüklerde) bütün yolla ("Test · Direktörlük X › Bölüm A"). Ayrışmaya gerekmeyen üst
+      // birim adı eklenmez.
+      if (ORGANIZATION_GROUP_BY.includes(groupBy)) {
+        const missing = ['Direktörlüğü belirtilmemiş', 'Bölümü belirtilmemiş'];
+        const organized = [...byKey.values()].filter((group) => group.key.startsWith('org:'));
+        const base = new Map(organized.map((group) => [group.key, group.label]));
+        const chain = (key) => (parents.get(key) || []).map((name, index) => name || missing[index]);
+        for (const depth of [1, 2]) {
+          const counts = new Map();
+          for (const group of byKey.values()) counts.set(group.label, (counts.get(group.label) || 0) + 1);
+          for (const group of organized) {
+            const path = chain(group.key);
+            if (counts.get(group.label) < 2 || depth > path.length) continue;
+            group.label = dataText(`${base.get(group.key)} · ${path.slice(-depth).join(' › ')}`, 160);
+          }
+        }
       }
       const ordered = [...byKey.values()].sort((left, right) => (groupBy === 'target_month'
         ? left.key.localeCompare(right.key)
