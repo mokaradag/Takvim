@@ -22,7 +22,7 @@ import { canResolveTaskAssignee } from '../../state/appState';
 import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
 import { resolveTaskDeleteAccess } from '../../state/projectWritePolicy.js';
 import { compareAssigneesBySicil, taskProgressValue, taskSortValue } from './taskDisplayValues.js';
-import { ganttAssigneeGroup } from '../gantt/ganttAssignees.js';
+import { taskAssigneeGroup } from './taskAssigneeIdentity.js';
 import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
 import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from './taskTableFacets.js';
 import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
@@ -177,7 +177,7 @@ export function TasksView() {
       .filter((task) => taskTableMatches(task, { search, filters: colFilter, dateMode: 'effective' }, null, today_));
     // Kimlik çözümlemesi sıralama karşılaştırmalarında yeniden yapılmaz.
     const assigneeSortValues = sort.key === 'sorumlu'
-      ? new Map(out.map((task) => [task, ganttAssigneeGroup(task, personLookup)]))
+      ? new Map(out.map((task) => [task, taskAssigneeGroup(task, personLookup)]))
       : null;
 
     out.sort((a, b) => {

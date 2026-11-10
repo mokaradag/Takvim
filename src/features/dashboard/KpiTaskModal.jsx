@@ -13,7 +13,7 @@ import { TaskOrganizationFilterControls } from '../tasks/TaskOrganizationFilterC
 import { taskTableMatches, taskTableFacetValues } from '../tasks/taskTableFacets.js';
 import { compareAssigneesBySicil, taskSortValue } from '../tasks/taskDisplayValues.js';
 import { createPersonLookup } from '../../components/avatarIdentity.js';
-import { ganttAssigneeGroup } from '../gantt/ganttAssignees.js';
+import { taskAssigneeGroup } from '../tasks/taskAssigneeIdentity.js';
 import { getStatus } from '../../scheduling/metrics/index.js';
 import { today } from '../../scheduling/dates/index.js';
 import { Icons } from '../../components/icons.jsx';
@@ -97,7 +97,7 @@ export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRe
     const result = filterKpiTasks(candidates, { filters: columnFilters, dateMode: profile.kpiDateMode }, referenceDay);
     // Görev kapsamlı kimlik bir kez çözülür, sıralama karşılaştırmasında yeniden üretilmez.
     const assigneeSortValues = sort.key === 'sorumlu'
-      ? new Map(result.map((task) => [task, ganttAssigneeGroup(task, personLookup)]))
+      ? new Map(result.map((task) => [task, taskAssigneeGroup(task, personLookup)]))
       : null;
     const value = (task) => {
       if (sort.key === 'status') return getStatus(task, referenceDay).label;

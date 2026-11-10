@@ -20,7 +20,7 @@ import { resolveTaskDeleteAccess } from '../../state/projectWritePolicy.js';
 import { usePeople, useProjects, useTaskActions, useTaskAssignableProjects, useTasks } from '../../state/hooks';
 import { createEmptySimpleTaskFilterState, SIMPLE_TASK_COLUMNS } from './simpleTaskColumns.js';
 import { compareAssigneesBySicil } from './taskDisplayValues.js';
-import { ganttAssigneeGroup } from '../gantt/ganttAssignees.js';
+import { taskAssigneeGroup } from './taskAssigneeIdentity.js';
 import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
 import { SIMPLE_TASK_FACET_KEYS, simpleTaskFacetValues, simpleTaskMatches } from './simpleTaskFacets.js';
 import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
@@ -116,7 +116,7 @@ export function SimpleTasksView({ onNewTask }) {
     const filtered = organization.filteredTasks.filter((task) => simpleTaskMatches(task, { search, filters }, null, referenceDay));
     // Sorumlu kimliği görev başına bir kez çözülür ve sıralamada yeniden kullanılır.
     const assigneeSortValues = sort.key === 'sorumlu'
-      ? new Map(filtered.map((task) => [task, ganttAssigneeGroup(task, personLookup)]))
+      ? new Map(filtered.map((task) => [task, taskAssigneeGroup(task, personLookup)]))
       : null;
 
     return filtered.sort((left, right) => {

@@ -16,7 +16,7 @@ import { compareAssigneesBySicil, taskProgressValue, taskSortValue } from '../ta
 import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from '../tasks/taskTableFacets.js';
 import { GanttOutlineControls } from './GanttOutlineControls.jsx';
 import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
-import { ganttAssigneeGroup } from './ganttAssignees.js';
+import { taskAssigneeGroup } from '../tasks/taskAssigneeIdentity.js';
 import { GANTT_CPM_DATE_KEYS, GANTT_NUMERIC_KEYS, createGanttColumnFilters, ganttColumnValue, ganttMatchesDerivedFilters } from './ganttColumnFilters.js';
 
 /* ── Gantt ──────────────────────────────────────────────── */
@@ -201,7 +201,7 @@ export function GanttView() {
   const personLookup = usePersonLookup();
   // Görev kapsamlı sorumlu kimliği gruplama ve sıralama boyunca bir kez çözülür.
   const taskAssigneeGroups = useMemo2(() => new Map(filteredTasks.map((task) => [
-    task, ganttAssigneeGroup(task, personLookup)
+    task, taskAssigneeGroup(task, personLookup)
   ])), [filteredTasks, personLookup]);
   const assigneeGroups = useMemo2(() => new Map(
     [...taskAssigneeGroups.values()].map((group) => [group.key, group])
