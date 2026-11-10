@@ -646,6 +646,7 @@ export function GanttView() {
                     sortKey={sortKey}
                     filterType={filterType}
                     filterOptions={filterOptions}
+                    preserveOptionOrder={c.key === 'sorumlu'}
                     numericMin={numMin}
                     numericMax={numMax}
                     numericUnit={numUnit}
@@ -964,7 +965,7 @@ export function GanttView() {
   );
 }
 
-function GanttColHead({ label, filter, onFilter, onSort, sortKey, filterType, filterOptions, numericMin, numericMax, numericUnit, align = 'left' }) {
+function GanttColHead({ label, filter, onFilter, onSort, sortKey, filterType, filterOptions, preserveOptionOrder = false, numericMin, numericMax, numericUnit, align = 'left' }) {
   const [open, setOpen] = useState2(false);
   const anchorRef = useRef2(null);
   const active = filterType === 'text' ? !!filter : Array.isArray(filter) ? filter.length > 0 : !!filter;
@@ -991,7 +992,7 @@ function GanttColHead({ label, filter, onFilter, onSort, sortKey, filterType, fi
           anchor={anchorRef.current}
           type={filterType}
           options={filterOptions || []}
-          preserveOptionOrder={label === 'Sorumlu'}
+          preserveOptionOrder={preserveOptionOrder}
           value={filter}
           onChange={onFilter}
           onClose={() => setOpen(false)}

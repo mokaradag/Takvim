@@ -11,7 +11,9 @@ import { createEmptyOrgFilter } from '../../domain/organization/organizationHier
 import { useTaskOrganizationFilter } from '../tasks/useTaskOrganizationFilter.js';
 import { TaskOrganizationFilterControls } from '../tasks/TaskOrganizationFilterControls.jsx';
 import { taskTableMatches, taskTableFacetValues } from '../tasks/taskTableFacets.js';
-import { taskSortValue } from '../tasks/taskDisplayValues.js';
+import { compareAssigneesBySicil, taskSortValue } from '../tasks/taskDisplayValues.js';
+import { createPersonLookup } from '../../components/avatarIdentity.js';
+import { ganttAssigneeGroup } from '../gantt/ganttAssignees.js';
 import { getStatus } from '../../scheduling/metrics/index.js';
 import { today } from '../../scheduling/dates/index.js';
 import { Icons } from '../../components/icons.jsx';
@@ -47,6 +49,7 @@ export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRe
   const [error, setError] = useState(null);
   const selectedTask = useSelectedTask();
   const directory = useAllPeople();
+  const personLookup = useMemo(() => createPersonLookup(directory), [directory]);
   const organization = useTaskOrganizationFilter(tasks, directory, organizationSelection, setOrganizationSelection);
   const dialogRef = useRef(null);
   const searchRef = useRef(null);
@@ -58,9 +61,11 @@ export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRe
     for (const task of tasks) for (const id of task.assigneeIds || []) {
       const person = byId.get(String(id));
       const identity = task.assigneeAvatarIdentities?.find((candidate) => String(candidate.employeeNo) === String(id));
-      found.set(String(id), person?.name || identity?.name || String(id));
+      const name = person?.name || identity?.name || String(id);
+      found.set(String(id), { name, person: person || identity || { name } });
     }
-    return [...found.entries()];
+    // Görünür seçenek kimliği değişmez; sıra yalnızca Sicil'e göre hesaplanır.
+    return [...found.entries()].sort(([, a], [, b]) => compareAssigneesBySicil(a.person, b.person));
   }, [tasks, directory]);
   const candidates = useMemo(
     () => filterKpiTasks(organization.filteredTasks, { ...filters, dateMode: profile.kpiDateMode }, referenceDay),
@@ -78,7 +83,7 @@ export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRe
   }, [candidates, columnFilters, facetKeys, profile.kpiDateMode, referenceDay]);
   const filterOptions = (key) => {
     if (key === 'proje') return projects.filter(([id]) => facets.proje.has(id)).map(([id, label]) => ({ value: id, label }));
-    if (key === 'sorumlu') return people.filter(([id]) => facets.sorumlu.has(id)).map(([id, name]) => ({ value: id, label: `${name} · ${id}` }));
+    if (key === 'sorumlu') return people.filter(([id]) => facets.sorumlu.has(id)).map(([id, { name }]) => ({ value: id, label: `${name} · ${id}` }));
     if (key === 'status') return TASK_STATUS_FILTER_OPTIONS.filter((option) => facets.status.has(option.value));
     if (key === 'priority') return TASK_PRIORITY_FILTER_OPTIONS
       .filter((priority) => facets.priority.has(priority.id))
@@ -90,8 +95,11 @@ export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRe
   };
   const filtered = useMemo(() => {
     const result = filterKpiTasks(candidates, { filters: columnFilters, dateMode: profile.kpiDateMode }, referenceDay);
+    // Görev kapsamlı kimlik bir kez çözülür, sıralama karşılaştırmasında yeniden üretilmez.
+    const assigneeSortValues = sort.key === 'sorumlu'
+      ? new Map(result.map((task) => [task, ganttAssigneeGroup(task, personLookup)]))
+      : null;
     const value = (task) => {
-      if (sort.key === 'sorumlu') return (task.sorumlu || []).join(', ');
       if (sort.key === 'status') return getStatus(task, referenceDay).label;
       if (sort.key === 'priority') return resolvePriority(task.priority).order;
       return taskSortValue(task, sort.key, profile.kpiDateMode);
@@ -100,6 +108,7 @@ export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRe
     // korur, çünkü `Array.prototype.sort` ES2019'dan beri kararlıdır. Ek bir
     // ayraç anahtarı, eşit tarihli görevleri başlığa göre yeniden dizerdi.
     return result.sort((left, right) => {
+      if (sort.key === 'sorumlu') return compareAssigneesBySicil(assigneeSortValues.get(left), assigneeSortValues.get(right), sort.dir);
       const a = value(left), b = value(right);
       // Değeri olmayan görev her iki yönde de EN ALTTA kalır.
       if (a == null || a === '') return b == null || b === '' ? 0 : 1;
@@ -107,7 +116,7 @@ export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRe
       const delta = typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b), 'tr');
       return delta * (sort.dir === 'desc' ? -1 : 1);
     });
-  }, [candidates, columnFilters, profile.kpiDateMode, referenceDay, sort]);
+  }, [candidates, columnFilters, profile.kpiDateMode, referenceDay, sort, personLookup]);
   const paged = useTaskTablePagination(filtered, JSON.stringify([filters, columnFilters, organization.selection, sort]));
   const change = (key, value) => setFilters((current) => ({ ...current, [key]: value }));
   const columnProps = (key) => ({
@@ -149,7 +158,7 @@ export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRe
       <div className="detail-list-filters">
         <label><span>Görev ara</span><input ref={searchRef} className="input" type="search" value={filters.search} onChange={(event) => change('search', event.target.value)} placeholder={profile.kpiSearchPlaceholder} /></label>
         <label><span>Proje</span><select className="input" value={filters.project} onChange={(event) => change('project', event.target.value)}><option value="">Tüm projeler</option>{projects.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
-        <label><span>Sorumlu</span><select className="input" value={filters.assignee} onChange={(event) => change('assignee', event.target.value)}><option value="">Tüm sorumlular</option>{people.map(([id, name]) => <option key={id} value={id}>{name} · {id}</option>)}</select></label>
+        <label><span>Sorumlu</span><select className="input" value={filters.assignee} onChange={(event) => change('assignee', event.target.value)}><option value="">Tüm sorumlular</option>{people.map(([id, { name }]) => <option key={id} value={id}>{name} · {id}</option>)}</select></label>
       </div>
       <div className="kpi-organization-filters">
         <TaskOrganizationFilterControls organization={organization} />
@@ -163,7 +172,8 @@ export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRe
             {tableColumns.map((column) => (column.filterType === 'date'
               ? <DateFilterableTH key={column.key} label={column.label} {...columnProps(column.key)} />
               : <FilterableTH key={column.key} label={column.label} {...columnProps(column.key)}
-                  filterType={column.filterType} filterOptions={column.filterType === 'multi' ? filterOptions(column.key) : undefined} />))}
+                  filterType={column.filterType} filterOptions={column.filterType === 'multi' ? filterOptions(column.key) : undefined}
+                  preserveOptionOrder={column.key === 'sorumlu'} />))}
           </tr></thead>
           <tbody>{paged.rows.map((task) => <tr key={task.id}>
             {tableColumns.map((column) => <td key={column.key} className={column.filterType === 'date' ? 'tabular' : undefined}>{cell(column.key, task)}</td>)}

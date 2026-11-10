@@ -34,10 +34,10 @@ const headerLabels = (view) => findElement(view.output, (node) => node.type === 
   .props.children.props.children.map((column) => column.props.label);
 const column = (view, label) => findElement(view.output, (node) => node.props?.label === label);
 
-function withModal(variant, run) {
-  globalThis[CLIENT_STATE] = { selectedTask: null, people };
+function withModal(variant, run, { tasks: modalTasks = tasks, people: modalPeople = people } = {}) {
+  globalThis[CLIENT_STATE] = { selectedTask: null, people: modalPeople };
   const view = mountComponent(KpiTaskModal, {
-    title: 'Toplam görev', tasks, variant, referenceDay: REFERENCE_DAY, onClose() {}, onOpenTask() {}
+    title: 'Toplam görev', tasks: modalTasks, variant, referenceDay: REFERENCE_DAY, onClose() {}, onOpenTask() {}
   });
   try { run(view); } finally { view.unmount(); delete globalThis[CLIENT_STATE]; }
 }
@@ -113,4 +113,30 @@ test('Temel Kip sınırları korunur: plan tarihi sütunları açılmaz', () => 
       assert.equal(column(view, label), null, `${label} sütunu Temel Kipte çizilmemelidir`);
     }
   });
+});
+
+test('KPI sorumlu sıralaması ve süzgeci Sicil sırasını iki kipte de korur', () => {
+  const numericPeople = [
+    { id: 'kimlik-10000', employeeNo: '10000', name: 'Ali' },
+    { id: 'kimlik-9000', employeeNo: '9000', name: 'Zeynep' }
+  ];
+  const numericTasks = [
+    { ...tasks[0], id: 'on-bin', sorumlu: ['Ali'], assigneeIds: ['kimlik-10000'],
+      assigneeAvatarIdentities: [{ name: 'Ali', employeeNo: '10000' }] },
+    { ...tasks[1], id: 'dokuz-bin', sorumlu: ['Zeynep'], assigneeIds: ['kimlik-9000'],
+      assigneeAvatarIdentities: [{ name: 'Zeynep', employeeNo: '9000' }] }
+  ];
+  for (const variant of ['advanced', 'simple']) {
+    withModal(variant, (view) => {
+      const header = () => column(view, variant === 'simple' ? 'Sorumlular' : 'Sorumlu');
+      assert.equal(header().props.preserveOptionOrder, true);
+      assert.deepEqual(header().props.filterOptions.map((item) => item.value), ['kimlik-9000', 'kimlik-10000']);
+      header().props.onSort('asc'); view.render();
+      assert.deepEqual(rows(view).map((row) => row.key), ['dokuz-bin', 'on-bin']);
+      header().props.onSort('desc'); view.render();
+      assert.deepEqual(rows(view).map((row) => row.key), ['on-bin', 'dokuz-bin']);
+      header().props.onFilter(['kimlik-9000']); view.render();
+      assert.deepEqual(rows(view).map((row) => row.key), ['dokuz-bin']);
+    }, { tasks: numericTasks, people: numericPeople });
+  }
 });
