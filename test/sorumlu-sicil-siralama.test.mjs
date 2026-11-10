@@ -5,7 +5,7 @@ import { button, click, mountDom } from './helpers/clientDomHarness.mjs';
 import { filterState, tasks as fixtureTasks } from './helpers/columnFilterFixtures.mjs';
 import { createPersonLookup } from '../src/components/avatarIdentity.js';
 import { ganttAssigneeGroup } from '../src/features/gantt/ganttAssignees.js';
-import { taskAssigneeFilterEntries } from '../src/features/tasks/taskAssigneeIdentity.js';
+import { taskAssigneeEntries, taskAssigneeFilterEntries } from '../src/features/tasks/taskAssigneeIdentity.js';
 import { createTaskAssigneeOrganizationIndex, filterTasksByOrganization, organizationPeopleForTasks } from '../src/domain/organization/taskOrganizationFilter.js';
 import { compareAssigneesBySicil } from '../src/features/tasks/taskDisplayValues.js';
 
@@ -14,6 +14,7 @@ const { SimpleTasksView } = await import('../src/features/tasks/SimpleTasksView.
 const { GanttView } = await import('../src/features/gantt/GanttView.jsx');
 const { PeopleDirectoryProvider } = await import('../src/components/PeopleDirectoryContext.jsx');
 const { TaskOrganizationFilterProvider } = await import('../src/features/tasks/TaskOrganizationFilterContext.jsx');
+const { TaskOrganizationFilterControls } = await import('../src/features/tasks/TaskOrganizationFilterControls.jsx');
 
 const people = [
   { id: 'internal-10000', employeeNo: '10000', name: 'Ali' },
@@ -207,6 +208,9 @@ test('Çakışan iç kimlik ve Sicil başka bir kişiyle eşleştirilmez', () =>
   const lookup = createPersonLookup(directory);
   const index = createTaskAssigneeOrganizationIndex(directory);
   assert.equal(lookup.byId('8000'), null);
+  assert.equal(lookup.isAmbiguousId('8000'), true);
+  assert.equal(lookup.isAmbiguousId('7000'), false);
+  assert.equal(index.ambiguousIds.has('8000'), true);
   assert.equal(index.peopleById.get('8000'), undefined);
   assert.equal(lookup.byId('7000')?.id, 'ic-a');
   assert.equal(lookup.byId('9000')?.name, 'Bora');
@@ -245,4 +249,54 @@ test('Dizinde bulunmayan kimlikle atanmış görev atanmamış sayılmaz', () =>
   assert.equal(ganttAssigneeGroup({
     assigneeIds: ['kimlik-yok', 'internal-9000'], sorumlu: []
   }, lookup).key, 'unresolved:kimlik-yok');
+});
+
+
+test('Eksik görev projeksiyonu saklı sorumluyu adla tahmin etmez', () => {
+  const lookup = createPersonLookup(people);
+  const projected = {
+    sorumlu: ['Zeynep', 'Ali'],
+    assigneeIds: ['internal-10000'],
+    assigneeAvatarIdentities: [{ name: 'Ali', employeeNo: '10000' }]
+  };
+  const entries = taskAssigneeEntries(projected, lookup);
+  assert.equal(entries[0].name, 'Zeynep');
+  assert.equal(entries[0].person, null);
+  assert.equal(entries[1].person?.employeeNo, '10000');
+  assert.equal(ganttAssigneeGroup(projected, lookup).person, null);
+  const legacy = taskAssigneeEntries({ sorumlu: ['Zeynep'] }, lookup);
+  assert.equal(legacy[0].person?.employeeNo, '9000');
+});
+
+test('Çakışan kimlik görev kapsamındaki kişiye de bağlanmaz', () => {
+  const directory = [
+    { id: '9000', employeeNo: '11000', name: 'Birinci' },
+    { id: 'ikinci', employeeNo: '9000', name: 'İkinci' }
+  ];
+  const lookup = createPersonLookup(directory);
+  const task = {
+    sorumlu: ['İkinci'], assigneeIds: ['9000'],
+    assigneeAvatarIdentities: [{ name: 'İkinci', employeeNo: '9000' }]
+  };
+  assert.equal(lookup.isAmbiguousId('9000'), true);
+  assert.equal(taskAssigneeEntries(task, lookup)[0].person, null);
+  assert.equal(ganttAssigneeGroup(task, lookup).person, null);
+});
+
+test('Kurumsal süzgeç çakışma uyarısını kişisel kimlik ifşa etmeden gösterir', () => {
+  const organization = {
+    selection: { directorate: '', department: '', unit: '' },
+    directorateOptions: [], departmentOptions: [], unitOptions: [],
+    hasIdentityConflicts: true,
+    selectLevel() {}
+  };
+  const view = mountDom(TaskOrganizationFilterControls, { organization });
+  try {
+    const warning = view.host.querySelector('[role="status"]');
+    assert.ok(warning);
+    assert.match(warning.textContent, /kimlikleri çakışıyor/);
+    assert.equal(warning.textContent.includes('9000'), false);
+  } finally {
+    view.unmount();
+  }
 });

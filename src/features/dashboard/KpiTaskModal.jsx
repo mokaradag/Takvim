@@ -59,8 +59,12 @@ export function KpiTaskModal({ title, tasks, onClose, onOpenTask, restoreFocusRe
     const found = new Map();
     for (const task of tasks) for (const id of task.assigneeIds || []) {
       // Görev kimliği iç ID veya Sicil olabilir; ortak kişi dizini ikisini de çözer.
-      const person = personLookup.byId(id);
-      const identity = task.assigneeAvatarIdentities?.find((candidate) => String(candidate.employeeNo) === String(id));
+      // Sicil/iç kimlik çakışıyorsa görev kapsamından da kişi tahmin edilmez.
+      const ambiguous = personLookup.isAmbiguousId(id);
+      const person = ambiguous ? null : personLookup.byId(id);
+      const identity = ambiguous ? null : task.assigneeAvatarIdentities?.find((candidate) =>
+        [candidate?.employeeNo, candidate?.sicil]
+          .some((value) => value != null && String(value).trim() === String(id).trim()));
       const name = person?.name || identity?.name || String(id);
       found.set(String(id), { name, person: person || identity || { name } });
     }

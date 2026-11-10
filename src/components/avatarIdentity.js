@@ -54,6 +54,11 @@ export function createPersonLookup(people = []) {
       const key = text(value);
       return key ? (byId.get(key) || null) : null;
     },
+    // Çakışan anahtar, görev kapsamında bile başka bir kişiye tahminle bağlanamaz.
+    isAmbiguousId(value) {
+      const key = text(value);
+      return key ? ambiguousIds.has(key) : false;
+    },
     byName(value) {
       const key = text(value);
       return key ? (byName.get(key) || null) : null;

@@ -68,7 +68,12 @@ export function taskAssigneeEntries(task = {}, lookup = EMPTY_PERSON_LOOKUP) {
       : assigneeId
         ? lookup.byId(assigneeId)
         : null;
-    const person = directoryPerson || scopedPerson || lookup.byName(name);
+    // Belirsiz kimliği başka kişiye bağlama; eksik görev projeksiyonunu ada göre tamamlama.
+    const ambiguousIdentity = assigneeId && lookup.isAmbiguousId(assigneeId);
+    const allowLegacyName = !Array.isArray(task.assigneeAvatarIdentities)
+      && !visibleIds.some(Boolean);
+    const person = ambiguousIdentity ? null
+      : directoryPerson || scopedPerson || (allowLegacyName ? lookup.byName(name) : null);
 
     const identity = text(person?.employeeNo)
       || text(person?.sicil)

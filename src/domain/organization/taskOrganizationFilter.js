@@ -49,7 +49,8 @@ export function createTaskAssigneeOrganizationIndex(people = []) {
     addIdentity(person?.sicil, person);
   }
 
-  return { peopleById, peopleByUniqueName };
+  // Çakışan anahtarlar, kimlikler gösterilmeden kullanıcıya uyarı vermek içindir.
+  return { peopleById, peopleByUniqueName, ambiguousIds };
 }
 
 /**

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { CLIENT_STATE, findElement, mountComponent } from './helpers/clientComponentHarness.mjs';
+import { button, click, mountDom } from './helpers/clientDomHarness.mjs';
 import { resolveDashboardVariant } from '../src/features/dashboard/dashboardVariant.js';
 import { TASK_PRIORITY_FILTER_OPTIONS } from '../src/domain/constants/index.js';
 
@@ -165,4 +166,62 @@ test('KPI sorumlu seçenekleri iç kimlikten farklı Sicil anahtarlarıyla doğr
       assert.deepEqual(rows(view).map((row) => row.key), ['sicil-kucuk']);
     }, { tasks: sicilTasks, people: sicilPeople });
   }
+});
+
+
+test('KPI açık sorumlu süzgecinde görünen seçenekler Sicil sırasındadır', () => {
+  const modalPeople = [
+    { id: 'kimlik-10000', employeeNo: '10000', name: 'Ali' },
+    { id: 'kimlik-9000', employeeNo: '9000', name: 'Zeynep' }
+  ];
+  const modalTasks = [
+    { ...tasks[0], id: 'on-bin', sorumlu: ['Ali'], assigneeIds: ['kimlik-10000'] },
+    { ...tasks[1], id: 'dokuz-bin', sorumlu: ['Zeynep'], assigneeIds: ['kimlik-9000'] }
+  ];
+  for (const variant of ['advanced', 'simple']) {
+    const view = mountDom(KpiTaskModal, {
+      title: 'Toplam görev', tasks: modalTasks, variant, referenceDay: REFERENCE_DAY,
+      onClose() {}, onOpenTask() {}
+    }, { selectedTask: null, people: modalPeople });
+    try {
+      click(button(variant === 'simple' ? 'Sorumlular' : 'Sorumlu', view.host.querySelector('thead')));
+      const labels = [...document.querySelectorAll('.col-filter-opt > span:last-child')]
+        .map((node) => node.textContent);
+      assert.deepEqual(labels, ['Zeynep · kimlik-9000', 'Ali · kimlik-10000']);
+    } finally {
+      view.unmount();
+    }
+  }
+});
+
+test('KPI sadece sicil içeren görev kapsamlı kişilerin adını ve sırasını korur', () => {
+  const scopedTasks = [
+    { ...tasks[0], id: 'sicil-10000', sorumlu: ['Ali'], assigneeIds: ['10000'],
+      assigneeAvatarIdentities: [{ name: 'Ali', sicil: '10000' }] },
+    { ...tasks[1], id: 'sicil-9000', sorumlu: ['Zeynep'], assigneeIds: ['9000'],
+      assigneeAvatarIdentities: [{ name: 'Zeynep', sicil: '9000' }] }
+  ];
+  for (const variant of ['advanced', 'simple']) {
+    withModal(variant, (view) => {
+      const header = column(view, variant === 'simple' ? 'Sorumlular' : 'Sorumlu');
+      assert.deepEqual(header.props.filterOptions.map(({ value, label }) => [value, label]), [
+        ['9000', 'Zeynep · 9000'], ['10000', 'Ali · 10000']
+      ]);
+    }, { tasks: scopedTasks, people: [] });
+  }
+});
+
+test('KPI çakışan Sicili görev kapsamındaki yanlış kişiye bağlamaz', () => {
+  const directory = [
+    { id: '9000', employeeNo: '11000', name: 'İç kimlik sahibi' },
+    { id: 'ikinci', employeeNo: '9000', name: 'Sicil sahibi' }
+  ];
+  const scopedTask = {
+    ...tasks[0], sorumlu: ['Sicil sahibi'], assigneeIds: ['9000'],
+    assigneeAvatarIdentities: [{ name: 'Sicil sahibi', employeeNo: '9000' }]
+  };
+  withModal('advanced', (view) => {
+    const options = column(view, 'Sorumlu').props.filterOptions;
+    assert.deepEqual(options.map(({ value, label }) => [value, label]), [['9000', '9000 · 9000']]);
+  }, { tasks: [scopedTask], people: directory });
 });
