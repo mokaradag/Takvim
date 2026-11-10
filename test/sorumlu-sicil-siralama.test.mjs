@@ -300,3 +300,59 @@ test('Kurumsal süzgeç çakışma uyarısını kişisel kimlik ifşa etmeden g�
     view.unmount();
   }
 });
+
+test('Görev kapsamındaki çakışma isimli ve isimsiz görevde çözülmez', () => {
+  const directory = [
+    { id: 'ic-a', employeeNo: '9000', name: 'Ayşe' },
+    { id: '9000', employeeNo: '10000', name: 'Bora' }
+  ];
+  const lookup = createPersonLookup(directory);
+  const scoped = { id: 'ic-a', employeeNo: '9000', name: 'Ayşe' };
+  for (const sorumlu of [['Ayşe'], []]) {
+    const task = { assigneeIds: ['ic-a'], sorumlu, assigneeAvatarIdentities: [scoped] };
+    const entry = taskAssigneeEntries(task, lookup)[0];
+    assert.equal(entry.person, null);
+    assert.match(entry.key, /^unresolved:/);
+    assert.equal(ganttAssigneeGroup(task, lookup).person, null);
+  }
+
+  // Görevdeki iç kimlik, dizindeki başka kişiye ait Sicil'e dönüşemez.
+  const onePersonLookup = createPersonLookup([{ id: '9000', name: 'Dizindeki kişi' }]);
+  const task = {
+    assigneeIds: ['gorev-ic'], sorumlu: ['Görevdeki kişi'],
+    assigneeAvatarIdentities: [{ id: 'gorev-ic', employeeNo: '9000', name: 'Görevdeki kişi' }]
+  };
+  assert.equal(taskAssigneeEntries(task, onePersonLookup)[0].person, null);
+});
+
+test('Belirsiz kimlik çözülmüş Sicil ile aynı Gantt grubuna girmez', () => {
+  const lookup = createPersonLookup([
+    { id: 'ic-a', employeeNo: '9000', name: 'Ayşe' },
+    { id: '9000', employeeNo: '10000', name: 'Bora' }
+  ]);
+  const resolved = ganttAssigneeGroup({ assigneeIds: ['ic-a'] }, lookup);
+  const ambiguous = ganttAssigneeGroup({ assigneeIds: ['9000'] }, lookup);
+  assert.equal(resolved.key, 'person:9000');
+  assert.equal(ambiguous.key, 'unresolved:9000');
+  assert.notEqual(resolved.key, ambiguous.key);
+});
+
+test('Belirsiz ve bulunamayan sorumlu kimlikleri süzgeçten düşmez', () => {
+  const lookup = createPersonLookup([
+    { id: 'ic-a', employeeNo: '9000', name: 'Ayşe' },
+    { id: '9000', employeeNo: '10000', name: 'Bora' }
+  ]);
+  const options = taskAssigneeFilterEntries(new Set(['ic-a', '9000', 'kimlik-yok']), lookup);
+  assert.deepEqual(new Set(options.map(([id]) => id)), new Set(['ic-a', '9000', 'kimlik-yok']));
+  assert.match(options.find(([id]) => id === '9000')[1].name, /9000/);
+  assert.match(options.find(([id]) => id === 'kimlik-yok')[1].name, /kimlik-yok/);
+});
+
+test('Aynı görünen ada sahip çözümsüz sorumlular Gantt üzerinde birleşmez', () => {
+  const lookup = createPersonLookup([]);
+  const first = ganttAssigneeGroup({ sorumlu: ['Ortak ad'], assigneeIds: ['bilinmeyen-1'] }, lookup);
+  const second = ganttAssigneeGroup({ sorumlu: ['Ortak ad'], assigneeIds: ['bilinmeyen-2'] }, lookup);
+  assert.equal(first.key, 'unresolved:bilinmeyen-1');
+  assert.equal(second.key, 'unresolved:bilinmeyen-2');
+  assert.notEqual(first.key, second.key);
+});

@@ -6,12 +6,28 @@ function text(value) {
   return value == null ? '' : String(value).trim();
 }
 
-/** Süzgeç değeri görevdeki kimliktir; kişi yalnızca Sicil sıralaması için çözülür. */
+/** Süzgeç değeri görevdeki kimliktir; belirsiz kimlikler de seçilebilir kalır. */
 export function taskAssigneeFilterEntries(ids, lookup = EMPTY_PERSON_LOOKUP) {
   return [...ids]
-    .map((id) => [String(id), lookup.byId(id)])
-    .filter(([, person]) => person)
+    .map((id) => [String(id), lookup.byId(id) || { name: `Bilinmeyen sorumlu (${id})` }])
     .sort(([, left], [, right]) => compareAssigneesBySicil(left, right));
+}
+
+/** Görev kapsamındaki kişi, çakışan dizin kimliğinden tahmin edilmez. */
+function hasScopedIdentityConflict(person, lookup) {
+  const scopedId = text(person?.id);
+  const scopedName = text(person?.name);
+  return [person?.id, person?.employeeNo, person?.sicil].some((candidate) => {
+    const id = text(candidate);
+    if (!id) return false;
+    if (lookup.isAmbiguousId?.(id)) return true;
+    const directoryPerson = lookup.byId(id);
+    if (!directoryPerson) return false;
+    const directoryId = text(directoryPerson.id);
+    return scopedId && directoryId
+      ? scopedId !== directoryId
+      : !scopedId && scopedName && text(directoryPerson.name) && scopedName !== text(directoryPerson.name);
+  });
 }
 
 export function taskAssigneeEntries(task = {}, lookup = EMPTY_PERSON_LOOKUP) {
@@ -22,7 +38,13 @@ export function taskAssigneeEntries(task = {}, lookup = EMPTY_PERSON_LOOKUP) {
   // başka bir kişi türetme. Yalnızca kimliği bilinen atama kaybolmasın.
   if (!names.length) {
     if (scopedPeople.length) {
-      return resolveAvatarEntries({ personIds: task.assigneeIds, people: scopedPeople, lookup });
+      return resolveAvatarEntries({ personIds: task.assigneeIds, people: scopedPeople, lookup })
+        .map((entry) => {
+          if (!hasScopedIdentityConflict(entry.person, lookup)) return entry;
+          const id = text(entry.person?.id) || text(entry.person?.employeeNo)
+            || text(entry.person?.sicil) || entry.key;
+          return { key: `unresolved:${id}`, name: 'Bilinmeyen sorumlu', person: null };
+        });
     }
     const entries = [];
     const seen = new Set();
@@ -69,17 +91,19 @@ export function taskAssigneeEntries(task = {}, lookup = EMPTY_PERSON_LOOKUP) {
         ? lookup.byId(assigneeId)
         : null;
     // Belirsiz kimliği başka kişiye bağlama; eksik görev projeksiyonunu ada göre tamamlama.
-    const ambiguousIdentity = assigneeId && lookup.isAmbiguousId(assigneeId);
+    const ambiguousIdentity = (assigneeId && lookup.isAmbiguousId(assigneeId))
+      || (scopedPerson && hasScopedIdentityConflict(scopedPerson, lookup));
     const allowLegacyName = !Array.isArray(task.assigneeAvatarIdentities)
       && !visibleIds.some(Boolean);
     const person = ambiguousIdentity ? null
-      : directoryPerson || scopedPerson || (allowLegacyName ? lookup.byName(name) : null);
+      : scopedPerson || directoryPerson || (allowLegacyName ? lookup.byName(name) : null);
 
     const identity = text(person?.employeeNo)
       || text(person?.sicil)
-      || text(person?.id)
-      || assigneeId;
-    const baseKey = identity || `name:${name}`;
+      || text(person?.id);
+    // Çözümsüz kimlik hiçbir zaman çözülmüş kişi anahtarıyla birleşmez.
+    const baseKey = person ? (identity || assigneeId || `name:${name}`)
+      : (assigneeId || scopedIdentity) ? `unresolved:${assigneeId || scopedIdentity}` : `name:${name}`;
     const occurrence = keyCounts.get(baseKey) || 0;
     keyCounts.set(baseKey, occurrence + 1);
 

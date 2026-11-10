@@ -367,3 +367,22 @@ test("alan bağlamı proje kipinde sıralı WBS verisini döndürür", () => {
   }));
   assert.deepEqual(context.wbs.map((node) => node.id), ['p1-root', 'p1-2', 'p1-2-a', 'p1-10']);
 });
+
+test('Proje çalışma alanı katılımcıları Sicil ve çalışan numarasıyla da bulunur', () => {
+  const value = {
+    workspaceMode: 'project',
+    selectedProjectId: 'p1',
+    projects: [{ id: 'p1', leadId: 'lider' }],
+    tasks: [
+      { id: 't1', projectId: 'p1', assigneeIds: ['9000'] },
+      { id: 't2', projectId: 'p1', assigneeIds: ['8000'] }
+    ],
+    people: [
+      { id: 'ic-a', employeeNo: '9000', name: 'Ayşe' },
+      { id: 'ic-b', sicil: '8000', name: 'Bora' },
+      { id: 'lider', name: 'Lider' },
+      { id: 'ilgisiz', employeeNo: '7000', name: 'Diğer' }
+    ]
+  };
+  assert.deepEqual(selectWorkspacePeople(value).map((person) => person.id), ['ic-a', 'ic-b', 'lider']);
+});
