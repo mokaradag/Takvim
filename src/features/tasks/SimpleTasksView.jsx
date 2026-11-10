@@ -45,6 +45,7 @@ function projectLabel(project) {
   return project.code ? `${project.code} · ${project.name}` : project.name;
 }
 
+/** Temel kip görev tablosunu, Sicil sıralamalı sorumlu sütunuyla gösterir. */
 export function SimpleTasksView({ onNewTask }) {
   const tasks = useTasks();
   const todayKey = useTodayKey();

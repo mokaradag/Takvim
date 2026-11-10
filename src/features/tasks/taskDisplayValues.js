@@ -24,8 +24,8 @@ export function effectiveTaskDate(task, key) {
 }
 
 /**
- * Sicil numarası sayısal karşılaştırılır; iç kişi kimliği kullanılmaz.
- * Eksik veya geçersiz Siciller sonda, eşit Siciller kararlı sırada kalır.
+ * Kişiden veya sorumlu grubundan sayısal Sicil metnini çıkarır.
+ * Büyük Sicillerde taşma yaşanmaması için değer metin olarak tutulur.
  */
 function sortableSicil(entry) {
   const person = entry?.person ?? entry;
@@ -36,6 +36,15 @@ function sortableSicil(entry) {
   return null;
 }
 
+/**
+ * Sorumluları sayısal Sicile göre seçilen yönde karşılaştırır.
+ * Geçerli Sicil bulunmayan kayıtlar ve atanmamışlar iki yönde de sonda kalır;
+ * eşit Sicillerde karşılaştırma sıfırdır ve mevcut sıra korunur.
+ * @param {object} a İlk kişi veya sorumlu grubu.
+ * @param {object} b İkinci kişi veya sorumlu grubu.
+ * @param {'asc'|'desc'} direction Sıralama yönü.
+ * @returns {number} Sıralama karşılaştırma sonucu.
+ */
 export function compareAssigneesBySicil(a, b, direction = 'asc') {
   // Atanmamış görevler, sayısal Sicili bulunmayan atanmış görevlerden de sonra gelir.
   const leftUnassigned = a?.key === 'unassigned:';

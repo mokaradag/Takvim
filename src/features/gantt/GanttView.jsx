@@ -112,6 +112,10 @@ function CpmTooltipRows({ schedule }) {
   );
 }
 
+/**
+ * Görevleri Gantt zaman çizelgesinde proje veya sorumlu gruplarıyla gösterir.
+ * Sorumlu sıralamasında sayısal Sicil karşılaştırmasını kullanır.
+ */
 export function GanttView() {
   const tasks = useTasks();
   const projects = useProjects();
@@ -961,6 +965,7 @@ export function GanttView() {
   );
 }
 
+/** Gantt sütunu için sıralama ve filtre menüsünü gösterir; seçenek sırasını koruyabilir. */
 function GanttColHead({ label, filter, onFilter, onSort, sortKey, filterType, filterOptions, preserveOptionOrder = false, numericMin, numericMax, numericUnit, align = 'left' }) {
   const [open, setOpen] = useState2(false);
   const anchorRef = useRef2(null);

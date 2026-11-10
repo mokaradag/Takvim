@@ -36,7 +36,10 @@ function projectLabel(project) {
   return project.code ? `${project.code} · ${project.name}` : project.name;
 }
 
-/* Veri tablosu.*/
+/**
+ * Kapsamlı kip görev tablosunu sıralama ve sütun filtreleriyle gösterir.
+ * Sorumlular Sicile göre sayısal sıralanır; filtre seçeneklerinin sırası korunur.
+ */
 export function TasksView() {
   const tasks = useTasks();
   const todayKey = useTodayKey();

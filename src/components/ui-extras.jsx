@@ -303,7 +303,10 @@ export function AnimatedNumber({ value, duration = 700, format, suffix = '' }) {
   return <span className="tabular">{shown}{suffix}</span>;
 }
 
-// ColumnFilter sütun başlığında açılır kutudur.
+/**
+ * Sütun başlığının sıralama ve çoklu/tarih/sayısal filtre menüsünü gösterir.
+ * preserveOptionOrder ile dışarıdan verilen Sicil sırası korunabilir.
+ */
 export function ColumnFilter({ label, anchor, type = 'text', options = [], preserveOptionOrder = false, value, onChange, onClose, sort, onSort, numericMin, numericMax, numericUnit }) {
   const [q, setQ] = useSx(typeof value === 'string' ? value : '');
   const [sel, setSel] = useSx(Array.isArray(value) ? new Set(value) : new Set());
@@ -667,7 +670,10 @@ export { dateMatchesFilter } from './dateMatchesFilter.js';
 // değişmez.
 export { numericMatchesFilter } from './numericMatchesFilter.js';
 
-// Sıralanabilir ve süzülebilir sütun başlığı.
+/**
+ * Sıralanabilir tablo başlığını ve sütuna özgü filtre menüsünü oluşturur.
+ * Önceden sıralanmış filtre seçeneklerini gerektiğinde aynen aktarır.
+ */
 export function FilterableTH({ label, sortKey, sortDir, onSort, filter, onFilter, filterType = 'text', filterOptions, preserveOptionOrder = false, style, numericMin, numericMax, numericUnit }) {
   const [open, setOpen] = useSx(false);
   const anchorRef = useRx(null);
