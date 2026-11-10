@@ -1,8 +1,17 @@
 import { EMPTY_PERSON_LOOKUP, resolveAvatarEntries } from '../../components/avatarIdentity.js';
 import { taskAssigneeDisplayNames } from '../task-detail/taskAssigneeDisplay.js';
+import { compareAssigneesBySicil } from './taskDisplayValues.js';
 
 function text(value) {
   return value == null ? '' : String(value).trim();
+}
+
+/** Süzgeç değeri görevdeki kimliktir; kişi yalnızca Sicil sıralaması için çözülür. */
+export function taskAssigneeFilterEntries(ids, lookup = EMPTY_PERSON_LOOKUP) {
+  return [...ids]
+    .map((id) => [String(id), lookup.byId(id)])
+    .filter(([, person]) => person)
+    .sort(([, left], [, right]) => compareAssigneesBySicil(left, right));
 }
 
 export function taskAssigneeEntries(task = {}, lookup = EMPTY_PERSON_LOOKUP) {

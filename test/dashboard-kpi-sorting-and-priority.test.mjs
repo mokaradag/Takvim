@@ -121,9 +121,9 @@ test('KPI sorumlu sıralaması ve süzgeci Sicil sırasını iki kipte de korur'
     { id: 'kimlik-9000', employeeNo: '9000', name: 'Zeynep' }
   ];
   const numericTasks = [
-    { ...tasks[0], id: 'on-bin', sorumlu: ['Ali'], assigneeIds: ['kimlik-10000'],
+    { ...tasks[0], id: 'on-bin', targetFinish: '2026-09-25', sorumlu: ['Ali'], assigneeIds: ['kimlik-10000'],
       assigneeAvatarIdentities: [{ name: 'Ali', employeeNo: '10000' }] },
-    { ...tasks[1], id: 'dokuz-bin', sorumlu: ['Zeynep'], assigneeIds: ['kimlik-9000'],
+    { ...tasks[1], id: 'dokuz-bin', targetFinish: '2026-12-01', sorumlu: ['Zeynep'], assigneeIds: ['kimlik-9000'],
       assigneeAvatarIdentities: [{ name: 'Zeynep', employeeNo: '9000' }] }
   ];
   for (const variant of ['advanced', 'simple']) {
@@ -131,6 +131,8 @@ test('KPI sorumlu sıralaması ve süzgeci Sicil sırasını iki kipte de korur'
       const header = () => column(view, variant === 'simple' ? 'Sorumlular' : 'Sorumlu');
       assert.equal(header().props.preserveOptionOrder, true);
       assert.deepEqual(header().props.filterOptions.map((item) => item.value), ['kimlik-9000', 'kimlik-10000']);
+      // Varsayılan tarih sırası Sicil sırasının tersidir; sıralama yok sayılırsa test geçemez.
+      assert.deepEqual(rows(view).map((row) => row.key), ['on-bin', 'dokuz-bin']);
       header().props.onSort('asc'); view.render();
       assert.deepEqual(rows(view).map((row) => row.key), ['dokuz-bin', 'on-bin']);
       header().props.onSort('desc'); view.render();
@@ -147,15 +149,18 @@ test('KPI sorumlu seçenekleri iç kimlikten farklı Sicil anahtarlarıyla doğr
     { id: 'ic-9000', employeeNo: '9000', name: 'Zeynep' }
   ];
   const sicilTasks = [
-    { ...tasks[0], id: 'sicil-buyuk', sorumlu: ['Ali'], assigneeIds: ['10000'] },
-    { ...tasks[1], id: 'sicil-kucuk', sorumlu: ['Zeynep'], assigneeIds: ['9000'] }
+    { ...tasks[0], id: 'sicil-buyuk', targetFinish: '2026-09-25', sorumlu: ['Ali'], assigneeIds: ['10000'] },
+    { ...tasks[1], id: 'sicil-kucuk', targetFinish: '2026-12-01', sorumlu: ['Zeynep'], assigneeIds: ['9000'] }
   ];
   for (const variant of ['advanced', 'simple']) {
     withModal(variant, (view) => {
       const header = () => column(view, variant === 'simple' ? 'Sorumlular' : 'Sorumlu');
       assert.deepEqual(header().props.filterOptions.map((item) => item.value), ['9000', '10000']);
+      assert.deepEqual(rows(view).map((row) => row.key), ['sicil-buyuk', 'sicil-kucuk']);
       header().props.onSort('asc'); view.render();
       assert.deepEqual(rows(view).map((row) => row.key), ['sicil-kucuk', 'sicil-buyuk']);
+      header().props.onSort('desc'); view.render();
+      assert.deepEqual(rows(view).map((row) => row.key), ['sicil-buyuk', 'sicil-kucuk']);
       header().props.onFilter(['9000']); view.render();
       assert.deepEqual(rows(view).map((row) => row.key), ['sicil-kucuk']);
     }, { tasks: sicilTasks, people: sicilPeople });

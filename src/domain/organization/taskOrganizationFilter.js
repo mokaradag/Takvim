@@ -31,6 +31,12 @@ export function createTaskAssigneeOrganizationIndex(people = []) {
     }
   }
 
+  // Önce iç kimlikler korunur; ardından mevcut dizindeki Sicil anahtarları eklenir.
+  for (const person of people) {
+    const sicil = normalizedId(person?.employeeNo) || normalizedId(person?.sicil);
+    if (sicil && !peopleById.has(sicil)) peopleById.set(sicil, person);
+  }
+
   return { peopleById, peopleByUniqueName };
 }
 

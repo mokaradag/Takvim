@@ -5,6 +5,8 @@ import { button, click, mountDom } from './helpers/clientDomHarness.mjs';
 import { filterState, tasks as fixtureTasks } from './helpers/columnFilterFixtures.mjs';
 import { createPersonLookup } from '../src/components/avatarIdentity.js';
 import { ganttAssigneeGroup } from '../src/features/gantt/ganttAssignees.js';
+import { taskAssigneeFilterEntries } from '../src/features/tasks/taskAssigneeIdentity.js';
+import { createTaskAssigneeOrganizationIndex, filterTasksByOrganization, organizationPeopleForTasks } from '../src/domain/organization/taskOrganizationFilter.js';
 import { compareAssigneesBySicil } from '../src/features/tasks/taskDisplayValues.js';
 
 const { TasksView } = await import('../src/features/tasks/TasksView.jsx');
@@ -160,4 +162,21 @@ test('Atanmamış görevler geçersiz Sicilli atanmış görevlerden her iki yö
   }
   assert.ok(compareAssigneesBySicil(invalid, noSicil) < 0);
   assert.ok(compareAssigneesBySicil(invalid, noSicil, 'desc') > 0);
+});
+
+// İç kişi kimliği ile Sicil ayrıldığında seçenek değeri görev kimliği kalmalıdır.
+test('Sicil anahtarlı sorumlular süzgeç ve kurumsal kapsamda kaybolmaz', () => {
+  const scopedPeople = people.map((person) => ({
+    ...person,
+    organization: { directorate: person.employeeNo === '9000' ? 'D9' : 'D10' }
+  }));
+  const lookup = createPersonLookup(scopedPeople);
+  const options = taskAssigneeFilterEntries(new Set(['10000', '9000']), lookup);
+  assert.deepEqual(options.map(([id]) => id), ['9000', '10000']);
+  assert.deepEqual(options.map(([, person]) => person.id), ['internal-9000', 'internal-10000']);
+
+  const sicilTasks = [{ id: 'a', assigneeIds: ['10000'] }, { id: 'b', assigneeIds: ['9000'] }];
+  const index = createTaskAssigneeOrganizationIndex(scopedPeople);
+  assert.deepEqual(organizationPeopleForTasks(sicilTasks, index).map((person) => person.id), ['internal-10000', 'internal-9000']);
+  assert.deepEqual(filterTasksByOrganization(sicilTasks, { directorate: 'D9', department: '', unit: '' }, index).map((task) => task.id), ['b']);
 });

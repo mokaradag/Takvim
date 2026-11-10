@@ -16,7 +16,7 @@ import { compareAssigneesBySicil, taskProgressValue, taskSortValue } from '../ta
 import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from '../tasks/taskTableFacets.js';
 import { GanttOutlineControls } from './GanttOutlineControls.jsx';
 import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
-import { taskAssigneeGroup } from '../tasks/taskAssigneeIdentity.js';
+import { taskAssigneeFilterEntries, taskAssigneeGroup } from '../tasks/taskAssigneeIdentity.js';
 import { GANTT_CPM_DATE_KEYS, GANTT_NUMERIC_KEYS, createGanttColumnFilters, ganttColumnValue, ganttMatchesDerivedFilters } from './ganttColumnFilters.js';
 
 /* ── Gantt ──────────────────────────────────────────────── */
@@ -617,12 +617,9 @@ export function GanttView() {
                 // değeri KARARLI Sicil kimliğidir: ada göre süzülseydi aynı adlı
                 // iki çalışan tek seçenekte birleşir ve biri seçildiğinde diğerinin
                 // görevleri de listelenirdi.
-                filterOptions = people
-                  .filter((p) => facets.sorumlu.has(String(p.id)) || colFilters.sorumlu.includes(String(p.id)))
-                  .slice()
-                  .sort((a, b) => compareAssigneesBySicil(a, b))
-                  .map(p => ({
-                    value: String(p.id),
+                filterOptions = taskAssigneeFilterEntries(new Set([...facets.sorumlu, ...colFilters.sorumlu]), personLookup)
+                   .map(([id, p]) => ({
+                     value: id,
                     label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name,
                     keywords: [p.name, p.employeeNo, p.username, p.role, p.team, p.organization?.department, p.organization?.unit],
                     icon: <Avatar name={p.name} person={p} size="sm" />

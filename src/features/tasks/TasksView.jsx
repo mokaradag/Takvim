@@ -22,7 +22,7 @@ import { canResolveTaskAssignee } from '../../state/appState';
 import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
 import { resolveTaskDeleteAccess } from '../../state/projectWritePolicy.js';
 import { compareAssigneesBySicil, taskProgressValue, taskSortValue } from './taskDisplayValues.js';
-import { taskAssigneeGroup } from './taskAssigneeIdentity.js';
+import { taskAssigneeFilterEntries, taskAssigneeGroup } from './taskAssigneeIdentity.js';
 import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
 import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from './taskTableFacets.js';
 import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
@@ -142,17 +142,15 @@ export function TasksView() {
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b, 'tr'))
     .map(k => ({ value: k, label: k })), [facetValues, colFilter.keyword, withSelected]);
-  const sorumluOpts = useMemo1(() => people
-    .filter(p => assigneeOptionIds.has(String(p.id)))
-    .sort((a, b) => compareAssigneesBySicil(a, b))
+  const sorumluOpts = useMemo1(() => taskAssigneeFilterEntries(assigneeOptionIds, personLookup)
     // Sicil, unvan ve birim de aranabilir: binlerce kişilik dizinde ad tek
     // başına yeterli bir arama anahtarı değildir.
-    .map(p => ({
-      value: String(p.id),
+    .map(([id, p]) => ({
+      value: id,
       label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name,
       keywords: [p.name, p.employeeNo, p.username, p.role, p.team, p.organization?.department, p.organization?.unit],
       icon: <Avatar name={p.name} person={p} size="sm" />
-    })), [people, assigneeOptionIds]);
+    })), [assigneeOptionIds, personLookup]);
   const statusOpts = useMemo1(() => TASK_STATUS_FILTER_OPTIONS
     .filter((status) => statusOptionValues.has(String(status.value)))
     .map((status) => ({

@@ -20,7 +20,7 @@ import { resolveTaskDeleteAccess } from '../../state/projectWritePolicy.js';
 import { usePeople, useProjects, useTaskActions, useTaskAssignableProjects, useTasks } from '../../state/hooks';
 import { createEmptySimpleTaskFilterState, SIMPLE_TASK_COLUMNS } from './simpleTaskColumns.js';
 import { compareAssigneesBySicil } from './taskDisplayValues.js';
-import { taskAssigneeGroup } from './taskAssigneeIdentity.js';
+import { taskAssigneeFilterEntries, taskAssigneeGroup } from './taskAssigneeIdentity.js';
 import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
 import { SIMPLE_TASK_FACET_KEYS, simpleTaskFacetValues, simpleTaskMatches } from './simpleTaskFacets.js';
 import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
@@ -86,15 +86,13 @@ export function SimpleTasksView({ onNewTask }) {
   [projects, facetValues]);
   const keywordOptions = useMemo(() => [...facetValues.keyword]
     .sort((a, b) => a.localeCompare(b, 'tr')).map((value) => ({ value, label: value })), [facetValues]);
-  const assigneeOptions = useMemo(() => people
-    .filter((person) => facetValues.sorumlu.has(String(person.id)))
-    .slice()
-    .sort((a, b) => compareAssigneesBySicil(a, b)).map((person) => ({
-    value: String(person.id),
-    label: person.employeeNo ? `${person.employeeNo} · ${person.name}` : person.name,
-    keywords: [person.name, person.employeeNo, person.role, person.team],
-    icon: <Avatar name={person.name} person={person} size="sm" />
-  })), [people, facetValues]);
+  const assigneeOptions = useMemo(() => taskAssigneeFilterEntries(facetValues.sorumlu, personLookup)
+    .map(([id, person]) => ({
+      value: id,
+      label: person.employeeNo ? `${person.employeeNo} · ${person.name}` : person.name,
+      keywords: [person.name, person.employeeNo, person.role, person.team],
+      icon: <Avatar name={person.name} person={person} size="sm" />
+    })), [facetValues, personLookup]);
   const priorityOptions = TASK_PRIORITY_FILTER_OPTIONS
     .filter((priority) => facetValues.priority.has(priority.id))
     .map((priority) => ({
