@@ -175,10 +175,14 @@ export function TasksView() {
     // düzeltilen bir kural ötekinde kalıyordu.
     const out = organization.filteredTasks
       .filter((task) => taskTableMatches(task, { search, filters: colFilter, dateMode: 'effective' }, null, today_));
+    // Kimlik çözümlemesi sıralama karşılaştırmalarında yeniden yapılmaz.
+    const assigneeSortValues = sort.key === 'sorumlu'
+      ? new Map(out.map((task) => [task, ganttAssigneeGroup(task, personLookup)]))
+      : null;
 
     out.sort((a, b) => {
       let va = taskSortValue(a, sort.key, 'effective'), vb = taskSortValue(b, sort.key, 'effective');
-      if (sort.key === 'sorumlu') return compareAssigneesBySicil(ganttAssigneeGroup(a, personLookup), ganttAssigneeGroup(b, personLookup), sort.dir);
+      if (sort.key === 'sorumlu') return compareAssigneesBySicil(assigneeSortValues.get(a), assigneeSortValues.get(b), sort.dir);
       if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
       const aMissing = va == null || va === '';
       const bMissing = vb == null || vb === '';

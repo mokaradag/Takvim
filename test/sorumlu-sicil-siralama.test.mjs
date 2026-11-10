@@ -8,6 +8,7 @@ import { ganttAssigneeGroup } from '../src/features/gantt/ganttAssignees.js';
 import { compareAssigneesBySicil } from '../src/features/tasks/taskDisplayValues.js';
 
 const { TasksView } = await import('../src/features/tasks/TasksView.jsx');
+const { SimpleTasksView } = await import('../src/features/tasks/SimpleTasksView.jsx');
 const { GanttView } = await import('../src/features/gantt/GanttView.jsx');
 const { PeopleDirectoryProvider } = await import('../src/components/PeopleDirectoryContext.jsx');
 const { TaskOrganizationFilterProvider } = await import('../src/features/tasks/TaskOrganizationFilterContext.jsx');
@@ -26,15 +27,16 @@ function screenState() {
   return { ...state, people, workspace: { ...state.workspace, people } };
 }
 
-function Screen({ gantt }) {
-  const view = React.createElement(gantt ? GanttView : TasksView);
+function Screen({ gantt, simple = false }) {
+  const view = React.createElement(gantt ? GanttView : simple ? SimpleTasksView : TasksView,
+    simple ? { onNewTask() {} } : null);
   return React.createElement(PeopleDirectoryProvider, { people },
     gantt ? view : React.createElement(TaskOrganizationFilterProvider, null, view));
 }
 
 function taskNames(gantt) {
   return gantt
-    ? [...document.querySelectorAll('.gantt-task-row .tr-name > span')].map((node) => node.textContent)
+    ? [...document.querySelectorAll('.gantt-task-row .tr-name')].map((node) => node.textContent)
     : [...document.querySelectorAll('tbody tr')].map((node) => node.textContent);
 }
 
@@ -66,6 +68,11 @@ test('Siciller sayısal, iç kimlikten bağımsız ve eşit değerlerde kararlı
   assert.ok(compareAssigneesBySicil(malformed, absent) < 0);
   assert.equal(compareAssigneesBySicil({ id: '9000', name: 'Kimlik' }, people[1]), 1);
   assert.ok(compareAssigneesBySicil({ employeeNo: '100000000000000000000' }, { employeeNo: '99999999999999999999' }) > 0);
+  assert.ok(compareAssigneesBySicil({ employeeNo: '', sicil: '9000' }, people[0]) < 0);
+  assert.ok(compareAssigneesBySicil({ employeeNo: 'bozuk', sicil: '9000' }, people[0]) < 0);
+  assert.ok(compareAssigneesBySicil({ employeeNo: '10000', sicil: '9000' }, people[1]) > 0);
+  assert.equal(compareAssigneesBySicil({ employeeNo: 'bozuk', sicil: 'geçersiz' }, people[0]), 1);
+  assert.ok(compareAssigneesBySicil({ person: { employeeNo: 'bozuk', sicil: '9000' } }, people[0]) < 0);
 });
 
 test('Görev kapsamlı ve maskeli kimlikte ilk sorumlunun Sicili korunur', () => {
@@ -111,6 +118,27 @@ test('Gantt sorumlu grupları Sicile göre artan ve azalan sıralanır', () => {
     click(button('Azalan'));
     headers = [...document.querySelectorAll('.gantt-group-header')].map((node) => node.textContent);
     assert.ok(headers[0].includes('Ali') && headers[1].includes('Zeynep'));
+  } finally {
+    view.unmount();
+  }
+});
+
+test('Temel Kip sorumlu süzgeci ve iki sıralama yönü sayısal Sicili kullanır', () => {
+  const view = mountDom(Screen, { simple: true }, screenState());
+  try {
+    const header = () => button('Sorumlular', document.querySelector('.simple-tasks-table thead'));
+    click(header());
+    const labels = [...document.querySelectorAll('.col-filter-opt > span:last-child')].map((node) => node.textContent);
+    assert.deepEqual(labels, ['9000 · Zeynep', '10000 · Ali']);
+    click(button('Artan'));
+    assertTaskOrder(false, ['Dokuz bin görevi', 'On bin görevi']);
+    click(header());
+    click(button('Azalan'));
+    assertTaskOrder(false, ['On bin görevi', 'Dokuz bin görevi']);
+    click(header());
+    click(document.querySelector('.col-filter-opt input'));
+    click(button('Uygula'));
+    assertTaskOrder(false, ['Dokuz bin görevi']);
   } finally {
     view.unmount();
   }

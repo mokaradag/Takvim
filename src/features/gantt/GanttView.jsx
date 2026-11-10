@@ -199,16 +199,19 @@ export function GanttView() {
   const totalWidth = days.length * zoom;
 
   const personLookup = usePersonLookup();
-  const assigneeGroups = useMemo2(() => new Map(filteredTasks.map((task) => {
-    const group = ganttAssigneeGroup(task, personLookup);
-    return [group.key, group];
-  })), [filteredTasks, personLookup]);
+  // Görev kapsamlı sorumlu kimliği gruplama ve sıralama boyunca bir kez çözülür.
+  const taskAssigneeGroups = useMemo2(() => new Map(filteredTasks.map((task) => [
+    task, ganttAssigneeGroup(task, personLookup)
+  ])), [filteredTasks, personLookup]);
+  const assigneeGroups = useMemo2(() => new Map(
+    [...taskAssigneeGroups.values()].map((group) => [group.key, group])
+  ), [taskAssigneeGroups]);
 
   // Sorumlu grupları aynı adlı kişileri Sicil üzerinden ayırır.
   const groups = useMemo2(() => {
     const map = Object.create(null);
     filteredTasks.forEach(t => {
-      const key = groupBy === 'proje' ? t.proje : ganttAssigneeGroup(t, personLookup).key;
+      const key = groupBy === 'proje' ? t.proje : taskAssigneeGroups.get(t).key;
       map[key] = map[key] || [];
       map[key].push(t);
     });
@@ -222,7 +225,7 @@ export function GanttView() {
             vb = ganttColumnValue(b, sort.key, schedule.tasks[b.id]);
             if (va == null || vb == null) return va == null ? (vb == null ? 0 : 1) : -1;
           }
-          if (sort.key === 'sorumlu') return compareAssigneesBySicil(ganttAssigneeGroup(a, personLookup), ganttAssigneeGroup(b, personLookup), sort.dir);
+          if (sort.key === 'sorumlu') return compareAssigneesBySicil(taskAssigneeGroups.get(a), taskAssigneeGroups.get(b), sort.dir);
           if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
           if (va == null) va = '';
           if (vb == null) vb = '';
@@ -239,7 +242,7 @@ export function GanttView() {
       }
       return a[0].localeCompare(b[0], 'tr');
     });
-  }, [filteredTasks, groupBy, sort, personLookup, assigneeGroups, schedule.tasks]);
+  }, [filteredTasks, groupBy, sort, taskAssigneeGroups, assigneeGroups, schedule.tasks]);
 
   const xForDate = (d) => diffDays(d, range.start) * zoom;
 

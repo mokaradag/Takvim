@@ -29,8 +29,11 @@ export function effectiveTaskDate(task, key) {
  */
 function sortableSicil(entry) {
   const person = entry?.person ?? entry;
-  const value = String(person?.employeeNo ?? person?.sicil ?? '').trim();
-  return /^\d+$/.test(value) ? value.replace(/^0+(?=\d)/, '') : null;
+  for (const candidate of [person?.employeeNo, person?.sicil]) {
+    const value = String(candidate ?? '').trim();
+    if (/^\d+$/.test(value)) return value.replace(/^0+(?=\d)/, '');
+  }
+  return null;
 }
 
 export function compareAssigneesBySicil(a, b, direction = 'asc') {
