@@ -16,10 +16,22 @@ export function createTaskAssigneeOrganizationIndex(people = []) {
   const peopleById = new Map();
   const peopleByUniqueName = new Map();
   const duplicateNames = new Set();
+  const ambiguousIds = new Set();
+  const addIdentity = (rawId, person) => {
+    const id = normalizedId(rawId);
+    if (!id || ambiguousIds.has(id)) return;
+    const previous = peopleById.get(id);
+    // Çakışan kimlikler farklı kişilere bağlanmaz; kapsam dışında kalır.
+    if (previous && previous !== person) {
+      peopleById.delete(id);
+      ambiguousIds.add(id);
+    } else if (!previous) {
+      peopleById.set(id, person);
+    }
+  };
 
   for (const person of people) {
-    const id = normalizedId(person?.id);
-    if (id && !peopleById.has(id)) peopleById.set(id, person);
+    addIdentity(person?.id, person);
 
     const name = normalizedName(person?.name);
     if (!name || duplicateNames.has(name)) continue;
@@ -31,10 +43,10 @@ export function createTaskAssigneeOrganizationIndex(people = []) {
     }
   }
 
-  // Önce iç kimlikler korunur; ardından mevcut dizindeki Sicil anahtarları eklenir.
+  // Her iki Sicil alanı da iç kimliklerden sonra, ayrı ayrı indekslenir.
   for (const person of people) {
-    const sicil = normalizedId(person?.employeeNo) || normalizedId(person?.sicil);
-    if (sicil && !peopleById.has(sicil)) peopleById.set(sicil, person);
+    addIdentity(person?.employeeNo, person);
+    addIdentity(person?.sicil, person);
   }
 
   return { peopleById, peopleByUniqueName };
@@ -57,8 +69,8 @@ export function taskAssigneeOrganizationPeople(task, index) {
   if (ids.length) {
     for (const id of ids) {
       const person = index?.peopleById?.get(id);
-      if (!person || seen.has(id)) continue;
-      seen.add(id);
+      if (!person || seen.has(person)) continue;
+      seen.add(person);
       matched.push(person);
     }
     return matched;

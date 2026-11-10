@@ -18,14 +18,26 @@ export function taskAssigneeEntries(task = {}, lookup = EMPTY_PERSON_LOOKUP) {
   const names = taskAssigneeDisplayNames(task);
   const scopedPeople = Array.isArray(task.assigneeAvatarIdentities) ? task.assigneeAvatarIdentities : [];
 
-  // Ad yoksa önceki kimlik/kişi çözümünü koru. Görev kapsamlı adlar varsa ise
-  // bunlar görünür sıra için kanoniktir; assigneeIds yetki nedeniyle daha kısa olabilir.
+  // Görev kapsamlı kişi bilgisi varsa önce onu kullan; dizin dışı kimlikten
+  // başka bir kişi türetme. Yalnızca kimliği bilinen atama kaybolmasın.
   if (!names.length) {
-    return resolveAvatarEntries({
-      personIds: task.assigneeIds,
-      people: scopedPeople,
-      lookup
-    });
+    if (scopedPeople.length) {
+      return resolveAvatarEntries({ personIds: task.assigneeIds, people: scopedPeople, lookup });
+    }
+    const entries = [];
+    const seen = new Set();
+    for (const rawId of Array.isArray(task.assigneeIds) ? task.assigneeIds : []) {
+      const id = text(rawId);
+      if (!id) continue;
+      const person = lookup.byId(id);
+      const key = person
+        ? (text(person.id) || text(person.employeeNo) || text(person.sicil) || id)
+        : `unresolved:${id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push({ key, name: text(person?.name) || 'Bilinmeyen sorumlu', person: person || null });
+    }
+    return entries;
   }
 
   const identityQueues = new Map();
@@ -78,5 +90,9 @@ export function taskAssigneeGroup(task, lookup) {
   const entry = taskAssigneeEntries(task, lookup)[0];
   if (!entry) return { key: 'unassigned:', name: 'Atanmamış', person: null };
   const identity = entry.person?.employeeNo || entry.person?.sicil || entry.person?.id;
-  return { ...entry, key: identity ? `person:${identity}` : `name:${entry.name}` };
+  return {
+    ...entry,
+    key: identity ? `person:${identity}`
+      : entry.key.startsWith('unresolved:') ? entry.key : `name:${entry.name}`
+  };
 }

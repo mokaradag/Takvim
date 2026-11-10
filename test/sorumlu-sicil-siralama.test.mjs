@@ -180,3 +180,69 @@ test('Sicil anahtarlı sorumlular süzgeç ve kurumsal kapsamda kaybolmaz', () =
   assert.deepEqual(organizationPeopleForTasks(sicilTasks, index).map((person) => person.id), ['internal-10000', 'internal-9000']);
   assert.deepEqual(filterTasksByOrganization(sicilTasks, { directorate: 'D9', department: '', unit: '' }, index).map((task) => task.id), ['b']);
 });
+
+
+// Kimlik, employeeNo ve sicil ayrı kaynaklardır; ikisi de geçerli Sicil takma adıdır.
+test('Farklı employeeNo ve sicil değerleri aynı kişiye güvenle çözülür', () => {
+  const directory = [
+    { id: 'ic-a', employeeNo: '7000', sicil: '8000', name: 'Ayşe', organization: { directorate: 'D-A' } },
+    { id: 'ic-b', employeeNo: '9000', name: 'Bora', organization: { directorate: 'D-B' } }
+  ];
+  const lookup = createPersonLookup(directory);
+  assert.equal(lookup.byId('7000')?.id, 'ic-a');
+  assert.equal(lookup.byId('8000')?.id, 'ic-a');
+  assert.deepEqual(taskAssigneeFilterEntries(new Set(['8000', '9000']), lookup)
+    .map(([, person]) => person.id), ['ic-a', 'ic-b']);
+  const index = createTaskAssigneeOrganizationIndex(directory);
+  const scoped = [{ id: 'gorev-a', assigneeIds: ['8000'] }];
+  assert.deepEqual(filterTasksByOrganization(scoped,
+    { directorate: 'D-A', department: '', unit: '' }, index).map((task) => task.id), ['gorev-a']);
+});
+
+test('Çakışan iç kimlik ve Sicil başka bir kişiyle eşleştirilmez', () => {
+  const directory = [
+    { id: 'ic-a', employeeNo: '7000', sicil: '8000', name: 'Ayşe', organization: { directorate: 'D-A' } },
+    { id: '8000', employeeNo: '9000', name: 'Bora', organization: { directorate: 'D-B' } }
+  ];
+  const lookup = createPersonLookup(directory);
+  const index = createTaskAssigneeOrganizationIndex(directory);
+  assert.equal(lookup.byId('8000'), null);
+  assert.equal(index.peopleById.get('8000'), undefined);
+  assert.equal(lookup.byId('7000')?.id, 'ic-a');
+  assert.equal(lookup.byId('9000')?.name, 'Bora');
+  const tasks = [{ id: 'belirsiz', assigneeIds: ['8000'] }];
+  for (const directorate of ['D-A', 'D-B']) {
+    assert.deepEqual(filterTasksByOrganization(tasks,
+      { directorate, department: '', unit: '' }, index), []);
+  }
+});
+
+test('Yalnızca sicil alanı olan kişi sorumlu seçeneklerinden düşmez', () => {
+  const directory = [{ id: 'ic-z', sicil: '9000', name: 'Zeynep', organization: { directorate: 'D9' } }];
+  const lookup = createPersonLookup(directory);
+  assert.equal(lookup.byId('9000')?.id, 'ic-z');
+  assert.deepEqual(taskAssigneeFilterEntries(new Set(['9000']), lookup)
+    .map(([id, person]) => [id, person.name]), [['9000', 'Zeynep']]);
+  assert.equal(ganttAssigneeGroup({ assigneeIds: ['9000'] }, lookup).person.id, 'ic-z');
+  const index = createTaskAssigneeOrganizationIndex(directory);
+  assert.deepEqual(organizationPeopleForTasks([{ assigneeIds: ['9000'] }], index)
+    .map((person) => person.name), ['Zeynep']);
+});
+
+test('Dizinde bulunmayan kimlikle atanmış görev atanmamış sayılmaz', () => {
+  const lookup = createPersonLookup(people);
+  const unknown = ganttAssigneeGroup({ assigneeIds: ['kimlik-yok'], sorumlu: [] }, lookup);
+  const another = ganttAssigneeGroup({ assigneeIds: ['ikinci-kimlik'], sorumlu: [] }, lookup);
+  const unassigned = ganttAssigneeGroup({ assigneeIds: [], sorumlu: [] }, lookup);
+  assert.equal(unknown.key, 'unresolved:kimlik-yok');
+  assert.notEqual(unknown.key, another.key);
+  assert.equal(unknown.person, null);
+  assert.equal(unknown.name, 'Bilinmeyen sorumlu');
+  assert.equal(unassigned.key, 'unassigned:');
+  for (const direction of ['asc', 'desc']) {
+    assert.ok(compareAssigneesBySicil(unknown, unassigned, direction) < 0);
+  }
+  assert.equal(ganttAssigneeGroup({
+    assigneeIds: ['kimlik-yok', 'internal-9000'], sorumlu: []
+  }, lookup).key, 'unresolved:kimlik-yok');
+});
