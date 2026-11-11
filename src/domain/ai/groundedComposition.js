@@ -658,7 +658,9 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     ...(synthesis && (synthesis.intro || synthesis.conclusion) ? { synthesis } : {}), ...(sectioned && titles.size ? { sectioned: true } : {}),
     ...(framing ? { framing } : listing ? { framing: listing } : {}), ...(analyst && outline && contentParts.size >= 1 ? { closing: nextStepSentence(outline.focus || [], locale) } : {}),
     // Çok bölümlü analitik rapor: tablolar kendi bölümünde cümlesiz kalmaz. Yalnızca tablo istenen yanıt tabloyla başlar.
-    ...(analyst && contentParts.size > 1 ? { report: true } : {}) }) });
+    ...(analyst && contentParts.size > 1 ? { report: true } : {}),
+    // Genel değerlendirme (ilk yön genel durum, tek kapsam): yanıt genel durumun kendisiyle açılır.
+    ...(analyst && outline?.focus?.[0] === 'overview' && !(outline.layers?.length > 1) ? { statusLead: true } : {}) }) });
 }
 
 /**
@@ -684,6 +686,17 @@ export function parseCompositionResponse(text) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Önceliklerin kapanış cümlesi: "Özetle öncelik sırası şöyle: önce A — gerekçe; ardından B — gerekçe; son olarak C — gerekçe."
+ * Öğeler bulgu motorunun doğrulanmış "konu — gerekçe" cümleleridir; bağlaçlar olgu taşımaz.
+ */
+export function closingSentence(items, locale = 'tr') {
+  const english = locale === 'en';
+  const marker = (index) => (index === 0 ? (english ? 'first ' : 'önce ') : index === items.length - 1 ? (english ? 'finally ' : 'son olarak ') : (english ? 'then ' : 'ardından '));
+  const body = items.map((item, index) => `${items.length === 2 && index === 1 ? (english ? 'then ' : 'ardından ') : marker(index)}${item}`).join('; ');
+  return `${english ? 'In short, the order of priority is: ' : 'Özetle öncelik sırası şöyle: '}${body}.`;
 }
 
 /** Model yalnızca sunucu kaynaklarını seçer; metin ve yuvalar olgusal yetki kazanamaz. */
@@ -1536,6 +1549,24 @@ export function renderComposition(composition, validated) {
     }
     out.unshift({ text: `${synthesis.intro.markdown} ${citation(synthesis.intro.evidenceIds)}`, part: null, rowBearing: false });
     cited.push(...synthesis.intro.evidenceIds);
+    // Genel değerlendirmede açılış, sorunun asıl yanıtı olan genel durum cümlesidir (açık, gecikmiş ve yakın terminli iş): okuyucu
+    // önce durumu, ardından onu açıklayan bölümler arası bulguları okur. Bölümün ilk paragrafı öne taşınır (yinelenmez, içeriği ve
+    // kaynağı değişmez); bölümde başka içerik kalmadıysa boş kalan başlığı da kalkar.
+    if (render.statusLead) {
+      const overview = [...render.titles.values()].find((title) => ['Genel görünüm', 'Overview'].includes(title.text));
+      const prose = (chunk) => !/^(#### |\||```|_|>|- |\d+\. )/.test(chunk.text);
+      const first = overview ? out.find((chunk) => chunk.part === overview.part && prose(chunk)) : null;
+      // Tek öznenin genel durumu tek kanıttır; iki öznenin karşılaştırmasında açılış karşılaştırma bulgusunun kendisidir (taşınmaz).
+      const single = first && new Set(first.text.match(/【R\d+】/g) || []).size === 1;
+      if (single && out.indexOf(first) > 0) {
+        out.splice(out.indexOf(first), 1);
+        out.unshift({ ...first, part: null });
+        if (!out.some((chunk) => chunk.part === overview.part && chunk.text !== overview.markdown)) {
+          const heading = out.findIndex((chunk) => chunk.text === overview.markdown);
+          if (heading >= 0) out.splice(heading, 1);
+        }
+      }
+    }
   } else if (render.framing) out.unshift({ text: render.framing.markdown, part: null, rowBearing: false });
   // Sonuç, gövdenin söylem belleğiyle kurulur: gövdede gün sayısıyla anılan en uzun gecikme sonuçta yalnızca adıyla anılır.
   const ratiosSaid = new Set(sequence.filter((block) => ['say', 'note'].includes(block.type)).flatMap((block) => block.items)
@@ -1546,11 +1577,12 @@ export function renderComposition(composition, validated) {
       : [discourse.named, discourse.attended].some((memory) => memory.get(`${finding.evidenceIds[0]}\u0000${finding.entity?.name}`) === finding.metrics?.days)) }).conclusion : null;
   if (conclusion) {
     // Başlıklı yanıtta öncelik listesi kendi bölüm başlığını alır; başlıksız yanıtta kalın satırla açılır. Her madde kendi kaynağını taşır.
-    const heading = titled ? `#### ${conclusion.heading}` : `**${conclusion.heading}**`;
-    const list = conclusion.items.map((item, index) => `${index + 1}. ${item.markdown} ${citation(item.evidenceIds)}`).join('\n');
-    // Tek öncelik liste değil, etiketli tek satırdır.
+    // Sonuç bir kapanış paragrafıdır (numaralı liste değil): öncelikler sırasıyla ve gerekçeleriyle tek cümlede bağlanır. Her konu ve
+    // gerekçe bulgunun doğrulanmış cümlesidir; sunucu yalnızca sıra bağlaçlarını ("önce", "ardından", "son olarak") ekler.
+    // Tek öncelik etiketli tek satırdır.
     const [only] = conclusion.items;
-    out.push({ text: conclusion.items.length === 1 ? `**${conclusion.heading}:** ${only.markdown} ${citation(only.evidenceIds)}` : `${heading}\n\n${list}`, part: null, rowBearing: false });
+    out.push({ text: conclusion.items.length === 1 ? `**${conclusion.heading}:** ${only.markdown} ${citation(only.evidenceIds)}`
+      : `${closingSentence(conclusion.items.map((item) => item.markdown), locale)} ${citation(conclusion.evidenceIds)}`, part: null, rowBearing: false });
     cited.push(...conclusion.evidenceIds);
   } else if (render.closing) {
     // Kanıtlı öncelik yoksa yanıt bir sonraki adım önerisiyle kapanır (olgu taşımaz).

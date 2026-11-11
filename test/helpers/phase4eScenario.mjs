@@ -280,7 +280,9 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.conclusion && !answerQuality(content).ending) problems.push('son blokta sonuç yok');
   if (expect.priorities) {
     const ending = content.split('\n\n').filter((block) => block.trim() && !/^_Not:/.test(block)).at(-1) || '';
-    const priorities = ending.split('\n').filter((line) => /^\d+\. .+【R\d+】/.test(line));
+    // Öncelik kapanışı kaynaklı tek paragraftır: sıra bağlacıyla açılan her bölüm bir önceliktir.
+    const closing = /^(?:Özetle öncelik sırası şöyle|In short, the order of priority is): (.+)\. (?:【R\d+】)+$/.exec(ending);
+    const priorities = closing ? closing[1].split('; ').filter((item) => /^(?:önce|ardından|son olarak|first|then|finally) \S/.test(item)) : [];
     if (priorities.length !== expect.priorities) problems.push('istenen kanıtlı öncelik sayısı eksik');
   }
   if (expect.overdueUnwindowed && !reads.some((row) => row.params.deadline === 'overdue' && !row.params.dateFrom && !row.params.dateTo)) problems.push('mevcut gecikme ayrı okunmadı');

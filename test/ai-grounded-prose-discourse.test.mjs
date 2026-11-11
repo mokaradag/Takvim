@@ -194,7 +194,9 @@ test('gerçek zayıf model düzeni: yorum sözcükleri atılır, karışık böl
   const overdue = paragraphs.indexOf('Şu anda **3** gecikmiş göreviniz var. 【R2】');
   assert.ok(overdue > first, content);
   assert.match(paragraphs[overdue - 1], /^#### /, content);
-  assert.ok(paragraphs.slice(first + 1, overdue - 1).every((paragraph) => !paragraph.includes('【R2】')), 'R2 bölümü kendi başlığından önce başlamaz');
+  // Genel değerlendirme genel durum cümlesiyle açılır; bölümler arası giriş onun ardından gelir.
+  assert.equal(first, 0, content);
+  assert.equal(paragraphs.filter((paragraph) => paragraph.startsWith("Açık **6** görevin **3'ü**")).length, 1, 'açılış cümlesi kendi bölümünde yinelenmez');
 });
 
 /** Gerçek Haiku 4.5 düzeni, yeni sözleşmede: model yalnızca yuva yazdı ve aynı bölümü iki paragrafa böldü (öneri ile en uzun gecikme ayrı paragrafta). */

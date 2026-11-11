@@ -93,7 +93,7 @@ for (const item of fixture.original.filter((entry) => entry.plan)) {
     // Aşama G: kadrosu okunan ekipte tamlık çekincesi yerine görev adedinin emek/kapasite olmadığı söylenir.
     if (item.expect.capacityCaveat) assert.match(content, /görev adedidir; işin büyüklüğünü, harcanan emeği ya da boş kapasiteyi göstermez/, 'kapasite çekincesi');
     // Sonuç, numaralı öncelik listesidir (bölümlü yanıtta kendi başlığıyla).
-    if (item.expect.conclusion) assert.match(content, /(?:\*\*|#### )Öncelikli konular(?:\*\*)?\n\n1\. .+\n2\. /);
+    if (item.expect.conclusion) assert.match(content, /Özetle öncelik sırası şöyle: önce .+; (?:ardından|son olarak) .+\. (?:【R\d+】)+/);
     if (item.expect.overdueUnwindowed) {
       // Gecikme bugüne göre ölçülür: gelecek dönem gecikmiş iş okumasını boşaltmaz.
       assert.doesNotMatch(content, /terminli gecikmiş görev yok/);
