@@ -21,7 +21,9 @@ import { useAppState } from '../../state/AppStateProvider';
 import { canResolveTaskAssignee } from '../../state/appState';
 import { useTasks, useProjects, usePeople, useTaskActions, useTaskAssignableProjects } from '../../state/hooks';
 import { resolveTaskDeleteAccess } from '../../state/projectWritePolicy.js';
-import { taskProgressValue, taskSortValue } from './taskDisplayValues.js';
+import { taskProgressValue, taskSortValue, compareAssigneesBySicil } from './taskDisplayValues.js';
+import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
+import { ganttAssigneeGroup } from '../gantt/ganttAssignees.js';
 import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from './taskTableFacets.js';
 import { TaskTablePagination, useTaskTablePagination } from './TaskTablePagination.jsx';
 import { createEmptyOrgFilter, hasOrgSelection } from '../../domain/organization/organizationHierarchy.js';
@@ -34,7 +36,10 @@ function projectLabel(project) {
   return project.code ? `${project.code} · ${project.name}` : project.name;
 }
 
-/* Veri tablosu.*/
+/**
+ * Kapsamlı kip görev tablosunu sıralama ve sütun filtreleriyle gösterir.
+ * Sorumlular Sicile göre sayısal sıralanır; filtre seçeneklerinin sırası korunur.
+ */
 export function TasksView() {
   const tasks = useTasks();
   const todayKey = useTodayKey();
@@ -139,9 +144,10 @@ export function TasksView() {
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b, 'tr'))
     .map(k => ({ value: k, label: k })), [facetValues, colFilter.keyword, withSelected]);
+  const personLookup = usePersonLookup();
   const sorumluOpts = useMemo1(() => people
     .filter(p => assigneeOptionIds.has(String(p.id)))
-    .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
+    .sort(compareAssigneesBySicil)
     // Sicil, unvan ve birim de aranabilir: binlerce kişilik dizinde ad tek
     // başına yeterli bir arama anahtarı değildir.
     .map(p => ({
@@ -173,9 +179,12 @@ export function TasksView() {
     const out = organization.filteredTasks
       .filter((task) => taskTableMatches(task, { search, filters: colFilter, dateMode: 'effective' }, null, today_));
 
+    // Sorumlu kimliği görev başına bir kez çözülür; sıralama Sicil ile yapılır.
+    const byAssignee = sort.key === 'sorumlu'
+      ? new Map(out.map((task) => [task.id, ganttAssigneeGroup(task, personLookup)])) : null;
     out.sort((a, b) => {
+      if (byAssignee) return compareAssigneesBySicil(byAssignee.get(a.id), byAssignee.get(b.id), sort.dir);
       let va = taskSortValue(a, sort.key, 'effective'), vb = taskSortValue(b, sort.key, 'effective');
-      if (sort.key === 'sorumlu') { va = (a.sorumlu?.[0] || ''); vb = (b.sorumlu?.[0] || ''); }
       if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
       const aMissing = va == null || va === '';
       const bMissing = vb == null || vb === '';
@@ -187,7 +196,7 @@ export function TasksView() {
       return 0;
     });
     return out;
-  }, [organization.filteredTasks, search, sort, colFilter, todayKey]);
+  }, [organization.filteredTasks, search, sort, colFilter, todayKey, personLookup]);
   const paginationKey = `${JSON.stringify(organization.selection)}\u001f${search}\u001f${JSON.stringify(colFilter)}\u001f${sort.key}\u001f${sort.dir}`;
   const paged = useTaskTablePagination(filtered, paginationKey);
 
@@ -317,7 +326,7 @@ export function TasksView() {
                 <FilterableTH label="Sorumlu" style={{ minWidth: 96 }}
                   sortKey={sortDirFor('sorumlu')} onSort={setSortFor('sorumlu')}
                   filter={colFilter.sorumlu} onFilter={v => setCF('sorumlu', v)}
-                  filterType="multi" filterOptions={sorumluOpts}
+                  filterType="multi" filterOptions={sorumluOpts} preserveOptionOrder
                 />
                 <FilterableTH label="Durum" style={{ minWidth: 118 }}
                   sortKey={sortDirFor('status')} onSort={setSortFor('status')}

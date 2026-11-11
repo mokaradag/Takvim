@@ -25,6 +25,9 @@ import { createEmptyOrgFilter, hasOrgSelection } from '../../domain/organization
 import { TaskOrganizationFilterControls } from './TaskOrganizationFilterControls.jsx';
 import { useSharedTaskOrganizationFilter } from './TaskOrganizationFilterContext.jsx';
 import { useTaskOrganizationFilter } from './useTaskOrganizationFilter.js';
+import { compareAssigneesBySicil } from './taskDisplayValues.js';
+import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
+import { ganttAssigneeGroup } from '../gantt/ganttAssignees.js';
 
 /**
  * Temel Kip · Görevler.
@@ -42,6 +45,7 @@ function projectLabel(project) {
   return project.code ? `${project.code} · ${project.name}` : project.name;
 }
 
+/** Temel kip görev tablosunu, Sicil sıralamalı sorumlu sütunuyla gösterir. */
 export function SimpleTasksView({ onNewTask }) {
   const tasks = useTasks();
   const todayKey = useTodayKey();
@@ -70,6 +74,7 @@ export function SimpleTasksView({ onNewTask }) {
   );
   const canAddTask = assignableProjects.some((project) => canResolveTaskAssignee(appState, project));
   const peopleById = useMemo(() => new Map(people.map((person) => [String(person.id), person])), [people]);
+  const personLookup = usePersonLookup();
   const facetValues = useMemo(() => Object.fromEntries(SIMPLE_TASK_FACET_KEYS.map((key) => [
     key,
     simpleTaskFacetValues(organization.filteredTasks, { search, filters }, key, referenceDay)
@@ -85,7 +90,7 @@ export function SimpleTasksView({ onNewTask }) {
   const assigneeOptions = useMemo(() => people
     .filter((person) => facetValues.sorumlu.has(String(person.id)))
     .slice()
-    .sort((a, b) => a.name.localeCompare(b.name, 'tr')).map((person) => ({
+    .sort(compareAssigneesBySicil).map((person) => ({
     value: String(person.id),
     label: person.employeeNo ? `${person.employeeNo} · ${person.name}` : person.name,
     keywords: [person.name, person.employeeNo, person.role, person.team],
@@ -110,19 +115,22 @@ export function SimpleTasksView({ onNewTask }) {
     // Kurumsal kapsam yetkili çalışma alanı görevlerini önce daraltır; Temel Kip
     // araması, fasetleri ve sıralaması bu kümenin üzerinde çalışır.
     const filtered = organization.filteredTasks.filter((task) => simpleTaskMatches(task, { search, filters }, null, referenceDay));
+    // Aynı Sicil karşılaştırması Temel Kipte de kullanılır.
+    const byAssignee = sort.key === 'sorumlu'
+      ? new Map(filtered.map((task) => [task.id, ganttAssigneeGroup(task, personLookup)])) : null;
 
     return filtered.sort((left, right) => {
+      if (byAssignee) return compareAssigneesBySicil(byAssignee.get(left.id), byAssignee.get(right.id), sort.dir);
       let a = left[sort.key];
       let b = right[sort.key];
       if (sort.key === 'priority') { a = resolvePriority(left.priority).order; b = resolvePriority(right.priority).order; }
-      if (sort.key === 'sorumlu') { a = left.sorumlu?.[0] || ''; b = right.sorumlu?.[0] || ''; }
       if (sort.key === 'proje') { a = projectLabel(projectById.get(left.projectId)); b = projectLabel(projectById.get(right.projectId)); }
       if (a == null || a === '') return b == null || b === '' ? 0 : 1;
       if (b == null || b === '') return -1;
       const delta = typeof a === 'number' ? a - b : String(a).localeCompare(String(b), 'tr');
       return sort.dir === 'asc' ? delta : -delta;
     });
-  }, [organization.filteredTasks, search, filters, sort, projectById, referenceDay]);
+  }, [organization.filteredTasks, search, filters, sort, projectById, referenceDay, personLookup]);
   const paginationKey = `${JSON.stringify(organization.selection)}\u001f${search}\u001f${JSON.stringify(filters)}\u001f${sort.key}\u001f${sort.dir}`;
   const paged = useTaskTablePagination(visible, paginationKey);
 
@@ -196,7 +204,7 @@ export function SimpleTasksView({ onNewTask }) {
                 <FilterableTH label="Kısa açıklama" sortKey={sortFor('keyword')} onSort={setSortFor('keyword')}
                   filter={filters.keyword} onFilter={(value) => setFilter('keyword', value)} filterType="multi" filterOptions={keywordOptions} />
                 <FilterableTH label="Sorumlular" sortKey={sortFor('sorumlu')} onSort={setSortFor('sorumlu')}
-                  filter={filters.sorumlu} onFilter={(value) => setFilter('sorumlu', value)} filterType="multi" filterOptions={assigneeOptions} />
+                  filter={filters.sorumlu} onFilter={(value) => setFilter('sorumlu', value)} filterType="multi" filterOptions={assigneeOptions} preserveOptionOrder />
                 <FilterableTH label="Öncelik" sortKey={sortFor('priority')} onSort={setSortFor('priority')}
                   filter={filters.priority} onFilter={(value) => setFilter('priority', value)} filterType="multi" filterOptions={priorityOptions} />
                 <FilterableTH label="Durum" sortKey={sortFor('status')} onSort={setSortFor('status')}

@@ -12,7 +12,7 @@ import { projectColorVar, personColorVar } from '../../lib/colors';
 import { Avatar, AvatarStack, StatusPill, StatusIcon } from '../../components/ui';
 import { Tooltip, InfoButton, ColumnFilter } from '../../components/ui-extras';
 import { useTasks, useProjects, usePeople, usePortfolioSchedule, useTaskActions } from '../../state/hooks';
-import { taskProgressValue, taskSortValue } from '../tasks/taskDisplayValues.js';
+import { taskProgressValue, taskSortValue, compareAssigneesBySicil } from '../tasks/taskDisplayValues.js';
 import { TASK_TABLE_FACET_KEYS, taskTableFacetValues, taskTableMatches } from '../tasks/taskTableFacets.js';
 import { GanttOutlineControls } from './GanttOutlineControls.jsx';
 import { usePersonLookup } from '../../components/PeopleDirectoryContext.jsx';
@@ -112,6 +112,10 @@ function CpmTooltipRows({ schedule }) {
   );
 }
 
+/**
+ * Görevleri Gantt zaman çizelgesinde proje veya sorumlu gruplarıyla gösterir.
+ * Sorumlu sıralamasında sayısal Sicil karşılaştırmasını kullanır.
+ */
 export function GanttView() {
   const tasks = useTasks();
   const projects = useProjects();
@@ -199,16 +203,16 @@ export function GanttView() {
   const totalWidth = days.length * zoom;
 
   const personLookup = usePersonLookup();
-  const assigneeGroups = useMemo2(() => new Map(filteredTasks.map((task) => {
-    const group = ganttAssigneeGroup(task, personLookup);
-    return [group.key, group];
-  })), [filteredTasks, personLookup]);
+  const assigneeByTask = useMemo2(() => new Map(filteredTasks.map((task) =>
+    [task.id, ganttAssigneeGroup(task, personLookup)])), [filteredTasks, personLookup]);
+  const assigneeGroups = useMemo2(() => new Map([...assigneeByTask.values()].map((group) =>
+    [group.key, group])), [assigneeByTask]);
 
   // Sorumlu grupları aynı adlı kişileri Sicil üzerinden ayırır.
   const groups = useMemo2(() => {
     const map = Object.create(null);
     filteredTasks.forEach(t => {
-      const key = groupBy === 'proje' ? t.proje : ganttAssigneeGroup(t, personLookup).key;
+      const key = groupBy === 'proje' ? t.proje : assigneeByTask.get(t.id).key;
       map[key] = map[key] || [];
       map[key].push(t);
     });
@@ -216,13 +220,13 @@ export function GanttView() {
       // Varsa sütun sırası uygulanır; yoksa başlangıçla sıralanır.
       arr.sort((a, b) => {
         if (sort.key) {
+          if (sort.key === 'sorumlu') return compareAssigneesBySicil(assigneeByTask.get(a.id), assigneeByTask.get(b.id), sort.dir);
           let va = taskSortValue(a, sort.key), vb = taskSortValue(b, sort.key);
           if (GANTT_CPM_DATE_KEYS.includes(sort.key) || GANTT_NUMERIC_KEYS.includes(sort.key)) {
             va = ganttColumnValue(a, sort.key, schedule.tasks[a.id]);
             vb = ganttColumnValue(b, sort.key, schedule.tasks[b.id]);
             if (va == null || vb == null) return va == null ? (vb == null ? 0 : 1) : -1;
           }
-          if (sort.key === 'sorumlu') { va = ganttAssigneeGroup(a, personLookup).name; vb = ganttAssigneeGroup(b, personLookup).name; }
           if (sort.key === 'priority') { va = resolvePriority(a.priority).order; vb = resolvePriority(b.priority).order; }
           if (va == null) va = '';
           if (vb == null) vb = '';
@@ -233,12 +237,12 @@ export function GanttView() {
         return parseDate(a.plannedStart) - parseDate(b.plannedStart);
       });
     });
-    return Object.entries(map).sort((a, b) => {
-      const aName = groupBy === 'proje' ? a[0] : assigneeGroups.get(a[0]).name;
-      const bName = groupBy === 'proje' ? b[0] : assigneeGroups.get(b[0]).name;
-      return aName.localeCompare(bName, 'tr') || a[0].localeCompare(b[0], 'tr');
-    });
-  }, [filteredTasks, groupBy, sort, personLookup, assigneeGroups, schedule.tasks]);
+    return Object.entries(map).sort((a, b) => groupBy === 'proje'
+      ? a[0].localeCompare(b[0], 'tr')
+      : compareAssigneesBySicil(assigneeGroups.get(a[0]), assigneeGroups.get(b[0]),
+          sort.key === 'sorumlu' ? sort.dir : 'asc')
+        || a[0].localeCompare(b[0], 'tr'));
+  }, [filteredTasks, groupBy, sort, assigneeByTask, assigneeGroups, schedule.tasks]);
 
   const xForDate = (d) => diffDays(d, range.start) * zoom;
 
@@ -616,7 +620,7 @@ export function GanttView() {
                 filterOptions = people
                   .filter((p) => facets.sorumlu.has(String(p.id)) || colFilters.sorumlu.includes(String(p.id)))
                   .slice()
-                  .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
+                  .sort(compareAssigneesBySicil)
                   .map(p => ({
                     value: String(p.id),
                     label: p.employeeNo ? `${p.employeeNo} · ${p.name}` : p.name,
@@ -642,6 +646,7 @@ export function GanttView() {
                     sortKey={sortKey}
                     filterType={filterType}
                     filterOptions={filterOptions}
+                    preserveOptionOrder={c.key === 'sorumlu'}
                     numericMin={numMin}
                     numericMax={numMax}
                     numericUnit={numUnit}
@@ -960,7 +965,8 @@ export function GanttView() {
   );
 }
 
-function GanttColHead({ label, filter, onFilter, onSort, sortKey, filterType, filterOptions, numericMin, numericMax, numericUnit, align = 'left' }) {
+/** Gantt sütunu için sıralama ve filtre menüsünü gösterir; seçenek sırasını koruyabilir. */
+function GanttColHead({ label, filter, onFilter, onSort, sortKey, filterType, filterOptions, preserveOptionOrder = false, numericMin, numericMax, numericUnit, align = 'left' }) {
   const [open, setOpen] = useState2(false);
   const anchorRef = useRef2(null);
   const active = filterType === 'text' ? !!filter : Array.isArray(filter) ? filter.length > 0 : !!filter;
@@ -987,6 +993,7 @@ function GanttColHead({ label, filter, onFilter, onSort, sortKey, filterType, fi
           anchor={anchorRef.current}
           type={filterType}
           options={filterOptions || []}
+          preserveOptionOrder={preserveOptionOrder}
           value={filter}
           onChange={onFilter}
           onClose={() => setOpen(false)}
