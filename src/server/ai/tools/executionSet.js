@@ -198,6 +198,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   plan = normalizePlan(decodeNestedJson(plan));
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw invalidArguments(['$.plan:shape']);
   plan = layeredAnalysis(plan);
+  plan = equivalentAnalysisSpelling(plan, today);
   // Sunum tercihleri (grafik türü, tablo) plan düzeyindedir; zayıf model onları özetin içine de yazabilir. Yapısal taşıma:
   // değer değişmez, özetin anlamı (kapsam, yön, ufuk) değişmez; plan düzeyinde ayrıca verilmişse o geçerlidir.
   if (plan.analysis && typeof plan.analysis === 'object' && !Array.isArray(plan.analysis)) {
@@ -468,6 +469,29 @@ function layeredAnalysis(plan) {
   if (languages.length > 1 || (languages.length && plan.language != null && plan.language !== languages[0])) throw invalidArguments(['$.analysis.also:scope']);
   const { language: _language, ...head } = primary;
   return { ...plan, ...(languages.length && plan.language == null ? { language: languages[0] } : {}), analysis: { ...head, also: rest.map(layer) } };
+}
+
+/**
+ * Özetin eşdeğer yazımları (yapısal; cümle yorumlanmaz, sonuç aynı doğrulamadan geçer):
+ *  - `intent: "analysis"` özetle birlikte yazıldıysa karar Rota verisidir (`analysis` yalnızca `rota` kararının alanıdır);
+ *  - özetin içindeki `reasoning` isteğe ait bir ipucudur, özetin okumalarını değiştirmez: düşürülür;
+ *  - göreli dönem, aynı günleri gösteren tarih çiftiyle birlikte yazıldıysa çelişki yoktur: göreli dönem kalır, tarihler düşer;
+ *  - takip dışındaki özette "dönem yok" (`all_time`) tarih çiftiyle birlikte yazıldıysa dönem tarihlerdir.
+ * Farklı günleri gösteren göreli dönem ve tarih çifti eskisi gibi çelişkidir (reddedilir; hangisinin kastedildiği seçilmez).
+ */
+function equivalentAnalysisSpelling(plan, today) {
+  const analysis = plan.analysis;
+  if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)) return plan;
+  let out = { ...analysis };
+  if (Object.hasOwn(out, 'reasoning')) delete out.reasoning;
+  const dated = out.dateFrom != null || out.dateTo != null;
+  if (dated && out.relativeWindow === 'all_time' && !['previous', 'row'].includes(out.scope)) delete out.relativeWindow;
+  if (dated && today && ['today', 'next_7_days'].includes(out.relativeWindow) && out.dateFrom === today
+    && out.dateTo === (out.relativeWindow === 'today' ? today : new Date(Date.parse(`${today}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10))) {
+    delete out.dateFrom;
+    delete out.dateTo;
+  }
+  return { ...plan, ...(plan.intent === 'analysis' ? { intent: PLANNER_INTENTS.ROTA } : {}), analysis: out };
 }
 
 /** Plan düzeyindeki sorunların beklenen biçimi (yalnızca sözleşmeden; modelin değeri yansıtılmaz). */

@@ -1019,6 +1019,19 @@ test('bölüm ve direktörlük düzeyindeki ekip özetine alt birim kırılımı
   assert.deepEqual([full.length, full.includes('unit')], [ANALYSIS_LIMITS.maxParts, false]);
 });
 
+test('özetin eşdeğer yazımları onarım turu harcamaz: analysis kararı, özetteki reasoning ve aynı günleri gösteren dönem çifti', () => {
+  const accepted = unpack({ intent: 'analysis', language: 'tr', analysis: { scope: 'self', focus: ['overview'], reasoning: 'synthesis' } }).plan;
+  assert.deepEqual([accepted.intent, Object.hasOwn(accepted.analysis, 'reasoning')], ['rota', false]);
+  // Özetsiz "analysis" kararı geçerli bir karar değildir.
+  assert.deepEqual(reject({ intent: 'analysis', language: 'tr', request: { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' } } }), ['$.intent:enum']);
+  const same = unpack({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'], relativeWindow: 'next_7_days', dateFrom: TODAY, dateTo: shift(6) } }).plan.analysis;
+  assert.deepEqual([same.relativeWindow, same.dateFrom ?? null, same.dateTo ?? null], ['next_7_days', null, null], 'göreli dönem kalır; yinelenen tarih çifti düşer');
+  const dated = unpack({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'], relativeWindow: 'all_time', dateFrom: TODAY, dateTo: shift(13) } }).plan.analysis;
+  assert.deepEqual([dated.relativeWindow ?? null, dated.dateTo], [null, shift(13)]);
+  // Farklı günleri gösteren göreli dönem ve tarih çifti çelişkidir.
+  assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'], relativeWindow: 'next_7_days', dateFrom: TODAY, dateTo: shift(13) } }), ['$.analysis.relativeWindow:conflict']);
+});
+
 test('istek yazımının yapısal eşdeğerleri ilk bildirimde kabul edilir: dizi biçimli istek, null süzgeç, sorumlu "any" ve süzgeçteki proje adı', () => {
   const list = { operation: 'list', metrics: ['task.title', 'task.targetFinish'], population: { tool: 'rota_task_search', collection: 'tasks' }, layout: 'list' };
   // İstekler tek dizi (JSON metni olarak da): ilk öğe istek, kalanı ek istek.
