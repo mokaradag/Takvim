@@ -48,6 +48,8 @@ const corpus = JSON.parse(readFileSync(new URL('../test/fixtures/ai-phase4e-corp
 const followups = JSON.parse(readFileSync(new URL('../test/fixtures/ai-phase4e-followups.json', import.meta.url), 'utf8'));
 const benchmark = JSON.parse(readFileSync(new URL('../test/fixtures/bilgin-analysis-benchmark.json', import.meta.url), 'utf8'));
 const executive = JSON.parse(readFileSync(new URL('../test/fixtures/bilgin-executive-benchmark.json', import.meta.url), 'utf8'));
+/** Kıyas konuşmalarının günü: sabit sınama saatinin Türkiye (UTC+3) günü. */
+export const BENCHMARK_TODAY = new Date(NOW.getTime() + 3 * 3600000).toISOString().slice(0, 10);
 const summary = { tier: TIER, model: EXPECTED_MODEL, cases: 0, passed: 0, failed: [], firstPass: 0, repairs: 0, escalations: 0, turns: 0, results: [] };
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
@@ -284,7 +286,9 @@ export function benchmarkExpectation(item) {
   const names = analysis?.names || item.expect?.names || [];
   const resolveDay = (value) => {
     const token = /^T\+(-?\d+)$/.exec(value || '');
-    return token ? new Date(Date.parse(`${corpus.today}T00:00:00Z`) + Number(token[1]) * 86400000).toISOString().slice(0, 10) : value;
+    // Göreli gün, vakanın KOŞTUĞU günden sayılır (sentetik verinin ve sistem yönergesinin günü: NOW'ın Türkiye günü). Planlayıcı
+    // derleminin günü (`corpus.today`) başka bir gündür; onunla çözülen ufuk, modelin doğru yazdığı dönemi "okunmadı" sayıyordu.
+    return token ? new Date(Date.parse(`${BENCHMARK_TODAY}T00:00:00Z`) + Number(token[1]) * 86400000).toISOString().slice(0, 10) : value;
   };
   const from = resolveDay(analysis?.dateFrom);
   const to = resolveDay(analysis?.dateTo);

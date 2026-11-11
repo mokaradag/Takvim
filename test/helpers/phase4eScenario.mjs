@@ -183,7 +183,12 @@ export function turnViolations(result, expect, { live = false } = {}) {
     !row.params.projectId && (!row.params.assigneeMode || row.params.assigneeMode === 'any') && !row.params.personSicil && !row.params.teamLevel)
     : !result.log.some((row) => row.query === 'portfolio'))) problems.push('tüm kapsam okumada daraltıldı');
   if (expect.projectIds && JSON.stringify([...new Set(reads.map((row) => row.params.projectId).filter(Boolean))].sort()) !== JSON.stringify([...expect.projectIds].sort())) problems.push('proje kimliği kümesi beklenenle aynı değil');
-  if (expect.focus && (!result.analysisContext || expect.focus.some((focus) => !result.analysisContext.focus.includes(focus)))) problems.push('analitik yönler eksik');
+  // Okunan yönler: bildirilen yönler ile sunucunun kapsam gereği kendiliğinden eklediği okumalar (portföy kapsamında proje satırları;
+  // bölüm ve direktörlük düzeyindeki ekipte alt birim kırılımı). Beklenen her yön gerçekten okunmuş olmalıdır.
+  const context = result.analysisContext;
+  const readFocus = context ? new Set([...(context.focus || []), ...(context.scope === 'projects' ? ['projects'] : []),
+    ...(context.scope === 'team' && ['department', 'directorate'].includes(context.level) ? ['org'] : [])]) : null;
+  if (expect.focus && (!readFocus || expect.focus.some((focus) => !readFocus.has(focus)))) problems.push('analitik yönler eksik');
   const status = result.evidence?.filter((row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'status') || [];
   // Dağılım istenmişse kişi/proje kıyası da teslim edilen sayıları kanıtlamalıdır; bağlam ve araç okuması yetmez.
   if (expect.focus?.includes('status') && (!['person', 'project'].includes(expect.scope) || status.length || expect.chartTypes?.includes('donut'))) {

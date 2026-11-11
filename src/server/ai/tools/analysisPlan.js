@@ -114,7 +114,8 @@ export function analysisSchema() {
  */
 export function normalizedBrief(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
-  const out = { ...raw };
+  // Değeri `null` olan alan yazılmamış alandır (zayıf model şablonu `"relativeWindow": null` gibi doldurur).
+  const out = Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== null));
   const single = (item) => Boolean(item) && typeof item === 'object' && !Array.isArray(item);
   if (Array.isArray(out.focus)) {
     out.focus = out.focus.map((item) => (typeof item !== 'string' || ANALYSIS_FOCUS.includes(item) ? item
@@ -198,7 +199,7 @@ function layerApplicable(focus, scope) {
 
 /** Ek kapsamın yazım normalleştirmesi: birincil özetle aynı yapısal kurallar (yön yazımı, adlı proje kapsamı). */
 function normalizedLayer(raw, unwindowed = false) {
-  const out = { ...raw };
+  const out = Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== null));
   if (unwindowed && out.relativeWindow === 'all_time') delete out.relativeWindow;
   if (Array.isArray(out.focus)) {
     out.focus = out.focus.map((item) => (typeof item !== 'string' || ANALYSIS_FOCUS.includes(item) ? item

@@ -152,6 +152,16 @@ function decodeNestedJson(plan) {
     if (rest.length) decoded.additionalRequests = rest;
     else delete decoded.additionalRequests;
   }
+  // Sunum tercihleri (görselleştirme, grafik türü, tablo) plan düzeyindedir; istek nesnesinin içine yazıldıysa yapısal olarak plan
+  // düzeyine taşınır (özetin içine yazılan tercihlerle aynı kural). Plan düzeyinde ayrıca verilmişse o geçerlidir.
+  if (decoded.request && typeof decoded.request === 'object' && !Array.isArray(decoded.request)) {
+    for (const key of ['visual', 'chart', 'charts', 'table']) {
+      if (!Object.hasOwn(decoded.request, key)) continue;
+      const { [key]: value, ...rest } = decoded.request;
+      decoded.request = rest;
+      if (decoded[key] == null) decoded[key] = value;
+    }
+  }
   decoded.request = decodeRequest(decoded.request);
   if (decoded.request === undefined) delete decoded.request;
   if (Array.isArray(decoded.additionalRequests)) decoded.additionalRequests = decoded.additionalRequests.slice(0, PLANNER_LIMITS.maxRequests).map((item) => decodeRequest(decodedJson(item)));

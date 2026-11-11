@@ -1037,6 +1037,10 @@ test('istek yazımının yapısal eşdeğerleri ilk bildirimde kabul edilir: diz
   assert.deepEqual([named.filters, named.entities], [{ milestone: true }, [{ type: 'project', text: 'KAP TOOL' }]]);
   const same = unpack({ intent: 'rota', language: 'tr', request: { ...list, filters: { project: 'KAP TOOL' }, entities: [{ type: 'project', text: 'KAP TOOL' }] } }).plan.request;
   assert.deepEqual([same.filters, same.entities], [{}, [{ type: 'project', text: 'KAP TOOL' }]]);
+  // İsteğin içine yazılan sunum tercihleri plan düzeyine taşınır; özetteki null alan yazılmamış alandır.
+  const hoisted = unpack({ intent: 'rota', language: 'tr', request: { ...list, filters: { assignee: 'me' }, visual: true, chart: 'bar' } }).plan;
+  assert.deepEqual([hoisted.visual, hoisted.chart, Object.hasOwn(hoisted.request, 'chart')], [true, 'bar', false]);
+  assert.equal(Object.hasOwn(parseAnalysis({ scope: 'self', focus: ['overview'], relativeWindow: null, dateFrom: null }), 'relativeWindow'), false);
   // Başka bir proje varlığıyla çelişen süzgeç çevrilmez (iki seçiciden biri sessizce seçilmez).
   const conflict = unpack({ intent: 'rota', language: 'tr', request: { ...list, filters: { projectId: 'KAP TOOL' }, entities: [{ type: 'project', text: 'Mobil Uygulama' }] } }).plan.request;
   assert.equal(conflict.filters.projectId, 'KAP TOOL');
