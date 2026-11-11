@@ -328,40 +328,46 @@ bu ortamda koşulamaz; G için ölçülmedi.
 
 ### 7.4b Zayıf model güvenilirliği düzeltmeleri ve yeniden ölçüm (10–11 Kasım 2026)
 
-**Durum: YAKINSAMADI.** Aşağıdaki kök nedenler belirlenimci olarak yeniden üretildi, düzeltildi ve regresyon sınamasıyla
-korundu; düzeltmelerden SONRAKİ tam Haiku koşusu hesabın haftalık kullanım sınırı (0,99; ardından `429`) nedeniyle
-yapılamadı. Bu bölümdeki canlı sayılar düzeltmelerden ÖNCEKİ taban ölçümdür; 49/49 ve 22/22 hedefi ölçülmemiştir.
+**Durum: YAKINSAMADI.** Kök nedenler Haiku'nun GERÇEK planlarının belirlenimci yeniden oynatılmasıyla doğrulanıp düzeltildi ve her
+düzeltmeden sonra kümeler yeniden koşuldu. Sonuçlar belirgin biçimde iyileşti ama 49/49 ve 22/22 hedefi sağlanmadı.
 
-| Koşu (claude-haiku-4-5-20251001, `--effort low`, düşünme 0) | Vaka | Geçen | Çağrı | Girdi | Önbellek yazma | Önbellek okuma | Çıktı |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| G ayrık (ilk beş inceleme düzeltmesiyle) | 22 | 18 | 33 | 99 | 49 885 | 1 198 878 | 8 886 |
-| G hedefli taban (aynı kod) | 49 | 21 | 102 | 112 731 | 138 993 | 2 268 045 | 28 625 |
-| Düzeltme sonrası doğrulama (x01, x07, x12, x14; x14 altyapı) | 4 | 1 | 8 | 21 | 23 436 | 250 047 | 1 582 |
-| Düzeltme sonrası G hedefli doğrulama | 11 | — | 1 | 0 | 0 | 0 | 0 |
+Koşul: `claude-haiku-4-5-20251001`, `--effort low`, düşünme 0 (her çağrıda kayıttan doğrulandı), Derin modele giden çağrı modele
+gitmez ve başarısızlıktır. Son üç tur `PLANNER_CLAUDE_FORCED_RETRY=1` ile koşuldu (üretimin adlı araç seçiminin CLI karşılığı;
+yeniden denemeler `forcedRetries` olarak ayrıca sayılır). Altyapı hatası yoktur.
 
-Son satır ilk çağrıda `429` (kullanım sınırı) ile durdu: altyapı hatasıdır, model sonucu değildir. Bütün çağrılarda model
-kimliği doğrulandı, düşünme belirteci 0; Derin modele giden çağrı modele gitmez ve başarısızlıktır. F kümeleri bu oturumda
-koşulmadı.
+| Küme | Kayıtlı önceki | Taban (bu oturum) | Tur 1 | Tur 2 | Tur 3 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| G hedefli (49) | 21 | 21 | 32 | 32 | **33** |
+| G ayrık (22) | 16 | 18 | 15 | 14 | 17, **17** |
+| F hedefli (40) | 9 | — | 13 | 20 | **17** |
+| F ayrık (24) | 14 | — | 18 | 16 | 19, **21** |
 
-**Taban koşusunun başarısızlık sınıfları ve yapılan düzeltme** (her biri altın planla değil, Haiku'nun GERÇEK planının
-belirlenimci yeniden oynatılmasıyla doğrulandı):
+Aynı kodla art arda koşularda küme başına yaklaşık ±3 vakalık model değişkenliği vardır (F hedefli 20 ve 17 aynı düzeltme kümesinin
+iki koşusudur): tek koşu kesin sayı değildir. Tur 3 ölçüleri: G hedefli 99 çağrı (ilk bildirimde geçen 28, Derin devir 3, zorunlu
+araç yeniden denemesi 5; girdi 118 706, önbellek yazma 113 972, önbellek okuma 2 212 526, çıktı 25 646), F hedefli 88 çağrı (ilk
+bildirimde geçen 15, Derin devir 7), G ayrık 23, F ayrık 44 çağrı.
 
-| Kök neden | Örnek vaka | Düzeltme |
-| --- | --- | --- |
-| Geçerli onarım "kapsam değişti" diye reddedilip Derin'e devrediliyor (reddedilen alan yüzünden birleşemeyen eşdeğer yazım) | g15 | Onarım karşılaştırması reddedilen yollar çıkarıldıktan sonra yeniden normalleştirilir; ek kapsamda reddedilen dönem özetin dönem alanlarında yeniden yazılabilir. Kapsam, düzey, ad ve yön değişikliği eskisi gibi reddedilir |
-| Model düzeninde tek hatalı blok (bölümleri karışık not, yinelenen/bilinmeyen kaynak, paragrafsız bölüm) bütün düzeni reddettirip Derin anlatıma devrediyor | g07, g31, g41 | Düzyazı düzeninde hatalı seçim yalnızca o bloğu düşürür; kapsamı sunucu tamamlar. Bozuk biçimli blok ve kimlik düzeni katı kalır |
-| Eşdeğer istek yazımı onarım turu harcıyor: dizi biçimli istek, `null` süzgeç, `assignee: any`, süzgeçte proje adı, bağsız `task.project` | g21, g27, g38, g51, g52, x07 | Yapısal normalleştirme (ad güvenilir metin denetiminden aynen geçer); listede adlandıran sütun ad alanına bağlanır, tek değerde belirsizlik modele kalır |
-| Portföy + "önümüzdeki 7 gün" dönemi portföy okumasını düşürüyor | g02 | Bugünden başlayan yedi günlük dönem portföyün kendi ölçüsüdür (`tasks.dueNext7Days`) |
-| Özetin yanındaki isteğin düzeysiz ekip koşulu | g52 | Özet tek ekip düzeyi taşıyorsa düzey istekten tamamlanır |
-| Planlayıcı yönergesi: özet/istek ayrımı, yön seçimi, örgütsel düzey, dönem ve tarihsel eğilim kuralları dağınık ya da eksik | g01, g03, g11, g14, g17, g19, g20, g28, g43, x12 | "KAPSAM VE ANALİTİK ÖZET" bölümü tek tek adlandırılmış kurallara ayrıldı; eğilim sorusu `abstain outside_data` olarak tanımlandı |
-| Bağdaştırıcı: CLI kendi ortam bağlamını (makinenin güncel tarihi dahil) modele ekliyor; sentetik "bugün" ile çelişiyor | g51 | Kullanıcı iletisinin başına ortam notu; sistem yönergesi ve araç kataloğu (önbellek öneki) değişmez |
+**Düzeltilen kök nedenler** (her biri regresyon sınamasıyla):
 
-**Açık kalanlar.** (1) Düzeltme sonrası G hedefli/ayrık ve F hedefli/ayrık tam koşuları yapılmadı. (2) İlk yanıtın düz metin
-olması (`forcedText`: CLI zorunlu aracı kısıtlı çözümle uygulayamıyor) onarım hakkını tüketiyor; üretimde adlı araç seçimi
-bunu engeller, bağdaştırıcıda engellenmiyor. (3) g05, g07, g32, g35 beklentileri sorunun adlandırmadığı bir yön ya da kapsam
-istiyor; beklenti değiştirilmedi. (4) Yanıt düzyazısı: giriş her zaman soruyu doğrudan yanıtlamıyor (ör. "genel görünüm olumlu
-mu?" sorusunda yanıt iş yükü yayılımıyla açılıyor) ve bölüm başlıkları ile tablolar anlatımı bölüyor; düzyazı kabulü
-sağlanmadı. (5) Betikli arayüz kabulü bu oturumda tarayıcıyla yeniden koşulmadı; kapsam kuralı birim sınamasıyla doğrulandı.
+| Kök neden | Düzeltme |
+| --- | --- |
+| Geçerli onarım "kapsam değişti" diye reddedilip Derin'e devrediliyor | Onarım karşılaştırması reddedilen yollar çıkarıldıktan sonra yeniden normalleştirilir; kapsam, düzey, ad ve yön değişikliği eskisi gibi reddedilir |
+| Model düzeninde tek hatalı blok bütün düzeni reddettirip Derin anlatıma devrediyor | Düzyazı düzeninde hatalı seçim yalnızca o bloğu düşürür; kapsamı sunucu tamamlar. Bozuk biçimli blok ve kimlik düzeni katı kalır |
+| Eşdeğer yazımlar onarım turu harcıyor | `intent: analysis` + özet, özetteki `reasoning`, `null` alan, aynı günleri gösteren dönem çifti, dizi biçimli istek, `assignee: any`, süzgeçte proje adı, istek içindeki grafik tercihi, listede bağsız `task.project` ilk bildirimde kabul edilir |
+| Bölüm/direktörlük düzeyinde alt birim kırılımı modelin seçimine kalıyor | Okuma sunucuca eklenir (isteğe bağlı; yer yoksa eklenmez) |
+| Portföy + "önümüzdeki 7 gün" portföy okumasını düşürüyor | Bu dönem portföyün kendi ölçüsüdür |
+| Planlayıcı yönergesi dağınık ve eksik | Özet/istek ayrımı, yön, örgütsel düzey, dönem, sınırlar, "belirsiz değildir" ve tarihsel eğilim kuralları ayrı adlandırıldı |
+| Puanlayıcı: göreli gün planlayıcı derleminin gününden çözülüyordu; sunucunun eklediği okumalar yön sayılmıyordu; eşdeğer açık istek özet bağlamı olmadığı için başarısızdı | Göreli gün vakanın koştuğu günden; okunan yönler sunucu okumalarını sayar; canlı puanda kapsam okuma düzeyinde sınanır |
+| Bağdaştırıcı: CLI makinenin tarihini modele ekliyor | Ortam notu ve sistem yönergesindeki günün yinelenmesi; önbellek öneki değişmez |
+
+**Düzyazı.** Genel değerlendirme genel durum cümlesiyle açılır; öncelikler numaralı liste yerine sıra bağlaçlı tek kapanış cümlesidir
+("Özetle öncelik sırası şöyle: önce …; ardından …; son olarak …"). Açık kalan: bölüm başlıkları ve tablo üstü sayım cümleleri girişte
+söylenen sayıyı yineliyor; açılış cümlesi kapsamı adlandırmıyor; düzyazı kabulü sağlanmadı.
+
+**Açık kalan model davranışları.** (1) Kullanıcının kendi birimi/bölümü sorulduğunda ad isteme (`clarify`). (2) Sorunun saydığı
+yönlerden birinin atlanması (F hedeflideki `analitik yönler eksik`). (3) İlk yanıtın düz metin olması onarım hakkını tüketiyor.
+(4) Altıdan çok yön ya da ikiden çok grafik yazılması. (5) g05, g07, g32, g35 beklentileri sorunun adlandırmadığı bir yön ya da kapsam
+istiyor; beklenti değiştirilmedi. (6) Betikli arayüz kabulü tarayıcıyla yeniden koşulmadı.
 
 ### 7.5 Görsel kabul (gerçek arayüz, betikli planlar)
 
