@@ -1007,6 +1007,18 @@ test('portföy kapsamı, bugünden başlayan yedi günlük dönemde de portföy 
   assert.equal(tools({ scope: 'projects', focus: ['projects'], dateFrom: shift(1), dateTo: shift(7) }).includes('rota_portfolio_summary'), false, 'bugünden başlamayan dönem de karşılanmaz');
 });
 
+test('bölüm ve direktörlük düzeyindeki ekip özetine alt birim kırılımı sunucuca eklenir; birim düzeyinde, yer yokken ve yazılmışken eklenmez', () => {
+  const groupings = (analysis) => { const { plan } = unpack({ intent: 'rota', language: 'tr', analysis }); return [plan.request, ...(plan.additionalRequests || [])].map((part) => part.population.groupBy || null); };
+  assert.ok(groupings({ scope: 'team', level: 'directorate', focus: ['overview', 'overdue'] }).includes('department'));
+  assert.ok(groupings({ scope: 'team', level: 'department', focus: ['workload'] }).includes('unit'));
+  assert.equal(groupings({ scope: 'team', level: 'unit', focus: ['overview'] }).some((groupBy) => ['unit', 'department'].includes(groupBy)), false, 'birimin altı kişilerdir');
+  assert.equal(groupings({ scope: 'team', focus: ['overview'] }).some((groupBy) => ['unit', 'department'].includes(groupBy)), false, 'düzeysiz ekipte eklenmez');
+  assert.equal(groupings({ scope: 'team', level: 'department', focus: ['org', 'overview'] }).filter((groupBy) => groupBy === 'unit').length, 1, 'yazılmış yön yinelenmez');
+  // Okuma tavanı doluysa eklenmez; bildirilen altı yön aynen okunur (plan reddedilmez).
+  const full = groupings({ scope: 'team', level: 'department', focus: ['overview', 'overdue', 'upcoming', 'critical', 'status', 'priority'] });
+  assert.deepEqual([full.length, full.includes('unit')], [ANALYSIS_LIMITS.maxParts, false]);
+});
+
 test('istek yazımının yapısal eşdeğerleri ilk bildirimde kabul edilir: dizi biçimli istek, null süzgeç, sorumlu "any" ve süzgeçteki proje adı', () => {
   const list = { operation: 'list', metrics: ['task.title', 'task.targetFinish'], population: { tool: 'rota_task_search', collection: 'tasks' }, layout: 'list' };
   // İstekler tek dizi (JSON metni olarak da): ilk öğe istek, kalanı ek istek.

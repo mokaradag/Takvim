@@ -110,7 +110,7 @@ test('nitelendirme bağdaştırıcısı, komut satırı aracının eklediği ort
   assert.match(HOST_CONTEXT_NOTE, /Rota bağlamı DEĞİLDİR/u);
   assert.doesNotMatch(HOST_CONTEXT_NOTE, /\d{4}/u);
   const source = readFileSync(new URL('../scripts/planner-model-adapter.mjs', import.meta.url), 'utf8');
-  assert.match(source, /function conversationText\(messages\) \{\n {2}const lines = \[HOST_CONTEXT_NOTE\];/u, 'not her çağrıda iletinin ilk satırıdır');
+  assert.match(source, /const lines = \[today \? `\$\{HOST_CONTEXT_NOTE\} Sistem yönergesine göre bugün \$\{today\}\.` : HOST_CONTEXT_NOTE\];/u, 'not her çağrıda iletinin ilk satırıdır; gün yalnızca sistem yönergesinden yinelenir');
   assert.match(source, /'--system-prompt-file'/u, 'sistem yönergesi değişmeden ayrı dosyada verilir');
 });
 
@@ -165,7 +165,9 @@ test('kıyas kümesinin her altın planı ilk bildirimde kabul edilir ve sorulan
     const { unpacked, requests } = acceptPlan(item.text, item.plan);
     assert.equal(unpacked.plan.intent, item.expect.intent, item.id);
     if (item.expect.intent !== 'rota') continue;
-    assert.ok(requests.length >= 1 && requests.length <= 3, item.id);
+    // En çok üç bildirilen yön; bölüm/direktörlük düzeyindeki ekip özetine sunucu ayrıca alt birim kırılımını ekler.
+    const derived = item.plan.analysis?.scope === 'team' && ['department', 'directorate'].includes(item.plan.analysis.level) && !item.plan.analysis.focus?.includes('org') ? 1 : 0;
+    assert.ok(requests.length >= 1 && requests.length <= 3 + derived, item.id);
     assert.equal(scopeOf(requests), item.expect.scope, `${item.id}: ${item.text}`);
     if (item.expect.level) assert.ok(requests.every((request) => request.filters.teamLevel === item.expect.level), item.id);
     if (item.expect.visual) assert.equal(unpacked.plan.visual, true, item.id);

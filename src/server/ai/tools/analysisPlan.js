@@ -810,6 +810,16 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
     if (items.length && parts.length + items.length <= ANALYSIS_LIMITS.maxDetailedParts) parts.push(...items);
   }
+  // Bölüm ya da direktörlük düzeyindeki ekip özetinin doğal kırılımı alt örgüt birimleridir (direktörlük → bölümler, bölüm → birimler):
+  // yönetici bu düzeyde "hangi birimde" sorusunu sorar. Model `org` yönünü yazmadıysa okuma sunucuca eklenir (portföy kapsamındaki
+  // proje satırları gibi; kullanıcı cümlesi yorumlanmaz, yalnızca türlü kapsam ve düzey). İsteğe bağlı okumadır: yer yoksa ya da
+  // dönem/daraltma nedeniyle kurulamıyorsa eklenmez, bildirilen hiçbir yön düşmez. Birim düzeyinin altı kişilerdir (eklenmez).
+  if (analysis.scope === 'team' && ['department', 'directorate'].includes(analysis.level) && !declared.includes('org') && !analysis.withSelf) {
+    let produced = null;
+    try { produced = produce('org'); } catch (error) { produced = optionalRead(error); }
+    const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
+    if (items.length && parts.length + items.length <= ANALYSIS_LIMITS.maxParts) parts.push(...items);
+  }
   return parts;
 
   /** Adı verilen grafik türünün gerektirdiği okuma; yer yoksa eklenmez (grafik notu türün neden çizilemediğini söyler). */

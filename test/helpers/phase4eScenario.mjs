@@ -175,7 +175,10 @@ export function turnViolations(result, expect, { live = false } = {}) {
   const teamRead = (level) => reads.some((row) => row.ok === true && row.params.assigneeMode === 'team' && (!level || String(row.params.teamLevel || '') === level));
   if (expect.noTeamRead && (teamEvidence() || teamRead())) problems.push('yetkisiz ekip kapsamı okundu ya da kanıtlandı');
   if (expect.noDepartmentRead && (teamEvidence('DEPARTMENT') || teamRead('DEPARTMENT'))) problems.push('yetkisiz bölüm kapsamı okundu ya da kanıtlandı');
-  if (expect.scope && result.analysisContext?.scope !== expect.scope) problems.push('analiz kapsamı beklenenle aynı değil');
+  // Canlı modelde eşdeğer açık istek (ör. "X'in bütün görevlerini göster" için liste isteği) özet bağlamı üretmez; kapsamı yine
+  // okuma düzeyindeki denetimler (sorumlu, kişi kümesi, proje kimlikleri, portföy) sınar. Özet bağlamı varsa kapsamı beklenendir.
+  // Belirlenimci sınamada altın plan özettir: bağlamın yokluğu da ihlaldir.
+  if (expect.scope && (live && !result.analysisContext ? false : result.analysisContext?.scope !== expect.scope)) problems.push('analiz kapsamı beklenenle aynı değil');
   if (expect.scope === 'all' && !expect.project && !expect.projectIds?.length && (reads.length ? !every((row) =>
     !row.params.projectId && (!row.params.assigneeMode || row.params.assigneeMode === 'any') && !row.params.personSicil && !row.params.teamLevel)
     : !result.log.some((row) => row.query === 'portfolio'))) problems.push('tüm kapsam okumada daraltıldı');

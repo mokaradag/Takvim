@@ -68,8 +68,11 @@ function serveTools(file) {
 export const HOST_CONTEXT_NOTE = '[ORTAM NOTU]\nBu iletiyi taşıyan komut satırı aracı kendi ortam bilgisini (güncel tarih, kullanıcı, depo ya da bütçe içeren system-reminder blokları) ekleyebilir. Bu bloklar Rota bağlamı DEĞİLDİR ve yok sayılır: geçerli tarih ve bağlam yalnızca sistem yönergesinde ve aşağıdaki iletilerde yazandır.';
 
 /** Sistem dışı iletiler tek kullanıcı iletisinde, sırasıyla ve rolleriyle. */
-function conversationText(messages) {
-  const lines = [HOST_CONTEXT_NOTE];
+function conversationText(messages, system = '') {
+  // Geçerli gün sistem yönergesinin takvim çapasından AYNEN yinelenir (yeni bilgi değildir): CLI'nin eklediği makine tarihi kullanıcı
+  // iletisine yakın durduğundan model onu seçebiliyor; yineleme çelişkiyi sistem yönergesi lehine çözer.
+  const today = /Takvim çapaları: bugün (\d{4}-\d{2}-\d{2})/u.exec(String(system))?.[1];
+  const lines = [today ? `${HOST_CONTEXT_NOTE} Sistem yönergesine göre bugün ${today}.` : HOST_CONTEXT_NOTE];
   for (const message of messages) {
     const content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? '');
     if (message.role === 'system') lines.push(`[SUNUCU NOTU]\n${content}`);
@@ -741,7 +744,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
       ...(forced ? ['--json-schema', JSON.stringify({ ...forced.parameters, description: forced.description })] : []), '--output-format', 'stream-json', '--verbose',
       '--max-turns', '1', '--no-session-persistence', '--disable-slash-commands'];
     const startedAt = Date.now();
-    const { code, events, launchFailed, timedOut, cleanupFailed } = await runClaude(args, env, cwd, conversationText(rest), launcher, timeoutMs);
+    const { code, events, launchFailed, timedOut, cleanupFailed } = await runClaude(args, env, cwd, conversationText(rest, system.content), launcher, timeoutMs);
     const init = events.find((event) => event.type === 'system' && event.subtype === 'init');
     const result = events.find((event) => event.type === 'result');
     const assistants = events.filter((event) => event.type === 'assistant' && !event.parent_tool_use_id).map((event) => event.message);
@@ -769,11 +772,15 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     // Zorunlu turda başka araç çağrısı: üretimde kısıtlı çözüm bunu engeller. İsteğe bağlı tek yeniden deneme (ayrı sayılır).
     const forcedToolCall = forced && !hideTools && code === 1 && result?.subtype === 'error_max_turns'
       && blocks.some(block => block.type === 'tool_use' && block.name?.startsWith(PREFIX));
-    if (forcedToolCall && MODEL_FORCED_RETRY_ATTEMPTS > 1 && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
+    // Zorunlu turda araçsız düz metin de aynı sınıftandır: üretimin adlı araç seçimi düz metni olanaksız kılar; CLI kılamaz. Aynı isteğe
+    // bağlı tek yeniden deneme uygulanır ve `forcedText` ile ayrıca sayılır (yeniden deneme yoksa metin sunucuya eskisi gibi iletilir).
+    const forcedProse = Boolean(forced && !hideTools && !forcedToolCall && code === 1 && result?.subtype === 'error_max_turns'
+      && !blocks.some((block) => block.type === 'tool_use') && blocks.some((block) => block.type === 'text'));
+    if ((forcedToolCall || forcedProse) && MODEL_FORCED_RETRY_ATTEMPTS > 1 && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
       // Yinelenen ilk yanıt da aynı model ve düşünme denetiminden geçer: temiz bir yeniden deneme yasak düşünmeyi gizleyemez.
       const problem = responseProblem(row, model);
-      if (problem) return fail(problem, { ...row, forcedToolCall: true });
-      appendLedger(log, { ...row, forcedToolCall: true });
+      if (problem) return fail(problem, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
+      appendLedger(log, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
       rmSync(work, { recursive: true, force: true });
       return complete(launcher, timeoutMs, payload, true);
     }
