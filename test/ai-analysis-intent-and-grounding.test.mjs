@@ -541,6 +541,12 @@ for (const [start, end] of [
 test('satır daraltması uyumlu yön sırasını korur ve yalnızca hepsi geçersizse genel görünüme döner', () => {
   const person = context({ scope: 'team', focus: ['workload', 'status'], rows: [{ type: 'person', id: String(ALI_1) }] });
   assert.deepEqual(resolveAnalysisBrief(parseAnalysis({ scope: 'row', rows: [1] }), { previous: person }).focus, ['workload', 'status']);
+  // Kişi satırına alt birim kırılımı uygulanmaz: devralınan `org` düşer; başka yön kalmadıysa genel görünüme dönülür ve açılım reddetmez.
+  const orgPerson = context({ scope: 'team', level: 'unit', focus: ['org'], rows: [{ type: 'person', id: String(ALI_1) }] });
+  assert.deepEqual(resolveAnalysisBrief(parseAnalysis({ scope: 'row', rows: [1] }), { previous: orgPerson }).focus, ['overview', 'overdue', 'upcoming']);
+  assert.doesNotThrow(() => expandAnalysis(parseAnalysis({ scope: 'row', rows: [1] }), { previous: orgPerson, today: '2026-09-30' }));
+  const orgMixed = context({ scope: 'team', level: 'unit', focus: ['org', 'status'], rows: [{ type: 'person', id: String(ALI_1) }] });
+  assert.deepEqual(resolveAnalysisBrief(parseAnalysis({ scope: 'row', rows: [1] }), { previous: orgMixed }).focus, ['status']);
   const project = context({ focus: ['projects'], rows: [{ type: 'project', id: PROJECTS.FULL }] });
   assert.deepEqual(resolveAnalysisBrief(parseAnalysis({ scope: 'row', rows: [1] }), { previous: project }).focus, ['overview', 'overdue', 'upcoming']);
   const explicit = context({ focus: ['upcoming'] });

@@ -50,9 +50,34 @@ function executiveOf(db, manager, employee) {
 }
 
 /** Ekip üyeliği (MR_V_ExecutiveScope, kullanıcı hariç); düzey verilirse yalnızca o ScopeType. */
-function teamMemberOf(db, manager, employee, level) {
+function liveTeamMemberOf(db, manager, employee, level) {
   return Number(employee) !== Number(manager) && db.executiveScope.some((entry) => entry.ManagerSicil === manager && entry.EmployeeSicil === Number(employee)
     && (!level || (entry.ScopeType || 'UNIT') === level));
+}
+
+/**
+ * Kadroyla okunan toplu işin üyelik anlık görüntüsü (üretimde #AiRosterStart): kadro sonuç kümesi, ekip görevi (ROSTER_TEAM_TASK) ve
+ * ekip üyesi (ROSTER_TEAM_MEMBER) koşulları AYNI kümeyi kullanır. Kadrosuz okumada null döner (üyelik canlı görünümdendir).
+ * Sınama kancaları: `rosterSnapshotEmpty` anlık görüntüyü boşaltır; `rosterSnapshotMembers` toplu işin başında alınmış farklı bir
+ * üyeliği taklit eder (canlı görünümden farkı üretimdeki gibi MembershipChanged = 1 verir).
+ */
+function rosterSnapshot(db, params) {
+  if (Number(params.withRoster) !== 1 || params.assigneeMode !== 'team') return null;
+  if (db.rosterSnapshotEmpty) return new Set();
+  if (Array.isArray(db.rosterSnapshotMembers)) return new Set(db.rosterSnapshotMembers.map(Number).filter((employee) => employee !== Number(params.sicil)));
+  return new Set(liveRoster(db, params));
+}
+
+function liveRoster(db, params) {
+  const sicil = Number(params.sicil);
+  const level = params.teamLevel || '';
+  return [...new Set(db.executiveScope.filter((entry) => entry.ManagerSicil === sicil && Number(entry.EmployeeSicil) !== sicil
+    && (!level || (entry.ScopeType || 'UNIT') === level)).map((entry) => Number(entry.EmployeeSicil)))].sort((a, b) => a - b);
+}
+
+function teamMemberOf(db, params, manager, employee) {
+  const snapshot = rosterSnapshot(db, params);
+  return snapshot ? snapshot.has(Number(employee)) : liveTeamMemberOf(db, manager, employee, params.teamLevel);
 }
 
 function personName(db, sicil) {
@@ -67,16 +92,13 @@ function personOrg(db, sicil, field) {
   return value || null;
 }
 
-/** Görev olgusu toplu işinin ekip kadrosu sonuç kümesi: kullanıcının yönetim kapsamındaki çalışanlar (kendisi hariç), Sicil sırasıyla. */
+/** Görev olgusu toplu işinin ekip kadrosu sonuç kümesi: anlık görüntüdeki çalışanlar (kullanıcı hariç), Sicil sırasıyla. */
 function teamRoster(db, params) {
-  const sicil = Number(params.sicil);
-  const level = params.teamLevel || '';
-  const members = [...new Set(db.executiveScope.filter((entry) => entry.ManagerSicil === sicil && Number(entry.EmployeeSicil) !== sicil
-    && (!level || (entry.ScopeType || 'UNIT') === level)).map((entry) => Number(entry.EmployeeSicil)))].sort((a, b) => a - b);
-  // Sınama kancası: görev olguları okunurken üyeliğin değiştiğini (toplu işin başı ile sonu arasında) taklit eder.
-  const changed = db.rosterMembershipChanged ? 1 : 0;
-  // Sınama kancası: kapsam denetiminden sonra anlık görüntünün boş kalması (üyelik toplu iş sırasında boşaldı); üretim SQL'i satırsız döner.
-  if (db.rosterSnapshotEmpty) return [];
+  const members = [...rosterSnapshot(db, params)].sort((a, b) => a - b);
+  const live = liveRoster(db, params);
+  // Üretimdeki @rosterChanged: anlık görüntü ile toplu işin sonundaki canlı üyelik farklıysa 1. `rosterMembershipChanged` kancası,
+  // üyeliğin toplu iş sırasında değişip eski hâline dönmesini (kümeler aynı, işaret 1) taklit eder.
+  const changed = db.rosterMembershipChanged || JSON.stringify(members) !== JSON.stringify(live) ? 1 : 0;
   return members.slice(0, Number(params.rosterRows)).map((employee) => ({ Sicil: employee, DisplayName: personName(db, employee), MembershipChanged: changed }));
 }
 
@@ -168,7 +190,7 @@ function factRow(db, scope, entry, params = {}) {
     IsOwnAssignee: assignees.some((row) => row.Sicil === scope.sicil) ? 1 : 0,
     DisclosedAssigneeCount: assignees.filter((row) => entry.IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)).length,
     ResolvedAssigneeCount: assignees.filter((row) => personName(db, row.Sicil) != null && (entry.IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil))).length,
-    IsTeamTask: params.assigneeMode === 'team' && assignees.some((row) => teamMemberOf(db, scope.sicil, row.Sicil, params.teamLevel)) ? 1 : 0
+    IsTeamTask: params.assigneeMode === 'team' && assignees.some((row) => teamMemberOf(db, params, scope.sicil, row.Sicil)) ? 1 : 0
   };
 }
 
@@ -184,7 +206,7 @@ function assigneeRows(db, scope, facts, params = {}) {
         DisplayName: personName(db, assignment.Sicil) ?? (identityVisible ? String(assignment.Sicil) : null),
         IdentityVisible: identityVisible ? 1 : 0,
         Resolved: personName(db, assignment.Sicil) != null ? 1 : 0,
-        TeamMember: params.assigneeMode === 'team' && teamMemberOf(db, scope.sicil, assignment.Sicil, params.teamLevel) ? 1 : 0,
+        TeamMember: params.assigneeMode === 'team' && teamMemberOf(db, params, scope.sicil, assignment.Sicil) ? 1 : 0,
         // Aşama G: dizindeki birim/bölüm yalnızca kimliği açık sorumluda döner.
         Unit: identityVisible ? personOrg(db, assignment.Sicil, 'Unit') : null,
         Department: identityVisible ? personOrg(db, assignment.Sicil, 'Department') : null,
@@ -253,7 +275,7 @@ function taskFacts(db, params) {
       case 'unassigned': return IdentityBase === 1 && assignments.length === 0;
       case 'person': return assignments.some((row) => row.Sicil === Number(params.personSicil)
         && (IdentityBase === 1 || row.Sicil === scope.sicil || executiveOf(db, scope.sicil, row.Sicil)));
-      case 'team': return assignments.some((row) => teamMemberOf(db, scope.sicil, row.Sicil, params.teamLevel));
+      case 'team': return assignments.some((row) => teamMemberOf(db, params, scope.sicil, row.Sicil));
       default: return true;
     }
   }).sort((left, right) => upper(left.task.TaskId).localeCompare(upper(right.task.TaskId)))

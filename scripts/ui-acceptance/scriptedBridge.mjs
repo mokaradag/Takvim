@@ -1,6 +1,6 @@
 /**
  * Betikli görsel kabul ucu (yalnızca 127.0.0.1, model çağrısı YOK): OpenAI uyumlu yerel uç. Planlayıcı turunda kıyas kümesindeki
- * vakanın ALTIN planını (soru metniyle birebir eşleşme; eşleşmezse açıklama kararı), düzen turunda sınamaların kapsayan düzenini
+ * vakanın ALTIN planını (soru metniyle birebir eşleşme; eşleşmezse açıklama kararı ve çağrı kaydında `unscripted`), düzen turunda sınamaların kapsayan düzenini
  * döndürür. Gerçek uygulama, yetki, SQL ikizi, kanıt doğrulaması ve çizici sınanır; model kalitesi sınanmaz (çağrı kaydı
  * `scripted: true` taşır ve sürücü UI_SCRIPTED=1 ile model kabul denetimini uygulamaz). Model kotası harcamadan masaüstü/mobil,
  * açık/koyu görünüm kanıtı içindir; Haiku kabulünün yerine geçmez.
@@ -11,7 +11,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import http from 'node:http';
 import { compositionView, coveringBlocks, isCompositionCall } from '../../test/helpers/compositionScenario.mjs';
 
-const PORT = Number(process.env.BRIDGE_PORT || 18741);
+const PORT = Number(process.env.BRIDGE_PORT ?? 18741);
 const CALLS = process.env.BRIDGE_CALLS || null;
 const benchmark = JSON.parse(readFileSync(process.env.UI_BENCHMARK || new URL('../../test/fixtures/bilgin-executive-benchmark.json', import.meta.url), 'utf8'));
 // Göreli termin belirteçleri ("T+N") çalıştırma gününe (Türkiye günü) göre çözülür; sentetik veri de aynı güne göre kurulur.
@@ -39,14 +39,21 @@ function reply(input) {
   const messages = (input.messages || []).map((message) => ({ role: message.role, content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? '') }));
   if (isCompositionCall({ messages })) return { purpose: 'compose', message: { role: 'assistant', content: JSON.stringify(coveringBlocks(compositionView({ messages }))) } };
   const question = [...messages].reverse().find((message) => message.role === 'user')?.content?.trim() || '';
-  const plan = (!collisions.has(question) && plans.get(question)) || { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } };
-  return { purpose: 'plan', message: { role: 'assistant', content: null, tool_calls: [{ id: `plan_${Date.now()}`, type: 'function', function: { name: 'rota_plan', arguments: JSON.stringify(plan) } }] } };
+  const scripted = (!collisions.has(question) && plans.get(question)) || null;
+  const plan = scripted || { intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous' } };
+  return { purpose: 'plan', unscripted: !scripted, message: { role: 'assistant', content: null, tool_calls: [{ id: `plan_${Date.now()}`, type: 'function', function: { name: 'rota_plan', arguments: JSON.stringify(plan) } }] } };
 }
 
 http.createServer((request, response) => {
   let body = '';
   request.on('data', (chunk) => { body += chunk; });
   request.on('end', () => {
+    // Betikli kapsam: altın planı olan (çakışmayan) soru metinleri. Sürücü yalnızca bütün turları bu listede olan konuşmaları koşar.
+    if (request.url.startsWith('/v1/scripted-plans')) {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ questions: [...plans.keys()].filter((key) => !collisions.has(key)) }));
+      return;
+    }
     if (request.url.startsWith('/v1/models')) {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ data: [{ id: 'scripted' }] }));
@@ -57,9 +64,9 @@ http.createServer((request, response) => {
     // Geçerli JSON ama beklenmeyen biçim (dizi, mesajsız ya da mesajları dizi olmayan istek) istemci hatasıdır; uç çökmez.
     if (!input || typeof input !== 'object' || Array.isArray(input) || !Array.isArray(input.messages)
       || input.messages.some((message) => !message || typeof message !== 'object')) { response.writeHead(400).end(); return; }
-    const { purpose, message } = reply(input);
+    const { purpose, message, unscripted } = reply(input);
     const finish = message.tool_calls ? 'tool_calls' : 'stop';
-    if (CALLS) appendFileSync(CALLS, `${JSON.stringify({ at: new Date().toISOString(), purpose, ok: true, scripted: true, toolCalls: message.tool_calls ? ['rota_plan'] : [] })}\n`);
+    if (CALLS) appendFileSync(CALLS, `${JSON.stringify({ at: new Date().toISOString(), purpose, ok: true, scripted: true, ...(unscripted ? { unscripted: true } : {}), toolCalls: message.tool_calls ? ['rota_plan'] : [] })}\n`);
     if (input.stream) {
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       const delta = message.tool_calls ? { role: 'assistant', tool_calls: message.tool_calls.map((call, index) => ({ index, ...call })) } : { role: 'assistant', content: message.content };
@@ -71,4 +78,4 @@ http.createServer((request, response) => {
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ id: 'scripted', object: 'chat.completion', model: input.model, choices: [{ index: 0, message, finish_reason: finish }] }));
   });
-}).listen(PORT, '127.0.0.1', () => process.stdout.write(`betikli uç hazır: ${PORT}\n`));
+}).listen(PORT, '127.0.0.1', function ready() { process.stdout.write(`betikli uç hazır: ${this.address().port}\n`); });

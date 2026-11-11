@@ -327,7 +327,7 @@ test('UI_SCRIPTED=1 tek başına model kabulünü kapatmaz: betikli uç kaydı y
   const dir = fakeDriverDir(t);
   const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [{ name: 'durum', detail: 'balanced', turns: ['durumum'] }] };
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
-  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1' });
+  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1', BRIDGE_PORT: '1' });
   assert.equal(result.status, 1, result.stderr);
   const [row] = JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
   assert.equal(row.scripted, undefined);
@@ -338,9 +338,57 @@ test('UI_SCRIPTED=1 tek başına model kabulünü kapatmaz: betikli uç kaydı y
   writeFileSync(bridgeLog, readFileSync(bridgeLog, 'utf8').replace("return {status:'complete'",
     "fs.appendFileSync(path.join(process.env.UI_ACCEPTANCE_DIR,'calls.jsonl'),JSON.stringify({purpose:'plan',ok:true,scripted:true,toolCalls:['rota_plan']})+'\\n');\n return {status:'complete'"));
   writeFileSync(join(scriptedDir, 'scenario.json'), JSON.stringify(scenario));
-  const scripted = run(join(scriptedDir, 'drive.cjs'), [join(scriptedDir, 'scenario.json'), join(scriptedDir, 'out')], { UI_ACCEPTANCE_DIR: scriptedDir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1' });
+  const scripted = run(join(scriptedDir, 'drive.cjs'), [join(scriptedDir, 'scenario.json'), join(scriptedDir, 'out')], { UI_ACCEPTANCE_DIR: scriptedDir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1', BRIDGE_PORT: '1' });
   assert.equal(scripted.status, 0, scripted.stderr);
   assert.equal(JSON.parse(readFileSync(join(scriptedDir, 'out', 'B.json'), 'utf8'))[0].scripted, true);
+});
+
+test('betikli kabul yalnızca bütün turlarının altın planı olan konuşmaları koşar; plansız soru açıklama kararıyla geçmez', async (t) => {
+  const dir = fakeDriverDir(t);
+  const child = spawn(process.execPath, ['scripts/ui-acceptance/scriptedBridge.mjs'], { cwd: root, env: { ...process.env, BRIDGE_PORT: '0', BRIDGE_CALLS: join(dir, 'calls.jsonl'), UI_PROFILE: 'B' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => child.kill());
+  const port = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('betikli uç açılmadı')), 5000);
+    child.stdout.on('data', (chunk) => { const match = /betikli uç hazır: (\d+)/u.exec(String(chunk)); if (match) { clearTimeout(timer); resolve(Number(match[1])); } });
+    child.once('error', reject);
+  });
+  const { questions } = await (await fetch(`http://127.0.0.1:${port}/v1/scripted-plans`)).json();
+  const scenarios = JSON.parse(readFileSync('scripts/ui-acceptance/scenarios/B.json', 'utf8')).conversations;
+  const seeded = scenarios.filter((item) => item.seed === 'executive');
+  assert.ok(seeded.length >= 5);
+  // Yönetici verisi isteyen her konuşmanın her turu betikli plana sahiptir; diğer konuşmaların planı yoktur (model kabulü ister).
+  for (const item of seeded) assert.ok(item.turns.every((text) => questions.includes(text)), item.name);
+  assert.ok(scenarios.some((item) => !item.turns.every((text) => questions.includes(text))));
+  // Plansız soru: uç açıklama kararı döndürür ve çağrıyı `unscripted` olarak işaretler.
+  const ask = (content) => fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content }] }) }).then((response) => response.json());
+  assert.match((await ask('altın planı olmayan soru')).choices[0].message.tool_calls[0].function.arguments, /"clarify"/u);
+  assert.doesNotMatch((await ask(seeded[0].turns[0])).choices[0].message.tool_calls[0].function.arguments, /"clarify"/u);
+  const calls = readFileSync(join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(calls.map((call) => call.unscripted === true), [true, false]);
+  // Sürücü: kapsam satırıyla yazılır, plansız konuşma koşulmaz ve satır üretmez.
+  const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [
+    { name: 'planlı', detail: 'balanced', turns: [seeded[0].turns[0]] }, { name: 'plansız', detail: 'balanced', turns: ['altın planı olmayan soru'] }] };
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
+  const playwright = join(dir, 'node_modules', 'playwright', 'index.js');
+  const original = readFileSync(playwright, 'utf8');
+  const withCall = (extra) => writeFileSync(playwright, original.replace("return {status:'complete'",
+    `fs.appendFileSync(path.join(process.env.UI_ACCEPTANCE_DIR,'calls.jsonl'),JSON.stringify({purpose:'plan',ok:true,scripted:true,${extra}toolCalls:['rota_plan']})+'\\n');\n return {status:'complete'`));
+  withCall('');
+  const driven = await new Promise((resolve) => {
+    const proc = spawn(process.execPath, [join(dir, 'drive.cjs'), join(dir, 'scenario.json'), join(dir, 'out')], { env: { ...process.env, UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1', BRIDGE_PORT: String(port) } });
+    let stdout = ''; proc.stdout.on('data', (chunk) => { stdout += chunk; }); proc.on('close', (status) => resolve({ status, stdout }));
+  });
+  assert.equal(driven.status, 0, driven.stdout);
+  assert.match(driven.stdout, /betikli kapsam: B 1\/2 konuşma/u);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8')).map((row) => [row.conversation, row.scripted]), [['planlı', true]]);
+  // Kapsamdaki bir turda uç plan bulamadıysa (çağrı kaydı `unscripted`) tur başarısızdır.
+  withCall('unscripted:true,');
+  const failed = await new Promise((resolve) => {
+    const proc = spawn(process.execPath, [join(dir, 'drive.cjs'), join(dir, 'scenario.json'), join(dir, 'out')], { env: { ...process.env, UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1', BRIDGE_PORT: String(port) } });
+    proc.on('close', (status) => resolve({ status }));
+  });
+  assert.equal(failed.status, 1);
+  assert.ok(JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8')).at(-1).failures.includes('betikli plan yok'));
 });
 
 test('belirli tablo beklentisi istenen sütunlu, satırlı ve görünür tabloyu ister; başka tablo yetmez', async () => {

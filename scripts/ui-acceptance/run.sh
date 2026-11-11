@@ -19,7 +19,8 @@ DEFAULT_MAX_CALLS=$(node -e 'const fs=require("fs"); console.log(process.argv.sl
 BRIDGE_MAX_CALLS=${BRIDGE_MAX_CALLS:-$DEFAULT_MAX_CALLS}
 DEFAULT_MAX_UNCACHED=$(node -e 'const calls=Number(process.argv[1]); if(!Number.isSafeInteger(calls)||calls<1||!Number.isSafeInteger(calls*64000))process.exit(1); console.log(calls*64000)' "$BRIDGE_MAX_CALLS")
 node -e "require.resolve('playwright')" >/dev/null
-# UI_SCRIPTED=1: betikli uç (scriptedBridge.mjs, model çağrısı yok) başlatılır; Claude CLI gerekmez. Sürücü kipi çağrı kayıtlarından doğrular.
+# UI_SCRIPTED=1: betikli uç (scriptedBridge.mjs, model çağrısı yok) başlatılır; Claude CLI gerekmez. Sürücü kipi çağrı kayıtlarından doğrular
+# ve yalnızca bütün turlarının altın planı olan konuşmaları koşar (kapsamı satırıyla yazar; kalan konuşmalar model kabulü ister).
 SCRIPTED=${UI_SCRIPTED:-}
 if [ "$SCRIPTED" != 1 ] && ! command -v claude >/dev/null; then printf 'Claude CLI bulunamadı; model kabulü çalıştırılamaz.\n' >&2; exit 1; fi
 BASE=${UI_ACCEPTANCE_DIR:-${TMPDIR:-/tmp}/rota-ui-acceptance}

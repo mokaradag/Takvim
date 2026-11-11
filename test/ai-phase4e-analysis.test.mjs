@@ -103,6 +103,17 @@ test('sınama yardımcıları boş geçmez: genişleyen tek bölüm, süzülmü�
   assert.equal(scopeOf([{ filters: {}, entities: [], population: { tool: 'rota_portfolio_summary' } }, { filters: {}, entities: [], population: { tool: 'rota_task_search' } }]), 'projects');
 });
 
+test('nitelendirme bağdaştırıcısı, komut satırı aracının eklediği ortam bağlamının Rota bağlamı olmadığını kullanıcı iletisinin başında söyler', async () => {
+  const { HOST_CONTEXT_NOTE } = await import('../scripts/planner-model-adapter.mjs');
+  // Not tarih ya da değer taşımaz (sentetik "bugün" yalnızca sistem yönergesindedir) ve önbelleğe alınan önekte değildir.
+  assert.match(HOST_CONTEXT_NOTE, /^\[ORTAM NOTU\]\n/u);
+  assert.match(HOST_CONTEXT_NOTE, /Rota bağlamı DEĞİLDİR/u);
+  assert.doesNotMatch(HOST_CONTEXT_NOTE, /\d{4}/u);
+  const source = readFileSync(new URL('../scripts/planner-model-adapter.mjs', import.meta.url), 'utf8');
+  assert.match(source, /function conversationText\(messages\) \{\n {2}const lines = \[HOST_CONTEXT_NOTE\];/u, 'not her çağrıda iletinin ilk satırıdır');
+  assert.match(source, /'--system-prompt-file'/u, 'sistem yönergesi değişmeden ayrı dosyada verilir');
+});
+
 test('nitelendirme boş geçmez: ufuk, etkin yön, her istek kapsamı, sunucu yedeği, vaka seçimi, kayıt ve kullanım bu koşunundur', async (t) => {
   const { plannerScore, pickCases, record, composedProblem, usageTotals } = await import('../scripts/analysis-qualification.mjs');
   const { responseProblem } = await import('../scripts/planner-model-adapter.mjs');
@@ -256,6 +267,12 @@ test('özet biçim hataları özetin kendi alanlarıyla bildirilir; ek liste ist
   const explicit = { operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' }, filters: { assignee: 'me', priority: ['critical'] } };
   const accepted = acceptPlan('Durumumu özetle ve kritik işlerimin sayısını ver.', { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] }, request: explicit });
   assert.ok(accepted.requests.some((request) => request.filters?.priority?.includes('critical')), 'açık istek ayrı bölümdür');
+  // Özetin kendi okuması da korunur: yalnızca açık isteğin kalması (özetin düşmesi) bu sınamayı geçemez.
+  const summaryOnly = acceptPlan('Durumumu özetle ve kritik işlerimin sayısını ver.', { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] } });
+  assert.equal(accepted.requests.length, summaryOnly.requests.length + 1, 'özetin bölümleri + açık istek');
+  assert.ok(summaryOnly.requests.length >= 1 && summaryOnly.requests.every((request) => !request.filters?.priority?.includes('critical')));
+  assert.deepEqual(accepted.requests.filter((request) => !request.filters?.priority?.includes('critical')).map((request) => JSON.stringify(request.population)),
+    summaryOnly.requests.map((request) => JSON.stringify(request.population)), 'özetin okumaları değişmeden kalır');
   const incomplete = parseRequestDeclaration({ operation: 'value', metrics: ['tasks.total'], layout: 'auto' }, { textTrusted: () => true, identityTrusted: () => true, today: corpus.today });
   assert.ok(completeRequest(incomplete, [], { today: corpus.today }).problems.includes('$.population:required'), 'nüfussuz istek üretimde reddedilir');
   assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] },

@@ -1461,7 +1461,7 @@ test("sistem yöneticisinin boş sayımlı tam kapsamı yalnız güncel yönetic
 
 test('örgütsel grup kanıtı proje başına erişim düzeyini kaydeder; düzeyi olmayan ya da daha yüksek düzeyle kurulmuş kayıt gevşetilmez', async (t) => {
   const stack = stackFor(t, {}, AYSE);
-  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'department' });
+  const { result, ledger, context } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'department' });
   assert.equal(result.ok, true, JSON.stringify(result));
   const [saved] = ledger.authorizationEntries();
   assert.ok(Array.isArray(saved.authorizationProjectLevels) && saved.authorizationProjectLevels.length, 'kayıt anındaki düzey saklanır');
@@ -1474,6 +1474,17 @@ test('örgütsel grup kanıtı proje başına erişim düzeyini kaydeder; düzey
   const full = savedEvidenceRequirements(persisted([{ projectId: PROJECTS.FULL, level: 'FULL' }]), { sicil: AYSE });
   assert.equal(full.projectLevels.get(PROJECTS.FULL), PROJECT_ACCESS_RANK.FULL);
   assert.equal(savedEvidenceRequirements(persisted(null), { sicil: AYSE }), null, 'düzeyi bilinmeyen örgütsel kanıt kapalı reddedilir');
+  // Değişmezin kendisi: aynı düzeyde kanıt geçerli kalır; güncel erişim tam → okuma düzeyine düşünce TAM düzeyle kurulmuş kanıt
+  // yeniden doğrulamada reddedilir (proje ve görevler hâlâ görünür olsa da).
+  const signal = new AbortController().signal;
+  assert.equal(saved.authorizationProjectLevels.find((row) => row.projectId === PROJECTS.FULL)?.level, 'FULL');
+  assert.ok((await context.revalidateEvidence([saved], signal)).has(saved.id), 'aynı düzeyde erişim kanıtı korur');
+  stack.db.projects.find((project) => project.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+  stack.db.projectAccess.push({ ProjectId: PROJECTS.FULL, Sicil: AYSE, AccessLevel: 'READ', GrantSource: 'MANUAL_GRANT' });
+  await context.revalidateAuthorization(signal);
+  const visible = await callRotaTool(stack, AYSE, 'rota_project_search', { text: 'Radar' });
+  assert.deepEqual(visible.result.data.matches.map((project) => project.access.level !== 'FULL'), [true], 'proje daha düşük düzeyde görünür kalır');
+  assert.equal((await context.revalidateEvidence([saved], signal)).has(saved.id), false, 'tam → okuma düşüşü tam düzeyli kanıtı açmaz');
 });
 
 test('görünür açık görevi olmayan ekibin kadro yanıtı yalnızca birebir dönemde ve üyeler güncel yönetim kapsamındaysa yeniden açılır', () => {

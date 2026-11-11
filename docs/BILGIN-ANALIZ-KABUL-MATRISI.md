@@ -326,6 +326,43 @@ yığılmasını ihlal sayacak biçimde düzeltildi).
 **Kanonik planlayıcı kapısı (117/117 + 19/19):** anlamsal danışmanlık (şirket içi gömme/yeniden sıralama) gerektirdiğinden
 bu ortamda koşulamaz; G için ölçülmedi.
 
+### 7.4b Zayıf model güvenilirliği düzeltmeleri ve yeniden ölçüm (10–11 Kasım 2026)
+
+**Durum: YAKINSAMADI.** Aşağıdaki kök nedenler belirlenimci olarak yeniden üretildi, düzeltildi ve regresyon sınamasıyla
+korundu; düzeltmelerden SONRAKİ tam Haiku koşusu hesabın haftalık kullanım sınırı (0,99; ardından `429`) nedeniyle
+yapılamadı. Bu bölümdeki canlı sayılar düzeltmelerden ÖNCEKİ taban ölçümdür; 49/49 ve 22/22 hedefi ölçülmemiştir.
+
+| Koşu (claude-haiku-4-5-20251001, `--effort low`, düşünme 0) | Vaka | Geçen | Çağrı | Girdi | Önbellek yazma | Önbellek okuma | Çıktı |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| G ayrık (ilk beş inceleme düzeltmesiyle) | 22 | 18 | 33 | 99 | 49 885 | 1 198 878 | 8 886 |
+| G hedefli taban (aynı kod) | 49 | 21 | 102 | 112 731 | 138 993 | 2 268 045 | 28 625 |
+| Düzeltme sonrası doğrulama (x01, x07, x12, x14; x14 altyapı) | 4 | 1 | 8 | 21 | 23 436 | 250 047 | 1 582 |
+| Düzeltme sonrası G hedefli doğrulama | 11 | — | 1 | 0 | 0 | 0 | 0 |
+
+Son satır ilk çağrıda `429` (kullanım sınırı) ile durdu: altyapı hatasıdır, model sonucu değildir. Bütün çağrılarda model
+kimliği doğrulandı, düşünme belirteci 0; Derin modele giden çağrı modele gitmez ve başarısızlıktır. F kümeleri bu oturumda
+koşulmadı.
+
+**Taban koşusunun başarısızlık sınıfları ve yapılan düzeltme** (her biri altın planla değil, Haiku'nun GERÇEK planının
+belirlenimci yeniden oynatılmasıyla doğrulandı):
+
+| Kök neden | Örnek vaka | Düzeltme |
+| --- | --- | --- |
+| Geçerli onarım "kapsam değişti" diye reddedilip Derin'e devrediliyor (reddedilen alan yüzünden birleşemeyen eşdeğer yazım) | g15 | Onarım karşılaştırması reddedilen yollar çıkarıldıktan sonra yeniden normalleştirilir; ek kapsamda reddedilen dönem özetin dönem alanlarında yeniden yazılabilir. Kapsam, düzey, ad ve yön değişikliği eskisi gibi reddedilir |
+| Model düzeninde tek hatalı blok (bölümleri karışık not, yinelenen/bilinmeyen kaynak, paragrafsız bölüm) bütün düzeni reddettirip Derin anlatıma devrediyor | g07, g31, g41 | Düzyazı düzeninde hatalı seçim yalnızca o bloğu düşürür; kapsamı sunucu tamamlar. Bozuk biçimli blok ve kimlik düzeni katı kalır |
+| Eşdeğer istek yazımı onarım turu harcıyor: dizi biçimli istek, `null` süzgeç, `assignee: any`, süzgeçte proje adı, bağsız `task.project` | g21, g27, g38, g51, g52, x07 | Yapısal normalleştirme (ad güvenilir metin denetiminden aynen geçer); listede adlandıran sütun ad alanına bağlanır, tek değerde belirsizlik modele kalır |
+| Portföy + "önümüzdeki 7 gün" dönemi portföy okumasını düşürüyor | g02 | Bugünden başlayan yedi günlük dönem portföyün kendi ölçüsüdür (`tasks.dueNext7Days`) |
+| Özetin yanındaki isteğin düzeysiz ekip koşulu | g52 | Özet tek ekip düzeyi taşıyorsa düzey istekten tamamlanır |
+| Planlayıcı yönergesi: özet/istek ayrımı, yön seçimi, örgütsel düzey, dönem ve tarihsel eğilim kuralları dağınık ya da eksik | g01, g03, g11, g14, g17, g19, g20, g28, g43, x12 | "KAPSAM VE ANALİTİK ÖZET" bölümü tek tek adlandırılmış kurallara ayrıldı; eğilim sorusu `abstain outside_data` olarak tanımlandı |
+| Bağdaştırıcı: CLI kendi ortam bağlamını (makinenin güncel tarihi dahil) modele ekliyor; sentetik "bugün" ile çelişiyor | g51 | Kullanıcı iletisinin başına ortam notu; sistem yönergesi ve araç kataloğu (önbellek öneki) değişmez |
+
+**Açık kalanlar.** (1) Düzeltme sonrası G hedefli/ayrık ve F hedefli/ayrık tam koşuları yapılmadı. (2) İlk yanıtın düz metin
+olması (`forcedText`: CLI zorunlu aracı kısıtlı çözümle uygulayamıyor) onarım hakkını tüketiyor; üretimde adlı araç seçimi
+bunu engeller, bağdaştırıcıda engellenmiyor. (3) g05, g07, g32, g35 beklentileri sorunun adlandırmadığı bir yön ya da kapsam
+istiyor; beklenti değiştirilmedi. (4) Yanıt düzyazısı: giriş her zaman soruyu doğrudan yanıtlamıyor (ör. "genel görünüm olumlu
+mu?" sorusunda yanıt iş yükü yayılımıyla açılıyor) ve bölüm başlıkları ile tablolar anlatımı bölüyor; düzyazı kabulü
+sağlanmadı. (5) Betikli arayüz kabulü bu oturumda tarayıcıyla yeniden koşulmadı; kapsam kuralı birim sınamasıyla doğrulandı.
+
 ### 7.5 Görsel kabul (gerçek arayüz, betikli planlar)
 
 Gerçek `next build` + SQL ikizi (yönetici sentetik verisi, `UI_SEED=executive`) + yeni betikli uç

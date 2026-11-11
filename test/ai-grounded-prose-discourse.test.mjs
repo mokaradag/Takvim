@@ -511,6 +511,40 @@ test('bölüm bölme ve sunucu tamamlama sonrasında toplam blok sınırı korun
   }
 });
 
+test('düzyazı düzeninde modelin hatalı seçimi yalnızca o bloğu düşürür; yanıtın kapsamını sunucu tamamlar, kimlik düzeni katı kalır', async () => {
+  const { validateComposition } = await import('../src/domain/ai/groundedComposition.js');
+  const propositions = new Map(Array.from({ length: 8 }, (_, index) => {
+    const id = `P${index + 1}`;
+    const part = index < 4 ? 1 : 2;
+    return [id, { ...counted(`R${part}`), id, part, ...([3, 6].includes(index) ? { required: true } : {}) }];
+  }));
+  const tables = new Map([1, 2].map(part => [`T${part}`, { id: `T${part}`, part, rows: 2, columns: [{ id: 'C1' }] }]));
+  const composition = { view: { language: 'tr' }, render: { locale: 'tr', propositions, tables, charts: new Map(), details: new Map(), titles: new Map() } };
+  const lead = { type: 'say', text: '{P1} {P2} {P3}' };
+  // Bölümleri karışık not, bilinmeyen kaynak, yinelenen tablo ve serbest metinli not: her biri tek başına atılır.
+  const noisy = validateComposition(composition, { blocks: [lead, { type: 'rows', source: 'T1' }, { type: 'rows', source: 'T9' }, { type: 'rows', source: 'T1' },
+    { type: 'say', text: '{P5} {P6}' }, { type: 'note', items: ['P4', 'P8'] }, { type: 'note', items: ['Modelin kendi cümlesi'] }] });
+  assert.equal(noisy.ok, true, JSON.stringify(noisy.issues));
+  assert.deepEqual(noisy.blocks.filter(block => block.type === 'rows').map(block => block.source), ['T1', 'T2'], 'yinelenen ve bilinmeyen tablo düşer, eksik tablo eklenir');
+  assert.deepEqual(noisy.blocks.filter(block => block.type === 'note').map(block => block.items), [['P4']], 'kutu ilk öğenin bölümünde kalır');
+  const ids = noisy.blocks.flatMap(block => block.items || []);
+  for (const id of ['P4', 'P7']) assert.ok(ids.includes(id), `zorunlu çekince söylenir: ${id}`);
+  assert.ok(ids.every(id => propositions.has(id) || tables.has(id)), 'yalnızca sunucu kaynakları çizilir');
+  assert.ok(noisy.prose.dropped >= 3);
+  // Bölümün önermeleri yalnızca not kutusundaysa bölüm paragrafsız kalmaz.
+  const noted = validateComposition(composition, { blocks: [lead, { type: 'note', items: ['P4'] }, { type: 'note', items: ['P5', 'P6', 'P7', 'P8'] }] });
+  assert.equal(noted.ok, true, JSON.stringify(noted.issues));
+  assert.ok(noted.blocks.some(block => block.type === 'say' && block.items.some(id => propositions.get(id)?.part === 2)), 'ikinci bölümün paragrafı var');
+  // Kimlik düzeninde (modelin `items` yazdığı eski biçim) aynı hatalar düzeni reddetmeye devam eder.
+  const strict = (blocks) => validateComposition(composition, { blocks: [{ type: 'say', items: ['P1', 'P2', 'P3', 'P4'] }, { type: 'say', items: ['P5', 'P6', 'P7'] }, ...blocks,
+    { type: 'rows', source: 'T1' }, { type: 'rows', source: 'T2' }] });
+  assert.equal(strict([]).ok, true);
+  assert.deepEqual(strict([{ type: 'rows', source: 'T9' }]), { ok: false, issues: ['UNKNOWN_SOURCE'] });
+  assert.deepEqual(strict([{ type: 'rows', source: 'T1' }]), { ok: false, issues: ['DUPLICATE_SOURCE'] });
+  // İzinsiz alan taşıyan blok düzyazıda da düzenin tamamını reddeder.
+  assert.deepEqual(validateComposition(composition, { blocks: [lead, { type: 'rows', source: 'T1', text: 'İzinsiz alan.' }] }), { ok: false, issues: ['BLOCK_INVALID'] });
+});
+
 test('bölümlere ayrılan paragraf kapasiteyi aşarsa bütünü düşer; önceki düzen, kimlikler ve sonraki yönlendirmeler korunur', async () => {
   const { validateComposition } = await import('../src/domain/ai/groundedComposition.js');
   const propositions = new Map(Array.from({ length: 8 }, (_, index) => {

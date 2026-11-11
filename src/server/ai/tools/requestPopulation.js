@@ -489,8 +489,16 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
       .map((binding) => Object.freeze({ ...binding, metric: renamed(binding.metric) }))),
     ...(request.rank ? { rank: Object.freeze({ ...request.rank, metric: renamed(request.rank.metric) }) } : {}),
     population: Object.freeze(Object.fromEntries(Object.entries(population).filter(([, value]) => value != null))) });
-  const capability = requestCapabilityProblems(completed, { allowedTextFields });
-  return { request: completed, problems: [...problems, ...capability.problems], hints: [...hints, ...capability.hints] };
+  // Liste ya da sıralamada satırı adlandıran sütun birden çok yolda taşınıyorsa (ör. `task.project`: proje adı ya da kodu) ve model
+  // yolu bağlamadıysa kayıt defterinin ilk yolu olan AD alanı varsayılandır (özetin kendi açılımının bağladığı yol; onarım ipucunun
+  // da ilk örneği). Yapısal tamamlamadır: ölçü, nüfus ve koşullar değişmez. Tek değer sorusunda (`value`) sorulan şeyin adı mı kodu mu
+  // olduğu yanıtın kendisidir: belirsizlik eskisi gibi modele kalır; ad olmayan çok yollu ölçü de açık bağ ister.
+  const defaulted = (operation === 'value' ? [] : unboundCarrierMetrics(completed)).map((metric) => ({ metric, path: metricPaths(tool, metric)[0] }))
+    .filter(({ path }) => typeof path === 'string' && path.endsWith('.name'));
+  const bound = defaulted.length ? Object.freeze({ ...completed, fields: Object.freeze([...completed.fields,
+    ...defaulted.map(({ metric, path }) => Object.freeze({ metric, tool, path }))]) }) : completed;
+  const capability = requestCapabilityProblems(bound, { allowedTextFields });
+  return { request: bound, problems: [...problems, ...capability.problems], hints: [...hints, ...capability.hints] };
 }
 
 /**

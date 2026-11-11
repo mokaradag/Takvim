@@ -126,7 +126,10 @@ export function normalizedBrief(raw) {
   // karşılaştırmasıdır (alanların kendisi kapsamı belirler, cümle yorumlanmaz).
   if (out.scope === 'self' && out.withSelf === true && Array.isArray(out.names) && out.names.length === 1) out.scope = 'person';
   if (Array.isArray(out.also)) {
-    out.also = out.also.map((item) => (item && typeof item === 'object' && !Array.isArray(item) ? normalizedLayer(item) : item));
+    // Özet dönem taşımıyorsa ek kapsamdaki "dönem yok" yazımı (`relativeWindow: all_time`) anlam eklemez: alanın yokluğuyla eşdeğerdir.
+    // Özetin dönemi varken ek kapsamın ayrı dönemi temsil edilemez; alan kalır ve doğrulama reddeder (dönem sessizce düşmez).
+    const unwindowed = !out.dateFrom && !out.dateTo && (out.relativeWindow == null || out.relativeWindow === 'all_time');
+    out.also = out.also.map((item) => (item && typeof item === 'object' && !Array.isArray(item) ? normalizedLayer(item, unwindowed) : item));
     // Aynı kapsamın yinelenen yazımı tek kapsamdır; ama yazımın taşıdığı yönler düşmez, kapsamın yönlerine katılır (yapısal
     // birleştirme). Birincil yönler, yönü yazılmamış ek kapsamların da yönleridir: birincile yön katılmadan önce bu kapsamlara
     // özgün birincil yönler açıkça yazılır (başka kapsamın okuması değişmez).
@@ -151,7 +154,10 @@ export function normalizedBrief(raw) {
       }
       const prior = kept.find((other) => plain(other) && key(other) === key(item));
       if (prior) {
-        if (own || prior.focus) prior.focus = union(prior.focus ?? inherited, own ?? inherited);
+        // Devralınan pay kapsamın kendi süzgecinden geçer (birincil yinelemesindeki kuralın aynısı): anlamı olmayan yön kapsamın
+        // kendi yönü olarak yazılırsa açılım planı reddederdi.
+        const base = inherited ? inheritedFor(item.scope) : null;
+        if (own || prior.focus) prior.focus = union(prior.focus ?? base, own ?? base);
         continue;
       }
       kept.push(item && typeof item === 'object' && !Array.isArray(item) ? { ...item } : item);
@@ -191,8 +197,9 @@ function layerApplicable(focus, scope) {
 }
 
 /** Ek kapsamın yazım normalleştirmesi: birincil özetle aynı yapısal kurallar (yön yazımı, adlı proje kapsamı). */
-function normalizedLayer(raw) {
+function normalizedLayer(raw, unwindowed = false) {
   const out = { ...raw };
+  if (unwindowed && out.relativeWindow === 'all_time') delete out.relativeWindow;
   if (Array.isArray(out.focus)) {
     out.focus = out.focus.map((item) => (typeof item !== 'string' || ANALYSIS_FOCUS.includes(item) ? item
       : ANALYSIS_FOCUS.find((known) => known === `${item}s` || `${known}s` === item) || item));
@@ -244,9 +251,9 @@ export function parseAnalysis(raw) {
       ...(layer.names ? { names: Object.freeze([...layer.names]) } : {}) }))) } : {}) });
 }
 
-/** Önceki yönlerden yeni öznede anlamı olanlar (ör. proje satırına "projelere göre" uygulanmaz). */
+/** Önceki yönlerden yeni öznede anlamı olanlar (ör. proje satırına "projelere göre", kişi satırına alt birim kırılımı uygulanmaz). */
 function inheritableFocus(focus, scope) {
-  return (focus || []).filter((item) => !(item === 'projects' && scope === 'project'));
+  return (focus || []).filter((item) => layerApplicable(item, scope));
 }
 
 /**
@@ -375,7 +382,15 @@ const request = (fields) => ({ layout: 'auto', ...fields });
  * Kapsam daraltılmışsa (within projesi, ekip, kişi) aynı yön daraltılmış görev nüfusundan okunur; nüfus hiçbir zaman
  * kabul edilen özetten geniş olmaz.
  */
-const portfolioWide = (base) => !base.entities.length && !Object.keys(base.filters).length;
+const portfolioWide = (base, today = null) => {
+  if (base.entities.length) return false;
+  const keys = Object.keys(base.filters);
+  if (!keys.length) return true;
+  // Bugünden başlayan yedi günlük dönem portföy özetinin kendi ölçüsüdür (`tasks.dueNext7Days`): dönem bu sütunla birebir karşılanır,
+  // portföy okuması daraltılmış görev gruplamasına düşmez (proje tablosu ve projeler arası bulgular kurulabilir). Başka her dönem ve
+  // süzgeç eskisi gibi daraltılmış görev nüfusundan okunur.
+  return Boolean(today) && keys.length === 2 && base.filters.dateFrom === today && base.filters.dateTo === addDays(today, 6);
+};
 
 /** Görev satırının bağlam sütunları: kişi kapsamında sorumlu, proje dışı kapsamda proje. */
 function rowContext(analysis, base) {
@@ -476,7 +491,7 @@ function focusRequest(focus, analysis, base, today = null) {
   if (compare) return comparisonFor(focus, analysis, base, focus === 'upcoming' ? ahead : window, today);
   switch (focus) {
     case 'overview':
-      if (analysis.scope === 'projects' && portfolioWide(base)) {
+      if (analysis.scope === 'projects' && portfolioWide(base, today)) {
         return request({ operation: 'value', metrics: ['projects.total', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'projects.withOverdue'],
           population: { tool: 'rota_portfolio_summary' } });
       }
@@ -523,7 +538,7 @@ function focusRequest(focus, analysis, base, today = null) {
     }
     case 'projects':
       if (analysis.scope === 'project') return null;
-      if ((analysis.scope === 'projects' || analysis.scope === 'all') && portfolioWide(base)) {
+      if ((analysis.scope === 'projects' || analysis.scope === 'all') && portfolioWide(base, today)) {
         // Aşama G: tamamlanan görev sayısı da okunur (aynı satır, ek okuma yok): proje başına tamamlanma ile gecikmenin birlikte
         // değerlendirilmesi ("tamamlanma yüksek ama gecikme sürüyor") yalnızca tam satırla kurulabilir. Portföy tablosu projeler
         // arası bulguların nüfusudur: ilk N değil, aracın kendi sınırıyla (aracın varsayılan sırası: gecikme) TAM listedir; kesilirse

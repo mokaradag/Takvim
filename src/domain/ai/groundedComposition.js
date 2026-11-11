@@ -695,7 +695,7 @@ export function validateComposition(composition, response) {
   if (response.language != null && response.language !== view.language) return fail('LANGUAGE_MISMATCH');
   const raw = response.blocks;
   const limits = render.limits || COMPOSITION_LIMITS;
-  if (!Array.isArray(raw) || raw.length < 1 || raw.length > limits.maxBlocks) return fail('BLOCK_COUNT');
+  if (!Array.isArray(raw) || raw.length < 1) return fail('BLOCK_COUNT');
   const blocks = [];
   const usedSources = new Set();
   const usedPropositions = new Set();
@@ -706,6 +706,15 @@ export function validateComposition(composition, response) {
   // değerler sunucunundur); istenen tür varsa ensureChart doğrulanmış adayla ekler. Kimlik düzeni katı kalır.
   const proseResponse = raw.some((item) => item?.type === 'say' && Object.hasOwn(item, 'text'));
   let chartsDropped = 0;
+  /*
+   * Düzyazı yanıtında modelin SEÇİM hatası (bilinmeyen ya da yinelenen kaynak, bölümleri karışık not, sınırı aşan blok) bütün
+   * düzeni düşürmez (bozuk biçimli blok — bilinmeyen tür ya da izinsiz alan — eskisi gibi düzenin tamamını reddeder): yalnızca o blok ya da öğe atılır. Model yalnızca sunucu kaynaklarını seçtiği için atılan seçim içerik
+   * eklemez, yalnızca modelin payını azaltır; eksik kalan tablo, zorunlu çekince ve bölüm anlatımını sunucu tamamlar. Böylece zayıf
+   * modelin tek bir blok hatası doğrulanmış yanıtı Derin anlatıma devrettirmez. Kimlik düzeninde (`items`) kurallar katı kalır.
+   */
+  let blocksDropped = 0;
+  const soft = (code) => { if (!proseResponse) return fail(code); blocksDropped += 1; return null; };
+  if (raw.length > limits.maxBlocks && !proseResponse) return fail('BLOCK_COUNT');
   const proseRejected = [];
   const proseSpoken = new Set();
   const emphasized = new Set();
@@ -721,7 +730,7 @@ export function validateComposition(composition, response) {
     const [part] = unique;
     return titledPart != null && part !== titledPart ? 'PART_SCOPE' : null;
   };
-  for (let index = 0; index < raw.length; index += 1) {
+  for (let index = 0; index < Math.min(raw.length, limits.maxBlocks); index += 1) {
     if (!Object.hasOwn(raw, index)) return fail('BLOCK_INVALID');
     const block = raw[index];
     const type = block?.type;
@@ -740,17 +749,21 @@ export function validateComposition(composition, response) {
     if (type === 'note') {
       // Not kutusu yalnızca sunucu önermeleridir; rengini önermelerin sunucu tonu belirler.
       const items = block.items;
-      if (!Array.isArray(items) || items.length < 1 || items.length > COMPOSITION_LIMITS.maxNoteItems) return fail('NOTE_INVALID');
-      if (blocks.filter((item) => item.type === 'note').length >= limits.maxNotes) return fail('NOTE_INVALID');
+      if (!Array.isArray(items) || items.length < 1 || (!proseResponse && items.length > COMPOSITION_LIMITS.maxNoteItems)) { const hard = soft('NOTE_INVALID'); if (hard) return hard; continue; }
+      // Düzyazıda ayrıntı ayarının not sınırını aşan kutu da atılır (önermeleri kullanılmış sayılmaz; gerekirse sunucu anlatır).
+      const noteCap = proseResponse ? Math.min(limits.maxNotes, ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)].maxNotes) : limits.maxNotes;
+      if (blocks.filter((item) => item.type === 'note').length >= noteCap) { const hard = soft('NOTE_INVALID'); if (hard) return hard; continue; }
       const kept = [];
-      for (let position = 0; position < items.length; position += 1) {
-        if (!Object.hasOwn(items, position) || typeof items[position] !== 'string') return fail('NOTE_INVALID');
-        if (!render.propositions?.has(items[position])) return fail('UNKNOWN_PROPOSITION');
+      for (let position = 0; position < Math.min(items.length, COMPOSITION_LIMITS.maxNoteItems); position += 1) {
+        if (!Object.hasOwn(items, position) || typeof items[position] !== 'string') { const hard = soft('NOTE_INVALID'); if (hard) return hard; continue; }
+        if (!render.propositions?.has(items[position])) { const hard = soft('UNKNOWN_PROPOSITION'); if (hard) return hard; continue; }
         // Düzyazıda söylenen önerme cümlenin parçasıdır: kutudaki yinelemesi düşer (kimlik kümesi daralır, içerik eklenmez).
         if (proseSpoken.has(items[position]) && !emphasized.has(items[position])) continue;
         // Paragrafta söylenen önermenin not kutusunda vurgulanması yapısal olarak normalleştirilir (yalnızca kutuda kalır);
         // başka her yineleme reddedilir. Bu, kimlik kümesini daraltır, içerik eklemez.
-        if (emphasized.has(items[position]) || (usedPropositions.has(items[position]) && !spoken.has(items[position]))) return fail('DUPLICATE_PROPOSITION');
+        if (emphasized.has(items[position]) || (usedPropositions.has(items[position]) && !spoken.has(items[position]))) { const hard = soft('DUPLICATE_PROPOSITION'); if (hard) return hard; continue; }
+        // Düzyazıda kutu tek bölümündür: ilk öğenin bölümünden olmayan öğe atılır (sunucu o bölümü kendi anlatımıyla tamamlar).
+        if (proseResponse && kept.length && partOfItem(items[position]) !== partOfItem(kept[0])) { blocksDropped += 1; continue; }
         usedPropositions.add(items[position]);
         emphasized.add(items[position]);
         kept.push(items[position]);
@@ -797,13 +810,13 @@ export function validateComposition(composition, response) {
           if (!Object.hasOwn(run, position) || typeof run[position] !== 'string') return fail('SAY_INVALID');
           const id = run[position];
           if (render.propositions?.has(id)) {
-            if (usedPropositions.has(id)) return fail('DUPLICATE_PROPOSITION');
+            if (usedPropositions.has(id)) { const hard = soft('DUPLICATE_PROPOSITION'); if (hard) return hard; continue; }
             usedPropositions.add(id);
             spoken.add(id);
             if (prose) proseSpoken.add(id);
             said.push(id);
           } else if (render.tables.has(id) || render.charts.has(id)) {
-            if (pointers.some((pointer) => pointer.id === id)) return fail('DUPLICATE_POINTER');
+            if (pointers.some((pointer) => pointer.id === id)) { const hard = soft('DUPLICATE_POINTER'); if (hard) return hard; continue; }
             pointers.push({ id, at: blocks.length });
             said.push(id);
           } else if (!prose && render.details?.has(id)) {
@@ -812,7 +825,7 @@ export function validateComposition(composition, response) {
             if (usedSources.has(id)) return fail('DUPLICATE_SOURCE');
             usedSources.add(id);
             placed.push(id);
-          } else return fail('UNKNOWN_PROPOSITION');
+          } else { const hard = soft('UNKNOWN_PROPOSITION'); if (hard) return hard; }
         }
         // Başlık olsun ya da olmasın paragrafın tüm önermeleri aynı bölüme aittir.
         const scope = owned(run.map(partOfItem));
@@ -824,22 +837,22 @@ export function validateComposition(composition, response) {
       continue;
     }
     const source = block.source;
-    if (typeof source !== 'string') return fail('SOURCE_INVALID');
+    if (typeof source !== 'string') { const hard = soft('SOURCE_INVALID'); if (hard) return hard; continue; }
     const known = type === 'rows' ? render.tables.get(source) : type === 'details' ? render.details.get(source) : render.charts.get(source);
-    if (!known) return fail('UNKNOWN_SOURCE');
+    if (!known) { const hard = soft('UNKNOWN_SOURCE'); if (hard) return hard; continue; }
     const chartStyle = type === 'chart' ? block.style ?? known.types[0] : null;
     const sourceKey = type === 'chart' ? `${source}:${chartStyle}` : source;
-    if (usedSources.has(sourceKey)) return fail('DUPLICATE_SOURCE');
+    if (usedSources.has(sourceKey)) { const hard = soft('DUPLICATE_SOURCE'); if (hard) return hard; continue; }
     if (type === 'chart' && blocks.some((item) => item.type === 'chart' && item.source === source)
-      && !(render.visual && (render.chartTypes || []).includes(chartStyle))) return fail('DUPLICATE_SOURCE');
+      && !(render.visual && (render.chartTypes || []).includes(chartStyle))) { const hard = soft('DUPLICATE_SOURCE'); if (hard) return hard; continue; }
     usedSources.add(sourceKey);
     const scope = owned([partOfSource(type, source)]);
     if (scope) return fail(scope);
     if (type === 'rows') {
-      if (block.style != null && !ROW_STYLES.has(block.style)) return fail('STYLE_INVALID');
+      if (block.style != null && !ROW_STYLES.has(block.style) && !proseResponse) return fail('STYLE_INVALID');
       // Açıkça istenen düzen modelin seçiminden önce gelir; satır sırasını sunucu korur.
       const requested = render.table || known.layout === 'table' ? 'table' : ['list', 'prose'].includes(known.layout) ? 'list' : null;
-      blocks.push({ type, source, style: requested ?? block.style ?? (known.columns.length >= 2 ? 'table' : 'list') });
+      blocks.push({ type, source, style: requested ?? (ROW_STYLES.has(block.style) ? block.style : null) ?? (known.columns.length >= 2 ? 'table' : 'list') });
     } else if (type === 'chart') {
       if (block.style != null && !known.types.includes(block.style)) {
         if (!proseResponse) return fail('STYLE_INVALID');
@@ -872,7 +885,18 @@ export function validateComposition(composition, response) {
       const available = [...render.propositions.values()].filter((item) => item.part === part);
       const said = available.filter((item) => usedPropositions.has(item.id)).length;
       const missingRequired = available.filter((item) => item.required && !usedPropositions.has(item.id));
-      const deficit = Math.max(0, Math.min(contract.minNarrated, available.length) - said);
+      // Bölümün kendi paragrafı yoksa (model önermelerini yalnızca not kutusuna koydu ya da paragrafı düştü) en az bir önerme
+      // paragraf olarak eklenir; anlatılacak önerme kalmadıysa bölümün not kutusu paragrafa çevrilir (aynı önermeler, kutu yerine cümle).
+      const narrated = blocks.some((block) => block.type === 'say' && block.items.some((id) => render.propositions.get(id)?.part === part));
+      if (!narrated && !available.some((item) => !usedPropositions.has(item.id))) {
+        const at = blocks.findIndex((block) => block.type === 'note' && block.items.some((id) => render.propositions.get(id)?.part === part));
+        if (at >= 0) {
+          for (const id of blocks[at].items) emphasized.delete(id);
+          blocks[at] = { type: 'say', items: [...blocks[at].items], supplemented: true };
+          supplemented += 1;
+        }
+      }
+      const deficit = Math.max(narrated ? 0 : 1, Math.min(contract.minNarrated, available.length) - said);
       const extra = [...missingRequired, ...available.filter((item) => !usedPropositions.has(item.id) && !item.required && item.analyst),
         ...available.filter((item) => !usedPropositions.has(item.id) && !item.required && !item.analyst)];
       const add = [...new Set([...missingRequired, ...extra.slice(0, Math.max(deficit, missingRequired.length))])].slice(0, COMPOSITION_LIMITS.maxSayItems);
@@ -1021,7 +1045,7 @@ export function validateComposition(composition, response) {
   // Sunucu çekincesi (eksik nüfus) her düzende söylenir: akıcı anlatım onu atlayıp eksik nüfusu tam gösteremez.
   if (propositions.some((item) => item.required && !usedPropositions.has(item.id))) return fail('CAVEAT_REQUIRED');
   if (normalized.length > limits.maxBlocks) return fail('BLOCK_COUNT');
-  return { ok: true, blocks: normalized, ...(proseMode ? { prose: { dropped: proseDropped, cut: proseCut, rejected: proseRejected.length, supplemented, charts: chartsDropped } } : {}) };
+  return { ok: true, blocks: normalized, ...(proseMode ? { prose: { dropped: proseDropped + blocksDropped, cut: proseCut, rejected: proseRejected.length, supplemented, charts: chartsDropped } } : {}) };
 }
 
 /** Düzyazının kimlik paragrafına göre ek anlatım payı (bölüm başına önerme). */

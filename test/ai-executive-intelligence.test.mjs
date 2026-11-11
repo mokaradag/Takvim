@@ -24,6 +24,8 @@ const { unpackTypedPlan, typedPlanningTool } = await import('../src/server/ai/to
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
 const { analyticalFindings, synthesisNarrative } = await import('../src/domain/ai/analyticalFindings.js');
 const { executiveExpectation, plannerScore } = await import('../scripts/analysis-qualification.mjs');
+const { parseRequestDeclaration } = await import('../src/server/ai/tools/requestDeclaration.js');
+const { completeRequest } = await import('../src/server/ai/tools/requestPopulation.js');
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/bilgin-executive-benchmark.json', import.meta.url), 'utf8'));
 const TODAY = fixture.today;
@@ -501,13 +503,15 @@ test('örgütsel gruplar: aynı adlı birim ve bölüm farklı direktörlüklerd
   // Aynı birim ve bölüm adı, farklı direktörlükte (ad zinciri direktörlüğe kadar aynı değil).
   Object.assign(seed.people.find((person) => person.Sicil === P.MEHMET_KAYA), { Unit: 'Uygulama Geliştirme', Department: 'Yazılım', Directorate: 'Operasyon' });
   // Yalnızca aksanı farklı ayrı birim adı.
-  Object.assign(seed.people.find((person) => person.Sicil === P.BURAK), { Unit: 'Dijital Kanallar'.replace('ı', 'i') });
+  const accentVariant = 'Dijital Kanallar'.replace('i', 'ı');
+  assert.notEqual(accentVariant, 'Dijital Kanallar', 'aksan değişkesi gerçekten farklı bir addır');
+  Object.assign(seed.people.find((person) => person.Sicil === P.BURAK), { Unit: accentVariant });
   const stack = createAiStack(t, { sicil: P.B, seed, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
   const { result } = await callRotaTool(stack, P.B, 'rota_task_analytics', { assignee: 'team', teamLevel: 'directorate', groupBy: 'unit', limit: 25 });
   const labels = result.data.groups.map((group) => group.label);
   assert.ok(labels.includes('Uygulama Geliştirme · Bilgi Sistemleri › Yazılım') && labels.includes('Uygulama Geliştirme · Operasyon › Yazılım'), labels.join(' | '));
   assert.equal(new Set(labels).size, labels.length, 'görünen etiketler de tekildir');
-  assert.ok(labels.includes('Dijital Kanallar') && labels.includes('Dijital Kanallar'.replace('ı', 'i')), 'aksanı farklı birimler ayrı gruptur');
+  assert.ok(labels.includes('Dijital Kanallar') && labels.includes(accentVariant), `aksanı farklı birimler ayrı gruptur: ${labels.join(' | ')}`);
   // Bölüm kırılımında bölümü yazılmamış sorumlu "Bölümü belirtilmemiş"tir; dizin kaydı çözülemeyen sorumlu ayrı (çözülemeyen) gruptadır.
   Object.assign(stack.db.people.find((person) => person.Sicil === P.SELIN), { Department: null });
   stack.db.people = stack.db.people.filter((person) => person.Sicil !== P.MEHMET_YILDIZ);
@@ -953,6 +957,159 @@ test('yinelenen kapsam birleşirken devralınan yön davranışı korunur: kapsa
   const sections = expandAnalysis(merged, { today: TODAY });
   assert.ok(sections.sections.some((item) => item.layer === 1), 'kendi kapsamının özeti okunur');
   assert.equal(sections.sections.some((item) => item.layer === 1 && item.focus === 'milestones'), false);
+});
+
+test('ek kapsamlar arasında yinelenen kapsam birleşirken devralınan yön kapsamın süzgecinden geçer: anlamı olmayan yön kapsamın kendi yönü olmaz', () => {
+  const merged = parseAnalysis({ scope: 'team', level: 'department', focus: ['org'], also: [{ scope: 'self' }, { scope: 'self', focus: ['milestones'] }] });
+  assert.equal(merged.also.length, 1);
+  assert.deepEqual([...merged.also[0].focus], ['overview', 'milestones'], 'alt birim kırılımı kendi işlerine yazılmaz; yazılan yön düşmez');
+  const expanded = expandAnalysis(merged, { today: TODAY });
+  assert.ok(expanded.sections.some((item) => item.layer === 1 && item.focus === 'milestones'));
+  // Yinelenen kapsam olmadan da aynı sonuç: kendi kapsamı alt birim kırılımını atlar.
+  assert.doesNotThrow(() => expandAnalysis(parseAnalysis({ scope: 'team', level: 'department', focus: ['org'], also: [{ scope: 'self' }] }), { today: TODAY }));
+  // Devralınan yön kapsamda anlamlıysa korunur.
+  const kept = parseAnalysis({ scope: 'team', level: 'department', focus: ['overdue'], also: [{ scope: 'self' }, { scope: 'self', focus: ['upcoming'] }] });
+  assert.deepEqual([...kept.also[0].focus], ['overdue', 'upcoming']);
+});
+
+test('tek öğeli özet dizisi çok öğeli yazımla aynı dil kuralını izler: öğedeki dil plana taşınır, çelişki reddedilir', () => {
+  const accepted = unpack({ intent: 'rota', analysis: [{ scope: 'self', focus: ['overview'], language: 'tr' }] }).plan;
+  assert.equal(accepted.language, 'tr');
+  assert.equal(Object.hasOwn(accepted.analysis, 'language'), false);
+  assert.equal(unpack({ intent: 'rota', language: 'tr', analysis: [{ scope: 'self', focus: ['overview'], language: 'tr' }] }).plan.language, 'tr');
+  assert.deepEqual(reject({ intent: 'rota', language: 'en', analysis: [{ scope: 'self', focus: ['overview'], language: 'tr' }] }), ['$.analysis.also:scope']);
+  assert.equal(unpack({ intent: 'rota', language: 'tr', analysis: [{ scope: 'self', focus: ['overview'] }] }).plan.analysis.scope, 'self');
+});
+
+test('kapsam karşılaştırması: bütün kapsamlarda açık iş yoksa bu durum söylenir; adlı kişi ile adlı proje örtüşme çekincesiyle açıklanır', () => {
+  const layer = (evidenceId, filters, open, overdue) => [['open', open], ['overdue', overdue]].map(([key, value]) => fact(evidenceId, `data.totals.${key}`, value, { tool: 'rota_task_analytics', filters }));
+  const idle = analyticalFindings([part(0, layer('R1', { assignee: 'me' }, 0, 0)), part(1, layer('R2', { assignee: 'team', teamLevel: 'unit' }, 0, 0)),
+    part(2, layer('R3', { assignee: 'team', teamLevel: 'department' }, 0, 0))]);
+  assert.equal(idle.find((item) => item.kind === 'levelComparison')?.layers.length, 3);
+  const text = synthesisNarrative(idle).intro.plain;
+  assert.match(text, /Karşılaştırılan kapsamların hiçbirinde açık iş olmadığından gecikme oranı karşılaştırılmadı\./);
+  assert.doesNotMatch(text, /%/u, 'tanımsız oran yazılmaz');
+  assert.match(synthesisNarrative(idle, { locale: 'en' }).intro.plain, /None of the compared scopes has open work/);
+  // Adlı kişi + adlı proje + kendi işleri: çekince kapsamların örtüşmesidir, yalnızca ortak sorumluluk değil.
+  const mixed = synthesisNarrative(analyticalFindings([part(0, layer('R1', { assignee: 'person', personSicil: 7, person: 'Ayşe' }, 10, 5)),
+    part(1, layer('R2', { projectId: 'p-1', project: 'Alfa' }, 8, 2)), part(2, layer('R3', { assignee: 'me' }, 4, 1))])).intro.plain;
+  assert.match(mixed, /bir görev hem kişinin işlerinde hem projede yer alabilir/);
+  assert.doesNotMatch(mixed, /her kişide ayrı sayılabildiğinden/);
+});
+
+/* ── Zayıf model güvenilirliği: eşdeğer yazımlar onarım turu harcamadan kabul edilir ── */
+
+test('portföy kapsamı, bugünden başlayan yedi günlük dönemde de portföy özetinden okunur; başka dönem daraltılmış görev nüfusunda kalır', () => {
+  const tools = (analysis) => { const { plan } = unpack({ intent: 'rota', language: 'tr', analysis }); return [plan.request, ...(plan.additionalRequests || [])].map((part) => part.population.tool); };
+  assert.ok(tools({ scope: 'projects', focus: ['overdue', 'upcoming'], relativeWindow: 'next_7_days' }).includes('rota_portfolio_summary'), 'yedi günlük dönem portföyün kendi ölçüsüdür');
+  assert.ok(tools({ scope: 'projects', focus: ['projects'], dateFrom: TODAY, dateTo: shift(6) }).includes('rota_portfolio_summary'), 'aynı dönemin tarihli yazımı');
+  assert.equal(tools({ scope: 'projects', focus: ['projects'], dateFrom: TODAY, dateTo: shift(13) }).includes('rota_portfolio_summary'), false, 'başka dönem portföy sütunuyla karşılanmaz');
+  assert.equal(tools({ scope: 'projects', focus: ['projects'], dateFrom: shift(1), dateTo: shift(7) }).includes('rota_portfolio_summary'), false, 'bugünden başlamayan dönem de karşılanmaz');
+});
+
+test('istek yazımının yapısal eşdeğerleri ilk bildirimde kabul edilir: dizi biçimli istek, null süzgeç, sorumlu "any" ve süzgeçteki proje adı', () => {
+  const list = { operation: 'list', metrics: ['task.title', 'task.targetFinish'], population: { tool: 'rota_task_search', collection: 'tasks' }, layout: 'list' };
+  // İstekler tek dizi (JSON metni olarak da): ilk öğe istek, kalanı ek istek.
+  const pair = [{ ...list, filters: { assignee: 'me', deadline: 'overdue' } }, { ...list, filters: { assignee: 'me', deadline: 'due_next_7_days' } }];
+  for (const request of [pair, JSON.stringify(pair)]) {
+    const { plan } = unpack({ intent: 'rota', language: 'tr', request });
+    assert.deepEqual([plan.request.filters.deadline, plan.additionalRequests.map((item) => item.filters.deadline)], ['overdue', ['due_next_7_days']]);
+  }
+  // Ayrıca ek istek de yazılmışsa dizi sessizce seçilmez: tür denetimi reddeder.
+  assert.ok(Array.isArray(unpack({ intent: 'rota', language: 'tr', request: pair, additionalRequests: [pair[1]] }).plan.request), 'dizi olduğu gibi kalır; bildirim doğrulaması reddeder');
+  // null süzgeç ve "any" sorumlu yazılmamış süzgeçtir.
+  const cleaned = unpack({ intent: 'rota', language: 'tr', request: { ...list, filters: { assignee: 'any', projectId: null, deadline: 'overdue' } } }).plan.request;
+  assert.deepEqual(cleaned.filters, { deadline: 'overdue' });
+  // Süzgeçteki proje adı varlık bildirimidir; ad güvenilir metin denetiminden ve aramadan aynen geçer.
+  const named = unpack({ intent: 'rota', language: 'tr', request: { ...list, filters: { projectId: 'KAP TOOL', milestone: true } } }).plan.request;
+  assert.deepEqual([named.filters, named.entities], [{ milestone: true }, [{ type: 'project', text: 'KAP TOOL' }]]);
+  const same = unpack({ intent: 'rota', language: 'tr', request: { ...list, filters: { project: 'KAP TOOL' }, entities: [{ type: 'project', text: 'KAP TOOL' }] } }).plan.request;
+  assert.deepEqual([same.filters, same.entities], [{}, [{ type: 'project', text: 'KAP TOOL' }]]);
+  // Başka bir proje varlığıyla çelişen süzgeç çevrilmez (iki seçiciden biri sessizce seçilmez).
+  const conflict = unpack({ intent: 'rota', language: 'tr', request: { ...list, filters: { projectId: 'KAP TOOL' }, entities: [{ type: 'project', text: 'Mobil Uygulama' }] } }).plan.request;
+  assert.equal(conflict.filters.projectId, 'KAP TOOL');
+});
+
+test('süzgeçteki proje adı bildirilmemiş adı güvenilir kılmaz; sorudaki ad ise onarım turu olmadan okunur', async (t) => {
+  const request = { operation: 'list', metrics: ['task.title', 'task.targetFinish'], population: { tool: 'rota_task_search', collection: 'tasks', sort: 'target_finish_asc' }, layout: 'list',
+    filters: { projectId: 'KAP TOOL', milestone: true, status: ['todo', 'in_progress'] } };
+  await t.test('sorudaki ad', async (st) => {
+    const { ask } = conversation(st, 'B');
+    const result = await ask({ text: 'KAP TOOL kilometre taşlarında geciken var mı, sıradaki hangisi?', plan: { intent: 'rota', language: 'tr', request } });
+    assert.equal(result.inputs.length, 1, 'onarım turu açılmaz');
+    assert.equal(result.answer.finishReason, 'stop', result.answer.content);
+    assert.ok(populationReads(result.log).length > 0 && populationReads(result.log).every((row) => row.params.projectId), 'okuma projeyle sınırlı');
+  });
+  await t.test('soruda geçmeyen ad', async (st) => {
+    const { ask } = conversation(st, 'B');
+    const untrusted = await ask({ text: 'Kilometre taşlarında geciken var mı?', plan: { intent: 'rota', language: 'tr', request } });
+    assert.notEqual(untrusted.answer.finishReason, 'stop', 'soruda geçmeyen ad süzgeç yoluyla da güvenilir olmaz');
+    assert.equal(populationReads(untrusted.log).length, 0);
+  });
+});
+
+test('satırı adlandıran çok yollu ölçü (task.project) bağ yazılmadan ad alanına bağlanır; açık bağ korunur', () => {
+  const request = (extra = {}) => ({ operation: 'list', metrics: ['task.title', 'task.project'], population: { tool: 'rota_task_search', collection: 'tasks' }, layout: 'auto', filters: { assignee: 'me' }, ...extra });
+  const parsed = (value) => completeRequest(parseRequestDeclaration(value, { textTrusted: () => true, identityTrusted: () => true, today: TODAY }), [], { today: TODAY });
+  const defaulted = parsed(request());
+  assert.deepEqual(defaulted.problems, []);
+  assert.deepEqual(defaulted.request.fields.map((field) => [field.metric, field.path]), [['task.project', 'data.tasks.*.project.name']]);
+  const explicit = parsed(request({ fields: [{ metric: 'task.project', tool: 'rota_task_search', path: 'data.tasks.*.project.code' }] }));
+  assert.deepEqual(explicit.request.fields.map((field) => field.path), ['data.tasks.*.project.code'], 'modelin seçtiği yol değişmez');
+});
+
+test('özetin tek ekip düzeyi yanındaki düzeysiz ekip isteğine geçer; birden çok ekip düzeyinde ya da açık düzeyde dokunulmaz', () => {
+  const list = { operation: 'list', metrics: ['task.title', 'task.targetFinish'], population: { tool: 'rota_task_search', collection: 'tasks' }, layout: 'table', filters: { assignee: 'team', status: ['todo', 'in_progress'], priority: ['critical'] } };
+  const levels = (analysis, request = list) => { const { plan } = unpack({ intent: 'rota', language: 'tr', analysis, request });
+    return [plan.request, ...(plan.additionalRequests || [])].filter((part) => part.filters?.priority?.includes('critical')).map((part) => part.filters.teamLevel ?? null); };
+  assert.deepEqual(levels({ scope: 'team', level: 'unit', focus: ['overview'] }), ['unit']);
+  assert.deepEqual(levels({ scope: 'team', level: 'unit', focus: ['overview'], also: [{ scope: 'team', level: 'department' }] }), [null], 'iki ekip düzeyinde hangisi olduğu belirsizdir');
+  assert.deepEqual(levels({ scope: 'team', level: 'unit', focus: ['overview'] }, { ...list, filters: { ...list.filters, teamLevel: 'department' } }), ['department']);
+  assert.deepEqual(levels({ scope: 'team', focus: ['overview'] }), [null], 'düzeysiz özet düzey eklemez');
+});
+
+test('ek kapsamdaki "dönem yok" yazımı dönemsiz özette anlam taşımaz; dönemli özette ayrı dönem reddedilir', () => {
+  const merged = parseAnalysis({ scope: 'self', focus: ['overview'], relativeWindow: 'all_time', also: [{ scope: 'team', level: 'unit', relativeWindow: 'all_time' }] });
+  assert.deepEqual(merged.also.map((layer) => Object.keys(layer).sort()), [['level', 'scope']]);
+  assert.throws(() => parseAnalysis({ scope: 'self', focus: ['upcoming'], relativeWindow: 'next_7_days', also: [{ scope: 'team', level: 'unit', relativeWindow: 'all_time' }] }),
+    (error) => error.details.includes('$.analysis.also[0].relativeWindow:unknown'));
+});
+
+test('ek kapsamda reddedilen dönem, özetin kendi döneminde yeniden yazılarak onarılır: aynı kapsam ve yönlerle Derin devir olmadan yanıtlanır', async (t) => {
+  const first = { intent: 'rota', language: 'tr', analysis: { scope: 'team', level: 'unit', focus: ['upcoming', 'overdue'], relativeWindow: 'next_7_days',
+    also: [{ scope: 'team', level: 'unit', focus: ['overdue'], relativeWindow: 'all_time' }] } };
+  const repaired = { intent: 'rota', language: 'tr', analysis: { scope: 'team', level: 'unit', focus: ['upcoming', 'overdue'], dateFrom: shift(0), dateTo: shift(13) } };
+  const planCall = (plan) => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plan }] });
+  const run = async (st, plans) => {
+    st.mock.timers.enable({ apis: ['Date'], now: NOW });
+    const seed = executiveBenchmarkSeed();
+    st.mock.timers.reset();
+    let standard = null;
+    let escalated = false;
+    const { ask } = phase4eConversation(st, { sicil: P.B, seed, planner: (input) => {
+      standard ??= input.model;
+      if (input.model !== standard) { escalated = true; return { type: 'status', status: 503 }; }
+      return planCall(plans.shift() || plans.at(-1));
+    } });
+    const result = await ask({ text: 'Birimimin önümüzdeki 14 günlük teslimatlarını göster; mevcut gecikmeleri de ayrı değerlendir.' });
+    return { result, escalated };
+  };
+  await t.test('geçerli onarım', async (st) => {
+    const fixed = await run(st, [first, repaired]);
+    assert.equal(fixed.escalated, false, 'geçerli onarım Derin modele devredilmez');
+    assert.equal(fixed.result.answer.finishReason, 'stop', fixed.result.answer.content);
+    assert.deepEqual(turnViolations(fixed.result, { assignee: 'team', level: 'unit', windowDays: 14 }), []);
+  });
+  // Onarım kapsamı değiştiremez: başka düzey ya da düşen yön eskisi gibi reddedilir.
+  await t.test('düzey değişemez', async (st) => {
+    const widened = await run(st, [first, { ...repaired, analysis: { ...repaired.analysis, level: 'department' } }]);
+    assert.notEqual(widened.result.answer.finishReason, 'stop');
+    assert.equal(populationReads(widened.result.log).some((row) => row.params.teamLevel === 'DEPARTMENT'), false, 'genişleyen kapsam okunmaz');
+  });
+  await t.test('yön düşemez', async (st) => {
+    const dropped = await run(st, [first, { ...repaired, analysis: { ...repaired.analysis, focus: ['upcoming'] } }]);
+    assert.notEqual(dropped.result.answer.finishReason, 'stop');
+  });
 });
 
 test('çok kapsamlı dizi yazımında öğelerdeki dil plan düzeyine taşınır; çelişen dil reddedilir', () => {

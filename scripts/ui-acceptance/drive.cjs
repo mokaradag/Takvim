@@ -79,8 +79,32 @@ async function ask(page, text) {
   });
 }
 
+/** Betikli ucun altın planı olan soru metinleri; uç betikli değilse (canlı köprü) null. */
+function scriptedQuestions() {
+  return new Promise((resolve) => {
+    const request = require('http').get(`http://127.0.0.1:${process.env.BRIDGE_PORT || 18731}/v1/scripted-plans`, (response) => {
+      let body = '';
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => { try { const list = JSON.parse(body).questions; resolve(response.statusCode === 200 && Array.isArray(list) ? new Set(list) : null); } catch { resolve(null); } });
+    });
+    request.on('error', () => resolve(null));
+    request.setTimeout(5000, () => { request.destroy(); resolve(null); });
+  });
+}
+
 (async () => {
   fs.mkdirSync(outDir, { recursive: true });
+  // UI_SCRIPTED=1: betikli uç yalnızca altın planı olan soruları yanıtlayabilir. Kapsam, bütün turlarının planı olan konuşmalardır;
+  // diğerleri bu kipte koşulmaz (model kabulü gerektirir) ve sayısıyla birlikte açıkça yazılır. Kapsamda konuşma kalmazsa rapor
+  // satırsız kalır ve koşu başarısızdır. Uç betikli değilse (liste alınamazsa) kapsam daraltılmaz: model kabulü uygulanır.
+  if (process.env.UI_SCRIPTED === '1') {
+    const known = await scriptedQuestions();
+    if (known) {
+      const covered = scenario.conversations.filter((item) => item.turns.every((text) => known.has(String(text).trim())));
+      process.stdout.write(`betikli kapsam: ${scenario.profile} ${covered.length}/${scenario.conversations.length} konuşma (kalanı betikli planı olmadığı için koşulmadı; model kabulü gerekir)\n`);
+      scenario.conversations = covered;
+    }
+  }
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1500, height: 1000 } });
   const page = await context.newPage();
@@ -143,6 +167,8 @@ async function ask(page, text) {
       // "any": türü belirtilmemiş grafik isteği; görünür herhangi bir grafik yeterlidir.
       if (expectedChart && !rendered.charts?.some((chart) => (expectedChart === 'any' || chart.type === expectedChart) && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);
       if (!trace) failures.push('bu tura ait sunucu kanıtı yok');
+      // Betikli uç bu soru için plan bulamadıysa yanıt uydurma bir açıklama kararıdır; tur kabul kanıtı değildir.
+      if (calls.some((call) => call.unscripted === true)) failures.push('betikli plan yok');
       const row = { runId, ...(scripted ? { scripted: true } : {}), failures, expectedOutcome: expected?.outcome || 'grounded', serverReplay: expected?.serverReplay === true, profile: scenario.profile, conversation: conversation.name, detail: conversation.detail, turn: turnIndex + 1, question: text, ms, rendered,
         server: trace ? { outcome: trace.outcome, evidence: trace.evidence, parts: trace.parts, escalated: trace.escalated, presentation: trace.presentation, models: [...new Set((trace.rounds || []).map((round) => round.model))],
           reasoning: trace.usage?.reasoning ?? null } : null,

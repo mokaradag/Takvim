@@ -903,6 +903,10 @@ function levelSentences(finding, locale) {
     const places = joinParts(unrated.map((layer) => layerPlace(layer, locale)), locale);
     out.push(factSentence(en(locale) ? ['There is no open work ', ...places, ', so no overdue share is compared there.']
       : [...places, ' açık iş olmadığından gecikme oranı karşılaştırılmadı.']));
+  } else if (unrated.length) {
+    // Bütün kapsamlarda açık iş yoksa karşılaştırmanın tek sonucu budur; söylenmezse yanıt durumu hiç bildirmez.
+    out.push(factSentence(en(locale) ? ['None of the compared scopes has open work, so no overdue share is compared.']
+      : ['Karşılaştırılan kapsamların hiçbirinde açık iş olmadığından gecikme oranı karşılaştırılmadı.']));
   }
   const completed = finding.layers.filter((layer) => layer.completion != null);
   if (completed.length >= 2) {
@@ -925,17 +929,18 @@ const SCOPE_WITHIN = Object.freeze({ 'team:department': ['bölümünüzün sayı
 /** İç içe kapsam uyarısı: karşılaştırılan en dar ve en geniş kapsamdan kurulan örnekle. */
 function overlapNote(layers, locale) {
   const lang0 = en(locale) ? 1 : 0;
+  // Kendi işleri ya da adlı kişi ile adlı proje (ekip/bütün işler yok): kişinin işleri projede de yer alabilir. Bu dal yalnızca
+  // kişi/proje dalından ÖNCE gelir; yoksa kişi + proje karşılaştırması ortak sorumlu çekincesiyle açıklanırdı.
+  if (layers.some((layer) => layer.type === 'project') && layers.some((layer) => layer.type !== 'project') && !layers.some((layer) => ['team', 'all'].includes(layer.type))) {
+    return ['These scopes can overlap (a task can belong to both the person\'s work and the project), so their counts are not added together; only rates computed the same way are compared.',
+      'Bu kapsamlar örtüşebildiğinden (bir görev hem kişinin işlerinde hem projede yer alabilir) sayılar toplanmaz; yalnızca aynı tanımla hesaplanan oranlar yan yana konur.'][en(locale) ? 0 : 1];
+  }
   // Yalnızca adlı kişi/proje kapsamları: kişiler ortak sorumlu oldukları görevde ayrı sayılır; projeler ayrıktır ama yine yalnızca oranlar yan yana konur.
   if (layers.every((layer) => ['person', 'project'].includes(layer.type))) {
     return layers.some((layer) => layer.type === 'person')
       ? ['A task with several assignees is counted for each of them, so these counts are not added together; only rates computed the same way are compared.',
         'Birden çok sorumlusu olan bir görev her kişide ayrı sayılabildiğinden sayılar toplanmaz; yalnızca aynı tanımla hesaplanan oranlar yan yana konur.'][lang0 ? 0 : 1]
       : ['Only rates computed the same way are compared; the scopes are not combined into a total.', 'Yalnızca aynı tanımla hesaplanan oranlar yan yana konur; kapsamlar tek bir toplamda birleştirilmez.'][lang0 ? 0 : 1];
-  }
-  // Kendi işleri ya da adlı kişi ile adlı proje (ekip/bütün işler yok): kişinin işleri projede de yer alabilir.
-  if (layers.some((layer) => layer.type === 'project') && !layers.some((layer) => ['team', 'all'].includes(layer.type))) {
-    return ['These scopes can overlap (a task can belong to both the person\'s work and the project), so their counts are not added together; only rates computed the same way are compared.',
-      'Bu kapsamlar örtüşebildiğinden (bir görev hem kişinin işlerinde hem projede yer alabilir) sayılar toplanmaz; yalnızca aynı tanımla hesaplanan oranlar yan yana konur.'][en(locale) ? 0 : 1];
   }
   const ranked = layers.filter((layer) => Object.hasOwn(SCOPE_RANK, layer.key)).sort((left, right) => SCOPE_RANK[left.key] - SCOPE_RANK[right.key]);
   const wide = ranked.at(-1);

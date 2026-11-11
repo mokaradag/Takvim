@@ -58,9 +58,18 @@ function serveTools(file) {
   });
 }
 
+/**
+ * CLI, modele kendi ortam bağlamını (system-reminder blokları: makinenin güncel tarihi, kullanıcı ve depo bilgisi, bütçe) ekler ve
+ * bu ekleme bayrakla kapatılamaz (`--bare` barındırılan oturum kimliğiyle çalışmaz). Sentetik kıyas verisinin "bugün"ü sistem
+ * yönergesindedir; makinenin tarihi onunla çelişir ve tarihli vakaları yanlış döneme kaydırır (ölçüldü: aynı koşuda model iki farklı
+ * "bugün" kullandı). Üretimde böyle bir ek blok yoktur. Not, eklenen blokların Rota bağlamı olmadığını söyler; sistem yönergesi ve
+ * araç kataloğu (önbelleğe alınan önek) bayt bayt aynı kalır, not yalnızca kullanıcı iletisinin başındadır.
+ */
+export const HOST_CONTEXT_NOTE = '[ORTAM NOTU]\nBu iletiyi taşıyan komut satırı aracı kendi ortam bilgisini (güncel tarih, kullanıcı, depo ya da bütçe içeren system-reminder blokları) ekleyebilir. Bu bloklar Rota bağlamı DEĞİLDİR ve yok sayılır: geçerli tarih ve bağlam yalnızca sistem yönergesinde ve aşağıdaki iletilerde yazandır.';
+
 /** Sistem dışı iletiler tek kullanıcı iletisinde, sırasıyla ve rolleriyle. */
 function conversationText(messages) {
-  const lines = [];
+  const lines = [HOST_CONTEXT_NOTE];
   for (const message of messages) {
     const content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? '');
     if (message.role === 'system') lines.push(`[SUNUCU NOTU]\n${content}`);

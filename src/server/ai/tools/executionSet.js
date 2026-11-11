@@ -113,13 +113,45 @@ function decodeRequest(request) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) return request;
   const decoded = { ...request };
   for (const key of NESTED_PLAN_FIELDS.request) if (Object.hasOwn(decoded, key)) decoded[key] = decodedJson(decoded[key]);
-  return decoded;
+  return projectSelectorAsEntity(decoded);
+}
+
+/**
+ * Eşdeğer yazımın yapısal normalleştirmesi (dil yorumu değil; her sonuç aynı doğrulamadan geçer):
+ *  - değeri `null` olan süzgeç ve `assignee: "any"` yazılmamış süzgeçtir (zayıf model şablonu doldurur);
+ *  - proje seçicisi süzgeç olarak yazıldıysa (`filters.projectId` / `filters.project`, metin) aynı seçici varlık bildirimidir
+ *    (`entities: [{type:'project', text}]`): ad sunucuda aranır ve güvenilir metin denetiminden aynen geçer. İstek zaten başka bir
+ *    proje varlığı taşıyorsa çeviri yapılmaz (iki seçiciden biri sessizce seçilmez); süzgeç olduğu gibi kalır ve reddedilir.
+ */
+function projectSelectorAsEntity(request) {
+  const filters = request.filters;
+  if (!filters || typeof filters !== 'object' || Array.isArray(filters)) return request;
+  // `assignee: "any"` sorumlu koşulu olmadığını söyler (araçların varsayılan kipi): yazılmamış süzgeçle aynıdır.
+  const kept = Object.fromEntries(Object.entries(filters).filter(([key, value]) => value !== null && !(key === 'assignee' && value === 'any')));
+  const entities = request.entities == null ? [] : request.entities;
+  const selectors = ['projectId', 'project'].filter((key) => Object.hasOwn(kept, key));
+  const text = selectors.length === 1 && typeof kept[selectors[0]] === 'string' ? kept[selectors[0]].trim() : '';
+  const projects = Array.isArray(entities) ? entities.filter((entity) => entity && typeof entity === 'object' && entity.type === 'project') : null;
+  if (text.length >= 2 && projects && (!projects.length || projects.every((entity) => entity.text === text))) {
+    delete kept[selectors[0]];
+    return { ...request, filters: kept, entities: projects.length ? entities : [...entities, { type: 'project', text }] };
+  }
+  return Object.keys(kept).length === Object.keys(filters).length ? request : { ...request, filters: kept };
 }
 
 function decodeNestedJson(plan) {
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return plan;
   const decoded = { ...plan };
   for (const key of NESTED_PLAN_FIELDS.plan) if (Object.hasOwn(decoded, key)) decoded[key] = decodedJson(decoded[key]);
+  // İstekler tek dizi olarak da yazılır (`"request":[{…},{…}]`): ilk öğe istek, kalanlar ek isteklerdir (aynı sıra, aynı alanlar).
+  // Ayrıca ek istek de yazılmışsa hangisinin kastedildiği belirsizdir: dizi olduğu gibi kalır ve tür denetimi reddeder.
+  if (Array.isArray(decoded.request) && decoded.request.length >= 1 && decoded.request.length <= PLANNER_LIMITS.maxRequests && decoded.additionalRequests == null
+    && decoded.request.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+    const [first, ...rest] = decoded.request;
+    decoded.request = first;
+    if (rest.length) decoded.additionalRequests = rest;
+    else delete decoded.additionalRequests;
+  }
   decoded.request = decodeRequest(decoded.request);
   if (decoded.request === undefined) delete decoded.request;
   if (Array.isArray(decoded.additionalRequests)) decoded.additionalRequests = decoded.additionalRequests.slice(0, PLANNER_LIMITS.maxRequests).map((item) => decodeRequest(decodedJson(item)));
@@ -260,6 +292,15 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // bölüme gönderme (from) özetin bölüm sırası belirsiz olduğundan kabul edilmez.
     // Önceki sonuca gönderme (`previousResult`) özetin bölümleriyle temsil edilemez: kapsayan bir özet okuması onu daha geniş
     // nüfusla değiştirirdi; birleşim reddedilir. Çok kapsamlı özetle açık liste birlikte verilebilir (her biri kendi nüfusuyla).
+    // Özetin ekip kapsamı tek bir düzey taşıyorsa, yanındaki açık isteğin düzeysiz ekip koşulu aynı ekiptir: düzey özetten tamamlanır
+    // (aynı soruda iki ayrı "ekip" yoktur). Özet birden çok ekip düzeyi taşıyorsa ya da istek kendi düzeyini yazdıysa dokunulmaz.
+    const teamLevels = [...new Set([parsed, ...(parsed.also || [])].filter((layer) => layer.scope === 'team').map((layer) => layer.level || ''))];
+    if (teamLevels.length === 1 && teamLevels[0]) {
+      const leveled = (item) => (item && typeof item === 'object' && !Array.isArray(item) && item.filters && typeof item.filters === 'object' && !Array.isArray(item.filters)
+        && item.filters.assignee === 'team' && item.filters.teamLevel == null ? { ...item, filters: { ...item.filters, teamLevel: teamLevels[0] } } : item);
+      plan = { ...plan, ...(present('request') ? { request: leveled(plan.request) } : {}),
+        ...(present('additionalRequests') && Array.isArray(plan.additionalRequests) ? { additionalRequests: plan.additionalRequests.map(leveled) } : {}) };
+    }
     const explicit = [...(present('request') ? [plan.request] : []), ...(present('additionalRequests') ? [].concat(plan.additionalRequests) : [])];
     if (explicit.some((item) => !item || typeof item !== 'object' || Array.isArray(item) || item.previousResult === true
       || (Array.isArray(item.entities) && item.entities.some((entity) => entity && typeof entity === 'object' && Object.hasOwn(entity, 'from'))))) throw invalidArguments(['$.analysis:request']);
@@ -393,7 +434,13 @@ function layeredAnalysis(plan) {
   if (!Array.isArray(plan.analysis)) return plan;
   const items = plan.analysis;
   if (!items.length || items.length > ANALYSIS_LIMITS.maxLayers || items.some((item) => !item || typeof item !== 'object' || Array.isArray(item))) throw invalidArguments(['$.analysis:type']);
-  if (items.length === 1) return { ...plan, analysis: items[0] };
+  if (items.length === 1) {
+    // Tek öğeli dizi de çok öğeli yazımla aynı dil kuralını izler: öğedeki dil plan düzeyine taşınır, çelişki reddedilir.
+    const { language, ...only } = items[0];
+    if (!Object.hasOwn(items[0], 'language')) return { ...plan, analysis: items[0] };
+    if (plan.language != null && plan.language !== language) throw invalidArguments(['$.analysis.also:scope']);
+    return { ...plan, ...(plan.language == null ? { language } : {}), analysis: only };
+  }
   const [primary, ...rest] = items;
   const window = (item) => JSON.stringify([item.dateFrom ?? null, item.dateTo ?? null, item.relativeWindow === 'all_time' ? null : item.relativeWindow ?? null]);
   if (rest.some((item) => window(item) !== window(primary))) throw invalidArguments(['$.analysis.also:window']);

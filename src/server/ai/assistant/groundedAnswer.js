@@ -728,6 +728,17 @@ function explicitRepairPaths(plan, details) {
   return paths;
 }
 
+/**
+ * Onarım karşılaştırmasının kanonik biçimi: reddedilen yollar çıkarıldıktan SONRA özet yeniden normalleştirilir. Reddedilen alan
+ * yüzünden birleşemeyen eşdeğer yazım (ör. birincil kapsamın, şemada olmayan bir alanla yinelenen ek kapsamı) alan çıkınca tek
+ * kapsama iner; modelin aynı anlamı tek kapsamla yeniden yazması kapsam değişikliği sayılmaz. Hiçbir kapsam, ad ya da yön düşmez:
+ * normalleştirme yinelenen kapsamın yönlerini birleştirir.
+ */
+function analysisRepairProjection(analysis, paths) {
+  const masked = repairOmit(analysis, paths);
+  return stable(masked && typeof masked === 'object' ? repairOmit(normalizedBrief(masked), paths) : masked);
+}
+
 function pinAnalysisRepair(turn, plan, details) {
   if (!plan.analysis || typeof plan.analysis !== 'object' || Array.isArray(plan.analysis)) return;
   const existing = turn.repairPins.get('analysis');
@@ -741,6 +752,8 @@ function pinAnalysisRepair(turn, plan, details) {
     if (path.startsWith('$.analysis.') && !['unsupported', 'requestBudget', 'narrowable', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
     // Aşama F: göreli pencere ile tarihlerin çakışması ancak ikisinden biri kaldırılarak düzeltilir: üç alan da onarımda değişebilir.
     if (path === '$.analysis.relativeWindow' && reason === 'conflict') for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) paths.add(key);
+    // Ek kapsam dönem taşıyamaz: reddedilen dönem ancak özetin kendi dönem alanlarında yeniden yazılarak düzeltilir (üçü de değişebilir).
+    if (/^\$\.analysis\.also\[\d+\]\.(?:relativeWindow|dateFrom|dateTo)$/.test(path) && reason === 'unknown') for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) paths.add(key);
   }
   const raw = Object.fromEntries(Object.entries(normalizedBrief(existing?.raw || plan.analysis)).filter(([key]) => Object.hasOwn(analysisSchema().properties, key)));
   // Görsel istek ayrıca (`visual`) denetlenir; özetin içinde ya da plan düzeyinde yazılması anlam değişikliği değildir.
@@ -752,7 +765,7 @@ function pinAnalysisRepair(turn, plan, details) {
   const explicitPaths = !existing ? rejectedPaths : existing.explicitPaths == null || rejectedPaths == null ? null
     : existing.explicitPaths.map((paths, index) => new Set([...paths, ...(rejectedPaths[index] || [])]));
   const explicit = existing ? existing.explicit : submittedExplicit(plan);
-  turn.repairPins.set('analysis', { raw, paths: pinnedPaths, projection: stable(repairOmit(raw, pinnedPaths)), presentation, presentationPaths, explicit, explicitPaths,
+  turn.repairPins.set('analysis', { raw, paths: pinnedPaths, projection: analysisRepairProjection(raw, pinnedPaths), presentation, presentationPaths, explicit, explicitPaths,
     visual: existing ? existing.visual : details.some((detail) => String(detail).startsWith('$.visual:') || String(detail).startsWith('$.analysis.visual:'))
       ? null : submittedVisual(plan) });
 }
@@ -766,7 +779,7 @@ function analysisRepairMatches(turn, plan) {
   const sameWindow = !dateConflict || analysis && ((analysis.relativeWindow === pin.raw.relativeWindow || pin.raw.relativeWindow === 'all_time' && !analysis.relativeWindow) && !analysis.dateFrom && !analysis.dateTo
     || !analysis.relativeWindow && analysis.dateFrom === pin.raw.dateFrom && analysis.dateTo === pin.raw.dateTo);
   return plan.intent === PLANNER_INTENTS.ROTA && Boolean(plan.analysis)
-    && sameWindow && stable(repairOmit(analysis, pin.paths)) === pin.projection
+    && sameWindow && analysisRepairProjection(analysis, pin.paths) === pin.projection
     && stable(repairOmit(submittedPresentation(plan), pin.presentationPaths)) === stable(repairOmit(pin.presentation, pin.presentationPaths))
     && (pin.visual == null || submittedVisual(plan) === pin.visual) && explicitRepairMatches(pin, plan);
 }
