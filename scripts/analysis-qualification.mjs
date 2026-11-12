@@ -275,6 +275,22 @@ const E2E_CASES = Object.freeze([
 ]);
 
 /**
+ * Çok kapsamlı altın planın kapsam başına yönleri: kapsamın kendi yönleri, yazılmadıysa birincil yönler (kapsamda anlamı olmayan yön,
+ * ör. kendi işlerinde alt birim kırılımı, devralınmaz). Her kapsamın yönü kendi kanıtıyla denetlenir.
+ */
+function layerFocus(layer, primary) {
+  const applicable = (focus) => !(focus === 'org' && ['self', 'person'].includes(layer.scope)) && !(focus === 'projects' && layer.scope === 'project');
+  return (layer.focus || primary.focus || []).filter(applicable);
+}
+
+/** Altın plandaki açık isteklerin (özetin yanındaki liste) teslim beklentisi: araç ve süzgeçler (göreli gün çözülmüş). */
+function explicitExpectations(plan, resolveDay) {
+  if (!plan?.analysis) return [];
+  return [plan.request, ...(plan.additionalRequests || [])].filter((item) => item?.population?.tool)
+    .map((item) => ({ tool: item.population.tool, filters: Object.fromEntries(Object.entries(item.filters || {}).map(([key, value]) => [key, ['dateFrom', 'dateTo'].includes(key) ? resolveDay(value) : value])) }));
+}
+
+/**
  * Kıyas vakasının canlı beklentisi: altın planın kapsamı (her nüfus okumasında), açık grafik isteği ve vaka sınıfı. Tam vakada
  * doğrulanmış yanıt (stop) zorunludur; kısmi vakada kapsamı doğrulanmış, dolu ve kanıtlı stop yanıtı gerekir; sınırlı vakada
  * verisiz ve desteklenmiyor bitişi gerekir; olgusal yanıt sınırlılık başarısı sayılamaz. Sunucu planı modelin yerine koymaz.
@@ -293,7 +309,7 @@ export function benchmarkExpectation(item) {
   const from = resolveDay(analysis?.dateFrom);
   const to = resolveDay(analysis?.dateTo);
   // Aşama G: çok kapsamlı planda her kapsamın kendi nüfusu okunur; tek kapsam beklentisi yerine kapsam başına okuma beklenir.
-  const layers = analysis?.also?.length ? [analysis, ...analysis.also].map(({ scope: layer, level }) => ({ scope: layer, ...(level ? { level } : {}) })) : null;
+  const layers = analysis?.also?.length ? [analysis, ...analysis.also].map((entry) => ({ scope: entry.scope, ...(entry.level ? { level: entry.level } : {}), focus: layerFocus(entry, analysis) })) : null;
   return { ...item.expect, ...(item.handling !== 'limitation' ? { finish: 'stop' } : { finish: 'unsupported', noData: true }),
     ...(scope ? { scope } : {}), ...(layers ? { layers } : {}),
     ...(layers ? {} : scope === 'team' ? { assignee: 'team' } : scope === 'self' ? { assignee: 'me' } : {}),
@@ -321,12 +337,19 @@ export function executiveExpectation(item) {
   // Adlı kapsam kendi kimliğiyle beklenir (sentetik verideki Sicil/proje kimliği): başka kişinin ya da projenin okuması karşılamaz.
   const identity = (layer, name) => (layer === 'person' ? { sicil: seed.people.find((row) => row.DisplayName === name)?.Sicil ?? -1 }
     : layer === 'project' ? { projectId: seed.projects.find((row) => row.ProjectName === name)?.ProjectId ?? `bilinmeyen:${name}` } : {});
-  const layers = analysis?.also?.length ? [analysis, ...analysis.also].map(({ scope: layer, level, names: layerNames }) => ({ scope: layer, ...(level ? { level } : {}),
-    ...(['person', 'project'].includes(layer) && layerNames?.length === 1 ? identity(layer, layerNames[0]) : {}) }))
+  const layers = analysis?.also?.length ? [analysis, ...analysis.also].map((entry) => ({ scope: entry.scope, ...(entry.level ? { level: entry.level } : {}),
+    ...(['person', 'project'].includes(entry.scope) && entry.names?.length === 1 ? identity(entry.scope, entry.names[0]) : {}), focus: layerFocus(entry, analysis) }))
     .map((layer) => (denied(layer) ? { ...layer, optional: true } : layer)) : null;
   const finish = item.expect?.finish || { denied: 'unavailable', clarify: 'clarification', limitation: 'unsupported' }[item.handling] || 'stop';
   const names = analysis?.names || [];
+  const resolveDay = (value) => {
+    const token = /^T\+(-?\d+)$/.exec(value || '');
+    return token ? new Date(Date.parse(`${BENCHMARK_TODAY}T00:00:00Z`) + Number(token[1]) * 86400000).toISOString().slice(0, 10) : value;
+  };
+  const explicitRequests = explicitExpectations(turns.at(-1).plan, resolveDay);
   return { ...item.expect, finish, ...(item.handling === 'limitation' ? { noData: true } : {}),
+    // Açıklama vakası nüfus okumadan sorar (ad çözümü serbesttir).
+    ...(item.handling === 'clarify' ? { noPopulation: true } : {}), ...(explicitRequests.length ? { explicitRequests } : {}),
     ...(scope && !item.expect?.scopeDenied ? { scope } : {}), ...(layers ? { layers } : {}),
     ...(layers || item.expect?.scopeDenied ? {} : scope === 'team' ? { assignee: 'team', ...(analysis.level ? { level: analysis.level } : {}) } : scope === 'self' ? { assignee: 'me' } : {}),
     ...(scope === 'project' && !item.expect?.scopeDenied ? { project: true, projectIds: names.map((name) => seed.projects.find((row) => row.ProjectName === name)?.ProjectId || `bilinmeyen:${name}`) } : {}),
@@ -334,6 +357,17 @@ export function executiveExpectation(item) {
     // Portföy kapsamı (birincil) portföy okumasını gerektirir: görev okumalarıyla geçemez.
     ...(scope === 'projects' && !item.expect?.scopeDenied && !denied(analysis) ? { portfolio: true } : {}),
     ...(turns.at(-1).plan?.visual ? { chart: true } : {}) };
+}
+
+/**
+ * Çok turlu vakanın ara turunun beklentisi: o turun altın planından kurulan kapsam ve kimlik (son tur vakanın kendi beklentisidir).
+ * Ara tur yalnızca doğrulanmış yanıtla (stop ya da turun kendi bitişi) bitmez; istenen kapsamı okumuş olmalıdır.
+ */
+export function executiveTurnExpectation(item, index) {
+  const turns = item.turns || [{ text: item.text, plan: item.plan }];
+  if (index >= turns.length - 1) return executiveExpectation(item);
+  const partial = { id: item.id, profile: item.profile, handling: 'full', turns: turns.slice(0, index + 1), expect: {} };
+  return { ...executiveExpectation(partial), finish: turns[index].expectFinish || 'stop' };
 }
 
 /** Düzen katmanı MODELİN düzenini sınar: sunucunun belirlenimci yedeği (model düzeni reddedildi) geçer sayılmaz. */
@@ -464,8 +498,9 @@ if (direct) {
       const seed = executiveBenchmarkSeed();
       t.mock.timers.reset();
       // Çok turlu vakada önceki turlar yalnızca doğrulanmış yanıtla biter; puan son turun beklentisidir.
+      // Ara turlar da kendi altın planlarının kapsamıyla puanlanır: son turdaki doğru ret, ara turda yanlış kapsamı örtmez.
       const turns = (item.turns || [{ text: item.text }]).map((turn, index, all) => ({ text: turn.text,
-        requireComposed: index === all.length - 1 && item.handling === 'full', expect: index === all.length - 1 ? executiveExpectation(item) : { finish: 'stop' } }));
+        requireComposed: index === all.length - 1 && item.handling === 'full', expect: executiveTurnExpectation(item, index) }));
       const results = await conversationCase(t, turns, { plannerModel: true, composeModel: true, seed, sicil: EXEC_PROFILES[item.profile] });
       const failures = results.flatMap((row, index) => row.failures.map((failure) => (results.length > 1 ? `#${index + 1} ${failure}` : failure)));
       if (item.handling === 'partial' && results.at(-1)?.finish !== 'stop' && !item.expect?.finish) failures.push(`kısmi vaka bitişi ${results.at(-1)?.finish}`);

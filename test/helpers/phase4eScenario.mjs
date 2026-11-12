@@ -70,14 +70,15 @@ export function phase4eConversation(t, { sicil = AYSE, seed = rotaToolSeed(), en
 /** Aşama G bulgularının sunucu cümlelerinin ayırt edici kalıpları (yalnızca varlığı denetlenir; sayılar kanıttandır). */
 export const G_FINDING_TEXT = Object.freeze({
   workloadSpread: /kişinin açık görev sayısı \*\*\d+\*\* ile \*\*\d+\*\* arasında değişiyor/,
-  overdueLeader: /Gecikmiş görevler en çok .+ üzerinde|En çok gecikmiş görev .+ projeleri?nde/,
+  overdueLeader: /Gecikmiş görevler en çok .+ üzerinde|En çok gecikmiş görev .+ proje(?:si|leri)nde/,
   overdueRateLeader: /Açık işe oranla bakıldığında tablo değişiyor/,
   completionDespiteOverdue: /tamamlanmış olsa da \*\*\d+\*\* gecikmiş görev bulunuyor/,
   volumeVsDelay: /Görev sayısı tek başına baskıyı göstermiyor/,
   levelComparison: /Açık işlerde gecikme oranı|Karşılaştırılan kapsamların hiçbirinde gecikmiş açık iş yok/,
   // Kilometre taşı DURUM bulgusunun kendisi (gecikmiş sayısı, "hiçbiri gecikmiş değil" ya da sıradaki): başlık ya da liste metni yetmez.
   milestoneStatus: /kilometre taşından \*\*\d+[^*]*\*\* gecikmiş|\*\*\d+\*\* kilometre taşı gecikmiş|kilometre taşının hiçbiri gecikmiş değil|Sıradaki kilometre taşı \*\*/,
-  orgSpread: /[İi]şler \*\*\d+\*\* (?:bölüme|birime) dağılıyor[\s\S]+sayıları toplanmaz/
+  // Örgütsel yayılım bulgusu ve tablonun zorunlu toplanmama çekincesi birlikte (sıra bulgu ile çekincenin yerleşimine bağlıdır).
+  orgSpread: /^(?=[\s\S]*[İi]şler \*\*\d+\*\* (?:bölüme|birime) dağılıyor)(?=[\s\S]*(?:bölüm|birim) sayıları toplanmaz)/
 });
 
 /** Görev nüfusu okumaları (sayfa sorumlu okumaları değil). */
@@ -137,10 +138,12 @@ export function turnViolations(result, expect, { live = false } = {}) {
   // okunmak zorunda değildir; okunduysa kanıt üretmemelidir (yetki reddi).
   if (expect.layers) {
     const level = (layer) => (layer.level ? layer.level.toUpperCase() : '');
+    // Kendi ve ekip kapsamının proje kısıtı imzanın parçasıdır: tek projeyle daraltılmış okuma kısıtsız kapsamın okuması sayılmaz.
     const signature = (row) => {
       const mode = row.params.assigneeMode || 'any';
-      if (mode === 'me' || mode === 'team') return `${mode}|${row.params.teamLevel || ''}`;
-      if (mode === 'person') return `person|${row.params.personSicil ?? ''}`;
+      const project = row.params.projectId ? `|project:${String(row.params.projectId).toLowerCase()}` : '';
+      if (mode === 'me' || mode === 'team') return `${mode}|${row.params.teamLevel || ''}${project}`;
+      if (mode === 'person') return `person|${row.params.personSicil ?? ''}${project}`;
       return row.params.projectId ? `project|${String(row.params.projectId).toLowerCase()}` : 'all|';
     };
     const matches = (layer, key) => {
@@ -150,12 +153,18 @@ export function turnViolations(result, expect, { live = false } = {}) {
       if (layer.scope === 'project') return layer.projectId != null ? key === `project|${String(layer.projectId).toLowerCase()}` : key.startsWith('project|');
       return key === 'all|';
     };
+    // Gerekli kapsam yalnızca BAŞARILI okumayla karşılanır (başarısız okuma kapsamı okunmuş saymaz); bildirilmemiş kapsam denetimi
+    // ise denenen her okumayı (başarısız olanlar ve portföy dahil) inceler.
     const keys = reads.map(signature);
+    const okKeys = reads.filter((row) => row.ok === true).map(signature);
+    const portfolioRead = result.log.some((row) => row.query === 'portfolio' && row.ok === true);
     for (const layer of expect.layers.filter((layer) => !layer.optional)) {
-      const portfolio = ['projects', 'all'].includes(layer.scope) && result.log.some((row) => row.query === 'portfolio');
-      if (!keys.some((key) => matches(layer, key)) && !portfolio) problems.push(`kapsam okunmadı: ${layer.scope}${layer.level ? `/${layer.level}` : ''}`);
+      const portfolio = ['projects', 'all'].includes(layer.scope) && portfolioRead;
+      if (!okKeys.some((key) => matches(layer, key)) && !portfolio) problems.push(`kapsam okunmadı: ${layer.scope}${layer.level ? `/${layer.level}` : ''}`);
     }
-    if (keys.some((key) => !expect.layers.some((layer) => matches(layer, key)))) problems.push('bildirilmeyen kapsam okundu');
+    const portfolioAttempted = result.log.some((row) => row.query === 'portfolio');
+    if (keys.some((key) => !expect.layers.some((layer) => matches(layer, key)))
+      || (portfolioAttempted && !expect.layers.some((layer) => ['projects', 'all'].includes(layer.scope)))) problems.push('bildirilmeyen kapsam okundu');
     // Kanıtın kapsam imzası okumanınkiyle aynıdır (adlı kişi ve proje dahil): yetkisiz adlı kapsamın kanıtı da yakalanır.
     const evidenceKey = (row) => {
       const filters = row.data?.filters || {};
@@ -167,6 +176,18 @@ export function turnViolations(result, expect, { live = false } = {}) {
     };
     for (const layer of expect.layers.filter((layer) => layer.optional)) {
       if ((result.evidence || []).some((row) => evidenceKey(row) && matches(layer, evidenceKey(row)))) problems.push(`yetkisiz kapsamın kanıtı var: ${layer.scope}${layer.level ? `/${layer.level}` : ''}`);
+    }
+    // Her kapsamın KENDİ yönleri o kapsamın kanıtıyla karşılanmalıdır: bir kapsamın yönü başka kapsamın okumasıyla ya da özet okumasıyla
+    // geçmez. Okuma bütçesine sığmayan yön yalnızca adıyla bildirildiyse (atlanan yön notu) kabul edilir.
+    const omissionStated = /tek yanıtın okuma sınırına sığmadığı için ayrıca gösterilmedi/.test(content);
+    const layerKeyOf = (row) => evidenceKey(row) || 'all|';
+    for (const layer of expect.layers.filter((layer) => !layer.optional && Array.isArray(layer.focus))) {
+      const owned = (result.evidence || []).filter((row) => matches(layer, layerKeyOf(row)));
+      for (const focus of layer.focus) {
+        const shape = LAYER_FOCUS_SHAPES[focus];
+        if (!shape || owned.some((row) => shape(row, layer))) continue;
+        if (!omissionStated) problems.push(`kapsamın yönü okunmadı: ${layer.scope}${layer.level ? `/${layer.level}` : ''}/${focus}`);
+      }
     }
   }
   // Yetkisiz kapsam (ekip ya da bölüm) hiçbir koşulda kanıt olarak kaydedilmez ve onun nüfus okuması başarılı olmaz. Okuma kayda
@@ -186,8 +207,10 @@ export function turnViolations(result, expect, { live = false } = {}) {
   // Okunan yönler: bildirilen yönler ile sunucunun kapsam gereği kendiliğinden eklediği okumalar (portföy kapsamında proje satırları;
   // bölüm ve direktörlük düzeyindeki ekipte alt birim kırılımı). Beklenen her yön gerçekten okunmuş olmalıdır.
   const context = result.analysisContext;
+  // Sunucunun kendiliğinden eklediği alt birim kırılımı yalnızca okuması gerçekten kanıtlandıysa yön sayılır (okuma bütçesi dolunca düşer).
+  const orgRead = (result.evidence || []).some((row) => row.tool === 'rota_task_analytics' && ['department', 'unit'].includes(row.data?.groupBy));
   const readFocus = context ? new Set([...(context.focus || []), ...(context.scope === 'projects' ? ['projects'] : []),
-    ...(context.scope === 'team' && ['department', 'directorate'].includes(context.level) ? ['org'] : [])]) : null;
+    ...(context.scope === 'team' && ['department', 'directorate'].includes(context.level) && orgRead ? ['org'] : [])]) : null;
   if (expect.focus && (!readFocus || expect.focus.some((focus) => !readFocus.has(focus)))) problems.push('analitik yönler eksik');
   const status = result.evidence?.filter((row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'status') || [];
   // Dağılım istenmişse kişi/proje kıyası da teslim edilen sayıları kanıtlamalıdır; bağlam ve araç okuması yetmez.
@@ -296,5 +319,42 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.table && !/^\|.+\|\n\|[- :|]+\|/m.test(content)) problems.push('istenen tablo yok');
   if (expect.detail && (!result.compositionViews?.length || !result.compositionViews.every((view) => view.detail === expect.detail))) problems.push('yanıt ayrıntısı beklenenle aynı değil');
   if (expect.finish === 'stop' && (!reads.length && !result.log.some((row) => row.query === 'portfolio'))) problems.push('araç okuması yok');
+  // Açıklama vakası görev nüfusunu okumadan sorar: kişi/proje adı çözümü serbesttir; başarılı nüfus ya da portföy okuması ve görev
+  // kanıtı açıklama bitişiyle örtülmez.
+  if (expect.noPopulation && (reads.some((row) => row.ok === true) || result.log.some((row) => row.query === 'portfolio' && row.ok === true)
+    || (result.evidence || []).some((row) => POPULATION_TOOLS.has(row.tool)))) problems.push('açıklama vakasında görev nüfusu okundu');
+  // Özetin yanındaki açık istek: kendi süzgeçleriyle okunmuş ve satırları yanıtta kaynağıyla teslim edilmiş olmalıdır (özetin
+  // başka bir tablosu ya da kapsam okumaları istenen listenin yerine geçmez).
+  for (const wanted of expect.explicitRequests || []) {
+    const delivered = (result.evidence || []).some((row) => row.tool === wanted.tool && explicitFiltersMatch(row.data?.filters || {}, wanted.filters)
+      && content.includes(`【${row.evidenceId}】`));
+    if (!delivered) problems.push(`açık istek teslim edilmedi: ${wanted.tool}`);
+  }
   return problems;
 }
+
+/** Görev nüfusu okuyan araçlar (ad çözümü değil). */
+const POPULATION_TOOLS = new Set(['rota_task_search', 'rota_task_analytics', 'rota_workload_summary', 'rota_portfolio_summary']);
+
+/** Açık isteğin süzgeçleri kanıtın süzgeçlerinde aynen var mı (istek alanı → araç alanı; değer sırası önemsizdir). */
+function explicitFiltersMatch(actual, wanted) {
+  const names = { status: 'statuses', priority: 'priorities' };
+  const norm = (value) => (Array.isArray(value) ? [...value].map((item) => String(item).toLowerCase()).sort() : String(value ?? '').toLowerCase());
+  return Object.entries(wanted || {}).every(([key, value]) => JSON.stringify(norm(actual[names[key] || key])) === JSON.stringify(norm(value)));
+}
+
+/** Kapsam yönünün kanıt biçimi (yön → okumanın aracı/gruplaması/süzgeci); özetle karşılanan yönler (genel, durum) denetlenmez. */
+const LAYER_FOCUS_SHAPES = Object.freeze({
+  overdue: (row) => row.tool === 'rota_task_search' && row.data?.filters?.deadline === 'overdue',
+  upcoming: (row) => row.tool === 'rota_task_search' && row.data?.filters?.milestone !== true && row.data?.filters?.deadline !== 'overdue'
+    && (String(row.data?.filters?.deadline || '').startsWith('due_') || Boolean(row.data?.filters?.dateFrom)),
+  critical: (row) => row.tool === 'rota_task_search' && (row.data?.filters?.priorities || []).includes('critical'),
+  milestones: (row) => row.tool === 'rota_task_search' && row.data?.filters?.milestone === true,
+  workload: (row) => row.tool === 'rota_workload_summary' || (row.tool === 'rota_task_analytics' && row.data?.groupBy === 'assignee'),
+  org: (row, layer) => (row.tool === 'rota_task_analytics' && ['department', 'unit'].includes(row.data?.groupBy))
+    || (layer.scope === 'team' && layer.level === 'unit' && row.tool === 'rota_workload_summary'),
+  projects: (row) => row.tool === 'rota_portfolio_summary' ? Array.isArray(row.data?.projects) : row.tool === 'rota_task_analytics' && row.data?.groupBy === 'project',
+  priority: (row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'priority',
+  deadlines: (row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'deadline',
+  schedule: (row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'target_month'
+});

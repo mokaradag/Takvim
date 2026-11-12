@@ -712,19 +712,31 @@ const submittedPresentation = (plan) => Object.fromEntries(['language', 'chart',
  * Aşama G — özetin yanındaki açık istekler (modelin yazdığı sırayla). Onarım bunları da korur: yalnızca reddedilen yolları değişebilir;
  * istek düşürülemez, eklenemez ve nüfusu değiştirilemez. Birleşimin kendisi reddedildiyse (`$.analysis:request`) istekler serbesttir.
  */
-const submittedExplicit = (plan) => [plan.request, ...[].concat(plan.additionalRequests ?? [])].filter((item) => item !== undefined && item !== null);
+// Boş istek nesnesi (`request: {}`) özetin yanında yazılmamış istektir (planın açılımı da onu düşürür): onarım yuvası sayılmaz.
+const writtenRequest = (item) => item !== undefined && item !== null && !(typeof item === 'object' && !Array.isArray(item) && !Object.keys(item).length);
+const submittedExplicit = (plan) => [plan.request, ...[].concat(plan.additionalRequests ?? [])].filter(writtenRequest);
 
 function explicitRepairPaths(plan, details) {
   if (details.some((detail) => String(detail).split(':')[0] === '$.analysis' && String(detail).endsWith(':request'))) return null;
-  const offset = plan.request != null ? 1 : 0;
-  const paths = submittedExplicit(plan).map(() => new Set());
+  const offset = writtenRequest(plan.request) ? 1 : 0;
+  const explicit = submittedExplicit(plan);
+  const paths = explicit.map(() => new Set());
+  const grouped = explicit.map(() => []);
   for (const detail of details) {
     const path = String(detail).split(':')[0];
     const match = /^\$\.(request|additionalRequests\[(\d+)\])(?:\.(.+))?$/.exec(path);
     if (!match) continue;
     const index = match[1] === 'request' ? 0 : offset + Number(match[2]);
-    if (paths[index]) paths[index].add(match[3] || '');
+    if (!paths[index]) continue;
+    paths[index].add(match[3] || '');
+    grouped[index].push(String(detail));
   }
+  // Açık isteğin anlamsal onarım payı tek istekli planınkiyle aynıdır (ör. ölçünün nüfusu reddedildiyse nüfus aracı değişebilir);
+  // ölçü ve isteğin diğer kapsamı korunur.
+  explicit.forEach((item, index) => {
+    if (!grouped[index].length || !item || typeof item !== 'object' || Array.isArray(item)) return;
+    for (const allowed of repairAllowance(grouped[index], item)) paths[index].add(allowed);
+  });
   return paths;
 }
 
@@ -736,7 +748,10 @@ function explicitRepairPaths(plan, details) {
  */
 function analysisRepairProjection(analysis, paths) {
   const masked = repairOmit(analysis, paths);
-  return stable(masked && typeof masked === 'object' ? repairOmit(normalizedBrief(masked), paths) : masked);
+  // Ek kapsamların konumsal yolları (`also[1].level`) yalnızca ilk maskede geçerlidir: normalleştirme kapsamları birleştirip diziyi
+  // kaydırabilir; aynı konum artık başka bir kapsamdır ve onun geçerli alanı maskelenmez (kapsam kimliği korunur).
+  const stablePaths = new Set([...paths].filter((path) => !/^also\[\d+\]/.test(path)));
+  return stable(masked && typeof masked === 'object' ? repairOmit(normalizedBrief(masked), stablePaths) : masked);
 }
 
 function pinAnalysisRepair(turn, plan, details) {
@@ -753,7 +768,11 @@ function pinAnalysisRepair(turn, plan, details) {
     // Aşama F: göreli pencere ile tarihlerin çakışması ancak ikisinden biri kaldırılarak düzeltilir: üç alan da onarımda değişebilir.
     if (path === '$.analysis.relativeWindow' && reason === 'conflict') for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) paths.add(key);
     // Ek kapsam dönem taşıyamaz: reddedilen dönem ancak özetin kendi dönem alanlarında yeniden yazılarak düzeltilir (üçü de değişebilir).
-    if (/^\$\.analysis\.also\[\d+\]\.(?:relativeWindow|dateFrom|dateTo)$/.test(path) && reason === 'unknown') for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) paths.add(key);
+    // Özetin kendi geçerli dönemi varsa sabit kalır: ek kapsamın geçersiz alanı, birincil kapsamın geçerli sınırlarını değiştirme izni
+    // değildir (yalnızca ek kapsamın alanı kaldırılabilir).
+    const source = existing?.raw || plan.analysis;
+    const primaryWindowed = source.relativeWindow != null || source.dateFrom != null || source.dateTo != null;
+    if (/^\$\.analysis\.also\[\d+\]\.(?:relativeWindow|dateFrom|dateTo)$/.test(path) && reason === 'unknown' && !primaryWindowed) for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) paths.add(key);
   }
   const raw = Object.fromEntries(Object.entries(normalizedBrief(existing?.raw || plan.analysis)).filter(([key]) => Object.hasOwn(analysisSchema().properties, key)));
   // Görsel istek ayrıca (`visual`) denetlenir; özetin içinde ya da plan düzeyinde yazılması anlam değişikliği değildir.
@@ -1652,7 +1671,10 @@ function compositionInput(turn, verdict) {
     // Çerçeve cümlesi için özetin kapsamı ve yönleri (olgu değil; adlar kanıttan alınır).
     outline: intent ? { scope: outlineScope, level: intent.level || (rowRequest ? rowRequest.filters?.teamLevel : followScope ? turn.previousAnalysis?.level : null) || null,
       focus: [...intent.focus], withSelf: intent.withSelf === true, ...outlineWindow, ...(intent.layers ? { layers: intent.layers, ...(intent.sections ? { sections: intent.sections } : {}) } : {}),
-      within: answers.some((answer) => answer.request?.entities?.some((entity) => entity.type === 'project'))
+      // Daraltma yalnızca özetin (çok kapsamlıda birincil kapsamın) bölümlerinden: yanındaki açık isteğin adlı projesi özeti daraltmaz.
+      within: answers.filter((answer) => (!Number.isInteger(intent.analysisParts) || (answer.index ?? 0) < intent.analysisParts)
+        && (!intent.layers || intent.sections?.[answer.index ?? 0]?.layer === 0))
+        .some((answer) => answer.request?.entities?.some((entity) => entity.type === 'project'))
         && !['project', 'projects'].includes(outlineScope) } : null,
     // Analitik özet olmayan çok bölümlü yanıtın açılışı için bölüm konuları (araç konusunun adı; olgu değil).
     topics: intent ? null : new Map(answers.filter((answer) => answer.verdict.kind === 'grounded')
@@ -1941,8 +1963,26 @@ function truncatedListFallback(turn, entries) {
   const request = turn.request;
   const metric = LIST_FALLBACK_RANKS[request?.population?.tool];
   if (!turn.presentationIntent?.analysis || request.operation !== 'list' || !metric || !request.metrics?.includes(metric)) return null;
+  // Yalnızca özetin kendi kurduğu liste bölümü: özetin yanındaki açık tam liste isteği sınırlı bir sıralama başıyla yanıtlanmış
+  // sayılmaz (istenen tam liste karşılanmadan kalır).
+  const owned = turn.presentationIntent.analysis.analysisParts;
+  if (Number.isInteger(owned) && (turn.partIndex ?? 0) >= owned) return null;
   const truncated = entries.some((entry) => entry.tool === request.population.tool && (entry.payload?.truncated === true || entry.payload?.complete === false));
   return truncated ? { ...request, operation: 'rank', rank: { metric, order: 'desc', limit: REQUEST_LIMITS.maxRankLimit } } : null;
+}
+
+/**
+ * Özetin kilometre taşı bölümü termine göre sıralamadır; doğrulanmış termini olmayan satır sıralamaya girmez (değersiz sıralama
+ * erişimi kapatır). Açık kilometre taşlarının hiçbirinin termini yoksa sıralama boş kalır: aynı kanıt (ek okuma yok) tam liste olarak
+ * doğrulanır; liste ancak koleksiyon tamsa kabul edilir (kesik koleksiyonda bölüm eskisi gibi doğrulanamaz).
+ */
+function undatedMilestoneFallback(turn) {
+  const request = turn.request;
+  if (!turn.presentationIntent?.analysis || request?.operation !== 'rank' || request.rank?.metric !== 'task.targetFinish' || request.filters?.milestone !== true) return null;
+  const owned = turn.presentationIntent.analysis.analysisParts;
+  if (Number.isInteger(owned) && (turn.partIndex ?? 0) >= owned) return null;
+  const { rank: _rank, ...rest } = request;
+  return { ...rest, operation: 'list' };
 }
 
 async function serverSelection(turn) {
@@ -1983,7 +2023,7 @@ async function serverSelection(turn) {
   // Aşama G: özetin tam liste bölümü (ekip iş yükü, portföy) aracın sayfasından büyük nüfusta tam liste olarak kanıtlanamaz. Bölüm
   // düşmez: AYNI kanıttan (ek okuma yok) aracın kendi sırasıyla sınırlı bir sıralama başı olarak doğrulanır; tam liste olmadığı için
   // nüfus geneli bulgular kurulmaz ve sunum sıralama başını söyler.
-  const fallback = !verified.length ? truncatedListFallback(turn, input.entries) : null;
+  const fallback = !verified.length ? truncatedListFallback(turn, input.entries) || undatedMilestoneFallback(turn) : null;
   if (fallback) {
     const original = turn.request;
     turn.request = fallback;

@@ -124,7 +124,9 @@ function taskLists(groups) {
     const future = !filters.dateField || filters.dateField === 'targetFinish';
     const upcoming = future && (String(filters.deadline || '').startsWith('due_') || today && filters.dateFrom >= today);
     // Aşama G: açık kilometre taşları listesi (termine göre artan; gecikmişler önce) ayrı bir liste türüdür.
-    const milestone = filters.milestone === true && statuses.length && statuses.every((status) => OPEN_STATUSES.has(status))
+    // Açık kilometre taşı nüfusu BÜTÜN açık durumlardır: tek durumla (ör. yalnızca yapılacak) daraltılmış liste "açık kilometre
+    // taşları" olarak anlatılmaz (devam eden gecikmiş kilometre taşı dışarıda kalırdı).
+    const milestone = filters.milestone === true && statuses.length === OPEN_STATUSES.size && [...OPEN_STATUSES].every((status) => statuses.includes(status))
       && !filters.deadline && !filters.dateFrom && !filters.dateTo;
     const kind = milestone ? 'milestone' : filters.deadline === 'overdue' ? 'overdue'
       : statuses.length && statuses.every((status) => OPEN_STATUSES.has(status)) && upcoming ? 'upcoming' : null;
@@ -335,12 +337,14 @@ function listFindings(list) {
         comparison: { population: list.rows.length, basis: 'complete-list' }, evidenceIds: [list.evidenceId], completeness: 'complete' });
     }
   }
-  if (list.kind === 'milestone' && rankedBy(list, 'task.targetFinish', 'asc') && list.today) {
+  // Termin sütunu seçilmemiş satırın termini BİLİNMEZ (undefined); termini olmadığı yalnızca doğrulanmış boş değerle (null) söylenir.
+  // Tam liste (bütün açık kilometre taşları kanıtta) sırasından bağımsız olarak aynı durumu kurar (termini olmayanların tam listesi dahil).
+  if (list.kind === 'milestone' && (rankedBy(list, 'task.targetFinish', 'asc') || list.complete) && list.today && list.rows.every((row) => row.due !== undefined)) {
     // Durum yalnızca TERMİNİ OLAN kilometre taşlarından kurulur; termini olmayan satır yargıya girmez ama durumu da gizlemez.
     // Sıra artan termindir ve termini olmayanlar sonda gelir: sayfada termini olmayan bir satır görünüyorsa ya da termini bugün
     // veya sonrası olan bir satır varsa, gecikmiş kilometre taşlarının tamamı sayfadadır (gecikmiş sayısı kesindir).
     const dated = list.rows.filter((row) => typeof row.due === 'string').sort((left, right) => left.due.localeCompare(right.due) || left.index - right.index);
-    const shownUndated = list.rows.length - dated.length;
+    const shownUndated = list.rows.filter((row) => row.due === null).length;
     const late = dated.filter((row) => row.due < list.today);
     const upcoming = dated.filter((row) => row.due >= list.today);
     const next = upcoming[0] || null;
@@ -538,8 +542,9 @@ function levelFindings(groups) {
     if (!totals.has('open') || !totals.has('overdue') || !filters) continue;
     const layer = layerOf(filters);
     if (!layer || layers.has(layer.key)) continue;
-    // Görevi olmayan kapsamda tamamlanma oranı tanımsızdır ("%0" söylenmez).
-    const empty = totals.get('total') === 0;
+    // Görevi olmayan kapsamda tamamlanma oranı tanımsızdır ("%0" söylenmez). Toplam seçilmediyse açık ve tamamlanan sayıları boşluğu
+    // gösterir; tamamlanan da bilinmiyorsa açık işi olmayan kapsamın oranı söylenmez (boş olup olmadığı kanıtlanamaz).
+    const empty = totals.has('total') ? totals.get('total') === 0 : totals.get('open') === 0 && (!totals.has('done') || totals.get('done') === 0);
     layers.set(layer.key, { ...layer, evidenceId, today, open: totals.get('open'), overdue: totals.get('overdue'), done: totals.get('done') ?? null,
       completion: !empty && typeof totals.get('completionRatePercent') === 'number' && Number.isFinite(totals.get('completionRatePercent')) ? totals.get('completionRatePercent') : null });
   }
@@ -942,6 +947,11 @@ function overlapNote(layers, locale) {
         'Birden çok sorumlusu olan bir görev her kişide ayrı sayılabildiğinden sayılar toplanmaz; yalnızca aynı tanımla hesaplanan oranlar yan yana konur.'][lang0 ? 0 : 1]
       : ['Only rates computed the same way are compared; the scopes are not combined into a total.', 'Yalnızca aynı tanımla hesaplanan oranlar yan yana konur; kapsamlar tek bir toplamda birleştirilmez.'][lang0 ? 0 : 1];
   }
+  // Adlı kişi ile ekip ya da görünür bütün işler: örtüşme kişinin kendi işleridir (kullanıcının ortak sorumluluğu değil).
+  if (layers.some((layer) => layer.type === 'person')) {
+    return ['These scopes can overlap (the named person\'s work can also be counted in the other scope), so their counts are not added together; only rates computed the same way are compared.',
+      'Bu kapsamlar örtüşebildiğinden (adı geçen kişinin işleri diğer kapsamda da sayılabilir) sayılar toplanmaz; yalnızca aynı tanımla hesaplanan oranlar yan yana konur.'][en(locale) ? 0 : 1];
+  }
   const ranked = layers.filter((layer) => Object.hasOwn(SCOPE_RANK, layer.key)).sort((left, right) => SCOPE_RANK[left.key] - SCOPE_RANK[right.key]);
   const wide = ranked.at(-1);
   // Kendi işleri ekip kapsamının parçası değildir (ekip okuması kullanıcının kendisini dışlar); bu çiftte örtüşme ortak sorumluluktur.
@@ -982,10 +992,12 @@ function gIntroSentences(findings, locale) {
         ...(open ? ['; en çok açık iş ', ...names(open), open.names.length > 1 ? ` ${org.noun}lerinde (` : ` ${org.noun}${org.noun === 'bölüm' ? 'ünde' : 'inde'} (`, s(formatCount(open.value, locale)), ')'] : []),
         ...(overdue ? [same ? ', gecikmiş işler de en çok burada (' : '; en çok gecikmiş iş ', ...(same ? [] : names(overdue)),
           ...(same ? [] : [overdue.names.length > 1 ? ` ${org.noun}lerinde (` : ` ${org.noun}${org.noun === 'bölüm' ? 'ünde' : 'inde'} (`]), s(formatCount(overdue.value, locale)), ')'] : []), '.']);
-    add(spread, en(locale) ? [overlap ? `Some tasks have assignees in more than one ${org.en}, so the ${org.enPlural}' counts overlap and are not added together.`
-      : `A task with assignees in different ${org.enPlural} is counted in each of them, so the ${org.enPlural}' counts are not added together.`]
-      : [overlap ? `Sorumluları farklı ${org.noun}lerde olan görevler her ${org.noun}de ayrı sayıldığından ${org.noun} sayıları toplanmaz.`
-        : `Sorumluları farklı ${org.noun}lerde olan bir görev her ${org.noun}de ayrı sayılabildiğinden ${org.noun} sayıları toplanmaz.`], { caveat: true });
+    // Toplanmama kuralı her örgütsel tabloda zorunlu çekince olarak söylenir (bkz. `caveatPropositions`); bulgu yalnızca kanıtlanmış
+    // örtüşmeyi ekler (kural yinelenmez).
+    if (overlap) {
+      add(spread, en(locale) ? [`Some tasks have assignees in more than one ${org.en}, so the ${org.enPlural}' counts overlap.`]
+        : [`Bazı görevlerin sorumluları birden çok ${org.noun}de olduğundan ${org.noun} sayıları örtüşüyor.`], { caveat: true });
+    }
   }
   for (const leader of findings.filter((item) => item.kind === 'overdueLeader')) {
     const names = joinParts(leader.names.map((name) => [s(name)]), locale);
@@ -1086,8 +1098,10 @@ function priorityItems(findings, locale, said, { scopeStated = true } = {}) {
   const levelTop = level ? level.layers.filter((layer) => layer.open > 0 && layer.overdue > 0)
     .reduce((top, layer) => (!top || compareRatio(layer.overdue, layer.open, top.overdue, top.open) > 0 ? layer : top), null) : null;
   if (levelTop && level.layers.filter((layer) => layer.open > 0 && compareRatio(layer.overdue, layer.open, levelTop.overdue, levelTop.open) === 0).length === 1) {
-    items.push({ finding: level, parts: en(locale) ? [layerLabel(levelTop, locale), ' — the scope with the highest overdue share (', s(formatPercent(sharePercent(levelTop.overdue, levelTop.open), locale)), ')']
-      : [layerLabel(levelTop, locale), ' — açık işlerde gecikme oranının en yüksek olduğu kapsam (', s(formatPercent(sharePercent(levelTop.overdue, levelTop.open), locale)), ')'] });
+    // Kişi ya da proje adı veridir (biçimlenmemiş veri parçası); sunucunun kapsam adı sunucu metnidir.
+    const label = ['person', 'project'].includes(levelTop.type) ? s(levelTop.name) : layerLabel(levelTop, locale);
+    items.push({ finding: level, parts: en(locale) ? [label, ' — the scope with the highest overdue share (', s(formatPercent(sharePercent(levelTop.overdue, levelTop.open), locale)), ')']
+      : [label, ' — açık işlerde gecikme oranının en yüksek olduğu kapsam (', s(formatPercent(sharePercent(levelTop.overdue, levelTop.open), locale)), ')'] });
   }
   // Aşama G: en uzun geciken görev zaten gecikmiş kilometre taşı olarak yazıldıysa ikinci kez öncelik olmaz.
   // Aynılık görev kimliğiyle (yoksa başlık + proje kimliğiyle) belirlenir: aynı adlı başka bir gecikmiş görev öncelikten düşmez.

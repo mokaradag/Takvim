@@ -591,8 +591,9 @@ function entityLead(described, noun, locale, add, allowLead = true) {
   const en = locale === 'en';
   const counts = described.columns.map((header, index) => ({ header, index, facts: header.numeric ? columnValues(described, index, 'number') : null }))
     // Aşama G: tamamlanan iş bir baskı göstergesi değildir; "ilk sırada" yargısına girmez (tablo sütunu olarak kalır).
+    // Oran sütunu (ör. tamamlanma yüzdesi) görev adedi değildir: tam sayı olsa da yük önderine katılmaz.
     .filter(({ facts }) => facts && facts.every((fact) => Number.isSafeInteger(fact.value) && fact.value >= 0 && String(fact.semantic?.metric || '').startsWith('tasks.')
-      && fact.semantic?.metric !== 'tasks.done'));
+      && fact.semantic?.metric !== 'tasks.done' && !/Percent$/.test(String(fact.semantic?.metric || ''))));
   const total = described.rows.length;
   const overdue = counts.find(({ facts }) => facts.every((fact) => fact.semantic?.metric === 'tasks.overdue'));
   if (overdue && (noun === 'project' || allowLead)) {
@@ -746,13 +747,15 @@ const TABLE_DIMENSIONS = Object.freeze({ status: ['durumlara', 'status'], priori
  * gecikmiş ve yedi gün içinde terminli görev sayıları aşağıdaki tabloda yan yana veriliyor."). Sütunlar adlandırılamıyorsa
  * genel yönlendirme cümlesi kalır. Cümle olgu taşımaz (sayı yoktur); yalnızca tablonun içeriğini adlandırır.
  */
-export function tableLeadSentence({ collection, groupBy = null, columns = [] }, locale) {
+export function tableLeadSentence({ collection, groupBy = null, columns = [], groupKeys = [] }, locale) {
   const en = locale === 'en';
   const leaf = String(collection ?? '').split('.').at(-1);
   if (TABLE_DIMENSIONS[groupBy]) {
     return en ? `The table below shows how the tasks are distributed by ${TABLE_DIMENSIONS[groupBy][1]}.` : `Görevlerin ${TABLE_DIMENSIONS[groupBy][0]} göre dağılımı aşağıdaki tabloda veriliyor.`;
   }
-  const rows = TABLE_ROWS[leaf === 'groups' ? groupBy : leaf];
+  // Atamasız, açıklanamayan ya da birimi belirsiz satır bir kişi/birim değildir: satırlar adlandırılmaz, genel yönlendirme kalır.
+  const nonEntity = groupKeys.some((key) => ORG_NON_ENTITY.has(String(key ?? '')));
+  const rows = nonEntity ? null : TABLE_ROWS[leaf === 'groups' ? groupBy : leaf];
   const labels = columns.filter((column) => column.numeric).map((column) => lowerLabel(column.label, locale));
   const suffix = en ? ' tasks' : ' görev';
   if (!rows || !labels.length || !labels.every((label) => label.endsWith(suffix))) return pointerSentence({ type: 'rows', style: 'table' }, locale);
@@ -991,21 +994,16 @@ export function caveatPropositions(parts, locale = 'tr') {
         continue;
       }
       if (fact?.semantic?.provenance?.tool === 'rota_task_analytics' && ['department', 'unit'].includes(fact.semantic.groupBy)) {
-        // Aşama G: örgütsel kırılımda bir görev farklı birimlerdeki sorumlularında ayrı sayılabilir; birim sayıları toplanmaz. Tam
-        // tabloda bu kural bölümler arası bulguyla (örgütsel yayılım) söylenir; tablo tam değilse (atamasız, açıklanamayan ya da
-        // birimi belirsiz grup, kesik liste) ya da gecikme sütunu yoksa o bulgu kurulmaz: kural burada, bulgudan bağımsız söylenir.
+        // Aşama G: örgütsel kırılımda bir görev farklı birimlerdeki sorumlularında ayrı sayılabilir; birim sayıları toplanmaz. Kural
+        // HER örgütsel tabloda zorunlu çekincedir: bölümler arası bulgu (örgütsel yayılım) düz istekte, kısa yanıtta ya da başka
+        // tamlık ölçütüyle kurulmayabilir; çekince ona bağlı değildir (bulgu kuralı yinelemez, yalnızca kanıtlanmış örtüşmeyi söyler).
         const key = `org:${item.evidenceId}`;
         if (seen.has(key)) continue;
-        const facts = (part.presentation?.facts || []).filter((other) => other.evidenceId === item.evidenceId).map((other) => other.fact);
-        const partial = facts.some((other) => other?.semantic?.complete !== true || ORG_NON_ENTITY.has(String(other?.semantic?.group?.key ?? '')))
-          || !facts.some((other) => /^data\.groups\.\d+\.overdue$/.test(other?.field || ''));
         seen.add(key);
-        if (partial) {
-          const unit = fact.semantic.groupBy === 'unit';
-          out.push({ part: part.index + 1, proposition: { kind: 'completeness', tone: 'info', evidenceId: item.evidenceId, ...sentence(en
-            ? [`a task with assignees in different ${unit ? 'units' : 'departments'} is counted in each of them, so these counts are not added together.`]
-            : [`sorumluları farklı ${unit ? 'birimlerde' : 'bölümlerde'} olan bir görev her ${unit ? 'birimde' : 'bölümde'} ayrı sayılabildiğinden bu sayılar toplanmaz.`]) } });
-        }
+        const unit = fact.semantic.groupBy === 'unit';
+        out.push({ part: part.index + 1, proposition: { kind: 'completeness', tone: 'info', evidenceId: item.evidenceId, ...sentence(en
+          ? [`a task with assignees in different ${unit ? 'units' : 'departments'} is counted in each of them, so the ${unit ? 'units' : 'departments'}' counts are not added together.`]
+          : [`sorumluları farklı ${unit ? 'birimlerde' : 'bölümlerde'} olan bir görev her ${unit ? 'birimde' : 'bölümde'} ayrı sayılabildiğinden ${unit ? 'birim' : 'bölüm'} sayıları toplanmaz.`]) } });
         continue;
       }
       const assignments = assignmentGroups(fact);

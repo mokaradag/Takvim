@@ -288,6 +288,14 @@ const TEAM_ROSTER = `
         SELECT EmployeeSicil FROM #AiRosterStart
         EXCEPT SELECT es.EmployeeSicil FROM dbo.MR_V_ExecutiveScope es
         WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel))
+      -- Kadro üyesinin okunan bir göreve ataması kimliği açık atama olarak okunmadıysa (üyelik atama okumaları sırasında değişip
+      -- geri döndü) görev sayıları kadroyla tutarlı değildir: kadro kesik sayılır, sıfır satır ve tamlık iddiası kurulmaz (kapalı ret).
+      -- Denetim yalnızca kadronun kendi üyeleri içindir (yönetim kapsamı); kapsam dışı gizli eş sorumlu hakkında bilgi üretmez.
+      OR EXISTS (
+        SELECT 1 FROM #AiFacts f
+        JOIN dbo.MR_TaskAssignees ta ON ta.TaskId = f.TaskId
+        JOIN #AiRosterStart r ON r.EmployeeSicil = ta.Sicil
+        WHERE NOT EXISTS (SELECT 1 FROM #AiAssignees a WHERE a.TaskId = ta.TaskId AND a.Sicil = ta.Sicil AND a.IdentityVisible = 1))
       THEN 1 ELSE 0 END;
     SELECT TOP (@rosterRows) r.EmployeeSicil AS Sicil, MIN(NULLIF(LTRIM(RTRIM(pd.DisplayName)), N'')) AS DisplayName, @rosterChanged AS MembershipChanged
     FROM #AiRosterStart r

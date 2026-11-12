@@ -6,7 +6,7 @@ import { invalidArguments, TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { TOOL_LIMITS } from './toolLimits.js';
 import { requestSchema } from './requestDeclaration.js';
 import { getRotaTool } from './toolRegistry.js';
-import { readKey } from './requestPopulation.js';
+import { effectiveSort, readKey } from './requestPopulation.js';
 import { analysisSchema, ANALYSIS_LIMITS, expandAnalysis, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
 import { expandedAnswerDetail } from '../../../domain/ai/answerDetail.js';
 
@@ -130,7 +130,10 @@ function projectSelectorAsEntity(request) {
   const kept = Object.fromEntries(Object.entries(filters).filter(([key, value]) => value !== null && !(key === 'assignee' && value === 'any')));
   const entities = request.entities == null ? [] : request.entities;
   const selectors = ['projectId', 'project'].filter((key) => Object.hasOwn(kept, key));
-  const text = selectors.length === 1 && typeof kept[selectors[0]] === 'string' ? kept[selectors[0]].trim() : '';
+  // GUID biçimli proje kimliği bir ad değildir: ad aramasına çevrilmez (görünür proje "bulunamadı" olurdu); süzgeç olduğu gibi kalır
+  // ve doğrulama/onarım yoluna girer (kimlik güven denetimi atlanmaz).
+  const guid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  const text = selectors.length === 1 && typeof kept[selectors[0]] === 'string' && !guid(kept[selectors[0]].trim()) ? kept[selectors[0]].trim() : '';
   const projects = Array.isArray(entities) ? entities.filter((entity) => entity && typeof entity === 'object' && entity.type === 'project') : null;
   if (text.length >= 2 && projects && (!projects.length || projects.every((entity) => entity.text === text))) {
     delete kept[selectors[0]];
@@ -303,15 +306,9 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // bölüme gönderme (from) özetin bölüm sırası belirsiz olduğundan kabul edilmez.
     // Önceki sonuca gönderme (`previousResult`) özetin bölümleriyle temsil edilemez: kapsayan bir özet okuması onu daha geniş
     // nüfusla değiştirirdi; birleşim reddedilir. Çok kapsamlı özetle açık liste birlikte verilebilir (her biri kendi nüfusuyla).
-    // Özetin ekip kapsamı tek bir düzey taşıyorsa, yanındaki açık isteğin düzeysiz ekip koşulu aynı ekiptir: düzey özetten tamamlanır
-    // (aynı soruda iki ayrı "ekip" yoktur). Özet birden çok ekip düzeyi taşıyorsa ya da istek kendi düzeyini yazdıysa dokunulmaz.
-    const teamLevels = [...new Set([parsed, ...(parsed.also || [])].filter((layer) => layer.scope === 'team').map((layer) => layer.level || ''))];
-    if (teamLevels.length === 1 && teamLevels[0]) {
-      const leveled = (item) => (item && typeof item === 'object' && !Array.isArray(item) && item.filters && typeof item.filters === 'object' && !Array.isArray(item.filters)
-        && item.filters.assignee === 'team' && item.filters.teamLevel == null ? { ...item, filters: { ...item.filters, teamLevel: teamLevels[0] } } : item);
-      plan = { ...plan, ...(present('request') ? { request: leveled(plan.request) } : {}),
-        ...(present('additionalRequests') && Array.isArray(plan.additionalRequests) ? { additionalRequests: plan.additionalRequests.map(leveled) } : {}) };
-    }
+    // Açık isteğin ekip koşulu olduğu gibi kalır: düzeysiz ekip koşulu araç sözleşmesinde BÜTÜN yönetim kapsamıdır, özetin düzeyi
+    // değildir. Özetin düzeyi isteğe kopyalanmaz (bağımsız istek nüfusunu kaybetmez); aynı okumaysa birleşim yalnızca nüfus
+    // birebir aynıysa yapılır (`coveredRequest`).
     const explicit = [...(present('request') ? [plan.request] : []), ...(present('additionalRequests') ? [].concat(plan.additionalRequests) : [])];
     if (explicit.some((item) => !item || typeof item !== 'object' || Array.isArray(item) || item.previousResult === true
       || (Array.isArray(item.entities) && item.entities.some((entity) => entity && typeof entity === 'object' && Object.hasOwn(entity, 'from'))))) throw invalidArguments(['$.analysis:request']);
@@ -326,11 +323,16 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const requested = visual ? base.charts || (!explicitCharts && follow && (!base.chart || base.chart === previousAnalysis.chart) ? previousAnalysis.charts : null) : null;
     const expand = (reserve) => expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested, reserve });
     // Açık istek, özetin aynı okumasıysa ikinci kez okunmaz; açık satır sınırı ve sunum tercihi (liste/tablo) o okumaya geçer.
+    // Geçersiz sunum tercihi ya da satır sınırı özetin okumasına taşınmaz: istek ayrı bölüm kalır ve sorunu kendi yoluyla bildirilir
+    // (onarım o isteğin yolunu açar; özetin okuması geçersiz değerle reddedilmez).
+    const schema = requestSchema().properties;
+    const transferable = (item) => (item.layout == null || schema.layout.enum.includes(item.layout))
+      && (item.rank?.limit == null || (Number.isInteger(item.rank.limit) && item.rank.limit >= 1 && item.rank.limit <= schema.rank.properties.limit.maximum));
     const merge = (expanded) => {
       const parts = [...expanded];
       const kept = [];
       for (const item of explicit) {
-        const index = parts.findIndex((part) => coveredRequest(part, item));
+        const index = transferable(item) ? parts.findIndex((part) => coveredRequest(part, item)) : -1;
         if (index < 0) { kept.push(item); continue; }
         const layout = item.layout && item.layout !== 'auto' ? item.layout : null;
         const limit = Number.isInteger(item.rank?.limit) ? item.rank.limit : null;
@@ -339,12 +341,15 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
       }
       return { parts, kept };
     };
-    let expanded = expand(0);
+    // Açık istekler için yer ayrılır (tek ya da çok kapsamlı özette): isteğe bağlı okumalar (grafik, bütünleyici, alt birim kırılımı,
+    // dağılım yönleri) kalan bütçeyle eklenir. Ayrılan yer açılımı değiştirip bir isteğin kapsanmasını bozabilir; ayrılan yer kalan
+    // istek sayısına ulaşana dek yeniden hesaplanır (yer yalnızca büyür; en çok `maxParts` tur).
+    let reserve = 0;
+    let expanded = expand(reserve);
     let { parts: analysisParts, kept } = merge(expanded);
-    // Çok kapsamlı özette dağılım yönleri kalan bütçeyle okunur: açık istekler için yer ayrılır ve sığmayan dağılım yönü adıyla
-    // bildirilir (açık istek ya da kapsam düşmez).
-    if (kept.length && analysis.also?.length && analysisParts.length + kept.length > ANALYSIS_LIMITS.maxParts) {
-      expanded = expand(kept.length);
+    while (kept.length > reserve && analysisParts.length + kept.length > ANALYSIS_LIMITS.maxParts && reserve < ANALYSIS_LIMITS.maxParts) {
+      reserve = kept.length;
+      expanded = expand(reserve);
       ({ parts: analysisParts, kept } = merge(expanded));
     }
     const sections = [...analysisParts, ...kept];
@@ -430,8 +435,15 @@ function coveredRequest(part, item) {
     : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, loose(item)])) : value);
   const same = (key) => stableJson(part[key] ?? null) === stableJson(item[key] ?? null);
   const alike = (key) => stableJson(loose(part[key] ?? null)) === stableJson(loose(item[key] ?? null));
+  // Nüfus etkin sırayla karşılaştırılır: yazılmamış sıra aracın/sıralamanın varsayılanıdır (aynı okuma iki kez okunmaz).
+  const shaped = (request) => {
+    if (!request.population || typeof request.population !== 'object' || Array.isArray(request.population)) return request.population ?? null;
+    const { sort: _sort, ...rest } = request.population;
+    const sort = effectiveSort(request);
+    return { ...rest, ...(sort ? { sort } : request.population.sort != null ? { sort: request.population.sort } : {}) };
+  };
   return Array.isArray(item.metrics) && item.metrics.every((metric) => part.metrics?.includes(metric)) && part.operation === item.operation
-    && same('population') && alike('entities') && alike('filters') && stableJson(rankShape(part.rank)) === stableJson(rankShape(item.rank))
+    && stableJson(shaped(part)) === stableJson(shaped(item)) && alike('entities') && alike('filters') && stableJson(rankShape(part.rank)) === stableJson(rankShape(item.rank))
     && (!item.fields?.length || same('fields')) && (!item.bindings?.length || same('bindings'));
 }
 

@@ -755,6 +755,18 @@ export function readKey(name, args, today) {
 }
 
 /** Sıralama isteğinin aracın sırası: sıralama ölçüsü ve yönü aracın sıra kayıtlarından biriyle eşleşmelidir. */
+/**
+ * İsteğin ETKİN sırası: yazılmış sıra, yoksa sıralama ölçüsünün sırası, yoksa aracın varsayılanı (tamamlama ile aynı kural).
+ * Sırası olmayan araçta ya da bilinmeyen araçta `null`. İki isteğin aynı okuma olup olmadığı yazılmamış varsayılanla değil etkin
+ * sırayla karşılaştırılır.
+ */
+export function effectiveSort(request) {
+  const tool = request?.population?.tool;
+  if (typeof tool !== 'string' || !getRotaTool(tool)?.parameters.properties.sort) return null;
+  const filters = request.filters && typeof request.filters === 'object' && !Array.isArray(request.filters) ? request.filters : {};
+  return request.population.sort || rankSort(tool, request.rank) || defaultSort(tool, declaredValues(FAMILIES[tool] || null, filters));
+}
+
 function rankSort(tool, rank) {
   if (!rank) return null;
   const table = tool === 'rota_task_search' ? TASK_SORT_RANKS : tool === 'rota_portfolio_summary' ? PORTFOLIO_SORT_RANKS : {};

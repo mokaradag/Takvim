@@ -591,7 +591,11 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         }
         if (!text || [...titles.values()].some((title) => title.text === text) || titles.size >= limits.maxTitles) continue;
         const id = `H${titles.size + 1}`;
-        titles.set(id, Object.freeze({ id, part: item.part, text, markdown: `#### ${escapedFactText(text)}`, ...(item.evidenceId ? { evidenceId: item.evidenceId } : {}) }));
+        // Kapsam başlığı yalnızca sahibini ve konusunu söyler: bölümün dönem koşulu varsa başlık nüfusu tam adlandırmaz, ölçüt satırı
+        // bastırılmaz (`evidenceId` verilmez; dönem sayılarla birlikte görünür kalır).
+        const partFilters = filtersOfPart(parts, item.part);
+        const dated = ['dateFrom', 'dateTo', 'period'].some((key) => partFilters[key] != null);
+        titles.set(id, Object.freeze({ id, part: item.part, text, markdown: `#### ${escapedFactText(text)}`, ...(item.evidenceId && !dated ? { evidenceId: item.evidenceId } : {}) }));
         viewTitles.push({ id, part: item.part, text });
       }
     }
@@ -695,7 +699,10 @@ export function parseCompositionResponse(text) {
 export function closingSentence(items, locale = 'tr') {
   const english = locale === 'en';
   const marker = (index) => (index === 0 ? (english ? 'first ' : 'önce ') : index === items.length - 1 ? (english ? 'finally ' : 'son olarak ') : (english ? 'then ' : 'ardından '));
-  const body = items.map((item, index) => `${items.length === 2 && index === 1 ? (english ? 'then ' : 'ardından ') : marker(index)}${item}`).join('; ');
+  // Öğe cümlenin ortasına girer: sunucu metniyle başlayan öğenin ilk harfi küçülür ("önce gecikmiş işler — …"). Kalın veri adı ("**X**")
+  // ve büyük harf kısaltması (ör. "WBS") olduğu gibi kalır.
+  const inline = (item) => (/^\p{Lu}\p{Ll}/u.test(item) ? `${item.charAt(0).toLocaleLowerCase(english ? 'en-US' : 'tr-TR')}${item.slice(1)}` : item);
+  const body = items.map((item, index) => `${items.length === 2 && index === 1 ? (english ? 'then ' : 'ardından ') : marker(index)}${inline(item)}`).join('; ');
   return `${english ? 'In short, the order of priority is: ' : 'Özetle öncelik sırası şöyle: '}${body}.`;
 }
 
@@ -841,7 +848,8 @@ export function validateComposition(composition, response) {
           } else { const hard = soft('UNKNOWN_PROPOSITION'); if (hard) return hard; }
         }
         // Başlık olsun ya da olmasın paragrafın tüm önermeleri aynı bölüme aittir.
-        const scope = owned(run.map(partOfItem));
+        // Sahiplik yalnızca KORUNAN öğelerle denetlenir: yumuşak işlemle atılan bilinmeyen kimlik geçerli öğeleri reddettirmez.
+        const scope = owned([...said, ...placed].map(partOfItem));
         if (scope) return fail(scope);
         // Düzyazı bloğunun metni kanonik yuva dizisidir: yeniden doğrulamada modelin atılan sözcükleri yeniden okunmaz.
         if (said.length) blocks.push({ type, items: said, ...(prose ? { prose: said.map((slot) => [{ slot }]), text: proseText(said) } : {}) });
@@ -1367,7 +1375,8 @@ export function renderComposition(composition, validated) {
     if (!table || style === 'list') return pointerSentence({ type: 'rows', style }, locale);
     const rows = [...(table.group.collections.get(table.collection)?.values() || [])].flatMap((row) => row.entries);
     const groupBy = rows.find(({ fact }) => fact.semantic?.groupBy)?.fact.semantic.groupBy || null;
-    return tableLeadSentence({ collection: table.collection, groupBy, columns: table.columns }, locale);
+    const groupKeys = [...new Set(rows.map(({ fact }) => fact.semantic?.group?.key).filter((key) => key != null))];
+    return tableLeadSentence({ collection: table.collection, groupBy, columns: table.columns, groupKeys }, locale);
   };
   // Türsüz G# göndergesi aynı kaynağın ilk çizilen grafiğini gösterir.
   const chartStyles = new Map();

@@ -220,11 +220,30 @@ function totalsSentences(entries, { scope, locale, qualifiers, singular = false 
   return sentences;
 }
 
+/** Örgütsel (bölüm/birim) grup satırının gruplaması; değilse `null`. */
+function organizationGroup(record) {
+  if (record.kind !== 'group') return null;
+  const groupBy = record.entries.find(({ fact }) => fact.semantic?.groupBy)?.fact.semantic.groupBy;
+  return ['department', 'unit'].includes(groupBy) ? groupBy : null;
+}
+
+/** Atama durumunu gösteren grup anahtarları (atamasız, açıklanamayan, birimi belirsiz): örgütsel birim değildir. */
+const NON_ENTITY_GROUPS = new Set(['other', 'unassigned', 'unresolved', 'undisclosed', 'none', 'no_unit']);
+
 function scopePhrase(record, locale, { named = false, projects = null } = {}) {
   const name = strong(escapedFactText(record.subject));
   if (record.tool === 'rota_portfolio_summary') {
     if (projects) return locale === 'en' ? `your ${strong(narrativeValue(projects, locale))} visible projects` : `görebildiğiniz ${strong(narrativeValue(projects, locale))} projede`;
     return locale === 'en' ? 'your visible projects' : 'görebildiğiniz projelerde';
+  }
+  // Aşama G: proje süzgeçli örgütsel kırılımın tek satırı bir bölüm/birimdir; adı proje adı sayılmaz (seçilen proje ölçütte kalır).
+  // Atama durumu grubu (ör. sorumlusuz) örgütsel birim gibi anlatılmaz.
+  const organization = organizationGroup(record);
+  if (organization) {
+    const key = String(record.entries.find(({ fact }) => fact.semantic?.group)?.fact.semantic.group.key ?? '');
+    if (NON_ENTITY_GROUPS.has(key)) return locale === 'en' ? `the ${name} group` : `${name} grubunda`;
+    return organization === 'department' ? (locale === 'en' ? `the ${name} department` : `${name} bölümündeki sorumlularda`)
+      : (locale === 'en' ? `the ${name} unit` : `${name} birimindeki sorumlularda`);
   }
   if (record.kind === 'project' || record.entries.some(({ fact }) => fact.semantic?.filters?.projectId)) {
     if (named) return locale === 'en' ? 'the project' : 'projede';
@@ -234,9 +253,6 @@ function scopePhrase(record, locale, { named = false, projects = null } = {}) {
   // Aşama F: projeye göre grubun satırı bir projedir ("**X** projesinde"), "grubunda" değil.
   const groupBy = record.entries.find(({ fact }) => fact.semantic?.groupBy)?.fact.semantic.groupBy;
   if (record.kind === 'group' && groupBy === 'project') return locale === 'en' ? `the ${name} project` : `${name} projesinde`;
-  // Aşama G: sorumluların bölüm/birim grubu bir örgütsel birimdir ("**X** bölümündeki sorumlularda").
-  if (record.kind === 'group' && groupBy === 'department') return locale === 'en' ? `the ${name} department` : `${name} bölümündeki sorumlularda`;
-  if (record.kind === 'group' && groupBy === 'unit') return locale === 'en' ? `the ${name} unit` : `${name} birimindeki sorumlularda`;
   if (record.kind === 'group') return locale === 'en' ? `the ${name} group` : `${name} grubunda`;
   // Ekip kapsamı (yönetim kapsamı) ve kullanıcının kendi görevleri nüfusun öznesidir: "görebildiğiniz bütün görevler"
   // ile karıştırılmaz ve ölçütte ayrıca "Sorumlu: Ben/Ekibiniz" diye yinelenmez (bkz. `assigneeScoped`).
@@ -260,7 +276,7 @@ function resolvedPerson(filters) {
 }
 
 /** Bir kaydın (ya da tek satırın) olgularından düzyazı cümleleri. */
-function recordSentences(record, locale) {
+function recordSentences(record, locale, { rowsCovered = false } = {}) {
   const lang = language(locale);
   const used = new Set();
   const take = (predicate) => record.entries.filter((entry) => !used.has(entry) && predicate(entry.rel, entry.fact)).map((entry) => { used.add(entry); return entry; });
@@ -326,7 +342,8 @@ function recordSentences(record, locale) {
   }).map(({ rel, fact }) => ({ key: rel.split('.').at(-1), fact }));
   const projectCount = totals.length ? take((rel, fact) => rel === 'totals.projects' && isCount(fact))[0] : null;
   if (totals.length) {
-    const projectNamed = record.kind === 'project' || record.entries.some(({ fact }) => fact.semantic?.filters?.projectId);
+    // Örgütsel grup satırında proje özne değildir: seçilen proje ölçütte ayrı niteleyici olarak kalır.
+    const projectNamed = !organizationGroup(record) && (record.kind === 'project' || record.entries.some(({ fact }) => fact.semantic?.filters?.projectId));
     const scope = scopePhrase(record, locale, { named: sentences.length > 0, projects: projectCount?.fact });
     const assigneeFilters = record.entries.find(({ fact }) => fact.semantic?.filters?.assignee)?.fact.semantic.filters;
     const personScoped = Boolean(resolvedPerson(assigneeFilters)) && record.tool !== 'rota_portfolio_summary' && !projectNamed;
@@ -438,7 +455,9 @@ function recordSentences(record, locale) {
     sentences.push(`${subject}${qualify()}.`);
   }
   const teamFilters = completeness?.fact.semantic?.filters || {};
-  const teamOwner = completeness?.fact.value === true && teamFilters.assignee === 'team' && !teamFilters.projectId
+  // "Tablo bütün kişileri içeriyor" yalnızca gösterilen satırlar kaynağın bütün satırlarıysa söylenir; sıralama başı ya da seçilmiş
+  // satırlar gösteriliyorsa yalnızca kaynağın (dağılımın) tamlığı söylenir.
+  const teamOwner = rowsCovered && completeness?.fact.value === true && teamFilters.assignee === 'team' && !teamFilters.projectId
     ? ({ unit: ['your unit', 'biriminizdeki'], department: ['your department', 'bölümünüzdeki'], directorate: ['your directorate', 'direktörlüğünüzdeki'] }[teamFilters.teamLevel] || ['your team', 'ekibinizdeki']) : null;
   if (teamOwner) {
     // Aşama G: kadrosu okunmuş ekip dağılımının tamlığı doğal cümledir (ölçüt satırı yazılmaz; süzgeç cümlede söylenir).
@@ -737,7 +756,12 @@ function groupSentences(group, { locale, layout, empty, lead = null }) {
   // `lead`: sunucunun doğal sayım cümlesi (ör. "Ekibinizde şu anda **1** gecikmiş görev var."); başta yazılır ve zarfın
   // ölçütlü "Eşleşen N görev bulundu" cümlesinin yerine geçer (öteki zarf notları kalır).
   const sentences = lead ? [lead] : [];
-  if (group.main.entries.length) sentences.push(...recordSentences(group.main, locale));
+  // Gösterilen satırlar her koleksiyonun bütün satırları mı (kaynak koleksiyon boyutu = gösterilen satır sayısı)?
+  const rowsCovered = group.collections.size > 0 && [...group.collections.values()].every((rows) => {
+    const sizes = [...rows.values()].flatMap((row) => row.entries).map(({ fact }) => fact.semantic?.row?.collectionSize).filter(Number.isSafeInteger);
+    return sizes.length > 0 && sizes.every((size) => size === rows.size);
+  });
+  if (group.main.entries.length) sentences.push(...recordSentences(group.main, locale, { rowsCovered }));
   for (const [collection, rows] of group.collections) {
     // Açıkça bildirilen tablo düzeni tek satırda da tablodur.
     if (rows.size === 1 && layout !== 'table') sentences.push(...singleRowSentences(group, collection, [...rows.values()][0], locale));

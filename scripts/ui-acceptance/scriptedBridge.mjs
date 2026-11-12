@@ -64,7 +64,10 @@ http.createServer((request, response) => {
     // Geçerli JSON ama beklenmeyen biçim (dizi, mesajsız ya da mesajları dizi olmayan istek) istemci hatasıdır; uç çökmez.
     if (!input || typeof input !== 'object' || Array.isArray(input) || !Array.isArray(input.messages)
       || input.messages.some((message) => !message || typeof message !== 'object')) { response.writeHead(400).end(); return; }
-    const { purpose, message, unscripted } = reply(input);
+    // Düzen iletisi bozuk JSON ya da çizilemeyen görünüm taşıyabilir: hata ucu sonlandırmaz, istemci hatası (400) olarak döner.
+    let replied;
+    try { replied = reply(input); } catch { response.writeHead(400).end(); return; }
+    const { purpose, message, unscripted } = replied;
     const finish = message.tool_calls ? 'tool_calls' : 'stop';
     if (CALLS) appendFileSync(CALLS, `${JSON.stringify({ at: new Date().toISOString(), purpose, ok: true, scripted: true, ...(unscripted ? { unscripted: true } : {}), toolCalls: message.tool_calls ? ['rota_plan'] : [] })}\n`);
     if (input.stream) {

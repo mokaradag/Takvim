@@ -1515,3 +1515,17 @@ test('ekip kadrosu üretim SQL sözleşmesi: üyelik değişimi iki yönlü kar�
   // Görev ayrıntısı kadro okumaz: canlı ekip koşulunu korur.
   assert.equal(toolQueries.AI_TOOL_TASK_DETAIL_SQL.includes('@withRoster'), false);
 });
+
+test('eşleşen görevi olmayan proje seçicili örgütsel kanıt, seçilen projenin erişim düzeyini kaydeder ve yetki değişmeden yeniden açılır', async (t) => {
+  const stack = stackFor(t, {}, AYSE);
+  // Seçilen projede bu dönemde terminli görev yoktur: nüfus boştur ama kanıt projeyi adlandırır.
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'department', dateFrom: '2099-01-01', dateTo: '2099-01-31' });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(result.data.groups, []);
+  const [saved] = ledger.authorizationEntries();
+  assert.equal(saved.authorizationProjectLevels.find((row) => String(row.projectId).toLowerCase() === PROJECTS.FULL.toLowerCase())?.level, 'FULL', 'seçilen projenin düzeyi kaydedilir');
+  const persisted = { ...saved, savedPopulation: true, payload: JSON.stringify({ ...JSON.parse(saved.payload), authorizationProjectLevels: saved.authorizationProjectLevels }) };
+  // Yetki dönemi aynıysa (yetki değişmedi) boş örgütsel kanıt yeniden açılır; dönem değiştiyse boş nüfus eskisi gibi kapalı kalır.
+  assert.ok(savedEvidenceRequirements(persisted, { sicil: AYSE }, { exact: true }), 'yetki değişmeden boş örgütsel kanıt yeniden açılır');
+  assert.equal(savedEvidenceRequirements(persisted, { sicil: AYSE }), null, 'dönem değiştiyse boş nüfus kanıtı açılmaz');
+});

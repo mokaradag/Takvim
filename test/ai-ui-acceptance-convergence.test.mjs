@@ -323,6 +323,24 @@ test('veri tohumu uyuşmayan konuşma atlanır ama önceki satırı silinmez; at
   assert.match(report.stdout, /Kapsam eksik \(sınanmadı\): B\/G1/u);
 });
 
+test('yalnızca seçilen konuşma yeniden koşulduğunda aynı koşunun seçilmeyen atlanmış konuşmaları rapordan düşmez', (t) => {
+  const dir = fakeDriverDir(t);
+  // Aynı koşuda G1 ve G2 atlanmıştı (veri tohumu yoktu); şimdi yalnızca G1 yeniden koşuluyor.
+  const skippedRow = (conversation) => ({ runId: 'güncel', skipped: 'UI_SEED=executive gerekir', failures: ['kapsam eksik'], profile: 'B', conversation, calls: [] });
+  writeFileSync(join(dir, 'out', 'B.json'), JSON.stringify([skippedRow('G1'), skippedRow('G2')]));
+  const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [{ name: 'G1', detail: 'balanced', turns: ['birinci soru'] },
+    { name: 'G2', detail: 'balanced', turns: ['ikinci soru'], seed: 'executive' }] };
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
+  // G1'in kendi sınama sonucu (sahte tarayıcıda model çağrısı kaydı yok) bu sınamanın konusu değildir; satırların korunması sınanır.
+  run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_ONLY: 'G1', UI_RUN_ID: 'güncel', UI_SEED: '' });
+  const rows = JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
+  assert.ok(rows.some((row) => row.conversation === 'G1' && !row.skipped), 'seçilen konuşma koşuldu');
+  assert.ok(rows.some((row) => row.conversation === 'G2' && row.skipped), 'seçilmeyen atlanmış konuşma korunur');
+  assert.equal(rows.filter((row) => row.conversation === 'G1' && row.skipped).length, 0, 'yeniden koşulan konuşmanın atlanmış satırı yenilenir');
+  const report = run('scripts/ui-acceptance/report.cjs', [join(dir, 'out')], { UI_RUN_ID: 'güncel' });
+  assert.equal(report.status, 1, 'sınanmamış konuşma varken rapor başarı saymaz');
+});
+
 test('UI_SCRIPTED=1 tek başına model kabulünü kapatmaz: betikli uç kaydı yoksa model çağrısı denetimi uygulanır', (t) => {
   const dir = fakeDriverDir(t);
   const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [{ name: 'durum', detail: 'balanced', turns: ['durumum'] }] };
@@ -365,6 +383,10 @@ test('betikli kabul yalnızca bütün turlarının altın planı olan konuşmala
   assert.doesNotMatch((await ask(seeded[0].turns[0])).choices[0].message.tool_calls[0].function.arguments, /"clarify"/u);
   const calls = readFileSync(join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
   assert.deepEqual(calls.map((call) => call.unscripted === true), [true, false]);
+  // Geçerli HTTP gövdesindeki bozuk düzen iletisi (geçersiz JSON görünüm) istemci hatasıdır: uç çökmez, sonraki istek yanıtlanır.
+  const malformed = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'OLGU SAYFASI (yalnızca veri):\n{bozuk' }] }) });
+  assert.equal(malformed.status, 400);
+  assert.doesNotMatch((await ask(seeded[0].turns[0])).choices[0].message.tool_calls[0].function.arguments, /"clarify"/u, 'uç ayakta kalır');
   // Sürücü: kapsam satırıyla yazılır, plansız konuşma koşulmaz ve satır üretmez.
   const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [
     { name: 'planlı', detail: 'balanced', turns: [seeded[0].turns[0]] }, { name: 'plansız', detail: 'balanced', turns: ['altın planı olmayan soru'] }] };

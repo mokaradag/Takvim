@@ -114,8 +114,11 @@ function scriptedQuestions() {
   // koşulmuş sayılmaz (önceki satırları silinmez) ve sonuçta eksik kapsam olarak kaydedilir: rapor tam kabul iddia etmez.
   const seedMismatch = (conversation) => Boolean(conversation.seed) && conversation.seed !== (process.env.UI_SEED || null);
   const rerun = new Set(scenario.conversations.filter((item) => !seedMismatch(item)).map((item) => item.name));
+  // Bu koşunun atlanmış satırı yalnızca konuşma bu yeniden koşuda yeniden seçildiyse yenilenir (yeniden atlanırsa yeniden yazılır);
+  // seçilmeyen konuşmaların atlanmış satırları korunur: sınanmamış konuşma rapordan sessizce düşmez.
+  const selected = new Set(scenario.conversations.map((item) => item.name));
   const results = process.env.UI_ONLY && fs.existsSync(resultFile)
-    ? JSON.parse(fs.readFileSync(resultFile, 'utf8')).filter((row) => !rerun.has(row.conversation) && !(row.skipped && row.runId === runId)) : [];
+    ? JSON.parse(fs.readFileSync(resultFile, 'utf8')).filter((row) => !rerun.has(row.conversation) && !(row.skipped && row.runId === runId && selected.has(row.conversation))) : [];
   try {
   await page.goto(`http://127.0.0.1:${scenario.port}/`, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: /Gerçek Sistemi aç/ }).click();

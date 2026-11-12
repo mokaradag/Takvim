@@ -188,6 +188,16 @@ async function groupedPage(t, options = {}) {
   return { parts, page: buildComposition({ parts, ...options }) };
 }
 
+test('düzyazılı yanıtta yumuşak işlemle atılan bilinmeyen kimlik, aynı paragrafta korunan geçerli önermeyi reddettirmez', async (t) => {
+  const { page } = await groupedPage(t, { detail: 'detailed' });
+  const [spoken, kept] = [1, 2].map((part) => page.view.propositions.find((item) => item.part === part).id);
+  const rows = page.view.tables.map((table) => ({ type: 'rows', source: table.id }));
+  const result = validateComposition(page, { blocks: [{ type: 'say', text: `{${spoken}}.` }, { type: 'say', items: [kept, 'P999'] }, ...rows] });
+  assert.equal(result.ok, true, JSON.stringify(result.issues));
+  assert.ok(result.blocks.some((block) => block.type === 'say' && block.items.includes(kept)), 'geçerli önerme korunur');
+  assert.equal(result.blocks.some((block) => (block.items || []).includes('P999')), false);
+});
+
 test('başlığın altına karışık bölüm önermeleri yerleştirilemez', async (t) => {
   const { page } = await groupedPage(t, { detail: 'detailed' });
   const ids = [1, 2].map((part) => page.view.propositions.find((item) => item.part === part).id);

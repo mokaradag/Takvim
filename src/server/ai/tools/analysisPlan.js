@@ -174,7 +174,10 @@ export function normalizedBrief(raw) {
   const personOf = (item) => item?.scope === 'person' && Array.isArray(item.names) && item.names.length === 1 && !item.level;
   const selfOf = (item) => item?.scope === 'self' && !item.level && !item.names?.length;
   const plainPair = pair && Object.keys(pair).every((field) => ['scope', 'names', 'focus'].includes(field)) && out.within == null && out.rows == null;
-  if (plainPair && ((selfOf(out) && personOf(pair)) || (personOf(out) && selfOf(pair))) && !out.withSelf) {
+  // Yönleri farklı iki kapsam tek karşılaştırmaya katlanmaz: katlama her yönü iki özneye de uygular (ör. kendi genel görünümü +
+  // kişinin termin yönleri sekiz okumaya büyür). Ek kapsamın yönü yazılmamışsa birincil yönleri devralır (aynı küme).
+  const sameFocus = (left, right) => !Array.isArray(right) || (Array.isArray(left) && left.length === right.length && right.every((item) => left.includes(item)));
+  if (plainPair && sameFocus(out.focus, pair.focus) && ((selfOf(out) && personOf(pair)) || (personOf(out) && selfOf(pair))) && !out.withSelf) {
     const person = personOf(out) ? out : pair;
     const focus = [...new Set([...(Array.isArray(out.focus) ? out.focus : []), ...(Array.isArray(pair.focus) ? pair.focus : [])])];
     delete out.also;
@@ -383,15 +386,9 @@ const request = (fields) => ({ layout: 'auto', ...fields });
  * Kapsam daraltılmışsa (within projesi, ekip, kişi) aynı yön daraltılmış görev nüfusundan okunur; nüfus hiçbir zaman
  * kabul edilen özetten geniş olmaz.
  */
-const portfolioWide = (base, today = null) => {
-  if (base.entities.length) return false;
-  const keys = Object.keys(base.filters);
-  if (!keys.length) return true;
-  // Bugünden başlayan yedi günlük dönem portföy özetinin kendi ölçüsüdür (`tasks.dueNext7Days`): dönem bu sütunla birebir karşılanır,
-  // portföy okuması daraltılmış görev gruplamasına düşmez (proje tablosu ve projeler arası bulgular kurulabilir). Başka her dönem ve
-  // süzgeç eskisi gibi daraltılmış görev nüfusundan okunur.
-  return Boolean(today) && keys.length === 2 && base.filters.dateFrom === today && base.filters.dateTo === addDays(today, 6);
-};
+// Yalnızca dönemsiz ve süzgeçsiz portföy: aracın açık/tamamlanan/gecikmiş sayıları bütün görünür görevlerdendir; yedi günlük dönem
+// bile (yalnızca `tasks.dueNext7Days` o dönemdir) bu sayıları daraltmaz. Dönemli her portföy sorusu dönemli görev gruplamasından okunur.
+const portfolioWide = (base) => !base.entities.length && !Object.keys(base.filters).length;
 
 /** Görev satırının bağlam sütunları: kişi kapsamında sorumlu, proje dışı kapsamda proje. */
 function rowContext(analysis, base) {
@@ -492,7 +489,7 @@ function focusRequest(focus, analysis, base, today = null) {
   if (compare) return comparisonFor(focus, analysis, base, focus === 'upcoming' ? ahead : window, today);
   switch (focus) {
     case 'overview':
-      if (analysis.scope === 'projects' && portfolioWide(base, today)) {
+      if (analysis.scope === 'projects' && portfolioWide(base)) {
         return request({ operation: 'value', metrics: ['projects.total', 'tasks.open', 'tasks.overdue', 'tasks.dueNext7Days', 'projects.withOverdue'],
           population: { tool: 'rota_portfolio_summary' } });
       }
@@ -539,7 +536,7 @@ function focusRequest(focus, analysis, base, today = null) {
     }
     case 'projects':
       if (analysis.scope === 'project') return null;
-      if ((analysis.scope === 'projects' || analysis.scope === 'all') && portfolioWide(base, today)) {
+      if ((analysis.scope === 'projects' || analysis.scope === 'all') && portfolioWide(base)) {
         // Aşama G: tamamlanan görev sayısı da okunur (aynı satır, ek okuma yok): proje başına tamamlanma ile gecikmenin birlikte
         // değerlendirilmesi ("tamamlanma yüksek ama gecikme sürüyor") yalnızca tam satırla kurulabilir. Portföy tablosu projeler
         // arası bulguların nüfusudur: ilk N değil, aracın kendi sınırıyla (aracın varsayılan sırası: gecikme) TAM listedir; kesilirse
@@ -590,11 +587,13 @@ export function expandAnalysis(analysis, { previous = null, today = null, detail
   };
   if (['previous', 'row'].includes(analysis.scope)) {
     const resolved = previousBase(analysis, previous);
-    analysis = { ...analysis, scope: resolved.scope };
-    return expandWith(analysis, narrowed(resolved.base), today, detail, chart, charts);
+    // Önceki ekip kapsamının düzeyi de öznenin parçasıdır: örgütsel kırılımın düzeyi (ör. bölüm → birim) ondan seçilir.
+    const level = analysis.scope === 'previous' && resolved.scope === 'team' && previous.level ? { level: previous.level } : {};
+    analysis = { ...analysis, scope: resolved.scope, ...level };
+    return expandWith(analysis, narrowed(resolved.base), today, detail, chart, charts, reserve);
   }
   if (analysis.also?.length) return expandLayers(analysis, today, { chart, charts, reserve });
-  return expandWith(analysis, narrowed(scopeBase(analysis)), today, detail, chart, charts);
+  return expandWith(analysis, narrowed(scopeBase(analysis)), today, detail, chart, charts, reserve);
 }
 
 /** Aşama G: her kapsamın karşılaştırılabilir özet ölçüleri (aynı tanım, aynı araç; kapsamlar arası toplam ya da pay yoktur). */
@@ -647,10 +646,13 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
   const add = (items, owner) => {
     for (const item of items) { seen.add(JSON.stringify(item)); parts.push(item); owners.set(item, owner); }
   };
-  layers.forEach((layer, index) => {
+  // Sunucunun kapsam gereği eklediği okumalar (portföy kapsamında proje satırları, dönemi taşıyan yön) bildirilen dağılım yönlerinden
+  // ÖNCE yer alır: önceki kapsamların dağılımları bütçeyi doldurup kapsamın zorunlu okumasını dışarıda bırakmaz.
+  const pass = (required) => layers.forEach((layer, index) => {
     const layerAnalysis = layerAnalysisOf(layer);
     const based = basedOf(layer);
     for (const focus of effectiveFocus(layerAnalysis, today)) {
+      if (layer.focus.includes(focus) === required) continue;
       if (layerCovered(focus, windowed)) continue;
       const produced = focusRequest(focus, layerAnalysis, based, today);
       if (!produced) {
@@ -665,6 +667,8 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
       add(items, { layer: index, focus });
     }
   });
+  pass(true);
+  pass(false);
   // Adı verilen grafik türünün okuması birincil kapsamdan (tek nüfus; kapsamlar birleştirilmez), yalnızca yer kaldıysa; yoksa
   // grafik notu türün neden çizilemediğini söyler.
   const primary = layers[0];
@@ -693,6 +697,18 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
     if (items.length && parts.length + items.length <= budget) add(items, { layer: 0, focus });
   }
+  // Bölüm ya da direktörlük düzeyindeki ekip kapsamının doğal kırılımı alt örgüt birimleridir (tek kapsamlı özetteki kuralın aynısı):
+  // `org` yazılmadıysa kalan bütçeyle o kapsamın kendi nüfusu ve yetkisiyle eklenir. İsteğe bağlıdır: yer yoksa eklenmez ve
+  // bildirilen yön sayılmaz (atlanan yön notu da yazılmaz); başka kapsamın okuması değişmez.
+  layers.forEach((layer, index) => {
+    if (layer.scope !== 'team' || !['department', 'directorate'].includes(layer.level)) return;
+    const layerAnalysis = layerAnalysisOf(layer);
+    if (effectiveFocus(layerAnalysis, today).includes('org')) return;
+    let produced = null;
+    try { produced = focusRequest('org', layerAnalysis, basedOf(layer), today); } catch (error) { produced = optionalRead(error); }
+    const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
+    if (items.length && parts.length + items.length <= budget) add(items, { layer: index, focus: 'org' });
+  });
   // Bütçe önce bütün kapsamların özetine ayrılır; yanıt sırası ise kapsam kapsamdır (özet ve o kapsamın dağılımları ardışık).
   const ordered = parts.map((part, position) => ({ part, position, layer: owners.get(part).layer })).sort((a, b) => a.layer - b.layer || a.position - b.position).map((item) => item.part);
   return Object.assign(ordered, { omitted: Object.freeze(omitted), sections: Object.freeze(ordered.map((part) => Object.freeze({ ...owners.get(part) }))) });
@@ -779,7 +795,11 @@ function budgetDetails(analysis) {
   return ['$.analysis.focus:requestBudget'];
 }
 
-function expandWith(analysis, base, today = null, detail = null, chart = null, charts = null) {
+function expandWith(analysis, base, today = null, detail = null, chart = null, charts = null, reserve = 0) {
+  // İsteğe bağlı okumalar (grafik, bütünleyici, alt birim kırılımı) açık istekler için ayrılan yeri kullanmaz; bildirilen yönler
+  // eskisi gibi `maxParts` içinde kalmalıdır (toplam bütçe ayrıca denetlenir).
+  const optionalBudget = Math.max(0, ANALYSIS_LIMITS.maxParts - reserve);
+  const detailedBudget = Math.max(0, ANALYSIS_LIMITS.maxDetailedParts - reserve);
   const window = { ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) };
   base = { ...base, filters: { ...base.filters, ...window } };
   const produce = (focus) => analysis.withSelf && analysis.scope === 'person' ? selfComparison(focus, analysis, base, today, chart) : focusRequest(focus, analysis, base, today);
@@ -809,7 +829,7 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
     let produced = null;
     try { produced = produce(extra); } catch (error) { produced = optionalRead(error); }
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
-    if (items.length && parts.length + items.length <= ANALYSIS_LIMITS.maxDetailedParts) parts.push(...items);
+    if (items.length && parts.length + items.length <= detailedBudget) parts.push(...items);
   }
   // Bölüm ya da direktörlük düzeyindeki ekip özetinin doğal kırılımı alt örgüt birimleridir (direktörlük → bölümler, bölüm → birimler):
   // yönetici bu düzeyde "hangi birimde" sorusunu sorar. Model `org` yönünü yazmadıysa okuma sunucuca eklenir (portföy kapsamındaki
@@ -819,7 +839,7 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
     let produced = null;
     try { produced = produce('org'); } catch (error) { produced = optionalRead(error); }
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
-    if (items.length && parts.length + items.length <= ANALYSIS_LIMITS.maxParts) parts.push(...items);
+    if (items.length && parts.length + items.length <= optionalBudget) parts.push(...items);
   }
   return parts;
 
@@ -838,7 +858,7 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
       const bases = people.length > 1 ? people.map((person) => ({ ...base, entities: [person, ...common] }))
         : analysis.withSelf ? [base, { filters: { ...base.filters, assignee: 'me' }, entities: common }] : [base];
       const splits = bases.map((side) => groups(side, 'project', { split: true, future: futureWindow(analysis, today) })).filter((split) => !seen.has(JSON.stringify(split)));
-      if (parts.length + splits.length <= ANALYSIS_LIMITS.maxParts) {
+      if (parts.length + splits.length <= optionalBudget) {
         for (const split of splits) { seen.add(JSON.stringify(split)); parts.push(split); }
       }
     }
@@ -865,7 +885,7 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
         } else produced = analysis.withSelf ? selfComparison(needed, analysis, base, today, chart) : produce(needed);
       } catch (error) { produced = optionalRead(error); }
       const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
-      if (items.length && parts.length + items.length <= ANALYSIS_LIMITS.maxParts) {
+      if (items.length && parts.length + items.length <= optionalBudget) {
         for (const item of items) seen.add(JSON.stringify(item));
         parts.push(...items);
       }

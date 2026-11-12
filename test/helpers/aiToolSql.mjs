@@ -93,12 +93,16 @@ function personOrg(db, sicil, field) {
 }
 
 /** Görev olgusu toplu işinin ekip kadrosu sonuç kümesi: anlık görüntüdeki çalışanlar (kullanıcı hariç), Sicil sırasıyla. */
-function teamRoster(db, params) {
+function teamRoster(db, params, facts = [], assignees = []) {
   const members = [...rosterSnapshot(db, params)].sort((a, b) => a - b);
   const live = liveRoster(db, params);
+  // Üretimdeki kadro/atama tutarlılığı: okunan görevlerde kadro üyesinin ataması kimliği açık atama olarak dönmediyse 1.
+  const snapshot = new Set(members);
+  const inconsistent = facts.some((fact) => assigneesOf(db, fact.TaskId).some((assignment) => snapshot.has(Number(assignment.Sicil))
+    && !assignees.some((row) => row.TaskId === fact.TaskId && Number(row.Sicil) === Number(assignment.Sicil) && row.IdentityVisible === 1)));
   // Üretimdeki @rosterChanged: anlık görüntü ile toplu işin sonundaki canlı üyelik farklıysa 1. `rosterMembershipChanged` kancası,
   // üyeliğin toplu iş sırasında değişip eski hâline dönmesini (kümeler aynı, işaret 1) taklit eder.
-  const changed = db.rosterMembershipChanged || JSON.stringify(members) !== JSON.stringify(live) ? 1 : 0;
+  const changed = db.rosterMembershipChanged || inconsistent || JSON.stringify(members) !== JSON.stringify(live) ? 1 : 0;
   return members.slice(0, Number(params.rosterRows)).map((employee) => ({ Sicil: employee, DisplayName: personName(db, employee), MembershipChanged: changed }));
 }
 
@@ -198,7 +202,10 @@ function assigneeRows(db, scope, facts, params = {}) {
   const rows = [];
   for (const fact of facts) {
     for (const assignment of assigneesOf(db, fact.TaskId)) {
-      const identityVisible = fact.IdentityBase === 1 || assignment.Sicil === scope.sicil || executiveOf(db, scope.sicil, assignment.Sicil);
+      // `assignmentScopeExcluded`: atama okumaları sırasında yönetim kapsamından geçici olarak çıkmış çalışanları taklit eder
+      // (kadro anlık görüntüsü ve toplu işin sonundaki canlı üyelik değişmez).
+      const identityVisible = fact.IdentityBase === 1 || assignment.Sicil === scope.sicil
+        || (executiveOf(db, scope.sicil, assignment.Sicil) && !(db.assignmentScopeExcluded || []).includes(Number(assignment.Sicil)));
       if (!identityVisible && !fact.IsOwnAssignee) continue;
       rows.push({
         TaskId: fact.TaskId,
@@ -287,8 +294,9 @@ function taskFacts(db, params) {
       const project = projectRow(db, id);
       return { ProjectId: project.ProjectId, ProjectName: project.ProjectName, ProjectCode: project.ProjectCode, SourceType: project.SourceType, ...access };
     });
-  return [facts, projects, params.withAssignees ? assigneeRows(db, scope, facts, params) : [],
-    ...(Number(params.withRoster) === 1 && params.assigneeMode === 'team' ? [teamRoster(db, params)] : [])];
+  const assignees = params.withAssignees ? assigneeRows(db, scope, facts, params) : [];
+  return [facts, projects, assignees,
+    ...(Number(params.withRoster) === 1 && params.assigneeMode === 'team' ? [teamRoster(db, params, facts, assignees)] : [])];
 }
 
 function taskVisibility(db, params) {
