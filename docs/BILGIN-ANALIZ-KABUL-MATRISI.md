@@ -224,8 +224,9 @@ Tek vakalık sınırlı Haiku denemesi (`PHASE4E_TIER=F`, `PHASE4E_CASES=o39`) a
 
 ## 7. Aşama G — yönetici ve proje zekâsı (9 Kasım 2026)
 
-**Durum: SÜRÜYOR.** Belirlenimci kabul ve betikli görsel kabul geçti; Haiku nitelendirmesi koşuldu ve aşağıda olduğu gibi
-kaydedildi (kısmi geçiş); Windows VM yeniden oynatması (§11 yordamı, Qwen/Gemma) **bekliyor**. Aşama G bu nedenle
+**Durum: SÜRÜYOR.** Belirlenimci kabul geçti; betikli görsel kabulün dört görünümlü tam kümesi (§7.5, 36 ekran) önceki bir
+turun sonucudur, bu turda yalnızca B profilinin G1–G5 konuşmaları masaüstü görünümde yeniden koşuldu (§7.8); Haiku nitelendirmesi
+koşuldu ve aşağıda olduğu gibi kaydedildi (kısmi geçiş); Windows VM yeniden oynatması (§11 yordamı, Qwen/Gemma) **bekliyor**. Aşama G bu nedenle
 TAMAMLANDI olarak işaretlenmez. Üç kanıt düzeyi ayrıdır: belirlenimci (altın plan, üretim hizmeti), Haiku (gerçek model,
 planlayıcı ve düzen), Windows VM (kurum içi modeller; koşulmadı).
 
@@ -279,7 +280,8 @@ taşı, görev başlığında istem enjeksiyonu). Gerçek kişi ya da kurum kayd
 `test/ai-executive-intelligence.test.mjs`: 48 altın planlı vaka (canlı nitelendirmenin beklentisinin aynısıyla:
 `executiveExpectation`) + 26 hedefli sınama (çok kapsamlı plan, birleşik plan, kadro tamlığı, örgütsel kırılım, kilometre
 taşı, yetki ve enjeksiyon, saf bulgu birimleri, şema boyutu, puanlayıcı). Tam küme: `npm test -- --test-concurrency=4`
-**5951/5951** (başarısız/atlanan 0), `npm run lint` uyarısız, `npm run build` başarılı.
+ilk kayıtta **5951/5951**, `890e7c9` doğrulamasında **6006/6006**; yakınsama turunun koşusunda (§7.8) **6065/6065** (başarısız/atlanan
+0), `npm run lint` uyarısız, `npm run build` başarılı.
 
 ### 7.4 Haiku nitelendirmesi (claude-haiku-4-5-20251001, `--effort low`, `MAX_THINKING_TOKENS=0`)
 
@@ -367,7 +369,8 @@ söylenen sayıyı yineliyor; açılış cümlesi kapsamı adlandırmıyor; düz
 **Açık kalan model davranışları.** (1) Kullanıcının kendi birimi/bölümü sorulduğunda ad isteme (`clarify`). (2) Sorunun saydığı
 yönlerden birinin atlanması (F hedeflideki `analitik yönler eksik`). (3) İlk yanıtın düz metin olması onarım hakkını tüketiyor.
 (4) Altıdan çok yön ya da ikiden çok grafik yazılması. (5) g05, g07, g32, g35 beklentileri sorunun adlandırmadığı bir yön ya da kapsam
-istiyor; beklenti değiştirilmedi. (6) Betikli arayüz kabulü tarayıcıyla yeniden koşulmadı.
+istiyor; beklenti değiştirilmedi. (6) Dört görünümlü betikli arayüz kabulü (36 ekran) sonraki değişikliklerden sonra tarayıcıyla
+yeniden koşulmadı; yakınsama turunda yalnızca B profili masaüstü görünümde yeniden koşuldu (§7.8).
 
 ### 7.5 Görsel kabul (gerçek arayüz, betikli planlar)
 
@@ -375,7 +378,8 @@ Gerçek `next build` + SQL ikizi (yönetici sentetik verisi, `UI_SEED=executive`
 (`scripts/ui-acceptance/scriptedBridge.mjs`, `UI_SCRIPTED=1`): planlayıcı turunda altın plan, düzen turunda kapsayan düzen;
 model çağrısı yoktur, model kalitesi bu kanıtın kapsamında değildir. 9 G vakası (çok kapsamlı özet, örgütsel kırılım, proje
 sağlığı, kadro tamlığı, portföy + ekip + kilometre taşı, özet + grafik + liste, örtüşen seriler, bütçeyi aşan kapsam, iki proje
-sağlığı) × 4 görünüm (masaüstü/mobil × açık/koyu) = **36 ekran görüntüsü, 0 başarısızlık**; görüntüler incelendi. İnceleme
+sağlığı) × 4 görünüm (masaüstü/mobil × açık/koyu) = **36 ekran görüntüsü, 0 başarısızlık** (önceki turun sonucu; o turdan sonraki
+değişikliklerle dört görünüm yeniden koşulmadı); görüntüler incelendi. İnceleme
 bulguları ve düzeltmeleri: dar ekranda tablo hücresi adı sözcük ortasından bölüyordu (hücre artık yalnızca sözcük sınırında
 kırılır; tablo kendi kabında kayar); kapsam karşılaştırması sayıları bölümlerle yineliyordu (giriş artık yalnızca oranları
 karşılaştırır); yığılmış grafik başlığı grubu adlandırmıyordu ("Projelere göre durum"); dönemli öncelik satırları "kendi
@@ -404,3 +408,38 @@ Kapasite verisi yoktur (görev adedi emek değildir); tarihsel karşılaştırma
 sıradaki tarih görünürse kesindir). Portföy proje tablosu en çok 25 projedir (fazlasında projeler arası bulgu kurulmaz). Çok kapsamlı
 plan en çok üç kapsamdır; farklı dönemli kapsamlar tek planda kabul edilmez. Haiku'da en sık açık davranışlar: kapsam/yön seçimi,
 geçersiz plan tekrarı, düzen reddi → Derin isteği (model değişkenliği; aynı vakalar yeniden koşuda geçebiliyor).
+
+### 7.8 Yakınsama turu (12 Kasım 2026)
+
+PR #116 inceleme bulguları (60 bulgu, `0eb4a21` üzerinde) kök nedenlerine göre birleştirilip düzeltildi; her düzeltilen kök neden,
+düzeltme olmadan başarısız olduğu doğrulanan bir regresyon sınamasıyla korunur (yedek isteğin son doğrulama reddinde geri alınması
+hariç: bu yol genel arayüzden belirlenimci olarak üretilemez, değişmez kod incelemesiyle doğrulandı).
+
+- **Kanıt ve anlatım:** sıralı önekten satır düştüyse sıralama başı, kesin kilometre taşı sayısı ve en uzun gecikme kurulmaz; metin,
+  iş dağılımı düğümü, öncelik ya da oluşturan koşuluyla daraltılmış liste açık kilometre taşı nüfusu sayılmaz; adaş kilometre taşları
+  proje adıyla ayrılır; durumla daraltılmış tablodan tamamlanma payı kurulmaz; bulgu yinelemesi sayıları ve sıradan bağımsız kimlik
+  kümesini anahtarlar; kendi işleri + proje örtüşmesi "kişinin işleri" diye anlatılmaz; daraltılmış sıfır sayıma "boşta değil" çekincesi
+  eklenmez; örgütsel satırda sorumlu kapsamı ölçütte kalır; proje süzgeçli kadro notu sıfır satırı seçilen projeyle sınırlar.
+- **Düzen:** yumuşak işlemle boşalan paragraf parçası yanıtı reddettirmez; tablo girişi yalnızca tablo hemen ardındaysa bastırılır;
+  çok kapsamlı özetin yanındaki açık istek bölümü başlığını korur; örtüşen seri notu yalnızca iş yükü grafiğini yerine geçen grafik
+  sayar; tamamlanamayan kapsam bölümü yönüyle adlandırılır ve kısmen okunan kapsamın okunmayan yön notu korunur.
+- **Plan ve onarım:** daraltılmış birincil kapsamın ek yinelemesi birleşmez; dizi olmayan yön katlanmaz; kişiyle kendini
+  karşılaştırmada anlamsız yön reddedilir; fazla ek istek kısaltılmadan reddedilir; yazılmamış koleksiyon etkin koleksiyonla
+  eşleşir; birleşen açık tam liste sıralama yedeğine düşmez; açık istekle okunan yön "gösterilmedi" diye not edilmez; boş ek istekten
+  sonraki onarım yolu kendi yuvasına bağlanır; nüfus reddi ölçüyü değiştirme izni değildir; yalnızca açık istek tamamlanamadıysa özetin
+  takip bağlamı kurulur; yedek istek kabul edilmezse planlayıcının özgün isteği geri konur; kadro değişim denetimi canlı üyeliği tek
+  deyimle okur; planlayıcı yönergesi sayı verilen sıralamayı ve adlı proje karşılaştırmasını doğru yola yönlendirir.
+- **Kabul denetimleri:** dönem okuması başarılı olmalı; kilometre taşı ve proje kırılımı yönleri nüfusuyla sınanır; atlanan yön notu
+  yalnızca adını verdiği kapsamın yönünü mazur gösterir; açık liste ek daraltmasız, istenen sıra ve sınırla, satırlarıyla teslim
+  edilmeli; eksik kadro çekincesi yalnızca iş yükü kanıtında ihlaldir; tek kapsamlı ekip turunun yönleri kanıtla sınanır; özetin dönemi
+  beklentiye girer; planlayıcı puanı beklenmeyen kapsamı reddeder (x09), kadroyla okunan iş yükü ister (x04) ve planlanan x20 yanıtında
+  birim nüfusu ister; betikli kipte sunucu yeniden yürütme sözleşmesi denetlenir ve hiç betikli konuşması olmayan profil eksik
+  kapsamdır; G1–G3 kabulü kapsam başlıklarını, birim tablosunu ve kilometre taşı adlarını ister; Ilgaz bölüm ve direktörlük kapsamlarında
+  da üyedir; zorunlu turdaki düz metin yeniden denemesi önbellek zorunluluğunu atlatamaz.
+- **Doğrulama (bu tur):** `npm test -- --test-concurrency=4` **6065/6065** (başarısız/atlanan 0); `npm run lint` uyarısız;
+  `NEXT_TELEMETRY_DISABLED=1 npm run build` başarılı; betikli arayüz kabulü (`UI_SCRIPTED=1 UI_SEED=executive`, B profili, masaüstü,
+  varsayılan tema) G1–G5 **5/5** (B profilinin diğer 21 konuşması betikli planı olmadığından koşulmadı). Mobil/koyu görünümler ve Haiku
+  nitelendirmesi bu turda yeniden koşulmadı; Haiku sonuçları §7.4b'deki son ölçümdür (yakınsamadı).
+- **Kapsam dışı bırakılan (gerekçeli):** kadro anlık görüntüsü satır sınırına bağlanmadı (sınır, sınırın ötesindeki üyelerin görevlerini
+  sessizce dışarıda bırakırdı; okuma ekip büyüklüğüyle sınırlıdır ve SQL süre bütçesi geçerlidir); öncelik kapanışı paragraf düzeyinde
+  atıf taşır (bütün akıcı paragraflarla aynı sözleşme).

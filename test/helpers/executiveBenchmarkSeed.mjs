@@ -78,8 +78,9 @@ export function executiveBenchmarkSeed() {
       ...(done ? { ActualStart: d(offset - 8), ActualFinish: d(Math.min(offset, 0)), Progress: 100 } : { Progress: status === 'p' ? 40 : 0 }), PlannedHours: 8 });
     for (const sicil of sicils) seed.taskAssignees.push({ TaskId: id, Sicil: sicil });
   });
-  // B'nin birim kadrosunda görünür açık görevi olmayan üye (kadro okunmadan bilinemez).
-  seed.executiveScope.push({ ManagerSicil: P.B, EmployeeSicil: EXEC_PEOPLE.ILGAZ, ScopeType: 'UNIT' });
+  // B'nin birim kadrosunda görünür açık görevi olmayan üye (kadro okunmadan bilinemez). Birim üyesi bölüm ve direktörlük kapsamında
+  // da üyedir (F verisindeki birim üyeleriyle aynı kural): iç içe kapsamların nüfusu tutarlı kalır.
+  seed.executiveScope.push(...['UNIT', 'DEPARTMENT', 'DIRECTORATE'].map((ScopeType) => ({ ManagerSicil: P.B, EmployeeSicil: EXEC_PEOPLE.ILGAZ, ScopeType })));
   return seed;
 }
 

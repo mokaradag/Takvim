@@ -8,7 +8,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const { semanticFailures, completionFailures, modelFailures } = require('./expectations.cjs');
+const { semanticFailures, completionFailures, modelFailures, replayFailures } = require('./expectations.cjs');
 
 const [scenarioFile, outDir] = process.argv.slice(2);
 const scenario = JSON.parse(fs.readFileSync(scenarioFile, 'utf8'));
@@ -97,19 +97,27 @@ function scriptedQuestions() {
   // UI_SCRIPTED=1: betikli uç yalnızca altın planı olan soruları yanıtlayabilir. Kapsam, bütün turlarının planı olan konuşmalardır;
   // diğerleri bu kipte koşulmaz (model kabulü gerektirir) ve sayısıyla birlikte açıkça yazılır. Kapsamda konuşma kalmazsa rapor
   // satırsız kalır ve koşu başarısızdır. Uç betikli değilse (liste alınamazsa) kapsam daraltılmaz: model kabulü uygulanır.
+  const resultFile = path.join(outDir, `${scenario.profile}.json`);
+  const runId = process.env.UI_RUN_ID || require('crypto').randomUUID();
   if (process.env.UI_SCRIPTED === '1') {
     const known = await scriptedQuestions();
     if (known) {
       const covered = scenario.conversations.filter((item) => item.turns.every((text) => known.has(String(text).trim())));
       process.stdout.write(`betikli kapsam: ${scenario.profile} ${covered.length}/${scenario.conversations.length} konuşma (kalanı betikli planı olmadığı için koşulmadı; model kabulü gerekir)\n`);
+      // Seçilen profilin hiçbir konuşması betikli değilse profil sınanmamıştır: eksik kapsam satırı yazılır, rapor koşuyu başarı saymaz
+      // (başka profilin geçen satırları bu profilin sınanmadığını örtemez).
+      if (!covered.length && scenario.conversations.length) {
+        const reason = 'betikli plan yok';
+        fs.writeFileSync(resultFile, JSON.stringify([{ runId, skipped: reason, failures: [`kapsam eksik: ${reason}`], profile: scenario.profile, conversation: '*', detail: null,
+          turn: 0, question: '', ms: 0, rendered: { status: 'skipped', tables: [], charts: [] }, server: null, calls: [] }], null, 2));
+        return;
+      }
       scenario.conversations = covered;
     }
   }
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1500, height: 1000 } });
   const page = await context.newPage();
-  const resultFile = path.join(outDir, `${scenario.profile}.json`);
-  const runId = process.env.UI_RUN_ID || require('crypto').randomUUID();
   // Senaryonun gerektirdiği sentetik veri (ör. Aşama G: UI_SEED=executive) bu koşuda yoksa konuşma sınanmaz. Atlanan konuşma yeniden
   // koşulmuş sayılmaz (önceki satırları silinmez) ve sonuçta eksik kapsam olarak kaydedilir: rapor tam kabul iddia etmez.
   const seedMismatch = (conversation) => Boolean(conversation.seed) && conversation.seed !== (process.env.UI_SEED || null);
@@ -166,7 +174,8 @@ function scriptedQuestions() {
       // değişkeninden değil, bu turun çağrı kayıtlarından doğrulanır: canlı köprü kullanıldıysa (kayıtlarda `scripted` yoksa) model
       // kabulü uygulanır; değişken tek başına model denetimini kapatmaz.
       const scripted = process.env.UI_SCRIPTED === '1' && calls.length > 0 && calls.every((call) => call.scripted === true);
-      const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace), ...(scripted ? [] : modelFailures(expected, trace, calls))];
+      // Betikli kipte yalnızca canlı model gereksinimleri atlanır; sunucu yeniden yürütme sözleşmesi her iki kipte denetlenir.
+      const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace), ...(scripted ? replayFailures(expected, trace, calls) : modelFailures(expected, trace, calls))];
       // "any": türü belirtilmemiş grafik isteği; görünür herhangi bir grafik yeterlidir.
       if (expectedChart && !rendered.charts?.some((chart) => (expectedChart === 'any' || chart.type === expectedChart) && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);
       if (!trace) failures.push('bu tura ait sunucu kanıtı yok');

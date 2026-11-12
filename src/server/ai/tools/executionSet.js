@@ -6,7 +6,7 @@ import { invalidArguments, TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { TOOL_LIMITS } from './toolLimits.js';
 import { requestSchema } from './requestDeclaration.js';
 import { getRotaTool } from './toolRegistry.js';
-import { effectiveSort, readKey } from './requestPopulation.js';
+import { effectiveCollection, effectiveSort, readKey } from './requestPopulation.js';
 import { analysisSchema, ANALYSIS_LIMITS, expandAnalysis, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
 import { expandedAnswerDetail } from '../../../domain/ai/answerDetail.js';
 
@@ -167,7 +167,8 @@ function decodeNestedJson(plan) {
   }
   decoded.request = decodeRequest(decoded.request);
   if (decoded.request === undefined) delete decoded.request;
-  if (Array.isArray(decoded.additionalRequests)) decoded.additionalRequests = decoded.additionalRequests.slice(0, PLANNER_LIMITS.maxRequests).map((item) => decodeRequest(decodedJson(item)));
+  // Çözümleme sınırlı kalır ama dizi sessizce kısaltılmaz: sınırın bir fazlası tutulur, sayım denetimi fazla isteği reddeder.
+  if (Array.isArray(decoded.additionalRequests)) decoded.additionalRequests = decoded.additionalRequests.slice(0, PLANNER_LIMITS.maxRequests + 1).map((item) => decodeRequest(decodedJson(item)));
   if (Array.isArray(decoded.calls)) {
     decoded.calls = decoded.calls.map((item) => (item && typeof item === 'object' && !Array.isArray(item) ? { ...item, arguments: decodedJson(item.arguments) } : item));
   }
@@ -331,6 +332,8 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const merge = (expanded) => {
       const parts = [...expanded];
       const kept = [];
+      // Açık isteğin birleştiği özet okumaları: bölüm açık isteğin koşulunu (ör. tam liste) taşır, özetin sıralama yedeğine düşmez.
+      const merged = new Set();
       for (const item of explicit) {
         const index = transferable(item) ? parts.findIndex((part) => coveredRequest(part, item)) : -1;
         if (index < 0) { kept.push(item); continue; }
@@ -338,26 +341,35 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
         const limit = Number.isInteger(item.rank?.limit) ? item.rank.limit : null;
         if (layout && parts[index].layout !== 'auto' && parts[index].layout !== layout) { kept.push(item); continue; }
         parts[index] = { ...parts[index], ...(layout ? { layout } : {}), ...(limit ? { rank: { ...parts[index].rank, limit } } : {}) };
+        merged.add(index);
       }
-      return { parts, kept };
+      return { parts, kept, merged: [...merged].sort((a, b) => a - b) };
     };
     // Açık istekler için yer ayrılır (tek ya da çok kapsamlı özette): isteğe bağlı okumalar (grafik, bütünleyici, alt birim kırılımı,
     // dağılım yönleri) kalan bütçeyle eklenir. Ayrılan yer açılımı değiştirip bir isteğin kapsanmasını bozabilir; ayrılan yer kalan
     // istek sayısına ulaşana dek yeniden hesaplanır (yer yalnızca büyür; en çok `maxParts` tur).
     let reserve = 0;
-    let expanded = expand(reserve);
-    let { parts: analysisParts, kept } = merge(expanded);
+    const initial = expand(reserve);
+    let expanded = initial;
+    let { parts: analysisParts, kept, merged } = merge(expanded);
     while (kept.length > reserve && analysisParts.length + kept.length > ANALYSIS_LIMITS.maxParts && reserve < ANALYSIS_LIMITS.maxParts) {
       reserve = kept.length;
       expanded = expand(reserve);
-      ({ parts: analysisParts, kept } = merge(expanded));
+      ({ parts: analysisParts, kept, merged } = merge(expanded));
     }
     const sections = [...analysisParts, ...kept];
     if (sections.length > ANALYSIS_LIMITS.maxParts) throw invalidArguments(['$.analysis.focus:requestBudget']);
     const [request, ...additionalRequests] = sections;
     // Bölümlerin özet sahipliği (kapsam ve yön): sunum başlıkları ve takip bağlamı bunu kullanır; açık istek bölümü özetin değildir.
-    const owned = { analysisParts: analysisParts.length, ...(expanded.sections ? { sections: expanded.sections } : {}) };
-    const omitted = expanded.omitted?.length ? { omitted: expanded.omitted } : {};
+    const owned = { analysisParts: analysisParts.length, ...(expanded.sections ? { sections: expanded.sections } : {}), ...(merged.length ? { explicitParts: Object.freeze(merged) } : {}) };
+    // Ayrılan yer yüzünden okunmayan yön, ayrı bölüm olarak kalan eşdeğer açık istekle zaten okunuyorsa "gösterilmedi" denmez:
+    // yer ayrılmamış açılımda o yönün bütün okumaları kalan açık isteklerce karşılanıyorsa not düşer.
+    const satisfied = (item) => {
+      const reads = initial.filter((part, position) => initial.sections?.[position]?.layer === item.layer && initial.sections[position].focus === item.focus);
+      return reads.length > 0 && reads.every((part) => kept.some((other) => coveredRequest(part, other)));
+    };
+    const notRead = (expanded.omitted || []).filter((item) => !satisfied(item));
+    const omitted = notRead.length ? { omitted: Object.freeze(notRead) } : {};
     // Açık isteğin birleşik plandaki yolu → modelin kendi yazdığı yol: o istekteki sorun özete değil isteğin kendisine bağlanır
     // (model hangi alanı düzelteceğini görür; özetin genel "geçersiz" ayrıntısına dönüşmez).
     const own = (item) => (item === plan.request ? '$.request' : `$.additionalRequests[${[].concat(plan.additionalRequests).indexOf(item)}]`);
@@ -436,11 +448,13 @@ function coveredRequest(part, item) {
   const same = (key) => stableJson(part[key] ?? null) === stableJson(item[key] ?? null);
   const alike = (key) => stableJson(loose(part[key] ?? null)) === stableJson(loose(item[key] ?? null));
   // Nüfus etkin sırayla karşılaştırılır: yazılmamış sıra aracın/sıralamanın varsayılanıdır (aynı okuma iki kez okunmaz).
+  // Koleksiyon da etkin değerle karşılaştırılır: yazılmamış koleksiyon aracın tek satır koleksiyonudur (tamamlama kuralı).
   const shaped = (request) => {
     if (!request.population || typeof request.population !== 'object' || Array.isArray(request.population)) return request.population ?? null;
-    const { sort: _sort, ...rest } = request.population;
+    const { sort: _sort, collection: _collection, ...rest } = request.population;
     const sort = effectiveSort(request);
-    return { ...rest, ...(sort ? { sort } : request.population.sort != null ? { sort: request.population.sort } : {}) };
+    const collection = effectiveCollection(request);
+    return { ...rest, ...(collection != null ? { collection } : {}), ...(sort ? { sort } : request.population.sort != null ? { sort: request.population.sort } : {}) };
   };
   return Array.isArray(item.metrics) && item.metrics.every((metric) => part.metrics?.includes(metric)) && part.operation === item.operation
     && stableJson(shaped(part)) === stableJson(shaped(item)) && alike('entities') && alike('filters') && stableJson(rankShape(part.rank)) === stableJson(rankShape(item.rank))

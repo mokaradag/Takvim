@@ -720,3 +720,37 @@ test('109 son: kabul edilen on iki bloklu model düzeni daha kısa doğrulanmı�
   }
   assert.equal(aiTelemetrySnapshot().grounding.presentation.byReason.MODEL_LAYOUT_REPLACED, 1);
 });
+
+test('tablo girişi: tablo paragrafın hemen ardında değilse (arada başka paragraf varsa) giriş cümlesi korunur', async (t) => {
+  // Her düzen kendi yığınında (alt sınama) yürür.
+  const answerFor = async (blocks) => {
+    let content = null;
+    await t.test(JSON.stringify(blocks.map((block) => block.items || block.source)), async (inner) => {
+      const stack = stackFor(inner);
+      const logs = captureConsole(inner);
+      stack.provider.enqueue(plan(), composer(() => ({ blocks })));
+      content = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage.content;
+      // Modelin düzeni kabul edildi (sunucu düzenine düşmedi): sınanan yol modelin blok sırasıdır.
+      assert.equal(turnLines(logs)[0].context.presentation.mode, 'composed');
+    });
+    return { content };
+  };
+  // Tablo hemen ardında: söyleyen paragraf ayrıca yönlendirme cümlesi kurmaz.
+  const adjacent = await answerFor([{ type: 'say', items: ['P1', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }, { type: 'say', items: ['P2', 'P3'] }]);
+  const first = (content) => content.split('\n\n')[0];
+  // Arada başka paragraf: ilk paragraf tablosunu kendi girişiyle adlandırır (tablo başka paragrafın ardında girişsiz kalmaz).
+  const separated = await answerFor([{ type: 'say', items: ['P1', 'T1'] }, { type: 'say', items: ['P2', 'P3'] }, { type: 'rows', source: 'T1', style: 'table' }]);
+  assert.ok(first(separated.content).length > first(adjacent.content).length, `${adjacent.content}\n---\n${separated.content}`);
+  assert.ok(first(separated.content).startsWith(first(adjacent.content).replace(/ 【R\d+】$/u, '')), separated.content);
+});
+
+test('düzyazı düzeni: yumuşak işlemin bütün öğelerini düşürdüğü paragraf parçası atlanır, yanıtın tamamı reddedilmez', async (t) => {
+  const stack = stackFor(t);
+  const logs = captureConsole(t);
+  // Düzyazı P1'i söyler; ardından gelen kimlik paragrafı yalnızca yinelenen P1'i taşır (yumuşak işlemle düşer, parça boş kalır).
+  stack.provider.enqueue(plan(), composer(() => ({ blocks: [{ type: 'say', text: '{P1} {P2} {P3} {T1}' }, { type: 'say', items: ['P1'] }, { type: 'rows', source: 'T1', style: 'table' }] })));
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
+  const presentation = turnLines(logs)[0].context.presentation;
+  assert.equal(presentation.mode, 'composed', JSON.stringify(presentation));
+  assert.equal(answer.content.split('Şu anda **3** gecikmiş göreviniz var').length - 1, 1, 'yinelenen önerme ikinci kez çizilmez');
+});

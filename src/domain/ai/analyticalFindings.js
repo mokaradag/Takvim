@@ -126,8 +126,9 @@ function taskLists(groups) {
     // Aşama G: açık kilometre taşları listesi (termine göre artan; gecikmişler önce) ayrı bir liste türüdür.
     // Açık kilometre taşı nüfusu BÜTÜN açık durumlardır: tek durumla (ör. yalnızca yapılacak) daraltılmış liste "açık kilometre
     // taşları" olarak anlatılmaz (devam eden gecikmiş kilometre taşı dışarıda kalırdı).
+    // Metin, iş dağılımı düğümü, öncelik ya da oluşturan koşuluyla daraltılmış liste de kapsamın açık kilometre taşı nüfusu değildir.
     const milestone = filters.milestone === true && statuses.length === OPEN_STATUSES.size && [...OPEN_STATUSES].every((status) => statuses.includes(status))
-      && !filters.deadline && !filters.dateFrom && !filters.dateTo;
+      && !filters.deadline && !filters.dateFrom && !filters.dateTo && ['text', 'wbsId', 'priorities', 'createdByMe'].every((key) => neutral(filters[key], key));
     const kind = milestone ? 'milestone' : filters.deadline === 'overdue' ? 'overdue'
       : statuses.length && statuses.every((status) => OPEN_STATUSES.has(status)) && upcoming ? 'upcoming' : null;
     if (!kind) continue;
@@ -149,7 +150,10 @@ function taskLists(groups) {
     if (!list.length) continue;
     const total = count(facts.find((fact) => fact.field === 'totalCount')?.value);
     const whole = complete && total != null && total === list.length && rows.size === list.length;
-    lists.push({ part, evidenceId, kind, rows: list, total, size, complete: whole, ranking, filters, today, self: filters.assignee === 'me' });
+    // Sıralı önek bütün mü: başlığı olmadığı için düşen ya da hiç olgusu gelmeyen satır varsa önek kesiktir; sıralama başı,
+    // kesin sayı ve en uzun gecikme böyle bir önekten kurulmaz.
+    const intact = rows.size === list.length && list.every((row, position) => row.index === position);
+    lists.push({ part, evidenceId, kind, rows: list, total, size, complete: whole, intact, ranking, filters, today, self: filters.assignee === 'me' });
   }
   return lists;
 }
@@ -280,7 +284,10 @@ function gTableFindings(table, prior) {
     }
   }
   if (table.entity === 'project' && rows.every((row) => count(row.open) != null && count(row.overdue) != null)) {
-    if (rows.every((row) => count(row.done) != null)) {
+    // Durumla daraltılmış tabloda (ör. yalnızca tamamlanan + devam eden) tamamlanma payı projenin görevlerinin payı değildir.
+    const statuses = Array.isArray(table.filters?.statuses) ? table.filters.statuses : [];
+    const allStatuses = !statuses.length || ['todo', 'in_progress', 'done'].every((status) => statuses.includes(status));
+    if (allStatuses && rows.every((row) => count(row.done) != null)) {
       const despite = rows.filter((row) => row.open + row.done >= FINDING_LIMITS.minCompletionTotal && row.done * 2 >= row.open + row.done && row.overdue > 0)
         .map((row) => ({ name: row.name, key: String(row.key).toLowerCase(), overdue: row.overdue, share: sharePercent(row.done, row.open + row.done) }))
         .sort((left, right) => right.share - left.share || right.overdue - left.overdue || left.name.localeCompare(right.name, 'tr'));
@@ -308,7 +315,7 @@ function gTableFindings(table, prior) {
 }
 
 /** Sıralı listenin başı geçerli mi: tam liste ya da sunucunun doğruladığı sıralama (ölçü + yön). */
-const rankedBy = (list, metric, order) => list.complete || (list.ranking?.metric === metric && list.ranking?.order === order);
+const rankedBy = (list, metric, order) => list.complete || (list.intact && list.ranking?.metric === metric && list.ranking?.order === order);
 
 function listFindings(list) {
   const findings = [];
@@ -350,6 +357,13 @@ function listFindings(list) {
     const next = upcoming[0] || null;
     const exactLate = list.complete || Boolean(next) || shownUndated > 0;
     const worst = late.length && late.every((row) => count(row.days) != null) ? late.reduce((top, row) => (row.days > top.days ? row : top), late[0]) : null;
+    // Aynı adlı başka bir kilometre taşı listedeyse (ör. farklı projelerde) proje adı ayırt edici olarak taşınır; adaş projede
+    // doğrulanmış proje kodu da eklenir.
+    const place = (row) => {
+      if (typeof row.project !== 'string' || !list.rows.some((other) => other !== row && other.title === row.title)) return null;
+      const homonym = row.projectCode && list.rows.some((other) => other !== row && other.project === row.project && String(other.projectId) !== String(row.projectId));
+      return homonym ? `${row.projectCode} · ${row.project}` : row.project;
+    };
     // Termini olmayanların sayısı yalnızca kesinse söylenir: tam listede görünenler; ya da araç bütün açık kilometre taşlarını
     // döndürdüğü (sayfa = kesin toplam) ve sıralama sınırı dolmadığı hâlde termin sıralamasının bıraktığı satırlar.
     const fits = list.total != null && list.size === list.total && list.rows.length < Math.min(list.size, list.ranking?.limit ?? 0);
@@ -357,9 +371,10 @@ function listFindings(list) {
     if (dated.length || undated) {
       findings.push({ kind: 'milestoneStatus', interpretation: 'milestone', entity: null, project: null,
         metrics: { open: list.complete || fits ? list.total : null, dated: list.complete || fits ? list.total - undated : null, overdue: late.length, overdueExact: exactLate, shown: list.rows.length, undated,
-          worst: worst ? { title: worst.title, days: worst.days, key: worst.key ?? null, projectId: worst.projectId ?? null, project: typeof worst.project === 'string' ? worst.project : null } : null,
+          worst: worst ? { title: worst.title, days: worst.days, key: worst.key ?? null, projectId: worst.projectId ?? null, project: typeof worst.project === 'string' ? worst.project : null,
+            place: place(worst) } : null,
           next: next ? { title: next.title, due: next.due, project: typeof next.project === 'string' ? next.project : null,
-            sole: upcoming.filter((row) => row.due === next.due).length === 1 } : null },
+            sole: upcoming.filter((row) => row.due === next.due).length === 1, place: place(next) } : null },
         comparison: { population: list.total, basis: list.complete ? 'complete-list' : 'ranking-head' }, evidenceIds: [list.evidenceId],
         completeness: list.complete ? 'complete' : 'ranking-head' });
     }
@@ -578,8 +593,10 @@ export function analyticalFindings(parts) {
   const unique = findings.filter((item) => {
     if (!G_TABLE_KINDS.has(item.kind)) return true;
     // Aynı varlıklar (görünen ad değil kimlik) ve aynı sayılar aynı iddiadır; farklı nüfusun farklı sayıları ayrı bulgudur.
-    const key = JSON.stringify([item.kind, item.entityType || item.entity?.type || null, item.today, item.keys || null,
-      JSON.parse(JSON.stringify(item.metrics || {}, (field, value) => (field === 'name' || field === 'title' ? undefined : value)))]);
+    // Kimlik kümesi sıradan bağımsızdır (eşitlikte satır sırası değişebilir); cümlenin söylediği çift sayıları da anahtardadır.
+    const numbers = (value) => JSON.parse(JSON.stringify(value ?? null, (field, inner) => (field === 'name' || field === 'title' ? undefined : inner)));
+    const key = JSON.stringify([item.kind, item.entityType || item.entity?.type || null, item.today, item.keys ? [...item.keys].sort() : null,
+      numbers(item.metrics || {}), numbers(item.pair)]);
     if (seenG.has(key)) return false;
     seenG.add(key);
     return true;
@@ -937,6 +954,11 @@ function overlapNote(layers, locale) {
   // Kendi işleri ya da adlı kişi ile adlı proje (ekip/bütün işler yok): kişinin işleri projede de yer alabilir. Bu dal yalnızca
   // kişi/proje dalından ÖNCE gelir; yoksa kişi + proje karşılaştırması ortak sorumlu çekincesiyle açıklanırdı.
   if (layers.some((layer) => layer.type === 'project') && layers.some((layer) => layer.type !== 'project') && !layers.some((layer) => ['team', 'all'].includes(layer.type))) {
+    // Adlı kişi yoksa (yalnızca kendi işleri ile proje) örtüşme kullanıcının kendi işleridir: "kişinin işleri" denmez.
+    if (layers.every((layer) => ['project', 'self'].includes(layer.type))) {
+      return ['These scopes can overlap (a task can belong to both your own work and the project), so their counts are not added together; only rates computed the same way are compared.',
+        'Bu kapsamlar örtüşebildiğinden (bir görev hem kendi işlerinizde hem projede yer alabilir) sayılar toplanmaz; yalnızca aynı tanımla hesaplanan oranlar yan yana konur.'][en(locale) ? 0 : 1];
+    }
     return ['These scopes can overlap (a task can belong to both the person\'s work and the project), so their counts are not added together; only rates computed the same way are compared.',
       'Bu kapsamlar örtüşebildiğinden (bir görev hem kişinin işlerinde hem projede yer alabilir) sayılar toplanmaz; yalnızca aynı tanımla hesaplanan oranlar yan yana konur.'][en(locale) ? 0 : 1];
   }
@@ -1053,14 +1075,16 @@ function gIntroSentences(findings, locale) {
     // Aşama G: durum, en uzun gecikme ve sıradaki kilometre taşı tek cümledir ("Açık **2** kilometre taşından **1'i** gecikmiş: en uzun
     // süredir geciken **X** (**9** gün), sıradaki ise **Y** (**21 Kasım 2026**)."); sıradaki ayrı bir kısa cümle olarak kalmaz.
     const nextDay = next ? s(formatFactDay(next.due, locale)) : null;
+    // Adaş kilometre taşında doğrulanmış proje adı parantez içinde ayırt edicidir (ör. farklı projelerde aynı "Faz 1 kabulü").
+    const projectOf = (item) => (item?.place ? [', ', s(item.place)] : []);
     if (overdue > 0) {
       add(status, en(locale)
         ? [...(open != null ? [s(formatCount(overdue, locale)), ' of the ', s(formatCount(open, locale)), ' open milestones ', overdue === 1 ? 'is' : 'are'] : [overdueExact ? '' : 'At least ', s(formatCount(overdue, locale)), overdue === 1 ? ' milestone is' : ' milestones are']),
-          ' overdue', ...(worst ? ['; the longest-overdue is ', s(worst.title), ' (', s(formatCount(worst.days, locale)), worst.days === 1 ? ' day' : ' days', ')'] : []),
-          ...(next ? [worst ? ', and the next is ' : '; the next is ', s(next.title), ' (', nextDay, ')'] : []), '.']
+          ' overdue', ...(worst ? ['; the longest-overdue is ', s(worst.title), ' (', s(formatCount(worst.days, locale)), worst.days === 1 ? ' day' : ' days', ...projectOf(worst), ')'] : []),
+          ...(next ? [worst ? ', and the next is ' : '; the next is ', s(next.title), ' (', nextDay, ...projectOf(next), ')'] : []), '.']
         : [...(open != null ? ['Açık ', s(formatCount(open, locale)), ' kilometre taşından ', s(possessiveCount(overdue, locale)), ' gecikmiş'] : [overdueExact ? '' : 'En az ', s(formatCount(overdue, locale)), ' kilometre taşı gecikmiş']),
-          ...(worst ? [': en uzun süredir geciken ', s(worst.title), ' (', s(formatCount(worst.days, locale)), ' gün)'] : []),
-          ...(next ? [worst ? ', sıradaki ise ' : '; sıradaki kilometre taşı ', s(next.title), ' (', nextDay, ')'] : []), '.']);
+          ...(worst ? [': en uzun süredir geciken ', s(worst.title), ' (', s(formatCount(worst.days, locale)), ' gün', ...projectOf(worst), ')'] : []),
+          ...(next ? [worst ? ', sıradaki ise ' : '; sıradaki kilometre taşı ', s(next.title), ' (', nextDay, ...projectOf(next), ')'] : []), '.']);
       if (!pathCaveat) {
         add(status, en(locale) ? ['An overdue milestone does not by itself prove that the project end date will slip, because Rota does not compute the critical path.']
           : ['Gecikmiş bir kilometre taşı projenin bitişinin kayacağını tek başına kanıtlamaz, çünkü Rota kritik yolu hesaplamaz.'], { caveat: true });
@@ -1070,11 +1094,11 @@ function gIntroSentences(findings, locale) {
       // Termini olmayan kilometre taşı için gecikme yargısı kurulmaz: "hiçbiri gecikmiş değil" yalnızca termini olanlar için söylenir.
       const { dated } = status.metrics;
       const some = dated !== open;
-      add(status, en(locale) ? ['None of the ', s(formatCount(dated, locale)), some ? ' open milestones with a target date is overdue' : ' open milestones is overdue', ...(next ? ['; the next is ', s(next.title), ' (', nextDay, ')'] : []), '.']
-        : [some ? 'Termini olan açık ' : 'Açık ', s(formatCount(dated, locale)), ' kilometre taşının hiçbiri gecikmiş değil', ...(next ? ['; sıradaki ', s(next.title), ' (', nextDay, ')'] : []), '.']);
+      add(status, en(locale) ? ['None of the ', s(formatCount(dated, locale)), some ? ' open milestones with a target date is overdue' : ' open milestones is overdue', ...(next ? ['; the next is ', s(next.title), ' (', nextDay, ...projectOf(next), ')'] : []), '.']
+        : [some ? 'Termini olan açık ' : 'Açık ', s(formatCount(dated, locale)), ' kilometre taşının hiçbiri gecikmiş değil', ...(next ? ['; sıradaki ', s(next.title), ' (', nextDay, ...projectOf(next), ')'] : []), '.']);
     } else if (next) {
-      add(status, en(locale) ? [next.sole ? 'The next milestone is ' : 'The next milestone date is ', s(next.title), ' (', nextDay, ').']
-        : ['Sıradaki kilometre taşı ', s(next.title), ' (', nextDay, ').']);
+      add(status, en(locale) ? [next.sole ? 'The next milestone is ' : 'The next milestone date is ', s(next.title), ' (', nextDay, ...projectOf(next), ').']
+        : ['Sıradaki kilometre taşı ', s(next.title), ' (', nextDay, ...projectOf(next), ').']);
     }
     if (status.metrics.undated > 0) {
       const { undated } = status.metrics;
@@ -1091,8 +1115,10 @@ function priorityItems(findings, locale, said, { scopeStated = true } = {}) {
   // Aşama G: gecikmiş kilometre taşı yönetim açısından en öncelikli dikkat noktasıdır (adı ve gecikme günü doğrulanmış olgudur).
   for (const status of findings.filter((item) => item.kind === 'milestoneStatus' && item.metrics.worst)) {
     const { worst } = status.metrics;
-    items.push({ finding: status, parts: en(locale) ? [s(worst.title), ' — an overdue milestone (', s(formatCount(worst.days, locale)), worst.days === 1 ? ' day)' : ' days)']
-      : [s(worst.title), ' — gecikmiş kilometre taşı (', s(formatCount(worst.days, locale)), ' gün)'] });
+    // Adaş kilometre taşı öncelikte de proje adıyla ayrılır.
+    const project = worst.place ? [', ', s(worst.place)] : [];
+    items.push({ finding: status, parts: en(locale) ? [s(worst.title), ' — an overdue milestone (', s(formatCount(worst.days, locale)), worst.days === 1 ? ' day' : ' days', ...project, ')']
+      : [s(worst.title), ' — gecikmiş kilometre taşı (', s(formatCount(worst.days, locale)), ' gün', ...project, ')'] });
   }
   const level = findings.find((item) => item.kind === 'levelComparison');
   const levelTop = level ? level.layers.filter((layer) => layer.open > 0 && layer.overdue > 0)

@@ -25,7 +25,7 @@ const PRIORITY_SQL = `CASE LOWER(LTRIM(RTRIM(COALESCE(t.Priority, ''))) COLLATE 
 const RESULT_TOO_LARGE = `BEGIN
     DROP TABLE IF EXISTS #AiScopeProjects, #AiScopeTaskIds, #AiScopeTasks, #AiTaskFilter, #AiProjectFilter, #AiTasks,
       #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts,
-      #AiProjectMatches, #AiWbsFocus, #AiRequiredWbs, #AiDependencies, #AiRosterStart;
+      #AiProjectMatches, #AiWbsFocus, #AiRequiredWbs, #AiDependencies, #AiRosterStart, #AiRosterEnd;
     THROW 51001, 'AI_TOOL_RESULT_TOO_LARGE', 1;
   END`;
 
@@ -277,17 +277,22 @@ const TEAM_ROSTER_START = `
   GROUP BY es.EmployeeSicil;
 `;
 
+// Toplu işin sonundaki canlı üyelik TEK deyimle bir kez okunur (#AiRosterEnd); iki yönlü karşılaştırma bu tek okumaya karşıdır.
+// Kilitli READ COMMITTED altında iki ayrı canlı okuma arasında katılan üye her iki karşılaştırmadan da kaçabilirdi.
 const TEAM_ROSTER = `
+  DROP TABLE IF EXISTS #AiRosterEnd;
+  SELECT es.EmployeeSicil INTO #AiRosterEnd
+  FROM dbo.MR_V_ExecutiveScope es
+  WHERE @withRoster = 1 AND @assigneeMode = 'team' AND es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)
+  GROUP BY es.EmployeeSicil;
   IF @withRoster = 1 AND @assigneeMode = 'team'
   BEGIN
     DECLARE @rosterChanged bit = CASE WHEN EXISTS (
-        SELECT es.EmployeeSicil FROM dbo.MR_V_ExecutiveScope es
-        WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)
+        SELECT EmployeeSicil FROM #AiRosterEnd
         EXCEPT SELECT EmployeeSicil FROM #AiRosterStart)
       OR EXISTS (
         SELECT EmployeeSicil FROM #AiRosterStart
-        EXCEPT SELECT es.EmployeeSicil FROM dbo.MR_V_ExecutiveScope es
-        WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel))
+        EXCEPT SELECT EmployeeSicil FROM #AiRosterEnd)
       -- Kadro üyesinin okunan bir göreve ataması kimliği açık atama olarak okunmadıysa (üyelik atama okumaları sırasında değişip
       -- geri döndü) görev sayıları kadroyla tutarlı değildir: kadro kesik sayılır, sıfır satır ve tamlık iddiası kurulmaz (kapalı ret).
       -- Denetim yalnızca kadronun kendi üyeleri içindir (yönetim kapsamı); kapsam dışı gizli eş sorumlu hakkında bilgi üretmez.
@@ -422,7 +427,7 @@ ${ASSIGNMENT_FACTS}
   WHERE @projectId IS NOT NULL OR EXISTS (SELECT 1 FROM #AiFacts f WHERE f.ProjectId = v.ProjectId);
 ${assigneeRows(ROSTER_TEAM_MEMBER)}
 ${TEAM_ROSTER}
-  DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects, #AiRosterStart;`;
+  DROP TABLE #AiAssignments, #AiResolvedPeople, #AiAssignmentFacts, #AiAssignees, #AiDirectory, #AiFacts, #AiTasks, #AiTaskFilter, #AiProjectFilter, #AiScopeTasks, #AiScopeTaskIds, #AiScopeProjects, #AiRosterStart, #AiRosterEnd;`;
 
 /**
  * Kanıt nüfusunun güncel görünürlüğü: verilen görevlerden kullanıcının ŞU AN

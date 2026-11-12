@@ -21,15 +21,20 @@ function completionFailures(rendered, trace) {
   if (['failed', 'error'].includes(trace?.outcome)) failures.push('sunucu turu başarısız');
   return failures;
 }
+// Sunucu yeniden yürütmesinin sözleşmesi (yeni planlayıcı çağrısı yok, kanıtlı doğrulanmış yanıt): betikli ve canlı kipte aynı uygulanır.
+function replayFailures(expected, trace, calls) {
+  if (expected?.serverReplay !== true) return [];
+  const plan = calls.some((call) => call.ok && call.purpose === 'plan' && call.toolCalls?.includes('rota_plan'));
+  return plan || trace?.outcome !== 'grounded' || !(trace?.evidence > 0) ? ['sunucu yeniden yürütme sözleşmesi sağlanmadı'] : [];
+}
 // Model yolunda gerçek plan çağrısı zorunludur; aday seçiminin sunucu yeniden yürütmesi açıkça belirtilir.
 function modelFailures(expected, trace, calls) {
   const failures = [];
   const plan = calls.some((call) => call.ok && call.purpose === 'plan' && call.toolCalls?.includes('rota_plan'));
-  if (expected?.serverReplay === true) {
-    if (plan || trace?.outcome !== 'grounded' || !(trace?.evidence > 0)) failures.push('sunucu yeniden yürütme sözleşmesi sağlanmadı');
-  } else if (!plan) failures.push('planlayıcı model çağrısı kanıtı yok');
+  if (expected?.serverReplay === true) failures.push(...replayFailures(expected, trace, calls));
+  else if (!plan) failures.push('planlayıcı model çağrısı kanıtı yok');
   if (trace?.presentation?.mode === 'composed' && !trace.presentation.server && !calls.some((call) => call.ok && call.purpose === 'compose')) failures.push('model düzeni çağrı kanıtı yok');
   if (calls.some((call) => !call.ok || call.thinking !== 'off' || call.thinkingTokens !== 0 || !call.models?.length || call.models.some((model) => model !== 'claude-haiku-4-5-20251001'))) failures.push('model çağrısı kabul sözleşmesini sağlamadı');
   return failures;
 }
-module.exports = { semanticFailures, completionFailures, modelFailures };
+module.exports = { semanticFailures, completionFailures, modelFailures, replayFailures };

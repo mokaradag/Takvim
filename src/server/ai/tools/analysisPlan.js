@@ -135,21 +135,26 @@ export function normalizedBrief(raw) {
     // birleştirme). Birincil yönler, yönü yazılmamış ek kapsamların da yönleridir: birincile yön katılmadan önce bu kapsamlara
     // özgün birincil yönler açıkça yazılır (başka kapsamın okuması değişmez).
     const key = (item) => JSON.stringify([item?.scope, item?.level || null, item?.names || null]);
+    // Birincil kapsam nüfusunu daraltıyorsa (within, rows) aynı kapsamın ek yazımı onun yinelemesi değildir (ör. "Alfa'daki işlerim ve
+    // bütün işlerim"): birleştirilmez, olduğu gibi kalır ve doğrulama reddeder (daraltma ek kapsama sessizce geçmez).
+    const samePrimary = (item) => key(item) === key(out) && out.within == null && out.rows == null;
     const union = (left, right) => [...new Set([...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])])];
     const inherited = Array.isArray(out.focus) ? [...out.focus] : null;
     const ownFocus = (item) => (single(item) && Array.isArray(item.focus) ? item.focus : null);
-    const widened = out.also.some((item) => key(item) === key(out) && ownFocus(item)?.some((focus) => !inherited?.includes(focus)));
+    const widened = out.also.some((item) => samePrimary(item) && ownFocus(item)?.some((focus) => !inherited?.includes(focus)));
     // Açıkça yazılan devralınan yönler, devralma davranışını korur: kapsamda anlamı olmayan yön (ör. kendi işlerinde alt birim
     // kırılımı) devralınırken atlanırdı, yazılırken de atlanır; hiçbiri kalmazsa kapsam yalnızca özetini okur (overview).
     const inheritedFor = (scope) => { const kept = inherited.filter((focus) => layerApplicable(focus, scope)); return kept.length ? kept : ['overview']; };
-    if (widened && inherited) out.also = out.also.map((item) => (single(item) && key(item) !== key(out) && item.focus == null ? { ...item, focus: inheritedFor(item.scope) } : item));
-    // Ek kapsamın taşıyamadığı alanı olan yazım birleştirilmez: olduğu gibi kalır ve doğrulama reddeder (alan sessizce düşmez).
-    const plain = (item) => single(item) && Object.keys(item).every((field) => ['scope', 'level', 'names', 'focus'].includes(field));
+    if (widened && inherited) out.also = out.also.map((item) => (single(item) && !samePrimary(item) && item.focus == null ? { ...item, focus: inheritedFor(item.scope) } : item));
+    // Ek kapsamın taşıyamadığı alanı olan yazım birleştirilmez: olduğu gibi kalır ve doğrulama reddeder (alan sessizce düşmez). Dizi
+    // olmayan yön (ör. tek metin) de taşınamaz: yinelemeyle silinmez, şema reddeder.
+    const plain = (item) => single(item) && Object.keys(item).every((field) => ['scope', 'level', 'names', 'focus'].includes(field))
+      && (item.focus == null || Array.isArray(item.focus));
     const kept = [];
     for (const item of out.also) {
       const own = ownFocus(item);
       if (!plain(item)) { kept.push(item); continue; }
-      if (key(item) === key(out)) {
+      if (samePrimary(item)) {
         if (own) out.focus = union(out.focus, own);
         continue;
       }
@@ -176,7 +181,8 @@ export function normalizedBrief(raw) {
   const plainPair = pair && Object.keys(pair).every((field) => ['scope', 'names', 'focus'].includes(field)) && out.within == null && out.rows == null;
   // Yönleri farklı iki kapsam tek karşılaştırmaya katlanmaz: katlama her yönü iki özneye de uygular (ör. kendi genel görünümü +
   // kişinin termin yönleri sekiz okumaya büyür). Ek kapsamın yönü yazılmamışsa birincil yönleri devralır (aynı küme).
-  const sameFocus = (left, right) => !Array.isArray(right) || (Array.isArray(left) && left.length === right.length && right.every((item) => left.includes(item)));
+  // Yalnızca yazılmamış yön devralınır; dizi olmayan yön (ör. "milestones" metni) aynı küme sayılmaz, katlanmaz ve şema reddeder.
+  const sameFocus = (left, right) => right == null || (Array.isArray(right) && Array.isArray(left) && left.length === right.length && right.every((item) => left.includes(item)));
   if (plainPair && sameFocus(out.focus, pair.focus) && ((selfOf(out) && personOf(pair)) || (personOf(out) && selfOf(pair))) && !out.withSelf) {
     const person = personOf(out) ? out : pair;
     const focus = [...new Set([...(Array.isArray(out.focus) ? out.focus : []), ...(Array.isArray(pair.focus) ? pair.focus : [])])];
@@ -762,12 +768,15 @@ function selfComparison(focus, analysis, base, today, chart) {
     workload: ['tasks.open', 'tasks.overdue', 'tasks.dueNext7Days'], overdue: ['tasks.overdue'],
     upcoming: analysis.dateFrom || analysis.dateTo ? null : ['tasks.dueNext7Days'], status: chart === 'donut' ? null : ['tasks.todo', 'tasks.inProgress', 'tasks.done'] }[focus];
   // İki özne de aynı yönün aynı nüfus sözleşmesiyle okunur; kimlik yalnızca sunucunun çözümünden gelir.
-  return [base, self].flatMap((side) => {
+  const sides = [base, self].map((side) => {
     const read = focus === 'overdue' ? overdueBase(side, analysis, today) : side;
     return metrics && !(chart === 'timeline' && focus === 'overdue')
       ? request({ operation: 'value', metrics, population: { tool: 'rota_task_analytics' }, ...(read.entities.length ? { entities: read.entities } : {}), filters: read.filters })
-      : focusRequest(focus, { ...analysis, scope: 'self', withSelf: false }, side, today) || [];
+      : focusRequest(focus, { ...analysis, scope: 'self', withSelf: false }, side, today);
   });
+  // Kapsamda anlamı olmayan yön (null) boş okumaya dönüşmez: açılım planı reddeder ve model yönü düzeltir. Geçerli boş sonuç ([]) kalır.
+  if (sides.some((side) => side == null)) return null;
+  return sides.flat();
 }
 
 /** Aynı öznenin aynı nüfus üzerindeki skaler ölçüleri tek okumada birleşir; hiçbir ölçü ya da koşul düşmez. */

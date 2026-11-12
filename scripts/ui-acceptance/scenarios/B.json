@@ -261,7 +261,11 @@
      "outcome": "grounded",
      "requires": [
       "iç içe olabildiğinden",
-      "Açık işlerde gecikme oranı"
+      "Açık işlerde gecikme oranı",
+      "Kendi işleriniz",
+      "Biriminiz",
+      "Bölümünüz",
+      "bu oran kendi işlerinizde"
      ]
     }
    ]
@@ -277,9 +281,17 @@
     {
      "outcome": "grounded",
      "table": true,
+     "tableHead": [
+      "Grup",
+      "Açık görev",
+      "Gecikmiş görev"
+     ],
      "requires": [
       "birime dağılıyor",
-      "birim sayıları toplanmaz"
+      "birim sayıları toplanmaz",
+      "Uygulama Geliştirme",
+      "Dijital Kanallar",
+      "Altyapı Operasyon"
      ]
     }
    ]
@@ -296,7 +308,9 @@
      "outcome": "grounded",
      "requires": [
       "sıradaki ise",
-      "kritik yolu hesaplamaz"
+      "kritik yolu hesaplamaz",
+      "Prototip onayı",
+      "Canlıya geçiş"
      ]
     }
    ]

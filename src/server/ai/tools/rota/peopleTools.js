@@ -132,7 +132,8 @@ const workloadSummary = {
           WORKLOAD_NOTE,
           ...(team && !rosterComplete ? ['Kişi satırları yalnızca çözümlenmiş, görünür atamaları kapsar; sıfır açık işi olan ekip üyelerinin tamamı bilinmediğinden ekip dengesi veya yoğunlaşması çıkarılamaz.'] : []),
           // Kadronun tam okunması ile dönen sayfanın tam olması ayrıdır: sayfa sınırla kesildiyse "bütün üyeler" denmez.
-          ...(team && rosterComplete && page.length === ordered.length ? [`Kişi satırları yönetim kapsamınızdaki bütün ekip üyelerini içerir; ${withoutOpen} üyenin görünür açık görevi yok. Görünür açık görevi olmaması kişinin boşta olduğunu göstermez.`] : []),
+          // Proje süzgecinde sıfır satır yalnızca seçilen projedeki görünür açık görevin yokluğudur (üyenin başka projede işi olabilir).
+          ...(team && rosterComplete && page.length === ordered.length ? [`Kişi satırları yönetim kapsamınızdaki bütün ekip üyelerini içerir; ${filters.projectId ? `${withoutOpen} üyenin seçilen projede görünür açık görevi yok (başka projelerdeki görevleri bu sayıya girmez)` : `${withoutOpen} üyenin görünür açık görevi yok`}. Görünür açık görevi olmaması kişinin boşta olduğunu göstermez.`] : []),
           ...(team && rosterComplete && page.length < ordered.length ? [`Ekip kadrosu tam okundu (${ordered.length} üye) ancak kişi satırları sayfa sınırı nedeniyle ilk ${page.length} üyeyle sınırlı; listede olmayan üyeler var. Görünür açık görevi olmaması kişinin boşta olduğunu göstermez.`] : []),
           ...(unrepresented ? [`${unrepresented} açık görev kişi satırlarında temsil edilemiyor; kimliği çözümlenmeyen sorumlular açıklanmaz.`] : []),
           'Birden çok sorumlusu olan görev her sorumluda ayrı sayılır.',

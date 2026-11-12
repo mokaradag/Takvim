@@ -278,6 +278,8 @@ test('L: İngilizce zincir İngilizce sayfa ve yanıtla sürer', async (t) => {
   const { ask } = conversation(t);
   const first = await ask('Show my overdue tasks.', [rotaPlan(OVERDUE_LIST, { language: 'en' }), 'compose'], { language: 'en' });
   assert.ok(first.answer.content.startsWith('You currently have **3** overdue tasks; the longest-overdue task is **Haftalık durum toplantısı** (**23 days**), and the shortest-overdue is **Kısmi kendi görevim** (**1 day**), with an average delay of **11\\.3 days**.'), first.answer.content);
+  // Önek denetimi atfı kapsamaz: açılış paragrafı kendi kaynağını taşımalıdır.
+  assert.match(first.answer.content.split('\n\n')[0], /【R\d+】$/u, first.answer.content);
   const second = await ask('What are their priorities?', [rotaPlan({ previousResult: true, operation: 'list', metrics: ['task.title', 'task.priority'],
     population: { tool: 'rota_task_search', collection: 'tasks' } }, { language: 'en' }), 'compose'], { language: 'en' });
   assert.equal(second.answer.finishReason, 'stop');

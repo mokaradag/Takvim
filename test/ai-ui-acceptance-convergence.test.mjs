@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import net from 'node:net';
+import { createServer } from 'node:http';
 const root = resolve('.');
 const directory = (t) => { const dir = mkdtempSync(join(tmpdir(), 'rota-kabul-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
 const run = (file, args, env = {}) => spawnSync(process.execPath, [resolve(file), ...args], { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 10000 });
@@ -325,20 +326,63 @@ test('veri tohumu uyuşmayan konuşma atlanır ama önceki satırı silinmez; at
 
 test('yalnızca seçilen konuşma yeniden koşulduğunda aynı koşunun seçilmeyen atlanmış konuşmaları rapordan düşmez', (t) => {
   const dir = fakeDriverDir(t);
-  // Aynı koşuda G1 ve G2 atlanmıştı (veri tohumu yoktu); şimdi yalnızca G1 yeniden koşuluyor.
-  const skippedRow = (conversation) => ({ runId: 'güncel', skipped: 'UI_SEED=executive gerekir', failures: ['kapsam eksik'], profile: 'B', conversation, calls: [] });
+  // G1 bu koşuda geçerli planlayıcı çağrısı kanıtıyla geçer: raporun başarısızlığı yalnızca atlanmış G2'den gelebilir.
+  const playwright = join(dir, 'node_modules', 'playwright', 'index.js');
+  writeFileSync(playwright, readFileSync(playwright, 'utf8').replace("return {status:'complete'",
+    "fs.appendFileSync(path.join(process.env.UI_ACCEPTANCE_DIR,'calls.jsonl'),JSON.stringify({purpose:'plan',ok:true,toolCalls:['rota_plan'],models:['claude-haiku-4-5-20251001'],thinking:'off',thinkingTokens:0})+'\\n');\n return {status:'complete'"));
+  // Aynı koşuda G1 ve G2 atlanmıştı (veri tohumu yoktu); şimdi yalnızca G1 yeniden koşuluyor. Atlanmış satır sürücünün yazdığı tam biçimdedir.
+  const skippedRow = (conversation) => ({ runId: 'güncel', skipped: 'UI_SEED=executive gerekir', failures: ['kapsam eksik: UI_SEED=executive gerekir'], profile: 'B', conversation,
+    detail: 'balanced', turn: 0, question: 'soru', ms: 0, rendered: { status: 'skipped', tables: [], charts: [] }, server: null, calls: [] });
   writeFileSync(join(dir, 'out', 'B.json'), JSON.stringify([skippedRow('G1'), skippedRow('G2')]));
   const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [{ name: 'G1', detail: 'balanced', turns: ['birinci soru'] },
     { name: 'G2', detail: 'balanced', turns: ['ikinci soru'], seed: 'executive' }] };
   writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
-  // G1'in kendi sınama sonucu (sahte tarayıcıda model çağrısı kaydı yok) bu sınamanın konusu değildir; satırların korunması sınanır.
-  run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_ONLY: 'G1', UI_RUN_ID: 'güncel', UI_SEED: '' });
+  const driven = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_ONLY: 'G1', UI_RUN_ID: 'güncel', UI_SEED: '' });
+  assert.equal(driven.status, 0, driven.stderr);
   const rows = JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
-  assert.ok(rows.some((row) => row.conversation === 'G1' && !row.skipped), 'seçilen konuşma koşuldu');
+  assert.ok(rows.some((row) => row.conversation === 'G1' && !row.skipped && !row.failures.length), 'seçilen konuşma koşuldu ve geçti');
   assert.ok(rows.some((row) => row.conversation === 'G2' && row.skipped), 'seçilmeyen atlanmış konuşma korunur');
   assert.equal(rows.filter((row) => row.conversation === 'G1' && row.skipped).length, 0, 'yeniden koşulan konuşmanın atlanmış satırı yenilenir');
   const report = run('scripts/ui-acceptance/report.cjs', [join(dir, 'out')], { UI_RUN_ID: 'güncel' });
   assert.equal(report.status, 1, 'sınanmamış konuşma varken rapor başarı saymaz');
+  assert.equal(report.stderr, '', 'rapor çökmeden kapsam denetimine ulaşır');
+  assert.match(report.stdout, /Kapsam eksik \(sınanmadı\): B\/G2 /u);
+  // Atlanmış satır kaldırılırsa aynı koşu başarılıdır: başarısızlığın nedeni yalnızca eksik kapsamdır.
+  writeFileSync(join(dir, 'out', 'B.json'), JSON.stringify(rows.filter((row) => !row.skipped)));
+  assert.equal(run('scripts/ui-acceptance/report.cjs', [join(dir, 'out')], { UI_RUN_ID: 'güncel' }).status, 0);
+});
+
+test('betikli kipte seçilen profilin hiç betikli konuşması yoksa eksik kapsam yazılır ve rapor başarı saymaz', (t) => {
+  const dir = fakeDriverDir(t);
+  const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [{ name: 'plansız', detail: 'balanced', turns: ['altın planı olmayan soru'] }] };
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
+  // Betikli plan listesi boş dönen yerel uç.
+  const server = createServer((request, response) => { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ questions: [] })); });
+  return new Promise((resolveTest, rejectTest) => server.listen(0, '127.0.0.1', () => {
+    const port = server.address().port;
+    const proc = spawn(process.execPath, [join(dir, 'drive.cjs'), join(dir, 'scenario.json'), join(dir, 'out')], { env: { ...process.env, UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1', BRIDGE_PORT: String(port) } });
+    proc.on('close', () => {
+      server.close();
+      try {
+        const rows = JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
+        assert.deepEqual(rows.map((row) => [row.profile, row.skipped]), [['B', 'betikli plan yok']]);
+        const report = run('scripts/ui-acceptance/report.cjs', [join(dir, 'out')], { UI_RUN_ID: 'güncel' });
+        assert.equal(report.status, 1);
+        assert.match(report.stdout, /Kapsam eksik \(sınanmadı\): B\/\*/u);
+        resolveTest();
+      } catch (error) { rejectTest(error); }
+    });
+  }));
+});
+
+test('betikli kipte sunucu yeniden yürütme turu yeni planlayıcı çağrısıyla geçemez', async () => {
+  const { replayFailures } = (await import('../scripts/ui-acceptance/expectations.cjs')).default;
+  const grounded = { outcome: 'grounded', evidence: 1 };
+  const scriptedPlan = { purpose: 'plan', ok: true, scripted: true, toolCalls: ['rota_plan'] };
+  assert.ok(replayFailures({ serverReplay: true }, grounded, [scriptedPlan]).length > 0, 'betikli planlayıcı çağrısı yeniden yürütmenin yerine geçmez');
+  assert.ok(replayFailures({ serverReplay: true }, { ...grounded, evidence: 0 }, []).length > 0);
+  assert.deepEqual(replayFailures({ serverReplay: true }, grounded, []), []);
+  assert.deepEqual(replayFailures(null, grounded, [scriptedPlan]), [], 'olağan betikli turda yeniden yürütme denetimi yoktur');
 });
 
 test('UI_SCRIPTED=1 tek başına model kabulünü kapatmaz: betikli uç kaydı yoksa model çağrısı denetimi uygulanır', (t) => {
@@ -367,7 +411,17 @@ test('betikli kabul yalnızca bütün turlarının altın planı olan konuşmala
   t.after(() => child.kill());
   const port = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('betikli uç açılmadı')), 5000);
-    child.stdout.on('data', (chunk) => { const match = /betikli uç hazır: (\d+)/u.exec(String(chunk)); if (match) { clearTimeout(timer); resolve(Number(match[1])); } });
+    // Hazır satırı tam satır olarak ayrıştırılır: stdout parçalı gelse de kapı numarası satır sonuna kadar beklenir.
+    let pending = '';
+    child.stdout.on('data', (chunk) => {
+      pending += String(chunk);
+      for (let end = pending.indexOf('\n'); end >= 0; end = pending.indexOf('\n')) {
+        const line = pending.slice(0, end);
+        pending = pending.slice(end + 1);
+        const match = /^betikli uç hazır: (\d+)\s*$/u.exec(line);
+        if (match) { clearTimeout(timer); resolve(Number(match[1])); }
+      }
+    });
     child.once('error', reject);
   });
   const { questions } = await (await fetch(`http://127.0.0.1:${port}/v1/scripted-plans`)).json();

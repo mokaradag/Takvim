@@ -574,13 +574,19 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         rows: facts.some((item) => item.fact?.semantic?.row) };
     });
     if (layered.every((item) => item.layer == null || outline.layers[item.layer])) {
+      // Özetin dışındaki bölümün (açık istek) önceden kurulmuş güvenilir başlığı korunur; aracın bölüm adı yoksa sunucunun konu adı.
+      const prior = new Map([...titles.values()].map((title) => [title.part, title.text]));
+      const topicTitle = (part) => {
+        const label = topics?.get(part);
+        return label ? `${label.charAt(0).toLocaleUpperCase(locale === 'en' ? 'en-US' : 'tr-TR')}${label.slice(1)}` : null;
+      };
       titles.clear();
       viewTitles.length = 0;
       const seenLayers = new Set();
       for (const item of layered) {
         // Görev listesi bölümünün konusu yönün adıdır ("Kilometre taşları", "Kritik işler"): aynı kapsamın iki listesi ayrışır.
         const topic = (item.tool === 'rota_task_search' && aspectTitle(item.focus, locale)) || sectionTitle(item.tool, locale, { rows: item.rows, groupBy: item.groupBy });
-        let text = topic;
+        let text = item.layer == null ? topic || prior.get(item.part) || topicTitle(item.part) : topic;
         if (item.layer != null) {
           const owner = layerTitle(outline.layers[item.layer], filtersOfPart(parts, item.part), locale);
           const first = !seenLayers.has(item.layer);
@@ -847,6 +853,8 @@ export function validateComposition(composition, response) {
             placed.push(id);
           } else { const hard = soft('UNKNOWN_PROPOSITION'); if (hard) return hard; }
         }
+        // Yumuşak işlem bütün öğeleri düşürdüyse (ör. yalnızca yinelenen önerme) parça boştur: çizilmez, sahiplik denetlenmez.
+        if (!said.length && !placed.length) continue;
         // Başlık olsun ya da olmasın paragrafın tüm önermeleri aynı bölüme aittir.
         // Sahiplik yalnızca KORUNAN öğelerle denetlenir: yumuşak işlemle atılan bilinmeyen kimlik geçerli öğeleri reddettirmez.
         const scope = owned([...said, ...placed].map(partOfItem));
@@ -1450,7 +1458,8 @@ export function renderComposition(composition, validated) {
       // Grafik yuvası grafiği tanıtır ve kalır (grafiğin yeri bu cümleye bağlıdır).
       // Bastırma yalnızca tablo bu paragraftan HEMEN SONRA çiziliyorsa geçerlidir: arada bir grafik varsa tablo kendi girişini taşır.
       const speaks = ordered.some((id) => render.propositions?.has(id));
-      const after = sequence.slice(sequence.indexOf(block) + 1).find((other) => !['say', 'title'].includes(other.type));
+      // Arada başka bir paragraf ya da başlık varsa tablo bu paragrafın hemen ardında değildir: giriş cümlesi korunur.
+      const after = sequence[sequence.indexOf(block) + 1];
       const adjacent = (id) => after?.type === 'rows' && after.source === id;
       for (const id of ordered) {
         const proposition = render.propositions?.get(id);
@@ -1603,5 +1612,7 @@ export function renderComposition(composition, validated) {
   return { text: out.map((chunk) => chunk.text).join('\n\n'), closing: conclusion || render.closing ? out.at(-1)?.text : null, citedIds: [...new Set(cited)], chart, charts, blocks: validated.blocks.length, said, tables, notes, titled, rowParts,
     ...(synthesis ? { findings: synthesis.findings.length } : {}),
     ...(saidIds.size > said ? { suppressed: saidIds.size - said } : {}),
-    chartTypes: validated.blocks.filter((block) => block.type === 'chart' && fences.has(`${block.source}:${block.style}`)).map((block) => block.style) };
+    chartTypes: validated.blocks.filter((block) => block.type === 'chart' && fences.has(`${block.source}:${block.style}`)).map((block) => block.style),
+    // Çizilen grafiklerin kaynak tabloları: not, yalnızca gerçekten o sayıları gösteren grafiği yerine geçen grafik olarak adlandırır.
+    chartTables: validated.blocks.filter((block) => block.type === 'chart' && fences.has(`${block.source}:${block.style}`)).map((block) => render.charts.get(block.source)?.table ?? null) };
 }

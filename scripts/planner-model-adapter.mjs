@@ -776,10 +776,21 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     // bağlı tek yeniden deneme uygulanır ve `forcedText` ile ayrıca sayılır (yeniden deneme yoksa metin sunucuya eskisi gibi iletilir).
     const forcedProse = Boolean(forced && !hideTools && !forcedToolCall && code === 1 && result?.subtype === 'error_max_turns'
       && !blocks.some((block) => block.type === 'tool_use') && blocks.some((block) => block.type === 'text'));
+    // Önbellek tabanı: aynı durağan istem ve araç kataloğuyla beş dakika içindeki başarılı çağrı.
+    const cacheBaseline = () => prior.find((item) => {
+      const ageMs = Number.isSafeInteger(item.durationMs) && item.durationMs >= 0 ? startedAt - (Date.parse(item.at) - item.durationMs) : NaN;
+      return !item.error && item.staticPromptHash === staticPromptHash && item.toolCatalogHash === toolCatalogHash
+        && ageMs >= 0 && ageMs < 5 * 60 * 1000;
+    });
     if ((forcedToolCall || forcedProse) && MODEL_FORCED_RETRY_ATTEMPTS > 1 && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
       // Yinelenen ilk yanıt da aynı model ve düşünme denetiminden geçer: temiz bir yeniden deneme yasak düşünmeyi gizleyemez.
       const problem = responseProblem(row, model);
       if (problem) return fail(problem, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
+      // Önbellek zorunluluğu yeniden denemeden ÖNCE uygulanır: yeniden deneme araçları gizlediği için katalog özeti değişir ve kendi
+      // tabanı olmaz; ilk yanıtın önbellek kaçırması bu yolla gizlenemez.
+      if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheBaseline() && !usage.cache_read_input_tokens) {
+        return fail('PLANNER_CACHE_NOT_REUSED', { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
+      }
       appendLedger(log, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
       rmSync(work, { recursive: true, force: true });
       return complete(launcher, timeoutMs, payload, true);
@@ -798,12 +809,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     // CLI araçları kendi kararlı sırasıyla sunar: küme birebir aynı olmalı, sıra (toolOrderHash) çağrılar arasında sabit kalmalıdır.
     if (JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort())) return fail('PLANNER_TOOLS_NOT_OFFERED', { ...row, offered });
     if (prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash)) return fail('PLANNER_TOOL_ORDER_UNSTABLE', row);
-    const first = prior.find((item) => {
-      const ageMs = Number.isSafeInteger(item.durationMs) && item.durationMs >= 0 ? startedAt - (Date.parse(item.at) - item.durationMs) : NaN;
-      return !item.error && item.staticPromptHash === staticPromptHash && item.toolCatalogHash === toolCatalogHash
-        && ageMs >= 0 && ageMs < 5 * 60 * 1000;
-    });
-    if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && first && !usage.cache_read_input_tokens) return fail('PLANNER_CACHE_NOT_REUSED', row);
+    if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheBaseline() && !usage.cache_read_input_tokens) return fail('PLANNER_CACHE_NOT_REUSED', row);
     if (row.apiCalls !== 1) return fail('PLANNER_CALL_COUNT_UNEXPECTED', row);
     if (!models.length || models.some((item) => item !== model)) return fail('PLANNER_MODEL_MISMATCH', row);
     if (row.thinking !== 'off') return fail('PLANNER_THINKING_ON', row);

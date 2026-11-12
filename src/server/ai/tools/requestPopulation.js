@@ -767,6 +767,21 @@ export function effectiveSort(request) {
   return request.population.sort || rankSort(tool, request.rank) || defaultSort(tool, declaredValues(FAMILIES[tool] || null, filters));
 }
 
+/**
+ * İsteğin ETKİN satır koleksiyonu (tamamlama ile aynı varsayılan kuralı): yazılmış koleksiyon; yoksa gruplu görev analizinde grup
+ * satırları, ölçüleri taşıyan tek koleksiyon ya da aracın bu varlık biçimindeki tek koleksiyonu. Değer isteğinde ve bilinmeyen araçta
+ * yazılan değer (çoğunlukla yok) döner. İki isteğin aynı okuma olup olmadığı yazılmamış varsayılanla değil etkin koleksiyonla karşılaştırılır.
+ */
+export function effectiveCollection(request) {
+  const population = request?.population;
+  const tool = population?.tool;
+  if (population?.collection != null || request.operation === 'value' || typeof tool !== 'string' || !getRotaTool(tool)) return population?.collection ?? null;
+  if (population.groupBy && tool === 'rota_task_analytics') return 'groups';
+  const shaped = shapeCollections(tool, Array.isArray(request.entities) ? request.entities.filter((entity) => entity && typeof entity === 'object') : []);
+  const fitting = Array.isArray(request.metrics) ? listCollections(tool, request.metrics, shaped) : [];
+  return fitting.length === 1 ? fitting[0] : !fitting.length && shaped.length === 1 ? shaped[0] : null;
+}
+
 function rankSort(tool, rank) {
   if (!rank) return null;
   const table = tool === 'rota_task_search' ? TASK_SORT_RANKS : tool === 'rota_portfolio_summary' ? PORTFOLIO_SORT_RANKS : {};

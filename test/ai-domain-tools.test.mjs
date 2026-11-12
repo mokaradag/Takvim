@@ -1506,8 +1506,15 @@ test('ekip kadrosu üretim SQL sözleşmesi: üyelik değişimi iki yönlü kar�
   const compact = (text) => text.replace(/\s+/g, ' ').trim();
   const sql = compact(toolQueries.AI_TOOL_TASK_FACTS_SQL);
   const live = "SELECT es.EmployeeSicil FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)";
-  assert.ok(sql.includes(`EXISTS ( ${live} EXCEPT SELECT EmployeeSicil FROM #AiRosterStart)`), 'kadroya katılan üye değişim sayılır');
-  assert.ok(sql.includes(`EXISTS ( SELECT EmployeeSicil FROM #AiRosterStart EXCEPT ${live})`), 'kadrodan ayrılan üye değişim sayılır');
+  // Canlı üyelik toplu işin sonunda TEK deyimle okunur; iki yönlü karşılaştırma bu tek okumaya karşıdır (iki canlı okuma arasında
+  // katılan üye iki karşılaştırmadan da kaçamaz).
+  const end = "SELECT es.EmployeeSicil INTO #AiRosterEnd FROM dbo.MR_V_ExecutiveScope es WHERE @withRoster = 1 AND @assigneeMode = 'team' AND es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)";
+  assert.ok(sql.includes(end), 'canlı üyelik bir kez anlık görüntüye alınır');
+  assert.ok(sql.includes('EXISTS ( SELECT EmployeeSicil FROM #AiRosterEnd EXCEPT SELECT EmployeeSicil FROM #AiRosterStart)'), 'kadroya katılan üye değişim sayılır');
+  assert.ok(sql.includes('EXISTS ( SELECT EmployeeSicil FROM #AiRosterStart EXCEPT SELECT EmployeeSicil FROM #AiRosterEnd)'), 'kadrodan ayrılan üye değişim sayılır');
+  assert.equal(sql.split(live).length - 1, 0, 'karşılaştırmada ikinci bir canlı üyelik okuması yoktur');
+  assert.ok(sql.indexOf('INTO #AiRosterEnd') > sql.indexOf('INTO #AiFacts') && sql.indexOf('INTO #AiRosterEnd') < sql.indexOf('@rosterChanged'));
+  assert.match(sql, /#AiRosterStart, #AiRosterEnd;$/, 'iki anlık görüntü de toplu işin sonunda düşürülür');
   assert.match(sql, /@rosterChanged AS MembershipChanged FROM #AiRosterStart r/, 'kadro satırları anlık görüntüden ve değişim işaretiyle döner');
   // Anlık görüntü görev olgularından önce alınır; sorumlunun ekip üyeliği aynı anlık görüntüdendir.
   assert.ok(sql.indexOf('INTO #AiRosterStart') < sql.indexOf('INTO #AiFacts'));

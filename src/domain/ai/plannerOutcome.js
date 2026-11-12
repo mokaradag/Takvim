@@ -168,6 +168,11 @@ const LAYER_ASPECTS = Object.freeze({ workload: ['kişilere göre iş yükü', '
   // Aşama G: okunmayan her yön adıyla söylenir. Durum dağılımı yalnızca dönem istendiğinde ayrı okunur (dönemsiz durum özettedir).
   status: ['dönemdeki durum dağılımı', 'status breakdown in the period'], overdue: ['gecikmiş işlerin listesi', 'the list of overdue work'] });
 
+/** Kapsam yönünün sunucu adı ("kişilere göre iş yükü"); özet yönü (genel görünüm) ya da bilinmeyen yön için `null`. */
+export function layerAspectLabel(focus, locale = 'tr') {
+  return LAYER_ASPECTS[focus]?.[locale === 'en' ? 1 : 0] || null;
+}
+
 /** Çok kapsamlı özette kapsamın sunucu adı ("biriminizin işleri", "**X** projesindeki işler"); adlar kullanıcının iletisindendir. */
 export function layerOwner(layer, locale = 'tr') {
   const lang = locale === 'en' ? 1 : 0;

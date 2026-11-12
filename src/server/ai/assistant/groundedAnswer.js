@@ -30,7 +30,7 @@ import { renderClarification } from '../../../domain/ai/evidenceNarrative.js';
 import { createAiDeadline } from '../aiDeadline.js';
 import { concreteCollections, rankedRowIndexes, REQUEST_LIMITS, taskResultScope } from '../../../domain/ai/requestContract.js';
 import { EVIDENCE_TEXT_FIELDS, METRICS, metricEntityType, metricPaths, rowCollections } from '../../../domain/ai/claimableEvidence.js';
-import { PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderLayerOmissions, renderOverlappingSeries, renderPartUnavailable, renderPlannerAbstention, renderChartUnavailable, renderChartTypeUnavailable, renderPlannerClarification, renderScopeUnavailable, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
+import { layerAspectLabel, PLANNER_INTENTS, PLANNER_LIMITS, plannerTopicLabel, renderDependentLimit, renderLayerOmissions, renderOverlappingSeries, renderPartUnavailable, renderPlannerAbstention, renderChartUnavailable, renderChartTypeUnavailable, renderPlannerClarification, renderScopeUnavailable, renderTextFieldsRequired } from '../../../domain/ai/plannerOutcome.js';
 import { buildComposition, chartTypeSupported, defaultComposition, hasCompositionChoice, renderComposition } from '../../../domain/ai/groundedComposition.js';
 import { ANALYSIS_LIMITS, analysisDetails, analysisHints, analysisLayers, analysisSchema, analysisSuggestion, normalizedBrief } from '../tools/analysisPlan.js';
 import { caveatPropositions } from '../../../domain/ai/groundedPropositions.js';
@@ -722,13 +722,17 @@ function explicitRepairPaths(plan, details) {
   const explicit = submittedExplicit(plan);
   const paths = explicit.map(() => new Set());
   const grouped = explicit.map(() => []);
+  // Ham ek istek konumu → yazılmış istek yuvası: boş istek (`{}`) yuva sayılmadığından sonraki isteklerin yolu kaydırılır.
+  const slots = new Map();
+  [].concat(plan.additionalRequests ?? []).forEach((item, position) => { if (writtenRequest(item)) slots.set(position, offset + slots.size); });
   for (const detail of details) {
-    const path = String(detail).split(':')[0];
+    const [path, reason] = String(detail).split(':');
     const match = /^\$\.(request|additionalRequests\[(\d+)\])(?:\.(.+))?$/.exec(path);
     if (!match) continue;
-    const index = match[1] === 'request' ? 0 : offset + Number(match[2]);
-    if (!paths[index]) continue;
-    paths[index].add(match[3] || '');
+    const index = match[1] === 'request' ? 0 : slots.get(Number(match[2]));
+    if (index == null || !paths[index]) continue;
+    // Ölçünün nüfus reddi ölçüyü değiştirme izni değildir: yalnızca nüfus araç alanları açılır (aşağıdaki anlamsal pay).
+    if (!(reason === 'population' && /^metrics(?:\[\d+\])?$/.test(match[3] || ''))) paths[index].add(match[3] || '');
     grouped[index].push(String(detail));
   }
   // Açık isteğin anlamsal onarım payı tek istekli planınkiyle aynıdır (ör. ölçünün nüfusu reddedildiyse nüfus aracı değişebilir);
@@ -1519,9 +1523,13 @@ function completedAnalysisContext(turn, verdict) {
   // Takip bağlamını yalnızca KABUL EDİLMİŞ analitik özet kurar; olağan istek bağlam yazmaz (görev kümesi takibi ayrıdır).
   const intent = turn.presentationIntent?.analysis;
   if (!intent) return requestAnalysisContext(turn, verdict);
-  // Eksik kabul edilmiş analiz sonraki turda daha küçük bir özne kümesine dönüşemez.
-  if (verdict.kind !== 'grounded' || turn.answers.some((answer) => answer.verdict.kind !== 'grounded')
-    || turn.partNotes?.size) return null;
+  // Eksik kabul edilmiş analiz sonraki turda daha küçük bir özne kümesine dönüşemez. Tamlık yalnızca ÖZETİN bölümlerinde (bütün
+  // kapsamlar) aranır: yalnızca özetin yanındaki açık istek tamamlanamadıysa tamamlanan özet takip bağlamını yine kurar.
+  const analysisPart = (index) => !Number.isInteger(intent.analysisParts) || (index ?? 0) < intent.analysisParts;
+  const explicitOnly = Number.isInteger(intent.analysisParts) && turn.answers.length > 0;
+  if ((verdict.kind !== 'grounded' && !(explicitOnly && verdict.kind === 'unavailable'))
+    || turn.answers.some((answer) => analysisPart(answer.index) && answer.verdict.kind !== 'grounded')
+    || [...(turn.partNotes?.keys() || [])].some((index) => analysisPart(index))) return null;
   // Aşama G: takip bağlamı yalnızca ÖZETİN bölümlerinden kurulur. Özetin yanındaki açık listenin varlıkları (ör. adlı proje
   // listesi) özetin öznesi ya da daraltması (within) değildir. Çok kapsamlı yanıtın takip öznesi birincil kapsamdır: yalnızca
   // birincil kapsamın okumaları özneyi, satırları ve sunucunun bağladığı kimlikleri verir; başka kapsamın kimlikleri birincil
@@ -1636,8 +1644,12 @@ function compositionInput(turn, verdict) {
   const notes = [];
   for (const answer of answers) {
     if (answer.verdict.kind === 'grounded') continue;
-    // Aşama G: çok kapsamlı özette tamamlanamayan bölüm kendi kapsamının adıyla anılır ("Bölümünüz"), araç konusuyla değil.
-    const topic = (turn.presentationIntent?.analysis?.layers && layerTopic(answer.request?.filters, turn.locale))
+    // Aşama G: çok kapsamlı özette tamamlanamayan bölüm kendi kapsamının adıyla anılır ("Bölümünüz"), araç konusuyla değil; bölüm
+    // bir dağılım yönüyse yön de adlandırılır ("Ekibiniz · kişilere göre iş yükü"): kullanıcı neyi yeniden soracağını bilir.
+    const layerIntent = turn.presentationIntent?.analysis;
+    const owner = layerIntent?.layers && layerTopic(answer.request?.filters, turn.locale);
+    const aspect = owner ? layerAspectLabel(layerIntent.sections?.[answer.index ?? 0]?.focus, turn.locale) : null;
+    const topic = (owner && (aspect ? `${owner} · ${aspect}` : owner))
       || plannerTopicLabel(getRotaTool(answer.request?.population?.tool)?.topic, turn.locale);
     if (!missing.some((item) => item.index === answer.index)) missing.push({ index: answer.index, kind: answer.verdict.kind, topic });
     // Eksik bölümün sunucu notu hangi konuya ait olduğunu söyler; metin doğrulanmış anlatımdakiyle aynıdır.
@@ -1676,8 +1688,9 @@ function compositionInput(turn, verdict) {
         && (!intent.layers || intent.sections?.[answer.index ?? 0]?.layer === 0))
         .some((answer) => answer.request?.entities?.some((entity) => entity.type === 'project'))
         && !['project', 'projects'].includes(outlineScope) } : null,
-    // Analitik özet olmayan çok bölümlü yanıtın açılışı için bölüm konuları (araç konusunun adı; olgu değil).
-    topics: intent ? null : new Map(answers.filter((answer) => answer.verdict.kind === 'grounded')
+    // Bölüm konuları (araç konusunun adı; olgu değil): analitik özet olmayan çok bölümlü yanıtın açılışı ve çok kapsamlı özetin
+    // yanındaki açık istek bölümünün başlığı (aracın bölüm adı yoksa) için.
+    topics: new Map(answers.filter((answer) => answer.verdict.kind === 'grounded')
       .map((answer) => [answer.index + 1, plannerTopicLabel(getRotaTool(answer.request?.population?.tool)?.topic, turn.locale)]).filter(([, label]) => label)) };
 }
 
@@ -1822,10 +1835,13 @@ export function chartTypeNote(turn, composition, rendered) {
     .map(({ fact }) => fact?.semantic?.groupBy).find(Boolean) || null;
   const overlapping = tables.some((table) => table.group?.tool === 'rota_workload_summary')
     && !tables.some((table) => table.group?.tool === 'rota_task_analytics' && ['project', 'department', 'unit', 'assignee'].includes(groupByOf(table)));
+  // Örtüşen iş yükü sayılarının yerine geçen grafik yalnızca iş yükü tablosundan çizilmiş grafiktir; başka kapsamın grafiği adlandırılmaz.
+  const workloadIndex = (rendered.chartTables || []).findIndex((id) => id != null && composition.render.tables.get(id)?.group?.tool === 'rota_workload_summary');
+  const workloadChart = workloadIndex >= 0 ? rendered.chartTypes?.[workloadIndex] || null : null;
   for (const type of types) {
     if (rendered.chartTypes?.includes(type)) continue;
     turn.trace.presentation = { ...(turn.trace.presentation || {}), chartTypeUnavailable: type };
-    notes.push(type === 'stacked' && overlapping ? renderOverlappingSeries({ substituted: rendered.chart, locale: turn.locale })
+    notes.push(type === 'stacked' && overlapping ? renderOverlappingSeries({ substituted: workloadChart, locale: turn.locale })
       : chartTypeSupported({ ...composition.render, chartType: type }) ? renderChartUnavailable({ type, substituted: rendered.chart, locale: turn.locale })
         : renderChartTypeUnavailable({ type, substituted: rendered.chart, locale: turn.locale }));
   }
@@ -1886,8 +1902,11 @@ async function finish(turn, settled, onText, selectedBy = 'model', { compose = t
   const withOmissions = (value) => {
     const intent = turn.presentationIntent?.analysis;
     if (!intent?.omitted?.length || !intent.layers || !(value.kind === 'grounded' || value.kind === 'unavailable' && value.citedIds?.length)) return value;
-    const failed = new Set(turn.answers.filter((answer) => answer.verdict.kind !== 'grounded').map((answer) => intent.sections?.[answer.index]?.layer).filter((layer) => layer != null));
-    const omitted = intent.omitted.filter((item) => !failed.has(item.layer));
+    const layerOf = (answer) => intent.sections?.[answer.index ?? 0]?.layer;
+    const failed = new Set(turn.answers.filter((answer) => answer.verdict.kind !== 'grounded').map(layerOf).filter((layer) => layer != null));
+    // Yönü not edilmeyen kapsam yalnızca BÜTÜN bölümleri tamamlanamayan kapsamdır; kısmen okunan kapsamın okunmayan yönü yine söylenir.
+    const lost = new Set([...failed].filter((layer) => turn.answers.filter((answer) => layerOf(answer) === layer).every((answer) => answer.verdict.kind !== 'grounded')));
+    const omitted = intent.omitted.filter((item) => !lost.has(item.layer));
     const note = renderLayerOmissions({ omitted, layers: intent.layers, complete: value.kind === 'grounded' && !failed.size, locale });
     return note ? { ...value, normalized: `${value.normalized}\n\n${note}` } : value;
   };
@@ -1967,6 +1986,8 @@ function truncatedListFallback(turn, entries) {
   // sayılmaz (istenen tam liste karşılanmadan kalır).
   const owned = turn.presentationIntent.analysis.analysisParts;
   if (Number.isInteger(owned) && (turn.partIndex ?? 0) >= owned) return null;
+  // Özetin okumasıyla birleşen açık tam liste isteği de kendi tam liste koşulunu korur (sıralama başına dönüşmez).
+  if (turn.presentationIntent.analysis.explicitParts?.includes(turn.partIndex ?? 0)) return null;
   const truncated = entries.some((entry) => entry.tool === request.population.tool && (entry.payload?.truncated === true || entry.payload?.complete === false));
   return truncated ? { ...request, operation: 'rank', rank: { metric, order: 'desc', limit: REQUEST_LIMITS.maxRankLimit } } : null;
 }
@@ -2024,20 +2045,22 @@ async function serverSelection(turn) {
   // düşmez: AYNI kanıttan (ek okuma yok) aracın kendi sırasıyla sınırlı bir sıralama başı olarak doğrulanır; tam liste olmadığı için
   // nüfus geneli bulgular kurulmaz ve sunum sıralama başını söyler.
   const fallback = !verified.length ? truncatedListFallback(turn, input.entries) || undatedMilestoneFallback(turn) : null;
+  // Yedek istek yalnızca kabul edilen bir hükümle kalır; başka her yolda (seçim yok, çok seçim ya da son doğrulama reddi) planlayıcının
+  // özgün isteği geri konur: onarım, kanıt ve bölüm kaydı bildirilmemiş bir istekle sürmez.
+  const original = turn.request;
   if (fallback) {
-    const original = turn.request;
     turn.request = fallback;
     const ranked = verdictInput(turn);
     verified = requestSelections(fallback, ranked.entries, ranked.selection, ranked.today, (candidate) => analyze(candidate, ranked).ok);
-    if (verified.length !== 1) turn.request = original;
   }
   turn.trace.verificationMs += Date.now() - startedAt;
-  if (verified.length !== 1) return null;
+  if (verified.length !== 1) { turn.request = original; return null; }
   const [selected] = verified;
   turn.status(ASSISTANT_STREAM_PHASES.VERIFYING);
   const checkedAt = Date.now();
   const verdict = analyze(selected, verdictInput(turn));
   turn.trace.verificationMs += Date.now() - checkedAt;
+  if (!verdict.ok) turn.request = original;
   return verdict.ok ? verdict : null;
 }
 
@@ -2057,7 +2080,9 @@ function presentationIntent(plan, today) {
       ...(analysis.omitted?.length ? { omitted: analysis.omitted } : {}),
       // Bölümlerin özet sahipliği: ilk `analysisParts` bölüm özetin okumalarıdır (sonrakiler açık istek); çok kapsamlı özette her
       // okumanın kapsamı ve yönü (`sections`). Sunum başlıkları ve takip bağlamı kanıt süzgecinden tahmin yürütmez.
-      ...(Number.isInteger(analysis.analysisParts) ? { analysisParts: analysis.analysisParts } : {}), ...(analysis.sections ? { sections: analysis.sections } : {}) }) : null,
+      ...(Number.isInteger(analysis.analysisParts) ? { analysisParts: analysis.analysisParts } : {}), ...(analysis.sections ? { sections: analysis.sections } : {}),
+      // Açık isteğin birleştiği özet okumaları: o bölüm açık isteğin koşulunu (ör. tam liste) taşır.
+      ...(analysis.explicitParts?.length ? { explicitParts: analysis.explicitParts } : {}) }) : null,
     ...(analysis?.relativeWindow ? { relativeWindow: analysis.relativeWindow } : {}),
     window: analysis?.dateFrom || analysis?.dateTo ? Object.freeze({ ...(analysis.dateFrom ? { dateFrom: analysis.dateFrom } : {}), ...(analysis.dateTo ? { dateTo: analysis.dateTo } : {}) }) : null,
     // Açıklama sonrasında yeniden yürütülecek kabul edilmiş özet (kimlik taşımaz; adlar kullanıcının kendi iletisindendir).

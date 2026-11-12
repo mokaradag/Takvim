@@ -645,8 +645,10 @@ Bu bölüm her oturumun sonunda güncellenir. Güncel durum ve sonraki giriş no
   betiğinde G katmanı ve tek üst sınama altında vaka koşusu (rapor bütün vakaları içerir), arayüz kabulünde yönetici verisi,
   tema/görünüm seçimi ve betikli uç.
 - **Doğrulandı:** `npm test -- --test-concurrency=4` (bütün sınamalar geçti), `npm run lint`, `npm run build`; G belirlenimci kıyası
-  48/48 altın plan + hedefli sınamalar; betikli görsel kabul 36/36; Haiku sonuçları ve belirteç kayıtları
-  [Kabul Matrisi §7.4](BILGIN-ANALIZ-KABUL-MATRISI.md) (G hedefli 21/49, G ayrık 16/22; aynı koşulda F ayrık dal 14/24 = `main` 14/24, F özgün dal 9/40 – `main` 8/40: gerileme göstergesi yok).
+  48/48 altın plan + hedefli sınamalar; betikli görsel kabul 36/36 (önceki tur; yakınsama turunda yalnızca B profili G1–G5 masaüstü
+  5/5, [Kabul Matrisi §7.8](BILGIN-ANALIZ-KABUL-MATRISI.md)); Haiku sonuçları ve belirteç kayıtları: ilk koşu
+  [Kabul Matrisi §7.4](BILGIN-ANALIZ-KABUL-MATRISI.md) (G hedefli 21/49, G ayrık 16/22; aynı koşulda F ayrık dal 14/24 = `main` 14/24, F özgün dal 9/40 – `main` 8/40: gerileme göstergesi yok);
+  son ölçüm [Kabul Matrisi §7.4b](BILGIN-ANALIZ-KABUL-MATRISI.md) (`890e7c9`: G hedefli 33/49, G ayrık 17/22, F hedefli 17/40, F ayrık 21/24; yakınsamadı).
 - **Açık:** Windows VM yeniden oynatması (§11); anlamsal danışmanlıklı kanonik kapı; Haiku'nun kapsam/yön seçimi ve düzen reddi →
   Derin isteği (model değişkenliği); CLI bağdaştırıcısının ara sıra `error_max_turns` altyapı hatası; Haiku ile canlı arayüz koşusu
   (kota); baz plan kayması bulgusu; dönemsel/tarihsel sorular (H).

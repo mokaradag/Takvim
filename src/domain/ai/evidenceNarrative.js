@@ -187,7 +187,12 @@ function totalsSentences(entries, { scope, locale, qualifiers, singular = false 
     // Aşama G: görevi olmayan nüfusta tamamlanma oranı tanımsızdır ("%0" uydurulmaz); kişide görünür görevin olmaması boşta
     // olduğunu göstermez (Rota kapasite ya da Rota dışındaki işi tutmaz).
     const assignee = total.semantic?.filters?.assignee;
-    if (total.value === 0 && (assignee === 'me' || assignee === 'person')) {
+    // Çekince yalnızca kişinin BÜTÜN (ya da bütün açık) görevleri sayıldıysa yerindedir: gecikmiş, dönemli, projeli ya da başka
+    // koşulla daraltılmış sıfır "boşta değil" anlamına gelecek bir boşluk değildir.
+    const statuses = total.semantic?.filters?.statuses || [];
+    const whole = factPresentation(total, locale).qualifierParts.every((part) => ['assignee', 'teamLevel', 'person', 'personSicil'].includes(part.key)
+      || (part.key === 'statuses' && ['todo', 'in_progress'].every((status) => statuses.includes(status))));
+    if (total.value === 0 && (assignee === 'me' || assignee === 'person') && whole) {
       extend(assignee === 'me'
         ? (locale === 'en' ? 'but this does not mean you are idle, because Rota records assigned tasks, not capacity or work done outside Rota'
           : 'ancak bu, boşta olduğunuz anlamına gelmez, çünkü Rota kapasiteyi ya da Rota dışındaki işleri değil, yalnızca atanmış görevleri tutar')
@@ -347,7 +352,8 @@ function recordSentences(record, locale, { rowsCovered = false } = {}) {
     const scope = scopePhrase(record, locale, { named: sentences.length > 0, projects: projectCount?.fact });
     const assigneeFilters = record.entries.find(({ fact }) => fact.semantic?.filters?.assignee)?.fact.semantic.filters;
     const personScoped = Boolean(resolvedPerson(assigneeFilters)) && record.tool !== 'rota_portfolio_summary' && !projectNamed;
-    const assigneeScoped = (['me', 'team'].includes(assigneeFilters?.assignee) || personScoped)
+    // Örgütsel grup satırının öznesi bölüm/birimdir; sorumlu kapsamı (ör. biriminiz) özneyle söylenmediğinden ölçütte kalır.
+    const assigneeScoped = (['me', 'team'].includes(assigneeFilters?.assignee) || personScoped) && !organizationGroup(record)
       && record.tool !== 'rota_portfolio_summary' && !(record.kind === 'project' || record.entries.some(({ fact }) => fact.semantic?.filters?.projectId));
     const scopedQualifiers = assigneeScoped && !qualified
       ? (qualified = true, qualifierText(record.entries, locale, { omit: ['assignee', 'teamLevel', 'person', 'personSicil', ...(projectNamed ? ['project'] : [])] })) : null;
