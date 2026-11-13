@@ -115,7 +115,7 @@ function liveTurn(rounds, completeRound) {
 }
 
 /** Tier B puanı: kabul edilen planın kararı, HER isteğin kapsamı, düzey, adlar, görsel bayrağı, etkin yönler ve ufuk. */
-export function plannerScore(result, expect) {
+export function plannerScore(result, expect, today = corpus.today) {
   const failures = [];
   const decision = result.decisions.at(-1) || null;
   const intent = result.outcome === 'planned' ? 'rota' : decision?.intent || result.outcome;
@@ -139,12 +139,15 @@ export function plannerScore(result, expect) {
     // Adlı kapsam yalnızca türüyle değil kimliğiyle eşleşir: beklenti adı verdiyse okumanın varlığı o addır (başka kişi/proje
     // karşılamaz). Portföy kapsamı portföy aracının okumasıdır; koşulsuz görev okuması "görünür bütün işler" kapsamıdır.
     const sameName = (layer, entity) => !layer.names?.length || layer.names.some((name) => containmentText(String(name)) === containmentText(String(entity.query ?? entity.text ?? '')));
-    const readsLayer = (layer, request) => (layer.scope === 'self' ? request.filters?.assignee === 'me'
-      : layer.scope === 'team' ? request.filters?.assignee === 'team' && (request.filters?.teamLevel || '') === (layer.level || '')
+    const readsLayer = (layer, request) => (layer.scope === 'self' ? request.filters?.assignee === 'me' && !request.entities?.length
+      : layer.scope === 'team' ? request.filters?.assignee === 'team' && !request.entities?.length && (request.filters?.teamLevel || '') === (layer.level || '')
         : ['person', 'project'].includes(layer.scope) ? request.entities?.some((entity) => entity.type === layer.scope && sameName(layer, entity)) && !request.filters?.assignee
           : layer.scope === 'projects' ? request.population?.tool === 'rota_portfolio_summary'
             : !request.filters?.assignee && !request.entities?.length && request.population?.tool !== 'rota_portfolio_summary');
     const reads = (layer) => requests.some((request) => readsLayer(layer, request));
+    for (const layer of expect.layers) for (const focus of layer.focus || []) {
+      if (!requests.some((request) => readsLayer(layer, request) && requestFocus(request).includes(focus))) failures.push(`kapsamın yönü okunmadı: ${layer.scope}/${focus}`);
+    }
     for (const layer of expect.layers.filter((layer) => !layer.optional)) if (!reads(layer)) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} okunmadı`);
     // Beklenen kapsamların üst kümesi kabul edilmez: bildirilen her kapsam ve açılan her istek beklenen kapsamlardan birinin nüfusudur
     // (ör. kendi + birim sorusuna eklenen bölüm kapsamı başarısızdır).
@@ -170,10 +173,17 @@ export function plannerScore(result, expect) {
     if (expect.visual && result.plan?.visual !== true) failures.push('görselleştirme bayrağı yok');
     // Kadro gerektiren soru (görevi olmayan üyeler): yalnızca kadroyla okunan ekip iş yükü karşılar; kişilere göre görev kırılımı
     // görevi olmayan üyeyi göstermez.
+    for (const wanted of expect.reads || []) {
+      if (!requests.some((request) => request.population?.tool === wanted.tool && (!wanted.groupBy || request.population.groupBy === wanted.groupBy)
+        && (!wanted.operation || request.operation === wanted.operation) && (wanted.limit == null || request.rank?.limit === wanted.limit)
+        && (!wanted.metrics || wanted.metrics.every((metric) => request.metrics?.includes(metric)))
+        && Object.entries(wanted.filters || {}).every(([key, value]) => JSON.stringify(request.filters?.[key]) === JSON.stringify(value)))) failures.push('istenen ölçü ve okuma biçimi yok');
+    }
     if (expect.roster && !requests.some((request) => request.population?.tool === 'rota_workload_summary' && request.filters?.assignee === 'team')) failures.push('kadroyla okunan iş yükü yok');
     // Sunucunun GERÇEKTEN okuduğu yönler: özetin etkin yönleri (bölüm bütçesi, ufuk ve portföy kuralları uygulanmış); özet
     // yoksa kabul edilen ayrıntılı isteklerin eşdeğer yönleri. Bildirilen ama okunmayan yön sayılmaz.
     const focus = result.plan?.analysis ? [...result.plan.analysis.focus] : requests.flatMap(requestFocus);
+    for (const required of expect.focusAll || []) if (!focus.includes(required)) failures.push(`yön eksik: ${required}`);
     if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
     // Beklenen ufuk kabul edilen bir okumanın aralığıdır (uçlarda en çok bir günlük yorum farkı).
     const bounded = requests.filter((request) => request.filters?.dateFrom || request.filters?.dateTo);
@@ -184,7 +194,7 @@ export function plannerScore(result, expect) {
     if (expect.overdueUnwindowed && !requests.some((request) => !request.filters?.dateFrom && !request.filters?.dateTo
       && (request.filters?.deadline === 'overdue' || request.metrics?.includes('tasks.overdue')))) failures.push('mevcut gecikme ayrı okunmadı');
     if (expect.upcomingWindow) {
-      const resolve = (value) => /^T\+-?\d+$/.test(value) ? day(corpus.today) + Number(value.slice(2)) : day(value);
+      const resolve = (value) => /^T\+-?\d+$/.test(value) ? day(today) + Number(value.slice(2)) : day(value);
       const [from, to] = expect.upcomingWindow.map(resolve);
       if (!requests.some(({ population, filters = {} }) => ['rota_task_search', 'rota_task_analytics'].includes(population?.tool)
         && !population.groupBy && filters.deadline !== 'overdue' && (!filters.dateField || filters.dateField === 'targetFinish')
@@ -195,11 +205,11 @@ export function plannerScore(result, expect) {
   return failures;
 }
 
-export async function plannerCase(item, { completeRound = completeModelRound } = {}) {
+export async function plannerCase(item, { completeRound = completeModelRound, today = corpus.today } = {}) {
   const rounds = [];
   const result = await planCase({ testCase: { id: 'q', text: item.text }, runTurn: liveTurn(rounds, completeRound), adviceFor: async () => ({ state: 'unavailable', candidates: [] }),
-    now: new Date(`${corpus.today}T09:00:00.000Z`), catalog: toolCatalogForModel() });
-  const failures = plannerScore(result, item.expect);
+    now: new Date(`${today}T09:00:00.000Z`), catalog: toolCatalogForModel() });
+  const failures = plannerScore(result, item.expect, today);
   const firstPass = rounds.length === 1 && !failures.length;
   return { id: item.id, rounds: rounds.length, firstPass, analysis: Boolean(result.plan?.analysis),
     infrastructure: rounds.find((round) => round.infrastructure)?.infrastructure || null, failures };
@@ -299,7 +309,7 @@ function layerFocus(layer, primary) {
 function explicitExpectations(plan, resolveDay) {
   if (!plan?.analysis) return [];
   return [plan.request, ...(plan.additionalRequests || [])].filter((item) => item?.population?.tool)
-    .map((item) => ({ tool: item.population.tool, filters: Object.fromEntries(Object.entries(item.filters || {}).map(([key, value]) => [key, ['dateFrom', 'dateTo'].includes(key) ? resolveDay(value) : value])),
+    .map((item) => ({ tool: item.population.tool, operation: item.operation, metrics: item.metrics, filters: Object.fromEntries(Object.entries(item.filters || {}).map(([key, value]) => [key, ['dateFrom', 'dateTo'].includes(key) ? resolveDay(value) : value])),
       // Sıralamalı istekte ölçü, yön ve satır sınırı da beklentidir (en yakın teslimatlar ile en uzak teslimatlar aynı değildir).
       ...(item.operation === 'rank' && item.rank?.metric ? { rank: { metric: item.rank.metric, order: item.rank.order, ...(Number.isInteger(item.rank.limit) ? { limit: item.rank.limit } : {}) } } : {}) }));
 }
@@ -353,7 +363,7 @@ export function executiveExpectation(item) {
   // Adlı kapsam kendi kimliğiyle beklenir (sentetik verideki Sicil/proje kimliği): başka kişinin ya da projenin okuması karşılamaz.
   const identity = (layer, name) => (layer === 'person' ? { sicil: seed.people.find((row) => row.DisplayName === name)?.Sicil ?? -1 }
     : layer === 'project' ? { projectId: seed.projects.find((row) => row.ProjectName === name)?.ProjectId ?? `bilinmeyen:${name}` } : {});
-  const layers = analysis?.also?.length ? [analysis, ...analysis.also].map((entry) => ({ scope: entry.scope, ...(entry.level ? { level: entry.level } : {}),
+  const layers = analysis?.also?.length ? [analysis, ...analysis.also].map((entry) => ({ scope: entry.scope, ...(entry.level ? { level: entry.level } : {}), ...(entry.names ? { names: entry.names } : {}),
     ...(['person', 'project'].includes(entry.scope) && entry.names?.length === 1 ? identity(entry.scope, entry.names[0]) : {}), focus: layerFocus(entry, analysis) }))
     .map((layer) => (denied(layer) ? { ...layer, optional: true } : layer)) : null;
   const finish = item.expect?.finish || { denied: 'unavailable', clarify: 'clarification', limitation: 'unsupported' }[item.handling] || 'stop';
@@ -368,16 +378,16 @@ export function executiveExpectation(item) {
   const window = from && to ? [from, to] : null;
   return { ...item.expect, finish, ...(item.handling === 'limitation' ? { noData: true } : {}),
     // Açıklama vakası nüfus okumadan sorar (ad çözümü serbesttir).
-    ...(item.handling === 'clarify' ? { noPopulation: true } : {}), ...(explicitRequests.length ? { explicitRequests } : {}),
+    ...(['clarify', 'denied'].includes(item.handling) ? { noPopulation: true } : {}), ...(explicitRequests.length ? { explicitRequests } : {}),
     ...(scope && !item.expect?.scopeDenied ? { scope } : {}), ...(layers ? { layers } : {}),
     ...(layers || item.expect?.scopeDenied ? {} : scope === 'team' ? { assignee: 'team', ...(analysis.level ? { level: analysis.level } : {}) } : scope === 'self' ? { assignee: 'me' } : {}),
     ...(scope === 'project' && !layers && !item.expect?.scopeDenied ? { project: true, projectIds: names.map((name) => seed.projects.find((row) => row.ProjectName === name)?.ProjectId || `bilinmeyen:${name}`) } : {}),
     ...(scope === 'person' && !layers && !item.expect?.scopeDenied ? { person: true, people: names.map((name) => seed.people.find((row) => row.DisplayName === name)?.Sicil || -1) } : {}),
     // Özetin dönemi: dönemli okumalar istenen takvim penceresidir (dönemsiz gecikme okuması ayrıca serbesttir).
     ...(window && finish === 'stop' ? { window } : {}),
-    // Tek kapsamlı ekip turunun yönleri kanıtla karşılanır (kapsam katmanlarındaki denetimin aynısı). Özne karşılaştırmasında
-    // (adlı kişiler/projeler, kendiyle karşılaştırma) ve kendi işlerinde yönler değer okumalarıdır; o biçimler burada denetlenmez.
-    ...(analysis?.scope === 'team' && !analysis.withSelf && !layers && finish === 'stop' && !item.expect?.scopeDenied ? { scopeFocus: layerFocus(analysis, analysis) } : {}),
+    // Tek kapsamlı yön kendi nüfusunun kanıtıyla karşılanır. İki öznenin sayısal kıyasları bu satır biçiminden ayrıdır;
+    // onların değer sözleşmesi ve özne kimlikleri kendi doğrulayıcısında korunur.
+    ...(['team', 'self', 'project', 'projects', 'all'].includes(analysis?.scope) && (analysis.scope !== 'project' || analysis.names?.length === 1) && !analysis.withSelf && !layers && finish === 'stop' && !item.expect?.scopeDenied ? { scopeFocus: layerFocus(analysis, analysis) } : {}),
     // Portföy kapsamı (birincil) portföy okumasını gerektirir: görev okumalarıyla geçemez.
     ...(scope === 'projects' && !item.expect?.scopeDenied && !denied(analysis) ? { portfolio: true } : {}),
     ...(turns.at(-1).plan?.visual ? { chart: true } : {}) };
@@ -510,7 +520,7 @@ if (direct) {
     });
   } else if (TIER === 'G' && process.env.PHASE4E_SET === 'holdout') {
     await runQualificationCases(pick(executive.holdout), async (_t, item) => {
-      const entry = await plannerCase(item);
+      const entry = await plannerCase(item, { today: executive.today });
       if (entry.firstPass) summary.firstPass += 1;
       summary.repairs += Math.max(0, entry.rounds - 1);
       summary.turns += 1;

@@ -20,6 +20,9 @@ import {
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { assigneesByTask, factFromRow } from './taskFacts.js';
 
+/** Tek toplu işte okunan ekip kadrosunun satır sınırı. */
+export const TEAM_ROSTER_LIMIT = 50;
+
 /**
  * Araç SQL'inin TEK yürütücüsü.
  *
@@ -108,7 +111,7 @@ export async function readTaskFacts(executor, scope, {
       // Görev olguları okunurken üyelik değiştiyse kadro görev sayılarıyla aynı anı göstermez: tamlık için kesik sayılır.
       // Toplu iş, ekipte en az bir üye olduğunu baştan doğrular (yoksa kapalı ret); boş anlık görüntü bu yüzden üyeliğin
       // değiştiğini gösterir ve değişim işareti satırsız sonuçta taşınamaz: boş kadro hiçbir zaman tam sayılmaz.
-      truncated: roster.truncated || roster.rows.length === 0 || roster.rows.some((row) => Number(row.MembershipChanged) === 1)
+      truncated: roster.truncated || roster.rows.length === 0 || roster.rows.some((row) => Number(row.MembershipChanged) === 1 || !(Number.isSafeInteger(Number(row.Sicil)) && Number(row.Sicil) > 0))
     } } : {})
   };
 }

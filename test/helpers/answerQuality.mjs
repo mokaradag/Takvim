@@ -32,7 +32,7 @@ function hasEnding(blocks) {
   const last = blocks.at(-1) || '';
   return /^\*\*(?:Öne çıkan konu|Key point):\*\* .+/.test(last) && !last.includes('\n')
     // Öncelik kapanışı bir paragraftır: sıra bağlaçlarıyla en az iki öncelik ve kaynak atfı taşır.
-    || /^(?:Özetle öncelik sırası şöyle: önce .+; (?:ardından|son olarak) .+|In short, the order of priority is: first .+; (?:then|finally) .+)\. (?:【R\d+】)+$/.test(last) && !last.includes('\n')
+    || /^(?:Özetle öncelik sırası şöyle: önce .+; (?:ardından|son olarak) .+|In short, the order of priority is: first .+; (?:then|finally) .+)\. (?:【R\d+】\s*)+$/.test(last) && !last.includes('\n')
     || NEXT_STEPS.has(last);
 }
 const NON_PROSE = /^(#### |\||_|```|- |\d+\. |> )/;

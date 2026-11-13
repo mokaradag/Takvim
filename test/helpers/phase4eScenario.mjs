@@ -13,7 +13,7 @@ import { AYSE, NOW, rotaToolSeed } from './aiToolFixtures.mjs';
 import { createFakeAiProvider } from './fakeAiProvider.mjs';
 import { composer, coveringBlocks, isCompositionCall, compositionView } from './compositionScenario.mjs';
 import { answerQuality } from './answerQuality.mjs';
-import { formatCount } from '../../src/domain/ai/groundedPropositions.js';
+import { formatCount, formatFactDay } from '../../src/domain/ai/groundedPropositions.js';
 import { layerAspectLabel, layerOwner } from '../../src/domain/ai/plannerOutcome.js';
 
 const planCall = (plan) => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plan }] });
@@ -75,7 +75,7 @@ export const G_FINDING_TEXT = Object.freeze({
   overdueRateLeader: /Açık işe oranla bakıldığında tablo değişiyor/,
   completionDespiteOverdue: /tamamlanmış olsa da \*\*\d+\*\* gecikmiş görev bulunuyor/,
   volumeVsDelay: /Görev sayısı tek başına baskıyı göstermiyor/,
-  levelComparison: /Açık işlerde gecikme oranı|Karşılaştırılan kapsamların hiçbirinde gecikmiş açık iş yok/,
+  levelComparison: /Açık işlerde gecikme oranı|Karşılaştırılan kapsamların hiçbirinde gecikmiş açık iş yok|Karşılaştırılan kapsamların hiçbirinde açık iş olmadığından/,
   // Kilometre taşı DURUM bulgusunun kendisi (gecikmiş sayısı, "hiçbiri gecikmiş değil" ya da sıradaki): başlık ya da liste metni yetmez.
   milestoneStatus: /kilometre taşından \*\*\d+[^*]*\*\* gecikmiş|\*\*\d+\*\* kilometre taşı gecikmiş|kilometre taşının hiçbiri gecikmiş değil|Sıradaki kilometre taşı \*\*/,
   // Örgütsel yayılım bulgusu ve tablonun zorunlu toplanmama çekincesi birlikte (sıra bulgu ile çekincenin yerleşimine bağlıdır).
@@ -121,6 +121,7 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.windowDays && !bounded.some((row) => row.ok === true && row.params.dateFrom && row.params.dateTo
     && (!expect.assignee || row.params.assigneeMode === expect.assignee)
     && (!expect.level || row.params.teamLevel === expect.level.toUpperCase())
+    && Math.abs(day(row.params.dateFrom) - day(row.params.today || new Date(NOW).toISOString().slice(0, 10))) <= 1
     && day(row.params.dateTo) - day(row.params.dateFrom) + 1 === expect.windowDays)) {
     problems.push(`${expect.windowDays} günlük dönem okunmadı`);
   }
@@ -158,7 +159,7 @@ export function turnViolations(result, expect, { live = false } = {}) {
     // Gerekli kapsam yalnızca BAŞARILI okumayla karşılanır (başarısız okuma kapsamı okunmuş saymaz); bildirilmemiş kapsam denetimi
     // ise denenen her okumayı (başarısız olanlar ve portföy dahil) inceler.
     const keys = reads.map(signature);
-    const okKeys = reads.filter((row) => row.ok === true).map(signature);
+    const okKeys = reads.filter((row) => row.ok === true && !(row.params.assigneeMode === 'unassigned')).map(signature);
     const portfolioRead = result.log.some((row) => row.query === 'portfolio' && row.ok === true);
     for (const layer of expect.layers.filter((layer) => !layer.optional)) {
       const portfolio = ['projects', 'all'].includes(layer.scope) && portfolioRead;
@@ -185,7 +186,7 @@ export function turnViolations(result, expect, { live = false } = {}) {
     const omissionStated = (layer, focus) => omissionNoted(content, expect.layers, layer, focus, result.locale);
     const layerKeyOf = (row) => evidenceKey(row) || 'all|';
     for (const layer of expect.layers.filter((layer) => !layer.optional && Array.isArray(layer.focus))) {
-      const owned = (result.evidence || []).filter((row) => matches(layer, layerKeyOf(row)));
+      const owned = (result.evidence || []).filter((row) => matches(layer, layerKeyOf(row)) && row.data?.filters?.assignee !== 'unassigned');
       for (const focus of layer.focus) {
         const shape = LAYER_FOCUS_SHAPES[focus];
         if (!shape || owned.some((row) => shape(row, layer))) continue;
@@ -220,7 +221,7 @@ export function turnViolations(result, expect, { live = false } = {}) {
     const layer = { scope: expect.scope, level: expect.level || null };
     for (const focus of expect.scopeFocus) {
       const shape = LAYER_FOCUS_SHAPES[focus];
-      if (shape && !(result.evidence || []).some((row) => shape(row, layer))) problems.push(`yön kanıtı yok: ${focus}`);
+      if (shape && !(result.evidence || []).some((row) => scopeEvidence(row, expect) && shape(row, layer))) problems.push(`yön kanıtı yok: ${focus}`);
     }
   }
   const status = result.evidence?.filter((row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'status') || [];
@@ -322,13 +323,13 @@ export function turnViolations(result, expect, { live = false } = {}) {
   for (const pattern of expect.must || []) if (!new RegExp(pattern).test(content)) problems.push(`zorunlu ifade yok: ${pattern}`);
   if (expect.conclusion && !answerQuality(content).ending) problems.push('son blokta sonuç yok');
   if (expect.priorities) {
-    const ending = content.split('\n\n').filter((block) => block.trim() && !/^_Not:/.test(block)).at(-1) || '';
+    const ending = content.split('\n\n').filter((block) => block.trim() && !/^_(?:Not:|Note:)/.test(block)).at(-1) || '';
     // Öncelik kapanışı kaynaklı tek paragraftır: sıra bağlacıyla açılan her bölüm bir önceliktir.
-    const closing = /^(?:Özetle öncelik sırası şöyle|In short, the order of priority is): (.+)\. (?:【R\d+】)+$/.exec(ending);
+    const closing = /^(?:Özetle öncelik sırası şöyle|In short, the order of priority is): (.+)\. (?:【R\d+】\s*)+$/.exec(ending);
     const priorities = closing ? closing[1].split('; ').filter((item) => /^(?:önce|ardından|son olarak|first|then|finally) \S/.test(item)) : [];
     if (priorities.length !== expect.priorities) problems.push('istenen kanıtlı öncelik sayısı eksik');
   }
-  if (expect.overdueUnwindowed && !reads.some((row) => row.params.deadline === 'overdue' && !row.params.dateFrom && !row.params.dateTo)) problems.push('mevcut gecikme ayrı okunmadı');
+  if (expect.overdueUnwindowed && !reads.some((row) => row.ok === true && row.params.deadline === 'overdue' && !row.params.dateFrom && !row.params.dateTo)) problems.push('mevcut gecikme ayrı okunmadı');
   // Veri okumayan tur hiçbir Rota sorgusu çalıştırmaz (görev kimliğiyle ya da portföy okuması dâhil; süzülmüş alt küme değil).
   if (expect.noData && result.log.length) problems.push(`veri okundu: ${[...new Set(result.log.map((row) => row.query))].join(',')}`);
   if (expect.table && !/^\|.+\|\n\|[- :|]+\|/m.test(content)) problems.push('istenen tablo yok');
@@ -336,7 +337,7 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.finish === 'stop' && (!reads.length && !result.log.some((row) => row.query === 'portfolio'))) problems.push('araç okuması yok');
   // Açıklama vakası görev nüfusunu okumadan sorar: kişi/proje adı çözümü serbesttir; başarılı nüfus ya da portföy okuması ve görev
   // kanıtı açıklama bitişiyle örtülmez.
-  if (expect.noPopulation && (reads.some((row) => row.ok === true) || result.log.some((row) => row.query === 'portfolio' && row.ok === true)
+  if (expect.noPopulation && (result.log.some((row) => ['task-facts', 'task-detail'].includes(row.query) && row.ok === true) || result.log.some((row) => row.query === 'portfolio' && row.ok === true)
     || (result.evidence || []).some((row) => POPULATION_TOOLS.has(row.tool)))) problems.push('açıklama vakasında görev nüfusu okundu');
   // Özetin yanındaki açık istek: kendi süzgeçleriyle okunmuş ve satırları yanıtta kaynağıyla teslim edilmiş olmalıdır (özetin
   // başka bir tablosu ya da kapsam okumaları istenen listenin yerine geçmez).
@@ -344,7 +345,8 @@ export function turnViolations(result, expect, { live = false } = {}) {
   // beklenendir. Atıf tek başına teslim değildir: kanıtın satırları yanıtta görünmelidir.
   for (const wanted of expect.explicitRequests || []) {
     const delivered = (result.evidence || []).some((row) => row.tool === wanted.tool && explicitFiltersMatch(row.data?.filters || {}, wanted.filters)
-      && explicitRankMatch(row, wanted.rank) && content.includes(`【${row.evidenceId}】`) && rowsDelivered(row, content));
+      && explicitRankMatch(row, wanted.rank) && (wanted.operation !== 'list' || row.complete === true && row.truncated !== true)
+      && content.includes(`【${row.evidenceId}】`) && rowsDelivered(row, content, wanted));
     if (!delivered) problems.push(`açık istek teslim edilmedi: ${wanted.tool}`);
   }
   return problems;
@@ -365,8 +367,9 @@ function explicitFiltersMatch(actual, wanted) {
   const names = { status: 'statuses', priority: 'priorities' };
   const norm = (value) => (Array.isArray(value) ? [...value].map((item) => String(item).toLowerCase()).sort() : String(value ?? '').toLowerCase());
   const asked = new Set(Object.keys(wanted || {}).map((key) => names[key] || key));
-  return Object.entries(wanted || {}).every(([key, value]) => JSON.stringify(norm(actual[names[key] || key])) === JSON.stringify(norm(value)))
-    && NARROWING_FILTERS.every((key) => asked.has(key) || neutralFilter(actual[key]));
+  return Object.entries(wanted || {}).every(([key, value]) => JSON.stringify(norm(actual[names[key] || key] ?? (key === 'dateField' ? 'targetFinish' : undefined))) === JSON.stringify(norm(value)))
+    && (!actual.dateField || actual.dateField === (wanted?.dateField || 'targetFinish'))
+    && NARROWING_FILTERS.every((key) => asked.has(key) || (key === 'milestone' ? actual[key] == null : neutralFilter(actual[key])));
 }
 
 /** Görev listesi sıralaması → aracın sırası (rota_task_search). */
@@ -378,15 +381,38 @@ function explicitRankMatch(row, rank) {
   const sort = TASK_RANK_SORTS[`${rank.metric}:${rank.order}`];
   if (row.tool === 'rota_task_search' && (!sort || row.data?.sort !== sort)) return false;
   const rows = row.data?.tasks || row.data?.people || row.data?.projects || [];
-  return !Number.isInteger(rank.limit) || rows.length <= rank.limit;
+  return !Number.isInteger(rank.limit) || rows.length === Math.min(rank.limit, row.counts?.total ?? row.totalCount ?? rows.length)
+    && (rows.length === rank.limit || row.complete === true);
 }
 
 /** Kanıtın satırları (görev başlığı, kişi ya da proje adı) yanıtta görünüyor mu; Markdown kaçışları yok sayılır. */
-function rowsDelivered(row, content) {
+function rowsDelivered(row, content, wanted = {}) {
   const plain = content.replace(/\\(.)/g, '$1').replaceAll('**', '');
-  const names = (row.data?.tasks || []).map((item) => item.title).concat((row.data?.people || []).map((item) => item.name), (row.data?.projects || []).map((item) => item.name))
-    .filter((name) => typeof name === 'string' && name.trim());
-  return names.every((name) => plain.includes(name));
+  const lines = plain.split('\n').filter((line) => line.trim());
+  const rows = row.data?.tasks || row.data?.people || row.data?.projects || [];
+  const used = new Set();
+  let previous = -1;
+  for (const item of rows) {
+    const name = item.title || item.name;
+    if (typeof name !== 'string' || !name.trim()) return false;
+    const found = lines.findIndex((line, index) => !used.has(index) && (!wanted.rank || index > previous) && line.includes(name)
+      && (!(wanted.metrics || []).includes('task.targetFinish') || item.targetFinish == null || line.includes(item.targetFinish) || line.includes(formatFactDay(item.targetFinish, 'tr')) || line.includes(formatFactDay(item.targetFinish, 'en'))
+        || line.includes(item.targetFinish.slice(0, 10).split('-').reverse().join('.'))
+        || line.includes(item.targetFinish.slice(0, 10).split('-').reverse().join('/'))));
+    if (found < 0) return false;
+    used.add(found); previous = found;
+  }
+  return true;
+}
+
+/** Tek kapsamlı yön yalnızca aynı kimliğin ve aynı nüfusun kanıtıyla karşılanır. */
+function scopeEvidence(row, expect) {
+  const f = row.data?.filters || {};
+  if (expect.scope === 'self') return f.assignee === 'me' && !f.projectId;
+  if (expect.scope === 'team') return f.assignee === 'team' && !f.projectId && (!expect.level || f.teamLevel === expect.level);
+  if (expect.scope === 'project') return expect.projectIds?.includes(f.projectId) && !['me', 'team', 'person', 'unassigned'].includes(f.assignee);
+  if (expect.scope === 'projects' && row.tool === 'rota_portfolio_summary') return true;
+  return !f.projectId && !['me', 'team', 'person', 'unassigned'].includes(f.assignee);
 }
 
 /**
@@ -400,15 +426,15 @@ function omissionNoted(content, layers, layer, focus, locale = 'tr') {
   const aspect = layerAspectLabel(focus, english ? 'en' : 'tr');
   if (!note || !aspect) return false;
   const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const ownerPattern = (item) => (['person', 'project'].includes(item.scope)
+  const ownerPattern = (item) => (['person', 'project'].includes(item.scope) && !item.names?.length
     ? (english ? (item.scope === 'person' ? "\\*\\*[^*]+\\*\\*'s work" : 'the work in \\*\\*[^*]+\\*\\*') : `\\*\\*[^*]+\\*\\* ${item.scope === 'person' ? 'sorumluluğundaki' : 'projesindeki'} işler`)
-    : escape(layerOwner({ scope: item.scope, ...(item.level ? { level: item.level } : {}) }, english ? 'en' : 'tr')));
+    : escape(layerOwner({ scope: item.scope, ...(item.level ? { level: item.level } : {}), ...(item.names ? { names: item.names } : {}) }, english ? 'en' : 'tr')));
   const at = (item) => { const match = new RegExp(ownerPattern(item), 'i').exec(note); return match ? { index: match.index, end: match.index + match[0].length } : null; };
   const own = at(layer);
   if (!own) return false;
   const others = layers.filter((item) => item !== layer).map(at).filter(Boolean);
   if (english) {
-    const start = Math.max(note.indexOf('; ') + 1, ...others.filter((item) => item.end <= own.index).map((item) => item.end));
+    const start = note.lastIndexOf('; ', own.index) + 2;
     return note.slice(start, own.index).includes(aspect);
   }
   const end = Math.min(note.indexOf(' tek yanıtın'), ...others.filter((item) => item.index > own.end).map((item) => item.index));
@@ -416,20 +442,24 @@ function omissionNoted(content, layers, layer, focus, locale = 'tr') {
 }
 
 /** Kapsam yönünün kanıt biçimi (yön → okumanın aracı/gruplaması/süzgeci); özetle karşılanan yönler (genel, durum) denetlenmez. */
+const openPopulation = (f) => Array.isArray(f.statuses) && f.statuses.length === 2 && ['todo', 'in_progress'].every((status) => f.statuses.includes(status));
+const unrestricted = (f, allowed = []) => NARROWING_FILTERS.filter((key) => !['projectId', ...allowed].includes(key)).every((key) => key === 'milestone' ? f[key] == null : neutralFilter(f[key]));
 const LAYER_FOCUS_SHAPES = Object.freeze({
-  overdue: (row) => row.tool === 'rota_task_search' && row.data?.filters?.deadline === 'overdue',
-  upcoming: (row) => row.tool === 'rota_task_search' && row.data?.filters?.milestone !== true && row.data?.filters?.deadline !== 'overdue'
-    && (String(row.data?.filters?.deadline || '').startsWith('due_') || Boolean(row.data?.filters?.dateFrom)),
-  critical: (row) => row.tool === 'rota_task_search' && (row.data?.filters?.priorities || []).includes('critical'),
-  // Kilometre taşı yönü AÇIK kilometre taşlarıdır (bütün açık durumlar): yalnızca tamamlananların listesi yönü karşılamaz.
-  milestones: (row) => row.tool === 'rota_task_search' && row.data?.filters?.milestone === true
-    && ['todo', 'in_progress'].every((status) => (row.data.filters.statuses || []).includes(status)) && !(row.data.filters.statuses || []).includes('done'),
-  workload: (row) => row.tool === 'rota_workload_summary' || (row.tool === 'rota_task_analytics' && row.data?.groupBy === 'assignee'),
-  org: (row, layer) => (row.tool === 'rota_task_analytics' && ['department', 'unit'].includes(row.data?.groupBy))
+  overdue: (row) => row.tool === 'rota_task_search' && row.data?.filters?.deadline === 'overdue'
+    && (!(row.data.filters.statuses || []).length || openPopulation(row.data.filters)) && unrestricted(row.data.filters, ['statuses', 'deadline']),
+  upcoming: (row) => row.tool === 'rota_task_search' && openPopulation(row.data?.filters || {}) && row.data?.filters?.milestone !== true
+    && (String(row.data?.filters?.deadline || '').startsWith('due_') || Boolean(row.data?.filters?.dateFrom))
+    && unrestricted(row.data.filters, ['statuses', 'deadline', 'dateFrom', 'dateTo']),
+  critical: (row) => row.tool === 'rota_task_search' && openPopulation(row.data?.filters || {})
+    && row.data.filters.priorities?.length === 2 && ['critical', 'high'].every((priority) => row.data.filters.priorities.includes(priority))
+    && unrestricted(row.data.filters, ['statuses', 'priorities', 'dateFrom', 'dateTo']),
+  milestones: (row) => row.tool === 'rota_task_search' && row.data?.filters?.milestone === true && openPopulation(row.data.filters)
+    && unrestricted(row.data.filters, ['statuses', 'milestone']),
+  workload: (row, layer) => row.tool === 'rota_workload_summary' || (row.tool === 'rota_task_analytics' && row.data?.groupBy === (['self', 'person'].includes(layer.scope) ? 'project' : 'assignee')),
+  org: (row, layer) => row.tool === 'rota_task_analytics' && row.data?.groupBy === (layer.level === 'department' ? 'unit' : 'department')
     || (layer.scope === 'team' && layer.level === 'unit' && row.tool === 'rota_workload_summary'),
-  // Proje kırılımı özetin okumasıyla aynı nüfustur: durum, termin, öncelik gibi daraltmalı gruplama (ör. yalnızca tamamlananlar) yönü karşılamaz.
   projects: (row) => row.tool === 'rota_portfolio_summary' ? Array.isArray(row.data?.projects) : row.tool === 'rota_task_analytics' && row.data?.groupBy === 'project'
-    && ['statuses', 'priorities', 'deadline', 'milestone', 'text', 'wbsId', 'createdByMe'].every((key) => neutralFilter(row.data?.filters?.[key])),
+    && unrestricted(row.data?.filters || {}, ['dateFrom', 'dateTo']),
   priority: (row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'priority',
   deadlines: (row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'deadline',
   schedule: (row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'target_month'

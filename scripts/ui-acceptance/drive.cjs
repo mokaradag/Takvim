@@ -84,6 +84,7 @@ function scriptedQuestions() {
   return new Promise((resolve) => {
     const request = require('http').get(`http://127.0.0.1:${process.env.BRIDGE_PORT || 18731}/v1/scripted-plans`, (response) => {
       let body = '';
+      response.setEncoding('utf8');
       response.on('data', (chunk) => { body += chunk; });
       response.on('end', () => { try { const list = JSON.parse(body).questions; resolve(response.statusCode === 200 && Array.isArray(list) ? new Set(list) : null); } catch { resolve(null); } });
     });
@@ -99,19 +100,24 @@ function scriptedQuestions() {
   // satırsız kalır ve koşu başarısızdır. Uç betikli değilse (liste alınamazsa) kapsam daraltılmaz: model kabulü uygulanır.
   const resultFile = path.join(outDir, `${scenario.profile}.json`);
   const runId = process.env.UI_RUN_ID || require('crypto').randomUUID();
+  const uncovered = [];
   if (process.env.UI_SCRIPTED === '1') {
     const known = await scriptedQuestions();
     if (known) {
-      const covered = scenario.conversations.filter((item) => item.turns.every((text) => known.has(String(text).trim())));
+      const covered = scenario.conversations.filter((item) => item.turns.every((text, index) => item.expectedTurns?.[index]?.serverReplay === true || known.has(String(text).trim())));
       process.stdout.write(`betikli kapsam: ${scenario.profile} ${covered.length}/${scenario.conversations.length} konuşma (kalanı betikli planı olmadığı için koşulmadı; model kabulü gerekir)\n`);
       // Seçilen profilin hiçbir konuşması betikli değilse profil sınanmamıştır: eksik kapsam satırı yazılır, rapor koşuyu başarı saymaz
       // (başka profilin geçen satırları bu profilin sınanmadığını örtemez).
-      if (!covered.length && scenario.conversations.length) {
-        const reason = 'betikli plan yok';
-        fs.writeFileSync(resultFile, JSON.stringify([{ runId, skipped: reason, failures: [`kapsam eksik: ${reason}`], profile: scenario.profile, conversation: '*', detail: null,
-          turn: 0, question: '', ms: 0, rendered: { status: 'skipped', tables: [], charts: [] }, server: null, calls: [] }], null, 2));
-        return;
-      }
+      const missing = scenario.conversations.filter((item) => !covered.includes(item));
+      const previous = process.env.UI_ONLY && fs.existsSync(resultFile) ? JSON.parse(fs.readFileSync(resultFile, 'utf8')) : [];
+      const missingNames = new Set(missing.map((item) => item.name));
+      const preserved = previous.filter((row) => !missingNames.has(row.conversation));
+      const skipped = missing.map((item) => ({ runId, skipped: 'betikli plan yok', failures: ['kapsam eksik: betikli plan yok'], profile: scenario.profile,
+        conversation: item.name, detail: item.detail, turn: 0, question: item.turns[0] || '', ms: 0, rendered: { status: 'skipped', tables: [], charts: [] }, server: null, calls: [] }));
+      uncovered.push(...skipped);
+      if (skipped.length) process.exitCode = 1;
+      if (skipped.length) fs.writeFileSync(resultFile, JSON.stringify([...preserved, ...skipped], null, 2));
+      if (!covered.length) { process.exitCode = 1; return; }
       scenario.conversations = covered;
     }
   }
@@ -126,7 +132,7 @@ function scriptedQuestions() {
   // seçilmeyen konuşmaların atlanmış satırları korunur: sınanmamış konuşma rapordan sessizce düşmez.
   const selected = new Set(scenario.conversations.map((item) => item.name));
   const results = process.env.UI_ONLY && fs.existsSync(resultFile)
-    ? JSON.parse(fs.readFileSync(resultFile, 'utf8')).filter((row) => !rerun.has(row.conversation) && !(row.skipped && row.runId === runId && selected.has(row.conversation))) : [];
+    ? JSON.parse(fs.readFileSync(resultFile, 'utf8')).filter((row) => !rerun.has(row.conversation) && !(row.skipped && row.runId === runId && selected.has(row.conversation))) : [...uncovered];
   try {
   await page.goto(`http://127.0.0.1:${scenario.port}/`, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: /Gerçek Sistemi aç/ }).click();
@@ -138,6 +144,7 @@ function scriptedQuestions() {
   const narrow = process.env.UI_VIEWPORT === 'mobile' ? { width: 390, height: 844 } : null;
   const toggle = { dark: 'Koyu temaya geç', light: 'Açık temaya geç' }[process.env.UI_THEME];
   if (toggle && await page.getByTitle(toggle).first().isVisible().catch(() => false)) { await page.getByTitle(toggle).first().click(); await page.waitForTimeout(400); }
+  if (toggle && !(await page.locator('body').getAttribute('class') || '').split(/\s+/).includes(`theme-${process.env.UI_THEME}`)) throw new Error(`istenen tema uygulanmadı: ${process.env.UI_THEME}`);
   let currentDetail = null;
   for (const [conversationIndex, conversation] of scenario.conversations.entries()) {
     // Yanlış veriyle sınanmaz: atlanır ve bu koşunun eksik kapsamı olarak kaydedilir (rapor başarı saymaz).

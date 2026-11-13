@@ -464,6 +464,7 @@ function recordSentences(record, locale, { rowsCovered = false } = {}) {
   // "Tablo bütün kişileri içeriyor" yalnızca gösterilen satırlar kaynağın bütün satırlarıysa söylenir; sıralama başı ya da seçilmiş
   // satırlar gösteriliyorsa yalnızca kaynağın (dağılımın) tamlığı söylenir.
   const teamOwner = rowsCovered && completeness?.fact.value === true && teamFilters.assignee === 'team' && !teamFilters.projectId
+    && !['dateFrom', 'dateTo', 'deadline', 'priorities', 'milestone', 'text', 'wbsId', 'createdByMe'].some((key) => teamFilters[key] != null && teamFilters[key] !== '' && (key === 'milestone' || teamFilters[key] !== false) && !(Array.isArray(teamFilters[key]) && !teamFilters[key].length))
     ? ({ unit: ['your unit', 'biriminizdeki'], department: ['your department', 'bölümünüzdeki'], directorate: ['your directorate', 'direktörlüğünüzdeki'] }[teamFilters.teamLevel] || ['your team', 'ekibinizdeki']) : null;
   if (teamOwner) {
     // Aşama G: kadrosu okunmuş ekip dağılımının tamlığı doğal cümledir (ölçüt satırı yazılmaz; süzgeç cümlede söylenir).

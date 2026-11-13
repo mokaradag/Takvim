@@ -21,8 +21,8 @@ const KEYS = new Set(['v', 'scope', 'level', 'subjects', 'within', 'focus', 'dat
 const VERSION_ONE_KEYS = new Set([...KEYS].filter((key) => !['withSelf', 'relativeWindow', 'charts'].includes(key)));
 const CHARTS = Object.freeze(['bar', 'donut', 'line', 'stacked', 'kpi', 'timeline']);
 const PENDING_SCOPES = Object.freeze([...ANALYSIS_CONTEXT_SCOPES, 'previous', 'row']);
-const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'withSelf', 'relativeWindow', 'rows', 'act']);
-const VERSION_ONE_PENDING_KEYS = Object.freeze([...PENDING_KEYS].filter((key) => !['charts', 'withSelf', 'relativeWindow', 'rows', 'act'].includes(key)));
+const PENDING_KEYS = new Set(['language', 'scope', 'focus', 'names', 'level', 'within', 'dateFrom', 'dateTo', 'visual', 'chart', 'charts', 'table', 'withSelf', 'relativeWindow', 'rows', 'act', 'requests']);
+const VERSION_ONE_PENDING_KEYS = Object.freeze([...PENDING_KEYS].filter((key) => !['charts', 'withSelf', 'relativeWindow', 'rows', 'act', 'requests'].includes(key)));
 const shortText = (value) => typeof value === 'string' && value.trim().length >= 2 && value.length <= 120;
 const validCharts = (value) => value.charts == null || value.visual === true && Array.isArray(value.charts) && value.charts.length >= 1 && value.charts.length <= 2
   && new Set(value.charts).size === value.charts.length && value.charts.every((type) => CHARTS.includes(type)) && value.chart === value.charts[0];
@@ -53,7 +53,11 @@ export function normalizePendingAnalysis(value) {
     for (const key of ['visual', 'table']) if (value[key] != null && typeof value[key] !== 'boolean') return null;
     if (value.chart != null && (!CHARTS.includes(value.chart) || value.visual !== true)) return null;
     if (!validCharts(value)) return null;
-    return Object.freeze({ language: value.language, scope: value.scope, focus: Object.freeze([...focus]), ...(value.names ? { names: Object.freeze([...value.names]) } : {}),
+    // Açık bildirimler yetki değildir: yalnızca sınırlı JSON olarak taşınır, yeniden yürütmede normal istek doğrulamasından geçer.
+    const requests = value.requests == null ? null : JSON.parse(JSON.stringify(value.requests));
+    if (requests && (!Array.isArray(requests) || requests.length < 1 || requests.length > 3
+      || requests.some((item) => !item || typeof item !== 'object' || Array.isArray(item)) || new TextEncoder().encode(JSON.stringify(requests)).length > 8192)) return null;
+    return Object.freeze({ ...(requests ? { requests: Object.freeze(requests) } : {}), language: value.language, scope: value.scope, focus: Object.freeze([...focus]), ...(value.names ? { names: Object.freeze([...value.names]) } : {}),
       ...(value.level ? { level: value.level } : {}), ...(value.withSelf != null ? { withSelf: value.withSelf } : {}), ...(value.within ? { within: value.within } : {}),
       ...(value.rows ? { rows: Object.freeze([...value.rows]) } : {}), ...(value.act ? { act: value.act } : {}), ...(value.relativeWindow ? { relativeWindow: value.relativeWindow } : {}), ...(value.dateFrom ? { dateFrom: value.dateFrom } : {}),
       ...(value.dateTo ? { dateTo: value.dateTo } : {}), ...(value.visual != null ? { visual: value.visual } : {}), ...(value.chart ? { chart: value.chart } : {}),

@@ -183,7 +183,7 @@ export function normalizedBrief(raw) {
   // kişinin termin yönleri sekiz okumaya büyür). Ek kapsamın yönü yazılmamışsa birincil yönleri devralır (aynı küme).
   // Yalnızca yazılmamış yön devralınır; dizi olmayan yön (ör. "milestones" metni) aynı küme sayılmaz, katlanmaz ve şema reddeder.
   const sameFocus = (left, right) => right == null || (Array.isArray(right) && Array.isArray(left) && left.length === right.length && right.every((item) => left.includes(item)));
-  if (plainPair && sameFocus(out.focus, pair.focus) && ((selfOf(out) && personOf(pair)) || (personOf(out) && selfOf(pair))) && !out.withSelf) {
+  if (plainPair && (out.focus == null || Array.isArray(out.focus)) && (pair.focus == null || Array.isArray(pair.focus)) && ![...(out.focus || []), ...(pair.focus || [])].some((focus) => ['overdue', 'upcoming', 'critical', 'milestones'].includes(focus)) && sameFocus(out.focus, pair.focus) && ((selfOf(out) && personOf(pair)) || (personOf(out) && selfOf(pair))) && !out.withSelf) {
     const person = personOf(out) ? out : pair;
     const focus = [...new Set([...(Array.isArray(out.focus) ? out.focus : []), ...(Array.isArray(pair.focus) ? pair.focus : [])])];
     delete out.also;
@@ -701,7 +701,9 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
         : focusRequest(focus, primaryAnalysis, based, today);
     } catch (error) { produced = optionalRead(error); }
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
-    if (items.length && parts.length + items.length <= budget) add(items, { layer: 0, focus });
+    if (!items.length) continue;
+    if (parts.length + items.length > budget) { omitted.push(Object.freeze({ layer: 0, focus })); continue; }
+    add(items, { layer: 0, focus });
   }
   // Bölüm ya da direktörlük düzeyindeki ekip kapsamının doğal kırılımı alt örgüt birimleridir (tek kapsamlı özetteki kuralın aynısı):
   // `org` yazılmadıysa kalan bütçeyle o kapsamın kendi nüfusu ve yetkisiyle eklenir. İsteğe bağlıdır: yer yoksa eklenmez ve

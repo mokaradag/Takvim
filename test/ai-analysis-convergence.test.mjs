@@ -689,3 +689,115 @@ test('iki haftalık ayrık vaka gecikme ve yaklaşan teslimat okumalarını ayr�
   assert.deepEqual(score([overdue, upcoming]), []);
   assert.ok(score([overdue, { ...upcoming, filters: { ...upcoming.filters, dateTo: '2026-10-06' } }]).length);
 });
+
+test('özetle birleşen açık istek boş varlıkları ve koleksiyon yazımını eşdeğer sayar; bozuk alanlar kaybolmaz', () => {
+  const base = { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overdue'] } };
+  const generated = unpack(base).additionalRequests?.find((item) => item.filters?.deadline === 'overdue') || unpack(base).request;
+  for (const changed of [{ entities: [] }, { collection: 'tasks', population: { tool: 'rota_task_search' } }]) {
+    const merged = unpack({ ...base, request: { ...generated, ...changed } });
+    assert.ok(merged.analysis.explicitParts?.length);
+    assert.equal([merged.request, ...(merged.additionalRequests || [])].length, [unpack(base).request, ...(unpack(base).additionalRequests || [])].length);
+  }
+  for (const changed of [{ fields: {} }, { bindings: {} }, { collection: 'people' }, { metrics: [...generated.metrics, generated.metrics[0]] }]) {
+    const result = unpack({ ...base, request: { ...generated, ...changed } });
+    assert.equal(result.analysis.explicitParts?.length || 0, 0);
+    assert.equal(result.additionalRequests.at(-1).collection || result.additionalRequests.at(-1).population?.collection, changed.collection || 'tasks');
+  }
+});
+
+test('aynı okumanın farklı açık sıra sınırları birbirini değiştirmez', () => {
+  const base = { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overdue'] } };
+  const initial = unpack(base);
+  const read = [initial.request, ...(initial.additionalRequests || [])].find((item) => item.filters?.deadline === 'overdue');
+  const result = unpack({ ...base, request: { ...read, rank: { ...read.rank, limit: 3 } }, additionalRequests: [{ ...read, rank: { ...read.rank, limit: 5 } }] });
+  assert.deepEqual([result.request, ...(result.additionalRequests || [])].filter((item) => item.rank).map((item) => item.rank.limit), [3, 5]);
+});
+
+test('takip kapsamındaki boş seçicili nüfus çağrısı sessizce düşmez', () => {
+  const previous = { v: 2, scope: 'project', subjects: [{ type: 'project', id: '11111111-1111-4111-8111-111111111111' }], rows: [], focus: ['overview'] };
+  for (const scope of ['previous', 'row']) assert.throws(() => unpack({ intent: 'rota', language: 'tr', analysis: { scope, ...(scope === 'row' ? { rows: [1] } : {}), focus: ['overview'] },
+    calls: [{ name: 'rota_task_search', arguments: {} }] }, previous), (error) => error.details.includes('$.analysis:request'));
+});
+
+test('satır isteyen kendi ve kişi katmanları ayrı listeleri korur', () => {
+  for (const focus of ['overdue', 'upcoming', 'critical', 'milestones']) {
+    const result = unpack({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: [focus], also: [{ scope: 'person', names: ['Ayşe Yılmaz'], focus: [focus] }] } });
+    const lists = [result.request, ...(result.additionalRequests || [])].filter((item) => item.population.tool === 'rota_task_search');
+    assert.equal(lists.length, 2, focus);
+    assert.equal(result.analysis.withSelf, undefined);
+  }
+});
+
+test('dizi biçiminin erken reddi diğer katmanın kapsamını onarım için yakalar', () => {
+  let captured;
+  assert.throws(() => unpack({ intent: 'rota', language: 'tr', analysis: [{ scope: 'self', focus: ['overview'] }, { scope: 'team', level: 'unit', focus: ['overview'], withSelf: true }] }, null, (plan) => { captured = plan; }));
+  assert.equal(captured.analysis.also[0].scope, 'team');
+  assert.equal(captured.analysis.also[0].level, 'unit');
+});
+
+test('kabul denetimi tam listeyi, sıra sayısını, satır çokluğunu, termin değerini ve teslim sırasını birlikte doğrular', async () => {
+  const { turnViolations } = await import('./helpers/phase4eScenario.mjs');
+  const filters = { assignee: 'me' };
+  const tasks = [{ title: 'Aynı başlık', targetFinish: TODAY }, { title: 'Aynı başlık', targetFinish: '2026-10-01' }];
+  const row = { evidenceId: 'R1', tool: 'rota_task_search', complete: true, counts: { total: 2 }, data: { filters, tasks, sort: 'target_finish_asc' } };
+  const wanted = { tool: row.tool, operation: 'list', metrics: ['task.title', 'task.targetFinish'], filters };
+  const result = (content, evidence = row) => ({ answer: { content }, log: [], evidence: [evidence] });
+  const valid = `Liste 【R1】\n\n- Aynı başlık ${TODAY}\n- Aynı başlık 2026-10-01`;
+  assert.deepEqual(turnViolations(result(valid), { explicitRequests: [wanted] }), []);
+  for (const content of [`Aynı başlık ${TODAY} 【R1】`, 'Aynı başlık 2020-01-01 【R1】\nAynı başlık 2020-01-02']) assert.ok(turnViolations(result(content), { explicitRequests: [wanted] }).length);
+  assert.ok(turnViolations(result(valid, { ...row, complete: false }), { explicitRequests: [wanted] }).length);
+  const ranked = { ...wanted, operation: 'rank', rank: { metric: 'task.targetFinish', order: 'asc', limit: 2 } };
+  assert.deepEqual(turnViolations(result(valid), { explicitRequests: [ranked] }), []);
+  assert.ok(turnViolations(result('Liste 【R1】\nAynı başlık 2026-10-01\nAynı başlık '+TODAY), { explicitRequests: [ranked] }).length);
+  assert.ok(turnViolations(result(valid, { ...row, complete: false, data: { ...row.data, tasks: tasks.slice(0, 1) } }), { explicitRequests: [ranked] }).length);
+});
+
+test('yön denetimi yanlış nüfusu, daraltılmış kilometre taşını ve yanlış örgüt düzeyini kabul etmez', async () => {
+  const { turnViolations } = await import('./helpers/phase4eScenario.mjs');
+  const check = (focus, filters, groupBy, tool = 'rota_task_search') => turnViolations({ answer: {}, log: [], evidence: [{ tool, data: { filters, groupBy } }] }, { scope: 'team', level: 'directorate', scopeFocus: [focus] });
+  const scope = { assignee: 'team', teamLevel: 'directorate' };
+  const open = { ...scope, statuses: ['todo', 'in_progress'] };
+  for (const filters of [{ ...open, milestone: true, deadline: 'overdue' }, { ...open, milestone: true, priorities: ['critical'] }]) assert.ok(check('milestones', filters).includes('yön kanıtı yok: milestones'));
+  assert.ok(check('overdue', { ...scope, deadline: 'overdue', priorities: ['critical'] }).includes('yön kanıtı yok: overdue'));
+  assert.ok(check('critical', { ...scope, statuses: ['done'], priorities: ['critical'] }).includes('yön kanıtı yok: critical'));
+  assert.ok(check('upcoming', { ...scope, statuses: ['done'], deadline: 'due_next_7_days' }).includes('yön kanıtı yok: upcoming'));
+  assert.ok(check('org', scope, 'unit', 'rota_task_analytics').includes('yön kanıtı yok: org'));
+  assert.equal(check('org', scope, 'department', 'rota_task_analytics').includes('yön kanıtı yok: org'), false);
+  assert.ok(check('milestones', { ...open, assignee: 'me', milestone: true }).includes('yön kanıtı yok: milestones'));
+});
+
+test('başarısız gecikme okuması ve görev ayrıntısıyla yapılan açıklama veri kapısını geçmez', async () => {
+  const { turnViolations } = await import('./helpers/phase4eScenario.mjs');
+  assert.ok(turnViolations({ answer: {}, log: [{ query: 'task-facts', ok: false, params: { deadline: 'overdue' } }] }, { overdueUnwindowed: true }).includes('mevcut gecikme ayrı okunmadı'));
+  assert.ok(turnViolations({ answer: {}, log: [{ query: 'task-facts', ok: true, params: { taskIds: 'kimlik' } }] }, { noPopulation: true }).includes('açıklama vakasında görev nüfusu okundu'));
+});
+
+test('kapanışın aralıklı kaynakları ve İngilizce atlama notu geçerli öncelikleri örtmez', async () => {
+  const { turnViolations } = await import('./helpers/phase4eScenario.mjs');
+  const content = 'In short, the order of priority is: first work; finally milestones. 【R1】 【R2】\n\n_Note: omitted._';
+  assert.equal(answerQuality(content).ending, true);
+  assert.deepEqual(turnViolations({ answer: { content }, log: [] }, { priorities: 2, conclusion: true }), []);
+});
+
+test('bekleyen açık bildirimler sınırlı taşınır, eski sürüme ve sınırsız isteğe açılmaz', async () => {
+  const { normalizePendingAnalysis, normalizeAnalysisContext } = await import('../src/domain/ai/analysisContext.js');
+  const pending = { language: 'tr', scope: 'self', focus: ['overview'], requests: [{ operation: 'value', metrics: ['tasks.overdue'], population: { tool: 'rota_task_analytics' } }] };
+  assert.deepEqual(normalizePendingAnalysis(pending).requests, pending.requests);
+  assert.equal(normalizePendingAnalysis({ ...pending, requests: Array(4).fill(pending.requests[0]) }), null);
+  assert.equal(normalizePendingAnalysis({ ...pending, requests: [{ text: 'a'.repeat(8193) }] }), null);
+  assert.equal(normalizeAnalysisContext({ v: 1, pending }), null);
+});
+
+test('aylık teslimat kıyası çizelge yönüyle de geçer; pencere veya gecikmiş liste eksikse geçmez', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { plannerScore } = await import('../scripts/analysis-qualification.mjs');
+  const fixture = JSON.parse(readFileSync(new URL('./fixtures/bilgin-executive-benchmark.json', import.meta.url), 'utf8'));
+  const expect = fixture.holdout.find((item) => item.id === 'x08').expect;
+  const plan = unpack({ intent: 'rota', language: 'tr', visual: true, analysis: { scope: 'self', focus: ['schedule'], dateFrom: expect.window[0], dateTo: expect.window[1] },
+    request: { operation: 'list', metrics: ['task.title'], population: { tool: 'rota_task_search', collection: 'tasks' }, filters: { assignee: 'me', deadline: 'overdue' } } });
+  const requests = [plan.request, ...(plan.additionalRequests || [])].map((request) => ({ ...request, entities: request.entities || [] }));
+  const score = (reads) => plannerScore({ outcome: 'planned', decisions: [], plan: { ...plan, requests: reads } }, expect, fixture.today);
+  assert.deepEqual(score(requests), []);
+  assert.ok(score(requests.filter((item) => item.filters?.deadline !== 'overdue')).length);
+  assert.ok(score(requests.map((item) => ({ ...item, filters: { ...item.filters, dateFrom: undefined, dateTo: undefined } }))).length);
+});

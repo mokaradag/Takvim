@@ -7,8 +7,7 @@ import { dataText, ID_PROPERTY, LIMIT_PROPERTY, PERSON_SICIL_PROPERTY, searchedS
 import { loadFilteredFacts } from './taskTools.js';
 import { assignmentState, foldText, isDueWithin, isOverdue, normalizeTaskFilters, DUE_SOON_DAYS, TEAM_LEVELS } from './taskFacts.js';
 
-/** Aşama G: tek okumada eklenebilecek en büyük ekip kadrosu (aşılırsa kadro kesik sayılır, tamlık iddiası kurulmaz). */
-const TEAM_ROSTER_LIMIT = 50;
+import { TEAM_ROSTER_LIMIT } from './rotaToolStore.js';
 import { decimalFromScaled, scaledDecimal } from '../../../../domain/numbers/fixedDecimal.js';
 
 /* ── rota_workload_summary ────────────────────────────────── */
@@ -46,6 +45,7 @@ const workloadSummary = {
     let unassigned = 0;
     let unrepresented = 0;
     let incompleteAssignments = false;
+    const unresolvedMembers = new Set();
     for (const fact of facts) {
       // Kısıtlı kimlik görünümü SQL sonucunun bütün ortak sorumluları içerdiğini kanıtlayamaz.
       // Bu durum gizli atama varlığından bağımsızdır; gizli atama sayısı veya varlığı açıklanmaz.
@@ -60,6 +60,7 @@ const workloadSummary = {
       const relevant = (assignees.get(fact.id) || []).filter((person) => (!team || person.teamMember) && (args.personSicil == null || person.sicil === args.personSicil));
       const visible = relevant.filter((person) => person.resolved && person.identityVisible && person.sicil != null);
       if (visible.length !== relevant.length) incompleteAssignments = true;
+      for (const person of relevant) if (!person.resolved || !person.identityVisible) unresolvedMembers.add(person.sicil);
       if (!visible.length) { unrepresented += 1; continue; }
       for (const person of visible) {
         if (args.personSicil != null && person.sicil !== args.personSicil) continue;
@@ -93,10 +94,11 @@ const workloadSummary = {
     let rosterComplete = false;
     if (roster) {
       const members = new Map(roster.members.map((member) => [member.sicil, member]));
-      rosterComplete = !roster.truncated && roster.members.every((member) => member.name) && [...people.keys()].every((sicil) => members.has(sicil));
-      if (rosterComplete) {
+      const usableRoster = !roster.truncated && roster.members.every((member) => member.name) && [...people.keys()].every((sicil) => members.has(sicil));
+      rosterComplete = usableRoster && unresolvedMembers.size === 0;
+      if (usableRoster) {
         for (const member of roster.members) {
-          if (people.has(member.sicil)) continue;
+          if (people.has(member.sicil) || unresolvedMembers.has(member.sicil)) continue;
           people.set(member.sicil, { sicil: member.sicil, name: dataText(member.name, 120), openTasks: 0, inProgress: 0, overdue: 0, dueNext7Days: 0,
             plannedHoursOnAssignedTasks: null, tasksWithPlannedHours: 0 });
         }

@@ -143,7 +143,7 @@ export function requestSchema() {
 /** Nüfusun boyutları: istek düzeyinde yazılmışlarsa (nüfusta yoksa) nüfusa aittir; biçim kayması anlamı değiştirmez. */
 const POPULATION_KEYS = Object.freeze(['collection', 'sort', 'groupBy', 'depth', 'textFields']);
 
-function populationShape(raw) {
+export function populationShape(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !raw.population || typeof raw.population !== 'object') return raw;
   const misplaced = POPULATION_KEYS.filter((key) => Object.hasOwn(raw, key) && !Object.hasOwn(raw.population, key));
   if (!misplaced.length) return raw;

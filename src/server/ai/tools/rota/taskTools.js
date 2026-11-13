@@ -7,7 +7,7 @@ import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.
 import { TOOL_LIMITS } from '../toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { describeTaskScope, projectAccess } from './rotaScope.js';
-import { readTaskDetail, readTaskFacts, readWbsSelector } from './rotaToolStore.js';
+import { readTaskDetail, readTaskFacts, readWbsSelector, TEAM_ROSTER_LIMIT } from './rotaToolStore.js';
 import {
   accessExplanation,
   CURSOR_PROPERTY,
@@ -510,7 +510,9 @@ const taskAnalytics = {
     const groupBy = args.groupBy || null;
     const limit = args.limit ?? 10;
     const { scope } = await call.authorization();
-    const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' || ORGANIZATION_GROUP_BY.includes(groupBy) });
+    const teamOrganization = filters.assignee === 'team' && ORGANIZATION_GROUP_BY.includes(groupBy);
+    const { facts, projects, assignees, roster } = await loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' || ORGANIZATION_GROUP_BY.includes(groupBy),
+      rosterRows: teamOrganization ? TEAM_ROSTER_LIMIT : 0 });
     // Ekip kapsamında sorumlu gruplaması yalnızca yönetim kapsamındaki kişilerdir (görevin kapsam dışı eş sorumlusu sayılmaz).
     const context = { projects, assignees, today: call.today, teamOnly: filters.assignee === 'team' };
     let groups = null;
@@ -547,6 +549,19 @@ const taskAnalytics = {
           }
         }
       }
+      if (ORGANIZATION_GROUP_BY.includes(groupBy)) {
+        const counts = new Map();
+        for (const group of byKey.values()) counts.set(group.label, (counts.get(group.label) || 0) + 1);
+        const ambiguous = [...byKey.values()].filter((group) => counts.get(group.label) > 1).sort((a, b) => a.key.localeCompare(b.key));
+        const used = new Set([...byKey.values()].filter((group) => counts.get(group.label) === 1).map((group) => group.label));
+        for (const group of ambiguous) {
+          const base = dataText(group.label, 140);
+          let suffix = 1;
+          while (suffix <= byKey.size && used.has(`${base} · ${suffix}`)) suffix += 1;
+          group.label = `${base} · ${suffix}`;
+          used.add(group.label);
+        }
+      }
       const ordered = [...byKey.values()].sort((left, right) => (groupBy === 'target_month'
         ? left.key.localeCompare(right.key)
         : right.count - left.count || left.label.localeCompare(right.label, 'tr')));
@@ -563,7 +578,7 @@ const taskAnalytics = {
         groups.push({ key: 'other', label: `Diğer ${ordered.length - visibleGroupLimit} grup`, ...rest });
       }
     }
-    const groupsTruncated = Boolean(groupBy && groupCount > limit);
+    const groupsTruncated = Boolean(groupBy && groupCount > limit || teamOrganization && roster?.truncated);
     const totals = statusTotals(facts, call.today);
     const descriptor = searchedScope(scope, filters.projectId);
     return {

@@ -46,6 +46,7 @@ function reply(input) {
 
 http.createServer((request, response) => {
   let body = '';
+  request.setEncoding('utf8');
   request.on('data', (chunk) => { body += chunk; });
   request.on('end', () => {
     // Betikli kapsam: altın planı olan (çakışmayan) soru metinleri. Sürücü yalnızca bütün turları bu listede olan konuşmaları koşar.
@@ -69,7 +70,7 @@ http.createServer((request, response) => {
     try { replied = reply(input); } catch { response.writeHead(400).end(); return; }
     const { purpose, message, unscripted } = replied;
     const finish = message.tool_calls ? 'tool_calls' : 'stop';
-    if (CALLS) appendFileSync(CALLS, `${JSON.stringify({ at: new Date().toISOString(), purpose, ok: true, scripted: true, ...(unscripted ? { unscripted: true } : {}), toolCalls: message.tool_calls ? ['rota_plan'] : [] })}\n`);
+    try { if (CALLS) appendFileSync(CALLS, `${JSON.stringify({ at: new Date().toISOString(), purpose, ok: true, scripted: true, ...(unscripted ? { unscripted: true } : {}), toolCalls: message.tool_calls ? ['rota_plan'] : [] })}\n`); } catch { response.writeHead(500).end(); return; }
     if (input.stream) {
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       const delta = message.tool_calls ? { role: 'assistant', tool_calls: message.tool_calls.map((call, index) => ({ index, ...call })) } : { role: 'assistant', content: message.content };

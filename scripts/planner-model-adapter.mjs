@@ -782,7 +782,10 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
       return !item.error && item.staticPromptHash === staticPromptHash && item.toolCatalogHash === toolCatalogHash
         && ageMs >= 0 && ageMs < 5 * 60 * 1000;
     });
+    const catalogProblem = JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort()) ? 'PLANNER_TOOLS_NOT_OFFERED'
+      : prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash) ? 'PLANNER_TOOL_ORDER_UNSTABLE' : null;
     if ((forcedToolCall || forcedProse) && MODEL_FORCED_RETRY_ATTEMPTS > 1 && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
+      if (catalogProblem) return fail(catalogProblem, { ...row, offered });
       // Yinelenen ilk yanıt da aynı model ve düşünme denetiminden geçer: temiz bir yeniden deneme yasak düşünmeyi gizleyemez.
       const problem = responseProblem(row, model);
       if (problem) return fail(problem, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
@@ -806,9 +809,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
       && !blocks.some((block) => block.type === 'tool_use') && blocks.some((block) => block.type === 'text'));
     if (forcedText) row.forcedText = true;
     if (code !== 0 && !toolHandoff && !schemaRejected && !forcedText || !result || result.is_error && result.subtype !== 'error_max_turns' || rejected || result.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null, subtype: result?.subtype ?? null, exitCode: code ?? null });
-    // CLI araçları kendi kararlı sırasıyla sunar: küme birebir aynı olmalı, sıra (toolOrderHash) çağrılar arasında sabit kalmalıdır.
-    if (JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort())) return fail('PLANNER_TOOLS_NOT_OFFERED', { ...row, offered });
-    if (prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash)) return fail('PLANNER_TOOL_ORDER_UNSTABLE', row);
+    if (catalogProblem) return fail(catalogProblem, { ...row, offered });
     if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheBaseline() && !usage.cache_read_input_tokens) return fail('PLANNER_CACHE_NOT_REUSED', row);
     if (row.apiCalls !== 1) return fail('PLANNER_CALL_COUNT_UNEXPECTED', row);
     if (!models.length || models.some((item) => item !== model)) return fail('PLANNER_MODEL_MISMATCH', row);

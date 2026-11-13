@@ -274,6 +274,7 @@ function filtersOfPart(parts, ordinal) {
 function layerTitle(layer, filters, locale) {
   const lang = locale === 'en' ? 1 : 0;
   if (layer.scope === 'person' && typeof filters.person === 'string' && filters.person.trim() && filters.person !== 'Seçilen kişi') return filters.person.trim();
+  if (layer.scope === 'person') return lang ? 'Selected person’s work' : 'Seçilen kişinin işleri';
   if (layer.scope === 'project' && typeof filters.project === 'string' && filters.project.trim()) return filters.project.trim();
   const key = layer.scope === 'team' && layer.level ? layer.level : ['projects', 'all'].includes(layer.scope) ? 'all' : layer.scope;
   return (LAYER_TITLES[key] || LAYER_TITLES.all)[lang];
@@ -310,6 +311,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   // Aşama F: istenen bütün türler (en çok iki; ilk tür birincil). Her istenen tür için aday yeri ayrılır.
   const requestedCharts = requestedChart ? [requestedChart, ...(Array.isArray(chartTypes) ? chartTypes : [])]
     .filter((type, index, all) => COMPOSITION_CHART_TYPES.includes(type) && all.indexOf(type) === index).slice(0, 2) : [];
+  const chartAllowed = (part) => allowCharts && (!(outline?.layers?.length > 1) || outline.sections?.[part - 1]?.layer === 0);
   const caveats = caveatPropositions(parts, locale);
   // Zorunlu çekinceler ve kesinlik bildirimleri isteğe bağlı önermelerden önce yer ayırır.
   const reservedPropositions = caveats.length + (certainty ? COMPOSITION_LIMITS.maxTables : 0);
@@ -419,7 +421,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         for (const proposition of tablePropositions({ group, described, distribution: partition, locale, population, collection })) derived.push({ ordinal, proposition, table: id });
         // Grafik adayı: satır başına tek, sonlu ve negatif olmayan sayı taşıyan sütun.
         const addChart = (candidate, viewExtra = {}) => {
-          if (!allowCharts) return;
+          if (!chartAllowed(ordinal)) return;
           // İstenen tür, tek sütunlu çubuk adaylarının doldurduğu sınırın arkasında kalamaz: o türden aday yoksa bir yer ayrılır.
           const reserved = requestedCharts.some((type) => candidate.types.includes(type) && ![...charts.values()].some((item) => item.types.includes(type)))
             && charts.size < COMPOSITION_LIMITS.maxCharts + requestedCharts.length - comparisonSlots;
@@ -478,7 +480,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         }
       }
       // Başlık ölçüleri (KPI kartları): satır koleksiyonu olmayan kaydın doğrulanmış sayıları.
-      if (allowCharts && !comparing && !multi.size && (charts.size < COMPOSITION_LIMITS.maxCharts || requestedCharts.includes('kpi') && charts.size < COMPOSITION_LIMITS.maxCharts + requestedCharts.length
+      if (chartAllowed(ordinal) && !comparing && !multi.size && (charts.size < COMPOSITION_LIMITS.maxCharts || requestedCharts.includes('kpi') && charts.size < COMPOSITION_LIMITS.maxCharts + requestedCharts.length
         && ![...charts.values()].some((item) => item.types.includes('kpi')))) {
         const kpi = kpiCandidate(group, locale);
         if (kpi && answerChartFence(chartSpec(kpi, 'kpi', locale))) {
@@ -520,6 +522,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         evidenceId: compared.evidenceIds[0], evidenceIds: [...compared.evidenceIds], items, types: ['bar'], comparison: true };
       if (!answerChartFence(chartSpec(candidate, 'bar', locale))) continue;
       const chartId = `G${charts.size + 1}`;
+      if (!chartAllowed(owner.index + 1)) continue;
       charts.set(chartId, Object.freeze({ id: chartId, part: owner.index + 1, ...candidate }));
       viewCharts.push({ id: chartId, part: owner.index + 1, title: candidate.title, types: candidate.types });
     }
@@ -586,7 +589,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
       for (const item of layered) {
         // Görev listesi bölümünün konusu yönün adıdır ("Kilometre taşları", "Kritik işler"): aynı kapsamın iki listesi ayrışır.
         const topic = (item.tool === 'rota_task_search' && aspectTitle(item.focus, locale)) || sectionTitle(item.tool, locale, { rows: item.rows, groupBy: item.groupBy });
-        let text = item.layer == null ? topic || prior.get(item.part) || topicTitle(item.part) : topic;
+        let text = item.layer == null ? prior.get(item.part) || topicTitle(item.part) || topic : topic;
         if (item.layer != null) {
           const owner = layerTitle(outline.layers[item.layer], filtersOfPart(parts, item.part), locale);
           const first = !seenLayers.has(item.layer);
@@ -670,7 +673,7 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
     // Çok bölümlü analitik rapor: tablolar kendi bölümünde cümlesiz kalmaz. Yalnızca tablo istenen yanıt tabloyla başlar.
     ...(analyst && contentParts.size > 1 ? { report: true } : {}),
     // Genel değerlendirme (ilk yön genel durum, tek kapsam): yanıt genel durumun kendisiyle açılır.
-    ...(analyst && outline?.focus?.[0] === 'overview' && !(outline.layers?.length > 1) ? { statusLead: true } : {}) }) });
+    ...(analyst && outline?.focus?.[0] === 'overview' && !(outline.layers?.length > 1) ? { statusLead: true, overviewPart: parts.find((part) => part.index === 0)?.index + 1 } : {}) }) });
 }
 
 /**
@@ -730,7 +733,7 @@ export function validateComposition(composition, response) {
   let proseCut = 0;
   // Düzyazı yanıtında modelin bir grafik adayına çizemeyeceği türü yazması yalnızca o grafik bloğunu düşürür (aday ve
   // değerler sunucunundur); istenen tür varsa ensureChart doğrulanmış adayla ekler. Kimlik düzeni katı kalır.
-  const proseResponse = raw.some((item) => item?.type === 'say' && Object.hasOwn(item, 'text'));
+  const proseResponse = raw.slice(0, limits.maxBlocks).some((item) => item?.type === 'say' && Object.hasOwn(item, 'text'));
   let chartsDropped = 0;
   /*
    * Düzyazı yanıtında modelin SEÇİM hatası (bilinmeyen ya da yinelenen kaynak, bölümleri karışık not, sınırı aşan blok) bütün
@@ -916,11 +919,13 @@ export function validateComposition(composition, response) {
       const missingRequired = available.filter((item) => item.required && !usedPropositions.has(item.id));
       // Bölümün kendi paragrafı yoksa (model önermelerini yalnızca not kutusuna koydu ya da paragrafı düştü) en az bir önerme
       // paragraf olarak eklenir; anlatılacak önerme kalmadıysa bölümün not kutusu paragrafa çevrilir (aynı önermeler, kutu yerine cümle).
-      const narrated = blocks.some((block) => block.type === 'say' && block.items.some((id) => render.propositions.get(id)?.part === part));
+      const narrated = blocks.some((block) => block.type === 'say' && block.items.some((id) => render.propositions.get(id)?.part === part && (block.prose || !emphasized.has(id))));
       if (!narrated && !available.some((item) => !usedPropositions.has(item.id))) {
         const at = blocks.findIndex((block) => block.type === 'note' && block.items.some((id) => render.propositions.get(id)?.part === part));
         if (at >= 0) {
-          for (const id of blocks[at].items) emphasized.delete(id);
+          const recovered = new Set(blocks[at].items);
+          for (const block of blocks) if (block.type === 'say' && !block.prose) block.items = block.items.filter((id) => !recovered.has(id));
+          for (const id of recovered) emphasized.delete(id);
           blocks[at] = { type: 'say', items: [...blocks[at].items], supplemented: true };
           supplemented += 1;
         }
@@ -1044,8 +1049,8 @@ export function validateComposition(composition, response) {
   // Önizleme ya da grafik bütün satırların yerine geçmez; kapsam yalnızca sunucu bloğuyla sağlanır.
   if ([...render.tables.keys()].some((id) => !usedSources.has(id))) return fail('COVERAGE_INCOMPLETE');
   // Not kutusunda vurgulanan önerme paragraftan çıkar; boşalan paragraf düşer (yönlendirmelerin göreli sırası korunur).
-  const normalized = emphasized.size ? blocks.map((block) => (block.type === 'say' && !block.prose ? { ...block, items: block.items.filter((id) => !emphasized.has(id)) } : block))
-    .filter((block) => block.type !== 'say' || block.items.length) : blocks;
+  const normalized = blocks.map((block) => (block.type === 'say' && !block.prose ? { ...block, items: block.items.filter((id) => !emphasized.has(id)) } : block))
+    .filter((block) => block.type !== 'say' || block.items.length);
   if (!normalized.length || ['chart', 'note'].includes(normalized[0].type)) return fail('LEAD_REQUIRED');
   // Çizici tablo ayrıntılarını yerinde, kalanları sonda ekler; onlar da son başlığın kapsamına uymalıdır.
   const locatedDetails = new Set(blocks.filter((block) => block.type === 'details').map((block) => block.source));
@@ -1573,13 +1578,15 @@ export function renderComposition(composition, validated) {
     if (render.statusLead) {
       const overview = [...render.titles.values()].find((title) => ['Genel görünüm', 'Overview'].includes(title.text));
       const prose = (chunk) => !/^(#### |\||```|_|>|- |\d+\. )/.test(chunk.text);
-      const first = overview ? out.find((chunk) => chunk.part === overview.part && prose(chunk)) : null;
+      const overviewPart = overview?.part ?? render.overviewPart;
+      const first = out.find((chunk) => chunk.part === overviewPart && prose(chunk));
       // Tek öznenin genel durumu tek kanıttır; iki öznenin karşılaştırmasında açılış karşılaştırma bulgusunun kendisidir (taşınmaz).
-      const single = first && new Set(first.text.match(/【R\d+】/g) || []).size === 1;
+      const single = first && new Set(first.text.match(/【R\d+】/g) || []).size === 1 && !synthesis.findings.some((item) => ['subjectComparison', 'levelComparison'].includes(item.kind))
+        && !sequence.some((block) => block.type === 'say' && block.items.some((id) => render.charts.has(id)) && block.items.some((id) => render.propositions.get(id)?.part === overviewPart));
       if (single && out.indexOf(first) > 0) {
         out.splice(out.indexOf(first), 1);
         out.unshift({ ...first, part: null });
-        if (!out.some((chunk) => chunk.part === overview.part && chunk.text !== overview.markdown)) {
+        if (overview && !out.some((chunk) => chunk.part === overview.part && chunk.text !== overview.markdown)) {
           const heading = out.findIndex((chunk) => chunk.text === overview.markdown);
           if (heading >= 0) out.splice(heading, 1);
         }

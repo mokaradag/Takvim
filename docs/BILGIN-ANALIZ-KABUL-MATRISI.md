@@ -36,7 +36,7 @@ grafik, bulgu, sonuç paragrafı, çağrı sayısı) ölçer; yazım kalitesi te
 | K8 | Proje portföy sıralaması 8 satırla kesiliyordu; 9+ projeli portföyde hiçbir pay/sıra bulgusu kurulamıyordu | 1, 4, 8, 17, 20 | Portföy sıralaması mevcut kayıt defteri üst sınırı (10) |
 | K9 | Kesik "en yakın teslimat" listesinde zaman çizelgesi çizilmiyordu | 24, 38 | Termine göre artan doğrulanmış sıralamanın başı "En yakın N teslimat" başlığıyla çizilir |
 | K10 | Onarım sözleşmesi kusurları (Haiku ile bulundu): `all_time` eşdeğer yazımı düşünce onarım "kapsam değişikliği" sayılıyordu; göreli pencere çakışmasında düzeltilecek alan dondurulmuştu; karşılaştırma bütçe aşımı daraltılamıyordu; özetin yanındaki ad arama çağrıları onarım turu açıyordu | 1, 3, 11 ve geniş sorular | Dönemsizlik eşdeğerliği; kalan tarih gösterimi sabit; bütçede yön korunur; yalnızca bildirilmiş seçicilere eşit ad aramaları atılır |
-| K11 | `EMPTY_COMPLETION`: Qwen plan/düzeltme turunda <1 sn boş yanıt; özdeş yeniden deneme de boş | VM'de çok sayıda | Burada yeniden üretilemez; çıktı belirteci sayısı günlüğe eklendi, VM yordamı (yol haritası §11) |
+| K11 | `EMPTY_COMPLETION`: Qwen plan/düzeltme turunda <1 sn boş yanıt; özdeş yeniden deneme de boş | VM'de çok sayıda | Burada yeniden üretilemez; çıktı belirteci sayısı günlüğe eklendi, VM yordamı ([yol haritası §11](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md#11-windows-vm-yeniden-oynatma-yordamı-f-k8-ve-f-kabulü)) |
 
 ## 3. 40 soruluk matris
 
@@ -226,7 +226,7 @@ Tek vakalık sınırlı Haiku denemesi (`PHASE4E_TIER=F`, `PHASE4E_CASES=o39`) a
 
 **Durum: SÜRÜYOR.** Belirlenimci kabul geçti; betikli görsel kabulün dört görünümlü tam kümesi (§7.5, 36 ekran) önceki bir
 turun sonucudur, bu turda yalnızca B profilinin G1–G5 konuşmaları masaüstü görünümde yeniden koşuldu (§7.8); Haiku nitelendirmesi
-koşuldu ve aşağıda olduğu gibi kaydedildi (kısmi geçiş); Windows VM yeniden oynatması (§11 yordamı, Qwen/Gemma) **bekliyor**. Aşama G bu nedenle
+koşuldu ve aşağıda olduğu gibi kaydedildi (kısmi geçiş); Windows VM yeniden oynatması ([yol haritası §11](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md#11-windows-vm-yeniden-oynatma-yordamı-f-k8-ve-f-kabulü) yordamı, Qwen/Gemma) **bekliyor**. Aşama G bu nedenle
 TAMAMLANDI olarak işaretlenmez. Üç kanıt düzeyi ayrıdır: belirlenimci (altın plan, üretim hizmeti), Haiku (gerçek model,
 planlayıcı ve düzen), Windows VM (kurum içi modeller; koşulmadı).
 

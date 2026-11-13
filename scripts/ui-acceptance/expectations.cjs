@@ -23,8 +23,8 @@ function completionFailures(rendered, trace) {
 }
 // Sunucu yeniden yürütmesinin sözleşmesi (yeni planlayıcı çağrısı yok, kanıtlı doğrulanmış yanıt): betikli ve canlı kipte aynı uygulanır.
 function replayFailures(expected, trace, calls) {
-  if (expected?.serverReplay !== true) return [];
-  const plan = calls.some((call) => call.ok && call.purpose === 'plan' && call.toolCalls?.includes('rota_plan'));
+  if (expected?.serverReplay !== true) return calls.some((call) => call.ok && call.purpose === 'plan' && call.toolCalls?.includes('rota_plan')) ? [] : ['planlayıcı model çağrısı kanıtı yok'];
+  const plan = calls.some((call) => call.purpose === 'plan');
   return plan || trace?.outcome !== 'grounded' || !(trace?.evidence > 0) ? ['sunucu yeniden yürütme sözleşmesi sağlanmadı'] : [];
 }
 // Model yolunda gerçek plan çağrısı zorunludur; aday seçiminin sunucu yeniden yürütmesi açıkça belirtilir.

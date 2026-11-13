@@ -4,7 +4,7 @@ import { ABSTAIN_REASONS, CLARIFY_REASONS, PLANNER_INTENTS, PLANNER_LIMITS } fro
 import { parseToolArguments } from './toolArguments.js';
 import { invalidArguments, TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { TOOL_LIMITS } from './toolLimits.js';
-import { requestSchema } from './requestDeclaration.js';
+import { requestSchema, populationShape } from './requestDeclaration.js';
 import { getRotaTool } from './toolRegistry.js';
 import { effectiveCollection, effectiveSort, readKey } from './requestPopulation.js';
 import { analysisSchema, ANALYSIS_LIMITS, expandAnalysis, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
@@ -113,7 +113,7 @@ function decodeRequest(request) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) return request;
   const decoded = { ...request };
   for (const key of NESTED_PLAN_FIELDS.request) if (Object.hasOwn(decoded, key)) decoded[key] = decodedJson(decoded[key]);
-  return projectSelectorAsEntity(decoded);
+  return populationShape(projectSelectorAsEntity(decoded));
 }
 
 /**
@@ -201,6 +201,10 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   try { plan = JSON.parse(call.arguments); } catch { throw invalidArguments(['$.plan:json']); }
   plan = normalizePlan(decodeNestedJson(plan));
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw invalidArguments(['$.plan:shape']);
+  if (Array.isArray(plan.analysis) && plan.analysis.length && plan.analysis.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+    const [primary, ...also] = plan.analysis;
+    onDecoded({ ...plan, analysis: { ...primary, ...(also.length ? { also } : {}) } });
+  } else onDecoded(plan);
   plan = layeredAnalysis(plan);
   plan = equivalentAnalysisSpelling(plan, today);
   // Sunum tercihleri (grafik türü, tablo) plan düzeyindedir; zayıf model onları özetin içine de yazabilir. Yapısal taşıma:
@@ -288,7 +292,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // Başka araç (ayrıntı, bağımlılık, baz plan, hareket) da özetle birlikte reddedilir.
     // Adlı kişi/proje kapsamının çağrı karşılığı çözülmüş kimliktir (personSicil/projectId); boş seçici o kapsamın nüfusu değil
     // görünür bütün işlerdir. Bu yüzden adlı kapsam boş seçiciyle eşleşmez: böyle bir çağrı yürütülmeden atılmaz, plan reddedilir.
-    const scopes = [parsed, ...(parsed.also || [])].filter((layer) => !['person', 'project'].includes(layer.scope))
+    const scopes = [parsed, ...(parsed.also || [])].filter((layer) => !['person', 'project', 'previous', 'row'].includes(layer.scope))
       .map((layer) => (layer.scope === 'self' ? { assignee: 'me' }
         : layer.scope === 'team' ? { assignee: 'team', ...(layer.level ? { teamLevel: layer.level } : {}) } : {}));
     const unselected = (call) => {
@@ -339,7 +343,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
         if (index < 0) { kept.push(item); continue; }
         const layout = item.layout && item.layout !== 'auto' ? item.layout : null;
         const limit = Number.isInteger(item.rank?.limit) ? item.rank.limit : null;
-        if (layout && parts[index].layout !== 'auto' && parts[index].layout !== layout) { kept.push(item); continue; }
+        if (merged.has(index) && limit !== null && parts[index].rank?.limit !== limit || layout && parts[index].layout !== 'auto' && parts[index].layout !== layout) { kept.push(item); continue; }
         parts[index] = { ...parts[index], ...(layout ? { layout } : {}), ...(limit ? { rank: { ...parts[index].rank, limit } } : {}) };
         merged.add(index);
       }
@@ -366,7 +370,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // yer ayrılmamış açılımda o yönün bütün okumaları kalan açık isteklerce karşılanıyorsa not düşer.
     const satisfied = (item) => {
       const reads = initial.filter((part, position) => initial.sections?.[position]?.layer === item.layer && initial.sections[position].focus === item.focus);
-      return reads.length > 0 && reads.every((part) => kept.some((other) => coveredRequest(part, other)));
+      return reads.length > 0 && reads.every((part) => kept.some((other) => coveredRequest(other, part) && (part.rank?.limit == null || other.rank?.limit >= part.rank.limit)));
     };
     const notRead = (expanded.omitted || []).filter((item) => !satisfied(item));
     const omitted = notRead.length ? { omitted: Object.freeze(notRead) } : {};
@@ -441,12 +445,15 @@ function stableJson(value) {
 const rankShape = (rank) => { const { limit: _limit, ...shape } = rank || {}; return rank ? shape : null; };
 
 function coveredRequest(part, item) {
-  if (!part || !item || item.previousResult === true) return false;
+  if (!part || !item || item.previousResult === true || Object.keys(item).some((key) => !Object.hasOwn(requestSchema().properties, key))) return false;
   // Süzgeç değerlerinin ve varlıkların sırası anlam taşımaz (ör. durum listesi); sıralama ve satır sınırı taşır.
   const loose = (value) => (Array.isArray(value) ? value.map(loose).sort((a, b) => stableJson(a).localeCompare(stableJson(b)))
     : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, loose(item)])) : value);
   const same = (key) => stableJson(part[key] ?? null) === stableJson(item[key] ?? null);
-  const alike = (key) => stableJson(loose(part[key] ?? null)) === stableJson(loose(item[key] ?? null));
+  const alike = (key) => {
+    const empty = key === 'entities' ? [] : {};
+    return stableJson(loose(part[key] ?? empty)) === stableJson(loose(item[key] ?? empty));
+  };
   // Nüfus etkin sırayla karşılaştırılır: yazılmamış sıra aracın/sıralamanın varsayılanıdır (aynı okuma iki kez okunmaz).
   // Koleksiyon da etkin değerle karşılaştırılır: yazılmamış koleksiyon aracın tek satır koleksiyonudur (tamamlama kuralı).
   const shaped = (request) => {
@@ -456,9 +463,10 @@ function coveredRequest(part, item) {
     const collection = effectiveCollection(request);
     return { ...rest, ...(collection != null ? { collection } : {}), ...(sort ? { sort } : request.population.sort != null ? { sort: request.population.sort } : {}) };
   };
-  return Array.isArray(item.metrics) && item.metrics.every((metric) => part.metrics?.includes(metric)) && part.operation === item.operation
+  return Array.isArray(item.metrics) && item.metrics.length === new Set(item.metrics).size && item.metrics.every((metric) => part.metrics?.includes(metric)) && part.operation === item.operation
     && stableJson(shaped(part)) === stableJson(shaped(item)) && alike('entities') && alike('filters') && stableJson(rankShape(part.rank)) === stableJson(rankShape(item.rank))
-    && (!item.fields?.length || same('fields')) && (!item.bindings?.length || same('bindings'));
+    && (item.fields == null || (Array.isArray(item.fields) && (!item.fields.length || same('fields'))))
+    && (item.bindings == null || (Array.isArray(item.bindings) && (!item.bindings.length || same('bindings'))));
 }
 
 /**
@@ -486,6 +494,9 @@ function layeredAnalysis(plan) {
   // birincille aynı olduğu doğrulandı; sunum alanları birincilinkiyle aynıysa anlam taşımaz.
   const presentation = ['visual', 'chart', 'charts', 'table'];
   const carried = new Set(['scope', 'level', 'names', 'focus', 'dateFrom', 'dateTo', 'relativeWindow', 'language', ...presentation]);
+  for (const [index, item] of rest.entries()) for (const key of ['withSelf', 'within', 'rows', 'act', 'also']) {
+    if (Object.hasOwn(item, key)) throw invalidArguments([`$.analysis.also[${index}].${key}:unknown`]);
+  }
   if (Object.hasOwn(primary, 'also') || rest.some((item) => Object.keys(item).some((key) => !carried.has(key))
     || presentation.some((key) => Object.hasOwn(item, key) && JSON.stringify(item[key]) !== JSON.stringify(primary[key])))) throw invalidArguments(['$.analysis.also:scope']);
   const layer = ({ scope, level, names, focus }) => ({ scope, ...(level != null ? { level } : {}), ...(names != null ? { names } : {}), ...(focus != null ? { focus } : {}) });

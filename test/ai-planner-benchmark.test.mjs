@@ -3007,3 +3007,20 @@ test('109 son: zorunlu yeniden denemenin üst süre bütçesi kilidi ve iki alt 
   assert.ok(modelCommandTimeoutMs(timeout, true) >= 3 * timeout + 4 * MODEL_CLEANUP_TIMEOUT_MS + 1000);
 
 });
+
+test('zorunlu düz metin yeniden denemesi ilk çağrının eksik araç kataloğunu gizleyemez', async (t) => {
+  const cli = await claudeCommandFixture(t, { payload: {
+    messages: [{ role: 'system', content: 'Sabit yönerge' }, { role: 'user', content: 'Durumu göster' }],
+    tools: [{ name: 'rota_plan', parameters: { type: 'object' } }, { name: 'rota_task_search', parameters: { type: 'object' } }], toolChoice: { name: 'rota_plan' }
+  }, events: [
+    { type: 'system', subtype: 'init', tools: [] },
+    { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'text', text: 'Düz metin' }] } },
+    { type: 'result', is_error: true, subtype: 'error_max_turns', num_turns: 1, usage: { input_tokens: 10, output_tokens: 1 } }
+  ] });
+  const { writeFileSync } = await import('node:fs');
+  writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('}, 0);', 'process.exitCode = 1; }, 0);'));
+  cli.release();
+  const result = await cli.start({ PLANNER_CLAUDE_FORCED_RETRY: '1' }).done;
+  assert.equal(result.error, 'PLANNER_TOOLS_NOT_OFFERED');
+  assert.equal(cli.count(), 1);
+});

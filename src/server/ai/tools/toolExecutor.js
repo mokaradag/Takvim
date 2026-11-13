@@ -247,7 +247,7 @@ export function createToolExecutor({
             // düzeyi de kaydedilir (yoksa yetki değişmeden yeniden açılış kapalı reddedilirdi).
             authorizationProjectLevels: ['rota_recurrence_inspect', 'rota_data_quality'].includes(name)
               || (name === 'rota_task_analytics' && ['department', 'unit'].includes(result.args?.groupBy))
-              ? context.evidenceProjectLevels?.([...(result.population || []), ...(result.args?.projectId ? [{ projectId: result.args.projectId }] : [])]) : null,
+              ? context.evidenceProjectLevels?.([...(result.population || []), ...(result.projectPopulation || []).map((projectId) => ({ projectId })), ...(result.args?.projectId ? [{ projectId: result.args.projectId }] : [])]) : null,
             populationReferences: result.population,
             args: result.args,
             round: state.rounds
