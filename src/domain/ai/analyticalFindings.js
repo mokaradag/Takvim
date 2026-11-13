@@ -376,7 +376,10 @@ function listFindings(list) {
           worst: worst ? { title: worst.title, days: worst.days, key: worst.key ?? null, projectId: worst.projectId ?? null, project: typeof worst.project === 'string' ? worst.project : null,
             place: place(worst), tied: late.filter((row) => row.days === worst.days).length > 1 } : null,
           next: next ? { title: next.title, due: next.due, project: typeof next.project === 'string' ? next.project : null,
-            sole: upcoming.filter((row) => row.due === next.due).length === 1, place: place(next) } : null },
+            // Tekillik yalnızca terminli satırların tamamı görünüyorsa (tam liste, sığan sayfa ya da görünen terminsiz satır) ya da
+            // sayfada daha geç terminli bir satır varsa kesindir: sıralama sınırı aynı günü paylaşan başka bir kilometre taşını bırakmış olabilir.
+            sole: upcoming.filter((row) => row.due === next.due).length === 1 && (list.complete || fits || shownUndated > 0 || upcoming.some((row) => row.due > next.due)),
+            place: place(next) } : null },
         comparison: { population: list.total, basis: list.complete ? 'complete-list' : 'ranking-head' }, evidenceIds: [list.evidenceId],
         completeness: list.complete ? 'complete' : 'ranking-head' });
     }
@@ -582,7 +585,10 @@ export function analyticalFindings(parts) {
   const tables = entityTables(groups);
   const lists = taskLists(groups);
   const leveled = levelFindings(groups);
+  // Kişi/proje kıyası, kapsam kıyasıyla AYNI nüfusu (aynı kanıt kayıtları: aynı süzgeç, dönem ve gün) aynı ölçülerle söylüyorsa
+  // yinelemedir. Ayrı okunan (ör. dönemle süzülmüş) kıyas, kapsamlar eşleşse de bağımsız bulgudur ve bastırılmaz.
   const compared = comparisonFindings(groups).filter((item) => !leveled.some((level) => item.subjects?.every((subject) => level.layers.some((layer) => layer.key === subject.key))
+    && item.evidenceIds.every((id) => level.evidenceIds.includes(id))
     && Object.keys(item.metrics).every((metric) => ['open', 'overdue', 'done', 'total', 'completionRatePercent'].includes(metric))));
   const findings = [...leveled, ...compared, ...tables.flatMap(tableFindings), ...windowPressureFindings(tables, lists), ...lists.flatMap(listFindings),
     ...(compared.length || leveled.length ? [] : overdueShareFindings(groups))];

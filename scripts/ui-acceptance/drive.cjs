@@ -8,7 +8,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const { semanticFailures, completionFailures, modelFailures, replayFailures } = require('./expectations.cjs');
+const { semanticFailures, completionFailures, modelFailures, scriptedFailures } = require('./expectations.cjs');
 
 const [scenarioFile, outDir] = process.argv.slice(2);
 const scenario = JSON.parse(fs.readFileSync(scenarioFile, 'utf8'));
@@ -181,8 +181,8 @@ function scriptedQuestions() {
       // değişkeninden değil, bu turun çağrı kayıtlarından doğrulanır: canlı köprü kullanıldıysa (kayıtlarda `scripted` yoksa) model
       // kabulü uygulanır; değişken tek başına model denetimini kapatmaz.
       const scripted = process.env.UI_SCRIPTED === '1' && calls.length > 0 && calls.every((call) => call.scripted === true);
-      // Betikli kipte yalnızca canlı model gereksinimleri atlanır; sunucu yeniden yürütme sözleşmesi her iki kipte denetlenir.
-      const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace), ...(scripted ? replayFailures(expected, trace, calls) : modelFailures(expected, trace, calls))];
+      // Betikli kipte yalnızca canlı model gereksinimleri atlanır; yeniden yürütme ve düzen çağrısı kanıtı her iki kipte denetlenir.
+      const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace), ...(scripted ? scriptedFailures(expected, trace, calls) : modelFailures(expected, trace, calls))];
       // "any": türü belirtilmemiş grafik isteği; görünür herhangi bir grafik yeterlidir.
       if (expectedChart && !rendered.charts?.some((chart) => (expectedChart === 'any' || chart.type === expectedChart) && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);
       if (!trace) failures.push('bu tura ait sunucu kanıtı yok');

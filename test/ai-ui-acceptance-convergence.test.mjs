@@ -385,6 +385,18 @@ test('betikli kipte sunucu yeniden yürütme turu yeni planlayıcı çağrısıy
   assert.deepEqual(replayFailures(null, grounded, [scriptedPlan]), [], 'olağan betikli turda yeniden yürütme denetimi yoktur');
 });
 
+test('betikli kipte model düzeniyle çizilen tur düzen çağrısı kanıtı olmadan geçemez', async () => {
+  const { scriptedFailures, modelFailures } = (await import('../scripts/ui-acceptance/expectations.cjs')).default;
+  const composed = { outcome: 'grounded', evidence: 1, presentation: { mode: 'composed', server: false } };
+  const plan = { purpose: 'plan', ok: true, scripted: true, toolCalls: ['rota_plan'] };
+  const compose = { purpose: 'compose', ok: true, scripted: true, toolCalls: [] };
+  assert.deepEqual(scriptedFailures(null, composed, [plan]), ['model düzeni çağrı kanıtı yok'], 'düzen çağrısı kaydı olmayan betikli tur reddedilmeli');
+  assert.deepEqual(scriptedFailures(null, composed, [plan, { ...compose, ok: false }]), ['model düzeni çağrı kanıtı yok'], 'başarısız düzen çağrısı kanıt sayılmamalı');
+  assert.deepEqual(scriptedFailures(null, composed, [plan, compose]), [], 'düzen çağrısı kaydı olan betikli tur geçmeli');
+  assert.deepEqual(scriptedFailures(null, { ...composed, presentation: { mode: 'composed', server: true } }, [plan]), [], 'sunucu düzeni düzen çağrısı gerektirmez');
+  assert.ok(modelFailures(null, composed, [{ ...plan, models: ['claude-haiku-4-5-20251001'], thinking: 'off', thinkingTokens: 0 }]).includes('model düzeni çağrı kanıtı yok'), 'canlı kipte de aynı denetim uygulanmalı');
+});
+
 test('UI_SCRIPTED=1 tek başına model kabulünü kapatmaz: betikli uç kaydı yoksa model çağrısı denetimi uygulanır', (t) => {
   const dir = fakeDriverDir(t);
   const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [{ name: 'durum', detail: 'balanced', turns: ['durumum'] }] };

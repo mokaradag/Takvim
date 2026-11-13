@@ -787,7 +787,8 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     if ((forcedToolCall || forcedProse) && MODEL_FORCED_RETRY_ATTEMPTS > 1 && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
       if (catalogProblem) return fail(catalogProblem, { ...row, offered });
       // Yinelenen ilk yanıt da aynı model ve düşünme denetiminden geçer: temiz bir yeniden deneme yasak düşünmeyi gizleyemez.
-      const problem = responseProblem(row, model);
+      // Tek çağrı denetimi de yeniden denemeden ÖNCE uygulanır: ilk yanıtın fazladan API çağrısı başarılı bir yeniden denemeyle gizlenemez.
+      const problem = row.apiCalls !== 1 ? 'PLANNER_CALL_COUNT_UNEXPECTED' : responseProblem(row, model);
       if (problem) return fail(problem, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
       // Önbellek zorunluluğu yeniden denemeden ÖNCE uygulanır: yeniden deneme araçları gizlediği için katalog özeti değişir ve kendi
       // tabanı olmaz; ilk yanıtın önbellek kaçırması bu yolla gizlenemez.

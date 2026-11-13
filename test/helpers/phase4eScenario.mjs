@@ -219,9 +219,15 @@ export function turnViolations(result, expect, { live = false } = {}) {
   // Tek kapsamlı turun yönleri de kanıtla karşılanır (kapsam katmanlarındaki denetimin aynısı): genel görünüm istenen iş yükünün yerine geçmez.
   if (expect.scopeFocus) {
     const layer = { scope: expect.scope, level: expect.level || null };
+    // Adlı projelerin kıyasında her yön her projenin kendi kanıtıyla karşılanmalıdır: tek projenin okuması ikisini birden karşılamaz.
+    // Kıyasta gecikme ve yakın termin, projenin süzgeçsiz toplamlarının değeri olarak da okunur (liste biçimi zorunlu değildir).
+    const compared = expect.scope === 'project' && expect.projectIds?.length > 1;
+    const owners = compared ? expect.projectIds.map((id) => ({ ...expect, projectIds: [id] })) : [expect];
     for (const focus of expect.scopeFocus) {
       const shape = LAYER_FOCUS_SHAPES[focus];
-      if (shape && !(result.evidence || []).some((row) => scopeEvidence(row, expect) && shape(row, layer))) problems.push(`yön kanıtı yok: ${focus}`);
+      const valueShape = compared ? COMPARISON_VALUE_SHAPES[focus] : null;
+      if (shape && owners.some((owner) => !(result.evidence || []).some((row) => scopeEvidence(row, owner) && (shape(row, layer) || Boolean(valueShape?.(row))))))
+        problems.push(`yön kanıtı yok: ${focus}`);
     }
   }
   const status = result.evidence?.filter((row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'status') || [];
@@ -443,21 +449,29 @@ function omissionNoted(content, layers, layer, focus, locale = 'tr') {
 
 /** Kapsam yönünün kanıt biçimi (yön → okumanın aracı/gruplaması/süzgeci); özetle karşılanan yönler (genel, durum) denetlenmez. */
 const openPopulation = (f) => Array.isArray(f.statuses) && f.statuses.length === 2 && ['todo', 'in_progress'].every((status) => f.statuses.includes(status));
+const wholePopulation = (row) => { const f = row.data?.filters || {}; return (neutralFilter(f.statuses) || openPopulation(f)) && unrestricted(f, ['statuses', 'dateFrom', 'dateTo']); };
 const unrestricted = (f, allowed = []) => NARROWING_FILTERS.filter((key) => !['projectId', ...allowed].includes(key)).every((key) => key === 'milestone' ? f[key] == null : neutralFilter(f[key]));
+/** Adlı iki projenin kıyasında değer biçimli yön kanıtı: projenin süzgeçsiz toplamları ilgili sayıyı taşır. */
+const totalsRow = (row, key) => row.tool === 'rota_task_analytics' && !row.data?.groupBy && Number.isSafeInteger(row.data?.totals?.[key]) && unrestricted(row.data?.filters || {});
+const COMPARISON_VALUE_SHAPES = Object.freeze({ overdue: (row) => totalsRow(row, 'overdue'), upcoming: (row) => totalsRow(row, 'dueNext7Days') });
 const LAYER_FOCUS_SHAPES = Object.freeze({
   overdue: (row) => row.tool === 'rota_task_search' && row.data?.filters?.deadline === 'overdue'
     && (!(row.data.filters.statuses || []).length || openPopulation(row.data.filters)) && unrestricted(row.data.filters, ['statuses', 'deadline']),
+  // Yaklaşan termin ya yaklaşan kova (`due_…`) ya da kovasız bir dönemle okunur: gecikmiş/terminsiz kovası yaklaşan işleri karşılamaz.
   upcoming: (row) => row.tool === 'rota_task_search' && openPopulation(row.data?.filters || {}) && row.data?.filters?.milestone !== true
-    && (String(row.data?.filters?.deadline || '').startsWith('due_') || Boolean(row.data?.filters?.dateFrom))
+    && (String(row.data?.filters?.deadline || '').startsWith('due_') || Boolean(row.data?.filters?.dateFrom) && neutralFilter(row.data.filters.deadline))
     && unrestricted(row.data.filters, ['statuses', 'deadline', 'dateFrom', 'dateTo']),
   critical: (row) => row.tool === 'rota_task_search' && openPopulation(row.data?.filters || {})
     && row.data.filters.priorities?.length === 2 && ['critical', 'high'].every((priority) => row.data.filters.priorities.includes(priority))
     && unrestricted(row.data.filters, ['statuses', 'priorities', 'dateFrom', 'dateTo']),
   milestones: (row) => row.tool === 'rota_task_search' && row.data?.filters?.milestone === true && openPopulation(row.data.filters)
     && unrestricted(row.data.filters, ['statuses', 'milestone']),
-  workload: (row, layer) => row.tool === 'rota_workload_summary' || (row.tool === 'rota_task_analytics' && row.data?.groupBy === (['self', 'person'].includes(layer.scope) ? 'project' : 'assignee')),
-  org: (row, layer) => row.tool === 'rota_task_analytics' && row.data?.groupBy === (layer.level === 'department' ? 'unit' : 'department')
-    || (layer.scope === 'team' && layer.level === 'unit' && row.tool === 'rota_workload_summary'),
+  // İş yükü ve örgütsel kırılım kapsamın açık (ya da bütün) işlerinin dağılımıdır: tamamlanmış, öncelikli, terminli ya da başka biçimde
+  // daraltılmış nüfus bu yönü karşılamaz (yalnızca dönem kabul edilir).
+  workload: (row, layer) => wholePopulation(row) && (row.tool === 'rota_workload_summary'
+    || (row.tool === 'rota_task_analytics' && row.data?.groupBy === (['self', 'person'].includes(layer.scope) ? 'project' : 'assignee'))),
+  org: (row, layer) => wholePopulation(row) && (row.tool === 'rota_task_analytics' && row.data?.groupBy === (layer.level === 'department' ? 'unit' : 'department')
+    || (layer.scope === 'team' && layer.level === 'unit' && row.tool === 'rota_workload_summary')),
   projects: (row) => row.tool === 'rota_portfolio_summary' ? Array.isArray(row.data?.projects) : row.tool === 'rota_task_analytics' && row.data?.groupBy === 'project'
     && unrestricted(row.data?.filters || {}, ['dateFrom', 'dateTo']),
   priority: (row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'priority',

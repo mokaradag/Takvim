@@ -1,6 +1,6 @@
 // Kabul koşusu özeti: profil/tur başına görünen sonuç, sunum yolu, grafik/tablo ve model kaydı.
 const fs = require('fs'); const path = require('path');
-const { semanticFailures, completionFailures, modelFailures, replayFailures } = require('./expectations.cjs');
+const { semanticFailures, completionFailures, modelFailures, scriptedFailures } = require('./expectations.cjs');
 const dir = process.argv[2];
 const manifest = path.join(dir, '..', 'run.json');
 const runId = process.env.UI_RUN_ID || (fs.existsSync(manifest) ? JSON.parse(fs.readFileSync(manifest, 'utf8')).runId : null);
@@ -24,6 +24,6 @@ if (skipped.length) out += `Kapsam eksik (sınanmadı): ${skipped.map((row) => `
 process.stdout.write(out);
 if (!rows.length || skipped.length || rows.some((row) => row.failures?.length || completionFailures(row.rendered, row.server).length || !row.server
   || semanticFailures({ outcome: row.expectedOutcome || 'grounded' }, row.rendered, row.server).length
-  // Betikli satırda yalnızca canlı model gereksinimleri atlanır; sunucu yeniden yürütme sözleşmesi yine denetlenir.
-  || (row.scripted ? replayFailures({ serverReplay: row.serverReplay === true }, row.server, row.calls).length
+  // Betikli satırda yalnızca canlı model gereksinimleri atlanır; yeniden yürütme ve düzen çağrısı kanıtı yine denetlenir.
+  || (row.scripted ? scriptedFailures({ serverReplay: row.serverReplay === true }, row.server, row.calls).length
     : modelFailures({ serverReplay: row.serverReplay === true }, row.server, row.calls).length))) process.exitCode = 1;

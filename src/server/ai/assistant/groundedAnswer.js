@@ -753,9 +753,12 @@ function explicitRepairPaths(plan, details) {
 function analysisRepairProjection(analysis, paths) {
   let masked = repairOmit(analysis, paths);
   if (paths.has('__duplicateLayers') && masked?.also) {
-    const population = (layer) => JSON.stringify([['projects', 'all'].includes(layer.scope) ? 'all' : layer.scope, layer.level || null, layer.names || null]);
+    // Bozuk kapsam değeri (`null`, dizi, metin) nüfus anahtarı üretmez ve yineleme sayılmaz: olduğu gibi kalır, karşılaştırma onu
+    // reddeder (onarım kapsam reddi yoluyla düzeltme turuna döner; tur çökmez).
+    const population = (layer) => (layer && typeof layer === 'object' && !Array.isArray(layer)
+      ? JSON.stringify([['projects', 'all'].includes(layer.scope) ? 'all' : layer.scope, layer.level || null, layer.names || null]) : null);
     const seen = new Set([population(masked)]);
-    masked = { ...masked, also: masked.also.filter((layer) => { const key = population(layer); if (seen.has(key)) return false; seen.add(key); return true; }) };
+    masked = { ...masked, also: masked.also.filter((layer) => { const key = population(layer); if (key === null) return true; if (seen.has(key)) return false; seen.add(key); return true; }) };
     if (!masked.also.length) delete masked.also;
   }
   // Ek kapsamların konumsal yolları (`also[1].level`) yalnızca ilk maskede geçerlidir: normalleştirme kapsamları birleştirip diziyi
@@ -775,7 +778,16 @@ function pinAnalysisRepair(turn, plan, details) {
     const [path, reason] = String(detail).split(':');
     if (path === '$.analysis.also' && reason === 'duplicate') paths.add('__duplicateLayers');
     if (['$.language', '$.chart', '$.charts', '$.table'].includes(path)) presentationPaths.add(path.slice(2));
-    if (path.startsWith('$.analysis.') && !(path === '$.analysis.also' && ['duplicate', 'scope'].includes(reason)) && !['unsupported', 'requestBudget', 'narrowable', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
+    if (path.startsWith('$.analysis.') && !(path === '$.analysis.also' && ['duplicate', 'scope', 'window'].includes(reason)) && !['unsupported', 'requestBudget', 'narrowable', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
+    // Kapsamlar arası dönem çakışması yalnızca dönem alanlarını açar: birincilin dönemi ve her ek kapsamın konumsal dönem alanları
+    // (ilk maskede). Kapsam kimlikleri, düzeyleri, adları ve yönleri sabit kalır; onarım bir kapsamı silerek çakışmayı gideremez.
+    if (path === '$.analysis.also' && reason === 'window') {
+      const layers = Array.isArray((existing?.raw || plan.analysis).also) ? (existing?.raw || plan.analysis).also : [];
+      for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) {
+        paths.add(key);
+        layers.forEach((_, index) => paths.add(`also[${index}].${key}`));
+      }
+    }
     // Aşama F: göreli pencere ile tarihlerin çakışması ancak ikisinden biri kaldırılarak düzeltilir: üç alan da onarımda değişebilir.
     if (path === '$.analysis.relativeWindow' && reason === 'conflict') for (const key of ['relativeWindow', 'dateFrom', 'dateTo']) paths.add(key);
     // Ek kapsam dönem taşıyamaz: reddedilen dönem ancak özetin kendi dönem alanlarında yeniden yazılarak düzeltilir (üçü de değişebilir).
@@ -820,7 +832,15 @@ function explicitRepairMatches(pin, plan) {
   const candidate = submittedExplicit(plan);
   return candidate.length === pin.explicit.length
     && candidate.every((item, index) => {
-      const shape = (request) => repairOmit({ ...request, ...(Array.isArray(request.metrics) ? { metrics: [...new Set(request.metrics)].sort() } : {}) }, pin.explicitPaths[index]);
+      // Konumsal ölçü yolları (`metrics[0]`) modelin yazdığı sıraya aittir: maske önce uygulanır, kalan ölçü kümesi sonra sıralanır.
+      // Önce sıralamak reddedilen ölçü yerine geçerli bir ölçüyü maskelerdi.
+      const shape = (request) => {
+        const masked = repairOmit(request, pin.explicitPaths[index]);
+        if (!masked || typeof masked !== 'object' || !Array.isArray(masked.metrics)) return masked;
+        const { metrics, ...rest } = masked;
+        const kept = [...new Set(metrics.filter((metric) => metric !== undefined))].sort();
+        return kept.length ? { ...rest, metrics: kept } : rest;
+      };
       return stable(shape(item)) === stable(shape(pin.explicit[index]));
     });
 }

@@ -125,6 +125,41 @@ test('basit sayımda düzen seçimi yoktur; dağılım tam kanıtta pasta grafi�
   assert.deepEqual(sheet.view.charts[0].types, ['bar', 'donut']);
 });
 
+test('çok kapsamlı özetin yanındaki açık istek bölümü grafik adayını korur; ikincil kapsam bölümü grafiksiz kalır', async (t) => {
+  const stack = stackFor(t);
+  const grouped = await callRotaTools(stack, AYSE, [['rota_task_analytics', { assignee: 'me', groupBy: 'priority' }]]);
+  const distribution = verifyRequested(grouped.ledger, ['data.groups.*.label', 'data.groups.*.count'],
+    { operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'priority' }, filters: { assignee: 'me' } });
+  assert.equal(distribution.ok, true, JSON.stringify(distribution.issues));
+  const layers = [{ scope: 'self', focus: ['overview'] }, { scope: 'team', level: 'unit', focus: ['priority'] }];
+  // Bölüm 1 ikincil kapsamın (katman 1) okuması; bölüm 2 özetin bölüm listesinde olmayan açık istektir.
+  const outline = { scope: 'self', focus: ['overview'], layers, sections: [{ layer: 1, focus: 'priority' }] };
+  const parts = [{ index: 0, presentation: distribution.presentation }, { index: 1, presentation: distribution.presentation }];
+  const sheet = buildComposition({ parts, question: 'Önceliğe göre dağılım', outline });
+  const owners = sheet.view.charts.map((chart) => chart.part);
+  assert.ok(owners.includes(2), `açık istek bölümünün grafik adayı düşmemeli: ${JSON.stringify(sheet.view.charts)}`);
+  assert.ok(!owners.includes(1), 'ikincil kapsam bölümü grafik adayı almamalı');
+});
+
+test('çok kapsamlı başlık yalnızca bütün ölçütleri söylüyorsa tablonun ölçüt satırını bastırır', async (t) => {
+  const stack = stackFor(t);
+  const grouped = await callRotaTools(stack, AYSE, [['rota_task_analytics', { assignee: 'me', groupBy: 'priority' }]]);
+  const distribution = verifyRequested(grouped.ledger, ['data.groups.*.label', 'data.groups.*.count'],
+    { operation: 'list', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics', collection: 'groups', groupBy: 'priority' }, filters: { assignee: 'me' } });
+  assert.equal(distribution.ok, true, JSON.stringify(distribution.issues));
+  const { verdict: overdue } = await overdueComposition(t);
+  const outline = { scope: 'self', focus: ['priority', 'overdue'], layers: [{ scope: 'self', focus: ['priority', 'overdue'] }, { scope: 'team', level: 'unit', focus: ['overview'] }],
+    sections: [{ layer: 0, focus: 'priority' }, { layer: 0, focus: 'overdue' }] };
+  const sheet = buildComposition({ parts: [{ index: 0, presentation: distribution.presentation }, { index: 1, presentation: overdue.presentation }],
+    question: 'Durumumu özetle', detail: 'balanced', outline });
+  const titles = [...sheet.render.titles.values()];
+  const ownerOnly = titles.find((title) => title.part === 1);
+  const filtered = titles.find((title) => title.part === 2);
+  assert.ok(ownerOnly && filtered, `iki bölüm de başlık almalı: ${JSON.stringify(titles)}`);
+  assert.ok(ownerOnly.evidenceId, 'yalnızca sahiplik süzgeçli bölümün başlığı nüfusu tam adlandırır');
+  assert.equal(filtered.evidenceId, undefined, 'termin ölçütlü bölümün başlığı ölçüt satırını bastırmamalı');
+});
+
 test('kapalı sayfa sınırı bütün tablo ve ayrıntıları korur; fazla kaynakta güvenle vazgeçilir', async (t) => {
   const { verdict } = await overdueComposition(t);
   const presentation = { ...verdict.presentation, facts: verdict.presentation.facts.filter(({ fact }) => fact.field === 'totalCount' || fact.field.endsWith('.title')) };

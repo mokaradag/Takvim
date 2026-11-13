@@ -2673,6 +2673,26 @@ test("model bağdaştırıcısı: zorunlu turdaki düz metin yeniden denemesi ö
   assert.equal(cli.locked(), false);
 });
 
+test('model bağdaştırıcısı: zorunlu yeniden deneme ilk yanıtın fazladan API çağrısını gizleyemez', async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  // İlk zorunlu tur iki ayrı asistan iletisi kimliğiyle düz metin döner: tek çağrı kuralı ihlal edilmiştir.
+  const cli = await claudeCommandFixture(t, { payload: {
+    messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }],
+    tools: [{ name: 'rota_plan', parameters: { type: 'object' } }], toolChoice: { name: 'rota_plan' }
+  }, events: [
+    { type: 'system', subtype: 'init', tools: [] },
+    { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'text', text: 'düz' }] } },
+    { type: 'assistant', message: { id: 'two', model: 'claude-haiku-4-5-20251001', content: [{ type: 'text', text: ' metin' }] } },
+    { type: 'result', is_error: true, subtype: 'error_max_turns', num_turns: 1, stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 1 } }
+  ] });
+  writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('}, 0);', 'process.exitCode = 1; }, 0);'));
+  cli.release();
+  const result = await cli.start({ PLANNER_CLAUDE_FORCED_RETRY: '1' }).done;
+  assert.equal(result.error, 'PLANNER_CALL_COUNT_UNEXPECTED', 'yeniden deneme öncesi çağrı sayısı ihlali raporlanmalı');
+  assert.equal(cli.count(), 1, 'ihlalli ilk yanıttan sonra yeniden deneme başlatılmamalı');
+  assert.equal(cli.locked(), false);
+});
+
 test("sonraki bölümün ayrı okumaları yalnızca kendi isteğine göre puanlanır", async () => {
   const { derivedReads, requestBoundCall } = await import('../src/server/ai/tools/requestPopulation.js');
   const { bindRequestEntities } = await import('../src/server/ai/tools/requestDeclaration.js');

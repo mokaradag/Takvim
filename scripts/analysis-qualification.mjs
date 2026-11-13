@@ -131,7 +131,9 @@ export function plannerScore(result, expect, today = corpus.today) {
     const declaredLayers = analysis ? (analysis.layers || [analysis, ...(analysis.also || [])]) : [];
     const sameNames = (layer, other) => !layer.names?.length || JSON.stringify(layer.names.map((name) => containmentText(String(name))).sort())
       === JSON.stringify((other.names || []).map((name) => containmentText(String(name))).sort());
-    for (const layer of expect.layers) {
+    // Bildirim denetimi yalnızca özet bildirimi varsa uygulanır: özetsiz açık plan (istek + ek istekler) kapsamlarını okumalarıyla
+    // karşılar; nüfus okuma denetimleri aşağıda her plan için geçerlidir.
+    if (analysis) for (const layer of expect.layers) {
       if (!declaredLayers.some((other) => other.scope === layer.scope && (other.level || '') === (layer.level || '') && sameNames(layer, other))) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} bildirilmedi`);
     }
     // Bildirilen kapsamın açılımı da o kapsamın nüfusunu okumalıdır (kapsam + düzey; adlı kapsamda adlı varlık): yalnızca özetin
@@ -385,9 +387,10 @@ export function executiveExpectation(item) {
     ...(scope === 'person' && !layers && !item.expect?.scopeDenied ? { person: true, people: names.map((name) => seed.people.find((row) => row.DisplayName === name)?.Sicil || -1) } : {}),
     // Özetin dönemi: dönemli okumalar istenen takvim penceresidir (dönemsiz gecikme okuması ayrıca serbesttir).
     ...(window && finish === 'stop' ? { window } : {}),
-    // Tek kapsamlı yön kendi nüfusunun kanıtıyla karşılanır. İki öznenin sayısal kıyasları bu satır biçiminden ayrıdır;
+    // Tek kapsamlı yön kendi nüfusunun kanıtıyla karşılanır. Adlı iki projenin kıyasında her yön HER projenin kendi kanıtıyla
+    // denetlenir (bir projenin eksik yönü öteki projenin okumasıyla geçmez). İki kişinin sayısal kıyasları bu satır biçiminden ayrıdır;
     // onların değer sözleşmesi ve özne kimlikleri kendi doğrulayıcısında korunur.
-    ...(['team', 'self', 'project', 'projects', 'all'].includes(analysis?.scope) && (analysis.scope !== 'project' || analysis.names?.length === 1) && !analysis.withSelf && !layers && finish === 'stop' && !item.expect?.scopeDenied ? { scopeFocus: layerFocus(analysis, analysis) } : {}),
+    ...(['team', 'self', 'project', 'projects', 'all'].includes(analysis?.scope) && (analysis.scope !== 'project' || [1, 2].includes(analysis.names?.length)) && !analysis.withSelf && !layers && finish === 'stop' && !item.expect?.scopeDenied ? { scopeFocus: layerFocus(analysis, analysis) } : {}),
     // Portföy kapsamı (birincil) portföy okumasını gerektirir: görev okumalarıyla geçemez.
     ...(scope === 'projects' && !item.expect?.scopeDenied && !denied(analysis) ? { portfolio: true } : {}),
     ...(turns.at(-1).plan?.visual ? { chart: true } : {}) };

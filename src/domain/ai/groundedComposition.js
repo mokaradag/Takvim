@@ -10,7 +10,7 @@ import {
   renderGroupDetails,
   renderGroupRows
 } from './evidenceNarrative.js';
-import { escapedFactText } from './evidenceFacts.js';
+import { escapedFactText, factPresentation } from './evidenceFacts.js';
 import { analystPropositions, singleSubjectPropositions, caveatPropositions, countProposition, taskCountLead, fluentParagraph, noteLabel, pointerSentence, populationProposition, rowPopulationComplete, tableLeadSentence, tablePropositions, titleCandidate } from './groundedPropositions.js';
 import { ANSWER_DETAIL_CONTRACT, normalizeAnswerDetail } from './answerDetail.js';
 import { analyticalSynthesis, aspectTitle, framingSentence, nextStepSentence, synthesisNarrative, findingScope } from './analyticalFindings.js';
@@ -266,6 +266,9 @@ const GROUP_SECTIONS = Object.freeze({ project: ['Proje dağılımı', 'By proje
 const LAYER_TITLES = Object.freeze({ self: ['Kendi işleriniz', 'Your work'], team: ['Ekibiniz', 'Your team'], unit: ['Biriminiz', 'Your unit'], department: ['Bölümünüz', 'Your department'],
   directorate: ['Direktörlüğünüz', 'Your directorate'], all: ['Görebildiğiniz bütün işler', 'All the work you can see'] });
 
+/** Kapsam başlığının (sahibin adı) kendisinin söylediği süzgeçler; bunların dışındaki her ölçüt tablonun ölçüt satırında kalır. */
+const LAYER_OWNER_FILTERS = new Set(['assignee', 'teamLevel', 'person', 'personSicil', 'project', 'projectId']);
+
 function filtersOfPart(parts, ordinal) {
   return (parts.find((item) => item.index + 1 === ordinal)?.presentation?.facts || []).map((item) => item.fact?.semantic?.filters).find(Boolean) || {};
 }
@@ -311,7 +314,10 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
   // Aşama F: istenen bütün türler (en çok iki; ilk tür birincil). Her istenen tür için aday yeri ayrılır.
   const requestedCharts = requestedChart ? [requestedChart, ...(Array.isArray(chartTypes) ? chartTypes : [])]
     .filter((type, index, all) => COMPOSITION_CHART_TYPES.includes(type) && all.indexOf(type) === index).slice(0, 2) : [];
-  const chartAllowed = (part) => allowCharts && (!(outline?.layers?.length > 1) || outline.sections?.[part - 1]?.layer === 0);
+  // Çok kapsamlı özette yalnızca ikincil kapsam bölümleri grafiksizdir; özetin bölüm listesinin (`sections`) ötesindeki açık istek
+  // bölümleri kendi grafik adaylarını korur.
+  const chartAllowed = (part) => allowCharts && (!(outline?.layers?.length > 1) || outline.sections?.[part - 1]?.layer === 0
+    || Array.isArray(outline.sections) && part > outline.sections.length);
   const caveats = caveatPropositions(parts, locale);
   // Zorunlu çekinceler ve kesinlik bildirimleri isteğe bağlı önermelerden önce yer ayırır.
   const reservedPropositions = caveats.length + (certainty ? COMPOSITION_LIMITS.maxTables : 0);
@@ -600,11 +606,13 @@ export function buildComposition({ parts = [], missing = [], locale = 'tr', ques
         }
         if (!text || [...titles.values()].some((title) => title.text === text) || titles.size >= limits.maxTitles) continue;
         const id = `H${titles.size + 1}`;
-        // Kapsam başlığı yalnızca sahibini ve konusunu söyler: bölümün dönem koşulu varsa başlık nüfusu tam adlandırmaz, ölçüt satırı
-        // bastırılmaz (`evidenceId` verilmez; dönem sayılarla birlikte görünür kalır).
+        // Kapsam başlığı yalnızca sahibini ve konusunu söyler: bölümün sahiplik dışı bir ölçütü (dönem, durum, öncelik, termin, kilometre
+        // taşı…) varsa başlık nüfusu tam adlandırmaz ve ölçüt satırı bastırılmaz (`evidenceId` verilmez; ölçüt tabloyla görünür kalır).
         const partFilters = filtersOfPart(parts, item.part);
-        const dated = ['dateFrom', 'dateTo', 'period'].some((key) => partFilters[key] != null);
-        titles.set(id, Object.freeze({ id, part: item.part, text, markdown: `#### ${escapedFactText(text)}`, ...(item.evidenceId && !dated ? { evidenceId: item.evidenceId } : {}) }));
+        const owner = (parts.find((entry) => entry.index + 1 === item.part)?.presentation?.facts || []).find((entry) => entry.fact?.semantic?.filters)?.fact;
+        const stated = !['dateFrom', 'dateTo', 'period'].some((key) => partFilters[key] != null)
+          && (!owner || factPresentation(owner, locale).qualifierParts.every((qualifier) => LAYER_OWNER_FILTERS.has(qualifier.key)));
+        titles.set(id, Object.freeze({ id, part: item.part, text, markdown: `#### ${escapedFactText(text)}`, ...(item.evidenceId && stated ? { evidenceId: item.evidenceId } : {}) }));
         viewTitles.push({ id, part: item.part, text });
       }
     }
