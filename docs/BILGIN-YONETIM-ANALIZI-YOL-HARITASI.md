@@ -584,6 +584,14 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
 | 2026-11-09 | Portföy proje tablosu ilk N değil, aracın sınırıyla tam liste | On projeden büyük portföyde projeler arası bulgular hiç kurulamıyordu; değer okuması aynı okumayı paylaşır |
 | 2026-11-09 | Proje adı düzyazıda doğrulanmış koduyla kalır | Listede görünmeyen adaş proje dışlanamaz (F kararı korunur) |
 | 2026-11-09 | Betikli görsel kabul ucu (`UI_SCRIPTED=1`) | Çizici ve sunucu sözleşmesi model kotası harcamadan dört görünümde sınanır; Haiku kabulünün yerine geçmez |
+| 2026-11-14 | Nitelendirme üretim eşdeğeri düzenekle: `FORCED_RETRY=0`, plan aracı MCP'den kendi adıyla (`NAMED_TOOL=auto`), önbellek kapısı yalnızca önbelleklenebilir durağan önekte | Standart profil adlı aracı `auto` gönderir; CLI plan aracını `StructuredOutput` adıyla sunuyordu; kısa düzen yönergesi önbellek alt sınırının altındadır. Taban aynı düzenekle yeniden ölçüldü |
+| 2026-11-14 | Açıklama kararı taze soruda bir kez doğrulanır; çekimserlik doğrulanmaz | Gereksiz açıklama sonlandırıcıydı; doğrulama mevcut düzeltme hakkından, yeni tur ya da araç yok |
+| 2026-11-14 | Yön/okuma tavanı aşımında model güdümlü kırpma YOK (denendi, geri alındı) | "Bütün yönleriyle" isteğinde yön kaybı; kullanıcıya öncelik sorulur (`analysis_budget`) |
+| 2026-11-14 | Metin kanalındaki JSON plan kabul edilmez | Karar yalnızca araç kanalından; sözleşme sınaması korunur |
+| 2026-11-14 | Plan düzeyindeki alanlar yalnızca tek anlamlı yerlerine taşınır; çelişen ya da belirsiz yazım reddedilir | Yapısal eşdeğerlik; onarım sınırı reddedilen plana göre kurulduğundan doğal onarım `repairScope` ile düşüyordu |
+| 2026-11-14 | Düzyazı düzeninde ayrıntı sınırı fazlası ve `D#` yuvası yumuşak; kimlik düzeni katı | Düzyazı yalnızca sunucu yuvalarıdır; tek seçim hatası doğrulanmış yanıtı Derin'e devrettirmez |
+| 2026-11-14 | Düzen modelinin serbest metni sunucu tamamlamasıyla "model düzeni" sayılmaz | Model yeteneğini olduğundan yüksek gösterirdi (g28) |
+| 2026-11-14 | Ağ geçidi ileti sınırı (32 KiB) yükseltilmez; yönerge sınır altında tutulur | Kaynak bütçeleri yalnızca zayıf model için büyütülmez |
 
 ---
 
@@ -656,3 +664,19 @@ Bu bölüm her oturumun sonunda güncellenir. Güncel durum ve sonraki giriş no
   yakınsaması, doğal düzyazı kabulü ve anlamsal danışmanlıklı kanonik 117/117 + 19/19 kapısının tamamlanması. Aşama H
   (dönem karşılaştırması, tamamlanma eğilimi, çoklu ufuk — g23, o07, o27, o30) yalnızca bu Aşama G kabul kapılarının tamamı
   doğrulandıktan sonra başlar.
+
+### 2026-11-14 — Zayıf model güvenilirlik yakınsaması
+
+- **Uygulandı:** üretim eşdeğeri nitelendirme düzeneği (önbellek kapısı, zorunlu tur iletimi, plan aracının MCP'den sunulması,
+  rol notu); açıklama doğrulaması; düz metin ve güvenlik ipucu; yönün iki adımlı seçimi (grup sonra konu), müdürlük = bölüm, örgüt
+  biriminin portföyü, iyeliksiz soru `all`, termin kovaları, sayısız kazanan sorusu ve kilometre taşı sorusu özettir; 14 örnek plan
+  (kıyas sorularıyla mekanik örtüşme denetimi); grafik türü ve plan düzeyi alanlarının yapısal eşdeğer yazımı; nüfus süzgeci ve grup
+  etiketi eşdeğerliği; dönem ve satır göndergesi onarımı; doğal kırılım ve adlı projede kilometre taşı okuması (yer varsa); geçersiz
+  liste isteğine özet önerisi; düzyazı düzeninde ayrıntı sınırı ve `D#` yuvası; tek kod çitli düzen yanıtı.
+- **Doğrulandı:** [Kabul Matrisi §8](BILGIN-ANALIZ-KABUL-MATRISI.md) — aynı düzenekte taban ortalaması 79,7/135, son kod ≈ 95,7/135
+  (başarısızlıkta −%29; hiçbir küme gerilemedi; %50 hedefine ulaşılmadı); taze varyantlar 12/18 → 15/18; güvenlik vakalarında
+  yetkisiz okuma yok.
+- **Açık:** §8.6'daki sınıflar (altın plan etiketi tutarsızlıkları, plan değişkenliği, onarım sınırında ikinci değişiklik, metin
+  kanalında JSON, düzen modelinin serbest metni); son kodun G hedefli kümesi sağlayıcı kullanım sınırı nedeniyle tam koşulamadı.
+- **Sonraki giriş noktası:** son kodla G hedefli kümenin tam koşusu; ardından §8.6 sınıfları (özellikle onarım turunda yalnızca
+  sunum tercihini değiştiren düzeltmenin güvenli kabulü tasarımı) ve Windows VM yeniden oynatması (§11).

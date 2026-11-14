@@ -87,11 +87,11 @@ export function analysisSchema() {
       scope: { type: 'string', enum: [...ANALYSIS_SCOPES], description: 'self kendi işleri; person adlı kişi; team yönetim kapsamı; project adlı proje; projects görünür projeler; all görünür işler; previous önceki özne; row görünür satır.' },
       rows: { type: 'array', minItems: 1, maxItems: 2, uniqueItems: true, items: { type: 'integer', minimum: 1, maximum: 10 }, description: 'scope row: 1 tabanlı satır(lar).' },
       within: { type: 'string', minLength: 2, maxLength: 120, description: 'Tek projeyle kesişim: self/team/all/previous veya person+withSelf.' },
-      level: { type: 'string', enum: [...ANALYSIS_LEVELS], description: 'team düzeyi: unit birim, department bölüm, directorate direktörlük.' },
+      level: { type: 'string', enum: [...ANALYSIS_LEVELS], description: 'team düzeyi: unit birim; department bölüm ya da müdürlük (müdürlük directorate DEĞİLDİR); directorate yalnızca direktörlük.' },
       names: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxNames, items: { type: 'string', minLength: 2, maxLength: 120 }, description: 'person/project: kullanıcının yazdığı ad(lar).' },
       withSelf: { type: 'boolean', description: 'Kişi adı/tek kişi satırı ile kendini karşılaştır.' },
       focus: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxFocus, uniqueItems: true, items: { type: 'string', enum: [...ANALYSIS_FOCUS] },
-        description: 'Yönler: overview sayılar, status durum, priority öncelik, deadlines termin kovaları, overdue gecikme, upcoming yakın termin, workload iş yükü, projects projeler, schedule aylar, critical kritik işler, org alt birimler, milestones kilometre taşları.' },
+        description: 'Önce sorunun grubu (kişiler workload, projeler projects, alt birim/bölümler org), sonra andığı her konu: overview genel sayılar, overdue gecikme, upcoming yakın teslim, critical kritik/yüksek öncelik, status durum ve tamamlanma, priority öncelik dağılımı, deadlines termin kovaları, schedule aylar, milestones kilometre taşı ve proje sağlığı.' },
       also: { type: 'array', minItems: 1, maxItems: ANALYSIS_LIMITS.maxLayers - 1, description: 'Aynı soruda ayrı kapsam(lar) (ör. kendi + ekip + bölüm); her biri ayrı okunur.',
         items: { type: 'object', additionalProperties: false, required: ['scope'], properties: { scope: { type: 'string', enum: [...LAYER_SCOPES] },
           level: { type: 'string', enum: [...ANALYSIS_LEVELS] }, names: { type: 'array', minItems: 1, maxItems: 1, items: { type: 'string', minLength: 2, maxLength: 120 } },
@@ -599,7 +599,18 @@ export function expandAnalysis(analysis, { previous = null, today = null, detail
     return expandWith(analysis, narrowed(resolved.base), today, detail, chart, charts, reserve);
   }
   if (analysis.also?.length) return expandLayers(analysis, today, { chart, charts, reserve });
-  return expandWith(analysis, narrowed(scopeBase(analysis)), today, detail, chart, charts, reserve);
+  return expandWith(analysis, narrowed(scopeBase(analysis)), today, detail, chart, charts, reserve, true);
+}
+
+/**
+ * Ekip özetinin doğal kırılımı: birim düzeyinde ya da düzeysiz ekipte kişilere göre iş yükü, bölüm/direktörlük düzeyinde alt örgüt
+ * birimleri. Yönetici "kimde / hangi birimde" sorusunu bu kırılımla yanıtlar; gerçek Haiku planlarında model genel sayılar, durum ve
+ * kritik iş gibi yönler yazıp kırılımı atlıyordu. İsteğe bağlı okumadır (yalnızca okuma tavanında yer varsa): bütçe reddi ve kullanıcıdan
+ * öncelik isteme kuralı değişmez, sunucu hiçbir bildirilen yönü düşürmez.
+ */
+function naturalBreakdown(analysis) {
+  if (analysis.scope !== 'team' || analysis.withSelf) return null;
+  return ['department', 'directorate'].includes(analysis.level) ? 'org' : 'workload';
 }
 
 /** Aşama G: her kapsamın karşılaştırılabilir özet ölçüleri (aynı tanım, aynı araç; kapsamlar arası toplam ya da pay yoktur). */
@@ -806,7 +817,7 @@ function budgetDetails(analysis) {
   return ['$.analysis.focus:requestBudget'];
 }
 
-function expandWith(analysis, base, today = null, detail = null, chart = null, charts = null, reserve = 0) {
+function expandWith(analysis, base, today = null, detail = null, chart = null, charts = null, reserve = 0, original = false) {
   // İsteğe bağlı okumalar (grafik, bütünleyici, alt birim kırılımı) açık istekler için ayrılan yeri kullanmaz; bildirilen yönler
   // eskisi gibi `maxParts` içinde kalmalıdır (toplam bütçe ayrıca denetlenir).
   const optionalBudget = Math.max(0, ANALYSIS_LIMITS.maxParts - reserve);
@@ -842,13 +853,24 @@ function expandWith(analysis, base, today = null, detail = null, chart = null, c
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
     if (items.length && parts.length + items.length <= detailedBudget) parts.push(...items);
   }
-  // Bölüm ya da direktörlük düzeyindeki ekip özetinin doğal kırılımı alt örgüt birimleridir (direktörlük → bölümler, bölüm → birimler):
-  // yönetici bu düzeyde "hangi birimde" sorusunu sorar. Model `org` yönünü yazmadıysa okuma sunucuca eklenir (portföy kapsamındaki
-  // proje satırları gibi; kullanıcı cümlesi yorumlanmaz, yalnızca türlü kapsam ve düzey). İsteğe bağlı okumadır: yer yoksa ya da
-  // dönem/daraltma nedeniyle kurulamıyorsa eklenmez, bildirilen hiçbir yön düşmez. Birim düzeyinin altı kişilerdir (eklenmez).
-  if (analysis.scope === 'team' && ['department', 'directorate'].includes(analysis.level) && !declared.includes('org') && !analysis.withSelf) {
+  // Ekip özetinin doğal kırılımı (bkz. `naturalBreakdown`): bölüm ya da direktörlük düzeyinde alt örgüt birimleri (direktörlük → bölümler,
+  // bölüm → birimler), birim düzeyinde ya da düzeysiz ekipte kişilere göre iş yükü. Model yönü yazmadıysa okuma sunucuca eklenir (portföy
+  // kapsamındaki proje satırları gibi; kullanıcı cümlesi yorumlanmaz, yalnızca türlü kapsam ve düzey). İsteğe bağlı okumadır: yer yoksa
+  // ya da dönem/daraltma nedeniyle kurulamıyorsa eklenmez, bildirilen hiçbir yön düşmez. Takip ve çok kapsamlı özette eklenmez.
+  const natural = original ? naturalBreakdown(analysis) : (analysis.scope === 'team' && ['department', 'directorate'].includes(analysis.level) && !analysis.withSelf ? 'org' : null);
+  if (natural && !declared.includes(natural) && !(natural === 'workload' && declared.includes('org'))) {
     let produced = null;
-    try { produced = produce('org'); } catch (error) { produced = optionalRead(error); }
+    try { produced = produce(natural); } catch (error) { produced = optionalRead(error); }
+    const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
+    if (items.length && parts.length + items.length <= optionalBudget) parts.push(...items);
+  }
+  // Adı verilen projenin genel durum özetinde proje sağlığının parçası kilometre taşı durumudur (gecikmiş kilometre taşı, sıradaki):
+  // model genel durumu (`overview`) isteyip `milestones` yönünü yazmadıysa okuma sunucuca eklenir (alt birim kırılımı gibi; kullanıcı
+  // cümlesi yorumlanmaz, yalnızca türlü kapsam ve yön). Gerçek Haiku planlarında proje sağlığı ve yönetici özeti sorularında bu yön
+  // sıkça atlanıyordu. İsteğe bağlı okumadır: yer yoksa eklenmez, bildirilen hiçbir yön düşmez, yeni yetki ya da araç açılmaz.
+  if (analysis.scope === 'project' && declared.includes('overview') && !declared.includes('milestones') && !analysis.withSelf) {
+    let produced = null;
+    try { produced = produce('milestones'); } catch (error) { produced = optionalRead(error); }
     const items = (Array.isArray(produced) ? produced : [produced]).filter(Boolean).filter((item) => !seen.has(JSON.stringify(item)));
     if (items.length && parts.length + items.length <= optionalBudget) parts.push(...items);
   }
@@ -924,6 +946,49 @@ export function analysisDetails(details = []) {
  * modelin kendi entities[].text değerleri olduğu yalnızca yapısal olarak söylenir. Eşleme yoksa `null`. Model öneriyi
  * benimsemek zorunda değildir; karar yine onundur.
  */
+/**
+ * Reddedilen ayrıntılı isteğin türlü alanlarından (araç, gruplama, süzgeç, ölçü, sorumlu koşulu, varlıklar) KABA analitik özet önerisi.
+ * `analysisSuggestion` okumaların birebir eşdeğer olmasını ister; istek zaten geçersizse (ör. araç istenen ölçüyü taşımıyor) eşdeğerlik
+ * kurulamaz ve zayıf model aynı geçersiz isteği yineleyip Derin modele devrediliyordu (gerçek Haiku koşularında ekip ve proje iş yükü
+ * sorularında ölçüldü). Bu öneri yalnızca düzeltme ipucudur: kapsamı ve yönleri sorudan doğrulamasını söyler; sunucu planı modelin yerine
+ * koymaz, öneri hiçbir okumayı, süzgeci ya da yetkiyi değiştirmez. Özet aileleri dışındaki araçlar (tek kayıt, bağımlılık, iş dağılım
+ * ağacı, hareket, talep) için öneri yoktur.
+ */
+const SUMMARY_TOOLS = Object.freeze(['rota_workload_summary', 'rota_portfolio_summary', 'rota_task_analytics', 'rota_task_search', 'rota_project_search']);
+export function analysisAlternative(request) {
+  if (!request || typeof request !== 'object' || Array.isArray(request) || request.previousResult) return null;
+  // Belirli bir sayım ya da tek değer (`value`) doğru istek biçimidir; yalnızca liste/sıralama özetin alanına girer.
+  if (!['list', 'rank'].includes(request.operation)) return null;
+  const tool = request.population?.tool;
+  if (!SUMMARY_TOOLS.includes(tool)) return null;
+  const filters = request.filters && typeof request.filters === 'object' && !Array.isArray(request.filters) ? request.filters : {};
+  const metrics = Array.isArray(request.metrics) ? request.metrics.filter((metric) => typeof metric === 'string') : [];
+  const entities = Array.isArray(request.entities) ? request.entities.filter((entity) => entity && typeof entity === 'object' && typeof entity.text === 'string') : [];
+  const groupBy = request.population?.groupBy;
+  const focus = [];
+  const add = (item, when) => { if (when && !focus.includes(item)) focus.push(item); };
+  add('workload', tool === 'rota_workload_summary' || groupBy === 'assignee' || metrics.includes('person.name'));
+  add('projects', tool === 'rota_portfolio_summary' || groupBy === 'project' || metrics.includes('project.name'));
+  add('org', ['department', 'unit'].includes(groupBy));
+  add('milestones', filters.milestone === true);
+  add('overdue', filters.deadline === 'overdue' || metrics.includes('tasks.overdue') || metrics.includes('task.overdueDays'));
+  add('upcoming', String(filters.deadline || '').startsWith('due_') || metrics.includes('tasks.dueNext7Days'));
+  add('status', groupBy === 'status' || metrics.some((metric) => ['tasks.todo', 'tasks.inProgress', 'tasks.done', 'tasks.completionRatePercent'].includes(metric)));
+  add('priority', groupBy === 'priority');
+  add('deadlines', groupBy === 'deadline');
+  add('schedule', groupBy === 'target_month');
+  if (!focus.length) return null;
+  const named = (type) => entities.filter((entity) => entity.type === type).map((entity) => entity.text);
+  const scope = filters.assignee === 'me' ? 'self' : filters.assignee === 'team' ? 'team' : named('person').length ? 'person' : named('project').length ? 'project'
+    : ['rota_portfolio_summary', 'rota_project_search'].includes(tool) || focus.includes('projects') ? 'projects' : 'all';
+  const names = ['person', 'project'].includes(scope) ? named(scope).slice(0, ANALYSIS_LIMITS.maxNames) : [];
+  const candidate = { scope, ...(scope === 'team' && ANALYSIS_LEVELS.includes(filters.teamLevel) ? { level: filters.teamLevel } : {}),
+    ...(names.length ? { names } : {}), focus: focus.filter((item) => layerApplicable(item, scope) && !(item === 'org' && scope !== 'team')).slice(0, 4) };
+  if (!candidate.focus.length) return null;
+  try { parseAnalysis(candidate); } catch { return null; }
+  return `Bu soru büyük olasılıkla bir durum, dağılım ya da iş yükü sorusudur: geçersiz request yerine analitik özet yaz (kapsamı, düzeyi ve yönleri sorudan doğrula; sunucu okumaları kendisi kurar): {"intent":"rota","language":"tr","analysis":${JSON.stringify(candidate)}}. İstek gerçekten tek bir kaydın alanı, belirli bir sayım ya da özel bir liste içinse yalnızca bildirilen sorunları düzelt.`;
+}
+
 export function analysisSuggestion(request) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) return null;
   if (request.previousResult || (request.filters != null && (typeof request.filters !== 'object' || Array.isArray(request.filters)))) return null;

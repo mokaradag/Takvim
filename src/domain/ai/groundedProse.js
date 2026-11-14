@@ -2,13 +2,13 @@
  * Kanıt yuvalarının kapalı anlatım sözleşmesi.
  *
  * Model paragrafta yalnızca hangi sunucu önermelerinin (`{P#}`) ve yönlendirmelerinin (`{T#}`, `{G#}`) hangi sırayla
- * söyleneceğini seçer. Yuva dışındaki HİÇBİR model metni çizilmez: ne serbest sözcük ne de bağlaç. Bağlaç da bir ilişki
+ * söyleneceğini seçer; `{D#}` sunucunun hazır ayrıntısının yeridir (kimlik paragrafındaki gibi paragrafın ardında kendi bloğu). Yuva dışındaki HİÇBİR model metni çizilmez: ne serbest sözcük ne de bağlaç. Bağlaç da bir ilişki
  * iddiasıdır ("öte yandan" karşıtlık söyler); ilişkiyi yalnızca sunucu, aynı kanıtın önermeleri arasında doğrulayarak
  * kurar (groundedPropositions.js § fluentParagraph). Yuva dışı metin bu yüzden yorumlanmaz, ayıklanmaz ya da olgusallığı
  * kestirilmez: yalnızca atılır ve sayılır. Kullanıcıya ulaşan her sözcük sunucunundur.
  */
 export const PROSE_LIMITS = Object.freeze({ maxChars: 2400, maxSentences: 8 });
-const SLOT = /\{([PTG][1-9][0-9]?)\}/gu;
+const SLOT = /\{([PTGD][1-9][0-9]?)\}/gu;
 /** Yuvaları ayıran boşluk ve noktalama atılan metin sayılmaz (gözlem sayacı yalnızca sözcük taşıyan parçaları sayar). */
 const SEPARATOR = /^[\s\p{P}]*$/u;
 const fail = (issue) => ({ ok: false, issue });

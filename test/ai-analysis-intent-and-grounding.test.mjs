@@ -365,7 +365,8 @@ for (const scope of ['previous', 'row']) test(`onarım devralınan pencere ve g�
   queue.push(plan({ scope: 'projects', focus: ['projects'], ...acceptedWindow }, { visual: true, chart: 'bar' }));
   assert.equal((await ask({ text: 'projeleri bu aralıkta grafikle göster' })).answer.finishReason, 'stop');
   const follow = { scope, ...(scope === 'row' ? { rows: [1] } : {}), focus: ['status'] };
-  queue.push(plan({ ...follow, act: 'certainty' }, { chart: 'geçersiz' }), plan({ ...follow, act: 'certainty' }, { chart: 'donut' }));
+  // İlk takip planı kapsamla çelişen tek bir alan yüzünden reddedilir (sözlük dışı grafik türü artık yalnızca düşer, ret sebebi olamaz).
+  queue.push(plan({ ...follow, level: 'unit', act: 'certainty' }, { chart: 'donut' }), plan({ ...follow, act: 'certainty' }, { chart: 'donut' }));
   const result = await ask({ text: 'aynı aralığı halka grafikle göster, ne kadar kesin?' });
   assert.equal(result.inputs.length, 2);
   assert.equal(result.answer.finishReason, 'stop', result.answer.content);

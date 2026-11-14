@@ -700,13 +700,20 @@ export function hasCompositionChoice(composition) {
 export function parseCompositionResponse(text) {
   if (typeof text !== 'string' || text.length > COMPOSITION_LIMITS.maxResponseChars) return null;
   const trimmed = text.trim();
-  const body = trimmed.replace(/^```(?:json)?[ \t]*\n([\s\S]*?)\n?```$/, '$1').trim();
-  try {
-    const value = JSON.parse(body);
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
-  } catch {
-    return null;
-  }
+  const parse = (body) => {
+    try {
+      const value = JSON.parse(body);
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+    } catch {
+      return null;
+    }
+  };
+  const whole = parse(trimmed.replace(/^```(?:json)?[ \t]*\n([\s\S]*?)\n?```$/, '$1').trim());
+  if (whole) return whole;
+  // Çitin önünde ya da ardında açıklama yazılmışsa yalnızca TEK kod çiti düzendir (doğrulama yanıtının ayrıştırıcısıyla aynı kural);
+  // çit dışındaki metin hiçbir zaman çizilmez. Birden çok çit belirsizdir ve reddedilir.
+  const fences = [...trimmed.matchAll(/```(?:json)?[ \t]*\n([\s\S]*?)\n?```/g)];
+  return fences.length === 1 ? parse(fences[0][1].trim()) : null;
 }
 
 /**
@@ -818,7 +825,7 @@ export function validateComposition(composition, response) {
       if (prose === Object.hasOwn(block, 'items')) return fail('BLOCK_INVALID');
       let items = block.items;
       if (prose) {
-        const checked = checkProse(block.text, { known: (id) => Boolean(render.propositions?.has(id) || render.tables.has(id) || render.charts.has(id)),
+        const checked = checkProse(block.text, { known: (id) => Boolean(render.propositions?.has(id) || render.tables.has(id) || render.charts.has(id) || render.details?.has(id)),
           used: new Set([...usedPropositions, ...pointers.map((pointer) => pointer.id)]) });
         // Kurala uymayan düzyazı paragrafı tümüyle düşer (yalnızca modelin içeriği azalır); kapsamı sunucu tamamlar.
         // Bütün düzyazı paragrafları düşerse düzen reddedilir.
@@ -856,10 +863,12 @@ export function validateComposition(composition, response) {
             if (pointers.some((pointer) => pointer.id === id)) { const hard = soft('DUPLICATE_POINTER'); if (hard) return hard; continue; }
             pointers.push({ id, at: blocks.length });
             said.push(id);
-          } else if (!prose && render.details?.has(id)) {
+          } else if (render.details?.has(id)) {
             // Paragrafa yazılan D#, sunucunun doğrulanmış ayrıntısının yeridir: paragrafın hemen ardında kendi bloğu olarak
-            // çizilir (details bloğuyla aynı; model metin yazmaz, ayrıntı bir kez kullanılır).
-            if (usedSources.has(id)) return fail('DUPLICATE_SOURCE');
+            // çizilir (details bloğuyla aynı; model metin yazmaz, ayrıntı bir kez kullanılır). Düzyazı paragrafında da aynı
+            // yerleştirmedir (yuva dışı metin zaten çizilmez); yalnızca ayrıntılardan oluşan olgu sayfasında modelin seçebileceği
+            // tek yuva D#'dir ve bu yazım bütün düzeni reddettirip Derin anlatıma devrettiriyordu (gerçek koşuda ölçüldü).
+            if (usedSources.has(id)) { if (!prose) return fail('DUPLICATE_SOURCE'); const hard = soft('DUPLICATE_SOURCE'); if (hard) return hard; continue; }
             usedSources.add(id);
             placed.push(id);
           } else { const hard = soft('UNKNOWN_PROPOSITION'); if (hard) return hard; }
@@ -1073,6 +1082,7 @@ export function validateComposition(composition, response) {
   }
   // Her bölüm kendi analist paragrafını ve mevcut önerme sayısına göre asgari anlatımını alır.
   const propositions = [...(render.propositions?.values() || [])];
+  let narrationTrimmed = 0;
   for (const part of new Set(propositions.map((item) => item.part))) {
     const available = propositions.filter((item) => item.part === part);
     const inSay = normalized.some((block) => block.type === 'say' && block.items.some((id) => render.propositions.get(id)?.part === part));
@@ -1080,7 +1090,30 @@ export function validateComposition(composition, response) {
     // Yanıt ayrıntısının üst sınırı da sözleşmedir: kısa/dengeli yanıt bütün önermeleri anlatamaz.
     // Düzyazı birden çok olguyu tek cümlede bağlayabilir: üst sınır kimlik paragrafından genişse de ayrıntıya göre artar.
     const ceiling = ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)].maxNarrated + (proseMode ? PROSE_NARRATION_ALLOWANCE[normalizeAnswerDetail(render.detail)] : 0);
-    if (available.filter((item) => usedPropositions.has(item.id)).length > ceiling) return fail('NARRATION_LIMIT');
+    const narrated = available.filter((item) => usedPropositions.has(item.id));
+    if (narrated.length <= ceiling) continue;
+    // Düzyazı paragrafı sunucu yuvalarının sırasıdır (yuva dışı metin çizilmez): sınırı aşan SEÇİM, öteki seçim hataları gibi
+    // yalnızca fazlası atılarak düzeltilir. Bölümün son anılan, zorunlu olmayan önermeleri düşer; kalan her cümle doğrulanmış
+    // sunucu önermesidir ve zorunlu çekince hiçbir zaman atılmaz. Kimlik paragrafında (items) sınır eskisi gibi katıdır.
+    const order = normalized.filter((block) => block.type === 'say').flatMap((block) => block.items)
+      .filter((id) => render.propositions.get(id)?.part === part);
+    const inProse = new Set(normalized.filter((block) => block.type === 'say' && block.prose).flatMap((block) => block.items));
+    const removable = order.filter((id) => inProse.has(id) && !render.propositions.get(id)?.required).reverse();
+    const excess = new Set(removable.slice(0, narrated.length - ceiling));
+    if (narrated.length - excess.size > ceiling) return fail('NARRATION_LIMIT');
+    for (let at = 0; at < normalized.length; at += 1) {
+      const block = normalized[at];
+      if (block.type !== 'say' || !block.prose || !block.items.some((id) => excess.has(id))) continue;
+      const items = block.items.filter((id) => !excess.has(id));
+      normalized[at] = { ...block, items, prose: block.prose.filter((sentence) => !sentence.some((token) => token.slot && excess.has(token.slot))), text: proseText(items) };
+    }
+    for (const id of excess) usedPropositions.delete(id);
+    narrationTrimmed += excess.size;
+  }
+  if (narrationTrimmed) {
+    for (let at = normalized.length - 1; at >= 0; at -= 1) if (normalized[at].type === 'say' && !normalized[at].items.length) normalized.splice(at, 1);
+    if (!normalized.length || ['chart', 'note'].includes(normalized[0].type)) return fail('LEAD_REQUIRED');
+    proseCut += narrationTrimmed;
   }
   // Ayrıntı ayarının not kutusu sınırı (kısa yanıt tek vurgu taşır).
   if (normalized.filter((block) => block.type === 'note').length > ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)].maxNotes) return fail('NOTE_INVALID');

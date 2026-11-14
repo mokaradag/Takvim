@@ -252,11 +252,15 @@ test('türlü plan kapalıdır: biçim, niyet, ek istek ve karar alanları alan�
 /* ── Sonlandırıcı kararlar ─────────────────────────────────── */
 
 test('açıklama ve çekimserlik veri okumaz; kullanıcı yalnızca sunucunun sabit metnini görür', async (t) => {
-  const clarified = await turn(t, [plan({ intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous', topics: ['rota_task_search', 'rota_notifications'] } })]);
+  const ambiguous = plan({ intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous', topics: ['rota_task_search', 'rota_notifications'] } });
+  // Taze turdaki açıklama kararı veri okunmadan bir kez doğrulanır; yinelenen karar olduğu gibi kabul edilir.
+  const clarified = await turn(t, [ambiguous, ambiguous]);
   assert.equal(clarified.result.outcome, 'clarification');
   assert.equal(clarified.result.finishReason, 'clarification');
   assert.equal(clarified.result.text, renderPlannerClarification({ reason: 'ambiguous', topics: ['tasks', 'notifications'], locale: 'tr' }));
   assert.equal(clarified.result.stats.attempted, 0);
+  const confirmation = clarified.inputs[1].messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content)).at(-1);
+  assert.deepEqual(confirmation.error.details, ['$.clarify:unconfirmed']);
   for (const reason of ABSTAIN_REASONS) {
     const refused = await turn(t, [plan({ intent: 'abstain', language: 'en', abstain: { reason } })]);
     assert.equal(refused.result.outcome, 'abstained');
@@ -502,7 +506,8 @@ test('proje arama satırlarının tamamı ayrıntı kaynağıdır ve sıfır kay
 });
 
 test('plan açıklaması sonraki turda kayıt adıyla tam soruyu yeniden ister', async (t) => {
-  const first = await turn(t, [plan({ intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous', topics: ['rota_task_search', 'rota_project_search'] } })], { user: 'Radar bilgileri' });
+  const ambiguous = plan({ intent: 'clarify', language: 'tr', clarify: { reason: 'ambiguous', topics: ['rota_task_search', 'rota_project_search'] } });
+  const first = await turn(t, [ambiguous, ambiguous], { user: 'Radar bilgileri' });
   assert.match(first.result.text, /Kaydın adını veya kodunu.*sorunun tamamını/);
   const second = await turn(t, [plan({ intent: 'rota', language: 'tr', request: { operation: 'value', metrics: ['project.lead'], population: { tool: 'rota_project_search' }, entities: [{ type: 'project', text: 'Radar Modernizasyonu' }], layout: 'auto' } })], { user: 'Radar Modernizasyonu projesinin lideri kim?' });
   assert.equal(second.result.outcome, 'grounded');

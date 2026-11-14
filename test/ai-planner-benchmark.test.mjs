@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { planCase, recordOf } from '../scripts/planner-evaluation.mjs';
 import { loadPlannerBenchmark, PLANNER_BENCHMARK_FILE, resolveExample, scoreDecision } from '../scripts/planner-scoring.mjs';
+import { CACHE_MIN_STATIC_CHARS } from '../scripts/planner-model-adapter.mjs';
 
 const { semanticPlanningAdvice } = await import('../src/server/ai/assistant/semanticPlanning.js');
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
@@ -1310,6 +1311,9 @@ test("model bağdaştırıcısı: eşzamanlı model nitelendirmeleri defteri pay
   }
 });
 
+/** Önbellek kapısının uygulandığı uzunlukta durağan sistem yönergesi (gerçek planlayıcı öneki gibi önbelleklenebilir). */
+const CACHEABLE_SYSTEM = 'kararlı önek '.repeat(Math.ceil(CACHE_MIN_STATIC_CHARS / 12) + 1);
+
 async function claudeCommandFixture(t, { reuse = false, events = null, newline = true, descendant = false, standalone = false, payload = null, executionDelayMs = 0, commandTimeoutMs = 8000, ...limits } = {}) {
   const { spawn, spawnSync } = await import('node:child_process');
   const { spawnModelCommand, terminateModelCommand } = await import('../scripts/planner-model-adapter.mjs');
@@ -1396,7 +1400,7 @@ async function claudeCommandFixture(t, { reuse = false, events = null, newline =
       child.on('close', (code, signal) => { if (standalone || !settled) finish(code, signal); });
     });
     children.push({ child, done });
-    child.stdin.end(JSON.stringify(payload || { messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }], tools: [], toolChoice: 'none' }));
+    child.stdin.end(JSON.stringify(payload || { messages: [{ role: 'system', content: CACHEABLE_SYSTEM }, { role: 'user', content: 'question' }], tools: [], toolChoice: 'none' }));
     return { child, done, stderr: () => err };
   };
   return { start, kill, waitFor, log, dir, adapter, model, command: '"' + process.execPath + '" "' + adapter + '" "' + model + '"', descendantPid: () => Number(readFileSync(path.join(dir, 'descendant'), 'utf8')), release: () => writeFileSync(release, 'go'),
@@ -1494,6 +1498,34 @@ test("model bağdaştırıcısı: bayat önbellek ısınır, yakın çağrı ve 
   assert.equal((await cli.start().done).error, 'PLANNER_BUDGET_CALLS', 'bayat satır bütçeden silinmez');
   assert.equal(cli.count(), 3);
   assert.equal(cli.rows().filter(row => row.reserved).length, 3);
+});
+
+test('model bağdaştırıcısı: önbelleklenemeyecek kadar kısa durağan önek önbellek tabanı sayılmaz; uzun önek okumayı zorunlu tutar', async (t) => {
+  // Kısa düzen yönergesi + değişken olgu sayfası: CLI bütün istemi önbelleğe yazar ama durağan önek tek başına en küçük
+  // önbelleklenebilir uzunluğun altında olduğundan sonraki tur onu hiç okuyamaz (gerçek koşudaki imza).
+  const wholePrompt = [
+    { type: 'system', subtype: 'init', tools: [] },
+    { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'text', text: 'ok' }] } },
+    { type: 'result', num_turns: 1, stop_reason: 'end_turn', usage: { input_tokens: 3, cache_creation_input_tokens: 4376, cache_read_input_tokens: 0, output_tokens: 1 } }
+  ];
+  const payload = { messages: [{ role: 'system', content: 'kısa düzen yönergesi'.repeat(200) }, { role: 'user', content: 'olgu sayfası' }], tools: [], toolChoice: 'none' };
+  assert.ok(payload.messages[0].content.length < CACHE_MIN_STATIC_CHARS);
+  const short = await claudeCommandFixture(t, { events: wholePrompt, payload, PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
+  const opening = short.start();
+  await short.waitFor(() => short.count() === 1);
+  short.release();
+  assert.equal((await opening.done).error, undefined);
+  for (const index of [2, 3]) {
+    assert.equal((await short.start().done).error, undefined, `önbelleklenemeyen önekte ${index}. çağrı sahte önbellek hatası almaz`);
+  }
+  assert.equal(short.count(), 3);
+  // Negatif denetim: önbelleğe yazan taban varken okumayan yakın çağrı yine altyapı hatasıdır (kapı gevşemez).
+  const long = await claudeCommandFixture(t, { PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
+  const first = long.start();
+  await long.waitFor(() => long.count() === 1);
+  long.release();
+  assert.equal((await first.done).error, undefined);
+  assert.equal((await long.start().done).error, 'PLANNER_CACHE_NOT_REUSED', 'önbelleğe yazılmış önek okunmadıysa koşu durur');
 });
 
 test("model bağdaştırıcısı: eşzamanlı çağrı tükenen belirteç bütçesini aşarak modele gitmez", async (t) => {
@@ -2421,8 +2453,10 @@ test("takip nitelendirmesi: takip nitelendirmesinde özet danışması gerçek m
   const stack = createAiStack(t, { sicil: AYSE, seed: rotaToolSeed(), env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' }, provider });
   const response = await sendTurn({ turnId: randomUUID(), message: 'Onun durumu?' });
   assert.equal(response.events.find(event => event.event === 'done').data.assistantMessage.finishReason, 'clarification');
-  assert.equal(inputs.length, 1);
-  assert.ok(!JSON.stringify(inputs[0].messages).includes('SUNUCU (anlamsal danışmanlık)'));
+  // Taze turdaki açıklama kararı bir kez doğrulanır (ikinci tur `clarify:unconfirmed` notuyla); yinelenen karar kabul edilir.
+  assert.equal(inputs.length, 2);
+  assert.ok(JSON.stringify(inputs[1].messages).includes('clarify:unconfirmed'));
+  assert.ok(inputs.every(input => !JSON.stringify(input.messages).includes('SUNUCU (anlamsal danışmanlık)')));
   assert.ok(provider.semanticCalls.some(call => call.kind === 'embeddings'));
   assert.ok(!provider.semanticCalls.some(call => call.kind === 'rerank'));
   assert.equal(stack.db.aiToolLog?.length || 0, 0);
@@ -2654,7 +2688,7 @@ test("model bağdaştırıcısı: zorunlu turdaki düz metin yeniden denemesi ö
   const { writeFileSync } = await import('node:fs');
   // Zorunlu adlı araç turu; model araç yerine düz metin döner (CLI tek tur sınırıyla biter, çıkış kodu 1).
   const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_REQUIRE_CACHE: '1', payload: {
-    messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }],
+    messages: [{ role: 'system', content: CACHEABLE_SYSTEM }, { role: 'user', content: 'question' }],
     tools: [{ name: 'rota_plan', parameters: { type: 'object' } }], toolChoice: { name: 'rota_plan' }
   }, events: [
     { type: 'system', subtype: 'init', tools: [] },
@@ -3026,6 +3060,56 @@ test('109 son: zorunlu yeniden denemenin üst süre bütçesi kilidi ve iki alt 
   assert.equal(modelCommandTimeoutMs(timeout, false), original);
   assert.ok(modelCommandTimeoutMs(timeout, true) >= 3 * timeout + 4 * MODEL_CLEANUP_TIMEOUT_MS + 1000);
 
+});
+
+test('model bağdaştırıcısı: yeniden denemesiz zorunlu turdaki doğrudan veri aracı çağrısı üretimdeki gibi sunucuya iletilir', async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  // Standart araç profilinde üretim adlı seçimi `auto` gönderir: model plan yerine veri aracını çağırabilir (altyapı hatası değildir).
+  const handoff = (exitCode) => claudeCommandFixture(t, { payload: {
+    messages: [{ role: 'system', content: 'Sabit yönerge' }, { role: 'user', content: 'Durumu göster' }],
+    tools: [{ name: 'rota_plan', parameters: { type: 'object' } }, { name: 'rota_project_search', parameters: { type: 'object' } }], toolChoice: { name: 'rota_plan' }
+  }, events: [
+    { type: 'system', subtype: 'init', tools: ['mcp__rota__rota_project_search'] },
+    { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'tool_use', name: 'mcp__rota__rota_project_search', input: { query: 'KAP' } }] } },
+    { type: 'result', is_error: true, subtype: exitCode === 1 ? 'error_max_turns' : 'error_during_execution', num_turns: 1, stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 1 } }
+  ] }).then((cli) => {
+    writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('}, 0);', `process.exitCode = ${exitCode}; }, 0);`));
+    cli.release();
+    return cli;
+  });
+  const cli = await handoff(1);
+  const reply = await cli.start({ PLANNER_CLAUDE_FORCED_RETRY: '0' }).done;
+  assert.equal(reply.error, undefined, 'üretimde geçerli yanıt altyapı hatası sayılmaz');
+  assert.deepEqual(reply.toolCalls, [{ name: 'rota_project_search', arguments: { query: 'KAP' } }]);
+  assert.equal(reply.finishReason, 'tool_calls');
+  assert.equal(cli.rows().find((row) => row.usage).forcedToolCall, true, 'devir ayrıca sayılır');
+  // Negatif denetim: belgelenmemiş CLI hatası yine sağlayıcı hatasıdır.
+  const broken = await handoff(7);
+  assert.equal((await broken.start({ PLANNER_CLAUDE_FORCED_RETRY: '0' }).done).error, 'PLANNER_PROVIDER_ERROR');
+});
+
+test('model bağdaştırıcısı: adlı araç seçiminin auto kipi plan aracını kendi adıyla sıradan MCP aracı olarak sunar ve çağrısını iletir', async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  // Standart araç profilinin üretim sözleşmesi: adlı seçim sağlayıcıya `auto` gider, plan aracı öteki araçlarla birlikte sunulur.
+  const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_NAMED_TOOL: 'auto', payload: {
+    messages: [{ role: 'system', content: 'Sabit yönerge' }, { role: 'user', content: 'Durumumu özetle' }],
+    tools: [{ name: 'rota_plan', parameters: { type: 'object' } }, { name: 'rota_task_search', parameters: { type: 'object' } }], toolChoice: { name: 'rota_plan' }
+  }, events: [
+    { type: 'system', subtype: 'init', tools: ['mcp__rota__rota_plan', 'mcp__rota__rota_task_search'] },
+    { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'tool_use', name: 'mcp__rota__rota_plan', input: { intent: 'rota', language: 'tr' } }] } },
+    { type: 'result', is_error: true, subtype: 'error_max_turns', num_turns: 1, stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 1 } }
+  ] });
+  const argsFile = `${cli.dir}/args.json`;
+  writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace("const fs = require('node:fs');", `const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));`)
+    .replace('}, 0);', 'process.exitCode = 1; }, 0);'));
+  cli.release();
+  const reply = await cli.start().done;
+  assert.equal(reply.error, undefined, 'plan aracının çağrısı altyapı hatası değildir');
+  assert.deepEqual(reply.toolCalls, [{ name: 'rota_plan', arguments: { intent: 'rota', language: 'tr' } }]);
+  assert.equal(reply.finishReason, 'tool_calls');
+  const args = JSON.parse(readFileSync(argsFile, 'utf8'));
+  assert.equal(args.includes('--json-schema'), false, 'yapılandırılmış çıktı (StructuredOutput) kullanılmaz');
+  assert.ok(args.includes('--mcp-config'), 'plan aracı yerel MCP sunucusundan sunulur');
 });
 
 test('zorunlu düz metin yeniden denemesi ilk çağrının eksik araç kataloğunu gizleyemez', async (t) => {
