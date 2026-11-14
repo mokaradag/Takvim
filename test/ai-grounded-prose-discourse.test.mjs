@@ -139,8 +139,12 @@ test('kabul derlemi: düşmanca model metni hiçbir vakada çizilmez; zorunlu ol
       if (!page) return;
       const paragraphs = content.split('\n\n');
       // Anlatım paragrafı: bir sunucu önermesinin başını taşıyan düz paragraf (tablo, liste, not, grafik ve sunucu ayrıntısı değil).
+      // Baş, sondaki noktalama olmadan en çok 40 karakterdir: adlı projeyle başlayan önermeler (ör. kilometre taşı durumu) sunucunun
+      // açılış cümlesiyle ilk 28 karakteri paylaşabilir ("<Proje> projesinde …") ve daha kısa baş sunucunun kendi açılışını model seçimi
+      // sanıyordu; sunucu bağladığı önermenin son noktasını kaldırdığı için noktalama başa katılmaz.
+      const head = (text) => text.replace(/[.!?]+$/u, '').slice(0, 40);
       const prose = paragraphs.filter((paragraph) => !/^[|_>`-]/.test(paragraph)
-        && page.propositions.some((proposition) => plain(paragraph).includes(proposition.text.slice(0, 28))));
+        && page.propositions.some((proposition) => plain(paragraph).includes(head(proposition.text))));
       assert.ok(prose.length, 'modelin seçtiği önermeler çizilir');
       const pageText = JSON.stringify(page);
       for (const paragraph of prose) {

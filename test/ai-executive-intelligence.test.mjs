@@ -1096,8 +1096,11 @@ test('özetin eşdeğer yazımları onarım turu harcamaz: analysis kararı, öz
   assert.deepEqual([same.relativeWindow, same.dateFrom ?? null, same.dateTo ?? null], ['next_7_days', null, null], 'göreli dönem kalır; yinelenen tarih çifti düşer');
   const dated = unpack({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'], relativeWindow: 'all_time', dateFrom: TODAY, dateTo: shift(13) } }).plan.analysis;
   assert.deepEqual([dated.relativeWindow ?? null, dated.dateTo], [null, shift(13)]);
-  // Farklı günleri gösteren göreli dönem ve tarih çifti çelişkidir.
-  assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'], relativeWindow: 'next_7_days', dateFrom: TODAY, dateTo: shift(13) } }), ['$.analysis.relativeWindow:conflict']);
+  // Farklı günleri gösteren TAM tarih çifti göreli ön ayarın yerine geçer (model tarihleri sorudan hesaplar, ön ayar şablondan kalır).
+  const pair = unpack({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'], relativeWindow: 'next_7_days', dateFrom: TODAY, dateTo: shift(13) } }).plan.analysis;
+  assert.deepEqual([pair.relativeWindow ?? null, pair.dateFrom, pair.dateTo], [null, TODAY, shift(13)]);
+  // Tek uçlu tarih ön ayarla çelişkisini korur.
+  assert.deepEqual(reject({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['upcoming'], relativeWindow: 'next_7_days', dateTo: shift(13) } }), ['$.analysis.relativeWindow:conflict']);
 });
 
 test('istek yazımının yapısal eşdeğerleri ilk bildirimde kabul edilir: dizi biçimli istek, null süzgeç, sorumlu "any" ve süzgeçteki proje adı', () => {
@@ -1182,6 +1185,9 @@ test('ek kapsamda reddedilen dönem kaldırılarak onarılır: özetin geçerli 
   const first = { intent: 'rota', language: 'tr', analysis: { scope: 'team', level: 'unit', focus: ['upcoming', 'overdue'], dateFrom: shift(0), dateTo: shift(13),
     also: [{ scope: 'team', level: 'unit', focus: ['overdue'], relativeWindow: 'all_time' }] } };
   const repaired = { intent: 'rota', language: 'tr', analysis: { scope: 'team', level: 'unit', focus: ['upcoming', 'overdue'], dateFrom: shift(0), dateTo: shift(13) } };
+  // Dönemsiz ek kapsam gecikme dışında bir yön de taşıyorsa birincilin yinelemesi değildir: alan reddedilir ve onarılır.
+  const layered = { ...first, analysis: { ...first.analysis, also: [{ scope: 'team', level: 'unit', focus: ['overdue', 'workload'], relativeWindow: 'all_time' }] } };
+  const layeredRepaired = { ...repaired, analysis: { ...repaired.analysis, focus: ['upcoming', 'overdue', 'workload'] } };
   const planCall = (plan) => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plan }] });
   const run = async (st, plans) => {
     st.mock.timers.enable({ apis: ['Date'], now: NOW });
@@ -1198,24 +1204,33 @@ test('ek kapsamda reddedilen dönem kaldırılarak onarılır: özetin geçerli 
     return { result, escalated };
   };
   await t.test('geçerli onarım', async (st) => {
+    // Yalnızca gecikme yönü için birincilin yinelemesi olan ek kapsam, gelecek dönemde birincilin gecikme yönüdür: onarım turu harcanmaz.
     const fixed = await run(st, [first, repaired]);
-    assert.equal(fixed.escalated, false, 'geçerli onarım Derin modele devredilmez');
+    assert.equal(fixed.escalated, false, 'geçerli plan Derin modele devredilmez');
+    assert.equal(fixed.result.inputs.length, 1, 'eşdeğer yazım ilk bildirimde kabul edilir');
     assert.equal(fixed.result.answer.finishReason, 'stop', fixed.result.answer.content);
     assert.deepEqual(turnViolations(fixed.result, { assignee: 'team', level: 'unit', windowDays: 14 }), []);
   });
+  await t.test('eşdeğer olmayan ek kapsamın onarımı', async (st) => {
+    // Gecikme dışındaki yönü taşıyan dönemsiz ek kapsam eşdeğer değildir: onarılır ve Derin devri olmadan yanıtlanır.
+    const kept = await run(st, [layered, layeredRepaired]);
+    assert.equal(kept.escalated, false);
+    assert.equal(kept.result.inputs.length, 2);
+    assert.equal(kept.result.answer.finishReason, 'stop', kept.result.answer.content);
+  });
   // Onarım kapsamı değiştiremez: başka düzey ya da düşen yön eskisi gibi reddedilir.
   await t.test('düzey değişemez', async (st) => {
-    const widened = await run(st, [first, { ...repaired, analysis: { ...repaired.analysis, level: 'department' } }]);
+    const widened = await run(st, [layered, { ...layeredRepaired, analysis: { ...layeredRepaired.analysis, level: 'department' } }]);
     assert.notEqual(widened.result.answer.finishReason, 'stop');
     assert.equal(populationReads(widened.result.log).some((row) => row.params.teamLevel === 'DEPARTMENT'), false, 'genişleyen kapsam okunmaz');
   });
   await t.test('yön düşemez', async (st) => {
-    const dropped = await run(st, [first, { ...repaired, analysis: { ...repaired.analysis, focus: ['upcoming'] } }]);
+    const dropped = await run(st, [layered, { ...layeredRepaired, analysis: { ...layeredRepaired.analysis, focus: ['upcoming'] } }]);
     assert.notEqual(dropped.result.answer.finishReason, 'stop');
   });
   // Ek kapsamın geçersiz dönemi, birincil kapsamın geçerli sınırlarını değiştirme izni değildir.
   await t.test('birincil dönem değişemez', async (st) => {
-    const moved = await run(st, [first, { ...repaired, analysis: { ...repaired.analysis, dateTo: shift(40) } }]);
+    const moved = await run(st, [layered, { ...layeredRepaired, analysis: { ...layeredRepaired.analysis, dateTo: shift(40) } }]);
     assert.notEqual(moved.result.answer.finishReason, 'stop');
     assert.equal(populationReads(moved.result.log).some((row) => row.params.dateTo === shift(40)), false, 'değişen dönem okunmaz');
   });

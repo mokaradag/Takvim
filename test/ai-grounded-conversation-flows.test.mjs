@@ -152,7 +152,9 @@ test('E: karşılaştırma ("ilk ikisi") iki satır göndergesini ayrı bölüml
 
 test('F: açıklama sorusundan sonra kaydı adlandıran yanıt yeni ve doğal yazılmış bir istektir', async (t) => {
   const { ask } = conversation(t);
-  const clarify = await ask('Bu projede kaç görev var?', [{ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } }] }]);
+  // Taze turdaki açıklama kararı bir kez doğrulanır; göndergesiz soruda model aynı kararı yineler.
+  const clarifyStep = { type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: { intent: 'clarify', language: 'tr', clarify: { reason: 'missing_referent' } } }] };
+  const clarify = await ask('Bu projede kaç görev var?', [clarifyStep, clarifyStep]);
   assert.equal(clarify.answer.finishReason, 'clarification');
   assert.equal(clarify.compose, null, 'açıklama turunda düzen yoktur');
   const answer = await ask('Radar Modernizasyonu', [rotaPlan({ operation: 'value', metrics: ['tasks.total'], population: { tool: 'rota_task_analytics' },

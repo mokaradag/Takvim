@@ -258,6 +258,11 @@ function scopePhrase(record, locale, { named = false, projects = null } = {}) {
   // Aşama F: projeye göre grubun satırı bir projedir ("**X** projesinde"), "grubunda" değil.
   const groupBy = record.entries.find(({ fact }) => fact.semantic?.groupBy)?.fact.semantic.groupBy;
   if (record.kind === 'group' && groupBy === 'project') return locale === 'en' ? `the ${name} project` : `${name} projesinde`;
+  // Sorumluya göre grubun satırı bir kişidir ("**X** üzerinde"), "grubunda" değil; sorumlusuz/çözülemeyen satır kişi değildir.
+  if (record.kind === 'group' && groupBy === 'assignee') {
+    const key = String(record.entries.find(({ fact }) => fact.semantic?.group)?.fact.semantic.group.key ?? '');
+    if (!NON_ENTITY_GROUPS.has(key)) return locale === 'en' ? `tasks assigned to ${name}` : `${name} üzerinde`;
+  }
   if (record.kind === 'group') return locale === 'en' ? `the ${name} group` : `${name} grubunda`;
   // Ekip kapsamı (yönetim kapsamı) ve kullanıcının kendi görevleri nüfusun öznesidir: "görebildiğiniz bütün görevler"
   // ile karıştırılmaz ve ölçütte ayrıca "Sorumlu: Ben/Ekibiniz" diye yinelenmez (bkz. `assigneeScoped`).

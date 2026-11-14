@@ -440,9 +440,15 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
   if (textual.length && definition.parameters.properties.textFields) population.textFields = [...new Set([...(population.textFields || []), ...textual])].sort();
   // Gruplanan boyutun ölçüsü (ör. önceliğe göre gruplamada task.priority) grup satırının etiketidir; ayrı ölçü değildir.
   const grouped = GROUP_METRICS[population.groupBy];
+  // Kayıt türüne göre gruplamada (sorumlu, proje) o kaydı adlandıran ölçü de (person.name, project.name, project.code) grup satırının
+  // etiketidir: "en çok gecikmesi olan kişi" için sorumluya göre gruplanan analizde `person.name` satırın kendi etiketidir, analiz aracı
+  // onu ayrı ölçü olarak taşımadığı için reddedilmesi zayıf modeli onarımda adlandıran ölçüyü silip Derin'e gitmeye itiyordu (gerçek
+  // Haiku koşularında ölçüldü). Yalnızca aracın taşımadığı etiket yazımları düşer; en az bir gerçek ölçü kalmalıdır.
+  const labels = [grouped, ...(ENTITY_GROUPS[population.groupBy]?.names || [])].filter(Boolean);
   const ungrouped = request.metrics.filter((metric) => !groupedNames.includes(metric));
   const named = ungrouped.length ? ungrouped : request.metrics;
-  const declaredMetrics = grouped && !carriesMetric(tool, grouped) && named.length > 1 ? named.filter((metric) => metric !== grouped) : named;
+  const unlabeled = named.filter((metric) => !(labels.includes(metric) && !carriesMetric(tool, metric)));
+  const declaredMetrics = grouped && unlabeled.length && unlabeled.length < named.length ? unlabeled : named;
   // Kırılım sayımı (ör. tasks.overdue) tanımlayan koşulu zaten taşıyan nüfusta o nüfusun toplamıdır.
   const metrics = breakdownTotals(tool, declaredMetrics, filters, today);
   // Adla arama yapan çağrı (nüfus aracı değilse) bildirilen bir varlığı çözer; çözdüğü varlık bildirilmemişse

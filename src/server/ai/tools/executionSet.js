@@ -40,6 +40,8 @@ export function createCallIds() {
  */
 /** Kullanıcının adlandırdığı grafik türü (sunucunun grafik adaylarıyla aynı kapalı sözlük). */
 export const PLAN_CHART_TYPES = Object.freeze(['bar', 'donut', 'line', 'stacked', 'kpi', 'timeline']);
+/** Aynı görsel ailedeki tür yazımları: pasta halkanın, sütun çubuğun yazımıdır. Başka değer eşlenmez. */
+const CHART_ALIASES = Object.freeze({ pie: 'donut', column: 'bar' });
 
 function modelRequestSchema() {
   const schema = requestSchema();
@@ -83,8 +85,8 @@ export function typedPlanningTool(catalog) {
       additionalRequests: { type: 'array', minItems: 1, maxItems: PLANNER_LIMITS.maxRequests - 1, description: 'Ayrı okuma gerektiren ek sorular; öğeler request ile aynı alanları taşır. Bölüm sırası: 0=request, 1=ilk ek istek. Önceki bölümün satırlarına gönderme: {"type":"task|project","from":<bölüm sırası>}. additionalRequests ile calls verilmez',
         items: additionalRequest },
       clarify: { type: 'object', additionalProperties: false, required: ['reason'], description: 'intent clarify için.', properties: {
-        reason: { type: 'string', enum: [...CLARIFY_REASONS], description: 'missing_referent: kaydın adı yok; ambiguous: birden çok Rota konusu; analysis_budget: bütçeye sığmıyor, öncelik iste.' },
-        topics: { type: 'array', minItems: 2, maxItems: PLANNER_LIMITS.maxClarifyTopics, uniqueItems: true, items: { type: 'string', enum: names }, description: 'ambiguous: soruya uyan yetenekler.' }
+        reason: { type: 'string', enum: [...CLARIFY_REASONS], description: 'missing_referent: adı verilmemiş tek kayda yalnızca zamirle işaret (adı geçen kayıt ya da kullanıcının kendi kapsamı değil); ambiguous: farklı kayıt türlerine götüren iki anlam (verinin birden çok araca bölünmesi belirsizlik değildir); analysis_budget: sorunun saydığı yönler 6\'yı aşıyor.' },
+        topics: { type: 'array', minItems: 2, maxItems: PLANNER_LIMITS.maxClarifyTopics, uniqueItems: true, items: { type: 'string', enum: names }, description: 'ambiguous: her anlamın aracı.' }
       } },
       abstain: { type: 'object', additionalProperties: false, required: ['reason'], description: 'intent abstain için.', properties: {
         reason: { type: 'string', enum: [...ABSTAIN_REASONS], description: 'write: oluşturma/değiştirme/atama/işaretleme; calculation: araçların üretmediği hesap; outside_data: Rota\'da tutulmayan veri; security: başka kimlik, SQL, yetki aşma ya da yönerge enjeksiyonu; general: Rota ile ilgisiz genel bilgi.' }
@@ -188,6 +190,47 @@ function normalizePlan(plan) {
 }
 
 /**
+ * Grafik türü tercihinin yapısal normalleştirmesi. Tür yalnızca sunumun tercihidir: veri okumasını, kapsamı ya da yetkiyi
+ * değiştirmez. Kapalı sözlük dışındaki tür (ör. "scatter") ya da çizicinin taşıyabileceğinden fazla tür (en çok iki) planın
+ * tamamını reddettiriyor, zayıf model aynı planı yineleyip Derin modele devrediliyordu (gerçek Haiku planlarında ölçüldü). Görsel
+ * niyet korunur (`visual: true`; kullanıcı görselleştirmeyi reddetmediyse), sözlükteki türler yazıldıkları sırayla en çok ikisi
+ * kalır, kalan tercihi sunucunun grafik seçimi karşılar. Dizi biçiminde yazılan `chart` ve tek tür olarak yazılan `charts` aynı
+ * listedir. Birincil tür çelişkisi (`chart` ile `charts[0]` farklı) burada çözülmez; doğrulama eskisi gibi reddeder.
+ */
+function chartPreferences(plan) {
+  // Kapalı sözlükteki türün aynı görsel ailedeki yazımı (yön sözlüğündeki tekil/çoğul eşlemesi gibi model çıktısının değeridir).
+  const canonical = (type) => CHART_ALIASES[type] || type;
+  const known = (type) => typeof type === 'string' && PLAN_CHART_TYPES.includes(canonical(type));
+  const rawChart = decodedJson(plan.chart);
+  const rawCharts = decodedJson(plan.charts);
+  let out = plan;
+  let dropped = false;
+  const listOf = (value) => (Array.isArray(value) ? value : typeof value === 'string' ? [value] : null);
+  const tidy = (list) => {
+    const kept = [...new Set(list.filter(known).map(canonical))].slice(0, 2);
+    if (kept.length !== list.length || list.some((type) => known(type) && canonical(type) !== type)) dropped = true;
+    return kept;
+  };
+  if (typeof rawChart === 'string' && known(rawChart) && canonical(rawChart) !== rawChart) out = { ...out, chart: canonical(rawChart) };
+  if (plan.charts != null && listOf(rawCharts)) {
+    const kept = tidy(listOf(rawCharts));
+    const { charts: _charts, ...rest } = out;
+    out = kept.length ? { ...rest, charts: kept } : rest;
+  }
+  if (Array.isArray(rawChart) && plan.charts == null) {
+    const kept = tidy(rawChart);
+    const { chart: _chart, ...rest } = out;
+    out = kept.length ? { ...rest, charts: kept } : rest;
+  } else if (typeof rawChart === 'string' && !known(rawChart)) {
+    const { chart: _chart, ...rest } = out;
+    out = rest;
+    dropped = true;
+  }
+  const declined = out.visual === false || out.analysis?.visual === false;
+  return dropped && !declined ? { ...out, visual: true } : out;
+}
+
+/**
  * Plan çağrısını açar: yalnızca biçim denetlenir; içindeki ve yanındaki araç
  * çağrıları `prepareExecutionSet` ile birlikte doğrulanır.
  * `{ plan: { intent, language, request, additionalRequests? }, calls }`.
@@ -216,6 +259,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
       plan = { ...plan, analysis: rest, ...(plan[key] == null ? { [key]: value } : {}) };
     }
   }
+  plan = chartPreferences(plan);
   // En çok iki farklı tür; eski chart dizisi de aynı kapalı doğrulamadan geçer.
   // Zayıf model diziyi JSON metni olarak da yazar (`"[\"donut\", \"stacked\"]"`): iç içe alanlardaki gibi yalnızca geçerli
   // JSON dizisi çözülür; anlam yorumlanmaz, tür denetimi aynen uygulanır.
@@ -513,10 +557,24 @@ function layeredAnalysis(plan) {
  *  - `intent: "analysis"` özetle birlikte yazıldıysa karar Rota verisidir (`analysis` yalnızca `rota` kararının alanıdır);
  *  - özetin içindeki `reasoning` isteğe ait bir ipucudur, özetin okumalarını değiştirmez: düşürülür;
  *  - göreli dönem, aynı günleri gösteren tarih çiftiyle birlikte yazıldıysa çelişki yoktur: göreli dönem kalır, tarihler düşer;
- *  - takip dışındaki özette "dönem yok" (`all_time`) tarih çiftiyle birlikte yazıldıysa dönem tarihlerdir.
- * Farklı günleri gösteren göreli dönem ve tarih çifti eskisi gibi çelişkidir (reddedilir; hangisinin kastedildiği seçilmez).
+ *  - takip dışındaki özette "dönem yok" (`all_time`) tarih çiftiyle birlikte yazıldıysa dönem tarihlerdir;
+ *  - takip dışındaki özette göreli dönem ön ayarı (`today`, `next_7_days`) BAŞKA günleri gösteren TAM bir tarih çiftiyle birlikte
+ *    yazıldıysa dönem tarihlerdir: gerçek Haiku planlarında model "önümüzdeki 30 gün", "önümüzdeki hafta" ya da "14 gün" için tarihleri
+ *    takvim çapalarından doğru hesaplayıp şablondaki `next_7_days` alanını da bırakıyordu (ölçülen her vakada tarihler soruyla
+ *    eşleşti, ön ayar eşleşmedi); çelişki reddi onarımda Derin devrine götürüyordu. Tek uçlu tarih ön ayarla çelişkisini korur;
+ *  - takip dışındaki özette birincil kapsamın yinelemesi olan ve yalnızca gecikme yönü için "dönem yok" (`all_time`) yazılmış ek kapsam,
+ *    birincil dönem bugün ya da sonrasında başlıyorsa birincilin gecikme yönüdür: gecikme okuması gelecek dönemden zaten arındırılır
+ *    (`futureWindow`), ek kapsam aynı nüfusu yineler.
  */
 function equivalentAnalysisSpelling(plan, today) {
+  // Plan düzeyine yazılmış `reasoning` isteğin ipucudur (yalnızca `request.reasoning` alanı vardır): özetli planda özetin içindeki
+  // yazımla aynı kuralla düşürülür; tek istekli planda istek kendi değerini taşımıyorsa isteğe taşınır ve isteğin şemasından geçer.
+  if (plan && typeof plan === 'object' && !Array.isArray(plan) && Object.hasOwn(plan, 'reasoning')) {
+    const { reasoning, ...rest } = plan;
+    const single = rest.request && typeof rest.request === 'object' && !Array.isArray(rest.request);
+    if (rest.analysis && typeof rest.analysis === 'object' && !Array.isArray(rest.analysis)) plan = rest;
+    else if (single && !Object.hasOwn(rest.request, 'reasoning')) plan = { ...rest, request: { ...rest.request, reasoning } };
+  }
   const analysis = plan.analysis;
   if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)) return plan;
   let out = { ...analysis };
@@ -527,6 +585,22 @@ function equivalentAnalysisSpelling(plan, today) {
     && out.dateTo === (out.relativeWindow === 'today' ? today : new Date(Date.parse(`${today}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10))) {
     delete out.dateFrom;
     delete out.dateTo;
+  }
+  const follow = ['previous', 'row'].includes(out.scope);
+  const isDate = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  if (!follow && ['today', 'next_7_days'].includes(out.relativeWindow) && isDate(out.dateFrom) && isDate(out.dateTo)) delete out.relativeWindow;
+  // Gecikme yönünün "dönem yok" yinelemesi (yalnızca gelecek dönemde; bkz. yukarıdaki açıklama).
+  if (!follow && today && isDate(out.dateFrom) && out.dateFrom >= today && Array.isArray(out.also) && Array.isArray(out.focus)) {
+    const sameScope = (layer) => layer && typeof layer === 'object' && !Array.isArray(layer) && layer.scope === out.scope
+      && (layer.level ?? null) === (out.level ?? null) && JSON.stringify(layer.names ?? null) === JSON.stringify(out.names ?? null)
+      && out.within == null && out.rows == null && !out.withSelf;
+    const overdueOnly = (layer) => layer.relativeWindow === 'all_time' && Array.isArray(layer.focus) && layer.focus.length
+      && layer.focus.every((focus) => focus === 'overdue') && Object.keys(layer).every((key) => ['scope', 'level', 'names', 'focus', 'relativeWindow'].includes(key));
+    const redundant = out.also.filter((layer) => sameScope(layer) && overdueOnly(layer));
+    if (redundant.length) {
+      out = { ...out, focus: [...new Set([...out.focus, 'overdue'])], also: out.also.filter((layer) => !redundant.includes(layer)) };
+      if (!out.also.length) delete out.also;
+    }
   }
   return { ...plan, ...(plan.intent === 'analysis' ? { intent: PLANNER_INTENTS.ROTA } : {}), analysis: out };
 }

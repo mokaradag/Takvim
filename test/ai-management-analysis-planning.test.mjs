@@ -68,7 +68,7 @@ test('altı yön model şemasından fiziksel okuma tavanına (6) kadar korunur; 
   assert.deepEqual(values.entities.map((item) => item.text), ['Ayşe Yılmaz', 'Zeynep Kaya']);
 });
 
-test('iki grafik türü dizisi kabul edilir ve her türün okuması eklenir; geçersiz dizi reddedilir', () => {
+test('iki grafik türü dizisi kabul edilir ve her türün okuması eklenir; sözlük dışı tür görsel niyeti koruyarak düşer', () => {
   const { plan } = unpack({ intent: 'rota', language: 'tr', chart: ['donut', 'stacked'], analysis: { scope: 'self', focus: ['status'] } });
   assert.equal(plan.chart, 'donut');
   assert.deepEqual(plan.charts, ['donut', 'stacked']);
@@ -76,14 +76,24 @@ test('iki grafik türü dizisi kabul edilir ve her türün okuması eklenir; ge�
   const reads = [plan.request, ...(plan.additionalRequests || [])];
   assert.ok(reads.some((part) => part.population.groupBy === 'status'), 'halka için durum dağılımı');
   assert.ok(reads.some((part) => part.population.groupBy === 'project' && part.metrics.includes('tasks.done')), 'yığılmış için proje başına açık/tamamlanan');
-  for (const chart of [['donut', 'donut'], ['donut', 'pie'], ['bar', 'donut', 'line'], []]) {
-    assert.throws(() => unpack({ intent: 'rota', language: 'tr', chart, analysis: { scope: 'self', focus: ['status'] } }), (error) => error.details.includes('$.chart:enum'), JSON.stringify(chart));
+  // Grafik türü yalnızca sunum tercihidir: yinelenen tür tekilleşir, pasta halkanın yazımıdır, çizicinin taşıyamadığı üçüncü tür
+  // düşer ve sözlük dışı tür görsel niyeti koruyarak kaldırılır (zayıf model bu planları onaramayıp Derin modele devrediliyordu).
+  const shaped = (chart) => unpack({ intent: 'rota', language: 'tr', chart, analysis: { scope: 'self', focus: ['status'] } }).plan;
+  for (const [chart, primary, list] of [[['donut', 'donut'], 'donut', undefined], [['donut', 'pie'], 'donut', undefined], [['bar', 'donut', 'line'], 'bar', ['bar', 'donut']],
+    [['scatter', 'stacked'], 'stacked', undefined], ['scatter', undefined, undefined], ['pie', 'donut', undefined]]) {
+    const result = shaped(chart);
+    assert.equal(result.chart, primary, JSON.stringify(chart));
+    assert.deepEqual(result.charts, list, JSON.stringify(chart));
+    assert.equal(result.visual, true, `${JSON.stringify(chart)}: görsel niyet korunur`);
   }
-  // Zayıf modelin JSON metni olarak yazdığı dizi (canlı Haiku gözlemi) aynı kurallarla çözülür; geçersiz metin reddedilir.
+  assert.equal(shaped([]).chart, undefined, 'boş liste tercih değildir');
+  // Zayıf modelin JSON metni olarak yazdığı dizi (canlı Haiku gözlemi) aynı kurallarla çözülür.
   assert.deepEqual(unpack({ intent: 'rota', language: 'tr', chart: '["donut", "stacked"]', analysis: { scope: 'self', focus: ['status'] } }).plan.charts, ['donut', 'stacked']);
-  for (const chart of ['["donut", "pie"]', '[donut, stacked]', '{"type":"donut"}']) {
-    assert.throws(() => unpack({ intent: 'rota', language: 'tr', chart, analysis: { scope: 'self', focus: ['status'] } }), (error) => error.details.includes('$.chart:enum'), chart);
-  }
+  assert.equal(shaped('["donut", "pie"]').chart, 'donut');
+  assert.equal(shaped('[donut, stacked]').visual, true, 'çözülemeyen metin tür değildir; görsel niyet korunur');
+  // Nesne biçimli tür ve birincil tür çelişkisi eskisi gibi reddedilir.
+  assert.throws(() => shaped('{"type":"donut"}'), (error) => error.details.includes('$.chart:enum'));
+  assert.throws(() => unpack({ intent: 'rota', language: 'tr', chart: 'line', charts: ['bar', 'donut'], analysis: { scope: 'self', focus: ['status'] } }), (error) => error.details.includes('$.charts:enum'));
   // Tek öğeli dizi tek türdür; açık görselleştirme reddi grafik türünden önce gelir.
   assert.equal(unpack({ intent: 'rota', language: 'tr', chart: ['bar'], analysis: { scope: 'self', focus: ['status'] } }).plan.charts, undefined);
   const declined = unpack({ intent: 'rota', language: 'tr', visual: false, chart: ['donut', 'stacked'], analysis: { scope: 'self', focus: ['status'] } }).plan;
@@ -142,8 +152,9 @@ test('şema sınırı kullanıcıya sorulur; göreli pencere çakışması anlam
     ['şema sınırını aşan model yönlerinin sıralı alt kümesi (all_time eşdeğer yazımı düşse de)',
       [plan({ scope: 'self', focus: ['overview', 'overdue', 'upcoming', 'workload', 'status', 'priority', 'schedule'], relativeWindow: 'all_time' }), plan({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] })]],
     ['göreli pencere ile tarih çakışmasında birinin kaldırılması',
-      [plan({ scope: 'self', focus: ['overview', 'upcoming'], relativeWindow: 'next_7_days', dateFrom: '2026-09-30', dateTo: '2026-10-29' }),
-        plan({ scope: 'self', focus: ['overview', 'upcoming'], dateFrom: '2026-09-30', dateTo: '2026-10-29' })]]
+      // Tek uçlu tarih ön ayarla çelişir; tam tarih çifti ise ön ayarın yerine onarımsız geçer.
+      [plan({ scope: 'self', focus: ['overview', 'upcoming'], relativeWindow: 'next_7_days', dateTo: '2026-10-29' }),
+        plan({ scope: 'self', focus: ['overview', 'upcoming'], dateTo: '2026-10-29' })]]
   ]) {
     await t.test(name, async (t) => {
       const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
