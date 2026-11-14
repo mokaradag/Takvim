@@ -2063,7 +2063,7 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
 
 ### 14.2 Analitik özet — `src/server/ai/tools/analysisPlan.js`
 
-`rota_plan` içinde `request`/`calls` yerine (birlikte verilemez: `$.analysis:request`):
+`rota_plan` içinde analitik özet. Aşama G ile `analysis` yanında bağımsız `request`/`additionalRequests` desteklenir; aynı okumalar birleştirilir ve toplam okuma bütçesi korunur. Özetle eşdeğer olmayan `calls`/doğrudan araç çağrıları birlikte verilemez (`$.analysis:request`):
 
 ```json
 {"intent":"rota","language":"tr","analysis":{"scope":"self","focus":["overview","overdue","upcoming"],
@@ -2181,7 +2181,7 @@ düz metin iletimi 4. Tier B, sonraki yönerge/şema değişikliklerinden önce 
 
 - Son yakınsama geçişinde Claude CLI bulunmadığından Haiku yeniden koşulmadı; yukarıdaki tarihsel sayılar son
   yönerge, bütçe ve puanlama sözleşmesinin yeni nitelendirmesi değildir. Deterministik sınamalar yeniden çalıştırıldı.
-- Ekip iş yükü sıfır açık işi olan bütün üyelerin kadrosunu getirmez; bu nedenle ekip dengesi/yoğunlaşması çıkarılmaz.
+- Tarihsel sınır (Aşama F): kadro okunmadığından sıfır açık işi olan üyeler dahil değildi. Aşama G ekip iş yükü tam kadroyu aynı toplu işte okur; görünür açık işi olmayan üyeler sıfır satırla eklenir. Denge/yoğunlaşma yalnızca kadro tam ve çözümlenmişse görev adetleri üzerinden incelenir; bu sayılar emek veya boş kapasiteyi göstermez.
 - Kurum içi Qwen ile nitelendirme yapılmadı; ölçümler Claude CLI uyarlayıcısıyla (zorunlu araç öykünmesi) alındı.
 - Uygulamanın tamamı bu ortamda çalıştırılamadı (SQL Server / Windows kimlik doğrulaması yok): arayüz, üretim
   bileşenlerinin uygulama CSS'iyle sunucu tarafı çizimi ve Playwright ekran görüntüleriyle (açık/koyu, 1280/390 px)

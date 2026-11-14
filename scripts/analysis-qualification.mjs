@@ -53,7 +53,7 @@ export const BENCHMARK_TODAY = new Date(NOW.getTime() + 3 * 3600000).toISOString
 const summary = { tier: TIER, model: EXPECTED_MODEL, cases: 0, passed: 0, failed: [], firstPass: 0, repairs: 0, escalations: 0, turns: 0, results: [] };
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
-const { analysisSuggestion } = await import('../src/server/ai/tools/analysisPlan.js');
+const { analysisSuggestion, resolveAnalysisBrief } = await import('../src/server/ai/tools/analysisPlan.js');
 const { containmentText } = await import('../src/server/ai/tools/toolScope.js');
 // Her çağrı kendi satırlarına sahiptir; önceki ve eşzamanlı koşular yalnızca eklenen defteri paylaşabilir.
 const RUN_ID = randomUUID();
@@ -79,7 +79,9 @@ const scopeOf = (requests) => {
 
 /** Ayrıntılı isteğin eşdeğer analitik yönü (sunucunun türlü eşlemesi); eşdeğeri yoksa yön yoktur. */
 const requestFocus = (request) => {
-  const text = analysisSuggestion(request);
+  const { dateFrom: _from, dateTo: _to, ...unwindowed } = request.filters || {};
+  const filters = request.population?.tool === 'rota_task_analytics' && request.population.groupBy === 'project' ? unwindowed : request.filters;
+  const text = analysisSuggestion({ ...request, filters, entities: (request.entities || []).map((entity) => entity.query != null ? { ...entity, text: entity.query } : entity) });
   return text ? JSON.parse(/\{.*\}/.exec(text)[0]).analysis.focus : [];
 };
 const day = (value) => Date.parse(`${String(value).slice(0, 10)}T00:00:00Z`) / 86400000;
@@ -141,16 +143,33 @@ export function plannerScore(result, expect, today = corpus.today) {
     // Adlı kapsam yalnızca türüyle değil kimliğiyle eşleşir: beklenti adı verdiyse okumanın varlığı o addır (başka kişi/proje
     // karşılamaz). Portföy kapsamı portföy aracının okumasıdır; koşulsuz görev okuması "görünür bütün işler" kapsamıdır.
     const sameName = (layer, entity) => !layer.names?.length || layer.names.some((name) => containmentText(String(name)) === containmentText(String(entity.query ?? entity.text ?? '')));
+    const portfolioRead = (layer, request) => !request.entities?.length && !request.filters?.assignee && !request.filters?.personSicil && !request.filters?.projectId
+      && (request.population?.tool === 'rota_portfolio_summary' || Boolean((layer.dateFrom || layer.dateTo || analysis?.dateFrom || analysis?.dateTo || expect.window)
+        && request.population?.tool === 'rota_task_analytics' && request.population.groupBy === 'project'
+        && !request.entities?.length && !request.filters?.assignee && (request.filters?.dateFrom || request.filters?.dateTo)));
     const readsLayer = (layer, request) => (layer.scope === 'self' ? request.filters?.assignee === 'me' && !request.entities?.length
       : layer.scope === 'team' ? request.filters?.assignee === 'team' && !request.entities?.length && (request.filters?.teamLevel || '') === (layer.level || '')
         : ['person', 'project'].includes(layer.scope) ? request.entities?.some((entity) => entity.type === layer.scope && sameName(layer, entity)) && !request.filters?.assignee
-          : layer.scope === 'projects' ? request.population?.tool === 'rota_portfolio_summary'
+          : layer.scope === 'projects' ? portfolioRead(layer, request)
             : !request.filters?.assignee && !request.entities?.length && request.population?.tool !== 'rota_portfolio_summary');
+    // Çok adlı katmanın her öznesi ayrı nüfus ve yön kanıtı gerektirir.
+    const subjects = expect.layers.flatMap((layer) => layer.names?.length ? layer.names.map((name) => ({ ...layer, names: [name] })) : [layer]);
     const reads = (layer) => requests.some((request) => readsLayer(layer, request));
-    for (const layer of expect.layers) for (const focus of layer.focus || []) {
+    const measured = (request, metric) => {
+      const filters = request.filters || {};
+      const open = Array.isArray(filters.status) && filters.status.length === 2 && ['todo', 'in_progress'].every((status) => filters.status.includes(status));
+      if (Object.entries(filters).some(([key, value]) => !['assignee', 'teamLevel', 'status', 'deadline'].includes(key) && value != null)) return false;
+      if (filters.status?.length && !open) return false;
+      if (filters.deadline) return metric === 'tasks.overdue' && filters.deadline === 'overdue' && request.metrics?.some((value) => ['tasks.total', 'tasks.open', 'tasks.overdue'].includes(value));
+      return request.metrics?.includes(metric) || metric === 'tasks.open' && open && request.metrics?.includes('tasks.total');
+    };
+    for (const layer of subjects) for (const metric of layer.metrics || []) {
+      if (!requests.some((request) => readsLayer(layer, request) && measured(request, metric))) failures.push(`kapsamın ölçüsü okunmadı: ${layer.scope}/${metric}`);
+    }
+    for (const layer of subjects) for (const focus of layer.focus || []) {
       if (!requests.some((request) => readsLayer(layer, request) && requestFocus(request).includes(focus))) failures.push(`kapsamın yönü okunmadı: ${layer.scope}/${focus}`);
     }
-    for (const layer of expect.layers.filter((layer) => !layer.optional)) if (!reads(layer)) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} okunmadı`);
+    for (const layer of subjects.filter((layer) => !layer.optional)) if (!reads(layer)) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} okunmadı`);
     // Beklenen kapsamların üst kümesi kabul edilmez: bildirilen her kapsam ve açılan her istek beklenen kapsamlardan birinin nüfusudur
     // (ör. kendi + birim sorusuna eklenen bölüm kapsamı başarısızdır).
     for (const other of declaredLayers) {
@@ -162,7 +181,10 @@ export function plannerScore(result, expect, today = corpus.today) {
   }
   // Birden çok doğru kararı olan vakada (`intentAny`) planlanmış sonuç da planın kendisiyle puanlanır (karar tek başına yetmez).
   if ((expect.intent === 'rota' || expect.intentAny?.includes('rota')) && result.outcome === 'planned') {
-    const scope = scopeOf(requests);
+    const rawScope = scopeOf(requests);
+    const windowedPortfolio = expect.scope === 'projects' && Boolean(expect.window || result.plan?.analysis?.dateFrom || result.plan?.analysis?.dateTo)
+      && requests.some((request) => request.population?.tool === 'rota_task_analytics' && request.population.groupBy === 'project' && !request.entities?.length && !request.filters?.assignee && (request.filters?.dateFrom || request.filters?.dateTo));
+    const scope = rawScope === 'all' && windowedPortfolio ? 'projects' : rawScope;
     // Beklentide kapsam yoksa (ayrık kümede bilinçli olarak serbest) kapsam puanlanmaz; Tier B vakalarının hepsi kapsam taşır.
     const pairedSelf = expect.withSelf === true && result.plan?.analysis?.withSelf === true && expect.scope === 'person' && new Set(requests.map((request) => scopeOf([request]))).size === 2
       && requests.every((request) => ['person', 'self'].includes(scopeOf([request])));
@@ -307,11 +329,38 @@ function layerFocus(layer, primary) {
   return (layer.focus || primary.focus || []).filter(applicable);
 }
 
+/** Adlı katmanların her öznesini sentetik veri kümesindeki kendi kimliğiyle eşle. */
+function expectationLayers(analysis, seed) {
+  if (!analysis?.also?.length) return null;
+  return [analysis, ...analysis.also].flatMap((entry) => {
+    const base = { scope: entry.scope, ...(entry.level ? { level: entry.level } : {}), focus: layerFocus(entry, analysis) };
+    return ['person', 'project'].includes(entry.scope) ? (entry.names || []).map((name) => ({ ...base, names: [name],
+      ...(entry.scope === 'person' ? { sicil: seed.people.find((row) => row.DisplayName === name)?.Sicil ?? -1 }
+        : { projectId: seed.projects.find((row) => row.ProjectName === name)?.ProjectId ?? `bilinmeyen:${name}` }) })) : [base];
+  });
+}
+
+/** Takipte kimlik kapsamı devralınır; son turun açık yönü ve dönemi üretimdeki kuralla çözülür. */
+function finalAnalysis(turns) {
+  let previous = null;
+  for (const turn of turns) {
+    const next = turn.plan?.analysis;
+    if (!next) continue;
+    if (next.scope !== 'previous') { previous = next; continue; }
+    const resolved = resolveAnalysisBrief(next, { previous, today: BENCHMARK_TODAY });
+    previous = { ...Object.fromEntries(['scope', 'level', 'names', 'within', 'withSelf'].filter((key) => previous?.[key] != null).map((key) => [key, previous[key]])),
+      ...resolved, scope: previous?.scope };
+  }
+  return previous;
+}
+
 /** Altın plandaki açık isteklerin (özetin yanındaki liste) teslim beklentisi: araç ve süzgeçler (göreli gün çözülmüş). */
-function explicitExpectations(plan, resolveDay) {
+function explicitExpectations(plan, resolveDay, seed) {
   if (!plan?.analysis) return [];
   return [plan.request, ...(plan.additionalRequests || [])].filter((item) => item?.population?.tool)
-    .map((item) => ({ tool: item.population.tool, operation: item.operation, metrics: item.metrics, filters: Object.fromEntries(Object.entries(item.filters || {}).map(([key, value]) => [key, ['dateFrom', 'dateTo'].includes(key) ? resolveDay(value) : value])),
+    .map((item) => ({ tool: item.population.tool, operation: item.operation, metrics: item.metrics, filters: { ...Object.fromEntries(Object.entries(item.filters || {}).map(([key, value]) => [key, ['dateFrom', 'dateTo'].includes(key) ? resolveDay(value) : value])),
+      ...Object.assign({}, ...(item.entities || []).map((entity) => entity.type === 'person' ? { assignee: 'person', personSicil: entity.id ?? seed?.people.find((row) => row.DisplayName === entity.text)?.Sicil ?? -1 }
+        : entity.type === 'project' ? { projectId: entity.id ?? seed?.projects.find((row) => row.ProjectName === entity.text)?.ProjectId ?? `bilinmeyen:${entity.text}` } : {})) },
       // Sıralamalı istekte ölçü, yön ve satır sınırı da beklentidir (en yakın teslimatlar ile en uzak teslimatlar aynı değildir).
       ...(item.operation === 'rank' && item.rank?.metric ? { rank: { metric: item.rank.metric, order: item.rank.order, ...(Number.isInteger(item.rank.limit) ? { limit: item.rank.limit } : {}) } } : {}) }));
 }
@@ -332,14 +381,15 @@ export function benchmarkExpectation(item) {
     // derleminin günü (`corpus.today`) başka bir gündür; onunla çözülen ufuk, modelin doğru yazdığı dönemi "okunmadı" sayıyordu.
     return token ? new Date(Date.parse(`${BENCHMARK_TODAY}T00:00:00Z`) + Number(token[1]) * 86400000).toISOString().slice(0, 10) : value;
   };
-  const from = resolveDay(analysis?.dateFrom);
-  const to = resolveDay(analysis?.dateTo);
+  const relative = ['today', 'next_7_days'].includes(analysis?.relativeWindow);
+  const from = relative ? BENCHMARK_TODAY : resolveDay(analysis?.dateFrom);
+  const to = relative ? resolveDay(`T+${analysis.relativeWindow === 'today' ? 0 : 6}`) : resolveDay(analysis?.dateTo);
   // Aşama G: çok kapsamlı planda her kapsamın kendi nüfusu okunur; tek kapsam beklentisi yerine kapsam başına okuma beklenir.
-  const layers = analysis?.also?.length ? [analysis, ...analysis.also].map((entry) => ({ scope: entry.scope, ...(entry.level ? { level: entry.level } : {}), focus: layerFocus(entry, analysis) })) : null;
+  const layers = expectationLayers(analysis, seed);
   return { ...item.expect, ...(item.handling !== 'limitation' ? { finish: 'stop' } : { finish: 'unsupported', noData: true }),
     ...(scope ? { scope } : {}), ...(layers ? { layers } : {}),
     ...(layers ? {} : scope === 'team' ? { assignee: 'team' } : scope === 'self' ? { assignee: 'me' } : {}),
-    ...(analysis?.level && !layers ? { level: analysis.level } : {}), ...(analysis?.focus ? { focus: [...analysis.focus] } : {}),
+    ...(analysis?.level && !layers ? { level: analysis.level } : {}), ...(!layers && analysis?.focus ? { focus: [...analysis.focus] } : {}),
     // Çok kapsamlı planda adlı birincil kapsamın kimlik koşulu her okumaya uygulanmaz (ek kapsamın okuması o kimliği taşımaz);
     // kapsamlar katman denetimiyle tek tek sınanır.
     ...(scope === 'project' && !layers ? { project: true, projectIds: names.map((name) => seed.projects.find((row) => row.ProjectName === name)?.ProjectId || `bilinmeyen:${name}`) } : {}),
@@ -358,25 +408,21 @@ export function executiveExpectation(item) {
   const turns = item.turns || [{ text: item.text, plan: item.plan }];
   // Takip turu ("previous") önceki turun kapsamını sürdürür; açıklama ya da ret bekleyen vakada kapsam okunmaz.
   const analysis = item.handling === 'clarify' ? null
-    : turns.map((turn) => turn.plan?.analysis).filter((entry) => entry && entry.scope !== 'previous').at(-1) || null;
+    : finalAnalysis(turns);
   const scope = analysis?.scope;
   const denied = (layer) => (item.expect?.deniedLayers || []).some((entry) => entry.scope === layer.scope && (entry.level || null) === (layer.level || null));
   const seed = executiveBenchmarkSeed();
-  // Adlı kapsam kendi kimliğiyle beklenir (sentetik verideki Sicil/proje kimliği): başka kişinin ya da projenin okuması karşılamaz.
-  const identity = (layer, name) => (layer === 'person' ? { sicil: seed.people.find((row) => row.DisplayName === name)?.Sicil ?? -1 }
-    : layer === 'project' ? { projectId: seed.projects.find((row) => row.ProjectName === name)?.ProjectId ?? `bilinmeyen:${name}` } : {});
-  const layers = analysis?.also?.length ? [analysis, ...analysis.also].map((entry) => ({ scope: entry.scope, ...(entry.level ? { level: entry.level } : {}), ...(entry.names ? { names: entry.names } : {}),
-    ...(['person', 'project'].includes(entry.scope) && entry.names?.length === 1 ? identity(entry.scope, entry.names[0]) : {}), focus: layerFocus(entry, analysis) }))
-    .map((layer) => (denied(layer) ? { ...layer, optional: true } : layer)) : null;
+  const layers = expectationLayers(analysis, seed)?.map((layer) => (denied(layer) ? { ...layer, optional: true } : layer)) || null;
   const finish = item.expect?.finish || { denied: 'unavailable', clarify: 'clarification', limitation: 'unsupported' }[item.handling] || 'stop';
   const names = analysis?.names || [];
   const resolveDay = (value) => {
     const token = /^T\+(-?\d+)$/.exec(value || '');
     return token ? new Date(Date.parse(`${BENCHMARK_TODAY}T00:00:00Z`) + Number(token[1]) * 86400000).toISOString().slice(0, 10) : value;
   };
-  const explicitRequests = explicitExpectations(turns.at(-1).plan, resolveDay);
-  const from = resolveDay(analysis?.dateFrom);
-  const to = resolveDay(analysis?.dateTo);
+  const explicitRequests = explicitExpectations(turns.at(-1).plan, resolveDay, seed);
+  const relative = ['today', 'next_7_days'].includes(analysis?.relativeWindow);
+  const from = relative ? BENCHMARK_TODAY : resolveDay(analysis?.dateFrom);
+  const to = relative ? resolveDay(`T+${analysis.relativeWindow === 'today' ? 0 : 6}`) : resolveDay(analysis?.dateTo);
   const window = from && to ? [from, to] : null;
   return { ...item.expect, finish, ...(item.handling === 'limitation' ? { noData: true } : {}),
     // Açıklama vakası nüfus okumadan sorar (ad çözümü serbesttir).
@@ -392,7 +438,7 @@ export function executiveExpectation(item) {
     // onların değer sözleşmesi ve özne kimlikleri kendi doğrulayıcısında korunur.
     ...(['team', 'self', 'project', 'projects', 'all'].includes(analysis?.scope) && (analysis.scope !== 'project' || [1, 2].includes(analysis.names?.length)) && !analysis.withSelf && !layers && finish === 'stop' && !item.expect?.scopeDenied ? { scopeFocus: layerFocus(analysis, analysis) } : {}),
     // Portföy kapsamı (birincil) portföy okumasını gerektirir: görev okumalarıyla geçemez.
-    ...(scope === 'projects' && !item.expect?.scopeDenied && !denied(analysis) ? { portfolio: true } : {}),
+    ...(scope === 'projects' && !window && !item.expect?.scopeDenied && !denied(analysis) ? { portfolio: true } : {}),
     ...(turns.at(-1).plan?.visual ? { chart: true } : {}) };
 }
 

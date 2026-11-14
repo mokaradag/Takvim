@@ -1629,11 +1629,19 @@
     "layers": [
      {
       "scope": "team",
-      "level": "unit"
+      "level": "unit",
+      "metrics": [
+       "tasks.open",
+       "tasks.overdue"
+      ]
      },
      {
       "scope": "team",
-      "level": "department"
+      "level": "department",
+      "metrics": [
+       "tasks.open",
+       "tasks.overdue"
+      ]
      }
     ]
    }
@@ -1882,8 +1890,16 @@
      {
       "tool": "rota_task_search",
       "operation": "rank",
-      "limit": 3
+      "limit": 3,
+      "filters": {
+       "dateFrom": "2026-09-28",
+       "dateTo": "2026-10-04"
+      }
      }
+    ],
+    "window": [
+     "2026-09-28",
+     "2026-10-04"
     ]
    }
   },

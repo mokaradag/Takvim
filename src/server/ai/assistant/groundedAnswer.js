@@ -499,7 +499,10 @@ function repairAllowance(details, raw) {
     }
     if (['fields', 'bindings'].includes(relative) && reason === 'unique') { paths.add(`${relative}Unique`); continue; }
     if (relative === 'metrics' && reason === 'unique') { paths.add('metricsUnique'); continue; }
-    if (relative === 'metrics' && reason === 'maxItems') continue;
+    if (relative === 'metrics' && reason === 'maxItems') {
+      if (Array.isArray(raw.metrics) && new Set(raw.metrics).size < raw.metrics.length) paths.add('metricsUnique');
+      continue;
+    }
     if (relative === 'bindings' && reason === 'unknown' && Array.isArray(raw.bindings)) {
       raw.bindings.forEach((binding, index) => {
         if (!raw.metrics?.includes?.(binding?.metric) || !raw.entities?.[binding?.entity]) paths.add(`bindings[${index}]`);
@@ -726,20 +729,20 @@ function explicitRepairPaths(plan, details) {
   const slots = new Map();
   [].concat(plan.additionalRequests ?? []).forEach((item, position) => { if (writtenRequest(item)) slots.set(position, offset + slots.size); });
   for (const detail of details) {
-    const [path, reason] = String(detail).split(':');
+    const [path] = String(detail).split(':');
     const match = /^\$\.(request|additionalRequests\[(\d+)\])(?:\.(.+))?$/.exec(path);
     if (!match) continue;
     const index = match[1] === 'request' ? 0 : slots.get(Number(match[2]));
     if (index == null || !paths[index]) continue;
     // Ölçünün nüfus reddi ölçüyü değiştirme izni değildir: yalnızca nüfus araç alanları açılır (aşağıdaki anlamsal pay).
-    if (!(['population', 'unique'].includes(reason) && /^metrics(?:\[\d+\])?$/.test(match[3] || ''))) paths[index].add(match[3] || '');
+    if (!match[3]) paths[index].add('');
     grouped[index].push(String(detail));
   }
   // Açık isteğin anlamsal onarım payı tek istekli planınkiyle aynıdır (ör. ölçünün nüfusu reddedildiyse nüfus aracı değişebilir);
   // ölçü ve isteğin diğer kapsamı korunur.
   explicit.forEach((item, index) => {
     if (!grouped[index].length || !item || typeof item !== 'object' || Array.isArray(item)) return;
-    for (const allowed of repairAllowance(grouped[index], item)) if (!(allowed === 'metrics' && grouped[index].some((detail) => /metrics:unique$/.test(detail)))) paths[index].add(allowed);
+    for (const allowed of repairAllowance(grouped[index], item)) paths[index].add(allowed);
   });
   return paths;
 }
@@ -757,9 +760,15 @@ function analysisRepairProjection(analysis, paths) {
     // reddeder (onarım kapsam reddi yoluyla düzeltme turuna döner; tur çökmez).
     const population = (layer) => (layer && typeof layer === 'object' && !Array.isArray(layer)
       ? JSON.stringify([['projects', 'all'].includes(layer.scope) ? 'all' : layer.scope, layer.level || null, layer.names || null]) : null);
-    const seen = new Set([population(masked)]);
-    masked = { ...masked, also: masked.also.filter((layer) => { const key = population(layer); if (key === null) return true; if (seen.has(key)) return false; seen.add(key); return true; }) };
-    if (!masked.also.length) delete masked.also;
+    const seen = new Map([[population(masked), masked.scope]]);
+    // Eşdeğer nüfusların kapsam yazımını eşitle; ortak normalleştirme yönleri birleştirir ve diğer katmanların devraldığı yönü korur.
+    masked = { ...masked, also: masked.also.map((layer) => {
+      const key = population(layer);
+      if (key === null) return layer;
+      if (seen.has(key)) return { ...layer, scope: seen.get(key) };
+      seen.set(key, layer.scope);
+      return layer;
+    }) };
   }
   // Ek kapsamların konumsal yolları (`also[1].level`) yalnızca ilk maskede geçerlidir: normalleştirme kapsamları birleştirip diziyi
   // kaydırabilir; aynı konum artık başka bir kapsamdır ve onun geçerli alanı maskelenmez (kapsam kimliği korunur).
@@ -823,25 +832,20 @@ function analysisRepairMatches(turn, plan) {
   return plan.intent === PLANNER_INTENTS.ROTA && Boolean(plan.analysis)
     && sameWindow && analysisRepairProjection(analysis, pin.paths) === pin.projection
     && stable(repairOmit(submittedPresentation(plan), pin.presentationPaths)) === stable(repairOmit(pin.presentation, pin.presentationPaths))
-    && (pin.visual == null || submittedVisual(plan) === pin.visual) && explicitRepairMatches(pin, plan);
+    && (pin.visual == null || submittedVisual(plan) === pin.visual) && explicitRepairMatches(turn, pin, plan);
 }
 
 /** Onarılan planın açık istekleri: sayı aynı, her istekte yalnızca reddedilen yollar farklı olabilir. */
-function explicitRepairMatches(pin, plan) {
+function explicitRepairMatches(turn, pin, plan) {
   if (!pin.explicitPaths) return true;
   const candidate = submittedExplicit(plan);
   return candidate.length === pin.explicit.length
     && candidate.every((item, index) => {
-      // Konumsal ölçü yolları (`metrics[0]`) modelin yazdığı sıraya aittir: maske önce uygulanır, kalan ölçü kümesi sonra sıralanır.
-      // Önce sıralamak reddedilen ölçü yerine geçerli bir ölçüyü maskelerdi.
-      const shape = (request) => {
-        const masked = repairOmit(request, pin.explicitPaths[index]);
-        if (!masked || typeof masked !== 'object' || !Array.isArray(masked.metrics)) return masked;
-        const { metrics, ...rest } = masked;
-        const kept = [...new Set(metrics.filter((metric) => metric !== undefined))].sort();
-        return kept.length ? { ...rest, metrics: kept } : rest;
-      };
-      return stable(shape(item)) === stable(shape(pin.explicit[index]));
+      // Açık istek de ortak anlamsal karşılaştırmadan geçer: seçici aktarımı ve öğe düzeyinde bağlama onarımı aynı sınırları korur.
+      const paths = pin.explicitPaths[index];
+      const preserved = pin.explicit[index];
+      return repairProjection(turn, item, index, [], candidate, paths, null, preserved)
+        === repairProjection(turn, preserved, index, [], pin.explicit, paths);
     });
 }
 

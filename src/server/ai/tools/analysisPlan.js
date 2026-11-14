@@ -137,7 +137,7 @@ export function normalizedBrief(raw) {
     const key = (item) => JSON.stringify([item?.scope, item?.level || null, item?.names || null]);
     // Birincil kapsam nüfusunu daraltıyorsa (within, rows) aynı kapsamın ek yazımı onun yinelemesi değildir (ör. "Alfa'daki işlerim ve
     // bütün işlerim"): birleştirilmez, olduğu gibi kalır ve doğrulama reddeder (daraltma ek kapsama sessizce geçmez).
-    const samePrimary = (item) => key(item) === key(out) && out.within == null && out.rows == null;
+    const samePrimary = (item) => key(item) === key(out) && out.within == null && out.rows == null && !out.withSelf;
     const union = (left, right) => [...new Set([...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])])];
     const inherited = Array.isArray(out.focus) ? [...out.focus] : null;
     const ownFocus = (item) => (single(item) && Array.isArray(item.focus) ? item.focus : null);
@@ -689,7 +689,7 @@ function expandLayers(analysis, today, { chart = null, charts = null, reserve = 
       timeline: primaryParts.some((part) => part.population?.tool === 'rota_task_search' && part.metrics?.includes('task.targetFinish')
         && (!future || (part.filters?.dateFrom === analysis.dateFrom && part.filters?.dateTo === analysis.dateTo))),
       stacked: primaryParts.some((part) => ['project', 'department', 'unit'].includes(part.population?.groupBy) && part.metrics?.includes('tasks.done'))
-        || (declared.includes('workload') && !declared.includes('projects')) || primary.scope === 'project',
+        || (['team', 'all', 'projects'].includes(primary.scope) && declared.includes('workload') && !declared.includes('projects')) || primary.scope === 'project',
       line: primaryParts.some((part) => part.population?.groupBy === 'target_month')
     }[type];
     if (ready !== false) continue;

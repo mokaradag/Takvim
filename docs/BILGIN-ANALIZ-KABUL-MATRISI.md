@@ -247,7 +247,7 @@ Yeniden kullanılan bileşenler: analitik özet ve sunucu açılımı, türlü i
 doğrulama, bulgu motoru (`analyticalFindings`), sunucu düzeni ve önermeler, nitelendirme betiği ve arayüz kabulü.
 
 **Yeni salt okunur erişim (tek):** görev olguları toplu işine eklenen kadro sonuç kümesi (`TEAM_ROSTER`; yalnızca
-`@withRoster = 1` ve ekip süzgeciyle, kullanıcının kendi yönetim kapsamı, satır sınırlı) ve sorumlu satırına dizindeki
+`@withRoster = 1` ve ekip süzgeciyle, kullanıcının kendi yönetim kapsamı; kadro için ayrı satır tavanı yoktur, ekip büyüklüğü ve mevcut SQL süre bütçesiyle sınırlıdır) ve sorumlu satırına dizindeki
 birim/bölüm (yalnızca kimliği açık sorumlu). Yeni araç, uç nokta, tablo, göç, arka plan işi ya da genel SQL aracı yoktur.
 
 **Arayüz ve sınır değişiklikleri (kullanıcı yönergesi):** analitik özetin kabul edilen yön sayısı ve fiziksel okuma tavanı

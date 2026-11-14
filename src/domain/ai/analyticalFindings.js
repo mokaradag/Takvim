@@ -288,7 +288,7 @@ function gTableFindings(table, prior) {
     // Durumla daraltılmış tabloda (ör. yalnızca tamamlanan + devam eden) tamamlanma payı projenin görevlerinin payı değildir.
     const statuses = Array.isArray(table.filters?.statuses) ? table.filters.statuses : [];
     const allStatuses = !statuses.length || ['todo', 'in_progress', 'done'].every((status) => statuses.includes(status));
-    if (allStatuses && rows.every((row) => count(row.done) != null)) {
+    if (allStatuses && table.filters?.milestone == null && rows.every((row) => count(row.done) != null)) {
       const despite = rows.filter((row) => row.open + row.done >= FINDING_LIMITS.minCompletionTotal && row.done * 2 >= row.open + row.done && row.overdue > 0)
         .map((row) => ({ name: row.name, key: String(row.key).toLowerCase(), overdue: row.overdue, share: sharePercent(row.done, row.open + row.done) }))
         .sort((left, right) => right.share - left.share || right.overdue - left.overdue || left.name.localeCompare(right.name, 'tr'));

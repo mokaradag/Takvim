@@ -14,6 +14,9 @@ import { createFakeAiProvider } from './fakeAiProvider.mjs';
 import { composer, coveringBlocks, isCompositionCall, compositionView } from './compositionScenario.mjs';
 import { answerQuality } from './answerQuality.mjs';
 import { formatCount, formatFactDay } from '../../src/domain/ai/groundedPropositions.js';
+import { rankedRowIndexes } from '../../src/domain/ai/requestContract.js';
+import { metricPaths } from '../../src/domain/ai/claimableEvidence.js';
+const { sortedBy } = await import('../../src/server/ai/tools/requestPopulation.js');
 import { layerAspectLabel, layerOwner } from '../../src/domain/ai/plannerOutcome.js';
 
 const planCall = (plan) => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plan }] });
@@ -82,6 +85,22 @@ export const G_FINDING_TEXT = Object.freeze({
   orgSpread: /^(?=[\s\S]*[İi]şler \*\*\d+\*\* (?:bölüme|birime) dağılıyor)(?=[\s\S]*(?:bölüm|birim) sayıları toplanmaz)/
 });
 
+/** İngilizce yanıtta aynı sunucu bulgularının yerelleştirilmiş kalıpları. */
+const EN_FINDING_TEXT = Object.freeze({
+  attentionLeader: /needs (?:management )?attention first|management attention.*(?:first|most)/i,
+  windowPressure: /with deliveries between/i,
+  subjectComparison: /(?:clearest|largest|main|most notable) difference|task counts.*(?:close|same)|same.*task counts/i,
+  overdueConcentration: /overdue[\s\S]+(?:concentrated|sits|sit)/i,
+  workloadSpread: /open tasks per person range from \*\*\d+\*\* to \*\*\d+\*\*/i,
+  overdueLeader: /overdue work sits most with|most overdue work is in/i,
+  overdueRateLeader: /relative to open work the picture changes/i,
+  completionDespiteOverdue: /has completed[\s\S]+of its tasks yet still has/i,
+  volumeVsDelay: /task volume alone does not show pressure/i,
+  levelComparison: /share of open work that is overdue|none of the compared scopes has (?:overdue )?open work/i,
+  milestoneStatus: /open milestones? (?:is|are) overdue|milestones? (?:is|are) overdue|next milestone(?: date)? is|none of the[\s\S]+open milestones/i,
+  orgSpread: /^(?=[\s\S]*work is spread across \*\*\d+\*\* (?:departments|units))(?=[\s\S]*(?:department|unit).*counts.*(?:not|never).*(?:sum|added together))/i
+});
+
 /** Görev nüfusu okumaları (sayfa sorumlu okumaları değil). */
 export const populationReads = (log) => log.filter((row) => row.query === 'task-facts' && !String(row.params.taskIds || ''));
 
@@ -111,7 +130,7 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.people && JSON.stringify([...new Set(reads.map((row) => Number(row.params.personSicil)))].sort((a, b) => a - b))
     !== JSON.stringify([...new Set(expect.people.map(Number))].sort((a, b) => a - b))) problems.push('kişi kümesi beklenenle aynı değil');
   if (expect.workload && !reads.some((row) => Number(row.params.withAssignees) === 1)) problems.push('iş yükü okunmadı');
-  if (expect.portfolio && !result.log.some((row) => row.query === 'portfolio')) problems.push('portföy okunmadı');
+  if (expect.portfolio && !result.log.some((row) => row.query === 'portfolio' && row.ok === true)) problems.push('portföy okunmadı');
   // Ufuk: beklenen aralıkla örtüşen bir termin penceresi okunmuş olmalı (uçlarda en çok bir günlük yorum farkı kabul edilir).
   const day = (value) => Date.parse(`${String(value).slice(0, 10)}T00:00:00Z`) / 86400000;
   const bounded = reads.filter((row) => row.params.dateFrom || row.params.dateTo);
@@ -310,7 +329,8 @@ export function turnViolations(result, expect, { live = false } = {}) {
   if (expect.horizonLimitation && !/birikimli teslimat sayıları burada karşılaştırılmıyor|does not compare cumulative delivery counts/.test(content)) problems.push('çoklu ufuk sınırlılığı açıklanmadı');
   const findings = { attentionLeader: /yönetim dikkatini en çok/, windowPressure: /arasında teslimatı olan/, subjectComparison: /arasındaki en belirgin fark|sayıları birbirine yakın|görev sayıları iki (?:kişide|projede) aynı/,
     overdueConcentration: /gecikmiş[\s\S]+toplanıyor/i, ...G_FINDING_TEXT };
-  for (const kind of expect.findings || []) if (!findings[kind]?.test(content)) problems.push(`${kind} bulgusu yok`);
+  const localized = result.locale === 'en' ? EN_FINDING_TEXT : findings;
+  for (const kind of expect.findings || []) if (!localized[kind]?.test(content)) problems.push(`${kind} bulgusu yok`);
   if (expect.caveat && !/kesin olarak söylenemez/.test(content)) problems.push('zorunlu tamlık çekincesi yok');
   // Aşama G: tam kadroda kişi sayıları için kapasite çekincesi zorunludur; tamlık çekincesi (eksik kadro) o zaman yazılmaz.
   if (expect.capacityCaveat && !/görev adedidir; işin büyüklüğünü, harcanan emeği ya da boş kapasiteyi göstermez/.test(content)) problems.push('kapasite çekincesi yok');
@@ -373,42 +393,76 @@ function explicitFiltersMatch(actual, wanted) {
   const names = { status: 'statuses', priority: 'priorities' };
   const norm = (value) => (Array.isArray(value) ? [...value].map((item) => String(item).toLowerCase()).sort() : String(value ?? '').toLowerCase());
   const asked = new Set(Object.keys(wanted || {}).map((key) => names[key] || key));
+  const scopeKeys = ['assignee', 'teamLevel', 'personSicil'];
+  const scopeValue = (key, value) => key === 'assignee' && (value == null || value === 'any') ? 'any' : neutralFilter(value) ? null : norm(value);
   return Object.entries(wanted || {}).every(([key, value]) => JSON.stringify(norm(actual[names[key] || key] ?? (key === 'dateField' ? 'targetFinish' : undefined))) === JSON.stringify(norm(value)))
+    && scopeKeys.every((key) => JSON.stringify(scopeValue(key, actual[key])) === JSON.stringify(scopeValue(key, wanted?.[key])))
     && (!actual.dateField || actual.dateField === (wanted?.dateField || 'targetFinish'))
     && NARROWING_FILTERS.every((key) => asked.has(key) || (key === 'milestone' ? actual[key] == null : neutralFilter(actual[key])));
 }
 
-/** Görev listesi sıralaması → aracın sırası (rota_task_search). */
-const TASK_RANK_SORTS = Object.freeze({ 'task.targetFinish:asc': 'target_finish_asc', 'task.targetFinish:desc': 'target_finish_desc', 'task.overdueDays:desc': 'overdue_days_desc' });
-
-/** Sıralamalı açık istek: okumanın sırası istenen ölçü/yön, döndürülen satırlar istenen sınırı aşmaz. */
-function explicitRankMatch(row, rank) {
-  if (!rank) return true;
-  const sort = TASK_RANK_SORTS[`${rank.metric}:${rank.order}`];
-  if (row.tool === 'rota_task_search' && (!sort || row.data?.sort !== sort)) return false;
-  const rows = row.data?.tasks || row.data?.people || row.data?.projects || [];
-  return !Number.isInteger(rank.limit) || rows.length === Math.min(rank.limit, row.counts?.total ?? row.totalCount ?? rows.length)
-    && (rows.length === rank.limit || row.complete === true);
+/** Tam koleksiyon ya da kanıtlı ilk sıralama sayfası: görev, proje ve kişi için aynı kayıtlı ölçü yollarını kullan. */
+function explicitRankRows(row, rank) {
+  const collection = row.data?.tasks ? 'tasks' : row.data?.people ? 'people' : row.data?.projects ? 'projects' : null;
+  if (!collection) return null;
+  const rows = row.data[collection];
+  if (!rank) return rows;
+  const total = row.totalCount ?? row.counts?.total;
+  const complete = row.complete === true && row.truncated !== true && Number.isSafeInteger(total) && total === rows.length;
+  const proof = row.rankingBoundary;
+  // Son devam sayfası `complete` olsa da bütün nüfus değildir; eksik sayfada yalnızca ilk sayfanın sınır kanıtı geçerlidir.
+  const order = sortedBy(row.tool, { sort: row.data.sort });
+  if (!complete && !(row.complete !== true && row.truncated !== true && order?.metric === rank.metric && order.order === rank.order
+    && proof?.collection === collection && proof.metric === rank.metric && proof.order === rank.order && proof.returnedCount === rows.length)) return null;
+  const indexes = rankedRowIndexes({ rank, fields: [] }, row.tool, row, collection, collection);
+  if (!indexes?.length) return rows.length === 0 && complete ? [] : null;
+  const selected = indexes.map((index) => rows[index]);
+  if (!complete) {
+    const path = metricPaths(row.tool, rank.metric).find((item) => item.startsWith(`data.${collection}.*.`))?.split('.*.')[1];
+    const value = (item) => path?.split('.').reduce((current, key) => current?.[key], item);
+    const boundary = value(selected.at(-1));
+    if (selected.length < (rank.limit || 1) || proof.nextValue !== null && !(rank.order === 'asc' ? proof.nextValue > boundary : proof.nextValue < boundary)) return null;
+  }
+  return selected;
 }
 
-/** Kanıtın satırları (görev başlığı, kişi ya da proje adı) yanıtta görünüyor mu; Markdown kaçışları yok sayılır. */
+/** Sıralamalı açık isteğin sırası, sınırı ve ilk sayfa kökeni birlikte doğrulanır. */
+function explicitRankMatch(row, rank) {
+  return !rank || explicitRankRows(row, rank) !== null;
+}
+
+/** Her kanıt satırı ayrı yanıt satırına eşlenir; sıralamasız listede eşleşme önceki seçimini düzeltebilir. */
 function rowsDelivered(row, content, wanted = {}) {
-  const plain = content.replace(/\\(.)/g, '$1').replaceAll('**', '');
-  const lines = plain.split('\n').filter((line) => line.trim());
-  const rows = row.data?.tasks || row.data?.people || row.data?.projects || [];
-  const used = new Set();
-  let previous = -1;
-  for (const item of rows) {
-    const name = item.title || item.name;
-    if (typeof name !== 'string' || !name.trim()) return false;
-    const found = lines.findIndex((line, index) => !used.has(index) && (!wanted.rank || index > previous) && line.includes(name)
-      && (!(wanted.metrics || []).includes('task.targetFinish') || item.targetFinish == null || line.includes(item.targetFinish) || line.includes(formatFactDay(item.targetFinish, 'tr')) || line.includes(formatFactDay(item.targetFinish, 'en'))
-        || line.includes(item.targetFinish.slice(0, 10).split('-').reverse().join('.'))
-        || line.includes(item.targetFinish.slice(0, 10).split('-').reverse().join('/'))));
-    if (found < 0) return false;
-    used.add(found); previous = found;
+  const lines = content.split('\n').filter((line) => line.trim()).map((line) => inlineText(parseInline(line)));
+  const rows = explicitRankRows(row, wanted.rank);
+  if (!rows) return false;
+  const names = rows.map((item) => item.title || item.name);
+  const choices = rows.map((item, at) => {
+    const name = names[at];
+    if (typeof name !== 'string' || !name.trim()) return [];
+    return lines.flatMap((line, index) => {
+      if (!line.includes(name) || names.some((other) => other !== name && other?.includes(name) && line.includes(other))) return [];
+      if ((wanted.metrics || []).includes('task.targetFinish')) {
+        const date = item.targetFinish;
+        if (date == null ? /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./]\d{4}\b|\b\d{1,2} \p{L}+ \d{4}\b/u.test(line)
+          : ![date, formatFactDay(date, 'tr'), formatFactDay(date, 'en'), ...['.', '/'].map((separator) => date.slice(0, 10).split('-').reverse().join(separator))].some((value) => line.includes(value))) return [];
+      }
+      return [index];
+    });
+  });
+  if (wanted.rank) {
+    let previous = -1;
+    return choices.every((matches) => { const next = matches.find((index) => index > previous); if (next == null) return false; previous = next; return true; });
   }
-  return true;
+  const owners = new Map();
+  const assign = (slot, visited) => choices[slot].some((line) => {
+    if (visited.has(line)) return false;
+    visited.add(line);
+    if (owners.has(line) && !assign(owners.get(line), visited)) return false;
+    owners.set(line, slot);
+    return true;
+  });
+  return choices.every((_, slot) => assign(slot, new Set()));
 }
 
 /** Tek kapsamlı yön yalnızca aynı kimliğin ve aynı nüfusun kanıtıyla karşılanır. */
@@ -474,7 +528,7 @@ const LAYER_FOCUS_SHAPES = Object.freeze({
     || (layer.scope === 'team' && layer.level === 'unit' && row.tool === 'rota_workload_summary')),
   projects: (row) => row.tool === 'rota_portfolio_summary' ? Array.isArray(row.data?.projects) : row.tool === 'rota_task_analytics' && row.data?.groupBy === 'project'
     && unrestricted(row.data?.filters || {}, ['dateFrom', 'dateTo']),
-  priority: (row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'priority',
-  deadlines: (row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'deadline',
-  schedule: (row) => row.tool === 'rota_task_analytics' && row.data?.groupBy === 'target_month'
+  priority: (row) => wholePopulation(row) && row.tool === 'rota_task_analytics' && row.data?.groupBy === 'priority',
+  deadlines: (row) => wholePopulation(row) && row.tool === 'rota_task_analytics' && row.data?.groupBy === 'deadline',
+  schedule: (row) => wholePopulation(row) && row.tool === 'rota_task_analytics' && row.data?.groupBy === 'target_month'
 });

@@ -292,7 +292,7 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // Başka araç (ayrıntı, bağımlılık, baz plan, hareket) da özetle birlikte reddedilir.
     // Adlı kişi/proje kapsamının çağrı karşılığı çözülmüş kimliktir (personSicil/projectId); boş seçici o kapsamın nüfusu değil
     // görünür bütün işlerdir. Bu yüzden adlı kapsam boş seçiciyle eşleşmez: böyle bir çağrı yürütülmeden atılmaz, plan reddedilir.
-    const scopes = [parsed, ...(parsed.also || [])].filter((layer) => !['person', 'project', 'previous', 'row'].includes(layer.scope))
+    const scopes = [parsed, ...(parsed.also || [])].filter((layer) => layer.within == null && !['person', 'project', 'previous', 'row'].includes(layer.scope))
       .map((layer) => (layer.scope === 'self' ? { assignee: 'me' }
         : layer.scope === 'team' ? { assignee: 'team', ...(layer.level ? { teamLevel: layer.level } : {}) } : {}));
     const unselected = (call) => {
