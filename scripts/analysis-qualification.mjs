@@ -150,6 +150,7 @@ export function plannerScore(result, expect, today = corpus.today) {
     const readsLayer = (layer, request) => (layer.scope === 'self' ? request.filters?.assignee === 'me' && !request.entities?.length
       : layer.scope === 'team' ? request.filters?.assignee === 'team' && !request.entities?.length && (request.filters?.teamLevel || '') === (layer.level || '')
         : ['person', 'project'].includes(layer.scope) ? request.entities?.some((entity) => entity.type === layer.scope && sameName(layer, entity)) && !request.filters?.assignee
+          && request.entities.every((entity) => entity.type === layer.scope && expect.layers.some((expected) => expected.scope === entity.type && sameName(expected, entity)))
           : layer.scope === 'projects' ? portfolioRead(layer, request)
             : !request.filters?.assignee && !request.entities?.length && request.population?.tool !== 'rota_portfolio_summary');
     // Çok adlı katmanın her öznesi ayrı nüfus ve yön kanıtı gerektirir.

@@ -285,10 +285,11 @@ function gTableFindings(table, prior) {
     }
   }
   if (table.entity === 'project' && rows.every((row) => count(row.open) != null && count(row.overdue) != null)) {
-    // Durumla daraltılmış tabloda (ör. yalnızca tamamlanan + devam eden) tamamlanma payı projenin görevlerinin payı değildir.
+    // Anlatımın taşımadığı daraltma (metin, düğüm, oluşturan, kilometre taşı veya eksik durum kümesi) bütün projenin tamamlanma payı değildir.
     const statuses = Array.isArray(table.filters?.statuses) ? table.filters.statuses : [];
     const allStatuses = !statuses.length || ['todo', 'in_progress', 'done'].every((status) => statuses.includes(status));
-    if (allStatuses && table.filters?.milestone == null && rows.every((row) => count(row.done) != null)) {
+    if (allStatuses && table.filters?.milestone == null && ['text', 'wbsId', 'createdByMe'].every((key) => neutral(table.filters?.[key], key) && table.filters?.[key] !== 'any')
+      && rows.every((row) => count(row.done) != null)) {
       const despite = rows.filter((row) => row.open + row.done >= FINDING_LIMITS.minCompletionTotal && row.done * 2 >= row.open + row.done && row.overdue > 0)
         .map((row) => ({ name: row.name, key: String(row.key).toLowerCase(), overdue: row.overdue, share: sharePercent(row.done, row.open + row.done) }))
         .sort((left, right) => right.share - left.share || right.overdue - left.overdue || left.name.localeCompare(right.name, 'tr'));
@@ -376,6 +377,7 @@ function listFindings(list) {
           worst: worst ? { title: worst.title, days: worst.days, key: worst.key ?? null, projectId: worst.projectId ?? null, project: typeof worst.project === 'string' ? worst.project : null,
             place: place(worst), tied: late.filter((row) => row.days === worst.days).length > 1 } : null,
           next: next ? { title: next.title, due: next.due, project: typeof next.project === 'string' ? next.project : null,
+            tied: upcoming.filter((row) => row.due === next.due).length > 1,
             // Tekillik yalnızca terminli satırların tamamı görünüyorsa (tam liste, sığan sayfa ya da görünen terminsiz satır) ya da
             // sayfada daha geç terminli bir satır varsa kesindir: sıralama sınırı aynı günü paylaşan başka bir kilometre taşını bırakmış olabilir.
             sole: upcoming.filter((row) => row.due === next.due).length === 1 && (list.complete || fits || shownUndated > 0 || upcoming.some((row) => row.due > next.due)),
@@ -1095,10 +1097,10 @@ function gIntroSentences(findings, locale) {
       add(status, en(locale)
         ? [...(open != null ? [s(formatCount(overdue, locale)), ' of the ', s(formatCount(open, locale)), ' open milestones ', overdue === 1 ? 'is' : 'are'] : [overdueExact ? '' : 'At least ', s(formatCount(overdue, locale)), overdue === 1 ? ' milestone is' : ' milestones are']),
           ' overdue', ...(worst ? [worst.tied ? '; one of the longest-overdue is ' : '; the longest-overdue is ', s(worst.title), ' (', s(formatCount(worst.days, locale)), worst.days === 1 ? ' day' : ' days', ...projectOf(worst), ')'] : []),
-          ...(next ? [next.sole ? (worst ? ', and the next is ' : '; the next is ') : '; one of the next milestones is ', s(next.title), ' (', nextDay, ...projectOf(next), ')'] : []), '.']
+          ...(next ? [next.sole ? (worst ? ', and the next is ' : '; the next is ') : next.tied ? '; one of the next milestones is ' : '; the earliest shown milestone is ', s(next.title), ' (', nextDay, ...projectOf(next), ')'] : []), '.']
         : [...(open != null ? ['Açık ', s(formatCount(open, locale)), ' kilometre taşından ', s(possessiveCount(overdue, locale)), ' gecikmiş'] : [overdueExact ? '' : 'En az ', s(formatCount(overdue, locale)), ' kilometre taşı gecikmiş']),
           ...(worst ? [worst.tied ? ': en uzun süredir gecikenlerden biri ' : ': en uzun süredir geciken ', s(worst.title), ' (', s(formatCount(worst.days, locale)), ' gün', ...projectOf(worst), ')'] : []),
-          ...(next ? [next.sole ? (worst ? ', sıradaki ise ' : '; sıradaki kilometre taşı ') : '; aynı en yakın termindeki kilometre taşlarından biri ', s(next.title), ' (', nextDay, ...projectOf(next), ')'] : []), '.']);
+          ...(next ? [next.sole ? (worst ? ', sıradaki ise ' : '; sıradaki kilometre taşı ') : next.tied ? '; aynı en yakın termindeki kilometre taşlarından biri ' : '; gösterilen en yakın kilometre taşı ', s(next.title), ' (', nextDay, ...projectOf(next), ')'] : []), '.']);
       if (!pathCaveat) {
         add(status, en(locale) ? ['An overdue milestone does not by itself prove that the project end date will slip, because Rota does not compute the critical path.']
           : ['Gecikmiş bir kilometre taşı projenin bitişinin kayacağını tek başına kanıtlamaz, çünkü Rota kritik yolu hesaplamaz.'], { caveat: true });
@@ -1111,8 +1113,8 @@ function gIntroSentences(findings, locale) {
       add(status, en(locale) ? ['None of the ', s(formatCount(dated, locale)), some ? ' open milestones with a target date is overdue' : ' open milestones is overdue', ...(next ? [next.sole ? '; the next is ' : '; one of the next milestones is ', s(next.title), ' (', nextDay, ...projectOf(next), ')'] : []), '.']
         : [some ? 'Termini olan açık ' : 'Açık ', s(formatCount(dated, locale)), ' kilometre taşının hiçbiri gecikmiş değil', ...(next ? [next.sole ? '; sıradaki ' : '; aynı en yakın termindeki kilometre taşlarından biri ', s(next.title), ' (', nextDay, ...projectOf(next), ')'] : []), '.']);
     } else if (next) {
-      add(status, en(locale) ? [next.sole ? 'The next milestone is ' : 'The next milestone date is ', s(next.title), ' (', nextDay, ...projectOf(next), ').']
-        : [next.sole ? 'Sıradaki kilometre taşı ' : 'Aynı en yakın termindeki kilometre taşlarından biri ', s(next.title), ' (', nextDay, ...projectOf(next), ').']);
+      add(status, en(locale) ? [next.sole ? 'The next milestone is ' : next.tied ? 'One of the next milestones is ' : 'The earliest shown milestone is ', s(next.title), ' (', nextDay, ...projectOf(next), ').']
+        : [next.sole ? 'Sıradaki kilometre taşı ' : next.tied ? 'Aynı en yakın termindeki kilometre taşlarından biri ' : 'Gösterilen en yakın kilometre taşı ', s(next.title), ' (', nextDay, ...projectOf(next), ').']);
     }
     if (status.metrics.undated > 0) {
       const { undated } = status.metrics;

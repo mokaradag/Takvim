@@ -652,5 +652,7 @@ Bu bölüm her oturumun sonunda güncellenir. Güncel durum ve sonraki giriş no
 - **Açık:** Windows VM yeniden oynatması (§11); anlamsal danışmanlıklı kanonik kapı; Haiku'nun kapsam/yön seçimi ve düzen reddi →
   Derin isteği (model değişkenliği); CLI bağdaştırıcısının ara sıra `error_max_turns` altyapı hatası; Haiku ile canlı arayüz koşusu
   (kota); baz plan kayması bulgusu; dönemsel/tarihsel sorular (H).
-- **Sonraki giriş noktası:** §11 yordamıyla VM yeniden oynatması (G soruları dahil; kabul matrisi §7.6); ardından Aşama H
-  (dönem karşılaştırması, tamamlanma eğilimi, çoklu ufuk — g23, o07, o27, o30).
+- **Sonraki giriş noktası:** §11 yordamıyla VM yeniden oynatması (G soruları dahil; kabul matrisi §7.6); ardından Haiku
+  yakınsaması, doğal düzyazı kabulü ve anlamsal danışmanlıklı kanonik 117/117 + 19/19 kapısının tamamlanması. Aşama H
+  (dönem karşılaştırması, tamamlanma eğilimi, çoklu ufuk — g23, o07, o27, o30) yalnızca bu Aşama G kabul kapılarının tamamı
+  doğrulandıktan sonra başlar.

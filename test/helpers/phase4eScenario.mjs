@@ -80,7 +80,7 @@ export const G_FINDING_TEXT = Object.freeze({
   volumeVsDelay: /Görev sayısı tek başına baskıyı göstermiyor/,
   levelComparison: /Açık işlerde gecikme oranı|Karşılaştırılan kapsamların hiçbirinde gecikmiş açık iş yok|Karşılaştırılan kapsamların hiçbirinde açık iş olmadığından/,
   // Kilometre taşı DURUM bulgusunun kendisi (gecikmiş sayısı, "hiçbiri gecikmiş değil" ya da sıradaki): başlık ya da liste metni yetmez.
-  milestoneStatus: /kilometre taşından \*\*\d+[^*]*\*\* gecikmiş|\*\*\d+\*\* kilometre taşı gecikmiş|kilometre taşının hiçbiri gecikmiş değil|Sıradaki kilometre taşı \*\*/,
+  milestoneStatus: /kilometre taşından \*\*\d+[^*]*\*\* gecikmiş|\*\*\d+\*\* kilometre taşı gecikmiş|kilometre taşının hiçbiri gecikmiş değil|Sıradaki kilometre taşı \*\*|[Gg]österilen en yakın kilometre taşı \*\*|[Aa]ynı en yakın termindeki kilometre taşlarından biri \*\*/,
   // Örgütsel yayılım bulgusu ve tablonun zorunlu toplanmama çekincesi birlikte (sıra bulgu ile çekincenin yerleşimine bağlıdır).
   orgSpread: /^(?=[\s\S]*[İi]şler \*\*\d+\*\* (?:bölüme|birime) dağılıyor)(?=[\s\S]*(?:bölüm|birim) sayıları toplanmaz)/
 });
@@ -97,7 +97,7 @@ const EN_FINDING_TEXT = Object.freeze({
   completionDespiteOverdue: /has completed[\s\S]+of its tasks yet still has/i,
   volumeVsDelay: /task volume alone does not show pressure/i,
   levelComparison: /share of open work that is overdue|none of the compared scopes has (?:overdue )?open work/i,
-  milestoneStatus: /open milestones? (?:is|are) overdue|milestones? (?:is|are) overdue|next milestone(?: date)? is|none of the[\s\S]+open milestones/i,
+  milestoneStatus: /open milestones? (?:is|are) overdue|milestones? (?:is|are) overdue|next milestones?(?: date)? is|earliest shown milestone is|none of the[\s\S]+open milestones/i,
   orgSpread: /^(?=[\s\S]*work is spread across \*\*\d+\*\* (?:departments|units))(?=[\s\S]*(?:department|unit).*counts.*(?:not|never).*(?:sum|added together))/i
 });
 
@@ -116,6 +116,7 @@ export function renderedCharts(content) {
  * kanıt verdiyse grafik adayı yoktur ve sunucunun kısa açıklaması kabul edilir (deterministik sınamada grafik zorunlu).
  */
 export function turnViolations(result, expect, { live = false } = {}) {
+  const english = result.locale === 'en';
   const problems = [];
   const reads = populationReads(result.log);
   const content = String(result.answer?.content || '');
@@ -241,7 +242,8 @@ export function turnViolations(result, expect, { live = false } = {}) {
     // Adlı projelerin kıyasında her yön her projenin kendi kanıtıyla karşılanmalıdır: tek projenin okuması ikisini birden karşılamaz.
     // Kıyasta gecikme ve yakın termin, projenin süzgeçsiz toplamlarının değeri olarak da okunur (liste biçimi zorunlu değildir).
     const compared = expect.scope === 'project' && expect.projectIds?.length > 1;
-    const owners = compared ? expect.projectIds.map((id) => ({ ...expect, projectIds: [id] })) : [expect];
+    const owners = compared ? expect.projectIds.map((id) => ({ ...expect, projectIds: [id] }))
+      : expect.scope === 'person' && expect.people?.length > 1 ? expect.people.map((id) => ({ ...expect, people: [id] })) : [expect];
     for (const focus of expect.scopeFocus) {
       const shape = LAYER_FOCUS_SHAPES[focus];
       const valueShape = compared ? COMPARISON_VALUE_SHAPES[focus] : null;
@@ -331,20 +333,21 @@ export function turnViolations(result, expect, { live = false } = {}) {
     overdueConcentration: /gecikmiş[\s\S]+toplanıyor/i, ...G_FINDING_TEXT };
   const localized = result.locale === 'en' ? EN_FINDING_TEXT : findings;
   for (const kind of expect.findings || []) if (!localized[kind]?.test(content)) problems.push(`${kind} bulgusu yok`);
-  if (expect.caveat && !/kesin olarak söylenemez/.test(content)) problems.push('zorunlu tamlık çekincesi yok');
+  const incompleteCaveat = english ? /cannot be stated with certainty|cannot be established/ : /kesin olarak söylenemez/;
+  if (expect.caveat && !incompleteCaveat.test(content)) problems.push('zorunlu tamlık çekincesi yok');
   // Aşama G: tam kadroda kişi sayıları için kapasite çekincesi zorunludur; tamlık çekincesi (eksik kadro) o zaman yazılmaz.
-  if (expect.capacityCaveat && !/görev adedidir; işin büyüklüğünü, harcanan emeği ya da boş kapasiteyi göstermez/.test(content)) problems.push('kapasite çekincesi yok');
+  if (expect.capacityCaveat && !(english ? /task counts: they do not measure task size, effort or spare capacity/ : /görev adedidir; işin büyüklüğünü, harcanan emeği ya da boş kapasiteyi göstermez/).test(content)) problems.push('kapasite çekincesi yok');
   // Eksik kadro çekincesi yalnızca İŞ YÜKÜ (kadro) kanıtına bağlıysa ihlaldir: kişilere göre görev kırılımının kendi tamlık çekincesi
   // aynı yanıtta bulunabilir.
   const workloadIds = (result.evidence || []).filter((row) => row.tool === 'rota_workload_summary').map((row) => row.evidenceId);
-  if (expect.capacityCaveat && content.split('\n\n').some((block) => /kesin olarak söylenemez/.test(block)
+  if (expect.capacityCaveat && content.split('\n\n').some((block) => incompleteCaveat.test(block)
     && workloadIds.some((id) => block.includes(`【${id}】`)))) problems.push('tam kadroda eksik kadro çekincesi');
-  if (expect.overlapNote && !/birbirini kapsar[\s\S]*yığıldığında toplam yanlış/.test(content)) problems.push('örtüşen seri notu yok');
+  if (expect.overlapNote && !(english ? /counts overlap[\s\S]*stacking them would show a wrong total/ : /birbirini kapsar[\s\S]*yığıldığında toplam yanlış/).test(content)) problems.push('örtüşen seri notu yok');
   // Yalnızca birbirini kapsayan seriler (açık ile onun parçası gecikmiş/yakın terminli) yığılırsa ihlaldir; açık + tamamlanan gibi
   // ayrık durum bölümlerinin yığılması doğrudur.
-  const overlapping = (series = []) => series.includes('Açık görev') && series.some((name) => ['Gecikmiş görev', 'Yedi gün içinde terminli görev'].includes(name));
+  const overlapping = (series = []) => series.includes(english ? 'Open tasks' : 'Açık görev') && series.some((name) => (english ? ['Overdue tasks', 'Due within seven days'] : ['Gecikmiş görev', 'Yedi gün içinde terminli görev']).includes(name));
   if (expect.overlapNote && renderedCharts(content).some((chart) => chart.type === 'stacked' && overlapping(chart.series))) problems.push('örtüşen seriler yığıldı');
-  if (expect.omissionNote && !/tek yanıtın okuma sınırına sığmadığı için ayrıca gösterilmedi/.test(content)) problems.push('okunmayan yön notu yok');
+  if (expect.omissionNote && !(english ? /did not fit within one answer's read limit/ : /tek yanıtın okuma sınırına sığmadığı için ayrıca gösterilmedi/).test(content)) problems.push('okunmayan yön notu yok');
   for (const pattern of expect.mustNot || []) if (new RegExp(pattern).test(content)) problems.push(`yasak ifade: ${pattern}`);
   for (const pattern of expect.must || []) if (!new RegExp(pattern).test(content)) problems.push(`zorunlu ifade yok: ${pattern}`);
   if (expect.conclusion && !answerQuality(content).ending) problems.push('son blokta sonuç yok');
@@ -433,19 +436,35 @@ function explicitRankMatch(row, rank) {
 
 /** Her kanıt satırı ayrı yanıt satırına eşlenir; sıralamasız listede eşleşme önceki seçimini düzeltebilir. */
 function rowsDelivered(row, content, wanted = {}) {
-  const lines = content.split('\n').filter((line) => line.trim()).map((line) => inlineText(parseInline(line)));
+  // Tablo hücresi kendi başlığıyla eşlenir; başka sütundaki tarih termin kanıtı olamaz. Liste ve düz yazıda başlık değeri çıkarılır.
+  const deliveredLines = (blocks) => blocks.flatMap((block) => {
+    if (block.type === 'table') {
+      const column = block.header.map((cell) => inlineText(cell).trim()).findIndex((label) => /^(?:termini?(?: tarihi)?|hedef(?: bitiş|\/termin)?|deadline|target(?: finish| date)?|due date)$/iu.test(label));
+      return block.rows.map((cells) => ({ text: cells.map((cell) => inlineText(cell)).join(' | '), table: true,
+        ...(column >= 0 ? { deadline: inlineText(cells[column] || []) } : {}) }));
+    }
+    if (block.type === 'quote') return deliveredLines(block.children);
+    if (block.type === 'list') return block.items.flatMap(deliveredLines);
+    return (block.source || '').split('\n').filter((line) => line.trim()).map((line) => ({ text: inlineText(parseInline(line)) }));
+  });
+  const lines = deliveredLines(parseAssistantMarkdown(content, { rotaData: true }));
   const rows = explicitRankRows(row, wanted.rank);
   if (!rows) return false;
   const names = rows.map((item) => item.title || item.name);
   const choices = rows.map((item, at) => {
     const name = names[at];
     if (typeof name !== 'string' || !name.trim()) return [];
-    return lines.flatMap((line, index) => {
+    return lines.flatMap((record, index) => {
+      const line = record.text;
       if (!line.includes(name) || names.some((other) => other !== name && other?.includes(name) && line.includes(other))) return [];
       if ((wanted.metrics || []).includes('task.targetFinish')) {
+        if (record.table && record.deadline == null) return [];
+        const withoutTitle = line.split(name).join('');
+        const labelled = /\b(?:termini?|deadline|target (?:finish|date)|due date)\s*(?:is\s+|:\s*)?([\s\S]*?)(?=\s+(?:ve|and)\s+|\.\s+|$)/iu.exec(withoutTitle);
+        const deadline = record.table ? record.deadline : labelled ? labelled[1] : withoutTitle;
         const date = item.targetFinish;
-        if (date == null ? /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./]\d{4}\b|\b\d{1,2} \p{L}+ \d{4}\b/u.test(line)
-          : ![date, formatFactDay(date, 'tr'), formatFactDay(date, 'en'), ...['.', '/'].map((separator) => date.slice(0, 10).split('-').reverse().join(separator))].some((value) => line.includes(value))) return [];
+        if (date == null ? /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./]\d{4}\b|\b\d{1,2} \p{L}+ \d{4}\b/u.test(deadline)
+          : ![date, formatFactDay(date, 'tr'), formatFactDay(date, 'en'), ...['.', '/'].map((separator) => date.slice(0, 10).split('-').reverse().join(separator))].some((value) => deadline.includes(value))) return [];
       }
       return [index];
     });
@@ -471,6 +490,8 @@ function scopeEvidence(row, expect) {
   if (expect.scope === 'self') return f.assignee === 'me' && !f.projectId;
   if (expect.scope === 'team') return f.assignee === 'team' && !f.projectId && (!expect.level || f.teamLevel === expect.level);
   if (expect.scope === 'project') return expect.projectIds?.includes(f.projectId) && !['me', 'team', 'person', 'unassigned'].includes(f.assignee);
+  if (expect.scope === 'person') return f.assignee === 'person' && expect.people?.map(Number).includes(Number(f.personSicil))
+    && (expect.projectIds?.length ? expect.projectIds.includes(f.projectId) : !f.projectId);
   if (expect.scope === 'projects' && row.tool === 'rota_portfolio_summary') return true;
   return !f.projectId && !['me', 'team', 'person', 'unassigned'].includes(f.assignee);
 }
