@@ -10,7 +10,7 @@ oturumu sohbet geçmişine dayanmadan bu belgeden devam edebilmelidir.
 | 19 salt okunur alan aracı, kanıt, atıf, yetki (Aşama 3) | [AI Alan Araçları](YAPAY-ZEKA-ALAN-ARACLARI.md) |
 | Anlamsal katman, planlayıcı, 4A–4E, nitelendirme kapıları | [AI Anlamsal Katmanı](YAPAY-ZEKA-ANLAMSAL-KATMAN.md) |
 | Yetki modeli | [Yetkilendirme Modeli](YETKILENDIRME-MODELI.md) |
-| Bu girişimin 40 soruluk kabul matrisi ve kıyas kümeleri | [Bilgin Analiz Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) |
+| Bu girişimin 40 soruluk kabul matrisi, Aşama G kıyas kümesi ve nitelendirme kayıtları | [Bilgin Analiz Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) |
 
 Bu belge yukarıdaki belgelerin sözleşmelerini yinelemez; onlara bağlanır. Çelişki varsa güvenlik ve yetki
 sözleşmesi o belgelerdedir; bu belge kapsam, sıra, kabul kapıları ve ilerleme kaydının sahibidir.
@@ -392,7 +392,9 @@ Bu oturumun PR'ı ve commit'i §13'te kaydedilir.
 
 ## 6. AŞAMA G — Yönetici ve proje zekâsı
 
-**Durum: PLANLANDI.**
+**Durum: SÜRÜYOR** (uygulandı; belirlenimci ve betikli görsel kabul geçti; Haiku nitelendirmesi kısmi geçişle kaydedildi;
+Windows VM yeniden oynatması bekliyor). Kanıt ve sayılar: [Kabul Matrisi §7](BILGIN-ANALIZ-KABUL-MATRISI.md). Aşağıdaki
+plan maddeleri tarihsel kapsamdır; uygulanan biçim [Kabul Matrisi §7.1](BILGIN-ANALIZ-KABUL-MATRISI.md)'dedir.
 
 1. **Amaç:** Yetkili kurumsal düzeylerde (birim, bölüm, direktörlük; doğrulanmış yetkiyle daha geniş) yönetici
    özeti; istisna ve dikkat analizi; proje sağlığı ve kilometre taşı değerlendirmesi; projeler arası çok ölçülü
@@ -424,7 +426,12 @@ Bu oturumun PR'ı ve commit'i §13'te kaydedilir.
 14. **Bağımlılık:** F.
 15. **Riskler/geri alma:** yanlış düzey yetkisi en büyük risk → yetki sınamaları kapıdır; PR düzeyinde geri alma.
 16. **Çıktılar:** çok kapsamlı plan, düzey kırılımı, proje sağlığı bulguları, belgeler, sınamalar.
-17. **Durum:** PLANLANDI. 18. **Kaynaklar:** —
+17. **Durum:** SÜRÜYOR (ayrıntı §13). 18. **Kaynaklar:** bu oturumun PR'ı §13'te kaydedilir.
+
+**Uygulanan biçimden ayrılan noktalar:** baz plan kayması bulgusu bu aşamada eklenmedi (kilometre taşı durumu ve tamamlanma/gecikme
+ödünleşimleri eklendi; baz plan karşılaştırması mevcut araçla ayrı soruda kalır). Sektör düzeyi yeni yetki eklenmedi: sektör sorusu
+yalnızca görünür projelerle yanıtlanır (g08) ya da sistem yöneticisinin görünürlüğüyle (g09). Kurumsal kırılım yeni araç değil,
+var olan aracın yeni gruplamasıdır (`department`, `unit`).
 
 ---
 
@@ -570,6 +577,13 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
 | 2026-11-07 | Dört yön toleransı, model şeması değişmeden | Fiziksel sınır (4) korunur; önek önbelleği ve kanonik kapı istikrarı |
 | 2026-11-07 | Çoklu ufuk, dönem karşılaştırması, tamamlanma eğilimi → H; üç düzeyli soru → G | Tarihsel tamlık ve çok kapsamlı yetki ayrı tasarım gerektirir |
 | 2026-11-08 | Model şeması ve sunucu aynı dört yönü sunar | Fiziksel okuma sınırı (4) ve toplam bütçeler korunur; önceki şema eşitliği ölçümü tarihseldir |
+| 2026-11-09 | Analitik özetin yön sayısı ve fiziksel okuma tavanı 4 → 6 (kullanıcı yönergesi) | "Okuma bütçesine sığmıyor" açıklaması dört yönlü yönetici ve çok kapsamlı sorularda sık dönüyordu; toplam çağrı (12), SQL süresi, sonuç boyutu ve tur süresi değişmedi |
+| 2026-11-09 | Çok kapsamlı plan tek `analysis` içinde `also` ile (en çok üç kapsam) | Her kapsam kendi yetkisiyle okunur; kapsamlar arası toplam yok, yalnızca aynı tanımlı oranlar; sığmayan yön adıyla söylenir |
+| 2026-11-09 | Örgütsel kırılım yeni araç değil, `rota_task_analytics` gruplaması | Görünürlük kuralları aynı kalır; yalnızca kimliği açık sorumlunun birimi kullanılır; örtüşen gruplar toplanmaz |
+| 2026-11-09 | Ekip kadrosu aynı toplu işin ek sonuç kümesi | Sıfır görünür görevli üye ancak kadroyla bilinir; ayrı SQL gidiş-dönüşü ve yeni araç yok |
+| 2026-11-09 | Portföy proje tablosu ilk N değil, aracın sınırıyla tam liste | On projeden büyük portföyde projeler arası bulgular hiç kurulamıyordu; değer okuması aynı okumayı paylaşır |
+| 2026-11-09 | Proje adı düzyazıda doğrulanmış koduyla kalır | Listede görünmeyen adaş proje dışlanamaz (F kararı korunur) |
+| 2026-11-09 | Betikli görsel kabul ucu (`UI_SCRIPTED=1`) | Çizici ve sunucu sözleşmesi model kotası harcamadan dört görünümde sınanır; Haiku kabulünün yerine geçmez |
 
 ---
 
@@ -618,3 +632,27 @@ Bu bölüm her oturumun sonunda güncellenir. Güncel durum ve sonraki giriş no
   kapsam, kimlik, yön, ufuk, grafik türü, son bloktaki sonuç ve model düzenini ayrı ayrı denetler.
 - Önceki Haiku ve görsel ölçümler tarihsel kayıttır; bu düzeltmelere yeniden koşulmuş sayılmaz. Güncel doğrulama
   sonucu (5787/5787 sınama, temiz lint, başarılı derleme) ve ortam sınırları kabul matrisinin §6 kaydındadır. Windows VM ve anlamsal danışmanlıklı kanonik kabul bekliyor.
+
+### 2026-11-09 — Aşama G yönetici ve proje zekâsı
+
+- **Uygulandı:** çok kapsamlı plan (`analysis.also`; dizi yazımı; kapsam başına okuma; okunmayan yön notu; takipte yalnızca birincil
+  kapsam), örgütsel kırılım (`focus: org`, `groupBy` `department`/`unit`), ekip kadrosu ve tamlık, kilometre taşı durumu
+  (`focus: milestones`; termini olmayan kilometre taşı; "Gecikmemiş" hücresi), özet + açık istek birleşik planı, yeni G bulguları
+  (iş yükü yayılımı, gecikmede ilk sıradakiler — kişi ya da proje —, oran/sayı ayrışması, tamamlanmaya karşın gecikme, görev sayısı ≠
+  baskı, örgütsel yayılım, kapsam karşılaştırması, kilometre taşı durumu), girişi soruya göre açan bulgu ve kapsam başına en çok dört
+  cümlelik analiz paragrafları, boş listenin doğal cümlesi, sıfır görünür görevde "boşta değildir" çekincesi, görevsiz nüfusta "%0"
+  uydurulmaması, adaş proje satırlarının kodla ayrılması, dar ekranda tablo hücresinin sözcük ortasından bölünmemesi, nitelendirme
+  betiğinde G katmanı ve tek üst sınama altında vaka koşusu (rapor bütün vakaları içerir), arayüz kabulünde yönetici verisi,
+  tema/görünüm seçimi ve betikli uç.
+- **Doğrulandı:** `npm test -- --test-concurrency=4` (bütün sınamalar geçti), `npm run lint`, `npm run build`; G belirlenimci kıyası
+  48/48 altın plan + hedefli sınamalar; betikli görsel kabul 36/36 (önceki tur; yakınsama turunda yalnızca B profili G1–G5 masaüstü
+  5/5, [Kabul Matrisi §7.8](BILGIN-ANALIZ-KABUL-MATRISI.md)); Haiku sonuçları ve belirteç kayıtları: ilk koşu
+  [Kabul Matrisi §7.4](BILGIN-ANALIZ-KABUL-MATRISI.md) (G hedefli 21/49, G ayrık 16/22; aynı koşulda F ayrık dal 14/24 = `main` 14/24, F özgün dal 9/40 – `main` 8/40: gerileme göstergesi yok);
+  son ölçüm [Kabul Matrisi §7.4b](BILGIN-ANALIZ-KABUL-MATRISI.md) (`890e7c9`: G hedefli 33/49, G ayrık 17/22, F hedefli 17/40, F ayrık 21/24; yakınsamadı).
+- **Açık:** Windows VM yeniden oynatması (§11); anlamsal danışmanlıklı kanonik kapı; Haiku'nun kapsam/yön seçimi ve düzen reddi →
+  Derin isteği (model değişkenliği); CLI bağdaştırıcısının ara sıra `error_max_turns` altyapı hatası; Haiku ile canlı arayüz koşusu
+  (kota); baz plan kayması bulgusu; dönemsel/tarihsel sorular (H).
+- **Sonraki giriş noktası:** §11 yordamıyla VM yeniden oynatması (G soruları dahil; kabul matrisi §7.6); ardından Haiku
+  yakınsaması, doğal düzyazı kabulü ve anlamsal danışmanlıklı kanonik 117/117 + 19/19 kapısının tamamlanması. Aşama H
+  (dönem karşılaştırması, tamamlanma eğilimi, çoklu ufuk — g23, o07, o27, o30) yalnızca bu Aşama G kabul kapılarının tamamı
+  doğrulandıktan sonra başlar.

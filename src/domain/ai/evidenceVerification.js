@@ -252,7 +252,7 @@ export function analyzeGroundedAnswer(text, { evidenceIds = [], evidencePayloads
   const contextOnly = new Set(['data.populationComplete', 'data.unrepresentedOpenTasks', 'data.unassignedOpenTasks']);
   const narrated = rendered.filter((item) => !contextOnly.has(item.fact.field) || selection.facts.includes(item));
   // Görev listesinin kesin sayısı, süzgeçleri doğal cümleyle söylenebiliyorsa insan diliyle yazılır (sayı aynı olgudur).
-  const countLead = (group) => taskCountLead(group, locale);
+  const countLead = (group) => taskCountLead(group, locale, { empty: emptyProofs.includes(group.evidenceId) });
   const normalized = renderVerifiedNarrative(narrated, { locale, layout, operation: request?.operation || null, empty: emptyProofs, countLead });
   if (normalized.length > FACT_LIMITS.maxAnswerChars) return { ok: false, citedIds: [], issues: [{ code: 'ANSWER_TOO_LARGE' }] };
   // Anlatımın girdisi, kanıta dayalı yanıt düzeni için de aynı doğrulanmış olgulardır (yeni olgu eklenmez).

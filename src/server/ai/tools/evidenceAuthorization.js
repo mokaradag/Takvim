@@ -295,14 +295,29 @@ const EMPTY_RESULT_DATA = Object.freeze({
  * Katkı kaydı olmayan boş sonuç yalnızca özgün yetki dönemiyle açılır.
  * Boş eşleşme listesi aranan korumalı nüfusu tek başına kanıtlamaz.
  */
-function provenEmptyResult(entry, payload, exact) {
+function provenEmptyResult(entry, payload, exact, permitted) {
   const data = payload.data;
-  if (!exact || entry.taskReferences.length !== 0 || !EMPTY_RESULT_DATA[entry.tool] || !data || typeof data !== 'object'
-    || payload.complete !== true || payload.truncated === true || payload.totalCount !== 0 || payload.returnedCount !== 0
-    || payload.entity != null) return false;
+  if (!exact || entry.taskReferences.length !== 0 || !EMPTY_RESULT_DATA[entry.tool] || !data || typeof data !== 'object' || payload.entity != null) return false;
+  if (rosterOnlyWorkload(entry, payload, permitted)) return true;
+  if (payload.complete !== true || payload.truncated === true || payload.totalCount !== 0 || payload.returnedCount !== 0) return false;
   const filters = data.filters;
   if (!filters || typeof filters !== 'object') return false;
   return EMPTY_RESULT_DATA[entry.tool](data);
+}
+
+/**
+ * Aşama G — görünür açık görevi olmayan ekibin kadro yanıtı: görev başvurusu yoktur, kişi satırları yalnızca yönetim kapsamından
+ * gelir. Yalnızca birebir dönem eşleşmesinde (çağıran `exact` ister; dönem yönetim kapsamının kimlik kümesini de bağlar) ve her
+ * satır sıfır görevli olup kişisi GÜNCEL yönetim kapsamındaysa açılır; aksi hâlde kapalı ret.
+ */
+function rosterOnlyWorkload(entry, payload, permitted) {
+  const data = payload.data;
+  if (entry.tool !== 'rota_workload_summary' || data.filters?.assignee !== 'team' || !permitted
+    || !Array.isArray(data.people) || !data.people.length || data.openTaskCount !== 0
+    || data.unassignedOpenTasks !== 0 || data.unrepresentedOpenTasks !== 0
+    || payload.returnedCount !== data.people.length || !Number.isSafeInteger(payload.totalCount) || payload.totalCount < data.people.length) return false;
+  return data.people.every((row) => row && typeof row === 'object' && Number.isSafeInteger(row.sicil) && row.sicil > 0 && permitted.has(row.sicil)
+    && ['openTasks', 'inProgress', 'overdue', 'dueNext7Days'].every((key) => row[key] === 0));
 }
 
 /**
@@ -392,7 +407,7 @@ export function savedEvidenceRequirements(entry, auth, { exact = false } = {}) {
       projectIds.push(...projectList.map(row => canonicalActualId(row.projectId)).filter(id => !projectIds.includes(id)));
     } else if (!Number.isSafeInteger(payload.totalCount) || proof.projectIds.length !== payload.totalCount) return null;
   }
-  if (!projectIds.length) return provenEmptyResult(entry, payload, exact) ? { projectIds: [], identities: false } : null;
+  if (!projectIds.length) return provenEmptyResult(entry, payload, exact, permitted) ? { projectIds: [], identities: false } : null;
   if (projectTool) {
     // Canlı arama/portföy kısmi projeleri de döndürür: gösterilmeyen proje yalnızca görünürlük, düzeyi
     // gösterilen proje (eşleşme, aday ya da portföy satırı) o düzeyden düşük olmayan güncel erişim ister.
@@ -506,6 +521,16 @@ export function savedEvidenceRequirements(entry, auth, { exact = false } = {}) {
   // Kesilmiş kişi/grup önizlemesi bütün kimlikleri kanıtlamaz.
   const truncated = payload.complete !== true || payload.truncated === true;
   if (entry.tool === 'rota_task_analytics') {
+    // Aşama G: birim/bölüm grupları görünür sorumluların kimliğinden türer. Kısmi görevlerde kayıtlı sorumlular hâlâ güncel
+    // yönetim kapsamındaysa kimlik tabanı aranmaz; değilse (ya da köken saklanmadıysa) güncel kimlik tabanı zorunludur.
+    // Kayıtta proje başına açıklanan erişim düzeyi zorunludur: düzeyi bilinmeyen örgütsel kanıt kapalı reddedilir ve
+    // güncel erişim kayıttaki düzeyin altına düştüyse (ör. tam → kısmi) açılmaz.
+    if (['department', 'unit'].includes(data.groupBy)) {
+      if (!taskProjectLevels) return null;
+      const identityTaskIds = savedIdentityPopulation(payload, population, permitted, personHidden);
+      if (identityTaskIds === null) return null;
+      return { projectIds, projectLevels: taskProjectLevels, identityTaskIds, identities: !identityTaskIds };
+    }
     if (data.groupBy !== 'assignee') return { projectIds, identities: personHidden || unassignedFilter };
     const groups = assigneeGroupsNeedIdentity(data.groups, permitted);
     if (groups == null) return null;

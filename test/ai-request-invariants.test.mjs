@@ -733,13 +733,15 @@ test("görev seçili seri kendi oluşumlarını sayar; boş yaklaşan liste seri
   assert.equal(issue(verifyRequested(upcoming.ledger, withRows, ruled)), null);
 });
 
-test("açık bağlı ad ve kod taşıyıcısını sunucu seçer; belirsiz alan modele kalır", async (t) => {
+test("açık bağlı ad ve kod taşıyıcısını sunucu seçer; listede bağsız adlandıran sütun ada bağlanır, tek değerde belirsizlik modele kalır", async (t) => {
   const stack = stackFor(t);
   const { ledger } = await callRotaTools(stack, AYSE, [['rota_task_search', { deadline: 'overdue', assignee: 'me' }]]);
   const list = parsedRequest({ operation: 'list', metrics: ['task.title', 'task.project'], population: { tool: 'rota_task_search', collection: 'tasks', sort: 'overdue_days_desc' },
     filters: { deadline: 'overdue', assignee: 'me' }, fields: ['name', 'code'].map((field) => ({ metric: 'task.project', tool: 'rota_task_search', path: `data.tasks.*.project.${field}` })) });
   assert.deepEqual(requestSelections({ ...list, fields: [] }, ledger.requestEntries(), null, REQUEST_TODAY), []);
-  assert.ok(complete({ ...list, fields: [] }, []).problems.includes('$.fields:required'));
+  // Listede satırı adlandıran sütunun bağı yazılmadıysa ad alanı varsayılandır (onarım turu açılmaz); açık bağ aynen korunur.
+  const defaulted = complete({ ...list, fields: [] }, []);
+  assert.deepEqual([defaulted.problems, defaulted.request.fields.map((field) => field.path)], [[], ['data.tasks.*.project.name']]);
   const [candidate] = requestSelections(list, ledger.requestEntries(), null, REQUEST_TODAY);
   assert.ok(JSON.parse(candidate).facts.includes('R1:data.tasks.*.project.name'));
   assert.ok(JSON.parse(candidate).facts.includes('R1:data.tasks.*.project.code'));
@@ -747,7 +749,7 @@ test("açık bağlı ad ve kod taşıyıcısını sunucu seçer; belirsiz alan m
   const wbs = await callRotaTool(stack, AYSE, 'rota_wbs_inspect', { projectId: PROJECTS.FULL, depth: 4 });
   const nodes = parsedRequest({ operation: 'list', metrics: ['wbs.name'], entities: [{ type: 'project', id: PROJECTS.FULL }], population: { tool: 'rota_wbs_inspect', collection: 'nodes', depth: 4 }, fields: ['name', 'code'].map((field) => ({ metric: 'wbs.name', tool: 'rota_wbs_inspect', path: `data.nodes.*.${field}` })) });
   assert.deepEqual(requestSelections({ ...nodes, fields: [] }, wbs.ledger.requestEntries(), null, REQUEST_TODAY), []);
-  assert.ok(complete({ ...nodes, fields: [] }, []).problems.includes('$.fields:required'));
+  assert.deepEqual(complete({ ...nodes, fields: [] }, []).request.fields.map((field) => field.path), ['data.nodes.*.name']);
   assert.deepEqual(requestSelections(nodes, wbs.ledger.requestEntries(), null, REQUEST_TODAY).map((item) => JSON.parse(item).facts),
     [['R1:data.nodes.*.name', 'R1:data.nodes.*.code']], 'düğüm adı ve kodu ayrı açık alanlardır');
 });

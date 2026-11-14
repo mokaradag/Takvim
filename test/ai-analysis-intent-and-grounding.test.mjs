@@ -56,7 +56,7 @@ test('genişletilmiş yönler ve sürümlü bağlam kapalı biçimde saklanır; 
   const value = context({ scope: 'projects', focus: ['overview', 'overdue', 'upcoming', 'projects'] });
   assert.equal(value.v, 2);
   assert.equal(value.focus.length, 4);
-  for (const bad of [{ ...value, v: 3 }, { ...value, futureScope: true }, { ...value, withSelf: true }, { ...value, focus: [...value.focus, 'status'] }, { ...value, rows: [{ type: 'project', id: 'bozuk' }] }]) assert.equal(normalizeAnalysisContext(bad), null);
+  for (const bad of [{ ...value, v: 3 }, { ...value, futureScope: true }, { ...value, withSelf: true }, { ...value, focus: [...value.focus, 'status', 'priority', 'schedule'] }, { ...value, rows: [{ type: 'project', id: 'bozuk' }] }]) assert.equal(normalizeAnalysisContext(bad), null);
   assert.equal(normalizePendingAnalysis({ language: 'tr', scope: 'person', names: ['Ali'], focus: ['status'], withSelf: true, unknown: true }), null);
 });
 
@@ -146,7 +146,8 @@ test('yazıyla sayı ve çoğunluk iddiası görünür yanıta giremez; sunucu o
 
 test('iş yükü kesinliği sayfa tam olsa da eksik nüfusu tam göstermez', async (t) => {
   const pages = [];
-  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }] });
+  // Aşama G: kadro okunur; eksik nüfus için yönetim kapsamında dizin kaydı çözülemeyen bir üye vardır.
+  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }, { ManagerSicil: AYSE, EmployeeSicil: 919999 }] });
   seed.taskAssignees.push({ TaskId: TASKS.OVERDUE, Sicil: ALI_1 }, { TaskId: TASKS.LITERAL, Sicil: ALI_1 });
   const { ask } = phase4eConversation(t, { seed, compose: () => composer((view) => { pages.push(view); return coveringBlocks(view); }) });
   await ask({ text: 'ekibimin iş yükü', plan: plan({ scope: 'team', focus: ['workload'] }) });
@@ -186,6 +187,16 @@ async function groupedPage(t, options = {}) {
   const parts = [0, 1].map((index) => ({ index, presentation: verdict.presentation }));
   return { parts, page: buildComposition({ parts, ...options }) };
 }
+
+test('düzyazılı yanıtta yumuşak işlemle atılan bilinmeyen kimlik, aynı paragrafta korunan geçerli önermeyi reddettirmez', async (t) => {
+  const { page } = await groupedPage(t, { detail: 'detailed' });
+  const [spoken, kept] = [1, 2].map((part) => page.view.propositions.find((item) => item.part === part).id);
+  const rows = page.view.tables.map((table) => ({ type: 'rows', source: table.id }));
+  const result = validateComposition(page, { blocks: [{ type: 'say', text: `{${spoken}}.` }, { type: 'say', items: [kept, 'P999'] }, ...rows] });
+  assert.equal(result.ok, true, JSON.stringify(result.issues));
+  assert.ok(result.blocks.some((block) => block.type === 'say' && block.items.includes(kept)), 'geçerli önerme korunur');
+  assert.equal(result.blocks.some((block) => (block.items || []).includes('P999')), false);
+});
 
 test('başlığın altına karışık bölüm önermeleri yerleştirilemez', async (t) => {
   const { page } = await groupedPage(t, { detail: 'detailed' });
@@ -230,7 +241,8 @@ test('istenen grafik eklenirken önceki grafikler bütçeyi doldursa da son çiz
 });
 
 test('zorunlu çekinceler ve kesinlik ifadeleri sayfa bütçesi dolsa da görünür yanıtta kalır', async (t) => {
-  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }] });
+  // Aşama G: kadro okunur; eksik nüfus için yönetim kapsamında dizin kaydı çözülemeyen bir üye vardır.
+  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }, { ManagerSicil: AYSE, EmployeeSicil: 919999 }] });
   seed.taskAssignees.push({ TaskId: TASKS.OVERDUE, Sicil: ALI_1 });
   const stack = createAiStack(t, { sicil: AYSE, seed, env: { MERGEN_ROTA_AI_TOOLS_ENABLED: 'true' } });
   const { ledger } = await callRotaTool(stack, AYSE, 'rota_workload_summary', { assignee: 'team' });
@@ -303,9 +315,10 @@ test('istenen çizgi adayı tek sütunlu aday sınırının arkasında kaybolmaz
 });
 
 test('şema sınırını aşan yönler alt kümeye onarılmadan kullanıcıya sorulur', async (t) => {
-  const queue = [plan({ scope: 'self', focus: ['overview', 'deadline', 'priority', 'status', 'critical'] }), plan({ scope: 'self', focus: ['deadlines', 'status'] })];
+  // Aşama G: şema yedi yönü kabul etmez (en çok 6).
+  const queue = [plan({ scope: 'self', focus: ['overview', 'deadline', 'priority', 'status', 'critical', 'schedule', 'milestones'] }), plan({ scope: 'self', focus: ['deadlines', 'status'] })];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: queue.shift() }] }) });
-  const result = await ask({ text: 'işlerimin beş yönünü değerlendir' });
+  const result = await ask({ text: 'işlerimin yedi yönünü değerlendir' });
   assert.equal(result.inputs.length, 1);
   assert.equal(result.log.length, 0);
   assert.equal(result.answer.finishReason, 'clarification', result.answer.content);
@@ -538,6 +551,12 @@ for (const [start, end] of [
 test('satır daraltması uyumlu yön sırasını korur ve yalnızca hepsi geçersizse genel görünüme döner', () => {
   const person = context({ scope: 'team', focus: ['workload', 'status'], rows: [{ type: 'person', id: String(ALI_1) }] });
   assert.deepEqual(resolveAnalysisBrief(parseAnalysis({ scope: 'row', rows: [1] }), { previous: person }).focus, ['workload', 'status']);
+  // Kişi satırına alt birim kırılımı uygulanmaz: devralınan `org` düşer; başka yön kalmadıysa genel görünüme dönülür ve açılım reddetmez.
+  const orgPerson = context({ scope: 'team', level: 'unit', focus: ['org'], rows: [{ type: 'person', id: String(ALI_1) }] });
+  assert.deepEqual(resolveAnalysisBrief(parseAnalysis({ scope: 'row', rows: [1] }), { previous: orgPerson }).focus, ['overview', 'overdue', 'upcoming']);
+  assert.doesNotThrow(() => expandAnalysis(parseAnalysis({ scope: 'row', rows: [1] }), { previous: orgPerson, today: '2026-09-30' }));
+  const orgMixed = context({ scope: 'team', level: 'unit', focus: ['org', 'status'], rows: [{ type: 'person', id: String(ALI_1) }] });
+  assert.deepEqual(resolveAnalysisBrief(parseAnalysis({ scope: 'row', rows: [1] }), { previous: orgMixed }).focus, ['status']);
   const project = context({ focus: ['projects'], rows: [{ type: 'project', id: PROJECTS.FULL }] });
   assert.deepEqual(resolveAnalysisBrief(parseAnalysis({ scope: 'row', rows: [1] }), { previous: project }).focus, ['overview', 'overdue', 'upcoming']);
   const explicit = context({ focus: ['upcoming'] });

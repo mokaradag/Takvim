@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { benchmarkExpectation } from '../scripts/analysis-qualification.mjs';
 import { answerQuality } from './helpers/answerQuality.mjs';
-import { phase4eConversation, turnViolations, renderedCharts } from './helpers/phase4eScenario.mjs';
+import { G_FINDING_TEXT, phase4eConversation, turnViolations, renderedCharts } from './helpers/phase4eScenario.mjs';
 import { analysisBenchmarkSeed, BENCH_PROFILES } from './helpers/analysisBenchmarkSeed.mjs';
 import { NOW } from './helpers/aiToolFixtures.mjs';
 
@@ -38,7 +38,8 @@ const FINDING_TEXT = Object.freeze({
   attentionLeader: /yönetim dikkatini en çok/,
   overdueConcentration: /\(\*\*%\d+\*\*\) (?:bu projede|.+ projesinde) toplanıyor/,
   windowPressure: /arasında teslimatı olan \*\*\d+\*\* projenin/,
-  subjectComparison: /arasındaki en belirgin fark|sayıları birbirine yakın|görev sayıları iki (?:kişide|projede) aynı/
+  subjectComparison: /arasındaki en belirgin fark|sayıları birbirine yakın|görev sayıları iki (?:kişide|projede) aynı/,
+  ...G_FINDING_TEXT
 });
 
 test('kıyas kümesi özgün 40 sorunun sırasını, gözlenen sonucunu ve sınıflarını korur; ayrık küme en az 20 vakadır', () => {
@@ -89,8 +90,10 @@ for (const item of fixture.original.filter((entry) => entry.plan)) {
     if (item.expect.chart) assert.ok(content.includes('```rota-chart'), `grafik yok:\n${content}`);
     for (const kind of item.expect.findings || []) assert.match(content, FINDING_TEXT[kind], `${kind} bulgusu yok:\n${content}`);
     if (item.expect.caveat) assert.match(content, /kesin olarak söylenemez/, 'eksik kadronun zorunlu çekincesi');
+    // Aşama G: kadrosu okunan ekipte tamlık çekincesi yerine görev adedinin emek/kapasite olmadığı söylenir.
+    if (item.expect.capacityCaveat) assert.match(content, /görev adedidir; işin büyüklüğünü, harcanan emeği ya da boş kapasiteyi göstermez/, 'kapasite çekincesi');
     // Sonuç, numaralı öncelik listesidir (bölümlü yanıtta kendi başlığıyla).
-    if (item.expect.conclusion) assert.match(content, /(?:\*\*|#### )Öncelikli konular(?:\*\*)?\n\n1\. .+\n2\. /);
+    if (item.expect.conclusion) assert.match(content, /Özetle öncelik sırası şöyle: önce .+; (?:ardından|son olarak) .+\. (?:【R\d+】)+/);
     if (item.expect.overdueUnwindowed) {
       // Gecikme bugüne göre ölçülür: gelecek dönem gecikmiş iş okumasını boşaltmaz.
       assert.doesNotMatch(content, /terminli gecikmiş görev yok/);
@@ -101,7 +104,12 @@ for (const item of fixture.original.filter((entry) => entry.plan)) {
 
 test('sonraki aşamaya bağlı vakalar açık bağımlılıkla kayıtlıdır (sınırlılık başarı sayılmaz)', () => {
   const limited = fixture.original.filter((item) => item.handling === 'limitation');
-  assert.deepEqual(limited.map((item) => [item.order, item.dependsOn]), [[7, 'H'], [19, 'G'], [27, 'H']]);
+  // Aşama G: üç düzeyli soru (19) çok kapsamlı planla tam yanıttır; dönemsel ve tarihsel sorular H'ye bağlı kalır.
+  assert.deepEqual(limited.map((item) => [item.order, item.dependsOn]), [[7, 'H'], [27, 'H']]);
+  // Aşama G'den sonra hiçbir vaka G'ye bağlı değildir. Kalan tek veri sınırı ekip dışı kişi nüfusudur: portföy genelindeki kişilerin
+  // kadrosu yoktur (kadro yalnızca yönetim kapsamında bilinir); kişi yoğunlaşması gerekçeli kısmi yanıttır.
+  assert.deepEqual(fixture.original.filter((item) => item.dependsOn === 'G').map((item) => item.id), []);
+  assert.deepEqual(fixture.original.filter((item) => item.dependsOn === 'veri').map((item) => item.id), ['o04']);
 });
 
 test('proje durum kıyası her projenin teslim edilen sayılarını ve doğru atfını gerektirir', async (t) => {

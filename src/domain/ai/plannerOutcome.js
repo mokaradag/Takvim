@@ -9,6 +9,8 @@
  * (ve açıklamada en çok dört yetenek konusu) seçer.
  */
 
+import { escapedFactText } from './evidenceFacts.js';
+
 export const PLANNER_INTENTS = Object.freeze({ ROTA: 'rota', GENERAL: 'general', CLARIFY: 'clarify', ABSTAIN: 'abstain' });
 
 /** Açıklama nedenleri: soruda göndergesi belirsiz kayıt ya da birden çok Rota yeteneğine eşit uyan istek. */
@@ -155,6 +157,65 @@ export function renderChartTypeUnavailable({ type, substituted = null, locale = 
   return en
     ? `_A ${name[1]} needs ${need[1]}, which this verified result does not contain${other ? `; the data is shown as a ${other} instead` : ''}._`
     : `_${name[0].charAt(0).toLocaleUpperCase('tr-TR')}${name[0].slice(1)} için ${need[0]} gerekir; bu doğrulanmış sonuçta bu veri yok${other ? `, bu yüzden veri ${other} olarak gösterildi` : ''}._`;
+}
+
+const LAYER_OWNERS = Object.freeze({ self: ['kendi işleriniz', 'your own work'], team: ['ekibinizin işleri', "your team's work"], unit: ['biriminizin işleri', "your unit's work"],
+  department: ['bölümünüzün işleri', "your department's work"], directorate: ['direktörlüğünüzün işleri', "your directorate's work"], projects: ['görebildiğiniz bütün işler', 'all the work you can see'],
+  all: ['görebildiğiniz bütün işler', 'all the work you can see'] });
+const LAYER_ASPECTS = Object.freeze({ workload: ['kişilere göre iş yükü', 'workload by person'], projects: ['proje dağılımı', 'project breakdown'], org: ['alt birimlere göre dağılım', 'breakdown by sub-unit'],
+  milestones: ['kilometre taşları', 'milestones'], priority: ['öncelik dağılımı', 'priority breakdown'], deadlines: ['termin dağılımı', 'deadline spread'], schedule: ['aylara göre terminler', 'deadlines by month'],
+  critical: ['kritik işler', 'critical work'], upcoming: ['yaklaşan teslimatların listesi', 'the list of upcoming deliveries'],
+  // Aşama G: okunmayan her yön adıyla söylenir. Durum dağılımı yalnızca dönem istendiğinde ayrı okunur (dönemsiz durum özettedir).
+  status: ['dönemdeki durum dağılımı', 'status breakdown in the period'], overdue: ['gecikmiş işlerin listesi', 'the list of overdue work'] });
+
+/** Kapsam yönünün sunucu adı ("kişilere göre iş yükü"); özet yönü (genel görünüm) ya da bilinmeyen yön için `null`. */
+export function layerAspectLabel(focus, locale = 'tr') {
+  return LAYER_ASPECTS[focus]?.[locale === 'en' ? 1 : 0] || null;
+}
+
+/** Çok kapsamlı özette kapsamın sunucu adı ("biriminizin işleri", "**X** projesindeki işler"); adlar kullanıcının iletisindendir. */
+export function layerOwner(layer, locale = 'tr') {
+  const lang = locale === 'en' ? 1 : 0;
+  // Ad kullanıcının iletisindendir: kanıt adlarıyla aynı yardımcıyla kaçışlanır (Markdown biçimine dönüşmez).
+  const name = layer.names?.length ? layer.names.map((item) => escapedFactText(item)).join(lang ? ' and ' : ' ve ') : null;
+  if (layer.scope === 'person' && name) return lang ? `**${name}**'s work` : `**${name}** sorumluluğundaki işler`;
+  if (layer.scope === 'project' && name) return lang ? `the work in **${name}**` : `**${name}** projesindeki işler`;
+  const key = layer.scope === 'team' && layer.level ? layer.level : layer.scope;
+  return (LAYER_OWNERS[key] || LAYER_OWNERS.all)[lang];
+}
+
+/**
+ * Aşama G — çok kapsamlı özetin okuma tavanına sığmayan dağılım yönleri: hangi kapsamın hangi yönünün bu yanıtta ayrıca
+ * okunmadığını adıyla söyleyen sunucu notu (sessiz düşürme yok). Kapsamların özet ölçüleri okunmuştur; not olgu taşımaz.
+ */
+export function renderLayerOmissions({ omitted = [], layers = [], complete = true, locale = 'tr' } = {}) {
+  const en = locale === 'en';
+  const join = (list) => (list.length === 1 ? list[0] : `${list.slice(0, -1).join(', ')}${en ? ' and ' : ' ve '}${list.at(-1)}`);
+  const kept = omitted.filter((item) => layers[item.layer] && LAYER_ASPECTS[item.focus]);
+  if (!kept.length) return '';
+  // Aynı kapsamın okunmayan yönleri tek kez kapsam adıyla söylenir ("bölümünüzün işleri için X ve Y").
+  const byLayer = [...new Set(kept.map((item) => item.layer))].map((layer) => {
+    const aspects = join(kept.filter((item) => item.layer === layer).map((item) => LAYER_ASPECTS[item.focus][en ? 1 : 0]));
+    return en ? `${aspects} for ${layerOwner(layers[layer], locale)}` : `${layerOwner(layers[layer], locale)} için ${aspects}`;
+  });
+  const many = kept.length > 1;
+  // "Her kapsamın göstergeleri okundu" yalnızca bütün kapsamlar gerçekten okunduysa söylenir (kısmi yanıtta söylenmez).
+  const lead = complete ? (en ? "every scope's headline figures were read; " : 'Her kapsamın temel göstergeleri okundu; ') : '';
+  const body = en ? `${join(byLayer)} did not fit within one answer's read limit and ${many ? 'are' : 'is'} not shown separately`
+    : `${join(byLayer)} tek yanıtın okuma sınırına sığmadığı için ayrıca gösterilmedi`;
+  return en ? `_Note: ${lead}${body}. You can ask for ${many ? 'them' : 'it'} in a follow-up question._`
+    : `_Not: ${lead}${lead ? body : `${body.charAt(0).toLocaleUpperCase('tr-TR')}${body.slice(1)}`}. İsterseniz ${many ? 'bunları' : 'bunu'} ayrı bir soruda inceleyebilirim._`;
+}
+
+/**
+ * Aşama G — örtüşen seriler: kişi başına açık, gecikmiş ve yakın terminli görev sayıları birbirinin parçasıdır (gecikmiş ve
+ * yakın terminli işler açık işlerin içindedir). Üst üste yığıldığında toplam yanlış olur; not bunu söyler ve çizilen grafiği adlandırır.
+ */
+export function renderOverlappingSeries({ substituted = null, locale = 'tr' } = {}) {
+  const other = substituted && CHART_TYPE_NAMES[substituted] ? CHART_TYPE_NAMES[substituted][locale === 'en' ? 1 : 0] : null;
+  return locale === 'en'
+    ? `_Open, overdue and soon-due counts overlap (overdue and soon-due tasks are part of the open tasks), so stacking them would show a wrong total; ${other ? `the counts are shown in a ${other} instead` : 'the counts are shown in the table'}._`
+    : `_Açık, gecikmiş ve yakın terminli görev sayıları birbirini kapsar (gecikmiş ve yakın terminli işler açık işlerin içindedir); üst üste yığıldığında toplam yanlış görünür. Bu yüzden ${other ? `sayılar ${other} olarak` : 'sayılar tabloda'} gösterildi._`;
 }
 
 /** Tamamlanamayan bölüm için içeriksiz, sabit sunucu notu. */

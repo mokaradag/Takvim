@@ -42,17 +42,23 @@ test('gelecekteki dönem gecikmiş iş okumasını daraltmaz; geçmişi kapsayan
   assert.equal(futureWindow({ dateFrom: '2026-09-30' }, null), false, 'bugün bilinmiyorsa kural uygulanmaz');
 });
 
-test('dört yön model şemasından fiziksel okuma sınırına kadar korunur', () => {
-  assert.equal(analysisSchema().properties.focus.maxItems, 4);
+test('altı yön model şemasından fiziksel okuma tavanına (6) kadar korunur; tavanı aşan plan yön düşürülmeden sorulur', () => {
+  // Aşama G (kullanıcı yönergesi): yön ve fiziksel okuma tavanı 4'ten 6'ya; toplam çağrı, SQL ve süre sınırları değişmez.
+  assert.equal(analysisSchema().properties.focus.maxItems, 6);
+  assert.equal(ANALYSIS_LIMITS.maxParts, 6);
   const parts = expand({ scope: 'all', focus: ['status', 'overdue', 'workload', 'upcoming'] });
-  assert.equal(parts.length, ANALYSIS_LIMITS.maxParts);
+  assert.equal(parts.length, 4);
   assert.deepEqual(parts.map((item) => [item.population.tool, item.population.groupBy || item.filters?.deadline]),
     [['rota_task_analytics', 'status'], ['rota_task_search', 'overdue'], ['rota_workload_summary', undefined], ['rota_task_search', 'due_next_7_days']]);
-  // Portföy kapsamı zorunlu proje okumasını ekler: dört yön + zorunlu okuma sınırı aşar, daraltma onarımı önerilir.
-  assert.deepEqual(reject({ scope: 'projects', focus: ['status', 'overdue', 'workload', 'upcoming'] }), ['$.analysis.focus:requestBudget']);
+  // Portföy kapsamı zorunlu proje okumasını ekler: dört yön + zorunlu okuma (5) artık tavana sığar.
+  const portfolio = expand({ scope: 'projects', focus: ['status', 'overdue', 'workload', 'upcoming'] });
+  assert.equal(portfolio.length, 5);
+  assert.ok(portfolio.some((item) => item.population.tool === 'rota_portfolio_summary' && item.population.collection === 'projects'));
+  // Altı yön + zorunlu portföy okuması (7) tavanı aşar: hiçbir yön düşürülmez, kullanıcıdan öncelik istenir.
+  assert.deepEqual(reject({ scope: 'projects', focus: ['status', 'overdue', 'workload', 'upcoming', 'priority', 'schedule'] }), ['$.analysis.focus:requestBudget']);
   assert.ok(analysisHints(['$.analysis.focus:requestBudget']).some((hint) => hint.includes('açıklamasını iste')));
-  // Karşılaştırmada da yön daraltılır (özne değil); tek yönlü sığmayan plan kullanıcıya sorulur.
-  assert.deepEqual(reject({ scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['priority', 'deadlines', 'critical'] }), ['$.analysis.focus:requestBudget']);
+  // Karşılaştırmada da yön daraltılmaz (özne de): iki kişinin dört dağılım yönü (8 okuma) kullanıcıya sorulur.
+  assert.deepEqual(reject({ scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['priority', 'deadlines', 'schedule', 'projects'] }), ['$.analysis.focus:requestBudget']);
   assert.ok(analysisHints(['$.analysis.focus:requestBudget']).some((hint) => hint.includes('açıklamasını iste')));
   // İki kişinin proje dağılımı, gecikmesi ve yaklaşanı (4 okuma) bütünüyle okunur.
   const comparison = expand({ scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['projects', 'overdue', 'upcoming'] });
@@ -98,15 +104,29 @@ test('boş tamamlama satırı çıktı belirteci sayısını içeriksiz olarak y
   assert.match(lines[1], /out \? tok/, 'bildirilmeyen sayı sıfır gibi yazılmaz');
 });
 
-test('özetin yanındaki yalnızca ad çözümü çağrıları yürütülmeden atılır; başka araç çağrısı reddedilir', () => {
+test('özetin yanındaki ad çözümü ve aynı nüfus okuma çağrıları yürütülmeden atılır; başka araç çağrısı reddedilir', () => {
   const brief = { scope: 'person', names: ['Ayşe Yılmaz', 'Zeynep Kaya'], focus: ['overview'] };
   const lookups = [{ name: 'rota_person_search', arguments: { text: 'Ayşe Yılmaz' } }, { name: 'rota_person_search', arguments: { text: 'Zeynep Kaya' } }];
   const accepted = unpack({ intent: 'rota', language: 'tr', analysis: brief, calls: lookups });
   assert.deepEqual(accepted.calls, [], 'çağrılar yürütülmez; adları sunucu özetten çözer');
   assert.equal(accepted.plan.analysis.scope, 'person');
-  assert.throws(() => unpack({ intent: 'rota', language: 'tr', analysis: brief, calls: [...lookups, { name: 'rota_task_search', arguments: {} }] }),
-    (error) => error.details.includes('$.analysis:request'));
-  assert.throws(() => unpack({ intent: 'rota', language: 'tr', analysis: brief, request: { operation: 'value', metrics: ['tasks.total'] } }), (error) => error.details.includes('$.analysis:request'));
+  // Aşama G: özetin kendi okumalarıyla aynı nüfus araçlarına yazılmış çağrılar da yürütülmez (okumaları özet kurar; kapsam genişlemez).
+  // Adlı kişi kapsamının çağrı karşılığı çözülmüş kimliktir; boş seçicili okuma görünür bütün işlerdir: özetle eşdeğer sayılıp
+  // sessizce atılmaz, plan reddedilir. Özetin kendi kapsamıyla birebir aynı seçici (kendi işleri) atılır.
+  for (const name of ['rota_task_search', 'rota_workload_summary']) {
+    assert.throws(() => unpack({ intent: 'rota', language: 'tr', analysis: brief, calls: [...lookups, { name, arguments: {} }] }),
+      (error) => error.details.includes('$.analysis:request'), name);
+  }
+  const self = { scope: 'self', focus: ['overview'] };
+  const reads = unpack({ intent: 'rota', language: 'tr', analysis: self, calls: [{ name: 'rota_task_analytics', arguments: { assignee: 'me' } }] });
+  assert.deepEqual(reads.calls, []);
+  assert.deepEqual(JSON.stringify([reads.plan.request, ...(reads.plan.additionalRequests || [])]),
+    JSON.stringify((({ plan }) => [plan.request, ...(plan.additionalRequests || [])])(unpack({ intent: 'rota', language: 'tr', analysis: self }))), 'atılan çağrılar okunan nüfusu değiştirmez');
+  // Başka yeteneğin aracı (ayrıntı, bağımlılık, baz plan, hareket) özetle birlikte yürütülemez ve reddedilir.
+  for (const name of ['rota_task_detail', 'rota_dependency_inspect', 'rota_baseline_compare', 'rota_activity_search']) {
+    assert.throws(() => unpack({ intent: 'rota', language: 'tr', analysis: brief, calls: [...lookups, { name, arguments: {} }] }),
+      (error) => error.details.includes('$.analysis:request'), name);
+  }
 });
 
 test('takip dışındaki özette "all_time" dönemsizliktir: alanın düşmesi onarımda kapsam değişikliği sayılmaz', () => {
@@ -120,7 +140,7 @@ test('şema sınırı kullanıcıya sorulur; göreli pencere çakışması anlam
   const plan = (analysis) => ({ intent: 'rota', language: 'tr', analysis });
   for (const [name, queue] of [
     ['şema sınırını aşan model yönlerinin sıralı alt kümesi (all_time eşdeğer yazımı düşse de)',
-      [plan({ scope: 'self', focus: ['overview', 'overdue', 'upcoming', 'workload', 'status'], relativeWindow: 'all_time' }), plan({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] })]],
+      [plan({ scope: 'self', focus: ['overview', 'overdue', 'upcoming', 'workload', 'status', 'priority', 'schedule'], relativeWindow: 'all_time' }), plan({ scope: 'self', focus: ['overview', 'overdue', 'upcoming'] })]],
     ['göreli pencere ile tarih çakışmasında birinin kaldırılması',
       [plan({ scope: 'self', focus: ['overview', 'upcoming'], relativeWindow: 'next_7_days', dateFrom: '2026-09-30', dateTo: '2026-10-29' }),
         plan({ scope: 'self', focus: ['overview', 'upcoming'], dateFrom: '2026-09-30', dateTo: '2026-10-29' })]]

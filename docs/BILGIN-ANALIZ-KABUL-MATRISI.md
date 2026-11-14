@@ -1,4 +1,4 @@
-# Bilgin Analiz Kabul Matrisi (Aşama F)
+# Bilgin Analiz Kabul Matrisi (Aşama F–G)
 
 Bu belge [Bilgin Yönetim Analizi Yol Haritası](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md)'nın kabul kanıtıdır: Windows VM'de
 sorulan 40 sorunun yetenek matrisi, doğrulanmış kök nedenler, Aşama F çözümleri ve üç kanıt düzeyinin sonuçları. Sorular
@@ -36,35 +36,36 @@ grafik, bulgu, sonuç paragrafı, çağrı sayısı) ölçer; yazım kalitesi te
 | K8 | Proje portföy sıralaması 8 satırla kesiliyordu; 9+ projeli portföyde hiçbir pay/sıra bulgusu kurulamıyordu | 1, 4, 8, 17, 20 | Portföy sıralaması mevcut kayıt defteri üst sınırı (10) |
 | K9 | Kesik "en yakın teslimat" listesinde zaman çizelgesi çizilmiyordu | 24, 38 | Termine göre artan doğrulanmış sıralamanın başı "En yakın N teslimat" başlığıyla çizilir |
 | K10 | Onarım sözleşmesi kusurları (Haiku ile bulundu): `all_time` eşdeğer yazımı düşünce onarım "kapsam değişikliği" sayılıyordu; göreli pencere çakışmasında düzeltilecek alan dondurulmuştu; karşılaştırma bütçe aşımı daraltılamıyordu; özetin yanındaki ad arama çağrıları onarım turu açıyordu | 1, 3, 11 ve geniş sorular | Dönemsizlik eşdeğerliği; kalan tarih gösterimi sabit; bütçede yön korunur; yalnızca bildirilmiş seçicilere eşit ad aramaları atılır |
-| K11 | `EMPTY_COMPLETION`: Qwen plan/düzeltme turunda <1 sn boş yanıt; özdeş yeniden deneme de boş | VM'de çok sayıda | Burada yeniden üretilemez; çıktı belirteci sayısı günlüğe eklendi, VM yordamı (yol haritası §11) |
+| K11 | `EMPTY_COMPLETION`: Qwen plan/düzeltme turunda <1 sn boş yanıt; özdeş yeniden deneme de boş | VM'de çok sayıda | Burada yeniden üretilemez; çıktı belirteci sayısı günlüğe eklendi, VM yordamı ([yol haritası §11](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md#11-windows-vm-yeniden-oynatma-yordamı-f-k8-ve-f-kabulü)) |
 
 ## 3. 40 soruluk matris
 
 Sütunlar: **No** · **VM** (B başarısız, M mekanik) · **Sınıf** (tam/kısmi/sınırlı → bağımlılık) · **Gerekli yetenek** ·
 **Kök neden** · **Belirlenimci** (altın plan, üretim hizmeti; ✓ geçti, — vaka sınırlı) · **Haiku** (gerçek model uçtan uca;
-§4'teki son koşu) · **Kalan sınır**.
+§4'teki son koşu) · **Kalan sınır**. Aşama G sonrasında **Sınıf** ve **Kalan sınır** sütunları güncellendi; **VM** ve **Haiku**
+sütunları Aşama F'nin tarihsel ölçümüdür (G'nin Haiku sonuçları §7.4–7.6'dadır).
 
 | No | VM | Sınıf | Gerekli yetenek | Kök neden | Belirlenimci | Haiku | Kalan sınır |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | M | tam | Çok ölçülü proje karşılaştırması, dikkat önceliği (A→C) | K5, K8, K10 | ✓ | ✓ (onarım düzeltmesi sonrası) | Bileşik puan bilinçli olarak yok |
-| 2 | B | kısmi → G | Ekip iş yükü + proje + gecikme + yaklaşan (B) | K1, K5 | ✓ | ✓ | Kadro tamlığı: denge/yoğunlaşma yalnızca tam nüfusta |
+| 2 | B | tam (G) | Ekip iş yükü + proje + gecikme + yaklaşan (B) | K1, K5 | ✓ | ✓ | G: kadro okumasıyla tam nüfus (görünür görevi olmayan üye dahil); kapasite çekincesi zorunlu (§7) |
 | 3 | B | tam | Gelecek dönem + mevcut gecikme (B) | K2, K10 | ✓ | ✓ (onarım düzeltmesi sonrası) | Gecikmiş listesi kesikse "en az" alt sınırı |
-| 4 | M | kısmi → G | Gecikme yoğunlaşması (C) | K5, K8 | ✓ | ✓ | Kişi yoğunlaşması kadro tamlığı ister |
+| 4 | M | kısmi → veri | Gecikme yoğunlaşması (C) | K5, K8 | ✓ | ✓ | Veri sınırı: portföy genelindeki kişilerin kadrosu yoktur; kişi yoğunlaşması gerekçeli kısmi yanıt (§7) |
 | 5 | B | tam | İki proje karşılaştırması (B) | K1, K5 | ✓ | ✓ | — |
-| 6 | M | kısmi → G | Ekip dengesi (C) | K5 | ✓ | ✓ | Kadro tamlığı çekincesi zorunlu |
+| 6 | M | tam (G) | Ekip dengesi (C) | K5 | ✓ | ✓ | G: tam kadroda yayılım ve gecikmede ilk sıradakiler (§7) |
 | 7 | B | sınırlı → H | İki dönem karşılaştırması (D, F) | Tek pencere temsili | — | sınırlı → H | Dönem karşılaştırma işleci ve geçmiş tamlık ölçüsü (H) |
 | 8 | M | tam | Bölüm düzeyi proje değerlendirmesi (A) | K8 | ✓ | ✓ | — |
-| 9 | M | kısmi → G | Direktörlük iş yükü, örgütsel gruplar (D) | Düzey kırılımı işleci yok | ✓ | ✓ | Birim/bölüm başına toplam (G) |
+| 9 | M | tam (G) | Direktörlük iş yükü, örgütsel gruplar (D) | Düzey kırılımı işleci yok | ✓ | ✓ | G: direktörlük → bölüm kırılımı; grup sayıları toplanmaz (§7) |
 | 10 | M | tam | Kişisel önceliklendirme (C) | K2, K5 | ✓ | ✓ | — |
 | 11 | B | tam | İki kişi × proje/gecikme/yaklaşan (B) | K1, K3, K6, K10 | ✓ | ✓ (ilk koşuda iç hata; 3 yeniden koşuda yok) | — |
-| 12 | M | tam | Tek proje sağlığı (C) | K5 | ✓ | ✓ | Kilometre taşı sağlığı (G) |
-| 13 | M | kısmi → G | "Çok görev = risk mi?" (C) | K5 | ✓ | ✓ | Desteklenmeyen çıkarım reddi metni (G) |
-| 14 | M | kısmi → G | En çok gecikmeli kişi (C) | Kadro tamlığı | ✓ | ✓ | Tam kadro okuması (G) |
-| 15 | M | kısmi → G | Tamamlanma + gecikme aynı tabloda (D) | Tablo yoktu | ✓ (gecikme sütunu eklendi) | ✓ | Proje başına tamamlanma oranı bulgusu (G) |
+| 12 | M | tam | Tek proje sağlığı (C) | K5 | ✓ | ✓ | G: kilometre taşı durumu (§7) |
+| 13 | M | tam (G) | "Çok görev = risk mi?" (C) | K5 | ✓ | ✓ | G: görev sayısı ≠ baskı bulgusu (§7) |
+| 14 | M | tam (G) | En çok gecikmeli kişi (C) | Kadro tamlığı | ✓ | ✓ | G: tam kadroda gecikmede ilk sıradakiler, işlemsel dil (§7) |
+| 15 | M | tam (G) | Tamamlanma + gecikme aynı tabloda (D) | Tablo yoktu | ✓ (gecikme sütunu eklendi) | ✓ | G: tamamlanmaya karşın gecikme bulgusu (§7) |
 | 16 | B | tam | 14 gün + mevcut gecikme, eşzamanlı baskı (B, D) | K2, K5 | ✓ | ✓ | Kesik listede alt sınır |
 | 17 | M | tam | Dengeli çok ölçülü değerlendirme (C) | K1, K5, K8 | ✓ | ✓ | — |
 | 18 | M | tam | Kanıt yeterliliği (C) | K5 | ✓ | ✓ | — |
-| 19 | B | sınırlı → G | Üç düzeyli değerlendirme (D, G) | Tek kapsamlı plan | — | sınırlı → G (yeniden koşuda yanıt) | Çok kapsamlı plan (G) |
+| 19 | B | tam (G) | Üç düzeyli değerlendirme (D, G) | Tek kapsamlı plan | ✓ (G) | sınırlı → G (yeniden koşuda yanıt) | G: çok kapsamlı plan; kapsamlar arası toplam yok (§7) |
 | 20 | M | tam | Kapsamlı yönetici değerlendirmesi (C) | K1, K5, K8 | ✓ | kararsız (3 koşunun 1'i) | — |
 | 21 | M | tam | Yığılmış grafik (A) | — | ✓ | ✓ | — |
 | 22 | M | tam | Ekip çubuk grafiği + denge (A) | Çekince | ✓ | ✓ | — |
@@ -73,7 +74,7 @@ Sütunlar: **No** · **VM** (B başarısız, M mekanik) · **Sınıf** (tam/kıs
 | 25 | M | tam | Gecikme dağılımı grafiği (A) | — | ✓ | ✓ | — |
 | 26 | M | tam | KPI özeti (A) | — | ✓ | ✓ | — |
 | 27 | B | sınırlı → H | 90 gün tamamlanma eğilimi (D, F) | Eğilim işleci yok | — | sınırlı → H | Gerçekleşen bitişe göre dizi + tamlık (H) |
-| 28 | M | kısmi → G | Örtüşen serilerin yığılması (C) | Gecikmiş ⊂ açık; yığılamaz | ✓ | ✓ | Doğru grafik biçimi seçimi (G) |
+| 28 | M | tam (G) | Örtüşen serilerin yığılması (C) | Gecikmiş ⊂ açık; yığılamaz | ✓ | ✓ | G: örtüşen seriler yığılmaz; çubuk + açıklayıcı not (§7) |
 | 29 | M | tam | Tablo + çubuk (A) | — | ✓ | ✓ | — |
 | 30 | B | kısmi → H | 7/14/30 gün yoğunluğu (D) | Çoklu ufuk yok | ✓ (termin aralıkları; birikimli kıyas değil) | ✗ → H | Birikimli dönem kıyası yapılmadığı zorunlu çekinceyle açıklanır; çoklu ufuk H aşamasındadır |
 | 31 | M | tam | Bölüm iş yükü proje grafiği (A) | — | ✓ | ✓ | — |
@@ -83,7 +84,7 @@ Sütunlar: **No** · **VM** (B başarısız, M mekanik) · **Sınıf** (tam/kıs
 | 35 | B | tam | Gecikmiş / zamanında ayrımı (A) | — | ✓ | ✓ | — |
 | 36 | B | tam | Grafik + kişi tablosu (A) | Çekince | ✓ | ✓ | — |
 | 37 | M | tam | Kısa yönetici özeti + KPI (A) | — | ✓ | ✓ | — |
-| 38 | B | tam | 30 gün iş yükü grafiği + teslimat listesi (B) | K2, K9 | ✓ | ✗ (özet + ek liste birlikte; G) | Zayıf model özet + ek liste karıştırıyor (§4) |
+| 38 | B | tam | 30 gün iş yükü grafiği + teslimat listesi (B) | K2, K9 | ✓ | ✗ (özet + ek liste birlikte; G) | G: özet + ek liste birleşik planı (§7) |
 | 39 | B | tam | İki grafik türü (B) | K4 | ✓ | kısmi (dizi çözümü eklendi; düzen reddi → Derin isteği) | — |
 | 40 | B | tam | Yönetim gösterge paneli (B) | K1, K10 | ✓ | ✓ | — |
 
@@ -220,3 +221,225 @@ Kurum içi Windows VM ve 117/117 + 19/19 anlamsal danışmanlıklı kapılar bu 
 Tek vakalık sınırlı Haiku denemesi (`PHASE4E_TIER=F`, `PHASE4E_CASES=o39`) altyapıda durdu:
 `PLANNER_PROVIDER_ERROR`, `exitCode: -1`, `apiCalls: 0`, doğrulanmış model kimliği yok. Bu ortamda
 `claude` yürütülebiliri yoktur. Bu sonuç bir model kalite başarısızlığı ya da canlı kabul geçişi değildir.
+
+## 7. Aşama G — yönetici ve proje zekâsı (9 Kasım 2026)
+
+**Durum: SÜRÜYOR.** Belirlenimci kabul geçti; betikli görsel kabulün dört görünümlü tam kümesi (§7.5, 36 ekran) önceki bir
+turun sonucudur, bu turda yalnızca B profilinin G1–G5 konuşmaları masaüstü görünümde yeniden koşuldu (§7.8); Haiku nitelendirmesi
+koşuldu ve aşağıda olduğu gibi kaydedildi (kısmi geçiş); Windows VM yeniden oynatması ([yol haritası §11](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md#11-windows-vm-yeniden-oynatma-yordamı-f-k8-ve-f-kabulü) yordamı, Qwen/Gemma) **bekliyor**. Aşama G bu nedenle
+TAMAMLANDI olarak işaretlenmez. Üç kanıt düzeyi ayrıdır: belirlenimci (altın plan, üretim hizmeti), Haiku (gerçek model,
+planlayıcı ve düzen), Windows VM (kurum içi modeller; koşulmadı).
+
+### 7.1 Yetenekler ve yeniden kullanılan bileşenler
+
+| Kod | Yetenek | Uygulama (mevcut mimarinin genişlemesi) |
+| --- | --- | --- |
+| G1 | Yetkili her düzeyde yönetici özeti | Aynı analitik özet (`analysis`), bulgu motoru ve sunucu düzeni; giriş soruyu yanıtlayan bulguyla açılır, bölümler arası bulgular kapsam başına en çok dört cümlelik paragraflardır |
+| G2 | Sınırlı çok kapsamlı plan | `analysis.also` (en çok 2 ek kapsam; dizi yazımı da kabul edilir). Her kapsam kendi nüfusu ve yetkisiyle okunur; özet ölçüleri önce, dağılım yönleri kalan okuma tavanıyla; sığmayan yön adıyla not edilir. Kapsamlar arası toplam yoktur; karşılaştırma yalnızca aynı tanımlı oranlarla (`levelComparison`); iç içe kapsam uyarısının örneği karşılaştırılan kapsamlardan kurulur. Takip yalnızca birincil kapsamı güncel yetkiyle yeniden okur |
+| G3 | Örgütsel düzey kırılımı | `rota_task_analytics` gruplaması `department` / `unit` (sorumlunun dizindeki birimi; yalnızca kimliği açık sorumlu). Bir görev farklı birimlerde ayrı sayılabildiğinden grup sayıları toplanmaz (her yanıtta söylenir). `focus: org` düzeyin bir altına açılır (direktörlük → bölüm, bölüm → birim; birimin altı kişilerdir) |
+| G4 | İş gücü zekâsı | Ekip iş yükü okuması kadroyu (`MR_V_ExecutiveScope`) aynı toplu işte okur: görünür açık görevi olmayan üye sıfır satırla eklenir; kadro kesik ya da adı çözülemiyorsa tamlık iddiası kurulmaz. Görev adedi emek/kapasite değildir (her yayılım bulgusunda söylenir); sıfır görünür görev boşta olmak değildir; gecikmede ilk sıradakiler işlemsel dille (performans yargısı yok) |
+| G5 | Proje sağlığı ve kilometre taşları | `focus: milestones` (açık kilometre taşları, termine göre). Gecikmiş sayısı, en uzun gecikme, sıradaki kilometre taşı; termini olmayan kilometre taşı sıralamanın dışında olduğu söylenir ve yargı kurulmaz; "projenin bitişi kayar" denmez (kritik yol hesaplanmaz). Gecikmemiş satırın gecikme hücresi "Gecikmemiş" yazar |
+| G6 | Özet + grafik + ayrıntılı liste (Q38) | `analysis` ile birlikte açık `request`/`additionalRequests`; özetin zaten okuduğu liste ikinci kez okunmaz; açık isteğin sorunu modelin yazdığı istek yoluyla döner (özetin genel "geçersiz" ayrıntısına dönüşmez) |
+| G7 | İnce karşılaştırmalar ve ödünleşimler | Bileşik puan yok; adı verilen göstergelerle: tamamlanmaya karşın gecikme, görev sayısı ≠ baskı, oran ile sayının ayrışması, örgütsel yayılım, gecikmede ilk sıradaki proje(ler) (eşitlikte birlikte) |
+
+Yeniden kullanılan bileşenler: analitik özet ve sunucu açılımı, türlü istek sözleşmesi ve doğrulayıcı, salt okunur araçlar
+(`rota_task_analytics`, `rota_workload_summary`, `rota_task_search`, `rota_portfolio_summary`), kanıt defteri ve yeniden
+doğrulama, bulgu motoru (`analyticalFindings`), sunucu düzeni ve önermeler, nitelendirme betiği ve arayüz kabulü.
+
+**Yeni salt okunur erişim (tek):** görev olguları toplu işine eklenen kadro sonuç kümesi (`TEAM_ROSTER`; yalnızca
+`@withRoster = 1` ve ekip süzgeciyle, kullanıcının kendi yönetim kapsamı; kadro için ayrı satır tavanı yoktur, ekip büyüklüğü ve mevcut SQL süre bütçesiyle sınırlıdır) ve sorumlu satırına dizindeki
+birim/bölüm (yalnızca kimliği açık sorumlu). Yeni araç, uç nokta, tablo, göç, arka plan işi ya da genel SQL aracı yoktur.
+
+**Arayüz ve sınır değişiklikleri (kullanıcı yönergesi):** analitik özetin kabul edilen yön sayısı ve fiziksel okuma tavanı
+4'ten 6'ya çıkarıldı (okuma bütçesi açıklamasının sık dönmesi). Toplam araç çağrısı (12), SQL süresi, sonuç boyutu ve
+tur süresi sınırları değişmedi. Portföy proje tablosu ilk 10 sıralama yerine aracın kendi sınırıyla (25) tam listedir
+(on projeden büyük portföyde dikkat ve eşzamanlı baskı bulguları kurulamıyordu); portföy değer okuması aynı okumayı paylaşır
+(ek araç çağrısı yok). Model görünür plan şeması 29 368 karakter (sınır 32 000; ek isteklerde yinelenen açıklamalar kaldırıldı).
+Aşama 5/6 ve üretim model yönlendirmesi (Qwen3-Next-80B-A3B-Instruct → gemma-4-31B-it) değişmedi.
+
+### 7.2 Kıyas kümesi (sentetik)
+
+`test/fixtures/bilgin-executive-benchmark.json` + `test/helpers/executiveBenchmarkSeed.mjs` (Aşama F verisini değiştirmeden
+genişletir: örgütsel birimler, kilometre taşları, görünür görevi olmayan kadro üyesi, adaş iki proje, termini olmayan kilometre
+taşı, görev başlığında istem enjeksiyonu). Gerçek kişi ya da kurum kaydı yoktur.
+
+- **49 hedefli vaka** (g01–g52 aralığında; g39, g40 ve g46 kimlikleri kıyas kümesinde kullanılmaz — tur içinde yetki kaybı, yeniden
+  açılış ve yeniden oynatma `test/ai-executive-intelligence.test.mjs` içinde adlı sınamalarla doğrulanır):
+  yönetici 8, yönetici (birim) 8, proje yöneticisi 7, çalışan 5, karmaşık 7, birleşik 2, sistem yöneticisi 1, saldırgan 11.
+  Sınıf: tam 40, kısmi 5, yetkisiz 2, açıklama 1, sınırlı 1 (g23 → H).
+- **22 bağımsız ayrık vaka** (x01–x22, yalnızca planlayıcı). Üretim kodu bu cümlelere göre ayarlanmadı; ayrık kümenin
+  ortaya çıkardığı iki **yapısal** kusur (özet + açık istek onarım yolu; "kendi + tek adlı kişi" ek kapsamının kendiyle
+  karşılaştırmaya çevrilmesi) düzeltildi ve bu iki vakanın sonraki koşusu bağımsız sayılmaz.
+- **Güvenlik:** yetkisiz kapsam (çalışan, yalnızca birim kapsamlı yönetici), karışık yetkili/yetkisiz kapsam, takipte kapsam
+  genişletme, tur içinde yetki kaybı (son çizimde kanıt kullanılmaz), yeniden açılışta bölüm kapsamı kaybı, adaş proje
+  (açıklama), istem enjeksiyonu (başlık veri olarak kalır; okumalar bildirilen kişiyle sınırlı), örtüşen birim nüfusu,
+  sıfır değerde uydurma yüzde yok, kimliği kapalı eş sorumlunun birimi açıklanmaz, çözülemeyen kadro kimliği sızmaz.
+
+### 7.3 Belirlenimci kabul
+
+`test/ai-executive-intelligence.test.mjs`: 48 altın planlı vaka (canlı nitelendirmenin beklentisinin aynısıyla:
+`executiveExpectation`) + 26 hedefli sınama (çok kapsamlı plan, birleşik plan, kadro tamlığı, örgütsel kırılım, kilometre
+taşı, yetki ve enjeksiyon, saf bulgu birimleri, şema boyutu, puanlayıcı). Tam küme: `npm test -- --test-concurrency=4`
+ilk kayıtta **5951/5951**, `890e7c9` doğrulamasında **6006/6006**; yakınsama turunun koşusunda (§7.8) **6065/6065** (başarısız/atlanan
+0), `npm run lint` uyarısız, `npm run build` başarılı.
+
+### 7.4 Haiku nitelendirmesi (claude-haiku-4-5-20251001, `--effort low`, `MAX_THINKING_TOKENS=0`)
+
+Her çağrıda model kimliği ve sıfır düşünme belirteci kayıttan doğrulandı (bütün koşularda `models = [claude-haiku-4-5-20251001]`,
+`thinking = 0`); her koşu kendi bütçesiyle (`PLANNER_CLAUDE_MAX_CALLS`, `PLANNER_CLAUDE_MAX_UNCACHED`) koşuldu. Derin modele
+giden her çağrı modele gitmez ve başarısızlık (`DEEP_ESCALATION`) sayılır. Hesabın hız sınırı kullanımı 0,99'a ulaşınca
+koşular durduruldu ve pencere açılınca parçalar hâlinde sürdürüldü; altyapı hatası (`ADAPTER_ERROR`, CLI `error_max_turns`)
+koşuyu durdurur, o vaka yeniden koşulur (aşağıda belirtildi).
+
+| Koşu | Vaka | Geçen | Çağrı | Girdi | Önbellek yazma | Önbellek okuma | Çıktı |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| G hedefli, koşu 1 (g01–g21; g21 altyapı hatası) | 21 | 7 | 43 | 54 320 | 47 631 | 861 943 | 12 909 |
+| G hedefli, koşu 2 (g21–g30) | 10 | 5 | 23 | 22 802 | 33 790 | 570 711 | 6 215 |
+| G hedefli, koşu 2 (g31–g38; g38 altyapı hatası) | 8 | 2 | 15 | 10 224 | 18 173 | 435 120 | 4 302 |
+| G hedefli, koşu 2 (g38–g52) | 12 | 7 | 23 | 28 648 | 16 988 | 508 796 | 5 396 |
+| G ayrık, ilk koşu (yapısal düzeltmelerden önce) | 22 | 14 | 29 | 87 | 16 582 | 1 077 083 | 7 903 |
+| G ayrık, son kod (x01–x11; x11 altyapı hatası) | 11 | 7 | 14 | 42 | 17 917 | 508 765 | 3 643 |
+| G ayrık, son kod (x11–x22) | 12 | 9 | 19 | 57 | 30 412 | 690 060 | 5 734 |
+| F hedefli o33 / o39 / o20 (uçtan uca) | 3 | 1 | 6 | 6 350 | 5 844 | 145 040 | 1 911 |
+| F ayrık 24 (dal) | 24 | 14 | 36 | 108 | 57 218 | 1 305 288 | 11 161 |
+| F ayrık 24 (`main`, aynı koşul) | 24 | 14 | 39 | 117 | 103 015 | 1 427 964 | 10 940 |
+| F özgün 40 (dal; o01–o14, o15–o28, o29–o40) | 40 | 9 | 88 | 116 680 | 72 308 | 1 852 858 | 23 581 |
+| F özgün 40 (`main`, aynı koşul, aynı parçalar) | 40 | 8 | 82 | 99 651 | 78 334 | 1 869 791 | 20 442 |
+
+`main` koşularının sayıları defterden toplandı (`main`'deki nitelendirme betiği raporu ilk vakadan sonra yazıyordu; bu dalda
+düzeltildi). Dal ve `main` koşuları aynı saat aralığında, aynı model, bütçe ve vaka parçalarıyla yapıldı.
+
+**Özet:** G hedefli kümede her vakanın son koşusuyla **21/49** (planlayıcı + düzen modeli, kanıtlı yanıt ve bütün yapısal
+beklentiler); G ayrık kümede son kodla **16/22** (x11 altyapı hatasından sonra yeniden koşuldu). F ayrık kümede dal ile `main`
+aynı koşulda **14/24 = 14/24** (başarısız kümeleri farklı; h03 ve h23 dalda geçti, `main`'de geçmedi); F özgün 40 vakada dal
+**9/40**, `main` **8/40** (o01–o14 parçasında aynı iki vaka; kalan farklar Derin devri ve plan değişkenliğidir: o26 dalda Derin devri,
+o31/o39 `main`'de başarısız). Gerileme göstergesi yoktur. F özgün kümenin düşük mutlak sonucu, kayıtlı 28/39'dan sonra eklenen katı
+denetimlerden (en sık `analitik yönler eksik`: altın planın bütün yönleri okunmalı) gelir ve `main`'de de aynıdır.
+
+**Başarısızlık sınıfları (G hedefli):** (1) planlayıcının kapsam/düzey/yön seçimi altın plandan farklı ya da plan geçersiz
+(g01, g03, g05, g07, g13–g15, g17, g19, g20, g27, g28, g30–g32, g34, g35, g38, g51); (2) Haiku düzeni reddedilip Derin anlatım
+istendi, yanıt sunucu düzeniyle doğru teslim edildi (g04, g25, g29, g33, g41, g43; F'deki o33/o39 ile aynı sınıf; aynı vakaların
+yeniden koşusunda düzen kabul edildi — model değişkenliği); (3) beklenti fazlası: g10, g11, g14 düzey adı geçmeyen "ekibim"
+sorusunda birim düzeyi bekliyordu ve g15 sorusu kapsam adı taşımıyordu — canlı koşudan SONRA düzeltildi (düzeysiz ekip; soruya
+"Birimimin"), koşu sonuçları düzeltmeyle yeniden puanlanmadı; (4) g47 planlayıcı kişi yerine proje kırılımı seçti (yığılmış
+grafik ayrık açık/tamamlanan bölümlerinden kurulduğu için doğrudur; puanlayıcı yalnızca birbirini kapsayan serilerin
+yığılmasını ihlal sayacak biçimde düzeltildi).
+
+**Kanonik planlayıcı kapısı (117/117 + 19/19):** anlamsal danışmanlık (şirket içi gömme/yeniden sıralama) gerektirdiğinden
+bu ortamda koşulamaz; G için ölçülmedi.
+
+### 7.4b Zayıf model güvenilirliği düzeltmeleri ve yeniden ölçüm (10–11 Kasım 2026)
+
+**Durum: YAKINSAMADI.** Kök nedenler Haiku'nun GERÇEK planlarının belirlenimci yeniden oynatılmasıyla doğrulanıp düzeltildi ve her
+düzeltmeden sonra kümeler yeniden koşuldu. Sonuçlar belirgin biçimde iyileşti ama 49/49 ve 22/22 hedefi sağlanmadı.
+
+Koşul: `claude-haiku-4-5-20251001`, `--effort low`, düşünme 0 (her çağrıda kayıttan doğrulandı), Derin modele giden çağrı modele
+gitmez ve başarısızlıktır. Son üç tur `PLANNER_CLAUDE_FORCED_RETRY=1` ile koşuldu (üretimin adlı araç seçiminin CLI karşılığı;
+yeniden denemeler `forcedRetries` olarak ayrıca sayılır). Altyapı hatası yoktur.
+
+| Küme | Kayıtlı önceki | Taban (bu oturum) | Tur 1 | Tur 2 | Tur 3 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| G hedefli (49) | 21 | 21 | 32 | 32 | **33** |
+| G ayrık (22) | 16 | 18 | 15 | 14 | 17, **17** |
+| F hedefli (40) | 9 | — | 13 | 20 | **17** |
+| F ayrık (24) | 14 | — | 18 | 16 | 19, **21** |
+
+Aynı kodla art arda koşularda küme başına yaklaşık ±3 vakalık model değişkenliği vardır (F hedefli 20 ve 17 aynı düzeltme kümesinin
+iki koşusudur): tek koşu kesin sayı değildir. Tur 3 ölçüleri: G hedefli 99 çağrı (ilk bildirimde geçen 28, Derin devir 3, zorunlu
+araç yeniden denemesi 5; girdi 118 706, önbellek yazma 113 972, önbellek okuma 2 212 526, çıktı 25 646), F hedefli 88 çağrı (ilk
+bildirimde geçen 15, Derin devir 7), G ayrık 23, F ayrık 44 çağrı.
+
+**Düzeltilen kök nedenler** (her biri regresyon sınamasıyla):
+
+| Kök neden | Düzeltme |
+| --- | --- |
+| Geçerli onarım "kapsam değişti" diye reddedilip Derin'e devrediliyor | Onarım karşılaştırması reddedilen yollar çıkarıldıktan sonra yeniden normalleştirilir; kapsam, düzey, ad ve yön değişikliği eskisi gibi reddedilir |
+| Model düzeninde tek hatalı blok bütün düzeni reddettirip Derin anlatıma devrediyor | Düzyazı düzeninde hatalı seçim yalnızca o bloğu düşürür; kapsamı sunucu tamamlar. Bozuk biçimli blok ve kimlik düzeni katı kalır |
+| Eşdeğer yazımlar onarım turu harcıyor | `intent: analysis` + özet, özetteki `reasoning`, `null` alan, aynı günleri gösteren dönem çifti, dizi biçimli istek, `assignee: any`, süzgeçte proje adı, istek içindeki grafik tercihi, listede bağsız `task.project` ilk bildirimde kabul edilir |
+| Bölüm/direktörlük düzeyinde alt birim kırılımı modelin seçimine kalıyor | Okuma sunucuca eklenir (isteğe bağlı; yer yoksa eklenmez) |
+| Portföy + "önümüzdeki 7 gün" portföy okumasını düşürüyor | Bu dönem portföyün kendi ölçüsüdür |
+| Planlayıcı yönergesi dağınık ve eksik | Özet/istek ayrımı, yön, örgütsel düzey, dönem, sınırlar, "belirsiz değildir" ve tarihsel eğilim kuralları ayrı adlandırıldı |
+| Puanlayıcı: göreli gün planlayıcı derleminin gününden çözülüyordu; sunucunun eklediği okumalar yön sayılmıyordu; eşdeğer açık istek özet bağlamı olmadığı için başarısızdı | Göreli gün vakanın koştuğu günden; okunan yönler sunucu okumalarını sayar; canlı puanda kapsam okuma düzeyinde sınanır |
+| Bağdaştırıcı: CLI makinenin tarihini modele ekliyor | Ortam notu ve sistem yönergesindeki günün yinelenmesi; önbellek öneki değişmez |
+
+**Düzyazı.** Genel değerlendirme genel durum cümlesiyle açılır; öncelikler numaralı liste yerine sıra bağlaçlı tek kapanış cümlesidir
+("Özetle öncelik sırası şöyle: önce …; ardından …; son olarak …"). Açık kalan: bölüm başlıkları ve tablo üstü sayım cümleleri girişte
+söylenen sayıyı yineliyor; açılış cümlesi kapsamı adlandırmıyor; düzyazı kabulü sağlanmadı.
+
+**Açık kalan model davranışları.** (1) Kullanıcının kendi birimi/bölümü sorulduğunda ad isteme (`clarify`). (2) Sorunun saydığı
+yönlerden birinin atlanması (F hedeflideki `analitik yönler eksik`). (3) İlk yanıtın düz metin olması onarım hakkını tüketiyor.
+(4) Altıdan çok yön ya da ikiden çok grafik yazılması. (5) g05, g07, g32, g35 beklentileri sorunun adlandırmadığı bir yön ya da kapsam
+istiyor; beklenti değiştirilmedi. (6) Dört görünümlü betikli arayüz kabulü (36 ekran) sonraki değişikliklerden sonra tarayıcıyla
+yeniden koşulmadı; yakınsama turunda yalnızca B profili masaüstü görünümde yeniden koşuldu (§7.8).
+
+### 7.5 Görsel kabul (gerçek arayüz, betikli planlar)
+
+Gerçek `next build` + SQL ikizi (yönetici sentetik verisi, `UI_SEED=executive`) + yeni betikli uç
+(`scripts/ui-acceptance/scriptedBridge.mjs`, `UI_SCRIPTED=1`): planlayıcı turunda altın plan, düzen turunda kapsayan düzen;
+model çağrısı yoktur, model kalitesi bu kanıtın kapsamında değildir. 9 G vakası (çok kapsamlı özet, örgütsel kırılım, proje
+sağlığı, kadro tamlığı, portföy + ekip + kilometre taşı, özet + grafik + liste, örtüşen seriler, bütçeyi aşan kapsam, iki proje
+sağlığı) × 4 görünüm (masaüstü/mobil × açık/koyu) = **36 ekran görüntüsü, 0 başarısızlık** (önceki turun sonucu; o turdan sonraki
+değişikliklerle dört görünüm yeniden koşulmadı); görüntüler incelendi. İnceleme
+bulguları ve düzeltmeleri: dar ekranda tablo hücresi adı sözcük ortasından bölüyordu (hücre artık yalnızca sözcük sınırında
+kırılır; tablo kendi kabında kayar); kapsam karşılaştırması sayıları bölümlerle yineliyordu (giriş artık yalnızca oranları
+karşılaştırır); yığılmış grafik başlığı grubu adlandırmıyordu ("Projelere göre durum"); dönemli öncelik satırları "kendi
+işleriniz · …:" etiketiyle başlıyordu ("Kendi işlerinizde (…):"); boş görev listesi "Gösterilecek görev yok (ölçüt: …)"
+diyordu ("Açık göreviniz yok."). Haiku ile canlı arayüz koşusu hesap kotası nedeniyle yapılmadı.
+
+### 7.6 Hedef soruların durumu
+
+| Soru | Önceki sınıf | Aşama G | Belirlenimci | Haiku (son koşu) |
+| --- | --- | --- | --- | --- |
+| Q2 (o02) | kısmi → G | tam: kadro okumasıyla iş yükü yayılımı + kapasite çekincesi | ✓ | yön seçimi farklı (`main` ile aynı) |
+| Q4 (o04) | kısmi → G | kısmi (veri): portföy genelindeki kişilerin kadrosu yoktur; kişi yoğunlaşması gerekçeli kısmi yanıttır | ✓ | yön seçimi farklı (`main` ile aynı) |
+| Q6 (o06) | kısmi → G | tam: yayılım + gecikmede ilk sıradakiler | ✓ | yön seçimi farklı (`main` ile aynı) |
+| Q9 (o09) | kısmi → G | tam: direktörlük → bölüm kırılımı (örtüşme kuralıyla) | ✓ | `main`'de Derin devri; dalda yön seçimi farklı |
+| Q12 (o12) | tam (G sınırı) | kilometre taşı durumu eklendi | ✓ | ✓ |
+| Q13 (o13) | kısmi → G | tam: görev sayısı ≠ baskı | ✓ | yön seçimi farklı (`main` ile aynı) |
+| Q14 (o14) | kısmi → G | tam: tam kadroda gecikmede ilk sıradakiler | ✓ | yön seçimi farklı |
+| Q15, Q19, Q28, Q38 | kısmi/sınırlı → G | tam: tamamlanmaya karşın gecikme; çok kapsamlı plan; örtüşen seri notu; özet + liste | ✓ | o15 yön seçimi; o19 farklı ek kapsam + Derin devri; o28 yön seçimi; o38 ufuk okunmadı (G'de birleşik plan: g51 ✗, g52 ✓) |
+| h03, h18, h23 | açık | düzey; kapasite sorusu; kendi + kişi | — | h03 ✓, h18 ✓, h23 ✓ (dal; `main`'de h03/h23 başarısız) |
+| o33, o39, o20 | kararsız | — | ✓ | o39 ✓; o33 durum grubu kanıtı ve halka grafik yok; o20 doğrulanmış yanıt yok (`grounding_failed`) |
+
+### 7.7 Sınırlar ve Aşama H bağımlılıkları
+
+Kapasite verisi yoktur (görev adedi emek değildir); tarihsel karşılaştırma, dönem kıyası, tamamlanma eğilimi ve çoklu ufuk H'dir
+(g23, o07, o27, o30). Kritik yol hesaplanmaz. Kilometre taşı listesi ilk 8 satırla sınırlıdır (kesik listede gecikmiş sayısı ancak
+sıradaki tarih görünürse kesindir). Portföy proje tablosu en çok 25 projedir (fazlasında projeler arası bulgu kurulmaz). Çok kapsamlı
+plan en çok üç kapsamdır; farklı dönemli kapsamlar tek planda kabul edilmez. Haiku'da en sık açık davranışlar: kapsam/yön seçimi,
+geçersiz plan tekrarı, düzen reddi → Derin isteği (model değişkenliği; aynı vakalar yeniden koşuda geçebiliyor).
+
+### 7.8 Yakınsama turu (12 Kasım 2026)
+
+PR #116 inceleme bulguları (60 bulgu, `0eb4a21` üzerinde) kök nedenlerine göre birleştirilip düzeltildi; her düzeltilen kök neden,
+düzeltme olmadan başarısız olduğu doğrulanan bir regresyon sınamasıyla korunur (yedek isteğin son doğrulama reddinde geri alınması
+hariç: bu yol genel arayüzden belirlenimci olarak üretilemez, değişmez kod incelemesiyle doğrulandı).
+
+- **Kanıt ve anlatım:** sıralı önekten satır düştüyse sıralama başı, kesin kilometre taşı sayısı ve en uzun gecikme kurulmaz; metin,
+  iş dağılımı düğümü, öncelik ya da oluşturan koşuluyla daraltılmış liste açık kilometre taşı nüfusu sayılmaz; adaş kilometre taşları
+  proje adıyla ayrılır; durumla daraltılmış tablodan tamamlanma payı kurulmaz; bulgu yinelemesi sayıları ve sıradan bağımsız kimlik
+  kümesini anahtarlar; kendi işleri + proje örtüşmesi "kişinin işleri" diye anlatılmaz; daraltılmış sıfır sayıma "boşta değil" çekincesi
+  eklenmez; örgütsel satırda sorumlu kapsamı ölçütte kalır; proje süzgeçli kadro notu sıfır satırı seçilen projeyle sınırlar.
+- **Düzen:** yumuşak işlemle boşalan paragraf parçası yanıtı reddettirmez; tablo girişi yalnızca tablo hemen ardındaysa bastırılır;
+  çok kapsamlı özetin yanındaki açık istek bölümü başlığını korur; örtüşen seri notu yalnızca iş yükü grafiğini yerine geçen grafik
+  sayar; tamamlanamayan kapsam bölümü yönüyle adlandırılır ve kısmen okunan kapsamın okunmayan yön notu korunur.
+- **Plan ve onarım:** daraltılmış birincil kapsamın ek yinelemesi birleşmez; dizi olmayan yön katlanmaz; kişiyle kendini
+  karşılaştırmada anlamsız yön reddedilir; fazla ek istek kısaltılmadan reddedilir; yazılmamış koleksiyon etkin koleksiyonla
+  eşleşir; birleşen açık tam liste sıralama yedeğine düşmez; açık istekle okunan yön "gösterilmedi" diye not edilmez; boş ek istekten
+  sonraki onarım yolu kendi yuvasına bağlanır; nüfus reddi ölçüyü değiştirme izni değildir; yalnızca açık istek tamamlanamadıysa özetin
+  takip bağlamı kurulur; yedek istek kabul edilmezse planlayıcının özgün isteği geri konur; kadro değişim denetimi canlı üyeliği tek
+  deyimle okur; planlayıcı yönergesi sayı verilen sıralamayı ve adlı proje karşılaştırmasını doğru yola yönlendirir.
+- **Kabul denetimleri:** dönem okuması başarılı olmalı; kilometre taşı ve proje kırılımı yönleri nüfusuyla sınanır; atlanan yön notu
+  yalnızca adını verdiği kapsamın yönünü mazur gösterir; açık liste ek daraltmasız, istenen sıra ve sınırla, satırlarıyla teslim
+  edilmeli; eksik kadro çekincesi yalnızca iş yükü kanıtında ihlaldir; tek kapsamlı ekip turunun yönleri kanıtla sınanır; özetin dönemi
+  beklentiye girer; planlayıcı puanı beklenmeyen kapsamı reddeder (x09), kadroyla okunan iş yükü ister (x04) ve planlanan x20 yanıtında
+  birim nüfusu ister; betikli kipte sunucu yeniden yürütme sözleşmesi denetlenir ve hiç betikli konuşması olmayan profil eksik
+  kapsamdır; G1–G3 kabulü kapsam başlıklarını, birim tablosunu ve kilometre taşı adlarını ister; Ilgaz bölüm ve direktörlük kapsamlarında
+  da üyedir; zorunlu turdaki düz metin yeniden denemesi önbellek zorunluluğunu atlatamaz.
+- **Doğrulama (bu tur):** `npm test -- --test-concurrency=4` **6065/6065** (başarısız/atlanan 0); `npm run lint` uyarısız;
+  `NEXT_TELEMETRY_DISABLED=1 npm run build` başarılı; betikli arayüz kabulü (`UI_SCRIPTED=1 UI_SEED=executive`, B profili, masaüstü,
+  varsayılan tema) G1–G5 **5/5** (B profilinin diğer 21 konuşması betikli planı olmadığından koşulmadı). Mobil/koyu görünümler ve Haiku
+  nitelendirmesi bu turda yeniden koşulmadı; Haiku sonuçları §7.4b'deki son ölçümdür (yakınsamadı).
+- **Kapsam dışı bırakılan (gerekçeli):** kadro anlık görüntüsü satır sınırına bağlanmadı (sınır, sınırın ötesindeki üyelerin görevlerini
+  sessizce dışarıda bırakırdı; okuma ekip büyüklüğüyle sınırlıdır ve SQL süre bütçesi geçerlidir); öncelik kapanışı paragraf düzeyinde
+  atıf taşır (bütün akıcı paragraflarla aynı sözleşme).

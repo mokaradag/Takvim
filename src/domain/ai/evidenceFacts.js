@@ -273,7 +273,8 @@ export function factPresentation(fact, locale = 'tr') {
     ? (locale === 'en' ? 'Undefined because of a WBS cycle' : 'WBS döngüsü nedeniyle tanımsız')
     : fact.semantic?.nullMeaning === 'over-limit'
       ? (locale === 'en' ? 'Not exact: exceeds the analysis limit' : 'Kesin değil: analiz sınırını aşıyor')
-      : (locale === 'en' ? 'Not specified' : 'Belirtilmemiş');
+      : fact.semantic?.nullMeaning === 'not-overdue' ? (locale === 'en' ? 'Not overdue' : 'Gecikmemiş')
+        : (locale === 'en' ? 'Not specified' : 'Belirtilmemiş');
   else if (enumValues && leaf !== 'key') value = enumValues[value]?.[locale === 'en' ? 1 : 0] || (locale === 'en' ? 'Unknown value' : 'Bilinmeyen değer');
   else if (fact.semantic?.displayValue != null) value = fact.semantic.displayValue;
   else if (typeof value === 'boolean') value = value ? (locale === 'en' ? 'Yes' : 'Evet') : (locale === 'en' ? 'No' : 'Hayır');

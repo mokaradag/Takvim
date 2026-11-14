@@ -368,7 +368,11 @@ export function assigneesByTask(rows = []) {
       identityVisible,
       resolved: row.Resolved == null ? true : Boolean(row.Resolved),
       // Yönetim kapsamındaki çalışan (ekip süzgecinin düzeyiyle); kimliği her zaman açıktır.
-      teamMember: identityVisible && Boolean(row.TeamMember)
+      teamMember: identityVisible && Boolean(row.TeamMember),
+      // Aşama G: dizindeki örgütsel birim yalnızca kimliği açık sorumluda taşınır (gizli eş sorumlunun birimi açıklanmaz).
+      unit: identityVisible && row.Unit != null && String(row.Unit).trim() ? String(row.Unit).trim() : null,
+      department: identityVisible && row.Department != null && String(row.Department).trim() ? String(row.Department).trim() : null,
+      directorate: identityVisible && row.Directorate != null && String(row.Directorate).trim() ? String(row.Directorate).trim() : null
     };
     if (!person.name && person.sicil == null) continue;
     if (!byTask.has(taskId)) byTask.set(taskId, []);

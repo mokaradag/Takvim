@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import net from 'node:net';
+import { createServer } from 'node:http';
 const root = resolve('.');
 const directory = (t) => { const dir = mkdtempSync(join(tmpdir(), 'rota-kabul-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
 const run = (file, args, env = {}) => spawnSync(process.execPath, [resolve(file), ...args], { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 10000 });
@@ -289,4 +290,226 @@ test('rapor sıfır model çağrılı olağan koşuyu başarısız sayar ve ayr�
   assert.equal(JSON.parse(readFileSync(file, 'utf8'))[0].conversation, 'eksik model kanıtı');
   row.serverReplay = true; writeFileSync(file, JSON.stringify([row]));
   assert.equal(run('scripts/ui-acceptance/report.cjs', [join(dir, 'out')], { UI_RUN_ID: '' }).status, 0);
+});
+
+/** Tarayıcı sınırını taklit eden sürücü dizini: her tur başarılı bir yanıt ve bu tura ait sunucu kaydı üretir. */
+function fakeDriverDir(t) {
+  const dir = directory(t); mkdirSync(join(dir, 'node_modules', 'playwright'), { recursive: true });
+  copyFileSync(resolve('scripts/ui-acceptance/drive.cjs'), join(dir, 'drive.cjs'));
+  copyFileSync(resolve('scripts/ui-acceptance/expectations.cjs'), join(dir, 'expectations.cjs'));
+  writeFileSync(join(dir, 'node_modules', 'playwright', 'index.js'), `
+const fs=require('fs'),path=require('path');
+const locator={first(){return this},getByRole(){return this},getByTitle(){return this},isVisible:async()=>false,click:async()=>{},getAttribute:async()=> 'true',waitFor:async()=>{},count:async()=>0,fill:async()=>{},press:async()=>{},screenshot:async()=>{}};
+const page={goto:async()=>{},getByRole:()=>locator,getByTitle:()=>locator,locator:()=>locator,waitForTimeout:async()=>{},waitForFunction:async()=>{},setViewportSize:async()=>{},evaluate:async()=>{
+ fs.appendFileSync(path.join(process.env.UI_ACCEPTANCE_DIR,'app-B.log'),JSON.stringify({operation:'ai.grounded.turn',context:{outcome:'grounded',evidence:1}})+'\\n');
+ return {status:'complete',text:'Yanıt',charts:[],tables:[]};
+}};
+exports.chromium={launch:async()=>({newContext:async()=>({newPage:async()=>page}),close:async()=>{}})};`);
+  mkdirSync(join(dir, 'out'));
+  return dir;
+}
+
+test('veri tohumu uyuşmayan konuşma atlanır ama önceki satırı silinmez; atlanan konuşma eksik kapsamdır ve rapor başarı saymaz', (t) => {
+  const dir = fakeDriverDir(t);
+  writeFileSync(join(dir, 'out', 'B.json'), JSON.stringify([{ runId: 'eski', conversation: 'G1', calls: [] }]));
+  const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [{ name: 'G1', detail: 'balanced', turns: ['yönetici sorusu'], seed: 'executive' }] };
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
+  writeFileSync(join(dir, 'run.json'), JSON.stringify({ runId: 'güncel' }));
+  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_ONLY: 'G1', UI_RUN_ID: 'güncel', UI_SEED: '' });
+  assert.equal(result.status, 0, result.stderr);
+  const rows = JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
+  assert.deepEqual(rows.map((row) => [row.runId, row.conversation, Boolean(row.skipped)]), [['eski', 'G1', false], ['güncel', 'G1', true]], 'önceki geçerli satır korunur');
+  const report = run('scripts/ui-acceptance/report.cjs', [join(dir, 'out')], { UI_RUN_ID: 'güncel' });
+  assert.equal(report.status, 1, report.stdout);
+  assert.match(report.stdout, /Kapsam eksik \(sınanmadı\): B\/G1/u);
+});
+
+test('yalnızca seçilen konuşma yeniden koşulduğunda aynı koşunun seçilmeyen atlanmış konuşmaları rapordan düşmez', (t) => {
+  const dir = fakeDriverDir(t);
+  // G1 bu koşuda geçerli planlayıcı çağrısı kanıtıyla geçer: raporun başarısızlığı yalnızca atlanmış G2'den gelebilir.
+  const playwright = join(dir, 'node_modules', 'playwright', 'index.js');
+  writeFileSync(playwright, readFileSync(playwright, 'utf8').replace("return {status:'complete'",
+    "fs.appendFileSync(path.join(process.env.UI_ACCEPTANCE_DIR,'calls.jsonl'),JSON.stringify({purpose:'plan',ok:true,toolCalls:['rota_plan'],models:['claude-haiku-4-5-20251001'],thinking:'off',thinkingTokens:0})+'\\n');\n return {status:'complete'"));
+  // Aynı koşuda G1 ve G2 atlanmıştı (veri tohumu yoktu); şimdi yalnızca G1 yeniden koşuluyor. Atlanmış satır sürücünün yazdığı tam biçimdedir.
+  const skippedRow = (conversation) => ({ runId: 'güncel', skipped: 'UI_SEED=executive gerekir', failures: ['kapsam eksik: UI_SEED=executive gerekir'], profile: 'B', conversation,
+    detail: 'balanced', turn: 0, question: 'soru', ms: 0, rendered: { status: 'skipped', tables: [], charts: [] }, server: null, calls: [] });
+  writeFileSync(join(dir, 'out', 'B.json'), JSON.stringify([skippedRow('G1'), skippedRow('G2')]));
+  const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [{ name: 'G1', detail: 'balanced', turns: ['birinci soru'] },
+    { name: 'G2', detail: 'balanced', turns: ['ikinci soru'], seed: 'executive' }] };
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
+  const driven = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_ONLY: 'G1', UI_RUN_ID: 'güncel', UI_SEED: '' });
+  assert.equal(driven.status, 0, driven.stderr);
+  const rows = JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
+  assert.ok(rows.some((row) => row.conversation === 'G1' && !row.skipped && !row.failures.length), 'seçilen konuşma koşuldu ve geçti');
+  assert.ok(rows.some((row) => row.conversation === 'G2' && row.skipped), 'seçilmeyen atlanmış konuşma korunur');
+  assert.equal(rows.filter((row) => row.conversation === 'G1' && row.skipped).length, 0, 'yeniden koşulan konuşmanın atlanmış satırı yenilenir');
+  const report = run('scripts/ui-acceptance/report.cjs', [join(dir, 'out')], { UI_RUN_ID: 'güncel' });
+  assert.equal(report.status, 1, 'sınanmamış konuşma varken rapor başarı saymaz');
+  assert.equal(report.stderr, '', 'rapor çökmeden kapsam denetimine ulaşır');
+  assert.match(report.stdout, /Kapsam eksik \(sınanmadı\): B\/G2 /u);
+  // Atlanmış satır kaldırılırsa aynı koşu başarılıdır: başarısızlığın nedeni yalnızca eksik kapsamdır.
+  writeFileSync(join(dir, 'out', 'B.json'), JSON.stringify(rows.filter((row) => !row.skipped)));
+  assert.equal(run('scripts/ui-acceptance/report.cjs', [join(dir, 'out')], { UI_RUN_ID: 'güncel' }).status, 0);
+});
+
+test('betikli kipte seçilen profilin hiç betikli konuşması yoksa eksik kapsam yazılır ve rapor başarı saymaz', (t) => {
+  const dir = fakeDriverDir(t);
+  const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [{ name: 'plansız', detail: 'balanced', turns: ['altın planı olmayan soru'] }] };
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
+  // Betikli plan listesi boş dönen yerel uç.
+  const server = createServer((request, response) => { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ questions: [] })); });
+  return new Promise((resolveTest, rejectTest) => server.listen(0, '127.0.0.1', () => {
+    const port = server.address().port;
+    const proc = spawn(process.execPath, [join(dir, 'drive.cjs'), join(dir, 'scenario.json'), join(dir, 'out')], { env: { ...process.env, UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1', BRIDGE_PORT: String(port) } });
+    proc.on('close', () => {
+      server.close();
+      try {
+        const rows = JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
+        assert.deepEqual(rows.map((row) => [row.profile, row.skipped]), [['B', 'betikli plan yok']]);
+        const report = run('scripts/ui-acceptance/report.cjs', [join(dir, 'out')], { UI_RUN_ID: 'güncel' });
+        assert.equal(report.status, 1);
+        assert.match(report.stdout, /Kapsam eksik \(sınanmadı\): B\/plansız/u);
+        resolveTest();
+      } catch (error) { rejectTest(error); }
+    });
+  }));
+});
+
+test('betikli kipte sunucu yeniden yürütme turu yeni planlayıcı çağrısıyla geçemez', async () => {
+  const { replayFailures } = (await import('../scripts/ui-acceptance/expectations.cjs')).default;
+  const grounded = { outcome: 'grounded', evidence: 1 };
+  const scriptedPlan = { purpose: 'plan', ok: true, scripted: true, toolCalls: ['rota_plan'] };
+  assert.ok(replayFailures({ serverReplay: true }, grounded, [scriptedPlan]).length > 0, 'betikli planlayıcı çağrısı yeniden yürütmenin yerine geçmez');
+  assert.ok(replayFailures({ serverReplay: true }, { ...grounded, evidence: 0 }, []).length > 0);
+  assert.deepEqual(replayFailures({ serverReplay: true }, grounded, []), []);
+  assert.deepEqual(replayFailures(null, grounded, [scriptedPlan]), [], 'olağan betikli turda yeniden yürütme denetimi yoktur');
+});
+
+test('betikli kipte model düzeniyle çizilen tur düzen çağrısı kanıtı olmadan geçemez', async () => {
+  const { scriptedFailures, modelFailures } = (await import('../scripts/ui-acceptance/expectations.cjs')).default;
+  const composed = { outcome: 'grounded', evidence: 1, presentation: { mode: 'composed', server: false } };
+  const plan = { purpose: 'plan', ok: true, scripted: true, toolCalls: ['rota_plan'] };
+  const compose = { purpose: 'compose', ok: true, scripted: true, toolCalls: [] };
+  assert.deepEqual(scriptedFailures(null, composed, [plan]), ['model düzeni çağrı kanıtı yok'], 'düzen çağrısı kaydı olmayan betikli tur reddedilmeli');
+  assert.deepEqual(scriptedFailures(null, composed, [plan, { ...compose, ok: false }]), ['model düzeni çağrı kanıtı yok'], 'başarısız düzen çağrısı kanıt sayılmamalı');
+  assert.deepEqual(scriptedFailures(null, composed, [plan, compose]), [], 'düzen çağrısı kaydı olan betikli tur geçmeli');
+  assert.deepEqual(scriptedFailures(null, { ...composed, presentation: { mode: 'composed', server: true } }, [plan]), [], 'sunucu düzeni düzen çağrısı gerektirmez');
+  assert.ok(modelFailures(null, composed, [{ ...plan, models: ['claude-haiku-4-5-20251001'], thinking: 'off', thinkingTokens: 0 }]).includes('model düzeni çağrı kanıtı yok'), 'canlı kipte de aynı denetim uygulanmalı');
+});
+
+test('UI_SCRIPTED=1 tek başına model kabulünü kapatmaz: betikli uç kaydı yoksa model çağrısı denetimi uygulanır', (t) => {
+  const dir = fakeDriverDir(t);
+  const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [{ name: 'durum', detail: 'balanced', turns: ['durumum'] }] };
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
+  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1', BRIDGE_PORT: '1' });
+  assert.equal(result.status, 1, result.stderr);
+  const [row] = JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8'));
+  assert.equal(row.scripted, undefined);
+  assert.ok(row.failures.includes('planlayıcı model çağrısı kanıtı yok'), row.failures.join('; '));
+  // Betikli uç kaydı varsa (scripted: true) model kabulü uygulanmaz.
+  const scriptedDir = fakeDriverDir(t);
+  const bridgeLog = join(scriptedDir, 'node_modules', 'playwright', 'index.js');
+  writeFileSync(bridgeLog, readFileSync(bridgeLog, 'utf8').replace("return {status:'complete'",
+    "fs.appendFileSync(path.join(process.env.UI_ACCEPTANCE_DIR,'calls.jsonl'),JSON.stringify({purpose:'plan',ok:true,scripted:true,toolCalls:['rota_plan']})+'\\n');\n return {status:'complete'"));
+  writeFileSync(join(scriptedDir, 'scenario.json'), JSON.stringify(scenario));
+  const scripted = run(join(scriptedDir, 'drive.cjs'), [join(scriptedDir, 'scenario.json'), join(scriptedDir, 'out')], { UI_ACCEPTANCE_DIR: scriptedDir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1', BRIDGE_PORT: '1' });
+  assert.equal(scripted.status, 0, scripted.stderr);
+  assert.equal(JSON.parse(readFileSync(join(scriptedDir, 'out', 'B.json'), 'utf8'))[0].scripted, true);
+});
+
+test('betikli kabul yalnızca bütün turlarının altın planı olan konuşmaları koşar; plansız soru açıklama kararıyla geçmez', async (t) => {
+  const dir = fakeDriverDir(t);
+  const child = spawn(process.execPath, ['scripts/ui-acceptance/scriptedBridge.mjs'], { cwd: root, env: { ...process.env, BRIDGE_PORT: '0', BRIDGE_CALLS: join(dir, 'calls.jsonl'), UI_PROFILE: 'B' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => child.kill());
+  const port = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('betikli uç açılmadı')), 5000);
+    // Hazır satırı tam satır olarak ayrıştırılır: stdout parçalı gelse de kapı numarası satır sonuna kadar beklenir.
+    let pending = '';
+    child.stdout.on('data', (chunk) => {
+      pending += String(chunk);
+      for (let end = pending.indexOf('\n'); end >= 0; end = pending.indexOf('\n')) {
+        const line = pending.slice(0, end);
+        pending = pending.slice(end + 1);
+        const match = /^betikli uç hazır: (\d+)\s*$/u.exec(line);
+        if (match) { clearTimeout(timer); resolve(Number(match[1])); }
+      }
+    });
+    child.once('error', reject);
+  });
+  const { questions } = await (await fetch(`http://127.0.0.1:${port}/v1/scripted-plans`)).json();
+  const scenarios = JSON.parse(readFileSync('scripts/ui-acceptance/scenarios/B.json', 'utf8')).conversations;
+  const seeded = scenarios.filter((item) => item.seed === 'executive');
+  assert.ok(seeded.length >= 5);
+  // Yönetici verisi isteyen her konuşmanın her turu betikli plana sahiptir; diğer konuşmaların planı yoktur (model kabulü ister).
+  for (const item of seeded) assert.ok(item.turns.every((text) => questions.includes(text)), item.name);
+  assert.ok(scenarios.some((item) => !item.turns.every((text) => questions.includes(text))));
+  // Plansız soru: uç açıklama kararı döndürür ve çağrıyı `unscripted` olarak işaretler.
+  const ask = (content) => fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content }] }) }).then((response) => response.json());
+  assert.match((await ask('altın planı olmayan soru')).choices[0].message.tool_calls[0].function.arguments, /"clarify"/u);
+  assert.doesNotMatch((await ask(seeded[0].turns[0])).choices[0].message.tool_calls[0].function.arguments, /"clarify"/u);
+  const calls = readFileSync(join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual(calls.map((call) => call.unscripted === true), [true, false]);
+  // Geçerli HTTP gövdesindeki bozuk düzen iletisi (geçersiz JSON görünüm) istemci hatasıdır: uç çökmez, sonraki istek yanıtlanır.
+  const malformed = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'OLGU SAYFASI (yalnızca veri):\n{bozuk' }] }) });
+  assert.equal(malformed.status, 400);
+  assert.doesNotMatch((await ask(seeded[0].turns[0])).choices[0].message.tool_calls[0].function.arguments, /"clarify"/u, 'uç ayakta kalır');
+  // Sürücü plansız konuşmayı eksik kapsam satırıyla korur; kısmi koşu tam kabul sayılmaz.
+  const scenario = { profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [
+    { name: 'planlı', detail: 'balanced', turns: [seeded[0].turns[0]] }, { name: 'plansız', detail: 'balanced', turns: ['altın planı olmayan soru'] }] };
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify(scenario));
+  const playwright = join(dir, 'node_modules', 'playwright', 'index.js');
+  const original = readFileSync(playwright, 'utf8');
+  const withCall = (extra) => writeFileSync(playwright, original.replace("return {status:'complete'",
+    `fs.appendFileSync(path.join(process.env.UI_ACCEPTANCE_DIR,'calls.jsonl'),JSON.stringify({purpose:'plan',ok:true,scripted:true,${extra}toolCalls:['rota_plan']})+'\\n');\n return {status:'complete'`));
+  withCall('');
+  const driven = await new Promise((resolve) => {
+    const proc = spawn(process.execPath, [join(dir, 'drive.cjs'), join(dir, 'scenario.json'), join(dir, 'out')], { env: { ...process.env, UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1', BRIDGE_PORT: String(port) } });
+    let stdout = ''; proc.stdout.on('data', (chunk) => { stdout += chunk; }); proc.on('close', (status) => resolve({ status, stdout }));
+  });
+  assert.equal(driven.status, 1, driven.stdout);
+  assert.match(driven.stdout, /betikli kapsam: B 1\/2 konuşma/u);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8')).map((row) => [row.conversation, row.scripted]), [['plansız', undefined], ['planlı', true]]);
+  // Kapsamdaki bir turda uç plan bulamadıysa (çağrı kaydı `unscripted`) tur başarısızdır.
+  withCall('unscripted:true,');
+  const failed = await new Promise((resolve) => {
+    const proc = spawn(process.execPath, [join(dir, 'drive.cjs'), join(dir, 'scenario.json'), join(dir, 'out')], { env: { ...process.env, UI_ACCEPTANCE_DIR: dir, UI_RUN_ID: 'güncel', UI_SCRIPTED: '1', BRIDGE_PORT: String(port) } });
+    proc.on('close', (status) => resolve({ status }));
+  });
+  assert.equal(failed.status, 1);
+  assert.ok(JSON.parse(readFileSync(join(dir, 'out', 'B.json'), 'utf8')).at(-1).failures.includes('betikli plan yok'));
+});
+
+test('belirli tablo beklentisi istenen sütunlu, satırlı ve görünür tabloyu ister; başka tablo yetmez', async () => {
+  const { semanticFailures } = (await import('../scripts/ui-acceptance/expectations.cjs')).default;
+  const expected = { tableHead: ['Görev', 'Termin'] };
+  assert.ok(semanticFailures(expected, { tables: [{ rows: 7, visible: true, head: ['Kişi', 'Açık görev'] }] }, { outcome: 'grounded' }).length > 0, 'özetin kişi tablosu yetmez');
+  assert.deepEqual(semanticFailures(expected, { tables: [{ rows: 7, visible: true, head: ['Kişi'] }, { rows: 5, visible: true, head: ['Görev', 'Termin'] }] }, { outcome: 'grounded' }), []);
+});
+
+test('betikli sunucu yeniden yürütmesi düz metin plan çağrısını da reddeder; olağan tur plan gerektirir', async () => {
+  const { replayFailures } = (await import('../scripts/ui-acceptance/expectations.cjs')).default;
+  const trace = { outcome: 'grounded', evidence: 1 };
+  for (const ok of [true, false]) assert.ok(replayFailures({ serverReplay: true }, trace, [{ purpose: 'plan', ok, toolCalls: [] }]).length);
+  assert.ok(replayFailures(null, trace, [{ purpose: 'compose', ok: true, toolCalls: [] }]).length);
+});
+
+test('istenen tema uygulanmadığında sürücü yanlış temayı kabul kanıtı saymaz', (t) => {
+  const dir = fakeDriverDir(t);
+  writeFileSync(join(dir, 'scenario.json'), JSON.stringify({ profile: 'B', port: 8102, appLog: 'app-B.log', conversations: [] }));
+  const result = run(join(dir, 'drive.cjs'), [join(dir, 'scenario.json'), join(dir, 'out')], { UI_ACCEPTANCE_DIR: dir, UI_THEME: 'dark' });
+  assert.equal(result.status, 1); assert.match(result.stderr, /istenen tema uygulanmadı/);
+});
+
+test('betikli köprü yazılamayan çağrı kaydından sonra ayakta kalır', async (t) => {
+  const dir = directory(t);
+  const child = spawn(process.execPath, ['scripts/ui-acceptance/scriptedBridge.mjs'], { cwd: root, env: { ...process.env, BRIDGE_PORT: '0', BRIDGE_CALLS: join(dir, 'olmayan', 'calls.jsonl'), UI_PROFILE: 'B' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => child.kill());
+  const port = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('betikli uç açılmadı')), 5000); let output = '';
+    child.stdout.on('data', (chunk) => { output += chunk; const match = /betikli uç hazır: (\d+)\n/u.exec(output); if (match) { clearTimeout(timer); resolve(Number(match[1])); } });
+    child.once('error', reject);
+  });
+  const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: 'Türkçe soru' }] }) });
+  assert.equal(response.status, 500);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/models`)).status, 200);
 });

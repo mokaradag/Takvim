@@ -52,8 +52,7 @@
     "gecikme yoğunlaşması",
     "dört yön"
    ],
-   "handling": "partial",
-   "dependsOn": "G",
+   "handling": "full",
    "plan": {
     "intent": "rota",
     "language": "tr",
@@ -68,7 +67,10 @@
     }
    },
    "expect": {
-    "caveat": true
+    "capacityCaveat": true,
+    "findings": [
+     "workloadSpread"
+    ]
    },
    "textEntities": []
   },
@@ -116,7 +118,7 @@
     "tamlık çekincesi"
    ],
    "handling": "partial",
-   "dependsOn": "G",
+   "dependsOn": "veri",
    "plan": {
     "intent": "rota",
     "language": "tr",
@@ -183,8 +185,7 @@
     "ekip dengesi",
     "tamlık çekincesi"
    ],
-   "handling": "partial",
-   "dependsOn": "G",
+   "handling": "full",
    "plan": {
     "intent": "rota",
     "language": "tr",
@@ -197,7 +198,11 @@
     }
    },
    "expect": {
-    "caveat": true
+    "capacityCaveat": true,
+    "findings": [
+     "workloadSpread",
+     "overdueLeader"
+    ]
    },
    "textEntities": []
   },
@@ -254,8 +259,7 @@
     "direktörlük düzeyi yetki",
     "örgütsel grup kırılımı"
    ],
-   "handling": "partial",
-   "dependsOn": "G",
+   "handling": "full",
    "plan": {
     "intent": "rota",
     "language": "tr",
@@ -263,13 +267,17 @@
      "scope": "team",
      "focus": [
       "workload",
+      "org",
       "projects"
      ],
      "level": "directorate"
     }
    },
    "expect": {
-    "caveat": true
+    "capacityCaveat": true,
+    "findings": [
+     "workloadSpread"
+    ]
    },
    "textEntities": []
   },
@@ -381,8 +389,7 @@
     "çok ölçülü karşılaştırma",
     "desteklenmeyen çıkarım"
    ],
-   "handling": "partial",
-   "dependsOn": "G",
+   "handling": "full",
    "plan": {
     "intent": "rota",
     "language": "tr",
@@ -394,7 +401,11 @@
      ]
     }
    },
-   "expect": {},
+   "expect": {
+    "findings": [
+     "volumeVsDelay"
+    ]
+   },
    "textEntities": []
   },
   {
@@ -407,8 +418,7 @@
     "kişi sıralaması",
     "kadro tamlığı"
    ],
-   "handling": "partial",
-   "dependsOn": "G",
+   "handling": "full",
    "plan": {
     "intent": "rota",
     "language": "tr",
@@ -421,7 +431,10 @@
     }
    },
    "expect": {
-    "caveat": true
+    "capacityCaveat": true,
+    "findings": [
+     "overdueLeader"
+    ]
    },
    "textEntities": []
   },
@@ -434,8 +447,7 @@
    "capabilities": [
     "tamamlanma + gecikme aynı tabloda"
    ],
-   "handling": "partial",
-   "dependsOn": "G",
+   "handling": "full",
    "plan": {
     "intent": "rota",
     "language": "tr",
@@ -447,7 +459,11 @@
      ]
     }
    },
-   "expect": {},
+   "expect": {
+    "findings": [
+     "completionDespiteOverdue"
+    ]
+   },
    "textEntities": []
   },
   {
@@ -536,7 +552,7 @@
     }
    },
    "expect": {
-    "caveat": true
+    "capacityCaveat": true
    },
    "textEntities": []
   },
@@ -549,10 +565,39 @@
    "capabilities": [
     "çok kapsamlı plan"
    ],
-   "handling": "limitation",
-   "dependsOn": "G",
-   "plan": null,
-   "expect": {},
+   "handling": "full",
+   "plan": {
+    "intent": "rota",
+    "language": "tr",
+    "analysis": {
+     "scope": "self",
+     "focus": [
+      "overview",
+      "overdue",
+      "upcoming"
+     ],
+     "also": [
+      {
+       "scope": "team",
+       "focus": [
+        "workload"
+       ]
+      },
+      {
+       "scope": "team",
+       "level": "department",
+       "focus": [
+        "projects"
+       ]
+      }
+     ]
+    }
+   },
+   "expect": {
+    "findings": [
+     "levelComparison"
+    ]
+   },
    "textEntities": []
   },
   {
@@ -645,7 +690,7 @@
     "chartTypes": [
      "bar"
     ],
-    "caveat": true
+    "capacityCaveat": true
    },
    "textEntities": []
   },
@@ -794,8 +839,7 @@
    "capabilities": [
     "örtüşen seriler yığılamaz"
    ],
-   "handling": "partial",
-   "dependsOn": "G",
+   "handling": "full",
    "plan": {
     "intent": "rota",
     "language": "tr",
@@ -807,7 +851,12 @@
     },
     "chart": "stacked"
    },
-   "expect": {},
+   "expect": {
+    "chartTypes": [
+     "bar"
+    ],
+    "overlapNote": true
+   },
    "textEntities": []
   },
   {
@@ -1055,7 +1104,7 @@
    },
    "expect": {
     "chart": true,
-    "caveat": true
+    "capacityCaveat": true
    },
    "textEntities": []
   },

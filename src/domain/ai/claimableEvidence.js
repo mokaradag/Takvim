@@ -134,7 +134,8 @@ const REGISTRY_ENTRIES = Object.freeze({
     ['task.calendar', p('task.calendar', 'text')], ['task.calendarSource', p('task.calendarSource', 'enum')],
     ...fields('task.dependencies', { predecessorCount: p('task.predecessorCount', 'dependencies'), successorCount: p('task.successorCount', 'dependencies') }),
     ...fields('task.recurrence', { rule: p('recurrence.rule', 'text'), ruleDescription: p('recurrence.rule', 'text'), occurrenceDate: p('recurrence.occurrenceDate', 'date') })],
-  rota_task_analytics: [...fields('definitions', { overdue: DEFINITION, dueNext7Days: DEFINITION, completionRatePercent: DEFINITION, today: x('date'), assignee: DEFINITION }),
+  rota_task_analytics: [...fields('definitions', { overdue: DEFINITION, dueNext7Days: DEFINITION, completionRatePercent: DEFINITION, today: x('date'), assignee: DEFINITION,
+    organization: DEFINITION }),
     ...fields('totals', TOTALS), ...fields('overdueAging.buckets.*', { label: x(), count: m('tasks.overdue', 'tasks') }),
     ['overdueAging.worstOverdueDays', m('tasks.worstOverdueDays', 'days')], ['hours.taskCount', m('tasks.total', 'tasks', 'tasks')], ...hoursPaths(),
     // Grup satırı yalnızca aracın ürettiği sayıları taşır (count, open, overdue, done); bildirilen başka toplam satır ölçüsü değildir.
@@ -395,6 +396,12 @@ export function evidenceSemantic(envelope, path, value, label, changeField = nul
     countScope: envelope.data?.countsScope || null,
     decimalScale: measure === 'currency-unspecified' ? 4 : null,
     nullMeaning: envelope.data?.nodes?.[Number(parts[2])]?.malformedCycle && parts.at(-1)?.startsWith('subtree') ? 'undefined-cycle'
-      : parts[1] === 'project' && envelope.data?.project?.countsOverLimit?.includes(parts.at(-1)) ? 'over-limit' : 'unknown'
+      : parts[1] === 'project' && envelope.data?.project?.countsOverLimit?.includes(parts.at(-1)) ? 'over-limit'
+        // Aşama G: gecikme günü yalnızca gecikmiş görevde vardır; açık ama gecikmemiş satırın boşluğu "belirtilmemiş" değildir.
+        // Tamamlanmış görevde gecikme günü uygulanamaz ("gecikmemiş" denmez); yalnızca açık, termini olan ve gecikmemiş satır
+        // "gecikmemiş"tir. Termini olmayan açık görevde gecikme yargısı kurulamaz: boşluk "belirtilmemiş" kalır.
+        : parts.at(-1) === 'overdueDays' && parts[1] === 'tasks' && envelope.data?.tasks?.[Number(parts[2])]?.overdue === false
+          && ['todo', 'in_progress'].includes(envelope.data.tasks[Number(parts[2])].status)
+          && envelope.data.tasks[Number(parts[2])].targetFinish != null ? 'not-overdue' : 'unknown'
   };
 }

@@ -248,6 +248,114 @@
     "Tüm erişebildiğim projeleri değerlendir; önemli bulguları, riskleri ve fırsatları doğal bir yönetici özeti halinde anlat.",
     "Hangi sonuçlardan emin olabiliyorsun, hangi sonuçlarda veri eksikliği nedeniyle temkinli olmak gerekiyor?"
    ]
+  },
+  {
+   "name": "G1-cok-kapsam",
+   "detail": "balanced",
+   "turns": [
+    "Benim, ekibimin ve bölümümün durumunu üç ayrı düzeyde değerlendir ve karşılaştırılabilir olanları karşılaştır."
+   ],
+   "seed": "executive",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "iç içe olabildiğinden",
+      "Açık işlerde gecikme oranı",
+      "Kendi işleriniz",
+      "Biriminiz",
+      "Bölümünüz",
+      "bu oran kendi işlerinizde"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "G2-orgut-kirilimi",
+   "detail": "balanced",
+   "turns": [
+    "Bölümümün işlerini birimlere göre karşılaştır."
+   ],
+   "seed": "executive",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "table": true,
+     "tableHead": [
+      "Grup",
+      "Açık görev",
+      "Gecikmiş görev"
+     ],
+     "requires": [
+      "birime dağılıyor",
+      "birim sayıları toplanmaz",
+      "Uygulama Geliştirme",
+      "Dijital Kanallar",
+      "Altyapı Operasyon"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "G3-kilometre-taslari",
+   "detail": "balanced",
+   "turns": [
+    "KAP TOOL projesinde hangi kilometre taşları gecikmiş ve sıradaki hangisi?"
+   ],
+   "seed": "executive",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "sıradaki ise",
+      "kritik yolu hesaplamaz",
+      "Prototip onayı",
+      "Canlıya geçiş"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "G4-birim-is-yuku",
+   "detail": "balanced",
+   "turns": [
+    "Alt birimlerimin iş dağılımını karşılaştırmalı grafikle göster."
+   ],
+   "seed": "executive",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "requires": [
+      "birime dağılıyor"
+     ]
+    }
+   ],
+   "expectedCharts": [
+    "any"
+   ]
+  },
+  {
+   "name": "G5-ozet-ve-liste",
+   "detail": "balanced",
+   "turns": [
+    "Birimimin durumunu özetle ve ayrıca kritik öncelikli açık işlerin tam listesini ver."
+   ],
+   "seed": "executive",
+   "expectedTurns": [
+    {
+     "outcome": "grounded",
+     "table": true,
+     "tableHead": [
+      "Görev",
+      "Termin"
+     ],
+     "requires": [
+      "kritik öncelikli",
+      "Faz 1 kabulü",
+      "Denetim teslimi"
+     ]
+    }
+   ]
   }
  ]
 }

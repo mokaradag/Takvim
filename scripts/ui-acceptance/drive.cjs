@@ -8,7 +8,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const { semanticFailures, completionFailures, modelFailures } = require('./expectations.cjs');
+const { semanticFailures, completionFailures, modelFailures, scriptedFailures } = require('./expectations.cjs');
 
 const [scenarioFile, outDir] = process.argv.slice(2);
 const scenario = JSON.parse(fs.readFileSync(scenarioFile, 'utf8'));
@@ -79,25 +79,88 @@ async function ask(page, text) {
   });
 }
 
+/** Betikli ucun altın planı olan soru metinleri; uç betikli değilse (canlı köprü) null. */
+function scriptedQuestions() {
+  return new Promise((resolve) => {
+    const request = require('http').get(`http://127.0.0.1:${process.env.BRIDGE_PORT || 18731}/v1/scripted-plans`, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => { try { const list = JSON.parse(body).questions; resolve(response.statusCode === 200 && Array.isArray(list) ? new Set(list) : null); } catch { resolve(null); } });
+    });
+    request.on('error', () => resolve(null));
+    request.setTimeout(5000, () => { request.destroy(); resolve(null); });
+  });
+}
+
 (async () => {
   fs.mkdirSync(outDir, { recursive: true });
+  // UI_SCRIPTED=1: betikli uç yalnızca altın planı olan soruları yanıtlayabilir. Kapsam, bütün turlarının planı olan konuşmalardır;
+  // diğerleri bu kipte koşulmaz (model kabulü gerektirir) ve sayısıyla birlikte açıkça yazılır. Kapsamda konuşma kalmazsa rapor
+  // satırsız kalır ve koşu başarısızdır. Uç betikli değilse (liste alınamazsa) kapsam daraltılmaz: model kabulü uygulanır.
+  const resultFile = path.join(outDir, `${scenario.profile}.json`);
+  const runId = process.env.UI_RUN_ID || require('crypto').randomUUID();
+  const uncovered = [];
+  if (process.env.UI_SCRIPTED === '1') {
+    const known = await scriptedQuestions();
+    if (known) {
+      const covered = scenario.conversations.filter((item) => item.turns.every((text, index) => item.expectedTurns?.[index]?.serverReplay === true || known.has(String(text).trim())));
+      process.stdout.write(`betikli kapsam: ${scenario.profile} ${covered.length}/${scenario.conversations.length} konuşma (kalanı betikli planı olmadığı için koşulmadı; model kabulü gerekir)\n`);
+      // Seçilen profilin hiçbir konuşması betikli değilse profil sınanmamıştır: eksik kapsam satırı yazılır, rapor koşuyu başarı saymaz
+      // (başka profilin geçen satırları bu profilin sınanmadığını örtemez).
+      const missing = scenario.conversations.filter((item) => !covered.includes(item));
+      const previous = process.env.UI_ONLY && fs.existsSync(resultFile) ? JSON.parse(fs.readFileSync(resultFile, 'utf8')) : [];
+      const missingNames = new Set(missing.map((item) => item.name));
+      const preserved = previous.filter((row) => !missingNames.has(row.conversation));
+      const skipped = missing.map((item) => ({ runId, skipped: 'betikli plan yok', failures: ['kapsam eksik: betikli plan yok'], profile: scenario.profile,
+        conversation: item.name, detail: item.detail, turn: 0, question: item.turns[0] || '', ms: 0, rendered: { status: 'skipped', tables: [], charts: [] }, server: null, calls: [] }));
+      uncovered.push(...skipped);
+      if (skipped.length) process.exitCode = 1;
+      if (skipped.length) fs.writeFileSync(resultFile, JSON.stringify([...preserved, ...skipped], null, 2));
+      if (!covered.length) { process.exitCode = 1; return; }
+      scenario.conversations = covered;
+    }
+  }
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1500, height: 1000 } });
   const page = await context.newPage();
-  const resultFile = path.join(outDir, `${scenario.profile}.json`);
-  const runId = process.env.UI_RUN_ID || require('crypto').randomUUID();
-  const rerun = new Set(scenario.conversations.map((item) => item.name));
+  // Senaryonun gerektirdiği sentetik veri (ör. Aşama G: UI_SEED=executive) bu koşuda yoksa konuşma sınanmaz. Atlanan konuşma yeniden
+  // koşulmuş sayılmaz (önceki satırları silinmez) ve sonuçta eksik kapsam olarak kaydedilir: rapor tam kabul iddia etmez.
+  const seedMismatch = (conversation) => Boolean(conversation.seed) && conversation.seed !== (process.env.UI_SEED || null);
+  const rerun = new Set(scenario.conversations.filter((item) => !seedMismatch(item)).map((item) => item.name));
+  // Bu koşunun atlanmış satırı yalnızca konuşma bu yeniden koşuda yeniden seçildiyse yenilenir (yeniden atlanırsa yeniden yazılır);
+  // seçilmeyen konuşmaların atlanmış satırları korunur: sınanmamış konuşma rapordan sessizce düşmez.
+  const selected = new Set(scenario.conversations.map((item) => item.name));
   const results = process.env.UI_ONLY && fs.existsSync(resultFile)
-    ? JSON.parse(fs.readFileSync(resultFile, 'utf8')).filter((row) => !rerun.has(row.conversation)) : [];
+    ? JSON.parse(fs.readFileSync(resultFile, 'utf8')).filter((row) => !rerun.has(row.conversation) && !(row.skipped && row.runId === runId && selected.has(row.conversation))) : [...uncovered];
   try {
   await page.goto(`http://127.0.0.1:${scenario.port}/`, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: /Gerçek Sistemi aç/ }).click();
   await page.getByRole('button', { name: /Kapsamlı Kip/ }).click();
   await page.getByRole('button', { name: /Başlayalım/ }).click().catch(() => {});
   await page.waitForTimeout(1500);
+  // İsteğe bağlı görünüm (Aşama G görsel kabulü): UI_THEME=light|dark tema (kenar çubuğundaki tema düğmesi; tema zaten istenense
+  // dokunulmaz), UI_VIEWPORT=mobile dar görünüm (390×844). Ayarlar geniş görünümde değiştirilir; turlar ve ekran görüntüsü istenen görünümdedir.
+  const narrow = process.env.UI_VIEWPORT === 'mobile' ? { width: 390, height: 844 } : null;
+  const toggle = { dark: 'Koyu temaya geç', light: 'Açık temaya geç' }[process.env.UI_THEME];
+  if (toggle && await page.getByTitle(toggle).first().isVisible().catch(() => false)) { await page.getByTitle(toggle).first().click(); await page.waitForTimeout(400); }
+  if (toggle && !(await page.locator('body').getAttribute('class') || '').split(/\s+/).includes(`theme-${process.env.UI_THEME}`)) throw new Error(`istenen tema uygulanmadı: ${process.env.UI_THEME}`);
   let currentDetail = null;
   for (const [conversationIndex, conversation] of scenario.conversations.entries()) {
-    if (conversation.detail !== currentDetail) { await setDetail(page, conversation.detail); currentDetail = conversation.detail; }
+    // Yanlış veriyle sınanmaz: atlanır ve bu koşunun eksik kapsamı olarak kaydedilir (rapor başarı saymaz).
+    if (seedMismatch(conversation)) {
+      process.stdout.write(`atlandı: ${scenario.profile}/${conversation.name} (UI_SEED=${conversation.seed} gerekir)\n`);
+      results.push({ runId, skipped: `UI_SEED=${conversation.seed} gerekir`, failures: [`kapsam eksik: UI_SEED=${conversation.seed} gerekir`], profile: scenario.profile,
+        conversation: conversation.name, detail: conversation.detail, turn: 0, question: conversation.turns[0] || '', ms: 0, rendered: { status: 'skipped', tables: [], charts: [] }, server: null, calls: [] });
+      fs.writeFileSync(resultFile, JSON.stringify(results, null, 2));
+      continue;
+    }
+    if (conversation.detail !== currentDetail) {
+      if (narrow) await page.setViewportSize({ width: 1500, height: 1000 });
+      await setDetail(page, conversation.detail);
+      currentDetail = conversation.detail;
+    }
+    if (narrow) await page.setViewportSize(narrow);
     await openBilgin(page);
     await newConversation(page);
     for (const [turnIndex, text] of conversation.turns.entries()) {
@@ -109,14 +172,23 @@ async function ask(page, text) {
       const ms = Date.now() - started;
       const calls = lines(CALLS).slice(callsBefore).map((line) => JSON.parse(line));
       const trace = turnTraces().slice(tracesBefore).at(-1) || null;
-      const shot = path.join(outDir, `${scenario.profile}-${conversationIndex + 1}-${turnIndex + 1}.png`);
+      const variant = [process.env.UI_VIEWPORT, process.env.UI_THEME].filter(Boolean).join('-');
+      const shot = path.join(outDir, `${scenario.profile}-${conversationIndex + 1}-${turnIndex + 1}${variant ? `-${variant}` : ''}.png`);
       await page.locator('.rota-assistant-thread').screenshot({ path: shot }).catch(() => {});
       const expectedChart = conversation.expectedCharts?.[turnIndex] || null;
       const expected = conversation.expectedTurns?.[turnIndex];
-      const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace), ...modelFailures(expected, trace, calls)];
-      if (expectedChart && !rendered.charts?.some((chart) => chart.type === expectedChart && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);
+      // UI_SCRIPTED=1 (scriptedBridge.mjs): planlar betiklidir, model kabulü yapılmaz; çizici ve sunucu sözleşmesi denetlenir. Kip ortam
+      // değişkeninden değil, bu turun çağrı kayıtlarından doğrulanır: canlı köprü kullanıldıysa (kayıtlarda `scripted` yoksa) model
+      // kabulü uygulanır; değişken tek başına model denetimini kapatmaz.
+      const scripted = process.env.UI_SCRIPTED === '1' && calls.length > 0 && calls.every((call) => call.scripted === true);
+      // Betikli kipte yalnızca canlı model gereksinimleri atlanır; yeniden yürütme ve düzen çağrısı kanıtı her iki kipte denetlenir.
+      const failures = [...completionFailures(rendered, trace), ...semanticFailures(expected, rendered, trace), ...(scripted ? scriptedFailures(expected, trace, calls) : modelFailures(expected, trace, calls))];
+      // "any": türü belirtilmemiş grafik isteği; görünür herhangi bir grafik yeterlidir.
+      if (expectedChart && !rendered.charts?.some((chart) => (expectedChart === 'any' || chart.type === expectedChart) && chart.visible)) failures.push(`istenen grafik çizilmedi: ${expectedChart}`);
       if (!trace) failures.push('bu tura ait sunucu kanıtı yok');
-      const row = { runId, failures, expectedOutcome: expected?.outcome || 'grounded', serverReplay: expected?.serverReplay === true, profile: scenario.profile, conversation: conversation.name, detail: conversation.detail, turn: turnIndex + 1, question: text, ms, rendered,
+      // Betikli uç bu soru için plan bulamadıysa yanıt uydurma bir açıklama kararıdır; tur kabul kanıtı değildir.
+      if (calls.some((call) => call.unscripted === true)) failures.push('betikli plan yok');
+      const row = { runId, ...(scripted ? { scripted: true } : {}), failures, expectedOutcome: expected?.outcome || 'grounded', serverReplay: expected?.serverReplay === true, profile: scenario.profile, conversation: conversation.name, detail: conversation.detail, turn: turnIndex + 1, question: text, ms, rendered,
         server: trace ? { outcome: trace.outcome, evidence: trace.evidence, parts: trace.parts, escalated: trace.escalated, presentation: trace.presentation, models: [...new Set((trace.rounds || []).map((round) => round.model))],
           reasoning: trace.usage?.reasoning ?? null } : null,
         calls: calls.map((call) => ({ purpose: call.purpose, toolCalls: call.toolCalls, ok: call.ok, models: call.models, thinking: call.thinking, thinkingTokens: call.thinkingTokens, ms: call.ms,

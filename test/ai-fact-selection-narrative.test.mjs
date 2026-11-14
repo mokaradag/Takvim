@@ -64,11 +64,12 @@ test("proje özeti alan listesi yerine doğrulanmış değerli düzyazı olur", 
     'data.visibleTasks.open', 'data.visibleTasks.done', 'data.visibleTasks.overdue', 'data.visibleTasks.completionRatePercent', 'data.project.wbsNodeCount', 'data.project.dependencyCount', 'data.project.tagCount']);
   assert.equal(verdict.ok, true, JSON.stringify(verdict.issues));
   const totals = result.data.visibleTasks;
-  assert.equal(verdict.normalized, `**Radar Modernizasyonu** projesinde toplam **${totals.total}** görev bulunuyor. Bunların **${totals.open}**'sı açık, **${totals.done}**'si tamamlanmış ve `
-    + `**${totals.overdue}**'si gecikmiş; tamamlanma oranı **%${totals.completionRatePercent}**. Projede ayrıca **3** WBS düğümü, **4** bağımlılık ve **1** etiket bulunuyor. 【R1】`);
+  // Aşama G: toplam ve dökümü tek cümledir; oran dökümün parantez içi ekidir.
+  assert.equal(verdict.normalized, `**Radar Modernizasyonu** projesinde toplam **${totals.total}** görev bulunuyor; bunların **${totals.open}**'sı açık, **${totals.done}**'si tamamlanmış ve `
+    + `**${totals.overdue}**'si gecikmiş (tamamlanma oranı **%${totals.completionRatePercent}**). Projede ayrıca **3** WBS düğümü, **4** bağımlılık ve **1** etiket bulunuyor. 【R1】`);
   assert.doesNotMatch(verdict.normalized, /^- /m, 'no one-bullet-per-field checklist');
   const english = await verify(stack, 'rota_project_detail', { projectId: PROJECTS.FULL }, ['data.visibleTasks.total', 'data.visibleTasks.overdue'], { locale: 'en' });
-  assert.equal(english.verdict.normalized, `The **Radar Modernizasyonu** project has **${totals.total}** tasks in total. Of these, **${totals.overdue}** are overdue. 【R1】`);
+  assert.equal(english.verdict.normalized, `The **Radar Modernizasyonu** project has **${totals.total}** tasks in total; of these, **${totals.overdue}** are overdue. 【R1】`);
 });
 
 test("anlatımdaki her sayı ve ad seçilmiş doğrulanmış olgudan gelir", async (t) => {
@@ -225,7 +226,7 @@ const COMMON_QUESTIONS = [
     ['rota_project_detail', { projectId: PROJECTS.FULL }], ['data.visibleTasks.total'], /projesinde toplam \*\*8\*\* görev/],
   [`Radar Modernizasyonu projesini özetle ${PROJECTS.FULL}`, { operation: 'value', metrics: ['tasks.total', 'tasks.open', 'tasks.overdue', 'tasks.completionRatePercent'], population: { tool: 'rota_project_detail' }, entities: FULL_PROJECT },
     ['rota_project_detail', { projectId: PROJECTS.FULL }],
-    ['data.visibleTasks.total', 'data.visibleTasks.open', 'data.visibleTasks.overdue', 'data.visibleTasks.completionRatePercent'], /Bunların \*\*\d+\*\*'s?[ıiuü] açık ve \*\*\d+\*\*'s?[ıiuü] gecikmiş; tamamlanma oranı \*\*%\d+\*\*\. 【R1】$/],
+    ['data.visibleTasks.total', 'data.visibleTasks.open', 'data.visibleTasks.overdue', 'data.visibleTasks.completionRatePercent'], /; bunların \*\*\d+\*\*'s?[ıiuü] açık ve \*\*\d+\*\*'s?[ıiuü] gecikmiş \(tamamlanma oranı \*\*%\d+\*\*\)\. 【R1】$/],
   ['Kimde kaç açık iş var?', { operation: 'list', metrics: ['tasks.open'], population: { tool: 'rota_workload_summary', collection: 'people' }, fields: [{ metric: 'tasks.open', tool: 'rota_workload_summary', path: 'data.people.*.openTasks' }] }, ['rota_workload_summary', {}], ['data.people.*.name', 'data.people.*.openTasks'],
     /^- \*\*Ayşe Yılmaz\*\* — Açık görev: \*\*\d+\*\* 【R1】$/m]
 ];

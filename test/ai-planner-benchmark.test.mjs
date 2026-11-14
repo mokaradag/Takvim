@@ -2650,6 +2650,49 @@ test("model bağdaştırıcısı: yalnızca belgeli tek turlu araç devri bir ç
   });
 });
 
+test("model bağdaştırıcısı: zorunlu turdaki düz metin yeniden denemesi önbellek zorunluluğunu atlatamaz", async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  // Zorunlu adlı araç turu; model araç yerine düz metin döner (CLI tek tur sınırıyla biter, çıkış kodu 1).
+  const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_REQUIRE_CACHE: '1', payload: {
+    messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }],
+    tools: [{ name: 'rota_plan', parameters: { type: 'object' } }], toolChoice: { name: 'rota_plan' }
+  }, events: [
+    { type: 'system', subtype: 'init', tools: [] },
+    { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'text', text: 'düz metin' }] } },
+    { type: 'result', is_error: true, subtype: 'error_max_turns', num_turns: 1, stop_reason: 'end_turn',
+      usage: { input_tokens: 10, cache_creation_input_tokens: 90, cache_read_input_tokens: 0, output_tokens: 1 } }
+  ] });
+  writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('}, 0);', 'process.exitCode = 1; }, 0);'));
+  cli.release();
+  // Yeniden denemesiz ilk çağrı önbellek tabanını kurar (aynı istem ve katalog).
+  assert.equal((await cli.start({ PLANNER_CLAUDE_FORCED_RETRY: '0' }).done).error, undefined);
+  // Yakın taban varken önbellek okumayan düz metin yanıtı reddedilir; araçları gizleyen yeniden deneme hiç başlatılmaz.
+  const retried = await cli.start({ PLANNER_CLAUDE_FORCED_RETRY: '1' }).done;
+  assert.equal(retried.error, 'PLANNER_CACHE_NOT_REUSED');
+  assert.equal(cli.count(), 2, 'yeniden deneme modeli üçüncü kez çağırmaz');
+  assert.equal(cli.locked(), false);
+});
+
+test('model bağdaştırıcısı: zorunlu yeniden deneme ilk yanıtın fazladan API çağrısını gizleyemez', async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  // İlk zorunlu tur iki ayrı asistan iletisi kimliğiyle düz metin döner: tek çağrı kuralı ihlal edilmiştir.
+  const cli = await claudeCommandFixture(t, { payload: {
+    messages: [{ role: 'system', content: 'stable' }, { role: 'user', content: 'question' }],
+    tools: [{ name: 'rota_plan', parameters: { type: 'object' } }], toolChoice: { name: 'rota_plan' }
+  }, events: [
+    { type: 'system', subtype: 'init', tools: [] },
+    { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'text', text: 'düz' }] } },
+    { type: 'assistant', message: { id: 'two', model: 'claude-haiku-4-5-20251001', content: [{ type: 'text', text: ' metin' }] } },
+    { type: 'result', is_error: true, subtype: 'error_max_turns', num_turns: 1, stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 1 } }
+  ] });
+  writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('}, 0);', 'process.exitCode = 1; }, 0);'));
+  cli.release();
+  const result = await cli.start({ PLANNER_CLAUDE_FORCED_RETRY: '1' }).done;
+  assert.equal(result.error, 'PLANNER_CALL_COUNT_UNEXPECTED', 'yeniden deneme öncesi çağrı sayısı ihlali raporlanmalı');
+  assert.equal(cli.count(), 1, 'ihlalli ilk yanıttan sonra yeniden deneme başlatılmamalı');
+  assert.equal(cli.locked(), false);
+});
+
 test("sonraki bölümün ayrı okumaları yalnızca kendi isteğine göre puanlanır", async () => {
   const { derivedReads, requestBoundCall } = await import('../src/server/ai/tools/requestPopulation.js');
   const { bindRequestEntities } = await import('../src/server/ai/tools/requestDeclaration.js');
@@ -2983,4 +3026,21 @@ test('109 son: zorunlu yeniden denemenin üst süre bütçesi kilidi ve iki alt 
   assert.equal(modelCommandTimeoutMs(timeout, false), original);
   assert.ok(modelCommandTimeoutMs(timeout, true) >= 3 * timeout + 4 * MODEL_CLEANUP_TIMEOUT_MS + 1000);
 
+});
+
+test('zorunlu düz metin yeniden denemesi ilk çağrının eksik araç kataloğunu gizleyemez', async (t) => {
+  const cli = await claudeCommandFixture(t, { payload: {
+    messages: [{ role: 'system', content: 'Sabit yönerge' }, { role: 'user', content: 'Durumu göster' }],
+    tools: [{ name: 'rota_plan', parameters: { type: 'object' } }, { name: 'rota_task_search', parameters: { type: 'object' } }], toolChoice: { name: 'rota_plan' }
+  }, events: [
+    { type: 'system', subtype: 'init', tools: [] },
+    { type: 'assistant', message: { id: 'one', model: 'claude-haiku-4-5-20251001', content: [{ type: 'text', text: 'Düz metin' }] } },
+    { type: 'result', is_error: true, subtype: 'error_max_turns', num_turns: 1, usage: { input_tokens: 10, output_tokens: 1 } }
+  ] });
+  const { writeFileSync } = await import('node:fs');
+  writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('}, 0);', 'process.exitCode = 1; }, 0);'));
+  cli.release();
+  const result = await cli.start({ PLANNER_CLAUDE_FORCED_RETRY: '1' }).done;
+  assert.equal(result.error, 'PLANNER_TOOLS_NOT_OFFERED');
+  assert.equal(cli.count(), 1);
 });

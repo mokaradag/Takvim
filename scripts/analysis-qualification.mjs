@@ -16,6 +16,9 @@
  *      karşılıkları uçtan uca (planlayıcı + düzen model; sentetik veri ve vakanın profili), ayrık küme (PHASE4E_SET=holdout)
  *      yalnızca planlayıcı. Vaka sınıfı (tam / kısmi / sınırlı) beklentiyi belirler; rapor içerik taşımaz, yalnızca bitiş,
  *      kapsam ihlalleri, sunum biçimi, bulgu ve grafik sayıları.
+ *   G  Aşama G yönetici ve proje zekâsı kıyas kümesi (`test/fixtures/bilgin-executive-benchmark.json`, sentetik): hedefli vakalar
+ *      uçtan uca (planlayıcı + düzen model; yönetici sentetik verisi ve vakanın profili; çok turlu vakalar sırayla), bağımsız ayrık
+ *      küme (PHASE4E_SET=holdout) yalnızca planlayıcı. Çok kapsamlı vakada her kapsamın kendi nüfusu okunmalıdır.
  * Derin modele giden her çağrı modele GİTMEZ; sayılır ve başarısızlıktır (zayıf model kabulü güçlü modelle gizlenmez).
  * PHASE4E_CASES=id,… yalnızca o vakaları (başarısızların yeniden koşusu) çalıştırır. Rapor içerik taşımaz.
  * PLANNER_CLAUDE_FORCED_RETRY=1: CLI zorunlu aracı kısıtlı çözümle uygulayamadığı için model zorunlu turda başka bir araç
@@ -30,6 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { captureConsole } from '../test/helpers/aiStack.mjs';
 import { AYSE, NOW, rotaToolSeed } from '../test/helpers/aiToolFixtures.mjs';
 import { analysisBenchmarkSeed, BENCH_PROFILES } from '../test/helpers/analysisBenchmarkSeed.mjs';
+import { executiveBenchmarkSeed, EXEC_PROFILES } from '../test/helpers/executiveBenchmarkSeed.mjs';
 import { answerQuality } from '../test/helpers/answerQuality.mjs';
 import { phase4eConversation, turnViolations, renderedCharts } from '../test/helpers/phase4eScenario.mjs';
 import { planCase } from './planner-evaluation.mjs';
@@ -43,10 +47,13 @@ const EXPECTED_MODEL = process.env.PLANNER_CLAUDE_MODEL || 'claude-haiku-4-5-202
 const corpus = JSON.parse(readFileSync(new URL('../test/fixtures/ai-phase4e-corpus.json', import.meta.url), 'utf8'));
 const followups = JSON.parse(readFileSync(new URL('../test/fixtures/ai-phase4e-followups.json', import.meta.url), 'utf8'));
 const benchmark = JSON.parse(readFileSync(new URL('../test/fixtures/bilgin-analysis-benchmark.json', import.meta.url), 'utf8'));
+const executive = JSON.parse(readFileSync(new URL('../test/fixtures/bilgin-executive-benchmark.json', import.meta.url), 'utf8'));
+/** Kıyas konuşmalarının günü: sabit sınama saatinin Türkiye (UTC+3) günü. */
+export const BENCHMARK_TODAY = new Date(NOW.getTime() + 3 * 3600000).toISOString().slice(0, 10);
 const summary = { tier: TIER, model: EXPECTED_MODEL, cases: 0, passed: 0, failed: [], firstPass: 0, repairs: 0, escalations: 0, turns: 0, results: [] };
 
 const { runGroundedTurn } = await import('../src/server/ai/assistant/groundedAnswer.js');
-const { analysisSuggestion } = await import('../src/server/ai/tools/analysisPlan.js');
+const { analysisSuggestion, resolveAnalysisBrief } = await import('../src/server/ai/tools/analysisPlan.js');
 const { containmentText } = await import('../src/server/ai/tools/toolScope.js');
 // Her çağrı kendi satırlarına sahiptir; önceki ve eşzamanlı koşular yalnızca eklenen defteri paylaşabilir.
 const RUN_ID = randomUUID();
@@ -72,7 +79,9 @@ const scopeOf = (requests) => {
 
 /** Ayrıntılı isteğin eşdeğer analitik yönü (sunucunun türlü eşlemesi); eşdeğeri yoksa yön yoktur. */
 const requestFocus = (request) => {
-  const text = analysisSuggestion(request);
+  const { dateFrom: _from, dateTo: _to, ...unwindowed } = request.filters || {};
+  const filters = request.population?.tool === 'rota_task_analytics' && request.population.groupBy === 'project' ? unwindowed : request.filters;
+  const text = analysisSuggestion({ ...request, filters, entities: (request.entities || []).map((entity) => entity.query != null ? { ...entity, text: entity.query } : entity) });
   return text ? JSON.parse(/\{.*\}/.exec(text)[0]).analysis.focus : [];
 };
 const day = (value) => Date.parse(`${String(value).slice(0, 10)}T00:00:00Z`) / 86400000;
@@ -108,16 +117,75 @@ function liveTurn(rounds, completeRound) {
 }
 
 /** Tier B puanı: kabul edilen planın kararı, HER isteğin kapsamı, düzey, adlar, görsel bayrağı, etkin yönler ve ufuk. */
-export function plannerScore(result, expect) {
+export function plannerScore(result, expect, today = corpus.today) {
   const failures = [];
   const decision = result.decisions.at(-1) || null;
   const intent = result.outcome === 'planned' ? 'rota' : decision?.intent || result.outcome;
   if (result.outcome === 'error') failures.push(`hata ${result.error}`);
-  if (intent !== expect.intent) failures.push(`karar ${intent} ≠ ${expect.intent}`);
+  // Aşama G: birden çok doğru kararı olan ayrık vaka (ör. yetkisiz kapsamda ret ya da kısmi yanıt) `intentAny` taşır.
+  if (expect.intentAny ? !expect.intentAny.includes(intent) : intent !== expect.intent) failures.push(`karar ${intent} ≠ ${expect.intentAny ? expect.intentAny.join('|') : expect.intent}`);
   if (expect.reason && decision?.reason !== expect.reason) failures.push(`neden ${decision?.reason} ≠ ${expect.reason}`);
   const requests = result.plan?.requests || [];
-  if (expect.intent === 'rota' && result.outcome === 'planned') {
-    const scope = scopeOf(requests);
+  // Aşama G: çok kapsamlı beklentide her kapsam (kapsam + düzey) kabul edilen planın birincil ya da ek kapsamıdır; tek kapsam puanı uygulanmaz.
+  if (expect.layers && result.outcome === 'planned') {
+    const analysis = result.plan?.analysis;
+    // Kabul edilen kararın özeti kapsamları `layers` olarak taşır (birincil + ek); ham plan biçimi `also`.
+    const declaredLayers = analysis ? (analysis.layers || [analysis, ...(analysis.also || [])]) : [];
+    const sameNames = (layer, other) => !layer.names?.length || JSON.stringify(layer.names.map((name) => containmentText(String(name))).sort())
+      === JSON.stringify((other.names || []).map((name) => containmentText(String(name))).sort());
+    // Bildirim denetimi yalnızca özet bildirimi varsa uygulanır: özetsiz açık plan (istek + ek istekler) kapsamlarını okumalarıyla
+    // karşılar; nüfus okuma denetimleri aşağıda her plan için geçerlidir.
+    if (analysis) for (const layer of expect.layers) {
+      if (!declaredLayers.some((other) => other.scope === layer.scope && (other.level || '') === (layer.level || '') && sameNames(layer, other))) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} bildirilmedi`);
+    }
+    // Bildirilen kapsamın açılımı da o kapsamın nüfusunu okumalıdır (kapsam + düzey; adlı kapsamda adlı varlık): yalnızca özetin
+    // kapsam listesinde görünmesi yetmez.
+    // Adlı kapsam yalnızca türüyle değil kimliğiyle eşleşir: beklenti adı verdiyse okumanın varlığı o addır (başka kişi/proje
+    // karşılamaz). Portföy kapsamı portföy aracının okumasıdır; koşulsuz görev okuması "görünür bütün işler" kapsamıdır.
+    const sameName = (layer, entity) => !layer.names?.length || layer.names.some((name) => containmentText(String(name)) === containmentText(String(entity.query ?? entity.text ?? '')));
+    const portfolioRead = (layer, request) => !request.entities?.length && !request.filters?.assignee && !request.filters?.personSicil && !request.filters?.projectId
+      && (request.population?.tool === 'rota_portfolio_summary' || Boolean((layer.dateFrom || layer.dateTo || analysis?.dateFrom || analysis?.dateTo || expect.window)
+        && request.population?.tool === 'rota_task_analytics' && request.population.groupBy === 'project'
+        && !request.entities?.length && !request.filters?.assignee && (request.filters?.dateFrom || request.filters?.dateTo)));
+    const readsLayer = (layer, request) => (layer.scope === 'self' ? request.filters?.assignee === 'me' && !request.entities?.length
+      : layer.scope === 'team' ? request.filters?.assignee === 'team' && !request.entities?.length && (request.filters?.teamLevel || '') === (layer.level || '')
+        : ['person', 'project'].includes(layer.scope) ? request.entities?.some((entity) => entity.type === layer.scope && sameName(layer, entity)) && !request.filters?.assignee
+          && request.entities.every((entity) => entity.type === layer.scope && expect.layers.some((expected) => expected.scope === entity.type && sameName(expected, entity)))
+          : layer.scope === 'projects' ? portfolioRead(layer, request)
+            : !request.filters?.assignee && !request.entities?.length && request.population?.tool !== 'rota_portfolio_summary');
+    // Çok adlı katmanın her öznesi ayrı nüfus ve yön kanıtı gerektirir.
+    const subjects = expect.layers.flatMap((layer) => layer.names?.length ? layer.names.map((name) => ({ ...layer, names: [name] })) : [layer]);
+    const reads = (layer) => requests.some((request) => readsLayer(layer, request));
+    const measured = (request, metric) => {
+      const filters = request.filters || {};
+      const open = Array.isArray(filters.status) && filters.status.length === 2 && ['todo', 'in_progress'].every((status) => filters.status.includes(status));
+      if (Object.entries(filters).some(([key, value]) => !['assignee', 'teamLevel', 'status', 'deadline'].includes(key) && value != null)) return false;
+      if (filters.status?.length && !open) return false;
+      if (filters.deadline) return metric === 'tasks.overdue' && filters.deadline === 'overdue' && request.metrics?.some((value) => ['tasks.total', 'tasks.open', 'tasks.overdue'].includes(value));
+      return request.metrics?.includes(metric) || metric === 'tasks.open' && open && request.metrics?.includes('tasks.total');
+    };
+    for (const layer of subjects) for (const metric of layer.metrics || []) {
+      if (!requests.some((request) => readsLayer(layer, request) && measured(request, metric))) failures.push(`kapsamın ölçüsü okunmadı: ${layer.scope}/${metric}`);
+    }
+    for (const layer of subjects) for (const focus of layer.focus || []) {
+      if (!requests.some((request) => readsLayer(layer, request) && requestFocus(request).includes(focus))) failures.push(`kapsamın yönü okunmadı: ${layer.scope}/${focus}`);
+    }
+    for (const layer of subjects.filter((layer) => !layer.optional)) if (!reads(layer)) failures.push(`kapsam ${layer.scope}${layer.level ? `/${layer.level}` : ''} okunmadı`);
+    // Beklenen kapsamların üst kümesi kabul edilmez: bildirilen her kapsam ve açılan her istek beklenen kapsamlardan birinin nüfusudur
+    // (ör. kendi + birim sorusuna eklenen bölüm kapsamı başarısızdır).
+    for (const other of declaredLayers) {
+      if (!expect.layers.some((layer) => other.scope === layer.scope && (other.level || '') === (layer.level || '') && sameNames(layer, other))) failures.push(`beklenmeyen kapsam ${other.scope}${other.level ? `/${other.level}` : ''} bildirildi`);
+    }
+    // Projeler kapsamının özet okuması koşulsuz görev okumasıdır (portföy satırları ayrıca okunur): o kapsamın kendi nüfusudur.
+    const owns = (layer, request) => readsLayer(layer, request) || (layer.scope === 'projects' && readsLayer({ scope: 'all' }, request));
+    if (requests.some((request) => !expect.layers.some((layer) => owns(layer, request)))) failures.push('beklenmeyen kapsam okundu');
+  }
+  // Birden çok doğru kararı olan vakada (`intentAny`) planlanmış sonuç da planın kendisiyle puanlanır (karar tek başına yetmez).
+  if ((expect.intent === 'rota' || expect.intentAny?.includes('rota')) && result.outcome === 'planned') {
+    const rawScope = scopeOf(requests);
+    const windowedPortfolio = expect.scope === 'projects' && Boolean(expect.window || result.plan?.analysis?.dateFrom || result.plan?.analysis?.dateTo)
+      && requests.some((request) => request.population?.tool === 'rota_task_analytics' && request.population.groupBy === 'project' && !request.entities?.length && !request.filters?.assignee && (request.filters?.dateFrom || request.filters?.dateTo));
+    const scope = rawScope === 'all' && windowedPortfolio ? 'projects' : rawScope;
     // Beklentide kapsam yoksa (ayrık kümede bilinçli olarak serbest) kapsam puanlanmaz; Tier B vakalarının hepsi kapsam taşır.
     const pairedSelf = expect.withSelf === true && result.plan?.analysis?.withSelf === true && expect.scope === 'person' && new Set(requests.map((request) => scopeOf([request]))).size === 2
       && requests.every((request) => ['person', 'self'].includes(scopeOf([request])));
@@ -128,9 +196,19 @@ export function plannerScore(result, expect) {
     const names = (values) => JSON.stringify([...new Set(values.map((value) => containmentText(String(value))))].sort());
     if (expect.names && names(requests.flatMap((request) => (request.entities || []).map((entity) => entity.query).filter((query) => query != null))) !== names(expect.names)) failures.push('ad kümesi beklenenle aynı değil');
     if (expect.visual && result.plan?.visual !== true) failures.push('görselleştirme bayrağı yok');
+    // Kadro gerektiren soru (görevi olmayan üyeler): yalnızca kadroyla okunan ekip iş yükü karşılar; kişilere göre görev kırılımı
+    // görevi olmayan üyeyi göstermez.
+    for (const wanted of expect.reads || []) {
+      if (!requests.some((request) => request.population?.tool === wanted.tool && (!wanted.groupBy || request.population.groupBy === wanted.groupBy)
+        && (!wanted.operation || request.operation === wanted.operation) && (wanted.limit == null || request.rank?.limit === wanted.limit)
+        && (!wanted.metrics || wanted.metrics.every((metric) => request.metrics?.includes(metric)))
+        && Object.entries(wanted.filters || {}).every(([key, value]) => JSON.stringify(request.filters?.[key]) === JSON.stringify(value)))) failures.push('istenen ölçü ve okuma biçimi yok');
+    }
+    if (expect.roster && !requests.some((request) => request.population?.tool === 'rota_workload_summary' && request.filters?.assignee === 'team')) failures.push('kadroyla okunan iş yükü yok');
     // Sunucunun GERÇEKTEN okuduğu yönler: özetin etkin yönleri (bölüm bütçesi, ufuk ve portföy kuralları uygulanmış); özet
     // yoksa kabul edilen ayrıntılı isteklerin eşdeğer yönleri. Bildirilen ama okunmayan yön sayılmaz.
     const focus = result.plan?.analysis ? [...result.plan.analysis.focus] : requests.flatMap(requestFocus);
+    for (const required of expect.focusAll || []) if (!focus.includes(required)) failures.push(`yön eksik: ${required}`);
     if (expect.focusAny && !focus.some((item) => expect.focusAny.includes(item))) failures.push(`yön ${focus.join('|') || '-'} beklenenlerle kesişmiyor`);
     // Beklenen ufuk kabul edilen bir okumanın aralığıdır (uçlarda en çok bir günlük yorum farkı).
     const bounded = requests.filter((request) => request.filters?.dateFrom || request.filters?.dateTo);
@@ -141,7 +219,7 @@ export function plannerScore(result, expect) {
     if (expect.overdueUnwindowed && !requests.some((request) => !request.filters?.dateFrom && !request.filters?.dateTo
       && (request.filters?.deadline === 'overdue' || request.metrics?.includes('tasks.overdue')))) failures.push('mevcut gecikme ayrı okunmadı');
     if (expect.upcomingWindow) {
-      const resolve = (value) => /^T\+-?\d+$/.test(value) ? day(corpus.today) + Number(value.slice(2)) : day(value);
+      const resolve = (value) => /^T\+-?\d+$/.test(value) ? day(today) + Number(value.slice(2)) : day(value);
       const [from, to] = expect.upcomingWindow.map(resolve);
       if (!requests.some(({ population, filters = {} }) => ['rota_task_search', 'rota_task_analytics'].includes(population?.tool)
         && !population.groupBy && filters.deadline !== 'overdue' && (!filters.dateField || filters.dateField === 'targetFinish')
@@ -152,11 +230,11 @@ export function plannerScore(result, expect) {
   return failures;
 }
 
-export async function plannerCase(item, { completeRound = completeModelRound } = {}) {
+export async function plannerCase(item, { completeRound = completeModelRound, today = corpus.today } = {}) {
   const rounds = [];
   const result = await planCase({ testCase: { id: 'q', text: item.text }, runTurn: liveTurn(rounds, completeRound), adviceFor: async () => ({ state: 'unavailable', candidates: [] }),
-    now: new Date(`${corpus.today}T09:00:00.000Z`), catalog: toolCatalogForModel() });
-  const failures = plannerScore(result, item.expect);
+    now: new Date(`${today}T09:00:00.000Z`), catalog: toolCatalogForModel() });
+  const failures = plannerScore(result, item.expect, today);
   const firstPass = rounds.length === 1 && !failures.length;
   return { id: item.id, rounds: rounds.length, firstPass, analysis: Boolean(result.plan?.analysis),
     infrastructure: rounds.find((round) => round.infrastructure)?.infrastructure || null, failures };
@@ -244,6 +322,51 @@ const E2E_CASES = Object.freeze([
 ]);
 
 /**
+ * Çok kapsamlı altın planın kapsam başına yönleri: kapsamın kendi yönleri, yazılmadıysa birincil yönler (kapsamda anlamı olmayan yön,
+ * ör. kendi işlerinde alt birim kırılımı, devralınmaz). Her kapsamın yönü kendi kanıtıyla denetlenir.
+ */
+function layerFocus(layer, primary) {
+  const applicable = (focus) => !(focus === 'org' && ['self', 'person'].includes(layer.scope)) && !(focus === 'projects' && layer.scope === 'project');
+  return (layer.focus || primary.focus || []).filter(applicable);
+}
+
+/** Adlı katmanların her öznesini sentetik veri kümesindeki kendi kimliğiyle eşle. */
+function expectationLayers(analysis, seed) {
+  if (!analysis?.also?.length) return null;
+  return [analysis, ...analysis.also].flatMap((entry) => {
+    const base = { scope: entry.scope, ...(entry.level ? { level: entry.level } : {}), focus: layerFocus(entry, analysis) };
+    return ['person', 'project'].includes(entry.scope) ? (entry.names || []).map((name) => ({ ...base, names: [name],
+      ...(entry.scope === 'person' ? { sicil: seed.people.find((row) => row.DisplayName === name)?.Sicil ?? -1 }
+        : { projectId: seed.projects.find((row) => row.ProjectName === name)?.ProjectId ?? `bilinmeyen:${name}` }) })) : [base];
+  });
+}
+
+/** Takipte kimlik kapsamı devralınır; son turun açık yönü ve dönemi üretimdeki kuralla çözülür. */
+function finalAnalysis(turns) {
+  let previous = null;
+  for (const turn of turns) {
+    const next = turn.plan?.analysis;
+    if (!next) continue;
+    if (next.scope !== 'previous') { previous = next; continue; }
+    const resolved = resolveAnalysisBrief(next, { previous, today: BENCHMARK_TODAY });
+    previous = { ...Object.fromEntries(['scope', 'level', 'names', 'within', 'withSelf'].filter((key) => previous?.[key] != null).map((key) => [key, previous[key]])),
+      ...resolved, scope: previous?.scope };
+  }
+  return previous;
+}
+
+/** Altın plandaki açık isteklerin (özetin yanındaki liste) teslim beklentisi: araç ve süzgeçler (göreli gün çözülmüş). */
+function explicitExpectations(plan, resolveDay, seed) {
+  if (!plan?.analysis) return [];
+  return [plan.request, ...(plan.additionalRequests || [])].filter((item) => item?.population?.tool)
+    .map((item) => ({ tool: item.population.tool, operation: item.operation, metrics: item.metrics, filters: { ...Object.fromEntries(Object.entries(item.filters || {}).map(([key, value]) => [key, ['dateFrom', 'dateTo'].includes(key) ? resolveDay(value) : value])),
+      ...Object.assign({}, ...(item.entities || []).map((entity) => entity.type === 'person' ? { assignee: 'person', personSicil: entity.id ?? seed?.people.find((row) => row.DisplayName === entity.text)?.Sicil ?? -1 }
+        : entity.type === 'project' ? { projectId: entity.id ?? seed?.projects.find((row) => row.ProjectName === entity.text)?.ProjectId ?? `bilinmeyen:${entity.text}` } : {})) },
+      // Sıralamalı istekte ölçü, yön ve satır sınırı da beklentidir (en yakın teslimatlar ile en uzak teslimatlar aynı değildir).
+      ...(item.operation === 'rank' && item.rank?.metric ? { rank: { metric: item.rank.metric, order: item.rank.order, ...(Number.isInteger(item.rank.limit) ? { limit: item.rank.limit } : {}) } } : {}) }));
+}
+
+/**
  * Kıyas vakasının canlı beklentisi: altın planın kapsamı (her nüfus okumasında), açık grafik isteği ve vaka sınıfı. Tam vakada
  * doğrulanmış yanıt (stop) zorunludur; kısmi vakada kapsamı doğrulanmış, dolu ve kanıtlı stop yanıtı gerekir; sınırlı vakada
  * verisiz ve desteklenmiyor bitişi gerekir; olgusal yanıt sınırlılık başarısı sayılamaz. Sunucu planı modelin yerine koymaz.
@@ -255,19 +378,80 @@ export function benchmarkExpectation(item) {
   const names = analysis?.names || item.expect?.names || [];
   const resolveDay = (value) => {
     const token = /^T\+(-?\d+)$/.exec(value || '');
-    return token ? new Date(Date.parse(`${corpus.today}T00:00:00Z`) + Number(token[1]) * 86400000).toISOString().slice(0, 10) : value;
+    // Göreli gün, vakanın KOŞTUĞU günden sayılır (sentetik verinin ve sistem yönergesinin günü: NOW'ın Türkiye günü). Planlayıcı
+    // derleminin günü (`corpus.today`) başka bir gündür; onunla çözülen ufuk, modelin doğru yazdığı dönemi "okunmadı" sayıyordu.
+    return token ? new Date(Date.parse(`${BENCHMARK_TODAY}T00:00:00Z`) + Number(token[1]) * 86400000).toISOString().slice(0, 10) : value;
   };
-  const from = resolveDay(analysis?.dateFrom);
-  const to = resolveDay(analysis?.dateTo);
+  const relative = ['today', 'next_7_days'].includes(analysis?.relativeWindow);
+  const from = relative ? BENCHMARK_TODAY : resolveDay(analysis?.dateFrom);
+  const to = relative ? resolveDay(`T+${analysis.relativeWindow === 'today' ? 0 : 6}`) : resolveDay(analysis?.dateTo);
+  // Aşama G: çok kapsamlı planda her kapsamın kendi nüfusu okunur; tek kapsam beklentisi yerine kapsam başına okuma beklenir.
+  const layers = expectationLayers(analysis, seed);
   return { ...item.expect, ...(item.handling !== 'limitation' ? { finish: 'stop' } : { finish: 'unsupported', noData: true }),
-    ...(scope ? { scope } : {}),
-    ...(scope === 'team' ? { assignee: 'team' } : scope === 'self' ? { assignee: 'me' } : {}),
-    ...(analysis?.level ? { level: analysis.level } : {}), ...(analysis?.focus ? { focus: [...analysis.focus] } : {}),
-    ...(scope === 'project' ? { project: true, projectIds: names.map((name) => seed.projects.find((row) => row.ProjectName === name)?.ProjectId || `bilinmeyen:${name}`) } : {}),
-    ...(scope === 'person' ? { person: true, people: names.map((name) => seed.people.find((row) => row.DisplayName === name)?.Sicil || -1) } : {}),
+    ...(scope ? { scope } : {}), ...(layers ? { layers } : {}),
+    ...(layers ? {} : scope === 'team' ? { assignee: 'team' } : scope === 'self' ? { assignee: 'me' } : {}),
+    ...(analysis?.level && !layers ? { level: analysis.level } : {}), ...(!layers && analysis?.focus ? { focus: [...analysis.focus] } : {}),
+    // Çok kapsamlı planda adlı birincil kapsamın kimlik koşulu her okumaya uygulanmaz (ek kapsamın okuması o kimliği taşımaz);
+    // kapsamlar katman denetimiyle tek tek sınanır.
+    ...(scope === 'project' && !layers ? { project: true, projectIds: names.map((name) => seed.projects.find((row) => row.ProjectName === name)?.ProjectId || `bilinmeyen:${name}`) } : {}),
+    ...(scope === 'person' && !layers ? { person: true, people: names.map((name) => seed.people.find((row) => row.DisplayName === name)?.Sicil || -1) } : {}),
     ...(from && to ? { window: [from, to] } : {}),
     ...(item.plan?.table ? { table: true } : {}),
     ...(item.expect?.chart || item.expect?.chartTypes?.length ? { chart: true } : {}) };
+}
+
+/**
+ * Aşama G vakasının canlı beklentisi: altın planın kapsamı ve düzeyi (tek kapsamda her nüfus okumasında; çok kapsamlıda kapsam başına),
+ * vaka sınıfının bitişi ve vakanın kendi beklentileri (bulgu, çekince, zorunlu/yasak ifade). Yetkisiz kapsam `deniedLayers` ile
+ * okunmak zorunda değildir. Sunucu planı modelin yerine koymaz.
+ */
+export function executiveExpectation(item) {
+  const turns = item.turns || [{ text: item.text, plan: item.plan }];
+  // Takip turu ("previous") önceki turun kapsamını sürdürür; açıklama ya da ret bekleyen vakada kapsam okunmaz.
+  const analysis = item.handling === 'clarify' ? null
+    : finalAnalysis(turns);
+  const scope = analysis?.scope;
+  const denied = (layer) => (item.expect?.deniedLayers || []).some((entry) => entry.scope === layer.scope && (entry.level || null) === (layer.level || null));
+  const seed = executiveBenchmarkSeed();
+  const layers = expectationLayers(analysis, seed)?.map((layer) => (denied(layer) ? { ...layer, optional: true } : layer)) || null;
+  const finish = item.expect?.finish || { denied: 'unavailable', clarify: 'clarification', limitation: 'unsupported' }[item.handling] || 'stop';
+  const names = analysis?.names || [];
+  const resolveDay = (value) => {
+    const token = /^T\+(-?\d+)$/.exec(value || '');
+    return token ? new Date(Date.parse(`${BENCHMARK_TODAY}T00:00:00Z`) + Number(token[1]) * 86400000).toISOString().slice(0, 10) : value;
+  };
+  const explicitRequests = explicitExpectations(turns.at(-1).plan, resolveDay, seed);
+  const relative = ['today', 'next_7_days'].includes(analysis?.relativeWindow);
+  const from = relative ? BENCHMARK_TODAY : resolveDay(analysis?.dateFrom);
+  const to = relative ? resolveDay(`T+${analysis.relativeWindow === 'today' ? 0 : 6}`) : resolveDay(analysis?.dateTo);
+  const window = from && to ? [from, to] : null;
+  return { ...item.expect, finish, ...(item.handling === 'limitation' ? { noData: true } : {}),
+    // Açıklama vakası nüfus okumadan sorar (ad çözümü serbesttir).
+    ...(['clarify', 'denied'].includes(item.handling) ? { noPopulation: true } : {}), ...(explicitRequests.length ? { explicitRequests } : {}),
+    ...(scope && !item.expect?.scopeDenied ? { scope } : {}), ...(layers ? { layers } : {}),
+    ...(layers || item.expect?.scopeDenied ? {} : scope === 'team' ? { assignee: 'team', ...(analysis.level ? { level: analysis.level } : {}) } : scope === 'self' ? { assignee: 'me' } : {}),
+    ...(scope === 'project' && !layers && !item.expect?.scopeDenied ? { project: true, projectIds: names.map((name) => seed.projects.find((row) => row.ProjectName === name)?.ProjectId || `bilinmeyen:${name}`) } : {}),
+    ...(scope === 'person' && !layers && !item.expect?.scopeDenied ? { person: true, people: names.map((name) => seed.people.find((row) => row.DisplayName === name)?.Sicil || -1) } : {}),
+    // Özetin dönemi: dönemli okumalar istenen takvim penceresidir (dönemsiz gecikme okuması ayrıca serbesttir).
+    ...(window && finish === 'stop' ? { window } : {}),
+    // Tek kapsamlı yön kendi nüfusunun kanıtıyla karşılanır. Adlı iki projenin kıyasında her yön HER projenin kendi kanıtıyla
+    // denetlenir (bir projenin eksik yönü öteki projenin okumasıyla geçmez). İki kişinin sayısal kıyasları bu satır biçiminden ayrıdır;
+    // onların değer sözleşmesi ve özne kimlikleri kendi doğrulayıcısında korunur.
+    ...(['team', 'self', 'project', 'projects', 'all'].includes(analysis?.scope) && (analysis.scope !== 'project' || [1, 2].includes(analysis.names?.length)) && !analysis.withSelf && !layers && finish === 'stop' && !item.expect?.scopeDenied ? { scopeFocus: layerFocus(analysis, analysis) } : {}),
+    // Portföy kapsamı (birincil) portföy okumasını gerektirir: görev okumalarıyla geçemez.
+    ...(scope === 'projects' && !window && !item.expect?.scopeDenied && !denied(analysis) ? { portfolio: true } : {}),
+    ...(turns.at(-1).plan?.visual ? { chart: true } : {}) };
+}
+
+/**
+ * Çok turlu vakanın ara turunun beklentisi: o turun altın planından kurulan kapsam ve kimlik (son tur vakanın kendi beklentisidir).
+ * Ara tur yalnızca doğrulanmış yanıtla (stop ya da turun kendi bitişi) bitmez; istenen kapsamı okumuş olmalıdır.
+ */
+export function executiveTurnExpectation(item, index) {
+  const turns = item.turns || [{ text: item.text, plan: item.plan }];
+  if (index >= turns.length - 1) return executiveExpectation(item);
+  const partial = { id: item.id, profile: item.profile, handling: 'full', turns: turns.slice(0, index + 1), expect: {} };
+  return { ...executiveExpectation(partial), finish: turns[index].expectFinish || 'stop' };
 }
 
 /** Düzen katmanı MODELİN düzenini sınar: sunucunun belirlenimci yedeği (model düzeni reddedildi) geçer sayılmaz. */
@@ -305,17 +489,23 @@ export function record(entry) {
   assert.deepEqual(entry.failures, [], `${entry.id}: ${entry.failures.join('; ')}`);
 }
 
-/** Vakalar sırayla kaydedilir; altyapı hatası korunur ve sonraki vaka başlatılmaz. */
+/**
+ * Vakalar sırayla kaydedilir; altyapı hatası korunur ve sonraki vaka başlatılmaz. Bütün vakalar TEK üst sınamanın alt
+ * sınamalarıdır: üst düzeyde ardışık beklenen sınamalarda kök sınama ilk vakadan sonra kapanıp özeti (test.after) erken
+ * yazıyordu; rapor yalnızca ilk vakayı içeriyordu.
+ */
 export async function runQualificationCases(items, execute) {
-  for (const item of items) {
-    let infrastructure = false;
-    await test(`nitelendirme vakası: ${item.id}`, async (t) => {
-      const entry = await execute(t, item);
-      infrastructure = Boolean(entry.infrastructure || entry.turns?.some((turn) => turn.infrastructure));
-      record(entry);
-    });
-    if (infrastructure) break;
-  }
+  await test('nitelendirme vakaları', async (parent) => {
+    for (const item of items) {
+      let infrastructure = false;
+      await parent.test(`nitelendirme vakası: ${item.id}`, async (t) => {
+        const entry = await execute(t, item);
+        infrastructure = Boolean(entry.infrastructure || entry.turns?.some((turn) => turn.infrastructure));
+        record(entry);
+      });
+      if (infrastructure) break;
+    }
+  });
 }
 
 const direct = (() => {
@@ -378,6 +568,28 @@ if (direct) {
       if (item.handling === 'partial' && result.finish !== 'stop') failures.push(`kısmi vaka bitişi ${result.finish}`);
       return { id: item.id, order: item.order, observed: item.observed, handling: item.handling, turns: [result], failures };
     });
+  } else if (TIER === 'G' && process.env.PHASE4E_SET === 'holdout') {
+    await runQualificationCases(pick(executive.holdout), async (_t, item) => {
+      const entry = await plannerCase(item, { today: executive.today });
+      if (entry.firstPass) summary.firstPass += 1;
+      summary.repairs += Math.max(0, entry.rounds - 1);
+      summary.turns += 1;
+      return { ...entry, id: item.id };
+    });
+  } else if (TIER === 'G') {
+    await runQualificationCases(pick(executive.scenarios), async (t, item) => {
+      t.mock.timers.enable({ apis: ['Date'], now: NOW });
+      const seed = executiveBenchmarkSeed();
+      t.mock.timers.reset();
+      // Çok turlu vakada önceki turlar yalnızca doğrulanmış yanıtla biter; puan son turun beklentisidir.
+      // Ara turlar da kendi altın planlarının kapsamıyla puanlanır: son turdaki doğru ret, ara turda yanlış kapsamı örtmez.
+      const turns = (item.turns || [{ text: item.text }]).map((turn, index, all) => ({ text: turn.text,
+        requireComposed: index === all.length - 1 && item.handling === 'full', expect: executiveTurnExpectation(item, index) }));
+      const results = await conversationCase(t, turns, { plannerModel: true, composeModel: true, seed, sicil: EXEC_PROFILES[item.profile] });
+      const failures = results.flatMap((row, index) => row.failures.map((failure) => (results.length > 1 ? `#${index + 1} ${failure}` : failure)));
+      if (item.handling === 'partial' && results.at(-1)?.finish !== 'stop' && !item.expect?.finish) failures.push(`kısmi vaka bitişi ${results.at(-1)?.finish}`);
+      return { id: item.id, persona: item.persona, handling: item.handling, turns: results, failures };
+    });
   } else if (TIER === 'E') {
     for (const [id, turns] of pick(E2E_CASES)) {
       test(`senaryo: ${id}`, async (t) => {
@@ -385,5 +597,5 @@ if (direct) {
         record({ id, turns: results, failures: results.flatMap((row, index) => row.failures.map((failure) => `#${index + 1} ${failure}`)) });
       });
     }
-  } else throw new Error('PHASE4E_TIER: B | C | D | E | F');
+  } else throw new Error('PHASE4E_TIER: B | C | D | E | F | G');
 }

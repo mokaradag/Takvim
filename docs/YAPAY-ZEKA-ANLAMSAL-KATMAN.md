@@ -2063,7 +2063,7 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
 
 ### 14.2 Analitik özet — `src/server/ai/tools/analysisPlan.js`
 
-`rota_plan` içinde `request`/`calls` yerine (birlikte verilemez: `$.analysis:request`):
+`rota_plan` içinde analitik özet. Aşama G ile `analysis` yanında bağımsız `request`/`additionalRequests` desteklenir; aynı okumalar birleştirilir ve toplam okuma bütçesi korunur. Özetle eşdeğer olmayan `calls`/doğrudan araç çağrıları birlikte verilemez (`$.analysis:request`):
 
 ```json
 {"intent":"rota","language":"tr","analysis":{"scope":"self","focus":["overview","overdue","upcoming"],
@@ -2080,6 +2080,10 @@ Nitelendirme sırasında bulunan ve kapatılan ek kök nedenler (her biri sınam
   **Aşama F güncellemesi:** bildirilen yönlerin okumaları mevcut fiziksel üst sınıra (`maxParts` = 4) kadar kabul edilir;
   model şeması ve doğrulayıcı 1-4 yön kullanır. Şemanın `maxItems` sınırı ya da fiziksel okuma bütçesi aşıldığında yön düşürülmez; veri okunmadan `analysis_budget` açıklamasıyla kullanıcıdan öncelik istenir. Kabul edilen planın asgari çağrı ve tur maliyeti kalan bütçeye de sığmalıdır. Ayrıntı:
   [Yol Haritası](BILGIN-YONETIM-ANALIZI-YOL-HARITASI.md) §5, [Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) §2.
+  **Aşama G güncellemesi (geçerli sözleşme):** yön sözlüğüne `org` (alt birim kırılımı) ve `milestones` (kilometre taşları)
+  eklendi; model şeması ve doğrulayıcı 1–6 yön kabul eder ve fiziksel okuma tavanı (`maxParts`) 6'dır. Yukarıdaki 4 sınırı
+  Aşama F'nin tarihsel değeridir. Çok kapsamlı özet (`also`, en çok iki ek kapsam) aynı 6 okuma tavanını paylaşır; sığmayan
+  dağılım yönü adıyla bildirilir. Ayrıntı: [Kabul Matrisi](BILGIN-ANALIZ-KABUL-MATRISI.md) §7.
 - Açılım (`expandAnalysis`) yalnızca türlü değerlerle çalışır, kullanıcı metnini okumaz; çıktı modelin yazacağı ham
   isteklerdir ve 4C bildirim doğrulamasından, yetkiden ve kanıt seçiminden aynen geçer. Adlar 4C içerme kuralına
   tabidir (kullanıcının bu iletisinde geçmeli).
@@ -2177,7 +2181,7 @@ düz metin iletimi 4. Tier B, sonraki yönerge/şema değişikliklerinden önce 
 
 - Son yakınsama geçişinde Claude CLI bulunmadığından Haiku yeniden koşulmadı; yukarıdaki tarihsel sayılar son
   yönerge, bütçe ve puanlama sözleşmesinin yeni nitelendirmesi değildir. Deterministik sınamalar yeniden çalıştırıldı.
-- Ekip iş yükü sıfır açık işi olan bütün üyelerin kadrosunu getirmez; bu nedenle ekip dengesi/yoğunlaşması çıkarılmaz.
+- Tarihsel sınır (Aşama F): kadro okunmadığından sıfır açık işi olan üyeler dahil değildi. Aşama G ekip iş yükü tam kadroyu aynı toplu işte okur; görünür açık işi olmayan üyeler sıfır satırla eklenir. Denge/yoğunlaşma yalnızca kadro tam ve çözümlenmişse görev adetleri üzerinden incelenir; bu sayılar emek veya boş kapasiteyi göstermez.
 - Kurum içi Qwen ile nitelendirme yapılmadı; ölçümler Claude CLI uyarlayıcısıyla (zorunlu araç öykünmesi) alındı.
 - Uygulamanın tamamı bu ortamda çalıştırılamadı (SQL Server / Windows kimlik doğrulaması yok): arayüz, üretim
   bileşenlerinin uygulama CSS'iyle sunucu tarafı çizimi ve Playwright ekran görüntüleriyle (açık/koyu, 1280/390 px)
@@ -2293,7 +2297,7 @@ dışarıda bırakamaz).
 - **Dönemli durum dağılımı**: `status` yönü ufku taşır (geçmiş dönemin tamamlanma görünümü o dönemde terminli işlerdir).
 - **Grafik türünün okuması**: adı verilen tür, gerektirdiği okumayı sunucunun zorunlu bölümü olarak ekler (yığılmış →
   proje başına açık/tamamlanan, zaman çizelgesi → tarihli görev satırları, çizgi → aylık termin dizisi, gösterge →
-  genel sayılar, halka → dağılım); toplam okuma bölümü en çok 4'tür.
+  genel sayılar, halka → dağılım); toplam okuma bölümü en çok 4'tür (Aşama G'de 6).
 - **Satır göndergeleri**: görev listesinin satırı kendi projesidir (`row` → proje). Ayrıntılı istekle (özetsiz) listelenen
   görevler yalnızca **satır-yalnız** bağlam yazar: `previous` kullanılamaz (isteğin süzgeçleri özetle temsil edilemediği
   için önceki özne genişlerdi), satırın projesi incelenebilir; bu küçük bağlam sığmazsa tam yetki nüfusu korunarak kanıtın zaten var olan sınırlı sıkıştırma yolu kullanılır.

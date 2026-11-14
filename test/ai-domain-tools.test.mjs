@@ -1357,10 +1357,13 @@ test('üretim ekip SQL sözleşmesi her seçimde göreve, yöneticiye ve düzeye
   const sql = toolQueries.AI_TOOL_TASK_FACTS_SQL;
   const compact = (text) => text.replace(/\s+/g, ' ').trim();
   const start = "OR (@assigneeMode = 'team'";
-  const expected = `OR (@assigneeMode = 'team' AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees member
+  // Aşama G: kadroyla okunan toplu işte ekip koşulu kadronun anlık görüntüsüdür (#AiRosterStart); diğer okumalarda canlı ilişki.
+  const expected = `OR (@assigneeMode = 'team' AND ((@withRoster = 1 AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees member
+    JOIN #AiRosterStart r ON r.EmployeeSicil = member.Sicil WHERE member.TaskId = t.TaskId))
+    OR (@withRoster = 0 AND EXISTS (SELECT 1 FROM dbo.MR_TaskAssignees member
     JOIN dbo.MR_V_ExecutiveScope es ON es.EmployeeSicil = member.Sicil
     WHERE member.TaskId = t.TaskId AND es.ManagerSicil = @sicil AND member.Sicil <> @sicil
-    AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)))`;
+    AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)))))`;
   // Sorgu üretim modülünden gelir; SQL ikizinin işaretle seçtiği ikinci bir uygulama sınanmıyor.
   const branches = [];
   for (let at = sql.indexOf(start); at >= 0; at = sql.indexOf(start, at + start.length)) {
@@ -1454,4 +1457,82 @@ test("sistem yöneticisinin boş sayımlı tam kapsamı yalnız güncel yönetic
     assert.equal(savedEvidenceRequirements(entry, { sicil: ADMIN, isSystemAdmin: false }), null,
       'yönetici yetkisi kaldırılınca boş kapsam tam erişim kanıtı olamaz');
   }
+});
+
+test('örgütsel grup kanıtı proje başına erişim düzeyini kaydeder; düzeyi olmayan ya da daha yüksek düzeyle kurulmuş kayıt gevşetilmez', async (t) => {
+  const stack = stackFor(t, {}, AYSE);
+  const { result, ledger, context } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'department' });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const [saved] = ledger.authorizationEntries();
+  assert.ok(Array.isArray(saved.authorizationProjectLevels) && saved.authorizationProjectLevels.length, 'kayıt anındaki düzey saklanır');
+  assert.ok(saved.authorizationProjectLevels.every((row) => ['FULL', 'READ', 'PARTIAL'].includes(row.level)));
+  // Kalıcı kayıt biçimi: düzeyler yükün içindedir. Kayıt düzeyi yeniden doğrulamanın asgari düzeyidir (tam → kısmi düşüş açmaz).
+  const taskId = '20000000-0000-4000-8000-000000000001';
+  const persisted = (levels) => ({ tool: 'rota_task_analytics', savedPopulation: true, authorizationEpoch: 'a'.repeat(64), taskReferences: [{ taskId, projectId: PROJECTS.FULL }],
+    payload: JSON.stringify({ tool: 'rota_task_analytics', complete: true, truncated: false, totalCount: 1, returnedCount: 1,
+      data: { groupBy: 'department', filters: { projectId: PROJECTS.FULL }, totals: { total: 1 }, groups: [] }, ...(levels ? { authorizationProjectLevels: levels } : {}) }) });
+  const full = savedEvidenceRequirements(persisted([{ projectId: PROJECTS.FULL, level: 'FULL' }]), { sicil: AYSE });
+  assert.equal(full.projectLevels.get(PROJECTS.FULL), PROJECT_ACCESS_RANK.FULL);
+  assert.equal(savedEvidenceRequirements(persisted(null), { sicil: AYSE }), null, 'düzeyi bilinmeyen örgütsel kanıt kapalı reddedilir');
+  // Değişmezin kendisi: aynı düzeyde kanıt geçerli kalır; güncel erişim tam → okuma düzeyine düşünce TAM düzeyle kurulmuş kanıt
+  // yeniden doğrulamada reddedilir (proje ve görevler hâlâ görünür olsa da).
+  const signal = new AbortController().signal;
+  assert.equal(saved.authorizationProjectLevels.find((row) => row.projectId === PROJECTS.FULL)?.level, 'FULL');
+  assert.ok((await context.revalidateEvidence([saved], signal)).has(saved.id), 'aynı düzeyde erişim kanıtı korur');
+  stack.db.projects.find((project) => project.ProjectId === PROJECTS.FULL).LeadSicil = LEAD;
+  stack.db.projectAccess.push({ ProjectId: PROJECTS.FULL, Sicil: AYSE, AccessLevel: 'READ', GrantSource: 'MANUAL_GRANT' });
+  await context.revalidateAuthorization(signal);
+  const visible = await callRotaTool(stack, AYSE, 'rota_project_search', { text: 'Radar' });
+  assert.deepEqual(visible.result.data.matches.map((project) => project.access.level !== 'FULL'), [true], 'proje daha düşük düzeyde görünür kalır');
+  assert.equal((await context.revalidateEvidence([saved], signal)).has(saved.id), false, 'tam → okuma düşüşü tam düzeyli kanıtı açmaz');
+});
+
+test('görünür açık görevi olmayan ekibin kadro yanıtı yalnızca birebir dönemde ve üyeler güncel yönetim kapsamındaysa yeniden açılır', () => {
+  const member = 910099;
+  const entry = (people, overrides = {}) => ({ tool: 'rota_workload_summary', savedPopulation: true, authorizationEpoch: 'b'.repeat(64), taskReferences: [],
+    payload: JSON.stringify({ tool: 'rota_workload_summary', complete: true, truncated: false, returnedCount: people.length, totalCount: people.length,
+      data: { filters: { assignee: 'team', teamLevel: 'unit' }, openTaskCount: 0, people, unassignedOpenTasks: 0, unrepresentedOpenTasks: 0, populationComplete: true, ...overrides } }) });
+  const idle = [{ sicil: member, name: 'Üye', openTasks: 0, inProgress: 0, overdue: 0, dueNext7Days: 0 }];
+  const auth = { sicil: AYSE, scopeIdentities: [member] };
+  assert.deepEqual(savedEvidenceRequirements(entry(idle), auth, { exact: true }), { projectIds: [], identities: false });
+  assert.equal(savedEvidenceRequirements(entry(idle), auth, { exact: false }), null, 'dönem değiştiyse ekip kanıtı açılmaz');
+  assert.equal(savedEvidenceRequirements(entry(idle), { sicil: AYSE, scopeIdentities: [] }, { exact: true }), null, 'kapsamdan çıkan üye açılmaz');
+  assert.equal(savedEvidenceRequirements(entry([{ ...idle[0], openTasks: 1 }]), auth, { exact: true }), null, 'görev sayısı taşıyan satır görev başvurusu ister');
+  assert.equal(savedEvidenceRequirements(entry(idle, { filters: {} }), auth, { exact: true }), null, 'ekip süzgeci olmayan kişi listesi kadro değildir');
+});
+
+test('ekip kadrosu üretim SQL sözleşmesi: üyelik değişimi iki yönlü karşılaştırılır; kadroyla okunan toplu işte ekip koşulu kadronun anlık görüntüsüdür', () => {
+  // Bu sınama üretim SQL metninin yapısını denetler (SQL ikizi sahte bayrakla değil); bir veritabanı tutarlılık güvencesi değildir.
+  const compact = (text) => text.replace(/\s+/g, ' ').trim();
+  const sql = compact(toolQueries.AI_TOOL_TASK_FACTS_SQL);
+  const live = "SELECT es.EmployeeSicil FROM dbo.MR_V_ExecutiveScope es WHERE es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)";
+  // Canlı üyelik toplu işin sonunda TEK deyimle okunur; iki yönlü karşılaştırma bu tek okumaya karşıdır (iki canlı okuma arasında
+  // katılan üye iki karşılaştırmadan da kaçamaz).
+  const end = "SELECT es.EmployeeSicil INTO #AiRosterEnd FROM dbo.MR_V_ExecutiveScope es WHERE @withRoster = 1 AND @assigneeMode = 'team' AND es.ManagerSicil = @sicil AND es.EmployeeSicil <> @sicil AND (LEN(@teamLevel) = 0 OR es.ScopeType = @teamLevel)";
+  assert.ok(sql.includes(end), 'canlı üyelik bir kez anlık görüntüye alınır');
+  assert.ok(sql.includes('EXISTS ( SELECT EmployeeSicil FROM #AiRosterEnd EXCEPT SELECT EmployeeSicil FROM #AiRosterStart)'), 'kadroya katılan üye değişim sayılır');
+  assert.ok(sql.includes('EXISTS ( SELECT EmployeeSicil FROM #AiRosterStart EXCEPT SELECT EmployeeSicil FROM #AiRosterEnd)'), 'kadrodan ayrılan üye değişim sayılır');
+  assert.equal(sql.split(live).length - 1, 0, 'karşılaştırmada ikinci bir canlı üyelik okuması yoktur');
+  assert.ok(sql.indexOf('INTO #AiRosterEnd') > sql.indexOf('INTO #AiFacts') && sql.indexOf('INTO #AiRosterEnd') < sql.indexOf('@rosterChanged'));
+  assert.match(sql, /#AiRosterStart, #AiRosterEnd;$/, 'iki anlık görüntü de toplu işin sonunda düşürülür');
+  assert.match(sql, /@rosterChanged AS MembershipChanged FROM #AiRosterStart r/, 'kadro satırları anlık görüntüden ve değişim işaretiyle döner');
+  // Anlık görüntü görev olgularından önce alınır; sorumlunun ekip üyeliği aynı anlık görüntüdendir.
+  assert.ok(sql.indexOf('INTO #AiRosterStart') < sql.indexOf('INTO #AiFacts'));
+  assert.ok(sql.includes("AS TeamMember") && sql.includes('(@withRoster = 1 AND EXISTS (SELECT 1 FROM #AiRosterStart r WHERE r.EmployeeSicil = a.Sicil))'));
+  // Görev ayrıntısı kadro okumaz: canlı ekip koşulunu korur.
+  assert.equal(toolQueries.AI_TOOL_TASK_DETAIL_SQL.includes('@withRoster'), false);
+});
+
+test('eşleşen görevi olmayan proje seçicili örgütsel kanıt, seçilen projenin erişim düzeyini kaydeder ve yetki değişmeden yeniden açılır', async (t) => {
+  const stack = stackFor(t, {}, AYSE);
+  // Seçilen projede bu dönemde terminli görev yoktur: nüfus boştur ama kanıt projeyi adlandırır.
+  const { result, ledger } = await callRotaTool(stack, AYSE, 'rota_task_analytics', { projectId: PROJECTS.FULL, groupBy: 'department', dateFrom: '2099-01-01', dateTo: '2099-01-31' });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(result.data.groups, []);
+  const [saved] = ledger.authorizationEntries();
+  assert.equal(saved.authorizationProjectLevels.find((row) => String(row.projectId).toLowerCase() === PROJECTS.FULL.toLowerCase())?.level, 'FULL', 'seçilen projenin düzeyi kaydedilir');
+  const persisted = { ...saved, savedPopulation: true, payload: JSON.stringify({ ...JSON.parse(saved.payload), authorizationProjectLevels: saved.authorizationProjectLevels }) };
+  // Yetki dönemi aynıysa (yetki değişmedi) boş örgütsel kanıt yeniden açılır; dönem değiştiyse boş nüfus eskisi gibi kapalı kalır.
+  assert.ok(savedEvidenceRequirements(persisted, { sicil: AYSE }, { exact: true }), 'yetki değişmeden boş örgütsel kanıt yeniden açılır');
+  assert.equal(savedEvidenceRequirements(persisted, { sicil: AYSE }), null, 'dönem değiştiyse boş nüfus kanıtı açılmaz');
 });

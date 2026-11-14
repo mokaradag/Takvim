@@ -49,7 +49,10 @@ function persistedEvidenceJson(entry, payload, clarificationContext, resultScope
   };
   const clarification = { ...(clarificationContext ? { clarificationContext } : {}), ...(resultScope ? { resultScope } : {}), ...(analysisContext ? { analysisContext } : {}) };
   const population = encodeAuthorizationPopulation(entry.taskReferences || evidenceTaskReferences(payload));
-  if (['rota_workload_summary', 'rota_data_quality'].includes(entry.tool) && entry.taskReferences?.some(row => row.identityBase === false)
+  // Aşama G: sorumlunun birimine göre gruplar da kimliği açık sorumlulardan türetilir; kimlik kökeni aynı biçimde saklanır.
+  const identityDerived = ['rota_workload_summary', 'rota_data_quality'].includes(entry.tool)
+    || entry.tool === 'rota_task_analytics' && ['department', 'unit'].includes(payload?.data?.groupBy);
+  if (identityDerived && entry.taskReferences?.some(row => row.identityBase === false)
     && entry.taskReferences.every(row => typeof row.identityBase === 'boolean')) {
     authorization.authorizationIdentityPopulation = compressAuthorizationPopulation({
       ...encodeAuthorizationPopulation(entry.taskReferences.filter(row => row.identityBase)),

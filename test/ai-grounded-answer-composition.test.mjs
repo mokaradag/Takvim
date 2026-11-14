@@ -163,7 +163,10 @@ test('düzenin her başarısızlığı aynı doğrulanmış anlatıma döner; ya
     stack.provider.enqueue(plan(), composer(() => ({ blocks: [{ type: 'say', items: ['P7'] }, { type: 'rows', source: 'T1' }] })),
       composer(() => ({ blocks: [{ type: 'say', items: ['P1', 'P2', 'P3', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }] })));
     const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
-    assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\. En uzun süredir geciken görev \*\*Haftalık durum toplantısı\*\* \(\*\*23 gün\*\*\), en kısa süredir geciken ise \*\*Kısmi kendi görevim\*\* \(\*\*1 gün\*\*\)\. Ayrıntıları aşağıdaki tabloda görebilirsiniz\. 【R1】/);
+    // Aşama G: sayım ve iki uç tek cümledir; söyleyen paragraf tablo için ayrıca yönlendirme cümlesi kurmaz.
+    assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var; en uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**).'), answer.content);
+    // Paragraf kendi kanıt atfını taşır (atıf kaybı bu senaryoda da yakalanır).
+    assert.match(answer.content, /^[^\n]*\(\*\*1 gün\*\*\)\. 【R1】/);
     const [line] = turnLines(logs);
     assert.deepEqual([line.context.presentation.mode, line.context.presentation.rejected, line.context.presentation.said], ['composed', 'UNKNOWN_PROPOSITION', 3]);
     assert.equal(line.context.escalation.kind, 'narrate');
@@ -222,7 +225,7 @@ test('Derin kipte düzen Derin oturumunda yürür ve düşünmeye yer bırakan p
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION, mode: 'deep' })).assistantMessage;
   assert.equal(answer.finishReason, 'stop');
   assert.deepEqual(stack.provider.calls.map((call) => [call.model, call.maxOutputTokens]), [[DEEP.model, DEEP.maxOutputTokens], [DEEP.model, DEEP.maxOutputTokens]]);
-  assert.match(answer.content, /^Şu anda \*\*3\*\* gecikmiş göreviniz var\. En uzun süredir geciken görev \*\*Haftalık durum toplantısı\*\* \(\*\*23 gün\*\*\), en kısa süredir geciken ise \*\*Kısmi kendi görevim\*\* \(\*\*1 gün\*\*\)\. Gecikmelerin ortalaması \*\*11,3 gün\*\*\./);
+  assert.ok(answer.content.startsWith('Şu anda **3** gecikmiş göreviniz var; en uzun süredir geciken görev **Haftalık durum toplantısı** (**23 gün**), en kısa süredir geciken ise **Kısmi kendi görevim** (**1 gün**) ve ortalama gecikme **11,3 gün**.'), answer.content);
 });
 
 test('kalan süre düzen penceresine yetmiyorsa düzen istenmez; doğrulanmış anlatım gösterilir', async (t) => {
@@ -289,8 +292,8 @@ test('İngilizce plan İngilizce olgu sayfası ve yanıt üretir', async (t) => 
   const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: 'Show my overdue tasks.' })).assistantMessage;
   assert.equal(sheet.language, 'en');
   assert.equal(Object.hasOwn(sheet, 'facts'), false);
-  assert.match(answer.content, /^You currently have \*\*3\*\* overdue tasks\. The longest-overdue task is \*\*Haftalık durum toplantısı\*\* \(\*\*23 days\*\*\), and the shortest-overdue is \*\*Kısmi kendi görevim\*\* \(\*\*1 day\*\*\)\. The average delay is \*\*11\\\.3 days\*\*\./);
-  assert.match(answer.content, /The average delay is \*\*11\\\.3 days\*\*\. \*\*2\*\* of the \*\*3\*\* tasks are more than a week overdue/);
+  assert.ok(answer.content.startsWith('You currently have **3** overdue tasks; the longest-overdue task is **Haftalık durum toplantısı** (**23 days**), and the shortest-overdue is **Kısmi kendi görevim** (**1 day**), with an average delay of **11\\.3 days**.'), answer.content);
+  assert.ok(answer.content.includes('with an average delay of **11\\.3 days**. Of these, **2** are more than a week overdue'), answer.content);
   assert.match(answer.content, /\| Task \| Deadline \| Overdue days \|/);
 });
 
@@ -716,4 +719,38 @@ test('109 son: kabul edilen on iki bloklu model düzeni daha kısa doğrulanmı�
     assert.equal(turnLines(logs).at(-1).context.presentation.reason, server ? 'MODEL_LAYOUT_REPLACED' : null, 'güvenli telemetri nedeni korur');
   }
   assert.equal(aiTelemetrySnapshot().grounding.presentation.byReason.MODEL_LAYOUT_REPLACED, 1);
+});
+
+test('tablo girişi: tablo paragrafın hemen ardında değilse (arada başka paragraf varsa) giriş cümlesi korunur', async (t) => {
+  // Her düzen kendi yığınında (alt sınama) yürür.
+  const answerFor = async (blocks) => {
+    let content = null;
+    await t.test(JSON.stringify(blocks.map((block) => block.items || block.source)), async (inner) => {
+      const stack = stackFor(inner);
+      const logs = captureConsole(inner);
+      stack.provider.enqueue(plan(), composer(() => ({ blocks })));
+      content = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage.content;
+      // Modelin düzeni kabul edildi (sunucu düzenine düşmedi): sınanan yol modelin blok sırasıdır.
+      assert.equal(turnLines(logs)[0].context.presentation.mode, 'composed');
+    });
+    return { content };
+  };
+  // Tablo hemen ardında: söyleyen paragraf ayrıca yönlendirme cümlesi kurmaz.
+  const adjacent = await answerFor([{ type: 'say', items: ['P1', 'T1'] }, { type: 'rows', source: 'T1', style: 'table' }, { type: 'say', items: ['P2', 'P3'] }]);
+  const first = (content) => content.split('\n\n')[0];
+  // Arada başka paragraf: ilk paragraf tablosunu kendi girişiyle adlandırır (tablo başka paragrafın ardında girişsiz kalmaz).
+  const separated = await answerFor([{ type: 'say', items: ['P1', 'T1'] }, { type: 'say', items: ['P2', 'P3'] }, { type: 'rows', source: 'T1', style: 'table' }]);
+  assert.ok(first(separated.content).length > first(adjacent.content).length, `${adjacent.content}\n---\n${separated.content}`);
+  assert.ok(first(separated.content).startsWith(first(adjacent.content).replace(/ 【R\d+】$/u, '')), separated.content);
+});
+
+test('düzyazı düzeni: yumuşak işlemin bütün öğelerini düşürdüğü paragraf parçası atlanır, yanıtın tamamı reddedilmez', async (t) => {
+  const stack = stackFor(t);
+  const logs = captureConsole(t);
+  // Düzyazı P1'i söyler; ardından gelen kimlik paragrafı yalnızca yinelenen P1'i taşır (yumuşak işlemle düşer, parça boş kalır).
+  stack.provider.enqueue(plan(), composer(() => ({ blocks: [{ type: 'say', text: '{P1} {P2} {P3} {T1}' }, { type: 'say', items: ['P1'] }, { type: 'rows', source: 'T1', style: 'table' }] })));
+  const answer = doneOf(await sendTurn({ turnId: randomUUID(), message: QUESTION })).assistantMessage;
+  const presentation = turnLines(logs)[0].context.presentation;
+  assert.equal(presentation.mode, 'composed', JSON.stringify(presentation));
+  assert.equal(answer.content.split('Şu anda **3** gecikmiş göreviniz var').length - 1, 1, 'yinelenen önerme ikinci kez çizilmez');
 });

@@ -31,6 +31,8 @@ const TASK_TOOLS = new Set(['rota_task_search', 'rota_task_analytics']);
 /** Dağılım önermesi yalnızca her görevi tek gruba koyan boyutlarda: kişi grupları birbirini dışlamaz. */
 export const EXCLUSIVE_GROUP_BY = Object.freeze(['status', 'priority', 'project', 'deadline', 'target_month']);
 const assignmentGroups = (fact) => fact?.semantic?.provenance?.tool === 'rota_task_analytics' && fact.semantic.groupBy === 'assignee';
+/** Örgütsel kırılımda varlık olmayan gruplar (atamasız, açıklanamayan, çözülemeyen, birimi belirsiz, kesik listenin "diğer"i). */
+const ORG_NON_ENTITY = new Set(['other', 'unassigned', 'unresolved', 'undisclosed', 'none', 'no_unit']);
 
 /** Görevlerin kişi kırılımı kadroyu kanıtlamaz; sayfa tamlığı kişi nüfusunun tamlığı değildir. */
 export function rowPopulationComplete(tool, facts) {
@@ -107,7 +109,8 @@ function taskPopulation(filters, locale) {
     : f.assignee === 'person' && typeof f.person === 'string' && f.person.trim() && f.person !== UNRESOLVED_PERSON ? f.person.trim() : null;
   if (!neutral(f.personSicil) && !person) return null;
   // Kilometre taşı süzgecinin iki değeri de nüfusu daraltır (`false` kilometre taşlarını dışlar; taskFacts.matchesTaskFilters).
-  if (typeof f.milestone === 'boolean') return null;
+  // Aşama G: yalnızca kilometre taşları (`true`) doğal addır ("kilometre taşı"); dışlama doğal söylenmez.
+  if (f.milestone === false) return null;
   if (!neutral(f.projectId) && (typeof f.project !== 'string' || !f.project.trim())) return null;
   if (!neutral(f.assignee) && !['me', 'unassigned', 'team', ...(person ? ['person'] : [])].includes(f.assignee)) return null;
   if (!neutral(f.teamLevel) && (f.assignee !== 'team' || !TEAM[f.teamLevel])) return null;
@@ -138,7 +141,8 @@ function taskPopulation(filters, locale) {
     project: neutral(f.projectId) ? null : f.project.trim(),
     from: neutral(f.dateFrom) ? null : f.dateFrom,
     to: neutral(f.dateTo) ? null : f.dateTo,
-    relative: Boolean(deadline?.relative)
+    relative: Boolean(deadline?.relative),
+    milestone: f.milestone === true
   };
 }
 
@@ -165,7 +169,7 @@ function taskCountSentence(filters, count, locale, { total = false } = {}) {
   if (!population) return null;
   const { me, team, adjectives, project, relative } = population;
   if (locale === 'en') {
-    const noun = count === 1 ? 'task' : 'tasks';
+    const noun = population.milestone ? (count === 1 ? 'milestone' : 'milestones') : count === 1 ? 'task' : 'tasks';
     const tail = [...(population.after ? [` ${population.after}`] : []), ...(project ? [' in the ', v(project), ' project'] : []), ...windowParts(population, locale),
       ...(total ? [' in total'] : [])];
     const described = `${adjectives.length ? `${adjectives.join(', ')} ` : ''}${noun}`;
@@ -183,7 +187,7 @@ function taskCountSentence(filters, count, locale, { total = false } = {}) {
   const named = windowed ? adjectives.slice(1) : adjectives;
   const lead = [...(population.person ? [v(population.person), ' sorumluluğunda '] : []), ...(team ? [`${team.at} `] : []), ...(relative && !total && !windowed ? ['şu anda '] : []),
     ...(project ? [v(project), ' projesinde '] : []), ...windowParts(population, locale), ...(windowed ? [`${adjectives[0]} `] : []), ...(total ? ['toplam '] : [])];
-  const noun = `${named.length ? `${named.join(', ')} ` : ''}${me ? 'göreviniz' : 'görev'}`;
+  const noun = `${named.length ? `${named.join(', ')} ` : ''}${population.milestone ? (me ? 'kilometre taşınız' : 'kilometre taşı') : me ? 'göreviniz' : 'görev'}`;
   if (count === 0) return sentence([...lead, `${noun} yok.`]);
   return sentence([...lead, v(number(count, locale)), ` ${noun} var.`]);
 }
@@ -191,7 +195,9 @@ function taskCountSentence(filters, count, locale, { total = false } = {}) {
 /** Dağılımın sahibi (tamlayan): "Görevlerinizin", "**X** projesindeki görevlerin"; ifade edilemiyorsa `null`. */
 function ownerParts(filters, locale, { open = false } = {}) {
   const population = taskPopulation(filters, locale);
-  if (!population || population.from || population.to) return null;
+  // Kilometre taşı nüfusunun dağılım sahibi "görevler" diye adlandırılmaz (çoğunluk/en büyük grup cümlesi bütün görevleri anlatırdı):
+  // doğal ad yoksa ölçütlü anlatım kalır.
+  if (!population || population.from || population.to || population.milestone) return null;
   const { me, team, adjectives: baseAdjectives, project } = population;
   const adjectives = open && !baseAdjectives.includes(locale === 'en' ? 'open' : 'açık') ? [...baseAdjectives, locale === 'en' ? 'open' : 'açık'] : baseAdjectives;
   if (locale === 'en') {
@@ -220,9 +226,10 @@ function numericValue(value, semantic, locale) {
 function groupPlace(groupBy, label, locale) {
   if (locale === 'en') {
     return { status: ['are in the ', v(label), ' status'], priority: ['have ', v(label), ' priority'], project: ['are in the ', v(label), ' project'],
-      target_month: ['are due in ', v(label)] }[groupBy] || ['are in the ', v(label), ' group'];
+      target_month: ['are due in ', v(label)], department: ['are assigned in ', v(label)], unit: ['are assigned in ', v(label)] }[groupBy] || ['are in the ', v(label), ' group'];
   }
-  return { status: [v(label), ' durumunda'], priority: [v(label), ' öncelikte'], project: [v(label), ' projesinde'], target_month: [v(label), ' termin ayında'] }[groupBy]
+  return { status: [v(label), ' durumunda'], priority: [v(label), ' öncelikte'], project: [v(label), ' projesinde'], target_month: [v(label), ' termin ayında'],
+    department: [v(label), ' bölümündeki sorumlularda'], unit: [v(label), ' birimindeki sorumlularda'] }[groupBy]
     || [v(label), ' grubunda'];
 }
 
@@ -277,18 +284,20 @@ const GROUP_TITLES = Object.freeze({ status: ['durum', 'status'], priority: ['ö
 export function titleCandidate({ tool, filters, groupBy = null, locale }) {
   if (!TASK_TOOLS.has(tool) || (groupBy && !EXCLUSIVE_GROUP_BY.includes(groupBy))) return null;
   const population = taskPopulation(filters, locale);
-  if (!population) return null;
+  // Gruplu kilometre taşı dağılımının başlığı görevlerin dağılımı değildir: doğal başlık kurulmaz.
+  if (!population || (groupBy && population.milestone)) return null;
   const { me, team, adjectives, project, person } = population;
   const adjective = adjectives.length ? `${adjectives.join(', ')} ` : '';
   let text;
   if (locale === 'en') {
-    const tasks = `${me ? 'your ' : team ? `${team.en}'s ` : person ? `${person}'s ` : ''}${adjective}tasks${population.after ? ` ${population.after}` : ''}${project ? ` in the ${project} project` : ''}`;
+    const tasks = `${me ? 'your ' : team ? `${team.en}'s ` : person ? `${person}'s ` : ''}${adjective}${population.milestone ? 'milestones' : 'tasks'}${population.after ? ` ${population.after}` : ''}${project ? ` in the ${project} project` : ''}`;
     const dimension = groupBy ? GROUP_TITLES[groupBy][1] : null;
     text = dimension ? `${dimension} distribution of ${tasks}` : tasks;
   } else {
     const place = `${team ? `${team.of} ` : ''}${project ? `${project} projesindeki ` : ''}${person ? `${person} sorumluluğundaki ` : ''}`;
     text = groupBy ? `${place}${adjective}${me ? 'görevlerinizin' : team ? 'görevlerinin' : 'görevlerin'} ${GROUP_TITLES[groupBy][0]} dağılımı`
-      : `${place}${adjective}${me ? 'görevleriniz' : team ? 'görevleri' : 'görevler'}`;
+      : population.milestone ? `${place}${adjective}${me ? 'kilometre taşlarınız' : team ? 'kilometre taşları' : 'kilometre taşları'}`
+        : `${place}${adjective}${me ? 'görevleriniz' : team ? 'görevleri' : 'görevler'}`;
   }
   // Termin aralığı nüfusun parçasıdır: tek uçlu ve gruplanmış aralık da başlıkta yazılır (başlık nüfusu genişletemez).
   const { from, to } = population;
@@ -367,14 +376,17 @@ function extremeSentence({ kind, metric, type, label, value, owner, locale, sema
   const high = kind === 'maximum';
   if (metric === 'task.overdueDays') {
     const amount = en ? `${number(value, locale)} ${value === 1 ? 'day' : 'days'}` : `${number(value, locale)} gün`;
+    // Aşama G: en uzun gecikme, hemen önceki aynı nüfusun sayım cümlesine yan cümle olarak bağlanabilir ("Şu anda **3** gecikmiş
+    // göreviniz var; en uzun süredir geciken görev **X** (**23 gün**).").
     if (owner) {
       return { ...sentence(en ? [`The ${high ? 'longest' : 'shortest'}-overdue task is `, v(owner), ' (', v(amount), ').']
         : [`En ${high ? 'uzun' : 'kısa'} süredir geciken görev `, v(owner), ' (', v(amount), ').']),
       fluent: pair(en ? [`and the ${high ? 'longest' : 'shortest'}-overdue is `, v(owner), ' (', v(amount), ')'] : [`en ${high ? 'uzun' : 'kısa'} süredir geciken ise `, v(owner), ' (', v(amount), ')'],
-        high ? { names: owner, days: value } : {}) };
+        high ? { names: owner, days: value, afterCount: en ? ['; the longest-overdue task is ', v(owner), ' (', v(amount), ')'] : ['; en uzun süredir geciken görev ', v(owner), ' (', v(amount), ')'] } : {}) };
     }
     return { ...sentence(en ? [`The ${high ? 'longest' : 'shortest'} delay is `, v(amount), '.'] : [`En ${high ? 'uzun' : 'kısa'} gecikme `, v(amount), '.']),
-      fluent: pair(en ? [`and the ${high ? 'longest' : 'shortest'} is `, v(amount)] : [`en ${high ? 'uzun' : 'kısa'} gecikme ise `, v(amount)]) };
+      fluent: pair(en ? [`and the ${high ? 'longest' : 'shortest'} is `, v(amount)] : [`en ${high ? 'uzun' : 'kısa'} gecikme ise `, v(amount)],
+        high ? { afterCount: en ? ['; the longest delay is ', v(amount)] : ['; en uzun gecikme ', v(amount)] } : {}) };
   }
   if (metric === 'task.targetFinish') {
     return { ...sentence(en ? [`The ${high ? 'latest' : 'earliest'} deadline is `, v(day(value, locale)), ...named, '.']
@@ -483,10 +495,11 @@ export function tablePropositions({ group, described, distribution, locale, popu
   if ((group.tool === 'rota_portfolio_summary' && leaf === 'projects') || (group.tool === 'rota_workload_summary' && leaf === 'people')) {
     // Aşama F: proje kapsama cümlesi ("9 projenin 8'inde") hangi değerleri söylediğini bildirir. Düzen, aynı kanıtın
     // "gecikmiş görevi olan proje" toplamını yalnızca bu değerler ayrıntıdaki toplamlarla BİREBİR eşitse yinelemez.
-    entityLead(described, leaf === 'projects' ? 'project' : 'person', locale, (kind, realized, tone, at, late) => {
+    entityLead(described, leaf === 'projects' ? 'project' : 'person', locale, (kind, realized, tone, at, late, joined = null) => {
       column = at;
-      add(kind, realized, tone, kind === 'coverage' && leaf === 'projects' && Number.isSafeInteger(late)
-        ? { claims: [{ metric: 'projects.withOverdue', values: { 'projects.withOverdue': late, 'projects.total': described.rows.length } }] } : null);
+      const claims = kind === 'coverage' && leaf === 'projects' && Number.isSafeInteger(late)
+        ? { claims: [{ metric: 'projects.withOverdue', values: { 'projects.withOverdue': late, 'projects.total': described.rows.length } }] } : null;
+      add(kind, realized, tone, claims || joined ? { ...(claims || {}), ...(joined || {}) } : null);
     }, group.tool !== 'rota_workload_summary' || group.main.entries.some(({ fact }) => fact.field === 'data.populationComplete' && fact.value === true));
     column = null;
     return out;
@@ -530,7 +543,9 @@ export function tablePropositions({ group, described, distribution, locale, popu
         ? sentence(en ? ['The average delay is ', v(`${mean} days`), '.'] : ['Gecikmelerin ortalaması ', v(`${mean} gün`), '.'])
         : sentence(en ? ['The average “', t(header.label), '” is ', v(mean), '.'] : ['“', t(header.label), '” ortalaması ', v(mean), '.']), 'info',
       // Sayım cümlesine eklenen yan cümle: "Şu anda **5** gecikmiş görev var ve ortalama gecikme **10,8 gün**."
-      overdue ? { stat: en ? [', with an average delay of ', v(`${mean} days`)] : [' ve ortalama gecikme ', v(`${mean} gün`)] } : null);
+      // Sayım cümlesine "ilk ele alınabilecek iş" yan cümlesi bağlandıysa ortalama onun ardından gelir ("…, ortalama gecikme ise …").
+      overdue ? { stat: en ? [', with an average delay of ', v(`${mean} days`)] : [' ve ortalama gecikme ', v(`${mean} gün`)],
+        afterLead: en ? [', and the average delay is ', v(`${mean} days`)] : [', ortalama gecikme ise ', v(`${mean} gün`)] } : null);
     }
     if (overdue) {
       // Bir haftayı aşan gecikme: sunucunun sabit eşiği (7 gün), modelin yorumu değil.
@@ -575,7 +590,10 @@ const lowerLabel = (label, locale) => String(label).toLocaleLowerCase(locale ===
 function entityLead(described, noun, locale, add, allowLead = true) {
   const en = locale === 'en';
   const counts = described.columns.map((header, index) => ({ header, index, facts: header.numeric ? columnValues(described, index, 'number') : null }))
-    .filter(({ facts }) => facts && facts.every((fact) => Number.isSafeInteger(fact.value) && fact.value >= 0 && String(fact.semantic?.metric || '').startsWith('tasks.')));
+    // Aşama G: tamamlanan iş bir baskı göstergesi değildir; "ilk sırada" yargısına girmez (tablo sütunu olarak kalır).
+    // Oran sütunu (ör. tamamlanma yüzdesi) görev adedi değildir: tam sayı olsa da yük önderine katılmaz.
+    .filter(({ facts }) => facts && facts.every((fact) => Number.isSafeInteger(fact.value) && fact.value >= 0 && String(fact.semantic?.metric || '').startsWith('tasks.')
+      && fact.semantic?.metric !== 'tasks.done' && !/Percent$/.test(String(fact.semantic?.metric || ''))));
   const total = described.rows.length;
   const overdue = counts.find(({ facts }) => facts.every((fact) => fact.semantic?.metric === 'tasks.overdue'));
   if (overdue && (noun === 'project' || allowLead)) {
@@ -605,11 +623,14 @@ function entityLead(described, noun, locale, add, allowLead = true) {
   // görevle projeler arasında ilk sırada." Etiket "görev" adıyla bitmiyorsa eski (etiketli) biçim kalır.
   if (!en && labels.every((label) => label.endsWith(' görev'))) {
     const listed = series(columns.map((item, index) => [v(number(item.max, locale)), ` ${labels[index].slice(0, -' görev'.length)}`]), locale);
-    add('leader', sentence([v(owner), ', ', ...listed, ` görevle ${noun === 'project' ? 'projeler' : 'listelenen kişiler'} arasında ilk sırada.`]), 'info', columns[0].index);
+    // Aşama G: kapsama cümlesinin hemen ardından tek cümlede ("… gecikmiş görev var; **X** ise … görevle ilk sırada.").
+    add('leader', sentence([v(owner), ', ', ...listed, ` görevle ${noun === 'project' ? 'projeler' : 'listelenen kişiler'} arasında ilk sırada.`]), 'info', columns[0].index, null,
+      { afterCoverage: ['; ', v(owner), ' ise ', ...listed, ' görevle ilk sırada'] });
     return;
   }
   const listed = series(columns.map((item, index) => [labels[index], ' (', v(number(item.max, locale)), ')']), locale);
-  add('leader', sentence(en ? [v(owner), ' leads in ', ...listed, '.'] : [v(owner), ', ', ...listed, ' sayısında en üstte.']), 'info', columns[0].index);
+  add('leader', sentence(en ? [v(owner), ' leads in ', ...listed, '.'] : [v(owner), ', ', ...listed, ' sayısında en üstte.']), 'info', columns[0].index, null,
+    { afterCoverage: en ? ['; ', v(owner), ' leads in ', ...listed] : ['; ', v(owner), ' ise ', ...listed, ' sayısında en üstte'] });
 }
 
 /**
@@ -711,6 +732,36 @@ export function pointerSentence({ type, style, distribution = false, chartType =
   }
   return style === 'table' ? (en ? 'You can see the details in the table below.' : 'Ayrıntıları aşağıdaki tabloda görebilirsiniz.')
     : (en ? 'The details are listed below.' : 'Ayrıntılar aşağıda listeleniyor.');
+}
+
+/** Tablonun satır adı (tamlayan): satırların ne olduğu sunucunun aracından ve gruplamasından bilinir. */
+const TABLE_ROWS = Object.freeze({ projects: ['Projelerin', 'each project'], people: ['Kişilerin', 'each person'], project: ['Projelerin', 'each project'],
+  assignee: ['Kişilerin', 'each person'], department: ['Bölümlerin', 'each department'], unit: ['Birimlerin', 'each unit'] });
+/** Tek boyutlu görev dağılımları: "Görevlerin durumlara göre dağılımı …". */
+// Termin kovaları tamamlanan ve termini olmayan işleri de içerir: tablo "termin aralıkları" değil terminle ilişkili durumlardır.
+const TABLE_DIMENSIONS = Object.freeze({ status: ['durumlara', 'status'], priority: ['önceliklere', 'priority'], deadline: ['termin durumlarına', 'deadline status'],
+  target_month: ['termin aylarına', 'deadline month'] });
+
+/**
+ * Aşama G: bölümünde başka cümle olmayan tablonun girişi, tablonun neyi gösterdiğini söyleyen tam cümledir ("Projelerin açık,
+ * gecikmiş ve yedi gün içinde terminli görev sayıları aşağıdaki tabloda yan yana veriliyor."). Sütunlar adlandırılamıyorsa
+ * genel yönlendirme cümlesi kalır. Cümle olgu taşımaz (sayı yoktur); yalnızca tablonun içeriğini adlandırır.
+ */
+export function tableLeadSentence({ collection, groupBy = null, columns = [], groupKeys = [] }, locale) {
+  const en = locale === 'en';
+  const leaf = String(collection ?? '').split('.').at(-1);
+  if (TABLE_DIMENSIONS[groupBy]) {
+    return en ? `The table below shows how the tasks are distributed by ${TABLE_DIMENSIONS[groupBy][1]}.` : `Görevlerin ${TABLE_DIMENSIONS[groupBy][0]} göre dağılımı aşağıdaki tabloda veriliyor.`;
+  }
+  // Atamasız, açıklanamayan ya da birimi belirsiz satır bir kişi/birim değildir: satırlar adlandırılmaz, genel yönlendirme kalır.
+  const nonEntity = groupKeys.some((key) => ORG_NON_ENTITY.has(String(key ?? '')));
+  const rows = nonEntity ? null : TABLE_ROWS[leaf === 'groups' ? groupBy : leaf];
+  const labels = columns.filter((column) => column.numeric).map((column) => lowerLabel(column.label, locale));
+  const suffix = en ? ' tasks' : ' görev';
+  if (!rows || !labels.length || !labels.every((label) => label.endsWith(suffix))) return pointerSentence({ type: 'rows', style: 'table' }, locale);
+  const kinds = labels.map((label) => label.slice(0, -suffix.length));
+  const listed = kinds.length === 1 ? kinds[0] : `${kinds.slice(0, -1).join(', ')}${en ? ' and ' : ' ve '}${kinds.at(-1)}`;
+  return en ? `The table below shows the ${listed} task counts for ${rows[1]} side by side.` : `${rows[0]} ${listed} görev sayıları aşağıdaki tabloda yan yana veriliyor.`;
 }
 
 /* ── Aşama 4E: analist önermeleri ─────────────────────────────────── */
@@ -909,7 +960,9 @@ export function analystPropositions(parts, locale = 'tr') {
         add(head.evidenceId, 'attention', en
           ? sentence(['A sensible first focus is ', v(title), ': it has been overdue for ', v(number(head.fact.value, locale)), ' days, the longest delay.'])
           : sentence(['İlk ele alınabilecek iş ', v(title), ' görünüyor: ', v(number(head.fact.value, locale)), ' gündür gecikmiş ve en uzun gecikme onda.']), 'warning',
-        { refers: { title, days: head.fact.value, short: en ? ['as the longest-overdue task, ', v(title), ' is a sensible first focus'] : ['en uzun süredir beklediği için ilk ele alınabilecek iş ', v(title), ' görünüyor'] } });
+        { refers: { title, days: head.fact.value, short: en ? ['as the longest-overdue task, ', v(title), ' is a sensible first focus'] : ['en uzun süredir beklediği için ilk ele alınabilecek iş ', v(title), ' görünüyor'] },
+          afterCount: en ? ['; a sensible first focus is ', v(title), ', overdue for ', v(number(head.fact.value, locale)), ' days, the longest delay']
+            : ['; ilk ele alınabilecek iş ', v(title), ' görünüyor: ', v(number(head.fact.value, locale)), ' gündür gecikmiş ve en uzun gecikme onda'] });
       }
     }
   }
@@ -938,6 +991,19 @@ export function caveatPropositions(parts, locale = 'tr') {
             ? ['this distribution shows mutually exclusive deadline-related categories; it does not compare cumulative delivery counts across periods of different lengths.']
             : ['bu dağılım, terminle ilişkili ve birbirini dışlayan kategorileri gösterir; farklı uzunluktaki dönemlerin birikimli teslimat sayıları burada karşılaştırılmıyor.']) } });
         }
+        continue;
+      }
+      if (fact?.semantic?.provenance?.tool === 'rota_task_analytics' && ['department', 'unit'].includes(fact.semantic.groupBy)) {
+        // Aşama G: örgütsel kırılımda bir görev farklı birimlerdeki sorumlularında ayrı sayılabilir; birim sayıları toplanmaz. Kural
+        // HER örgütsel tabloda zorunlu çekincedir: bölümler arası bulgu (örgütsel yayılım) düz istekte, kısa yanıtta ya da başka
+        // tamlık ölçütüyle kurulmayabilir; çekince ona bağlı değildir (bulgu kuralı yinelemez, yalnızca kanıtlanmış örtüşmeyi söyler).
+        const key = `org:${item.evidenceId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const unit = fact.semantic.groupBy === 'unit';
+        out.push({ part: part.index + 1, proposition: { kind: 'completeness', tone: 'info', evidenceId: item.evidenceId, ...sentence(en
+          ? [`a task with assignees in different ${unit ? 'units' : 'departments'} is counted in each of them, so the ${unit ? 'units' : 'departments'}' counts are not added together.`]
+          : [`sorumluları farklı ${unit ? 'birimlerde' : 'bölümlerde'} olan bir görev her ${unit ? 'birimde' : 'bölümde'} ayrı sayılabildiğinden ${unit ? 'birim' : 'bölüm'} sayıları toplanmaz.`]) } });
         continue;
       }
       const assignments = assignmentGroups(fact);
@@ -1025,9 +1091,14 @@ export function fluentParagraph(entries, locale = 'tr', memory = null, emitted =
     // Birleştirilebilir önceki cümle: aynı kanıt, yan cümle biçimi var, pay dizisi değil.
     const open = prev && prev.subject === subject && prev.parts && !prev.shares ? prev : null;
     const pairKey = proposition.table != null && Number.isInteger(proposition.column) ? `${proposition.table}:${proposition.column}` : null;
-    const prevPair = open?.kinds.length === 1 && open.last.fluent?.pair && open.last.table != null ? `${open.last.table}:${open.last.column}` : null;
+    // Uç çifti, uç tek başına söylendiyse ya da sayım cümlesine yan cümle olarak bağlandıysa (sayım + en uzun gecikme) tamamlanır.
+    const extremeAfterCount = open?.kinds.length === 2 && open.kinds[0] === 'count' && open.last.fluent?.afterCount;
+    const prevPair = (open?.kinds.length === 1 || extremeAfterCount) && open.last.fluent?.pair && open.last.table != null ? `${open.last.table}:${open.last.column}` : null;
+    // Ortalama gecikme, sayımın ve ona bağlanan en uzun gecikmenin ardından da aynı cümleye eklenir ("…; en uzun süredir geciken
+    // görev **X** (**23 gün**) ve ortalama gecikme **11,3 gün**").
     const countHost = samePopulation && open?.proposition.kind === 'count'
-      && (open.last.kind === 'count' || open.last.fluent?.stat) ? open : null;
+      && (open.last.kind === 'count' || open.last.fluent?.stat || (open.kinds.length <= 3 && ['maximum', 'minimum'].includes(open.last.kind) && open.kinds[1] === 'maximum'
+        && open.kinds.slice(1).every((kind) => ['maximum', 'minimum'].includes(kind)))) ? open : null;
     // Göndergeyi hemen önce çizilen sayım tanıtır; yalnızca aynı nüfusun istatistiğiyle birleşmesi bu bağı korur.
     // Döküm, başka bir yan cümle ya da not eski sayımı sürdüremez.
     const antecedent = samePopulation && ['count', 'total'].includes(prev.last.kind) ? prev.last.fluent?.count : countHost?.proposition.fluent?.count;
@@ -1035,6 +1106,14 @@ export function fluentParagraph(entries, locale = 'tr', memory = null, emitted =
       extend(open, proposition, [', ', ...fluent.pair.tail]);
     } else if (fluent.stat && countHost) {
       extend(countHost, proposition, fluent.stat);
+    } else if (fluent.afterCount && samePopulation && open && open.kinds.length === 1 && open.last.kind === 'count') {
+      // Aşama G: kısa sayım cümlesi tek başına kalmaz; aynı nüfusun öne çıkan işi ya da en uzun gecikmesi onun yan cümlesidir.
+      extend(open, proposition, fluent.afterCount);
+      if (fluent.refers) attended.set(taskKey(subject, fluent.refers.title), fluent.refers.days);
+    } else if (fluent.afterLead && samePopulation && open && open.kinds.length === 2 && open.kinds[0] === 'count' && open.last.kind === 'attention') {
+      extend(open, proposition, fluent.afterLead);
+    } else if (fluent.afterCoverage && samePopulation && open && open.kinds.length === 1 && open.last.kind === 'coverage') {
+      extend(open, proposition, fluent.afterCoverage);
     } else if (fluent.share && prev?.shares && samePopulation && prev.shares.base === fluent.share.base && prev.shares.clauses.length < 3) {
       prev.shares.clauses.push(fluent.share.also);
       prev.kinds.push(proposition.kind);
@@ -1072,7 +1151,11 @@ export function fluentParagraph(entries, locale = 'tr', memory = null, emitted =
 export { sentence as factSentence, v as strongFact, t as plainFact, number as formatCount, day as formatFactDay, percent as formatPercent, ofCount as possessiveCount, locativeOf as locativeCountSuffix };
 
 /** Görev listesinin kesin sayım cümlesi; doğrulanmış anlatım ve düzen aynı nüfusu adlandırır. */
-export function taskCountLead(group, locale = 'tr') {
+export function taskCountLead(group, locale = 'tr', { empty = false } = {}) {
   const total = group.tool === 'rota_task_search' ? group.envelope.find((fact) => fact.field === 'totalCount') : null;
-  return total ? countProposition(group, total, locale, null)?.markdown ?? null : null;
+  if (total) return countProposition(group, total, locale, null)?.markdown ?? null;
+  // Aşama G: boş ve TAM görev listesi sıfır sayımın kanıtıdır; "Gösterilecek görev yok (ölçüt: …)" yerine nüfusu söyleyen doğal
+  // cümle ("Bugün terminli açık göreviniz yok."). Süzgeçler doğal söylenemiyorsa ölçütlü cümle kalır.
+  const complete = empty && group.tool === 'rota_task_search' ? group.envelope.find((fact) => fact.field === 'complete' && fact.value === true) : null;
+  return complete ? taskCountSentence(complete.semantic?.filters, 0, locale)?.markdown ?? null : null;
 }

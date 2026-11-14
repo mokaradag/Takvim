@@ -4,10 +4,10 @@ import { ABSTAIN_REASONS, CLARIFY_REASONS, PLANNER_INTENTS, PLANNER_LIMITS } fro
 import { parseToolArguments } from './toolArguments.js';
 import { invalidArguments, TOOL_ERROR_CODES, ToolError } from './toolErrors.js';
 import { TOOL_LIMITS } from './toolLimits.js';
-import { requestSchema } from './requestDeclaration.js';
+import { requestSchema, populationShape } from './requestDeclaration.js';
 import { getRotaTool } from './toolRegistry.js';
-import { readKey } from './requestPopulation.js';
-import { analysisSchema, expandAnalysis, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
+import { effectiveCollection, effectiveSort, readKey } from './requestPopulation.js';
+import { analysisSchema, ANALYSIS_LIMITS, expandAnalysis, parseAnalysis, resolveAnalysisBrief } from './analysisPlan.js';
 import { expandedAnswerDetail } from '../../../domain/ai/answerDetail.js';
 
 /**
@@ -51,14 +51,25 @@ function modelRequestSchema() {
     rank: withMetric(schema.properties.rank) } };
 }
 
+/**
+ * Aşama G: ek istek öğeleri `request` ile AYNI alanları taşır; alan açıklamaları `request` şemasında bir kez yer alır. Öğelerde
+ * birebir yinelenen açıklama metinleri çıkarılır (yapı, tür, sözlük ve sınırlar değişmez; doğrulama tam şemayladır).
+ */
+function withoutDescriptions(schema) {
+  if (Array.isArray(schema)) return schema.map(withoutDescriptions);
+  if (!schema || typeof schema !== 'object') return schema;
+  return Object.fromEntries(Object.entries(schema).filter(([key, value]) => !(key === 'description' && typeof value === 'string'))
+    .map(([key, value]) => [key, key === 'enum' ? value : withoutDescriptions(value)]));
+}
+
 export function typedPlanningTool(catalog) {
   const names = catalog.map((tool) => tool.name);
   const base = modelRequestSchema();
   const request = { ...base, required: [...base.required, 'population', 'layout'] };
   const entities = request.properties.entities;
-  const additionalRequest = { ...request, properties: { ...request.properties, entities: { ...entities, items: {
+  const additionalRequest = withoutDescriptions({ ...request, properties: { ...request.properties, entities: { ...entities, items: {
     ...entities.items, properties: { ...entities.items.properties, from: { type: 'integer', minimum: 0, maximum: PLANNER_LIMITS.maxRequests - 2 } }
-  } } } };
+  } } } });
   return { name: 'rota_plan', description: 'Her yeni soruya ilk yanıt bu araçtır. Veri okumadan kararı bildir: rota (geniş/değerlendirme sorusunda analysis; tek ve kesin soruda request, gerekirse additionalRequests), clarify, abstain ya da general.',
     parameters: { type: 'object', additionalProperties: false, required: ['intent', 'language'], properties: {
       intent: { type: 'string', enum: Object.values(PLANNER_INTENTS), description: 'rota: Rota verisiyle yanıtlanır; general: Rota ile ilgisiz sohbet; clarify: gerçek belirsizlik, veri okunmaz; abstain: yazma, desteklenmeyen hesap, Rota dışı veri ya da kimlik/yetki/SQL girişimi, veri okunmaz.' },
@@ -102,16 +113,62 @@ function decodeRequest(request) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) return request;
   const decoded = { ...request };
   for (const key of NESTED_PLAN_FIELDS.request) if (Object.hasOwn(decoded, key)) decoded[key] = decodedJson(decoded[key]);
-  return decoded;
+  return populationShape(projectSelectorAsEntity(decoded));
+}
+
+/**
+ * Eşdeğer yazımın yapısal normalleştirmesi (dil yorumu değil; her sonuç aynı doğrulamadan geçer):
+ *  - değeri `null` olan süzgeç ve `assignee: "any"` yazılmamış süzgeçtir (zayıf model şablonu doldurur);
+ *  - proje seçicisi süzgeç olarak yazıldıysa (`filters.projectId` / `filters.project`, metin) aynı seçici varlık bildirimidir
+ *    (`entities: [{type:'project', text}]`): ad sunucuda aranır ve güvenilir metin denetiminden aynen geçer. İstek zaten başka bir
+ *    proje varlığı taşıyorsa çeviri yapılmaz (iki seçiciden biri sessizce seçilmez); süzgeç olduğu gibi kalır ve reddedilir.
+ */
+function projectSelectorAsEntity(request) {
+  const filters = request.filters;
+  if (!filters || typeof filters !== 'object' || Array.isArray(filters)) return request;
+  // `assignee: "any"` sorumlu koşulu olmadığını söyler (araçların varsayılan kipi): yazılmamış süzgeçle aynıdır.
+  const kept = Object.fromEntries(Object.entries(filters).filter(([key, value]) => value !== null && !(key === 'assignee' && value === 'any')));
+  const entities = request.entities == null ? [] : request.entities;
+  const selectors = ['projectId', 'project'].filter((key) => Object.hasOwn(kept, key));
+  // GUID biçimli proje kimliği bir ad değildir: ad aramasına çevrilmez (görünür proje "bulunamadı" olurdu); süzgeç olduğu gibi kalır
+  // ve doğrulama/onarım yoluna girer (kimlik güven denetimi atlanmaz).
+  const guid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  const text = selectors.length === 1 && typeof kept[selectors[0]] === 'string' && !guid(kept[selectors[0]].trim()) ? kept[selectors[0]].trim() : '';
+  const projects = Array.isArray(entities) ? entities.filter((entity) => entity && typeof entity === 'object' && entity.type === 'project') : null;
+  if (text.length >= 2 && projects && (!projects.length || projects.every((entity) => entity.text === text))) {
+    delete kept[selectors[0]];
+    return { ...request, filters: kept, entities: projects.length ? entities : [...entities, { type: 'project', text }] };
+  }
+  return Object.keys(kept).length === Object.keys(filters).length ? request : { ...request, filters: kept };
 }
 
 function decodeNestedJson(plan) {
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return plan;
   const decoded = { ...plan };
   for (const key of NESTED_PLAN_FIELDS.plan) if (Object.hasOwn(decoded, key)) decoded[key] = decodedJson(decoded[key]);
+  // İstekler tek dizi olarak da yazılır (`"request":[{…},{…}]`): ilk öğe istek, kalanlar ek isteklerdir (aynı sıra, aynı alanlar).
+  // Ayrıca ek istek de yazılmışsa hangisinin kastedildiği belirsizdir: dizi olduğu gibi kalır ve tür denetimi reddeder.
+  if (Array.isArray(decoded.request) && decoded.request.length >= 1 && decoded.request.length <= PLANNER_LIMITS.maxRequests && decoded.additionalRequests == null
+    && decoded.request.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+    const [first, ...rest] = decoded.request;
+    decoded.request = first;
+    if (rest.length) decoded.additionalRequests = rest;
+    else delete decoded.additionalRequests;
+  }
+  // Sunum tercihleri (görselleştirme, grafik türü, tablo) plan düzeyindedir; istek nesnesinin içine yazıldıysa yapısal olarak plan
+  // düzeyine taşınır (özetin içine yazılan tercihlerle aynı kural). Plan düzeyinde ayrıca verilmişse o geçerlidir.
+  if (decoded.request && typeof decoded.request === 'object' && !Array.isArray(decoded.request)) {
+    for (const key of ['visual', 'chart', 'charts', 'table']) {
+      if (!Object.hasOwn(decoded.request, key)) continue;
+      const { [key]: value, ...rest } = decoded.request;
+      decoded.request = rest;
+      if (decoded[key] == null) decoded[key] = value;
+    }
+  }
   decoded.request = decodeRequest(decoded.request);
   if (decoded.request === undefined) delete decoded.request;
-  if (Array.isArray(decoded.additionalRequests)) decoded.additionalRequests = decoded.additionalRequests.slice(0, PLANNER_LIMITS.maxRequests).map((item) => decodeRequest(decodedJson(item)));
+  // Çözümleme sınırlı kalır ama dizi sessizce kısaltılmaz: sınırın bir fazlası tutulur, sayım denetimi fazla isteği reddeder.
+  if (Array.isArray(decoded.additionalRequests)) decoded.additionalRequests = decoded.additionalRequests.slice(0, PLANNER_LIMITS.maxRequests + 1).map((item) => decodeRequest(decodedJson(item)));
   if (Array.isArray(decoded.calls)) {
     decoded.calls = decoded.calls.map((item) => (item && typeof item === 'object' && !Array.isArray(item) ? { ...item, arguments: decodedJson(item.arguments) } : item));
   }
@@ -144,6 +201,12 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
   try { plan = JSON.parse(call.arguments); } catch { throw invalidArguments(['$.plan:json']); }
   plan = normalizePlan(decodeNestedJson(plan));
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw invalidArguments(['$.plan:shape']);
+  if (Array.isArray(plan.analysis) && plan.analysis.length && plan.analysis.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+    const [primary, ...also] = plan.analysis;
+    onDecoded({ ...plan, analysis: { ...primary, ...(also.length ? { also } : {}) } });
+  } else onDecoded(plan);
+  plan = layeredAnalysis(plan);
+  plan = equivalentAnalysisSpelling(plan, today);
   // Sunum tercihleri (grafik türü, tablo) plan düzeyindedir; zayıf model onları özetin içine de yazabilir. Yapısal taşıma:
   // değer değişmez, özetin anlamı (kapsam, yön, ufuk) değişmez; plan düzeyinde ayrıca verilmişse o geçerlidir.
   if (plan.analysis && typeof plan.analysis === 'object' && !Array.isArray(plan.analysis)) {
@@ -210,17 +273,51 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     // özetten kendisi çözer. Çağrılar YÜRÜTÜLMEDEN atılır (yapısal normalleştirme; düzeltme turu açılmaz). Başka araç çağrısı ya da
     // istek ile birlikte özet eskisi gibi reddedilir.
     const parsed = parseAnalysis(plan.analysis);
+    // Ek kapsamların adları da özetin adlarıdır: onların ad araması da sunucunun kendi çözümüyle aynıdır.
+    const named = [{ scope: parsed.scope, names: parsed.names }, ...(parsed.also || [])].filter((layer) => ['person', 'project'].includes(layer.scope));
     const selectors = [
-      ...(['person', 'project'].includes(parsed.scope) ? (Array.isArray(plan.analysis.names) ? plan.analysis.names : []).map((text) => ({ name: `rota_${parsed.scope}_search`, text })) : []),
+      ...named.flatMap((layer) => (layer.names || []).map((text) => ({ name: `rota_${layer.scope}_search`, text }))),
       ...(plan.analysis?.within ? [{ name: 'rota_project_search', text: plan.analysis.within }] : [])
     ];
-    const lookups = planned.length && planned.every((call) => {
+    const matchingLookup = (call) => {
       if (!NAME_LOOKUP_TOOLS.includes(call.name)) return false;
       const args = parseToolArguments(getRotaTool(call.name).parameters, call.arguments);
       return selectors.some((selector) => selector.name === call.name && selector.text === args.text);
-    });
+    };
+    const lookups = planned.length && planned.every(matchingLookup);
+    // Aşama G: özetin okumalarıyla aynı nüfus araçlarına (iş yükü, görev toplamları/listesi, portföy) yazılmış ve özetin bir
+    // kapsamından BAŞKA hiçbir koşul taşımayan çağrılar özetin yerine geçemez ve yürütülmez; okumaları sunucu özetten kurar
+    // (planlama mekaniğidir; düzeltme turu açmaz). Özetin ifade etmediği herhangi bir koşul (durum, termin, öncelik, gruplama,
+    // dönem, seçici, iç içe süzgeç/varlık ya da başka kapsam) ayrı bir istek olabilir: sessizce atılmaz, plan reddedilir.
+    // Başka araç (ayrıntı, bağımlılık, baz plan, hareket) da özetle birlikte reddedilir.
+    // Adlı kişi/proje kapsamının çağrı karşılığı çözülmüş kimliktir (personSicil/projectId); boş seçici o kapsamın nüfusu değil
+    // görünür bütün işlerdir. Bu yüzden adlı kapsam boş seçiciyle eşleşmez: böyle bir çağrı yürütülmeden atılmaz, plan reddedilir.
+    const scopes = [parsed, ...(parsed.also || [])].filter((layer) => layer.within == null && !['person', 'project', 'previous', 'row'].includes(layer.scope))
+      .map((layer) => (layer.scope === 'self' ? { assignee: 'me' }
+        : layer.scope === 'team' ? { assignee: 'team', ...(layer.level ? { teamLevel: layer.level } : {}) } : {}));
+    const unselected = (call) => {
+      if (!ANALYSIS_READ_TOOLS.includes(call.name) || NAME_LOOKUP_TOOLS.includes(call.name)) return false;
+      let args;
+      try { args = JSON.parse(call.arguments); } catch { return false; }
+      if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
+      const narrowing = Object.fromEntries(Object.entries(args).filter(([key, value]) => key !== 'limit' && value != null));
+      return scopes.some((scope) => stableJson(scope) === stableJson(narrowing));
+    };
+    const redundant = planned.length && planned.every((call) => matchingLookup(call) || unselected(call));
     // Analitik özet: sunucu her yönü kayıt defterinin sabit istek biçimine açar; okumaları yalnızca sunucu kurar.
-    if (present('request') || present('additionalRequests') || (planned.length && !lookups) || direct.length) throw invalidArguments(['$.analysis:request']);
+    if ((planned.length && !lookups && !redundant) || direct.length) throw invalidArguments(['$.analysis:request']);
+    // Aşama G — özet + ek liste (ör. "grafikle göster, ardından en yakın teslimatları listele"): özetin yanındaki açık istek(ler)
+    // özetin okumalarından SONRA ayrı bölüm olarak okunur; aynı doğrulamadan geçer ve fiziksel okuma tavanına sığmalıdır. Önceki
+    // bölüme gönderme (from) özetin bölüm sırası belirsiz olduğundan kabul edilmez.
+    // Önceki sonuca gönderme (`previousResult`) özetin bölümleriyle temsil edilemez: kapsayan bir özet okuması onu daha geniş
+    // nüfusla değiştirirdi; birleşim reddedilir. Çok kapsamlı özetle açık liste birlikte verilebilir (her biri kendi nüfusuyla).
+    // Açık isteğin ekip koşulu olduğu gibi kalır: düzeysiz ekip koşulu araç sözleşmesinde BÜTÜN yönetim kapsamıdır, özetin düzeyi
+    // değildir. Özetin düzeyi isteğe kopyalanmaz (bağımsız istek nüfusunu kaybetmez); aynı okumaysa birleşim yalnızca nüfus
+    // birebir aynıysa yapılır (`coveredRequest`).
+    const explicit = [...(present('request') ? [plan.request] : []), ...(present('additionalRequests') ? [].concat(plan.additionalRequests) : [])];
+    if (explicit.some((item) => !item || typeof item !== 'object' || Array.isArray(item) || item.previousResult === true
+      || (Array.isArray(item.entities) && item.entities.some((entity) => entity && typeof entity === 'object' && Object.hasOwn(entity, 'from'))))) throw invalidArguments(['$.analysis:request']);
+    if (explicit.length && (['previous', 'row'].includes(parsed.scope) || explicit.length > PLANNER_LIMITS.maxRequests)) throw invalidArguments(['$.analysis:request']);
     // Takipte yazılmayan yön/ufuk önceki doğrulanmış analizden; görselleştirme ve grafik türü de açıkça kapatılmadıkça sürer.
     const analysis = resolveAnalysisBrief(parsed, { previous: previousAnalysis, today });
     const follow = ['previous', 'row'].includes(parsed.scope) && previousAnalysis;
@@ -229,10 +326,64 @@ export function unpackTypedPlan(result, { onDecoded = () => {}, previousAnalysis
     const table = base.table === true || Boolean(follow && previousAnalysis.table && plan.table !== false);
     const expansionDetail = parsed.act === 'expand' ? expandedAnswerDetail(detail) : detail;
     const requested = visual ? base.charts || (!explicitCharts && follow && (!base.chart || base.chart === previousAnalysis.chart) ? previousAnalysis.charts : null) : null;
-    const [request, ...additionalRequests] = expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested });
+    const expand = (reserve) => expandAnalysis(analysis, { previous: previousAnalysis, today, detail: expansionDetail, chart: visual ? chart : null, charts: requested, reserve });
+    // Açık istek, özetin aynı okumasıysa ikinci kez okunmaz; açık satır sınırı ve sunum tercihi (liste/tablo) o okumaya geçer.
+    // Geçersiz sunum tercihi ya da satır sınırı özetin okumasına taşınmaz: istek ayrı bölüm kalır ve sorunu kendi yoluyla bildirilir
+    // (onarım o isteğin yolunu açar; özetin okuması geçersiz değerle reddedilmez).
+    const schema = requestSchema().properties;
+    const transferable = (item) => (item.layout == null || schema.layout.enum.includes(item.layout))
+      && (item.rank?.limit == null || (Number.isInteger(item.rank.limit) && item.rank.limit >= 1 && item.rank.limit <= schema.rank.properties.limit.maximum));
+    const merge = (expanded) => {
+      const parts = [...expanded];
+      const kept = [];
+      // Açık isteğin birleştiği özet okumaları: bölüm açık isteğin koşulunu (ör. tam liste) taşır, özetin sıralama yedeğine düşmez.
+      const merged = new Set();
+      for (const item of explicit) {
+        const index = transferable(item) ? parts.findIndex((part) => coveredRequest(part, item)) : -1;
+        if (index < 0) { kept.push(item); continue; }
+        const layout = item.layout && item.layout !== 'auto' ? item.layout : null;
+        const limit = Number.isInteger(item.rank?.limit) ? item.rank.limit : null;
+        if (merged.has(index) && limit !== null && parts[index].rank?.limit !== limit || layout && parts[index].layout !== 'auto' && parts[index].layout !== layout) { kept.push(item); continue; }
+        parts[index] = { ...parts[index], ...(layout ? { layout } : {}), ...(limit ? { rank: { ...parts[index].rank, limit } } : {}) };
+        merged.add(index);
+      }
+      return { parts, kept, merged: [...merged].sort((a, b) => a - b) };
+    };
+    // Açık istekler için yer ayrılır (tek ya da çok kapsamlı özette): isteğe bağlı okumalar (grafik, bütünleyici, alt birim kırılımı,
+    // dağılım yönleri) kalan bütçeyle eklenir. Ayrılan yer açılımı değiştirip bir isteğin kapsanmasını bozabilir; ayrılan yer kalan
+    // istek sayısına ulaşana dek yeniden hesaplanır (yer yalnızca büyür; en çok `maxParts` tur).
+    let reserve = 0;
+    const initial = expand(reserve);
+    let expanded = initial;
+    let { parts: analysisParts, kept, merged } = merge(expanded);
+    while (kept.length > reserve && analysisParts.length + kept.length > ANALYSIS_LIMITS.maxParts && reserve < ANALYSIS_LIMITS.maxParts) {
+      reserve = kept.length;
+      expanded = expand(reserve);
+      ({ parts: analysisParts, kept, merged } = merge(expanded));
+    }
+    const sections = [...analysisParts, ...kept];
+    if (sections.length > ANALYSIS_LIMITS.maxParts) throw invalidArguments(['$.analysis.focus:requestBudget']);
+    const [request, ...additionalRequests] = sections;
+    // Bölümlerin özet sahipliği (kapsam ve yön): sunum başlıkları ve takip bağlamı bunu kullanır; açık istek bölümü özetin değildir.
+    const owned = { analysisParts: analysisParts.length, ...(expanded.sections ? { sections: expanded.sections } : {}), ...(merged.length ? { explicitParts: Object.freeze(merged) } : {}) };
+    // Ayrılan yer yüzünden okunmayan yön, ayrı bölüm olarak kalan eşdeğer açık istekle zaten okunuyorsa "gösterilmedi" denmez:
+    // yer ayrılmamış açılımda o yönün bütün okumaları kalan açık isteklerce karşılanıyorsa not düşer.
+    const satisfied = (item) => {
+      const reads = initial.filter((part, position) => initial.sections?.[position]?.layer === item.layer && initial.sections[position].focus === item.focus);
+      return reads.length > 0 && reads.every((part) => kept.some((other) => coveredRequest(other, part) && (part.rank?.limit == null || other.rank?.limit >= part.rank.limit)));
+    };
+    const notRead = (expanded.omitted || []).filter((item) => !satisfied(item));
+    const omitted = notRead.length ? { omitted: Object.freeze(notRead) } : {};
+    // Açık isteğin birleşik plandaki yolu → modelin kendi yazdığı yol: o istekteki sorun özete değil isteğin kendisine bağlanır
+    // (model hangi alanı düzelteceğini görür; özetin genel "geçersiz" ayrıntısına dönüşmez).
+    const own = (item) => (item === plan.request ? '$.request' : `$.additionalRequests[${[].concat(plan.additionalRequests).indexOf(item)}]`);
+    const explicitPaths = Object.freeze(Object.fromEntries(kept.map((item, offset) => {
+      const merged = analysisParts.length + offset;
+      return [merged === 0 ? '$.request' : `$.additionalRequests[${merged - 1}]`, own(item)];
+    })));
     return { plan: { ...base, ...(visual ? { visual: true } : declined ? { visual: false } : {}), ...(chart ? { chart } : {}), ...(requested ? { charts: requested } : {}),
-      ...(table ? { table: true } : {}), analysis, request,
-      ...(additionalRequests.length ? { additionalRequests } : {}) }, brief: parsed, calls: [] };
+      ...(table ? { table: true } : {}), analysis: Object.freeze({ ...analysis, ...omitted, ...owned }), request,
+      ...(additionalRequests.length ? { additionalRequests } : {}) }, brief: parsed, calls: [], ...(kept.length ? { explicitPaths } : {}) };
   }
   if (plan.intent === PLANNER_INTENTS.ROTA) {
     if (!only('request', 'additionalRequests')) throw invalidArguments(['$.plan:rota']);
@@ -274,6 +425,111 @@ function planChoice(schema, value, prefix) {
 const PLAN_KEYS = Object.freeze(['intent', 'language', 'analysis', 'visual', 'chart', 'charts', 'table', 'request', 'additionalRequests', 'calls', 'clarify', 'abstain']);
 /** Özetin adlarını sunucu zaten çözer: bu araçların özet yanındaki çağrıları yürütülmeden atılabilir. */
 const NAME_LOOKUP_TOOLS = Object.freeze(['rota_person_search', 'rota_project_search']);
+/** Aşama G: özetin kendi okumalarını kurduğu nüfus araçları; özet yanındaki seçicisiz çağrıları yürütülmeden atılır. */
+const ANALYSIS_READ_TOOLS = Object.freeze([...NAME_LOOKUP_TOOLS, 'rota_workload_summary', 'rota_task_analytics', 'rota_task_search', 'rota_portfolio_summary']);
+
+/** Alan sırasından bağımsız kanonik JSON (dizi sırası anlamlıdır). */
+function stableJson(value) {
+  const canonical = (item) => (Array.isArray(item) ? item.map(canonical) : item && typeof item === 'object'
+    ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, canonical(item[key])])) : item);
+  return JSON.stringify(canonical(value ?? null));
+}
+
+/**
+ * Özetin bir okuması açık isteğin AYNI okuması mı: aynı işlem, nüfus (araç, koleksiyon, gruplama, sıralama düzeni), varlıklar,
+ * süzgeçler ve sıralama ölçüsü/yönü; açık isteğin her ölçüsü okumada da var; alan ve bağlama yazdıysa okumanınkiyle aynı. Farklı
+ * sıralama düzeni, süzgeç, gruplama ya da kimlik ayrı bir okumadır: açık istek ayrı bölüm olarak okunur. Satır sınırı ve sunum
+ * tercihi (layout) okumanın nüfusunu değiştirmez: çağıran açık isteğin sınırını ve tercihini o okumaya taşır (kullanıcı istediği
+ * kadar satırı istediği biçimde görür). Önceki sonuca gönderme hiçbir özet okumasıyla karşılanmaz.
+ */
+const rankShape = (rank) => { const { limit: _limit, ...shape } = rank || {}; return rank ? shape : null; };
+
+function coveredRequest(part, item) {
+  if (!part || !item || item.previousResult === true || Object.keys(item).some((key) => !Object.hasOwn(requestSchema().properties, key))) return false;
+  // Süzgeç değerlerinin ve varlıkların sırası anlam taşımaz (ör. durum listesi); sıralama ve satır sınırı taşır.
+  const loose = (value) => (Array.isArray(value) ? value.map(loose).sort((a, b) => stableJson(a).localeCompare(stableJson(b)))
+    : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, loose(item)])) : value);
+  const same = (key) => stableJson(part[key] ?? null) === stableJson(item[key] ?? null);
+  const alike = (key) => {
+    const empty = key === 'entities' ? [] : {};
+    return stableJson(loose(part[key] ?? empty)) === stableJson(loose(item[key] ?? empty));
+  };
+  // Nüfus etkin sırayla karşılaştırılır: yazılmamış sıra aracın/sıralamanın varsayılanıdır (aynı okuma iki kez okunmaz).
+  // Koleksiyon da etkin değerle karşılaştırılır: yazılmamış koleksiyon aracın tek satır koleksiyonudur (tamamlama kuralı).
+  const shaped = (request) => {
+    if (!request.population || typeof request.population !== 'object' || Array.isArray(request.population)) return request.population ?? null;
+    const { sort: _sort, collection: _collection, ...rest } = request.population;
+    const sort = effectiveSort(request);
+    const collection = effectiveCollection(request);
+    return { ...rest, ...(collection != null ? { collection } : {}), ...(sort ? { sort } : request.population.sort != null ? { sort: request.population.sort } : {}) };
+  };
+  return Array.isArray(item.metrics) && item.metrics.length === new Set(item.metrics).size && item.metrics.every((metric) => part.metrics?.includes(metric)) && part.operation === item.operation
+    && stableJson(shaped(part)) === stableJson(shaped(item)) && alike('entities') && alike('filters') && stableJson(rankShape(part.rank)) === stableJson(rankShape(item.rank))
+    && (item.fields == null || (Array.isArray(item.fields) && (!item.fields.length || same('fields'))))
+    && (item.bindings == null || (Array.isArray(item.bindings) && (!item.bindings.length || same('bindings'))));
+}
+
+/**
+ * Aşama G — çok kapsamlı özetin dizi yazımı: zayıf model birden çok kapsamı ayrı özetlerin dizisi olarak yazar
+ * (`"analysis":[{"scope":"self",…},{"scope":"team",…}]`). İlk öğe birincil özettir; diğerleri `also` kapsamlarıdır
+ * (kapsam, düzey, adlar ve yön AYNEN taşınır; dönem ve görselleştirme birincil özetten). Yapısal çeviridir; dil yorumu yoktur.
+ * Ek kapsamın birincilden farklı dönemi tek pencerede temsil edilemez: plan reddedilir (sessizce dönem düşmez).
+ */
+function layeredAnalysis(plan) {
+  if (!Array.isArray(plan.analysis)) return plan;
+  const items = plan.analysis;
+  if (!items.length || items.length > ANALYSIS_LIMITS.maxLayers || items.some((item) => !item || typeof item !== 'object' || Array.isArray(item))) throw invalidArguments(['$.analysis:type']);
+  if (items.length === 1) {
+    // Tek öğeli dizi de çok öğeli yazımla aynı dil kuralını izler: öğedeki dil plan düzeyine taşınır, çelişki reddedilir.
+    const { language, ...only } = items[0];
+    if (!Object.hasOwn(items[0], 'language')) return { ...plan, analysis: items[0] };
+    if (plan.language != null && plan.language !== language) throw invalidArguments(['$.analysis.also:scope']);
+    return { ...plan, ...(plan.language == null ? { language } : {}), analysis: only };
+  }
+  const [primary, ...rest] = items;
+  const window = (item) => JSON.stringify([item.dateFrom ?? null, item.dateTo ?? null, item.relativeWindow === 'all_time' ? null : item.relativeWindow ?? null]);
+  if (rest.some((item) => window(item) !== window(primary))) throw invalidArguments(['$.analysis.also:window']);
+  // Ek öğede ek kapsamın taşıyamadığı bir alan (daraltma, kendiyle karşılaştırma, satır, takip eylemi, iç içe ek kapsam) ya da
+  // birincilde kendi `also` alanı varsa çeviri o koşulu sessizce düşürür: plan reddedilir (model düzeltir). Dönem yukarıda
+  // birincille aynı olduğu doğrulandı; sunum alanları birincilinkiyle aynıysa anlam taşımaz.
+  const presentation = ['visual', 'chart', 'charts', 'table'];
+  const carried = new Set(['scope', 'level', 'names', 'focus', 'dateFrom', 'dateTo', 'relativeWindow', 'language', ...presentation]);
+  for (const [index, item] of rest.entries()) for (const key of ['withSelf', 'within', 'rows', 'act', 'also']) {
+    if (Object.hasOwn(item, key)) throw invalidArguments([`$.analysis.also[${index}].${key}:unknown`]);
+  }
+  if (Object.hasOwn(primary, 'also') || rest.some((item) => Object.keys(item).some((key) => !carried.has(key))
+    || presentation.some((key) => Object.hasOwn(item, key) && JSON.stringify(item[key]) !== JSON.stringify(primary[key])))) throw invalidArguments(['$.analysis.also:scope']);
+  const layer = ({ scope, level, names, focus }) => ({ scope, ...(level != null ? { level } : {}), ...(names != null ? { names } : {}), ...(focus != null ? { focus } : {}) });
+  // Dil plan düzeyindedir (özet şeması dil taşımaz): öğelerdeki dil yapısal olarak plan düzeyine taşınır; öğeler arasında ya da
+  // plan düzeyiyle çelişen dil sessizce seçilmez, plan reddedilir.
+  const languages = [...new Set(items.filter((item) => Object.hasOwn(item, 'language')).map((item) => item.language))];
+  if (languages.length > 1 || (languages.length && plan.language != null && plan.language !== languages[0])) throw invalidArguments(['$.analysis.also:scope']);
+  const { language: _language, ...head } = primary;
+  return { ...plan, ...(languages.length && plan.language == null ? { language: languages[0] } : {}), analysis: { ...head, also: rest.map(layer) } };
+}
+
+/**
+ * Özetin eşdeğer yazımları (yapısal; cümle yorumlanmaz, sonuç aynı doğrulamadan geçer):
+ *  - `intent: "analysis"` özetle birlikte yazıldıysa karar Rota verisidir (`analysis` yalnızca `rota` kararının alanıdır);
+ *  - özetin içindeki `reasoning` isteğe ait bir ipucudur, özetin okumalarını değiştirmez: düşürülür;
+ *  - göreli dönem, aynı günleri gösteren tarih çiftiyle birlikte yazıldıysa çelişki yoktur: göreli dönem kalır, tarihler düşer;
+ *  - takip dışındaki özette "dönem yok" (`all_time`) tarih çiftiyle birlikte yazıldıysa dönem tarihlerdir.
+ * Farklı günleri gösteren göreli dönem ve tarih çifti eskisi gibi çelişkidir (reddedilir; hangisinin kastedildiği seçilmez).
+ */
+function equivalentAnalysisSpelling(plan, today) {
+  const analysis = plan.analysis;
+  if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)) return plan;
+  let out = { ...analysis };
+  if (Object.hasOwn(out, 'reasoning')) delete out.reasoning;
+  const dated = out.dateFrom != null || out.dateTo != null;
+  if (dated && out.relativeWindow === 'all_time' && !['previous', 'row'].includes(out.scope)) delete out.relativeWindow;
+  if (dated && today && ['today', 'next_7_days'].includes(out.relativeWindow) && out.dateFrom === today
+    && out.dateTo === (out.relativeWindow === 'today' ? today : new Date(Date.parse(`${today}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10))) {
+    delete out.dateFrom;
+    delete out.dateTo;
+  }
+  return { ...plan, ...(plan.intent === 'analysis' ? { intent: PLANNER_INTENTS.ROTA } : {}), analysis: out };
+}
 
 /** Plan düzeyindeki sorunların beklenen biçimi (yalnızca sözleşmeden; modelin değeri yansıtılmaz). */
 export function planShapeHints(problems) {
@@ -286,7 +542,7 @@ export function planShapeHints(problems) {
     '$.chart': `chart: ${PLAN_CHART_TYPES.join('|')}`,
     '$.table': 'table: true|false',
     '$.request:required': 'intent rota için request ya da (geniş/değerlendirme sorusunda) analysis zorunludur',
-    '$.analysis': 'analysis: {"scope":"self|person|team|project|projects|all","focus":["overview","overdue","upcoming"],"names":["<ad>"] (yalnızca person/project)}; request/calls ile birlikte verilmez',
+    '$.analysis': 'analysis: {"scope":"self|person|team|project|projects|all","focus":["overview","overdue","upcoming"],"names":["<ad>"] (yalnızca person/project),"also":[{"scope":"team","level":"department"}] (ek kapsam)}; calls ile birlikte verilmez',
     '$.additionalRequests': 'additionalRequests: tek soru için alanı çıkar; bir ya da iki ek istek nesnesi ver; calls ile birlikte verme',
     '$.plan:repairScope': 'Yalnızca reddedilen yolları düzelt; önceki sorunsuz bölümleri, varlıkları ve koşulları aynen koru',
     '$.clarify': `clarify.reason: ${CLARIFY_REASONS.join('|')}`,

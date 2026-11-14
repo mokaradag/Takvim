@@ -58,9 +58,21 @@ function serveTools(file) {
   });
 }
 
+/**
+ * CLI, modele kendi ortam bağlamını (system-reminder blokları: makinenin güncel tarihi, kullanıcı ve depo bilgisi, bütçe) ekler ve
+ * bu ekleme bayrakla kapatılamaz (`--bare` barındırılan oturum kimliğiyle çalışmaz). Sentetik kıyas verisinin "bugün"ü sistem
+ * yönergesindedir; makinenin tarihi onunla çelişir ve tarihli vakaları yanlış döneme kaydırır (ölçüldü: aynı koşuda model iki farklı
+ * "bugün" kullandı). Üretimde böyle bir ek blok yoktur. Not, eklenen blokların Rota bağlamı olmadığını söyler; sistem yönergesi ve
+ * araç kataloğu (önbelleğe alınan önek) bayt bayt aynı kalır, not yalnızca kullanıcı iletisinin başındadır.
+ */
+export const HOST_CONTEXT_NOTE = '[ORTAM NOTU]\nBu iletiyi taşıyan komut satırı aracı kendi ortam bilgisini (güncel tarih, kullanıcı, depo ya da bütçe içeren system-reminder blokları) ekleyebilir. Bu bloklar Rota bağlamı DEĞİLDİR ve yok sayılır: geçerli tarih ve bağlam yalnızca sistem yönergesinde ve aşağıdaki iletilerde yazandır.';
+
 /** Sistem dışı iletiler tek kullanıcı iletisinde, sırasıyla ve rolleriyle. */
-function conversationText(messages) {
-  const lines = [];
+function conversationText(messages, system = '') {
+  // Geçerli gün sistem yönergesinin takvim çapasından AYNEN yinelenir (yeni bilgi değildir): CLI'nin eklediği makine tarihi kullanıcı
+  // iletisine yakın durduğundan model onu seçebiliyor; yineleme çelişkiyi sistem yönergesi lehine çözer.
+  const today = /Takvim çapaları: bugün (\d{4}-\d{2}-\d{2})/u.exec(String(system))?.[1];
+  const lines = [today ? `${HOST_CONTEXT_NOTE} Sistem yönergesine göre bugün ${today}.` : HOST_CONTEXT_NOTE];
   for (const message of messages) {
     const content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? '');
     if (message.role === 'system') lines.push(`[SUNUCU NOTU]\n${content}`);
@@ -732,7 +744,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
       ...(forced ? ['--json-schema', JSON.stringify({ ...forced.parameters, description: forced.description })] : []), '--output-format', 'stream-json', '--verbose',
       '--max-turns', '1', '--no-session-persistence', '--disable-slash-commands'];
     const startedAt = Date.now();
-    const { code, events, launchFailed, timedOut, cleanupFailed } = await runClaude(args, env, cwd, conversationText(rest), launcher, timeoutMs);
+    const { code, events, launchFailed, timedOut, cleanupFailed } = await runClaude(args, env, cwd, conversationText(rest, system.content), launcher, timeoutMs);
     const init = events.find((event) => event.type === 'system' && event.subtype === 'init');
     const result = events.find((event) => event.type === 'result');
     const assistants = events.filter((event) => event.type === 'assistant' && !event.parent_tool_use_id).map((event) => event.message);
@@ -760,11 +772,30 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     // Zorunlu turda başka araç çağrısı: üretimde kısıtlı çözüm bunu engeller. İsteğe bağlı tek yeniden deneme (ayrı sayılır).
     const forcedToolCall = forced && !hideTools && code === 1 && result?.subtype === 'error_max_turns'
       && blocks.some(block => block.type === 'tool_use' && block.name?.startsWith(PREFIX));
-    if (forcedToolCall && MODEL_FORCED_RETRY_ATTEMPTS > 1 && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
+    // Zorunlu turda araçsız düz metin de aynı sınıftandır: üretimin adlı araç seçimi düz metni olanaksız kılar; CLI kılamaz. Aynı isteğe
+    // bağlı tek yeniden deneme uygulanır ve `forcedText` ile ayrıca sayılır (yeniden deneme yoksa metin sunucuya eskisi gibi iletilir).
+    const forcedProse = Boolean(forced && !hideTools && !forcedToolCall && code === 1 && result?.subtype === 'error_max_turns'
+      && !blocks.some((block) => block.type === 'tool_use') && blocks.some((block) => block.type === 'text'));
+    // Önbellek tabanı: aynı durağan istem ve araç kataloğuyla beş dakika içindeki başarılı çağrı.
+    const cacheBaseline = () => prior.find((item) => {
+      const ageMs = Number.isSafeInteger(item.durationMs) && item.durationMs >= 0 ? startedAt - (Date.parse(item.at) - item.durationMs) : NaN;
+      return !item.error && item.staticPromptHash === staticPromptHash && item.toolCatalogHash === toolCatalogHash
+        && ageMs >= 0 && ageMs < 5 * 60 * 1000;
+    });
+    const catalogProblem = JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort()) ? 'PLANNER_TOOLS_NOT_OFFERED'
+      : prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash) ? 'PLANNER_TOOL_ORDER_UNSTABLE' : null;
+    if ((forcedToolCall || forcedProse) && MODEL_FORCED_RETRY_ATTEMPTS > 1 && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
+      if (catalogProblem) return fail(catalogProblem, { ...row, offered });
       // Yinelenen ilk yanıt da aynı model ve düşünme denetiminden geçer: temiz bir yeniden deneme yasak düşünmeyi gizleyemez.
-      const problem = responseProblem(row, model);
-      if (problem) return fail(problem, { ...row, forcedToolCall: true });
-      appendLedger(log, { ...row, forcedToolCall: true });
+      // Tek çağrı denetimi de yeniden denemeden ÖNCE uygulanır: ilk yanıtın fazladan API çağrısı başarılı bir yeniden denemeyle gizlenemez.
+      const problem = row.apiCalls !== 1 ? 'PLANNER_CALL_COUNT_UNEXPECTED' : responseProblem(row, model);
+      if (problem) return fail(problem, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
+      // Önbellek zorunluluğu yeniden denemeden ÖNCE uygulanır: yeniden deneme araçları gizlediği için katalog özeti değişir ve kendi
+      // tabanı olmaz; ilk yanıtın önbellek kaçırması bu yolla gizlenemez.
+      if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheBaseline() && !usage.cache_read_input_tokens) {
+        return fail('PLANNER_CACHE_NOT_REUSED', { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
+      }
+      appendLedger(log, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
       rmSync(work, { recursive: true, force: true });
       return complete(launcher, timeoutMs, payload, true);
     }
@@ -779,15 +810,8 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
       && !blocks.some((block) => block.type === 'tool_use') && blocks.some((block) => block.type === 'text'));
     if (forcedText) row.forcedText = true;
     if (code !== 0 && !toolHandoff && !schemaRejected && !forcedText || !result || result.is_error && result.subtype !== 'error_max_turns' || rejected || result.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null, subtype: result?.subtype ?? null, exitCode: code ?? null });
-    // CLI araçları kendi kararlı sırasıyla sunar: küme birebir aynı olmalı, sıra (toolOrderHash) çağrılar arasında sabit kalmalıdır.
-    if (JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort())) return fail('PLANNER_TOOLS_NOT_OFFERED', { ...row, offered });
-    if (prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash)) return fail('PLANNER_TOOL_ORDER_UNSTABLE', row);
-    const first = prior.find((item) => {
-      const ageMs = Number.isSafeInteger(item.durationMs) && item.durationMs >= 0 ? startedAt - (Date.parse(item.at) - item.durationMs) : NaN;
-      return !item.error && item.staticPromptHash === staticPromptHash && item.toolCatalogHash === toolCatalogHash
-        && ageMs >= 0 && ageMs < 5 * 60 * 1000;
-    });
-    if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && first && !usage.cache_read_input_tokens) return fail('PLANNER_CACHE_NOT_REUSED', row);
+    if (catalogProblem) return fail(catalogProblem, { ...row, offered });
+    if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheBaseline() && !usage.cache_read_input_tokens) return fail('PLANNER_CACHE_NOT_REUSED', row);
     if (row.apiCalls !== 1) return fail('PLANNER_CALL_COUNT_UNEXPECTED', row);
     if (!models.length || models.some((item) => item !== model)) return fail('PLANNER_MODEL_MISMATCH', row);
     if (row.thinking !== 'off') return fail('PLANNER_THINKING_ON', row);

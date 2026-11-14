@@ -117,7 +117,8 @@ test('doğal analist yanıtı: eski bağlaçlı model düzeni de çizilir; bağl
 
 test('zorunlu çekince: tamlığı kanıtlanmamış ekip iş yükünde çekince her yanıtta söylenir', async (t) => {
   const plan = { intent: 'rota', language: 'tr', analysis: { scope: 'team', focus: ['workload', 'overdue'] } };
-  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }] });
+  // Aşama G: kadro okunur; tamlığı kanıtlanamayan ekip için yönetim kapsamında dizin kaydı çözülemeyen bir üye vardır.
+  const seed = rotaToolSeed({ executiveScope: [{ ManagerSicil: AYSE, EmployeeSicil: ZEYNEP }, { ManagerSicil: AYSE, EmployeeSicil: ALI_1 }, { ManagerSicil: AYSE, EmployeeSicil: 919999 }] });
   seed.taskAssignees.push({ TaskId: TASKS.LITERAL, Sicil: ALI_1 }, { TaskId: TASKS.UNASSIGNED, Sicil: ALI_1 }, { TaskId: TASKS.OVERDUE, Sicil: ALI_1 },
     { TaskId: TASKS.SERIES, Sicil: ZEYNEP });
   await t.test('çekinceyi atlayan düzyazıya sunucu çekinceyi ekler', async (t) => {
@@ -328,7 +329,7 @@ test('seyrek veri: görevi olmayan kullanıcıda düzyazı kısa ve dayanaklıd�
 
 test('fazla yön kullanıcı öncelik vermeden alt kümeye daraltılmaz ve veri okunmaz', async (t) => {
   const plans = [
-    { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming', 'priority'] } },
+    { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'status', 'overdue', 'upcoming', 'priority', 'schedule', 'critical'] } },
     { intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview', 'overdue', 'upcoming'] } }
   ];
   const { ask } = phase4eConversation(t, { planner: () => ({ type: 'tool-calls', calls: [{ name: 'rota_plan', arguments: plans.shift() }] }),
@@ -464,7 +465,9 @@ test('Ayrıntılı bölümlüdür: sayfa ana hat taşır, her bölüm sunucu ba�
   assert.equal(results.balanced.page.sections, undefined);
   assert.ok(results.detailed.page.sections.length >= 3, 'ana hat her bölümü sıralar');
   const headings = (text) => (text.match(/^#### /gm) || []).length;
-  assert.ok(headings(results.balanced.content) >= 3, `Dengeli üç bölümlü özet başlıklı:\n${results.balanced.content}`);
+  // Öncelik kapanışı başlıksız bir paragraftır; başlıklar yalnızca veri bölümlerinindir.
+  assert.ok(headings(results.balanced.content) >= 2, `Dengeli çok bölümlü özet başlıklı:\n${results.balanced.content}`);
+  assert.match(results.balanced.content, /Özetle öncelik sırası şöyle: önce /);
   assert.ok(headings(results.detailed.content) >= 3, `Ayrıntılı bölüm başlıklı:\n${results.detailed.content}`);
   assert.ok(results.detailed.page.propositions.length > results.balanced.page.propositions.length);
 });
@@ -541,13 +544,13 @@ test('Ayrıntılı düzyazıda başlığı sunucu koyar: modelin yanlış başl�
     const { ask } = phase4eConversation(t, { compose: () => composer((view) => { page = view; return shifted(view); }) });
     const result = await ask({ text: 'projelerimi değerlendir', plan }, { detail: 'detailed' });
     assert.equal(turnLine(logs).context.presentation.server, false, JSON.stringify(turnLine(logs).context.presentation));
-    assert.match(result.answer.content, /#### Öncelikli konular\n\n1\. [^\n]+(?:\n[2-9]\. [^\n]+)+(?:\n\n_Not:[^\n]+)?$/);
+    assert.match(result.answer.content, /\n\nÖzetle öncelik sırası şöyle: önce [^\n]+; (?:ardından|son olarak) [^\n]+\. (?:【R\d+】)+(?:\n\n_Not:[^\n]+)?$/);
     const headings = headingsOf(result.answer.content);
     assert.ok(headings.length >= 2, result.answer.content);
     // Başlıklar ana hattın bölüm sırasıyladır (modelin yazdığı kayık kimlik sırasıyla değil).
     const expected = page.sections.filter((section) => section.title).map((section) => `#### ${page.titles.find((title) => title.id === section.title).text}`);
-    // Aşama F: bölümlerden sonra sunucunun öncelik listesi kendi başlığıyla gelir.
-    assert.deepEqual(headings.filter((heading) => heading !== '#### Öncelikli konular'), expected, 'başlıklar bölüm sırasıyla ve kendi bölümünün önünde');
+    // Bölümlerden sonra sunucunun öncelik kapanışı başlıksız bir paragraftır.
+    assert.deepEqual(headings, expected, 'başlıklar bölüm sırasıyla ve kendi bölümünün önünde');
   });
   // Bölümler iç içe yazılırsa (bir bölümün tablosu başka bölümün paragrafından sonra) başlık hiç konmaz.
   await t.test('iç içe bölümler', async (t) => {
@@ -562,13 +565,13 @@ test('Ayrıntılı düzyazıda başlığı sunucu koyar: modelin yanlış başl�
     // Aşama F: iç içe dizilen bölümler sunucuda bölümlerine toplanır (bölüm sırası ilk görünüş, bölüm içi sıra modelin) ve
     // her bölüm kendi başlığıyla açılır; tablo artık başka bölümün başlığı altına düşmez.
     const content = mixed.answer.content;
-    assert.match(content, /#### Öncelikli konular\n\n1\. [^\n]+(?:\n[2-9]\. [^\n]+)+(?:\n\n_Not:[^\n]+)?$/);
-    const headings = headingsOf(content).filter((heading) => heading !== '#### Öncelikli konular');
+    assert.match(content, /\n\nÖzetle öncelik sırası şöyle: önce [^\n]+; (?:ardından|son olarak) [^\n]+\. (?:【R\d+】)+(?:\n\n_Not:[^\n]+)?$/);
+    const headings = headingsOf(content);
     const expected = page.sections.filter((section) => section.title).map((section) => `#### ${page.titles.find((title) => title.id === section.title).text}`);
     assert.deepEqual(headings, expected, content);
     for (const [index, heading] of headings.entries()) {
       const start = content.indexOf(heading);
-      const end = index + 1 < headings.length ? content.indexOf(headings[index + 1]) : content.lastIndexOf('#### Öncelikli konular');
+      const end = index + 1 < headings.length ? content.indexOf(headings[index + 1]) : content.lastIndexOf('Özetle öncelik sırası şöyle:');
       assert.match(content.slice(start + heading.length, end), /【R\d+】/, `kanıtsız bölüm: ${heading}`);
       const section = page.sections.find((item) => page.titles.find((title) => title.id === item.title)?.text === heading.slice(5));
       const body = content.slice(start + heading.length, end).replaceAll('**', '').replaceAll('\\', '');

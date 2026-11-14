@@ -489,8 +489,16 @@ export function completeRequest(request, calls, { today, allowedTextFields = [] 
       .map((binding) => Object.freeze({ ...binding, metric: renamed(binding.metric) }))),
     ...(request.rank ? { rank: Object.freeze({ ...request.rank, metric: renamed(request.rank.metric) }) } : {}),
     population: Object.freeze(Object.fromEntries(Object.entries(population).filter(([, value]) => value != null))) });
-  const capability = requestCapabilityProblems(completed, { allowedTextFields });
-  return { request: completed, problems: [...problems, ...capability.problems], hints: [...hints, ...capability.hints] };
+  // Liste ya da sıralamada satırı adlandıran sütun birden çok yolda taşınıyorsa (ör. `task.project`: proje adı ya da kodu) ve model
+  // yolu bağlamadıysa kayıt defterinin ilk yolu olan AD alanı varsayılandır (özetin kendi açılımının bağladığı yol; onarım ipucunun
+  // da ilk örneği). Yapısal tamamlamadır: ölçü, nüfus ve koşullar değişmez. Tek değer sorusunda (`value`) sorulan şeyin adı mı kodu mu
+  // olduğu yanıtın kendisidir: belirsizlik eskisi gibi modele kalır; ad olmayan çok yollu ölçü de açık bağ ister.
+  const defaulted = (operation === 'value' ? [] : unboundCarrierMetrics(completed)).map((metric) => ({ metric, path: metricPaths(tool, metric)[0] }))
+    .filter(({ path }) => typeof path === 'string' && path.endsWith('.name'));
+  const bound = defaulted.length ? Object.freeze({ ...completed, fields: Object.freeze([...completed.fields,
+    ...defaulted.map(({ metric, path }) => Object.freeze({ metric, tool, path }))]) }) : completed;
+  const capability = requestCapabilityProblems(bound, { allowedTextFields });
+  return { request: bound, problems: [...problems, ...capability.problems], hints: [...hints, ...capability.hints] };
 }
 
 /**
@@ -747,6 +755,33 @@ export function readKey(name, args, today) {
 }
 
 /** Sıralama isteğinin aracın sırası: sıralama ölçüsü ve yönü aracın sıra kayıtlarından biriyle eşleşmelidir. */
+/**
+ * İsteğin ETKİN sırası: yazılmış sıra, yoksa sıralama ölçüsünün sırası, yoksa aracın varsayılanı (tamamlama ile aynı kural).
+ * Sırası olmayan araçta ya da bilinmeyen araçta `null`. İki isteğin aynı okuma olup olmadığı yazılmamış varsayılanla değil etkin
+ * sırayla karşılaştırılır.
+ */
+export function effectiveSort(request) {
+  const tool = request?.population?.tool;
+  if (typeof tool !== 'string' || !getRotaTool(tool)?.parameters.properties.sort) return null;
+  const filters = request.filters && typeof request.filters === 'object' && !Array.isArray(request.filters) ? request.filters : {};
+  return request.population.sort || rankSort(tool, request.rank) || defaultSort(tool, declaredValues(FAMILIES[tool] || null, filters));
+}
+
+/**
+ * İsteğin ETKİN satır koleksiyonu (tamamlama ile aynı varsayılan kuralı): yazılmış koleksiyon; yoksa gruplu görev analizinde grup
+ * satırları, ölçüleri taşıyan tek koleksiyon ya da aracın bu varlık biçimindeki tek koleksiyonu. Değer isteğinde ve bilinmeyen araçta
+ * yazılan değer (çoğunlukla yok) döner. İki isteğin aynı okuma olup olmadığı yazılmamış varsayılanla değil etkin koleksiyonla karşılaştırılır.
+ */
+export function effectiveCollection(request) {
+  const population = request?.population;
+  const tool = population?.tool;
+  if (population?.collection != null || request.operation === 'value' || typeof tool !== 'string' || !getRotaTool(tool)) return population?.collection ?? null;
+  if (population.groupBy && tool === 'rota_task_analytics') return 'groups';
+  const shaped = shapeCollections(tool, Array.isArray(request.entities) ? request.entities.filter((entity) => entity && typeof entity === 'object') : []);
+  const fitting = Array.isArray(request.metrics) ? listCollections(tool, request.metrics, shaped) : [];
+  return fitting.length === 1 ? fitting[0] : !fitting.length && shaped.length === 1 ? shaped[0] : null;
+}
+
 function rankSort(tool, rank) {
   if (!rank) return null;
   const table = tool === 'rota_task_search' ? TASK_SORT_RANKS : tool === 'rota_portfolio_summary' ? PORTFOLIO_SORT_RANKS : {};
@@ -801,8 +836,9 @@ export function derivedReads(request, bound, { today, attempted = new Set() } = 
   if (population.groupBy && properties.groupBy) base.groupBy = population.groupBy;
   if (population.depth && properties.depth) base.depth = population.depth;
   if (population.textFields?.length && properties.textFields) base.textFields = population.textFields;
-  // Liste nüfusun bütün satırlarıdır: aracın en büyük sayfasıyla bir kez okunur; sayfalar birleştirilmez.
-  if (request.operation === 'list' && properties.limit?.maximum) base.limit = properties.limit.maximum;
+  // Liste nüfusun bütün satırlarıdır: aracın en büyük sayfasıyla bir kez okunur; sayfalar birleştirilmez. Aşama G: portföy
+  // toplamları sayfadan bağımsızdır; portföy değer okuması da en büyük sayfayla okunur ve aynı turdaki proje listesiyle TEK okumadır.
+  if ((request.operation === 'list' || (request.operation === 'value' && tool.name === 'rota_portfolio_summary')) && properties.limit?.maximum) base.limit = properties.limit.maximum;
   const selectors = new Map();
   for (const entity of bound) {
     const param = SELECTOR_PARAMS[entity.type];

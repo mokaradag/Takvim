@@ -242,8 +242,12 @@ export function createToolExecutor({
             highlights: shrunk.data?.sizeNote ? [] : (result.outcome.evidence?.highlights || []),
             authorizationEpoch: context.authorizationEpoch?.() ?? null,
             scopedAuthorization: context.evidenceAuthorization?.(result.args, shrunk, result.projectPopulation) ?? null,
+            // Örgütsel (bölüm/birim) gruplar da proje başına açıklanan erişim düzeyini saklar: yeniden açılışta daha düşük
+            // güncel erişim, tam erişimle kurulmuş özeti açamaz. Seçilen proje, nüfus boş olsa da kanıtın adlandırdığı projedir:
+            // düzeyi de kaydedilir (yoksa yetki değişmeden yeniden açılış kapalı reddedilirdi).
             authorizationProjectLevels: ['rota_recurrence_inspect', 'rota_data_quality'].includes(name)
-              ? context.evidenceProjectLevels?.(result.population || []) : null,
+              || (name === 'rota_task_analytics' && ['department', 'unit'].includes(result.args?.groupBy))
+              ? context.evidenceProjectLevels?.([...(result.population || []), ...(result.projectPopulation || []).map((projectId) => ({ projectId })), ...(result.args?.projectId ? [{ projectId: result.args.projectId }] : [])]) : null,
             populationReferences: result.population,
             args: result.args,
             round: state.rounds

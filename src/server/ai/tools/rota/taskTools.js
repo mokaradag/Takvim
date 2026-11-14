@@ -7,7 +7,7 @@ import { describeRecurrenceRule } from '../../../../scheduling/recurrence/index.
 import { TOOL_LIMITS } from '../toolLimits.js';
 import { TOOL_ERROR_CODES, ToolError } from '../toolErrors.js';
 import { describeTaskScope, projectAccess } from './rotaScope.js';
-import { readTaskDetail, readTaskFacts, readWbsSelector } from './rotaToolStore.js';
+import { readTaskDetail, readTaskFacts, readWbsSelector, TEAM_ROSTER_LIMIT } from './rotaToolStore.js';
 import {
   accessExplanation,
   CURSOR_PROPERTY,
@@ -109,7 +109,7 @@ export async function requireTeamScope(call, filters) {
   if (!auth?.isExecutive) throw denied();
 }
 
-async function loadFilteredFacts(call, scope, filters, { withAssignees = false } = {}) {
+async function loadFilteredFacts(call, scope, filters, { withAssignees = false, rosterRows = 0 } = {}) {
   await requireTeamScope(call, filters);
   if (filters.wbsId) {
     const node = await call.sql((executor) => readWbsSelector(executor, scope, { projectId: filters.projectId, wbsId: filters.wbsId }));
@@ -144,7 +144,8 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false }
     personSicil: filters.personSicil,
     teamLevel: filters.assignee === 'team' && filters.teamLevel ? TEAM_LEVELS[filters.teamLevel] : null,
     withAssignees: withAssignees || filters.assignee === 'person',
-    maxRows: TOOL_LIMITS.maxAnalyzedTasks
+    maxRows: TOOL_LIMITS.maxAnalyzedTasks,
+    rosterRows
   }));
   if (result.truncated) throw new ToolError(TOOL_ERROR_CODES.RESULT_TOO_LARGE);
   const facts = result.facts.filter((fact) => matchesTaskFilters(fact, filters, {
@@ -162,7 +163,7 @@ async function loadFilteredFacts(call, scope, filters, { withAssignees = false }
       .items.find((person) => person.sicil === filters.personSicil)?.name;
     filters.person = resolved && resolved !== String(filters.personSicil) ? dataText(resolved, 120) : 'Seçilen kişi';
   }
-  return { facts, projects, assignees: result.assignees };
+  return { facts, projects, assignees: result.assignees, roster: result.roster || null };
 }
 
 function filterHighlights(filters) {
@@ -413,13 +414,23 @@ const taskDetail = {
 
 /* ── rota_task_analytics ──────────────────────────────────── */
 
-const GROUP_BY = Object.freeze(['status', 'priority', 'project', 'assignee', 'deadline', 'target_month']);
+const GROUP_BY = Object.freeze(['status', 'priority', 'project', 'assignee', 'deadline', 'target_month', 'department', 'unit']);
+/** Aşama G: sorumlunun dizindeki örgütsel birimine göre gruplama (bir görev farklı birimlerdeki sorumlularında ayrı sayılır). */
+const ORGANIZATION_GROUP_BY = Object.freeze(['department', 'unit']);
 /** Görünür kişiye bağlanamayan görevlerin grupları; gizli ve olmayan atama aynı gruptadır. */
 const ASSIGNMENT_GROUPS = Object.freeze({
   unassigned: ['unassigned', 'Sorumlusuz'],
   unresolved: ['unresolved', 'Sorumlu kaydı çözülemiyor'],
   undisclosed: ['undisclosed', 'Sorumlu bilgisi gösterilemiyor']
 });
+
+/**
+ * Dizin kaydı çözülen ama bölümü/birimi kayıtlı olmayan görünür sorumluların grubu (varlık değildir; etiketi gruplama düzeyini
+ * söyler). Dizin kaydı çözülemeyen sorumlu bu gruba değil, atama gruplarının `unresolved` grubuna girer (iki ayrı neden).
+ */
+const ORGANIZATION_UNKNOWN = Object.freeze({ department: ['no_unit', 'Bölümü belirtilmemiş'], unit: ['no_unit', 'Birimi belirtilmemiş'] });
+/** Örgütsel kimlik anahtarının parçası: dizindeki ad aynen (yalnızca Unicode NFC); büyük/küçük harf ve aksan ayrımı korunur. */
+const organizationKeyPart = (name) => (name ? String(name).normalize('NFC') : '');
 
 function deadlineBucket(fact, today) {
   if (fact.status === 'done') return ['done', 'Tamamlandı'];
@@ -449,6 +460,28 @@ function groupKeys(fact, groupBy, { projects, assignees, today, teamOnly = false
       if (teamOnly && (assignees.get(fact.id) || []).some((person) => person.teamMember === true && person.identityVisible && !person.resolved)) return [ASSIGNMENT_GROUPS.unresolved];
       return [ASSIGNMENT_GROUPS[state] || ASSIGNMENT_GROUPS.undisclosed];
     }
+    case 'department':
+    case 'unit': {
+      // Görev, görünür (ekip kapsamında yalnızca ekip üyesi) sorumlularının FARKLI birimlerinde birer kez sayılır; birimi
+      // dizinde olmayan ya da kimliği çözülemeyen sorumlu ayrı gruptadır. Gizli sorumlunun birimi açıklanmaz.
+      const state = assignmentState(fact);
+      const people = state === 'visible'
+        ? (assignees.get(fact.id) || []).filter((person) => person.identityVisible && person.sicil != null && (!teamOnly || person.teamMember === true)) : [];
+      if (!people.length) return [ASSIGNMENT_GROUPS[state === 'visible' ? 'undisclosed' : state] || ASSIGNMENT_GROUPS.undisclosed];
+      // Birimin kimliği dizindeki hiyerarşik yoludur (direktörlük › bölüm › birim): farklı üst birimlerdeki aynı adlı birimler
+      // birleşmez. Üst birimi bilinmeyen birim, üst birimi bilinen aynı adlı birimle de birleşmez (ad tek başına kimlik değildir).
+      // Anahtar dizindeki adları katlamadan kullanır: yalnızca aksanı farklı iki ayrı birim tek grupta birleşmez.
+      const labels = new Map();
+      for (const person of people) {
+        if (!person.resolved) { labels.set(ASSIGNMENT_GROUPS.unresolved[0], ASSIGNMENT_GROUPS.unresolved[1]); continue; }
+        const label = person[groupBy];
+        if (!label) { labels.set(ORGANIZATION_UNKNOWN[groupBy][0], ORGANIZATION_UNKNOWN[groupBy][1]); continue; }
+        const parents = groupBy === 'unit' ? [person.directorate, person.department] : [person.directorate];
+        const path = [...parents.map(organizationKeyPart), organizationKeyPart(label)];
+        labels.set(`org:${JSON.stringify(path)}`, [label, parents]);
+      }
+      return [...labels.entries()].map(([key, value]) => (Array.isArray(value) ? [key, ...value] : [key, value]));
+    }
     default: return [];
   }
 }
@@ -467,7 +500,7 @@ const taskAnalytics = {
       ...FILTER_PROPERTIES,
       groupBy: {
         type: 'string', enum: [...GROUP_BY],
-        description: 'Gruplama boyutu: status, priority, project, assignee (bir görev birden çok sorumluda sayılabilir), deadline (termin kovası), target_month (termin ayı).'
+        description: 'Gruplama boyutu: status, priority, project, assignee (bir görev birden çok sorumluda sayılabilir), deadline (termin kovası), target_month (termin ayı), department/unit (sorumlunun bölümü/birimi; bir görev birden çok birimde sayılabilir).'
       },
       limit: LIMIT_PROPERTY(25, 10)
     }
@@ -477,16 +510,20 @@ const taskAnalytics = {
     const groupBy = args.groupBy || null;
     const limit = args.limit ?? 10;
     const { scope } = await call.authorization();
-    const { facts, projects, assignees } = await loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' });
+    const teamOrganization = filters.assignee === 'team' && ORGANIZATION_GROUP_BY.includes(groupBy);
+    const { facts, projects, assignees, roster } = await loadFilteredFacts(call, scope, filters, { withAssignees: groupBy === 'assignee' || ORGANIZATION_GROUP_BY.includes(groupBy),
+      rosterRows: teamOrganization ? TEAM_ROSTER_LIMIT : 0 });
     // Ekip kapsamında sorumlu gruplaması yalnızca yönetim kapsamındaki kişilerdir (görevin kapsam dışı eş sorumlusu sayılmaz).
     const context = { projects, assignees, today: call.today, teamOnly: filters.assignee === 'team' };
     let groups = null;
     let groupCount = 0;
     if (groupBy) {
       const byKey = new Map();
+      const parents = new Map();
       for (const fact of facts) {
-        for (const [key, label] of groupKeys(fact, groupBy, context)) {
+        for (const [key, label, parent = null] of groupKeys(fact, groupBy, context)) {
           if (!byKey.has(key)) byKey.set(key, { key, label: dataText(label, 160), count: 0, open: 0, overdue: 0, done: 0 });
+          if (parent) parents.set(key, parent);
           const group = byKey.get(key);
           group.count += 1;
           if (fact.status === 'done') group.done += 1;
@@ -494,20 +531,54 @@ const taskAnalytics = {
           if (isOverdue(fact, call.today)) group.overdue += 1;
         }
       }
+      // Aynı adlı farklı birimler görünen adlarıyla da ayrışır: önce en yakın üst birimle ("Test · Bölüm A"); bu da yetmezse
+      // (aynı adlı bölümler farklı direktörlüklerde) bütün yolla ("Test · Direktörlük X › Bölüm A"). Ayrışmaya gerekmeyen üst
+      // birim adı eklenmez.
+      if (ORGANIZATION_GROUP_BY.includes(groupBy)) {
+        const missing = ['Direktörlüğü belirtilmemiş', 'Bölümü belirtilmemiş'];
+        const organized = [...byKey.values()].filter((group) => group.key.startsWith('org:'));
+        const base = new Map(organized.map((group) => [group.key, group.label]));
+        const chain = (key) => (parents.get(key) || []).map((name, index) => name || missing[index]);
+        for (const depth of [1, 2]) {
+          const counts = new Map();
+          for (const group of byKey.values()) counts.set(group.label, (counts.get(group.label) || 0) + 1);
+          for (const group of organized) {
+            const path = chain(group.key);
+            if (counts.get(group.label) < 2 || depth > path.length) continue;
+            group.label = dataText(`${base.get(group.key)} · ${path.slice(-depth).join(' › ')}`, 160);
+          }
+        }
+      }
+      if (ORGANIZATION_GROUP_BY.includes(groupBy)) {
+        const counts = new Map();
+        for (const group of byKey.values()) counts.set(group.label, (counts.get(group.label) || 0) + 1);
+        const ambiguous = [...byKey.values()].filter((group) => counts.get(group.label) > 1).sort((a, b) => a.key.localeCompare(b.key));
+        const used = new Set([...byKey.values()].filter((group) => counts.get(group.label) === 1).map((group) => group.label));
+        for (const group of ambiguous) {
+          const base = dataText(group.label, 140);
+          let suffix = 1;
+          while (suffix <= byKey.size && used.has(`${base} · ${suffix}`)) suffix += 1;
+          group.label = `${base} · ${suffix}`;
+          used.add(group.label);
+        }
+      }
       const ordered = [...byKey.values()].sort((left, right) => (groupBy === 'target_month'
         ? left.key.localeCompare(right.key)
         : right.count - left.count || left.label.localeCompare(right.label, 'tr')));
       groupCount = ordered.length;
-      const visibleGroupLimit = ordered.length > limit ? Math.max(0, limit - 1) : limit;
+      // Aşama G: örgütsel gruplar örtüşebilir (bir görev farklı birimlerde ayrı sayılır): sınırı aşan gruplar toplanmış bir "diğer"
+      // satırına katılmaz (örtüşen sayıların toplamı yanlıştır). Kesiklik `groupCount`, `complete` ve `truncated` ile bildirilir.
+      const overlapping = ORGANIZATION_GROUP_BY.includes(groupBy);
+      const visibleGroupLimit = ordered.length > limit && !overlapping ? Math.max(0, limit - 1) : limit;
       groups = ordered.slice(0, visibleGroupLimit);
-      if (ordered.length > visibleGroupLimit) {
+      if (ordered.length > visibleGroupLimit && !overlapping) {
         const rest = ordered.slice(visibleGroupLimit).reduce((sum, group) => ({
           count: sum.count + group.count, open: sum.open + group.open, overdue: sum.overdue + group.overdue, done: sum.done + group.done
         }), { count: 0, open: 0, overdue: 0, done: 0 });
         groups.push({ key: 'other', label: `Diğer ${ordered.length - visibleGroupLimit} grup`, ...rest });
       }
     }
-    const groupsTruncated = Boolean(groupBy && groupCount > limit);
+    const groupsTruncated = Boolean(groupBy && groupCount > limit || teamOrganization && roster?.truncated);
     const totals = statusTotals(facts, call.today);
     const descriptor = searchedScope(scope, filters.projectId);
     return {
@@ -520,7 +591,8 @@ const taskAnalytics = {
         definitions: {
           ...METRIC_DEFINITIONS.taskTotals,
           today: call.today,
-          ...(groupBy === 'assignee' ? { assignee: METRIC_DEFINITIONS.assigneeGrouping } : {})
+          ...(groupBy === 'assignee' ? { assignee: METRIC_DEFINITIONS.assigneeGrouping } : {}),
+          ...(ORGANIZATION_GROUP_BY.includes(groupBy) ? { organization: METRIC_DEFINITIONS.organizationGrouping } : {})
         }
       },
       scope: descriptor,

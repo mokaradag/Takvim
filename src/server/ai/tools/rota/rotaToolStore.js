@@ -20,6 +20,9 @@ import {
 import { canonicalActualId } from '../../../../domain/identity/actualId.js';
 import { assigneesByTask, factFromRow } from './taskFacts.js';
 
+/** Tek toplu işte okunan ekip kadrosunun satır sınırı. */
+export const TEAM_ROSTER_LIMIT = 50;
+
 /**
  * Araç SQL'inin TEK yürütücüsü.
  *
@@ -66,7 +69,7 @@ export async function readTaskFacts(executor, scope, {
   openOnly = false, targetFrom = null, targetTo = null, createdByMe = false,
   statuses = [], priorities = [], milestone = null, deadline = null,
   dateField = null, dateFrom = null, dateTo = null, today = null,
-  assigneeMode = 'any', personSicil = null, teamLevel = null, withAssignees = false, maxRows
+  assigneeMode = 'any', personSicil = null, teamLevel = null, withAssignees = false, maxRows, rosterRows = 0
 }) {
   const request = scoped(executor, scope, { projectId, taskIds });
   request.input('maxRows', sql.Int, maxRows + 1);
@@ -90,13 +93,26 @@ export async function readTaskFacts(executor, scope, {
   request.input('personSicil', sql.Int, personSicil);
   request.input('teamLevel', sql.VarChar(20), teamLevel || '');
   request.input('withAssignees', sql.Bit, withAssignees ? 1 : 0);
-  const [factRows = [], projectRows = [], assigneeRows = []] = recordsets(await request.query(AI_TOOL_TASK_FACTS_SQL));
+  // Aşama G: ekip kadrosu yalnızca istenirse ve ekip süzgeciyle aynı toplu işte okunur (`rosterRows` + 1 kesikliği gösterir).
+  const withRoster = rosterRows > 0 && assigneeMode === 'team';
+  request.input('withRoster', sql.Bit, withRoster ? 1 : 0);
+  request.input('rosterRows', sql.Int, withRoster ? rosterRows + 1 : 0);
+  const [factRows = [], projectRows = [], assigneeRows = [], rosterRowsRead = []] = recordsets(await request.query(AI_TOOL_TASK_FACTS_SQL));
   const { rows, truncated } = capped(factRows, maxRows);
+  const roster = withRoster ? capped(rosterRowsRead, rosterRows) : null;
   return {
     facts: rows.map(factFromRow),
     truncated,
     projects: projectRows,
-    assignees: assigneesByTask(assigneeRows)
+    assignees: assigneesByTask(assigneeRows),
+    ...(roster ? { roster: {
+      members: roster.rows.map((row) => ({ sicil: Number(row.Sicil), name: row.DisplayName && String(row.DisplayName).trim() !== String(row.Sicil) ? String(row.DisplayName).trim() : null }))
+        .filter((member) => Number.isSafeInteger(member.sicil) && member.sicil > 0),
+      // Görev olguları okunurken üyelik değiştiyse kadro görev sayılarıyla aynı anı göstermez: tamlık için kesik sayılır.
+      // Toplu iş, ekipte en az bir üye olduğunu baştan doğrular (yoksa kapalı ret); boş anlık görüntü bu yüzden üyeliğin
+      // değiştiğini gösterir ve değişim işareti satırsız sonuçta taşınamaz: boş kadro hiçbir zaman tam sayılmaz.
+      truncated: roster.truncated || roster.rows.length === 0 || roster.rows.some((row) => Number(row.MembershipChanged) === 1 || !(Number.isSafeInteger(Number(row.Sicil)) && Number(row.Sicil) > 0))
+    } } : {})
   };
 }
 
