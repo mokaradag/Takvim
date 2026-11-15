@@ -833,6 +833,7 @@ export function validateComposition(composition, response) {
         items = checked.ids;
         proseDropped += checked.dropped;
         proseCut += checked.cut || 0;
+        if (checked.omitted) continue;
       }
       if (!Array.isArray(items) || items.length < 1 || items.length > COMPOSITION_LIMITS.maxSayItems) return fail('SAY_INVALID');
       // Düzyazı paragrafı bölüm sınırında ardışık parçalara bölünür: her parça kendi bölümünün paragrafıdır (yalnızca
@@ -1117,6 +1118,14 @@ export function validateComposition(composition, response) {
     for (let at = normalized.length - 1; at >= 0; at -= 1) if (normalized[at].type === 'say' && !normalized[at].items.length) normalized.splice(at, 1);
     if (!normalized.length || ['chart', 'note'].includes(normalized[0].type)) return fail('LEAD_REQUIRED');
     proseCut += narrationTrimmed;
+  }
+  // Budama son düzyazı bloğunu kaldırmış olabilir; kalan kimlik düzeni düzyazının ek anlatım payını kullanamaz.
+  const finalProseMode = normalized.some((block) => block.type === 'say' && block.prose);
+  if (proseMode && !finalProseMode) {
+    const ceiling = ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)].maxNarrated;
+    for (const part of new Set(propositions.map((item) => item.part))) {
+      if (propositions.filter((item) => item.part === part && usedPropositions.has(item.id)).length > ceiling) return fail('NARRATION_LIMIT');
+    }
   }
   // Ayrıntı ayarının not kutusu sınırı (kısa yanıt tek vurgu taşır).
   if (normalized.filter((block) => block.type === 'note').length > ANSWER_DETAIL_CONTRACT[normalizeAnswerDetail(render.detail)].maxNotes) return fail('NOTE_INVALID');

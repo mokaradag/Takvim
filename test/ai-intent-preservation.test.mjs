@@ -188,3 +188,45 @@ test('adlı proje özeti iki gerçek çağrı bütçesine sığar; isteğe bağl
   assert.equal(result.finishReason, 'stop', result.text);
   assert.equal(result.stats.attempted, 2);
 });
+
+test('son düzyazı bloğu budanınca kalan kimlik düzeni kendi anlatım tavanıyla doğrulanır', () => {
+  const page = composition(4);
+  const result = validateComposition(page, { blocks: [{ type: 'say', items: ['P1', 'P2', 'P3'] }, { type: 'say', text: '{P4}' }] });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.issues, ['NARRATION_LIMIT']);
+});
+
+test('yalnız ayrıntı içeren düzyazı yinelenince kabul edilen ayrıntı kaybolmaz', () => {
+  const page = composition(0);
+  page.render.details.set('D1', { id: 'D1', part: 1 });
+  const result = validateComposition(page, { blocks: [{ type: 'say', text: '{D1}' }, { type: 'say', text: '{D1}' }] });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(result.blocks, [{ type: 'details', source: 'D1' }]);
+  for (const text of ['dayanaksız anlatım', '{D1} dayanaksız anlatım', '{D99}']) {
+    assert.equal(validateComposition(page, { blocks: [{ type: 'say', text: '{D1}' }, { type: 'say', text }] }).ok, false, text);
+  }
+  assert.equal(validateComposition(page, { blocks: [{ type: 'say', items: ['D1'] }, { type: 'say', items: ['D1'] }] }).ok, false);
+});
+
+test('bütçe açıklaması doğrulama turunda eksik yönlü plana dönüştürülemez', async (t) => {
+  const queue = [call({ intent: 'clarify', language: 'tr', clarify: { reason: 'analysis_budget' } }),
+    call({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overview'] } })];
+  const { ask } = phase4eConversation(t, { planner: () => queue.shift() });
+  const result = await ask({ text: 'Genel durum, gecikme, yaklaşan işler, öncelik, durum dağılımı, iş yükü ve aylık takvimi incele' });
+  assert.equal(result.answer.finishReason, 'clarification');
+  assert.equal(result.inputs.length, 1);
+  assert.deepEqual(result.log, []);
+  assert.match(result.answer.content, /Hangi analiz yönlerine öncelik/);
+});
+
+test('previous içindeki gerçek satır göndergeleri normalleşmeden sonra da onarımda sabit kalır', async (t) => {
+  const queue = [call({ intent: 'rota', language: 'tr', analysis: { scope: 'self', focus: ['overdue'] } })];
+  const { ask } = phase4eConversation(t, { planner: () => queue.shift() });
+  await ask({ text: 'Gecikmiş işlerimi göster' });
+  queue.push(call({ intent: 'rota', language: 'tr', analysis: { scope: 'previous', rows: [1, 2, 3], focus: ['status'] } }),
+    call({ intent: 'rota', language: 'tr', analysis: { scope: 'previous', rows: [1], focus: ['status'] } }),
+    call({ intent: 'clarify', language: 'tr', clarify: { reason: 'analysis_budget' } }));
+  const result = await ask({ text: 'İlk üç satırın durumunu karşılaştır' });
+  assert.equal(result.answer.finishReason, 'clarification');
+  assert.deepEqual(result.log, []);
+});

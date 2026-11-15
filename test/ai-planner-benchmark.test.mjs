@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { planCase, recordOf } from '../scripts/planner-evaluation.mjs';
 import { loadPlannerBenchmark, PLANNER_BENCHMARK_FILE, resolveExample, scoreDecision } from '../scripts/planner-scoring.mjs';
-import { cacheMinimumTokens, cacheReuseBaseline } from '../scripts/planner-model-adapter.mjs';
+import { cacheMinimumTokens, cacheReuseBaseline, cacheReuseState } from '../scripts/planner-model-adapter.mjs';
 
 const { semanticPlanningAdvice } = await import('../src/server/ai/assistant/semanticPlanning.js');
 const { toolCatalogForModel } = await import('../src/server/ai/tools/toolRegistry.js');
@@ -1379,7 +1379,7 @@ async function claudeCommandFixture(t, { reuse = false, events = null, newline =
     children.at(-1)?.done.then(reply => { if (!settled && !predicate()) done(new Error(`Bağdaştırıcı hazır olmadan bitti: ${reply.error || reply.signal || 'no provider call'}`)); }, done);
     check();
   });
-  const start = (extra = {}, command = null) => {
+  const start = (extra = {}, command = null, request = payload) => {
     const launch = standalone ? spawn : spawnModelCommand;
     const child = launch(process.execPath, [adapter, model, ...(command ? [command] : [])], { detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...commandPlatformEnv(), PLANNER_CLAUDE_HOME: path.join(dir, 'home'), PLANNER_CLAUDE_LOG: log, ...limits, ...extra } });
@@ -1400,7 +1400,7 @@ async function claudeCommandFixture(t, { reuse = false, events = null, newline =
       child.on('close', (code, signal) => { if (standalone || !settled) finish(code, signal); });
     });
     children.push({ child, done });
-    child.stdin.end(JSON.stringify(payload || { messages: [{ role: 'system', content: CACHEABLE_SYSTEM }, { role: 'user', content: 'question' }], tools: [], toolChoice: 'none' }));
+    child.stdin.end(JSON.stringify(request || { messages: [{ role: 'system', content: CACHEABLE_SYSTEM }, { role: 'user', content: 'question' }], tools: [], toolChoice: 'none' }));
     return { child, done, stderr: () => err };
   };
   return { start, kill, waitFor, log, dir, adapter, model, command: '"' + process.execPath + '" "' + adapter + '" "' + model + '"', descendantPid: () => Number(readFileSync(path.join(dir, 'descendant'), 'utf8')), release: () => writeFileSync(release, 'go'),
@@ -3137,7 +3137,7 @@ test('önbellek yeteneği modelin belirteç sınırıdır; karakter uzunluğu uy
   assert.equal(cacheMinimumTokens('bilinmeyen-model'), null);
 });
 
-for (const model of ['claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929']) test(`önbellek tabanı gerçek kullanım, aynı model ve tam istem gerektirir: ${model}`, () => {
+for (const model of ['claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929']) test(`önbellek tabanı gerçek kullanım, aynı model ve durağan önek gerektirir: ${model}`, () => {
   const now = Date.parse('2026-11-15T10:00:00Z');
   const row = { models: [model], staticPromptHash: 'sistem', toolCatalogHash: 'araçlar', promptHash: 'tam-istem' };
   const prior = { ...row, at: new Date(now - 1000).toISOString(), durationMs: 100, staticChars: 7000,
@@ -3145,8 +3145,50 @@ for (const model of ['claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929'])
   assert.equal(cacheReuseBaseline([prior], row, now), undefined);
   const cached = { ...prior, staticChars: 3300, usage: { cache_creation_input_tokens: 1500 } };
   assert.equal(cacheReuseBaseline([cached], row, now), cached);
-  assert.equal(cacheReuseBaseline([{ ...cached, promptHash: 'başka-olgu-sayfası' }], row, now), undefined);
+  const changed = { ...cached, promptHash: 'başka-olgu-sayfası' };
+  assert.equal(cacheReuseBaseline([changed], row, now), changed);
+  assert.equal(cacheReuseState([changed], row, now).error, 'PLANNER_CACHE_PREFIX_UNVERIFIED');
   assert.equal(cacheReuseBaseline([{ ...cached, models: ['başka-model'] }], row, now), undefined);
   assert.equal(cacheReuseBaseline([{ ...cached, error: 'PLANNER_PROVIDER_ERROR' }], row, now), undefined);
   assert.equal(cacheReuseBaseline([{ ...cached, at: new Date(now - 300001).toISOString() }], row, now), undefined);
+});
+
+
+test('model bağdaştırıcısı: farklı sorunun önbelleksiz yanıtı aynı önekte doğrulanmış koşu sayılmaz', async (t) => {
+  const cli = await claudeCommandFixture(t, { PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
+  cli.release();
+  assert.equal((await cli.start().done).error, undefined);
+  const changed = { messages: [{ role: 'system', content: CACHEABLE_SYSTEM }, { role: 'user', content: 'başka bir soru' }], tools: [], toolChoice: 'none' };
+  const second = await cli.start({}, null, changed).done;
+  assert.ok(['PLANNER_CACHE_NOT_REUSED', 'PLANNER_CACHE_PREFIX_UNVERIFIED'].includes(second.error), JSON.stringify(second));
+});
+
+
+test('model bağdaştırıcısı: farklı sorularda doğrulanan durağan öneğin sonraki kaçırması reddedilir', async (t) => {
+  const { writeFileSync } = await import('node:fs');
+  const cli = await claudeCommandFixture(t, { reuse: true, PLANNER_CLAUDE_REQUIRE_CACHE: '1' });
+  cli.release();
+  const payload = (question) => ({ messages: [{ role: 'system', content: CACHEABLE_SYSTEM }, { role: 'user', content: question }], tools: [], toolChoice: 'none' });
+  assert.equal((await cli.start({}, null, payload('birinci soru')).done).error, undefined);
+  assert.equal((await cli.start({}, null, payload('ikinci soru')).done).error, undefined);
+  assert.equal(cli.rows().at(-1).cacheEligibility, 'verified_prefix');
+  assert.ok(cli.rows().at(-1).cachePrefixTokens > 0);
+  writeFileSync(cli.model, readFileSync(cli.model, 'utf8').replace('cached?100:0', '0'));
+  assert.equal((await cli.start({}, null, payload('üçüncü soru')).done).error, 'PLANNER_CACHE_NOT_REUSED');
+});
+
+test('önbellek uygunluğu oluşturma toplamını durağan önek sanmaz; kısa tam girdinin belirteç kanıtını korur', () => {
+  const now = Date.parse('2026-11-15T10:00:00Z');
+  const first = { models: ['claude-haiku-4-5-20251001'], staticPromptHash: 'sistem', toolCatalogHash: 'araçlar',
+    promptHash: 'soru-bir', cacheTailKind: 'single_user', at: new Date(now - 1000).toISOString(), durationMs: 100,
+    usage: { input_tokens: 10, cache_creation_input_tokens: 5000, cache_read_input_tokens: 0 } };
+  const changed = { ...first, promptHash: 'soru-iki', usage: { input_tokens: 6000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
+  assert.equal(cacheReuseState([first], changed, now).error, 'PLANNER_CACHE_PREFIX_UNVERIFIED');
+  assert.equal(cacheReuseState([first], changed, now).prefixTokens, null);
+  const short = { ...first, usage: { input_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
+  const shortState = cacheReuseState([], short, now);
+  assert.equal(shortState.eligibility, 'below_minimum');
+  assert.equal(cacheReuseState([{ ...short, cacheEligibility: shortState.eligibility }], changed, now).error, null);
+  assert.equal(cacheReuseState([{ ...short, models: ['başka-model'], cacheEligibility: 'below_minimum' }], changed, now).eligibility, 'unverified');
+  assert.equal(cacheReuseState([{ ...short, cacheEligibility: 'below_minimum' }, first], { ...changed, promptHash: first.promptHash }, now).error, 'PLANNER_CACHE_NOT_REUSED');
 });

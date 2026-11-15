@@ -789,7 +789,7 @@ function pinAnalysisRepair(turn, plan, details) {
     if (['$.language', '$.chart', '$.charts', '$.table'].includes(path)) presentationPaths.add(path.slice(2));
     if (path.startsWith('$.analysis.') && !(path === '$.analysis.also' && ['duplicate', 'scope', 'window'].includes(reason)) && !['unsupported', 'requestBudget', 'narrowable', 'conflict', 'maxItems', 'unique'].includes(reason)) paths.add(path.slice('$.analysis.'.length));
     // Gerçek satır göndergeleri onarımda silinemez; başka kapsamdaki anlamsız alan kaldırılabilir.
-    if (path === '$.analysis.rows' && (existing?.raw || plan.analysis).scope !== 'row') paths.add('rows');
+    if (path === '$.analysis.rows' && normalizedBrief(existing?.raw || plan.analysis).scope !== 'row') paths.add('rows');
     // Kapsamlar arası dönem çakışması yalnızca dönem alanlarını açar: birincilin dönemi ve her ek kapsamın konumsal dönem alanları
     // (ilk maskede). Kapsam kimlikleri, düzeyleri, adları ve yönleri sabit kalır; onarım bir kapsamı silerek çakışmayı gideremez.
     if (path === '$.analysis.also' && reason === 'window') {
@@ -2682,8 +2682,8 @@ async function continueTurn(turn, { escalationAvailable, onText, resumed }) {
       }
     }
     // Taze soruda (önceki sonuç ya da analiz bağlamı yok) turun ilk kararı açıklamaysa bir kez doğrulanır (CLARIFY_CONFIRM_HINT);
-    // takip turlarında açıklamayı sunucunun kendi notları ister, orada doğrulama yapılmaz. Yinelenen karar aşağıda kabul edilir.
-    if (plan && plan.plan.intent === PLANNER_INTENTS.CLARIFY && !turn.clarifyChecked && turn.trace.declarations === 0
+    // Takip ve bütçe açıklamasında doğrulama yapılmaz: bütçe gerekçesi eksik yönlü bir plana çevrilemez. Yinelenen karar kabul edilir.
+    if (plan && plan.plan.intent === PLANNER_INTENTS.CLARIFY && plan.plan.clarify?.reason !== 'analysis_budget' && !turn.clarifyChecked && turn.trace.declarations === 0
       && !turn.previousResult && !turn.previousAnalysis && turn.declarationsLeft > 0) {
       clarificationFallback = plan.plan;
       turn.clarifyChecked = true;

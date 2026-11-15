@@ -39,6 +39,7 @@ export function checkProse(text, { known, used = new Set(), recoverDetail = () =
   const seen = new Set(used);
   const ids = [];
   let dropped = 0;
+  let recovered = 0;
   for (const token of parsed.tokens) {
     if (token.text != null) {
       if (!SEPARATOR.test(token.text)) dropped += 1;
@@ -46,12 +47,14 @@ export function checkProse(text, { known, used = new Set(), recoverDetail = () =
     }
     if (!known(token.slot)) return fail('UNKNOWN_PROPOSITION');
     if (seen.has(token.slot)) {
-      if (recoverDetail(token.slot)) continue;
+      if (recoverDetail(token.slot)) { recovered += 1; continue; }
       return fail('DUPLICATE_PROPOSITION');
     }
     seen.add(token.slot);
     ids.push(token.slot);
   }
+  // Yalnızca bilinen ayrıntı yinelemeleri kalan paragraf çizilmez; dayanağı olmayan metin hâlâ reddedilir.
+  if (!ids.length && recovered && !dropped) return { ok: true, omitted: true, ids: [], sentences: [], dropped, cut: recovered, issues: [] };
   if (!ids.length) return fail('PROSE_UNGROUNDED');
   if (ids.length > PROSE_LIMITS.maxSentences) return fail('PROSE_LENGTH');
   return { ok: true, ids, sentences: ids.map((slot) => [{ slot }]), dropped, cut: 0, issues: [] };

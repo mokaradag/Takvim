@@ -99,7 +99,7 @@ function liveTurn(rounds, completeRound) {
       };
       try {
         const reply = await completeRound({ messages: input.messages, tools: input.tools, toolChoice: input.toolChoice });
-        if (reply?.error) throw infrastructure(['PLANNER_BUDGET_CALLS', 'PLANNER_BUDGET_TOKENS'].includes(reply.error) ? reply.error : 'ADAPTER_ERROR');
+        if (reply?.error) throw infrastructure(['PLANNER_BUDGET_CALLS', 'PLANNER_BUDGET_TOKENS', 'PLANNER_CACHE_NOT_REUSED', 'PLANNER_CACHE_PREFIX_UNVERIFIED'].includes(reply.error) ? reply.error : 'ADAPTER_ERROR');
         if (!reply.models?.length || reply.models.some((model) => model !== EXPECTED_MODEL)) throw infrastructure('PLANNER_MODEL_UNVERIFIED');
         if (reply.thinking !== 'off' || reply.usage?.output_tokens_details?.thinking_tokens) throw infrastructure('PLANNER_THINKING_ON');
         measured.finish = reply.finishReason;

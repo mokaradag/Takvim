@@ -211,18 +211,37 @@ export function cacheMinimumTokens(model) {
     || new RegExp(`^claude-${name}-(?:[0-9]{8}|latest)$`).test(model)))?.[0] ?? null;
 }
 
-/** Kullanım aynı tam istemin önbelleğini kanıtlar; farklı kuyruğun durağan öneki için uygunluk çıkarılmaz. */
-export function cacheReuseBaseline(prior, row, startedAt) {
-  return prior.find((item) => {
+/** Aynı durağan öneğin yakın gözlemleri: soru metni önbellek kimliğinin parçası değildir. */
+export function cacheReuseState(prior, row, startedAt) {
+  const recent = prior.filter((item) => {
     const ageMs = Number.isSafeInteger(item.durationMs) && item.durationMs >= 0 ? startedAt - (Date.parse(item.at) - item.durationMs) : NaN;
-    const sameModel = item.models?.length === 1 && row.models?.length === 1 && item.models[0] === row.models[0] && item.effort === row.effort;
-    const read = item.usage?.cache_read_input_tokens || 0;
-    const written = item.usage?.cache_creation_input_tokens || 0;
-    const observed = read > 0 || written > 0;
-    const exact = item.promptHash && item.promptHash === row.promptHash;
-    return !item.error && sameModel && item.staticPromptHash === row.staticPromptHash && item.toolCatalogHash === row.toolCatalogHash
-      && observed && exact && ageMs >= 0 && ageMs < 5 * 60 * 1000;
+    return !item.error && item.models?.length === 1 && row.models?.length === 1 && item.models[0] === row.models[0]
+      && item.effort === row.effort && item.staticPromptHash === row.staticPromptHash && item.toolCatalogHash === row.toolCatalogHash
+      && ageMs >= 0 && ageMs < 5 * 60 * 1000;
   });
+  const read = row.usage?.cache_read_input_tokens || 0;
+  const written = row.usage?.cache_creation_input_tokens || 0;
+  const observed = (item) => item.usage?.cache_read_input_tokens > 0 || item.usage?.cache_creation_input_tokens > 0;
+  const baseline = recent.findLast(observed);
+  const exact = recent.some((item) => item.promptHash === row.promptHash && observed(item));
+  // İki farklı tek kullanıcı iletisi ortak dinamik blok taşımaz: aralarındaki gerçek okuma durağan öneği kanıtlar.
+  const crossRead = read > 0 && row.cacheTailKind === 'single_user' && recent.some((item) => item.cacheTailKind === 'single_user' && item.promptHash !== row.promptHash);
+  const prefixTokens = crossRead ? read : recent.findLast((item) => item.cachePrefixTokens > 0)?.cachePrefixTokens || null;
+  const tokens = ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'].map((key) => row.usage?.[key]);
+  const minimum = cacheMinimumTokens(row.models?.[0]);
+  const belowMinimum = !read && !written && minimum != null && tokens.every((value) => Number.isSafeInteger(value) && value >= 0)
+    && tokens.reduce((sum, value) => sum + value, 0) > 0 && tokens.reduce((sum, value) => sum + value, 0) < minimum;
+  const prefixBelowMinimum = !prefixTokens && (belowMinimum || recent.some((item) => item.cacheEligibility === 'below_minimum'));
+  // Tam istem oluşturması tek başına durağan önek kanıtı değildir. Doğrulanamayan ikinci çağrı başarı diye geçmez;
+  // ayrı altyapı nedeni modeli suçlamadan koşuyu durdurur. Bilinen kısa önekte sahte önbellek kaçırma hatası üretilmez.
+  const error = read || !recent.length ? null : exact || prefixTokens ? 'PLANNER_CACHE_NOT_REUSED'
+    : prefixBelowMinimum ? null : 'PLANNER_CACHE_PREFIX_UNVERIFIED';
+  return { baseline, prefixTokens, eligibility: prefixTokens ? 'verified_prefix' : exact ? 'verified_full'
+    : read ? 'observed_reuse' : prefixBelowMinimum ? 'below_minimum' : 'unverified', error };
+}
+
+export function cacheReuseBaseline(prior, row, startedAt) {
+  return cacheReuseState(prior, row, startedAt).baseline;
 }
 export const MODEL_CLEANUP_TIMEOUT_MS = 5000;
 export const MODEL_FORCED_RETRY_ATTEMPTS = 2;
@@ -738,7 +757,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
   const staticPromptHash = hash(system.content);
   const promptHash = hash(conversationText(rest, system.content));
   const toolCatalogHash = hash(JSON.stringify([forced?.name ?? null, all, hideTools]));
-  // Önbelleklenebilir durağan önek: sistem yönergesi, sunulan araçlar ve zorunlu aracın şeması (turdan bağımsız baytlar).
+  // Durağan içerik uzunluğu yalnızca tanıdır: karakter sayısı önbellek uygunluğunu kanıtlamaz.
   const staticChars = String(system.content).length + JSON.stringify(tools).length + (forced ? JSON.stringify(forced.parameters ?? {}).length : 0);
   let maxCalls;
   let maxUncached;
@@ -805,7 +824,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     const offered = (init?.tools || []).filter((name) => name.startsWith(PREFIX)).map((name) => name.slice(PREFIX.length));
     const row = { at: new Date().toISOString(), ...(callId ? { callId } : {}), models, effort, thinking: usage.output_tokens_details.thinking_tokens || usage.thinkingBlocks ? 'on' : 'off', usage,
       apiCalls: ids.size, numTurns: result?.num_turns ?? null, stopReason: !forced && blocks.some((block) => block.type === 'tool_use') ? 'tool_use' : result?.stop_reason ?? null,
-      durationMs: Date.now() - startedAt, rateLimit: limit ? { status: limit.status, utilization: limit.utilization ?? null } : null, staticPromptHash, promptHash, staticChars, toolCatalogHash, toolOrderHash: hash(JSON.stringify(offered)), tailChars: conversationText(rest).length };
+      durationMs: Date.now() - startedAt, rateLimit: limit ? { status: limit.status, utilization: limit.utilization ?? null } : null, staticPromptHash, promptHash, staticChars, cacheTailKind: rest.length === 1 && rest[0]?.role === 'user' && typeof rest[0].content === 'string' ? 'single_user' : 'conversation', toolCatalogHash, toolOrderHash: hash(JSON.stringify(offered)), tailChars: conversationText(rest).length };
     if (timedOut) return fail(cleanupFailed ? 'MODEL_COMMAND_TIMEOUT MODEL_COMMAND_CLEANUP_ERROR' : 'MODEL_COMMAND_TIMEOUT', row);
     if (cleanupFailed) return fail('MODEL_COMMAND_CLEANUP_ERROR', row);
     // --max-turns 1 yerel araç devrini belgeli CLI durumuyla bitirir; bu başarısız tamamlama değildir.
@@ -819,9 +838,10 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     const forcedProse = Boolean(forced && !hideTools && !forcedToolCall && code === 1 && result?.subtype === 'error_max_turns'
       && !blocks.some((block) => block.type === 'tool_use') && blocks.some((block) => block.type === 'text'));
     // Karakter sayısı yalnızca tanıdır; önbelleklenebilirlik sağlayıcının gerçek belirteç kullanımıyla kanıtlanır.
-    const cacheBaseline = () => cacheReuseBaseline(prior, row, startedAt);
+    const cacheState = cacheReuseState(prior, row, startedAt);
     row.cacheMinimumTokens = cacheMinimumTokens(model);
-    row.cacheEligibility = usage.cache_read_input_tokens > 0 ? 'observed_reuse' : cacheBaseline() ? 'verified_baseline' : 'unverified';
+    row.cacheEligibility = cacheState.eligibility;
+    row.cachePrefixTokens = cacheState.prefixTokens;
     const catalogProblem = JSON.stringify([...offered].sort()) !== JSON.stringify(tools.map((tool) => tool.name).sort()) ? 'PLANNER_TOOLS_NOT_OFFERED'
       : prior.some((item) => item.toolCatalogHash === toolCatalogHash && item.toolOrderHash && item.toolOrderHash !== row.toolOrderHash) ? 'PLANNER_TOOL_ORDER_UNSTABLE' : null;
     if ((forcedToolCall || forcedProse) && MODEL_FORCED_RETRY_ATTEMPTS > 1 && process.env.PLANNER_CLAUDE_FORCED_RETRY === '1') {
@@ -832,8 +852,8 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
       if (problem) return fail(problem, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
       // Önbellek zorunluluğu yeniden denemeden ÖNCE uygulanır: yeniden deneme araçları gizlediği için katalog özeti değişir ve kendi
       // tabanı olmaz; ilk yanıtın önbellek kaçırması bu yolla gizlenemez.
-      if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheBaseline() && !usage.cache_read_input_tokens) {
-        return fail('PLANNER_CACHE_NOT_REUSED', { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
+      if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheState.error) {
+        return fail(cacheState.error, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
       }
       appendLedger(log, { ...row, forcedToolCall: true, ...(forcedProse ? { forcedText: true } : {}) });
       rmSync(work, { recursive: true, force: true });
@@ -856,7 +876,7 @@ async function complete(launcher, timeoutMs, payload = JSON.parse(readFileSync(0
     if (forcedHandoff) row.forcedToolCall = true;
     if (code !== 0 && !toolHandoff && !forcedHandoff && !schemaRejected && !forcedText || !result || result.is_error && result.subtype !== 'error_max_turns' || rejected || result.api_error_status) return fail('PLANNER_PROVIDER_ERROR', { ...row, status: result?.api_error_status ?? null, subtype: result?.subtype ?? null, exitCode: code ?? null });
     if (catalogProblem) return fail(catalogProblem, { ...row, offered });
-    if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheBaseline() && !usage.cache_read_input_tokens) return fail('PLANNER_CACHE_NOT_REUSED', row);
+    if (process.env.PLANNER_CLAUDE_REQUIRE_CACHE === '1' && cacheState.error) return fail(cacheState.error, row);
     if (row.apiCalls !== 1) return fail('PLANNER_CALL_COUNT_UNEXPECTED', row);
     if (!models.length || models.some((item) => item !== model)) return fail('PLANNER_MODEL_MISMATCH', row);
     if (row.thinking !== 'off') return fail('PLANNER_THINKING_ON', row);

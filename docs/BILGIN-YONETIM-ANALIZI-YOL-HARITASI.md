@@ -584,7 +584,7 @@ Gerçek Qwen/Gemma kabulü bu geliştirme ortamında yapılamaz. VM'de:
 | 2026-11-09 | Portföy proje tablosu ilk N değil, aracın sınırıyla tam liste | On projeden büyük portföyde projeler arası bulgular hiç kurulamıyordu; değer okuması aynı okumayı paylaşır |
 | 2026-11-09 | Proje adı düzyazıda doğrulanmış koduyla kalır | Listede görünmeyen adaş proje dışlanamaz (F kararı korunur) |
 | 2026-11-09 | Betikli görsel kabul ucu (`UI_SCRIPTED=1`) | Çizici ve sunucu sözleşmesi model kotası harcamadan dört görünümde sınanır; Haiku kabulünün yerine geçmez |
-| 2026-11-14 | Nitelendirme üretim eşdeğeri düzenekle: `FORCED_RETRY=0`, plan aracı MCP'den kendi adıyla (`NAMED_TOOL=auto`), önbellek kapısı yalnızca önbelleklenebilir durağan önekte | Standart profil adlı aracı `auto` gönderir; CLI plan aracını `StructuredOutput` adıyla sunuyordu; kısa düzen yönergesi önbellek alt sınırının altındadır. Taban aynı düzenekle yeniden ölçüldü |
+| 2026-11-14 | Nitelendirme üretim eşdeğeri düzenekle: `FORCED_RETRY=0`, plan aracı MCP'den kendi adıyla (`NAMED_TOOL=auto`), önbellek kapısı yalnızca önbelleklenebilir durağan önekte | Standart profil adlı aracı `auto` gönderir; CLI plan aracını `StructuredOutput` adıyla sunuyordu; düzen yönergesinin belirteç alt sınırının altında olduğu doğrulanmamıştır; karakter sayısı ve tam istem önbelleği durağan önek uygunluğunu kanıtlamaz. Taban aynı düzenekle yeniden ölçüldü |
 | 2026-11-14 | Açıklama kararı taze soruda bir kez doğrulanır; çekimserlik doğrulanmaz | Gereksiz açıklama sonlandırıcıydı; doğrulama mevcut düzeltme hakkından, yeni tur ya da araç yok |
 | 2026-11-14 | Yön/okuma tavanı aşımında model güdümlü kırpma YOK (denendi, geri alındı) | "Bütün yönleriyle" isteğinde yön kaybı; kullanıcıya öncelik sorulur (`analysis_budget`) |
 | 2026-11-14 | Metin kanalındaki JSON plan kabul edilmez | Karar yalnızca araç kanalından; sözleşme sınaması korunur |
@@ -687,6 +687,6 @@ Bu bölüm her oturumun sonunda güncellenir. Güncel durum ve sonraki giriş no
 Dönem ve gerçek satır göndergeleri onarımda korunur; çelişkili dönem ve desteklenmeyen grafik sessizce değiştirilmez.
 Eşdeğer olmayan kaba özet önerisi kaldırıldı; kullanıcı adları sistem onarım notuna yazılmaz.
 İsteğe bağlı okumalar kalan bütçeye göre eklenir; dönemli proje özetine dönemsiz kilometre taşı eklenmez.
-Önbellek uygunluğu karakter eşiğinden çıkarılmaz; gözlenen kullanım ve doğrulanmamış kapsam ayrı raporlanır.
+Önbellek uygunluğu karakter eşiğinden çıkarılmaz; tam istem oluşturması ile farklı sorular arasında doğrulanan önek okuması ayrı raporlanır. Önek doğrulanmadan ikinci önbelleksiz çağrı nitelendirme başarısı sayılmaz.
 Kabul Matrisi §8.3'te C6/C7'nin iki hedefli kümesi aynı yöntemle birleştirildi. Bu kod için yeni canlı model ölçümü yapılmadı;
 önceki ölçümler yeni düzeltmelerin deneysel doğrulaması değildir.

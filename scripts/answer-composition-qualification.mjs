@@ -202,7 +202,7 @@ export function qualificationProvider(rounds, { provider = PROVIDER, completeRou
         : { messages: input.messages, tools: input.tools, toolChoice: input.toolChoice }, input.signal);
       measured.latencyMs = Math.round(performance.now() - startedAt);
       const infrastructure = (reason) => { measured.infrastructure = reason; return new Error(`MODEL_INFRASTRUCTURE ${reason}`); };
-      if (reply?.error) throw infrastructure(['PLANNER_BUDGET_CALLS', 'PLANNER_BUDGET_TOKENS'].includes(reply.error) ? reply.error : 'ADAPTER_ERROR');
+      if (reply?.error) throw infrastructure(['PLANNER_BUDGET_CALLS', 'PLANNER_BUDGET_TOKENS', 'PLANNER_CACHE_NOT_REUSED', 'PLANNER_CACHE_PREFIX_UNVERIFIED'].includes(reply.error) ? reply.error : 'ADAPTER_ERROR');
       if (!reply || typeof reply !== 'object' || Array.isArray(reply) || typeof reply.text !== 'string'
         || !Array.isArray(reply.toolCalls) || (composing && reply.toolCalls.length) || !Array.isArray(reply.models)) throw infrastructure('ADAPTER_OUTPUT_INVALID');
       if (!reply.models.length || reply.models.some((model) => model !== expectedModel)) throw infrastructure('PLANNER_MODEL_UNVERIFIED');

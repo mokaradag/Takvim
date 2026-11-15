@@ -459,8 +459,7 @@ korunur. Bu nedenle **taban ve son ölçüm aynı, üretim eşdeğeri düzenekle
 1. **Önbellek kapısının sahte hatası.** İlk düzeltmede durağan öneğin karakter uzunluğu uygunluk için kullanılmıştı.
    Karakter/belirteç oranı sabit olmadığından bu yöntem ne Haiku 4.5'in 4096 belirteç sınırını ne başka modellerin sınırını kanıtlar.
    15 Kasım düzeltmesi bu eşiği kaldırdı: modelin yapılandırılmış alt sınırı ayrı kaydedilir; aynı model, sistem, araç kataloğu ve tam
-   istem için gözlenen önbellek oluşturma/okuma yakın tabanı kurar. Değişken kuyruğun toplam oluşturma sayısı durağan öneğin sayısı
-   değildir. Böyle bir taban yoksa uygunluk doğrulanmamış kalır; karakter sayısı yalnızca tanıdır (§8.3).
+   istem için gözlenen önbellek oluşturma/okuma yakın gözlemi kurar. Farklı tek kullanıcı soruları arasında gerçek okuma, yeniden kullanılabilen önek için ayrı kanıttır. Değişken kuyruğun toplam oluşturma sayısı durağan öneğin sayısı değildir (§8.3).
 2. **Zorunlu yeniden deneme üretim eşdeğeri değildir.** Standart araç profili (`chat.tools`) adlı araç seçimini sağlayıcıya `auto` olarak
    gönderir (`openAiCompatibleProvider.wireToolChoice`); model üretimde düz metin ya da başka araçla yanıt verebilir ve sunucu `$.plan:required`
    düzeltmesi verir. `PLANNER_CLAUDE_FORCED_RETRY=1` üretimde olmayan gizli bir ikinci deneme veriyordu: bütün ölçümler `FORCED_RETRY=0`.
@@ -484,7 +483,7 @@ tamamlamasıyla "model düzeni" sayılmadı; böyle bir değişiklik modelin dü
 
 | Sınıf | Kök neden (gerçek Haiku planlarından) | Düzeltme |
 | --- | --- | --- |
-| G · Altyapı | Kısa doğal yanıt düzeni yönergesi (≈4,2 bin karakter) Haiku 4.5'in en küçük önbelleklenebilir isteminin (4096 belirteç) altında; ikinci düzen çağrısı `PLANNER_CACHE_NOT_REUSED` ile koşuyu durduruyordu | Karakter eşiği kaldırıldı; aynı model ve tam istemde gözlenen önbellek tabanı varsa yeniden kullanım zorunlu, aksi kapsam doğrulanmamış |
+| G · Altyapı | Doğal yanıt düzeni yönergesi ≈4,2 bin karakterdir; 4096 belirtecin altında olduğu belirteç sayımıyla doğrulanmadı. İkinci düzen çağrısı `PLANNER_CACHE_NOT_REUSED` ile koşuyu durduruyordu | Karakter eşiği kaldırıldı. Farklı sorular arasında gözlenen önek okuması ayrı kaydedilir; doğrulanmış önekte yeniden kullanım zorunludur. Tam istem oluşturması durağan öneği kanıtlamaz |
 | G · Altyapı | Yeniden denemesiz zorunlu turda doğrudan veri aracı çağrısı `PLANNER_PROVIDER_ERROR` sayılıp koşuyu durduruyordu | Standart profilde üretim seçimi `auto`: çağrı sunucuya iletilir (sunucu `$.plan:required` düzeltmesi verir) |
 | G · Altyapı | `PLANNER_CLAUDE_FORCED_RETRY=1` üretimde olmayan gizli bir ikinci deneme veriyordu (`chat.tools` profili adlı seçimi `auto` gönderir) | Nitelendirme üretim eşdeğeri protokolle (`FORCED_RETRY=0`) koşuldu |
 | G · Altyapı | CLI'nin yapılandırılmış çıktısı plan aracını modele `StructuredOutput` adıyla, son yanıt biçimi olarak sunuyordu (ölçüldü); düzleştirilmiş iletide rol bilgisi yoktu | `PLANNER_CLAUDE_NAMED_TOOL=auto`: plan aracı yerel MCP sunucusundan kendi adıyla sıradan araç olarak; ortam notu bölümlerin rolünü betimler. Düz metin ilk yanıt 10 bölümde 10 → 6, ilk bildirimde geçen 1 → 7 (10 soruluk deney) |
@@ -557,7 +556,7 @@ F hedefli 25,5–26,5/40, toplam 86,5–100,0/135 olur (bunlar güven aralığı
 | Önbelleksiz girdi / başarılı vaka | 7 608 ↔ 12 726/11 343/7 719 | 8 130 ↔ 15 012/13 419/7 147 | 3 800 ↔ 3 923/2 596/3 621 | 2 257 ↔ 4 636/1 816/4 645 |
 | Çıktı belirteci / vaka | 475 ↔ 412/431/423 | 406 ↔ 507/536/490 | 347 ↔ 274/321/250 | 293 ↔ 380/300/349 |
 
-Kaydedilen çağrılarda model kimliği `claude-haiku-4-5-20251001` ve düşünme belirteci 0'dır. Eski karakter eşiğine dayalı önbellek kapısı hata vermedi; bu, durağan öneğin belirteç uygunluğunu veya bütün turlarda önbellek kullanımını kanıtlamaz. Yeni kapı model yeteneğini ayrı kaydeder, gerçek oluşturma/okuma kullanımından taban kurar; karakter sayısını uygunluk kanıtı saymaz. Aynı tam istemde gözlenen oluşturma veya okuma yoksa `cacheEligibility: unverified` yazılır; kapının uygulanmaması önbellek başarısı değildir.
+Kaydedilen çağrılarda model kimliği `claude-haiku-4-5-20251001` ve düşünme belirteci 0'dır. Eski karakter eşiğine dayalı önbellek kapısı hata vermedi; bu, durağan öneğin belirteç uygunluğunu veya bütün turlarda önbellek kullanımını kanıtlamaz. Yeni kapı model yeteneğini, tam istem gözlemini ve `cachePrefixTokens` ile doğrulanan yeniden kullanılabilir öneği ayrı kaydeder. Farklı tek kullanıcı soruları arasındaki gerçek önbellek okuması durağan öneği kanıtlar; yalnız tam istem oluşturması bunu kanıtlamaz. Doğrulanmış önekte veya önceden önbelleklenmiş aynı tam istemde okuma yoksa `PLANNER_CACHE_NOT_REUSED` verilir. İkinci aynı-önek çağrısında ne okuma ne uygunluk kanıtı varsa `PLANNER_CACHE_PREFIX_UNVERIFIED` ile nitelendirme durur; bu model başarısızlığı veya önbellek başarısı diye sunulmaz. Tam girdinin gerçek belirteç toplamı model alt sınırından küçükse durağan önek de küçüktür (`below_minimum`); bu durumda sahte önbellek kaçırma hatası üretilmez. Karakter sayısı yalnızca tanıdır. Gerçek sağlayıcıyla yeni ölçüm yapılmadı.
 
 ### 8.4 Genelleme (taze varyantlar)
 
